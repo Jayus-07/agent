@@ -6,16 +6,27 @@
 | `GET  /sys/providers/presets` | 预置端点目录（新增/编辑抽屉的厂商·协议候选，只读静态数据） | — |
 | `POST /sys/providers/{provider_id}/verify` | 已存实例复测（默认快速，`mode=full` 才检查流式 usage） | admin · 10 次/分 |
 | `POST /sys/providers/verify-draft` | 草稿态探测（body 带 driver/base_url/apiKey/scope） | admin · **5 次/分**（更严） |
+| `POST /sys/providers/model-catalog` | 草稿态**模型目录**（填模型名时的可选清单） | admin · 20 次/分 |
+| `POST /sys/providers/{provider_id}/model-catalog` | 已存实例模型目录 | admin · 20 次/分 |
 
-后两个端点落实 B.6 的**四道限制**（否则它就是一个「任意 URL 探测代理」）：
+**探测与「模型目录」是两件事**（2026-09-21 分层重划，见 `provider_probe` 模块头）：
+
+- `verify*` = **判定**（L0 安全闸门 + L2 真实最小调用）。只有 L2 能回答「能不能用」。
+- `model-catalog` = **填料**（拉 `GET {base}/models`，只回报模型名，供下拉选择）。
+  它**不参与任何判定**：拿不到清单只意味着用户要手打模型名，**不是**「供应商不可用」。
+  原 L1 曾挂在探测链上，既拖慢成功路径（串行 8s 超时），又让「拿不到清单」容易被误读
+  成「测试失败」，故移出为独立按需端点（服务端带短 TTL 缓存，见 `provider_probe`）。
+
+四个探测/目录端点落实 B.6 的**四道限制**（否则它就是一个「任意 URL 探测代理」）：
 
 1. **admin only** —— 复用 `require_admin_user`（kind=user + role=admin）。
 2. **目标过 `url_guard`** —— 私网只在实例 `network_scope='private'` 时放行，
-   且该值来自 DB 显式勾选，不由「解析结果」推导（防 DNS rebinding）。
-3. **报文固定** —— body 只有 driver/base_url/api_key/model_name/network_scope，
-   不接受自定义 prompt / body / 任意 header；探测用固定 prompt 与 `max_tokens=16`。
-   默认快速模式只跑到 L2，`mode=full` 才检查流式 usage。
-4. **限流** —— 进程内滑动窗口，按 actor 分桶；草稿态配额更小。
+   且该值来自 DB 显式勾选，不由「解析结果」推导（防 DNS rebinding）。目录端点同样
+   会带着密钥出站，因此**走同一道闸门**，不因为是「只读」就放宽。
+3. **报文固定** —— 探测 body 只有 driver/base_url/api_key/model_name/network_scope，
+   不接受自定义 prompt / body / 任意 header；目录 body 更窄，只有 base_url/api_key/scope。
+   探测用固定 prompt 与 `max_tokens=16`。默认快速模式只跑到 L2，`mode=full` 才检查流式 usage。
+4. **限流** —— 进程内滑动窗口，按 actor 分桶；草稿态探测配额更小。
 
 响应一律**裸 dict**（§1.1.1 决策，无 Result 壳）。审计走 logger：
 **who / 目标 URL / network_scope / 分级结论 / 耗时，不记密钥**（B.6）。
@@ -47,6 +58,9 @@ router = APIRouter(prefix="/sys/providers", tags=["sys-providers"])
 
 _VERIFY_PER_MIN = 10
 _DRAFT_VERIFY_PER_MIN = 5
+# 目录比探测宽松：它有服务端短 TTL 缓存，且用户可能连点几次换地址试。
+# 但它同样会带着密钥出站，所以仍然限流、仍然过 url_guard。
+_CATALOG_PER_MIN = 20
 _WINDOW_S = 60.0
 
 _hits: dict[str, deque[float]] = {}
@@ -85,6 +99,23 @@ class DraftProbeRequest(BaseModel):
     )
     model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] = Field(
         "chat", alias="modelKind", description="模型用途"
+    )
+    api_key: str = Field("", alias="apiKey", description="草稿密钥；ollama 可留空")
+    network_scope: str = Field(
+        "public", alias="networkScope", description="public | private"
+    )
+
+
+class ModelCatalogRequest(BaseModel):
+    """草稿态模型目录请求。字段比探测更窄 —— 目录只是一个只读 POST。
+
+    没有 `driver`：`/models` 是标准 HTTP GET + Bearer，与协议无关。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    base_url: str = Field(
+        ..., alias="baseUrl", min_length=1, description="供应商端点根地址"
     )
     api_key: str = Field("", alias="apiKey", description="草稿密钥；ollama 可留空")
     network_scope: str = Field(
@@ -478,4 +509,86 @@ async def verify_draft_provider(
         "draft": True,
         "mode": mode,
         **result.to_dict(),
+    }
+
+
+# ── 模型目录（填写辅助，不参与任何判定）──────────────────────────────────
+#
+# 这两个端点回答的是「这个地址上有哪些模型名可以填」，而不是「这个供应商能不能用」。
+# 所以它们**永远不返回 ok/blocked_at 那套判定语义**，失败也只影响「能不能帮你省掉
+# 手打」。前端把结果渲染在「模型名称」输入框旁的下拉里，用户点了才请求。
+
+
+@router.post("/model-catalog")
+async def model_catalog_draft(
+    req: ModelCatalogRequest,
+    ident=Depends(require_admin_user),
+) -> dict:
+    """草稿态模型目录：用用户刚填的地址与 Key 去拉一次可选模型名。"""
+    _enforce_rate_limit(ident.actor, "catalog", _CATALOG_PER_MIN)
+
+    scope = _normalize_scope(req.network_scope)
+    catalog = await provider_probe.fetch_model_catalog(
+        req.base_url, req.api_key,
+        allow_private=(scope == "private"),
+    )
+    logger.info(
+        "[ModelCatalog] 草稿目录 who=%s target=%s scope=%s ok=%s cached=%s 条数=%d",
+        ident.actor, req.base_url, scope, catalog.ok, catalog.cached,
+        len(catalog.items),
+    )
+    return {
+        "provider": None,
+        "target": req.base_url,
+        "network_scope": scope,
+        "draft": True,
+        **catalog.to_dict(),
+    }
+
+
+@router.post("/{provider_id}/model-catalog")
+async def model_catalog_saved(
+    provider_id: str,
+    ident=Depends(require_admin_user),
+) -> dict:
+    """已存实例的模型目录：用库里已保存的地址与密钥去拉（密钥不回显）。"""
+    _enforce_rate_limit(ident.actor, "catalog", _CATALOG_PER_MIN)
+
+    snap = await registry_store.load_registry()
+    if not snap.loaded:
+        raise HTTPException(
+            status_code=503,
+            detail="注册表不可用（DB 未就绪），无法读取供应商地址",
+        )
+
+    provider = _find_provider(snap, provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail=f"未找到供应商实例：{provider_id}")
+
+    cred = _credential_for(snap, provider_id)
+    api_key = (cred.api_key if cred else "") or ""
+    base_url = ((cred.base_url if cred else None) or provider.get("base_url") or "")
+    extra_headers = ((cred.extra_headers if cred else None)
+                     or provider.get("extra_headers") or {})
+    scope = _normalize_scope(provider.get("network_scope"))
+
+    if not base_url:
+        raise HTTPException(status_code=422, detail=f"供应商 {provider_id} 未配置 base_url")
+
+    catalog = await provider_probe.fetch_model_catalog(
+        base_url, api_key,
+        extra_headers=extra_headers or None,
+        allow_private=(scope == "private"),
+    )
+    logger.info(
+        "[ModelCatalog] 实例目录 who=%s provider=%s target=%s scope=%s ok=%s cached=%s 条数=%d",
+        ident.actor, provider_id, base_url, scope, catalog.ok, catalog.cached,
+        len(catalog.items),
+    )
+    return {
+        "provider": provider_id,
+        "target": base_url,
+        "network_scope": scope,
+        "draft": False,
+        **catalog.to_dict(),
     }

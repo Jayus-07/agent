@@ -100,16 +100,46 @@ export function roleModelKind(role: string): ModelKind {
   return 'chat'
 }
 
+/**
+ * 探测级别标签。
+ *
+ * ⚠️ **`L1` 已不再由后端产生**（2026-09-21 起：原 `GET {base}/models` 移出探测链，
+ * 改为按需的模型目录接口，见 `ModelCatalogResponse`）。但 `L1` **必须保留在这个联合
+ * 类型里**：`provider.lastProbe.worstGrade` 是**历史值**，库里可能还存着改动前那次
+ * 探测留下的 `L1`，删掉会让老数据显示成空白。新代码不应再产出 `L1`。
+ */
 export type ProbeGrade = 'L0' | 'L1' | 'L2' | 'L3'
 export type ProbeStatus = 'pass' | 'fail' | 'skip' | 'fail_degraded'
+
+/** 失败归因代号 —— 后端 `provider_probe.REASON_*` 的镜像。
+ *
+ * 用它来决定显示哪个「去修」动作，**不要对 `summary` 做字符串匹配**：
+ * 文案随时可能改，代号是契约。未知代号要能优雅退化成「不给建议」。
+ */
+export type ProbeReason =
+  | 'blocked'          // 被安全策略拦截（私网 / 云元数据）
+  | 'invalid_url'      // URL 本身不合法
+  | 'unreachable'      // DNS / TCP / TLS 连不上
+  | 'timeout'          // 连接或调用超时
+  | 'base_url'         // 地址不是 OpenAI 兼容基址（路由不存在）
+  | 'model_name'       // 模型名错 / 该 Key 无权访问该模型
+  | 'api_key'          // Key 无效或无权
+  | 'client_build'     // 客户端初始化失败（协议与地址不匹配）
+  | 'no_model'         // 未提供模型名
+  | 'unknown'
 
 export interface ProbeStep {
   grade: ProbeGrade
   status: ProbeStatus
-  /** 一句话结论（后端给了就用后端的，否则用 `probeFallbackSummary`） */
+  /** 一句话结论（后端给了就用后端的，否则用 `probeFallbackSummary`）
+   *
+   *  后端保证这里**只有中文人话**：异常类名 / JSON / 厂商英文报文一律在 `raw` 里。
+   *  所以 UI 可以直接展示 `summary`，但**展示 `raw` 必须标明是技术细节**。 */
   summary: string
-  /** 原文摘要（截断 200 字，主设计 B.4 硬约束 4） */
+  /** 排障原文（异常类名、上游响应体等，截断 200 字，主设计 B.4 硬约束 4） */
   raw?: string
+  /** 失败归因代号（仅失败步骤有值） */
+  reason?: ProbeReason
   elapsedMs?: number
 }
 
@@ -121,6 +151,48 @@ export interface ProbeResult {
   /** 后端返回的整体结论；失败时优先展示它，不能只显示「卡在 L2」。 */
   summary?: string
   blocked_at?: ProbeGrade | null
+}
+
+// ── 模型目录（填写辅助，**不是探测结果**）───────────────────────────────
+
+export interface ModelCatalogItem {
+  id: string
+  /** 名称启发式分出的用途，仅用于分组展示；分错也不影响任何判定 */
+  kind: ModelKind
+}
+
+/**
+ * `POST /sys/providers/model-catalog` 的响应。
+ *
+ * ⚠️ 这里**没有 `blocked_at` / `steps`**，`ok` 的含义也**不是「供应商可用」**，
+ * 而是「这次拿到了可用的模型名清单」。拿不到只代表用户要手打模型名 —— 千万不要把
+ * `ok === false` 渲染成「供应商不可用」，那正是把原 L1 移出探测链要避免的误解。
+ */
+export interface ModelCatalogResponse {
+  ok: boolean
+  status: ProbeStatus
+  /** 结论文案，后端保证是中文人话 */
+  summary: string
+  reason?: ProbeReason | null
+  items: ModelCatalogItem[]
+  count: number
+  /** 厂商声称的总数（原生信封会给），没有则 null */
+  total?: number | null
+  truncated: boolean
+  /** 响应体是否 OpenAI 形状；`false` 说明地址疑似非兼容端点（会连带提示改地址） */
+  shape_ok?: boolean | null
+  /** 命中服务端短 TTL 缓存 */
+  cached: boolean
+  provider: string | null
+  target: string
+  network_scope: string
+  draft: boolean
+}
+
+export interface ModelCatalogInput {
+  baseUrl: string
+  apiKey?: string
+  networkScope?: 'public' | 'private'
 }
 
 export interface ProviderRow {

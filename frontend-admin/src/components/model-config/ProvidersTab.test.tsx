@@ -5,9 +5,12 @@ import { createRoot, type Root } from 'react-dom/client'
 const apiMock = vi.hoisted(() => ({
   createProvider: vi.fn(),
   addProviderModel: vi.fn(),
+  removeProviderModel: vi.fn(),
   saveProvider: vi.fn(),
   verifyProvider: vi.fn(),
   verifyDraftProvider: vi.fn(),
+  fetchModelCatalog: vi.fn(),
+  fetchProviderModelCatalog: vi.fn(),
 }))
 
 vi.mock('@/api/modelConfig', () => apiMock)
@@ -714,10 +717,200 @@ describe('ProvidersTab 地址助手', () => {
   })
 })
 
+describe('ProvidersTab 模型目录与「去修」动作（B2）', () => {
+  const CATALOG = {
+    ok: true,
+    summary: '上游目录共 5 个模型',
+    cached: false,
+    shape_ok: true,
+    truncated: false,
+    items: [
+      { id: 'qwen3.7-plus', kind: 'chat' },
+      { id: 'qwen3.8-max', kind: 'chat' },
+      { id: 'qwen3.7-text-embedding', kind: 'embedding' },
+      { id: 'qwen3.7-text-rerank', kind: 'rerank' },
+      { id: 'qwen3.7-vl', kind: 'vision' },
+    ],
+  }
+
+  it('「从目录选」按需拉取：默认只平铺当前用途，其余折叠；选中即回填并收起', async () => {
+    apiMock.fetchModelCatalog.mockResolvedValueOnce(CATALOG)
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
+
+    await click(container.querySelector('[data-testid="model-catalog-toggle"]') as HTMLButtonElement)
+    expect(apiMock.fetchModelCatalog).toHaveBeenCalledWith({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: undefined,
+      networkScope: 'public',
+    })
+
+    const panel = () => container.querySelector('[data-testid="model-catalog-panel"]') as HTMLElement
+    expect(panel().textContent).toContain('上游目录共 5 个模型')
+    // 当前用途（对话）直接平铺；别的用途收进 <details>，避免几百个名字一次铺出来
+    const chatSection = panel().querySelector('[data-testid="catalog-section-chat"]') as HTMLElement
+    expect(chatSection.tagName).toBe('DIV')
+    expect(chatSection.textContent).toContain('qwen3.7-plus')
+    const embeddingSection = panel().querySelector('[data-testid="catalog-section-embedding"]') as HTMLDetailsElement
+    expect(embeddingSection.tagName).toBe('DETAILS')
+    expect(embeddingSection.open).toBe(false)
+
+    act(() => { embeddingSection.open = true })
+    await click(container.querySelector('[data-testid="catalog-item-qwen3.7-text-embedding"]') as HTMLButtonElement)
+    const nameInput = container.querySelector('[data-testid="provider-model-name"]') as HTMLInputElement
+    expect(nameInput.value).toBe('qwen3.7-text-embedding')
+    expect(container.querySelector('[data-testid="model-catalog-panel"]')).toBeNull()
+  })
+
+  it('没填地址时不去请求，给可操作提示', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    await click(container.querySelector('[data-testid="model-catalog-toggle"]') as HTMLButtonElement)
+    expect(apiMock.fetchModelCatalog).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('请先填写 Base URL')
+  })
+
+  it('清单拉取失败不堵死路：显示原因，仍可直接手打', async () => {
+    apiMock.fetchModelCatalog.mockRejectedValueOnce(new Error('上游返回 404'))
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
+    await click(container.querySelector('[data-testid="model-catalog-toggle"]') as HTMLButtonElement)
+    expect(container.textContent).toContain('上游返回 404')
+    // 输入框保持可自由手打（大量站点不实现 /models）
+    const nameInput = container.querySelector('[data-testid="provider-model-name"]') as HTMLInputElement
+    expect(nameInput).toBeTruthy()
+    typeInto(container, 'provider-model-name', 'my-private-model')
+    expect((container.querySelector('[data-testid="provider-model-name"]') as HTMLInputElement).value).toBe('my-private-model')
+  })
+
+  it('L2 归因为模型名时给「从清单里选」去修按钮，点击即打开目录', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValueOnce({
+      ok: false,
+      provider: null,
+      target: 'https://api.example.com/v1',
+      network_scope: 'public',
+      draft: true,
+      summary: '未通过（卡在 L2）：模型名不对',
+      steps: [
+        { grade: 'L0', status: 'pass', summary: 'URL 可达' },
+        { grade: 'L2', status: 'fail', summary: '模型名不对，或这个 Key 无权访问该模型', reason: 'model_name' },
+      ],
+    })
+    apiMock.fetchModelCatalog.mockResolvedValueOnce(CATALOG)
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
+    typeInto(container, 'provider-model-name', 'some-model')
+    typeInto(container, 'provider-api-key', 'sk-test')
+    await click(container.querySelector('[data-testid="provider-test"]') as HTMLButtonElement)
+
+    const fixArea = container.querySelector('[data-testid="probe-fix-L2"]') as HTMLElement
+    expect(fixArea.textContent).toContain('可以直接修')
+    await click(Array.from(fixArea.querySelectorAll('button')).find((b) => b.textContent?.includes('从模型清单里选一个')) as HTMLButtonElement)
+    expect(apiMock.fetchModelCatalog).toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="model-catalog-panel"]')).toBeTruthy()
+  })
+
+  it('L2 归因为地址时一键改成兼容模式地址（替换而非追加）', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValueOnce({
+      ok: false,
+      provider: null,
+      target: 'https://maas.aliyuncs.com/api/v1',
+      network_scope: 'public',
+      draft: true,
+      summary: '未通过（卡在 L2）：端点没有该对话路由',
+      steps: [
+        { grade: 'L0', status: 'pass', summary: 'URL 可达' },
+        { grade: 'L2', status: 'fail', summary: '端点没有该对话路由（HTTP 404 且响应体为空）', reason: 'base_url' },
+      ],
+    })
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://maas.aliyuncs.com/api/v1')
+    typeInto(container, 'provider-model-name', 'some-model')
+    typeInto(container, 'provider-api-key', 'sk-test')
+    await click(container.querySelector('[data-testid="provider-test"]') as HTMLButtonElement)
+
+    const fixArea = container.querySelector('[data-testid="probe-fix-L2"]') as HTMLElement
+    expect(fixArea.textContent).toContain('改为兼容模式地址')
+    await click(Array.from(fixArea.querySelectorAll('button')).find((b) => b.textContent?.includes('改为兼容模式地址')) as HTMLButtonElement)
+    expect((container.querySelector('[data-testid="provider-base-url"]') as HTMLInputElement).value)
+      .toBe('https://maas.aliyuncs.com/compatible-mode/v1')
+  })
+
+  it('归因给不出可执行动作时不造按钮（如超时）', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValueOnce({
+      ok: false,
+      provider: null,
+      target: 'https://api.example.com/v1',
+      network_scope: 'public',
+      draft: true,
+      summary: '未通过（卡在 L2）：最小调用超时',
+      steps: [
+        { grade: 'L0', status: 'pass', summary: 'URL 可达' },
+        { grade: 'L2', status: 'fail', summary: '最小调用超时（10s）：模型可能不可用或响应过慢', reason: 'timeout' },
+      ],
+    })
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
+    typeInto(container, 'provider-model-name', 'some-model')
+    typeInto(container, 'provider-api-key', 'sk-test')
+    await click(container.querySelector('[data-testid="provider-test"]') as HTMLButtonElement)
+    expect(container.querySelector('[data-testid="probe-fix-L2"]')).toBeNull()
+  })
+
+  it('用户看不懂的英文异常只收进「技术细节」，不进结论', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValueOnce({
+      ok: false,
+      provider: null,
+      target: 'https://api.example.com/v1',
+      network_scope: 'public',
+      draft: true,
+      summary: '未通过（卡在 L2）',
+      steps: [
+        { grade: 'L0', status: 'pass', summary: 'URL 可达' },
+        {
+          grade: 'L2',
+          status: 'fail',
+          summary: 'Key 无效或没有权限 —— 请重新粘贴 Key（注意别带多余空格）',
+          reason: 'api_key',
+          raw: 'openai.AuthenticationError: Error code: 401 - invalid_api_key',
+        },
+      ],
+    })
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
+    typeInto(container, 'provider-model-name', 'some-model')
+    typeInto(container, 'provider-api-key', 'sk-test')
+    await click(container.querySelector('[data-testid="provider-test"]') as HTMLButtonElement)
+
+    const summary = container.querySelector('[data-testid="probe-step-summary-L2"]') as HTMLElement
+    expect(summary.textContent).toContain('Key 无效')
+    expect(summary.textContent).not.toContain('AuthenticationError')
+    // 英文原文保留在折叠的「技术细节」里供排障，不与结论混排
+    expect(container.textContent).toContain('技术细节')
+    expect(container.textContent).toContain('openai.AuthenticationError')
+  })
+
+  it('抽屉底部按钮收敛为 3 个，「完整测试」收进高级设置', async () => {
+    const container = mount()
+    await openNewProvider(container)
+    const footer = Array.from(container.querySelectorAll('div'))
+      .find((node) => node.className.includes('justify-end') && node.textContent === '取消测试连接测试并保存')
+    expect(footer, '底部应为 取消/测试连接/保存 三个按钮').toBeTruthy()
+    // 深度切换存在，且没有第二个常驻测试按钮
+    expect(container.querySelector('[data-testid="provider-probe-depth"]')).toBeTruthy()
+    expect(container.querySelectorAll('[data-testid="provider-test"]')).toHaveLength(1)
+    expect(container.textContent).not.toContain('完整测试中')
+  })
+})
+
 afterEach(() => {
-  apiMock.verifyProvider.mockReset()
-  apiMock.verifyDraftProvider.mockReset()
-  apiMock.saveProvider.mockReset()
+  for (const mock of Object.values(apiMock)) mock.mockReset()
   for (const { container, root } of mounted.splice(0)) {
     act(() => root.unmount())
     container.remove()

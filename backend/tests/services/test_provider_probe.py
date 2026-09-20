@@ -1,18 +1,23 @@
-"""services/provider_probe.py —— 四级探测契约（P1b）
+"""services/provider_probe.py —— 分级探测契约（P1b / §B.14）
 
-锁定三件事：
+锁定四件事：
 
 1. **私网放行只能来自显式 `network_scope`**，且云元数据地址即便放行也拦（B.6）。
    这是防 DNS rebinding 的关键，不能靠「解析出来是私网就自动放行」。
-2. **L1 失败不判死**（B.4 硬约束 1）：只有 L0 失败短路。若哪天有人把 L1 的
-   404/401 也改成短路，本文件会红 —— 那是刻意的，它会毁掉测试按钮的可信度。
+2. **探测链只剩 L0 + L2**（2026-09-21 起）：判定完全由 L2 给出，只有 L0 失败短路。
+   原 L1（`GET /models`）已移出链路、改为按需的 `fetch_model_catalog()`；若哪天有人
+   把它塞回探测链，本文件不会直接报错，但 `test_probe_chain_has_no_l1` 会红 ——
+   那是刻意的：它不仅拖慢成功路径，还会让「拿不到清单」被误读成「供应商不可用」。
 3. **探测不经 proxy**（B.4 硬约束 3）：用 AST 断言 import 列表，避免「探测烧预算
    / 污染 token 统计」这类只在运行时才暴露的问题。
+4. **给用户看的 `summary` 不得出现机器原文**：英文异常类名 / JSON / `Error code:`
+   一律只准出现在 `detail`。这组用例是文案纪律的门禁（用户明确要求过）。
 """
 from __future__ import annotations
 
 import ast
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +34,17 @@ def _async_step(level: str, status: str, summary: str):
     async def _f(*_a, **_k) -> P.ProbeStep:
         return P.ProbeStep(level=level, status=status, summary=summary)
     return _f
+
+
+class _HttpError(Exception):
+    """带 `status_code` 的异常，模拟 openai SDK 的 APIStatusError。
+
+    放在文件前部：下面有 `@pytest.mark.parametrize` 在**导入期**就要构造它。
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 # ── L0：私网策略 ────────────────────────────────────────────────────────
@@ -68,7 +84,12 @@ def test_l0_unreachable_is_fail_with_actionable_hint(monkeypatch):
     assert "不可达" in step.summary
 
 
-# ── L1：404 降级而非判死 ────────────────────────────────────────────────
+# ── 模型目录：按需资源（原 L1 的能力，已移出探测链）─────────────────────
+#
+# 这组用例守的是「探测链只剩 L0 + L2」之后的新契约：
+#   1. 拿不到清单**永远不算探测失败** —— 它只影响「要不要手打模型名」。
+#   2. 地址疑似填成厂商原生端点时，**清单照给但要点破地址**。
+#   3. `summary` 只讲人话，英文异常/JSON 一律进 `detail`。
 
 
 class _FakeResponse:
@@ -91,30 +112,58 @@ class _FakeClient:
         return self._response
 
 
+_catalog_calls = {"n": 0}
+
+
 def _patch_httpx(monkeypatch, response: _FakeResponse) -> None:
     import httpx
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **_k: _FakeClient(response))
+
+    def _factory(**_k):
+        _catalog_calls["n"] += 1
+        return _FakeClient(response)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _factory)
 
 
-def test_l1_200_is_pass(monkeypatch):
-    _patch_httpx(monkeypatch, _FakeResponse(200, '{"data": []}'))
-    step = _run(P.probe_l1("https://api.example.com/v1", "sk-x"))
-    assert step.status == P.STATUS_PASS
+@pytest.fixture(autouse=True)
+def _clear_catalog_state(monkeypatch):
+    """缓存与调用计数逐个用例清零 —— 否则本文件会互相污染（顺序敏感）。"""
+    _catalog_calls["n"] = 0
+    P.reset_catalog_cache_for_tests()
+    yield
+    P.reset_catalog_cache_for_tests()
 
 
-def test_l1_404_is_degraded_and_hints_missing_v1(monkeypatch):
-    """404 → 降级不判死，并提示可能缺 /v1（B.4 硬约束 1 + B.7 归一化提示）。"""
+def test_catalog_200_openai_shape_lists_models(monkeypatch):
+    _patch_httpx(monkeypatch, _FakeResponse(
+        200, '{"object":"list","data":[{"id":"qwen3.7-plus"},{"id":"bge-m3"}]}'))
+    cat = _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-x"))
+
+    assert cat.ok is True
+    assert cat.shape_ok is True
+    assert [i.id for i in cat.items] == ["qwen3.7-plus", "bge-m3"]
+    assert cat.items[0].kind == "chat"
+    assert cat.items[1].kind == "embedding"
+
+
+def test_catalog_404_hints_missing_v1_and_is_not_a_probe_failure(monkeypatch):
+    """404 只说明「这个站点没有清单接口」，不是「供应商不可用」。"""
     _patch_httpx(monkeypatch, _FakeResponse(404, "not found"))
-    step = _run(P.probe_l1("https://api.example.com", "sk-x"))
-    assert step.status == P.STATUS_DEGRADED
-    assert "/v1" in step.summary
+    cat = _run(P.fetch_model_catalog("https://api.example.com", "sk-x"))
+
+    assert cat.ok is False
+    assert cat.status == P.STATUS_DEGRADED      # 不是 fail —— 手打模型名照常可用
+    assert "/v1" in cat.summary
+    assert cat.reason == P.REASON_BASE_URL
 
 
-def test_l1_401_is_fail_pointing_at_key(monkeypatch):
+def test_catalog_401_points_at_key(monkeypatch):
     _patch_httpx(monkeypatch, _FakeResponse(401, "unauthorized"))
-    step = _run(P.probe_l1("https://api.example.com/v1", "sk-bad"))
-    assert step.status == P.STATUS_FAIL
-    assert "API Key" in step.summary
+    cat = _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-bad"))
+
+    assert cat.ok is False
+    assert cat.reason == P.REASON_API_KEY
+    assert "API Key" in cat.summary
 
 
 # 百炼原生 `/api/v1/models` 的真实响应形状（实测 200，507 个模型）。
@@ -125,33 +174,134 @@ _NATIVE_ENVELOPE = (
 )
 
 
-def test_l1_200_native_envelope_is_degraded_and_hints_base_url(monkeypatch):
-    """地址填成「厂商原生协议端点」时必须点破 —— 否则 L1 通过、L2 必然 404。
+def test_catalog_native_envelope_still_lists_names_but_flags_base_url(monkeypatch):
+    """地址填成「厂商原生协议端点」时：名字照给，但必须当场点破地址问题。
 
-    实测：`{base}/models` 在原生前缀下**也**是 200，于是 L1 会给绿灯；但 OpenAI
-    协议要打的 `/chat/completions` 在该前缀下不存在（404 且 body 为空），用户只会
-    看到一个 404 然后去猜模型名。这里要求降级并直接提示补 `/compatible-mode`。
+    实测：`{base}/models` 在原生前缀下**也**是 200（还能读出模型名），但 OpenAI 协议
+    要打的 `/chat/completions` 在该前缀下不存在（404 且 body 为空）。若这里不点破，
+    用户就会拿着正确的模型名、在错误的地址上反复 404。
     """
     _patch_httpx(monkeypatch, _FakeResponse(200, _NATIVE_ENVELOPE))
-    step = _run(P.probe_l1("https://maas.example.com/api/v1", "sk-x"))
-    assert step.status == P.STATUS_DEGRADED
-    assert "/compatible-mode" in step.summary
-    # 降级不等于判死：L1 永远不能短路探测（B.4 硬约束 1）
-    assert step.status != P.STATUS_FAIL
+    cat = _run(P.fetch_model_catalog("https://maas.example.com/api/v1", "sk-x"))
+
+    assert cat.shape_ok is False
+    assert [i.id for i in cat.items] == ["qwen3.8-max"]   # 名字照样给
+    assert cat.total == 507
+    assert "/compatible-mode" in cat.summary
 
 
-def test_l1_200_openai_list_object_stays_pass(monkeypatch):
-    _patch_httpx(monkeypatch, _FakeResponse(
-        200, '{"object":"list","data":[{"id":"m","object":"model"}]}'))
-    step = _run(P.probe_l1("https://api.example.com/v1", "sk-x"))
-    assert step.status == P.STATUS_PASS
-
-
-def test_l1_200_opaque_body_stays_pass(monkeypatch):
+def test_catalog_opaque_body_does_not_blame_the_address(monkeypatch):
     """形状判断不了时保持宽容 —— 宁可漏报，不可误报「地址错了」。"""
     _patch_httpx(monkeypatch, _FakeResponse(200, "<html>not json</html>"))
-    step = _run(P.probe_l1("https://api.example.com/v1", "sk-x"))
-    assert step.status == P.STATUS_PASS
+    cat = _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-x"))
+
+    assert cat.shape_ok is None
+    assert cat.ok is False
+    assert cat.reason != P.REASON_BASE_URL
+
+
+def test_catalog_truncates_beyond_limit(monkeypatch):
+    huge = json.dumps({"data": [{"id": f"m{i}"} for i in range(P._CATALOG_LIMIT + 5)]})
+    _patch_httpx(monkeypatch, _FakeResponse(200, huge))
+    cat = _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-x"))
+
+    assert len(cat.items) == P._CATALOG_LIMIT
+    assert cat.truncated is True
+
+
+def test_catalog_second_call_hits_cache_and_skips_http(monkeypatch):
+    _patch_httpx(monkeypatch, _FakeResponse(200, '{"data":[{"id":"m"}]}'))
+
+    first = _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-x"))
+    second = _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-x"))
+
+    assert first.cached is False
+    assert second.cached is True
+    assert _catalog_calls["n"] == 1        # 第二次没有再打上游
+    assert [i.id for i in second.items] == ["m"]
+
+
+def test_catalog_cache_is_keyed_by_api_key(monkeypatch):
+    """换 Key 必须重新拉 —— 否则会把上一个 Key 的可见范围错给下一个。"""
+    _patch_httpx(monkeypatch, _FakeResponse(200, '{"data":[{"id":"m"}]}'))
+
+    _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-a"))
+    _run(P.fetch_model_catalog("https://api.example.com/v1", "sk-b"))
+
+    assert _catalog_calls["n"] == 2
+
+
+def test_catalog_rejects_private_host_without_explicit_scope(monkeypatch):
+    """目录会带着用户的 Key 出站 —— 同样必须过 url_guard（唯一拦 SSRF 的地方）。"""
+    _patch_httpx(monkeypatch, _FakeResponse(200, '{"data":[{"id":"m"}]}'))
+    cat = _run(P.fetch_model_catalog("http://127.0.0.1:8000/v1", "sk-x"))
+
+    assert cat.ok is False
+    assert cat.reason == P.REASON_BLOCKED
+    assert _catalog_calls["n"] == 0        # 被拦的地址根本不该出站
+
+
+@pytest.mark.parametrize("model_id,kind", [
+    ("qwen3.7-plus", "chat"),
+    ("text-embedding-v4", "embedding"),
+    ("BAAI/bge-reranker-v2-m3", "rerank"),   # rerank 规则必须排在 embedding 的 bge 之前
+    ("bge-m3", "embedding"),
+    ("qwen3-omni-flutter", "vision"),
+    ("cosyvoice-v2", "speech"),
+])
+def test_catalog_model_kind_heuristics(model_id, kind):
+    assert P._classify_model_kind(model_id) == kind
+
+
+def test_catalog_kind_is_never_used_to_reject_a_name():
+    """分错用途只是分组问题 —— 默认一律保守落回 chat，不参与任何判定。"""
+    assert P._classify_model_kind("某个中文名模型") == "chat"
+    assert P._classify_model_kind("") == "chat"
+
+
+# ── 文案纪律：给用户看的 summary 不得出现看不懂的英文 ────────────────────
+
+_FORBIDDEN_IN_SUMMARY = (
+    "Error code:", "Traceback", "Exception", "openai", "langchain",
+    "OpenAI", "HTTPError", "status_code", "{", "}",
+)
+
+
+def _assert_human_readable(summary: str) -> None:
+    for token in _FORBIDDEN_IN_SUMMARY:
+        assert token not in summary, f"summary 泄漏了机器原文：{token} in {summary!r}"
+    # 中文结论：至少含一个汉字，避免退化成纯英文
+    assert any("\u4e00" <= ch <= "\u9fff" for ch in summary), summary
+
+
+@pytest.mark.parametrize("exc,api_key", [
+    (_HttpError("Error code: 404", status_code=404), "sk-secret"),
+    (_HttpError("Error code: 401 - invalid api key", status_code=401), "sk-secret"),
+    (RuntimeError(
+        "OpenAIModelNotFoundError: Error code: 404 - {'error': {'code': 'model_not_found'}}"), ""),
+    (RuntimeError("connection reset by peer"), ""),
+    (RuntimeError("APITimeoutError: Request timed out."), ""),
+])
+def test_l2_failure_summary_is_human_readable(exc, api_key):
+    """用户明确要求：失败提示不能是看不懂的英文 —— 原文只准进 detail。"""
+    failure = P._classify_l2_failure(exc, api_key=api_key)
+    _assert_human_readable(failure.summary)
+    assert exc.__class__.__name__ in failure.raw      # 原文没丢，只是换了字段
+
+
+def test_step_summary_never_carries_exception_chatter(monkeypatch):
+    """端到端再确认一次：探测步骤的 summary 干净、detail 才放原文。"""
+    monkeypatch.setattr(P, "assert_url_allowed", lambda url, **_k: url)
+
+    def _boom(*_a, **_k):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(P, "_tcp_tls_ok", _boom)
+    step = _run(P.probe_l0("https://api.example.com/v1", allow_private=False))
+
+    _assert_human_readable(step.summary)
+    assert "OSError" in step.detail
+    assert step.reason == P.REASON_UNREACHABLE
 
 
 # ── L2：Key 错 vs 模型名错 ──────────────────────────────────────────────
@@ -209,16 +359,8 @@ def test_fast_l2_only_waits_for_first_stream_chunk(monkeypatch):
      "模型名"),
 ])
 def test_l2_failure_attribution(message, expected):
-    out = P._classify_l2_failure(RuntimeError(message))
-    assert expected in out
-
-
-class _HttpError(Exception):
-    """带 `status_code` 的异常，模拟 openai SDK 的 APIStatusError。"""
-
-    def __init__(self, message: str, status_code: int | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
+    failure = P._classify_l2_failure(RuntimeError(message))
+    assert expected in failure.summary
 
 
 def test_l2_404_with_empty_body_blames_base_url_not_model_name():
@@ -228,9 +370,21 @@ def test_l2_404_with_empty_body_blames_base_url_not_model_name():
     之前就 404，说明该前缀下根本没有 `/chat/completions`；此时改模型名永远无效。
     """
     exc = _HttpError("Error code: 404", status_code=404)
-    out = P._classify_l2_failure(exc, api_key="sk-secret")
-    assert "/compatible-mode" in out
-    assert "模型名" not in out
+    failure = P._classify_l2_failure(exc, api_key="sk-secret")
+    assert "/compatible-mode" in failure.summary
+    assert "模型名" not in failure.summary
+    assert failure.reason == P.REASON_BASE_URL
+    assert failure.raw == "_HttpError: Error code: 404"
+
+
+def test_l2_raw_masks_the_api_key():
+    """原文要留，但**绝不能留 Key** —— 探测结果会被写进审计与日志。"""
+    exc = _HttpError("Error code: 401 - Incorrect API key provided: sk-secret")
+    failure = P._classify_l2_failure(exc, api_key="sk-secret")
+
+    assert "sk-secret" not in failure.raw
+    assert "<API_KEY>" in failure.raw
+    assert "sk-secret" not in failure.summary
 
 
 def test_l2_404_with_structured_body_still_blames_model_name():
@@ -239,9 +393,10 @@ def test_l2_404_with_structured_body_still_blames_model_name():
         "Error code: 404 - {'error': {'code': 'model_not_found', 'message': 'no such model'}}",
         status_code=404,
     )
-    out = P._classify_l2_failure(exc)
-    assert "模型名" in out
-    assert "/compatible-mode" not in out
+    failure = P._classify_l2_failure(exc)
+    assert "模型名" in failure.summary
+    assert "/compatible-mode" not in failure.summary
+    assert failure.reason == P.REASON_MODEL_NAME
 
 
 def test_l2_detail_is_clipped():
@@ -399,18 +554,18 @@ def test_rerank_probe_selects_protocol_from_registered_provider_url(monkeypatch)
     ]
 
 
-# ── 编排：只有 L0 短路 ──────────────────────────────────────────────────
+# ── 编排：只有 L0 短路，判定只看 L2 ─────────────────────────────────────
 
 
 def test_l0_failure_short_circuits(monkeypatch):
     monkeypatch.setattr(P, "probe_l0", _async_step("L0", P.STATUS_FAIL, "地址不通"))
     called = {"n": 0}
 
-    async def _l1(*_a, **_k):
+    async def _l2(*_a, **_k):
         called["n"] += 1
-        return P.ProbeStep("L1", P.STATUS_PASS, "ok")
+        return P.ProbeStep("L2", P.STATUS_PASS, "ok")
 
-    monkeypatch.setattr(P, "probe_l1", _l1)
+    monkeypatch.setattr(P, "probe_l2", _l2)
 
     res = _run(P.probe_provider(
         driver="openai", base_url="https://x/v1", api_key="k", model_name="m"
@@ -421,25 +576,31 @@ def test_l0_failure_short_circuits(monkeypatch):
     assert [s.level for s in res.steps] == ["L0"]
 
 
-def test_l1_failure_does_not_short_circuit_and_l2_can_still_pass(monkeypatch):
-    """L1 失败（如 401）仍继续跑 L2 —— 有些站点 /models 需额外 scope。"""
+def test_probe_chain_has_no_l1(monkeypatch):
+    """L1 必须留在探测链之外（2026-09-21 分层重划，详见模块头）。
+
+    原 L1 唯一的产出是模型名清单，而那份清单属于「填写阶段」的输入辅助、不是判定结论。
+    挂在链上只会串行拖慢成功路径（8s 超时 + 大量站点不实现 `/models`），并让「拿不到
+    清单」被误读成供应商问题。它已改由 `fetch_model_catalog()` 按需提供。
+    """
     monkeypatch.setattr(P, "probe_l0", _async_step("L0", P.STATUS_PASS, "可达"))
-    monkeypatch.setattr(P, "probe_l1", _async_step("L1", P.STATUS_FAIL, "Key 被拒绝"))
     monkeypatch.setattr(P, "probe_l2", _async_step("L2", P.STATUS_PASS, "模型可用"))
     monkeypatch.setattr(P, "probe_l3", _async_step("L3", P.STATUS_PASS, "usage"))
 
     res = _run(P.probe_provider(driver="openai", base_url="https://x/v1",
                                 api_key="k", model_name="m",
                                 include_stream_usage=True))
+
     assert res.ok is True
-    assert res.blocked_at is None
-    assert [s.level for s in res.steps] == ["L0", "L1", "L2", "L3"]
+    assert [s.level for s in res.steps] == ["L0", "L2", "L3"]
+    # 探测模块里不应再存在 probe_l1 —— 能力已迁到按需的目录接口
+    assert not hasattr(P, "probe_l1")
+    assert hasattr(P, "fetch_model_catalog")
 
 
 def test_fast_probe_skips_stream_usage_after_l2(monkeypatch):
     """快速测试只验证模型可调用，不因流式 usage 阻塞。"""
     monkeypatch.setattr(P, "probe_l0", _async_step("L0", P.STATUS_PASS, "可达"))
-    monkeypatch.setattr(P, "probe_l1", _async_step("L1", P.STATUS_PASS, "端点正常"))
     captured: dict = {}
 
     async def _l2(*_args, **kwargs):
@@ -461,14 +622,13 @@ def test_fast_probe_skips_stream_usage_after_l2(monkeypatch):
     assert res.ok is True
     assert res.blocked_at is None
     assert captured["fast"] is True
-    assert [s.level for s in res.steps] == ["L0", "L1", "L2", "L3"]
+    assert [s.level for s in res.steps] == ["L0", "L2", "L3"]
     assert res.steps[-1].status == P.STATUS_SKIP
     assert "快速测试" in res.steps[-1].summary
 
 
 def test_l2_failure_blocks_with_attribution(monkeypatch):
     monkeypatch.setattr(P, "probe_l0", _async_step("L0", P.STATUS_PASS, "可达"))
-    monkeypatch.setattr(P, "probe_l1", _async_step("L1", P.STATUS_DEGRADED, "跳过"))
     monkeypatch.setattr(P, "probe_l2", _async_step("L2", P.STATUS_FAIL, "模型名错误"))
 
     res = _run(P.probe_provider(driver="openai", base_url="https://x/v1",
@@ -480,7 +640,6 @@ def test_l2_failure_blocks_with_attribution(monkeypatch):
 
 def test_l3_skip_does_not_block(monkeypatch):
     monkeypatch.setattr(P, "probe_l0", _async_step("L0", P.STATUS_PASS, "可达"))
-    monkeypatch.setattr(P, "probe_l1", _async_step("L1", P.STATUS_PASS, "ok"))
     monkeypatch.setattr(P, "probe_l2", _async_step("L2", P.STATUS_PASS, "ok"))
     monkeypatch.setattr(P, "probe_l3", _async_step("L3", P.STATUS_SKIP, "不回传 usage"))
 
@@ -514,4 +673,20 @@ def test_probe_result_dict_shape():
                         steps=[P.ProbeStep("L0", P.STATUS_PASS, "可达")])
     d = res.to_dict()
     assert set(d) == {"ok", "blocked_at", "summary", "steps"}
-    assert set(d["steps"][0]) == {"level", "status", "summary", "detail", "elapsed_ms"}
+    assert set(d["steps"][0]) == {
+        "level", "status", "summary", "detail", "elapsed_ms", "reason",
+    }
+
+
+def test_catalog_dict_shape():
+    """前端据此渲染分组与「去修」动作 —— 改字段名要同步 modelConfig.ts。"""
+    cat = P.ModelCatalog(
+        ok=True, status=P.STATUS_PASS, summary="共 1 个模型可选",
+        items=[P.ModelCatalogItem(id="m", kind="chat")],
+    )
+    d = cat.to_dict()
+    assert set(d) == {
+        "ok", "status", "summary", "reason", "items", "count", "total",
+        "truncated", "shape_ok", "cached",
+    }
+    assert d["items"][0] == {"id": "m", "kind": "chat"}

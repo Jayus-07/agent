@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
-import { CheckCircle2, Edit3, FlaskConical, KeyRound, LockKeyhole, Plus, Save, Trash2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { CheckCircle2, Edit3, FlaskConical, KeyRound, ListChecks, LockKeyhole, Plus, Save, Trash2, Wrench, X } from 'lucide-react'
 import {
   addProviderModel,
   createProvider,
+  fetchModelCatalog,
+  fetchProviderModelCatalog,
   removeProviderModel,
   saveProvider,
   verifyDraftProvider,
@@ -19,9 +21,12 @@ import {
   probeFallbackSummary,
   probeStepSummary,
   maskSecret,
+  type ModelCatalogItem,
+  type ModelCatalogResponse,
   type ModelKind,
   type PlanId,
   type PresetPlan,
+  type ProbeReason,
   type ProviderPreset,
   type ProviderRow,
 } from '@/types/modelConfig'
@@ -376,7 +381,167 @@ function resultElapsedMs(result: ProbeResponse): number {
   return result.steps.reduce((total, step) => total + (step.elapsedMs ?? 0), 0)
 }
 
-function ProbeResultDetails({ result }: { result: ProbeResponse }) {
+// ── 模型清单的筛选与分组（纯函数，供「从目录选」使用）─────────────────────
+
+/** 搜索态每组上限；浏览态「当前用途」组与其余组各自的条数上限。
+ *
+ *  实测某厂商一次返回 **507** 个模型名 —— 一次铺出来等于让用户滚着找，所以浏览态
+ *  只给「与当前用途一致」的那组 30 条，其余收进折叠区；一旦开始输入就转为跨全部
+ *  分组搜索（这时才可能命中向量/重排模型）。
+ */
+const CATALOG_SEARCH_LIMIT = 25
+const CATALOG_BROWSE_PRIMARY = 30
+const CATALOG_BROWSE_OTHER = 10
+
+const CATALOG_KIND_ORDER: ModelKind[] = ['chat', 'embedding', 'rerank', 'vision', 'speech']
+
+interface CatalogSection {
+  kind: ModelKind
+  /** 该组命中的总数（可能大于 `items.length`） */
+  total: number
+  /** 实际要渲染的条目 */
+  items: ModelCatalogItem[]
+  /** 是否为「当前用途」那一组 —— 组件据此决定默认展开 */
+  primary: boolean
+}
+
+/** 按「与当前用途一致优先」分组，并做输入即筛。
+ *
+ *  主分组取**当前「模型用途」**而不是固定 chat：用户把用途改成 embedding 时他要找的
+ *  就是向量模型，此时还先给一堆对话模型是反直觉的。
+ */
+function catalogSections(
+  items: ModelCatalogItem[],
+  query: string,
+  primaryKind: ModelKind,
+): { sections: CatalogSection[]; matched: number; searching: boolean } {
+  const q = query.trim().toLowerCase()
+  const matched = q ? items.filter((item) => item.id.toLowerCase().includes(q)) : items
+  const order = [primaryKind, ...CATALOG_KIND_ORDER.filter((kind) => kind !== primaryKind)]
+
+  const sections: CatalogSection[] = []
+  for (const kind of order) {
+    const group = matched.filter((item) => item.kind === kind)
+    if (!group.length) continue
+    const primary = kind === primaryKind
+    const limit = q
+      ? CATALOG_SEARCH_LIMIT
+      : (primary ? CATALOG_BROWSE_PRIMARY : CATALOG_BROWSE_OTHER)
+    sections.push({ kind, total: group.length, items: group.slice(0, limit), primary })
+  }
+  return { sections, matched: matched.length, searching: Boolean(q) }
+}
+
+/** 该名字在上游目录里属于别的用途吗（**仅提示，不拦截**）。 */
+function catalogKindMismatch(
+  name: string,
+  kind: ModelKind,
+  items: ModelCatalogItem[],
+): ModelKind | null {
+  const hit = items.find((item) => item.id === name)
+  return hit && hit.kind !== kind ? hit.kind : null
+}
+
+// ── 探测失败后的「去修」动作（纯函数产出描述，组件负责绑定 onClick）──────
+
+/** 一个可执行的修复动作。**刻意不带回调** —— 保持纯函数可单测。
+ *
+ *  地址类的动作直接带上**算好的目标地址**（`use-url`），而不是「补一段 /v1」这种指令：
+ *  补与替换的差别很大（百炼要从 `/api/v1` **换成** `/compatible-mode/v1`，不是往后接），
+ *  让纯函数算出最终值，组件只负责写入，也便于断言。
+ */
+type FixHint =
+  | { kind: 'use-preset'; presetId: string; label: string }
+  | { kind: 'use-url'; baseUrl: string; label: string }
+  | { kind: 'open-catalog'; label: string }
+  | { kind: 'focus-api-key'; label: string }
+
+function baseUrlOrigin(raw: string): string {
+  try {
+    const url = new URL(raw.trim())
+    return `${url.protocol}//${url.host}`
+  } catch {
+    return ''
+  }
+}
+
+/** 由**失败归因代号**推出可点的修复动作。
+ *
+ *  只对能确定动作的归因给按钮 —— 给不出就**不给**：一个点了没用的按钮比没有按钮更糟。
+ *  结论全部来自预置目录与当前地址，不硬编码厂商知识（百炼那条也是照它文档写明的路径）。
+ */
+function fixHintsFor(
+  reason: ProbeReason | undefined,
+  draft: { baseUrl: string; driver: ProviderRow['driver'] },
+  presets: ProviderPreset[],
+  plans: PresetPlan[],
+): FixHint[] {
+  const baseUrl = draft.baseUrl.trim()
+  if (reason === 'base_url') {
+    const hints: FixHint[] = []
+    const host = baseUrlHost(baseUrl)
+    // 同域名、同协议的收录端点（最多两条）——最可能就是用户想填的那个
+    for (const preset of presets) {
+      if (baseUrlHost(preset.baseUrl) !== host) continue
+      if (preset.driver !== draft.driver) continue
+      if (normalizeBaseUrl(preset.baseUrl) === normalizeBaseUrl(baseUrl)) continue
+      hints.push({
+        kind: 'use-preset',
+        presetId: preset.id,
+        label: `改用「${presetLabelFor(preset, plans)}」`,
+      })
+      if (hints.length >= 2) break
+    }
+
+    const lower = baseUrl.toLowerCase()
+    const path = baseUrlPath(baseUrl)
+    const origin = baseUrlOrigin(baseUrl)
+    if (origin && host.endsWith('maas.aliyuncs.com') && !lower.includes('/compatible-mode')) {
+      // 百炼的原生前缀是 `/api/v1`，OpenAI 兼容端点是 `/compatible-mode/v1`
+      // —— 是**替换**而不是追加，所以按路径判断该换成什么。
+      const target = /\/api\/v\d+$/.test(path) ? `${origin}/compatible-mode/v1` : `${baseUrl.replace(/\/+$/, '')}/compatible-mode/v1`
+      hints.push({ kind: 'use-url', baseUrl: target, label: '改为兼容模式地址（/compatible-mode/v1）' })
+    } else if (origin && !/\/v\d+\/?$/.test(lower) && !lower.includes('/compatible-mode')) {
+      hints.push({ kind: 'use-url', baseUrl: `${baseUrl.replace(/\/+$/, '')}/v1`, label: '在地址末尾补 /v1' })
+    }
+    return hints.slice(0, 3)
+  }
+  if (reason === 'model_name') {
+    return [{ kind: 'open-catalog', label: '从模型清单里选一个' }]
+  }
+  if (reason === 'api_key') {
+    return [{ kind: 'focus-api-key', label: '重新填写 API Key' }]
+  }
+  // unreachable / blocked / timeout / invalid_url / client_build / unknown：
+  // 能给的只有「检查地址与网络」这类说明，给不出可执行的一步 —— 不造按钮。
+  return []
+}
+
+/** 把后端 / 传输层抛来的错误文案变成人话。
+ *
+ *  裸 `error.message` 常是 `{"detail": ...}` 或 SDK 英文原文，用户看不懂；但也不能直接
+ *  丢掉（排障要用）。所以：**含中文就照用**，否则换成一句中文结论 + 折叠原文。
+ */
+function friendlyErrorMessage(raw: string): { summary: string; raw?: string } {
+  const text = raw.trim()
+  if (!text) return { summary: '操作没有成功，请稍后重试' }
+  if (/[\u4e00-\u9fff]/.test(text)) return { summary: text }
+  return {
+    summary: '请求没有成功 —— 请检查网络、网关与后端服务',
+    raw: text,
+  }
+}
+
+function ProbeResultDetails({
+  result,
+  fixHints,
+  onFix,
+}: {
+  result: ProbeResponse
+  /** `grade → 可执行的修复动作`（由 `fixHintsFor` 产出）。不传则不显示「去修」。 */
+  fixHints?: Record<string, FixHint[]>
+  onFix?: (hint: FixHint) => void
+}) {
   const failure = probeFailureReason(result)
   const elapsedMs = resultElapsedMs(result)
   return (
@@ -391,16 +556,36 @@ function ProbeResultDetails({ result }: { result: ProbeResponse }) {
       <details open={!result.ok} className="mt-1.5">
         <summary className="cursor-pointer select-none text-[10px] font-medium">查看探测详情</summary>
         <ol className="mt-1.5 space-y-1.5">
-          {result.steps.map((step) => (
-            <li key={step.grade} className="border-l border-current/20 pl-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{step.grade} · {gradeLabel(step.grade)} · {probeStatusLabel(step.status)}</span>
-                {step.elapsedMs != null && <span className="opacity-70">{step.elapsedMs}ms</span>}
-              </div>
-              <div className="mt-0.5 break-words">{probeStepSummary(step)}</div>
-              {step.raw && <div className="mt-0.5 break-words opacity-75">原文：{step.raw}</div>}
-            </li>
-          ))}
+          {result.steps.map((step) => {
+            const hints = step.status === 'fail' ? fixHints?.[step.grade] ?? [] : []
+            return (
+              <li key={step.grade} className="border-l border-current/20 pl-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{step.grade} · {gradeLabel(step.grade)} · {probeStatusLabel(step.status)}</span>
+                  {step.elapsedMs != null && <span className="opacity-70">{step.elapsedMs}ms</span>}
+                </div>
+                <div className="mt-0.5 break-words" data-testid={`probe-step-summary-${step.grade}`}>{probeStepSummary(step)}</div>
+                {hints.length > 0 && onFix && (
+                  <div data-testid={`probe-fix-${step.grade}`} className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="flex items-center gap-1 opacity-80"><Wrench size={10} />可以直接修：</span>
+                    {hints.map((hint) => (
+                      <AdvisorButton key={`${hint.kind}:${hint.label}`} disabled={false} onClick={() => onFix(hint)}>
+                        {hint.label}
+                      </AdvisorButton>
+                    ))}
+                  </div>
+                )}
+                {/* 英文原文 / 上游报文只在这里出现，并明确标注用途 —— 用户看不懂的东西
+                    不该和结论混在一行里。 */}
+                {step.raw && (
+                  <details className="mt-0.5 opacity-75">
+                    <summary className="cursor-pointer select-none">技术细节（上游原文，排障用）</summary>
+                    <div className="mt-0.5 break-words font-mono">{step.raw}</div>
+                  </details>
+                )}
+              </li>
+            )
+          })}
         </ol>
         {result.suggestion && <div className="mt-1.5 break-words border-t border-current/10 pt-1.5">建议：{result.suggestion}</div>}
       </details>
@@ -984,7 +1169,7 @@ export default function ProvidersTab({
                 {(liveResult || liveError || (!isTesting && row.lastProbe && !row.lastProbe.ok)) && (
                   <div className="mt-2 space-y-2">
                     {liveResult && <ProbeResultDetails result={liveResult} />}
-                    {liveError && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[10px] text-red-800">{liveError}</div>}
+                    {liveError && <ErrorNote message={liveError} />}
                     {!liveResult && !liveError && !isTesting && row.lastProbe && !row.lastProbe.ok && row.lastProbe.worstGrade && (
                       <div className="rounded-lg border border-red-100 bg-red-50/60 px-2.5 py-2 text-[10px] text-red-700">建议：{probeFallbackSummary(row.lastProbe.worstGrade, 'fail')}</div>
                     )}
@@ -1011,8 +1196,7 @@ export default function ProvidersTab({
         testingMode={testingTarget === 'draft' ? testingMode : null}
         testingElapsedMs={testingElapsedMs}
         onSave={() => { void save() }}
-        onTest={() => { void performDraftTest('fast') }}
-        onFullTest={() => { void performDraftTest('full') }}
+        onTest={(mode) => { void performDraftTest(mode) }}
         onCancel={() => { setEditing(null); resetProbe() }}
       />}
       {addingModel && <ProviderModelEditor
@@ -1100,6 +1284,205 @@ function ProviderModelEditor({
   )
 }
 
+/** 错误提示：中文结论直接显示，原文收进折叠的「技术细节」。 */
+function ErrorNote({ message, tone = 'red' }: { message: string; tone?: 'red' | 'amber' }) {
+  const { summary, raw } = friendlyErrorMessage(message)
+  const palette = tone === 'amber'
+    ? 'border-amber-200 bg-amber-50 text-amber-800'
+    : 'border-red-200 bg-red-50 text-red-800'
+  return (
+    <div className={`break-words rounded-lg border px-3 py-2 text-[11px] ${palette}`}>
+      <div>{summary}</div>
+      {raw && (
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none opacity-80">技术细节</summary>
+          <div className="mt-0.5 break-words font-mono text-[10px] opacity-90">{raw}</div>
+        </details>
+      )}
+    </div>
+  )
+}
+
+/** 模型名输入 + 「从目录选」。
+ *
+ *  两条硬约束：
+ *
+ *  1. **输入框永远可以自由手打**。大量中转站 / 编码套餐不实现 `/models`，目录会是空的；
+ *     把这里做成强制下拉就等于让这些供应商没法用。
+ *  2. **目录只是提示，不是保证**。上游目录可能列着该 Key 其实调不通的模型名（中转站
+ *     惯用手法），也可能包含别的账号才有的模型。选中只代表「少打几个字」，**能不能用
+ *     仍然只由「测试连接」的 L2 说了算**。
+ */
+function ModelCatalogPicker({
+  value,
+  modelKind,
+  disabled,
+  catalog,
+  loading,
+  error,
+  open,
+  onToggle,
+  onLoad,
+  onChange,
+}: {
+  value: string
+  modelKind: ModelKind
+  disabled: boolean
+  catalog: ModelCatalogResponse | null
+  loading: boolean
+  error: string | null
+  open: boolean
+  onToggle: (next: boolean) => void
+  onLoad: () => void
+  onChange: (next: string) => void
+}) {
+  const [filter, setFilter] = useState('')
+  const { sections, matched, searching } = catalog
+    ? catalogSections(catalog.items, filter, modelKind)
+    : { sections: [] as CatalogSection[], matched: 0, searching: false }
+  const mismatch = catalog ? catalogKindMismatch(value.trim(), modelKind, catalog.items) : null
+
+  function toggle() {
+    if (!open) {
+      onToggle(true)
+      setFilter('')
+      // 每次打开都重新请求：服务端有短 TTL 缓存，重复打开不会真的反复打上游。
+      onLoad()
+    } else {
+      onToggle(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-end gap-2">
+        <label className="block flex-1 text-xs text-text-secondary">模型名称
+          <input
+            data-testid="provider-model-name"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm"
+            placeholder="例如：deepseek-v4-pro、qwen3.7-plus"
+            autoComplete="off"
+          />
+        </label>
+        <button
+          type="button"
+          data-testid="model-catalog-toggle"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={toggle}
+          className="flex shrink-0 items-center gap-1 rounded-lg border border-black/10 px-2.5 py-2 text-[11px] text-text-secondary hover:bg-slate-50 disabled:opacity-50"
+        >
+          <ListChecks size={12} />{open ? '收起清单' : '从目录选'}
+        </button>
+      </div>
+
+      {mismatch && (
+        <div data-testid="model-kind-mismatch" className="mt-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          「{value.trim()}」在上游目录里是{modelKindLabel(mismatch)}，与当前「模型用途」不一致 —— 测试多半会失败，请一并调整用途。
+        </div>
+      )}
+
+      {open && (
+        <div data-testid="model-catalog-panel" className="mt-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+          {loading && <div role="status" className="px-1 py-1.5 text-[11px] text-text-muted">正在读取上游模型清单…</div>}
+          {!loading && error && <ErrorNote message={error} />}
+          {!loading && !error && catalog && (
+            <>
+              <div className={`px-1 text-[11px] ${catalog.shape_ok === false ? 'text-amber-800' : 'text-text-secondary'}`}>
+                {catalog.summary}
+                {catalog.cached && <span className="ml-1 text-text-muted">（缓存）</span>}
+              </div>
+
+              {catalog.ok && catalog.items.length > 0 ? (
+                <>
+                  <input
+                    autoFocus
+                    data-testid="model-catalog-filter"
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    className="mt-1.5 w-full rounded-lg border border-black/10 px-2.5 py-1.5 font-mono text-[11px]"
+                    placeholder="输入关键字筛选，例如 qwen / bge / embedding"
+                    autoComplete="off"
+                  />
+                  <div className="mt-1 max-h-56 overflow-y-auto">
+                    {sections.map((section) => (
+                      <CatalogSectionList
+                        key={section.kind}
+                        section={section}
+                        onPick={(name) => { onChange(name); onToggle(false) }}
+                      />
+                    ))}
+                    {searching && matched === 0 && (
+                      <div className="px-1 py-2 text-[11px] text-text-muted">没有匹配的模型名 —— 可以直接手打，清单不代表全部。</div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-1 px-1 text-[11px] text-text-muted">
+                  拿不到清单不影响使用，直接手打模型名即可 —— 「测试连接」照样能验证。
+                </div>
+              )}
+
+              <div className="mt-1.5 border-t border-slate-100 px-1 pt-1.5 text-[10px] text-text-muted">
+                清单由上游返回，可能包含该 Key 调不通、或只在别处可用的模型名；选中后仍需「测试连接」通过才能真正使用。
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 清单里的一个用途分组。非「当前用途」组默认折叠，避免 507 个名字一次铺出来。 */
+function CatalogSectionList({
+  section,
+  onPick,
+}: {
+  section: CatalogSection
+  onPick: (name: string) => void
+}) {
+  const list = (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {section.items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          data-testid={`catalog-item-${item.id}`}
+          onClick={() => onPick(item.id)}
+          className="max-w-full truncate rounded border border-black/10 px-1.5 py-0.5 font-mono text-[10px] text-text-secondary hover:border-accent hover:bg-accent/5 hover:text-accent"
+          title={item.id}
+        >
+          {item.id}
+        </button>
+      ))}
+    </div>
+  )
+
+  if (section.primary) {
+    return (
+      <div data-testid={`catalog-section-${section.kind}`} className="px-1 py-1">
+        <div className="text-[10px] text-text-muted">{modelKindLabel(section.kind)}（{section.total}）</div>
+        {list}
+        {section.total > section.items.length && (
+          <div className="mt-1 text-[10px] text-text-muted">还有 {section.total - section.items.length} 个，输入关键字可继续收窄。</div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <details data-testid={`catalog-section-${section.kind}`} className="px-1 py-1">
+      <summary className="cursor-pointer select-none text-[10px] text-text-muted">
+        其他用途 · {modelKindLabel(section.kind)}（{section.total}）
+      </summary>
+      {list}
+    </details>
+  )
+}
+
 function ProviderEditor({
   draft,
   providers,
@@ -1116,7 +1499,6 @@ function ProviderEditor({
   testingElapsedMs,
   onSave,
   onTest,
-  onFullTest,
   onCancel,
 }: {
   draft: Draft
@@ -1133,13 +1515,88 @@ function ProviderEditor({
   testingMode: ProbeMode | null
   testingElapsedMs: number
   onSave: () => void
-  onTest: () => void
-  onFullTest: () => void
+  /** 测试深度由抽屉内的「高级设置」决定，所以回调带 mode —— 底部不再放两个测试按钮。 */
+  onTest: (mode: ProbeMode) => void
   onCancel: () => void
 }) {
   const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch })
   const isNew = !draft.id
   const row = draft.id ? providers.find((item) => item.id === draft.id) ?? null : null
+
+  // 测试深度：默认快速。完整测试只多查一项「流式是否回传 usage」，与可用性判断无关，
+  // 因此收进高级设置，不再占用底部一个常驻按钮。
+  const [probeDepth, setProbeDepth] = useState<ProbeMode>('fast')
+
+  // 模型清单：用户点「从目录选」才去拉（见 ModelCatalogPicker 的说明）。
+  const [catalogOpen, setCatalogOpen] = useState(false)
+  const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(null)
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogError, setCatalogError] = useState<string | null>(null)
+  const apiKeyRef = useRef<HTMLInputElement | null>(null)
+
+  async function loadCatalog() {
+    if (catalogLoading) return
+    const baseUrl = draft.baseUrl.trim()
+    if (!baseUrl) {
+      setCatalog(null)
+      setCatalogError('请先填写 Base URL，才能读取该地址的模型清单')
+      return
+    }
+    setCatalogLoading(true)
+    setCatalogError(null)
+    try {
+      // 地址与密钥都没被改过、且有已保存密钥 → 走服务端已存的凭据（密钥不回显）；
+      // 否则用草稿接口，把当前填的地址与 Key 带上去。
+      const canUseSavedCredential = Boolean(
+        draft.id
+        && draft.credentialConfigured
+        && !draft.apiKey?.trim()
+        && draft.originalBaseUrl === baseUrl,
+      )
+      const result = canUseSavedCredential && draft.id
+        ? await fetchProviderModelCatalog(draft.id)
+        : await fetchModelCatalog({
+            baseUrl,
+            apiKey: draft.apiKey?.trim() || undefined,
+            networkScope: draft.networkScope,
+          })
+      setCatalog(result)
+    } catch (error) {
+      setCatalog(null)
+      setCatalogError(error instanceof Error ? error.message : '模型清单读取失败')
+    } finally {
+      setCatalogLoading(false)
+    }
+  }
+
+  /** 把「去修」动作落到具体控件上。 */
+  function handleFix(hint: FixHint) {
+    if (hint.kind === 'use-preset') {
+      onPresetChange(hint.presetId)
+      return
+    }
+    if (hint.kind === 'use-url') {
+      update({ baseUrl: hint.baseUrl })
+      return
+    }
+    if (hint.kind === 'open-catalog') {
+      setCatalogOpen(true)
+      void loadCatalog()
+      return
+    }
+    if (hint.kind === 'focus-api-key') {
+      apiKeyRef.current?.focus()
+      apiKeyRef.current?.select()
+    }
+  }
+
+  // 只给「判死那一级」配动作 —— 降级/跳过的步骤不需要用户做什么。
+  const fixHints: Record<string, FixHint[]> = {}
+  for (const step of probeResult?.steps ?? []) {
+    if (step.status !== 'fail') continue
+    const hints = fixHintsFor(step.reason, draft, presets, plans)
+    if (hints.length) fixHints[step.grade] = hints
+  }
 
   // 预置目录可用性。不可用时整块降级为手填 —— 不能把「新增供应商」做成死路。
   const catalogReady = plans.length > 0 && presets.length > 0
@@ -1232,12 +1689,21 @@ function ProviderEditor({
           {placeholder && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">地址里的 {'{'} {placeholder} {'}'} 是占位符，必须替换成你自己的取值才能测试。</div>}
 
           <label className="block text-xs text-text-secondary">API Key
-            <input data-testid="provider-api-key" type="password" value={draft.apiKey || ''} onChange={(event) => update({ apiKey: event.target.value || undefined, clearApiKey: false })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" autoComplete="new-password" placeholder={draft.credentialConfigured ? `已配置 ${maskSecret(draft.keyLast4, null) || '****'}，留空则保持不变` : '输入你的 API Key'} />
+            <input ref={apiKeyRef} data-testid="provider-api-key" type="password" value={draft.apiKey || ''} onChange={(event) => update({ apiKey: event.target.value || undefined, clearApiKey: false })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" autoComplete="new-password" placeholder={draft.credentialConfigured ? `已配置 ${maskSecret(draft.keyLast4, null) || '****'}，留空则保持不变` : '输入你的 API Key'} />
           </label>
 
-          <label className="block text-xs text-text-secondary">模型名称
-            <input data-testid="provider-model-name" value={draft.modelName} onChange={(event) => changeModelName(event.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：deepseek-v4-pro、qwen3.7-plus" autoComplete="off" />
-          </label>
+          <ModelCatalogPicker
+            value={draft.modelName}
+            modelKind={draft.modelKind}
+            disabled={busy}
+            catalog={catalog}
+            loading={catalogLoading}
+            error={catalogError}
+            open={catalogOpen}
+            onToggle={setCatalogOpen}
+            onLoad={() => { void loadCatalog() }}
+            onChange={changeModelName}
+          />
           {occupiedBy && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">模型名「{trimmedName}」已属于供应商「{occupiedBy.displayName}」。模型名全局唯一，保存会被拒绝 —— 请换个名字，或改去那个供应商下追加。</div>}
 
           <label className="block text-xs text-text-secondary">模型用途
@@ -1265,20 +1731,22 @@ function ProviderEditor({
               <label>计费口径<select data-testid="provider-billing" value={draft.billing} onChange={(event) => update({ billing: event.target.value as Draft['billing'] })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="metered">按量计费</option><option value="subscription">订阅制</option><option value="local">本地</option></select>
                 <span className="mt-1 block text-[10px] text-text-muted">默认由计费计划派生（Token Plan / Coding Plan → 订阅制），可覆盖。</span>
               </label>
+              <label className="md:col-span-2">测试深度<select data-testid="provider-probe-depth" value={probeDepth} onChange={(event) => setProbeDepth(event.target.value as ProbeMode)} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="fast">快速 —— 只确认能调用（推荐）</option><option value="full">完整 —— 额外检查流式是否回传 usage</option></select>
+                <span className="mt-1 block text-[10px] text-text-muted">「流式 usage」只影响记账能否拿到 token 数，与模型能不能用无关，所以完整测试更慢却不一定更有用。</span>
+              </label>
             </div>
             {!isNew && draft.credentialConfigured && <label className="mt-3 flex items-center gap-2 text-[11px] text-red-700"><input type="checkbox" checked={Boolean(draft.clearApiKey)} onChange={(event) => update({ clearApiKey: event.target.checked, apiKey: undefined })} />清除托管 API Key</label>}
           </details>
 
           {draft.clearApiKey && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">保存后将清除当前托管密钥。</div>}
           {testingMode && <div role="status" className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-[11px] text-accent">正在{probeModeLabel(testingMode)}连接 · 已耗时 {formatLiveElapsed(testingElapsedMs)}</div>}
-          {probeResult && <ProbeResultDetails result={probeResult} />}
-          {probeError && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{probeError}</div>}
+          {probeResult && <ProbeResultDetails result={probeResult} fixHints={fixHints} onFix={handleFix} />}
+          {probeError && <ErrorNote message={probeError} />}
         </div>
 
         <div className="mt-5 flex justify-end gap-2">
           <button disabled={busy} onClick={onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
-          <button disabled={busy} onClick={onTest} className="flex items-center gap-1 rounded-lg border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50"><FlaskConical size={13} />{testingMode === 'fast' ? `测试中 ${formatLiveElapsed(testingElapsedMs)}` : '测试连接'}</button>
-          <button disabled={busy} onClick={onFullTest} className="flex items-center gap-1 rounded-lg border border-accent/20 px-3 py-2 text-xs text-accent disabled:opacity-50">{testingMode === 'full' ? `完整测试中 ${formatLiveElapsed(testingElapsedMs)}` : '完整测试'}</button>
+          <button data-testid="provider-test" disabled={busy} onClick={() => onTest(probeDepth)} className="flex items-center gap-1 rounded-lg border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50"><FlaskConical size={13} />{testingMode ? `${probeModeLabel(testingMode)}中 ${formatLiveElapsed(testingElapsedMs)}` : probeDepth === 'full' ? '完整测试' : '测试连接'}</button>
           <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />{isNew ? '测试并保存' : '保存'}</button>
         </div>
       </div>

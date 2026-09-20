@@ -2,6 +2,8 @@ import { mutationRequest, request } from '@/api/client'
 import type {
   ConfigHistoryEntry,
   DriftItem,
+  ModelCatalogInput,
+  ModelCatalogResponse,
   ModelKind,
   ProbeResult,
   ProviderListResponse,
@@ -110,6 +112,7 @@ function normalizeProbeResponse(input: Record<string, any>): ProbeResponse {
       status: step.status,
       summary: String(step.summary ?? ''),
       raw: step.raw ?? step.detail,
+      reason: step.reason ?? undefined,
       elapsedMs: step.elapsedMs ?? step.elapsed_ms,
     })),
   } as ProbeResponse
@@ -215,6 +218,57 @@ export async function verifyDraftProvider(body: DraftProbeInput, options: ProbeO
     timeout: mode === 'full' ? 60000 : 45000,
   })
   return normalizeProbeResponse(result)
+}
+
+/** 拉取**草稿态**供应商的模型名清单（`GET {base}/models`，后端带短 TTL 缓存）。
+ *
+ *  与 `verifyDraftProvider` 的区别是本质性的：那个回答「能不能用」，这个只回答
+ *  「有哪些模型名可以填」。**拿不到清单不代表供应商不可用** —— 它只意味着用户得
+ *  手打模型名，所以这里失败时不要在 UI 上渲染成"测试失败"。
+ */
+export async function fetchModelCatalog(body: ModelCatalogInput): Promise<ModelCatalogResponse> {
+  const result = await mutationRequest<Record<string, any>>('/api/sys/providers/model-catalog', {
+    operation: 'model-provider-catalog-draft',
+    method: 'POST',
+    body,
+    timeout: 30000,
+  })
+  return normalizeCatalogResponse(result)
+}
+
+/** 拉取**已在库实例**的模型名清单（用库里保存的地址与密钥，密钥不回显）。 */
+export async function fetchProviderModelCatalog(providerId: string): Promise<ModelCatalogResponse> {
+  const result = await mutationRequest<Record<string, any>>(
+    `/api/sys/providers/${encodeURIComponent(providerId)}/model-catalog`,
+    {
+      operation: `model-provider-catalog:${providerId}`,
+      method: 'POST',
+      timeout: 30000,
+    },
+  )
+  return normalizeCatalogResponse(result)
+}
+
+function normalizeCatalogResponse(input: Record<string, any>): ModelCatalogResponse {
+  const items = Array.isArray(input.items) ? input.items : []
+  return {
+    ok: Boolean(input.ok),
+    status: input.status === 'pass' ? 'pass' : input.status === 'skip' ? 'skip' : input.status === 'fail_degraded' ? 'fail_degraded' : 'fail',
+    summary: String(input.summary ?? ''),
+    reason: input.reason ?? null,
+    items: items
+      .filter((item: Record<string, any>) => item && typeof item.id === 'string' && item.id)
+      .map((item: Record<string, any>) => ({ id: String(item.id), kind: (item.kind ?? 'chat') as ModelKind })),
+    count: Number(input.count ?? items.length ?? 0),
+    total: typeof input.total === 'number' ? input.total : null,
+    truncated: Boolean(input.truncated),
+    shape_ok: typeof input.shape_ok === 'boolean' ? input.shape_ok : null,
+    cached: Boolean(input.cached),
+    provider: input.provider ?? null,
+    target: String(input.target ?? ''),
+    network_scope: String(input.network_scope ?? 'public'),
+    draft: Boolean(input.draft),
+  }
 }
 
 /** 专项模型（embedding/rerank）供应商配置的两个端点封装。
