@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """test_router_prefilter_order.py — 预过滤顺序与检测缓存回归（2026-09-15）
 
-背景：CS 检测器向量通道每次请求一次云端 embedding（实测 1.0~3.4s），
-而旅游预过滤是纯正则（~1ms）。原顺序无条件先跑完整 CS 检测 → 旅游/普通
-请求白烧一次 embedding。优化后顺序：
+背景：该顺序最初为省掉 CS 向量通道的云端 embedding 往返而设计（2026-09-15
+实测 1.0~3.4s）。3f88b4f（2026-09-18）删除向量通道后 CS 检测已退化为纯正则
+（冷路径 ~21µs），顺序保留是为判定语义（客服优先）而非性能。顺序：
   1) CS 廉价规则预判 → 命中则完整 CS 检测（保客服优先）
   2) 旅游纯正则预过滤 → 命中短路
-  3) 都没命中 → 完整 CS 检测（向量语义兜底）
+  3) 都没命中 → 完整 CS 检测兜底（与 1) 同源）
 本测试锁定：旅游请求不再触发 CS 检测；含 CS 规则的请求仍走 CS 优先；
 detect_cached 对同 query 只调一次真实检测。
 """
@@ -32,7 +32,7 @@ def _fake_detection(is_cs: bool = False):
 
 @pytest.fixture
 def fake_detector(monkeypatch):
-    """注入假检测器：记录 detect/向量通道调用次数。"""
+    """注入假检测器：记录 detect 调用次数。"""
     det = MagicMock()
     det.rule_hit_count = 0
     det._rule_channel.return_value = ([], 0.0)
@@ -67,8 +67,8 @@ class TestPrefilterOrder:
         rn.router_node({"question": "订单里的行程单怎么退款", "session_id": "s2"})
         fake_detector.detect.assert_called()
 
-    def test_generic_query_falls_back_to_cs_vector(self, fake_detector, travel_on, cs_on):
-        """普通问题：规则未命中且非旅游 → 仍走完整 CS 检测（语义兜底）。"""
+    def test_generic_query_falls_back_to_cs_detection(self, fake_detector, travel_on, cs_on):
+        """普通问题：规则未命中且非旅游 → 仍走完整 CS 检测（检测器已无向量通道）。"""
         rn.router_node({"question": "这个季度的经营状况怎么样", "session_id": "s3"})
         fake_detector.detect.assert_called()
 

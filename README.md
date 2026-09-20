@@ -100,7 +100,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 | 节点 | 职责边界 |
 |------|----------|
-| Router | 三层路由：规则强信号 → 向量召回 → LLM 兜底；域图预过滤优先级 客服 > 旅游 |
+| Router | 三层路由：规则强信号 → 向量召回（pgvector 路由索引）→ LLM 兜底；域图预过滤（客服/旅游/选品）与 CS 域检测为**纯正则**、不走向量 |
 | Planner | 只做任务拆解 → Capability DAG，**禁调 Tool/Skill/DB** |
 | Critique | 规则校验优先，仅 anomaly 才调 LLM；含计划深度上限（≤8） |
 | Supervisor | 纯规则 DAG 调度，`Send[]` 并行 + 注入 `previous_outputs` |
@@ -116,12 +116,18 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | 入口 | 触发方式 | 行为 |
 |---|---|---|
 | **客服窗口锁域** | 用户端客服抽屉 `CSDrawer` 每条消息带 `domain_hint=customer_service`（`frontend/src/hooks/useCSChat.ts`） | `router_node` 置 `cs_forced` → **跳过域检测门、跳过灰度判定（恒 treatment）、跳过旅游/选品 prefilter**，直接进客服管线。仍受 `CS_ENABLED` 总闸约束（关闭则降级回主路由） |
-| **全局入口** | `domain_hint` 为空（普通对话页） | 在 router 内按序判定：CS 廉价规则预判（~1ms）→ 旅游正则 → 选品正则 → CS 完整检测（含向量兜底）；CS 命中后还须过服务端灰度 `CS_ROLLOUT_PERCENT`（默认 100），落 control 组则回主图 |
+| **全局入口** | `domain_hint` 为空（普通对话页） | 在 router 内按序判定：CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测（同为纯正则，与第一步同源）；CS 命中后还须过服务端灰度 `CS_ROLLOUT_PERCENT`（默认 100），落 control 组则回主图 |
 
 预过滤优先级 **客服 > 旅游**（"订单里的行程单"按客服诉求处理）。
 
-> **客服窗口为什么必须锁域**（代码注释原话）：用户已显式进入客服窗口，每条消息重新判域会把"下周去大阪怎么玩"这类非客服问法漏进旅游域图硬答（实测）。
-> **但锁域不等于绝对**：域锁下若「无任何客服规则信号 **且** 命中旅游/选品强信号」，仍会走 `redirect_main` 正则阶段转出主路由；阶段二 LLM 语义仲裁默认 OFF（`CS_REDIRECT_MAIN_LLM_ENABLED`）。目的是让抽屉里问旅游/选品也能拿到正常回答。混合信号（如"订单里的行程单怎么退款"含客服规则）**仍守 CS 优先**。行为有测试守护：`backend/tests/orchestration/graph/test_router_prefilter_order.py`（**19 例全绿**，覆盖锁域越过检测失败 / CS 关闭降级主路由 / 旅游转出 / 混合信号留守 / 灰度顺序等）。
+> **客服窗口为什么必须锁域**：此处**不存在"漏进主图"的 A/B 对照语义**（用户已显式进入客服窗口），而每条消息重新判域有两个实测代价——
+> ① **召回漏判**：CS 规则阈值 `CS_RULE_MIN_HITS=2`，实测「东西坏了咋办」「我的订单三天前就显示已发货，为什么还没收到」规则命中**均仅 1** → 全局入口判非客服、落到 `route_mode=plan`，白跑一轮 Planner/LLM；
+> ② **域错配**：非客服问法被甩到主图 plan 支线（实测「下周去大阪怎么玩」`cs规则=0` → `route_mode=plan`）。
+> 锁域顺带把该窗口的 token 用量归因到 `component="customer_service"`（trace 打 `cs_domain_lock=1`）。
+>
+> ⚠️ **锁域几乎不省时间，别当性能优化看**：全部域预过滤合计 **< 0.1ms**（实测 CS 规则预判 14~35µs / 旅游正则 22~53µs / 选品正则 9~20µs）；CS 域检测自 2026-09-18 起已无向量通道，冷路径 ~21µs、命中缓存 ~1µs。
+>
+> **锁域不等于绝对**：域锁下若「无任何客服规则信号 **且** 命中旅游/选品强信号」，仍会走 `redirect_main` 正则阶段转出主路由——但该正则**只认种子城市（福州/厦门/杭州）**，故「去大阪怎么玩」这类问法仍留守客服管线（阶段二 LLM 语义仲裁默认 OFF，`CS_REDIRECT_MAIN_LLM_ENABLED`）。混合信号（如"订单里的行程单怎么退款"含客服规则）**仍守 CS 优先**。行为有测试守护：`backend/tests/orchestration/graph/test_router_prefilter_order.py`（**19 例全绿**，覆盖锁域越过检测失败 / CS 关闭降级主路由 / 旅游转出 / 混合信号留守 / 灰度顺序等）。
 
 - **客服域图**：`state_loader → pending_handler → cs_supervisor → 5 专家 → cs_reporter`
   - `cs_supervisor` 承担三件事：handoff 拦截、循环上限、LLM 兜底

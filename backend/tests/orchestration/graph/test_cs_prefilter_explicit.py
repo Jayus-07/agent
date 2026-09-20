@@ -20,7 +20,7 @@ def cs_enabled(monkeypatch):
 
 
 def _fake_detect_not_cs(monkeypatch):
-    """embedding 域检测恒判非客服域（模拟漏判场景）。"""
+    """域检测恒判非客服域（模拟漏判场景）。"""
     from backend.customer_service.router import domain_detector
 
     class _FakeDetection:

@@ -189,7 +189,7 @@ def test_router_weak_hit_short_circuits_to_clarify(monkeypatch):
             pass
 
     monkeypatch.setattr(clarify_content, "_get_guard_cache", lambda: _FreshCache())
-    # CS 语义兜底（向量通道）在 L1 之前执行，测试中必须屏蔽
+    # CS 兜底在 L1 之前执行（检测器已无向量通道），测试中必须屏蔽
     monkeypatch.setattr(cs_prefilter, "try_cs_prefilter", lambda *a, **k: None)
     monkeypatch.setattr(sel_prefilter, "try_selection_funnel_prefilter",
                         lambda *a, **k: None)

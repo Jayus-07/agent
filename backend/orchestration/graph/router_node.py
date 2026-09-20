@@ -76,16 +76,18 @@ def router_node(state: dict) -> dict:
             "route_mode": "plan",
         }
 
-    # ── 预过滤顺序（2026-09-15 性能优化，判定语义保持不变）──────────
-    # 背景：CS 检测器双通道，向量通道每次请求一次云端 embedding 往返
-    # （实测 1.0~3.4s）；旅游预过滤是纯正则（~1ms）。原先无条件先跑完整
-    # CS 检测 → 旅游/普通请求白烧一次 embedding。
-    # 新顺序：
-    #   1) CS 廉价规则预判（~1ms）：命中 → 立即做完整 CS 检测（保客服优先）
-    #   2) 旅游纯正则预过滤（~1ms）：命中 → 短路进旅游域
-    #   3) 都没命中 → 完整 CS 检测（含向量通道，保留语义兜底路径）
+    # ── 预过滤顺序（2026-09-15 定序；2026-09-18 起已无性能收益）──────
+    # 该顺序最初为省掉 CS 向量通道的云端 embedding 往返而设计（2026-09-15
+    # 实测 1.0~3.4s / 次）。3f88b4f（2026-09-18）删除向量通道后，CS 检测
+    # 已退化为纯正则（实测冷路径 ~21µs、命中缓存 ~1µs），顺序不再带来可观
+    # 耗时收益；保留它是为**判定语义**而非性能：
+    #   1) CS 廉价规则预判（纯正则）：命中 → 立即做完整 CS 检测（保客服优先）
+    #   2) 旅游纯正则预过滤：命中 → 短路进旅游域
+    #   3) 都没命中 → 完整 CS 检测兜底
     # 对"订单里的行程单"这类同时含 CS 规则的 query：规则命中 → 仍走 CS
     # 优先，与旧行为一致。
+    # 注：1) 与 3) 现在同源（都走 _rule_channel 正则），属可收拢的冗余；
+    # 收拢会改判定语义，需另立变更单，勿在注释/文档修订里顺手改。
     try:
         from backend.customer_service.router.domain_detector import cs_rule_hit_count
         cs_rule_hits = cs_rule_hit_count(query)
@@ -94,10 +96,14 @@ def router_node(state: dict) -> dict:
         cs_rule_hits = 1  # 保守：视作命中，维持 CS 优先
 
     # ── 入口域锁（2026-09-18）：客服窗口（CSDrawer）每条消息带
-    # domain_hint=customer_service。用户已显式进入客服窗口，每条消息
-    # 重新判域会把"下周去大阪怎么玩"这类非客服问法漏进旅游域图（实测），
-    # 故锁域强制走 CS 预过滤：跳过域检测门/灰度判定/旅游与选品 prefilter。
-    # 仅保留 CS_ENABLED 总闸——CS 关闭时降级回主路由（与全局开关语义一致）。
+    # domain_hint=customer_service。用户已显式进入客服窗口，若每条消息重新
+    # 判域，非客服问法会被甩到主图 plan 支线白烧 LLM（实测"下周去大阪怎么玩"
+    # 全局入口 cs规则=0 → route_mode=plan）；且 CS 规则阈值 CS_RULE_MIN_HITS=2
+    # 漏掉"东西坏了咋办"这类高频问法（实测命中仅 1）。故锁域强制走 CS 预过滤：
+    # 跳过域检测门/灰度判定/旅游与选品 prefilter；仅保留 CS_ENABLED 总闸
+    # （CS 关闭时降级回主路由，与全局开关语义一致）。
+    # 域锁非绝对：redirect_main 会把命中旅游/选品强信号的问法转出主路由，但
+    # 该正则只认种子城市（福州/厦门/杭州）——"去大阪怎么玩"仍留守客服管线。
     domain_hint = (state.get("domain_hint") or "").strip().lower()
     cs_forced = domain_hint in ("customer_service", "cs")
 
@@ -162,7 +168,7 @@ def router_node(state: dict) -> dict:
         if cs_update is not None:
             return {**state, **_enrich_with_understanding(cs_update, query)}
 
-    # ── 旅游预过滤：纯正则，先于 CS 向量检测执行（省一次 embedding）──
+    # ── 旅游预过滤：纯正则 ─────────────────────────────────────────
     # 域锁且未转出时跳过；转出（redirect_main）或全局入口正常执行。
     if not cs_forced or cs_redirect:
         try:
@@ -186,14 +192,16 @@ def router_node(state: dict) -> dict:
         except Exception as e:
             logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
-    # ── CS 语义兜底：无 CS 规则命中时，向量通道仍可能判定为客服域 ──
+    # ── CS 兜底（全局入口）：无 CS 规则命中时再走一次完整 CS 预过滤 ──
+    # 检测器已无向量通道（3f88b4f 删除），与上面的规则预判同源；保留是为
+    # 走通 detect_cached + 灰度判定路径，行为与旧版一致。
     if not cs_rule_hits and not cs_forced:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
             return {**state, **_enrich_with_understanding(cs_update, query)}
 
     # ── L1 入口弱命中追问（2026-09-19 拒答转追问）────────────────
-    # 放在全部域预过滤与 CS 向量兜底之后：客服优先级不被追问抢夺。
+    # 放在全部域预过滤与 CS 兜底之后：客服优先级不被追问抢夺。
     # 只拦"差一个槽位就能进域"的输入（如 1 个旅游信号词没说城市），
     # 短路不进主 Router，避免这类输入跑完链路后只换来一句拒答。
     # _clarify 只活在节点原始输出里（stream_node_events 从这里发

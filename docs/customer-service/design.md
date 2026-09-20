@@ -397,6 +397,14 @@ CS_DOMAIN_PATTERNS = [
 - 向量通道 top1 相似度 ≥ 0.7 → `is_cs_domain = True`
 - 均不命中 → `is_cs_domain = False`，走现有 Router
 
+> ⚠️ **实现已变更（2026-09-18 起）**：本节 §3.2 描述的**向量通道已删除**
+> （提交 `3f88b4f`，2026-09-18），现行实现见 `backend/customer_service/router/domain_detector.py`
+> ——**纯正则**单通道（`CS_DOMAIN_PATTERNS` 命中 ≥ `CS_RULE_MIN_HITS` 即判客服域；
+> `vector_score` 字段保留但恒 `0.0`，仅为消费方兼容）。上表「规则命中 1 模式 → 交给向量通道」
+> 与「向量 top1 相似度 ≥ 0.7」两条**均已不存在**。由此产生的语义类问法召回缺口
+> 由**客服窗口锁域**（前端客服抽屉带 `domain_hint=customer_service` → 跳过判域）兜底。
+> 删除通道的动机是 2026-09-17 全站存储收口 pgvector，见 `docs/chroma-pgvector迁移方案-2026-09-17.md`。
+
 ### 3.3 第一层：粗分类 Router
 
 ```python

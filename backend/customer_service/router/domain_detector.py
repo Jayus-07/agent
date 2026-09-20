@@ -54,7 +54,7 @@ def get_domain_detector() -> DomainDetector:
 
 # ── 廉价规则预判 ─────────────────────────────────────────────
 def cs_rule_hit_count(query: str) -> int:
-    """CS 域规则的命中数（纯正则，~1ms）。"""
+    """CS 域规则的命中数（纯正则，实测 14~35µs）。"""
     from backend.config.customer_service import CS_DOMAIN_PATTERNS
 
     if not query:

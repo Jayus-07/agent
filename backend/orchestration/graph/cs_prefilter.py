@@ -41,7 +41,7 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
 
     # ── 显式触发直通（确定性过滤层，2026-09-17）─────────────────────
     # 转人工类指令（"转人工"/"找真人"/"转接人工客服"…见 handoff.py 关键词表）
-    # 是用户的硬性意图，不允许被 embedding 域检测漏判、也不允许落进灰度
+    # 是用户的硬性意图，不允许被域检测漏判、也不允许落进灰度
     # control 组——否则会像普通模糊查询一样进业务 Agent 的澄清兜底。
     # 零成本：纯正则，无模型调用；确定性：直接合成 human_handoff 路由结果。
     from backend.customer_service.handoff import detect_handoff_trigger
@@ -54,7 +54,7 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
     else:
         # ── 人工接管期强制接管（2026-09-17）─────────────────────────
         # 会话存在未关闭的转接（waiting_human/human_active）时，用户的一切
-        # 消息都应转达人工，不允许再被 embedding 域检测漏判漏进主图——
+        # 消息都应转达人工，不允许再被域检测漏判漏进主图——
         # 实测接管期间发"我的订单一直没发货"，域检测判非客服，主图向量
         # 路由瞎匹配到 email.search，三次重试失败后回了无关兜底文案。
         # 数据源 HandoffStore（L1 缓存 + DB 回查），异常时按无转接处理。
@@ -70,7 +70,8 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
             from backend.customer_service.router.cs_router import get_cs_router
 
             # detect_cached：同 query 5min 内复用检测结果（检测只依赖 query、
-            # 与 session 无关），省掉重复请求的云端 embedding 往返（实测 1.0~3.4s）。
+            # 与 session 无关）。2026-09-18 删除向量通道后检测器已是纯正则，
+            # 缓存收益从"省一次 embedding 往返"变为"省一次正则重跑"（~21µs）。
             detection = detect_cached(query)
             if not detection.is_cs and not forced:
                 return None
