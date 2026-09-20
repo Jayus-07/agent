@@ -34,8 +34,11 @@ from backend.shared.logger import logger
 #         - subscription 恒 0，但显示「订阅制·不计 token」；不计入预算，仍记用量
 #         - local        恒 0（自托管）；不计入预算，仍记用量
 #         ⚠️ 语义混淆会让报表无法区分「真没花钱」与「价格没录」，勿合并后两者。
+# label:  厂商中文名（管理端展示用）。代码内置厂商的真名以这里为准 ——
+#         db 注册的自建供应商不走此表，其显示名在 provider_registry 的 display_name。
 PROVIDERS: dict[str, dict[str, Any]] = {
     "ollama": {
+        "label": "Ollama（本地）",
         "class": None,  # 懒加载（langchain_ollama.ChatOllama，见 providers/ollama.py）
         "default_model": "qwen2.5:3b",
         "needs_api_key": False,
@@ -43,6 +46,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "billing": "local",
     },
     "deepseek": {
+        "label": "DeepSeek",
         "class": None,  # 懒加载（兼容 OpenAI 协议的 ChatOpenAI）
         "default_model": "deepseek-v4-flash",
         "needs_api_key": True,
@@ -50,6 +54,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "billing": "metered",
     },
     "minimax": {
+        "label": "MiniMax",
         "class": None,  # Anthropic Messages API（官方推荐路径，见 providers/minimax.py）
         "default_model": "MiniMax-M3",
         "needs_api_key": True,
@@ -57,6 +62,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "billing": "metered",
     },
     "qwen": {
+        "label": "阿里云百炼",
         "class": None,  # DashScope OpenAI 兼容协议
         "default_model": "qwen3.7-plus",
         "needs_api_key": True,
@@ -64,6 +70,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "billing": "metered",
     },
     "qwen_tp": {
+        "label": "阿里云百炼（模型包）",
         "class": None,  # Qwen Token Plan（模型包端点，注册名带 @tp 后缀）
         "default_model": "qwen3.7-plus@tp",
         "needs_api_key": True,
@@ -72,6 +79,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "billing": "subscription",
     },
     "vllm": {
+        "label": "自托管 vLLM",
         "class": None,  # 自托管 vLLM（OpenAI 兼容协议），见 providers/vllm.py
         "default_model": "Qwen/Qwen3-32B-AWQ",
         "needs_api_key": True,
@@ -79,6 +87,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "billing": "local",
     },
     "siliconflow": {
+        "label": "硅基流动",
         "class": None,  # 硅基流动（OpenAI 兼容协议），见 providers/siliconflow.py
         "default_model": "Qwen/Qwen3-8B",
         "needs_api_key": True,

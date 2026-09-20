@@ -19,11 +19,18 @@ import { useToast } from '@/components/shared/Toast'
 import EmptyState from '@/components/shared/EmptyState'
 
 interface Props {
-  roles: RoleBinding[]
+  roles: RoleRow[]
   catalog: ModelCatalogEntry[]
   canAdmin: boolean
   onSaved: () => Promise<unknown>
 }
+
+/**
+ * 厂商中文名由后端下发（`PROVIDERS[].label`，db 自建供应商回落 provider 代码）。
+ * ⚠️ 字段尚未并入 `RoleBinding` 接口（types/modelConfig.ts 正被其他会话改动），
+ * 待其落定后把 `providerLabel` 移进接口并删除此交叉类型。
+ */
+type RoleRow = RoleBinding & { providerLabel?: string | null }
 
 /** 生效来源 → 徽章配色（§6：DB 覆盖蓝 / 环境变量灰 / 跟随父角色紫 / 代码默认浅灰）。 */
 const SOURCE_BADGE: Record<string, string> = {
@@ -44,7 +51,7 @@ const SOURCE_BADGE_FALLBACK = 'border-slate-300 bg-slate-50 text-text-muted'
  * 而不是等他保存完才发现挑了个不可用的模型。
  */
 function roleVerdict(
-  row: RoleBinding,
+  row: RoleRow,
   modelName: string,
   entry: ModelCatalogEntry | undefined,
   expectedKind: ModelKind,
@@ -70,7 +77,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
   const [editing, setEditing] = useState<string | null>(null)
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
-  const [confirmRow, setConfirmRow] = useState<RoleBinding | null>(null)
+  const [confirmRow, setConfirmRow] = useState<RoleRow | null>(null)
   const [onlyProblem, setOnlyProblem] = useState(false)
   const byName = useMemo(() => new Map(catalog.map((item) => [item.name, item])), [catalog])
   const byRole = useMemo(() => new Map(roles.map((item) => [item.role, item])), [roles])
@@ -80,7 +87,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
     [roles, byName],
   )
 
-  function begin(row: RoleBinding) {
+  function begin(row: RoleRow) {
     setEditing(row.role)
     setValue(row.effectiveModel)
   }
@@ -90,7 +97,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
     setValue('')
   }
 
-  async function persist(row: RoleBinding) {
+  async function persist(row: RoleRow) {
     setBusy(true)
     try {
       await saveModelRole(row.role, value.trim())
@@ -109,7 +116,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
     }
   }
 
-  function submit(row: RoleBinding) {
+  function submit(row: RoleRow) {
     const next = value.trim()
     if (!next && row.role !== 'eval_gen') {
       toast.error('模型名不能为空')
@@ -130,7 +137,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
   }
 
   const groups = useMemo(() => {
-    const visible = (list: RoleBinding[]) =>
+    const visible = (list: RoleRow[]) =>
       list.filter((row) => !onlyProblem || !roleVerdict(
         row, row.effectiveModel, byName.get(row.effectiveModel), roleModelKind(row.role),
       ).selectable)
@@ -140,7 +147,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
       hint: group.hint,
       rows: visible(group.roles
         .map((role) => byRole.get(role))
-        .filter((row): row is RoleBinding => Boolean(row))),
+        .filter((row): row is RoleRow => Boolean(row))),
     }))
     // 后端新增角色时不该从界面上消失：未登记进分组的一律收进末位「其他」
     const covered = new Set(ROLE_GROUPS.flatMap((group) => group.roles))
@@ -263,6 +270,11 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
                           </>
                         ) : (
                           <div className="flex flex-wrap items-center gap-1.5">
+                            {row.providerLabel && (
+                              <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                                {row.providerLabel}
+                              </span>
+                            )}
                             <span className={usable ? 'font-mono text-text-primary' : 'font-mono text-red-700'}>
                               {row.effectiveModel || '—'}
                             </span>
@@ -271,7 +283,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved }: P
                                 {modelKindLabel(currentEntry.modelKind)}
                               </span>
                             )}
-                            {row.provider && (
+                            {!row.providerLabel && row.provider && (
                               <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
                                 {row.provider}
                               </span>

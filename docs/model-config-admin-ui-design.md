@@ -298,6 +298,7 @@ export interface RoleBinding {
   source: ValueSource
   inheritedFrom: string | null    // source==='inherit' 时的父 role
   provider: string | null         // 归属 provider（自建模型必填，B.5#3）
+  providerLabel: string | null    // 厂商中文名（后端 `PROVIDERS[].label` 下发；db 自建供应商回落 provider 代码）
   registered: boolean             // 是否在可用模型清单内
   missingKeyEnv: string | null    // 缺哪个 Key 环境名（null = 齐备）
   requiresReindex: boolean        // embedding 改值需重建索引；rerank 不改变向量空间
@@ -402,7 +403,7 @@ question_gen / table_describe / tool_selector / fallback / ocr / embedding / rer
 | 列 | 内容 | 态 |
 |---|---|---|
 | 角色 | 中文名（`ROLE_LABELS`）+ `role` 代码（`font-mono text-[10px] text-text-muted`） | — |
-| 当前绑定 | 只留模型信息：`effectiveModel`（`font-mono`，非法时红字）+ 用途徽章（**仅当模型目录能查到该模型**才渲染，避免用期望用途冒充事实）+ provider 徽章 | 编辑时换成 `<select>` |
+| 当前绑定 | 只留模型信息：**厂商中文名徽章**（`providerLabel` 前置，后端 `PROVIDERS[].label` 下发）+ `effectiveModel`（`font-mono`，非法时红字）+ 用途徽章（**仅当模型目录能查到该模型**才渲染，避免用期望用途冒充事实）；后端未下发中文名（db 自建供应商）时在模型名后回落显示 provider 代码 | 编辑时换成 `<select>` |
 | 来源 | 第一行：**来源徽章** + 审计「最后由 who · 相对时间」（`updatedBy`/`updatedAt`）；`literalValue !== effectiveValue` 时第二行给「配置值」 | 编辑时显示「沿用当前来源，保存后更新」 |
 | 可用性 | 图标 + 结论；不可用时直接给 `availabilityReason`；`requiresReindex` 的角色另起一行「变更需重建索引」 | 编辑时**按下拉所选值实时重算** |
 | 操作 | 「修改」/「保存」+「取消」 | 非 canEdit 不渲染 |

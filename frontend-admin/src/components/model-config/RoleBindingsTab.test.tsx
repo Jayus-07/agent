@@ -14,6 +14,9 @@ vi.mock('@/components/shared/Toast', () => ({
 import RoleBindingsTab from './RoleBindingsTab'
 import type { RoleBinding } from '@/types/modelConfig'
 
+/** 厂商中文名由后端下发；待 types/modelConfig.ts 落定后并入 RoleBinding 接口。 */
+type RoleRow = RoleBinding & { providerLabel?: string | null }
+
 beforeAll(() => { (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true })
 
 const mounted: { container: HTMLElement; root: Root }[] = []
@@ -24,7 +27,7 @@ const CATALOG = [
   { name: 'qwen3.7-text-rerank', provider: 'dashscope-rag', modelKind: 'rerank' as const },
 ]
 
-function roleRow(overrides: Partial<RoleBinding> = {}): RoleBinding {
+function roleRow(overrides: Partial<RoleRow> = {}): RoleRow {
   return {
     role: 'rerank',
     effectiveModel: 'qwen3.7-text-rerank',
@@ -32,6 +35,7 @@ function roleRow(overrides: Partial<RoleBinding> = {}): RoleBinding {
     source: 'db',
     inheritedFrom: null,
     provider: 'dashscope-rag',
+    providerLabel: '阿里云百炼',
     registered: true,
     missingKeyEnv: null,
     available: true,
@@ -189,6 +193,22 @@ describe('RoleBindingsTab 版式', () => {
     expect(sourceCell).toBeTruthy()
     expect(sourceCell?.textContent).not.toContain('qwen3.7-plus')
     expect(sourceCell?.textContent).not.toContain('主问答模型')
+  })
+
+  it('厂商中文名徽章在模型名前面；后端未下发时回落 provider 代码', () => {
+    const withLabel = mount()
+    const boundCell = Array.from(withLabel.querySelectorAll('td'))
+      .find((td) => td.textContent?.includes('qwen3.7-text-rerank'))
+    const text = boundCell?.textContent ?? ''
+    expect(text.indexOf('阿里云百炼')).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf('阿里云百炼')).toBeLessThan(text.indexOf('qwen3.7-text-rerank'))
+    // 有厂商中文名时不再显示 provider 代码（信息重复）
+    expect(text).not.toContain('dashscope-rag')
+
+    const withoutLabel = mount({ roles: [roleRow({ providerLabel: null })] })
+    const fallbackCell = Array.from(withoutLabel.querySelectorAll('td'))
+      .find((td) => td.textContent?.includes('qwen3.7-text-rerank'))
+    expect(fallbackCell?.textContent).toContain('dashscope-rag')
   })
 
   it('「只看不可用」只留下判定不可用的角色', async () => {

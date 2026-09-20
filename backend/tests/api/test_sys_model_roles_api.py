@@ -128,6 +128,29 @@ def test_provider_and_registered_share_available_catalog(client):
     assert main["provider"] == "glm-coding"
 
 
+def test_provider_label_from_builtin_providers(client):
+    """`providerLabel` 取 `PROVIDERS[].label`（厂商中文名，管理端展示用）。
+
+    代码内置厂商必有 label；db 自建供应商不在 PROVIDERS 里 → 回落 provider 代码
+    （其显示名在 provider_registry 的 display_name，roles API 不为此查 registry）。
+    """
+    model = _a_registered_qwen_model()
+    model_roles.inject_overrides({"main": model})
+
+    row = {r["role"]: r for r in client.get("/sys/model-roles").json()["items"]}
+    assert row["main"]["providerLabel"] == "阿里云百炼"
+
+    # 自建 provider 回落代码，且 11 个角色全部带 providerLabel 字段（契约字段不下线）
+    models_mod.set_dynamic_models(
+        [{"name": "glm-4.6", "provider": "glm-coding", "source": "db"}]
+    )
+    model_roles.inject_overrides({"main": "glm-4.6"})
+    items = client.get("/sys/model-roles").json()["items"]
+    main = next(r for r in items if r["role"] == "main")
+    assert main["providerLabel"] == "glm-coding"
+    assert all("providerLabel" in item for item in items)
+
+
 def test_unregistered_model_reported_as_not_registered(client):
     model_roles.inject_overrides({"main": "no-such-model"})
 

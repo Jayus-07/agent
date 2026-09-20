@@ -99,8 +99,9 @@ def _availability_reason(
 async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
     """全部模型角色：生效模型、来源、归属 provider 与可用性（tab①⑤ 数据源）。
 
-    响应裸 dict（§1.1.1 决策），字段见 §5.4 `RoleBinding`；`label` 不在其中
-    （前端常量，契约明确不从后端取）。**不含任何密钥载体**。
+    响应裸 dict（§1.1.1 决策），字段见 §5.4 `RoleBinding`；角色名 `label` 不在其中
+    （前端常量，契约明确不从后端取）；`providerLabel` 为厂商中文名（来自
+    `PROVIDERS[].label`，代码内置厂商的真名以后端为准）。**不含任何密钥载体**。
     """
     # name → provider，一次遍历同时供 provider / registered 使用（同源，见模块头第 3 条）
     catalog = {
@@ -115,6 +116,12 @@ async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
         provider = str(entry.get("provider") or "") or None
         registered = bool(effective) and effective in catalog
         missing_key_env = _missing_key_env(provider)
+        # 厂商中文名：代码内置厂商取 PROVIDERS[].label；db 自建供应商不在
+        # PROVIDERS 里，回落 provider 代码（其显示名在 provider_registry）。
+        provider_label = (
+            str(models_mod.PROVIDERS.get(provider or "", {}).get("label") or "")
+            or provider
+        )
         availability_reason = _availability_reason(
             role=row["role"],
             effective=effective,
@@ -130,6 +137,7 @@ async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
             "source": _schema_source(row["source"]),
             "inheritedFrom": row["inheritedFrom"],
             "provider": provider,
+            "providerLabel": provider_label,
             "registered": registered,
             "missingKeyEnv": missing_key_env,
             "available": availability_reason is None and bool(effective),
