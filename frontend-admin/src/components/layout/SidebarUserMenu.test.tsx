@@ -1,6 +1,7 @@
 import { act } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SidebarUserMenu from "./SidebarUserMenu";
 
 beforeAll(() => {
@@ -12,6 +13,7 @@ const mounted: { container: HTMLElement; root: Root }[] = [];
 function mount(
   queryClient?: { clear: () => void },
   onNavigate: (path: string) => void = vi.fn(),
+  collapsed = false,
 ) {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -19,6 +21,7 @@ function mount(
   act(() => {
     root.render(
       <SidebarUserMenu
+        collapsed={collapsed}
         queryClient={queryClient}
         onNavigate={onNavigate}
       />,
@@ -125,6 +128,65 @@ describe("SidebarUserMenu", () => {
     expect(sessionStorage.getItem("agent.access_token")).toBeNull();
     expect(sessionStorage.getItem("agent.user_info")).toBeNull();
     expect(sessionStorage.getItem("agent.session_expired")).toBeNull();
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("collapsed 菜单仍显示 admin 入口和退出操作，Escape 关闭且双击只登出一次", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ code: 200, data: true })));
+    const navigate = vi.fn();
+    const container = mount(undefined, navigate, true);
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label="打开用户菜单"]',
+    );
+    expect(trigger).toBeTruthy();
+    act(() => {
+      trigger!.focus();
+      trigger!.click();
+    });
+    expect(document.activeElement).toBe(trigger);
+    expect(container.querySelector('[role="menu"]')).toBeTruthy();
+    expect(container.querySelector('a[href="/settings/access"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="logout-button"]')).toBeTruthy();
+
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+
+    act(() => trigger!.click());
+    const logoutButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="logout-button"]',
+    );
+    expect(logoutButton).toBeTruthy();
+    await act(async () => {
+      logoutButton!.click();
+      logoutButton!.click();
+      await Promise.resolve();
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("在真实 QueryClientProvider 内清理同一个 client，而不是依赖 fake prop", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["rbac", "users"], { secret: "stale" });
+    vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ code: 200, data: true })));
+    const navigate = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarUserMenu onNavigate={navigate} />
+        </QueryClientProvider>,
+      );
+    });
+    mounted.push({ container, root });
+    await clickLogout(container);
+    expect(queryClient.getQueryData(["rbac", "users"])).toBeUndefined();
     expect(navigate).toHaveBeenCalledTimes(1);
   });
 });

@@ -89,7 +89,7 @@ export default function SidebarUserMenu({
 
   return (
     <div
-      className="relative border-t border-black/5 px-3 py-2"
+      className={`relative border-t border-black/5 py-2 ${collapsed ? "px-1" : "px-3"}`}
       data-testid="sidebar-user-menu"
     >
       <button
@@ -118,11 +118,15 @@ export default function SidebarUserMenu({
         {!collapsed && <ChevronUp size={14} aria-hidden="true" />}
       </button>
 
-      {open && !collapsed && (
+      {open && (
         <div
           role="menu"
           aria-label="用户操作"
-          className="absolute bottom-14 left-3 right-3 z-30 rounded-xl border border-gray-200 bg-white p-1.5 shadow-card"
+          className={`absolute z-30 rounded-xl border border-gray-200 bg-white p-1.5 shadow-card ${
+            collapsed
+              ? "bottom-1 left-full ml-2 w-52"
+              : "bottom-14 left-3 right-3"
+          }`}
         >
           <div className="border-b border-gray-100 px-3 py-2">
             <p className="truncate text-xs font-medium text-text-primary">{displayName}</p>
