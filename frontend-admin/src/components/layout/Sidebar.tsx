@@ -19,7 +19,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
 
   if (collapsed) {
     return (
-      <aside className="w-0 shrink-0 overflow-visible md:w-14 md:flex md:flex-col md:items-center md:py-3 glass border-r border-black/5 gap-1">
+      <aside className="w-0 shrink-0 overflow-hidden md:w-14 md:flex md:flex-col md:items-center md:py-3 md:overflow-visible glass border-r border-black/5 gap-1">
         <button onClick={onToggle} className="p-2 rounded-lg hover:bg-black/5 transition-colors text-text-secondary" aria-label="展开">
           <PanelLeft size={18} />
         </button>

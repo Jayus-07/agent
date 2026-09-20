@@ -2,6 +2,7 @@ import { act } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import Sidebar from "./Sidebar";
 import SidebarUserMenu from "./SidebarUserMenu";
 
 beforeAll(() => {
@@ -188,5 +189,19 @@ describe("SidebarUserMenu", () => {
     await clickLogout(container);
     expect(queryClient.getQueryData(["rbac", "users"])).toBeUndefined();
     expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("collapsed 侧栏移动端裁切、md 以上允许右侧 popover 溢出", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(<Sidebar collapsed onToggle={vi.fn()} />);
+    });
+    mounted.push({ container, root });
+
+    const aside = container.querySelector("aside");
+    expect(aside?.className).toContain("overflow-hidden");
+    expect(aside?.className).toContain("md:overflow-visible");
   });
 });

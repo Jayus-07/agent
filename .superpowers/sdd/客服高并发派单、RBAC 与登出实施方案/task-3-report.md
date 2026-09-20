@@ -48,13 +48,33 @@ git diff --check
 
 本轮新增证据：RootLayout 顺序测试锁定 Sidebar 在 QueryClientProvider 内；真实 `QueryClientProvider` 测试写入同一 client 的 query data，点击用户菜单登出后确认该 client 已清空；collapsed 菜单测试确认 admin 访问控制、退出按钮、Escape 关闭、焦点和双击单请求/单导航。
 
+P3 修复轮次 2 先运行 collapsed 响应式断言：
+
+```text
+npm test -- --run src/components/layout/SidebarUserMenu.test.tsx
+Test Files 1 failed; Tests 1 failed, 5 passed
+expected class to contain "overflow-hidden"
+received "w-0 shrink-0 overflow-visible md:w-14 ..."
+```
+
+红灯正好对应移动端零宽侧栏的溢出问题；既有 collapsed admin/退出/键盘测试仍通过。
+
+轮次 2 修复后 focused 测试：
+
+```text
+npm test -- --run src/components/layout/SidebarUserMenu.test.tsx
+Test Files 1 passed; Tests 6 passed
+```
+
+新增断言锁定 `overflow-hidden md:overflow-visible`；移动端零宽侧栏裁切导航/用户菜单，md 以上保留右侧 popover 溢出。
+
 `npx tsc --noEmit` 已运行。本次 P3 文件未产生 TypeScript 报错；命令仍被工作树已有的 `.next`/`.next-dev-*` 生成类型缺失，以及基线 `lib/fetcher.ts` 重新导出的 `createIdempotencyKey`、`mutationFetchRaw`、`MutationFetchRawOptions` 在 `api/client.ts` 中缺失所阻断。
 
 ## 两遍视觉自审
 
 第一遍（桌面/信息层级）：页首只保留租户权限摘要，用户/审计采用同一内容面与轻分隔；平台角色、客服角色、容量与状态均按列对齐，主色只用于保存、搜索和焦点，未引入第二套主题或卡片墙。
 
-第二遍（窄屏/状态与可达性）：表格使用 `min-w` + 横向滚动；loading、错误、空态和 409 均有中文文案/重试出口；按钮、select、checkbox、分页和 tab 均有 label/`focus-visible`；spinner/shimmer 和过渡均提供 `motion-reduce` 降级；用户菜单的 admin 入口与页内 RoleGate 双重收口。复审后再次检查折叠侧栏：弹层从侧栏右侧展开，不受 `overflow` 裁切，Escape 可关闭，触发按钮/菜单项均可键盘到达。敏感的 token、密码字段和 `agentId` 未渲染。
+第二遍（窄屏/状态与可达性）：表格使用 `min-w` + 横向滚动；loading、错误、空态和 409 均有中文文案/重试出口；按钮、select、checkbox、分页和 tab 均有 label/`focus-visible`；spinner/shimmer 和过渡均提供 `motion-reduce` 降级；用户菜单的 admin 入口与页内 RoleGate 双重收口。轮次 2 复查响应式边界：移动端 `overflow-hidden` 防止 `w-0` 侧栏外溢，md 以上 `overflow-visible` 保留右侧 popover，collapsed 的 admin/退出/Escape/焦点行为保持不变。敏感的 token、密码字段和 `agentId` 未渲染。
 
 ## 改动文件
 
