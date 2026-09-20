@@ -76,6 +76,7 @@ export const NAV: NavEntry[] = [
     icon: <ShieldCheck size={18} />, label: '运营干预', minRole: 'admin',
     items: [
       { label: '工具审批', path: '/approvals' },
+      { label: '访问控制', path: '/settings/access', minRole: 'admin' },
       { label: '客服对话', path: '/cs' },
       { label: '客服会话', path: '/cs/conversations' },
       { label: '人工接入坐席', path: '/cs/handoff' },
@@ -106,4 +107,3 @@ export function visibleNav(baseline = false): NavEntry[] {
   if (baseline) return NAV.filter((e) => !e.minRole)
   return NAV.filter((e) => !e.minRole || atLeast(e.minRole))
 }
-

@@ -16,6 +16,15 @@ export type AgentEvent = {
   [key: string]: unknown;
 };
 
+/** auth.logout 广播的浏览器级事件名；不携带 token 或用户数据。 */
+export const CS_AGENT_LOGOUT_EVENT = "agent:logout";
+
+export function broadcastAgentLogout(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(CS_AGENT_LOGOUT_EVENT));
+  }
+}
+
 // P3.3：WS 走 APISIX 网关 /ws/cs/*（此前硬编码 ws://127.0.0.1:8000 绕网关）。
 // 优先 NEXT_PUBLIC_CS_WS_URL（如 ws://gateway:9080）；缺省推导同源 ——
 // 网关与前端同域部署时零配置；不同域必须显式配置。同源不可达时
@@ -40,10 +49,26 @@ export function useAgentSocket(onEvent: (e: AgentEvent) => void) {
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
 
+    const stop = () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pingTimer) clearInterval(pingTimer);
+      reconnectTimer = undefined;
+      pingTimer = undefined;
+      setConnected(false);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws && ws.readyState < 2) ws.close();
+    };
+
+    const onLogout = () => stop();
+    window.addEventListener(CS_AGENT_LOGOUT_EVENT, onLogout);
+
     const connect = async () => {
       if (disposed) return;
       try {
         const { ticket, ws_path } = await issueWsTicket();
+        if (disposed) return;
         const ws = new WebSocket(
           `${WS_BASE}${ws_path}?ticket=${encodeURIComponent(ticket)}`,
         );
@@ -90,10 +115,8 @@ export function useAgentSocket(onEvent: (e: AgentEvent) => void) {
     connect();
 
     return () => {
-      disposed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (pingTimer) clearInterval(pingTimer);
-      wsRef.current?.close();
+      window.removeEventListener(CS_AGENT_LOGOUT_EVENT, onLogout);
+      stop();
     };
   }, []);
 

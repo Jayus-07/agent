@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react'
 import NavGroup from './NavGroup'
 import { visibleNav } from './navConfig'
+import SidebarUserMenu from './SidebarUserMenu'
 
 interface Props { collapsed: boolean; onToggle: () => void }
 
@@ -25,6 +26,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
         {groups.map(g => (
           <NavGroup key={g.path || g.label} {...g} collapsed={true} />
         ))}
+        <SidebarUserMenu collapsed />
       </aside>
     )
   }
@@ -52,6 +54,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
       </nav>
 
       {/* 底部 */}
+      <SidebarUserMenu />
       <div className="px-4 py-3 border-t border-black/5">
         <p className="text-[10px] text-text-muted leading-relaxed">
           Powered by LangGraph<br />Multi-Agent System
