@@ -182,14 +182,21 @@ def test_disabled_ollama_role_reports_actionable_unavailable_reason(client, monk
 # ── missingKeyEnv ───────────────────────────────────────────────────────
 
 
-def test_missing_key_env_reported_when_key_absent(client, monkeypatch):
+def test_missing_key_env_is_none_in_db_mode(client, monkeypatch):
+    """DB 配置模式下 missingKeyEnv 恒为 None（B15 收口语义）。
+
+    2026-09-21 语义变更：Key 已迁入加密数据库，接口不再返回「缺哪个 env」——
+    前端不引导用户改 env，可操作原因由 `availabilityReason` 下发。
+    原用例 test_missing_key_env_reported_when_key_absent 断言的是已废弃的
+    env 分支行为，随语义更新改写。
+    """
     model = _a_registered_qwen_model()
     monkeypatch.setattr(config_llm, "QWEN_API_KEY", "")
     credentials_mod.reset_credentials_for_tests()      # 确保走 env 分支
     model_roles.inject_overrides({"main": model})
 
     row = {r["role"]: r for r in client.get("/sys/model-roles").json()["items"]}
-    assert row["main"]["missingKeyEnv"] == models_mod.PROVIDER_API_KEY_ENV["qwen"]
+    assert row["main"]["missingKeyEnv"] is None
 
 
 def test_missing_key_env_cleared_when_credential_present(client, monkeypatch):
