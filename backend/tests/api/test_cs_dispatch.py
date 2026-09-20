@@ -169,6 +169,34 @@ def test_database_failure_returns_503(client, app, monkeypatch):
     assert response.status_code == 503
 
 
+def test_database_failure_during_session_dependency_returns_503(monkeypatch):
+    """连接在 FastAPI 依赖阶段失败时也不能泄漏成 500。"""
+    app = FastAPI()
+    app.include_router(cs_dispatch.router)
+    _install_identity(app, _identity())
+
+    class _UnavailableSession:
+        async def __aenter__(self):
+            raise MemoryDatabaseUnavailable("database is down")
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(
+        cs_dispatch,
+        "AsyncSessionLocal",
+        lambda: _UnavailableSession(),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        response = test_client.post(
+            PATH,
+            headers={"Idempotency-Key": "request-1"},
+        )
+
+    assert response.status_code == 503
+
+
 @pytest.mark.parametrize("reused", [False, True])
 def test_success_response_contains_handoff_contract(
     client,

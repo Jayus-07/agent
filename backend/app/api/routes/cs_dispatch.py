@@ -20,8 +20,13 @@ router = APIRouter(prefix="/cs/conversations", tags=["智能客服-派单"])
 
 async def get_session():
     """为路由提供独立请求事务。"""
-    async with AsyncSessionLocal() as session:
-        yield session
+    try:
+        async with AsyncSessionLocal() as session:
+            yield session
+    except MemoryDatabaseUnavailable as exc:
+        # 依赖在进入 endpoint 前执行，不能依赖 endpoint 内部的 try 块
+        # 或仅依赖完整 server 的全局异常处理器。
+        raise HTTPException(503, detail="Database unavailable") from exc
 
 
 class HandoffResponse(BaseModel):
