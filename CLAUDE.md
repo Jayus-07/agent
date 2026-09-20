@@ -215,7 +215,8 @@ Backend: `py_compile` + `pytest tests/sql/ -v` ｜ Frontend: `npx tsc --noEmit` 
 next dev（:3100）。网关入口 `http://127.0.0.1:9080`（APISIX）。
 
 - **`backend` 只按“服务名”操作**：`stop backend` = `docker compose stop app`，**不会**
-  停 postgres/redis/apisix/rag-service/mcp-service/worker；`up -d app` 也只拉起 app 一个容器。
+  停 postgres/redis/apisix/rag-service/mcp-service/worker；`up -d --build app`（**带重建**，见下方已知坑）
+  也只拉起 app 一个容器。
   需要整套栈另用 `docker compose up -d` / `down`。
 - 前端每次 start 都新开一个空 `NEXT_DIST_DIR=.next-dev-<rand>`（复用非空 distDir 必启动失败），
   故 `frontend/.next-dev-*`、`frontend-admin/.next-dev-*` 会不断堆积（已实测 16 个目录、~300MB），
@@ -233,9 +234,15 @@ next dev（:3100）。网关入口 `http://127.0.0.1:9080`（APISIX）。
 
 ### 启停已知坑（实测，详见 `命令文档.md`、`docs/gateway-apisix-final-report.md`）
 
+- **app 容器无源码卷：改后端代码必须重建镜像**（2026-09-20 实测）——镜像曾落后修复提交 1h23m，
+  `up -d app` 一直复用旧代码 → 启动校验 fatal → 容器崩溃循环（RestartCount 16）→ 前端 `/api/*`
+  全部 **502**。`dev-svc.bat` 的 `start backend` 已改为 **`up -d --build app`**。定性方法：
+  `docker exec agent-app-1 md5sum /app/backend/config/<file>` 与工作区同文件 md5 比对（不一致即中招），
+  再比 `docker image inspect agent-app --format '{{.Created}}'` 与 `git log -1 --format=%ci <修复提交>`。
+  只 `docker compose restart app` 会继续跑旧镜像。
 - **.bat 必须 ASCII-only**（cmd 按 GBK 解析，中文注释会破坏控制流）；**别用 `timeout /t`**（Git Bash PATH 会解析到 GNU timeout，改用 `ping -n N 127.0.0.1 >nul`）
-- **`dev-svc.bat` 未跟踪**（`?? ` 状态）：它是 `devctl`/`dev-{start,stop,restart}.bat` 四者的共享实现，
-  删旧脚本时务必一起 `git add`，否则新提交的入口脚本会指向一个不存在的文件。
+- **`dev-svc.bat` 是 `devctl`/`dev-{start,stop,restart}.bat` 四者的共享实现**，改动它须与入口脚本一起提交
+  （它历史上曾处于 `?? ` 未跟踪状态，2026-09-20 核实**已纳入版本库**）。
 - 宿主机 `127.0.0.1:8000` 有 Docker 残留僵尸绑定 → 裸跑 uvicorn 前先重启 Docker Desktop
 - app 容器换 IP 后 APISIX 有 ~1-2min 502 窗口（`dns_resolver_valid: 5` 已缓解），急用 `docker compose restart apisix`；oa-auth-service/system 无重启策略，引擎重启后需手动 `docker start`
 - oa-auth 整栈曾被反复 SIGKILL(137)：修复 = `docker start oa-auth-nacos oa-auth-mysql oa-auth-redis oa-auth-service oa-auth-system` → `docker network connect agent_agent-net <容器>` → 重启前端。vpnkit 回环不可靠，**容器名直连是首选**；本机 5432 是宿主机原生 PG，不是 agent-postgres

@@ -147,13 +147,13 @@ if not errorlevel 1 (
 exit /b 0
 
 :start_backend
-echo   [backend] docker compose up -d app ...
+echo   [backend] docker compose up -d --build app ...
 pushd "%ROOT%"
-docker compose up -d app
+docker compose up -d --build app
 set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
-    echo   [ERROR] docker compose up -d app failed, rc=%RC%
+    echo   [ERROR] docker compose up -d --build app failed, rc=%RC%
     exit /b 1
 )
 call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
