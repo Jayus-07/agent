@@ -168,8 +168,14 @@ async def _lookup_bound_agent_id(*, tenant_id: str, user_id: str) -> str | None:
         )
 
 
-def _ensure_conversation_access(request: Request, conv_user_id: str) -> None:
-    """会话归属校验：登录用户只能读自己的会话；guest 只能读匿名会话。
+def _ensure_conversation_access(
+    request: Request, conv_user_id: str, conv_tenant_id: str | None = None
+) -> None:
+    """会话归属校验：登录用户只能读自己租户下自己的会话；guest 只能读匿名会话。
+
+    普通用户必须同时满足 ``conv.user_id == ident.user_id`` 且
+    ``conv.tenant_id == ident.tenant_id``（P0 多租户越权修复：仅校验
+    user_id 会允许跨租户用户凭相同 user_id 串会话）。
 
     服务间 API-Key 通道（BFF 管理端）放行并记 warning —— 该通道由
     服务端凭据保护，用户归属在 BFF 信任边界内校验。
@@ -189,6 +195,12 @@ def _ensure_conversation_access(request: Request, conv_user_id: str) -> None:
     if ident.authenticated:
         if conv_user_id != ident.user_id:
             raise HTTPException(403, detail="无权访问他人会话")
+        if (
+            conv_tenant_id is not None
+            and ident.tenant_id
+            and conv_tenant_id != ident.tenant_id
+        ):
+            raise HTTPException(403, detail="无权访问其他租户的会话")
         return
     # guest（未登录）：仅允许匿名演示会话
     if (conv_user_id or "").strip() in ("", "anonymous", "guest"):
@@ -378,16 +390,18 @@ async def replay_conversation_events(
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
-            conv_user_id = (
+            conv_row = (
                 await db.execute(
-                    select(CSConversation.user_id)
+                    select(
+                        CSConversation.user_id, CSConversation.tenant_id
+                    )
                     .where(CSConversation.conversation_id == conversation_id)
                     .limit(1)
                 )
-            ).scalar_one_or_none()
-        if conv_user_id is None:
+            ).first()
+        if conv_row is None:
             raise HTTPException(404, detail="Conversation not found")
-        _ensure_conversation_access(request, conv_user_id)
+        _ensure_conversation_access(request, conv_row.user_id, conv_row.tenant_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -437,8 +451,8 @@ async def rate_conversation(conversation_id: str, body: RatingRequest, request: 
             if conv is None:
                 raise HTTPException(404, detail="Conversation not found")
 
-            # P1 归属校验：登录用户只能评自己的会话（guest 仅限匿名会话）
-            _ensure_conversation_access(request, conv.user_id)
+            # P1 归属校验：登录用户只能评自己租户下自己的会话（guest 仅限匿名会话）
+            _ensure_conversation_access(request, conv.user_id, conv.tenant_id)
 
             conv.rating = body.rating
             conv.rating_comment = (body.comment or "").strip() or None
@@ -975,13 +989,17 @@ async def get_conversation_messages(
         async with AsyncSessionLocal() as db:
             conv = (
                 await db.execute(
-                    select(CSConversation.conversation_id, CSConversation.user_id)
+                    select(
+                        CSConversation.conversation_id,
+                        CSConversation.user_id,
+                        CSConversation.tenant_id,
+                    )
                     .where(CSConversation.conversation_id == conversation_id)
                     .limit(1)
                 )
             ).first()
         if conv is not None:
-            _ensure_conversation_access(request, conv.user_id)
+            _ensure_conversation_access(request, conv.user_id, conv.tenant_id)
         else:
             # 会话不存在：与 404 语义一致（不泄露存在性）
             raise HTTPException(404, detail="Conversation not found")

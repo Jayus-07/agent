@@ -132,3 +132,103 @@ async def test_service_channel_still_honours_declared_agent_id(monkeypatch):
         await cs_admin._resolve_agent_identity(request, "  ")
 
     assert exc_info.value.status_code == 422
+
+
+# ── P0 多租户越权修复：_ensure_conversation_access 增加 tenant 校验 ──
+
+
+def _jwt_request(roles=("viewer",)) -> Request:
+    return Request({"type": "http", "headers": []})
+
+
+def _patch_identity(monkeypatch, *, user_id, tenant_id, roles=("viewer",)):
+    monkeypatch.setattr(
+        "backend.app.api.identity.resolve_identity",
+        lambda request: Identity(
+            user_id=user_id,
+            user_name=user_id,
+            auth_type="jwt",
+            source="header",
+            roles=roles,
+            tenant_id=tenant_id,
+        ),
+    )
+
+
+def test_owner_same_tenant_can_access_own_conversation(monkeypatch):
+    """tenant A 的 user A 可以 rating 自己的会话（user + tenant 双匹配）。"""
+    _patch_identity(monkeypatch, user_id="user-a", tenant_id="tenant-a")
+
+    cs_admin._ensure_conversation_access(
+        _jwt_request(), "user-a", "tenant-a"
+    )
+
+
+def test_same_tenant_other_user_cannot_rate_others_conversation(monkeypatch):
+    """tenant A 的 user B 不能操作 user A 的会话（user 不匹配 → 403）。"""
+    _patch_identity(monkeypatch, user_id="user-b", tenant_id="tenant-a")
+
+    with pytest.raises(HTTPException) as exc_info:
+        cs_admin._ensure_conversation_access(
+            _jwt_request(), "user-a", "tenant-a"
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "无权访问他人会话"
+
+
+def test_cross_tenant_same_user_id_cannot_rate(monkeypatch):
+    """tenant B 即使构造相同/已知 conversation_id（user_id 相同），也不能操作
+    tenant A 的会话（tenant 不匹配 → 403）。"""
+    _patch_identity(monkeypatch, user_id="user-a", tenant_id="tenant-b")
+
+    with pytest.raises(HTTPException) as exc_info:
+        cs_admin._ensure_conversation_access(
+            _jwt_request(), "user-a", "tenant-a"
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "无权访问其他租户的会话"
+
+
+def test_cross_tenant_access_denied_even_for_same_display_name(monkeypatch):
+    """两租户下 user_id 不同但同名场景：tenant B 用户访问 tenant A 会话 403。"""
+    _patch_identity(monkeypatch, user_id="张三", tenant_id="tenant-b")
+
+    with pytest.raises(HTTPException) as exc_info:
+        cs_admin._ensure_conversation_access(
+            _jwt_request(), "张三", "tenant-a"
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_admin_channel_not_broken_by_tenant_check(monkeypatch):
+    """admin 特殊通道跨租户读会话不受影响（既有设计允许）。"""
+    _patch_identity(
+        monkeypatch, user_id="admin-1", tenant_id="tenant-b", roles=("admin",)
+    )
+
+    cs_admin._ensure_conversation_access(
+        _jwt_request(), "user-a", "tenant-a"
+    )
+
+
+def test_service_api_key_channel_not_broken_by_tenant_check():
+    """服务间 API-Key（BFF）通道原行为不被破坏：不校验 user/tenant。"""
+    request = Request({"type": "http", "headers": [(b"x-auth-type", b"api-key")]})
+
+    cs_admin._ensure_conversation_access(request, "user-a", "tenant-a")
+
+
+def test_guest_anonymous_conversation_still_allowed():
+    """guest 访问匿名会话的原行为保持。"""
+    cs_admin._ensure_conversation_access(_jwt_request(), "anonymous", "default")
+
+
+def test_guest_cannot_access_logged_in_user_conversation():
+    """guest 不能借 tenant 放行访问登录用户会话。"""
+    with pytest.raises(HTTPException) as exc_info:
+        cs_admin._ensure_conversation_access(_jwt_request(), "user-a", "tenant-a")
+
+    assert exc_info.value.status_code == 403
