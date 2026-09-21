@@ -362,8 +362,8 @@ services:
       # off | shadow | enforce
       - CS_DISPATCH_MODE=${CS_DISPATCH_MODE:-off}
       - CS_OFFER_TIMEOUT_SECONDS=${CS_OFFER_TIMEOUT_SECONDS:-30}
-      - CS_MAX_DISPATCH_ATTEMPTS=${CS_MAX_DISPATCH_ATTEMPTS:-5}
-      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-600}
+      - CS_MAX_DISPATCH_ATTEMPTS=${CS_MAX_DISPATCH_ATTEMPTS:-3}
+      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-120}
       - CS_DISPATCH_INTERVAL_SECONDS=${CS_DISPATCH_INTERVAL_SECONDS:-1.0}
       - CS_DISPATCHER_HEARTBEAT_TTL_SECONDS=${CS_DISPATCHER_HEARTBEAT_TTL_SECONDS:-30}
       - LOG_FORMAT=${LOG_FORMAT:-json}
@@ -581,7 +581,7 @@ services:
   # ── Redis（缓存/限流/异步队列）──
   redis:
     image: redis:7-alpine
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
