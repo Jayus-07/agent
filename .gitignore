@@ -36,6 +36,10 @@ sdist/
 # 导致 frontend/src/lib/ 下新文件永远进不了 git（auth.ts/authFetch.ts 曾中招）
 !frontend/src/lib/
 !frontend/src/lib/**
+!frontend-admin/src/lib/
+!frontend-admin/src/lib/**
+!frontend-cs/src/lib/
+!frontend-cs/src/lib/**
 var/
 wheels/
 *.egg-info/
