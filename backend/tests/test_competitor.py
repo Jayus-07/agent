@@ -28,6 +28,20 @@ def _pg_iso(pg_clean_tables):
     yield
 
 
+@pytest.fixture(autouse=True)
+def budget_not_enforced(monkeypatch):
+    """本文件只测竞品域语义（同 test_email_skill.py 先例）。
+
+    .env 的 LLM_BUDGET_MODE=enforce 时写副作用预算门要求可信 user/tenant
+    上下文（单测没有）→ Tool 内的 ensure_approved 抛 QuotaConfigurationError。
+    预算门是独立关注点（由 test_tool_approval.py 专项覆盖），这里固定为
+    monitor 保持测试 hermetic，不随宿主 .env 漂移。
+    """
+    import backend.config.llm as llm_config
+
+    monkeypatch.setattr(llm_config, "LLM_BUDGET_MODE", "monitor")
+
+
 # ────────────────────────────────────────────────────────────────────────────
 #  adapters.py 测试
 # ────────────────────────────────────────────────────────────────────────────
