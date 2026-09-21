@@ -22,8 +22,10 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
+import sqlglot
+from sqlglot import exp
 from psycopg2 import OperationalError, ProgrammingError
-from psycopg2.pool import ThreadedConnectionPool
+from psycopg2.pool import ThreadedConnectionPool, PoolError
 
 from backend.sql.schema_loader import schema_loader
 from backend.sql.sql_result import SQLResult
@@ -92,6 +94,10 @@ def _close_pool() -> None:
             logger.info("[Executor] 连接池已关闭")
 
 
+class PoolExhaustedError(Exception):
+    """连接池打满（限流语义，不再裸 500）——建议项 2026-09-21。"""
+
+
 @contextmanager
 def _get_conn(timeout: float = None):
     """从连接池获取一个连接，用 with 自动归还。
@@ -102,7 +108,13 @@ def _get_conn(timeout: float = None):
     pool = _get_pool()
     conn = None
     try:
-        conn = pool.getconn()
+        try:
+            conn = pool.getconn()
+        except PoolError as e:
+            # 连接池打满：转限流语义（建议项 2026-09-21），不再裸 500
+            raise PoolExhaustedError(
+                f"连接池已满（maxconn={pool.maxconn}）"
+            ) from e
         conn.autocommit = False
         conn.set_session(readonly=True)
         yield conn
@@ -184,6 +196,21 @@ def _classify_pg_error(exc: Exception) -> tuple[str, str | None]:
 # 主执行器
 # =================================================
 
+def _public_error_text(status: str, timeout: float) -> str:
+    """把 PG 异常转成对外安全的分类文案。
+
+    安全修复（审查 #11）：PG 报错原文可能携带 SQL 片段/字面量数据，
+    只允许进日志，不得回显给调用方。
+    """
+    if status == "timeout":
+        return f"查询超时（超过 {timeout} 秒），请简化查询条件。"
+    if status == "permission_denied":
+        return "安全错误：数据库权限拒绝，请检查只读角色配置。"
+    if status == "syntax_error":
+        return "查询执行错误：SQL 语法或对象名不正确，请调整后重试。"
+    return "数据库错误：执行失败，请稍后重试或联系管理员。"
+
+
 def execute_sql(
     sql: str,
     db_config: dict[str, Any] | None = None,
@@ -221,36 +248,38 @@ def execute_sql(
 
                 columns = [desc.name for desc in cur.description] if cur.description else []
                 result_dicts = [dict(r) for r in rows]
-                masked_results = [_mask_row(r, columns) for r in result_dicts]
+                lineage = _output_lineage(sql)
+                masked_results = [_mask_row(r, columns, lineage) for r in result_dicts]
 
                 md = _to_markdown_table(columns, masked_results)
                 logger.info(f"[Executor] 查询完成: {len(rows)} 行, {len(columns)} 列")
                 conn.commit()
                 return md
 
+    except PoolExhaustedError as e:
+        logger.warning(f"[Executor] 连接池打满: {e}")
+        return "**查询被限流**\n\n当前数据库并发过高（连接池已满），请稍后重试。"
+
     except OperationalError as e:
-        logger.error(f"[Executor] 数据库连接/操作错误: {e}")
-        return f"数据库错误: {e}"
+        status, _ = _classify_pg_error(e)
+        # 安全修复：原文只进日志（可能含 SQL 片段/字面量），对外只回分类语义
+        logger.error(f"[Executor] 数据库执行错误({status}): {e}")
+        if timeout is None:
+            timeout = schema_loader.query_timeout
+        return _public_error_text(status, timeout)
 
     except ProgrammingError as e:
-        error_msg = str(e)
-        if "canceling statement" in error_msg.lower():
-            logger.warning(f"[Executor] 查询超时 ({timeout}s)")
-            return f"查询超时（超过 {timeout} 秒），请简化查询条件。"
-        if "cannot execute INSERT in a read-only transaction" in error_msg \
-                or "cannot execute UPDATE in a read-only transaction" in error_msg \
-                or "read-only transaction" in error_msg.lower():
-            logger.error(f"[Executor] 检测到非只读操作被拦截: {e}")
-            return f"安全错误：检测到非只读操作，已拦截。"
-        if "permission denied" in error_msg.lower():
-            logger.error(f"[Executor] 权限拒绝（只读角色拦截）: {e}")
-            return f"安全错误：数据库权限拒绝，请检查只读角色配置。"
-        logger.error(f"[Executor] SQL 执行错误: {e}")
-        return f"查询执行错误: {error_msg}"
+        status, _ = _classify_pg_error(e)
+        logger.error(f"[Executor] SQL 执行错误({status}): {e}")
+        if timeout is None:
+            timeout = schema_loader.query_timeout
+        return _public_error_text(status, timeout)
 
     except Exception as e:
         logger.error(f"[Executor] SQL 执行失败: {e}")
-        return f"查询执行错误: {str(e)}"
+        if timeout is None:
+            timeout = schema_loader.query_timeout
+        return _public_error_text("failed", timeout)
 
 
 # =================================================
@@ -285,22 +314,37 @@ def execute_sql_struct(
                 rows = cur.fetchall()
                 columns = [desc.name for desc in cur.description] if cur.description else []
                 result_dicts = [dict(r) for r in rows]
-                masked = [_mask_row(r, columns) for r in result_dicts]
+                lineage = _output_lineage(sql)
+                masked = [_mask_row(r, columns, lineage) for r in result_dicts]
 
                 conn.commit()
                 elapsed = time.monotonic() - t0
                 logger.info(f"[Executor:struct] 查询完成: {len(rows)} 行, {len(columns)} 列")
                 return SQLResult.success(masked, columns, sql=sql, elapsed=elapsed)
 
+    except PoolExhaustedError as e:
+        elapsed = time.monotonic() - t0
+        logger.warning(f"[Executor:struct] 连接池打满: {e}")
+        # status 沿用既有 Literal（"failed"），限流语义由 error_type + 文案表达
+        return SQLResult.failed(
+            status="failed",
+            error="当前数据库并发过高（连接池已满），请稍后重试",
+            error_type="rate_limited",
+            sql=sql,
+            elapsed=elapsed,
+        )
+
     except (OperationalError, ProgrammingError) as e:
         status, error_type = _classify_pg_error(e)
         elapsed = time.monotonic() - t0
         if isinstance(e, OperationalError) and status == "failed":
             error_type = "connection"
+        # 安全修复：PG 原文只进日志；SQLResult.error 会经 step_results 透出
+        # 到 Reporter/前端，只回分类语义
         logger.warning(f"[Executor:struct] 失败 status={status} type={error_type}: {e}")
         return SQLResult.failed(
             status=status,
-            error=str(e),
+            error=_struct_error_text(status, timeout),
             error_type=error_type,
             sql=sql,
             elapsed=elapsed,
@@ -311,7 +355,7 @@ def execute_sql_struct(
         logger.error(f"[Executor:struct] 兜底异常: {e}")
         return SQLResult.failed(
             status="failed",
-            error=str(e),
+            error=_struct_error_text("failed", timeout),
             error_type="unknown",
             sql=sql,
             elapsed=elapsed,
@@ -321,6 +365,50 @@ def execute_sql_struct(
 # =================================================
 # 列级脱敏
 # =================================================
+
+def _struct_error_text(status: str, timeout: float) -> str:
+    """execute_sql_struct 的对外安全文案（原文只进日志）。"""
+    if timeout is None:
+        timeout = schema_loader.query_timeout
+    return _public_error_text(status, timeout)
+
+
+def _output_lineage(sql: str) -> dict[str, set[str]]:
+    """输出列名 → 源列名集合 的映射（用于别名脱敏，审查 #10）。
+
+    `SELECT name AS n` 的结果列名是 n，按结果列名匹配 masked_columns
+    会漏脱敏。这里解析 AST 把 n → {name} 映射出来，_mask_row 据此
+    回溯源列名匹配。解析失败返回空 dict（退化为按结果列名匹配，
+    不阻塞查询）。
+    """
+    try:
+        stmt = sqlglot.parse_one(sql, read="postgres")
+        mapping: dict[str, set[str]] = {}
+        for proj in stmt.expressions:
+            out_name = (getattr(proj, "alias", "") or proj.output_name or "")
+            if not out_name:
+                continue
+            cols = {c.name.lower() for c in proj.find_all(exp.Column)}
+            if cols:
+                mapping[out_name.lower()] = cols
+        return mapping
+    except Exception:
+        return {}
+
+
+def _apply_mask(value: str, prefix_len: int, suffix_len: int) -> str:
+    """按 (prefix, suffix) 配置对字符串打码。
+
+    P1-11 修复：suffix_len=0 时 value[-0:] 会返回整个字符串，
+    导致脱敏结果泄露原文（"张***张三丰"），必须显式跳过后缀拼接
+    """
+    if len(value) <= prefix_len + suffix_len + 1:
+        return "*" * min(len(value), 5)
+    masked = value[:prefix_len] + "***"
+    if suffix_len > 0:
+        masked += value[-suffix_len:]
+    return masked
+
 
 def _mask_value(value: Any, column_key: str) -> Any:
     """对单值执行脱敏"""
@@ -338,23 +426,33 @@ def _mask_value(value: Any, column_key: str) -> Any:
     if not mask_config:
         return value
 
-    prefix_len, suffix_len = mask_config
-    if len(value) <= prefix_len + suffix_len + 1:
-        return "*" * min(len(value), 5)
-
-    # P1-11 修复：suffix_len=0 时 value[-0:] 会返回整个字符串，
-    # 导致脱敏结果泄露原文（"张***张三丰"），必须显式跳过后缀拼接
-    masked = value[:prefix_len] + "***"
-    if suffix_len > 0:
-        masked += value[-suffix_len:]
-    return masked
+    return _apply_mask(value, mask_config[0], mask_config[1])
 
 
-def _mask_row(row: dict, column_names: list) -> dict:
-    """对一行数据执行列级脱敏"""
+def _mask_row(row: dict, column_names: list, lineage: dict | None = None) -> dict:
+    """对一行数据执行列级脱敏。
+
+    结果列名与源列名（lineage 解析出的别名映射）都参与匹配：
+    `SELECT name AS n` 时结果列名 n 不在 masked_columns 里，
+    但源列名 name 在 → 仍需脱敏。多个键命中时取第一个匹配配置，
+    只打码一次。
+    """
     masked = {}
     for col, val in row.items():
-        masked[col] = _mask_value(val, col)
+        keys = [col.lower()] + sorted((lineage or {}).get(col.lower(), set()))
+        config = next(
+            (
+                cfg
+                for key in keys
+                for mk, cfg in schema_loader.masked_columns.items()
+                if mk.endswith(f".{key}") or mk == key
+            ),
+            None,
+        )
+        if config and isinstance(val, str):
+            masked[col] = _apply_mask(val, config[0], config[1])
+        else:
+            masked[col] = val
     return masked
 
 

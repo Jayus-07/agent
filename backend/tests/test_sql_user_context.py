@@ -8,6 +8,8 @@
 from unittest.mock import Mock
 
 import pytest
+import sqlglot
+from sqlglot import exp
 
 from backend.sql.executor import _mask_value, _mask_row
 from backend.sql.schema_loader import SchemaLoader
@@ -57,6 +59,126 @@ class TestMaskValue:
         masked = _mask_row(row, ["name", "level"])
         assert masked["name"] == "王***"
         assert masked["level"] == "VIP"
+
+
+# =====================================================
+# 1b. 别名脱敏（2026-09-21 审查 #10）
+# =====================================================
+
+class TestMaskWithAlias:
+    def test_output_lineage_resolves_alias(self):
+        from backend.sql.executor import _output_lineage
+        lineage = _output_lineage(
+            "SELECT name AS n, brand FROM customer.customers"
+        )
+        assert lineage.get("n") == {"name"}
+        assert lineage.get("brand") == {"brand"}
+
+    def test_lineage_parse_failure_degrades_to_empty(self):
+        from backend.sql.executor import _output_lineage
+        assert _output_lineage("NOT A SQL !!!") == {}
+
+    def test_mask_row_masks_aliased_column(self):
+        """`SELECT name AS n` 绕过脱敏的回归：经 lineage 回溯源列名后仍打码"""
+        from backend.sql import executor as ex
+        original = dict(ex.schema_loader.masked_columns)
+        try:
+            ex.schema_loader.masked_columns["customer.customers.name"] = (1, 0)
+            masked = ex._mask_row({"n": "张三丰"}, ["n"], lineage={"n": {"name"}})
+            assert masked["n"] == "张***"
+        finally:
+            ex.schema_loader.masked_columns.clear()
+            ex.schema_loader.masked_columns.update(original)
+
+    def test_mask_row_without_lineage_unchanged(self):
+        """无 lineage 时行为与旧版一致（按结果列名匹配）"""
+        from backend.sql import executor as ex
+        original = dict(ex.schema_loader.masked_columns)
+        try:
+            ex.schema_loader.masked_columns["customer.customers.name"] = (1, 0)
+            masked = ex._mask_row({"name": "张三丰", "level": "VIP"}, ["name", "level"])
+            assert masked["name"] == "张***"
+            assert masked["level"] == "VIP"
+        finally:
+            ex.schema_loader.masked_columns.clear()
+            ex.schema_loader.masked_columns.update(original)
+
+
+# =====================================================
+# 1c. 数据库错误原文不回显（2026-09-21 审查 #11）
+# =====================================================
+
+class TestExecutorErrorSanitization:
+    """PG 报错原文可能含 SQL 片段/字面量 → 只进日志，对外只回分类语义。"""
+
+    def _patch_conn_raise(self, monkeypatch, exc):
+        from contextlib import contextmanager
+        from backend.sql import executor as ex
+
+        @contextmanager
+        def fake_conn(timeout=None):
+            raise exc
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(ex, "_get_conn", fake_conn)
+
+    def test_execute_sql_permission_error_sanitized(self, monkeypatch):
+        import psycopg2
+        from backend.sql import executor as ex
+        self._patch_conn_raise(
+            monkeypatch,
+            psycopg2.errors.InsufficientPrivilege(
+                "permission denied for table customers; literal=secret123"
+            ),
+        )
+        out = ex.execute_sql("SELECT name FROM customer.customers")
+        assert "secret123" not in out
+        assert "permission denied" not in out.lower()
+        assert "安全错误" in out
+
+    def test_execute_sql_timeout_sanitized(self, monkeypatch):
+        import psycopg2
+        from backend.sql import executor as ex
+        self._patch_conn_raise(
+            monkeypatch,
+            psycopg2.errors.QueryCanceled(
+                "canceling statement due to statement timeout"
+            ),
+        )
+        out = ex.execute_sql("SELECT 1", timeout=5)
+        assert "canceling" not in out
+        assert "查询超时" in out
+
+    def test_struct_error_sanitized(self, monkeypatch):
+        import psycopg2
+        from backend.sql import executor as ex
+        self._patch_conn_raise(
+            monkeypatch,
+            psycopg2.errors.InsufficientPrivilege(
+                "permission denied for table customers; literal=secret123"
+            ),
+        )
+        result = ex.execute_sql_struct("SELECT name FROM customer.customers")
+        assert result.status == "permission_denied"
+        assert "secret123" not in (result.error or "")
+        assert "permission denied" not in (result.error or "").lower()
+
+    def test_pool_exhausted_markdown_rate_limited(self, monkeypatch):
+        """连接池打满 → 限流文案，不再裸 500（建议项 2026-09-21）"""
+        from backend.sql import executor as ex
+        self._patch_conn_raise(monkeypatch, ex.PoolExhaustedError("连接池已满"))
+        out = ex.execute_sql("SELECT name FROM customer.customers")
+        assert "限流" in out
+        assert "稍后重试" in out
+
+    def test_pool_exhausted_struct_rate_limited(self, monkeypatch):
+        """连接池打满 → SQLResult(failed, error_type=rate_limited)"""
+        from backend.sql import executor as ex
+        self._patch_conn_raise(monkeypatch, ex.PoolExhaustedError("连接池已满"))
+        result = ex.execute_sql_struct("SELECT name FROM customer.customers")
+        assert result.status == "failed"
+        assert result.error_type == "rate_limited"
+        assert "并发过高" in (result.error or "")
 
 
 # =====================================================
@@ -182,3 +304,68 @@ class TestRowSecurityStrictMode:
         )
         assert "customer_id" in new_sql
         assert 7 in params.values()
+
+
+# =====================================================
+# 5. 行级安全注入安全回归（自连接 + 作用域）
+# =====================================================
+
+class TestRowSecurityInjectionSafety:
+    """2026-09-21 审查 #1/#2 回归。
+
+    #1 自连接：同一受保护表多个别名时必须逐别名注入（旧实现按表覆盖写，
+    只有最后一个别名被过滤，其余别名裸奔）。
+    #2 作用域：条件必须注入**顶层** SELECT 的 WHERE（旧实现 stmt.find 全树
+    BFS，外层无 WHERE 而子查询有 WHERE 时条件落入子查询，外层零过滤）。
+    """
+
+    _RS_CONFIG = {"order.orders": {"column": "customer_id", "param": "current_user_id"}}
+
+    def _patch(self, monkeypatch):
+        from backend.sql.schema_loader import schema_loader
+        monkeypatch.setattr(schema_loader, "row_security", dict(self._RS_CONFIG))
+        from backend.sql.row_security import inject_row_filter
+        return inject_row_filter
+
+    def test_self_join_injects_all_aliases(self, monkeypatch):
+        """自连接两个别名都必须被过滤（占位符条件出现两次）"""
+        inject = self._patch(monkeypatch)
+        new_sql, params = inject(
+            "SELECT * FROM order.orders o1 JOIN order.orders o2 "
+            "ON o1.customer_id = o2.customer_id",
+            user_context={"current_user_id": 101},
+        )
+        stmt = sqlglot.parse_one(new_sql, read="postgres")
+        placeholders = list(stmt.find_all(exp.Placeholder))
+        assert len(placeholders) == 2
+        # 每个别名的 customer_id 列都出现在过滤条件中
+        filtered_aliases = {
+            c.table for c in stmt.find_all(exp.Column) if c.name == "customer_id"
+        }
+        assert {"o1", "o2"} <= filtered_aliases
+        # 同表共享同一占位符与值
+        assert params == {"order_orders_customer_id": 101}
+
+    def test_no_outer_where_injects_top_level_not_subquery(self, monkeypatch):
+        """外层无 WHERE、子查询有 WHERE：条件注入顶层，不得落入子查询作用域"""
+        inject = self._patch(monkeypatch)
+        new_sql, _ = inject(
+            "SELECT (SELECT count(*) FROM order.orders x WHERE x.status = 'paid') "
+            "FROM order.orders o",
+            user_context={"current_user_id": 101},
+        )
+        stmt = sqlglot.parse_one(new_sql, read="postgres")
+        assert stmt.args.get("where") is not None, "顶层 SELECT 必须带上过滤条件"
+
+    def test_outer_where_preserved_and_extended(self, monkeypatch):
+        """外层已有 WHERE：原条件保留，过滤条件 AND 追加在顶层"""
+        inject = self._patch(monkeypatch)
+        new_sql, params = inject(
+            "SELECT o.id FROM order.orders o WHERE o.status = 'paid'",
+            user_context={"current_user_id": 101},
+        )
+        stmt = sqlglot.parse_one(new_sql, read="postgres")
+        where_sql = stmt.args["where"].sql(dialect="postgres")
+        assert "o.status" in where_sql
+        assert "customer_id" in where_sql
+        assert params == {"order_orders_customer_id": 101}

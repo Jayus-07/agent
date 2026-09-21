@@ -13,8 +13,11 @@
      Planner/Reporter 能自然把"等待审批"转述给用户）。
   管理端: /api/approvals 列表/批准/驳回（app/api/routes/approvals.py）。
 
-指纹（fingerprint）: sha256(tool|action|detail)。detail 必须只含稳定字段
-（不含时间戳），保证"批准后重试相同操作"命中同指纹。
+指纹（fingerprint）: sha256(tool|action|detail|user_id|tenant_id)。detail 必须只含
+稳定字段（不含时间戳），保证"批准后重试相同操作"命中同指纹。身份字段参与指纹 +
+consume 按 user_id 过滤双重绑定，防止审批单被其他用户以相同参数消耗（审查 #3）。
+注意：指纹掺入身份后，与本改动前创建的旧审批单不再匹配（需重新发起审批；
+旧单 TTL 短，影响有限）。
 
 存储: PostgreSQL ai.tool_approval_requests（agent_business 库）。
 连接失败降级进程内存存储（单进程审批可用；多 worker 部署需修复 DB）。
@@ -65,13 +68,18 @@ class _MemoryApprovalStore:
                     return dict(rec)
         return None
 
-    def consume_approved(self, fingerprint: str, ttl_seconds: int) -> dict | None:
-        """取 TTL 内已批准的同指纹审批单并标记已执行；无则 None。"""
+    def consume_approved(self, fingerprint: str, ttl_seconds: int,
+                         user_id: str | None = None) -> dict | None:
+        """取 TTL 内已批准的同指纹审批单并标记已执行；无则 None。
+
+        user_id 非 None 时强制核对归属（审查 #3：防止跨用户消耗他人审批单）。
+        """
         now = datetime.now(timezone.utc)
         with self._lock:
             candidates = [
                 r for r in self._records.values()
                 if r["fingerprint"] == fingerprint and r["status"] == STATUS_APPROVED
+                and (user_id is None or r.get("user_id") == user_id)
                 and r["decided_at"] and _parse_iso(r["decided_at"])
                 and now - _parse_iso(r["decided_at"]) < timedelta(seconds=ttl_seconds)
             ]
@@ -202,21 +210,26 @@ class _PgApprovalStore:
             cols = [d[0] for d in cur.description]
         return _row_to_record(dict(zip(cols, row)))
 
-    def consume_approved(self, fingerprint: str, ttl_seconds: int) -> dict | None:
-        with self._conn.cursor() as cur:
-            cur.execute(
-                """UPDATE ai.tool_approval_requests
+    def consume_approved(self, fingerprint: str, ttl_seconds: int,
+                         user_id: str | None = None) -> dict | None:
+        # 动态拼接：user_id 非 None 时强制核对归属（审查 #3）
+        sql = """UPDATE ai.tool_approval_requests
                    SET status = %s, executed_at = now()
                    WHERE id = (
                        SELECT id FROM ai.tool_approval_requests
                        WHERE fingerprint = %s AND status = %s
                          AND decided_at > now() - (%s || ' seconds')::interval
-                       ORDER BY decided_at DESC LIMIT 1
+                   """
+        params: list = [STATUS_EXECUTED, fingerprint, STATUS_APPROVED, str(ttl_seconds)]
+        if user_id is not None:
+            sql += "                         AND user_id = %s\n"
+            params.append(user_id)
+        sql += """                       ORDER BY decided_at DESC LIMIT 1
                        FOR UPDATE SKIP LOCKED
                    )
-                   RETURNING *""",
-                (STATUS_EXECUTED, fingerprint, STATUS_APPROVED, str(ttl_seconds)),
-            )
+                   RETURNING *"""
+        with self._conn.cursor() as cur:
+            cur.execute(sql, params)
             row = cur.fetchone()
             if row is None:
                 return None
@@ -314,9 +327,16 @@ def is_degraded() -> bool:
 # 工具层入口：ensure_approved
 # =====================================================
 
-def _fingerprint(tool_name: str, action: str, detail: dict) -> str:
+def _fingerprint(tool_name: str, action: str, detail: dict,
+                 user_id: str = "", tenant_id: str = "") -> str:
+    """审批指纹：操作语义 + 发起身份共同决定（审查 #3）。
+
+    身份不参与指纹则用户 B 可用与用户 A 完全相同的参数消耗 A 的审批单
+    并执行副作用。user_id/tenant_id 掺入后，同参数不同身份 = 不同指纹。
+    """
     canonical = json.dumps(
-        {"tool": tool_name, "action": action, "detail": detail},
+        {"tool": tool_name, "action": action, "detail": detail,
+         "user_id": user_id or "", "tenant_id": tenant_id or ""},
         ensure_ascii=False, sort_keys=True,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -331,6 +351,7 @@ def ensure_approved(tool_name: str, action: str,
         str  — 待审批提示（工具直接把它作为返回值，Planner/Reporter 会转述给用户）。
     """
     detail = detail or {}
+    uid = user_id or "default"
 
     def _side_effect_budget_gate() -> None:
         from backend.core.request_context import get_tool_tenant_id
@@ -346,11 +367,14 @@ def ensure_approved(tool_name: str, action: str,
         _side_effect_budget_gate()
         return None
 
-    fp = _fingerprint(tool_name, action, detail)
+    from backend.core.request_context import get_tool_tenant_id
+    tenant_id = get_tool_tenant_id() or ""
+
+    fp = _fingerprint(tool_name, action, detail, uid, tenant_id)
     store = get_store()
 
-    # 1) 审批通过后的重试：消费 TTL 内 approved 单 → 放行
-    consumed = store.consume_approved(fp, TOOL_APPROVAL_TTL_SECONDS)
+    # 1) 审批通过后的重试：消费 TTL 内 approved 单 → 放行（并核对归属）
+    consumed = store.consume_approved(fp, TOOL_APPROVAL_TTL_SECONDS, user_id=uid)
     if consumed is not None:
         logger.info(f"[ToolApproval] 审批单已批准,放行执行: {tool_name}.{action} "
                     f"(id={consumed['id']}, user={user_id})")
@@ -362,10 +386,10 @@ def ensure_approved(tool_name: str, action: str,
     if existing is not None:
         rid = existing["id"]
     else:
-        rec = store.create(tool_name, action, fp, detail, user_id or "default")
+        rec = store.create(tool_name, action, fp, detail, uid)
         rid = rec["id"]
         logger.warning(f"[ToolApproval] 写操作待审批: {tool_name}.{action} "
-                       f"(id={rid}, user={user_id or 'default'})")
+                       f"(id={rid}, user={uid})")
 
     return (
         f"⏸ 该操作需要人工审批后执行（写操作安全策略）。\n\n"

@@ -11,10 +11,9 @@ SSE 流式协议 (v2):
 """
 import asyncio
 import json
-import os
-import queue
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -61,6 +60,42 @@ _SSE_PING_INTERVAL = 15.0
 
 def _request_key(session_id: str, request_id: str) -> str:
     return f"{session_id}:{request_id}"
+
+
+def _resolve_request_id(raw: str | None) -> str:
+    """#14：客户端未提供有效 id（空或 "default" 占位）→ 服务端生成唯一 id。
+
+    同一 session 的并发流都落到 "default" 时，_active_stops 互相覆盖、
+    abort 误中止别人的流。服务端唯一化后经 meta 事件 + X-Request-Id 头回传。
+    """
+    if raw and raw != "default":
+        return raw
+    return uuid.uuid4().hex
+
+
+def _aq_put_nowait(aq: asyncio.Queue, evt) -> None:
+    """call_soon_threadsafe 回调：非阻塞入队（满时计 metric，不抛回事件循环）。"""
+    try:
+        aq.put_nowait(evt)
+    except asyncio.QueueFull:
+        chat_stream_event_dropped_total.labels(reason="queue_full").inc()
+
+
+def _put_final_frame(aq: asyncio.Queue, loop, stop_event: threading.Event,
+                     evt, wait: float = 5.0) -> None:
+    """收尾帧（error/sentinel）尽力投递：队列满时等 consumer 腾位（#16）。
+
+    stop_event 已置（客户端断开）时跳过等待——此时无人消费，等也等不到。
+    提为模块级便于单测（TestClient 的 asgi transport 缓冲无限，无法端到端
+    模拟真实传输背压）。
+    """
+    deadline = time.monotonic() + wait
+    while aq.full() and time.monotonic() < deadline and not stop_event.is_set():
+        time.sleep(0.01)
+    try:
+        loop.call_soon_threadsafe(_aq_put_nowait, aq, evt)
+    except RuntimeError:
+        pass  # loop 已关闭（应用关停），放弃投递
 
 
 def _validate_model_override(model: str | None) -> None:
@@ -168,7 +203,7 @@ async def chat_stream(
     t0 = time.monotonic()
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
-    request_id = req.request_id or "default"
+    request_id = _resolve_request_id(req.request_id)
 
     # user_id 解析：统一走 identity.py（P3 收敛）。
     # legacy=请求体优先+网关头兜底（现网行为不变）；header/strict=网关权威，body 身份被无视。
@@ -177,26 +212,39 @@ async def chat_stream(
     user_id = ident.user_id or "default"
     key = _request_key(req.session_id, request_id)
 
-    # —— 队列与中止标志延后到生成器内部，确保只在真正进入流式后注册 _active_stops；
+    # —— 中止标志延后到生成器内部注册，确保只在真正进入流式后注册 _active_stops；
     #    之前的代码在请求 body 解析前就注册，r.json() 抛错时不会清理（P1-10 修复）。 ——
-    q: queue.Queue = queue.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
+    # #15：producer（executor 线程）→ consumer（事件循环）改用 asyncio.Queue +
+    #    call_soon_threadsafe 投递。旧实现 consumer 侧 run_in_executor(None, q.get)
+    #    每路流常驻占用默认线程池 1 线程做 0.5s 轮询，并发流多时挤占
+    #    asyncio.to_thread（/chat 同步路径）等默认池消费者。
     stop_event: threading.Event = threading.Event()
+    loop = asyncio.get_running_loop()
+    aq: asyncio.Queue = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
 
-    # —— 握手事件：发送 node_labels 映射表 ——
+    # —— 握手事件：发送 node_labels 映射表 + 服务端 request_id（#14 回传）——
     meta_event = _sse_encode({
         "event": "meta",
-        "data": {"node_labels": _NODE_LABELS},
+        "data": {"node_labels": _NODE_LABELS, "request_id": request_id},
     })
 
-    def producer():
-        """在 executor 线程中运行 LangGraph，事件逐个入队。
+    def _threadsafe_put(evt) -> bool:
+        """producer 线程跨线程投递到 consumer 的 asyncio.Queue；loop 已关则放弃。"""
+        try:
+            loop.call_soon_threadsafe(_aq_put_nowait, aq, evt)
+            return True
+        except RuntimeError:
+            return False
 
-        Backpressure（P0-1）：队列满时不再静默丢弃——
+    def producer():
+        """在 executor 线程中运行 LangGraph，事件跨线程投递到 asyncio.Queue。
+
+        Backpressure（P0-1 + #16）：队列满时不再静默丢弃——
           ① 记 metric（可观测性）；
-          ② 设 stop_event，让上游 LLM 链路尽快退出；
-          ③ 入队 sentinel 让 consumer 干净收尾。
+          ② 先入队 error 帧告知前端「流被截断」（不能静默收尾让前端误判正常结束）；
+          ③ 设 stop_event 让上游 LLM 链路尽快退出；
+          ④ 投递 sentinel 让 consumer 干净收尾。
         """
-        nonlocal stop_event
         try:
             for evt in agent.stream_events(
                 req.question,
@@ -219,33 +267,31 @@ async def chat_stream(
                     chat_stream_event_produced_total.labels(event=evt_name).inc()
                 except Exception:
                     logger.debug("[P1-10] produced_total 指标上报失败", exc_info=True)
-                try:
-                    q.put(evt, timeout=0.05)
-                except queue.Full:
-                    # backpressure：服务端快 / 客户端慢 → 不能丢，否则流式内容跳字
+                if aq.full():
+                    time.sleep(0.05)  # 给 consumer 腾位（与旧 q.put(timeout=0.05) 节流等价）
+                if aq.full():
+                    # backpressure：服务端快 / 客户端慢 → 截断流（丢当前帧会跳字）
                     chat_stream_event_dropped_total.labels(reason="queue_full").inc()
                     if stop_event.is_set():
                         break
-                    # 触发上游停止，并把 None 入队让 consumer 干净收尾
+                    # #16：先入队 error 帧再置 stop，前端才能区分「截断」与「正常结束」
+                    _put_final_frame(aq, loop, stop_event, _sse_error_event(
+                        RuntimeError("服务端背压：客户端消费过慢，流已截断"),
+                    ))
                     stop_event.set()
+                    break
+                if not _threadsafe_put(evt):
                     break
         except Exception as exc:
             chat_stream_event_dropped_total.labels(reason="producer_error").inc()
-            try:
-                q.put(_sse_error_event(exc), timeout=0.05)
-            except queue.Full:
-                pass
+            _put_final_frame(aq, loop, stop_event, _sse_error_event(exc))
         finally:
-            try:
-                q.put(None, timeout=0.05)  # sentinel
-            except queue.Full:
-                pass
+            _put_final_frame(aq, loop, stop_event, None)  # sentinel
 
     async def event_generator():
-        """异步生成器：从队列取事件 → SSE 格式化 → yield。"""
+        """异步生成器：从 asyncio.Queue 取事件 → SSE 格式化 → yield。"""
         # 注册中止标志（cleanup 在 finally 强制执行）
         _active_stops[key] = stop_event
-        loop = asyncio.get_running_loop()
         future = loop.run_in_executor(_executor, producer)
 
         client_aborted = False
@@ -265,12 +311,13 @@ async def chat_stream(
             last_yield_at = time.monotonic()  # 心跳节流基准（P0 保活）
 
             while True:
-                # 阻塞拉取：避免 100Hz 轮询消耗 CPU（P1-14）
+                # 直接 await 队列（#15）：不再经默认线程池轮询 q.get；
+                # wait_for 超时后继续兜心跳与 producer 完成检测
                 try:
-                    evt = await loop.run_in_executor(None, q.get, True, _SSE_GET_TIMEOUT)
-                except queue.Empty:
+                    evt = await asyncio.wait_for(aq.get(), timeout=_SSE_GET_TIMEOUT)
+                except asyncio.TimeoutError:
                     # 超时：检查 producer 是否已结束；未结束则继续等
-                    if future.done() and q.empty():
+                    if future.done() and aq.empty():
                         break
                     # SSE 心跳保活（P0）：长 workflow（market_research 156s）执行期
                     # 事件稀疏，代理/浏览器对无数据连接按空闲超时断流（实测 ~97s），
@@ -328,6 +375,7 @@ async def chat_stream(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            "X-Request-Id": request_id,  # #14：服务端唯一 request_id 回传（meta 事件冗余一份）
         },
     )
 
@@ -366,4 +414,12 @@ async def chat_abort(req: AbortRequest):
     if evt:
         evt.set()
         return {"status": "aborted", "key": key}
+    # #14：服务端可能自行生成了唯一 request_id（meta 事件回传），旧客户端未回传时
+    # 精确 key 未命中 → 按 session 前缀兜底（abort 语义 = 停该会话的活跃流）
+    prefix = f"{req.session_id}:"
+    hits = [e for k, e in _active_stops.items() if k.startswith(prefix)]
+    if hits:
+        for e in hits:
+            e.set()
+        return {"status": "aborted", "key": f"{prefix}*"}
     return {"status": "not_found", "key": key}

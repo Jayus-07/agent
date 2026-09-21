@@ -96,8 +96,9 @@ class SessionStore:
         if r is not None:
             try:
                 r.expire(self._key(session_id), self._ttl)
-            except Exception:
-                pass
+            except Exception as e:
+                # TTL 刷新失败不影响主流程，但留痕（会话可能提前过期）
+                logger.debug(f"[SessionStore] TTL 刷新失败: {session_id} {e}")
 
     @staticmethod
     def _serialize(data: dict) -> dict[str, str]:

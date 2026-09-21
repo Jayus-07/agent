@@ -251,3 +251,27 @@ class TestCheckpointerBackendValidation:
         warnings = su.validate_startup_settings()
         assert not any(
             "checkpointer" in w and "Postgres" in w for w in warnings)
+
+
+class TestReadonlyPassword:
+    """2026-09-21 审查 #12 回归：PG_READONLY_PASSWORD 有内置开发缺省值，
+    生产漏配 = 静默使用公开口令。任何环境 warning 点名；production fatal。"""
+
+    def test_missing_warns_in_dev(self, valid_env, monkeypatch):
+        monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        warnings = su.validate_startup_settings()
+        assert any("PG_READONLY_PASSWORD" in w for w in warnings)
+
+    def test_missing_fatal_in_production(self, valid_env, monkeypatch):
+        monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        with pytest.raises(su.SettingsValidationError) as exc_info:
+            su.validate_startup_settings()
+        assert "PG_READONLY_PASSWORD" in str(exc_info.value)
+
+    def test_explicit_no_warning(self, valid_env, monkeypatch):
+        monkeypatch.setenv("PG_READONLY_PASSWORD", "prod-readonly-secret")
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        warnings = su.validate_startup_settings()
+        assert not any("PG_READONLY_PASSWORD" in w for w in warnings)

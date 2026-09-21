@@ -14,6 +14,19 @@ import pytest
 from backend.skills.email.skill import EmailSkill
 
 
+@pytest.fixture(autouse=True)
+def budget_not_enforced(monkeypatch):
+    """本文件只测 email skill 语义。
+
+    .env 的 LLM_BUDGET_MODE=enforce 时写副作用预算门要求可信 user/tenant
+    上下文（单测没有）→ Tool 内的 ensure_approved 抛 QuotaConfigurationError。
+    预算门是独立关注点，这里固定为 monitor 保持测试 hermetic。
+    """
+    import backend.config.llm as llm_config
+
+    monkeypatch.setattr(llm_config, "LLM_BUDGET_MODE", "monitor")
+
+
 # ==================== 能力分发 ====================
 
 class TestEmailSkillDispatch:

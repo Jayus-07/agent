@@ -354,8 +354,9 @@ async def poll_qr_login(
         for pattern in config.get("scanned_text", []):
             if pattern in text:
                 return {"status": QrStatus.SCANNED.value}
-    except Exception:
-        pass
+    except Exception as e:
+        # 探测失败视为「未扫描」，下轮轮询重试；debug 留痕便于排查
+        logger.debug(f"[QR-Login] scanned_text 探测失败: {e}")
 
     # 4. QR 码元素是否仍可见（不可见可能已扫描或过期）
     try:
@@ -363,8 +364,8 @@ async def poll_qr_login(
         qr_el = await qr_frame.query_selector(config["qr_selector"])
         if not qr_el:
             return {"status": QrStatus.SCANNED.value}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[QR-Login] QR 元素探测失败: {e}")
 
     return {"status": QrStatus.NEW.value}
 

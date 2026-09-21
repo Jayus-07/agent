@@ -111,8 +111,9 @@ async def metrics_endpoint():
     try:
         from backend.observability.metrics import publish_breaker_states
         publish_breaker_states()
-    except Exception:
-        pass
+    except Exception as e:
+        # gauge 刷新失败不影响 metrics 输出，debug 留痕
+        logger.debug(f"[Server] breaker gauge 刷新失败: {e}")
     body, content_type = render_metrics()
     return Response(content=body, media_type=content_type)
 

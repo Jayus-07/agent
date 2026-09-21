@@ -54,6 +54,15 @@ def execute_agent_task_impl(task_id: str, *,
         logger.info("[AgentTask] %s already cancelled, skip", task_id)
         return {"status": "CANCELLED"}
 
+    # 审查 #5：acks_late 可见性超时重投会派第二个 Worker 进来。执行前
+    # 先原子抢租约：抢不到说明已有 Worker 在跑同一 thread_id —— 直接
+    # 退出，不得进入执行分支（LLM 重复烧钱、step_results 互踩）。
+    if not task_service.try_acquire_lease(task_id, worker=hostname or None):
+        logger.warning(
+            "[AgentTask] %s lease held by another worker (acks_late 重投?), skip",
+            task_id)
+        return {"status": "RUNNING_ELSEWHERE"}
+
     if retries:
         task_service.increment_retry(task_id)
         logger.warning("[AgentTask] retry #%d for %s (从 checkpoint 续跑)",

@@ -58,12 +58,14 @@ def inject_row_filter(
     if not isinstance(stmt, exp.Select):
         raise RowSecurityError("只支持 SELECT 注入行级条件")
 
-    # — 收集 SQL 中引用的表及其别名 —
+    # — 收集 SQL 中引用的表及其别名（逐引用记录，不去重）—
     # P1-11 修复：row_security 的键是 schema 限定名（如 order.orders），
     # 而 sqlglot 的 table.name 只是裸表名（orders）——旧实现用裸名查配置，
     # 导致开启行级安全后过滤器永远不会注入（静默失效）。现在同时尝试
     # 限定名与裸表名两种键进行匹配。
-    real_to_alias: Dict[str, str] = {}
+    # 安全修复：按 (表, 别名) 逐引用记录 —— 自连接（同一受保护表多个别名）
+    # 时每个别名都必须各自注入过滤条件，按表覆盖写会漏掉其余别名。
+    protected_refs = []  # [(matched_key, alias)]，按出现顺序去重
     referenced_tables = set()
     for table in stmt.find_all(exp.Table):
         real_name = table.name.lower()
@@ -83,7 +85,9 @@ def inject_row_filter(
                     break
         if matched_key is not None:
             referenced_tables.add(matched_key)
-            real_to_alias[matched_key] = alias
+            ref = (matched_key, alias)
+            if ref not in protected_refs:
+                protected_refs.append(ref)
 
     # — 找出哪些引用表是受保护的 —
     protected_tables = [
@@ -106,10 +110,11 @@ def inject_row_filter(
             f"user_context keys: {list(user_context.keys())})"
         )
 
-    # — 为每个受保护的引用表构建条件（参数化）—
+    # — 为每个受保护的引用（表, 别名）构建条件（参数化）—
+    # 同一表的多个别名共享同一占位符（值相同），但各自生成一条条件
     extra_conditions = []
     params: Dict[str, int] = {}
-    for tname in referenced_tables:
+    for tname, alias in protected_refs:
         rs_config = schema_loader.get_row_security(tname)
         if not rs_config:
             continue
@@ -125,7 +130,6 @@ def inject_row_filter(
         placeholder_key = _safe_name(f"{tname}_{column}")
         params[placeholder_key] = param_value
 
-        alias = real_to_alias.get(tname, tname)
         col_ref = exp.Column(
             this=exp.Identifier(this=column),
             table=exp.Identifier(this=alias),
@@ -149,9 +153,13 @@ def inject_row_filter(
     for cond in extra_conditions[1:]:
         combined = exp.And(this=combined, expression=cond)
 
-    # — 注入到 WHERE —
-    existing_where = stmt.find(exp.Where)
-    if existing_where:
+    # — 注入到顶层 WHERE —
+    # 安全修复：必须用 args.get("where") 定位**本层** SELECT 的 WHERE。
+    # stmt.find(exp.Where) 是全树 BFS，外层无 WHERE 而子查询有 WHERE 时，
+    # 条件会被注入到子查询作用域 —— 相关子查询可引用外层别名，SQL 合法
+    # 但外层零过滤，造成越权全量返回。
+    existing_where = stmt.args.get("where")
+    if existing_where is not None:
         combined = exp.And(this=existing_where.this.copy(), expression=combined.copy())
         existing_where.set("this", combined)
     else:

@@ -158,8 +158,9 @@ class BaseAgentSkill(BaseCapability):
                             "completion_tokens": meta["completion_tokens"],
                             "total_tokens": meta["prompt_tokens"] + meta["completion_tokens"],
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    # trace 指标回填失败不影响调用结果，留痕便于排查
+                    logger.debug(f"[{self.name}] trace token 指标回填失败: {e}")
             return content if isinstance(content, str) else str(content)
         except Exception as e:
             logger.error(f"[{self.name}] LLM 调用失败: {e}")

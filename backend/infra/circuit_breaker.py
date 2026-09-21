@@ -3,7 +3,7 @@
 CLOSED → OPEN → HALF_OPEN 三态状态机:
   - CLOSED: 正常调用，累计失败 N 次后进入 OPEN
   - OPEN: 快速失败（直接抛 CircuitBreakerOpenError），timeout 秒后进入 HALF_OPEN
-  - HALF_OPEN: 试探 1 次 → 成功恢复 CLOSED / 失败回到 OPEN
+  - HALF_OPEN: 试探 1 次（其余并发调用快速失败）→ 成功恢复 CLOSED / 失败回到 OPEN
 
 用法:
     cb = CircuitBreaker("deepseek", fail_threshold=5, timeout=30)
@@ -64,6 +64,7 @@ class CircuitBreaker:
         self.timeout = timeout
         self._state = State.CLOSED
         self._stats = _Stats(last_state_change=time.monotonic())
+        self._probe_in_flight = False  # HALF_OPEN 探测位：仅放行 1 个探测调用（防探测风暴）
         self._lock = threading.Lock()
 
     # ── 公开 API ──
@@ -128,6 +129,7 @@ class CircuitBreaker:
         with self._lock:
             self._state = State.CLOSED
             self._stats = _Stats(last_state_change=time.monotonic())
+            self._probe_in_flight = False
 
     # ── 状态机 ──
 
@@ -137,6 +139,10 @@ class CircuitBreaker:
             if self._state == State.CLOSED:
                 return
             if self._state == State.HALF_OPEN:
+                # 单探测放行：首个调用已占用探测位（尚未返回），其余并发调用快速失败
+                if self._probe_in_flight:
+                    raise CircuitBreakerOpenError(self.name, self.timeout)
+                self._probe_in_flight = True
                 return
             # OPEN: 检查是否到试探时间
             elapsed = time.monotonic() - self._stats.last_state_change
@@ -177,6 +183,8 @@ class CircuitBreaker:
     def _transition(self, new_state: State) -> None:
         self._state = new_state
         self._stats.last_state_change = time.monotonic()
+        # 探测位随 HALF_OPEN 生命周期管理：转入时占用（触发转换者即探测者），转出时释放
+        self._probe_in_flight = new_state == State.HALF_OPEN
 
 
 # ── 预置熔断器实例 ──

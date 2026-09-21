@@ -36,6 +36,19 @@ def required_mode(monkeypatch):
     monkeypatch.setattr(tool_approval, "TOOL_APPROVAL_MODE", "required")
 
 
+@pytest.fixture(autouse=True)
+def budget_not_enforced(monkeypatch):
+    """审批门测试不依赖 .env 的 LLM_BUDGET_MODE。
+
+    2026-09-20 起写副作用预算门（并行工作）在 enforce 模式下要求可信
+    tenant 上下文，单测无网关头会抛 QuotaConfigurationError。预算门是
+    独立关注点，这里固定为 monitor 保持本文件只测审批语义。
+    """
+    import backend.config.llm as llm_config
+
+    monkeypatch.setattr(llm_config, "LLM_BUDGET_MODE", "monitor")
+
+
 class TestAutoMode:
     def test_auto_mode_allows_without_request(self, monkeypatch, memory_store):
         monkeypatch.setattr(tool_approval, "TOOL_APPROVAL_MODE", "auto")
@@ -108,3 +121,48 @@ class TestRequiredMode:
 
     def test_decide_unknown_id(self, memory_store):
         assert tool_approval.decide_request("no-such-id", True, "boss") is None
+
+
+class TestIdentityBinding:
+    """2026-09-21 审查 #3 回归：审批单必须绑定发起身份。
+
+    旧实现指纹 = sha256(tool|action|detail)，不含 user_id/tenant，
+    用户 B 可用与用户 A 完全相同的参数消耗 A 的审批单并执行副作用。
+    """
+
+    def test_other_user_same_params_cannot_consume(self, memory_store):
+        r1 = ensure_approved("send_email", "send", "u1", {"to": "a@b.c"})
+        rid = r1.split("审批单号: `")[1].split("`")[0]
+        tool_approval.decide_request(rid, approve=True, reviewer="boss")
+
+        # 用户 B 用完全相同的参数 → 不得消耗 A 的审批单，须自己建单
+        r2 = ensure_approved("send_email", "send", "u2", {"to": "a@b.c"})
+        assert r2 is not None
+        assert r2 != r1
+
+        # A 的审批单仍处于 approved（未被 B 消耗）
+        recs = memory_store.list(limit=10)
+        a_rec = next(r for r in recs if r["id"] == rid)
+        assert a_rec["status"] == STATUS_APPROVED
+
+    def test_same_user_retry_still_passes(self, memory_store):
+        """身份绑定不破坏正常流程：同一用户批准后重试仍放行。"""
+        r1 = ensure_approved("send_email", "send", "u1", {"to": "a@b.c"})
+        rid = r1.split("审批单号: `")[1].split("`")[0]
+        tool_approval.decide_request(rid, approve=True, reviewer="boss")
+        assert ensure_approved("send_email", "send", "u1", {"to": "a@b.c"}) is None
+
+    def test_same_params_different_user_separate_requests(self, memory_store):
+        """同参数不同用户 → 不同指纹 → 各自独立审批单。"""
+        ensure_approved("send_email", "send", "u1", {"to": "a@b.c"})
+        ensure_approved("send_email", "send", "u2", {"to": "a@b.c"})
+        pending = memory_store.list(status=STATUS_PENDING, limit=10)
+        assert len(pending) == 2
+        assert {r["user_id"] for r in pending} == {"u1", "u2"}
+
+    def test_empty_user_normalized_to_default(self, memory_store):
+        """user_id 缺省归一为 default：同参数两次触发复用同一单。"""
+        r1 = ensure_approved("send_email", "send", "", {"to": "a@b.c"})
+        r2 = ensure_approved("send_email", "send", "", {"to": "a@b.c"})
+        assert r1 == r2
+        assert len(memory_store.list(status=STATUS_PENDING, limit=10)) == 1

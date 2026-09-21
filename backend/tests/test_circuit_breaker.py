@@ -101,6 +101,94 @@ class TestStateMachine:
             cb.call(lambda: (_ for _ in ()).throw(ValueError("test error")))
 
 
+class TestHalfOpenSingleProbe:
+    """HALF_OPEN 单探测放行 — 防探测风暴（#6）"""
+
+    def _trip_to_open(self, cb: CircuitBreaker) -> None:
+        for _ in range(2):
+            try:
+                cb.call(lambda: 1 / 0)
+            except ZeroDivisionError:
+                pass
+        assert cb.state == State.OPEN
+
+    def test_second_call_during_probe_rejected(self):
+        """探测执行期间（fn 未返回）的并发第二调用必须被拒"""
+        cb = CircuitBreaker("test", fail_threshold=2, timeout=0.3)
+        self._trip_to_open(cb)
+        time.sleep(0.4)  # 到达 HALF_OPEN 时机
+
+        second_rejected = False
+
+        def probe():
+            nonlocal second_rejected
+            # 探测 fn 执行中再发起调用 → 等价于并发第二探测
+            try:
+                cb.call(lambda: 42)
+            except CircuitBreakerOpenError:
+                second_rejected = True
+            return 1
+
+        assert cb.call(probe) == 1
+        assert second_rejected is True
+        assert cb.state == State.CLOSED  # 探测成功仍正常恢复
+
+    def test_concurrent_probes_single_flight(self):
+        """5 线程并发探测：仅 1 个真正放行，其余 4 个被拒"""
+        import threading
+
+        cb = CircuitBreaker("test", fail_threshold=2, timeout=0.3)
+        self._trip_to_open(cb)
+        time.sleep(0.4)
+
+        entered = threading.Event()   # 首个探测已过 _check_state（fn 开始执行）
+        release = threading.Event()   # 放行探测完成
+        executed: list[int] = []
+        rejected: list[int] = []
+
+        def worker() -> None:
+            try:
+                cb.call(lambda: (entered.set(), release.wait(timeout=2), executed.append(1)))
+            except CircuitBreakerOpenError:
+                rejected.append(1)
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        threads[0].start()
+        assert entered.wait(timeout=2), "首个探测未开始执行"
+        for t in threads[1:]:
+            t.start()
+        release.set()
+        for t in threads:
+            t.join()
+
+        assert len(executed) == 1
+        assert len(rejected) == 4
+        assert cb.state == State.CLOSED
+
+    def test_probe_failure_releases_flag_and_returns_to_open(self):
+        """探测失败回 OPEN 时释放探测位"""
+        cb = CircuitBreaker("test", fail_threshold=2, timeout=0.3)
+        self._trip_to_open(cb)
+        time.sleep(0.4)
+        try:
+            cb.call(lambda: 1 / 0)  # 探测失败
+        except ZeroDivisionError:
+            pass
+        assert cb.state == State.OPEN
+        assert cb._probe_in_flight is False
+
+    def test_reset_clears_probe_flag(self):
+        """reset 必须清探测位，且状态机内部一致性可守护"""
+        cb = CircuitBreaker("test", fail_threshold=2, timeout=0.3)
+        self._trip_to_open(cb)
+        time.sleep(0.4)
+        cb._check_state()  # 占位（模拟探测在飞，不执行 fn）
+        assert cb.state == State.HALF_OPEN
+        cb.reset()
+        assert cb._probe_in_flight is False
+        assert cb.call(lambda: 42) == 42
+
+
 class TestPresetBreakers:
     """预置熔断器实例"""
 

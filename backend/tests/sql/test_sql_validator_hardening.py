@@ -44,6 +44,14 @@ class TestLimitEnforcement:
             sql_validator.validate(sql)
         assert exc_info.value.layer == 2
 
+    def test_limit_all_forced_to_max(self):
+        """LIMIT ALL 解析不出数值（expression 非数字字面量）→ 强制覆写
+        为 max_limit，不得原样放行（旧实现按 0 处理 → 无界扫描）。"""
+        sql = "SELECT id FROM product.products LIMIT ALL"
+        safe_sql, _, _ = sql_validator.validate(sql)
+        assert "LIMIT ALL" not in safe_sql.upper()
+        assert "LIMIT 100" in safe_sql
+
 
 class TestStarProjectionHardening:
     @pytest.fixture(autouse=True)
@@ -95,3 +103,84 @@ class TestStarProjectionHardening:
         sql = "SELECT * FROM product.products LIMIT 5"
         safe_sql, _, _ = sql_validator.validate(sql)
         assert "product" in safe_sql.lower()
+
+
+class TestSensitiveColumnResolution:
+    """2026-09-21 审查 #9 回归：敏感列匹配必须解析别名 + 三段式取对位。
+
+    旧实现两个洞（sensitive_columns 生产为空故潜伏）：
+      ① 三段式 schema.table.column 取 sens_table=parts[0]，拿到的是
+         schema 名 → `customers.phone` 永远匹配不上；
+      ② 不解析别名 → `c.phone`（c 为 customers 别名）永不匹配。
+    """
+
+    def _enable(self, monkeypatch, refs):
+        monkeypatch.setattr(sql_validator, "sensitive_columns", set(refs))
+
+    def test_qualified_column_on_sensitive_table_rejected(self, monkeypatch):
+        self._enable(monkeypatch, {"customer.customers.phone"})
+        sql = "SELECT phone FROM customer.customers LIMIT 5"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 3
+
+    def test_aliased_column_resolved_to_real_table(self, monkeypatch):
+        self._enable(monkeypatch, {"customer.customers.phone"})
+        sql = "SELECT c.phone FROM customer.customers c LIMIT 5"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 3
+
+    def test_two_part_config_matches_bare_schema_table(self, monkeypatch):
+        """两段式配置 table.column 也能命中（别名解析后比对表名）。"""
+        self._enable(monkeypatch, {"customers.phone"})
+        sql = "SELECT c.phone FROM customer.customers c LIMIT 5"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 3
+
+    def test_where_clause_reference_rejected(self, monkeypatch):
+        self._enable(monkeypatch, {"customer.customers.phone"})
+        sql = "SELECT name FROM customer.customers c WHERE c.phone = '123' LIMIT 5"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 3
+
+    def test_non_sensitive_column_still_passes(self, monkeypatch):
+        self._enable(monkeypatch, {"customer.customers.phone"})
+        safe_sql, _, _ = sql_validator.validate(
+            "SELECT c.name FROM customer.customers c LIMIT 5"
+        )
+        assert "name" in safe_sql
+
+
+class TestLayer1ExplicitRejects:
+    """Layer 1 显式拒绝 SELECT INTO / FOR UPDATE（建议项 2026-09-21）。
+
+    以前只靠 READ ONLY 事务兜底；现在 AST 层直接拒绝——INTO 会建表落盘，
+    锁子句会持有行锁直到事务结束。
+    """
+
+    def test_select_into_rejected(self):
+        sql = "SELECT id, name INTO new_products FROM product.products"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 1
+
+    def test_for_update_rejected(self):
+        sql = "SELECT id FROM product.products WHERE id = 1 FOR UPDATE"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 1
+
+    def test_for_share_rejected(self):
+        sql = "SELECT id FROM product.products WHERE id = 1 FOR SHARE"
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(sql)
+        assert exc_info.value.layer == 1
+
+    def test_plain_select_still_passes(self):
+        safe_sql, _, _ = sql_validator.validate(
+            "SELECT id FROM product.products LIMIT 5"
+        )
+        assert "LIMIT 5" in safe_sql

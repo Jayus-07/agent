@@ -73,6 +73,15 @@ class SQLValidator:
                 layer=1,
             )
 
+        # 显式拒绝 SELECT INTO / FOR UPDATE / FOR SHARE（建议项 2026-09-21）：
+        # 以前只靠只读事务兜底，现在 Layer 1 直接拒绝——INTO 会建表落盘，
+        # 锁子句会持有行锁直到事务结束，都不该进到执行层。
+        if stmt.args.get("into"):
+            raise ValidationError("禁止 SELECT INTO（会创建表/写文件）", layer=1)
+        locks = stmt.args.get("locks") or []
+        if locks:
+            raise ValidationError("禁止 FOR UPDATE / FOR SHARE 锁子句", layer=1)
+
         self._check_no_write_in_subqueries(stmt)
 
     def _check_no_write_in_subqueries(self, node: exp.Expression):
@@ -194,25 +203,45 @@ class SQLValidator:
     # =================================================
 
     def _check_sensitive_columns(self, parsed: list, table_names: Set[str]) -> None:
-        """检查 SELECT / WHERE 中是否引用了敏感列"""
+        """检查 SELECT / WHERE 中是否引用了敏感列。
+
+        安全修复：
+        ① 配置为三段式 schema.table.column 时表名取 parts[-2]（旧实现取
+           parts[0] 拿到的是 schema 名，永远匹配不上表别名）；
+        ② 列引用先按别名解析到真实表名再比对（`c.phone` 中 c 是
+           customers 的别名时旧实现永不匹配）。
+        """
+        if not self.sensitive_columns:
+            return
+
         stmt = parsed[0]
+        # 别名 → 真实表名映射（无别名时 alias_or_name 即表名本身）
+        alias_to_table = {}
+        for table in stmt.find_all(exp.Table):
+            real = table.name.lower()
+            alias_to_table[table.alias_or_name.lower()] = real
+            alias_to_table[real] = real
+
         for column in stmt.find_all(exp.Column):
             col_name = column.name.lower()
-            table_name = column.table.lower() if column.table else ""
-
-            full_ref = f"{table_name}.{col_name}" if table_name else col_name
+            raw_table = column.table.lower() if column.table else ""
+            resolved_table = alias_to_table.get(raw_table, raw_table)
 
             for sensitive_ref in self.sensitive_columns:
-                sens_parts = sensitive_ref.split(".")
+                sens_parts = sensitive_ref.lower().split(".")
                 sens_col = sens_parts[-1]
-                sens_table = sens_parts[0] if len(sens_parts) > 1 else ""
+                sens_table = sens_parts[-2] if len(sens_parts) > 1 else ""
 
-                if col_name == sens_col:
-                    if not sens_table or table_name == sens_table:
-                        raise ValidationError(
-                            f"禁止查询敏感列: '{full_ref}' (敏感列: {sensitive_ref})",
-                            layer=3,
-                        )
+                if col_name != sens_col:
+                    continue
+                # 未限定表名的列引用（SELECT phone FROM ...）无法证明
+                # 不属于敏感表 → fail-closed 直接拒绝
+                if not sens_table or not raw_table or resolved_table == sens_table:
+                    full_ref = f"{raw_table}.{col_name}" if raw_table else col_name
+                    raise ValidationError(
+                        f"禁止查询敏感列: '{full_ref}' (敏感列: {sensitive_ref})",
+                        layer=3,
+                    )
 
     # =================================================
     # Layer 3+: SELECT * 泄露防护 — 敏感表上禁止星号投影
@@ -291,13 +320,20 @@ class SQLValidator:
 
         limit_clause = stmt.args.get("limit")
         if limit_clause is not None:
-            current = int(limit_clause.expression.name) if limit_clause.expression else 0
-            if current > self.max_limit:
-                raise ValidationError(
-                    f"LIMIT {current} 超过最大值 {self.max_limit}",
-                    layer=5,
-                )
-            return parsed, False
+            expr = limit_clause.expression
+            if isinstance(expr, exp.Literal) and expr.is_int:
+                current = int(expr.name)
+                if current > self.max_limit:
+                    raise ValidationError(
+                        f"LIMIT {current} 超过最大值 {self.max_limit}",
+                        layer=5,
+                    )
+                return parsed, False
+            # 安全修复：LIMIT ALL / 非数字字面量（表达式、参数等）解析不出
+            # 数值 → 旧实现按 0 处理原样放行，max_limit 失效。强制覆写。
+            stmt = stmt.limit(self.max_limit)
+            logger.info("[Validator] LIMIT 非数字字面量（如 LIMIT ALL），强制覆写为 max_limit")
+            return [stmt], True
 
         stmt = stmt.limit(self.max_limit)
         logger.info(f"[Validator] 自动添加 LIMIT {self.max_limit}")

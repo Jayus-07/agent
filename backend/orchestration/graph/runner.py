@@ -24,6 +24,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import uuid
 from typing import Generator
 
 from backend.config import ENABLE_TOKEN_STREAMING, MAIN_GRAPH_RECURSION_LIMIT
@@ -366,12 +367,16 @@ class GraphRunner:
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
                 # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
-                # thread_id：每轮唯一（session+毫秒），checkpoint 定位用于崩溃
-                # 恢复/审计，不做跨轮状态合并（多轮记忆由 MemoryService 负责）
+                # thread_id：每轮唯一（session+毫秒+uuid），checkpoint 定位用于崩溃
+                # 恢复/审计，不做跨轮状态合并（多轮记忆由 MemoryService 负责）。
+                # uuid 后缀防同毫秒重复提交撞 thread_id（建议项 2026-09-21）
                 invoke_config: dict = {"recursion_limit": MAIN_GRAPH_RECURSION_LIMIT}
                 if has_checkpointer:
                     invoke_config["configurable"] = {
-                        "thread_id": f"agent-{session_id}-{int(time.time() * 1000)}",
+                        "thread_id": (
+                            f"agent-{session_id}-{int(time.time() * 1000)}"
+                            f"-{uuid.uuid4().hex[:8]}"
+                        ),
                     }
                 for event in self._graph.stream(initial_state, config=invoke_config):
                     if stop_event is not None and stop_event.is_set():

@@ -13,7 +13,7 @@ import asyncio
 import os
 import time
 
-from backend.config import CHROMA_PATH, EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, ENV_MODE
+from backend.config import EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, ENV_MODE
 
 
 def _embedding_model_name() -> str:
@@ -66,12 +66,14 @@ async def get_stats():
             "doc_count": len(docs),
             "chunk_count": total_chunks,
             "embedding_model": _embedding_model_name(),
-            "vector_db": "Chroma",
-            "vector_db_path": CHROMA_PATH,
+            # 向量库唯一实现 = pgvector（agent_memory.rag_vectors 表）；
+            # Chroma 与 VECTOR_BACKEND 开关已于 2026-09-17 删除。
+            "vector_db": "pgvector",
+            "vector_db_path": "pgvector:rag_vectors",
         }
     except Exception as e:
         logger.error(f"[RAG] stats 失败: {e}")
-        return {"kb_count": 0, "doc_count": 0, "chunk_count": 0, "embedding_model": "", "vector_db": "Chroma", "error": str(e)}
+        return {"kb_count": 0, "doc_count": 0, "chunk_count": 0, "embedding_model": "", "vector_db": "pgvector", "error": str(e)}
 
 
 @router.get("/documents")
@@ -452,7 +454,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
 
 
 def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str]) -> None:
-    """级联删除一个 Doc 的全部向量/索引/文件（Chroma 两库 + chunk_store + BM25 + 原文件）。
+    """级联删除一个 Doc 的全部向量/索引/文件（pgvector 两 collection + chunk_store + BM25 + 原文件）。
 
     不负责 registry 状态变更——由调用方决定 mark_deleted 还是 update_status。
     """
@@ -489,15 +491,15 @@ def _verify_doc_purged(doc_id: str, file_path: str, pipeline) -> list[str]:
     try:
         result = pipeline.vectordb.get(where={"doc_id": doc_id})
         if result and result.get("ids"):
-            residue.append(f"Chroma chunk 残留 {len(result['ids'])} 条")
+            residue.append(f"pgvector chunk 残留 {len(result['ids'])} 条")
     except Exception as e:
-        residue.append(f"Chroma chunk 验证失败: {e}")
+        residue.append(f"pgvector chunk 验证失败: {e}")
     try:
         result = pipeline.doc_db.get(where={"doc_id": doc_id})
         if result and result.get("ids"):
-            residue.append(f"Chroma doc 残留 {len(result['ids'])} 条")
+            residue.append(f"pgvector doc 残留 {len(result['ids'])} 条")
     except Exception as e:
-        residue.append(f"Chroma doc 验证失败: {e}")
+        residue.append(f"pgvector doc 验证失败: {e}")
     try:
         from backend.rag.indexing.chunk_store import get_chunk_store
         cnt = get_chunk_store().count_by_doc_id(doc_id)
@@ -575,7 +577,7 @@ async def get_chunks(doc_id: str):
         import json as _json
         chunk_ids = _json.loads(chunk_ids_str) if isinstance(chunk_ids_str, str) else chunk_ids_str
 
-        # 从 ChromaDB 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
+        # 从 pgvector 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
         chunks = []
         try:
             store = (await asyncio.to_thread(get_rag_pipeline)).vectordb
@@ -602,7 +604,7 @@ async def get_chunks(doc_id: str):
 
 @router.get("/chunks/{doc_id}/detail")
 async def get_chunk_detail(doc_id: str):
-    """获取文档的完整 Chunk 文本（从 SQLite chunk_store，非 ChromaDB）。
+    """获取文档的完整 Chunk 文本（从 chunk_store 取，非向量库）。
     供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。"""
     try:
         from backend.rag.indexing.chunk_store import get_chunk_store

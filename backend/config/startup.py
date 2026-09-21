@@ -59,6 +59,8 @@ class DatabaseSettings(BaseModel):
     pg_password: str
     pg_database: str = "agent_memory"
     business_pgdatabase: str = "agent_business"
+    # None = 未显式配置（database.py 会静默落回内置开发口令 agent_readonly_dev）
+    pg_readonly_password: Optional[str] = None
     pool_min: int = Field(ge=0)
     pool_max: int = Field(ge=1)
 
@@ -156,6 +158,7 @@ def _build_settings() -> StartupSettings:
             pg_password=_env("PGPASSWORD"),
             pg_database=_env("MEMORY_PGDATABASE", "agent_memory"),
             business_pgdatabase=_env("BUSINESS_PGDATABASE", "agent_business"),
+            pg_readonly_password=_env("PG_READONLY_PASSWORD") or None,
             pool_min=_env_int("DB_POOL_MIN_CONN", 2),
             pool_max=_env_int("DB_POOL_MAX_CONN", 10),
         ),
@@ -218,6 +221,14 @@ def validate_startup_settings() -> List[str]:
         )
     elif len(s.auth.api_key) < 16:
         warnings.append(f"API_KEY 长度仅 {len(s.auth.api_key)} 位（建议 ≥ 32 位随机串）")
+
+    if not s.database.pg_readonly_password:
+        # 审查 #12：database.py 对 PG_READONLY_PASSWORD 有内置开发缺省值，
+        # 生产漏配会静默使用公开口令 —— 任何环境都点名提醒
+        warnings.append(
+            "PG_READONLY_PASSWORD 未配置：SQL 只读连接将使用内置开发口令"
+            "（agent_readonly_dev）。生产环境必须显式配置。"
+        )
 
     if s.auth.allow_unauthenticated:
         warnings.append(
@@ -318,6 +329,13 @@ def validate_startup_settings() -> List[str]:
             "ENVIRONMENT=production + IDENTITY_SOURCE=legacy：生产环境禁止采信"
             "请求体身份（可伪造）。请设置 IDENTITY_SOURCE=header 或 strict，"
             "由网关验签后注入 X-User-Id 等身份头。"
+        )
+
+    # 审查 #12：只读口令有公开的开发缺省值，生产漏配 = 静默使用弱口令
+    if _is_prod and not s.database.pg_readonly_password:
+        _fatal.append(
+            "ENVIRONMENT=production + PG_READONLY_PASSWORD 未配置：生产环境"
+            "禁止静默使用内置开发口令（agent_readonly_dev），必须显式配置。"
         )
 
     if _fatal:

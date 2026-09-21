@@ -208,6 +208,47 @@ def test_cancelled_task_skips_execution(pg, task_record):
 
 
 # ═══════════════════════════════════════════════════
+# 2026-09-21 审查 #5：acks_late 重投防双跑（执行租约）
+# ═══════════════════════════════════════════════════
+
+def test_lease_acquired_once(pg, task_record):
+    """同一任务只有第一个 Worker 能抢到租约。"""
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a") is True
+    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is False
+
+
+def test_impl_skips_when_lease_held_elsewhere(pg, task_record):
+    """租约被占时 impl 直接退出，不得进入执行分支（防双跑）。"""
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a") is True
+    from backend.tasks.agent_tasks import execute_agent_task_impl
+
+    result = execute_agent_task_impl(task_record.id)
+    assert result["status"] == "RUNNING_ELSEWHERE"
+    # 状态保持 RUNNING，未被第二个 Worker 破坏
+    assert _refresh(pg, task_record).status == TaskStatus.RUNNING
+
+
+def test_failed_task_lease_reclaimable_for_retry(pg, task_record):
+    """FAILED（重试路径）必须能重新抢到租约。"""
+    pg.update_status(task_record.id, TaskStatus.FAILED, error_message="boom")
+    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is True
+
+
+def test_stale_running_lease_reclaimable(pg, task_record):
+    """RUNNING 但心跳停更超过硬超时 → 视为 Worker 已死，允许接管。"""
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a") is True
+    # 把 updated_at 回拨到阈值之前（模拟硬杀/OOM 后无心跳的死 Worker）
+    import json as _json
+
+    with pg._conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET updated_at = now() - interval '2 hours' "
+            "WHERE id = %s", (task_record.id,))
+    assert pg.try_acquire_lease(
+        task_record.id, worker="worker-b", stale_running_seconds=1900) is True
+
+
+# ═══════════════════════════════════════════════════
 # 取消 / 暂停标志 → 任务终态（Worker 捕获路径）
 # ═══════════════════════════════════════════════════
 

@@ -190,14 +190,17 @@ class TokenTracker:
                     event.step_id = attribution["step_id"] or None
                     event.role = attribution["role"] or None
                     event.stage = attribution["stage"] or None
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 归因失败不影响用量记录，但留痕便于排查（禁令：except-pass 需日志）
+                    from backend.shared.logger import logger as _logger
+                    _logger.debug(f"[TokenTracker] usage 归因填充失败: {e}")
                 try:
                     from backend.infra.llm.budget import current_call_decision
 
                     event.decision = current_call_decision()
-                except Exception:
-                    pass
+                except Exception as e:
+                    from backend.shared.logger import logger as _logger
+                    _logger.debug(f"[TokenTracker] 读取 call decision 失败: {e}")
 
                 try:
                     from backend.infra.llm.budget import record_model_usage
@@ -222,9 +225,10 @@ class TokenTracker:
                         total_tokens=total_tokens,
                         cost_usd=cost_usd,
                     )
-                except Exception:
-                    # 预算统计失败不得覆盖原始模型结果/异常。
-                    pass
+                except Exception as e:
+                    # 预算统计失败不得覆盖原始模型结果/异常，但留痕便于排查。
+                    from backend.shared.logger import logger as _logger
+                    _logger.debug(f"[TokenTracker] 预算统计失败: {e}")
                 
                 # JSONL 写入 (线程安全)
                 self._write_jsonl(event)
