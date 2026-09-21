@@ -6,13 +6,15 @@ setlocal enabledelayedexpansion
 ::               dev-restart / devctl (do not call it directly unless
 ::               you need the raw action form)
 ::
-::   dev-svc.bat [status^|start^|stop^|restart] [backend^|admin^|web^|all] [/y]
+::   dev-svc.bat [status^|start^|stop^|restart^|rebuild] [backend^|admin^|web^|all] [/y]
 ::
 ::   backend = docker compose "app" service   127.0.0.1:8000  (/health)
 ::   admin   = frontend-admin  next dev       :3200           (/login)
 ::   web     = frontend        next dev       :3100           (/login)
-::   /y      = skip the confirmation prompt of stop/restart
+::   /y      = skip the confirmation prompt of stop/restart/rebuild
 ::   no arg  = print status
+::   rebuild = backend only: compose build + up -d all backend services
+::             - the ONLY way code / .env changes reach the containers
 ::
 :: Conventions kept from start_frontend*.bat:
 ::   * every next dev start uses a NEW EMPTY distDir (NEXT_DIST_DIR),
@@ -68,6 +70,7 @@ if /i "!ACTION!"=="status"  goto do_status
 if /i "!ACTION!"=="start"   goto do_start
 if /i "!ACTION!"=="stop"    goto do_stop
 if /i "!ACTION!"=="restart" goto do_restart
+if /i "!ACTION!"=="rebuild" goto do_rebuild
 goto usage
 
 :: =====================================================================
@@ -98,6 +101,14 @@ call :confirm restart
 if errorlevel 1 exit /b 0
 call :fanout stop
 call :fanout start
+call :do_status
+exit /b 0
+
+:do_rebuild
+:: rebuild = backend only. Frontends are "next dev" processes, nothing to build.
+call :confirm rebuild
+if errorlevel 1 exit /b 0
+call :rebuild_backend
 call :do_status
 exit /b 0
 
@@ -179,6 +190,32 @@ if not "%RC%"=="0" (
     exit /b 1
 )
 exit /b 0
+
+:: =====================================================================
+:: backend rebuild - build images + recreate ALL code-bearing backend
+:: services. Plain "restart" reuses the old image and the env vars that
+:: were baked in at container creation: code changes AND .env changes
+:: both take effect only via this rebuild path. db-migrate one-shot is
+:: re-run automatically through the compose depends_on chain.
+:: =====================================================================
+:rebuild_backend
+set "BACKEND_SERVICES=app rag-service mcp-service worker beat cs-dispatcher metadata-shadow-worker"
+echo   [backend] docker compose build %BACKEND_SERVICES% ...
+pushd "%ROOT%"
+docker compose build %BACKEND_SERVICES%
+if errorlevel 1 goto rebuild_fail
+echo   [backend] docker compose up -d %BACKEND_SERVICES% ...
+docker compose up -d %BACKEND_SERVICES%
+if errorlevel 1 goto rebuild_fail
+popd
+call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
+exit /b 0
+
+:rebuild_fail
+set "RC=%ERRORLEVEL%"
+popd
+echo   [ERROR] docker compose rebuild failed, rc=%RC%
+exit /b 1
 
 :: =====================================================================
 :: next dev (admin / web)
@@ -290,12 +327,15 @@ exit /b 1
 
 :: =====================================================================
 :usage
-echo dev-svc.bat - shared impl of dev-start / dev-stop / dev-restart / devctl
+echo dev-svc.bat - shared impl of dev-start / dev-stop / dev-restart / dev-rebuild / devctl
 echo.
-echo   dev-svc.bat [status^|start^|stop^|restart] [backend^|admin^|cs^|web^|all] [/y]
+echo   dev-svc.bat [status^|start^|stop^|restart^|rebuild] [backend^|admin^|cs^|web^|all] [/y]
 echo.
 echo   backend = docker compose app service   127.0.0.1:8000
 echo   admin   = frontend-admin next dev      :3200
 echo   cs      = frontend-cs next dev         :3300
 echo   web     = frontend next dev            :3100
+echo   rebuild = backend only: build images + up -d all backend services.
+echo             Code or .env changes take effect ONLY via rebuild,
+echo             plain restart reuses old image and old env vars.
 exit /b 1

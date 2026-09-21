@@ -2,12 +2,15 @@
 setlocal
 
 :: =============================================================
-:: devctl.bat - all-in-one entry (status / start / stop / restart)
+:: devctl.bat - all-in-one entry (status / start / stop / restart / rebuild)
 ::   devctl.bat status
 ::   devctl.bat start   [backend^|admin^|web^|all]
 ::   devctl.bat stop    [backend^|admin^|web^|all] [/y]
 ::   devctl.bat restart [backend^|admin^|web^|all] [/y]
-::   shortcuts: dev-start.bat / dev-stop.bat / dev-restart.bat
+::   devctl.bat rebuild [/y]        - backend only: build + up -d all backend
+::                                    services; the ONLY path that applies code
+::                                    / .env changes to the containers
+::   shortcuts: dev-start.bat / dev-stop.bat / dev-restart.bat / dev-rebuild.bat
 ::   implementation: dev-svc.bat
 ::   NOTE: ASCII-only (cmd parses .bat in ANSI/GBK)
 :: =============================================================
