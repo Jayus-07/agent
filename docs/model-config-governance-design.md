@@ -1484,5 +1484,12 @@ import 单向无环；`tsc --noEmit` 零错；frontend-admin 348 例全绿。
   authority）**零失败**，51 例全部落在既有无关区域（competitor、rag_upload、
   lineage、tool_approval、email 幂等、memory_routes 503 等）；
 - P0（宿主 5432 原生 PG 误迁移）已拍板：**保留不回滚**（2026-09-21）；
-- 待拍板：`test_database_model_config_authority` 2 例 xfail 背后的「删除 env 开发
-  兼容路径」产品决策；活服务容器未重建，B3 读权限放行需随下次变更窗口生效。
+- ✅ env 开发兼容路径已拍板（2026-09-21）：**保留不删除**。理由：回退仅在「无 DB
+  绑定」时作为末位兜底，不违反 DB 权威原则；删除会使无 DB 绑定的开发环境直接
+  失去 embedding/OCR 云端能力。2 例 xfail 已改写为钉住过渡期行为的正式用例
+  （`test_embedding_config_env_fallback_when_no_db_binding_transitional` /
+  `test_ocr_key_env_fallback_when_no_db_binding_transitional`，后者同时钉住三级
+  env 优先级），docstring 显式标注翻转条件——待 DB 绑定成为强制配置后改回
+  「env 不再生效」目标态断言；
+- ⏳ 活服务容器未重建，B3 读权限放行需随下次变更窗口生效（当日工作区有他会话
+  合并中間态：`backend/app/api/router.py` 等处于 UU 冲突未决，禁止此时 rebuild）。
