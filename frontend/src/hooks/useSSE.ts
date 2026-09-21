@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/api/chat'
 import { apiErrorFromEnvelope } from '@/api/client'
@@ -11,6 +11,15 @@ import { nanoid } from 'nanoid'
 // 模块级 abort controller：send / regenerate / stopStream 共用一份，
 // 多组件各自调用 useSSE() 也操作同一条在途流，中止路由不会分裂
 let activeController: AbortController | null = null
+
+/**
+ * #20 页面级卸载清理：路由离开聊天页时终止在途流（否则流继续跑完并计费）。
+ * 只给聊天主视图（ChatView）调用——MessageBubble 等子组件的挂载/卸载
+ * 不应中断全局在途流。
+ */
+export function useAbortStreamOnUnmount() {
+  useEffect(() => () => { activeController?.abort() }, [])
+}
 
 export function useSSE() {
   /** 执行一轮流式请求：重置流状态 → assistant 占位 → 消费 SSE 事件。
@@ -70,7 +79,13 @@ export function useSSE() {
             `## ${evt.data.message}`,
             sessionId,
           )
-          setLoading(false)
+          // #19：error 帧后主动断开——后端可能不再发后续帧（连接悬挂，
+          // 底层 socket 不释放），abort 让 for-await 立即终止
+          controller.abort()
+          // #7：闭包比对——若期间已发起新请求 B，A 的收尾不得清掉 B 的状态
+          if (useChatStore.getState().currentRequestId === requestId) {
+            setLoading(false)
+          }
           return
         }
 
@@ -122,8 +137,13 @@ export function useSSE() {
         )
       }
     } finally {
-      setLoading(false)
-      setCurrentRequestId(null)
+      // #7：闭包比对——stop A 后立即发 B 时，A 的 finally 异步到达会清掉
+      // B 的 loading / currentRequestId（B 的「停止生成」因此失效）。只有
+      // 自己仍是当前请求时才清态。
+      if (useChatStore.getState().currentRequestId === requestId) {
+        setLoading(false)
+        setCurrentRequestId(null)
+      }
     }
   }, [])
 

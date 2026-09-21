@@ -237,6 +237,11 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     //  messages 数组只会让整棵消息树白白重渲染。
     addStreamEvent: (evt, sessionId) => {
       set((state) => {
+        // #7 请求归属：非当前会话的流事件直接丢弃——切换会话不 abort 旧流时，
+        // 旧流的 delta/status 会写进新会话的共享字段（内容互串）。
+        // 空对象 = 不更新任何字段。
+        if (sessionId && sessionId !== state.currentId) return {}
+
         const core = reduceStreamCore(state, evt)
 
         let currentNode = state.currentNode

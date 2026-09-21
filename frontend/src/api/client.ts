@@ -316,15 +316,14 @@ export async function request<T = unknown>(
     timeout,
   );
 
-  // 合并外部 signal
+  // 合并外部 signal（请求结束后移除 listener，避免外部 signal 长期持有引用）
+  let onExternalAbort: (() => void) | null = null;
   if (externalSignal) {
     if (externalSignal.aborted) controller.abort(externalSignal.reason);
-    else
-      externalSignal.addEventListener(
-        "abort",
-        () => controller.abort(externalSignal.reason),
-        { once: true },
-      );
+    else {
+      onExternalAbort = () => controller.abort(externalSignal.reason);
+      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    }
   }
 
   try {
@@ -373,6 +372,9 @@ export async function request<T = unknown>(
     return data as T;
   } finally {
     clearTimeout(timer);
+    if (onExternalAbort && externalSignal) {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
   }
 }
 

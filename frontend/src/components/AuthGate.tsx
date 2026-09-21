@@ -20,7 +20,11 @@ import { getAccessToken, tryRefreshOnce } from "@/lib/auth";
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";
-  const isPublic = pathname.startsWith("/login");
+  // 公开页：登录、注册、统一门户主页（/）均无需登录即可访问
+  const isPublic =
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/";
   const [state, setState] = useState<"checking" | "ok">("checking");
 
   useEffect(() => {

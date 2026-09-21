@@ -53,12 +53,13 @@ export async function* parseSSEStream(
       for (const line of lines) {
         const trimmed = line.trim();
         if (trimmed === "") continue; // 空行 = 帧边界
-        if (trimmed.startsWith("event: ")) {
-          currentEvent = trimmed.slice(7);
+        // SSE 规范：字段冒号后可有可无一个空格（"event: x" 与 "event:x" 等价）
+        if (trimmed.startsWith("event:")) {
+          currentEvent = trimmed.slice(6).replace(/^ /, "");
           continue;
         }
-        if (trimmed.startsWith("data: ")) {
-          const jsonStr = trimmed.slice(6);
+        if (trimmed.startsWith("data:")) {
+          const jsonStr = trimmed.slice(5).replace(/^ /, "");
           const parsed = parseSSEFrame(currentEvent, jsonStr);
           if (parsed) yield parsed;
           currentEvent = "";
@@ -66,6 +67,11 @@ export async function* parseSSEStream(
       }
     }
   } finally {
+    // #19：releaseLock 只还锁不关流——error 帧提前 return / 生成器提前退出后，
+    // 底层 fetch 连接会悬挂到超时。cancel() 主动关闭底层流。
+    reader.cancel().catch(() => {
+      // 流可能已被对端关闭，cancel 失败无需处理
+    });
     reader.releaseLock();
   }
 }

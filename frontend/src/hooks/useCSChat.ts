@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useCSChatStore } from '@/store/csChat'
 import { streamChat, abortChat } from '@/api/chat'
 import { nanoid } from 'nanoid'
@@ -8,6 +8,9 @@ import { nanoid } from 'nanoid'
 export function useCSChat() {
   const abortRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef<string>('')
+
+  // #20：抽屉关闭/组件卸载时终止在途流（否则流继续跑完并计费）
+  useEffect(() => () => { abortRef.current?.abort() }, [])
 
   const startStream = useCallback(async (question: string, sessionId: string) => {
     abortRef.current?.abort()
@@ -50,7 +53,12 @@ export function useCSChat() {
 
         if (evt.event === 'error') {
           replaceLastAssistant(`## ${evt.data.message}`, sessionId)
-          setLoading(false)
+          // #19：error 帧后主动断开，防连接悬挂（后端可能不再发后续帧）
+          controller.abort()
+          // #7：闭包比对——期间已发起新请求时不得清掉新请求的状态
+          if (useCSChatStore.getState().currentRequestId === requestId) {
+            setLoading(false)
+          }
           return
         }
 
@@ -83,8 +91,12 @@ export function useCSChat() {
         replaceLastAssistant(`## 请求失败\n\n${message}`, sessionId)
       }
     } finally {
-      setLoading(false)
-      setCurrentRequestId(null)
+      // #7：闭包比对——stop A 后立即发 B 时，A 的 finally 异步到达会清掉
+      // B 的 loading / currentRequestId。只有自己仍是当前请求时才清态。
+      if (useCSChatStore.getState().currentRequestId === requestId) {
+        setLoading(false)
+        setCurrentRequestId(null)
+      }
     }
   }, [])
 

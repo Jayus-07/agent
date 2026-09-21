@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
 import { useSendMessage } from '@/hooks/useChat'
+import { useAbortStreamOnUnmount } from '@/hooks/useSSE'
 import type { Message } from '@/lib/types'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
@@ -32,6 +33,8 @@ export default function ChatView() {
   const clarification = useChatStore((s) => s.clarification)
   const retryQuestion = useMemo(() => lastUserQuestion(messages), [messages])
   const { send, stopStream } = useSendMessage()
+  // #20：路由离开聊天页时终止在途流（流继续跑完会白烧 token）
+  useAbortStreamOnUnmount()
   const [budgetBlocked, setBudgetBlocked] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)

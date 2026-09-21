@@ -16,8 +16,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // （12 个业务入口在 TaskSidebar 上半区常驻，会话历史在下半区）。
   // 用精确匹配而非 startsWith —— /agent/tasks 仍走原控制台导航，避免扩大影响面。
   const isTaskMode = pathname === '/agent'
-  // 登录页独立呈现：不渲染全局侧边栏（AuthGate 同样对其放行）
-  const isLoginPage = pathname.startsWith('/login')
+  // 登录页 / 注册页 / 统一门户主页 独立呈现：不渲染全局侧边栏与移动端 tab
+  // （AuthGate 同样对这些路径放行）。用精确匹配，避免误伤 /login-xxx 之类子路径。
+  const isStandalone =
+    pathname === '/login' ||
+    pathname === '/register' ||
+    pathname === '/'
 
   return (
     <html lang="zh-CN">
@@ -26,7 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </head>
       <body className="h-full flex bg-surface-root">
-        {!isTaskMode && !isLoginPage && (
+        {!isTaskMode && !isStandalone && (
           <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
         )}
         <main className="flex-1 flex flex-col min-w-0 pb-16 md:pb-0">
@@ -34,8 +38,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <ToastProvider>{children}</ToastProvider>
           </AuthGate>
           {/* UX P2-⑨ 移动断点：≤768px 底部四 tab（桌面 md:hidden 由 Sidebar 接管）；
-              /login 免登录页不放导航 */}
-          {!isLoginPage && <MobileTabBar />}
+              登录/注册/门户等独立页不放导航 */}
+          {!isStandalone && <MobileTabBar />}
         </main>
       </body>
     </html>

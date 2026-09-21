@@ -1,51 +1,55 @@
 "use client";
 
 /**
- * /login — 登录页（方案 A · 居中单卡片）
+ * /login — 用户端登录页（统一门户视觉体系 · 分屏 + 毛玻璃卡）
  *
- * 视觉遵循全站「AI Native 极简商务风」：#4D6BFE 主色、浅灰底、
- * 输入框 focus 光圈、细腻卡片投影。不引入新依赖。
- *
- * 行为：
- * - 登录成功 → 跳 redirect 参数指定的原页面（默认 /）
- * - 会话被 401 拦截器踢回时显示"登录已过期"提示（sessionStorage 标记）
- * - 错误内联展示（密码错误 / 网络异常），不用 alert
- * - 记住用户名：localStorage 只存用户名（密码永不落盘），下次预填
- * - 注册开发者账号：走网关 → system-service /users/register，成功后自动登录
+ * - 绿色主题，复用既有登录态逻辑：redirect 回跳、记住用户名（仅用户名，密码不落盘）、
+ *   会话过期标记（consumeExpiredFlag）。第三方登录为占位（禁用·敬请期待）。
+ * - 客服端登录已分离：客服端现为独立应用 frontend-cs（:3300），由门户主页跨应用跳转，
+ *   不再经此页（原 ?end=cs 主题变体已移除）。
+ * - 注册入口移到独立 /register 页（见设计稿 02）。
  */
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   clearSavedUsername,
   consumeExpiredFlag,
   getSavedUsername,
   login,
-  register,
   saveUsername,
 } from "@/lib/auth";
+import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
+import AuthInput from "@/components/auth/AuthInput";
 
-type Mode = "login" | "register";
+const THEME = {
+  accent: "#1F7A4D",
+  accentHover: "#17633d",
+  fog: [
+    "radial-gradient(circle at 30% 30%, rgba(80,160,110,0.55), transparent 70%)",
+    "radial-gradient(circle at 72% 18%, rgba(120,195,150,0.45), transparent 70%)",
+    "radial-gradient(circle at 82% 82%, rgba(50,110,75,0.5), transparent 70%)",
+    "radial-gradient(circle at 8% 92%, rgba(200,225,205,0.6), transparent 70%)",
+  ] as [string, string, string, string],
+};
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/";
+  const redirect = searchParams.get("redirect") || "/agent";
+  const theme = THEME;
 
-  const [mode, setMode] = useState<Mode>("login");
-  const [username, setUsername] = useState("");
+  const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [realName, setRealName] = useState("");
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // 挂载：预填"记住的用户名"（只预填用户名，密码必须手输）+ 会话过期标记
   useEffect(() => {
     const saved = getSavedUsername();
     if (saved) {
-      setUsername(saved);
+      setAccount(saved);
       setRemember(true);
     }
     if (consumeExpiredFlag()) {
@@ -54,15 +58,22 @@ function LoginForm() {
   }, []);
 
   const goNext = () => {
-    router.replace(redirect.startsWith("/") ? redirect : "/");
+    router.replace(redirect.startsWith("/") ? redirect : "/agent");
   };
 
-  const doLogin = async (name: string, pass: string, persist: boolean) => {
-    setLoading(true);
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
     setError("");
+    setNotice("");
+    if (!account.trim() || !password) {
+      setError("请输入手机号 / 邮箱和密码");
+      return;
+    }
+    setLoading(true);
     try {
-      await login(name, pass);
-      if (persist) saveUsername(name);
+      await login(account.trim(), password);
+      if (remember) saveUsername(account.trim());
       else clearSavedUsername();
       goNext();
     } catch (err) {
@@ -71,249 +82,156 @@ function LoginForm() {
     }
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (loading) return;
-    setError("");
-    setNotice("");
-
-    if (mode === "login") {
-      if (!username.trim() || !password) {
-        setError("请输入账号和密码");
-        return;
-      }
-      await doLogin(username.trim(), password, remember);
-      return;
-    }
-
-    // 注册校验（后端 @Size 同规则，前端先拦一遍）
-    if (username.trim().length < 3 || username.trim().length > 20) {
-      setError("用户名长度必须在 3-20 个字符之间");
-      return;
-    }
-    if (password.length < 6 || password.length > 20) {
-      setError("密码长度必须在 6-20 个字符之间");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError("两次输入的密码不一致");
-      return;
-    }
-    setLoading(true);
-    try {
-      await register(username.trim(), password, confirmPassword, realName.trim() || undefined);
-      // 注册成功 → 自动登录并记住用户名（密码不落盘）
-      await login(username.trim(), password);
-      saveUsername(username.trim());
-      goNext();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "注册失败，请稍后重试");
-      setLoading(false);
-    }
-  };
-
-  const switchMode = (m: Mode) => {
-    setMode(m);
-    setError("");
-    setNotice("");
-    setConfirmPassword("");
-  };
-
-  const inputStyle = {
-    borderColor: "var(--border-subtle)",
-    color: "var(--text-primary)",
-    boxShadow: "var(--shadow-input)",
-  };
-  const onFocus = (e: React.FocusEvent<HTMLInputElement>) => {
-    e.target.style.borderColor = "var(--accent)";
-    e.target.style.boxShadow = "0 0 0 3px rgba(77, 107, 254, 0.12)";
-  };
-  const onBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    e.target.style.borderColor = "var(--border-subtle)";
-    e.target.style.boxShadow = "var(--shadow-input)";
-  };
+  const left = (
+    <div className="max-w-[520px]">
+      <span
+        className="inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3.5 py-1.5 text-[13px] text-[#4A544F]"
+      >
+        AI 问答 · 多模态客服
+      </span>
+      <h1
+        className="mt-7 whitespace-pre-line text-[56px] font-bold leading-[68px] tracking-[-1.5px] text-[#16191A]"
+      >
+        {"问一句，\n拿到带证据的答案"}
+      </h1>
+      <p className="mt-6 max-w-[470px] text-[16px] leading-7 text-[#6E7873]">
+        知识库检索、图片与文档理解、订单与售后查询，一句话全部接住；AI 答不了的问题，自动转人工客服接着办。
+      </p>
+      <Link
+        href="/register"
+        className="mt-8 inline-flex items-center gap-2 rounded-full bg-[#16191A] px-6 py-3.5 text-[15px] font-medium text-white transition-opacity hover:opacity-90"
+      >
+        还没有账号？免费注册
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2.6 8H13.2" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
+          <path
+            d="M8.8 3.6L13.2 8L8.8 12.4"
+            stroke="#fff"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </Link>
+    </div>
+  );
 
   return (
-    <main
-      className="flex min-h-screen items-center justify-center px-4"
-      style={{ background: "var(--bg-root)" }}
+    <AuthShell
+      accent={theme.accent}
+      accentHover={theme.accentHover}
+      fog={theme.fog}
+      nav={
+        <AuthNav
+          brand={"智能协作平台"}
+          links={[{ label: "返回官网" }, { label: "帮助中心" }]}
+        />
+      }
+      left={left}
     >
-      <div
-        className="w-full max-w-[340px] rounded-xl border bg-white px-7 pb-6 pt-7"
-        style={{
-          borderColor: "var(--border-subtle)",
-          boxShadow: "0 4px 16px rgba(26, 26, 46, 0.05)",
-        }}
-      >
-        {/* 品牌区 */}
-        <div className="mb-1 flex items-center gap-2.5">
-          <div
-            className="flex h-[34px] w-[34px] items-center justify-center rounded-[9px]"
-            style={{ background: "var(--accent)" }}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M3 12L8 3l5 9"
-                stroke="#fff"
-                strokeWidth="1.8"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <circle cx="8" cy="10" r="1.6" fill="#fff" />
-            </svg>
-          </div>
-          <h1 className="text-[15px] font-medium" style={{ color: "var(--text-primary)" }}>
-            {mode === "login" ? "欢迎回来" : "创建开发者账号"}
-          </h1>
-        </div>
-        <p className="mb-4 text-[13px]" style={{ color: "var(--text-muted)" }}>
-          {mode === "login" ? "登录 AI Agent 工作台" : "注册后自动登录并记住用户名"}
+      <div className="mb-6">
+        <h2 className="text-[26px] font-semibold text-[#16191A]">
+          登录你的 AI 助手
+        </h2>
+        <p className="mt-1.5 text-[13px] text-[#7A8480]">
+          继续上次的对话、知识库与客服工单
         </p>
+      </div>
 
-        {/* 登录 / 注册 切换 */}
+      {notice && (
         <div
-          className="mb-4 grid grid-cols-2 rounded-lg p-0.5 text-[12px]"
-          style={{ background: "var(--bg-hover)" }}
+          className="mb-4 rounded-lg bg-[#FAEEDA] px-3 py-2.5 text-[12px] text-[#633806]"
         >
-          {(["login", "register"] as const).map((m) => (
+          {notice}
+        </div>
+      )}
+      {error && (
+        <div
+          className="mb-4 rounded-lg bg-[#FCEBEB] px-3 py-2.5 text-[12px] text-[#791F1F]"
+        >
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} noValidate>
+        <div className="space-y-4">
+          <AuthInput
+            label={"手机号 / 邮箱"}
+            accent={theme.accent}
+            type="text"
+            autoComplete="username"
+            placeholder="请输入手机号或邮箱"
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+          />
+          <AuthInput
+            label="登录密码"
+            accent={theme.accent}
+            type="password"
+            autoComplete="current-password"
+            placeholder="请输入登录密码"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            trailing={
+              <Link
+                href="/register"
+                className="shrink-0 pl-3 text-[13px] font-medium"
+                style={{ color: theme.accent }}
+              >
+                忘记密码？
+              </Link>
+            }
+          />
+        </div>
+
+        <label className="mt-4 flex cursor-pointer items-center gap-2 text-[13px] text-[#5C6662]">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            style={{ accentColor: theme.accent }}
+          />
+          记住登录状态
+        </label>
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="mt-6 w-full rounded-xl py-3.5 text-[16px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ background: theme.accent }}
+          onMouseEnter={(e) => {
+            if (!loading) e.currentTarget.style.background = theme.accentHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = theme.accent;
+          }}
+        >
+          {loading ? "处理中…" : "登录"}
+        </button>
+
+        <div className="my-5 flex items-center gap-3 text-[12px] text-[#98A29D]">
+          <span className="h-px flex-1 bg-[#E4EAE6]" />
+          或使用以下方式登录
+          <span className="h-px flex-1 bg-[#E4EAE6]" />
+        </div>
+        <div className="grid grid-cols-3 gap-2.5">
+          {["微信", "企业微信", "SSO"].map((name) => (
             <button
-              key={m}
+              key={name}
               type="button"
-              onClick={() => switchMode(m)}
-              className="rounded-[6px] py-1.5 transition-colors"
-              style={
-                mode === m
-                  ? { background: "#fff", color: "var(--accent)", fontWeight: 500 }
-                  : { color: "var(--text-secondary)" }
-              }
+              disabled
+              title="敬请期待"
+              className="h-11 rounded-xl border border-[#E3E8E4] bg-white/85 text-[13px] text-[#3F4A46] opacity-60"
             >
-              {m === "login" ? "登录" : "注册"}
+              {name}
             </button>
           ))}
         </div>
-
-        {/* 提示条（内联） */}
-        {notice && (
-          <div
-            className="mb-4 rounded-lg px-3 py-2.5 text-[12px]"
-            style={{ background: "#FAEEDA", color: "#633806" }}
-          >
-            {notice}
-          </div>
-        )}
-        {error && (
-          <div
-            className="mb-4 rounded-lg px-3 py-2.5 text-[12px]"
-            style={{ background: "#FCEBEB", color: "#791F1F" }}
-          >
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} noValidate>
-          <label className="mb-1.5 block text-[12px]" style={{ color: "var(--text-secondary)" }}>
-            账号
-          </label>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            className="mb-3.5 w-full rounded-lg border bg-white px-3 py-2 text-[13px] outline-none transition-shadow"
-            style={inputStyle}
-            onFocus={onFocus}
-            onBlur={onBlur}
-          />
-
-          <label className="mb-1.5 block text-[12px]" style={{ color: "var(--text-secondary)" }}>
-            密码
-          </label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
-            className="w-full rounded-lg border bg-white px-3 py-2 text-[13px] outline-none transition-shadow"
-            style={inputStyle}
-            onFocus={onFocus}
-            onBlur={onBlur}
-          />
-
-          {mode === "register" && (
-            <>
-              <label
-                className="mb-1.5 mt-3.5 block text-[12px]"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                确认密码
-              </label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                autoComplete="new-password"
-                className="w-full rounded-lg border bg-white px-3 py-2 text-[13px] outline-none transition-shadow"
-                style={inputStyle}
-                onFocus={onFocus}
-                onBlur={onBlur}
-              />
-              <label
-                className="mb-1.5 mt-3.5 block text-[12px]"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                真实姓名（选填）
-              </label>
-              <input
-                type="text"
-                value={realName}
-                onChange={(e) => setRealName(e.target.value)}
-                className="w-full rounded-lg border bg-white px-3 py-2 text-[13px] outline-none transition-shadow"
-                style={inputStyle}
-                onFocus={onFocus}
-                onBlur={onBlur}
-              />
-            </>
-          )}
-
-          {mode === "login" && (
-            <label
-              className="mt-3 flex cursor-pointer items-center gap-1.5 text-[12px]"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                style={{ accentColor: "var(--accent)" }}
-              />
-              记住用户名（本机保存，密码不保存）
-            </label>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-5 w-full rounded-lg py-2.5 text-[13px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            style={{ background: "var(--accent)" }}
-            onMouseEnter={(e) => {
-              if (!loading) e.currentTarget.style.background = "var(--accent-hover)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--accent)";
-            }}
-          >
-            {loading ? "处理中…" : mode === "login" ? "登 录" : "注册并登录"}
-          </button>
-        </form>
-
-        <p className="mt-4 text-center text-[11px]" style={{ color: "var(--text-muted)" }}>
-          {mode === "login"
-            ? "账号由管理员统一开通，或切换到注册自助创建"
-            : "仅限内部开发者使用"}
+        <p className="mt-5 text-center text-[12px] text-[#98A29D]">
+          登录即代表你同意《服务条款》与《隐私政策》
         </p>
-      </div>
-    </main>
+      </form>
+    </AuthShell>
   );
 }
 

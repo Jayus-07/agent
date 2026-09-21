@@ -253,7 +253,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         }
 
         // 公共字段（deltaText/currentStatus/nodeLabels）走共享归约
-        const core = reduceStreamCore(state, evt)
+        // #7 请求归属：非当前会话的流事件不得更新共享字段（此前 thinking/todo/
+        // usage 受 isCurrentSession 保护，但这三个字段漏了——切会话后旧流的
+        // delta 会写进新会话的打字机）。Partial 语义：空对象 = 不更新任何字段。
+        const core = isCurrentSession ? reduceStreamCore(state, evt) : {}
 
         // 实时更新最后一条 assistant 消息的 streamEvents
         // - 终态：清空该字段（释放内存）
@@ -414,7 +417,11 @@ export const useChatStore = create<ChatState>((set, get) => {
 
         if (remoteSessions.length > 0) {
           set((state) => ({
-            sessions: [...remoteSessions, ...state.sessions.filter((s) => s.messages.length > 0)],
+            // 保留 currentId 指向的会话（哪怕还没有消息），否则 currentId 悬空
+            sessions: [
+              ...remoteSessions,
+              ...state.sessions.filter((s) => s.messages.length > 0 || s.id === state.currentId),
+            ],
           }))
         }
         set({ historyError: null })

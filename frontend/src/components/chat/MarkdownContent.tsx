@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -11,6 +11,11 @@ interface Props { content: string }
 
 function CodeBlock({ children, ...props }: any) {
   const [copied, setCopied] = useState(false)
+  // 复制态定时器：重复点击清旧的，卸载时清理（避免 setState on unmounted）
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+  }, [])
 
   // 从 children 中提取纯文本
   const extractText = (node: any): string => {
@@ -34,7 +39,8 @@ function CodeBlock({ children, ...props }: any) {
       document.body.removeChild(ta)
     }
     setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 2000)
   }, [codeText])
 
   return (

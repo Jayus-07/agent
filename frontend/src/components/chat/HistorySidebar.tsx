@@ -13,6 +13,7 @@ import { useChatStore } from '@/store/chat'
 import type { SessionMeta } from '@/api/memory'
 import { getSessionsCached, invalidateSessionsCache } from '@/lib/sessions-cache'
 import { deleteMemorySession, renameMemorySession } from '@/api/memory'
+import { useToast } from '@/components/shared/Toast'
 import { BUCKET_LABELS, filterByKeyword, groupByTime } from '@/lib/session-groups'
 import SessionRow from '@/components/agent/SessionRow'
 import {
@@ -30,6 +31,7 @@ export default function HistorySidebar({ onClose }: { onClose: () => void }) {
   const [keyword, setKeyword] = useState('')
   const currentId = useChatStore((s) => s.currentId)
   const router = useRouter()
+  const toast = useToast()
   const activeRowRef = useRef<HTMLButtonElement | null>(null)
 
   const refresh = useCallback(async (force: boolean) => {
@@ -89,8 +91,9 @@ export default function HistorySidebar({ onClose }: { onClose: () => void }) {
     if (!window.confirm('确定删除这条会话记录吗？删除后不可恢复。')) return
     try {
       await deleteMemorySession(sid)
-    } catch {
-      // 删除失败（如 404）时同样刷新，让列表与后端对齐
+    } catch (err) {
+      // #23：失败要给用户反馈（后端为硬删，失败=记录仍在，只静默刷新会让人以为删掉了）
+      toast.error(`删除会话失败：${err instanceof Error ? err.message : '未知错误'}`)
     } finally {
       invalidateSessionsCache()
       refresh(true)
