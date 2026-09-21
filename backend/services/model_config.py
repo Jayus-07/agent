@@ -1385,21 +1385,27 @@ class ModelConfigService:
         model_name: str,
         operator: str,
     ) -> dict[str, Any]:
-        """从供应商下移除一个自建模型条目；内置模型与被占用的模型一律拒绝。
+        """从供应商下移除一个自建模型条目（2026-09-22 拍板：软删 + 关联一并停用）。
 
-        三条红线都在**删除前**挡住 —— 这些引用表都没有外键，删完留下的悬空引用补不回来：
+        守卫与处置：
 
         1. 仅存在于代码层 `AVAILABLE_MODELS` 的模型不可移除：DB 本来就没有行，删了
            下次 `_merged_models` 合并还会原样出现，属于「假装成功」。
-        2. 被 `llm_model_role_bindings` 占用的不可移除：该表没有外键，删模型会让角色
-           指向不存在的模型，而 main / embedding / rerank 这类角色缺失会直接让能力不可用。
-           要删先去「角色绑定」改绑。
-        3. 被 `llm_specialized_model_bindings` 或 `model_price` 引用的同样不可移除。
+        2. 被 `llm_model_role_bindings` 占用的不可移除（唯一保留的硬红线）：角色
+           缺模型会让 main / embedding / rerank 能力直接不可用，要删先去
+           「角色绑定」改绑。
+        3. 其余引用一律**随软删一并处置**，不再要求先手工清理：
+           - `llm_specialized_model_bindings`（专项通道）→ `enabled=false` 停用；
+           - `model_price` 未关闭的价格条目 → `effective_to=now()` 关闭
+             （价格表是治理账目，append-only 设计，只关不删）。
+        4. 模型本体不物理删：`llm_models.enabled=false`。运行时注册表与
+           管理端清单都按 `enabled=true` 过滤，软删后即刻从目录消失；重新
+           添加同名模型会经 upsert 复活，数据可恢复。
 
         历史记录复用 `object_type='provider'`（`llm_config_history` 的 CHECK 只有
         role / provider / provider_credential / provider_network_scope，加一个 `model`
-        要动 schema），并显式置 `rollbackable=false`：模型删除不是一次 UPDATE 能回放的，
-        回滚需要重新探测并重建条目，不能让历史回放假装完成。
+        要动 schema），并显式置 `rollbackable=false`：软删虽可手工恢复，但不是一次
+        UPDATE 能回放的完整回放，不能让历史回放假装完成。
         """
         provider_id = (provider_id or "").strip()
         model_name = (model_name or "").strip()
@@ -1455,38 +1461,31 @@ class ModelConfigService:
                     "请先在「角色绑定」里改绑到其他模型"
                 )
 
-            specialized_rows = (
-                await session.execute(
-                    text(
-                        "SELECT role FROM llm_specialized_model_bindings "
-                        "WHERE model_name = :model_name ORDER BY role"
-                    ),
-                    {"model_name": model_name},
-                )
-            ).mappings().all()
-            if specialized_rows:
-                roles = "、".join(str(item.get("role")) for item in specialized_rows)
-                raise ModelConfigConflict(
-                    f"模型 {model_name} 仍绑定在专项通道 {roles} 上，不能移除"
-                )
-
-            price_row = (
-                await session.execute(
-                    text(
-                        "SELECT count(*) AS total FROM model_price "
-                        "WHERE model_name = :model_name"
-                    ),
-                    {"model_name": model_name},
-                )
-            ).mappings().first()
-            if price_row and int(price_row.get("total") or 0) > 0:
-                raise ModelConfigConflict(
-                    f"模型 {model_name} 仍配置了价格表，请先清除价格后再移除"
-                )
+            # 关联处置 ①：专项通道软停用（运行时按 enabled=false 跳过，可恢复）
+            await session.execute(
+                text(
+                    "UPDATE llm_specialized_model_bindings "
+                    "SET enabled = false, updated_by = :operator, updated_at = now() "
+                    "WHERE model_name = :model_name AND enabled = true"
+                ),
+                {"model_name": model_name, "operator": operator},
+            )
+            # 关联处置 ②：未关闭的价格条目按治理口径关闭（append-only，只关不删）
+            await session.execute(
+                text(
+                    "UPDATE model_price SET effective_to = now() "
+                    "WHERE model_name = :model_name AND effective_to IS NULL"
+                ),
+                {"model_name": model_name},
+            )
 
             model_kind = models_mod.normalize_model_kind(row.get("model_kind"))
+            # 软删本体：enabled=false 后运行时注册表与管理端清单即刻不可见
             await session.execute(
-                text("DELETE FROM llm_models WHERE name = :model_name"),
+                text(
+                    "UPDATE llm_models SET enabled = false, updated_at = now() "
+                    "WHERE name = :model_name"
+                ),
                 {"model_name": model_name},
             )
             await session.execute(
@@ -1502,6 +1501,7 @@ class ModelConfigService:
                             "removedModel": model_name,
                             "displayName": row.get("display_name") or model_name,
                             "modelKind": model_kind,
+                            "softDeleted": True,
                         }
                     ),
                     "operator": operator,
@@ -1513,6 +1513,7 @@ class ModelConfigService:
                 "name": model_name,
                 "display": row.get("display_name") or model_name,
                 "modelKind": model_kind,
+                "softDeleted": True,
             }
             break
 
@@ -1691,18 +1692,26 @@ class ModelConfigService:
         provider_id: str,
         operator: str,
     ) -> dict[str, Any]:
-        """删除自定义供应商（2026-09-21 拍板：名下没有被角色绑定的模型即可删）。
+        """删除自定义供应商（2026-09-22 拍板：软删 + 关联一并停用/关闭）。
 
-        守卫（全部在删除前挡住 —— 引用表没有外键，删完留悬空引用补不回来）：
+        守卫（仅剩两条硬红线，全部在处置前挡住）：
         1. 内置供应商（is_builtin）由代码目录管理，不可从管理端删除；
         2. 名下任一模型被 `llm_model_role_bindings` 占用 → 拒绝，提示先改绑
-           （角色缺模型会让能力直接不可用）；
-        3. 名下任一模型被 `llm_specialized_model_bindings`（按 provider_id 或
-           model_name）或 `model_price` 引用 → 拒绝。
+           （角色缺模型会让能力直接不可用）。
 
-        通过守卫后：名下未被绑定的 DB 模型随供应商级联删除（它们只依附于该
-        供应商），凭据行一并删除。历史记录 `object_type='provider'` 且
-        `rollbackable=false`：删除不是一次 UPDATE 能回放的，重建需要重新探测。
+        通过守卫后不再要求先清理价格/专项引用，全部随软删一并处置：
+
+        - 名下模型：`llm_models.enabled=false`（运行时与管理端清单按
+          `enabled=true` 过滤，即刻从目录消失；重新添加可复活）；
+        - 专项通道：`llm_specialized_model_bindings.enabled=false` 停用
+          （不物理删，避免与 provider 外键 RESTRICT 纠缠，且可恢复）；
+        - 价格条目：`model_price.effective_to=now()` 关闭（治理账目
+          append-only，只关不删，账目可追溯）；
+        - 凭据行保留（软删语义，恢复供应商时密钥仍在）；
+        - 供应商本体：`llm_providers.enabled=false`。
+
+        历史记录 `object_type='provider'` 且 `rollbackable=false`：软删虽可
+        手工恢复，但不是一次 UPDATE 能回放的完整回放，不能让历史回放假装完成。
         """
         provider_id = (provider_id or "").strip()
         if not provider_id:
@@ -1755,60 +1764,38 @@ class ModelConfigService:
                         "不能删除；请先在「角色绑定」里改绑到其他模型"
                     )
 
-            # 守卫 3a：专项绑定按 provider_id 或 model_name 引用
-            specialized_sql = (
-                "SELECT role FROM llm_specialized_model_bindings "
-                "WHERE provider_id = :provider_id"
-            )
-            specialized_params: dict[str, Any] = {"provider_id": provider_id}
-            if model_names:
-                # asyncpg 对空序列的 ANY() 推断不了元素类型，无模型时跳过该分支
-                specialized_sql += " OR model_name = ANY(:model_names)"
-                specialized_params["model_names"] = model_names
-            specialized_rows = (
-                await session.execute(text(specialized_sql + " ORDER BY role"), specialized_params)
-            ).mappings().all()
-            if specialized_rows:
-                roles = "、".join(
-                    sorted({str(item.get("role")) for item in specialized_rows})
-                )
-                raise ModelConfigConflict(
-                    f"供应商 {provider_id} 仍绑定在专项通道 {roles} 上，不能删除；"
-                    "请先在管理端把这些专项角色改绑到其他供应商"
-                )
-
-            # 守卫 3b：价格表按 model_name 引用
-            if model_names:
-                price_rows = (
-                    await session.execute(
-                        text(
-                            "SELECT model_name FROM model_price "
-                            "WHERE model_name = ANY(:model_names) LIMIT 5"
-                        ),
-                        {"model_names": model_names},
-                    )
-                ).mappings().all()
-                if price_rows:
-                    names = "、".join(
-                        str(item.get("model_name")) for item in price_rows
-                    )
-                    raise ModelConfigConflict(
-                        f"供应商 {provider_id} 的模型 {names} 仍配置了价格表，"
-                        "请先清除价格后再删除"
-                    )
-
-            await session.execute(
-                text("DELETE FROM llm_models WHERE provider_id = :provider_id"),
-                {"provider_id": provider_id},
-            )
+            # 关联处置 ①：专项通道软停用（不物理删，避免 provider 外键 RESTRICT 纠缠）
             await session.execute(
                 text(
-                    "DELETE FROM llm_provider_credentials WHERE provider_id = :provider_id"
+                    "UPDATE llm_specialized_model_bindings "
+                    "SET enabled = false, updated_by = :operator, updated_at = now() "
+                    "WHERE provider_id = :provider_id AND enabled = true"
+                ),
+                {"provider_id": provider_id, "operator": operator},
+            )
+            # 关联处置 ②：名下模型未关闭的价格条目按治理口径关闭（append-only，只关不删）
+            if model_names:
+                await session.execute(
+                    text(
+                        "UPDATE model_price SET effective_to = now() "
+                        "WHERE model_name = ANY(:model_names) AND effective_to IS NULL"
+                    ),
+                    {"model_names": model_names},
+                )
+            # 关联处置 ③：名下模型软删（enabled=false 后即刻从目录消失）
+            await session.execute(
+                text(
+                    "UPDATE llm_models SET enabled = false, updated_at = now() "
+                    "WHERE provider_id = :provider_id"
                 ),
                 {"provider_id": provider_id},
             )
+            # 凭据行保留：软删语义，恢复供应商时密钥仍在（密文不出管理端）
             await session.execute(
-                text("DELETE FROM llm_providers WHERE id = :provider_id"),
+                text(
+                    "UPDATE llm_providers SET enabled = false, updated_at = now() "
+                    "WHERE id = :provider_id"
+                ),
                 {"provider_id": provider_id},
             )
             await session.execute(
@@ -1822,6 +1809,7 @@ class ModelConfigService:
                     "old_value": _json_value(
                         {
                             "deleted": True,
+                            "softDeleted": True,
                             "displayName": row.get("display_name") or provider_id,
                             "driver": str(row.get("driver") or ""),
                             "baseUrl": str(row.get("base_url") or ""),
@@ -1837,6 +1825,7 @@ class ModelConfigService:
                 "providerId": provider_id,
                 "displayName": row.get("display_name") or provider_id,
                 "removedModels": model_names,
+                "softDeleted": True,
             }
             break
 

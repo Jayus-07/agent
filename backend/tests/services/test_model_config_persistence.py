@@ -259,7 +259,7 @@ async def test_create_provider_claims_same_model_from_legacy_specialized_provide
     refresh.assert_awaited_once()
 
 
-# ── delete_provider（2026-09-21 拍板：名下没有被角色绑定的模型即可删）───────
+# ── delete_provider（2026-09-22 拍板：软删 + 关联一并停用/关闭；角色占用仍拒删）───
 
 
 class _Mappings:
@@ -327,8 +327,8 @@ def _provider_row(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_delete_provider_cascades_unbound_models_and_credentials(monkeypatch):
-    """无角色绑定的自建供应商可删：模型、凭据、供应商行级联清除并刷新快照。"""
+async def test_delete_provider_soft_deletes_models_and_closes_associations(monkeypatch):
+    """软删：供应商/模型 enabled=false，价格关闭、专项停用，凭据保留，无物理 DELETE。"""
     session = _DeleteSession(
         provider_row=_provider_row(),
         model_rows=[{"name": "custom-chat", "display_name": "自建模型", "model_kind": "chat"}],
@@ -343,9 +343,16 @@ async def test_delete_provider_cascades_unbound_models_and_credentials(monkeypat
 
     assert result["providerId"] == "custom-host"
     assert result["removedModels"] == ["custom-chat"]
-    assert any("DELETE FROM llm_models" in sql for sql in session.statements)
-    assert any("DELETE FROM llm_provider_credentials" in sql for sql in session.statements)
-    assert any("DELETE FROM llm_providers" in sql for sql in session.statements)
+    assert result["softDeleted"] is True
+    joined = "\n".join(session.statements)
+    assert "UPDATE llm_models SET enabled = false" in joined
+    assert "UPDATE llm_providers SET enabled = false" in joined
+    assert "UPDATE llm_specialized_model_bindings" in joined
+    assert "UPDATE model_price SET effective_to = now()" in joined
+    # 软删语义：不物理删任何行，凭据保留（恢复供应商时密钥仍在）
+    assert not any("DELETE FROM llm_models" in sql for sql in session.statements)
+    assert not any("DELETE FROM llm_providers" in sql for sql in session.statements)
+    assert not any("DELETE FROM llm_provider_credentials" in sql for sql in session.statements)
     assert any("INSERT INTO llm_config_history" in sql for sql in session.statements)
     assert session.commit_count == 1
     refresh.assert_awaited_once()
@@ -371,13 +378,14 @@ async def test_delete_provider_rejects_when_role_binding_uses_model(monkeypatch)
             "custom-host", "user:test-admin"
         )
     assert not any(
-        "DELETE FROM llm_providers" in sql for sql in session.statements
+        "UPDATE llm_providers SET enabled = false" in sql
+        for sql in session.statements
     )
 
 
 @pytest.mark.asyncio
-async def test_delete_provider_rejects_builtin_and_specialized(monkeypatch):
-    """内置供应商一律拒删；专项通道占用（按 provider_id 命中）同样拒删。"""
+async def test_delete_provider_rejects_builtin_only(monkeypatch):
+    """内置供应商一律拒删；专项通道占用不再拦截（随软删一并停用）。"""
     monkeypatch.setattr(
         model_config.registry_store, "refresh_registry", AsyncMock(return_value=True)
     )
@@ -390,22 +398,36 @@ async def test_delete_provider_rejects_builtin_and_specialized(monkeypatch):
         await model_config.ModelConfigService().delete_provider(
             "qwen", "user:test-admin"
         )
+    assert not any(
+        "UPDATE llm_providers SET enabled = false" in sql
+        for sql in builtin_session.statements
+    )
 
-    specialized_session = _DeleteSession(
+
+@pytest.mark.asyncio
+async def test_delete_provider_soft_disables_specialized_bindings(monkeypatch):
+    """旧专项卡占用不再拒删：绑定行 enabled=false 停用，供应商本体软删。"""
+    session = _DeleteSession(
         provider_row=_provider_row(id="specialized-api"),
         model_rows=[{"name": "qwen3.7-text-embedding", "display_name": "向量", "model_kind": "embedding"}],
         specialized_rows=[{"role": "embedding"}],
     )
-    monkeypatch.setattr(
-        model_config, "get_session", lambda: _session_stream(specialized_session)
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))
+    monkeypatch.setattr(model_config.registry_store, "refresh_registry", refresh)
+
+    result = await model_config.ModelConfigService().delete_provider(
+        "specialized-api", "user:test-admin"
     )
-    with pytest.raises(model_config.ModelConfigConflict, match="专项通道"):
-        await model_config.ModelConfigService().delete_provider(
-            "specialized-api", "user:test-admin"
-        )
-    assert not any(
-        "DELETE FROM llm_providers" in sql for sql in specialized_session.statements
+
+    assert result["softDeleted"] is True
+    joined = "\n".join(session.statements)
+    assert (
+        "UPDATE llm_specialized_model_bindings" in joined
+        and "enabled = false" in joined
     )
+    assert "UPDATE llm_providers SET enabled = false" in joined
+    refresh.assert_awaited_once()
 
 
 @pytest.mark.asyncio

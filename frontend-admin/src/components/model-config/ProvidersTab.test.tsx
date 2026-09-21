@@ -1019,13 +1019,14 @@ describe('ProvidersTab 列表筛选/搜索与角色占用徽标（B3）', () => 
   })
 })
 
-describe('ProvidersTab 供应商删除（2026-09-21 拍板：无角色绑定即可删）', () => {
+describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一并停用）', () => {
   it('自建无绑定供应商显示可点删除按钮，确认后调用 deleteProvider 并刷新', async () => {
     const onChanged = vi.fn(async () => undefined)
     apiMock.deleteProvider.mockResolvedValue({
       providerId: 'custom-host',
       displayName: '自建供应商',
       removedModels: ['free-model'],
+      softDeleted: true,
     })
     const container = document.createElement('div')
     document.body.appendChild(container)
@@ -1066,10 +1067,11 @@ describe('ProvidersTab 供应商删除（2026-09-21 拍板：无角色绑定即�
     expect(deleteButton.disabled).toBe(false)
 
     await click(deleteButton)
-    // 确认弹窗出现并展示级联范围
+    // 确认弹窗出现并展示软删范围（价格关闭/专项停用/密钥保留）
     const dialog = container.querySelector('[role="dialog"][aria-label="删除供应商 自建供应商"]')
     expect(dialog).toBeTruthy()
-    expect(dialog!.textContent).toContain('未被角色绑定的模型')
+    expect(dialog!.textContent).toContain('软删')
+    expect(dialog!.textContent).toContain('专项通道停用')
 
     await click(findButton(dialog as HTMLElement, '确认删除'))
     expect(apiMock.deleteProvider).toHaveBeenCalledWith('custom-host')

@@ -239,7 +239,7 @@ export default function ProvidersTab({
     try {
       const result = await deleteProvider(deletingProvider.row.id)
       const removed = Array.isArray(result.removedModels) ? result.removedModels.length : 0
-      toast.success(`已删除供应商 ${deletingProvider.row.displayName}${removed ? `（连带移除 ${removed} 个未绑定模型）` : ''}`)
+      toast.success(`已删除供应商 ${deletingProvider.row.displayName}（软删）${removed ? `，连带移除 ${removed} 个模型` : ''}`)
       setDeletingProvider(null)
       await onChanged()
     } catch (error) {
@@ -670,7 +670,7 @@ export default function ProvidersTab({
                 <span className={`rounded px-1.5 py-0.5 text-[10px] ${modelKindBadgeClass(removingModel.modelKind)}`}>{modelKindShortLabel(removingModel.modelKind)}</span>
                 <span className="font-mono text-xs text-text-secondary">{removingModel.name}</span>
               </div>
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">移除后该模型从供应商目录消失。若仍被角色或价格表引用，后端会拒绝并说明原因，不会留下悬空引用。</div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">移除为软删：模型即刻从目录消失，关联的价格条目同步关闭、专项通道一并停用，可恢复。若仍被角色占用，后端会拒绝并说明原因。</div>
               {removingModel.error && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{removingModel.error}</div>}
             </div>
             <div className="mt-5 flex justify-end gap-2">
@@ -696,7 +696,7 @@ export default function ProvidersTab({
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">{deletingProvider.row.isBuiltin ? '内置' : '自建'}</span>
               </div>
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                将删除该供应商、其托管密钥及名下 {(deletingProvider.row.models ?? []).length} 个未被角色绑定的模型。若名下模型仍被角色/专项通道/价格表引用，后端会拒绝并说明原因，不会留下悬空引用。
+                将删除（软删）该供应商及名下 {(deletingProvider.row.models ?? []).length} 个模型：价格条目同步关闭、专项通道停用，托管密钥保留、可恢复。若名下模型仍被角色绑定，后端会拒绝并说明原因。
               </div>
               {deletingProvider.error && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{deletingProvider.error}</div>}
             </div>
