@@ -92,13 +92,35 @@ class SQLSkill(BaseSkill):
         self,
         state: dict,
         step_capability: str = "",
-        max_retries: int = _DEFAULT_MAX_RETRIES,
-        timeout: float = _DEFAULT_TIMEOUT,
+        max_retries: int | None = None,
+        timeout: float | None = None,
     ) -> dict:
         """执行 SQL 查询，返回结构化 SQLResult。
 
         Trace 由 TraceMiddleware 统一记录，本方法不手动管理 Span。
+        timeout/max_retries 缺省时按策略注册表（core/tool_runtime/policy）
+        解析 —— sql.query 注册策略 timeout 15s / retries 0（Deadline 兜底）；
+        未注册场景回退旧默认 60s / 2。
+        2026-09-22 Tool 治理：执行前检查请求 Deadline 剩余预算，不足直接
+        降级；最终失败按 criticality 标注 business_outcome（root trace 不再
+        因 SQL 挂掉整体 error）。
         """
+        from backend.core.tool_runtime.executor import _BUDGET_MARGIN_MS
+        from backend.core.tool_runtime.policy import get_policy, is_registered
+        from backend.skills.base import (
+            _deadline_from_state,
+            _mark_business_outcome,
+        )
+        from backend.observability.tracer import trace_collector
+
+        reg = get_policy(step_capability or "sql.query")
+        if is_registered(step_capability or "sql.query"):
+            timeout = reg.timeout_ms / 1000 if timeout is None else timeout
+            max_retries = reg.retries if max_retries is None else max_retries
+        else:
+            timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
+            max_retries = _DEFAULT_MAX_RETRIES if max_retries is None else max_retries
+        deadline = _deadline_from_state(state)
         step_id = state.get("current_step_id")
         if not step_id:
             logger.warning("[SQL Skill] current_step_id 缺失，跳过")
@@ -149,6 +171,25 @@ class SQLSkill(BaseSkill):
         last_result: AgentSQLResult | None = None
 
         for attempt in range(max_retries + 1):
+            # Deadline 检查：剩余预算装不下一次完整调用 → 直接降级（§4）
+            if deadline is not None and (
+                deadline.remaining_workflow_ms() < timeout * 1000 + _BUDGET_MARGIN_MS
+            ):
+                sr.update(
+                    status="failed", output=None,
+                    error="剩余处理时间不足，跳过 SQL 查询",
+                    error_type="timeout",
+                    tool_status="unavailable", criticality=reg.criticality.value,
+                    error_code="DEADLINE_BUDGET_INSUFFICIENT",
+                    fallback_used="deadline_budget",
+                    finished_at=time.time(),
+                )
+                logger.warning(f"[SQL Skill] step={step_id} Deadline 预算不足，降级")
+                _mark_business_outcome(trace_collector, reg.criticality,
+                                       step_capability or "sql.query",
+                                       "DEADLINE_BUDGET_INSUFFICIENT")
+                return {"step_results": {step_id: sr}}
+
             sr["retries"] = attempt
             try:
                 result = await asyncio.wait_for(
@@ -230,6 +271,12 @@ class SQLSkill(BaseSkill):
         else:
             sr["error"] = f"步骤执行超时（{timeout}s）"
             sr["error_type"] = "timeout"
+        # 治理标注：criticality 决定业务结果（important → degraded，§16）
+        sr["tool_status"] = "timeout" if sr["error_type"] == "timeout" else "failed"
+        sr["criticality"] = reg.criticality.value
+        _mark_business_outcome(trace_collector, reg.criticality,
+                               step_capability or "sql.query",
+                               sr["error_type"])
 
         logger.error(f"[SQL Skill] step={step_id} 最终失败: {sr['error']}")
         return {"step_results": {step_id: sr}}

@@ -25,6 +25,9 @@ class ConfirmationState(str, Enum):
     USER_CONFIRMED = "confirmed"
     USER_CANCELLED = "cancelled"
     EXECUTING = "executing"
+    # 结果未知（2026-09-22 Tool 治理）：写操作 timeout 后实际可能已执行成功
+    # 但响应丢失 —— 进入 VERIFYING 待对账（查操作状态），禁止盲目重新提交
+    VERIFYING = "verifying"
     SUCCESS = "success"
     FAILED = "failed"
     EXPIRED = "expired"
@@ -39,6 +42,11 @@ VALID_TRANSITIONS: dict[ConfirmationState, frozenset[ConfirmationState]] = {
     }),
     ConfirmationState.USER_CONFIRMED:     frozenset({ConfirmationState.EXECUTING}),
     ConfirmationState.EXECUTING:          frozenset({
+        ConfirmationState.SUCCESS,
+        ConfirmationState.FAILED,
+        ConfirmationState.VERIFYING,
+    }),
+    ConfirmationState.VERIFYING:          frozenset({
         ConfirmationState.SUCCESS,
         ConfirmationState.FAILED,
     }),

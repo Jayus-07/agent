@@ -459,6 +459,51 @@ llm_usage_missing_total = Counter(
     "LLM 调用后 token 用量采集失败的次数",
 )
 
+# ── Tool 失败治理指标（core/tool_runtime，2026-09-22）──
+# Label 基数控制：只含 tool / domain / status（status=ToolStatus 值），
+# 禁止 user_id / request_id / session_id / error_message 进 label。
+agent_tool_calls_total = Counter(
+    "agent_tool_calls_total",
+    "Tool 调用总数（按 tool/domain/status）",
+    labelnames=("tool", "domain", "status"),
+)
+agent_tool_timeout_total = Counter(
+    "agent_tool_timeout_total",
+    "Tool 超时次数",
+    labelnames=("tool", "domain"),
+)
+agent_tool_failure_total = Counter(
+    "agent_tool_failure_total",
+    "Tool 失败次数（timeout/unavailable/rate_limited/failed）",
+    labelnames=("tool", "domain"),
+)
+agent_tool_retry_total = Counter(
+    "agent_tool_retry_total",
+    "Tool 重试次数",
+    labelnames=("tool", "domain"),
+)
+agent_tool_fallback_total = Counter(
+    "agent_tool_fallback_total",
+    "Tool 走降级路径的次数（reason = fallback 名）",
+    labelnames=("tool", "domain", "reason"),
+)
+agent_tool_circuit_open_total = Counter(
+    "agent_tool_circuit_open_total",
+    "熔断器进入 OPEN 的次数（按 tool）",
+    labelnames=("tool",),
+)
+agent_request_degraded_total = Counter(
+    "agent_request_degraded_total",
+    "业务结果为 degraded 的请求数",
+    labelnames=("domain",),
+)
+agent_tool_latency_seconds = Histogram(
+    "agent_tool_latency_seconds",
+    "Tool 端到端延迟（含重试）",
+    labelnames=("tool",),
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 60.0),
+)
+
 
 def publish_breaker_states() -> None:
     """把全部熔断器状态刷到 Prometheus Gauge（周期调用或 /metrics 请求时调用）。"""
@@ -960,5 +1005,14 @@ __all__ = [
     "trace_span_leak_total",
     "trace_uncovered_ratio",
     "llm_usage_missing_total",
+    # Tool 失败治理指标（2026-09-22）
+    "agent_tool_calls_total",
+    "agent_tool_timeout_total",
+    "agent_tool_failure_total",
+    "agent_tool_retry_total",
+    "agent_tool_fallback_total",
+    "agent_tool_circuit_open_total",
+    "agent_request_degraded_total",
+    "agent_tool_latency_seconds",
     "render_metrics",
 ]

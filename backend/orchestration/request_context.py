@@ -43,6 +43,8 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
     if isinstance(ctx, RequestContext):
         return ctx
     if isinstance(ctx, dict):
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
         return RequestContext(
             session_id=ctx.get("session_id", "default"),
             user_id=ctx.get("user_id", "default"),
@@ -53,6 +55,7 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
             subject_type=ctx.get("subject_type", ""),
             permissions=tuple(ctx["permissions"]) if ctx.get("permissions") is not None else None,
             model=ctx.get("model", ""),
+            deadline=RequestDeadline.from_dict(ctx.get("deadline")),
             trace=None,
             stream_sink=None,
             bind_sink=False,

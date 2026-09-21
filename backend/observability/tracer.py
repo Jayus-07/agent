@@ -773,13 +773,21 @@ class TraceCollector:
 
     @staticmethod
     def _aggregate_status(record: TraceRecord) -> str:
-        """顶层状态聚合：rejected > error > success。
+        """顶层状态聚合：rejected > business_outcome(degraded/failed) > error > rejected(span) > success。
 
-        拒答优先于 error：Evidence Gate 拒答时，子 span 可能因检索失败
-        标记了 error，但系统已优雅处理，整体应显示 rejected 而非 error。
+        P0-1（旧）：error > rejected > success —— 任一子 span error 即整条 error，
+        导致"rag.search 超时但 Reporter 已优雅降级回答"的请求被判 error。
+
+        2026-09-22 Tool 治理：skills 层按 criticality 写入 metadata.business_outcome
+        （required 失败 → failed；important 失败但已降级 → degraded）。该语义优先于
+        span 级 error 聚合 —— 单个 Tool span = error 不再拖垮 root trace；
+        未标注（无 Tool 失败的请求）保持旧行为不变。
         """
         if (record.metadata.get("rejection") or {}).get("rejected"):
             return "rejected"
+        business = record.metadata.get("business_outcome")
+        if business in ("degraded", "failed"):
+            return business
         statuses = {s.status for s in record.spans}
         if "error" in statuses:
             return "error"

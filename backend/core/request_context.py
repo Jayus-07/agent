@@ -128,6 +128,9 @@ class RequestContext:
     stream_sink: Callable[[str], None] | None = None
     # 按请求模型覆盖（空 = 用全局 LLM_MODEL；非法模型名在 bind 时被忽略）
     model: str = ""
+    # 请求级 Deadline（在线请求统一预算，tool_runtime 治理用）；
+    # None = 无 Deadline（后台任务/测试路径，不做预算约束）
+    deadline: Any = None
     # dict 还原形态为 False：不覆盖当前线程已绑定的 sink/trace（防清掉 worker 主上下文）
     bind_sink: bool = True
 
@@ -177,6 +180,8 @@ class RequestContext:
 
     def checkpoint_safe(self) -> dict:
         """checkpointer 序列化安全形态：剔除 trace/sink 等不可序列化对象。"""
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
         return {
             "session_id": self.session_id,
             "user_id": self.user_id,
@@ -187,4 +192,10 @@ class RequestContext:
             "subject_type": self.subject_type,
             "permissions": self.permissions,
             "model": self.model,
+            # RequestDeadline 是纯数据 dataclass，可序列化；
+            # 兼容实例（在线路径）与 dict（checkpoint 还原后再序列化）两种形态
+            "deadline": (
+                self.deadline.to_dict()
+                if isinstance(self.deadline, RequestDeadline) else self.deadline
+            ),
         }

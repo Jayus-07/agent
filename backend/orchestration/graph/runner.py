@@ -425,11 +425,14 @@ class GraphRunner:
         merged_q: queue.Queue = queue.Queue()
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
+        # deadline：在线请求统一预算（tool_runtime 治理），后台/测试路径无此对象不受约束
+        from backend.core.tool_runtime.deadline import RequestDeadline
         request_ctx = RequestContext(
             session_id=session_id, user_id=user_id, kb_id=kb_id,
             tenant_id=tenant_id, idempotency_key=idempotency_key,
             department=department, permissions=permissions,
-            trace=trace, model=model)
+            trace=trace, model=model,
+            deadline=RequestDeadline.started_now())
         ctx = {
             "final_answer": "",
             "all_step_results": {},

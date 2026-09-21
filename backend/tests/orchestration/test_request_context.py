@@ -77,11 +77,13 @@ class TestCheckpointSafe:
         ctx = RequestContext(session_id="s1", user_id="u1", kb_id="k1",
                              trace=object(), stream_sink=lambda t: None)
         safe = ctx.checkpoint_safe()
+        # deadline：2026-09-22 Tool 治理新增（None=无 Deadline 的路径，可序列化）
         assert safe == {"session_id": "s1", "user_id": "u1",
                         "tenant_id": "",
                         "idempotency_key": "",
                         "kb_id": "k1", "department": "",
-                        "subject_type": "", "permissions": None, "model": ""}
+                        "subject_type": "", "permissions": None, "model": "",
+                        "deadline": None}
         # 可 JSON 序列化（checkpoint 传输前提）
         import json
         json.dumps(safe, ensure_ascii=False)

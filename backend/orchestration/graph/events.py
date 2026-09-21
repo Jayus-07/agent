@@ -295,10 +295,20 @@ def _build_skill_events(node_name: str, output: dict, make_step_payload) -> Gene
             level = "warn"
 
         status_label = {"success": "完成", "failed": "失败", "skipped": "跳过"}.get(status, status)
+        message = f"{status_label}: {desc}"
+        # Tool 治理（2026-09-22）：降级/超时/不可用时给用户友好状态提示，
+        # 底层错误码/异常细节只进 trace，不下发前端。
+        tool_status = sr.get("tool_status", "")
+        if tool_status == "timeout" and status in ("failed", "skipped"):
+            message = f"「{desc}」响应超时，已切换降级模式，正在生成回答…"
+        elif tool_status in ("unavailable", "rate_limited") and status in ("failed", "skipped"):
+            message = f"「{desc}」服务暂时不可用，已切换降级模式，正在生成回答…"
+        elif status == "skipped":
+            message = f"「{desc}」非关键步骤已跳过，流程继续"
         yield {
             "event": "log", "data": {
                 "level": level, "node": node_name, "step_id": sid,
-                "message": f"{status_label}: {desc}",
+                "message": message,
                 "payload": payload, "ts": time.time(),
             },
         }

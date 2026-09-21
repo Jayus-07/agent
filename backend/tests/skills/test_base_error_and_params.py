@@ -80,11 +80,17 @@ class TestClassifyError:
         assert tool.calls == 1
 
     def test_unknown_error_retries(self):
-        """unknown 类错误可重试直至耗尽"""
+        """连接类错误（connect refused）可重试直至耗尽。
+
+        2026-09-22 Tool 治理：error_mapper 把连接类失败归类为
+        UNAVAILABLE → sr["error_type"]="network"（state.py 词表本就有 network），
+        比 classify_error 的 "unknown" 更准确；重试次数仍走类级默认（2）。
+        """
         tool = _CountingTool()
         tool.error = RuntimeError("connection refused")
         out = _run(tool)
-        assert out["step_results"]["step_1"]["error_type"] == "unknown"
+        assert out["step_results"]["step_1"]["error_type"] == "network"
+        assert out["step_results"]["step_1"]["tool_status"] == "unavailable"
         assert tool.calls == 3  # max_retries=2 + 首次
 
 

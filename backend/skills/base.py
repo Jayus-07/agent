@@ -22,10 +22,11 @@ from backend.skills.validation import (
     validate_output,
     validate_semantics,
 )
+from backend.core.tool_runtime.models import ToolStatus  # noqa: F401（_STATUS_TO_ERROR_TYPE 用）
 
 DEFAULT_TIMEOUT = 60
 DEFAULT_MAX_RETRIES = 2
-RETRY_BACKOFF_BASE = 1.5
+RETRY_BACKOFF_BASE = 1.5  # 旧执行循环退避（TOOL_RUNTIME_ENABLED=false 回滚时仍生效）
 
 # ── 错误分类：类型 → 判定子串（lower 匹配，先命中先定类型）。
 # 决定两件事：可否重试（UNRETRYABLE_ERROR_TYPES 之外均可重试）、
@@ -260,6 +261,11 @@ class BaseSkill(ABC):
         from backend.observability.alerts import make_alert, log_degradation
         from backend.observability.tracer import trace_collector
 
+        # 原始实参（None=未显式指定）：治理层用它按"显式实参 > 注册表策略 >
+        # 类级默认"的优先级解析；legacy 循环仍用补齐默认值后的形态
+        raw_timeout = timeout
+        raw_max_retries = max_retries
+
         timeout = self.default_timeout if timeout is None else timeout
         max_retries = self.default_max_retries if max_retries is None else max_retries
 
@@ -333,8 +339,170 @@ class BaseSkill(ABC):
             input={"params": params, "capability": cap},
         )
 
-        last_error = None
         tool_fn, invoke_params = self._select_tool(sr["capability"], params)
+
+        # ── 执行：统一治理层（默认）或旧执行循环（紧急回滚开关）──
+        if _tool_runtime_enabled():
+            await self._execute_governed(
+                state, sr, step_results, tool_fn, invoke_params, params,
+                raw_timeout, raw_max_retries, tool_span,
+            )
+        else:
+            await self._execute_legacy_loop(
+                sr, step_results, tool_fn, invoke_params, params,
+                timeout, max_retries, tool_span,
+            )
+        return {"step_results": {step_id: step_results[step_id]}}
+
+    # ================================================================
+    # 统一治理执行（core/tool_runtime）：Deadline / Timeout / Retry /
+    # CircuitBreaker / Bulkhead / ErrorMapper / Metrics
+    # ================================================================
+    async def _execute_governed(
+        self, state: dict, sr: dict, step_results: dict,
+        tool_fn: Any, invoke_params: dict, params: dict,
+        timeout: float | None, max_retries: int | None,
+        tool_span: str,
+    ) -> None:
+        from dataclasses import replace as dc_replace
+
+        from backend.observability.alerts import make_alert, log_degradation
+        from backend.observability.tracer import trace_collector as _tc
+        from backend.core.tool_runtime.executor import safe_tool_executor
+        from backend.core.tool_runtime.models import ToolCriticality, ToolStatus
+        from backend.core.tool_runtime.policy import get_policy, is_registered
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        trace_collector = _tc
+
+        cap = sr["capability"]
+        reg = get_policy(cap)
+        registered = is_registered(cap)
+
+        # 参数优先级：显式实参 > 注册表策略（仅注册 tool）> 类级默认（未注册 tool 保持旧行为）
+        eff_timeout_s = timeout
+        if eff_timeout_s is None:
+            eff_timeout_s = (reg.timeout_ms / 1000) if registered else self.default_timeout
+        eff_retries = max_retries
+        if eff_retries is None:
+            eff_retries = reg.retries if registered else self.default_max_retries
+        pol = dc_replace(reg, timeout_ms=eff_timeout_s * 1000, retries=eff_retries)
+
+        deadline = _deadline_from_state(state)
+
+        def _on_event(event: str, info: dict) -> None:
+            """executor 治理事件 → trace span events（timeout/fail 标 warn）。"""
+            level = "warn" if ("fail" in event or "timeout" in event or "insufficient" in event) else "info"
+            trace_collector.add_event(tool_span, event, level, event, info)
+
+        result = await safe_tool_executor.run(
+            tool_key=cap,
+            call=lambda: asyncio.to_thread(tool_fn.invoke, invoke_params),
+            policy=pol, deadline=deadline,
+            domain=self.name or cap.split(".", 1)[0],
+            on_event=_on_event,
+        )
+
+        # ── ToolResult → step_results 契约字段（下游零改动）+ 治理扩展字段 ──
+        sr["retries"] = result.retry_count
+        sr["latency_ms"] = result.latency_ms
+        sr["tool_status"] = result.status.value
+        sr["criticality"] = pol.criticality.value
+        sr["operation_type"] = pol.operation_type.value
+        sr["error_code"] = result.error_code
+        sr["fallback_used"] = result.fallback_used
+        sr["degraded"] = result.status is ToolStatus.DEGRADED
+
+        if result.status is ToolStatus.SUCCESS:
+            output = self._normalize_output(cap, result.data)
+            declared_type = self.output_types.get(cap, self.output_type)
+            try:
+                validate_output(cap, output, declared_type)
+                validate_semantics(cap, params, output)
+            except ValidationFailure as e:
+                # 后置校验失败是确定性错误，不重试（与旧循环同语义）
+                sr.update(status="failed", output=None,
+                          error=f"输出校验失败: {e.layer}", error_type="invalid_param",
+                          finished_at=time.time())
+                step_results[sr["step_id"]] = dict(sr)
+                trace_collector.end_span(tool_span, status="error",
+                    metrics={"error": f"validation:{e.layer}", "retries": result.retry_count})
+                logger.warning(f"[{self.name}] step={sr['step_id']} 输出校验失败: {e.layer}")
+                return
+            sr.update(status="success", output=output, error=None, error_type=None,
+                      finished_at=time.time())
+            step_results[sr["step_id"]] = dict(sr)
+            elapsed = result.latency_ms / 1000
+            logger.info(f"[{self.name}] step={sr['step_id']} 成功 (耗时 {elapsed:.2f}s)")
+            trace_collector.end_span(tool_span,
+                output={"result": output},
+                metrics={"elapsed_s": round(elapsed, 2), "retries": result.retry_count})
+            return
+
+        # ── 失败/降级分支：按 criticality 决定 workflow 走向（§8/§15/§16）──
+        user_msg = result.user_friendly_message()
+        sr["needs_verification"] = bool(
+            result.fallback_used == "check_operation_status")
+
+        if pol.criticality is ToolCriticality.OPTIONAL:
+            # optional：直接跳过，一个可选 Tool 失败不能导致整个 Workflow error
+            sr.update(status="skipped", output=None,
+                      error=f"{user_msg}（非关键步骤已跳过）",
+                      error_type=_status_to_error_type(result.status, result.error_code or ""),
+                      finished_at=time.time())
+            step_results[sr["step_id"]] = dict(sr)
+            trace_collector.end_span(tool_span, status="skipped",
+                metrics={"error": result.error_code or "", "retries": result.retry_count,
+                         "fallback": result.fallback_used or ""})
+            logger.warning(
+                f"[{self.name}] step={sr['step_id']} optional 失败已跳过: {result.error_code}")
+            return
+
+        # required / important：步骤失败，Reporter 给明确说明；
+        # important 额外把业务结果标记为 degraded（root trace 不再整体 error）
+        error_protocol = error_envelope_from_exception(
+            result.original_exception or RuntimeError(user_msg),
+            source="skill",
+        ).to_dict()
+        sr.update(status="failed", output=None, error=user_msg,
+                  error_type=_status_to_error_type(result.status, result.error_code or ""),
+                  error_protocol=error_protocol, finished_at=time.time())
+        step_results[sr["step_id"]] = dict(sr)
+
+        trace_collector.end_span(tool_span, status="error",
+            metrics={"error": result.error_message or user_msg,
+                     "error_code": result.error_code or "",
+                     "retries": result.retry_count,
+                     "fallback": result.fallback_used or ""})
+
+        code = ("WORKER_TIMEOUT" if result.status is ToolStatus.TIMEOUT
+                else "WORKER_RETRY_EXHAUST")
+        alert = make_alert(code, {"step_id": sr["step_id"],
+                                  "error": result.error_message or user_msg,
+                                  "criticality": pol.criticality.value})
+        log_degradation(alert)
+        logger.error(f"[{self.name}] step={sr['step_id']} 最终失败 "
+                     f"({pol.criticality.value}): {result.error_code} {user_msg}")
+
+        # 业务结果标注：required → failed；important → degraded
+        _mark_business_outcome(trace_collector, pol.criticality, cap,
+                               result.error_code or "")
+
+    # ================================================================
+    # 旧执行循环（TOOL_RUNTIME_ENABLED=false 时回滚用，行为与历史版本一致）
+    # ================================================================
+    async def _execute_legacy_loop(
+        self, sr: dict, step_results: dict,
+        tool_fn: Any, invoke_params: dict, params: dict,
+        timeout: float, max_retries: int,
+        tool_span: str,
+    ) -> None:
+        from backend.observability.alerts import make_alert, log_degradation
+        from backend.observability.tracer import trace_collector as _tc
+
+        trace_collector = _tc
+        step_id = sr["step_id"]
+        last_error = None
         for attempt in range(max_retries + 1):
             sr["status"] = "running"
             sr["started_at"] = time.time()
@@ -368,11 +536,10 @@ class BaseSkill(ABC):
                 elapsed = sr["finished_at"] - sr.get("started_at", sr["finished_at"])
                 logger.info(f"[{self.name}] step={step_id} 成功 (耗时 {elapsed:.2f}s)")
 
-                # ── Tracing: 成功 ──
                 trace_collector.end_span(tool_span,
                     output={"result": output},
                     metrics={"elapsed_s": round(elapsed, 2), "retries": attempt})
-                break
+                return
 
             except ValidationFailure as e:
                 # 后置校验失败是确定性错误，不重试 Tool，避免重复副作用。
@@ -420,7 +587,6 @@ class BaseSkill(ABC):
             sr["finished_at"] = time.time()
             step_results[step_id] = dict(sr)
 
-            # ── Tracing: 最终失败 ──
             trace_collector.end_span(tool_span, status="error",
                 metrics={"error": str(last_error), "retries": max_retries})
 
@@ -430,8 +596,80 @@ class BaseSkill(ABC):
             log_degradation(alert)
             logger.error(f"[{self.name}] step={step_id} 最终失败: {last_error}")
 
-        # 只返回自有步骤（同上，消除并行分支过期快照的根源）
-        return {"step_results": {step_id: step_results[step_id]}}
+
+def _tool_runtime_enabled() -> bool:
+    """治理层开关（紧急回滚用）。软失败：配置缺失时按开启处理。"""
+    try:
+        from backend.config.settings import TOOL_RUNTIME_ENABLED
+        return bool(TOOL_RUNTIME_ENABLED)
+    except Exception:
+        return True
+
+
+def _deadline_from_state(state: dict | None):
+    """从图状态取请求 Deadline；无（后台任务/测试假 state）返回 None = 不做预算约束。"""
+    try:
+        if not state:
+            return None
+        rc = state.get("request_context")
+        if rc is None:
+            return None
+        if isinstance(rc, dict):
+            from backend.core.tool_runtime.deadline import RequestDeadline
+            return RequestDeadline.from_dict(rc.get("deadline"))
+        return getattr(rc, "deadline", None)
+    except Exception:
+        return None
+
+
+_STATUS_TO_ERROR_TYPE = {
+    ToolStatus.TIMEOUT: "timeout",
+    ToolStatus.UNAUTHORIZED: "permission",
+    ToolStatus.INVALID_REQUEST: "invalid_param",
+    ToolStatus.UNAVAILABLE: "network",
+    ToolStatus.RATE_LIMITED: "network",
+    ToolStatus.FAILED: "unknown",
+}
+
+
+def _status_to_error_type(status: "ToolStatus", error_code: str = "") -> str:
+    """ToolStatus(+error_code) → 旧版 sr["error_type"] 词表
+    （timeout/permission/not_found/invalid_param/network/unknown），
+    与 classify_error 的留痕语义保持兼容。"""
+    code = (error_code or "").lower()
+    if code in ("not_found", "timeout"):
+        return code
+    return _STATUS_TO_ERROR_TYPE.get(status, "unknown")
+
+
+def _mark_business_outcome(trace_collector, criticality, capability: str,
+                           error_code: str) -> None:
+    """把 criticality 语义写进 trace metadata（§16：business_outcome 三态）。
+
+    required → failed；important → degraded（不覆盖已有的 failed）。
+    Reporter 正常给出降级回答时 root trace 显示 degraded 而非 error。
+    """
+    try:
+        from backend.core.tool_runtime.models import ToolCriticality
+        from backend.core.tool_runtime.metrics import record_request_degraded
+
+        trace = trace_collector.current()
+        if trace is None:
+            return
+        meta = trace.metadata
+        if criticality is ToolCriticality.REQUIRED:
+            meta["business_outcome"] = "failed"
+        else:
+            if meta.get("business_outcome") != "failed":
+                meta["business_outcome"] = "degraded"
+            record_request_degraded(capability.split(".", 1)[0] or "workflow")
+        reasons = meta.setdefault("degraded_reasons", [])
+        entry = {"tool": capability, "error_code": error_code}
+        if entry not in reasons:
+            reasons.append(entry)
+        meta["degraded"] = True
+    except Exception:
+        logger.debug("business_outcome 标注失败", exc_info=True)
 
 
 # 向后兼容
