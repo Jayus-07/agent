@@ -82,10 +82,28 @@ class TestBackendFactoryFallback:
         """
         from backend.rag import reranker as mod
 
-        # cloud → 云端 Reranker，即使 SDK 标记缺失也不静默降级
+        # cloud → 云端 Reranker（都用 DB：Key 由数据库专项绑定 + 供应商凭据
+        # 解析，即使 SDK 标记缺失也不静默降级）
+        from types import SimpleNamespace
+
+        fake_binding = SimpleNamespace(
+            provider_id="dashscope-rag",
+            adapter="dashscope_rerank",
+            model_name="qwen3.7-text-rerank",
+            base_url="https://dashscope.aliyuncs.com/api/v1",
+        )
         monkeypatch.setattr(mod, "RERANK_PROVIDER", "cloud")
         monkeypatch.setattr(mod, "DASHSCOPE_AVAILABLE", False)
-        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+        monkeypatch.setattr(
+            mod.specialized_mod,
+            "resolve_binding",
+            lambda _role: fake_binding if mod.RERANK_PROVIDER == "cloud" else None,
+        )
+        monkeypatch.setattr(
+            mod.credentials_mod,
+            "resolve_credentials",
+            lambda provider_id, model_name=None: SimpleNamespace(api_key="sk-test"),
+        )
         backend = mod.get_reranker_backend()
         assert isinstance(backend, mod.DashScopeReranker)
 

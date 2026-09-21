@@ -82,19 +82,10 @@ def test_model_validation_uses_database_credential_only(monkeypatch):
     assert "未配置 API Key" in reason
 
 
-def test_embedding_config_env_fallback_when_no_db_binding_transitional(monkeypatch):
-    """过渡期行为（2026-09-21 拍板保留，见设计文档 §B.16.3）：
-
-    无 DB embedding 绑定时允许回退旧 env（provider == "env"），保证无 DB
-    绑定的开发环境仍具备云端 embedding 能力；DB 绑定存在时仍是唯一来源
-    （由 _resolve_cloud_embedding_config 分支保证）。待 DB 绑定成为强制
-    配置后，本用例应翻转回「env 不再生效」的目标态断言。
-    """
+def test_embedding_config_ignores_legacy_env_without_db_binding(monkeypatch):
+    """没有 DB embedding 绑定时，旧 env Key 不得继续生效（都用 DB，2026-09-21 拍板）。"""
     from backend.rag import embedding_singleton
 
-    # 屏蔽模块导入期快照的常量，确保 monkeypatch.setenv 生效
-    monkeypatch.setattr(embedding_singleton, "EMBEDDING_API_KEY", "")
-    monkeypatch.setattr(embedding_singleton, "EMBEDDING_API_BASE", "")
     monkeypatch.setenv("EMBEDDING_API_KEY", "env-only-secret")
     monkeypatch.setenv("EMBEDDING_API_BASE", "https://env-fallback.example/v1")
     monkeypatch.setattr(
@@ -105,9 +96,9 @@ def test_embedding_config_env_fallback_when_no_db_binding_transitional(monkeypat
 
     runtime = embedding_singleton._resolve_cloud_embedding_config()
 
-    assert runtime["api_key"] == "env-only-secret"
-    assert runtime["base_url"] == "https://env-fallback.example/v1"
-    assert runtime["provider"] == "env"
+    assert runtime["api_key"] == ""
+    assert runtime["base_url"] == ""
+    assert runtime["provider"] == ""
 
 
 def test_rerank_config_ignores_legacy_env_without_db_binding(monkeypatch):
@@ -129,13 +120,11 @@ def test_rerank_config_ignores_legacy_env_without_db_binding(monkeypatch):
     assert runtime["base_url"] == ""
 
 
-def test_ocr_key_env_fallback_when_no_db_binding_transitional(monkeypatch):
-    """过渡期行为（2026-09-21 拍板保留，见设计文档 §B.16.3）：
+def test_ocr_key_resolution_does_not_read_legacy_env(monkeypatch):
+    """OCR 云端 Key 只来自数据库供应商凭据（都用 DB，2026-09-21 拍板）。
 
-    无 DB OCR 角色绑定时允许按优先级回退旧 env（OCR_DASHSCOPE →
-    DASHSCOPE → EMBEDDING）；DB 绑定存在时由 _resolve_ocr_runtime_config
-    走数据库凭据（source==SOURCE_DB 分支）。待 DB 绑定成为强制配置后，
-    本用例应翻转回「env 不再生效」的目标态断言。
+    旧的三级 env 回退链（OCR_DASHSCOPE → DASHSCOPE → EMBEDDING）已随
+    「都用 DB」拍板删除，即便全部设置也不得生效。
     """
     from backend.rag.preprocessing.parser import ocr
 
@@ -143,14 +132,6 @@ def test_ocr_key_env_fallback_when_no_db_binding_transitional(monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "dashscope-env-secret")
     monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-env-secret")
 
-    # 命中第一优先级
-    assert ocr._resolve_dashscope_key() == "ocr-env-secret"
+    runtime = ocr._resolve_ocr_runtime_config()
 
-    monkeypatch.delenv("OCR_DASHSCOPE_API_KEY")
-    assert ocr._resolve_dashscope_key() == "dashscope-env-secret"
-
-    monkeypatch.delenv("DASHSCOPE_API_KEY")
-    assert ocr._resolve_dashscope_key() == "embedding-env-secret"
-
-    monkeypatch.delenv("EMBEDDING_API_KEY")
-    assert ocr._resolve_dashscope_key() == ""
+    assert runtime["api_key"] == ""

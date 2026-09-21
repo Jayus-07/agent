@@ -119,15 +119,32 @@ class TestProviderRouting:
         assert identity.provider == "rapidocr"
         assert identity.model_name == "RapidOCR"
 
-    def test_dashscope_with_key_available(self, monkeypatch):
+    def test_dashscope_with_db_binding_available(self, monkeypatch):
+        """都用 DB：dashscope 引擎的可用性由数据库 OCR 绑定 + 供应商 Key 决定。"""
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
-        monkeypatch.setenv("OCR_DASHSCOPE_API_KEY", "sk-test")
+        monkeypatch.setattr(
+            ocr_mod.model_roles,
+            "resolve_effective",
+            lambda _role: {"source": ocr_mod.model_roles.SOURCE_DB},
+        )
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
         assert ocr_mod.ocr_available() is True
 
-    def test_dashscope_without_key_unavailable(self, monkeypatch):
+    def test_dashscope_env_key_without_db_binding_unavailable(self, monkeypatch):
+        """都用 DB：仅设置旧 env Key 而无数据库绑定时，云端 OCR 不可用。"""
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
-        for k in ("OCR_DASHSCOPE_API_KEY", "DASHSCOPE_API_KEY", "EMBEDDING_API_KEY"):
-            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("OCR_DASHSCOPE_API_KEY", "sk-test")
+        monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
+        monkeypatch.setenv("EMBEDDING_API_KEY", "sk-test")
         assert ocr_mod.ocr_available() is False
 
     def test_rapidocr_importable(self):
@@ -160,7 +177,17 @@ class TestDashScopeUsageRecording:
     def test_usage_recorded_as_ocr_component(self, monkeypatch):
         """DashScope OCR 的 token 用量进 llm_usage_store，tokens 看板可查。"""
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
-        monkeypatch.setenv("OCR_DASHSCOPE_API_KEY", "sk-test")
+        # 都用 DB：注入数据库形状的 OCR 运行时配置（api_key 只来自 DB 凭据）
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
         monkeypatch.setitem(sys.modules, "openai", self._fake_openai_module())
 
         recorded = []
@@ -190,7 +217,16 @@ class TestDashScopeUsageRecording:
     def test_record_failure_soft(self, monkeypatch):
         """用量记录失败不影响 OCR 主流程。"""
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
-        monkeypatch.setenv("OCR_DASHSCOPE_API_KEY", "sk-test")
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
         monkeypatch.setitem(sys.modules, "openai", self._fake_openai_module())
 
         import backend.observability.llm_usage_store as store_mod
@@ -285,6 +321,17 @@ class TestCloudCacheAndThrottle:
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
         monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
         monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        # 都用 DB：注入数据库形状的 OCR 运行时配置（api_key 只来自 DB 凭据）
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
         monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
         ocr_mod._last_call_mono = 0.0  # 重置全局限流状态，避免用例间串扰
         calls = {"n": 0}
@@ -317,6 +364,16 @@ class TestCloudCacheAndThrottle:
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
         monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", False)
         monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
         monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
         ocr_mod._last_call_mono = 0.0
         calls = {"n": 0}
@@ -334,6 +391,16 @@ class TestCloudCacheAndThrottle:
         import time as _time
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
         monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 60)
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
         monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
         ocr_mod._last_call_mono = 0.0
         monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", lambda png: "x")

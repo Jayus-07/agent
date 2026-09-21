@@ -36,19 +36,6 @@ from backend.rag.indexing.processing_lineage import ModelIdentity
 from backend.shared.logger import logger
 
 
-def _resolve_dashscope_key() -> str:
-    """开发兼容入口：无 DB OCR 角色时读取旧 env，DB 绑定优先。"""
-    for env_key in (
-        "OCR_DASHSCOPE_API_KEY",
-        "DASHSCOPE_API_KEY",
-        "EMBEDDING_API_KEY",
-    ):
-        value = os.getenv(env_key, "").strip()
-        if value:
-            return value
-    return ""
-
-
 def _configured_ocr_model() -> str:
     """读取 OCR 角色；无 DB 覆盖时保持旧版 rag 配置语义。"""
     return model_roles.resolve_runtime_name("ocr", rag_cfg.RAG_OCR_DASHSCOPE_MODEL)
@@ -95,16 +82,19 @@ def _resolve_ocr_runtime_config() -> dict[str, str]:
             "base_url": base_url,
         }
 
+    # 都用 DB（2026-09-21 拍板）：云端 OCR 的 Key 只来自数据库供应商凭据，
+    # 无 DB 绑定时不再回退旧 env（OCR_DASHSCOPE/DASHSCOPE/EMBEDDING），
+    # 由 ocr_available / ocr_image 以明确告警/报错拒绝。
     return {
         "provider": "dashscope",
         "model": model,
-        "api_key": _resolve_dashscope_key(),
+        "api_key": "",
         "base_url": "",
     }
 
 
 def _ocr_cloud_configured() -> bool:
-    """数据库已绑定 OCR 或旧 dashscope env 开启云端 OCR。"""
+    """RAG_OCR_PROVIDER 选择了云端 dashscope 引擎（Key 一律来自数据库绑定）。"""
     effective = model_roles.resolve_effective("ocr")
     return (
         effective.get("source") == model_roles.SOURCE_DB
@@ -199,7 +189,8 @@ def ocr_available() -> bool:
     if _ocr_cloud_configured():
         if not _resolve_ocr_runtime_config()["api_key"]:
             logger.warning(
-                "[OCR] 云端 OCR 已启用但当前已登记供应商没有可用 API Key"
+                "[OCR] RAG_OCR_PROVIDER=dashscope 但数据库未绑定 OCR 角色（或供应商"
+                "缺少可用 API Key）—— 云端 Key 只来自数据库，请先在管理端绑定"
             )
             return False
         return True
@@ -337,6 +328,11 @@ def ocr_image(png_bytes: bytes) -> str:
             _record_ocr_result(status="success", cache_status="miss")
             return result
         if _ocr_cloud_configured():
+            if not _resolve_ocr_runtime_config()["api_key"]:
+                raise RuntimeError(
+                    "云端 OCR 未在数据库绑定 OCR 角色（或供应商缺少 API Key），"
+                    "不再回退旧环境变量"
+                )
             return _ocr_image_cloud_cached(png_bytes)
         raise RuntimeError(f"OCR 供应商不可用: {provider!r}")
     except Exception:

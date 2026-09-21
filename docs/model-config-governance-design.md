@@ -1484,12 +1484,23 @@ import 单向无环；`tsc --noEmit` 零错；frontend-admin 348 例全绿。
   authority）**零失败**，51 例全部落在既有无关区域（competitor、rag_upload、
   lineage、tool_approval、email 幂等、memory_routes 503 等）；
 - P0（宿主 5432 原生 PG 误迁移）已拍板：**保留不回滚**（2026-09-21）；
-- ✅ env 开发兼容路径已拍板（2026-09-21）：**保留不删除**。理由：回退仅在「无 DB
-  绑定」时作为末位兜底，不违反 DB 权威原则；删除会使无 DB 绑定的开发环境直接
-  失去 embedding/OCR 云端能力。2 例 xfail 已改写为钉住过渡期行为的正式用例
-  （`test_embedding_config_env_fallback_when_no_db_binding_transitional` /
-  `test_ocr_key_env_fallback_when_no_db_binding_transitional`，后者同时钉住三级
-  env 优先级），docstring 显式标注翻转条件——待 DB 绑定成为强制配置后改回
-  「env 不再生效」目标态断言；
+- ✅ env 开发兼容路径终局拍板（2026-09-21，用户裁定**都用 DB，删除回退**，
+  推翻当日早间「保留」初判）：
+  - `embedding_singleton._resolve_cloud_embedding_config`：无绑定时返回空配置
+    （provider=""），由 `_get_cloud_embedding` 以「数据库未配置…请先在管理端」
+    明确报错；删除 `EMBEDDING_API_KEY/BASE` import（模块 docstring 的 P0 约束
+    本就要求 DB 唯一来源，此次是实现归位）；
+  - `ocr.py`：删除 `_resolve_dashscope_key` 三级 env 回退链；`_resolve_ocr_runtime_config`
+    非 DB 分支 api_key 恒空；`ocr_available`/`ocr_image` 告警与报错文案改为
+    「云端 Key 只来自数据库」；`ocr_image` 非 DB dashscope 路径补 Key 防线；
+  - 测试归位：authority 2 例回到「env 不再生效」目标态断言；
+    `test_pdf_ocr` 6 处 env 注入改 DB 形状运行时配置/绑定注入；
+    `test_embedding_singleton` 超时用例改走 DB 绑定路径；
+    顺手修复基线 51 例中的既有失败 `test_reranker_fallback::test_factory_selects_by_env_mode`
+    （reranker 工厂本已 DB-only，测试仍假设 env Key 生效）；
+  - 影响面确认：活库 embedding/ocr/rerank 均已有 DB 绑定，删除回退不改变
+    活服务行为；仅「无 DB 绑定」环境失去云端能力，须先在管理端绑定；
+  - 验证：受影响 5 个测试文件 49/49 全绿；
+  - 待变更窗口：rebuild app 容器后生效（同时带上 B3 读权限放行）。
 - ⏳ 活服务容器未重建，B3 读权限放行需随下次变更窗口生效（当日工作区有他会话
   合并中間态：`backend/app/api/router.py` 等处于 UU 冲突未决，禁止此时 rebuild）。

@@ -15,7 +15,6 @@ EMBEDDING_PROVIDER 留空时跟随 ENV_MODE（向后兼容）。
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 from pathlib import Path
@@ -30,8 +29,6 @@ from backend.config import (
     EMBEDDING_PROVIDER,
     EMBEDDING_MODEL,
     EMBEDDING_MODEL_PATH,
-    EMBEDDING_API_BASE,
-    EMBEDDING_API_KEY,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_REQUEST_TIMEOUT,
     TOKEN_USAGE_LOG_PATH,
@@ -81,15 +78,19 @@ def _embedding_is_cloud() -> bool:
 
 
 def _resolve_cloud_embedding_config() -> dict[str, Any]:
-    """解析专项 DB 配置；开发阶段无绑定时兼容旧 env/code 配置。"""
+    """解析云端 embedding 出站配置；数据库专项绑定是唯一配置来源。
+
+    都用 DB（2026-09-21 拍板）：无绑定时不再回退旧 env（EMBEDDING_API_KEY/BASE），
+    返回空配置，由 `_get_cloud_embedding` 以明确报错拒绝，提示先在管理端绑定。
+    """
     binding = specialized_mod.resolve_binding("embedding")
     if binding is None:
         return {
-            "model": _configured_embedding_model(),
-            "api_key": EMBEDDING_API_KEY or os.getenv("EMBEDDING_API_KEY", ""),
-            "base_url": EMBEDDING_API_BASE or os.getenv("EMBEDDING_API_BASE", ""),
+            "model": "",
+            "api_key": "",
+            "base_url": "",
             "dimensions": None,
-            "provider": "env",
+            "provider": "",
         }
 
     credentials = credentials_mod.resolve_credentials(
@@ -317,7 +318,7 @@ def get_embedding() -> Embeddings:
         Embeddings: LangChain Embeddings 接口
 
     抛出:
-        RuntimeError: Cloud 模式下缺少 EMBEDDING_API_KEY
+        RuntimeError: Cloud 模式下数据库未绑定 embedding 或供应商缺少 API Key
     """
     global _embedding
 
