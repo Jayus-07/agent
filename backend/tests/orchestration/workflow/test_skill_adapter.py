@@ -70,13 +70,40 @@ class TestSkillCalls:
     """call_sql / call_rag / call_report / call_email"""
 
     def test_call_sql_passes_params(self):
-        """call_sql 的 query 模式走 execute_sql_tool 直连 PG"""
+        """call_sql 的 query 模式走 execute_sql_tool 直连 PG（封套拆包）"""
+        async def run():
+            fake_tool = MagicMock()
+            fake_tool.ainvoke = AsyncMock(
+                return_value='{"status": "success", "data": {"rows": [], "total": 0}}')
+            with mp("backend.orchestration.tools.execute_sql_tool", fake_tool):
+                result = await call_sql({"query": "SELECT 1"})
+                assert fake_tool.ainvoke.called
+                assert result == {"rows": [], "total": 0}
+        asyncio.run(run())
+
+    def test_call_sql_failure_raises(self):
+        """call_sql 的 query 模式：封套 status=failed 时上抛，不走业务数据路径"""
+        async def run():
+            fake_tool = MagicMock()
+            fake_tool.ainvoke = AsyncMock(
+                return_value='{"status": "failed", "error": "SQL 校验未通过"}')
+            with mp("backend.orchestration.tools.execute_sql_tool", fake_tool):
+                try:
+                    await call_sql({"query": "DELETE FROM x"})
+                    raised = False
+                except ValueError as e:
+                    raised = True
+                    assert "SQL 校验未通过" in str(e)
+                assert raised, "failed 封套应上抛 ValueError"
+        asyncio.run(run())
+
+    def test_call_sql_legacy_shape_passthrough(self):
+        """call_sql 兼容：无 status 的历史形态原样透传（渐进迁移保护）"""
         async def run():
             fake_tool = MagicMock()
             fake_tool.ainvoke = AsyncMock(return_value='{"rows": [], "total": 0}')
             with mp("backend.orchestration.tools.execute_sql_tool", fake_tool):
                 result = await call_sql({"query": "SELECT 1"})
-                assert fake_tool.ainvoke.called
                 assert result == {"rows": [], "total": 0}
         asyncio.run(run())
 

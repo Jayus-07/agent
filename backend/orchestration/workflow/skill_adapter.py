@@ -94,7 +94,17 @@ async def call_sql(params: dict) -> dict:
         import json as _json  # noqa: F811
         from backend.orchestration.tools import execute_sql_tool
         result_str = await execute_sql_tool.ainvoke({"query": params["query"]})
-        return _json.loads(result_str)
+        # 边界归一（同 f14/f16b 模式）：execute_sql_tool 已统一封套
+        # （shared/tool_envelope.py）——成功拆出 data 返回；失败上抛，
+        # 让 step 走失败路径，而不是把 error dict 当业务数据往下传。
+        envelope = _json.loads(result_str)
+        if isinstance(envelope, dict) and envelope.get("status") == "success":
+            return envelope.get("data") or {}
+        if isinstance(envelope, dict) and envelope.get("status") == "failed":
+            raise ValueError(
+                f"execute_sql_tool 失败: {envelope.get('error', '未知错误')}"
+            )
+        return envelope  # 兼容：无 status 的历史形态原样透传
     return await call_skill("sql", "sql.query", params)
 
 

@@ -1,16 +1,22 @@
 """tools/map/_base.py — 地图工具层公共约定
 
 工具返回值统一为 JSON 字符串（与 backend/tools 下其他工具一致），
-并遵守一条契约：**失败必须显式出现在返回值里**，不能安静地返回空。
+并遵守两条契约：
+
+1. **统一封套**（shared/tool_envelope.py）：成功 ``{"status": "success",
+   "data": {...}}``，失败 ``{"status": "failed", "error": ...}``。
+2. **失败必须显式出现在返回值里**，不能安静地返回空。
 
 原因：LLM 拿到 ``{"pois": []}`` 会理解成「这里没有地点」并据此改写行程，
-而 ``{"error": "配额用尽"}`` 才会让它换策略（改用地理编码或直接告知用户）。
-把「查不到」与「查不了」混为一谈，是行程幻觉的常见起点。
+而 ``{"status": "failed", "error": "配额用尽"}`` 才会让它换策略（改用地理
+编码或直接告知用户）。把「查不到」与「查不了」混为一谈，是行程幻觉的常见起点。
 """
 from __future__ import annotations
 
 import json
 from typing import Any
+
+from backend.shared.tool_envelope import tool_success_result, tool_error_result
 
 
 def dumps(payload: Any) -> str:
@@ -19,13 +25,13 @@ def dumps(payload: Any) -> str:
 
 
 def ok(payload: dict) -> str:
-    """成功返回。"""
-    return dumps(payload)
+    """成功返回：业务数据嵌套在 ``data`` 下（统一封套）。"""
+    return tool_success_result(payload)
 
 
 def fail(message: str, **extra: Any) -> str:
     """失败返回：``error`` 字段是给 LLM 看的可执行提示，不是堆栈。"""
-    return dumps({"error": message, **extra})
+    return tool_error_result(message, **extra)
 
 
 def not_configured() -> str:

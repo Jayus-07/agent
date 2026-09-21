@@ -164,8 +164,8 @@ class TestExecuteSQLToolSecurity:
                    return_value=mock_result) as mock_exec:
             for query in safe_queries:
                 out = json.loads(execute_sql_tool.invoke({"query": query}))
-                assert out["rows"] == [{"id": 1, "name": "test"}]
-                assert out["total"] == 1
+                assert out["data"]["rows"] == [{"id": 1, "name": "test"}]
+                assert out["data"]["total"] == 1
         assert mock_exec.call_count == len(safe_queries)
 
 
@@ -246,8 +246,8 @@ class TestExecuteSQLToolIntegration:
             result = execute_sql_tool.invoke({"query": "SELECT * FROM products"})
             parsed = json.loads(result)
             
-            assert parsed['rows'][0]['id'] == 1
-            assert parsed['total'] == 1
+            assert parsed['data']['rows'][0]['id'] == 1
+            assert parsed['data']['total'] == 1
     
     def test_execute_sql_with_multiple_rows(self):
         """多行数据查询"""
@@ -267,9 +267,9 @@ class TestExecuteSQLToolIntegration:
             result = execute_sql_tool.invoke({"query": "SELECT * FROM product.products"})
             parsed = json.loads(result)
 
-            assert len(parsed['rows']) == 3
-            assert parsed['total'] == 3
-            assert parsed['columns'] == ["id", "name", "price"]
+            assert len(parsed['data']['rows']) == 3
+            assert parsed['data']['total'] == 3
+            assert parsed['data']['columns'] == ["id", "name", "price"]
     
     def test_execute_security_validation(self):
         """SQL 注入尝试应被拒绝（校验器异常从工具层原样上抛）"""
@@ -297,7 +297,7 @@ class TestExecuteSQLToolIntegration:
             result = execute_sql_tool.invoke({"query": "SELECT COUNT(*) FROM orders"})
             parsed = json.loads(result)
             
-            assert parsed['rows'][0]['count'] == 150
+            assert parsed['data']['rows'][0]['count'] == 150
     
     def test_no_data_result(self):
         """无匹配数据返回 no_data 状态"""
@@ -314,8 +314,8 @@ class TestExecuteSQLToolIntegration:
                 {"query": "SELECT * FROM product.products WHERE 1=0"})
             parsed = json.loads(result)
 
-            assert parsed['total'] == 0
-            assert parsed['rows'] == []
+            assert parsed['data']['total'] == 0
+            assert parsed['data']['rows'] == []
 
 
 class TestSQLQueryToolIntegration:
@@ -436,7 +436,7 @@ class TestSQLToolPerformance:
             # 包含 SQL 验证器开销，设置宽松阈值 200ms
             assert elapsed < 0.2, f"查询耗时{elapsed:.3f}s，超过 200ms 基线"
             parsed = json.loads(result)
-            assert parsed['total'] == 10
+            assert parsed['data']['total'] == 10
     
     @pytest.mark.benchmark
     def test_execute_sql_medium_dataset(self):
@@ -457,7 +457,7 @@ class TestSQLToolPerformance:
             
             assert elapsed < 0.5, f"查询耗时{elapsed:.3f}s，超过 500ms 基线"
             parsed = json.loads(result)
-            assert parsed['total'] == 100
+            assert parsed['data']['total'] == 100
     
     @pytest.mark.benchmark
     def test_sql_query_natural_language_response(self):

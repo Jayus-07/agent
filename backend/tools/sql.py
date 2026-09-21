@@ -1,6 +1,7 @@
 """SQL 工具 — 自然语言查数据库 + 安全原始 SQL 执行。"""
 from langchain_core.tools import tool
 from backend.shared.logger import logger
+from backend.shared.tool_envelope import tool_success_result, tool_error_result
 
 # =====================================================
 # 懒加载单例（首次调用时初始化，避免启动时全部加载）
@@ -37,7 +38,6 @@ def execute_sql_tool(query: str) -> str:
 
     ⚠️ 安全：SQL 必须经过 validator 校验，只允许 SELECT/只读事务。
     """
-    import json as _json
     import time
     from backend.sql.schema_loader import schema_loader
     from backend.sql.sql_validator import sql_validator
@@ -54,16 +54,13 @@ def execute_sql_tool(query: str) -> str:
 
         if result.status in ("success", "no_data"):
             logger.info(f"[Tool:execute_sql] 返回 {result.row_count} 行")
-            return _json.dumps(
+            # 统一封套（shared/tool_envelope.py）：数据嵌套在 data 下
+            return tool_success_result(
                 {"rows": result.rows, "columns": result.columns, "total": result.row_count},
-                ensure_ascii=False, default=str,
             )
         else:
             logger.error(f"[Tool:execute_sql] 失败: {result.status} - {result.error}")
-            return _json.dumps(
-                {"error": result.error, "status": result.status},
-                ensure_ascii=False,
-            )
+            return tool_error_result(result.error, reason=result.status)
     except Exception as e:
         logger.error(f"[Tool:execute_sql] 失败: {e}")
         raise

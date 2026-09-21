@@ -10,11 +10,10 @@
 """
 from __future__ import annotations
 
-import json
-
 from langchain_core.tools import tool
 
 from backend.shared.logger import logger
+from backend.shared.tool_envelope import tool_success_result, tool_error_result
 from backend.tools.travel import poi_seed
 from backend.travel.models.poi import Poi
 
@@ -156,14 +155,12 @@ def travel_poi_search_tool(
     )
     if not pois:
         known = "、".join(poi_seed.all_cities())
-        return json.dumps(
-            {"error": f"未找到城市「{city}」的 POI 数据", "known_cities": known},
-            ensure_ascii=False,
+        return tool_error_result(
+            f"未找到城市「{city}」的 POI 数据", known_cities=known,
         )
-    return json.dumps(
+    return tool_success_result(
         {"city": pois[0].city, "count": len(pois),
          "pois": [p.model_dump() for p in pois]},
-        ensure_ascii=False,
     )
 
 
