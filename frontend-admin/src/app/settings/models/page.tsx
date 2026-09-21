@@ -12,14 +12,12 @@ import RuntimeChainCard from '@/components/model-config/RuntimeChainCard'
 import ProvidersTab from '@/components/model-config/ProvidersTab'
 import ConfigHistoryTab from '@/components/model-config/ConfigHistoryTab'
 import DriftTab from '@/components/model-config/DriftTab'
-import PriceTab from '@/components/model-config/PriceTab'
 
-type Tab = 'roles' | 'providers' | 'prices' | 'history' | 'drift'
+type Tab = 'roles' | 'providers' | 'history' | 'drift'
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof Settings2 }> = [
   { id: 'roles', label: '角色绑定', icon: SlidersHorizontal },
   { id: 'providers', label: '供应商与密钥', icon: KeyRound },
-  { id: 'prices', label: '模型价格', icon: Database },
   { id: 'history', label: '变更历史', icon: RefreshCw },
   { id: 'drift', label: '体检与漂移', icon: ShieldCheck },
 ]
@@ -39,6 +37,14 @@ export default function ModelConfigPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const initial = params.get('tab')
+    // 2026-09-22：价格 tab 退役 —— 录价/看价并入供应商页（加模型/改价弹窗）。
+    // 旧链接 ?tab=prices 静默重定向到供应商页，避免书签 404。
+    if (initial === 'prices') {
+      setTab('providers')
+      params.set('tab', 'providers')
+      window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+      return
+    }
     // B3：providers tab 对 editor 只读可见，不再强制回退到 roles。
     setTab(readTab(initial))
     const role = params.get('role')
@@ -116,7 +122,7 @@ export default function ModelConfigPage() {
         driftCard,
       ]
     }
-    // prices：PriceTab 自管数据，头部只给全局背景卡
+    // drift 兜底分支
     return [roleCard, modelCard, driftCard, { icon: <SlidersHorizontal size={15} />, label: '不可用角色', value: String(unavailableRoles), note: unavailableRoles ? '需处理绑定' : '全部可用', tone: (unavailableRoles ? 'bad' : 'good') as 'bad' | 'good' }]
   }
 
@@ -143,17 +149,16 @@ export default function ModelConfigPage() {
       )
     }
     if (tab === 'providers') return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} plans={presets.data?.plans ?? []} presets={presets.data?.items ?? []} presetsLoading={presets.isLoading} onGoToRoles={(role) => changeTab('roles', role)} />
-    if (tab === 'prices') return <PriceTab />
     if (tab === 'history') return <ConfigHistoryTab items={history.data?.items ?? []} canAdmin={canAdmin} onChanged={refreshAll} />
     return <DriftTab items={driftItems} />
   }
 
   // B3：providers tab 对 editor 只读可见（写操作在组件内按 canAdmin 门控）。
   const visibleTabs = TABS
-  return <RoleGate minRole="editor" pageName="模型与供应商"><div className="flex-1 overflow-y-auto"><div className="mx-auto max-w-7xl px-6 py-8"><PageHeader title="模型与供应商" desc="集中管理模型角色、供应商地址、托管密钥与价格治理；每次变更都可追溯。" />
+  return <RoleGate minRole="editor" pageName="模型与供应商"><div className="flex-1 overflow-y-auto"><div className="mx-auto max-w-7xl px-6 py-8"><PageHeader title="模型与供应商" desc="集中管理模型角色、供应商地址、托管密钥与模型价格；每次变更都可追溯。" />
     <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">{cards.map((card) => <SummaryCard key={card.label} {...card} />)}</div>
     {critical > 0 && <button onClick={() => changeTab('drift')} className="mb-5 flex w-full items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-left text-xs text-red-800"><AlertTriangle size={15} />存在 {critical} 项严重配置问题，点击查看处理建议。</button>}
-    <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200">{visibleTabs.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => changeTab(id)} className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs transition-colors ${tab === id ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'}`}>{<Icon size={14} />}{label}{id === 'prices' && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] text-amber-700">需审核</span>}</button>)}</div>
+    <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200">{visibleTabs.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => changeTab(id)} className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs transition-colors ${tab === id ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'}`}>{<Icon size={14} />}{label}</button>)}</div>
     {!canAdmin && <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-800">当前为只读模式。模型角色、供应商密钥、价格审核和历史回滚需要管理员权限。</div>}
     {roles.isLoading || providers.isLoading ? <LoadingState /> : renderContent()}
     {roles.isError || providers.isError || (tab === 'drift' && drift.isError) || (tab === 'history' && history.isError) ? <div className="mt-4 rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-800">配置数据加载失败，请刷新页面或检查 APISIX / 记忆库状态。</div> : null}

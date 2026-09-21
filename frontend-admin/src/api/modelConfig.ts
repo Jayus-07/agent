@@ -64,6 +64,9 @@ export interface ProviderCreateInput {
 export interface ProviderModelCreateInput {
   modelName: string
   modelKind: ModelKind
+  /** 按量计费单价（USD / 1M tokens）。登记即生效，同步写入计费表 */
+  inputPricePer1m?: number
+  outputPricePer1m?: number
 }
 
 export interface DraftProbeInput {
@@ -79,6 +82,8 @@ export type ProbeMode = 'fast' | 'full'
 
 export interface ProbeOptions {
   mode?: ProbeMode
+  /** 模型级测试：只测这一个模型。后端据此解析模型用途与专项协议地址。 */
+  modelName?: string
 }
 
 export interface ConfigHistoryResponse {
@@ -92,6 +97,8 @@ export interface DriftResponse {
 
 export interface ProbeResponse extends ProbeResult {
   provider: string | null
+  /** 这次探测用的模型名（模型级测试时=点按钮的那个模型；否则为供应商第一个模型） */
+  model?: string
   target: string
   network_scope: string
   draft: boolean
@@ -103,6 +110,7 @@ function normalizeProbeResponse(input: Record<string, any>): ProbeResponse {
   return {
     ok: Boolean(input.ok),
     provider: input.provider ?? null,
+    model: typeof input.model === 'string' ? input.model : undefined,
     target: String(input.target ?? ''),
     network_scope: String(input.network_scope ?? 'public'),
     draft: Boolean(input.draft),
@@ -253,8 +261,9 @@ export async function removeProviderModel(
 
 export async function verifyProvider(providerId: string, options: ProbeOptions = {}): Promise<ProbeResponse> {
   const mode = options.mode ?? 'fast'
-  const result = await mutationRequest<Record<string, any>>(`/api/sys/providers/${encodeURIComponent(providerId)}/verify?mode=${mode}`, {
-    operation: `model-provider-verify:${providerId}:${mode}`,
+  const modelNameQuery = options.modelName ? `&model_name=${encodeURIComponent(options.modelName)}` : ''
+  const result = await mutationRequest<Record<string, any>>(`/api/sys/providers/${encodeURIComponent(providerId)}/verify?mode=${mode}${modelNameQuery}`, {
+    operation: `model-provider-verify:${providerId}:${mode}${options.modelName ? `:${options.modelName}` : ''}`,
     method: 'POST',
     timeout: mode === 'full' ? 60000 : 45000,
   })

@@ -184,6 +184,26 @@ def _credential_for(snap: registry_store.RegistrySnapshot, provider_id: str):
 # 把运维引向「谁把配置删了」的错误方向。
 
 
+def _specialized_probe_base_url(
+    snap: registry_store.RegistrySnapshot, provider_id: str, model_kind: str
+) -> str:
+    """embedding/rerank 优先取专项绑定表里运行时真实在用的协议地址。
+
+    供应商表保存的是通用根地址；同一供应商下 embedding（OpenAI 兼容
+    `/compatible-mode/v1`）与 rerank（DashScope 原生 `/api/v1`）协议可能不同，
+    任何单一根地址都无法同时作为两者的探测目标。专项绑定表
+    （`llm_specialized_model_bindings`）按角色保存带协议路径的 URL，是运行时
+    真实在用的地址 —— 探测必须与之同源，否则会对裸根地址拼协议路径打出 404，
+    再把 404 误归因成「模型名错误或 Key 无权访问」（2026-09-22 实测事故）。
+    """
+    if model_kind not in {"embedding", "rerank"}:
+        return ""
+    row = snap.specialized.get(model_kind) or {}
+    if str(row.get("provider_id") or "") != provider_id:
+        return ""
+    return str(row.get("base_url") or "").strip().rstrip("/")
+
+
 def _count_models_by_provider(entries) -> dict[str, int]:
     counts: dict[str, int] = {}
     for m in entries:
@@ -194,7 +214,7 @@ def _count_models_by_provider(entries) -> dict[str, int]:
 
 
 def _models_by_provider(entries) -> dict[str, list[dict]]:
-    """按供应商返回模型目录，并补齐历史条目的用途类型。"""
+    """按供应商返回模型目录，并补齐历史条目的用途类型与单价（USD/1M）。"""
     grouped: dict[str, list[dict]] = {}
     for item in entries:
         provider = str(item.get("provider") or "")
@@ -205,6 +225,8 @@ def _models_by_provider(entries) -> dict[str, list[dict]]:
             "name": name,
             "display": item.get("display") or name,
             "modelKind": models_mod.normalize_model_kind(item.get("model_kind")),
+            "inputPrice": item.get("input_price_per_1m"),
+            "outputPrice": item.get("output_price_per_1m"),
         })
     for values in grouped.values():
         values.sort(key=lambda value: (value["modelKind"], value["name"]))
@@ -425,9 +447,16 @@ async def list_providers(ident=Depends(require_user_actor)) -> dict:
 async def verify_saved_provider(
     provider_id: str,
     mode: Literal["fast", "full"] = "fast",
+    model_name: str = "",
     ident=Depends(require_admin_user),
 ) -> dict:
-    """已存实例复测：默认只测到 L2，完整模式才等待流式 usage。"""
+    """已存实例复测：默认只测到 L2，完整模式才等待流式 usage。
+
+    `model_name` 指定要测的模型（模型级测试按钮）。不传时取该供应商名下
+    第一个模型（历史行为，兼容旧入口）。embedding/rerank 的探测地址优先取
+    专项绑定表里的协议完整 URL（`_specialized_probe_base_url`），取不到再退
+    供应商根地址 —— 响应里的 `model` / `target` 说明这次测的是谁、打的哪。
+    """
     _enforce_rate_limit(ident.actor, "verify", _VERIFY_PER_MIN)
 
     snap = await registry_store.load_registry()
@@ -443,20 +472,36 @@ async def verify_saved_provider(
 
     cred = _credential_for(snap, provider_id)
     api_key = (cred.api_key if cred else "") or ""
-    base_url = ((cred.base_url if cred else None) or provider.get("base_url") or "")
     extra_headers = ((cred.extra_headers if cred else None)
                      or provider.get("extra_headers") or {})
     scope = _normalize_scope(provider.get("network_scope"))
     driver = provider.get("driver") or models_mod.get_provider_driver(provider_id) or ""
     # 与供应商列表的 modelCount 保持同一口径（§B.15 起均为 DB-only）：
     # 只查 snap.models 即可，代码层种子已随迁移 0023 退役。
-    model_entry = next(
-        (m for m in _merged_models(snap) if str(m.get("provider")) == provider_id),
-        None,
-    )
-    model_name = str(model_entry.get("name") or "") if model_entry else ""
+    provider_models = [
+        m for m in _merged_models(snap) if str(m.get("provider")) == provider_id
+    ]
+    if model_name.strip():
+        target = model_name.strip()
+        model_entry = next(
+            (m for m in provider_models if str(m.get("name") or "") == target),
+            None,
+        )
+        if model_entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"供应商 {provider_id} 下没有模型：{target}",
+            )
+    else:
+        model_entry = next(iter(provider_models), None)
+    resolved_model_name = str(model_entry.get("name") or "") if model_entry else ""
     model_kind = models_mod.normalize_model_kind(
         model_entry.get("model_kind") if model_entry else None
+    )
+
+    base_url = (
+        _specialized_probe_base_url(snap, provider_id, model_kind)
+        or ((cred.base_url if cred else None) or provider.get("base_url") or "")
     )
 
     if not base_url:
@@ -464,19 +509,23 @@ async def verify_saved_provider(
 
     result = await provider_probe.probe_provider(
         driver=driver, base_url=base_url, api_key=api_key,
-        model_name=model_name, network_scope=scope,
+        model_name=resolved_model_name, network_scope=scope,
         extra_headers=extra_headers or None,
         include_stream_usage=(mode == "full"),
         model_kind=model_kind,
     )
     await get_model_config_service().record_probe(provider_id, result.to_dict())
     logger.info(
-        "[ProviderProbe] 复测 who=%s provider=%s target=%s scope=%s ok=%s blocked=%s 耗时=%dms",
-        ident.actor, provider_id, base_url, scope, result.ok, result.blocked_at,
+        "[ProviderProbe] 复测 who=%s provider=%s model=%s target=%s scope=%s "
+        "ok=%s blocked=%s 耗时=%dms",
+        ident.actor, provider_id, resolved_model_name, base_url, scope,
+        result.ok, result.blocked_at,
         sum(s.elapsed_ms for s in result.steps),
     )
     return {
         "provider": provider_id,
+        "model": resolved_model_name,
+        "model_kind": model_kind,
         "target": base_url,
         "network_scope": scope,
         "draft": False,

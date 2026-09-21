@@ -210,6 +210,9 @@ export interface ProviderRow {
     source?: 'user' | 'builtin'
     /** 正占用该模型的角色。非空即不可移除 —— 删了会让角色指向不存在的模型 */
     usedByRoles?: string[]
+    /** 按量计费单价（USD / 1M tokens）。0/缺省 = 未登记价格 */
+    inputPrice?: number | null
+    outputPrice?: number | null
   }>
   networkScope: NetworkScope
   billing: BillingMode

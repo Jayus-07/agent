@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
@@ -48,6 +49,153 @@ class ModelConfigConflict(RuntimeError):
 
 
 _SPECIALIZED_ROLES = {"embedding", "rerank"}
+
+# 模型用途 → model_price.component（计价口径）。chat/vision/speech 都按 llm 计。
+_COMPONENT_BY_MODEL_KIND = {
+    "chat": "llm",
+    "vision": "llm",
+    "speech": "llm",
+    "embedding": "embedding",
+    "rerank": "rerank",
+}
+
+
+def _parse_model_price(payload: Mapping[str, Any]) -> tuple[Decimal | None, Decimal | None]:
+    """提取并校验表单单价（USD / 1M tokens）；未填返回 (None, None)。"""
+    def _one(*keys: str) -> Decimal | None:
+        for key in keys:
+            raw = payload.get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                price = Decimal(str(raw)).quantize(Decimal("0.000001"))
+            except (InvalidOperation, ValueError) as exc:
+                raise ValueError(f"模型单价「{raw}」不是合法数字") from exc
+            if price < 0:
+                raise ValueError("模型单价不能为负数")
+            if price > Decimal("100000"):
+                raise ValueError("模型单价超出合理范围（USD / 1M tokens）")
+            return price
+        return None
+
+    return (
+        _one("inputPricePer1m", "input_price_per_1m"),
+        _one("outputPricePer1m", "output_price_per_1m"),
+    )
+
+
+async def _apply_model_pricing(
+    session: Any,
+    *,
+    provider_row: Mapping[str, Any],
+    model_name: str,
+    model_kind: str,
+    input_price: Decimal | None,
+    output_price: Decimal | None,
+    operator: str,
+) -> None:
+    """把供应商页录入的单价落库（2026-09-22 拍板：登记即生效）。
+
+    两处写入，各司其职：
+
+    1. `llm_models.pricing` JSONB —— 目录展示价（供应商页模型行、
+       registry `_model_entry` 读取）；
+    2. `model_price` —— 计费事实源（proxy / token_tracker / 预算硬门读取），
+       直通写入 `approval_status='approved'` 生效条目。不走去模型价格页的
+       导入+双人审核流程：单管理员平台过不了 `reviewer_1 <> reviewer_2`
+       的 CHECK，直通条目记 `reviewer_1=操作人、reviewer_2='system'`、
+       `source='provider-page'`，model_price 本身 append-only，留痕可追溯。
+
+    只落计费必需维度（pricing._REQUIRED_DIMENSIONS）：llm=input+output，
+    embedding/rerank=input；其余维度计费时按 0 跳过。同一维度已有同价
+    生效条目则跳过（避免重复保存产生无谓版本行）；有变化则先关闭全部
+    未关闭条目（含 pending 旧草稿）再插入新条目 —— append-only 的
+    「改价 = 关旧开新」。
+    """
+    if input_price is None and output_price is None:
+        return
+    if str(provider_row.get("billing") or "") != "metered":
+        raise ValueError("该供应商不是按量计费（metered），无需填写模型单价")
+
+    component = _COMPONENT_BY_MODEL_KIND.get(model_kind, "llm")
+    if component == "llm":
+        if input_price is None or output_price is None:
+            raise ValueError("按量文本模型需同时填写输入与输出单价")
+        dimensions = ("input", "output")
+    else:
+        dimensions = ("input",)
+    prices = {"input": input_price, "output": output_price}
+
+    # ① 目录展示价
+    pricing_json = _json_value(
+        {
+            "input_price_per_1m": float(prices["input"] or 0),
+            "output_price_per_1m": float(prices["output"] or 0),
+        }
+    )
+    await session.execute(
+        text(
+            "UPDATE llm_models SET pricing = CAST(:pricing AS JSONB), updated_at = now() "
+            "WHERE name = :model_name"
+        ),
+        {"pricing": pricing_json, "model_name": model_name},
+    )
+
+    # ② 计费生效价：同价跳过，变价关旧开新
+    version = f"provider-page-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+    for dimension in dimensions:
+        price = prices[dimension]
+        if price is None:  # 防御：非 llm 组件没有 output 维度
+            continue
+        current = (
+            await session.execute(
+                text(
+                    "SELECT price_per_unit FROM model_price "
+                    "WHERE model_name = :model_name AND component = :component "
+                    "AND dimension = :dimension AND effective_to IS NULL "
+                    "AND approval_status = 'approved' "
+                    "ORDER BY effective_from DESC LIMIT 1"
+                ),
+                {
+                    "model_name": model_name,
+                    "component": component,
+                    "dimension": dimension,
+                },
+            )
+        ).mappings().first()
+        if current is not None and Decimal(str(current["price_per_unit"])) == price:
+            continue
+        await session.execute(
+            text(
+                "UPDATE model_price SET effective_to = now() "
+                "WHERE model_name = :model_name AND component = :component "
+                "AND dimension = :dimension AND effective_to IS NULL"
+            ),
+            {
+                "model_name": model_name,
+                "component": component,
+                "dimension": dimension,
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO model_price "
+                "(model_name, component, dimension, price_per_unit, unit, currency, "
+                " price_table_version, source, effective_from, approval_status, "
+                " reviewer_1, reviewer_2) "
+                "VALUES (:model_name, :component, :dimension, :price, "
+                " 'per_1m_tokens', 'USD', :version, 'provider-page', now(), "
+                " 'approved', :operator, 'system')"
+            ),
+            {
+                "model_name": model_name,
+                "component": component,
+                "dimension": dimension,
+                "price": price,
+                "version": version,
+                "operator": operator,
+            },
+        )
 
 
 def _specialized_binding_payload(role: str, value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1288,7 +1436,12 @@ class ModelConfigService:
         payload: Mapping[str, Any],
         operator: str,
     ) -> dict[str, Any]:
-        """测试通过后向已有供应商追加一个模型目录条目。"""
+        """测试通过后向供应商登记模型条目（2026-09-22 起兼作改价入口）。
+
+        同名模型已属于**同一供应商**时不再报冲突，而是走更新（含价格变更）；
+        属于其他供应商仍拒绝（模型名全局唯一）。表单单价（按量计费）经
+        `_apply_model_pricing` 同步落目录展示价与计费生效价。
+        """
         provider_id = (provider_id or "").strip()
         model_name = str(payload.get("modelName") or payload.get("model_name") or "").strip()
         if not provider_id:
@@ -1298,6 +1451,7 @@ class ModelConfigService:
         model_kind = models_mod.normalize_model_kind(
             payload.get("modelKind") or payload.get("model_kind")
         )
+        input_price, output_price = _parse_model_price(payload)
 
         provider: Mapping[str, Any] | None = None
         async for session in get_session():
@@ -1315,10 +1469,12 @@ class ModelConfigService:
                     {"model_name": model_name},
                 )
             ).mappings().first()
-            if duplicate is not None:
+            if duplicate is not None and str(duplicate.get("provider_id")) != provider_id:
                 raise ModelConfigConflict(
-                    f"模型 {model_name} 已登记到供应商 {duplicate.get('provider_id')}"
+                    f"模型 {model_name} 已登记到供应商 {duplicate.get('provider_id')}；"
+                    "模型名全局唯一，请到原供应商下编辑或更换模型名"
                 )
+            # 同供应商重复登记 = 更新（含改价），继续走探测 + upsert
             provider = dict(provider_row)
             break
 
@@ -1364,6 +1520,15 @@ class ModelConfigService:
                 allow_legacy_specialized_migration=True,
                 migration_base_url=base_url,
             )
+            await _apply_model_pricing(
+                session,
+                provider_row=provider,
+                model_name=model_name,
+                model_kind=model_kind,
+                input_price=input_price,
+                output_price=output_price,
+                operator=operator,
+            )
             await session.commit()
             break
         await registry_store.refresh_registry()
@@ -1372,6 +1537,8 @@ class ModelConfigService:
             "name": model_name,
             "display": model_name,
             "modelKind": model_kind,
+            "inputPricePer1m": float(input_price) if input_price is not None else None,
+            "outputPricePer1m": float(output_price) if output_price is not None else None,
             "probe": {
                 "ok": True,
                 "summary": probe.summary,

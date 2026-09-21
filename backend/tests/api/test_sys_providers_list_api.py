@@ -243,6 +243,8 @@ def test_provider_rows_include_specialized_provider_and_models(client, monkeypat
             "modelKind": "embedding",
             "source": "user",
             "usedByRoles": [],
+            "inputPrice": None,
+            "outputPrice": None,
         },
         {
             "name": "qwen3.7-text-rerank",
@@ -250,6 +252,8 @@ def test_provider_rows_include_specialized_provider_and_models(client, monkeypat
             "modelKind": "rerank",
             "source": "user",
             "usedByRoles": [],
+            "inputPrice": None,
+            "outputPrice": None,
         },
     ]
 

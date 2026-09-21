@@ -62,6 +62,9 @@ export interface ProviderCreateInput {
 export interface ProviderModelCreateInput {
   modelName: string
   modelKind: ModelKind
+  /** 按量计费单价（USD / 1M tokens）。登记即生效，同步写入计费表 */
+  inputPricePer1m?: number
+  outputPricePer1m?: number
 }
 
 export interface DraftProbeInput {

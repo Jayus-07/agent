@@ -436,32 +436,33 @@ describe('ProvidersTab 探测失败详情', () => {
     expect(container.textContent).toContain('历史专项供应商')
   })
 
-  it('默认测试走快速模式，并可显式执行完整 usage 测试', async () => {
+  it('测试按钮在模型行上：定向测该模型；供应商卡片不再有厂商级测试/完整测试', async () => {
     apiMock.verifyProvider.mockResolvedValue({
       ok: true,
       provider: 'qwen_tp',
+      model: 'qwen3.7-text-embedding',
       target: 'https://token-plan.example/v1',
       network_scope: 'public',
       draft: false,
       steps: [],
     })
     const container = mount()
-    const quickButton = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent?.trim() === '测试') as HTMLButtonElement
-    const fullButton = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent?.includes('完整测试')) as HTMLButtonElement
+    // 找 embedding 模型行上的测试按钮（aria-label 精确定位）。
+    const embedButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.getAttribute('aria-label') === '测试模型 qwen3.7-text-embedding') as HTMLButtonElement
+    expect(embedButton).toBeTruthy()
 
     await act(async () => {
-      quickButton.click()
+      embedButton.click()
       await Promise.resolve()
     })
-    expect(apiMock.verifyProvider).toHaveBeenNthCalledWith(1, 'qwen_tp', { mode: 'fast' })
+    expect(apiMock.verifyProvider).toHaveBeenCalledWith('qwen_tp', { mode: 'fast', modelName: 'qwen3.7-text-embedding' })
 
-    await act(async () => {
-      fullButton.click()
-      await Promise.resolve()
-    })
-    expect(apiMock.verifyProvider).toHaveBeenNthCalledWith(2, 'qwen_tp', { mode: 'full' })
+    // 厂商级入口已撤下：完整测试只存在于编辑抽屉（provider-test），卡片上不再有。
+    const card = Array.from(container.querySelectorAll('[data-testid="provider-card"]'))
+      .find((item) => item.textContent?.includes('Qwen Token Plan')) as HTMLElement
+    expect(Array.from(card.querySelectorAll('button')).some((button) => button.textContent?.includes('完整测试'))).toBe(false)
+    expect(Array.from(card.querySelectorAll('button')).filter((button) => button.textContent?.trim() === '测试').length).toBe(5)
   })
 })
 

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -104,6 +105,14 @@ class ProviderModelCreateRequest(BaseModel):
     model_name: str = Field(..., alias="modelName", min_length=1, max_length=256)
     model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] = Field(
         "chat", alias="modelKind"
+    )
+    # 按量计费单价（USD / 1M tokens）。登记即生效：服务层同步写入
+    # llm_models.pricing（展示）与 model_price（计费，见 _apply_model_pricing）。
+    input_price_per_1m: Decimal | None = Field(
+        None, alias="inputPricePer1m", ge=0, le=100000
+    )
+    output_price_per_1m: Decimal | None = Field(
+        None, alias="outputPricePer1m", ge=0, le=100000
     )
 
 

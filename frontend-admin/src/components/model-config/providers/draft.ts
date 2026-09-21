@@ -33,6 +33,11 @@ export type ModelDraft = {
   modelName: string
   modelKind: ModelKind
   error: string | null
+  /** 按量计费单价（USD / 1M tokens），表单原始字符串；仅 metered 供应商显示 */
+  inputPrice: string
+  outputPrice: string
+  /** true = 从既有模型行进入（更新/改价），后端按同供应商 upsert 处理 */
+  editingExisting: boolean
 }
 
 /** 移除模型前的确认态。后端对内置/被占用的模型会回 409，理由直接展示。 */

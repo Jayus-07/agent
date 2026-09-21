@@ -10,7 +10,7 @@
  *  `ProviderModelEditor.tsx`。本文件只保留列表渲染与数据编排。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Edit3, FlaskConical, LockKeyhole, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Edit3, FlaskConical, LockKeyhole, Pencil, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import {
   addProviderModel,
   createProvider,
@@ -160,8 +160,16 @@ export default function ProvidersTab({
     setEditing(draftFromRow(row, defaultModels, presets, plans))
   }
 
-  function beginAddModel(row: ProviderRow) {
-    setAddingModel({ provider: row, modelName: '', modelKind: 'chat', error: null })
+  function beginAddModel(row: ProviderRow, model?: NonNullable<ProviderRow['models']>[number]) {
+    setAddingModel({
+      provider: row,
+      modelName: model?.name ?? '',
+      modelKind: model?.modelKind ?? 'chat',
+      inputPrice: model?.inputPrice && model.inputPrice > 0 ? String(model.inputPrice) : '',
+      outputPrice: model?.outputPrice && model.outputPrice > 0 ? String(model.outputPrice) : '',
+      editingExisting: Boolean(model),
+      error: null,
+    })
   }
 
   async function saveAddedModel() {
@@ -171,14 +179,36 @@ export default function ProvidersTab({
       setAddingModel({ ...addingModel, error: '模型名称不能为空' })
       return
     }
+    // 按量计费才录价；文本族（chat/vision/speech）计费需 input+output，
+    // embedding/rerank 只要 input（与 pricing._REQUIRED_DIMENSIONS 对齐）。
+    let inputPricePer1m: number | undefined
+    let outputPricePer1m: number | undefined
+    if (addingModel.provider.billing === 'metered') {
+      const isLlmFamily = addingModel.modelKind !== 'embedding' && addingModel.modelKind !== 'rerank'
+      const inputText = addingModel.inputPrice.trim()
+      const outputText = addingModel.outputPrice.trim()
+      if (!inputText || (isLlmFamily && !outputText)) {
+        setAddingModel({ ...addingModel, error: isLlmFamily ? '按量计费需填写输入与输出单价' : '按量计费需填写单价' })
+        return
+      }
+      inputPricePer1m = Number(inputText)
+      outputPricePer1m = isLlmFamily ? Number(outputText) : undefined
+      const invalid = [inputPricePer1m, outputPricePer1m].some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))
+      if (invalid) {
+        setAddingModel({ ...addingModel, error: '单价必须是 ≥ 0 的数字（USD / 1M tokens）' })
+        return
+      }
+    }
     setModelBusy(true)
     setAddingModel({ ...addingModel, error: null })
     try {
       await addProviderModel(addingModel.provider.id, {
         modelName,
         modelKind: addingModel.modelKind,
+        ...(inputPricePer1m !== undefined ? { inputPricePer1m } : {}),
+        ...(outputPricePer1m !== undefined ? { outputPricePer1m } : {}),
       })
-      toast.success('模型测试通过，已加入供应商目录')
+      toast.success(addingModel.editingExisting ? `模型 ${modelName} 价格已更新并生效` : `模型 ${modelName} 测试通过，已加入供应商目录`)
       setAddingModel(null)
       await onChanged()
     } catch (error) {
@@ -584,8 +614,16 @@ export default function ProvidersTab({
                           <span className={`rounded px-1.5 py-0.5 text-[10px] ${modelKindBadgeClass(model.modelKind)}`}>{modelKindShortLabel(model.modelKind)}</span>
                           <span className="truncate font-mono text-[11px] text-text-secondary">{model.name}</span>
                           {model.source !== 'user' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">内置</span>}
+                          {row.billing === 'metered' && (model.inputPrice ?? 0) > 0 && (
+                            <span data-testid={`model-price-${model.name}`} className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] text-emerald-700">
+                              {(model.modelKind === 'embedding' || model.modelKind === 'rerank')
+                                ? `$${model.inputPrice} ·1M`
+                                : `$${model.inputPrice}/$${model.outputPrice ?? 0} ·1M`}
+                            </span>
+                          )}
                         </div>
                         <div className="flex flex-shrink-0 items-center gap-2">
+                          {canAdmin && source === 'db' && row.billing === 'metered' && <button aria-label={`改价 ${model.name}`} onClick={() => beginAddModel(row, model)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[11px] text-text-secondary hover:bg-slate-50"><Pencil size={11} />改价</button>}
                           {/* B3：角色占用徽标 —— 每个占用角色一枚，可点跳「模型角色」页改绑。 */}
                           {(model.usedByRoles?.length ?? 0) > 0 && (
                             <span className="flex flex-wrap items-center gap-1">

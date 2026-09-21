@@ -429,3 +429,152 @@ def test_saved_provider_422_when_base_url_missing(client, monkeypatch):
                         AsyncMock(return_value=snap))
     resp = client.post("/sys/providers/custom/verify")
     assert resp.status_code == 422
+
+
+# ── 模型级测试（2026-09-22）：model_name 定向 + 专项绑定地址优先 ─────────
+
+
+def _snapshot_with_specialized() -> RegistrySnapshot:
+    """百炼形态：供应商根地址是裸域名，embedding 走兼容协议子路径。"""
+    return RegistrySnapshot(
+        providers=[{
+            "id": "specialized-api",
+            "base_url": "https://dashscope.aliyuncs.com",
+            "network_scope": "public",
+            "driver": "openai",
+        }],
+        models=[
+            {"name": "qwen3.7-text-embedding", "provider": "specialized-api",
+             "model_kind": "embedding"},
+            {"name": "qwen3.7-text-rerank", "provider": "specialized-api",
+             "model_kind": "rerank"},
+        ],
+        credentials={},
+        specialized={
+            "embedding": {
+                "role": "embedding",
+                "provider_id": "specialized-api",
+                "adapter": "openai_embedding",
+                "model_name": "qwen3.7-text-embedding",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "enabled": True,
+            },
+            "rerank": {
+                "role": "rerank",
+                "provider_id": "specialized-api",
+                "adapter": "dashscope_rerank",
+                "model_name": "qwen3.7-text-rerank",
+                "base_url": "https://dashscope.aliyuncs.com/api/v1",
+                "enabled": True,
+            },
+        },
+        loaded=True,
+    )
+
+
+def _patch_verify_deps(monkeypatch, snap) -> dict:
+    monkeypatch.setattr(sys_providers.registry_store, "load_registry",
+                        AsyncMock(return_value=snap))
+    monkeypatch.setattr(
+        credentials_mod, "resolve_credentials",
+        lambda provider, **kw: ProviderCredentials(
+            provider=provider, api_key="sk-test", source="env", version=0
+        ),
+    )
+    captured: dict = {}
+
+    async def _capture(**kw):
+        captured.update(kw)
+        return _ok_result()
+
+    monkeypatch.setattr(sys_providers.provider_probe, "probe_provider", _capture)
+    return captured
+
+
+def test_verify_model_level_uses_specialized_binding_base_url(client, monkeypatch):
+    """定向测 embedding 时，探测地址取专项绑定的兼容协议 URL，而非供应商裸根地址。"""
+    captured = _patch_verify_deps(monkeypatch, _snapshot_with_specialized())
+
+    resp = client.post(
+        "/sys/providers/specialized-api/verify",
+        params={"model_name": "qwen3.7-text-embedding"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["model_name"] == "qwen3.7-text-embedding"
+    assert captured["model_kind"] == "embedding"
+    assert captured["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    body = resp.json()
+    assert body["model"] == "qwen3.7-text-embedding"
+    assert body["target"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def test_verify_model_level_rerank_uses_native_binding_base_url(client, monkeypatch):
+    """rerank 同理：探测地址取原生协议绑定（/api/v1），不对根地址拼服务路径。"""
+    captured = _patch_verify_deps(monkeypatch, _snapshot_with_specialized())
+
+    resp = client.post(
+        "/sys/providers/specialized-api/verify",
+        params={"model_name": "qwen3.7-text-rerank"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["base_url"] == "https://dashscope.aliyuncs.com/api/v1"
+
+
+def test_verify_chat_model_keeps_provider_root_base_url(client, monkeypatch):
+    """chat 模型不受专项绑定影响：仍用供应商（或凭据）地址。"""
+    snap = _snapshot_with_specialized()
+    snap.models.append({"name": "qwen3.7-plus", "provider": "specialized-api",
+                        "model_kind": "chat"})
+    captured = _patch_verify_deps(monkeypatch, snap)
+
+    resp = client.post(
+        "/sys/providers/specialized-api/verify",
+        params={"model_name": "qwen3.7-plus"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["base_url"] == "https://dashscope.aliyuncs.com"
+
+
+def test_verify_specialized_binding_of_other_provider_is_ignored(client, monkeypatch):
+    """专项绑定属于别的供应商时不得串用 —— 退回本供应商自己的地址。"""
+    snap = _snapshot_with_specialized()
+    snap.models.append({"name": "other-embed", "provider": "other", "model_kind": "embedding"})
+    snap.providers.append({"id": "other", "base_url": "https://other.example/v1",
+                           "network_scope": "public", "driver": "openai"})
+    captured = _patch_verify_deps(monkeypatch, snap)
+
+    resp = client.post(
+        "/sys/providers/other/verify",
+        params={"model_name": "other-embed"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["base_url"] == "https://other.example/v1"
+
+
+def test_verify_rejects_model_not_under_provider(client, monkeypatch):
+    captured = _patch_verify_deps(monkeypatch, _snapshot_with_specialized())
+
+    resp = client.post(
+        "/sys/providers/specialized-api/verify",
+        params={"model_name": "not-registered"},
+    )
+
+    assert resp.status_code == 404
+    assert "not-registered" in resp.json()["detail"]
+    assert captured == {}  # 未发起探测
+
+
+def test_verify_without_model_name_keeps_first_model_behavior(client, monkeypatch):
+    """不带 model_name 时保持历史行为（取第一个模型），兼容旧入口。"""
+    captured = _patch_verify_deps(monkeypatch, _snapshot_with_specialized())
+
+    resp = client.post("/sys/providers/specialized-api/verify")
+
+    assert resp.status_code == 200
+    assert captured["model_name"] == "qwen3.7-text-embedding"
+    # 第一个模型恰好是 embedding → 地址同样吃到专项绑定优先的修正
+    assert captured["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"

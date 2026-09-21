@@ -10,7 +10,7 @@
  *  `ProviderModelEditor.tsx`。本文件只保留列表渲染与数据编排。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Edit3, FlaskConical, LockKeyhole, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Edit3, FlaskConical, LockKeyhole, Pencil, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import {
   addProviderModel,
   createProvider,
@@ -160,8 +160,16 @@ export default function ProvidersTab({
     setEditing(draftFromRow(row, defaultModels, presets, plans))
   }
 
-  function beginAddModel(row: ProviderRow) {
-    setAddingModel({ provider: row, modelName: '', modelKind: 'chat', error: null })
+  function beginAddModel(row: ProviderRow, model?: NonNullable<ProviderRow['models']>[number]) {
+    setAddingModel({
+      provider: row,
+      modelName: model?.name ?? '',
+      modelKind: model?.modelKind ?? 'chat',
+      inputPrice: model?.inputPrice && model.inputPrice > 0 ? String(model.inputPrice) : '',
+      outputPrice: model?.outputPrice && model.outputPrice > 0 ? String(model.outputPrice) : '',
+      editingExisting: Boolean(model),
+      error: null,
+    })
   }
 
   async function saveAddedModel() {
@@ -171,14 +179,36 @@ export default function ProvidersTab({
       setAddingModel({ ...addingModel, error: '模型名称不能为空' })
       return
     }
+    // 按量计费才录价；文本族（chat/vision/speech）计费需 input+output，
+    // embedding/rerank 只要 input（与 pricing._REQUIRED_DIMENSIONS 对齐）。
+    let inputPricePer1m: number | undefined
+    let outputPricePer1m: number | undefined
+    if (addingModel.provider.billing === 'metered') {
+      const isLlmFamily = addingModel.modelKind !== 'embedding' && addingModel.modelKind !== 'rerank'
+      const inputText = addingModel.inputPrice.trim()
+      const outputText = addingModel.outputPrice.trim()
+      if (!inputText || (isLlmFamily && !outputText)) {
+        setAddingModel({ ...addingModel, error: isLlmFamily ? '按量计费需填写输入与输出单价' : '按量计费需填写单价' })
+        return
+      }
+      inputPricePer1m = Number(inputText)
+      outputPricePer1m = isLlmFamily ? Number(outputText) : undefined
+      const invalid = [inputPricePer1m, outputPricePer1m].some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))
+      if (invalid) {
+        setAddingModel({ ...addingModel, error: '单价必须是 ≥ 0 的数字（USD / 1M tokens）' })
+        return
+      }
+    }
     setModelBusy(true)
     setAddingModel({ ...addingModel, error: null })
     try {
       await addProviderModel(addingModel.provider.id, {
         modelName,
         modelKind: addingModel.modelKind,
+        ...(inputPricePer1m !== undefined ? { inputPricePer1m } : {}),
+        ...(outputPricePer1m !== undefined ? { outputPricePer1m } : {}),
       })
-      toast.success('模型测试通过，已加入供应商目录')
+      toast.success(addingModel.editingExisting ? `模型 ${modelName} 价格已更新并生效` : `模型 ${modelName} 测试通过，已加入供应商目录`)
       setAddingModel(null)
       await onChanged()
     } catch (error) {
@@ -429,8 +459,11 @@ export default function ProvidersTab({
     }
   }
 
-  async function testSaved(row: ProviderRow, mode: ProbeMode = 'fast') {
-    const startedAt = beginTesting(row.id, mode)
+  /** 供应商/模型级探测。带 modelName 时只测该模型（后端按模型用途解析协议地址）；
+   *  结果面板挂在供应商卡片下，model + target 会展示这次测的是谁、打的哪。 */
+  async function testSaved(row: ProviderRow, mode: ProbeMode = 'fast', modelName?: string) {
+    const key = modelName ? `${row.id}::${modelName}` : row.id
+    const startedAt = beginTesting(key, mode)
     let testingEnded = false
     let measuredElapsedMs = 0
     const stopTesting = () => {
@@ -442,7 +475,7 @@ export default function ProvidersTab({
     }
     setBusy(true)
     try {
-      const result = await verifyProvider(row.id, { mode })
+      const result = await verifyProvider(row.id, { mode, modelName })
       stopTesting()
       setProbeResults((previous) => ({ ...previous, [row.id]: result }))
       setProbeErrors((previous) => ({ ...previous, [row.id]: '' }))
@@ -518,7 +551,9 @@ export default function ProvidersTab({
           {filteredProviders.map((row) => {
             const liveResult = probeResults[row.id]
             const liveError = probeErrors[row.id]
-            const isTesting = testingTarget === row.id
+            // 测试键是 `${row.id}::${模型名}`（模型级）或 `${row.id}`（草稿态复用）；
+            // 卡片头部的「正在测试」只看是否测到本供应商，具体哪个模型在按钮上显示。
+            const isTesting = testingTarget === row.id || (testingTarget ?? '').startsWith(`${row.id}::`)
             const visibleModels: NonNullable<ProviderRow['models']> = row.models?.length
               ? row.models
               : [{
@@ -555,8 +590,9 @@ export default function ProvidersTab({
                     </div>
                   </div>
                   <div className="flex flex-shrink-0 flex-wrap justify-end gap-1.5">
-                    <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'fast') }} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-text-secondary disabled:opacity-40"><FlaskConical size={12} />{isTesting && testingMode === 'fast' ? `测试中 ${formatLiveElapsed(testingElapsedMs)}` : '测试'}</button>
-                    <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'full') }} className="flex items-center gap-1 rounded-lg border border-accent/20 px-2.5 py-1.5 text-[11px] text-accent disabled:opacity-40">{isTesting && testingMode === 'full' ? `完整测试中 ${formatLiveElapsed(testingElapsedMs)}` : '完整测试'}</button>
+                    {/* 2026-09-22 拍板：厂商级「测试/完整测试」撤下 —— 测试本就是模型级动作
+                        （协议按模型用途分），且旧入口随机取第一个模型 + 裸根地址，结果误导。
+                        测试入口收敛到每个模型行；地址+Key 的验证在新建/编辑抽屉的「测试连接」。 */}
                     {canAdmin && source === 'db' && <><button onClick={() => beginAddModel(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Plus size={12} />新增模型</button><button onClick={() => begin(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Edit3 size={12} />编辑</button></>}
                     {canAdmin && source === 'db' && !row.isBuiltin && (() => {
                       const deleteBlock = providerDeleteBlockReason(row)
@@ -584,8 +620,27 @@ export default function ProvidersTab({
                           <span className={`rounded px-1.5 py-0.5 text-[10px] ${modelKindBadgeClass(model.modelKind)}`}>{modelKindShortLabel(model.modelKind)}</span>
                           <span className="truncate font-mono text-[11px] text-text-secondary">{model.name}</span>
                           {model.source !== 'user' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">内置</span>}
+                          {row.billing === 'metered' && (model.inputPrice ?? 0) > 0 && (
+                            <span data-testid={`model-price-${model.name}`} className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] text-emerald-700">
+                              {(model.modelKind === 'embedding' || model.modelKind === 'rerank')
+                                ? `$${model.inputPrice} ·1M`
+                                : `$${model.inputPrice}/$${model.outputPrice ?? 0} ·1M`}
+                            </span>
+                          )}
                         </div>
                         <div className="flex flex-shrink-0 items-center gap-2">
+                          {canAdmin && source === 'db' && (
+                            <button
+                              aria-label={`测试模型 ${model.name}`}
+                              disabled={busy}
+                              onClick={() => { void testSaved(row, 'fast', model.name) }}
+                              className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[11px] text-text-secondary hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              <FlaskConical size={11} />
+                              {testingTarget === `${row.id}::${model.name}` ? `测试中 ${formatLiveElapsed(testingElapsedMs)}` : '测试'}
+                            </button>
+                          )}
+                          {canAdmin && source === 'db' && row.billing === 'metered' && <button aria-label={`改价 ${model.name}`} onClick={() => beginAddModel(row, model)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[11px] text-text-secondary hover:bg-slate-50"><Pencil size={11} />改价</button>}
                           {/* B3：角色占用徽标 —— 每个占用角色一枚，可点跳「模型角色」页改绑。 */}
                           {(model.usedByRoles?.length ?? 0) > 0 && (
                             <span className="flex flex-wrap items-center gap-1">
