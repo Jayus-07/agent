@@ -229,6 +229,10 @@ async def accept_offer(
         raise HTTPException(409, detail=str(exc)) from exc
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
+    # 显式提交（2026-09-21 实机验证）：get_session 的 commit 在依赖收尾
+    # （响应已发出）才执行，坐席「接单→立即发消息」会读到未提交的旧状态
+    # 而误报 409。必须在返回前落库可见。
+    await session.commit()
     return _action_response(result)
 
 
@@ -260,6 +264,10 @@ async def decline_offer(
         raise HTTPException(409, detail=str(exc)) from exc
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
+    # 显式提交（2026-09-21 实机验证）：get_session 的 commit 在依赖收尾
+    # （响应已发出）才执行，坐席「接单→立即发消息」会读到未提交的旧状态
+    # 而误报 409。必须在返回前落库可见。
+    await session.commit()
     return _action_response(result)
 
 
@@ -305,6 +313,10 @@ async def reassign_handoff(
         raise HTTPException(409, detail=str(exc)) from exc
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
+    # 显式提交（2026-09-21 实机验证）：get_session 的 commit 在依赖收尾
+    # （响应已发出）才执行，坐席「接单→立即发消息」会读到未提交的旧状态
+    # 而误报 409。必须在返回前落库可见。
+    await session.commit()
     return _action_response(result)
 
 
