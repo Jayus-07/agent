@@ -198,12 +198,17 @@ class TestSharedCleanupDaemon:
 
 class TestCleanupSql:
     class _Cursor:
-        def __init__(self, log):
+        def __init__(self, log, lock_acquired=True):
             self._log = log
+            self._lock_acquired = lock_acquired
             self.rowcount = 2
 
         def execute(self, sql, params=None):
             self._log.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            # 只有抢主 SELECT 会取结果行
+            return (self._lock_acquired,)
 
         def __enter__(self):
             return self
@@ -212,11 +217,12 @@ class TestCleanupSql:
             return False
 
     class _Conn:
-        def __init__(self, log):
+        def __init__(self, log, lock_acquired=True):
             self._log = log
+            self._lock_acquired = lock_acquired
 
         def cursor(self):
-            return TestCleanupSql._Cursor(self._log)
+            return TestCleanupSql._Cursor(self._log, self._lock_acquired)
 
         def __enter__(self):
             return self
@@ -224,33 +230,50 @@ class TestCleanupSql:
         def __exit__(self, *exc):
             return False
 
-    def test_issues_three_deletes_and_aggregates_rowcounts(self, monkeypatch):
-        log: list = []
+    def _fake_psycopg(self, monkeypatch, log, lock_acquired=True):
         fake = types.ModuleType("psycopg")
-        fake.connect = lambda dsn, autocommit=False: TestCleanupSql._Conn(log)
+        fake.connect = lambda dsn, autocommit=False: TestCleanupSql._Conn(
+            log, lock_acquired)
         monkeypatch.setitem(sys.modules, "psycopg", fake)
+
+    def test_lock_acquired_issues_lock_three_deletes_unlock(self, monkeypatch):
+        log: list = []
+        self._fake_psycopg(monkeypatch, log)
 
         deleted = shared_cleanup.cleanup_stale_checkpoints(7)
 
         assert deleted == {"checkpoints": 2, "blobs": 2, "writes": 2}
-        assert len(log) == 3
+        assert len(log) == 5
         sqls = [entry[0] for entry in log]
-        assert sqls[0].startswith("DELETE FROM checkpoints")
-        assert "checkpoint_blobs" in sqls[1]
-        assert "checkpoint_writes" in sqls[2]
+        # 抢主在最先，unlock 在最后；参数化防注入
+        assert sqls[0] == "SELECT pg_try_advisory_lock(%s)"
+        assert log[0][1] == (shared_cleanup.ADVISORY_LOCK_KEY,)
+        assert sqls[1].startswith("DELETE FROM checkpoints")
+        assert "checkpoint_blobs" in sqls[2]
+        assert "checkpoint_writes" in sqls[3]
+        assert sqls[4] == "SELECT pg_advisory_unlock(%s)"
         # TTL 必须作为参数传入，不能被拼进 SQL（注入面）
-        assert log[0][1] == ("7",)
-        assert all(entry[1] is None for entry in log[1:])
+        assert log[1][1] == ("7",)
+        assert all(entry[1] is None for entry in log[2:4])
+
+    def test_lock_not_acquired_skips_all_deletes(self, monkeypatch):
+        """多进程抢主失败 → 零 DELETE（避免 N 个进程重复清理同一批行）。"""
+        log: list = []
+        self._fake_psycopg(monkeypatch, log, lock_acquired=False)
+
+        deleted = shared_cleanup.cleanup_stale_checkpoints(7)
+
+        assert deleted.get("skipped_lock") is True
+        assert deleted["checkpoints"] == 0
+        assert len(log) == 1  # 只发了抢主 SELECT，未发任何 DELETE
 
     def test_orphan_delete_guards_on_parent_checkpoint(self, monkeypatch):
         """孤儿清理必须带 NOT EXISTS 关联条件，否则会把仍被引用的 blob 删掉。"""
         log: list = []
-        fake = types.ModuleType("psycopg")
-        fake.connect = lambda dsn, autocommit=False: TestCleanupSql._Conn(log)
-        monkeypatch.setitem(sys.modules, "psycopg", fake)
+        self._fake_psycopg(monkeypatch, log)
 
         shared_cleanup.cleanup_stale_checkpoints(7)
 
-        for sql in (log[1][0], log[2][0]):
+        for sql in (log[2][0], log[3][0]):
             assert "NOT EXISTS" in sql
             assert "checkpoints c" in sql

@@ -41,6 +41,12 @@ CLEANUP_INTERVAL_SECONDS = 24 * 3600
 # 想改就改这一处 + 两个域配置，别只改其中一个。
 DEFAULT_TTL_DAYS = 7
 
+# 多进程抢主锁（2026-09-21 审查遗留项 3.2）：API / worker / beat 各进程都可能有
+# 清理守护，同一轮会重复 DELETE（无害但浪费）。会话级 advisory lock：
+# 抢不到直接跳过本轮；连接关闭时 PG 自动释放（显式 unlock 只是礼节性提前归还）。
+# 值为任意固定 bigint，只要全仓唯一即可；改了等于换锁，须同步清理旧锁名文档。
+ADVISORY_LOCK_KEY = 20260921
+
 
 def _dsn() -> str:
     from backend.config.database import MEMORY_DB_CONFIG
@@ -53,7 +59,8 @@ def cleanup_stale_checkpoints(max_age_days: int) -> dict:
     """删除超过 TTL 的 checkpoint 及孤儿 blob/writes。
 
     Returns:
-        {"checkpoints": n1, "blobs": n2, "writes": n3}（各表删除行数）
+        {"checkpoints": n1, "blobs": n2, "writes": n3}（各表删除行数）；
+        多进程抢主失败时返回 {"skipped_lock": True, ...全 0}，不发任何 DELETE。
 
     短连接：每轮清理单独建连/释放，不与 checkpointer 主连接争用。
     """
@@ -62,37 +69,57 @@ def cleanup_stale_checkpoints(max_age_days: int) -> dict:
     deleted = {"checkpoints": 0, "blobs": 0, "writes": 0}
     with psycopg.connect(_dsn(), autocommit=True) as conn:
         with conn.cursor() as cur:
-            # 1) 过期 checkpoint（langgraph 在 checkpoint JSONB 里写 ts）
+            # 0) 抢主：多进程只有一个守护真正执行本轮 DELETE（session 级锁，
+            #    连接关闭自动释放；未抢到属正常现象，debug 记录即可）
             cur.execute(
-                """
-                DELETE FROM checkpoints
-                WHERE (checkpoint->>'ts')::timestamptz
-                      < now() - (%s || ' days')::interval
-                """,
-                (str(max_age_days),),
-            )
-            deleted["checkpoints"] = cur.rowcount or 0
-
-            # 2) 孤儿 blob/writes：其 (thread_id, checkpoint_ns) 已无任何 checkpoint
-            for table in ("checkpoint_blobs", "checkpoint_writes"):
+                "SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+            acquired = bool(cur.fetchone() and cur.fetchone()[0])
+            if not acquired:
+                return {"skipped_lock": True, **deleted}
+            try:
+                # 1) 过期 checkpoint（langgraph 在 checkpoint JSONB 里写 ts）
                 cur.execute(
-                    f"""
-                    DELETE FROM {table} t
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM checkpoints c
-                        WHERE c.thread_id = t.thread_id
-                          AND c.checkpoint_ns = t.checkpoint_ns
-                    )
                     """
+                    DELETE FROM checkpoints
+                    WHERE (checkpoint->>'ts')::timestamptz
+                          < now() - (%s || ' days')::interval
+                    """,
+                    (str(max_age_days),),
                 )
-                deleted["blobs" if table == "checkpoint_blobs" else "writes"] = \
-                    cur.rowcount or 0
+                deleted["checkpoints"] = cur.rowcount or 0
+
+                # 2) 孤儿 blob/writes：其 (thread_id, checkpoint_ns) 已无任何 checkpoint
+                for table in ("checkpoint_blobs", "checkpoint_writes"):
+                    cur.execute(
+                        f"""
+                        DELETE FROM {table} t
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM checkpoints c
+                            WHERE c.thread_id = t.thread_id
+                              AND c.checkpoint_ns = t.checkpoint_ns
+                        )
+                        """
+                    )
+                    deleted["blobs" if table == "checkpoint_blobs" else "writes"] = \
+                        cur.rowcount or 0
+            finally:
+                # 礼节性提前释放；即便这里异常，连接关闭也会释放（软失败语义）
+                try:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+                except Exception as unlock_err:  # noqa: BLE001
+                    logger.debug("[Checkpoint] advisory unlock 失败（连接关闭会自动释放）: %s",
+                                 unlock_err)
     return deleted
 
 
 def _run_once(max_age_days: int, owner: str) -> None:
     try:
         deleted = cleanup_stale_checkpoints(max_age_days)
+        if deleted.get("skipped_lock"):
+            # 别的进程抢到主、正在清理 —— 本轮静默跳过（多进程常态，不刷日志）
+            logger.debug("[Checkpoint] TTL 清理本轮抢主失败，跳过 owner=%s", owner)
+            return
         total = sum(deleted.values())
         if total:
             logger.info("[Checkpoint] TTL 清理完成 owner=%s (>%d天): %s",
