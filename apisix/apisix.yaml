@@ -79,6 +79,12 @@ routes:
       prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
+        headers:
+          set:
+            # 2026-09-21 补注入：后端 register 同样要求可信 X-Tenant-Id
+            # （缺失 401「缺少可信租户身份」），此前漏配导致自助注册必 401。
+            # 与 auth 路由同语义：无条件覆盖，浏览器注册固定进 default 租户。
+            X-Tenant-Id: "default"
 
   - id: system-service
     uri: /api/sys/*
