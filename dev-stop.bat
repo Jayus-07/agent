@@ -3,8 +3,9 @@ setlocal
 
 :: =============================================================
 :: dev-stop.bat - stop local dev services
-::   dev-stop.bat            -> backend + admin + web  (asks to confirm)
+::   dev-stop.bat            -> backend + admin + cs + web  (asks to confirm)
 ::   dev-stop.bat admin      -> frontend-admin only (:3200)
+::   dev-stop.bat cs         -> frontend-cs only (:3300)
 ::   dev-stop.bat web        -> frontend only (:3100)
 ::   dev-stop.bat backend    -> docker compose app only (:8000)
 ::   dev-stop.bat all /y     -> no confirmation prompt
