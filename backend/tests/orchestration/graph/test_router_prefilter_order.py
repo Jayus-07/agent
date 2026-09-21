@@ -265,7 +265,7 @@ class TestCsRedirectMain:
     ):
         """正则未命中 + LLM 高置信判非客服 → 转出，落到主路由（非 CS）。"""
         from backend.customer_service.analyzer import non_cs_detector as ncd
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv("CS_REDIRECT_MAIN_LLM_ENABLED", "true")
         monkeypatch.setattr(
             ncd, "detect_non_cs_cached",
             lambda q: ncd.NonCSDetection(
@@ -290,7 +290,7 @@ class TestCsRedirectMain:
     ):
         """LLM 置信度低于阈值 → 不转出，forced CS prefilter 留守。"""
         from backend.customer_service.analyzer import non_cs_detector as ncd
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv("CS_REDIRECT_MAIN_LLM_ENABLED", "true")
         monkeypatch.setattr(
             ncd, "detect_non_cs_cached",
             lambda q: ncd.NonCSDetection(
@@ -309,7 +309,7 @@ class TestCsRedirectMain:
     ):
         """开关默认 OFF（灰度零调用）：LLM 仲裁完全不触发，留守 CS。"""
         from backend.customer_service.analyzer import non_cs_detector as ncd
-        monkeypatch.delenv(ncd.ENV_LLM_ENABLED, raising=False)
+        monkeypatch.delenv("CS_REDIRECT_MAIN_LLM_ENABLED", raising=False)
         called = {"n": 0}
 
         def _spy(q):

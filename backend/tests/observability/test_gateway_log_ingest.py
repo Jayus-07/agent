@@ -99,5 +99,17 @@ def test_query_endpoint_degrades_when_datasource_unavailable(monkeypatch):
         return _BrokenSession()
 
     monkeypatch.setattr(obs, "AsyncSessionLocal", _fake_session_local)
-    result = asyncio.run(obs.get_gateway_access_logs(hours=6))
+
+    # 2026-09-22：端点升级为挂 admin 门禁的 FastAPI 路由（request 必传）。
+    # 单测直调时用最小桩替身 + 跳过 admin 校验，只测"PG 不可达 → 优雅降级"。
+    async def _no_admin(request):
+        return None
+
+    class _FakeRequest:
+        query_params = {}
+        headers = {}
+
+    monkeypatch.setattr(obs, "require_admin_operator", _no_admin)
+    result = asyncio.run(
+        obs.get_gateway_access_logs(_FakeRequest(), hours=6))
     assert result["available"] is False

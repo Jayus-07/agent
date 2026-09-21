@@ -46,10 +46,12 @@ class ToolPolicy:
 
 # ── 默认策略注册表（key = capability 名，与 Skill.capabilities 对齐）──
 DEFAULT_POLICIES: dict[str, ToolPolicy] = {
-    # RAG：本地模式 pipeline.ask 含 LLM 合成；8s 是在线请求的合理上限，
-    # 若生产常态超过（如长文档合成）用 TOOL_POLICY_JSON 调大 —— Deadline 仍兜底
+    # RAG：本地模式 pipeline.ask 含 LLM 合成。2026-09-22 依真实 trace 数据
+    # （最近 7 次 rag.search：成功样本 3~15s，p50=8.2s，2 次成功落在 8-15s）
+    # 将默认从 8s 放宽到 15s，避免误伤正常查询；retries=0 + Deadline 25s
+    # 兜底不变 —— 183.7s 事故不可能复发。仍可用 TOOL_POLICY_JSON 覆盖。
     "rag.search": ToolPolicy(
-        timeout_ms=8_000.0, retries=0, bulkhead_limit=20,
+        timeout_ms=15_000.0, retries=0, bulkhead_limit=20,
         criticality=ToolCriticality.IMPORTANT, fallback="rag_degraded",
     ),
     "sql.query": ToolPolicy(

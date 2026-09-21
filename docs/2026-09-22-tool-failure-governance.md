@@ -77,7 +77,7 @@ fallback_used / degraded / latency_ms / needs_verification`。
 
 | tool | timeout | retries | criticality | CB | bulkhead | fallback |
 |---|---|---|---|---|---|---|
-| rag.search | 8s* | 0 | important | ✓(5/30s) | 20 | rag_degraded |
+| rag.search | 15s* | 0 | important | ✓(5/30s) | 20 | rag_degraded |
 | sql.query | 15s* | 0 | important | ✓ | 20 | sql_degraded |
 | report.generate | 20s | 0 | important | ✓ | 10 | rag_degraded |
 | web.search | 6s | 1 | optional | ✓ | 10 | skip |
@@ -86,8 +86,10 @@ fallback_used / degraded / latency_ms / needs_verification`。
 | email.send | 10s | 0(强制) | important | ✓ | 5 | check_operation_status |
 | 未注册 tool | 15s | 1 | important | ✓ | 20 | — |
 
-\* rag.search 8s：本地模式 pipeline.ask 含 LLM 合成，若生产常态超 8s，用
-`TOOL_POLICY_JSON={"rag.search":{"timeout_ms":15000}}` 调大；Deadline 25s 兜底不变。
+\* rag.search 15s：依真实 trace 数据校准（66 个历史样本：成功调用 p50=4.5s /
+p90=9.3s / max=25.5s；8s 会误伤 19% 正常请求，15s 只影响 3%）。原规范建议
+5~8s 偏紧，本地 pipeline.ask 含 LLM 合成是主因。仍可用 `TOOL_POLICY_JSON`
+覆盖；Deadline 25s 兜底不变。sql.query 同理（ask_struct 含 LLM SQL 生成）。
 
 ## 4. 重试规则（§9）
 
