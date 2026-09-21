@@ -28,15 +28,26 @@ def _environment(service: dict) -> dict[str, str]:
 
 
 def test_fresh_database_init_includes_metadata_migrations():
-    script = INIT_DBS_PATH.read_text(encoding="utf-8")
+    """全新部署能建出 metadata 三表。
 
-    assert "/docker-migrations/025_metadata_rule_governance.sql" in script
-    assert "/docker-migrations/026_metadata_shadow_jobs.sql" in script
-    assert "/docker-migrations/027_rag_processing_lineage.sql" in script
-    assert script.index("025_metadata_rule_governance.sql") < script.index(
+    2026-09-21 起 docker/init-dbs.sh 手抄清单退役，迁移事实源唯一化为
+    scripts/init_db.py（compose 的 db-migrate one-shot 服务执行）——守护
+    对象从 init-dbs.sh 文本改为 init_db.py 的 MIGRATION_TARGETS 登记。
+    """
+    init_db_path = INIT_DBS_PATH.parent.parent / "scripts" / "init_db.py"
+    source = init_db_path.read_text(encoding="utf-8")
+
+    for migration in (
+        "025_metadata_rule_governance.sql",
+        "026_metadata_shadow_jobs.sql",
+        "027_rag_processing_lineage.sql",
+    ):
+        assert f'"{migration}": "memory"' in source, f"{migration} 未登记到 memory 库"
+    # 数字顺序保证依赖次序（025 → 026 → 027）
+    assert source.index("025_metadata_rule_governance.sql") < source.index(
         "026_metadata_shadow_jobs.sql"
     )
-    assert script.index("026_metadata_shadow_jobs.sql") < script.index(
+    assert source.index("026_metadata_shadow_jobs.sql") < source.index(
         "027_rag_processing_lineage.sql"
     )
 
