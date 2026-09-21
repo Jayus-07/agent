@@ -83,9 +83,13 @@ def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
     decls = {c.name: c for c in manifest.capabilities}
     candidates: list[ToolCandidate] = []
     for name in manifest.capabilities_by_domain.get(domain, ()):
+        decl = decls.get(name)
+        # 只放行 routed 能力：routed:false 是内部能力（如 competitor.watch
+        # 长轮询副作用），用户问题路由不可见，FC 也绝不能 bind 到它们
+        if decl is None or not decl.routed:
+            continue
         if tool_registry.get_node(name) is None:
             continue  # yaml 声明了但 Skill 未注册 → 不进候选（fail-safe）
-        decl = decls[name]
         candidates.append(
             ToolCandidate(
                 name=name, risk_level=decl.risk_level,

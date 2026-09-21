@@ -14,8 +14,17 @@ class TimeoutError(Exception):
 
 def _timeout_unix(func: Callable, seconds: int, error_message: str, *args, **kwargs):
     """Unix/Linux/Mac超时实现（使用signal）"""
+    import threading
+
     def handler(signum, frame):
         raise TimeoutError(error_message)
+
+    # ⚠️ signal 只能在主线程注册（2026-09-22 实机验证发现）：LangGraph 节点
+    # 跑在线程本地 loop 的 worker 线程里，tool_selector 等节点内的
+    # safe_call_with_timeout 曾 100% 抛 "signal only works in main thread"
+    # → FC 选择静默全灭。非主线程退化为线程版（不能抢占，但能限时等待）。
+    if threading.current_thread() is not threading.main_thread():
+        return _timeout_windows(func, seconds, error_message, *args, **kwargs)
 
     old_handler = signal.signal(signal.SIGALRM, handler)
     signal.alarm(seconds)

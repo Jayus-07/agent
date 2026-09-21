@@ -140,6 +140,11 @@ class OrchestratorState(AgentState):
     cs_context: CSContext
     cs_action_result: dict                # 业务操作执行结果
     cs_audit_entries: list[dict]          # 审计日志条目
+    # 工具选择阻断标记（tool_selector 多候选 FC 失败时置位，skill_executor
+    # 据此拒绝执行 candidates[0]）。⚠️ 必须入 schema：LangGraph updates 流
+    # 会剥离 schema 外的键，缺此键曾导致「阻断」从未生效、灰区照旧盲执行
+    # 首候选（2026-09-22 实机验证发现，与 _clarify 同一批坑）。
+    selection_blocked: bool
     # 拒答转追问标记（2026-09-19）：router（L1 弱命中）/ reporter（L2 拒答）/
     # cs_graph_node（L2 知识域拒答）在节点输出携带，events.py 据此发
     # clarification SSE 事件。**必须入 schema**——LangGraph updates 流会剥离
