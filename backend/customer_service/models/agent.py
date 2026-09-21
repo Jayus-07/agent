@@ -1,6 +1,7 @@
 """CS Agent (human support agent) ORM model
 
-Maps to ``customer_service.cs_agents`` table (new in Alembic 0003).
+Maps to ``customer_service.cs_agents`` table (created by SQL migrations
+backend/sql/migrations/*.sql，经 scripts/init_db.py 执行).
 """
 from datetime import datetime, timezone
 

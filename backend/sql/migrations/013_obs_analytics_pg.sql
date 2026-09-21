@@ -55,7 +55,44 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     created_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_ts        ON llm_usage(ts);
-CREATE INDEX IF NOT EXISTS idx_llm_usage_model     ON llm_usage(model, ts);
-CREATE INDEX IF NOT EXISTS idx_llm_usage_trace     ON llm_usage(trace_id);
-CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_user_ts ON llm_usage(tenant_id, user_id, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_llm_usage_component ON llm_usage(component, ts);
+-- ⚠️ 极老存量库的 llm_usage 可能只有部分历史列（缺 model/trace_id/tenant_id 等），
+--    CREATE TABLE IF NOT EXISTS 会跳过补列，直接建索引报 UndefinedColumn（42703），
+--    因此对引用非基础列的索引先判断列存在再建，保证本迁移可安全重放。
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'llm_usage' AND column_name = 'model'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model, ts);
+    END IF;
+END $$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'llm_usage' AND column_name = 'trace_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_llm_usage_trace ON llm_usage(trace_id);
+    END IF;
+END $$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'llm_usage' AND column_name = 'tenant_id'
+          AND EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'llm_usage' AND column_name = 'user_id')
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_user_ts ON llm_usage(tenant_id, user_id, ts DESC);
+    END IF;
+END $$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'llm_usage' AND column_name = 'component'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_llm_usage_component ON llm_usage(component, ts);
+    END IF;
+END $$;

@@ -304,7 +304,7 @@ async def load_registry() -> RegistrySnapshot:
     except Exception:
         logger.warning(
             "[LLMRegistry] DB 注册表读取失败，模型目录保持代码层，云端凭据保持未配置"
-            "（若表不存在，请先执行：alembic -c alembic.ini -n memory upgrade head）",
+            "（若表不存在，请先执行：python scripts/init_db.py，宿主机加 --port 5433）",
             exc_info=True,
         )
         return RegistrySnapshot(loaded=False)

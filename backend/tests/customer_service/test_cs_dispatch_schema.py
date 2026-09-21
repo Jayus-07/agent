@@ -1,13 +1,17 @@
-"""客服自动派单数据模型与迁移契约测试。"""
+"""客服自动派单数据模型与迁移契约测试。
+
+2026-09-21：Alembic 退役，迁移事实源统一为 backend/sql/migrations/*.sql
+（scripts/init_db.py 扫描执行）。本文件同步从「alembic 0023/0024 链」
+切换到「原生 028/029」，验收语义不变：幂等重放、存量库兼容升级、
+租户 FK 收敛与重复 assignment 守卫。
+"""
 
 from __future__ import annotations
 
-import ast
 import importlib.util
 import re
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import (
@@ -26,34 +30,22 @@ from backend.customer_service.models.handoff import HANDOFF_STATES, CSHandoff
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 NATIVE_MIGRATION = BACKEND_ROOT / "sql" / "migrations" / "028_cs_dispatch.sql"
-HISTORICAL_CHAIN = tuple(
-    sorted(
-        (
-            path
-            for path in (BACKEND_ROOT / "sql" / "alembic" / "memory" / "versions")
-            .glob("*.py")
-            if path.name[:4].isdigit() and int(path.name[:4]) < 23
-        ),
-        key=lambda path: int(path.name[:4]),
-    )
-)
-ALEMBIC_MIGRATION = (
-    BACKEND_ROOT
-    / "sql"
-    / "alembic"
-    / "memory"
-    / "versions"
-    / "0023_cs_dispatch.py"
-)
-P2_ALEMBIC_MIGRATION = (
-    BACKEND_ROOT
-    / "sql"
-    / "alembic"
-    / "memory"
-    / "versions"
-    / "0024_rbac_audit.py"
-)
 P2_NATIVE_MIGRATION = BACKEND_ROOT / "sql" / "migrations" / "029_rbac_audit.sql"
+INIT_DB_SCRIPT = BACKEND_ROOT.parent / "scripts" / "init_db.py"
+
+
+def _memory_migrations_before_028() -> tuple[Path, ...]:
+    """按 init_db.py 的真实执行顺序取 028 之前的 memory 线迁移。"""
+    spec = importlib.util.spec_from_file_location("init_db_module", INIT_DB_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    init_db = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(init_db)
+    plan, _ = init_db.discover_migrations()
+    return tuple(
+        BACKEND_ROOT / "sql" / "migrations" / name
+        for name, target in plan
+        if target == "memory" and name < "028"
+    )
 
 
 def _column(model, name: str):
@@ -81,28 +73,9 @@ def _constraint(model, name: str):
     raise AssertionError(f"{model.__name__} 缺少约束 {name}")
 
 
-def _load_migration(path: Path, module_name: str):
-    assert path.exists(), f"缺少 Alembic 迁移: {path}"
-    spec = importlib.util.spec_from_file_location(
-        module_name, path
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_alembic_migration():
-    return _load_migration(ALEMBIC_MIGRATION, "cs_dispatch_migration")
-
-
-def _literal_assignment(tree: ast.Module, name: str):
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == name:
-                    return ast.literal_eval(node.value)
-    raise AssertionError(f"迁移未声明 {name}")
+def _native_sql(path: Path) -> str:
+    assert path.exists(), f"缺少原生迁移: {path}"
+    return path.read_text(encoding="utf-8")
 
 
 def test_all_dispatch_models_have_tenant_contract():
@@ -310,30 +283,15 @@ def test_dispatch_states_are_explicit_and_preserve_legacy_values():
     } <= set(ASSIGNMENT_STATES)
 
 
-def test_alembic_revision_is_0023_and_leaves_single_head():
-    migration = _load_alembic_migration()
-    p2_migration = _load_migration(P2_ALEMBIC_MIGRATION, "rbac_audit_migration")
-    assert migration.revision == "0023"
-    assert migration.down_revision == "0022"
-    assert p2_migration.revision == "0024"
-    assert p2_migration.down_revision == "0023"
-
-    revisions: dict[str, Path] = {}
-    down_revisions: set[str] = set()
-    for path in ALEMBIC_MIGRATION.parent.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        revision = _literal_assignment(tree, "revision")
-        revisions[revision] = path
-        down_revision = _literal_assignment(tree, "down_revision")
-        if isinstance(down_revision, str):
-            down_revisions.add(down_revision)
-        elif isinstance(down_revision, (tuple, list)):
-            down_revisions.update(down_revision)
-
-    assert len([path for path in revisions.values() if path.name == "0023_cs_dispatch.py"]) == 1
-    # 2026-09-21：model-config 的 seed 迁移原编号 0023 与本链撞车（双头），
-    # 重排为 0025 并链到 0024 之后，链尾（唯一 head）随之推进到 0025。
-    assert set(revisions) - down_revisions == {"0025"}
+def test_native_migrations_are_registered_in_init_db():
+    """028/029 必须存在于迁移目录且登记进 scripts/init_db.py 的归属表。"""
+    init_db_text = INIT_DB_SCRIPT.read_text(encoding="utf-8")
+    for path in (NATIVE_MIGRATION, P2_NATIVE_MIGRATION):
+        assert path.exists(), f"缺少原生迁移: {path}"
+        assert f'"{path.name}"' in init_db_text, (
+            f"{path.name} 未登记进 scripts/init_db.py 的 MIGRATION_TARGETS，"
+            "一键初始化会漏掉它"
+        )
 
 
 def test_rbac_native_migration_is_idempotent_and_has_no_implicit_tenant_default():
@@ -348,11 +306,15 @@ def test_rbac_native_migration_is_idempotent_and_has_no_implicit_tenant_default(
     assert "TENANT_ID VARCHAR(64) NOT NULL DEFAULT 'DEFAULT'" not in normalized
 
 
+def _run_dispatch_upgrade(connection, path: Path = NATIVE_MIGRATION):
+    """在给定连接上执行原生迁移 SQL（幂等，可直接重放）。"""
+    with connection.cursor() as cursor:
+        cursor.execute(_native_sql(path))
+    connection.commit()
+
+
 def _run_p2_upgrade(connection):
-    _run_migration_upgrade(
-        connection,
-        _load_migration(P2_ALEMBIC_MIGRATION, "rbac_audit_real_migration"),
-    )
+    _run_dispatch_upgrade(connection, P2_NATIVE_MIGRATION)
 
 
 def test_p2_migration_chain_is_repeatable_and_real_display_name_constraint_holds(
@@ -360,7 +322,7 @@ def test_p2_migration_chain_is_repeatable_and_real_display_name_constraint_holds
 ):
     psycopg2 = pytest.importorskip("psycopg2")
     connection = dispatch_postgres_db
-    _run_alembic_upgrade(connection)
+    _run_dispatch_upgrade(connection)
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -710,25 +672,7 @@ def dispatch_postgres_db():
         cleanup.close()
 
 
-def _run_alembic_upgrade(connection):
-    _run_migration_upgrade(connection, _load_alembic_migration())
-
-
-def _run_migration_upgrade(connection, migration):
-
-    def execute(sql):
-        with connection.cursor() as cursor:
-            cursor.execute(sql)
-        connection.commit()
-
-    migration.op = SimpleNamespace(
-        execute=execute,
-        get_bind=lambda: SimpleNamespace(exec_driver_sql=execute),
-    )
-    migration.upgrade()
-
-
-def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
+def test_dispatch_upgrade_handles_legacy_assignments_and_tenant_guards(
     dispatch_postgres_db,
 ):
     psycopg2 = pytest.importorskip("psycopg2")
@@ -737,8 +681,8 @@ def test_alembic_upgrade_handles_legacy_assignments_and_tenant_guards(
         cursor.execute(_legacy_schema_sql())
     connection.commit()
 
-    _run_alembic_upgrade(connection)
-    _run_alembic_upgrade(connection)
+    _run_dispatch_upgrade(connection)
+    _run_dispatch_upgrade(connection)
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -865,8 +809,8 @@ def test_empty_database_upgrade_has_one_named_tenant_fk_per_relationship(
     dispatch_postgres_db,
 ):
     connection = dispatch_postgres_db
-    _run_alembic_upgrade(connection)
-    _run_alembic_upgrade(connection)
+    _run_dispatch_upgrade(connection)
+    _run_dispatch_upgrade(connection)
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -899,22 +843,21 @@ def test_empty_database_upgrade_has_one_named_tenant_fk_per_relationship(
         ]
 
 
-def test_historical_assignment_fks_are_replaced_before_0023(
+def test_historical_assignment_fks_are_replaced_by_dispatch_upgrade(
     dispatch_postgres_db,
 ):
+    """006 时代的存量结构（老 FK 命名）上重放原生迁移链，租户 FK 必须收敛。
+
+    与真实初始化路径一致：按 init_db.py 的 memory 线顺序应用 028 之前的
+    全部迁移（含 020 的列改名等存量兼容），再重放 028。
+    """
     connection = dispatch_postgres_db
     with connection.cursor() as cursor:
         cursor.execute(_historical_006_schema_sql())
     connection.commit()
 
-    assert [int(path.name[:4]) for path in HISTORICAL_CHAIN] == list(
-        range(1, 23)
-    )
-    for path in HISTORICAL_CHAIN:
-        _run_migration_upgrade(
-            connection,
-            _load_migration(path, f"historical_{path.stem}_migration"),
-        )
+    for path in _memory_migrations_before_028():
+        _run_dispatch_upgrade(connection, path)
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -932,8 +875,8 @@ def test_historical_assignment_fks_are_replaced_before_0023(
         )
     connection.commit()
 
-    _run_alembic_upgrade(connection)
-    _run_alembic_upgrade(connection)
+    _run_dispatch_upgrade(connection)
+    _run_dispatch_upgrade(connection)
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -1037,7 +980,7 @@ def test_upgrade_rejects_non_null_active_assignment_duplicates(
 
     with connection.cursor() as cursor:
         with pytest.raises(psycopg2.errors.RaiseException, match="duplicate active"):
-            _run_alembic_upgrade(connection)
+            _run_dispatch_upgrade(connection)
         connection.rollback()
         cursor.execute(
             "SELECT COUNT(*) FROM customer_service.assignments "

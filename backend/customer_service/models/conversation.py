@@ -4,8 +4,8 @@ Dual-dimension state:
   conversation_status  — open / pending / resolved / snoozed
   handling_mode        — ai / human / waiting_human
 
-Maps to ``customer_service.conversations`` table (created by 006 migration,
-extended by Alembic 0003).
+Maps to ``customer_service.conversations`` table (created by SQL migrations
+backend/sql/migrations/*.sql，经 scripts/init_db.py 执行).
 """
 from datetime import datetime, timezone
 

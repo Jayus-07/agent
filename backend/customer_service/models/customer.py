@@ -1,6 +1,7 @@
 """CS Customer ORM model
 
-Maps to ``customer_service.customers`` table (new in Alembic 0003).
+Maps to ``customer_service.customers`` table (created by SQL migrations
+backend/sql/migrations/*.sql，经 scripts/init_db.py 执行).
 """
 from datetime import datetime, timezone
 

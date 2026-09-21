@@ -1,13 +1,12 @@
 """rebuild_pg.py — 一键重建 PostgreSQL 两库（删 + 建 + 迁移 + 回归）
 
-P1-13 起 schema 版本管理迁移到 alembic（backend/sql/alembic/）：
-  - Step 4/5 不再手动跑 SQL，改为 `alembic upgrade head`（business/memory 双线）
-  - 原 002/003 dump 再生成步骤已删除（schema 演进改走 alembic revision）
-  - 日常增量变更：alembic -c alembic.ini -n business revision -m "描述"
+2026-09-21 起 schema 版本管理统一走 scripts/init_db.py（alembic 已退役）：
+  - 迁移事实源 = backend/sql/migrations/*.sql（init_db.py 自动扫描、幂等可重跑）
+  - 本脚本保留"完整重建 + 回归测试"的编排职责，迁移步骤委托给 init_db.py
 
 用法：
-  python scripts/rebuild_pg.py                  # 完整重建（DROP + CREATE + alembic + 回归）
-  python scripts/rebuild_pg.py --keep-data      # 不 DROP，只跑 alembic upgrade（修复用，幂等）
+  python scripts/rebuild_pg.py                  # 完整重建（DROP + init_db.py + 回归）
+  python scripts/rebuild_pg.py --keep-data      # 不 DROP，只跑 init_db.py（修复用，幂等）
   python scripts/rebuild_pg.py --skip-regress  # 跳过 pytest
 """
 import argparse
@@ -100,27 +99,24 @@ def step3_create_databases():
     conn.close()
 
 
-def _alembic(section: str):
-    """执行 alembic upgrade head（P1-13：替代手动跑 SQL 迁移）。
+def _init_db(reset: bool = False):
+    """执行 scripts/init_db.py（2026-09-21：替代 alembic upgrade head）。
 
-    section: 'business' | 'memory'（对应 alembic.ini 的两个 section）
+    init_db.py 自动扫描 backend/sql/migrations/*.sql，幂等可重跑；
+    reset=True 时删库重建（等价原 DROP+CREATE+upgrade head 全流程）。
     """
-    cmd = [sys.executable, '-m', 'alembic', '-c', 'alembic.ini',
-           '-n', section, 'upgrade', 'head']
+    cmd = [sys.executable, os.path.join(PROJECT_ROOT, 'scripts', 'init_db.py')]
+    if reset:
+        cmd += ['--reset', '--yes']
     r = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
     print(r.stdout.strip())
     if r.returncode != 0:
-        fail(f'alembic -n {section} upgrade head failed:\n{r.stderr}')
+        fail(f'init_db.py failed:\n{r.stderr}')
 
 
 def step4_memory_migration():
-    """agent_memory：alembic -n memory upgrade head（基线 0001 = 002 schema + 003 seed）。"""
-    _alembic('memory')
-
-
-def step5_business_migration():
-    """agent_business：alembic -n business upgrade head（基线 0001 = 001 + 005 加固）。"""
-    _alembic('business')
+    """两库迁移已由 init_db.py 一次完成（保留函数名兼容旧调用）。"""
+    _init_db(reset=False)
 
 
 def step7_regression():
@@ -182,11 +178,8 @@ def main():
         step('Step 3: CREATE DATABASE')
         step3_create_databases(); ok()
 
-    step('Step 4: agent_memory — alembic upgrade head')
+    step('Step 4: 两库迁移 — scripts/init_db.py')
     step4_memory_migration(); ok()
-
-    step('Step 5: agent_business — alembic upgrade head')
-    step5_business_migration(); ok()
 
     if not args.skip_regress:
         step('Step 7: 后端回归 pytest')

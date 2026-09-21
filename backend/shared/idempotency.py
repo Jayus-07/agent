@@ -467,7 +467,7 @@ class IdempotencyExecutor:
 
 
 class PostgresIdempotencyResultStore:
-    """PG 权威终态仓储；表结构由 Alembic 迁移创建。"""
+    """PG 权威终态仓储；表结构由 SQL 迁移（scripts/init_db.py）创建。"""
 
     def __init__(self, connection_factory=None):
         self._connection_factory = connection_factory or _default_memory_connection

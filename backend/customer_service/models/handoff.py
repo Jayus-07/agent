@@ -1,6 +1,7 @@
 """CSHandoff ORM model
 
-Maps to ``customer_service.handoffs`` (created by Alembic 0004 migration).
+Maps to ``customer_service.handoffs`` (created by SQL migrations
+backend/sql/migrations/*.sql，经 scripts/init_db.py 执行).
 """
 from datetime import datetime, timezone
 

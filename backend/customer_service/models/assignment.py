@@ -1,6 +1,7 @@
 """CS Assignment ORM model
 
-Tracks assignment history for conversations (new in Alembic 0003).
+Tracks assignment history for conversations (created by SQL migrations
+backend/sql/migrations/*.sql, applied by scripts/init_db.py).
 """
 from datetime import datetime, timezone
 

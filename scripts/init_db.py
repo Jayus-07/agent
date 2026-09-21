@@ -113,6 +113,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "028_cs_dispatch.sql": "memory",
     "029_rbac_audit.sql": "memory",
     "030_cs_dispatch_hardening.sql": "memory",
+    "031_model_governance_pg.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
@@ -200,9 +201,9 @@ def split_sql_statements(sql: str) -> list[str]:
                 continue
         if dollar_tag is not None:
             if sql.startswith(dollar_tag, i):
+                i += len(dollar_tag)  # 先前进再置空，否则 len(None) 崩溃
                 buf.append(dollar_tag)
                 dollar_tag = None
-                i += len(dollar_tag)
                 continue
             buf.append(c)
             i += 1
