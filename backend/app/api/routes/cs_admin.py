@@ -442,6 +442,8 @@ async def rate_conversation(conversation_id: str, body: RatingRequest, request: 
 
         # P3 事务统一（2026-09-21）：route 持有事务（begin → block 退出提交，
         # 异常回滚），不再手写 commit。
+        # P4 事件统一：conversation.rated 进 PG Outbox（与业务同事务提交，
+        # relay 异步广播），删除 commit 后 fire-and-forget + except: pass。
         async with AsyncSessionLocal() as db, db.begin():
             conv = (
                 await db.execute(
@@ -459,20 +461,23 @@ async def rate_conversation(conversation_id: str, body: RatingRequest, request: 
             conv.rating = body.rating
             conv.rating_comment = (body.comment or "").strip() or None
             conv.rated_at = datetime.now(timezone.utc)
-            # commit 后实例过期，作用域外不可再访问（同 close 端点的处理）
             rated_at_iso = conv.rated_at.isoformat()
 
-        # 广播给坐席工作台（会话列表角标实时刷新）
-        try:
-            from backend.customer_service.realtime import get_agent_hub
+            # P4 事件统一：conversation.rated 进 PG Outbox，与评分同事务
+            # 提交；广播由 relay 异步完成（不再 fire-and-forget + 吞错）。
+            from backend.customer_service.dispatch.outbox import append_event
 
-            get_agent_hub().publish(
-                "conversation.rated",
+            append_event(
+                db,
+                tenant_id=conv.tenant_id,
                 conversation_id=conversation_id,
-                rating=body.rating,
+                type="conversation.rated",
+                payload={
+                    "conversation_id": conversation_id,
+                    "rating": body.rating,
+                },
+                now=datetime.now(timezone.utc),
             )
-        except Exception:
-            pass  # 广播失败不影响评分落库
 
         return {
             "conversation_id": conversation_id,
@@ -782,6 +787,24 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
                 .values(unassigned_at=datetime.now(timezone.utc))
             )
 
+            # P4 事件统一：conversation.closed 进 PG Outbox（与关闭同事务），
+            # 广播由 relay 异步完成；WS event name 不变。
+            from backend.customer_service.dispatch.outbox import append_event
+
+            append_event(
+                db,
+                tenant_id=row.tenant_id,
+                conversation_id=conversation_id,
+                type="conversation.closed",
+                payload={
+                    "conversation_id": conversation_id,
+                    "closed_by": agent_id,
+                },
+                handoff_id=row.handoff_id,
+                actor_user_id=agent_id,
+                now=datetime.now(timezone.utc),
+            )
+
         # L1 缓存失效（缓存 key = (user_id, session_id)，handoff 行的
         # conversation_id 即 session_id，user_id 行上有）
         from backend.customer_service.handoff_store import (
@@ -789,15 +812,6 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
         )
 
         get_handoff_store().invalidate(handoff_user_id, conversation_id)
-
-        # 广播：工作台队列摘除 + 用户侧卡片状态刷新
-        from backend.customer_service.realtime import get_agent_hub
-
-        get_agent_hub().publish(
-            "conversation.closed",
-            conversation_id=conversation_id,
-            closed_by=agent_id,
-        )
 
         return {
             "conversation_id": conversation_id,
@@ -1393,6 +1407,8 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
     P3 事务统一：整个用例一个事务（begin → 退出提交/异常回滚），
     分支内不再手写 commit。
     """
+    from datetime import datetime, timezone
+
     from sqlalchemy import select, update
 
     from backend.customer_service.models.handoff import CSHandoff
@@ -1401,7 +1417,12 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
     async with AsyncSessionLocal() as db, db.begin():
         row = (
             await db.execute(
-                select(CSHandoff.conversation_id, CSHandoff.user_id, CSHandoff.handoff_state)
+                select(
+                    CSHandoff.conversation_id,
+                    CSHandoff.user_id,
+                    CSHandoff.handoff_state,
+                    CSHandoff.tenant_id,
+                )
                 .where(
                     CSHandoff.conversation_id == conversation_id,
                     CSHandoff.handoff_state != "closed",
@@ -1498,20 +1519,28 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
             conversation_id, agent_id, assigned_by=agent_id,
         )
 
+        # P4 事件统一：conversation.claimed 进 PG Outbox（与认领同事务），
+        # 广播由 relay 异步完成；WS event name 不变。
+        from backend.customer_service.dispatch.outbox import append_event
+
+        append_event(
+            db,
+            tenant_id=row.tenant_id,
+            conversation_id=conversation_id,
+            type="conversation.claimed",
+            payload={
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+            },
+            actor_user_id=agent_id,
+            now=datetime.now(timezone.utc),
+        )
+
     # L1 缓存失效：用户侧下个 turn 的 state loader 才能从 DB 读到
     # human_active（否则仍读缓存里的 waiting_human，回复话术滞后一档）。
     from backend.customer_service.handoff_store import get_handoff_store
 
     get_handoff_store().invalidate(handoff_user_id, conversation_id)
-
-    # 广播：其他坐席队列摘除该会话 / 用户侧卡片切「人工已接入」。
-    from backend.customer_service.realtime import get_agent_hub
-
-    get_agent_hub().publish(
-        "conversation.claimed",
-        conversation_id=conversation_id,
-        agent_id=agent_id,
-    )
 
     return {
         "conversation_id": conversation_id,
@@ -1522,6 +1551,8 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
 
 
 async def _async_agent_message(conversation_id: str, agent_id: str, content: str, run_sync):
+    from datetime import datetime, timezone
+
     from sqlalchemy import select
 
     from backend.customer_service.models.handoff import CSHandoff
@@ -1572,15 +1603,23 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
         }
         msg_pk = msg.id
 
-    # 广播：坐席消息实时推给用户侧/其他坐席订阅（last_id 作增量游标）
-    from backend.customer_service.realtime import get_agent_hub
+        # P4 事件统一：message.created 进 PG Outbox（与消息落库同事务），
+        # 广播由 relay 异步完成；WS event name / payload 不变。
+        from backend.customer_service.dispatch.outbox import append_event
 
-    get_agent_hub().publish(
-        "message.created",
-        conversation_id=conversation_id,
-        last_id=msg_pk,
-        message=msg_payload,
-    )
+        append_event(
+            db,
+            tenant_id=row.tenant_id,
+            conversation_id=conversation_id,
+            type="message.created",
+            payload={
+                "conversation_id": conversation_id,
+                "last_id": msg_pk,
+                "message": msg_payload,
+            },
+            actor_user_id=agent_id,
+            now=datetime.now(timezone.utc),
+        )
 
     return AgentMessageResponse(
         message_id=msg.message_id,
