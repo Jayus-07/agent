@@ -70,7 +70,12 @@ export function useSSE() {
             `## ${evt.data.message}`,
             sessionId,
           )
-          setLoading(false)
+          // #19：error 帧后主动断开——后端可能不再发后续帧（连接悬挂）
+          controller.abort()
+          // #7：闭包比对——期间已发起新请求时不得清掉新请求的状态
+          if (useChatStore.getState().currentRequestId === requestId) {
+            setLoading(false)
+          }
           return
         }
 
@@ -105,7 +110,9 @@ export function useSSE() {
       }
     } catch (err: any) {
       if (controller.signal.aborted) return
-      setError(err.message || '请求失败')
+      // #22：存原始异常对象（带 status/kind），对齐 frontend 版——存字符串会丢
+      // status/code/retryable，errors.ts 码表在 admin 全失效
+      setError(err)
       // 保留已显示内容，不清空
       const finalState = useChatStore.getState()
       if (finalState.deltaText) {
@@ -120,8 +127,12 @@ export function useSSE() {
         )
       }
     } finally {
-      setLoading(false)
-      setCurrentRequestId(null)
+      // #7：闭包比对——stop A 后立即发 B 时，A 的 finally 异步到达会清掉
+      // B 的 loading / currentRequestId。只有自己仍是当前请求时才清态。
+      if (useChatStore.getState().currentRequestId === requestId) {
+        setLoading(false)
+        setCurrentRequestId(null)
+      }
     }
   }, [])
 

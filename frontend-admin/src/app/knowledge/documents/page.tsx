@@ -105,10 +105,16 @@ export default function DocumentsPage() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    const { id } = deleteTarget
+    const { id, name } = deleteTarget
     setDeleteTarget(null)
-    await knowledgeService.deleteDocument(id)
-    refresh()
+    // #21：补 try/catch + toast——此前失败成 unhandled rejection，无提示、不刷新
+    try {
+      await knowledgeService.deleteDocument(id)
+      toast.success(`已删除「${name}」`)
+      refresh()
+    } catch (err) {
+      toast.error(`删除「${name}」失败：${err instanceof Error ? err.message : '未知错误'}`)
+    }
   }
 
   const handleReindex = async (id: string) => {
