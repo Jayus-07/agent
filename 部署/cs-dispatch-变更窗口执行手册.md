@@ -112,7 +112,16 @@ python scripts/cs_dispatch_chaos.py --target dispatcher --apply
 |---|---|---|
 | 028/029 共享库部署 | ✅ **已执行**（2026-09-21 04:12，操作人 `workbuddy-20260921T0411`，低峰窗口） | 执行前预检 `cs-dispatch-migrate-preflight-20260921T041116.json`（PENDING_DEPLOY，风险项全 N/A）；备份 `backup-pre-028-029.sql`（475KB，customer_service+auth 双 schema，容器 `/tmp` 与 worktree 根各一份）；执行后复核 `cs-dispatch-migrate-apply-20260921T041215.json`（**ALL_APPLIED**）；人工抽查 handoffs 新列 5/5、`auth.rbac_audits` 建表、`auth.users` 补 version/tenant_id；存量数据零降级（assignments 仅 1 条 released）、共享后端 /health 正常 |
 | 网关挂载压测 | 未执行（待隔离环境） | 2026-09-20 误压已终止，无残留进程 |
-| 容器级故障演练 | dispatcher 受控项就绪（dispatcher shadow 已启动）；Redis/PG/API 停启演练待窗口 | chaos 只读预检 `cs-dispatch-chaos-20260920T202023.json`（⚠️ 该脚本读 `.env` 默认连本机 `localhost:5432/demo`，对共享库跑必须显式覆盖 `PGHOST=127.0.0.1 PGPORT=5433 PGDATABASE=agent_memory`，否则误报 028 未应用） |
+| 容器级故障演练 | ✅ dispatcher 受控项**已执行**（2026-09-21 12:01）：stop→心跳 40s 内过期 →start→两副本 healthy、心跳恢复（脚本 10s 检查窗判 False 系冷启动 ~25s 慢于窗口，实测自愈成功）；Redis/PG/API 停启演练仍待窗口 | `cs-dispatch-chaos-20260921T040131.json`；⚠️ 脚本 compose 调用须加 `COMPOSE_PROJECT_NAME=agent`（容器属 agent project，worktree 默认 project 名不同会停不中）；其 `.env` 连错库问题同前 |
+
+## 运行时收口（2026-09-21 上午）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 分支合 main | ✅ 合并提交 `a1eaa7a`（3 冲突全保双：router.py import 并集、gateway-auth.lua 注释融合、navConfig.tsx 取并集；46 路由模块文件全存在、include 引用零缺失） | `git log main -1` |
+| app 镜像重建 + recreate | ✅ 11:52–11:54，openapi 实测 `/cs/agents/me/offers`、`/cs/ops/dispatch/stats`、`/cs/handoffs` 全 OK（cs 路径 17→23），/health 正常 | 运行时缺口关闭 |
+| Prometheus 告警装载 | ✅ 重启 prometheus 后 `agent-platform-cs-dispatch` 组 6 条规则全部加载（CsNoOnlineAgents / CsPresenceUnavailableSpike critical 等） | `GET :9090/api/v1/rules` |
+| 备份文件 | ✅ 移出仓库工作区 → `D:/Program Files/workplace/backups/backup-pre-028-029-20260921.sql`（容器 `/tmp` 副本仍在） | — |
 
 ## 部署后启用进度（随窗口滚动更新）
 
