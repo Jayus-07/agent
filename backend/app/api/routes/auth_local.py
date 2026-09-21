@@ -698,6 +698,8 @@ async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)
 
     一行 = 一次设备登录（auth.sessions），refresh 轮换/多标签/页面刷新
     均不产生新行。活跃口径：revoked_at IS NULL 且 refresh_expires_at 未到。
+    排序：created_at 倒序——安全巡检页最新登录置顶（2026-09-21，原先按
+    user_id 正序导致刚登录的会话沉底，巡检时看似丢失）。
     不再扫 Redis——Redis 只是在线闸门，台账以数据库为准（Redis 故障不影响列表）。
     """
     async with _db() as session:
@@ -707,7 +709,7 @@ async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)
             "u.username, u.real_name, u.role "
             "FROM auth.sessions s JOIN auth.users u ON u.id = s.user_id "
             "WHERE s.revoked_at IS NULL AND s.refresh_expires_at > now() "
-            "ORDER BY s.user_id, s.created_at"))).mappings().all()
+            "ORDER BY s.created_at DESC, s.id"))).mappings().all()
     sessions = [{
         "sessionId": str(r["id"]),
         "userId": r["user_id"],
