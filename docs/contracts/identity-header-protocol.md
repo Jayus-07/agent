@@ -25,6 +25,13 @@
 - 仅当：黑名单未命中 + 签名/issuer/exp（60s skew）/userId/type=access 全部通过后，才注入四头。
 - 注入前先剥离 → 不存在"伪造值与真实值并存"的中间态。
 - 策略模式（`GATEWAY_AUTH_MODE`）：`shadow`/`open` 全部校验但**不注入不拦截**（只记 `gateway_auth_would_deny_total`）；`guest` 无凭据注入 `X-Auth-Type: anonymous, X-User-Id: anonymous`；`enforce` 按上述全量行为。
+- **roles claim 内容域（2026-09-21 身份接线补充）**：roles 数组除平台角色
+  （`viewer`/`editor`/`admin`）外，可含客服域角色（`agent`/`supervisor`，
+  由 py 自建 auth 在 login/refresh 时反查 `customer_service.cs_agents` 并入，
+  docstring 见 `auth_local.py::_jwt_roles`）。两个角色空间互不相通：
+  网关角色闸中客服域规则用 any_of 白名单匹配，**不参与** viewer/editor/admin
+  的 rank 比较；后端 `resolve_operator_role` 的 `_highest_known_role` 按已知
+  集合过滤，未知角色自动忽略。
 
 ## 4. 上游消费规则（FastAPI）
 

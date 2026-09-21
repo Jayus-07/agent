@@ -266,6 +266,13 @@ local ROLE_GATE_PREFIXES = {
     -- require_admin_operator 仍保留，双层分工）。api-key 通道无 roles，
     -- 按既有设计不在此拦，由后端统一守卫判定
     ["/api/observability/gateway"] = { read = "admin", write = "admin" },
+    -- 客服端（2026-09-21 三端拆分 + 身份接线）：/api/cs/* 仅限平台 admin
+    -- 与客服域角色（cs_agents.role=agent/supervisor，登录/刷新时并入 JWT
+    -- roles claim）。any_of 语义：命中任一角色即放行，**不走 ROLE_RANK**
+    -- —— 坐席不是平台 editor，不得借此通过 /api/prompts 等其他闸。
+    -- api-key 通道无 roles，按既有设计不在此拦，由后端守卫判定；
+    -- /ws/cs/* 是 ticket 一次性鉴权（无 JWT 可验），不在本闸范围。
+    ["/api/cs"] = { any_of = { admin = true, supervisor = true, agent = true } },
 }
 
 local function role_gate(uri, method, roles)
@@ -278,6 +285,17 @@ local function role_gate(uri, method, roles)
     end
     if not rule then
         return nil
+    end
+    -- any_of 规则（2026-09-21 客服域角色）：白名单命中即放行，不参与 rank
+    -- 比较 —— agent/supervisor 与 viewer/editor/admin 是两个互不相通的
+    -- 角色空间，混进同一 rank 表会让坐席获得平台写权限。
+    if rule.any_of then
+        for _, r in ipairs(roles or {}) do
+            if rule.any_of[r] then
+                return nil
+            end
+        end
+        return "role-insufficient"
     end
     -- ⚠️ 不能写 `READ_METHODS[method] and rule.read or rule.write`：
     -- Lua 的 and-or 在 rule.read 为 nil 时会落到 rule.write，把读也拦掉（矩阵实测踩坑）

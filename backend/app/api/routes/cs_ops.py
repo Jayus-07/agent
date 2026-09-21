@@ -9,18 +9,36 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.customer_service.dispatch import repository
 from backend.memory.database import AsyncSessionLocal, MemoryDatabaseUnavailable
 
 router = APIRouter(tags=["智能客服-派单运营"])
 
 
+async def require_cs_supervisor(request: Request):
+    """派单运营快照权限闸（2026-09-21 客服端身份接线）。
+
+    允许两档：平台 admin（auth.users.role）与客服主管
+    （cs_agents.role=supervisor，经 JWT roles claim → 网关 X-User-Roles
+    注入，客户端不可伪造）。api-key 服务通道不映射用户身份，一律 403，
+    与 deps.require_admin_user 的 kind 语义一致。
+    """
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    if ident.authenticated and ({"admin", "supervisor"} & set(ident.roles)):
+        return ident
+    raise HTTPException(
+        403, detail="派单运营快照仅限管理员或客服主管（supervisor）访问",
+    )
+
+
 @router.get("/cs/ops/dispatch/stats")
 async def dispatch_stats(
-    _operator: OperatorIdentity = Depends(require_admin_user),
+    request: Request,
+    _operator=Depends(require_cs_supervisor),
 ):
     """派单域运营快照（管理员）。
 

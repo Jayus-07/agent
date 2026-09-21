@@ -85,11 +85,21 @@ def _is_service_channel(request: Request) -> bool:
     return (request.headers.get(AUTH_TYPE_HEADER) or "").strip().lower() == "api-key"
 
 
+_CS_OPERATOR_ROLES = frozenset({"admin", "supervisor", "agent"})
+
+
 def _is_cs_operator(request: Request) -> bool:
     """判断请求是否来自客服工作台操作者。
 
-    工作台在管理端只对 admin 角色开放；服务间 API-Key 由网关和 BFF
-    共同保护。普通客户 JWT 即使已登录，也不能读取他人的客服会话。
+    2026-09-21 客服端身份接线后开放两档：
+    - 平台 admin（auth.users.role，历史语义：管理端时期的运营兜底）；
+    - 客服域角色 agent/supervisor —— login/refresh 时由 _jwt_roles 并入
+      JWT roles claim，经网关注入 X-User-Roles，此处只认头、不信客户端。
+      坐席账号（平台角色 viewer/editor）由此可以进入坐席工作台。
+
+    服务间 API-Key 由网关和 BFF 共同保护。普通客户 JWT 即使已登录
+    （roles 无客服域角色），也不能读取他人的客服会话；写操作另经
+    _resolve_agent_identity 强校验 cs_agents 绑定。
     """
     if _is_service_channel(request):
         return True
@@ -97,7 +107,7 @@ def _is_cs_operator(request: Request) -> bool:
     from backend.app.api.identity import resolve_identity
 
     ident = resolve_identity(request)
-    return ident.authenticated and "admin" in ident.roles
+    return ident.authenticated and bool(_CS_OPERATOR_ROLES & set(ident.roles))
 
 
 def _require_cs_operator(request: Request) -> None:

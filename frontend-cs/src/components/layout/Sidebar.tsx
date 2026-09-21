@@ -51,6 +51,13 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
         {groups.map(g => (
           <NavGroup key={g.path || g.label} {...g} collapsed={false} />
         ))}
+        {/* 2026-09-21 身份接线：未绑定坐席的账号导航为空，给出明确指引 */}
+        {mounted && groups.length === 0 && (
+          <p className="px-2 py-4 text-xs text-text-muted leading-relaxed">
+            当前账号未绑定客服坐席（或坐席已停用）。
+            <br />请联系管理员在「访问控制」中完成绑定。
+          </p>
+        )}
       </nav>
 
       {/* 底部 */}

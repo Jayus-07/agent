@@ -184,6 +184,26 @@ def _user_info(row) -> dict:
     }
 
 
+def _jwt_roles(row) -> list[str]:
+    """JWT roles claim：平台角色 + 客服域角色（2026-09-21 客服端身份接线）。
+
+    此前 roles claim 只放 auth.users.role，cs_role（_enrich_user_row 反查
+    customer_service.cs_agents 所得）只进响应体不进 token —— 网关按 claim
+    注入的 X-User-Roles 与 /api/cs 角色闸因此看不到客服角色，坐席账号
+    （平台角色 viewer/editor）进不了坐席工作台。本函数把 cs_role 并入
+    roles claim，login 与 refresh（含宽限期补发）三处签发点统一走它。
+
+    命名沿用 cs_agents.role 原值（agent/supervisor），与平台三枚举
+    （viewer/editor/admin）无交集：后端 _highest_known_role 与网关
+    ROLE_RANK 都按「已知集合」过滤，未知角色自动忽略，对既有消费者零回归。
+    """
+    roles = [row.get("role") or "viewer"]
+    cs = row.get("cs_role")
+    if cs in ("agent", "supervisor"):
+        roles.append(cs)
+    return roles
+
+
 def _blacklist_access(token: str) -> bool:
     """logout 黑名单写入（尽力而为）。返回是否写入成功。"""
     ttl = token_ttl_seconds(token)
@@ -443,7 +463,7 @@ async def refresh(request: Request, response: Response):
         await session.commit()
 
     issued = issue_access_token(user_id=row["user_id"], username=row["username"],
-                                dept=row["dept"], roles=[row["role"]],
+                                dept=row["dept"], roles=_jwt_roles(row),
                                 tenant_id=row["tenant_id"],
                                 session_id=sid)
     _write_session(issued)

@@ -4,7 +4,7 @@
  * 2026-09-21 三端拆分：客服端只承载智能客服域，平台治理类入口
  * 全部留在管理端、业务对话留在用户端，两边都不得回渗。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { NAV, visibleNav } from './navConfig'
 
 const allPaths = NAV.flatMap((e) => [e.path, ...(e.items ?? []).map((i) => i.path)]).filter(
@@ -61,13 +61,39 @@ describe('NAV — 导航配置完整性', () => {
   })
 })
 
-describe('visibleNav — 角色过滤', () => {
-  it('baseline 返回无门槛全量菜单', () => {
-    expect(visibleNav(true).length).toBe(NAV.length)
+describe('visibleNav — 角色过滤（2026-09-21 csRole 接线）', () => {
+  /** 写入 sessionStorage 的登录缓存（getCsRole 从这里读） */
+  function loginAs(userInfo: Record<string, unknown>): void {
+    sessionStorage.setItem('agent.user_info', JSON.stringify(userInfo))
+  }
+
+  afterEach(() => {
+    sessionStorage.clear()
   })
 
-  it('MVP 阶段无 minRole，过滤后仍为全量', () => {
-    expect(NAV.every((e) => !e.minRole)).toBe(true)
-    expect(visibleNav().length).toBe(NAV.length)
+  it('baseline 返回无门槛菜单（四项均设 minCsRole → 基线为空）', () => {
+    expect(NAV.every((e) => e.minCsRole)).toBe(true)
+    expect(visibleNav(true)).toEqual([])
+  })
+
+  it('未绑定坐席（csRole 缺失）→ 导航为空', () => {
+    loginAs({ roles: ['viewer'], platformRole: 'viewer' })
+    expect(visibleNav()).toEqual([])
+  })
+
+  it('坐席（agent）→ 可见工作台/人工接入/会话管理，不可见满意度统计', () => {
+    loginAs({ roles: ['viewer', 'agent'], platformRole: 'viewer', csRole: 'agent' })
+    const labels = visibleNav().map((e) => e.label)
+    expect(labels).toEqual(['工作台', '人工接入', '会话管理'])
+  })
+
+  it('客服主管（supervisor）→ 四项全可见', () => {
+    loginAs({ roles: ['viewer', 'supervisor'], platformRole: 'viewer', csRole: 'supervisor' })
+    expect(visibleNav().map((e) => e.label)).toEqual(NAV.map((e) => e.label))
+  })
+
+  it('平台 admin 但未绑定坐席 → 导航为空（UI 层不豁免，网关 any_of 才豁免）', () => {
+    loginAs({ roles: ['admin'], platformRole: 'admin' })
+    expect(visibleNav()).toEqual([])
   })
 })
