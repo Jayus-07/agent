@@ -180,6 +180,21 @@ export async function addProviderModel(
   )
 }
 
+/** 删除自定义供应商（名下没有被角色绑定的模型即可删，未绑定模型级联删除）。
+ *
+ * 内置供应商与被角色/专项/价格占用的供应商后端返回 409，原因在错误体里，直接展示即可。
+ */
+export async function deleteProvider(providerId: string): Promise<Record<string, unknown>> {
+  return mutationRequest<Record<string, unknown>>(
+    `/api/sys/providers/${encodeURIComponent(providerId)}`,
+    {
+      operation: `model-provider-delete:${providerId}`,
+      method: 'DELETE',
+      timeout: 30000,
+    },
+  )
+}
+
 /** 移除供应商下的自建模型条目。
  *
  * 模型名走 query 参数：`Qwen/Qwen3-32B` 这类名字自带斜杠，放进路径段会被拆开。

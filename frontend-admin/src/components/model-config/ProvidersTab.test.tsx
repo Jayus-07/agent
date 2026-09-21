@@ -7,6 +7,7 @@ const apiMock = vi.hoisted(() => ({
   addProviderModel: vi.fn(),
   removeProviderModel: vi.fn(),
   saveProvider: vi.fn(),
+  deleteProvider: vi.fn(),
   verifyProvider: vi.fn(),
   verifyDraftProvider: vi.fn(),
   fetchModelCatalog: vi.fn(),
@@ -19,7 +20,7 @@ vi.mock('@/components/shared/Toast', () => ({
 }))
 
 import ProvidersTab from './ProvidersTab'
-import type { PresetPlan, ProviderPreset } from '@/types/modelConfig'
+import type { PresetPlan, ProviderPreset, ProviderRow } from '@/types/modelConfig'
 
 beforeAll(() => { (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true })
 
@@ -86,8 +87,35 @@ function mount(
   configured = false,
   specialized = false,
   catalogPresets: ProviderPreset[] = PRESETS,
-  opts: { usedByRoles?: string[]; onGoToRoles?: (role: string) => void } = {},
+  opts: {
+    usedByRoles?: string[]
+    onGoToRoles?: (role: string) => void
+    customProvider?: { id: string; displayName: string; usedByRoles?: string[] }
+  } = {},
 ) {
+  const custom = opts.customProvider
+  const customRows: ProviderRow[] = custom
+    ? [{
+        id: custom.id,
+        displayName: custom.displayName,
+        driver: 'openai',
+        baseUrl: 'https://custom.example/v1',
+        networkScope: 'public',
+        billing: 'metered',
+        isBuiltin: false,
+        enabled: true,
+        modelCount: 1,
+        modelName: custom.usedByRoles?.length ? 'bound-model' : 'free-model',
+        modelKind: 'chat',
+        models: [{
+          name: custom.usedByRoles?.length ? 'bound-model' : 'free-model',
+          modelKind: 'chat',
+          ...(custom.usedByRoles ? { usedByRoles: custom.usedByRoles } : {}),
+        }],
+        credential: { configured: true, fingerprint: 'f1', last4: 'a1b2', rotatedAt: null, rotatedBy: null },
+        lastProbe: null,
+      }]
+    : []
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -138,7 +166,7 @@ function mount(
          ],
          credential: { configured: true, fingerprint: 'abc123', last4: '1234', rotatedAt: null, rotatedBy: null },
          lastProbe: null,
-       }] : [])]}
+       }] : []), ...customRows]}
       defaultModels={{ qwen_tp: 'qwen3.7-plus@tp' }}
       source="db"
         canAdmin
@@ -988,6 +1016,95 @@ describe('ProvidersTab 列表筛选/搜索与角色占用徽标（B3）', () => 
     expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value).toBe('')
     expect(container.querySelector<HTMLInputElement>('[data-testid="provider-display-name"]')!.value)
       .toBe('我的火山主力')
+  })
+})
+
+describe('ProvidersTab 供应商删除（2026-09-21 拍板：无角色绑定即可删）', () => {
+  it('自建无绑定供应商显示可点删除按钮，确认后调用 deleteProvider 并刷新', async () => {
+    const onChanged = vi.fn(async () => undefined)
+    apiMock.deleteProvider.mockResolvedValue({
+      providerId: 'custom-host',
+      displayName: '自建供应商',
+      removedModels: ['free-model'],
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => root.render(
+      <ProvidersTab
+        providers={[{
+          id: 'custom-host',
+          displayName: '自建供应商',
+          driver: 'openai',
+          baseUrl: 'https://custom.example/v1',
+          networkScope: 'public',
+          billing: 'metered',
+          isBuiltin: false,
+          enabled: true,
+          modelCount: 1,
+          modelName: 'free-model',
+          modelKind: 'chat',
+          models: [{ name: 'free-model', modelKind: 'chat' }],
+          credential: { configured: true, fingerprint: 'f1', last4: 'a1b2', rotatedAt: null, rotatedBy: null },
+          lastProbe: null,
+        }]}
+        defaultModels={{}}
+        source="db"
+        canAdmin
+        onChanged={onChanged}
+        plans={PLANS}
+        presets={PRESETS}
+        presetsLoading={false}
+      />,
+    ))
+    mounted.push({ container, root })
+
+    const deleteButton = container.querySelector(
+      '[aria-label="删除供应商 自建供应商"]',
+    ) as HTMLButtonElement
+    expect(deleteButton).toBeTruthy()
+    expect(deleteButton.disabled).toBe(false)
+
+    await click(deleteButton)
+    // 确认弹窗出现并展示级联范围
+    const dialog = container.querySelector('[role="dialog"][aria-label="删除供应商 自建供应商"]')
+    expect(dialog).toBeTruthy()
+    expect(dialog!.textContent).toContain('未被角色绑定的模型')
+
+    await click(findButton(dialog as HTMLElement, '确认删除'))
+    expect(apiMock.deleteProvider).toHaveBeenCalledWith('custom-host')
+    expect(onChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it('名下模型被角色占用时删除按钮禁用并提示先改绑', () => {
+    const container = mount(false, false, PRESETS, {
+      customProvider: { id: 'custom-host', displayName: '自建供应商', usedByRoles: ['doc'] },
+    })
+    const deleteButton = container.querySelector(
+      '[aria-label="删除供应商 自建供应商"]',
+    ) as HTMLButtonElement
+    expect(deleteButton).toBeTruthy()
+    expect(deleteButton.disabled).toBe(true)
+    expect(deleteButton.title).toContain('改绑')
+  })
+
+  it('内置供应商不渲染删除按钮', () => {
+    const container = mount()
+    expect(container.querySelector('[aria-label="删除供应商 Qwen Token Plan"]')).toBeNull()
+  })
+
+  it('后端 409 的拒绝原因直接展示在确认弹窗内', async () => {
+    apiMock.deleteProvider.mockRejectedValue(new Error('供应商 custom-host 仍绑定在专项通道 embedding 上，不能删除'))
+    const container = mount(false, false, PRESETS, {
+      customProvider: { id: 'custom-host', displayName: '自建供应商' },
+    })
+
+    await click(container.querySelector('[aria-label="删除供应商 自建供应商"]') as HTMLButtonElement)
+    const dialog = container.querySelector('[role="dialog"][aria-label="删除供应商 自建供应商"]') as HTMLElement
+    expect(dialog).toBeTruthy()
+
+    await click(findButton(dialog, '确认删除'))
+    expect(dialog.textContent).toContain('专项通道 embedding')
   })
 })
 

@@ -1461,6 +1461,164 @@ class ModelConfigService:
             },
         )
 
+    async def delete_provider(
+        self,
+        provider_id: str,
+        operator: str,
+    ) -> dict[str, Any]:
+        """删除自定义供应商（2026-09-21 拍板：名下没有被角色绑定的模型即可删）。
+
+        守卫（全部在删除前挡住 —— 引用表没有外键，删完留悬空引用补不回来）：
+        1. 内置供应商（is_builtin）由代码目录管理，不可从管理端删除；
+        2. 名下任一模型被 `llm_model_role_bindings` 占用 → 拒绝，提示先改绑
+           （角色缺模型会让能力直接不可用）；
+        3. 名下任一模型被 `llm_specialized_model_bindings`（按 provider_id 或
+           model_name）或 `model_price` 引用 → 拒绝。
+
+        通过守卫后：名下未被绑定的 DB 模型随供应商级联删除（它们只依附于该
+        供应商），凭据行一并删除。历史记录 `object_type='provider'` 且
+        `rollbackable=false`：删除不是一次 UPDATE 能回放的，重建需要重新探测。
+        """
+        provider_id = (provider_id or "").strip()
+        if not provider_id:
+            raise ModelConfigNotFound("供应商 ID 不能为空")
+
+        deleted: dict[str, Any] | None = None
+        async for session in get_session():
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT id, display_name, driver, base_url, billing, is_builtin "
+                        "FROM llm_providers WHERE id = :provider_id"
+                    ),
+                    {"provider_id": provider_id},
+                )
+            ).mappings().first()
+            if row is None:
+                raise ModelConfigNotFound(f"供应商 {provider_id} 不存在")
+            if bool(row.get("is_builtin")):
+                raise ModelConfigConflict(
+                    f"供应商 {provider_id} 是内置供应商，由代码目录管理，不能删除"
+                )
+
+            model_rows = (
+                await session.execute(
+                    text(
+                        "SELECT name, display_name, model_kind FROM llm_models "
+                        "WHERE provider_id = :provider_id ORDER BY name"
+                    ),
+                    {"provider_id": provider_id},
+                )
+            ).mappings().all()
+            model_names = [str(item.get("name") or "") for item in model_rows]
+
+            # 守卫 2：角色绑定按 model_name 引用
+            for name in model_names:
+                role_rows = (
+                    await session.execute(
+                        text(
+                            "SELECT role FROM llm_model_role_bindings "
+                            "WHERE model_name = :model_name ORDER BY role"
+                        ),
+                        {"model_name": name},
+                    )
+                ).mappings().all()
+                if role_rows:
+                    roles = "、".join(str(item.get("role")) for item in role_rows)
+                    raise ModelConfigConflict(
+                        f"供应商 {provider_id} 的模型 {name} 正被角色 {roles} 使用，"
+                        "不能删除；请先在「角色绑定」里改绑到其他模型"
+                    )
+
+            # 守卫 3a：专项绑定按 provider_id 或 model_name 引用
+            specialized_sql = (
+                "SELECT role FROM llm_specialized_model_bindings "
+                "WHERE provider_id = :provider_id"
+            )
+            specialized_params: dict[str, Any] = {"provider_id": provider_id}
+            if model_names:
+                # asyncpg 对空序列的 ANY() 推断不了元素类型，无模型时跳过该分支
+                specialized_sql += " OR model_name = ANY(:model_names)"
+                specialized_params["model_names"] = model_names
+            specialized_rows = (
+                await session.execute(text(specialized_sql + " ORDER BY role"), specialized_params)
+            ).mappings().all()
+            if specialized_rows:
+                roles = "、".join(
+                    sorted({str(item.get("role")) for item in specialized_rows})
+                )
+                raise ModelConfigConflict(
+                    f"供应商 {provider_id} 仍绑定在专项通道 {roles} 上，不能删除；"
+                    "请先在管理端把这些专项角色改绑到其他供应商"
+                )
+
+            # 守卫 3b：价格表按 model_name 引用
+            if model_names:
+                price_rows = (
+                    await session.execute(
+                        text(
+                            "SELECT model_name FROM model_price "
+                            "WHERE model_name = ANY(:model_names) LIMIT 5"
+                        ),
+                        {"model_names": model_names},
+                    )
+                ).mappings().all()
+                if price_rows:
+                    names = "、".join(
+                        str(item.get("model_name")) for item in price_rows
+                    )
+                    raise ModelConfigConflict(
+                        f"供应商 {provider_id} 的模型 {names} 仍配置了价格表，"
+                        "请先清除价格后再删除"
+                    )
+
+            await session.execute(
+                text("DELETE FROM llm_models WHERE provider_id = :provider_id"),
+                {"provider_id": provider_id},
+            )
+            await session.execute(
+                text(
+                    "DELETE FROM llm_provider_credentials WHERE provider_id = :provider_id"
+                ),
+                {"provider_id": provider_id},
+            )
+            await session.execute(
+                text("DELETE FROM llm_providers WHERE id = :provider_id"),
+                {"provider_id": provider_id},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO llm_config_history "
+                    "(object_type, object_key, old_value, new_value, operator, rollbackable) "
+                    "VALUES ('provider', :key, :old_value, NULL, :operator, false)"
+                ),
+                {
+                    "key": provider_id,
+                    "old_value": _json_value(
+                        {
+                            "deleted": True,
+                            "displayName": row.get("display_name") or provider_id,
+                            "driver": str(row.get("driver") or ""),
+                            "baseUrl": str(row.get("base_url") or ""),
+                            "billing": str(row.get("billing") or "metered"),
+                            "removedModels": model_names,
+                        }
+                    ),
+                    "operator": operator,
+                },
+            )
+            await session.commit()
+            deleted = {
+                "providerId": provider_id,
+                "displayName": row.get("display_name") or provider_id,
+                "removedModels": model_names,
+            }
+            break
+
+        await registry_store.refresh_registry()
+        assert deleted is not None
+        return deleted
+
     async def record_probe(self, provider_id: str, result: Mapping[str, Any]) -> None:
         """保存最后一次探测结论；探测接口本身不因审计表故障而失败。"""
         try:

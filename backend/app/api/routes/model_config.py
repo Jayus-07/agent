@@ -190,6 +190,23 @@ async def create_provider(
         raise _error(exc) from exc
 
 
+@router.delete("/sys/providers/{provider_id}")
+async def delete_provider(
+    provider_id: str,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict[str, Any]:
+    """删除自定义供应商（名下没有被角色绑定的模型即可删，未绑定模型级联删除）。
+
+    内置供应商与被角色/专项/价格占用的供应商后端返回 409，原因在错误体里。
+    """
+    require_idempotency_key(request)
+    try:
+        return await _service(request).delete_provider(provider_id, operator.actor)
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 @router.post("/sys/providers/{provider_id}/models")
 async def add_provider_model(
     provider_id: str,

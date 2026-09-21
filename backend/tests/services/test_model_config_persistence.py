@@ -257,3 +257,168 @@ async def test_create_provider_claims_same_model_from_legacy_specialized_provide
     assert any("UPDATE llm_specialized_model_bindings" in sql for sql in session.statements)
     assert session.commit_count == 1
     refresh.assert_awaited_once()
+
+
+# ── delete_provider（2026-09-21 拍板：名下没有被角色绑定的模型即可删）───────
+
+
+class _Mappings:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+
+class _DeleteExec:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return _Mappings(self._rows)
+
+
+class _DeleteSession:
+    """按语句关键字路由返回值的假会话，并记录全部 SQL。"""
+
+    def __init__(self, provider_row, model_rows=(), role_rows=(),
+                 specialized_rows=(), price_rows=()):
+        self.provider_row = provider_row
+        self.model_rows = list(model_rows)
+        self.role_rows = list(role_rows)
+        self.specialized_rows = list(specialized_rows)
+        self.price_rows = list(price_rows)
+        self.statements: list[str] = []
+        self.commit_count = 0
+
+    async def execute(self, statement, _params=None):
+        sql = str(statement)
+        self.statements.append(sql)
+        if "FROM llm_providers WHERE id" in sql:
+            return _DeleteExec([self.provider_row] if self.provider_row else [])
+        if "FROM llm_models WHERE provider_id" in sql:
+            return _DeleteExec(self.model_rows)
+        if "FROM llm_model_role_bindings" in sql:
+            return _DeleteExec(self.role_rows)
+        if "FROM llm_specialized_model_bindings" in sql:
+            return _DeleteExec(self.specialized_rows)
+        if "FROM model_price" in sql:
+            return _DeleteExec(self.price_rows)
+        return _DeleteExec([])
+
+    async def commit(self):
+        self.commit_count += 1
+
+
+def _provider_row(**overrides):
+    row = {
+        "id": "custom-host",
+        "display_name": "自建供应商",
+        "driver": "openai",
+        "base_url": "https://custom.example/v1",
+        "billing": "metered",
+        "is_builtin": False,
+    }
+    row.update(overrides)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_cascades_unbound_models_and_credentials(monkeypatch):
+    """无角色绑定的自建供应商可删：模型、凭据、供应商行级联清除并刷新快照。"""
+    session = _DeleteSession(
+        provider_row=_provider_row(),
+        model_rows=[{"name": "custom-chat", "display_name": "自建模型", "model_kind": "chat"}],
+    )
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))
+    monkeypatch.setattr(model_config.registry_store, "refresh_registry", refresh)
+
+    result = await model_config.ModelConfigService().delete_provider(
+        "custom-host", "user:test-admin"
+    )
+
+    assert result["providerId"] == "custom-host"
+    assert result["removedModels"] == ["custom-chat"]
+    assert any("DELETE FROM llm_models" in sql for sql in session.statements)
+    assert any("DELETE FROM llm_provider_credentials" in sql for sql in session.statements)
+    assert any("DELETE FROM llm_providers" in sql for sql in session.statements)
+    assert any("INSERT INTO llm_config_history" in sql for sql in session.statements)
+    assert session.commit_count == 1
+    refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_rejects_when_role_binding_uses_model(monkeypatch):
+    """名下模型被普通角色绑定时拒绝删除，提示先改绑。"""
+    session = _DeleteSession(
+        provider_row=_provider_row(),
+        model_rows=[{"name": "custom-chat", "display_name": "自建模型", "model_kind": "chat"}],
+        role_rows=[{"role": "main"}],
+    )
+    monkeypatch.setattr(
+        model_config, "get_session", lambda: _session_stream(session)
+    )
+    monkeypatch.setattr(
+        model_config.registry_store, "refresh_registry", AsyncMock(return_value=True)
+    )
+
+    with pytest.raises(model_config.ModelConfigConflict, match="main"):
+        await model_config.ModelConfigService().delete_provider(
+            "custom-host", "user:test-admin"
+        )
+    assert not any(
+        "DELETE FROM llm_providers" in sql for sql in session.statements
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_rejects_builtin_and_specialized(monkeypatch):
+    """内置供应商一律拒删；专项通道占用（按 provider_id 命中）同样拒删。"""
+    monkeypatch.setattr(
+        model_config.registry_store, "refresh_registry", AsyncMock(return_value=True)
+    )
+
+    builtin_session = _DeleteSession(provider_row=_provider_row(is_builtin=True))
+    monkeypatch.setattr(
+        model_config, "get_session", lambda: _session_stream(builtin_session)
+    )
+    with pytest.raises(model_config.ModelConfigConflict, match="内置"):
+        await model_config.ModelConfigService().delete_provider(
+            "qwen", "user:test-admin"
+        )
+
+    specialized_session = _DeleteSession(
+        provider_row=_provider_row(id="specialized-api"),
+        model_rows=[{"name": "qwen3.7-text-embedding", "display_name": "向量", "model_kind": "embedding"}],
+        specialized_rows=[{"role": "embedding"}],
+    )
+    monkeypatch.setattr(
+        model_config, "get_session", lambda: _session_stream(specialized_session)
+    )
+    with pytest.raises(model_config.ModelConfigConflict, match="专项通道"):
+        await model_config.ModelConfigService().delete_provider(
+            "specialized-api", "user:test-admin"
+        )
+    assert not any(
+        "DELETE FROM llm_providers" in sql for sql in specialized_session.statements
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_rejects_unknown_provider(monkeypatch):
+    session = _DeleteSession(provider_row=None)
+    monkeypatch.setattr(
+        model_config, "get_session", lambda: _session_stream(session)
+    )
+    monkeypatch.setattr(
+        model_config.registry_store, "refresh_registry", AsyncMock(return_value=True)
+    )
+
+    with pytest.raises(model_config.ModelConfigNotFound):
+        await model_config.ModelConfigService().delete_provider(
+            "ghost", "user:test-admin"
+        )

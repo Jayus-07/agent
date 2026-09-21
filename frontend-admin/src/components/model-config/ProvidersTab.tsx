@@ -16,6 +16,7 @@ import {
   createProvider,
   removeProviderModel,
   saveProvider,
+  deleteProvider,
   verifyDraftProvider,
   verifyProvider,
   type ProbeMode,
@@ -75,6 +76,11 @@ export default function ProvidersTab({
   const [editing, setEditing] = useState<Draft | null>(null)
   const [addingModel, setAddingModel] = useState<ModelDraft | null>(null)
   const [removingModel, setRemovingModel] = useState<ModelRemoval | null>(null)
+  const [deletingProvider, setDeletingProvider] = useState<{
+    row: ProviderRow
+    busy: boolean
+    error: string | null
+  } | null>(null)
   const [modelBusy, setModelBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [probeResults, setProbeResults] = useState<Record<string, ProbeResponse>>({})
@@ -206,6 +212,40 @@ export default function ProvidersTab({
       // 不弹 toast：409 的原因（被哪个角色占用）就在弹窗里，用户要能对着看
       const message = error instanceof Error ? error.message : '移除模型失败'
       setRemovingModel({ ...removingModel, busy: false, error: message })
+    }
+  }
+
+  /** 供应商删除阻断原因；null 表示可删（2026-09-21 拍板：名下没有被角色
+   *  绑定的模型即可删，未绑定模型与凭据由后端级联处理）。 */
+  function providerDeleteBlockReason(row: ProviderRow): string | null {
+    if (row.isBuiltin) return '内置供应商由代码目录管理，不能删除'
+    const bound = (row.models ?? []).filter((model) => (model.usedByRoles?.length ?? 0) > 0)
+    if (bound.length > 0) {
+      const detail = bound
+        .map((model) => `${model.name}（${model.usedByRoles!.join('、')}）`)
+        .join('、')
+      return `模型 ${detail} 正被角色占用，删除前请先在「模型角色」页改绑`
+    }
+    return null
+  }
+
+  function beginDeleteProvider(row: ProviderRow) {
+    setDeletingProvider({ row, busy: false, error: null })
+  }
+
+  async function confirmDeleteProvider() {
+    if (!deletingProvider) return
+    setDeletingProvider({ ...deletingProvider, busy: true, error: null })
+    try {
+      const result = await deleteProvider(deletingProvider.row.id)
+      const removed = Array.isArray(result.removedModels) ? result.removedModels.length : 0
+      toast.success(`已删除供应商 ${deletingProvider.row.displayName}${removed ? `（连带移除 ${removed} 个未绑定模型）` : ''}`)
+      setDeletingProvider(null)
+      await onChanged()
+    } catch (error) {
+      // 不弹 toast：409 的原因（被哪个角色/专项占用）就在弹窗里，用户要能对着看
+      const message = error instanceof Error ? error.message : '删除供应商失败'
+      setDeletingProvider({ ...deletingProvider, busy: false, error: message })
     }
   }
 
@@ -518,6 +558,20 @@ export default function ProvidersTab({
                     <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'fast') }} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-text-secondary disabled:opacity-40"><FlaskConical size={12} />{isTesting && testingMode === 'fast' ? `测试中 ${formatLiveElapsed(testingElapsedMs)}` : '测试'}</button>
                     <button disabled={!canAdmin || busy || source !== 'db'} onClick={() => { void testSaved(row, 'full') }} className="flex items-center gap-1 rounded-lg border border-accent/20 px-2.5 py-1.5 text-[11px] text-accent disabled:opacity-40">{isTesting && testingMode === 'full' ? `完整测试中 ${formatLiveElapsed(testingElapsedMs)}` : '完整测试'}</button>
                     {canAdmin && source === 'db' && <><button onClick={() => beginAddModel(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Plus size={12} />新增模型</button><button onClick={() => begin(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Edit3 size={12} />编辑</button></>}
+                    {canAdmin && source === 'db' && !row.isBuiltin && (() => {
+                      const deleteBlock = providerDeleteBlockReason(row)
+                      return (
+                        <button
+                          disabled={Boolean(deleteBlock)}
+                          title={deleteBlock ?? '删除该供应商及其未被绑定的模型与托管密钥'}
+                          aria-label={`删除供应商 ${row.displayName}`}
+                          onClick={() => beginDeleteProvider(row)}
+                          className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                          <Trash2 size={12} />删除
+                        </button>
+                      )
+                    })()}
                   </div>
                 </div>
 
@@ -622,6 +676,33 @@ export default function ProvidersTab({
             <div className="mt-5 flex justify-end gap-2">
               <button disabled={removingModel.busy} onClick={() => setRemovingModel(null)} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
               <button disabled={removingModel.busy} onClick={() => { void confirmRemoveModel() }} className="flex items-center gap-1 rounded-lg bg-red-700 px-3 py-2 text-xs text-white disabled:opacity-50"><Trash2 size={13} />{removingModel.busy ? '移除中…' : '确认移除'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deletingProvider && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" role="dialog" aria-modal="true" aria-label={`删除供应商 ${deletingProvider.row.displayName}`}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Trash2 size={15} className="text-red-700" />删除供应商</div>
+                <p className="mt-1 font-mono text-[11px] text-text-muted">{deletingProvider.row.id}</p>
+              </div>
+              <button onClick={() => setDeletingProvider(null)} className="text-text-muted hover:text-text-primary" aria-label="关闭"><X size={16} /></button>
+            </div>
+            <div className="mt-5 space-y-3">
+              <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                <span className="text-sm font-medium text-text-primary">{deletingProvider.row.displayName}</span>
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-text-muted">{deletingProvider.row.isBuiltin ? '内置' : '自建'}</span>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                将删除该供应商、其托管密钥及名下 {(deletingProvider.row.models ?? []).length} 个未被角色绑定的模型。若名下模型仍被角色/专项通道/价格表引用，后端会拒绝并说明原因，不会留下悬空引用。
+              </div>
+              {deletingProvider.error && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{deletingProvider.error}</div>}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button disabled={deletingProvider.busy} onClick={() => setDeletingProvider(null)} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
+              <button disabled={deletingProvider.busy} onClick={() => { void confirmDeleteProvider() }} className="flex items-center gap-1 rounded-lg bg-red-700 px-3 py-2 text-xs text-white disabled:opacity-50"><Trash2 size={13} />{deletingProvider.busy ? '删除中…' : '确认删除'}</button>
             </div>
           </div>
         </div>
