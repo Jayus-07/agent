@@ -440,7 +440,9 @@ async def rate_conversation(conversation_id: str, body: RatingRequest, request: 
         from backend.customer_service.models.conversation import CSConversation
         from backend.memory.database import AsyncSessionLocal
 
-        async with AsyncSessionLocal() as db:
+        # P3 事务统一（2026-09-21）：route 持有事务（begin → block 退出提交，
+        # 异常回滚），不再手写 commit。
+        async with AsyncSessionLocal() as db, db.begin():
             conv = (
                 await db.execute(
                     select(CSConversation).where(
@@ -459,7 +461,6 @@ async def rate_conversation(conversation_id: str, body: RatingRequest, request: 
             conv.rated_at = datetime.now(timezone.utc)
             # commit 后实例过期，作用域外不可再访问（同 close 端点的处理）
             rated_at_iso = conv.rated_at.isoformat()
-            await db.commit()
 
         # 广播给坐席工作台（会话列表角标实时刷新）
         try:
@@ -717,7 +718,8 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
         from backend.customer_service.models.handoff import CSHandoff
         from backend.memory.database import AsyncSessionLocal
 
-        async with AsyncSessionLocal() as db:
+        # P3 事务统一：route 持有事务（同 rating 端点注释）。
+        async with AsyncSessionLocal() as db, db.begin():
             row = (
                 await db.execute(
                     select(CSHandoff).where(
@@ -779,7 +781,6 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
                 )
                 .values(unassigned_at=datetime.now(timezone.utc))
             )
-            await db.commit()
 
         # L1 缓存失效（缓存 key = (user_id, session_id)，handoff 行的
         # conversation_id 即 session_id，user_id 行上有）
@@ -1387,13 +1388,17 @@ async def _load_assigned_agent_id(db, conversation_id: str) -> str | None:
 
 
 async def _async_claim(conversation_id: str, agent_id: str, run_sync):
-    """认领会话并同步写入 handoff、conversation、assignment 三处状态。"""
+    """认领会话并同步写入 handoff、conversation、assignment 三处状态。
+
+    P3 事务统一：整个用例一个事务（begin → 退出提交/异常回滚），
+    分支内不再手写 commit。
+    """
     from sqlalchemy import select, update
 
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
 
-    async with AsyncSessionLocal() as db:
+    async with AsyncSessionLocal() as db, db.begin():
         row = (
             await db.execute(
                 select(CSHandoff.conversation_id, CSHandoff.user_id, CSHandoff.handoff_state)
@@ -1425,7 +1430,6 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                 await conv_mgr.assign_agent(
                     conversation_id, agent_id, assigned_by=agent_id,
                 )
-                await db.commit()
             return {
                 "conversation_id": conversation_id,
                 "handoff_state": current_state,
@@ -1493,7 +1497,6 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
         await conv_mgr.escalate_to_human(
             conversation_id, agent_id, assigned_by=agent_id,
         )
-        await db.commit()
 
     # L1 缓存失效：用户侧下个 turn 的 state loader 才能从 DB 读到
     # human_active（否则仍读缓存里的 waiting_human，回复话术滞后一档）。
@@ -1524,7 +1527,8 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
 
-    async with AsyncSessionLocal() as db:
+    # P3 事务统一：route 持有事务（begin → block 退出提交，异常回滚）
+    async with AsyncSessionLocal() as db, db.begin():
         result = await db.execute(
             select(CSHandoff).where(
                 CSHandoff.conversation_id == conversation_id,
@@ -1555,9 +1559,8 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
         msg = await mgr.save_human_agent_message(
             conversation_id, content, sender_id=agent_id
         )
-        await db.commit()
 
-        # 会话关闭前捕获字段（commit 后实例过期，退出作用域后不可再访问）
+        # 提交前捕获字段（session expire_on_commit=False，此处为防御式快照）
         msg_payload = {
             "message_id": msg.message_id,
             "sender_type": msg.sender_type,

@@ -198,7 +198,8 @@ async def test_accept_binds_agent_and_switches_to_human_active(
     assert events[0].payload["agent_id"] == "agent-1"
     assert events[0].payload["assignment_version"] == 3
 
-    assert scenario.session.records == ["begin", "flush", "commit"]
+    # P3 事务统一：服务层只 flush（begin/commit 由 route 持有）
+    assert scenario.session.records == ["flush"]
 
 
 async def test_accept_by_another_agent_is_forbidden(scenario: Scenario) -> None:
@@ -212,7 +213,8 @@ async def test_accept_by_another_agent_is_forbidden(scenario: Scenario) -> None:
             now=NOW,
         )
     assert scenario.handoff.handoff_state == "agent_offered"
-    assert scenario.session.records[-1] == "rollback"
+    # P3 事务统一：服务层只做业务判定（flush 未达），回滚由 route 事务负责
+    assert scenario.session.records == []
 
 
 async def test_accept_with_stale_version_is_rejected(scenario: Scenario) -> None:

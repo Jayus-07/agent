@@ -47,7 +47,12 @@ _SUPERVISOR_ROLE = "supervisor"
 
 
 async def get_session():
-    """为路由提供独立请求事务。"""
+    """为路由提供独立请求事务。
+
+    P3 事务统一（2026-09-21）：写端点以 ``async with session.begin():``
+    持有事务（route 拥有 begin/commit/rollback），身份反查（require_agent /
+    _resolve_agent_id）使用各自独立的短会话，避免 autobegin 污染路由事务。
+    """
     try:
         async with AsyncSessionLocal() as session:
             yield session
@@ -155,13 +160,19 @@ async def _resolve_agent_id(
 
 
 async def require_agent(
-    request: Request, session: AsyncSession = Depends(get_session)
+    request: Request,
 ) -> AgentContext:
-    """接单/拒单/我的 offer 的身份闸。"""
-    agent_id, tenant_id, user_id, roles = await _resolve_agent_id(request, session)
-    cs_role = await repository.find_agent_role(
-        session, tenant_id=tenant_id, agent_id=agent_id
-    )
+    """接单/拒单/我的 offer 的身份闸（独立短会话，不占用路由事务）。"""
+    try:
+        async with AsyncSessionLocal() as session:
+            agent_id, tenant_id, user_id, roles = await _resolve_agent_id(
+                request, session
+            )
+            cs_role = await repository.find_agent_role(
+                session, tenant_id=tenant_id, agent_id=agent_id
+            )
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
     return AgentContext(
         agent_id=agent_id,
         tenant_id=tenant_id,
@@ -214,13 +225,16 @@ async def accept_offer(
 ) -> OfferActionResponse:
     """接单：``agent_offered → human_active``；旧版本返回 409。"""
     try:
-        result = await offers_service.accept_offer(
-            session,
-            tenant_id=context.tenant_id,
-            agent_id=context.agent_id,
-            handoff_id=handoff_id,
-            offer_version=body.offer_version,
-        )
+        # P3 事务统一：route 持有事务，block 退出即提交（响应发出前落库
+        # 可见 —— 「接单→立即发消息」不再读到旧状态误报 409）。
+        async with session.begin():
+            result = await offers_service.accept_offer(
+                session,
+                tenant_id=context.tenant_id,
+                agent_id=context.agent_id,
+                handoff_id=handoff_id,
+                offer_version=body.offer_version,
+            )
     except OfferNotFound as exc:
         raise HTTPException(404, detail=str(exc)) from exc
     except OfferForbidden as exc:
@@ -229,10 +243,6 @@ async def accept_offer(
         raise HTTPException(409, detail=str(exc)) from exc
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
-    # 显式提交（2026-09-21 实机验证）：get_session 的 commit 在依赖收尾
-    # （响应已发出）才执行，坐席「接单→立即发消息」会读到未提交的旧状态
-    # 而误报 409。必须在返回前落库可见。
-    await session.commit()
     return _action_response(result)
 
 
@@ -248,14 +258,16 @@ async def decline_offer(
 ) -> OfferActionResponse:
     """拒单：``agent_offered → waiting_human``；该坐席进入本工单冷却期。"""
     try:
-        result = await offers_service.decline_offer(
-            session,
-            tenant_id=context.tenant_id,
-            agent_id=context.agent_id,
-            handoff_id=handoff_id,
-            offer_version=body.offer_version,
-            reason=body.reason,
-        )
+        # P3 事务统一：route 持有事务（同 accept 端点注释）。
+        async with session.begin():
+            result = await offers_service.decline_offer(
+                session,
+                tenant_id=context.tenant_id,
+                agent_id=context.agent_id,
+                handoff_id=handoff_id,
+                offer_version=body.offer_version,
+                reason=body.reason,
+            )
     except OfferNotFound as exc:
         raise HTTPException(404, detail=str(exc)) from exc
     except OfferForbidden as exc:
@@ -264,10 +276,6 @@ async def decline_offer(
         raise HTTPException(409, detail=str(exc)) from exc
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
-    # 显式提交（2026-09-21 实机验证）：get_session 的 commit 在依赖收尾
-    # （响应已发出）才执行，坐席「接单→立即发消息」会读到未提交的旧状态
-    # 而误报 409。必须在返回前落库可见。
-    await session.commit()
     return _action_response(result)
 
 
@@ -282,29 +290,37 @@ async def reassign_handoff(
     session: AsyncSession = Depends(get_session),
 ) -> OfferActionResponse:
     """主管重派：解除当前分配，可指定新坐席；``agent`` 角色调用 403。"""
-    actor_id, tenant_id, _user_id, roles = await _resolve_agent_id(
-        request, session, allow_unbound_admin=True
-    )
+    # 身份/角色反查用独立短会话，不占用路由事务（P3）
+    try:
+        async with AsyncSessionLocal() as ident_session:
+            actor_id, tenant_id, _user_id, roles = await _resolve_agent_id(
+                request, ident_session, allow_unbound_admin=True
+            )
+            cs_role = await repository.find_agent_role(
+                ident_session, tenant_id=tenant_id, agent_id=actor_id
+            )
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
     context = AgentContext(
         agent_id=actor_id,
         tenant_id=tenant_id,
         user_id=_user_id,
-        cs_role=await repository.find_agent_role(
-            session, tenant_id=tenant_id, agent_id=actor_id
-        ),
+        cs_role=str(cs_role) if cs_role else None,
         platform_roles=tuple(roles),
     )
     _require_supervisor(context)
 
     try:
-        result = await offers_service.reassign_handoff(
-            session,
-            tenant_id=context.tenant_id,
-            supervisor_agent_id=context.agent_id,
-            handoff_id=handoff_id,
-            target_agent_id=body.target_agent_id,
-            reason=body.reason,
-        )
+        # P3 事务统一：route 持有事务（同 accept 端点注释）。
+        async with session.begin():
+            result = await offers_service.reassign_handoff(
+                session,
+                tenant_id=context.tenant_id,
+                supervisor_agent_id=context.agent_id,
+                handoff_id=handoff_id,
+                target_agent_id=body.target_agent_id,
+                reason=body.reason,
+            )
     except OfferNotFound as exc:
         raise HTTPException(404, detail=str(exc)) from exc
     except ReassignForbidden as exc:
@@ -313,10 +329,6 @@ async def reassign_handoff(
         raise HTTPException(409, detail=str(exc)) from exc
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
-    # 显式提交（2026-09-21 实机验证）：get_session 的 commit 在依赖收尾
-    # （响应已发出）才执行，坐席「接单→立即发消息」会读到未提交的旧状态
-    # 而误报 409。必须在返回前落库可见。
-    await session.commit()
     return _action_response(result)
 
 

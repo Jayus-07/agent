@@ -61,8 +61,19 @@ def _agent_context() -> routes.AgentContext:
     )
 
 
+class _Txn:
+    """P3 事务统一后 route 走 ``async with session.begin():`` 的假事务。"""
+
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 class _Session:
-    pass
+    def begin(self) -> _Txn:
+        return _Txn()
 
 
 # ── 身份闸 ──────────────────────────────────────────────────

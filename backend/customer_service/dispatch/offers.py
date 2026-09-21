@@ -22,7 +22,6 @@ accept/decline/reassign 只从 ``handoff_id`` 入手，所以先做一次**无�
 """
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -98,24 +97,10 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-@asynccontextmanager
-async def _txn(session: AsyncSession):
-    """事务收口（2026-09-21 实机验证修复）。
-
-    路由层 ``require_agent`` 与端点共用同一 get_session 实例，身份查询
-    （find_agent_role 等）已令 session autobegin —— 此时再显式
-    ``session.begin()`` 会抛 InvalidRequestError（A transaction is already
-    begun），导致 accept/decline/reassign 三条路径全部 500。改为：已在
-    事务中就直接复用（提交由 get_session 的 yield 后 commit 收口，异常
-    同样走 get_session rollback），全新 session 才显式 begin（保持原有
-    「异常即回滚」语义）。
-    """
-    in_txn = getattr(session, "in_transaction", None)
-    if callable(in_txn) and in_txn():
-        yield
-    else:
-        async with session.begin():
-            yield
+# 事务边界（P3 统一，2026-09-21）：本模块的 accept/decline/reassign 只做
+# 业务判定 + flush，**不拥有事务生命周期** —— begin/commit/rollback 由
+# 调用方（API Route / Worker UseCase）以 ``async with session.begin():``
+# 持有。旧 ``_txn``（in_transaction 兼容 + 条件 begin）双模式已删除。
 
 
 def _item(row: CSHandoff) -> OfferItem:
@@ -219,62 +204,61 @@ async def accept_offer(
     —— 这是「重派后再点旧的接单按钮」的唯一正确语义，不能当作幂等成功。
     """
     now = now or _now()
-    async with _txn(session):
-        conversation, handoff = await _load_locked_pair(
-            session, tenant_id=tenant_id, handoff_id=handoff_id
-        )
-        if handoff is None:
-            raise OfferNotFound("handoff not found")
+    conversation, handoff = await _load_locked_pair(
+        session, tenant_id=tenant_id, handoff_id=handoff_id
+    )
+    if handoff is None:
+        raise OfferNotFound("handoff not found")
 
-        _assert_offer_owner(handoff, agent_id)
+    _assert_offer_owner(handoff, agent_id)
 
-        if handoff.handoff_state == ACTIVE_STATE:
-            # 重复点接单：状态已流转 → 与其他 stale 路径一样 409
-            #（消息区分开，方便前端提示「工单已由本坐席接单」）。
-            raise OfferStale("工单已由本坐席接单")
+    if handoff.handoff_state == ACTIVE_STATE:
+        # 重复点接单：状态已流转 → 与其他 stale 路径一样 409
+        #（消息区分开，方便前端提示「工单已由本坐席接单」）。
+        raise OfferStale("工单已由本坐席接单")
 
-        _assert_offer_fresh(handoff, offer_version=offer_version, now=now)
+    _assert_offer_fresh(handoff, offer_version=offer_version, now=now)
 
-        assignments = await repository.lock_active_assignments_for_handoff(
-            session, tenant_id=tenant_id, handoff_id=handoff_id
-        )
-        target = next((a for a in assignments if a.agent_id == agent_id), None)
-        if target is None:
-            # 活动 assignment 已被 reaper/主管解除，但工单状态还没刷新：
-            # 以 assignment 为准拒绝，避免"接单成功但无人负责"。
-            raise OfferStale("offer 已被回收，请等待重新派单")
+    assignments = await repository.lock_active_assignments_for_handoff(
+        session, tenant_id=tenant_id, handoff_id=handoff_id
+    )
+    target = next((a for a in assignments if a.agent_id == agent_id), None)
+    if target is None:
+        # 活动 assignment 已被 reaper/主管解除，但工单状态还没刷新：
+        # 以 assignment 为准拒绝，避免"接单成功但无人负责"。
+        raise OfferStale("offer 已被回收，请等待重新派单")
 
-        handoff.handoff_state = ACTIVE_STATE
-        handoff.updated_at = now
-        handoff.offer_expires_at = None
-        handoff.offered_at = None
+    handoff.handoff_state = ACTIVE_STATE
+    handoff.updated_at = now
+    handoff.offer_expires_at = None
+    handoff.offered_at = None
 
-        target.state = "accepted"
-        target.accepted_at = now
+    target.state = "accepted"
+    target.accepted_at = now
 
-        if conversation is not None:
-            conversation.assigned_agent_id = agent_id
-            conversation.handling_mode = "human"
-            conversation.updated_at = now
+    if conversation is not None:
+        conversation.assigned_agent_id = agent_id
+        conversation.handling_mode = "human"
+        conversation.updated_at = now
 
-        outbox.append_event(
-            session,
-            tenant_id=tenant_id,
-            conversation_id=handoff.conversation_id,
-            type=EVENT_CLAIMED,
-            payload={
-                "conversation_id": handoff.conversation_id,
-                "handoff_id": handoff.handoff_id,
-                "tenant_id": tenant_id,
-                "agent_id": agent_id,
-                "assignment_version": int(handoff.assignment_version or 0),
-            },
-            handoff_id=handoff.handoff_id,
-            actor_user_id=agent_id,
-            now=now,
-        )
-        await session.flush()
-        return _result(handoff, agent_id=agent_id)
+    outbox.append_event(
+        session,
+        tenant_id=tenant_id,
+        conversation_id=handoff.conversation_id,
+        type=EVENT_CLAIMED,
+        payload={
+            "conversation_id": handoff.conversation_id,
+            "handoff_id": handoff.handoff_id,
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "assignment_version": int(handoff.assignment_version or 0),
+        },
+        handoff_id=handoff.handoff_id,
+        actor_user_id=agent_id,
+        now=now,
+    )
+    await session.flush()
+    return _result(handoff, agent_id=agent_id)
 
 
 async def decline_offer(
@@ -293,62 +277,61 @@ async def decline_offer(
     可以无限循环（方案 A5 的 5 次上限会形同虚设）。
     """
     now = now or _now()
-    async with _txn(session):
-        conversation, handoff = await _load_locked_pair(
-            session, tenant_id=tenant_id, handoff_id=handoff_id
-        )
-        if handoff is None:
-            raise OfferNotFound("handoff not found")
+    conversation, handoff = await _load_locked_pair(
+        session, tenant_id=tenant_id, handoff_id=handoff_id
+    )
+    if handoff is None:
+        raise OfferNotFound("handoff not found")
 
-        _assert_offer_owner(handoff, agent_id)
-        _assert_offer_fresh(handoff, offer_version=offer_version, now=now)
+    _assert_offer_owner(handoff, agent_id)
+    _assert_offer_fresh(handoff, offer_version=offer_version, now=now)
 
-        assignments = await repository.lock_active_assignments_for_handoff(
-            session, tenant_id=tenant_id, handoff_id=handoff_id
-        )
-        target = next((a for a in assignments if a.agent_id == agent_id), None)
-        if target is None:
-            raise OfferStale("offer 已被回收，请等待重新派单")
+    assignments = await repository.lock_active_assignments_for_handoff(
+        session, tenant_id=tenant_id, handoff_id=handoff_id
+    )
+    target = next((a for a in assignments if a.agent_id == agent_id), None)
+    if target is None:
+        raise OfferStale("offer 已被回收，请等待重新派单")
 
-        handoff.handoff_state = WAITING_STATE
-        handoff.assigned_agent_id = None
-        handoff.offered_at = None
-        handoff.offer_expires_at = None
-        handoff.updated_at = now
+    handoff.handoff_state = WAITING_STATE
+    handoff.assigned_agent_id = None
+    handoff.offered_at = None
+    handoff.offer_expires_at = None
+    handoff.updated_at = now
 
-        target.state = "declined"
-        target.declined_at = now
-        target.unassigned_at = now
-        # 拒单原因落库（030 新列；接口可选提交，写不进也不影响状态机）
-        target.decline_reason = ((reason or "").strip() or None)
+    target.state = "declined"
+    target.declined_at = now
+    target.unassigned_at = now
+    # 拒单原因落库（030 新列；接口可选提交，写不进也不影响状态机）
+    target.decline_reason = ((reason or "").strip() or None)
 
-        # 自动置忙计数：滑动窗口内频繁拒单 → Redis 置忙窗口（fail-open）。
-        await agent_busy.record_agent_reject(tenant_id, agent_id)
+    # 自动置忙计数：滑动窗口内频繁拒单 → Redis 置忙窗口（fail-open）。
+    await agent_busy.record_agent_reject(tenant_id, agent_id)
 
-        if conversation is not None:
-            conversation.assigned_agent_id = None
-            conversation.handling_mode = WAITING_STATE
-            conversation.updated_at = now
+    if conversation is not None:
+        conversation.assigned_agent_id = None
+        conversation.handling_mode = WAITING_STATE
+        conversation.updated_at = now
 
-        outbox.append_event(
-            session,
-            tenant_id=tenant_id,
-            conversation_id=handoff.conversation_id,
-            type=EVENT_OFFER_DECLINED,
-            payload={
-                "conversation_id": handoff.conversation_id,
-                "handoff_id": handoff.handoff_id,
-                "tenant_id": tenant_id,
-                "agent_id": agent_id,
-                "reason": (reason or "").strip() or None,
-                "assignment_version": int(handoff.assignment_version or 0),
-            },
-            handoff_id=handoff.handoff_id,
-            actor_user_id=agent_id,
-            now=now,
-        )
-        await session.flush()
-        return _result(handoff, agent_id=None)
+    outbox.append_event(
+        session,
+        tenant_id=tenant_id,
+        conversation_id=handoff.conversation_id,
+        type=EVENT_OFFER_DECLINED,
+        payload={
+            "conversation_id": handoff.conversation_id,
+            "handoff_id": handoff.handoff_id,
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "reason": (reason or "").strip() or None,
+            "assignment_version": int(handoff.assignment_version or 0),
+        },
+        handoff_id=handoff.handoff_id,
+        actor_user_id=agent_id,
+        now=now,
+    )
+    await session.flush()
+    return _result(handoff, agent_id=None)
 
 
 async def reassign_handoff(
@@ -378,126 +361,125 @@ async def reassign_handoff(
     now = now or _now()
     target = (target_agent_id or "").strip() or None
 
-    async with _txn(session):
-        conversation, handoff = await _load_locked_pair(
-            session, tenant_id=tenant_id, handoff_id=handoff_id
+    conversation, handoff = await _load_locked_pair(
+        session, tenant_id=tenant_id, handoff_id=handoff_id
+    )
+    if handoff is None:
+        raise OfferNotFound("handoff not found")
+    if handoff.handoff_state not in _REASSIGNABLE_STATES:
+        raise ReassignConflict(
+            f"工单状态 {handoff.handoff_state} 不允许重派"
         )
-        if handoff is None:
-            raise OfferNotFound("handoff not found")
-        if handoff.handoff_state not in _REASSIGNABLE_STATES:
-            raise ReassignConflict(
-                f"工单状态 {handoff.handoff_state} 不允许重派"
-            )
 
-        previous_agent_id = handoff.assigned_agent_id
+    previous_agent_id = handoff.assigned_agent_id
 
-        # 目标坐席校验：同租户、启用、可接单（最后取锁，保持锁序约定）。
-        target_agent = None
-        if target is not None:
-            target_agent = await repository.lock_least_loaded_agent(
-                session,
+    # 目标坐席校验：同租户、启用、可接单（最后取锁，保持锁序约定）。
+    target_agent = None
+    if target is not None:
+        target_agent = await repository.lock_least_loaded_agent(
+            session,
+            tenant_id=tenant_id,
+            online_agent_ids=[target],
+            now=now,
+        )
+        if target_agent is None:
+            raise ReassignConflict("目标坐席不存在、未启用或不可接单")
+
+    for assignment in await repository.lock_active_assignments_for_handoff(
+        session, tenant_id=tenant_id, handoff_id=handoff_id
+    ):
+        assignment.state = "released"
+        assignment.unassigned_at = now
+
+    version = int(handoff.assignment_version or 0) + 1
+    handoff.assignment_version = version
+    handoff.attempt_count = 0
+    handoff.total_deadline_at = now + timedelta(
+        seconds=CS_HANDOFF_TIMEOUT_SECONDS
+    )
+    handoff.updated_at = now
+
+    offer_expires_at: datetime | None = None
+    if target is not None and target_agent is not None:
+        offer_expires_at = now + timedelta(seconds=CS_OFFER_TIMEOUT_SECONDS)
+        handoff.handoff_state = OFFERED_STATE
+        handoff.assigned_agent_id = target
+        handoff.offered_at = now
+        handoff.offer_expires_at = offer_expires_at
+        target_agent.last_assigned_at = now
+
+        from backend.customer_service.models.assignment import CSAssignment
+
+        session.add(
+            CSAssignment(
                 tenant_id=tenant_id,
-                online_agent_ids=[target],
-                now=now,
+                handoff_id=handoff.handoff_id,
+                conversation_id=handoff.conversation_id,
+                agent_id=target,
+                state="offered",
+                attempt_no=1,
+                offer_version=version,
+                offered_at=now,
+                offer_expires_at=offer_expires_at,
+                assigned_by=supervisor_agent_id,
+                assigned_at=now,
             )
-            if target_agent is None:
-                raise ReassignConflict("目标坐席不存在、未启用或不可接单")
-
-        for assignment in await repository.lock_active_assignments_for_handoff(
-            session, tenant_id=tenant_id, handoff_id=handoff_id
-        ):
-            assignment.state = "released"
-            assignment.unassigned_at = now
-
-        version = int(handoff.assignment_version or 0) + 1
-        handoff.assignment_version = version
-        handoff.attempt_count = 0
-        handoff.total_deadline_at = now + timedelta(
-            seconds=CS_HANDOFF_TIMEOUT_SECONDS
         )
-        handoff.updated_at = now
+        if conversation is not None:
+            conversation.assigned_agent_id = target
+            conversation.handling_mode = WAITING_STATE
+            conversation.updated_at = now
+    else:
+        handoff.handoff_state = WAITING_STATE
+        handoff.assigned_agent_id = None
+        handoff.offered_at = None
+        handoff.offer_expires_at = None
+        if conversation is not None:
+            conversation.assigned_agent_id = None
+            conversation.handling_mode = WAITING_STATE
+            conversation.updated_at = now
 
-        offer_expires_at: datetime | None = None
-        if target is not None and target_agent is not None:
-            offer_expires_at = now + timedelta(seconds=CS_OFFER_TIMEOUT_SECONDS)
-            handoff.handoff_state = OFFERED_STATE
-            handoff.assigned_agent_id = target
-            handoff.offered_at = now
-            handoff.offer_expires_at = offer_expires_at
-            target_agent.last_assigned_at = now
-
-            from backend.customer_service.models.assignment import CSAssignment
-
-            session.add(
-                CSAssignment(
-                    tenant_id=tenant_id,
-                    handoff_id=handoff.handoff_id,
-                    conversation_id=handoff.conversation_id,
-                    agent_id=target,
-                    state="offered",
-                    attempt_no=1,
-                    offer_version=version,
-                    offered_at=now,
-                    offer_expires_at=offer_expires_at,
-                    assigned_by=supervisor_agent_id,
-                    assigned_at=now,
-                )
-            )
-            if conversation is not None:
-                conversation.assigned_agent_id = target
-                conversation.handling_mode = WAITING_STATE
-                conversation.updated_at = now
-        else:
-            handoff.handoff_state = WAITING_STATE
-            handoff.assigned_agent_id = None
-            handoff.offered_at = None
-            handoff.offer_expires_at = None
-            if conversation is not None:
-                conversation.assigned_agent_id = None
-                conversation.handling_mode = WAITING_STATE
-                conversation.updated_at = now
-
-        payload = {
-            "conversation_id": handoff.conversation_id,
-            "handoff_id": handoff.handoff_id,
-            "tenant_id": tenant_id,
-            "previous_agent_id": previous_agent_id,
-            "agent_id": target,
-            "reassigned_by": supervisor_agent_id,
-            "reason": (reason or "").strip() or None,
-            "assignment_version": version,
-        }
+    payload = {
+        "conversation_id": handoff.conversation_id,
+        "handoff_id": handoff.handoff_id,
+        "tenant_id": tenant_id,
+        "previous_agent_id": previous_agent_id,
+        "agent_id": target,
+        "reassigned_by": supervisor_agent_id,
+        "reason": (reason or "").strip() or None,
+        "assignment_version": version,
+    }
+    outbox.append_event(
+        session,
+        tenant_id=tenant_id,
+        conversation_id=handoff.conversation_id,
+        type=EVENT_REASSIGNED,
+        payload=payload,
+        handoff_id=handoff.handoff_id,
+        actor_user_id=supervisor_agent_id,
+        now=now,
+    )
+    if target is not None:
+        # 复用 P6 的定向 offer 契约（定向 = 只有目标坐席收到）
         outbox.append_event(
             session,
             tenant_id=tenant_id,
             conversation_id=handoff.conversation_id,
-            type=EVENT_REASSIGNED,
-            payload=payload,
+            type=EVENT_OFFERED,
+            payload={
+                **payload,
+                "attempt_count": 1,
+                "priority": int(handoff.priority or 0),
+                "offer_expires_at": (
+                    offer_expires_at.isoformat()
+                    if offer_expires_at is not None
+                    else None
+                ),
+            },
             handoff_id=handoff.handoff_id,
+            target_agent_id=target,
             actor_user_id=supervisor_agent_id,
             now=now,
         )
-        if target is not None:
-            # 复用 P6 的定向 offer 契约（定向 = 只有目标坐席收到）
-            outbox.append_event(
-                session,
-                tenant_id=tenant_id,
-                conversation_id=handoff.conversation_id,
-                type=EVENT_OFFERED,
-                payload={
-                    **payload,
-                    "attempt_count": 1,
-                    "priority": int(handoff.priority or 0),
-                    "offer_expires_at": (
-                        offer_expires_at.isoformat()
-                        if offer_expires_at is not None
-                        else None
-                    ),
-                },
-                handoff_id=handoff.handoff_id,
-                target_agent_id=target,
-                actor_user_id=supervisor_agent_id,
-                now=now,
-            )
-        await session.flush()
-        return _result(handoff, agent_id=target, offer_expires_at=offer_expires_at)
+    await session.flush()
+    return _result(handoff, agent_id=target, offer_expires_at=offer_expires_at)
