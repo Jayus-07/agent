@@ -96,3 +96,32 @@ class TestEmailIdempotency:
         # 恢复正常 SMTP 后重试可达
         result = send_email_tool.invoke(dict(self.ARGS))
         assert "已发送" in result
+
+    def test_recipient_format_variance_blocked(self, smtp_env):
+        """收件人格式差异（空格/大小写）不得换指纹绕过重复拦截"""
+        from backend.tools.email import send_email_tool
+
+        assert "已发送" in send_email_tool.invoke(dict(self.ARGS))
+        # 同一收件人的格式变体：多空格、大小写
+        variant = {**self.ARGS, "to": " A@Example.com "}
+        result = send_email_tool.invoke(variant)
+        assert "EMAIL DUPLICATE" in result
+        assert len(smtp_env) == 1
+
+    def test_chinese_comma_recipients_parsed(self, smtp_env):
+        """中文逗号/顿号分隔的收件人拆成多个地址（此前整串成畸形地址）"""
+        from backend.tools.email import send_email_tool
+
+        result = send_email_tool.invoke({
+            **self.ARGS, "to": "a@example.com，b@example.com、c@example.com",
+        })
+        assert "已发送" in result
+        assert len(smtp_env) == 1
+
+    def test_empty_recipients_after_parse(self, smtp_env):
+        """to 只含分隔符时显式报错，不进 SMTP"""
+        from backend.tools.email import send_email_tool
+
+        result = send_email_tool.invoke({**self.ARGS, "to": "，、 "})
+        assert "收件人解析为空" in result
+        assert len(smtp_env) == 0

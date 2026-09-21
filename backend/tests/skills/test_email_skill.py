@@ -119,7 +119,7 @@ class TestSendEngineSwitch:
         """窗口内同指纹拦截——agently 与 smtp 共用同一份指纹缓存。"""
         from backend.tools import email as email_mod
         email_mod._SENT_FINGERPRINTS[
-            email_mod._email_fingerprint("a@b.c", "", "周报", "# 数据")] = 1e18
+            email_mod._email_fingerprint(["a@b.c"], [], "周报", "# 数据")] = 1e18
         with patch("backend.config.EMAIL_ENGINE", "agently"), \
              patch("backend.tools.agently.agently_available", return_value=True), \
              patch("backend.tools.agently.agently_send") as mock_send:
@@ -136,7 +136,7 @@ class TestSendEngineSwitch:
                    return_value="[AGENTLY ERROR:1] 服务端错误"):
             r1 = email_mod._send_via_agently("a@b.c", "周报", "# 数据", "")
         assert r1.startswith("[AGENTLY ERROR:1]")
-        assert email_mod._email_fingerprint("a@b.c", "", "周报", "# 数据") \
+        assert email_mod._email_fingerprint(["a@b.c"], [], "周报", "# 数据") \
             not in email_mod._SENT_FINGERPRINTS
 
     def test_agently_send_cli_missing(self):

@@ -4,6 +4,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 from backend.shared.logger import logger
+from backend.shared.text_split import split_list
 
 from backend.data_collection.config import (
     DC_DEDUP_ENABLED, DC_ANALYSIS_ENABLED, DC_DATABASE_URL,
@@ -123,13 +124,13 @@ def _collect_after_approval(
         enable_write=True,
     )
 
-    # 去重键 → clean 阶段规则
-    dedup_key_list = [k.strip() for k in dedup_keys.split(",") if k.strip()] if dedup_keys else None
+    # 去重键 → clean 阶段规则（中文逗号/顿号/分号/空白皆可分隔）
+    dedup_key_list = split_list(dedup_keys) if dedup_keys else None
 
     # 分析维度 → analysis_config
     analysis_config: dict[str, Any] | None = None
     if enable_analysis and groupby_keys:
-        analysis_config = {"groupby_keys": [k.strip() for k in groupby_keys.split(",") if k.strip()]}
+        analysis_config = {"groupby_keys": split_list(groupby_keys)}
 
     # 执行
     result = pipeline.run(

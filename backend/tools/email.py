@@ -11,6 +11,7 @@ import time
 
 from langchain_core.tools import tool
 from backend.shared.logger import logger
+from backend.shared.text_split import split_list
 
 # ── 发送幂等：同指纹（收件人+主题+正文哈希）在窗口内只发一次。
 # 背景: BaseSkill 用 to_thread+wait_for 执行 Tool，超时判重试时线程不可
@@ -20,9 +21,19 @@ _EMAIL_DEDUP_WINDOW_SECONDS = 600
 _SENT_FINGERPRINTS: dict[str, float] = {}
 
 
-def _email_fingerprint(to: str, cc: str, subject: str, body: str) -> str:
+def _email_fingerprint(
+    to_list: list[str], cc_list: list[str], subject: str, body: str,
+) -> str:
+    """指纹基于**解析规整后**的收件人列表（排序 + 小写）。
+
+    此前直接哈希原始字符串，收件人格式差异（多空格 / 大小写 /
+    中文逗号 vs 英文逗号）会换指纹绕过重复发送拦截——对外发信
+    是信誉面风险，故 2026-09-21 收口为规整后再哈希。
+    """
+    norm_to = ",".join(sorted(a.lower() for a in to_list))
+    norm_cc = ",".join(sorted(a.lower() for a in cc_list))
     return hashlib.sha256(
-        f"{to}|{cc or ''}|{subject}|{body}".encode("utf-8")).hexdigest()
+        f"{norm_to}|{norm_cc}|{subject}|{body}".encode("utf-8")).hexdigest()
 
 
 @tool
@@ -90,12 +101,19 @@ def _send_email_after_approval(to: str, subject: str, body: str, cc: str) -> str
     if EMAIL_ENGINE == "agently":
         return _send_via_agently(to, subject, body, cc)
 
+    # 收件人规整：中文逗号/顿号/分号/空白皆可分隔（shared/text_split.py）
+    to_list = split_list(to)
+    cc_list = split_list(cc) if cc else []
+    if not to_list:
+        return ("收件人解析为空，请检查 to 参数（多个收件人用逗号分隔，"
+                f"当前值: {to!r}）")
+
     # 幂等拦截：窗口内同指纹视为重试，直接拒绝再次发送
     now = time.time()
     for fp, ts in list(_SENT_FINGERPRINTS.items()):
         if now - ts > _EMAIL_DEDUP_WINDOW_SECONDS:
             _SENT_FINGERPRINTS.pop(fp, None)
-    fingerprint = _email_fingerprint(to, cc, subject, body)
+    fingerprint = _email_fingerprint(to_list, cc_list, subject, body)
     if fingerprint in _SENT_FINGERPRINTS:
         logger.warning(f"[Tool:send_email] 幂等拦截: 窗口内已发送过 → {to} ({subject})")
         return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
@@ -104,19 +122,16 @@ def _send_email_after_approval(to: str, subject: str, body: str, cc: str) -> str
     try:
         msg = MIMEMultipart("alternative")
         msg["From"] = SMTP_FROM
-        msg["To"] = to
+        msg["To"] = ", ".join(to_list)
         msg["Subject"] = subject
-        if cc:
-            msg["Cc"] = cc
+        if cc_list:
+            msg["Cc"] = ", ".join(cc_list)
         msg.attach(MIMEText(body, "html" if body.startswith("<") else "plain", "utf-8"))
 
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
-            recipients = [a.strip() for a in to.split(",")]
-            if cc:
-                recipients += [a.strip() for a in cc.split(",")]
-            server.sendmail(SMTP_FROM, recipients, msg.as_string())
+            server.sendmail(SMTP_FROM, to_list + cc_list, msg.as_string())
 
         _SENT_FINGERPRINTS[fingerprint] = time.time()
         logger.info(f"[Tool:send_email] 已发送 → {to} ({subject})")
@@ -137,15 +152,20 @@ def _send_via_agently(to: str, subject: str, body: str, cc: str) -> str:
     if not agently.agently_available():
         return "[AGENTLY ERROR:4] agently-cli 未安装，无法以 agently 引擎发送"
 
-    fingerprint = _email_fingerprint(to, cc, subject, body)
+    # 收件人规整：与 SMTP 路径同口径（split_list + 指纹基于规整列表）
+    to_list = split_list(to)
+    cc_list = split_list(cc) if cc else []
+    if not to_list:
+        return ("收件人解析为空，请检查 to 参数（多个收件人用逗号分隔，"
+                f"当前值: {to!r}）")
+
+    fingerprint = _email_fingerprint(to_list, cc_list, subject, body)
     if fingerprint in _SENT_FINGERPRINTS:
         return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
                 f"主题 '{subject}'），为避免重复发送本次已拦截，请勿重试。")
 
-    cc_list = [a.strip() for a in cc.split(",") if a.strip()] if cc else []
     result = agently.agently_send(
-        to=[a.strip() for a in to.split(",") if a.strip()],
-        subject=subject, body=body, cc=cc_list or None,
+        to=to_list, subject=subject, body=body, cc=cc_list or None,
     )
     if result.startswith("[AGENTLY ERROR:"):
         # 与 SMTP 路径一致：失败不缓存指纹，重试路径畅通

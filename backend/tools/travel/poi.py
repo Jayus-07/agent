@@ -13,6 +13,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from backend.shared.logger import logger
+from backend.shared.text_split import split_list
 from backend.shared.tool_envelope import tool_success_result, tool_error_result
 from backend.tools.travel import poi_seed
 from backend.travel.models.poi import Poi
@@ -144,7 +145,10 @@ def travel_poi_search_tool(
     适用场景：规划行程前拉取候选景点池。注意返回的是候选池，不含排程与时间校验。
     """
     def _split(raw: str) -> list[str]:
-        return [s.strip() for s in raw.replace("，", ",").split(",") if s.strip()]
+        # 顿号/分号/空白一并识别（shared/text_split.py）——中文 LLM 列举
+        # 偏好最常用顿号，此前只认中英文逗号会整串变成一个标签，
+        # 过滤静默失效
+        return split_list(raw)
 
     pois = search_poi(
         city=city,
