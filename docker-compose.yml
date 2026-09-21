@@ -346,6 +346,10 @@ services:
       - RAG_SERVICE_URL=http://rag-service:8090
       - RAG_DATA_DIR=/app/data
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      # 应用级降级告警外推（B4：Celery 任务侧 alerts.py 也读这组变量，
+      # 与 app 服务同源；.env 填 ALERT_WEBHOOK_URL 即启用）
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_TYPE=${ALERT_WEBHOOK_TYPE:-generic}
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
@@ -527,6 +531,8 @@ services:
       - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_TYPE=${ALERT_WEBHOOK_TYPE:-generic}
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
@@ -710,23 +716,27 @@ services:
 
   # ── Alertmanager（B4：告警只响不给的触达修复，observability profile）──
   # Prometheus 40+ 条规则触发后经本服务外推：webhook receiver（generic JSON，
-  # 可接自建接收端/钉钉/企微的转发桥）。URL 从 .env 的 ALERT_WEBHOOK_URL
+  # 可接自建接收端/转发桥）。URL 从 .env 的 ALERTMANAGER_WEBHOOK_URL
   # 经 sed 注入 docker/alertmanager.yml.tpl（AM 原生不支持 env 展开）。
-  # 未配置时指向 127.0.0.1:9（discard，不可达仅记发送失败日志，不崩进程）。
-  # 应用级降级告警（LLM 熔断/重试耗尽等）另走 app 内 alerts.py 的
-  # ALERT_WEBHOOK_URL 外推，原生支持 wecom/dingtalk/feishu 格式。
+  # ⚠️ 与应用级告警的 ALERT_WEBHOOK_URL 是**两个独立变量**：AM 的
+  # webhook payload 是标准 Alertmanager JSON，钉钉/企微/飞书群机器人
+  # 直连会被拒（格式不匹配）——AM 侧直推群机器人需自建转发桥
+  # （读 AM webhook → 转格式）。未配置时指向 127.0.0.1:9（discard，
+  # 不可达仅记发送失败日志，不崩进程）。
+  # 应用级降级告警（LLM 熔断/重试耗尽等）走 app/worker 内 alerts.py 的
+  # ALERT_WEBHOOK_URL，原生支持 wecom/dingtalk/feishu 格式。
   alertmanager:
     image: prom/alertmanager:v0.27.0
     profiles: ["observability"]
     ports:
       - "127.0.0.1:9093:9093"
     environment:
-      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL:-}
     # alertmanager 镜像基于 busybox：sh + sed 可用。config 不能读 env →
     # 启动前用 sed 把占位符替换成真实 webhook URL 再 exec 主进程
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - "sed \"s|__ALERT_WEBHOOK_URL__|${ALERT_WEBHOOK_URL:-http://127.0.0.1:9/unset}|g\" /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager"
+      - "sed \"s|__ALERT_WEBHOOK_URL__|${ALERTMANAGER_WEBHOOK_URL:-http://127.0.0.1:9/unset}|g\" /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager"
     volumes:
       - ./docker/alertmanager.yml.tpl:/etc/alertmanager/alertmanager.yml.tpl:ro
     depends_on:

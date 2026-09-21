@@ -1,7 +1,8 @@
 # alertmanager.yml.tpl — Alertmanager 配置模板（B4 告警触达，2026-09-21）
 #
 # compose 的 alertmanager 服务在启动时用 sed 把 __ALERT_WEBHOOK_URL__
-# 替换为 .env 的 ALERT_WEBHOOK_URL（AM 原生不支持环境变量展开）。
+# 替换为 .env 的 ALERTMANAGER_WEBHOOK_URL（AM 原生不支持环境变量展开；
+# 与应用级告警的 ALERT_WEBHOOK_URL 相互独立）。
 #
 # receiver 为 generic webhook：POST JSON（Alertmanager 标准告警结构，
 # alerts[] 数组），可接自建接收端或任意支持该格式的转发桥。
