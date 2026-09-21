@@ -84,3 +84,27 @@ async def test_blank_ids_are_ignored(fake_redis: FakeRedis) -> None:
     assert await agent_busy.record_agent_reject("t1", "  ") is False
     assert await agent_busy.busy_agent_ids(tenant_id="t1", agent_ids=[None]) == set()
     assert fake_redis.strings == {}
+
+
+async def test_expire_refreshed_on_every_incr(
+    fake_redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-09-21 审查 #18 回归：EXPIRE 必须随每次 INCR 刷新。
+
+    只在 count==1 时设置的话，首次 EXPIRE 一旦失败计数键永不过期，
+    历史拒单无限累积 → 坐席被误置忙。
+    """
+    expire_calls: list[str] = []
+    real_expire = fake_redis.expire
+
+    def expire(key: str, ttl: int) -> bool:
+        expire_calls.append(key)
+        return real_expire(key, ttl)
+
+    monkeypatch.setattr(fake_redis, "expire", expire)
+    count_key = agent_busy.reject_count_key("t1", "agent-1")
+
+    await agent_busy.record_agent_reject("t1", "agent-1")
+    await agent_busy.record_agent_reject("t1", "agent-1")  # 第 2 次 INCR 也要刷 TTL
+
+    assert expire_calls.count(count_key) == 2

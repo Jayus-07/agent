@@ -129,20 +129,38 @@ async def run_once(now=None) -> DispatchResult:
 
 
 async def reap_stage(now=None) -> ReapResult | None:
-    """回收过期 offer / 关闭超期工单；开关关闭时返回 ``None``。"""
+    """回收过期 offer / 关闭超期工单；开关关闭时返回 ``None``。
+
+    审查 #17：按 ``CS_REAPER_COMMIT_CHUNK`` 分块提交 —— 旧实现把整批
+    塞进一个事务，逐行 ``FOR UPDATE`` 锁横跨全批，单行异常整批回滚。
+    每块独立事务，块间互不影响。
+    """
     if not getattr(config, "CS_REAPER_ENABLED", True):
         return None
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            result = await reaper.reap_once(session, now=now)
-    if result.released or result.closed:
+    batch = max(1, config.CS_REAPER_BATCH_LIMIT)
+    chunk = max(1, min(getattr(config, "CS_REAPER_COMMIT_CHUNK", 50), batch))
+    total = ReapResult()
+    # 迭代上限 = 理论块数 + 1（最后一次空扫确认收尾），防脏数据死循环
+    for _ in range(batch // chunk + 1):
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                result = await reaper.reap_once(session, now=now, limit=chunk)
+        total = ReapResult(
+            scanned=total.scanned + result.scanned,
+            released=total.released + result.released,
+            closed=total.closed + result.closed,
+            contended=total.contended + result.contended,
+        )
+        if result.scanned < chunk:
+            break
+    if total.released or total.closed:
         logger.info(
             "[cs-dispatcher] reaped released=%s closed=%s scanned=%s",
-            result.released,
-            result.closed,
-            result.scanned,
+            total.released,
+            total.closed,
+            total.scanned,
         )
-    return result
+    return total
 
 
 async def relay_stage(now=None) -> RelayResult | None:

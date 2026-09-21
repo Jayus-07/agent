@@ -168,9 +168,12 @@ async def _release_offer(
         conversation.handling_mode = "waiting_human"
         conversation.updated_at = now
 
-    from backend.observability.metrics import record_cs_reaped
-
-    record_cs_reaped("released")
+    # 审查 #4：超时回收与主动拒单同语义 —— 计入自动置忙计数
+    # （record_agent_reject 自身 fail-open，Redis 故障不影响回收事务）。
+    # 指标不在这里打点：提交由 reap_stage 完成，run_tick 在提交后统一
+    # 记 record_cs_reaped，避免回滚路径指标超报/双计（审查 #17）。
+    for agent_id in released_agents:
+        await agent_busy.record_agent_reject(tenant_id, agent_id)
 
     outbox.append_event(
         session,

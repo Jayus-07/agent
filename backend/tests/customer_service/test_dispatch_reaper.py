@@ -306,3 +306,43 @@ async def test_reaper_release_writes_expired_event(
     assert call["type"] == "conversation.offer_expired"
     assert call["payload"]["previous_agent_id"] == "agent-1"
     assert call["payload"]["attempt_count"] == 1
+
+
+async def test_release_records_reject_for_auto_busy(
+    scenario: Scenario, monkeypatch
+) -> None:
+    """2026-09-21 审查 #4 回归：offer 超时回收计入自动置忙计数。
+
+    43fe77e 声称「拒单/超时达阈值 → 置忙」，但 record_agent_reject
+    只接了主动拒单路径，reaper 超时回收零调用 —— 坐席最常见的不响应
+    形态（超时）对 auto-busy 永不生效。
+    """
+    rejects: list[tuple[str, str]] = []
+
+    async def fake_record(tenant_id: str, agent_id: str) -> bool:
+        rejects.append((tenant_id, agent_id))
+        return False
+
+    monkeypatch.setattr(reaper.agent_busy, "record_agent_reject", fake_record)
+
+    await reaper.reap_expired_offers(scenario.session, now=NOW, limit=50)
+
+    assert rejects == [(TENANT, "agent-1")]
+
+
+async def test_release_does_not_record_metric_before_commit(
+    scenario: Scenario, monkeypatch
+) -> None:
+    """2026-09-21 审查 #17 回归：指标统一由 run_tick 在提交后记录。
+
+    reaper 事务内打点会在回滚路径超报（且与 run_tick 的打点双计）。
+    """
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        "backend.observability.metrics.record_cs_reaped",
+        lambda action: recorded.append(action),
+    )
+
+    await reaper.reap_expired_offers(scenario.session, now=NOW, limit=50)
+
+    assert recorded == []

@@ -41,10 +41,11 @@ def busy_key(tenant_id: str, agent_id: str) -> str:
 def _record_reject(client: Any, tenant_id: str, agent_id: str) -> bool:
     """INCR 拒单计数（窗口 TTL），达阈值写置忙 key。返回是否被置忙。"""
     count_key = reject_count_key(tenant_id, agent_id)
-    count = client.incr(count_key)
-    if count == 1:
-        client.expire(count_key, CS_AGENT_AUTO_BUSY_WINDOW_SECONDS)
-    if int(count or 0) >= CS_AGENT_AUTO_BUSY_THRESHOLD:
+    count = int(client.incr(count_key) or 0)
+    # 无条件刷新窗口 TTL（审查 #18）：只在 count==1 时设置的话，EXPIRE
+    # 一旦失败计数键永不过期，历史拒单会无限累积误置忙坐席。
+    client.expire(count_key, CS_AGENT_AUTO_BUSY_WINDOW_SECONDS)
+    if count >= CS_AGENT_AUTO_BUSY_THRESHOLD:
         client.setex(busy_key(tenant_id, agent_id), CS_AGENT_AUTO_BUSY_SECONDS, "1")
         client.delete(count_key)
         return True

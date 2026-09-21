@@ -53,6 +53,9 @@ CS_AGENT_OFFER_COOLDOWN_SECONDS = int(
 
 # reaper 每轮最多处理的工单数（多副本下用 SKIP LOCKED 分批，避免长事务）。
 CS_REAPER_BATCH_LIMIT = int(os.getenv("CS_REAPER_BATCH_LIMIT", "200"))
+# 审查 #17：reaper 分块提交 —— 每块一个独立事务，避免单事务横跨全批
+# 逐行锁（单行异常整批回滚、锁持有时间过长）
+CS_REAPER_COMMIT_CHUNK = int(os.getenv("CS_REAPER_COMMIT_CHUNK", "50"))
 
 # dispatcher 心跳 TTL 30 秒（方案 §六 P6「心跳中断 30 秒内告警」）。
 CS_DISPATCHER_HEARTBEAT_TTL_SECONDS = int(

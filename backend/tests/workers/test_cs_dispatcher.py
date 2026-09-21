@@ -313,7 +313,9 @@ def test_default_mode_is_off() -> None:
 
 def test_offer_timeout_matches_frozen_decision() -> None:
     assert config.CS_OFFER_TIMEOUT_SECONDS == 30
-    assert config.CS_MAX_DISPATCH_ATTEMPTS == 5
+    # 43fe77e 派单治理：attempt 预算 5 → 3（代码默认与 .env 已同步改），
+    # 冻结口径跟着更新；再调整必须连本用例一起改，防无意识漂移。
+    assert config.CS_MAX_DISPATCH_ATTEMPTS == 3
 
 
 async def fake_gauges() -> None:
@@ -357,6 +359,44 @@ async def test_reap_stage_is_skipped_when_disabled(monkeypatch) -> None:
     monkeypatch.setattr(cs_dispatcher.reaper, "reap_once", explode)
 
     assert await cs_dispatcher.reap_stage() is None
+
+
+async def test_reap_stage_commits_in_chunks(factory, monkeypatch) -> None:
+    """2026-09-21 审查 #17 回归：reaper 分块提交，每块独立事务。
+
+    旧实现整批一个事务 —— 逐行 FOR UPDATE 锁横跨全批，单行异常
+    整批回滚。
+    """
+    monkeypatch.setattr(cs_dispatcher.config, "CS_REAPER_BATCH_LIMIT", 100)
+    monkeypatch.setattr(cs_dispatcher.config, "CS_REAPER_COMMIT_CHUNK", 40)
+    scanned_values = [40, 40, 5]
+
+    async def fake_reap(_session, now=None, limit=None):
+        return ReapResult(scanned=scanned_values.pop(0))
+
+    monkeypatch.setattr(cs_dispatcher.reaper, "reap_once", fake_reap)
+
+    result = await cs_dispatcher.reap_stage()
+
+    assert result.scanned == 85
+    # 3 个块 → 3 个独立 session 事务（begin+commit），块间互不影响
+    assert len(factory.sessions) == 3
+    assert all(s.records == ["begin", "commit"] for s in factory.sessions)
+
+
+async def test_reap_stage_stops_when_batch_drained(factory, monkeypatch) -> None:
+    monkeypatch.setattr(cs_dispatcher.config, "CS_REAPER_BATCH_LIMIT", 100)
+    monkeypatch.setattr(cs_dispatcher.config, "CS_REAPER_COMMIT_CHUNK", 40)
+
+    async def fake_reap(_session, now=None, limit=None):
+        return ReapResult(scanned=3)
+
+    monkeypatch.setattr(cs_dispatcher.reaper, "reap_once", fake_reap)
+
+    result = await cs_dispatcher.reap_stage()
+
+    assert result.scanned == 3
+    assert len(factory.sessions) == 1
 
 
 async def test_relay_stage_is_skipped_when_disabled(monkeypatch) -> None:

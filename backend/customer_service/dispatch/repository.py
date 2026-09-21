@@ -189,7 +189,7 @@ def active_assignment_count_expr():
     )
 
 
-def agent_in_offer_cooldown_expr(*, handoff_id: str, now: datetime):
+def agent_in_offer_cooldown_expr(*, handoff_id: str):
     """该坐席是否被**本工单**永久排除（2026-09-21 治理：60s 冷却 → 本单排除）。
 
     判定：存在一条本租户本坐席本工单的终结 assignment（expired/declined）
@@ -201,6 +201,8 @@ def agent_in_offer_cooldown_expr(*, handoff_id: str, now: datetime):
     池空后果：若唯一在线坐席被排除，本轮 ``no_candidate``，工单留在队列，
     由 reaper 在总等待期（``total_deadline_at``）到点关单兜底——这正是
     「可派池为空不要空转」的设计语义。
+
+    注：原 ``now`` 参数已随时间窗移除（2026-09-21 治理），当前判定为纯状态。
     """
     return ~exists(
         select(CSAssignment.id)
@@ -227,8 +229,9 @@ def least_loaded_agent_stmt(
     排序固定为：活动数升序 → ``last_assigned_at`` NULLS FIRST 升序 →
     ``agent_id`` 升序。容量谓词 ``active < max_conversations`` 保证不超载。
 
-    传入 ``handoff_id`` + ``now`` 时额外排除在本工单上拒过/超时过的坐席
-    （见 ``agent_in_offer_cooldown_expr``，本单永久排除）；缺省不排除。
+    传入 ``handoff_id`` 时额外排除在本工单上拒过/超时过的坐席（见
+    ``agent_in_offer_cooldown_expr``，本单永久排除）；缺省不排除。
+    ``now`` 参数保留兼容（调用方已传），当前实现不使用——本单排除无时间窗。
 
     传入 ``required_skill`` 时按技能精确匹配（``cs_agents.skill`` ==
     required_skill，两边默认 ``general``）；缺省不过滤（主管指定重派
@@ -245,9 +248,9 @@ def least_loaded_agent_stmt(
     ]
     if required_skill:
         conditions.append(CSAgent.skill == required_skill)
-    if handoff_id and now is not None:
+    if handoff_id:
         conditions.append(
-            agent_in_offer_cooldown_expr(handoff_id=handoff_id, now=now)
+            agent_in_offer_cooldown_expr(handoff_id=handoff_id)
         )
     return (
         select(CSAgent)
