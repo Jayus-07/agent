@@ -186,6 +186,8 @@ services:
       # env_file 注入的是宿主值 localhost，故此处必须显式覆盖为容器网络别名。
       - PGHOST=postgres
       - PGPORT=5432
+      # Redis：影子任务投递/缓存需要（同 PGHOST 的 localhost 坑，2026-09-21 补）。
+      - REDIS_URL=redis://redis:6379/0
       # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
       - PGDATABASE=agent_memory
       - PGUSER=postgres
