@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.customer_service.dispatch import offers, repository
+from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.event import CSEvent
@@ -302,6 +303,8 @@ async def test_decline_returns_handoff_to_queue_and_starts_cooldown(
     assert target.state == "declined"
     assert target.declined_at == NOW
     assert target.unassigned_at == NOW
+    # 拒单原因落库（030 新列），与事件 payload 同源
+    assert target.decline_reason == "away"
 
     assert scenario.conversation.assigned_agent_id is None
     assert scenario.conversation.handling_mode == "waiting_human"
@@ -341,7 +344,9 @@ async def test_reassign_without_target_resets_retry_budget(
     assert scenario.handoff.assignment_version == 4
     assert scenario.handoff.attempt_count == 0
     # 人工介入把自动重试预算重新计满，总等待期顺延一个完整窗口。
-    assert scenario.handoff.total_deadline_at == NOW + timedelta(seconds=600)
+    assert scenario.handoff.total_deadline_at == NOW + timedelta(
+        seconds=CS_HANDOFF_TIMEOUT_SECONDS
+    )
 
     assert scenario.assignments[0].state == "released"
     assert scenario.assignments[0].unassigned_at == NOW

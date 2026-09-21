@@ -331,7 +331,9 @@ def test_alembic_revision_is_0023_and_leaves_single_head():
             down_revisions.update(down_revision)
 
     assert len([path for path in revisions.values() if path.name == "0023_cs_dispatch.py"]) == 1
-    assert set(revisions) - down_revisions == {"0024"}
+    # 2026-09-21：model-config 的 seed 迁移原编号 0023 与本链撞车（双头），
+    # 重排为 0025 并链到 0024 之后，链尾（唯一 head）随之推进到 0025。
+    assert set(revisions) - down_revisions == {"0025"}
 
 
 def test_rbac_native_migration_is_idempotent_and_has_no_implicit_tenant_default():

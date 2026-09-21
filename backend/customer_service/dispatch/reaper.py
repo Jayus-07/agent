@@ -25,7 +25,7 @@ from backend.config.cs_dispatch import (
     CS_MAX_DISPATCH_ATTEMPTS,
     CS_REAPER_BATCH_LIMIT,
 )
-from backend.customer_service.dispatch import outbox, repository
+from backend.customer_service.dispatch import agent_busy, outbox, repository
 
 EVENT_OFFER_EXPIRED = "conversation.offer_expired"
 EVENT_HANDOFF_CLOSED = "conversation.handoff_closed"
@@ -98,7 +98,13 @@ async def _close_handoff(
 
     previous_agent_id = handoff.assigned_agent_id
     handoff.handoff_state = "closed"
-    handoff.closed_reason = f"{reason}:超时未接单，已恢复 AI 服务"
+    if reason == REASON_TOTAL_DEADLINE:
+        # 池空/无人接单到达总等待期：给用户「留言兜底」语义而不是冷冰冰的超时
+        handoff.closed_reason = (
+            "total_deadline:人工坐席繁忙，已为您保留会话记录，客服稍后会主动联系您"
+        )
+    else:
+        handoff.closed_reason = f"{reason}:超时未接单，已恢复 AI 服务"
     handoff.closed_at = now
     handoff.updated_at = now
     handoff.assigned_agent_id = None

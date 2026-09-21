@@ -37,7 +37,10 @@ CS_CRITICAL_REFUND_AMOUNT = float(os.getenv("CS_CRITICAL_REFUND_AMOUNT", "1000")
 # =============================================
 # 人工转接
 # =============================================
-CS_HANDOFF_TIMEOUT_SECONDS = int(os.getenv("CS_HANDOFF_TIMEOUT_SECONDS", "600"))
+# 总等待上限（硬编码治理 2026-09-21：600→120s）。语义不变：工单入池与
+# 主管重派时盖 total_deadline_at 章，超期由 reaper 关单并通知用户。
+# 该值同时是「池空兜底」的等待窗口——可派池持续为空时工单最多悬挂这么久。
+CS_HANDOFF_TIMEOUT_SECONDS = int(os.getenv("CS_HANDOFF_TIMEOUT_SECONDS", "120"))
 CS_HANDOFF_LOW_CONF_THRESHOLD = float(os.getenv("CS_HANDOFF_LOW_CONF_THRESHOLD", "0.4"))
 CS_HANDOFF_CONSECUTIVE_FAIL_LIMIT = int(os.getenv("CS_HANDOFF_CONSECUTIVE_FAIL_LIMIT", "3"))
 

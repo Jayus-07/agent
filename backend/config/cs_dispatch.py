@@ -24,10 +24,21 @@ if CS_DISPATCH_MODE not in _VALID_MODES:
 # 接单超时（冻结决策 A5/Q3）：offer 到期后由重派/reaper 回收。
 CS_OFFER_TIMEOUT_SECONDS = int(os.getenv("CS_OFFER_TIMEOUT_SECONDS", "30"))
 
-# 单张工单最多自动重派次数（冻结决策 A5）。
+# 单张工单最多自动重派次数（冻结决策 A5；2026-09-21 治理 5→3）。
 # P6 只写入并递增 handoff.attempt_count；达到上限后的终态关闭与用户通知
 # 由 P7 的 reaper 消费本值执行。
-CS_MAX_DISPATCH_ATTEMPTS = int(os.getenv("CS_MAX_DISPATCH_ATTEMPTS", "5"))
+CS_MAX_DISPATCH_ATTEMPTS = int(os.getenv("CS_MAX_DISPATCH_ATTEMPTS", "3"))
+
+# ── 自动置忙（2026-09-21 派单治理）────────────────────────────
+# 坐席在本窗口内拒单/超时次数达到阈值 → 自动置忙一段时间（Redis 计数+置忙 key，
+# 失败 fail-open：Redis 不可用时视为无人置忙，派单照常——在线判定已有 fail-closed）。
+CS_AGENT_AUTO_BUSY_THRESHOLD = int(
+    os.getenv("CS_AGENT_AUTO_BUSY_THRESHOLD", "3")
+)
+CS_AGENT_AUTO_BUSY_WINDOW_SECONDS = int(
+    os.getenv("CS_AGENT_AUTO_BUSY_WINDOW_SECONDS", "600")
+)
+CS_AGENT_AUTO_BUSY_SECONDS = int(os.getenv("CS_AGENT_AUTO_BUSY_SECONDS", "300"))
 
 # worker 轮询间隔（秒）——同时也是心跳写入间隔：默认 1s 远小于 30s TTL，
 # 因此不需要单独的心跳周期配置。

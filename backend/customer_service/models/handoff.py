@@ -91,6 +91,13 @@ class CSHandoff(CSBase):
     trigger_reason = Column(Text, nullable=True)
     ticket_id = Column(String(64), nullable=True)
     priority = Column(Integer, nullable=False, default=50)
+    required_skill = Column(
+        String(32),
+        nullable=False,
+        default="general",
+        server_default="general",
+        comment="所需技能组；派单时与 cs_agents.skill 精确匹配（030）",
+    )
     assigned_agent_id = Column(String(64), nullable=True)
     assignment_version = Column(Integer, nullable=False, default=0)
     attempt_count = Column(Integer, nullable=False, default=0)

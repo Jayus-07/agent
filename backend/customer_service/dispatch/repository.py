@@ -24,7 +24,6 @@ from typing import Sequence
 from sqlalchemy import Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config.cs_dispatch import CS_AGENT_OFFER_COOLDOWN_SECONDS
 from backend.customer_service.models.agent import CSAgent
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
@@ -36,7 +35,9 @@ _OFFERED_STATE = "agent_offered"
 _ACTIVE_ASSIGNMENT_STATES = ("offered", "accepted")
 # 已终结、且需要让当事坐席在该工单上冷却的 assignment 状态（P7）：
 # expired=超时被 reaper 回收，declined=坐席主动拒绝，released=主管重派解除。
-_COOLDOWN_ASSIGNMENT_STATES = ("expired", "declined", "released")
+# 本单永久排除的 assignment 终结态：拒单/超时的坐席本单不再派给他。
+# released 除外——主管重派是人工决策，允许指定回同一坐席。
+_EXCLUDED_ASSIGNMENT_STATES = ("expired", "declined")
 
 
 def _dispatchable(now: datetime):
@@ -189,27 +190,25 @@ def active_assignment_count_expr():
 
 
 def agent_in_offer_cooldown_expr(*, handoff_id: str, now: datetime):
-    """该坐席是否在**本工单**上处于 offer 冷却期（P7「排除刚超时客服」）。
+    """该坐席是否被**本工单**永久排除（2026-09-21 治理：60s 冷却 → 本单排除）。
 
-    判定：存在一条本租户本坐席本工单的终结 assignment（expired/declined/
-    released）且 ``unassigned_at`` 晚于 ``now - CS_AGENT_OFFER_COOLDOWN_SECONDS``。
+    判定：存在一条本租户本坐席本工单的终结 assignment（expired/declined）
+    即排除，**不再看时间窗**——用户明确拒过或超时没接的坐席，本单不再派给
+    他（避免 60s 冷却过期后又派回同一人）。
 
-    不加这个谓词时，「唯一在线坐席反复不接单」会让同一对人选被无限重试，
-    直到 600 秒总等待期耗尽；加了之后冷却期内该坐席被跳过，工单继续排队
-    由其他坐席接走（或到达 attempt/总期限终态）。
+    ``released`` **不排除**：主管重派指定回同一坐席是人工决策，必须放行。
+
+    池空后果：若唯一在线坐席被排除，本轮 ``no_candidate``，工单留在队列，
+    由 reaper 在总等待期（``total_deadline_at``）到点关单兜底——这正是
+    「可派池为空不要空转」的设计语义。
     """
-    cooldown_before = now - timedelta(
-        seconds=CS_AGENT_OFFER_COOLDOWN_SECONDS
-    )
     return ~exists(
         select(CSAssignment.id)
         .where(
             CSAssignment.tenant_id == CSAgent.tenant_id,
             CSAssignment.agent_id == CSAgent.agent_id,
             CSAssignment.handoff_id == handoff_id,
-            CSAssignment.state.in_(_COOLDOWN_ASSIGNMENT_STATES),
-            CSAssignment.unassigned_at.is_not(None),
-            CSAssignment.unassigned_at > cooldown_before,
+            CSAssignment.state.in_(_EXCLUDED_ASSIGNMENT_STATES),
         )
         .correlate(CSAgent)
     )
@@ -221,14 +220,19 @@ def least_loaded_agent_stmt(
     online_agent_ids: Sequence[str],
     handoff_id: str | None = None,
     now: datetime | None = None,
+    required_skill: str | None = None,
 ) -> Select:
     """最少负载 + 轮询选一名在线坐席，并锁定该行。
 
     排序固定为：活动数升序 → ``last_assigned_at`` NULLS FIRST 升序 →
     ``agent_id`` 升序。容量谓词 ``active < max_conversations`` 保证不超载。
 
-    传入 ``handoff_id`` + ``now`` 时额外排除处于 offer 冷却期的坐席
-    （见 ``agent_in_offer_cooldown_expr``）；缺省不排除，保持 P6 行为。
+    传入 ``handoff_id`` + ``now`` 时额外排除在本工单上拒过/超时过的坐席
+    （见 ``agent_in_offer_cooldown_expr``，本单永久排除）；缺省不排除。
+
+    传入 ``required_skill`` 时按技能精确匹配（``cs_agents.skill`` ==
+    required_skill，两边默认 ``general``）；缺省不过滤（主管指定重派
+    是人工决策，不设技能门槛）。
     """
     active_count = active_assignment_count_expr()
     conditions = [
@@ -239,6 +243,8 @@ def least_loaded_agent_stmt(
         CSAgent.agent_id.in_(list(online_agent_ids)),
         active_count < CSAgent.max_conversations,
     ]
+    if required_skill:
+        conditions.append(CSAgent.skill == required_skill)
     if handoff_id and now is not None:
         conditions.append(
             agent_in_offer_cooldown_expr(handoff_id=handoff_id, now=now)
@@ -396,6 +402,7 @@ async def lock_least_loaded_agent(
     online_agent_ids: Sequence[str],
     handoff_id: str | None = None,
     now: datetime | None = None,
+    required_skill: str | None = None,
 ) -> CSAgent | None:
     if not online_agent_ids:
         return None
@@ -405,6 +412,7 @@ async def lock_least_loaded_agent(
             online_agent_ids=online_agent_ids,
             handoff_id=handoff_id,
             now=now,
+            required_skill=required_skill,
         )
     )
     return result.scalars().first()

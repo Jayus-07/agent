@@ -61,6 +61,13 @@ class CSAgent(CSBase):
     )
 
     available = Column(Boolean, nullable=False, default=True)
+    skill = Column(
+        String(32),
+        nullable=False,
+        default="general",
+        server_default="general",
+        comment="技能组标签；派单时与 handoffs.required_skill 精确匹配（030）",
+    )
     auth_user_id = Column(String(64), nullable=True)
     enabled = Column(Boolean, nullable=False, default=True)
     accepting = Column(Boolean, nullable=False, default=True)
