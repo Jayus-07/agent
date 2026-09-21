@@ -144,6 +144,10 @@ domains:
       - 日报
       - 总结
       - 汇报
+      # 正则对冲：「经营分析报告」同时命中 business 的 分析+经营，须让
+      # report 有同等强度的组合信号，避免被 business rule override 抢走
+      - 分析.*?报告
+      - 生成.*?报告
 
   - name: customer_service
     description: 客服售后：订单查询、物流、退款退货申请、投诉、人工客服（域图承载）
