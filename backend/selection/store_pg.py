@@ -20,6 +20,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import SELECTION_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.selection.store import DEFAULT_WEIGHTS, SelectionStore
 from backend.shared.logger import logger
 
@@ -54,7 +55,7 @@ class PostgresSelectionStore(SelectionStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**SELECTION_PG_CONFIG)
+        conn = engine_for(SELECTION_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

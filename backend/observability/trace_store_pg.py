@@ -28,6 +28,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import OBS_DB_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.observability.trace_store import _MAX_ROWS, TraceStore, _serialize_trace
 from backend.shared.logger import logger
 
@@ -46,11 +47,11 @@ class PostgresTraceStore(TraceStore):
         self._table = os.getenv("OBS_DB_PG_TABLE_PREFIX", "") + "trace_store"
         self._init_db()
 
-    # ---- 连接层（与 doc_registry_pg 同模式：每次操作独立连接，用完即关）----
+    # ---- 连接层（池化：从统一 Engine 借出，close 即归还，不再每操作建 TCP）----
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**OBS_DB_PG_CONFIG)
+        conn = engine_for(OBS_DB_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()
