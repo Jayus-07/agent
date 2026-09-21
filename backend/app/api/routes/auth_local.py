@@ -356,7 +356,7 @@ async def login(request: Request, response: Response):
 
     issued = issue_access_token(user_id=row["id"], username=row["username"],
                                 dept=row["dept"], device_id=device_id,
-                                roles=[row["role"]],
+                                roles=_jwt_roles(row),
                                 tenant_id=row["tenant_id"],
                                 session_id=sid)
     _write_session(issued)
@@ -413,7 +413,7 @@ async def refresh(request: Request, response: Response):
                     and row["revoked_at"] is not None
                     and (now - row["revoked_at"]).total_seconds() <= _REFRESH_GRACE_SECONDS):
                 issued = issue_access_token(user_id=row["user_id"], username=row["username"],
-                                            dept=row["dept"], roles=[row["role"]],
+                                            dept=row["dept"], roles=_jwt_roles(row),
                                             tenant_id=row["tenant_id"],
                                             session_id=sid)
                 _write_session(issued)
