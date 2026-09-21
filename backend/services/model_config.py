@@ -35,6 +35,7 @@ HISTORY_OBJECTS = {
     "provider",
     "provider_credential",
     "provider_network_scope",
+    "role_policy",
 }
 
 
@@ -254,6 +255,28 @@ class ModelConfigService:
                         "operator": operator,
                     },
                 )
+                # embedding 换模型 = 换语义空间：既有索引立即进入待重建状态
+                # （治理改造 2026-09-22）。查询门禁（pgvector_store）会据此
+                # 拒绝检索并返回 INDEX_EMBEDDING_MISMATCH，重建写回后恢复 ready。
+                if role == "embedding" and old_value:
+                    try:
+                        await session.execute(
+                            text(
+                                "UPDATE rag_index_meta SET status = 'rebuild_required', "
+                                "updated_at = now() WHERE status <> 'rebuilding'"
+                            )
+                        )
+                    except Exception as meta_exc:
+                        # 全新环境还没建过索引（表不存在）：无索引可标记，不算失败
+                        logger.debug(
+                            "[ModelConfig] rag_index_meta 标记跳过（可能尚未建索引）: %s",
+                            meta_exc,
+                        )
+                    logger.warning(
+                        "[ModelConfig] embedding 角色由 %s 切换为 %s，"
+                        "全部向量索引已标记 rebuild_required",
+                        old_value, model_name,
+                    )
             # get_session() 是 async generator；break 会提前结束迭代，无法执行
             # 生成器 yield 后的自动 commit。写入必须在 break 前显式提交。
             await session.commit()
@@ -272,6 +295,208 @@ class ModelConfigService:
             "changedBy": operator,
             "requiresReindex": model_roles.MODEL_ROLES[role].requires_reindex,
         }
+
+    # ── 角色级运行策略（治理改造 2026-09-22）─────────────────────
+
+    @staticmethod
+    def _validate_policy_payload(role: str, payload: Mapping[str, Any]) -> dict:
+        """校验策略字段；返回归一化后的写入值。"""
+        defaults = model_roles.runtime_defaults(role)
+        fallback_model = str(payload.get("fallbackModel") or "").strip()
+        timeout_seconds = payload.get(
+            "timeoutSeconds", defaults.timeout_seconds
+        )
+        max_retries = payload.get("maxRetries", defaults.max_retries)
+        failure_policy = str(
+            payload.get("failurePolicy") or defaults.failure_policy
+        )
+        try:
+            timeout_seconds = int(timeout_seconds)
+            max_retries = int(max_retries)
+        except (TypeError, ValueError):
+            raise ValueError("timeoutSeconds / maxRetries 必须是整数")
+        if not 1 <= timeout_seconds <= 600:
+            raise ValueError("timeoutSeconds 必须在 1~600 之间")
+        if not 0 <= max_retries <= 3:
+            raise ValueError("maxRetries 必须在 0~3 之间（预算封顶，禁止 60s×N）")
+        if failure_policy not in model_roles.FAILURE_POLICIES:
+            raise ValueError(
+                f"failurePolicy 必须是 {model_roles.FAILURE_POLICIES} 之一"
+            )
+        # embedding 禁止 fallback：静默换语义空间会让新向量查旧索引
+        if role == "embedding" and failure_policy == "fallback":
+            raise ValueError(
+                "embedding 角色禁止 fallback 策略：不同 embedding 模型不共享"
+                "语义空间，必须 fail_fast 后重建索引"
+            )
+        if fallback_model:
+            issue = _model_validation_issue(fallback_model, role=role)
+            if issue:
+                raise ValueError(f"fallback 模型非法：{issue}")
+            if fallback_model == str(
+                model_roles.resolve_effective(role).get("value") or ""
+            ):
+                raise ValueError("fallback 模型不能与 primary 相同")
+        return {
+            "fallback_model": fallback_model,
+            "timeout_seconds": timeout_seconds,
+            "max_retries": max_retries,
+            "failure_policy": failure_policy,
+        }
+
+    async def get_role_policy(self, role: str) -> dict:
+        """角色的运行策略：DB 覆盖优先，否则代码默认（含来源标注）。"""
+        if role not in model_roles.MODEL_ROLES:
+            raise ModelConfigNotFound(f"未注册的模型角色：{role}")
+        defaults = model_roles.runtime_defaults(role)
+        row: Mapping[str, Any] | None = None
+        async for session in get_session():
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT fallback_model, timeout_seconds, max_retries, "
+                        "failure_policy, updated_by, updated_at "
+                        "FROM llm_model_role_policy WHERE role = :role"
+                    ),
+                    {"role": role},
+                )
+            ).mappings().first()
+            break
+        if row is None:
+            return {
+                "role": role,
+                "fallbackModel": defaults.fallback_model,
+                "timeoutSeconds": defaults.timeout_seconds,
+                "maxRetries": defaults.max_retries,
+                "failurePolicy": defaults.failure_policy,
+                "source": "default",
+                "updatedBy": None,
+                "updatedAt": None,
+            }
+        return {
+            "role": role,
+            "fallbackModel": str(row["fallback_model"] or ""),
+            "timeoutSeconds": int(row["timeout_seconds"]),
+            "maxRetries": int(row["max_retries"]),
+            "failurePolicy": str(row["failure_policy"]),
+            "source": "db",
+            "updatedBy": row["updated_by"],
+            "updatedAt": _iso(row["updated_at"]),
+        }
+
+    async def update_role_policy(
+        self, role: str, payload: Mapping[str, Any], operator: str,
+    ) -> dict:
+        """写入角色运行策略（含审计历史）。"""
+        if role not in model_roles.MODEL_ROLES:
+            raise ModelConfigNotFound(f"未注册的模型角色：{role}")
+        normalized = self._validate_policy_payload(role, payload)
+        old_policy = await self.get_role_policy(role)
+        async for session in get_session():
+            await session.execute(
+                text(
+                    "INSERT INTO llm_model_role_policy "
+                    "(role, fallback_model, timeout_seconds, max_retries, "
+                    " failure_policy, updated_by, updated_at) "
+                    "VALUES (:role, :fallback_model, :timeout_seconds, "
+                    "        :max_retries, :failure_policy, :operator, now()) "
+                    "ON CONFLICT (role) DO UPDATE SET "
+                    "fallback_model = EXCLUDED.fallback_model, "
+                    "timeout_seconds = EXCLUDED.timeout_seconds, "
+                    "max_retries = EXCLUDED.max_retries, "
+                    "failure_policy = EXCLUDED.failure_policy, "
+                    "updated_by = EXCLUDED.updated_by, "
+                    "updated_at = now()"
+                ),
+                {"role": role, "operator": operator, **normalized},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO llm_config_history "
+                    "(object_type, object_key, old_value, new_value, operator) "
+                    "VALUES ('role_policy', :role, :old_value, :new_value, :operator)"
+                ),
+                {
+                    "role": role,
+                    "old_value": _json_value(old_policy),
+                    "new_value": _json_value(normalized),
+                    "operator": operator,
+                },
+            )
+            await session.commit()
+            break
+        return {
+            "role": role,
+            **{k: normalized[k] for k in (
+                "fallback_model", "timeout_seconds", "max_retries",
+                "failure_policy")},
+            "changedBy": operator,
+        }
+
+    # ── 模型健康缓存读取（探测在 Celery beat，见 tasks/model_health_tasks.py）──
+
+    async def list_model_health(self) -> list[dict]:
+        """全部已探测模型 health 快照（只读缓存，不在线探测）。"""
+        rows: list[Mapping[str, Any]] = []
+        async for session in get_session():
+            result = await session.execute(text(
+                "SELECT model_name, provider, model_kind, status, "
+                "last_checked_at, last_latency_ms, last_error, "
+                "consecutive_failures FROM llm_model_health"
+            ))
+            rows = list(result.mappings())
+            break
+        return [
+            {
+                "modelName": str(r["model_name"]),
+                "provider": str(r["provider"] or ""),
+                "modelKind": str(r["model_kind"] or "chat"),
+                "status": str(r["status"] or "unknown"),
+                "lastCheckedAt": _iso(r["last_checked_at"]),
+                "lastLatencyMs": (
+                    int(r["last_latency_ms"])
+                    if r["last_latency_ms"] is not None else None
+                ),
+                "lastError": str(r["last_error"] or ""),
+                "consecutiveFailures": int(r["consecutive_failures"] or 0),
+            }
+            for r in rows
+        ]
+
+    async def get_index_compat(self) -> list[dict]:
+        """全部向量索引的 embedding 元数据（与运行时角色对比供前端展示）。"""
+        rows: list[Mapping[str, Any]] = []
+        async for session in get_session():
+            result = await session.execute(text(
+                "SELECT collection, embedding_provider, embedding_model, "
+                "embedding_dimension, index_version, built_at, updated_at, status "
+                "FROM rag_index_meta ORDER BY collection"
+            ))
+            rows = list(result.mappings())
+            break
+        runtime_model = str(
+            model_roles.resolve_effective("embedding").get("value") or ""
+        )
+        out: list[dict] = []
+        for r in rows:
+            index_model = str(r["embedding_model"] or "")
+            status = str(r["status"] or "ready")
+            mismatch = bool(index_model) and index_model != runtime_model
+            if mismatch and status == "ready":
+                status = "rebuild_required"
+            out.append({
+                "collection": str(r["collection"]),
+                "embeddingProvider": str(r["embedding_provider"] or ""),
+                "embeddingModel": index_model,
+                "embeddingDimension": int(r["embedding_dimension"] or 0),
+                "indexVersion": int(r["index_version"] or 1),
+                "builtAt": _iso(r["built_at"]),
+                "updatedAt": _iso(r["updated_at"]),
+                "status": status,
+                "runtimeModel": runtime_model,
+                "mismatch": mismatch,
+            })
+        return out
 
     async def _read_provider_secret(self, provider_id: str) -> str:
         """读取已有 provider 密文并在服务端解密，绝不向 API 返回。"""

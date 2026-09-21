@@ -60,9 +60,104 @@ _POOL_LOCK = threading.Lock()
 _POOLS: dict[tuple[tuple[str, str], ...], ThreadedConnectionPool] = {}
 
 
+class IndexEmbeddingMismatchError(RuntimeError):
+    """查询 embedding 与索引 embedding 模型不一致 —— 禁止检索（治理改造 2026-09-22）。
+
+    不同 embedding 模型不共享语义空间，拿新模型的查询向量去比旧模型的
+    文档向量，结果是噪声而不是「降级」。必须让检索显式失败并带上
+    INDEX_EMBEDDING_MISMATCH 代码，由上层转成明确提示，禁止偷偷降级 BM25。
+    """
+
+    code = "INDEX_EMBEDDING_MISMATCH"
+
+    def __init__(self, index_model: str, runtime_model: str, collection: str = "") -> None:
+        self.index_model = index_model
+        self.runtime_model = runtime_model
+        self.collection = collection
+        super().__init__(
+            f"INDEX_EMBEDDING_MISMATCH: 索引由 {index_model!r} 构建，"
+            f"当前向量化模型为 {runtime_model!r}"
+            + (f"（collection={collection}）" if collection else "")
+            + "。请重建索引后再使用。"
+        )
+
+
 def _pool_key(config: dict) -> tuple[tuple[str, str], ...]:
     """构造不含明文日志的稳定连接池 key。"""
     return tuple(sorted((str(key), repr(value)) for key, value in config.items()))
+
+
+# ======================= 索引级 embedding 元数据 =======================
+# 表：rag_index_meta（与 rag_vectors 同库同 DDL 风格，幂等创建）。
+# 每个 collection 记录「当前索引由哪个 embedding 模型构建」——
+# 查询前校验 runtime embedding 与之一致，不一致禁止检索（INDEX_EMBEDDING_MISMATCH）。
+
+_INDEX_META_TABLE_SUFFIX = "rag_index_meta"
+_META_DDL_DONE = threading.Event()
+
+
+def _meta_table_name() -> str:
+    """rag_index_meta 表名（实例期读前缀 env，与 rag_vectors 同前缀隔离测试）。"""
+    return os.getenv("VECTOR_PG_TABLE_PREFIX", "") + _INDEX_META_TABLE_SUFFIX
+
+
+def _ensure_meta_table(conn: Any) -> None:
+    """幂等建 rag_index_meta（复用借出连接，调用方负责提交/回滚）。"""
+    if _META_DDL_DONE.is_set():
+        return
+    conn.cursor().execute(f"""
+        CREATE TABLE IF NOT EXISTS {_meta_table_name()} (
+            collection          TEXT PRIMARY KEY,
+            embedding_provider  TEXT NOT NULL DEFAULT '',
+            embedding_model     TEXT NOT NULL DEFAULT '',
+            embedding_dimension INT  NOT NULL DEFAULT {EMBEDDING_DIM},
+            model_revision      TEXT NOT NULL DEFAULT '',
+            index_version       INT  NOT NULL DEFAULT 1,
+            built_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+            status              TEXT NOT NULL DEFAULT 'ready',
+            CONSTRAINT rag_index_meta_status_check
+                CHECK (status IN ('ready', 'rebuild_required', 'rebuilding', 'failed'))
+        )
+    """)
+    _META_DDL_DONE.set()
+
+
+def _runtime_embedding_identity(embedding_function: Any) -> dict[str, str]:
+    """从 embedding 实例读取运行时模型身份（与 indexer._embedding_model_identity 同口径）。"""
+    model_name = next(
+        (item for item in (
+            getattr(embedding_function, "_model_name", None),
+            getattr(embedding_function, "model_name", None),
+            getattr(embedding_function, "model", None),
+        ) if isinstance(item, str) and item),
+        "",
+    )
+    provider = next(
+        (item for item in (
+            getattr(embedding_function, "_provider", None),
+            getattr(embedding_function, "provider", None),
+        ) if isinstance(item, str) and item),
+        "",
+    )
+    # 实例字段缺失时回落角色配置（如测试桩直接传 OpenAIEmbeddings）
+    if not model_name:
+        try:
+            from backend.config import model_roles
+            info = model_roles.resolve_effective("embedding")
+            model_name = str(info.get("value") or "")
+            if not provider:
+                provider = str(info.get("source") or "")
+        except Exception:
+            pass
+    return {"provider": provider, "model": model_name}
+
+
+def _meta_model_matches(meta_model: str, runtime_model: str) -> bool:
+    """索引模型与运行时模型是否同空间。空值不判不一致（无身份信息时不误伤）。"""
+    if not meta_model or not runtime_model:
+        return True
+    return meta_model == runtime_model
 
 
 def _get_vector_pool() -> ThreadedConnectionPool:
@@ -262,6 +357,8 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                     f"CREATE INDEX IF NOT EXISTS idx_{t}_scope ON {t} (collection, doc_id)")
                 cur.execute(
                     f"CREATE INDEX IF NOT EXISTS idx_{t}_meta ON {t} USING gin (metadata)")
+                # 索引级 embedding 元数据表（写入/查询两侧都要）
+                _ensure_meta_table(conn)
             _DDL_DONE.add(self._table)
             logger.info(f"[PgVectorStore] 就绪: table={self._table} collection={self._collection}")
 
@@ -309,7 +406,124 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 template="(%s, %s, %s, %s, %s::jsonb, %s)",
                 page_size=500,
             )
+            # 写入即登记索引身份：任何成功写入都说明本 collection 是用当前
+            # 运行时 embedding 建的 → 元数据对齐 + 状态回 ready。
+            self._record_index_meta(conn)
         return len(rows)
+
+    def _record_index_meta(self, conn: Any) -> None:
+        """把当前运行时 embedding 身份写入 rag_index_meta（复用借出连接）。"""
+        try:
+            _ensure_meta_table(conn)
+            identity = _runtime_embedding_identity(self.embedding_function)
+            conn.cursor().execute(
+                f"""INSERT INTO {_meta_table_name()}
+                       (collection, embedding_provider, embedding_model,
+                        embedding_dimension, model_revision, status)
+                   VALUES (%s, %s, %s, %s, %s, 'ready')
+                   ON CONFLICT (collection) DO UPDATE SET
+                       embedding_provider = EXCLUDED.embedding_provider,
+                       embedding_model    = EXCLUDED.embedding_model,
+                       embedding_dimension = EXCLUDED.embedding_dimension,
+                       model_revision     = EXCLUDED.model_revision,
+                       status             = 'ready',
+                       updated_at         = now()""",
+                (
+                    self._collection,
+                    identity["provider"],
+                    identity["model"],
+                    EMBEDDING_DIM,
+                    "",
+                ),
+            )
+        except Exception as e:
+            # 元数据登记失败不阻塞索引写入本身，但必须留痕 —— 否则会出现
+            # 「索引建好了却不知道用什么模型建的」的治理盲区。
+            logger.warning(
+                f"[PgVectorStore] 索引元数据登记失败 collection={self._collection}: {e}")
+
+    def get_index_meta(self) -> dict | None:
+        """读取本 collection 的索引元数据（管理端展示 / 校验用）。"""
+        try:
+            with self._conn() as conn:
+                _ensure_meta_table(conn)
+                cur = conn.cursor()
+                cur.execute(
+                    f"""SELECT embedding_provider, embedding_model,
+                               embedding_dimension, model_revision,
+                               index_version, built_at, updated_at, status
+                        FROM {_meta_table_name()} WHERE collection = %s""",
+                    (self._collection,),
+                )
+                row = cur.fetchone()
+        except Exception as e:
+            logger.warning(f"[PgVectorStore] 读取索引元数据失败: {e}")
+            return None
+        if row is None:
+            return None
+        return {
+            "collection": self._collection,
+            "embeddingProvider": row[0],
+            "embeddingModel": row[1],
+            "embeddingDimension": row[2],
+            "modelRevision": row[3],
+            "indexVersion": row[4],
+            "builtAt": row[5].isoformat() if row[5] else None,
+            "updatedAt": row[6].isoformat() if row[6] else None,
+            "status": row[7],
+        }
+
+    def mark_rebuild_required(self) -> None:
+        """运行时 embedding 模型被换掉后，把既有索引标记为待重建。"""
+        try:
+            with self._conn() as conn:
+                _ensure_meta_table(conn)
+                conn.cursor().execute(
+                    f"""UPDATE {_meta_table_name()}
+                        SET status = 'rebuild_required', updated_at = now()
+                        WHERE collection = %s AND status <> 'rebuilding'""",
+                    (self._collection,),
+                )
+        except Exception as e:
+            logger.warning(
+                f"[PgVectorStore] 标记 rebuild_required 失败 collection={self._collection}: {e}")
+
+    def _check_index_compat(self, conn: Any) -> None:
+        """查询前门禁：索引 embedding ≠ 运行时 embedding → 显式失败。
+
+        - 元数据缺失（旧索引升级后首次查询）：采纳当前运行时身份作为基线
+          并放行 —— 否则存量索引全部不可用；采纳只发生一次且留 warning。
+        - 明确不一致：抛 IndexEmbeddingMismatchError，禁止任何静默降级。
+        """
+        try:
+            _ensure_meta_table(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"""SELECT embedding_model, status FROM {_meta_table_name()}
+                    WHERE collection = %s""",
+                (self._collection,),
+            )
+            row = cur.fetchone()
+        except Exception as e:
+            # 元数据表本身不可用时不能把查询一起打死 —— 记警告放行，
+            # 但这属于治理盲区，监控应关注该告警。
+            logger.warning(f"[PgVectorStore] 索引兼容性校验跳过（元数据不可读）: {e}")
+            return
+        runtime = _runtime_embedding_identity(self.embedding_function)
+        if row is None:
+            # 存量索引无元数据：首次查询时采纳运行时身份为基线（幂等 upsert）
+            logger.warning(
+                f"[PgVectorStore] collection={self._collection} 缺少索引元数据，"
+                f"采纳当前运行时 embedding 为基线: {runtime['model']!r}")
+            self._record_index_meta(conn)
+            return
+        meta_model, status = str(row[0] or ""), str(row[1] or "ready")
+        if status == "rebuild_required" or not _meta_model_matches(meta_model, runtime["model"]):
+            raise IndexEmbeddingMismatchError(
+                index_model=meta_model or "(unknown)",
+                runtime_model=runtime["model"] or "(unknown)",
+                collection=self._collection,
+            )
 
     def _texts_to_rows(
         self, texts: list[str], metadatas: list[dict] | None,
@@ -375,6 +589,11 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         self, query: str, k: int = 5, filter: dict | None = None,
     ) -> list[tuple[Any, float]]:
         from langchain_core.documents import Document
+
+        # 查询前门禁：索引 embedding 与运行时 embedding 不一致时，
+        # 在花一次 embedding 往返之前就显式失败（治理改造 2026-09-22）。
+        with self._conn() as conn:
+            self._check_index_compat(conn)
 
         qvec = np.asarray(self.embedding_function.embed_query(query), dtype=np.float32)
         params: list = [qvec, self._collection]

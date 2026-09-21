@@ -46,6 +46,10 @@ from typing import Any
 __all__ = [
     "MODEL_ROLES",
     "RoleSpec",
+    "RoleRuntimeDefaults",
+    "ROLE_RUNTIME_DEFAULTS",
+    "FAILURE_POLICIES",
+    "runtime_defaults",
     "resolve_raw",
     "resolve_effective",
     "resolve_name",
@@ -174,6 +178,60 @@ SOURCE_DB = "db"
 SOURCE_ENV = "env"
 SOURCE_INHERIT = "inherit"
 SOURCE_DEFAULT = "code-default"
+
+
+# =====================================================
+# 角色级运行策略默认值（034 迁移 llm_model_role_policy 的代码层缺省）
+# =====================================================
+# 设计约束（2026-09-22 治理改造）：
+#   - 总超时预算可控：单角色 timeout × (retry+1) 不得超过请求级预算；
+#     历史事故「单次 60s × retries=2 ≈ 180s」由此封死 —— 默认值全部满足
+#     timeout × (retry+1) ≤ 60s（ocr 除外，逐页识别本身是长任务）。
+#   - failure_policy：fallback / skip / fail_fast / template_response / mark_failed
+#   - embedding 禁止 fallback：换 embedding 模型等于换语义空间，静默切换会让
+#     新向量查旧索引，必须 fail_fast（索引一致性由 pgvector_store 门禁兜底）。
+FAILURE_POLICIES = (
+    "fallback", "skip", "fail_fast", "template_response", "mark_failed",
+)
+
+
+@dataclass(frozen=True)
+class RoleRuntimeDefaults:
+    """一个角色的默认运行策略（DB 无行时生效）。"""
+    fallback_model: str = ""
+    timeout_seconds: int = 30
+    max_retries: int = 0
+    failure_policy: str = "fail_fast"
+
+
+ROLE_RUNTIME_DEFAULTS: dict[str, RoleRuntimeDefaults] = {
+    # 主问答：30s × (1+1) = 60s 预算上限；耗尽走 fallback 角色 → 模板话术
+    "main": RoleRuntimeDefaults(timeout_seconds=30, max_retries=1, failure_policy="fallback"),
+    # 工具选择必须快失败：10s × 1；失败由规则选择器兜底（skip 语义）
+    "tool_selector": RoleRuntimeDefaults(timeout_seconds=10, max_retries=0, failure_policy="skip"),
+    # 熔断兜底角色本身不再套 fallback
+    "fallback": RoleRuntimeDefaults(timeout_seconds=30, max_retries=0, failure_policy="fail_fast"),
+    # 入库链路：单阶段失败不阻塞整篇文档，标记后继续
+    "doc": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
+    "metadata_extract": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
+    "question_gen": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
+    "table_describe": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
+    # OCR 逐页识别是长任务；失败标记文档 OCR failed，不换模型静默重试
+    "ocr": RoleRuntimeDefaults(timeout_seconds=120, max_retries=0, failure_policy="mark_failed"),
+    # embedding 禁止静默切换语义空间 —— 只能重试，耗尽即 fail_fast
+    "embedding": RoleRuntimeDefaults(timeout_seconds=15, max_retries=1, failure_policy="fail_fast"),
+    # rerank 失败 → 跳过重排，用检索原序（行为可观测降级）
+    "rerank": RoleRuntimeDefaults(timeout_seconds=15, max_retries=1, failure_policy="skip"),
+    # 评测生成失败直接终止本轮评测，不产脏数据
+    "eval_gen": RoleRuntimeDefaults(timeout_seconds=30, max_retries=1, failure_policy="fail_fast"),
+}
+
+
+def runtime_defaults(role: str) -> RoleRuntimeDefaults:
+    """角色的默认运行策略；未登记角色给保守缺省（10s×0 fail_fast）。"""
+    return ROLE_RUNTIME_DEFAULTS.get(
+        role, RoleRuntimeDefaults(timeout_seconds=10, max_retries=0)
+    )
 
 
 # =====================================================

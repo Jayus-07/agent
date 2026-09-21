@@ -99,6 +99,13 @@ class CustomRetriever:
                             q, k=k,
                         )
                 except Exception as e:
+                    # 索引/运行时 embedding 不一致必须穿透 RRF 循环：
+                    # 这是「禁止检索」的门禁信号，不能被当成单个变体失败跳过。
+                    from backend.rag.vectorstore.pgvector_store import (
+                        IndexEmbeddingMismatchError,
+                    )
+                    if isinstance(e, IndexEmbeddingMismatchError):
+                        raise
                     logger.warning(f"expanded query '{q}' 检索失败: {e}")
                     continue
                 # 原始 query 权重最高（rank bonus）

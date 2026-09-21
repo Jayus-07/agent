@@ -957,6 +957,14 @@ class RAGPipeline:
                     if content not in chunks:
                         chunks.append(content)
             except Exception as e:
+                # 索引/运行时 embedding 模型不一致 → 禁止静默降级 BM25：
+                # 必须显式失败并携带 INDEX_EMBEDDING_MISMATCH（治理改造 2026-09-22）。
+                from backend.rag.vectorstore.pgvector_store import (
+                    IndexEmbeddingMismatchError,
+                )
+                if isinstance(e, IndexEmbeddingMismatchError):
+                    logger.error(f"[RAG.retrieve] {e}")
+                    raise
                 # 向量检索失败 → 保留 BM25 结果（软降级），留痕
                 logger.warning(f"[RAG.retrieve] 向量检索失败，跳过: {e}", exc_info=True)
 

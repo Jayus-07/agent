@@ -65,6 +65,7 @@ api_router.include_router(rbac.router)  # 管理端 RBAC、客服档案与会话
 api_router.include_router(sys_config_admin.router)  # 灰度开关动态配置（2026-09-16 Lite，管理员闸）
 api_router.include_router(sys_providers.router)  # 模型供应商清单与分级探测
 api_router.include_router(sys_model_roles.router)  # 模型角色生效视图
+api_router.include_router(sys_model_roles._health_router)  # 模型健康缓存 + 手动探测（治理 2026-09-22）
 api_router.include_router(model_config.router)  # 模型配置写入、历史与漂移
 api_router.include_router(chat.router)
 api_router.include_router(sql.router)

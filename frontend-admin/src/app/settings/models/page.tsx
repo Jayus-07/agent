@@ -8,6 +8,7 @@ import PageHeader from '@/components/layout/PageHeader'
 import { atLeast } from '@/lib/auth'
 import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviderPresets, listProviders } from '@/api/modelConfig'
 import RoleBindingsTab from '@/components/model-config/RoleBindingsTab'
+import RuntimeChainCard from '@/components/model-config/RuntimeChainCard'
 import ProvidersTab from '@/components/model-config/ProvidersTab'
 import ConfigHistoryTab from '@/components/model-config/ConfigHistoryTab'
 import DriftTab from '@/components/model-config/DriftTab'
@@ -132,7 +133,15 @@ export default function ModelConfigPage() {
   }
 
   function renderContent() {
-    if (tab === 'roles') return <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} highlightRole={highlightRole} onSaved={refreshAll} />
+    if (tab === 'roles') {
+      return (
+        <div className="space-y-5">
+          {/* 运行时链路：按角色绑定动态生成的问答/入库模型链（治理 2026-09-22） */}
+          <RuntimeChainCard roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} />
+          <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} highlightRole={highlightRole} onSaved={refreshAll} />
+        </div>
+      )
+    }
     if (tab === 'providers') return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} plans={presets.data?.plans ?? []} presets={presets.data?.items ?? []} presetsLoading={presets.isLoading} onGoToRoles={(role) => changeTab('roles', role)} />
     if (tab === 'prices') return <PriceTab />
     if (tab === 'history') return <ConfigHistoryTab items={history.data?.items ?? []} canAdmin={canAdmin} onChanged={refreshAll} />

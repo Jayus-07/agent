@@ -1,11 +1,21 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, CircleAlert, Edit3, Save, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, CircleAlert, Edit3, Save, SlidersHorizontal, X } from 'lucide-react'
 import type { ModelCatalogEntry } from '@/api/modelConfig'
-import { saveModelRole } from '@/api/modelConfig'
-import type { ModelKind, ModelOption, RoleBinding, SelectableVerdict } from '@/types/modelConfig'
+import { saveModelRole, saveModelRolePolicy } from '@/api/modelConfig'
+import type {
+  FailurePolicy,
+  ModelKind,
+  ModelOption,
+  RoleBinding,
+  RolePolicy,
+  SelectableVerdict,
+} from '@/types/modelConfig'
 import {
+  failurePolicyLabel,
+  healthStatusLabel,
+  healthStatusTone,
   OTHER_ROLE_GROUP_ID,
   ROLE_GROUPS,
   isModelSelectable,
@@ -45,6 +55,26 @@ const SOURCE_BADGE: Record<string, string> = {
 /** 未知来源不求鲜艳，只求不冒充「代码默认」。 */
 const SOURCE_BADGE_FALLBACK = 'border-slate-300 bg-slate-50 text-text-muted'
 
+/** failurePolicy 全枚举（后端 CHECK 约束镜像）。 */
+const FAILURE_POLICIES: FailurePolicy[] = [
+  'fallback', 'skip', 'fail_fast', 'template_response', 'mark_failed',
+]
+
+/** 各角色默认策略（后端 ROLE_RUNTIME_DEFAULTS 的展示镜像，仅用于弹窗预填）。 */
+const POLICY_PRESETS: Record<string, Pick<RolePolicy, 'fallbackModel' | 'timeoutSeconds' | 'maxRetries' | 'failurePolicy'>> = {
+  main: { fallbackModel: '', timeoutSeconds: 30, maxRetries: 1, failurePolicy: 'fallback' },
+  tool_selector: { fallbackModel: '', timeoutSeconds: 10, maxRetries: 0, failurePolicy: 'skip' },
+  fallback: { fallbackModel: '', timeoutSeconds: 30, maxRetries: 0, failurePolicy: 'fail_fast' },
+  doc: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
+  metadata_extract: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
+  question_gen: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
+  table_describe: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
+  ocr: { fallbackModel: '', timeoutSeconds: 120, maxRetries: 0, failurePolicy: 'mark_failed' },
+  embedding: { fallbackModel: '', timeoutSeconds: 15, maxRetries: 1, failurePolicy: 'fail_fast' },
+  rerank: { fallbackModel: '', timeoutSeconds: 15, maxRetries: 1, failurePolicy: 'skip' },
+  eval_gen: { fallbackModel: '', timeoutSeconds: 30, maxRetries: 1, failurePolicy: 'fail_fast' },
+}
+
 /**
  * 角色的可用性判定。`modelName` 传行内生效值 = 展示态，传下拉选中值 = 编辑态预览。
  *
@@ -74,6 +104,13 @@ function roleVerdict(
   return isModelSelectable(option, expectedKind)
 }
 
+/** 索引兼容告警条目数（embedding 角色行）：mismatch 或 rebuild_required 的 collection 数。 */
+function incompatibleIndexes(row: RoleRow) {
+  return (row.indexCompat ?? []).filter(
+    (item) => item.mismatch || item.status === 'rebuild_required',
+  )
+}
+
 export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, highlightRole }: Props) {
   const toast = useToast()
   const [editing, setEditing] = useState<string | null>(null)
@@ -81,6 +118,14 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   const [busy, setBusy] = useState(false)
   const [confirmRow, setConfirmRow] = useState<RoleRow | null>(null)
   const [onlyProblem, setOnlyProblem] = useState(false)
+  // 策略编辑态：editingPolicy = 角色名；表单值独立保存
+  const [editingPolicy, setEditingPolicy] = useState<RoleRow | null>(null)
+  const [policyForm, setPolicyForm] = useState({
+    fallbackModel: '',
+    timeoutSeconds: 30,
+    maxRetries: 0,
+    failurePolicy: 'fail_fast' as FailurePolicy,
+  })
   const byName = useMemo(() => new Map(catalog.map((item) => [item.name, item])), [catalog])
   const byRole = useMemo(() => new Map(roles.map((item) => [item.role, item])), [roles])
 
@@ -104,6 +149,37 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   function cancel() {
     setEditing(null)
     setValue('')
+  }
+
+  function beginPolicy(row: RoleRow) {
+    const preset = row.policy ?? {
+      role: row.role,
+      source: 'default' as const,
+      ...(POLICY_PRESETS[row.role] ?? {
+        fallbackModel: '', timeoutSeconds: 10, maxRetries: 0, failurePolicy: 'fail_fast' as FailurePolicy,
+      }),
+    }
+    setEditingPolicy(row)
+    setPolicyForm({
+      fallbackModel: preset.fallbackModel ?? '',
+      timeoutSeconds: preset.timeoutSeconds,
+      maxRetries: preset.maxRetries,
+      failurePolicy: preset.failurePolicy,
+    })
+  }
+
+  async function persistPolicy(row: RoleRow) {
+    setBusy(true)
+    try {
+      await saveModelRolePolicy(row.role, policyForm)
+      toast.success('运行策略已保存，下一次对应链路调用生效')
+      setEditingPolicy(null)
+      await onSaved()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '运行策略保存失败')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function persist(row: RoleRow) {
@@ -172,14 +248,37 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
     return built.filter((group) => group.rows.length > 0)
   }, [roles, byRole, byName, onlyProblem])
 
+  // 索引兼容全局告警（embedding 换模型后既有索引进入待重建态）
+  const embeddingRow = byRole.get('embedding')
+  const badIndexes = embeddingRow ? incompatibleIndexes(embeddingRow) : []
+
   return (
     <section className="overflow-hidden rounded-xl border border-black/5 bg-white shadow-card">
+      {badIndexes.length > 0 && (
+        <div
+          data-testid="index-compat-warning"
+          className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-800"
+        >
+          <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-600" />
+          <div>
+            <div className="font-medium">当前向量化模型与现有知识库索引不一致，请重建索引后再使用。</div>
+            <div className="mt-0.5 font-mono text-[10px] text-amber-700">
+              {badIndexes.map((item) => (
+                <span key={item.collection} className="mr-3">
+                  {item.collection}: {item.embeddingModel || '（未记录）'} → {item.runtimeModel}（{item.status}）
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div>
           <h2 className="text-xs font-medium text-text-primary">角色绑定</h2>
           <p className="mt-1 text-[11px] text-text-muted">
             共 {roles.length} 个角色，按业务链路分组。角色决定业务链路使用哪个模型；非索引链路会在刷新周期内读取新值，
-            向量化与重排模型必须先重建索引。
+            向量化与重排模型必须先重建索引。健康状态来自后台周期探测（默认 5 分钟），页面不做在线探测。
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-text-secondary">
@@ -195,20 +294,22 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] text-left text-xs">
+        <table className="w-full min-w-[980px] text-left text-xs">
           <colgroup>
-            <col className="w-[21%]" />
-            <col className="w-[29%]" />
-            <col className="w-[27%]" />
+            <col className="w-[17%]" />
+            <col className="w-[24%]" />
+            <col className="w-[22%]" />
+            <col className="w-[12%]" />
             <col className="w-[13%]" />
-            <col className="w-[10%]" />
+            <col className="w-[12%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-slate-100 text-[10px] text-text-muted">
-              <th scope="col" className="px-4 py-3 font-normal">角色</th>
-              <th scope="col" className="px-4 py-3 font-normal">当前绑定</th>
+              <th scope="col" className="px-4 py-3 font-normal">业务角色</th>
+              <th scope="col" className="px-4 py-3 font-normal">当前生效模型</th>
               <th scope="col" className="px-4 py-3 font-normal">来源</th>
-              <th scope="col" className="px-4 py-3 font-normal">可用性</th>
+              <th scope="col" className="px-4 py-3 font-normal">健康状态</th>
+              <th scope="col" className="px-4 py-3 font-normal">可用性 / 风险</th>
               <th scope="col" className="px-4 py-3 text-right font-normal">操作</th>
             </tr>
           </thead>
@@ -216,7 +317,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
             {groups.map((group) => (
               <Fragment key={group.id}>
                 <tr className="bg-slate-50/80">
-                  <td colSpan={5} className="px-4 py-2">
+                  <td colSpan={6} className="px-4 py-2">
                     <span className="text-[11px] font-medium text-text-secondary">{group.label}</span>
                     <span className="ml-2 text-[10px] text-text-muted">{group.hint} · {group.rows.length} 个角色</span>
                   </td>
@@ -231,6 +332,9 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                   const verdict = roleVerdict(row, shownModel, byName.get(shownModel), expectedKind)
                   const usable = verdict.selectable
                   const sourceTone = SOURCE_BADGE[row.source] ?? SOURCE_BADGE_FALLBACK
+                  const isInherit = row.source === 'inherit'
+                  const policy = row.policy
+                  const health = row.health
                   return (
                     <tr
                       key={row.role}
@@ -310,7 +414,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                           <>
                             <div className="flex flex-wrap items-center gap-1.5">
                               <span className={`rounded-full border px-2 py-0.5 text-[10px] ${sourceTone}`}>
-                                {sourceLabel(row.source, row.inheritedFrom)}
+                                {sourceLabel(row.source, row.inheritedFrom, isInherit ? row.effectiveModel : null)}
                               </span>
                               {(row.updatedBy || row.updatedAt) && (
                                 <span className="text-[10px] text-text-muted">
@@ -319,14 +423,36 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                                 </span>
                               )}
                             </div>
-                            {row.literalValue !== row.effectiveModel && (
-                              <div className="mt-1 text-[10px] text-text-muted">
-                                {row.literalValue
-                                  ? `配置值：${row.literalValue}`
-                                  : '配置值：空白（该角色的空值有语义，不等于「未配置」）'}
+                            {isInherit ? (
+                              // 「继承 main」的用户语义：不是「配置值为空」，而是运行时跟随主模型
+                              <div
+                                className="mt-1 text-[10px] text-text-muted"
+                                title="当前角色未配置独立模型，因此运行时跟随 main 角色的当前绑定模型。"
+                                data-testid={`inherit-hint-${row.role}`}
+                              >
+                                来源：继承主问答模型 · 当前生效 {row.effectiveModel || '—'}
                               </div>
-                            )}
+                            ) : (row.literalValue && row.literalValue !== row.effectiveModel) ? (
+                              <div className="mt-1 text-[10px] text-text-muted">配置值：{row.literalValue}</div>
+                            ) : null}
                           </>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3" data-testid={`role-health-${row.role}`}>
+                        {!health ? (
+                          <span className="text-[10px] text-text-muted">未探测</span>
+                        ) : (
+                          <div>
+                            <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] ${healthStatusTone(health.status)}`}>
+                              {healthStatusLabel(health.status)}
+                            </span>
+                            <div className="mt-1 text-[10px] text-text-muted">
+                              {health.lastLatencyMs != null ? `${health.lastLatencyMs}ms` : ''}
+                              {health.lastCheckedAt ? ` · ${formatRelative(health.lastCheckedAt)}` : ''}
+                              {health.consecutiveFailures > 0 ? ` · 连续失败 ${health.consecutiveFailures}` : ''}
+                            </div>
+                          </div>
                         )}
                       </td>
 
@@ -341,6 +467,11 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                             </div>
                             {isEditing && <div className="mt-0.5 text-[10px] text-text-muted">按所选模型实时判定</div>}
                             {row.requiresReindex && <div className="mt-0.5 text-[10px] text-amber-700">变更需重建索引</div>}
+                            {policy && (
+                              <div className="mt-0.5 text-[10px] text-text-muted" title={`超时 ${policy.timeoutSeconds}s · 重试 ${policy.maxRetries} 次`}>
+                                {failurePolicyLabel(policy.failurePolicy)}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -368,14 +499,25 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                             </button>
                           </div>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => begin(row)}
-                            aria-label={`修改 ${roleLabel(row.role)}`}
-                            className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"
-                          >
-                            <Edit3 size={12} />修改
-                          </button>
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => beginPolicy(row)}
+                              aria-label={`修改 ${roleLabel(row.role)} 的运行策略`}
+                              data-testid={`role-policy-${row.role}`}
+                              className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-text-secondary hover:bg-accent/5"
+                            >
+                              <SlidersHorizontal size={12} />策略
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => begin(row)}
+                              aria-label={`修改 ${roleLabel(row.role)}`}
+                              className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"
+                            >
+                              <Edit3 size={12} />修改
+                            </button>
+                          </div>
                         ))}
                       </td>
                     </tr>
@@ -423,7 +565,10 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
               <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-[11px] text-text-primary">
                 {confirmRow.effectiveModel || '—'} → {value.trim() || '（空）'}
               </div>
-              <p className="text-[11px] text-text-muted">保存后当前索引不会自动切换，重建索引时才读取新模型。</p>
+              <p className="text-[11px] text-text-muted">
+                不同向量模型通常不共享同一语义空间。保存后现有向量索引将进入「待重建」状态，
+                完成重建前系统会拒绝按新模型查询旧索引（INDEX_EMBEDDING_MISMATCH），不会静默降级。
+              </p>
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
               <button
@@ -440,7 +585,137 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                 disabled={busy}
                 className="rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"
               >
-                {busy ? '保存中…' : '确认修改'}
+                {busy ? '保存中…' : '保存配置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingPolicy && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="编辑运行策略">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white shadow-2xl" data-testid="policy-modal">
+            <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
+              <SlidersHorizontal size={15} className="text-accent" />
+              <div className="text-sm font-medium text-text-primary">
+                {roleLabel(editingPolicy.role)} · 运行策略
+              </div>
+            </div>
+            <div className="space-y-4 px-5 py-4 text-xs text-text-secondary">
+              <p className="text-[11px] text-text-muted">
+                策略决定该角色模型失败时怎么兜底、单次调用超时多久。所有角色的
+                「超时 ×（重试 + 1）」预算封顶 60s（OCR 除外），防止一次请求拖满三分钟。
+              </p>
+
+              {/* 能力校验面板 */}
+              <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                <div className="text-[11px] font-medium text-text-secondary">能力要求</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <span>要求：{modelKindLabel(roleModelKind(editingPolicy.role))}</span>
+                  <span className="text-text-muted">当前生效模型：{editingPolicy.effectiveModel || '—'}</span>
+                  <span className={editingPolicy.registered ? 'text-emerald-700' : 'text-red-700'}>
+                    {editingPolicy.registered ? '兼容' : (editingPolicy.availabilityReason || '不兼容')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Failure Policy */}
+              <label className="block">
+                <span className="text-[11px] font-medium text-text-secondary">失败策略（Failure Policy）</span>
+                <select
+                  value={policyForm.failurePolicy}
+                  onChange={(event) => setPolicyForm((prev) => ({ ...prev, failurePolicy: event.target.value as FailurePolicy }))}
+                  data-testid="policy-failure-policy"
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2 py-1.5 text-[11px] text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/20"
+                >
+                  {FAILURE_POLICIES.map((policy) => (
+                    <option
+                      key={policy}
+                      value={policy}
+                      disabled={editingPolicy.role === 'embedding' && policy === 'fallback'}
+                    >
+                      {failurePolicyLabel(policy)}{editingPolicy.role === 'embedding' && policy === 'fallback' ? '（embedding 禁用）' : ''}
+                    </option>
+                  ))}
+                </select>
+                {editingPolicy.role === 'embedding' && (
+                  <span className="mt-1 block text-[10px] text-amber-700">
+                    embedding 不允许 fallback：不同向量模型不共享语义空间，静默切换会让新向量查询旧索引。
+                  </span>
+                )}
+              </label>
+
+              {/* Fallback Model（非 fail_fast/skip 才有意义，但始终展示，禁用逻辑在 submit） */}
+              <label className="block">
+                <span className="text-[11px] font-medium text-text-secondary">Fallback 模型（留空 = 不启用备用）</span>
+                <select
+                  value={policyForm.fallbackModel}
+                  onChange={(event) => setPolicyForm((prev) => ({ ...prev, fallbackModel: event.target.value }))}
+                  data-testid="policy-fallback-model"
+                  disabled={editingPolicy.role === 'embedding'}
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2 py-1.5 font-mono text-[11px] text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:opacity-50"
+                >
+                  <option value="">（不启用备用模型）</option>
+                  {catalog
+                    .filter((item) => (item.modelKind || 'chat') === roleModelKind(editingPolicy.role))
+                    .filter((item) => item.name !== editingPolicy.effectiveModel)
+                    .map((item) => (
+                      <option key={item.name} value={item.name}>{item.name}</option>
+                    ))}
+                </select>
+              </label>
+
+              {/* Timeout / Retry */}
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-[11px] font-medium text-text-secondary">超时（秒）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={600}
+                    value={policyForm.timeoutSeconds}
+                    onChange={(event) => setPolicyForm((prev) => ({ ...prev, timeoutSeconds: Number(event.target.value) }))}
+                    data-testid="policy-timeout"
+                    className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2 py-1.5 text-[11px] text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/20"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-medium text-text-secondary">重试次数（0~3）</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={3}
+                    value={policyForm.maxRetries}
+                    onChange={(event) => setPolicyForm((prev) => ({ ...prev, maxRetries: Number(event.target.value) }))}
+                    data-testid="policy-retries"
+                    className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2 py-1.5 text-[11px] text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/20"
+                  />
+                </label>
+              </div>
+              <div className="text-[10px] text-text-muted">
+                本轮总预算：{policyForm.timeoutSeconds * (policyForm.maxRetries + 1)}s
+                {policyForm.timeoutSeconds * (policyForm.maxRetries + 1) > 60 && editingPolicy.role !== 'ocr' && (
+                  <span className="text-amber-700">（超过 60s 推荐上限，保存可能被拒绝）</span>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setEditingPolicy(null)}
+                disabled={busy}
+                className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void persistPolicy(editingPolicy)}
+                disabled={busy}
+                data-testid="policy-save"
+                className="rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"
+              >
+                {busy ? '保存中…' : '保存策略'}
               </button>
             </div>
           </div>

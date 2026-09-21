@@ -4,12 +4,14 @@ import type {
   DriftItem,
   ModelCatalogInput,
   ModelCatalogResponse,
+  ModelHealth,
   ModelKind,
   ProbeResult,
   ProviderListResponse,
   ProviderPresetsResponse,
   ProviderRow,
   RoleBinding,
+  RolePolicy,
   SpecializedConfigureResponse,
   SpecializedModelConfigureInput,
   SpecializedModelResponse,
@@ -131,6 +133,41 @@ export async function saveModelRole(role: string, modelName: string): Promise<Re
     operation: `model-role:${role}`,
     method: 'PUT',
     body: { modelName },
+  })
+}
+
+/** 角色运行策略写入（治理改造 2026-09-22；后端硬校验 embedding 禁止 fallback）。 */
+export async function saveModelRolePolicy(
+  role: string,
+  body: Omit<RolePolicy, 'role' | 'source' | 'updatedBy' | 'updatedAt'>,
+): Promise<Record<string, unknown>> {
+  return mutationRequest<Record<string, unknown>>(
+    `/api/sys/model-roles/${encodeURIComponent(role)}/policy`,
+    {
+      operation: `model-role-policy:${role}`,
+      method: 'PUT',
+      body: {
+        fallbackModel: body.fallbackModel,
+        timeoutSeconds: body.timeoutSeconds,
+        maxRetries: body.maxRetries,
+        failurePolicy: body.failurePolicy,
+      },
+    },
+  )
+}
+
+/** 模型健康缓存（beat 周期探测；本端点不在线探测）。 */
+export async function listModelHealth(): Promise<{ items: ModelHealth[] }> {
+  return request<{ items: ModelHealth[] }>('/api/sys/model-health')
+}
+
+/** 管理员手动触发单模型健康探测（同步执行一次极低成本探测）。 */
+export async function checkModelHealth(modelName: string): Promise<{ status: string; latencyMs: number; error: string }> {
+  return mutationRequest('/api/sys/model-health/check', {
+    operation: `model-health-check:${modelName}`,
+    method: 'POST',
+    body: { modelName },
+    timeout: 30000,
   })
 }
 

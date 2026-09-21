@@ -273,10 +273,42 @@ def router_node(state: dict) -> dict:
 
     # V2: workflow / direct 不再降级到 plan
     mode = decision.execution_mode
+
+    # ── QueryRouter 统一问题理解（治理改造 2026-09-22）──────────
+    # 纯规则 + 既有路由决策合成（零新增 LLM 调用）；两个消费点：
+    #   1. state["query_understanding"] 供 Planner/Reporter/Trace 消费；
+    #   2. 简单问题（单能力、无组合措辞）被路由丢给 plan 时降级为 direct，
+    #      阻止「SKU 库存多少」这类事实查询白跑 planner→critique→supervisor。
+    understanding: dict = {}
+    try:
+        from backend.orchestration.router.query_understanding import understand_query
+
+        understanding = understand_query(query, decision)
+        downgrade = understanding.get("downgrade")
+        if downgrade:
+            logger.info(
+                "[RouterNode] QueryRouter 降级 plan→direct: capability=%s "
+                "complexity=%s",
+                downgrade.get("capability"),
+                understanding.get("complexity"),
+            )
+            mode = decision.execution_mode.DIRECT
+            try:
+                from backend.observability.tracer import trace_collector
+                t = trace_collector.current()
+                if t is not None:
+                    t.tags["queryrouter_downgrade"] = str(
+                        downgrade.get("capability") or "")
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[RouterNode] QueryRouter 理解失败（软降级，保持原路由）: {e}")
+
     return {
         **state,
         "route_decision": decision.model_dump(),
         "route_mode": mode.value,
+        "query_understanding": understanding,
     }
 
 

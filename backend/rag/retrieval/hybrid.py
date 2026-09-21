@@ -316,6 +316,13 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
                 metadata_filter=metadata_filter, expanded_queries=expanded_queries,
             ).result()
         except Exception as e:
+            # embedding 模型与索引不一致 → 禁止降级 BM25（新向量查旧索引是噪声）
+            from backend.rag.vectorstore.pgvector_store import (
+                IndexEmbeddingMismatchError,
+            )
+            if isinstance(e, IndexEmbeddingMismatchError):
+                logger.error(f"[hybrid_retrieve] {e}")
+                raise
             logger.warning(
                 f"[hybrid_retrieve] Vector-only 检索失败，降级 BM25: {e}",
                 exc_info=True,
@@ -410,7 +417,14 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     try:
         vector_docs = vf.result()
     except Exception as e:
-        # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛
+        # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛。
+        # 例外：索引/运行时 embedding 不一致是门禁信号，必须上抛（2026-09-22）。
+        from backend.rag.vectorstore.pgvector_store import (
+            IndexEmbeddingMismatchError,
+        )
+        if isinstance(e, IndexEmbeddingMismatchError):
+            logger.error(f"[hybrid_retrieve] {e}")
+            raise
         logger.warning(
             f"[hybrid_retrieve] Vector 检索失败，降级仅用 BM25: {e}",
             exc_info=True,

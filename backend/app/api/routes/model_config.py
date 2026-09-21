@@ -43,6 +43,19 @@ class ModelRoleUpdateRequest(BaseModel):
     model_name: str = Field(..., alias="modelName", min_length=0, max_length=256)
 
 
+class RolePolicyUpdateRequest(BaseModel):
+    """角色运行策略写入（None 字段 = 沿用默认/现值）。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    fallback_model: str = Field("", alias="fallbackModel", max_length=256)
+    timeout_seconds: int = Field(30, alias="timeoutSeconds", ge=1, le=600)
+    max_retries: int = Field(0, alias="maxRetries", ge=0, le=3)
+    failure_policy: Literal[
+        "fallback", "skip", "fail_fast", "template_response", "mark_failed"
+    ] = Field("fail_fast", alias="failurePolicy")
+
+
 class ProviderUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -155,6 +168,40 @@ async def update_model_role(
             role, body.model_name, operator.actor
         )
     except Exception as exc:  # 统一把存储异常转为可操作的 5xx
+        raise _error(exc) from exc
+
+
+@router.get("/sys/model-roles/{role}/policy")
+async def get_role_policy(
+    role: str,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_user_actor),
+) -> dict[str, Any]:
+    """角色运行策略（DB 覆盖或代码默认，含来源标注）。"""
+    del operator
+    try:
+        return await _service(request).get_role_policy(role)
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.put("/sys/model-roles/{role}/policy")
+async def update_role_policy(
+    role: str,
+    body: RolePolicyUpdateRequest,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict[str, Any]:
+    """写入角色运行策略（fallback/timeout/retry/failure_policy，含审计）。
+
+    后端硬校验：embedding 禁止 fallback、retry ≤ 3（预算封顶，防 60s×N）。
+    """
+    require_idempotency_key(request)
+    try:
+        return await _service(request).update_role_policy(
+            role, body.model_dump(by_alias=True), operator.actor
+        )
+    except Exception as exc:
         raise _error(exc) from exc
 
 

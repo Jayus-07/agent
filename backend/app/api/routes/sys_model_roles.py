@@ -2,7 +2,9 @@
 
 | 端点 | 用途 |
 |---|---|
-| `GET /sys/model-roles` | 全部模型角色的生效值、来源与可用性（只读） |
+| `GET /sys/model-roles` | 全部模型角色的生效值、来源、可用性、健康与策略（只读） |
+| `GET /sys/model-health` | 全部模型的健康探测缓存（只读，探测在 Celery beat） |
+| `POST /sys/model-health/check` | 管理员手动触发单模型探测 |
 
 字段对齐 UI 设计 §5.4 `RoleBinding`（**该文档即契约**）。端点层做三件事：
 
@@ -19,12 +21,22 @@
 DB 角色覆盖由 `registry_store` 刷新时注入 `model_roles`，因此 `source=db` 是真实
 可观测状态；无覆盖时仍按 `env` / `inherit` / `default` 返回。该路由已注册到
 `api_router`，并与角色写入端点共享同一套模型清单。
+
+治理改造（2026-09-22）新增字段（全部软失败，缺表/缺数据时优雅降级）：
+- `health`：llm_model_health 缓存快照（探测在 beat，不在本请求内发生）
+- `policy`：角色运行策略（DB 覆盖或代码默认，含来源）
+- `indexCompat`（仅 embedding 角色）：向量索引元数据与运行时模型的兼容状态
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.api.deps import require_user_actor
+from backend.app.api.deps import (
+    OperatorIdentity,
+    require_admin_user,
+    require_user_actor,
+)
 from backend.config import model_roles
 from backend.config import llm as config_llm
 from backend.infra.llm import credentials as credentials_mod
@@ -97,7 +109,7 @@ def _availability_reason(
 
 @router.get("")
 async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
-    """全部模型角色：生效模型、来源、归属 provider 与可用性（tab①⑤ 数据源）。
+    """全部模型角色：生效模型、来源、归属 provider、可用性、健康与策略。
 
     响应裸 dict（§1.1.1 决策），字段见 §5.4 `RoleBinding`；角色名 `label` 不在其中
     （前端常量，契约明确不从后端取）；`providerLabel` 为厂商中文名（来自
@@ -109,6 +121,8 @@ async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
         for m in models_mod.get_available_models()
         if m.get("name")
     }
+    # 治理字段（健康/策略/索引兼容）：软失败 —— 034 迁移未跑或表为空时不阻塞主视图
+    health_map, policy_map, index_compat = await _governance_context()
     items: list[dict] = []
     for row in model_roles.effective_snapshot():
         effective = row["value"] or ""
@@ -145,5 +159,89 @@ async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
             "requiresReindex": row["requiresReindex"],
             "updatedBy": row["updatedBy"],
             "updatedAt": row["updatedAt"],
+            # ── 治理字段 ──
+            "health": health_map.get(effective),
+            "policy": policy_map.get(row["role"]),
+            "indexCompat": index_compat if row["role"] == "embedding" else None,
         })
     return {"items": items, "actor": ident.actor}
+
+
+async def _governance_context() -> tuple[dict, dict, list | None]:
+    """拉健康缓存 / 角色策略 / 索引兼容（全部软失败，缺表返回空）。"""
+    health_map: dict = {}
+    policy_map: dict = {}
+    index_compat: list | None = None
+    try:
+        from backend.services.model_config import get_model_config_service
+
+        svc = get_model_config_service()
+        health_rows = await svc.list_model_health()
+        health_map = {
+            r["modelName"]: {
+                "status": r["status"],
+                "lastCheckedAt": r["lastCheckedAt"],
+                "lastLatencyMs": r["lastLatencyMs"],
+                "lastError": r["lastError"] or None,
+                "consecutiveFailures": r["consecutiveFailures"],
+            }
+            for r in health_rows
+        }
+        for role in model_roles.MODEL_ROLES:
+            try:
+                policy_map[role] = await svc.get_role_policy(role)
+            except Exception:
+                defaults = model_roles.runtime_defaults(role)
+                policy_map[role] = {
+                    "role": role,
+                    "fallbackModel": defaults.fallback_model,
+                    "timeoutSeconds": defaults.timeout_seconds,
+                    "maxRetries": defaults.max_retries,
+                    "failurePolicy": defaults.failure_policy,
+                    "source": "default",
+                }
+        index_compat = await svc.get_index_compat()
+    except Exception:
+        # 策略缺行不在 except 捕获范围（内部已兜底默认值）；到这里说明
+        # 健康表/索引表整体不可读（如 034 未跑），治理字段全部缺省。
+        for role in model_roles.MODEL_ROLES:
+            policy_map.setdefault(role, None)
+    return health_map, policy_map, index_compat
+
+
+# ── 模型健康缓存视图 + 手动探测 ──────────────────────────────
+
+_health_router = APIRouter(prefix="/sys/model-health", tags=["sys-model-roles"])
+
+
+class ModelHealthCheckRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_name: str = Field(..., alias="modelName", min_length=1, max_length=256)
+
+
+@_health_router.get("")
+async def list_model_health(
+    operator: OperatorIdentity = Depends(require_user_actor),
+) -> dict:
+    """全部模型健康探测缓存（探测在 Celery beat，本端点不在线探测）。"""
+    del operator
+    from backend.services.model_config import get_model_config_service
+
+    items = await get_model_config_service().list_model_health()
+    return {"items": items}
+
+
+@_health_router.post("/check")
+async def check_model_health(
+    body: ModelHealthCheckRequest,
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict:
+    """管理员手动触发单模型探测（同步执行一次极低成本探测）。"""
+    del operator
+    from backend.infra.llm.health import probe_model
+
+    result = probe_model(body.model_name)
+    if result["status"] == "model_not_found":
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result

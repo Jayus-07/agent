@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 
 const apiMock = vi.hoisted(() => ({
   saveModelRole: vi.fn(),
+  saveModelRolePolicy: vi.fn(),
 }))
 
 vi.mock('@/api/modelConfig', () => apiMock)
@@ -100,6 +101,7 @@ afterEach(() => {
     item.container.remove()
   }
   apiMock.saveModelRole.mockReset()
+  apiMock.saveModelRolePolicy.mockReset()
 })
 
 describe('RoleBindingsTab 模型目录选择', () => {
@@ -253,5 +255,114 @@ describe('RoleBindingsTab 供应商页跳转高亮（B3）', () => {
   it('未传 highlightRole 时无行被高亮', () => {
     const container = mount()
     expect(container.querySelector('[data-role-row="rerank"]')?.className).not.toContain('bg-amber-50')
+  })
+})
+
+describe('RoleBindingsTab 运行时治理（2026-09-22 改造）', () => {
+  it('继承 main 的行展示「继承主问答模型」语义，不再出现「空白有语义」措辞', () => {
+    const container = mount({
+      roles: [roleRow({
+        role: 'metadata_extract',
+        effectiveModel: 'qwen3.7-plus',
+        literalValue: '',
+        source: 'inherit',
+        inheritedFrom: 'main',
+        provider: 'qwen',
+      })],
+    })
+    const hint = container.querySelector('[data-testid="inherit-hint-metadata_extract"]')
+    expect(hint?.textContent).toContain('继承主问答模型')
+    expect(hint?.textContent).toContain('qwen3.7-plus')
+    expect(container.textContent).not.toContain('空白')
+    expect(container.textContent).not.toContain('该角色的空值有语义')
+  })
+
+  it('健康列展示后端探测缓存的状态与延迟', () => {
+    const container = mount({
+      roles: [
+        roleRow({ role: 'main', effectiveModel: 'qwen3.7-plus', literalValue: 'qwen3.7-plus', provider: 'qwen', health: {
+          status: 'healthy', lastCheckedAt: new Date().toISOString(), lastLatencyMs: 820, lastError: null, consecutiveFailures: 0,
+        } }),
+        roleRow({ health: { status: 'rate_limited', lastCheckedAt: null, lastLatencyMs: null, lastError: '429', consecutiveFailures: 2 } }),
+      ],
+    })
+    expect(container.querySelector('[data-testid="role-health-main"]')?.textContent).toContain('正常')
+    expect(container.querySelector('[data-testid="role-health-main"]')?.textContent).toContain('820ms')
+    expect(container.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('限流')
+    expect(container.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('连续失败 2')
+
+    // 无探测数据 → 「未探测」，不冒充正常
+    const noHealth = mount()
+    expect(noHealth.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('未探测')
+  })
+
+  it('embedding 索引不一致时显示全局重建告警', () => {
+    const container = mount({
+      roles: [roleRow({
+        role: 'embedding',
+        effectiveModel: 'qwen3.7-text-embedding',
+        literalValue: 'qwen3.7-text-embedding',
+        provider: 'dashscope-rag',
+        requiresReindex: true,
+        indexCompat: [{
+          collection: 'chroma', embeddingProvider: 'dashscope-rag', embeddingModel: 'old-emb',
+          embeddingDimension: 1024, indexVersion: 1, builtAt: null, updatedAt: null,
+          status: 'rebuild_required', runtimeModel: 'qwen3.7-text-embedding', mismatch: true,
+        }],
+      })],
+    })
+    const warning = container.querySelector('[data-testid="index-compat-warning"]')
+    expect(warning?.textContent).toContain('请重建索引后再使用')
+    expect(warning?.textContent).toContain('old-emb')
+  })
+
+  it('策略弹窗可编辑并保存 fallback/timeout/retry/failurePolicy', async () => {
+    apiMock.saveModelRolePolicy.mockResolvedValue({})
+    const container = mount({
+      roles: [roleRow({
+        policy: { role: 'rerank', fallbackModel: '', timeoutSeconds: 15, maxRetries: 1, failurePolicy: 'skip', source: 'db', updatedBy: null, updatedAt: null },
+      })],
+    })
+
+    const btn = container.querySelector<HTMLButtonElement>('[data-testid="role-policy-rerank"]')
+    await act(async () => {
+      btn?.click()
+      await Promise.resolve()
+    })
+    const modal = container.querySelector('[data-testid="policy-modal"]')
+    expect(modal?.textContent).toContain('失败策略')
+    expect(modal?.textContent).toContain('能力要求')
+
+    const save = container.querySelector<HTMLButtonElement>('[data-testid="policy-save"]')
+    await act(async () => {
+      save?.click()
+      await Promise.resolve()
+    })
+    expect(apiMock.saveModelRolePolicy).toHaveBeenCalledWith('rerank', {
+      fallbackModel: '',
+      timeoutSeconds: 15,
+      maxRetries: 1,
+      failurePolicy: 'skip',
+    })
+  })
+
+  it('embedding 角色的失败策略里 fallback 选项被禁用', async () => {
+    const container = mount({
+      roles: [roleRow({
+        role: 'embedding',
+        effectiveModel: 'qwen3.7-text-embedding',
+        literalValue: 'qwen3.7-text-embedding',
+        provider: 'dashscope-rag',
+        requiresReindex: true,
+      })],
+    })
+    const btn = container.querySelector<HTMLButtonElement>('[data-testid="role-policy-embedding"]')
+    await act(async () => {
+      btn?.click()
+      await Promise.resolve()
+    })
+    const select = container.querySelector<HTMLSelectElement>('[data-testid="policy-failure-policy"]')
+    const fallbackOption = Array.from(select?.options ?? []).find((option) => option.value === 'fallback')
+    expect(fallbackOption?.disabled).toBe(true)
   })
 })

@@ -20,6 +20,54 @@
 /** 生效来源：db 覆盖 / env 值 / 继承父 role / 代码默认 */
 export type ValueSource = 'db' | 'env' | 'inherit' | 'default'
 
+/** 模型健康状态（后端 llm_model_health.status 枚举镜像，治理改造 2026-09-22） */
+export type ModelHealthStatus =
+  | 'healthy'
+  | 'degraded'
+  | 'slow'
+  | 'rate_limited'
+  | 'auth_failed'
+  | 'timeout'
+  | 'provider_unreachable'
+  | 'model_not_found'
+  | 'unknown'
+
+export interface ModelHealth {
+  status: ModelHealthStatus
+  lastCheckedAt: string | null
+  lastLatencyMs: number | null
+  lastError: string | null
+  consecutiveFailures: number
+}
+
+/** 角色运行策略（后端 llm_model_role_policy 镜像；source=default 时为代码默认值） */
+export type FailurePolicy = 'fallback' | 'skip' | 'fail_fast' | 'template_response' | 'mark_failed'
+
+export interface RolePolicy {
+  role: string
+  fallbackModel: string
+  timeoutSeconds: number
+  maxRetries: number
+  failurePolicy: FailurePolicy
+  source: 'db' | 'default'
+  updatedBy?: string | null
+  updatedAt?: string | null
+}
+
+/** 向量索引 embedding 元数据（仅 embedding 角色下发；治理改造 2026-09-22） */
+export interface IndexCompat {
+  collection: string
+  embeddingProvider: string
+  embeddingModel: string
+  embeddingDimension: number
+  indexVersion: number
+  builtAt: string | null
+  updatedAt: string | null
+  status: 'ready' | 'rebuild_required' | 'rebuilding' | 'failed'
+  runtimeModel: string
+  mismatch: boolean
+}
+
 export interface RoleBinding {
   role: string
   /** 中文显示名由前端常量提供（见 `ROLE_LABELS`），后端不下发 */
@@ -37,6 +85,73 @@ export interface RoleBinding {
   requiresReindex: boolean
   updatedBy: string | null
   updatedAt: string | null
+  /** 治理字段：健康探测缓存（beat 探测，页面只读；034 未跑时为 null） */
+  health?: ModelHealth | null
+  /** 治理字段：角色运行策略（缺省 = 代码默认） */
+  policy?: RolePolicy | null
+  /** 治理字段：索引兼容状态（仅 embedding 角色） */
+  indexCompat?: IndexCompat[] | null
+}
+
+/** 健康状态 → 中文徽标文案（§6 收敛点，组件不许再写第二遍） */
+export function healthStatusLabel(status: ModelHealthStatus | undefined | null): string {
+  switch (status) {
+    case 'healthy':
+      return '正常'
+    case 'slow':
+      return '响应慢'
+    case 'rate_limited':
+      return '限流'
+    case 'auth_failed':
+      return '鉴权失败'
+    case 'timeout':
+      return '超时'
+    case 'provider_unreachable':
+      return 'Provider 不可达'
+    case 'model_not_found':
+      return '模型不存在'
+    case 'degraded':
+      return '异常'
+    default:
+      return '未知'
+  }
+}
+
+/** 健康状态 → 徽标配色（tailwind class）。未探测过（unknown）用中性灰。 */
+export function healthStatusTone(status: ModelHealthStatus | undefined | null): string {
+  switch (status) {
+    case 'healthy':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    case 'slow':
+    case 'rate_limited':
+      return 'border-amber-200 bg-amber-50 text-amber-700'
+    case 'degraded':
+    case 'auth_failed':
+    case 'timeout':
+    case 'provider_unreachable':
+    case 'model_not_found':
+      return 'border-red-200 bg-red-50 text-red-700'
+    default:
+      return 'border-slate-200 bg-slate-50 text-text-muted'
+  }
+}
+
+/** 失败策略 → 中文文案。 */
+export function failurePolicyLabel(policy: RolePolicy['failurePolicy']): string {
+  switch (policy) {
+    case 'fallback':
+      return '切换备用'
+    case 'skip':
+      return '跳过（降级继续）'
+    case 'fail_fast':
+      return '快速失败'
+    case 'template_response':
+      return '模板话术兜底'
+    case 'mark_failed':
+      return '标记失败'
+    default:
+      return policy
+  }
 }
 
 export type BillingMode = 'metered' | 'subscription' | 'local'

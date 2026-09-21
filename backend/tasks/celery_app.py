@@ -7,6 +7,7 @@
 - acks_late + prefetch=1：Worker 宕机任务自动回队；多实例公平消费
 """
 import asyncio
+import os
 
 from celery import Celery
 from celery.signals import worker_process_init
@@ -34,6 +35,7 @@ celery_app = Celery(
              "backend.tasks.metadata_shadow_tasks",  # 元数据影子隔离队列
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
+             "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
              "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
 )
 
@@ -102,6 +104,12 @@ celery_app.conf.update(
         "tasks-zombie-reconcile": {
             "task": "tasks.zombie_reconcile",
             "schedule": float(TASK_ZOMBIE_RECONCILE_INTERVAL),
+        },
+        # 治理改造（2026-09-22）：模型健康周期探测 → llm_model_health 缓存。
+        # 页面只读缓存；间隔经 env MODEL_HEALTH_SCAN_INTERVAL 可调（默认 300s）。
+        "model-health-scan": {
+            "task": "model.health_scan",
+            "schedule": float(os.getenv("MODEL_HEALTH_SCAN_INTERVAL", "300")),
         },
     },
 )
