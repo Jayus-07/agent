@@ -56,6 +56,8 @@ class RegistrySnapshot:
     role_meta: dict[str, dict] = field(default_factory=dict)
     # role → embedding/rerank provider、适配器与非敏感运行参数
     specialized: dict[str, dict] = field(default_factory=dict)
+    # role → 运行策略行（llm_model_role_policy，timeout/retry/failure_policy）
+    policies: dict[str, dict] = field(default_factory=dict)
     loaded: bool = False
 
 
@@ -93,6 +95,12 @@ _SELECT_SPECIALIZED = """
            last_probe_at, last_probe_ok, last_probe_summary,
            last_probe_elapsed_ms, updated_by, updated_at
     FROM llm_specialized_model_bindings
+    ORDER BY role
+"""
+
+_SELECT_ROLE_POLICY = """
+    SELECT role, fallback_model, timeout_seconds, max_retries, failure_policy
+    FROM llm_model_role_policy
     ORDER BY role
 """
 
@@ -298,6 +306,9 @@ async def load_registry() -> RegistrySnapshot:
             crow = (await session.execute(text(_SELECT_CREDENTIALS))).mappings().all()
             rrow = (await session.execute(text(_SELECT_ROLES))).mappings().all()
             srow = (await session.execute(text(_SELECT_SPECIALIZED))).mappings().all()
+            prow_policy = (
+                await session.execute(text(_SELECT_ROLE_POLICY))
+            ).mappings().all()
             break
         else:
             raise RuntimeError("get_session 未产出会话")
@@ -375,6 +386,15 @@ async def load_registry() -> RegistrySnapshot:
             "updated_at": row["updated_at"],
         }
 
+    # 角色运行策略（llm_model_role_policy）：只收已登记角色，未知角色忽略
+    policies: dict[str, dict] = {}
+    for row in prow_policy:
+        role = str(row["role"] or "")
+        if role not in _model_roles.MODEL_ROLES:
+            logger.warning("[LLMRegistry] 忽略未知角色策略行: %s", role)
+            continue
+        policies[role] = dict(row)
+
     return RegistrySnapshot(
         providers=[dict(r) for r in prow],
         models=[_model_entry(r) for r in mrow],
@@ -383,6 +403,7 @@ async def load_registry() -> RegistrySnapshot:
         roles=roles,
         role_meta=role_meta,
         specialized=specialized,
+        policies=policies,
         loaded=True,
     )
 
@@ -403,6 +424,7 @@ async def refresh_registry() -> bool:
     _models.set_dynamic_models(snap.models)
     _credentials.set_db_credentials(snap.credentials)
     _model_roles.inject_overrides(snap.roles, snap.role_meta)
+    _model_roles.inject_policies(snap.policies)
     _specialized.set_bindings(_derive_specialized_bindings(snap))
     if changed:
         # DB 配置变化后必须丢弃已构建的客户端，否则旧 API Key/base_url 会继续被复用。

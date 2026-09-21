@@ -50,6 +50,9 @@ __all__ = [
     "ROLE_RUNTIME_DEFAULTS",
     "FAILURE_POLICIES",
     "runtime_defaults",
+    "resolve_runtime_policy",
+    "has_db_policy",
+    "inject_policies",
     "resolve_raw",
     "resolve_effective",
     "resolve_name",
@@ -231,6 +234,57 @@ def runtime_defaults(role: str) -> RoleRuntimeDefaults:
     """角色的默认运行策略；未登记角色给保守缺省（10s×0 fail_fast）。"""
     return ROLE_RUNTIME_DEFAULTS.get(
         role, RoleRuntimeDefaults(timeout_seconds=10, max_retries=0)
+    )
+
+
+# =====================================================
+# 角色策略 DB 覆盖层（llm_model_role_policy，registry_store 注入）
+# =====================================================
+# ⚠️ 2026-09-22 实机验证发现：策略此前只有管理端 CRUD+回显，运行时零消费
+# （按钮是"假开关"）。本层把 DB 行注入进程内，供调用方（如 tool_selector）
+# 经 resolve_runtime_policy 消费；注入随 refresh_registry 15s 刷新循环走，
+# 保存后准实时生效。
+_policy_overrides: dict[str, dict[str, Any]] = {}
+
+
+def inject_policies(values: dict[str, dict[str, Any]] | None) -> None:
+    """整表替换策略覆盖层（refresh_registry 专用，与 inject_overrides 同模式）。"""
+    _policy_overrides.clear()
+    for role, row in (values or {}).items():
+        if isinstance(row, dict):
+            _policy_overrides[str(role)] = dict(row)
+
+
+def has_db_policy(role: str) -> bool:
+    """该角色是否存在 DB 显式策略行（区分「管理员设过」与「代码默认」）。"""
+    return str(role or "") in _policy_overrides
+
+
+def resolve_runtime_policy(role: str) -> RoleRuntimeDefaults:
+    """角色运行策略：DB 显式行 → 代码默认（runtime_defaults）。
+
+    纯内存读取，热路径零 IO；未登记字段逐个回落默认值（DB 行允许只配
+    部分字段的语义由写入端归一化保证，这里再兜一层）。
+    """
+    base = runtime_defaults(role)
+    row = _policy_overrides.get(str(role or ""))
+    if not row:
+        return base
+    try:
+        timeout_seconds = int(row.get("timeout_seconds") or base.timeout_seconds)
+    except (TypeError, ValueError):
+        timeout_seconds = base.timeout_seconds
+    try:
+        max_retries = int(row.get("max_retries")
+                          if row.get("max_retries") is not None
+                          else base.max_retries)
+    except (TypeError, ValueError):
+        max_retries = base.max_retries
+    return RoleRuntimeDefaults(
+        fallback_model=str(row.get("fallback_model") or "") or base.fallback_model,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        failure_policy=str(row.get("failure_policy") or "") or base.failure_policy,
     )
 
 

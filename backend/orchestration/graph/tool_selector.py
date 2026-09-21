@@ -55,6 +55,32 @@ def _configured_tool_selector_model() -> str:
     """读取工具选择角色；无 DB 覆盖时保留历史模块常量语义。"""
     return model_roles.resolve_runtime_name("tool_selector", TOOL_SELECTOR_MODEL)
 
+
+def _selector_timeout() -> int:
+    """FC 外层超时闸：角色策略（llm_model_role_policy）优先，无 DB 行回落
+    历史缺省 TOOL_SELECTOR_LLM_TIMEOUT(8s)。
+
+    2026-09-22 实机验证：策略此前只在管理端回显、运行时零消费（假开关），
+    Qwen3-8B 灰区选择 8s 内跑不完 → 3 连超时。管理员在角色策略里调大后
+    经 refresh_registry 15s 刷新循环准实时生效。
+    """
+    try:
+        if model_roles.has_db_policy("tool_selector"):
+            return max(1, model_roles.resolve_runtime_policy("tool_selector").timeout_seconds)
+    except Exception:
+        pass
+    return TOOL_SELECTOR_LLM_TIMEOUT
+
+
+def _selector_llm_retries() -> int:
+    """LLM 调用层重试次数：仅 DB 显式策略行生效（无行 = 0，保持现行为）。"""
+    try:
+        if model_roles.has_db_policy("tool_selector"):
+            return max(0, model_roles.resolve_runtime_policy("tool_selector").max_retries)
+    except Exception:
+        pass
+    return 0
+
 _SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问题，从候选工具中选出最合适的一个，并从问题中抽取该工具需要的全部参数。
 
 规则：
@@ -221,17 +247,25 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
     # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
     # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录
     bound = bind_tools_for_model(_configured_tool_selector_model(), tools) or llm.bind_tools(tools)
+    timeout_s = _selector_timeout()
+    llm_retries = _selector_llm_retries()
     feedback = ""
     for attempt in range(2):
-        raw = safe_call_with_timeout(
-            bound.invoke,
-            timeout=TOOL_SELECTOR_LLM_TIMEOUT,
-            default_value=None,
-            error_message=f"[ToolSelector] LLM 超时 ({TOOL_SELECTOR_LLM_TIMEOUT}s)",
-            input=[("system", _SYSTEM_PROMPT),
-                   ("human", _build_user_prompt(query, valid_caps, decision, feedback))],
-            max_tokens=TOOL_SELECTOR_LLM_MAX_TOKENS,
-        )
+        # LLM 调用层重试（角色策略 max_retries）：超时/异常逐次重试，仍失败
+        # 才落到底下的业务级反馈重试 / clarify
+        raw = None
+        for _llm_attempt in range(llm_retries + 1):
+            raw = safe_call_with_timeout(
+                bound.invoke,
+                timeout=timeout_s,
+                default_value=None,
+                error_message=f"[ToolSelector] LLM 超时 ({timeout_s}s)",
+                input=[("system", _SYSTEM_PROMPT),
+                       ("human", _build_user_prompt(query, valid_caps, decision, feedback))],
+                max_tokens=TOOL_SELECTOR_LLM_MAX_TOKENS,
+            )
+            if raw is not None:
+                break
         if raw is None:
             # 多候选时不能因 FC 故障盲执行首项；单候选保留兼容路径。
             logger.warning("[ToolSelector] LLM 超时/异常")

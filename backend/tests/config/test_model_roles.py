@@ -361,3 +361,64 @@ def test_module_does_not_import_infra_llm_at_module_level():
         if line.startswith(("import ", "from ")) and "backend.infra.llm" in line:
             top_level.append(line)
     assert not top_level, f"模块级出现了 infra.llm 导入: {top_level}"
+
+
+# ── 角色运行策略（llm_model_role_policy 注入，2026-09-22 实机验证接线）──
+
+def test_policy_no_db_row_falls_back_to_defaults():
+    """无 DB 行 → runtime_defaults（tool_selector=10s×0 skip），has_db_policy=False。"""
+    model_roles.inject_policies(None)
+    p = model_roles.resolve_runtime_policy("tool_selector")
+    assert (p.timeout_seconds, p.max_retries, p.failure_policy) == (10, 0, "skip")
+    assert model_roles.has_db_policy("tool_selector") is False
+
+
+def test_policy_db_row_overrides_and_resets():
+    """DB 行逐字段覆盖；inject_policies(None) 整表复位。"""
+    model_roles.inject_policies({
+        "tool_selector": {"timeout_seconds": 30, "max_retries": 1,
+                          "failure_policy": "skip"},
+    })
+    assert model_roles.has_db_policy("tool_selector") is True
+    p = model_roles.resolve_runtime_policy("tool_selector")
+    assert (p.timeout_seconds, p.max_retries) == (30, 1)
+    # 未登记角色不受影响
+    assert model_roles.resolve_runtime_policy("main").timeout_seconds == 30
+    model_roles.inject_policies(None)
+    assert model_roles.resolve_runtime_policy("tool_selector").timeout_seconds == 10
+    assert model_roles.has_db_policy("tool_selector") is False
+
+
+def test_policy_partial_row_fills_defaults():
+    """DB 行缺字段时逐个回落默认（写入端已归一化，这里再兜一层）。"""
+    model_roles.inject_policies({"ocr": {"timeout_seconds": 200}})
+    p = model_roles.resolve_runtime_policy("ocr")
+    assert p.timeout_seconds == 200
+    assert p.max_retries == 0  # ocr 默认
+    assert p.failure_policy == "mark_failed"
+    model_roles.inject_policies(None)
+
+
+def test_policy_bad_values_fall_back(monkeypatch):
+    """脏值（非数字）不炸，逐字段回落默认。"""
+    model_roles.inject_policies({"main": {"timeout_seconds": "abc", "max_retries": None}})
+    p = model_roles.resolve_runtime_policy("main")
+    assert p.timeout_seconds == 30
+    assert p.max_retries == 1
+    model_roles.inject_policies(None)
+
+
+def test_tool_selector_consumes_policy_timeout():
+    """tool_selector 的外层超时闸/重试必须消费角色策略（实机验证暴露的假开关）。"""
+    import backend.orchestration.graph.tool_selector as ts
+
+    model_roles.inject_policies({
+        "tool_selector": {"timeout_seconds": 45, "max_retries": 2,
+                          "failure_policy": "skip"},
+    })
+    assert ts._selector_timeout() == 45
+    assert ts._selector_llm_retries() == 2
+    model_roles.inject_policies(None)
+    # 无 DB 行 → 历史缺省（8s×0，行为不变）
+    assert ts._selector_timeout() == ts.TOOL_SELECTOR_LLM_TIMEOUT
+    assert ts._selector_llm_retries() == 0

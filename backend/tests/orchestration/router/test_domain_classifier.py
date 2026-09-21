@@ -146,7 +146,9 @@ class TestPredictionShape:
         scores["report"] = 0.9
         scores["business"] = 0.6
         clf = CoarseIntentClassifier(backend=StubBackend(scores))
-        p = clf.classify("生成本月经营报告")
+        # 用弱命中 query（「总结」1 次）：避免规则强命中走 override 分支
+        # （override 不带 second_domain，契约字段由 embedding 分支体现）
+        p = clf.classify("帮我出一份库存总结")
         assert isinstance(p, DomainPrediction)
         dumped = p.model_dump()
         assert set(dumped) >= {
