@@ -49,7 +49,7 @@ async function flush() {
 
 afterEach(() => {
   vi.clearAllMocks()
-  useChatStore.setState({ sessionModel: null, sessions: [], currentId: null })
+  useChatStore.setState({ sessionModel: undefined, sessions: [], currentId: undefined })
   for (const { container, root } of mounted.splice(0)) {
     act(() => root.unmount())
     container.remove()
@@ -64,7 +64,7 @@ describe('useSSE 会话级模型覆盖', () => {
     await act(async () => { await api.startStream('问题', 's1') })
     await flush()
 
-    const body = vi.mocked(streamChat).mock.calls[0][0] as Record<string, unknown>
+    const body = vi.mocked(streamChat).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(body.model).toBeUndefined()
     // 幂等键仍需照常带上（并发会话引入的契约，不能被本次改动破坏）
     expect(body.idempotency_key).toBeTruthy()
@@ -77,7 +77,7 @@ describe('useSSE 会话级模型覆盖', () => {
     await act(async () => { await api.startStream('问题', 's1') })
     await flush()
 
-    const body = vi.mocked(streamChat).mock.calls[0][0] as Record<string, unknown>
+    const body = vi.mocked(streamChat).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(body.model).toBe('model-b')
   })
 })
