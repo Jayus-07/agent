@@ -222,3 +222,25 @@ def test_never_leaks_secret(client):
     raw = client.get("/sys/model-roles").text
     assert "sk-secret-value" not in raw
     assert "apiKey" not in raw and "api_key" not in raw
+
+
+# ── 策略消费进度（policyEnforced，2026-09-22 假开关治理）────────────────
+
+
+def test_policy_enforced_flag_matches_registry(client):
+    """每个角色行必须带 policyEnforced，且与 model_roles 单一事实源一致。"""
+    model_roles.inject_policies(None)
+    rows = {r["role"]: r for r in client.get("/sys/model-roles").json()["items"]}
+    assert rows, "角色列表不应为空"
+    for role, row in rows.items():
+        assert row["policyEnforced"] is model_roles.policy_enforced(role)
+    # tool_selector 已接线；main 尚未接线（防止"假开关"回归）
+    assert rows["tool_selector"]["policyEnforced"] is True
+    assert rows["main"]["policyEnforced"] is False
+
+
+def test_policy_enforced_false_for_unregistered_roles(client):
+    """未接线角色的策略行即便存在 DB 覆盖也不影响 flag 判定来源。"""
+    rows = {r["role"]: r for r in client.get("/sys/model-roles").json()["items"]}
+    for role in ("doc", "ocr", "embedding", "rerank"):
+        assert rows[role]["policyEnforced"] is False

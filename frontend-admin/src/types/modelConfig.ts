@@ -89,6 +89,8 @@ export interface RoleBinding {
   health?: ModelHealth | null
   /** 治理字段：角色运行策略（缺省 = 代码默认） */
   policy?: RolePolicy | null
+  /** 治理字段：策略是否已被运行时消费（false = 未接线角色，策略按钮应禁用） */
+  policyEnforced?: boolean
   /** 治理字段：索引兼容状态（仅 embedding 角色） */
   indexCompat?: IndexCompat[] | null
 }

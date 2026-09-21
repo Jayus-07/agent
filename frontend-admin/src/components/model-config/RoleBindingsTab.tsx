@@ -541,9 +541,19 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                             <button
                               type="button"
                               onClick={() => beginPolicy(row)}
+                              disabled={row.policyEnforced === false}
+                              title={
+                                row.policyEnforced === false
+                                  ? '该角色的运行策略尚未接入运行时（当前仅「工具选择」生效），编辑不会影响行为'
+                                  : undefined
+                              }
                               aria-label={`修改 ${roleLabel(row.role)} 的运行策略`}
                               data-testid={`role-policy-${row.role}`}
-                              className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-text-secondary hover:bg-accent/5"
+                              className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] ${
+                                row.policyEnforced === false
+                                  ? 'cursor-not-allowed border-black/5 text-text-muted/50'
+                                  : 'border-black/10 text-text-secondary hover:bg-accent/5'
+                              }`}
                             >
                               <SlidersHorizontal size={12} />策略
                             </button>

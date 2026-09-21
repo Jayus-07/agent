@@ -53,6 +53,8 @@ __all__ = [
     "resolve_runtime_policy",
     "has_db_policy",
     "inject_policies",
+    "policy_enforced",
+    "POLICY_CONSUMED_ROLES",
     "resolve_raw",
     "resolve_effective",
     "resolve_name",
@@ -286,6 +288,18 @@ def resolve_runtime_policy(role: str) -> RoleRuntimeDefaults:
         max_retries=max_retries,
         failure_policy=str(row.get("failure_policy") or "") or base.failure_policy,
     )
+
+
+# ── 策略消费进度（管理端"策略"按钮的开关依据）─────────────────
+# 2026-09-22 实机验证发现策略表运行时零消费（假开关），当日接线
+# tool_selector；其余角色接通一个登记一个。管理端只对已登记角色开放
+# 策略编辑按钮，未登记角色编辑了也不生效，不该给可点的入口。
+POLICY_CONSUMED_ROLES = frozenset({"tool_selector"})
+
+
+def policy_enforced(role: str) -> bool:
+    """该角色的运行策略是否已被运行时消费（决定管理端按钮可用性）。"""
+    return str(role or "") in POLICY_CONSUMED_ROLES
 
 
 # =====================================================

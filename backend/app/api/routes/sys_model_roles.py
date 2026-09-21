@@ -162,6 +162,8 @@ async def list_model_roles(ident=Depends(require_user_actor)) -> dict:
             # ── 治理字段 ──
             "health": health_map.get(effective),
             "policy": policy_map.get(row["role"]),
+            # 策略是否已被运行时消费（未接线角色前端禁用策略按钮，防假开关）
+            "policyEnforced": model_roles.policy_enforced(row["role"]),
             "indexCompat": index_compat if row["role"] == "embedding" else None,
         })
     return {"items": items, "actor": ident.actor}
