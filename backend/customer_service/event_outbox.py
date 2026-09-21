@@ -201,12 +201,14 @@ def _collect_messages(redis, *, consumer: str, limit: int, min_idle_ms: int):
 
     remaining = max(0, limit - len(messages))
     if remaining:
+        # 非阻塞轮询：本补偿任务由 beat 每 15s 调度一次，无需阻塞等待；
+        # 共享 Redis 客户端 socket_timeout=5s，block=0（无限阻塞）会导致
+        # 每次 XREADGROUP 都 TimeoutError，且已 auto-claim 的消息一并丢失。
         fresh = redis.xreadgroup(
             OUTBOX_GROUP,
             consumer,
             {OUTBOX_STREAM: ">"},
             count=remaining,
-            block=0,
         )
         for _stream, stream_messages in fresh or []:
             messages.extend(stream_messages or [])
