@@ -8,25 +8,24 @@
 
 设计约束（对齐既有先例）：
 - prompt 模块内硬编码（同 supervisor._llm_decision 先例，不注册 PromptSpec）
-- 配置用模块内 os.getenv（同 llm_usage_store._cfg_enabled 先例，
-  避开 config/customer_service.py 的多会话占用，测试直接 patch env）
+- 配置 env 名收口 config/customer_service.py 的 getter（调用时求值，
+  测试直接 patch env 即生效；2026-09-21 审查遗留项 3.3 收敛）
 - 软失败：LLM 超时/解析失败/开关关闭/短句 → 返回 None，调用方留守 CS
 - _get_llm() 间接层供测试 monkeypatch
 - 同 query 结果 TTL 缓存（路由层仲裁在每条消息上都可能触发，不能重复付费）
 """
 import json
 import logging
-import os
 import time
 from typing import Any, Optional
 
 from pydantic import BaseModel
+from backend.config.customer_service import (
+    cs_non_cs_redirect_threshold,
+    cs_redirect_main_llm_enabled,
+)
 
 logger = logging.getLogger(__name__)
-
-# ── 配置（env 直读，默认 OFF 灰度）────────────────────────────────
-ENV_LLM_ENABLED = "CS_REDIRECT_MAIN_LLM_ENABLED"
-ENV_THRESHOLD = "CS_NON_CS_REDIRECT_THRESHOLD"
 
 # 短于该长度（去空白后）不值得一次 LLM 调用："你好"/"谢谢"留守 CS
 _MIN_QUERY_LEN = 6
@@ -41,17 +40,13 @@ _CACHE: dict[str, tuple[float, "NonCSDetection"]] = {}
 
 
 def _cfg_enabled() -> bool:
-    return os.getenv(ENV_LLM_ENABLED, "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    """薄委托：env 名与解析收口 config/customer_service.py（保留本名供测试 patch）。"""
+    return cs_redirect_main_llm_enabled()
 
 
 def _threshold() -> float:
-    try:
-        v = float(os.getenv(ENV_THRESHOLD, "0.75"))
-        return v if 0.0 <= v <= 1.0 else 0.75
-    except (TypeError, ValueError):
-        return 0.75
+    """薄委托：同上，保留本名供测试 patch。"""
+    return cs_non_cs_redirect_threshold()
 
 
 class NonCSDetection(BaseModel):

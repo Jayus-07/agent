@@ -518,3 +518,9 @@ def compute_metadata_fingerprint() -> str:
     return h.hexdigest()[:12]
 
 METADATA_SCHEMA_FINGERPRINT = compute_metadata_fingerprint()
+
+# ── Celery 模式 SSE 进度轮询 ──
+# 进度权威 = Redis Hash {REDIS_KEY_PREFIX}upload:{id}（Worker 与 API 分属不同
+# 进程，进程内队列没有 Worker 事件，SSE 必须轮询 Redis）
+RAG_SSE_REDIS_POLL_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_SECONDS", "0.5"))
+RAG_SSE_REDIS_POLL_MAX_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_MAX_SECONDS", "1900"))

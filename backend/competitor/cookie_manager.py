@@ -11,12 +11,13 @@
 来源 source: "manual"（手动粘贴）/ "qr"（扫码登录）。
 """
 import json
-import os
+
 from datetime import datetime
 from typing import Any
 
 from backend.competitor.adapters import detect_platform
 from backend.competitor.store import get_store
+from backend.config.competitor import crawler_cookies_raw
 from backend.shared.logger import logger
 
 # 支持的平台（顺序即前端选择器/列表展示顺序）
@@ -111,7 +112,7 @@ def get_cookies_for_url(url: str) -> str:
         store = get_store()
         val = (store.get_config("crawler_cookies") or "").strip()
     if not val:
-        val = os.getenv("CRAWLER_COOKIES", "").strip()
+        val = crawler_cookies_raw()
     return val
 
 

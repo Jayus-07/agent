@@ -495,7 +495,8 @@ _PROMETHEUS_TIMEOUT_S = 3.0
 
 
 def _prometheus_url() -> str:
-    return os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090").rstrip("/")
+    from backend.config.observability import PROMETHEUS_URL
+    return PROMETHEUS_URL.rstrip("/")
 
 
 async def _prom_instant(promql: str) -> list[dict]:
@@ -668,7 +669,8 @@ def _redis_health_block() -> dict:
             except Exception:
                 pass
 
-    block = {"db0": _probe(os.getenv("REDIS_URL", "redis://localhost:6379/0")),
+    from backend.config.redis import REDIS_URL
+    block = {"db0": _probe(REDIS_URL),
              "broker": _probe(CELERY_BROKER_URL),
              "result": _probe(CELERY_RESULT_BACKEND)}
 

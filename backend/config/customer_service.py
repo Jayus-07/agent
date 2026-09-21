@@ -285,3 +285,28 @@ if _faults_raw:
         CS_DEMO_FAULTS = _json.loads(_faults_raw)
     except ValueError:
         CS_DEMO_FAULTS = {}
+
+# =============================================
+# 非客服检测 · LLM 仲裁（customer_service/analyzer/non_cs_detector.py）
+# =============================================
+# env 名收口在本模块，业务侧禁止直接 os.getenv。用 getter（调用时求值）
+# 而非模块常量：仲裁默认 OFF 是灰度开关，测试 monkeypatch setenv 后
+# 必须立即生效（无重导依赖）。
+ENV_CS_REDIRECT_MAIN_LLM_ENABLED = "CS_REDIRECT_MAIN_LLM_ENABLED"
+ENV_CS_NON_CS_REDIRECT_THRESHOLD = "CS_NON_CS_REDIRECT_THRESHOLD"
+
+
+def cs_redirect_main_llm_enabled() -> bool:
+    """LLM 语义仲裁总开关（默认 OFF，正则漏判时才放开）。"""
+    return os.getenv(ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def cs_non_cs_redirect_threshold() -> float:
+    """转出置信阈值；非法/越界值回落 0.75（与非客服检测既有口径一致）。"""
+    try:
+        v = float(os.getenv(ENV_CS_NON_CS_REDIRECT_THRESHOLD, "0.75"))
+        return v if 0.0 <= v <= 1.0 else 0.75
+    except (TypeError, ValueError):
+        return 0.75

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.config import customer_service as cfg
 from backend.customer_service.analyzer import non_cs_detector as ncd
 
 
@@ -45,8 +46,8 @@ def _json_content(is_non_cs: bool = True, confidence: float = 0.9,
 @pytest.fixture(autouse=True)
 def _env_off_and_cache_isolated(monkeypatch):
     """默认环境：开关关闭 + 缓存隔离（防跨测试污染）。"""
-    monkeypatch.delenv(ncd.ENV_LLM_ENABLED, raising=False)
-    monkeypatch.delenv(ncd.ENV_THRESHOLD, raising=False)
+    monkeypatch.delenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, raising=False)
+    monkeypatch.delenv(cfg.ENV_CS_NON_CS_REDIRECT_THRESHOLD, raising=False)
     monkeypatch.setattr(ncd, "_CACHE", {})
     yield
 
@@ -64,7 +65,7 @@ class TestDetectNonCs:
 
     def test_enabled_high_confidence_detects(self, monkeypatch):
         """ON + LLM 高置信判非客服 → 返回检测结果。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content(is_non_cs=True, confidence=0.9))
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         det = ncd.detect_non_cs_cached(_LONG_QUERY)
@@ -76,7 +77,7 @@ class TestDetectNonCs:
 
     def test_low_confidence_no_redirect(self, monkeypatch):
         """ON + 置信度低于默认阈值 0.75 → 不转出。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content(confidence=0.3))
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         det = ncd.detect_non_cs_cached(_LONG_QUERY)
@@ -85,7 +86,7 @@ class TestDetectNonCs:
 
     def test_cs_judgment_never_redirects(self, monkeypatch):
         """LLM 判为客服（is_non_cs=false）无论置信度多高都不转出。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content(is_non_cs=False, confidence=0.99))
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         det = ncd.detect_non_cs_cached(_LONG_QUERY)
@@ -94,7 +95,7 @@ class TestDetectNonCs:
 
     def test_short_query_skips_llm(self, monkeypatch):
         """短句（<6 字符）不值得一次 LLM 调用：None 且零调用。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content())
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         assert ncd.detect_non_cs_cached("你好") is None
@@ -102,21 +103,21 @@ class TestDetectNonCs:
 
     def test_bad_output_soft_fails(self, monkeypatch):
         """LLM 回复无 JSON → 软失败 None（留守 CS 是安全侧）。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM("我觉得这不是客服问题吧")
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         assert ncd.detect_non_cs_cached(_LONG_QUERY) is None
 
     def test_llm_exception_soft_fails(self, monkeypatch):
         """LLM 抛异常 → 软失败 None。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(boom=True)
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         assert ncd.detect_non_cs_cached(_LONG_QUERY) is None
 
     def test_timeout_soft_fails(self, monkeypatch):
         """LLM 超时（线程级限时）→ 软失败 None。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         monkeypatch.setattr(ncd, "_TIMEOUT_S", 0.05)
         fake = _FakeLLM(_json_content(), sleep_s=0.3)
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
@@ -154,13 +155,13 @@ class TestParseResponse:
 class TestThreshold:
     def test_threshold_env_override(self, monkeypatch):
         """阈值可经 env 覆盖：0.95 时 0.9 不转出。"""
-        monkeypatch.setenv(ncd.ENV_THRESHOLD, "0.95")
+        monkeypatch.setenv(cfg.ENV_CS_NON_CS_REDIRECT_THRESHOLD, "0.95")
         det = ncd.NonCSDetection(is_non_cs=True, confidence=0.9)
         assert ncd.should_redirect(det) is False
 
     def test_threshold_invalid_env_falls_back(self, monkeypatch):
         """非法阈值 env 回落默认 0.75。"""
-        monkeypatch.setenv(ncd.ENV_THRESHOLD, "not-a-number")
+        monkeypatch.setenv(cfg.ENV_CS_NON_CS_REDIRECT_THRESHOLD, "not-a-number")
         assert ncd.should_redirect(
             ncd.NonCSDetection(is_non_cs=True, confidence=0.75)
         ) is True
@@ -172,7 +173,7 @@ class TestThreshold:
 class TestCache:
     def test_same_query_hits_cache(self, monkeypatch):
         """同 query 第二次不调 LLM。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content())
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         ncd.detect_non_cs_cached(_LONG_QUERY)
@@ -181,7 +182,7 @@ class TestCache:
 
     def test_different_query_no_cross_hit(self, monkeypatch):
         """不同 query 各自调 LLM。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content())
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         ncd.detect_non_cs_cached("帮我写一个快速排序")
@@ -190,7 +191,7 @@ class TestCache:
 
     def test_failure_not_cached(self, monkeypatch):
         """软失败（None）不缓存：LLM 恢复后同 query 可重试。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         bad = _FakeLLM("不是 JSON")
         monkeypatch.setattr(ncd, "_get_llm", lambda: bad)
         assert ncd.detect_non_cs_cached(_LONG_QUERY) is None
@@ -202,7 +203,7 @@ class TestCache:
 
     def test_fifo_eviction_bounded(self, monkeypatch):
         """缓存超上限时淘汰最旧条目，不无界膨胀。"""
-        monkeypatch.setenv(ncd.ENV_LLM_ENABLED, "true")
+        monkeypatch.setenv(cfg.ENV_CS_REDIRECT_MAIN_LLM_ENABLED, "true")
         fake = _FakeLLM(_json_content())
         monkeypatch.setattr(ncd, "_get_llm", lambda: fake)
         for i in range(ncd._CACHE_MAX + 2):

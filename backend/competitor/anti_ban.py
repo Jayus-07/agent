@@ -16,7 +16,6 @@
 所有函数接受可选 store 参数（默认全局单例），便于测试隔离。
 """
 import json
-import os
 import random
 import threading
 import time
@@ -26,6 +25,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from backend.config.competitor import robots_override
 from backend.shared.logger import logger
 
 # ── 恒定指纹（单账号场景: 一致性本身就是伪装）──────────────
@@ -379,7 +379,7 @@ def robots_allowed(url: str, store=None) -> bool:
     - 缓存 24h；拉取失败 → 放行（记录告警）
     - ROBOTS_OVERRIDE=warn_only → 仅告警不拦截（用户显式决策）
     """
-    if os.getenv("ROBOTS_OVERRIDE", "").strip() == "warn_only":
+    if robots_override() == "warn_only":
         return True
     parsed = urlparse(url)
     domain = parsed.netloc

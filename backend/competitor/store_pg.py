@@ -15,7 +15,6 @@ schema 与 backend/sql/migrations/016_business_stores_pg.sql 保持一致。
 
 from __future__ import annotations
 
-import os
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -26,11 +25,12 @@ import psycopg2.extras
 
 from backend.competitor.crypto import maybe_decrypt, maybe_encrypt
 from backend.competitor.store import CompetitorStore
+from backend.config.competitor import pg_table_prefix
 from backend.config.database import COMPETITOR_PG_CONFIG
 from backend.infra.db import engine_for
 from backend.shared.logger import logger
 
-_PREFIX = os.getenv("COMPETITOR_PG_TABLE_PREFIX", "")
+_PREFIX = pg_table_prefix()
 _T_WATCH = f"{_PREFIX}competitor_watchlist"
 _T_SNAP = f"{_PREFIX}competitor_snapshots"
 _T_CONFIG = f"{_PREFIX}competitor_config"

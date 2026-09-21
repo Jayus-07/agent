@@ -1,33 +1,19 @@
+"""data_collection/config.py — 向后兼容壳（2026-09-21 审查遗留项 3.3）
+
+``DC_*`` 常量事实源已迁至 ``backend/config/data_collection.py``（env 读取
+收口 config 层）。本壳逐名 re-export，既有 ``from backend.data_collection.config
+import DC_*`` 不受影响；新代码请直接从 config 层导入。
 """
-data_collection/config.py — Data Collection Center 模块配置
-
-所有配置可通过环境变量覆盖。
-"""
-
-import os
-
-# ── 数据源 ──
-DC_DEFAULT_FETCHER = os.getenv("DC_DEFAULT_FETCHER", "static")
-DC_DATA_DIR = os.getenv("DC_DATA_DIR", "")  # Phase 2: 自定义数据目录（当前 StaticDataFetcher 自动计算）
-
-# ── HTTP 采集 ──
-DC_HTTP_TIMEOUT = int(os.getenv("DC_HTTP_TIMEOUT", "30"))
-DC_HTTP_USER_AGENT = os.getenv("DC_HTTP_USER_AGENT", "DataCollectionCenter/1.0")
-DC_HTTP_MAX_RETRIES = int(os.getenv("DC_HTTP_MAX_RETRIES", "2"))
-
-# ── Mock API ──
-DC_MOCK_API_HOST = os.getenv("DC_MOCK_API_HOST", "localhost")
-DC_MOCK_API_PORT = int(os.getenv("DC_MOCK_API_PORT", "8001"))
-
-# ── 数据库 ──
-DC_DATABASE_URL = os.getenv(
-    "DC_DATABASE_URL",
-    "postgresql://postgres@localhost:5432/demo",  # 密码从环境变量 PGPASSWORD 注入
+from backend.config.data_collection import (  # noqa: F401
+    DC_ANALYSIS_ENABLED,
+    DC_BATCH_SIZE,
+    DC_DATABASE_URL,
+    DC_DATA_DIR,
+    DC_DEDUP_ENABLED,
+    DC_DEFAULT_FETCHER,
+    DC_HTTP_MAX_RETRIES,
+    DC_HTTP_TIMEOUT,
+    DC_HTTP_USER_AGENT,
+    DC_MOCK_API_HOST,
+    DC_MOCK_API_PORT,
 )
-DC_BATCH_SIZE = int(os.getenv("DC_BATCH_SIZE", "500"))
-
-# ── 清洗 ──
-DC_DEDUP_ENABLED = os.getenv("DC_DEDUP_ENABLED", "true").lower() == "true"  # Phase 2: 全局去重开关
-
-# ── 分析 ──
-DC_ANALYSIS_ENABLED = os.getenv("DC_ANALYSIS_ENABLED", "true").lower() == "true"

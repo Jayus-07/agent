@@ -11,6 +11,11 @@ from backend.app.api.deps import (
 )
 from backend.app.api.identity import resolve_identity
 from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS
+from backend.config.rag import (
+    RAG_MAX_CONCURRENT_INDEX,
+    RAG_SSE_REDIS_POLL_MAX_SECONDS,
+    RAG_SSE_REDIS_POLL_SECONDS,
+)
 # F7: IncrementalIndexer 不在模块顶层导入（导入链含 langchain/tracer 等重依赖），
 # 改为 _do_index_sync 内惰性导入，路由模块冷启动不再被拖慢。
 from backend.rag.progress_listener import ProgressListener
@@ -320,8 +325,8 @@ from backend.rag.preprocessing.parser import PARSABLE_EXTS
 # 后台索引任务的存活引用集：防止 fire-and-forget task 被 GC / 异常静默丢失
 _background_index_tasks: set[asyncio.Task] = set()
 
-# 索引并发闸门（懒创建信号量，见 _get_index_semaphore）
-_INDEX_CONCURRENCY_LIMIT = int(os.getenv("RAG_MAX_CONCURRENT_INDEX", "2"))
+# 索引并发闸门（懒创建信号量，见 _get_index_semaphore）；env 读取收口 config/rag.py
+_INDEX_CONCURRENCY_LIMIT = RAG_MAX_CONCURRENT_INDEX
 _index_semaphore: asyncio.Semaphore | None = None
 
 _MIME_BY_EXT: dict[str, set[str]] = {
@@ -1204,8 +1209,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
 # 进度权威 = Redis Hash {REDIS_KEY_PREFIX}upload:{upload_id}
 # （_write_progress_redis 镜像，跨进程可查）。Worker 与 API 分属不同
 # 进程，进程内队列里没有 Worker 的事件，SSE 必须改为轮询 Redis。
-_SSE_REDIS_POLL_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_SECONDS", "0.5"))
-_SSE_REDIS_POLL_MAX_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_MAX_SECONDS", "1900"))
+_SSE_REDIS_POLL_SECONDS = RAG_SSE_REDIS_POLL_SECONDS
+_SSE_REDIS_POLL_MAX_SECONDS = RAG_SSE_REDIS_POLL_MAX_SECONDS
 _SSE_REDIS_EMPTY_GRACE_POLLS = 20   # 连续无镜像判定过期（20 × 0.5s = 10s）
 _SSE_TERMINAL_STAGES = ("done", "error", "duplicate")
 _SSE_KEEPALIVE_EVERY_N_POLLS = 60   # 无变化时每 30s 一条 keepalive
