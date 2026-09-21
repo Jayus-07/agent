@@ -25,6 +25,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import OBS_DB_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.observability.analytics_store import (
     _MAX_ROWS,
     AnalyticsStore,
@@ -46,7 +47,7 @@ class PostgresAnalyticsStore(AnalyticsStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**OBS_DB_PG_CONFIG)
+        conn = engine_for(OBS_DB_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

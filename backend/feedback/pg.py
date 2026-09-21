@@ -22,6 +22,7 @@ from typing import Any, Iterator
 import psycopg2
 
 from backend.config.database import FEEDBACK_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.shared.logger import logger
 
 def _table() -> str:
@@ -66,7 +67,7 @@ def _utc_now_text() -> str:
 @contextmanager
 def _conn() -> Iterator[Any]:
     """per-op 连接：成功 commit、异常 rollback、退出必关。"""
-    conn = psycopg2.connect(**FEEDBACK_PG_CONFIG)
+    conn = engine_for(FEEDBACK_PG_CONFIG).raw_connection()
     try:
         yield conn
         conn.commit()

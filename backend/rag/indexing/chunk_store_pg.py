@@ -24,6 +24,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import RAG_STORES_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.rag.indexing.chunk_store import ChunkStore
 from backend.shared.logger import logger
 
@@ -46,7 +47,7 @@ class PostgresChunkStore(ChunkStore):
 
     @contextmanager
     def _conn(self, row_factory=None) -> Iterator[Any]:
-        conn = psycopg2.connect(**RAG_STORES_PG_CONFIG)
+        conn = engine_for(RAG_STORES_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

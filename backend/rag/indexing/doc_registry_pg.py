@@ -25,6 +25,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import DOC_REGISTRY_PG_CONFIG, DOC_REGISTRY_PG_TABLE
+from backend.infra.db import engine_for
 from backend.rag.indexing.doc_registry import (
     DOC_STATUSES,
     VERSION_GOVERNANCE_COLUMNS,
@@ -129,7 +130,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
     @contextmanager
     def _conn(self) -> Iterator[Any]:
         """每次操作独立连接：成功 commit、异常 rollback、退出必关（防连接泄漏）。"""
-        conn = psycopg2.connect(**DOC_REGISTRY_PG_CONFIG)
+        conn = engine_for(DOC_REGISTRY_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

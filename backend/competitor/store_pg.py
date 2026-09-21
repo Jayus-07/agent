@@ -27,6 +27,7 @@ import psycopg2.extras
 from backend.competitor.crypto import maybe_decrypt, maybe_encrypt
 from backend.competitor.store import CompetitorStore
 from backend.config.database import COMPETITOR_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.shared.logger import logger
 
 _PREFIX = os.getenv("COMPETITOR_PG_TABLE_PREFIX", "")
@@ -103,7 +104,7 @@ class PostgresCompetitorStore(CompetitorStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**COMPETITOR_PG_CONFIG)
+        conn = engine_for(COMPETITOR_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

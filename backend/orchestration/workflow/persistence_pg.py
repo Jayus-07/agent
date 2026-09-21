@@ -24,6 +24,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import WORKFLOW_DB_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.orchestration.workflow.context import WorkflowContext
 from backend.orchestration.workflow.persistence import (
     WorkflowRunStore,
@@ -67,7 +68,7 @@ class PostgresWorkflowRunStore(WorkflowRunStore):
     @contextmanager
     def _conn(self) -> Iterator[Any]:
         """每次操作独立连接：成功 commit、异常 rollback、退出必关。"""
-        conn = psycopg2.connect(**WORKFLOW_DB_PG_CONFIG)
+        conn = engine_for(WORKFLOW_DB_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

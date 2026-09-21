@@ -9,6 +9,7 @@ import hashlib
 import json
 import threading
 import uuid
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -104,12 +105,26 @@ def _input_ttl() -> int:
     return int(METADATA_IDEMPOTENCY_TTL_SECONDS)
 
 
+@contextmanager
 def _connect():
-    import psycopg2
+    """池化连接（统一 Engine）；块结束自动 commit、异常 rollback、退出归还池。
 
+    语义对齐 psycopg2 原生 ``with conn``（块结束 commit / 异常 rollback），
+    但连接归还池——原实现每次新建连接且依赖 GC 兜底关闭。
+    """
     from backend.config.database import RAG_STORES_PG_CONFIG
 
-    return psycopg2.connect(**RAG_STORES_PG_CONFIG, connect_timeout=3)
+    from backend.infra.db import engine_for
+
+    conn = engine_for(RAG_STORES_PG_CONFIG).raw_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _write_shadow_job(

@@ -27,6 +27,7 @@ import psycopg2.extras
 
 from backend.config import DEFAULT_KEYWORDS, SIGNAL_RULES
 from backend.config.database import BUSINESS_DB_CONFIG, RAG_STORES_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.rag.preprocessing.keyword_store import KeywordRuleStore
 from backend.shared.logger import logger
 
@@ -50,7 +51,7 @@ class PostgresKeywordRuleStore(KeywordRuleStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**RAG_STORES_PG_CONFIG)
+        conn = engine_for(RAG_STORES_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()
@@ -342,7 +343,7 @@ class PostgresKeywordRuleStore(KeywordRuleStore):
         # RAG 库连接上查询，否则双库部署时会把“已审批”误判成不存在。
         conn = None
         try:
-            conn = psycopg2.connect(**BUSINESS_DB_CONFIG, connect_timeout=3)
+            conn = engine_for(BUSINESS_DB_CONFIG).raw_connection()
             approved, reviewer = self._approval_in_conn(conn, approval_id)
             return reviewer if approved else None
         except Exception as exc:

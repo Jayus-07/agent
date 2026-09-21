@@ -28,6 +28,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import SELECTION_DECISION_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.selection_decision.store import SelectionDecisionStore
 from backend.shared.logger import logger
 
@@ -78,7 +79,7 @@ class PostgresSelectionDecisionStore(SelectionDecisionStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**SELECTION_DECISION_PG_CONFIG)
+        conn = engine_for(SELECTION_DECISION_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

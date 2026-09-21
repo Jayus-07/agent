@@ -16,6 +16,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import FEEDBACK_PG_CONFIG
+from backend.infra.db import engine_for
 
 
 VALID_STATUSES = frozenset({"pending", "approved", "rejected", "promoted"})
@@ -48,7 +49,7 @@ def _table() -> str:
 
 @contextmanager
 def _conn() -> Iterator[Any]:
-    conn = psycopg2.connect(**FEEDBACK_PG_CONFIG)
+    conn = engine_for(FEEDBACK_PG_CONFIG).raw_connection()
     try:
         yield conn
         conn.commit()

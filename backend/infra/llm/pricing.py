@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 import threading
 import time
 import logging
@@ -149,12 +150,26 @@ class PostgresPriceRepository:
         self._table = os.getenv("BUDGET_PG_TABLE_PREFIX", "") + "model_price"
 
     @staticmethod
+    @contextmanager
     def _connect():
-        import psycopg2
+        """池化连接（统一 Engine）：块结束自动 commit、异常 rollback、归还池。
 
-        from backend.config.database import MEMORY_DB_CONFIG
+        语义对齐 psycopg2 原生 ``with conn``（块结束 commit / 异常 rollback），
+        但连接归还池，不再每次新建。
+        """
+        from backend.config.database import MEMORY_DB_CONFIG  # noqa: F401  (engine_for 归一)
 
-        return psycopg2.connect(**MEMORY_DB_CONFIG)
+        from backend.infra.db import engine_for
+
+        conn = engine_for(MEMORY_DB_CONFIG).raw_connection()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def get_current(self, model_name: str, component: str) -> PriceTable:
         try:

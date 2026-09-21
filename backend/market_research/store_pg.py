@@ -28,6 +28,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import MARKET_RESEARCH_PG_CONFIG
+from backend.infra.db import engine_for
 from backend.market_research.store import MarketResearchStore
 from backend.shared.logger import logger
 
@@ -75,7 +76,7 @@ class PostgresMarketResearchStore(MarketResearchStore):
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
-        conn = psycopg2.connect(**MARKET_RESEARCH_PG_CONFIG)
+        conn = engine_for(MARKET_RESEARCH_PG_CONFIG).raw_connection()
         try:
             yield conn
             conn.commit()

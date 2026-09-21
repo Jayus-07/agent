@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 import os
+from contextlib import contextmanager
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -284,12 +285,26 @@ class PostgresQuotaStore:
         self._policy_audit = prefix + "budget_policy_audit"
 
     @staticmethod
+    @contextmanager
     def _connect():
-        import psycopg2
+        """池化连接（统一 Engine）：块结束自动 commit、异常 rollback、归还池。
 
-        from backend.config.database import MEMORY_DB_CONFIG
+        语义对齐 psycopg2 原生 ``with conn``（块结束 commit / 异常 rollback），
+        但连接归还池，不再每次新建。
+        """
+        from backend.config.database import MEMORY_DB_CONFIG  # noqa: F401  (engine_for 归一)
 
-        return psycopg2.connect(**MEMORY_DB_CONFIG)
+        from backend.infra.db import engine_for
+
+        conn = engine_for(MEMORY_DB_CONFIG).raw_connection()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     @staticmethod
     def _policy(row: tuple[Any, ...] | None) -> BudgetPolicy | None:
