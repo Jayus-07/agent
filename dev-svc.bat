@@ -40,6 +40,8 @@ set "ADMIN_DIR=frontend-admin"
 set "ADMIN_PORT=3200"
 set "WEB_DIR=frontend"
 set "WEB_PORT=3100"
+set "CS_DIR=frontend-cs"
+set "CS_PORT=3300"
 set "GATEWAY_URL=http://127.0.0.1:9080"
 
 :: ---- parse args: flags anywhere, first bare token = action, 2nd = target ----
@@ -73,6 +75,7 @@ goto usage
 echo Service status:
 call :status_backend
 call :status_next "%ADMIN_PORT%" admin
+call :status_next "%CS_PORT%" cs
 call :status_next "%WEB_PORT%" web
 echo.
 echo   gateway: http://127.0.0.1:9080  (APISIX, python entry)
@@ -105,6 +108,7 @@ exit /b 0
 if /i "%TARGET%"=="all" (
     call :dispatch %~1 backend
     call :dispatch %~1 admin
+    call :dispatch %~1 cs
     call :dispatch %~1 web
     exit /b 0
 )
@@ -122,6 +126,11 @@ if /i "%NAME%"=="backend" (
 if /i "%NAME%"=="admin" (
     if /i "%PHASE%"=="start" call :start_next "%ADMIN_DIR%" "%ADMIN_PORT%" admin
     if /i "%PHASE%"=="stop"  call :stop_next "%ADMIN_PORT%" admin
+    exit /b 0
+)
+if /i "%NAME%"=="cs" (
+    if /i "%PHASE%"=="start" call :start_next "%CS_DIR%" "%CS_PORT%" cs
+    if /i "%PHASE%"=="stop"  call :stop_next "%CS_PORT%" cs
     exit /b 0
 )
 if /i "%NAME%"=="web" (
@@ -283,9 +292,10 @@ exit /b 1
 :usage
 echo dev-svc.bat - shared impl of dev-start / dev-stop / dev-restart / devctl
 echo.
-echo   dev-svc.bat [status^|start^|stop^|restart] [backend^|admin^|web^|all] [/y]
+echo   dev-svc.bat [status^|start^|stop^|restart] [backend^|admin^|cs^|web^|all] [/y]
 echo.
 echo   backend = docker compose app service   127.0.0.1:8000
 echo   admin   = frontend-admin next dev      :3200
+echo   cs      = frontend-cs next dev         :3300
 echo   web     = frontend next dev            :3100
 exit /b 1

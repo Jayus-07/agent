@@ -1,0 +1,55 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
+    "target": "ES2017"
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    ".next-dev/types/**/*.ts",
+    ".next-*/types/**/*.ts",
+    ".next-smoke/types/**/*.ts",
+    ".next-p0-rolegate/types/**/*.ts",
+    ".next-dev-r080148/types/**/*.ts",
+    ".next-dev-40470/types/**/*.ts",
+    ".next-dev-02128/types/**/*.ts",
+    ".next-dev-56901/types/**/*.ts",
+    ".next-dev-783422653/types/**/*.ts",
+    ".next-dev-1018217509/types/**/*.ts",
+    ".next-dev-124296845/types/**/*.ts",
+    ".next-dev-190095236/types/**/*.ts",
+    ".next-dev-227586961/types/**/*.ts",
+    ".next-dev-176024513/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
