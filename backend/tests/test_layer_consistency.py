@@ -195,8 +195,13 @@ class TestNamingConvention:
 
         bad = {
             "version": 1,
+            "domains": [
+                {"name": "knowledge", "description": "知识检索",
+                 "examples": ["例一", "例二"], "keywords": ["制度"]},
+            ],
             "capabilities": [
-                {"name": "x.y", "skill": "s", "routed": True, "examples": ["a", "b"]}
+                {"name": "x.y", "skill": "s", "routed": True, "examples": ["a", "b"],
+                 "domain": "knowledge"}
             ],
             "workflows": [{"name": "bad.name", "examples": ["a"]}],
         }

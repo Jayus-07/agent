@@ -290,6 +290,10 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             **state,
             "route_decision": new_decision,
             "resolved_params": params,
+            # 分层路由平铺字段（§12）：FC 选定后回写，trace/评测消费
+            "selected_tool": cap,
+            "tool_arguments": params,
+            "tool_route_mode": state.get("tool_route_mode") or "llm_selection",
             "_tool_selection": {
                 "source": "fc", "capability": cap, "params": params,
                 "candidates": valid_caps, "attempts": attempt + 1,
@@ -336,6 +340,12 @@ def _decide(state: dict) -> dict:
 
     if state.get("route_mode") != "direct":
         return _passthrough(state, "not_direct")
+
+    # 分层路由 Fast Path（2026-09-22）：router 层已按 top1/margin/风险三条件
+    # 直选工具，此处必须直通 —— 否则 LOW 风险但不在旧 FAST_PATH_CAPS 白名单的
+    # 能力（如 report.generate）会被再次送进 FC，形成重复 LLM 路由。
+    if state.get("tool_route_mode") == "fast_path":
+        return _passthrough(state, "hierarchical_fast_path")
 
     # 灰度放量：未命中的 session 走 control 组（直通 = 旧行为），
     # 便于按 session 对比 FC 与直通的表现

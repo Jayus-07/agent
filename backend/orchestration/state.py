@@ -111,6 +111,21 @@ class AgentState(TypedDict):
     # 挤在 "default" 一个桶里，坐席无法按真实会话认领（2026-09-17 实测）。
     # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
     session_id: str
+    # ── 分层路由（hierarchical routing，2026-09-22）──────────────
+    # ROUTING_ARCHITECTURE=hierarchical 时由 router_node 从
+    # RouteDecision.routing_meta 展平写入；legacy 模式这些键缺省（.get() 消费）。
+    # 全部为可序列化标量/简单容器，兼容 Checkpointer；不塞模型原始响应对象。
+    domain: str                                  # 粗域（knowledge/data/business/...）
+    domain_confidence: float                     # 粗分类 top1 置信度
+    domain_margin: float                         # top1 - top2 置信度差
+    domain_source: str                           # rule | classifier | gate | degraded
+    candidate_tools: list[str]                   # 域内候选 capability（Domain Tool Registry）
+    selected_tool: str                           # Fast Path 直选的 capability（灰区为空）
+    tool_arguments: dict | None                  # 细选择产出的执行参数（FC 填参后）
+    tool_confidence: float                       # 细选择 top1 分数
+    tool_route_mode: str                         # fast_path | llm_selection | ""
+    need_clarification: bool                     # unknown / 低置信 → 澄清
+    clarification_reason: str                    # LOW_CONFIDENCE | LOW_MARGIN | ...
 
 
 class OrchestratorState(AgentState):

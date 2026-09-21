@@ -40,15 +40,187 @@
 #     清单取 orchestration/tool_registry 全量（17 个，含内部），故内部
 #     能力对 Planner LLM 仍可见。详见四层设计规范 §4 台账 E9。
 #
-# 注意：增删 examples 后，VectorRouter 启动时会按数量自检并自动重建 Chroma
-# 索引（collection 内自愈，无需手动删 backend/data/router_index）。
+# =====================================================
+# 分层路由（hierarchical routing，2026-09-22）
+# =====================================================
+# domains 段：粗分类器（CoarseIntentClassifier）的唯一事实源。
+#   - description/examples 供 embedding prototype 分类器建域心；
+#   - keywords 供规则 hint（强信号 >= COARSE_RULE_STRONG_HITS 直接判域）；
+#   - customer_service / travel / selection_funnel 是域图（无主图 capability），
+#     粗分类命中后由 router_node 复用各自既有 prefilter，不新增路由实现。
+#
+# capability 三字段（声明式，禁止代码手写映射）：
+#   domain            归属粗域（必须已在 domains 段声明，manifest fail-fast）
+#   risk_level        LOW / MEDIUM / HIGH —— HIGH 永不进 Fast Path，
+#                     执行期另有 Tool 层审批门（security/tool_approval）
+#   fast_path_enabled 细路由 Fast Path 白名单（还需 top1/margin 双阈值 + LOW 风险）
 
 version: 1
+
+domains:
+  - name: knowledge
+    description: 企业知识与公开信息检索：制度、政策、文档、FAQ、知识库问答、外部资料搜索
+    examples:
+      - 公司年假规定是什么
+      - 退款流程是怎么规定的
+      - 员工福利有哪些制度
+      - 广告投放政策说明
+      - 差评处理 SOP
+      - 搜一下最新的跨境电商政策
+    keywords:
+      - 制度
+      - 规定
+      - 规范
+      - 政策
+      - 流程
+      - 标准
+      - 时效
+      - "SLA"
+      - 是什么
+      - 什么叫
+      - 定义
+      - 条例
+      - 指南
+      - "SOP"
+
+  - name: data
+    description: 数据查询与统计：数据库查询、指标、明细数据、数据导出与采集
+    examples:
+      - 查询最近 30 天销售额
+      - 本月销量前 10 的商品
+      - 各品类商品数量统计
+      - 导出销售数据到 Excel
+      - 采集最近一个月的订单数据
+      - 排名前五的客户
+    keywords:
+      - 多少
+      - 几个
+      - 统计
+      - 数量
+      - 金额
+      - 总和
+      - 排名
+      - 库存
+      - 销量
+      - 销售额
+      - 环比
+      - 同比
+      - 增长率
+      - 明细
+      - 导出
+
+  - name: business
+    description: 业务分析：经营分析、销量趋势、竞品与比价分析、库存原因分析
+    examples:
+      - 分析 SKU001 为什么销量下降
+      - 毛利率下降趋势分析
+      - 评估供应商绩效
+      - 分析这个竞品链接
+      - 跟竞品比价
+      - 各渠道转化率表现怎么样
+    keywords:
+      - 分析
+      - 为什么
+      - 原因
+      - 趋势
+      - 毛利
+      - 转化率
+      - 竞品
+      - 比价
+      - 经营
+
+  - name: report
+    description: 报告生成：经营报告、销售周报月报、分析报告、总结汇报
+    examples:
+      - 生成本月经营分析报告
+      - 生成月度销售报告
+      - 生成库存分析报告
+      - 出一份上月经营周报
+      - 帮我写一份库存盘点报告
+    keywords:
+      - 报告
+      - 报表
+      - 周报
+      - 日报
+      - 总结
+      - 汇报
+
+  - name: customer_service
+    description: 客服售后：订单查询、物流、退款退货申请、投诉、人工客服（域图承载）
+    examples:
+      - 查一下我的订单物流
+      - 订单 123456 到哪了
+      - 帮我申请退款
+      - 东西坏了怎么退换
+      - 我要投诉
+      - 转人工客服
+    keywords:
+      - 订单
+      - 物流
+      - 退款
+      - 退货
+      - 换货
+      - 售后
+      - 投诉
+      - 客服
+      - 发货
+
+  - name: travel
+    description: 旅游出行：行程规划、景点检索、天气路线地图（域图承载）
+    examples:
+      - 规划福州 2 天的行程
+      - 厦门有哪些值得去的景点
+      - 明天会下雨吗
+      - 从福州站到长乐机场要多久
+    keywords:
+      - 旅游
+      - 行程
+      - 景点
+      - 攻略
+      - 出行
+      - 天气
+
+  - name: selection_funnel
+    description: 智能选品：品类评估、选品漏斗、上不上架决策（域图承载）
+    examples:
+      - 给宠物零食做一次智能选品
+      - 评估蓝牙耳机品类值不值得做
+    keywords:
+      - 选品
+
+  - name: communication
+    description: 邮件通信：发送邮件、搜索邮件、读邮件
+    examples:
+      - 发送邮件给运营
+      - 帮我搜一下邮箱里关于发货单的邮件
+      - 读一下这封邮件的内容
+    keywords:
+      - 邮件
+      - 邮箱
+      - 抄送
+      - 收件人
+
+  - name: general
+    description: 普通寒暄与闲聊，不需要任何工具的请求
+    examples:
+      - 你好
+      - 你能做什么
+      - 谢谢
+      - 再见
+    keywords:
+      - 你好
+      - 您好
+      - 谢谢
+      - 再见
+      - 你是谁
 
 capabilities:
   - name: sql.query
     skill: sql
     routed: true
+    domain: data
+    risk_level: LOW
+    fast_path_enabled: true
     # rule_keywords：规则路由（RuleRouter）单意图强/弱信号关键词（正则）。
     # 未声明的 capability 由 rule_router 回退内置缺省表，行为不变。
     rule_keywords:
@@ -82,6 +254,9 @@ capabilities:
   - name: rag.search
     skill: rag
     routed: true
+    domain: knowledge
+    risk_level: LOW
+    fast_path_enabled: true
     rule_keywords:
       - 制度
       - 规定
@@ -113,6 +288,9 @@ capabilities:
   - name: business.analyze
     skill: business_analysis
     routed: true
+    domain: business
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 分析库存不足的原因
       - 毛利率下降趋势分析
@@ -124,6 +302,9 @@ capabilities:
   - name: report.generate
     skill: report
     routed: true
+    domain: report
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 生成月度销售报告
       - 生成库存分析报告
@@ -135,6 +316,9 @@ capabilities:
   - name: email.send
     skill: email
     routed: true
+    domain: communication
+    risk_level: HIGH
+    fast_path_enabled: false
     examples:
       - 发送邮件给运营
       - 把日报发给 CEO
@@ -148,6 +332,9 @@ capabilities:
   - name: email.search
     skill: email
     routed: true
+    domain: communication
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 帮我搜一下邮箱里关于发货单的邮件
       - 最近收到了哪些邮件
@@ -159,6 +346,9 @@ capabilities:
   - name: email.read
     skill: email
     routed: true
+    domain: communication
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 读一下这封邮件的内容
       - 这封邮件里说了什么
@@ -171,11 +361,17 @@ capabilities:
   - name: email.watch
     skill: email
     routed: false
+    domain: communication
+    risk_level: HIGH
+    fast_path_enabled: false
     reason: 新邮件监听为长轮询阻塞操作，仅通知闭环与 automation 内部使用
 
   - name: data.export
     skill: data_export
     routed: true
+    domain: data
+    risk_level: MEDIUM
+    fast_path_enabled: false
     examples:
       - 导出销售数据到 Excel
       - 把客户名单导出
@@ -187,6 +383,9 @@ capabilities:
   - name: web.search
     skill: web_search
     routed: true
+    domain: knowledge
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 搜索 Amazon 政策更新
       - 查 Google 趋势
@@ -198,6 +397,9 @@ capabilities:
   - name: web.crawl
     skill: web_crawl
     routed: true
+    domain: data
+    risk_level: MEDIUM
+    fast_path_enabled: false
     examples:
       - 抓取竞品网站
       - 爬取新闻内容
@@ -209,6 +411,9 @@ capabilities:
   - name: data.collect
     skill: data_collection
     routed: true
+    domain: data
+    risk_level: MEDIUM
+    fast_path_enabled: false
     examples:
       - 采集 90 天销售数据
       - 收集各平台数据
@@ -222,6 +427,9 @@ capabilities:
   - name: travel.poi_search
     skill: travel_poi
     routed: true
+    domain: travel
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 福州有哪些值得去的景点
       - 厦门必去的打卡点有哪些
@@ -233,6 +441,9 @@ capabilities:
   - name: map.lookup
     skill: map_lookup
     routed: true
+    domain: travel
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 福州现在天气怎么样
       - 明天厦门会下雨吗
@@ -248,6 +459,9 @@ capabilities:
   - name: competitor.analyze
     skill: competitor_analysis
     routed: true
+    domain: business
+    risk_level: LOW
+    fast_path_enabled: true
     examples:
       - 分析这个竞品链接
       - 帮我跟竞品比价
@@ -261,11 +475,17 @@ capabilities:
   - name: competitor.watch
     skill: competitor_analysis
     routed: false
+    domain: business
+    risk_level: HIGH
+    fast_path_enabled: false
     reason: 竞品巡检为全量扫描 + 快照写入，不参与用户问题路由：用户侧「巡检/监控」类提问由 competitor.analyze 承接并经 action=watch 分发（selection_decision workflow 直接读 store，不经过本能力）
 
   - name: competitor.history
     skill: competitor_analysis
     routed: false
+    domain: business
+    risk_level: LOW
+    fast_path_enabled: true
     reason: 竞品快照历史查询依赖已存快照，不参与用户问题路由：用户侧「价格历史」类提问由 competitor.analyze 承接并经 action=history 分发（selection_decision workflow 直接读 store，不经过本能力）
 
 workflows:

@@ -568,6 +568,65 @@ def record_tool_selection(source: str, reason: str = "",
         pass
 
 
+# ── 分层路由可观测性（hierarchical routing，2026-09-22）──
+# 评估口径（§19）：域分类分布 / unknown rate / LLM selector usage rate /
+# fast path rate / clarification rate / shadow match rate / 路由耗时
+routing_domain_total = Counter(
+    "routing_domain_total",
+    "粗分类域分布（含 unknown；source=rule/classifier/gate）",
+    labelnames=("domain", "source"),
+)
+routing_hierarchy_verdict_total = Counter(
+    "routing_hierarchy_verdict_total",
+    "分层路由裁决分布（fast_path / llm_selector / clarification / "
+    "rule_workflow / rule_composite / prefilter_* / plan）",
+    labelnames=("verdict",),
+)
+routing_shadow_match_total = Counter(
+    "routing_shadow_match_total",
+    "shadow 双轨对比结果（is_match=true/false，legacy vs hierarchical）",
+    labelnames=("is_match",),
+)
+routing_latency_seconds = Histogram(
+    "routing_latency_seconds",
+    "分层路由分阶段耗时（coarse / fine / total，秒）",
+    labelnames=("stage",),
+    buckets=(0.001, 0.005, 0.01, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+
+
+def record_domain_classification(domain: str, source: str) -> None:
+    """埋点粗分类结果（domain=unknown 即 unknown rate 分子）。"""
+    try:
+        routing_domain_total.labels(domain=domain, source=source or "-").inc()
+    except Exception:
+        pass
+
+
+def record_hierarchy_verdict(verdict: str) -> None:
+    """埋点分层路由裁决（fast path / llm selector / clarification / ...）。"""
+    try:
+        routing_hierarchy_verdict_total.labels(verdict=verdict or "-").inc()
+    except Exception:
+        pass
+
+
+def record_shadow_match(is_match: bool) -> None:
+    """埋点 shadow 双轨对比（legacy_tool == hierarchical_tool）。"""
+    try:
+        routing_shadow_match_total.labels(is_match=str(bool(is_match)).lower()).inc()
+    except Exception:
+        pass
+
+
+def record_routing_latency(stage: str, elapsed_ms: float) -> None:
+    """埋点分层路由分阶段耗时（毫秒入参，秒入桶）。"""
+    try:
+        routing_latency_seconds.labels(stage=stage or "-").observe(elapsed_ms / 1000.0)
+    except Exception:
+        pass
+
+
 # ── 客服系统指标（Phase 6）──
 cs_intent_total = Counter(
     "cs_intent_total",

@@ -75,30 +75,67 @@ export default function RuntimeChainCard({ roles, catalog: _catalog }: Props) {
         <span className="text-[10px] text-text-muted">按角色绑定动态生成 · 每 30s 随配置刷新</span>
       </div>
 
-      {/* 问答链路：QueryRouter → ToolSelector → RAG → Main → Fallback */}
-      <Chain title="问答链路" hint="用户问题 → 理解路由 → 生成">
+      {/* 问答链路（分层路由 2026-09-22）：粗分类器 → 业务域 → 细工具选择 → Tool → Main → Fallback */}
+      <Chain title="问答链路" hint="粗分类（域）→ 域内细选择（工具）→ 生成">
         <Step label="用户问题" model="—" muted />
         <Arrow />
-        <div className="rounded-lg border border-dashed border-slate-300 px-2.5 py-1.5">
-          <div className="text-[10px] leading-none text-text-muted">QueryRouter</div>
-          <div className="mt-1 font-mono text-[11px] leading-none text-text-secondary">规则 → 向量 → LLM 兜底</div>
+        {/* 粗分类器：Rule + Semantic Domain Classifier，语义侧复用 embedding 角色，
+            未来切独立 classifier 角色后此处随绑定自动变化 */}
+        <div className="rounded-lg border border-black/5 bg-white px-2.5 py-1.5 shadow-sm">
+          <div className="text-[10px] leading-none text-text-muted">粗分类器</div>
+          <div className="mt-1 font-mono text-[11px] leading-none text-text-secondary">
+            Semantic Domain Classifier
+          </div>
+          <div className="mt-0.5 font-mono text-[10px] leading-none text-text-muted" title={modelName(byRole, 'embedding')}>
+            Embedding: {modelName(byRole, 'embedding')}
+          </div>
         </div>
         <Arrow />
-        <Step label="ToolSelector" model={modelName(byRole, 'tool_selector')} />
-        <Arrow />
-        <div className="rounded-lg border border-black/5 bg-white px-2.5 py-1.5 shadow-sm">
-          <div className="text-[10px] leading-none text-text-muted">RAG</div>
-          <div className="mt-1 font-mono text-[11px] leading-none text-text-primary" title={modelName(byRole, 'embedding')}>
-            向量: {modelName(byRole, 'embedding')}
+        <div className="rounded-lg border border-dashed border-slate-300 px-2.5 py-1.5">
+          <div className="text-[10px] leading-none text-text-muted">业务域</div>
+          <div className="mt-1 font-mono text-[11px] leading-none text-text-secondary">
+            域内候选工具
           </div>
-          <div className="mt-0.5 font-mono text-[11px] leading-none text-text-primary" title={modelName(byRole, 'rerank')}>
-            重排: {modelName(byRole, 'rerank')}
+        </div>
+        <Arrow />
+        {/* 细工具选择：Fast Path（零 LLM）或灰区交 FC 模型（tool_selector 角色）*/}
+        <div className="rounded-lg border border-black/5 bg-white px-2.5 py-1.5 shadow-sm">
+          <div className="text-[10px] leading-none text-text-muted">细工具选择</div>
+          <div className="mt-1 font-mono text-[11px] leading-none text-text-secondary">Fast Path</div>
+          <div className="mt-0.5 font-mono text-[10px] leading-none text-text-muted" title={modelName(byRole, 'tool_selector')}>
+            灰区 LLM: {modelName(byRole, 'tool_selector')}
+          </div>
+        </div>
+        <Arrow />
+        <div className="rounded-lg border border-dashed border-slate-300 px-2.5 py-1.5">
+          <div className="text-[10px] leading-none text-text-muted">Tool</div>
+          <div className="mt-1 font-mono text-[11px] leading-none text-text-secondary">
+            校验 → 执行
           </div>
         </div>
         <Arrow />
         <Step label="Main" model={mainModel} />
         <Arrow />
         <Step label="Fallback" model={modelName(byRole, 'fallback')} muted />
+      </Chain>
+
+      {/* RAG 子链路（进入知识域时）：向量化 + 重排 */}
+      <Chain title="RAG 子链路" hint="粗分类命中 knowledge 域进入知识检索时生效">
+        <Step label="RAG" model="—" muted />
+        <Arrow />
+        <div className="rounded-lg border border-black/5 bg-white px-2.5 py-1.5 shadow-sm">
+          <div className="text-[10px] leading-none text-text-muted">Embedding</div>
+          <div className="mt-1 font-mono text-[11px] leading-none text-text-primary" title={modelName(byRole, 'embedding')}>
+            {modelName(byRole, 'embedding')}
+          </div>
+        </div>
+        <Arrow />
+        <div className="rounded-lg border border-black/5 bg-white px-2.5 py-1.5 shadow-sm">
+          <div className="text-[10px] leading-none text-text-muted">Rerank</div>
+          <div className="mt-1 font-mono text-[11px] leading-none text-text-primary" title={modelName(byRole, 'rerank')}>
+            {modelName(byRole, 'rerank')}
+          </div>
+        </div>
       </Chain>
 
       {/* 入库链路：Upload → Doc → Metadata → QuestionGen → Table → OCR → Embedding → Index */}

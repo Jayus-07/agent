@@ -44,6 +44,10 @@ class RouteDecision(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, description="整体路由置信度")
     reason: Optional[str] = Field(None, description="路由判断依据")
     workflow_name: Optional[str] = Field(None, description="WORKFLOW 模式时指定 workflow 名")
+    # 分层路由（hierarchical routing，2026-09-22）决策上下文。
+    # router_node 消费它写 state 平铺字段（domain/candidate_tools/...）；
+    # legacy 路由恒为 None。dict 可序列化，路由缓存（model_dump）兼容。
+    routing_meta: Optional[dict] = Field(None, description="分层路由决策上下文（粗分类/细选择明细）")
 
 
 # ── Capability / Workflow 名单：由 capabilities.yaml 派生（唯一事实源）──

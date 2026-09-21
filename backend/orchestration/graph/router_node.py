@@ -274,6 +274,18 @@ def router_node(state: dict) -> dict:
     # V2: workflow / direct 不再降级到 plan
     mode = decision.execution_mode
 
+    # ── 分层路由（hierarchical routing，2026-09-22）──────────────
+    # RouteDecision.routing_meta 由 hierarchical 模式携带；legacy 恒 None。
+    # 消费顺序：域图类域 → 复用既有 prefilter（未放行回退 legacy 路由）；
+    # unknown/低置信 → 澄清；工具域/plan → 决策照常向下，粗分类字段展平入 state。
+    hierarchical_fields: dict = {}
+    meta = getattr(decision, "routing_meta", None)
+    if meta:
+        early = _handle_hierarchical_meta(meta, state, query, route_context)
+        if early is not None:
+            return early
+        hierarchical_fields = _hierarchical_state_fields(meta)
+
     # ── QueryRouter 统一问题理解（治理改造 2026-09-22）──────────
     # 纯规则 + 既有路由决策合成（零新增 LLM 调用）；两个消费点：
     #   1. state["query_understanding"] 供 Planner/Reporter/Trace 消费；
@@ -309,7 +321,100 @@ def router_node(state: dict) -> dict:
         "route_decision": decision.model_dump(),
         "route_mode": mode.value,
         "query_understanding": understanding,
+        **hierarchical_fields,
     }
+
+
+def _hierarchical_state_fields(meta: dict) -> dict:
+    """routing_meta → AgentState 平铺字段（§12，全部可序列化标量/简单容器）。"""
+    return {
+        "domain": meta.get("domain") or "",
+        "domain_confidence": float(meta.get("domain_confidence") or 0.0),
+        "domain_margin": float(meta.get("domain_margin") or 0.0),
+        "domain_source": meta.get("domain_source") or "",
+        "candidate_tools": list(meta.get("candidate_tools") or []),
+        "selected_tool": meta.get("selected_tool") or "",
+        "tool_arguments": None,  # FC 填参后由 tool_selector 写 resolved_params
+        "tool_confidence": float(meta.get("fine_top1_score") or 0.0),
+        "tool_route_mode": meta.get("tool_route_mode") or "",
+        "need_clarification": bool(meta.get("need_clarification")),
+        "clarification_reason": meta.get("clarification_reason") or "",
+    }
+
+
+def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
+                              route_context: dict) -> dict | None:
+    """hierarchical 决策分派。
+
+    Returns:
+        dict → 提前返回的 state 更新（prefilter 命中 / 澄清 / legacy 回退）；
+        None → 决策照常向下（plan / tool_route），粗分类字段由调用方并入。
+    """
+    action = meta.get("domain_action") or "plan"
+    fields = _hierarchical_state_fields(meta)
+
+    # rule override（workflow / 复合意图）：无粗分类字段，沿用既有决策路径
+    if not fields["domain"]:
+        return None
+
+    # ── 域图类域：复用既有 prefilter（不新增路由实现）─────────────
+    if action.startswith("prefilter_"):
+        update = None
+        try:
+            if action == "prefilter_cs":
+                from backend.orchestration.graph.cs_prefilter import try_cs_prefilter
+                update = try_cs_prefilter(query, state)
+            elif action == "prefilter_travel":
+                from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
+                update = try_travel_prefilter(query, state)
+            elif action == "prefilter_selection":
+                from backend.orchestration.graph.selection_funnel_prefilter import (
+                    try_selection_funnel_prefilter,
+                )
+                update = try_selection_funnel_prefilter(query, state)
+        except Exception as e:
+            logger.warning(f"[RouterNode] 分层路由域图 prefilter 失败，回退 legacy: {e}")
+        if update is not None:
+            return {**state, **_enrich_with_understanding(update, query)}
+        # 未放行（如 CS 灰度 control 组 / 检测器不同意）→ legacy 路由重新决策；
+        # route_legacy 绕过 hierarchical 分支与缓存，粗分类字段保留供评测
+        from backend.orchestration.router import get_router
+        legacy_decision = get_router().route_legacy(query, route_context)
+        return {
+            **state,
+            "route_decision": legacy_decision.model_dump(),
+            "route_mode": legacy_decision.execution_mode.value,
+            **fields,
+        }
+
+    # ── unknown / 低置信：澄清（复用 L1 追问卡片与防循环守卫）─────
+    if action == "clarify":
+        try:
+            from backend.orchestration.graph.clarify_content import (
+                build_refusal_clarify,
+                clarify_allowed,
+                mark_clarified,
+            )
+            if clarify_allowed(state.get("session_id", "")):
+                clarify = build_refusal_clarify(query, state.get("domain_hint") or "")
+                mark_clarified(state.get("session_id", ""))
+                logger.info(
+                    f"[RouterNode] 分层路由澄清: reason={fields['clarification_reason']}"
+                )
+                return {
+                    **state,
+                    "route_decision": None,
+                    "route_mode": "clarify",
+                    "_clarify": clarify,
+                    **fields,
+                    "need_clarification": True,
+                }
+        except Exception as e:
+            logger.warning(f"[RouterNode] 分层路由澄清构造失败，回退 plan 支线: {e}")
+        return None  # 防循环守卫不放行 / 构造失败 → 照常走 plan 支线
+
+    # plan / tool_route：决策照常向下（direct → tool_selector → skill_executor）
+    return None
 
 
 def route_selector(state: dict) -> str:

@@ -32,9 +32,28 @@ _CAP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 _WF_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _MIN_ROUTED_EXAMPLES = 2
 
+# 分层路由（2026-09-22）：粗域与能力风险声明
+_VALID_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH")
+# 默认风险：未声明 risk_level 的能力按 LOW 处理（只读语义）；
+# HIGH 能力永不进 Fast Path（双保险：fast_path_enabled 也须显式 false）
+_DEFAULT_RISK_LEVEL = "LOW"
+
 
 class ManifestError(RuntimeError):
     """capabilities.yaml 结构/内容非法（启动期 fail-fast）。"""
+
+
+@dataclass(frozen=True)
+class DomainDecl:
+    """粗业务域声明（CoarseIntentClassifier 的分类对象）。
+
+    description/examples 供 embedding prototype 分类器建域心；
+    keywords 供规则 hint（强信号直接判域，弱信号做分数加成）。
+    """
+    name: str
+    description: str
+    examples: tuple[str, ...]
+    keywords: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -47,6 +66,13 @@ class CapabilityDecl:
     # 规则路由关键词（可选，2026-09-15 迁入）：单意图强/弱信号判定用。
     # 未声明时 rule_router 回退内置缺省表（行为零变化）。
     rule_keywords: tuple[str, ...] = ()
+    # 分层路由三字段（2026-09-22）：
+    #   domain            归属粗域（须在 domains 段声明，违例 fail-fast）
+    #   risk_level        LOW/MEDIUM/HIGH；HIGH 永不进 Fast Path
+    #   fast_path_enabled 细路由 Fast Path 候选白名单
+    domain: str = ""
+    risk_level: str = _DEFAULT_RISK_LEVEL
+    fast_path_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -59,6 +85,7 @@ class WorkflowDecl:
 class RouterManifest:
     capabilities: tuple[CapabilityDecl, ...]
     workflows: tuple[WorkflowDecl, ...]
+    domains: tuple[DomainDecl, ...] = ()
 
     @property
     def routed_capabilities(self) -> tuple[CapabilityDecl, ...]:
@@ -70,12 +97,37 @@ class RouterManifest:
         return tuple(c.name for c in self.capabilities)
 
     @property
+    def domain_names(self) -> tuple[str, ...]:
+        return tuple(d.name for d in self.domains)
+
+    @property
+    def domain_by_name(self) -> dict[str, DomainDecl]:
+        return {d.name: d for d in self.domains}
+
+    @property
+    def capabilities_by_domain(self) -> dict[str, tuple[str, ...]]:
+        """粗域 → 该域全部 capability 名（含 routed:false，保序）。
+
+        Domain Tool Registry 的派生视图：细路由只在域内候选中选工具。
+        """
+        buckets: dict[str, list[str]] = {}
+        for c in self.capabilities:
+            if c.domain:
+                buckets.setdefault(c.domain, []).append(c.name)
+        return {k: tuple(v) for k, v in buckets.items()}
+
+    @property
     def rule_keyword_groups(self) -> dict[str, tuple[str, ...]]:
         """声明了 rule_keywords 的 capability → 关键词组（保持 yaml 顺序）。"""
         return {
             c.name: c.rule_keywords
             for c in self.capabilities if c.rule_keywords
         }
+
+    @property
+    def domain_keyword_groups(self) -> dict[str, tuple[str, ...]]:
+        """粗域 → 规则 hint 关键词组（CoarseIntentClassifier 消费）。"""
+        return {d.name: d.keywords for d in self.domains if d.keywords}
 
     @property
     def total_example_count(self) -> int:
@@ -106,7 +158,35 @@ def load_manifest(path: str | None = None) -> RouterManifest:
     if raw.get("version") != 1:
         raise ManifestError(f"manifest version 必须为 1，实际: {raw.get('version')!r}")
 
-    seen: dict[str, str] = {}  # name -> 类别（capability/workflow），查重
+    seen: dict[str, str] = {}  # name -> 类别（capability/workflow/domain），查重
+
+    # ── domains 段（分层路由粗域声明）──────────────────────────
+    domains: list[DomainDecl] = []
+    for i, item in enumerate(raw.get("domains") or []):
+        where = f"domains[{i}]"
+        if not isinstance(item, dict):
+            raise ManifestError(f"{where} 必须是 mapping")
+        name = str(item.get("name", "")).strip()
+        if not _WF_NAME_RE.match(name):
+            raise ManifestError(f"{where}: 域名须为小写蛇形，实际 {name!r}")
+        if name in seen:
+            raise ManifestError(f"{where}: 域名重复: {name}")
+        seen[name] = "domain"
+        description = str(item.get("description", "")).strip()
+        if not description:
+            raise ManifestError(f"{where} ({name}): description 必填（embedding 域心文本）")
+        examples = tuple(str(e).strip() for e in (item.get("examples") or []) if str(e).strip())
+        if len(examples) < 2:
+            raise ManifestError(
+                f"{where} ({name}): 至少需 2 条 examples（prototype 域心质量），实际 {len(examples)}"
+            )
+        if len(set(examples)) != len(examples):
+            raise ManifestError(f"{where} ({name}): examples 有重复")
+        keywords = tuple(str(k).strip() for k in (item.get("keywords") or []) if str(k).strip())
+        domains.append(DomainDecl(name=name, description=description, examples=examples, keywords=keywords))
+
+    if not domains:
+        raise ManifestError("manifest 未声明任何 domain（分层路由需要 domains 段）")
 
     caps: list[CapabilityDecl] = []
     for i, item in enumerate(raw.get("capabilities") or []):
@@ -140,6 +220,26 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         elif not str(item.get("reason", "")).strip():
             raise ManifestError(f"{where} ({name}): routed: false 必须给 reason")
 
+        # ── 分层路由三字段（2026-09-22）────────────────────────
+        domain = str(item.get("domain", "")).strip()
+        if not domain:
+            raise ManifestError(f"{where} ({name}): domain 必填（粗域归属，分层路由唯一事实源）")
+        if domain not in seen:
+            raise ManifestError(
+                f"{where} ({name}): domain {domain!r} 未在 domains 段声明"
+            )
+        risk = str(item.get("risk_level", _DEFAULT_RISK_LEVEL)).strip().upper()
+        if risk not in _VALID_RISK_LEVELS:
+            raise ManifestError(
+                f"{where} ({name}): risk_level 须为 {'/'.join(_VALID_RISK_LEVELS)}，实际 {risk!r}"
+            )
+        fast_path = bool(item.get("fast_path_enabled", True))
+        if risk == "HIGH" and fast_path:
+            raise ManifestError(
+                f"{where} ({name}): HIGH 风险能力禁止 fast_path_enabled: true"
+                "（副作用工具必须走细路由 + 审批门）"
+            )
+
         caps.append(
             CapabilityDecl(
                 name=name,
@@ -150,6 +250,9 @@ def load_manifest(path: str | None = None) -> RouterManifest:
                 rule_keywords=tuple(
                     str(k).strip() for k in (item.get("rule_keywords") or []) if str(k).strip()
                 ),
+                domain=domain,
+                risk_level=risk,
+                fast_path_enabled=fast_path,
             )
         )
 
@@ -179,4 +282,4 @@ def load_manifest(path: str | None = None) -> RouterManifest:
 
         wfs.append(WorkflowDecl(name=name, examples=examples))
 
-    return RouterManifest(capabilities=tuple(caps), workflows=tuple(wfs))
+    return RouterManifest(capabilities=tuple(caps), workflows=tuple(wfs), domains=tuple(domains))

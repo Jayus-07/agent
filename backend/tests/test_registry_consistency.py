@@ -209,17 +209,27 @@ class TestCapabilityManifest:
             "name": "x.y", "skill": "s", "routed": True,
             "examples": ["例一", "例二"],
         }
+        # 分层路由（2026-09-22）起 manifest 必须含 domains 段：
+        # capability 的 domain 必填，域必须已声明（fail-fast 顺序在最后）
+        good_domain = {
+            "name": "knowledge", "description": "知识检索",
+            "examples": ["例一", "例二"], "keywords": ["制度"],
+        }
+        good_cap["domain"] = "knowledge"
 
-        duplicate = {"version": 1, "capabilities": [good_cap, dict(good_cap)]}
+        duplicate = {"version": 1, "domains": [good_domain],
+                     "capabilities": [good_cap, dict(good_cap)]}
         with pytest.raises(ManifestError, match="重复"):
             load_manifest(write(duplicate, "dup.yaml"))
 
-        thin = {"version": 1, "capabilities": [dict(good_cap, examples=["只有一条"])]}
+        thin = {"version": 1, "domains": [good_domain],
+                "capabilities": [dict(good_cap, examples=["只有一条"])]}
         with pytest.raises(ManifestError, match="examples"):
             load_manifest(write(thin, "thin.yaml"))
 
         unreasoned = {
             "version": 1,
+            "domains": [good_domain],
             "capabilities": [dict(good_cap, routed=False, examples=[])],
         }
         with pytest.raises(ManifestError, match="reason"):
