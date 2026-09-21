@@ -9,6 +9,17 @@ import pytest
 from backend.config import model_roles
 from backend.config import startup as su
 from backend.infra.llm import credentials
+from backend.infra.llm import models as llm_models
+
+# §B.15 起模型清单唯一事实来源是 DB（llm_models）；单测环境注册表刷新循环
+# 不运行 → 注入内存注册表（形状对齐 registry_store._model_entry），否则
+# 所有角色都被判「注册表为空」。条目覆盖本模块引用到的全部模型名。
+_REGISTRY_FIXTURE = [
+    {"name": "qwen2.5:3b", "provider": "ollama", "model_kind": "chat"},
+    {"name": "qwen3.7-plus", "provider": "qwen", "model_kind": "chat"},
+    {"name": "deepseek-v4-flash", "provider": "deepseek", "model_kind": "chat"},
+    {"name": "MiniMax-M3", "provider": "minimax", "model_kind": "chat"},
+]
 
 
 @pytest.fixture(autouse=True)
@@ -29,9 +40,11 @@ def _clean_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     model_roles.reset_overrides()
     credentials.reset_credentials_for_tests()
+    llm_models.set_dynamic_models([dict(e) for e in _REGISTRY_FIXTURE])
     yield
     model_roles.reset_overrides()
     credentials.reset_credentials_for_tests()
+    llm_models.reset_dynamic_models_for_tests()
 
 
 @pytest.fixture

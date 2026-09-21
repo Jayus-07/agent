@@ -8,7 +8,36 @@
 import pytest
 from fastapi import HTTPException
 
+from backend.infra.llm import credentials
+from backend.infra.llm import models as llm_models
 from backend.infra.llm.models import validate_override_model
+
+# 本模块用到的模型 → provider（内存注册表条目，形状对齐 registry_store._model_entry）。
+# §B.15 起模型清单唯一事实来源是 DB（llm_models），单测环境没有 DB 注册表
+# （registry 刷新循环不运行）→ 必须注入内存注册表，否则全部判「未知模型」。
+_REGISTRY_FIXTURE = [
+    {"name": "qwen2.5:3b", "provider": "ollama", "model_kind": "chat"},
+    {"name": "Qwen/Qwen3-32B-AWQ", "provider": "vllm", "model_kind": "chat"},
+    {"name": "qwen3.7-plus@tp", "provider": "qwen_tp", "model_kind": "chat"},
+    {"name": "qwen3.7-plus", "provider": "qwen", "model_kind": "chat"},
+    {"name": "deepseek-v4-flash", "provider": "deepseek", "model_kind": "chat"},
+    {"name": "MiniMax-M3", "provider": "minimax", "model_kind": "chat"},
+]
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_model_registry():
+    """内存注册表 + DB 凭据注入，使本模块不依赖宿主数据库状态（hermetic）。
+
+    做法与 test_tool_approval.py / test_email_skill.py 的 autouse 隔离一致：
+    用生产自带的测试态注入点（set_dynamic_models / set_db_credentials），
+    不改生产行为；teardown 复位，防止泄漏给后续模块。
+    """
+    llm_models.set_dynamic_models([dict(e) for e in _REGISTRY_FIXTURE])
+    credentials.reset_credentials_for_tests()
+    yield
+    llm_models.reset_dynamic_models_for_tests()
+    credentials.reset_credentials_for_tests()
 
 
 class TestValidateOverrideModel:
@@ -35,14 +64,22 @@ class TestValidateOverrideModel:
         assert ok is True
         assert reason == ""
 
-    def test_missing_provider_key_rejected(self, monkeypatch):
-        monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    def test_missing_provider_key_rejected(self):
+        # §B.15 起凭据唯一来自 DB（不读旧 env）—— 清空 DB 凭据即「未配置」
+        credentials.reset_credentials_for_tests()
         ok, reason = validate_override_model("Qwen/Qwen3-32B-AWQ")  # provider=vllm
         assert ok is False
-        assert "VLLM_API_KEY" in reason
+        assert "未在数据库配置 API Key" in reason
 
-    def test_valid_model_with_key_passes(self, monkeypatch):
-        monkeypatch.setenv("QWEN_TP_API_KEY", "sk-sp-test")
+    def test_valid_model_with_key_passes(self):
+        credentials.set_db_credentials({
+            "qwen_tp": credentials.ProviderCredentials(
+                provider="qwen_tp",
+                api_key="sk-sp-test",
+                source="db",
+                version=1,
+            ),
+        })
         ok, reason = validate_override_model("qwen3.7-plus@tp")
         assert ok is True
         assert reason == ""
@@ -67,17 +104,24 @@ class TestApiBoundaryFailFast:
         assert detail["error"] == "InvalidModelOverride"
         assert "未知模型" in detail["message"]
 
-    def test_missing_key_raises_400(self, monkeypatch):
+    def test_missing_key_raises_400(self):
         from backend.app.api.routes.chat import _validate_model_override
 
-        monkeypatch.delenv("VLLM_API_KEY", raising=False)
+        credentials.reset_credentials_for_tests()
         with pytest.raises(HTTPException) as ei:
             _validate_model_override("Qwen/Qwen3-32B-AWQ")
         assert ei.value.status_code == 400
         assert ei.value.detail["error"] == "InvalidModelOverride"
 
-    def test_valid_model_passes(self, monkeypatch):
+    def test_valid_model_passes(self):
         from backend.app.api.routes.chat import _validate_model_override
 
-        monkeypatch.setenv("QWEN_TP_API_KEY", "sk-sp-test")
+        credentials.set_db_credentials({
+            "qwen_tp": credentials.ProviderCredentials(
+                provider="qwen_tp",
+                api_key="sk-sp-test",
+                source="db",
+                version=1,
+            ),
+        })
         _validate_model_override("qwen3.7-plus@tp")
