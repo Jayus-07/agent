@@ -308,16 +308,19 @@ cp .env.example .env
 ### 1. 一键启停（唯一入口 = `devctl.bat`）
 
 ```bat
-devctl.bat status                  :: 查看三服务状态（空参 = status）
-devctl.bat start all               :: backend(compose app) + admin + web
+devctl.bat status                  :: 查看四端服务状态（空参 = status）
+devctl.bat start all               :: backend(compose app) + admin + cs + web
 devctl.bat restart all /y          :: 免确认重启全部
 devctl.bat stop web /y             :: 只停用户端
+devctl.bat rebuild /y              :: 一键重建后端（改代码 / 改 .env 后必用，见下）
 ```
 
-`dev-start.bat` / `dev-stop.bat` / `dev-restart.bat` 是上表的短路写法，实现只在 `dev-svc.bat` 一份。
-服务定义：`backend` = compose 的 `app` 服务（探活 `/health`）｜`admin` = `frontend-admin`（:3200）｜`web` = `frontend`（:3100）。
+`dev-start.bat` / `dev-stop.bat` / `dev-restart.bat` / `dev-rebuild.bat` 是上表的短路写法，实现只在 `dev-svc.bat` 一份。
+服务定义：`backend` = compose 的 `app` 服务（探活 `/health`）｜`admin` = `frontend-admin`（:3200）｜`cs` = `frontend-cs`（:3300）｜`web` = `frontend`（:3100）。
 
-> ⚠️ 旧的 `start_py.bat` / `start_frontend.bat` 系列**已删除**，请勿按旧文档执行。
+> ⚠️ **改后端代码或改根 `.env` 后，用 `dev-rebuild.bat /y`**（build + up -d 全部 7 个后端代码服务，
+> 迁移一次性容器自动重跑）。普通 restart 复用旧镜像且不重读 `.env`——只适合纯重启。
+> 旧的 `start_py.bat` / `start_frontend.bat` 系列**已删除**，请勿按旧文档执行。
 
 ### 容器栈
 

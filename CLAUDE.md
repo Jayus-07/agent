@@ -198,26 +198,33 @@ Backend: `py_compile` + `pytest tests/sql/ -v` ｜ Frontend: `npx tsc --noEmit` 
 ```bash
 # 统一入口（powershell / cmd 均可，参数大小写不敏感）
 .\devctl.bat status                      # 默认动作；空参 = status
-.\devctl.bat start   [backend|admin|web|all]
-.\devctl.bat stop    [backend|admin|web|all] [/y]
-.\devctl.bat restart [backend|admin|web|all] [/y]
+.\devctl.bat start   [backend|admin|cs|web|all]
+.\devctl.bat stop    [backend|admin|cs|web|all] [/y]
+.\devctl.bat restart [backend|admin|cs|web|all] [/y]
+.\devctl.bat rebuild [/y]                # 后端专用：build + up -d 全部后端服务
 .\devctl.bat all /y                      # stop+start 全量，跳过确认
 
 # 短路入口（等价于 devctl 的同名动作，实现在 dev-svc.bat）
-.\dev-start.bat [backend|admin|web|all]  # 已运行的服务自动 skip
-.\dev-stop.bat  [backend|admin|web|all]  # 默认交互确认，加 /y 跳过
-.\dev-restart.bat [backend|admin|web|all] /y
-.\dev-svc.bat   [status|start|stop|restart] [target] [/y]   # 底层实现，一般不直接调
+.\dev-start.bat [backend|admin|cs|web|all]  # 已运行的服务自动 skip
+.\dev-stop.bat  [backend|admin|cs|web|all]  # 默认交互确认，加 /y 跳过
+.\dev-restart.bat [backend|admin|cs|web|all] /y
+.\dev-rebuild.bat /y                        # 一键重建后端（改代码/改 .env 后必用）
+.\dev-svc.bat   [status|start|stop|restart|rebuild] [target] [/y]   # 底层实现，一般不直接调
 ```
 
 服务定义与端口：`backend` = docker compose 的 **`app` 服务**（127.0.0.1:8000，探活
-`/health`）｜`admin` = `frontend-admin` next dev（:3200）｜`web` = `frontend`
-next dev（:3100）。网关入口 `http://127.0.0.1:9080`（APISIX）。
+`/health`）｜`admin` = `frontend-admin` next dev（:3200）｜`cs` = `frontend-cs`
+next dev（:3300）｜`web` = `frontend` next dev（:3100）。网关入口
+`http://127.0.0.1:9080`（APISIX）。
 
 - **`backend` 只按“服务名”操作**：`stop backend` = `docker compose stop app`，**不会**
   停 postgres/redis/apisix/rag-service/mcp-service/worker；`up -d --build app`（**带重建**，见下方已知坑）
   也只拉起 app 一个容器。
   需要整套栈另用 `docker compose up -d` / `down`。
+- **改后端代码 / 改根 `.env` 后，一律 `dev-rebuild.bat /y`**（2026-09-21 新增）：
+  build + up -d 全部 7 个后端代码服务（app/rag-service/mcp-service/worker/beat/
+  cs-dispatcher/metadata-shadow-worker），db-migrate one-shot 经 depends_on 自动重跑。
+  纯 `restart` 复用旧镜像且**不重读 .env**（env 在容器创建时烧死）——单 restart 只适合纯重启。
 - 前端每次 start 都新开一个空 `NEXT_DIST_DIR=.next-dev-<rand>`（复用非空 distDir 必启动失败），
   故 `frontend/.next-dev-*`、`frontend-admin/.next-dev-*` 会不断堆积（已实测 16 个目录、~300MB），
   `.gitignore` 用 `.next-*/` 通配兜住；**该脚本不清理旧 distDir**，需手动删。
@@ -236,12 +243,13 @@ next dev（:3100）。网关入口 `http://127.0.0.1:9080`（APISIX）。
 
 - **app 容器无源码卷：改后端代码必须重建镜像**（2026-09-20 实测）——镜像曾落后修复提交 1h23m，
   `up -d app` 一直复用旧代码 → 启动校验 fatal → 容器崩溃循环（RestartCount 16）→ 前端 `/api/*`
-  全部 **502**。`dev-svc.bat` 的 `start backend` 已改为 **`up -d --build app`**。定性方法：
+  全部 **502**。**标准路径 = `dev-rebuild.bat /y`**（2026-09-21 新增，覆盖全部 7 个后端代码服务；
+  仅改 `.env` 也必须走 rebuild —— env 在容器创建时烧死，restart 不重读）。定性方法：
   `docker exec agent-app-1 md5sum /app/backend/config/<file>` 与工作区同文件 md5 比对（不一致即中招），
   再比 `docker image inspect agent-app --format '{{.Created}}'` 与 `git log -1 --format=%ci <修复提交>`。
   只 `docker compose restart app` 会继续跑旧镜像。
 - **.bat 必须 ASCII-only**（cmd 按 GBK 解析，中文注释会破坏控制流）；**别用 `timeout /t`**（Git Bash PATH 会解析到 GNU timeout，改用 `ping -n N 127.0.0.1 >nul`）
-- **`dev-svc.bat` 是 `devctl`/`dev-{start,stop,restart}.bat` 四者的共享实现**，改动它须与入口脚本一起提交
+- **`dev-svc.bat` 是 `devctl`/`dev-{start,stop,restart,rebuild}.bat` 五者的共享实现**，改动它须与入口脚本一起提交
   （它历史上曾处于 `?? ` 未跟踪状态，2026-09-20 核实**已纳入版本库**）。
 - 宿主机 `127.0.0.1:8000` 有 Docker 残留僵尸绑定 → 裸跑 uvicorn 前先重启 Docker Desktop
 - app 容器换 IP 后 APISIX 有 ~1-2min 502 窗口（`dns_resolver_valid: 5` 已缓解），急用 `docker compose restart apisix`；oa-auth-service/system 无重启策略，引擎重启后需手动 `docker start`
