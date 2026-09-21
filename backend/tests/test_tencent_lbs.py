@@ -936,6 +936,43 @@ class TestMapTools:
         assert _base.normalize_coord("26.08 119.29") == (26.08, 119.29)
         assert _base.normalize_coord("26.08") is None
 
+    def test_normalize_coord_case_insensitive_keys(self):
+        """key 前缀大小写不敏感（评审 #1：Lat=/LAT= 此前一律失配返 None）"""
+        from backend.tools.map import _base
+
+        assert _base.normalize_coord("Lat=26.08, Lng=119.29") == (26.08, 119.29)
+        assert _base.normalize_coord("LAT:26.08 LNG:119.29") == (26.08, 119.29)
+
+    def test_normalize_coord_latitude_longitutde_no_mangling(self):
+        """latitude=/longitude= 整词剥离，不残留 itude=（评审 #2 顺序脆弱性）"""
+        from backend.tools.map import _base
+
+        assert _base.normalize_coord("latitude=26.08,longitude=119.29") == (26.08, 119.29)
+        assert _base.normalize_coord("Latitude=26.08 Longitude=119.29") == (26.08, 119.29)
+
+    def test_normalize_coord_hemisphere_and_degree(self):
+        """半球后缀/前缀与度数符号（评审 #3 常见漏网写法）"""
+        from backend.tools.map import _base
+
+        assert _base.normalize_coord("26.08N 119.29E") == (26.08, 119.29)
+        assert _base.normalize_coord("N26.08 E119.29") == (26.08, 119.29)
+        assert _base.normalize_coord("26.08° 119.29°") == (26.08, 119.29)
+
+    def test_normalize_coord_more_separators(self):
+        """分号/冒号/中文标点分隔（评审 #3）"""
+        from backend.tools.map import _base
+
+        assert _base.normalize_coord("26.08;119.29") == (26.08, 119.29)
+        assert _base.normalize_coord("26.08；119.29") == (26.08, 119.29)
+        assert _base.normalize_coord("lat:26.08 lng:119.29") == (26.08, 119.29)
+        assert _base.normalize_coord("26.08，119.29") == (26.08, 119.29)
+
+    def test_normalize_coord_scientific_notation_not_eaten(self):
+        """科学计数法的 e 不被当半球后缀吃掉"""
+        from backend.tools.map import _base
+
+        assert _base.normalize_coord("2.608e1,1.1929e2") == (26.08, 119.29)
+
     def test_all_map_tools_registered(self):
         from backend.tools.tool_registry import tool_registry
 
