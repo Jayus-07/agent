@@ -226,11 +226,41 @@ class ConversationManager:
     async def _record_assignment(
         self, conversation_id: str, agent_id: str, assigned_by: str,
     ) -> None:
-        record = CSAssignment(
-            conversation_id=conversation_id,
-            agent_id=agent_id,
-            assigned_by=assigned_by,
-        )
+        # 2026-09-21 实机修复：此前直接以默认 state='offered' + handoff_id=NULL
+        # 落行，违反 ck_cs_assignment_active_handoff_required（offered/accepted
+        # 必须携带 handoff_id）——claim 与 assign_agent 两条路径必现 IntegrityError。
+        # 现改为：有在途工单 → 关联该工单并记 accepted（与 dispatcher accept
+        # 路径的数据形态一致）；无在途工单 → 记审计行（state=closed 避开约束）。
+        from backend.customer_service.models.handoff import CSHandoff
+
+        open_handoff = (
+            await self._s.execute(
+                select(CSHandoff.handoff_id)
+                .where(
+                    CSHandoff.conversation_id == conversation_id,
+                    CSHandoff.handoff_state != "closed",
+                )
+                .limit(1)
+            )
+        ).first()
+        now = _now()
+        if open_handoff is not None:
+            record = CSAssignment(
+                handoff_id=open_handoff.handoff_id,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                state="accepted",
+                accepted_at=now,
+                assigned_by=assigned_by,
+            )
+        else:
+            record = CSAssignment(
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+                state="closed",
+                closed_at=now,
+                assigned_by=assigned_by,
+            )
         self._s.add(record)
         await self._s.flush()
 
