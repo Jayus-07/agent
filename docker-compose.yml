@@ -42,9 +42,11 @@ services:
       - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}
       - JWT_ISSUER=${JWT_ISSUER:-agent-platform}
       # Redis 黑名单（只读 oa-auth-redis，写侧归 auth-service）
+      # B1：实例启用 requirepass 后，未显式配 AUTH_REDIS_PASSWORD 时
+      # 回退 REDIS_PASSWORD（Java 写侧需同步同密码，见 .env 注释）
       - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-redis}
       - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-6379}
-      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-}
+      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}
     # 注意：不要加 extra_hosts host-gateway —— Docker Desktop (Windows) 自带的
     # host.docker.internal 才能到达宿主机 loopback 服务（8000/8006）；
     # host-gateway 指向 VM 网关，loopback 服务不可达（B1 实测 502）。
@@ -81,7 +83,8 @@ services:
       - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
       # PostgreSQL — 记忆库（读写，服务账号）
       - PGHOST=postgres
-      # 向量库后端开关（chroma|pgvector，透传 .env；默认 chroma 零变化）
+      # 向量库唯一实现 = pgvector（agent_memory.rag_vectors 表）；Chroma 与
+      # VECTOR_BACKEND 开关已于 2026-09-17 删除（方案：docs/chroma-pgvector迁移方案-2026-09-17.md）
       - PGPORT=5432
       - PGDATABASE=agent_memory
       - PGUSER=postgres
@@ -104,13 +107,19 @@ services:
       # 网关安全页数据源（/observability/gateway-auth 只读代理）。prometheus 属
       # observability profile：未启动时该路由返回 available=false，前端显式降级
       - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
-      # Redis
+      # Redis（B1：requirepass 启用后 URL 携带 :pass@；REDIS_PASSWORD 为空时
+      # 不鉴权，行为与旧版一致。缓存/限流/控制面 db0 走 redis 实例）
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
-      - REDIS_URL=redis://redis:6379/0
-      # Celery（broker/result 分库：/1 队列，/2 结果，避免键冲突）
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      # Celery（B1：broker/result 拆到独立 redis-broker 实例——noeviction+AOF，
+      # 未 ack 任务消息与结果永不被逐出，修复内存压力下任务丢失）
       # 显式注入容器内地址，优先级高于 .env 的宿主值（与 REDIS_URL 同策略）
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      # 告警触达（B4）：应用级降级告警外推通道（企微/钉钉/飞书机器人或
+      # 自建接收端）。.env 设 ALERT_WEBHOOK_URL 即启用（alerts.py 读取）
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_TYPE=${ALERT_WEBHOOK_TYPE:-generic}
       # Kafka（事件发布，默认关闭；需要 WhatsApp/Java 闭环时在 .env 设 true）
       - KAFKA_ENABLED=${KAFKA_ENABLED:-false}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -166,15 +175,26 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    # B6 优雅停机：docker stop 先 SIGTERM，等 stop_grace_period 再 SIGKILL。
+    # 分钟级 SSE 流需要足够窗口走完 --timeout-graceful-shutdown（Dockerfile 600s）
+    stop_grace_period: 700s
+    # H1 资源限制（compose v2 非 swarm 也生效）：防单服务 OOM 连坐同宿主机 PG
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "2.0"
 
-  # ── RAG 独立服务（重资源：embedding 模型 + Chroma + BM25 + 索引同步）──
+  # ── RAG 独立服务（重资源：embedding 模型 + pgvector + BM25 + 索引同步）──
   # 初始化含全量增量同步（可能数十分钟），readyz 就绪前 /ask 返回 503；
   # 与 app 共享 app_data 卷（索引数据原地复用，存量部署无迁移成本；
   # remote 模式下 app 不再写索引路径，实际写路径归本服务独占）；
   # 共享 app_cache 卷（embedding/reranker 模型只存一份，不重复下载）
   rag-service:
     build: .
-    command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090"]
+    # B6：--timeout-graceful-shutdown 600 —— SIGTERM 后最多等 600s 让在途
+    # 请求（长 RAG 检索/SSE）自然收尾，避免 docker stop 10s 默认硬断
+    command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090", "--timeout-graceful-shutdown", "600"]
     ports:
       - "127.0.0.1:8090:8090"
     env_file:
@@ -187,8 +207,8 @@ services:
       - PGHOST=postgres
       - PGPORT=5432
       # Redis：影子任务投递/缓存需要（同 PGHOST 的 localhost 坑，2026-09-21 补）。
-      - REDIS_URL=redis://redis:6379/0
-      # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -212,13 +232,22 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    # B6：grace period 700s > uvicorn graceful 600s，给在途请求完整收尾窗口
+    stop_grace_period: 700s
+    # H1：bge+reranker 常驻内存的大头，单独限住防 OOM 连坐
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "2.0"
 
   # ── 标准 MCP 协议服务（streamable HTTP，供 Claude/Cursor 等外部 client）──
   # 工具执行复用 MCPServer.call_tool；RAG 工具经代理转发 rag-service（不重复
   # 加载 embedding/Chroma）；鉴权沿用全局 API_KEY（X-API-Key，fail-closed）
   mcp-service:
     build: .
-    command: ["python", "-m", "uvicorn", "mcp_servers.protocol_app:app", "--host", "0.0.0.0", "--port", "8091"]
+    # B6：MCP streamable HTTP 为长连接，同样给 600s 优雅收尾窗口
+    command: ["python", "-m", "uvicorn", "mcp_servers.protocol_app:app", "--host", "0.0.0.0", "--port", "8091", "--timeout-graceful-shutdown", "600"]
     ports:
       - "127.0.0.1:8091:8091"
     environment:
@@ -233,7 +262,7 @@ services:
       # SQL 工具（本进程直连业务库）
       - PGHOST=postgres
       - PGPORT=5432
-      # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
+      # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -259,6 +288,12 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    stop_grace_period: 700s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
 
   # ── Celery Worker（异步任务执行，独立于 API 进程水平扩展）──
   # 与 app 共用同一镜像；只消费 agent/rag_index 队列（task_routes 固定路由）。
@@ -275,16 +310,16 @@ services:
     env_file:
       - .env
     environment:
-      # Celery：broker db1 / result db2（与 app 注入保持一致）
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # Celery：broker db1 / result db2（B1：拆独立 redis-broker 实例）
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
       # 控制面（取消/暂停标志、事件 pub/sub 走业务 db0）
       - REDIS_ENABLED=true
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # PostgreSQL — 任务状态权威（agent_memory.tasks）+ LangGraph checkpoint
       - PGHOST=postgres
       - PGPORT=5432
-      # 向量库后端开关（chroma|pgvector；env_file 已透传，此处显式声明默认值）
+      # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
@@ -333,6 +368,73 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    # B6：60s 温停后强杀。acks_late + task_reject_on_worker_lost 保证被杀
+    # 任务的未 ack 消息回队重投（无需等 1h visibility timeout）
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "2.0"
+
+  # ── Celery Beat（客服周期维护的唯一调度者，单实例）──────────
+  # beat_schedule 只有在 beat 进程运行时才会投递；调度职责不能塞进可水平
+  # 扩展的 worker —— 扩容会重复调度，单 worker 又不会调度。故 beat 必须
+  # 单实例，worker 才可多副本。
+  # 当前调度（定义见 backend/tasks/celery_app.py）：
+  #   cs.handoff_timeout_scan       60s   转人工超时收口
+  #   cs.confirmation_expiry_scan   60s   确认态过期
+  #   cs.event_outbox_compensation  15s   事件 outbox 补发
+  #   tasks.zombie_reconcile        300s  僵尸 RUNNING 任务收尸（审查 B5）
+  # 任务体在 backend/tasks/cs_maintenance_tasks.py 与
+  # backend/tasks/task_maintenance_tasks.py（薄壳，逻辑在
+  # backend/customer_service/maintenance.py / tasks/task_manager.py，纯函数，可手动触发）。
+  # 历史债：2026-09-21 前本服务只存在于 worktree / 临时 override
+  # （D:\tmp\agent-worker-branch.override.yml，已删除），按主干 up 不会起
+  # beat → 客服三条周期任务静默停摆。现正式纳入主干，禁止再移除。
+  beat:
+    build: .
+    command:
+      ["celery", "-A", "backend.tasks.celery_app", "beat",
+       "--loglevel=info"]
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      # 控制面（事件 pub/sub 走业务 db0）
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      # 客服维护扫描需要 PG（后台任务状态权威在 agent_memory）
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # 存活判定：beat 无 HTTP 端口，直接看 PID 1 的 argv 是否是 beat 入口
+    # （与 cs-dispatcher 同款，不依赖 procps/pgrep）
+    healthcheck:
+      test:
+        ["CMD-SHELL",
+         "python -c \"import sys; sys.exit(0 if b'beat' in open('/proc/1/cmdline','rb').read() else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
 
   # ── 客服自动派单 dispatcher（P6）────────────────────────────
   # 与 app/worker 共用镜像，但没有 HTTP 端口：只消费 PostgreSQL 的
@@ -358,7 +460,7 @@ services:
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
       # 在线状态与心跳都走业务 Redis（db0，与 AgentHub 的 pub/sub 同库）
       - REDIS_ENABLED=true
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # off | shadow | enforce
       - CS_DISPATCH_MODE=${CS_DISPATCH_MODE:-off}
       - CS_OFFER_TIMEOUT_SECONDS=${CS_OFFER_TIMEOUT_SECONDS:-30}
@@ -386,6 +488,10 @@ services:
     deploy:
       # 2 副本是最低生产要求（一轮 dispatcher 挂掉不影响派单）
       replicas: 2
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
     networks:
       - agent-net
     restart: unless-stopped
@@ -404,11 +510,11 @@ services:
       - .env
     environment:
       # broker/result 与主 worker 一致；影子任务只传 job_id，不把正文塞进 Redis broker。
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
       - CELERY_METADATA_SHADOW_QUEUE=${CELERY_METADATA_SHADOW_QUEUE:-rag_metadata_shadow}
       - REDIS_ENABLED=true
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # 影子任务需要 PG 读取 job/input 状态；显式覆盖宿主机地址。
       - PGHOST=postgres
       - PGPORT=5432
@@ -438,6 +544,12 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.0"
 
   # ── PostgreSQL + pgvector ──
   postgres:
@@ -462,6 +574,12 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    # H1：PG 是全平台状态权威，自身也限住（宽裕值），防其他服务拖垮宿主机后 OOM killer 误伤
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
 
   # ── Kafka（事件总线，KRaft 单节点）──
   # kafka：仅 Java 客服闭环使用（py 侧 KAFKA_ENABLED=false）——默认不随 up 启动
@@ -496,13 +614,54 @@ services:
     image: ollama/ollama:latest
     profiles: ["local-llm"]
     ports:
-      - "11434:11434"
+      # H2（2026-09-21 审查）：唯一未收敛回环的端口 → 绑 127.0.0.1，
+      # 容器网络内各服务仍走 ollama:11434 别名访问
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+          cpus: "4.0"
+
+  # ── PG 自动备份（B3：每日 pg_dump + 保留策略）────────────────
+  # 全仓此前零自动备份：PG 是任务状态/checkpoint/记忆库唯一权威，
+  # 磁盘损坏 = 全量丢失。本服务用与 postgres 同版本镜像（pg_dump 兼容），
+  # 首轮启动即备份一次，此后每 PG_BACKUP_INTERVAL_SECONDS 备份一轮，
+  # 保留最近 PG_BACKUP_RETENTION_DAYS 天（脚本见 docker/pg-backup.sh）。
+  # 恢复：docker/pg-backup.sh 底部注释有 pg_restore 命令。
+  pg-backup:
+    image: pgvector/pgvector:pg16
+    container_name: agent-pg-backup
+    command: ["bash", "/scripts/pg-backup.sh"]
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - PG_BACKUP_DIR=/backups
+      - PG_BACKUP_RETENTION_DAYS=${PG_BACKUP_RETENTION_DAYS:-14}
+      - PG_BACKUP_INTERVAL_SECONDS=${PG_BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - ./docker/pg-backup.sh:/scripts/pg-backup.sh:ro
+      # 备份落宿主机目录（可直接拷走做异地容灾）
+      - ./backups/pg:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
 
   # ── Prometheus（指标抓取 + 告警，可选）──
-  # 启动：docker compose --profile observability up -d prometheus grafana
+  # 启动：docker compose --profile observability up -d prometheus grafana alertmanager
   # UI: http://localhost:9090（查询 recording rules：chat:qps:rate5m 等）
   prometheus:
     image: prom/prometheus:latest
@@ -519,6 +678,11 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
 
   # ── Grafana（看板，可选；数据源自动装配指向 prometheus）──
   # UI: http://localhost:3001（默认 admin/admin，GRAFANA_PASSWORD 可覆盖）
@@ -538,6 +702,43 @@ services:
     networks:
       - agent-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+
+  # ── Alertmanager（B4：告警只响不给的触达修复，observability profile）──
+  # Prometheus 40+ 条规则触发后经本服务外推：webhook receiver（generic JSON，
+  # 可接自建接收端/钉钉/企微的转发桥）。URL 从 .env 的 ALERT_WEBHOOK_URL
+  # 经 sed 注入 docker/alertmanager.yml.tpl（AM 原生不支持 env 展开）。
+  # 未配置时指向 127.0.0.1:9（discard，不可达仅记发送失败日志，不崩进程）。
+  # 应用级降级告警（LLM 熔断/重试耗尽等）另走 app 内 alerts.py 的
+  # ALERT_WEBHOOK_URL 外推，原生支持 wecom/dingtalk/feishu 格式。
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:9093:9093"
+    environment:
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+    # alertmanager 镜像基于 busybox：sh + sed 可用。config 不能读 env →
+    # 启动前用 sed 把占位符替换成真实 webhook URL 再 exec 主进程
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "sed \"s|__ALERT_WEBHOOK_URL__|${ALERT_WEBHOOK_URL:-http://127.0.0.1:9/unset}|g\" /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager"
+    volumes:
+      - ./docker/alertmanager.yml.tpl:/etc/alertmanager/alertmanager.yml.tpl:ro
+    depends_on:
+      - prometheus
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
 
   # ── Redis exporter（observability profile；redis:6379 → :9121/metrics）──
   redis-exporter:
@@ -545,6 +746,19 @@ services:
     profiles: ["observability"]
     environment:
       - REDIS_ADDR=redis://redis:6379
+      # B1：requirepass 启用后需要鉴权（空值 = 未启用密码，行为不变）
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    networks:
+      - agent-net
+    restart: unless-stopped
+
+  # ── Redis broker exporter（B1 拆实例后独立监控 → :9122/metrics）──
+  redis-broker-exporter:
+    image: oliver006/redis_exporter:latest
+    profiles: ["observability"]
+    environment:
+      - REDIS_ADDR=redis://redis-broker:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     networks:
       - agent-net
     restart: unless-stopped
@@ -570,30 +784,102 @@ services:
   celery-exporter:
     image: danihodovic/celery-exporter:latest
     profiles: ["observability"]
-    command: ["--broker-url=redis://redis:6379/1"]
+    # B1：broker 拆 redis-broker 实例 + 密码
+    command: ["--broker-url=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1"]
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - agent-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
 
-  # ── Redis（缓存/限流/异步队列）──
+  # ── Redis 实例 1：缓存/限流/控制面（db0）──
+  # B1（2026-09-21 审查）：缓存语义保留 allkeys-lru（可逐出）；requirepass
+  # 可选启用（REDIS_PASSWORD 为空 = 不鉴权，与旧版一致）。注意：JWT 吊销
+  # 黑名单等安全键历史上也在 db0（写侧归 Java auth-service）——启用密码后
+  # Java 侧与 apisix 的 AUTH_REDIS_* 需同步指向本实例并携带密码。
   redis:
     image: redis:7-alpine
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command:
+      - redis-server
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      # REDIS_PASSWORD 为空时 requirepass "" = 关闭鉴权（redis 官方语义）
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # 密码启用与否都通：先带密码 ping，失败再裸 ping
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
+    environment:
+      # 供 healthcheck CMD-SHELL 内 $REDIS_PASSWORD 引用（$$ 转义后取容器 env）
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     networks:
       - agent-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
+
+  # ── Redis 实例 2：Celery broker/result 专用（db1/db2）──
+  # B1 核心修复：broker 与缓存拆实例。noeviction——内存满时写入报错
+  # （入队 fail-fast 可见）而不是静默逐出未 ack 任务消息；AOF everysec
+  # 保证崩溃后消息/结果最多丢 1 秒。maxmemory 512mb + noeviction：
+  # 队列真正堆积时以错误暴露，绝不丢消息。
+  redis-broker:
+    image: redis:7-alpine
+    container_name: agent-redis-broker
+    command:
+      - redis-server
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    ports:
+      # 宿主机 6380（6379 已被缓存实例占用）；宿主侧 .env 的 CELERY_* 指向此端口
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis_broker_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
 
 volumes:
   app_data:
@@ -601,6 +887,7 @@ volumes:
   pg_data:
   ollama_data:
   redis_data:
+  redis_broker_data:
   kafka_data:
   prometheus_data:
   grafana_data:

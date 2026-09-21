@@ -289,6 +289,39 @@ groups:
           summary: "PostgreSQL exporter 失联"
           description: "记忆库/任务状态权威/checkpoint 全在 PG；连续 1 分钟抓不到 postgres-exporter:9187 即判不可用"
 
+      # ── B4（2026-09-21 审查）：PG 连接饱和——up==0 只能发现宕机，
+      # 池打满（连接耗尽）时 up 仍为 1，必须用连接数口径单独告警
+      - alert: PostgresConnectionsSaturated
+        expr: |
+          sum(pg_stat_activity_count) / clamp_min(pg_settings_max_connections, 1) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PG 连接使用率超过 80%（持续 5 分钟）"
+          description: "async 池 + pgvector 池 + Celery 子进程池 + 裸连接总和逼近 max_connections；按 client/应用侧排查连接泄漏，或评估 max_connections 与 pgbouncer（勿盲目调大）"
+
+      # ── B1（2026-09-21 审查）：Redis 内存压力与逐出监控 ──
+      # 缓存实例 allkeys-lru：内存压力 = 逐出开始 = 缓存命中率下降 +
+      # 混入 db0 的非缓存键（会话/黑名单）有被逐出风险，必须可见
+      - alert: RedisMemoryPressureHigh
+        expr: |
+          redis_memory_used_bytes{job=~"redis"} / clamp_min(redis_memory_max_bytes{job=~"redis"}, 1) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 实例 {{ $labels.job }} 内存使用超过 maxmemory 90%"
+          description: "缓存实例接近 allkeys-lru 逐出线；broker 实例（noeviction）接近后写入将报错。评估扩 maxmemory、清理大键或拆分业务"
+
+      - alert: RedisEvictedKeysSpike
+        expr: increase(redis_evicted_keys_total{job=~"redis"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 实例 {{ $labels.job }} 发生键逐出（15 分钟）"
+          description: "allkeys-lru 已开始逐出：缓存键逐出可接受，但须确认无安全键（JWT 吊销黑名单/会话）混入缓存实例；broker 实例 noeviction 不应有此指标，出现即配置漂移"
+
       - alert: CeleryWorkerDown
         expr: min(celery_worker_up) == 0 or absent(celery_worker_up) == 1
         for: 2m

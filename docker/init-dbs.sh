@@ -69,5 +69,22 @@ $PSQL -d agent_memory -f /docker-migrations/025_metadata_rule_governance.sql
 $PSQL -d agent_memory -f /docker-migrations/026_metadata_shadow_jobs.sql
 $PSQL -d agent_memory -f /docker-migrations/027_rag_processing_lineage.sql
 
+echo "[init-dbs] 10/10 补齐 021~024/028~030（2026-09-21 审查 B2：全新部署 schema 不完整修复）..."
+# B2 修复：首启链此前只执行到 027，缺 021/022/023_auth_sessions/024/
+# 028_cs_dispatch（029/030 为后续新增同样缺失）——新卷部署后 /auth/refresh
+# 与 cs-dispatcher 启动即报错。全部为幂等 SQL（IF NOT EXISTS / DO 块守卫）。
+# 库归属：021/022 → agent_business（业务族）；023/024/028/029/030 → agent_memory
+# （auth 族 / doc_registry / customer_service 族）。
+$PSQL -d agent_business -f /docker-migrations/021_selection_funnel_pg.sql
+$PSQL -d agent_business -f /docker-migrations/022_feedback_review_candidates.sql
+$PSQL -d agent_memory -f /docker-migrations/023_auth_sessions.sql
+$PSQL -d agent_memory -f /docker-migrations/024_rag_eval_fixture_set.sql
+$PSQL -d agent_memory -f /docker-migrations/028_cs_dispatch.sql
+$PSQL -d agent_memory -f /docker-migrations/029_rbac_audit.sql
+$PSQL -d agent_memory -f /docker-migrations/030_cs_dispatch_hardening.sql
+# 收敛提示：sql/migrations 与 alembic 双轨收敛（alembic 唯一权威）为后续
+# 重构项，见 docs/2026-09-21-高并发与可上线专项审查.md B2。存量数据卷补齐
+# 可用 scripts/ensure_dbs.py（注意其清单也需同步更新）。
+
 echo "[init-dbs] 完成。验证只读角色："
 $PSQL -d postgres -c "SELECT rolname, rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'agent_readonly';"

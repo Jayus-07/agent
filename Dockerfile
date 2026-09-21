@@ -57,9 +57,7 @@ COPY --from=builder /opt/venv /opt/venv
 # ── 代码 ──
 WORKDIR /app
 COPY backend/ ./backend/
-# memory 库迁移在容器内执行（PG 未发布端口到宿主机，容器外无法连库）；
-# 缺此文件 alembic 报 No 'script_location' key found
-COPY alembic.ini ./
+# 2026-09-21：alembic 退役，迁移统一走 scripts/init_db.py（已随 scripts/ 拷入）
 COPY mcp_servers/ ./mcp_servers/
 COPY scripts/ ./scripts/
 
@@ -71,4 +69,7 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "backend.app.server:app", "--host", "0.0.0.0", "--port", "8000"]
+# B6（2026-09-21 审查）：--timeout-graceful-shutdown 600 —— SIGTERM 后最多
+# 等 600s 让在途请求（分钟级 SSE/长 RAG）自然收尾；compose 侧配套
+# stop_grace_period: 700s（app/rag/mcp），worker 用 acks_late 重投兜底。
+CMD ["python", "-m", "uvicorn", "backend.app.server:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "600"]

@@ -35,6 +35,8 @@ Dockerfile.*      text eol=lf
 *.lua   text eol=lf
 *.yaml  text eol=lf
 *.yml   text eol=lf
+# 容器内渲染的模板（如 alertmanager.yml.tpl：sed 注入后进 YAML 解析器，CRLF 会污染值行）
+*.tpl   text eol=lf
 *.json  text eol=lf
 *.toml  text eol=lf
 *.ini   text eol=lf

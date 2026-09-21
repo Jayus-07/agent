@@ -7,6 +7,13 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# B4（2026-09-21 审查）：告警触达——规则触发后发往 Alertmanager，
+# 由其按 docker/alertmanager.yml.tpl 的 receiver 外推 webhook
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 rule_files:
   - /etc/prometheus/prometheus-alert-rules.yml
 
@@ -27,6 +34,11 @@ scrape_configs:
   - job_name: redis
     static_configs:
       - targets: ["redis-exporter:9121"]
+
+  - job_name: redis-broker
+    # B1 拆实例后的 broker 独立监控（noeviction 内存压力/队列键规模）
+    static_configs:
+      - targets: ["redis-broker-exporter:9121"]
 
   - job_name: postgres
     static_configs:
