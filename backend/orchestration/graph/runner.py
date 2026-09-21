@@ -55,6 +55,78 @@ from backend.shared.logger import logger
 _ANSWER_EVENT = "_answer"
 
 
+def _resolve_followup_for_request(
+    *,
+    trace,
+    raw_question: str,
+    tenant_id: str,
+    user_id: str,
+    session_id: str,
+    l1_messages: list,
+) -> str | None:
+    """P2.7：Router 之前的统一 follow-up 解析（全局入口专用）。
+
+    流程：load ConversationContext → FollowUpResolver → standalone_query。
+    返回值语义：
+      - 非 None 字符串：本轮实际进 Router 的 query（解析结果或原文回退）
+      - None：need_clarification，调用方短路输出澄清（P2.9）
+
+    全程软失败：任何异常都返回原文，绝不阻断主聊天链。
+    Trace 只记槽位名与 query，不记完整上下文（P2.11 防敏感泄漏）。
+    """
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from backend.orchestration.context.conversation_context import (
+            get_conversation_context_store,
+        )
+        from backend.orchestration.context.follow_up_resolver import (
+            apply_resolution_to_context,
+            resolve_followup,
+        )
+
+        last_user_turn = ""
+        for msg in reversed(l1_messages or []):
+            if isinstance(msg, HumanMessage):
+                last_user_turn = (msg.content or "").strip()
+                break
+
+        store = get_conversation_context_store()
+        ctx = store.get(tenant_id, user_id, session_id)
+        resolution = resolve_followup(raw_question, ctx, last_user_turn)
+
+        # P2.11 Trace：span attributes + trace tags（只记低敏字段）
+        try:
+            trace.tags["follow_up_detected"] = str(
+                resolution["follow_up_detected"]).lower()
+            trace.tags["rewrite_method"] = resolution["rewrite_method"]
+            trace.tags["context_slots_used"] = ",".join(
+                resolution["used_context"][:5])
+            if resolution["need_clarification"]:
+                trace.tags["need_clarification"] = "true"
+        except Exception:
+            pass
+
+        if resolution["need_clarification"]:
+            apply_resolution_to_context(ctx, resolution)
+            logger.info(
+                "[Runner] follow-up 需要澄清: raw=%s used=%s",
+                resolution["raw_query"][:40], resolution["used_context"])
+            return None
+
+        apply_resolution_to_context(ctx, resolution)
+        standalone = resolution["standalone_query"] or raw_question
+        if standalone != raw_question:
+            logger.info(
+                "[Runner] follow-up 解析: %r → %r (method=%s, used=%s)",
+                raw_question[:40], standalone[:60],
+                resolution["rewrite_method"], resolution["used_context"])
+        return standalone
+    except Exception as exc:  # noqa: BLE001 — 解析失败回退原文
+        logger.warning("[Runner] follow-up 解析失败，回退原文: %s", exc)
+        return raw_question
+
+
 def _should_bypass_guard_for_human_relay(
     guard_result,
     *,
@@ -297,7 +369,7 @@ class GraphRunner:
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
                 user_id=user_id, department=department,
-                domain_hint=domain_hint,
+                domain_hint=domain_hint, tenant_id=tenant_id,
             )
         except Exception as e:
             trace_collector.end_span(load_span, status="error",
@@ -309,6 +381,44 @@ class GraphRunner:
             return
         trace_collector.end_span(
             load_span, metrics={"history_messages": len(l1.messages)})
+
+        # ── FollowUpResolver（P2.7/D1）：Router 之前统一 Query Preprocessing ──
+        # raw_query → ConversationContext → standalone_query → router_node。
+        # 客服窗口锁域（domain_hint=customer_service）不参与解析：窗口内
+        # 问法以订单/售后为主，指代改写与澄清会误伤客服语义。
+        # 软失败：resolver 任何异常都回退原文，绝不阻断主链。
+        if (domain_hint or "").strip().lower() not in ("customer_service", "cs"):
+            effective_question = _resolve_followup_for_request(
+                trace=trace,
+                raw_question=question,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                session_id=session_id,
+                l1_messages=l1.messages,
+            )
+            if effective_question is None:
+                # need_clarification：无上下文时禁止瞎猜（P2.9）。
+                # 走既有 answer/done 通道输出澄清，不新增 SSE 事件类型。
+                message = "你指的是哪个城市或地区？"
+                logger.info(
+                    "[Runner] follow-up 无上下文，澄清接管: session=%s", session_id)
+                yield {"event": "status", "data": {
+                    "node": "follow_up_resolver", "ts": time.time()}}
+                if fallback_deltas:
+                    yield from emit_delta_events(message, stop_event)
+                yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
+                yield make_done_event(message, {}, start_time)
+                _end_root(trace, status="success",
+                          metrics={"follow_up": "clarified"})
+                trace_collector.finish(
+                    trace, message,
+                    int((time.time() - start_time) * 1000), "", "")
+                return
+            if effective_question != question:
+                # P2.8：Router/各域消费 standalone；原始输入保留在
+                # state["raw_query"] 供 trace / UI / debugging。
+                initial_state["question"] = effective_question
+                initial_state["raw_query"] = question
 
         # ── worker 线程执行图 + 事件合并队列 ──
         # merged_q 元素: ("evt", event_dict) 或 ("done", None) 哨兵

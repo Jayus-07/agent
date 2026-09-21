@@ -415,7 +415,7 @@ def summarize_turn_usage() -> dict | None:
 def make_initial_state(question: str, session_id: str, kb_id: str, messages: list,
                        guard_result: dict | None = None,
                        user_id: str = "", department: str = "",
-                       domain_hint: str = "") -> dict:
+                       domain_hint: str = "", tenant_id: str = "") -> dict:
     """构建初始 AgentState。
 
     guard_result: Input Guard 判定结果（允许/降级放行时携带，
@@ -445,6 +445,7 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "user_id": user_id or "",
         "department": department or "",
         "domain_hint": (domain_hint or "").strip(),
+        "tenant_id": tenant_id or "",
         "plan": {"nodes": {}, "edges": {}},
         "step_results": {},
         "current_step_id": None,

@@ -55,7 +55,35 @@ def travel_graph_node(state: dict) -> dict:
         return _interrupt_update(state, final_state)
 
     _stamp_execution_tags(final_state, result)
+    _sync_brief_to_conversation_context(state, final_state)
     return _build_main_state_update(result)
+
+
+def _sync_brief_to_conversation_context(state: dict, final_state: dict) -> None:
+    """P2.2：TravelBrief 摘要槽位 → ConversationContext（单向同步）。
+
+    Travel 子图仍是 Travel 域权威状态；这里只把跨轮 follow-up 需要的
+    槽位同步给主 Router 可读的摘要上下文。同步软失败（函数内部兜底）。
+    """
+    try:
+        brief = final_state.get("brief") or {}
+        if not isinstance(brief, dict) or not brief:
+            return
+        from backend.orchestration.context.conversation_context import (
+            sync_travel_brief_to_context,
+        )
+
+        sync_travel_brief_to_context(
+            tenant_id=state.get("tenant_id") or "",
+            user_id=state.get("user_id") or "",
+            conversation_id=(
+                (state.get("travel_context") or {}).get("conversation_id")
+                or state.get("session_id") or ""
+            ),
+            brief=brief,
+        )
+    except Exception:  # noqa: BLE001 — 同步失败绝不影响主链
+        logger.debug("[travel_graph_node] brief→上下文同步失败", exc_info=True)
 
 
 def _interrupt_update(state: dict, final_state: dict) -> dict:
