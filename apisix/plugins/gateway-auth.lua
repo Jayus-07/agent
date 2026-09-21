@@ -478,8 +478,8 @@ function _M.access(_, ctx)
             core.request.set_header(ctx, HEADER_USER_PERMISSIONS, concat(parts, ","))
         end
     end
-    -- tenant_id claim（2026-09-18 预算闭环）→ X-Tenant-Id 注入；预算 /me 与
-    -- 治理写（幂等租户隔离）都要求可信租户。缺省不注入，后端按未声明 fail-closed。
+    -- tenant_id claim（2026-09-18 预算闭环）→ X-Tenant-Id 注入；预算 /me、治理写
+    -- 与客服/RBAC 等租户敏感端点缺失时 fail-closed。
     local tenant = to_str_or_nil(payload.tenant_id)
     if tenant then
         core.request.set_header(ctx, HEADER_TENANT_ID, tenant)

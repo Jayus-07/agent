@@ -6,44 +6,52 @@
 from fastapi import APIRouter
 
 from backend.app.api.routes import (
-    auth_local,
-    chat,
-    sql,
-    rag,
-    report,
-    llm,
-    observability,
-    memory,
-    data,
-    mcp,
+    admin_tasks,
     agents,
+    approvals,
+    auth_local,
     capabilities,
-    workflows,
-    inventory_alerts,
+    chat,
+    competitor,
+    cs_admin,
+    cs_agent_offers,
+    cs_agent_ws,
+    cs_dispatch,
+    cs_ops,
+    data,
     demo,
+    evaluation,
+    feedback,
+    internal_ai,
+    inventory_alerts,
+    llm,
+    maps,
+    mcp,
+    memory,
+    observability,
+    prompts,
+    rag,
+    rbac,
+    report,
     reports,
     schedules,
-    feedback,
-    competitor,
     selection,
     selection_decision,
     selection_funnel,
-    prompts,
+    approvals,
+    admin_tasks,
+    budgets,
     cs_admin,
     cs_agent_ws,
-    evaluation,
-    internal_ai,
-    approvals,
-    budgets,
-    model_prices,
     idempotency,
-    maps,
-    tasks,
-    admin_tasks,
-    sys_config_admin,
-    sys_providers,
-    sys_model_roles,
     model_config,
+    model_prices,
+    sql,
+    sys_config_admin,
+    sys_model_roles,
+    sys_providers,
+    tasks,
+    workflows,
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
@@ -53,6 +61,7 @@ api_router = APIRouter()
 # ── 业务路由 ──────────────────────────────────
 api_router.include_router(auth_local.router)  # 自建认证（2026-09-15 拆分，替代 Java auth-service）
 api_router.include_router(auth_local.sys_router)  # 用户中心（register）
+api_router.include_router(rbac.router)  # 管理端 RBAC、客服档案与会话撤销
 api_router.include_router(sys_config_admin.router)  # 灰度开关动态配置（2026-09-16 Lite，管理员闸）
 api_router.include_router(sys_providers.router)  # 模型供应商清单与分级探测
 api_router.include_router(sys_model_roles.router)  # 模型角色生效视图
@@ -84,6 +93,9 @@ api_router.include_router(selection_funnel.router)  # 智能选品漏斗（导�
 api_router.include_router(prompts.router)  # Prompt 管理
 api_router.include_router(cs_admin.router)  # 客服会话管理
 api_router.include_router(cs_admin.confirm_router)  # P3.1: 确认卡片端点
+api_router.include_router(cs_dispatch.router)  # P4: 用户直接请求人工入池
+api_router.include_router(cs_agent_offers.router)  # P7: 坐席 offer 接单/拒单/主管重派
+api_router.include_router(cs_ops.router)  # P8: 派单运营统计（admin）
 api_router.include_router(cs_agent_ws.router)  # 坐席 WS 实时推送（ticket 鉴权，不走 X-API-Key）
 api_router.include_router(evaluation.router)  # 评测集管理
 api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）

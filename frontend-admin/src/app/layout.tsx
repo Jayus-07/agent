@@ -40,16 +40,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </head>
       <body className="h-full flex bg-surface-root">
-        {!isTaskMode && !isLoginPage && (
-          <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
-        )}
-        <main className="flex-1 flex flex-col min-w-0">
-          <AuthGate>
-            <QueryClientProvider client={queryClient}>
+        <QueryClientProvider client={queryClient}>
+          {!isTaskMode && !isLoginPage && (
+            <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
+          )}
+          <main className="flex-1 flex flex-col min-w-0">
+            <AuthGate>
               <ToastProvider>{children}</ToastProvider>
-            </QueryClientProvider>
-          </AuthGate>
-        </main>
+            </AuthGate>
+          </main>
+        </QueryClientProvider>
       </body>
     </html>
   )

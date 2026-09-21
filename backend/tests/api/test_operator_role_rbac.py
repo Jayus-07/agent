@@ -21,7 +21,6 @@ from backend.app.api.routes import auth_local
 from backend.app.api.routes.approvals import router as approvals_router
 from backend.app.api.routes.auth_local import sys_router
 
-
 # ── resolve_operator_role：JWT 通道 ──────────────────────────
 
 class _FakeRequest:
@@ -110,14 +109,22 @@ def test_approve_reason_passthrough(monkeypatch):
 # ── PATCH /sys/users/{id}/role：提权接口 ─────────────────────
 
 class _FakeResult:
-    def __init__(self, row):
+    def __init__(self, row=None, rows=None, scalar=None):
         self._row = row
+        self._rows = rows if rows is not None else ([] if row is None else [row])
+        self._scalar = scalar
 
     def mappings(self):
         return self
 
     def first(self):
         return self._row
+
+    def all(self):
+        return self._rows
+
+    def scalar(self):
+        return self._scalar
 
 
 class _FakeSession:
@@ -127,8 +134,28 @@ class _FakeSession:
         self._row = row
         self.committed = False
 
-    async def execute(self, _sql, _params=None):
-        return _FakeResult(self._row)
+    async def execute(self, sql, params=None):
+        statement = str(sql)
+        if "pg_advisory_xact_lock" in statement:
+            return _FakeResult()
+        if "role = 'admin'" in statement and "FOR UPDATE" in statement:
+            return _FakeResult(rows=[{"id": 1}])
+        if statement.lstrip().startswith("SELECT id, username"):
+            return _FakeResult(self._row)
+        if statement.lstrip().startswith("SELECT agent_id"):
+            return _FakeResult()
+        if statement.lstrip().startswith("UPDATE auth.users"):
+            if self._row is None:
+                return _FakeResult()
+            updated = dict(self._row)
+            updated.update({
+                "role": params["role"],
+                "status": params.get("status", 1),
+                "version": int(updated.get("version", 0)) + 1,
+                "tenant_id": params["tenant_id"],
+            })
+            return _FakeResult(updated)
+        return _FakeResult()
 
     async def commit(self):
         self.committed = True
@@ -137,7 +164,6 @@ class _FakeSession:
 def _auth_client(monkeypatch, role: str, db_row) -> TestClient:
     app = FastAPI()
     app.include_router(sys_router)
-    app.dependency_overrides[resolve_operator_role] = lambda: OperatorIdentity(role=role, actor="user:1")
 
     import contextlib
 
@@ -146,7 +172,14 @@ def _auth_client(monkeypatch, role: str, db_row) -> TestClient:
         yield _FakeSession(db_row)
 
     monkeypatch.setattr(auth_local, "_db", _fake_db)
-    return TestClient(app, raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    client.headers.update({
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "1",
+        "X-User-Roles": role,
+        "X-Tenant-Id": "default",
+    })
+    return client
 
 
 def test_change_role_rejects_non_admin(monkeypatch):

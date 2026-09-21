@@ -84,6 +84,8 @@ export const NAV: NavEntry[] = [
     icon: <ShieldCheck size={18} />, label: '运营干预', minRole: 'admin',
     items: [
       { label: '工具审批', path: '/approvals' },
+      { label: '访问控制', path: '/settings/access', minRole: 'admin' },
+      { label: '客服对话', path: '/cs' },
       { label: '客服会话', path: '/cs/conversations' },
       { label: '人工接入坐席', path: '/cs/handoff' },
       { label: '库存告警工单', path: '/alerts' },

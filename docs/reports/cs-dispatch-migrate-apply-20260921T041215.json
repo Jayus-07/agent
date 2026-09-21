@@ -1,0 +1,181 @@
+{
+  "timestamp": "2026-09-20T20:12:06.357269+00:00",
+  "operator": "workbuddy-20260921T0411",
+  "container": "agent-postgres-1",
+  "database": "agent_memory",
+  "files": [
+    {
+      "name": "028_cs_dispatch.sql",
+      "ok": true,
+      "tail": "CREATE SCHEMA\nCREATE TABLE\nCREATE TABLE\nCREATE TABLE\nCREATE TABLE\nCREATE TABLE\nDO\nDO\nDO\nDO\nUPDATE 1\nDO\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nALTER TABLE\nDO\nDO\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX\nDO"
+    },
+    {
+      "name": "029_rbac_audit.sql",
+      "ok": true,
+      "tail": "CREATE SCHEMA\nALTER TABLE\nCREATE INDEX\nCREATE TABLE\nALTER TABLE\nCREATE INDEX\nCREATE INDEX\nCREATE INDEX"
+    }
+  ],
+  "post_preflight": {
+    "timestamp": "2026-09-20T20:12:07.031500+00:00",
+    "container": "agent-postgres-1",
+    "database": "agent_memory",
+    "read_only": true,
+    "migrations": {
+      "028": {
+        "total": 18,
+        "present": 18,
+        "missing": [],
+        "applied": true,
+        "checks": [
+          {
+            "category": "column",
+            "name": "customer_service.handoffs.priority",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.handoffs.assignment_version",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.handoffs.attempt_count",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.handoffs.offer_expires_at",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.cs_agents.tenant_id",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.cs_agents.auth_user_id",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.assignments.state",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.assignments.attempt_no",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.events.outbox_status",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.events.event_seq",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "customer_service.conversations.tenant_id",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "index",
+            "name": "idx_cs_handoff_dispatch_queue",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "index",
+            "name": "uq_cs_handoff_tenant_conversation_active",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "index",
+            "name": "uq_cs_agent_tenant_auth_user",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "index",
+            "name": "idx_cs_event_outbox_pending",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "constraint",
+            "name": "fk_cs_handoff_tenant_agent",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "constraint",
+            "name": "fk_cs_assignment_tenant_conversation",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "constraint",
+            "name": "ck_cs_assignment_active_handoff_required",
+            "present": true,
+            "error": null
+          }
+        ]
+      },
+      "029": {
+        "total": 4,
+        "present": 4,
+        "missing": [],
+        "applied": true,
+        "checks": [
+          {
+            "category": "column",
+            "name": "auth.users.version",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "column",
+            "name": "auth.users.tenant_id",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "table",
+            "name": "auth.rbac_audits",
+            "present": true,
+            "error": null
+          },
+          {
+            "category": "index",
+            "name": "idx_rbac_audits_tenant_created",
+            "present": true,
+            "error": null
+          }
+        ]
+      }
+    },
+    "risk_items": {
+      "assignments_legacy_active_rows": 0,
+      "handoffs_orphan_tenant_agent": 0,
+      "handoffs_duplicate_active": 0,
+      "cs_agents_duplicate_auth_user": 0
+    },
+    "conclusion": "ALL_APPLIED"
+  }
+}

@@ -28,7 +28,7 @@ describe('NAV — 导航配置完整性', () => {
     }
   })
 
-  it('核心路由不因导航重构丢失（追踪/入库/审批/网关安全/选品/客服/告警/任务）', () => {
+  it('核心路由不因导航重构丢失（追踪/入库/审批/网关安全/选品/客服/告警/任务/访问控制）', () => {
     for (const p of [
       '/observability/traces',
       '/knowledge/documents',
@@ -44,6 +44,7 @@ describe('NAV — 导航配置完整性', () => {
       // B13 能力治理只读页（2026-09-16）
       '/agents',
       '/skills',
+      '/settings/access',
     ]) {
       expect(allPaths, `核心路由 ${p} 丢失`).toContain(p)
     }
@@ -113,5 +114,7 @@ describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）'
       if (e.label === '知识运营' || e.label === '质量与配置') expect(e.minRole).toBe('editor')
       if (e.label === '运营干预') expect(e.minRole).toBe('admin')
     }
+    const access = NAV.flatMap((e) => e.items ?? []).find((i) => i.path === '/settings/access')
+    expect(access?.minRole).toBe('admin')
   })
 })

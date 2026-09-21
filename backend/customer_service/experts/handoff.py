@@ -67,7 +67,9 @@ def execute_handoff(
     # 人工处理中时复用工单直接成功返回 —— waiting_human → handoff_requested
     # 是非法转换，二次执行绝不能炸（炸了用户会收到兜底报错文案）。
     if current_state in (
-        HandoffState.WAITING_HUMAN, HandoffState.HUMAN_ACTIVE,
+        HandoffState.WAITING_HUMAN,
+        HandoffState.AGENT_OFFERED,
+        HandoffState.HUMAN_ACTIVE,
     ):
         reused_ticket = (existing or {}).get("ticket_id", "")
         # 文案按状态区分（2026-09-17）：人工已接入时仍说"请稍候"会误导。

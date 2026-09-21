@@ -71,21 +71,20 @@ export async function getHandoffQueue(
 
 export async function claimConversation(
   conversationId: string,
-  agentId: string,
 ): Promise<HandoffClaimResult> {
   return request<HandoffClaimResult>(
     `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/claim`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_id: agentId }),
+      // P7：坐席身份由后端从登录身份反查，不再提交 agent_id。
+      body: JSON.stringify({}),
     },
   );
 }
 
 export async function sendAgentMessage(
   conversationId: string,
-  agentId: string,
   content: string,
 ): Promise<HandoffMessageDTO> {
   return request<HandoffMessageDTO>(
@@ -93,7 +92,7 @@ export async function sendAgentMessage(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_id: agentId, content }),
+      body: JSON.stringify({ content }),
     },
   );
 }
@@ -122,14 +121,80 @@ export async function issueWsTicket(): Promise<{
 
 export async function closeConversation(
   conversationId: string,
-  agentId: string,
 ): Promise<{ conversation_id: string; handoff_state: string; closed_by: string }> {
   return request(
     `/api/cs/conversations/` + encodeURIComponent(conversationId) + `/close`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_id: agentId }),
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+// ── P7 坐席 offer（待接单/拒单）────────────────────────
+
+export interface MyOfferItem {
+  handoff_id: string;
+  conversation_id: string;
+  user_id: string;
+  handoff_state: string;
+  assignment_version: number;
+  attempt_count: number;
+  priority: number;
+  offered_at: string | null;
+  offer_expires_at: string | null;
+}
+
+export async function getMyOffers(): Promise<{
+  items: MyOfferItem[];
+  total: number;
+}> {
+  return request(`/api/cs/agents/me/offers`);
+}
+
+export async function acceptOffer(
+  handoffId: string,
+  offerVersion?: number,
+): Promise<{
+  handoff_id: string;
+  conversation_id: string;
+  handoff_state: string;
+  agent_id: string | null;
+  assignment_version: number;
+  offer_expires_at: string | null;
+}> {
+  return request(
+    `/api/cs/agents/me/offers/` + encodeURIComponent(handoffId) + `/accept`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        offerVersion === undefined ? {} : { offer_version: offerVersion },
+      ),
+    },
+  );
+}
+
+export async function declineOffer(
+  handoffId: string,
+  offerVersion?: number,
+): Promise<{
+  handoff_id: string;
+  conversation_id: string;
+  handoff_state: string;
+  agent_id: string | null;
+  assignment_version: number;
+  offer_expires_at: string | null;
+}> {
+  return request(
+    `/api/cs/agents/me/offers/` + encodeURIComponent(handoffId) + `/decline`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        offerVersion === undefined ? {} : { offer_version: offerVersion },
+      ),
     },
   );
 }
@@ -150,7 +215,6 @@ export async function getCSStats(): Promise<CSStatsResponse> {
  */
 export async function notifyAgentTyping(
   conversationId: string,
-  agentId: string,
 ): Promise<void> {
   try {
     await request(
@@ -158,7 +222,7 @@ export async function notifyAgentTyping(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId }),
+        body: JSON.stringify({}),
       },
     );
   } catch {

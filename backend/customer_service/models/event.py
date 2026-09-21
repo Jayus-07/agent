@@ -17,6 +17,7 @@ from sqlalchemy import (
     DateTime,
     Index,
     String,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -32,12 +33,33 @@ class CSEvent(CSBase):
     __table_args__ = (
         # 断线补发主查询：WHERE conversation_id AND id > after_seq ORDER BY id
         Index("idx_cs_event_conv_id", "conversation_id", "id"),
+        Index(
+            "uq_cs_event_tenant_handoff_seq",
+            "tenant_id",
+            "handoff_id",
+            "event_seq",
+            unique=True,
+        ),
+        Index(
+            "idx_cs_event_outbox_pending",
+            "outbox_status",
+            "created_at",
+            "id",
+            postgresql_where=text("outbox_status = 'pending'"),
+        ),
         {"schema": "customer_service"},
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     conversation_id = Column(String(64), nullable=False)
     event_id = Column(String(64), unique=True, nullable=False)
+    tenant_id = Column(String(64), nullable=False, default="default")
+    handoff_id = Column(String(64), nullable=True)
+    target_agent_id = Column(String(64), nullable=True)
+    actor_user_id = Column(String(64), nullable=True)
+    event_seq = Column(BigInteger, nullable=True)
     type = Column(String(64), nullable=False)
     payload = Column(JSONB, nullable=False, default=dict)
+    outbox_status = Column(String(20), nullable=False, default="pending")
+    published_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)

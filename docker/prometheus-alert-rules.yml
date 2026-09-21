@@ -397,3 +397,64 @@ groups:
         annotations:
           summary: "反馈评测候选审核或 promotion 拒绝量升高"
           description: "检查审核状态机和 golden set 导出；pending/rejected 候选不得进入生产评测集"
+
+  # ── 客服高并发派单与事件可靠性（P8，2026-09-21）──────────────
+  # 口径与 backend/observability/metrics.py 的 cs_dispatch_* / cs_outbox_* 对齐；
+  # dispatcher 心跳由 cs-dispatcher 每 tick 写 Redis（TTL 30s），进程消失即
+  # up == 0（cs-dispatcher 的 healthcheck 由 compose 直接重启，无需告警联动）。
+  - name: agent-platform-cs-dispatch
+    interval: 30s
+    rules:
+      - alert: CsOutboxLagHigh
+        expr: cs_outbox_lag_seconds > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "客服 outbox 最旧 pending 事件 lag 超过 5 秒"
+          description: "方案 P8 完成标准为 P99 < 2s；先查 cs-dispatcher relay 是否存活，再看 Redis publish 回执失败率"
+
+      - alert: CsOutboxBacklogGrowing
+        expr: cs_outbox_pending > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "客服 outbox 积压事件超过 100 条且持续"
+          description: "relay 长时间未清空 pending；检查 AgentHub.publish_envelope 失败与 Redis 连通性，事件不会丢但用户通知延迟"
+
+      - alert: CsDispatchQueueDepthHigh
+        expr: cs_dispatch_queue_depth > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "客服排队工单持续超过 50"
+          description: "检查在线坐席数与容量（cs_dispatch_online_agents × max_conversations），必要时引导用户走 AI 或扩坐席"
+
+      - alert: CsNoOnlineAgents
+        expr: cs_dispatch_online_agents == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "客服在线坐席数为 0"
+          description: "派单 fail-closed 不产生新绑定；确认坐席是否全部离线（WS 心跳）或 presence Redis 故障"
+
+      - alert: CsPresenceUnavailableSpike
+        expr: increase(cs_dispatch_offered_total{result="presence_unavailable"}[5m]) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "派单因 Redis presence 不可用持续 fail-closed"
+          description: "5 分钟内超过 5 次 presence_unavailable；检查 Redis 与 customer_service.realtime 的同步客户端"
+
+      - alert: CsReaperClosedSpike
+        expr: increase(cs_dispatch_reaped_total{action=~"closed_.*"}[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "10 分钟内超过 10 张工单被 reaper 终态关闭"
+          description: "closed_max_attempts/closed_total_deadline 说明坐席侧长期无人接单或派单目标不可达，属于服务体验事件而非技术故障时需人工复盘"

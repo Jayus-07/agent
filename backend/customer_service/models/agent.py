@@ -10,7 +10,9 @@ from sqlalchemy import (
     Column,
     DateTime,
     Index,
+    Integer,
     String,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -25,11 +27,31 @@ class CSAgent(CSBase):
     __tablename__ = "cs_agents"
     __table_args__ = (
         Index("idx_cs_agent_email", "email", unique=True),
+        Index(
+            "uq_cs_agent_tenant_agent_id",
+            "tenant_id",
+            "agent_id",
+            unique=True,
+        ),
+        Index(
+            "idx_cs_agent_tenant_status",
+            "tenant_id",
+            "enabled",
+            "accepting",
+        ),
+        Index(
+            "uq_cs_agent_tenant_auth_user",
+            "tenant_id",
+            "auth_user_id",
+            unique=True,
+            postgresql_where=text("auth_user_id IS NOT NULL"),
+        ),
         {"schema": "customer_service"},
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     agent_id = Column(String(64), unique=True, nullable=False)
+    tenant_id = Column(String(64), nullable=False, default="default")
 
     display_name = Column(String(128), nullable=False)
     email = Column(String(128), nullable=True)
@@ -39,6 +61,11 @@ class CSAgent(CSBase):
     )
 
     available = Column(Boolean, nullable=False, default=True)
+    auth_user_id = Column(String(64), nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    accepting = Column(Boolean, nullable=False, default=True)
+    last_assigned_at = Column(DateTime(timezone=True), nullable=True)
+    version = Column(Integer, nullable=False, default=0)
     max_conversations = Column(BigInteger, nullable=False, default=10)
 
     custom_fields = Column(JSONB, nullable=False, default=dict)

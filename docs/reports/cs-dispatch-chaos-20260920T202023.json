@@ -1,0 +1,45 @@
+{
+  "script": "cs_dispatch_chaos.py",
+  "mode": "preflight",
+  "preflight": {
+    "checked_at": "2026-09-20T20:20:19.450331+00:00",
+    "pg_reachable": true,
+    "handoff_new_columns": 4,
+    "outbox_pending": 456,
+    "redis_reachable": false,
+    "redis_error": "ModuleNotFoundError: No module named 'langchain_core'",
+    "manual_drills": [
+      {
+        "target": "redis",
+        "steps": [
+          "docker compose stop redis",
+          "等待 60s",
+          "docker compose start redis"
+        ],
+        "expect": "dispatcher 派单 fail-closed（cs_dispatch_offered_total{result=presence_unavailable} 上升）且不产生脏绑定；relay 失败事件保持 pending，恢复后 1-2 个 tick 内清空",
+        "recovery": "cs_outbox_pending 回落 0；presence_unavailable 计数停止增长"
+      },
+      {
+        "target": "postgres",
+        "steps": [
+          "docker compose stop postgres",
+          "等待 60s",
+          "docker compose start postgres"
+        ],
+        "expect": "API 503（MemoryDatabaseUnavailable）；dispatcher 循环不退出，异常只记日志",
+        "recovery": "恢复后下一 tick 队列继续消费；无需人工修复数据"
+      },
+      {
+        "target": "api",
+        "steps": [
+          "docker compose stop app",
+          "等待 60s",
+          "docker compose start app"
+        ],
+        "expect": "用户转人工入池 503，dispatcher/reaper/relay 继续运行（独立进程）",
+        "recovery": "app 恢复后入池恢复；期间无工单丢失"
+      }
+    ]
+  },
+  "finished_at": "2026-09-20T20:20:23.340268+00:00"
+}

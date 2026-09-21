@@ -20,8 +20,10 @@
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import text
@@ -31,12 +33,9 @@ from backend.app.api.deps import (
     require_admin_user,
     resolve_operator_role,
 )
-from backend.services import sys_config
-
-from contextlib import asynccontextmanager
-
+from backend.config.auth import TENANT_ID_HEADER
+from backend.infra.redis.client import get_redis
 from backend.memory.database import get_session
-from backend.security import local_jwt
 from backend.security.local_jwt import (
     hash_password,
     hash_refresh_token,
@@ -46,7 +45,8 @@ from backend.security.local_jwt import (
     verify_access_token,
     verify_password,
 )
-from backend.infra.redis.client import get_redis
+from backend.security.session_service import SessionRef, SessionService
+from backend.services import sys_config
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/auth", tags=["认证"])
@@ -63,6 +63,7 @@ _REVOKE_REASON_ADMIN = "admin_force_logout"     # 管理员强制下线
 _REVOKE_REASON_REPLAY = "replay_detected"       # refresh token 重放（疑似泄露）
 _COOKIE_KWARGS = {"key": "refresh_token", "httponly": True, "samesite": "lax",
                   "path": "/api/auth", "max_age": _REFRESH_TTL_SECONDS}
+_session_service = SessionService(redis_getter=lambda: get_redis())
 
 
 def _client_ip(request: Request) -> str:
@@ -119,11 +120,68 @@ def _fail(message: str, code: int = 400):
     return JSONResponse(_result(None, code=code, message=message), status_code=code)
 
 
-async def _fetch_user(session, username: str):
+def _trusted_tenant_id(request: Request) -> str | None:
+    """读取网关注入的租户头；认证端点也禁止用缺省租户猜测归属。"""
+    value = (request.headers.get(TENANT_ID_HEADER) or "").strip()
+    if not value or len(value) > 128:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value) is None:
+        return None
+    return value
+
+
+async def _fetch_user(session, username: str, tenant_id: str):
     row = (await session.execute(text(
-        "SELECT id, username, password_hash, real_name, dept, role, status "
-        "FROM auth.users WHERE username = :u"), {"u": username})).mappings().first()
-    return row
+        "SELECT id, username, password_hash, real_name, dept, role, status, "
+        "tenant_id FROM auth.users "
+        "WHERE username = :u AND tenant_id = :tenant_id"),
+        {"u": username, "tenant_id": tenant_id})).mappings().first()
+    return (
+        await _enrich_user_row(session, row, tenant_id)
+        if row is not None else None
+    )
+
+
+async def _enrich_user_row(session, row, tenant_id: str):
+    """按可信租户补充客服角色；不把缺失租户降级成 default。"""
+    data = dict(row)
+    if data.get("tenant_id") != tenant_id:
+        return None
+    data["cs_role"] = None
+    available = (await session.execute(text(
+        "SELECT COUNT(*) = 3 AS available "
+        "FROM information_schema.columns "
+        "WHERE table_schema = 'customer_service' "
+        "AND table_name = 'cs_agents' "
+        "AND column_name IN ('auth_user_id', 'tenant_id', 'enabled')"))).scalar()
+    if not available:
+        return data
+    cs_row = (await session.execute(text(
+        "SELECT role FROM customer_service.cs_agents "
+        "WHERE auth_user_id = CAST(:uid AS VARCHAR) "
+        "AND tenant_id = :tenant_id AND enabled IS TRUE"),
+        {
+            "uid": str(data.get("user_id", data.get("id"))),
+            "tenant_id": tenant_id,
+        })).mappings().first()
+    if cs_row is not None:
+        role = cs_row.get("role")
+        data["cs_role"] = role if role in ("agent", "supervisor") else None
+    return data
+
+
+def _user_info(row) -> dict:
+    """统一构造登录/刷新返回的最新用户权限信息。"""
+    role = row.get("role") or "viewer"
+    return {
+        "userId": row.get("user_id", row.get("id")),
+        "username": row.get("username"),
+        "realName": row.get("real_name") or row.get("username"),
+        "roles": [role],
+        "platformRole": role,
+        "tenantId": row.get("tenant_id"),
+        "csRole": row.get("cs_role"),
+    }
 
 
 def _blacklist_access(token: str) -> bool:
@@ -207,18 +265,9 @@ def _delete_session_redis_keys(user_id, sid: str) -> int:
     用于管理员强制下线 / 重放撤销 / 登出撤会话。尽力而为，返回删除的
     闸键数量；Redis 不可用返回 0（DB 侧吊销是权威，闸键随 access TTL 自然过期）。
     """
-    client = get_redis()
-    if client is None:
-        return 0
-    deleted = 0
-    try:
-        members = client.smembers(_session_idx_key(user_id, sid)) or set()
-        for jti in members:
-            deleted += client.delete(f"auth:session:{user_id}:{jti}")
-        client.delete(_session_idx_key(user_id, sid))
-    except Exception:
-        logger.warning("[local-auth] 会话 Redis 键清理异常（sid=%s…）", sid[:8], exc_info=True)
-    return deleted
+    return _session_service.clear_redis_for_session(
+        SessionRef(session_id=str(sid), user_id=user_id)
+    )
 
 
 async def _create_session(db, *, user_id: int, device_id: str, user_agent: str,
@@ -238,14 +287,7 @@ async def _revoke_session_row(db, *, session_id: str, reason: str) -> None:
 
     幂等：已吊销的会话不再改写 revoke_reason（首次吊销原因优先）。
     """
-    await db.execute(text(
-        "UPDATE auth.sessions SET revoked_at = now(), revoke_reason = :r "
-        "WHERE id = :sid AND revoked_at IS NULL"),
-        {"r": reason, "sid": session_id})
-    await db.execute(text(
-        "UPDATE auth.refresh_tokens SET revoked = TRUE, revoked_at = now() "
-        "WHERE session_id = :sid AND revoked = FALSE"),
-        {"sid": session_id})
+    await _session_service.revoke_session(db, session_id, reason=reason)
 
 
 # ── /auth/login ──────────────────────────────────────────────
@@ -260,9 +302,12 @@ async def login(request: Request, response: Response):
     ip = _client_ip(request)
     if not username or not password:
         return _fail("用户名或密码不能为空", code=400)
+    tenant_id = _trusted_tenant_id(request)
+    if tenant_id is None:
+        return _fail("缺少可信租户身份", code=401)
 
     async with _db() as session:
-        row = await _fetch_user(session, username)
+        row = await _fetch_user(session, username, tenant_id)
     if row is None or row["status"] != 1 or not verify_password(password, row["password_hash"]):
         return _fail("用户名或密码错误", code=400)
 
@@ -291,7 +336,9 @@ async def login(request: Request, response: Response):
 
     issued = issue_access_token(user_id=row["id"], username=row["username"],
                                 dept=row["dept"], device_id=device_id,
-                                roles=[row["role"]], session_id=sid)
+                                roles=[row["role"]],
+                                tenant_id=row["tenant_id"],
+                                session_id=sid)
     _write_session(issued)
     response.set_cookie(value=raw_refresh, **_COOKIE_KWARGS)
     return _result({
@@ -299,9 +346,7 @@ async def login(request: Request, response: Response):
         "refreshToken": None,          # 契约：改走 HttpOnly Cookie
         "tokenType": "Bearer",
         "expiresIn": issued["expiresIn"],
-        "userInfo": {"userId": row["id"], "username": row["username"],
-                     "realName": row["real_name"] or row["username"],
-                     "roles": [row["role"]]},
+        "userInfo": _user_info(row),
     })
 
 
@@ -312,17 +357,24 @@ async def refresh(request: Request, response: Response):
     raw = request.cookies.get("refresh_token")
     if not raw:
         return _fail("缺少刷新凭据", code=401)
+    tenant_id = _trusted_tenant_id(request)
+    if tenant_id is None:
+        return _fail("缺少可信租户身份", code=401)
     token_hash = hash_refresh_token(raw)
 
     async with _db() as session:
         row = (await session.execute(text(
             "SELECT rt.id, rt.user_id, rt.expires_at, rt.revoked, rt.revoked_at, rt.session_id, "
             "s.revoked_at AS session_revoked_at, s.device_id AS s_device_id, "
-            "u.username, u.dept, u.role, u.status "
+            "u.username, u.real_name, u.dept, u.role, u.status, u.tenant_id "
             "FROM auth.refresh_tokens rt "
             "LEFT JOIN auth.sessions s ON s.id = rt.session_id "
             "JOIN auth.users u ON u.id = rt.user_id "
-            "WHERE rt.token_hash = :th"), {"th": token_hash})).mappings().first()
+            "WHERE rt.token_hash = :th AND u.tenant_id = :tenant_id"),
+            {"th": token_hash, "tenant_id": tenant_id})).mappings().first()
+
+        if row is not None:
+            row = await _enrich_user_row(session, row, tenant_id)
 
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
@@ -342,6 +394,7 @@ async def refresh(request: Request, response: Response):
                     and (now - row["revoked_at"]).total_seconds() <= _REFRESH_GRACE_SECONDS):
                 issued = issue_access_token(user_id=row["user_id"], username=row["username"],
                                             dept=row["dept"], roles=[row["role"]],
+                                            tenant_id=row["tenant_id"],
                                             session_id=sid)
                 _write_session(issued)
                 await session.execute(text(
@@ -350,8 +403,7 @@ async def refresh(request: Request, response: Response):
                 await session.commit()
                 return _result({"token": issued["token"], "refreshToken": None,
                                 "tokenType": "Bearer", "expiresIn": issued["expiresIn"],
-                                "userInfo": {"userId": row["user_id"],
-                                             "username": row["username"]}})
+                                "userInfo": _user_info(row)})
             if sid and row["session_revoked_at"] is None:
                 await _revoke_session_row(session, session_id=sid,
                                           reason=_REVOKE_REASON_REPLAY)
@@ -391,12 +443,14 @@ async def refresh(request: Request, response: Response):
         await session.commit()
 
     issued = issue_access_token(user_id=row["user_id"], username=row["username"],
-                                dept=row["dept"], roles=[row["role"]], session_id=sid)
+                                dept=row["dept"], roles=[row["role"]],
+                                tenant_id=row["tenant_id"],
+                                session_id=sid)
     _write_session(issued)
     response.set_cookie(value=raw_new, **_COOKIE_KWARGS)
     return _result({"token": issued["token"], "refreshToken": None,
                     "tokenType": "Bearer", "expiresIn": issued["expiresIn"],
-                    "userInfo": {"userId": row["user_id"], "username": row["username"]}})
+                    "userInfo": _user_info(row)})
 
 
 # ── /auth/logout ─────────────────────────────────────────────
@@ -436,6 +490,9 @@ async def logout(request: Request, response: Response):
 @sys_router.post("/users/register")
 async def register(request: Request):
     body = await request.json()
+    tenant_id = _trusted_tenant_id(request)
+    if tenant_id is None:
+        return _fail("缺少可信租户身份", code=401)
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     confirm = body.get("confirmPassword") or ""
@@ -454,9 +511,16 @@ async def register(request: Request):
         if exists:
             return _fail("用户名已存在", code=400)
         row = (await session.execute(text(
-            "INSERT INTO auth.users (username, password_hash, real_name, role) "
-            "VALUES (:u, :p, :r, 'viewer') RETURNING id, username, real_name, role"),
-            {"u": username, "p": hash_password(password), "r": real_name})).mappings().first()
+            "INSERT INTO auth.users "
+            "(username, password_hash, real_name, role, tenant_id) "
+            "VALUES (:u, :p, :r, 'viewer', :tenant_id) "
+            "RETURNING id, username, real_name, role, tenant_id"),
+            {
+                "u": username,
+                "p": hash_password(password),
+                "r": real_name,
+                "tenant_id": tenant_id,
+            })).mappings().first()
         await session.commit()
 
     logger.info(f"[local-auth] 注册用户 id={row['id']} username={row['username']}")
@@ -470,13 +534,7 @@ _ALLOWED_ROLES = ("viewer", "editor", "admin")
 @sys_router.patch("/users/{user_id}/role")
 async def change_role(user_id: int, request: Request,
                       operator: "OperatorIdentity" = Depends(resolve_operator_role)):
-    """变更用户角色（提权/降权）。仅 admin 可操作（resolve_operator_role 双通道）。
-
-    - 变更即时落库；目标用户已签发的 access token（30min TTL）与 refresh
-      不回收，新角色在下次登录/刷新时进入 JWT roles claim 生效。
-    - 首个 admin 无法由本接口产生（鸡生蛋）：用 SQL 一次性提权
-      `UPDATE auth.users SET role='admin' WHERE username='...'`，之后即可界面化管理。
-    """
+    """兼容旧角色路径，并转发到 RBAC 事务实现。"""
     if operator.role != "admin":
         raise HTTPException(status_code=403, detail="仅 admin 可变更用户角色")
 
@@ -485,19 +543,42 @@ async def change_role(user_id: int, request: Request,
     if role not in _ALLOWED_ROLES:
         return _fail(f"角色必须是 {'/'.join(_ALLOWED_ROLES)}", code=400)
 
-    async with _db() as session:
-        row = (await session.execute(text(
-            "UPDATE auth.users SET role = :role WHERE id = :uid "
-            "RETURNING id, username, role"),
-            {"role": role, "uid": user_id})).mappings().first()
-        await session.commit()
-    if row is None:
-        return _fail("用户不存在", code=404)
+    from backend.app.api.routes import rbac as rbac_routes
+
+    db = None
+    try:
+        async with _db() as db:
+            outcome = await rbac_routes.update_user_in_transaction(
+                db,
+                user_id=user_id,
+                body={"platformRole": role},
+                operator=operator,
+                tenant_id=rbac_routes._tenant_id(request),
+                require_version=False,
+            )
+            await db.commit()
+    except HTTPException:
+        await rbac_routes._rollback(db)
+        raise
+    except Exception as exc:
+        await rbac_routes._rollback(db)
+        if rbac_routes._is_concurrency_conflict(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="角色更新发生并发冲突，请重试",
+            ) from exc
+        logger.exception("[local-auth] 兼容角色更新事务失败 user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="角色更新事务失败") from exc
+
+    rbac_routes._session_service.clear_redis_for_sessions(outcome.revoked_sessions)
 
     logger.info(f"[local-auth] 角色变更 actor={operator.actor} "
-                f"user={row['username']}({row['id']}) → {row['role']}")
-    return _result({"userId": row["id"], "username": row["username"],
-                    "role": row["role"], "changedBy": operator.actor})
+                f"user={outcome.user['username']}({outcome.user['userId']}) "
+                f"→ {outcome.user['platformRole']}")
+    return _result({"userId": outcome.user["userId"],
+                    "username": outcome.user["username"],
+                    "role": outcome.user["platformRole"],
+                    "changedBy": operator.actor})
 
 
 # ── 安全运营（2026-09-16 方案 A 配套：管理员只读 + 会话强制下线）──────────

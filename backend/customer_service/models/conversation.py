@@ -18,6 +18,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import declarative_base, relationship
@@ -33,15 +34,28 @@ class CSConversation(CSBase):
     __table_args__ = (
         Index("idx_cs_conv_user", "user_id", "updated_at"),
         Index("idx_cs_conv_status", "conversation_status",
-              postgresql_where=Text("conversation_status != 'resolved'")),
+              postgresql_where=text("conversation_status != 'resolved'")),
+        Index(
+            "idx_cs_conv_tenant_status",
+            "tenant_id",
+            "conversation_status",
+            "updated_at",
+        ),
+        Index(
+            "uq_cs_conversation_tenant_conversation_id",
+            "tenant_id",
+            "conversation_id",
+            unique=True,
+        ),
         Index("idx_cs_conv_agent", "assigned_agent_id",
-              postgresql_where=Text("assigned_agent_id IS NOT NULL")),
+              postgresql_where=text("assigned_agent_id IS NOT NULL")),
         {"schema": "customer_service"},
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     conversation_id = Column(String(64), unique=True, nullable=False)
     user_id = Column(String(64), nullable=False)
+    tenant_id = Column(String(64), nullable=False, default="default")
 
     # ── dual-dimension state ──
     conversation_status = Column(
