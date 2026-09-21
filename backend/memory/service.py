@@ -1,5 +1,6 @@
 """MemoryService — 统一记忆服务入口"""
 import asyncio
+import time
 
 from backend.memory.database import get_session, AsyncSessionLocal
 from backend.memory.repository.session_repo import SessionRepository
@@ -16,6 +17,20 @@ from backend.memory.token_budget import trim_messages_to_budget
 from backend.config import HISTORY_TOKEN_BUDGET
 from langchain_core.messages import SystemMessage
 from backend.shared.logger import logger
+from backend.observability.metrics import (
+    degradation_alerts_total,
+    memory_retrieval_failure_total,
+    memory_retrieval_latency_seconds,
+    memory_retrieval_total,
+)
+
+
+def _metric_safe(fn, **labels) -> None:
+    """metric 埋点兜底：观测面异常绝不反噬业务链路。"""
+    try:
+        fn(**labels)
+    except Exception:  # pragma: no cover - 观测面异常不外泄
+        pass
 
 
 class MemoryService:
@@ -47,7 +62,6 @@ class MemoryService:
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
-                mrepo = MemoryRepository(db_session)
 
                 # Ensure chat_sessions row exists (FK target for chat_messages)
                 srow = await srepo.get_or_create(session_id, user_id)
@@ -79,19 +93,47 @@ class MemoryService:
                     ))
                     logger.info(f"[MemoryService] 注入 L2 会话摘要 (session={session_id}, {len(srow.summary)} 字)")
 
-                # L3 → L1
-                retriever = HybridRetriever(mrepo)
-                l3 = LongTermMemory(mrepo)
-                # L3 语义 query：用当前用户问题检索长期记忆（此前误用 session_id，
-                # 召回与当前问题语义无关）；空 query 兜底回退 session_id 保持旧行为
-                l3_query = query or session_id
-                emb = l3.embedding.embed_query(l3_query)
-                records = await retriever.retrieve(l3_query, emb, user_id, top_k=5)
-                if records:
-                    facts = [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id) for r in records]
-                    prompt_text = LongTermMemory.format_for_prompt(facts)
-                    l1._messages.insert(0, SystemMessage(content=prompt_text))
-                    logger.info(f"[MemoryService] 注入 {len(records)} 条长期记忆 (session={session_id})")
+                # L3 → L1（独立数据库会话 + 显式降级：pgvector/检索异常
+                # 只降级不阻断主聊天链 —— 主事务不被 L3 失败污染）
+                l3_started = time.perf_counter()
+                try:
+                    async with AsyncSessionLocal() as l3_db:
+                        l3_repo = MemoryRepository(l3_db)
+                        retriever = HybridRetriever(l3_repo)
+                        l3 = LongTermMemory(l3_repo)
+                        # L3 语义 query：用当前用户问题检索长期记忆（此前误用 session_id，
+                        # 召回与当前问题语义无关）；空 query 兜底回退 session_id 保持旧行为
+                        l3_query = query or session_id
+                        emb = l3.embedding.embed_query(l3_query)
+                        records = await retriever.retrieve(l3_query, emb, user_id, top_k=5)
+                    if records:
+                        facts = [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id) for r in records]
+                        prompt_text = LongTermMemory.format_for_prompt(facts)
+                        l1._messages.insert(0, SystemMessage(content=prompt_text))
+                        logger.info(f"[MemoryService] 注入 {len(records)} 条长期记忆 (session={session_id})")
+                    _metric_safe(
+                        memory_retrieval_total.labels(
+                            status="success", operation="retrieve").inc)
+                except Exception as l3_exc:
+                    # 降级：记录日志 + metric，主流程继续（不允许 L3 失败打挂聊天）
+                    logger.error(
+                        f"[MemoryService] L3 检索失败，降级继续 (session={session_id}): {l3_exc}")
+                    _metric_safe(
+                        memory_retrieval_total.labels(
+                            status="degraded", operation="retrieve").inc)
+                    _metric_safe(
+                        memory_retrieval_failure_total.labels(
+                            operation="retrieve").inc)
+                    _metric_safe(
+                        degradation_alerts_total.labels(
+                            code="MEMORY_L3_RETRIEVAL_FAILED", level="warn").inc)
+                finally:
+                    try:
+                        memory_retrieval_latency_seconds.labels(
+                            operation="retrieve"
+                        ).observe(time.perf_counter() - l3_started)
+                    except Exception:  # pragma: no cover
+                        pass
 
                 # Token 预算裁剪（P3）：L1 条数上限（20 条）挡不住单条超长消息，
                 # 注入摘要/长期记忆后按 token 整体裁剪，防止挤爆 LLM_CONTEXT_LENGTH
@@ -187,6 +229,7 @@ class MemoryService:
         导致同期其他记忆操作（会话持久化等）超时降级。
         """
         async with AsyncSessionLocal() as db_session:
+            write_started = time.perf_counter()
             try:
                 mrepo = MemoryRepository(db_session)
                 l3 = LongTermMemory(mrepo)
@@ -217,9 +260,25 @@ class MemoryService:
                 if stored:
                     await db_session.commit()
                     logger.info(f"[MemoryService] 后台写入 {stored}/{len(facts)} 条记忆")
+                _metric_safe(
+                    memory_retrieval_total.labels(
+                        status="success", operation="write").inc)
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] store 失败: {e}")
+                _metric_safe(
+                    memory_retrieval_total.labels(
+                        status="failure", operation="write").inc)
+                _metric_safe(
+                    memory_retrieval_failure_total.labels(
+                        operation="write").inc)
+            finally:
+                try:
+                    memory_retrieval_latency_seconds.labels(
+                        operation="write"
+                    ).observe(time.perf_counter() - write_started)
+                except Exception:  # pragma: no cover
+                    pass
 
     # ============================================================
     # Maintenance

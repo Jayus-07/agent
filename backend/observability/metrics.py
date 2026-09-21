@@ -408,6 +408,25 @@ degradation_alerts_total = Counter(
     labelnames=("code", "level"),  # code: LLM_CIRCUIT_OPEN / WORKER_TIMEOUT / ...
 )
 
+# ── Memory L3 检索/写入指标（2026-09-21 pgvector 修复配套）──
+# 标签仅用低基数字段；禁止 user_id/tenant_id/conversation_id/query 作 label。
+memory_retrieval_total = Counter(
+    "memory_retrieval_total",
+    "Memory L3 检索/写入结果总数（按状态与操作）",
+    labelnames=("status", "operation"),  # status: success|failure|degraded; operation: retrieve|write
+)
+memory_retrieval_failure_total = Counter(
+    "memory_retrieval_failure_total",
+    "Memory L3 检索/写入失败总数（按操作）",
+    labelnames=("operation",),  # operation: retrieve | write
+)
+memory_retrieval_latency_seconds = Histogram(
+    "memory_retrieval_latency_seconds",
+    "Memory L3 检索/写入耗时（秒，按操作）",
+    labelnames=("operation",),  # operation: retrieve | write
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
 # 熔断器状态（0=closed 1=half_open 2=open）— 熔断开路告警数据源
 circuit_breaker_state = Gauge(
     "circuit_breaker_state",

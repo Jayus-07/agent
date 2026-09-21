@@ -6,6 +6,10 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base
 from pgvector.sqlalchemy import Vector
 
+# 复用 RAG 向量库的统一维度配置（text-embedding-v3 = 1024，env VECTOR_PG_DIM 可覆盖）。
+# 历史 bug：此处曾声明 Vector(512)，与 provider 维度不符（台账外修复，2026-09-21）。
+from backend.rag.vectorstore.pgvector_store import EMBEDDING_DIM
+
 Base = declarative_base()
 
 class MemoryRecord(Base):
@@ -16,7 +20,7 @@ class MemoryRecord(Base):
     session_id = Column(String(128), nullable=False, default="")
     memory_type = Column(String(32), nullable=False)
     content = Column(Text, nullable=False)
-    embedding = Column(Vector(512))
+    embedding = Column(Vector(EMBEDDING_DIM))
     importance_score = Column(Float, nullable=False, default=0.5)
     confidence_score = Column(Float, nullable=False, default=1.0)
     access_count = Column(Integer, nullable=False, default=0)

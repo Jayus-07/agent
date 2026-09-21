@@ -1,9 +1,22 @@
 """MemoryRepository — async CRUD + pgvector hybrid search for memory_records"""
 from uuid import uuid4
 from datetime import datetime, timezone
-from sqlalchemy import select, update, text
+from sqlalchemy import select, update, text, type_coerce
 from sqlalchemy.ext.asyncio import AsyncSession
-from backend.memory.models.memory import MemoryRecord
+from pgvector.sqlalchemy import Vector
+
+from backend.memory.models.memory import EMBEDDING_DIM, MemoryRecord
+
+
+def _query_vector(embedding: list[float]):
+    """把 Python list 显式 coerce 成 pgvector Vector 类型。
+
+    背景（2026-09-21 P1 修复）：裸 list 走 asyncpg 时被推断为 unknown，
+    与 vector 列做 ``<=>`` 会报「vector <=> unknown」/「bytea <=> unknown」。
+    type_coerce 走 Vector 类型的 bind processor，参数以 vector(1024) 参与
+    运算（pgvector-python 官方 asyncpg 用法）。
+    """
+    return type_coerce(embedding, Vector(EMBEDDING_DIM))
 
 
 class MemoryRepository:
@@ -28,9 +41,10 @@ class MemoryRepository:
         注意：本方法**仅**按相似度排序，不做 importance / recency 联合打分。
         如需重排序（如结合 importance_score / last_access_at），由调用方拿到结果后自行处理。
         """
+        query_vec = _query_vector(embedding)
         query = select(
             MemoryRecord,
-            (1.0 - (MemoryRecord.embedding.cosine_distance(embedding))).label("similarity"),
+            (1.0 - (MemoryRecord.embedding.cosine_distance(query_vec))).label("similarity"),
         ).where(
             MemoryRecord.is_active == True,
             MemoryRecord.user_id == user_id,
@@ -46,10 +60,11 @@ class MemoryRepository:
         self, embedding: list[float], user_id: str, threshold: float = 0.85,
     ) -> MemoryRecord | None:
         """Find most similar active record above threshold via subquery"""
+        query_vec = _query_vector(embedding)
         sub = (
             select(
                 MemoryRecord.id,
-                (1.0 - MemoryRecord.embedding.cosine_distance(embedding)).label("sim"),
+                (1.0 - MemoryRecord.embedding.cosine_distance(query_vec)).label("sim"),
             )
             .where(MemoryRecord.is_active == True, MemoryRecord.user_id == user_id)
             .subquery()
