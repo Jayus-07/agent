@@ -170,12 +170,21 @@ exit /b 0
 echo   [backend] docker compose up -d --build app ...
 pushd "%ROOT%"
 docker compose up -d --build app
-set "RC=%ERRORLEVEL%"
-popd
-if not "%RC%"=="0" (
-    echo   [ERROR] docker compose up -d --build app failed, rc=%RC%
+if errorlevel 1 goto start_backend_retry
+goto start_backend_up_ok
+
+:start_backend_retry
+echo   [backend] up failed - prune stale containers, retry once ...
+call :prune_stale_backend_containers
+docker compose up -d --build app
+if errorlevel 1 (
+    popd
+    echo   [ERROR] docker compose up -d --build app failed after retry
     exit /b 1
 )
+
+:start_backend_up_ok
+popd
 call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
 exit /b 0
 
@@ -204,9 +213,19 @@ echo   [backend] docker compose build %BACKEND_SERVICES% ...
 pushd "%ROOT%"
 docker compose build %BACKEND_SERVICES%
 if errorlevel 1 goto rebuild_fail
+call :prune_stale_backend_containers
 echo   [backend] docker compose up -d %BACKEND_SERVICES% ...
 docker compose up -d %BACKEND_SERVICES%
+if errorlevel 1 goto rebuild_retry
+goto rebuild_up_ok
+
+:rebuild_retry
+echo   [backend] up failed - prune stale containers, retry once ...
+call :prune_stale_backend_containers
+docker compose up -d %BACKEND_SERVICES%
 if errorlevel 1 goto rebuild_fail
+
+:rebuild_up_ok
 popd
 call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
 exit /b 0
@@ -216,6 +235,40 @@ set "RC=%ERRORLEVEL%"
 popd
 echo   [ERROR] docker compose rebuild failed, rc=%RC%
 exit /b 1
+
+:: =====================================================================
+:: prune_stale_backend_containers
+:: A failed/interrupted "compose up" can leave leftovers that block the
+:: next run with 'container name already in use':
+::   - the canonical name holder left stopped but not recreated
+::   - compose replace-renames like <hash>_agent-<svc>-1 (status Created)
+:: Only NON-RUNNING containers (created/exited/restarting) are removed,
+:: so healthy running services are never touched.
+:: =====================================================================
+:prune_stale_backend_containers
+for /f "tokens=1,2" %%i in ('docker ps -a --filter "status=created" --filter "status=exited" --filter "status=restarting" --format "{{.ID}} {{.Names}}" 2^>nul') do (
+    call :try_prune_one "%%i" "%%j"
+)
+exit /b 0
+
+:try_prune_one
+:: NOTE: no "exit /b" inside parenthesized blocks here - inside a
+:: subroutine called from a for /f loop, block-level exit /b unwinds
+:: the WHOLE call chain and silently truncates the outer loop.
+set "PRUNE_ID=%~1"
+set "PRUNE_NAME=%~2"
+set "PRUNE_HIT="
+for %%s in (%BACKEND_SERVICES%) do (
+    if not defined PRUNE_HIT (
+        set "PRUNE_T=!PRUNE_NAME:*agent-%%s-1=!"
+        if not "!PRUNE_T!"=="!PRUNE_NAME!" set "PRUNE_HIT=1"
+    )
+)
+if defined PRUNE_HIT (
+    echo   [cleanup] removing stale container "!PRUNE_NAME!" ...
+    docker rm -f "!PRUNE_ID!" >nul 2>&1
+)
+exit /b 0
 
 :: =====================================================================
 :: next dev (admin / web)
