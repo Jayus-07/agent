@@ -38,6 +38,9 @@ services:
       # 认证模式：默认 enforce（fail-closed）。灰度已完成（.env 曾设 shadow→enforce），
       # 需要临时回观测时在 .env 显式设 GATEWAY_AUTH_MODE=shadow
       - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-enforce}
+      # 会话闸（方案 A）：off/audit/enforce，默认 enforce（2026-09-22 切入，
+      # 与后端 JWT_SESSION_GUARD_MODE 同语义双层；回滚 = .env 改回 audit 后重建本服务）
+      - GATEWAY_SESSION_CHECK=${GATEWAY_SESSION_CHECK:-enforce}
       # JWT 验签（与 Java auth-service 同源；值来自 .env，禁止写入本文件）
       - JWT_SECRET=${JWT_SECRET:-}
       - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}

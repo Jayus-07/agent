@@ -11,6 +11,7 @@ nginx_config:
   # ⚠️ schema 键名是 envs 不是 env——写错会被静默忽略（B2 实测踩坑）
   envs:
     - GATEWAY_AUTH_MODE
+    - GATEWAY_SESSION_CHECK
     - JWT_SECRET
     - JWT_SECRET_PREVIOUS
     - JWT_ISSUER
