@@ -3,11 +3,11 @@
  "doc_id": "cc077bcc1b",
  "kb_id": "policy_general",
  "source_file": "doc.txt",
- "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\pytest-of-wh\\pytest-1013\\test_background_task_with_real0\\doc.txt",
- "file_size": 1542,
- "file_sha256": "654b2506242ae0a231ff3253abe4f9911e43b58d82c17c2bdc2540773bff92a1",
+ "file_path": "C:\\Users\\wh\\AppData\\Local\\Temp\\pytest-of-wh\\pytest-1180\\popen-gw1\\test_indexer_trace_tags_carry_0\\doc.txt",
+ "file_size": 270,
+ "file_sha256": "bc69ab8af28b77584cbc54b1112bcfe7dccdf5ef7e4c33d3c8a99406a4f5856e",
  "format": "txt",
- "doc_type": "listing",
+ "doc_type": "general",
  "chunking_strategy": "RecursiveChunkStrategy",
  "completeness": 0.1,
  "parsing": {
@@ -23,13 +23,13 @@
   "degrade_reason": ""
  },
  "cleaning": {
-  "raw_chars": 642,
-  "cleaned_chars": 642,
+  "raw_chars": 90,
+  "cleaned_chars": 90,
   "nodes_cleaned": 0
  },
  "chunking": {
-  "chunk_count": 2,
-  "leaf_chunk_count": 2,
+  "chunk_count": 1,
+  "leaf_chunk_count": 1,
   "parent_chunk_count": 0,
   "truncated": false,
   "filtered_count": 0,
@@ -60,8 +60,8 @@
     ],
     "page_number": null,
     "bbox": null,
-    "content_hash": "654b2506242ae0a2",
-    "chars": 642,
+    "content_hash": "bc69ab8af28b7758",
+    "chars": 90,
     "cleaned": false
    }
   ]
@@ -71,7 +71,7 @@
    {
     "check": "cleaned_chars",
     "pass": true,
-    "detail": "cleaned_chars=642 < 20"
+    "detail": "cleaned_chars=90 < 20"
    },
    {
     "check": "leaf_nodes",
