@@ -285,7 +285,19 @@ agent_offered ──客服接单──▶ human_active ──结束──▶ clo
 
   
 
-## 十、下一步行动
+## 十、实施状态（2026-09-21 验证结论）
+
+P0–P9 已全部实施并合并主干（分支 codex/cs-dispatch-rbac-logout、codex/cs-dispatch-hardening；P4=811c39b、P6=079ff58、P7=74ef4c3、P8=9de1e26、P9=8ed6e8d、P3 RBAC+登出=f9d76ad、治理加固=43fe77e）。后续大重构（Alembic 退役、init-dbs.sh→db-migrate、store 收口 infra/db.py、三端拆分）均已确认未破坏本链路。
+
+- 数据模型：028_cs_dispatch.sql / 029_rbac_audit.sql / 030_cs_dispatch_hardening.sql 均登记 scripts/init_db.py（memory 库）。
+- 运行态：agent-cs-dispatcher-1/2 双副本 healthy，mode=enforce、reaper/relay 已开；rbac/offers 未鉴权均 401；告警组 agent-platform-cs-dispatch 生效。
+- 冻结参数修订（43fe77e 治理）：总等待 600s→120s、重派 5 次→3 次、60s 冷却→本单永久排除；见设计稿与变更窗口执行手册。
+- 测试基线（2026-09-21 本机实测）：dispatch 全量 112 passed/1 skipped；RBAC/认证/注册一致性 72 passed。
+- 演练证据：docs/reports/cs-dispatch-{chaos,pg-acceptance,migrate}-*.json + 部署/cs-dispatch-变更窗口执行手册.md。
+- 收尾提交：2a73cc7（dispatcher 审查加固：reaper 本单坐席排除+分块提交、busy EXPIRE 刷新、冷却表达式收参）。⚠️ 需用户授权 `docker compose up -d --build cs-dispatcher` 重建后加固才在容器内生效。
+- 唯一遗留（轻微）：演练文档在 `部署/` 目录而非 `docs/`，不影响功能。
+
+## 十一、下一步行动
 
 1. 先确认 Q1–Q7，尤其是动态 RBAC、超时参数、无人接单终态和是否允许新增 dispatcher。
 2. 确认后将方案固化为设计文档和逐任务 TDD 实施计划。
