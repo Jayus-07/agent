@@ -61,6 +61,9 @@ export default function ProviderModelEditor({
                   </label>
                 )}
               </div>
+              {!isLlmFamily && (
+                <div className="mt-2 text-[10px] leading-4 text-text-muted">向量 / 重排模型按输入 token 计量计费：API 不产生输出 token，故无输出单价（与系统 token 计量口径一致）。</div>
+              )}
             </fieldset>
           )}
           <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-text-muted">将测试 {modelKindLabel(draft.modelKind)} 的对应端点；API Key 不会显示或返回。</div>

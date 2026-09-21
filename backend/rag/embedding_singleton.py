@@ -49,6 +49,20 @@ def _configured_embedding_model() -> str:
     return model_roles.resolve_runtime_name("embedding", EMBEDDING_MODEL)
 
 
+def _metered_embedding_model() -> str:
+    """返回「实际出站调用」的模型名，供用量计量与计费对齐。
+
+    实际请求用的模型名来自专项绑定的派生结果（注册表以角色覆盖优先）；
+    计费按 `model_price` 里以**这个名字**登记的条目查价。此前记录端用
+    `_configured_embedding_model()`（纯角色/env 解析），在「角色未绑定但
+    专项通道生效」时会与真实调用名错位，导致录了价也对不上号。
+    """
+    binding = specialized_mod.resolve_binding("embedding")
+    if binding is not None and str(binding.model_name or "").strip():
+        return str(binding.model_name).strip()
+    return _configured_embedding_model()
+
+
 def _embedding_runtime_signature() -> tuple[Any, ...]:
     """返回影响 embedding 客户端的配置签名，供已构建的包装器热切换。"""
     binding = specialized_mod.resolve_binding("embedding")
@@ -182,7 +196,7 @@ class _TrackedEmbedding(Embeddings):
         self._refresh_lock = threading.RLock()
         self._config_signature = _embedding_runtime_signature()
         cloud_enabled = _embedding_is_cloud()
-        self._model_name = _configured_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
+        self._model_name = _metered_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
         self._provider = "cloud" if cloud_enabled else "local"
         # 单次 embed_documents 调用的最优文本条数，供索引链路取批大小：
         # cloud 模式受 DashScope 单请求上限约束（外层攒 32 条会被
@@ -206,7 +220,7 @@ class _TrackedEmbedding(Embeddings):
             cloud_enabled = _embedding_is_cloud()
             self._inner = _get_cloud_embedding() if cloud_enabled else _get_local_embedding()
             self._config_signature = signature
-            self._model_name = _configured_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
+            self._model_name = _metered_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
             self._provider = "cloud" if cloud_enabled else "local"
             if cloud_enabled:
                 from backend.config.rag import EMBED_REQUEST_LIMIT
@@ -252,10 +266,31 @@ class _TrackedEmbedding(Embeddings):
         return max(1, total_chars // 3)
 
     def _record(self, total_tokens, doc_count, duration_ms, status="success"):
-        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。"""
+        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。
+
+        2026-09-22 起成本与 token 计量连通：云端调用按 `model_price` 实价
+        计费（供应商页登记即生效），enforce=False 时缺价自动回落旧估算，
+        绝不因计费故障丢用量行。
+        """
         try:
             from backend.observability.llm_usage_store import get_llm_usage_store
             from backend.observability.llm_usage_store import current_usage_attribution
+            cost_usd = 0.0
+            if self._provider == "cloud" and (total_tokens or 0) > 0:
+                try:
+                    from backend.infra.llm.pricing import calculate_current_cost
+
+                    cost_usd = float(calculate_current_cost(
+                        self._model_name,
+                        "embedding",
+                        {"input": total_tokens or 0},
+                        enforce=False,
+                    ))
+                except Exception as e:
+                    from backend.shared.logger import logger as _logger
+                    _logger.debug(
+                        "[Embedding] 用量计费失败（用量行照常记录，成本记 0）: %s", e,
+                    )
             attribution = current_usage_attribution()
             get_llm_usage_store().record({
                 "component": "embedding",
@@ -264,7 +299,7 @@ class _TrackedEmbedding(Embeddings):
                 "prompt_tokens": total_tokens or 0,
                 "completion_tokens": 0,
                 "total_tokens": total_tokens or 0,
-                "cost_usd": 0.0,
+                "cost_usd": cost_usd,
                 "duration_ms": duration_ms,
                 "trace_id": attribution["trace_id"],
                 "session_id": attribution["session_id"],
@@ -300,7 +335,7 @@ def _init_tracker():
         )
         _tracker = create_tracker_for_embedding(
             log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
-            model_name=_configured_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH,
+            model_name=_metered_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH,
             backend=EMBEDDING_PROVIDER,
         )
     return _tracker

@@ -347,11 +347,30 @@ class DashScopeReranker(BaseDocumentCompressor):
             raise
 
     def _record_tokens(self, doc_count, duration_ms, total_tokens=0, status="success"):
-        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。"""
+        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。
+
+        2026-09-22 起成本与 token 计量连通：按 `model_price` 实价计费
+        （供应商页登记即生效），enforce=False 时缺价回落旧估算，不丢用量行。
+        """
         try:
             from backend.observability.llm_usage_store import get_llm_usage_store
             from backend.observability.tracer import current_trace_context
             trace_id, session_id = current_trace_context()
+            cost_usd = 0.0
+            if (total_tokens or 0) > 0:
+                try:
+                    from backend.infra.llm.pricing import calculate_current_cost
+
+                    cost_usd = float(calculate_current_cost(
+                        _configured_rerank_model(),
+                        "rerank",
+                        {"input": total_tokens},
+                        enforce=False,
+                    ))
+                except Exception as e:
+                    logger.debug(
+                        "[Reranker] 用量计费失败（用量行照常记录，成本记 0）: %s", e,
+                    )
             get_llm_usage_store().record({
                 "component": "rerank",
                 "model": _configured_rerank_model(),
@@ -359,7 +378,7 @@ class DashScopeReranker(BaseDocumentCompressor):
                 "prompt_tokens": total_tokens,
                 "completion_tokens": 0,
                 "total_tokens": total_tokens,
-                "cost_usd": 0.0,
+                "cost_usd": cost_usd,
                 "duration_ms": duration_ms,
                 "trace_id": trace_id or "",
                 "session_id": session_id or "",
