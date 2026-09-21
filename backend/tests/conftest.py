@@ -127,6 +127,22 @@ def _auto_approve_tools(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _budget_mode_hermetic(monkeypatch):
+    """测试会话预算模式固定 monitor，不随宿主 .env 漂移（hermetic）。
+
+    背景：宿主 .env 的 LLM_BUDGET_MODE=enforce 时，写副作用工具经
+    ensure_approved → 预算硬门禁要求可信 user/tenant 上下文（单测没有）→
+    QuotaConfigurationError。2026-09-21 实测 test_competitor 9 例随宿主
+    配置漂移失败，此前 test_email_skill / test_tool_approval 已各自打补丁。
+    预算门自身的行为契约由 security/test_tool_approval.py 与 quota 专项
+    覆盖（其 fixture 会按需覆盖本 fixture 的设置）。
+    """
+    import backend.config.llm as llm_config
+
+    monkeypatch.setattr(llm_config, "LLM_BUDGET_MODE", "monitor")
+
+
+@pytest.fixture(autouse=True)
 def _reset_observability_singletons(monkeypatch):
     """逐用例重置 analytics 单例，防止模块加载时缓存的 enabled 状态泄漏。
     （Langfuse 已于 2026-09-18 随弃用清理删除，exporter 单例复位一并移除。）"""
