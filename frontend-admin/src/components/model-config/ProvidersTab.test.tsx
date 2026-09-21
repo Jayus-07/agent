@@ -20,73 +20,15 @@ vi.mock('@/components/shared/Toast', () => ({
 }))
 
 import ProvidersTab from './ProvidersTab'
-import type { PresetPlan, ProviderPreset, ProviderRow } from '@/types/modelConfig'
+import type { ProviderRow } from '@/types/modelConfig'
 
 beforeAll(() => { (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true })
 
 const mounted: { container: HTMLElement; root: Root }[] = []
 
-const PLANS: PresetPlan[] = [
-  { id: 'token_plan', label: 'Token Plan', billing: 'subscription' },
-  { id: 'coding_plan', label: 'Coding Plan', billing: 'subscription' },
-  { id: 'metered', label: '按量付费', billing: 'metered' },
-]
-
-const PRESETS: ProviderPreset[] = [
-  {
-    id: 'volc-coding-openai',
-    plan: 'coding_plan',
-    vendor: '火山引擎（方舟）',
-    variant: '',
-    driver: 'openai',
-    driverLabel: 'OpenAI 兼容',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
-    apiKeyHint: 'ARK_API_KEY',
-    note: '按量付费是 /api/v3，Coding Plan 是 /api/coding/v3，用错会产生额外费用',
-    placeholders: [],
-  },
-  {
-    id: 'volc-metered-openai',
-    plan: 'metered',
-    vendor: '火山引擎（方舟）',
-    variant: '',
-    driver: 'openai',
-    driverLabel: 'OpenAI 兼容',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    apiKeyHint: 'ARK_API_KEY',
-    note: '',
-    placeholders: [],
-  },
-  {
-    id: 'deepseek-metered-anthropic',
-    plan: 'metered',
-    vendor: 'DeepSeek',
-    variant: '',
-    driver: 'anthropic',
-    driverLabel: 'Anthropic 兼容',
-    baseUrl: 'https://api.deepseek.com/anthropic',
-    apiKeyHint: 'DeepSeek API Key',
-    note: '',
-    placeholders: [],
-  },
-  {
-    id: 'aliyun-metered-cn-openai',
-    plan: 'metered',
-    vendor: '阿里云百炼',
-    variant: '北京',
-    driver: 'openai',
-    driverLabel: 'OpenAI 兼容',
-    baseUrl: 'https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
-    apiKeyHint: 'sk- 开头',
-    note: '需把 {WorkspaceId} 换成你自己的业务空间 ID，否则无法调用',
-    placeholders: ['WorkspaceId'],
-  },
-]
-
 function mount(
   configured = false,
   specialized = false,
-  catalogPresets: ProviderPreset[] = PRESETS,
   opts: {
     usedByRoles?: string[]
     onGoToRoles?: (role: string) => void
@@ -171,9 +113,6 @@ function mount(
       source="db"
         canAdmin
         onChanged={vi.fn(async () => undefined)}
-        plans={catalogPresets.length > 0 ? PLANS : []}
-        presets={catalogPresets}
-        presetsLoading={false}
         {...(opts.onGoToRoles ? { onGoToRoles: opts.onGoToRoles } : {})}
       />,
   ))
@@ -466,87 +405,20 @@ describe('ProvidersTab 探测失败详情', () => {
   })
 })
 
-describe('ProvidersTab 计费计划驱动的厂商目录', () => {
-  it('厂商下拉按所选计划过滤，不混入其他计划的端点', async () => {
+describe('ProvidersTab 手填三要素（2026-09-22 拍板：删除预置端点目录）', () => {
+  it('新增抽屉是纯手填表单：没有计费计划与厂商端点下拉', async () => {
     const container = mount()
     await openNewProvider(container)
 
-    // 未选计划时不给候选，避免默认落到某个计划的端点上
-    expect(optionLabels(container, 'provider-preset')).toEqual(['自定义（手填 Base URL）'])
-
-    choose(container, 'provider-plan', 'coding_plan')
-    expect(optionLabels(container, 'provider-preset')).toEqual([
-      '自定义（手填 Base URL）',
-      '火山引擎（方舟） · OpenAI 兼容',
-    ])
-
-    choose(container, 'provider-plan', 'metered')
-    expect(optionLabels(container, 'provider-preset')).toEqual([
-      '自定义（手填 Base URL）',
-      '火山引擎（方舟） · OpenAI 兼容',
-      'DeepSeek · Anthropic 兼容',
-      '阿里云百炼 · 北京 · OpenAI 兼容',
-    ])
+    expect(container.querySelector('[data-testid="provider-plan"]')).toBeNull()
+    expect(container.querySelector('[data-testid="provider-preset"]')).toBeNull()
+    expect(container.querySelector('[data-testid="provider-base-url"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="provider-api-key"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="provider-model-name"]')).toBeTruthy()
+    expect(container.textContent).not.toContain('预置厂商目录不可用')
   })
 
-  it('选中厂商条目一次性回填地址、协议、显示名与计费口径', async () => {
-    const container = mount()
-    await openNewProvider(container)
-
-    choose(container, 'provider-plan', 'metered')
-    choose(container, 'provider-preset', 'deepseek-metered-anthropic')
-
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value)
-      .toBe('https://api.deepseek.com/anthropic')
-    expect(selectField(container, 'provider-driver').value).toBe('anthropic')
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-display-name"]')!.value)
-      .toContain('DeepSeek')
-    // 计划派生 billing：按量付费 → metered
-    expect(selectField(container, 'provider-billing').value).toBe('metered')
-  })
-
-  it('切换计划会清掉上一个计划带出的地址，避免把按量端点用在 Coding Plan 上', async () => {
-    const container = mount()
-    await openNewProvider(container)
-
-    choose(container, 'provider-plan', 'coding_plan')
-    choose(container, 'provider-preset', 'volc-coding-openai')
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value)
-      .toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
-
-    choose(container, 'provider-plan', 'metered')
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value).toBe('')
-  })
-
-  it('手填的地址在切换计划时保留，不丢用户输入', async () => {
-    const container = mount()
-    await openNewProvider(container)
-
-    choose(container, 'provider-plan', 'metered')
-    choose(container, 'provider-preset', '__custom')
-    typeInto(container, 'provider-base-url', 'https://internal.corp.local/v1')
-
-    choose(container, 'provider-plan', 'coding_plan')
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value)
-      .toBe('https://internal.corp.local/v1')
-  })
-
-  it('地址里还有未替换的占位符时不发起探测，并给出可操作提示', async () => {
-    const container = mount()
-    await openNewProvider(container)
-
-    choose(container, 'provider-plan', 'metered')
-    choose(container, 'provider-preset', 'aliyun-metered-cn-openai')
-    typeInto(container, 'provider-model-name', 'qwen3.7-plus')
-
-    await click(findButton(container, '测试连接'))
-
-    expect(apiMock.verifyDraftProvider).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('WorkspaceId')
-    expect(container.textContent).toContain('替换')
-  })
-
-  it('预置目录不可用时降级为手填，抽屉不成为死路', async () => {
+  it('手填地址 / Key / 模型名后测试连接，三要素必须真的进了探测请求', async () => {
     apiMock.verifyDraftProvider.mockResolvedValue({
       ok: true,
       provider: 'draft',
@@ -555,18 +427,13 @@ describe('ProvidersTab 计费计划驱动的厂商目录', () => {
       draft: true,
       steps: [],
     })
-    const container = mount(false, false, [])
+    const container = mount()
     await openNewProvider(container)
-
-    expect(container.textContent).toContain('预置厂商目录不可用')
-    expect(selectField(container, 'provider-plan').disabled).toBe(true)
 
     typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
     typeInto(container, 'provider-api-key', 'sk-manual')
     typeInto(container, 'provider-model-name', 'manual-model')
 
-    // 关键断言走探测入参而不是 DOM 值 —— 手填内容必须真的进了 state，
-    // 只读 DOM 会掩盖「onChange 没触发但 DOM 已被写脏」的假阳性。
     await click(findButton(container, '测试连接'))
 
     expect(apiMock.verifyDraftProvider).toHaveBeenCalledWith(
@@ -577,6 +444,20 @@ describe('ProvidersTab 计费计划驱动的厂商目录', () => {
       }),
       expect.objectContaining({ mode: 'fast' }),
     )
+  })
+
+  it('地址里还有未替换的占位符时不发起探测，并给出可操作提示', async () => {
+    const container = mount()
+    await openNewProvider(container)
+
+    typeInto(container, 'provider-base-url', 'https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')
+    typeInto(container, 'provider-model-name', 'qwen3.7-plus')
+
+    await click(findButton(container, '测试连接'))
+
+    expect(apiMock.verifyDraftProvider).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('WorkspaceId')
+    expect(container.textContent).toContain('替换')
   })
 })
 
@@ -628,131 +509,6 @@ describe('ProvidersTab 编辑态的前置拦截', () => {
     await click(findButton(container, '编辑'))
 
     expect(selectField(container, 'provider-driver').disabled).toBe(true)
-  })
-})
-
-describe('ProvidersTab 地址助手', () => {
-  function advisor(container: HTMLElement): HTMLElement | null {
-    return container.querySelector<HTMLElement>('[data-testid="base-url-advisor"]')
-  }
-
-  function baseUrlValue(container: HTMLElement): string {
-    return container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value
-  }
-
-  it('地址与预置一致时只给一句确认，不出告警', async () => {
-    const container = mount()
-    await openNewProvider(container)
-    choose(container, 'provider-plan', 'coding_plan')
-    choose(container, 'provider-preset', 'volc-coding-openai')
-
-    const box = advisor(container)!
-    expect(box).toBeTruthy()
-    expect(box.getAttribute('data-kind')).toBeNull()
-    expect(box.textContent).toContain('一致')
-    expect(box.querySelectorAll('button').length).toBe(0)
-  })
-
-  it('选中预置后手改地址会点名偏离，并给一键还原', async () => {
-    const container = mount()
-    await openNewProvider(container)
-    choose(container, 'provider-plan', 'coding_plan')
-    choose(container, 'provider-preset', 'volc-coding-openai')
-
-    typeInto(container, 'provider-base-url', 'https://my-gateway.internal/openai/v1')
-
-    const box = advisor(container)!
-    expect(box.getAttribute('data-kind')).toBe('deviated')
-    expect(box.textContent).toContain('已偏离预置')
-    expect(box.textContent).toContain('https://ark.cn-beijing.volces.com/api/coding/v3')
-    // 预置的 Key 格式提示必须显式声明「可能不适用」，否则就是本次事故的误导来源。
-    expect(container.textContent).toContain('而地址已被改过')
-
-    await click(findButton(container, '还原为预置地址'))
-    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
-    expect(advisor(container)!.getAttribute('data-kind')).toBeNull()
-  })
-
-  it('地址落在别的计费计划端点上时点名计划不符，并可切回本计划端点', async () => {
-    const container = mount()
-    await openNewProvider(container)
-    choose(container, 'provider-plan', 'coding_plan')
-    choose(container, 'provider-preset', 'volc-coding-openai')
-
-    // Coding Plan 下填按量付费端点 —— 两条都是合法预置，所以不能只给「已匹配」绿灯。
-    typeInto(container, 'provider-base-url', 'https://ark.cn-beijing.volces.com/api/v3')
-
-    const box = advisor(container)!
-    expect(box.getAttribute('data-kind')).toBe('plan-mismatch')
-    expect(box.textContent).toContain('按量付费')
-    expect(box.textContent).toContain('Coding Plan')
-
-    await click(findButton(container, '改用「Coding Plan」端点'))
-    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
-  })
-
-  it('未选过预置、只选了计划再粘贴地址时，计划不符仍要给出可切回的端点', async () => {
-    const container = mount()
-    await openNewProvider(container)
-    // 刻意不选预置：此时 presetId 为空，「还原到原预置」无从谈起，
-    // 只能按域名找本计划的端点 —— 若实现只在 URL 相同的预置里找，这里就没了按钮。
-    choose(container, 'provider-plan', 'coding_plan')
-    typeInto(container, 'provider-base-url', 'https://ark.cn-beijing.volces.com/api/v3')
-
-    const box = advisor(container)!
-    expect(box.getAttribute('data-kind')).toBe('plan-mismatch')
-
-    await click(findButton(container, '改用「Coding Plan」端点'))
-    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/coding/v3')
-  })
-
-  it('域名认识但路径不是收录值时，列出该域名的端点供选择而不替用户拍板', async () => {
-    const container = mount()
-    await openNewProvider(container)
-    choose(container, 'provider-plan', 'metered')
-    typeInto(container, 'provider-base-url', 'https://ark.cn-beijing.volces.com/api/v9')
-
-    const box = advisor(container)!
-    expect(box.getAttribute('data-kind')).toBe('suggest')
-    expect(box.textContent).toContain('ark.cn-beijing.volces.com')
-    // 同域名下两个端点都要出现，不能只给一个「正解」。
-    expect(box.textContent).toContain('/api/v3')
-    expect(box.textContent).toContain('/api/coding/v3')
-
-    // 同计划的候选排在最前，故按量地址是第一个按钮。
-    await click(findButton(container, '/api/v3'))
-    expect(baseUrlValue(container)).toBe('https://ark.cn-beijing.volces.com/api/v3')
-  })
-
-  it('陌生域名配 /api/vN 原生前缀只提示不判死，且不提供动作按钮', async () => {
-    const container = mount()
-    await openNewProvider(container)
-    typeInto(container, 'provider-base-url', 'https://maas.qianwenaiapi.com/api/v1')
-
-    const box = advisor(container)!
-    expect(box.getAttribute('data-kind')).toBe('suspect')
-    expect(box.textContent).toContain('/api/v1')
-    expect(box.textContent).toContain('没有先例')
-    // 关键：自建网关可用任意路径，措辞必须留余地，且不提供「改成 X」的伪正解。
-    expect(box.textContent).toContain('不代表填错')
-    expect(box.textContent).toContain('404 且响应体为空')
-    expect(box.querySelectorAll('button').length).toBe(0)
-  })
-
-  it('合法自建网关与带业务空间的按量地址都不触发任何提示', async () => {
-    const container = mount()
-    await openNewProvider(container)
-
-    typeInto(container, 'provider-base-url', 'https://gateway.internal.example/v1')
-    // 先证明值真的写进去了，否则下面的 toBeNull 会因「什么都没发生」而假阳性通过。
-    expect(baseUrlValue(container)).toBe('https://gateway.internal.example/v1')
-    expect(advisor(container)).toBeNull()
-
-    // 预置里 {WorkspaceId} 是占位符域名，替换成真实取值后反查必然落空，
-    // 不能因此把真实的按量付费地址误报成异常。
-    typeInto(container, 'provider-base-url', 'https://ws-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')
-    expect(baseUrlValue(container)).toBe('https://ws-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')
-    expect(advisor(container)).toBeNull()
   })
 })
 
@@ -982,7 +738,7 @@ describe('ProvidersTab 列表筛选/搜索与角色占用徽标（B3）', () => 
 
   it('角色占用徽标逐角色渲染，点击触发 onGoToRoles 前往改绑', async () => {
     const onGoToRoles = vi.fn()
-    const container = mount(false, false, PRESETS, { usedByRoles: ['doc', 'fallback'], onGoToRoles })
+    const container = mount(false, false, { usedByRoles: ['doc', 'fallback'], onGoToRoles })
 
     const docBadge = container.querySelector('[data-testid="used-by-role-doc"]') as HTMLButtonElement
     const fallbackBadge = container.querySelector('[data-testid="used-by-role-fallback"]') as HTMLButtonElement
@@ -999,24 +755,9 @@ describe('ProvidersTab 列表筛选/搜索与角色占用徽标（B3）', () => 
   })
 
   it('未传 onGoToRoles 时徽标仅展示不可点', () => {
-    const container = mount(false, false, PRESETS, { usedByRoles: ['doc'] })
+    const container = mount(false, false, { usedByRoles: ['doc'] })
     const badge = container.querySelector('[data-testid="used-by-role-doc"]') as HTMLButtonElement
     expect(badge.disabled).toBe(true)
-  })
-
-  it('切换计费计划保留手改的显示名（applyPlan 不清 displayName）', async () => {
-    const container = mount()
-    await openNewProvider(container)
-
-    choose(container, 'provider-plan', 'coding_plan')
-    choose(container, 'provider-preset', 'volc-coding-openai')
-    typeInto(container, 'provider-display-name', '我的火山主力')
-
-    choose(container, 'provider-plan', 'metered')
-    // 地址被清（换计划不能沿用上个计划的端点），但用户手改的显示名必须保留
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-base-url"]')!.value).toBe('')
-    expect(container.querySelector<HTMLInputElement>('[data-testid="provider-display-name"]')!.value)
-      .toBe('我的火山主力')
   })
 })
 
@@ -1054,9 +795,6 @@ describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一�
         source="db"
         canAdmin
         onChanged={onChanged}
-        plans={PLANS}
-        presets={PRESETS}
-        presetsLoading={false}
       />,
     ))
     mounted.push({ container, root })
@@ -1080,7 +818,7 @@ describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一�
   })
 
   it('名下模型被角色占用时删除按钮禁用并提示先改绑', () => {
-    const container = mount(false, false, PRESETS, {
+    const container = mount(false, false, {
       customProvider: { id: 'custom-host', displayName: '自建供应商', usedByRoles: ['doc'] },
     })
     const deleteButton = container.querySelector(
@@ -1098,7 +836,7 @@ describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一�
 
   it('后端 409 的拒绝原因直接展示在确认弹窗内', async () => {
     apiMock.deleteProvider.mockRejectedValue(new Error('供应商 custom-host 仍绑定在专项通道 embedding 上，不能删除'))
-    const container = mount(false, false, PRESETS, {
+    const container = mount(false, false, {
       customProvider: { id: 'custom-host', displayName: '自建供应商' },
     })
 

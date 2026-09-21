@@ -8,7 +8,6 @@ import type {
   ModelKind,
   ProbeResult,
   ProviderListResponse,
-  ProviderPresetsResponse,
   ProviderRow,
   RoleBinding,
   RolePolicy,
@@ -181,17 +180,6 @@ export async function checkModelHealth(modelName: string): Promise<{ status: str
 
 export async function listProviders(): Promise<ProviderListResponse> {
   return request<ProviderListResponse>('/api/sys/providers')
-}
-
-/**
- * 预置端点目录（新增/编辑抽屉的「厂商 · 协议」候选）。
- *
- * 静态参考数据，只读；**不注入幂等键**（不是写操作）。
- * 返回空是合法状态（后端未部署该端点时），调用方需按「目录不可用」
- * 降级到手填 Base URL，而不是把抽屉做成死的。
- */
-export async function listProviderPresets(): Promise<ProviderPresetsResponse> {
-  return request<ProviderPresetsResponse>('/api/sys/providers/presets')
 }
 
 export async function saveProvider(providerId: string, body: ProviderUpdateInput): Promise<ProviderRow> {

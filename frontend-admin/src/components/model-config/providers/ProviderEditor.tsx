@@ -1,4 +1,8 @@
-/** 供应商编辑抽屉（B4 拆分迁出；加载/保存逻辑仍由 ProvidersTab 主组件编排）。 */
+/** 供应商编辑抽屉（B4 拆分迁出；加载/保存逻辑仍由 ProvidersTab 主组件编排）。
+ *
+ *  2026-09-22 拍板：删除预置端点目录后，表单回归「自填三要素」——
+ *  Base URL / API Key / 模型名称 全部由用户手填，计费口径在高级设置里选。
+ */
 import { useRef, useState } from 'react'
 import { FlaskConical, KeyRound, Save, X } from 'lucide-react'
 import {
@@ -7,26 +11,20 @@ import {
   type ProbeMode,
   type ProbeResponse,
 } from '@/api/modelConfig'
-import { maskSecret, modelKindLabel, type ModelCatalogResponse, type ModelKind, type PlanId, type PresetPlan, type ProviderPreset, type ProviderRow } from '@/types/modelConfig'
-import BaseUrlAdvisor from './BaseUrlAdvisor'
+import { maskSecret, modelKindLabel, type ModelCatalogResponse, type ModelKind, type ProviderRow } from '@/types/modelConfig'
 import ErrorNote from './ErrorNote'
 import ModelCatalogPicker from './ModelCatalogPicker'
 import ProbeResultDetails from './ProbeResultDetails'
 import type { Draft } from './draft'
 import { fixHintsFor, type FixHint } from './fixHints'
 import { formatLiveElapsed, probeModeLabel } from './format'
-import { diagnoseBaseUrl, presetOptionLabel, unresolvedPlaceholder } from './presets'
+import { unresolvedPlaceholder } from './urlUtils'
 
 export default function ProviderEditor({
   draft,
   providers,
-  plans,
-  presets,
-  presetsLoading,
   busy,
   setDraft,
-  onPlanChange,
-  onPresetChange,
   probeResult,
   probeError,
   testingMode,
@@ -37,13 +35,8 @@ export default function ProviderEditor({
 }: {
   draft: Draft
   providers: ProviderRow[]
-  plans: PresetPlan[]
-  presets: ProviderPreset[]
-  presetsLoading: boolean
   busy: boolean
   setDraft: (value: Draft) => void
-  onPlanChange: (value: PlanId | '') => void
-  onPresetChange: (value: string) => void
   probeResult: ProbeResponse | null
   probeError: string | null
   testingMode: ProbeMode | null
@@ -105,10 +98,6 @@ export default function ProviderEditor({
 
   /** 把「去修」动作落到具体控件上。 */
   function handleFix(hint: FixHint) {
-    if (hint.kind === 'use-preset') {
-      onPresetChange(hint.presetId)
-      return
-    }
     if (hint.kind === 'use-url') {
       update({ baseUrl: hint.baseUrl })
       return
@@ -128,19 +117,14 @@ export default function ProviderEditor({
   const fixHints: Record<string, FixHint[]> = {}
   for (const step of probeResult?.steps ?? []) {
     if (step.status !== 'fail') continue
-    const hints = fixHintsFor(step.reason, draft, presets, plans)
+    const hints = fixHintsFor(step.reason, draft)
     if (hints.length) fixHints[step.grade] = hints
   }
 
-  // 预置目录可用性。不可用时整块降级为手填 —— 不能把「新增供应商」做成死路。
-  const catalogReady = plans.length > 0 && presets.length > 0
-  const planPresets = presets.filter((item) => item.plan === draft.plan)
-  const selectedPreset = presets.find((item) => item.id === draft.presetId) ?? null
   const placeholder = unresolvedPlaceholder(draft.baseUrl)
-  const baseUrlDiagnosis = diagnoseBaseUrl(draft, presets, plans)
 
   // 协议可选性：内置供应商的 driver 后端锁定（改了会 422）；ollama / specialized
-  // 不在预置目录里，也不该被这个下拉悄悄改掉，故一并锁住。
+  // 等特殊 driver 也不该被这个下拉悄悄改掉，故一并锁住。
   const driverOptions: Array<{ value: string; label: string }> = [
     { value: 'openai', label: 'OpenAI 兼容' },
     { value: 'anthropic', label: 'Anthropic 兼容' },
@@ -174,34 +158,14 @@ export default function ProviderEditor({
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-text-primary"><KeyRound size={16} className="text-accent" />{isNew ? '新增供应商' : `编辑 ${draft.displayName}`}</div>
-            <p className="mt-1 text-[11px] text-text-muted">先选计费计划与厂商端点（自动填地址与协议），再填 API Key 和模型名称，测试通过后保存。</p>
+            <p className="mt-1 text-[11px] text-text-muted">手填 Base URL（注意别漏 /v1 之类的路径后缀）、API Key 与模型名称，测试通过后保存。</p>
           </div>
           <button onClick={onCancel} className="text-text-muted hover:text-text-primary" aria-label="关闭"><X size={16} /></button>
         </div>
 
         <div className="mt-5 space-y-3">
-          {!catalogReady && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">{presetsLoading ? '预置厂商目录加载中…' : '预置厂商目录不可用（后端未部署该接口或请求失败）。可手动填写 Base URL，并在「高级设置」里选定计费口径。'}</div>}
-
-          <label className="block text-xs text-text-secondary">计费计划
-            <select data-testid="provider-plan" value={draft.plan} onChange={(event) => onPlanChange(event.target.value as PlanId | '')} disabled={!catalogReady} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm disabled:bg-slate-50">
-              <option value="">未套用预置（自建 / 内网）</option>
-              {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.label}</option>)}
-            </select>
-            <span className="mt-1 block text-[10px] text-text-muted">按量付费与 Token Plan / Coding Plan 走的是不同端点，用错会产生额外费用。</span>
-          </label>
-
-          <label className="block text-xs text-text-secondary">厂商 · 协议
-            <select data-testid="provider-preset" value={draft.presetId ?? '__custom'} onChange={(event) => onPresetChange(event.target.value)} disabled={!catalogReady || !draft.plan} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm disabled:bg-slate-50">
-              <option value="__custom">自定义（手填 Base URL）</option>
-              {planPresets.map((preset) => <option key={preset.id} value={preset.id}>{presetOptionLabel(preset)}</option>)}
-            </select>
-            {!draft.plan && catalogReady && <span className="mt-1 block text-[10px] text-text-muted">先选计费计划，这里才会列出该计划下的厂商端点。</span>}
-          </label>
-
-          {selectedPreset && (selectedPreset.note || selectedPreset.apiKeyHint) && <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px]">{selectedPreset.apiKeyHint && <div className="text-text-muted">API Key 格式：{selectedPreset.apiKeyHint}</div>}{selectedPreset.note && <div className="mt-0.5 text-amber-700">{selectedPreset.note}</div>}{baseUrlDiagnosis.kind === 'deviated' && <div className="mt-0.5 text-amber-700">以上按预置「{baseUrlDiagnosis.label}」填写，而地址已被改过 —— 可能不适用。</div>}</div>}
-
           <label className="block text-xs text-text-secondary">显示名
-            <input data-testid="provider-display-name" value={draft.displayName} onChange={(event) => update({ displayName: event.target.value })} maxLength={128} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：火山引擎 · Coding Plan" autoComplete="off" />
+            <input data-testid="provider-display-name" value={draft.displayName} onChange={(event) => update({ displayName: event.target.value })} maxLength={128} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：阿里云百炼（中转）" autoComplete="off" />
             <span className="mt-1 block text-[10px] text-text-muted">留空则由地址域名兜底；显示名会参与生成供应商 ID。</span>
           </label>
 
@@ -216,9 +180,7 @@ export default function ProviderEditor({
               <input data-testid="provider-base-url" value={draft.baseUrl} onChange={(event) => update({ baseUrl: event.target.value })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="https://api.example.com/v1" autoComplete="url" />
             </label>
           </div>
-          <span className="block text-[10px] text-text-muted">{driverLocked ? '内置供应商的协议由代码锁定，不可更改。' : '协议随预置自动选定，也可手动修改。'}</span>
-
-          <BaseUrlAdvisor diagnosis={baseUrlDiagnosis} busy={busy} onUsePreset={onPresetChange} />
+          <span className="block text-[10px] text-text-muted">{driverLocked ? '内置供应商的协议由代码锁定，不可更改。' : 'OpenAI 兼容端点一般以 /v1 结尾；Anthropic 兼容端点不要带 /v1（客户端自己拼）。'}</span>
 
           {placeholder && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">地址里的 {'{'} {placeholder} {'}'} 是占位符，必须替换成你自己的取值才能测试。</div>}
 
@@ -263,7 +225,7 @@ export default function ProviderEditor({
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label>网络范围<select value={draft.networkScope} onChange={(event) => update({ networkScope: event.target.value as Draft['networkScope'] })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="public">公网</option><option value="private">内网（显式放行）</option></select></label>
               <label>计费口径<select data-testid="provider-billing" value={draft.billing} onChange={(event) => update({ billing: event.target.value as Draft['billing'] })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="metered">按量计费</option><option value="subscription">订阅制</option><option value="local">本地</option></select>
-                <span className="mt-1 block text-[10px] text-text-muted">默认由计费计划派生（Token Plan / Coding Plan → 订阅制），可覆盖。</span>
+                <span className="mt-1 block text-[10px] text-text-muted">按量计费时模型行可录单价；订阅制 / 本地不参与价格计算。</span>
               </label>
               <label className="md:col-span-2">测试深度<select data-testid="provider-probe-depth" value={probeDepth} onChange={(event) => setProbeDepth(event.target.value as ProbeMode)} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="fast">快速 —— 只确认能调用（推荐）</option><option value="full">完整 —— 额外检查流式是否回传 usage</option></select>
                 <span className="mt-1 block text-[10px] text-text-muted">「流式 usage」只影响记账能否拿到 token 数，与模型能不能用无关，所以完整测试更慢却不一定更有用。</span>

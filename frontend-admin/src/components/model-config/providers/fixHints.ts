@@ -5,13 +5,14 @@
  *  地址类的动作直接带上**算好的目标地址**（`use-url`），而不是「补一段 /v1」这种指令：
  *  补与替换的差别很大（百炼要从 `/api/v1` **换成** `/compatible-mode/v1`，不是往后接），
  *  让纯函数算出最终值，组件只负责写入，也便于断言。
+ *
+ *  2026-09-22 拍板删除预置端点目录：原「use-preset（改用官方收录端点）」动作
+ *  随之退役，只保留不依赖目录的通用修复提示。
  */
-import type { ProbeReason, ProviderPreset, ProviderRow } from '@/types/modelConfig'
-import type { PresetPlan } from '@/types/modelConfig'
-import { baseUrlHost, baseUrlPath, normalizeBaseUrl, presetLabelFor } from './presets'
+import type { ProbeReason, ProviderRow } from '@/types/modelConfig'
+import { baseUrlHost, baseUrlPath } from './urlUtils'
 
 export type FixHint =
-  | { kind: 'use-preset'; presetId: string; label: string }
   | { kind: 'use-url'; baseUrl: string; label: string }
   | { kind: 'open-catalog'; label: string }
   | { kind: 'focus-api-key'; label: string }
@@ -28,31 +29,15 @@ function baseUrlOrigin(raw: string): string {
 /** 由**失败归因代号**推出可点的修复动作。
  *
  *  只对能确定动作的归因给按钮 —— 给不出就**不给**：一个点了没用的按钮比没有按钮更糟。
- *  结论全部来自预置目录与当前地址，不硬编码厂商知识（百炼那条也是照它文档写明的路径）。
  */
 export function fixHintsFor(
   reason: ProbeReason | undefined,
   draft: { baseUrl: string; driver: ProviderRow['driver'] },
-  presets: ProviderPreset[],
-  plans: PresetPlan[],
 ): FixHint[] {
   const baseUrl = draft.baseUrl.trim()
   if (reason === 'base_url') {
     const hints: FixHint[] = []
     const host = baseUrlHost(baseUrl)
-    // 同域名、同协议的收录端点（最多两条）——最可能就是用户想填的那个
-    for (const preset of presets) {
-      if (baseUrlHost(preset.baseUrl) !== host) continue
-      if (preset.driver !== draft.driver) continue
-      if (normalizeBaseUrl(preset.baseUrl) === normalizeBaseUrl(baseUrl)) continue
-      hints.push({
-        kind: 'use-preset',
-        presetId: preset.id,
-        label: `改用「${presetLabelFor(preset, plans)}」`,
-      })
-      if (hints.length >= 2) break
-    }
-
     const lower = baseUrl.toLowerCase()
     const path = baseUrlPath(baseUrl)
     const origin = baseUrlOrigin(baseUrl)

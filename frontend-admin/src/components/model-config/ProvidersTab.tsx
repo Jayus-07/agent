@@ -3,11 +3,13 @@
 /** 供应商与密钥 tab —— 主组件（列表 + 编排）。
  *
  *  B4 拆分：纯函数与子组件迁入 `providers/` 子目录 ——
- *  `presets.ts`（预置反查/地址诊断）、`draft.ts`（草稿类型/工厂）、
- *  `format.ts`（展示格式化）、`catalogSections.ts`（目录分组）、
- *  `fixHints.ts`（去修动作）、`ProbeResultDetails.tsx`、`BaseUrlAdvisor.tsx`、
+ *  `urlUtils.ts`（URL 校验）、`draft.ts`（草稿类型/工厂）、
+ *  `format.ts`（展示格式化）、`fixHints.ts`（去修动作）、`ProbeResultDetails.tsx`、
  *  `ErrorNote.tsx`、`ModelCatalogPicker.tsx`、`ProviderEditor.tsx`、
  *  `ProviderModelEditor.tsx`。本文件只保留列表渲染与数据编排。
+ *
+ *  2026-09-22 拍板：删除预置端点目录 —— 新增/编辑供应商一律手填
+ *  Base URL / API Key / 模型名称，计费口径在高级设置里直接选。
  */
 import { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Edit3, FlaskConical, LockKeyhole, Pencil, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
@@ -26,9 +28,6 @@ import {
   maskSecret,
   probeFallbackSummary,
   type ModelKind,
-  type PlanId,
-  type PresetPlan,
-  type ProviderPreset,
   type ProviderRow,
 } from '@/types/modelConfig'
 import { useToast } from '@/components/shared/Toast'
@@ -36,7 +35,7 @@ import ErrorNote from './providers/ErrorNote'
 import ProbeResultDetails from './providers/ProbeResultDetails'
 import ProviderEditor from './providers/ProviderEditor'
 import ProviderModelEditor from './providers/ProviderModelEditor'
-import { billingForPlan, presetDisplayName, unresolvedPlaceholder } from './providers/presets'
+import { unresolvedPlaceholder } from './providers/urlUtils'
 import { formatElapsed, formatLiveElapsed, modelKindBadgeClass, modelKindShortLabel, probeModeLabel } from './providers/format'
 import { draftFromRow, modelRemovalBlockReason, newDraft, type Draft, type ModelDraft, type ModelRemoval } from './providers/draft'
 
@@ -46,11 +45,6 @@ interface Props {
   source: 'db' | 'builtin'
   canAdmin: boolean
   onChanged: () => Promise<unknown>
-  /** 计费计划「三选一」选项（来自后端预置目录接口）。 */
-  plans: PresetPlan[]
-  /** 预置端点目录。为空表示接口不可用，抽屉降级为手填 Base URL。 */
-  presets: ProviderPreset[]
-  presetsLoading: boolean
   /** B3：点角色占用徽标 → 跳「模型角色」页并高亮该角色。缺省则徽标只展示不可点。 */
   onGoToRoles?: (role: string) => void
 }
@@ -61,9 +55,6 @@ export default function ProvidersTab({
   source,
   canAdmin,
   onChanged,
-  plans,
-  presets,
-  presetsLoading,
   onGoToRoles,
 }: Props) {
   const toast = useToast()
@@ -157,7 +148,7 @@ export default function ProvidersTab({
 
   function begin(row: ProviderRow) {
     resetProbe()
-    setEditing(draftFromRow(row, defaultModels, presets, plans))
+    setEditing(draftFromRow(row, defaultModels))
   }
 
   function beginAddModel(row: ProviderRow, model?: NonNullable<ProviderRow['models']>[number]) {
@@ -277,48 +268,6 @@ export default function ProvidersTab({
       const message = error instanceof Error ? error.message : '删除供应商失败'
       setDeletingProvider({ ...deletingProvider, busy: false, error: message })
     }
-  }
-
-  /** 切换计费计划（三选一）。
-   *
-   *  若当前地址是「上一个计划的预置」带出来的，必须一并清掉 —— 留着它
-   *  正是本功能要消灭的事故：把火山引擎按量 `/api/v3` 用在 Coding Plan 上。
-   *  手填的自定义地址则保留，不丢用户输入。
-   */
-  function applyPlan(nextPlan: PlanId | '') {
-    setEditing((current) => {
-      if (!current) return current
-      const cameFromPreset = current.presetId !== null
-      return {
-        ...current,
-        plan: nextPlan,
-        presetId: null,
-        baseUrl: cameFromPreset ? '' : current.baseUrl,
-        billing: billingForPlan(plans, nextPlan) ?? current.billing,
-      }
-    })
-    resetProbe()
-  }
-
-  /** 选中预置条目：一次回填地址、协议、显示名与推荐计费口径。 */
-  function applyPreset(presetId: string) {
-    setEditing((current) => {
-      if (!current) return current
-      if (presetId === '__custom') return { ...current, presetId: null }
-      const preset = presets.find((item) => item.id === presetId)
-      if (!preset) return current
-      const planLabel = plans.find((item) => item.id === preset.plan)?.label ?? ''
-      return {
-        ...current,
-        plan: preset.plan,
-        presetId: preset.id,
-        driver: preset.driver,
-        baseUrl: preset.baseUrl,
-        displayName: presetDisplayName(preset, planLabel),
-        billing: billingForPlan(plans, preset.plan) ?? current.billing,
-      }
-    })
-    resetProbe()
   }
 
   function draftPayload(draft: Draft) {
@@ -688,13 +637,8 @@ export default function ProvidersTab({
       {editing && <ProviderEditor
         draft={editing}
         providers={providers}
-        plans={plans}
-        presets={presets}
-        presetsLoading={presetsLoading}
         busy={busy}
         setDraft={setEditing}
-        onPlanChange={applyPlan}
-        onPresetChange={applyPreset}
         probeResult={draftProbe}
         probeError={draftProbeError}
         testingMode={testingTarget === 'draft' ? testingMode : null}

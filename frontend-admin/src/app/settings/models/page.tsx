@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import RoleGate from '@/components/auth/RoleGate'
 import PageHeader from '@/components/layout/PageHeader'
 import { atLeast } from '@/lib/auth'
-import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviderPresets, listProviders } from '@/api/modelConfig'
+import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviders } from '@/api/modelConfig'
 import RoleBindingsTab from '@/components/model-config/RoleBindingsTab'
 import RuntimeChainCard from '@/components/model-config/RuntimeChainCard'
 import ProvidersTab from '@/components/model-config/ProvidersTab'
@@ -67,9 +67,6 @@ export default function ModelConfigPage() {
   // B3：清单读端点后端已放宽为 JWT 用户可读，editor 也拉取（只读浏览，
   // 写操作在 ProvidersTab 内部仍按 canAdmin 门控）。
   const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor })
-  // 预置端点目录：admin only（与 providers 同门槛）。请求失败不影响页面 ——
-  // ProvidersTab 会降级为手填 Base URL，所以这里不把 isError 计入全局错误条。
-  const presets = useQuery({ queryKey: ['model-config-provider-presets'], queryFn: listProviderPresets, enabled: canAdmin, staleTime: 5 * 60_000 })
   const history = useQuery({ queryKey: ['model-config-history'], queryFn: () => listConfigHistory(), enabled: canEditor && tab === 'history' })
   const drift = useQuery({ queryKey: ['model-config-drift'], queryFn: getConfigDrift, enabled: canEditor, refetchInterval: 60_000 })
 
@@ -83,7 +80,6 @@ export default function ModelConfigPage() {
   const unavailableRoles = (roles.data?.items ?? []).filter((role) => !role.available).length
   const roleCount = roles.data?.items.length ?? 0
   const modelCount = catalog.data?.models.length ?? 0
-  const presetCount = presets.data?.items.length ?? 0
   const historyCount = history.data?.items.length ?? 0
 
   function summaryCards(current: Tab): Array<Parameters<typeof SummaryCard>[0]> {
@@ -102,7 +98,7 @@ export default function ModelConfigPage() {
       return [
         { icon: <KeyRound size={15} />, label: '供应商', value: String(providers.data?.items.length ?? 0), note: providers.data?.source === 'db' ? '注册表已接通' : '代码层兜底' },
         { icon: <CheckCircle2 size={15} />, label: '已验证', value: `${verified}/${providers.data?.items.length ?? 0}`, note: '最近一次探测通过', tone: (verified === (providers.data?.items.length ?? 0) && verified > 0 ? 'good' : 'neutral') as 'good' | 'neutral' },
-        { icon: <Database size={15} />, label: '预置端点', value: canAdmin ? String(presetCount) : '—', note: canAdmin ? '内置厂商目录' : '管理员可见' },
+        modelCard,
         driftCard,
       ]
     }
@@ -148,7 +144,7 @@ export default function ModelConfigPage() {
         </div>
       )
     }
-    if (tab === 'providers') return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} plans={presets.data?.plans ?? []} presets={presets.data?.items ?? []} presetsLoading={presets.isLoading} onGoToRoles={(role) => changeTab('roles', role)} />
+    if (tab === 'providers') return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} onGoToRoles={(role) => changeTab('roles', role)} />
     if (tab === 'history') return <ConfigHistoryTab items={history.data?.items ?? []} canAdmin={canAdmin} onChanged={refreshAll} />
     return <DriftTab items={driftItems} />
   }
