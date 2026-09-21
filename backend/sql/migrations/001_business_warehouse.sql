@@ -214,12 +214,17 @@ INSERT INTO product.products (id, sku, product_name, category_id, brand, cost_pr
 ON CONFLICT (id) DO NOTHING;
 
 -- 商品标签
-INSERT INTO product.product_tags (product_id, tag) VALUES
+-- ⚠️ 本表无唯一约束，ON CONFLICT DO NOTHING 挡不住重复执行（实测会翻倍），
+--    改用「整表为空才播种」守卫，保证脚本可重复执行。
+INSERT INTO product.product_tags (product_id, tag)
+SELECT v.product_id::int, v.tag::varchar
+FROM (VALUES
     (1, '爆款'),
     (3, '新品'),
     (2, '高利润'),
     (1, '清仓')
-ON CONFLICT DO NOTHING;
+) AS v(product_id, tag)
+WHERE NOT EXISTS (SELECT 1 FROM product.product_tags);
 
 -- 仓库
 INSERT INTO inventory.warehouses (id, name, location) VALUES
@@ -228,14 +233,18 @@ INSERT INTO inventory.warehouses (id, name, location) VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- 库存（含 1 条触发预警：珍珠项链库存 < 安全库存）
-INSERT INTO inventory.inventory (product_id, warehouse_id, stock_quantity, safety_stock, updated_at) VALUES
+INSERT INTO inventory.inventory (product_id, warehouse_id, stock_quantity, safety_stock, updated_at)
+SELECT v.product_id::int, v.warehouse_id::int, v.stock_quantity::int,
+       v.safety_stock::int, v.updated_at::timestamp
+FROM (VALUES
     (1, 1, 20,  100, NOW()),    -- 触发预警
     (2, 1, 300, 50,  NOW()),
     (3, 1, 250, 100, NOW()),
     (4, 1, 80,  100, NOW()),    -- 触发预警
     (5, 2, 200, 50,  NOW()),
     (1, 2, 50,  100, NOW())
-ON CONFLICT DO NOTHING;
+) AS v(product_id, warehouse_id, stock_quantity, safety_stock, updated_at)
+WHERE NOT EXISTS (SELECT 1 FROM inventory.inventory);
 
 -- 客户
 INSERT INTO customer.customers (id, name, gender, level, register_time) VALUES
@@ -245,13 +254,16 @@ INSERT INTO customer.customers (id, name, gender, level, register_time) VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- 客户行为
-INSERT INTO customer.customer_behavior (customer_id, event_type, product_id, created_at) VALUES
+INSERT INTO customer.customer_behavior (customer_id, event_type, product_id, created_at)
+SELECT v.customer_id::int, v.event_type::varchar, v.product_id::int, v.created_at::timestamp
+FROM (VALUES
     (1, 'view',     1, NOW() - INTERVAL '3 days'),
     (1, 'add_cart', 1, NOW() - INTERVAL '3 days'),
     (2, 'view',     3, NOW() - INTERVAL '1 day'),
     (2, 'favorite', 3, NOW() - INTERVAL '1 day'),
     (3, 'click',    4, NOW())
-ON CONFLICT DO NOTHING;
+) AS v(customer_id, event_type, product_id, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM customer.customer_behavior);
 
 -- 订单（最近一个月，含 status 多样性）
 INSERT INTO "order".orders (id, order_no, customer_id, total_amount, status, payment_status, created_at) VALUES
@@ -262,18 +274,25 @@ INSERT INTO "order".orders (id, order_no, customer_id, total_amount, status, pay
 ON CONFLICT (id) DO NOTHING;
 
 -- 订单明细
-INSERT INTO "order".order_items (order_id, product_id, quantity, price, cost) VALUES
+INSERT INTO "order".order_items (order_id, product_id, quantity, price, cost)
+SELECT v.order_id::int, v.product_id::int, v.quantity::int, v.price::numeric, v.cost::numeric
+FROM (VALUES
     (1, 1, 1, 199.00, 50.00),
     (2, 3, 1, 599.00, 180.00),
     (3, 4, 1, 99.00,  30.00),
     (4, 2, 1, 599.00, 200.00)
-ON CONFLICT DO NOTHING;
+) AS v(order_id, product_id, quantity, price, cost)
+WHERE NOT EXISTS (SELECT 1 FROM "order".order_items);
 
 -- 退款（让 Agent 能分析"高退款率商品"）
-INSERT INTO "order".refunds (order_id, product_id, refund_amount, reason, created_at) VALUES
+INSERT INTO "order".refunds (order_id, product_id, refund_amount, reason, created_at)
+SELECT v.order_id::int, v.product_id::int, v.refund_amount::numeric,
+       v.reason::varchar, v.created_at::timestamp
+FROM (VALUES
     (1, 1, 199.00, '商品描述不符', NOW() - INTERVAL '4 days'),
     (2, 3, 599.00, '质量问题',     NOW() - INTERVAL '24 days')
-ON CONFLICT DO NOTHING;
+) AS v(order_id, product_id, refund_amount, reason, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM "order".refunds);
 
 -- 竞品（爬虫域）
 INSERT INTO crawler.competitor_products (id, platform, brand, product_name, category, url) VALUES
@@ -281,23 +300,33 @@ INSERT INTO crawler.competitor_products (id, platform, brand, product_name, cate
     (2, 'TikTok Shop', 'TrendBrand', 'Hot Dress',      'Apparel', 'https://tiktok.com/p/B002')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO crawler.competitor_price (product_id, price, discount, crawl_time) VALUES
+INSERT INTO crawler.competitor_price (product_id, price, discount, crawl_time)
+SELECT v.product_id::int, v.price::numeric, v.discount::numeric, v.crawl_time::timestamp
+FROM (VALUES
     (1, 149.00, 0.25, NOW()),
     (1, 139.00, 0.30, NOW() - INTERVAL '1 day'),
     (2, 549.00, 0.10, NOW())
-ON CONFLICT DO NOTHING;
+) AS v(product_id, price, discount, crawl_time)
+WHERE NOT EXISTS (SELECT 1 FROM crawler.competitor_price);
 
-INSERT INTO crawler.product_reviews (product_id, rating, review_text, sentiment, created_at) VALUES
+INSERT INTO crawler.product_reviews (product_id, rating, review_text, sentiment, created_at)
+SELECT v.product_id::int, v.rating::int, v.review_text::varchar,
+       v.sentiment::varchar, v.created_at::timestamp
+FROM (VALUES
     (1, 4, 'Quality is good but shipping slow', 'neutral', NOW() - INTERVAL '2 days'),
     (3, 2, 'Color is different from picture', 'negative', NOW() - INTERVAL '1 day')
-ON CONFLICT DO NOTHING;
+) AS v(product_id, rating, review_text, sentiment, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM crawler.product_reviews);
 
 -- 财务
-INSERT INTO finance.expenses (type, amount, date) VALUES
+INSERT INTO finance.expenses (type, amount, date)
+SELECT v.type::varchar, v.amount::numeric, v.date::date
+FROM (VALUES
     ('广告费', 5000.00, CURRENT_DATE - INTERVAL '5 days'),
     ('物流费', 1200.00, CURRENT_DATE - INTERVAL '5 days'),
     ('人工',   8000.00, CURRENT_DATE - INTERVAL '5 days')
-ON CONFLICT DO NOTHING;
+) AS v(type, amount, date)
+WHERE NOT EXISTS (SELECT 1 FROM finance.expenses);
 
 INSERT INTO finance.daily_profit (date, revenue, cost, profit) VALUES
     (CURRENT_DATE - INTERVAL '5 days', 1496.00, 8500.00, -7004.00)

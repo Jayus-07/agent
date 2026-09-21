@@ -28,11 +28,35 @@ CREATE TABLE IF NOT EXISTS customer_service.conversations (
 
 CREATE INDEX IF NOT EXISTS idx_cs_conv_user
     ON customer_service.conversations (user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cs_conv_status
-    ON customer_service.conversations (status) WHERE status != 'closed';
-CREATE INDEX IF NOT EXISTS idx_cs_conv_agent
-    ON customer_service.conversations (assigned_agent)
-    WHERE assigned_agent IS NOT NULL;
+-- ⚠️ 020_alembic_gaps_pg.sql 会把 status 重命名为 conversation_status。
+--    重放本迁移时该列可能已不存在，直接建索引会报 UndefinedColumn（42703），
+--    因此先判断列是否存在再建，保证本迁移可安全重放。
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'customer_service'
+          AND table_name   = 'conversations'
+          AND column_name  = 'status'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cs_conv_status
+            ON customer_service.conversations (status) WHERE status != 'closed';
+    END IF;
+END $$;
+-- 同理：020 会把 assigned_agent 重命名为 assigned_agent_id，重放时加守卫。
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'customer_service'
+          AND table_name   = 'conversations'
+          AND column_name  = 'assigned_agent'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_cs_conv_agent
+            ON customer_service.conversations (assigned_agent)
+            WHERE assigned_agent IS NOT NULL;
+    END IF;
+END $$;
 
 -- =============================================
 -- 客服消息表

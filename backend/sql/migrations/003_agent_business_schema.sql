@@ -171,9 +171,9 @@ CREATE SEQUENCE IF NOT EXISTS finance.expenses_id_seq OWNED BY finance.expenses.
 CREATE SEQUENCE IF NOT EXISTS inventory.inventory_id_seq OWNED BY inventory.inventory.id;
 CREATE SEQUENCE IF NOT EXISTS inventory.purchase_orders_id_seq OWNED BY inventory.purchase_orders.id;
 CREATE SEQUENCE IF NOT EXISTS inventory.warehouses_id_seq OWNED BY inventory.warehouses.id;
-CREATE SEQUENCE IF NOT EXISTS order.order_items_id_seq OWNED BY order.order_items.id;
-CREATE SEQUENCE IF NOT EXISTS order.orders_id_seq OWNED BY order.orders.id;
-CREATE SEQUENCE IF NOT EXISTS order.refunds_id_seq OWNED BY order.refunds.id;
+CREATE SEQUENCE IF NOT EXISTS "order".order_items_id_seq OWNED BY "order".order_items.id;
+CREATE SEQUENCE IF NOT EXISTS "order".orders_id_seq OWNED BY "order".orders.id;
+CREATE SEQUENCE IF NOT EXISTS "order".refunds_id_seq OWNED BY "order".refunds.id;
 CREATE SEQUENCE IF NOT EXISTS product.categories_id_seq OWNED BY product.categories.id;
 CREATE SEQUENCE IF NOT EXISTS product.product_tags_id_seq OWNED BY product.product_tags.id;
 CREATE SEQUENCE IF NOT EXISTS product.products_id_seq OWNED BY product.products.id;

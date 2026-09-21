@@ -71,7 +71,11 @@ ON CONFLICT (session_id) DO NOTHING;
 
 -- ═══ public.chat_messages ═══
 -- 字段：id (serial PK), session_id, role, content, created_at
-INSERT INTO public.chat_messages (session_id, role, content, created_at) VALUES
+-- ⚠️ 本表只有 serial PK，无业务唯一键，ON CONFLICT 挡不住重跑（实测每次 +6 行）。
+--    改用「整表为空才播种」守卫，保证脚本可重复执行。
+INSERT INTO public.chat_messages (session_id, role, content, created_at)
+SELECT v.session_id::varchar, v.role::varchar, v.content::text, v.created_at::timestamptz
+FROM (VALUES
     ('session-demo-1', 'user',
      '查询最近一个月内价格最高的商品信息',
      NOW() - INTERVAL '2 days'),
@@ -89,7 +93,9 @@ INSERT INTO public.chat_messages (session_id, role, content, created_at) VALUES
      NOW() - INTERVAL '1 hour'),
     ('session-demo-2', 'assistant',
      '已重新跑：本周复购用户 12 人，新购用户 28 人，流失预警 5 人。',
-     NOW() - INTERVAL '1 hour' + INTERVAL '4 seconds');
+     NOW() - INTERVAL '1 hour' + INTERVAL '4 seconds')
+) AS v(session_id, role, content, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM public.chat_messages);
 
 SELECT setval(pg_get_serial_sequence('public.chat_messages', 'id'),
               GREATEST(COALESCE((SELECT MAX(id) FROM public.chat_messages), 1), 6));
