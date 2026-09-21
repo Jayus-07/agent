@@ -51,6 +51,11 @@ upstreams:
 routes:
   # ── 认证（2026-09-15 拆分：py 自建 auth 模块，strip /api → /auth/*）──
   # login/refresh/logout 公开可达；logout 的令牌吊销由后端写 Redis 黑名单
+  # 2026-09-21 补全租户注入链：72be04d 起后端 login/refresh 要求可信
+  # X-Tenant-Id（缺失 401「缺少可信租户身份」），但认证端点尚无 JWT 可供
+  # gateway-auth 提取 claim → 由网关显式注入部署级默认租户兜底。headers.set
+  # 无条件覆盖（而非透传），客户端伪造的 X-Tenant-Id 到不了后端；浏览器登录
+  # 固定走 default 租户（当前单租户部署现实），多租户需求出现时再演进。
   - id: auth-service
     uri: /api/auth/*
     upstream_id: app
@@ -58,6 +63,9 @@ routes:
       prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
+        headers:
+          set:
+            X-Tenant-Id: "default"
 
   # ── 用户中心（2026-09-16 拆白名单）──
   # 自助注册必须匿名可达 → 单列无插件路由（radixtree 静态路径优先于通配，

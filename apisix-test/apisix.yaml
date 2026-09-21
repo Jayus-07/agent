@@ -61,6 +61,8 @@ routes:
       prometheus: {}
 
   # 白名单对照：auth 路由不挂认证插件（与生产一致；prometheus 例外——观测与认证无关）
+  # 2026-09-21 与生产同步：注入部署级默认租户（后端 login/refresh 要求可信
+  # X-Tenant-Id，见 72be04d；set 覆盖防伪造，多租户演进前单租户兜底）
   - id: auth-passthrough
     uri: /api/auth/*
     upstream_id: auth
@@ -68,6 +70,9 @@ routes:
       prometheus: {}
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
+        headers:
+          set:
+            X-Tenant-Id: "default"
 
 # 访问审计日志挂全路由（与生产一致，台架同时承担生产配置加载前验证）
 global_rules:
