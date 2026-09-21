@@ -1,4 +1,4 @@
-/** navConfig 回归测试 — 管理端六组导航的完整性与拆分边界（2026-09-16 Phase 1.5） */
+/** navConfig 回归测试 — 管理端五组导航的完整性与拆分边界（2026-09-21 P5 治理） */
 import { describe, it, expect, afterEach } from 'vitest'
 import { NAV, visibleNav } from './navConfig'
 
@@ -21,10 +21,15 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('六组结构齐全（知识运营/业务分析/可观测/质量与配置/审批与安全/自动化 + 总览直达）', () => {
+  it('五组结构齐全（总览直达 + 知识库/业务分析/运维监控/平台管理），旧分组名不再出现', () => {
     const labels = NAV.map((e) => e.label)
-    for (const group of ['运营总览', '知识运营', '业务分析', '可观测', '质量与配置', '审批与安全', '自动化']) {
+    for (const group of ['知识库', '业务分析', '运维监控', '平台管理']) {
       expect(labels, `缺少分组「${group}」`).toContain(group)
+    }
+    expect(labels).toContain('运营总览')
+    // P5 收敛：旧分组名全部退役
+    for (const oldGroup of ['知识运营', '可观测', '成本治理', '质量与配置', '审批与安全', '自动化']) {
+      expect(labels, `旧分组「${oldGroup}」应已并入新五组`).not.toContain(oldGroup)
     }
   })
 
@@ -49,9 +54,21 @@ describe('NAV — 导航配置完整性', () => {
     }
   })
 
+  it('P5 新分组归属正确（评测/反馈入知识库，定时任务/库存工单入运维监控，预算/模型入平台管理）', () => {
+    const groupOf = (path: string) =>
+      NAV.find((e) => (e.items ?? []).some((i) => i.path === path))?.label
+
+    expect(groupOf('/evaluations')).toBe('知识库')
+    expect(groupOf('/evaluations/feedback')).toBe('知识库')
+    expect(groupOf('/schedules')).toBe('运维监控')
+    expect(groupOf('/alerts')).toBe('运维监控')
+    expect(groupOf('/cost-governance/budgets')).toBe('平台管理')
+    expect(groupOf('/settings/models')).toBe('平台管理')
+  })
+
   it('模型与供应商入口仅 admin 可见，旧模型价格入口不再出现在导航', () => {
-    const quality = NAV.find((entry) => entry.label === '质量与配置')
-    expect(quality?.items).toEqual(expect.arrayContaining([
+    const platform = NAV.find((entry) => entry.label === '平台管理')
+    expect(platform?.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: '模型与供应商', path: '/settings/models', minRole: 'admin' }),
     ]))
     expect(allPaths).not.toContain('/cost-governance/prices')
@@ -98,32 +115,38 @@ describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）'
     expect(labels()).toEqual(NAV.map((e) => e.label))
   })
 
-  it('editor 无「审批与安全」（处置权仅 admin），其余可见', () => {
+  it('editor 无 admin 专属条目声明（工具审批/访问控制/模型），组本身可见', () => {
+    // item 级 minRole 是声明元数据（可见性由后端 403 兜底），visibleNav
+    // 只过滤组级 minRole —— 此处校验声明本身，防止 admin 条目漏标。
     loginAs('editor')
-    expect(labels()).not.toContain('审批与安全')
-    expect(labels()).toContain('质量与配置')
-    expect(labels()).toContain('知识运营')
+    expect(labels()).toContain('知识库')
+    expect(labels()).toContain('平台管理')
+    for (const p of ['/approvals', '/settings/access', '/settings/models']) {
+      const item = NAV.flatMap((e) => e.items ?? []).find((i) => i.path === p)
+      expect(item?.minRole, `${p} 应声明 minRole=admin`).toBe('admin')
+    }
   })
 
-  it('viewer 只看免角色分组（总览/业务分析/可观测/自动化）', () => {
+  it('viewer 只看免角色分组（总览/业务分析/运维监控）', () => {
     loginAs('viewer')
-    expect(labels()).toEqual(expect.arrayContaining(['运营总览', '业务分析', '可观测', '自动化']))
-    for (const hidden of ['知识运营', '质量与配置', '审批与安全']) {
+    expect(labels()).toEqual(expect.arrayContaining(['运营总览', '业务分析', '运维监控']))
+    for (const hidden of ['知识库', '平台管理']) {
       expect(labels(), `viewer 不应看到「${hidden}」`).not.toContain(hidden)
     }
   })
 
   it('未登录（无角色缓存）只看免角色分组，且不抛错', () => {
     loginAs(null)
-    expect(labels()).not.toContain('审批与安全')
+    expect(labels()).not.toContain('平台管理')
   })
 
-  it('minRole 声明与后端 RBAC 同语义（知识运营/质量配置=editor，审批与安全=admin）', () => {
+  it('minRole 声明与后端 RBAC 同语义（知识库/平台管理=editor，admin 条目=admin）', () => {
     for (const e of NAV) {
-      if (e.label === '知识运营' || e.label === '质量与配置') expect(e.minRole).toBe('editor')
-      if (e.label === '审批与安全') expect(e.minRole).toBe('admin')
+      if (e.label === '知识库' || e.label === '平台管理') expect(e.minRole).toBe('editor')
     }
-    const access = NAV.flatMap((e) => e.items ?? []).find((i) => i.path === '/settings/access')
-    expect(access?.minRole).toBe('admin')
+    for (const path of ['/settings/access', '/approvals', '/settings/models']) {
+      const item = NAV.flatMap((e) => e.items ?? []).find((i) => i.path === path)
+      expect(item?.minRole, `${path} 应为 admin 专属`).toBe('admin')
+    }
   })
 })

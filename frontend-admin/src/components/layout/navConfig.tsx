@@ -3,19 +3,13 @@
 /**
  * navConfig — 管理端全局导航配置（单一数据源）
  *
- * 六组结构（2026-09-16 Phase 1.5，对应 docs/2026-09-16-前端拆分计划.md §1）：
- * 看得到（可观测）、管得住（知识运营/审批与安全/自动化）、查得清（质量与配置）。
- * 业务对话入口（智能问答/报告中心）在用户端 frontend/，这里不放。
- *
- * 2026-09-21 三端拆分：智能客服域整体迁出到客服端 frontend-cs（:3300），
- * 「运营干预」组中的客服四项（客服对话 /cs、客服会话 /cs/conversations、
- * 人工接入坐席 /cs/handoff）移除，页面目录 app/cs/ 一并删除；
- * 组内只剩工具审批、访问控制、库存告警工单三项，故该组改名为
- * 「审批与安全」（语义更贴切：都是平台治理的处置动作）。
+ * 五组结构（2026-09-21 P5 治理，治理实施方案.md §P5）：
+ * 总览 / 知识库 / 业务分析 / 运维监控 / 平台管理。
+ * 本轮只改导航信息架构，所有页面 URL 保持原样。
+ * （历史：2026-09-16 六组 → 2026-09-21 三端拆分（客服迁出）→ 本轮 5 组收敛）
  */
 import {
-  Activity, Clock, Database, LayoutDashboard,
-  ScrollText, ShieldCheck, TrendingUp, WalletCards,
+  Activity, Database, LayoutDashboard, Settings, TrendingUp,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { atLeast, type RoleName } from '@/lib/auth'
@@ -41,11 +35,13 @@ export interface NavEntry {
 export const NAV: NavEntry[] = [
   { icon: <LayoutDashboard size={18} />, label: '运营总览', path: '/' },
   {
-    icon: <Database size={18} />, label: '知识运营', minRole: 'editor',
+    icon: <Database size={18} />, label: '知识库', minRole: 'editor',
     items: [
       { label: '文档入库', path: '/knowledge/documents' },
-      { label: '待复核审批', path: '/knowledge/pending' },
-      { label: '词库管理', path: '/knowledge/keywords' },
+      { label: '待复核', path: '/knowledge/pending' },
+      { label: '词库', path: '/knowledge/keywords' },
+      { label: '评测结果', path: '/evaluations' },
+      { label: '反馈候选', path: '/evaluations/feedback', minRole: 'admin' },
       { label: '文档操作日志', path: '/knowledge/operations' },
     ],
   },
@@ -59,46 +55,28 @@ export const NAV: NavEntry[] = [
     ],
   },
   {
-    icon: <Activity size={18} />, label: '可观测',
+    icon: <Activity size={18} />, label: '运维监控',
     items: [
       { label: '任务中心', path: '/tasks' },
       { label: '问答追踪', path: '/observability/traces' },
       { label: '网关安全', path: '/observability/gateway' },
-      { label: '安全运营', path: '/security' },
       { label: 'Token 用量', path: '/observability/tokens' },
+      { label: '安全运营', path: '/security' },
       { label: '告警中心', path: '/observability/alerts' },
-    ],
-  },
-  {
-    icon: <WalletCards size={18} />, label: '成本治理',
-    items: [
-      { label: '预算策略', path: '/cost-governance/budgets' },
-    ],
-  },
-  {
-    icon: <ScrollText size={18} />, label: '质量与配置', minRole: 'editor',
-    items: [
-      { label: 'Prompt 管理', path: '/prompts' },
-      { label: 'Agent 节点', path: '/agents' },
-      { label: '能力与技能', path: '/skills' },
-      { label: '评测结果', path: '/evaluations' },
-      { label: '反馈候选', path: '/evaluations/feedback', minRole: 'admin' },
-      { label: '模型与供应商', path: '/settings/models', minRole: 'admin' },
-    ],
-  },
-  {
-    // 2026-09-21：原「运营干预」组，客服四项迁往 frontend-cs 后改名
-    icon: <ShieldCheck size={18} />, label: '审批与安全', minRole: 'admin',
-    items: [
-      { label: '工具审批', path: '/approvals' },
-      { label: '访问控制', path: '/settings/access', minRole: 'admin' },
+      { label: '定时任务', path: '/schedules' },
       { label: '库存告警工单', path: '/alerts' },
     ],
   },
   {
-    icon: <Clock size={18} />, label: '自动化',
+    icon: <Settings size={18} />, label: '平台管理', minRole: 'editor',
     items: [
-      { label: '定时任务', path: '/schedules' },
+      { label: 'Prompt 管理', path: '/prompts' },
+      { label: 'Agent 节点', path: '/agents' },
+      { label: 'Skill 能力', path: '/skills' },
+      { label: '预算策略', path: '/cost-governance/budgets' },
+      { label: '模型与供应商', path: '/settings/models', minRole: 'admin' },
+      { label: '工具审批', path: '/approvals', minRole: 'admin' },
+      { label: '访问控制', path: '/settings/access', minRole: 'admin' },
     ],
   },
 ]
