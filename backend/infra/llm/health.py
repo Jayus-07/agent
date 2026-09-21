@@ -63,51 +63,40 @@ def _record(
     """
     failed = bool(error)
     try:
-        from sqlalchemy import text
-
         from backend.config.database import MEMORY_DB_CONFIG
         from backend.infra.db import engine_for
 
         conn = engine_for(MEMORY_DB_CONFIG).raw_connection()
         try:
             cur = conn.cursor()
+            # 原生 psycopg2 游标：只认 %s 占位符（text()/:name 是 SQLAlchemy
+            # 方言，raw_connection 下会炸 —— 实机验证发现的坑）。
             cur.execute(
-                text(
-                    """
-                    INSERT INTO llm_model_health
-                        (model_name, provider, model_kind, status,
-                         last_checked_at, last_latency_ms, last_error,
-                         consecutive_failures)
-                    VALUES (:m, :p, :k, :s, now(), :l, :e, :f)
-                    ON CONFLICT (model_name) DO UPDATE SET
-                        provider = EXCLUDED.provider,
-                        model_kind = EXCLUDED.model_kind,
-                        status = EXCLUDED.status,
-                        last_checked_at = now(),
-                        last_latency_ms = EXCLUDED.last_latency_ms,
-                        last_error = EXCLUDED.last_error,
-                        consecutive_failures = EXCLUDED.consecutive_failures
-                    """
-                ),
-                {
-                    "m": model_name,
-                    "p": provider,
-                    "k": model_kind,
-                    "s": status,
-                    "l": latency_ms,
-                    "e": (error or "")[:500],
-                    "f": 0 if not failed else -1,  # 占位：下方按上一轮值修正
-                },
+                """
+                INSERT INTO llm_model_health
+                    (model_name, provider, model_kind, status,
+                     last_checked_at, last_latency_ms, last_error,
+                     consecutive_failures)
+                VALUES (%s, %s, %s, %s, now(), %s, %s, %s)
+                ON CONFLICT (model_name) DO UPDATE SET
+                    provider = EXCLUDED.provider,
+                    model_kind = EXCLUDED.model_kind,
+                    status = EXCLUDED.status,
+                    last_checked_at = now(),
+                    last_latency_ms = EXCLUDED.last_latency_ms,
+                    last_error = EXCLUDED.last_error,
+                    consecutive_failures = EXCLUDED.consecutive_failures
+                """,
+                (model_name, provider, model_kind, status,
+                 latency_ms, (error or "")[:500], 0 if not failed else -1),
             )
             if failed:
                 # 失败：在上一轮计数基础上 +1（插入行则从 1 起）
                 cur.execute(
-                    text(
-                        "UPDATE llm_model_health SET consecutive_failures = "
-                        "GREATEST(consecutive_failures, 0) + 1 "
-                        "WHERE model_name = :m"
-                    ),
-                    {"m": model_name},
+                    "UPDATE llm_model_health SET consecutive_failures = "
+                    "GREATEST(consecutive_failures, 0) + 1 "
+                    "WHERE model_name = %s",
+                    (model_name,),
                 )
             conn.commit()
         finally:
@@ -225,9 +214,20 @@ def scan_all_models() -> dict[str, Any]:
 
     凭据未配置的模型跳过（探测必然 401，无信息量）。
     """
+    import asyncio
+
     from backend.infra.llm import credentials as credentials_mod
     from backend.infra.llm import models as models_mod
+    from backend.infra.llm import registry_store
 
+    # 目录是 DB-only 动态层：uvicorn 启动会刷，但 worker/beat 进程不会——
+    # 不在此刷新的话，beat 周期任务永远扫 0 个模型（实机验证发现的坑）。
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(registry_store.refresh_registry())  # 同步上下文（worker 任务）
+    else:  # pragma: no cover - 极少在已运行 loop 内被调
+        asyncio.ensure_future(registry_store.refresh_registry())
     results: dict[str, str] = {}
     for entry in models_mod.get_available_models():
         name = str(entry.get("name") or "")
