@@ -19,7 +19,7 @@ from backend.app.exceptions import (
 )
 from backend.app.api.middleware.access_log import access_log_middleware
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
-from backend.app.api.middleware.auth import api_key_middleware
+from backend.app.api.middleware.auth import api_key_middleware, must_change_password_gate
 from backend.observability.metrics import render_metrics
 from backend.shared.logger import logger
 from backend.config.rag import RAG_MAX_FILE_SIZE
@@ -39,6 +39,9 @@ app = FastAPI(
 # 短路返回的 401/503/413 才会被记录；CORS（add_middleware 最后注册）在最外层。
 # 1. 认证：未认证请求尽早 401，不消耗下游资源
 app.middleware("http")(api_key_middleware)
+
+# 1.5 临时密码门禁（P6.3）：must_change_password=true 的账户仅放行改密闭环
+app.middleware("http")(must_change_password_gate)
 
 # 2. 上传大小限制：在请求体接收前拦截超大文件
 @app.middleware("http")

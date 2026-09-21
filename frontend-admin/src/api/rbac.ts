@@ -34,6 +34,7 @@ export interface RbacUserPage {
 export interface RbacUserPatch {
   version: number;
   platformRole?: PlatformRole;
+  status?: number;
   csRole?: CsRole | null;
   maxConversations?: number;
   enabled?: boolean;
@@ -141,4 +142,88 @@ export async function listRbacAudit(params: {
     ])}`,
   );
   return unwrap<RbacAuditPage>(body);
+}
+
+// ── P6 用户生命周期（2026-09-21）─────────────────────────────
+
+export interface RbacUserDetail {
+  userId: number;
+  username: string;
+  realName: string;
+  email: string;
+  dept: string;
+  tenantId: string;
+  platformRoles: PlatformRole[];
+  csRoles: CsRole[];
+  csAgent: RbacAgent | null;
+  status: number;
+  version: number;
+  mustChangePassword: boolean;
+  createdAt: string | null;
+  lastLoginAt: string | null;
+  activeSessionCount: number;
+}
+
+export interface RbacCreateUserBody {
+  username: string;
+  realName?: string;
+  dept?: string;
+  email?: string;
+  platformRole?: PlatformRole;
+  csRole?: CsRole | null;
+}
+
+export interface RbacCreateUserResult {
+  userId: number;
+  username: string;
+  platformRole: PlatformRole;
+  mustChangePassword: boolean;
+  /** 临时密码明文（仅创建响应中出现一次） */
+  tempPassword: string;
+}
+
+export interface RbacResetPasswordResult {
+  userId: number;
+  username: string;
+  mustChangePassword: boolean;
+  revokedSessionCount: number;
+  tempPassword: string;
+}
+
+export interface RbacForceLogoutResult {
+  userId: number;
+  revokedSessionCount: number;
+}
+
+export async function createRbacUser(
+  body: RbacCreateUserBody,
+): Promise<RbacCreateUserResult> {
+  const raw = await request(`/api/sys/rbac/users`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return unwrap<RbacCreateUserResult>(raw);
+}
+
+export async function getRbacUserDetail(userId: number): Promise<RbacUserDetail> {
+  const raw = await request(`/api/sys/rbac/users/${userId}`);
+  return unwrap<RbacUserDetail>(raw);
+}
+
+export async function resetRbacUserPassword(
+  userId: number,
+): Promise<RbacResetPasswordResult> {
+  const raw = await request(`/api/sys/rbac/users/${userId}/reset-password`, {
+    method: "POST",
+  });
+  return unwrap<RbacResetPasswordResult>(raw);
+}
+
+export async function forceLogoutRbacUser(
+  userId: number,
+): Promise<RbacForceLogoutResult> {
+  const raw = await request(`/api/sys/rbac/users/${userId}/force-logout`, {
+    method: "POST",
+  });
+  return unwrap<RbacForceLogoutResult>(raw);
 }

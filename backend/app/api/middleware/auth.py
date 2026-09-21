@@ -181,3 +181,40 @@ if not API_KEY:
         logger.error("[Auth] API_KEY 未配置！业务端点已全部拒绝（fail-closed）。设置 API_KEY 环境变量后重启；仅本地开发可显式设置 ALLOW_UNAUTHENTICATED=true")
 else:
     logger.info("[Auth] API Key 认证已启用")
+
+
+# ── must_change_password 门禁（P6.3，2026-09-21）──────────────────
+# 管理员创建用户 / 重置密码后，用户以临时密码登录 → JWT claim
+# must_change_password=true。此状态下仅放行改密/登出/刷新/基本信息类
+# 路径，其余业务 API 统一 403，禁止临时密码长期使用。
+# 判定基于自签 JWT claim（verify_access_token 本地验签，无 DB/Redis 往返）；
+# 无 Bearer / 旧令牌（无该 claim）不受影响 —— 向后兼容。
+_MCP_ALLOWED_PREFIXES = (
+    "/auth",          # change-password / login / refresh / logout
+    "/docs", "/redoc", "/openapi.json", "/metrics", "/health", "/internal",
+)
+
+
+async def must_change_password_gate(request: Request, call_next):
+    """临时密码账户只允许改密闭环相关请求（P6.3）。"""
+    path = request.url.path
+    if any(path.startswith(p) for p in _MCP_ALLOWED_PREFIXES):
+        return await call_next(request)
+    authz = request.headers.get("authorization") or ""
+    if authz[:7].lower() != "bearer ":
+        return await call_next(request)
+    from backend.security.local_jwt import verify_access_token
+
+    payload = verify_access_token(authz[7:].strip())
+    if payload is None:
+        return await call_next(request)  # 验签失败由网关主校验拒绝
+    if payload.get("must_change_password") is True:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "MustChangePassword",
+                "detail": "首次登录使用的是临时密码，请先修改密码后再执行其他操作",
+                "code": "must_change_password",
+            },
+        )
+    return await call_next(request)

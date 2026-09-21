@@ -12,9 +12,12 @@ import {
   ChevronLeft,
   ChevronRight,
   History,
+  KeyRound,
+  LogOut,
   RefreshCw,
   Search,
   ShieldCheck,
+  UserPlus,
   Users,
 } from "lucide-react";
 import RoleGate from "@/components/auth/RoleGate";
@@ -23,16 +26,21 @@ import {
   type PlatformRole,
   type RbacAuditItem,
   type RbacUser,
+  type RbacUserDetail,
   type RbacUserPatch,
+  createRbacUser,
+  forceLogoutRbacUser,
+  getRbacUserDetail,
   listRbacAudit,
   listRbacUsers,
+  resetRbacUserPassword,
   updateRbacUser,
 } from "@/api/rbac";
 import { describeApiError } from "@/api/errors";
 import { ApiError } from "@/lib/fetcher";
 
 const PAGE_SIZE = 20;
-type Tab = "users" | "audit";
+type Tab = "users" | "roles" | "audit";
 
 interface UserDraft {
   platformRole: PlatformRole;
@@ -121,6 +129,15 @@ function AccessControlContent() {
   const [audit, setAudit] = useState<RbacAuditItem[]>([]);
   const [auditTotal, setAuditTotal] = useState(0);
   const [auditError, setAuditError] = useState<string | null>(null);
+  // ── P6 用户生命周期（新建 / 重置密码 / 强制下线 / 详情 / 角色说明）──
+  const [showCreate, setShowCreate] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [issuedPassword, setIssuedPassword] = useState<string | null>(null);
+  const [detail, setDetail] = useState<RbacUserDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actingUserId, setActingUserId] = useState<number | null>(null);
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -240,6 +257,96 @@ function AccessControlContent() {
     return `${start}-${Math.min(page * PAGE_SIZE, total)} / ${total}`;
   }, [page, total]);
 
+  // ── P6 用户生命周期动作 ──
+
+  const toggleUserStatus = async (user: RbacUser) => {
+    if (actingUserId !== null) return;
+    setActingUserId(user.userId);
+    setActionError(null);
+    try {
+      const updated = await updateRbacUser(user.userId, {
+        version: user.version,
+        status: user.status === 1 ? 0 : 1,
+      });
+      setUsers((current) =>
+        current.map((item) =>
+          item.userId === user.userId ? { ...item, ...updated } : item,
+        ),
+      );
+      setDrafts((current) => ({ ...current, [user.userId]: draftFor({ ...user, ...updated }) }));
+    } catch (error) {
+      setActionError(readableError(error, "账号状态变更失败，请稍后重试。"));
+    } finally {
+      setActingUserId(null);
+    }
+  };
+
+  const resetPassword = async (user: RbacUser) => {
+    if (actingUserId !== null) return;
+    if (!window.confirm(`确认为「${user.realName || user.username}」重置密码？其全部会话将立即失效。`)) return;
+    setActingUserId(user.userId);
+    setActionError(null);
+    try {
+      const result = await resetRbacUserPassword(user.userId);
+      setIssuedPassword(result.tempPassword);
+      await loadUsers();
+    } catch (error) {
+      setActionError(readableError(error, "密码重置失败，请稍后重试。"));
+    } finally {
+      setActingUserId(null);
+    }
+  };
+
+  const forceLogout = async (user: RbacUser) => {
+    if (actingUserId !== null) return;
+    if (!window.confirm(`确认强制下线「${user.realName || user.username}」的全部会话？`)) return;
+    setActingUserId(user.userId);
+    setActionError(null);
+    try {
+      await forceLogoutRbacUser(user.userId);
+      await loadUsers();
+    } catch (error) {
+      setActionError(readableError(error, "强制下线失败，请稍后重试。"));
+    } finally {
+      setActingUserId(null);
+    }
+  };
+
+  const openDetail = async (user: RbacUser) => {
+    setDetailLoading(true);
+    setActionError(null);
+    try {
+      setDetail(await getRbacUserDetail(user.userId));
+    } catch (error) {
+      setActionError(readableError(error, "用户详情加载失败，请稍后重试。"));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const submitCreate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (creating) return;
+    const form = new FormData(event.currentTarget);
+    const username = String(form.get("username") || "").trim();
+    const realName = String(form.get("realName") || "").trim();
+    const dept = String(form.get("dept") || "").trim();
+    const email = String(form.get("email") || "").trim();
+    const platformRole = String(form.get("platformRole") || "viewer") as PlatformRole;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const result = await createRbacUser({ username, realName, dept, email, platformRole });
+      setShowCreate(false);
+      setIssuedPassword(result.tempPassword);
+      await loadUsers();
+    } catch (error) {
+      setCreateError(readableError(error, "创建用户失败，请稍后重试。"));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white/90 p-5 shadow-card sm:flex-row sm:items-center sm:justify-between">
@@ -271,7 +378,16 @@ function AccessControlContent() {
               onClick={() => setTab("users")}
               className={`rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "users" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
-              用户与客服
+              用户
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "roles"}
+              onClick={() => setTab("roles")}
+              className={`rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "roles" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+            >
+              角色
             </button>
             <button
               type="button"
@@ -286,25 +402,35 @@ function AccessControlContent() {
             </button>
           </div>
           {tab === "users" && (
-            <form className="flex w-full gap-2 sm:w-auto" onSubmit={submitSearch}>
-              <label className="sr-only" htmlFor="rbac-user-search">搜索用户</label>
-              <div className="relative min-w-0 flex-1 sm:w-64">
-                <Search size={14} className="pointer-events-none absolute left-3 top-2.5 text-text-muted" aria-hidden="true" />
-                <input
-                  id="rbac-user-search"
-                  value={searchInput}
-                  onChange={(event) => setSearchInput(event.target.value)}
-                  placeholder="搜索用户名、姓名或部门"
-                  className="h-9 w-full rounded-lg border border-gray-200 bg-surface-elevated pl-9 pr-3 text-xs text-text-primary outline-none placeholder:text-text-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
-                />
-              </div>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+              <form className="flex w-full gap-2 sm:w-auto" onSubmit={submitSearch}>
+                <label className="sr-only" htmlFor="rbac-user-search">搜索用户</label>
+                <div className="relative min-w-0 flex-1 sm:w-64">
+                  <Search size={14} className="pointer-events-none absolute left-3 top-2.5 text-text-muted" aria-hidden="true" />
+                  <input
+                    id="rbac-user-search"
+                    value={searchInput}
+                    onChange={(event) => setSearchInput(event.target.value)}
+                    placeholder="搜索用户名、姓名或部门"
+                    className="h-9 w-full rounded-lg border border-gray-200 bg-surface-elevated pl-9 pr-3 text-xs text-text-primary outline-none placeholder:text-text-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="h-9 rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                >
+                  搜索
+                </button>
+              </form>
               <button
-                type="submit"
-                className="h-9 rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                type="button"
+                onClick={() => { setShowCreate(true); setCreateError(null); }}
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/5 px-3 text-xs font-medium text-accent hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
               >
-                搜索
+                <UserPlus size={14} aria-hidden="true" />
+                新建用户
               </button>
-            </form>
+            </div>
           )}
         </div>
 
@@ -422,18 +548,54 @@ function AccessControlContent() {
                             </td>
                             <td className="px-3 py-3 text-text-secondary">{user.sessionCount}</td>
                             <td className="px-3 py-3 text-right">
-                              <button
-                                type="button"
-                                disabled={saving}
-                                onClick={() => void saveUser(user)}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
-                              >
-                                {saving ? <RefreshCw size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
-                                {saving ? "保存中" : "保存"}
-                              </button>
-                              {rowErrors[user.userId] && (
+                              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={actingUserId === user.userId}
+                                  onClick={() => void saveUser(user)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                >
+                                  {saving ? <RefreshCw size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+                                  {saving ? "保存中" : "保存"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={actingUserId === user.userId}
+                                  onClick={() => void toggleUserStatus(user)}
+                                  className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                >
+                                  {user.status === 1 ? "禁用" : "启用"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={actingUserId === user.userId}
+                                  onClick={() => void resetPassword(user)}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                >
+                                  <KeyRound size={12} aria-hidden="true" />
+                                  重置密码
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={actingUserId === user.userId}
+                                  onClick={() => void forceLogout(user)}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                >
+                                  <LogOut size={12} aria-hidden="true" />
+                                  强制下线
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={detailLoading}
+                                  onClick={() => void openDetail(user)}
+                                  className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                >
+                                  详情
+                                </button>
+                              </div>
+                              {(rowErrors[user.userId] || actionError) && (
                                 <p className="mt-2 max-w-56 text-left text-[11px] leading-4 text-red-600" role="alert">
-                                  {rowErrors[user.userId]}
+                                  {rowErrors[user.userId] || actionError}
                                 </p>
                               )}
                             </td>
@@ -469,6 +631,41 @@ function AccessControlContent() {
                 </div>
               </>
             )}
+          </div>
+        ) : tab === "roles" ? (
+          <div className="p-4 sm:p-5">
+            <div className="overflow-x-auto rounded-xl border border-gray-100">
+              <table className="min-w-[720px] w-full border-collapse text-left text-xs">
+                <caption className="sr-only">平台与客服角色说明（只读）</caption>
+                <thead className="bg-surface-elevated text-[11px] font-medium text-text-secondary">
+                  <tr>
+                    <th className="px-3 py-3">角色</th>
+                    <th className="px-3 py-3">类别</th>
+                    <th className="px-3 py-3">说明</th>
+                    <th className="px-3 py-3">权限范围</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {[
+                    { role: "admin", category: "平台角色", desc: "管理员", scope: "全部功能：用户与客服档案管理、模型与供应商、工具审批、访问控制及全部读写" },
+                    { role: "editor", category: "平台角色", desc: "编辑者", scope: "知识库运营（入库/复核/词库）、业务分析读写；无用户管理与审批权" },
+                    { role: "viewer", category: "平台角色", desc: "查看者", scope: "只读访问总览、业务分析与监控面板；写操作由后端 403 兜底" },
+                    { role: "supervisor", category: "客服角色", desc: "客服主管", scope: "坐席工作台全部能力 + 工单重派；由管理员在用户页绑定" },
+                    { role: "agent", category: "客服角色", desc: "客服坐席", scope: "接单/处理人工会话；容量与接单状态由管理员配置" },
+                  ].map((item) => (
+                    <tr key={item.role} className="text-text-primary">
+                      <td className="px-3 py-3 font-medium">{item.desc}</td>
+                      <td className="px-3 py-3 text-text-secondary">{item.category}</td>
+                      <td className="px-3 py-3 text-text-secondary">{item.role}</td>
+                      <td className="px-3 py-3 text-text-secondary">{item.scope}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-[11px] text-text-muted">
+              第一阶段角色为只读展示；角色定义与权限判定在后端 RBAC（403 兜底）。
+            </p>
           </div>
         ) : (
           <div className="p-4 sm:p-5">
@@ -524,6 +721,118 @@ function AccessControlContent() {
           </div>
         )}
       </section>
+
+      {/* 临时密码一次性展示（P6.3：创建用户 / 重置密码共用） */}
+      {issuedPassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="临时密码">
+          <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-card">
+            <h2 className="text-sm font-semibold text-text-primary">临时密码（仅显示一次）</h2>
+            <p className="mt-2 text-xs leading-5 text-text-secondary">
+              请立即复制并转交给用户。用户首次登录时必须修改密码，此前无法访问其他功能。
+            </p>
+            <code className="mt-3 block select-all rounded-lg bg-surface-elevated px-3 py-2.5 font-mono text-sm text-text-primary">
+              {issuedPassword}
+            </code>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(issuedPassword)}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-text-secondary hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                复制
+              </button>
+              <button
+                type="button"
+                onClick={() => setIssuedPassword(null)}
+                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                我已保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 新建用户（P6.1） */}
+      {showCreate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="新建用户">
+          <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-card">
+            <h2 className="text-sm font-semibold text-text-primary">新建用户</h2>
+            <p className="mt-1 text-[11px] text-text-muted">
+              创建后生成随机临时密码；租户继承当前管理员（多租户规则）。
+            </p>
+            <form className="mt-4 space-y-3" onSubmit={submitCreate}>
+              <div>
+                <label htmlFor="create-username" className="text-xs text-text-secondary">用户名（2-20 位字母/数字/_.-）</label>
+                <input id="create-username" name="username" required pattern="[A-Za-z0-9_.-]{2,20}" className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+              </div>
+              <div>
+                <label htmlFor="create-realname" className="text-xs text-text-secondary">姓名</label>
+                <input id="create-realname" name="realName" className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+              </div>
+              <div>
+                <label htmlFor="create-email" className="text-xs text-text-secondary">邮箱</label>
+                <input id="create-email" name="email" type="email" className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+              </div>
+              <div>
+                <label htmlFor="create-dept" className="text-xs text-text-secondary">部门</label>
+                <input id="create-dept" name="dept" className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+              </div>
+              <div>
+                <label htmlFor="create-role" className="text-xs text-text-secondary">平台角色</label>
+                <select id="create-role" name="platformRole" defaultValue="viewer" className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20">
+                  <option value="viewer">查看者</option>
+                  <option value="editor">编辑者</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </div>
+              {createError && <p className="text-[11px] text-red-600" role="alert">{createError}</p>}
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" onClick={() => setShowCreate(false)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-text-secondary hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                  取消
+                </button>
+                <button type="submit" disabled={creating} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                  {creating ? "创建中…" : "创建"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 用户详情（P6.1） */}
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="用户详情">
+          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 shadow-card">
+            <h2 className="text-sm font-semibold text-text-primary">用户详情</h2>
+            <dl className="mt-3 grid grid-cols-[96px_1fr] gap-x-3 gap-y-2 text-xs">
+              {[
+                ["用户名", detail.username],
+                ["邮箱", detail.email || "—"],
+                ["租户", detail.tenantId],
+                ["部门", detail.dept || "—"],
+                ["平台角色", detail.platformRoles.map(roleLabel).join("、")],
+                ["客服角色", detail.csRoles.length ? detail.csRoles.map(roleLabel).join("、") : "未绑定"],
+                ["状态", detail.status === 1 ? "已启用" : "已禁用"],
+                ["创建时间", detail.createdAt ? new Date(detail.createdAt).toLocaleString("zh-CN") : "—"],
+                ["最近登录", detail.lastLoginAt ? new Date(detail.lastLoginAt).toLocaleString("zh-CN") : "—"],
+                ["活跃会话", String(detail.activeSessionCount)],
+                ["待改密", detail.mustChangePassword ? "是（临时密码）" : "否"],
+              ].map(([term, value]) => (
+                <div key={term} className="contents">
+                  <dt className="text-text-muted">{term}</dt>
+                  <dd className="text-text-primary">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="mt-4 flex justify-end">
+              <button type="button" onClick={() => setDetail(null)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -55,6 +55,7 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
                        device_id: str = "", roles: list[str] | None = None,
                        tenant_id: str = "default",
                        session_id: str = "",
+                       must_change_password: bool = False,
                        ttl_seconds: int = _ACCESS_TTL_SECONDS) -> dict:
     """签发 access token。返回 {token, expiresIn(ms), exp, jti}。
 
@@ -83,6 +84,9 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
                "type": "access", "deviceId": device_id,
                "tenant_id": tenant_id or "default",
                "sid": session_id,
+               # P6.3（2026-09-21）：临时密码首次登录标记，仅新增 claim，
+               # 不改动既有 claim 结构（兼容性要求：JWT 结构只向后兼容演进）
+               "must_change_password": bool(must_change_password),
                "iss": _ISSUER, "iat": now, "exp": exp, "jti": jti}
     header = {"alg": "HS512", "typ": "JWT"}
     signing_input = (_b64url(json.dumps(header).encode()) + "." +

@@ -133,7 +133,7 @@ def _trusted_tenant_id(request: Request) -> str | None:
 async def _fetch_user(session, username: str, tenant_id: str):
     row = (await session.execute(text(
         "SELECT id, username, password_hash, real_name, dept, role, status, "
-        "tenant_id FROM auth.users "
+        "tenant_id, must_change_password FROM auth.users "
         "WHERE username = :u AND tenant_id = :tenant_id"),
         {"u": username, "tenant_id": tenant_id})).mappings().first()
     return (
@@ -181,6 +181,8 @@ def _user_info(row) -> dict:
         "platformRole": role,
         "tenantId": row.get("tenant_id"),
         "csRole": row.get("cs_role"),
+        # P6.3：临时密码首次登录标记（前端据此强制进入改密流程）
+        "mustChangePassword": bool(row.get("must_change_password", False)),
     }
 
 
@@ -358,7 +360,8 @@ async def login(request: Request, response: Response):
                                 dept=row["dept"], device_id=device_id,
                                 roles=_jwt_roles(row),
                                 tenant_id=row["tenant_id"],
-                                session_id=sid)
+                                session_id=sid,
+                                must_change_password=bool(row.get("must_change_password", False)))
     _write_session(issued)
     response.set_cookie(value=raw_refresh, **_COOKIE_KWARGS)
     return _result({
@@ -386,7 +389,8 @@ async def refresh(request: Request, response: Response):
         row = (await session.execute(text(
             "SELECT rt.id, rt.user_id, rt.expires_at, rt.revoked, rt.revoked_at, rt.session_id, "
             "s.revoked_at AS session_revoked_at, s.device_id AS s_device_id, "
-            "u.username, u.real_name, u.dept, u.role, u.status, u.tenant_id "
+            "u.username, u.real_name, u.dept, u.role, u.status, u.tenant_id, "
+            "u.must_change_password "
             "FROM auth.refresh_tokens rt "
             "LEFT JOIN auth.sessions s ON s.id = rt.session_id "
             "JOIN auth.users u ON u.id = rt.user_id "
@@ -415,7 +419,8 @@ async def refresh(request: Request, response: Response):
                 issued = issue_access_token(user_id=row["user_id"], username=row["username"],
                                             dept=row["dept"], roles=_jwt_roles(row),
                                             tenant_id=row["tenant_id"],
-                                            session_id=sid)
+                                            session_id=sid,
+                                            must_change_password=bool(row.get("must_change_password", False)))
                 _write_session(issued)
                 await session.execute(text(
                     "UPDATE auth.sessions SET last_active_at = now() WHERE id = :sid"),
@@ -465,7 +470,8 @@ async def refresh(request: Request, response: Response):
     issued = issue_access_token(user_id=row["user_id"], username=row["username"],
                                 dept=row["dept"], roles=_jwt_roles(row),
                                 tenant_id=row["tenant_id"],
-                                session_id=sid)
+                                session_id=sid,
+                                must_change_password=bool(row.get("must_change_password", False)))
     _write_session(issued)
     response.set_cookie(value=raw_new, **_COOKIE_KWARGS)
     return _result({"token": issued["token"], "refreshToken": None,
@@ -503,6 +509,93 @@ async def logout(request: Request, response: Response):
             await session.commit()
     response.delete_cookie(**{k: v for k, v in _COOKIE_KWARGS.items() if k != "max_age"})
     return _result(True)
+
+
+# ── /auth/change-password（P6.3 临时密码改密闭环）────────────
+
+@router.post("/change-password")
+async def change_password(request: Request, response: Response):
+    """修改密码（临时密码首次登录强制流程的唯一出路）。
+
+    - 验证旧密码 → 写新哈希 → must_change_password=FALSE；
+    - 撤销该用户全部旧会话（含当前），随后签发**全新正常 token**
+      （must_change_password claim 已清除）；
+    - 新密码 ≥ 8 位；不允许与旧密码相同。
+    """
+    body = await request.json()
+    old_password = body.get("oldPassword") or ""
+    new_password = body.get("newPassword") or ""
+    if not old_password or not new_password:
+        return _fail("旧密码与新密码不能为空", code=400)
+    if len(new_password) < 8:
+        return _fail("新密码长度至少 8 位", code=400)
+    if new_password == old_password:
+        return _fail("新密码不能与旧密码相同", code=400)
+    tenant_id = _trusted_tenant_id(request)
+    if tenant_id is None:
+        return _fail("缺少可信租户身份", code=401)
+
+    authz = request.headers.get("authorization") or ""
+    token = authz[7:].strip() if authz[:7].lower() == "bearer " else ""
+    payload = verify_access_token(token) if token else None
+    if payload is None:
+        return _fail("未认证：缺少有效访问令牌", code=401)
+    user_id = payload.get("userId")
+
+    async with _db() as session:
+        row = (await session.execute(text(
+            "SELECT id, username, password_hash, must_change_password "
+            "FROM auth.users WHERE id = :uid AND tenant_id = :tenant_id FOR UPDATE"),
+            {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
+        if row is None:
+            return _fail("用户不存在", code=404)
+        if not verify_password(old_password, row["password_hash"]):
+            return _fail("旧密码错误", code=400)
+        await session.execute(text(
+            "UPDATE auth.users SET password_hash = :ph, "
+            "must_change_password = FALSE, updated_at = now() "
+            "WHERE id = :uid"),
+            {"ph": hash_password(new_password), "uid": user_id})
+
+        # 旧会话全部撤销（含当前 sid）；改密完成后的新 token 在下方签发
+        sids = (await session.execute(text(
+            "SELECT id FROM auth.sessions "
+            "WHERE user_id = :uid AND revoked_at IS NULL"),
+            {"uid": user_id})).mappings().all()
+        for s in sids:
+            await _revoke_session_row(session, session_id=str(s["id"]),
+                                      reason="password_changed")
+        await session.commit()
+        for s in sids:
+            _delete_session_redis_keys(user_id, str(s["id"]))
+
+    # 当前 token 也已随会话撤销 → 直接签发全新正常 token（不继承旧会话）
+    async with _db() as session:
+        sid = await _create_session(session, user_id=user_id, device_id="",
+                                    user_agent=(request.headers.get("user-agent") or "")[:256],
+                                    ip=_client_ip(request),
+                                    ttl_seconds=_REFRESH_TTL_SECONDS)
+        raw_refresh, token_hash = new_refresh_token()
+        await session.execute(text(
+            "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at, session_id) "
+            "VALUES (:uid, :th, '', now() + make_interval(secs => :ttl), :sid)"),
+            {"uid": user_id, "th": token_hash,
+             "ttl": _REFRESH_TTL_SECONDS, "sid": sid})
+        await session.commit()
+    issued = issue_access_token(user_id=user_id, username=payload.get("username") or "",
+                                dept=payload.get("dept") or "",
+                                roles=payload.get("roles") or ["viewer"],
+                                tenant_id=tenant_id, session_id=sid,
+                                must_change_password=False)
+    _write_session(issued)
+    response.set_cookie(value=raw_refresh, **_COOKIE_KWARGS)
+    return _result({
+        "token": issued["token"],
+        "refreshToken": None,
+        "tokenType": "Bearer",
+        "expiresIn": issued["expiresIn"],
+        "userInfo": {"userId": user_id, "mustChangePassword": False},
+    })
 
 
 # ── /sys/users/register（对齐前端 register 契约）─────────────

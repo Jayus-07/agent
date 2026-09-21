@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ from sqlalchemy import text
 from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.app.api.identity import resolve_identity
 from backend.memory.database import get_session
+from backend.security.local_jwt import hash_password
 from backend.security.session_service import SessionRef, SessionService
 from backend.shared.logger import logger
 
@@ -562,6 +565,255 @@ async def update_user(
     deleted = _session_service.clear_redis_for_sessions(outcome.revoked_sessions)
     return {**outcome.user, "revokedSessionCount": len(outcome.revoked_sessions),
             "redisKeysDeleted": deleted}
+
+
+# ── P6 用户生命周期（2026-09-21，治理实施方案 §P6）──────────────
+
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,20}$")
+
+
+def _generate_temp_password() -> str:
+    """随机临时密码（大小写 + 数字，16 位，无歧义字符集）。"""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(16))
+
+
+async def _write_user_audit(db, *, tenant_id: str, actor_user_id: int | None,
+                            target_user_id: int, action: str,
+                            after_state: dict) -> None:
+    """用户生命周期动作审计（user.create / reset_password / force_logout）。
+
+    审计失败不阻断主流程（记录日志后继续）。
+    """
+    try:
+        await db.execute(text(
+            "INSERT INTO auth.rbac_audits "
+            "(tenant_id, actor_user_id, target_user_id, action, "
+            "before_state, after_state, result) VALUES "
+            "(:tenant_id, :actor_user_id, :target_user_id, :action, "
+            "CAST(:before_state AS JSONB), CAST(:after_state AS JSONB), 'success')"),
+            {
+                "tenant_id": tenant_id,
+                "actor_user_id": actor_user_id,
+                "target_user_id": target_user_id,
+                "action": action,
+                "before_state": json.dumps({}),
+                "after_state": json.dumps(after_state, ensure_ascii=False),
+            })
+    except Exception:  # noqa: BLE001 — 审计失败不阻断主流程（记录日志）
+        logger.warning("[RBAC] 用户生命周期审计写入失败 action=%s", action, exc_info=True)
+
+
+@router.post("/users")
+async def create_user(
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """创建用户（P6.1/P6.2）：随机临时密码 + must_change_password=TRUE。
+
+    tenant：请求体可显式指定 tenantId（admin 权限），缺省继承操作者租户
+    —— 遵守现有多租户规则，不降级成共享租户。密码走现有 pbkdf2 哈希，
+    绝不明文落库；临时密码仅在本响应中出现一次。
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise _http_error("请求体必须是 JSON 对象", 400)
+    tenant_id = _tenant_id(request)
+    requested_tenant = str(body.get("tenantId") or "").strip()
+    if requested_tenant and requested_tenant != tenant_id:
+        raise _http_error("tenantId 与操作者租户不一致（多租户规则禁止跨租户创建）", 403)
+
+    username = str(body.get("username") or "").strip()
+    if not _USERNAME_RE.match(username):
+        raise _http_error("username 必须为 2-20 位字母/数字/_.-", 400)
+    platform_role = body.get("platformRole") or "viewer"
+    if platform_role not in _ALLOWED_PLATFORM_ROLES:
+        raise _http_error("platformRole 必须是 viewer/editor/admin", 400)
+    real_name = str(body.get("realName") or "").strip()[:50]
+    dept = str(body.get("dept") or "").strip()[:50]
+    email = str(body.get("email") or "").strip()[:255]
+
+    temp_password = _generate_temp_password()
+
+    async with _db() as db:
+        exists = (await db.execute(text(
+            "SELECT 1 FROM auth.users WHERE username = :u"),
+            {"u": username})).first()
+        if exists is not None:
+            raise _http_error("用户名已存在", 409)
+        row = (await db.execute(text(
+            "INSERT INTO auth.users "
+            "(username, password_hash, real_name, dept, role, status, tenant_id, "
+            "email, must_change_password) VALUES "
+            "(:username, :ph, :real_name, :dept, :role, 1, :tenant_id, "
+            ":email, TRUE) "
+            "RETURNING id, username, real_name, dept, role, status, tenant_id, "
+            "created_at"),
+            {
+                "username": username,
+                "ph": hash_password(temp_password),
+                "real_name": real_name,
+                "dept": dept,
+                "role": platform_role,
+                "tenant_id": tenant_id,
+                "email": email,
+            })).mappings().first()
+        await db.commit()
+
+    user_id = _row_value(row, "id")
+    _audit_after = {
+        "action": "create",
+        "username": username,
+        "platformRole": platform_role,
+        "mustChangePassword": True,
+    }
+    async with _db() as db:
+        await _write_user_audit(
+            db, tenant_id=tenant_id,
+            actor_user_id=_actor_user_id(operator),
+            target_user_id=int(user_id),
+            action="user.create", after_state=_audit_after)
+        await db.commit()
+
+    return {
+        "userId": user_id,
+        "username": username,
+        "realName": _row_value(row, "real_name", real_name),
+        "platformRole": platform_role,
+        "status": 1,
+        "tenantId": _row_value(row, "tenant_id", tenant_id),
+        "mustChangePassword": True,
+        # 临时密码明文仅此一次返回，前端负责展示给管理员转交用户
+        "tempPassword": temp_password,
+    }
+
+
+@router.get("/users/{user_id}")
+async def get_user_detail(
+    user_id: int,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """用户详情（P6.1）：基本资料 + 平台/客服角色 + 会话/登录信息。"""
+    del operator
+    tenant_id = _tenant_id(request)
+    async with _db() as db:
+        row = (await db.execute(text(
+            "SELECT id, username, real_name, dept, email, role, status, "
+            "version, tenant_id, created_at, must_change_password "
+            "FROM auth.users WHERE id = :uid AND tenant_id = :tenant_id"),
+            {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
+        if row is None:
+            raise _http_error("用户不存在", 404)
+        cs_row = (await db.execute(text(
+            "SELECT agent_id, display_name, role, max_conversations, "
+            "enabled, accepting FROM customer_service.cs_agents "
+            "WHERE tenant_id = :tenant_id "
+            "AND auth_user_id = CAST(:uid AS VARCHAR)"),
+            {"tenant_id": tenant_id, "uid": str(user_id)})).mappings().first()
+        session_stat = (await db.execute(text(
+            "SELECT COUNT(*) AS active_sessions, "
+            "MAX(created_at) AS last_login_at FROM auth.sessions "
+            "WHERE user_id = :uid AND revoked_at IS NULL"),
+            {"uid": user_id})).mappings().first()
+
+    agent = None
+    if cs_row is not None:
+        agent = _cs_public(cs_row)
+    return {
+        "userId": _row_value(row, "id"),
+        "username": _row_value(row, "username"),
+        "realName": _row_value(row, "real_name"),
+        "email": _row_value(row, "email", ""),
+        "dept": _row_value(row, "dept", ""),
+        "tenantId": _row_value(row, "tenant_id"),
+        "platformRoles": [_row_value(row, "role", "viewer")],
+        "csRoles": [agent["role"]] if agent and agent.get("role") else [],
+        "csAgent": agent,
+        "status": int(_row_value(row, "status", 1)),
+        "version": int(_row_value(row, "version", 0)),
+        "mustChangePassword": bool(_row_value(row, "must_change_password", False)),
+        "createdAt": _iso(_row_value(row, "created_at")),
+        "lastLoginAt": _iso(_row_value(session_stat, "last_login_at")),
+        "activeSessionCount": int(
+            _row_value(session_stat, "active_sessions", 0) or 0),
+    }
+
+
+@router.post("/users/{user_id}/reset-password")
+async def reset_password(
+    user_id: int,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """重置密码（P6.3）：生成随机临时密码，强制改密 + 立即吊销全部会话。"""
+    tenant_id = _tenant_id(request)
+    temp_password = _generate_temp_password()
+    async with _db() as db:
+        row = (await db.execute(text(
+            "SELECT id, username FROM auth.users "
+            "WHERE id = :uid AND tenant_id = :tenant_id FOR UPDATE"),
+            {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
+        if row is None:
+            raise _http_error("用户不存在", 404)
+        await db.execute(text(
+            "UPDATE auth.users SET password_hash = :ph, "
+            "must_change_password = TRUE, updated_at = now() WHERE id = :uid"),
+            {"ph": hash_password(temp_password), "uid": user_id})
+        revoked = await _session_service.revoke_user_sessions(
+            db, user_id, reason="password_reset"
+        )
+        await _write_user_audit(
+            db, tenant_id=tenant_id,
+            actor_user_id=_actor_user_id(operator),
+            target_user_id=user_id,
+            action="user.reset_password",
+            after_state={"mustChangePassword": True,
+                         "revokedSessions": len(revoked)})
+        await db.commit()
+    deleted = _session_service.clear_redis_for_sessions(revoked)
+    return {
+        "userId": user_id,
+        "username": _row_value(row, "username"),
+        "mustChangePassword": True,
+        "revokedSessionCount": len(revoked),
+        "redisKeysDeleted": deleted,
+        # 临时密码明文仅此一次返回
+        "tempPassword": temp_password,
+    }
+
+
+@router.post("/users/{user_id}/force-logout")
+async def force_logout_user(
+    user_id: int,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """强制下线（P6.2）：复用 SessionService.revoke_user_sessions，不建第二套。"""
+    tenant_id = _tenant_id(request)
+    async with _db() as db:
+        row = (await db.execute(text(
+            "SELECT id, username FROM auth.users "
+            "WHERE id = :uid AND tenant_id = :tenant_id"),
+            {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
+        if row is None:
+            raise _http_error("用户不存在", 404)
+        revoked = await _session_service.revoke_user_sessions(
+            db, user_id, reason="force_logout"
+        )
+        await _write_user_audit(
+            db, tenant_id=tenant_id,
+            actor_user_id=_actor_user_id(operator),
+            target_user_id=user_id,
+            action="user.force_logout",
+            after_state={"revokedSessions": len(revoked)})
+        await db.commit()
+    deleted = _session_service.clear_redis_for_sessions(revoked)
+    return {
+        "userId": user_id,
+        "revokedSessionCount": len(revoked),
+        "redisKeysDeleted": deleted,
+    }
 
 
 def _audit_item(row: Any) -> dict[str, Any]:
