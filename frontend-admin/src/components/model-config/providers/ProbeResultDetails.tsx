@@ -27,6 +27,15 @@ export default function ProbeResultDetails({
         <div className="font-medium">{result.ok ? '探测通过' : failure}</div>
         {elapsedMs > 0 && <span className="shrink-0 font-mono opacity-70">总耗时 {formatElapsed(elapsedMs)}</span>}
       </div>
+      {/* 这次测的是谁、实际打的哪个地址 —— 模型级测试后必看，防止
+          「模型名错误」之类的归因把人引去改模型名（实际是地址问题）。 */}
+      {(result.model || result.target) && (
+        <div className="mt-0.5 break-words opacity-80">
+          {result.model && <>模型 <span className="font-mono">{result.model}</span></>}
+          {result.model && result.target && ' · '}
+          {result.target && <>实际地址 <span className="font-mono">{result.target}</span></>}
+        </div>
+      )}
       <details open={!result.ok} className="mt-1.5">
         <summary className="cursor-pointer select-none text-[10px] font-medium">查看探测详情</summary>
         <ol className="mt-1.5 space-y-1.5">
