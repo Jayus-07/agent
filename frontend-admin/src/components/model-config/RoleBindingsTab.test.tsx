@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 const apiMock = vi.hoisted(() => ({
   saveModelRole: vi.fn(),
   saveModelRolePolicy: vi.fn(),
+  checkModelHealth: vi.fn(),
 }))
 
 vi.mock('@/api/modelConfig', () => apiMock)
@@ -102,6 +103,7 @@ afterEach(() => {
   }
   apiMock.saveModelRole.mockReset()
   apiMock.saveModelRolePolicy.mockReset()
+  apiMock.checkModelHealth.mockReset()
 })
 
 describe('RoleBindingsTab 模型目录选择', () => {
@@ -364,5 +366,49 @@ describe('RoleBindingsTab 运行时治理（2026-09-22 改造）', () => {
     const select = container.querySelector<HTMLSelectElement>('[data-testid="policy-failure-policy"]')
     const fallbackOption = Array.from(select?.options ?? []).find((option) => option.value === 'fallback')
     expect(fallbackOption?.disabled).toBe(true)
+  })
+})
+
+describe('手动健康测试按钮', () => {
+  it('点击后调用 checkModelHealth 探测当前绑定模型，成功后刷新', async () => {
+    apiMock.checkModelHealth.mockResolvedValueOnce({ status: 'healthy', latencyMs: 614 })
+    const onSaved = vi.fn(async () => undefined)
+    const container = mount({ onSaved })
+
+    const btn = container.querySelector<HTMLButtonElement>('[data-testid="role-health-check-rerank"]')
+    expect(btn).toBeTruthy()
+    expect(btn?.textContent).toContain('手动测试')
+    await act(async () => {
+      btn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(apiMock.checkModelHealth).toHaveBeenCalledWith('qwen3.7-text-rerank')
+    expect(onSaved).toHaveBeenCalled()
+    expect(btn?.getAttribute('disabled')).toBeNull()
+  })
+
+  it('探测接口报错时展示错误且不崩', async () => {
+    apiMock.checkModelHealth.mockRejectedValueOnce(new Error('模型未在注册表登记'))
+    const container = mount()
+
+    const btn = container.querySelector<HTMLButtonElement>('[data-testid="role-health-check-rerank"]')
+    await act(async () => {
+      btn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(apiMock.checkModelHealth).toHaveBeenCalledTimes(1)
+    expect(btn?.textContent).toContain('手动测试') // 恢复可点状态
+  })
+
+  it('未绑定模型的角色不渲染手动测试按钮', () => {
+    const container = mount({
+      roles: [roleRow({ role: 'eval_gen', effectiveModel: '', literalValue: '' })],
+    })
+
+    expect(container.querySelector('[data-testid="role-health-check-eval_gen"]')).toBeNull()
   })
 })

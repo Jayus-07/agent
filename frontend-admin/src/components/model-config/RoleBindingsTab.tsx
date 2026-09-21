@@ -1,11 +1,12 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, CircleAlert, Edit3, Save, SlidersHorizontal, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, CircleAlert, Edit3, FlaskConical, Save, SlidersHorizontal, X } from 'lucide-react'
 import type { ModelCatalogEntry } from '@/api/modelConfig'
-import { saveModelRole, saveModelRolePolicy } from '@/api/modelConfig'
+import { checkModelHealth, saveModelRole, saveModelRolePolicy } from '@/api/modelConfig'
 import type {
   FailurePolicy,
+  ModelHealthStatus,
   ModelKind,
   ModelOption,
   RoleBinding,
@@ -118,6 +119,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   const [busy, setBusy] = useState(false)
   const [confirmRow, setConfirmRow] = useState<RoleRow | null>(null)
   const [onlyProblem, setOnlyProblem] = useState(false)
+  // 手动健康探测：同一时刻只允许一个角色行在探（探测本身是同步极低成本调用）
+  const [checkingHealthRole, setCheckingHealthRole] = useState<string | null>(null)
   // 策略编辑态：editingPolicy = 角色名；表单值独立保存
   const [editingPolicy, setEditingPolicy] = useState<RoleRow | null>(null)
   const [policyForm, setPolicyForm] = useState({
@@ -149,6 +152,27 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   function cancel() {
     setEditing(null)
     setValue('')
+  }
+
+  /** 手动触发当前绑定模型的健康探测（beat 自动扫描之外的手动兜底）。
+   *  结果由后端写入 llm_model_health 缓存，onSaved() 拉回后本行即时刷新。 */
+  async function manualHealthCheck(row: RoleRow) {
+    const model = (row.effectiveModel || '').trim()
+    if (!model) {
+      toast.error('该角色未绑定模型，无可探测对象')
+      return
+    }
+    setCheckingHealthRole(row.role)
+    try {
+      const result = await checkModelHealth(model)
+      const ms = result.latencyMs != null ? ` · ${result.latencyMs}ms` : ''
+      toast.success(`手动探测完成：${healthStatusLabel(result.status as ModelHealthStatus)}${ms}`)
+      await onSaved()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '手动探测失败')
+    } finally {
+      setCheckingHealthRole(null)
+    }
   }
 
   function beginPolicy(row: RoleRow) {
@@ -453,6 +477,20 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                               {health.consecutiveFailures > 0 ? ` · 连续失败 ${health.consecutiveFailures}` : ''}
                             </div>
                           </div>
+                        )}
+                        {/* 手动测试：beat 300s 自动扫描之外的手动兜底，点一次真探一次 */}
+                        {canAdmin && row.effectiveModel && (
+                          <button
+                            type="button"
+                            data-testid={`role-health-check-${row.role}`}
+                            disabled={checkingHealthRole === row.role}
+                            onClick={() => { void manualHealthCheck(row) }}
+                            aria-label={`手动测试 ${roleLabel(row.role)} 的健康`}
+                            className="mt-1.5 flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[10px] text-text-secondary hover:bg-slate-50 disabled:opacity-40"
+                          >
+                            <FlaskConical size={10} />
+                            {checkingHealthRole === row.role ? '探测中…' : '手动测试'}
+                          </button>
                         )}
                       </td>
 
