@@ -143,6 +143,19 @@ def _budget_mode_hermetic(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _cb_shared_disabled(monkeypatch):
+    """测试会话熔断共享态默认关闭（hermetic）。
+
+    背景：.env 的 CIRCUIT_BREAKER_SHARED_ENABLED=true 会让熔断器在单测里
+    读写真实 Redis（键跨用例残留、引入网络 IO）。共享语义由
+    tests/test_circuit_breaker.py 的共享专项用例以 fake Redis 覆盖。
+    """
+    import backend.config.redis as redis_config
+
+    monkeypatch.setattr(redis_config, "CIRCUIT_BREAKER_SHARED_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_observability_singletons(monkeypatch):
     """逐用例重置 analytics 单例，防止模块加载时缓存的 enabled 状态泄漏。
     （Langfuse 已于 2026-09-18 随弃用清理删除，exporter 单例复位一并移除。）"""

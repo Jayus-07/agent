@@ -19,3 +19,16 @@ REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "20"))
 
 # Socket 超时（秒）
 REDIS_SOCKET_TIMEOUT = int(os.getenv("REDIS_SOCKET_TIMEOUT", "5"))
+
+# ── 熔断状态跨进程共享（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）──
+# 开 = fail 计数与 OPEN 广播走 Redis（多 worker/多副本下阈值不再放大 N 倍）；
+# Redis 不可用时自动退回进程内状态（方向安全：等于现状行为）。
+# 走缓存实例（REDIS_URL，allkeys-lru）：键被驱逐 = 短暂退回本地计数，可接受。
+CIRCUIT_BREAKER_SHARED_ENABLED = (
+    os.getenv("CIRCUIT_BREAKER_SHARED_ENABLED", "false").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+# 其它实例 OPEN 广播的轮询间隔（秒）；热路径不查，仅此周期一次 GET
+CIRCUIT_BREAKER_SHARED_POLL_SECONDS = float(
+    os.getenv("CIRCUIT_BREAKER_SHARED_POLL_SECONDS", "5")
+)

@@ -5,6 +5,12 @@ CLOSED → OPEN → HALF_OPEN 三态状态机:
   - OPEN: 快速失败（直接抛 CircuitBreakerOpenError），timeout 秒后进入 HALF_OPEN
   - HALF_OPEN: 试探 1 次（其余并发调用快速失败）→ 成功恢复 CLOSED / 失败回到 OPEN
 
+跨进程共享（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）:
+  CIRCUIT_BREAKER_SHARED_ENABLED 开启时，fail 计数（INCR+TTL）与 OPEN 状态
+  （SET NX+TTL）走 Redis，多 worker/多副本下阈值不再放大 N 倍；Redis 不可用
+  自动退回进程内状态（= 单机行为，方向安全）。热路径（CLOSED 下成功的调用）
+  零 Redis 往返，轮询节流见 CIRCUIT_BREAKER_SHARED_POLL_SECONDS。
+
 用法:
     cb = CircuitBreaker("deepseek", fail_threshold=5, timeout=30)
     try:
@@ -25,6 +31,9 @@ from typing import Awaitable, Callable, TypeVar
 from backend.shared.logger import logger
 
 T = TypeVar("T")
+
+# 共享态键命名空间（实际键 = {REDIS_KEY_PREFIX}cb:{name}:{fails|open_at}）
+_CB_KEY_NS = "cb"
 
 
 class State(str, Enum):
@@ -66,6 +75,10 @@ class CircuitBreaker:
         self._stats = _Stats(last_state_change=time.monotonic())
         self._probe_in_flight = False  # HALF_OPEN 探测位：仅放行 1 个探测调用（防探测风暴）
         self._lock = threading.Lock()
+        # ── 跨进程共享态（仅 CIRCUIT_BREAKER_SHARED_ENABLED=true 时使用）──
+        self._last_remote_poll = 0.0        # monotonic，节流 OPEN 广播轮询
+        self._redis_degraded_at = 0.0       # unix ts，最近一次 Redis 操作失败时刻
+        self._redis_degraded_logged = 0.0   # 降级告警去重（60s 内至多一条）
 
     # ── 公开 API ──
 
@@ -111,7 +124,7 @@ class CircuitBreaker:
     def stats(self) -> dict:
         """返回熔断器状态（用于 /metrics 或调试）。"""
         with self._lock:
-            return {
+            info = {
                 "name": self.name,
                 "state": self._state.value,
                 "failures": self._stats.failures,
@@ -120,21 +133,151 @@ class CircuitBreaker:
                 "last_failure_s": round(time.monotonic() - self._stats.last_failure_time, 1)
                 if self._stats.last_failure_time else None,
             }
+        shared = self._shared_enabled()
+        info["shared"] = shared
+        if shared:
+            info["redis_degraded"] = (
+                time.time() - self._redis_degraded_at < 60.0
+                if self._redis_degraded_at else False
+            )
+        return info
 
     def reset(self) -> None:
         """强制复位到 CLOSED 并清零失败计数（对标 pybreaker/resilience4j）。
 
         用途：运维手动恢复、测试隔离。生产调用方不要用 reset 掩盖真实故障。
+        共享模式下一并清除 Redis 侧计数与 OPEN 广播（全局生效）。
         """
         with self._lock:
             self._state = State.CLOSED
             self._stats = _Stats(last_state_change=time.monotonic())
             self._probe_in_flight = False
+        self._redis_clear_remote()
+
+    # ── 跨进程共享态（Redis，全部软失败：异常 = 退回本地单机语义）──
+
+    @staticmethod
+    def _shared_enabled() -> bool:
+        """调用时读取开关（非导入期），测试可 monkeypatch config 生效。"""
+        try:
+            from backend.config.redis import CIRCUIT_BREAKER_SHARED_ENABLED
+            return bool(CIRCUIT_BREAKER_SHARED_ENABLED)
+        except Exception:
+            return False
+
+    def _fails_key(self) -> str:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        return f"{REDIS_KEY_PREFIX or 'agent:'}{_CB_KEY_NS}:{self.name}:fails"
+
+    def _open_key(self) -> str:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        return f"{REDIS_KEY_PREFIX or 'agent:'}{_CB_KEY_NS}:{self.name}:open_at"
+
+    def _mark_degraded(self, err: Exception) -> None:
+        self._redis_degraded_at = time.time()
+        if time.time() - self._redis_degraded_logged > 60.0:
+            self._redis_degraded_logged = time.time()
+            logger.warning(
+                "[CB:%s] Redis 共享态不可用，退回进程内状态（60s 内不重复告警）: %s",
+                self.name, err,
+            )
+
+    def _redis_report_failure(self) -> int | None:
+        """失败上报：INCR 计数 + TTL（窗口 = timeout）。返回系统级累计次数。
+
+        仅失败路径调用（成功热路径零 Redis 往返）。返回 None = Redis 不可用。
+        """
+        try:
+            from backend.infra.redis.client import get_redis
+            r = get_redis()
+        except Exception as e:  # pragma: no cover - config 层异常视同降级
+            self._mark_degraded(e)
+            return None
+        if r is None:
+            return None
+        try:
+            pipe = r.pipeline()
+            pipe.incr(self._fails_key())
+            pipe.expire(self._fails_key(), max(int(self.timeout), 1))
+            count = int(pipe.execute()[0])
+            return count
+        except Exception as e:
+            self._mark_degraded(e)
+            return None
+
+    def _redis_mark_open(self, *, refresh: bool = False) -> None:
+        """OPEN 广播：SET open_at EX timeout（首个实例 NX；重开路 refresh 覆盖）。"""
+        try:
+            from backend.infra.redis.client import get_redis
+            r = get_redis()
+        except Exception as e:  # pragma: no cover
+            self._mark_degraded(e)
+            return
+        if r is None:
+            return
+        try:
+            ttl = max(int(self.timeout), 1)
+            if refresh:
+                r.set(self._open_key(), str(time.time()), ex=ttl)
+            else:
+                r.set(self._open_key(), str(time.time()), ex=ttl, nx=True)
+        except Exception as e:
+            self._mark_degraded(e)
+
+    def _redis_clear_remote(self) -> None:
+        """恢复 CLOSED / 手动 reset 时清共享态（fail 计数 + OPEN 广播）。"""
+        try:
+            from backend.infra.redis.client import get_redis
+            r = get_redis()
+        except Exception:  # pragma: no cover
+            return
+        if r is None:
+            return
+        try:
+            r.delete(self._fails_key(), self._open_key())
+        except Exception as e:
+            self._mark_degraded(e)
+
+    def _poll_remote_state(self) -> None:
+        """CLOSED 下按节流周期拉取其它实例的 OPEN 广播；命中即本地转 OPEN。
+
+        本地转 OPEN 用本地时钟重新起算 timeout：远端键 TTL ≤ 本地试探等待，
+        探测只会更晚不会更早 —— 保守方向安全。
+        """
+        now = time.monotonic()
+        try:
+            from backend.config.redis import CIRCUIT_BREAKER_SHARED_POLL_SECONDS
+            interval = CIRCUIT_BREAKER_SHARED_POLL_SECONDS
+        except Exception:
+            interval = 5.0
+        if now - self._last_remote_poll < interval:
+            return
+        self._last_remote_poll = now
+        try:
+            from backend.infra.redis.client import get_redis
+            r = get_redis()
+        except Exception:  # pragma: no cover
+            return
+        if r is None:
+            return
+        try:
+            if r.get(self._open_key()):
+                with self._lock:
+                    if self._state == State.CLOSED:
+                        self._transition(State.OPEN)
+                        logger.warning(
+                            "[CB:%s] 收到其他实例的 OPEN 广播，本地 CLOSED → OPEN", self.name
+                        )
+        except Exception as e:
+            self._mark_degraded(e)
 
     # ── 状态机 ──
 
     def _check_state(self) -> None:
         """检查是否可以调用。OPEN 状态下检查是否超时进入 HALF_OPEN。"""
+        # 共享模式：CLOSED 下先节流轮询远端 OPEN 广播（锁外 IO，不阻塞热路径持锁）
+        if self._shared_enabled() and self._state == State.CLOSED:
+            self._poll_remote_state()
         with self._lock:
             if self._state == State.CLOSED:
                 return
@@ -156,14 +299,26 @@ class CircuitBreaker:
 
     def _on_success(self) -> None:
         """调用成功。HALF_OPEN → CLOSED，或保持 CLOSED。"""
+        recovered = False
         with self._lock:
             if self._state == State.HALF_OPEN:
                 self._transition(State.CLOSED)
+                recovered = True
                 logger.info(f"[CB:{self.name}] HALF_OPEN → CLOSED（恢复）")
             self._stats.failures = 0
+        if recovered:
+            # 锁外清共享态：本实例恢复 = 后端已可用，其它实例也应停止快速失败
+            self._redis_clear_remote()
 
     def _on_failure(self, error: Exception) -> None:
-        """调用失败。CLOSED/HALF_OPEN 时累计，达阈值进入 OPEN。"""
+        """调用失败。CLOSED/HALF_OPEN 时累计，达阈值进入 OPEN。
+
+        共享模式：失败时先 INCR Redis 计数（锁外 IO），阈值判定取
+        max(本地计数, Redis 系统级计数) —— 任一实例看到系统级超阈即熔断。
+        """
+        remote_count = None
+        if self._shared_enabled():
+            remote_count = self._redis_report_failure()
         with self._lock:
             self._stats.failures += 1
             self._stats.last_failure_time = time.monotonic()
@@ -173,12 +328,16 @@ class CircuitBreaker:
                     f"[CB:{self.name}] HALF_OPEN 试探失败，回到 OPEN "
                     f"(failures={self._stats.failures}, error={type(error).__name__})"
                 )
-            elif self._stats.failures >= self.fail_threshold:
+                self._redis_mark_open(refresh=True)
+            elif max(self._stats.failures, remote_count or 0) >= self.fail_threshold:
                 self._transition(State.OPEN)
                 logger.warning(
                     f"[CB:{self.name}] CLOSED → OPEN "
-                    f"(failures={self._stats.failures}/{self.fail_threshold})"
+                    f"(failures={self._stats.failures}/{self.fail_threshold}"
+                    + (f", remote={remote_count}" if remote_count else "")
+                    + ")"
                 )
+                self._redis_mark_open()
 
     def _transition(self, new_state: State) -> None:
         self._state = new_state

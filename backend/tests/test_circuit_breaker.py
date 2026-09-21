@@ -230,3 +230,148 @@ class TestStats:
         s = cb.stats()
         assert s["failures"] == 1
         assert s["last_failure_s"] is not None
+
+
+# ============================================================
+# 跨进程共享态（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）
+# ============================================================
+class _FakeRedis:
+    """最小 Redis 桩：incr/expire/set/get/delete/pipeline。"""
+
+    def __init__(self):
+        self.store: dict = {}
+
+    def incr(self, key):
+        self.store[key] = self.store.get(key, 0) + 1
+        return self.store[key]
+
+    def expire(self, key, ttl):
+        return True
+
+    def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def delete(self, *keys):
+        n = 0
+        for k in keys:
+            if self.store.pop(k, None) is not None:
+                n += 1
+        return n
+
+    def pipeline(self):
+        outer = self
+
+        class _Pipe:
+            def __init__(self):
+                self._ops = []
+
+            def incr(self, k):
+                self._ops.append(("incr", k))
+                return self
+
+            def expire(self, k, t):
+                self._ops.append(("expire", k, t))
+                return self
+
+            def execute(self):
+                out = []
+                for op in self._ops:
+                    out.append(outer.incr(op[1]) if op[0] == "incr"
+                               else outer.expire(op[1], op[2]))
+                return out
+
+        return _Pipe()
+
+
+@pytest.fixture
+def shared_redis(monkeypatch):
+    """开共享开关 + 注入 fake Redis（拦截 get_redis 调用时导入路径）。"""
+    fake = _FakeRedis()
+    import backend.config.redis as redis_config
+    import backend.infra.redis.client as redis_client
+
+    monkeypatch.setattr(redis_config, "CIRCUIT_BREAKER_SHARED_ENABLED", True)
+    monkeypatch.setattr(redis_client, "get_redis", lambda: fake)
+    return fake
+
+
+class TestSharedState:
+    def test_remote_count_trips_other_instance(self, shared_redis):
+        """A 实例失败 4 次（未达本地阈值），B 实例第 1 次失败即熔断 ——
+        系统级计数合并生效，阈值不再被多进程放大。"""
+        a = CircuitBreaker("x-llm", fail_threshold=5, timeout=30.0)
+        b = CircuitBreaker("x-llm", fail_threshold=5, timeout=30.0)
+
+        def boom():
+            raise RuntimeError("down")
+
+        for _ in range(4):
+            with pytest.raises(RuntimeError):
+                a.call(boom)
+        assert a.state is State.CLOSED  # 本地 4/5，未熔断
+
+        with pytest.raises(RuntimeError):
+            b.call(boom)  # 远端 INCR 后 = 5 → 系统级超阈
+        assert b.state is State.OPEN
+        assert a.state is State.CLOSED  # A 尚未感知（轮询/自身失败才收敛）
+
+    def test_open_broadcast_reaches_other_instance(self, shared_redis):
+        a = CircuitBreaker("x-pg", fail_threshold=2, timeout=30.0)
+        b = CircuitBreaker("x-pg", fail_threshold=2, timeout=30.0)
+
+        def boom():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            a.call(boom)
+        with pytest.raises(RuntimeError):
+            a.call(boom)
+        assert a.state is State.OPEN
+
+        b._poll_remote_state()  # 模拟 B 的节流轮询
+        assert b.state is State.OPEN
+
+    def test_recovery_clears_remote_state(self, shared_redis):
+        a = CircuitBreaker("x-chroma", fail_threshold=1, timeout=30.0)
+
+        def boom():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            a.call(boom)
+        assert a.state is State.OPEN
+        assert shared_redis.get(a._open_key()) is not None
+
+        a.reset()  # 运维复位应全局生效：清 fail 计数 + OPEN 广播
+        assert shared_redis.get(a._open_key()) is None
+        assert shared_redis.get(a._fails_key()) is None
+
+    def test_redis_unavailable_degrades_to_local(self, monkeypatch):
+        """Redis 不可用 = 退回进程内语义（现状行为），绝不抛错。"""
+        import backend.config.redis as redis_config
+        import backend.infra.redis.client as redis_client
+
+        monkeypatch.setattr(redis_config, "CIRCUIT_BREAKER_SHARED_ENABLED", True)
+        monkeypatch.setattr(redis_client, "get_redis", lambda: None)
+
+        cb = CircuitBreaker("x-degraded", fail_threshold=2, timeout=30.0)
+
+        def boom():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            cb.call(boom)
+        with pytest.raises(RuntimeError):
+            cb.call(boom)
+        assert cb.state is State.OPEN  # 本地阈值照常生效
+        assert cb.stats()["redis_degraded"] is False  # 未发生异常，仅无客户端
+
+    def test_stats_reports_shared_flag(self, shared_redis):
+        cb = CircuitBreaker("x-stats", fail_threshold=5, timeout=30.0)
+        assert cb.stats()["shared"] is True
