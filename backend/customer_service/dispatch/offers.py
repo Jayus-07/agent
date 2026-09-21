@@ -22,6 +22,7 @@ accept/decline/reassign 只从 ``handoff_id`` 入手，所以先做一次**无�
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -95,6 +96,26 @@ class OfferActionResult:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@asynccontextmanager
+async def _txn(session: AsyncSession):
+    """事务收口（2026-09-21 实机验证修复）。
+
+    路由层 ``require_agent`` 与端点共用同一 get_session 实例，身份查询
+    （find_agent_role 等）已令 session autobegin —— 此时再显式
+    ``session.begin()`` 会抛 InvalidRequestError（A transaction is already
+    begun），导致 accept/decline/reassign 三条路径全部 500。改为：已在
+    事务中就直接复用（提交由 get_session 的 yield 后 commit 收口，异常
+    同样走 get_session rollback），全新 session 才显式 begin（保持原有
+    「异常即回滚」语义）。
+    """
+    in_txn = getattr(session, "in_transaction", None)
+    if callable(in_txn) and in_txn():
+        yield
+    else:
+        async with session.begin():
+            yield
 
 
 def _item(row: CSHandoff) -> OfferItem:
@@ -198,7 +219,7 @@ async def accept_offer(
     —— 这是「重派后再点旧的接单按钮」的唯一正确语义，不能当作幂等成功。
     """
     now = now or _now()
-    async with session.begin():
+    async with _txn(session):
         conversation, handoff = await _load_locked_pair(
             session, tenant_id=tenant_id, handoff_id=handoff_id
         )
@@ -272,7 +293,7 @@ async def decline_offer(
     可以无限循环（方案 A5 的 5 次上限会形同虚设）。
     """
     now = now or _now()
-    async with session.begin():
+    async with _txn(session):
         conversation, handoff = await _load_locked_pair(
             session, tenant_id=tenant_id, handoff_id=handoff_id
         )
@@ -357,7 +378,7 @@ async def reassign_handoff(
     now = now or _now()
     target = (target_agent_id or "").strip() or None
 
-    async with session.begin():
+    async with _txn(session):
         conversation, handoff = await _load_locked_pair(
             session, tenant_id=tenant_id, handoff_id=handoff_id
         )

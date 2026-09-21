@@ -275,7 +275,26 @@ local ROLE_GATE_PREFIXES = {
     ["/api/cs"] = { any_of = { admin = true, supervisor = true, agent = true } },
 }
 
+-- 用户侧客服端点豁免（2026-09-21 实机验证发现：/api/cs 前缀闸把普通用户的
+-- 客服抽屉也拦了 → 抽屉 403 role-insufficient，转人工全断）。这些端点是
+-- 消费者身份调用的，走正常 JWT 验签 + 后端归属校验兜底，不做 cs 角色要求。
+-- ⚠️ 只放用户侧：坐席/主管端点（claim/close/agent-messages/queue/stats/
+-- offers/ws-ticket/{id} 详情/typing 等）仍被 /api/cs 前缀闸拦截。
+local ROLE_GATE_EXEMPT_PATTERNS = {
+    "^/api/cs/confirm$",                                  -- 确认卡操作（消费者）
+    "^/api/cs/conversations/my$",                         -- 我的会话列表
+    "^/api/cs/conversations/my/.+$",                      -- 我的会话消息/typing
+    "^/api/cs/conversations/[^/]+/handoff$",              -- 用户发起转人工
+    "^/api/cs/conversations/[^/]+/rating$",               -- 用户满意度评分
+}
+
 local function role_gate(uri, method, roles)
+    -- 用户侧豁免：正则命中即不做 cs 角色要求（JWT 主流程照常验）
+    for _, pat in ipairs(ROLE_GATE_EXEMPT_PATTERNS) do
+        if string.match(uri, pat) then
+            return nil
+        end
+    end
     -- 命中清单且角色不足 → 返回拒绝 reason；否则 nil 放行
     local rule, best_len = nil, 0
     for prefix, r in pairs(ROLE_GATE_PREFIXES) do
