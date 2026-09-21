@@ -4,8 +4,14 @@
  * navConfig — 管理端全局导航配置（单一数据源）
  *
  * 六组结构（2026-09-16 Phase 1.5，对应 docs/2026-09-16-前端拆分计划.md §1）：
- * 看得到（可观测）、管得住（知识运营/运营干预/自动化）、查得清（质量与配置）。
+ * 看得到（可观测）、管得住（知识运营/审批与安全/自动化）、查得清（质量与配置）。
  * 业务对话入口（智能问答/报告中心）在用户端 frontend/，这里不放。
+ *
+ * 2026-09-21 三端拆分：智能客服域整体迁出到客服端 frontend-cs（:3300），
+ * 「运营干预」组中的客服四项（客服对话 /cs、客服会话 /cs/conversations、
+ * 人工接入坐席 /cs/handoff）移除，页面目录 app/cs/ 一并删除；
+ * 组内只剩工具审批、访问控制、库存告警工单三项，故该组改名为
+ * 「审批与安全」（语义更贴切：都是平台治理的处置动作）。
  */
 import {
   Activity, Clock, Database, LayoutDashboard,
@@ -81,13 +87,11 @@ export const NAV: NavEntry[] = [
     ],
   },
   {
-    icon: <ShieldCheck size={18} />, label: '运营干预', minRole: 'admin',
+    // 2026-09-21：原「运营干预」组，客服四项迁往 frontend-cs 后改名
+    icon: <ShieldCheck size={18} />, label: '审批与安全', minRole: 'admin',
     items: [
       { label: '工具审批', path: '/approvals' },
       { label: '访问控制', path: '/settings/access', minRole: 'admin' },
-      { label: '客服对话', path: '/cs' },
-      { label: '客服会话', path: '/cs/conversations' },
-      { label: '人工接入坐席', path: '/cs/handoff' },
       { label: '库存告警工单', path: '/alerts' },
     ],
   },

@@ -21,14 +21,14 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('六组结构齐全（知识运营/业务分析/可观测/质量与配置/运营干预/自动化 + 总览直达）', () => {
+  it('六组结构齐全（知识运营/业务分析/可观测/质量与配置/审批与安全/自动化 + 总览直达）', () => {
     const labels = NAV.map((e) => e.label)
-    for (const group of ['运营总览', '知识运营', '业务分析', '可观测', '质量与配置', '运营干预', '自动化']) {
+    for (const group of ['运营总览', '知识运营', '业务分析', '可观测', '质量与配置', '审批与安全', '自动化']) {
       expect(labels, `缺少分组「${group}」`).toContain(group)
     }
   })
 
-  it('核心路由不因导航重构丢失（追踪/入库/审批/网关安全/选品/客服/告警/任务/访问控制）', () => {
+  it('核心路由不因导航重构丢失（追踪/入库/审批/网关安全/选品/告警/任务/访问控制）', () => {
     for (const p of [
       '/observability/traces',
       '/knowledge/documents',
@@ -38,7 +38,6 @@ describe('NAV — 导航配置完整性', () => {
       '/selection-decision',
       '/reports',
       '/competitors',
-      '/cs/conversations',
       '/alerts',
       '/schedules',
       // B13 能力治理只读页（2026-09-16）
@@ -72,6 +71,16 @@ describe('NAV — 导航配置完整性', () => {
       expect(isUserAgentRoute, `用户端独有路由 ${p} 不应出现在管理端`).toBe(false)
     }
   })
+
+  it('客服域不回渗（2026-09-21 三端拆分：/cs/* 全部迁往 frontend-cs）', () => {
+    for (const p of allPaths) {
+      expect(p.startsWith('/cs'), `客服端路由 ${p} 不应出现在管理端`).toBe(false)
+    }
+    const labels = NAV.map((e) => e.label)
+    for (const csOnly of ['客服对话', '客服会话', '人工接入坐席']) {
+      expect(labels, `客服端入口「${csOnly}」不应出现在管理端`).not.toContain(csOnly)
+    }
+  })
 })
 
 describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）', () => {
@@ -89,9 +98,9 @@ describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）'
     expect(labels()).toEqual(NAV.map((e) => e.label))
   })
 
-  it('editor 无「运营干预」（处置权仅 admin），其余可见', () => {
+  it('editor 无「审批与安全」（处置权仅 admin），其余可见', () => {
     loginAs('editor')
-    expect(labels()).not.toContain('运营干预')
+    expect(labels()).not.toContain('审批与安全')
     expect(labels()).toContain('质量与配置')
     expect(labels()).toContain('知识运营')
   })
@@ -99,20 +108,20 @@ describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）'
   it('viewer 只看免角色分组（总览/业务分析/可观测/自动化）', () => {
     loginAs('viewer')
     expect(labels()).toEqual(expect.arrayContaining(['运营总览', '业务分析', '可观测', '自动化']))
-    for (const hidden of ['知识运营', '质量与配置', '运营干预']) {
+    for (const hidden of ['知识运营', '质量与配置', '审批与安全']) {
       expect(labels(), `viewer 不应看到「${hidden}」`).not.toContain(hidden)
     }
   })
 
   it('未登录（无角色缓存）只看免角色分组，且不抛错', () => {
     loginAs(null)
-    expect(labels()).not.toContain('运营干预')
+    expect(labels()).not.toContain('审批与安全')
   })
 
-  it('minRole 声明与后端 RBAC 同语义（知识运营/质量配置=editor，运营干预=admin）', () => {
+  it('minRole 声明与后端 RBAC 同语义（知识运营/质量配置=editor，审批与安全=admin）', () => {
     for (const e of NAV) {
       if (e.label === '知识运营' || e.label === '质量与配置') expect(e.minRole).toBe('editor')
-      if (e.label === '运营干预') expect(e.minRole).toBe('admin')
+      if (e.label === '审批与安全') expect(e.minRole).toBe('admin')
     }
     const access = NAV.flatMap((e) => e.items ?? []).find((i) => i.path === '/settings/access')
     expect(access?.minRole).toBe('admin')

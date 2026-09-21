@@ -11,6 +11,10 @@
  *   /agent?cs=1 自动滑出 CSDrawer。语义区分：用户端「智能客服」= CSDrawer
  *   消费者直达入口（子项，非顶层）；管理端「智能客服」入口与 /cs 坐席
  *   路由仍禁止出现在用户端（黑名单不变）。
+ * - 2026-09-21 三次收敛（三端拆分）：用户端只剩「AI 对话」单组。
+ *   /agent/tasks、/reports、/alerts 页面目录与导航项一并移除（报告中心归
+ *   管理端业务分析组、告警工单归管理端审批与安全组），核心路由断言收缩到
+ *   仅 /agent；管理端路由黑名单不变。
  */
 import { describe, it, expect } from 'vitest'
 import { NAV } from './navConfig'
@@ -34,11 +38,15 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('用户端导航 = AI 对话 + 报告中心 + 我的告警（ADR-001 workspace 单组）', () => {
+  it('用户端导航 = AI 对话单组（2026-09-21 三次收敛）', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['AI 对话', '报告中心', '我的告警'])
-    for (const p of ['/agent', '/agent/tasks', '/reports', '/alerts']) {
+    expect(labels).toEqual(['AI 对话'])
+    for (const p of ['/agent']) {
       expect(allPaths, `用户端核心路由 ${p} 丢失`).toContain(p)
+    }
+    // 已裁撤页面不得回渗（页面目录已删，导航也不得再挂）
+    for (const p of ['/agent/tasks', '/reports', '/alerts']) {
+      expect(allPaths, `已裁撤路由 ${p} 不应出现在用户端`).not.toContain(p)
     }
   })
 
