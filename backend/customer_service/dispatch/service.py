@@ -19,7 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import cs_dispatch as config
 from backend.config.cs_dispatch import CS_OFFER_TIMEOUT_SECONDS
 from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
-from backend.customer_service.dispatch import event_relay, outbox, presence, repository
+from backend.customer_service.dispatch import (
+    agent_busy,
+    event_relay,
+    outbox,
+    presence,
+    repository,
+)
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.handoff import CSHandoff
@@ -339,13 +345,28 @@ async def dispatch_once(
                 conversation_id=handoff.conversation_id,
             )
 
+        # 自动置忙过滤（fail-open：Redis 不可用返回空集，不影响在线判定）。
+        busy = await agent_busy.busy_agent_ids(
+            tenant_id=tenant_id, agent_ids=candidate_ids
+        )
+        if busy:
+            online = online - busy
+            if not online:
+                return DispatchResult(
+                    status="no_candidate",
+                    handoff_id=handoff.handoff_id,
+                    conversation_id=handoff.conversation_id,
+                )
+
         agent = await repository.lock_least_loaded_agent(
             session,
             tenant_id=tenant_id,
             online_agent_ids=sorted(online),
-            # P7：排除刚在本工单上超时/拒绝过的坐席（冷却期内不再重复派给他）
+            # 2026-09-21 治理：本单内拒过/超时过的坐席永久排除（原 60s 冷却）
             handoff_id=handoff.handoff_id,
             now=now,
+            # 技能匹配：cs_agents.skill == handoffs.required_skill（默认 general）
+            required_skill=str(getattr(handoff, "required_skill", None) or ""),
         )
         if agent is None:
             return DispatchResult(

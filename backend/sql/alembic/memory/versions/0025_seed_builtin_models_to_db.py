@@ -1,4 +1,8 @@
-"""0023 — 代码层内置模型种入 DB（「DB 统一控制」收尾）。
+"""0025 — 代码层内置模型种入 DB（「DB 统一控制」收尾）。
+
+⚠️ 版本号沿革：原编号 0023 与 cs-dispatch 的 ``0023_cs_dispatch`` 撞车
+（合并后出现双头、schema 测试失败），2026-09-21 重排为 0025 并链到 0024。
+本迁移全程 ``ON CONFLICT DO NOTHING`` 幂等，重放安全。
 
 背景与决策见 docs/model-config-governance-design.md §B.15：
 
@@ -20,8 +24,8 @@ display/description/单价取自迁移时刻的代码清单（2026-09-21 快照�
 """
 from alembic import op
 
-revision = "0023"
-down_revision = "0022"
+revision = "0025"
+down_revision = "0024"
 branch_labels = None
 depends_on = None
 

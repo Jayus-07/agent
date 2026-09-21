@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.cs_dispatch import CS_OFFER_TIMEOUT_SECONDS
 from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
-from backend.customer_service.dispatch import outbox, repository
+from backend.customer_service.dispatch import agent_busy, outbox, repository
 from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.handoff import CSHandoff
 
@@ -298,6 +298,11 @@ async def decline_offer(
         target.state = "declined"
         target.declined_at = now
         target.unassigned_at = now
+        # 拒单原因落库（030 新列；接口可选提交，写不进也不影响状态机）
+        target.decline_reason = ((reason or "").strip() or None)
+
+        # 自动置忙计数：滑动窗口内频繁拒单 → Redis 置忙窗口（fail-open）。
+        await agent_busy.record_agent_reject(tenant_id, agent_id)
 
         if conversation is not None:
             conversation.assigned_agent_id = None

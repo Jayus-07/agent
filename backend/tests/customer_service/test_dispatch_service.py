@@ -298,6 +298,10 @@ class Scenario:
             self.calls.append("presence")
             return self.online
 
+        async def busy_agent_ids(*_a, **_k):
+            # 默认无人置忙（隔离真实 Redis）；置忙场景在用例内覆盖。
+            return set()
+
         def publish(envelope):
             self.calls.append("publish")
             if self.publish_error is not None:
@@ -313,6 +317,7 @@ class Scenario:
         monkeypatch.setattr(repository, "list_accepting_agent_ids", list_agent_ids)
         monkeypatch.setattr(repository, "lock_least_loaded_agent", lock_agent)
         monkeypatch.setattr(presence, "online_agent_ids", online_agent_ids)
+        monkeypatch.setattr(service.agent_busy, "busy_agent_ids", busy_agent_ids)
         monkeypatch.setattr(event_relay, "publish_persisted_event", publish)
 
 
@@ -676,3 +681,92 @@ async def test_rollout_default_100_does_not_gate(scenario: Scenario) -> None:
     """默认 100%：未配置 DB 覆盖时全部放行（env 缺省）。"""
     result = await _dispatch(scenario)
     assert result.status == "dispatched"
+
+
+# ── 2026-09-21 派单治理：本单永久排除 / 技能匹配 / 自动置忙 ──────
+
+
+def test_agent_selection_query_permanently_excludes_declined_or_expired_agents() -> None:
+    """本单排除：存在该工单的 declined/expired assignment 即排除，无时间窗。"""
+    stmt = repository.least_loaded_agent_stmt(
+        tenant_id=TENANT, online_agent_ids=["agent-1"], handoff_id="hd-1", now=NOW
+    )
+    sql = _normalized_sql(stmt)
+    params = stmt.compile(dialect=postgresql.dialect()).params
+
+    assert "unassigned_at >" not in sql  # 冷却时间窗已移除
+    excluded_states = [
+        v
+        for v in params.values()
+        if isinstance(v, list) and "declined" in v and "expired" in v
+    ]
+    assert excluded_states, "排除谓词应包含 declined/expired 终结态"
+    assert all("released" not in v for v in excluded_states), (
+        "released 不排除——主管重派是人工决策，允许指定回同一坐席"
+    )
+
+
+def test_agent_selection_query_without_handoff_has_no_exclusion_predicate() -> None:
+    """缺省（无 handoff_id）不排除任何坐席，保持 P6 主管重派行为。"""
+    stmt = repository.least_loaded_agent_stmt(
+        tenant_id=TENANT, online_agent_ids=["agent-1"]
+    )
+    params = stmt.compile(dialect=postgresql.dialect()).params
+    assert not [
+        v
+        for v in params.values()
+        if isinstance(v, list) and "declined" in v and "expired" in v
+    ]
+
+
+def test_agent_selection_query_filters_by_required_skill() -> None:
+    """技能匹配：传 required_skill 时按 cs_agents.skill 精确过滤。"""
+    stmt = repository.least_loaded_agent_stmt(
+        tenant_id=TENANT, online_agent_ids=["agent-1"], required_skill="billing"
+    )
+    where = _normalized_sql(stmt).split(" where ", 1)[1]
+    assert "cs_agents.skill = " in where
+
+    plain_where = _normalized_sql(
+        repository.least_loaded_agent_stmt(
+            tenant_id=TENANT, online_agent_ids=["agent-1"]
+        )
+    ).split(" where ", 1)[1]
+    # 主管指定重派不设技能门槛（SELECT 列表天然含全部列，只看 WHERE）
+    assert "cs_agents.skill" not in plain_where
+
+
+async def test_busy_agents_are_excluded_from_dispatch(
+    scenario: Scenario, monkeypatch
+) -> None:
+    """自动置忙：置忙坐席从可派池剔除；全员置忙 → no_candidate。"""
+
+    async def all_busy(*_a, **_k):
+        return {"agent-1"}
+
+    monkeypatch.setattr(service.agent_busy, "busy_agent_ids", all_busy)
+
+    result = await _dispatch(scenario)
+
+    assert result.status == "no_candidate"
+    assert scenario.session.added == []
+    assert scenario.handoff.assigned_agent_id is None
+
+
+async def test_skill_mismatch_is_a_noop(scenario: Scenario, monkeypatch) -> None:
+    """技能不匹配：lock_agent 收到的 required_skill 与坐席技能不一致时选不出人。"""
+    # ORM 列默认值只在 flush 时生效，这里显式对齐 DB 存量行的 'general'
+    scenario.handoff.required_skill = "general"
+    captured: dict = {}
+
+    async def lock_agent(*_a, **_k):
+        captured["required_skill"] = _k.get("required_skill")
+        return None
+
+    monkeypatch.setattr(repository, "lock_least_loaded_agent", lock_agent)
+
+    result = await _dispatch(scenario)
+
+    assert result.status == "no_candidate"
+    # 默认 handoff.required_skill = general（模型 default），必须传给选人语句
+    assert captured["required_skill"] == "general"

@@ -106,6 +106,11 @@ class CSAssignment(CSBase):
     offer_expires_at = Column(DateTime(timezone=True), nullable=True)
     accepted_at = Column(DateTime(timezone=True), nullable=True)
     declined_at = Column(DateTime(timezone=True), nullable=True)
+    decline_reason = Column(
+        String(255),
+        nullable=True,
+        comment="坐席拒单原因（decline 接口可选提交，030）",
+    )
     closed_at = Column(DateTime(timezone=True), nullable=True)
     assigned_by = Column(String(64), nullable=True,
                          comment="user_id of who/what made the assignment")
