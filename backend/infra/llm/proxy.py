@@ -37,6 +37,7 @@ from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import (
     compute_cost_usd,
     get_available_models,
+    get_provider_driver,
     is_registered_model,
     resolve_provider,
 )
@@ -299,6 +300,24 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     if provider == "siliconflow":
         from backend.infra.llm.providers.siliconflow import build_siliconflow
         return build_siliconflow(model_name, credentials)
+    # ── DB 自建供应商：按登记协议分发，不再无脑落 ollama 兜底 ──────────
+    # custom-* 此前落到 ollama：拿 OpenAI 兼容地址去打 /api/chat → 上游 404
+    # → 健康页归因「模型不存在」（2026-09-22 实测）。这是 qwen_tp / vllm
+    # 两例同型缺陷的整类收口；与供应商页测试（provider_probe.build_probe_client）
+    # 同一 driver 分发口径。详见 providers/driver_compat.py 模块头。
+    driver = (get_provider_driver(provider) or "").strip().lower()
+    if driver in ("openai", "anthropic"):
+        from backend.infra.llm.providers.driver_compat import build_by_driver
+
+        return build_by_driver(driver, model_name, credentials)
+    if driver and driver != "ollama":
+        # driver 已登记但不受支持（如 specialized 专项供应商的 chat 误绑）：
+        # 保留历史兜底语义（聊天热路径上宁可给明确失败也不新增崩溃点），
+        # 但把真因写进日志。
+        logger.warning(
+            "[LLM:proxy] provider=%s 的协议驱动 %s 不受支持，落 ollama 兜底",
+            provider, driver,
+        )
     # ollama / 兜底 — 模型选择完全由 env 配置驱动（LLM_MODEL / 请求覆盖），
     # 构建层不再按 ENV_MODE 拒建（2026-09-17 拍板：不做 cloud/local 区分）。
     # 用户配了本地模型但 Ollama 未运行时，invoke 阶段自然报连接错误。

@@ -150,6 +150,17 @@ class LLMFactory:
             from backend.infra.llm.providers.siliconflow import build_siliconflow
             return build_siliconflow(model_name, credentials)
         else:
+            # ── DB 自建供应商：按登记协议构建，不再直接 raise ──────────
+            # 与 proxy._build_llm_for 同型收口（2026-09-22）：custom-* 之前
+            # 会走到这里抛「未知 provider」。按 llm_providers.driver 分发，
+            # 与供应商页测试同一口径；driver 未登记/不受支持才维持 raise。
+            from backend.infra.llm.models import get_provider_driver
+
+            driver = (get_provider_driver(provider) or "").strip().lower()
+            if driver in ("openai", "anthropic", "ollama"):
+                from backend.infra.llm.providers.driver_compat import build_by_driver
+
+                return build_by_driver(driver, model_name, credentials)
             raise ValueError(f"未知 provider: {provider}")
 
     def _get_provider(self, model_name: str) -> str:
