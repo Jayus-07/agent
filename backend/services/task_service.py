@@ -101,6 +101,99 @@ def mark_queued(task_id: str, celery_task_id: str, *,
         )
 
 
+def try_acquire_lease(task_id: str, *, worker: str | None = None,
+                      stale_running_seconds: int | None = None) -> bool:
+    """原子抢执行租约（2026-09-21 审查 #5：acks_late 重投防双跑）。
+
+    acks_late + Redis visibility timeout 内未 ack 会重投第二个 Worker；
+    若不抢租约，第二个 Worker 会与第一个并发跑同一 thread_id
+    （LLM 重复烧钱、step_results 互踩）。
+
+    可认领态 = PENDING / FAILED（正常入队与失败重试路径）。RUNNING 行
+    属于另一个在跑的 Worker → rowcount=0 直接退出；但 ``updated_at``
+    停更超过 ``stale_running_seconds`` 的 RUNNING 行视为其 Worker 已死
+    （硬杀/OOM 来不及落 FAILED），允许接管续跑。默认阈值取
+    hard time limit + 余量 —— 活着的 Worker 在软超时内必然有节点级
+    update_progress 心跳。
+    """
+    ensure_schema()
+    if stale_running_seconds is None:
+        from backend.config.tasks import CELERY_HARD_TASK_TIMEOUT
+
+        stale_running_seconds = CELERY_HARD_TASK_TIMEOUT + 60
+    sets = ["status = %s", "updated_at = now()",
+            "started_at = COALESCE(started_at, now())"]
+    args: list = [TaskStatus.RUNNING.value]
+    if worker:
+        sets.append("worker = %s")
+        args.append(worker[:128])
+    args.extend([
+        task_id,
+        TaskStatus.PENDING.value, TaskStatus.FAILED.value,
+        TaskStatus.RUNNING.value, str(stale_running_seconds),
+    ])
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET " + ", ".join(sets) + " "
+            "WHERE id = %s AND (status IN (%s, %s) OR "
+            "(status = %s AND updated_at < "
+            "now() - (%s || ' seconds')::interval))",
+            args,
+        )
+        return cur.rowcount > 0
+
+
+def reap_zombie_running(
+    *,
+    threshold_seconds: int,
+    limit: int = 100,
+    status: TaskStatus = TaskStatus.FAILED,
+    error_message: str = "",
+    error_type: str = "ZOMBIE_RECONCILED",
+    task_id: str | None = None,
+) -> list[str]:
+    """原子收尸僵尸 RUNNING 任务（2026-09-21 高并发审查 B5）。
+
+    Worker 崩溃且 broker 消息丢失（无 acks_late 重投）时，任务永久卡
+    RUNNING。本函数把 ``updated_at`` 停更超过 ``threshold_seconds`` 的
+    RUNNING 行原子置为指定终态（beat reconcile → FAILED 可重试；
+    管理端强制撤销 → CANCELLED）。
+
+    竞态安全：单条条件 UPDATE，WHERE 里重新校验 status 与心跳——若
+    Worker 恰好恢复心跳（updated_at 刷新）或已自行落终态，该行不计入
+    返回，绝不误杀活任务。返回被收尸的 task id 列表。
+    """
+    ensure_schema()
+    where = [
+        "t.status = 'RUNNING'",
+        "t.updated_at < now() - (%s || ' seconds')::interval",
+    ]
+    # 占位符顺序 = SQL 中出现顺序：where 阈值 → [task_id] → CTE LIMIT →
+    # UPDATE 的 status/error_message/error_type（顺序错了会拿状态串去喂 bigint）
+    args: list = [str(int(threshold_seconds))]
+    if task_id is not None:
+        where.append("t.id = %s")
+        args.append(task_id)
+    args.append(max(1, int(limit)))  # CTE LIMIT %s
+    args.extend([status.value, error_message[:2000], error_type[:128]])
+    sql = (
+        "WITH stale AS ("
+        "  SELECT id FROM tasks t WHERE " + " AND ".join(where) +
+        "  LIMIT %s"
+        ") "
+        "UPDATE tasks t SET status = %s, error_message = %s, error_type = %s, "
+        "    finished_at = now(), updated_at = now(), "
+        "    duration_ms = CASE WHEN t.started_at IS NOT NULL "
+        "        THEN (EXTRACT(EPOCH FROM (now() - t.started_at)) * 1000)::int "
+        "        ELSE t.duration_ms END "
+        "FROM stale WHERE t.id = stale.id RETURNING t.id"
+    )
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, args)
+        rows = cur.fetchall()
+    return [str(r[0]) for r in rows]
+
+
 def update_status(task_id: str, status: TaskStatus, *,
                   error_message: str = "",
                   error_type: str | None = None,

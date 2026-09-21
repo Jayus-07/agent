@@ -15,6 +15,7 @@ from backend.config.tasks import (
     TASK_EVENT_CHANNEL,
     TASK_FLAG_TTL,
     TASK_KEY_PREFIX,
+    TASK_ZOMBIE_THRESHOLD_SECONDS,
 )
 from backend.models.task import TaskRecord, TaskStatus
 from backend.shared.logger import logger
@@ -135,6 +136,82 @@ def resume_task(task_id: str, user_input: str = "") -> TaskRecord:
     record = task_service.get_task(task_id)  # type: ignore[assignment]
     enqueue_task(record)  # type: ignore[arg-type]
     return task_service.get_task(task_id)  # type: ignore[return-value]
+
+
+# ═══════════════════════════════════════════════════
+# 僵尸任务收尸（2026-09-21 高并发审查 B5）
+# ═══════════════════════════════════════════════════
+
+def reconcile_zombie_tasks() -> dict:
+    """beat 周期任务：把心跳停更超阈值的僵尸 RUNNING 任务收尸为 FAILED。
+
+    场景：Worker 崩溃 + broker 消息丢失（Redis 逐出/未重投）→ 无 acks_late
+    重投兜底，任务永久卡 RUNNING，admin retry 因非 resumable 被拒。
+    收尸为 FAILED 后即可在管理端重试（从 checkpoint 续跑）。
+
+    原子性：收尸走 task_service.reap_zombie_running 的条件 UPDATE，
+    与活 Worker 并发安全；收尸后清控制标志 + 广播 SSE failed 事件
+    （让还挂在任务详情页的 SSE 流正常收尾）。
+    """
+    from backend.services import task_service
+
+    reaped = task_service.reap_zombie_running(
+        threshold_seconds=TASK_ZOMBIE_THRESHOLD_SECONDS,
+        status=TaskStatus.FAILED,
+        error_message=(
+            f"疑似 Worker 崩溃：心跳停更超过 {TASK_ZOMBIE_THRESHOLD_SECONDS}s，"
+            "由 zombie reconcile 自动收尸（可重试）"),
+        error_type="ZOMBIE_RECONCILED",
+    )
+    for task_id in reaped:
+        clear_flags(task_id)
+        publish_event(task_id, "failed",
+                      message="Worker 心跳超时，任务被自动收尸（可重试）")
+    if reaped:
+        logger.warning("[TaskManager] zombie reconcile 收尸 %d 个任务: %s",
+                       len(reaped), reaped)
+    return {"ok": True, "count": len(reaped),
+            "threshold_seconds": TASK_ZOMBIE_THRESHOLD_SECONDS}
+
+
+def force_cancel_task(task_id: str) -> dict:
+    """管理端强制撤销（B5：RUNNING 纳入强制取消范围）。
+
+    1. 置取消标志 + 队列内 revoke（原有温和路径，活 Worker 节点边界生效）；
+    2. 若任务为 RUNNING 且心跳已停更超阈值（僵尸），直接原子收尸为
+       CANCELLED——不等一个永远不会来的 Worker。
+
+    返回 {"flag": 标志是否下发成功, "forced": 是否强制收尸, "status": 最新状态}。
+    任务不存在抛 LookupError；已终态抛 ValueError。
+    """
+    from backend.services import task_service
+
+    record = task_service.get_task(task_id)
+    if record is None:
+        raise LookupError(f"task not found: {task_id}")
+    if record.status.is_terminal():
+        raise ValueError(f"task already terminal: {record.status.value}")
+
+    flag_ok = request_cancel(task_id)
+
+    forced = False
+    if record.status == TaskStatus.RUNNING:
+        reaped = task_service.reap_zombie_running(
+            threshold_seconds=TASK_ZOMBIE_THRESHOLD_SECONDS,
+            status=TaskStatus.CANCELLED,
+            error_message="管理员强制撤销（RUNNING 心跳超时，直接收尸）",
+            error_type="ADMIN_FORCE_CANCEL",
+            task_id=task_id,
+        )
+        forced = bool(reaped)
+        if forced:
+            clear_flags(task_id)
+            publish_event(task_id, "cancelled",
+                          message="管理员强制撤销（僵尸任务收尸）")
+
+    record = task_service.get_task(task_id)
+    return {"flag": flag_ok, "forced": forced,
+            "status": record.status.value if record else ""}
 
 
 # ═══════════════════════════════════════════════════

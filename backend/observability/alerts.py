@@ -14,6 +14,7 @@ PlanAlert 数据类 + 告警代码表 + 降级日志写入 + webhook 外推（P1
 """
 
 import json
+import logging
 import os
 import threading
 from dataclasses import asdict, dataclass
@@ -151,11 +152,10 @@ def log_degradation(alert: PlanAlert) -> None:
         degradation_alerts_total.labels(code=alert.code, level=alert.level).inc()
     except Exception:
         pass
-    # 2) 本地 JSONL
+    # 2) 本地 JSONL（H5：RotatingFileHandler 50MB×5，防磁盘打爆）
     try:
-        os.makedirs(DEGRADATION_LOG_DIR, exist_ok=True)
-        with open(DEGRADATION_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(alert), ensure_ascii=False) + "\n")
+        _get_degradation_logger().info(
+            json.dumps(asdict(alert), ensure_ascii=False))
     except Exception as e:
         logger.warning(f"[Alerts] 降级日志写入失败: {e}")
     # 3) webhook 外推（P1-8）
@@ -163,3 +163,34 @@ def log_degradation(alert: PlanAlert) -> None:
         _push_webhook(alert)
     except Exception as e:
         logger.warning(f"[Alerts] webhook 外推异常: {e}")
+
+
+# ── degradation.jsonl 专用轮转 logger（H5，2026-09-21）──────────
+# 旧实现裸 open(..., "a") 纯 append，长期运行磁盘打爆。改用独立
+# RotatingFileHandler（50MB × 5 备份，保留 ~300MB 上限），propagate=False
+# 避免回流到 root；进程内单例 + 锁，多线程写安全。
+_degradation_logger: logging.Logger | None = None
+_degradation_logger_lock = threading.Lock()
+
+
+def _get_degradation_logger() -> logging.Logger:
+    global _degradation_logger
+    if _degradation_logger is not None:
+        return _degradation_logger
+    with _degradation_logger_lock:
+        if _degradation_logger is None:
+            from logging.handlers import RotatingFileHandler
+
+            os.makedirs(DEGRADATION_LOG_DIR, exist_ok=True)
+            lg = logging.getLogger("agent.degradation")
+            lg.setLevel(logging.INFO)
+            lg.propagate = False
+            if not lg.handlers:  # 幂等：重复调用不叠加 handler
+                handler = RotatingFileHandler(
+                    DEGRADATION_LOG_FILE, encoding="utf-8",
+                    maxBytes=50 * 1024 * 1024, backupCount=5,
+                )
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                lg.addHandler(handler)
+            _degradation_logger = lg
+    return _degradation_logger

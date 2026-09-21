@@ -21,6 +21,7 @@ from backend.config.tasks import (
     CELERY_RETRY_BACKOFF,
     CELERY_RETRY_BACKOFF_MAX,
     CELERY_TASK_TIMEOUT,
+    TASK_ZOMBIE_RECONCILE_INTERVAL,
 )
 from backend.shared.logger import logger
 
@@ -32,6 +33,7 @@ celery_app = Celery(
              "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
              "backend.tasks.metadata_shadow_tasks",  # 元数据影子隔离队列
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
+             "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
              "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
 )
 
@@ -94,6 +96,12 @@ celery_app.conf.update(
         "cs-event-outbox-compensation": {
             "task": "cs.event_outbox_compensation",
             "schedule": 15.0,
+        },
+        # B5（2026-09-21 高并发审查）：僵尸 RUNNING 任务定期收尸。
+        # 阈值与间隔均可经 env 覆盖（TASK_ZOMBIE_*，见 backend/config/tasks.py）
+        "tasks-zombie-reconcile": {
+            "task": "tasks.zombie_reconcile",
+            "schedule": float(TASK_ZOMBIE_RECONCILE_INTERVAL),
         },
     },
 )

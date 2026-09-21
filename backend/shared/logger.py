@@ -180,8 +180,18 @@ def setup_logger(name: str = "rag_system", level: str = None) -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # file handler 强制 UTF-8 写入磁盘（无论 OS locale）
-    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    # file handler 强制 UTF-8 写入磁盘（无论 OS locale）。
+    # H5（2026-09-21 高并发审查）：裸 FileHandler 无轮转 → 磁盘打爆连锁
+    # 打死 PG/trace。改 RotatingFileHandler：单文件 50MB × 10 备份。
+    # 注意：多进程（uvicorn workers/Celery prefork）各自旋转同名文件在
+    # Windows 本机开发会竞争，容器内各服务进程写各自文件系统，风险可接受；
+    # 严格多进程部署应由 sidecar 收集（后续接入时替换此 handler）。
+    from logging.handlers import RotatingFileHandler
+
+    file_handler = RotatingFileHandler(
+        LOG_FILE, encoding="utf-8",
+        maxBytes=50 * 1024 * 1024, backupCount=10,
+    )
     file_handler.setLevel(logging.WARNING)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)

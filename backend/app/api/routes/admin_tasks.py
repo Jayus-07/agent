@@ -163,8 +163,16 @@ async def admin_revoke_task(task_id: str, body: AdminOpRequest, request: Request
         raise HTTPException(status_code=409,
                             detail=f"任务已终态（{record.status.value}），无需撤销")
     _cooldown(task_id)
-    if not task_manager.request_cancel(task_id):
+    # B5（2026-09-21 高并发审查）：RUNNING 纳入强制取消范围——活 Worker 走
+    # 取消标志（节点边界生效）；心跳已停更超阈值的僵尸 RUNNING 直接收尸为
+    # CANCELLED，不等一个永远不会回来的 Worker。
+    result = task_manager.force_cancel_task(task_id)
+    if not result.get("flag"):
         raise HTTPException(status_code=503, detail="控制通道（Redis）不可用，无法撤销")
-    _audit(actor, "revoke", task_id, f"reason={body.reason or '-'}")
-    return {"task_id": task_id, "status": record.status.value,
-            "message": "撤销请求已下发（节点边界生效 / 队列内直接 revoke）"}
+    message = ("僵尸任务已强制收尸（RUNNING 心跳超时，直接置 CANCELLED）"
+               if result.get("forced")
+               else "撤销请求已下发（节点边界生效 / 队列内直接 revoke）")
+    _audit(actor, "revoke", task_id,
+           f"reason={body.reason or '-'} forced={result.get('forced')}")
+    return {"task_id": task_id, "status": result.get("status", ""),
+            "forced": result.get("forced", False), "message": message}

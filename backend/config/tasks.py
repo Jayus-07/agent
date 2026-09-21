@@ -40,6 +40,18 @@ TASK_FLAG_TTL = int(os.getenv("TASK_FLAG_TTL", "3600"))
 # SSE 事件通道前缀（pub/sub）：TASK_KEY_PREFIX + "events:" + task_id
 TASK_EVENT_CHANNEL = TASK_KEY_PREFIX + "events:"
 
+# ── 僵尸任务收尸（2026-09-21 高并发审查 B5）────────────────
+# 判定口径：RUNNING 且 updated_at 停更超过阈值 = Worker 已死（崩溃/消息丢失）。
+# 默认 = Celery 硬超时 + 60s 余量——活 Worker 在软超时内必有节点级
+# update_progress 心跳，与 task_service.try_acquire_lease 的 stale 判定同口径。
+TASK_ZOMBIE_THRESHOLD_SECONDS = int(
+    os.getenv("TASK_ZOMBIE_THRESHOLD_SECONDS", str(CELERY_HARD_TASK_TIMEOUT + 60))
+)
+# reconcile 扫描间隔（秒），beat 调度
+TASK_ZOMBIE_RECONCILE_INTERVAL = int(
+    os.getenv("TASK_ZOMBIE_RECONCILE_INTERVAL", "300")
+)
+
 # 任务列表默认分页
 TASKS_LIST_DEFAULT_LIMIT = int(os.getenv("TASKS_LIST_DEFAULT_LIMIT", "20"))
 
