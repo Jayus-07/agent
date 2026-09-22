@@ -463,3 +463,55 @@ class TestActiveModelName:
         # 无请求覆盖时返回全局默认（.env/默认值为 MiniMax-M3 或 qwen3.7-plus）
         name = get_active_model_name()
         assert isinstance(name, str) and name
+
+
+# ==================== selector 预算闸（P1 阶段 2，2026-09-22） ====================
+
+class TestSelectorBudget:
+    # span input 与 _fc_decide 都会解析 selector 模型名；patch 掉避免
+    # get_active_model_name() 在测试环境真实构建 LLM 客户端
+    @pytest.fixture(autouse=True)
+    def _fake_selector_model(self, monkeypatch):
+        monkeypatch.setattr(ts, "_configured_tool_selector_model", lambda: "fake-selector")
+
+    def test_selector_budget_exhausted_single_candidate_passthrough(self):
+        """selector 预算耗尽：单候选降级直通，不再消耗工具执行保底预算。"""
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        dl._mono_started -= 11.0  # 已耗时 11s > selector 预算 10.5s
+        st = _state([{"name": "report.generate", "score": 0.7}])
+        # 直接 patch 返回对象：dict 通道会触发 from_dict 时钟重校准（checkpoint 语义）
+        with patch.object(ts, "_deadline_from_state", lambda _s: dl):
+            out = tool_selector_node(st)
+        assert out["_tool_selection"]["source"] == "passthrough"
+        assert out["_tool_selection"]["reason"] == "selector_budget_exhausted"
+
+    def test_selector_budget_exhausted_multi_candidates_clarify(self):
+        """selector 预算耗尽 + 多候选：走澄清阻断（同 LLM 失败语义）。"""
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        dl._mono_started -= 11.0
+        st = _state([{"name": "report.generate", "score": 0.7},
+                     {"name": "rag.search", "score": 0.65}])
+        with patch.object(ts, "_deadline_from_state", lambda _s: dl):
+            out = tool_selector_node(st)
+        assert out["selection_blocked"] is True
+        assert out["_tool_selection"]["reason"] == "selector_budget_exhausted"
+
+    def test_selector_budget_caps_llm_timeout(self):
+        """角色策略超时（如 15s）不得突破 selector 剩余预算。"""
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        dl._mono_started -= 9.0  # selector 剩余 ≈ 1.5s
+        st = _state([{"name": "report.generate", "score": 0.7}])
+        fake = _FakeLLM([AIMessage(content="", tool_calls=[
+            _tc("report__generate", {"report_type": "daily_sales"})])])
+        with patch.object(ts, "_deadline_from_state", lambda _s: dl), \
+             patch.object(ts, "llm", fake), \
+             patch.object(ts, "_selector_timeout", lambda: 15):
+            out = tool_selector_node(st)
+        # 不抛超时异常且成功选择（safe_call_with_timeout 用被压缩后的超时）
+        assert out["_tool_selection"]["source"] == "fc"

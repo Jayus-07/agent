@@ -317,3 +317,91 @@ class TestRetryRules:
         assert r.status is ToolStatus.SUCCESS
         assert r.data == {"rows": 3}
         assert r.retry_count == 0
+
+
+# ==================== 预算分段（P1 阶段 2，2026-09-22） ====================
+
+class TestBudgetSegments:
+    """selector / tool execution / reserve 三段预算的分隔与保底。"""
+
+    def test_segment_defaults_30s(self):
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        assert dl.selector_budget_ms == pytest.approx(10_500)   # 35% × T
+        assert dl.min_tool_execution_ms == pytest.approx(9_000)  # 30% × T
+        assert dl.reserve_budget_ms == pytest.approx(5_000)      # max(5s, 10%×T)
+
+    def test_tool_budget_capped_by_policy_and_reserve(self):
+        """60s 类默认超时的未注册工具：预算判定压缩到「剩余−预留」内放行。"""
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        allow, tool_budget, decision, reason = dl.check_tool_execution(60_000)
+        assert allow is True and decision == "allow"
+        # 25s workflow − 5s reserve − 250ms margin
+        assert tool_budget == pytest.approx(25_000 - 5_000 - 250)
+
+    def test_tool_budget_capped_by_policy_when_smaller(self):
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        allow, tool_budget, _, _ = dl.check_tool_execution(2_000)
+        assert allow is True
+        assert tool_budget == pytest.approx(2_000)
+
+    def test_deny_below_min_tool_execution(self):
+        """剩余 < 30% × T 保底 → 拒绝启动工具执行。"""
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        dl._mono_started -= 22.0  # remaining_wf ≈ 3s < 9s
+        allow, tool_budget, decision, reason = dl.check_tool_execution(5_000)
+        assert allow is False
+        assert tool_budget == 0
+        assert decision == "deny"
+        assert reason.startswith("below_min_tool_execution")
+
+    def test_selector_budget_is_absolute_window(self):
+        """selector 预算从请求起点计：进入越晚剩余越少，耗尽为 0。"""
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        assert dl.selector_remaining_ms() > 10_000
+        dl._mono_started -= 11.0  # 已耗时 > 10.5s selector 预算
+        assert dl.selector_remaining_ms() <= 0
+
+    @pytest.mark.asyncio
+    async def test_slow_tool_terminates_within_budget(self):
+        """慢工具：在自己 budget 内被终止，返回明确 TIMEOUT，不拖穿请求。"""
+        async def slow():
+            await asyncio.sleep(10)
+
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        t0 = time.monotonic()
+        r = await safe_tool_executor.run(
+            tool_key="slow.svc", call=slow,
+            policy=ToolPolicy(timeout_ms=500, retries=0, circuit_breaker=False),
+            deadline=dl)
+        assert r.status is ToolStatus.TIMEOUT
+        assert time.monotonic() - t0 < 3.0  # 被有效超时硬封顶，绝不等满 10s
+        assert dl.remaining_workflow_ms() > 20_000  # 请求预算未被拖穿
+
+    def test_retry_blocked_below_min_floor(self):
+        """剩余 < 工具执行保底 → 重试直接禁止。"""
+        from backend.core.tool_runtime.error_mapper import ErrorClassification
+        from backend.core.tool_runtime.models import ToolCriticality
+        from backend.core.tool_runtime.retry import should_retry
+
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        dl._mono_started -= 22.0  # remaining_wf ≈ 3s < 9s floor
+        cls = ErrorClassification(
+            status=ToolStatus.UNAVAILABLE, error_code="CONNECT_ERROR",
+            error_message="conn refused", retryable=True)
+        pol = ToolPolicy(timeout_ms=1_000, retries=2)
+        d = should_retry(cls, attempt=0, policy=pol, deadline=dl,
+                         effective_timeout_ms=1_000)
+        assert d.should_retry is False
+        assert d.reason == "below_min_tool_execution"
+
+    def test_budget_log_fields_complete(self):
+        """预算日志字段齐全：仅凭日志可还原一次请求的预算消耗路径。"""
+        dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
+        fields = dl.budget_log_fields(
+            selector_elapsed_ms=1_000, tool_budget_ms=2_000,
+            tool_elapsed_ms=300, decision="allow", reason="tool_budget_granted",
+        )
+        for key in ("request_budget_ms", "selector_budget_ms", "selector_elapsed_ms",
+                    "tool_budget_ms", "tool_elapsed_ms", "remaining_budget_ms",
+                    "reserve_budget_ms", "deadline_decision", "deadline_reason"):
+            assert key in fields, f"缺少预算日志字段: {key}"

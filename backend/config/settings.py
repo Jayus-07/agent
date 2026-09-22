@@ -33,6 +33,15 @@ CHAT_SSE_GET_TIMEOUT = float(os.getenv("CHAT_SSE_GET_TIMEOUT", "0.5"))
 BUSINESS_DEADLINE_S = float(os.getenv("BUSINESS_DEADLINE_S", "30"))
 WORKFLOW_DEADLINE_S = float(os.getenv("WORKFLOW_DEADLINE_S", "25"))
 REPORTER_RESERVED_S = float(os.getenv("REPORTER_RESERVED_S", "5"))
+# ── 预算分段（P1 阶段 2，2026-09-22）：selector / tool execution / reserve ──
+# selector（tool_selector FC 等 LLM 选择动作）最多消耗总预算的该比例，
+# 超过即中止/降级，不得侵占工具执行保底预算。
+TOOL_SELECTOR_BUDGET_RATIO = float(os.getenv("TOOL_SELECTOR_BUDGET_RATIO", "0.35"))
+# 工具执行保底：进入 tool execution 前剩余预算必须 ≥ 该比例 × 总预算，
+# 否则按策略降级（防止 selector/规划把工具执行饿死）。
+MIN_TOOL_EXECUTION_RATIO = float(os.getenv("MIN_TOOL_EXECUTION_RATIO", "0.30"))
+# 收尾预留：结果整合 / SSE 收尾 / 最终响应至少保留该比例 × 总预算。
+RESERVE_BUDGET_RATIO = float(os.getenv("RESERVE_BUDGET_RATIO", "0.10"))
 # Tool 治理总开关（false 时 BaseSkill 回退旧执行循环，仅作紧急回滚用）
 TOOL_RUNTIME_ENABLED = os.getenv("TOOL_RUNTIME_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 # 熔断器全局默认（可被 TOOL_POLICY_JSON 按 tool 覆盖）

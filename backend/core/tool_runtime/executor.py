@@ -25,6 +25,7 @@ from backend.core.tool_runtime.bulkhead import bulkhead_registry
 from backend.core.tool_runtime.circuit_breaker import circuit_registry
 from backend.core.tool_runtime.deadline import RequestDeadline
 from backend.core.tool_runtime.error_mapper import map_exception
+from backend.shared.logger import logger
 from backend.core.tool_runtime.metrics import (
     record_circuit_open,
     record_tool_result,
@@ -132,27 +133,42 @@ class SafeToolExecutor:
         last: ToolResult | None = None
 
         for attempt in range(pol.retries + 1):
-            # ── Deadline 检查：剩余预算装不下"一次完整调用"就不启动（§4）──
-            # 例：剩余 4s、策略超时 6s → 直接降级，而不是压缩超时白等一次超时
+            # ── Deadline 检查（P1 阶段 2 统一判定）──────────────────
+            # check_tool_execution 同时保证：
+            #   a) 剩余预算 ≥ min_tool_execution（保底不被 selector/规划吃掉）
+            #   b) 本次调用有效超时 = min(策略超时, 剩余−预留−margin)
+            #     —— 未注册 tool 的类默认 60s 超时不会再触发「预算必不足」
+            #     的假拒绝（D8 实测根因），而是被压缩到预算内真实执行
+            # 判定不过 → 直接降级，不压缩超时白等一次超时
             if deadline is not None:
-                remaining = deadline.remaining_workflow_ms()
-                if remaining < pol.timeout_ms + _BUDGET_MARGIN_MS:
+                allow, tool_budget_ms, decision, reason = deadline.check_tool_execution(
+                    pol.timeout_ms, margin_ms=_BUDGET_MARGIN_MS,
+                )
+                logger.info(
+                    "[Deadline] tool=%s attempt=%d %s",
+                    tool_key, attempt + 1,
+                    deadline.budget_log_fields(
+                        tool_budget_ms=tool_budget_ms,
+                        decision=decision, reason=reason,
+                    ),
+                )
+                if not allow:
                     result = ToolResult(
                         status=ToolStatus.UNAVAILABLE, tool_name=tool_key,
                         latency_ms=int((time.monotonic() - started) * 1000),
                         error_code="DEADLINE_BUDGET_INSUFFICIENT",
-                        error_message=(
-                            f"剩余预算 {remaining:.0f}ms 不足以完成 "
-                            f"{pol.timeout_ms:.0f}ms 的调用，跳过 Tool"),
+                        error_message=f"预算判定拒绝（{reason}），跳过 Tool",
                         fallback_used="deadline_budget",
                     )
                     record_tool_result(result, domain)
                     _emit("deadline_budget_insufficient",
-                          {"remaining_ms": round(remaining),
-                           "required_ms": round(pol.timeout_ms)})
+                          {"remaining_ms": round(deadline.remaining_workflow_ms()),
+                           "required_ms": round(pol.timeout_ms),
+                           "decision": decision, "reason": reason})
                     return result
-
-            effective_timeout_s = pol.timeout_ms / 1000
+                effective_timeout_s = tool_budget_ms / 1000
+            else:
+                effective_timeout_s = pol.timeout_ms / 1000
 
             _emit("attempt_start", {
                 "attempt": attempt + 1, "max_attempts": pol.retries + 1,
@@ -173,6 +189,16 @@ class SafeToolExecutor:
                     data=output, retry_count=attempt,
                 )
                 record_tool_result(result, domain)
+                if deadline is not None:
+                    logger.info(
+                        "[Deadline] tool=%s success %s",
+                        tool_key,
+                        deadline.budget_log_fields(
+                            tool_budget_ms=effective_timeout_s * 1000,
+                            tool_elapsed_ms=latency,
+                            decision="done", reason="tool_success",
+                        ),
+                    )
                 _emit("attempt_success", {"attempt": attempt + 1, "latency_ms": latency})
                 return result
 
@@ -213,6 +239,15 @@ class SafeToolExecutor:
                 await sleep_before_retry(decision.delay_ms)
 
         assert last is not None
+        if deadline is not None:
+            logger.info(
+                "[Deadline] tool=%s exhausted %s",
+                tool_key,
+                deadline.budget_log_fields(
+                    tool_elapsed_ms=last.latency_ms,
+                    decision="done", reason=f"final_status:{last.status.value}",
+                ),
+            )
         # 写操作超时：状态未知（可能已执行成功但响应丢失），禁止重试后必须可辨识
         if is_write and last.status is ToolStatus.TIMEOUT:
             last.fallback_used = "check_operation_status"

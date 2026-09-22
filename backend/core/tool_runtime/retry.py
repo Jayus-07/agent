@@ -54,8 +54,11 @@ def should_retry(
         if classification.retry_after_ms + effective_timeout_ms > remaining:
             return RetryDecision(False, reason="rate_limit_exceeds_budget")
 
-    # 4) Deadline 约束：退避 + 下一次完整调用的预算必须都在剩余范围内
+    # 4) Deadline 约束：保底预算 + 退避 + 下一次完整调用的预算都在剩余范围内
+    #    （P1 阶段 2：每次重试前重算 remaining，低于工具执行保底即禁止）
     if deadline is not None:
+        if deadline.remaining_workflow_ms() < deadline.min_tool_execution_ms:
+            return RetryDecision(False, reason="below_min_tool_execution")
         need_ms = jitter_backoff_ms(policy, attempt) + effective_timeout_ms
         remaining = deadline.remaining_workflow_ms()
         if remaining < need_ms:

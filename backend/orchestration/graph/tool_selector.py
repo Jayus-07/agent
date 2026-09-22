@@ -41,7 +41,7 @@ from backend.orchestration.tool_schema import (
     capability_to_function_name,
 )
 from backend.shared.logger import logger
-from backend.skills.base import validate_params
+from backend.skills.base import _deadline_from_state, validate_params
 
 # 参数平凡（只有 question）/自动注入（business.analyze 的 sql_result 走
 # previous_outputs）的高频能力：路由高置信时直通，避免无意义的 LLM 调用。
@@ -236,13 +236,65 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
     return result
 
 
+def _selector_deadline_log(deadline, decision: str, reason: str) -> None:
+    """selector 预算日志（P1 阶段 2）：selector_elapsed / selector_budget /
+    remaining_budget / deadline_decision / deadline_reason 统一落日志。"""
+    try:
+        if deadline is None:
+            return
+        logger.info(
+            "[ToolSelector][Deadline] %s",
+            deadline.budget_log_fields(
+                selector_elapsed_ms=deadline.elapsed_ms(),
+                decision=decision, reason=reason,
+            ),
+        )
+    except Exception:
+        pass
+
+
+def _selector_degrade(state: dict, reason: str) -> dict:
+    """selector 预算耗尽时的降级：多候选澄清 / 单候选直通（同 LLM 失败路径，
+    绝不继续消耗工具执行保底预算）。"""
+    from backend.observability.metrics import record_tool_selection
+
+    _selector_deadline_log(_deadline_from_state(state), "selector_skip", reason)
+    try:
+        record_tool_selection("passthrough", reason)
+    except Exception:
+        pass
+    return {**state, "_tool_selection": {"source": "passthrough", "reason": reason}}
+
+
 def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
-    """FC 决策主循环：最多 2 次尝试（首试 + 带反馈重试 1 次）。"""
+    """FC 决策主循环：最多 2 次尝试（首试 + 带反馈重试 1 次）。
+
+    P1 阶段 2：selector 只能消费 selector_budget（35% × T，绝对窗口），
+    每次尝试前重算剩余，耗尽即降级 —— 不得侵占工具执行保底预算。
+    """
     query = state.get("question", "")
     decision = state.get("route_decision") or {}
     tools, fn2cap = capabilities_to_tools(valid_caps)
     if not tools:
         return _passthrough(state, "schema_convert_failed")
+
+    deadline = _deadline_from_state(state)
+    selector_budget_ms = deadline.selector_budget_ms if deadline is not None else None
+
+    # selector 预算闸（入口检查）：预算耗尽直接降级，连 LLM 客户端都不建 ——
+    # 不消耗任何下游资源
+    if deadline is not None and deadline.selector_remaining_ms() <= 0:
+        logger.warning(
+            "[ToolSelector][Deadline] selector 预算耗尽，降级 %s",
+            deadline.budget_log_fields(
+                selector_elapsed_ms=deadline.elapsed_ms(),
+                decision="selector_skip",
+                reason="selector_budget_exhausted",
+            ),
+        )
+        if len(valid_caps) > 1:
+            return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
+        return _selector_degrade(state, "selector_budget_exhausted")
 
     # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
     # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录
@@ -251,6 +303,24 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
     llm_retries = _selector_llm_retries()
     feedback = ""
     for attempt in range(2):
+        # selector 预算闸（每次尝试前重算剩余；绝对窗口 = 预算 − 请求已耗时）
+        if deadline is not None:
+            selector_remaining_ms = deadline.selector_remaining_ms()
+            if selector_remaining_ms <= 0:
+                logger.warning(
+                    "[ToolSelector][Deadline] selector 预算耗尽，降级 %s",
+                    deadline.budget_log_fields(
+                        selector_elapsed_ms=deadline.elapsed_ms(),
+                        decision="selector_skip",
+                        reason="selector_budget_exhausted",
+                    ),
+                )
+                if len(valid_caps) > 1:
+                    return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
+                return _selector_degrade(state, "selector_budget_exhausted")
+            # 单次尝试超时同时被角色策略与 selector 剩余预算封顶
+            timeout_s = min(timeout_s, selector_remaining_ms / 1000)
+
         # LLM 调用层重试（角色策略 max_retries）：超时/异常逐次重试，仍失败
         # 才落到底下的业务级反馈重试 / clarify
         raw = None
@@ -269,6 +339,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
         if raw is None:
             # 多候选时不能因 FC 故障盲执行首项；单候选保留兼容路径。
             logger.warning("[ToolSelector] LLM 超时/异常")
+            _selector_deadline_log(deadline, "selector_timeout", "llm_failed")
             if len(valid_caps) > 1:
                 return _clarify_selection(state, "llm_failed", valid_caps)
             return _passthrough(state, "llm_failed")
@@ -315,6 +386,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
         new_decision = {**decision, "candidates": [{"name": cap, "score": 0.95}] + rest}
         elapsed_ms = int((time.time() - t0) * 1000)
         _record("fc", "ok", capability=cap, t0=t0)
+        _selector_deadline_log(deadline, "selector_done", f"fc_selected:{cap}")
         logger.info(
             f"[ToolSelector] FC 选定 {cap} model={_configured_tool_selector_model() or get_active_model_name()} "
             f"params={list(params.keys())} "
