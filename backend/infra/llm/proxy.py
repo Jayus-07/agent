@@ -401,22 +401,29 @@ def _is_transient(err: BaseException) -> bool:
     return any(m in name for m in _TRANSIENT_MARKERS)
 
 
-def _degraded_answer(reason: str = ""):
+def _degraded_answer(reason: str = "", error_type: str = "",
+                     provider: str = "", model: str = ""):
     """构造降级 AIMessage（结构与正常 LLM 返回一致）。
 
     2026-09-15：**必须带可识别标记**。此消息会流向下游结构化消费者
     （JSON 解析 / SQL 解析 / 校验器），若不标记就会被当成真实模型内容
     解析，产出"检测到 Alias"这类与真实原因（LLM 401/超时）毫无关系的
     报错。消费者可用 is_degraded_response() 判定后 fail-fast。
+    路由专项 Step 3：附统一错误分类（llm_error_type）与 provider/model
+    归属，下游 trace 能看到「这是模型侧问题」而非业务失败。
     """
     from langchain_core.messages import AIMessage
+    degraded_meta = {
+        "llm_degraded": True,
+        "llm_degrade_reason": reason[:200],
+        "llm_error_type": error_type,
+        "llm_provider": provider,
+        "llm_model": model,
+    }
     return AIMessage(
         content=_DEGRADED_ANSWER,
-        additional_kwargs={
-            "llm_degraded": True,
-            "llm_degrade_reason": reason[:200],
-        },
-        response_metadata={"llm_degraded": True, "llm_degrade_reason": reason[:200]},
+        additional_kwargs=dict(degraded_meta),
+        response_metadata=dict(degraded_meta),
     )
 
 
@@ -449,8 +456,22 @@ def _notify_degradation(code: str, detail: dict) -> None:
 
 
 def _handle_terminal_failure(err: BaseException, args, kwargs):
-    """重试耗尽/熔断开路后的统一兜底：备用模型 → 降级话术 → 抛原异常。"""
+    """重试耗尽/熔断开路后的统一兜底：备用模型 → 降级话术 → 模型错误。
+
+    路由专项 Step 3：错误在 proxy 层统一归类（quota_exhausted/auth_failed/
+    rate_limited/timeout/provider_error），随告警/降级话术/异常透传——
+    模型错误不得被下游包装成 RAG / SQL / Travel 等业务失败。
+    """
     reason = f"{type(err).__name__}: {str(err)[:120]}"
+    from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
+
+    error_type = classify_model_error(err)
+    active_model = get_active_model_name()
+    provider = _get_provider_for(active_model)
+    error_detail = {
+        "reason": reason, "error_type": error_type,
+        "provider": provider, "model": active_model,
+    }
     # 1) 备用模型
     fb = _get_fallback_llm()
     if fb is not None:
@@ -472,22 +493,38 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
             ))
             result = fb.invoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
-            _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": fallback_model})
+            _notify_degradation("LLM_FALLBACK_USED",
+                                {**error_detail, "fallback_model": fallback_model})
             return result
         except Exception as e:
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
     if LLM_ALLOW_DEGRADED_ANSWER:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
-        _notify_degradation("LLM_DEGRADED_ANSWER", {"reason": reason})
-        return _degraded_answer(reason)
-    # 3) 抛回原异常（默认路径 — fail-fast，见 config/llm.py 注释）
-    raise err
+        _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
+        return _degraded_answer(reason, error_type=error_type,
+                                provider=provider, model=active_model)
+    # 3) 明确模型错误（默认路径 — fail-fast；统一分类包装，原始异常保留为
+    #    __cause__，调用方按模型错误处置而非业务失败）
+    raise ModelProviderError(
+        f"模型调用失败 [{error_type}] provider={provider} model={active_model}: {reason}",
+        error_type=error_type, provider=provider, model=active_model,
+        origin=err,
+    ) from err
 
 
 async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
-    """async 版兜底：备用模型 → 降级话术 → 抛原异常。"""
+    """async 版兜底：备用模型 → 降级话术 → 模型错误（分类同同步版）。"""
     reason = f"{type(err).__name__}: {str(err)[:120]}"
+    from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
+
+    error_type = classify_model_error(err)
+    active_model = get_active_model_name()
+    provider = _get_provider_for(active_model)
+    error_detail = {
+        "reason": reason, "error_type": error_type,
+        "provider": provider, "model": active_model,
+    }
     fb = _get_fallback_llm()
     if fb is not None:
         fallback_model = _configured_fallback_model()
@@ -506,15 +543,21 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
             ))
             result = await fb.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
-            _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": fallback_model})
+            _notify_degradation("LLM_FALLBACK_USED",
+                                {**error_detail, "fallback_model": fallback_model})
             return result
         except Exception as e:
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
     if LLM_ALLOW_DEGRADED_ANSWER:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
-        _notify_degradation("LLM_DEGRADED_ANSWER", {"reason": reason})
-        return _degraded_answer(reason)
-    raise err
+        _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
+        return _degraded_answer(reason, error_type=error_type,
+                                provider=provider, model=active_model)
+    raise ModelProviderError(
+        f"模型调用失败 [{error_type}] provider={provider} model={active_model}: {reason}",
+        error_type=error_type, provider=provider, model=active_model,
+        origin=err,
+    ) from err
 
 
 def _call_with_resilience(attr, *args, **kwargs):
