@@ -123,6 +123,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "038_llm_models_upstream_name.sql": "memory",
     "039_llm_models_ocr_kind.sql": "memory",
     "040_chat_sessions_summary_frontier.sql": "memory",
+    "041_auth_departments.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
