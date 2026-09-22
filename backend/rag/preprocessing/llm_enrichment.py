@@ -33,6 +33,18 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
     if llm_obj is None:
         from backend.infra.llm.proxy import get_llm_for_role
         llm_obj = get_llm_for_role(role)
+        # 观测口径（路由专项 Step 1）：按角色解析时记住登记名（canonical），
+        # 计量用它而不是实例底层的 upstream 真名——否则 usage 按上游别名
+        # 分裂成独立行、且 alias 无价目导致 cost_status=unpriced。
+        try:
+            from backend.config import model_roles as _mr
+
+            _resolved_role_model = str(
+                _mr.resolve_effective(role).get("value") or "")
+        except Exception:
+            _resolved_role_model = ""
+    else:
+        _resolved_role_model = ""
 
     started = time.monotonic()
 
@@ -47,7 +59,8 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
                 record_llm_result(
                     response,
                     duration_ms=(time.monotonic() - started) * 1000,
-                    model_name=str(getattr(llm_obj, "model", "") or ""),
+                    model_name=_resolved_role_model
+                    or str(getattr(llm_obj, "model", "") or ""),
                 )
             except Exception as exc:
                 logger.debug(f"[MetadataLLM] 直接调用计量失败: {exc}")
