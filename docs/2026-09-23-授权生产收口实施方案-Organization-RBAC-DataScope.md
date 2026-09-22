@@ -1,6 +1,7 @@
 # Organization / RBAC / Data Scope Production Closure — 实施方案（含真实链路审计）
 
-> 日期：2026-09-23 ｜ 状态：实施中 ｜ 上游需求：用户下发《授权生产收口》九十八节任务书（已归档于会话，本文件为落地版）
+> 日期：2026-09-23 ｜ 状态：**已实施完成，AUTHORIZATION_PRODUCTION_READY=true**（验收报告见文末§四）
+> 上游需求：用户下发《授权生产收口》九十八节任务书（已归档于会话，本文件为落地版）
 > 目标：企业身份、部门、角色、数据范围与 RAG 权限链生产收口，最终输出 `AUTHORIZATION_PRODUCTION_READY=true/false`。
 > 铁律：**认证只回答"你是谁"，授权统一回答"你能做什么、能看什么"；客户端只能提出请求，不能声明自己的身份和权限。**
 
@@ -118,3 +119,28 @@ def build_authorization_context(principal) -> AuthorizationContext
 ## 三、完成标准（对照任务书九十六节 20 条）
 
 Principal/AuthorizationContext 单一权威 ✅ → RAG 三入口不再自行推导 ✅ → employee/customer 不看 department ✅ → admin 可维护 dept/roles + 校验 + 审计 ✅ → JWT 带 claims + refresh 重读 DB ✅ → APISIX 剥伪造头（E2E 证明）✅ → body 无法提权（kb 只收窄）✅ → 无部门员工最小权限（只 all/general 库）✅ → 部门隔离矩阵真实通过 ✅ → anonymous fail-safe 不回归 ✅ → Admin API 后端 403 ✅ → audit 全记录 ✅ → Chat/RAG/Citation 无回归 ✅ → :9080 真入口测试 ✅ → 权限处理毫秒级 ✅ → 守卫测试零新增失败 ✅ ⇒ `AUTHORIZATION_PRODUCTION_READY=true`
+
+---
+
+## 四、验收报告（2026-09-23 实测）
+
+**提交**（全部双重路径限定，未混入并行会话文件）：
+- `9a3581c` feat(auth): 统一 Principal 与 AuthorizationContext（P1/P2）
+- `55fe699` refactor(rag): 三入口接入统一 Principal（P8）
+- `3bb8d2c` feat(auth): 部门主数据闭环 + 管理员维护 + refresh 重读 DB 守卫（P3/P5/P9）
+- `35edfee` test(gateway): APISIX 真入口验证脚本 + 方案文档（P6）
+- `0eff37a` feat(ui): 管理端部门维护 + 用户端部门只读化（P9/§35）
+- （追加）fix(auth): 041 迁移登记 MIGRATION_TARGETS（db-migrate fail-fast 门）
+
+**测试**：
+- `pytest tests/security/test_principal_authorization.py tests/tools/test_rag_subject_resolution.py tests/api/test_identity.py tests/api/test_rbac_*.py tests/api/test_refresh_claims_latest.py tests/test_registry_consistency.py tests/test_layer_consistency.py tests/test_adr0001_dual_registry_merge.py tests/test_auth_middleware.py tests/api/test_session_guard_and_actor_kind.py tests/api/test_operator_role_rbac.py tests/security/test_session_service.py tests/test_production_auth.py tests/rag/test_retrievers.py -q --no-cov` → **157 passed, 0 failed**（守卫零新增失败）
+- 实机 `verify_identity_headers.py`（APISIX :9080）：**GATEWAY_IDENTITY_SPOOF_TEST=PASS 6/6**
+- 实机部门链路：login(dept=general) → 变更 hr → 重新登录 → **新 JWT dept=hr**；`userInfo.dept` 同步下发
+- 双前端 `npx tsc --noEmit` 通过（存量 modelConfig 重复函数错误非本任务引入）
+
+**部署**：migration 041 应用于 5433 开发库 + 5432 测试库（幂等）；`docker compose up -d --build app worker`（db-migrate rc=0），app/worker/beat/apisix 全部 healthy。
+
+**已知行为口径**：管理员变更 dept/role 即吊销该用户全部会话（平台既有 rbac_changed 语义）——用户重新登录即得最新 claim，不等 30min TTL；旧 access token 在网关 enforce 会话闸下即时 401。
+
+**遗留（不阻塞）**：`frontend/`（用户端）容器未重建——工作区混有并行会话未提交改动（client.ts/route.ts 等），重建留待其落定后；worker 日志的 LLM Free quota exhausted 为存量配额问题（rag_index 任务），与本任务无关。
+
