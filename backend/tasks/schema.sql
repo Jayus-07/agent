@@ -59,6 +59,8 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS finished_at     TIMESTAMPTZ  NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lease_heartbeat_at TIMESTAMPTZ NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lease_expires_at   TIMESTAMPTZ NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recovery_count     INT NOT NULL DEFAULT 0;
+-- Phase2 Step2：重试耗尽标记（FAILED 终态的可观测细分；普通 FAILED 为 FALSE）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_exhausted    BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- stale recovery sweeper 扫描路径：RUNNING + 租约过期
 CREATE INDEX IF NOT EXISTS idx_tasks_lease_expiry ON tasks (lease_expires_at)

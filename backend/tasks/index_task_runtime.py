@@ -98,7 +98,7 @@ def _flags(task_id: str) -> tuple[bool, bool]:
 
 
 def run_with_task_state(db_task_id: str | None, upload_id: str,
-                        run_index) -> dict:
+                        run_index, *, retries: int = 0) -> dict:
     """索引原子节点的 TaskState 包装（execute_index_task_impl 专用）。
 
     run_index: 无参 callable，执行单文档索引（含 settle），返回
@@ -112,13 +112,17 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
       5. 节点边界控制：开始前 / 整节点（含 settle）完成后轮询标志
       6. 终态落库（SUCCESS/FAILED/PAUSED/CANCELLED）+ checkpoint 快照，
          全部带 execution_id fencing——租约被接管的旧 Worker 写不进去
+      7. 失败按 runtime 分类落 error_type（Phase2 Step2），可重试但
+         budget 耗尽时补 retry_exhausted（终态细分由 _index_failure_exit 完成）
     """
     if not db_task_id:
         return run_index()
 
+    from backend.config.tasks import CELERY_MAX_RETRIES
     from backend.models.task import TaskLeaseLost
     from backend.services import task_service
     from backend.services.task_state import TaskManager
+    from backend.tasks.error_taxonomy import classify_task_error
     from backend.tasks.execution_context import clear_execution, set_execution
     from backend.tasks.lease_heartbeat import LeaseHeartbeat
 
@@ -170,10 +174,19 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
             # 心跳已在节点内判定丢失（罕见：run_index 内部经 fence 写触发）
             return _lease_lost_result("lease_lost")
         except Exception as e:
+            # Phase2 Step2：分类落 error_type（不再落异常类名）；
+            # 可重试但 budget 耗尽 → retry_exhausted 终态细分
+            decision = classify_task_error(e)
+            exhausted = decision.retryable and retries >= CELERY_MAX_RETRIES
             try:
-                TaskManager.mark_failed(db_task_id, error_message=str(e)[:2000],
-                                        error_code=type(e).__name__,
-                                        progress="索引失败", execution_id=lease_id)
+                TaskManager.mark_failed(
+                    db_task_id, error_message=str(e)[:2000],
+                    error_code=decision.error_type,
+                    progress=("重试耗尽" if exhausted else
+                              ("等待重试" if decision.retryable
+                               else f"不可重试（{decision.error_type}）")),
+                    execution_id=lease_id,
+                    retry_exhausted=True if exhausted else None)
             except TaskLeaseLost:
                 logger.warning("[IndexTaskRuntime] %s fencing 拒绝 FAILED 写"
                                "（租约已被接管）", db_task_id)

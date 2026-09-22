@@ -130,6 +130,7 @@ class TaskRecord:
     retry_count: int = 0
     max_retries: int = 3
     recovery_count: int = 0         # 自动恢复次数（Phase2 Step1：租约过期重投计数）
+    retry_exhausted: bool = False   # 重试耗尽（Phase2 Step2：FAILED 终态细分）
     duration_ms: int | None = None
     queue: str = "agent"
     worker: str = ""
@@ -171,6 +172,7 @@ class TaskRecord:
             retry_count=int(row.get("retry_count") or 0),
             max_retries=int(row.get("max_retries") or 3),
             recovery_count=int(row.get("recovery_count") or 0),
+            retry_exhausted=bool(row.get("retry_exhausted") or False),
             duration_ms=int(row["duration_ms"]) if row.get("duration_ms") is not None else None,
             queue=row.get("queue") or "agent",
             worker=row.get("worker") or "",
@@ -206,6 +208,7 @@ class TaskRecord:
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
             "recovery_count": self.recovery_count,
+            "retry_exhausted": self.retry_exhausted,
             "duration_ms": self.duration_ms,
             "queue": self.queue,
             "worker": self.worker,

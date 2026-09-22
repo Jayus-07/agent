@@ -254,7 +254,7 @@ def reap_zombie_running(
 
 
 def update_status(task_id: str, status: TaskStatus, *,
-                  error_message: str = "",
+                  error_message: str | None = "",
                   error_type: str | None = None,
                   traceback_text: str | None = None,
                   worker: str | None = None,
@@ -263,7 +263,8 @@ def update_status(task_id: str, status: TaskStatus, *,
                   checkpoint_id: str | None = None,
                   output: dict | None = None,
                   celery_task_id: str | None = None,
-                  execution_id: str | None = None) -> None:
+                  execution_id: str | None = None,
+                  retry_exhausted: bool | None = None) -> None:
     """状态迁移 + 可选字段一并更新（单条 UPDATE，避免多写竞态）。
 
     Phase1 状态机收口：写入前按 ``TaskStatus._legal_transitions`` 白名单
@@ -276,6 +277,11 @@ def update_status(task_id: str, status: TaskStatus, *,
     执行期写必须传）WHERE 追加 ``AND execution_id = %s``——租约已被接管
     时 rowcount=0 直接抛 ``TaskLeaseLost``，不做并发重判（旧 owner 对
     TaskState 无任何写权）。
+
+    Phase2 Step2 错误口径：``error_message=None`` 表示**不改写**既有错误
+    字段（signals retry/failure 兜底不再清掉分类器写入的错误信息）；显式
+    ``""`` 仍清空（终态 SUCCESS 收尾时用）。``error_type`` 传 None 不改写、
+    传值覆写（runtime 分类词表）。``retry_exhausted`` 仅终态 FAILED 携带。
 
     时间戳自动治理：
     - RUNNING → started_at（COALESCE 保留首次启动，重试不覆盖）
@@ -298,8 +304,11 @@ def update_status(task_id: str, status: TaskStatus, *,
         if not current.can_transition_to(status):
             raise IllegalTaskTransition(task_id, current, status)
 
-        sets = ["status = %s", "error_message = %s", "updated_at = now()"]
-        args: list = [status.value, error_message]
+        sets = ["status = %s", "updated_at = now()"]
+        args: list = [status.value]
+        if error_message is not None:
+            sets.append("error_message = %s")
+            args.append(error_message)
         if error_type is not None:
             sets.append("error_type = %s")
             args.append(error_type[:128])
@@ -324,6 +333,9 @@ def update_status(task_id: str, status: TaskStatus, *,
         if celery_task_id is not None:
             sets.append("celery_task_id = %s")
             args.append(celery_task_id)
+        if retry_exhausted is not None:
+            sets.append("retry_exhausted = %s")
+            args.append(bool(retry_exhausted))
         if status == TaskStatus.RUNNING:
             sets.append("started_at = COALESCE(started_at, now())")
         if status.is_terminal():

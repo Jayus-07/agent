@@ -194,7 +194,9 @@ def test_failure_marks_failed_then_retry(pg, flags):
         run_with_task_state(task_id, "upload-6", run)
     row = pg.get_task(task_id)
     assert row.status == TaskStatus.FAILED
-    assert row.error_type == "RuntimeError"
+    # Phase2 Step2：error_type 落分类词表（embedding 属 provider 侧临时错误，
+    # 可重试），不再落异常类名
+    assert row.error_type == "provider_error"
 
     # Celery 重投：FAILED 显式回 PENDING（requeue_failed）→ 续跑成功
     TaskManager.requeue_failed(task_id)

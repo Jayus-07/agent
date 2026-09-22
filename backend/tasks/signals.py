@@ -45,12 +45,18 @@ def _owns_execution(task_id: str, record) -> bool:
             and ctx[1] == record.execution_id)
 
 
-def _update(task_id: str, **kwargs) -> None:
-    """埋点写库兜底：失败只记 debug，不抛出（信号回调不允许影响主流程）。"""
+def _update(task_id: str, status: TaskStatus, **kwargs) -> None:
+    """埋点写库兜底：失败只记 debug，不抛出（信号回调不允许影响主流程）。
+
+    修复记录（Phase2 Step2）：原签名缺 status 形参，钩子传
+    (task_id, TaskStatus.FAILED, ...) 一直 TypeError 被 except 吞掉——
+    agent 路径的 task_failure 兜底从未落库过（Step0 审计「error_type 未落」
+    的根因之一），本签名修正后兜底恢复生效。
+    """
     try:
         from backend.services import task_service
 
-        task_service.update_status(task_id, **kwargs)
+        task_service.update_status(task_id, status, **kwargs)
     except Exception:  # noqa: BLE001 — 埋点失败不影响任务
         logger.debug("[TaskSignals] update failed for %s", task_id, exc_info=True)
 
@@ -107,17 +113,21 @@ def _on_postrun(sender=None, task=None, state=None, **kwargs):
         if not _owns_execution(task_id, record):
             return  # 租约已易主/本消息未持租约：不收尾
         duration_ms = int((time.monotonic() - start) * 1000) if start else None
-        task_service.update_status(task_id, TaskStatus.SUCCESS, duration_ms=duration_ms)
+        # error_message=""：成功收尾清掉等待重试阶段残留的错误信息
+        task_service.update_status(task_id, TaskStatus.SUCCESS,
+                                   error_message="", duration_ms=duration_ms)
     except Exception:  # noqa: BLE001
         logger.debug("[TaskSignals] postrun hook failed", exc_info=True)
 
 
 @task_failure.connect
 def _on_failure(sender=None, task=None, **kwargs):
-    """终审失败：异常类名 + 堆栈 + finished_at（重试耗尽或不可重试异常时到达）。
+    """终审失败兜底：异常类名 + 堆栈 + finished_at（重试耗尽或不可重试时到达）。
 
     Phase2 Step1 fencing：租约不属于本消息时不得写 FAILED（旧 Worker 的
     异常不能盖掉新 owner 的 RUNNING）。
+    Phase2 Step2 口径：impl 的分类器已落 error_type/error_message 时**保留**
+    （本钩子只补 traceback 与空缺字段，不覆盖分类词表为异常类名）。
     """
     try:
         if task is not None and task.name != _EXECUTE_TASK_NAME:
@@ -136,9 +146,13 @@ def _on_failure(sender=None, task=None, **kwargs):
             return
         _update(
             task_id, TaskStatus.FAILED,
-            error_type=type(exc).__name__ if exc else "",
+            error_type=(type(exc).__name__
+                        if exc and record is not None and not record.error_type
+                        else None),
             traceback_text=tb,
-            error_message=f"任务执行失败: {exc}" if exc else "任务执行失败",
+            error_message=(f"任务执行失败: {exc}"
+                           if record is not None and not record.error_message
+                           else None),
         )
     except Exception:  # noqa: BLE001
         logger.debug("[TaskSignals] failure hook failed", exc_info=True)
@@ -146,7 +160,12 @@ def _on_failure(sender=None, task=None, **kwargs):
 
 @task_retry.connect
 def _on_retry(sender=None, task=None, reason=None, **kwargs):
-    """重试排队：记录重试原因（状态语义由 agent_tasks 的 _fail 维持 FAILED）。"""
+    """重试排队兜底（Phase2 Step2）。
+
+    显式 retry 链路里 impl 的 _fail 已写入 FAILED + 分类 error_type +
+    "等待重试"进度，本钩子只在那些字段缺失时兜底，避免覆盖分类口径
+    （此前无条件写会清掉 error_message 并冲掉进度语义）。
+    """
     try:
         if task is None or task.name != _EXECUTE_TASK_NAME:
             return
@@ -158,6 +177,8 @@ def _on_retry(sender=None, task=None, reason=None, **kwargs):
         record = task_service.get_task(task_id)
         if record is not None and not _owns_execution(task_id, record):
             return
+        if record is not None and record.status == TaskStatus.FAILED:
+            return  # impl 已收口：保留分类字段
         _update(task_id, TaskStatus.FAILED,
                 progress=f"等待重试: {reason}" if reason else "等待重试")
     except Exception:  # noqa: BLE001

@@ -1,19 +1,27 @@
 """tasks/agent_tasks.py — Celery 任务定义（Agent 执行入口）。
 
 状态机责任划分：
-- Celery：调度（排队/重试/超时杀），不感知 Agent 内部状态
+- Celery：调度（排队/超时杀），不感知 Agent 内部状态
 - agent_memory.tasks：状态权威（DB 行）
 - LangGraph PostgresSaver：Agent 执行状态（checkpoint 恢复）
 
-重试语义：自愈式续跑——重试时任务已处于 FAILED 状态且 thread_id 在库，
-executor 从最近 checkpoint 继续，已完成的节点不重跑（LLM 调用零浪费）。
+三套机制边界（Phase2）：
+- Retry（本模块）：进程活着 + 分类为可重试错误 → 显式 self.retry（退避+jitter），
+  budget = tasks.max_retries 行级快照；耗尽 → FAILED(retry_exhausted)
+- Recovery（Step1）：Worker/进程死亡 → 心跳停 → lease 过期 → stale sweeper
+  自动重投 → checkpoint 续跑；不经过本模块的 retry 决策
+- Failure：不可重试错误（validation/auth/quota/permission...）→ 立即 FAILED
 
 Phase2 Step1（自动恢复）：
 - 显式状态短路：SUCCESS/CANCELLED/PAUSED/WAITING_USER 收到任何
-  redelivery/redispatch/retry 一律 NO-OP，不再依赖"刚好抢不到租约"隐式保护
-- 执行租约心跳：LeaseHeartbeat 周期续租（覆盖长原子节点内部），丢失即退
-- 执行期 fencing：本模块全部状态写（_fail 终态/超时）带 execution_id，
-  租约被接管的旧 Worker 无法污染新 owner 的状态
+  redelivery/redispatch/retry 一律 NO-OP，状态不被消息唤醒
+- 执行租约心跳 + 执行期 fencing：本模块全部状态写带 execution_id
+
+Phase2 Step2（错误分类）：
+- 移除 autoretry_for=(Exception,) 无差别重试；异常先经
+  tasks.error_taxonomy.classify_task_error 分类，再按 RetryPolicy 决策
+- retry 入队前复查任务状态（CANCELLED/PAUSED/SUCCESS... 禁止 retry）
+- TaskState/log/SSE 错误口径统一为分类词表（不再落异常类名）
 """
 from __future__ import annotations
 
@@ -21,22 +29,19 @@ import socket
 
 from celery.exceptions import SoftTimeLimitExceeded
 
-from backend.config.tasks import (
-    CELERY_MAX_RETRIES,
-    CELERY_RETRY_BACKOFF,
-    CELERY_RETRY_BACKOFF_MAX,
-    TASK_LEASE_TTL_SECONDS,
-)
 from backend.models.task import TaskLeaseLost, TaskStatus
 from backend.shared.logger import logger
-
-#: 这些异常是"业务终态"，重试无意义（用户主动行为 / 永久性失败）
-_NO_RETRY_EXC = (KeyboardInterrupt, SystemExit)
+# 顶层导入：壳层 except 子句在异常匹配期解析该名字，函数内局部导入不够
+from backend.tasks.retry_policy import TaskRetryScheduled
 
 
 def _fail(task_id: str, message: str, status: TaskStatus = TaskStatus.FAILED,
-          progress: str = "", execution_id: str | None = None) -> None:
-    """终态落库 + SSE 广播；execution_id 传入时为 fencing 写。
+          progress: str = "", execution_id: str | None = None, *,
+          error_type: str = "", retryable: bool | None = None,
+          retry_count: int | None = None,
+          retry_exhausted: bool | None = None,
+          retry_delay: int | None = None) -> None:
+    """终态/等待重试落库 + SSE 广播；execution_id 传入时为 fencing 写。
 
     租约已丢失（TaskLeaseLost）时静默退出：状态权威已归属新 owner，
     本 Worker 对任务不再有任何写权（含事件广播）。
@@ -44,8 +49,11 @@ def _fail(task_id: str, message: str, status: TaskStatus = TaskStatus.FAILED,
     from backend.services import task_service
 
     try:
-        task_service.update_status(task_id, status, error_message=message[:2000],
-                                   progress=progress, execution_id=execution_id)
+        task_service.update_status(
+            task_id, status, error_message=message[:2000], progress=progress,
+            execution_id=execution_id,
+            error_type=error_type or None,
+            retry_exhausted=retry_exhausted)
     except TaskLeaseLost:
         logger.warning("[AgentTask] %s fencing 拒绝终态写（租约已被接管），"
                        "放弃落库: %s", task_id, message)
@@ -55,7 +63,70 @@ def _fail(task_id: str, message: str, status: TaskStatus = TaskStatus.FAILED,
     publish_event(task_id,
                   "cancelled" if status == TaskStatus.CANCELLED
                   else ("paused" if status == TaskStatus.PAUSED else "failed"),
-                  message=message)
+                  message=message,
+                  error_type=error_type or None,
+                  retryable=retryable,
+                  retry_count=retry_count,
+                  retry_delay=retry_delay)
+
+
+def _budget_decision(record, retries: int, error_type: str, retryable: bool):
+    """分类 + budget → (是否本轮重试, 延迟秒数)。
+
+    budget 权威 = tasks.max_retries 行级快照；延迟来自集中 RetryPolicy。
+    """
+    from backend.tasks.retry_policy import compute_delay, get_policy
+
+    if not retryable:
+        return False, 0
+    retries_left = int(record.max_retries) - int(retries)
+    if retries_left <= 0:
+        return False, 0
+    return True, compute_delay(get_policy(record.workflow), retries)
+
+
+def _finalize_failure(task_id: str, exc: BaseException, *, record,
+                      retries: int, execution_id: str | None,
+                      timeout_limit_ms: int | None = None) -> bool:
+    """统一失败出口：分类 → budget → 等待重试落库 或 终态 FAILED。
+
+    返回 True = 已调度重试（调用方须抛 TaskRetryScheduled 由壳执行
+    self.retry）；返回 False = 终态已落库（retry_exhausted / 不可重试），
+    调用方应上抛原始异常交 Celery FAILURE + signals 补 traceback。
+    """
+    from backend.tasks.error_taxonomy import classify_task_error
+
+    decision = classify_task_error(exc)
+    retry_now, delay = _budget_decision(record, retries,
+                                        decision.error_type, decision.retryable)
+    if retry_now:
+        _fail(task_id,
+              f"可重试错误（{decision.error_type}）: {exc}",
+              TaskStatus.FAILED,
+              progress=f"等待第 {retries + 1}/{record.max_retries} 次重试"
+                       f"（{delay}s 后，从 checkpoint 续跑）",
+              execution_id=execution_id,
+              error_type=decision.error_type, retryable=True,
+              retry_count=retries, retry_delay=delay)
+        return True
+
+    exhausted = decision.retryable  # 分类可重试但 budget 耗尽
+    _fail(task_id,
+          f"{'重试耗尽' if exhausted else '不可重试错误'}"
+          f"（{decision.error_type}）: {exc}",
+          TaskStatus.FAILED,
+          progress=("重试耗尽" if exhausted else
+                    f"不可重试（{decision.error_type}），已终态"),
+          execution_id=execution_id,
+          error_type=decision.error_type, retryable=False,
+          retry_count=retries, retry_exhausted=exhausted,
+          retry_delay=None)
+    logger.error(
+        "[AgentTask] %s final failure: error_type=%s retryable=%s "
+        "retry_exhausted=%s retry_count=%s/%s timeout_limit_ms=%s",
+        task_id, decision.error_type, decision.retryable, exhausted,
+        retries, record.max_retries, timeout_limit_ms)
+    return False
 
 
 def execute_agent_task_impl(task_id: str, *,
@@ -80,7 +151,7 @@ def execute_agent_task_impl(task_id: str, *,
         logger.info("[AgentTask] %s already succeeded, no-op", task_id)
         return {"status": "SUCCESS_NOOP"}
     if record.status in (TaskStatus.PAUSED, TaskStatus.WAITING_USER):
-        # 暂停/等人任务不被 redelivery 自动唤醒：只有显式 resume API 才恢复
+        # 暂停/等人任务不被 redelivery/retry 自动唤醒：只有显式 resume API 才恢复
         logger.info("[AgentTask] %s in %s, keep paused (no-op)",
                     task_id, record.status.value)
         return {"status": record.status.value, "skipped": True}
@@ -92,8 +163,8 @@ def execute_agent_task_impl(task_id: str, *,
                        task_id)
         return {"status": "SKIPPED_GRAPH_MISMATCH"}
 
-    # 状态机禁止 FAILED→RUNNING 直跳（Phase1）：Celery autoretry 重投 /
-    # 收尸后重试路径，先显式回 PENDING（requeue 标记，可审计）再抢租约。
+    # 状态机禁止 FAILED→RUNNING 直跳（Phase1）：重试/recovery 重投路径，
+    # 先显式回 PENDING（requeue 标记，可审计）再抢租约。
     # 幂等：admin retry 已回 PENDING 时本跳转为自转换，直接通过。
     if record.status == TaskStatus.FAILED:
         task_service.update_status(
@@ -101,10 +172,11 @@ def execute_agent_task_impl(task_id: str, *,
             progress="重试回队（从 checkpoint 续跑）")
         record = task_service.get_task(task_id)
 
-    # 审查 #5 / Phase1 Step3：acks_late 可见性超时重投会派第二个 Worker 进来。
     # 执行前先原子抢租约（返回 execution_id，owner=worker+租约实例）：抢不到
     # 说明已有 Worker 在跑同一 thread_id —— 直接退出，不得进入执行分支
     # （LLM 重复烧钱、step_results 互踩）。
+    from backend.config.tasks import TASK_LEASE_TTL_SECONDS
+
     lease_id = task_service.try_acquire_lease(
         task_id, worker=hostname or None, lease_ttl_seconds=TASK_LEASE_TTL_SECONDS)
     if not lease_id:
@@ -128,16 +200,33 @@ def execute_agent_task_impl(task_id: str, *,
         output = executor.execute(record, execution_id=lease_id, heartbeat=hb)
         return {"status": str(output.get("status", TaskStatus.SUCCESS.value)),
                 "output": output}
-    except SoftTimeLimitExceeded:
-        # 超时：自动 FAILED（验收要求），checkpoint 保留供人工 resume；
-        # fencing 写——若租约已被接管则放弃（新 owner 负责终态）
-        timeout_exc = SoftTimeLimitExceeded("任务执行超时")
-        _fail(task_id, "任务超时（超过 soft time limit）", TaskStatus.FAILED,
-              "执行超时", execution_id=lease_id)
-        from backend.shared.error_protocol import celery_error_result
+    except SoftTimeLimitExceeded as exc:
+        # SoftTimeLimit：runtime 层 timeout（进程仍活着）。分类器映射为
+        # timeout（retryable）→ 与通用异常同一条 Retry/Failure 出口；
+        # checkpoint 保留在最后成功节点，重试从 checkpoint 续跑。
+        from backend.tasks.error_taxonomy import classify_task_error
+        from backend.tasks.retry_policy import TaskRetryScheduled
 
-        return celery_error_result(timeout_exc, source="celery.agent",
-                                   reason="timeout")
+        decision = classify_task_error(exc)
+        retry_now, delay = _budget_decision(record, retries,
+                                            decision.error_type,
+                                            decision.retryable)
+        if retry_now:
+            _fail(task_id, f"可重试错误（{decision.error_type}）: {exc}",
+                  TaskStatus.FAILED,
+                  progress=f"等待第 {retries + 1}/{record.max_retries} 次重试"
+                           f"（{delay}s 后，从 checkpoint 续跑）",
+                  execution_id=lease_id, error_type=decision.error_type,
+                  retryable=True, retry_count=retries, retry_delay=delay)
+            raise TaskRetryScheduled(
+                exc, error_type=decision.error_type, retryable=True,
+                delay=delay, retry_count=retries,
+                max_retries=int(record.max_retries))
+        # budget 耗尽（或分类不可重试）：终态 FAILED，checkpoint 保留
+        _finalize_failure(task_id, exc, record=record, retries=retries,
+                          execution_id=lease_id,
+                          timeout_limit_ms=None)
+        raise
     except TaskLeaseLost:
         # 租约被接管：禁止写任何状态/事件，立即退出（恢复链由新 owner 继续）
         logger.warning("[AgentTask] %s 租约被接管（execution=%s），本 executor "
@@ -155,20 +244,52 @@ def execute_agent_task_impl(task_id: str, *,
             _fail(task_id, "用户暂停", TaskStatus.PAUSED,
                   "已暂停，可 resume 恢复", execution_id=lease_id)
             return {"status": "PAUSED"}
-        retries_left = CELERY_MAX_RETRIES - retries
-        logger.error("[AgentTask] %s failed (剩余重试 %d): %s",
-                     task_id, retries_left, e, exc_info=True)
-        if retries_left <= 0:
-            _fail(task_id, f"重试耗尽: {e}", TaskStatus.FAILED, "执行失败",
-                  execution_id=lease_id)
-        else:
-            # 仍会重试：状态记 FAILED + 原因，executor 重试时按 FAILED 续跑
-            _fail(task_id, f"执行异常（将重试）: {e}", TaskStatus.FAILED,
-                  f"等待第 {retries + 1} 次重试", execution_id=lease_id)
-        raise
+        will_retry = _finalize_failure(task_id, e, record=record,
+                                       retries=retries, execution_id=lease_id)
+        if will_retry:
+            # _finalize_failure 已按同口径落"等待重试"状态并算好延迟；
+            # 这里抛 TaskRetryScheduled 由 Celery 壳复查状态后 self.retry
+            from backend.tasks.error_taxonomy import classify_task_error
+            from backend.tasks.retry_policy import TaskRetryScheduled
+
+            decision = classify_task_error(e)
+            _, delay = _budget_decision(record, retries,
+                                        decision.error_type, decision.retryable)
+            raise TaskRetryScheduled(
+                e, error_type=decision.error_type, retryable=True,
+                delay=delay, retry_count=retries,
+                max_retries=int(record.max_retries))
+        raise  # 终态已落库：上抛原始异常 → Celery FAILURE + signals 补 traceback
     finally:
         hb.stop()
         clear_execution(ctx_token)
+
+
+def _retry_after_state_recheck(task_self, task_id: str,
+                               scheduled) -> dict:
+    """retry 入队前的最终状态复查（规格 §十一）。
+
+    CANCELLED / PAUSED / SUCCESS / WAITING_USER / 非预期态 → 放弃重投
+    （NO-OP）；仅当任务仍处于 impl 写下的 FAILED(等待重试) 才执行
+    self.retry（新消息 countdown 入队，旧消息 ack）。
+    """
+    from backend.services import task_service
+
+    record = task_service.get_task(task_id)
+    if record is None:
+        logger.warning("[AgentTask] %s retry recheck: row missing, drop", task_id)
+        return {"status": "MISSING", "skipped": True}
+    if record.status != TaskStatus.FAILED:
+        logger.warning(
+            "[AgentTask] %s retry recheck: status=%s ≠ FAILED，放弃重投"
+            "（不被 retry 唤醒）", task_id, record.status.value)
+        return {"status": record.status.value, "skipped": True,
+                "retry_cancelled": True}
+    logger.warning(
+        "[AgentTask] %s retry #%d/%d scheduled (%s, delay=%ss, 从 checkpoint 续跑)",
+        task_id, scheduled.retry_count + 1, scheduled.max_retries,
+        scheduled.error_type, scheduled.delay)
+    raise task_self.retry(exc=scheduled.original, countdown=scheduled.delay)
 
 
 # ═══════════════════════════════════════════════════
@@ -177,26 +298,27 @@ def execute_agent_task_impl(task_id: str, *,
 
 def _register_task():
     """惰性注册：celery 未安装时允许模块被非 Worker 进程安全 import（eager 测试前置检查用）。"""
+    from backend.config.tasks import CELERY_MAX_RETRIES
     from backend.tasks.celery_app import celery_app
 
     @celery_app.task(
         bind=True,
         name="tasks.execute_agent",
         acks_late=True,
-        autoretry_for=(Exception,),
-        retry_backoff=CELERY_RETRY_BACKOFF,
-        retry_backoff_max=CELERY_RETRY_BACKOFF_MAX,
-        retry_jitter=True,
+        # Phase2 Step2：无差别 autoretry_for=(Exception,) 已移除——
+        # 重试由 impl 分类决策后经 TaskRetryScheduled → self.retry 显式触发
         max_retries=CELERY_MAX_RETRIES,
-        # 终态异常不重试：用户取消/暂停是明确意图；DB 缺行不可恢复
-        dont_autoretry_for=_NO_RETRY_EXC + (LookupError,),
     )
     def execute_agent_task(self, task_id: str) -> dict:
-        # 超时/租约丢失/终态异常全部在 impl 内收口（fencing 感知），
-        # 本壳只负责把 request 上下文传进去
-        return execute_agent_task_impl(
-            task_id, retries=self.request.retries,
-            hostname=getattr(self.request, "hostname", "") or socket.gethostname())
+        try:
+            # 超时/租约丢失/终态异常全部在 impl 内收口（fencing 感知），
+            # 本壳只负责把 request 上下文传进去
+            return execute_agent_task_impl(
+                task_id, retries=self.request.retries,
+                hostname=getattr(self.request, "hostname", "") or socket.gethostname())
+        except TaskRetryScheduled as scheduled:
+            # retry 入队前最终状态复查（CANCELLED/PAUSED/... 不被 retry 唤醒）
+            return _retry_after_state_recheck(self, task_id, scheduled)
 
     return execute_agent_task
 

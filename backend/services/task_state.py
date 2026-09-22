@@ -91,22 +91,24 @@ class TaskManager:
                      progress: str = "执行完成",
                      duration_ms: int | None = None,
                      execution_id: str | None = None) -> None:
-        """RUNNING → SUCCESS（finished_at/duration 自动补算）。"""
+        """RUNNING → SUCCESS（finished_at/duration 自动补算；清错误字段）。"""
         task_service.update_status(
-            task_id, TaskStatus.SUCCESS, progress=progress, output=output,
-            duration_ms=duration_ms, execution_id=execution_id)
+            task_id, TaskStatus.SUCCESS, error_message="", progress=progress,
+            output=output, duration_ms=duration_ms, execution_id=execution_id)
         _publish_status(task_id, TaskStatus.SUCCESS, progress)
 
     @staticmethod
     def mark_failed(task_id: str, *, error_message: str,
                     error_code: str = "", progress: str = "",
                     traceback_text: str | None = None,
-                    execution_id: str | None = None) -> None:
+                    execution_id: str | None = None,
+                    retry_exhausted: bool | None = None) -> None:
         """RUNNING → FAILED（error_code 落 error_type 列，任务中心归因筛选）。"""
         task_service.update_status(
             task_id, TaskStatus.FAILED, error_message=error_message[:2000],
             error_type=error_code or None, progress=progress,
-            traceback_text=traceback_text, execution_id=execution_id)
+            traceback_text=traceback_text, execution_id=execution_id,
+            retry_exhausted=retry_exhausted)
         _publish_status(task_id, TaskStatus.FAILED, progress or error_message)
 
     @staticmethod

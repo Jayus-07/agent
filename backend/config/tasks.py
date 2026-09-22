@@ -27,6 +27,17 @@ CELERY_MAX_RETRIES = int(os.getenv("CELERY_MAX_RETRIES", "3"))
 CELERY_RETRY_BACKOFF = int(os.getenv("CELERY_RETRY_BACKOFF", "5"))
 CELERY_RETRY_BACKOFF_MAX = int(os.getenv("CELERY_RETRY_BACKOFF_MAX", "120"))
 
+# ── 集中 RetryPolicy（Phase2 Step2）────────────────────────
+# Retry 只负责"进程活着 + 已知临时错误"；Worker 死亡走 Recovery（Step1），
+# 重试耗尽/永久错误走 Failure。参数沿用既有 env 源（CELERY_MAX_RETRIES /
+# CELERY_RETRY_BACKOFF / CELERY_RETRY_BACKOFF_MAX），per-workflow 只允许
+# 覆盖延迟形态，max_retries 统一，避免散落 decorator。
+TASK_RETRY_INITIAL_DELAY = int(os.getenv("TASK_RETRY_INITIAL_DELAY",
+                                         str(CELERY_RETRY_BACKOFF)))
+TASK_RETRY_MAX_DELAY = int(os.getenv("TASK_RETRY_MAX_DELAY",
+                                     str(CELERY_RETRY_BACKOFF_MAX)))
+TASK_RETRY_JITTER = os.getenv("TASK_RETRY_JITTER", "true").lower() != "false"
+
 # 单 Worker 并发槽（prefetch=1 + 该并发 = 公平排队）
 CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "4"))
 
