@@ -169,6 +169,40 @@ def _converge_candidates(candidates: list) -> list[str]:
     return valid
 
 
+# ── selector 结果校验（路由专项 Step 2：candidate constraints → validation）──
+
+def _capability_domain(cap: str) -> str:
+    """capability 的粗域声明（capabilities.yaml 唯一事实源）；未声明返回空。"""
+    try:
+        from backend.orchestration.router.manifest import load_manifest
+
+        for c in load_manifest().capabilities:
+            if c.name == cap:
+                return c.domain
+    except Exception:
+        pass
+    return ""
+
+
+def _validate_selection(cap: str, valid_caps: list[str],
+                        domain: str) -> str | None:
+    """FC 返回 capability 的合法性校验。返回拒绝原因，None = 通过。
+
+    两层（最小保护，不改 Router / 不扩规则集）：
+      1. candidate constraints —— 必须在本次绑定的候选集合内；
+      2. domain conflict —— 与当前请求粗域冲突（如 data 域问题选中
+         knowledge 域能力）即拒绝。state 无域信息（legacy 路径）时跳过。
+    合法但次优（如 sql 与 data.collect 都在域内）不拦 —— 优劣由校准与
+    FC 意图判断负责，这里只拦非法。
+    """
+    if cap not in valid_caps:
+        return "not_in_candidates"
+    declared = _capability_domain(cap)
+    if domain and declared and declared != domain:
+        return f"domain_conflict:{declared}!={domain}"
+    return None
+
+
 def _parse_text_tool_call(content: str, fn2cap: dict[str, str]) -> tuple[str, dict] | None:
     """文本兜底：模型把工具调用写成 JSON 文本而非 tool_calls 结构时解析。
 
@@ -371,6 +405,19 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                 feedback = f"工具 {tc.get('name')} 不在候选列表内，只能从候选工具中选择。"
                 logger.warning(f"[ToolSelector] 越界选择 {tc.get('name')}，重试")
                 continue
+
+        # selector 结果校验（Step 2）：非法选择直接拒绝进现有 fallback，
+        # 不做带反馈重试（重试只会教模型钻规则，不会改变合法性）
+        reject_reason = _validate_selection(cap, valid_caps,
+                                            str(state.get("domain") or ""))
+        if reject_reason:
+            logger.warning(
+                f"[ToolSelector] 非法选择 {cap}（{reject_reason}），直接拒绝")
+            _record("rejected", reject_reason, capability=cap)
+            if len(valid_caps) > 1:
+                return _clarify_selection(state, f"selection_rejected:{reject_reason}",
+                                          valid_caps)
+            return _passthrough(state, f"selection_rejected:{reject_reason}")
 
         schema = tool_registry.get_schema(cap)
         err = validate_params(schema["params"], args) if schema else None
