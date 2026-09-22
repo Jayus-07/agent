@@ -126,17 +126,16 @@ def test_bare_dict_without_result_envelope(client, monkeypatch):
 # ── fail-open 兜底：DB 不可用 → 代码层厂商，而非空列表 ──────────────────
 
 
-def test_db_unavailable_falls_back_to_builtin(client, monkeypatch):
+def test_db_unavailable_returns_empty_with_builtin_source(client, monkeypatch):
+    """DB 不可用 → `source='builtin'` 且**空清单**（2026-09-22 拍板：内置厂商
+    特殊类退役，兜底不再伪装出代码层厂商行，由前端亮「DB 未就绪」横幅）。"""
     monkeypatch.setattr(
         registry_store, "load_registry",
         AsyncMock(return_value=registry_store.RegistrySnapshot(loaded=False)),
     )
     body = client.get("/sys/providers").json()
     assert body["source"] == "builtin"
-    ids = [r["id"] for r in body["items"]]
-    assert ids == list(models_mod.PROVIDERS)
-    assert all(r["isBuiltin"] for r in body["items"])
-    assert all(r["networkScope"] == "public" for r in body["items"])
+    assert body["items"] == []
 
 
 def test_db_loaded_but_empty_is_not_fallback(client, monkeypatch):

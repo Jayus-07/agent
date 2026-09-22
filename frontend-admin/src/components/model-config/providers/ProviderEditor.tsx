@@ -123,15 +123,13 @@ export default function ProviderEditor({
 
   const placeholder = unresolvedPlaceholder(draft.baseUrl)
 
-  // 协议可选性：内置供应商的 driver 后端锁定（改了会 422）；ollama / specialized
-  // 等特殊 driver 也不该被这个下拉悄悄改掉，故一并锁住。
+  // 协议可选性：ollama / specialized 等特殊 driver 不该被这个下拉悄悄改掉，故锁定；
+  // 内置供应商特殊类已退役（2026-09-22），is_builtin 行不再锁定协议。
   const driverOptions: Array<{ value: string; label: string }> = [
     { value: 'openai', label: 'OpenAI 兼容' },
     { value: 'anthropic', label: 'Anthropic 兼容' },
   ]
-  const driverLocked = !isNew && (
-    Boolean(row?.isBuiltin) || (draft.driver !== 'openai' && draft.driver !== 'anthropic')
-  )
+  const driverLocked = !isNew && draft.driver !== 'openai' && draft.driver !== 'anthropic'
 
   // 已登记模型：决定「模型用途」能不能改 —— 后端对已登记模型一律拒绝改用途，
   // 所以这里必须前置拦住，否则用户只会看到一次必然失败的探测。
@@ -180,7 +178,7 @@ export default function ProviderEditor({
               <input data-testid="provider-base-url" value={draft.baseUrl} onChange={(event) => update({ baseUrl: event.target.value })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="https://api.example.com/v1" autoComplete="url" />
             </label>
           </div>
-          <span className="block text-[10px] text-text-muted">{driverLocked ? '内置供应商的协议由代码锁定，不可更改。' : 'OpenAI 兼容端点一般以 /v1 结尾；Anthropic 兼容端点不要带 /v1（客户端自己拼）。'}</span>
+          <span className="block text-[10px] text-text-muted">{driverLocked ? '特殊驱动（ollama 等）的协议不可更改。' : 'OpenAI 兼容端点一般以 /v1 结尾；Anthropic 兼容端点不要带 /v1（客户端自己拼）。'}</span>
 
           {placeholder && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">地址里的 {'{'} {placeholder} {'}'} 是占位符，必须替换成你自己的取值才能测试。</div>}
 

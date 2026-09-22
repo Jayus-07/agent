@@ -249,10 +249,10 @@ export default function ProvidersTab({
     }
   }
 
-  /** 供应商删除阻断原因；null 表示可删（2026-09-21 拍板：名下没有被角色
-   *  绑定的模型即可删，未绑定模型与凭据由后端级联处理）。 */
+  /** 供应商删除阻断原因；null 表示可删（2026-09-22 拍板：名下没有被角色
+   *  绑定的模型即可删，未绑定模型与凭据由后端级联处理；内置供应商特殊类
+   *  已退役，is_builtin 行同样可删）。 */
   function providerDeleteBlockReason(row: ProviderRow): string | null {
-    if (row.isBuiltin) return '内置供应商由代码目录管理，不能删除'
     const bound = (row.models ?? []).filter((model) => (model.usedByRoles?.length ?? 0) > 0)
     if (bound.length > 0) {
       const detail = bound
@@ -553,7 +553,7 @@ export default function ProvidersTab({
                         （协议按模型用途分），且旧入口随机取第一个模型 + 裸根地址，结果误导。
                         测试入口收敛到每个模型行；地址+Key 的验证在新建/编辑抽屉的「测试连接」。 */}
                     {canAdmin && source === 'db' && <><button onClick={() => beginAddModel(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Plus size={12} />新增模型</button><button onClick={() => begin(row)} className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"><Edit3 size={12} />编辑</button></>}
-                    {canAdmin && source === 'db' && !row.isBuiltin && (() => {
+                    {canAdmin && source === 'db' && (() => {
                       const deleteBlock = providerDeleteBlockReason(row)
                       return (
                         <button

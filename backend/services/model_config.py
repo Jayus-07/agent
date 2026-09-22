@@ -1088,11 +1088,9 @@ class ModelConfigService:
             if row is None:
                 raise ModelConfigNotFound(f"未找到供应商：{provider_id}")
             old_row = dict(row)
-            expected_driver = models_mod.get_provider_driver(provider_id)
-            if provider_id in models_mod.PROVIDERS and expected_driver != driver:
-                raise ValueError(
-                    f"内置供应商 {provider_id} 的 driver 固定为 {expected_driver}"
-                )
+            # 2026-09-22 拍板：内置供应商特殊类退役 —— 供应商一律用户自管，
+            # driver 不再因「代码目录登记过」而被锁定（ollama / specialized
+            # 等特殊驱动的锁定仍在编辑抽屉的前置校验里）。
 
             credential_row = (
                 await session.execute(
@@ -1892,12 +1890,14 @@ class ModelConfigService:
         provider_id: str,
         operator: str,
     ) -> dict[str, Any]:
-        """删除自定义供应商（2026-09-22 拍板：软删 + 关联一并停用/关闭）。
+        """删除供应商（2026-09-22 拍板：软删 + 关联一并停用/关闭）。
 
-        守卫（仅剩两条硬红线，全部在处置前挡住）：
-        1. 内置供应商（is_builtin）由代码目录管理，不可从管理端删除；
-        2. 名下任一模型被 `llm_model_role_bindings` 占用 → 拒绝，提示先改绑
+        守卫（仅剩一条硬红线，在处置前挡住）：
+        1. 名下任一模型被 `llm_model_role_bindings` 占用 → 拒绝，提示先改绑
            （角色缺模型会让能力直接不可用）。
+
+        内置供应商（is_builtin）特殊类已退役（2026-09-22 拍板）：供应商一律
+        用户自管，内置行同样可软删。
 
         通过守卫后不再要求先清理价格/专项引用，全部随软删一并处置：
 
@@ -1930,10 +1930,6 @@ class ModelConfigService:
             ).mappings().first()
             if row is None:
                 raise ModelConfigNotFound(f"供应商 {provider_id} 不存在")
-            if bool(row.get("is_builtin")):
-                raise ModelConfigConflict(
-                    f"供应商 {provider_id} 是内置供应商，由代码目录管理，不能删除"
-                )
 
             model_rows = (
                 await session.execute(

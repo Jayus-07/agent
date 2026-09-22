@@ -384,8 +384,8 @@ async def test_delete_provider_rejects_when_role_binding_uses_model(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_delete_provider_rejects_builtin_only(monkeypatch):
-    """内置供应商一律拒删；专项通道占用不再拦截（随软删一并停用）。"""
+async def test_delete_provider_allows_builtin_row(monkeypatch):
+    """内置供应商特殊类退役（2026-09-22 拍板）：is_builtin 行同样可软删。"""
     monkeypatch.setattr(
         model_config.registry_store, "refresh_registry", AsyncMock(return_value=True)
     )
@@ -394,11 +394,11 @@ async def test_delete_provider_rejects_builtin_only(monkeypatch):
     monkeypatch.setattr(
         model_config, "get_session", lambda: _session_stream(builtin_session)
     )
-    with pytest.raises(model_config.ModelConfigConflict, match="内置"):
-        await model_config.ModelConfigService().delete_provider(
-            "qwen", "user:test-admin"
-        )
-    assert not any(
+    result = await model_config.ModelConfigService().delete_provider(
+        "qwen", "user:test-admin"
+    )
+    assert result.get("softDeleted") is True
+    assert any(
         "UPDATE llm_providers SET enabled = false" in sql
         for sql in builtin_session.statements
     )

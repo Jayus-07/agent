@@ -285,43 +285,9 @@ def _credential_view(configured: bool, meta: dict | None) -> dict:
     }
 
 
-def _builtin_rows() -> list[dict]:
-    """DB 不可用时的兜底清单（代码层内置厂商 + env 凭据状态）。
-
-    §B.15 起代码层模型种子已退役：兜底分支列出的厂商行 `modelCount` 恒为 0、
-    无模型平铺（`modelName` 回落 `default_model` 仅供展示）。模型数据只在 DB。
-    """
-    env = credentials_mod.snapshot()
-    counts = _count_models_by_provider(models_mod.get_available_models())
-    grouped_models = _models_by_provider(models_mod.get_available_models())
-    _decorate_models(grouped_models, set(), {})
-    rows: list[dict] = []
-    for pid, meta in models_mod.PROVIDERS.items():
-        cred = env.get(pid) or {}
-        rows.append({
-            "id": pid,
-            "displayName": pid,
-            "driver": str(meta.get("driver") or ""),
-            "baseUrl": cred.get("baseUrl") or "",
-            "networkScope": "public",
-            "billing": str(meta.get("billing") or "metered"),
-            "isBuiltin": True,
-            "enabled": True,
-            "modelCount": counts.get(pid, 0),
-            "modelName": (
-                grouped_models.get(pid, [{}])[0].get("name")
-                or meta.get("default_model")
-            ),
-            "modelKind": (
-                grouped_models.get(pid, [{}])[0].get("modelKind", "chat")
-                if grouped_models.get(pid)
-                else "chat"
-            ),
-            "models": grouped_models.get(pid, []),
-            "credential": _credential_view(bool(cred.get("hasApiKey")), None),
-            "lastProbe": None,
-        })
-    return rows
+# `_builtin_rows`（DB 不可用时的代码层厂商兜底）已于 2026-09-22 退役：
+# 内置供应商特殊类不再存在，DB 未就绪时清单返回空列表 + `source='builtin'`，
+# 由前端亮「DB 未就绪」横幅，不再伪装出厂商行。
 
 
 def _db_rows(snap: registry_store.RegistrySnapshot) -> list[dict]:
@@ -398,12 +364,15 @@ async def list_providers(ident=Depends(require_user_actor)) -> dict:
 
     `source` 表明清单来自 `db` 还是代码层 `builtin` 兜底 —— 前端据此在库未就绪时
     提示「配置暂不可用」，而不是让管理员以为自己把供应商删光了。
+    2026-09-22 拍板：内置供应商特殊类退役，`_builtin_rows` 兜底清空 ——
+    DB 未就绪时列表就是空的（`source='builtin'` 仍告知前端亮「DB 未就绪」横幅），
+    不再把代码层厂商伪装成清单数据。
 
     `lastProbe` 来自 provider 表中的最近一次探测结果；尚未探测的 provider
     仍返回 `null`，前端按「未验证」灰显（tab⑤ 漂移会点名）。
     """
     snap = await registry_store.load_registry()
-    rows, source = (_db_rows(snap), "db") if snap.loaded else (_builtin_rows(), "builtin")
+    rows, source = (_db_rows(snap), "db") if snap.loaded else ([], "builtin")
     return {"items": rows, "source": source, "actor": ident.actor}
 
 
