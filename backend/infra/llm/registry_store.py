@@ -72,7 +72,7 @@ _SELECT_PROVIDERS = """
 
 _SELECT_MODELS = """
     SELECT name, provider_id, display_name, description, model_kind, capabilities,
-           context_length, pricing
+           context_length, pricing, upstream_model_name
     FROM llm_models
     WHERE enabled = true
     ORDER BY name
@@ -186,6 +186,9 @@ def _model_entry(row) -> dict:
         "output_price_per_1m": float(pricing.get("output_price_per_1m", 0.0) or 0.0),
         "cached_input_price_per_1m": pricing.get("cached_input_price_per_1m"),
         "price_currency": pricing.get("price_currency") or "USD",
+        # 登记名/上游模型名拆分（2026-09-22）：调用与探测发上游 API 时用
+        # upstream_model_name（''=与登记名相同）；账目与绑定仍按登记名。
+        "upstream_name": str(row.get("upstream_model_name") or "").strip(),
         "context_length": row["context_length"],
         "capabilities": row["capabilities"] or {},
         "source": "db",
@@ -261,6 +264,8 @@ def _derive_specialized_bindings(snapshot: RegistrySnapshot) -> dict[str, dict]:
             "provider_id": provider_id,
             "adapter": adapter or _specialized_adapters.infer_adapter(role, base_url),
             "model_name": selected_name,
+            # 登记名/上游名拆分（2026-09-22）：专项调用发上游用 upstream。
+            "upstream_name": str(entry.get("upstream_name") or "").strip(),
             "base_url": base_url,
             "options": previous.get("options") if same_model else {},
             "enabled": True,

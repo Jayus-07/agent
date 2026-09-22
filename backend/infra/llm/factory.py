@@ -124,31 +124,40 @@ class LLMFactory:
             return self._instance_cache[model_name]
 
         provider = self._get_provider(model_name)
+        # 登记名/上游名拆分（2026-09-22）：缓存与凭据按登记名，
+        # 发给厂商 API 的 model 参数用上游名。
+        try:
+            from backend.infra.llm.models import get_model_entry as _get_model_entry
+
+            entry = _get_model_entry(model_name)
+        except Exception:
+            entry = None
+        upstream = str((entry or {}).get("upstream_name") or "").strip() or model_name
         # 凭据在**这里**解析（调用时），而不是在 provider 模块导入时 —— 见文件头注释
         credentials = resolve_credentials(provider, model_name=model_name)
 
         # providers/* 延迟导入（见文件顶部注释）
         if provider == "ollama":
             from backend.infra.llm.providers.ollama import build_ollama
-            return build_ollama(model_name, credentials)
+            return build_ollama(upstream, credentials)
         elif provider == "deepseek":
             from backend.infra.llm.providers.deepseek import build_deepseek
-            return build_deepseek(model_name, credentials)
+            return build_deepseek(upstream, credentials)
         elif provider == "minimax":
             from backend.infra.llm.providers.minimax import build_minimax
-            return build_minimax(model_name, credentials)
+            return build_minimax(upstream, credentials)
         elif provider == "qwen":
             from backend.infra.llm.providers.qwen import build_qwen
-            return build_qwen(model_name, credentials)
+            return build_qwen(upstream, credentials)
         elif provider == "qwen_tp":
             from backend.infra.llm.providers.qwen_tp import build_qwen_tp
-            return build_qwen_tp(model_name, credentials)
+            return build_qwen_tp(upstream, credentials)
         elif provider == "vllm":
             from backend.infra.llm.providers.vllm import build_vllm
-            return build_vllm(model_name, credentials)
+            return build_vllm(upstream, credentials)
         elif provider == "siliconflow":
             from backend.infra.llm.providers.siliconflow import build_siliconflow
-            return build_siliconflow(model_name, credentials)
+            return build_siliconflow(upstream, credentials)
         else:
             # ── DB 自建供应商：按登记协议构建，不再直接 raise ──────────
             # 与 proxy._build_llm_for 同型收口（2026-09-22）：custom-* 之前
@@ -160,7 +169,7 @@ class LLMFactory:
             if driver in ("openai", "anthropic", "ollama"):
                 from backend.infra.llm.providers.driver_compat import build_by_driver
 
-                return build_by_driver(driver, model_name, credentials)
+                return build_by_driver(driver, upstream, credentials)
             raise ValueError(f"未知 provider: {provider}")
 
     def _get_provider(self, model_name: str) -> str:

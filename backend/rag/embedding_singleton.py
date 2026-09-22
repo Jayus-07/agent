@@ -113,7 +113,8 @@ def _resolve_cloud_embedding_config() -> dict[str, Any]:
     )
     dimensions = binding.options.get("dimensions")
     return {
-        "model": binding.model_name,
+        # 登记名/上游名拆分（2026-09-22）：发给厂商 API 的 model 用 upstream。
+        "model": binding.upstream_name or binding.model_name,
         "api_key": credentials.api_key or "",
         "base_url": binding.base_url,
         "dimensions": int(dimensions) if dimensions is not None else None,

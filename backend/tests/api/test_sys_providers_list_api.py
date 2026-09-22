@@ -246,6 +246,7 @@ def test_provider_rows_include_specialized_provider_and_models(client, monkeypat
             "outputPrice": None,
             "cachedInputPrice": None,
             "priceCurrency": "USD",
+            "upstreamName": "",
         },
         {
             "name": "qwen3.7-text-rerank",
@@ -257,6 +258,7 @@ def test_provider_rows_include_specialized_provider_and_models(client, monkeypat
             "outputPrice": None,
             "cachedInputPrice": None,
             "priceCurrency": "USD",
+            "upstreamName": "",
         },
     ]
 

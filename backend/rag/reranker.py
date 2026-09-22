@@ -97,7 +97,8 @@ def _resolve_rerank_runtime_config() -> dict[str, str]:
     if adapter_format is None:
         raise RuntimeError(f"未知重排适配器：{binding.adapter}")
     return {
-        "model": binding.model_name,
+        # 登记名/上游名拆分（2026-09-22）：发给厂商 API 的 model 用 upstream。
+        "model": binding.upstream_name or binding.model_name,
         "api_key": credentials.api_key or "",
         "api_format": adapter_format,
         "base_url": binding.base_url,

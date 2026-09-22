@@ -851,6 +851,7 @@ async def probe_provider(
     extra_headers: dict[str, str] | None = None,
     include_stream_usage: bool = False,
     model_kind: str = "chat",
+    upstream_model_name: str = "",
 ) -> ProbeResult:
     """执行快速或完整探测。
 
@@ -859,7 +860,11 @@ async def probe_provider(
     —— 它从不参与判定，只负责「填模型名时给个可选清单」，详见模块头。
 
     L3 只在完整模式执行，且不参与「模型可调用」的判定。
+
+    ``upstream_model_name``：登记名/上游名拆分（2026-09-22）——发给厂商 API 的
+    ``model`` 参数用上游名；空串 = 与 model_name（登记名）相同。
     """
+    probe_model = (upstream_model_name or model_name).strip() or model_name
     kind = (model_kind or "chat").strip().lower()
     if kind not in _MODEL_KINDS:
         step = ProbeStep(
@@ -895,7 +900,7 @@ async def probe_provider(
                            summary=f"未通过（卡在 L0）：{l0.summary}")
 
     l2 = await probe_l2(
-        driver, model_name=model_name, api_key=api_key, base_url=base_url,
+        driver, model_name=probe_model, api_key=api_key, base_url=base_url,
         extra_headers=extra_headers, fast=not include_stream_usage,
     )
     steps.append(l2)
@@ -921,7 +926,7 @@ async def probe_provider(
             summary="模型连通性通过（快速测试）",
         )
 
-    l3 = await probe_l3(driver, model_name=model_name, api_key=api_key,
+    l3 = await probe_l3(driver, model_name=probe_model, api_key=api_key,
                         base_url=base_url, extra_headers=extra_headers)
     steps.append(l3)
 

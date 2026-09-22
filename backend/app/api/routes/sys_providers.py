@@ -227,6 +227,7 @@ def _models_by_provider(entries) -> dict[str, list[dict]]:
             "outputPrice": item.get("output_price_per_1m"),
             "cachedInputPrice": item.get("cached_input_price_per_1m"),
             "priceCurrency": item.get("price_currency") or "USD",
+            "upstreamName": item.get("upstream_name") or "",
         })
     for values in grouped.values():
         values.sort(key=lambda value: (value["modelKind"], value["name"]))
@@ -428,6 +429,11 @@ async def verify_saved_provider(
     else:
         model_entry = next(iter(provider_models), None)
     resolved_model_name = str(model_entry.get("name") or "") if model_entry else ""
+    # 登记名/上游名拆分（2026-09-22）：探测发上游 API 的 model 用上游名
+    resolved_upstream_name = (
+        str(model_entry.get("upstream_name") or "").strip()
+        if model_entry else ""
+    ) or resolved_model_name
     model_kind = models_mod.normalize_model_kind(
         model_entry.get("model_kind") if model_entry else None
     )
@@ -446,6 +452,7 @@ async def verify_saved_provider(
         extra_headers=extra_headers or None,
         include_stream_usage=(mode == "full"),
         model_kind=model_kind,
+        upstream_model_name=resolved_upstream_name,
     )
     await get_model_config_service().record_probe(provider_id, result.to_dict())
     logger.info(

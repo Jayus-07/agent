@@ -22,6 +22,7 @@ class SpecializedBinding:
     adapter: str
     model_name: str
     base_url: str
+    upstream_name: str = ""  # 发给厂商 API 的真实模型名；'' = 与 model_name 相同
     options: Mapping[str, Any] = field(default_factory=dict)
     enabled: bool = True
     last_probe_ok: bool | None = None
@@ -50,6 +51,7 @@ def _binding(role: str, value: Mapping[str, Any]) -> SpecializedBinding | None:
         adapter=adapter,
         model_name=model_name,
         base_url=base_url,
+        upstream_name=str(value.get("upstream_name") or "").strip(),
         options=options,
         enabled=bool(value.get("enabled", True)),
         last_probe_ok=value.get("last_probe_ok"),

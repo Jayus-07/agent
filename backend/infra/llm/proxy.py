@@ -37,6 +37,7 @@ from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import (
     compute_cost_usd,
     get_available_models,
+    get_model_entry,
     get_provider_driver,
     is_registered_model,
     resolve_provider,
@@ -240,6 +241,22 @@ def _get_provider_for(model_name: str) -> str:
     return resolve_provider(model_name)
 
 
+def _upstream_model_name(model_name: str) -> str:
+    """登记名 → 上游真实模型名（2026-09-22 登记名/上游名拆分）。
+
+    登记名（llm_models.name）全局唯一，是价格/角色/账目的锚点；发给厂商
+    API 的 ``model`` 参数必须用 upstream_model_name（未设置时与登记名相同）。
+    查不到登记条目（单测 / registry 未加载）时原样返回登记名。
+    """
+    try:
+        entry = get_model_entry(model_name)
+    except Exception:
+        return model_name
+    if not entry:
+        return model_name
+    return str(entry.get("upstream_name") or "").strip() or model_name
+
+
 def _resolve_credentials_or_none(provider: str, model_name: str):
     """解析某 provider 当前生效的数据库凭据。
 
@@ -275,31 +292,34 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     """
     provider = _get_provider_for(model_name)
     credentials = _resolve_credentials_or_none(provider, model_name)
+    # 登记名/上游名拆分（2026-09-22）：凭据与账目归属按登记名解析，
+    # 发给厂商 API 的 model 参数用上游名。
+    upstream = _upstream_model_name(model_name)
     if provider == "deepseek":
         from backend.infra.llm.providers.deepseek import build_deepseek
-        return build_deepseek(model_name, credentials)
+        return build_deepseek(upstream, credentials)
     if provider == "minimax":
         from backend.infra.llm.providers.minimax import build_minimax
-        return build_minimax(model_name, credentials)
+        return build_minimax(upstream, credentials)
     if provider == "qwen":
         from backend.infra.llm.providers.qwen import build_qwen
-        return build_qwen(model_name, credentials)
+        return build_qwen(upstream, credentials)
     if provider == "qwen_tp":
         # Token Plan 模型包端点（@tp 后缀）。此前 proxy 缺此分支，
         # @tp 模型落到 ollama 兜底被 cloud 模式拒绝（models.py/factory.py
         # 均已注册 qwen_tp，proxy 构建口径 2026-09-17 对齐）
         from backend.infra.llm.providers.qwen_tp import build_qwen_tp
-        return build_qwen_tp(model_name, credentials)
+        return build_qwen_tp(upstream, credentials)
     if provider == "vllm":
         # 自建 vLLM（OpenAI 兼容协议）。此前 proxy **缺此分支**，而 models.py
         # 注册了 Qwen/Qwen3-32B-AWQ(provider=vllm) 供选择 → 选它会落到末尾的
         # ollama 兜底、报一个与真因无关的 Ollama 连接错误。
         # 与 2026-09-17 修过的 qwen_tp 属同型缺陷（手写分发表与 factory 双维护）。
         from backend.infra.llm.providers.vllm import build_vllm
-        return build_vllm(model_name, credentials)
+        return build_vllm(upstream, credentials)
     if provider == "siliconflow":
         from backend.infra.llm.providers.siliconflow import build_siliconflow
-        return build_siliconflow(model_name, credentials)
+        return build_siliconflow(upstream, credentials)
     # ── DB 自建供应商：按登记协议分发，不再无脑落 ollama 兜底 ──────────
     # custom-* 此前落到 ollama：拿 OpenAI 兼容地址去打 /api/chat → 上游 404
     # → 健康页归因「模型不存在」（2026-09-22 实测）。这是 qwen_tp / vllm
@@ -309,7 +329,7 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     if driver in ("openai", "anthropic"):
         from backend.infra.llm.providers.driver_compat import build_by_driver
 
-        return build_by_driver(driver, model_name, credentials)
+        return build_by_driver(driver, upstream, credentials)
     if driver and driver != "ollama":
         # driver 已登记但不受支持（如 specialized 专项供应商的 chat 误绑）：
         # 保留历史兜底语义（聊天热路径上宁可给明确失败也不新增崩溃点），
@@ -325,7 +345,7 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     # 多出 base_url（credentials > OLLAMA_BASE_URL > 默认，当前三者同为
     # localhost:11434）与 keep_alive（OLLAMA_KEEP_ALIVE=30m，config 既有意图）。
     from backend.infra.llm.providers.ollama import build_ollama
-    return build_ollama(model_name, credentials)  # type: ignore[return-value]
+    return build_ollama(upstream, credentials)  # type: ignore[return-value]
 
 
 # P1-7: 备用模型实例缓存（独立于主模型，失败不相互污染）

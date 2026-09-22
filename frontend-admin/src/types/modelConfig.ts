@@ -297,6 +297,8 @@ export interface ProviderRow {
     /** 缓存命中单价（可选）。null/缺省 = 未配置（运行时判 estimated） */
     cachedInputPrice?: number | null
     priceCurrency?: 'CNY' | 'USD'
+    /** 上游模型名：发给厂商 API 的真实名字；空 = 与登记名相同 */
+    upstreamName?: string
   }>
   networkScope: NetworkScope
   billing: BillingMode

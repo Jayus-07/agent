@@ -1284,6 +1284,7 @@ class ModelConfigService:
         allow_legacy_specialized_migration: bool = False,
         migration_base_url: str = "",
         allow_soft_deleted_takeover: bool = False,
+        upstream_model_name: str = "",
     ) -> str:
         """登记模型；允许历史专项实例与软删行被显式迁移/复活到新供应商。"""
         existing = (
@@ -1365,6 +1366,7 @@ class ModelConfigService:
                         text(
                             "UPDATE llm_models SET provider_id = :provider_id, "
                             "display_name = :display_name, model_kind = :model_kind, "
+                            "upstream_model_name = :upstream_name, "
                             "enabled = true, updated_at = now() "
                             "WHERE name = :model_name"
                         ),
@@ -1373,6 +1375,7 @@ class ModelConfigService:
                             "model_name": model_name,
                             "display_name": model_name,
                             "model_kind": effective_kind,
+                            "upstream_name": upstream_model_name,
                         },
                     )
                     if effective_kind in _SPECIALIZED_ROLES:
@@ -1402,13 +1405,15 @@ class ModelConfigService:
                     await session.execute(
                         text(
                             "UPDATE llm_models SET display_name = :display_name, "
-                            "model_kind = :model_kind, enabled = true, updated_at = now() "
+                            "model_kind = :model_kind, upstream_model_name = :upstream_name, "
+                            "enabled = true, updated_at = now() "
                             "WHERE name = :model_name"
                         ),
                         {
                             "model_name": model_name,
                             "display_name": model_name,
                             "model_kind": effective_kind,
+                            "upstream_name": upstream_model_name,
                         },
                     )
             elif models_mod.model_kind_of(code_entry) != effective_kind:
@@ -1421,14 +1426,15 @@ class ModelConfigService:
         await session.execute(
             text(
                 "INSERT INTO llm_models "
-                "(name, provider_id, display_name, model_kind, source, created_by, updated_at) "
-                "VALUES (:name, :provider_id, :display_name, :model_kind, 'user', :operator, now())"
+                "(name, provider_id, display_name, model_kind, upstream_model_name, source, created_by, updated_at) "
+                "VALUES (:name, :provider_id, :display_name, :model_kind, :upstream_name, 'user', :operator, now())"
             ),
             {
                 "name": model_name,
                 "provider_id": provider_id,
                 "display_name": model_name,
                 "model_kind": effective_kind,
+                "upstream_name": upstream_model_name,
                 "operator": operator,
             },
         )
@@ -1546,6 +1552,11 @@ class ModelConfigService:
             raise ValueError("供应商未配置 API Key，无法测试新模型")
         raw_headers = provider.get("extra_headers") or {}
         extra_headers = dict(raw_headers) if isinstance(raw_headers, Mapping) else {}
+        # 登记名/上游名拆分（2026-09-22）：上游名缺省 = 登记名
+        upstream_model_name = str(
+            payload.get("upstreamModelName") or payload.get("upstream_model_name")
+            or model_name
+        ).strip() or model_name
         probe = await provider_probe.probe_provider(
             driver=driver,
             base_url=base_url,
@@ -1554,6 +1565,7 @@ class ModelConfigService:
             model_kind=model_kind,
             network_scope=str(provider.get("network_scope") or "public"),
             extra_headers=extra_headers or None,
+            upstream_model_name=upstream_model_name,
         )
         await self.record_probe(provider_id, probe.to_dict())
         if not probe.ok:
@@ -1569,6 +1581,7 @@ class ModelConfigService:
                 allow_legacy_specialized_migration=True,
                 migration_base_url=base_url,
                 allow_soft_deleted_takeover=takeover_soft_deleted,
+                upstream_model_name=upstream_model_name,
             )
             await _apply_model_pricing(
                 session,
@@ -1774,6 +1787,9 @@ class ModelConfigService:
 
         # API 层不能只依赖管理端先测再保存；直接调用写接口也必须通过同一
         # 个按用途分流的探测器，避免把未验证模型写进生效目录。
+        upstream_model_name = str(
+            payload.get("upstreamModelName") or payload.get("upstream_model_name")
+        ).strip()
         probe = await provider_probe.probe_provider(
             driver=driver,
             base_url=base_url,
@@ -1782,6 +1798,7 @@ class ModelConfigService:
             model_kind=model_kind,
             network_scope=network_scope,
             extra_headers=extra_headers or None,
+            upstream_model_name=upstream_model_name or model_name,
         )
         if not probe.ok:
             raise ValueError(f"模型测试未通过：{probe.summary}")
@@ -1832,6 +1849,7 @@ class ModelConfigService:
                 operator=operator,
                 allow_legacy_specialized_migration=True,
                 migration_base_url=base_url,
+                upstream_model_name=upstream_model_name or model_name,
             )
             if api_key:
                 await session.execute(

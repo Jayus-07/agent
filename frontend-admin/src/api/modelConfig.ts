@@ -69,6 +69,8 @@ export interface ProviderModelCreateInput {
   /** 缓存命中单价（每 1M tokens，可选）。不传 = 未配置（NULL），运行时判 estimated */
   cachedInputPricePer1m?: number
   priceCurrency?: 'CNY' | 'USD'
+  /** 上游模型名（可选）：发给厂商 API 的真实名字，缺省 = 与登记名相同 */
+  upstreamModelName?: string
 }
 
 export interface DraftProbeInput {

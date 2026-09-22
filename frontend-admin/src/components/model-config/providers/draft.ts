@@ -34,6 +34,8 @@ export type ModelDraft = {
   /** 缓存命中单价（可选）：空串 = 未配置（NULL）；'0' = 明确免费 */
   cachedInputPrice: string
   priceCurrency: 'CNY' | 'USD'
+  /** 上游模型名（可选）：空 = 与登记名相同；发给厂商 API 的真实名字 */
+  upstreamName: string
   /** true = 从既有模型行进入（更新/改价），后端按同供应商 upsert 处理 */
   editingExisting: boolean
 }

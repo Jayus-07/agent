@@ -504,11 +504,11 @@ describe('ProvidersTab 编辑态的前置拦截', () => {
     expect(selectField(container, 'provider-model-kind').value).toBe('embedding')
   })
 
-  it('内置供应商的协议不可改，避免把内置驱动改坏', async () => {
+  it('内置供应商的协议现在可改（特殊类退役 2026-09-22），特殊驱动仍锁定', async () => {
     const container = mount()
     await click(findButton(container, '编辑'))
 
-    expect(selectField(container, 'provider-driver').disabled).toBe(true)
+    expect(selectField(container, 'provider-driver').disabled).toBe(false)
   })
 })
 
@@ -829,9 +829,10 @@ describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一�
     expect(deleteButton.title).toContain('改绑')
   })
 
-  it('内置供应商不渲染删除按钮', () => {
+  it('内置供应商也渲染删除按钮（特殊类退役 2026-09-22）', () => {
     const container = mount()
-    expect(container.querySelector('[aria-label="删除供应商 Qwen Token Plan"]')).toBeNull()
+    const deleteButton = container.querySelector('[aria-label="删除供应商 Qwen Token Plan"]') as HTMLButtonElement | null
+    expect(deleteButton).toBeTruthy()
   })
 
   it('后端 409 的拒绝原因直接展示在确认弹窗内', async () => {

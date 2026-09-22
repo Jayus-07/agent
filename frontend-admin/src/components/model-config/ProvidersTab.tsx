@@ -165,6 +165,7 @@ export default function ProvidersTab({
       outputPrice: model?.outputPrice && model.outputPrice > 0 ? String(model.outputPrice) : '',
       cachedInputPrice: model?.cachedInputPrice != null ? String(model.cachedInputPrice) : '',
       priceCurrency: model?.priceCurrency ?? 'CNY',
+      upstreamName: model?.upstreamName ?? '',
       editingExisting: Boolean(model),
       error: null,
     })
@@ -211,6 +212,7 @@ export default function ProvidersTab({
         ...(outputPricePer1m !== undefined ? { outputPricePer1m } : {}),
         ...(cachedInputPricePer1m !== undefined ? { cachedInputPricePer1m } : {}),
         priceCurrency: addingModel.priceCurrency,
+        upstreamModelName: addingModel.upstreamName.trim() || undefined,
       })
       toast.success(addingModel.editingExisting ? `模型 ${modelName} 价格已更新并生效` : `模型 ${modelName} 测试通过，已加入供应商目录`)
       setAddingModel(null)

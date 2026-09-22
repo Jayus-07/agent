@@ -73,6 +73,10 @@ export default function ProviderModelEditor({
                   <span className="mt-1 block text-[10px] leading-4 text-text-muted">仅当模型 Provider 能返回缓存命中 Token 数量时，缓存价格才会参与精确成本计算；留空 = 未配置，命中时按输入价保守估算（标记 estimated）。</span>
                 </label>
               )}
+              <label className="mt-2 block text-[11px] text-text-secondary">上游模型名（可选）
+                <input value={draft.upstreamName} onChange={(event) => setDraft({ ...draft, upstreamName: event.target.value, error: null })} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="默认与上方「模型名称」相同" />
+                <span className="mt-1 block text-[10px] leading-4 text-text-muted">发给厂商 API 的真实模型名。仅在登记名与上游不一致时需要填——例如登记名用了 qwen3.7-plus@relay 以区分厂商，这里填厂商文档里的原名 qwen3.7-plus。</span>
+              </label>
               {!isLlmFamily && (
                 <div className="mt-2 text-[10px] leading-4 text-text-muted">向量 / 重排模型按输入 token 计量计费：API 不产生输出 token，故无输出单价（与系统 token 计量口径一致）。</div>
               )}

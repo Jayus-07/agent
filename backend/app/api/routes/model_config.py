@@ -95,6 +95,10 @@ class ProviderCreateRequest(BaseModel):
     model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] = Field(
         "chat", alias="modelKind"
     )
+    # 上游模型名（可选）：发给厂商 API 的真实名字，缺省 = 与登记名相同
+    upstream_model_name: str | None = Field(
+        None, alias="upstreamModelName", max_length=256
+    )
     api_key: str = Field(..., alias="apiKey", min_length=1, max_length=4096)
     extra_headers: dict[str, str] = Field(default_factory=dict, alias="extraHeaders")
 
@@ -120,6 +124,12 @@ class ProviderModelCreateRequest(BaseModel):
         None, alias="cachedInputPricePer1m", ge=0, le=100000
     )
     price_currency: Literal["CNY", "USD"] = Field("USD", alias="priceCurrency")
+    # 登记名/上游名拆分（2026-09-22）：上游模型名 = 发给厂商 API 的真实名字。
+    # 缺省 = 与登记名相同；跨厂商同名场景给登记名起别名（如 qwen3.7-plus@relay）
+    # 时必填上游名。
+    upstream_model_name: str | None = Field(
+        None, alias="upstreamModelName", max_length=256
+    )
 
 
 class SpecializedProviderRequest(BaseModel):
