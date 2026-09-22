@@ -106,6 +106,10 @@ class DraftProbeRequest(BaseModel):
     network_scope: str = Field(
         "public", alias="networkScope", description="public | private"
     )
+    # 已登记供应商的草稿测试（如供应商卡片下的「新增模型」弹窗）：留空
+    # apiKey 并传 providerId → 服务端取托管凭据测试，明文不下发前端
+    #（§7.3 硬约束 1）。
+    provider_id: str | None = Field(None, alias="providerId", max_length=128)
 
 
 class ModelCatalogRequest(BaseModel):
@@ -484,8 +488,19 @@ async def verify_draft_provider(
     _enforce_rate_limit(ident.actor, "verify-draft", _DRAFT_VERIFY_PER_MIN)
 
     scope = _normalize_scope(req.network_scope)
+    api_key = req.api_key
+    if not api_key and req.provider_id:
+        # 已登记供应商的草稿测试：取托管凭据（明文不回显）
+        snap0 = await registry_store.load_registry()
+        resolved = _credential_for(snap0, req.provider_id)
+        api_key = getattr(resolved, "api_key", None) or ""
+    if not api_key and req.driver != "ollama":
+        raise HTTPException(
+            status_code=422,
+            detail="请输入 API Key，或传入已登记供应商的 providerId 以使用托管凭据",
+        )
     result = await provider_probe.probe_provider(
-        driver=req.driver, base_url=req.base_url, api_key=req.api_key,
+        driver=req.driver, base_url=req.base_url, api_key=api_key,
         model_name=req.model_name, network_scope=scope,
         include_stream_usage=(mode == "full"),
         model_kind=req.model_kind,

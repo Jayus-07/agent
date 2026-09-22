@@ -78,6 +78,11 @@ export default function ProvidersTab({
     error: string | null
   } | null>(null)
   const [modelBusy, setModelBusy] = useState(false)
+  // 新增/改价弹窗的独立「测试连接」（2026-09-22）：用供应商托管凭据测
+  // 弹窗内填写的模型名，与保存完全解耦
+  const [modelTesting, setModelTesting] = useState(false)
+  const [modelProbe, setModelProbe] = useState<ProbeResponse | null>(null)
+  const [modelProbeError, setModelProbeError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [probeResults, setProbeResults] = useState<Record<string, ProbeResponse>>({})
   const [probeErrors, setProbeErrors] = useState<Record<string, string>>({})
@@ -157,6 +162,8 @@ export default function ProvidersTab({
   }
 
   function beginAddModel(row: ProviderRow, model?: NonNullable<ProviderRow['models']>[number]) {
+    setModelProbe(null)
+    setModelProbeError(null)
     setAddingModel({
       provider: row,
       modelName: model?.name ?? '',
@@ -169,6 +176,45 @@ export default function ProvidersTab({
       editingExisting: Boolean(model),
       error: null,
     })
+  }
+
+  /** 弹窗内「测试连接」：用供应商托管凭据测草稿模型名（服务端取 Key，明文不下发）。 */
+  async function testAddingModel(): Promise<void> {
+    if (!addingModel) return
+    const modelName = addingModel.modelName.trim()
+    if (!modelName) {
+      setAddingModel({ ...addingModel, error: '先填模型名称再测试' })
+      return
+    }
+    const provider = addingModel.provider
+    const placeholder = unresolvedPlaceholder(provider.baseUrl || '')
+    if (placeholder) {
+      setModelProbeError(`供应商 Base URL 里的 {${placeholder}} 还没替换成实际取值`)
+      return
+    }
+    setModelTesting(true)
+    setModelProbeError(null)
+    setModelProbe(null)
+    try {
+      const result = await verifyDraftProvider({
+        driver: provider.driver,
+        baseUrl: provider.baseUrl,
+        modelName: addingModel.upstreamName.trim() || modelName,
+        modelKind: addingModel.modelKind,
+        apiKey: undefined,
+        providerId: provider.id,
+        networkScope: provider.networkScope,
+      })
+      setModelProbe(result)
+      if (result.ok) setAddingModel({ ...addingModel, error: null })
+      toast[result.ok ? 'success' : 'error'](result.summary || (result.ok ? '测试通过' : '测试失败'))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '测试失败'
+      setModelProbeError(message)
+      toast.error(message)
+    } finally {
+      setModelTesting(false)
+    }
   }
 
   async function saveAddedModel() {
@@ -674,6 +720,10 @@ export default function ProvidersTab({
         setDraft={setAddingModel}
         onSave={() => { void saveAddedModel() }}
         onCancel={() => setAddingModel(null)}
+        onTest={() => { void testAddingModel() }}
+        testing={modelTesting}
+        probe={modelProbe}
+        probeError={modelProbeError}
       />}
       {removingModel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" role="dialog" aria-modal="true" aria-label={`移除模型 ${removingModel.name}`}>

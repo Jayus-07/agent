@@ -1,11 +1,13 @@
-/** 新增/改价模型弹窗（后端先测后入库；B4 拆分迁出）。
-
+/** 新增/改价模型弹窗（2026-09-22 起测试与保存独立：保存不探测，
+ * 「测试连接」为独立动作，用供应商托管凭据测弹窗内填写的模型名）。
+ *
  * 2026-09-22：按量计费（metered）供应商在此直接填单价 —— 登记即生效，
  * 同步写入目录展示价与计费表（model_price），不再走模型价格页的
  * 导入+双人审核流程。embedding/rerank 只有输入单价一个字段。
  */
-import { Save, X } from 'lucide-react'
+import { FlaskConical, Save, X } from 'lucide-react'
 import { modelKindLabel, type ModelKind } from '@/types/modelConfig'
+import type { ProbeResponse } from '@/api/modelConfig'
 import type { ModelDraft } from './draft'
 
 const PRICE_HINT = '每 1M tokens'
@@ -16,12 +18,20 @@ export default function ProviderModelEditor({
   setDraft,
   onSave,
   onCancel,
+  onTest,
+  testing,
+  probe,
+  probeError,
 }: {
   draft: ModelDraft
   busy: boolean
   setDraft: (value: ModelDraft) => void
   onSave: () => void
   onCancel: () => void
+  onTest: () => void
+  testing: boolean
+  probe: ProbeResponse | null
+  probeError: string | null
 }) {
   const metered = draft.provider.billing === 'metered'
   const isLlmFamily = draft.modelKind !== 'embedding' && draft.modelKind !== 'rerank'
@@ -82,11 +92,27 @@ export default function ProviderModelEditor({
               )}
             </fieldset>
           )}
-          <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-text-muted">将测试 {modelKindLabel(draft.modelKind)} 的对应端点；API Key 不会显示或返回。</div>
+          {probe && (
+            <div className={`rounded-lg px-3 py-2 text-[11px] ${probe.ok ? 'border border-emerald-200 bg-emerald-50 text-emerald-800' : 'border border-red-200 bg-red-50 text-red-800'}`}>
+              {probe.ok ? '✓ ' : '✗ '}{probe.summary}
+              {probe.steps?.some((s) => s.raw) && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[10px] opacity-70">技术细节（上游原文，排障用）</summary>
+                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-4">{probe.steps.filter((s) => s.raw).map((s) => `${s.grade}: ${s.summary}${s.raw ? ` | ${s.raw}` : ''}`).join('\n')}</pre>
+                </details>
+              )}
+            </div>
+          )}
           {draft.error && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{draft.error}</div>}
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button disabled={busy} onClick={onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
+          <button
+            disabled={busy || testing || !draft.modelName.trim()}
+            title={!draft.modelName.trim() ? '先填模型名称再测试' : '用供应商已托管的密钥测试此模型名（不影响保存）'}
+            onClick={onTest}
+            className="flex items-center gap-1 rounded-lg border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50"
+          ><FlaskConical size={13} />{testing ? '测试中…' : '测试连接'}</button>
           <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />{busy ? '保存中…' : '保存'}</button>
         </div>
       </div>

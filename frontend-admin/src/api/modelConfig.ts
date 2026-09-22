@@ -80,6 +80,8 @@ export interface DraftProbeInput {
   modelKind?: ModelKind
   apiKey?: string
   networkScope?: ProviderRow['networkScope']
+  /** 已登记供应商 ID：留空 apiKey 时服务端用其托管凭据测试（明文不下发） */
+  providerId?: string
 }
 
 export type ProbeMode = 'fast' | 'full'
