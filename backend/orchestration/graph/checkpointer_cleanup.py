@@ -73,7 +73,10 @@ def cleanup_stale_checkpoints(max_age_days: int) -> dict:
             #    连接关闭自动释放；未抢到属正常现象，debug 记录即可）
             cur.execute(
                 "SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
-            acquired = bool(cur.fetchone() and cur.fetchone()[0])
+            # 抢主结果只消费一次（2026-09-23 P0-2：此前连读两次 fetchone，
+            # 第二次恒 None → TypeError，清理从未生效且被误报为「表未建」）
+            row = cur.fetchone()
+            acquired = bool(row and row[0])
             if not acquired:
                 return {"skipped_lock": True, **deleted}
             try:
@@ -125,8 +128,11 @@ def _run_once(max_age_days: int, owner: str) -> None:
             logger.info("[Checkpoint] TTL 清理完成 owner=%s (>%d天): %s",
                         owner, max_age_days, deleted)
     except Exception as e:
-        # 常见：表未建（checkpointer 从未启用）、连接失败 —— 软失败
-        logger.warning("[Checkpoint] TTL 清理失败（非致命）: %s", e)
+        # 软失败：清理是非关键路径，但不误报成因——保留异常类型与原文
+        # （2026-09-23 P0-2：双重 fetchone 的 TypeError 曾被「表未建/连接失败」
+        # 这句笼统文案掩盖，运维被引向完全错误的排查方向）。
+        logger.warning("[Checkpoint] TTL 清理失败（非致命）: %s: %s",
+                       type(e).__name__, e)
 
 
 def start_cleanup_daemon(ttl_days: int, owner: str) -> bool:

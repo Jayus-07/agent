@@ -202,13 +202,19 @@ class TestCleanupSql:
             self._log = log
             self._lock_acquired = lock_acquired
             self.rowcount = 2
+            self.fetch_calls = 0
 
         def execute(self, sql, params=None):
             self._log.append((" ".join(sql.split()), params))
 
         def fetchone(self):
-            # 只有抢主 SELECT 会取结果行
-            return (self._lock_acquired,)
+            # 真实 cursor 语义：结果集只有一行，取走后再次读取返回 None
+            # （2026-09-23 P0-2：旧假实现每次都返回同一行，恰好遮蔽了
+            # 生产代码双重 fetchone 的 TypeError）。
+            self.fetch_calls += 1
+            if self.fetch_calls == 1:
+                return (self._lock_acquired,)
+            return None
 
         def __enter__(self):
             return self
@@ -220,9 +226,12 @@ class TestCleanupSql:
         def __init__(self, log, lock_acquired=True):
             self._log = log
             self._lock_acquired = lock_acquired
+            self.last_cursor = None
 
         def cursor(self):
-            return TestCleanupSql._Cursor(self._log, self._lock_acquired)
+            self.last_cursor = TestCleanupSql._Cursor(self._log,
+                                                      self._lock_acquired)
+            return self.last_cursor
 
         def __enter__(self):
             return self
@@ -230,10 +239,16 @@ class TestCleanupSql:
         def __exit__(self, *exc):
             return False
 
-    def _fake_psycopg(self, monkeypatch, log, lock_acquired=True):
+    def _fake_psycopg(self, monkeypatch, log, lock_acquired=True, made=None):
         fake = types.ModuleType("psycopg")
-        fake.connect = lambda dsn, autocommit=False: TestCleanupSql._Conn(
-            log, lock_acquired)
+
+        def _connect(dsn, autocommit=False):
+            conn = TestCleanupSql._Conn(log, lock_acquired)
+            if made is not None:
+                made.append(conn)
+            return conn
+
+        fake.connect = _connect
         monkeypatch.setitem(sys.modules, "psycopg", fake)
 
     def test_lock_acquired_issues_lock_three_deletes_unlock(self, monkeypatch):
@@ -255,6 +270,37 @@ class TestCleanupSql:
         # TTL 必须作为参数传入，不能被拼进 SQL（注入面）
         assert log[1][1] == ("7",)
         assert all(entry[1] is None for entry in log[2:4])
+
+    def test_fetchone_consumed_once(self, monkeypatch):
+        """抢主结果只允许消费一次（P0-2 回归：双重 fetchone 必崩 TypeError）。"""
+        log: list = []
+        made: list = []
+        self._fake_psycopg(monkeypatch, log, made=made)
+
+        deleted = shared_cleanup.cleanup_stale_checkpoints(7)
+
+        assert made and made[0].last_cursor is not None
+        assert made[0].last_cursor.fetch_calls == 1
+        assert deleted.get("skipped_lock") is None
+
+    def test_cleanup_exception_does_not_fake_success(self, monkeypatch):
+        """清理中途异常不得伪装成功，warning 必须携带异常类型而非误报成因。"""
+        log: list = []
+        self._fake_psycopg(monkeypatch, log)
+
+        def _boom(max_age_days):
+            raise RuntimeError("boom-in-cleanup")
+
+        warnings: list[str] = []
+        monkeypatch.setattr(shared_cleanup, "cleanup_stale_checkpoints", _boom)
+        monkeypatch.setattr(shared_cleanup.logger, "warning",
+                            lambda msg, *a: warnings.append(str(msg % a if a else msg)))
+
+        shared_cleanup._run_once(7, "test-owner")
+
+        assert len(warnings) == 1
+        assert "RuntimeError" in warnings[0]
+        assert "boom-in-cleanup" in warnings[0]
 
     def test_lock_not_acquired_skips_all_deletes(self, monkeypatch):
         """多进程抢主失败 → 零 DELETE（避免 N 个进程重复清理同一批行）。"""
