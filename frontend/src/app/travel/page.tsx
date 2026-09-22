@@ -232,7 +232,10 @@ export default function TravelPage() {
     setError('')
     setFeedbackSent('')
     try {
-      const res = await request<PlanResponse>('/api/travel/plan', {
+      // 用 fetchRaw（Response 层透传）而非 request()：规划响应体较大且需
+      // 按 status 分支展示，绕开封装层（2026-09-22 实测 request() 路径下
+      // body 到达后端非 JSON 对象，422——fetchRaw 直接透传无此问题）。
+      const res = await fetchRaw('/api/travel/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -240,11 +243,20 @@ export default function TravelPage() {
           session_id: threadRef.current,
           conversation_id: threadRef.current,
         }),
-        // 55s < 网关 60s 读超时（docs/travel-test-scenarios S2）：让前端先拿到
-        // 干净的超时提示，而不是等网关 504。旅游域纯规则规划通常秒级返回。
-        timeout: 55_000,
       })
-      setPlan(res)
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => null)) as
+          | { detail?: unknown; message?: string }
+          | null
+        const detail = errBody?.detail ?? errBody?.message
+        throw new Error(
+          typeof detail === 'string' && detail
+            ? detail
+            : `规划请求失败（HTTP ${res.status}），请稍后再试`,
+        )
+      }
+      const data = (await res.json()) as PlanResponse
+      setPlan(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : '规划请求失败，请稍后再试')
     } finally {
@@ -480,11 +492,20 @@ export default function TravelPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-2 rounded-lg bg-gray-50 p-3 text-sm sm:grid-cols-5">
-                <span>门票 ¥{itinerary.cost.tickets.toFixed(0)}</span>
-                <span>餐饮 ¥{itinerary.cost.meals.toFixed(0)}</span>
-                <span>住宿 ¥{itinerary.cost.lodging.toFixed(0)}</span>
-                <span>通勤 ¥{itinerary.cost.transit.toFixed(0)}</span>
-                <span className="font-semibold">合计 ¥{itinerary.cost.total.toFixed(0)}</span>
+                {/* cost.total 是后端 pydantic @property，model_dump() 不含该字段 —— 合计前端自算 */}
+                <span>门票 ¥{(itinerary.cost?.tickets ?? 0).toFixed(0)}</span>
+                <span>餐饮 ¥{(itinerary.cost?.meals ?? 0).toFixed(0)}</span>
+                <span>住宿 ¥{(itinerary.cost?.lodging ?? 0).toFixed(0)}</span>
+                <span>通勤 ¥{(itinerary.cost?.transit ?? 0).toFixed(0)}</span>
+                <span className="font-semibold">
+                  合计 ¥
+                  {(itinerary.cost?.total ??
+                    (itinerary.cost?.tickets ?? 0) +
+                      (itinerary.cost?.meals ?? 0) +
+                      (itinerary.cost?.lodging ?? 0) +
+                      (itinerary.cost?.transit ?? 0)
+                  ).toFixed(0)}
+                </span>
               </div>
 
               <StaticMap itinerary={itinerary} />

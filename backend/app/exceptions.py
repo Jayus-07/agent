@@ -35,7 +35,17 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 async def request_validation_exception_handler(
     request: Request, exc: RequestValidationError
 ):
-    """请求体/查询参数校验失败：保持 422，响应改用统一安全协议。"""
+    """请求体/查询参数校验失败：保持 422，响应改用统一安全协议。
+
+    2026-09-22 排障修正：此前 errors() 详情被吞，客户端只见「请求参数有误」
+    无法定位字段 —— 现将字段级错误落日志（对外响应不变，不泄露内部结构，
+    仅记录 path 与 pydantic 错误要点）。
+    """
+    logger.error(
+        "[RequestValidation] %s %s → %s",
+        request.method, request.url.path,
+        [(e.get("loc"), e.get("msg"), e.get("type")) for e in exc.errors()],
+    )
     envelope = ErrorEnvelope(
         code=ErrorCode.INVALID_PARAM,
         retryable=False,
