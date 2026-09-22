@@ -2,11 +2,14 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 
+from backend.config.chat_input import CHAT_INPUT_MAX_CHARS
+
 
 # ── 对话（Multi-Agent）───────────────────────────
 
 class ChatRequest(BaseModel):
-    question: str = Field(..., description="用户问题", min_length=1, max_length=2000)
+    question: str = Field(..., description="用户问题", min_length=1,
+                          max_length=CHAT_INPUT_MAX_CHARS)
     session_id: str = Field("default", description="会话ID，同一会话内记忆持久化")
     kb_id: Optional[str] = Field(None, description="知识库ID（policy/tech/finance/hr 等，默认 default）")
     request_id: Optional[str] = Field("default", description="请求ID，用于中止信号路由")

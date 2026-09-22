@@ -17,10 +17,15 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
 from backend.shared.logger import logger
-from backend.shared.error_protocol import sse_error_event as build_sse_error_event
+from backend.shared.error_protocol import (
+    ErrorCode,
+    ErrorEnvelope,
+    sse_error_event as build_sse_error_event,
+)
 from backend.config.settings import (
     CHAT_SSE_MAX_WORKERS,
     CHAT_SSE_QUEUE_MAXSIZE,
@@ -191,12 +196,73 @@ async def chat_stream(
     当前 FastAPI/Pydantic 组合对 body 解析在某些中文 payload 下会抛
     "There was an error parsing the body"（即使 chat_stream 本身能正常工作），
     这里直接读 request.json() 手动反序列化，已验证可稳定运行。
+
+    Chat/RAG 收口（2026-09-22）：解析失败区分「输入超长」（业务语义
+    CHAT_INPUT_TOO_LARGE + limit_chars，引导走知识库上传）与其它参数错误
+    （通用 INVALID_PARAM，实现细节只落日志不进响应）。
     """
-    raw = await r.json()
+    # 请求体字节上限（防超大 payload；APISIX client_max_body_size=0 不限，
+    # 产品限制以 app 层为权威 —— 超限给业务错误而非网关/解析器裸错误）
+    from backend.app.exceptions import _http_payload
+    from backend.config.chat_input import CHAT_INPUT_MAX_BYTES, CHAT_INPUT_MAX_CHARS
+
+    def _too_large_response(limit_bytes: int | None = None) -> JSONResponse:
+        envelope = ErrorEnvelope(
+            code=ErrorCode.INVALID_PARAM,
+            retryable=False,
+            handoff_available=False,
+            message="输入内容过长，请缩短内容或通过知识库文件上传处理。",
+            source="http",
+            details={"reason": "CHAT_INPUT_TOO_LARGE",
+                     "limit_chars": CHAT_INPUT_MAX_CHARS,
+                     **({"limit_bytes": limit_bytes} if limit_bytes else {})},
+        )
+        return JSONResponse(status_code=422, content=_http_payload(envelope))
+
+    content_length = int(r.headers.get("content-length") or 0)
+    if content_length > CHAT_INPUT_MAX_BYTES:
+        return _too_large_response(limit_bytes=CHAT_INPUT_MAX_BYTES)
+
+    try:
+        raw = await r.json()
+    except Exception as e:
+        logger.warning(f"[ChatStream] body 解析失败: {type(e).__name__}")
+        envelope = ErrorEnvelope(
+            code=ErrorCode.INVALID_PARAM,
+            retryable=False,
+            handoff_available=False,
+            message="请求参数有误，请检查后重试。",
+            source="http",
+        )
+        return JSONResponse(status_code=422, content=_http_payload(envelope))
     try:
         req = ChatRequest(**raw)
+    except ValidationError as e:
+        too_long = any(
+            "question" in (err.get("loc") or ())
+            and err.get("type") in ("string_too_long", "length_error", "value_error")
+            for err in e.errors()
+        )
+        if too_long:
+            return _too_large_response()
+        envelope = ErrorEnvelope(
+            code=ErrorCode.INVALID_PARAM,
+            retryable=False,
+            handoff_available=False,
+            message="请求参数有误，请检查后重试。",
+            source="http",
+        )
+        return JSONResponse(status_code=422, content=_http_payload(envelope))
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"ChatRequest 解析失败: {e}")
+        logger.warning(f"[ChatStream] ChatRequest 解析失败: {type(e).__name__}")
+        envelope = ErrorEnvelope(
+            code=ErrorCode.INVALID_PARAM,
+            retryable=False,
+            handoff_available=False,
+            message="请求参数有误，请检查后重试。",
+            source="http",
+        )
+        return JSONResponse(status_code=422, content=_http_payload(envelope))
 
     _validate_model_override(req.model)
 

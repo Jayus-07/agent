@@ -40,11 +40,16 @@ async def request_validation_exception_handler(
     2026-09-22 排障修正：此前 errors() 详情被吞，客户端只见「请求参数有误」
     无法定位字段 —— 现将字段级错误落日志（对外响应不变，不泄露内部结构，
     仅记录 path 与 pydantic 错误要点）。
+
+    2026-09-22 Chat/RAG 收口：聊天输入超长（question > CHAT_INPUT_MAX_CHARS）
+    给出明确业务语义（details.reason=CHAT_INPUT_TOO_LARGE + limit_chars），
+    不再让用户看到裸 422「请求参数有误」。
     """
+    errors = exc.errors()
     logger.error(
         "[RequestValidation] %s %s → %s",
         request.method, request.url.path,
-        [(e.get("loc"), e.get("msg"), e.get("type")) for e in exc.errors()],
+        [(e.get("loc"), e.get("msg"), e.get("type")) for e in errors],
     )
     envelope = ErrorEnvelope(
         code=ErrorCode.INVALID_PARAM,
@@ -53,6 +58,22 @@ async def request_validation_exception_handler(
         message="请求参数有误，请检查后重试。",
         source="http",
     )
+    # 聊天输入超长：明确的业务错误语义（引导走知识库上传），实现细节不外泄
+    if any(
+        "question" in (e.get("loc") or ())
+        and e.get("type") in ("string_too_long", "length_error", "value_error")
+        for e in errors
+    ):
+        from backend.config.chat_input import CHAT_INPUT_MAX_CHARS
+        envelope = ErrorEnvelope(
+            code=ErrorCode.INVALID_PARAM,
+            retryable=False,
+            handoff_available=False,
+            message="输入内容过长，请缩短内容或通过知识库文件上传处理。",
+            source="http",
+            details={"reason": "CHAT_INPUT_TOO_LARGE",
+                     "limit_chars": CHAT_INPUT_MAX_CHARS},
+        )
     return JSONResponse(
         status_code=422,
         content=_http_payload(envelope),

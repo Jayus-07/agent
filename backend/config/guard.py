@@ -18,10 +18,19 @@ def _env_bool(name: str, default: str = "false") -> bool:
 ENABLE_INPUT_GUARD = _env_bool("ENABLE_INPUT_GUARD", "true")
 
 # ── 格式检查 ────────────────────────────────────────────
-# 最大字符数（与 ChatRequest.max_length 对齐，双重防御）
-GUARD_MAX_INPUT_CHARS = int(os.getenv("GUARD_MAX_INPUT_CHARS", "2000"))
+# 最大字符数（与 ChatRequest.max_length 对齐，双重防御）。
+# 2026-09-22 Chat/RAG 收口：默认值改为跟随 CHAT_INPUT_MAX_CHARS（产品输入
+# 硬上限的单一来源），仍可用 env 独立覆盖。
+from backend.config.chat_input import (
+    CHAT_INPUT_MAX_CHARS as _CHAT_INPUT_MAX_CHARS,
+    CHAT_INPUT_MAX_TOKENS as _CHAT_INPUT_MAX_TOKENS,
+)
+
+GUARD_MAX_INPUT_CHARS = int(os.getenv(
+    "GUARD_MAX_INPUT_CHARS", str(_CHAT_INPUT_MAX_CHARS)))
 # 最大 token 数（tiktoken cl100k_base 估算）
-GUARD_MAX_INPUT_TOKENS = int(os.getenv("GUARD_MAX_INPUT_TOKENS", "2000"))
+GUARD_MAX_INPUT_TOKENS = int(os.getenv(
+    "GUARD_MAX_INPUT_TOKENS", str(_CHAT_INPUT_MAX_TOKENS)))
 # 单一字符重复占比阈值（超过判定为大量重复垃圾输入）
 GUARD_MAX_REPEAT_RATIO = float(os.getenv("GUARD_MAX_REPEAT_RATIO", "0.7"))
 # 触发重复检测的最小长度（短串如"哈哈"不检测）

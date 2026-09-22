@@ -325,6 +325,11 @@ from backend.config.rag import (
 )
 # Input Guard（输入侧安全门禁）
 from backend.config import guard  # noqa: F401 — 模块形式暴露（backend.config.guard.XXX）
+from backend.config.chat_input import (  # noqa: F401 — 聊天输入限制（单一来源）
+    CHAT_INPUT_MAX_CHARS,
+    CHAT_INPUT_MAX_BYTES,
+    CHAT_INPUT_MAX_TOKENS,
+)
 # Customer Service（客服子系统）
 from backend.config.customer_service import (
     CS_ENABLED,

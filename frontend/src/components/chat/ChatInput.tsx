@@ -9,6 +9,11 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { getSelectedDepartment, setSelectedDepartment } from '@/lib/department'
 import ComposerToolbar from '@/components/agent/ComposerToolbar'
+import {
+  CHAT_INPUT_MAX_CHARS,
+  chatInputOverLimit,
+  chatInputShowCounter,
+} from '@/lib/chatInputLimit'
 
 interface Props {
   onSend: (text: string) => void
@@ -43,6 +48,8 @@ export default function ChatInput({ onSend, isLoading, onStop, embedded = false,
   function handleSend() {
     const trimmed = input.trim()
     if (!trimmed || isLoading || budgetBlocked) return
+    // 超长输入禁止提交（后端仍是权威校验；此处只是避免必然失败的请求）
+    if (chatInputOverLimit(trimmed)) return
     setInput(''); onSend(trimmed)
   }
 
@@ -77,10 +84,23 @@ export default function ChatInput({ onSend, isLoading, onStop, embedded = false,
             department={department}
             onDepartmentChange={handleDepartmentChange}
             disabled={isLoading || budgetBlocked}
-            canSend={Boolean(input.trim()) && !isLoading && !budgetBlocked}
+            canSend={Boolean(input.trim()) && !chatInputOverLimit(input) && !isLoading && !budgetBlocked}
             onSend={handleSend}
             onStop={onStop}
           />
+          {/* 接近/超过上限时显示计数与引导（短消息不展示噪声计数器） */}
+          {chatInputShowCounter(input) && (
+            <div className="flex items-center justify-between px-1 pt-1 text-[11px]">
+              <span className={chatInputOverLimit(input) ? 'text-red-600' : 'text-text-muted'}>
+                {chatInputOverLimit(input)
+                  ? '输入过长，请缩短内容或通过知识库文件上传处理'
+                  : '长文档建议通过知识库上传，可获得更好的检索与引用效果'}
+              </span>
+              <span className={chatInputOverLimit(input) ? 'text-red-600' : 'text-text-muted'}>
+                {input.length} / {CHAT_INPUT_MAX_CHARS}
+              </span>
+            </div>
+          )}
         </div>
         {budgetBlocked && <p className="mt-2 text-center text-[11px] text-red-600">硬额度已达到上限，发送和写操作暂时不可用；历史与只读页面仍可访问。</p>}
         <p className="text-[10px] text-text-muted text-center mt-2.5 select-none">
