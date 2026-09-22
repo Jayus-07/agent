@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, D
 from fastapi.responses import StreamingResponse
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready, get_rag_status
-from backend.app.api.identity import require_identity
+from backend.app.api.identity import require_principal
 import asyncio
 
 from backend.shared.logger import logger
@@ -20,7 +20,7 @@ async def rag_health():
 @router.get("/knowledge-bases")
 async def list_knowledge_bases(request: Request):
     """返回知识库列表（含文档计数）。"""
-    require_identity(request)
+    require_principal(request)
     from backend.config.knowledge_base import get_kb_list
     kbs = get_kb_list()
     try:
@@ -34,7 +34,7 @@ async def list_knowledge_bases(request: Request):
     return {"knowledge_bases": kbs}
 @router.post("/search")
 async def search_knowledge(req: SearchRequest, request: Request):
-    identity = require_identity(request)
+    principal = require_principal(request)
     query = req.query
     """检索测试 — 直接调 RAG Pipeline 检索链（不调 LLM）"""
     if not query.strip():
@@ -52,9 +52,9 @@ async def search_knowledge(req: SearchRequest, request: Request):
             text = await asyncio.to_thread(
                 pipeline.retrieve_knowledge,
                 query,
-                subject_type="employee" if identity.authenticated else "customer",
-                department=identity.department,
-                permissions=identity.permissions,
+                subject_type=principal.subject_type,
+                department=principal.department,
+                permissions=principal.permissions,
             )
             results = (
                 [{
@@ -71,9 +71,9 @@ async def search_knowledge(req: SearchRequest, request: Request):
             pipeline._prepare_context(
                 "default",
                 query,
-                subject_type="employee" if identity.authenticated else "customer",
-                department=identity.department,
-                permissions=identity.permissions,
+                subject_type=principal.subject_type,
+                department=principal.department,
+                permissions=principal.permissions,
             )
             try:
                 return retriever.retrieve(query)
@@ -106,15 +106,15 @@ async def rag_ask(req: RAGAskRequest, request: Request):
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     kb_id = req.kb_id or "default"
-    identity = require_identity(request)
+    principal = require_principal(request)
     answer = await asyncio.to_thread(
         pipeline.ask,
         req.question,
         req.session_id,
         kb_id=kb_id,
-        subject_type="employee" if identity.authenticated else "customer",
-        department=identity.department,
-        permissions=identity.permissions,
+        subject_type=principal.subject_type,
+        department=principal.department,
+        permissions=principal.permissions,
     )
     sources = getattr(pipeline.lc_chain, '_last_sources', [])
     return {"answer": answer, "session_id": req.session_id, "sources": sources}

@@ -18,14 +18,17 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     """
     logger.info(f"[Tool:search_knowledge] 检索：{question[:80]}... (kb={kb_id})")
     pipeline = _get_rag_pipeline()
+    from backend.security.principal import resolve_tool_principal
     from backend.tools.session import (
         _get_session_id,
         get_tool_department,
         get_tool_permissions,
+        get_tool_tenant_id,
         get_tool_user_id,
     )
     sid = _get_session_id()
-    # 主体解析（2026-09-22 Chat/RAG 收口修正）：
+    # 主体解析（2026-09-23 授权收口）：c4b865b 的推导语义原样迁移至
+    # security/principal.resolve_tool_principal（单一权威，HTTP 通道同规则）：
     #   - 带部门 → employee（按 owner_depts 矩阵授权）；
     #   - 已登录但未声明部门 → employee + 空部门（authorized_kbs 语义：员工
     #     未带部门只见 "all" 库，即 policy_general）——此前误判成 customer，
@@ -33,23 +36,16 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     #   - 未登录（guest/api-key 匿名通道）→ customer fail-safe（宁严勿漏），
     #     仅 audience=customer 的 cs_* 库可见。RAG_TOOL_FAILSAFE_CUSTOMER=
     #     false 回滚为未声明主体（旧行为）。
-    import os
-
-    department = get_tool_department()
-    user_id = (get_tool_user_id() or "").strip()
-    authenticated = user_id not in ("", "default", "anonymous")
-    if department:
-        subject_type, dept = "employee", department
-    elif authenticated:
-        subject_type, dept = "employee", ""
-    elif os.getenv("RAG_TOOL_FAILSAFE_CUSTOMER", "true").strip().lower() == "true":
-        subject_type, dept = "customer", ""
-    else:
-        subject_type, dept = "", ""
-    permissions = get_tool_permissions()
+    principal = resolve_tool_principal(
+        user_id=get_tool_user_id(),
+        department=get_tool_department(),
+        permissions=get_tool_permissions(),
+        tenant_id=get_tool_tenant_id(),
+    )
     return pipeline.ask(question, session_id=sid, kb_id=kb_id,
-                        subject_type=subject_type, department=dept,
-                        permissions=permissions)
+                        subject_type=principal.subject_type,
+                        department=principal.department,
+                        permissions=principal.permissions)
 
 
 # ==================== Tool Registry 自动注册 ====================
