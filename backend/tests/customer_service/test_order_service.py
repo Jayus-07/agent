@@ -14,6 +14,20 @@ from backend.sql.sql_result import SQLResult
 _EXEC_PATCH = "backend.sql.executor.execute_sql_struct"
 
 
+@pytest.fixture(autouse=True)
+def _force_sandbox_mode(monkeypatch):
+    """本文件测的是 sandbox（直查演示库）实现。
+
+    开发环境 .env 可能切 CS_BUSINESS_GATEWAY_MODE=http（联调真实业务网关），
+    与本文件的 execute_sql_struct mock 冲突 —— 显式钉回 sandbox，
+    http 模式的契约测试见 test_order_gateway.py。
+    """
+    monkeypatch.setattr(
+        "backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE",
+        "sandbox",
+    )
+
+
 def _make_sql_result(rows, status="success"):
     cols = list(rows[0].keys()) if rows else []
     if status == "success" and rows:
