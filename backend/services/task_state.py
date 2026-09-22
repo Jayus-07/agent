@@ -101,3 +101,18 @@ class TaskManager:
         task_service.update_status(
             task_id, TaskStatus.CANCELLED, error_message="", progress=message)
         _publish_status(task_id, TaskStatus.CANCELLED, message)
+
+    @staticmethod
+    def requeue_failed(task_id: str, *,
+                       progress: str = "重试回队（从 checkpoint 续跑）") -> TaskRecord:
+        """FAILED 显式回 PENDING（Celery 重投/重试路径的统一入口）。
+
+        状态机禁止 FAILED→RUNNING 直跳——重投 Worker 认领租约前必须先
+        走这里（幂等：已 PENDING 时记录状态不匹配直接原样返回，无跳转）。
+        """
+        record = task_service.get_task(task_id)
+        if record is not None and record.status == TaskStatus.FAILED:
+            task_service.update_status(task_id, TaskStatus.PENDING,
+                                       progress=progress)
+            record = task_service.get_task(task_id)
+        return record  # type: ignore[return-value]

@@ -47,17 +47,24 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
                             batch_id: str | None = None,
                             upload_elapsed_ms: int | None = None,
                             was_overwrite: bool = False,
+                            db_task_id: str | None = None,
                             retries: int = 0) -> dict:
     """索引执行主体（Celery task 与 eager 测试共用的纯函数）。
 
     成功返回 {"status": terminal, ...}；失败上抛（由 Celery 判定
     autoretry 或终审 FAILED）。终态事件（done/duplicate/error）写 Redis
     镜像，供 SSE 轮询通道消费。
+
+    db_task_id（Phase1 Step8 试点）：tasks 表关联行。None = 存量消息/降级
+    模式，直接执行不碰 TaskState（行为与历史版本一致）。
     """
     import time as _time
 
     from backend.app.api.routes.rag_upload import (
         _do_index_sync, _settle_index_result,
+    )
+    from backend.tasks.index_task_runtime import (
+        IndexTaskCancelled, IndexTaskPaused, run_with_task_state,
     )
 
     emit_fn = _redis_emit_fn(upload_id)
@@ -65,31 +72,46 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     if retries:
         emit_fn("uploading", f"索引重试（第 {retries}/{CELERY_MAX_RETRIES} 次）...")
 
-    try:
-        # main_loop 传 None：Worker 进程无 asyncio 主循环，
-        # _do_index_sync 的 sync_emit 在队列不存在时只写 Redis，不碰 loop
-        result = _do_index_sync(upload_id, filepath, filename, None,
-                                kb_id, department, batch_id=batch_id)
-    except Exception as e:
-        from backend.rag.indexing.indexer import ChunkingEmptyError
-        no_retry = isinstance(e, ChunkingEmptyError) or retries >= CELERY_MAX_RETRIES
-        if no_retry:
-            # 终审失败：registry 标 failed / 清理源文件 / 终态 error 事件
-            _settle_index_result(
-                upload_id, filepath, filename, source, batch_id, kb_id,
-                upload_elapsed_ms, was_overwrite, t0,
-                result=None, emit_fn=emit_fn, exc=e)
-        else:
-            # 仍会重试：只发进度事件，不发终态（SSE 客户端继续等待）
-            emit_fn("uploading",
-                    f"索引异常，将自动重试（第 {retries + 1}/{CELERY_MAX_RETRIES} 次）: "
-                    f"{type(e).__name__}: {e}"[:300])
-        raise
+    def run_index() -> dict:
+        try:
+            # main_loop 传 None：Worker 进程无 asyncio 主循环，
+            # _do_index_sync 的 sync_emit 在队列不存在时只写 Redis，不碰 loop
+            result = _do_index_sync(upload_id, filepath, filename, None,
+                                    kb_id, department, batch_id=batch_id)
+        except Exception as e:
+            from backend.rag.indexing.indexer import ChunkingEmptyError
+            no_retry = isinstance(e, ChunkingEmptyError) or retries >= CELERY_MAX_RETRIES
+            if no_retry:
+                # 终审失败：registry 标 failed / 清理源文件 / 终态 error 事件
+                _settle_index_result(
+                    upload_id, filepath, filename, source, batch_id, kb_id,
+                    upload_elapsed_ms, was_overwrite, t0,
+                    result=None, emit_fn=emit_fn, exc=e)
+            else:
+                # 仍会重试：只发进度事件，不发终态（SSE 客户端继续等待）
+                emit_fn("uploading",
+                        f"索引异常，将自动重试（第 {retries + 1}/{CELERY_MAX_RETRIES} 次）: "
+                        f"{type(e).__name__}: {e}"[:300])
+            raise
 
-    _settle_index_result(
-        upload_id, filepath, filename, source, batch_id, kb_id,
-        upload_elapsed_ms, was_overwrite, t0,
-        result=result, emit_fn=emit_fn)
+        _settle_index_result(
+            upload_id, filepath, filename, source, batch_id, kb_id,
+            upload_elapsed_ms, was_overwrite, t0,
+            result=result, emit_fn=emit_fn)
+        return result or {}
+
+    # Phase1 Step8：TaskState 包装（租约/状态落库/节点边界 pause-cancel）。
+    # pause/cancel 在原子节点（索引+settle）边界生效：IndexTask* 已 settle，
+    # 直接返回不 raise（避免 Celery 对用户意图做无意义重试）。
+    try:
+        result = run_with_task_state(db_task_id, upload_id, run_index)
+    except IndexTaskPaused:
+        return {"status": "paused", "skipped": True}
+    except IndexTaskCancelled:
+        return {"status": "cancelled", "skipped": True}
+
+    if (result or {}).get("skipped"):
+        return result
     terminal = (result or {}).get("terminal", "done")
     doc = (result or {}).get("doc") or {}
     return {"status": terminal,
@@ -119,13 +141,15 @@ def _register_task():
                            department: str = "general", source: str = "",
                            batch_id: str | None = None,
                            upload_elapsed_ms: int | None = None,
-                           was_overwrite: bool = False) -> dict:
+                           was_overwrite: bool = False,
+                           db_task_id: str | None = None) -> dict:
         try:
             return execute_index_task_impl(
                 upload_id, filepath, filename, kb_id=kb_id,
                 department=department, source=source, batch_id=batch_id,
                 upload_elapsed_ms=upload_elapsed_ms,
                 was_overwrite=was_overwrite,
+                db_task_id=db_task_id,
                 retries=self.request.retries)
         except SoftTimeLimitExceeded:
             # 超时：按终态收口（registry failed / 终态 error 事件）
