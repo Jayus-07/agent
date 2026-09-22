@@ -60,8 +60,15 @@ _COMPONENT_BY_MODEL_KIND = {
 }
 
 
-def _parse_model_price(payload: Mapping[str, Any]) -> tuple[Decimal | None, Decimal | None]:
-    """提取并校验表单单价（USD / 1M tokens）；未填返回 (None, None)。"""
+def _parse_model_price(
+    payload: Mapping[str, Any],
+) -> tuple[Decimal | None, Decimal | None, Decimal | None, str]:
+    """提取并校验表单单价（每 1M tokens）；未填返回 None。
+
+    返回 (input, output, cached_input, currency)。cached_input 为空表示
+    「未配置缓存命中价」（区别于 0 = 明确免费），落库为 NULL，运行时据此
+    判 cost_status=estimated。currency 支持 CNY/USD，缺省 USD。
+    """
     def _one(*keys: str) -> Decimal | None:
         for key in keys:
             raw = payload.get(key)
@@ -74,13 +81,20 @@ def _parse_model_price(payload: Mapping[str, Any]) -> tuple[Decimal | None, Deci
             if price < 0:
                 raise ValueError("模型单价不能为负数")
             if price > Decimal("100000"):
-                raise ValueError("模型单价超出合理范围（USD / 1M tokens）")
+                raise ValueError("模型单价超出合理范围（每 1M tokens）")
             return price
         return None
 
+    currency = str(
+        payload.get("priceCurrency") or payload.get("price_currency") or "USD"
+    ).strip().upper()
+    if currency not in {"CNY", "USD"}:
+        raise ValueError(f"不支持的货币单位：{currency}（仅支持 CNY / USD）")
     return (
         _one("inputPricePer1m", "input_price_per_1m"),
         _one("outputPricePer1m", "output_price_per_1m"),
+        _one("cachedInputPricePer1m", "cached_input_price_per_1m"),
+        currency,
     )
 
 
@@ -93,6 +107,8 @@ async def _apply_model_pricing(
     input_price: Decimal | None,
     output_price: Decimal | None,
     operator: str,
+    cached_input_price: Decimal | None = None,
+    price_currency: str = "USD",
 ) -> None:
     """把供应商页录入的单价落库（2026-09-22 拍板：登记即生效）。
 
@@ -107,10 +123,12 @@ async def _apply_model_pricing(
        `source='provider-page'`，model_price 本身 append-only，留痕可追溯。
 
     只落计费必需维度（pricing._REQUIRED_DIMENSIONS）：llm=input+output，
-    embedding/rerank=input；其余维度计费时按 0 跳过。同一维度已有同价
-    生效条目则跳过（避免重复保存产生无谓版本行）；有变化则先关闭全部
-    未关闭条目（含 pending 旧草稿）再插入新条目 —— append-only 的
-    「改价 = 关旧开新」。
+    embedding/rerank=input；其余维度计费时按 0 跳过。缓存命中价（成本计量
+    第一阶段 2026-09-22）为可选第三维度 `cache_read`：仅 llm 且用户填写时
+    才落行，**不填不落行**（NULL = 未配置，运行时据此判 estimated）。
+    同一维度已有同价生效条目则跳过（避免重复保存产生无谓版本行）；有变化
+    则先关闭全部未关闭条目（含 pending 旧草稿）再插入新条目 —— append-only
+    的「改价 = 关旧开新」。
     """
     if input_price is None and output_price is None:
         return
@@ -125,12 +143,18 @@ async def _apply_model_pricing(
     else:
         dimensions = ("input",)
     prices = {"input": input_price, "output": output_price}
+    if component == "llm" and cached_input_price is not None:
+        prices["cache_read"] = cached_input_price
 
     # ① 目录展示价
     pricing_json = _json_value(
         {
             "input_price_per_1m": float(prices["input"] or 0),
             "output_price_per_1m": float(prices["output"] or 0),
+            "cached_input_price_per_1m": (
+                float(prices["cache_read"]) if prices.get("cache_read") is not None else None
+            ),
+            "price_currency": price_currency,
         }
     )
     await session.execute(
@@ -184,7 +208,7 @@ async def _apply_model_pricing(
                 " price_table_version, source, effective_from, approval_status, "
                 " reviewer_1, reviewer_2) "
                 "VALUES (:model_name, :component, :dimension, :price, "
-                " 'per_1m_tokens', 'USD', :version, 'provider-page', now(), "
+                " 'per_1m_tokens', :currency, :version, 'provider-page', now(), "
                 " 'approved', :operator, 'system')"
             ),
             {
@@ -192,6 +216,7 @@ async def _apply_model_pricing(
                 "component": component,
                 "dimension": dimension,
                 "price": price,
+                "currency": price_currency,
                 "version": version,
                 "operator": operator,
             },
@@ -1451,7 +1476,9 @@ class ModelConfigService:
         model_kind = models_mod.normalize_model_kind(
             payload.get("modelKind") or payload.get("model_kind")
         )
-        input_price, output_price = _parse_model_price(payload)
+        input_price, output_price, cached_input_price, price_currency = (
+            _parse_model_price(payload)
+        )
 
         provider: Mapping[str, Any] | None = None
         async for session in get_session():
@@ -1528,6 +1555,8 @@ class ModelConfigService:
                 input_price=input_price,
                 output_price=output_price,
                 operator=operator,
+                cached_input_price=cached_input_price,
+                price_currency=price_currency,
             )
             await session.commit()
             break
@@ -1539,6 +1568,10 @@ class ModelConfigService:
             "modelKind": model_kind,
             "inputPricePer1m": float(input_price) if input_price is not None else None,
             "outputPricePer1m": float(output_price) if output_price is not None else None,
+            "cachedInputPricePer1m": (
+                float(cached_input_price) if cached_input_price is not None else None
+            ),
+            "priceCurrency": price_currency,
             "probe": {
                 "ok": True,
                 "summary": probe.summary,

@@ -39,6 +39,11 @@ import { unresolvedPlaceholder } from './providers/urlUtils'
 import { formatElapsed, formatLiveElapsed, modelKindBadgeClass, modelKindShortLabel, probeModeLabel } from './providers/format'
 import { draftFromRow, modelRemovalBlockReason, newDraft, type Draft, type ModelDraft, type ModelRemoval } from './providers/draft'
 
+/** 价格徽标的货币符号（第一阶段仅 CNY / USD）。 */
+function currencySymbol(currency?: string): string {
+  return currency === 'CNY' ? '¥' : '$'
+}
+
 interface Props {
   providers: ProviderRow[]
   defaultModels: Record<string, string>
@@ -158,6 +163,8 @@ export default function ProvidersTab({
       modelKind: model?.modelKind ?? 'chat',
       inputPrice: model?.inputPrice && model.inputPrice > 0 ? String(model.inputPrice) : '',
       outputPrice: model?.outputPrice && model.outputPrice > 0 ? String(model.outputPrice) : '',
+      cachedInputPrice: model?.cachedInputPrice != null ? String(model.cachedInputPrice) : '',
+      priceCurrency: model?.priceCurrency ?? 'CNY',
       editingExisting: Boolean(model),
       error: null,
     })
@@ -172,8 +179,10 @@ export default function ProvidersTab({
     }
     // 按量计费才录价；文本族（chat/vision/speech）计费需 input+output，
     // embedding/rerank 只要 input（与 pricing._REQUIRED_DIMENSIONS 对齐）。
+    // 缓存命中价可选：空 = 未配置（后端落 NULL，运行时判 estimated）；'0' = 明确免费。
     let inputPricePer1m: number | undefined
     let outputPricePer1m: number | undefined
+    let cachedInputPricePer1m: number | undefined
     if (addingModel.provider.billing === 'metered') {
       const isLlmFamily = addingModel.modelKind !== 'embedding' && addingModel.modelKind !== 'rerank'
       const inputText = addingModel.inputPrice.trim()
@@ -184,9 +193,11 @@ export default function ProvidersTab({
       }
       inputPricePer1m = Number(inputText)
       outputPricePer1m = isLlmFamily ? Number(outputText) : undefined
-      const invalid = [inputPricePer1m, outputPricePer1m].some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))
+      const cachedText = addingModel.cachedInputPrice.trim()
+      if (isLlmFamily && cachedText !== '') cachedInputPricePer1m = Number(cachedText)
+      const invalid = [inputPricePer1m, outputPricePer1m, cachedInputPricePer1m].some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))
       if (invalid) {
-        setAddingModel({ ...addingModel, error: '单价必须是 ≥ 0 的数字（USD / 1M tokens）' })
+        setAddingModel({ ...addingModel, error: '单价必须是 ≥ 0 的数字（每 1M tokens）' })
         return
       }
     }
@@ -198,6 +209,8 @@ export default function ProvidersTab({
         modelKind: addingModel.modelKind,
         ...(inputPricePer1m !== undefined ? { inputPricePer1m } : {}),
         ...(outputPricePer1m !== undefined ? { outputPricePer1m } : {}),
+        ...(cachedInputPricePer1m !== undefined ? { cachedInputPricePer1m } : {}),
+        priceCurrency: addingModel.priceCurrency,
       })
       toast.success(addingModel.editingExisting ? `模型 ${modelName} 价格已更新并生效` : `模型 ${modelName} 测试通过，已加入供应商目录`)
       setAddingModel(null)
@@ -572,8 +585,11 @@ export default function ProvidersTab({
                           {row.billing === 'metered' && (model.inputPrice ?? 0) > 0 && (
                             <span data-testid={`model-price-${model.name}`} className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] text-emerald-700">
                               {(model.modelKind === 'embedding' || model.modelKind === 'rerank')
-                                ? `$${model.inputPrice} ·1M`
-                                : `$${model.inputPrice}/$${model.outputPrice ?? 0} ·1M`}
+                                ? `${currencySymbol(model.priceCurrency)}${model.inputPrice} ·1M`
+                                : `${currencySymbol(model.priceCurrency)}${model.inputPrice}/${currencySymbol(model.priceCurrency)}${model.outputPrice ?? 0} ·1M`}
+                              {model.cachedInputPrice != null && model.modelKind !== 'embedding' && model.modelKind !== 'rerank'
+                                ? ` · 缓存${currencySymbol(model.priceCurrency)}${model.cachedInputPrice}`
+                                : ''}
                             </span>
                           )}
                         </div>

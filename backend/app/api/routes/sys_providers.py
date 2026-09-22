@@ -225,6 +225,8 @@ def _models_by_provider(entries) -> dict[str, list[dict]]:
             "modelKind": models_mod.normalize_model_kind(item.get("model_kind")),
             "inputPrice": item.get("input_price_per_1m"),
             "outputPrice": item.get("output_price_per_1m"),
+            "cachedInputPrice": item.get("cached_input_price_per_1m"),
+            "priceCurrency": item.get("price_currency") or "USD",
         })
     for values in grouped.values():
         values.sort(key=lambda value: (value["modelKind"], value["name"]))

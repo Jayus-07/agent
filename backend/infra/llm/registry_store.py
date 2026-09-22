@@ -184,6 +184,8 @@ def _model_entry(row) -> dict:
         "model_kind": _models.normalize_model_kind(row.get("model_kind")),
         "input_price_per_1m": float(pricing.get("input_price_per_1m", 0.0) or 0.0),
         "output_price_per_1m": float(pricing.get("output_price_per_1m", 0.0) or 0.0),
+        "cached_input_price_per_1m": pricing.get("cached_input_price_per_1m"),
+        "price_currency": pricing.get("price_currency") or "USD",
         "context_length": row["context_length"],
         "capabilities": row["capabilities"] or {},
         "source": "db",

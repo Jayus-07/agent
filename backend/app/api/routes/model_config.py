@@ -106,14 +106,20 @@ class ProviderModelCreateRequest(BaseModel):
     model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] = Field(
         "chat", alias="modelKind"
     )
-    # 按量计费单价（USD / 1M tokens）。登记即生效：服务层同步写入
+    # 按量计费单价（每 1M tokens）。登记即生效：服务层同步写入
     # llm_models.pricing（展示）与 model_price（计费，见 _apply_model_pricing）。
+    # cachedInputPricePer1m 为可选缓存命中价：不填 = 未配置（NULL，运行时
+    # 判 cost_status=estimated），区别于 0 = 明确免费。
     input_price_per_1m: Decimal | None = Field(
         None, alias="inputPricePer1m", ge=0, le=100000
     )
     output_price_per_1m: Decimal | None = Field(
         None, alias="outputPricePer1m", ge=0, le=100000
     )
+    cached_input_price_per_1m: Decimal | None = Field(
+        None, alias="cachedInputPricePer1m", ge=0, le=100000
+    )
+    price_currency: Literal["CNY", "USD"] = Field("USD", alias="priceCurrency")
 
 
 class SpecializedProviderRequest(BaseModel):

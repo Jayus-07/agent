@@ -8,7 +8,7 @@ import { FlaskConical, X } from 'lucide-react'
 import { modelKindLabel, type ModelKind } from '@/types/modelConfig'
 import type { ModelDraft } from './draft'
 
-const PRICE_HINT = 'USD / 1M tokens'
+const PRICE_HINT = '每 1M tokens'
 
 export default function ProviderModelEditor({
   draft,
@@ -50,17 +50,29 @@ export default function ProviderModelEditor({
           </label>
           {metered && (
             <fieldset className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
-              <legend className="px-1 text-[11px] text-text-secondary">按量单价（{PRICE_HINT}，保存即生效）</legend>
+              <legend className="px-1 text-[11px] text-text-secondary">Token 计费（{PRICE_HINT}，保存即生效）</legend>
+              <label className="mb-2 block text-[11px] text-text-secondary">货币
+                <select value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value as 'CNY' | 'USD', error: null })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs">
+                  <option value="CNY">CNY（人民币）</option>
+                  <option value="USD">USD（美元）</option>
+                </select>
+              </label>
               <div className={`grid gap-2 ${isLlmFamily ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <label className="block text-[11px] text-text-secondary">输入单价
-                  <input value={draft.inputPrice} onChange={(event) => setDraft({ ...draft, inputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="0.125" />
+                <label className="block text-[11px] text-text-secondary">输入价格
+                  <input value={draft.inputPrice} onChange={(event) => setDraft({ ...draft, inputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="3" />
                 </label>
                 {isLlmFamily && (
-                  <label className="block text-[11px] text-text-secondary">输出单价
-                    <input value={draft.outputPrice} onChange={(event) => setDraft({ ...draft, outputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="0.5" />
+                  <label className="block text-[11px] text-text-secondary">输出价格
+                    <input value={draft.outputPrice} onChange={(event) => setDraft({ ...draft, outputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="9" />
                   </label>
                 )}
               </div>
+              {isLlmFamily && (
+                <label className="mt-2 block text-[11px] text-text-secondary">缓存命中价格（可选）
+                  <input value={draft.cachedInputPrice} onChange={(event) => setDraft({ ...draft, cachedInputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="0.3" />
+                  <span className="mt-1 block text-[10px] leading-4 text-text-muted">仅当模型 Provider 能返回缓存命中 Token 数量时，缓存价格才会参与精确成本计算；留空 = 未配置，命中时按输入价保守估算（标记 estimated）。</span>
+                </label>
+              )}
               {!isLlmFamily && (
                 <div className="mt-2 text-[10px] leading-4 text-text-muted">向量 / 重排模型按输入 token 计量计费：API 不产生输出 token，故无输出单价（与系统 token 计量口径一致）。</div>
               )}

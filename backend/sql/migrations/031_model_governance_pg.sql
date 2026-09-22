@@ -60,7 +60,9 @@ CREATE TABLE IF NOT EXISTS model_price (
             price_per_unit NUMERIC(18, 6) NOT NULL CHECK (price_per_unit >= 0),
             unit TEXT NOT NULL DEFAULT 'per_1m_tokens'
                 CHECK (unit IN ('per_1m_tokens', 'per_call')),
-            currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
+            -- 成本计量第一阶段（2026-09-22）：放开 CNY —— 页面录入可选 CNY/USD，
+            -- 币种跟随价格行进入计费结果（老数据仍为 USD，完全兼容）。
+            currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency IN ('USD', 'CNY')),
             price_table_version TEXT NOT NULL,
             source TEXT NOT NULL,
             effective_from TIMESTAMPTZ NOT NULL,

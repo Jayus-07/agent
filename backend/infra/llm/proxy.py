@@ -787,11 +787,15 @@ def _record_tokens(
         # 细粒度用量：缓存命中 / 推理 token。
         # LangChain 统一在 usage_metadata.input_token_details（cache_read/cache_creation）
         # 与 output_token_details（reasoning）透传；上游未返回时为 0。
-        # 注意 cached_tokens 是 prompt_tokens 的子集（计费口径），仅作明细展示。
+        # ⚠️ 计费口径（2026-09-22 成本计量第一阶段）：LangChain 三家 Provider
+        # （OpenAI/Anthropic/DashScope）的 input_token_details.cache_read 均为
+        # prompt/input tokens 的**子集** —— 按 input 价计费的部分必须是
+        # billable = input - cached，否则缓存部分会被 input 与 cache_read 双算。
         in_details = tu.get("input_token_details") or {}
         out_details = tu.get("output_token_details") or {}
         cached = int(in_details.get("cache_read", 0) or 0)
         reasoning = int(out_details.get("reasoning", 0) or 0)
+        billable_input = max(int(p) - cached, 0)
         _last_tokens_var.set({
             "prompt_tokens": p, "completion_tokens": c, "total_tokens": t,
             "cached_tokens": cached, "reasoning_tokens": reasoning,
@@ -824,23 +828,34 @@ def _record_tokens(
         from backend.infra.llm.pricing import calculate_current_cost
 
         budget_state = current_request_budget()
-        cost_decimal = calculate_current_cost(
-            model,
-            "llm",
-            {
-                "input": p,
-                "output": c,
-                "cache_read": cached,
-                "cache_write": int(in_details.get("cache_creation", 0) or 0),
-                "reasoning": reasoning,
-                "tool_call": int(tu.get("tool_calls", 0) or 0),
-            },
-            enforce=bool(
-                budget_state
-                and budget_state.mode == "enforce"
-                and budget_state.quota_store is not None
-            ),
+        cost_quantities = {
+            "input": billable_input,
+            "output": c,
+            "cache_read": cached,
+            "cache_write": int(in_details.get("cache_creation", 0) or 0),
+            "reasoning": reasoning,
+            "tool_call": int(tu.get("tool_calls", 0) or 0),
+        }
+        enforce = bool(
+            budget_state
+            and budget_state.mode == "enforce"
+            and budget_state.quota_store is not None
         )
+        if enforce:
+            # 硬预算门：缺价直接抛 MissingModelPrice（行为不变），
+            # 但 quantities 已按 billable 口径修正，缓存部分不会双算。
+            cost_decimal = calculate_current_cost(
+                model, "llm", cost_quantities, enforce=True,
+            )
+            cost_status, currency = "exact", "USD"
+            cost_breakdown: dict[str, float] = {}
+        else:
+            # 软统计：状态化计费入口，永不抛错（exact/estimated/unpriced）。
+            from backend.infra.llm.pricing import calculate_llm_cost_with_status
+
+            cost_decimal, cost_status, currency, cost_breakdown = (
+                calculate_llm_cost_with_status(model, cost_quantities)
+            )
         cost = float(cost_decimal)
         try:
             from backend.infra.llm.budget import record_model_usage
@@ -858,10 +873,16 @@ def _record_tokens(
             "prompt_tokens": p,
             "completion_tokens": c,
             "total_tokens": t,
+            "billable_input_tokens": billable_input,
             "cached_tokens": cached,
             "reasoning_tokens": reasoning,
             "finish_reason": finish_reason,
             "cost_usd": cost,
+            "input_cost": cost_breakdown.get("input_cost", 0.0),
+            "cached_input_cost": cost_breakdown.get("cached_input_cost", 0.0),
+            "output_cost": cost_breakdown.get("output_cost", 0.0),
+            "cost_status": cost_status,
+            "currency": currency,
             "model": model,
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
         })
@@ -889,9 +910,15 @@ def _record_tokens(
                 "prompt_tokens": p,
                 "completion_tokens": c,
                 "total_tokens": t,
+                "billable_input_tokens": billable_input,
                 "cached_tokens": cached,
                 "reasoning_tokens": reasoning,
                 "cost_usd": cost,
+                "input_cost": cost_breakdown.get("input_cost", 0.0),
+                "cached_input_cost": cost_breakdown.get("cached_input_cost", 0.0),
+                "output_cost": cost_breakdown.get("output_cost", 0.0),
+                "cost_status": cost_status,
+                "currency": currency,
                 "finish_reason": finish_reason,
                 "decision": current_call_decision(),
                 "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,

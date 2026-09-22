@@ -37,7 +37,10 @@ from backend.shared.logger import logger
 _COLS = ("ts, trace_id, request_id, session_id, user_id, tenant_id, "
          "component, model, provider, "
          "prompt_tokens, completion_tokens, total_tokens, "
-         "cached_tokens, reasoning_tokens, cost_usd, duration_ms, finish_reason, decision")
+         "cached_tokens, reasoning_tokens, cost_usd, "
+         "billable_input_tokens, input_cost, cached_input_cost, "
+         "output_cost, total_cost, cost_status, currency, "
+         "duration_ms, finish_reason, decision")
 _COLS += ", run_id, step_id, role, stage"
 
 
@@ -137,6 +140,36 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS stage "
                 "TEXT NOT NULL DEFAULT ''"
             )
+            # 成本计量第一阶段（2026-09-22）：分项成本 + 状态 + 货币。
+            # 与 sql/migrations/032_llm_usage_cost_columns.sql 同口径，启动即自愈补列。
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS billable_input_tokens "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS input_cost "
+                "DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS cached_input_cost "
+                "DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS output_cost "
+                "DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS total_cost "
+                "DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS cost_status "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS currency "
+                "TEXT NOT NULL DEFAULT ''"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_ts ON {t}(ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_model ON {t}(model, ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_trace ON {t}(trace_id)")
@@ -167,11 +200,13 @@ class PostgresLLMUsageStore(LLMUsageStore):
                         component, model, provider,
                         prompt_tokens, completion_tokens, total_tokens,
                         cached_tokens, reasoning_tokens, cost_usd,
+                        billable_input_tokens, input_cost, cached_input_cost,
+                        output_cost, total_cost, cost_status, currency,
                         duration_ms, finish_reason, decision,
                         run_id, step_id, role, stage, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     event.get("timestamp") or now,
                     str(event.get("trace_id") or ""),
@@ -188,6 +223,13 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     int(event.get("cached_tokens") or 0),
                     int(event.get("reasoning_tokens") or 0),
                     float(event.get("cost_usd") or 0.0),
+                    int(event.get("billable_input_tokens") or 0),
+                    float(event.get("input_cost") or 0.0),
+                    float(event.get("cached_input_cost") or 0.0),
+                    float(event.get("output_cost") or 0.0),
+                    float(event.get("total_cost") or event.get("cost_usd") or 0.0),
+                    str(event.get("cost_status") or ""),
+                    str(event.get("currency") or ""),
                     float(event.get("duration_ms") or 0.0),
                     str(event.get("finish_reason") or ""),
                     str(event.get("decision") or "primary"),

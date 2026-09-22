@@ -65,6 +65,7 @@ class PriceLine:
     price_per_unit: Decimal
     unit: str = "per_1m_tokens"
     price_table_version: str = ""
+    currency: str = "USD"
 
 
 class PriceTable:
@@ -97,6 +98,7 @@ class PriceTable:
                     price_per_unit=price.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
                     unit=str(row.get("unit") or "per_1m_tokens"),
                     price_table_version=str(row.get("price_table_version") or ""),
+                    currency=str(row.get("currency") or "USD"),
                 )
             )
         return cls(normalized)
@@ -117,6 +119,13 @@ class PriceTable:
             _record_price_metric(component, "missing")
             raise MissingModelPrice(model_name, component)
         return rows
+
+    def currency_for(self, model_name: str, component: str) -> str:
+        """该模型该组件当前价格行的币种；无行时回退 USD。"""
+        for (model, row_component, _dimension), row in self._prices.items():
+            if model == model_name and row_component == component:
+                return row.currency or "USD"
+        return "USD"
 
     def calculate_cost(
         self,
@@ -178,7 +187,8 @@ class PostgresPriceRepository:
                     cur.execute(
                         f"""
                         SELECT model_name, component, dimension,
-                               price_per_unit, unit, price_table_version
+                               price_per_unit, unit, price_table_version,
+                               currency
                         FROM {self._table}
                         WHERE model_name = %s AND component = %s
                           AND approval_status = 'approved'
@@ -359,7 +369,105 @@ def calculate_fallback_cost(
                    ).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
 
 
+# 成本状态（第一阶段 2026-09-22 拍板）：exact / estimated / unpriced
+COST_STATUS_EXACT = "exact"
+COST_STATUS_ESTIMATED = "estimated"
+COST_STATUS_UNPRICED = "unpriced"
+
+
+def _llm_cost_breakdown(
+    rows: dict[str, PriceLine],
+    billable_input: int,
+    cached_input: int,
+    output_tokens: int,
+) -> tuple[Decimal, dict[str, Decimal]]:
+    """按价格行分项计算（全部 Decimal，1M tokens 口径）。
+
+    缓存价格行缺失时，缓存部分按普通 input 价计算 —— 这正是
+    ``cost_status='estimated'`` 的语义（保守估算，不猜价）。
+    """
+    in_p = rows["input"].price_per_unit
+    out_p = rows["output"].price_per_unit
+    cache_line = rows.get("cache_read")
+    cache_p = cache_line.price_per_unit if cache_line is not None else in_p
+    input_cost = (Decimal(billable_input) / Decimal("1000000") * in_p)
+    cached_cost = (Decimal(cached_input) / Decimal("1000000") * cache_p)
+    output_cost = (Decimal(output_tokens) / Decimal("1000000") * out_p)
+    total = (input_cost + cached_cost + output_cost).quantize(
+        _SIX_PLACES, rounding=ROUND_HALF_UP
+    )
+    breakdown = {
+        "input_cost": input_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
+        "cached_input_cost": cached_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
+        "output_cost": output_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
+    }
+    return total, breakdown
+
+
+def calculate_llm_cost_with_status(
+    model_name: str,
+    quantities: dict[str, int | float | Decimal],
+) -> tuple[Decimal, str, str, dict[str, float]]:
+    """第一阶段统一成本入口（软统计）：返回 (total, status, currency, breakdown)。
+
+    与 ``calculate_current_cost``（预算硬门，缺价抛异常）不同，本入口**永不抛错**
+    ——成本统计失败不能影响模型主链路（2026-09-22 拍板）。
+
+    quantities 口径（proxy 已标准化）：
+      - ``input``   = **billable** input tokens（不含缓存命中部分）
+      - ``cache_read`` = 缓存命中 tokens
+      - ``output``  = output tokens
+
+    状态判定：
+      - exact     ：PG 有审核生效的 input+output 价格；缓存命中为 0 或已有
+                    cache_read 价格行。
+      - estimated ：缓存命中 > 0 但模型未配置 cache_read 价格 —— 缓存部分按
+                    普通 input 价保守估算；或 PG 价格表不可用/缺行，退回注册表
+                    内置估价。
+      - unpriced  ：PG 无价格且注册表内置估价也为 0 —— 只记 token，不计费。
+
+    分项成本（breakdown）恒给出：input_cost / cached_input_cost / output_cost
+    （USD float，6 位小数）。货币取自价格行；fallback 场景注册表价固定 USD。
+    """
+    billable = max(int(quantities.get("input", 0) or 0), 0)
+    cached = max(int(quantities.get("cache_read", 0) or 0), 0)
+    output = max(int(quantities.get("output", 0) or 0), 0)
+    zero: dict[str, float] = {
+        "input_cost": 0.0, "cached_input_cost": 0.0, "output_cost": 0.0,
+    }
+
+    rows: dict[str, PriceLine] | None
+    currency = "USD"
+    try:
+        table = get_current_price_table(model_name, "llm")
+        rows = table.require(model_name, "llm", enforce=False)
+        currency = table.currency_for(model_name, "llm")
+    except PriceTableUnavailable:
+        rows = None
+
+    if rows is None or "input" not in rows or "output" not in rows:
+        # PG 无审核生效价格：退回注册表内置估价（语义 = estimated），无内置价则 unpriced。
+        fallback = calculate_fallback_cost(model_name, billable + cached, output)
+        status = COST_STATUS_ESTIMATED if fallback > 0 else COST_STATUS_UNPRICED
+        return fallback, status, "USD", zero
+
+    if cached > 0 and "cache_read" not in rows:
+        # 缓存命中但无缓存价：缓存部分按普通 input 价保守估算。
+        total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
+        return total, COST_STATUS_ESTIMATED, currency, {
+            key: float(value) for key, value in breakdown.items()
+        }
+
+    total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
+    return total, COST_STATUS_EXACT, currency, {
+        key: float(value) for key, value in breakdown.items()
+    }
+
+
 __all__ = [
+    "COST_STATUS_ESTIMATED",
+    "COST_STATUS_EXACT",
+    "COST_STATUS_UNPRICED",
     "MissingModelPrice",
     "PRICE_DIMENSIONS",
     "PriceLine",
@@ -368,6 +476,7 @@ __all__ = [
     "PostgresPriceRepository",
     "calculate_current_cost",
     "calculate_fallback_cost",
+    "calculate_llm_cost_with_status",
     "clear_price_cache",
     "get_current_price_table",
 ]
