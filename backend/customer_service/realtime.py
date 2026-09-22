@@ -449,6 +449,23 @@ class AgentHub:
                                     continue
                                 if not envelope:
                                     continue
+                                # 批次A 修正：outbox relay 经 publish_envelope
+                                # 直投 Redis，绕过 _persist_and_broadcast ——
+                                # 坐席辅助触发必须补在订阅转发点（跨线程安全，
+                                # 内部含开关/事件过滤/去重，失败静默）
+                                try:
+                                    from backend.customer_service.agent_assist import (
+                                        maybe_schedule_assist_from_envelope,
+                                    )
+
+                                    maybe_schedule_assist_from_envelope(
+                                        envelope, self._main_loop,
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "[AgentHub] assist hook (relay) skipped",
+                                        exc_info=True,
+                                    )
                                 asyncio.run_coroutine_threadsafe(
                                     self._broadcast(data), self._main_loop
                                 )

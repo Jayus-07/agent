@@ -56,7 +56,17 @@ def execute_complaint(
     if not existing_ticket:
         try:
             from backend.customer_service.handoff_store import get_handoff_store
-            active = get_handoff_store().get_active_handoff(user_id)
+            store = get_handoff_store()
+            active = None
+            # 批次C 修正（P0 验收发现）：优先按会话查活跃转接 ——
+            # 原按 user 的 get_active 是 LIMIT 1 无排序查询，同用户有
+            # 多条历史未关闭 handoff 时返回任意一条，会漏判同会话重复投诉
+            if conversation_id:
+                active = store.get_active_by_conversation(conversation_id)
+            if active is None and session_id and session_id != conversation_id:
+                active = store.get_active_by_conversation(session_id)
+            if active is None:
+                active = store.get_active_handoff(user_id)
             if active and active.get("trigger_type") == "complaint_escalation":
                 existing_ticket = active.get("ticket_id")
         except Exception:

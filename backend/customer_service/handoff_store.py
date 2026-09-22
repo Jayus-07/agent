@@ -114,6 +114,24 @@ class HandoffStore:
                 self._data[(user_id, sid)] = db_data
         return db_data
 
+    def get_active_by_conversation(self, conversation_id: str) -> dict | None:
+        """按会话查活跃转接（批次C 修正）。
+
+        ``get_active_handoff(user)`` 走 ``get_active(user_id)`` 的
+        ``LIMIT 1`` 无排序查询 —— 同用户存在多条历史未关闭 handoff 时
+        返回任意一条，投诉幂等会漏判。按会话维度查询语义精确、无歧义。
+        """
+        try:
+            from backend.customer_service._db_loop import run_sync
+
+            return run_sync(
+                self._async_get_active_by_conversation(conversation_id))
+        except Exception as exc:
+            logger.warning(
+                "[HandoffStore] DB get_active_by_conversation failed: %s", exc,
+            )
+            return None
+
     def _db_load(self, user_id: str, session_id: str) -> dict | None:
         try:
             from backend.customer_service._db_loop import run_sync
@@ -230,6 +248,20 @@ class HandoffStore:
         async with AsyncSessionLocal() as db:
             repo = HandoffRepository(db)
             row = await repo.get_active(user_id)
+            if row is not None:
+                return _handoff_to_dict(row)
+            return None
+
+    @staticmethod
+    async def _async_get_active_by_conversation(
+        conversation_id: str,
+    ) -> dict | None:
+        from backend.customer_service.repository import HandoffRepository
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            repo = HandoffRepository(db)
+            row = await repo.get_open_by_conversation(conversation_id)
             if row is not None:
                 return _handoff_to_dict(row)
             return None

@@ -266,8 +266,10 @@ CS_ROLLOUT_WHITELIST = {
 CS_AGENT_ASSIST_ENABLED = os.getenv("CS_AGENT_ASSIST_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 # 单次推荐最多条数
 CS_AGENT_ASSIST_TOP_K = max(1, min(5, int(os.getenv("CS_AGENT_ASSIST_TOP_K", "3"))))
-# 单次生成总超时（秒）：超时静默放弃，绝不阻塞消息主链路
-CS_AGENT_ASSIST_TIMEOUT_SECONDS = float(os.getenv("CS_AGENT_ASSIST_TIMEOUT_SECONDS", "8"))
+# 单次生成总超时（秒）：超时静默放弃，绝不阻塞消息主链路。
+# 默认 15s：实测 RAG+LLM 一次生成 10-50s（首次调用含模型加载更久），
+# 8s 会把正常推荐全判超时；15s 在"晚到推荐"与"体验"间取平衡。
+CS_AGENT_ASSIST_TIMEOUT_SECONDS = float(os.getenv("CS_AGENT_ASSIST_TIMEOUT_SECONDS", "15"))
 # 全局并发上限：同时生成的推荐任务数（背压保护，防 LLM/RAG 被打爆）
 CS_AGENT_ASSIST_MAX_CONCURRENCY = max(1, int(os.getenv("CS_AGENT_ASSIST_MAX_CONCURRENCY", "4")))
 # 参与推荐的最近消息条数

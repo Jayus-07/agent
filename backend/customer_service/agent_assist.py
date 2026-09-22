@@ -59,44 +59,83 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 
 # ────────────────────────────────────────────────────────────
-# 触发入口（realtime.py 的 _persist_and_broadcast 调用，主 loop 上执行）
+# 触发入口：主 loop（_persist_and_broadcast 路径）+
+#           Redis 订阅线程（outbox relay 路径）双通道
 # ────────────────────────────────────────────────────────────
 
+def _acquire_trigger(event_type: str, payload: dict[str, Any]) -> str | None:
+    """判定是否命中触发条件；命中则登记 in-flight 并返回会话 ID。
+
+    供主 loop（maybe_schedule_assist）与 Redis 订阅线程
+    （maybe_schedule_assist_from_envelope）两条路径共用。
+    """
+    if not _assist_enabled():
+        return None
+
+    if event_type == "message.created":
+        msg = payload.get("message") or {}
+        if msg.get("sender_type") != "user":
+            return None  # 只对用户消息刷新推荐（坐席自己发的消息无需响应）
+        conversation_id = str(payload.get("conversation_id") or "")
+    elif event_type == "conversation.claimed":
+        conversation_id = str(payload.get("conversation_id") or "")
+    else:
+        return None
+
+    if not conversation_id:
+        return None
+
+    # 会话级去重：同会话已有生成任务在跑则跳过（下一条消息会再触发）
+    with _inflight_lock:
+        if conversation_id in _inflight:
+            return None
+        _inflight.add(conversation_id)
+    return conversation_id
+
+
 def maybe_schedule_assist(event_type: str, payload: dict[str, Any]) -> None:
-    """命中触发条件则调度一次推荐生成；其余情况静默返回。
+    """主 loop 入口（hub._persist_and_broadcast 调用）：
+    本进程直接发布的事件（AI 阶段消息、typing 等）。
 
     必须运行在主 uvicorn loop（create_task 依赖 running loop）。
     异常全部吞掉——触发器挂了只损失推荐，不影响事件广播本身。
     """
     try:
-        if not _assist_enabled():
-            return
-
-        if event_type == "message.created":
-            msg = payload.get("message") or {}
-            if msg.get("sender_type") != "user":
-                return  # 只对用户消息刷新推荐（坐席自己发的消息无需响应）
-            conversation_id = str(payload.get("conversation_id") or "")
-        elif event_type == "conversation.claimed":
-            conversation_id = str(payload.get("conversation_id") or "")
-        else:
-            return
-
+        conversation_id = _acquire_trigger(event_type, payload)
         if not conversation_id:
             return
-
-        # 会话级去重：同会话已有生成任务在跑则跳过（下一条消息会再触发）
-        with _inflight_lock:
-            if conversation_id in _inflight:
-                return
-            _inflight.add(conversation_id)
-
         asyncio.get_running_loop().create_task(
             _assist_task(conversation_id),
             name=f"cs-assist-{conversation_id[:12]}",
         )
     except Exception:
         logger.debug("[AgentAssist] schedule failed", exc_info=True)
+
+
+def maybe_schedule_assist_from_envelope(envelope: dict[str, Any], loop) -> None:
+    """Redis 订阅线程入口（批次A 修正）：relay 转发路径的必经点。
+
+    outbox relay（cs-dispatcher）经 ``publish_envelope`` 直投 Redis，
+    不经过 ``_persist_and_broadcast`` —— 认领/坐席消息等 outbox 事件的
+    坐席辅助触发只能挂在这里。跨线程经 ``run_coroutine_threadsafe``
+    跳回主 loop；in-flight 去重防止与本地发布路径重复调度。
+    """
+    try:
+        if not isinstance(envelope, dict) or loop is None:
+            return
+        event_type = str(envelope.get("type") or "")
+        payload = {
+            k: v for k, v in envelope.items()
+            if k not in ("type", "event_id", "seq", "ts")
+        }
+        conversation_id = _acquire_trigger(event_type, payload)
+        if not conversation_id:
+            return
+        asyncio.run_coroutine_threadsafe(
+            _assist_task(conversation_id), loop,
+        )
+    except Exception:
+        logger.debug("[AgentAssist] schedule from envelope failed", exc_info=True)
 
 
 async def _assist_task(conversation_id: str) -> None:
