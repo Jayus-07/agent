@@ -40,10 +40,28 @@ def _require_pg() -> None:
                     "AND column_name IN ('must_change_password','email')"
                 )
                 count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT COUNT(*) = 1 FROM information_schema.tables "
+                    "WHERE table_schema='auth' AND table_name='departments'"
+                )
+                departments_ready = cursor.fetchone()[0]
     except Exception as exc:
         pytest.skip(f"agent_memory PostgreSQL 不可达，跳过 P6 真实验收: {exc}")
     if count != 2:
         pytest.skip("auth.users 缺少 033 字段（迁移未应用），跳过真实验收")
+    if not departments_ready:
+        pytest.skip("auth.departments 缺少 041 表（迁移未应用），跳过真实验收")
+
+
+def _seed_tenant_department(code: str = "general") -> None:
+    """为本测试租户准备 active 部门（041 主数据按租户隔离）。"""
+    with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO auth.departments (tenant_id, code, name) "
+                "VALUES ('tenant-p6', %s, '生命周期测试部门') "
+                "ON CONFLICT (tenant_id, code) DO NOTHING", (code,))
+        conn.commit()
 
 
 @pytest.fixture(autouse=True)
@@ -99,12 +117,18 @@ def test_user_lifecycle_end_to_end():
     client = _client()
     prefix = f"p6lc{uuid.uuid4().hex[:8]}"
     username = f"{prefix}a"
+    _seed_tenant_department("general")
     try:
         # ── 创建 ──
+        # dept 必须命中本租户 active 部门（041 主数据），任意字符串 400
+        bad_dept = client.post("/api/sys/rbac/users", json={
+            "username": f"{prefix}x", "dept": "finance123xxx",
+        })
+        assert bad_dept.status_code == 400, bad_dept.text
         resp = client.post("/api/sys/rbac/users", json={
             "username": username,
             "realName": "生命周期测试",
-            "dept": "QA",
+            "dept": "general",
             "email": "p6@example.com",
             "platformRole": "viewer",
         })
@@ -145,6 +169,48 @@ def test_user_lifecycle_end_to_end():
         assert d["csRoles"] == []
         assert d["mustChangePassword"] is True
         assert d["activeSessionCount"] == 0
+
+        # ── 部门维护（P9）：修改 → DB 更新 + 审计 + 会话吊销 ──
+        _seed_tenant_department("hr")
+        audit_before = _psql_row(
+            "SELECT COUNT(*) FROM auth.rbac_audits "
+            "WHERE target_user_id = %s AND action = 'user.update'", (user_id,))
+        dept_patch = client.patch(
+            f"/api/sys/rbac/users/{user_id}",
+            json={"version": d["version"], "dept": "hr"},
+        )
+        assert dept_patch.status_code == 200, dept_patch.text
+        row = _psql_row("SELECT dept FROM auth.users WHERE id = %s", (user_id,))
+        assert row[0] == "hr"
+        audit_row = _psql_row(
+            "SELECT before_state->>'dept', after_state->>'dept' "
+            "FROM auth.rbac_audits WHERE target_user_id = %s "
+            "AND action = 'user.update' ORDER BY id DESC LIMIT 1", (user_id,))
+        assert audit_row[0] == "general" and audit_row[1] == "hr"
+        assert dept_patch.json()["revokedSessionCount"] >= 0
+        del audit_before
+        # 版本已随 PATCH 自增，后续 PATCH 用新版本号
+        d = {**d, "version": dept_patch.json()["version"]}
+        # 非法部门 → 400（不落库）
+        bad = client.patch(
+            f"/api/sys/rbac/users/{user_id}",
+            json={"version": d["version"], "dept": "finance123xxx"},
+        )
+        assert bad.status_code == 400, bad.text
+        # 清空部门 → 空串（合法，最小权限语义；非法 PATCH 未消耗版本号）
+        clear = client.patch(
+            f"/api/sys/rbac/users/{user_id}",
+            json={"version": d["version"], "dept": ""},
+        )
+        assert clear.status_code == 200, clear.text
+        row = _psql_row("SELECT dept FROM auth.users WHERE id = %s", (user_id,))
+        assert row[0] == ""
+        d = {**d, "version": clear.json()["version"]}
+        # 部门列表 API：本租户 active 部门（管理端下拉数据源）
+        dept_list = client.get("/api/sys/rbac/departments")
+        assert dept_list.status_code == 200
+        dept_codes = {item["code"] for item in dept_list.json()["items"]}
+        assert {"general", "hr"} <= dept_codes
 
         # ── 临时密码登录态被门禁拦截（P6.3）──
         login_ish_token = issue_access_token(

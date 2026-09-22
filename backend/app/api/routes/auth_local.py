@@ -181,6 +181,9 @@ def _user_info(row) -> dict:
         "platformRole": role,
         "tenantId": row.get("tenant_id"),
         "csRole": row.get("cs_role"),
+        # P9（2026-09-23 授权收口）：部门随登录/刷新下发最新值——用户端
+        # 只读展示「我的部门」（部门变更经管理员维护，用户不可自改）
+        "dept": row.get("dept") or "",
         # P6.3：临时密码首次登录标记（前端据此强制进入改密流程）
         "mustChangePassword": bool(row.get("must_change_password", False)),
     }

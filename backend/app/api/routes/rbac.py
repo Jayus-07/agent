@@ -167,6 +167,17 @@ def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
     ):
         raise _http_error("csRole 必须是 agent/supervisor/null", 400)
 
+    # dept（P9 部门维护）：空串/null = 清空部门；非空必须是字符串且在
+    # 事务内校验为本租户 active 部门（_department_active），不收任意文本。
+    dept = body.get("dept", _MISSING)
+    if dept is not _MISSING:
+        if dept is None:
+            dept = ""
+        elif not isinstance(dept, str):
+            raise _http_error("dept 必须是字符串或 null", 400)
+        else:
+            dept = dept.strip()[:50]
+
     return {
         "version": None if version is _MISSING else version,
         "platform_role": platform_role,
@@ -175,11 +186,30 @@ def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
         "max_conversations": max_conversations,
         "enabled": body.get("enabled", _MISSING),
         "accepting": body.get("accepting", _MISSING),
+        "dept": dept,
         "cs_fields_present": any(
             key in body
             for key in ("csRole", "maxConversations", "enabled", "accepting")
         ),
     }
+
+
+async def _department_active(db, *, tenant_id: str, code: str) -> bool:
+    """部门主数据校验（P3）：本租户 + code 命中 + active。
+
+    fail-closed：auth.departments 未就绪（041 迁移未应用）时显式报错，
+    不降级放行——部门校验是授权属性，静默放行等于绕过主数据约束。
+    """
+    available = (await db.execute(text(
+        "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+        "WHERE table_schema = 'auth' AND table_name = 'departments'"))).scalar()
+    if not available:
+        raise _http_error("部门主数据未初始化（请先应用 041_auth_departments 迁移）", 503)
+    row = (await db.execute(text(
+        "SELECT 1 FROM auth.departments "
+        "WHERE tenant_id = :tenant_id AND code = :code AND status = 1"),
+        {"tenant_id": tenant_id, "code": code})).first()
+    return row is not None
 
 
 async def _load_cs_agent(db, *, tenant_id: str, user_id: int):
@@ -218,6 +248,7 @@ def _state(user: Any, agent: Any) -> dict[str, Any]:
     return {
         "platformRole": _row_value(user, "role", "viewer"),
         "status": int(_row_value(user, "status", 1)),
+        "dept": _row_value(user, "dept", ""),
         "csRole": _cs_role(agent),
         "displayName": _row_value(agent, "display_name") if agent else None,
         "maxConversations": _row_value(agent, "max_conversations") if agent else None,
@@ -276,6 +307,13 @@ async def update_user_in_transaction(
         if parsed["status"] is _MISSING
         else parsed["status"]
     )
+    # dept（P9）：未携带 = 保持现状；携带空串 = 清空；非空 = 主数据校验
+    current_dept = str(_row_value(current, "dept", "") or "")
+    new_dept = current_dept if parsed["dept"] is _MISSING else parsed["dept"]
+    if parsed["dept"] is not _MISSING and new_dept:
+        if not await _department_active(db, tenant_id=tenant_id, code=new_dept):
+            raise _http_error(
+                f"部门 '{new_dept}' 不存在或未启用（须为本租户 active 部门）", 400)
 
     was_active_admin = (
         _row_value(current, "role") == "admin"
@@ -292,7 +330,7 @@ async def update_user_in_transaction(
     before_state = _state(current, current_agent)
 
     updated = (await db.execute(text(
-        "UPDATE auth.users SET role = :role, status = :status, "
+        "UPDATE auth.users SET role = :role, status = :status, dept = :dept, "
         "version = version + 1, updated_at = now() "
         "WHERE id = :uid AND tenant_id = :tenant_id "
         "AND version = :expected_version "
@@ -302,6 +340,7 @@ async def update_user_in_transaction(
             "tenant_id": tenant_id,
             "role": new_role,
             "status": new_status,
+            "dept": new_dept,
             "expected_version": expected_version,
         })).mappings().first()
     if updated is None:
@@ -412,12 +451,16 @@ async def update_user_in_transaction(
 
     role_changed = new_role != _row_value(current, "role", "viewer")
     disabled = new_status != int(_row_value(current, "status", 1)) and new_status != 1
+    dept_changed = new_dept != current_dept
     cs_authorization_changed = any(
         before_state.get(field) != after_state.get(field)
         for field in ("csRole", "enabled", "accepting")
     )
     revoked_sessions: list[SessionRef] = []
-    if role_changed or disabled or cs_authorization_changed:
+    if role_changed or disabled or dept_changed or cs_authorization_changed:
+        # 部门是授权属性（决定 RAG KB 可见范围）：与角色/禁用同语义立即
+        # 吊销全部会话（rbac_changed）——平台已有会话闸，改权即失效，
+        # 用户重新登录即得最新 claim，不等 access TTL。
         revoked_sessions = await _session_service.revoke_user_sessions(
             db, user_id, reason="rbac_changed"
         )
@@ -454,6 +497,34 @@ def _is_concurrency_conflict(exc: BaseException) -> bool:
         if code in {"40001", "40P01", "55P03", "23505"}:
             return True
     return False
+
+
+@router.get("/departments")
+async def list_departments(
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """本租户 active 部门列表（P9）：管理端部门下拉唯一数据源。
+
+    禁止前端硬编码部门清单——主数据权威在 auth.departments（041 迁移）。
+    未就绪（迁移未应用）时返回空列表 + warning，管理端下拉自然为空，
+    不阻塞其他用户管理功能（读接口 fail-soft，写校验仍 fail-closed）。
+    """
+    del operator
+    tenant_id = _tenant_id(request)
+    async with _db() as db:
+        available = (await db.execute(text(
+            "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+            "WHERE table_schema = 'auth' AND table_name = 'departments'"))).scalar()
+        if not available:
+            logger.warning("[RBAC] auth.departments 未就绪（041 迁移未应用），部门列表为空")
+            return {"items": []}
+        rows = (await db.execute(text(
+            "SELECT code, name, status FROM auth.departments "
+            "WHERE tenant_id = :tenant_id AND status = 1 "
+            "ORDER BY code"),
+            {"tenant_id": tenant_id})).mappings().all()
+    return {"items": [{"code": r["code"], "name": r["name"]} for r in rows]}
 
 
 @router.get("/users")
@@ -636,6 +707,22 @@ async def create_user(
     temp_password = _generate_temp_password()
 
     async with _db() as db:
+        # 部门校验（P9）：与 PATCH 同口径——非空必须命中本租户 active 部门，
+        # 禁止创建即挂上一个不存在/跨租户的部门字符串
+        if dept:
+            available = (await db.execute(text(
+                "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+                "WHERE table_schema = 'auth' AND table_name = 'departments'"))).scalar()
+            if not available:
+                raise _http_error(
+                    "部门主数据未初始化（请先应用 041_auth_departments 迁移）", 503)
+            dept_ok = (await db.execute(text(
+                "SELECT 1 FROM auth.departments "
+                "WHERE tenant_id = :tenant_id AND code = :code AND status = 1"),
+                {"tenant_id": tenant_id, "code": dept})).first()
+            if dept_ok is None:
+                raise _http_error(
+                    f"部门 '{dept}' 不存在或未启用（须为本租户 active 部门）", 400)
         exists = (await db.execute(text(
             "SELECT 1 FROM auth.users WHERE username = :u"),
             {"u": username})).first()
