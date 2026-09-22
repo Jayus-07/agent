@@ -240,7 +240,9 @@ export default function TravelPage() {
           session_id: threadRef.current,
           conversation_id: threadRef.current,
         }),
-        timeout: 120_000,
+        // 55s < 网关 60s 读超时（docs/travel-test-scenarios S2）：让前端先拿到
+        // 干净的超时提示，而不是等网关 504。旅游域纯规则规划通常秒级返回。
+        timeout: 55_000,
       })
       setPlan(res)
     } catch (e) {

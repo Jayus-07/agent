@@ -58,6 +58,50 @@ def _mask_dates(message: str) -> str:
     return _RE_DATE_CN.sub(_DATE_MASK, _RE_DATE_RANGE_CN.sub(_DATE_MASK, message))
 
 
+def extract_date_range_days(
+    message: str, today: date | None = None,
+) -> tuple[int, str] | None:
+    """日期区间 → 天数（「9月21到25日」= 5 天），返回 (天数, 原文)。
+
+    此前日期区间只做遮蔽（防误读成 21 天），区间本身的天数没有兑现 ——
+    用户给了明确日期却还要被追问「玩几天」。年份按「不早于今天」补齐
+    （与 extract_start_date 同一规则）；跨年区间（12月30到1月2日）-end
+    早于-start 时放弃计算，回落追问（不猜）。
+    """
+    today = today or date.today()
+    match = _RE_DATE_RANGE_CN.search(message)
+    if not match:
+        return None
+    # 省写区间两边不一定都带月份（「9月21到25日」右边只有日），逐侧解析：
+    # 带「N月D日」用之；只有「D日」继承左侧月份。两侧都无月份 → 放弃。
+    left, right = re.split(r"到|至|[-~—]", match.group(0), maxsplit=1)
+
+    def _month_day(text: str) -> tuple[int | None, int | None]:
+        full = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})", text)
+        if full:
+            return int(full.group(1)), int(full.group(2))
+        day_only = re.search(r"(\d{1,2})", text)
+        return (None, int(day_only.group(1))) if day_only else (None, None)
+
+    mo1, d1 = _month_day(left)
+    mo2, d2 = _month_day(right)
+    if d1 is None or d2 is None or mo1 is None:
+        return None
+    if mo2 is None:
+        mo2 = mo1
+    for year in (today.year, today.year + 1):
+        try:
+            start = date(year, mo1, d1)
+            end = date(year, mo2, d2)
+        except ValueError:
+            return None
+        if start >= today:
+            if end < start:
+                return None
+            return (end - start).days + 1, match.group(0)
+    return None
+
+
 # 天数：阿拉伯数字或中文数字（含复合） + 天/日（原文已先经 _mask_dates 保护）
 _RE_DAYS = re.compile(rf"({_CN_COMPOUND})\s*[天日]")
 # 区间天数：「两三天」「三四天」「2-3天」「两到三天」。
@@ -123,11 +167,17 @@ def extract_destination(message: str) -> str:
 
 
 def extract_days(message: str) -> int | None:
+    # 显式天数表达优先（「9月21到25日去福州玩2天」= 2 天，用户说了算）；
+    # 没有显式天数时，日期区间才兜底（「9月21到25日福州玩」= 5 天）
     match = _RE_DAYS.search(_mask_dates(message))
-    if not match:
-        return None
-    value = _to_int(match.group(1))
-    return value if value and value > 0 else None
+    if match:
+        value = _to_int(match.group(1))
+        if value and value > 0:
+            return value
+    range_days = extract_date_range_days(message)
+    if range_days is not None:
+        return range_days[0]
+    return None
 
 
 def extract_days_range(message: str) -> tuple[int, int, str] | None:
@@ -191,6 +241,10 @@ _KNOWN_MAJOR_CITIES = (
     "南京", "天津", "苏州", "长沙", "郑州", "青岛", "大连", "昆明",
     "贵阳", "哈尔滨", "沈阳", "济南", "合肥", "南昌", "宁波", "无锡",
     "泉州", "宁德", "南平", "莆田", "漳州", "龙岩", "三明",
+    # 境外热门目的地（2026-09-22 场景 B1）：点名时明确告知不支持，
+    # 而不是当成没说过 —— 用户需要知道为什么城市没被接住
+    "纽约", "伦敦", "巴黎", "东京", "大阪", "首尔", "曼谷",
+    "新加坡", "吉隆坡", "香港", "澳门",
 )
 
 
@@ -545,6 +599,11 @@ def slot_filler_node(state: dict) -> dict:
     # notes 每轮重写（旧轮提示对新规划已过时）；risk expert 在本轮末尾
     # 读取 state.notes 累加风险提示，不冲突。
     notes: list[str] = []
+    # 日期区间透明化：「9月21到25日」按区间天数规划，让用户看得见换算结果
+    date_range = extract_date_range_days(message)
+    if date_range and brief.days == date_range[0]:
+        notes.append(f"你说的「{date_range[1]}」共 {date_range[0]} 天，已按此规划；"
+                     "想调整直接说「改成 N 天」")
     day_range = extract_days_range(message)
     if day_range and brief.days == day_range[1]:
         notes.append(
