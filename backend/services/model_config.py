@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+import os
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -51,6 +52,13 @@ class ModelConfigConflict(RuntimeError):
 _SPECIALIZED_ROLES = {"embedding", "rerank"}
 
 # 模型用途 → model_price.component（计价口径）。chat/vision/speech 都按 llm 计。
+# 保存路径探测的 L2 失败退避重试（2026-09-22 实测：中转站 ~1 次/分钟限流，
+# 「测试连接 + 测试并保存」背靠背必撞）。0 = 不重试。
+_PROBE_SAVE_RETRY_BACKOFF = float(
+    os.getenv("PROBE_SAVE_RETRY_BACKOFF_SECONDS", "35") or "35"
+)
+
+
 _COMPONENT_BY_MODEL_KIND = {
     "chat": "llm",
     "vision": "llm",
@@ -1557,19 +1565,26 @@ class ModelConfigService:
             payload.get("upstreamModelName") or payload.get("upstream_model_name")
             or model_name
         ).strip() or model_name
-        probe = await provider_probe.probe_provider(
-            driver=driver,
-            base_url=base_url,
-            api_key=api_key,
-            model_name=model_name,
-            model_kind=model_kind,
-            network_scope=str(provider.get("network_scope") or "public"),
-            extra_headers=extra_headers or None,
-            upstream_model_name=upstream_model_name,
-        )
-        await self.record_probe(provider_id, probe.to_dict())
-        if not probe.ok:
-            raise ValueError(f"模型测试未通过：{probe.summary}")
+        # 2026-09-22 拍板：测试与保存独立 —— 保存不再强制探测（「测试连接」
+        # 是独立入口）。原因：中转站 ~1 次/分钟限流，保存探测与测试连接
+        # 背靠背必撞，用户永远保存不了。未验证模型照常登记，探测状态由
+        # 卡片「测试连接」随时补齐（last_probe 空则前端灰显"未验证"）。
+        probe_result: provider_probe.ProbeResult | None = None
+        if payload.get("probe"):
+            probe_result = await provider_probe.probe_provider(
+                driver=driver,
+                base_url=base_url,
+                api_key=api_key,
+                model_name=model_name,
+                model_kind=model_kind,
+                network_scope=str(provider.get("network_scope") or "public"),
+                extra_headers=extra_headers or None,
+                upstream_model_name=upstream_model_name,
+                retry_l2_backoff_seconds=_PROBE_SAVE_RETRY_BACKOFF,
+            )
+            await self.record_probe(provider_id, probe_result.to_dict())
+            if not probe_result.ok:
+                raise ValueError(f"模型测试未通过：{probe_result.summary}")
 
         async for session in get_session():
             await self._upsert_model(
@@ -1608,11 +1623,15 @@ class ModelConfigService:
                 float(cached_input_price) if cached_input_price is not None else None
             ),
             "priceCurrency": price_currency,
-            "probe": {
-                "ok": True,
-                "summary": probe.summary,
-                "elapsedMs": sum(item.elapsed_ms for item in probe.steps),
-            },
+            "probe": (
+                {
+                    "ok": True,
+                    "summary": probe_result.summary,
+                    "elapsedMs": sum(item.elapsed_ms for item in probe_result.steps),
+                }
+                if probe_result is not None
+                else None
+            ),
         }
 
     async def remove_provider_model(
@@ -1785,23 +1804,27 @@ class ModelConfigService:
             raise ValueError("billing 只能是 metered、subscription 或 local")
         extra_headers = _normalize_extra_headers(payload.get("extraHeaders"))
 
-        # API 层不能只依赖管理端先测再保存；直接调用写接口也必须通过同一
-        # 个按用途分流的探测器，避免把未验证模型写进生效目录。
+        # 2026-09-22 拍板：测试与保存独立 —— 保存不再强制探测（与
+        # add_provider_model 同口径，见彼处注释）。payload.probe=true 时仍
+        # 走探测并阻断（保留给需要强校验的调用方）。
         upstream_model_name = str(
             payload.get("upstreamModelName") or payload.get("upstream_model_name")
         ).strip()
-        probe = await provider_probe.probe_provider(
-            driver=driver,
-            base_url=base_url,
-            api_key=api_key,
-            model_name=model_name,
-            model_kind=model_kind,
-            network_scope=network_scope,
-            extra_headers=extra_headers or None,
-            upstream_model_name=upstream_model_name or model_name,
-        )
-        if not probe.ok:
-            raise ValueError(f"模型测试未通过：{probe.summary}")
+        probe: provider_probe.ProbeResult | None = None
+        if payload.get("probe"):
+            probe = await provider_probe.probe_provider(
+                driver=driver,
+                base_url=base_url,
+                api_key=api_key,
+                model_name=model_name,
+                model_kind=model_kind,
+                network_scope=network_scope,
+                extra_headers=extra_headers or None,
+                upstream_model_name=upstream_model_name or model_name,
+                retry_l2_backoff_seconds=_PROBE_SAVE_RETRY_BACKOFF,
+            )
+            if not probe.ok:
+                raise ValueError(f"模型测试未通过：{probe.summary}")
         display_name = str(payload.get("displayName") or "").strip()
         provider_id = ""
         new_fingerprint = fingerprint(api_key) if api_key else ""

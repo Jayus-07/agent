@@ -153,6 +153,7 @@ async def test_create_provider_registers_model_and_encrypts_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_provider_does_not_persist_when_probe_fails(monkeypatch):
+    """payload.probe=true 时探测失败不得落库（强校验路径保留）。"""
     async def _probe(**_kwargs):
         return ProbeResult(
             ok=False,
@@ -174,9 +175,63 @@ async def test_create_provider_does_not_persist_when_probe_fails(monkeypatch):
                 "baseUrl": "https://provider.example/v1",
                 "apiKey": "sk-secret-value",
                 "modelName": "bad-model",
+                "probe": True,
             },
             "user:test-admin",
         )
+
+
+@pytest.mark.asyncio
+async def test_create_provider_without_probe_saves_directly(monkeypatch):
+    """测试与保存独立（2026-09-22 拍板）：不带 probe 直接保存，不探测。"""
+    def _no_probe(**_kwargs):
+        raise AssertionError("缺省保存不得探测")
+
+    monkeypatch.setattr(model_config.provider_probe, "probe_provider", _no_probe)
+
+    class _SaveSession:
+        def __init__(self):
+            self.statements: list[str] = []
+
+        async def execute(self, statement, _params=None):
+            sql = str(statement)
+            self.statements.append(sql)
+            if "SELECT 1 FROM llm_providers" in sql:
+                class _R:
+                    def first(self):
+                        return None
+                return _R()
+            if "FROM llm_models" in sql:
+                class _M:
+                    def mappings(self):
+                        class _MM:
+                            def first(self):
+                                return None
+                        return _MM()
+                return _M()
+            return None
+
+        async def commit(self):
+            pass
+
+    session = _SaveSession()
+    monkeypatch.setattr(model_config, "get_session", lambda: _save_stream(session))
+
+    await model_config.ModelConfigService().create_provider(
+        {
+            "displayName": "relay",
+            "baseUrl": "https://provider.example/v1",
+            "apiKey": "sk-secret-value",
+            "modelName": "qwen3.7-flash",
+        },
+        "user:test-admin",
+    )
+    assert any("INSERT INTO llm_providers" in s for s in session.statements)
+    assert any("INSERT INTO llm_models" in s for s in session.statements)
+
+
+async def _save_stream(session):
+    yield session
 
 
 class _LegacyMigrationResult:

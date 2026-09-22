@@ -695,7 +695,7 @@ describe('ProvidersTab 模型目录与「去修」动作（B2）', () => {
     const container = mount()
     await openNewProvider(container)
     const footer = Array.from(container.querySelectorAll('div'))
-      .find((node) => node.className.includes('justify-end') && node.textContent === '取消测试连接测试并保存')
+      .find((node) => node.className.includes('justify-end') && node.textContent === '取消测试连接保存')
     expect(footer, '底部应为 取消/测试连接/保存 三个按钮').toBeTruthy()
     // 深度切换存在，且没有第二个常驻测试按钮
     expect(container.querySelector('[data-testid="provider-probe-depth"]')).toBeTruthy()

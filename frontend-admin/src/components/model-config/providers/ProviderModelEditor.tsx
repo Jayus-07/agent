@@ -4,7 +4,7 @@
  * 同步写入目录展示价与计费表（model_price），不再走模型价格页的
  * 导入+双人审核流程。embedding/rerank 只有输入单价一个字段。
  */
-import { FlaskConical, X } from 'lucide-react'
+import { Save, X } from 'lucide-react'
 import { modelKindLabel, type ModelKind } from '@/types/modelConfig'
 import type { ModelDraft } from './draft'
 
@@ -31,7 +31,7 @@ export default function ProviderModelEditor({
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-sm font-semibold text-text-primary">{draft.editingExisting ? '调整模型价格' : '新增模型'}</div>
-            <p className="mt-1 text-[11px] text-text-muted">供应商：{draft.provider.displayName}。后端会用已保存的 URL 和密钥测试，通过后按填写的单价登记{metered ? '并即时生效' : ''}。</p>
+            <p className="mt-1 text-[11px] text-text-muted">供应商：{draft.provider.displayName}。保存即按填写的单价登记生效{metered ? '（登记即生效）' : ''}；连通性验证请用供应商卡片上的「测试连接」。</p>
           </div>
           <button onClick={onCancel} className="text-text-muted hover:text-text-primary" aria-label="关闭"><X size={16} /></button>
         </div>
@@ -87,7 +87,7 @@ export default function ProviderModelEditor({
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button disabled={busy} onClick={onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
-          <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><FlaskConical size={13} />{busy ? '测试中…' : '测试并保存'}</button>
+          <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />{busy ? '保存中…' : '保存'}</button>
         </div>
       </div>
     </div>

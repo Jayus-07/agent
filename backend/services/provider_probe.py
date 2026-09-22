@@ -95,6 +95,7 @@ REASON_BASE_URL = "base_url"          # 地址不是 OpenAI 兼容基址（路�
 REASON_MODEL_NAME = "model_name"      # 模型名错 / 该 Key 无权访问该模型
 REASON_API_KEY = "api_key"            # Key 无效或无权
 REASON_BILLING = "billing"            # 账户欠费 / 余额 / 额度不足（2026-09-22 实测：中转站欠费常被误读成 Key 坏）
+REASON_RATE_LIMITED = "rate_limited"  # 厂商限流（429 / rate limit）—— 测试+保存背靠背两次调用必撞（2026-09-22 实测）
 REASON_CLIENT_BUILD = "client_build"  # 客户端初始化失败（协议与地址不匹配）
 REASON_NO_MODEL = "no_model"          # 未提供模型名
 
@@ -116,6 +117,10 @@ _KEY_ERROR_HINTS = (
 _BILLING_ERROR_HINTS = (
     "insufficient", "balance", "quota", "arrears", "prepaid",
     "402", "额度", "余额", "欠费", "充值",
+)
+_RATE_LIMIT_HINTS = (
+    "429", "rate limit", "rate_limit", "ratelimit", "too many requests",
+    "请求过于频繁", "限流", "频率",
 )
 
 
@@ -659,6 +664,16 @@ def _classify_l2_failure(exc: Exception, api_key: str = "") -> FailureAttributio
             reason=REASON_BASE_URL,
             raw=raw,
         )
+    if status == 429 or any(h in low for h in _RATE_LIMIT_HINTS):
+        return FailureAttribution(
+            summary=(
+                "厂商限流：这个地址一分钟内只允许少量调用 —— "
+                "「测试连接」和「测试并保存」背靠背两次会撞限流。请等约 1 分钟后"
+                "直接点「测试并保存」（跳过单独的测试连接），系统也会自动重试"
+            ),
+            reason=REASON_RATE_LIMITED,
+            raw=raw,
+        )
     if any(h in low for h in _BILLING_ERROR_HINTS) or status == 402:
         return FailureAttribution(
             summary=(
@@ -873,6 +888,7 @@ async def probe_provider(
     include_stream_usage: bool = False,
     model_kind: str = "chat",
     upstream_model_name: str = "",
+    retry_l2_backoff_seconds: float = 0,
 ) -> ProbeResult:
     """执行快速或完整探测。
 
@@ -925,6 +941,23 @@ async def probe_provider(
         extra_headers=extra_headers, fast=not include_stream_usage,
     )
     steps.append(l2)
+
+    # 保存路径的退避重试（2026-09-22 实测：中转站 ~1 次/分钟限流，「测试连接 +
+    # 测试并保存」背靠背必撞 —— 第二次失败等一个限流窗口再试一次）。
+    if l2.status != STATUS_PASS and retry_l2_backoff_seconds > 0:
+        import asyncio as _asyncio
+
+        logger.info(
+            "[ProviderProbe] L2 未通过，%.0fs 后自动重试一次（疑似厂商限流）",
+            retry_l2_backoff_seconds,
+        )
+        await _asyncio.sleep(retry_l2_backoff_seconds)
+        l2_retry = await probe_l2(
+            driver, model_name=probe_model, api_key=api_key, base_url=base_url,
+            extra_headers=extra_headers, fast=not include_stream_usage,
+        )
+        steps.append(l2_retry)
+        l2 = l2_retry
 
     if l2.status != STATUS_PASS:
         logger.info(

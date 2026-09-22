@@ -241,7 +241,7 @@ export default function ProviderEditor({
         <div className="mt-5 flex justify-end gap-2">
           <button disabled={busy} onClick={onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
           <button data-testid="provider-test" disabled={busy} onClick={() => onTest(probeDepth)} className="flex items-center gap-1 rounded-lg border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50"><FlaskConical size={13} />{testingMode ? `${probeModeLabel(testingMode)}中 ${formatLiveElapsed(testingElapsedMs)}` : probeDepth === 'full' ? '完整测试' : '测试连接'}</button>
-          <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />{isNew ? '测试并保存' : '保存'}</button>
+          <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />保存</button>
         </div>
       </div>
     </div>
