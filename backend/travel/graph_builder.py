@@ -4,17 +4,22 @@
   START → travel_slot_filler → travel_supervisor
             ├─ travel_poi_expert      ─┐
             ├─ travel_transit_expert   │
-            ├─ travel_budget_expert    ├→ travel_supervisor（循环）
+            ├─ travel_weather_expert   ├→ travel_supervisor（循环）
+            ├─ travel_budget_expert    │
             ├─ travel_risk_expert      │
             ├─ travel_validator       ─┘
             └─ travel_repair ──────────→ travel_supervisor
   travel_supervisor → travel_reporter → END
 
 为什么用「supervisor 单点入、单点出」而不是 Send 并行派发：
-P0 的四个专家之间存在**严格的数据依赖**（poi → transit → budget/risk），
+P0 的专家之间存在**严格的数据依赖**（poi → transit → weather → budget/risk），
 真正可并行的只有 budget 与 risk 两个，并行收益有限而调度复杂度上升。
-先跑通契约与校验，P1 再把 budget/risk 改为 Send 并行（届时两者只读同一份
+先跑通契约与校验，后续再把 budget/risk 改为 Send 并行（届时两者只读同一份
 itinerary，互不写入，天然可并行）。
+
+weather（2026-09-22）：排程后按出行日期核查天气，坏天气日做户外→室内
+替换 —— 位于 transit 后（需要重排当日时刻表）、budget 前（替换会改变
+门票/通勤费用，先换再算钱，预算口径才一致）。
 """
 from __future__ import annotations
 
@@ -27,6 +32,7 @@ from backend.travel.experts.budget import budget_expert_node
 from backend.travel.experts.poi import poi_expert_node
 from backend.travel.experts.risk import risk_expert_node
 from backend.travel.experts.transit import transit_expert_node
+from backend.travel.experts.weather import weather_expert_node
 from backend.travel.graph_state import (
     TRAVEL_BUDGET_EXPERT,
     TRAVEL_POI_EXPERT,
@@ -37,6 +43,7 @@ from backend.travel.graph_state import (
     TRAVEL_SUPERVISOR,
     TRAVEL_TRANSIT_EXPERT,
     TRAVEL_VALIDATOR,
+    TRAVEL_WEATHER_EXPERT,
     TravelGraphState,
 )
 from backend.travel.repair import repair_node
@@ -48,8 +55,8 @@ from backend.shared.logger import logger
 
 # 回到调度器的节点（supervisor 是唯一的汇聚点）
 _BACK_TO_SUPERVISOR = (
-    TRAVEL_POI_EXPERT, TRAVEL_TRANSIT_EXPERT, TRAVEL_BUDGET_EXPERT,
-    TRAVEL_RISK_EXPERT, TRAVEL_VALIDATOR, TRAVEL_REPAIR,
+    TRAVEL_POI_EXPERT, TRAVEL_TRANSIT_EXPERT, TRAVEL_WEATHER_EXPERT,
+    TRAVEL_BUDGET_EXPERT, TRAVEL_RISK_EXPERT, TRAVEL_VALIDATOR, TRAVEL_REPAIR,
 )
 
 
@@ -61,6 +68,7 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
     wf.add_node(TRAVEL_SUPERVISOR, travel_supervisor_node)
     wf.add_node(TRAVEL_POI_EXPERT, poi_expert_node)
     wf.add_node(TRAVEL_TRANSIT_EXPERT, transit_expert_node)
+    wf.add_node(TRAVEL_WEATHER_EXPERT, weather_expert_node)
     wf.add_node(TRAVEL_BUDGET_EXPERT, budget_expert_node)
     wf.add_node(TRAVEL_RISK_EXPERT, risk_expert_node)
     wf.add_node(TRAVEL_VALIDATOR, travel_validator_node)
@@ -80,7 +88,7 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         compile_kwargs["checkpointer"] = checkpointer
 
     graph = wf.compile(**compile_kwargs)
-    logger.info("[TravelGraph] 编译完成（9 节点，checkpointer=%s）",
+    logger.info("[TravelGraph] 编译完成（10 节点，checkpointer=%s）",
                 "on" if checkpointer else "off")
     return graph
 

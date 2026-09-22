@@ -123,7 +123,8 @@ def repair_itinerary(
     repaired.repair_rounds = itinerary.repair_rounds + 1
     repaired.warnings = list(itinerary.warnings)
     repaired.sources = list(itinerary.sources)
-    repaired.cost = estimate_cost(repaired.days, itinerary.brief.party_size)
+    repaired.cost = estimate_cost(repaired.days, itinerary.brief.party_size,
+                                  city=itinerary.brief.destination)
     # 版本章（任务书 §4）：修复产物是旧版的直接后继 —— plan_version +1、
     # parent 指向旧版；候选池未变，data_snapshot 沿用旧值。
     repaired.stamp_version(

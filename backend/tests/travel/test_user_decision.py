@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
@@ -19,7 +20,20 @@ from backend.travel.graph_state import new_travel_graph_input
 from backend.travel.validator import _normalize_decision
 from backend.travel.validator import check_itinerary  # noqa: F401 — 保证模块可导入
 
-MONDAY_QUESTION = "9月21日福州一日游，1个人，必去福建博物院"
+
+def _next_monday() -> date:
+    """下一个周一（今天恰为周一则取下周一）。
+
+    场景需要「未来日期 + 福建博物院闭馆日」——固定写「9月21日」会随真实
+    日期漂移（2026-09-22 起被抽取为 2027-09-21 周二，闭馆场景永不触发）。
+    """
+    today = date.today()
+    ahead = (7 - today.weekday()) % 7
+    return today + timedelta(days=ahead or 7)
+
+
+_M = _next_monday()
+MONDAY_QUESTION = f"{_M.month}月{_M.day}日福州一日游，1个人，必去福建博物院"
 
 
 @pytest.fixture

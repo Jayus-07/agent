@@ -23,7 +23,9 @@ def budget_expert_node(state: dict) -> dict:
             return {"status": "failed", "data": {}, "notes": [],
                     "error": "行程尚未生成，无法核算预算"}
 
-        itinerary.cost = estimate_cost(itinerary.days, brief.party_size)
+        # 城市档位（P0-3）：餐饮/住宿按目的地消费水平核算，未登记城市回落全局定额
+        itinerary.cost = estimate_cost(itinerary.days, brief.party_size,
+                                       city=brief.destination)
 
         notes: list[str] = []
         if brief.budget_cny is None or brief.budget_cny <= 0:

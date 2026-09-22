@@ -40,9 +40,13 @@ PREFERENCE_KEYWORDS: dict[str, list[str]] = {
 }
 
 # 节奏关键词 → 档位
+# 2026-09-22（P1-4 模糊反馈）：补「太赶」类口语 —— 用户对已生成行程说
+# 「太赶了」时，应把节奏降为 relaxed 并触发重排（pace 在指纹内，变化即重规划）。
 PACE_KEYWORDS: dict[str, list[str]] = {
-    "relaxed": ["轻松", "悠闲", "慢慢", "不赶", "放松", "慢节奏", "佛系", "休闲"],
-    "intense": ["紧凑", "深度", "暴走", "尽可能多", "多逛", "高效", "特种兵"],
+    "relaxed": ["轻松", "悠闲", "慢慢", "不赶", "太赶", "好赶", "有点赶", "节奏太快",
+                "太快了", "缓一缓", "放慢", "放松", "慢节奏", "佛系", "休闲"],
+    "intense": ["紧凑", "深度", "暴走", "尽可能多", "多逛", "高效", "特种兵",
+                "太闲", "太松", "不够玩", "再多排"],
 }
 
 # 槽位追问话术（缺失槽位 → 向用户提的具体问题）
@@ -53,6 +57,14 @@ SLOT_QUESTIONS: dict[str, str] = {
     "party_size": "几个人一起？",
     "budget_cny": "有预算范围吗？",
 }
+
+# 饮食忌口/偏好关键词（P1-1 偏好管理）：命中即记入 brief.diet。
+# 只做记录与持久化，不参与排程判定 —— 刻意不做「忌口 → 换餐厅」的推断，
+# 那需要餐厅级数据支撑，种子池没有这个前提。
+DIET_KEYWORDS: tuple[str, ...] = (
+    "不吃辣", "不能吃辣", "忌辣", "素食", "吃素", "清真",
+    "不吃海鲜", "海鲜过敏", "不吃牛肉", "不吃猪肉", "过敏",
+)
 
 
 class TravelBrief(BaseModel):
@@ -81,6 +93,12 @@ class TravelBrief(BaseModel):
     must_go: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
     pace: str = "moderate"
+    # 偏好补充（P1-1 偏好管理，2026-09-22）：饮食忌口/住宿倾向/交通偏好。
+    # 只做记录与持久化，暂不参与排程判定与指纹（指纹不含它们——用户换着
+    # 说法重述忌口不该触发整份行程重排）。
+    diet: str = ""
+    lodging: str = ""
+    transport: str = ""
     # 需求版本号（任务书 §4 三层版本之一）：指纹变化触发重规划时 +1，
     # 承担「这版行程基于哪个需求」的追溯；指纹只做变更检测的快速通道。
     version: int = Field(default=1, ge=1, description="需求版本号，重规划时递增")

@@ -28,6 +28,26 @@ TRAVEL_DIR = DATASET_DIR / "travel"
 VALID_TIERS = {"smoke", "core", "hard", "regression"}
 
 
+def _next_monday_text() -> str:
+    """下一个周一的「M月D日」文本（E 组场景的动态日期锚）。"""
+    from datetime import date, timedelta
+
+    today = date.today()
+    ahead = (7 - today.weekday()) % 7
+    m = today + timedelta(days=ahead or 7)
+    return f"{m.month}月{m.day}日"
+
+
+def _normalize_e_group_dates(cases: dict) -> None:
+    """E 组用例的日期锚随真实日期漂移（原「9月21日」2026-09-22 后已成过去、
+    且星期不再落在周一，闭馆场景永不触发）。冒烟测试内把日期替换为动态
+    下一个周一 —— golden 数据集文本本身不动（评测口径由评测侧统一重建）。
+    """
+    for c in cases.values():
+        if c.metadata.get("group") == "E" and "9月21日" in c.question:
+            c.question = c.question.replace("9月21日", _next_monday_text())
+
+
 # =============================================
 # 一、数据集完整性
 # =============================================
@@ -181,5 +201,6 @@ class TestRunnerSmoke:
 
     def test_user_decision_case_passes(self):
         cases = {c.id: c for c in load_dataset("travel")}
+        _normalize_e_group_dates(cases)
         result = _run_case(cases["T-E01"])
         assert result.status == "pass", result.error_msg

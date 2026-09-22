@@ -51,6 +51,7 @@ from backend.app.api.routes import (
     sys_model_roles,
     sys_providers,
     tasks,
+    travel,
     workflows,
 )
 from backend.app.api.routes.health import router as health_router
@@ -107,6 +108,7 @@ api_router.include_router(idempotency.router)  # 原操作者幂等状态查询
 api_router.include_router(tasks.router)  # 异步任务编排（Celery + LangGraph checkpoint）
 api_router.include_router(admin_tasks.router)  # 管理端任务中心（管理员闸 + 操作审计）
 api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /api/map/*，Key 不出后端）
+api_router.include_router(travel.router)  # 旅游域 REST：plan/ICS导出/反馈/偏好/推荐（2026-09-22）
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)

@@ -25,6 +25,7 @@ from backend.tools.travel import poi_seed
 from backend.travel.graph_state import load_brief
 from backend.travel.models.itinerary import CHANGE_BRIEF
 from backend.travel.models.brief import (
+    DIET_KEYWORDS,
     PACE_KEYWORDS,
     PREFERENCE_KEYWORDS,
     SLOT_QUESTIONS,
@@ -245,6 +246,14 @@ def extract_preferences(message: str) -> list[str]:
     return tags
 
 
+def extract_diet(message: str) -> str:
+    """饮食忌口抽取（P1-1）：命中多个时取最长表述（信息量最大）。"""
+    hits = [k for k in DIET_KEYWORDS if k in message]
+    if not hits:
+        return ""
+    return max(hits, key=len)
+
+
 def extract_pace(message: str) -> str | None:
     for pace, keywords in PACE_KEYWORDS.items():
         if any(k in message for k in keywords):
@@ -376,6 +385,9 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
     merged.must_go = _filter_city_names(merged.must_go)
     if fresh.pace != "moderate":
         merged.pace = fresh.pace
+    # 饮食忌口：本轮有表述才覆盖（与 pace 同一合并语义）
+    if fresh.diet:
+        merged.diet = fresh.diet
     return merged
 
 
@@ -392,6 +404,7 @@ def extract_brief(message: str, previous: TravelBrief | None = None) -> TravelBr
         start_date=extract_start_date(message),
         preferences=extract_preferences(message),
         pace=extract_pace(message) or "moderate",
+        diet=extract_diet(message),
     )
     fresh.avoid = extract_avoid(message)
     fresh.must_go = extract_must_go(message, fresh.destination, fresh.avoid)
@@ -403,6 +416,7 @@ def build_clarification(brief: TravelBrief, user_message: str = "") -> str:
 
     user_message 用于识别「用户点名了不支持的城市」——此时明确告知原因
     （缺当地地点数据），而不是让用户对着城市列表猜自己哪里答错了。
+    P1-3：destination 缺失时附偏好推荐，让用户有「可以直接选」的起点。
     """
     missing = brief.missing_slots()
     if not missing:
@@ -419,6 +433,19 @@ def build_clarification(brief: TravelBrief, user_message: str = "") -> str:
         )
     else:
         lines.append(f"\n（当前可规划的城市：{cities_line}）")
+    if "destination" in missing:
+        try:
+            from backend.travel.recommend import (
+                recommend_cities,
+                render_recommendation_line,
+            )
+
+            rec_line = render_recommendation_line(
+                recommend_cities(brief.preferences))
+            if rec_line:
+                lines.append(f"\n{rec_line}，回复城市名即可开始规划。")
+        except Exception:  # noqa: BLE001 — 推荐是增强项，失败不影响追问
+            pass
     return "\n".join(lines)
 
 
@@ -448,6 +475,44 @@ def slot_filler_node(state: dict) -> dict:
                      and T.TRAVEL_REQUIRE_PERSISTENCE)
 
     brief = extract_brief(message, previous)
+
+    # P1-1 偏好持久化（软失败，读写失败都不影响规划主链）：
+    #   预填 —— 跨轮首轮（无上一轮 brief）且开启了偏好功能时，把历史偏好
+    #   填进本轮没表达的槽位；发生在指纹计算之前，同轮内一次性完成。
+    #   回写 —— 本轮用户明确表达的偏好（标签/节奏/忌口）upsert 落库。
+    if previous is None and T.TRAVEL_PREFS_ENABLED and state.get("user_id"):
+        try:
+            from backend.tools.travel import preferences as prefs_store
+
+            saved = prefs_store.get_preferences(state.get("user_id", ""))
+            if saved:
+                if not brief.preferences and saved.get("preferences"):
+                    brief.preferences = list(saved["preferences"])
+                if not brief.origin and saved.get("origin"):
+                    brief.origin = saved["origin"]
+                if not brief.diet and saved.get("diet"):
+                    brief.diet = saved["diet"]
+                if (brief.pace == "moderate" and saved.get("pace")
+                        in ("relaxed", "intense")):
+                    brief.pace = saved["pace"]
+                logger.info("[TravelSlotFiller] 已预填历史偏好: tags=%s pace=%s",
+                            brief.preferences, brief.pace)
+        except Exception:  # noqa: BLE001 — 预填失败按未填处理
+            logger.debug("[TravelSlotFiller] 偏好预填失败", exc_info=True)
+    if T.TRAVEL_PREFS_ENABLED and state.get("user_id"):
+        try:
+            from backend.tools.travel import preferences as prefs_store
+
+            prefs_store.upsert_preferences(
+                state.get("user_id", ""),
+                origin=brief.origin or "",
+                preferences=brief.preferences,
+                pace=(brief.pace if brief.pace != "moderate" else ""),
+                diet=brief.diet or "",
+            )
+        except Exception:  # noqa: BLE001 — 回写失败不影响本轮
+            logger.debug("[TravelSlotFiller] 偏好回写失败", exc_info=True)
+
     missing = brief.missing_slots()
     clarification = build_clarification(brief, message)
 

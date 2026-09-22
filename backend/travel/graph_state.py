@@ -26,6 +26,7 @@ TRAVEL_SLOT_FILLER = "travel_slot_filler"
 TRAVEL_SUPERVISOR = "travel_supervisor"
 TRAVEL_POI_EXPERT = "travel_poi_expert"
 TRAVEL_TRANSIT_EXPERT = "travel_transit_expert"
+TRAVEL_WEATHER_EXPERT = "travel_weather_expert"
 TRAVEL_BUDGET_EXPERT = "travel_budget_expert"
 TRAVEL_RISK_EXPERT = "travel_risk_expert"
 TRAVEL_VALIDATOR = "travel_validator"
@@ -36,6 +37,7 @@ TRAVEL_REPORTER = "travel_reporter"
 EXPERT_TO_NODE: dict[str, str] = {
     "poi": TRAVEL_POI_EXPERT,
     "transit": TRAVEL_TRANSIT_EXPERT,
+    "weather": TRAVEL_WEATHER_EXPERT,
     "budget": TRAVEL_BUDGET_EXPERT,
     "risk": TRAVEL_RISK_EXPERT,
 }
@@ -85,6 +87,10 @@ class TravelGraphState(TypedDict, total=False):
     last_repair_constraint_sig: str
     repair_no_improvement_streak: int
     notes: list[str]
+    # 知识库摘录（P0-1）：risk expert 检索 RAG 后写入，reporter 渲染为
+    # 「知识库参考」段。与 notes 分开：notes 是「行程被迫做的取舍」，
+    # 摘录是「可引用的外部知识」，语义不同不应混排。
+    knowledge_refs: list[str]
 
     # === 执行态 ===
     stage: str
@@ -254,5 +260,6 @@ def planning_reset() -> dict:
         "stage": "",
         "finished": False,
         "notes": [],
+        "knowledge_refs": [],
         "candidate_plans": [],
     }

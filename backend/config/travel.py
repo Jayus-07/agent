@@ -16,7 +16,8 @@ load_dotenv()
 TRAVEL_ENABLED = os.getenv("TRAVEL_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
 # 专家调度循环上限（与 CS_EXPERT_MAX_LOOPS 同语义，兜底防御）
-TRAVEL_MAX_STEPS = int(os.getenv("TRAVEL_MAX_STEPS", "12"))
+# 2026-09-22 新增 weather 专家（transit→budget 之间多一步），默认 12→14
+TRAVEL_MAX_STEPS = int(os.getenv("TRAVEL_MAX_STEPS", "14"))
 # 校验失败后的局部修复轮数上限（防止 repair ↔ validate 死循环）
 TRAVEL_MAX_REPAIR_ROUNDS = int(os.getenv("TRAVEL_MAX_REPAIR_ROUNDS", "2"))
 
@@ -124,6 +125,51 @@ TRAVEL_TRANSIT_BASE_CNY = float(os.getenv("TRAVEL_TRANSIT_BASE_CNY", "10"))
 TRAVEL_TRANSIT_PER_KM_CNY = float(os.getenv("TRAVEL_TRANSIT_PER_KM_CNY", "3.0"))
 # 达到预算该比例即提前预警（不等超支才报）
 TRAVEL_BUDGET_WARN_RATIO = float(os.getenv("TRAVEL_BUDGET_WARN_RATIO", "0.9"))
+
+# =============================================
+# 城市消费档位（2026-09-22 P0-3 预算分项真实化）
+# =============================================
+# 门票与通勤已按 POI 真实数据核算；餐饮/住宿此前是全局定额，对杭州这类
+# 消费明显偏高的城市会低估。按城市键给出日餐费与每晚房价，未登记的城市
+# 回落全局定额 —— 新增城市只需在此补一行，不影响未配置城市的既有行为。
+TRAVEL_CITY_COST_TIERS: dict[str, dict[str, float]] = {
+    "福州": {"meal": 120.0, "lodging": 350.0},
+    "厦门": {"meal": 130.0, "lodging": 400.0},
+    "杭州": {"meal": 160.0, "lodging": 520.0},
+}
+
+
+def city_cost_tier(city: str) -> dict[str, float]:
+    """城市 → {meal, lodging} 档位；未登记城市回落全局定额（单一兜底口径）。"""
+    tier = TRAVEL_CITY_COST_TIERS.get((city or "").strip())
+    if tier:
+        return dict(tier)
+    return {"meal": TRAVEL_MEAL_PER_DAY_CNY, "lodging": TRAVEL_LODGING_PER_NIGHT_CNY}
+
+
+# =============================================
+# 天气专家（2026-09-22 P0-2 接入域图）
+# =============================================
+TRAVEL_WEATHER_ENABLED = os.getenv("TRAVEL_WEATHER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# 天气 API 失败/超时的整体预算（秒）：天气检查是增强项，不能拖垮排程主链
+TRAVEL_WEATHER_TIMEOUT_S = float(os.getenv("TRAVEL_WEATHER_TIMEOUT_S", "6"))
+# 预报文本命中这些词判为「坏天气日」（腾讯天气字段为中文短语，如"中雨"）
+TRAVEL_BAD_WEATHER_KEYWORDS: tuple[str, ...] = (
+    "雨", "雪", "雷", "雹", "台风", "沙尘", "冻",
+)
+
+# =============================================
+# 知识库检索（2026-09-22 P0-1 RAG 接入）
+# =============================================
+TRAVEL_RAG_ENABLED = os.getenv("TRAVEL_RAG_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# 旅游域知识库 id：语料未灌入时检索返回空，risk 专家自动降级为免责声明
+TRAVEL_RAG_KB_ID = os.getenv("TRAVEL_RAG_KB_ID", "travel")
+TRAVEL_RAG_TOP_K = int(os.getenv("TRAVEL_RAG_TOP_K", "3"))
+
+# =============================================
+# 用户偏好持久化（2026-09-22 P1-1）
+# =============================================
+TRAVEL_PREFS_ENABLED = os.getenv("TRAVEL_PREFS_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
 # =============================================
 # 意图预过滤（Router 内，与 CS 预过滤同层）

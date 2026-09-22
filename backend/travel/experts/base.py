@@ -21,9 +21,10 @@ class TravelExpertStatus(str, Enum):
 
 
 class TravelExpertType(str, Enum):
-    """四个规则专家（P0 全部为业务编排，不含 LLM 决策）"""
+    """规则专家（全部为业务编排，不含 LLM 决策；weather 为 2026-09-22 新增）"""
     POI = "poi"
     TRANSIT = "transit"
+    WEATHER = "weather"
     BUDGET = "budget"
     RISK = "risk"
 

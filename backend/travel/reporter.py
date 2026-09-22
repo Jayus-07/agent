@@ -28,6 +28,7 @@ _SOURCE_LABELS: dict[str, str] = {
     "seed": "本地示例数据（未经实时校验）",
     "tencent:lbs": "腾讯位置服务 —— 坐标与路线为实时数据；营业时间与票价为默认占位，未核实",
     "estimate:local": "本地估算（直线距离 × 绕行系数，非真实路况）",
+    "rag:travel": "旅游知识库检索摘录 —— 原文引用，时效未核实，请以官方最新公布为准",
 }
 
 
@@ -206,8 +207,25 @@ def _render_itinerary(state: dict, itinerary) -> str:
         lines.append("## 行程自动调整说明")
         lines.append("")
         rounds = itinerary.repair_rounds
-        lines.append(f"首版行程未通过约束校验，已自动调整 {rounds} 轮：")
+        weather_rounds = sum(1 for a in repair_log
+                             if a.get("code") == "weather_swap")
+        if rounds > 0 or weather_rounds > 0:
+            seg: list[str] = []
+            if rounds > 0:
+                seg.append(f"约束校验自动调整 {rounds} 轮")
+            if weather_rounds > 0:
+                seg.append(f"天气调整 {weather_rounds} 处")
+            lines.append("首版行程经自动调整：" + "、".join(seg) + "：")
         for action in repair_log:
+            swaps = action.get("weather_swaps") or []
+            if swaps:
+                day_idx = action.get("day_index", "")
+                for s in swaps:
+                    lines.append(
+                        f"- 第 {day_idx} 天「{s.get('from', '')}」→ "
+                        f"「{s.get('to', '')}」：{action.get('reason', '')}"
+                    )
+                continue
             dropped = "、".join(action.get("dropped", []))
             kept = "、".join(action.get("kept_required", []))
             if dropped:
@@ -242,6 +260,17 @@ def _render_itinerary(state: dict, itinerary) -> str:
     else:
         lines.append("- 无")
     lines.append("")
+
+    # ── 知识库参考（P0-1）：risk 专家检索的原文摘录，独立成段不与提示混排 ──
+    knowledge_refs = state.get("knowledge_refs") or []
+    if knowledge_refs:
+        lines.append("## 知识库参考")
+        lines.append("")
+        lines.append("> 以下为知识库检索摘录（原文引用，时效未核实）：")
+        lines.append("")
+        for ref in knowledge_refs:
+            lines.append(f"- {ref}")
+        lines.append("")
 
     if itinerary.sources:
         lines.append("## 数据来源")

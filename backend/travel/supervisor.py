@@ -39,6 +39,7 @@ from backend.travel.graph_state import (
     TRAVEL_SUPERVISOR,
     TRAVEL_TRANSIT_EXPERT,
     TRAVEL_VALIDATOR,
+    TRAVEL_WEATHER_EXPERT,
     load_brief,
     load_itinerary,
     load_validation,
@@ -49,6 +50,7 @@ class TravelStage(str, Enum):
     """域图内部阶段（也是埋点与 trace 标签的取值域）"""
     POI = "poi"
     TRANSIT = "transit"
+    WEATHER = "weather"
     BUDGET = "budget"
     RISK = "risk"
     VALIDATE = "validate"
@@ -60,6 +62,7 @@ class TravelStage(str, Enum):
 _STAGE_TO_NODE: dict[TravelStage, str] = {
     TravelStage.POI: TRAVEL_POI_EXPERT,
     TravelStage.TRANSIT: TRAVEL_TRANSIT_EXPERT,
+    TravelStage.WEATHER: TRAVEL_WEATHER_EXPERT,
     TravelStage.BUDGET: TRAVEL_BUDGET_EXPERT,
     TravelStage.RISK: TRAVEL_RISK_EXPERT,
     TravelStage.VALIDATE: TRAVEL_VALIDATOR,
@@ -71,6 +74,7 @@ _STAGE_TO_NODE: dict[TravelStage, str] = {
 _STAGE_TO_EXPERT: dict[TravelStage, str] = {
     TravelStage.POI: "poi",
     TravelStage.TRANSIT: "transit",
+    TravelStage.WEATHER: "weather",
     TravelStage.BUDGET: "budget",
     TravelStage.RISK: "risk",
 }
@@ -80,6 +84,7 @@ _STAGE_TO_EXPERT: dict[TravelStage, str] = {
 _STAGE_TO_ACTION: dict[TravelStage, str] = {
     TravelStage.POI: "run_poi",
     TravelStage.TRANSIT: "run_transit",
+    TravelStage.WEATHER: "run_weather",
     TravelStage.BUDGET: "run_budget",
     TravelStage.RISK: "run_risk",
     TravelStage.VALIDATE: "run_validation",
@@ -144,6 +149,9 @@ def decide(state: dict) -> TravelDecision:
 
     if load_itinerary(state) is None:
         return TravelDecision(TravelStage.REPORT, "排程未产出行程，终止规划")
+
+    if "weather" not in done:
+        return TravelDecision(TravelStage.WEATHER, "排程完成，按出行日期核查天气")
 
     if "budget" not in done:
         return TravelDecision(TravelStage.BUDGET, "行程已排定，核算费用")

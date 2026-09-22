@@ -1,13 +1,17 @@
 """tools/travel/cost.py — 费用估算（纯函数）
 
-费用口径（P0 为城市均值占位，全部可在 config/travel.py 调参）：
+费用口径：
   门票 = Σ 各到访 POI 票价 × 人数
-  餐饮 = 人均日餐费 × 天数 × 人数
-  住宿 = 每晚房价 × (天数 - 1) 夜 × 房间数（2 人 1 间）
+  餐饮 = 城市档位日餐费 × 天数 × 人数（未登记城市回落全局定额）
+  住宿 = 城市档位每晚房价 × (天数 - 1) 夜 × 房间数（2 人 1 间）
   通勤 = Σ 各段整车费用（不乘人数，见 routing.leg_cost_cny）
 
 拆分保留而非只给总额：用户问「为什么超了」时必须能答出来，
 这也是 validator 的 BUDGET_OVER 能做归因、reporter 能给出省钱建议的前提。
+
+城市档位（2026-09-22 P0-3）：餐饮/住宿此前是全局均值，对消费水平明显
+不同的城市会系统性偏差。city 参数为可选 —— 不传时行为与旧版完全一致，
+调用方（budget expert / repair）显式传入 brief.destination。
 """
 from __future__ import annotations
 
@@ -39,30 +43,34 @@ def day_transit_cost(day: ItineraryDay) -> float:
     return sum(leg.cost_cny for leg in day.legs)
 
 
-def day_cost(day: ItineraryDay, party_size: int) -> float:
+def day_cost(day: ItineraryDay, party_size: int, city: str = "") -> float:
     """单日花费 = 门票×人数 + 人均日餐费×人数 + 通勤。
 
     住宿不摊到单日：末晚不产生住宿，摊到某一天会误导用户以为那天特别贵。
     """
-    meals = T.TRAVEL_MEAL_PER_DAY_CNY * max(1, party_size)
+    meal = T.city_cost_tier(city)["meal"]
+    meals = meal * max(1, party_size)
     return round(day_visit_tickets(day) * max(1, party_size) + meals
                  + day_transit_cost(day), 2)
 
 
-def estimate_cost(days: list[ItineraryDay], party_size: int) -> CostBreakdown:
+def estimate_cost(
+    days: list[ItineraryDay], party_size: int, city: str = "",
+) -> CostBreakdown:
     """汇总全程费用拆分。
 
     Args:
         days: 全部行程日（用于累加门票与通勤）
         party_size: 同行人数
+        city: 目的地城市键（决定餐饮/住宿档位；空串回落全局定额）
     """
     people = max(1, party_size)
     night_count = max(0, len(days) - 1)
+    tier = T.city_cost_tier(city)
 
     return CostBreakdown(
         tickets=round(sum(day_visit_tickets(d) for d in days) * people, 2),
-        meals=round(T.TRAVEL_MEAL_PER_DAY_CNY * people * len(days), 2),
-        lodging=round(T.TRAVEL_LODGING_PER_NIGHT_CNY * night_count
-                      * rooms_needed(people), 2),
+        meals=round(tier["meal"] * people * len(days), 2),
+        lodging=round(tier["lodging"] * night_count * rooms_needed(people), 2),
         transit=round(sum(day_transit_cost(d) for d in days), 2),
     )

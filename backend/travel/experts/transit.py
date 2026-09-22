@@ -164,7 +164,7 @@ def schedule_day(
     # 单独约束。把这两者算进来会掩盖真正的超量，也会让两轴互相包含。
     day.active_minutes = sum(i.minutes for i in day.items if i.kind == KIND_VISIT)
     day.transit_minutes = sum(leg.minutes for leg in day.legs)
-    day.cost_cny = day_cost(day, brief.party_size)
+    day.cost_cny = day_cost(day, brief.party_size, city=brief.destination)
     return day
 
 
