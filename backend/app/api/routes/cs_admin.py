@@ -168,8 +168,11 @@ async def _lookup_bound_agent_id(*, tenant_id: str, user_id: str) -> str | None:
         )
 
 
-def _ensure_conversation_access(
-    request: Request, conv_user_id: str, conv_tenant_id: str | None = None
+async def _ensure_conversation_access(
+    request: Request,
+    conv_user_id: str,
+    conv_tenant_id: str | None = None,
+    assigned_agent_id: str | None = None,
 ) -> None:
     """会话归属校验：登录用户只能读自己租户下自己的会话；guest 只能读匿名会话。
 
@@ -179,6 +182,13 @@ def _ensure_conversation_access(
 
     服务间 API-Key 通道（BFF 管理端）放行并记 warning —— 该通道由
     服务端凭据保护，用户归属在 BFF 信任边界内校验。
+
+    缺陷7（2026-09-23）：认领/被派单坐席读会话消息与事件补发曾被 403
+    （owner/admin 之外无通道）→ 工作台「选中会话暂无消息 / REST 对账与
+    轮询降级全挂」。放行语义与 claim/close 的 ``_assert_current_agent``
+    一致：只有 ``conv.assigned_agent_id`` 的**当前**认领坐席放行，不是
+    「所有 cs_agent 读任意会话」，IDOR 隔离不变。坐席反查失败不在此
+    拒绝 —— 请求方可能是会话主人（非坐席），继续走 owner 判定。
     """
     from backend.app.api.identity import resolve_identity
 
@@ -192,6 +202,16 @@ def _ensure_conversation_access(
     ident = resolve_identity(request)
     if ident.authenticated and "admin" in ident.roles:
         return
+    if assigned_agent_id and ident.authenticated and ident.tenant_id:
+        try:
+            agent_id = await _lookup_bound_agent_id(
+                tenant_id=ident.tenant_id, user_id=ident.user_id
+            )
+        except Exception as exc:  # 反查失败按「非当前坐席」处理，继续 owner 判定
+            logger.warning("[CSAdmin] resolve agent identity for read failed: %s", exc)
+            agent_id = None
+        if agent_id and str(agent_id) == str(assigned_agent_id):
+            return
     if ident.authenticated:
         if conv_user_id != ident.user_id:
             raise HTTPException(403, detail="无权访问他人会话")
@@ -393,7 +413,9 @@ async def replay_conversation_events(
             conv_row = (
                 await db.execute(
                     select(
-                        CSConversation.user_id, CSConversation.tenant_id
+                        CSConversation.user_id,
+                        CSConversation.tenant_id,
+                        CSConversation.assigned_agent_id,
                     )
                     .where(CSConversation.conversation_id == conversation_id)
                     .limit(1)
@@ -401,7 +423,12 @@ async def replay_conversation_events(
             ).first()
         if conv_row is None:
             raise HTTPException(404, detail="Conversation not found")
-        _ensure_conversation_access(request, conv_row.user_id, conv_row.tenant_id)
+        await _ensure_conversation_access(
+            request,
+            conv_row.user_id,
+            conv_row.tenant_id,
+            assigned_agent_id=conv_row.assigned_agent_id,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -456,7 +483,9 @@ async def rate_conversation(conversation_id: str, body: RatingRequest, request: 
                 raise HTTPException(404, detail="Conversation not found")
 
             # P1 归属校验：登录用户只能评自己租户下自己的会话（guest 仅限匿名会话）
-            _ensure_conversation_access(request, conv.user_id, conv.tenant_id)
+            await _ensure_conversation_access(
+                request, conv.user_id, conv.tenant_id
+            )
 
             conv.rating = body.rating
             conv.rating_comment = (body.comment or "").strip() or None
@@ -1008,13 +1037,20 @@ async def get_conversation_messages(
                         CSConversation.conversation_id,
                         CSConversation.user_id,
                         CSConversation.tenant_id,
+                        CSConversation.assigned_agent_id,
                     )
                     .where(CSConversation.conversation_id == conversation_id)
                     .limit(1)
                 )
             ).first()
         if conv is not None:
-            _ensure_conversation_access(request, conv.user_id, conv.tenant_id)
+            # 缺陷7：认领/被派单坐席同样可读（工作台消息加载 / REST 对账 / 轮询降级）
+            await _ensure_conversation_access(
+                request,
+                conv.user_id,
+                conv.tenant_id,
+                assigned_agent_id=conv.assigned_agent_id,
+            )
         else:
             # 会话不存在：与 404 语义一致（不泄露存在性）
             raise HTTPException(404, detail="Conversation not found")
