@@ -17,6 +17,12 @@
         messages=messages, previous_outputs=po, rag_context=rag)
 """
 
+from backend.context_budget.collapse import (
+    ContextFold,
+    FoldRegistry,
+    build_projection_text,
+    fold_messages,
+)
 from backend.context_budget.manager import ContextBudgetManager, context_budget
 from backend.context_budget.micro_compactor import compact_previous_outputs
 from backend.context_budget.models import (
@@ -39,6 +45,10 @@ __all__ = [
     "PreparedContext",
     "ToolResultRef",
     "ArtifactStore",
+    "ContextFold",
+    "FoldRegistry",
+    "build_projection_text",
+    "fold_messages",
     "guard_tool_result",
     "compact_previous_outputs",
     "is_compacted_preview",

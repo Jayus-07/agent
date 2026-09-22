@@ -142,6 +142,7 @@ class ContextBudgetManager:
 
         def _finalize(
             m: list, p: dict, r: list[str], *, overflow: bool = False,
+            folds: list | None = None,
         ) -> PreparedContext:
             used = (
                 sum(_count_message(x) for x in m)
@@ -162,7 +163,7 @@ class ContextBudgetManager:
                 record_overflow("preflight")
             return PreparedContext(
                 messages=m, previous_outputs=p, rag_context=r or None,
-                usage=usage, overflow=overflow,
+                usage=usage, overflow=overflow, folds=folds or [],
             )
 
         # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag；最后一条消息永不丢）
@@ -175,8 +176,45 @@ class ContextBudgetManager:
                 msg_tokens = sum(_count_message(m) for m in msgs)
 
         used = msg_tokens + po_tokens + rag_tokens
+
+        # ── L4 Context Collapse（零 LLM、确定性、可回滚）─────────────
+        # 触发：usage_ratio >= CONTEXT_L4_TRIGGER_RATIO（默认 0.80）。
+        # 折叠较早普通历史为 Projection SystemMessage；SystemMessage /
+        # 最近 CONTEXT_L4_KEEP_RECENT_TURNS 轮 / 当前消息永不折叠；
+        # 原始 chat_messages 不受影响。仍超限时继续走确定性 hard trim。
+        folds: list = []
+        if budget > 0 and (used / budget) >= float(
+                _cfg("CONTEXT_L4_TRIGGER_RATIO", 0.80)):
+            from backend.context_budget.collapse import fold_messages
+            from backend.context_budget.metrics import (
+                emit_context_event,
+                record_compaction,
+            )
+
+            folded, fold = fold_messages(msgs)
+            if fold is not None:
+                used_before = used
+                msgs = folded
+                folds = [fold.to_dict()]
+                msg_tokens = sum(_count_message(m) for m in msgs)
+                used = msg_tokens + po_tokens + rag_tokens
+                record_compaction(level="L4", action="collapse",
+                                  before_tokens=used_before,
+                                  after_tokens=used)
+                emit_context_event(level="L4", action="collapse",
+                                   before_tokens=used_before,
+                                   after_tokens=used,
+                                   reversible=True,
+                                   fold_id=fold.fold_id,
+                                   folded_messages=fold.message_count)
+                logger.info(
+                    f"context_compacted level=L4 action=collapse "
+                    f"fold_id={fold.fold_id} folded_messages={fold.message_count} "
+                    f"before_tokens={used_before} after_tokens={used} "
+                    f"saved_tokens={max(0, used_before - used)}")
+
         if used <= budget:
-            return _finalize(msgs, po, rag_texts)
+            return _finalize(msgs, po, rag_texts, folds=folds)
 
         # ── 确定性裁剪（仍超限时）：旧 history → 旧 previous_outputs → RAG 尾部 ──
         # 1) 收紧 history：预算 = 剩余空间（SystemMessage 由 trim 保证全保留，
@@ -209,7 +247,8 @@ class ContextBudgetManager:
                 + count_tokens("\n".join(rag_texts))
             )
 
-        return _finalize(msgs, po, rag_texts, overflow=used > budget)
+        return _finalize(msgs, po, rag_texts, overflow=used > budget,
+                         folds=folds)
 
     # ── L4 / L5 预留接口（本版不实现，规格 §十）────────────────
 
@@ -218,13 +257,15 @@ class ContextBudgetManager:
         return usage.usage_ratio >= float(
             _cfg("CONTEXT_L4_TRIGGER_RATIO", 0.80))
 
-    async def context_collapse(self, *args: Any, **kwargs: Any) -> None:
-        """Future L4: projection based context folding.
+    async def context_collapse(self, messages: list, **kwargs: Any):
+        """L4: projection based context folding（零 LLM、非破坏性）。
 
-        Do not modify raw chat history. 预留接口，暂未实现。
+        对给定消息列表执行确定性折叠，返回 (折叠后消息列表, ContextFold|None)。
+        不修改原始 chat history；调用方决定是否采用（通常经 prepare_llm_context
+        自动触发，本方法供显式调用/恢复编排使用）。
         """
-        raise NotImplementedError(
-            "L4 Context Collapse 未实现（基础版仅预留接口）")
+        from backend.context_budget.collapse import fold_messages
+        return fold_messages(messages)
 
     def should_auto_compact(self, usage: ContextUsage) -> bool:
         """L5 AutoCompact 触发判定。"""

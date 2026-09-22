@@ -63,6 +63,7 @@ class PreparedContext:
 
     overflow=True 表示经过全部确定性裁剪后仍超 hard budget（已记 warning +
     metric，调用方拿到的是最大程度压缩后的结果，属安全降级而非静默超限）。
+    folds：本轮发生的 L4 折叠台账（可序列化，供图状态留痕）。
     """
 
     messages: list[BaseMessage] = field(default_factory=list)
@@ -70,6 +71,7 @@ class PreparedContext:
     rag_context: list[str] | None = None
     usage: ContextUsage | None = None
     overflow: bool = False
+    folds: list = field(default_factory=list)
 
 
 @runtime_checkable

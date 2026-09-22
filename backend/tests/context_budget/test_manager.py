@@ -161,8 +161,12 @@ class TestFutureLevels:
         assert manager.should_auto_compact(above) is True
 
     @pytest.mark.asyncio
-    async def test_l4_l5_not_implemented(self, manager):
-        with pytest.raises(NotImplementedError):
-            await manager.context_collapse()
+    async def test_l5_not_implemented(self, manager):
         with pytest.raises(NotImplementedError):
             await manager.auto_compact()
+
+    @pytest.mark.asyncio
+    async def test_l4_api_functional(self, manager):
+        folded, fold = await manager.context_collapse([])
+        assert folded == []
+        assert fold is None

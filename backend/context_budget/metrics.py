@@ -11,7 +11,9 @@ MicroCompactor 通过 emit_context_event 发声（sink 未挂载时静默跳过�
 
 from __future__ import annotations
 
+import threading
 import time
+from collections import deque
 from contextvars import ContextVar
 from typing import Any, Callable
 
@@ -67,6 +69,13 @@ ContextSink = Callable[[dict], None]
 _context_sink: ContextVar[ContextSink | None] = ContextVar(
     "context_event_sink", default=None
 )
+# sink 未挂载时的事件缓冲（进程级有界队列，加锁）：
+# L2 历史裁剪发生在 MemoryManager 的后台 event loop 线程（5s 超时放弃后
+# 协程仍会跑完），该线程没有 sink 也取不到 ContextVar —— 必须用进程级
+# 缓冲，由 runner 创建 merged_q 后统一 flush。超时晚到的 L2 事件会顺延
+# 到同一会话的下一条流，属可接受的最终一致。
+_pending_events: deque = deque(maxlen=64)
+_pending_lock = threading.Lock()
 
 
 def set_context_sink(sink: ContextSink) -> object:
@@ -81,6 +90,14 @@ def reset_context_sink(token: object) -> None:
         _context_sink.set(None)
 
 
+def drain_pending_events() -> list[dict]:
+    """取走并清空缓冲的早期 context 事件（L2 等）。"""
+    with _pending_lock:
+        buf = list(_pending_events)
+        _pending_events.clear()
+    return buf
+
+
 def emit_context_event(
     *,
     level: str,
@@ -89,8 +106,9 @@ def emit_context_event(
     after_tokens: int,
     **extra: Any,
 ) -> None:
-    """发一条 context SSE 事件（sink 未挂载时跳过；绝不携带完整工具结果）。
+    """发一条 context SSE 事件（绝不携带完整工具结果）。
 
+    sink 已挂载 → 直发；未挂载 → 进程级缓冲（runner drain 后补发）。
     格式（规格 §十一）：
       {"type": "context", "level": "L1", "action": "tool_compact",
        "before_tokens": 5200, "after_tokens": 250, "saved_tokens": 4950}
@@ -107,9 +125,14 @@ def emit_context_event(
         **extra,
     }
     sink = _context_sink.get()
-    if sink is None:
-        return
+    if sink is not None:
+        try:
+            sink(data)
+            return
+        except Exception:
+            logger.debug("context SSE 事件发送失败", exc_info=True)
     try:
-        sink(data)
+        with _pending_lock:
+            _pending_events.append(data)
     except Exception:
-        logger.debug("context SSE 事件发送失败", exc_info=True)
+        logger.debug("context 事件缓冲失败", exc_info=True)

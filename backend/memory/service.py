@@ -157,6 +157,7 @@ class MemoryService:
                     current_query_tokens=count_tokens(query) if query else 0,
                     reserved_tokens=PREVIOUS_OUTPUTS_MAX_TOKENS,
                 )
+                _pre_trim = list(l1._messages)
                 kept, dropped = trim_messages_to_budget(
                     l1._messages, _history_budget)
                 if dropped:
@@ -164,6 +165,24 @@ class MemoryService:
                     logger.info(
                         f"[MemoryService] 历史 token 预算裁剪: 丢弃 {dropped} 条旧消息 "
                         f"(budget={_history_budget}, 上限={HISTORY_TOKEN_BUDGET})")
+                    # L2 观测闭环（2026-09-22 Phase 2）：metric + SSE context
+                    # 事件。本协程跑在 MemoryManager 后台 loop 线程（无 sink），
+                    # 事件经进程级缓冲由 runner flush 到 SSE。
+                    try:
+                        from backend.context_budget.metrics import (
+                            emit_context_event,
+                            record_compaction,
+                        )
+                        _before = sum(count_message_tokens(m) for m in _pre_trim)
+                        _after = sum(count_message_tokens(m) for m in kept)
+                        record_compaction(level="L2", action="history_trim",
+                                          before_tokens=_before,
+                                          after_tokens=_after)
+                        emit_context_event(level="L2", action="history_trim",
+                                           before_tokens=_before,
+                                           after_tokens=_after)
+                    except Exception:
+                        logger.debug("L2 观测留痕失败", exc_info=True)
 
                 await db_session.commit()
                 return l1

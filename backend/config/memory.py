@@ -55,6 +55,10 @@ PREVIOUS_OUTPUTS_MAX_TOKENS = int(os.getenv("PREVIOUS_OUTPUTS_MAX_TOKENS", "1024
 CONTEXT_L4_TRIGGER_RATIO = float(os.getenv("CONTEXT_L4_TRIGGER_RATIO", "0.80"))
 CONTEXT_L5_TRIGGER_RATIO = float(os.getenv("CONTEXT_L5_TRIGGER_RATIO", "0.90"))
 
+# L4 折叠时保留的最近对话轮数（一组 user+assistant 算一轮），
+# 折叠只作用于更早的普通 user/assistant 历史（SystemMessage/当前消息永不折叠）
+CONTEXT_L4_KEEP_RECENT_TURNS = int(os.getenv("CONTEXT_L4_KEEP_RECENT_TURNS", "4"))
+
 # PostgreSQL 连接池
 MEMORY_ASYNC_POOL_SIZE = int(os.getenv("MEMORY_ASYNC_POOL_SIZE", "20"))
 MEMORY_ASYNC_MAX_OVERFLOW = int(os.getenv("MEMORY_ASYNC_MAX_OVERFLOW", "10"))
