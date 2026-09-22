@@ -51,7 +51,7 @@ class AfterSalesService:
 
         return AfterSalesEligibility(
             eligible=True,
-            order_id=str(order["id"]),
+            order_id=str(order.get("id") or order.get("order_no", "")),
             order_no=str(order.get("order_no", "")),
             amount=float(order.get("total_amount", 0)),
             status=status,
@@ -70,7 +70,7 @@ class AfterSalesService:
 
         return AfterSalesEligibility(
             eligible=True,
-            order_id=str(order["id"]),
+            order_id=str(order.get("id") or order.get("order_no", "")),
             order_no=str(order.get("order_no", "")),
             amount=float(order.get("total_amount", 0)),
             status=status,
@@ -165,50 +165,23 @@ class AfterSalesService:
         )
 
     def _get_order(self, user_id: str, order_id: str) -> dict:
-        from backend.customer_service.service.demo_mode import resolve_user_id
+        """订单事实统一取自 OrderService（缺陷6.4，2026-09-23）。
 
-        user_id = resolve_user_id(user_id)
-        from backend.sql.executor import execute_sql_struct
-
-        if order_id == "latest":
-            # 语义化兜底（P0 实测缺陷修复 2026-09-19）：退货/换货提案缺订单
-            # 槽位时 action.py 回退 "latest"，此前按字面匹配必然
-            # OrderNotFoundError。与 refund_service._get_order 同构。
-            sql = """
-                SELECT id, order_no, customer_id, total_amount, status,
-                       payment_status, created_at
-                FROM "order".orders
-                WHERE customer_id::text = %(user_id)s
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-            """
-            result = execute_sql_struct(sql, params={"user_id": str(user_id)})
-            if result.status not in ("success", "no_data"):
-                raise DatabaseError(f"查询订单失败: {result.error}")
-            if not result.rows:
-                raise OrderNotFoundError(f"No orders found for user {user_id}")
-            return result.rows[0]
-
-        sql = """
-            SELECT id, order_no, customer_id, total_amount, status,
-                   payment_status, created_at
-            FROM "order".orders
-            WHERE (id::text = %(order_id)s OR order_no = %(order_id)s)
-              AND customer_id::text = %(user_id)s
+        与 refund_service._get_order 同构收口：http 网关模式下退货/换货的
+        订单校验与查询侧同源（business service），不再直查本地演示库；
+        sandbox 模式保持本地 SQL。历史 "latest" 语义化兜底已随缺陷6.2
+        一并删除。
         """
-        result = execute_sql_struct(
-            sql, params={"order_id": order_id, "user_id": str(user_id)}
+        from backend.customer_service.service.order_service import get_order_service
+
+        result = get_order_service().query_orders(
+            user_id, order_id=order_id, query_type="detail",
         )
-
-        if result.status not in ("success", "no_data"):
-            raise DatabaseError(f"查询订单失败: {result.error}")
-
-        if not result.rows:
+        if not result.orders:
             raise OrderNotFoundError(
                 f"Order {order_id} not found for user {user_id}"
             )
-
-        return result.rows[0]
+        return result.orders[0]
 
 
 _service_instance: AfterSalesService | None = None

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.customer_service.errors import (
+    DatabaseError,
     OrderNotEligibleError,
     OrderNotFoundError,
 )
@@ -23,6 +24,10 @@ _INTENT_ACTION_MAP = {
     "a_address":   "address",
     "a_password":  "password",
 }
+
+# 缺槽位需要追问的动作意图（缺陷6.2）：refund/return/exchange 以订单为
+# 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
+_SLOT_ORDER_INTENTS = frozenset({"as_refund", "as_return", "as_exchange"})
 
 _ACTION_TYPE_LABELS = {
     "refund_request": "退款申请",
@@ -72,13 +77,39 @@ def execute_action(
 
     pending_action = state.get("pending_action") or store.load(user_id, session_id)
 
+    # 缺陷6.3（2026-09-23）：need_info 型 pending（等待订单号补槽）优先于
+    # 确认流程 —— 它还没有 proposal，「确认/取消」语义不适用。
+    if pending_action and pending_action.get("status") == "need_info":
+        return _handle_slot_fill(
+            pending_action, user_message, user_id, session_id, store, cs_route,
+        )
+
     if pending_action:
         return _handle_pending_confirmation(
             pending_action, user_message, user_id, session_id,
         )
 
+    # 缺陷6.2（2026-09-23）：副作用动作缺订单号时必须结构化追问，
+    # 禁止 fallback "latest"（最近一单）替用户决定操作对象。
+    if intent in _SLOT_ORDER_INTENTS and not _resolve_order_id(cs_route, user_message):
+        return _ask_missing_slot(user_id, intent, session_id, store)
+
     try:
         return _build_new_proposal(user_id, intent, cs_route, session_id, store, user_message)
+    except DatabaseError:
+        # 业务网关不可用（http 模式下订单事实源连接失败/超时/5xx）：显式
+        # 告知暂不可用 —— 绝不 fallback 本地演示库（缺陷6.5 红线）；
+        # need_info/pending 状态保持，网关恢复后用户重发订单号即可继续。
+        logger.warning("[ActionExpert] business service unavailable for proposal")
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "业务服务暂时不可用，请稍后重试；"
+                "您也可以回复「转人工」由人工客服协助。"
+            ),
+            data={},
+        )
     except OrderNotEligibleError as e:
         # 业务规则拒绝（P0 实测修复 2026-09-19）：资格不满足是正常业务结论，
         # 必须向用户给出可读原因与下一步，而不是当作专家异常降级为通用报错。
@@ -150,6 +181,14 @@ def action_expert_node(state: dict[str, Any]) -> dict[str, Any]:
     }
     if "action_result" in data:
         update["cs_action_result"] = data["action_result"]
+    # 缺陷6.3（2026-09-23）：pending_action/confirmation_state 同步写平铺
+    # state 字段 —— build_cs_graph_result（done 帧 cs_pending_action → 前端
+    # 确认卡）与 reporter 的确认文案都读平铺键，只写 cs_context 会让确认卡
+    # 拿不到 proposal、reporter 落回通用问句。
+    if "pending_action" in data:
+        update["pending_action"] = data["pending_action"]
+    if "confirmation_state" in data:
+        update["confirmation_state"] = data["confirmation_state"]
 
     return update
 
@@ -251,26 +290,20 @@ def _build_proposal(
 
     if action_type == "refund":
         from backend.customer_service.service.refund_service import get_refund_service
-        order_id = cs_route.get("metadata", {}).get("order_id", "")
+        order_id = _resolve_order_id(cs_route, user_message)
         reason = cs_route.get("metadata", {}).get("reason", "")
-        if not order_id:
-            order_id = _extract_order_id_from_message(user_message)
         return get_refund_service().build_refund_proposal(user_id, order_id, reason)
 
     if action_type == "return":
         from backend.customer_service.service.after_sales_service import get_after_sales_service
-        order_id = cs_route.get("metadata", {}).get("order_id", "")
+        order_id = _resolve_order_id(cs_route, user_message)
         reason = cs_route.get("metadata", {}).get("reason", "")
-        if not order_id:
-            order_id = _extract_order_id_from_message(user_message)
         return get_after_sales_service().build_return_proposal(user_id, order_id, reason)
 
     if action_type == "exchange":
         from backend.customer_service.service.after_sales_service import get_after_sales_service
-        order_id = cs_route.get("metadata", {}).get("order_id", "")
+        order_id = _resolve_order_id(cs_route, user_message)
         reason = cs_route.get("metadata", {}).get("reason", "")
-        if not order_id:
-            order_id = _extract_order_id_from_message(user_message)
         return get_after_sales_service().build_exchange_proposal(user_id, order_id, reason)
 
     if action_type == "address":
@@ -288,13 +321,26 @@ def _build_proposal(
     raise ValidationError(f"不支持的操作类型: {intent}")
 
 
+def _resolve_order_id(cs_route: dict, user_message: str) -> str:
+    """订单槽位解析：router metadata 显式值优先，其次当前轮消息实体。
+
+    两处都取不到时返回空串 —— 由调用方进入缺槽位追问（缺陷6.2），
+    绝不回退 "latest"。当前轮显式实体永远优先于任何继承值。
+    """
+    explicit = (cs_route.get("metadata", {}).get("order_id") or "").strip()
+    if explicit:
+        return explicit
+    return _extract_order_id_from_message(user_message)
+
+
 def _extract_order_id_from_message(user_message: str) -> str:
     """订单号提取（P1 收敛：委托 understanding.entities 单一事实源）。
 
     understanding 层在规范化文本上抽取（NFKC/零宽剥离复用 Input Guard
     事实源），支持字母数字混合段（两段式、形近错别字原样认领）与关键词
-    纯数字形态；识别不到时回退 "latest"（由服务端 _get_order 语义化
-    处理为最近一单）。
+    纯数字形态。识别不到返回空串 —— 缺槽位走结构化追问，不再注入
+    "latest"（2026-09-19 引入的语义化兜底已被缺陷6否决：有副作用的动作
+    不能替用户猜操作对象）。
     """
     from backend.customer_service.understanding.entities import extract_entities
     from backend.customer_service.understanding.types import EntityType
@@ -303,7 +349,172 @@ def _extract_order_id_from_message(user_message: str) -> str:
     for e in extract_entities(normalize_query(user_message or "")):
         if e.type == EntityType.ORDER_ID:
             return e.match()
-    return "latest"
+    return ""
+
+
+def _ask_missing_slot(
+    user_id: str, intent: str, session_id: str, store: Any,
+) -> ExpertResult:
+    """缺订单槽位：持久化 need_info 型 pending_action 并结构化追问。
+
+    状态复用现有 pending_action 体系（ConfirmationStore，同一 (user_id,
+    session_id) 键），仅追加 need_info 专用字段；confirmation_state 仍为
+    pending_confirmation（满足 confirmations.state CHECK 约束，
+    pending_handler据此转入 action expert 补槽，不进确认流程）。
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    from backend.config.customer_service import CS_CONFIRMATION_TTL_SECONDS
+    from backend.customer_service.confirmation import (
+        ConfirmationState,
+        compute_expires_at,
+    )
+
+    now = datetime.now(timezone.utc)
+    action_type = _INTENT_ACTION_MAP.get(intent, "refund")
+    label = _ACTION_TYPE_LABELS.get(f"{action_type}_request", action_type)
+
+    pending = {
+        "action_id": str(uuid.uuid4()),
+        "action_type": f"{action_type}_request",
+        "intent": intent,
+        "status": "need_info",
+        "missing_slots": ["order_id"],
+        "collected_slots": {},
+        "target_type": "order",
+        "target_id": "",
+        "risk_level": "high",
+        "requires_confirmation": False,
+        "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
+        "retry_count": 0,
+        "created_at": now.isoformat(),
+        "expires_at": compute_expires_at(
+            now, CS_CONFIRMATION_TTL_SECONDS
+        ).isoformat(),
+    }
+    store.save(user_id, session_id, pending)
+    logger.info(
+        "[ActionExpert] missing slot order_id, ask user: intent=%s user_id=%s",
+        intent, user_id,
+    )
+
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft=(
+            f"请提供需要办理{label}的订单号（例如 MO-1002），"
+            "我会先为您核对订单，确认无误后再提交申请。"
+        ),
+        data={
+            "pending_action": pending,
+            "confirmation_state": pending["confirmation_state"],
+        },
+    )
+
+
+def _handle_slot_fill(
+    pending_action: dict,
+    user_message: str,
+    user_id: str,
+    session_id: str,
+    store: Any,
+    cs_route: dict,
+) -> ExpertResult:
+    """need_info 补槽：下一轮消息优先尝试填充缺失的 order_id。
+
+    补槽成功 → 以显式订单号走正常 proposal 流程（eligibility → 确认卡），
+    不再进入 KB/RAG；补不上 → 追问（retry 上限后释放，不强行吞掉用户
+    的新意图）。pronoun/「那单」等通用上下文改写属 Step 6，此处只认
+    当前轮的显式订单号实体。
+    """
+    from backend.config.customer_service import CS_MAX_CONFIRMATION_RETRIES
+
+    order_id = _extract_order_id_from_message(user_message)
+    if order_id:
+        cs_route = dict(cs_route or {})
+        metadata = dict(cs_route.get("metadata") or {})
+        metadata["order_id"] = order_id
+        cs_route["metadata"] = metadata
+        intent = pending_action.get("intent", "as_refund")
+        logger.info(
+            "[ActionExpert] slot filled: order_id=%s intent=%s", order_id, intent,
+        )
+        try:
+            return _build_new_proposal(
+                user_id, intent, cs_route, session_id, store, user_message,
+            )
+        except OrderNotEligibleError as e:
+            logger.info("[ActionExpert] proposal declined after slot fill: %s", e)
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    f"{e}\n\n可以告诉我其他订单号让我重新核对，"
+                    "或回复「查我的所有订单」查看各订单当前状态。"
+                ),
+                data={},
+            )
+        except DatabaseError:
+            logger.warning(
+                "[ActionExpert] business service unavailable after slot fill"
+            )
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    "业务服务暂时不可用，请稍后重试；"
+                    "您也可以回复「转人工」由人工客服协助。"
+                ),
+                data={},
+            )
+        except OrderNotFoundError:
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    f"没有找到订单 {order_id}，请核对后重新告诉我订单号，"
+                    "或回复「查我的所有订单」先查看订单。"
+                ),
+                data={},
+            )
+
+    retries = int(pending_action.get("retry_count", 0)) + 1
+    if retries > CS_MAX_CONFIRMATION_RETRIES:
+        store.clear(user_id, session_id, final_state="expired")
+        logger.info(
+            "[ActionExpert] slot fill retries exhausted: user_id=%s", user_id,
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "多次未收到有效的订单号，已为您结束本次申请。"
+                "如需继续办理，请再次告诉我并附上订单号。"
+            ),
+            data={},
+        )
+
+    label = _ACTION_TYPE_LABELS.get(
+        pending_action.get("action_type", ""),
+        pending_action.get("action_type", "申请"),
+    )
+    updated = {**pending_action, "retry_count": retries}
+    store.save(user_id, session_id, updated)
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft=(
+            f"请提供需要办理{label}的订单号（例如 MO-1002），"
+            "我会先为您核对订单，确认无误后再提交申请。"
+        ),
+        data={
+            "pending_action": updated,
+            "confirmation_state": pending_action.get(
+                "confirmation_state", "pending_confirmation"
+            ),
+        },
+    )
 
 
 def _simulate_execute(pending_action: dict) -> Any:

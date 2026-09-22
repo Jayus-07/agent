@@ -5,6 +5,9 @@
 1. 动作提案缺订单槽位时 action.py 回退 "latest"，refund/after_sales 的
    ``_get_order`` 此前按字面匹配 → 必然 ``OrderNotFoundError``，退款/退货
    确认卡永远无法生成（C 剧本实测 10/10 报错）。
+   ⚠️ 2026-09-23 缺陷6 行为反转："latest" 兜底本身被否决 —— 有副作用的
+   动作不能替用户猜操作对象。缺槽位现在在上游结构化追问（need_info），
+   _get_order 不再有 "latest" 特殊语义（按字面匹配，查不到即 NotFound）。
 2. 订单号抽取正则 ``[A-Za-z]{2,10}-\\d{2,12}`` 对两段式订单号截断
    （ORD-20260915-0042 → ORD-20260915），违反「订单号不得改写」要求。
 """
@@ -43,38 +46,35 @@ def _order_row(order_id="42", order_no="DEMO-1006", created_at="2026-09-16"):
     }
 
 
-class TestLatestOrderResolution:
-    """_get_order("latest") 语义化兜底：两个动作服务行为必须一致。"""
+class TestLatestSemanticRemoved:
+    """缺陷6 反转（2026-09-23）："latest" 语义化兜底已删除。
+
+    动作侧订单事实统一经 OrderService（sandbox = 本地 SQL 字面匹配），
+    "latest" 不再触发「最近一单」特殊查询；缺订单号由 action expert 的
+    need_info 追问承接（见 test_defect6_action_chain.py）。
+    """
 
     @pytest.mark.parametrize("svc_cls", [RefundService, AfterSalesService])
-    def test_latest_returns_newest_row(self, svc_cls):
-        newest = _order_row(order_no="DEMO-1006", created_at="2026-09-16")
-        captured = {}
+    def test_latest_treated_as_literal_no_special_query(self, svc_cls, monkeypatch):
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE", "sandbox"
+        )
 
         def fake_exec(sql, params=None, **kwargs):
-            captured["sql"] = sql
-            captured["params"] = params
-            return FakeSQLResult(rows=[newest])
+            assert params is not None and params.get("order_id") == "latest"
+            assert "ORDER BY created_at DESC" not in sql, "不得回退最近一单特殊查询"
+            return FakeSQLResult(rows=[], status="no_data")
 
         with patch(_EXEC_PATCH, side_effect=fake_exec):
-            row = svc_cls()._get_order("u1", "latest")
-
-        assert row["order_no"] == "DEMO-1006"
-        assert "ORDER BY created_at DESC" in captured["sql"]
-        assert "LIMIT 1" in captured["sql"]
-        assert captured["params"]["user_id"] == "u1"
-        # 兜底查询不得带 order_id 过滤（否则复现字面匹配缺陷）
-        assert "%(order_id)s" not in captured["sql"]
-
-    @pytest.mark.parametrize("svc_cls", [RefundService, AfterSalesService])
-    def test_latest_without_orders_raises(self, svc_cls):
-        with patch(_EXEC_PATCH, return_value=FakeSQLResult(rows=[], status="no_data")):
             with pytest.raises(OrderNotFoundError):
                 svc_cls()._get_order("u1", "latest")
 
     @pytest.mark.parametrize("svc_cls", [RefundService, AfterSalesService])
-    def test_literal_id_path_unchanged(self, svc_cls):
-        """字面订单号路径必须保持原语义（id/order_no 精确匹配 + 属主过滤）。"""
+    def test_literal_id_path_unchanged(self, svc_cls, monkeypatch):
+        """字面订单号路径保持原语义（id/order_no 精确匹配 + 属主过滤）。"""
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE", "sandbox"
+        )
         captured = {}
 
         def fake_exec(sql, params=None, **kwargs):
@@ -109,9 +109,11 @@ class TestOrderIdExtraction:
     def test_action_digits_after_keyword(self):
         assert _extract_order_id_from_message("订单号 123456789") == "123456789"
 
-    def test_action_fallback_latest(self):
-        assert _extract_order_id_from_message("我要申请退款") == "latest"
-        assert _extract_order_id_from_message("") == "latest"
+    def test_action_fallback_empty_not_latest(self):
+        """缺陷6 反转：识别不到订单号返回空串（上游结构化追问），
+        不再注入 "latest"。"""
+        assert _extract_order_id_from_message("我要申请退款") == ""
+        assert _extract_order_id_from_message("") == ""
 
     @pytest.mark.parametrize(
         "text,expected",
@@ -128,7 +130,11 @@ class TestOrderIdExtraction:
 
 
 class TestProposalDeclineReadable:
-    """资格拒绝/无可用订单必须转成可读答复，而不是专家异常→通用报错。"""
+    """资格拒绝/无可用订单必须转成可读答复，而不是专家异常→通用报错。
+
+    缺陷6 后：显式/补槽订单存在时才走 proposal —— _run 注入
+    metadata.order_id 以覆盖该路径（缺槽位路径见 test_defect6_action_chain）。
+    """
 
     @staticmethod
     def _run(exc: Exception) -> dict:
@@ -147,7 +153,9 @@ class TestProposalDeclineReadable:
         ):
             mock_store.return_value.load.return_value = None
             return action_mod.execute_action(
-                "我要申请退款", {"intent": "as_refund"}, state,
+                "我要申请退款",
+                {"intent": "as_refund", "metadata": {"order_id": "DEMO-1002"}},
+                state,
             )
 
     def test_not_eligible_becomes_readable_answer(self):

@@ -52,12 +52,12 @@ class RefundService:
                 f"订单状态 '{status}' 不允许退款，仅支持: {', '.join(sorted(self.REFUNDABLE_STATUSES))}"
             )
 
-        if self._has_existing_refund(order["id"]):
+        if self._has_existing_refund(order.get("id") or order.get("order_no", "")):
             raise OrderNotEligibleError("该订单已存在退款记录，不可重复退款")
 
         return RefundEligibility(
             eligible=True,
-            order_id=str(order["id"]),
+            order_id=str(order.get("id") or order.get("order_no", "")),
             order_no=str(order.get("order_no", "")),
             amount=amount,
             status=status,
@@ -121,50 +121,26 @@ class RefundService:
         )
 
     def _get_order(self, user_id: str, order_id: str) -> dict:
-        from backend.customer_service.service.demo_mode import resolve_user_id
+        """订单事实统一取自 OrderService（缺陷6.4，2026-09-23）。
 
-        user_id = resolve_user_id(user_id)
-        from backend.sql.executor import execute_sql_struct
-
-        if order_id == "latest":
-            # 语义化兜底（P0 实测缺陷修复 2026-09-19）：动作提案缺订单槽位时
-            # action.py 回退 "latest"，此前按字面匹配必然 OrderNotFoundError，
-            # 退款确认卡永远无法生成。与 after_sales_service._get_order 同构。
-            sql = """
-                SELECT id, order_no, customer_id, total_amount, status,
-                       payment_status, created_at
-                FROM "order".orders
-                WHERE customer_id::text = %(user_id)s
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-            """
-            result = execute_sql_struct(sql, params={"user_id": str(user_id)})
-            if result.status not in ("success", "no_data"):
-                raise DatabaseError(f"查询订单失败: {result.error}")
-            if not result.rows:
-                raise OrderNotFoundError(f"No orders found for user {user_id}")
-            return result.rows[0]
-
-        sql = """
-            SELECT id, order_no, customer_id, total_amount, status,
-                   payment_status, created_at
-            FROM "order".orders
-            WHERE (id::text = %(order_id)s OR order_no = %(order_id)s)
-              AND customer_id::text = %(user_id)s
+        此前动作侧直查本地 "order".orders（execute_sql_struct），与查询侧
+        （http 模式经 business_client）split-brain：前一秒查得到的订单
+        退款时「不存在」。现动作与查询共用同一入口 —— CS_BUSINESS_GATEWAY
+        模式为 http 时订单事实来自 business service（404 = 订单不存在，
+        网关挂 = 业务不可用，绝不 fallback 本地库），sandbox 模式保持本地
+        演示库（本地开发模式不受影响）。历史 "latest" 语义化兜底已随
+        缺陷6.2 一并删除：动作缺订单号在上游结构化追问，不再走到这里。
         """
-        result = execute_sql_struct(
-            sql, params={"order_id": order_id, "user_id": str(user_id)}
+        from backend.customer_service.service.order_service import get_order_service
+
+        result = get_order_service().query_orders(
+            user_id, order_id=order_id, query_type="detail",
         )
-
-        if result.status not in ("success", "no_data"):
-            raise DatabaseError(f"查询订单失败: {result.error}")
-
-        if not result.rows:
+        if not result.orders:
             raise OrderNotFoundError(
                 f"Order {order_id} not found for user {user_id}"
             )
-
-        return result.rows[0]
+        return result.orders[0]
 
     def _has_existing_refund(self, order_pk: str) -> bool:
         """Check if a refund record already exists for this order.
@@ -172,7 +148,21 @@ class RefundService:
         P1 修正（audit-report §P0-8）：查询失败此前返回 False（放行），
         降级方向不安全 —— 重复退款闸门失效。改为 fail-closed：无法确认
         不存在退款记录时拒绝并提示用户，宁可多一次人工介入也不双退款。
+
+        http 网关模式跳过本地 refunds 查重（能力边界，非 fallback）：订单
+        事实在 business service 侧，其退款记录本地库必然查不到；网关契约
+        暂无退款记录端点，重复退款由确认后的执行层把关（当前 simulate，
+        真实执行接入时网关侧必须校验）。
         """
+        from backend.customer_service.service.order_service import _use_http_gateway
+
+        if _use_http_gateway():
+            logger.info(
+                "[RefundService] http gateway mode, skip local refunds check: "
+                "order=%s", order_pk,
+            )
+            return False
+
         from backend.sql.executor import execute_sql_struct
 
         sql = """

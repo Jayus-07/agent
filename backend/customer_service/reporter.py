@@ -48,7 +48,7 @@ def _assemble_answer(
         return _handoff_intercept_reply(state)
 
     if next_action == "pending":
-        return _pending_confirmation_reply(state)
+        return _pending_confirmation_reply(state, expert_result)
 
     response_draft = expert_result.get("response_draft")
     if response_draft:
@@ -102,11 +102,19 @@ def _handoff_intercept_reply(state: dict) -> str:
     return "您好，正在为您转接人工客服，请稍候。"
 
 
-def _pending_confirmation_reply(state: dict) -> str:
+def _pending_confirmation_reply(
+    state: dict, expert_result: dict | None = None,
+) -> str:
     """等待用户确认的回复"""
     pending_action = state.get("pending_action")
     if pending_action and pending_action.get("proposal_text"):
         return pending_action["proposal_text"]
+    # 缺陷6.3（2026-09-23）：need_info（缺槽位追问中，尚无 proposal_text）
+    # 优先采用专家本轮生成的回复（追问话术 / 「订单不存在」反馈），
+    # 不再被通用确认问句覆盖；专家无输出时退回通用问句兜底。
+    draft = (expert_result or {}).get("response_draft")
+    if draft:
+        return draft
     return "请确认是否继续执行此操作？回复「确认」继续，或「取消」放弃。"
 
 

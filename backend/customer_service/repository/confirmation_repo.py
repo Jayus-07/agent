@@ -74,6 +74,35 @@ class ConfirmationRepository:
         await self._s.flush()
         return result.rowcount > 0
 
+    async def update_proposal(
+        self,
+        confirmation_id: str,
+        pending_action: dict,
+    ) -> bool:
+        """整行覆盖 pending 行的 proposal JSON 及其派生列（缺陷6.3）。
+
+        need_info（缺槽位追问）升级为正式 proposal、reask 更新 retry_count
+        时，仅 update_state 不够 —— proposal JSON 必须同步落库，否则补槽
+        结果/追问计数在 L1 缓存失效后丢失。
+        """
+        values: dict = {
+            "proposal": pending_action,
+            "state": pending_action.get("confirmation_state", "pending"),
+            "action_type": pending_action.get("action_type", ""),
+            "target_type": pending_action.get("target_type", ""),
+            "target_id": pending_action.get("target_id", ""),
+        }
+        expires = _parse_dt(pending_action.get("expires_at"))
+        if expires is not None:
+            values["expires_at"] = expires
+        result = await self._s.execute(
+            update(CSConfirmation)
+            .where(CSConfirmation.confirmation_id == confirmation_id)
+            .values(**values)
+        )
+        await self._s.flush()
+        return result.rowcount > 0
+
     async def clear(self, user_id: str, conversation_id: str) -> bool:
         result = await self._s.execute(
             update(CSConfirmation)

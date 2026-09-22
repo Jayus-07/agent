@@ -213,17 +213,31 @@ class ConfirmationStore:
     async def _async_save(
         user_id: str, session_id: str, pending_action: dict
     ) -> None:
+        from backend.customer_service.managers.conversation_manager import (
+            ConversationManager,
+        )
         from backend.customer_service.repository import ConfirmationRepository
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
+            # FK 生命周期（缺陷6.5，2026-09-23）：confirmations.conversation_id
+            # 是指向 conversations 的 NOT NULL FK，而 conversation row 此前在
+            # turn 结束时才 lazy get_or_create（runner._persist_cs_turn_if_needed）
+            # —— 流中写 confirmation 先于 conversation insert，触发 FK violation。
+            # 不变量：任何 conversation-dependent durable object 落库前，
+            # parent row 必须存在。同事务内幂等 ensure（先查后插）+ flush，
+            # FK 在同一事务内可见，随后 confirmation insert 才执行。
+            conv_mgr = ConversationManager(db)
+            await conv_mgr.get_or_create(session_id, user_id)
+            await db.flush()
+
             repo = ConfirmationRepository(db)
             existing = await repo.load(user_id, session_id)
             if existing is not None:
-                await repo.update_state(
-                    existing.confirmation_id,
-                    pending_action.get("confirmation_state", "pending"),
-                )
+                # 已有 pending 行（need_info 升级为正式 proposal、reask 更新
+                # retry_count）：整行覆盖 proposal JSON。此前只 update_state
+                # 会导致补槽结果/追问计数在 L1 失效后丢失。
+                await repo.update_proposal(existing.confirmation_id, pending_action)
             else:
                 await repo.save(user_id, session_id, pending_action)
             await db.commit()

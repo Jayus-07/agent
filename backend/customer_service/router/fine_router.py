@@ -29,6 +29,14 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
     "TRANSACTION": {
         "t_ticket_status": ["工单", "投诉单", "报修单", "投诉进度"],
     },
+    # 缺陷6（2026-09-23）：AFTER_SALES 域此前只能落 DOMAIN_DEFAULT_INTENT
+    # （as_refund），「我要退货」被当成退款 —— 动作类型错了，确认卡与后续
+    # 执行全偏。按域专属关键词精化动作意图（退货/退款/换货互斥）。
+    "AFTER_SALES": {
+        "as_return": ["退货", "退换", "return"],
+        "as_exchange": ["换货", "exchange"],
+        "as_refund": ["退款", "退钱", "refund"],
+    },
 }
 
 

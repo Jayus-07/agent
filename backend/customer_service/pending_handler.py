@@ -38,6 +38,16 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
     if not pending_action:
         return Command(goto="cs_supervisor", update={})
 
+    # 缺陷6.3（2026-09-23）：need_info 型 pending（等待订单号补槽）不走
+    # 确认流程 —— 转发 action expert 优先补槽；补到后原地生成 proposal，
+    # 补不到按 retry 上限追问/释放。否则「MO-1001」会被当作确认意图
+    # reask，或过期后落回 KB/RAG 拒答。
+    if pending_action.get("status") == "need_info":
+        confirmation_state = state.get("confirmation_state", "")
+        if confirmation_state in _PENDING_STATES:
+            return Command(goto="cs_action_expert", update={})
+        return Command(goto="cs_supervisor", update={})
+
     confirmation_state = state.get("confirmation_state", "")
     if confirmation_state not in _PENDING_STATES:
         return Command(goto="cs_supervisor", update={})
