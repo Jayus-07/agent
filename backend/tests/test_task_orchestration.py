@@ -190,6 +190,8 @@ def test_failure_then_retry(pg, task_record, stub_graph):
                      error_message="boom", progress="等待第 1 次重试")
     pg.increment_retry(task_record.id)
 
+    # Phase1 状态机：FAILED→RUNNING 禁止，重试先显式回 PENDING（impl 同款）
+    pg.update_status(task_record.id, TaskStatus.PENDING, progress="重试回队")
     fail["active"] = False
     output = executor.execute(_refresh(pg, task_record))
     assert output["answer"] == "finished"
@@ -229,8 +231,10 @@ def test_impl_skips_when_lease_held_elsewhere(pg, task_record):
 
 
 def test_failed_task_lease_reclaimable_for_retry(pg, task_record):
-    """FAILED（重试路径）必须能重新抢到租约。"""
+    """FAILED（重试路径）不能被租约直接认领（Phase1 状态机），须先显式回 PENDING。"""
     pg.update_status(task_record.id, TaskStatus.FAILED, error_message="boom")
+    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is False
+    pg.update_status(task_record.id, TaskStatus.PENDING, progress="重试回队")
     assert pg.try_acquire_lease(task_record.id, worker="worker-b") is True
 
 

@@ -40,10 +40,14 @@ def _update(task_id: str, **kwargs) -> None:
 
 @task_prerun.connect
 def _on_prerun(sender=None, task=None, **kwargs):
-    """拾取即 RUNNING：记 worker 节点 + 首次 started_at。
+    """拾取时刻记账（postrun 兜底算耗时用）；不写任何状态。
 
-    仅 PENDING/FAILED 提到 RUNNING（CANCELLED/SUCCESS 等终态或人工态不复活——
-    队列里的任务可能已被用户取消，executor 拾取后会自行短路返回）。
+    Phase1 状态机收口：置 RUNNING 的唯一入口 = try_acquire_lease（认领，
+    同步落 worker/started_at）+ executor（恢复/开始执行）。prerun 若在
+    租约之前抢先写 RUNNING，会让紧随其后的租约认领（只认领 PENDING）
+    永远失败——任务被跳过还被 postrun 兜底成假 SUCCESS（2026-09-21 起
+    lease 与 prerun 的时序冲突，本回调回归纯记账）。终态/人工态同理
+    不在此处复活：CANCELLED 短路在 impl，FAILED 重试回队在 impl。
     """
     try:
         if task is None or task.name != _EXECUTE_TASK_NAME:
@@ -52,19 +56,6 @@ def _on_prerun(sender=None, task=None, **kwargs):
         if not task_id:
             return
         _prerun_ts[str(task_id)] = time.monotonic()
-        # task 是命名参数（不进 kwargs）；sender 同为 task 实例，两者兜底
-        _task_inst = task or sender
-        hostname = getattr(getattr(_task_inst, "request", None),
-                           "hostname", "") or ""
-        from backend.services import task_service
-
-        record = task_service.get_task(str(task_id))
-        if record is None or record.status.is_terminal() or \
-                record.status in (TaskStatus.PAUSED, TaskStatus.WAITING_USER):
-            return
-        task_service.update_status(
-            str(task_id), TaskStatus.RUNNING,
-            worker=hostname or "unknown")
     except Exception:  # noqa: BLE001
         logger.debug("[TaskSignals] prerun hook failed", exc_info=True)
 
@@ -91,8 +82,8 @@ def _on_postrun(sender=None, task=None, state=None, **kwargs):
         from backend.services import task_service
 
         record = task_service.get_task(task_id)
-        if record is None or record.status not in (TaskStatus.RUNNING, TaskStatus.PENDING):
-            return
+        if record is None or record.status != TaskStatus.RUNNING:
+            return  # PENDING→SUCCESS 状态机已禁：仅 RUNNING 残留允许兜底收尾
         duration_ms = int((time.monotonic() - start) * 1000) if start else None
         task_service.update_status(task_id, TaskStatus.SUCCESS, duration_ms=duration_ms)
     except Exception:  # noqa: BLE001

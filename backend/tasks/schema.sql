@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     user_id         VARCHAR(128) NOT NULL,                -- 任务归属用户（隔离强制）
     tenant_id       VARCHAR(128) NOT NULL DEFAULT 'default',
     graph_name      VARCHAR(128) NOT NULL DEFAULT 'main', -- 预留多图路由，当前仅 main
+    conversation_id VARCHAR(128) NOT NULL DEFAULT '',     -- 关联会话（Phase1 TaskState 字段，可选）
     status          VARCHAR(32)  NOT NULL DEFAULT 'PENDING',
     input           JSONB        NOT NULL DEFAULT '{}',   -- {query, ...}
     output          JSONB        NULL,                    -- {answer, step_results}
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 -- 存量库升级：CREATE TABLE IF NOT EXISTS 不会补列，这里幂等补齐（2026-09-16 任务中心扩展）
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_type      VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(128) NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS traceback       TEXT         NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS max_retries     INT          NOT NULL DEFAULT 3;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS duration_ms     INT          NULL;

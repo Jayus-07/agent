@@ -54,6 +54,15 @@ def execute_agent_task_impl(task_id: str, *,
         logger.info("[AgentTask] %s already cancelled, skip", task_id)
         return {"status": "CANCELLED"}
 
+    # 状态机禁止 FAILED→RUNNING 直跳（Phase1）：Celery autoretry 重投 /
+    # 收尸后重试路径，先显式回 PENDING（requeue 标记，可审计）再抢租约。
+    # 幂等：admin retry 已回 PENDING 时本跳转为自转换，直接通过。
+    if record.status == TaskStatus.FAILED:
+        task_service.update_status(
+            task_id, TaskStatus.PENDING,
+            progress="重试回队（从 checkpoint 续跑）")
+        record = task_service.get_task(task_id)
+
     # 审查 #5：acks_late 可见性超时重投会派第二个 Worker 进来。执行前
     # 先原子抢租约：抢不到说明已有 Worker 在跑同一 thread_id —— 直接
     # 退出，不得进入执行分支（LLM 重复烧钱、step_results 互踩）。

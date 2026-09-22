@@ -63,6 +63,7 @@ def ensure_schema() -> None:
 
 def create_task(user_id: str, query: str, *, tenant_id: str = "default",
                 graph_name: str = "main",
+                conversation_id: str = "",
                 trace_id: str = "",
                 biz_type: str = "", biz_id: str = "",
                 parent_task_id: str = "") -> TaskRecord:
@@ -75,13 +76,14 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO tasks (id, user_id, tenant_id, graph_name, status,
+            INSERT INTO tasks (id, user_id, tenant_id, graph_name,
+                               conversation_id, status,
                                input, thread_id, trace_id,
                                biz_type, biz_id, parent_task_id, max_retries)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (task_id, user_id, tenant_id, graph_name,
-             TaskStatus.PENDING.value,
+             conversation_id[:128], TaskStatus.PENDING.value,
              json.dumps({"query": query}, ensure_ascii=False),
              thread_id, trace_id, biz_type, biz_id,
              parent_task_id or None, CELERY_MAX_RETRIES),
@@ -109,8 +111,9 @@ def try_acquire_lease(task_id: str, *, worker: str | None = None,
     若不抢租约，第二个 Worker 会与第一个并发跑同一 thread_id
     （LLM 重复烧钱、step_results 互踩）。
 
-    可认领态 = PENDING / FAILED（正常入队与失败重试路径）。RUNNING 行
-    属于另一个在跑的 Worker → rowcount=0 直接退出；但 ``updated_at``
+    可认领态 = PENDING（正常入队；FAILED 重试须先显式回 PENDING，见
+    agent_tasks.execute_agent_task_impl——状态机禁止 FAILED→RUNNING 直跳）。
+    RUNNING 行属于另一个在跑的 Worker → rowcount=0 直接退出；但 ``updated_at``
     停更超过 ``stale_running_seconds`` 的 RUNNING 行视为其 Worker 已死
     （硬杀/OOM 来不及落 FAILED），允许接管续跑。默认阈值取
     hard time limit + 余量 —— 活着的 Worker 在软超时内必然有节点级
@@ -129,13 +132,13 @@ def try_acquire_lease(task_id: str, *, worker: str | None = None,
         args.append(worker[:128])
     args.extend([
         task_id,
-        TaskStatus.PENDING.value, TaskStatus.FAILED.value,
+        TaskStatus.PENDING.value,
         TaskStatus.RUNNING.value, str(stale_running_seconds),
     ])
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET " + ", ".join(sets) + " "
-            "WHERE id = %s AND (status IN (%s, %s) OR "
+            "WHERE id = %s AND (status = %s OR "
             "(status = %s AND updated_at < "
             "now() - (%s || ' seconds')::interval))",
             args,
@@ -206,49 +209,83 @@ def update_status(task_id: str, status: TaskStatus, *,
                   celery_task_id: str | None = None) -> None:
     """状态迁移 + 可选字段一并更新（单条 UPDATE，避免多写竞态）。
 
+    Phase1 状态机收口：写入前按 ``TaskStatus._legal_transitions`` 白名单
+    校验 DB 当前态 → 目标态，非法跳转抛 ``IllegalTaskTransition``（终态
+    SUCCESS/CANCELLED 完全封闭，FAILED→RUNNING 禁止——重试须先显式回
+    PENDING）。校验与写入之间用 ``WHERE status = <校验时快照>`` 条件更新
+    关闭并发窗口：并发写者抢先变更状态时 rowcount=0，按最新状态重新判定。
+
     时间戳自动治理：
     - RUNNING → started_at（COALESCE 保留首次启动，重试不覆盖）
     - 终态 → finished_at，且 started_at 非空时自动计算 duration_ms
     """
+    from backend.models.task import IllegalTaskTransition
+
     ensure_schema()
-    sets = ["status = %s", "error_message = %s", "updated_at = now()"]
-    args: list = [status.value, error_message]
-    if error_type is not None:
-        sets.append("error_type = %s")
-        args.append(error_type[:128])
-    if traceback_text is not None:
-        sets.append("traceback = %s")
-        args.append(traceback_text[:20000])
-    if worker is not None:
-        sets.append("worker = %s")
-        args.append(worker[:128])
-    if duration_ms is not None:
-        sets.append("duration_ms = %s")
-        args.append(int(duration_ms))
-    if progress is not None:
-        sets.append("progress = %s")
-        args.append(progress[:500])
-    if checkpoint_id is not None:
-        sets.append("checkpoint_id = %s")
-        args.append(checkpoint_id)
-    if output is not None:
-        sets.append("output = %s")
-        args.append(json.dumps(output, ensure_ascii=False, default=str))
-    if celery_task_id is not None:
-        sets.append("celery_task_id = %s")
-        args.append(celery_task_id)
-    if status == TaskStatus.RUNNING:
-        sets.append("started_at = COALESCE(started_at, now())")
-    if status.is_terminal():
-        sets.append("finished_at = now()")
-        # 未显式给耗时时自动补算（执行段耗时，不含排队）
-        if duration_ms is None:
-            sets.append("duration_ms = CASE WHEN started_at IS NOT NULL THEN "
-                        "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
-                        "ELSE duration_ms END")
-    args.append(task_id)
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = %s", args)
+        cur.execute("SELECT status FROM tasks WHERE id = %s", (task_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise LookupError(f"task not found: {task_id}")
+        try:
+            current = TaskStatus(row[0])
+        except ValueError:
+            raise ValueError(
+                f"task {task_id} 存量状态值非法: {row[0]!r}（状态机拒绝写入）")
+
+        if not current.can_transition_to(status):
+            raise IllegalTaskTransition(task_id, current, status)
+
+        sets = ["status = %s", "error_message = %s", "updated_at = now()"]
+        args: list = [status.value, error_message]
+        if error_type is not None:
+            sets.append("error_type = %s")
+            args.append(error_type[:128])
+        if traceback_text is not None:
+            sets.append("traceback = %s")
+            args.append(traceback_text[:20000])
+        if worker is not None:
+            sets.append("worker = %s")
+            args.append(worker[:128])
+        if duration_ms is not None:
+            sets.append("duration_ms = %s")
+            args.append(int(duration_ms))
+        if progress is not None:
+            sets.append("progress = %s")
+            args.append(progress[:500])
+        if checkpoint_id is not None:
+            sets.append("checkpoint_id = %s")
+            args.append(checkpoint_id)
+        if output is not None:
+            sets.append("output = %s")
+            args.append(json.dumps(output, ensure_ascii=False, default=str))
+        if celery_task_id is not None:
+            sets.append("celery_task_id = %s")
+            args.append(celery_task_id)
+        if status == TaskStatus.RUNNING:
+            sets.append("started_at = COALESCE(started_at, now())")
+        if status.is_terminal():
+            sets.append("finished_at = now()")
+            # 未显式给耗时时自动补算（执行段耗时，不含排队）
+            if duration_ms is None:
+                sets.append("duration_ms = CASE WHEN started_at IS NOT NULL THEN "
+                            "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
+                            "ELSE duration_ms END")
+        args.extend([task_id, current.value])
+        cur.execute(
+            f"UPDATE tasks SET {', '.join(sets)} "
+            f"WHERE id = %s AND status = %s", args)
+        if cur.rowcount == 0:
+            # 并发写者在校验后抢先变更了状态：按最新状态重判（正常重试一次）
+            cur.execute("SELECT status FROM tasks WHERE id = %s", (task_id,))
+            latest = cur.fetchone()
+            latest_status = TaskStatus(latest[0]) if latest else None
+            if latest_status is None or not latest_status.can_transition_to(status):
+                raise IllegalTaskTransition(
+                    task_id, latest_status or current, status)
+            cur.execute(
+                f"UPDATE tasks SET {', '.join(sets)} "
+                f"WHERE id = %s AND status = %s", args)
 
 
 def update_progress(task_id: str, node_name: str, progress: str = "") -> None:

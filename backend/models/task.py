@@ -10,13 +10,27 @@ from datetime import datetime
 from enum import Enum
 
 
+class IllegalTaskTransition(Exception):
+    """非法状态跳转（状态机拒绝；携带当前态与目标态便于定位调用方）。"""
+
+    def __init__(self, task_id: str, current: "TaskStatus", target: "TaskStatus"):
+        self.task_id = task_id
+        self.current = current
+        self.target = target
+        super().__init__(
+            f"非法状态跳转 task={task_id}: {current.value} → {target.value}")
+
+
 class TaskStatus(str, Enum):
     """任务生命周期状态机。
 
     PENDING → RUNNING → SUCCESS / FAILED / CANCELLED
                        ↘ WAITING_USER → (resume) → RUNNING
                        ↘ PAUSED      → (resume) → RUNNING
-    FAILED --(重试)--> PENDING → RUNNING（从最近 checkpoint 续跑）
+    FAILED --(显式重试/requeue)--> PENDING → RUNNING（从最近 checkpoint 续跑）
+
+    合法跳转白名单见 _LEGAL_TRANSITIONS；终态 SUCCESS/CANCELLED 完全封闭，
+    FAILED 仅允许自转换（错误信息刷新）与显式回 PENDING（重试）。
     """
 
     PENDING = "PENDING"
@@ -40,6 +54,40 @@ class TaskStatus(str, Enum):
         """可恢复（resume API 允许）的状态。"""
         return (cls.WAITING_USER, cls.PAUSED, cls.FAILED)
 
+    @classmethod
+    def _legal_transitions(cls) -> dict["TaskStatus", frozenset["TaskStatus"]]:
+        """合法跳转白名单（Phase1 Task Runtime 验收口径）。
+
+        规格必允许：PENDING→RUNNING、RUNNING→PAUSED、PAUSED→RUNNING、
+        RUNNING→SUCCESS、RUNNING→FAILED、RUNNING/PAUSED→CANCELLED。
+        规格必禁止：SUCCESS/FAILED/CANCELLED → RUNNING（终态不复活）；
+        FAILED 恢复执行必须先显式回 PENDING（重试动作可审计）。
+        自转换（同态重写进度/错误字段）与以下系统跳转一并登记：
+        - PENDING→FAILED/CANCELLED：入队失败落终态 / 队列内取消（未开跑）
+        - PAUSED/WAITING_USER→PENDING：resume 的回队标记（Worker 租约认领后进 RUNNING）
+        - WAITING_USER→CANCELLED：等人态取消
+        例外通道（不经本表、走原生 SQL，登记于 Phase1 报告）：
+        - try_acquire_lease 的 stale-RUNNING 接管（RUNNING→RUNNING 所有权转移）
+        - reap_zombie_running 的 RUNNING→FAILED/CANCELLED（条件 UPDATE 收尸）
+        """
+        return {
+            cls.PENDING: frozenset({cls.PENDING, cls.RUNNING, cls.FAILED,
+                                    cls.CANCELLED}),
+            cls.RUNNING: frozenset({cls.RUNNING, cls.PAUSED, cls.WAITING_USER,
+                                    cls.SUCCESS, cls.FAILED, cls.CANCELLED}),
+            cls.PAUSED: frozenset({cls.PAUSED, cls.RUNNING, cls.PENDING,
+                                    cls.CANCELLED}),
+            cls.WAITING_USER: frozenset({cls.WAITING_USER, cls.PENDING,
+                                          cls.CANCELLED}),
+            cls.FAILED: frozenset({cls.FAILED, cls.PENDING}),
+            cls.SUCCESS: frozenset(),
+            cls.CANCELLED: frozenset(),
+        }
+
+    def can_transition_to(self, target: "TaskStatus") -> bool:
+        """target 是否为从当前态出发的合法跳转。"""
+        return target in self._legal_transitions()[self]
+
 
 @dataclass
 class TaskRecord:
@@ -49,6 +97,7 @@ class TaskRecord:
     user_id: str
     tenant_id: str = "default"
     graph_name: str = "main"
+    conversation_id: str = ""        # 关联会话（客服窗口/聊天线程），可选
     status: TaskStatus = TaskStatus.PENDING
     input: dict = field(default_factory=dict)
     output: dict | None = None
@@ -87,6 +136,7 @@ class TaskRecord:
             user_id=row.get("user_id") or "",
             tenant_id=row.get("tenant_id") or "default",
             graph_name=row.get("graph_name") or "main",
+            conversation_id=row.get("conversation_id") or "",
             status=status,
             input=row.get("input") or {},
             output=row.get("output"),
@@ -114,6 +164,11 @@ class TaskRecord:
             updated_at=row.get("updated_at"),
         )
 
+    @property
+    def workflow(self) -> str:
+        """Phase1 TaskState 口径别名：workflow = graph_name（单一事实源，不另存列）。"""
+        return self.graph_name
+
     def to_public_dict(self) -> dict:
         """API 对外形态（GET /tasks/{id} 的主体）。"""
         return {
@@ -124,6 +179,7 @@ class TaskRecord:
             "result": self.output,
             "error_message": self.error_message,
             "error_type": self.error_type,
+            "error_code": self.error_type,   # Phase1 口径别名（同 error_type）
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
             "duration_ms": self.duration_ms,
@@ -133,6 +189,8 @@ class TaskRecord:
             "biz_type": self.biz_type,
             "biz_id": self.biz_id,
             "graph_name": self.graph_name,
+            "workflow": self.graph_name,     # Phase1 口径别名（同 graph_name）
+            "conversation_id": self.conversation_id,
             "tenant_id": self.tenant_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "queued_at": self.queued_at.isoformat() if self.queued_at else None,

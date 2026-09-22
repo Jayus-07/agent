@@ -175,6 +175,8 @@ def test_force_cancel_terminal_rejected(pg):
     from backend.tasks import task_manager
 
     record = pg.create_task(f"zombie-test-{uuid.uuid4().hex[:8]}", "终态拒绝测试")
+    # Phase1 状态机：先按合法路径 RUNNING→SUCCESS 进终态（PENDING→SUCCESS 已禁）
+    pg.update_status(record.id, TaskStatus.RUNNING)
     pg.update_status(record.id, TaskStatus.SUCCESS, output={"done": True})
     with _pytest.raises(ValueError):
         task_manager.force_cancel_task(record.id)
