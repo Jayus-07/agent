@@ -131,6 +131,28 @@ def execute_handoff(
     }
     store.save(user_id, session_id, handoff_data)
 
+    # 批次C：转人工工单落库（与 handoff 行同 ticket_id 关联）。
+    # fire-and-forget：落库失败只损失工单可查询性，不阻断转接。
+    try:
+        from backend.customer_service.ticket_store import get_ticket_store
+
+        get_ticket_store().create_sync(
+            ticket_id=ticket_id,
+            conversation_id=session_id,
+            user_id=user_id,
+            type="handoff",
+            status="open",
+            source="ai",
+            priority="medium",
+            title=f"人工转接：{trigger_type}",
+            description=trigger_reason[:2000] if trigger_reason else None,
+        )
+    except Exception:
+        logger.warning(
+            "[HandoffExpert] 转人工工单落库失败（不阻断主流程）: %s",
+            ticket_id, exc_info=True,
+        )
+
     # 实时推送：新工单进入坐席待接入队列（WebSocket，无连接时静默丢弃）
     from backend.customer_service.realtime import get_agent_hub
     get_agent_hub().publish(

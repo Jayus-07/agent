@@ -12,6 +12,17 @@ from typing import Any
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
 from backend.shared.logger import logger
 
+_SEVERITY_PRIORITY = {
+    "critical": "critical",
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+}
+
+
+def _severity_to_priority(severity: str) -> str:
+    return _SEVERITY_PRIORITY.get(severity, "medium")
+
 
 def execute_complaint(
     user_message: str,
@@ -87,6 +98,30 @@ def execute_complaint(
         summary=user_message,
     )
     service.simulate_execute(ticket)
+
+    # 批次C：投诉工单落库（此前仅内存模拟）。fire-and-forget：落库失败
+    # 只损失可查询性，不阻断安抚回复与转人工。
+    try:
+        from backend.customer_service.ticket_store import get_ticket_store
+
+        get_ticket_store().create_sync(
+            ticket_id=ticket.ticket_id,
+            conversation_id=conversation_id or session_id,
+            user_id=user_id,
+            type="complaint",
+            status="open",
+            source="ai",
+            severity=detection.severity,
+            priority=_severity_to_priority(detection.severity),
+            title=f"投诉工单（{detection.severity}）：{user_message[:80]}",
+            description=user_message[:2000],
+        )
+    except Exception:
+        logger.warning(
+            "[ComplaintExpert] 投诉工单落库失败（不阻断主流程）: %s",
+            ticket.ticket_id,
+            exc_info=True,
+        )
 
     answer = service.build_comfort_response(detection, ticket)
 

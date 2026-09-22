@@ -43,6 +43,7 @@ from backend.app.api.routes import (
     budgets,
     cs_admin,
     cs_agent_ws,
+    cs_tickets,
     idempotency,
     model_config,
     model_prices,
@@ -98,6 +99,7 @@ api_router.include_router(cs_admin.confirm_router)  # P3.1: 确认卡片端点
 api_router.include_router(cs_dispatch.router)  # P4: 用户直接请求人工入池
 api_router.include_router(cs_agent_offers.router)  # P7: 坐席 offer 接单/拒单/主管重派
 api_router.include_router(cs_ops.router)  # P8: 派单运营统计（admin）
+api_router.include_router(cs_tickets.router)  # 批次C: 统一工单（用户查询 + supervisor 流转）
 api_router.include_router(cs_agent_ws.router)  # 坐席 WS 实时推送（ticket 鉴权，不走 X-API-Key）
 api_router.include_router(evaluation.router)  # 评测集管理
 api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）

@@ -18,7 +18,7 @@
  * 满意度统计仅 supervisor 可见（agent 隐藏），其余三项坐席即可见。
  */
 import {
-  BarChart3, Headset, LayoutDashboard, MessagesSquare,
+  BarChart3, Headset, LayoutDashboard, MessagesSquare, TicketCheck,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import {
@@ -50,6 +50,7 @@ export const NAV: NavEntry[] = [
   { icon: <LayoutDashboard size={18} />, label: '工作台', path: '/cs', minCsRole: 'agent' },
   { icon: <Headset size={18} />, label: '人工接入', path: '/cs/handoff', minCsRole: 'agent' },
   { icon: <MessagesSquare size={18} />, label: '会话管理', path: '/cs/conversations', minCsRole: 'agent' },
+  { icon: <TicketCheck size={18} />, label: '工单管理', path: '/cs/tickets', minCsRole: 'agent' },
   { icon: <BarChart3 size={18} />, label: '满意度统计', path: '/cs/stats', minCsRole: 'supervisor' },
 ]
 

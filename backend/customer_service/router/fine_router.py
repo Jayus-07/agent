@@ -25,6 +25,10 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         "h_handoff": ["转人工", "真人", "人工客服", "人工服务", "不要机器人"],
         "h_supervisor": ["领导", "经理", "主管", "负责人"],
     },
+    # 批次C：TRANSACTION 域规则直查（工单进度）
+    "TRANSACTION": {
+        "t_ticket_status": ["工单", "投诉单", "报修单", "投诉进度"],
+    },
 }
 
 

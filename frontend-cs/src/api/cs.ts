@@ -8,6 +8,8 @@ import type {
   HandoffMessageDTO,
   HandoffMessagesResponse,
   CSStatsResponse,
+  TicketDTO,
+  TicketListResponse,
 } from "@/types/cs";
 
 export async function listConversations(params: {
@@ -227,5 +229,76 @@ export async function notifyAgentTyping(
     );
   } catch {
     // 静默
+  }
+}
+
+
+// ── 批次C：统一工单 ──────────────────────────────
+
+export async function listTickets(params: {
+  status?: string;
+  type?: string;
+  limit?: number;
+} = {}): Promise<TicketListResponse> {
+  const sp = new URLSearchParams();
+  if (params.status) sp.set("status", params.status);
+  if (params.type) sp.set("type", params.type);
+  if (params.limit) sp.set("limit", String(params.limit));
+  try {
+    return await request<TicketListResponse>(`/api/cs/tickets/admin/list?${sp.toString()}`);
+  } catch (e) {
+    throw new Error(`listTickets failed: ${(e as Error).message}`);
+  }
+}
+
+export async function transitionTicket(
+  ticketId: string,
+  status: string,
+  resolution?: string,
+): Promise<TicketDTO> {
+  try {
+    return await request<TicketDTO>(
+      `/api/cs/tickets/admin/${encodeURIComponent(ticketId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, resolution }),
+      },
+    );
+  } catch (e) {
+    const msg = (e as Error).message ?? "工单状态更新失败";
+    throw new Error(msg.includes("409") ? "工单状态不允许该流转" : msg);
+  }
+}
+
+
+// ── 批次D：质检日报 ──────────────────────────────
+
+export interface QADailyReport {
+  report_date: string;
+  metrics: {
+    conversations?: { total?: number; closed?: number; human_mode?: number; handoff_rate?: number; ai_closed?: number; ai_resolution_rate?: number };
+    satisfaction?: { rated_count?: number; avg_rating?: number | null; distribution?: Record<string, number> };
+    response?: { first_reply_within_60s?: number; with_first_reply?: number; rate?: number };
+    top_intents?: { intent: string; count: number }[];
+    agents?: { agent_id: string; handled: number; avg_rating: number | null }[];
+    tickets?: { new_total?: number; open_total?: number; stale_over_48h?: number; by_type?: Record<string, number> };
+  };
+  generated_at?: string | null;
+}
+
+export async function getQAReports(params: {
+  start?: string;
+  end?: string;
+} = {}): Promise<{ items: QADailyReport[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params.start) sp.set("start", params.start);
+  if (params.end) sp.set("end", params.end);
+  try {
+    return await request<{ items: QADailyReport[]; total: number }>(
+      `/api/cs/ops/qa/reports?${sp.toString()}`,
+    );
+  } catch (e) {
+    throw new Error(`getQAReports failed: ${(e as Error).message}`);
   }
 }

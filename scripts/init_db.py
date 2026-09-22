@@ -118,6 +118,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "033_auth_user_lifecycle.sql": "memory",
     "034_model_runtime_governance_pg.sql": "memory",
     "035_llm_usage_cost_columns.sql": "memory",
+    "036_cs_tickets.sql": "memory",
+    "037_cs_qa_reports.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

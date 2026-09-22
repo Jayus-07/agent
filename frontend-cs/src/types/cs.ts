@@ -102,3 +102,31 @@ export interface CSStatsResponse {
   intent_dist: Array<{ name: string; count: number }>;
   handoff_count: number;
 }
+
+
+// ── 批次C：统一工单 ──────────────────────────────
+
+export interface TicketDTO {
+  ticket_id: string;
+  type: string;
+  status: string;
+  source: string;
+  conversation_id: string;
+  user_id: string;
+  handoff_id?: string | null;
+  assigned_agent_id?: string | null;
+  priority: string;
+  title: string;
+  description?: string | null;
+  resolution?: string | null;
+  severity?: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string | null;
+  closed_at?: string | null;
+}
+
+export interface TicketListResponse {
+  items: TicketDTO[];
+  total: number;
+}

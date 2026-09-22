@@ -26,10 +26,14 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('客服端导航 = 工作台 + 人工接入 + 会话管理 + 满意度统计', () => {
+  it('客服端导航 = 工作台 + 人工接入 + 会话管理 + 工单管理 + 满意度统计', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['工作台', '人工接入', '会话管理', '满意度统计'])
-    for (const p of ['/cs', '/cs/handoff', '/cs/conversations', '/cs/stats']) {
+    expect(labels).toEqual([
+      '工作台', '人工接入', '会话管理', '工单管理', '满意度统计',
+    ])
+    for (const p of [
+      '/cs', '/cs/handoff', '/cs/conversations', '/cs/tickets', '/cs/stats',
+    ]) {
       expect(allPaths, `客服端核心路由 ${p} 丢失`).toContain(p)
     }
   })
@@ -81,13 +85,13 @@ describe('visibleNav — 角色过滤（2026-09-21 csRole 接线）', () => {
     expect(visibleNav()).toEqual([])
   })
 
-  it('坐席（agent）→ 可见工作台/人工接入/会话管理，不可见满意度统计', () => {
+  it('坐席（agent）→ 可见工作台/人工接入/会话管理/工单管理，不可见满意度统计', () => {
     loginAs({ roles: ['viewer', 'agent'], platformRole: 'viewer', csRole: 'agent' })
     const labels = visibleNav().map((e) => e.label)
-    expect(labels).toEqual(['工作台', '人工接入', '会话管理'])
+    expect(labels).toEqual(['工作台', '人工接入', '会话管理', '工单管理'])
   })
 
-  it('客服主管（supervisor）→ 四项全可见', () => {
+  it('客服主管（supervisor）→ 五项全可见', () => {
     loginAs({ roles: ['viewer', 'supervisor'], platformRole: 'viewer', csRole: 'supervisor' })
     expect(visibleNav().map((e) => e.label)).toEqual(NAV.map((e) => e.label))
   })

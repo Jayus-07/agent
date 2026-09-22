@@ -12,6 +12,7 @@ FINE_INTENTS: dict[str, str] = {
     # TRANSACTION
     "t_order_status": "订单状态查询",
     "t_logistics": "物流查询",
+    "t_ticket_status": "工单进度查询",
     "t_delivery_estimate": "配送时效",
     # AFTER_SALES
     "as_refund": "退款",
@@ -74,6 +75,12 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     ),
     "t_logistics": IntentProfile(
         intent="t_logistics", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_faq"],
+    ),
+    # 批次C：工单进度查询（投诉工单/转人工工单落库后用户可查）
+    "t_ticket_status": IntentProfile(
+        intent="t_ticket_status", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
     ),

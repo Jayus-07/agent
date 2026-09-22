@@ -16,6 +16,7 @@ from backend.shared.logger import logger
 _INTENT_SERVICE_MAP = {
     "t_order_status": "order",
     "t_logistics": "logistics",
+    "t_ticket_status": "ticket",  # 批次C：工单进度
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -210,6 +211,21 @@ def _dispatch_service(
             return _format_logistics(result)
         return "暂无物流信息。请先查询您的订单。"
 
+    if service_type == "ticket":
+        # 批次C：工单进度查询（统一工单表，投诉/转人工落库后可查）
+        try:
+            from backend.customer_service.ticket_store import (
+                get_ticket_store,
+            )
+
+            tickets = get_ticket_store().list_for_user_sync(
+                user_id=user_id, limit=10,
+            )
+            return _format_ticket_list(tickets)
+        except Exception:
+            logger.warning("[QueryExpert] 工单查询失败", exc_info=True)
+            return "暂时查不到您的工单信息，请稍后再试。"
+
     return "该功能正在建设中，请稍后再试。"
 
 
@@ -239,6 +255,44 @@ def _get_latest_order_id(user_id: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+_TICKET_STATUS_LABELS = {
+    "open": "已受理",
+    "processing": "处理中",
+    "pending_user": "等待您补充信息",
+    "resolved": "已解决",
+    "closed": "已关闭",
+}
+
+_TICKET_TYPE_LABELS = {
+    "complaint": "投诉",
+    "handoff": "人工服务",
+    "inquiry": "咨询",
+    "repair": "报修",
+}
+
+
+def _format_ticket_list(tickets: list[dict]) -> str:
+    """格式化工单列表为 Markdown（批次C）。"""
+    if not tickets:
+        return (
+            "您当前没有进行中的工单。如需帮助，可以描述您的问题，"
+            "或回复「转人工」由客服人员为您处理。"
+        )
+
+    lines = ["## 您的工单\n"]
+    for i, t in enumerate(tickets[:10], 1):
+        status = _TICKET_STATUS_LABELS.get(t.get("status", ""), t.get("status", ""))
+        type_label = _TICKET_TYPE_LABELS.get(t.get("type", ""), t.get("type", ""))
+        title = (t.get("title") or type_label)[:40]
+        lines.append(
+            f"**{i}.** [{type_label}] {title} | "
+            f"工单号: `{t.get('ticket_id', '')}` | "
+            f"状态: {status}"
+        )
+    lines.append("\n如需了解工单详情，请回复工单号，或回复「转人工」咨询客服。")
+    return "\n".join(lines)
 
 
 def _format_order_list(orders: list[dict]) -> str:

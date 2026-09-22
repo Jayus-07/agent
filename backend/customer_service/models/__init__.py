@@ -11,6 +11,7 @@ from backend.customer_service.models.customer import CSCustomer
 from backend.customer_service.models.event import CSEvent
 from backend.customer_service.models.handoff import CSHandoff
 from backend.customer_service.models.message import CSMessage
+from backend.customer_service.models.ticket import CSTicket
 
 __all__ = [
     "CSConversation",
@@ -21,4 +22,5 @@ __all__ = [
     "CSConfirmation",
     "CSEvent",
     "CSHandoff",
+    "CSTicket",
 ]
