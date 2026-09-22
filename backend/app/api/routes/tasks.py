@@ -155,15 +155,22 @@ async def list_tasks(request: Request,
 @router.post("/{task_id}/cancel")
 async def cancel_task(task_id: str, request: Request):
     ident = _identity(request)
-    record = _get_owned_task(task_id, ident.user_id,
-                             _tenant(request, identity=ident))
-    if record.status.is_terminal():
-        return {"task_id": task_id, "status": record.status.value,
+    _get_owned_task(task_id, ident.user_id,
+                    _tenant(request, identity=ident))
+    try:
+        result = task_manager.cancel_task(task_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not result.get("ok"):
+        raise HTTPException(status_code=503,
+                            detail="控制通道（Redis）不可用，无法取消")
+    if result.get("already"):
+        return {"task_id": task_id, "status": result["status"],
                 "message": "任务已结束，无需取消"}
-    if not task_manager.request_cancel(task_id):
-        raise HTTPException(status_code=503, detail="控制通道（Redis）不可用，无法取消")
-    return {"task_id": task_id, "status": record.status.value,
-            "message": "取消请求已下发（节点边界生效）"}
+    message = ("任务已取消" if result.get("mode") == "db"
+               else "取消请求已下发（节点边界生效）")
+    return {"task_id": task_id, "status": result["status"],
+            "message": message}
 
 
 # ═══════════════════════════════════════════════════
@@ -173,15 +180,27 @@ async def cancel_task(task_id: str, request: Request):
 @router.post("/{task_id}/pause")
 async def pause_task(task_id: str, request: Request):
     ident = _identity(request)
-    record = _get_owned_task(task_id, ident.user_id,
-                             _tenant(request, identity=ident))
-    if record.status != "RUNNING" and record.status != TaskStatusRef.PENDING:
-        raise HTTPException(status_code=409,
-                            detail=f"仅 RUNNING/PENDING 任务可暂停（当前 {record.status.value}）")
-    if not task_manager.request_pause(task_id):
-        raise HTTPException(status_code=503, detail="控制通道（Redis）不可用，无法暂停")
-    return {"task_id": task_id, "status": record.status.value,
-            "message": "暂停请求已下发（下一节点边界生效）"}
+    _get_owned_task(task_id, ident.user_id,
+                    _tenant(request, identity=ident))
+    # Phase1 Step4/7：编排收敛到 task_manager.pause_task
+    # （RUNNING 置标志 / PENDING 队列内直落 / PAUSED 幂等 / 终态拒绝）
+    try:
+        result = task_manager.pause_task(task_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not result.get("ok"):
+        raise HTTPException(status_code=503,
+                            detail="控制通道（Redis）不可用，无法暂停")
+    if result.get("already"):
+        message = "任务已在暂停中"
+    elif result.get("mode") == "queued":
+        message = "任务在队列中暂停（未被拾取，无需等待节点边界）"
+    else:
+        message = "暂停请求已下发（当前节点完成后生效）"
+    return {"task_id": task_id, "status": result["status"],
+            "message": message}
 
 
 # ═══════════════════════════════════════════════════
@@ -207,7 +226,7 @@ async def resume_task(task_id: str, body: TaskResumeRequest, request: Request):
 # GET /tasks/{task_id}/stream — SSE 实时状态推送
 # ═══════════════════════════════════════════════════
 
-_SSE_TERMINAL_EVENTS = {"completed", "failed", "cancelled"}
+_SSE_TERMINAL_EVENTS = {"completed", "failed", "cancelled", "done", "error"}
 
 
 @router.get("/{task_id}/stream")
@@ -223,8 +242,14 @@ async def stream_task_events(task_id: str, request: Request,
         # 初始快照：订阅前已发生的事件以 status 快照补齐
         yield _sse_frame("snapshot", record.to_public_dict())
         if record.status.is_terminal():
-            yield _sse_frame("completed" if record.status == TaskStatus.SUCCESS
-                             else record.status.value.lower(), {})
+            if record.status == TaskStatus.SUCCESS:
+                yield _sse_frame("completed", {})
+                yield _sse_frame("done", {})          # Phase1 新协议别名
+            elif record.status == TaskStatus.CANCELLED:
+                yield _sse_frame("cancelled", {})
+            else:
+                yield _sse_frame("failed", {})
+                yield _sse_frame("error", {})          # Phase1 新协议别名
             return
 
         pubsub = task_manager.subscribe_events(task_id)
@@ -251,8 +276,16 @@ async def stream_task_events(task_id: str, request: Request,
                     continue
                 idle = 0.0
                 payload = json.loads(message["data"])
-                yield f"event: {payload.get('event', 'message')}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                if payload.get("event") in _SSE_TERMINAL_EVENTS:
+                event_name = payload.get("event", "message")
+                # 兼容转发：旧事件名原样（前端协议不变）
+                yield f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                # Phase1 新协议别名帧：completed→done、failed→error
+                # （旧客户端忽略未知事件名；新客户端消费统一别名）
+                if event_name == "completed":
+                    yield _sse_frame("done", payload)
+                elif event_name == "failed":
+                    yield _sse_frame("error", payload)
+                if event_name in _SSE_TERMINAL_EVENTS:
                     break
         except asyncio.CancelledError:
             raise

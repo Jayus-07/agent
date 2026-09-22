@@ -21,6 +21,21 @@ from backend.models.task import TaskRecord, TaskStatus
 from backend.services import task_service
 
 
+def _publish_status(task_id: str, status: TaskStatus, progress: str = "") -> None:
+    """发布 task_status 事件（Phase1 Step7 SSE：状态事实源变更即广播）。
+
+    广播失败不影响落库（publish_event 内部 fire-and-forget）；import 失败
+    同样静默——事件通道是 best-effort，DB 才是事实源。
+    """
+    try:
+        from backend.tasks.task_manager import publish_event
+
+        publish_event(task_id, "task_status", status=status.value,
+                      progress=progress)
+    except Exception:  # noqa: BLE001 — 事件是旁路，不阻塞状态落库
+        pass
+
+
 class TaskManager:
     """统一业务任务状态机门面（所有写操作经状态机校验）。"""
 
@@ -50,12 +65,14 @@ class TaskManager:
         task_service.update_status(
             task_id, TaskStatus.RUNNING, progress=progress,
             checkpoint_id=checkpoint_id, worker=worker)
+        _publish_status(task_id, TaskStatus.RUNNING, progress)
 
     @staticmethod
     def mark_paused(task_id: str, *, message: str = "用户暂停") -> None:
         """RUNNING → PAUSED（checkpoint 已由执行器保留）。"""
         task_service.update_status(
             task_id, TaskStatus.PAUSED, error_message="", progress=message)
+        _publish_status(task_id, TaskStatus.PAUSED, message)
 
     @staticmethod
     def mark_success(task_id: str, *, output: dict | None = None,
@@ -65,6 +82,7 @@ class TaskManager:
         task_service.update_status(
             task_id, TaskStatus.SUCCESS, progress=progress, output=output,
             duration_ms=duration_ms)
+        _publish_status(task_id, TaskStatus.SUCCESS, progress)
 
     @staticmethod
     def mark_failed(task_id: str, *, error_message: str,
@@ -75,9 +93,11 @@ class TaskManager:
             task_id, TaskStatus.FAILED, error_message=error_message[:2000],
             error_type=error_code or None, progress=progress,
             traceback_text=traceback_text)
+        _publish_status(task_id, TaskStatus.FAILED, progress or error_message)
 
     @staticmethod
     def mark_cancelled(task_id: str, *, message: str = "用户取消") -> None:
         """RUNNING/PAUSED/PENDING → CANCELLED（checkpoint 与已完成结果保留）。"""
         task_service.update_status(
             task_id, TaskStatus.CANCELLED, error_message="", progress=message)
+        _publish_status(task_id, TaskStatus.CANCELLED, message)

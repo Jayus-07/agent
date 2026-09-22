@@ -260,7 +260,11 @@ def resume_task(task_id: str, user_input: str = "",
         # 入队失败回滚到 PAUSED（PENDING→PAUSED 白名单合法），可再次 resume
         task_service.mark_paused_if_pending(
             task_id, progress="入队失败已回滚，可再次恢复")
+        publish_event(task_id, "paused", status="PAUSED",
+                      message="恢复入队失败，已回滚暂停")
         raise
+    publish_event(task_id, "resumed", status="PENDING",
+                  progress="已恢复，等待调度（从 checkpoint 续跑）")
     return task_service.get_task(task_id)  # type: ignore[return-value]
 
 

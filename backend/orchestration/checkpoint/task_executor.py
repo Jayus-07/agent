@@ -218,7 +218,9 @@ class TaskGraphExecutor:
                     progress=f"节点 {node_name} 完成",
                     checkpoint_id=self._latest_checkpoint_id(config))
                 task_service.append_checkpoint(task_id, node_name, node_output)
-                self._publish(task_id, "node_finish", node=node_name)
+                self._publish(task_id, "node_finish", node=node_name,
+                              progress=f"节点 {node_name} 完成",
+                              status=TaskStatus.RUNNING.value)
 
                 if node_output.get("needs_user_input"):
                     # 节点主动请求用户输入：状态（含 needs_user_input）已被
