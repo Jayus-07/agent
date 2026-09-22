@@ -43,7 +43,7 @@ def _patch_chain(monkeypatch, recorded):
         lambda attr, *a, **k: recorded.append(("aresilience",)) or attr(*a, **k))
     monkeypatch.setattr(
         proxy_mod, "_record_tokens",
-        lambda result, duration_ms=None: recorded.append(
+        lambda result, duration_ms=None, **_: recorded.append(
             ("tokens", result, duration_ms is not None)))
     monkeypatch.setattr(
         proxy_mod, "_wrap_result",

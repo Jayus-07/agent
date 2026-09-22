@@ -42,6 +42,11 @@ from backend.infra.llm.models import (
     is_registered_model,
     resolve_provider,
 )
+from backend.infra.llm.resolved_model import (
+    ResolvedModelContext,
+    get_current_resolved_model,
+    set_current_resolved_model,
+)
 from backend.shared.logger import logger
 
 # =====================================================
@@ -455,6 +460,15 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
         reserve_model_call("fallback", model_name=fallback_model)
         try:
+            # P1 模型归属：fallback 接管期间上下文改挂备用模型，
+            # 其产出的用量按真实接管者结算（外层 _record_tokens 消费）
+            _prev_ctx = get_current_resolved_model()
+            set_current_resolved_model(ResolvedModelContext(
+                model_id=fallback_model, provider=_get_provider_for(fallback_model),
+                role="main", binding_source="fallback",
+                request_id=(_prev_ctx.request_id if _prev_ctx else ""),
+                trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
+            ))
             result = fb.invoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": fallback_model})
@@ -480,6 +494,15 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
 
         reserve_model_call("fallback", model_name=fallback_model)
         try:
+            # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
+            set_current_resolved_model(ResolvedModelContext(
+                model_id=fallback_model, provider=_get_provider_for(fallback_model),
+                role="main", binding_source="fallback",
+                request_id=(get_current_resolved_model().request_id
+                            if get_current_resolved_model() else ""),
+                trace_id=(get_current_resolved_model().trace_id
+                          if get_current_resolved_model() else ""),
+            ))
             result = await fb.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             _notify_degradation("LLM_FALLBACK_USED", {"reason": reason, "model": fallback_model})
@@ -687,6 +710,82 @@ def get_active_model_name() -> str:
     return _configured_main_model()
 
 
+def _request_attribution_ids() -> tuple[str, str]:
+    """取当前请求的 request_id / trace_id（软失败返回空串）。"""
+    try:
+        from backend.observability.llm_usage_store import current_usage_attribution
+
+        attr_d = current_usage_attribution()
+        return str(attr_d.get("request_id") or ""), str(attr_d.get("trace_id") or "")
+    except Exception:
+        return "", ""
+
+
+def _resolve_call_context(
+    role: str = "main", model_name: str | None = None,
+) -> ResolvedModelContext | None:
+    """生成本次调用的 ResolvedModelContext（P1 模型归属修复）。
+
+    每次调用实时解析（请求覆盖 > DB 绑定 > env/代码默认），解析结果存入
+    ContextVar 供 usage 结算消费 —— 流式 chunk 无 model metadata 时从
+    上下文取真实模型，不再回退 import 期常量。软失败返回 None（保持
+    旧回退链语义）。
+    """
+    try:
+        request_id, trace_id = _request_attribution_ids()
+
+        # 1. 请求级覆盖（仅 main 角色语义）
+        if role == "main":
+            override = _request_model_var.get()
+            if override:
+                return ResolvedModelContext(
+                    model_id=override, provider=_get_provider_for(override),
+                    role=role, binding_source="request_override",
+                    request_id=request_id, trace_id=trace_id,
+                )
+
+        # 2. 显式指定模型（专用角色，如 tool_selector 的角色绑定模型）
+        resolved_name = str(model_name or "").strip()
+        source = "code_default"
+        if resolved_name:
+            try:
+                from backend.config import model_roles
+
+                src = model_roles.resolve_raw(role).get("source")
+                if src == model_roles.SOURCE_DB:
+                    source = "db_binding"
+                elif src == model_roles.SOURCE_ENV:
+                    source = "env_default"
+            except Exception:
+                pass
+        else:
+            # 3. main 默认解析（与 get_active_model_name 同链）
+            resolved_name = get_active_model_name()
+            try:
+                from backend.config import model_roles
+
+                if model_roles.resolve_raw("main").get("source") == model_roles.SOURCE_DB:
+                    source = "db_binding"
+            except Exception:
+                pass
+            factory = get_llm_factory()
+            if factory is not None and source != "db_binding":
+                if resolved_name == getattr(factory, "_current_model", None):
+                    source = "factory"
+                else:
+                    source = "env_default"
+
+        if not resolved_name:
+            return None
+        return ResolvedModelContext(
+            model_id=resolved_name, provider=_get_provider_for(resolved_name),
+            role=role, binding_source=source,
+            request_id=request_id, trace_id=trace_id,
+        )
+    except Exception:
+        return None
+
+
 # =====================================================
 # <think> 剥离（防御性，正规方案是 Provider 传 reasoning_split）
 # =====================================================
@@ -821,11 +920,19 @@ def _record_tokens(
             "cached_tokens": cached, "reasoning_tokens": reasoning,
         })
 
-        # 实际模型名（response_metadata 优先，兜底全局配置）；成本按实际模型计价
+        # 实际模型名归属链（P1 修复）：response_metadata（上游真实返回）>
+        # 调用方显式 model_name > 调用上下文 ResolvedModelContext（流式 chunk
+        # 无 metadata 时的权威来源）> LLM_MODEL（最后兜底，仅在上下文缺失
+        # 时触达 —— 禁止在上下文可用时用 import 期常量推断模型）。
         model = ""
         if hasattr(result, "response_metadata") and result.response_metadata:
             model = (result.response_metadata.get("model_name", "")
                      or result.response_metadata.get("model", ""))
+        ctx = get_current_resolved_model()
+        model = model or str(model_name or "")
+        if not model and ctx is not None:
+            model = ctx.model_id
+        model = model or LLM_MODEL
 
         # Prometheus 指标：LLM token 用量
         try:
@@ -843,7 +950,6 @@ def _record_tokens(
                 "finish_reason",
                 result.response_metadata.get("stop_reason", "unknown"),
             )
-        model = model or str(model_name or "") or LLM_MODEL
         from backend.infra.llm.budget import current_request_budget
         from backend.infra.llm.pricing import calculate_current_cost
 
@@ -921,6 +1027,8 @@ def _record_tokens(
             "cost_status": cost_status,
             "currency": currency,
             "model": model,
+            "model_role": ctx.role if ctx is not None else "",
+            "binding_source": ctx.binding_source if ctx is not None else "",
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
         })
         _accumulate_turn_usage(model, p, c, t, cached, reasoning, cost)
@@ -943,7 +1051,11 @@ def _record_tokens(
                 "tenant_id": attribution["tenant_id"],
                 "component": _usage_component(),
                 "model": model,
-                "provider": _get_provider_for(model),
+                "provider": (
+                    ctx.provider
+                    if ctx is not None and ctx.model_id == model
+                    else _get_provider_for(model)
+                ),
                 "prompt_tokens": p,
                 "completion_tokens": c,
                 "total_tokens": t,
@@ -1078,30 +1190,52 @@ class _BoundLLMProxy:
     invoke/ainvoke 会绕过限流、韧性链（重试/熔断/fallback）与 token
     记录。本类把绑定后的调用重新纳入与 _LLMProxy 相同的包装路径；
     其余属性（如 bind / with_config）原样透传。
+
+    P1 模型归属：绑定专用模型时（如 tool_selector）携带 model_name/role，
+    调用前登记 ResolvedModelContext，用量按真实模型结算、不串角色。
     """
 
-    def __init__(self, bound):
+    def __init__(self, bound, model_name: str | None = None, role: str = "main"):
         self._bound = bound
+        self._model_name = model_name or ""
+        self._role = role
+
+    def _bind_context(self) -> None:
+        ctx = _resolve_call_context(
+            role=self._role, model_name=self._model_name or None)
+        if ctx is not None:
+            set_current_resolved_model(ctx)
 
     def invoke(self, *args, **kwargs):
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
+        self._bind_context()
         _t0 = time.monotonic()
         result = _call_with_resilience(self._bound.invoke, *args, **kwargs)
-        _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
+        _record_tokens(
+            result, duration_ms=(time.monotonic() - _t0) * 1000,
+            model_name=self._model_name or None,
+        )
         return _wrap_result(result)
 
     async def ainvoke(self, *args, **kwargs):
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
+        self._bind_context()
         _t0 = time.monotonic()
         result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
-        _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
+        _record_tokens(
+            result, duration_ms=(time.monotonic() - _t0) * 1000,
+            model_name=self._model_name or None,
+        )
         return _wrap_result(result)
 
     def bind_tools(self, *args, **kwargs):
         # 链式绑定（罕见）：继续走包装，不裸透传
-        return _BoundLLMProxy(self._bound.bind_tools(*args, **kwargs))
+        return _BoundLLMProxy(
+            self._bound.bind_tools(*args, **kwargs),
+            model_name=self._model_name or None, role=self._role,
+        )
 
     def __getattr__(self, name: str):
         return getattr(self._bound, name)
@@ -1123,7 +1257,9 @@ def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
                 f"[LLM:proxy] 专用模型未注册: {model_name}，回退全局模型")
             return None
         inst = _get_override_llm(model_name)
-        return _BoundLLMProxy(inst.bind_tools(tools))
+        return _BoundLLMProxy(
+            inst.bind_tools(tools), model_name=model_name, role="tool_selector",
+        )
     except Exception as e:
         logger.warning(f"[LLM:proxy] 专用模型 bind_tools 失败，回退全局: {e}")
         return None
@@ -1211,6 +1347,11 @@ class _LLMProxy:
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
+                    # P1 模型归属：调用时实时解析并登记模型上下文，
+                    # 流式 chunk 无 metadata 时 usage 从此取真实模型
+                    ctx = _resolve_call_context()
+                    if ctx is not None:
+                        set_current_resolved_model(ctx)
                     reserve_model_call(
                         "primary", model_name=get_active_model_name(),
                     )
@@ -1248,6 +1389,10 @@ class _LLMProxy:
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
+                    # P1 模型归属：调用时实时解析并登记模型上下文
+                    ctx = _resolve_call_context()
+                    if ctx is not None:
+                        set_current_resolved_model(ctx)
                     _t0 = time.monotonic()
                     usage_chunk = None
                     yielded_content = False
@@ -1295,6 +1440,10 @@ class _LLMProxy:
                     # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
+                    # P1 模型归属：调用时实时解析并登记模型上下文
+                    ctx = _resolve_call_context()
+                    if ctx is not None:
+                        set_current_resolved_model(ctx)
                     _t0 = time.monotonic()
                     result = await _acall_with_resilience(attr, *args, **kwargs)
                     _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
@@ -1304,6 +1453,10 @@ class _LLMProxy:
                 # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                 user_id = kwargs.get("user_id") or _thread_local_user_id()
                 _enforce_rate_limit(user_id)
+                # P1 模型归属：调用时实时解析并登记模型上下文
+                ctx = _resolve_call_context()
+                if ctx is not None:
+                    set_current_resolved_model(ctx)
                 _t0 = time.monotonic()
                 result = _call_with_resilience(attr, *args, **kwargs)
                 _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
@@ -1315,6 +1468,9 @@ class _LLMProxy:
         # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
+        ctx = _resolve_call_context()
+        if ctx is not None:
+            set_current_resolved_model(ctx)
         args = _preflight_context(args)
         _t0 = time.monotonic()
         result = _call_with_resilience(_resolve_active_llm().invoke, *args, **kwargs)
