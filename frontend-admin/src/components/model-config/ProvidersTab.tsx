@@ -516,14 +516,11 @@ export default function ProvidersTab({
             // 测试键是 `${row.id}::${模型名}`（模型级）或 `${row.id}`（草稿态复用）；
             // 卡片头部的「正在测试」只看是否测到本供应商，具体哪个模型在按钮上显示。
             const isTesting = testingTarget === row.id || (testingTarget ?? '').startsWith(`${row.id}::`)
+            // 模型清单为空就明说「暂无模型」，不再用 '—' 占位行兜底 ——
+            // 占位行长得像真模型，用户会误以为「删了怎么还在」（2026-09-22 实测反馈）。
             const visibleModels: NonNullable<ProviderRow['models']> = row.models?.length
               ? row.models
-              : [{
-                  name: row.modelName || defaultModels[row.id] || '—',
-                  modelKind: (row.modelKind || 'chat') as ModelKind,
-                  source: 'user' as const,
-                  usedByRoles: [],
-                }]
+              : []
             return (
               <div key={row.id} data-testid="provider-card" className="px-4 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -574,6 +571,9 @@ export default function ProvidersTab({
                 </div>
 
                 <div className="mt-3 overflow-hidden rounded-lg border border-slate-100">
+                  {visibleModels.length === 0 && (
+                    <div className="px-3 py-2.5 text-[11px] text-text-muted">暂无模型 —— 点右上角「新增模型」登记。</div>
+                  )}
                   {visibleModels.map((model) => {
                     const blockReason = modelRemovalBlockReason(model)
                     return (
