@@ -18,7 +18,10 @@ import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
-API_KEY = "ak_tadNA05DPYN8Yj9QeIYpTPh50n_VR5kUMgubOxxIn3I"
+# 服务级 API Key 只从环境读取（同 d6_routing_regression 的 P0-1 口径）
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 REFRESH_WAIT_S = 22  # 注册表 15s 刷新循环 + 余量
 

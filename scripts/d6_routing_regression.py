@@ -13,12 +13,17 @@
 """
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
-API_KEY = "ak_tadNA05DPYN8Yj9QeIYpTPh50n_VR5kUMgubOxxIn3I"
+# 服务级 API Key 只从环境读取（2026-09-23 审查 P0-1：此前硬编码已进 git
+# 历史，轮换由外部执行）；缺失即失败，错误信息不得回显密钥。
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
 HDRS = {"X-API-Key": API_KEY}
 QUERY = "统计本月订单金额"
 EXPECTED = "sql.query"

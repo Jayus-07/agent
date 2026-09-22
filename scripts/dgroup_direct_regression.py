@@ -8,11 +8,16 @@ D1→D2→D3 同会话（跨轮改单），D7→D8 同会话。
 用法: docker exec agent-app-1 python scripts/dgroup_direct_regression.py
 """
 import json
+import os
+import sys
 import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
-API_KEY = "ak_tadNA05DPYN8Yj9QeIYpTPh50n_VR5kUMgubOxxIn3I"
+# 服务级 API Key 只从环境读取（同 d6_routing_regression 的 P0-1 口径）
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
 HDRS = {"X-API-Key": API_KEY}
 
 
