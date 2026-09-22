@@ -113,6 +113,7 @@ class TaskRecord:
     duration_ms: int | None = None
     queue: str = "agent"
     worker: str = ""
+    execution_id: str = ""           # 当前执行租约 id（Phase1 Step3：max executor=1）
     trace_id: str = ""
     biz_type: str = ""
     biz_id: str = ""
@@ -152,6 +153,7 @@ class TaskRecord:
             duration_ms=int(row["duration_ms"]) if row.get("duration_ms") is not None else None,
             queue=row.get("queue") or "agent",
             worker=row.get("worker") or "",
+            execution_id=row.get("execution_id") or "",
             trace_id=row.get("trace_id") or "",
             biz_type=row.get("biz_type") or "",
             biz_id=row.get("biz_id") or "",
@@ -209,6 +211,7 @@ class TaskRecord:
             "traceback": self.traceback,
             "celery_task_id": self.celery_task_id,
             "thread_id": self.thread_id,
+            "execution_id": self.execution_id,
             "input": self.input,
             "parent_task_id": self.parent_task_id,
         }

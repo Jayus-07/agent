@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     duration_ms     INT          NULL,                    -- 执行耗时（started_at → finished_at）
     queue           VARCHAR(64)  NOT NULL DEFAULT 'agent',-- 消费队列（水平扩展观测维度）
     worker          VARCHAR(128) NOT NULL DEFAULT '',      -- 执行节点（celery@host）
+    execution_id    VARCHAR(64)  NOT NULL DEFAULT '',      -- 当前执行租约 id（Phase1 Step3：防双执行/接管审计）
     trace_id        VARCHAR(64)  NOT NULL DEFAULT '',      -- 全链路追踪 id（可跳网关审计/日志）
     biz_type        VARCHAR(64)  NOT NULL DEFAULT '',      -- 业务归类（报告/工作流/审批…）
     biz_id          VARCHAR(128) NOT NULL DEFAULT '',      -- 业务对象 id（任务中心业务检索键）
@@ -45,6 +46,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS max_retries     INT          NOT NULL
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS duration_ms     INT          NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queue           VARCHAR(64)  NOT NULL DEFAULT 'agent';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS worker          VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS execution_id    VARCHAR(64)  NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS trace_id        VARCHAR(64)  NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS biz_type        VARCHAR(64)  NOT NULL DEFAULT '';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS biz_id          VARCHAR(128) NOT NULL DEFAULT '';

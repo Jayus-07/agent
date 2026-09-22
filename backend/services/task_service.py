@@ -104,29 +104,34 @@ def mark_queued(task_id: str, celery_task_id: str, *,
 
 
 def try_acquire_lease(task_id: str, *, worker: str | None = None,
-                      stale_running_seconds: int | None = None) -> bool:
-    """原子抢执行租约（2026-09-21 审查 #5：acks_late 重投防双跑）。
+                      stale_running_seconds: int | None = None) -> str | None:
+    """原子抢执行租约（Phase1 Step3 执行权锁：max_concurrent_executor_per_task=1）。
 
     acks_late + Redis visibility timeout 内未 ack 会重投第二个 Worker；
     若不抢租约，第二个 Worker 会与第一个并发跑同一 thread_id
     （LLM 重复烧钱、step_results 互踩）。
 
+    返回值：认领成功 = 本次执行租约 ``execution_id``（uuid，owner 维度二：
+    worker 名 + 租约实例 id，接管/重投时换发新值可审计）；认领失败 = None。
+
     可认领态 = PENDING（正常入队；FAILED 重试须先显式回 PENDING，见
     agent_tasks.execute_agent_task_impl——状态机禁止 FAILED→RUNNING 直跳）。
     RUNNING 行属于另一个在跑的 Worker → rowcount=0 直接退出；但 ``updated_at``
     停更超过 ``stale_running_seconds`` 的 RUNNING 行视为其 Worker 已死
-    （硬杀/OOM 来不及落 FAILED），允许接管续跑。默认阈值取
-    hard time limit + 余量 —— 活着的 Worker 在软超时内必然有节点级
-    update_progress 心跳。
+    （硬杀/OOM 来不及落 FAILED），允许接管续跑（换发新 execution_id）——
+    阈值有界，不存在永久死锁。默认阈值取 hard time limit + 余量——活着的
+    Worker 在软超时内必然有节点级 update_progress 心跳。
     """
     ensure_schema()
     if stale_running_seconds is None:
         from backend.config.tasks import CELERY_HARD_TASK_TIMEOUT
 
         stale_running_seconds = CELERY_HARD_TASK_TIMEOUT + 60
+    execution_id = uuid.uuid4().hex
     sets = ["status = %s", "updated_at = now()",
-            "started_at = COALESCE(started_at, now())"]
-    args: list = [TaskStatus.RUNNING.value]
+            "started_at = COALESCE(started_at, now())",
+            "execution_id = %s"]
+    args: list = [TaskStatus.RUNNING.value, execution_id]
     if worker:
         sets.append("worker = %s")
         args.append(worker[:128])
@@ -143,7 +148,7 @@ def try_acquire_lease(task_id: str, *, worker: str | None = None,
             "now() - (%s || ' seconds')::interval))",
             args,
         )
-        return cur.rowcount > 0
+        return execution_id if cur.rowcount > 0 else None
 
 
 def reap_zombie_running(

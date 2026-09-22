@@ -228,7 +228,7 @@ def test_lease_no_longer_claims_failed(pg, record):
     """租约只认领 PENDING；FAILED 必须先显式回 PENDING（重试可审计）。"""
     TaskManager.mark_running(record.id)
     TaskManager.mark_failed(record.id, error_message="boom")
-    assert pg.try_acquire_lease(record.id, worker="w1") is False
+    assert pg.try_acquire_lease(record.id, worker="w1") is None
     assert _refresh(pg, record).status == TaskStatus.FAILED
     pg.update_status(record.id, TaskStatus.PENDING, progress="重试回队")
-    assert pg.try_acquire_lease(record.id, worker="w1") is True
+    assert pg.try_acquire_lease(record.id, worker="w1")

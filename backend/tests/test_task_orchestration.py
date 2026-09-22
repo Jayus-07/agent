@@ -215,13 +215,13 @@ def test_cancelled_task_skips_execution(pg, task_record):
 
 def test_lease_acquired_once(pg, task_record):
     """同一任务只有第一个 Worker 能抢到租约。"""
-    assert pg.try_acquire_lease(task_record.id, worker="worker-a") is True
-    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is False
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a")
+    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is None
 
 
 def test_impl_skips_when_lease_held_elsewhere(pg, task_record):
     """租约被占时 impl 直接退出，不得进入执行分支（防双跑）。"""
-    assert pg.try_acquire_lease(task_record.id, worker="worker-a") is True
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a")
     from backend.tasks.agent_tasks import execute_agent_task_impl
 
     result = execute_agent_task_impl(task_record.id)
@@ -233,14 +233,14 @@ def test_impl_skips_when_lease_held_elsewhere(pg, task_record):
 def test_failed_task_lease_reclaimable_for_retry(pg, task_record):
     """FAILED（重试路径）不能被租约直接认领（Phase1 状态机），须先显式回 PENDING。"""
     pg.update_status(task_record.id, TaskStatus.FAILED, error_message="boom")
-    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is False
+    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is None
     pg.update_status(task_record.id, TaskStatus.PENDING, progress="重试回队")
-    assert pg.try_acquire_lease(task_record.id, worker="worker-b") is True
+    assert pg.try_acquire_lease(task_record.id, worker="worker-b")
 
 
 def test_stale_running_lease_reclaimable(pg, task_record):
     """RUNNING 但心跳停更超过硬超时 → 视为 Worker 已死，允许接管。"""
-    assert pg.try_acquire_lease(task_record.id, worker="worker-a") is True
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a")
     # 把 updated_at 回拨到阈值之前（模拟硬杀/OOM 后无心跳的死 Worker）
     import json as _json
 
@@ -249,7 +249,7 @@ def test_stale_running_lease_reclaimable(pg, task_record):
             "UPDATE tasks SET updated_at = now() - interval '2 hours' "
             "WHERE id = %s", (task_record.id,))
     assert pg.try_acquire_lease(
-        task_record.id, worker="worker-b", stale_running_seconds=1900) is True
+        task_record.id, worker="worker-b", stale_running_seconds=1900)
 
 
 # ═══════════════════════════════════════════════════

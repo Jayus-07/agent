@@ -63,14 +63,18 @@ def execute_agent_task_impl(task_id: str, *,
             progress="重试回队（从 checkpoint 续跑）")
         record = task_service.get_task(task_id)
 
-    # 审查 #5：acks_late 可见性超时重投会派第二个 Worker 进来。执行前
-    # 先原子抢租约：抢不到说明已有 Worker 在跑同一 thread_id —— 直接
-    # 退出，不得进入执行分支（LLM 重复烧钱、step_results 互踩）。
-    if not task_service.try_acquire_lease(task_id, worker=hostname or None):
+    # 审查 #5 / Phase1 Step3：acks_late 可见性超时重投会派第二个 Worker 进来。
+    # 执行前先原子抢租约（返回 execution_id，owner=worker+租约实例）：抢不到
+    # 说明已有 Worker 在跑同一 thread_id —— 直接退出，不得进入执行分支
+    # （LLM 重复烧钱、step_results 互踩）。
+    lease_id = task_service.try_acquire_lease(task_id, worker=hostname or None)
+    if not lease_id:
         logger.warning(
             "[AgentTask] %s lease held by another worker (acks_late 重投?), skip",
             task_id)
         return {"status": "RUNNING_ELSEWHERE"}
+    logger.info("[AgentTask] %s lease acquired execution_id=%s worker=%s",
+                task_id, lease_id[:8], hostname or "unknown")
 
     if retries:
         task_service.increment_retry(task_id)
