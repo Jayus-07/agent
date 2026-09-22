@@ -46,6 +46,8 @@ class ProtectedFact(BaseModel):
     type: str
     value: str
     source_message_id: int | str | None = None
+    # 语义金额标签（仅裸数字金额有）：用于「同一语义最新值优先」 supersede
+    label: str | None = None
 
 
 # (类型, 模式) —— 全部用捕获组取值；顺序即优先级
@@ -69,13 +71,35 @@ _ENTITY_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("数量", re.compile(r"\d+\s*(?:个|件|台|条|名|人|箱|包|袋|kg|KG|克|千克|升|毫升)")),
 ]
 
+# 裸金额（Phase 5，P3）：语义词 + 数值，无货币符号。
+# Phase 4 真实丢失案例：「预算 100,000」被摘要后丢失。
+# 误判防线（§14 禁止把所有大数字当金额）：
+#   - 只认固定语义词表（预算/金额/成本/…），订单号/用户ID/SKU/库存/错误码不在表内；
+#   - 词与数字之间的间隙不得跨越货币符号（「预算 ¥5000」交给既有货币规则）；
+#   - 数字后缀是单位/日期/百分比时不当作金额（「35件」「10万」「18%」「2026-10-15」）。
+_BARE_AMOUNT_LABELS = (
+    "退款金额|采购价|销售额|预算|金额|成本|价格|售价|退款|收入|利润|毛利"
+    "|费用|支出|单价|总价|最高|最低|上限|下限"
+)
+_BARE_AMOUNT = re.compile(
+    rf"({_BARE_AMOUNT_LABELS})"
+    rf"[^0-9%¥￥$€£]{{0,4}}?"
+    rf"(\d[\d,]*(?:\.\d+)?)"
+    rf"(?![\d%‰年月日万亿块/-])"
+)
+
 _extract_lock = threading.Lock()  # 正则模块级共享，抽取本身无状态，锁仅为语义清晰
 
 
 def extract_protected_facts(
     rows: Iterable[tuple[int | str | None, str]],
 ) -> list[ProtectedFact]:
-    """从待摘要消息中确定性抽取关键事实（去重保序，按配置截断）。"""
+    """从待摘要消息中确定性抽取关键事实（去重保序，按配置截断）。
+
+    裸金额「最新事实优先」supersede（Phase 5 P3）：同一语义标签的金额
+    （如「预算」先 100,000 后改成 120,000）只保留最新一条，避免摘要
+    把新旧两个值同时当作当前有效值。
+    """
     seen: set[tuple[str, str]] = set()
     facts: list[ProtectedFact] = []
     max_facts = int(_cfg("CONTEXT_L5_MAX_PROTECTED_FACTS", 40))
@@ -95,15 +119,39 @@ def extract_protected_facts(
                     seen.add(key)
                     facts.append(ProtectedFact(
                         type=fact_type, value=value, source_message_id=msg_id))
-                    if len(facts) >= max_facts:
-                        return facts
-    return facts
+            for m in _BARE_AMOUNT.finditer(content):
+                label, value = m.group(1), m.group(2)
+                key = ("金额", value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                facts.append(ProtectedFact(
+                    type="金额", value=value, source_message_id=msg_id,
+                    label=label))
+
+    # 语义金额 supersede：同 label 只留最新（rows 按 message id 升序遍历）
+    latest_by_label: dict[str, int] = {}
+    for i, f in enumerate(facts):
+        if f.label:
+            latest_by_label[f.label] = i
+    stale: set[int] = set()
+    for label, last_idx in latest_by_label.items():
+        stale.update(
+            i for i, f in enumerate(facts)
+            if f.label == label and i != last_idx)
+    facts = [f for i, f in enumerate(facts) if i not in stale]
+
+    return facts[:max_facts]
 
 
 def format_facts_for_prompt(facts: list[ProtectedFact]) -> str:
     if not facts:
         return "（无）"
-    return "\n".join(f"- {f.type}: {f.value}" for f in facts)
+    return "\n".join(
+        f"- {f.type}（{f.label}）: {f.value}" if f.label
+        else f"- {f.type}: {f.value}"
+        for f in facts
+    )
 
 
 def validate_and_patch(
@@ -139,6 +187,9 @@ class SummaryOutcome:
     llm_prompt_tokens: int = 0
     llm_completion_tokens: int = 0
     latency_ms: int = 0
+    # Phase 5 分类型统计（patched 分布观测，§19）
+    protected_by_type: dict = field(default_factory=dict)
+    patched_by_type: dict = field(default_factory=dict)
 
 
 class SyncMemorySummaryStore:
@@ -246,25 +297,88 @@ def _format_conversation(rows: list[tuple[int, str, str]]) -> str:
     )
 
 
+def _resolve_summary_model() -> str:
+    """context_compactor 角色解析（Phase 5 正式化）。
+
+    解析链（§七，不建第二套配置系统）：
+      DB role binding（管理端 llm_model_role_bindings）
+      → config fallback（CONTEXT_L5_SUMMARY_MODEL 常量/env）
+      → provider adapter（角色 inherit main 兜底）
+    业务代码零直连模型名；DB 改绑定随 refresh 循环准实时生效。
+    解析失败不阻断（安全回退：摘要失败走确定性裁剪）。
+    """
+    cfg_model = str(_cfg("CONTEXT_L5_SUMMARY_MODEL", "") or "").strip()
+    try:
+        from backend.config import model_roles
+        info = model_roles.resolve_effective("context_compactor")
+        value = str(info.get("value") or "").strip()
+        if info.get("source") == model_roles.SOURCE_DB and value:
+            return value  # DB 显式绑定最高优先
+        if cfg_model:
+            return cfg_model  # config fallback 优先于 inherit main
+        return value  # inherit main（或空）
+    except Exception:
+        logger.debug("context_compactor 角色解析失败，回落 config 常量", exc_info=True)
+        return cfg_model
+
+
+def _provider_supports_thinking_flag(model_name: str) -> bool:
+    """该模型是否支持 enable_thinking 开关（qwen/siliconflow 系）。
+
+    与 rag/preprocessing/llm_enrichment.py 同一口径：qwen（DashScope）
+    与 siliconflow 支持顶层 enable_thinking；DeepSeek/Ollama 不识别该参数，
+    保持原调用不传（传了可能报错或被网关拒绝）。
+    """
+    if not model_name:
+        return False
+    lowered = model_name.lower()
+    if "qwen" in lowered or "qwq" in lowered:
+        return True
+    try:
+        from backend.infra.llm.proxy import _get_provider_for
+        return _get_provider_for(model_name) in ("qwen", "siliconflow")
+    except Exception:
+        return False
+
+
+def _summary_invoke_kwargs(model_name: str) -> dict:
+    """摘要调用的确定性收口参数（Phase 5 P1）：短输出 + 低温 + 显式关 thinking。
+
+    Phase 4/5 实测根因：qwen 系混合思考模型在通用 openai driver 下不传
+    enable_thinking 时思考链默认开启，摘要一次 2.7k thinking tokens / 25~41s。
+    摘要任务不需要 reasoning：只要短、准、结构化、稳定。
+    """
+    kwargs: dict = {
+        "max_tokens": int(_cfg("CONTEXT_L5_SUMMARY_MAX_TOKENS", 512)),
+        "temperature": float(_cfg("CONTEXT_L5_SUMMARY_TEMPERATURE", 0.2)),
+    }
+    if _provider_supports_thinking_flag(model_name):
+        kwargs["extra_body"] = {"enable_thinking": False}
+    return kwargs
+
+
 def _invoke_llm_with_timeout(prompt: str):
     """摘要 LLM 调用（带超时；超时按失败处理，不阻塞调用方）。
 
-    CONTEXT_L5_SUMMARY_MODEL 非空时按模型名覆盖（在 executor 线程内绑定，
-    保留 proxy 的限流/韧性/<think> 剥离/token 统计链路）。Phase 4 实测：
-    默认 LLM 解析指向未配置密钥的模型时摘要必然失败回退（ChatAnthropic
-    validation error），此配置给治理层一个明确的模型指定出口。
+    模型经 context_compactor 角色解析（_resolve_summary_model），在 executor
+    线程内 set_request_model 绑定，保留 proxy 的限流/韧性/<think> 剥离/token
+    统计链路；调用参数统一收口 _summary_invoke_kwargs（关 thinking + 限输出）。
+
+    Fallback 原则（Phase 5 §九）：摘要模型调用失败**不换模型重试**、不自动
+    降级到主 reasoning 模型 —— L5 是保险层，直接失败回退确定性裁剪。
     """
     from backend.infra.llm import llm
 
-    model_name = str(_cfg("CONTEXT_L5_SUMMARY_MODEL", "") or "").strip()
+    model_name = _resolve_summary_model()
+    invoke_kwargs = _summary_invoke_kwargs(model_name)
 
     def _call():
         if model_name:
             from backend.infra.llm.proxy import set_request_model
             set_request_model(model_name)
-        return llm.invoke(prompt)
+        return llm.invoke(prompt, **invoke_kwargs)
 
-    timeout = float(_cfg("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", 20))
+    timeout = float(_cfg("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", 30))
     future = _llm_executor.submit(_call)
     try:
         return future.result(timeout=timeout)
@@ -324,7 +438,10 @@ def run_incremental_summary(
             llm_prompt_tokens=int(tu.get("prompt_tokens") or 0),
             llm_completion_tokens=int(tu.get("completion_tokens") or 0),
             latency_ms=int((time.perf_counter() - started) * 1000),
+            protected_by_type=_count_by_type(facts),
+            patched_by_type=_count_by_type(missing),
         )
+        _record_l5_metrics(outcome)
         logger.info(
             f"context_compacted level=L5 action=auto_compact "
             f"delta_messages={outcome.delta_message_count} "
@@ -334,11 +451,66 @@ def run_incremental_summary(
             f"llm_tokens={outcome.llm_prompt_tokens}+{outcome.llm_completion_tokens} "
             f"latency_ms={outcome.latency_ms}")
         return outcome
-    except Exception as e:
+    except TimeoutError as e:
+        _record_l5_failure("timeout")
+        logger.warning(
+            f"[AutoCompact:{session_id}] 增量摘要超时，保留旧摘要与旧水位线"
+            f"（安全回退）: {e}")
+        return None
+    except ValueError as e:
+        # 空摘要 / 水位线落库失败等确定性业务失败
+        msg = str(e)
+        reason = "empty_summary" if "空" in msg else "db_error"
+        _record_l5_failure(reason)
         logger.warning(
             f"[AutoCompact:{session_id}] 增量摘要失败，保留旧摘要与旧水位线"
             f"（安全回退）: {e}")
         return None
+    except Exception as e:
+        _record_l5_failure("provider_error")
+        logger.warning(
+            f"[AutoCompact:{session_id}] 增量摘要失败，保留旧摘要与旧水位线"
+            f"（安全回退）: {e}")
+        return None
+
+
+def _count_by_type(facts: list[ProtectedFact]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for f in facts:
+        counts[f.type] = counts.get(f.type, 0) + 1
+    return counts
+
+
+def _record_l5_metrics(outcome: SummaryOutcome) -> None:
+    """成功路径指标：l5_total(success) + ProtectedFacts 分层（§26 低基数）。
+
+    extracted = 抽取总量；patched = LLM 遗漏由确定性补丁补回；
+    preserved = LLM 原生保留（extracted - patched，按类型对齐）。
+    """
+    try:
+        from backend.context_budget.metrics import (
+            record_l5_attempt,
+            record_protected_fact,
+        )
+        record_l5_attempt(status="success", reason="success")
+        for fact_type, total in outcome.protected_by_type.items():
+            record_protected_fact(fact_type=fact_type, result="extracted")
+            patched = outcome.patched_by_type.get(fact_type, 0)
+            for _ in range(max(0, total - patched)):
+                record_protected_fact(fact_type=fact_type, result="preserved")
+        for fact_type, patched in outcome.patched_by_type.items():
+            for _ in range(patched):
+                record_protected_fact(fact_type=fact_type, result="patched")
+    except Exception:
+        logger.debug("L5 metric 记录失败", exc_info=True)
+
+
+def _record_l5_failure(reason: str) -> None:
+    try:
+        from backend.context_budget.metrics import record_l5_attempt
+        record_l5_attempt(status="failed", reason=reason)
+    except Exception:
+        logger.debug("L5 metric 记录失败", exc_info=True)
 
 
 def _render_summary_prompt(

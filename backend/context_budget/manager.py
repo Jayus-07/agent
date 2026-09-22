@@ -278,6 +278,12 @@ class ContextBudgetManager:
             return msgs, used
         if not _cfg("CONTEXT_L5_ENABLED", True) or not _cfg(
                 "CONTEXT_BUDGET_ENABLED", True):
+            # kill switch 观测：disabled 计数（低基数，无 session 信息）
+            try:
+                from backend.context_budget.metrics import record_l5_attempt
+                record_l5_attempt(status="disabled", reason="disabled")
+            except Exception:
+                pass
             return msgs, used
         if getattr(self._l5_thread_local, "active", False):
             return msgs, used  # 摘要 LLM 调用自身的 preflight，禁止重入

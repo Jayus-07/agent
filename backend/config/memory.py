@@ -64,11 +64,19 @@ CONTEXT_L5_TRIGGER_RATIO = float(os.getenv("CONTEXT_L5_TRIGGER_RATIO", "0.90"))
 CONTEXT_L5_ENABLED = os.getenv("CONTEXT_L5_ENABLED", "true").lower() == "true"
 # 触发后把 active context 压到的目标比例（input_budget 的 ~70%）
 CONTEXT_L5_TARGET_RATIO = float(os.getenv("CONTEXT_L5_TARGET_RATIO", "0.70"))
-# 摘要 LLM 调用超时（秒）：超时按摘要失败处理，安全回退到裁剪后上下文
-CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", "20"))
-# 摘要 LLM 模型名覆盖（空 = 用默认 LLM）。Phase 4 实测：默认 LLM 解析指向
-# 未配置密钥的模型时摘要必然失败回退，此配置给治理层明确的模型指定出口
+# 摘要 LLM 调用超时（秒）：超时按摘要失败处理，安全回退到裁剪后上下文。
+# 校准依据（Phase 5）：摘要模型切 non-thinking 后 P95 实测 ~5s，timeout=P95×2
+# 取整 30s（§十二：正常摘要不误超时，provider 卡死又能及时 fallback）
+CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", "30"))
+# 摘要 LLM 模型：正式走模型角色控制面（context_compactor 角色，2026-09-22 Phase 5）。
+# 解析链 = DB role binding（管理端「模型角色绑定」）→ config fallback（本常量）→
+# provider adapter。此常量仅作 DB 未绑定时的代码默认值；运行时经
+# model_roles.resolve_effective("context_compactor") 统一解析，业务代码禁止直读。
 CONTEXT_L5_SUMMARY_MODEL = os.getenv("CONTEXT_L5_SUMMARY_MODEL", "")
+# 摘要输出上限（tokens）：摘要任务只需短/准/结构化，超出即截断（防 thinking 泄漏膨胀）
+CONTEXT_L5_SUMMARY_MAX_TOKENS = int(os.getenv("CONTEXT_L5_SUMMARY_MAX_TOKENS", "512"))
+# 摘要温度：低温保证结构化稳定复现
+CONTEXT_L5_SUMMARY_TEMPERATURE = float(os.getenv("CONTEXT_L5_SUMMARY_TEMPERATURE", "0.2"))
 # 增量摘要最小新消息数：少于该条数不值得一次 LLM 调用（跳过本轮 L5）
 CONTEXT_L5_MIN_DELTA_MESSAGES = int(os.getenv("CONTEXT_L5_MIN_DELTA_MESSAGES", "2"))
 # 单次增量摘要最多带多少条新消息进 prompt（防 delta 巨大时 prompt 爆炸）
