@@ -60,6 +60,7 @@ def _build_sql_policy_context(state: dict):
         tenant_id=ctx.tenant_id or "",
         roles=tuple(ctx.roles or ()),
         data_scope=ctx.data_scope or None,
+        source_channel="graph",
     )
 
 

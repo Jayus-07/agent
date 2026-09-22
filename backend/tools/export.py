@@ -2,6 +2,13 @@
 from langchain_core.tools import tool
 from backend.shared.logger import logger
 
+
+def _get_sql_agent():
+    from backend.sql.sql_agent import get_sql_agent
+
+    return get_sql_agent()
+
+
 @tool
 def export_csv_tool(question: str, filename: str = "",
                     idempotency_key: str = "") -> str:
@@ -50,15 +57,21 @@ def _export_csv_after_approval(question: str, filename: str = "") -> str:
     from datetime import datetime
     from backend.config import STORAGE_DOCS_DIR
 
-    # 委托 SQL agent 生成并执行 SQL
-    from backend.tools.session import get_tool_user_id
+    # STOP C：导出与 sql_query_tool 走同一策略链（权限门/表域/scope 注入/
+    # 审计），不再经 agent.ask 旧链旁路；身份来自 contextvars 可信上下文
+    from backend.tools.sql import tool_policy_context
     agent = _get_sql_agent()
-    result = agent.ask(question, current_user_id=get_tool_user_id() or None)
+    result = agent.ask_struct(question, policy=tool_policy_context())
 
-    # 从 SQL agent 结果中提取表格数据
-    rows, columns = _extract_table_from_markdown(result)
+    if result.status not in ("success", "no_data"):
+        logger.warning(
+            f"[Tool:export_csv] 查询失败 status={result.status}: "
+            f"{(result.error or '')[:120]}")
+        return f"[EXPORT FAILED] 查询未成功: {result.error or result.status}"
+
+    rows, columns = result.rows or [], result.columns or []
     if not rows:
-        return f"[EXPORT FAILED] 查询无结果或无法解析: {question[:80]}"
+        return f"[EXPORT FAILED] 查询无结果: {question[:80]}"
 
     if not filename:
         filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
