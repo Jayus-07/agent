@@ -45,6 +45,11 @@ USER_ID_HEADER = os.getenv("USER_ID_HEADER", "X-User-Id")
 # 行级安全总开关：默认关闭（Demo 查询不携带用户上下文，严格模式会全部拒绝）。
 # 生产开启后，schema_config.row_security 中配置的表将强制按用户隔离。
 SQL_ROW_SECURITY_ENABLED = os.getenv("SQL_ROW_SECURITY_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# SQL Agent 生产 kill switch（2026-09-23 STOP C）：关闭时全部 SQL 生产入口
+# （HTTP /sql*、图内 SQLSkill、Tool、MCP）返回服务不可用，executor 零调用。
+# 默认 true——SQL Agent 是存量生产功能，开关只作应急停用，不改变现网行为。
+# 注意语义：不可用 ≠ 权限拒绝（error_type=service_unavailable，避免误导权限诊断）。
+SQL_AGENT_ENABLED = os.getenv("SQL_AGENT_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
 # 报告
 REPORT_SNAPSHOT_DAYS = int(os.getenv("REPORT_SNAPSHOT_DAYS", "30"))
@@ -375,6 +380,7 @@ __all__ = [
     "LOG_LEVEL", "LOG_FILE", "OVERALL_REQUEST_TIMEOUT",
     # sql 数据安全
     "TRUST_USER_HEADER", "USER_ID_HEADER", "SQL_ROW_SECURITY_ENABLED",
+    "SQL_AGENT_ENABLED",
     # tool 审批门 / MCP / 主图保护
     "TOOL_APPROVAL_MODE", "TOOL_APPROVAL_TTL_SECONDS", "MCP_TOOL_TIMEOUT",
     "MAIN_GRAPH_RECURSION_LIMIT", "MAIN_GRAPH_CHECKPOINTER_ENABLED",

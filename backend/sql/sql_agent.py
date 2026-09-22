@@ -19,6 +19,7 @@ sql_agent.py — SQL Agent 主编排器
 """
 from typing import Optional
 
+from backend.config import SQL_AGENT_ENABLED
 from backend.sql.policy import SQLPolicyContext
 from backend.sql.router import select_tables
 from backend.sql.sql_generator import generate_sql
@@ -27,6 +28,110 @@ from backend.sql.row_security import inject_row_filter, RowSecurityError
 from backend.sql.executor import execute_sql_struct
 from backend.sql.sql_result import SQLResult
 from backend.shared.logger import logger
+
+# ── 服务不可用语义（kill switch 关闭时；区别于权限拒绝，避免误导诊断）──
+_UNAVAILABLE_ERROR = "SQL 查询服务暂不可用，请稍后重试。"
+
+
+def _unavailable_result() -> SQLResult:
+    return SQLResult.failed(
+        status="failed",
+        error=_UNAVAILABLE_ERROR,
+        error_type="service_unavailable",
+    )
+
+
+# SQLPolicyError.code → 审计决策映射（低基数；deny 全部为终态）
+_DENY_DECISION = {
+    "SQL_PERMISSION_DENIED": "DENY_PERMISSION",
+    "SQL_TABLE_NOT_ALLOWED": "DENY_TABLE",
+    "SQL_SCOPE_UNAVAILABLE": "DENY_SCOPE",
+}
+_DENY_METRIC_REASON = {
+    "SQL_PERMISSION_DENIED": "permission",
+    "SQL_TABLE_NOT_ALLOWED": "table",
+    "SQL_SCOPE_UNAVAILABLE": "scope",
+}
+
+
+def _observe(
+    *,
+    decision: str,
+    policy: Optional[SQLPolicyContext],
+    sql: str = "",
+    tables=(),
+    deny_code: str = "",
+    duration_ms: int = 0,
+    row_count: int | None = None,
+    status: str = "",
+    error_type: str = "",
+) -> None:
+    """统一观测出口：audit（best-effort 落库）+ Prometheus 指标。
+
+    只在 agent 层 choke point 调用，各入口不复制审计逻辑；
+    任何观测失败都不影响主流程（record_sql_audit 内部吞异常）。
+    """
+    try:
+        from backend.observability.metrics import (
+            sql_agent_denied_total,
+            sql_agent_execution_duration_seconds,
+            sql_agent_execution_total,
+            sql_agent_requests_total,
+            sql_agent_rows_returned_total,
+        )
+        from backend.sql import audit as sql_audit
+
+        source = (policy.source_channel if policy else "") or "unknown"
+        sql_agent_requests_total.labels(
+            source=source, decision=decision).inc()
+        if decision.startswith("DENY"):
+            reason = (_DENY_METRIC_REASON.get(deny_code)
+                      or ("validator" if decision == "DENY_VALIDATOR"
+                          else "unknown_scope"))
+            sql_agent_denied_total.labels(reason=reason).inc()
+        if status:
+            sql_agent_execution_total.labels(status=status).inc()
+            if status == "timeout":
+                sql_agent_denied_total.labels(reason="timeout").inc()
+        if duration_ms:
+            sql_agent_execution_duration_seconds.observe(duration_ms / 1000)
+        if row_count:
+            sql_agent_rows_returned_total.inc(row_count)
+
+        sql_audit.record_sql_audit(
+            decision=decision,
+            session_id=_current_session(),
+            user_id=(policy.user_id if policy else "") or "",
+            tenant_id=(policy.tenant_id if policy else "") or "",
+            department=(policy.department if policy else "") or "",
+            data_scope=str(policy.data_scope or "") if policy else "",
+            source_channel=source,
+            sql=sql,
+            tables=tables,
+            deny_code=deny_code,
+            duration_ms=duration_ms,
+            row_count=row_count,
+            status=status,
+            error_type=error_type,
+        )
+    except Exception as e:  # 观测永不阻塞主查询
+        logger.warning(f"[SQLAgent] 观测埋点失败（忽略）: {e}")
+
+
+def _current_session() -> str:
+    try:
+        from backend.core.request_context import get_current_session_id
+
+        return get_current_session_id()
+    except Exception:
+        return ""
+
+
+def sql_audit_decision(status: str) -> str:
+    """executor status → 审计决策（供 policy 链/旧链/收口 tool 共用）。"""
+    from backend.sql.audit import decision_from_result
+
+    return decision_from_result(status)
 
 
 class SQLAgent:
@@ -51,12 +156,15 @@ class SQLAgent:
         self,
         question: str,
         current_user_id: Optional[int] = None,
+        policy: Optional[SQLPolicyContext] = None,
     ) -> str:
         """处理自然语言问题，返回 Markdown 表格或错误字符串（向后兼容）。
 
         推荐新调用方使用 `ask_struct()` 拿 SQLResult。
+        policy：STOP C 策略链上下文（生产入口必须携带）。
         """
-        result = self.ask_struct(question, current_user_id=current_user_id)
+        result = self.ask_struct(question, current_user_id=current_user_id,
+                                 policy=policy)
         return result.to_markdown()
 
     # =================================================
@@ -82,6 +190,10 @@ class SQLAgent:
           - RowSecurityError   → status="permission_denied"
           - executor 返回的 status 透传（success / no_data / timeout / syntax_error / permission_denied / failed）
         """
+        if not SQL_AGENT_ENABLED:
+            # kill switch（STOP C §十四）：全入口统一服务不可用语义，
+            # 不区分权限——避免误导权限诊断
+            return _unavailable_result()
         if policy is not None:
             return self._ask_struct_with_policy(question, policy)
 
@@ -97,6 +209,8 @@ class SQLAgent:
             logger.info(f"[SQLAgent] 选中表: {table_names}")
         except Exception as e:
             logger.error(f"[SQLAgent] 表路由失败: {e}")
+            _observe(decision="EXECUTION_FAILED", policy=None,
+                     status="failed", error_type="router_error")
             return SQLResult.failed(
                 status="failed",
                 error=f"内部错误：表路由失败 {e}",
@@ -104,6 +218,8 @@ class SQLAgent:
             )
 
         if not table_names:
+            _observe(decision="EXECUTION_FAILED", policy=None,
+                     status="no_table", error_type="no_table")
             return SQLResult.failed(
                 status="no_table",
                 error="未找到相关数据表，请调整问题后重试。",
@@ -131,6 +247,11 @@ class SQLAgent:
 
                 # 成功路径 → 直接返回
                 if result.status in ("success", "no_data"):
+                    _observe(
+                        decision=sql_audit_decision(result.status), policy=None,
+                        sql=sql, duration_ms=int((result.elapsed_sec or 0) * 1000),
+                        row_count=result.row_count, status=result.status,
+                    )
                     return result
 
                 # 失败判断：
@@ -138,17 +259,34 @@ class SQLAgent:
                 # 2. status ∈ {syntax_error} → 不可重试（同一 LLM 再来通常还是同样错）
                 # 3. status ∈ {timeout, failed, no_table} → 可重试
                 if result.status in ("validation_error", "permission_denied", "syntax_error"):
+                    _observe(
+                        decision=sql_audit_decision(result.status), policy=None,
+                        sql=sql, status=result.status,
+                        error_type=result.error_type or "",
+                    )
                     return result
 
                 # 其它失败：尝试重试
                 if attempt < self.max_retries:
                     feedback = f"上次生成的 SQL:\n{sql}\n执行报错: {result.error}"
                     continue
+                _observe(
+                    decision=sql_audit_decision(result.status), policy=None,
+                    sql=sql, status=result.status,
+                    error_type=result.error_type or "",
+                )
                 return result
 
             except ValidationError as e:
                 logger.warning(f"[SQLAgent] 校验失败 (第{attempt+1}次): {e}")
-                if attempt < self.max_retries:
+                _observe(
+                    decision="DENY_VALIDATOR", policy=None, sql=sql or "",
+                    deny_code=f"validator:{e.reason or 'unknown'}",
+                )
+                # STOP C 终态分类：安全/策略拒绝（表白名单/敏感列/危险函数/
+                # 非 SELECT 等）不携带反馈重试——LLM 不允许根据拒绝原因
+                # 改写后再试；仅 parse/别名/LIMIT 类语法错误可有限修复
+                if attempt < self.max_retries and not e.is_terminal_deny:
                     feedback = (
                         f"上次生成的 SQL:\n{last_sql}\n"
                         f"被安全校验拒绝（{e}），请避免同样问题"
@@ -156,20 +294,24 @@ class SQLAgent:
                     continue
                 return SQLResult.failed(
                     status="validation_error",
-                    error=f"SQL 校验失败: {e}",
+                    error="查询未通过安全校验，请调整问题后重试。",
                     error_type="validation",
                 )
 
             except RowSecurityError as e:
                 logger.error(f"[SQLAgent] 行级安全注入失败: {e}")
+                _observe(decision="DENY_SCOPE", policy=None,
+                         deny_code="SQL_SCOPE_UNAVAILABLE")
                 return SQLResult.failed(
                     status="permission_denied",
-                    error=f"访问控制错误: {e}",
+                    error="当前无法确定你的数据访问范围，查询被拒绝。",
                     error_type="row_security",
                 )
 
             except Exception as e:
                 logger.error(f"[SQLAgent] 执行失败 (第{attempt+1}次): {e}")
+                _observe(decision="EXECUTION_FAILED", policy=None,
+                         sql=sql or "", status="failed", error_type="unknown")
                 if attempt < self.max_retries:
                     feedback = (
                         f"上次生成的 SQL:\n{last_sql}\n执行报错: {e}"
@@ -214,20 +356,40 @@ class SQLAgent:
         logger.info(
             f"[SQLAgent:policy] 收到问题: {question[:80]}... "
             f"(user={policy.user_id}, scope={policy.data_scope}, "
-            f"dept={policy.department or '-'}, tenant={policy.tenant_id or '-'})"
+            f"dept={policy.department or '-'}, tenant={policy.tenant_id or '-'}, "
+            f"source={policy.source_channel or '-'})"
         )
+
+        guard = SQLPolicyGuard()
+        # — Step 0: 前置权限门（STOP C §八）：无权限/非法 scope 在任何
+        #    LLM 调用之前拒绝——路由选表与 SQL 生成都不发生
+        try:
+            guard.precheck(policy)
+        except SQLPolicyError as e:
+            logger.warning(f"[SQLAgent:policy] 前置策略拒绝 code={e.code}: {e}")
+            _observe(decision=_DENY_DECISION.get(e.code, "DENY_SCOPE"),
+                     policy=policy, deny_code=e.code)
+            return SQLResult.failed(
+                status="permission_denied",
+                error=e.user_text,
+                error_type="row_security",
+            )
 
         # — Step 1: 路由选表（与旧链路一致）—
         try:
             table_names = select_tables(question)
         except Exception as e:
             logger.error(f"[SQLAgent:policy] 表路由失败: {e}")
+            _observe(decision="EXECUTION_FAILED", policy=policy,
+                     status="failed", error_type="router_error")
             return SQLResult.failed(
                 status="failed",
                 error=f"内部错误：表路由失败 {e}",
                 error_type="router_error",
             )
         if not table_names:
+            _observe(decision="EXECUTION_FAILED", policy=policy,
+                     status="no_table", error_type="no_table")
             return SQLResult.failed(
                 status="no_table",
                 error="未找到相关数据表，请调整问题后重试。",
@@ -235,7 +397,6 @@ class SQLAgent:
             )
 
         # — Step 2-5: 生成 + Guard 循环 —
-        guard = SQLPolicyGuard()
         feedback: str | None = None
         sql: str | None = None
         last_result: SQLResult | None = None
@@ -251,19 +412,49 @@ class SQLAgent:
                 last_result = result
 
                 if result.status in ("success", "no_data"):
+                    _observe(
+                        decision=sql_audit_decision(result.status),
+                        policy=policy, sql=sql,
+                        tables=guarded.referenced_tables,
+                        duration_ms=int((result.elapsed_sec or 0) * 1000),
+                        row_count=result.row_count,
+                        status=result.status,
+                    )
                     return result
                 # 语法/schema/权限类不可重试；timeout/failed 可重试
                 if result.status in ("validation_error", "permission_denied", "syntax_error"):
+                    _observe(
+                        decision=sql_audit_decision(result.status),
+                        policy=policy, sql=sql,
+                        tables=guarded.referenced_tables,
+                        duration_ms=int((result.elapsed_sec or 0) * 1000),
+                        status=result.status,
+                        error_type=result.error_type or "",
+                    )
                     return result
                 if attempt < self.max_retries:
                     feedback = f"上次生成的 SQL:\n{sql}\n执行报错: {result.error}"
                     continue
+                _observe(
+                    decision=sql_audit_decision(result.status),
+                    policy=policy, sql=sql,
+                    tables=guarded.referenced_tables,
+                    duration_ms=int((result.elapsed_sec or 0) * 1000),
+                    status=result.status,
+                    error_type=result.error_type or "",
+                )
                 return result
 
             except SQLPolicyError as e:
-                # 安全拒绝 = 终态（对外安全文案，详细原因只进日志）
+                # 安全拒绝 = 终态（对外安全文案，详细原因只进日志）；
+                # STOP C：deny 后不携带 feedback 重试，generate 次数 = attempt+1
                 logger.warning(
                     f"[SQLAgent:policy] 策略拒绝 code={e.code}: {e}")
+                _observe(
+                    decision=_DENY_DECISION.get(e.code, "DENY_SCOPE"),
+                    policy=policy, sql=sql,
+                    deny_code=e.code,
+                )
                 return SQLResult.failed(
                     status="permission_denied",
                     error=e.user_text,
@@ -273,7 +464,13 @@ class SQLAgent:
             except ValidationError as e:
                 logger.warning(
                     f"[SQLAgent:policy] 校验失败 (第{attempt+1}次): {e}")
-                if attempt < self.max_retries:
+                _observe(
+                    decision="DENY_VALIDATOR", policy=policy, sql=sql or "",
+                    deny_code=f"validator:{e.reason or 'unknown'}",
+                )
+                if attempt < self.max_retries and not e.is_terminal_deny:
+                    # 仅语法/schema 类可带反馈修复重试（每次重走 Guard）；
+                    # 安全拒绝（table/column/function/类型类）为终态
                     feedback = (
                         f"上次生成的 SQL:\n{sql}\n"
                         f"被安全校验拒绝（{e}），请避免同样问题"
@@ -281,12 +478,15 @@ class SQLAgent:
                     continue
                 return SQLResult.failed(
                     status="validation_error",
-                    error=f"SQL 校验失败: {e}",
+                    error="查询未通过安全校验，请调整问题后重试。",
                     error_type="validation",
                 )
 
             except Exception as e:
                 logger.error(f"[SQLAgent:policy] 执行失败 (第{attempt+1}次): {e}")
+                _observe(decision="EXECUTION_FAILED", policy=policy,
+                         sql=sql or "", status="failed",
+                         error_type="unknown")
                 if attempt < self.max_retries:
                     feedback = f"执行报错: {e}"
                     continue

@@ -44,6 +44,11 @@ _current_department: ContextVar[str] = ContextVar("tool_department", default="")
 _current_permissions: ContextVar[tuple[str, ...] | None] = ContextVar(
     "tool_permissions", default=None
 )
+# 网关验签后的 JWT 角色（图通道随 RequestContext 显式流动；HTTP 依赖用不到；
+# Tool/MCP 直调通道经此 ContextVar 传递，授权层推导 permission_codes 用）
+_current_roles: ContextVar[tuple[str, ...] | None] = ContextVar(
+    "tool_roles", default=None
+)
 
 
 def set_session_id(sid: str) -> None:
@@ -108,6 +113,15 @@ def set_tool_permissions(permissions: tuple[str, ...] | None) -> None:
 def get_tool_permissions() -> tuple[str, ...] | None:
     """当前请求持有的文档级权限；无可信上下文时返回 None。"""
     return _current_permissions.get()
+
+
+def set_tool_roles(roles: tuple[str, ...] | None) -> None:
+    _current_roles.set(None if roles is None else tuple(sorted(set(roles))))
+
+
+def get_tool_roles() -> tuple[str, ...]:
+    """当前请求 JWT 角色；无可信上下文返回空元组（授权层 fail-closed）。"""
+    return _current_roles.get() or ()
 
 
 @dataclass
@@ -189,6 +203,7 @@ class RequestContext:
         set_tool_idempotency_key(self.idempotency_key)
         set_tool_department(self.department)
         set_tool_permissions(self.permissions)
+        set_tool_roles(self.roles)
         set_log_context(user_id=self.user_id)
         set_request_model(self.model)
         if self.bind_sink:

@@ -50,13 +50,23 @@ async def call_tool(req: CallRequest, request: Request):
     if not req.tool_name:
         raise HTTPException(status_code=400, detail="tool_name 不能为空")
     from backend.app.api.identity import resolve_identity
-    from backend.core.request_context import set_tool_department, set_tool_user_id
+    from backend.core.request_context import (
+        set_tool_department,
+        set_tool_roles,
+        set_tool_tenant_id,
+        set_tool_user_id,
+    )
 
     ident = resolve_identity(request)
     if ident.user_id:
         set_tool_user_id(ident.user_id)
     if ident.department:
         set_tool_department(ident.department)
+    # STOP C：tenant/roles 一并绑定——SQL MCP 通道的权限门/数据范围
+    # 需要完整可信身份（与 HTTP/Graph 通道同一授权语义）
+    if ident.tenant_id:
+        set_tool_tenant_id(ident.tenant_id)
+    set_tool_roles(ident.roles or ())
     logger.info(f"[MCP] call {req.tool_name} params={req.params} "
                 f"actor={ident.user_id or 'anonymous'}")
     return manager.route(req.tool_name, req.params)

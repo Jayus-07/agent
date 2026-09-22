@@ -138,6 +138,24 @@ class SQLSkill(BaseSkill):
         )
         from backend.observability.tracer import trace_collector
 
+        # kill switch（STOP C §十四）：graph 入口与服务不可用语义务必与
+        # HTTP/Tool/MCP 一致——不产生 LLM 生成，executor 零调用
+        from backend.config import SQL_AGENT_ENABLED
+
+        if not SQL_AGENT_ENABLED:
+            step_id_ks = state.get("current_step_id") or "sql"
+            logger.warning("[SQL Skill] SQL_AGENT_ENABLED=false，服务不可用降级")
+            return {"step_results": {step_id_ks: {
+                "step_id": step_id_ks,
+                "capability": step_capability or "sql.query",
+                "status": "failed",
+                "output": None,
+                "error": "SQL 查询服务暂不可用，请稍后重试。",
+                "error_type": "service_unavailable",
+                "tool_status": "unavailable",
+                "finished_at": time.time(),
+            }}}
+
         reg = get_policy(step_capability or "sql.query")
         if is_registered(step_capability or "sql.query"):
             timeout = reg.timeout_ms / 1000 if timeout is None else timeout

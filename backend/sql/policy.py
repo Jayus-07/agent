@@ -99,10 +99,13 @@ class SQLPolicyContext:
 
     只能由 Principal/AuthorizationContext 装配（build_sql_policy_context），
     不得携带请求体/客户端声明的身份字段。
+    source_channel（STOP C）：http|graph|tool|mcp，仅用于审计/metrics
+    归因，低基数，不参与任何授权判定。
     """
 
     principal: Principal
     authz: AuthorizationContext
+    source_channel: str = ""
 
     @property
     def user_id(self) -> str:
@@ -128,6 +131,7 @@ def build_sql_policy_context(
     tenant_id: str = "",
     roles: tuple[str, ...] = (),
     data_scope: str | None = None,
+    source_channel: str = "",
 ) -> SQLPolicyContext:
     """图/Tool 通道装配入口（HTTP 通道走 deps.get_authorization_context）。
 
@@ -144,7 +148,10 @@ def build_sql_policy_context(
         roles=tuple(roles),
         data_scope=data_scope,
     )
-    return SQLPolicyContext(principal=authz.principal, authz=authz)
+    return SQLPolicyContext(
+        principal=authz.principal, authz=authz,
+        source_channel=(source_channel or "")[:16],
+    )
 
 
 @dataclass
@@ -162,16 +169,19 @@ class GuardedSQL:
 class SQLPolicyGuard:
     """组合 sql_validator + 三维 scope 注入的确定性策略闸门。"""
 
-    def validate_and_rewrite(self, sql: str, policy: SQLPolicyContext) -> GuardedSQL:
-        # ── 1. 权限门（fail-closed：无 sql.read 一律拒绝）──
+    def precheck(self, policy: SQLPolicyContext) -> None:
+        """前置权限门（STOP C §八）：权限点 + scope 合法性校验。
+
+        供 agent 在路由选表/LLM 生成**之前**调用——无权限用户不触发
+        任何 LLM 调用；validate_and_rewrite 内部重复执行同一检查
+        （纵深，防调用方绕过 precheck 直接进 Guard）。
+        """
         if not policy.authz.has_permission("sql.read"):
             raise SQLPolicyError(
                 SQL_PERMISSION_DENIED,
                 f"user={policy.user_id!r} 无 sql.read 权限"
                 f"(roles={policy.principal.roles})",
             )
-
-        # ── 2. data_scope 合法性（unknown/None → fail-closed，§三十八）──
         scope = policy.data_scope
         if scope not in _VALID_SCOPES:
             raise SQLPolicyError(
@@ -179,19 +189,78 @@ class SQLPolicyGuard:
                 f"data_scope={scope!r} 非法（合法值: {_VALID_SCOPES}）",
             )
 
-        # ── 3. 既有 6 层硬校验（只读/白名单/敏感列/危险函数/LIMIT）──
+    def validate_and_rewrite(self, sql: str, policy: SQLPolicyContext) -> GuardedSQL:
+        # sql.guard span（STOP C §十二）：低基数 attributes，deny 也收口；
+        # best-effort——无 active trace 时 start_span 返回 noop，不阻塞查询
+        _span = None
+        try:
+            from backend.observability.tracer import trace_collector
+
+            import uuid as _uuid
+
+            _span = trace_collector.start_span(
+                f"sql.guard.{_uuid.uuid4().hex[:8]}", name="sql.guard",
+                kind="tool_call",
+            )
+        except Exception:
+            _span = None
+        try:
+            return self._validate_and_rewrite_inner(sql, policy)
+        except SQLPolicyError as e:
+            self._end_guard_span(_span, policy, None, e.code)
+            raise
+        except ValidationError as e:
+            self._end_guard_span(_span, policy, None,
+                                 f"validator:{e.reason or 'unknown'}")
+            raise
+        else:
+            self._end_guard_span(_span, policy, None, "")
+
+    def _end_guard_span(self, span, policy: SQLPolicyContext,
+                        guarded: GuardedSQL | None, reason_code: str) -> None:
+        if span is None:
+            return
+        try:
+            from backend.observability.tracer import trace_collector
+
+            table_count = len(guarded.referenced_tables) if guarded else 0
+            trace_collector.end_span(
+                span,
+                metrics={
+                    "source_channel": policy.source_channel or "unknown",
+                    "data_scope": str(policy.data_scope or ""),
+                    "decision": ("deny" if reason_code else
+                                 ("allow" if guarded and guarded.applied_scopes
+                                  else "allow_no_scope")),
+                    "reason_code": reason_code,
+                    "table_count": table_count,
+                },
+                status="error" if reason_code else "success",
+            )
+        except Exception:
+            pass  # 观测永不阻塞安全判定
+
+    def _validate_and_rewrite_inner(
+        self, sql: str, policy: SQLPolicyContext,
+    ) -> GuardedSQL:
+        # ── 1. 权限门（fail-closed：无 sql.read 一律拒绝；与 precheck
+        #      同一检查——纵深防绕过）──
+        self.precheck(policy)
+        scope = policy.data_scope
+
+        # ── 2. 既有 6 层硬校验（只读/白名单/敏感列/危险函数/LIMIT）──
         try:
             safe_sql, _table_names, stmt = sql_validator.validate(sql)
         except ValidationError:
             raise  # 语法/schema 类，由调用方按既有重试语义处理
 
-        # ── 4. 表域判定（全 AST 真实表引用；任一表拒绝 → 整条拒绝）──
+        # ── 3. 表域判定（全 AST 真实表引用；任一表拒绝 → 整条拒绝）──
         cte_names = {cte.alias.lower() for cte in stmt.find_all(exp.CTE)}
         table_refs = _collect_table_refs(stmt, cte_names)
         for qualified_name in table_refs:
             self._check_tableallowed(qualified_name, scope, policy)
 
-        # ── 5. 按 SELECT scope 逐组注入（UNION 分支/子查询/CTE body
+        # ── 4. 按 SELECT scope 逐组注入（UNION 分支/子查询/CTE body
         #      各自是独立 Select scope，逐组处理保证 scope 不丢）──
         params: Dict[str, Any] = {}
         applied: set[str] = set()

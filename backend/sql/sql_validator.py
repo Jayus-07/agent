@@ -19,11 +19,34 @@ from backend.sql.schema_loader import schema_loader
 from backend.shared.logger import logger
 
 
+# ValidationError.reason 低基数枚举（STOP C 终态分类）：
+#   terminal（安全/策略拒绝，禁止携带反馈重试）：
+#     non_select / multi_statement / select_into / lock_clause /
+#     write_in_subquery / table_forbidden / schema_forbidden /
+#     column_forbidden / star_projection / dangerous_function
+#   retryable（语法/schema 类，允许有限次带反馈重新生成）：
+#     parse_error / empty_sql / alias_undefined / limit_exceeded
+TERMINAL_DENY_REASONS = frozenset({
+    "non_select", "multi_statement", "select_into", "lock_clause",
+    "write_in_subquery", "table_forbidden", "schema_forbidden",
+    "column_forbidden", "star_projection", "dangerous_function",
+})
+
+
 class ValidationError(Exception):
-    """校验失败异常，包含友好错误消息"""
-    def __init__(self, message: str, layer: int = 0):
+    """校验失败异常，包含友好错误消息与低基数原因码。
+
+    reason（STOP C）：供上层区分「安全拒绝（终态，不重试）」与
+    「语法/schema 错误（可有限重试重新生成）」；缺省空串兼容旧调用。
+    """
+    def __init__(self, message: str, layer: int = 0, reason: str = ""):
         self.layer = layer
+        self.reason = reason
         super().__init__(message)
+
+    @property
+    def is_terminal_deny(self) -> bool:
+        return self.reason in TERMINAL_DENY_REASONS
 
 
 # PostgreSQL 保留字（子集）—— 作为 schema/table 名时必须加引号。
@@ -55,13 +78,13 @@ class SQLValidator:
     def _check_statement_type(self, parsed: list) -> None:
         """检查 AST 顶层语句类型，只允许单个 SELECT"""
         if not parsed:
-            raise ValidationError("SQL 语句为空", layer=1)
+            raise ValidationError("SQL 语句为空", layer=1, reason="empty_sql")
 
         if len(parsed) > 1:
             statements = [type(s).__name__ for s in parsed]
             raise ValidationError(
                 f"禁止多条语句，检测到 {len(parsed)} 条: {statements}",
-                layer=1,
+                layer=1, reason="multi_statement",
             )
 
         stmt = parsed[0]
@@ -70,17 +93,17 @@ class SQLValidator:
             stmt_type = type(stmt).__name__
             raise ValidationError(
                 f"只允许 SELECT 查询，检测到 {stmt_type}",
-                layer=1,
+                layer=1, reason="non_select",
             )
 
         # 显式拒绝 SELECT INTO / FOR UPDATE / FOR SHARE（建议项 2026-09-21）：
         # 以前只靠只读事务兜底，现在 Layer 1 直接拒绝——INTO 会建表落盘，
         # 锁子句会持有行锁直到事务结束，都不该进到执行层。
         if stmt.args.get("into"):
-            raise ValidationError("禁止 SELECT INTO（会创建表/写文件）", layer=1)
+            raise ValidationError("禁止 SELECT INTO（会创建表/写文件）", layer=1, reason="select_into")
         locks = stmt.args.get("locks") or []
         if locks:
-            raise ValidationError("禁止 FOR UPDATE / FOR SHARE 锁子句", layer=1)
+            raise ValidationError("禁止 FOR UPDATE / FOR SHARE 锁子句", layer=1, reason="lock_clause")
 
         self._check_no_write_in_subqueries(stmt)
 
@@ -94,7 +117,7 @@ class SQLValidator:
             if isinstance(child, write_types):
                 raise ValidationError(
                     f"语句中包含禁止操作 {type(child).__name__}",
-                    layer=1,
+                    layer=1, reason="write_in_subquery",
                 )
 
     # =================================================
@@ -139,7 +162,7 @@ class SQLValidator:
                 raise ValidationError(
                     f"列 '{col.table}.{col.name}' 引用的表别名 '{col.table}' "
                     f"未在 FROM/JOIN 中定义（已定义: {sorted(defined)}）",
-                    layer=2,
+                    layer=2, reason="alias_undefined",
                 )
 
     def _extract_table_names(self, parsed: list) -> Set[str]:
@@ -180,7 +203,7 @@ class SQLValidator:
                 if schema_name and schema_name not in self.allowed_schemas:
                     raise ValidationError(
                         f"禁止访问 schema '{schema_name}'，白名单: {sorted(self.allowed_schemas)}",
-                        layer=2,
+                        layer=2, reason="schema_forbidden",
                     )
                 continue
 
@@ -195,7 +218,7 @@ class SQLValidator:
 
             raise ValidationError(
                 f"禁止访问表 '{qname}'，白名单: {sorted(self.allowed_tables)}",
-                layer=2,
+                layer=2, reason="table_forbidden",
             )
 
     # =================================================
@@ -238,10 +261,10 @@ class SQLValidator:
                 # 不属于敏感表 → fail-closed 直接拒绝
                 if not sens_table or not raw_table or resolved_table == sens_table:
                     full_ref = f"{raw_table}.{col_name}" if raw_table else col_name
-                    raise ValidationError(
-                        f"禁止查询敏感列: '{full_ref}' (敏感列: {sensitive_ref})",
-                        layer=3,
-                    )
+                raise ValidationError(
+                    f"禁止查询敏感列: '{full_ref}' (敏感列: {sensitive_ref})",
+                    layer=3, reason="column_forbidden",
+                )
 
     # =================================================
     # Layer 3+: SELECT * 泄露防护 — 敏感表上禁止星号投影
@@ -278,7 +301,7 @@ class SQLValidator:
                 ):
                     raise ValidationError(
                         "查询涉及含敏感列的表，禁止使用 SELECT *，请显式列出所需列名",
-                        layer=3,
+                        layer=3, reason="star_projection",
                     )
 
     # =================================================
@@ -293,7 +316,7 @@ class SQLValidator:
             if func_name in self.banned_functions:
                 raise ValidationError(
                     f"禁止使用函数: {func_name}()",
-                    layer=4,
+                    layer=4, reason="dangerous_function",
                 )
         for func in stmt.find_all(exp.Func):
             func_name = type(func).__name__.upper()
@@ -302,7 +325,7 @@ class SQLValidator:
                 if sql_name == banned or func_name == banned:
                     raise ValidationError(
                         f"禁止使用函数: {banned}()",
-                        layer=4,
+                        layer=4, reason="dangerous_function",
                     )
 
     # =================================================
@@ -326,7 +349,7 @@ class SQLValidator:
                 if current > self.max_limit:
                     raise ValidationError(
                         f"LIMIT {current} 超过最大值 {self.max_limit}",
-                        layer=5,
+                        layer=5, reason="limit_exceeded",
                     )
                 return parsed, False
             # 安全修复：LIMIT ALL / 非数字字面量（表达式、参数等）解析不出
@@ -360,10 +383,10 @@ class SQLValidator:
         try:
             parsed = sqlglot.parse(sql, read="postgres")
         except Exception as e:
-            raise ValidationError(f"SQL 解析失败: {e}", layer=0)
+            raise ValidationError(f"SQL 解析失败: {e}", layer=0, reason="parse_error")
 
         if not parsed:
-            raise ValidationError("SQL 解析结果为空", layer=0)
+            raise ValidationError("SQL 解析结果为空", layer=0, reason="parse_error")
 
         # — Layer 1: 类型校验 —
         self._check_statement_type(parsed)

@@ -8,10 +8,12 @@ set/reset ContextVar）均不受影响。
 from backend.core.request_context import (
     _current_department,
     _current_idempotency_key,
+    _current_roles,
     _current_session_id,
     _current_tenant_id,
     _current_user_id,
     get_tool_permissions,
+    get_tool_roles,
     _get_session_id,
     get_tool_department,
     get_tool_idempotency_key,
@@ -21,6 +23,7 @@ from backend.core.request_context import (
     set_tool_department,
     set_tool_idempotency_key,
     set_tool_permissions,
+    set_tool_roles,
     set_tool_tenant_id,
     set_tool_user_id,
 )
@@ -28,6 +31,7 @@ from backend.core.request_context import (
 __all__ = [
     "_current_department",
     "_current_idempotency_key",
+    "_current_roles",
     "_current_session_id",
     "_current_tenant_id",
     "_current_user_id",
@@ -37,10 +41,12 @@ __all__ = [
     "get_tool_tenant_id",
     "get_tool_user_id",
     "get_tool_permissions",
+    "get_tool_roles",
     "set_session_id",
     "set_tool_department",
     "set_tool_idempotency_key",
     "set_tool_permissions",
+    "set_tool_roles",
     "set_tool_tenant_id",
     "set_tool_user_id",
 ]
