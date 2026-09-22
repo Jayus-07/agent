@@ -4,9 +4,8 @@
   - get_input_budget():  input = LLM_CONTEXT_LENGTH - 输出预留 - 安全余量
   - calculate_usage():   统一用量计算入口（业务层禁止自行重复计算）
   - history_budget():    L2 动态历史预算（HISTORY_TOKEN_BUDGET 只是上限）
-  - prepare_llm_context(): 统一 Prompt Preflight（L2 trim → L3 compact → 复核）
-  - should_context_collapse / context_collapse:   L4 预留接口（不实现）
-  - should_auto_compact / auto_compact:           L5 预留接口（不实现）
+  - prepare_llm_context(): 统一 Prompt Preflight（L2 trim → L4 collapse →
+    确定性 hard trim → L5 AutoCompact 触发判定与执行）
 
 原则：
   - 所有阈值以 token 为准（count_tokens，tiktoken）
@@ -16,6 +15,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Any
 
 from backend.context_budget.models import ContextUsage, PreparedContext
@@ -214,6 +215,9 @@ class ContextBudgetManager:
                     f"saved_tokens={max(0, used_before - used)}")
 
         if used <= budget:
+            # 已在预算内：仍须做 L5 触发判定（0.90~1.0 区间属 L5 职责，
+            # 不触发确定性 hard trim——那是 >100% 的兜底）
+            msgs, used = self._maybe_auto_compact(msgs, used, budget)
             return _finalize(msgs, po, rag_texts, folds=folds)
 
         # ── 确定性裁剪（仍超限时）：旧 history → 旧 previous_outputs → RAG 尾部 ──
@@ -247,8 +251,136 @@ class ContextBudgetManager:
                 + count_tokens("\n".join(rag_texts))
             )
 
+        # ── L5 AutoCompact（最后一道防线，2026-09-22 Phase 3）──────────
+        # 触发链路：L1/L2/L3/L4 全部执行 → 重算用量 → 仍 >= 0.90 才触发。
+        # 摘要失败/超时安全回退：沿用上面确定性裁剪结果，绝不阻断请求。
+        msgs, used = self._maybe_auto_compact(msgs, used, budget)
+
         return _finalize(msgs, po, rag_texts, overflow=used > budget,
                          folds=folds)
+
+    # ── L5 触发与执行 ───────────────────────────────────────────
+
+    # 同会话单飞：防止并发请求对同一 session 重复触发摘要 LLM 调用
+    _l5_inflight: set[str] = set()
+    _l5_inflight_lock = threading.Lock()
+    _l5_thread_local = threading.local()  # 重入守卫（摘要 LLM 自己也走 preflight）
+
+    def _maybe_auto_compact(
+        self, msgs: list, used: int, budget: int,
+    ) -> tuple[list, int]:
+        """usage_ratio 达到 CONTEXT_L5_TRIGGER_RATIO 时触发 L5 并重建 projection。
+
+        返回 (可能重建后的消息列表, 重算后用量)。失败/不触发原样返回。
+        """
+        if budget <= 0 or used / budget < float(
+                _cfg("CONTEXT_L5_TRIGGER_RATIO", 0.90)):
+            return msgs, used
+        if not _cfg("CONTEXT_L5_ENABLED", True) or not _cfg(
+                "CONTEXT_BUDGET_ENABLED", True):
+            return msgs, used
+        if getattr(self._l5_thread_local, "active", False):
+            return msgs, used  # 摘要 LLM 调用自身的 preflight，禁止重入
+
+        from backend.core.request_context import get_current_session_id
+        session_id = get_current_session_id() or ""
+        # 无真实会话上下文（测试/后台脚本/无 session 请求）不触发 L5：
+        # 增量摘要水位线挂在 chat_sessions 上，没有会话无处落账。
+        if session_id.strip() in ("", "default", "multi-agent-default"):
+            logger.debug("[ContextBudget] L5 触发但无有效会话上下文，跳过")
+            return msgs, used
+        with self._l5_inflight_lock:
+            if session_id in self._l5_inflight:
+                return msgs, used  # 同会话已有摘要在进行，本轮先用裁剪结果
+            self._l5_inflight.add(session_id)
+        try:
+            return self._run_l5(msgs, used, budget, session_id)
+        finally:
+            with self._l5_inflight_lock:
+                self._l5_inflight.discard(session_id)
+
+    def _run_l5(self, msgs: list, used: int, budget: int,
+                session_id: str) -> tuple[list, int]:
+        import time as _time
+
+        from backend.context_budget.auto_compact import (
+            SyncMemorySummaryStore,
+            fold_rebuild,
+            run_incremental_summary,
+        )
+        from backend.context_budget.metrics import (
+            emit_context_event,
+            record_compaction,
+            record_compaction_latency,
+            record_summary_llm_tokens,
+        )
+
+        # 事件循环上下文（async 节点内调用）：同步 LLM 摘要不能阻塞 loop，
+        # 降级为 fire-and-forget——本轮继续用裁剪结果，摘要落库后下一轮生效。
+        try:
+            loop = asyncio.get_running_loop()
+            import backend.context_budget.auto_compact as _ac
+            _t = loop.create_task(_ac.run_auto_compact_async(session_id))
+            _L5_TASKS.add(_t)
+            _t.add_done_callback(_L5_TASKS.discard)
+            logger.info(
+                "[ContextBudget] L5 触发（async 上下文）→ 后台摘要，本轮安全降级")
+            emit_context_event(level="L5", action="deferred",
+                               before_tokens=used, after_tokens=used)
+            return msgs, used
+        except RuntimeError:
+            pass  # 无 running loop：worker 线程同步路径，可内联执行
+
+        started = _time.perf_counter()
+        self._l5_thread_local.active = True
+        try:
+            outcome = run_incremental_summary(
+                session_id, SyncMemorySummaryStore(session_id))
+        finally:
+            self._l5_thread_local.active = False
+        record_compaction_latency(
+            level="L5", seconds=_time.perf_counter() - started)
+
+        if outcome is None:
+            # 安全回退：摘要失败/无收益 → 沿用确定性裁剪结果，绝不阻断
+            try:
+                from backend.observability.metrics import degradation_alerts_total
+                degradation_alerts_total.labels(
+                    code="context_autocompact_failed", level="warn").inc()
+            except Exception:
+                pass
+            return msgs, used
+
+        record_summary_llm_tokens(
+            prompt_tokens=outcome.llm_prompt_tokens,
+            completion_tokens=outcome.llm_completion_tokens)
+
+        # 重建 active projection：旧历史 → 新摘要 SystemMessage（保留最近 N 轮）
+        old_msg_tokens = sum(_count_message(m) for m in msgs)
+        rebuilt, replaced, _boundary = fold_rebuild(msgs, outcome.summary)
+        if replaced > 0:
+            used_before = used
+            msgs = rebuilt
+            used = max(0, used - old_msg_tokens
+                       + sum(_count_message(m) for m in msgs))
+            record_compaction(level="L5", action="auto_compact",
+                              before_tokens=used_before, after_tokens=used)
+            emit_context_event(level="L5", action="auto_compact",
+                               before_tokens=used_before, after_tokens=used,
+                               replaced_messages=replaced,
+                               summary_tokens=outcome.token_count,
+                               delta_messages=outcome.delta_message_count)
+            logger.info(
+                f"context_compacted level=L5 action=auto_compact "
+                f"replaced_messages={replaced} "
+                f"before_tokens={used_before} after_tokens={used} "
+                f"saved_tokens={max(0, used_before - used)} "
+                f"(目标比例 {float(_cfg('CONTEXT_L5_TARGET_RATIO', 0.70))})")
+        else:
+            # 摘要已落库但本轮消息层无可替换内容（罕见）：下一轮生效
+            logger.info(
+                "[ContextBudget] L5 摘要已落库，本轮 projection 无可替换历史")
+        return msgs, used
 
     # ── L4 / L5 预留接口（本版不实现，规格 §十）────────────────
 
@@ -272,14 +404,20 @@ class ContextBudgetManager:
         return usage.usage_ratio >= float(
             _cfg("CONTEXT_L5_TRIGGER_RATIO", 0.90))
 
-    async def auto_compact(self, *args: Any, **kwargs: Any) -> None:
-        """Future L5: LLM based summary.
+    async def auto_compact(self, *, session_id: str, **kwargs: Any):
+        """L5 AutoCompact：增量摘要一次（显式调用入口）。
 
-        预留接口，暂未实现；未来接入点为 SessionMemory.summarize() /
-        chat_sessions.summary，本版不做任何改造。
+        正常路径经 prepare_llm_context 的触发链路（L1-L4 之后）自动进入；
+        本方法供管理端/测试显式触发。失败返回 None，旧摘要与水位线不动。
         """
-        raise NotImplementedError(
-            "L5 AutoCompact 未实现（基础版仅预留接口）")
+        from backend.context_budget.auto_compact import (
+            SyncMemorySummaryStore,
+            run_incremental_summary,
+        )
+        import asyncio as _aio
+        return await _aio.to_thread(
+            run_incremental_summary,
+            session_id, SyncMemorySummaryStore(session_id))
 
 
 # ── 模块级辅助 ──────────────────────────────────────────────────

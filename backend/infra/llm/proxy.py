@@ -1118,10 +1118,11 @@ def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
 
 def _preflight_context(args: tuple) -> tuple:
     """统一 Prompt Preflight（2026-09-22，ContextBudgetManager）：LLM 调用前
-    对 messages 形态的输入做 token 预算检查与 L2 裁剪。
+    对 messages 形态的输入走 ContextBudgetManager.prepare_llm_context
+    （L2 历史裁剪 → L4 折叠 → 确定性 hard trim → L5 AutoCompact 触发）。
 
-    - list[BaseMessage] 输入 → 超过 input_budget 时裁剪**较旧**的非 System
-      消息；最后一条消息（当前 prompt/问题）与 SystemMessage 永不丢弃；
+    - list[BaseMessage] 输入 → 超过 input_budget 时进入统一预算链路；
+      SystemMessage 与最后一条消息（当前 prompt/问题）永不丢弃；
     - 其他输入形态（str / PromptValue / 批量 / OpenAI dict）不做改动；
     - 软失败：preflight 异常原样放行，绝不阻断 LLM 调用。
     只影响本次发送给模型的内容，不触碰任何持久化历史。
@@ -1138,40 +1139,26 @@ def _preflight_context(args: tuple) -> tuple:
             return args
 
         from backend.context_budget import context_budget
-        from backend.memory.token_budget import (
-            count_message_tokens,
-            trim_messages_to_budget,
-        )
+        from backend.memory.token_budget import count_message_tokens
 
+        # 快路径：绝大多数调用在预算内原样返回，零改动
         budget = context_budget.get_input_budget()
         total = sum(count_message_tokens(m) for m in payload)
         if total <= budget:
-            return args  # 快路径：绝大多数调用在此原样返回，零改动
+            return args
 
-        # 超预算：保留最后一条（当前问题）+ SystemMessage，裁较旧的非 System 消息
-        last = payload[-1]
-        last_tokens = count_message_tokens(last)
-        older, last_part = payload[:-1], [payload[-1]]
-        older_budget = budget - last_tokens
-        kept, dropped = trim_messages_to_budget(older, max(0, older_budget))
-        if dropped:
-            new_messages = kept + last_part
-            new_total = sum(count_message_tokens(m) for m in new_messages)
+        # 超预算：统一预算链路（L2 → L4 → hard trim → L5 最后一道防线）
+        prepared = context_budget.prepare_llm_context(messages=payload)
+        if prepared.overflow:
             logger.warning(
-                f"[LLM:preflight] 上下文超预算已裁剪: {total}→{new_total} tokens "
-                f"(budget={budget}, dropped={dropped})"
-                + ("" if new_total <= budget else "（仍超限，安全降级放行）")
-            )
-            from backend.context_budget.metrics import record_overflow
-            record_overflow("preflight")
-            return (new_messages, *args[1:])
-        # 超限但全是 System/最后一条撑的（裁不动）→ 原样放行 + 观测
-        from backend.context_budget.metrics import record_overflow
-        record_overflow("preflight")
-        logger.warning(
-            f"[LLM:preflight] 上下文超预算但无可裁剪消息: {total} tokens "
-            f"(budget={budget})，安全降级放行")
-        return args
+                f"[LLM:preflight] 上下文超预算且经 L2/L4/L5 后仍超限: "
+                f"{prepared.usage.used_tokens} tokens (budget={budget})，"
+                f"安全降级放行")
+        else:
+            logger.info(
+                f"[LLM:preflight] 上下文超预算已压缩: {total}→"
+                f"{prepared.usage.used_tokens} tokens (budget={budget})")
+        return (prepared.messages, *args[1:])
     except Exception:
         logger.debug("context preflight 失败，原样放行", exc_info=True)
         return args

@@ -51,9 +51,27 @@ TOOL_PREVIEW_MAX_TOKENS = int(os.getenv("TOOL_PREVIEW_MAX_TOKENS", "256"))
 # L3 previous_outputs 总预算（注入下一 Skill prompt 的全部前置输出）
 PREVIOUS_OUTPUTS_MAX_TOKENS = int(os.getenv("PREVIOUS_OUTPUTS_MAX_TOKENS", "1024"))
 
-# L4 Context Collapse / L5 AutoCompact 触发阈值（基础版只预留，不实现）
+# L4 Context Collapse / L5 AutoCompact 触发阈值
+# L5 是最后一道防线：只在 L1/L2/L3/L4 全部执行后仍达阈值才触发（有 LLM 成本）
 CONTEXT_L4_TRIGGER_RATIO = float(os.getenv("CONTEXT_L4_TRIGGER_RATIO", "0.80"))
 CONTEXT_L5_TRIGGER_RATIO = float(os.getenv("CONTEXT_L5_TRIGGER_RATIO", "0.90"))
+
+# L5 折叠时保留的最近对话轮数：与 L4 语义一致（最近 N 个完整 turn 保持原文），
+# 直接复用 CONTEXT_L4_KEEP_RECENT_TURNS，不为配置而配置
+
+# L5 AutoCompact（LLM 摘要，2026-09-22 Phase 3）
+# 总开关（false = 完全禁用 L5，超预算时安全降级为确定性裁剪）
+CONTEXT_L5_ENABLED = os.getenv("CONTEXT_L5_ENABLED", "true").lower() == "true"
+# 触发后把 active context 压到的目标比例（input_budget 的 ~70%）
+CONTEXT_L5_TARGET_RATIO = float(os.getenv("CONTEXT_L5_TARGET_RATIO", "0.70"))
+# 摘要 LLM 调用超时（秒）：超时按摘要失败处理，安全回退到裁剪后上下文
+CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", "20"))
+# 增量摘要最小新消息数：少于该条数不值得一次 LLM 调用（跳过本轮 L5）
+CONTEXT_L5_MIN_DELTA_MESSAGES = int(os.getenv("CONTEXT_L5_MIN_DELTA_MESSAGES", "2"))
+# 单次增量摘要最多带多少条新消息进 prompt（防 delta 巨大时 prompt 爆炸）
+CONTEXT_L5_MAX_DELTA_MESSAGES = int(os.getenv("CONTEXT_L5_MAX_DELTA_MESSAGES", "200"))
+# ProtectedFacts 最大条数（超出按发现顺序截断，保护摘要 prompt 体积）
+CONTEXT_L5_MAX_PROTECTED_FACTS = int(os.getenv("CONTEXT_L5_MAX_PROTECTED_FACTS", "40"))
 
 # L4 折叠时保留的最近对话轮数（一组 user+assistant 算一轮），
 # 折叠只作用于更早的普通 user/assistant 历史（SystemMessage/当前消息永不折叠）

@@ -294,6 +294,15 @@ _register(PromptSpec(
 ))
 
 _register(PromptSpec(
+    key="memory.session.auto_compact",
+    name="L5 增量会话摘要 Prompt",
+    category="memory",
+    risk_level="low",
+    variables=(R("existing_summary"), R("new_conversation"), R("protected_facts")),
+    default_file="memory_auto_compact.yaml",
+))
+
+_register(PromptSpec(
     key="memory.long_term.fact_extraction",
     name="事实提取 Prompt",
     category="memory",

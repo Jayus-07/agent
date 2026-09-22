@@ -17,6 +17,15 @@
         messages=messages, previous_outputs=po, rag_context=rag)
 """
 
+from backend.context_budget.auto_compact import (
+    ProtectedFact,
+    SyncMemorySummaryStore,
+    SummaryOutcome,
+    extract_protected_facts,
+    fold_rebuild,
+    run_incremental_summary,
+    validate_and_patch,
+)
 from backend.context_budget.collapse import (
     ContextFold,
     FoldRegistry,
@@ -45,6 +54,13 @@ __all__ = [
     "PreparedContext",
     "ToolResultRef",
     "ArtifactStore",
+    "ProtectedFact",
+    "SyncMemorySummaryStore",
+    "SummaryOutcome",
+    "extract_protected_facts",
+    "fold_rebuild",
+    "run_incremental_summary",
+    "validate_and_patch",
     "ContextFold",
     "FoldRegistry",
     "build_projection_text",

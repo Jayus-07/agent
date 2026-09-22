@@ -523,6 +523,17 @@ context_budget_overflow_total = Counter(
     "预算裁剪后仍超 hard budget 的次数（按阶段）",
     labelnames=("stage",),  # stage: preflight|tool_guard|micro_compact
 )
+context_compaction_latency_seconds = Histogram(
+    "context_compaction_latency_seconds",
+    "上下文压缩耗时（按层级；L5 含 LLM 摘要调用）",
+    labelnames=("level",),
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0),
+)
+context_autocompact_llm_tokens_total = Counter(
+    "context_autocompact_llm_tokens_total",
+    "L5 AutoCompact 摘要消耗的 LLM token（成本观测，按类型）",
+    labelnames=("kind",),  # kind: prompt|completion
+)
 
 
 def publish_breaker_states() -> None:

@@ -167,6 +167,66 @@ class SessionRepository:
         )
         return result.rowcount > 0
 
+    # ── L5 AutoCompact 摘要水位线（2026-09-22 Phase 3，migration 040）──
+
+    async def get_summary_state(self, session_id: str) -> dict:
+        """读取摘要水位线状态（summary / through_id / token_count）。"""
+        result = await self._s.execute(
+            select(ChatSession.summary, ChatSession.summary_through_message_id,
+                   ChatSession.summary_token_count)
+            .where(ChatSession.session_id == session_id)
+        )
+        row = result.first()
+        if not row:
+            return {"summary": None, "through_id": None, "token_count": None}
+        return {"summary": row[0], "through_id": row[1], "token_count": row[2]}
+
+    async def summarizable_before_id(
+        self, session_id: str, keep_recent_turns: int,
+    ) -> int | None:
+        """最近 keep_recent_turns 轮（user 消息开轮）之前的边界消息 id。
+
+        None = 轮数不足，无可增量摘要范围。最近 N 轮永远保持原文。
+        """
+        result = await self._s.execute(
+            select(ChatMessage.id)
+            .where(ChatMessage.session_id == session_id,
+                   ChatMessage.role == "user")
+            .order_by(ChatMessage.id.desc())
+            .offset(max(0, int(keep_recent_turns) - 1))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def load_messages_since(
+        self, session_id: str, after_id: int, before_id: int, limit: int = 200,
+    ) -> list[ChatMessage]:
+        """读取水位线区间 (after_id, before_id) 的消息（id 升序）。"""
+        result = await self._s.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id,
+                   ChatMessage.id > int(after_id or 0),
+                   ChatMessage.id < int(before_id))
+            .order_by(ChatMessage.id.asc())
+            .limit(int(limit))
+        )
+        return list(result.scalars().all())
+
+    async def update_summary_state(
+        self, session_id: str, summary: str, through_id: int, token_count: int,
+    ) -> bool:
+        """持久化增量摘要 + 推进水位线（原子：同一条 UPDATE）。"""
+        result = await self._s.execute(
+            update(ChatSession)
+            .where(ChatSession.session_id == session_id)
+            .values(summary=summary,
+                    summary_through_message_id=int(through_id),
+                    summary_token_count=int(token_count),
+                    summary_updated_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc))
+        )
+        return result.rowcount > 0
+
     async def update_context(self, session_id: str, context: str) -> bool:
         """更新 Agent 工作上下文（JSON: sql_results/rag_docs/report/turns）"""
         result = await self._s.execute(

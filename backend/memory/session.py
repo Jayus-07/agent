@@ -40,9 +40,32 @@ class SessionMemory:
     async def summarize(self) -> str | None:
         """生成会话摘要；失败返回 None（调用方不覆盖旧摘要）。
 
-        此前失败时用 conversation[:500] 顶替并落库——把坏摘要写进 DB，
-        且异常只有 warning 级日志，静默污染 L2。
+        Phase 3（L5 AutoCompact，2026-09-22）：真实 repo 优先走**增量摘要
+        水位线**——只把 summary_through_message_id 之后、最近
+        CONTEXT_L4_KEEP_RECENT_TURNS 轮之前的新消息合并进旧摘要，
+        不重复总结整段会话；水位线随摘要原子推进。
+        fake repo / 增量路径不可用时回退旧全量路径（行为不变）。
         """
+        from backend.memory.repository.session_repo import SessionRepository
+        if isinstance(self._repo, SessionRepository):
+            try:
+                import asyncio as _aio
+                from backend.context_budget.auto_compact import (
+                    SyncMemorySummaryStore,
+                    run_incremental_summary,
+                )
+                outcome = await _aio.to_thread(
+                    run_incremental_summary,
+                    self.session_id, SyncMemorySummaryStore(self.session_id))
+                if outcome is not None:
+                    self._summary = outcome.summary
+                # outcome None（无增量内容/失败）：沿用现有摘要，不覆盖
+                return self._summary
+            except Exception as e:
+                logger.warning(
+                    f"[SessionMemory:{self.session_id}] 增量摘要路径失败，"
+                    f"回退全量路径: {e}")
+
         rows = await self._repo.load_messages(self.session_id, limit=SESSION_MAX_MESSAGES)
         conversation = "\n".join(
             f"{'用户' if r.role == 'user' else '助手'}: {r.content}"

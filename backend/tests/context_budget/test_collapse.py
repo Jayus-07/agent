@@ -155,12 +155,18 @@ class TestL4InPreflight:
         assert fold is not None
         assert len(folded) < len(_history(8))
 
-    def test_auto_compact_still_not_implemented(self):
-        m = ContextBudgetManager()
+    def test_auto_compact_safe_fallback(self, monkeypatch):
+        """L5 摘要链路异常时安全回退：返回 None，不向上抛。"""
+        import backend.context_budget.auto_compact as ac_mod
         import asyncio
-        try:
-            asyncio.run(m.auto_compact())
-            raised = False
-        except NotImplementedError:
-            raised = True
-        assert raised is True
+
+        class _BrokenStore:
+            def __init__(self, session_id):
+                pass
+
+            def get_summary_state(self):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(ac_mod, "SyncMemorySummaryStore", _BrokenStore)
+        m = ContextBudgetManager()
+        assert asyncio.run(m.auto_compact(session_id="s-x")) is None

@@ -1,0 +1,45 @@
+key: memory.session.auto_compact
+name: L5 增量会话摘要 Prompt
+category: memory
+risk_level: low
+template_engine: str_format
+variables:
+  - {name: existing_summary, required: true, description: 已有摘要（可为空）}
+  - {name: new_conversation, required: true, description: 本次新增对话内容}
+  - {name: protected_facts, required: true, description: 必须原样保留的关键事实清单}
+template: |
+  你在维护一个长期会话摘要（供机器在后续对话中消费，不是给人看的文章）。
+  已有摘要覆盖了更早的对话，本次只有新增对话需要合并进去。
+
+  == 已有摘要 ==
+  {existing_summary}
+
+  == 新增对话 ==
+  {new_conversation}
+
+  == 维护规则 ==
+  1. 保留用户目标
+  2. 保留已经做出的关键决定
+  3. 保留尚未完成的事项
+  4. 保留用户明确约束
+  5. 保留业务状态
+  6. 保留关键 ID
+  7. 不加入推测
+  8. 不补充原文没有的信息
+  9. 删除寒暄、重复、过程性噪声
+  10. 输出简洁结构化摘要（短条目，不写长段落）
+
+  == 必须原样保留的关键事实 ==
+  以下事实逐字出现在对话中，摘要里必须原样保留（数值、编号一个字符都不能变）：
+  {protected_facts}
+
+  == 输出格式（固定小节）==
+  [用户目标]
+  [已确认事实]
+  [关键约束]
+  [关键实体]
+  [已完成]
+  [待处理]
+
+  某小节无内容时写「无」。只输出摘要正文，不要任何解释。
+摘要:

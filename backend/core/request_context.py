@@ -54,6 +54,15 @@ def _get_session_id() -> str:
     return _current_session_id.get()
 
 
+def get_current_session_id() -> str:
+    """当前请求会话 ID（L5 AutoCompact 等需要会话归属的组件读取）。
+
+    无真实请求上下文（测试/后台脚本）返回占位默认值，
+    调用方须对 default/multi-agent-default 做守卫。
+    """
+    return _current_session_id.get()
+
+
 def set_tool_user_id(user_id: str) -> None:
     _current_user_id.set(user_id or "")
 

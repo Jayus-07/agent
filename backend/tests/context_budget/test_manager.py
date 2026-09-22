@@ -161,9 +161,24 @@ class TestFutureLevels:
         assert manager.should_auto_compact(above) is True
 
     @pytest.mark.asyncio
-    async def test_l5_not_implemented(self, manager):
-        with pytest.raises(NotImplementedError):
-            await manager.auto_compact()
+    async def test_auto_compact_explicit_entry(self, manager, monkeypatch):
+        """L5 显式入口：走增量摘要核心，失败返回 None（Phase 3 已实现）。"""
+        import backend.context_budget.auto_compact as ac_mod
+        from backend.context_budget.auto_compact import SummaryOutcome
+
+        calls: dict = {}
+
+        def _fake(session_id, store):
+            calls["session_id"] = session_id
+            return SummaryOutcome(
+                summary="新摘要", through_id=9, token_count=3,
+                delta_message_count=4, protected_fact_count=0,
+                patched_fact_count=0)
+
+        monkeypatch.setattr(ac_mod, "run_incremental_summary", _fake)
+        out = await manager.auto_compact(session_id="sess-1")
+        assert out.summary == "新摘要"
+        assert calls["session_id"] == "sess-1"
 
     @pytest.mark.asyncio
     async def test_l4_api_functional(self, manager):

@@ -28,6 +28,8 @@ from backend.shared.logger import logger
 try:
     from backend.observability.metrics import (
         context_budget_overflow_total,
+        context_autocompact_llm_tokens_total,
+        context_compaction_latency_seconds,
         context_compactions_total,
         context_tokens_saved_total,
     )
@@ -35,6 +37,8 @@ except Exception:  # pragma: no cover — observability 层不可用时软降级
     context_compactions_total = None
     context_tokens_saved_total = None
     context_budget_overflow_total = None
+    context_compaction_latency_seconds = None
+    context_autocompact_llm_tokens_total = None
 
 
 def record_compaction(
@@ -56,6 +60,27 @@ def record_overflow(stage: str) -> None:
     try:
         if context_budget_overflow_total is not None:
             context_budget_overflow_total.labels(stage=stage).inc()
+    except Exception:
+        logger.debug("context metric 记录失败", exc_info=True)
+
+
+def record_compaction_latency(*, level: str, seconds: float) -> None:
+    """记录一次压缩耗时（L5 含 LLM 调用，秒级）。"""
+    try:
+        if context_compaction_latency_seconds is not None:
+            context_compaction_latency_seconds.labels(level=level).observe(seconds)
+    except Exception:
+        logger.debug("context metric 记录失败", exc_info=True)
+
+
+def record_summary_llm_tokens(*, prompt_tokens: int, completion_tokens: int) -> None:
+    """记录 L5 摘要的 LLM token 消耗（成本观测）。"""
+    try:
+        if context_autocompact_llm_tokens_total is not None:
+            context_autocompact_llm_tokens_total.labels(
+                kind="prompt").inc(max(0, prompt_tokens))
+            context_autocompact_llm_tokens_total.labels(
+                kind="completion").inc(max(0, completion_tokens))
     except Exception:
         logger.debug("context metric 记录失败", exc_info=True)
 
