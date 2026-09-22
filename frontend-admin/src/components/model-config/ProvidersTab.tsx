@@ -343,6 +343,9 @@ export default function ProvidersTab({
         ? await verifyProvider(editing.id, { mode })
         : await verifyDraftProvider(draftPayload(editing), { mode })
       setDraftProbe(result)
+      // 测试通过 = 之前的失败原因（如保存时欠费被拒）已不复存在，清掉残留
+      // 错误条，避免「绿条通过 + 红条未通过」同屏让人误读（2026-09-22 实测反馈）。
+      if (result.ok) setDraftProbeError(null)
       toast[result.ok ? 'success' : 'error'](result.summary || (result.ok ? '连接测试通过' : '连接测试失败'))
       return result
     } catch (error) {

@@ -94,6 +94,7 @@ REASON_TIMEOUT = "timeout"            # 连接或调用超时
 REASON_BASE_URL = "base_url"          # 地址不是 OpenAI 兼容基址（路由不存在）
 REASON_MODEL_NAME = "model_name"      # 模型名错 / 该 Key 无权访问该模型
 REASON_API_KEY = "api_key"            # Key 无效或无权
+REASON_BILLING = "billing"            # 账户欠费 / 余额 / 额度不足（2026-09-22 实测：中转站欠费常被误读成 Key 坏）
 REASON_CLIENT_BUILD = "client_build"  # 客户端初始化失败（协议与地址不匹配）
 REASON_NO_MODEL = "no_model"          # 未提供模型名
 
@@ -108,6 +109,13 @@ _MODEL_ERROR_HINTS = (
 _KEY_ERROR_HINTS = (
     "invalid api key", "incorrect api key", "invalid_api_key", "unauthorized",
     "authentication", "api key", "401", "403",
+)
+# 欠费/额度判定必须放在 Key 判定**之前**：中转站（one-api 系）欠费报文
+# 常含 "令牌"/"api key" 字样，先命中 Key 归因会把欠费误读成 Key 坏
+# （2026-09-22 实测：qianwenaiapi 欠费 → 提示重贴 Key，误导排障方向）。
+_BILLING_ERROR_HINTS = (
+    "insufficient", "balance", "quota", "arrears", "prepaid",
+    "402", "额度", "余额", "欠费", "充值",
 )
 
 
@@ -651,32 +659,45 @@ def _classify_l2_failure(exc: Exception, api_key: str = "") -> FailureAttributio
             reason=REASON_BASE_URL,
             raw=raw,
         )
+    if any(h in low for h in _BILLING_ERROR_HINTS) or status == 402:
+        return FailureAttribution(
+            summary=(
+                "账户欠费 / 余额或额度不足 —— 请到厂商控制台充值或调整该 Key 的额度；"
+                "部分中转站按 Key 独立计费，新 Key 也要先充值"
+            ),
+            reason=REASON_BILLING,
+            raw=raw,
+        )
     if any(h in low for h in _MODEL_ERROR_HINTS):
         return FailureAttribution(
             summary=(
-                "模型名不对，或这个 Key 没有权限访问该模型 —— "
-                "可以从「模型清单」里选一个，或确认该模型确实存在"
+                "模型名不对，或这个 Key 没有权限访问该模型（部分中转站欠费也报此错）—— "
+                "可以从「模型清单」里选一个，或确认该模型确实存在、账户有余额"
             ),
             reason=REASON_MODEL_NAME,
             raw=raw,
         )
     if any(h in low for h in _KEY_ERROR_HINTS):
         return FailureAttribution(
-            summary="API Key 无效或没有权限 —— 请重新粘贴 Key（注意别带多余空格）",
+            summary=(
+                "这个 Key 被上游拒绝 —— 可能是 Key 本身无效，也可能是账户欠费、"
+                "额度不足或该 Key 未开通此模型权限。请到厂商控制台核对："
+                "①Key 是否启用 ②账户余额 ③Key 的模型权限分组"
+            ),
             reason=REASON_API_KEY,
             raw=raw,
         )
     if status == 404:
         return FailureAttribution(
             summary=(
-                "模型名不对，或这个 Key 没有权限访问该模型 —— "
-                "可以从「模型清单」里选一个，或确认该模型确实存在"
+                "模型名不对，或这个 Key 没有权限访问该模型（部分中转站欠费也报此错）—— "
+                "可以从「模型清单」里选一个，或确认该模型确实存在、账户有余额"
             ),
             reason=REASON_MODEL_NAME,
             raw=raw,
         )
     return FailureAttribution(
-        summary="最小调用失败：没能完成一次对话 —— 请检查地址、Key 与模型名",
+        summary="最小调用失败：没能完成一次对话 —— 请检查地址、Key、模型名与账户余额",
         reason="unknown",
         raw=raw,
     )
