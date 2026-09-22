@@ -54,6 +54,15 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_task_id  UUID         NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued_at       TIMESTAMPTZ  NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at      TIMESTAMPTZ  NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS finished_at     TIMESTAMPTZ  NULL;
+-- Phase2 Step1：独立执行租约（不再借用业务 updated_at 兼任心跳）
+-- lease_expires_at 是 stale 判定唯一权威；updated_at 保留业务语义（zombie 最终兜底仍读它）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lease_heartbeat_at TIMESTAMPTZ NULL;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lease_expires_at   TIMESTAMPTZ NULL;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recovery_count     INT NOT NULL DEFAULT 0;
+
+-- stale recovery sweeper 扫描路径：RUNNING + 租约过期
+CREATE INDEX IF NOT EXISTS idx_tasks_lease_expiry ON tasks (lease_expires_at)
+    WHERE status = 'RUNNING';
 
 CREATE INDEX IF NOT EXISTS idx_tasks_user_created ON tasks (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON tasks (tenant_id, created_at DESC);

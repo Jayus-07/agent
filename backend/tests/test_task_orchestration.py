@@ -239,14 +239,16 @@ def test_failed_task_lease_reclaimable_for_retry(pg, task_record):
 
 
 def test_stale_running_lease_reclaimable(pg, task_record):
-    """RUNNING 但心跳停更超过硬超时 → 视为 Worker 已死，允许接管。"""
-    assert pg.try_acquire_lease(task_record.id, worker="worker-a")
-    # 把 updated_at 回拨到阈值之前（模拟硬杀/OOM 后无心跳的死 Worker）
-    import json as _json
+    """RUNNING 但租约过期（心跳停更）→ 视为 Worker 已死，允许接管。
 
+    Phase2 Step1 起 stale 唯一权威 = lease_expires_at（心跳续租维持）；
+    updated_at 旧口径仅对无租约的存量行生效——死亡模拟须两个一起回拨。
+    """
+    assert pg.try_acquire_lease(task_record.id, worker="worker-a")
     with pg._conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE tasks SET updated_at = now() - interval '2 hours' "
+            "UPDATE tasks SET updated_at = now() - interval '2 hours', "
+            "lease_expires_at = now() - interval '2 hours' "
             "WHERE id = %s", (task_record.id,))
     assert pg.try_acquire_lease(
         task_record.id, worker="worker-b", stale_running_seconds=1900)

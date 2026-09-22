@@ -184,10 +184,12 @@ def test_resume_then_worker_kill_then_takeover(pg, abc3):
     record = task_manager.resume_task(record.id)
     assert pg_status(pg, record.id) == TaskStatus.PENDING
 
-    # Worker-a 拾取（租约）后立即被硬杀：无任何落库，心跳停更
+    # Worker-a 拾取（租约）后立即被硬杀：无任何落库，心跳/租约停更
+    # （Phase2 Step1：stale 权威 = lease_expires_at，须随 updated_at 一起回拨）
     assert pg.try_acquire_lease(record.id, worker="worker-a")
     with pg._conn() as conn, conn.cursor() as cur:
-        cur.execute("UPDATE tasks SET updated_at = now() - interval '2 hours' "
+        cur.execute("UPDATE tasks SET updated_at = now() - interval '2 hours', "
+                    "lease_expires_at = now() - interval '2 hours' "
                     "WHERE id = %s", (record.id,))
     # Worker-b stale 接管续跑：A/B 不重跑，C 补跑成功
     assert pg.try_acquire_lease(record.id, worker="worker-b",

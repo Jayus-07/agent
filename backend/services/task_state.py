@@ -46,6 +46,8 @@ class TaskManager:
         return task_service.get_task(task_id)
 
     # ── 写 ────────────────────────────────────────────────
+    # execution_id（Phase2 Step1）：传入时持久层做执行期 fencing——租约被
+    # 接管的旧 Worker 的状态写抛 TaskLeaseLost，不污染新 owner。
     @staticmethod
     def create(user_id: str, query: str, *, tenant_id: str = "default",
                graph_name: str = "main", conversation_id: str = "",
@@ -66,46 +68,54 @@ class TaskManager:
     @staticmethod
     def mark_running(task_id: str, *, progress: str = "",
                      checkpoint_id: str | None = None,
-                     worker: str | None = None) -> None:
+                     worker: str | None = None,
+                     execution_id: str | None = None) -> None:
         """PENDING/PAUSED → RUNNING（started_at 首次启动才落）。"""
         task_service.update_status(
             task_id, TaskStatus.RUNNING, progress=progress,
-            checkpoint_id=checkpoint_id, worker=worker)
+            checkpoint_id=checkpoint_id, worker=worker,
+            execution_id=execution_id)
         _publish_status(task_id, TaskStatus.RUNNING, progress)
 
     @staticmethod
-    def mark_paused(task_id: str, *, message: str = "用户暂停") -> None:
+    def mark_paused(task_id: str, *, message: str = "用户暂停",
+                    execution_id: str | None = None) -> None:
         """RUNNING → PAUSED（checkpoint 已由执行器保留）。"""
         task_service.update_status(
-            task_id, TaskStatus.PAUSED, error_message="", progress=message)
+            task_id, TaskStatus.PAUSED, error_message="", progress=message,
+            execution_id=execution_id)
         _publish_status(task_id, TaskStatus.PAUSED, message)
 
     @staticmethod
     def mark_success(task_id: str, *, output: dict | None = None,
                      progress: str = "执行完成",
-                     duration_ms: int | None = None) -> None:
+                     duration_ms: int | None = None,
+                     execution_id: str | None = None) -> None:
         """RUNNING → SUCCESS（finished_at/duration 自动补算）。"""
         task_service.update_status(
             task_id, TaskStatus.SUCCESS, progress=progress, output=output,
-            duration_ms=duration_ms)
+            duration_ms=duration_ms, execution_id=execution_id)
         _publish_status(task_id, TaskStatus.SUCCESS, progress)
 
     @staticmethod
     def mark_failed(task_id: str, *, error_message: str,
                     error_code: str = "", progress: str = "",
-                    traceback_text: str | None = None) -> None:
+                    traceback_text: str | None = None,
+                    execution_id: str | None = None) -> None:
         """RUNNING → FAILED（error_code 落 error_type 列，任务中心归因筛选）。"""
         task_service.update_status(
             task_id, TaskStatus.FAILED, error_message=error_message[:2000],
             error_type=error_code or None, progress=progress,
-            traceback_text=traceback_text)
+            traceback_text=traceback_text, execution_id=execution_id)
         _publish_status(task_id, TaskStatus.FAILED, progress or error_message)
 
     @staticmethod
-    def mark_cancelled(task_id: str, *, message: str = "用户取消") -> None:
+    def mark_cancelled(task_id: str, *, message: str = "用户取消",
+                       execution_id: str | None = None) -> None:
         """RUNNING/PAUSED/PENDING → CANCELLED（checkpoint 与已完成结果保留）。"""
         task_service.update_status(
-            task_id, TaskStatus.CANCELLED, error_message="", progress=message)
+            task_id, TaskStatus.CANCELLED, error_message="", progress=message,
+            execution_id=execution_id)
         _publish_status(task_id, TaskStatus.CANCELLED, message)
 
     @staticmethod

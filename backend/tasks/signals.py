@@ -28,6 +28,23 @@ _EXECUTE_TASK_NAME = "tasks.execute_agent"
 _prerun_ts: dict[str, float] = {}
 
 
+def _owns_execution(task_id: str, record) -> bool:
+    """fencing 守卫（Phase2 Step1）：本消息是否有权收尾该任务。
+
+    - DB 行尚无 execution_id（异常残留）：维持旧行为允许收尾
+    - impl 已登记租约上下文：必须与 DB 行活跃 execution 一致
+    - impl 未登记（本消息从未认领租约，如 RUNNING_ELSEWHERE/短路 NO-OP/
+      租约被接管后退出）：一律不收尾——状态权威属于持租约的执行者
+    """
+    if not record.execution_id:
+        return True
+    from backend.tasks.execution_context import get_execution
+
+    ctx = get_execution()
+    return (ctx is not None and str(ctx[0]) == str(task_id)
+            and ctx[1] == record.execution_id)
+
+
 def _update(task_id: str, **kwargs) -> None:
     """埋点写库兜底：失败只记 debug，不抛出（信号回调不允许影响主流程）。"""
     try:
@@ -67,6 +84,9 @@ def _on_postrun(sender=None, task=None, state=None, **kwargs):
     守卫：仅当 DB 状态仍在 RUNNING/PENDING 时才写 SUCCESS。被取消/暂停/超时
     _fail 的任务 Celery 侧同样以 SUCCESS 返回（正常 return，非 raise），
     业务终态已由 executor / agent_tasks 落库，不得被本回调覆盖。
+    Phase2 Step1 fencing：租约被接管的旧 Worker / 从未持租约的消息
+    （RUNNING_ELSEWHERE、短路 NO-OP）一律不得盲写 SUCCESS——那会把
+    新 owner 正在执行的任务提前标成终态。
     duration 与 finished_at 在 update_status 的终态分支自动补算，
     此处跳过不丢数据。
     """
@@ -84,6 +104,8 @@ def _on_postrun(sender=None, task=None, state=None, **kwargs):
         record = task_service.get_task(task_id)
         if record is None or record.status != TaskStatus.RUNNING:
             return  # PENDING→SUCCESS 状态机已禁：仅 RUNNING 残留允许兜底收尾
+        if not _owns_execution(task_id, record):
+            return  # 租约已易主/本消息未持租约：不收尾
         duration_ms = int((time.monotonic() - start) * 1000) if start else None
         task_service.update_status(task_id, TaskStatus.SUCCESS, duration_ms=duration_ms)
     except Exception:  # noqa: BLE001
@@ -92,7 +114,11 @@ def _on_postrun(sender=None, task=None, state=None, **kwargs):
 
 @task_failure.connect
 def _on_failure(sender=None, task=None, **kwargs):
-    """终审失败：异常类名 + 堆栈 + finished_at（重试耗尽或不可重试异常时到达）。"""
+    """终审失败：异常类名 + 堆栈 + finished_at（重试耗尽或不可重试异常时到达）。
+
+    Phase2 Step1 fencing：租约不属于本消息时不得写 FAILED（旧 Worker 的
+    异常不能盖掉新 owner 的 RUNNING）。
+    """
     try:
         if task is not None and task.name != _EXECUTE_TASK_NAME:
             return
@@ -103,6 +129,11 @@ def _on_failure(sender=None, task=None, **kwargs):
         exc = kwargs.get("exc")
         tb = kwargs.get("traceback") or ""
         _prerun_ts.pop(task_id, None)
+        from backend.services import task_service
+
+        record = task_service.get_task(task_id)
+        if record is not None and not _owns_execution(task_id, record):
+            return
         _update(
             task_id, TaskStatus.FAILED,
             error_type=type(exc).__name__ if exc else "",
@@ -121,6 +152,11 @@ def _on_retry(sender=None, task=None, reason=None, **kwargs):
             return
         task_id = str((kwargs.get("args") or [None])[0] or kwargs.get("task_id", "") or "")
         if not task_id:
+            return
+        from backend.services import task_service
+
+        record = task_service.get_task(task_id)
+        if record is not None and not _owns_execution(task_id, record):
             return
         _update(task_id, TaskStatus.FAILED,
                 progress=f"等待重试: {reason}" if reason else "等待重试")

@@ -110,7 +110,8 @@ def mark_queued(task_id: str, celery_task_id: str, *,
 
 
 def try_acquire_lease(task_id: str, *, worker: str | None = None,
-                      stale_running_seconds: int | None = None) -> str | None:
+                      stale_running_seconds: int | None = None,
+                      lease_ttl_seconds: int | None = None) -> str | None:
     """原子抢执行租约（Phase1 Step3 执行权锁：max_concurrent_executor_per_task=1）。
 
     acks_late + Redis visibility timeout 内未 ack 会重投第二个 Worker；
@@ -121,40 +122,84 @@ def try_acquire_lease(task_id: str, *, worker: str | None = None,
     worker 名 + 租约实例 id，接管/重投时换发新值可审计）；认领失败 = None。
 
     可认领态 = PENDING（正常入队；FAILED 重试须先显式回 PENDING，见
-    agent_tasks.execute_agent_task_impl——状态机禁止 FAILED→RUNNING 直跳）。
-    RUNNING 行属于另一个在跑的 Worker → rowcount=0 直接退出；但 ``updated_at``
-    停更超过 ``stale_running_seconds`` 的 RUNNING 行视为其 Worker 已死
-    （硬杀/OOM 来不及落 FAILED），允许接管续跑（换发新 execution_id）——
-    阈值有界，不存在永久死锁。默认阈值取 hard time limit + 余量——活着的
-    Worker 在软超时内必然有节点级 update_progress 心跳。
+    agent_tasks.execute_agent_task_impl——状态机禁止 FAILED→RUNNING 直跳）；
+    或租约已过期的 RUNNING 行（Phase2 Step1：stale 判定唯一权威 =
+    ``lease_expires_at``，由心跳线程续租维持；存量 NULL 行回落 updated_at
+    旧口径）。认领时换发新 execution_id 并写入租约窗口。
     """
     ensure_schema()
     if stale_running_seconds is None:
         from backend.config.tasks import CELERY_HARD_TASK_TIMEOUT
 
         stale_running_seconds = CELERY_HARD_TASK_TIMEOUT + 60
+    if lease_ttl_seconds is None:
+        from backend.config.tasks import TASK_LEASE_TTL_SECONDS
+
+        lease_ttl_seconds = TASK_LEASE_TTL_SECONDS
     execution_id = uuid.uuid4().hex
     sets = ["status = %s", "updated_at = now()",
             "started_at = COALESCE(started_at, now())",
-            "execution_id = %s"]
-    args: list = [TaskStatus.RUNNING.value, execution_id]
+            "execution_id = %s",
+            "lease_heartbeat_at = now()",
+            "lease_expires_at = now() + (%s || ' seconds')::interval"]
+    args: list = [TaskStatus.RUNNING.value, execution_id,
+                  str(int(lease_ttl_seconds))]
     if worker:
         sets.append("worker = %s")
         args.append(worker[:128])
     args.extend([
         task_id,
         TaskStatus.PENDING.value,
-        TaskStatus.RUNNING.value, str(stale_running_seconds),
+        TaskStatus.RUNNING.value, str(int(stale_running_seconds)),
     ])
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET " + ", ".join(sets) + " "
             "WHERE id = %s AND (status = %s OR "
-            "(status = %s AND updated_at < "
-            "now() - (%s || ' seconds')::interval))",
+            "(status = %s AND ("
+            "(lease_expires_at IS NOT NULL AND lease_expires_at < now()) OR "
+            "(lease_expires_at IS NULL AND updated_at < "
+            "now() - (%s || ' seconds')::interval))))",
             args,
         )
         return execution_id if cur.rowcount > 0 else None
+
+
+def renew_lease(task_id: str, execution_id: str, *,
+                lease_ttl_seconds: int | None = None) -> bool:
+    """续租 = 心跳 + fencing 写（Phase2 Step1）。
+
+    仅当 DB 行仍属于本 execution_id 且状态 RUNNING 时续租成功；rowcount=0
+    即租约已被接管/过期——心跳线程据此停止续租，executor 据此退出执行。
+    续租同时刷新 updated_at（zombie 最终兜底的"活任务"信号）。
+    """
+    ensure_schema()
+    if lease_ttl_seconds is None:
+        from backend.config.tasks import TASK_LEASE_TTL_SECONDS
+
+        lease_ttl_seconds = TASK_LEASE_TTL_SECONDS
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET lease_heartbeat_at = now(), "
+            "lease_expires_at = now() + (%s || ' seconds')::interval, "
+            "updated_at = now() "
+            "WHERE id = %s AND execution_id = %s AND status = %s",
+            (str(int(lease_ttl_seconds)), task_id, execution_id,
+             TaskStatus.RUNNING.value),
+        )
+        return cur.rowcount > 0
+
+
+def check_lease_active(task_id: str, execution_id: str) -> bool:
+    """fencing 校验（只读）：本 execution 是否仍是任务的活跃执行者。"""
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM tasks WHERE id = %s AND execution_id = %s "
+            "AND status = %s",
+            (task_id, execution_id, TaskStatus.RUNNING.value),
+        )
+        return cur.fetchone() is not None
 
 
 def reap_zombie_running(
@@ -217,7 +262,8 @@ def update_status(task_id: str, status: TaskStatus, *,
                   progress: str | None = None,
                   checkpoint_id: str | None = None,
                   output: dict | None = None,
-                  celery_task_id: str | None = None) -> None:
+                  celery_task_id: str | None = None,
+                  execution_id: str | None = None) -> None:
     """状态迁移 + 可选字段一并更新（单条 UPDATE，避免多写竞态）。
 
     Phase1 状态机收口：写入前按 ``TaskStatus._legal_transitions`` 白名单
@@ -226,11 +272,16 @@ def update_status(task_id: str, status: TaskStatus, *,
     PENDING）。校验与写入之间用 ``WHERE status = <校验时快照>`` 条件更新
     关闭并发窗口：并发写者抢先变更状态时 rowcount=0，按最新状态重新判定。
 
+    Phase2 Step1 执行期 fencing：``execution_id`` 传入时（executor 全部
+    执行期写必须传）WHERE 追加 ``AND execution_id = %s``——租约已被接管
+    时 rowcount=0 直接抛 ``TaskLeaseLost``，不做并发重判（旧 owner 对
+    TaskState 无任何写权）。
+
     时间戳自动治理：
     - RUNNING → started_at（COALESCE 保留首次启动，重试不覆盖）
     - 终态 → finished_at，且 started_at 非空时自动计算 duration_ms
     """
-    from backend.models.task import IllegalTaskTransition
+    from backend.models.task import IllegalTaskTransition, TaskLeaseLost
 
     ensure_schema()
     with _conn() as conn, conn.cursor() as cur:
@@ -282,6 +333,16 @@ def update_status(task_id: str, status: TaskStatus, *,
                 sets.append("duration_ms = CASE WHEN started_at IS NOT NULL THEN "
                             "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
                             "ELSE duration_ms END")
+        if execution_id is not None:
+            # fencing 写：不与"并发写者抢先"重判兼容——租约不属于自己就是丢了
+            args.extend([task_id, current.value, execution_id])
+            cur.execute(
+                f"UPDATE tasks SET {', '.join(sets)} "
+                f"WHERE id = %s AND status = %s AND execution_id = %s", args)
+            if cur.rowcount == 0:
+                raise TaskLeaseLost(task_id, execution_id)
+            return
+
         args.extend([task_id, current.value])
         cur.execute(
             f"UPDATE tasks SET {', '.join(sets)} "
@@ -300,13 +361,27 @@ def update_status(task_id: str, status: TaskStatus, *,
 
 
 def update_progress(task_id: str, node_name: str, progress: str = "",
-                    checkpoint_id: str | None = None) -> None:
+                    checkpoint_id: str | None = None,
+                    *, execution_id: str | None = None) -> bool:
     """节点级进度更新（Worker 每个节点边界调用）。
 
     checkpoint_id：Phase1 Step2 起执行器传 LangGraph 真实 checkpoint id；
     None 时回落旧口径（= thread_id 占位，仅表达"该 thread 至少有 checkpoint"）。
+
+    Phase2 Step1：execution_id 传入时为 fencing 写（executor 必传）——
+    租约被接管的旧 Worker 在此被拒绝，返回 False；调用方必须停止执行。
     """
     ensure_schema()
+    if execution_id is not None:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tasks SET current_node = %s, progress = %s, "
+                "checkpoint_id = COALESCE(%s, thread_id), updated_at = now() "
+                "WHERE id = %s AND execution_id = %s AND status = %s",
+                (node_name, progress[:500], checkpoint_id, task_id,
+                 execution_id, TaskStatus.RUNNING.value),
+            )
+            return cur.rowcount > 0
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET current_node = %s, progress = %s, "
@@ -314,6 +389,7 @@ def update_progress(task_id: str, node_name: str, progress: str = "",
             "WHERE id = %s",
             (node_name, progress[:500], checkpoint_id, task_id),
         )
+    return True
 
 
 def mark_paused_if_pending(task_id: str, *, progress: str = "队列内暂停") -> bool:
@@ -392,16 +468,151 @@ def increment_retry(task_id: str) -> int:
     return int(row[0]) if row else 0
 
 
-def append_checkpoint(task_id: str, node_name: str, state: dict) -> None:
-    """节点执行完成 → 追加 agent_checkpoints 历史（节点输出快照）。"""
+def append_checkpoint(task_id: str, node_name: str, state: dict, *,
+                      execution_id: str | None = None) -> bool:
+    """节点执行完成 → 追加 agent_checkpoints 历史（节点输出快照）。
+
+    Phase2 Step1：execution_id 传入时为 fencing 写——INSERT..SELECT 与
+    tasks 行的 execution_id/status 原子绑定，租约被接管的旧 Worker 无法
+    追加"幽灵 checkpoint"，返回 False。
+    """
     ensure_schema()
+    payload = json.dumps(state, ensure_ascii=False, default=str)
+    if execution_id is not None:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_checkpoints (task_id, node_name, state_json) "
+                "SELECT %s, %s, %s FROM tasks "
+                "WHERE tasks.id = %s AND tasks.execution_id = %s "
+                "AND tasks.status = %s",
+                (task_id, node_name, payload, task_id, execution_id,
+                 TaskStatus.RUNNING.value),
+            )
+            return cur.rowcount > 0
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO agent_checkpoints (task_id, node_name, state_json) "
             "VALUES (%s, %s, %s)",
-            (task_id, node_name,
-             json.dumps(state, ensure_ascii=False, default=str)),
+            (task_id, node_name, payload),
         )
+    return True
+
+
+# ═══════════════════════════════════════════════════
+# Stale Recovery（Phase2 Step1：租约过期自动恢复）
+# 判定唯一权威 = lease_expires_at（心跳续租维持）；
+# lease_expires_at IS NULL 的存量 RUNNING 行回落 updated_at 旧口径。
+# ═══════════════════════════════════════════════════
+
+def find_stale_executions(*, grace_seconds: int,
+                          legacy_threshold_seconds: int,
+                          limit: int = 50,
+                          max_age_seconds: int | None = None) -> list[str]:
+    """发现租约已过期的 RUNNING 任务（sweeper 扫描入口）。
+
+    grace：比租约过期多等一个宽限，避免与一次在途续租竞态。
+    max_age：自动恢复时效上限——updated_at 停更超过该窗口的行不参与
+    自动恢复（远古垃圾行交给 zombie 收尸，防止复活旧任务）。
+    """
+    from backend.config.tasks import TASK_RECOVERY_MAX_AGE_SECONDS
+
+    if max_age_seconds is None:
+        max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM tasks WHERE status = %s AND updated_at > "
+            "now() - (%s || ' seconds')::interval AND ("
+            "(lease_expires_at IS NOT NULL AND lease_expires_at < "
+            "now() - (%s || ' seconds')::interval) OR "
+            "(lease_expires_at IS NULL AND updated_at < "
+            "now() - (%s || ' seconds')::interval)) "
+            "ORDER BY lease_expires_at NULLS FIRST, updated_at LIMIT %s",
+            (TaskStatus.RUNNING.value, str(int(max_age_seconds)),
+             str(int(grace_seconds)),
+             str(int(legacy_threshold_seconds)), max(1, int(limit))),
+        )
+        return [str(r[0]) for r in cur.fetchall()]
+
+
+def claim_stale_for_recovery(task_id: str, *, grace_seconds: int,
+                             legacy_threshold_seconds: int,
+                             max_recoveries: int,
+                             max_age_seconds: int | None = None) -> bool:
+    """原子认领 stale 执行做恢复：RUNNING→PENDING（回队标记）+ 计数。
+
+    幂等仲裁点：同一 stale execution 被多个 sweeper 并发扫描，条件 UPDATE
+    只有一个 rowcount=1——**同一 stale execution 只能成功触发一次 recovery**
+    （重复 recovery 防线）。恢复次数超上限时认领失败，由
+    fail_recovered_task 终态收口；时效超上限（max_age）同样不认领。
+    """
+    from backend.config.tasks import TASK_RECOVERY_MAX_AGE_SECONDS
+
+    if max_age_seconds is None:
+        max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, recovery_count = recovery_count + 1, "
+            "updated_at = now() WHERE id = %s AND status = %s AND updated_at > "
+            "now() - (%s || ' seconds')::interval AND ("
+            "(lease_expires_at IS NOT NULL AND lease_expires_at < "
+            "now() - (%s || ' seconds')::interval) OR "
+            "(lease_expires_at IS NULL AND updated_at < "
+            "now() - (%s || ' seconds')::interval)) "
+            "AND recovery_count < %s",
+            (TaskStatus.PENDING.value, task_id, TaskStatus.RUNNING.value,
+             str(int(max_age_seconds)), str(int(grace_seconds)),
+             str(int(legacy_threshold_seconds)),
+             int(max_recoveries)),
+        )
+        return cur.rowcount > 0
+
+
+def revert_recovery_claim(task_id: str) -> bool:
+    """恢复重投失败回滚：PENDING→RUNNING（租约字段维持过期值，下轮 sweep 重试）。
+
+    注意不清 lease_expires_at——保持"stale"语义，否则任务会以新鲜租约
+    假象卡 RUNNING 永远不被再次恢复。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, updated_at = now() "
+            "WHERE id = %s AND status = %s",
+            (TaskStatus.RUNNING.value, task_id, TaskStatus.PENDING.value),
+        )
+        return cur.rowcount > 0
+
+
+def fail_recovered_task(task_id: str, *, grace_seconds: int,
+                        legacy_threshold_seconds: int, message: str) -> bool:
+    """自动恢复次数耗尽的终态收口：stale RUNNING → FAILED(ZOMBIE_RECONCILED)。
+
+    zombie reconcile 的执行体（sweeper 视角）：只在"stale 且
+    recovery_count 已达上限"时落 FAILED，可恢复任务永远先走 recovery。
+    """
+    from backend.config.tasks import TASK_MAX_LEASE_RECOVERIES
+
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, error_type = 'ZOMBIE_RECONCILED', "
+            "error_message = %s, finished_at = now(), updated_at = now(), "
+            "duration_ms = CASE WHEN started_at IS NOT NULL THEN "
+            "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
+            "ELSE duration_ms END "
+            "WHERE id = %s AND status = %s AND ("
+            "(lease_expires_at IS NOT NULL AND lease_expires_at < "
+            "now() - (%s || ' seconds')::interval) OR "
+            "(lease_expires_at IS NULL AND updated_at < "
+            "now() - (%s || ' seconds')::interval)) "
+            "AND recovery_count >= %s",
+            (TaskStatus.FAILED.value, message[:2000], task_id,
+             TaskStatus.RUNNING.value, str(int(grace_seconds)),
+             str(int(legacy_threshold_seconds)), int(TASK_MAX_LEASE_RECOVERIES)),
+        )
+        return cur.rowcount > 0
 
 
 # ═══════════════════════════════════════════════════

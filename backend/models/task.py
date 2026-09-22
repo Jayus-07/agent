@@ -21,6 +21,19 @@ class IllegalTaskTransition(Exception):
             f"非法状态跳转 task={task_id}: {current.value} → {target.value}")
 
 
+class TaskLeaseLost(Exception):
+    """执行租约已丢失（被接管/过期），fencing 拒绝后续写入。
+
+    Worker 捕获后必须立即停止写 TaskState/checkpoint/event 并退出执行，
+    不得落任何状态——任务的状态权威已归属新 execution 的 owner。
+    """
+
+    def __init__(self, task_id: str, execution_id: str = ""):
+        self.task_id = task_id
+        self.execution_id = execution_id
+        super().__init__(f"执行租约已丢失 task={task_id} execution={execution_id[:8]}")
+
+
 class TaskStatus(str, Enum):
     """任务生命周期状态机。
 
@@ -70,6 +83,11 @@ class TaskStatus(str, Enum):
         例外通道（不经本表、走原生 SQL，登记于 Phase1 报告）：
         - try_acquire_lease 的 stale-RUNNING 接管（RUNNING→RUNNING 所有权转移）
         - reap_zombie_running 的 RUNNING→FAILED/CANCELLED（条件 UPDATE 收尸）
+        - claim_stale_for_recovery 的 RUNNING→PENDING（Phase2 Step1：租约过期
+          自动恢复回队，原子认领幂等，recovery_count 计数）
+        - revert_recovery_claim 的 PENDING→RUNNING（恢复重投失败回滚，租约
+          字段维持过期值，下一次 sweep 重新处理）
+        - fail_recovered_task 的 RUNNING→FAILED（自动恢复次数耗尽的终态收口）
         """
         return {
             cls.PENDING: frozenset({cls.PENDING, cls.RUNNING, cls.PAUSED,
@@ -111,6 +129,7 @@ class TaskRecord:
     traceback: str = ""
     retry_count: int = 0
     max_retries: int = 3
+    recovery_count: int = 0         # 自动恢复次数（Phase2 Step1：租约过期重投计数）
     duration_ms: int | None = None
     queue: str = "agent"
     worker: str = ""
@@ -151,6 +170,7 @@ class TaskRecord:
             traceback=row.get("traceback") or "",
             retry_count=int(row.get("retry_count") or 0),
             max_retries=int(row.get("max_retries") or 3),
+            recovery_count=int(row.get("recovery_count") or 0),
             duration_ms=int(row["duration_ms"]) if row.get("duration_ms") is not None else None,
             queue=row.get("queue") or "agent",
             worker=row.get("worker") or "",
@@ -185,6 +205,7 @@ class TaskRecord:
             "error_code": self.error_type,   # Phase1 口径别名（同 error_type）
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
+            "recovery_count": self.recovery_count,
             "duration_ms": self.duration_ms,
             "queue": self.queue,
             "worker": self.worker,

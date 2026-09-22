@@ -15,6 +15,7 @@ from celery.signals import worker_process_init
 
 from backend.config.tasks import (
     CELERY_BROKER_URL,
+    CELERY_BROKER_VISIBILITY_TIMEOUT,
     CELERY_HARD_TASK_TIMEOUT,
     CELERY_METADATA_SHADOW_MAX_RETRIES,
     CELERY_METADATA_SHADOW_QUEUE,
@@ -23,6 +24,7 @@ from backend.config.tasks import (
     CELERY_RETRY_BACKOFF,
     CELERY_RETRY_BACKOFF_MAX,
     CELERY_TASK_TIMEOUT,
+    TASK_RECOVERY_SWEEP_INTERVAL,
     TASK_ZOMBIE_RECONCILE_INTERVAL,
 )
 from backend.shared.logger import logger
@@ -51,6 +53,13 @@ celery_app.conf.update(
     task_acks_late=True,                 # 执行完才 ack：Worker 宕机任务回队重投
     worker_prefetch_multiplier=1,        # 长任务公平分发，防止单实例饿死队列
     task_reject_on_worker_lost=True,     # Worker 被 OOM kill 等异常退出 → 任务回队
+    # Phase2 Step1：visibility_timeout 显式化（原 kombu/Redis 默认 3600s）。
+    # 定位 = Runtime 恢复（stale sweeper ~3min）之后的 broker 第二层兜底；
+    # 取值必须 > 单条消息未 ack 时长上界（hard limit 1830s）+ 余量，
+    # 推导见 backend/config/tasks.py 与 Step1 报告，禁止为恢复速度压小。
+    broker_transport_options={
+        "visibility_timeout": CELERY_BROKER_VISIBILITY_TIMEOUT,
+    },
     broker_connection_retry_on_startup=True,
     task_track_started=True,             # STARTED 状态可见（监控用）
     # 事件流（celery-exporter 消费：celery_task_{sent,succeeded,failed,retried}_total）
@@ -112,6 +121,13 @@ celery_app.conf.update(
         "tasks-zombie-reconcile": {
             "task": "tasks.zombie_reconcile",
             "schedule": float(TASK_ZOMBIE_RECONCILE_INTERVAL),
+        },
+        # Phase2 Step1：stale execution 自动恢复主路径。租约过期的 RUNNING
+        # 任务由本任务原子认领并按原 queue 重投（不等 visibility_timeout、
+        # 无需 admin retry）；zombie reconcile 退化为最终兜底。
+        "tasks-stale-execution-recovery": {
+            "task": "tasks.stale_execution_recovery",
+            "schedule": float(TASK_RECOVERY_SWEEP_INTERVAL),
         },
         # 治理改造（2026-09-22）：模型健康周期探测 → llm_model_health 缓存。
         # 页面只读缓存；间隔经 env MODEL_HEALTH_SCAN_INTERVAL 可调（默认 300s）。

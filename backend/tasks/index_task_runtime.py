@@ -104,16 +104,27 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
     run_index: 无参 callable，执行单文档索引（含 settle），返回
     {"status": terminal, ...} 形态结果。本函数负责：
       1. 无 db_task_id（存量消息）→ 直接执行，行为不变
-      2. FAILED（Celery 重投）→ 显式回 PENDING 再抢租约
-      3. 租约认领（max executor=1）；认领失败 skip
-      4. 节点边界控制：开始前 / 整节点（含 settle）完成后轮询标志
-      5. 终态落库（SUCCESS/FAILED/PAUSED/CANCELLED）+ checkpoint 快照
+      2. 显式状态短路（Phase2 Step1）：SUCCESS/CANCELLED/PAUSED/WAITING_USER
+         一律不执行——redelivery/恢复重投不得唤醒终态与暂停任务
+      3. FAILED（Celery 重投）→ 显式回 PENDING 再抢租约
+      4. 租约认领（max executor=1）+ 心跳线程（长原子节点内维持活性）；
+         认领失败 skip
+      5. 节点边界控制：开始前 / 整节点（含 settle）完成后轮询标志
+      6. 终态落库（SUCCESS/FAILED/PAUSED/CANCELLED）+ checkpoint 快照，
+         全部带 execution_id fencing——租约被接管的旧 Worker 写不进去
     """
     if not db_task_id:
         return run_index()
 
+    from backend.models.task import TaskLeaseLost
     from backend.services import task_service
     from backend.services.task_state import TaskManager
+    from backend.tasks.execution_context import clear_execution, set_execution
+    from backend.tasks.lease_heartbeat import LeaseHeartbeat
+
+    def _lease_lost_result(reason: str) -> dict:
+        return {"status": "error", "error": reason, "skipped": True,
+                "lease_lost": True}
 
     record = TaskManager.requeue_failed(db_task_id)
     if record is None:
@@ -122,6 +133,10 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
     if record.status == TaskStatus.CANCELLED:
         logger.info("[IndexTaskRuntime] %s already cancelled, skip", db_task_id)
         return {"status": "error", "error": "cancelled", "skipped": True}
+    if record.status == TaskStatus.SUCCESS:
+        # 终态收到重复消息（redelivery/恢复重投晚到）：NO-OP，不重复索引
+        logger.info("[IndexTaskRuntime] %s already succeeded, no-op", db_task_id)
+        return {"status": "done", "skipped": True}
     if record.status in (TaskStatus.PAUSED, TaskStatus.WAITING_USER):
         # 暂停中的任务被重投（消息早于 pause 请求）：不执行，等待 resume
         logger.info("[IndexTaskRuntime] %s paused, skip execution", db_task_id)
@@ -132,45 +147,78 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
         logger.warning("[IndexTaskRuntime] %s lease held elsewhere, skip", db_task_id)
         return {"status": "error", "error": "running_elsewhere", "skipped": True}
 
-    # ── 节点开始前：标志已置位则不开跑 ──
-    cancelled, paused = _flags(db_task_id)
-    if cancelled:
-        TaskManager.mark_cancelled(db_task_id, message="用户取消（执行前拦截）")
-        return {"status": "error", "error": "cancelled", "skipped": True}
-    if paused:
-        TaskManager.mark_paused(db_task_id, message="用户暂停（执行前拦截）")
-        return {"status": "error", "error": "paused", "skipped": True}
-
-    TaskManager.mark_running(db_task_id, progress=f"索引文档 {upload_id}")
+    hb = LeaseHeartbeat(db_task_id, lease_id)
+    hb.start()
+    ctx_token = set_execution(db_task_id, lease_id)
     try:
-        result = run_index()
-    except Exception as e:
-        TaskManager.mark_failed(db_task_id, error_message=str(e)[:2000],
-                                error_code=type(e).__name__,
-                                progress="索引失败")
-        raise
+        # ── 节点开始前：标志已置位则不开跑（fencing 写）──
+        cancelled, paused = _flags(db_task_id)
+        if cancelled:
+            TaskManager.mark_cancelled(db_task_id, message="用户取消（执行前拦截）",
+                                       execution_id=lease_id)
+            return {"status": "error", "error": "cancelled", "skipped": True}
+        if paused:
+            TaskManager.mark_paused(db_task_id, message="用户暂停（执行前拦截）",
+                                    execution_id=lease_id)
+            return {"status": "error", "error": "paused", "skipped": True}
 
-    # ── 节点完成（settle 已做，结果已持久）：标志置位则结果保留并停 ──
-    task_service.update_progress(db_task_id, "index_document",
-                                 progress="索引节点完成")
-    task_service.append_checkpoint(db_task_id, "index_document", {
-        "upload_id": upload_id,
-        "terminal": (result or {}).get("terminal", ""),
-        "doc_id": (result or {}).get("doc", {}).get("doc_id", "")
-        if isinstance((result or {}).get("doc"), dict) else "",
-    })
-    cancelled, paused = _flags(db_task_id)
-    if cancelled:
-        TaskManager.mark_cancelled(db_task_id, message="用户取消（索引完成，结果保留）")
-        raise IndexTaskCancelled(db_task_id)
-    if paused:
-        TaskManager.mark_paused(db_task_id, message="用户暂停（索引完成，结果保留）")
-        raise IndexTaskPaused(db_task_id)
+        TaskManager.mark_running(db_task_id, progress=f"索引文档 {upload_id}",
+                                 execution_id=lease_id)
+        try:
+            result = run_index()
+        except TaskLeaseLost:
+            # 心跳已在节点内判定丢失（罕见：run_index 内部经 fence 写触发）
+            return _lease_lost_result("lease_lost")
+        except Exception as e:
+            try:
+                TaskManager.mark_failed(db_task_id, error_message=str(e)[:2000],
+                                        error_code=type(e).__name__,
+                                        progress="索引失败", execution_id=lease_id)
+            except TaskLeaseLost:
+                logger.warning("[IndexTaskRuntime] %s fencing 拒绝 FAILED 写"
+                               "（租约已被接管）", db_task_id)
+            raise
 
-    terminal = (result or {}).get("terminal", "done")
-    TaskManager.mark_success(
-        db_task_id, output={"terminal": terminal,
-                            "doc_id": (result or {}).get("doc", {}).get("doc_id", "")
-                            if isinstance((result or {}).get("doc"), dict) else ""},
-        progress=f"索引完成（{terminal}）")
-    return result
+        # ── 节点完成（settle 已做，结果已持久）：fencing 写 + 标志检查 ──
+        try:
+            if not task_service.update_progress(db_task_id, "index_document",
+                                                progress="索引节点完成",
+                                                execution_id=lease_id):
+                return _lease_lost_result("lease_lost")
+            if not task_service.append_checkpoint(db_task_id, "index_document", {
+                "upload_id": upload_id,
+                "terminal": (result or {}).get("terminal", ""),
+                "doc_id": (result or {}).get("doc", {}).get("doc_id", "")
+                if isinstance((result or {}).get("doc"), dict) else "",
+            }, execution_id=lease_id):
+                return _lease_lost_result("lease_lost")
+        except TaskLeaseLost:
+            return _lease_lost_result("lease_lost")
+
+        cancelled, paused = _flags(db_task_id)
+        if cancelled:
+            TaskManager.mark_cancelled(db_task_id, message="用户取消（索引完成，结果保留）",
+                                       execution_id=lease_id)
+            raise IndexTaskCancelled(db_task_id)
+        if paused:
+            TaskManager.mark_paused(db_task_id, message="用户暂停（索引完成，结果保留）",
+                                    execution_id=lease_id)
+            raise IndexTaskPaused(db_task_id)
+
+        terminal = (result or {}).get("terminal", "done")
+        try:
+            TaskManager.mark_success(
+                db_task_id, output={"terminal": terminal,
+                                    "doc_id": (result or {}).get("doc", {}).get("doc_id", "")
+                                    if isinstance((result or {}).get("doc"), dict) else ""},
+                progress=f"索引完成（{terminal}）", execution_id=lease_id)
+        except TaskLeaseLost:
+            # 索引本体已完成（registry/向量库已持久），仅状态写被新 owner 顶替；
+            # 恢复链会重跑本节点，由 registry duplicate/upsert 语义吸收
+            logger.warning("[IndexTaskRuntime] %s fencing 拒绝 SUCCESS 写"
+                           "（租约已被接管）", db_task_id)
+            return _lease_lost_result("lease_lost")
+        return result
+    finally:
+        hb.stop()
+        clear_execution(ctx_token)
