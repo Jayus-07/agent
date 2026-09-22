@@ -1817,8 +1817,10 @@ class ModelConfigService:
         # 2026-09-22 拍板：测试与保存独立 —— 保存不再强制探测（与
         # add_provider_model 同口径，见彼处注释）。payload.probe=true 时仍
         # 走探测并阻断（保留给需要强校验的调用方）。
+        # ⚠️ 必须 or ""：str(None) 会把字符串 'None' 写进库（2026-09-22 实测
+        # 事故：qwen3.7-flash 的 upstream 变成 'None'，调用时发 model='None' 404）
         upstream_model_name = str(
-            payload.get("upstreamModelName") or payload.get("upstream_model_name")
+            payload.get("upstreamModelName") or payload.get("upstream_model_name") or ""
         ).strip()
         probe: provider_probe.ProbeResult | None = None
         if payload.get("probe"):
