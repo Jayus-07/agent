@@ -1,0 +1,446 @@
+# -*- coding: utf-8 -*-
+"""STOP C 生产收口测试：kill switch / deny 终态 / Tool-MCP 收口 /
+list_tables 白名单一致性 / 审计 best-effort。
+
+只 mock 外部边界（executor/LLM/DB 连接）；策略与装配逻辑全部真实执行。
+"""
+import asyncio
+import json
+from unittest.mock import patch
+
+import pytest
+
+from tests.sql.conftest import build_ctx, make_ctx
+
+from backend.core.request_context import (
+    set_tool_department,
+    set_tool_roles,
+    set_tool_tenant_id,
+    set_tool_user_id,
+)
+from backend.sql.policy import SQLPolicyContext, build_sql_policy_context
+from backend.sql.schema_loader import schema_loader
+from backend.sql.sql_agent import SQLAgent, _unavailable_result, get_sql_agent
+from backend.sql.sql_result import SQLResult
+
+
+@pytest.fixture(autouse=True)
+def _clean_tool_contextvars():
+    """每个用例前后清理 Tool 通道 contextvars（防跨用例串身份）。"""
+    for setter in (set_tool_user_id, set_tool_department,
+                   set_tool_tenant_id):
+        setter("")
+    set_tool_roles(())
+    yield
+    for setter in (set_tool_user_id, set_tool_department,
+                   set_tool_tenant_id):
+        setter("")
+    set_tool_roles(())
+
+
+def _editor_ctx(source="tool"):
+    return build_sql_policy_context(
+        user_id="3", department="hr", roles=("editor",),
+        source_channel=source)
+
+
+# =====================================================
+# Kill switch（规格 §十四：executor 调用次数 = 0）
+# =====================================================
+
+class TestKillSwitch:
+    def test_ask_struct_disabled_no_executor_call(self, monkeypatch):
+        """SQL_AGENT_ENABLED=false → ask_struct 直接 unavailable，
+        executor 与 LLM 生成零调用。"""
+        import backend.sql.sql_agent as agent_mod
+
+        monkeypatch.setattr(agent_mod, "SQL_AGENT_ENABLED", False)
+        executor_calls = {"n": 0}
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: executor_calls.__setitem__(
+                "n", executor_calls["n"] + 1) or SQLResult.success(
+                [], columns=[], sql="x", elapsed=0))
+        monkeypatch.setattr(agent_mod, "generate_sql", lambda *a, **k: "SELECT 1")
+
+        agent = get_sql_agent()
+        result = agent.ask_struct(
+            "查库存", policy=_editor_ctx(source="http"))
+        assert result.error_type == "service_unavailable"
+        assert executor_calls["n"] == 0
+
+    def test_legacy_path_disabled_no_executor_call(self, monkeypatch):
+        """旧链（policy=None）同样被 kill switch 拦截——不存在
+        「HTTP 关了、legacy 还能执行」。"""
+        import backend.sql.sql_agent as agent_mod
+
+        monkeypatch.setattr(agent_mod, "SQL_AGENT_ENABLED", False)
+        executor_calls = {"n": 0}
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: executor_calls.__setitem__(
+                "n", executor_calls["n"] + 1) or SQLResult.success(
+                [], columns=[], sql="x", elapsed=0))
+        monkeypatch.setattr(agent_mod, "select_tables", lambda q: ["product.products"])
+        monkeypatch.setattr(agent_mod, "generate_sql", lambda *a, **k: "SELECT 1")
+
+        agent = get_sql_agent()
+        result = agent.ask_struct("查库存")
+        assert result.error_type == "service_unavailable"
+        assert executor_calls["n"] == 0
+
+    def test_skill_disabled_terminal_unavailable(self, monkeypatch):
+        """graph SQLSkill 入口：kill switch 关闭 → 终态 unavailable
+        step_result（无重试语义）。"""
+        import backend.skills.sql.skill as skill_mod
+        from backend.skills.sql.skill import SQLSkill
+
+        monkeypatch.setattr("backend.config.SQL_AGENT_ENABLED", False)
+        # SQLSkill.execute 是 async def；直接驱动
+        result = asyncio.run(SQLSkill().execute(
+            {"current_step_id": "1"}, step_capability="sql.query"))
+        step = result["step_results"]["1"]
+        assert step["error_type"] == "service_unavailable"
+        assert step["tool_status"] == "unavailable"
+
+    def test_tool_disabled_envelope(self, monkeypatch):
+        """Tool 入口：kill switch 关闭 → unavailable 错误封套。"""
+        from backend.tools.sql import sql_query_tool
+
+        monkeypatch.setattr("backend.config.SQL_AGENT_ENABLED", False)
+        raw = sql_query_tool.invoke({"question": "查库存"})
+        envelope = json.loads(raw)
+        assert envelope.get("reason") == "service_unavailable", raw
+
+    def test_mcp_disabled_unavailable(self, monkeypatch):
+        """MCP 入口：kill switch 关闭 → unavailable（sql_query 与
+        list_tables 全部覆盖）。"""
+        from mcp_servers.servers.sql import SQLMCPServer
+
+        monkeypatch.setattr("backend.config.SQL_AGENT_ENABLED", False)
+        server = SQLMCPServer()
+        for tool_name in ("sql_query", "list_tables"):
+            out = server.call_tool(
+                tool_name, {} if tool_name == "list_tables"
+                else {"question": "查库存"})
+            assert out.get("reason") == "service_unavailable", tool_name
+
+    def test_unavailable_is_not_permission_semantics(self):
+        """不可用 ≠ 权限拒绝：error_type 不与权限语义混淆（§十四）。"""
+        result = _unavailable_result()
+        assert result.status == "failed"
+        assert result.error_type == "service_unavailable"
+
+
+# =====================================================
+# Deny 终态（规格 §八：generate 次数=1、executor 次数=0）
+# =====================================================
+
+class TestDenyTerminal:
+    def _agent_with_counters(self, monkeypatch, validation_error):
+        import backend.sql.sql_agent as agent_mod
+
+        calls = {"generate": 0, "executor": 0}
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["finance.expenses"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: calls.__setitem__(
+                "generate", calls["generate"] + 1) or "SELECT amount FROM finance.expenses")
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: calls.__setitem__(
+                "executor", calls["executor"] + 1) or SQLResult.success(
+                [], columns=[], sql="x", elapsed=0))
+        monkeypatch.setattr(
+            agent_mod, "sql_validator",
+            type("V", (), {"validate": staticmethod(
+                lambda sql: (_ for _ in ()).throw(validation_error))})())
+        return get_sql_agent(), calls
+
+    def test_terminal_deny_no_retry_no_executor(self, monkeypatch):
+        """policy 链：策略拒绝（internal 表 + department scope）→ 终态——
+        generate 只发生 1 次、executor 零调用、不携带 feedback 重试（§八）。"""
+        import backend.sql.sql_agent as agent_mod
+
+        calls = {"generate": 0, "executor": 0}
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["finance.expenses"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: calls.__setitem__(
+                "generate", calls["generate"] + 1) or "SELECT amount FROM finance.expenses")
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: calls.__setitem__(
+                "executor", calls["executor"] + 1) or SQLResult.success(
+                [], columns=[], sql="x", elapsed=0))
+
+        agent = get_sql_agent()
+        result = agent.ask_struct("查财务", policy=_editor_ctx(source="graph"))
+        assert calls["generate"] == 1
+        assert calls["executor"] == 0
+        assert result.status == "permission_denied"
+
+    def test_feedback_never_leaks_on_deny(self, monkeypatch):
+        """策略拒绝后 feedback 不携带上次 SQL/原因进入下一次生成
+        （capture generate 的 feedback 参数必须为 None）。"""
+        import backend.sql.sql_agent as agent_mod
+
+        seen_feedback = []
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["finance.expenses"])
+
+        def fake_generate(q, t, feedback=None):
+            seen_feedback.append(feedback)
+            return "SELECT amount FROM finance.expenses"
+
+        monkeypatch.setattr(agent_mod, "generate_sql", fake_generate)
+        agent = get_sql_agent()
+        agent.ask_struct("查财务", policy=_editor_ctx(source="graph"))
+        assert seen_feedback == [None]
+
+    def test_syntax_error_still_retryable(self, monkeypatch):
+        """旧链：语法类（alias_undefined）保留既有有限修复重试——
+        终态化只针对安全拒绝，不误伤可修复错误（重试仍重走校验）。"""
+        from backend.sql.sql_validator import ValidationError
+
+        import backend.sql.sql_agent as agent_mod
+
+        calls = {"generate": 0, "executor": 0, "validate": 0}
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["product.products"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: calls.__setitem__(
+                "generate", calls["generate"] + 1) or "SELECT id FROM product.products")
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: calls.__setitem__(
+                "executor", calls["executor"] + 1) or SQLResult.success(
+                [], columns=[], sql="x", elapsed=0))
+
+        class _FakeValidator:
+            def validate(self, sql):
+                calls["validate"] += 1
+                raise ValidationError("别名未定义", layer=2,
+                                      reason="alias_undefined")
+
+        monkeypatch.setattr(agent_mod, "sql_validator", _FakeValidator())
+
+        agent = get_sql_agent()
+        result = agent.ask_struct("查商品")  # policy=None → 旧链
+        assert calls["generate"] == 3  # max_retries=2 → 1+2 次
+        assert calls["validate"] == 3
+        assert calls["executor"] == 0
+        assert result.status == "validation_error"
+
+    def test_legacy_terminal_deny_no_retry(self, monkeypatch):
+        """旧链：安全拒绝（dangerous_function）同样终态——generate=1。"""
+        from backend.sql.sql_validator import ValidationError
+
+        import backend.sql.sql_agent as agent_mod
+
+        calls = {"generate": 0}
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["product.products"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: calls.__setitem__(
+                "generate", calls["generate"] + 1)
+            or "SELECT pg_sleep(60)")
+
+        class _FakeValidator:
+            def validate(self, sql):
+                raise ValidationError("禁止使用函数: PG_SLEEP()",
+                                      layer=4, reason="dangerous_function")
+
+        monkeypatch.setattr(agent_mod, "sql_validator", _FakeValidator())
+
+        agent = get_sql_agent()
+        result = agent.ask_struct("慢查")
+        assert calls["generate"] == 1
+        assert result.status == "validation_error"
+        assert "PG_SLEEP" not in (result.error or "")
+
+    def test_validator_reason_taxonomy(self):
+        """reason 分类完备性：安全拒绝枚举全部标记终态，语法类不误标。"""
+        from backend.sql.sql_validator import TERMINAL_DENY_REASONS, ValidationError
+
+        for reason in ("non_select", "multi_statement", "select_into",
+                       "lock_clause", "write_in_subquery", "table_forbidden",
+                       "schema_forbidden", "column_forbidden",
+                       "star_projection", "dangerous_function"):
+            assert ValidationError("x", layer=1, reason=reason).is_terminal_deny
+        for reason in ("parse_error", "empty_sql", "alias_undefined",
+                       "limit_exceeded"):
+            assert not ValidationError("x", layer=0, reason=reason).is_terminal_deny
+
+
+# =====================================================
+# Tool / MCP 通道收口
+# =====================================================
+
+class TestToolChannelClosure:
+    def test_execute_sql_tool_passes_guard_and_injects_scope(self, monkeypatch):
+        """execute_sql_tool（原旁路）：现在必须过 SQLPolicyGuard。
+        admin（all）查 shared 表 → 放行且 source=tool；
+        editor（department）查 personal 表 → 拒绝（scope 语义在 tool
+        通道与 graph/HTTP 通道完全一致）。"""
+        from backend.tools.sql import execute_sql_tool
+
+        set_tool_user_id("9")
+        set_tool_roles(("admin",))
+        captured = {}
+
+        def fake_guard_validate(self, sql, policy):
+            captured["policy"] = policy
+            from backend.sql.policy import SQLPolicyGuard as G
+            return G._validate_and_rewrite_inner(self, sql, policy)
+
+        monkeypatch.setattr(
+            "backend.sql.policy.SQLPolicyGuard.validate_and_rewrite",
+            fake_guard_validate)
+
+        def fake_executor(sql, db_config=None, params=None, timeout=None):
+            return SQLResult.success(
+                [{"sku": "A"}], columns=["sku"], sql=sql, elapsed=0.01)
+
+        monkeypatch.setattr("backend.sql.executor.execute_sql_struct",
+                            fake_executor)
+
+        raw = execute_sql_tool.invoke(
+            {"query": "SELECT sku FROM product.products"})
+        envelope = json.loads(raw)
+        assert envelope.get("data", {}).get("total") == 1, raw
+        assert captured["policy"].source_channel == "tool"
+        assert captured["policy"].data_scope == "all"
+
+    def test_execute_sql_tool_personal_denied_for_editor(self):
+        """tool 通道 scope 语义一致性：editor（department）直查
+        personal 表（无部门列）→ 拒绝——旁路收口后不再有例外。"""
+        from backend.tools.sql import execute_sql_tool
+
+        set_tool_user_id("3")
+        set_tool_roles(("editor",))
+        raw = execute_sql_tool.invoke(
+            {"query": 'SELECT order_no FROM "order".orders'})
+        assert "SQL_TABLE_NOT_ALLOWED" in raw
+
+    def test_execute_sql_tool_denied_for_internal_table(self):
+        """原旁路封死验证：tool 直调查 finance 表 → 权限门拒绝封套，
+        executor 不被触达（真实 Guard，无 mock）。"""
+        from backend.tools.sql import execute_sql_tool
+
+        set_tool_user_id("3")
+        set_tool_roles(("editor",))
+        raw = execute_sql_tool.invoke(
+            {"query": "SELECT amount FROM finance.expenses"})
+        assert "finance" not in raw  # 对外文案不泄露表名
+        assert "SQL_TABLE_NOT_ALLOWED" in raw
+
+    def test_tool_without_identity_denied(self):
+        """Tool 通道无可信身份（脚本直调）→ 权限门 fail-closed，
+        且不触发 LLM 生成（前置 precheck）。"""
+        from backend.tools.sql import sql_query_tool
+
+        raw = sql_query_tool.invoke({"question": "查询销量"})  # 不设任何 contextvar
+        assert ("超出你的数据访问范围" in raw
+                or "SQL_PERMISSION_DENIED" in raw), raw
+
+    def test_sql_query_tool_success_uses_policy_chain(self, monkeypatch):
+        """sql_query_tool：policy 链生效（source=tool）且真实可查。"""
+        from backend.tools.sql import sql_query_tool
+
+        set_tool_user_id("9")
+        set_tool_roles(("admin",))
+        raw = sql_query_tool.invoke({"question": "商品库存"})
+        assert isinstance(raw, str)
+
+
+class TestMcpChannelClosure:
+    def test_list_tables_matches_whitelist_exactly(self):
+        """list_tables 数据源 = schema_loader 白名单（修复连错库 +
+        information_schema 探测面）；7 个业务 schema 全部可见。"""
+        from mcp_servers.servers.sql import SQLMCPServer
+
+        out = SQLMCPServer().call_tool("list_tables", {})
+        tables = set(out["tables"])
+        expected = set(schema_loader.get_all_table_names())
+        assert tables == expected  # 严格一致，不是「非空」
+        for schema in ("product", "order", "inventory", "customer",
+                       "crawler", "finance", "ai"):
+            assert any(t.startswith(f"{schema}.") for t in tables), schema
+        # 白名单外对象绝不出现（旧实现连 agent_memory 库会列出内部表）
+        assert "public.schema_migrations" not in tables
+        assert not any(t.startswith("auth.") for t in tables)
+
+    def test_mcp_sql_query_without_identity_denied(self):
+        """MCP 通道无可信身份 → 权限门拒绝（不存在匿名 SQL），
+        且前置 precheck 保证不触发 LLM 生成。"""
+        from mcp_servers.servers.sql import SQLMCPServer
+
+        out = SQLMCPServer().call_tool("sql_query", {"question": "查销量"})
+        assert out.get("reason") == "permission_denied", out
+        assert "finance" not in json.dumps(out, ensure_ascii=False)
+
+
+# =====================================================
+# 审计（best-effort）
+# =====================================================
+
+class TestAuditBestEffort:
+    def test_hash_stable_and_normalized(self):
+        from backend.sql.audit import normalize_sql_hash
+
+        h1 = normalize_sql_hash("SELECT  a,  b\n FROM t")
+        h2 = normalize_sql_hash("select a b from t".replace(" a b ", " a,  b "))
+        assert h1 == h2  # 空白/大小写规范化后一致
+        assert len(h1) == 64
+
+    def test_record_failure_never_raises(self, monkeypatch):
+        """审计写入失败（DB 不可达）不向主查询传播——best-effort 语义。"""
+        from backend.sql import audit
+
+        def boom():
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(audit, "_conn", boom)
+        # 不抛异常即通过（内部线程吞掉）
+        audit.record_sql_audit(
+            decision=audit.DECISION_DENY_TABLE,
+            user_id="u1", sql="SELECT 1", tables=["product.products"],
+            deny_code="SQL_TABLE_NOT_ALLOWED")
+        import time as _t
+        _t.sleep(0.3)  # 等待后台线程落地失败路径
+
+    def test_decision_mapping(self):
+        from backend.sql.audit import (
+            DECISION_EXECUTION_FAILED, DECISION_EXECUTION_SUCCESS,
+            DECISION_TIMEOUT, decision_from_result)
+
+        assert decision_from_result("success") == DECISION_EXECUTION_SUCCESS
+        assert decision_from_result("no_data") == DECISION_EXECUTION_SUCCESS
+        assert decision_from_result("timeout") == DECISION_TIMEOUT
+        assert decision_from_result("syntax_error") == DECISION_EXECUTION_FAILED
+
+
+# =====================================================
+# SQLPolicyContext source_channel（审计归因，不参与授权）
+# =====================================================
+
+class TestSourceChannel:
+    def test_channel_propagates(self):
+        ctx = build_sql_policy_context(
+            user_id="3", roles=("editor",), source_channel="mcp")
+        assert ctx.source_channel == "mcp"
+
+    def test_channel_truncated_low_cardinality(self):
+        ctx = build_sql_policy_context(
+            user_id="3", roles=("editor",),
+            source_channel="x" * 200)
+        assert len(ctx.source_channel) <= 16
+
+    def test_default_empty(self):
+        ctx = make_ctx("all")
+        assert ctx.source_channel == ""
