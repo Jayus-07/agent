@@ -5,7 +5,6 @@ import { useChatStore } from '@/store/chat'
 import { streamChat, abortChat } from '@/api/chat'
 import { apiErrorFromEnvelope } from '@/api/client'
 import { invalidateSessionsCache } from '@/lib/sessions-cache'
-import { getSelectedDepartment } from '@/lib/department'
 import { nanoid } from 'nanoid'
 
 // 模块级 abort controller：send / regenerate / stopStream 共用一份，
@@ -43,7 +42,6 @@ export function useSSE() {
     try {
       for await (const evt of streamChat(
         { question, session_id: sessionId, request_id: requestId,
-          department: getSelectedDepartment() || undefined,
           idempotency_key: requestId,
           // 会话级模型覆盖：只有本次会话显式选过模型才带，否则用后端全局默认
           model: modelOverride || undefined },

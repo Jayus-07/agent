@@ -1,10 +1,11 @@
 /**
- * 部门选择偏好 — 聊天检索授权用（与后端 KNOWLEDGE_BASES/DEPARTMENTS 对齐）。
+ * 部门身份（只读） — 授权收口（2026-09-23）后的唯一口径。
  *
- * 部门决定检索授权范围：带部门的请求按 employee 主体经 owner_depts 矩阵
- * 授权知识库；不带则后端按对客最严格集合处理（仅 cs_* 库）。
- * 持久化到 localStorage（键 chat_department），跨会话保留。
+ * 部门是「账号的组织属性」，由管理员维护、登录/刷新时随 JWT 下发；
+ * 管理端聊天框同样不可自选部门（旧选择器对授权零作用，已移除）。
+ * DEPARTMENTS 仅作 code → 中文名映射保留。
  */
+import { getCachedUser } from '@/lib/auth'
 
 export interface DepartmentOption {
   id: string
@@ -24,22 +25,17 @@ export const DEPARTMENTS: DepartmentOption[] = [
   { id: 'admin', label: '行政部' },
 ]
 
-const STORAGE_KEY = 'chat_department'
+const LABELS = new Map(DEPARTMENTS.map((d) => [d.id, d.label]))
 
-export function getSelectedDepartment(): string {
-  if (typeof window === 'undefined') return ''
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) || ''
-  } catch {
-    return ''
-  }
+export function departmentLabel(code: string): string {
+  return LABELS.get(code) || code
 }
 
-export function setSelectedDepartment(department: string): void {
-  try {
-    if (department) window.localStorage.setItem(STORAGE_KEY, department)
-    else window.localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    // localStorage 不可用（隐私模式等）：静默降级为会话内不生效
-  }
+/** 当前账号部门（登录响应 userInfo.dept）；未分配返回 null */
+export function getCurrentDepartment(): DepartmentOption | null {
+  if (typeof window === 'undefined') return null
+  const raw = (getCachedUser() as { dept?: unknown } | null)?.dept
+  const code = typeof raw === 'string' ? raw.trim() : ''
+  if (!code) return null
+  return { id: code, label: departmentLabel(code) }
 }

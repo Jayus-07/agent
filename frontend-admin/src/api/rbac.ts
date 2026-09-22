@@ -35,10 +35,18 @@ export interface RbacUserPatch {
   version: number;
   platformRole?: PlatformRole;
   status?: number;
+  /** 部门 code（授权属性）：空串=清空；非空须为本租户 active 部门（后端校验） */
+  dept?: string;
   csRole?: CsRole | null;
   maxConversations?: number;
   enabled?: boolean;
   accepting?: boolean;
+}
+
+/** 部门主数据（041_auth_departments；管理端部门下拉唯一数据源，禁前端写死） */
+export interface RbacDepartment {
+  code: string;
+  name: string;
 }
 
 export interface RbacAuditItem {
@@ -97,6 +105,11 @@ function queryString(entries: Array<[string, string | number | undefined]>): str
   }
   const encoded = query.toString();
   return encoded ? `?${encoded}` : "";
+}
+
+export async function listRbacDepartments(): Promise<RbacDepartment[]> {
+  const body = await request(`/api/sys/rbac/departments`);
+  return unwrap<{ items: RbacDepartment[] }>(body).items;
 }
 
 export async function listRbacUsers(params: {

@@ -3,15 +3,16 @@
 /**
  * ComposerToolbar — 输入框下方工具栏（两段式输入框的下半段）
  *
- * 从左到右：部门选择 · 附件 · （弹性空隙）· 模型切换 · 权限开关 · 发送。
- *  - 部门选择：决定 RAG 检索授权范围（不是装饰，逻辑与原 ChatInput 一致）
+ * 从左到右：当前部门（只读）· 附件 · （弹性空隙）· 模型切换 · 权限开关 · 发送。
+ *  - 当前部门：只读徽标（授权收口 §35）——部门是账号组织属性，由管理员
+ *    维护、随 JWT 下发，检索授权由后端按它计算，不可在聊天框自选。
  *  - 附件：P0 占位，点击提示能力开发中
  *  - 模型切换：LLMSwitcher 从 ChatHeader 下移至此
  *  - 权限开关：localStorage 占位（键 chat_permission），P1 接后端
  */
 import { useEffect, useState } from 'react'
 import { ArrowUp, Building2, Paperclip, ShieldCheck, ShieldOff } from 'lucide-react'
-import { DEPARTMENTS } from '@/lib/department'
+import { getCurrentDepartment } from '@/lib/department'
 import { useToast } from '@/components/shared/Toast'
 import LLMSwitcher from '@/components/agent/LLMSwitcher'
 
@@ -36,18 +37,17 @@ function writePermission(on: boolean): void {
 }
 
 interface Props {
-  department: string
-  onDepartmentChange: (value: string) => void
   disabled?: boolean
   canSend: boolean
   onSend: () => void
 }
 
 export default function ComposerToolbar({
-  department, onDepartmentChange, disabled = false, canSend, onSend,
+  disabled = false, canSend, onSend,
 }: Props) {
   const toast = useToast()
   const [permission, setPermission] = useState(false)
+  const department = getCurrentDepartment()
 
   // localStorage 仅客户端可读，挂载后再取，避免 SSR 水合不一致
   useEffect(() => { setPermission(readPermission()) }, [])
@@ -63,26 +63,15 @@ export default function ComposerToolbar({
     // flex-wrap：320px 级窄屏下放不下单行（部门+附件+模型胶囊+权限+发送 ≈ 380px），
     // 模型切换器整组换行而不是溢出；≥sm 视口仍单行
     <div className="flex flex-wrap items-center gap-1.5 gap-y-1 pt-2">
-      {/* 部门选择：决定检索授权范围（空 = 按对客最严格集合） */}
+      {/* 当前部门（只读徽标）：授权由后端按 JWT dept claim 计算 */}
       <div
-        className="shrink-0 min-w-0 flex items-center gap-1 rounded-lg hover:bg-black/[0.05]
-          transition-colors duration-200 px-2 py-1.5"
-        title="选择部门以获得对应知识库的检索范围；未选择按对客最严格范围处理"
+        className="shrink-0 min-w-0 flex items-center gap-1 rounded-lg px-2 py-1.5"
+        title="部门由管理员维护，决定知识库检索授权范围"
       >
         <Building2 size={14} className="text-text-muted" aria-hidden />
-        <select
-          value={department}
-          onChange={(e) => onDepartmentChange(e.target.value)}
-          disabled={disabled}
-          aria-label="选择部门（检索授权范围）"
-          className="bg-transparent outline-none text-xs text-text-secondary cursor-pointer
-            disabled:opacity-40 max-w-[92px] appearance-none"
-        >
-          <option value="">未选择部门</option>
-          {DEPARTMENTS.map((d) => (
-            <option key={d.id} value={d.id}>{d.label}</option>
-          ))}
-        </select>
+        <span className="text-xs text-text-secondary max-w-[120px] truncate">
+          {department ? `当前部门：${department.label}` : '未分配部门'}
+        </span>
       </div>
 
       {/* 附件（P0 占位） */}

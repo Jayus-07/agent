@@ -2,35 +2,21 @@
 
 /**
  * ChatInput — 两段式输入框：上方 textarea，下方 ComposerToolbar。
- *
- * 部门选择器的状态与持久化仍在本组件（决定 RAG 检索授权范围），
- * 工具栏只负责展示与回调，避免权限输入被搬到叶子组件后丢失。
+ * 部门为只读展示（授权收口 §35），本组件不再持有部门选择状态。
  */
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
-import { getSelectedDepartment, setSelectedDepartment } from '@/lib/department'
 import ComposerToolbar from '@/components/agent/ComposerToolbar'
 
 interface Props { onSend: (text: string) => void; isLoading: boolean; budgetBlocked?: boolean }
 
 export default function ChatInput({ onSend, isLoading, budgetBlocked = false }: Props) {
   const [input, setInput] = useState('')
-  const [department, setDepartment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     const el = textareaRef.current
     if (el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px' }
   }, [input])
-
-  // localStorage 仅客户端可读，挂载后再取，避免 SSR 水合不一致
-  useEffect(() => {
-    setDepartment(getSelectedDepartment())
-  }, [])
-
-  function handleDepartmentChange(value: string) {
-    setDepartment(value)
-    setSelectedDepartment(value)
-  }
 
   function handleSend() {
     const trimmed = input.trim()
@@ -64,8 +50,6 @@ export default function ChatInput({ onSend, isLoading, budgetBlocked = false }: 
 
           {/* 下段：工具栏 */}
           <ComposerToolbar
-            department={department}
-            onDepartmentChange={handleDepartmentChange}
             disabled={isLoading || budgetBlocked}
             canSend={Boolean(input.trim()) && !isLoading && !budgetBlocked}
             onSend={handleSend}

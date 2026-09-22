@@ -25,6 +25,7 @@ import {
   type CsRole,
   type PlatformRole,
   type RbacAuditItem,
+  type RbacDepartment,
   type RbacUser,
   type RbacUserDetail,
   type RbacUserPatch,
@@ -32,6 +33,7 @@ import {
   forceLogoutRbacUser,
   getRbacUserDetail,
   listRbacAudit,
+  listRbacDepartments,
   listRbacUsers,
   resetRbacUserPassword,
   updateRbacUser,
@@ -44,6 +46,7 @@ type Tab = "users" | "roles" | "audit";
 
 interface UserDraft {
   platformRole: PlatformRole;
+  dept: string;
   csRole: CsRole | null;
   maxConversations: number;
   enabled: boolean;
@@ -53,6 +56,7 @@ interface UserDraft {
 function draftFor(user: RbacUser): UserDraft {
   return {
     platformRole: user.platformRole,
+    dept: user.dept ?? "",
     csRole: user.csAgent?.role ?? null,
     maxConversations: user.csAgent?.maxConversations ?? 10,
     enabled: user.csAgent?.enabled ?? false,
@@ -138,6 +142,23 @@ function AccessControlContent() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actingUserId, setActingUserId] = useState<number | null>(null);
+  // ── P9 部门维护：下拉数据源来自 departments API（禁前端写死部门清单）──
+  const [departments, setDepartments] = useState<RbacDepartment[]>([]);
+  const [rowNotices, setRowNotices] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    listRbacDepartments()
+      .then((items) => {
+        if (!cancelled) setDepartments(items);
+      })
+      .catch(() => {
+        // 部门主数据未就绪/无权限时下拉为空，不阻塞用户管理主功能
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -212,9 +233,15 @@ function AccessControlContent() {
       delete next[user.userId];
       return next;
     });
+    setRowNotices((current) => {
+      const next = { ...current };
+      delete next[user.userId];
+      return next;
+    });
     const patch: RbacUserPatch = {
       version: user.version,
       platformRole: draft.platformRole,
+      dept: draft.dept,
       csRole: draft.csRole,
       maxConversations: draft.maxConversations,
       enabled: draft.enabled,
@@ -228,6 +255,11 @@ function AccessControlContent() {
         ),
       );
       setDrafts((current) => ({ ...current, [user.userId]: draftFor({ ...user, ...updated }) }));
+      // 部门/角色是授权属性：平台侧保存即吊销该用户全部会话
+      setRowNotices((current) => ({
+        ...current,
+        [user.userId]: "已保存。部门/角色变更已即时生效：该用户下次访问需重新登录获取新权限。",
+      }));
     } catch (error) {
       if (statusOf(error) === 409) {
         const refreshed = await loadUsers();
@@ -497,6 +529,18 @@ function AccessControlContent() {
                                 <option value="editor">编辑者</option>
                                 <option value="admin">管理员</option>
                               </select>
+                              <label className="sr-only" htmlFor={`user-dept-${user.userId}`}>部门</label>
+                              <select
+                                id={`user-dept-${user.userId}`}
+                                value={draft.dept}
+                                onChange={(event) => setDraft(user.userId, { dept: event.target.value })}
+                                className="mt-1.5 block rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+                              >
+                                <option value="">未分配部门</option>
+                                {departments.map((d) => (
+                                  <option key={d.code} value={d.code}>{d.name}</option>
+                                ))}
+                              </select>
                             </td>
                             <td className="px-3 py-3">
                               <label className="sr-only" htmlFor={`cs-role-${user.userId}`}>客服角色</label>
@@ -596,6 +640,11 @@ function AccessControlContent() {
                               {(rowErrors[user.userId] || actionError) && (
                                 <p className="mt-2 max-w-56 text-left text-[11px] leading-4 text-red-600" role="alert">
                                   {rowErrors[user.userId] || actionError}
+                                </p>
+                              )}
+                              {rowNotices[user.userId] && !rowErrors[user.userId] && (
+                                <p className="mt-2 max-w-56 text-left text-[11px] leading-4 text-emerald-700" role="status">
+                                  {rowNotices[user.userId]}
                                 </p>
                               )}
                             </td>
@@ -776,7 +825,17 @@ function AccessControlContent() {
               </div>
               <div>
                 <label htmlFor="create-dept" className="text-xs text-text-secondary">部门</label>
-                <input id="create-dept" name="dept" className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+                <select
+                  id="create-dept"
+                  name="dept"
+                  defaultValue=""
+                  className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+                >
+                  <option value="">未分配部门</option>
+                  {departments.map((d) => (
+                    <option key={d.code} value={d.code}>{d.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label htmlFor="create-role" className="text-xs text-text-secondary">平台角色</label>

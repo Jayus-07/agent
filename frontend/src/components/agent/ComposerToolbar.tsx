@@ -3,19 +3,19 @@
 /**
  * ComposerToolbar — 输入框下方工具栏（两段式输入框的下半段）
  *
- * 从左到右：部门选择 · 附件 · （弹性空隙）· 模型切换 · 发送/停止。
- *  - 部门选择：决定 RAG 检索授权范围（不是装饰，逻辑与原 ChatInput 一致）
+ * 从左到右：当前部门 · 附件 · （弹性空隙）· 模型切换 · 发送/停止。
+ *  - 当前部门：只读徽标（授权收口 §35）。部门是账号组织属性，由管理员
+ *    维护、随 JWT 下发，检索授权由后端按它计算——用户不可自选，旧
+ *    「部门选择器」对授权零作用，属误导 UI 已移除。
  *  - 附件：P0 占位，点击提示能力开发中
  *  - 模型切换：LLMSwitcher 从 ChatHeader 下移至此
  */
 import { ArrowUp, Building2, Paperclip, Square } from 'lucide-react'
-import { DEPARTMENTS } from '@/lib/department'
+import { getCurrentDepartment } from '@/lib/department'
 import { useToast } from '@/components/shared/Toast'
 import LLMSwitcher from '@/components/agent/LLMSwitcher'
 
 interface Props {
-  department: string
-  onDepartmentChange: (value: string) => void
   disabled?: boolean
   canSend: boolean
   onSend: () => void
@@ -24,36 +24,26 @@ interface Props {
 }
 
 export default function ComposerToolbar({
-  department, onDepartmentChange, disabled = false, canSend, onSend, onStop,
+  disabled = false, canSend, onSend, onStop,
 }: Props) {
   const toast = useToast()
+  const department = getCurrentDepartment()
 
   return (
     // flex-wrap：320px 级窄屏下放不下单行（部门+附件+模型胶囊+权限+发送 ≈ 380px），
     // 模型切换器整组换行而不是溢出；≥sm 视口仍单行。
     // 左簇（部门+附件）与右簇（模型+权限+发送）用 ml-auto 分开，行内垂直统一居中
     <div className="flex flex-wrap items-center gap-1.5 gap-y-1 pt-2">
-      {/* 左簇：部门选择 + 附件 */}
+      {/* 左簇：当前部门（只读）+ 附件 */}
       <div className="flex items-center gap-0.5 shrink-0">
         <div
-          className="min-w-0 flex items-center gap-1 rounded-lg hover:bg-black/[0.05]
-            transition-colors duration-200 px-2 py-1.5"
-          title="选择部门以获得对应知识库的检索范围；未选择按对客最严格范围处理"
+          className="min-w-0 flex items-center gap-1 rounded-lg px-2 py-1.5"
+          title="部门由管理员在管理端维护，决定知识库检索授权范围"
         >
           <Building2 size={14} className="text-text-muted" aria-hidden />
-          <select
-            value={department}
-            onChange={(e) => onDepartmentChange(e.target.value)}
-            disabled={disabled}
-            aria-label="选择部门（检索授权范围）"
-            className="bg-transparent outline-none text-xs text-text-secondary cursor-pointer
-              disabled:opacity-40 max-w-[92px] appearance-none"
-          >
-            <option value="">未选择部门</option>
-            {DEPARTMENTS.map((d) => (
-              <option key={d.id} value={d.id}>{d.label}</option>
-            ))}
-          </select>
+          <span className="text-xs text-text-secondary max-w-[120px] truncate">
+            {department ? `当前部门：${department.label}` : '未分配部门'}
+          </span>
         </div>
 
         {/* 附件（P0 占位） */}
