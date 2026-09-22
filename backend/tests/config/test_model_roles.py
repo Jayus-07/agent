@@ -69,7 +69,7 @@ def _clear_role_env(monkeypatch) -> None:
 
 def test_all_roles_registered():
     assert set(MODEL_ROLES) == {
-        "main", "doc", "tool_selector", "fallback",
+        "main", "doc", "tool_selector", "fallback", "context_compactor",
         "ocr", "embedding", "rerank", "eval_gen",
         "metadata_extract", "question_gen", "table_describe",
     }

@@ -535,6 +535,23 @@ context_autocompact_llm_tokens_total = Counter(
     labelnames=("kind",),  # kind: prompt|completion
 )
 
+# Phase 5（2026-09-22）生产指标补齐：L5 结果分类 + ProtectedFacts 分层
+context_l5_total = Counter(
+    "context_l5_total",
+    "L5 AutoCompact 尝试结果分类（kill switch 观测）",
+    labelnames=("status", "reason"),
+    # status: success|failed|disabled；reason 固定枚举，禁止 session_id/user_id
+    # 入 label（reason: success|timeout|provider_error|empty_summary|db_error
+    #         |stale_waterline|disabled）
+)
+context_protected_facts_total = Counter(
+    "context_protected_facts_total",
+    "ProtectedFacts 分层统计（LLM 原生保留 vs 确定性补丁）",
+    labelnames=("type", "result"),
+    # type 固定低基数: amount|identifier|percentage|date|url|error_code|other
+    # result: extracted|preserved|patched
+)
+
 
 def publish_breaker_states() -> None:
     """把全部熔断器状态刷到 Prometheus Gauge（周期调用或 /metrics 请求时调用）。"""

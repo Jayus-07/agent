@@ -31,6 +31,8 @@ try:
         context_autocompact_llm_tokens_total,
         context_compaction_latency_seconds,
         context_compactions_total,
+        context_l5_total,
+        context_protected_facts_total,
         context_tokens_saved_total,
     )
 except Exception:  # pragma: no cover — observability 层不可用时软降级
@@ -39,6 +41,8 @@ except Exception:  # pragma: no cover — observability 层不可用时软降级
     context_budget_overflow_total = None
     context_compaction_latency_seconds = None
     context_autocompact_llm_tokens_total = None
+    context_l5_total = None
+    context_protected_facts_total = None
 
 
 def record_compaction(
@@ -81,6 +85,62 @@ def record_summary_llm_tokens(*, prompt_tokens: int, completion_tokens: int) -> 
                 kind="prompt").inc(max(0, prompt_tokens))
             context_autocompact_llm_tokens_total.labels(
                 kind="completion").inc(max(0, completion_tokens))
+    except Exception:
+        logger.debug("context metric 记录失败", exc_info=True)
+
+
+# ── Phase 5 生产指标（低基数，§25/§26）─────────────────────────────
+
+_L5_REASONS = frozenset({
+    "success", "timeout", "provider_error", "empty_summary",
+    "db_error", "stale_waterline", "disabled",
+})
+_FACT_TYPES = frozenset({
+    "amount", "identifier", "percentage", "date", "url", "error_code", "other",
+})
+# 中文事实类型 → 低基数枚举（§26 固定集合）
+_FACT_TYPE_MAP = {
+    "金额": "amount",
+    "订单号": "identifier",
+    "SKU": "identifier",
+    "业务ID": "identifier",
+    "版本号": "identifier",
+    "百分比": "percentage",
+    "日期": "date",
+    "时间": "date",
+    "URL": "url",
+    "错误码": "error_code",
+}
+
+
+def normalize_fact_type(fact_type: str) -> str:
+    """中文事实类型 → Prometheus 低基数枚举；未知一律 other。"""
+    return _FACT_TYPE_MAP.get(fact_type, "other")
+
+
+def record_l5_attempt(*, status: str, reason: str) -> None:
+    """记录一次 L5 尝试结果（status: success|failed|disabled）。
+
+    reason 固定枚举（_L5_REASONS），非法值兜底 provider_error 防基数爆炸；
+    禁止把 session_id/user_id/模型回复放 label。
+    """
+    if reason not in _L5_REASONS:
+        reason = "provider_error"
+    try:
+        if context_l5_total is not None:
+            context_l5_total.labels(status=status, reason=reason).inc()
+    except Exception:
+        logger.debug("context metric 记录失败", exc_info=True)
+
+
+def record_protected_fact(*, fact_type: str, result: str) -> None:
+    """记录 ProtectedFact 分层结果（result: extracted|preserved|patched）。"""
+    t = normalize_fact_type(fact_type)
+    if t not in _FACT_TYPES:  # 防御：normalize 已保证，双保险
+        t = "other"
+    try:
+        if context_protected_facts_total is not None:
+            context_protected_facts_total.labels(type=t, result=result).inc()
     except Exception:
         logger.debug("context metric 记录失败", exc_info=True)
 
