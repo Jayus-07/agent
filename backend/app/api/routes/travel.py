@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -45,13 +45,28 @@ def _plan_error(message: str, status: str = "failed") -> dict:
 
 
 @router.post("/plan", summary="旅游规划（非流式，返回行程单与结构化行程）")
-def travel_plan(req: TravelPlanRequest, request: Request):
+async def travel_plan(request: Request):
+    """手动 request.json() 解析 body —— 对齐 chat_stream 先例。
+
+    FastAPI/Pydantic 自动 body 解析在部分中文 payload 下会抛
+    "There was an error parsing the body"（实测 2026-09-22：页面提交
+    「杭州，3天，2个人…」稳定 422），chat.py 已用同款绕过并验证稳定。
+    """
     from backend.orchestration.graph.travel_graph_node import (
         _build_invoke_config,  # 复用 thread_id/recursion_limit 组装（单一事实源）
     )
     from backend.travel.graph_builder import get_travel_graph
     from backend.travel.graph_state import new_travel_graph_input
     from backend.travel.models.graph_result import build_travel_graph_result
+
+    try:
+        raw = await request.json()
+        req = TravelPlanRequest(**raw)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422,
+                            detail=f"TravelPlanRequest 解析失败: {e}")
 
     identity = resolve_identity(request, body_user_id=req.session_id or None)
     conversation_id = req.conversation_id or req.session_id
@@ -162,7 +177,16 @@ def itinerary_to_ics(itinerary: dict) -> str:
 
 @router.post("/export/ics", summary="行程导出为 ICS 日历文件",
              responses={200: {"content": {"text/calendar": {}}}})
-def travel_export_ics(req: IcsExportRequest):
+async def travel_export_ics(request: Request):
+    # 手动解析（对齐 chat_stream 先例，规避 FastAPI 中文 payload 自动解析 bug）
+    try:
+        req = IcsExportRequest(**(await request.json()))
+    except Exception as e:
+        return Response(
+            json.dumps({"error": "invalid_itinerary", "message": str(e)},
+                       ensure_ascii=False),
+            status_code=422, media_type="application/json",
+        )
     from backend.travel.models.itinerary import Itinerary
 
     try:
@@ -196,7 +220,11 @@ class TravelFeedbackRequest(BaseModel):
 
 
 @router.post("/feedback", summary="行程单反馈（收藏/不满意）")
-def travel_feedback(req: TravelFeedbackRequest, request: Request):
+async def travel_feedback(request: Request):
+    try:
+        req = TravelFeedbackRequest(**(await request.json()))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"解析失败: {e}")
     from backend.feedback import add_feedback
 
     identity = resolve_identity(request)
@@ -231,7 +259,11 @@ class TravelPreferencesRequest(BaseModel):
 
 
 @router.put("/preferences", summary="写入/更新用户旅游偏好")
-def travel_put_preferences(req: TravelPreferencesRequest, request: Request):
+async def travel_put_preferences(request: Request):
+    try:
+        req = TravelPreferencesRequest(**(await request.json()))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"解析失败: {e}")
     from backend.tools.travel import preferences as prefs_store
 
     identity = resolve_identity(request)
