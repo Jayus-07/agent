@@ -44,10 +44,24 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[idx]
 
 
+def _bootstrap_llm_registry() -> None:
+    """独立进程运行时先拉一次 DB 配置层（同 run_tool_routing_eval）。"""
+    try:
+        import asyncio
+
+        from backend.infra.llm.registry_store import refresh_registry
+
+        asyncio.run(refresh_registry())
+    except Exception as e:
+        print(f"[bootstrap] refresh_registry 失败（env 兜底）: {e}", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 条（冒烟）")
     args = parser.parse_args()
+
+    _bootstrap_llm_registry()
 
     from backend.orchestration.router.hierarchical import (
         HierarchicalRouter,
