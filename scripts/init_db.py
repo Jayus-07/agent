@@ -117,6 +117,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "032_memory_embedding_vector.sql": "memory",
     "033_auth_user_lifecycle.sql": "memory",
     "034_model_runtime_governance_pg.sql": "memory",
+    "035_llm_usage_cost_columns.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
