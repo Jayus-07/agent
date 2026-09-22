@@ -66,7 +66,11 @@ def execute_query(
             if service_type in dispatched_services:
                 continue
             dispatched_services.append(service_type)
-            sections.append(_dispatch_service(user_id, it, user_message, cs_route))
+            sections.append(_dispatch_service(
+                user_id, it, user_message, cs_route,
+                tenant_id=str(state.get("tenant_id") or "default"),
+                session_id=str(state.get("session_id") or ""),
+            ))
         answer = "\n\n---\n\n".join(sections)
         return ExpertResult(
             expert="query",
@@ -75,7 +79,12 @@ def execute_query(
             data={"intent": intents, "user_id": user_id, "decomposed": True},
         )
 
-    answer = _dispatch_service(user_id, intent, user_message, cs_route)
+    tenant_id = str(state.get("tenant_id") or "default")
+    session_id = str(state.get("session_id") or "")
+    answer = _dispatch_service(
+        user_id, intent, user_message, cs_route,
+        tenant_id=tenant_id, session_id=session_id,
+    )
 
     return ExpertResult(
         expert="query",
@@ -175,6 +184,7 @@ def query_expert_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def _dispatch_service(
     user_id: str, intent: str, question: str, cs_route: dict,
+    tenant_id: str = "default", session_id: str = "",
 ) -> str:
     """根据 intent 分发到对应的 Service。"""
     service_type = _INTENT_SERVICE_MAP.get(intent, "order")
@@ -184,20 +194,38 @@ def _dispatch_service(
         order_service = get_order_service()
 
         if intent == "t_order_status":
+            # 缺陷9（2026-09-23）：回指承接解析出的订单号经 cs_route.metadata
+            # 注入，优先于当前轮文本抽取——「那它到哪了」resolved_query 里
+            # 的订单号是权威 referent。
+            injected_order = str(
+                (cs_route.get("metadata") or {}).get("order_id") or ""
+            ).strip()
             # P3.5：问句带具体订单号 → detail 精确查（此前一律全量列表，
             # 「DEMO-1001 到哪了」返回整个订单列表，答非所问）
-            order_no = _extract_order_no(question)
+            order_no = injected_order or _extract_order_no(question)
             if order_no:
                 try:
                     result = order_service.query_orders(
                         user_id=user_id, order_id=order_no, query_type="detail",
                     )
-                    return _format_order_list(result.orders)
                 except Exception:
                     return (
                         f"没有找到订单 {order_no} 的记录。请核对订单号，"
                         "或告诉我「查我的所有订单」，我来帮您列出全部订单。"
                     )
+                # 缺陷9：精确查单返回唯一订单 → 记录会话业务上下文，
+                # 供下一轮回指（「那它到哪了」）继承。列表查询不写
+                # （多订单无唯一 referent，不得猜测）。
+                if result.orders:
+                    from backend.customer_service.context_resolver import (
+                        record_recent_order,
+                    )
+
+                    record_recent_order(
+                        tenant_id, user_id, session_id, order_no,
+                        source_intent=intent,
+                    )
+                return _format_order_list(result.orders)
             result = order_service.query_orders(user_id=user_id)
             return _format_order_list(result.orders)
         return _format_order_list([])
@@ -205,7 +233,12 @@ def _dispatch_service(
     if service_type == "logistics":
         from backend.customer_service.service.logistics_service import get_logistics_service
         logistics = get_logistics_service()
-        order_id = _get_latest_order_id(user_id)
+        injected_order = str(
+            (cs_route.get("metadata") or {}).get("order_id") or ""
+        ).strip()
+        # 缺陷9：会话上下文注入的订单号优先；_get_latest_order_id（按用户
+        # 全局最近一单）是既有 fallback，保留原行为不在本轮扩大。
+        order_id = injected_order or _get_latest_order_id(user_id)
         if order_id:
             result = logistics.query_logistics(user_id=user_id, order_id=order_id)
             return _format_logistics(result)

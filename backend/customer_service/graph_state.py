@@ -89,6 +89,7 @@ class CSGraphState(TypedDict, total=False):
     session_id: str
     conversation_id: str
     cs_route: dict
+    tenant_id: str
 
     # === 执行态 (Supervisor + Expert 读写) ===
     supervisor_decision: dict
@@ -117,6 +118,7 @@ def new_cs_graph_input(
     session_id: str,
     conversation_id: str,
     cs_route: dict,
+    tenant_id: str = "default",
 ) -> dict[str, Any]:
     """构建 CS Graph 初始输入（含执行态默认值）
 
@@ -128,6 +130,7 @@ def new_cs_graph_input(
         "session_id": session_id,
         "conversation_id": conversation_id,
         "cs_route": cs_route,
+        "tenant_id": tenant_id or "default",
         "supervisor_decision": {},
         "expert_history": [],
         "last_expert_result": {},

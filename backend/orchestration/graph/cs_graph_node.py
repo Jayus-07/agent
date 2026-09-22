@@ -37,6 +37,7 @@ def cs_graph_node(state: dict) -> dict:
         session_id=cs_context.get("session_id", ""),
         conversation_id=conversation_id,
         cs_route=cs_context.get("cs_route", {}),
+        tenant_id=cs_context.get("tenant_id", "default"),
     )
 
     try:

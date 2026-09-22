@@ -38,6 +38,8 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
 
     session_id = state.get("session_id", "default")
     user_id = state.get("user_id", "anonymous")
+    # tenant 在显式转人工直通分支也可能用到（_build_cs_context 隔离维度）
+    tenant_id = str(state.get("tenant_id") or "default")
 
     # ── 显式触发直通（确定性过滤层，2026-09-17）─────────────────────
     # 转人工类指令（"转人工"/"找真人"/"转接人工客服"…见 handoff.py 关键词表）
@@ -86,7 +88,55 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
             else:
                 _stamp_variant(session_id, "treatment")
 
-            cs_result = get_cs_router().route(query, detection)
+            # ── 缺陷9（2026-09-23）：实体感知路由，必须在 Router 判域前 ──
+            # 两类解析，均把订单号注入 cs_route.metadata：
+            #   1. explicit_entity：「查 MO-3C052B3A」无域中文关键词时
+            #      coarse 落 UNKNOWN→knowledge 拒答；提取订单号以规范化
+            #      query「查询订单 X」路由（→ query expert 精确查单）。
+            #   2. inherited_entity：「那它到哪了」+ 上一轮唯一订单 →
+            #      resolved_query 继承（落 TRANSACTION/t_order_status）。
+            # 优先级：显式实体 > 继承实体；负向语境/无上下文时返回 None，
+            # 原始 query 照常路由；pending 补槽在 CS 图内更早拦截，不受
+            # 影响。零 LLM，纯正则。
+            resolution = None
+            route_query = query
+            route_detection = detection
+            try:
+                from backend.customer_service.context_resolver import (
+                    resolve_explicit_order_route,
+                    resolve_turn_reference,
+                )
+
+                resolution = resolve_turn_reference(
+                    query,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+                if resolution is None:
+                    resolution = resolve_explicit_order_route(query)
+            except Exception as exc:
+                logger.warning(f"[CsPrefilter] context resolver failed: {exc}")
+            if resolution is not None:
+                route_query = resolution.resolved_query
+                route_detection = detect_cached(route_query)
+
+            cs_result = get_cs_router().route(route_query, route_detection)
+            if resolution is not None:
+                cs_result.metadata["order_id"] = resolution.order_id
+                cs_result.metadata["context_original_query"] = (
+                    resolution.original_query
+                )
+                try:
+                    from backend.observability.tracer import trace_collector
+
+                    _t = trace_collector.current()
+                    if _t is not None:
+                        _t.metadata["cs_context_resolution"] = (
+                            resolution.trace_fields()
+                        )
+                except Exception:
+                    pass
 
     from backend.observability.metrics import record_cs_intent
     record_cs_intent(cs_result.intent)
@@ -141,7 +191,9 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
     return {
         "route_decision": None,
         "route_mode": "customer_service",
-        "cs_context": _build_cs_context(cs_result, cs_target, user_id, session_id),
+        "cs_context": _build_cs_context(
+            cs_result, cs_target, user_id, session_id, tenant_id
+        ),
     }
 
 
@@ -194,13 +246,15 @@ def _build_explicit_handoff_result(trigger) -> "CSRouteResult":
 
 
 def _build_cs_context(cs_result, cs_target: str,
-                      authenticated_user_id: str, session_id: str) -> dict:
+                      authenticated_user_id: str, session_id: str,
+                      tenant_id: str = "") -> dict:
     from backend.customer_service.context import build_cs_context
     return build_cs_context(
         cs_route=cs_result.model_dump(),
         cs_target=cs_target,
         authenticated_user_id=authenticated_user_id,
         session_id=session_id,
+        tenant_id=tenant_id,
     )
 
 

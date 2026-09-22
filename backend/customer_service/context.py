@@ -31,6 +31,7 @@ class CSContext(TypedDict, total=False):
     authenticated_user_id: str
     session_id: str
     conversation_id: str
+    tenant_id: str
 
     # ── CS Nodes 写入 ──
     answer_meta: dict
@@ -59,11 +60,13 @@ def build_cs_context(
     authenticated_user_id: str,
     session_id: str,
     conversation_id: str | None = None,
+    tenant_id: str = "",
 ) -> CSContext:
     """构建初始 CSContext（由 Router 调用）
 
     Router 节点在 CS 域命中后调用，构建完整的初始 cs_context。
     conversation_id 默认等于 session_id（当前实现）。
+    tenant_id 供 CS 图内业务实体上下文（缺陷9）做隔离维度。
     """
     return CSContext(
         cs_route=cs_route,
@@ -71,6 +74,7 @@ def build_cs_context(
         authenticated_user_id=authenticated_user_id,
         session_id=session_id,
         conversation_id=conversation_id or session_id,
+        tenant_id=tenant_id or "default",
     )
 
 

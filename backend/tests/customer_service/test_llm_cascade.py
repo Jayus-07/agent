@@ -126,7 +126,7 @@ class TestExecuteQueryCompound:
         cs_route = {"intent": "t_order_status"}
         calls = []
 
-        def fake_dispatch(user_id, intent, question, route):
+        def fake_dispatch(user_id, intent, question, route, **kwargs):
             calls.append(intent)
             return f"结果-{intent}"
 

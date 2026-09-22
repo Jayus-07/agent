@@ -63,9 +63,19 @@ class TestClassifyCascade:
         assert "default_fallback" in reason
         assert conf > 0.3  # P2.1: 对齐 CS_CONFIDENCE_CAUTIOUS(0.6)
 
-    def test_aftersales_falls_to_default(self):
+    def test_aftersales_action_words_hit_domain_rules(self):
+        """缺陷6/STOP B(2026-09-23):AFTER_SALES 域规则化后「退款」命中
+        as_refund 规则（意图相同，证据从域默认升级为域专属规则）。"""
         fr = CSFineRouter()
         intent, conf, reason = fr.classify("怎么退款", CSDomain.AFTER_SALES)
+        assert intent == "as_refund"
+        assert reason.startswith("rule:")
+
+    def test_aftersales_falls_to_default(self):
+        """真正无域关键词的售后语句仍落域默认意图（default_fallback 分支
+        本身不被规则化消灭）。"""
+        fr = CSFineRouter()
+        intent, conf, reason = fr.classify("这个售后问题帮我看看", CSDomain.AFTER_SALES)
         assert intent == "as_refund"
         assert "default_fallback" in reason
 
