@@ -348,6 +348,33 @@ def claim_for_resume(task_id: str, expected: TaskStatus) -> bool:
         return cur.rowcount > 0
 
 
+def mark_cancelled_if_status(task_id: str, expected: TaskStatus, *,
+                             progress: str = "已取消",
+                             error_message: str = "用户取消") -> bool:
+    """按预期状态原子落 CANCELLED（Phase1 Step6 队列内/暂停态取消）。
+
+    第五条例外通道（原生条件 SQL，与状态机白名单一致：PENDING/PAUSED/
+    WAITING_USER→CANCELLED）。竞态回落由调用方负责——不得经 update_status
+    的并发重判直写：把刚被拾取的 RUNNING 行直标 CANCELLED 会让在跑的
+    Worker 无从感知（它必须经 Redis 标志在节点边界自行停下）。
+    竞态失败（rowcount=0）= 状态已变，调用方应重读后走标志路径。
+    终态字段对齐 update_status：finished_at + duration 补算。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, progress = %s, error_message = %s, "
+            "finished_at = now(), updated_at = now(), "
+            "duration_ms = CASE WHEN started_at IS NOT NULL THEN "
+            "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
+            "ELSE duration_ms END "
+            "WHERE id = %s AND status = %s",
+            (TaskStatus.CANCELLED.value, progress[:500],
+             error_message[:2000], task_id, expected.value),
+        )
+        return cur.rowcount > 0
+
+
 def increment_retry(task_id: str) -> int:
     """重试计数 +1，返回新值（Celery self.request.retries 的 DB 侧镜像）。"""
     ensure_schema()

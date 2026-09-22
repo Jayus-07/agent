@@ -158,6 +158,57 @@ def enqueue_task(record: TaskRecord) -> str | None:
         raise
 
 
+def cancel_task(task_id: str) -> dict:
+    """取消任务（Phase1 Step6 编排入口，幂等）。
+
+    语义：不强杀当前原子节点——RUNNING 中取消时 Worker 在当前节点完成后
+    的边界停下，后续节点不得开始；checkpoint 与已完成结果保留；
+    CANCELLED 为终态，resume 被明确拒绝。
+
+    - PENDING / PAUSED / WAITING_USER：原子落库 CANCELLED（不经 Worker），
+      并对队列内消息发 revoke；竞态（恰好被拾取）回落标志路径
+    - RUNNING：置 Redis 取消标志（节点边界生效），Worker 捕获后落 CANCELLED
+    - 终态（含重复 cancel）：幂等返回 already
+
+    返回 {"ok", "already", "status", "mode": db|flag}。
+    """
+    from backend.services import task_service
+
+    record = task_service.get_task(task_id)
+    if record is None:
+        raise LookupError(f"task not found: {task_id}")
+    if record.status.is_terminal():
+        return {"ok": True, "already": True, "status": record.status.value}
+
+    # 队列内消息直接失效（已在执行则 revoke 无效，幂等无害）
+    _revoke_queued(task_id)
+
+    if record.status in (TaskStatus.PENDING, TaskStatus.PAUSED,
+                         TaskStatus.WAITING_USER):
+        if task_service.mark_cancelled_if_status(task_id, record.status):
+            clear_flags(task_id)
+            publish_event(task_id, "cancelled",
+                          node=record.current_node or "queued",
+                          message="任务已取消")
+            return {"ok": True, "already": False, "status": "CANCELLED",
+                    "mode": "db"}
+        # 竞态：读状态后恰好被拾取/恢复 → 回落标志路径
+        record = task_service.get_task(task_id)
+        if record is None:
+            raise LookupError(f"task not found: {task_id}")
+        if record.status.is_terminal():
+            return {"ok": True, "already": True,
+                    "status": record.status.value}
+
+    ok = request_cancel(task_id)
+    if not ok:
+        logger.error("[TaskManager] Redis 不可用，取消标志无法下发: %s", task_id)
+        return {"ok": False, "already": False,
+                "status": record.status.value, "mode": "flag"}
+    return {"ok": True, "already": False, "status": record.status.value,
+            "mode": "flag"}
+
+
 def resume_task(task_id: str, user_input: str = "",
                 *, allow_failed: bool = False) -> TaskRecord:
     """恢复任务（Phase1 Step5：原子认领，重复 resume 不产生第二个执行链）。
