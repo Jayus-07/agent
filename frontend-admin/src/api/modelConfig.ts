@@ -150,6 +150,24 @@ export async function saveModelRole(role: string, modelName: string): Promise<Re
   })
 }
 
+/** 管理员手动触发单模型健康探测（同步执行一次极低成本探测，结果写缓存）。
+ *
+ *  后端 `POST /sys/model-health/check`：模型未在注册表登记时返回 404。
+ */
+export async function checkModelHealth(
+  modelName: string,
+): Promise<{ status: string; latencyMs?: number; error?: string }> {
+  return mutationRequest<{ status: string; latencyMs?: number; error?: string }>(
+    '/api/sys/model-health/check',
+    {
+      operation: `model-health-check:${modelName}`,
+      method: 'POST',
+      body: { modelName },
+      timeout: 30000,
+    },
+  )
+}
+
 /** 角色运行策略写入（治理改造 2026-09-22；后端硬校验 embedding 禁止 fallback）。 */
 export async function saveModelRolePolicy(
   role: string,
