@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from backend.config import ALLOW_UNAUTHENTICATED, ENVIRONMENT
 from backend.services.sys_config import get_mode
@@ -422,6 +422,25 @@ async def require_rag_user(request: Request):
     from backend.app.api.identity import require_identity
 
     return require_identity(request)
+
+
+def get_principal(request: Request):
+    """统一主体依赖（P1 授权收口）：路由声明 `principal = Depends(get_principal)`
+    即得可信 Principal，不再自行解析身份头/推导 subject_type。
+
+    FastAPI 对同一请求内的依赖天然缓存 → 每 HTTP run 只解析一次。
+    """
+    from backend.app.api.identity import resolve_principal
+
+    return resolve_principal(request)
+
+
+def get_authorization_context(principal=Depends(get_principal)):
+    """统一授权依赖（P2）：allowed_kb_ids / permission_codes / data_scope
+    的唯一构建点（纯内存计算，毫秒级；Depends 缓存保证每请求只构建一次）。"""
+    from backend.security.authorization import build_authorization_context
+
+    return build_authorization_context(principal)
 
 
 async def require_rag_editor(request: Request):

@@ -121,3 +121,45 @@ def require_identity(request: Request) -> Identity:
     if not ident.authenticated:
         raise HTTPException(status_code=401, detail="未认证：缺少网关注入的身份头")
     return ident
+
+
+def resolve_principal(request: Request) -> "Principal":
+    """统一主体入口（P1 授权收口）：Identity → Principal，RAG 等业务模块
+    只接 Principal，不再自行推导 subject_type（谁/哪租户/哪部门/什么角色
+    只有一个权威答案）。
+
+    安全边界与 resolve_identity 相同：header/strict 模式只认网关验签后
+    注入的身份头，请求体身份字段永不参与构造（客户端只能提请求，不能
+    声明身份）。subject_type 规则收口在 security/principal.derive_
+    subject_type——已认证=employee（department 只是组织属性），未认证=
+    customer fail-safe。
+    """
+    from backend.security.principal import Principal, derive_subject_type
+
+    ident = _from_headers(request)
+    return Principal(
+        user_id=ident.user_id,
+        user_name=ident.user_name,
+        tenant_id=ident.tenant_id,
+        department=ident.department,
+        roles=ident.roles,
+        permissions=ident.permissions,
+        subject_type=derive_subject_type(authenticated=ident.authenticated),
+        authenticated=ident.authenticated,
+        auth_type=ident.auth_type,
+        source=ident.source,
+    )
+
+
+def require_principal(request: Request) -> "Principal":
+    """strict 语义的主体入口：未认证直接 401，认证后返回 Principal。
+
+    RAG 路由既有门禁语义（require_identity 的 401）+ 统一主体的组合，
+    供业务路由一行替换「require_identity + 内联 subject_type 推导」。
+    """
+    from fastapi import HTTPException
+
+    principal = resolve_principal(request)
+    if not principal.authenticated:
+        raise HTTPException(status_code=401, detail="未认证：缺少网关注入的身份头")
+    return principal
