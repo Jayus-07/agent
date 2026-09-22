@@ -75,6 +75,7 @@ class MultiAgentSystem:
         domain_hint: str = "",
         tenant_id: str = "",
         idempotency_key: str = "",
+        roles: tuple[str, ...] = (),
     ) -> str:
         """处理用户问题，返回最终 Markdown 回答。
 
@@ -97,6 +98,7 @@ class MultiAgentSystem:
             domain_hint=domain_hint,
             tenant_id=tenant_id,
             idempotency_key=idempotency_key,
+            roles=roles,
         ))
 
         answer = ""
@@ -134,6 +136,7 @@ class MultiAgentSystem:
         domain_hint: str = "",
         tenant_id: str = "",
         idempotency_key: str = "",
+        roles: tuple[str, ...] = (),
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。委托 GraphRunner 统一执行核心，过滤内部事件。
 
@@ -152,7 +155,8 @@ class MultiAgentSystem:
                 model=model,
                 domain_hint=domain_hint,
                 tenant_id=tenant_id,
-                idempotency_key=idempotency_key):
+                idempotency_key=idempotency_key,
+                roles=roles):
             if evt.get("event") == _ANSWER_EVENT:
                 continue  # 内部事件（ask 用），不属于 SSE 协议
             yield evt

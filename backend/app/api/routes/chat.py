@@ -169,7 +169,8 @@ async def chat(req: ChatRequest, request: Request,
             user_id=user_id, department=ident.department,
             permissions=ident.permissions, model=req.model or "",
             domain_hint=req.domain_hint or "", tenant_id=ident.tenant_id,
-            idempotency_key=(request.headers.get("Idempotency-Key") or "").strip())
+            idempotency_key=(request.headers.get("Idempotency-Key") or "").strip(),
+            roles=ident.roles)
         chat_request_total.labels(status="ok").inc()
         return ChatResponse(
             answer=answer,
@@ -324,6 +325,7 @@ async def chat_stream(
                 domain_hint=req.domain_hint or "",
                 tenant_id=ident.tenant_id,
                 idempotency_key=(r.headers.get("Idempotency-Key") or "").strip(),
+                roles=ident.roles,
             ):
                 if stop_event.is_set():
                     break

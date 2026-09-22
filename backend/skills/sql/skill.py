@@ -38,6 +38,31 @@ _DEFAULT_MAX_RETRIES = 2
 _DEFAULT_TIMEOUT = 60
 
 
+def _build_sql_policy_context(state: dict):
+    """从图状态构造 SQL 策略上下文（STOP B 身份透传）。
+
+    生产链路 runner 恒写 request_context（实例或 checkpoint_safe dict），
+    据此装配 SQLPolicyContext → 权限门 + 表域 + scope 注入生效
+    （guest/无权限主体会被权限门 fail-closed 拒绝）。
+    state 无 request_context（旧路径/测试假 state）返回 None = 授权未启用
+    旧行为——与 get_context_from_state 的 None 语义一致，不虚构身份。
+    """
+    from backend.orchestration.request_context import get_context_from_state
+
+    ctx = get_context_from_state(state)
+    if ctx is None:
+        return None
+    from backend.sql.policy import build_sql_policy_context
+
+    return build_sql_policy_context(
+        user_id=ctx.user_id or "",
+        department=ctx.department or "",
+        tenant_id=ctx.tenant_id or "",
+        roles=tuple(ctx.roles or ()),
+        data_scope=ctx.data_scope or None,
+    )
+
+
 def _agent_result_to_pydantic(result: AgentSQLResult) -> SQLResult:
     """将 SQLAgent 的 dataclass SQLResult 转换为 Skill 层 Pydantic SQLResult。
 
@@ -192,8 +217,12 @@ class SQLSkill(BaseSkill):
 
             sr["retries"] = attempt
             try:
+                # STOP B：策略上下文随状态装配（无 request_context 时 None =
+                # 旧行为），权限/表域/scope 由 SQLAgent 内部 Guard 强制
+                policy_ctx = _build_sql_policy_context(state)
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(agent.ask_struct, question),
+                    asyncio.to_thread(
+                        agent.ask_struct, question, policy=policy_ctx),
                     timeout=timeout,
                 )
                 last_result = result

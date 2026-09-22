@@ -18,18 +18,23 @@ data_scope），不再自行推导。单一计算点：
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from dataclasses import dataclass
 
 from backend.security.principal import Principal
 
 # 角色 → 权限点（最小集合，与既有角色枚举 viewer/editor/admin 对齐；
 # RBAC 管理面已在 deps/rbac.py 按角色闸，此处给业务层统一 code 语义）
+# sql.read（2026-09-23 SQL Agent 生产收口 STOP B，决策 D3）：
+#   editor/admin 可用 SQL 数据分析，viewer 不含 → SQL 层消费
+#   has_permission("sql.read") 拒绝。映射只在此处，SQL 层禁止自判角色。
 ROLE_PERMISSION_CODES: dict[str, frozenset[str]] = {
     "viewer": frozenset({"rag.read"}),
-    "editor": frozenset({"rag.read", "rag.upload", "rag.review"}),
+    "editor": frozenset({"rag.read", "rag.upload", "rag.review", "sql.read"}),
     "admin": frozenset({
         "rag.read", "rag.upload", "rag.review", "rag.admin",
         "admin.users.read", "admin.users.write",
+        "sql.read",
     }),
 }
 
@@ -81,6 +86,47 @@ def _widest_data_scope(roles: tuple[str, ...]) -> str | None:
         if candidate is not None and _DATA_SCOPE_RANK[candidate] > rank:
             scope, rank = candidate, _DATA_SCOPE_RANK[candidate]
     return scope
+
+
+def widest_data_scope(roles: tuple[str, ...]) -> str | None:
+    """角色 → data_scope 的公开推导入口（多角色取最宽）。
+
+    图通道（runner 入口）用它把 roles 折算成可随 checkpoint 序列化的
+    data_scope 字段；推导规则唯一存在于本模块，消费方不得自行判角色。
+    """
+    return _widest_data_scope(roles)
+
+
+def build_tool_authorization_context(
+    *,
+    user_id: str,
+    department: str = "",
+    tenant_id: str = "",
+    roles: tuple[str, ...] = (),
+    data_scope: str | None = None,
+) -> AuthorizationContext:
+    """图/Tool 通道装配点：可信身份字段 → AuthorizationContext。
+
+    无 HTTP Request 可用时（graph state / Tool contextvars）的唯一构建
+    入口，语义与 HTTP 通道 build_authorization_context 完全一致：
+    authenticated/subject_type 由 user_id 统一推导，权限点只从 roles 推导。
+
+    data_scope：入口已按 roles 算好并随状态透传时直接采用（同一推导
+    结果的透传，非第二套逻辑）；缺省回退 _widest_data_scope(roles)。
+    """
+    from backend.security.principal import resolve_tool_principal
+
+    principal = resolve_tool_principal(
+        user_id=user_id,
+        department=department,
+        tenant_id=tenant_id,
+        roles=roles,
+    )
+    ctx = build_authorization_context(principal)
+    effective_scope = data_scope or _widest_data_scope(principal.roles)
+    if effective_scope != ctx.data_scope:
+        ctx = replace(ctx, data_scope=effective_scope)
+    return ctx
 
 
 def build_authorization_context(principal: Principal) -> AuthorizationContext:

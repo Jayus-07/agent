@@ -83,6 +83,7 @@ def derive_subject_type(*, authenticated: bool,
 def resolve_tool_principal(*, user_id: Any, department: Any = "",
                            permissions: tuple[str, ...] | None = None,
                            tenant_id: Any = "",
+                           roles: tuple[str, ...] = (),
                            failsafe_customer: bool | None = None) -> Principal:
     """图/Tool 通道主体解析（contextvars → Principal）。
 
@@ -91,6 +92,10 @@ def resolve_tool_principal(*, user_id: Any, department: Any = "",
       - 已登录未声明部门 → employee + 空部门（只见 "all" 库）
       - 未登录 → customer fail-safe（RAG_TOOL_FAILSAFE_CUSTOMER=false
         回滚为未声明主体）
+
+    roles（2026-09-23 SQL 收口 STOP B）：图通道把网关验签后的 JWT roles
+    随 RequestContext 透传，授权层据它推导 permission_codes/data_scope；
+    本函数只透传不做任何角色判断（角色语义唯一权威在 authorization.py）。
     """
     uid = str(user_id or "").strip()
     authenticated = uid not in _UNAUTHENTICATED_USER_IDS
@@ -100,6 +105,7 @@ def resolve_tool_principal(*, user_id: Any, department: Any = "",
         user_id=uid,
         department=str(department or "").strip(),
         tenant_id=str(tenant_id or "").strip(),
+        roles=tuple(roles),
         permissions=None if permissions is None else tuple(permissions),
         subject_type=derive_subject_type(
             authenticated=authenticated, failsafe_customer=failsafe_customer),

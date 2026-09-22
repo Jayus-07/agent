@@ -5,13 +5,30 @@ schema_loader.py — 多业务域 schema 加载器
   - 多 schema（product / order / inventory / customer / crawler / finance / ai）
   - 表名以 `schema.table` 全限定形式加载
   - 反向索引：schema → [tables]（供 router / validator 使用）
+  - 表数据域策略（table_policies → TablePolicy，供 SQLPolicyGuard 消费）
 
 所有安全策略集中在 schema_config.py，本模块只做加载与索引构建。
 """
+from dataclasses import dataclass
 from typing import Dict, List, Set, Any
 
 from backend.config import SQL_ROW_SECURITY_ENABLED
 from backend.sql.data.schema_config import SCHEMA_CONFIG
+
+
+@dataclass(frozen=True)
+class TablePolicy:
+    """单表数据域策略（schema_config.table_policies 的类型化形态）。
+
+    语义见 schema_config.py「表数据域策略」段注释（STOP B 决策 D1-D4）：
+    data_domain ∈ shared | personal | internal；三个 *_column 是 scope
+    注入能力位（声明才注入，不虚构不存在的列）。
+    """
+
+    data_domain: str = "shared"
+    tenant_column: str | None = None
+    department_column: str | None = None
+    self_column: str | None = None
 
 
 class SchemaLoader:
@@ -31,6 +48,12 @@ class SchemaLoader:
         for qualified_name in self.allowed_tables:
             schema_name = qualified_name.split(".", 1)[0]
             self._tables_by_schema.setdefault(schema_name, set()).add(qualified_name)
+
+        # — 表数据域策略（未登记表默认 shared / 无归属列，向后兼容）—
+        self.table_policies: Dict[str, TablePolicy] = {
+            qname: TablePolicy(**cfg)
+            for qname, cfg in self._config.get("table_policies", {}).items()
+        }
 
         # — 敏感列 / 脱敏列 / 行级安全 / 黑名单 / 限制 —
         self.sensitive_columns: Set[str] = set(self._config["sensitive_columns"])
@@ -119,12 +142,38 @@ class SchemaLoader:
         return self.row_security.get(qualified_name, {})
 
     # =================================================
+    # 表数据域策略（SQLPolicyGuard 消费）
+    # =================================================
+
+    def get_table_policy(self, qualified_name: str) -> TablePolicy:
+        """按 schema-qualified 或裸表名取表策略。
+
+        匹配顺序与 row_security 一致：qualified 命中 → 裸名精确 →
+        裸名反向匹配限定键（orders → order.orders）。
+        未登记表返回默认策略（shared / 无归属列）——白名单外的表在
+        validator Layer 2 已被拒绝，这里只服务已登记表。
+        """
+        qname = qualified_name.lower()
+        if qname in self.table_policies:
+            return self.table_policies[qname]
+        bare = self.split_qualified(qname)[1]
+        for key, policy in self.table_policies.items():
+            if key == bare or key.endswith(f".{bare}"):
+                return policy
+        return TablePolicy()
+
+    # =================================================
     # 动态表注册（demo/测试用，未来可对接 INFORMATION_SCHEMA）
     # =================================================
 
     def register_table(self, qualified_name: str, columns: Dict[str, str],
-                       description: str = "") -> None:
-        """注册临时表（demo 用）。qualified_name 形如 `tenant.tmp_orders`。"""
+                       description: str = "",
+                       policy: TablePolicy | None = None) -> None:
+        """注册临时表（demo 用）。qualified_name 形如 `tenant.tmp_orders`。
+
+        policy：同步登记数据域策略（fixture 测试 tenant/department 列用）；
+        缺省默认策略（shared / 无归属列）。
+        """
         qname = qualified_name.lower()
         schema_name = qname.split(".", 1)[0] if "." in qname else "public"
         if schema_name not in self.allowed_schemas and schema_name != "public":
@@ -135,6 +184,8 @@ class SchemaLoader:
             "columns": columns,
             "description": description or f"动态注册表: {qualified_name}",
         }
+        if policy is not None:
+            self.table_policies[qname] = policy
 
 
 # 全局单例

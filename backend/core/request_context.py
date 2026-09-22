@@ -122,6 +122,14 @@ class RequestContext:
     # 员工部门（检索侧授权用）：请求体/网关注头带入；空 = 未声明，
     # RAG 工具按 fail-safe 以 customer 主体检索（对客最严格集合）
     department: str = ""
+    # 网关验签后的 JWT 角色（viewer/editor/admin），授权层推导
+    # permission_codes/data_scope 的唯一输入；空 = 未声明（无权限点）。
+    # 只透传不判定——角色语义唯一权威在 security/authorization.py。
+    roles: tuple[str, ...] = ()
+    # 数据范围（all/department/self）：入口按 roles 经 widest_data_scope
+    # 折算后随状态透传（checkpoint 可序列化）；"" = 未声明 → SQL 等消费方
+    # fail-closed 拒绝，不得静默放大为 all。
+    data_scope: str = ""
     # 主体类型（customer/employee）：检索授权第一属性，入口解析一次下游只读；
     # "" = 未声明主体 → 授权未启用（旧行为）。图路径由 RAG 工具层按
     # fail-safe 规则推导后经 pipeline.ask 声明（见 tools/rag.py）。
@@ -198,6 +206,8 @@ class RequestContext:
             "idempotency_key": self.idempotency_key,
             "kb_id": self.kb_id,
             "department": self.department,
+            "roles": self.roles,
+            "data_scope": self.data_scope,
             "subject_type": self.subject_type,
             "permissions": self.permissions,
             "model": self.model,

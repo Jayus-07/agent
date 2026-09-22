@@ -52,6 +52,8 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
             idempotency_key=ctx.get("idempotency_key", ""),
             kb_id=ctx.get("kb_id", "default"),
             department=ctx.get("department", ""),
+            roles=tuple(ctx.get("roles") or ()),
+            data_scope=ctx.get("data_scope", ""),
             subject_type=ctx.get("subject_type", ""),
             permissions=tuple(ctx["permissions"]) if ctx.get("permissions") is not None else None,
             model=ctx.get("model", ""),

@@ -231,6 +231,7 @@ class GraphRunner:
         domain_hint: str = "",
         tenant_id: str = "",
         idempotency_key: str = "",
+        roles: tuple[str, ...] = (),
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
@@ -461,10 +462,15 @@ class GraphRunner:
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
         # deadline：在线请求统一预算（tool_runtime 治理），后台/测试路径无此对象不受约束
         from backend.core.tool_runtime.deadline import RequestDeadline
+        # roles → data_scope：authorization 单一来源折算，随 checkpoint_safe
+        # 序列化（SQL 等数据面消费）；未声明角色 → data_scope 为空（消费方 fail-closed）
+        from backend.security.authorization import widest_data_scope
         request_ctx = RequestContext(
             session_id=session_id, user_id=user_id, kb_id=kb_id,
             tenant_id=tenant_id, idempotency_key=idempotency_key,
             department=department, permissions=permissions,
+            roles=tuple(roles),
+            data_scope=widest_data_scope(tuple(roles)) or "",
             trace=trace, model=model,
             deadline=RequestDeadline.started_now())
         ctx = {

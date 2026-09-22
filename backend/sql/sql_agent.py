@@ -9,9 +9,17 @@ sql_agent.py — SQL Agent 主编排器
 返回契约 (A 段重构)：
   - `ask(question)`     — 旧入口，返回 Markdown 字符串（向后兼容 tools 层）
   - `ask_struct(question)` — 新入口，返回 SQLResult（推荐给 SQLSkill）
+
+策略链（2026-09-23 SQL 收口 STOP B）：
+  - `ask_struct(question, policy=SQLPolicyContext)` — 生产链路：权限门 +
+    表域判定 + 三维 scope 注入（backend/sql/policy.py），SQLPolicyError
+    为终态拒绝；重试仍重走 Guard。
+  - policy=None（评测/脚本/未接上下文调用）— 旧行为：仅 6 层校验 +
+    旧 row_security 注入（受 SQL_ROW_SECURITY_ENABLED 控制）。
 """
 from typing import Optional
 
+from backend.sql.policy import SQLPolicyContext
 from backend.sql.router import select_tables
 from backend.sql.sql_generator import generate_sql
 from backend.sql.sql_validator import sql_validator, ValidationError
@@ -59,16 +67,24 @@ class SQLAgent:
         self,
         question: str,
         current_user_id: Optional[int] = None,
+        policy: Optional["SQLPolicyContext"] = None,
     ) -> SQLResult:
         """处理自然语言问题并返回 SQLResult。
+
+        policy 给定 → 策略链（权限门/表域/scope 注入，见模块 docstring）；
+        policy=None → 旧行为（未声明主体 = 授权未启用，评测/脚本路径）。
 
         错误语义约定：
           - router 抛任何异常 → status="failed", error_type="router_error"
           - router 返回 []     → status="no_table"
           - ValidationError    → status="validation_error"
+          - SQLPolicyError     → status="permission_denied"（终态，不重试）
           - RowSecurityError   → status="permission_denied"
           - executor 返回的 status 透传（success / no_data / timeout / syntax_error / permission_denied / failed）
         """
+        if policy is not None:
+            return self._ask_struct_with_policy(question, policy)
+
         logger.info(f"[SQLAgent] 收到问题: {question[:80]}... (user={current_user_id})")
 
         user_context = {}
@@ -167,6 +183,119 @@ class SQLAgent:
                 )
 
         # 极端兜底（理论上不可达；防御性返回）
+        if last_result is not None:
+            return last_result
+        return SQLResult.failed(
+            status="failed",
+            error="查询失败，已达到最大重试次数。",
+            error_type="retry_exhausted",
+        )
+
+    # =================================================
+    # 策略链（policy 链：权限门 + 表域判定 + 三维 scope 注入）
+    # =================================================
+
+    def _ask_struct_with_policy(
+        self,
+        question: str,
+        policy: "SQLPolicyContext",
+    ) -> SQLResult:
+        """生产策略链路。与旧行为的差异：
+
+        - 执行前过 SQLPolicyGuard（权限门/表域/scope 注入）；
+        - SQLPolicyError 是终态拒绝（对外只回安全文案，原因进日志），
+          不进入「带反馈重试」——安全拒绝不允许模型绕过；
+        - ValidationError（解析/别名等语法类）保留既有有限重试，
+          且每次重试重新走 Guard；
+        - scope 注入取代旧 inject_row_filter（避免 customer_id 双重注入）。
+        """
+        from backend.sql.policy import SQLPolicyGuard, SQLPolicyError
+
+        logger.info(
+            f"[SQLAgent:policy] 收到问题: {question[:80]}... "
+            f"(user={policy.user_id}, scope={policy.data_scope}, "
+            f"dept={policy.department or '-'}, tenant={policy.tenant_id or '-'})"
+        )
+
+        # — Step 1: 路由选表（与旧链路一致）—
+        try:
+            table_names = select_tables(question)
+        except Exception as e:
+            logger.error(f"[SQLAgent:policy] 表路由失败: {e}")
+            return SQLResult.failed(
+                status="failed",
+                error=f"内部错误：表路由失败 {e}",
+                error_type="router_error",
+            )
+        if not table_names:
+            return SQLResult.failed(
+                status="no_table",
+                error="未找到相关数据表，请调整问题后重试。",
+                error_type="no_table",
+            )
+
+        # — Step 2-5: 生成 + Guard 循环 —
+        guard = SQLPolicyGuard()
+        feedback: str | None = None
+        sql: str | None = None
+        last_result: SQLResult | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                sql = generate_sql(question, table_names, feedback=feedback)
+
+                guarded = guard.validate_and_rewrite(sql, policy)
+                result = execute_sql_struct(
+                    guarded.executable_sql, self.db_config,
+                    params=guarded.params,
+                )
+                last_result = result
+
+                if result.status in ("success", "no_data"):
+                    return result
+                # 语法/schema/权限类不可重试；timeout/failed 可重试
+                if result.status in ("validation_error", "permission_denied", "syntax_error"):
+                    return result
+                if attempt < self.max_retries:
+                    feedback = f"上次生成的 SQL:\n{sql}\n执行报错: {result.error}"
+                    continue
+                return result
+
+            except SQLPolicyError as e:
+                # 安全拒绝 = 终态（对外安全文案，详细原因只进日志）
+                logger.warning(
+                    f"[SQLAgent:policy] 策略拒绝 code={e.code}: {e}")
+                return SQLResult.failed(
+                    status="permission_denied",
+                    error=e.user_text,
+                    error_type="row_security",
+                )
+
+            except ValidationError as e:
+                logger.warning(
+                    f"[SQLAgent:policy] 校验失败 (第{attempt+1}次): {e}")
+                if attempt < self.max_retries:
+                    feedback = (
+                        f"上次生成的 SQL:\n{sql}\n"
+                        f"被安全校验拒绝（{e}），请避免同样问题"
+                    )
+                    continue
+                return SQLResult.failed(
+                    status="validation_error",
+                    error=f"SQL 校验失败: {e}",
+                    error_type="validation",
+                )
+
+            except Exception as e:
+                logger.error(f"[SQLAgent:policy] 执行失败 (第{attempt+1}次): {e}")
+                if attempt < self.max_retries:
+                    feedback = f"执行报错: {e}"
+                    continue
+                return SQLResult.failed(
+                    status="failed",
+                    error=f"查询失败: {e}",
+                    error_type="unknown",
+                )
+
         if last_result is not None:
             return last_result
         return SQLResult.failed(

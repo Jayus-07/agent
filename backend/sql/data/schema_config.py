@@ -261,7 +261,54 @@ SCHEMA_CONFIG: Dict[str, Any] = {
         "customer.customers.name": (1, 0),
     },
 
+    # ── 表数据域策略（2026-09-23 SQL 收口 STOP B，决策 D1-D4 定版）──────
+    # 消费方：backend/sql/policy.py::SQLPolicyGuard（三维 scope 注入引擎）。
+    # data_domain：
+    #   shared    — 平台运营数据，无个人/部门归属 → 持 sql.read 者皆可读
+    #               （department/self 用户同样放行，不虚构归属条件）
+    #   personal  — 存在真实个人归属的表：all 全量；self 按 self_column
+    #               参数化注入；department 无部门列可表达 → fail-closed 拒绝
+    #   internal  — 财务/Agent 运行内部数据（含他人会话内容/商业成本）
+    #               → 仅 data_scope=all 可读（决策 D4）
+    # tenant_column：当前 18 表均无租户列（单租户仓库，结构隔离，决策 D1）；
+    #   该列保留为 Guard 注入能力位——未来表真带租户列时在此登记即可生效，
+    #   all 也不例外（tenant 永远优先）。
+    # department_column：当前无表声明；声明后 department scope 自动注入
+    #   （principal.department 为空 → fail-closed，决策 D2）。
+    # self_column：与当前用户关联的列。order_items/refunds/customer_behavior
+    #   个人归属需跨表 join 才能表达 → 本阶段不登记 self_column，
+    #   self scope 用户查询直接拒绝（不做自动 JOIN 改写，安全优先）。
+    "table_policies": {
+        # ═══ shared（11 表）═══
+        "product.products":               {"data_domain": "shared"},
+        "product.categories":             {"data_domain": "shared"},
+        "product.product_tags":           {"data_domain": "shared"},
+        "inventory.inventory":            {"data_domain": "shared"},
+        "inventory.warehouses":           {"data_domain": "shared"},
+        "inventory.purchase_orders":      {"data_domain": "shared"},
+        "crawler.competitor_products":    {"data_domain": "shared"},
+        "crawler.competitor_price":       {"data_domain": "shared"},
+        "crawler.product_reviews":        {"data_domain": "shared"},
+        "customer.customers":             {"data_domain": "shared"},
+        "customer.customer_behavior":     {"data_domain": "shared"},
+        # ═══ personal（3 表）═══
+        "order.orders": {
+            "data_domain": "personal",
+            "self_column": "customer_id",   # 与旧 row_security 同列；STOP C 收口后 row_security 段退役
+        },
+        "order.order_items":              {"data_domain": "personal"},
+        "order.refunds":                  {"data_domain": "personal"},
+        # ═══ internal（4 表，仅 all）═══
+        "finance.expenses":               {"data_domain": "internal"},
+        "finance.daily_profit":           {"data_domain": "internal"},
+        "ai.agent_tasks":                 {"data_domain": "internal"},
+        "ai.agent_trace":                 {"data_domain": "internal"},
+    },
+
     # ── 行级安全（P1-11 已配置，默认由 SQL_ROW_SECURITY_ENABLED 控制）──
+    # ⚠️ legacy（STOP C 收口对象）：仅服务未接 SQLPolicyContext 的存量调用
+    # （评测 runner / 脚本）。走 SQLPolicyGuard 的新链路按 table_policies
+    # 注入 self 条件，不再读本段——避免 order.orders.customer_id 双重注入。
     # 生产部署设置 SQL_ROW_SECURITY_ENABLED=true 启用；
     # 启用后查询 order.orders 将强制注入 customer_id = current_user_id
     # （参数化，值来自服务端推导的可信用户头 X-User-Id，客户端不可伪造），
