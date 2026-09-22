@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -247,11 +247,25 @@ def _format_conversation(rows: list[tuple[int, str, str]]) -> str:
 
 
 def _invoke_llm_with_timeout(prompt: str):
-    """摘要 LLM 调用（带超时；超时按失败处理，不阻塞调用方）。"""
+    """摘要 LLM 调用（带超时；超时按失败处理，不阻塞调用方）。
+
+    CONTEXT_L5_SUMMARY_MODEL 非空时按模型名覆盖（在 executor 线程内绑定，
+    保留 proxy 的限流/韧性/<think> 剥离/token 统计链路）。Phase 4 实测：
+    默认 LLM 解析指向未配置密钥的模型时摘要必然失败回退（ChatAnthropic
+    validation error），此配置给治理层一个明确的模型指定出口。
+    """
     from backend.infra.llm import llm
 
+    model_name = str(_cfg("CONTEXT_L5_SUMMARY_MODEL", "") or "").strip()
+
+    def _call():
+        if model_name:
+            from backend.infra.llm.proxy import set_request_model
+            set_request_model(model_name)
+        return llm.invoke(prompt)
+
     timeout = float(_cfg("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", 20))
-    future = _llm_executor.submit(llm.invoke, prompt)
+    future = _llm_executor.submit(_call)
     try:
         return future.result(timeout=timeout)
     except FuturesTimeout:

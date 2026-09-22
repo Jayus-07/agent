@@ -66,6 +66,9 @@ CONTEXT_L5_ENABLED = os.getenv("CONTEXT_L5_ENABLED", "true").lower() == "true"
 CONTEXT_L5_TARGET_RATIO = float(os.getenv("CONTEXT_L5_TARGET_RATIO", "0.70"))
 # 摘要 LLM 调用超时（秒）：超时按摘要失败处理，安全回退到裁剪后上下文
 CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", "20"))
+# 摘要 LLM 模型名覆盖（空 = 用默认 LLM）。Phase 4 实测：默认 LLM 解析指向
+# 未配置密钥的模型时摘要必然失败回退，此配置给治理层明确的模型指定出口
+CONTEXT_L5_SUMMARY_MODEL = os.getenv("CONTEXT_L5_SUMMARY_MODEL", "")
 # 增量摘要最小新消息数：少于该条数不值得一次 LLM 调用（跳过本轮 L5）
 CONTEXT_L5_MIN_DELTA_MESSAGES = int(os.getenv("CONTEXT_L5_MIN_DELTA_MESSAGES", "2"))
 # 单次增量摘要最多带多少条新消息进 prompt（防 delta 巨大时 prompt 爆炸）
