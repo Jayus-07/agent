@@ -630,6 +630,28 @@ class GraphRunner:
 
         threading.Thread(target=_worker, daemon=True, name="graph-worker").start()
 
+        def _finalize_trace(status: str, metrics: dict | None = None,
+                            answer: str | None = None) -> None:
+            """trace 幂等收尾（2026-09-23 P0-3）：每轮恰好 finish 一次。
+
+            统一承载四条退出路径：正常完成 / 用户中止（/chat/abort 或 stop）/
+            客户端断连（生成器被 close，GeneratorExit）/ 内部异常。此前各分支
+            各自 _end_root+finish，而「生成器被关闭」路径什么都不执行——该轮
+            trace 永不落库、root span 泄漏在内存 collector 里，中止/断连恰是
+            流式最常见的退出方式。
+            """
+            if ctx.get("trace_finalized"):
+                return
+            ctx["trace_finalized"] = True
+            try:
+                _end_root(trace, status=status, metrics=metrics or {})
+                trace_collector.finish(
+                    trace,
+                    answer if answer is not None else (ctx["final_answer"] or ""),
+                    int((time.time() - start_time) * 1000), "", "")
+            except Exception:
+                logger.debug("[GraphRunner] trace 收尾失败", exc_info=True)
+
         try:
             while True:
                 kind, evt = merged_q.get()
@@ -640,17 +662,10 @@ class GraphRunner:
             # ── 图执行结束后的收尾 ──
             if ctx["aborted"]:
                 yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
-                _end_root(trace, status="error", metrics={"reason": "user_abort"})
-                trace_collector.finish(trace, ctx["final_answer"] or "",
-                                       int((time.time() - start_time) * 1000), "", "")
+                _finalize_trace("error", {"reason": "user_abort"})
                 return
             if ctx["worker_error"]:
-                try:
-                    _end_root(trace, status="error", metrics={"error": "graph_failed"})
-                    trace_collector.finish(trace, ctx["final_answer"] or "",
-                                           int((time.time() - start_time) * 1000), "", "")
-                except Exception:
-                    logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
+                _finalize_trace("error", {"error": "graph_failed"})
                 return
 
             answer = ctx["final_answer"]
@@ -663,6 +678,7 @@ class GraphRunner:
                 yield from emit_delta_events(answer, stop_event)
                 if stop_event is not None and stop_event.is_set():
                     yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
+                    _finalize_trace("error", {"reason": "user_abort"})
                     return
 
             # ── Tracing: 重建 span 树 ──
@@ -677,9 +693,8 @@ class GraphRunner:
                 "cs_context": ctx["cs_context_snapshot"],
             }
             trace_from_state(trace, state_for_trace)
-            _end_root(trace, metrics={"span_count": len(trace.spans) - 1})
-            trace_collector.finish(trace, answer,
-                                   int((time.time() - start_time) * 1000), "", "")
+            _finalize_trace("success", {"span_count": len(trace.spans) - 1},
+                            answer=answer)
 
             _persist_cs_turn_if_needed(
                 ctx["cs_context_snapshot"], session_id, question, answer, trace.id,
@@ -712,18 +727,22 @@ class GraphRunner:
                                   trace_id=trace.id,
                                   context_usage=context_usage)
 
+        except GeneratorExit:
+            # 消费方关闭生成器（客户端断连 / 用户中止后前端停止拉流）：
+            # 生成器挂起在 yield 处收到 GeneratorExit，此前这里不执行任何
+            # 收尾。GeneratorExit 处理内禁止 yield；收尾后必须重新抛出。
+            reason = ("user_abort"
+                      if (stop_event is not None and stop_event.is_set())
+                      or ctx["aborted"] else "client_disconnect")
+            _finalize_trace("error", {"reason": reason})
+            raise
         except Exception as e:
             import traceback as _tb
             logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
             _tb_tail = "\n".join(_tb.format_exc().splitlines()[-12:])
             yield {"event": "error",
                    "data": {"message": f"执行失败: {e}\n{_tb_tail}", "ts": time.time()}}
-            try:
-                _end_root(trace, status="error", metrics={"error": str(e)[:100]})
-                trace_collector.finish(trace, ctx["final_answer"] or "",
-                                       int((time.time() - start_time) * 1000), "", "")
-            except Exception:
-                logger.debug("[P1-10] 错误路径 trace 收尾失败", exc_info=True)
+            _finalize_trace("error", {"error": str(e)[:100]})
         finally:
             # 中止/早期失败路径 final_answer 为空：不落库，避免历史恢复时出现空气泡
             # CS 轮次不落主库：客服域已由 _persist_cs_turn_if_needed 独家落库
