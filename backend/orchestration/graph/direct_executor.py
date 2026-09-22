@@ -237,9 +237,17 @@ def skill_executor_node(state: dict) -> dict:
                 )
                 step_results["direct_0"] = pre_step
                 if pre_step["status"] == "success" and pre_step.get("output"):
-                    state["previous_outputs"] = {
+                    # L3 微压缩：与 supervisor Send 注入同语义（单条超预算同样降级）
+                    from backend.context_budget.micro_compactor import compact_previous_outputs
+                    state["previous_outputs"] = compact_previous_outputs({
                         "direct_0": pre_step["output"],
-                    }
+                    }, meta={
+                        "direct_0": {
+                            "step_id": "direct_0",
+                            "tool": pre_cap,
+                            "status": pre_step["status"],
+                        },
+                    })
                 else:
                     logger.warning(
                         f"[SkillExecutor] 前置步骤 {pre_cap} 未产出数据，"

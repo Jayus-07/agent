@@ -44,6 +44,11 @@ interface ChatState {
   fileOps: { path: string; node: string; step_id: string; ts: number }[]
   /** 工具选择未收敛时的结构化澄清卡片 */
   clarification: ClarificationEvent | null
+  /** 本轮累计上下文压缩节省（context 事件累加；resetStream 清零）。
+   *  仅 UI runtime 提示条用，不入聊天历史。 */
+  contextSavedTokens: number
+  /** 上下文用量快照（done.context_usage，显示「上下文 xx%」） */
+  contextUsage: import('@/lib/types').ContextUsageSnapshot | null
 
   // — 计算属性 —
   currentMessages: () => Message[]
@@ -118,6 +123,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     streamUsage: null,
     fileOps: [],
     clarification: null,
+    contextSavedTokens: 0,
+    contextUsage: null,
 
     // —— 计算属性 ——
     currentMessages: () => {
@@ -221,11 +228,18 @@ export const useChatStore = create<ChatState>((set, get) => {
         let streamUsage = state.streamUsage
         let fileOps = state.fileOps
         let clarification = state.clarification
+        let contextSavedTokens = state.contextSavedTokens
+        let contextUsage = state.contextUsage
         if (isCurrentSession) {
           if (evt.event === 'todo') {
             todoItems = evt.data.items
           } else if (evt.event === 'usage') {
             streamUsage = evt.data
+          } else if (evt.event === 'context') {
+            // 上下文压缩提示条数据：只累加节省量，事件本身不入渲染流
+            contextSavedTokens += evt.data.saved_tokens
+          } else if (evt.event === 'done') {
+            if (evt.data.context_usage) contextUsage = evt.data.context_usage
           } else if (evt.event === 'file') {
             // 文件级去重：同一文件被后续步骤再次触达时以最新记录为准，
             // 且不影响同事件内其他文件（事件级去重会把它们一并吞掉）
@@ -292,6 +306,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
       currentRequestId: null,
       todoItems: [], streamUsage: null, fileOps: [], clarification: null,
+      contextSavedTokens: 0, contextUsage: null,
     }),
 
     // 重新生成：移除尾部 assistant 占位/旧回答（user 提问保留，问题由调用方重发）

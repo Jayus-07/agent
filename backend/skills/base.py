@@ -431,6 +431,15 @@ class BaseSkill(ABC):
                 return
             sr.update(status="success", output=output, error=None, error_type=None,
                       finished_at=time.time())
+            # L1 上下文预算（2026-09-22）：工具结果写入 step_results 前统一
+            # Guard——超 TOOL_INLINE_MAX_TOKENS 降级为预览（含 18 个 Markdown
+            # 老 Tool，它们也走本基类）。校验在 Guard 之前：Guard 产出的预览
+            # 结构不再参与 output 契约校验。
+            output = _apply_tool_result_budget(output, cap, sr["step_id"])
+            if isinstance(output, dict) and output.get("context_compacted"):
+                sr["context_compacted"] = True
+                sr["original_output_tokens"] = output.get("original_tokens")
+            sr["output"] = output
             step_results[sr["step_id"]] = dict(sr)
             elapsed = result.latency_ms / 1000
             logger.info(f"[{self.name}] step={sr['step_id']} 成功 (耗时 {elapsed:.2f}s)")
@@ -531,6 +540,12 @@ class BaseSkill(ABC):
                 sr["error"] = None
                 sr["error_type"] = None
                 sr["finished_at"] = time.time()
+                # L1 上下文预算：与治理路径同语义（校验后、落 step_results 前）
+                output = _apply_tool_result_budget(output, sr["capability"], step_id)
+                if isinstance(output, dict) and output.get("context_compacted"):
+                    sr["context_compacted"] = True
+                    sr["original_output_tokens"] = output.get("original_tokens")
+                sr["output"] = output
                 step_results[step_id] = dict(sr)
 
                 elapsed = sr["finished_at"] - sr.get("started_at", sr["finished_at"])
@@ -595,6 +610,16 @@ class BaseSkill(ABC):
             alert = make_alert(code, {"step_id": step_id, "error": str(last_error)})
             log_degradation(alert)
             logger.error(f"[{self.name}] step={step_id} 最终失败: {last_error}")
+
+
+def _apply_tool_result_budget(output: Any, capability: str, step_id: str) -> Any:
+    """L1 工具结果预算 Guard 的接线点（软失败：Guard 异常不拖垮 Skill 执行）。"""
+    try:
+        from backend.context_budget.tool_guard import guard_tool_result
+        return guard_tool_result(output, capability=capability, step_id=step_id)
+    except Exception:
+        logger.debug("tool result budget guard 失败，原样放行", exc_info=True)
+        return output
 
 
 def _tool_runtime_enabled() -> bool:

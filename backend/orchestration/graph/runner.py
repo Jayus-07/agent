@@ -477,6 +477,17 @@ class GraphRunner:
             # ContextVar 不跨线程：worker 入口整体绑定一次请求上下文；
             # Send 内部线程分支由节点入口的 bind_from_state 覆盖
             request_ctx.bind()
+            # context SSE 事件 sink（L1/L2/L3 压缩发生时发声，2026-09-22）：
+            # worker 线程内挂载（ContextVar 不跨线程继承），退出时还原
+            from backend.context_budget.metrics import (
+                reset_context_sink,
+                set_context_sink,
+            )
+
+            def _context_sink(evt: dict) -> None:
+                merged_q.put(("evt", {"event": "context", "data": evt}))
+
+            _sink_token = set_context_sink(_context_sink)
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
                 # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
@@ -572,6 +583,7 @@ class GraphRunner:
                                       "data": {"message": f"执行失败: {e}\n{_tb_tail}",
                                                "ts": time.time()}}))
             finally:
+                reset_context_sink(_sink_token)
                 reset_stream_sink()
                 merged_q.put(("done", None))
 
@@ -634,10 +646,30 @@ class GraphRunner:
 
             # 内部事件：ask() 从这里取最终回答（SSE 层过滤）
             yield {"event": _ANSWER_EVENT, "data": {"answer": answer}}
+
+            # 上下文用量快照（2026-09-22）：done 携带 context_usage 供前端
+            # 显示「上下文 xx%」。近似口径 = 本轮输入历史 + 步骤产出；
+            # 精确的逐次 LLM preflight 用量见 trace 与 context 事件。
+            context_usage = None
+            try:
+                from backend.context_budget import context_budget as _cb
+                _extra = [
+                    str(sr.get("output"))
+                    for sr in ctx["all_step_results"].values()
+                    if isinstance(sr, dict) and sr.get("output") is not None
+                ]
+                context_usage = _cb.calculate_usage(
+                    messages=initial_state.get("messages"),
+                    extra_texts=_extra,
+                ).to_dict()
+            except Exception:
+                logger.debug("context_usage 计算失败，done 不携带", exc_info=True)
+
             yield make_done_event(answer, ctx["all_step_results"], start_time,
                                   usage=ctx["usage"],
                                   pending_action=ctx.get("cs_pending_action"),
-                                  trace_id=trace.id)
+                                  trace_id=trace.id,
+                                  context_usage=context_usage)
 
         except Exception as e:
             import traceback as _tb

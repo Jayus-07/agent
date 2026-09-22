@@ -13,8 +13,14 @@ from backend.memory.importance import ImportanceScorer
 from backend.memory.retriever import HybridRetriever
 from backend.memory.decay import MemoryDecayService
 from backend.memory.pii_filter import scan_and_sanitize
-from backend.memory.token_budget import trim_messages_to_budget
+from backend.memory.token_budget import (
+    count_message_tokens,
+    count_tokens,
+    trim_messages_to_budget,
+)
 from backend.config import HISTORY_TOKEN_BUDGET
+from backend.config import PREVIOUS_OUTPUTS_MAX_TOKENS
+from backend.context_budget import context_budget
 from langchain_core.messages import SystemMessage
 from backend.shared.logger import logger
 from backend.observability.metrics import (
@@ -137,13 +143,27 @@ class MemoryService:
 
                 # Token 预算裁剪（P3）：L1 条数上限（20 条）挡不住单条超长消息，
                 # 注入摘要/长期记忆后按 token 整体裁剪，防止挤爆 LLM_CONTEXT_LENGTH
+                # 动态预算（2026-09-22，ContextBudgetManager 统一管理）：
+                # HISTORY_TOKEN_BUDGET 只是上限，实际预算 = input_budget
+                # 减去 System 消息 / 当前问题 / previous_outputs 预留后按剩余
+                # 空间动态收缩。只裁 active context，PG 原始消息不受影响。
+                _system_tokens = sum(
+                    count_message_tokens(m)
+                    for m in l1._messages
+                    if type(m).__name__ == "SystemMessage"
+                )
+                _history_budget = context_budget.history_budget(
+                    system_tokens=_system_tokens,
+                    current_query_tokens=count_tokens(query) if query else 0,
+                    reserved_tokens=PREVIOUS_OUTPUTS_MAX_TOKENS,
+                )
                 kept, dropped = trim_messages_to_budget(
-                    l1._messages, HISTORY_TOKEN_BUDGET)
+                    l1._messages, _history_budget)
                 if dropped:
                     l1._messages = kept
                     logger.info(
                         f"[MemoryService] 历史 token 预算裁剪: 丢弃 {dropped} 条旧消息 "
-                        f"(budget={HISTORY_TOKEN_BUDGET})")
+                        f"(budget={_history_budget}, 上限={HISTORY_TOKEN_BUDGET})")
 
                 await db_session.commit()
                 return l1

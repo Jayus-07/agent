@@ -77,6 +77,28 @@ export interface DoneEvent {
   usage?: TokenUsage
   /** P3.1：CS 确认流等待用户点击确认卡片（非空时前端渲染 CSConfirmCard） */
   pending_action?: PendingActionInfo
+  /** 上下文用量快照（2026-09-22 Context Budget）：前端显示「上下文 xx%」 */
+  context_usage?: ContextUsageSnapshot
+}
+
+/** 上下文用量快照（done.context_usage） */
+export interface ContextUsageSnapshot {
+  used_tokens: number
+  input_budget: number
+  remaining_tokens: number
+  usage_ratio: number
+}
+
+/** 上下文压缩事件（2026-09-22 Context Budget，SSE event: context）。
+ *  仅 UI runtime 提示条：不入聊天历史、不落库。 */
+export interface ContextEvent {
+  type: 'context'
+  level: 'L1' | 'L2' | 'L3' | 'L4' | 'L5'
+  action: string
+  before_tokens: number
+  after_tokens: number
+  saved_tokens: number
+  ts: number
 }
 
 /** CS 待确认操作摘要（done 帧 pending_action） */
@@ -154,6 +176,7 @@ export type SSEStreamEvent =
   | { event: 'todo';     data: TodoEvent }
   | { event: 'usage';    data: UsageEvent }
   | { event: 'file';     data: FileEvent }
+  | { event: 'context';  data: ContextEvent }
   | { event: 'clarification'; data: ClarificationEvent }
   /** SSE 保活心跳（后端空闲 >间隔 发 ping 防断流，消费方零语义、不入渲染流） */
   | { event: 'ping';     data: PingEvent }

@@ -33,6 +33,28 @@ L3_PII_FILTER_ENABLED = os.getenv("L3_PII_FILTER_ENABLED", "true").lower() == "t
 L3_DEDUP_COSINE_THRESHOLD = float(os.getenv("L3_DEDUP_COSINE_THRESHOLD", "0.85"))
 L3_SUPERSEDE_THRESHOLD = float(os.getenv("L3_SUPERSEDE_THRESHOLD", "0.92"))
 
+# ── 上下文预算管理（Context Budget Management，2026-09-22）──
+# 统一管理 active context（发给模型的上下文）的 token 预算；原始 chat_messages 不受影响。
+# 完整设计见 docs/2026-09-22-context-budget-management-实施规格.md
+# LLM_CONTEXT_LENGTH 复用 config/llm.py，不在此复制第二份窗口配置。
+CONTEXT_BUDGET_ENABLED = os.getenv("CONTEXT_BUDGET_ENABLED", "true").lower() == "true"
+
+# 输出预留 + 安全余量：input_budget = LLM_CONTEXT_LENGTH - 这两者
+CONTEXT_OUTPUT_RESERVE_TOKENS = int(os.getenv("CONTEXT_OUTPUT_RESERVE_TOKENS", "768"))
+CONTEXT_SAFETY_RESERVE_TOKENS = int(os.getenv("CONTEXT_SAFETY_RESERVE_TOKENS", "256"))
+
+# L1 工具结果预算：单条工具结果超过 TOOL_INLINE_MAX_TOKENS 则降级为预览
+TOOL_INLINE_MAX_TOKENS = int(os.getenv("TOOL_INLINE_MAX_TOKENS", "768"))
+# 预览上限（按 token 截取，非字符）
+TOOL_PREVIEW_MAX_TOKENS = int(os.getenv("TOOL_PREVIEW_MAX_TOKENS", "256"))
+
+# L3 previous_outputs 总预算（注入下一 Skill prompt 的全部前置输出）
+PREVIOUS_OUTPUTS_MAX_TOKENS = int(os.getenv("PREVIOUS_OUTPUTS_MAX_TOKENS", "1024"))
+
+# L4 Context Collapse / L5 AutoCompact 触发阈值（基础版只预留，不实现）
+CONTEXT_L4_TRIGGER_RATIO = float(os.getenv("CONTEXT_L4_TRIGGER_RATIO", "0.80"))
+CONTEXT_L5_TRIGGER_RATIO = float(os.getenv("CONTEXT_L5_TRIGGER_RATIO", "0.90"))
+
 # PostgreSQL 连接池
 MEMORY_ASYNC_POOL_SIZE = int(os.getenv("MEMORY_ASYNC_POOL_SIZE", "20"))
 MEMORY_ASYNC_MAX_OVERFLOW = int(os.getenv("MEMORY_ASYNC_MAX_OVERFLOW", "10"))

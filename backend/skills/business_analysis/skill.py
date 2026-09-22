@@ -179,6 +179,12 @@ class BusinessAnalysisSkill(BaseSkill):
                 output,
             )
             sr["status"] = "success"
+            # L1 上下文预算：与 BaseSkill 同语义（校验后、写 step_results 前）
+            from backend.skills.base import _apply_tool_result_budget
+            output = _apply_tool_result_budget(output, "business.analyze", step_id)
+            if isinstance(output, dict) and output.get("context_compacted"):
+                sr["context_compacted"] = True
+                sr["original_output_tokens"] = output.get("original_tokens")
             sr["output"] = output
             sr["finished_at"] = time.time()
             logger.info(

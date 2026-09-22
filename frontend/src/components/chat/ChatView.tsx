@@ -12,6 +12,7 @@ import WelcomeState from './WelcomeState'
 import ContextPanel from './ContextPanel'
 import ErrorCard from '@/components/shared/ErrorCard'
 import BudgetStatusBar from './BudgetStatusBar'
+import ContextNoticeBar from './ContextNoticeBar'
 import ClarificationCard from './ClarificationCard'
 import { lastUserQuestion } from './chatRetry'
 
@@ -122,6 +123,9 @@ export default function ChatView() {
       )}
 
       <BudgetStatusBar onBlockedChange={setBudgetBlocked} />
+
+      {/* 上下文预算提示条（2026-09-22）：节省 tokens + 上下文用量百分比 */}
+      <ContextNoticeBar />
 
       {clarification && (
         <ClarificationCard

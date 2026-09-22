@@ -505,6 +505,26 @@ agent_tool_latency_seconds = Histogram(
 )
 
 
+# ── 上下文预算管理指标（Context Budget Management，2026-09-22）──
+# 低基数约束：label 只含 level/action/stage，禁止 session_id/user_id/turn_id
+# 进 label（这些 ID 只进结构化日志与 Trace）。
+context_compactions_total = Counter(
+    "context_compactions_total",
+    "上下文压缩发生次数（按层级与动作）",
+    labelnames=("level", "action"),  # level: L1|L2|L3|L4|L5; action: tool_compact|history_trim|previous_outputs_compact|...
+)
+context_tokens_saved_total = Counter(
+    "context_tokens_saved_total",
+    "上下文压缩节省的 token 总数（按层级）",
+    labelnames=("level",),
+)
+context_budget_overflow_total = Counter(
+    "context_budget_overflow_total",
+    "预算裁剪后仍超 hard budget 的次数（按阶段）",
+    labelnames=("stage",),  # stage: preflight|tool_guard|micro_compact
+)
+
+
 def publish_breaker_states() -> None:
     """把全部熔断器状态刷到 Prometheus Gauge（周期调用或 /metrics 请求时调用）。"""
     try:

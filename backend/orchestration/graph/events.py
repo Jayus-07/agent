@@ -358,11 +358,13 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
                     usage: dict | None = None,
                     pending_action: dict | None = None,
-                    trace_id: str = "") -> dict:
+                    trace_id: str = "",
+                    context_usage: dict | None = None) -> dict:
     """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。
 
     P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
     前端据此渲染 CSConfirmCard；其余场景恒为 None，前端无感。
+    context_usage（2026-09-22）：上下文用量快照，前端显示「上下文 xx%」。
     """
     from backend.agents.reporter.reporter import _extract_sources_from_steps
     from backend.agents.reporter.context_filter import parse_sources_from_text
@@ -380,6 +382,8 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
             "proposal_text": pending_action.get("proposal_text", ""),
             "action_type": pending_action.get("action_type", "unknown"),
         }
+    if context_usage:
+        data["context_usage"] = context_usage
     return {"event": "done", "data": data}
 
 

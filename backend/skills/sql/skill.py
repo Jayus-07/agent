@@ -208,6 +208,13 @@ class SQLSkill(BaseSkill):
                         step_capability or "sql.query", {"question": question}, output
                     )
                     sr["status"] = "success"
+                    # L1 上下文预算：与 BaseSkill 同语义（校验后、写 step_results 前）
+                    from backend.skills.base import _apply_tool_result_budget
+                    output = _apply_tool_result_budget(
+                        output, step_capability or "sql.query", step_id)
+                    if isinstance(output, dict) and output.get("context_compacted"):
+                        sr["context_compacted"] = True
+                        sr["original_output_tokens"] = output.get("original_tokens")
                     sr["output"] = output
                     sr["row_count"] = result.row_count
                     sr["is_empty"] = result.is_empty

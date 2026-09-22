@@ -233,10 +233,25 @@ def route_after_supervisor(state: dict) -> str | list:
 
             # 注入前置步骤的输出，支持 Capability 间数据传递
             # 例如 business.analyze 依赖 sql.query → 从 step_results["1"].output 取 SQLResult
-            previous_outputs = {
+            # L3 微压缩（2026-09-22）：注入前做总预算压缩（默认 1024 token），
+            # 超预算时最新结果优先完整保留、旧结果降级为摘要结构。
+            # 只影响发给模型的 active context；step_results 原样传递，
+            # Reporter 汇总与前端展示不受影响。
+            _raw_prev = {
                 dep_id: step_results.get(dep_id, {}).get("output")
                 for dep_id in edges.get(item["step_id"], [])
             }
+            _prev_meta = {
+                dep_id: {
+                    "step_id": dep_id,
+                    "tool": step_results.get(dep_id, {}).get("capability", ""),
+                    "status": step_results.get(dep_id, {}).get("status", "success"),
+                }
+                for dep_id in _raw_prev
+                if dep_id in step_results
+            }
+            from backend.context_budget.micro_compactor import compact_previous_outputs
+            previous_outputs = compact_previous_outputs(_raw_prev, meta=_prev_meta)
 
             sends.append(
                 Send(item["worker"], {
