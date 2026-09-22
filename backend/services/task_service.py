@@ -288,14 +288,20 @@ def update_status(task_id: str, status: TaskStatus, *,
                 f"WHERE id = %s AND status = %s", args)
 
 
-def update_progress(task_id: str, node_name: str, progress: str = "") -> None:
-    """节点级进度更新（Worker 每个节点边界调用）。"""
+def update_progress(task_id: str, node_name: str, progress: str = "",
+                    checkpoint_id: str | None = None) -> None:
+    """节点级进度更新（Worker 每个节点边界调用）。
+
+    checkpoint_id：Phase1 Step2 起执行器传 LangGraph 真实 checkpoint id；
+    None 时回落旧口径（= thread_id 占位，仅表达"该 thread 至少有 checkpoint"）。
+    """
     ensure_schema()
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET current_node = %s, progress = %s, "
-            "checkpoint_id = thread_id, updated_at = now() WHERE id = %s",
-            (node_name, progress[:500], task_id),
+            "checkpoint_id = COALESCE(%s, thread_id), updated_at = now() "
+            "WHERE id = %s",
+            (node_name, progress[:500], checkpoint_id, task_id),
         )
 
 

@@ -131,14 +131,24 @@ class TaskGraphExecutor:
         query = (record.input or {}).get("query", "")
         thread_id = record.thread_id or f"task-{task_id}"
 
+        # 终态短路（Phase1 Step2 纵深防御）：SUCCESS/FAILED/CANCELLED 不可执行，
+        # 状态机会拒绝 SUCCESS→RUNNING 写入，此处更早拦截（重试路径在 impl
+        # 已先显式回 PENDING，正常链路不会到达这里）。
+        if record.status.is_terminal():
+            logger.info("[TaskExecutor] %s terminal (%s), skip execution",
+                        task_id, record.status.value)
+            return {"answer": "", "step_results": {},
+                    "skipped_terminal": record.status.value}
+
         # checkpoint 线程：是否有节点级历史（区分"从未开跑"与"跑到一半"）
         has_history = task_service.list_checkpoints(task_id, record.user_id) != []
-        # 恢复判定：有 checkpoint 历史 + 非 RUNNING 执行中。
-        # 覆盖三种场景：WAITING_USER/PAUSED 恢复（resume API 已置回 PENDING）、
-        # Celery 失败重试（FAILED）、Worker 宕机回队（acks_late 重投）。
-        # 全新任务 thread_id 在库但无历史 → 走全新执行。
-        resume = bool(record.thread_id) and has_history \
-            and record.status != TaskStatus.RUNNING
+        # 恢复判定（Phase1 Step2）：只看 thread_id + checkpoint 历史是否存在，
+        # 不看 record.status——Worker 硬杀后状态停在 RUNNING（无 _fail 落库），
+        # acks_late 重投/租约接管时若按 status!=RUNNING 判定会走全新执行分支，
+        # 已完成节点整图重跑。有历史 = 从最近 checkpoint 续跑（覆盖三种场景：
+        # WAITING_USER/PAUSED 恢复、Celery 失败重试（impl 已回 PENDING）、
+        # Worker 宕机接管）。全新任务 thread_id 在库但无历史 → 走全新执行。
+        resume = bool(record.thread_id) and has_history
         # 用户输入注入（resume API 落在 agent_checkpoints 的特殊行）
         pending_user_input = self._pop_user_input(task_id) if resume else ""
 
@@ -205,8 +215,10 @@ class TaskGraphExecutor:
 
                 last_node = node_name
                 node_output = node_output or {}
-                task_service.update_progress(task_id, node_name,
-                                             progress=f"节点 {node_name} 完成")
+                task_service.update_progress(
+                    task_id, node_name,
+                    progress=f"节点 {node_name} 完成",
+                    checkpoint_id=self._latest_checkpoint_id(config))
                 task_service.append_checkpoint(task_id, node_name, node_output)
                 self._publish(task_id, "node_finish", node=node_name)
 
@@ -236,6 +248,19 @@ class TaskGraphExecutor:
         return output
 
     # ── 内部 ─────────────────────────────────────────────
+    def _latest_checkpoint_id(self, config: dict) -> str | None:
+        """读最近一次 LangGraph checkpoint 的真实 id（Phase1 Step2：TaskState
+        checkpoint_id 不再恒写 thread_id 占位，恢复定位可对账）。读失败不
+        阻断执行——update_progress 会回落为 thread_id 旧口径。"""
+        try:
+            snap = self._graph.get_state(config)
+        except Exception:
+            logger.debug("[TaskExecutor] get_state failed", exc_info=True)
+            return None
+        if snap is None or not getattr(snap, "config", None):
+            return None
+        return snap.config.get("configurable", {}).get("checkpoint_id")
+
     def _stream(self, payload: Any, config: dict) -> Generator[dict, None, None]:
         """graph.stream 包装：区分首次执行 / checkpoint 恢复。"""
         try:
