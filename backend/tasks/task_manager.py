@@ -56,6 +56,54 @@ def request_pause(task_id: str) -> bool:
     return True
 
 
+def pause_task(task_id: str) -> dict:
+    """暂停任务（Phase1 Step4 编排入口，幂等）。
+
+    语义：不强杀当前原子节点——RUNNING 中请求暂停时，Worker 在当前节点
+    完成并落库后、下一节点开始前发现标志，停止调度后续节点（C 不得开始），
+    checkpoint 保留指向最后成功节点。
+
+    - RUNNING：置 Redis 暂停标志（节点边界生效）
+    - PENDING（未拾取）：直接原子落库 PAUSED（mark_paused_if_pending），
+      不依赖 Worker；竞态失败（恰好被拾取）回落标志路径
+    - PAUSED：幂等返回，不重复置标志
+    - 终态：拒绝（ValueError）
+    返回 {"ok": bool, "already": 是否原本已暂停, "mode": 标志/落库, ...}。
+    """
+    from backend.services import task_service
+
+    record = task_service.get_task(task_id)
+    if record is None:
+        raise LookupError(f"task not found: {task_id}")
+    if record.status.is_terminal():
+        raise ValueError(f"task already terminal: {record.status.value}")
+    if record.status == TaskStatus.PAUSED:
+        return {"ok": True, "already": True, "status": "PAUSED"}
+
+    if record.status == TaskStatus.PENDING:
+        if task_service.mark_paused_if_pending(task_id):
+            publish_event(task_id, "paused", node="queued",
+                          message="任务在队列中暂停")
+            return {"ok": True, "already": False, "status": "PAUSED",
+                    "mode": "queued"}
+        # 竞态：API 读到 PENDING 后 Worker 恰好拾取（租约已置 RUNNING）
+        # → 回落标志路径，Worker 在第一个节点边界停下
+        record = task_service.get_task(task_id)
+        if record is not None and record.status == TaskStatus.RUNNING:
+            ok = request_pause(task_id)
+            return {"ok": ok, "already": False, "status": "RUNNING",
+                    "mode": "flag", "flag": ok}
+        raise ValueError("task status changed during pause, retry")
+
+    ok = request_pause(task_id)
+    if not ok:
+        logger.error("[TaskManager] Redis 不可用，暂停标志无法下发: %s", task_id)
+        return {"ok": False, "already": False, "status": record.status.value,
+                "mode": "flag", "flag": False}
+    return {"ok": True, "already": False, "status": record.status.value,
+            "mode": "flag", "flag": True}
+
+
 def clear_flags(task_id: str) -> None:
     """恢复/重启前清除全部控制标志。"""
     r = _redis()

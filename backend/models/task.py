@@ -63,6 +63,7 @@ class TaskStatus(str, Enum):
         规格必禁止：SUCCESS/FAILED/CANCELLED → RUNNING（终态不复活）；
         FAILED 恢复执行必须先显式回 PENDING（重试动作可审计）。
         自转换（同态重写进度/错误字段）与以下系统跳转一并登记：
+        - PENDING→PAUSED：队列内暂停（Worker 租约只认 PENDING，天然不双跑）
         - PENDING→FAILED/CANCELLED：入队失败落终态 / 队列内取消（未开跑）
         - PAUSED/WAITING_USER→PENDING：resume 的回队标记（Worker 租约认领后进 RUNNING）
         - WAITING_USER→CANCELLED：等人态取消
@@ -71,8 +72,8 @@ class TaskStatus(str, Enum):
         - reap_zombie_running 的 RUNNING→FAILED/CANCELLED（条件 UPDATE 收尸）
         """
         return {
-            cls.PENDING: frozenset({cls.PENDING, cls.RUNNING, cls.FAILED,
-                                    cls.CANCELLED}),
+            cls.PENDING: frozenset({cls.PENDING, cls.RUNNING, cls.PAUSED,
+                                    cls.FAILED, cls.CANCELLED}),
             cls.RUNNING: frozenset({cls.RUNNING, cls.PAUSED, cls.WAITING_USER,
                                     cls.SUCCESS, cls.FAILED, cls.CANCELLED}),
             cls.PAUSED: frozenset({cls.PAUSED, cls.RUNNING, cls.PENDING,

@@ -310,6 +310,26 @@ def update_progress(task_id: str, node_name: str, progress: str = "",
         )
 
 
+def mark_paused_if_pending(task_id: str, *, progress: str = "队列内暂停") -> bool:
+    """队列内暂停：仅当任务仍为 PENDING（未被 Worker 拾取）时原子落 PAUSED。
+
+    Phase1 Step4 特化路径（原生条件 SQL，与状态机白名单 PENDING→PAUSED
+    一致，登记为第四条例外通道）：调用方（task_manager.pause_task）在
+    rowcount=0（已被拾取变 RUNNING）时必须回落 Redis 标志路径——不能靠
+    update_status 的并发重判直写，否则会把正在跑的 Worker 直接标成 PAUSED
+    而它无从感知。返回是否落库成功。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, progress = %s, updated_at = now() "
+            "WHERE id = %s AND status = %s",
+            (TaskStatus.PAUSED.value, progress[:500], task_id,
+             TaskStatus.PENDING.value),
+        )
+        return cur.rowcount > 0
+
+
 def increment_retry(task_id: str) -> int:
     """重试计数 +1，返回新值（Celery self.request.retries 的 DB 侧镜像）。"""
     ensure_schema()

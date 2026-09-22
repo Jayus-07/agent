@@ -190,15 +190,13 @@ class TaskGraphExecutor:
         # stream_mode="updates" 事件形态：{node_name: update}（Send 并行分支
         # 单事件含多节点）。直接按键解析，不用主图 _parse_event 白名单——
         # 执行器必须对任意 graph_name 通用（stub 图/域图/未来新增图）。
+        # 取消/暂停检查点在「当前节点边界落库之后、下一节点调度之前」：
+        # 语义 = 不强杀原子节点，已完成节点的 checkpoint/进度痕迹完整保留
+        # （Phase1 Step4：pause 后 checkpoint 必须指向最后成功节点）。
         final_answer = ""
         step_results: dict = {}
         last_node = ""
         for event in self._stream(payload, config):
-            if self._cancelled(task_id):
-                raise TaskCancelled(task_id)
-            if self._paused(task_id):
-                raise TaskPaused(task_id)
-
             if not isinstance(event, dict):
                 continue
             if "__interrupt__" in event:
@@ -237,6 +235,12 @@ class TaskGraphExecutor:
                     final_answer = ans if isinstance(ans, str) else str(ans)
                 if node_output.get("step_results"):
                     step_results.update(node_output.get("step_results", {}))
+
+            # 控制检查：当前节点已完成落库，下一节点尚未开始
+            if self._cancelled(task_id):
+                raise TaskCancelled(task_id)
+            if self._paused(task_id):
+                raise TaskPaused(task_id)
 
         # ── 正常完成 ──
         if not final_answer:
