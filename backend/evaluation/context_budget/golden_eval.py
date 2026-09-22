@@ -107,8 +107,17 @@ def _pad_to_boundary(history: list[dict]) -> list[dict]:
 
 def _invoke(messages: list) -> str:
     from backend.infra.llm import llm
+    model_name = str(_cfg("CONTEXT_L5_SUMMARY_MODEL", "") or "").strip()
+    if model_name:
+        from backend.infra.llm.proxy import set_request_model
+        set_request_model(model_name)
     resp = llm.invoke(messages)
     return getattr(resp, "content", None) or str(resp)
+
+
+def _cfg(name: str, default):
+    import backend.config as config
+    return getattr(config, name, default)
 
 
 def run_golden(limit: int = 0, category: str = "") -> dict:
@@ -179,9 +188,9 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
             return {"hit": hit, "miss": [m for m in musts if m not in hit],
                     "leak": leak}
 
-        b_chk = check(baseline_answer, expect["must_contain"],
+        b_chk = check(baseline_answer, expect.get("must_contain") or [],
                       expect.get("must_not_contain", []))
-        c_chk = check(compacted_answer, expect["must_contain"],
+        c_chk = check(compacted_answer, expect.get("must_contain") or [],
                       expect.get("must_not_contain", []))
 
         # ProtectedFact Recall（对摘要文本）
@@ -217,11 +226,11 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
                          **b_chk},
             "after_L5": {"answer_head": compacted_answer[:120], **c_chk},
             "fact_retention_baseline": (
-                len(b_chk["hit"]) / len(expect["must_contain"])
-                if expect["must_contain"] else None),
+                len(b_chk["hit"]) / len(expect.get("must_contain") or [])
+                if expect.get("must_contain") or [] else None),
             "fact_retention_after_L5": (
-                len(c_chk["hit"]) / len(expect["must_contain"])
-                if expect["must_contain"] else None),
+                len(c_chk["hit"]) / len(expect.get("must_contain") or [])
+                if expect.get("must_contain") or [] else None),
             "constraint_violation": bool(c_chk["leak"]),
             "summary_text": outcome.summary[:400],
         })
@@ -232,8 +241,6 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
               f"summary_tokens={outcome.token_count}", flush=True)
 
     scored = [r for r in rows if r.get("summary_ok")]
-    req_n = [len(_load_cases() and [c for c in [cases[i]]] and
-              [1]) for i, _ in enumerate(cases)]  # placeholder，下方直接算
 
     report = {
         "mode": "golden",

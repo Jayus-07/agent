@@ -99,8 +99,10 @@ def run_waterline() -> dict:
         # 无重发：load_calls 的 after_id 必须等于上一轮 through
         if detail["load_calls"] and (detail["load_calls"][0][0] or 0) != prev_through:
             ok_no_resend = False
-        # 无空洞：delta 最小 id == through+1（覆盖边界内全部）
-        if detail.get("delta_id_min") is not None \
+        # 无空洞：delta 最小 id == through+1（覆盖边界内全部）。
+        # 首轮（prev_through==0）除外：会话消息 id 从表自增值起步，
+        # through=0 只表示「尚无摘要」，不代表 1..873 未处理。
+        if prev_through > 0 and detail.get("delta_id_min") is not None \
                 and detail["delta_id_min"] != prev_through + 1:
             ok_no_hole = False
         # 单调
