@@ -1283,12 +1283,13 @@ class ModelConfigService:
         model_kind: str | None = None,
         allow_legacy_specialized_migration: bool = False,
         migration_base_url: str = "",
+        allow_soft_deleted_takeover: bool = False,
     ) -> str:
-        """登记模型；仅允许历史专项实例被显式迁移到新供应商。"""
+        """登记模型；允许历史专项实例与软删行被显式迁移/复活到新供应商。"""
         existing = (
             await session.execute(
                 text(
-                    "SELECT provider_id, model_kind FROM llm_models "
+                    "SELECT provider_id, model_kind, enabled FROM llm_models "
                     "WHERE name = :model_name"
                 ),
                 {"model_name": model_name},
@@ -1308,9 +1309,19 @@ class ModelConfigService:
         )
 
         existing_provider_id = str(existing.get("provider_id")) if existing else ""
+        # 复活过户：占用行已软删（enabled=false）→ 允许迁移到新供应商。
+        # 场景：删除供应商后其模型名成为幽灵占用，用户在新供应商下重加同名模型。
+        takeover_soft_deleted = bool(
+            allow_soft_deleted_takeover
+            and existing is not None
+            and not bool(existing.get("enabled"))
+            and existing_provider_id != provider_id
+        )
         migrating_legacy = False
         if existing is not None and existing_provider_id != provider_id:
-            if allow_legacy_specialized_migration:
+            if takeover_soft_deleted:
+                migrating_legacy = True
+            else:
                 legacy_provider = (
                     await session.execute(
                         text(
@@ -1488,18 +1499,31 @@ class ModelConfigService:
             ).mappings().first()
             if provider_row is None:
                 raise ModelConfigNotFound(f"未找到供应商：{provider_id}")
+            # 模型名全局唯一（llm_models 主键，价格/角色/账目按名引用）。
+            # 但**软删的行不再占名**（2026-09-22 拍板）：占用行 enabled=false 时
+            # 允许复活并过户到当前供应商 —— 否则删掉供应商后其模型名成为
+            # 看不见也解不开的幽灵占用（实测事故：qwen3.7-plus 卡死）。
             duplicate = (
                 await session.execute(
-                    text("SELECT provider_id FROM llm_models WHERE name = :model_name"),
+                    text(
+                        "SELECT provider_id, enabled FROM llm_models "
+                        "WHERE name = :model_name"
+                    ),
                     {"model_name": model_name},
                 )
             ).mappings().first()
+            takeover_soft_deleted = False
             if duplicate is not None and str(duplicate.get("provider_id")) != provider_id:
-                raise ModelConfigConflict(
-                    f"模型 {model_name} 已登记到供应商 {duplicate.get('provider_id')}；"
-                    "模型名全局唯一，请到原供应商下编辑或更换模型名"
-                )
-            # 同供应商重复登记 = 更新（含改价），继续走探测 + upsert
+                if not bool(duplicate.get("enabled")):
+                    takeover_soft_deleted = True
+                else:
+                    raise ModelConfigConflict(
+                        f"模型 {model_name} 已登记到供应商 {duplicate.get('provider_id')}；"
+                        "模型名全局唯一（价格与角色按名引用），"
+                        "请到原供应商下编辑或更换模型名"
+                    )
+            # 同供应商重复登记 = 更新（含改价）；软删占用 = 复活过户。
+            # 继续走探测 + upsert
             provider = dict(provider_row)
             break
 
@@ -1544,6 +1568,7 @@ class ModelConfigService:
                 operator=operator,
                 allow_legacy_specialized_migration=True,
                 migration_base_url=base_url,
+                allow_soft_deleted_takeover=takeover_soft_deleted,
             )
             await _apply_model_pricing(
                 session,

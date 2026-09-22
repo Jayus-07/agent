@@ -158,9 +158,9 @@ async def test_blank_prices_are_noop():
 
 def test_parse_model_price_validation():
     parsed = _parse_model_price({"inputPricePer1m": "0.125", "outputPricePer1m": 0.5})
-    assert parsed == (Decimal("0.125000"), Decimal("0.500000"))
-    assert _parse_model_price({}) == (None, None)
-    assert _parse_model_price({"inputPricePer1m": ""}) == (None, None)
+    assert parsed == (Decimal("0.125000"), Decimal("0.500000"), None, "USD")
+    assert _parse_model_price({}) == (None, None, None, "USD")
+    assert _parse_model_price({"inputPricePer1m": ""}) == (None, None, None, "USD")
     with pytest.raises(ValueError, match="负数"):
         _parse_model_price({"inputPricePer1m": "-1"})
     with pytest.raises(ValueError, match="合法数字"):

@@ -202,10 +202,11 @@ class _LegacyMigrationSession:
         self.parameters.append(dict(params or {}))
         if "SELECT 1 FROM llm_providers" in sql:
             return _LegacyMigrationResult(None)
-        if "SELECT provider_id, model_kind FROM llm_models" in sql:
+        if "SELECT provider_id, model_kind, enabled FROM llm_models" in sql:
             return _LegacyMigrationResult({
                 "provider_id": "specialized-api",
                 "model_kind": "embedding",
+                "enabled": True,
             })
         if "SELECT driver FROM llm_providers" in sql:
             return _LegacyMigrationResult({"driver": "specialized"})
