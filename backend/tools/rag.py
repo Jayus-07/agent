@@ -22,15 +22,26 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
         _get_session_id,
         get_tool_department,
         get_tool_permissions,
+        get_tool_user_id,
     )
     sid = _get_session_id()
-    # 主体解析：请求带部门 → 员工（按 owner_depts 矩阵授权）；未带部门
-    # → fail-safe 按对客处理（混合入口下客户问题可能漏进主图，宁严勿漏）。
-    # RAG_TOOL_FAILSAFE_CUSTOMER=false 可回滚为未声明主体（旧行为）。
+    # 主体解析（2026-09-22 Chat/RAG 收口修正）：
+    #   - 带部门 → employee（按 owner_depts 矩阵授权）；
+    #   - 已登录但未声明部门 → employee + 空部门（authorized_kbs 语义：员工
+    #     未带部门只见 "all" 库，即 policy_general）——此前误判成 customer，
+    #     导致内部政策库从聊天主链整体不可达（「知识库暂无相关资料」根因）；
+    #   - 未登录（guest/api-key 匿名通道）→ customer fail-safe（宁严勿漏），
+    #     仅 audience=customer 的 cs_* 库可见。RAG_TOOL_FAILSAFE_CUSTOMER=
+    #     false 回滚为未声明主体（旧行为）。
     import os
+
     department = get_tool_department()
+    user_id = (get_tool_user_id() or "").strip()
+    authenticated = user_id not in ("", "default", "anonymous")
     if department:
         subject_type, dept = "employee", department
+    elif authenticated:
+        subject_type, dept = "employee", ""
     elif os.getenv("RAG_TOOL_FAILSAFE_CUSTOMER", "true").strip().lower() == "true":
         subject_type, dept = "customer", ""
     else:

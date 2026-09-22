@@ -948,10 +948,25 @@ class RAGPipeline:
             # 向量检索 —— CustomRetriever 的接口是 .retrieve（旧代码误用
             # LangChain 的 get_relevant_documents，向量腿同样 100% 断）。
             # 原生支持 metadata_filter，KB/域过滤在此生效。
-            try:
-                vec_results = self.chunk_retriever.retrieve(
-                    question, k=top_k, metadata_filter=mf,
+            # 2026-09-22 Chat/RAG 收口：QueryAnalyzer 派生的 doc_type/
+            # business_domain 过滤在语料缺该元数据时会 0 命中（ask 路径的
+            # ChunkLevelRetriever 有放宽重试，此处原本没有）——0 命中时以
+            # kb 范围过滤放宽重试一次，杜绝「有数据但查不到」。
+            def _vec_retrieve(filt):
+                return self.chunk_retriever.retrieve(
+                    question, k=top_k, metadata_filter=filt,
                 )
+
+            try:
+                vec_results = _vec_retrieve(mf)
+                if not vec_results and mf:
+                    kb_scope = {k: v for k, v in mf.items()
+                                if k in ("kb_id", "$or")}
+                    if kb_scope and kb_scope != mf:
+                        logger.info(
+                            "[RAG.retrieve] 全量过滤 0 命中，放宽 QueryAnalyzer "
+                            f"维度重试（保留 kb 范围）: {kb_scope}")
+                        vec_results = _vec_retrieve(kb_scope)
                 for doc in vec_results[:top_k]:
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
                     if content not in chunks:

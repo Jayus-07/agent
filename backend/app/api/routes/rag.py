@@ -34,7 +34,7 @@ router.include_router(upload_router)
 async def rag_ask(req: RAGAskRequest, request: Request):
     require_rag_ready()
     identity = require_identity(request)
-    subject_type = "employee" if identity.department else "customer"
+    subject_type = "employee" if identity.authenticated else "customer"
     # 初始化锁等待与 LLM 问答都是长耗时同步操作，全部移入工作线程
     pipeline = await asyncio.to_thread(get_rag_pipeline)
     answer = await asyncio.to_thread(

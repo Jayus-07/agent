@@ -52,7 +52,7 @@ async def search_knowledge(req: SearchRequest, request: Request):
             text = await asyncio.to_thread(
                 pipeline.retrieve_knowledge,
                 query,
-                subject_type="employee" if identity.department else "customer",
+                subject_type="employee" if identity.authenticated else "customer",
                 department=identity.department,
                 permissions=identity.permissions,
             )
@@ -71,7 +71,7 @@ async def search_knowledge(req: SearchRequest, request: Request):
             pipeline._prepare_context(
                 "default",
                 query,
-                subject_type="employee" if identity.department else "customer",
+                subject_type="employee" if identity.authenticated else "customer",
                 department=identity.department,
                 permissions=identity.permissions,
             )
@@ -112,7 +112,7 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         req.question,
         req.session_id,
         kb_id=kb_id,
-        subject_type="employee" if identity.department else "customer",
+        subject_type="employee" if identity.authenticated else "customer",
         department=identity.department,
         permissions=identity.permissions,
     )
