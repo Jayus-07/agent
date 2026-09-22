@@ -326,6 +326,9 @@ class Router:
                     "total_tokens": _m.get("total_tokens", 0),
                     "cost_usd": _m.get("cost_usd", 0),
                     "model_name": _m.get("model", ""),
+                    # 观测口径（路由专项 Step 1）：trace 保留 upstream 原始值
+                    "upstream_model_id": _m.get("upstream_model_id", ""),
+                    "configured_model_id": _m.get("configured_model_id", ""),
                 })
         except Exception:
             pass

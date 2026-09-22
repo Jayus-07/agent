@@ -378,6 +378,34 @@ def get_model_entry(model_name: str) -> dict | None:
     return None
 
 
+def canonical_model_id(model_name: str) -> str:
+    """观测口径统一（2026-09-22 路由专项 Step 1）：任意模型名 → 登记名。
+
+    usage / cost / dashboard 按 canonical（登记名）聚合；trace 保留
+    upstream 原始值（由调用方从 response_metadata 透传）。
+
+    解析规则：
+      - 登记名精确命中 → 原样返回
+      - upstream_name 命中（alias）→ 返回登记名
+      - 未注册（含空值）→ 原样返回（调用方语义不变，不猜）
+
+    alias 唯一事实源 = llm_models DB 注册表的 name/upstream_name 两列，
+    本函数只做反查，不维护第二份映射表。
+    """
+    if not model_name:
+        return model_name
+    name = str(model_name).strip()
+    if not name:
+        return name
+    for m in _dynamic_models:
+        if m.get("name") == name:
+            return name
+        upstream = str(m.get("upstream_name") or "").strip()
+        if upstream and upstream == name:
+            return str(m["name"])
+    return name
+
+
 def is_known_model(model_name: str) -> bool:
     """模型是否在当前生效的注册表内（含 DB 覆盖层）。"""
     return get_model_entry(model_name) is not None

@@ -35,6 +35,7 @@ from backend.config.llm import (
 )
 from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import (
+    canonical_model_id,
     compute_cost_usd,
     get_available_models,
     get_model_entry,
@@ -932,6 +933,16 @@ def _record_tokens(
         model = model or str(model_name or "")
         if not model and ctx is not None:
             model = ctx.model_id
+        # 观测口径统一（路由专项 Step 1）：usage/cost/dashboard 按 canonical
+        # （登记名）聚合；response_metadata 的 upstream 原始值保留在
+        # upstream_model_id 供 trace 透传。
+        upstream_model = model
+        model = canonical_model_id(model)
+        if model == upstream_model and ctx is not None \
+                and upstream_model and upstream_model != ctx.model_id:
+            # 注册表不认识的厂商回传别名（如 doubao 上游真名）→ 归一到本次
+            # 调用的 configured 模型：本次调用就是用它解析发起的
+            model = ctx.model_id
         model = model or LLM_MODEL
 
         # Prometheus 指标：LLM token 用量
@@ -1027,6 +1038,9 @@ def _record_tokens(
             "cost_status": cost_status,
             "currency": currency,
             "model": model,
+            "canonical_model_id": model,
+            "upstream_model_id": upstream_model or "",
+            "configured_model_id": ctx.model_id if ctx is not None else "",
             "model_role": ctx.role if ctx is not None else "",
             "binding_source": ctx.binding_source if ctx is not None else "",
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
