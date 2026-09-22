@@ -452,3 +452,7 @@ scripts/_diag_*.py
 # 手工备份文件
 AGENTS.md.bak-*
 *.bak-20*
+
+# 路由专项收口（2026-09-22 Step 4）：数据库备份与本地验证产物不进版本库
+backups/
+tmp/
