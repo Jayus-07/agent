@@ -444,3 +444,201 @@ class TestSourceChannel:
     def test_default_empty(self):
         ctx = make_ctx("all")
         assert ctx.source_channel == ""
+
+
+# =====================================================
+# Tool 参数伪造身份（规格 §十一：模型输出参数不可信）
+# =====================================================
+
+class TestToolSpoof:
+    def test_sql_query_tool_args_cannot_escalate_role(self, monkeypatch):
+        """viewer 真实身份 + tool args 伪造 role=admin/data_scope=all：
+        无论额外参数被拒绝还是忽略，executor 不得触达（viewer wins）。"""
+        import backend.sql.sql_agent as agent_mod
+        from backend.tools.sql import sql_query_tool
+
+        set_tool_user_id("7")
+        set_tool_roles(("viewer",))
+        calls = {"executor": 0}
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: calls.__setitem__(
+                "n", calls["executor"] + 1) or SQLResult.success(
+                [{"sku": "SECRET"}], columns=["sku"], sql="x", elapsed=0))
+
+        raw = sql_query_tool.invoke({
+            "question": "查所有商品", "role": "admin", "data_scope": "all"})
+        assert "SECRET" not in raw
+        assert calls["executor"] == 0, raw
+
+    def test_execute_sql_tool_args_cannot_escalate_scope(self):
+        """editor(department) + 伪造 admin/all args 直查 finance 表：
+        授权仍按 contextvars 真实身份判定 → 拒绝。"""
+        from backend.tools.sql import execute_sql_tool
+
+        set_tool_user_id("3")
+        set_tool_roles(("editor",))
+        raw = execute_sql_tool.invoke({
+            "query": "SELECT amount FROM finance.expenses",
+            "role": "admin", "data_scope": "all"})
+        assert "SQL_TABLE_NOT_ALLOWED" in raw, raw
+
+
+# =====================================================
+# Graph 通道集成（规格 §九：policy 非 None + Guard 恰好一次）
+# =====================================================
+
+class TestGraphIntegration:
+    def _state(self, roles=("editor",)):
+        return {
+            "question": "查财务费用",
+            "plan": {"nodes": {"1": {"step_id": "1",
+                                     "capability": "sql.query"}}},
+            "current_step_id": "1",
+            "step_results": {},
+            "request_context": {
+                "session_id": "sess-graph", "user_id": "3",
+                "department": "hr", "roles": list(roles),
+            },
+        }
+
+    def test_deny_policy_not_none_guard_once_executor_zero(self, monkeypatch):
+        from backend.skills.sql.skill import SQLSkill
+
+        import backend.sql.sql_agent as agent_mod
+
+        calls = {"generate": 0, "executor": 0, "guard": 0}
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["finance.expenses"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: calls.__setitem__(
+                "generate", calls["generate"] + 1)
+            or "SELECT amount FROM finance.expenses")
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: calls.__setitem__(
+                "executor", calls["executor"] + 1) or SQLResult.success(
+                [], columns=[], sql="x", elapsed=0))
+
+        from backend.sql.policy import SQLPolicyGuard as _Guard
+        real_guard = _Guard.validate_and_rewrite
+
+        def counting_guard(self, sql, policy):
+            calls["guard"] += 1
+            return real_guard(self, sql, policy)
+
+        monkeypatch.setattr(_Guard, "validate_and_rewrite", counting_guard)
+
+        async def run():
+            return await SQLSkill().execute(self._state(),
+                                            step_capability="sql.query")
+
+        result = asyncio.run(run())
+        sr = result["step_results"]["1"]
+        assert calls["guard"] == 1, calls
+        assert calls["generate"] == 1
+        assert calls["executor"] == 0
+        # skill 层语义：permission_denied → step failed + error_type 保留原语义
+        assert sr["status"] == "failed"
+        assert sr["error_type"] == "permission_denied"
+
+    def test_success_policy_channel_is_graph(self, monkeypatch):
+        """成功路径：policy 非 None 且 source_channel="graph"（审计归因）。"""
+        from backend.skills.sql.skill import SQLSkill
+
+        import backend.sql.sql_agent as agent_mod
+
+        seen = {}
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["product.products"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: "SELECT sku FROM product.products LIMIT 3")
+        monkeypatch.setattr(
+            agent_mod, "execute_sql_struct",
+            lambda *a, **k: SQLResult.success(
+                [{"sku": "A"}], columns=["sku"], sql="x", elapsed=0))
+
+        from backend.sql.policy import SQLPolicyGuard as _Guard
+        real_guard = _Guard.validate_and_rewrite
+
+        def spy_guard(self, sql, policy):
+            seen["policy"] = policy
+            return real_guard(self, sql, policy)
+
+        monkeypatch.setattr(_Guard, "validate_and_rewrite", spy_guard)
+
+        state = self._state()
+        state["question"] = "查商品"
+        state["request_context"] = dict(state["request_context"],
+                                        roles=["editor"])
+
+        async def run():
+            return await SQLSkill().execute(state, step_capability="sql.query")
+
+        result = asyncio.run(run())
+        sr = result["step_results"]["1"]
+        assert sr["status"] == "success", sr
+        assert seen["policy"] is not None
+        assert seen["policy"].source_channel == "graph"
+
+
+# =====================================================
+# 审计归因（规格 §三十：source_channel 必须区分通道）
+# =====================================================
+
+class TestAuditAttribution:
+    def _capture_audit(self, monkeypatch):
+        from backend.sql import audit as audit_mod
+
+        seen = []
+        monkeypatch.setattr(audit_mod, "record_sql_audit",
+                            lambda **kw: seen.append(kw))
+        return seen
+
+    def test_graph_deny_audited_with_channel(self, monkeypatch):
+        import backend.sql.sql_agent as agent_mod
+        from backend.skills.sql.skill import SQLSkill
+
+        seen = self._capture_audit(monkeypatch)
+        monkeypatch.setattr(agent_mod, "select_tables",
+                            lambda q: ["finance.expenses"])
+        monkeypatch.setattr(
+            agent_mod, "generate_sql",
+            lambda q, t, feedback=None: "SELECT amount FROM finance.expenses")
+
+        state = {
+            "question": "查财务",
+            "plan": {"nodes": {"1": {"step_id": "1",
+                                     "capability": "sql.query"}}},
+            "current_step_id": "1", "step_results": {},
+            "request_context": {"user_id": "3", "department": "hr",
+                                "roles": ["editor"]},
+        }
+
+        async def run():
+            return await SQLSkill().execute(state, step_capability="sql.query")
+
+        asyncio.run(run())
+        assert seen, "deny 场景必须产生审计事件"
+        deny = [e for e in seen if e["decision"].startswith("DENY")]
+        assert deny
+        assert deny[-1]["source_channel"] == "graph"
+        assert deny[-1]["deny_code"] in ("SQL_TABLE_NOT_ALLOWED",
+                                         "SQL_PERMISSION_DENIED",
+                                         "SQL_SCOPE_UNAVAILABLE")
+
+    def test_tool_deny_audited_with_channel(self, monkeypatch):
+        from backend.tools.sql import execute_sql_tool
+
+        seen = self._capture_audit(monkeypatch)
+        set_tool_user_id("3")
+        set_tool_roles(("editor",))
+        execute_sql_tool.invoke(
+            {"query": "SELECT amount FROM finance.expenses"})
+        assert seen
+        deny = [e for e in seen if e["decision"].startswith("DENY")]
+        assert deny
+        assert deny[-1]["source_channel"] == "tool"
+        assert deny[-1]["deny_code"] == "SQL_TABLE_NOT_ALLOWED"

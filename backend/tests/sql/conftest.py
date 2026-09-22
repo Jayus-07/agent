@@ -28,6 +28,22 @@ def guard() -> SQLPolicyGuard:
     return SQLPolicyGuard()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_audit_db(monkeypatch):
+    """单元/策略测试不触达真实审计库（audit 是外部边界）。
+
+    record_sql_audit 保留真实调用（TestAuditAttribution 捕获参数、
+    TestAuditBestEffort 单独覆盖失败路径），仅把 DB 连接断开——
+    防止宿主机测试环境把审计行写进 .env 指向的非权威 PG（双库坑）。
+    """
+    from backend.sql import audit as audit_mod
+
+    def _no_conn():
+        raise RuntimeError("audit db disabled in unit tests")
+
+    monkeypatch.setattr(audit_mod, "_conn", _no_conn)
+
+
 @pytest.fixture
 def fixture_tables():
     """注册 tenant/department fixture 表，用例后清理单例状态。"""
