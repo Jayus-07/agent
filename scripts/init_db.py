@@ -124,6 +124,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "039_llm_models_ocr_kind.sql": "memory",
     "040_chat_sessions_summary_frontier.sql": "memory",
     "041_auth_departments.sql": "memory",
+    "042_sql_query_audits.sql": "memory",
+    # SQL Agent 生产收口（STOP C）：readonly 角色回收 public schema SELECT
+    "043_readonly_public_revoke.sql": "business",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

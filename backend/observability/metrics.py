@@ -59,6 +59,35 @@ token_usage_total = Counter(
     labelnames=("component", "model", "direction"),  # component: embedding|rerank|llm
 )
 
+# ── SQL Agent 生产收口指标（STOP C 2026-09-23）──
+# 标签基数约束（规格 §十一）：source ∈ http|graph|tool|mcp|unknown；
+# decision ∈ ALLOW|DENY_*|EXECUTION_*|TIMEOUT；reason ∈ 低基数枚举。
+# 禁止 user_id/tenant_id/trace/请求 ID/SQL 原文/表名进入标签。
+sql_agent_requests_total = Counter(
+    "sql_agent_requests_total",
+    "SQL Agent 请求总数（按来源通道与最终决策）",
+    labelnames=("source", "decision"),
+)
+sql_agent_denied_total = Counter(
+    "sql_agent_denied_total",
+    "SQL Agent 安全拒绝数（按低基数原因）",
+    labelnames=("reason",),  # permission|scope|table|validator|unknown_scope|disabled
+)
+sql_agent_execution_total = Counter(
+    "sql_agent_execution_total",
+    "SQL 执行终态（executor 返回 status）",
+    labelnames=("status",),  # success|no_data|timeout|syntax_error|permission_denied|failed
+)
+sql_agent_execution_duration_seconds = Histogram(
+    "sql_agent_execution_duration_seconds",
+    "SQL 执行耗时（秒，executor 侧）",
+    buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+)
+sql_agent_rows_returned_total = Counter(
+    "sql_agent_rows_returned_total",
+    "SQL 查询返回行数累计",
+)
+
 skill_failure_total = Counter(
     "skill_failure_total",
     "Skill execution failures by skill name and error type",
