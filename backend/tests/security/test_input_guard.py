@@ -117,15 +117,18 @@ class TestGarbage:
 # 4. 模糊问题
 # ═══════════════════════════════════════════════════════
 class TestAmbiguous:
-    @pytest.mark.parametrize("q", ["帮我分析一下", "看一下数据", "怎么办"])
+    # 2026-09-22 降权后仅「全匹配式空话」拦 CLARIFY；
+    # 其余短句放行，可答性交给路由层（ContinuationResolver/粗分类）判断。
+    @pytest.mark.parametrize("q", ["帮我分析一下", "怎么办"])
     def test_vague_clarify(self, guard, q):
         r = guard.guard(q)
         assert r.action == GuardAction.CLARIFY
         assert r.category == GuardCategory.AMBIGUOUS
 
-    @pytest.mark.parametrize("q", ["库存怎么样", "销售如何"])
+    @pytest.mark.parametrize("q", ["库存怎么样", "销售如何", "看一下数据",
+                                   "太赶了", "改成3天", "换一个"])
     def test_vague_with_business_noun_passes(self, guard, q):
-        """含业务名词的短模糊句：系统可尝试回答，放行（不误杀）。"""
+        """短模糊句/跨轮短指令：Guard 放行（不误杀），路由层负责处置。"""
         r = guard.guard(q)
         assert r.action == GuardAction.ALLOW
 

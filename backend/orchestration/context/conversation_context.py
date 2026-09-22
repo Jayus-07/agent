@@ -67,6 +67,15 @@ class ConversationContext:
     last_verified_source_ids: list[str] = field(default_factory=list)
     source_context_fingerprint: str = ""
 
+    # ── 路由上下文（2026-09-22 路由入口重构：Context Assembler 数据源）──
+    # Router（ContinuationResolver / 粗分类）可读的跨轮任务状态。
+    # active_domain 取路由层口径（travel/customer_service/selection_funnel/
+    # data/knowledge/...），与粗分类 domain 命名一致。
+    active_domain: str = ""
+    last_intent: str = ""        # 上一轮路由意图（route_mode / domain_action）
+    last_action: str = ""        # 上一轮动作（selected_tool / 域图名 / clarify）
+    pending_question: str = ""   # 上一轮留给用户的待答问题（追问卡/澄清/待决项）
+
     updated_at: float = field(default_factory=time.time)
 
     # ── 槽位合并 ──
@@ -87,6 +96,25 @@ class ConversationContext:
         if topic:
             self.current_topic = topic
             self.updated_at = time.time()
+
+    # ── 路由上下文维护（2026-09-22 路由入口重构）──
+
+    def mark_turn(self, *, domain: str, intent: str = "",
+                  action: str = "", pending_question: str | None = None) -> None:
+        """记录一轮路由结果，供下一轮 Context Assembler / ContinuationResolver 消费。
+
+        pending_question 传 None 表示「本轮没有产生新追问」，不清空旧值
+        （追问往往跨轮存活，如旅游域待决项）；显式传空串表示清除。
+        """
+        if domain:
+            self.active_domain = domain
+        if intent:
+            self.last_intent = intent
+        if action:
+            self.last_action = action
+        if pending_question is not None:
+            self.pending_question = pending_question
+        self.updated_at = time.time()
 
     # ── P2.5 显式切换：overwrite 清理 ──
 
@@ -156,6 +184,10 @@ class ConversationContext:
             "must_go": list(self.must_go),
             "avoid": list(self.avoid),
             "current_topic": self.current_topic,
+            "active_domain": self.active_domain,
+            "last_intent": self.last_intent,
+            "last_action": self.last_action,
+            "pending_question": self.pending_question,
         }
 
 

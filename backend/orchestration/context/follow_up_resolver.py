@@ -49,7 +49,7 @@ _CONTINUATION_TEMPLATES = {
     "换一个": "换一个推荐",
 }
 
-# ── P2.5 显式切换（overwrite）正则 ──
+# P2.5 显式切换（overwrite）正则 ──
 _OVERWRITE_PATTERNS = (
     # 算了，改成成都 ｜ 改成成都吧
     re.compile(r"改成\s*([^\s，,。.!！?？]{2,12})"),
@@ -58,6 +58,12 @@ _OVERWRITE_PATTERNS = (
     # 换成都吧 ｜ 换成成都吧
     re.compile(r"换(?:成|到)?\s*([^\s，,。.!！?？]{2,12})(?:吧)?"),
 )
+
+# 非「目的地」候选：天数/数字/日期类短语（2026-09-22 实测踩坑）。
+# 「改成3天」是改天数不是改目的地，曾被当 overwrite 写脏
+# destination="3天"，污染后续跨轮上下文。目的地至少要含一个非数字字符
+# 且不匹配天数短语。
+_RE_OVERWRITE_DAY = re.compile(r"^[\d一二两三四五六七八九十百]+\s*(?:天|日|晚|号|日[早晚]|月|点分?)?$")
 
 
 def _has_strong_marker(query: str) -> bool:
@@ -77,7 +83,7 @@ def _detect_overwrite(query: str) -> str | None:
             # 「不去X了，去Y」里排除把旧目的地当新目的地
             if candidate and not any(
                 m2 in candidate for m2 in ("然后", "还有")
-            ):
+            ) and not _RE_OVERWRITE_DAY.match(candidate):
                 return candidate
     return None
 

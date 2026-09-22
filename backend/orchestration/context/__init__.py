@@ -5,10 +5,19 @@ from backend.orchestration.context.conversation_context import (
     get_conversation_context_store,
     sync_travel_brief_to_context,
 )
+from backend.orchestration.context.continuation_resolver import (
+    is_continuation_query,
+    resolve_continuation,
+)
 from backend.orchestration.context.follow_up_resolver import (
     CLARIFICATION_QUESTION,
     apply_resolution_to_context,
     resolve_followup,
+)
+from backend.orchestration.context.routing_context import (
+    assemble_routing_context,
+    mark_domain_turn,
+    set_pending_question,
 )
 
 __all__ = [
@@ -19,4 +28,9 @@ __all__ = [
     "CLARIFICATION_QUESTION",
     "apply_resolution_to_context",
     "resolve_followup",
+    "is_continuation_query",
+    "resolve_continuation",
+    "assemble_routing_context",
+    "mark_domain_turn",
+    "set_pending_question",
 ]

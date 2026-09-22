@@ -155,8 +155,15 @@ _RESCHEDULE_INTENT = re.compile(
 # ═══════════════════════════════════════════════════════
 # 模糊问题判定辅助
 # ═══════════════════════════════════════════════════════
+# 2026-09-22 路由入口重构（InputGuard 降权）：Guard 只负责空输入/非法请求/
+# 安全/权限/限流，「短文本 + 无业务名词」不再是 CLARIFY 条件——那是路由层
+# （ContinuationResolver / 粗分类 unknown→clarify）的职责。此前的弱命中
+# 分支曾把「太赶了」「帮我排个行程」等跨轮短指令误杀在图外。
+# 现仅保留**全匹配式空话**（无任何动作指向的祈使残句）→ CLARIFY。
 _VAGUE_PATTERNS = [r"^帮我看看$", r"^分析一下$", r"^帮我分析一下$", r"怎么办$",
                    r"^(?:随便|随意).{0,4}(?:说说|聊聊|讲讲)$"]
+# 业务名词 = 路由特征（out_of_scope 豁免 + has_business_signal 置信标注），
+# 不再作为 Guard 放行条件（2026-09-22 降权）。
 # 业务名词（判断"短问题是否仍含业务语义"）
 # 2026-09-15 整改：补齐组织/项目域名词。此前词表只有电商+制度词，
 # "查询技术部有多少人"（9 字符、无电商词）被 detect_vague 误判为模糊请求
@@ -405,26 +412,22 @@ class RuleGuard:
 
     # ── 模糊问题 ──────────────────────────────────────
     def detect_vague(self, q: str) -> RuleFinding | None:
-        if len(q) >= 10:
-            return None
-        # 带查询意图的短句有明确动作指向，不算模糊（防误杀，2026-09-15）
-        if _QUERY_INTENT.search(q):
-            return None
-        # 跨轮改单/排程指令（2026-09-22）：「改成3天」有明确动作指向
-        if _RESCHEDULE_INTENT.search(q):
+        """仅拦「全匹配式空话」（无任何动作指向）。
+
+        2026-09-22 降权：删除「短文本 + 无业务名词 → CLARIFY」弱分支与
+        长度门槛——短指令是否可答交给路由层（ContinuationResolver /
+        粗分类）判断，Guard 不再根据词汇表放行/拦截。
+        """
+        # 带查询/改单意图的短句有明确动作指向，不算模糊（防误杀）
+        if _QUERY_INTENT.search(q) or _RESCHEDULE_INTENT.search(q):
             return None
         if any(re.match(p, q) for p in _VAGUE_PATTERNS):
             return RuleFinding(
                 GuardCategory.AMBIGUOUS, RiskLevel.LOW, 0.7,
                 "请求过于模糊", "strong",
             )
-        if not _BUSINESS_NOUNS.search(q):
-            return RuleFinding(
-                GuardCategory.AMBIGUOUS, RiskLevel.LOW, 0.55,
-                "短查询且缺少业务对象", "weak",
-            )
         return None
 
-    # ── 业务正向信号（用于"放行确认"）────────────────
+    # ── 业务正向信号（路由特征：供 Router/置信标注消费，非放行条件）──
     def has_business_signal(self, q: str) -> bool:
         return bool(_BUSINESS_NOUNS.search(q))

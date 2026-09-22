@@ -111,6 +111,19 @@ class AgentState(TypedDict):
     # 挤在 "default" 一个桶里，坐席无法按真实会话认领（2026-09-17 实测）。
     # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
     session_id: str
+    # 路由上下文（路由入口重构 2026-09-22）：runner 在图外由 Context
+    # Assembler 组装（assemble_routing_context），router_node 消费——
+    # ContinuationResolver 据此判定跨轮短指令、粗分类器随 route_context
+    # 可见。结构见 routing_context.assemble_routing_context；空 dict = 无
+    # 活跃任务。每轮覆盖写入，无跨轮残留问题。
+    routing_context: dict
+    # 租户 ID 平铺（路由入口重构 2026-09-22 补漏）：make_initial_state 一直
+    # 写 tenant_id，但 schema 未声明 → LangGraph updates 流剥离该键，节点内
+    # state.get("tenant_id") 恒为 None。后果：ConversationContext 回写键
+    # (tenant="")与 runner 组装键 (tenant=identity 归一化值，如 "default")
+    # 不一致，跨轮上下文永远 miss（travel brief 同步同受此害）。
+    # 与 user_id/department/session_id 同批「断链修复」口径：每轮覆盖写入。
+    tenant_id: str
     # ── 分层路由（hierarchical routing，2026-09-22）──────────────
     # ROUTING_ARCHITECTURE=hierarchical 时由 router_node 从
     # RouteDecision.routing_meta 展平写入；legacy 模式这些键缺省（.get() 消费）。

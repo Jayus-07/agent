@@ -22,17 +22,20 @@ from backend.orchestration.graph.selection_funnel_prefilter import (
 # =====================================================
 
 class TestEntryClarify:
-    def test_weak_hit_single_signal_no_city(self, monkeypatch):
-        """「帮我做个行程」：1 个信号词无城市 → 追问城市，选项必命中旅游域。"""
+    def test_travel_weak_hit_no_longer_clarifies(self):
+        """路由入口重构（2026-09-22）：旅游弱命中不再全局追问——
+
+        「帮我做个行程」直接进旅游域图，由 brief 节点在域内追问目的地/天数
+        （参数缺失由域内处理）；入口追问只保留选品类目分支。
+        """
         from backend.orchestration.graph import clarify_content
 
-        result = clarify_content.build_entry_clarify("帮我做个行程", domain_hint="")
-        assert result is not None
-        assert result["handoff_available"] is False
-        assert result["options"], "必须提供可点选项"
-        # 选项文案 = 用户话术，点击后原样重发，必须能进对应域
-        for label in result["options"]:
-            assert is_travel_request(label), f"选项未命中旅游域: {label}"
+        assert clarify_content.build_entry_clarify(
+            "帮我做个行程", domain_hint="") is None
+        assert clarify_content.build_entry_clarify(
+            "帮我规划个行程", domain_hint="") is None
+        # 同时保证这类请求确实能进旅游域（预过滤命中 → 域图 brief 追问）
+        assert is_travel_request("帮我规划个行程")
 
     def test_no_clarify_when_strong_hit(self):
         """强命中（≥2 信号词）走正常旅游域，不追问。"""
@@ -170,7 +173,11 @@ class TestClarifyGuard:
 # =====================================================
 
 def test_router_weak_hit_short_circuits_to_clarify(monkeypatch):
-    """弱命中 query → route_mode="clarify"，不进主 Router。"""
+    """选品类目弱命中 query → route_mode="clarify"，不进主 Router。
+
+    路由入口重构（2026-09-22）后 L1 追问仅剩选品类目分支；旅游弱命中
+    改为进旅游域图由 brief 节点追问（见 TestEntryClarify）。
+    """
     import backend.orchestration.graph.cs_prefilter as cs_prefilter
     import backend.orchestration.graph.router_node as router_node
     import backend.orchestration.graph.selection_funnel_prefilter as sel_prefilter
@@ -191,10 +198,11 @@ def test_router_weak_hit_short_circuits_to_clarify(monkeypatch):
     monkeypatch.setattr(clarify_content, "_get_guard_cache", lambda: _FreshCache())
     # CS 兜底在 L1 之前执行（检测器已无向量通道），测试中必须屏蔽
     monkeypatch.setattr(cs_prefilter, "try_cs_prefilter", lambda *a, **k: None)
+    # 选品预过滤不命中（类目暗示无选品动词）才会走到 L1 追问，屏蔽之
     monkeypatch.setattr(sel_prefilter, "try_selection_funnel_prefilter",
                         lambda *a, **k: None)
 
-    state = {"question": "帮我做个行程", "session_id": "s1", "domain_hint": ""}
+    state = {"question": "宠物零食这个品类", "session_id": "s1", "domain_hint": ""}
     update = router_node.router_node(state)
     assert update["route_mode"] == "clarify"
     assert update["_clarify"]["options"]

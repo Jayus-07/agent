@@ -203,13 +203,15 @@ class HierarchicalRouter:
                 prediction, _DOMAIN_ACTIONS[prediction.domain], None, None, t0))
 
         if prediction.domain == "general":
-            # 寒暄/无需工具：v1 维持 legacy plan 支线（planner 处置），行为不劣化
+            # 寒暄/无需工具（路由入口重构 2026-09-22）：general_chat 主 LLM
+            # 直答，不再进 plan 支线（planner/critique/supervisor 对寒暄是
+            # 纯浪费，RAG 拒答话术对寒暄是噪声）
             decision = RouteDecision(
                 execution_mode=ExecutionMode.PLAN, candidates=[],
                 confidence=prediction.confidence,
-                reason="coarse domain=general → planner 支线",
+                reason="coarse domain=general → general_chat 直答",
             )
-            return self._assemble(decision, _meta(prediction, "plan", None, None, t0))
+            return self._assemble(decision, _meta(prediction, "general_chat", None, None, t0))
 
         if prediction.domain == "unknown":
             if COARSE_UNKNOWN_ACTION == "clarify":

@@ -28,6 +28,7 @@ from backend.agents.reporter.reporter import reporter_node
 from backend.observability.trace_middleware import trace_middleware
 from backend.orchestration.domain_registry import domain_graph_registry
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
+from backend.orchestration.graph.general_chat_node import general_chat_node
 from backend.orchestration.graph.router_node import route_selector, router_node
 from backend.orchestration.graph.tool_selector import tool_selector_node
 from backend.orchestration.state import AgentState, OrchestratorState
@@ -52,6 +53,7 @@ _NODE_LABELS = {
     "rag_skill":          "知识库检索",
     "report_skill":       "报告生成",
     "reporter":           "结果汇总",
+    "general_chat":       "寒暄直答",
 }
 
 
@@ -136,6 +138,8 @@ def build_graph(checkpointer=None):
     wf.add_node("critique", trace_middleware.wrap_sync_node("critique", critique_node))
     wf.add_node("supervisor", trace_middleware.wrap_sync_node("supervisor", supervisor_node))
     wf.add_node("reporter", trace_middleware.wrap_sync_node("reporter", reporter_node))
+    # 寒暄/能力咨询直答（路由入口重构 2026-09-22）：主 LLM 直连，禁 RAG
+    wf.add_node("general_chat", trace_middleware.wrap_sync_node("general_chat", general_chat_node))
 
     # ── 域图节点（自动发现，每个域图自带 reporter，直接到 END）──
     domains = domain_graph_registry.get_all()
@@ -169,6 +173,8 @@ def build_graph(checkpointer=None):
         "workflow_executor": "workflow_executor",
         # L1 弱命中追问（2026-09-19）：router 短路出追问，reporter 只出短文案
         "clarify": "reporter",
+        # 寒暄/能力咨询直答（2026-09-22）：主 LLM 直连节点
+        "general_chat": "general_chat",
     }
     for domain in domains.values():
         edge_map[domain.node_name] = domain.node_name
@@ -181,9 +187,10 @@ def build_graph(checkpointer=None):
     wf.add_edge("skill_executor", "reporter")
     wf.add_edge("workflow_executor", "reporter")
 
-    # 域图自带 reporter，直接到 END
+    # 域图自带 reporter，直接到 END；general_chat 直答完也直接 END
     for domain in domains.values():
         wf.add_edge(domain.node_name, END)
+    wf.add_edge("general_chat", END)
 
     wf.add_edge("planner", "critique")
 
@@ -202,7 +209,7 @@ def build_graph(checkpointer=None):
 
     skill_count = len(tool_registry.get_skill_nodes())
     logger.info(
-        f"[Graph] 图编译完成 (内置9节点+Router/executors + {skill_count} Skill = {9 + skill_count}节点,"
+        f"[Graph] 图编译完成 (内置10节点+Router/executors + {skill_count} Skill = {10 + skill_count}节点,"
         f"checkpointer={'on' if checkpointer is not None else 'off'})"
     )
     return wf.compile(checkpointer=checkpointer)

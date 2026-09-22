@@ -303,6 +303,18 @@ class GraphRunner:
                         "[Runner] guard clarify 接管为业务追问: "
                         f"source={clarify.get('source')}"
                     )
+                    try:
+                        from backend.orchestration.context.routing_context import (
+                            set_pending_question,
+                        )
+
+                        set_pending_question(
+                            tenant_id, user_id, session_id,
+                            clarify.get("question") or "",
+                        )
+                    except Exception:
+                        logger.debug("[Runner] 待答问题记录失败（软降级）",
+                                     exc_info=True)
                     yield {"event": "clarification", "data": {
                         "question": clarify["question"],
                         "options": [
@@ -420,9 +432,31 @@ class GraphRunner:
                 initial_state["question"] = effective_question
                 initial_state["raw_query"] = question
 
+        # ── Context Assembler（路由入口重构 2026-09-22）──────────────
+        # Guard 之后、Router 之前组装 Router 可读的会话上下文
+        # （active_domain / last_intent / last_action / brief_summary /
+        # pending_question），注入 state 供 ContinuationResolver 与粗分类
+        # 消费。软失败：空上下文 = 无活跃任务，路由行为不劣化。
+        try:
+            from backend.orchestration.context.routing_context import (
+                assemble_routing_context,
+            )
+
+            initial_state["routing_context"] = assemble_routing_context(
+                tenant_id, user_id, session_id)
+        except Exception as e:
+            logger.warning(f"[Runner] routing_context 组装失败（软降级）: {e}")
+            initial_state["routing_context"] = {}
+
         # ── worker 线程执行图 + 事件合并队列 ──
         # merged_q 元素: ("evt", event_dict) 或 ("done", None) 哨兵
         merged_q: queue.Queue = queue.Queue()
+        # flush 早期 context 事件（L2 历史裁剪在 MemoryManager 后台线程发生，
+        # 无 sink → 进程级缓冲；此处统一补发。晚到的 L2 事件顺延到下一条流，
+        # 最终一致。2026-09-22 实机验证发现并修复）
+        from backend.context_budget.metrics import drain_pending_events
+        for _early in drain_pending_events():
+            merged_q.put(("evt", {"event": "context", "data": _early}))
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
         # deadline：在线请求统一预算（tool_runtime 治理），后台/测试路径无此对象不受约束
@@ -525,7 +559,8 @@ class GraphRunner:
                     # 「未能获取任何有效数据」兜底文案。）
                     if node_name in self._skill_nodes or node_name == "supervisor" \
                             or node_name in ("workflow_executor", "skill_executor",
-                                             "cs_knowledge", "cs_pending") \
+                                             "cs_knowledge", "cs_pending",
+                                             "general_chat") \
                             or node_name in _domain_node_names():
                         ctx["all_step_results"].update(node_output.get("step_results", {}))
                         # direct/workflow executor 自己就是最终产出者

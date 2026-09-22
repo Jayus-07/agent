@@ -17,6 +17,134 @@ import time
 from backend.orchestration.router import get_router
 from backend.shared.logger import logger
 
+# route_mode → ConversationContext.active_domain（预过滤命中回写用）。
+# 客服 clarify（route_mode=clarify，出自 cs_prefilter）也归属客服域。
+_ROUTE_MODE_DOMAIN = {
+    "travel": "travel",
+    "customer_service": "customer_service",
+    "selection_funnel": "selection_funnel",
+}
+
+
+def _mark_route_from_update(state: dict, update: dict) -> dict:
+    """域图 prefilter 命中 → 回写会话路由上下文（Context Assembler 回写侧）。
+
+    下一轮 Context Assembler 据此组装 active_domain，ContinuationResolver
+    据此把「改成3天」「太赶了」这类跨轮短指令拉回活跃域。软失败不影响路由。
+    """
+    try:
+        mode = (update or {}).get("route_mode") or ""
+        domain = _ROUTE_MODE_DOMAIN.get(mode)
+        pending = None
+        clarify = (update or {}).get("_clarify")
+        if isinstance(clarify, dict) and clarify.get("question"):
+            pending = clarify["question"]
+        if domain or (mode == "clarify" and (update or {}).get("cs_context") is not None):
+            from backend.orchestration.context.routing_context import mark_domain_turn
+
+            mark_domain_turn(
+                state.get("tenant_id") or "", state.get("user_id") or "",
+                state.get("session_id") or "",
+                domain=domain or "customer_service",
+                intent=mode, action=domain or mode,
+                pending_question=pending,
+            )
+    except Exception:
+        logger.debug("[RouterNode] 路由上下文回写失败（软降级）", exc_info=True)
+    return update
+
+
+def _try_continuation(state: dict, query: str, routing_context: dict) -> dict | None:
+    """ContinuationResolver 命中 → 直接回活跃域（复用既有域图入口）。
+
+    仅处理有状态域图（travel/customer_service/selection_funnel）；工具域
+    （data/knowledge/...）无跨轮图状态可回，交正常路由。任何异常都返回
+    None 走原有链路，绝不阻断。
+    """
+    try:
+        from backend.orchestration.context.continuation_resolver import (
+            resolve_continuation,
+        )
+
+        cont = resolve_continuation(query, routing_context)
+    except Exception as e:
+        logger.warning(f"[RouterNode] 延续判定失败，走正常路由: {e}")
+        return None
+
+    if not cont.get("is_continuation"):
+        if cont.get("matched"):
+            logger.info(
+                f"[RouterNode] 延续信号未回域: reason={cont.get('reason')} "
+                f"matched={cont.get('matched')}"
+            )
+        return None
+
+    domain = cont["domain"]
+    logger.info(
+        f"[RouterNode] 延续命中: domain={domain} matched={cont.get('matched')}"
+    )
+    try:
+        from backend.observability.tracer import trace_collector
+
+        t = trace_collector.current()
+        if t is not None:
+            t.tags["continuation"] = f"{domain}:{cont.get('matched', '')}"
+    except Exception:
+        pass
+
+    if domain == "travel":
+        # 与 try_travel_prefilter 同构的域图入口；目的地/天数变更由域图
+        # slot_filler 在 checkpoint 状态上处理（跨轮契约不变）
+        return {
+            "route_decision": None,
+            "route_mode": "travel",
+            "travel_context": {
+                "conversation_id": state.get("session_id", ""),
+                "travel_route": {"source": "continuation"},
+            },
+        }
+    if domain == "customer_service":
+        try:
+            from backend.orchestration.graph.cs_prefilter import try_cs_prefilter
+
+            update = try_cs_prefilter(query, state, forced=True)
+            if update is not None:
+                return update
+        except Exception as e:
+            logger.warning(f"[RouterNode] 延续回客服域失败，走正常路由: {e}")
+        return None
+    if domain == "selection_funnel":
+        try:
+            from backend.orchestration.graph.selection_funnel_prefilter import (
+                try_selection_funnel_prefilter,
+            )
+
+            update = try_selection_funnel_prefilter(query, state)
+            if update is not None:
+                return update
+        except Exception as e:
+            logger.warning(f"[RouterNode] 延续回选品域失败，走正常路由: {e}")
+    return None
+
+
+def _try_general_chat(state: dict) -> dict | None:
+    """问候/能力咨询（Guard GREETING 判定）→ general_chat 直答分流。
+
+    仅全局入口生效；客服窗口锁域语义不变（寒暄仍进 CS 管线）。
+    """
+    try:
+        category = ((state.get("guard_result") or {}).get("category") or "")
+        if category == "greeting":
+            logger.info("[RouterNode] Guard GREETING → general_chat 直答")
+            return {
+                "route_decision": None,
+                "route_mode": "general_chat",
+                "query_understanding": {"intent": "greeting", "complexity": "chat"},
+            }
+    except Exception:
+        logger.debug("[RouterNode] general_chat 判定失败，走正常路由", exc_info=True)
+    return None
+
 
 def _enrich_with_understanding(cs_update: dict, query: str) -> dict:
     """P1 步骤 3 接线（2026-09-19）：CSUnderstanding 结果并入 cs_route。
@@ -107,6 +235,21 @@ def router_node(state: dict) -> dict:
     domain_hint = (state.get("domain_hint") or "").strip().lower()
     cs_forced = domain_hint in ("customer_service", "cs")
 
+    # ── 路由入口重构（2026-09-22）：Guard → Context Assembler →
+    # ContinuationResolver → Coarse Domain Router ──────────────────
+    # routing_context 由 runner 在图外组装（assemble_routing_context），
+    # 缺省空 dict = 无活跃任务，延续判定自动失效。
+    routing_context = state.get("routing_context") or {}
+    if not cs_forced:
+        # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
+        cont_update = _try_continuation(state, query, routing_context)
+        if cont_update is not None:
+            return {**state, **_mark_route_from_update(state, cont_update)}
+        # 问候/能力咨询 → general_chat 主 LLM 直答（禁 RAG，不进域图）
+        general_update = _try_general_chat(state)
+        if general_update is not None:
+            return {**state, **general_update}
+
     def _try_cs_prefilter(forced: bool = False) -> dict | None:
         # 逻辑在 cs_prefilter.py（只判断"是不是客服"，不判断"走哪个 expert"）
         try:
@@ -162,11 +305,13 @@ def router_node(state: dict) -> dict:
     if cs_forced and not cs_redirect:
         cs_update = _try_cs_prefilter(forced=True)
         if cs_update is not None:
-            return {**state, **_enrich_with_understanding(cs_update, query)}
+            return {**state, **_mark_route_from_update(
+                state, _enrich_with_understanding(cs_update, query))}
     elif not cs_forced and cs_rule_hits:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
-            return {**state, **_enrich_with_understanding(cs_update, query)}
+            return {**state, **_mark_route_from_update(
+                state, _enrich_with_understanding(cs_update, query))}
 
     # ── 旅游预过滤：纯正则 ─────────────────────────────────────────
     # 域锁且未转出时跳过；转出（redirect_main）或全局入口正常执行。
@@ -175,7 +320,7 @@ def router_node(state: dict) -> dict:
             from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
             travel_update = try_travel_prefilter(query, state)
             if travel_update is not None:
-                return {**state, **travel_update}
+                return {**state, **_mark_route_from_update(state, travel_update)}
         except Exception as e:
             logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
 
@@ -188,7 +333,7 @@ def router_node(state: dict) -> dict:
             )
             funnel_update = try_selection_funnel_prefilter(query, state)
             if funnel_update is not None:
-                return {**state, **funnel_update}
+                return {**state, **_mark_route_from_update(state, funnel_update)}
         except Exception as e:
             logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
@@ -198,7 +343,8 @@ def router_node(state: dict) -> dict:
     if not cs_rule_hits and not cs_forced:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
-            return {**state, **_enrich_with_understanding(cs_update, query)}
+            return {**state, **_mark_route_from_update(
+                state, _enrich_with_understanding(cs_update, query))}
 
     # ── L1 入口弱命中追问（2026-09-19 拒答转追问）────────────────
     # 放在全部域预过滤与 CS 兜底之后：客服优先级不被追问抢夺。
@@ -225,6 +371,18 @@ def router_node(state: dict) -> dict:
         clarify = None
     if clarify is not None:
         logger.info(f"[RouterNode] L1 弱命中追问: source={clarify.get('source')}")
+        try:
+            from backend.orchestration.context.routing_context import (
+                set_pending_question,
+            )
+
+            set_pending_question(
+                state.get("tenant_id") or "", state.get("user_id") or "",
+                state.get("session_id") or "",
+                clarify.get("question") or "",
+            )
+        except Exception:
+            logger.debug("[RouterNode] 待答问题记录失败（软降级）", exc_info=True)
         return {
             **state,
             "route_decision": None,
@@ -251,11 +409,18 @@ def router_node(state: dict) -> dict:
             logger.debug("[RouterNode] router_init span 记录失败", exc_info=True)
             router = get_router()
         # 同步调用（router 主流程是同步的）。
-        # context 进入路由缓存键（预留位）：同文 query 在不同 user/department
-        # 下不会互串缓存。当前路由决策本身不依赖上下文，故不改变行为。
+        # context 进入路由缓存键：同文 query 在不同 user/department 下不会
+        # 互串缓存。2026-09-22 起额外携带会话任务状态（active_domain 等），
+        # 供粗分类器/HierarchicalRouter 消费（纯规则延续判定已在上方完成，
+        # 这里是 Router 层的上下文可见性）。
         route_context = {
             "department": state.get("department") or "",
             "user_id": state.get("user_id") or "",
+            "active_domain": routing_context.get("active_domain") or "",
+            "last_intent": routing_context.get("last_intent") or "",
+            "last_action": routing_context.get("last_action") or "",
+            "brief_summary": routing_context.get("brief_summary") or {},
+            "pending_question": routing_context.get("pending_question") or "",
         }
         decision = router.route(query, context=route_context)
         logger.info(
@@ -357,6 +522,26 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
     if not fields["domain"]:
         return None
 
+    # ── general 域：寒暄直答（2026-09-22，主 LLM 直连，禁 RAG/工具）──
+    if action == "general_chat":
+        try:
+            from backend.orchestration.context.routing_context import mark_domain_turn
+
+            mark_domain_turn(
+                state.get("tenant_id") or "", state.get("user_id") or "",
+                state.get("session_id") or "",
+                domain="general", intent="general_chat", action="general_chat",
+                pending_question="",
+            )
+        except Exception:
+            pass
+        return {
+            **state,
+            "route_decision": None,
+            "route_mode": "general_chat",
+            **fields,
+        }
+
     # ── 域图类域：复用既有 prefilter（不新增路由实现）─────────────
     if action.startswith("prefilter_"):
         update = None
@@ -375,7 +560,8 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
         except Exception as e:
             logger.warning(f"[RouterNode] 分层路由域图 prefilter 失败，回退 legacy: {e}")
         if update is not None:
-            return {**state, **_enrich_with_understanding(update, query)}
+            return {**state, **_mark_route_from_update(
+                state, _enrich_with_understanding(update, query))}
         # 未放行（如 CS 灰度 control 组 / 检测器不同意）→ legacy 路由重新决策；
         # route_legacy 绕过 hierarchical 分支与缓存，粗分类字段保留供评测
         from backend.orchestration.router import get_router
@@ -401,6 +587,18 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                 logger.info(
                     f"[RouterNode] 分层路由澄清: reason={fields['clarification_reason']}"
                 )
+                try:
+                    from backend.orchestration.context.routing_context import (
+                        set_pending_question,
+                    )
+
+                    set_pending_question(
+                        state.get("tenant_id") or "", state.get("user_id") or "",
+                        state.get("session_id") or "",
+                        clarify.get("question") or "",
+                    )
+                except Exception:
+                    pass
                 return {
                     **state,
                     "route_decision": None,
@@ -412,6 +610,22 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
         except Exception as e:
             logger.warning(f"[RouterNode] 分层路由澄清构造失败，回退 plan 支线: {e}")
         return None  # 防循环守卫不放行 / 构造失败 → 照常走 plan 支线
+
+    # ── 工具域 / plan 拍板：回写路由上下文（下一轮延续判定数据源）──
+    if action in ("tool_route", "plan"):
+        try:
+            from backend.orchestration.context.routing_context import mark_domain_turn
+
+            mark_domain_turn(
+                state.get("tenant_id") or "", state.get("user_id") or "",
+                state.get("session_id") or "",
+                domain=fields["domain"], intent=action,
+                action=fields["selected_tool"] or fields["domain"],
+                pending_question="",
+            )
+        except Exception:
+            logger.debug("[RouterNode] 工具域路由上下文回写失败（软降级）",
+                         exc_info=True)
 
     # plan / tool_route：决策照常向下（direct → tool_selector → skill_executor）
     return None
@@ -432,6 +646,9 @@ def route_selector(state: dict) -> str:
         # L1 弱命中追问：直接到 reporter 出短文案（builder edge_map
         # "clarify" → "reporter"），不执行任何 skill
         return "clarify"
+    if mode == "general_chat":
+        # 寒暄/能力咨询直答（2026-09-22）：主 LLM 直连，不进 RAG/域图
+        return "general_chat"
     from backend.orchestration.domain_registry import domain_graph_registry
     domain = domain_graph_registry.get(mode)
     if domain:

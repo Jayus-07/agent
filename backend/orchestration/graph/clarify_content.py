@@ -66,6 +66,11 @@ CLARIFY_STANDALONE_TEXT = (
 def build_entry_clarify(query: str, domain_hint: str) -> dict | None:
     """Router 预过滤层的弱命中追问判定。
 
+    2026-09-22 路由入口重构：**移除旅游分支**——「帮我规划个行程」这类
+    缺目的地的请求现在直接进旅游域图，由 brief 节点（slot_filler）在域内
+    追问目的地/天数，不再被全局追问卡拦截（参数缺失由域内处理）。
+    仅保留选品类目暗示分支。
+
     Returns:
         需要追问 → {"source", "question", "options", "handoff_available"}；
         不追问 → None（走原链路）。
@@ -75,21 +80,6 @@ def build_entry_clarify(query: str, domain_hint: str) -> dict | None:
     # 客服窗口锁域：不打断客服语境（强信号转出由 redirect_main 负责）
     if (domain_hint or "").strip().lower() in ("customer_service", "cs"):
         return None
-
-    from backend.orchestration.graph.travel_prefilter import (
-        travel_has_city,
-        travel_signal_hits,
-    )
-
-    travel_hits = travel_signal_hits(query)
-    if travel_hits and not travel_has_city(query):
-        # 1 个信号词、无城市：差"目的地"这一个槽位就能进旅游域
-        return {
-            "source": "entry_travel_city",
-            "question": "看起来您可能想规划行程——想去哪个城市呢？目前支持福州、厦门、杭州。",
-            "options": list(_TRAVEL_CITY_OPTIONS),
-            "handoff_available": False,
-        }
 
     from backend.orchestration.graph.selection_funnel_prefilter import (
         selection_category_hint,

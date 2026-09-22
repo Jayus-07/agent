@@ -28,3 +28,11 @@ FOLLOWUP_LLM_REWRITE_ENABLED = (
 FOLLOWUP_LLM_REWRITE_TIMEOUT_SECONDS = float(
     os.getenv("FOLLOWUP_LLM_REWRITE_TIMEOUT_SECONDS", "6")
 )
+
+# ContinuationResolver 开关（路由入口重构 2026-09-22）：
+# 命中延续信号且会话有活跃任务时，直接回上一任务域（如旅游域跨轮改单）。
+# 关闭即回滚为原路由行为（短指令交给粗分类/Gate 判定）。
+CONTINUATION_RESOLVER_ENABLED = (
+    os.getenv("CONTINUATION_RESOLVER_ENABLED", "true").strip().lower()
+    in ("1", "true", "yes", "on")
+)
