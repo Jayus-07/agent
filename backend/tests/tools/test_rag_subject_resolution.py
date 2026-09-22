@@ -33,10 +33,15 @@ def captured(monkeypatch):
 
 
 def _bind(user_id: str = "", department: str = "", monkeypatch=None):
-    """绑定工具上下文（bind() 的 contextvar 面最小组件）。"""
-    monkeypatch.setattr(rc, "get_tool_user_id", lambda: user_id, raising=False)
-    monkeypatch.setattr(rc, "get_tool_department", lambda: department, raising=False)
-    monkeypatch.setattr(rc, "get_tool_permissions", lambda: None, raising=False)
+    """用真实 contextvar setter 绑定工具上下文（bind() 的最小组件）。"""
+    from backend.core.request_context import (
+        set_tool_department,
+        set_tool_permissions,
+        set_tool_user_id,
+    )
+    set_tool_user_id(user_id)
+    set_tool_department(department)
+    set_tool_permissions(None)
 
 
 def _call():
