@@ -978,6 +978,38 @@ def record_cs_outbox_publish(result: str) -> None:
         pass
 
 
+# ── 客服质检日报指标（批次D，2026-09-22）──────────────────
+
+cs_qa_daily_conversations = Gauge(
+    "cs_qa_daily_conversations",
+    "客服质检日报：昨日会话量",
+)
+cs_qa_daily_handoff_rate = Gauge(
+    "cs_qa_daily_handoff_rate",
+    "客服质检日报：昨日转人工率",
+)
+cs_qa_daily_satisfaction = Gauge(
+    "cs_qa_daily_satisfaction",
+    "客服质检日报：昨日满意度均分（无评价时不上报）",
+)
+
+
+def record_cs_qa_conversations(total: int, handoff_rate: float) -> None:
+    try:
+        cs_qa_daily_conversations.set(max(0, int(total)))
+        cs_qa_daily_handoff_rate.set(max(0.0, float(handoff_rate)))
+    except Exception:
+        pass
+
+
+def record_cs_qa_satisfaction(avg_rating) -> None:
+    try:
+        if avg_rating is not None:
+            cs_qa_daily_satisfaction.set(float(avg_rating))
+    except Exception:
+        pass
+
+
 __all__ = [
     "chat_request_total",
     "chat_request_duration_seconds",
@@ -1058,6 +1090,12 @@ __all__ = [
     "set_cs_outbox_pending",
     "set_cs_outbox_lag",
     "record_cs_outbox_publish",
+    # 客服质检日报（批次D）
+    "cs_qa_daily_conversations",
+    "cs_qa_daily_handoff_rate",
+    "cs_qa_daily_satisfaction",
+    "record_cs_qa_conversations",
+    "record_cs_qa_satisfaction",
     # Trace 数据质量指标（2026-09-03）
     "trace_finish_total",
     "trace_rejection_total",

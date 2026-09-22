@@ -10,6 +10,7 @@ import asyncio
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init
 
 from backend.config.tasks import (
@@ -34,6 +35,7 @@ celery_app = Celery(
              "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
              "backend.tasks.metadata_shadow_tasks",  # 元数据影子隔离队列
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
+             "backend.tasks.cs_qa_tasks",  # 批次D：客服质检每日报表（beat）
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
              "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
@@ -98,6 +100,12 @@ celery_app.conf.update(
         "cs-event-outbox-compensation": {
             "task": "cs.event_outbox_compensation",
             "schedule": 15.0,
+        },
+        # 批次D（2026-09-22）：客服质检每日报表。每日 06:10 UTC 聚合昨日
+        # 指标（幂等覆盖 qa_daily_reports）；失败自动重试（最多 3 次）。
+        "cs-qa-daily-report": {
+            "task": "cs.qa_daily_report",
+            "schedule": crontab(hour=6, minute=10),
         },
         # B5（2026-09-21 高并发审查）：僵尸 RUNNING 任务定期收尸。
         # 阈值与间隔均可经 env 覆盖（TASK_ZOMBIE_*，见 backend/config/tasks.py）

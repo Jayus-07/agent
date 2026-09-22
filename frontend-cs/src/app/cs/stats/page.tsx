@@ -11,7 +11,7 @@ import Link from "next/link";
 import {
   Headphones, MessageSquare, Star, Headset, RefreshCw, ArrowLeft,
 } from "lucide-react";
-import { getCSStats } from "@/api/cs";
+import { getCSStats, getQAReports, type QADailyReport } from "@/api/cs";
 import type { CSStatsResponse } from "@/types/cs";
 
 const RATING_COLORS: Record<number, string> = {
@@ -180,9 +180,127 @@ export default function CSStatsPage() {
                 )}
               </div>
             </div>
+
+            {/* 批次D：质检日报（beat 每日聚合，最新一天在首位） */}
+            <QAReportSection />
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function QAReportSection() {
+  const [reports, setReports] = useState<QADailyReport[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    getQAReports()
+      .then((res) => {
+        if (alive) setReports(res.items);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const latest = reports[0];
+
+  return (
+    <div className="bg-white border border-border-subtle rounded-xl p-4">
+      <h3 className="text-sm font-semibold text-text-primary mb-3">
+        质检日报（每日 06:10 自动聚合）
+      </h3>
+      {loading ? (
+        <p className="text-xs text-text-muted py-6 text-center">加载中…</p>
+      ) : !latest ? (
+        <p className="text-xs text-text-muted py-6 text-center">
+          暂无日报数据 —— 首份日报将在次日 06:10 后生成
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <MiniMetric
+              label={`会话量（${latest.report_date}）`}
+              value={String(latest.metrics.conversations?.total ?? 0)}
+            />
+            <MiniMetric
+              label="转人工率"
+              value={`${Math.round((latest.metrics.conversations?.handoff_rate ?? 0) * 100)}%`}
+            />
+            <MiniMetric
+              label="AI 独立解决率"
+              value={`${Math.round((latest.metrics.conversations?.ai_resolution_rate ?? 0) * 100)}%`}
+            />
+            <MiniMetric
+              label="60s 首响达标率"
+              value={`${Math.round((latest.metrics.response?.rate ?? 0) * 100)}%`}
+            />
+            <MiniMetric
+              label="满意度均分"
+              value={
+                latest.metrics.satisfaction?.avg_rating != null
+                  ? `${latest.metrics.satisfaction.avg_rating} / 5`
+                  : "暂无评价"
+              }
+            />
+            <MiniMetric
+              label="新增工单"
+              value={String(latest.metrics.tickets?.new_total ?? 0)}
+            />
+            <MiniMetric
+              label="未关闭工单"
+              value={String(latest.metrics.tickets?.open_total ?? 0)}
+            />
+            <MiniMetric
+              label="超 48h 未结"
+              value={String(latest.metrics.tickets?.stale_over_48h ?? 0)}
+            />
+          </div>
+
+          {(latest.metrics.agents?.length ?? 0) > 0 && (
+            <div>
+              <h4 className="text-xs font-medium text-text-muted mb-1.5">
+                坐席质量（承接量 Top）
+              </h4>
+              <div className="space-y-1">
+                {latest.metrics.agents!.slice(0, 5).map((a) => (
+                  <div key={a.agent_id} className="flex items-center gap-2 text-xs">
+                    <span className="font-mono text-text-secondary truncate w-40">
+                      {a.agent_id}
+                    </span>
+                    <span className="text-text-muted">承接 {a.handled}</span>
+                    <span className="text-text-muted">
+                      满意度 {a.avg_rating != null ? a.avg_rating : "--"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {reports.length > 1 && (
+            <p className="text-[11px] text-text-muted">
+              已沉淀 {reports.length} 天报表（近 7 天），可在
+              /api/cs/ops/qa/reports 按日期区间查询
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 border border-border-subtle/60 px-3 py-2">
+      <div className="text-[11px] text-text-muted truncate">{label}</div>
+      <div className="text-base font-semibold text-text-primary">{value}</div>
     </div>
   );
 }

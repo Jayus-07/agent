@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from backend.app.api.identity import resolve_identity
 from backend.customer_service.dispatch import repository
 from backend.memory.database import AsyncSessionLocal, MemoryDatabaseUnavailable
 
@@ -78,3 +79,42 @@ async def dispatch_stats(
         },
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/cs/ops/qa/reports")
+async def qa_reports(
+    request: Request,
+    start: str = Query("", description="起始日期 YYYY-MM-DD（含），缺省=近7天"),
+    end: str = Query("", description="结束日期 YYYY-MM-DD（含），缺省=今天"),
+    _operator=Depends(require_cs_supervisor),
+):
+    """客服质检每日报表（批次D，supervisor 闸）。
+
+    beat 每日 06:10 UTC 聚合写入（cs.qa_daily_report），本端点只读。
+    手动补数：``celery call cs.qa_daily_report``（幂等覆盖）。
+    """
+    from datetime import date, timedelta
+
+    from backend.customer_service.qa_report import list_reports
+
+    def _parse(value: str, fallback: date) -> date:
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return fallback
+
+    today = datetime.now(timezone.utc).date()
+    end_date = _parse(end, today)
+    start_date = _parse(start, end_date - timedelta(days=6))
+    if start_date > end_date:
+        raise HTTPException(422, detail="start 不能晚于 end")
+
+    ident = resolve_identity(request)
+    try:
+        reports = await list_reports(
+            start_date, end_date,
+            tenant_id=ident.tenant_id or "default",
+        )
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
+    return {"items": reports, "total": len(reports)}
