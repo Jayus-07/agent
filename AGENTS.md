@@ -148,3 +148,50 @@ Backend: `py_compile` + `pytest tests/sql/ -v` ｜ Frontend: `npx tsc --noEmit` 
 - 杀端口脚本都带 docker 守卫（容器占端口时跳过，防误杀 com.docker.backend）
 - **py 与 Java 是两个独立项目**：Java = Enterprise_OA（备份 `.workbuddy/java-legacy-backup/`，割接清单 `docs/java-side-handover.md`）；唯一联系是 Java 客服调 py agent
 - **认证 py 自建**（issuer=agent-platform，`backend/security/local_jwt.py`，migration 008）；APISIX `gateway-auth` 插件验 JWT——**Bearer 优先于 X-API-Key**，注入 X-User-Id 身份头（契约 `docs/contracts/identity-header-protocol.md`）；登录链路前端 `/login` → APISIX `/api/auth/**` → auth-service，回滚 = env 改回 8080
+
+## 多会话协作与环境避坑纪律（2026-09-19~09-22 真实事故沉淀）
+
+多个会话（人 + 多个 AI session）并行操作同一仓库、共享同一套容器/端口/测试环境。每条规则来自实测事故，不是理论推演。完整版（含全部排查命令与判定流程）见 `.zcode/skills/agent-repo-pitfalls/SKILL.md`。
+
+### 提交：必须双重路径限定
+
+- 事故：不带路径的 `git commit` 把整个暂存区一并提交——实测一次吞掉 258 个文件（含其他会话 stage 的内容）。
+- 标准写法（两条都要带路径）：`git add -A -- <paths>` + `git commit -m "..." -- <paths>`；`commit -- <path>` 对未跟踪文件无效，必须先 add。
+- 误提交回退：`git reset <base>`（mixed，工作区零损失），绝不用 `--hard`。
+
+### 提交前：查引用符号是否已落库
+
+- `git diff <file>` 看新增行引用了哪些新模块/函数/导出，逐个 `git status --short -- <模块路径>` 确认定义文件已提交——否则主干 import / tsc 直接挂（实测两次）。
+- 文件混有他人未提交改动 → 整个文件此时不能提交；文件干净只引用未提交模块 → 接线行留待对方落定后补，提交信息显式标注「差一行未生效」。
+- admin 门禁（`SENSITIVE_API_GUARD_MODE=enforce`）改动必须与前端改道原子提交，否则旧前端 403。
+- 阶段完成**立即**路径限定提交——并行会话可能「收编」工作区未提交文件代为提交（实测发生过）。
+
+### 并发 pytest 冻结
+
+任何会话跑全量 pytest（约 20 分钟）期间：不改 `backend/` 代码、不动容器（改了结果不可信）。开工前先确认没有会话在跑全量测试。
+
+### 动容器/端口前：先查归属
+
+- 启动/重启/down/rebuild/抢占端口前必做只读核查：`docker ps`（谁在跑）、`netstat -ano | findstr :<port>`（端口被谁占）、`docker inspect <容器>`（真实启动配置）。会停掉/重建/抢占别人在用的 → 先报告「发现了什么、会影响谁」，等确认再动手；纯增量只读操作可直接做；无冲突可启动但须说明占了什么。
+- **孤儿容器陷阱**：容器若靠已删除的临时 override 拉起（`docker inspect <容器> --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'` 指向不存在的文件），主干 `compose up` 后会**静默消失**（实测 beat 消失、三条周期任务停摆）。服务必须正式定义在主干 compose；Celery beat 必须单实例，worker 才可多副本。
+
+### compose up 中途失败 → 半死容器 → 前端「认证缺 data 字段」
+
+- `up` 报错中断 ≠ 什么都没发生：前面的服务可能已被 SIGTERM 停掉且未拉起。容器名冲突先 `docker rm <冲突容器>` 再 up，不要反复重试。
+- **关键判定**：前端报「认证响应缺少 data 字段」（文案出自 `frontend/src/lib/auth.ts:96` 的 `unwrapResult`，期望 Result 包裹 `{code,message,data}`）= 网关 503 HTML / 上游挂了的典型症状——**先查后端容器，别改前端代码**。
+- 处置：`docker ps -a` 找 Exited/Created 容器 → `docker start agent-app-1` → `curl -s http://localhost:8000/health` 验证恢复。
+
+### 本机双 PostgreSQL（连错库排查极费时）
+
+- docker `agent-postgres-1` = 宿主机映射 **5433**（agent 权威库）；宿主机原生 PG **5432** 恰好也有同名 `agent_memory` 库——库名一样数据不一样，极易误判「数据丢了/写入没生效」。
+- agent 项目库连接一律**显式写 5433**；见 `localhost:5432` 先怀疑连错库。不确定就 `docker port agent-postgres-1` 确认。
+
+### 其他仓库级坑
+
+- 开工前必查 `git status` + `git log`；发现已有实施只做增量修改，不重写（用户常多会话并行推进同一功能）。
+- refs/remotes 静默丢失（`git status` 永远 `[ahead N]/[gone]`）：`mkdir -p .git/refs/remotes/origin` 后重试 fetch。
+- TaskList 不跨会话持久化：跨会话待办以 `docs/未完成功能进度汇总-*.md` + `docs/*跨会话交接报告*.md` 的并集为准。
+
+### 通用排查顺序（运行环境类问题）
+
+1. `docker ps -a` 看全量容器（不是 `docker ps`）→ 2. 前端报「响应格式不对」类错误先 curl 上游 :8000 确认是否 503 → 3. 数据「消失/不一致」先 `docker port` 确认连的哪个 PG → 4. 环境 OK 再看代码，反过来必走弯路。
