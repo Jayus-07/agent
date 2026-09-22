@@ -1,5 +1,15 @@
 """customer_service/service/order_service.py — 订单查询服务
 
+批次B（2026-09-22）：业务网关双模式收口。
+  - sandbox（默认）：直查内部演示库 + demo 身份映射，历史行为不变
+  - http：经 business_client 调 business-service（Java / mock 容器），
+    契约见 backend/mock/business_service/contract.md
+
+模式判定收口在 service 层（与 demo_mode 同位），Router/权限层零改动。
+http 模式失败映射回既存异常类型（OrderNotFoundError/DatabaseError），
+调用方（query_expert 等）的错误处理路径无需感知模式。
+网关失败**不降级回 sandbox**——真环境返回假数据比查不到更危险。
+
 设计参考: docs/customer-service/design.md §5.3
 """
 from __future__ import annotations
@@ -16,6 +26,23 @@ from backend.customer_service.errors import (
 from backend.customer_service.security.permission import PermissionChecker
 
 _ORDER_ID_RE = re.compile(r"^[a-zA-Z0-9\-]+$")
+
+
+def _use_http_gateway() -> bool:
+    from backend.config.customer_service import CS_BUSINESS_GATEWAY_MODE
+
+    return CS_BUSINESS_GATEWAY_MODE == "http"
+
+
+def _unwrap(resp: dict) -> dict:
+    """解统一响应封套 {"code", "message", "data"}；code!=0 视为业务失败。"""
+    code = resp.get("code", 0)
+    if code != 0:
+        raise DatabaseError(f"业务网关返回失败 code={code}: {resp.get('message')}")
+    data = resp.get("data")
+    if not isinstance(data, dict):
+        raise DatabaseError("业务网关响应缺少 data 字段")
+    return data
 
 
 @dataclass
@@ -45,6 +72,9 @@ class OrderService:
             OrderNotFoundError: 订单不存在或不属于该用户
             DatabaseError: 数据库异常
         """
+        if _use_http_gateway():
+            return self._http_query_orders(user_id, order_id, query_type)
+
         if query_type == "detail":
             if not order_id:
                 raise ValidationError("detail 查询需要提供 order_id")
@@ -59,6 +89,9 @@ class OrderService:
 
     def query_order_items(self, user_id: str, order_id: str) -> list[dict]:
         """查询订单明细。先验证订单归属。"""
+        if _use_http_gateway():
+            return self._http_query_order_items(user_id, order_id)
+
         PermissionChecker.validate_order_id(order_id)
         order = self._get_single_order(user_id, order_id)
 
@@ -76,6 +109,68 @@ class OrderService:
             raise DatabaseError(f"查询订单明细失败: {result.error}")
 
         return result.rows
+
+    # ── http 网关模式（批次B）─────────────────────────────
+
+    def _http_query_orders(
+        self,
+        user_id: str,
+        order_id: str | None,
+        query_type: str,
+    ) -> OrderQueryResult:
+        if query_type == "detail":
+            if not order_id:
+                raise ValidationError("detail 查询需要提供 order_id")
+            PermissionChecker.validate_order_id(order_id)
+            return OrderQueryResult(
+                orders=[self._http_get_single_order(user_id, order_id)],
+                total_count=1,
+                query_type="detail",
+            )
+        data = self._http_get("/business/orders", user_id)
+        orders = data.get("orders")
+        if not isinstance(orders, list):
+            raise DatabaseError("业务网关订单列表响应格式异常")
+        return OrderQueryResult(
+            orders=orders, total_count=len(orders), query_type="list",
+        )
+
+    def _http_query_order_items(self, user_id: str, order_id: str) -> list[dict]:
+        PermissionChecker.validate_order_id(order_id)
+        data = self._http_get(f"/business/orders/{order_no_urlsafe(order_id)}", user_id)
+        order = data.get("order") or {}
+        items = order.get("items")
+        if not isinstance(items, list):
+            # 真实 Java 侧未提供明细端点前，列表契约不含 items —— 显式报错
+            raise DatabaseError("业务网关暂未提供订单明细数据")
+        return items
+
+    def _http_get_single_order(self, user_id: str, order_id: str) -> dict:
+        data = self._http_get(
+            f"/business/orders/{order_no_urlsafe(order_id)}", user_id,
+        )
+        order = data.get("order")
+        if not isinstance(order, dict):
+            raise DatabaseError("业务网关订单详情响应格式异常")
+        return order
+
+    def _http_get(self, path: str, user_id: str) -> dict:
+        from backend.customer_service.service.demo_mode import resolve_user_id
+        from backend.infra.http.business_client import (
+            BusinessServiceError,
+            get_json_sync,
+        )
+
+        try:
+            resp = get_json_sync(path, params={"user_id": str(resolve_user_id(user_id))})
+        except BusinessServiceError as exc:
+            if exc.status_code == 404:
+                raise OrderNotFoundError(f"Order not found via gateway: {path}")
+            # 网关挂了/超时/5xx：显式失败，绝不降级回演示库假数据
+            raise DatabaseError(f"业务网关不可用: {exc}") from exc
+        return _unwrap(resp)
+
+    # ── sandbox 模式（直查演示库，历史行为不变）──────────
 
     def _get_single_order(self, user_id: str, order_id: str) -> dict:
         """获取单个订单并验证归属。"""
@@ -129,6 +224,12 @@ class OrderService:
             total_count=len(result.rows),
             query_type="list",
         )
+
+
+def order_no_urlsafe(order_id: str) -> str:
+    """路径段转义：order_id 已由 PermissionChecker 校验为安全字符，
+    此处再兜底去掉斜杠/空白，防路径拼接意外。"""
+    return str(order_id).strip().replace("/", "")
 
 
 _service_instance: OrderService | None = None

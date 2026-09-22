@@ -303,6 +303,43 @@ services:
           memory: 1g
           cpus: "1.0"
 
+  # ── business-service HTTP mock（批次B 联调）────────────────
+  # Java business-service 未就绪期间的只读订单查询 mock，契约见
+  # backend/mock/business_service/contract.md（真实服务落地时照此实现）。
+  # 与 app 共用镜像（fastapi/uvicorn 已内置），仅独立进程 + 端口。
+  #   - 鉴权：mock 配置 INTERNAL_API_TOKEN（与 app 相同 env 注入）时
+  #     强制校验 X-Internal-Token，fail-closed。
+  #   - 无任何外部依赖（不连 DB/Redis），可独立启停：
+  #     docker compose up -d business-mock
+  #   - 上线切换：真实 Java 服务就绪后改 BUSINESS_SERVICE_URL 指向之，
+  #     本服务直接下线，无任何代码改动。
+  business-mock:
+    build: .
+    command:
+      ["python", "-m", "uvicorn", "backend.mock.business_service.main:app",
+       "--host", "0.0.0.0", "--port", "8081"]
+    ports:
+      - "127.0.0.1:8081:8081"
+    environment:
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    healthcheck:
+      test:
+        ["CMD-SHELL",
+         "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
+
   # ── Celery Worker（异步任务执行，独立于 API 进程水平扩展）──
   # 与 app 共用同一镜像；只消费 agent/rag_index 队列（task_routes 固定路由）。
   # 纵向扩并发用 CELERY_WORKER_CONCURRENCY，横向扩 = 起多个本服务副本。
