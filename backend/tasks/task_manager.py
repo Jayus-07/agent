@@ -158,31 +158,58 @@ def enqueue_task(record: TaskRecord) -> str | None:
         raise
 
 
-def resume_task(task_id: str, user_input: str = "") -> TaskRecord:
-    """恢复 WAITING_USER / PAUSED / FAILED 任务：
+def resume_task(task_id: str, user_input: str = "",
+                *, allow_failed: bool = False) -> TaskRecord:
+    """恢复任务（Phase1 Step5：原子认领，重复 resume 不产生第二个执行链）。
 
-    1. 清控制标志 → 2. 若带用户输入则写入 DB（Worker 从 checkpoint 续跑时注入
-    state）→ 3. 状态回 PENDING → 4. 重新入队。
-    Worker 拾取时按 status/checkpoint 判定续跑，不重头执行图。
+    1. 清控制标志 → 2. 若带用户输入写入 DB（Worker 续跑时注入 state）→
+    3. 原子认领 expected→PENDING（条件 UPDATE，并发双 resume 恰一个胜出，
+    败者幂等返回不重复入队）→ 4. 入队。Worker 拾取后按租约 + checkpoint
+    判定续跑，不重头执行图；真正执行权由 try_acquire_lease 仲裁
+    （max_concurrent_executor_per_task=1）。
+
+    - 默认仅 PAUSED / WAITING_USER 可恢复（Phase1 规格口径；
+      WAITING_USER 为"暂停等人"变体，既有产品能力，登记例外）
+    - FAILED 重试走管理端通道（allow_failed=True），保持自愈式续跑语义
+    - 入队失败回滚 PENDING→PAUSED（状态机合法），任务保留可再次 resume
+
+    返回最新 TaskRecord（败者返回的是已被对手认领后的行，status=PENDING）。
     """
     from backend.services import task_service
 
     record = task_service.get_task(task_id)
     if record is None:
         raise LookupError(f"task not found: {task_id}")
-    if record.status not in TaskStatus.resumable():
-        raise ValueError(f"task not resumable in status {record.status.value}")
+    status = record.status
+    if status in (TaskStatus.SUCCESS, TaskStatus.CANCELLED):
+        raise ValueError(f"task is terminal ({status.value}), resume rejected")
+    if status == TaskStatus.FAILED and not allow_failed:
+        raise ValueError(
+            "仅 PAUSED/WAITING_USER 可恢复；FAILED 重试请走管理端重试通道")
+    if status in (TaskStatus.RUNNING, TaskStatus.PENDING):
+        # 已在执行/排队：视为幂等命中（不重复入队）
+        logger.info("[TaskManager] resume on %s task %s, skip re-enqueue",
+                    status.value, task_id)
+        return record
 
     clear_flags(task_id)
     if user_input:
         task_service.append_checkpoint(
             task_id, "__user_input__", {"user_input": user_input})
-    task_service.update_status(
-        task_id, TaskStatus.PENDING,
-        progress="等待重新调度（从 checkpoint 恢复）" if not user_input
-        else "已注入用户输入，等待恢复执行")
+    if not task_service.claim_for_resume(task_id, status):
+        # 并发对手已认领（status 已变）：幂等返回最新行，不重复入队
+        logger.info("[TaskManager] resume lost race for %s (already claimed),"
+                    " skip re-enqueue", task_id)
+        return task_service.get_task(task_id)  # type: ignore[return-value]
+
     record = task_service.get_task(task_id)  # type: ignore[assignment]
-    enqueue_task(record)  # type: ignore[arg-type]
+    try:
+        enqueue_task(record)  # type: ignore[arg-type]
+    except Exception:
+        # 入队失败回滚到 PAUSED（PENDING→PAUSED 白名单合法），可再次 resume
+        task_service.mark_paused_if_pending(
+            task_id, progress="入队失败已回滚，可再次恢复")
+        raise
     return task_service.get_task(task_id)  # type: ignore[return-value]
 
 

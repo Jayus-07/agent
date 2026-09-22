@@ -330,6 +330,24 @@ def mark_paused_if_pending(task_id: str, *, progress: str = "队列内暂停") -
         return cur.rowcount > 0
 
 
+def claim_for_resume(task_id: str, expected: TaskStatus) -> bool:
+    """resume 原子认领：仅当状态仍为 expected 时落 PENDING（回队标记）。
+
+    Phase1 Step5：并发/重复 resume 的仲裁点——两个客户端同时 resume 同一
+    任务，条件 UPDATE 只有一个 rowcount=1，败者不得重复入队（执行权由
+    Worker 租约最终仲裁，本认领消除重复消息）。expected→PENDING 均为
+    状态机白名单合法跳转（PAUSED/WAITING_USER/FAILED→PENDING）。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, updated_at = now() "
+            "WHERE id = %s AND status = %s",
+            (TaskStatus.PENDING.value, task_id, expected.value),
+        )
+        return cur.rowcount > 0
+
+
 def increment_retry(task_id: str) -> int:
     """重试计数 +1，返回新值（Celery self.request.retries 的 DB 侧镜像）。"""
     ensure_schema()
