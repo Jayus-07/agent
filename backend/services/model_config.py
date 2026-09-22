@@ -1584,6 +1584,16 @@ class ModelConfigService:
             )
             await self.record_probe(provider_id, probe_result.to_dict())
             if not probe_result.ok:
+                # 失败详情（含上游原始报文）必须留痕 —— 否则同参数「草稿探测过、
+                # 保存探测挂」的排障永远拿不到第一现场（2026-09-22 实测）。
+                _fail_detail = "; ".join(
+                    f"{s.level}:{s.summary}" + (f" | {s.detail}" if s.detail else "")
+                    for s in probe_result.steps if s.status == "fail"
+                )
+                logger.warning(
+                    "[ModelConfig] 保存前探测失败（raw）：model=%s upstream=%s steps=%s",
+                    model_name, upstream_model_name, _fail_detail,
+                )
                 raise ValueError(f"模型测试未通过：{probe_result.summary}")
 
         async for session in get_session():
@@ -1824,6 +1834,14 @@ class ModelConfigService:
                 retry_l2_backoff_seconds=_PROBE_SAVE_RETRY_BACKOFF,
             )
             if not probe.ok:
+                _fail_detail = "; ".join(
+                    f"{s.level}:{s.summary}" + (f" | {s.detail}" if s.detail else "")
+                    for s in probe.steps if s.status == "fail"
+                )
+                logger.warning(
+                    "[ModelConfig] 新增供应商探测失败（raw）：model=%s upstream=%s steps=%s",
+                    model_name, upstream_model_name, _fail_detail,
+                )
                 raise ValueError(f"模型测试未通过：{probe.summary}")
         display_name = str(payload.get("displayName") or "").strip()
         provider_id = ""
