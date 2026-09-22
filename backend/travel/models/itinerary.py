@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.poi import Poi
@@ -116,6 +116,10 @@ class CostBreakdown(BaseModel):
     lodging: float = 0.0
     transit: float = 0.0
 
+    # computed_field 而非 @property（2026-09-22 教训）：Itinerary 是出网契约，
+    # @property 不进 model_dump()，前端拿不到 total 直接 toFixed 崩溃；
+    # 改 computed_field 后序列化结果带 total，前端自算兜底（?? 回退）仍兼容。
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def total(self) -> float:
         return round(self.tickets + self.meals + self.lodging + self.transit, 2)

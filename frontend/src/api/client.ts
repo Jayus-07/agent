@@ -282,13 +282,21 @@ export async function fetchRaw(
 
 // ── JSON 层 ───────────────────────────────────────────────────
 
-export interface RequestOptions extends Omit<RequestInit, "signal"> {
+export interface RequestOptions extends Omit<RequestInit, "signal" | "body"> {
   /** 超时毫秒，默认 30000 */
   timeout?: number;
   /** AbortSignal 用于外部取消 */
   signal?: AbortSignal;
   /** 目标后端，默认 `core` */
   backend?: BackendId;
+  /**
+   * 请求体。**JSON 层契约**：传对象自动 `JSON.stringify`；传 string 视为
+   * 已序列化、原样透传（FormData/Blob 等二进制体也原样透传）。
+   * 2026-09-22 复盘：此前 body 原样交给 fetch，误传对象时浏览器会把它
+   * String() 成 `[object Object]` 发出（Content-Type 仍是 application/json），
+   * 后端 422「body 不是 JSON 对象」——极易误判为封装层吞改了 body。
+   */
+  body?: RequestInit["body"] | object;
 }
 
 const DEFAULT_TIMEOUT = 30_000;
@@ -327,11 +335,29 @@ export async function request<T = unknown>(
   }
 
   try {
+    // body 序列化收口（见 RequestOptions.body 注释）：可安全直传的类型原样，
+    // 其余（普通对象/数组）自动 JSON.stringify，杜绝 `[object Object]` 出网。
+    const rawBody = init.body as RequestInit["body"] | undefined;
+    const serializedBody =
+      rawBody == null ||
+      typeof rawBody === "string" ||
+      rawBody instanceof FormData ||
+      rawBody instanceof Blob ||
+      rawBody instanceof URLSearchParams ||
+      rawBody instanceof ArrayBuffer ||
+      ArrayBuffer.isView(rawBody) ||
+      typeof ReadableStream !== "undefined" &&
+        rawBody instanceof ReadableStream
+        ? rawBody
+        : JSON.stringify(rawBody);
+    const { body: _widenedBody, ...restInit } = init as RequestInit;
+
     const res = await fetch(joinUrl(path, backend), {
-      ...init,
+      ...restInit,
+      body: serializedBody,
       headers: {
         "Content-Type": "application/json",
-        ...buildHeaders(init),
+        ...buildHeaders(restInit),
       },
       signal: controller.signal,
     });

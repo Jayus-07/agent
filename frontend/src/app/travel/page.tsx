@@ -232,30 +232,20 @@ export default function TravelPage() {
     setError('')
     setFeedbackSent('')
     try {
-      // 用 fetchRaw（Response 层透传）而非 request()：规划响应体较大且需
-      // 按 status 分支展示，绕开封装层（2026-09-22 实测 request() 路径下
-      // body 到达后端非 JSON 对象，422——fetchRaw 直接透传无此问题）。
-      const res = await fetchRaw('/api/travel/plan', {
+      // 2026-09-22 复盘：曾因 request() 不自动序列化 body（误传对象 →
+      // "[object Object]" 出网 → 422）改用 fetchRaw 绕开。现根因已在
+      // client.ts 修复（JSON 层收口序列化 + 契约测试锁住），按规范回归
+      // request()；直接传对象即受自动 stringify 保护。
+      // timeout 55s < 网关 60s 读超时：让前端先拿到干净的超时提示而非等 504。
+      const data = await request<PlanResponse>('/api/travel/plan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           message: parts.join('，'),
           session_id: threadRef.current,
           conversation_id: threadRef.current,
-        }),
+        },
+        timeout: 55_000,
       })
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => null)) as
-          | { detail?: unknown; message?: string }
-          | null
-        const detail = errBody?.detail ?? errBody?.message
-        throw new Error(
-          typeof detail === 'string' && detail
-            ? detail
-            : `规划请求失败（HTTP ${res.status}），请稍后再试`,
-        )
-      }
-      const data = (await res.json()) as PlanResponse
       setPlan(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : '规划请求失败，请稍后再试')

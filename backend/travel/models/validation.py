@@ -53,7 +53,12 @@ class Violation(BaseModel):
 
 
 class ValidationReport(BaseModel):
-    """一次完整校验的输出"""
+    """一次完整校验的输出
+
+    ⚠️ 内部消费模型：下方 @property 派生字段**不进 model_dump()**（graph_state
+    落 checkpointer 的就是 dump 结果）。若将来要把它作为出网契约返回给前端，
+    必须先改 @computed_field —— 先例教训见 CostBreakdown.total（2026-09-22）。
+    """
 
     violations: list[Violation] = Field(default_factory=list)
     checked_days: int = Field(default=0, description="本次校验覆盖的天数")

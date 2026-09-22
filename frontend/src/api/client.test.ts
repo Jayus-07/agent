@@ -145,6 +145,49 @@ describe("request 请求构造", () => {
 
     expect(fetchSpy.mock.calls[0][0]).toBe("http://core.test/prompts");
   });
+
+  // 2026-09-22 /travel/plan 422 复盘：body 误传对象时浏览器把它 String() 成
+  // "[object Object]" 出网，后端 422「body 不是 JSON 对象」。JSON 层必须收口序列化。
+  it("body 传对象时自动 JSON.stringify（杜绝 [object Object] 出网）", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    await request("/x", {
+      method: "POST",
+      body: { message: "福州2天", count: 2, nested: { a: 1 } },
+    });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBe(
+      JSON.stringify({ message: "福州2天", count: 2, nested: { a: 1 } }),
+    );
+  });
+
+  it("body 传 string 视为已序列化，原样透传（不二次 stringify）", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    const raw = JSON.stringify({ already: "stringified" });
+    await request("/x", { method: "POST", body: raw });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBe(raw);
+  });
+
+  it("body 传 FormData 等二进制体时原样透传，不做字符串化", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    const fd = new FormData();
+    fd.append("f", "1");
+    await request("/x", { method: "POST", body: fd });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBe(fd);
+  });
 });
 
 describe("request 错误模型", () => {
