@@ -23,6 +23,9 @@ import {
   type MyOfferItem,
 } from "@/api/cs";
 import { useAgentSocket, type AgentEvent } from "@/lib/csAgentWs";
+import AgentAssistPanel, {
+  type AssistSuggestion,
+} from "@/components/agent/AgentAssistPanel";
 import type {
   HandoffMessageDTO,
   HandoffQueueItem,
@@ -131,6 +134,8 @@ export default function HandoffWorkbenchPage() {
   const selectedRef = useRef<HandoffQueueItem | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   selectedRef.current = selected;
+  // 批次A：坐席辅助推荐（assist.suggestion 瞬态事件驱动，仅对当前选中会话）
+  const [suggestions, setSuggestions] = useState<AssistSuggestion[]>([]);
 
   // ── 转人工通知层（toast + 提示音 + 桌面通知 + 标题角标）──────
   const [toasts, setToasts] = useState<WaitingToast[]>([]);
@@ -312,6 +317,16 @@ export default function HandoffWorkbenchPage() {
           if (lastId > sinceIdRef.current) sinceIdRef.current = lastId;
           break;
         }
+        case "assist.suggestion": {
+          // 批次A：AI 推荐回复（瞬态事件，只对当前选中会话生效；
+          // 非当前会话的推荐直接丢弃——切会话后旧推荐无意义）
+          const cid = e.conversation_id as string;
+          if (selectedRef.current?.conversation_id !== cid) break;
+          setSuggestions(
+            (e.suggestions as AssistSuggestion[]) ?? [],
+          );
+          break;
+        }
         default:
           // hello / heartbeat / pong：仅保活
           break;
@@ -376,6 +391,7 @@ export default function HandoffWorkbenchPage() {
   const selectConversation = useCallback((item: HandoffQueueItem) => {
     setSelected(item);
     setMessages([]);
+    setSuggestions([]);
     sinceIdRef.current = 0;
     setUserTyping(false);
     if (userTypingTimer.current) clearTimeout(userTypingTimer.current);
@@ -839,6 +855,10 @@ export default function HandoffWorkbenchPage() {
                 ))}
                 <div ref={bottomRef} />
               </div>
+              <AgentAssistPanel
+                suggestions={suggestions}
+                onPick={(text) => setReply(text)}
+              />
               <div className="border-t border-slate-200 p-3 flex gap-2">
                 <input
                   value={reply}

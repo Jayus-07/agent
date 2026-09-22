@@ -318,11 +318,26 @@ class AgentHub:
                     envelope["type"],
                     exc_info=True,
                 )
+        await self._maybe_schedule_assist(envelope["type"], payload)
         if not self._connections:
             return
         data = json.dumps(envelope, ensure_ascii=False, default=str)
         if not await self._publish_via_redis(data):
             await self._broadcast(data)
+
+    async def _maybe_schedule_assist(self, event_type: str, payload: dict) -> None:
+        """坐席辅助触发钩（批次A）：命中事件异步生成推荐，失败静默。
+
+        放在广播之后调用——辅助是纯增量能力，任何异常都不得影响事件链路。
+        """
+        try:
+            from backend.customer_service.agent_assist import (
+                maybe_schedule_assist,
+            )
+
+            maybe_schedule_assist(event_type, payload)
+        except Exception:
+            logger.debug("[AgentHub] assist hook skipped", exc_info=True)
 
     async def _enqueue_event_outbox(
         self, envelope: dict, payload: dict,

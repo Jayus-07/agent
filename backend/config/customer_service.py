@@ -256,6 +256,24 @@ CS_ROLLOUT_WHITELIST = {
     s.strip() for s in os.getenv("CS_ROLLOUT_WHITELIST", "").split(",") if s.strip()
 }
 
+# ── 坐席辅助（agent assist，AI 给人工坐席实时推荐回复）────────
+# 总开关：关闭后 hub 不再调度生成任务，前端无推荐事件（默认开启，失败静默）
+CS_AGENT_ASSIST_ENABLED = os.getenv("CS_AGENT_ASSIST_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# 单次推荐最多条数
+CS_AGENT_ASSIST_TOP_K = max(1, min(5, int(os.getenv("CS_AGENT_ASSIST_TOP_K", "3"))))
+# 单次生成总超时（秒）：超时静默放弃，绝不阻塞消息主链路
+CS_AGENT_ASSIST_TIMEOUT_SECONDS = float(os.getenv("CS_AGENT_ASSIST_TIMEOUT_SECONDS", "8"))
+# 全局并发上限：同时生成的推荐任务数（背压保护，防 LLM/RAG 被打爆）
+CS_AGENT_ASSIST_MAX_CONCURRENCY = max(1, int(os.getenv("CS_AGENT_ASSIST_MAX_CONCURRENCY", "4")))
+# 参与推荐的最近消息条数
+CS_AGENT_ASSIST_HISTORY_LIMIT = max(2, int(os.getenv("CS_AGENT_ASSIST_HISTORY_LIMIT", "10")))
+
+# ── 业务网关（批次B：客服业务服务经 HTTP 调真实业务系统）────────
+# sandbox（默认）：直查内部演示库 + demo 身份映射，行为与历史版本一致
+# http：经 infra/http/business_client 调 business-service（Java/mock），
+#       仅收口的只读查询先切；失败返回友好话术，绝不降级回 sandbox 假数据
+CS_BUSINESS_GATEWAY_MODE = os.getenv("CS_BUSINESS_GATEWAY_MODE", "sandbox").strip().lower()
+
 # ── CS 质量报告告警阈值（超过即触发 alerts）────────────────
 CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))
 CS_QUALITY_ALERT_ROUTE_CONSISTENCY = float(os.getenv("CS_QUALITY_ALERT_ROUTE_CONSISTENCY", "0.85"))
