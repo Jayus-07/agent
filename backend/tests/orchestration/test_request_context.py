@@ -78,10 +78,13 @@ class TestCheckpointSafe:
                              trace=object(), stream_sink=lambda t: None)
         safe = ctx.checkpoint_safe()
         # deadline：2026-09-22 Tool 治理新增（None=无 Deadline 的路径，可序列化）
+        # roles/data_scope：2026-09-23 SQL 收口 STOP B 新增（规格书 §96
+        # 可序列化身份集 user_id/tenant_id/department/roles/data_scope）
         assert safe == {"session_id": "s1", "user_id": "u1",
                         "tenant_id": "",
                         "idempotency_key": "",
                         "kb_id": "k1", "department": "",
+                        "roles": (), "data_scope": "",
                         "subject_type": "", "permissions": None, "model": "",
                         "deadline": None}
         # 可 JSON 序列化（checkpoint 传输前提）
@@ -104,6 +107,18 @@ class TestCheckpointSafe:
         assert restored.trace is None
         assert restored.stream_sink is None
         assert restored.bind_sink is False
+
+    def test_dict_round_trip_preserves_roles_and_data_scope(self):
+        """STOP B：roles/data_scope 随 checkpoint_safe 序列化并可还原
+        （SQLSkill 等数据面消费方依赖这两个字段，checkpointer 开启时
+        不得在还原路径丢失）。"""
+        ctx = RequestContext(session_id="s1", user_id="u3",
+                             department="hr", roles=("editor",),
+                             data_scope="department")
+        state = {"request_context": ctx.checkpoint_safe()}
+        restored = get_context_from_state(state)
+        assert restored.roles == ("editor",)
+        assert restored.data_scope == "department"
 
     def test_dict_restore_does_not_clear_sink(self):
         """还原形态 bind 不覆盖当前线程已绑定的 sink（防清掉 worker 主上下文）。"""
