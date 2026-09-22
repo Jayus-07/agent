@@ -124,15 +124,23 @@ class RequestBudget:
             if self.mode == "enforce" and model_name and self.quota_store is not None:
                 from backend.infra.llm.pricing import get_current_price_table
 
-                # Q8：硬预算模式下价格缺失或价格库不可用都拒绝首调，
-                # 防止模型调用已经发生后才发现无法结算。
+                # P0 治理修正（2026-09-22）：价格未知（缺价/价格库不可用）
+                # 不再阻断调用 —— 模型推理可用性优先于结算精度。此前
+                # 「拒绝首调」曾让 general_chat 等主链路直接降级静态话术。
+                # 放行后由 proxy._record_tokens 结算侧以 price_unknown
+                # 状态标记，按注册表估价记账（不静默算 0），token 上限
+                # 保护照常生效。
                 try:
                     get_current_price_table(model_name, component).require(
                         model_name, component, enforce=True
                     )
-                except Exception:
-                    _record_budget_request(self.mode, "rejected")
-                    raise
+                except Exception as exc:
+                    _record_budget_request(self.mode, "price_unknown")
+                    logger.warning(
+                        "[Budget][price_unknown] model=%s component=%s "
+                        "价格未知，放行调用（结算侧将标记 price_unknown）: %s",
+                        model_name, component, exc,
+                    )
             reservation = None
             if (
                 self.mode == "enforce"

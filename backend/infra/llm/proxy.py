@@ -862,13 +862,30 @@ def _record_tokens(
             and budget_state.quota_store is not None
         )
         if enforce:
-            # 硬预算门：缺价直接抛 MissingModelPrice（行为不变），
-            # 但 quantities 已按 billable 口径修正，缓存部分不会双算。
-            cost_decimal = calculate_current_cost(
-                model, "llm", cost_quantities, enforce=True,
-            )
-            cost_status, currency = "exact", "USD"
-            cost_breakdown: dict[str, float] = {}
+            # 硬预算门（P0 治理修正 2026-09-22）：有价按真实价结算；
+            # 缺价/价格库不可用不再让已成功的调用变错误或丢 usage 行 ——
+            # 按注册表估价记账，cost_status=price_unknown 显式标记
+            # （不静默算 0：token 照常入预算与用量库，状态可查）。
+            try:
+                cost_decimal = calculate_current_cost(
+                    model, "llm", cost_quantities, enforce=True,
+                )
+                cost_status, currency = "exact", "USD"
+                cost_breakdown: dict[str, float] = {}
+            except Exception as pricing_err:
+                from backend.infra.llm.pricing import calculate_fallback_cost
+
+                cost_decimal = calculate_fallback_cost(
+                    model, billable_input + cached, c,
+                )
+                cost_status = "price_unknown"
+                currency = "USD"
+                cost_breakdown = {}
+                logger.warning(
+                    "[Pricing][price_unknown] model=%s 调用成功但无生效价格，"
+                    "按注册表估价 %s USD 记账: %s",
+                    model, cost_decimal, pricing_err,
+                )
         else:
             # 软统计：状态化计费入口，永不抛错（exact/estimated/unpriced）。
             from backend.infra.llm.pricing import calculate_llm_cost_with_status

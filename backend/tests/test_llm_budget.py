@@ -110,6 +110,82 @@ def test_budget_error_maps_to_protocol_budget_exceeded():
     assert envelope.retryable is False
 
 
+# =====================================================
+# P0 治理修正（2026-09-22）：价格未知放行调用，标记 price_unknown
+# =====================================================
+
+class _NoPriceStore:
+    """quota_store 必须存在才触发价格预检路径（与生产 enforce 一致）。"""
+
+    def reserve(self, **kwargs):
+        return {"id": "r1"}
+
+
+def test_missing_price_allows_call_and_marks_price_unknown(caplog):
+    """缺价模型：reserve 不抛异常、调用计数照常、日志含 price_unknown。"""
+    import logging
+
+    from backend.infra.llm.budget import RequestBudget
+
+    budget = RequestBudget(
+        _limits(), mode="enforce", user_id="user-a", tenant_id="tenant-a",
+        quota_store=_NoPriceStore(),
+    )
+    with caplog.at_level(logging.WARNING):
+        # 不应抛 MissingModelPrice / 任何异常
+        budget.reserve("primary", model_name="__no_such_model__")
+    assert budget.snapshot().calls == 1
+    assert any("price_unknown" in (r.getMessage() or "") for r in caplog.records)
+
+
+def test_missing_price_still_respects_call_limits():
+    """放行 ≠ 无限调用：缺价模型的调用次数仍受 max_calls 约束。"""
+    from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
+
+    budget = RequestBudget(
+        _limits(max_calls=1), mode="enforce",
+        user_id="user-a", tenant_id="tenant-a",
+        quota_store=_NoPriceStore(),
+    )
+    budget.reserve("primary", model_name="__no_such_model__")
+    with pytest.raises(RequestBudgetExceeded):
+        budget.reserve("primary", model_name="__no_such_model__")
+
+
+def test_record_tokens_marks_price_unknown(monkeypatch):
+    """enforce 模式缺价：调用后记账不抛错，meta 落 price_unknown 状态。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm import proxy
+
+    budget_module.clear_request_budget()
+    monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
+    budget_module.bind_request_budget("trace-price-unknown-1")
+    state = budget_module.current_request_budget()
+    state.mode = "enforce"
+    state.quota_store = _NoPriceStore()
+    state.user_id = "user-a"
+    state.tenant_id = "tenant-a"
+
+    result = SimpleNamespace(
+        response_metadata={
+            "token_usage": {
+                "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+            },
+            "model_name": "__no_such_model__",
+        },
+    )
+    # 不应抛 MissingModelPrice（此前会静默吞掉整条 usage 记录）
+    proxy._record_tokens(result, duration_ms=10.0)
+    meta = proxy._last_call_meta_var.get()
+    try:
+        assert meta["cost_status"] == "price_unknown"
+        assert meta["total_tokens"] == 150
+    finally:
+        budget_module.clear_request_budget()
+
+
 def test_request_context_binds_shared_budget_by_trace(monkeypatch):
     from backend.core.request_context import RequestContext
     from backend.infra.llm import budget as budget_module
