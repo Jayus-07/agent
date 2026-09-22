@@ -52,7 +52,13 @@ def travel_has_city(query: str) -> bool:
 
 
 def is_travel_request(query: str) -> bool:
-    """是否为旅游规划请求（纯函数，可单测）。"""
+    """是否为旅游规划请求（纯函数，可单测）。
+
+    P2 城市解耦（2026-09-22）：域识别与「城市是否支持」分离 ——
+    非种子城市的「旅游名词 + 天数」组合（如「纽约3天行程」）仍是强
+    旅游信号，先进旅游域，由域内 slot_filler 的 unsupported-city 逻辑
+    明确告知「暂不支持该城市」，禁止漏回主 Router 伪装成 RAG 拒答。
+    """
     if not query:
         return False
 
@@ -62,10 +68,12 @@ def is_travel_request(query: str) -> bool:
     if hits >= TRAVEL_DETECT_MIN_HITS:
         return True
 
-    if not travel_has_city(query):
-        return False
+    if travel_has_city(query):
+        return hits >= 1 or bool(_RE_DAY_COUNT.search(query))
 
-    return hits >= 1 or bool(_RE_DAY_COUNT.search(query))
+    # 无种子城市：旅游名词与天数同时在场才判旅游（防「近3天订单量」），
+    # 单名词无天数仍走主路由（与旧行为一致）
+    return hits >= 1 and bool(_RE_DAY_COUNT.search(query))
 
 
 def try_travel_prefilter(query: str, state: dict) -> dict | None:

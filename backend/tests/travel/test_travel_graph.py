@@ -360,3 +360,41 @@ class TestRuntimeGuards:
         用户看到的是 GraphRecursionError，而不是「已达步数上限，如实收尾」。
         """
         assert T.TRAVEL_GRAPH_RECURSION_LIMIT > 2 * T.TRAVEL_MAX_STEPS
+
+
+# ==================== P2 城市解耦（2026-09-22） ====================
+
+class TestTravelCityBoundary:
+    """域识别与「城市是否支持」解耦：非种子城市的旅游请求先进域，
+    由 slot_filler 的 unsupported-city 逻辑明确告知，禁止漏回 RAG 拒答。"""
+
+    def test_unsupported_city_with_days_enters_travel(self):
+        assert is_travel_request("帮我排纽约3天行程") is True
+
+    def test_no_city_days_plus_travel_noun_enters_travel(self):
+        """「帮我排3天行程」无城市：进域由 brief 追问目的地（D5 同路径）。"""
+        assert is_travel_request("帮我排3天行程") is True
+
+    def test_unsupported_city_without_days_not_travel(self):
+        """单城市名无旅游名词/天数不判旅游（防误抢）。"""
+        assert is_travel_request("纽约今天的新闻") is False
+
+    def test_business_time_window_still_not_travel(self):
+        assert is_travel_request("近3天的订单量") is False
+        assert is_travel_request("统计本月订单金额") is False
+
+    def test_unsupported_city_clarified_in_domain(self):
+        """进域后：明确「暂不支持该城市」，不是知识库拒答。"""
+        from backend.travel.models.brief import TravelBrief
+        from backend.travel.slot_filler import (
+            build_clarification,
+            extract_unsupported_city,
+        )
+
+        msg = "帮我排纽约3天行程"
+        assert extract_unsupported_city(msg) == "纽约"
+        brief = TravelBrief(days=3)
+        text = build_clarification(brief, msg)
+        assert "纽约" in text
+        assert "暂时无法规划" in text
+        assert "福州" in text  # 给出可规划城市引导
