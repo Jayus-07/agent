@@ -929,17 +929,33 @@ class RAGPipeline:
                 user_permissions = None
 
             chunks = []
+            kb_scope = (
+                {k: v for k, v in (mf or {}).items() if k in ("kb_id", "$or")}
+                or None
+            )
             # BM25 检索 —— LangChain BM25Retriever 的公开接口是 .invoke(query)
             # （旧代码误用 .search，BM25 腿 100% 断，被软降级吞掉）；它不支持
             # metadata 过滤，结果按 Chroma where 语义手工后过滤。
+            # 2026-09-22 收口：与向量腿同策略——QueryAnalyzer 维度 0 命中时
+            # 以 kb 范围放宽重试（标识符/编号类精确查询主要靠 BM25 腿）。
             try:
                 from backend.rag.permissions import filter_documents_by_permission
                 bm25_results = self.bm25.invoke(question)
-                for doc in bm25_results:
-                    if not self._doc_matches_filter(getattr(doc, "metadata", {}), mf):
-                        continue
-                    if not filter_documents_by_permission([doc], user_permissions):
-                        continue
+                kept = [
+                    d for d in bm25_results
+                    if self._doc_matches_filter(getattr(d, "metadata", {}), mf)
+                    and filter_documents_by_permission([d], user_permissions)
+                ]
+                if not kept and mf and kb_scope and kb_scope != mf:
+                    logger.info(
+                        "[RAG.retrieve] BM25 全量过滤 0 命中，放宽 QueryAnalyzer "
+                        f"维度重试（保留 kb 范围）: {kb_scope}")
+                    kept = [
+                        d for d in bm25_results
+                        if self._doc_matches_filter(getattr(d, "metadata", {}), kb_scope)
+                        and filter_documents_by_permission([d], user_permissions)
+                    ]
+                for doc in kept:
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
             except Exception as e:
                 # BM25 失败 → 降级只用向量检索（软降级），留痕；全部失败时 chunks 为空返回 ""
@@ -959,14 +975,11 @@ class RAGPipeline:
 
             try:
                 vec_results = _vec_retrieve(mf)
-                if not vec_results and mf:
-                    kb_scope = {k: v for k, v in mf.items()
-                                if k in ("kb_id", "$or")}
-                    if kb_scope and kb_scope != mf:
-                        logger.info(
-                            "[RAG.retrieve] 全量过滤 0 命中，放宽 QueryAnalyzer "
-                            f"维度重试（保留 kb 范围）: {kb_scope}")
-                        vec_results = _vec_retrieve(kb_scope)
+                if not vec_results and mf and kb_scope and kb_scope != mf:
+                    logger.info(
+                        "[RAG.retrieve] 全量过滤 0 命中，放宽 QueryAnalyzer "
+                        f"维度重试（保留 kb 范围）: {kb_scope}")
+                    vec_results = _vec_retrieve(kb_scope)
                 for doc in vec_results[:top_k]:
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
                     if content not in chunks:
