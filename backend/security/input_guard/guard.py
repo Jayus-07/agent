@@ -35,11 +35,18 @@ from backend.security.input_guard.types import (
 from backend.shared.logger import logger
 
 # ── 面向用户的短路话术（不泄露内部实现细节）─────────────
+# 长度话术从 config 取值（2026-09-22 Chat/RAG 收口：不再硬编码 2000 字）
+def _too_long_message() -> str:
+    from backend.config.chat_input import CHAT_INPUT_MAX_CHARS
+    return (
+        "## 无法处理该输入\n\n输入过长或包含异常字符，"
+        f"请精简后重新提问（单次提问不超过 {CHAT_INPUT_MAX_CHARS} 字，"
+        "长文档请通过知识库上传处理）。"
+    )
+
+
 MSG_BLOCK_EMPTY = "## 提示\n\n请输入有效问题。"
-MSG_BLOCK_FORMAT = (
-    "## 无法处理该输入\n\n输入过长或包含异常字符，"
-    "请精简后重新提问（单次提问建议不超过 2000 字）。"
-)
+MSG_BLOCK_FORMAT = _too_long_message()
 MSG_BLOCK_INJECTION = (
     "## 无法处理该请求\n\n检测到可能影响系统安全的指令性内容，已拒绝处理。"
     "如有业务问题，请直接描述您的数据查询或知识咨询需求。"
