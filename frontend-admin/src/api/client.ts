@@ -148,14 +148,13 @@ export async function mutationFetchRaw(
   if (existing) return existing.then((response) => response.clone());
 
   const idempotencyKey = requestedKey ?? createIdempotencyKey();
-  const headers = Object.fromEntries(new Headers(init.headers).entries());
+  // 头合并必须走 mergeHeaders（缺陷5 同步）：对象 spread 会把调用方的
+  // 小写 `idempotency-key` 与注入的 `Idempotency-Key` 存成两个 JS 键，
+  // 进 Headers 后合并成逗号双值。
   const promise = fetchRaw(path, {
     ...init,
     method,
-    headers: {
-      ...headers,
-      "Idempotency-Key": idempotencyKey,
-    },
+    headers: mergeHeaders(init.headers, { "Idempotency-Key": idempotencyKey }),
   }, backend).finally(() => {
     if (mutationRawInFlight.get(fingerprint) === promise) {
       mutationRawInFlight.delete(fingerprint);
@@ -261,14 +260,46 @@ function isAuthPath(input: string): boolean {
   return input.startsWith("/api/auth/") || /:\/\/[^/]+\/api\/auth\//.test(input);
 }
 
-function buildHeaders(init?: RequestInit): Record<string, string> {
+function buildHeaders(init?: RequestInit): Headers {
+  // 统一 Headers 构造（2026-09-23 缺陷5 同步自 frontend）：此前用对象字面量
+  // spread 合并默认头与调用方头，`Content-Type` 与调用方的 `content-type`
+  // 是两个 JS 键，进入 fetch 的 Headers 后按 RFC 大小写不敏感规则合并成
+  // "application/json, application/json"，后端解析媒体类型失败 → 带体 POST
+  // 全线 422。改走 Headers.set()：同名头（大小写不敏感）后源覆盖前源，
+  // 永远单值。
   // 凭据收口（2026-09-16 方案 B）：X-API-Key 由服务端代理路由
   // （app/api/[...path]/route.ts）注入，浏览器不再持有服务级密钥。
   // 旧变量 NEXT_PUBLIC_API_KEY 已废弃，请勿在此引用（会重新泄漏进 bundle）。
-  return {
-    ...bearerHeaders(),
-    ...Object.fromEntries(new Headers(init?.headers).entries()),
-  };
+  return mergeHeaders(bearerHeaders(), init?.headers);
+}
+
+/**
+ * 按 Headers 语义合并多个头源：后源覆盖前源（同大小写不敏感同名）。
+ * 所有请求头构造必须经过本函数，禁止对象 spread 拼接头。
+ */
+function mergeHeaders(
+  ...sources: Array<HeadersInit | undefined | null>
+): Headers {
+  const merged = new Headers();
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, value] of new Headers(source).entries()) {
+      merged.set(key, value);
+    }
+  }
+  return merged;
+}
+
+/** 浏览器自行决定 Content-Type 的请求体（multipart boundary / 表单编码 / Blob type / 流）。 */
+function hasBrowserManagedBody(body: unknown): boolean {
+  return (
+    body instanceof FormData ||
+    body instanceof Blob ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body as object) ||
+    (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
+  );
 }
 
 // ── Response 层 ───────────────────────────────────────────────
@@ -302,13 +333,21 @@ export async function fetchRaw(
 
 // ── JSON 层 ───────────────────────────────────────────────────
 
-export interface RequestOptions extends Omit<RequestInit, "signal"> {
+export interface RequestOptions extends Omit<RequestInit, "signal" | "body"> {
   /** 超时毫秒，默认 30000 */
   timeout?: number;
   /** AbortSignal 用于外部取消 */
   signal?: AbortSignal;
   /** 目标后端，默认 `core` */
   backend?: BackendId;
+  /**
+   * 请求体。**JSON 层契约**：传对象自动 `JSON.stringify`；传 string 视为
+   * 已序列化、原样透传（FormData/Blob 等二进制体也原样透传）。
+   * 2026-09-22 复盘（frontend 同源事故）：此前 body 原样交给 fetch，误传
+   * 对象时浏览器会把它 String() 成 `[object Object]` 发出（Content-Type
+   * 仍是 application/json），后端 422「body 不是 JSON 对象」。
+   */
+  body?: RequestInit["body"] | object;
 }
 
 const DEFAULT_TIMEOUT = 30_000;
@@ -348,12 +387,37 @@ export async function request<T = unknown>(
   }
 
   try {
+    // body 序列化收口（见 RequestOptions.body 注释）：可安全直传的类型原样，
+    // 其余（普通对象/数组）自动 JSON.stringify，杜绝 `[object Object]` 出网。
+    const rawBody = init.body as RequestInit["body"] | undefined;
+    const serializedBody =
+      rawBody == null ||
+      typeof rawBody === "string" ||
+      rawBody instanceof FormData ||
+      rawBody instanceof Blob ||
+      rawBody instanceof URLSearchParams ||
+      rawBody instanceof ArrayBuffer ||
+      ArrayBuffer.isView(rawBody) ||
+      typeof ReadableStream !== "undefined" &&
+        rawBody instanceof ReadableStream
+      ? rawBody
+      : JSON.stringify(rawBody);
+    const { body: _widenedBody, ...restInit } = init as RequestInit;
+
     const res = await fetch(joinUrl(path, backend), {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...buildHeaders(init),
-      },
+      ...restInit,
+      body: serializedBody,
+      // 默认 JSON 头；FormData/Blob/流等由浏览器生成 Content-Type（multipart
+      // boundary 等），强制 application/json 会顶掉 boundary → 后端解析失败。
+      // 优先级：调用方头 > Bearer > 默认 JSON 头。合并必须走 mergeHeaders
+      // （缺陷5），禁止对象 spread。
+      headers: mergeHeaders(
+        hasBrowserManagedBody(serializedBody)
+          ? undefined
+          : { "Content-Type": "application/json" },
+        bearerHeaders(),
+        restInit.headers,
+      ),
       signal: controller.signal,
     });
 

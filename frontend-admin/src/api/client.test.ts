@@ -93,13 +93,12 @@ describe("request 请求构造", () => {
     await request("/x", { headers: { "X-Custom": "1" } });
 
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect(init.headers).toMatchObject({
-      "Content-Type": "application/json",
-      Authorization: "Bearer t",
-      "X-Custom": "1",
-    });
+    const sent = new Headers(init.headers);
+    expect(sent.get("Content-Type")).toBe("application/json");
+    expect(sent.get("Authorization")).toBe("Bearer t");
+    expect(sent.get("X-Custom")).toBe("1");
     // 凭据收口（方案 B）：浏览器侧不再注入 X-API-Key（由 BFF 代理路由注入）
-    expect((init.headers as Record<string, string>)["X-API-Key"]).toBeUndefined();
+    expect(sent.get("X-API-Key")).toBeNull();
   });
 
   it("调用方可用 headers 覆写默认值（含 Content-Type）", async () => {
@@ -110,7 +109,7 @@ describe("request 请求构造", () => {
     await request("/x", { headers: { "Content-Type": "text/plain" } });
 
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("text/plain");
   });
 
   it("绝对 URL 原样透传，不拼基址", async () => {
@@ -436,5 +435,80 @@ describe("P0-1b 错误码提取与翻译", () => {
     const err = await request("/slow", { timeout: 10 }).catch((e: unknown) => e);
     expect(describeApiError(err).kind).toBe("timeout");
     expect(describeApiError(err).code).toBe(CLIENT_ERROR_CODES.TIMEOUT);
+  });
+});
+
+// ── 2026-09-23 缺陷5 同步（自 frontend）：Content-Type 归一 ──
+
+describe("Content-Type 归一（缺陷5 同步）", () => {
+  it("JSON POST：默认 Content-Type 单值，不出现逗号双值", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    await request("/tasks/x/retry", { method: "POST", body: { a: 1 } });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+  });
+
+  it("调用方小写 content-type 覆盖默认且仍单值（旧对象 spread 在此必然双值 422）", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    await request("/x", {
+      method: "POST",
+      body: { a: 1 },
+      headers: { "content-type": "application/merge-patch+json" },
+    });
+
+    const sent = new Headers((fetchSpy.mock.calls[0][1] as RequestInit).headers);
+    expect(sent.get("Content-Type")).toBe("application/merge-patch+json");
+    expect(sent.get("Content-Type")).not.toContain(",");
+  });
+
+  it("POST FormData：不强制 Content-Type，multipart boundary 交浏览器生成", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+    const form = new FormData();
+    form.append("file", new Blob(["x"], { type: "text/plain" }), "a.txt");
+
+    await request("/upload", { method: "POST", body: form });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    const sent = new Headers(init.headers);
+    expect(sent.get("Content-Type")).toBeNull();
+    expect(init.body).toBe(form);
+  });
+
+  it("误传对象 body 自动 JSON.stringify（杜绝 [object Object] 出网）", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    await request("/x", { method: "POST", body: { a: 1 } });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBe(JSON.stringify({ a: 1 }));
+  });
+
+  it("GET 无 body：默认 JSON 头存在且单值", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+
+    await request("/x");
+
+    const sent = new Headers((fetchSpy.mock.calls[0][1] as RequestInit).headers);
+    expect(sent.get("Content-Type")).toBe("application/json");
+  });
+
+  it("外部 AbortSignal：已中止的 signal 传递给 fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ ok: true }));
+    const controller = new AbortController();
+    controller.abort();
+
+    await request("/x", { signal: controller.signal });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect((init.signal as AbortSignal).aborted).toBe(true);
   });
 });
