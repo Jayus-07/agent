@@ -73,6 +73,10 @@ class CapabilityDecl:
     domain: str = ""
     risk_level: str = _DEFAULT_RISK_LEVEL
     fast_path_enabled: bool = True
+    # score calibration opt-in（2026-09-22 D6 修复）：声明后该能力的
+    # rule_keywords 参与向量召回分数校准（score_calibration.py）。
+    # 默认 False —— 未显式 opt-in 的能力（RAG/travel 等）行为零变化。
+    calibrate_signals: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,6 +132,18 @@ class RouterManifest:
     def domain_keyword_groups(self) -> dict[str, tuple[str, ...]]:
         """粗域 → 规则 hint 关键词组（CoarseIntentClassifier 消费）。"""
         return {d.name: d.keywords for d in self.domains if d.keywords}
+
+    @property
+    def calibration_keyword_groups(self) -> dict[str, tuple[str, ...]]:
+        """opt-in 校准的能力 → 关键词组（score_calibration.py 消费）。
+
+        与 rule_keyword_groups 的区别：只收 calibrate_signals: true 的能力，
+        保证校准范围可声明、可审计，不外溢到未声明域。
+        """
+        return {
+            c.name: c.rule_keywords
+            for c in self.capabilities if c.calibrate_signals and c.rule_keywords
+        }
 
     @property
     def total_example_count(self) -> int:
@@ -253,6 +269,7 @@ def load_manifest(path: str | None = None) -> RouterManifest:
                 domain=domain,
                 risk_level=risk,
                 fast_path_enabled=fast_path,
+                calibrate_signals=bool(item.get("calibrate_signals", False)),
             )
         )
 

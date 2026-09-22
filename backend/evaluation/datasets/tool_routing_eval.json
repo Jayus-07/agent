@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "_comment": "工具路由评测集（2026-09-22 D6 修复验收）。strict=true: top1 必须等于 expected_tools[0]（SQL 明确场景，验收门槛 Top1 命中率 >= 95%）。strict=false: top1 命中 expected_tools 任一即过；forbid 列表内的工具命中即失败（如采集类场景误入 sql.query）。mixed 场景 top1 落在 acceptable 集合外但未命中 forbid 时记 soft_fail（不计入 SQL 门槛）。",
+  "cases": [
+    { "id": "TR-001", "category": "sql_stats", "query": "统计本月订单金额", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-002", "category": "sql_stats", "query": "本月订单数是多少", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-003", "category": "sql_stats", "query": "各部门销售额", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-004", "category": "sql_stats", "query": "最近 7 天退款金额", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-005", "category": "sql_stats", "query": "销售额最高的 5 个商品", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-006", "category": "sql_stats", "query": "上个月销售额环比是多少", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-007", "category": "sql_stats", "query": "查一下库存不足的商品数量", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-008", "category": "sql_stats", "query": "今年订单总量和去年对比一下", "expected_tools": ["sql.query"], "strict": true },
+    { "id": "TR-101", "category": "collect", "query": "帮我采集竞品价格", "expected_tools": ["data.collect", "competitor.analyze", "web.crawl"], "strict": false, "forbid": ["sql.query"] },
+    { "id": "TR-102", "category": "collect", "query": "抓一下这个网页数据", "expected_tools": ["data.collect", "web.crawl"], "strict": false, "forbid": ["sql.query"] },
+    { "id": "TR-103", "category": "collect", "query": "导入供应商商品信息", "expected_tools": ["data.collect"], "strict": false, "forbid": ["sql.query"] },
+    { "id": "TR-104", "category": "collect", "query": "同步一下外部平台的订单数据", "expected_tools": ["data.collect"], "strict": false, "forbid": ["sql.query"] },
+    { "id": "TR-105", "category": "collect", "query": "拉取各平台最新的销量数据", "expected_tools": ["data.collect"], "strict": false, "forbid": ["sql.query"] },
+    { "id": "TR-201", "category": "mixed", "query": "采集最近一个月的订单数据并统计总金额", "expected_tools": ["sql.query", "data.collect"], "strict": false },
+    { "id": "TR-202", "category": "mixed", "query": "把采集到的竞品价格导入系统", "expected_tools": ["data.collect", "competitor.analyze"], "strict": false, "forbid": ["sql.query"] },
+    { "id": "TR-203", "category": "mixed", "query": "导出上个月的订单明细", "expected_tools": ["data.export", "sql.query"], "strict": false, "forbid": ["data.collect"] },
+    { "id": "TR-301", "category": "other_domain", "query": "员工报销制度是什么", "expected_tools": ["rag.search"], "strict": false, "forbid": ["sql.query", "data.collect"] },
+    { "id": "TR-302", "category": "other_domain", "query": "帮我排福州2天行程", "expected_tools": [], "strict": false, "forbid": ["sql.query", "data.collect"] }
+  ]
+}

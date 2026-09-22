@@ -247,6 +247,23 @@ capabilities:
       - 环比
       - 同比
       - 增长率
+      # 2026-09-22 D6 路由能力漂移修复：补齐统计/汇总类特征词。
+      # 此前「各部门销售额」「本月订单数」只命中 0-1 个关键词，规则层给不出
+      # 强信号，向量层又被 data.collect 的采集类 examples 拉走 top1。
+      - 汇总
+      - 合计
+      - 总额
+      - 订单量
+      - 订单数
+      - 销售额
+      - 销量
+      - 各部门
+      - 按部门
+      - 明细
+    # score calibration opt-in（score_calibration.py）：向量召回分数按本组
+    # 关键词命中数校准（强信号加分 / 零命中降权）。仅显式声明的能力参与，
+    # RAG/Travel/CS/Selection 等其他域不受影响。
+    calibrate_signals: true
     examples:
       - 最近 30 天销售金额
       - 本月销量前 10 的商品
@@ -254,6 +271,11 @@ capabilities:
       - 上个月退款金额
       - 各品类商品数量统计
       - 排名前五的客户
+      - 统计本月订单金额
+      - 本月订单总数是多少
+      - 各部门销售额统计
+      - 最近 7 天退款金额
+      - 销售额最高的 5 个商品
 
   - name: rag.search
     skill: rag
@@ -418,6 +440,20 @@ capabilities:
     domain: data
     risk_level: MEDIUM
     fast_path_enabled: false
+    # D6 修复：此前零关键词声明，「统计本月订单金额」类 SQL 问题被本能力的
+    # 采集类 examples（语义过近）拉走向量 top1。现在补齐采集/同步/导入侧
+    # 特征词，并在校准层与 sql.query 对峙（SQL 统计词命中时本能力零命中降权）。
+    rule_keywords:
+      - 采集
+      - 抓取
+      - 抓一下
+      - 爬取
+      - 同步
+      - 导入
+      - 拉取
+      - 获取外部
+      - 外部数据
+    calibrate_signals: true
     examples:
       - 采集 90 天销售数据
       - 收集各平台数据
@@ -425,6 +461,10 @@ capabilities:
       - 拉取各平台的销量数据
       - 导入这批商品的价格数据
       - 采集供应商的库存数据
+      - 帮我采集竞品价格
+      - 抓一下这个网页数据
+      - 导入供应商商品信息
+      - 同步外部平台的订单数据
 
   # 仅覆盖「候选地点检索」这一无状态能力；完整行程规划走旅游域图，
   # 不经主 Router（见 orchestration/graph/travel_prefilter.py）

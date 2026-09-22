@@ -190,9 +190,32 @@ class VectorRouter:
         # 检索返回顺序——索引重建后顺序漂移是路由波动来源之一。
         candidates.sort(key=lambda c: (-c.score, c.name))
 
+        # 规则特征分数校准（2026-09-22 D6 修复）：向量召回完成后按
+        # capabilities.yaml 声明的能力特征（calibrate_signals opt-in）对
+        # 分数做加分/降权。纯函数零 IO；未 opt-in 的能力分数原样返回。
+        # legacy 三层路由与 hierarchical 细路由（_fine_scores 复用本方法）
+        # 在此单点同时生效。
+        from backend.orchestration.router.score_calibration import calibrate_scores
+
+        score_map = {c.name: c.score for c in candidates}
+        calibrated, calib_info = calibrate_scores(query, score_map)
+        if calib_info:
+            candidates = [
+                CapabilityScore(name=c.name, score=calibrated[c.name])
+                for c in candidates
+            ]
+            candidates.sort(key=lambda c: (-c.score, c.name))
+            strong = ",".join(calib_info["strong"]) or "-"
+            logger.info(
+                f"[VectorRouter] 分数校准: hits={calib_info['hits']} "
+                f"strong={strong} adjusted={calib_info['adjusted']}"
+            )
+
         # 整体置信度 = top1 分数
         top1 = candidates[0].score if candidates else 0.0
         reason = f"embedding top1={candidates[0].name} score={top1:.2f}" if candidates else "no match"
+        if calib_info:
+            reason += " (calibrated)"
 
         # 决定 mode：根据 top1 capability 类型
         top1_cap = candidates[0].name if candidates else None

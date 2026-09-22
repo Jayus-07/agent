@@ -69,6 +69,10 @@ class ToolSelection(BaseModel):
     fine_margin: float = 0.0
     need_clarification: bool = False
     clarification_reason: str = ""
+    # 规则特征校准明细（2026-09-22 D6 修复，score_calibration.py）：
+    # hits=各候选特征命中数，strong=强信号候选，basis=直通判定依据。
+    # 空 dict = 本次未触发校准（无 opt-in 能力或零命中）。
+    calibration: dict = Field(default_factory=dict)
 
 
 def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
@@ -128,12 +132,33 @@ class HierarchicalRouter:
 
     def select_tool(self, query: str, domain: str,
                     candidates: list[ToolCandidate]) -> ToolSelection:
-        """细路由：Fast Path 三条件（top1 / margin / risk+白名单）→ 灰区交 LLM。"""
+        """细路由：Fast Path 三条件（top1/margin/risk+白名单）→ 灰区交 LLM。
+
+        2026-09-22 D6 修复：_fine_scores 返回的已是校准后分数（校准在
+        VectorRouter.route 单点生效）；此外唯一规则强信号候选（≥2 个特征
+        命中）直通 —— 这是「高置信场景直通」的规则化表达，不是把某工具
+        固定为最高优先级：直通资格随 query 命中的特征数变化，且仍受
+        LOW 风险 + fast_path_enabled 双门槛约束（§11）。
+        """
+        from backend.orchestration.router.score_calibration import (
+            STRONG_SIGNAL_HITS,
+            compute_signal,
+        )
+
         if not candidates:
             return ToolSelection(need_clarification=True, clarification_reason="domain_has_no_tools")
 
         scores = self._fine_scores(query, candidates)
         ranked = sorted(candidates, key=lambda c: (-scores.get(c.name, 0.0), c.name))
+
+        # 规则强信号：唯一 ≥2 特征命中的候选（如有）提到首位——向量召回被
+        # 语义搭便车的 examples 拉偏时（D6），特征信号兜住确定性。
+        hits = compute_signal(query, [c.name for c in candidates])
+        strong = sorted(c for c, h in hits.items() if h >= STRONG_SIGNAL_HITS)
+        calib_meta: dict = {"hits": hits, "strong": strong} if hits else {}
+        if len(strong) == 1 and ranked[0].name != strong[0]:
+            ranked.sort(key=lambda c: c.name != strong[0])  # stable：强信号候选置顶
+
         top1, top2 = ranked[0], ranked[1] if len(ranked) > 1 else None
         s1 = scores.get(top1.name, 0.0)
         s2 = scores.get(top2.name, 0.0) if top2 else 0.0
@@ -152,12 +177,24 @@ class HierarchicalRouter:
             and top1.fast_path_enabled
             and top1.risk_level == "LOW"
         )
-        if fast_ok:
+        rule_signal_ok = (
+            len(strong) == 1
+            and top1.name == strong[0]
+            and top1.fast_path_enabled
+            and top1.risk_level == "LOW"
+        )
+        if fast_ok or rule_signal_ok:
             selection.route_mode = "fast_path"
+            if calib_meta:
+                calib_meta["basis"] = "rule_strong_signal" if rule_signal_ok else "calibrated_scores"
+                selection.calibration = calib_meta
         else:
             # 灰区：候选原样交给 tool_selector（bind 的只有域内工具）；
             # 不在此处调 LLM —— LLM 调用统一收敛在 tool_selector 节点。
             selection.route_mode = "llm_selection"
+            if calib_meta:
+                calib_meta["basis"] = "grey_zone"
+                selection.calibration = calib_meta
         return selection
 
     # ── 主流程 ─────────────────────────────────────────────────
@@ -325,6 +362,7 @@ def _meta(source_or_prediction, action: str,
             "fine_top1_score": selection.fine_top1_score if selection else 0.0,
             "fine_margin": selection.fine_margin if selection else 0.0,
             "tool_route_mode": selection.route_mode if selection else "",
+            "calibration": (selection.calibration if selection else {}),
             "selected_tool": (selection.tool_name if selection.route_mode == "fast_path" else "") if selection else "",
             "need_clarification": selection.need_clarification if selection else (action == "clarify"),
             "clarification_reason": selection.clarification_reason if selection else (

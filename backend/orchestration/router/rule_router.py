@@ -188,6 +188,31 @@ class RuleRouter:
                     reason=f"复合意图（连接词 + {'/'.join(hit_groups)}）→ plan 编排",
                 )
 
+        # 2.5 其他 yaml 声明组（2026-09-22 D6 修复，如 data.collect）：
+        # 采集/抓取/同步/导入类特征词与 SQL 统计词正交，先于 RAG/SQL 判定，
+        # 防止「导入供应商商品信息」这类外部数据诉求被统计词误吸进 sql.query。
+        # 只消费 capabilities.yaml rule_keyword_groups 里显式声明的组
+        # （sql.query/rag.search 保留下方专属块，行为不变），不扩写内置词表。
+        _DEDICATED_GROUPS = ("sql.query", "rag.search")
+        for cap, kws in _RULE_KEYWORD_GROUPS.items():
+            if cap in _DEDICATED_GROUPS or not kws:
+                continue
+            cap_hits = sum(1 for k in kws if re.search(k, query_lower))
+            if cap_hits >= 2:
+                return RouteDecision(
+                    execution_mode=ExecutionMode.DIRECT,
+                    candidates=[CapabilityScore(name=cap, score=0.85)],
+                    confidence=0.85,
+                    reason=f"匹配 {cap} 关键词 {cap_hits} 个（强信号）",
+                )
+            if cap_hits == 1:
+                return RouteDecision(
+                    execution_mode=ExecutionMode.DIRECT,
+                    candidates=[CapabilityScore(name=cap, score=0.75 + 0.05 * cap_hits)],
+                    confidence=0.75,  # < 0.8 → fallback 到 Vector
+                    reason=f"匹配 {cap} 关键词 1 个（弱信号）",
+                )
+
         # 3. 业务 SOP 关键字（审核/退款/流程等）
         # 2026-09-10：2 个命中即视为强信号直接拍板（原阈值 3）。
         # 依据：trace c8431b548b01 —— 「退款审核时间是多少？」命中 2 个 RAG 关键词，
