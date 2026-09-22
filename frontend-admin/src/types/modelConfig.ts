@@ -158,7 +158,7 @@ export function failurePolicyLabel(policy: RolePolicy['failurePolicy']): string 
 
 export type BillingMode = 'metered' | 'subscription' | 'local'
 export type NetworkScope = 'public' | 'private'
-export type ModelKind = 'chat' | 'embedding' | 'rerank' | 'vision' | 'speech'
+export type ModelKind = 'chat' | 'embedding' | 'rerank' | 'vision' | 'speech' | 'ocr'
 
 export function modelKindLabel(kind: ModelKind): string {
   switch (kind) {
@@ -170,6 +170,8 @@ export function modelKindLabel(kind: ModelKind): string {
       return '视觉模型'
     case 'speech':
       return '语音模型'
+    case 'ocr':
+      return 'OCR 模型'
     default:
       return '文本模型'
   }
@@ -178,6 +180,9 @@ export function modelKindLabel(kind: ModelKind): string {
 export function roleModelKind(role: string): ModelKind {
   if (role === 'embedding') return 'embedding'
   if (role === 'rerank') return 'rerank'
+  // OCR 角色期望同名用途（后端 _SPECIALIZED_MODEL_ROLES 已含 ocr，2026-09-22）：
+  // 只有用途=ocr 的模型才能绑到 OCR 角色
+  if (role === 'ocr') return 'ocr'
   return 'chat'
 }
 
@@ -450,9 +455,9 @@ export const ROLE_LABELS: Record<string, string> = {
 
 /** 使用专项协议适配器的角色，与后端 `infra/llm/models.py::_SPECIALIZED_MODEL_ROLES` 对齐。
  *
- *  ⚠️ 只有 embedding / rerank —— 后端 `expected_model_kind()` 把 `ocr` 的期望用途判为
- *  `chat`，把它列进这里会让前端以为 ocr 需要视觉模型，与后端校验打架。
- *  角色绑定编辑仍统一从已登记模型目录选择。
+ *  只有 embedding / rerank —— ocr 角色不走专项协议适配器链（rag 的 OCR
+ *  解析器自行调用），故不在此列；其期望用途已改为同名 `ocr`（2026-09-22，
+ *  后端 _SPECIALIZED_MODEL_ROLES 同步）。角色绑定编辑仍统一从已登记模型目录选择。
  */
 export const SPECIALIZED_MODEL_ROLES = new Set(['embedding', 'rerank'])
 

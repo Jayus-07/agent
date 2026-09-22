@@ -8,6 +8,7 @@ export function modelKindShortLabel(kind: ModelKind): string {
   if (kind === 'rerank') return '重排'
   if (kind === 'vision') return '视觉'
   if (kind === 'speech') return '语音'
+  if (kind === 'ocr') return 'OCR'
   return '文本'
 }
 
@@ -16,6 +17,7 @@ export function modelKindBadgeClass(kind: ModelKind): string {
   if (kind === 'rerank') return 'bg-amber-50 text-amber-700'
   if (kind === 'vision') return 'bg-sky-50 text-sky-700'
   if (kind === 'speech') return 'bg-rose-50 text-rose-700'
+  if (kind === 'ocr') return 'bg-cyan-50 text-cyan-700'
   return 'bg-slate-100 text-text-muted'
 }
 

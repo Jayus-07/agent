@@ -225,7 +225,7 @@ describe('ProvidersTab 探测失败详情', () => {
     expect(container.textContent).toContain('向量模型')
   })
 
-  it('模型新增弹窗提供文本、向量、重排、视觉、语音五类用途', async () => {
+  it('模型新增弹窗提供文本、向量、重排、视觉、语音、OCR 六类用途', async () => {
     const container = mount()
     const addModelButton = Array.from(container.querySelectorAll('button'))
       .find((button) => button.textContent?.includes('新增模型')) as HTMLButtonElement
@@ -246,6 +246,7 @@ describe('ProvidersTab 探测失败详情', () => {
       '重排模型（Rerank）',
       '视觉模型（Vision）',
       '语音模型（Speech）',
+      'OCR 模型（文档识别 / 视觉问答）',
     ])
   })
 

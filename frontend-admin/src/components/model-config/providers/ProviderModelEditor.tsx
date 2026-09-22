@@ -56,6 +56,7 @@ export default function ProviderModelEditor({
               <option value="rerank">重排模型（Rerank）</option>
               <option value="vision">视觉模型（Vision）</option>
               <option value="speech">语音模型（Speech）</option>
+              <option value="ocr">OCR 模型（文档识别 / 视觉问答）</option>
             </select>
           </label>
           {metered && (

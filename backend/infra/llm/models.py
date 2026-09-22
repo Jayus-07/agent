@@ -131,15 +131,16 @@ PROVIDER_API_KEY_ENV = {
 
 # 模型用途类型与协议类型解耦：同一个 OpenAI 兼容供应商可以同时提供
 # chat、embedding、rerank，调用端必须按用途选择对应适配器和端点。
-MODEL_KINDS = ("chat", "embedding", "rerank", "vision", "speech")
+MODEL_KINDS = ("chat", "embedding", "rerank", "vision", "speech", "ocr")
 MODEL_KIND_LABELS = {
     "chat": "文本模型",
     "embedding": "向量模型",
     "rerank": "重排模型",
     "vision": "视觉模型",
     "speech": "语音模型",
+    "ocr": "OCR 模型",
 }
-_SPECIALIZED_MODEL_ROLES = {"embedding", "rerank"}
+_SPECIALIZED_MODEL_ROLES = {"embedding", "rerank", "ocr"}
 
 
 def normalize_model_kind(value: str | None) -> str:

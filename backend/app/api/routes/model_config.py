@@ -69,7 +69,7 @@ class ProviderUpdateRequest(BaseModel):
     billing: Literal["metered", "subscription", "local"] = "metered"
     enabled: bool = True
     model_name: str | None = Field(None, alias="modelName", max_length=256)
-    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] | None = Field(
+    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech", "ocr"] | None = Field(
         None, alias="modelKind"
     )
     extra_headers: dict[str, str] = Field(default_factory=dict, alias="extraHeaders")
@@ -92,7 +92,7 @@ class ProviderCreateRequest(BaseModel):
     billing: Literal["metered", "subscription", "local"] = "metered"
     enabled: bool = True
     model_name: str = Field(..., alias="modelName", min_length=1, max_length=256)
-    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] = Field(
+    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech", "ocr"] = Field(
         "chat", alias="modelKind"
     )
     # 上游模型名（可选）：发给厂商 API 的真实名字，缺省 = 与登记名相同
@@ -107,7 +107,7 @@ class ProviderModelCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     model_name: str = Field(..., alias="modelName", min_length=1, max_length=256)
-    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] = Field(
+    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech", "ocr"] = Field(
         "chat", alias="modelKind"
     )
     # 按量计费单价（每 1M tokens）。登记即生效：服务层同步写入
@@ -321,7 +321,7 @@ async def remove_provider_model(
 async def list_provider_models(
     provider_id: str,
     request: Request,
-    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech"] | None = Query(
+    model_kind: Literal["chat", "embedding", "rerank", "vision", "speech", "ocr"] | None = Query(
         None, alias="modelKind"
     ),
     operator: OperatorIdentity = Depends(require_user_actor),

@@ -63,6 +63,7 @@ _COMPONENT_BY_MODEL_KIND = {
     "chat": "llm",
     "vision": "llm",
     "speech": "llm",
+    "ocr": "llm",
     "embedding": "embedding",
     "rerank": "rerank",
 }

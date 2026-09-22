@@ -121,6 +121,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "036_cs_tickets.sql": "memory",
     "037_cs_qa_reports.sql": "memory",
     "038_llm_models_upstream_name.sql": "memory",
+    "039_llm_models_ocr_kind.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
