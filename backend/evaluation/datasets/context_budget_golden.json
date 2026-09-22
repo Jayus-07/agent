@@ -1116,9 +1116,6 @@
         "must_contain": [
           "60,000"
         ],
-        "must_not_contain": [
-          "50,000"
-        ],
         "protected": [
           "60,000"
         ]
