@@ -42,9 +42,9 @@ describe('requestHandoff', () => {
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/cs/conversations/conversation%2F1/handoff')
     expect(init?.method).toBe('POST')
     expect(init?.body).toBeUndefined()
-    expect(init?.headers).toMatchObject({
-      Authorization: 'Bearer test-token',
-      'Idempotency-Key': 'key-1',
-    })
+    // 缺陷5 归一后 headers 以 Headers 实例交给 fetch
+    const sent = new Headers(init?.headers)
+    expect(sent.get('Authorization')).toBe('Bearer test-token')
+    expect(sent.get('Idempotency-Key')).toBe('key-1')
   })
 })

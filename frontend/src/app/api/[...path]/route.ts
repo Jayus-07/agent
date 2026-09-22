@@ -33,6 +33,10 @@ const GATEWAY = (process.env.API_URL || "http://127.0.0.1:9080").replace(
 const FORWARD_REQ_HEADERS = [
   "authorization",
   "content-type",
+  // 幂等键（2026-09-23 缺陷4）：写操作（转人工等）的 Idempotency-Key 由前端
+  // 统一网络层注入，后端强制校验（缺失 400）。BFF 白名单漏掉它等于剥头，
+  // 真实 UI 转人工必 400，而脚本测试直连网关掩盖了这条链路。
+  "idempotency-key",
   "accept",
   "user-agent",
   "cookie",

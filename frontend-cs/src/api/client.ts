@@ -148,14 +148,10 @@ export async function mutationFetchRaw(
   if (existing) return existing.then((response) => response.clone());
 
   const idempotencyKey = requestedKey ?? createIdempotencyKey();
-  const headers = Object.fromEntries(new Headers(init.headers).entries());
   const promise = fetchRaw(path, {
     ...init,
     method,
-    headers: {
-      ...headers,
-      "Idempotency-Key": idempotencyKey,
-    },
+    headers: mergeHeaders(init.headers, { "Idempotency-Key": idempotencyKey }),
   }, backend).finally(() => {
     if (mutationRawInFlight.get(fingerprint) === promise) {
       mutationRawInFlight.delete(fingerprint);
@@ -180,16 +176,15 @@ export async function mutationRequest<T = unknown>(
   if (existing) return existing as Promise<T>;
   const idempotencyKey = options.idempotencyKey ?? createIdempotencyKey();
   const { operation: _operation, idempotencyKey: _key, body: _body, ...requestOptions } = options;
-  const mutationHeaders = Object.fromEntries(new Headers(requestOptions.headers).entries());
   let promise: Promise<T>;
   promise = request<T>(path, {
     ...requestOptions,
     method,
     body: bodyText,
-    headers: {
-      ...mutationHeaders,
-      "Idempotency-Key": idempotencyKey,
-    },
+    headers: mergeHeaders(
+      requestOptions.headers,
+      { "Idempotency-Key": idempotencyKey },
+    ),
   } as RequestOptions).finally(() => {
     if (mutationInFlight.get(fingerprint) === promise) mutationInFlight.delete(fingerprint);
   });
@@ -261,14 +256,45 @@ function isAuthPath(input: string): boolean {
   return input.startsWith("/api/auth/") || /:\/\/[^/]+\/api\/auth\//.test(input);
 }
 
-function buildHeaders(init?: RequestInit): Record<string, string> {
-  // 凭据收口（2026-09-16 方案 B）：X-API-Key 由服务端代理路由
-  // （app/api/[...path]/route.ts）注入，浏览器不再持有服务级密钥。
-  // 旧变量 NEXT_PUBLIC_API_KEY 已废弃，请勿在此引用（会重新泄漏进 bundle）。
-  return {
-    ...bearerHeaders(),
-    ...Object.fromEntries(new Headers(init?.headers).entries()),
-  };
+function buildHeaders(init?: RequestInit): Headers {
+  // 统一 Headers 构造（2026-09-23 缺陷5）：此前用对象字面量 spread 合并默认头
+  // 与调用方头，`Content-Type` 与调用方的 `content-type` 是两个 JS 键，进入
+  // fetch 的 Headers 后按 RFC 大小写不敏感规则合并成
+  // "application/json, application/json"，后端解析媒体类型失败 → 带体 POST 全线 422
+  // （坐席认领/发消息/确认动作首当其冲）。改走 Headers.set()：同名头（大小写
+  // 不敏感）后源覆盖前源，永远单值。
+  // 凭据收口（2026-09-16 方案 B）：X-API-Key 由服务端代理路由注入，浏览器
+  // 不再持有服务级密钥。旧变量 NEXT_PUBLIC_API_KEY 已废弃，请勿在此引用。
+  return mergeHeaders(bearerHeaders(), init?.headers);
+}
+
+/**
+ * 按 Headers 语义合并多个头源：后源覆盖前源（同大小写不敏感同名）。
+ * 所有请求头构造必须经过本函数，禁止对象 spread 拼接头。
+ */
+function mergeHeaders(
+  ...sources: Array<HeadersInit | undefined | null>
+): Headers {
+  const merged = new Headers();
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, value] of new Headers(source).entries()) {
+      merged.set(key, value);
+    }
+  }
+  return merged;
+}
+
+/** 浏览器自行决定 Content-Type 的请求体（multipart boundary / 表单编码 / Blob type / 流）。 */
+function hasBrowserManagedBody(body: unknown): boolean {
+  return (
+    body instanceof FormData ||
+    body instanceof Blob ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body as object) ||
+    (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
+  );
 }
 
 // ── Response 层 ───────────────────────────────────────────────
@@ -350,10 +376,16 @@ export async function request<T = unknown>(
   try {
     const res = await fetch(joinUrl(path, backend), {
       ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...buildHeaders(init),
-      },
+      // 默认 JSON 头；FormData/Blob/流等由浏览器生成 Content-Type（multipart
+      // boundary 等），强制 application/json 会顶掉 boundary → 后端解析失败。
+      // 优先级：调用方头 > Bearer > 默认 JSON 头。
+      headers: mergeHeaders(
+        hasBrowserManagedBody(init.body)
+          ? undefined
+          : { "Content-Type": "application/json" },
+        bearerHeaders(),
+        init.headers,
+      ),
       signal: controller.signal,
     });
 

@@ -38,8 +38,8 @@ describe("mutationRequest 幂等请求", () => {
   it("同一逻辑操作并发 20 次只发送一个请求并复用键", async () => {
     const requests: Array<{ key: string | null }> = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      requests.push({ key: headers["Idempotency-Key"] ?? null });
+      // 缺陷5 归一后 headers 以 Headers 实例交给 fetch
+      requests.push({ key: new Headers(init?.headers).get("Idempotency-Key") });
       await new Promise((resolve) => setTimeout(resolve, 5));
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
@@ -55,6 +55,8 @@ describe("mutationRequest 幂等请求", () => {
     );
 
     expect(requests).toHaveLength(1);
+    // 键必须是真实读到的非空值 —— 否则「去重断言」在 key=null 时是假阳性
+    expect(requests[0]?.key).toBeTruthy();
     expect(new Set(requests.map((item) => item.key)).size).toBe(1);
     expect(results.every((item) => item.ok)).toBe(true);
   });
@@ -62,8 +64,8 @@ describe("mutationRequest 幂等请求", () => {
   it("参数变化后生成新键", async () => {
     const keys: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      keys.push(headers["Idempotency-Key"] ?? "");
+      // 缺陷5 归一后 headers 以 Headers 实例交给 fetch
+      keys.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
 

@@ -92,13 +92,13 @@ describe("request 请求构造", () => {
     await request("/x", { headers: { "X-Custom": "1" } });
 
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect(init.headers).toMatchObject({
-      "Content-Type": "application/json",
-      Authorization: "Bearer t",
-      "X-Custom": "1",
-    });
+    // 缺陷5 归一后 headers 以 Headers 实例交给 fetch（大小写不敏感单值）
+    const sent = new Headers(init.headers);
+    expect(sent.get("Content-Type")).toBe("application/json");
+    expect(sent.get("Authorization")).toBe("Bearer t");
+    expect(sent.get("X-Custom")).toBe("1");
     // 凭据收口（方案 B）：浏览器侧不再注入 X-API-Key（由 BFF 代理路由注入）
-    expect((init.headers as Record<string, string>)["X-API-Key"]).toBeUndefined();
+    expect(sent.get("X-API-Key")).toBeNull();
   });
 
   it("调用方可用 headers 覆写默认值（含 Content-Type）", async () => {
@@ -109,7 +109,106 @@ describe("request 请求构造", () => {
     await request("/x", { headers: { "Content-Type": "text/plain" } });
 
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
-    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("text/plain");
+  });
+
+  // 2026-09-23 缺陷5：对象 spread 合并默认头与调用方头时，`Content-Type` 与
+  // `content-type` 是两个 JS 键，进 fetch 的 Headers 合并成
+  // "application/json, application/json" → 后端 422。以下锁定归一契约。
+  describe("Content-Type 归一（缺陷5）", () => {
+    const expectSingleHeaderValue = async (
+      run: () => Promise<unknown>,
+      fetchSpy: ReturnType<typeof vi.spyOn>,
+      expected: string | null,
+    ) => {
+      await run();
+      const sent = new Headers(
+        (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers,
+      );
+      const value = sent.get("content-type");
+      expect(value).toBe(expected);
+      if (expected !== null) expect(value).not.toContain(",");
+    };
+
+    it("POST JSON：默认恰好一个 application/json（不发生逗号合并）", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ ok: true }));
+      await expectSingleHeaderValue(
+        () => request("/x", { method: "POST", body: { a: 1 } }),
+        fetchSpy,
+        "application/json",
+      );
+    });
+
+    it("调用方 content-type（小写）覆盖默认且仍单值", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ ok: true }));
+      await expectSingleHeaderValue(
+        () =>
+          request("/x", {
+            method: "POST",
+            body: "{}",
+            headers: { "content-type": "application/merge-patch+json" },
+          }),
+        fetchSpy,
+        "application/merge-patch+json",
+      );
+    });
+
+    it("调用方 CONTENT-TYPE（大写）覆盖默认且仍单值", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ ok: true }));
+      await expectSingleHeaderValue(
+        () =>
+          request("/x", {
+            method: "POST",
+            body: "text",
+            headers: { "CONTENT-TYPE": "text/plain" },
+          }),
+        fetchSpy,
+        "text/plain",
+      );
+    });
+
+    it("POST FormData：不强制 Content-Type，multipart boundary 交浏览器生成", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ ok: true }));
+      await expectSingleHeaderValue(
+        () => {
+          const fd = new FormData();
+          fd.append("f", "1");
+          return request("/upload", { method: "POST", body: fd });
+        },
+        fetchSpy,
+        null,
+      );
+    });
+
+    it("GET：保持默认 application/json（行为不变，无 body 无实际影响）", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ ok: true }));
+      await expectSingleHeaderValue(
+        () => request("/x"),
+        fetchSpy,
+        "application/json",
+      );
+    });
+
+    it("no-body POST：保持默认 application/json（行为不变）", async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ ok: true }));
+      await expectSingleHeaderValue(
+        () => request("/x", { method: "POST" }),
+        fetchSpy,
+        "application/json",
+      );
+    });
   });
 
   it("绝对 URL 原样透传，不拼基址", async () => {

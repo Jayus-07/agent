@@ -454,13 +454,19 @@ export default function HandoffWorkbenchPage() {
   const handleClaim = async (item: HandoffQueueItem) => {
     setError(null);
     try {
-      await claimConversation(item.conversation_id);
-      selectConversation(item);
+      const result = await claimConversation(item.conversation_id);
+      // 缺陷8（2026-09-23）：以 REST 返回的权威状态立即更新选中项与队列 ——
+      // 此前用 claim 前的旧快照 selectConversation，polling 降级（WS 断）时
+      // conversation.claimed 事件不可达，composer 永久 disabled。WS 事件只
+      // 承担其他客户端的最终一致性，不是发起方状态更新的依据。
+      const updated: HandoffQueueItem = {
+        ...item,
+        handoff_state: result.handoff_state,
+      };
+      selectConversation(updated);
       applyQueue(
         queueRef.current.map((q) =>
-          q.conversation_id === item.conversation_id
-            ? { ...q, handoff_state: "human_active" }
-            : q,
+          q.conversation_id === item.conversation_id ? updated : q,
         ),
       );
     } catch (e) {
