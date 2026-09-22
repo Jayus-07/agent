@@ -120,9 +120,27 @@ def _cfg(name: str, default):
     return getattr(config, name, default)
 
 
+def _peak_rss_mb() -> float | None:
+    """当前进程峰值 RSS（MB）。Linux 容器用 VmHWM；Windows 宿主用 psutil。"""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmHWM"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except Exception:
+        pass
+    try:
+        import psutil
+        return round(psutil.Process().memory_info().rss / 1024 / 1024, 1)
+    except Exception:
+        return None
+
+
 def run_golden(limit: int = 0, category: str = "") -> dict:
     # 进程内加载 DB 模型注册表（评测进程无 startup 刷新循环）
     import asyncio
+    import gc
+
     from backend.infra.llm.registry_store import refresh_registry
     asyncio.run(refresh_registry())
 
@@ -137,6 +155,10 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
     rows: list[dict] = []
     totals = {"protected": 0, "preserved_by_llm": 0, "patched": 0,
               "missed_final": 0}
+    # §19 patched 分类型分布：type → {total, preserved_by_llm, patched}
+    type_stats: dict[str, dict[str, int]] = {}
+    rss_start = _peak_rss_mb()
+    t_start = time.perf_counter()
 
     for case in cases:
         case_id = case["id"]
@@ -213,10 +235,24 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
         totals["patched"] += outcome.patched_fact_count
         totals["missed_final"] += len(fact_values) - len(preserved)
 
+        # §19 分类型统计（outcome 自带中文类型 → 低基数归一在报告层做）
+        for f in facts:
+            _t = _type_bucket(f.type)
+            st = type_stats.setdefault(
+                _t, {"total": 0, "preserved_by_llm": 0, "patched": 0})
+            st["total"] += 1
+        for ftype, n in (outcome.patched_by_type or {}).items():
+            type_stats.setdefault(_type_bucket(ftype), {
+                "total": 0, "preserved_by_llm": 0, "patched": 0})["patched"] += n
+        for t_name, st in type_stats.items():
+            st["preserved_by_llm"] = st["total"] - st["patched"]
+
         row.update({
             "summary_ok": True,
             "summary_tokens": outcome.token_count,
             "summary_latency_s": round(summary_latency, 2),
+            "llm_prompt_tokens": outcome.llm_prompt_tokens,
+            "llm_completion_tokens": outcome.llm_completion_tokens,
             "delta_messages": outcome.delta_message_count,
             "protected_facts_total": len(fact_values),
             "protected_facts_preserved_in_summary": len(preserved),
@@ -238,9 +274,23 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
         print(f"[{case_id}] retention_after_L5="
               f"{row['fact_retention_after_L5']} patched={outcome.patched_fact_count}"
               f"/{outcome.protected_fact_count} "
-              f"summary_tokens={outcome.token_count}", flush=True)
+              f"summary_tokens={outcome.token_count} "
+              f"latency={row['summary_latency_s']}s "
+              f"llm={row['llm_prompt_tokens']}+{row['llm_completion_tokens']}",
+              flush=True)
+
+        # §23 内存卫生：逐例清场，防跨例驻留累积（OOM 防护）
+        del history_msgs, baseline_msgs, baseline_answer, compacted_msgs, \
+            compacted_answer, compacted
+        gc.collect()
 
     scored = [r for r in rows if r.get("summary_ok")]
+
+    patched_breakdown = {
+        t: {**st, "patched_ratio": round(st["patched"] / st["total"], 4)
+            if st["total"] else None}
+        for t, st in sorted(type_stats.items())
+    }
 
     report = {
         "mode": "golden",
@@ -257,10 +307,28 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
         "patched_ratio": (
             totals["patched"] / totals["protected"]) if totals["protected"] else None,
         "protected_facts": totals,
+        "patched_by_type": patched_breakdown,
+        "runtime": {
+            "elapsed_s": round(time.perf_counter() - t_start, 1),
+            "peak_rss_mb_start": rss_start,
+            "peak_rss_mb_end": _peak_rss_mb(),
+        },
         "constraint_violations": [r["id"] for r in scored
                                   if r["constraint_violation"]],
         "detail": rows,
     }
-    print(json.dumps({k: v for k, v in report.items() if k != "detail"},
-                     ensure_ascii=False, indent=2))
+    print(json.dumps({k: v for k, v in report.items()
+                      if k not in ("detail",)}, ensure_ascii=False, indent=2))
     return report
+
+
+_TYPE_BUCKET_MAP = {
+    "金额": "amount", "订单号": "identifier", "SKU": "identifier",
+    "业务ID": "identifier", "版本号": "identifier", "百分比": "percentage",
+    "日期": "date", "时间": "date", "URL": "url", "错误码": "error_code",
+}
+
+
+def _type_bucket(chinese_type: str) -> str:
+    """中文事实类型 → 固定低基数桶（§19/§26 口径一致）。"""
+    return _TYPE_BUCKET_MAP.get(chinese_type, "other")

@@ -1,321 +1,1160 @@
 {
   "name": "context_budget_golden",
-  "version": "1.0",
-  "description": "L5 AutoCompact 事实保真 Golden Cases（Phase 4，2026-09-22）。每例对同一 session 历史做 Baseline（原始历史）与 After-L5（真实增量摘要+重建投影）双轨问答，按确定性断言计分。历史里刻意埋入寒暄与过程性噪声以贴近真实长会话。",
+  "version": "1.1",
+  "description": "L5 AutoCompact 事实保真 Golden Cases（Phase 4，2026-09-22）。每例对同一 session 历史做 Baseline（原始历史）与 After-L5（真实增量摘要+重建投影）双轨问答，按确定性断言计分。历史里刻意埋入寒暄与过程性噪声以贴近真实长会话。；v1.1 新增裸金额四例（B04-B07）",
   "cases": [
     {
-      "id": "A01", "category": "identifier", "title": "订单号保留",
+      "id": "A01",
+      "category": "identifier",
+      "title": "订单号保留",
       "history": [
-        {"role": "user", "content": "你好，在吗？"},
-        {"role": "assistant", "content": "在的，请问有什么可以帮您？"},
-        {"role": "user", "content": "我之前买了一个手机壳，想问下物流。订单号：ORD-20260922-001，麻烦帮我查一下到哪了。"},
-        {"role": "assistant", "content": "已收到您的订单号 ORD-20260922-001，我记录下来了，稍后为您跟进物流状态。"},
-        {"role": "user", "content": "顺便说下这个壳是给 iPhone 17 用的，透明的那个。"},
-        {"role": "assistant", "content": "好的，iPhone 17 透明手机壳，已备注。"},
-        {"role": "user", "content": "对了你们周末上班吗"},
-        {"role": "assistant", "content": "周末客服在线时间是 9:00-18:00。"}
+        {
+          "role": "user",
+          "content": "你好，在吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "在的，请问有什么可以帮您？"
+        },
+        {
+          "role": "user",
+          "content": "我之前买了一个手机壳，想问下物流。订单号：ORD-20260922-001，麻烦帮我查一下到哪了。"
+        },
+        {
+          "role": "assistant",
+          "content": "已收到您的订单号 ORD-20260922-001，我记录下来了，稍后为您跟进物流状态。"
+        },
+        {
+          "role": "user",
+          "content": "顺便说下这个壳是给 iPhone 17 用的，透明的那个。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，iPhone 17 透明手机壳，已备注。"
+        },
+        {
+          "role": "user",
+          "content": "对了你们周末上班吗"
+        },
+        {
+          "role": "assistant",
+          "content": "周末客服在线时间是 9:00-18:00。"
+        }
       ],
       "question": "我刚才的订单号是什么？",
-      "expect": {"must_contain": ["ORD-20260922-001"], "protected": ["ORD-20260922-001"]}
+      "expect": {
+        "must_contain": [
+          "ORD-20260922-001"
+        ],
+        "protected": [
+          "ORD-20260922-001"
+        ]
+      }
     },
     {
-      "id": "A02", "category": "identifier", "title": "SKU 精确保留",
+      "id": "A02",
+      "category": "identifier",
+      "title": "SKU 精确保留",
       "history": [
-        {"role": "user", "content": "帮我看看这个货还在不在：SKU 是 CASE-IP17-BLK-256。"},
-        {"role": "assistant", "content": "SKU CASE-IP17-BLK-256，我记下了，稍后帮您确认库存。"},
-        {"role": "user", "content": "黑色 256G 那款对吧"},
-        {"role": "assistant", "content": "对，CASE-IP17-BLK-256 是黑色 256G 保护壳。"},
-        {"role": "user", "content": "价格大概多少"},
-        {"role": "assistant", "content": "这款定价 79 元，具体以结算页为准。"}
+        {
+          "role": "user",
+          "content": "帮我看看这个货还在不在：SKU 是 CASE-IP17-BLK-256。"
+        },
+        {
+          "role": "assistant",
+          "content": "SKU CASE-IP17-BLK-256，我记下了，稍后帮您确认库存。"
+        },
+        {
+          "role": "user",
+          "content": "黑色 256G 那款对吧"
+        },
+        {
+          "role": "assistant",
+          "content": "对，CASE-IP17-BLK-256 是黑色 256G 保护壳。"
+        },
+        {
+          "role": "user",
+          "content": "价格大概多少"
+        },
+        {
+          "role": "assistant",
+          "content": "这款定价 79 元，具体以结算页为准。"
+        }
       ],
       "question": "那个 SKU 是什么？",
-      "expect": {"must_contain": ["CASE-IP17-BLK-256"], "protected": ["CASE-IP17-BLK-256"]}
+      "expect": {
+        "must_contain": [
+          "CASE-IP17-BLK-256"
+        ],
+        "protected": [
+          "CASE-IP17-BLK-256"
+        ]
+      }
     },
     {
-      "id": "A03", "category": "identifier", "title": "项目编号+用户ID 双标识",
+      "id": "A03",
+      "category": "identifier",
+      "title": "项目编号+用户ID 双标识",
       "history": [
-        {"role": "user", "content": "我这边项目编号是 PRJ-8821，负责对账。"},
-        {"role": "assistant", "content": "已记录项目 PRJ-8821，对账相关需求请讲。"},
-        {"role": "user", "content": "我的用户ID是 U-7788，之前绑定过邮箱。"},
-        {"role": "assistant", "content": "用户 U-7788 已记录。"},
-        {"role": "user", "content": "行，先这样。"},
-        {"role": "assistant", "content": "好的，随时找我。"}
+        {
+          "role": "user",
+          "content": "我这边项目编号是 PRJ-8821，负责对账。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录项目 PRJ-8821，对账相关需求请讲。"
+        },
+        {
+          "role": "user",
+          "content": "我的用户ID是 U-7788，之前绑定过邮箱。"
+        },
+        {
+          "role": "assistant",
+          "content": "用户 U-7788 已记录。"
+        },
+        {
+          "role": "user",
+          "content": "行，先这样。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，随时找我。"
+        }
       ],
       "question": "我的项目编号和用户ID分别是多少？",
-      "expect": {"must_contain": ["PRJ-8821", "U-7788"], "protected": ["PRJ-8821", "U-7788"]}
+      "expect": {
+        "must_contain": [
+          "PRJ-8821",
+          "U-7788"
+        ],
+        "protected": [
+          "PRJ-8821",
+          "U-7788"
+        ]
+      }
     },
     {
-      "id": "B01", "category": "amount", "title": "预算与退款金额",
+      "id": "B01",
+      "category": "amount",
+      "title": "预算与退款金额",
       "history": [
-        {"role": "user", "content": "我想采购一批键盘，预算 ¥5,000 以内。"},
-        {"role": "assistant", "content": "好的，采购预算 ¥5,000 以内，已记录。"},
-        {"role": "user", "content": "另外上个月有个订单退了款，退款金额 ¥128.50，还没到账。"},
-        {"role": "assistant", "content": "退款 ¥128.50 未到账已记录，我会帮您标记跟进。"},
-        {"role": "user", "content": "嗯，麻烦了。"},
-        {"role": "assistant", "content": "不客气。"}
+        {
+          "role": "user",
+          "content": "我想采购一批键盘，预算 ¥5,000 以内。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，采购预算 ¥5,000 以内，已记录。"
+        },
+        {
+          "role": "user",
+          "content": "另外上个月有个订单退了款，退款金额 ¥128.50，还没到账。"
+        },
+        {
+          "role": "assistant",
+          "content": "退款 ¥128.50 未到账已记录，我会帮您标记跟进。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，麻烦了。"
+        },
+        {
+          "role": "assistant",
+          "content": "不客气。"
+        }
       ],
       "question": "我的预算和退款金额分别是多少？",
-      "expect": {"must_contain": ["5,000", "128.50"], "protected": ["¥5,000", "¥128.50"]}
+      "expect": {
+        "must_contain": [
+          "5,000",
+          "128.50"
+        ],
+        "protected": [
+          "¥5,000",
+          "¥128.50"
+        ]
+      }
     },
     {
-      "id": "B02", "category": "amount", "title": "目标售价小数",
+      "id": "B02",
+      "category": "amount",
+      "title": "目标售价小数",
       "history": [
-        {"role": "user", "content": "新品目标售价 ¥79.90，不能高。"},
-        {"role": "assistant", "content": "目标售价 ¥79.90 已记录为硬约束。"},
-        {"role": "user", "content": "运费另算，大概 8 块。"},
-        {"role": "assistant", "content": "运费约 8 元，记下了。"},
-        {"role": "user", "content": "好。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "新品目标售价 ¥79.90，不能高。"
+        },
+        {
+          "role": "assistant",
+          "content": "目标售价 ¥79.90 已记录为硬约束。"
+        },
+        {
+          "role": "user",
+          "content": "运费另算，大概 8 块。"
+        },
+        {
+          "role": "assistant",
+          "content": "运费约 8 元，记下了。"
+        },
+        {
+          "role": "user",
+          "content": "好。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "目标售价是多少？",
-      "expect": {"must_contain": ["79.90"], "protected": ["¥79.90"]}
+      "expect": {
+        "must_contain": [
+          "79.90"
+        ],
+        "protected": [
+          "¥79.90"
+        ]
+      }
     },
     {
-      "id": "C01", "category": "percent", "title": "三个费率",
+      "id": "C01",
+      "category": "percent",
+      "title": "三个费率",
       "history": [
-        {"role": "user", "content": "记一下：推广费率 15%，退款率上限 3%，佣金 5.5%。"},
-        {"role": "assistant", "content": "已记录：推广费率 15%，退款率上限 3%，佣金 5.5%。"},
-        {"role": "user", "content": "以后算账都按这个来。"},
-        {"role": "assistant", "content": "明白，按这组费率执行。"},
-        {"role": "user", "content": "嗯。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "记一下：推广费率 15%，退款率上限 3%，佣金 5.5%。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：推广费率 15%，退款率上限 3%，佣金 5.5%。"
+        },
+        {
+          "role": "user",
+          "content": "以后算账都按这个来。"
+        },
+        {
+          "role": "assistant",
+          "content": "明白，按这组费率执行。"
+        },
+        {
+          "role": "user",
+          "content": "嗯。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "推广费率、退款率上限、佣金分别是多少？",
-      "expect": {"must_contain": ["15%", "3%", "5.5%"], "protected": ["15%", "3%", "5.5%"]}
+      "expect": {
+        "must_contain": [
+          "15%",
+          "3%",
+          "5.5%"
+        ],
+        "protected": [
+          "15%",
+          "3%",
+          "5.5%"
+        ]
+      }
     },
     {
-      "id": "C02", "category": "percent", "title": "百分比防漂移",
+      "id": "C02",
+      "category": "percent",
+      "title": "百分比防漂移",
       "history": [
-        {"role": "user", "content": "毛利率做到 30% 就合格了，别记错。"},
-        {"role": "assistant", "content": "毛利率目标 30%，已记录。"},
-        {"role": "user", "content": "之前有人跟我说 3%，那是错的。"},
-        {"role": "assistant", "content": "明白，以 30% 为准，3% 是错误说法。"},
-        {"role": "user", "content": "OK。"},
-        {"role": "assistant", "content": "嗯。"}
+        {
+          "role": "user",
+          "content": "毛利率做到 30% 就合格了，别记错。"
+        },
+        {
+          "role": "assistant",
+          "content": "毛利率目标 30%，已记录。"
+        },
+        {
+          "role": "user",
+          "content": "之前有人跟我说 3%，那是错的。"
+        },
+        {
+          "role": "assistant",
+          "content": "明白，以 30% 为准，3% 是错误说法。"
+        },
+        {
+          "role": "user",
+          "content": "OK。"
+        },
+        {
+          "role": "assistant",
+          "content": "嗯。"
+        }
       ],
       "question": "毛利率目标是多少？",
-      "expect": {"must_contain": ["30%"], "must_not_contain": ["3%是"], "protected": ["30%"]}
+      "expect": {
+        "must_contain": [
+          "30%"
+        ],
+        "must_not_contain": [
+          "3%是"
+        ],
+        "protected": [
+          "30%"
+        ]
+      }
     },
     {
-      "id": "D01", "category": "datetime", "title": "交付日期",
+      "id": "D01",
+      "category": "datetime",
+      "title": "交付日期",
       "history": [
-        {"role": "user", "content": "这批货交付日期是 2026-10-03，别延期。"},
-        {"role": "assistant", "content": "交付日期 2026-10-03 已记录。"},
-        {"role": "user", "content": "促销开始时间是 09:30 当天早上。"},
-        {"role": "assistant", "content": "促销开始 09:30 已记录。"},
-        {"role": "user", "content": "好的。"},
-        {"role": "assistant", "content": "嗯嗯。"}
+        {
+          "role": "user",
+          "content": "这批货交付日期是 2026-10-03，别延期。"
+        },
+        {
+          "role": "assistant",
+          "content": "交付日期 2026-10-03 已记录。"
+        },
+        {
+          "role": "user",
+          "content": "促销开始时间是 09:30 当天早上。"
+        },
+        {
+          "role": "assistant",
+          "content": "促销开始 09:30 已记录。"
+        },
+        {
+          "role": "user",
+          "content": "好的。"
+        },
+        {
+          "role": "assistant",
+          "content": "嗯嗯。"
+        }
       ],
       "question": "交付日期和促销开始时间分别是？",
-      "expect": {"must_contain": ["2026-10-03", "09:30"], "protected": ["2026-10-03", "09:30"]}
+      "expect": {
+        "must_contain": [
+          "2026-10-03",
+          "09:30"
+        ],
+        "protected": [
+          "2026-10-03",
+          "09:30"
+        ]
+      }
     },
     {
-      "id": "E01", "category": "constraint", "title": "多条硬约束",
+      "id": "E01",
+      "category": "constraint",
+      "title": "多条硬约束",
       "history": [
-        {"role": "user", "content": "帮我选款，约束先说清楚：不要使用海外仓，预算不超过 5000，只考虑评分 4.5 以上的，不要推荐红色款。"},
-        {"role": "assistant", "content": "已记录四条约束：不用海外仓、预算≤5000、评分≥4.5、排除红色款。"},
-        {"role": "user", "content": "对，就这样。"},
-        {"role": "assistant", "content": "好的，按这些约束筛选。"},
-        {"role": "user", "content": "嗯，你先记着。"},
-        {"role": "assistant", "content": "好的，随时继续。"}
+        {
+          "role": "user",
+          "content": "帮我选款，约束先说清楚：不要使用海外仓，预算不超过 5000，只考虑评分 4.5 以上的，不要推荐红色款。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录四条约束：不用海外仓、预算≤5000、评分≥4.5、排除红色款。"
+        },
+        {
+          "role": "user",
+          "content": "对，就这样。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，按这些约束筛选。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，你先记着。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，随时继续。"
+        }
       ],
       "question": "继续帮我做决策，重述一下你遵守的约束。",
-      "expect": {"must_contain": ["海外仓", "5000", "4.5", "红色"], "protected": []}
+      "expect": {
+        "must_contain": [
+          "海外仓",
+          "5000",
+          "4.5",
+          "红色"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "F01", "category": "decision", "title": "已确认决策不回退",
+      "id": "F01",
+      "category": "decision",
+      "title": "已确认决策不回退",
       "history": [
-        {"role": "user", "content": "两个方案对比完了，确认采用方案 B，方案 A 不做了。"},
-        {"role": "assistant", "content": "已确认：采用方案 B，方案 A 否决。"},
-        {"role": "user", "content": "另外已经决定不做 SKU X 了，别再提它。"},
-        {"role": "assistant", "content": "SKU X 已排除，后续不再作为候选。"},
-        {"role": "user", "content": "好，先这样。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "两个方案对比完了，确认采用方案 B，方案 A 不做了。"
+        },
+        {
+          "role": "assistant",
+          "content": "已确认：采用方案 B，方案 A 否决。"
+        },
+        {
+          "role": "user",
+          "content": "另外已经决定不做 SKU X 了，别再提它。"
+        },
+        {
+          "role": "assistant",
+          "content": "SKU X 已排除，后续不再作为候选。"
+        },
+        {
+          "role": "user",
+          "content": "好，先这样。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "继续下一步吧，我们刚才定了什么？",
-      "expect": {"must_contain": ["方案 B"], "must_not_contain": ["方案 A 和方案 B 都", "重新对比"], "protected": []}
+      "expect": {
+        "must_contain": [
+          "方案 B"
+        ],
+        "must_not_contain": [
+          "方案 A 和方案 B 都",
+          "重新对比"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "G01", "category": "pending", "title": "待办清单",
+      "id": "G01",
+      "category": "pending",
+      "title": "待办清单",
       "history": [
-        {"role": "user", "content": "这个项目接下来要做三件事：1. 查库存；2. 比较物流时效；3. 再生成一份报告。"},
-        {"role": "assistant", "content": "已记录待办：1) 查库存 2) 比较物流时效 3) 生成报告。"},
-        {"role": "user", "content": "顺序别乱。"},
-        {"role": "assistant", "content": "好的，按 1→2→3 顺序执行。"},
-        {"role": "user", "content": "嗯，先歇会儿。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "这个项目接下来要做三件事：1. 查库存；2. 比较物流时效；3. 再生成一份报告。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录待办：1) 查库存 2) 比较物流时效 3) 生成报告。"
+        },
+        {
+          "role": "user",
+          "content": "顺序别乱。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，按 1→2→3 顺序执行。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，先歇会儿。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "剩下还有哪些事没做？",
-      "expect": {"must_contain": ["库存", "物流", "报告"], "protected": []}
+      "expect": {
+        "must_contain": [
+          "库存",
+          "物流",
+          "报告"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "H01", "category": "negation", "title": "否定信息保留",
+      "id": "H01",
+      "category": "negation",
+      "title": "否定信息保留",
       "history": [
-        {"role": "user", "content": "这笔订单不要退款，客户自己取消了。注意不是订单 123 那笔，是另一笔。"},
-        {"role": "assistant", "content": "记录：此订单不退款；非订单 123。"},
-        {"role": "user", "content": "还有，那个操作没有被批准过。"},
-        {"role": "assistant", "content": "记录：该操作未批准。"},
-        {"role": "user", "content": "行了。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "这笔订单不要退款，客户自己取消了。注意不是订单 123 那笔，是另一笔。"
+        },
+        {
+          "role": "assistant",
+          "content": "记录：此订单不退款；非订单 123。"
+        },
+        {
+          "role": "user",
+          "content": "还有，那个操作没有被批准过。"
+        },
+        {
+          "role": "assistant",
+          "content": "记录：该操作未批准。"
+        },
+        {
+          "role": "user",
+          "content": "行了。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "退款和批准的状态到底是什么？",
-      "expect": {"must_not_contain": ["已批准", "同意退款", "办理退款"], "protected": []}
+      "expect": {
+        "must_not_contain": [
+          "已批准",
+          "同意退款",
+          "办理退款"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "I01", "category": "correction", "title": "纠正后以新值为准",
+      "id": "I01",
+      "category": "correction",
+      "title": "纠正后以新值为准",
       "history": [
-        {"role": "user", "content": "之前说 SKU-A 是我记错了，正确的是 SKU-B。以后都以 SKU-B 为准。"},
-        {"role": "assistant", "content": "已更正：有效 SKU 为 SKU-B，SKU-A 作废。"},
-        {"role": "user", "content": "对，别再把 SKU-A 当有效货号了。"},
-        {"role": "assistant", "content": "明白，SKU-A 已作废，只认 SKU-B。"},
-        {"role": "user", "content": "好。"},
-        {"role": "assistant", "content": "嗯。"}
+        {
+          "role": "user",
+          "content": "之前说 SKU-A 是我记错了，正确的是 SKU-B。以后都以 SKU-B 为准。"
+        },
+        {
+          "role": "assistant",
+          "content": "已更正：有效 SKU 为 SKU-B，SKU-A 作废。"
+        },
+        {
+          "role": "user",
+          "content": "对，别再把 SKU-A 当有效货号了。"
+        },
+        {
+          "role": "assistant",
+          "content": "明白，SKU-A 已作废，只认 SKU-B。"
+        },
+        {
+          "role": "user",
+          "content": "好。"
+        },
+        {
+          "role": "assistant",
+          "content": "嗯。"
+        }
       ],
       "question": "现在有效的 SKU 是哪个？",
-      "expect": {"must_contain": ["SKU-B"], "protected": ["SKU-B"]}
+      "expect": {
+        "must_contain": [
+          "SKU-B"
+        ],
+        "protected": [
+          "SKU-B"
+        ]
+      }
     },
     {
-      "id": "I02", "category": "correction", "title": "预算修改（摘要冲突）",
+      "id": "I02",
+      "category": "correction",
+      "title": "预算修改（摘要冲突）",
       "history": [
-        {"role": "user", "content": "这次活动的预算是 5000。"},
-        {"role": "assistant", "content": "活动预算 5000 已记录。"},
-        {"role": "user", "content": "等一下，预算改成 7000 了，刚批下来的。以后都按 7000 算。"},
-        {"role": "assistant", "content": "已更新：活动预算 7000，替代原 5000。"},
-        {"role": "user", "content": "对，7000 是最新的。"},
-        {"role": "assistant", "content": "好的，以 7000 为准。"}
+        {
+          "role": "user",
+          "content": "这次活动的预算是 5000。"
+        },
+        {
+          "role": "assistant",
+          "content": "活动预算 5000 已记录。"
+        },
+        {
+          "role": "user",
+          "content": "等一下，预算改成 7000 了，刚批下来的。以后都按 7000 算。"
+        },
+        {
+          "role": "assistant",
+          "content": "已更新：活动预算 7000，替代原 5000。"
+        },
+        {
+          "role": "user",
+          "content": "对，7000 是最新的。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，以 7000 为准。"
+        }
       ],
       "question": "当前活动预算是多少？",
-      "expect": {"must_contain": ["7000"], "protected": ["7000"]}
+      "expect": {
+        "must_contain": [
+          "7000"
+        ],
+        "protected": [
+          "7000"
+        ]
+      }
     },
     {
-      "id": "J01", "category": "reference", "title": "跨轮指代（第二个方案）",
+      "id": "J01",
+      "category": "reference",
+      "title": "跨轮指代（第二个方案）",
       "history": [
-        {"role": "user", "content": "给我出三个物流方案：方案一是顺丰次日达，方案二是京东隔日达，方案三是普通快递三到五天。"},
-        {"role": "assistant", "content": "已列出：①顺丰次日达 ②京东隔日达 ③普通快递3-5天。"},
-        {"role": "user", "content": "成本上方案一 25 元，方案二 15 元，方案三 6 元。"},
-        {"role": "assistant", "content": "成本记录：25/15/6 元。"},
-        {"role": "user", "content": "嗯，先这样。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "给我出三个物流方案：方案一是顺丰次日达，方案二是京东隔日达，方案三是普通快递三到五天。"
+        },
+        {
+          "role": "assistant",
+          "content": "已列出：①顺丰次日达 ②京东隔日达 ③普通快递3-5天。"
+        },
+        {
+          "role": "user",
+          "content": "成本上方案一 25 元，方案二 15 元，方案三 6 元。"
+        },
+        {
+          "role": "assistant",
+          "content": "成本记录：25/15/6 元。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，先这样。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "刚才第二个方案是什么？成本多少？",
-      "expect": {"must_contain": ["京东", "15"], "protected": ["15"]}
+      "expect": {
+        "must_contain": [
+          "京东",
+          "15"
+        ],
+        "protected": [
+          "15"
+        ]
+      }
     },
     {
-      "id": "J02", "category": "reference", "title": "跨轮指代（黑色商品+上限）",
+      "id": "J02",
+      "category": "reference",
+      "title": "跨轮指代（黑色商品+上限）",
       "history": [
-        {"role": "user", "content": "看中两个商品：一个是黑色无线鼠标，一个是白色键盘。"},
-        {"role": "assistant", "content": "已记录：黑色无线鼠标、白色键盘。"},
-        {"role": "user", "content": "预算上限 200，超了就放弃。"},
-        {"role": "assistant", "content": "预算上限 200 已记录。"},
-        {"role": "user", "content": "嗯。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "看中两个商品：一个是黑色无线鼠标，一个是白色键盘。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：黑色无线鼠标、白色键盘。"
+        },
+        {
+          "role": "user",
+          "content": "预算上限 200，超了就放弃。"
+        },
+        {
+          "role": "assistant",
+          "content": "预算上限 200 已记录。"
+        },
+        {
+          "role": "user",
+          "content": "嗯。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "前面那个黑色的商品是什么？我的上限是多少？",
-      "expect": {"must_contain": ["鼠标", "200"], "protected": ["200"]}
+      "expect": {
+        "must_contain": [
+          "鼠标",
+          "200"
+        ],
+        "protected": [
+          "200"
+        ]
+      }
     },
     {
-      "id": "A04", "category": "identifier", "title": "多订单混排（选对那个）",
+      "id": "A04",
+      "category": "identifier",
+      "title": "多订单混排（选对那个）",
       "history": [
-        {"role": "user", "content": "我有两个订单：ORD-20260901-100 已经收到了，ORD-20260920-200 还没发货。"},
-        {"role": "assistant", "content": "已记录：ORD-20260901-100 已签收；ORD-20260920-200 待发货。"},
-        {"role": "user", "content": "帮我催一下没发的那单。"},
-        {"role": "assistant", "content": "好的，为您催促 ORD-20260920-200。"},
-        {"role": "user", "content": "谢谢你。"},
-        {"role": "assistant", "content": "不客气。"}
+        {
+          "role": "user",
+          "content": "我有两个订单：ORD-20260901-100 已经收到了，ORD-20260920-200 还没发货。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：ORD-20260901-100 已签收；ORD-20260920-200 待发货。"
+        },
+        {
+          "role": "user",
+          "content": "帮我催一下没发的那单。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，为您催促 ORD-20260920-200。"
+        },
+        {
+          "role": "user",
+          "content": "谢谢你。"
+        },
+        {
+          "role": "assistant",
+          "content": "不客气。"
+        }
       ],
       "question": "我要催的是哪个订单号？",
-      "expect": {"must_contain": ["ORD-20260920-200"], "must_not_contain": ["催促 ORD-20260901-100"], "protected": ["ORD-20260920-200", "ORD-20260901-100"]}
+      "expect": {
+        "must_contain": [
+          "ORD-20260920-200"
+        ],
+        "must_not_contain": [
+          "催促 ORD-20260901-100"
+        ],
+        "protected": [
+          "ORD-20260920-200",
+          "ORD-20260901-100"
+        ]
+      }
     },
     {
-      "id": "B03", "category": "amount", "title": "金额单位混合",
+      "id": "B03",
+      "category": "amount",
+      "title": "金额单位混合",
       "history": [
-        {"role": "user", "content": "定金付了 3000 元，尾款还有 1200 块。"},
-        {"role": "assistant", "content": "记录：定金 3000 元，尾款 1200 元。"},
-        {"role": "user", "content": "发票金额开 4200。"},
-        {"role": "assistant", "content": "发票 4200 元已记录。"},
-        {"role": "user", "content": "好。"},
-        {"role": "assistant", "content": "嗯。"}
+        {
+          "role": "user",
+          "content": "定金付了 3000 元，尾款还有 1200 块。"
+        },
+        {
+          "role": "assistant",
+          "content": "记录：定金 3000 元，尾款 1200 元。"
+        },
+        {
+          "role": "user",
+          "content": "发票金额开 4200。"
+        },
+        {
+          "role": "assistant",
+          "content": "发票 4200 元已记录。"
+        },
+        {
+          "role": "user",
+          "content": "好。"
+        },
+        {
+          "role": "assistant",
+          "content": "嗯。"
+        }
       ],
       "question": "定金、尾款、发票金额分别是多少？",
-      "expect": {"must_contain": ["3000", "1200", "4200"], "protected": ["3000 元", "1200"]}
+      "expect": {
+        "must_contain": [
+          "3000",
+          "1200",
+          "4200"
+        ],
+        "protected": [
+          "3000 元",
+          "1200"
+        ]
+      }
     },
     {
-      "id": "D02", "category": "datetime", "title": "日期+版本号混合",
+      "id": "D02",
+      "category": "datetime",
+      "title": "日期+版本号混合",
       "history": [
-        {"role": "user", "content": "系统 2026-11-01 升级到 v2.3.1，升级窗口凌晨 2:00 开始。"},
-        {"role": "assistant", "content": "已记录：2026-11-01 升级 v2.3.1，窗口 02:00 开始。"},
-        {"role": "user", "content": "错误码 E-4021 出现过两次，升级前要观察。"},
-        {"role": "assistant", "content": "错误码 E-4021 已记录待观察。"},
-        {"role": "user", "content": "好。"},
-        {"role": "assistant", "content": "嗯。"}
+        {
+          "role": "user",
+          "content": "系统 2026-11-01 升级到 v2.3.1，升级窗口凌晨 2:00 开始。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：2026-11-01 升级 v2.3.1，窗口 02:00 开始。"
+        },
+        {
+          "role": "user",
+          "content": "错误码 E-4021 出现过两次，升级前要观察。"
+        },
+        {
+          "role": "assistant",
+          "content": "错误码 E-4021 已记录待观察。"
+        },
+        {
+          "role": "user",
+          "content": "好。"
+        },
+        {
+          "role": "assistant",
+          "content": "嗯。"
+        }
       ],
       "question": "升级日期、版本号、错误码分别是什么？",
-      "expect": {"must_contain": ["2026-11-01", "2.3.1", "E-4021"], "protected": ["2026-11-01", "2.3.1", "E-4021"]}
+      "expect": {
+        "must_contain": [
+          "2026-11-01",
+          "2.3.1",
+          "E-4021"
+        ],
+        "protected": [
+          "2026-11-01",
+          "2.3.1",
+          "E-4021"
+        ]
+      }
     },
     {
-      "id": "E02", "category": "constraint", "title": "阈值约束（数量+评分）",
+      "id": "E02",
+      "category": "constraint",
+      "title": "阈值约束（数量+评分）",
       "history": [
-        {"role": "user", "content": "补货规则：库存低于 50件 就要补，供应商只选评分 4.8 以上的。"},
-        {"role": "assistant", "content": "已记录：补货线 50 件，供应商评分≥4.8。"},
-        {"role": "user", "content": "每次补货不超过 200 箱。"},
-        {"role": "assistant", "content": "单次补货上限 200 箱已记录。"},
-        {"role": "user", "content": "先这样。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "补货规则：库存低于 50件 就要补，供应商只选评分 4.8 以上的。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：补货线 50 件，供应商评分≥4.8。"
+        },
+        {
+          "role": "user",
+          "content": "每次补货不超过 200 箱。"
+        },
+        {
+          "role": "assistant",
+          "content": "单次补货上限 200 箱已记录。"
+        },
+        {
+          "role": "user",
+          "content": "先这样。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "补货规则里有哪些数字要求？",
-      "expect": {"must_contain": ["50", "4.8", "200"], "protected": ["50件", "200 箱"]}
+      "expect": {
+        "must_contain": [
+          "50",
+          "4.8",
+          "200"
+        ],
+        "protected": [
+          "50件",
+          "200 箱"
+        ]
+      }
     },
     {
-      "id": "F02", "category": "decision", "title": "否决的供应商不复活",
+      "id": "F02",
+      "category": "decision",
+      "title": "否决的供应商不复活",
       "history": [
-        {"role": "user", "content": "供应商对比结束，定了华东供应链，华南供应商否掉了，价格谈不拢。"},
-        {"role": "assistant", "content": "已确认：选定华东供应链；华南供应商否决（价格原因）。"},
-        {"role": "user", "content": "嗯，别再推华南的了。"},
-        {"role": "assistant", "content": "好的，华南不再进入候选。"},
-        {"role": "user", "content": "行。"},
-        {"role": "assistant", "content": "嗯嗯。"}
+        {
+          "role": "user",
+          "content": "供应商对比结束，定了华东供应链，华南供应商否掉了，价格谈不拢。"
+        },
+        {
+          "role": "assistant",
+          "content": "已确认：选定华东供应链；华南供应商否决（价格原因）。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，别再推华南的了。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，华南不再进入候选。"
+        },
+        {
+          "role": "user",
+          "content": "行。"
+        },
+        {
+          "role": "assistant",
+          "content": "嗯嗯。"
+        }
       ],
       "question": "供应商定的是哪家？哪一家被否了？",
-      "expect": {"must_contain": ["华东"], "protected": []}
+      "expect": {
+        "must_contain": [
+          "华东"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "H02", "category": "negation", "title": "否定+纠正叠加",
+      "id": "H02",
+      "category": "negation",
+      "title": "否定+纠正叠加",
       "history": [
-        {"role": "user", "content": "重申一下：这笔费用不能报销，公司还没批。另外之前我说报销 500 是口误，根本没有这回事。"},
-        {"role": "assistant", "content": "记录：费用不可报销（未批准）；「报销 500」为口误，不存在。"},
-        {"role": "user", "content": "对，就是这个意思。"},
-        {"role": "assistant", "content": "明白。"},
-        {"role": "user", "content": "嗯。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "重申一下：这笔费用不能报销，公司还没批。另外之前我说报销 500 是口误，根本没有这回事。"
+        },
+        {
+          "role": "assistant",
+          "content": "记录：费用不可报销（未批准）；「报销 500」为口误，不存在。"
+        },
+        {
+          "role": "user",
+          "content": "对，就是这个意思。"
+        },
+        {
+          "role": "assistant",
+          "content": "明白。"
+        },
+        {
+          "role": "user",
+          "content": "嗯。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "这笔费用能报销吗？之前说的报销 500 是真的吗？",
-      "expect": {"must_not_contain": ["可以报销", "500 元可以报销", "已批准"], "protected": []}
+      "expect": {
+        "must_not_contain": [
+          "可以报销",
+          "500 元可以报销",
+          "已批准"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "G02", "category": "pending", "title": "待办+已完成混合",
+      "id": "G02",
+      "category": "pending",
+      "title": "待办+已完成混合",
       "history": [
-        {"role": "user", "content": "盘点一下：数据清洗已经做完了，特征工程做了一半，模型训练还没开始，报告要等训练完再写。"},
-        {"role": "assistant", "content": "已记录：数据清洗✅；特征工程进行中；模型训练未开始；报告待训练后。"},
-        {"role": "user", "content": "对，就这个进度。"},
-        {"role": "assistant", "content": "好的，按此跟踪。"},
-        {"role": "user", "content": "嗯。"},
-        {"role": "assistant", "content": "好。"}
+        {
+          "role": "user",
+          "content": "盘点一下：数据清洗已经做完了，特征工程做了一半，模型训练还没开始，报告要等训练完再写。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：数据清洗✅；特征工程进行中；模型训练未开始；报告待训练后。"
+        },
+        {
+          "role": "user",
+          "content": "对，就这个进度。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，按此跟踪。"
+        },
+        {
+          "role": "user",
+          "content": "嗯。"
+        },
+        {
+          "role": "assistant",
+          "content": "好。"
+        }
       ],
       "question": "哪些做完了？哪些还没做？",
-      "expect": {"must_contain": ["清洗", "训练"], "protected": []}
+      "expect": {
+        "must_contain": [
+          "清洗",
+          "训练"
+        ],
+        "protected": []
+      }
     },
     {
-      "id": "J03", "category": "reference", "title": "跨轮指代（之前说的上限）",
+      "id": "J03",
+      "category": "reference",
+      "title": "跨轮指代（之前说的上限）",
       "history": [
-        {"role": "user", "content": "采购上限 800，单件不超过 40。"},
-        {"role": "assistant", "content": "已记录：采购上限 800，单件≤40。"},
-        {"role": "user", "content": "候选有三款：甲 35 元，乙 42 元，丙 39 元。"},
-        {"role": "assistant", "content": "候选价格：甲35/乙42/丙39。"},
-        {"role": "user", "content": "嗯，先记着。"},
-        {"role": "assistant", "content": "好的。"}
+        {
+          "role": "user",
+          "content": "采购上限 800，单件不超过 40。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：采购上限 800，单件≤40。"
+        },
+        {
+          "role": "user",
+          "content": "候选有三款：甲 35 元，乙 42 元，丙 39 元。"
+        },
+        {
+          "role": "assistant",
+          "content": "候选价格：甲35/乙42/丙39。"
+        },
+        {
+          "role": "user",
+          "content": "嗯，先记着。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的。"
+        }
       ],
       "question": "之前说的上限是多少？候选里哪款超上限了？",
-      "expect": {"must_contain": ["800", "42"], "protected": ["800", "40"]}
+      "expect": {
+        "must_contain": [
+          "800",
+          "42"
+        ],
+        "protected": [
+          "800",
+          "40"
+        ]
+      }
+    },
+    {
+      "id": "B04",
+      "category": "amount",
+      "title": "裸金额（无货币符号）保护",
+      "history": [
+        {
+          "role": "user",
+          "content": "在吗？跟我说下公司采购这块的事，我口头给你报几个数。"
+        },
+        {
+          "role": "assistant",
+          "content": "在的，您说，我记录。"
+        },
+        {
+          "role": "user",
+          "content": "这次服务器采购预算 100,000，另外办公设备采购成本 25,000，目标售价 定在 8999。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：服务器采购预算 100,000，办公设备采购成本 25,000，目标售价 8999。"
+        },
+        {
+          "role": "user",
+          "content": "供应商那边谈的退款金额 1,299.50，还有最高运费不能超过 500。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的：退款金额 1,299.50，运费上限 500。"
+        }
+      ],
+      "question": "这次服务器采购的预算是多少？",
+      "expect": {
+        "must_contain": [
+          "100,000"
+        ],
+        "protected": [
+          "100,000",
+          "25,000",
+          "8999",
+          "1,299.50",
+          "500"
+        ]
+      }
+    },
+    {
+      "id": "B05",
+      "category": "amount",
+      "title": "裸金额修改（最新值优先，不得新旧并存）",
+      "history": [
+        {
+          "role": "user",
+          "content": "记住，本次营销活动预算 100,000。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录营销活动预算 100,000。"
+        },
+        {
+          "role": "user",
+          "content": "物料印刷预算 8,000，主播坑位费 20,000。"
+        },
+        {
+          "role": "assistant",
+          "content": "记录：物料印刷预算 8,000，主播坑位费 20,000。"
+        },
+        {
+          "role": "user",
+          "content": "等等，预算改成 120,000，老板批了追加。"
+        },
+        {
+          "role": "assistant",
+          "content": "更新：营销活动预算改为 120,000。"
+        }
+      ],
+      "question": "当前有效的营销活动预算是多少？",
+      "expect": {
+        "must_contain": [
+          "120,000"
+        ],
+        "must_not_contain": [
+          "100,000"
+        ],
+        "protected": [
+          "120,000"
+        ]
+      }
+    },
+    {
+      "id": "B06",
+      "category": "amount",
+      "title": "裸金额否定后修正",
+      "history": [
+        {
+          "role": "user",
+          "content": "项目备用金是 50,000。"
+        },
+        {
+          "role": "assistant",
+          "content": "备用金 50,000 已记录。"
+        },
+        {
+          "role": "user",
+          "content": "不对不对，50,000 说错了，不是这个数，备用金其实是 60,000。"
+        },
+        {
+          "role": "assistant",
+          "content": "更正：备用金为 60,000，之前说的 50,000 作废。"
+        }
+      ],
+      "question": "备用金最终是多少？",
+      "expect": {
+        "must_contain": [
+          "60,000"
+        ],
+        "must_not_contain": [
+          "50,000"
+        ],
+        "protected": [
+          "60,000"
+        ]
+      }
+    },
+    {
+      "id": "B07",
+      "category": "amount",
+      "title": "大数字非金额（不得误判为金额保护）",
+      "history": [
+        {
+          "role": "user",
+          "content": "帮我记几个编号：订单号 100000，SKU 100000，错误码 100000 都出现了，系统库存数量 100000。"
+        },
+        {
+          "role": "assistant",
+          "content": "已记录：订单号 100000、SKU 100000、错误码 100000、库存数量 100000。"
+        },
+        {
+          "role": "user",
+          "content": "这些都只是编号和数量，不涉及钱。"
+        },
+        {
+          "role": "assistant",
+          "content": "明白，都是编号/数量信息，与金额无关。"
+        }
+      ],
+      "question": "我的订单号是多少？",
+      "expect": {
+        "must_contain": [
+          "100000"
+        ],
+        "protected": [
+          "100000"
+        ]
+      }
     }
   ]
 }

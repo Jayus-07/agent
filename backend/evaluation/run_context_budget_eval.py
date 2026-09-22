@@ -459,12 +459,17 @@ def main() -> None:
     parser.add_argument("mode", choices=[*MODES, "golden", "waterline"])
     parser.add_argument("--limit", type=int, default=0, help="golden: 只跑前 N 例")
     parser.add_argument("--category", default="", help="golden: 只跑指定类别")
+    parser.add_argument("--smoke", action="store_true",
+                        help="golden: smoke 模式（前 5 例，低内存，适合 CI 门禁）；"
+                             "不带该参数 = 完整 Golden（发布前执行）")
     args = parser.parse_args()
 
     if args.mode == "golden":
         from backend.evaluation.context_budget.golden_eval import run_golden
-        report = run_golden(limit=args.limit, category=args.category)
-        path = _save_report("golden", report)
+        limit = 5 if args.smoke else args.limit  # --smoke 优先
+        report = run_golden(limit=limit, category=args.category)
+        path = _save_report("golden" if not args.smoke else "golden_smoke",
+                            report)
         print(f"\nreport: {path}")
     elif args.mode == "waterline":
         from backend.evaluation.context_budget.waterline import run_waterline
