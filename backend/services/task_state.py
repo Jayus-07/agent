@@ -50,12 +50,18 @@ class TaskManager:
     def create(user_id: str, query: str, *, tenant_id: str = "default",
                graph_name: str = "main", conversation_id: str = "",
                trace_id: str = "", biz_type: str = "", biz_id: str = "",
-               parent_task_id: str = "") -> TaskRecord:
-        """创建 PENDING 任务（thread_id = task-{task_id}，checkpoint 定位键）。"""
+               parent_task_id: str = "",
+               extra_input: dict | None = None) -> TaskRecord:
+        """创建 PENDING 任务（thread_id = task-{task_id}，checkpoint 定位键）。
+
+        extra_input：执行器重投所需业务参数（如 rag_index 的索引 kwargs），
+        落 input JSONB——resume 执行器路由依赖。
+        """
         return task_service.create_task(
             user_id, query, tenant_id=tenant_id, graph_name=graph_name,
             conversation_id=conversation_id, trace_id=trace_id,
-            biz_type=biz_type, biz_id=biz_id, parent_task_id=parent_task_id)
+            biz_type=biz_type, biz_id=biz_id, parent_task_id=parent_task_id,
+            extra_input=extra_input)
 
     @staticmethod
     def mark_running(task_id: str, *, progress: str = "",

@@ -210,16 +210,20 @@ async def pause_task(task_id: str, request: Request):
 @router.post("/{task_id}/resume")
 async def resume_task(task_id: str, body: TaskResumeRequest, request: Request):
     ident = _identity(request)
-    _get_owned_task(task_id, ident.user_id,
-                    _tenant(request, identity=ident))
+    before = _get_owned_task(task_id, ident.user_id,
+                             _tenant(request, identity=ident))
     try:
         record = task_manager.resume_task(task_id, body.user_input or "")
     except LookupError:
         raise HTTPException(status_code=404, detail="任务不存在")
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    if before.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+        message = "任务已在队列/执行中（幂等，未重复入队）"
+    else:
+        message = "已重新入队（从 checkpoint 恢复）"
     return {"task_id": task_id, "status": record.status.value,
-            "message": "已重新入队（从 checkpoint 恢复）"}
+            "message": message}
 
 
 # ═══════════════════════════════════════════════════

@@ -53,6 +53,13 @@ def execute_agent_task_impl(task_id: str, *,
     if record.status == TaskStatus.CANCELLED:
         logger.info("[AgentTask] %s already cancelled, skip", task_id)
         return {"status": "CANCELLED"}
+    if record.graph_name == "rag_index":
+        # 执行器归属守卫（实机演练 2026-09-23）：rag_index 行的执行权在
+        # execute_index（重投也走 rag_index 队列），agent 图绝不碰它——
+        # 否则空 graph 输入直接 EmptyInputError。
+        logger.warning("[AgentTask] %s is a rag_index task, skip (graph 归属守卫)",
+                       task_id)
+        return {"status": "SKIPPED_GRAPH_MISMATCH"}
 
     # 状态机禁止 FAILED→RUNNING 直跳（Phase1）：Celery autoretry 重投 /
     # 收尸后重试路径，先显式回 PENDING（requeue 标记，可审计）再抢租约。

@@ -37,20 +37,54 @@ class IndexTaskCancelled(Exception):
 def create_index_task_record(upload_id: str, filename: str, *,
                              kb_id: str = "", tenant_id: str = "default",
                              user_id: str = "system",
-                             conversation_id: str = "") -> str | None:
-    """为索引任务创建 PENDING tasks 行，返回 task_id；失败降级返回 None。"""
+                             conversation_id: str = "",
+                             index_kwargs: dict | None = None) -> str | None:
+    """为索引任务创建 PENDING tasks 行，返回 task_id；失败降级返回 None。
+
+    index_kwargs（Celery 消息原文）持久化进 tasks.input——PAUSED 后 resume
+    重投时按 graph_name 路由回 rag_index 队列必需（实机演练 2026-09-23：
+    缺它会导致 resume 误走 agent 队列 → EmptyInputError）。
+    """
     try:
         from backend.services.task_state import TaskManager
 
         record = TaskManager.create(
             user_id, f"索引文档: {filename}", tenant_id=tenant_id,
             graph_name="rag_index", conversation_id=conversation_id,
-            biz_type="rag_index", biz_id=upload_id)
+            biz_type="rag_index", biz_id=upload_id,
+            extra_input={"index_kwargs": index_kwargs or {}})
         return record.id
     except Exception:
         logger.warning("[IndexTaskRuntime] tasks 行创建失败，降级无 TaskState "
                        "模式: upload_id=%s", upload_id, exc_info=True)
         return None
+
+
+def redispatch_index_task(task_id: str) -> str | None:
+    """按 tasks.input 里的原始 kwargs 重投 rag_index 队列（resume 专用）。
+
+    返回 celery async result id；task 行不存在或缺 index_kwargs 时 None
+    （调用方回落通用入队或报错）。
+    """
+    from backend.services import task_service
+    from backend.tasks.index_tasks import execute_index_task
+    from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
+
+    record = task_service.get_task(task_id)
+    if record is None:
+        return None
+    index_kwargs = (record.input or {}).get("index_kwargs") or {}
+    if not index_kwargs:
+        logger.error("[IndexTaskRuntime] %s 缺 index_kwargs，无法重投", task_id)
+        return None
+    async_result = execute_index_task.apply_async(
+        kwargs={**index_kwargs, "db_task_id": task_id},
+        queue=CELERY_RAG_INDEX_QUEUE)
+    task_service.mark_queued(task_id, getattr(async_result, "id", ""),
+                             queue=CELERY_RAG_INDEX_QUEUE)
+    logger.info("[IndexTaskRuntime] %s redispatched to rag_index (%s)",
+                task_id, str(getattr(async_result, "id", ""))[:8])
+    return getattr(async_result, "id", None)
 
 
 # ═══════════════════════════════════════════════════

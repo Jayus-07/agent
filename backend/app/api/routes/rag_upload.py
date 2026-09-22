@@ -935,7 +935,8 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
         kwargs.get("upload_id", ""), kwargs.get("filename", ""),
         kb_id=kwargs.get("kb_id", "") or "policy_general",
         tenant_id=tenant_id or "default",
-        user_id=actor_id or "system")
+        user_id=actor_id or "system",
+        index_kwargs=dict(kwargs))
     if db_task_id:
         kwargs = {**kwargs, "db_task_id": db_task_id}
 

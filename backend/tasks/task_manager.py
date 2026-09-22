@@ -255,7 +255,17 @@ def resume_task(task_id: str, user_input: str = "",
 
     record = task_service.get_task(task_id)  # type: ignore[assignment]
     try:
-        enqueue_task(record)  # type: ignore[arg-type]
+        if record is not None and record.graph_name == "rag_index":
+            # 执行器路由（实机演练 2026-09-23 修复）：索引任务的 resume 必须
+            # 重投 rag_index 队列（按 tasks.input 持久化的原始 kwargs），
+            # 否则 agent worker 拿到索引任务行 → 空 graph 输入 → EmptyInputError
+            from backend.tasks.index_task_runtime import redispatch_index_task
+
+            if redispatch_index_task(task_id) is None:
+                raise RuntimeError(
+                    f"rag_index 任务 {task_id} 缺 index_kwargs，无法重投")
+        else:
+            enqueue_task(record)  # type: ignore[arg-type]
     except Exception:
         # 入队失败回滚到 PAUSED（PENDING→PAUSED 白名单合法），可再次 resume
         task_service.mark_paused_if_pending(

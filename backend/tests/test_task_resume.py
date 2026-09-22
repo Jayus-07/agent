@@ -257,3 +257,52 @@ def test_resume_unknown_task(pg):
 
     with pytest.raises(LookupError):
         task_manager.resume_task(str(uuid.uuid4()))
+
+
+# ═══════════════════════════════════════════════════
+# 执行器路由（实机演练 2026-09-23 回归）：rag_index resume 必须回 rag_index 队列
+# ═══════════════════════════════════════════════════
+
+def test_resume_rag_index_routes_to_index_queue(pg, monkeypatch):
+    from backend.services import task_service
+    from backend.tasks import task_manager
+
+    record = task_service.create_task(
+        f"idx-user-{uuid.uuid4().hex[:8]}", "索引文档: r.pdf",
+        graph_name="rag_index", biz_type="rag_index", biz_id="up-route-1",
+        extra_input={"index_kwargs": {"upload_id": "up-route-1",
+                                      "filepath": "/tmp/r.pdf",
+                                      "filename": "r.pdf"}})
+    TaskManager.mark_running(record.id)
+    TaskManager.mark_paused(record.id)
+
+    dispatched, enqueued = [], []
+    monkeypatch.setattr("backend.tasks.index_tasks.execute_index_task.apply_async",
+                        lambda *, kwargs, queue: dispatched.append((kwargs, queue))
+                        or type("R", (), {"id": "celery-1"})())
+    monkeypatch.setattr(task_manager, "enqueue_task",
+                        lambda r: enqueued.append(r.id))
+    monkeypatch.setattr(task_manager, "mark_queued",
+                        lambda *a, **k: None, raising=False)
+
+    rec = task_manager.resume_task(record.id)
+    assert pg_status(pg, rec.id) == TaskStatus.PENDING
+    assert len(dispatched) == 1
+    kwargs, queue = dispatched[0]
+    assert queue == "rag_index"
+    assert kwargs["db_task_id"] == record.id
+    assert kwargs["upload_id"] == "up-route-1"        # 原始 kwargs 还原
+    assert enqueued == []                             # 绝不走 agent 队列
+
+
+def test_agent_impl_guard_skips_rag_index_row(pg):
+    from backend.tasks.agent_tasks import execute_agent_task_impl
+    from backend.services import task_service
+
+    record = task_service.create_task(
+        f"idx-user-{uuid.uuid4().hex[:8]}", "索引文档: g.pdf",
+        graph_name="rag_index", biz_type="rag_index", biz_id="up-guard-1",
+        extra_input={"index_kwargs": {"upload_id": "up-guard-1"}})
+    result = execute_agent_task_impl(record.id)
+    assert result["status"] == "SKIPPED_GRAPH_MISMATCH"
+    assert task_service.get_task(record.id).status == TaskStatus.PENDING  # 未被 agent 触碰

@@ -66,13 +66,19 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
                 conversation_id: str = "",
                 trace_id: str = "",
                 biz_type: str = "", biz_id: str = "",
-                parent_task_id: str = "") -> TaskRecord:
-    """创建 PENDING 任务并落库。thread_id 全局唯一（checkpoint 定位键）。"""
+                parent_task_id: str = "",
+                extra_input: dict | None = None) -> TaskRecord:
+    """创建 PENDING 任务并落库。thread_id 全局唯一（checkpoint 定位键）。
+
+    extra_input：执行器重投所需的业务参数（如 rag_index 的索引 kwargs），
+    与 query 合并进 input JSONB——resume 时执行器路由依赖它。
+    """
     from backend.config.tasks import CELERY_MAX_RETRIES
 
     ensure_schema()
     task_id = str(uuid.uuid4())
     thread_id = f"task-{task_id}"
+    input_payload = {"query": query, **(extra_input or {})}
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -84,7 +90,7 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
             """,
             (task_id, user_id, tenant_id, graph_name,
              conversation_id[:128], TaskStatus.PENDING.value,
-             json.dumps({"query": query}, ensure_ascii=False),
+             json.dumps(input_payload, ensure_ascii=False, default=str),
              thread_id, trace_id, biz_type, biz_id,
              parent_task_id or None, CELERY_MAX_RETRIES),
         )
