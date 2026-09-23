@@ -490,7 +490,10 @@ class ContextBackendUnavailable(RuntimeError):
 
 # ── Redis 实现（生产；WATCH/MULTI/EXEC 乐观锁 + Lua-free 单键 CAS）──
 
-_RETRY_ON_WATCH_ERROR = 4
+import random
+
+_RETRY_ON_WATCH_ERROR = 8
+_WATCH_RETRY_BACKOFF = (0.001, 0.006)  # 随机退避区间（秒），错开竞争窗口
 
 
 class RedisConversationContextRepository:
@@ -648,7 +651,9 @@ class RedisConversationContextRepository:
                         result.context = ctx.copy()
                         return result
                     except WatchError:
-                        continue  # 并发写冲突：重读重试（version 单调保证）
+                        # 并发写冲突：随机退避后重读重试（version 单调保证）
+                        time.sleep(random.uniform(*_WATCH_RETRY_BACKOFF))
+                        continue
         except ContextBackendUnavailable:
             raise
         except ContextConflictError:
