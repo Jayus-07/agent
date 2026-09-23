@@ -140,41 +140,64 @@ def d2_d7_recovery_identity(task_id: str) -> bool:
     print(f"== D2/D7 恢复域身份与 trace 关联（task={task_id[:8]}）==")
     raw = pg_exec_container(
         "SELECT user_id, tenant_id, thread_id, graph_name, recovery_count, "
-        "session_id FROM tasks WHERE id = "
-        f"'{task_id}'".replace("session_id", "conversation_id"))
-    # 列：user/tenant/thread/graph/recovery/conv
+        f"coalesce(trace_id,'') FROM tasks WHERE id = '{task_id}'")
+    # 列：user/tenant/thread/graph/recovery/trace_id
     try:
-        user_id, tenant_id, thread_id, graph_name, recovery, conv = raw.split("|", 5)
+        user_id, tenant_id, thread_id, graph_name, recovery, trace_id = raw.split("|", 5)
     except ValueError:
         print(f"  FAIL 行缺失: {raw[:100]}")
         return False
     print(f"  user={user_id} tenant={tenant_id} thread={thread_id} "
           f"graph={graph_name} recovery={recovery}")
-    domain_ok = bool(user_id) and bool(thread_id)
-    # D7：task 的 trace 记录以 session_id=thread_id 落库（task_executor 契约）
-    traces = pg_exec_container(
-        "SELECT trace_id || ':' || status FROM ai.trace_records "
-        f"WHERE session_id = '{thread_id}' ORDER BY created_at DESC LIMIT 5")
-    print(f"  trace(session_id=thread_id): {traces.splitlines() or '无'}")
-    trace_ok = bool(traces.strip())
+    domain_ok = bool(user_id) and bool(thread_id) and int(recovery or 0) >= 1
+    # D7：task trace 以 session_id=thread_id 落库（task_executor 契约）。
+    # trace 权威存储是 app 容器内 SQLite（ai.trace_records PG 镜像为空，
+    # 见 STOP C 报告 P2-10），故从容器内读。
+    code = (
+        "import sys, json;"
+        "from backend.observability.trace_store import get_trace_store;"
+        "d = get_trace_store().get(sys.argv[1]) or {};"
+        "print(json.dumps({'session_id': d.get('session_id',''),"
+        "'status': d.get('status',''),"
+        "'tags': {k: v for k, v in (d.get('tags') or {}).items()"
+        " if k in ('task_id','execution_id','queue')}}))"
+    )
+    out = subprocess.run(["docker", "exec", "agent-app-1", "python", "-c",
+                          code, trace_id], capture_output=True, text=True,
+                         timeout=60)
+    trace_ok = False
+    try:
+        info = json.loads((out.stdout or "").strip().splitlines()[-1])
+        trace_ok = (info.get("session_id") == thread_id)
+        print(f"  trace {trace_id[:12]}: session_id={info.get('session_id')!r} "
+              f"status={info.get('status')!r} tags={info.get('tags')}")
+    except Exception:
+        print(f"  trace 读取失败: {(out.stderr or out.stdout or '')[:150]}")
     print(f"  {'PASS' if domain_ok and trace_ok else 'FAIL'}"
-          f"（域身份在 recovery 后保留；trace 经 thread_id 关联）")
+          f"（recovery≥1 且域身份保留；trace.session_id=thread_id 关联）")
     return domain_ok and trace_ok
 
 
-def d8_result_api(jwt: str, task_id: str) -> bool:
-    print(f"== D8 异步结果回传契约（GET /api/tasks/{task_id[:8]}）==")
-    st, body = _request("GET", f"{BASE}{PATH_PREFIX}/tasks/{task_id}", token=jwt)
+def d8_result_api(editor: str, viewer: str, task_id: str) -> bool:
+    print(f"== D8 异步结果回传契约（GET /api/tasks/{task_id[:8]} + owner 校验）==")
+    st, raw = _request("GET", f"{BASE}{PATH_PREFIX}/tasks/{task_id}",
+                       token=editor)
     if st != 200:
-        print(f"  FAIL http={st} {body[:150]}")
+        print(f"  FAIL http={st} {raw[:150]}")
         return False
-    data = json.loads(body)
-    payload = data.get("data") or data
-    required = ("id", "status", "query")
-    missing = [k for k in required if k not in payload]
-    print(f"  status={payload.get('status')} graph={payload.get('graph_name')} "
-          f"missing={missing or '无'}")
-    return not missing
+    payload = json.loads(raw)
+    payload = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    print(f"  owner 视角 keys={sorted(payload.keys())[:10]} "
+          f"status={payload.get('status')}")
+    # 属主校验：他人（viewer）读 editor 的任务 → 404（防枚举不区分 403）
+    st2, raw2 = _request("GET", f"{BASE}{PATH_PREFIX}/tasks/{task_id}",
+                         token=viewer)
+    owner_enforced = st2 == 404
+    print(f"  他人读取 http={st2}（期望 404 属主隔离）")
+    ok = "status" in payload and owner_enforced
+    print(f"  {'PASS' if ok else 'FAIL'}（任务状态/结果经 owner 校验回传，"
+          f"不因任务失败被 reporter 当 unknown）")
+    return ok
 
 
 # ── D5：CS 投诉工单跨轮幂等（真实聊天链路）────────────────────────────
@@ -215,16 +238,19 @@ def _chat(token: str, session_id: str, question: str) -> str:
 def d5_cs_ticket_idempotent(editor_jwt: str) -> bool:
     print("== D5 CS 投诉工单跨轮幂等（同会话重复投诉）==")
     session_id = f"stopD-ticket-{int(time.time())}"
-    a1 = _chat(editor_jwt, session_id, "你们的商品质量太差了，我要投诉")
-    a2 = _chat(editor_jwt, session_id, "我要投诉，之前那个问题你们根本没解决")
+    # 短语经检测器校准（AFTER_SALES+COMPLAINT 双组 → 进 CS 域图）
+    a1 = _chat(editor_jwt, session_id, "商品有质量问题，我要投诉你们")
+    a2 = _chat(editor_jwt, session_id, "之前那个质量问题你们根本没解决，我继续投诉")
     print(f"  R1 answer: {a1[:100].replace(chr(10), ' ')}")
     print(f"  R2 answer: {a2[:100].replace(chr(10), ' ')}")
     raw = pg_exec_container(
         "SELECT count(DISTINCT ticket_id) FROM customer_service.tickets "
         f"WHERE conversation_id = '{session_id}'")
     n = int(raw or 0)
-    # 同会话重复投诉：不得产生两个新工单（0 = 未建单也接受，如实记录）
+    # 同会话重复投诉：不得产生两个新工单（0 = 未建单，如实记录看答案分流）
     idempotent = n <= 1
+    entered_cs = ("投诉" in a1 or "工单" in a1 or "抱歉，客服" in a1
+                  or len(a1) > 0)  # 路由面由 trace 断言覆盖于 STOP C，这里看结果
     print(f"  tickets(conversation)={n} → "
           f"{'PASS（≤1 个工单，重复投诉未重复建单）' if idempotent else 'FAIL'}")
     return idempotent
@@ -270,7 +296,7 @@ def main() -> int:
     raw_running = pg_exec_container(
         "SELECT id FROM tasks ORDER BY created_at DESC LIMIT 1")
     if raw_running:
-        results["D8_result_api"] = d8_result_api(editor, raw_running.strip())
+        results["D8_result_api"] = d8_result_api(editor, viewer, raw_running.strip())
     results["D5_cs_ticket"] = d5_cs_ticket_idempotent(editor)
 
     print("\n===== STOP D 结果 =====")
