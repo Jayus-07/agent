@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from backend.shared.logger import logger
 from backend.tasks.celery_app import celery_app
@@ -29,6 +30,13 @@ _ENABLED_VALUES = ("1", "true", "yes")
 
 def _flag_on(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in _ENABLED_VALUES
+
+
+def _sleep_if_configured() -> None:
+    """T8 用：拖长执行窗口（毫秒），默认 0 = 不等待。"""
+    delay_ms = int(os.getenv("SIDE_EFFECT_PROBE_SLEEP_MS", "0") or "0")
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000)
 
 
 def _memory_dsn() -> str:
@@ -108,6 +116,7 @@ def execute_side_effect_probe(
                 and not _probe_row_exists(probe_key)):
             # 模拟可重试瞬时失败：副作用未发生，ledger 标 FAILED（T6）
             raise ProbeTransientError(f"transient failure for {probe_key}")
+        _sleep_if_configured()  # T8：拖长执行窗口供滚动重启测试
         _insert_probe_row(probe_key, execution_id)
         if _flag_on("SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT"):
             # 模拟副作用成功之后、终态写回之前 crash（T4 关键窗口）

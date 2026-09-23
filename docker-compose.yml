@@ -503,6 +503,13 @@ services:
        "-n", "maintenance-worker@%h"]
     environment:
       <<: *worker-base-env
+      # Phase2 Step6：副作用幂等实机验收探针（默认全关，验收窗口经 .env 开启）
+      SIDE_EFFECT_PROBE_ENABLED: ${SIDE_EFFECT_PROBE_ENABLED:-0}
+      SIDE_EFFECT_PROBE_LEASE_SECONDS: ${SIDE_EFFECT_PROBE_LEASE_SECONDS:-300}
+      SIDE_EFFECT_PROBE_SLEEP_MS: ${SIDE_EFFECT_PROBE_SLEEP_MS:-0}
+      SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT: ${SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT:-0}
+      SIDE_EFFECT_TEST_CRASH_BEFORE_EFFECT: ${SIDE_EFFECT_TEST_CRASH_BEFORE_EFFECT:-0}
+      SIDE_EFFECT_TEST_FAIL_ONCE: ${SIDE_EFFECT_TEST_FAIL_ONCE:-0}
     depends_on:
       db-migrate:
         condition: service_completed_successfully
