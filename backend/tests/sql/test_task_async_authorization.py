@@ -536,7 +536,7 @@ def test_a11_concurrent_executors_no_auth_crosstalk(task_db, monkeypatch):
     def _generate(tables, question, **kwargs):
         return "SELECT sku FROM product.products LIMIT 3"
 
-    def _exec(sql, **kwargs):
+    def _exec(sql, *args, **kwargs):
         return SQLResult.success([{"ok": 1}], columns=["ok"],
                                  sql=sql, elapsed=0)
 
