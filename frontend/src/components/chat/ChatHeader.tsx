@@ -2,12 +2,14 @@
 
 /**
  * ChatHeader — 任务模式顶部标题栏（h-14）
- * 左：任务栏开关 + 当前会话标题；右：新建任务 + 分享。
+ * 左：任务栏开关 + 当前会话标题；右：新建任务 + 分享 + 退出登录。
  * 模型切换已下移到输入框工具栏（ComposerToolbar），此处不再重复。
  * 全局控制台导航在 /agent 下不渲染（见 app/layout.tsx）。
  */
-import { Headphones, PanelLeft, PanelLeftClose, Plus, Share2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Headphones, LogOut, PanelLeft, PanelLeftClose, Plus, Share2 } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
+import { logout } from '@/lib/auth'
 
 interface Props {
   title: string
@@ -24,6 +26,7 @@ export default function ChatHeader({
   title, sidebarVisible, onToggleSidebar, onNewTask, sessionId, onOpenCS,
 }: Props) {
   const toast = useToast()
+  const router = useRouter()
 
   const handleShare = async () => {
     const url = sessionId
@@ -34,6 +37,16 @@ export default function ChatHeader({
       toast.success('会话链接已复制到剪贴板')
     } catch {
       toast.warning(`复制失败，请手动复制：${url}`)
+    }
+  }
+
+  // 退出登录（2026-09-23 D1-8）：吊销后端 refresh 会话（HttpOnly cookie
+  // 由服务端 Set-Cookie 失效）+ 清本地 access/userInfo，无论请求成败都跳登录页
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } finally {
+      router.replace('/login')
     }
   }
 
@@ -90,6 +103,16 @@ export default function ChatHeader({
         title="分享会话链接"
       >
         <Share2 size={16} />
+      </button>
+
+      <button
+        onClick={handleLogout}
+        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
+          hover:text-text-primary hover:bg-black/5 transition-colors"
+        aria-label="退出登录"
+        title="退出登录"
+      >
+        <LogOut size={16} />
       </button>
     </header>
   )
