@@ -22,6 +22,19 @@ from backend.orchestration.graph.runner import (
 )
 from backend.orchestration.capability_registry import tool_registry
 from backend.shared.logger import logger
+from dataclasses import dataclass, field
+
+
+@dataclass
+class AgentOutcome:
+    """单次同步问答的请求级结果（2026-09-23 E3）。
+
+    answer/sources 随返回值带回，调用方（非流式 /chat）不再从
+    MultiAgentSystem 单例的 _last_sources 读取——并发请求下该实例属性
+    互相覆盖串扰。_last_sources 保留仅为 deprecated 调试兼容。
+    """
+    answer: str
+    sources: list = field(default_factory=list)
 
 
 class MultiAgentSystem:
@@ -77,7 +90,28 @@ class MultiAgentSystem:
         idempotency_key: str = "",
         roles: tuple[str, ...] = (),
     ) -> str:
-        """处理用户问题，返回最终 Markdown 回答。
+        """兼容出口：只取回答文本。需要 sources 的调用方请用 ask_result。"""
+        return self.ask_result(
+            question, session_id, kb_id=kb_id, user_id=user_id,
+            department=department, permissions=permissions, model=model,
+            domain_hint=domain_hint, tenant_id=tenant_id,
+            idempotency_key=idempotency_key, roles=roles).answer
+
+    def ask_result(
+        self,
+        question: str,
+        session_id: str = "default",
+        kb_id: str = "default",
+        user_id: str = "default",
+        department: str = "",
+        permissions: tuple[str, ...] | None = None,
+        model: str = "",
+        domain_hint: str = "",
+        tenant_id: str = "",
+        idempotency_key: str = "",
+        roles: tuple[str, ...] = (),
+    ) -> AgentOutcome:
+        """处理用户问题，返回请求级结果（E3）：answer + sources 随返回值带回。
 
         复用 GraphRunner 事件流（fallback_deltas=False：不做打字机增量），
         物化后取 _answer 内部事件作为回答。语义与旧同步实现一致。
@@ -103,21 +137,29 @@ class MultiAgentSystem:
 
         answer = ""
         error_message = ""
+        answer = ""
+        error_message = ""
+        sources: list = []
         for evt in events:
             name = evt.get("event")
             if name == _ANSWER_EVENT:
                 answer = evt["data"].get("answer", "")
             elif name == "done":
-                self._last_sources = evt["data"].get("sources", [])
+                sources = evt["data"].get("sources", [])
+                # deprecated 调试兼容（E3）：生产 HTTP 路径禁止读取本属性，
+                # 正式出口 = ask_result 随返回值带回
+                self._last_sources = sources
             elif name == "error":
                 error_message = evt["data"].get("message", "")
 
         if error_message:
             if "用户中止" in error_message:
-                return answer
+                return AgentOutcome(answer=answer, sources=sources)
             # 对齐旧同步实现的错误话术（error message 形如 "执行失败: ..."）
-            return f"## 系统错误\n\n{error_message}\n\n请稍后重试。"
-        return answer
+            return AgentOutcome(
+                answer=f"## 系统错误\n\n{error_message}\n\n请稍后重试。",
+                sources=sources)
+        return AgentOutcome(answer=answer, sources=sources)
 
     # =====================================================
     # SSE 流式入口

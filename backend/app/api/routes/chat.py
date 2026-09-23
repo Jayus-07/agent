@@ -164,8 +164,10 @@ async def chat(req: ChatRequest, request: Request,
     ident = resolve_identity(request, body_user_id=req.user_id)
     user_id = ident.user_id or "default"
     try:
-        answer = await asyncio.to_thread(
-            agent.ask, req.question, req.session_id, kb_id=kb_id,
+        # E3（2026-09-23）：sources 随返回值带回——不再读 MultiAgentSystem
+        # 单例的 _last_sources（并发请求互相覆盖串扰）
+        outcome = await asyncio.to_thread(
+            agent.ask_result, req.question, req.session_id, kb_id=kb_id,
             user_id=user_id, department=ident.department,
             permissions=ident.permissions, model=req.model or "",
             domain_hint=req.domain_hint or "", tenant_id=ident.tenant_id,
@@ -173,9 +175,9 @@ async def chat(req: ChatRequest, request: Request,
             roles=ident.roles)
         chat_request_total.labels(status="ok").inc()
         return ChatResponse(
-            answer=answer,
+            answer=outcome.answer,
             session_id=req.session_id,
-            sources=getattr(agent, "_last_sources", []),
+            sources=outcome.sources,
         )
     except Exception:
         chat_request_total.labels(status="error").inc()
