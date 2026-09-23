@@ -1,0 +1,113 @@
+"""providers/travel/live/quota.py — Provider 日预算软治理（STOP J7 §51-§57）
+
+任务书 §54/§55：Provider 有日配额时必须有**本项目侧的软预算**——达到
+预算即停止非关键 live 请求，转 cache/estimate/seed，且可观测。宁可自己
+先停，不要一直请求直到被第三方硬封（120 当日上限）。
+
+实现：
+  - ``TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET``（默认 0 = 不限，兼容单机开发）
+  - 计数器跨进程共享：Redis INCR（key 带日期，25h 过期）；Redis 不可用
+    退化为进程内计数（单机方向安全，多副本会低估——记 debug 日志）
+  - 超预算 → :class:`BudgetExhausted` → 适配器走 fallback matrix 并打
+    ``quota_exhausted`` 事件 + ``travel_provider_quota_total`` 指标
+
+免费额度不伪造成本（§57）：只记 request_count，不编造金额。
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import threading
+
+from backend.shared.logger import logger
+
+_QUOTA_PREFIX = "travel_provider:quota"
+# 当日计数过期给 25h（跨过午夜仍有余量，日期在键里天然轮换）
+_COUNTER_TTL_S = 90000
+
+_local_counters: dict[str, int] = {}
+_local_lock = threading.Lock()
+
+
+class BudgetExhausted(Exception):
+    """软预算用尽——调用方必须走 cache/estimate/seed 降级。"""
+
+    def __init__(self, provider: str, budget: int):
+        super().__init__(f"{provider} 日预算已用尽（{budget}）")
+        self.provider = provider
+        self.budget = budget
+
+
+def daily_budget(provider: str) -> int:
+    """provider → 本项目侧日软预算；0 = 不限（开发默认）。"""
+    if provider == "tencent:lbs":
+        import os
+
+        return int(os.getenv("TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET", "0"))
+    return 0
+
+
+def _today_key(provider: str) -> str:
+    today = _dt.date.today().isoformat()
+    return f"{_QUOTA_PREFIX}:{provider}:{today}"
+
+
+def _redis_incr(key: str) -> int | None:
+    try:
+        from backend.infra.redis.client import get_redis
+
+        r = get_redis()
+        if r is None:
+            return None
+        count = int(r.incr(key))
+        if count == 1:
+            r.expire(key, _COUNTER_TTL_S)
+        return count
+    except Exception:  # noqa: BLE001 — Redis 故障退化为进程内计数
+        logger.debug("[TravelProviderQuota] Redis 计数不可用", exc_info=True)
+        return None
+
+
+def check_and_consume(provider: str) -> int:
+    """消耗一次调用额度并返回当前计数；超预算抛 BudgetExhausted。
+
+    预算为 0（不限）时不做任何计数（零 Redis 往返，热路径零开销）。
+    """
+    budget = daily_budget(provider)
+    if budget <= 0:
+        return 0
+
+    key = _today_key(provider)
+    count = _redis_incr(key)
+    if count is None:
+        with _local_lock:
+            _local_counters[key] = _local_counters.get(key, 0) + 1
+            count = _local_counters[key]
+
+    if count > budget:
+        raise BudgetExhausted(provider, budget)
+    return count
+
+
+def current_usage(provider: str) -> int:
+    """当前日计数（health/观测用；不消耗额度）。"""
+    budget = daily_budget(provider)
+    if budget <= 0:
+        return 0
+    key = _today_key(provider)
+    try:
+        from backend.infra.redis.client import get_redis
+
+        r = get_redis()
+        if r is not None:
+            raw = r.get(key)
+            return int(raw) if raw else 0
+    except Exception:  # noqa: BLE001
+        pass
+    with _local_lock:
+        return _local_counters.get(key, 0)
+
+
+def reset_local_counters() -> None:
+    """清空进程内计数（仅测试用）。"""
+    with _local_lock:
+        _local_counters.clear()

@@ -134,3 +134,20 @@ def _memory_context_repo(monkeypatch):
     monkeypatch.setattr(repo_mod, "_repo", repo)
     yield repo
     monkeypatch.setattr(repo_mod, "_repo", None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_provider_cache(monkeypatch):
+    """STOP J 测试隔离：Provider 共享缓存换进程内空实例。
+
+    生产 backend 是 Redis（TwoTierCache），单测若直连会把测试数据写进
+    共享栈、且用例间互相污染（实测：先跑的成功用例缓存了路线，后面的
+    失败用例命中缓存而跳过失败路径）。多 worker 共享缓存行为见 STOP J
+    专项实测（不走本 fixture）。
+    """
+    from backend.infra.cache.backend import InMemoryCache
+    from backend.providers.travel.live import cache as pcache
+
+    monkeypatch.setattr(pcache, "_backend",
+                        lambda: InMemoryCache(default_ttl=600))
+    yield

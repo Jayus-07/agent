@@ -63,15 +63,32 @@ def is_bad_weather(weather_text: str) -> bool:
     return any(k in text for k in T.TRAVEL_BAD_WEATHER_KEYWORDS)
 
 
-def fetch_forecast(destination: str) -> dict | None:
-    """查未来几天预报；任何失败返回 None（调用方跳过检查）。"""
-    try:
-        from backend.infra.lbs import api
+def fetch_forecast(destination: str) -> tuple[dict | None, str]:
+    """查未来几天预报（STOP J5：经 Provider 层——6s 预算/共享缓存/遥测）。
 
-        return api.weather_for_city(destination, kind="future")
+    Returns:
+        (预报 dict 或 None, 降级说明)；任何失败返回 (None, 原因)，
+        调用方跳过检查并向用户披露。
+    """
+    try:
+        from backend.providers.travel.live import get_weather_provider
+        from backend.providers.travel.live.result import ProviderStatus
+
+        result = get_weather_provider().forecast_payload(destination)
+        if result.ok:
+            return result.data, ""
+        if result.status == ProviderStatus.DISABLED:
+            return None, ""
+        if result.status == ProviderStatus.TIMEOUT:
+            return None, "天气服务响应超时"
+        if result.status == ProviderStatus.RATE_LIMITED:
+            return None, "天气服务配额已达软预算"
+        if result.status == ProviderStatus.NOT_FOUND:
+            return None, "未获取到该城市的预报数据"
+        return None, "天气服务暂时不可用"
     except Exception as e:  # noqa: BLE001 — 天气失败软降级
         logger.warning("[TravelWeather] 天气查询失败（跳过检查）: %s", e)
-        return None
+        return None, "天气服务暂时不可用"
 
 
 def bad_weather_dates(forecast: dict) -> list[str]:
@@ -194,19 +211,33 @@ def weather_expert_node(state: dict) -> dict:
                 "未提供出发日期，已跳过天气检查；提供日期后可重新规划以纳入天气因素"
             ]}
 
-        forecast = fetch_forecast(brief.destination)
+        forecast, degrade_reason = fetch_forecast(brief.destination)
         if not forecast:
+            # §44：Provider down 行程仍出单，只披露；降级原因来自
+            # Provider 状态分类（timeout/配额/不可用），不再笼统一句话
+            note = "天气预报暂时不可用"
+            if degrade_reason and degrade_reason != "天气服务暂时不可用":
+                note = f"天气检查已跳过（{degrade_reason}）"
             return {"status": "success", "data": {}, "notes": [
-                "天气预报暂时不可用，本次未做天气检查；出行前请自行确认天气"
+                f"{note}，本次未做天气检查；出行前请自行确认天气"
             ]}
 
         # 预报窗口与行程日期求交：预报只覆盖未来几天，远期行程按日匹配，
-        # 匹配不到的日期自然不触发替换
+        # 匹配不到的日期自然不触发替换。
+        # §43 OUT_OF_HORIZON（STOP J5）：预报与行程日期**零交集**说明出行
+        # 日期超出 Provider 可信窗口——如实披露，绝不拿今天的天气伪装未来。
         bad_dates = bad_weather_dates(forecast)
+        forecast_dates = {(rec.get("date") or "") for rec in (forecast.get("days") or [])}
         trip_dates = {
             (brief.start_date + timedelta(days=i)).isoformat()
             for i in range(brief.resolved_days())
         }
+        if trip_dates and forecast_dates and not (trip_dates & forecast_dates):
+            horizon = len(forecast_dates)
+            return {"status": "success", "data": {}, "notes": [
+                f"出行日期超出天气预报的可信范围（当前预报仅覆盖未来约 {horizon} 天），"
+                "本次未做天气检查；临近出发时可让我重新评估"
+            ]}
         hit_dates = sorted(set(bad_dates) & trip_dates)
         if not hit_dates:
             return {"status": "success", "data": {}, "notes": []}

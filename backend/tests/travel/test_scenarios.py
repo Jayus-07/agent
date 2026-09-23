@@ -209,8 +209,8 @@ class TestDegradation:
 
         def fake_forecast(city):
             calls["n"] += 1
-            return {"days": [{"date": date.today().isoformat(),
-                              "day": {"weather": "暴雨"}, "night": {"weather": "晴"}}]}
+            return ({"days": [{"date": date.today().isoformat(),
+                               "day": {"weather": "暴雨"}, "night": {"weather": "晴"}}]}, "")
 
         monkeypatch.setattr(W, "fetch_forecast", fake_forecast)
         far = date.today() + __import__("datetime").timedelta(days=60)
@@ -221,7 +221,10 @@ class TestDegradation:
         update = W.weather_expert_node(state)
         assert calls["n"] == 1  # 查了预报
         assert "itinerary" not in update  # 但远期日期不在预报窗口 → 无替换
-        assert not update["notes"]
+        # STOP J5 §43：远期日期与预报窗口零交集 = OUT_OF_HORIZON，必须显式
+        # 披露（不再静默），且绝不拿今天的天气伪装 60 天后
+        joined = "\n".join(update.get("notes") or [])
+        assert "超出天气预报的可信范围" in joined
 
     def test_w6_bad_weather_without_indoor_candidates(self, monkeypatch):
         from backend.travel.experts import weather as W
@@ -229,9 +232,9 @@ class TestDegradation:
         from backend.travel.models.brief import TravelBrief
 
         today_iso = date.today().isoformat()
-        monkeypatch.setattr(W, "fetch_forecast", lambda city: {
+        monkeypatch.setattr(W, "fetch_forecast", lambda city: ({
             "days": [{"date": today_iso, "day": {"weather": "大雨"},
-                      "night": {"weather": "晴"}}]})
+                      "night": {"weather": "晴"}}]}, ""))
         outdoor = make_poi(poi_id="p_out", name="登山步道", tags=["自然"])
         itinerary = make_itinerary(brief=TravelBrief(
             destination="测试城", days=1, start_date=date.today()))

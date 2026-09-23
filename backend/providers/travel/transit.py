@@ -102,6 +102,19 @@ class TencentTransitProvider:
                 fallback_reason=FAR_TRIP_FALLBACK_REASON,
             )
 
+        # ── STOP J3：跨 worker 共享路由缓存（stale-if-error 仅失败路径）──
+        # 进程内 _LEG_CACHE（900s）不变；本层补 Redis 共享层，多副本冷启动
+        # 不再各自烧一遍配额。缓存只存事实 dict；observed_at 用写入时戳。
+        from backend.providers.travel.live import cache as pcache
+
+        key = pcache.build_key("route", float(from_lat), float(from_lng),
+                               float(to_lat), float(to_lng), "live_leg")
+        env, cache_status = pcache.cache_get(key)
+        if cache_status == "hit" and isinstance(env.data, dict):
+            cached = dict(env.data)
+            cached["observed_at"] = env.observed_at  # 观测时间如实（缓存时点）
+            return cached
+
         try:
             live = self._live_map.live_leg(from_lat, from_lng, to_lat, to_lng)
         except Exception as e:  # noqa: BLE001 — 数据源异常不得影响排程主链路
@@ -109,7 +122,17 @@ class TencentTransitProvider:
             live = None
 
         if live is None:
-            # 网络失败/未启用 → 返回 None，由 estimate_leg 现有回落语义接管
+            # 网络失败 → stale-if-error（§32：仅失败路径用旧数据，观测时间如实）
+            stale = pcache.cache_get_stale(key)
+            if stale is not None and isinstance(stale.data, dict):
+                from backend.providers.travel.live import telemetry
+
+                stale_leg = dict(stale.data)
+                stale_leg["observed_at"] = stale.observed_at
+                telemetry.record_stale("tencent:lbs")
+                telemetry.record_fallback("tencent:lbs", "stale")
+                return stale_leg
+            # 无旧数据 → 返回 None，由 estimate_leg 现有回落语义接管
             #（保持「数据源不需要自己实现降级」的旧契约）
             return None
 
@@ -119,6 +142,13 @@ class TencentTransitProvider:
         live["traffic_aware"] = True
         live["is_estimate"] = False
         live["fallback_reason"] = None
+        try:
+            pcache.cache_put_success(
+                key, data=dict(live), provider="tencent:lbs", operation="route",
+                observed_at=live["observed_at"],
+            )
+        except Exception:  # noqa: BLE001 — 缓存写失败不影响排程
+            pass
         return live
 
 

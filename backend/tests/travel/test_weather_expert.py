@@ -84,7 +84,7 @@ def test_swap_without_indoor_candidates_degrades():
 
 def test_node_notes_when_no_indoor_candidates(monkeypatch):
     itinerary, _ = _rainy_itinerary()
-    monkeypatch.setattr(W, "fetch_forecast", lambda city: FORECAST_RAIN)
+    monkeypatch.setattr(W, "fetch_forecast", lambda city: (FORECAST_RAIN, ""))
     state = {
         "brief": TravelBrief(destination="测试城", days=1,
                              start_date=date(2026, 9, 15)).model_dump(),
@@ -109,7 +109,7 @@ def test_node_skips_without_start_date():
 
 def test_node_skips_when_forecast_unavailable(monkeypatch):
     itinerary, _ = _rainy_itinerary()
-    monkeypatch.setattr(W, "fetch_forecast", lambda city: None)
+    monkeypatch.setattr(W, "fetch_forecast", lambda city: (None, "天气服务暂时不可用"))
     state = {
         "brief": TravelBrief(destination="测试城", days=1,
                              start_date=date(2026, 9, 15)).model_dump(),
@@ -123,7 +123,7 @@ def test_node_skips_when_forecast_unavailable(monkeypatch):
 
 def test_node_swaps_and_logs(monkeypatch):
     itinerary, candidates = _rainy_itinerary()
-    monkeypatch.setattr(W, "fetch_forecast", lambda city: FORECAST_RAIN)
+    monkeypatch.setattr(W, "fetch_forecast", lambda city: (FORECAST_RAIN, ""))
     state = {
         "brief": TravelBrief(destination="测试城", days=1,
                              start_date=date(2026, 9, 15)).model_dump(),

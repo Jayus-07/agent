@@ -17,6 +17,9 @@ async def health():
         # STOP G5：ConversationContext backend 观测（healthy/degraded/
         # disabled + backend 名称）。软失败：观测缺失不影响存活判定。
         "conversation_context": _context_backend_status(),
+        # STOP J §98：Provider health 组件（healthy/degraded/disabled）——
+        # 非关键 Provider 降级不拖垮整体 /health（travel 域全部 required=false）
+        "travel_providers": _travel_providers_status(),
     }
 
 
@@ -29,3 +32,12 @@ def _context_backend_status() -> dict:
         return get_conversation_context_repository().status
     except Exception:  # noqa: BLE001
         return {"backend": "unknown", "status": "unknown"}
+
+
+def _travel_providers_status() -> dict:
+    try:
+        from backend.providers.travel.live.health import provider_health
+
+        return provider_health()
+    except Exception:  # noqa: BLE001
+        return {}

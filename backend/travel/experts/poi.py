@@ -143,15 +143,21 @@ def poi_expert_node(state: dict) -> dict:
             limit=_CANDIDATE_LIMIT,
         )
 
-        # 用户点名要去、但本地候选池没有的地点，用腾讯位置服务补全坐标后入池。
+        # 用户点名要去、但本地候选池没有的地点，经 Provider 层（STOP J4：
+        # 共享缓存/3s 预算/坐标与 id 校验/quota 软预算）用腾讯位置服务补全。
         # 放在这里而非 search_poi 内部：补全需要网络，而 search_poi 是纯函数，
         # 保持它可离线单测的价值高于把它做成一个会发请求的函数。
         extra_notes: list[str] = []
         if brief.must_go:
-            from backend.tools.travel import live_map
+            from backend.providers.travel.live import get_place_provider
 
-            if live_map.is_enabled():
-                added, extra_notes = live_map.resolve_missing_places(
+            provider = get_place_provider()
+            if provider.is_enabled():
+                from backend.providers.travel.live.tencent import (
+                    resolve_missing_places,
+                )
+
+                added, extra_notes = resolve_missing_places(
                     brief.destination, candidates, brief.must_go,
                 )
                 if added:

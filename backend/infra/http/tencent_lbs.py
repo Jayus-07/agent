@@ -228,8 +228,11 @@ def _parse(resp: httpx.Response, path: str = "") -> dict:
     try:
         payload = resp.json()
     except ValueError as e:
+        # status=-1 哨兵：响应体不是合法 JSON（schema 失效）。STOP J2 分类
+        # 修正——「再试也没用」类，call_sync 对 status<0 不重试，避免把
+        # 第三方 schema 漂移放大成双倍无效请求。
         raise TencentLbsError(
-            f"响应不是合法 JSON（HTTP {resp.status_code}）", status=0
+            f"响应不是合法 JSON（HTTP {resp.status_code}）", status=-1
         ) from e
 
     status = int(payload.get("status", 0))
@@ -349,8 +352,9 @@ def call_sync(path: str, params: "dict | list[tuple[str, str]] | None" = None,
                            last_error, ck, attempt, attempts)
         except TencentLbsError as e:
             last_error = e
-            # 鉴权类错误重试无意义，直接抛出，避免浪费配额
-            if e.is_fatal:
+            # 鉴权类错误重试无意义，直接抛出，避免浪费配额；
+            # schema 失效（status=-1，响应非 JSON）同样重试无意义（STOP J2）
+            if e.is_fatal or e.status < 0:
                 raise
             logger.warning("[TencentLBS] %s %s (第 %d/%d 次)", e, ck, attempt, attempts)
 
