@@ -1194,6 +1194,18 @@ def record_admission_active_global(active: int) -> None:
 # resume/recovery 重投在 worker 计数走 worker 端点），其余在 worker
 # 进程计数，经 worker metrics 端点（multiprocess 聚合）暴露。
 
+# multiprocess 目录必须在下方模块级 Histogram 创建前存在（prometheus_client
+# 创建指标时即写 mmap 文件；worker 内 import 顺序不可控，故在本模块内自建）。
+# app 进程未设该 env → no-op。
+import os as _os
+
+_mp_dir = _os.getenv("PROMETHEUS_MULTIPROC_DIR", "")
+if _mp_dir:
+    try:
+        _os.makedirs(_mp_dir, exist_ok=True)
+    except Exception:  # noqa: BLE001 — 创建失败由单指标创建异常暴露
+        pass
+
 task_enqueued_total = Counter(
     "task_enqueued_total",
     "任务投递总数（initial/resume/recovery 统一口径）",
