@@ -391,3 +391,192 @@ def test_a8_skill_fail_closed_without_request_context(monkeypatch):
     assert sr["error_type"] == "permission_denied"
     assert calls["select"] == 0 and calls["generate"] == 0
     assert calls["executor"] == 0
+
+
+# ── A9：用户不存在 → fail-closed（快照用户被删 / id 失效）──
+
+def test_a9_user_missing_fail_closed(task_db, monkeypatch):
+    import backend.security.task_authorization as ta
+
+    monkeypatch.setattr(ta, "_fetch_auth_user", lambda uid: None)
+    calls, _ = _sql_agent_mocks(
+        monkeypatch, ["product.products"],
+        "SELECT sku FROM product.products LIMIT 3")
+
+    out = _run_executor(_record())
+
+    assert out.get("blocked") is True
+    assert TaskStatus.FAILED in task_db["status"]
+    assert calls["select"] == 0 and calls["generate"] == 0
+    assert calls["executor"] == 0
+
+
+# ── A10：升权 resume → 恢复跳以当前新角色执行业务节点 ──────
+
+def _two_step_graph():
+    """两节点 stub 图：node_a（无授权语义）→ sql_step（授权消费方）。
+
+    用于构造「跑到一半暂停」的真实生命周期：pause 点在 node_a 之后，
+    resume 时 sql_step 尚未执行——恢复跳的授权必须来自本次重新解析。
+    """
+    from langgraph.graph import StateGraph, START, END
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from backend.orchestration.state import OrchestratorState
+    from backend.skills.sql.skill import SQLSkill
+
+    g = StateGraph(OrchestratorState)
+
+    def node_a(state):
+        s = dict(state)
+        s.setdefault("step_results", {})
+        return {"step_results": {**s["step_results"],
+                                 "a": {"status": "success"}}}
+
+    def sql_step(state):
+        s = dict(state)
+        s["current_step_id"] = "1"
+        s["plan"] = {"nodes": {"1": {"step_id": "1",
+                                     "capability": "sql.query"}},
+                     "edges": {}}
+        s.setdefault("step_results", {})
+        sr = asyncio.run(SQLSkill().execute(s, step_capability="sql.query"))
+        return {"step_results": {**s["step_results"], **sr.get("step_results", {})}}
+
+    g.add_node("node_a", node_a)
+    g.add_node("sql_step", sql_step)
+    g.add_edge(START, "node_a")
+    g.add_edge("node_a", "sql_step")
+    g.add_edge("sql_step", END)
+    return g.compile(checkpointer=MemorySaver())
+
+
+def test_a10_escalated_resume_runs_with_current_role(auth_user, task_db,
+                                                     monkeypatch):
+    from backend.orchestration.checkpoint import TaskPaused
+    from backend.orchestration.checkpoint.task_executor import (
+        TaskGraphExecutor,
+    )
+    from backend.services import task_service as task_service_mod
+
+    calls, seen = _sql_agent_mocks(
+        monkeypatch, ["product.products"],
+        "SELECT sku FROM product.products LIMIT 3")
+
+    # T1：viewer 创建并执行，node_a 完成后在边界暂停（checkpoint 留下
+    # roles=("viewer",) 的旧快照）
+    auth_user["set"](role="viewer")
+    ex = TaskGraphExecutor(graph=_two_step_graph(), poll_control_flags=False)
+    pause_holder = {"paused": True}
+    monkeypatch.setattr(ex, "_paused",
+                        lambda tid: pause_holder["paused"])
+    rec = TaskRecord(id="task-a10", user_id="3", tenant_id="t1",
+                     status=TaskStatus.PENDING,
+                     input={"query": "查商品库存"},
+                     thread_id="task-a10")
+    try:
+        ex.execute(rec)
+        raised = False
+    except TaskPaused:
+        raised = True
+    assert raised  # 暂停发生在 node_a 之后、sql_step 之前
+    assert calls["executor"] == 0  # sql_step 未执行
+
+    # T3→T4：暂停期间 DB 升权 viewer→editor；resume 必须以 editor 执行
+    # 剩余业务节点（不是 checkpoint 里的旧 viewer）
+    auth_user["set"](role="editor")
+    pause_holder["paused"] = False
+    monkeypatch.setattr(task_service_mod, "list_checkpoints",
+                        lambda tid, uid: ["cp-after-node-a"])
+    out = ex.execute(rec)
+
+    assert out["step_results"]["a"]["status"] == "success"
+    assert out["step_results"]["1"]["status"] == "success"
+    assert calls["executor"] == 1
+    # 恢复跳进入 SQLSkill 的授权 = 执行时解析的 editor（升权生效）
+    assert seen["policy"] is not None
+    assert "editor" in seen["policy"].principal.roles
+    assert "viewer" not in seen["policy"].principal.roles
+
+
+# ── A11：并发交错（两个租户内用户同时执行，授权无串扰）─────
+
+def test_a11_concurrent_executors_no_auth_crosstalk(task_db, monkeypatch):
+    """Task A(user 3, editor) 与 Task B(user 4, viewer) 强制并发交错。
+
+    授权上下文为函数局部量 → 图状态（executor 实例私有），无进程级共享；
+    本用例以 barrier 强制两执行流同时在跑，验证 precheck 看到的 policy
+    身份与调用任务一一对应（A/B 不串）。
+    """
+    import threading
+
+    import backend.security.task_authorization as ta
+
+    rows = {3: _auth_row(role="editor"), 4: _auth_row(role="viewer")}
+    monkeypatch.setattr(ta, "_fetch_auth_user", lambda uid: rows[int(uid)])
+
+    import backend.sql.sql_agent as agent_mod
+    from backend.sql.policy import SQLPolicyGuard as Guard
+
+    captures = []  # (user_id, roles) 每次真实进入策略链的授权身份
+    lock = threading.Lock()
+    real_precheck = Guard.precheck
+
+    def _pre(self, policy):
+        with lock:
+            captures.append((policy.user_id,
+                             tuple(policy.principal.roles)))
+        return real_precheck(self, policy)
+
+    monkeypatch.setattr(Guard, "precheck", _pre)
+
+    def _select(tables):
+        return tables
+
+    def _generate(tables, question, **kwargs):
+        return "SELECT sku FROM product.products LIMIT 3"
+
+    def _exec(sql, **kwargs):
+        return SQLResult.success([{"ok": 1}], columns=["ok"],
+                                 sql=sql, elapsed=0)
+
+    monkeypatch.setattr(agent_mod, "select_tables", _select)
+    monkeypatch.setattr(agent_mod, "generate_sql", _generate)
+    monkeypatch.setattr(agent_mod, "execute_sql_struct", _exec)
+
+    from backend.orchestration.checkpoint.task_executor import (
+        TaskGraphExecutor,
+    )
+
+    results = {}
+
+    def _run(key, user_id):
+        rec = TaskRecord(id=f"task-a11-{key}", user_id=str(user_id),
+                         tenant_id="t1", status=TaskStatus.PENDING,
+                         input={"query": "查商品库存"},
+                         thread_id=f"task-a11-{key}")
+        ex = TaskGraphExecutor(graph=_stub_graph(), poll_control_flags=False)
+        barrier.wait()
+        results[key] = ex.execute(rec)
+
+    barrier = threading.Barrier(2)
+    threads = [threading.Thread(target=_run, args=("A", 3)),
+               threading.Thread(target=_run, args=("B", 4))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+    assert not any(t.is_alive() for t in threads)
+
+    # 结果各归各位：A(editor) success，B(viewer) permission_denied
+    assert results["A"]["step_results"]["1"]["status"] == "success"
+    assert results["B"]["step_results"]["1"]["status"] == "failed"
+    assert results["B"]["step_results"]["1"]["error_type"] == "permission_denied"
+
+    # 进入策略链的每次授权身份与任务一一对应（无串扰）
+    assert captures, "策略链未被触达"
+    for uid, roles in captures:
+        if uid == "3":
+            assert "editor" in roles and "viewer" not in roles
+        elif uid == "4":
+            assert roles == ("viewer",)
