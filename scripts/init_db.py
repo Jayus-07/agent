@@ -136,6 +136,11 @@ MIGRATION_TARGETS: dict[str, str] = {
     "046_llm_usage_identity_billing.sql": "memory",
     # Phase2 Step6（2026-09-24）：幂等 ledger owner_execution_id 列 + 实机探针表
     "047_side_effect_idempotency.sql": "memory",
+    # Memory provenance（STOP B，2026-09-24）：memory_records origin + 溯源列。
+    # 部署 unblock 登记（STOP H-D2）：该 untracked 文件在 build 上下文内导致
+    # db-migrate fail-fast 挡住共享栈；与 047_side_effect 同号不同名，按
+    # 文件名排序可共存。
+    "047_memory_provenance.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
