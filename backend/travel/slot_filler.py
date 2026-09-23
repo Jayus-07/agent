@@ -314,6 +314,36 @@ def is_new_run_query(message: str) -> bool:
     return bool(_NEW_RUN_RE.search(message or ""))
 
 
+# CANCEL_RUN 显式信号（STOP G3）：取消**整个**规划任务。保守词表——
+# 只认「规划/行程/安排」整体对象的取消；「不去海游馆了」类点名局部
+# 景点的排除句是 PATCH avoid，由 _CANCEL_EXCLUDE_RE 先行排除（宁可
+# 漏判走正常图处理，不可误取消整趟规划）。
+_CANCEL_RUN_RE = re.compile(
+    r"取消(整个|这次|本次|当前的?)?(规划|行程(规划)?|安排|旅行|旅游|计划)"
+    r"|(规划|行程(规划)?|安排|计划)(不用|别|不)?(取消|取消了?)"
+    r"|不(想|要|用)?(做)?(攻略|规划)了|别(规划|安排)了|先不(规划|去)了"
+    r"|这次(旅行|旅游|行程)不(想|去)?了?"
+)
+# 局部排除句：「不去X了 / 不想去X了 / 不打算去X了」（X=具体地点，1~12 字）
+# → PATCH avoid 场景，不得识别为取消整个规划（任务书 §16/T16）。
+_CANCEL_EXCLUDE_RE = re.compile(r"不(想去|打算去|去).{1,12}?(了|啦)")
+
+
+def is_cancel_run_query(message: str) -> bool:
+    """消息是否为「取消整个规划」显式信号（纯函数，保守）。
+
+    规则（任务书 §16）：
+    - 真取消必须表达「取消整个规划 / 不规划了」这类整体意图；
+    - 「不去海游馆了」类点名局部景点的排除句返回 False（PATCH avoid）。
+    """
+    msg = (message or "").strip()
+    if not msg or len(msg) > 40:
+        return False
+    if _CANCEL_EXCLUDE_RE.search(msg):
+        return False
+    return bool(_CANCEL_RUN_RE.search(msg))
+
+
 def extract_start_date(message: str, today: date | None = None) -> date | None:
     """出发日期。只给月日时按「不早于今天」补年份，避免抽到过去的日期。"""
     today = today or date.today()

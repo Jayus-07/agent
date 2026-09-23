@@ -124,6 +124,34 @@ def resolve_travel_pending(query: str, routing_context: dict | None) -> dict | N
     summary = ctx.get("brief_summary") or {}
     pending = summary.get("travel_pending") or {}
     requested = pending.get("requested_slots") or []
+
+    # 取消整个规划（STOP G3）：活跃 run 期间显式取消 → 短路回域图，
+    # 由 travel_graph_node 执行 CANCEL_TRAVEL_RUN（本层只判定不改状态）。
+    # 保守：仅 run 活跃（非 completed/cancelled）且词表命中才拦；
+    # 「不去海游馆了」类局部排除句由 is_cancel_run_query 自行排除。
+    summary_run = summary.get("travel_run_id") or ""
+    summary_stage = summary.get("travel_stage") or ""
+    if summary_run and summary_stage not in ("completed", "cancelled"):
+        from backend.travel.slot_filler import is_cancel_run_query
+
+        if is_cancel_run_query(query):
+            logger.info(
+                "[TravelPendingResolver] 命中: mode=cancel run=%s", summary_run)
+            return {
+                "route_decision": None,
+                "route_mode": "travel",
+                "travel_context": {
+                    "conversation_id": ctx.get("conversation_id") or "",
+                    "travel_route": {
+                        "source": "pending_resume",
+                        "resume_mode": "cancel",
+                        "new_run": False,
+                        "requested_slots": list(requested or []),
+                        "filled_slots": [],
+                    },
+                },
+            }
+
     if not requested:
         return None  # 无结构化 pending（既有任务完成/无追问），不拦
 

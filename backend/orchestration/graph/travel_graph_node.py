@@ -16,12 +16,85 @@ from backend.travel.models.graph_result import build_travel_graph_result
 _FALLBACK_ANSWER = "抱歉，旅游规划服务暂时不可用，请稍后再试。"
 
 
+def _maybe_cancel_active_run(state: dict, conversation_id: str) -> dict | None:
+    """「取消整个规划」短路（STOP G3，任务书 §16/§17）。
+
+    仅当会话存在活跃 travel run（run_id 非空且非 completed/cancelled）
+    且消息命中保守 cancel 词表（is_cancel_run_query：「不去海游馆了」类
+    局部排除句不触发）时执行：CANCEL_TRAVEL_RUN 原子 mutation（run CAS，
+    seq 保留 → 下一 run 不撞号；pending 清；摘要槽位保留）——不跑专家图。
+    保守失败：无 run / 词表未命中 / CAS stale 一律返回 None 放行正常流程。
+    """
+    question = state.get("question") or state.get("query") or ""
+    try:
+        from backend.travel.slot_filler import is_cancel_run_query
+        if not is_cancel_run_query(question):
+            return None
+        from backend.orchestration.context.context_repository import (
+            ContextMutation,
+            MutationType,
+            get_conversation_context_repository,
+        )
+
+        repo = get_conversation_context_repository()
+        snap = repo.peek(state.get("tenant_id") or "",
+                         state.get("user_id") or "", conversation_id)
+        if (snap is None or not snap.travel_run_id
+                or snap.travel_stage in ("completed", "cancelled")):
+            return None
+        run_id = snap.travel_run_id
+        result = repo.mutate(
+            state.get("tenant_id") or "", state.get("user_id") or "",
+            conversation_id,
+            ContextMutation(MutationType.CANCEL_TRAVEL_RUN,
+                            {"expected_run_id": run_id}))
+        if result.status != "applied":
+            logger.info("[travel.run] cancel 未生效(status=%s)，放行正常流程",
+                        result.status)
+            return None
+        logger.info("[travel.run] event=travel.run.cancelled run=%s", run_id)
+        try:  # trace 观测（软失败）
+            from backend.observability.tracer import trace_collector
+            trace = trace_collector.current()
+            if trace is not None:
+                trace.tags["travel_status"] = "cancelled"
+                trace.tags["travel_resume_mode"] = "cancel"
+                trace.tags["travel_run_id"] = run_id
+        except Exception:
+            pass
+        original = state.get("travel_context") or {}
+        return {
+            "final_answer": (
+                f"好的，已取消当前的行程规划（{run_id}）。"
+                "想重新规划随时告诉我。"),
+            "travel_context": {
+                "conversation_id": conversation_id,
+                "travel_route": {
+                    **(original.get("travel_route") or {}),
+                    "source": "pending_resume",
+                    "resume_mode": "cancel",
+                    "cancelled_run": run_id,
+                },
+            },
+        }
+    except Exception:  # noqa: BLE001 — cancel 判定失败绝不阻断正常规划
+        logger.debug("[travel_graph_node] cancel 判定失败，放行正常流程",
+                     exc_info=True)
+        return None
+
+
 def travel_graph_node(state: dict) -> dict:
     """Main Graph → 旅游域图 → Main Graph 适配器"""
     travel_context = state.get("travel_context") or {}
     session_id = state.get("session_id", "")
     conversation_id = travel_context.get("conversation_id") or session_id
     travel_route = travel_context.get("travel_route") or {}
+
+    # 取消整个规划短路（STOP G3）：命中即在上下文层完成 CANCEL，
+    # 不进域图（不消耗专家/校验轮次）。
+    cancel_update = _maybe_cancel_active_run(state, conversation_id)
+    if cancel_update is not None:
+        return cancel_update
 
     graph_input = new_travel_graph_input(
         user_message=state.get("question") or state.get("query") or "",
