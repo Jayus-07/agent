@@ -441,7 +441,11 @@ def sync_travel_run_to_context(
         # run 身份：首次（无活跃 run）或显式 NEW_RUN 才换；普通补槽/
         # 改约束（CONTINUE/PATCH/REPLAN）保持同 run（任务书 §7）
         if new_run or not ctx.travel_run_id:
+            prev_run = ctx.travel_run_id
             run_id = ctx.begin_travel_run()
+            if prev_run:
+                logger.info("[travel.run] event=travel.run.new run=%s "
+                            "prev=%s new_run=True", run_id, prev_run)
         else:
             run_id = ctx.travel_run_id
         # 阶段与 pending：必填槽缺失 = slot 阶段 + 结构化追问；齐备 = 规划
@@ -460,7 +464,12 @@ def sync_travel_run_to_context(
                     "reason": "missing_required",
                     "created_at": time.time(),
                 })
+                logger.info("[travel.pending] event=travel.pending.created "
+                            "run=%s slots=%s", run_id, missing)
         else:
+            if ctx.travel_pending is not None:
+                logger.info("[travel.pending] event=travel.pending.resolved "
+                            "run=%s", run_id)
             ctx.set_travel_pending(None)
             if ctx.travel_stage in ("", "slot"):
                 ctx.set_travel_stage("planned")
@@ -489,6 +498,8 @@ def mark_travel_run_completed(
             tenant_id or "", user_id or "", conversation_id)
         ctx.set_travel_stage("completed")
         ctx.set_travel_pending(None)
+        logger.info("[travel.run] event=travel.run.completed run=%s",
+                    ctx.travel_run_id)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[ConversationContext] travel 收尾失败（软降级）: %s", exc)
 

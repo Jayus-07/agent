@@ -61,8 +61,10 @@ def travel_graph_node(state: dict) -> dict:
     if isinstance(final_state, dict) and final_state.get("__interrupt__"):
         return _interrupt_update(state, final_state)
 
-    _stamp_execution_tags(final_state, result, resume_mode=resume_mode)
-    _sync_travel_run(state, final_state, result, travel_route)
+    # run 同步在前：tags 需要 run_id（任务书 §21 观测字段）
+    run_id = _sync_travel_run(state, final_state, result, travel_route)
+    _stamp_execution_tags(final_state, result, resume_mode=resume_mode,
+                          run_id=run_id)
     return _build_main_state_update(result)
 
 
@@ -118,12 +120,15 @@ def _detect_resume_mode(
 
 
 def _sync_travel_run(state: dict, final_state: dict, result: dict,
-                     travel_route: dict) -> None:
+                     travel_route: dict) -> str:
     """执行后的 TravelRun 结构化同步（STOP F1/F2，软失败）。
 
     run 身份（首次/NEW_RUN 时换）、阶段标记与结构化 pending 写进
     ConversationContext——下一轮路由层 TravelPendingResolver 的数据基础。
     成功出单（status=success）追加 completed 收尾 + 清 pending（T15）。
+
+    Returns:
+        本次同步后的 run_id（同步失败/不可同步时空串）。
     """
     try:
         from backend.orchestration.context.conversation_context import (
@@ -149,18 +154,20 @@ def _sync_travel_run(state: dict, final_state: dict, result: dict,
             brief=final_state.get("brief") or {},
             missing_slots=final_state.get("brief_missing") or [],
             new_run=new_run,
-        )
+        ) or ""
         if result.get("status") == "success":
             mark_travel_run_completed(
                 state.get("tenant_id") or "",
                 state.get("user_id") or "", conversation_id)
         if run_id:
             logger.info(
-                "[travel_graph_node] run=%s status=%s resume_mode=%s",
-                run_id, result.get("status", ""),
+                "[travel.run] event=travel.run.turned run=%s status=%s "
+                "resume_mode=%s", run_id, result.get("status", ""),
                 (travel_route or {}).get("resume_mode") or "fresh")
+        return run_id
     except Exception:  # noqa: BLE001 — 同步失败绝不影响主链
         logger.debug("[travel_graph_node] run 同步失败", exc_info=True)
+        return ""
 
 
 def _interrupt_update(state: dict, final_state: dict) -> dict:
@@ -217,7 +224,7 @@ def _fallback_update(state: dict) -> dict:
 
 
 def _stamp_execution_tags(final_state: dict, result: dict,
-                          resume_mode: str = "") -> None:
+                          resume_mode: str = "", run_id: str = "") -> None:
     """把执行结果写进 trace tags —— 旅游域的质量指标数据源。
 
     status / 校验码 / 修复轮数 / 置信度都打标，后续做「约束违反率」
@@ -233,6 +240,14 @@ def _stamp_execution_tags(final_state: dict, result: dict,
             # 任务书 §21：resume 模式必须可观测（checkpoint / reconstruct /
             # fresh / new_run / continue）
             trace.tags["travel_resume_mode"] = resume_mode
+        if run_id:
+            trace.tags["travel_run_id"] = run_id
+        missing = final_state.get("brief_missing") or []
+        if missing:
+            trace.tags["travel_pending_slots"] = ",".join(missing)
+        dirty = final_state.get("brief_changed_fields") or []
+        if dirty:
+            trace.tags["travel_dirty_fields"] = ",".join(dirty[:8])
         brief = final_state.get("brief") or {}
         if brief.get("destination"):
             trace.tags["travel_destination"] = brief["destination"]
