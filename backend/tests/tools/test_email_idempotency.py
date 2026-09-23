@@ -23,6 +23,7 @@ def smtp_env(monkeypatch):
     monkeypatch.setattr(approval, "ensure_approved", lambda *a, **k: None)
 
     sent = []
+    contexts = []
 
     class _FakeSMTP:
         def __init__(self, host, port, timeout=None):
@@ -34,8 +35,10 @@ def smtp_env(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def starttls(self):
-            pass
+        def starttls(self, context=None):
+            # 2026-09-23 D1-3：生产路径必须显式传验证系统 CA 的 SSL context
+            assert context is not None, "starttls 必须携带证书校验 context"
+            contexts.append(context)
 
         def login(self, user, password):
             pass

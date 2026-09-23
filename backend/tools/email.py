@@ -7,6 +7,7 @@
 search / read / watch 三个只读能力仅 agently 引擎提供。
 """
 import hashlib
+import ssl
 import time
 
 from langchain_core.tools import tool
@@ -129,7 +130,10 @@ def _send_email_after_approval(to: str, subject: str, body: str, cc: str) -> str
         msg.attach(MIMEText(body, "html" if body.startswith("<") else "plain", "utf-8"))
 
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-            server.starttls()
+            # TLS 证书校验（2026-09-23 D1-3）：starttls() 无 context 时走
+            # ssl._create_stdlib_context()（CERT_NONE），可被 MITM 截获
+            # SMTP 口令与邮件内容。显式传系统 CA 默认 context。
+            server.starttls(context=ssl.create_default_context())
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.sendmail(SMTP_FROM, to_list + cc_list, msg.as_string())
 
