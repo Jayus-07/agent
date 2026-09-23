@@ -47,6 +47,27 @@ MEMORY_INFERRED_DEFAULT_CONFIDENCE = float(os.getenv("MEMORY_INFERRED_DEFAULT_CO
 # 防 assistant 复述把模糊意图强化成高置信"决定"（Case B4），纯规则非 LLM
 MEMORY_HEDGED_CONFIDENCE_CAP = float(os.getenv("MEMORY_HEDGED_CONFIDENCE_CAP", "0.55"))
 
+# ── L3 读取管线（048+，STOP D：Safe Injection + Relevance Gate）──
+# 候选召回数（SQL eligibility 后的 top-N；沿用旧 top20 口径，不扩大召回）
+MEMORY_RETRIEVAL_CANDIDATES = int(os.getenv("MEMORY_RETRIEVAL_CANDIDATES", "20"))
+# 最终注入上限（0~K，0 条合法；不再强凑 top5）
+MEMORY_MAX_INJECTED = int(os.getenv("MEMORY_MAX_INJECTED", "5"))
+# 语义相关性硬门（cosine similarity，1.0-cosine_distance 口径，越高越相关）。
+# 初值 0.45 与 RAG 语义边界阈值（SEMANTIC_SIMILARITY_THRESHOLD）同源参照，
+# 目标是先阻止明显无关记忆陪跑；精确调优留 STOP F Memory Golden。
+MEMORY_MIN_RELEVANCE_SCORE = float(os.getenv("MEMORY_MIN_RELEVANCE_SCORE", "0.45"))
+# 全局响应偏好：memory_key 命中这些前缀的 active 记忆免 semantic gate
+# （"回答用中文"与问题主题无关但任何轮次都适用）；白名单为确定性策略，
+# 禁止 LLM 决定 global（§90 防 key 扩权）。普通主题型偏好不在白名单，
+# 仍需过 semantic gate。
+MEMORY_GLOBAL_KEY_PREFIXES = tuple(
+    p.strip().lower()
+    for p in os.getenv("MEMORY_GLOBAL_KEY_PREFIXES", "response.").split(",")
+    if p.strip()
+)
+# 全局偏好最大注入数（与 semantic 命中共享 MEMORY_MAX_INJECTED 总上限）
+MEMORY_MAX_GLOBAL_PREFERENCES = int(os.getenv("MEMORY_MAX_GLOBAL_PREFERENCES", "3"))
+
 # ── 上下文预算管理（Context Budget Management，2026-09-22）──
 # 统一管理 active context（发给模型的上下文）的 token 预算；原始 chat_messages 不受影响。
 # 完整设计见 docs/2026-09-22-context-budget-management-实施规格.md

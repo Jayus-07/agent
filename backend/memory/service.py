@@ -28,6 +28,8 @@ from langchain_core.messages import SystemMessage
 from backend.shared.logger import logger
 from backend.observability.metrics import (
     degradation_alerts_total,
+    memory_access_mark_failure_total,
+    memory_access_mark_total,
     memory_conflict_total,
     memory_extraction_candidate_total,
     memory_extraction_rejected_total,
@@ -109,17 +111,28 @@ class MemoryService:
                 # 角色安全（2026-09-23 P0-2）：摘要源自用户历史，属 untrusted
                 # data——只进 AIMessage <historical_context> 数据块，不进
                 # SystemMessage（SystemMessage 承载固定 policy 声明）。
+                # import 必须无条件（L3 段也用 build_memory_context，
+                # 放在 L2 条件分支内会在无摘要时 UnboundLocalError）
+                from backend.context_budget.role_safety import (
+                    build_historical_context,
+                    build_memory_context,
+                )
+                # L2 数据块长度：L3 注入位置依赖它（顺序 §84：L2 摘要在前、
+                # L3 记忆随后、再往后是最近对话）
+                l2_block_len = 0
                 if srow.summary and len(srow.summary) >= 30:
-                    from backend.context_budget.role_safety import (
-                        build_historical_context,
-                    )
                     for _i, _m in enumerate(
                             build_historical_context(srow.summary)):
                         l1._messages.insert(_i, _m)
+                    l2_block_len = 2
                     logger.info(f"[MemoryService] 注入 L2 会话摘要 (session={session_id}, {len(srow.summary)} 字)")
 
                 # L3 → L1（独立数据库会话 + 显式降级：pgvector/检索异常
                 # 只降级不阻断主聊天链 —— 主事务不被 L3 失败污染）
+                # STOP D：candidate → SQL eligibility（scope/active/not expired）
+                # → relevance gate → rank → merge → max-K → 安全数据上下文
+                # （policy SystemMessage + <memory_context> AIMessage 数据块，
+                # 记忆原文绝不进 SystemMessage）→ 仅注入条 mark_accessed。
                 l3_started = time.perf_counter()
                 try:
                     async with AsyncSessionLocal() as l3_db:
@@ -130,13 +143,46 @@ class MemoryService:
                         # 召回与当前问题语义无关）；空 query 兜底回退 session_id 保持旧行为
                         l3_query = query or session_id
                         emb = l3.embedding.embed_query(l3_query)
-                        records = await retriever.retrieve(l3_query, emb, user_id, top_k=5,
-                                                           tenant_id=tenant_id)
-                    if records:
-                        facts = [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id) for r in records]
-                        prompt_text = LongTermMemory.format_for_prompt(facts)
-                        l1._messages.insert(0, SystemMessage(content=prompt_text))
-                        logger.info(f"[MemoryService] 注入 {len(records)} 条长期记忆 (session={session_id})")
+                        retrieved = await retriever.retrieve(l3_query, emb, user_id,
+                                                             tenant_id=tenant_id)
+                    if retrieved:
+                        records = [m.record for m in retrieved]
+                        # 白名单字段（§34）：不带 tenant/user/UUID/embedding 分数/
+                        # source_message_id——模型不需要内部标识
+                        entries = [
+                            {
+                                "memory_type": r.memory_type,
+                                "memory_key": r.memory_key or "",
+                                "origin": r.origin,
+                                "confidence": round(float(r.confidence_score), 2),
+                                "content": r.content,
+                            }
+                            for r in records
+                        ]
+                        policy_msg, data_msg = build_memory_context(entries)[0:2]
+                        # 顺序（§84）：紧跟 L2 摘要块（无摘要时在头部），
+                        # 之后才是最近对话
+                        _base = l2_block_len
+                        l1._messages.insert(_base, policy_msg)
+                        l1._messages.insert(_base + 1, data_msg)
+                        # mark_accessed（§25/§26/§29）：只有真正注入的记忆才计访问，
+                        # 独立短事务 + fail-open（失败不阻断主聊天，仅 metric+log）
+                        try:
+                            async with AsyncSessionLocal() as mark_db:
+                                await MemoryRepository(mark_db).mark_accessed(
+                                    [str(r.id) for r in records],
+                                    tenant_id=tenant_id, user_id=user_id)
+                                await mark_db.commit()
+                            _metric_safe(memory_access_mark_total.inc)
+                        except Exception as mark_exc:
+                            _metric_safe(memory_access_mark_failure_total.inc)
+                            logger.warning(
+                                f"[MemoryService] mark_accessed 失败（fail-open）"
+                                f"(session={session_id}): {mark_exc}")
+                        logger.info(
+                            f"[MemoryService] 注入 {len(records)} 条长期记忆 "
+                            f"(session={session_id}, sources="
+                            f"{[m.source for m in retrieved]})")
                     _metric_safe(
                         memory_retrieval_total.labels(
                             status="success", operation="retrieve").inc)
@@ -272,11 +318,17 @@ class MemoryService:
                 l3 = LongTermMemory(mrepo)
                 retriever = HybridRetriever(mrepo)
                 emb = l3.embedding.embed_query(query)
-                records = await retriever.retrieve(query, emb, user_id, top_k=top_k,
-                                                   tenant_id=tenant_id)
+                # 工具显式搜索（§70/§71）：宽松 gate（enforce_gate=False），
+                # 但 SQL eligibility（scope/active/not expired）同样生效；
+                # 仅真正返回给 Agent 的记忆 mark_accessed（§31，带 scope）
+                retrieved = await retriever.retrieve(query, emb, user_id, top_k=top_k,
+                                                     tenant_id=tenant_id,
+                                                     enforce_gate=False)
+                records = [m.record for m in retrieved]
 
                 if records:
-                    await mrepo.mark_accessed([str(r.id) for r in records])
+                    await mrepo.mark_accessed([str(r.id) for r in records],
+                                              tenant_id=tenant_id, user_id=user_id)
                     await db_session.commit()
 
                 return [

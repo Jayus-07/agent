@@ -209,7 +209,8 @@ class LongTermMemory:
         emb = self.embedding.embed_query(query)
         rows = await self._repo.search_hybrid(emb, user_id, top_k=k,
                                               tenant_id=normalize_tenant_id(tenant_id))
-        return [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id, created_at=str(r.created_at)) for r in rows]
+        return [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id,
+                           created_at=str(r.created_at)) for r, _sim in rows]
 
     async def store_with_resolution(self, fact: MemoryFact, user_id: str,
                                     session_id: str, tenant_id: str = "") -> StoreResult:
@@ -252,12 +253,3 @@ class LongTermMemory:
         result = await self.store_with_resolution(fact, user_id, session_id, tenant_id)
         return result.stored
 
-    @staticmethod
-    def format_for_prompt(facts: list[MemoryFact]) -> str:
-        if not facts:
-            return ""
-        lines = ["[已知背景信息]"]
-        type_label = {"user_fact": "信息", "preference": "偏好", "decision": "决策", "knowledge": "知识"}
-        for f in facts:
-            lines.append(f"- [{type_label.get(f.fact_type, '其他')}] {f.content}")
-        return "\n".join(lines)

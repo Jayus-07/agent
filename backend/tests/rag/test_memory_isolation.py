@@ -112,8 +112,9 @@ async def test_repo_user_isolation_physical(tmp_path):
         async with AsyncSessionLocal() as db:
             from backend.memory.repository.memory_repo import MemoryRepository
             repo = MemoryRepository(db)
-            hits_a = await repo.search_hybrid(vec_a, user_a, top_k=10)
-            hits_b = await repo.search_hybrid(vec_a, user_b, top_k=10)
+            # search_hybrid 自 STOP D 返回 (record, similarity) 元组
+            hits_a = [r for r, _s in await repo.search_hybrid(vec_a, user_a, top_k=10)]
+            hits_b = [r for r, _s in await repo.search_hybrid(vec_a, user_b, top_k=10)]
 
         assert any("alpha-123" in h.content for h in hits_a)
         assert hits_b == []

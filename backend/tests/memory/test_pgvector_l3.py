@@ -155,7 +155,7 @@ async def test_insert_and_cosine_search_ordered_correctly():
 
         async with AsyncSessionLocal() as db:
             repo = MemoryRepository(db)
-            hits = await repo.search_hybrid(_unit_vec(0), _USER_A, top_k=2)
+            hits = [r for r, _s in await repo.search_hybrid(_unit_vec(0), _USER_A, top_k=2)]
         contents = [r.content for r in hits]
         assert contents[0] == "apple-banana-cherry"
         assert "delta-echo-foxtrot" in contents
@@ -187,13 +187,13 @@ async def test_user_isolation_no_cross_user_recall():
 
         async with AsyncSessionLocal() as db:
             repo = MemoryRepository(db)
-            hits_b = await repo.search_hybrid(_unit_vec(2), _USER_B, top_k=20)
+            hits_b = [r for r, _s in await repo.search_hybrid(_unit_vec(2), _USER_B, top_k=20)]
         assert all(r.user_id == _USER_B for r in hits_b)
         assert not any(r.content == "secret-of-user-a" for r in hits_b)
 
         async with AsyncSessionLocal() as db:
             repo = MemoryRepository(db)
-            hits_a = await repo.search_hybrid(_unit_vec(2), _USER_A, top_k=20)
+            hits_a = [r for r, _s in await repo.search_hybrid(_unit_vec(2), _USER_A, top_k=20)]
         assert any(r.content == "secret-of-user-a" for r in hits_a)
     finally:
         await _cleanup()
@@ -223,9 +223,9 @@ async def test_retrieval_survives_engine_recreate():
             await engine.dispose()
 
         async with AsyncSessionLocal() as db:
-            hits = await MemoryRepository(db).search_hybrid(
+            hits = [r for r, _s in await MemoryRepository(db).search_hybrid(
                 _unit_vec(3), _USER_A, top_k=5
-            )
+            )]
         assert any(r.content == "persistent-after-restart" for r in hits)
     finally:
         await _cleanup()

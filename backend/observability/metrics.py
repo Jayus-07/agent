@@ -531,6 +531,32 @@ memory_decay_records_total = Counter(
     labelnames=("action",),  # decayed | archived
 )
 
+# ── Memory 读取管线指标（STOP D：relevance gate + access semantics）──
+# 回答：这轮召回多少候选？多少因相关性被拒？多少注入（global/semantic）？
+# mark_accessed 是否成功？label 全部固定枚举，禁高基数（§43）。
+memory_retrieval_candidate_total = Counter(
+    "memory_retrieval_candidate_total",
+    "L3 检索候选总数（SQL eligibility 后进入 gate 的候选）",
+)
+memory_retrieval_accepted_total = Counter(
+    "memory_retrieval_accepted_total",
+    "L3 检索接受（最终注入候选池）总数（按来源）",
+    labelnames=("source",),  # global | semantic
+)
+memory_retrieval_rejected_total = Counter(
+    "memory_retrieval_rejected_total",
+    "L3 检索拒绝总数（按原因）",
+    labelnames=("reason",),  # below_relevance
+)
+memory_access_mark_total = Counter(
+    "memory_access_mark_total",
+    "mark_accessed 成功批次总数（仅最终注入/工具返回的记忆）",
+)
+memory_access_mark_failure_total = Counter(
+    "memory_access_mark_failure_total",
+    "mark_accessed 失败批次总数（fail-open，不阻断主聊天）",
+)
+
 # 熔断器状态（0=closed 1=half_open 2=open）— 熔断开路告警数据源
 circuit_breaker_state = Gauge(
     "circuit_breaker_state",

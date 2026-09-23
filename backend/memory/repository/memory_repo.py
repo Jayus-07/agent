@@ -40,12 +40,15 @@ class MemoryRepository:
         self, embedding: list[float], user_id: str, top_k: int = 20,
         memory_type: str | None = None, tenant_id: str = "",
     ) -> list[MemoryRecord]:
-        """按 pgvector 余弦相似度降序返回 top_k 条记忆（scope=tenant+user）。
+        """候选召回（SQL 层 hard eligibility，STOP D）。
 
-        排序键：cosine similarity（降序）。
-        过滤条件：is_active AND tenant_id AND user_id [AND memory_type]。
-        注意：本方法**仅**按相似度排序，不做 importance / recency 联合打分。
-        如需重排序（如结合 importance_score / last_access_at），由调用方拿到结果后自行处理。
+        排序键：cosine similarity = 1 - cosine_distance（范围约 [0,1]，
+        越高越相关——relevance gate 的 normalized 口径与此一致）。
+        过滤条件（全部 SQL 层，过期行不占候选槽位，§21）：
+          is_active AND tenant_id AND user_id
+          AND (expire_at IS NULL OR expire_at > NOW())
+        注意：本方法仅按相似度排序，不做 relevance gate 与 importance/
+        recency 联合打分（职责在 Retriever，§72）。
         """
         tenant_id = normalize_tenant_id(tenant_id)
         query_vec = _query_vector(embedding)
@@ -56,13 +59,16 @@ class MemoryRepository:
             MemoryRecord.is_active == True,
             MemoryRecord.tenant_id == tenant_id,
             MemoryRecord.user_id == user_id,
+            (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
         )
         if memory_type:
             query = query.where(MemoryRecord.memory_type == memory_type)
         query = query.order_by(text("similarity DESC")).limit(top_k)
 
         result = await self._s.execute(query)
-        return [row[0] for row in result.all()]
+        # 返回 (record, similarity) 元组：relevance gate 需要逐条 semantic
+        # score（§73：到 service 层不得丢失分数）
+        return [(row[0], float(row[1])) for row in result.all()]
 
     async def find_similar_candidates(
         self, embedding: list[float], user_id: str, tenant_id: str,
@@ -139,10 +145,25 @@ class MemoryRepository:
         )
         return result.rowcount > 0
 
-    async def mark_accessed(self, ids: list[str]) -> None:
+    async def mark_accessed(self, ids: list[str], tenant_id: str = "",
+                            user_id: str = "") -> None:
+        """批量更新访问状态（单 SQL，§27）——只有真正注入模型 / 工具返回的
+        记忆才调用（§25/§26：候选与被拒者不计访问）。
+
+        scope 契约（§28）：UPDATE 再带 tenant_id+user_id 过滤，不单靠 id。
+        """
+        if not ids:
+            return
         await self._s.execute(
-            update(MemoryRecord).where(MemoryRecord.id.in_(ids))
-            .values(access_count=MemoryRecord.access_count + 1, last_access_at=datetime.now(timezone.utc))
+            update(MemoryRecord)
+            .where(
+                MemoryRecord.id.in_(ids),
+                MemoryRecord.tenant_id == normalize_tenant_id(tenant_id),
+                MemoryRecord.user_id == user_id,
+                MemoryRecord.is_active == True,
+            )
+            .values(access_count=MemoryRecord.access_count + 1,
+                    last_access_at=datetime.now(timezone.utc))
         )
 
     async def update_fields(self, record_id: str, **fields) -> bool:
