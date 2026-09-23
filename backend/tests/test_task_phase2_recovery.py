@@ -411,3 +411,126 @@ def test_heartbeat_renews_and_detects_takeover(pg):
     finally:
         with pg._conn() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM tasks WHERE id = %s", (task.id,))
+
+
+# ═══════════════════════════════════════════════════
+# Lease/Fencing 收口补强（2026-09-23）：
+#   G cancel race：终态先落地 → 旧 Worker 迟到写被拒（F8/F9）
+#   H resume 全周期：pause → resume → 新 execution，旧 execution 永久失权（F11）
+# 策略同上：真实 PG；控制面终态经 reap_zombie_running 条件 UPDATE 原子落地
+#（force-cancel/zombie 收尸的真实通道），不用裸 UPDATE 伪造状态。
+# ═══════════════════════════════════════════════════
+
+def _reap_one(pg, task_id: str, status: TaskStatus, error_type: str) -> bool:
+    """对单个任务执行原子收尸（threshold=1s，行已被 _expire_lease 回拨满足）。
+
+    reap 权威条件含 updated_at 停更——先回拨 updated_at 模拟 Worker 长期
+    停摆（zombie 判定与租约过期是两个独立信号，收尸看前者）。
+    """
+    with pg._conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET updated_at = now() - interval '1 hour' "
+            "WHERE id = %s", (task_id,))
+    return task_id in pg.reap_zombie_running(
+        threshold_seconds=1, limit=10, status=status,
+        error_message="控制面终态先落地（测试）", error_type=error_type,
+        task_id=task_id)
+
+
+@pytest.mark.parametrize("terminal,error_type", [
+    (TaskStatus.CANCELLED, "FORCE_CANCELLED"),   # F8：管理端强制撤销竞态
+    (TaskStatus.FAILED, "ZOMBIE_RECONCILED"),    # F9：zombie 收尸竞态
+])
+def test_case_g_terminal_beats_late_worker_write(pg, terminal, error_type):
+    """控制面终态先落地后，苏醒旧 Worker 的 SUCCESS fencing 写被拒且不留痕。
+
+    §24/§25：cancel/timeout 竞态下终态不可被旧 execution 覆盖。fencing 写
+    遇「快照状态已不可达」统一抛 TaskLeaseLost（失权是首要事实），调用方
+    except/finally 兜底据此静默放弃——不得以 IllegalTaskTransition 逃逸。
+    """
+    user = f"p2-{uuid.uuid4().hex[:8]}"
+    task = pg.create_task(user, "终态竞态测试")
+    try:
+        lease = pg.try_acquire_lease(task.id, worker="w1")
+        assert lease
+        _expire_lease(pg, task.id)
+        assert _reap_one(pg, task.id, terminal, error_type)
+
+        # 旧 Worker 苏醒：progress / checkpoint / 终态写全部被拒
+        assert not pg.update_progress(task.id, "reporter", "迟到进度",
+                                      execution_id=lease)
+        assert not pg.append_checkpoint(task_id=task.id, node_name="reporter",
+                                        state={"late": True},
+                                        execution_id=lease)
+        with pytest.raises(TaskLeaseLost):
+            pg.update_status(task.id, TaskStatus.SUCCESS,
+                             output={"late": True}, execution_id=lease)
+        with pytest.raises(TaskLeaseLost):
+            pg.update_status(task.id, TaskStatus.FAILED,
+                             error_message="迟到失败", execution_id=lease)
+
+        record = pg.get_task(task.id)
+        assert record.status == terminal
+        assert record.execution_id == lease        # ownership 记录不被改写
+        assert not record.output                   # 结果未被旧 Worker 污染
+        with pg._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM agent_checkpoints WHERE task_id = %s",
+                (task.id,))
+            assert int(cur.fetchone()[0]) == 0     # 无幽灵 checkpoint
+    finally:
+        with pg._conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM agent_checkpoints WHERE task_id = %s",
+                        (task.id,))
+            cur.execute("DELETE FROM tasks WHERE id = %s", (task.id,))
+
+
+def test_case_h_resume_rotates_ownership_and_fences_old_execution(pg):
+    """F11：pause → resume → 新 Worker 换发 execution_id，旧 execution 永久失权。
+
+    resume 不得让旧 Worker 与 resume Worker 共享有效 execution identity；
+    旧 Worker 在 PAUSED/PENDING/新 RUNNING 各阶段的全部执行期写都被拒。
+    """
+    from backend.services.task_state import TaskManager
+
+    user = f"p2-{uuid.uuid4().hex[:8]}"
+    task = pg.create_task(user, "resume 换发 ownership 测试")
+    try:
+        old = pg.try_acquire_lease(task.id, worker="w1")
+        assert old
+        # Worker 在节点边界捕获 pause → fencing 落 PAUSED（同 impl 的
+        # TaskPaused 出口）
+        TaskManager.mark_paused(task.id, message="用户暂停",
+                                execution_id=old)
+        assert _get_status(pg, task.id) == TaskStatus.PAUSED
+
+        # PAUSED 阶段：旧 Worker 任何执行期写被拒（status ≠ RUNNING）
+        assert not pg.update_progress(task.id, "planner", "旧worker",
+                                      execution_id=old)
+        with pytest.raises(TaskLeaseLost):
+            pg.update_status(task.id, TaskStatus.SUCCESS, execution_id=old)
+
+        # resume：原子认领回 PENDING（并发仲裁点）→ 新 Worker 换发新租约
+        assert pg.claim_for_resume(task.id, TaskStatus.PAUSED)
+        new = pg.try_acquire_lease(task.id, worker="w2")
+        assert new and new != old
+
+        # 新 RUNNING 阶段：旧 execution 仍被 fencing（execution_id 不匹配）
+        assert not pg.update_progress(task.id, "planner", "旧worker",
+                                      execution_id=old)
+        with pytest.raises(TaskLeaseLost):
+            pg.update_status(task.id, TaskStatus.SUCCESS,
+                             output={"evil": True}, execution_id=old)
+        assert not pg.renew_lease(task.id, old)    # 旧心跳续不到新租约
+
+        # 新 owner 全链路正常，最终状态归属新 execution
+        assert pg.update_progress(task.id, "planner", "新owner",
+                                  execution_id=new)
+        pg.update_status(task.id, TaskStatus.SUCCESS, output={"ok": True},
+                         execution_id=new)
+        record = pg.get_task(task.id)
+        assert record.status == TaskStatus.SUCCESS
+        assert record.execution_id == new
+    finally:
+        with pg._conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM tasks WHERE id = %s", (task.id,))

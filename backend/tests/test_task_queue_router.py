@@ -313,18 +313,22 @@ def test_case_l_agent_recovery_queue_and_dispatch(pg, monkeypatch, caplog):
         assert pg.try_acquire_lease(record.id, worker="w1")
         _expire_lease(pg, record.id)
 
-        captured: dict = {}
+        # sweep 扫全表 stale 行：并发/前后批次泄漏的他人 stale agent 行也会
+        # 被本次 sweep 捎带 dispatch——captured 必须按 task id 分桶，否则
+        # 残留行的写入会覆盖本任务的断言样本（批跑偶发 flake 根因）
+        captured: dict[str, dict] = {}
         monkeypatch.setattr(
             "backend.tasks.agent_tasks.execute_agent_task.apply_async",
-            lambda *, args, queue: captured.update(args=args, queue=queue)
+            lambda *, args, queue: captured.update(
+                {args[0]: {"args": args, "queue": queue}})
             or type("R", (), {"id": "celery-l"})())
         monkeypatch.setattr(task_manager, "_redis", lambda: _FakeRedis())
 
         with caplog.at_level("INFO"):
             result = sweep_stale_executions()
         assert record.id in result["recovered"]
-        assert captured["queue"] == "agent"
-        assert captured["args"] == [record.id]
+        assert captured[record.id]["queue"] == "agent"
+        assert captured[record.id]["args"] == [record.id]
         assert "dispatch=recovery" in caplog.text
         assert "logical=interactive_agent" in caplog.text
     finally:

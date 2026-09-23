@@ -280,7 +280,10 @@ def update_status(task_id: str, status: TaskStatus, *,
     Phase2 Step1 执行期 fencing：``execution_id`` 传入时（executor 全部
     执行期写必须传）WHERE 追加 ``AND execution_id = %s``——租约已被接管
     时 rowcount=0 直接抛 ``TaskLeaseLost``，不做并发重判（旧 owner 对
-    TaskState 无任何写权）。
+    TaskState 无任何写权）。fencing 写只对 RUNNING 快照行有效：快照已
+    离开 RUNNING（控制面终态先落地等）或跳转非法，同样抛
+    ``TaskLeaseLost``——失权是首要事实，状态机非法跳转只对仍持权的
+    writer 有诊断意义。
 
     Phase2 Step2 错误口径：``error_message=None`` 表示**不改写**既有错误
     字段（signals retry/failure 兜底不再清掉分类器写入的错误信息）；显式
@@ -305,7 +308,19 @@ def update_status(task_id: str, status: TaskStatus, *,
             raise ValueError(
                 f"task {task_id} 存量状态值非法: {row[0]!r}（状态机拒绝写入）")
 
-        if not current.can_transition_to(status):
+        if execution_id is not None and (
+                current is not TaskStatus.RUNNING
+                or not current.can_transition_to(status)):
+            # fencing 写只对 RUNNING 快照行有效（租约语义 = RUNNING 期的
+            # 执行权；executor/impl 的全部合法 fenced 写都满足）。快照已
+            # 离开 RUNNING（控制面终态先落地 / 已被新 owner 接管）或跳转
+            # 非法时，一律按 TaskLeaseLost 退出——旧 Worker 的所有
+            # except/finally 兜底路径只捕获本异常，据此统一静默放弃，
+            # 不产生二次异常噪声；同时封死 FAILED→FAILED 自转换被失权
+            # writer 复用覆盖 error 字段的口子。状态机仍由下方
+            # WHERE status=快照 原子保证。
+            raise TaskLeaseLost(task_id, execution_id)
+        if execution_id is None and not current.can_transition_to(status):
             raise IllegalTaskTransition(task_id, current, status)
 
         sets = ["status = %s", "updated_at = now()"]
@@ -455,6 +470,29 @@ def claim_for_resume(task_id: str, expected: TaskStatus) -> bool:
             "UPDATE tasks SET status = %s, updated_at = now() "
             "WHERE id = %s AND status = %s",
             (TaskStatus.PENDING.value, task_id, expected.value),
+        )
+        return cur.rowcount > 0
+
+
+def release_lease_for_defer(task_id: str, execution_id: str) -> bool:
+    """admission defer 专用：释放刚认领的租约回 PENDING（Phase2 Step4）。
+
+    状态机例外通道（原生条件 SQL，与 try_acquire_lease 的 stale 接管、
+    revert_recovery_claim 同类，登记于 Step4 验收报告）：RUNNING→PENDING
+    仅在"租约仍属于本次 execution 且尚未执行任何节点"时发生——任务没跑
+    过任何原子操作，回到队列语义与 initial PENDING 等价，消息层由调用方
+    countdown 重投。不做并发重判：租约已被接管（rowcount=0）说明已有新
+    owner 在跑，调用方不得再动这行。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, execution_id = '', "
+            "lease_heartbeat_at = NULL, lease_expires_at = NULL, "
+            "updated_at = now() "
+            "WHERE id = %s AND execution_id = %s AND status = %s",
+            (TaskStatus.PENDING.value, task_id, execution_id,
+             TaskStatus.RUNNING.value),
         )
         return cur.rowcount > 0
 
