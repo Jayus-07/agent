@@ -177,3 +177,10 @@ class OrchestratorState(AgentState):
     # 写入即丢（旅游子图自身 checkpointer 的跨轮状态不受此影响，子图 State
     # 独立声明）。跨轮注入另依赖会话级载体，主图 thread_id 每轮唯一。
     travel_context: dict
+    # 客服 pending 透传（2026-09-24 STOP B 补登记）：cs_graph_node 节点输出
+    # 携带（_build_main_state_update / _fallback_update），runner 据此并入
+    # SSE done 帧 pending_action（前端确认卡片数据源）。此前未入 schema——
+    # runner 一直从节点原始输出读取所以功能未坏，但它是 LangGraph「updates
+    # 流剥离 schema 外键」的活证据：任何改为从 state 读的消费方都会拿到
+    # None。登记后与 cs_context 等域上下文字段同语义。
+    cs_pending_action: dict | None
