@@ -466,8 +466,13 @@ def _invoke_llm_with_timeout(prompt: str):
 
 def run_incremental_summary(
     session_id: str, store: SyncMemorySummaryStore,
+    extra_facts: Iterable[Any] | None = None,
 ) -> SummaryOutcome | None:
     """增量摘要一次：旧 summary + 水位线之后的新消息 → 新 summary。
+
+    extra_facts（P2-3）：调用方经 ProtectedFactRegistry 注入的非文本来源
+    关键事实（业务实体/确认态/结构化工具输出），与正则抽取合并登记，
+    摘要前后同样受确定性校验保护。
 
     并发安全（2026-09-23 STOP C）：
       - 进程内：L5_ACTIVE ContextVar 递归守卫（调用方 manager 亦有单飞）
@@ -494,7 +499,8 @@ def run_incremental_summary(
         return None
     token = L5_ACTIVE.set(True)
     try:
-        return _run_incremental_summary_locked(session_id, store, started)
+        return _run_incremental_summary_locked(
+            session_id, store, started, extra_facts)
     finally:
         L5_ACTIVE.reset(token)
         _release_l5_lock(lock)
@@ -502,6 +508,7 @@ def run_incremental_summary(
 
 def _run_incremental_summary_locked(
     session_id: str, store: SyncMemorySummaryStore, started: float,
+    extra_facts: Iterable[Any] | None = None,
 ) -> SummaryOutcome | None:
     try:
         state = store.get_summary_state()
@@ -520,15 +527,26 @@ def _run_incremental_summary_locked(
         if len(rows) < int(_cfg("CONTEXT_L5_MIN_DELTA_MESSAGES", 2)):
             return None  # delta 太小，不值得一次 LLM 调用
 
-        facts = extract_protected_facts(rows)
-        rendered = _render_summary_prompt(old_summary, rows, facts)
+        # P2-3 ProtectedFactRegistry：正则链保留，业务态事实经 extra_facts
+        # 合并登记；critical（业务来源）在 prompt 中优先
+        from backend.context_budget.fact_registry import ProtectedFactRegistry
+        registry = ProtectedFactRegistry()
+        registry.add_regex_facts(extract_protected_facts(rows))
+        for f in extra_facts or []:
+            if hasattr(f, "source"):
+                registry.add(f)
+            else:  # 兼容裸 (type, value) 元组
+                registry.add_business_fact(f[0], f[1])
+        rendered = _render_summary_prompt(old_summary, rows, registry)
         resp = _invoke_llm_with_timeout(rendered)
         summary = getattr(resp, "content", None) or str(resp)
         summary = summary.strip()
         if not summary:
             raise ValueError("摘要 LLM 返回空内容")
 
-        summary, missing = validate_and_patch(summary, facts)
+        outcome_patch = registry.validate_and_patch(summary)
+        summary = outcome_patch.patched_summary
+        missing = outcome_patch.missing
 
         token_count = _count_tokens(summary)
         new_through = max(int(r[0]) for r in rows)
@@ -553,12 +571,12 @@ def _run_incremental_summary_locked(
         outcome = SummaryOutcome(
             summary=summary, through_id=new_through, token_count=token_count,
             delta_message_count=len(rows),
-            protected_fact_count=len(facts),
+            protected_fact_count=len(registry),
             patched_fact_count=len(missing),
             llm_prompt_tokens=int(tu.get("prompt_tokens") or 0),
             llm_completion_tokens=int(tu.get("completion_tokens") or 0),
             latency_ms=int((time.perf_counter() - started) * 1000),
-            protected_by_type=_count_by_type(facts),
+            protected_by_type=_count_by_type(registry.facts),
             patched_by_type=_count_by_type(missing),
         )
         _record_l5_metrics(outcome)
@@ -635,14 +653,23 @@ def _record_l5_failure(reason: str) -> None:
 
 def _render_summary_prompt(
     old_summary: str, rows: list[tuple[int, str, str]],
-    facts: list[ProtectedFact],
+    registry: Any,
 ) -> str:
+    """protected_facts 接受 ProtectedFactRegistry（P2-3）。
+
+    兼容旧签名：传入 list 时走 format_facts_for_prompt（正则对象）。
+    """
     from backend.prompts.service import prompt_service
+    if hasattr(registry, "to_prompt_text"):
+        facts_text = registry.to_prompt_text(
+            int(_cfg("CONTEXT_L5_MAX_PROTECTED_FACTS", 40)))
+    else:
+        facts_text = format_facts_for_prompt(registry)
     r = prompt_service.render_sync(
         "memory.session.auto_compact",
         existing_summary=old_summary or "（无，这是首次摘要）",
         new_conversation=_format_conversation(rows),
-        protected_facts=format_facts_for_prompt(facts),
+        protected_facts=facts_text,
     )
     return r.text
 
@@ -693,12 +720,14 @@ def fold_rebuild(
     summary_text: str,
     *,
     keep_recent_turns: int | None = None,
+    projection_meta: dict | None = None,
 ) -> tuple[list, int, int | None]:
     """把较旧历史替换为「固定 policy SystemMessage + <historical_context>
     摘要 AIMessage」（重建 active projection）。
 
     角色安全（P0-2）：摘要由用户历史生成，属 untrusted data，只进
     AIMessage 数据块；SystemMessage 仅承载进程内固定 policy 文本。
+    projection_meta：溯源元数据（§十九），写入数据消息 additional_kwargs。
 
     保留：SystemMessage（旧摘要/折叠投影除外，它们被新摘要取代）、
     最近 keep_recent_turns 轮、当前消息。返回 (新消息列表, 被替换条数,
@@ -726,9 +755,11 @@ def fold_rebuild(
     if replaced <= 0 and not any(_is_replaceable_summary(m) for m in head):
         return messages, 0, None  # 摘要无可替换内容，不白做
 
+    meta = dict(projection_meta or {})
+    meta.setdefault("kind", "l5_summary")
     new_messages = (
         kept_head
-        + build_historical_context(summary_text)
+        + build_historical_context(summary_text, meta=meta)
         + list(messages[boundary:])
     )
     return new_messages, replaced, boundary

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from datetime import datetime
 from typing import Any
 
 from backend.context_budget.models import ContextUsage, PreparedContext
@@ -112,6 +113,9 @@ class ContextBudgetManager:
         previous_outputs: dict[str, Any] | None = None,
         rag_context: list[str] | None = None,
         extra_reserved_tokens: int = 0,
+        rag_scores: list[float] | None = None,
+        rag_sources: list[str] | None = None,
+        predicted_extra_tokens: int = 0,
     ) -> PreparedContext:
         """LLM 调用前的统一检查入口（第一版流程，规格 §九）：
 
@@ -120,15 +124,17 @@ class ContextBudgetManager:
 
         extra_reserved_tokens：调用方折算的非消息占用（tools schema /
         response_format / provider 信封），直接从预算中扣除。
+        rag_scores / rag_sources：RAG 证据相关性口径（P2-1）——提供时
+        hard trim 走 RAGBudgeter（价值优先 + source 多样性），否则原序裁剪。
+        predicted_extra_tokens：预测的后续注入（P2-2，如下一步
+        previous_outputs），只参与 L4/L5 触发判定，不参与裁剪目标。
 
-        仍超 hard budget 时做确定性裁剪（优先级：旧 history → 旧
-        previous_outputs → RAG 尾部证据），SystemMessage 与最新消息始终
-        保留。全部裁剪后仍超限：warning + metric +1 + overflow 标记
-        （安全降级——调用方拿到的是最大程度压缩后的结果，不做静默超限）。
+        仍超 hard budget 时做确定性裁剪（优先级：旧 history → RAG 证据 →
+        旧 previous_outputs），SystemMessage 与语义 pin 消息始终保留。
+        全部裁剪后仍超限：warning + metric +1 + overflow 标记（安全降级）。
         """
         from backend.memory.token_budget import (
             count_tokens,
-            trim_messages_to_budget,
             trim_texts_to_budget,
         )
         from backend.context_budget.micro_compactor import compact_previous_outputs
@@ -136,6 +142,7 @@ class ContextBudgetManager:
 
         budget = self.get_input_budget(
             extra_reserved_tokens=extra_reserved_tokens)
+        predicted = max(0, int(predicted_extra_tokens or 0))
 
         # L3：previous_outputs 总预算压缩
         po = compact_previous_outputs(previous_outputs or {})
@@ -152,25 +159,42 @@ class ContextBudgetManager:
             _count_message(m) for m in msgs
         )
 
+        def _components(m: list, p: dict, r: list[str]) -> dict:
+            return {
+                "system": sum(_count_message(x) for x in m
+                              if type(x).__name__ == "SystemMessage"),
+                "history": sum(_count_message(x) for x in m
+                               if type(x).__name__ != "SystemMessage"),
+                "previous_outputs": count_tokens("\n".join(
+                    _serialize_po(v) for v in p.values() if v is not None)),
+                "rag": count_tokens("\n".join(r)) if r else 0,
+                "tool_schema": max(0, int(extra_reserved_tokens or 0)),
+            }
+
         def _finalize(
             m: list, p: dict, r: list[str], *, overflow: bool = False,
             folds: list | None = None,
         ) -> PreparedContext:
-            used = (
-                sum(_count_message(x) for x in m)
-                + count_tokens("\n".join(_serialize_po(v) for v in p.values() if v is not None))
-                + (count_tokens("\n".join(r)) if r else 0)
-            )
+            comps = _components(m, p, r)
+            used = sum(comps.values())
             usage = ContextUsage(
                 used_tokens=used,
                 input_budget=budget,
                 remaining_tokens=max(0, budget - used),
                 usage_ratio=(used / budget) if budget > 0 else 0.0,
             )
+            try:
+                from backend.context_budget.metrics import (
+                    record_usage_components,
+                )
+                record_usage_components(**comps)
+            except Exception:
+                pass
             if overflow:
                 logger.warning(
                     f"[ContextBudget] preflight 后仍超 hard budget: "
-                    f"used={used} budget={budget}（已最大化裁剪，安全降级放行）"
+                    f"used={used} budget={budget} components={comps}"
+                    f"（已最大化裁剪，安全降级放行）"
                 )
                 record_overflow("preflight")
             return PreparedContext(
@@ -178,7 +202,7 @@ class ContextBudgetManager:
                 usage=usage, overflow=overflow, folds=folds or [],
             )
 
-        # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag；最后一条消息永不丢）
+        # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag；语义 pin 永不丢）
         history_cap = self.history_budget(
             reserved_tokens=po_tokens + rag_tokens)
         if history_cap > 0:
@@ -190,12 +214,11 @@ class ContextBudgetManager:
         used = msg_tokens + po_tokens + rag_tokens
 
         # ── L4 Context Collapse（零 LLM、确定性、可回滚）─────────────
-        # 触发：usage_ratio >= CONTEXT_L4_TRIGGER_RATIO（默认 0.80）。
-        # 折叠较早普通历史为 Projection SystemMessage；SystemMessage /
-        # 最近 CONTEXT_L4_KEEP_RECENT_TURNS 轮 / 当前消息永不折叠；
-        # 原始 chat_messages 不受影响。仍超限时继续走确定性 hard trim。
+        # 触发：predicted_usage_ratio >= CONTEXT_L4_TRIGGER_RATIO（默认 0.80）。
+        # 滞回（P2-2）：折叠后仍高于 CONTEXT_L4_TARGET_RATIO 时逐步收紧
+        # 保留轮数（下限 1），一次触发压到安全区，避免下一轮立即重触发。
         folds: list = []
-        if budget > 0 and (used / budget) >= float(
+        if budget > 0 and (used + predicted) / budget >= float(
                 _cfg("CONTEXT_L4_TRIGGER_RATIO", 0.80)):
             from backend.context_budget.collapse import fold_messages
             from backend.context_budget.metrics import (
@@ -203,11 +226,15 @@ class ContextBudgetManager:
                 record_compaction,
             )
 
-            folded, fold = fold_messages(msgs)
-            if fold is not None:
+            target = float(_cfg("CONTEXT_L4_TARGET_RATIO", 0.65))
+            keep = int(_cfg("CONTEXT_L4_KEEP_RECENT_TURNS", 4))
+            while keep >= 1:
+                folded, fold = fold_messages(msgs, keep_recent_turns=keep)
+                if fold is None:
+                    break
                 used_before = used
                 msgs = folded
-                folds = [fold.to_dict()]
+                folds.append(fold.to_dict())
                 msg_tokens = sum(_count_message(m) for m in msgs)
                 used = msg_tokens + po_tokens + rag_tokens
                 record_compaction(level="L4", action="collapse",
@@ -223,17 +250,21 @@ class ContextBudgetManager:
                     f"context_compacted level=L4 action=collapse "
                     f"fold_id={fold.fold_id} folded_messages={fold.message_count} "
                     f"before_tokens={used_before} after_tokens={used} "
-                    f"saved_tokens={max(0, used_before - used)}")
+                    f"saved_tokens={max(0, used_before - used)} "
+                    f"keep_recent_turns={keep}")
+                if used / budget <= target:
+                    break
+                keep -= 1  # 仍高于目标比例 → 更激进折叠（滞回）
 
         if used <= budget:
             # 已在预算内：仍须做 L5 触发判定（0.90~1.0 区间属 L5 职责，
             # 不触发确定性 hard trim——那是 >100% 的兜底）
-            msgs, used = self._maybe_auto_compact(msgs, used, budget)
+            msgs, used = self._maybe_auto_compact(
+                msgs, used, budget, predicted_extra_tokens=predicted)
             return _finalize(msgs, po, rag_texts, folds=folds)
 
-        # ── 确定性裁剪（仍超限时）：旧 history → 旧 previous_outputs → RAG 尾部 ──
-        # 1) 收紧 history：预算 = 剩余空间（SystemMessage 由 trim 保证全保留，
-        #    最新消息从尾部优先保留）
+        # ── 确定性裁剪（仍超限时）：旧 history → RAG 证据 → 旧 previous_outputs ──
+        # 1) 收紧 history：预算 = 剩余空间（语义 pin 消息全保留）
         remaining = budget - po_tokens - rag_tokens
         if remaining > 0 and msgs:
             msgs, dropped = _trim_semantic(msgs, remaining)
@@ -242,12 +273,20 @@ class ContextBudgetManager:
 
         used = sum(_count_message(m) for m in msgs) + po_tokens + rag_tokens
 
-        # 2) RAG 尾部证据丢弃（trim_texts_to_budget 从头保留，尾部整体丢）
+        # 2) RAG 证据收缩（P2-1：有分数走 RAGBudgeter 价值优先+多样性；
+        #    无分数保持原序从头保留）
         if used > budget and rag_texts:
             rag_budget = budget - sum(_count_message(m) for m in msgs) - po_tokens
-            kept_rag, _dropped = trim_texts_to_budget(rag_texts, max(0, rag_budget))
-            rag_texts = kept_rag
-            used = sum(_count_message(m) for m in msgs) + po_tokens + count_tokens("\n".join(rag_texts))
+            if rag_scores:
+                from backend.context_budget.rag_budgeter import budget_rag_texts
+                rag_texts, _dropped = budget_rag_texts(
+                    rag_texts, max(0, rag_budget),
+                    scores=rag_scores, sources=rag_sources)
+            else:
+                rag_texts, _dropped = trim_texts_to_budget(
+                    rag_texts, max(0, rag_budget))
+            rag_tokens = count_tokens("\n".join(rag_texts))
+            used = sum(_count_message(m) for m in msgs) + po_tokens + rag_tokens
 
         # 3) 旧 previous_outputs 再收缩（进一步降级，最新条目最后动）
         if used > budget and po:
@@ -265,7 +304,8 @@ class ContextBudgetManager:
         # ── L5 AutoCompact（最后一道防线，2026-09-22 Phase 3）──────────
         # 触发链路：L1/L2/L3/L4 全部执行 → 重算用量 → 仍 >= 0.90 才触发。
         # 摘要失败/超时安全回退：沿用上面确定性裁剪结果，绝不阻断请求。
-        msgs, used = self._maybe_auto_compact(msgs, used, budget)
+        msgs, used = self._maybe_auto_compact(
+            msgs, used, budget, predicted_extra_tokens=predicted)
 
         return _finalize(msgs, po, rag_texts, overflow=used > budget,
                          folds=folds)
@@ -280,13 +320,15 @@ class ContextBudgetManager:
 
     def _maybe_auto_compact(
         self, msgs: list, used: int, budget: int,
+        predicted_extra_tokens: int = 0,
     ) -> tuple[list, int]:
         """usage_ratio 达到 CONTEXT_L5_TRIGGER_RATIO 时触发 L5 并重建 projection。
 
+        predicted_extra_tokens：预测的后续注入（P2-2），参与触发判定。
         返回 (可能重建后的消息列表, 重算后用量)。失败/不触发原样返回。
         """
-        if budget <= 0 or used / budget < float(
-                _cfg("CONTEXT_L5_TRIGGER_RATIO", 0.90)):
+        if budget <= 0 or (used + max(0, predicted_extra_tokens)) / budget \
+                < float(_cfg("CONTEXT_L5_TRIGGER_RATIO", 0.90)):
             return msgs, used
         if not _cfg("CONTEXT_L5_ENABLED", True) or not _cfg(
                 "CONTEXT_BUDGET_ENABLED", True):
@@ -370,9 +412,35 @@ class ContextBudgetManager:
             prompt_tokens=outcome.llm_prompt_tokens,
             completion_tokens=outcome.llm_completion_tokens)
 
-        # 重建 active projection：旧历史 → 新摘要 SystemMessage（保留最近 N 轮）
+        # 重建 active projection：旧历史 → 新摘要数据块（保留最近 N 轮）。
+        # 滞回（P2-2）：若以默认轮数重建仍高于 CONTEXT_L5_TARGET_RATIO，
+        # 逐步试探更小的保留轮数（下限 1），只用成功的最深一档提交。
         old_msg_tokens = sum(_count_message(m) for m in msgs)
-        rebuilt, replaced, _boundary = fold_rebuild(msgs, outcome.summary)
+        projection_meta = {
+            "through_message_id": outcome.through_id,
+            "summary_token_count": outcome.token_count,
+            "delta_messages": outcome.delta_message_count,
+            "protected_facts": outcome.protected_fact_count,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        target = float(_cfg("CONTEXT_L5_TARGET_RATIO", 0.70))
+        keep = int(_cfg("CONTEXT_L4_KEEP_RECENT_TURNS", 4))
+        rebuilt, replaced, _boundary = fold_rebuild(
+            msgs, outcome.summary, keep_recent_turns=keep,
+            projection_meta=projection_meta)
+        while replaced > 0 and budget > 0 and keep > 1:
+            new_used = max(0, used - old_msg_tokens
+                           + sum(_count_message(m) for m in rebuilt))
+            if new_used / budget <= target:
+                break  # 本档已压到目标区
+            cand_rebuilt, cand_replaced, cand_boundary = fold_rebuild(
+                msgs, outcome.summary, keep_recent_turns=keep - 1,
+                projection_meta=projection_meta)
+            if cand_replaced <= 0:
+                break  # 更深一档无可替换，保持当前档
+            keep -= 1
+            rebuilt, replaced, _boundary = (cand_rebuilt, cand_replaced,
+                                            cand_boundary)
         if replaced > 0:
             used_before = used
             msgs = rebuilt
@@ -390,7 +458,8 @@ class ContextBudgetManager:
                 f"replaced_messages={replaced} "
                 f"before_tokens={used_before} after_tokens={used} "
                 f"saved_tokens={max(0, used_before - used)} "
-                f"(目标比例 {float(_cfg('CONTEXT_L5_TARGET_RATIO', 0.70))})")
+                f"through_message_id={outcome.through_id} "
+                f"(目标比例 {target})")
         else:
             # 摘要已落库但本轮消息层无可替换内容（罕见）：下一轮生效
             logger.info(

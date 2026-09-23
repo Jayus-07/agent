@@ -56,6 +56,10 @@ PREVIOUS_OUTPUTS_MAX_TOKENS = int(os.getenv("PREVIOUS_OUTPUTS_MAX_TOKENS", "1024
 CONTEXT_L4_TRIGGER_RATIO = float(os.getenv("CONTEXT_L4_TRIGGER_RATIO", "0.80"))
 CONTEXT_L5_TRIGGER_RATIO = float(os.getenv("CONTEXT_L5_TRIGGER_RATIO", "0.90"))
 
+# 滞回目标（2026-09-23 STOP D）：触发一次后压到目标比例以下的安全区，
+# 而不是刚好低于触发线导致下一轮立即重新触发
+CONTEXT_L4_TARGET_RATIO = float(os.getenv("CONTEXT_L4_TARGET_RATIO", "0.65"))
+
 # L5 折叠时保留的最近对话轮数：与 L4 语义一致（最近 N 个完整 turn 保持原文），
 # 直接复用 CONTEXT_L4_KEEP_RECENT_TURNS，不为配置而配置
 

@@ -589,6 +589,13 @@ context_token_counter_total = Counter(
     # provider: openai|deepseek|qwen|...|unknown；strategy: native|compatible
     #           |calibrated|fallback；estimated: true|false（全低基数）
 )
+# P2-4（2026-09-23）用量分解：最近一次 preflight 的分项 token 占用（Gauge）
+context_tokens_by_component = Gauge(
+    "context_tokens_by_component",
+    "最近一次 Prompt Preflight 的分项 token 占用（低基数 component）",
+    labelnames=("component",),
+    # component: system|history|previous_outputs|rag|tool_schema
+)
 
 
 def publish_breaker_states() -> None:

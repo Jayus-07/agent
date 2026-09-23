@@ -45,20 +45,31 @@ def sanitize_historical_content(text: str) -> str:
     return _CLOSE_TAG_RE.sub(_CLOSE_TAG_ESCAPED, text)
 
 
-def build_historical_context(data: str) -> list:
+def build_historical_context(
+    data: str,
+    *,
+    meta: dict[str, Any] | None = None,
+) -> list:
     """构造「固定 policy SystemMessage + AIMessage 数据块」二元组。
 
     返回 [SystemMessage(POLICY_TEXT), AIMessage(<historical_context>数据)]。
     动态内容只出现在 AIMessage 的标签内——它只是 assistant 的陈述文本，
     不携带 system 权重。
+
+    meta：溯源信息（fold_id / summary_version / through_message_id /
+    source_range / created_at），写入数据消息的 additional_kwargs，
+    仅 trace/debug 可见，不进 prompt 正文（规格 §十九）。
     """
     from langchain_core.messages import AIMessage, SystemMessage
 
     safe = sanitize_historical_content(data or "")
+    msg = AIMessage(
+        content=f"{HISTORICAL_TAG_OPEN}\n{safe}\n{HISTORICAL_TAG_CLOSE}")
+    if meta:
+        msg.additional_kwargs.update({"context_projection": dict(meta)})
     return [
         SystemMessage(content=HISTORICAL_CONTEXT_POLICY_TEXT),
-        AIMessage(
-            content=f"{HISTORICAL_TAG_OPEN}\n{safe}\n{HISTORICAL_TAG_CLOSE}"),
+        msg,
     ]
 
 

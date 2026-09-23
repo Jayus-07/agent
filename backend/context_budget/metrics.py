@@ -145,6 +145,23 @@ def record_protected_fact(*, fact_type: str, result: str) -> None:
         logger.debug("context metric 记录失败", exc_info=True)
 
 
+def record_usage_components(**components: int) -> None:
+    """P2-4：分项 token 占用 → Gauge + 结构化日志字段（无 ID 进 label）。
+
+    components: system / history / previous_outputs / rag / tool_schema。
+    """
+    try:
+        from backend.observability.metrics import context_tokens_by_component
+        if context_tokens_by_component is not None:
+            for name, value in components.items():
+                if name in ("system", "history", "previous_outputs",
+                            "rag", "tool_schema"):
+                    context_tokens_by_component.labels(component=name).set(
+                        max(0, int(value)))
+    except Exception:
+        logger.debug("component gauge 记录失败", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # SSE context 事件出口（ContextVar sink，模式与 stream_sink 一致）
 # ---------------------------------------------------------------------------

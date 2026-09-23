@@ -137,7 +137,18 @@ def fold_messages(
         to_message_id=str(getattr(candidates[-1], "id", "") or "") or None,
     )
     from backend.context_budget.role_safety import build_historical_context
-    projection_msgs = build_historical_context(build_projection_text(fold))
+    projection_msgs = build_historical_context(
+        build_projection_text(fold),
+        meta={
+            "kind": "l4_fold",
+            "fold_id": fold.fold_id,
+            "source_range": [fold.from_index, fold.to_index],
+            "message_count": fold.message_count,
+            "from_message_id": fold.from_message_id,
+            "to_message_id": fold.to_message_id,
+            "created_at": fold.created_at.isoformat(),
+            "reversible": True,
+        })
     fold.projected_tokens = sum(
         _count_token_message(m) for m in projection_msgs)
     if fold.projected_tokens >= original_tokens:
