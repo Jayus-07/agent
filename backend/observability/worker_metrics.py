@@ -84,16 +84,20 @@ def _start_aggregate_server() -> None:
 
 
 def _cleanup_multiproc_dir() -> None:
-    """清理上次 worker 运行的 multiproc 残留文件（仅主进程启动期安全）。"""
-    from prometheus_client import multiprocess
+    """清理 multiproc 目录残留文件。
 
+    ⚠️ 时序红线（Phase2-G 两次实机复现）：
+    1. **晚于指标构造**的 unlink：句柄写已删 inode，inc 静默丢失；
+    2. **fork 模型下任何自动清理**都会误伤：billiard pool 子进程会
+       re-import 模块链，即使挂在「最早 import 点」也会在子进程打开
+       文件后再次执行 → unlink 活跃句柄（/proc/<pid>/fd 呈 deleted）。
+    因此运行链路上**没有任何自动清理**；残留文件跨重启保留（counter
+    语义天然兼容，dead pid 文件量级固定）。本函数仅供**停机窗口内的人工
+    运维**显式调用。
+    """
     d = _multiproc_dir()
     if not d:
         return
-    try:
-        multiprocess.mark_process_dead  # noqa: B018 — 确认模块可用（早失败进 warning）
-    except Exception:  # noqa: BLE001
-        pass
     try:
         for name in os.listdir(d):
             if name.startswith(("counter_", "histogram_", "gauge_",
@@ -106,14 +110,25 @@ def _cleanup_multiproc_dir() -> None:
         os.makedirs(d, exist_ok=True)
 
 
+def cleanup_multiproc_dir_early() -> None:
+    """人工运维清理入口（仅限停机窗口；运行链路绝不自动调用）。
+
+    全程 best-effort：失败只记 warning。
+    """
+    try:
+        _cleanup_multiproc_dir()
+    except Exception:  # noqa: BLE001 — 观测失败不影响任务执行（§34）
+        logger.warning("[WorkerMetrics] multiproc 目录清理失败（跳过）",
+                       exc_info=True)
+
+
 def start_worker_metrics() -> None:
-    """worker_init 入口：清残留 → 起服务。全部 best-effort。"""
+    """worker_init 入口：起聚合 HTTP 服务（不做任何目录清理，见上）。"""
     try:
         if not _multiproc_dir():
             logger.warning("[WorkerMetrics] 未配置 PROMETHEUS_MULTIPROC_DIR，"
                            "worker 运行时指标仅存进程内存，不可抓取")
             return
-        _cleanup_multiproc_dir()
         _start_aggregate_server()
     except Exception:  # noqa: BLE001 — 观测失败不影响任务执行（§34）
         logger.warning("[WorkerMetrics] 指标端点启动失败（best-effort 跳过）",
