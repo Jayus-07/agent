@@ -35,6 +35,8 @@ class CSKnowledgeService:
         question: str,
         kb_ids: list[str] | None = None,
         session_id: str = "default",
+        user_id: str = "",
+        tenant_id: str = "",
     ) -> CSKnowledgeResult:
         """知识问答入口。
 
@@ -42,9 +44,17 @@ class CSKnowledgeService:
             question: 用户问题
             kb_ids: 指定的知识库 ID 列表（来自 CSRouteResult）
             session_id: 会话 ID
+            user_id: 认证坐席/客服用户 id（来自 cs_context.authenticated_user_id）；
+                空 = 未认证会话，按 demo 命名空间隔离，绝不共享长期记忆
+            tenant_id: 租户 id（来自 cs_context.tenant_id）
         """
         if not kb_ids:
             kb_ids = ["cs_faq"]
+        # E2（2026-09-23）：身份贯通——认证用户按真实身份隔离 L2/L3 记忆；
+        # 无身份不得落共享 "default"（所有未知用户共用一个长期记忆空间），
+        # 显式 demo 命名空间按会话隔离
+        if not user_id:
+            user_id = f"cs-anon:{session_id}"
 
         try:
             # 必须用单例：RAGPipeline.__init__ 会全量加载文档/重建 BM25/加载向量库，
@@ -65,6 +75,8 @@ class CSKnowledgeService:
                 kb_ids=kb_ids,
                 # 对客知识问答：检索授权收敛到 audience=="customer" 库（cs_*）
                 subject_type="customer",
+                user_id=user_id,
+                tenant_id=tenant_id,
             )
             answer = outcome.answer
 

@@ -17,6 +17,8 @@ def execute_knowledge(
     user_message: str,
     cs_route: dict,
     session_id: str,
+    user_id: str = "",
+    tenant_id: str = "",
 ) -> ExpertResult:
     """KnowledgeExpert 核心逻辑。
 
@@ -24,6 +26,8 @@ def execute_knowledge(
         user_message: 用户原始问题
         cs_route: CS Router 输出（含 intent + kb_ids）
         session_id: 会话 ID
+        user_id: 认证客服用户 id（CSGraphState 平铺键，源自 cs_context）
+        tenant_id: 租户 id
 
     Returns:
         ExpertResult — status=success 时含 response_draft + evidence
@@ -45,6 +49,8 @@ def execute_knowledge(
         question=user_message,
         kb_ids=kb_ids if kb_ids else None,
         session_id=session_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
     )
 
     record_cs_rag_status("hit" if result.answer else "miss")
@@ -91,10 +97,15 @@ def knowledge_expert_node(state: dict[str, Any]) -> dict[str, Any]:
     user_message = state.get("user_message", "")
     cs_route = state.get("cs_route", {})
     session_id = state.get("session_id", "default")
+    # E2（2026-09-23）：CSGraphState 平铺身份（源自 cs_context
+    # authenticated_user_id/tenant_id）贯通到 knowledge → RAG → Memory
+    user_id = state.get("user_id", "")
+    tenant_id = state.get("tenant_id", "")
 
     result = run_expert_safely(
         expert_name="knowledge",
-        fn=lambda _state: execute_knowledge(user_message, cs_route, session_id),
+        fn=lambda _state: execute_knowledge(user_message, cs_route, session_id,
+                                            user_id=user_id, tenant_id=tenant_id),
         state=state,
         timeout_s=CS_EXPERT_TIMEOUT_S,
     )
