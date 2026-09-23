@@ -45,8 +45,15 @@ def process_confirmation(
     user_message: str,
     user_id: str,
     session_id: str,
+    *,
+    tenant_id: str = "",
 ) -> ConfirmationOutcome:
-    """处理用户对 pending action 的响应 — 唯一入口。"""
+    """处理用户对 pending action 的响应 — 唯一入口。
+
+    tenant_id：可选显式租户（调用方持有 cs_context 时传入）；缺省回退
+    请求上下文 ContextVar，再回退 "default"——只影响幂等 ledger 的
+    租户隔离维度，不改变任何状态机行为。
+    """
     action_type = pending_action.get("action_type", "unknown")
 
     # ── 1. 过期检查（响应式；后台 Celery 扫描见 P2.4）──
@@ -57,7 +64,8 @@ def process_confirmation(
     user_intent = confirmation_sm.detect_confirmation_intent(user_message)
 
     if user_intent == confirmation_sm.ConfirmationIntent.CONFIRM:
-        return _handle_confirm(pending_action, user_id, session_id)
+        return _handle_confirm(pending_action, user_id, session_id,
+                               tenant_id=tenant_id)
 
     if user_intent == confirmation_sm.ConfirmationIntent.CANCEL:
         return _handle_cancel(pending_action, user_id, session_id)
@@ -103,15 +111,56 @@ def _handle_expired(
 
 # ── 确认 → 执行 ──────────────────────────────────────────────
 
+def _execute_confirmed_action(
+    pending_action: dict, *, user_id: str, tenant_id: str = "",
+) -> dict:
+    """执行已确认的业务动作——Step6 副作用幂等边界。
+
+    claim→execute→complete 走 PG durable ledger（Phase2 Step6）：
+    key = (tenant, user, 'cs.action.execute', cs_action:{confirmation_id})，
+    同一 confirmation 的重复执行——多实例并发确认、expert 线程超时重入、
+    未来真实执行器（Phase 6）的 retry/recovery/admin retry——最多真实
+    生效一次并复用同一 action_record（含同一 action_id，下游审计落库
+    以此去重）。
+
+    缺 confirmation_id / user_id 时退化为直调（无身份可用；与 tools 层
+    既有语义一致）。当前执行为模拟模式（无真实外部副作用）；Phase 6
+    接真实执行器时本边界的 fail-closed 语义即成为硬门禁。
+    """
+    from backend.core.request_context import get_tool_tenant_id
+    from backend.customer_service.experts.action import _simulate_execute
+    from backend.shared.idempotency import run_idempotent_side_effect
+
+    confirmation_id = str(pending_action.get("action_id", "") or "")
+    if not confirmation_id or not user_id:
+        return _simulate_execute(pending_action).to_dict()
+
+    payload = {
+        "action_type": pending_action.get("action_type", ""),
+        "target_type": pending_action.get("target_type", ""),
+        "target_id": pending_action.get("target_id", ""),
+        "proposal_text": pending_action.get("proposal_text", ""),
+        # risk_level 是 proposal 语义的一部分：变更 = 不同请求（冲突检测）
+        "risk_level": pending_action.get("risk_level", ""),
+    }
+    resolved_tenant = tenant_id or get_tool_tenant_id() or "default"
+    return run_idempotent_side_effect(
+        "cs.action.execute",
+        payload,
+        lambda: _simulate_execute(pending_action).to_dict(),
+        tenant_id=resolved_tenant,
+        actor_id=user_id,
+        client_key=f"cs_action:{confirmation_id}",
+    )
+
+
 def _handle_confirm(
     pending_action: dict, user_id: str, session_id: str,
+    *, tenant_id: str = "",
 ) -> ConfirmationOutcome:
     from backend.customer_service.audit import build_audit_entry
     from backend.customer_service.confirmation_store import get_confirmation_store
-    from backend.customer_service.experts.action import (
-        _ACTION_TYPE_LABELS,
-        _simulate_execute,
-    )
+    from backend.customer_service.experts.action import _ACTION_TYPE_LABELS
     from backend.observability.metrics import record_cs_action, record_cs_confirmation
 
     store = get_confirmation_store()
@@ -144,7 +193,8 @@ def _handle_confirm(
     record_cs_confirmation("confirmed")
 
     try:
-        record = _simulate_execute(pending_action)
+        record = _execute_confirmed_action(
+            pending_action, user_id=user_id, tenant_id=tenant_id)
         confirmation_sm.transition(CS.EXECUTING, CS.SUCCESS)
         store.clear(user_id, session_id, final_state=CS.SUCCESS.value)
         record_cs_action(action_type, "success")
@@ -152,7 +202,7 @@ def _handle_confirm(
         action_result = {
             "action_type": action_type,
             "status": "success",
-            "action_record": record.to_dict(),
+            "action_record": record,
         }
         audit_entry = build_audit_entry(
             user_id=user_id,
@@ -160,7 +210,7 @@ def _handle_confirm(
             result="success",
             target_type=pending_action.get("target_type", ""),
             target_id=pending_action.get("target_id", ""),
-            detail=f"simulated execution, action_id={record.action_id}",
+            detail=f"simulated execution, action_id={record.get('action_id', '')}",
         )
 
         label = _ACTION_TYPE_LABELS.get(action_type, action_type)

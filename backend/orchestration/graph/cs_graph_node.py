@@ -138,23 +138,38 @@ def _persist_audit_records(final_state: dict) -> None:
 
 
 async def _async_persist_audit(audit_entries: list, action_record: dict | None) -> None:
+    from backend.core.request_context import get_tool_tenant_id
     from backend.customer_service.repository import AuditRepository
     from backend.memory.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
         repo = AuditRepository(db)
+        if action_record and isinstance(action_record, dict):
+            # Step6：确认动作落库走同事务幂等 ledger（§二十一/G13）——
+            # 主图 checkpoint resume / 重复持久化绝不产生第二条
+            # agent_actions/审计；AgentActionRecord.to_dict() 不含
+            # conversation_id/user_id —— 从审计条目补齐（动作执行必有
+            # 对应审计条目）
+            first = audit_entries[0] if audit_entries else {}
+            persisted = await repo.insert_action_idempotently(
+                {
+                    **action_record,
+                    "conversation_id": first.get("conversation_id", ""),
+                    "user_id": first.get("user_id", ""),
+                    "confirmation_state": "success",
+                },
+                audit_entries,
+                tenant_id=get_tool_tenant_id() or "default",
+            )
+            if not persisted:
+                logger.info(
+                    "[cs_graph_node] 动作审计已落库过，幂等跳过: action_id=%s",
+                    action_record.get("action_id", ""),
+                )
+            await db.commit()
+            return
         for entry in audit_entries:
             await repo.insert_audit_log(entry)
-        if action_record and isinstance(action_record, dict):
-            # AgentActionRecord.to_dict() 不含 conversation_id/user_id ——
-            # 从审计条目/动作记录补齐（动作执行必有对应审计条目）
-            first = audit_entries[0] if audit_entries else {}
-            await repo.insert_agent_action({
-                **action_record,
-                "conversation_id": first.get("conversation_id", ""),
-                "user_id": first.get("user_id", ""),
-                "confirmation_state": "success",
-            })
         await db.commit()
 
 

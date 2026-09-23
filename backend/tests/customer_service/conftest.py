@@ -31,6 +31,28 @@ def _supervisor_llm_off_by_default(monkeypatch):
     monkeypatch.setattr(cs_config, "CS_SUPERVISOR_LLM_ENABLED", False)
 
 
+@pytest.fixture(autouse=True)
+def _cs_action_idempotency_memory(monkeypatch):
+    """Step6：确认执行幂等闸门在 CS 单测里用进程内存储。
+
+    _execute_confirmed_action 的 PG durable ledger 属集成验证（见
+    tests/test_side_effect_idempotency.py，显式注入隔离连接工厂）；
+    CS 域状态机/流程单测不依赖真实 PostgreSQL——与本目录「DB 连接
+    mock（单元测试不依赖真实 PostgreSQL）」约定一致。
+    """
+    from backend.shared import idempotency as idem
+
+    class _MemoryLedger(idem.MemoryIdempotencyStore):
+        def __init__(self, connection_factory=None, *,
+                     table: str = "ai.idempotency_records",
+                     lease_seconds: int = 300,
+                     owner_execution_id: str = "",
+                     takeover_allowed=None):
+            super().__init__(lease_seconds=lease_seconds)
+
+    monkeypatch.setattr(idem, "PostgresIdempotencyLedgerStore", _MemoryLedger)
+
+
 @pytest.fixture
 def sample_conversation_id():
     return "conv-test-001"

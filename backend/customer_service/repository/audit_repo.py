@@ -74,3 +74,93 @@ class AuditRepository:
         )
         self._s.add(obj)
         await self._s.flush()
+
+    async def insert_action_idempotently(
+        self, record: dict, audit_entries: list, *, tenant_id: str = "default",
+    ) -> bool:
+        """业务动作 + 幂等 ledger 同事务落库（Phase2 Step6 §二十一/G13）。
+
+        ledger INSERT ... ON CONFLICT DO NOTHING 为闸门（ai.idempotency_records
+        主键即唯一约束，check-then-act 竞态不成立）：冲突 = 同一 action_id
+        已落库（主图 checkpoint resume / 重复持久化）→ 跳过本批写入返回
+        False。同 id 不同内容（request_hash 不一致）→ 抛 ValueError 冲突，
+        调用方按「关键旁路」语义 error 告警，绝不静默复用旧结果。
+
+        前提：确认执行边界（cs.action.execute）已保证重放复用同一
+        action_record（同一 action_id），本闸门才可能命中。
+        """
+        import json
+
+        from sqlalchemy import text
+
+        from backend.shared.idempotency import canonical_fingerprint
+
+        action_id = str(record.get("action_id", "") or "")
+        actor_id = str(
+            record.get("user_id", "")
+            or (audit_entries[0].get("user_id", "") if audit_entries else "")
+            or "system"
+        )
+        if not action_id:
+            # 无身份可用：退化为普通写入（调用方维持原有行为）
+            for entry in audit_entries:
+                await self.insert_audit_log(entry)
+            await self.insert_agent_action(record)
+            return True
+
+        request_hash = canonical_fingerprint(record)
+        result_summary = {
+            "action_id": action_id,
+            "action_type": record.get("action_type", ""),
+            "status": record.get("status", ""),
+            "target_type": record.get("target_type"),
+            "target_id": record.get("target_id"),
+        }
+        claimed = await self._s.execute(
+            text(
+                """
+                INSERT INTO ai.idempotency_records (
+                    tenant_id, actor_id, operation, client_key,
+                    request_hash, status, attempt, result
+                )
+                VALUES (:tenant_id, :actor_id, 'cs.action.persist',
+                        :client_key, :request_hash, 'succeeded', 1,
+                        CAST(:result AS jsonb))
+                ON CONFLICT (tenant_id, actor_id, operation, client_key)
+                DO NOTHING
+                RETURNING client_key
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "actor_id": actor_id,
+                "client_key": action_id,
+                "request_hash": request_hash,
+                "result": json.dumps(result_summary, ensure_ascii=False,
+                                     default=str),
+            },
+        )
+        if claimed.fetchone() is not None:
+            for entry in audit_entries:
+                await self.insert_audit_log(entry)
+            await self.insert_agent_action(record)
+            return True
+
+        existing = await self._s.execute(
+            text(
+                """
+                SELECT request_hash FROM ai.idempotency_records
+                WHERE tenant_id = :tenant_id AND actor_id = :actor_id
+                  AND operation = 'cs.action.persist'
+                  AND client_key = :client_key
+                """
+            ),
+            {"tenant_id": tenant_id, "actor_id": actor_id,
+             "client_key": action_id},
+        )
+        row = existing.fetchone()
+        if row is not None and row[0] != request_hash:
+            raise ValueError(
+                f"IDEMPOTENCY_CONFLICT: action_id={action_id} 内容与已落库记录不一致"
+            )
+        return False
