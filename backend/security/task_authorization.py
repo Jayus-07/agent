@@ -27,7 +27,9 @@ class TaskAuthorizationDenied(PermissionError):
     """任务执行时授权解析失败或主体已失权（fail-closed 终态）。"""
 
 
-# 与 Principal._UNAUTHENTICATED_USER_IDS 同口径：占位身份不是已认证主体
+# user_id 占位身份（与 Principal._UNAUTHENTICATED_USER_IDS 同口径）。
+# 注意只适用于用户身份：tenant 的 'default' 是合法租户（auth.users
+# tenant_id 与 tasks 默认值均为 'default'），不在此列。
 _UNAUTHENTICATED = frozenset({"", "default", "anonymous"})
 
 # auth.users.status（migration 008）：1=启用 0=禁用
@@ -67,10 +69,14 @@ def resolve_task_authorization(user_id: str, tenant_id: str) -> AuthorizationCon
     """
     raw_uid = str(user_id or "").strip()
     tid = str(tenant_id or "").strip()
-    if raw_uid in _UNAUTHENTICATED or tid in _UNAUTHENTICATED:
+    # user_id：占位身份（空/default/anonymous）不是已认证主体 → 拒绝
+    if raw_uid in _UNAUTHENTICATED:
         raise TaskAuthorizationDenied(
-            f"任务 actor 身份不可信（user_id={raw_uid!r}, "
-            f"tenant_id={tid!r}），拒绝执行")
+            f"任务 actor 身份不可信（user_id={raw_uid!r}），拒绝执行")
+    # tenant_id：只要求非空（'default' 是合法租户；空 = 未声明 → 拒绝）
+    if not tid:
+        raise TaskAuthorizationDenied(
+            "任务 tenant_id 未声明，拒绝执行")
     try:
         uid = int(raw_uid)
     except ValueError:
