@@ -13,6 +13,21 @@ import uuid
 
 import pytest
 
+# ── STOP D P0（2026-09-23）：TaskGraphExecutor 执行时解析授权 ──
+# 本文件测取消/暂停/租约接管语义，不是授权本身；授权解析整体替换为
+# 合法 editor 上下文（执行器注入/刷新逻辑仍真实执行）。
+@pytest.fixture(autouse=True)
+def _task_auth_enabled(monkeypatch):
+    import backend.security.task_authorization as _ta
+    from backend.security.authorization import build_tool_authorization_context
+
+    ctx = build_tool_authorization_context(
+        user_id="900001", department="ecom", tenant_id="default",
+        roles=("editor",))
+    monkeypatch.setattr(_ta, "resolve_task_authorization",
+                        lambda uid, tid: ctx)
+
+
 
 @pytest.fixture(scope="module")
 def pg():

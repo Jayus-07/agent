@@ -37,6 +37,12 @@ def _make_state(question: str = "查询最近一个月内价格最高的商品�
         "current_step_id": "1",
         "step_results": {},
         "current_user_id": None,
+        # STOP D P0 契约：生产 graph 节点必须携带可信请求上下文
+        # （缺省 fail-closed），Skill 行为契约测试按真实形态注入 editor 身份
+        "request_context": {
+            "session_id": "sess-skill-test", "user_id": "3",
+            "department": "ecom", "roles": ["editor"],
+        },
     }
 
 

@@ -22,6 +22,24 @@ import pytest
 from backend.models.task import TaskRecord, TaskStatus
 
 
+# ── STOP D P0（2026-09-23）：TaskGraphExecutor 执行时解析授权 ──
+# 本文件测 fencing/恢复/编排语义，不是授权本身；auth.users 数据源
+# mock 为合法 editor（tenant 与 pg fixture 的 default 租户一致），
+# resolve_task_authorization 的判定逻辑仍真实执行。
+@pytest.fixture(autouse=True)
+def _task_auth_enabled(monkeypatch):
+    import backend.security.task_authorization as _ta
+    from backend.security.authorization import build_tool_authorization_context
+
+    # 本文件用例的 user 是随机串（非 auth.users 数字 id 口径），授权解析
+    # 整体替换为合法 editor 上下文；task_executor 的注入/刷新逻辑仍真实执行
+    ctx = build_tool_authorization_context(
+        user_id="900001", department="ecom", tenant_id="default",
+        roles=("editor",))
+    monkeypatch.setattr(_ta, "resolve_task_authorization",
+                        lambda uid, tid: ctx)
+
+
 # ═══════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════
@@ -162,7 +180,9 @@ def test_waiting_user_then_resume_continues_graph(pg, task_record, stub_graph, m
     assert calls == {"a": 1, "b": 0}          # b 未执行
 
     # resume API 语义：注入用户输入 + 状态回 PENDING + 重新入队（eager 环境下 stub 掉入队）
-    monkeypatch.setattr("backend.tasks.task_manager.enqueue_task", lambda r: None)
+    # **k：resume_task 会带 dispatch_type 关键字调用（Phase2 既有口径）
+    monkeypatch.setattr("backend.tasks.task_manager.enqueue_task",
+                        lambda r, **k: None)
     from backend.tasks import task_manager
 
     record = task_manager.resume_task(record.id, user_input="继续执行")

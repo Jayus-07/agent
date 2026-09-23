@@ -236,9 +236,24 @@ class SQLSkill(BaseSkill):
 
             sr["retries"] = attempt
             try:
-                # STOP B：策略上下文随状态装配（无 request_context 时 None =
-                # 旧行为），权限/表域/scope 由 SQLAgent 内部 Guard 强制
+                # STOP B：策略上下文随状态装配。
+                # STOP D P0 纵深防御（2026-09-23）：生产 graph 节点缺可信
+                # request_context = 上下文传播断裂（如任务执行器未注入），
+                # fail-closed 拒绝，绝不静默退回 policy=None legacy（授权
+                # 未启用）。评测/脚本路径直接调 sql_agent.ask_struct，不经
+                # 本 Skill，不受影响。
                 policy_ctx = _build_sql_policy_context(state)
+                if policy_ctx is None:
+                    sr.update(
+                        status="failed", output=None,
+                        error="SQL 查询缺少可信请求上下文，已拒绝执行",
+                        error_type="permission_denied",
+                        finished_at=time.time(),
+                    )
+                    logger.warning(
+                        f"[SQL Skill] step={step_id} 缺 request_context，"
+                        "fail-closed 拒绝（上下文传播断裂）")
+                    return {"step_results": {step_id: sr}}
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
                         agent.ask_struct, question, policy=policy_ctx),

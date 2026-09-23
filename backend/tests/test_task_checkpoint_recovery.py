@@ -23,6 +23,24 @@ import pytest
 from backend.models.task import TaskRecord, TaskStatus
 
 
+# ── STOP D P0（2026-09-23）：TaskGraphExecutor 执行时解析授权 ──
+# 本文件测 fencing/恢复/编排语义，不是授权本身；auth.users 数据源
+# mock 为合法 editor（tenant 与 pg fixture 的 default 租户一致），
+# resolve_task_authorization 的判定逻辑仍真实执行。
+@pytest.fixture(autouse=True)
+def _task_auth_enabled(monkeypatch):
+    import backend.security.task_authorization as _ta
+    from backend.security.authorization import build_tool_authorization_context
+
+    # 本文件用例的 user 是随机串（非 auth.users 数字 id 口径），授权解析
+    # 整体替换为合法 editor 上下文；task_executor 的注入/刷新逻辑仍真实执行
+    ctx = build_tool_authorization_context(
+        user_id="900001", department="ecom", tenant_id="default",
+        roles=("editor",))
+    monkeypatch.setattr(_ta, "resolve_task_authorization",
+                        lambda uid, tid: ctx)
+
+
 def _postgres_saver_available() -> bool:
     try:
         import psycopg  # noqa: F401
