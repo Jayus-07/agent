@@ -424,6 +424,17 @@ def repair_node(state: dict) -> dict:
     repaired, actions = repair_itinerary(itinerary, report)
     log = list(state.get("repair_log", [])) + [a.to_dict() for a in actions]
 
+    # STOP I6 遥测（软失败）：修复执行/停滞计数
+    try:
+        from backend.travel import quality_metrics as qm
+
+        qm.record_repair("executed" if repaired is not None else "stalled")
+        if repaired is not None:
+            qm.event("travel.itinerary.repaired",
+                     round=repaired.repair_rounds, actions=len(actions))
+    except Exception:  # noqa: BLE001 — 遥测失败不影响修复
+        pass
+
     if repaired is None:
         # 本轮没有任何可自动执行的动作（典型：违规项全是必去地点，而必去不可删）。
         #

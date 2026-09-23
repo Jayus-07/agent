@@ -489,7 +489,28 @@ def travel_validator_node(state: dict) -> dict:
     valid_ids = {c.get("poi_id", "") for c in (state.get("candidates") or [])
                  if c.get("poi_id")} or None
     report = check_itinerary(itinerary, valid_poi_ids=valid_ids)
+
+    # STOP I6 遥测（软失败）：校验轮次 / 违反码分布 / 置信度
+    try:
+        from backend.travel import quality_metrics as qm
+
+        qm.record_validation(len(report.errors), report.codes())
+        qm.event(
+            "travel.itinerary.validation_failed" if report.errors
+            else "travel.itinerary.validated",
+            errors=len(report.errors), warnings=len(report.warnings),
+            codes=",".join(report.codes()),
+        )
+    except Exception:  # noqa: BLE001 — 遥测失败不影响校验
+        pass
+
     itinerary.confidence = compute_confidence(itinerary, report)
+    try:
+        from backend.travel import quality_metrics as qm
+
+        qm.record_confidence(itinerary.confidence)
+    except Exception:  # noqa: BLE001
+        pass
     # plan 状态机判定（任务书 §4/§7）：状态在事实产生处落库。
     # errors → degraded；无 error 但有必去冲突等 → needs_user_decision
     #（行程可交付，取舍选项摆明）；全过 → ready。

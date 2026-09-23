@@ -274,6 +274,16 @@ def transit_expert_node(state: dict) -> dict:
                     sum(len(d.legs) for d in itinerary.days),
                     itinerary.plan_version, itinerary.brief_version,
                     itinerary.change_reason)
+        # STOP I6 结构化事件（软失败）
+        try:
+            from backend.travel import quality_metrics as qm
+
+            qm.event("travel.itinerary.planned",
+                     days=len(itinerary.days),
+                     pois=itinerary.total_pois(),
+                     plan_version=itinerary.plan_version)
+        except Exception:  # noqa: BLE001
+            pass
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(itinerary)},
                 "notes": extra_notes + notes}

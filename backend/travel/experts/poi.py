@@ -169,6 +169,22 @@ def poi_expert_node(state: dict) -> dict:
         # must_go 三态契约（STOP I1）：resolved/unresolved 在此唯一产生，
         # 金标 Q2（must_go_coverage）与下游披露都消费这里的事实
         resolution = resolve_must_go(brief, candidates)
+
+        # STOP I6 遥测 + 结构化事件（软失败）
+        try:
+            from backend.travel import quality_metrics as qm
+
+            qm.record_candidates(len(candidates))
+            qm.record_unresolved(len(resolution.unresolved))
+            qm.event("travel.candidates.retrieved",
+                     destination=brief.destination, count=len(candidates),
+                     scheduled=sum(len(d) for d in skeleton.days))
+            if resolution.unresolved:
+                qm.event("travel.data.unresolved_place",
+                         count=len(resolution.unresolved))
+        except Exception:  # noqa: BLE001 — 遥测失败不影响规划
+            pass
+
         return {
             "status": "success",
             "data": {

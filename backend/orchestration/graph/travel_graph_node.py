@@ -371,6 +371,16 @@ def _stamp_execution_tags(final_state: dict, result: dict,
             "repair_rounds": final_state.get("repair_rounds", 0),
             "steps": final_state.get("step_count", 0),
         }
+        # 候选池漏斗（STOP I6）：检索量 / 排入 POI 量 / 未能解析的必去地点
+        # ——「候选够不够、排没排进去、哪些点名没兑现」在 trace 一眼可见
+        trace.metadata["travel_quality"] = {
+            "candidate_count": len(final_state.get("candidates") or []),
+            "scheduled_poi_count": sum(
+                1 for d in ((final_state.get("itinerary") or {}).get("days") or [])
+                for i in (d.get("items") or []) if i.get("poi")
+            ),
+            "must_go_unresolved": final_state.get("must_go_unresolved") or [],
+        }
         itinerary = final_state.get("itinerary") or {}
         if itinerary:
             trace.metadata["travel_confidence"] = itinerary.get("confidence")
