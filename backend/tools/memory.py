@@ -16,14 +16,19 @@ _MAX_OUTPUT_CHARS = 2000
 _ALLOWED_FACT_TYPES = ("user_fact", "preference", "decision", "knowledge")
 
 
-def _context_ids() -> tuple[str, str]:
-    """(session_id, user_id) — 无请求上下文时给出可读错误。"""
-    from backend.tools.session import _get_session_id, get_tool_user_id
+def _context_ids() -> tuple[str, str, str]:
+    """(session_id, user_id, tenant_id) — 无请求上下文时给出可读错误。
+
+    tenant_id 来自网关验签注入的可信身份（ContextVar），禁止模型/请求体
+    自报；未声明租户由 normalize_tenant_id 归一为 default（scope 仍精确）。
+    """
+    from backend.tools.session import _get_session_id, get_tool_tenant_id, get_tool_user_id
     session_id = _get_session_id() or ""
     user_id = get_tool_user_id() or "default"
+    tenant_id = get_tool_tenant_id() or ""
     if not session_id:
         raise RuntimeError("无会话上下文（session_id 为空），记忆工具需要在 Agent 请求内调用")
-    return session_id, user_id
+    return session_id, user_id, tenant_id
 
 
 @tool
@@ -38,11 +43,12 @@ def memory_search_tool(query: str, top_k: int = 5) -> str:
     if not query or not query.strip():
         return "❌ 错误: query 不能为空"
 
-    session_id, user_id = _context_ids()
+    session_id, user_id, tenant_id = _context_ids()
     try:
         facts = memory_manager.run_tool(
             lambda: memory_manager.service.search(
                 query.strip(), session_id, user_id=user_id, top_k=max(1, min(int(top_k), 10)),
+                tenant_id=tenant_id,
             )
         )
     except Exception as e:
@@ -57,11 +63,15 @@ def memory_search_tool(query: str, top_k: int = 5) -> str:
 
 
 @tool
-def memory_store_tool(content: str, memory_type: str = "user_fact") -> str:
+def memory_store_tool(content: str, memory_type: str = "user_fact",
+                      memory_key: str = "", structured_value: str = "") -> str:
     """
-    将重要事实写入当前用户的长期记忆（自动去重 + 覆盖旧值）。
+    将重要事实写入当前用户的长期记忆（自动去重 + 冲突裁决 + 覆盖旧值）。
     content: 要记住的事实（一句完整陈述，如"用户偏好看同比而非环比数据"）
     memory_type: user_fact（用户事实）| preference（偏好）| decision（决定）| knowledge（领域知识）
+    memory_key: 可选，属性身份（dot 分隔 snake_case，如 project.main_llm /
+    response.language）。同一属性的新值会自动替换旧值；无法稳定结构化时留空。
+    structured_value: 可选，与 memory_key 成对的规范化属性值（如 doubao、zh）。
     适用场景：用户明确表达偏好/纠正/重要背景时主动记录；不要记录敏感个人信息。
     """
     from backend.config import MEMORY_EXPLICIT_DEFAULT_CONFIDENCE, MEMORY_ORIGIN_EXPLICIT
@@ -77,13 +87,15 @@ def memory_store_tool(content: str, memory_type: str = "user_fact") -> str:
         return (f"❌ 错误: memory_type 必须是 {'/'.join(_ALLOWED_FACT_TYPES)}，"
                 f"收到: {memory_type}")
 
-    session_id, user_id = _context_ids()
+    session_id, user_id, tenant_id = _context_ids()
 
     # 写入前强制 PII 脱敏（与后台管线同一口径）
     scan = scan_and_sanitize(content.strip())
     # 显式通道 provenance（STOP B）：用户主动要求记住 → origin=explicit、
     # 高置信默认值。tool 请求上下文（ContextVar）当前无 message id，
     # source_message_id 置 NULL（不造假），session 归属仍可追溯。
+    # scope（STOP C）：tenant 来自可信 ContextVar；memory_key/structured_value
+    # 为模型可选参数（normalize+validate 在 store_with_resolution 入口强制）
     fact = MemoryFact(
         fact_type=memory_type,
         content=scan.sanitized,
@@ -91,29 +103,52 @@ def memory_store_tool(content: str, memory_type: str = "user_fact") -> str:
         origin=MEMORY_ORIGIN_EXPLICIT,
         confidence_score=MEMORY_EXPLICIT_DEFAULT_CONFIDENCE,
         source_message_id=None,
+        memory_key=(memory_key or "").strip() or None,
+        structured_value=(structured_value or "").strip() or None,
     )
 
-    async def _store() -> bool:
+    async def _store() -> tuple[bool, str]:
+        from backend.memory.keying import StoreOutcome
         async with AsyncSessionLocal() as db:
-            ok = await LongTermMemory(MemoryRepository(db)).store_single(
-                fact, user_id, session_id)
+            result = await LongTermMemory(MemoryRepository(db)).store_with_resolution(
+                fact, user_id, session_id, tenant_id)
             await db.commit()
-            return ok
+            try:
+                from backend.observability.metrics import memory_store_outcome_total
+                memory_store_outcome_total.labels(outcome=result.outcome.value).inc()
+                if result.outcome == StoreOutcome.SUPERSEDED:
+                    from backend.observability.metrics import (
+                        memory_conflict_total,
+                        memory_explicit_total,
+                        memory_supersede_total,
+                    )
+                    memory_supersede_total.inc()
+                    memory_conflict_total.inc()
+                    memory_explicit_total.inc()
+                elif result.outcome == StoreOutcome.CONFLICT_BLOCKED_EXPLICIT:
+                    from backend.observability.metrics import memory_conflict_total
+                    memory_conflict_total.inc()
+                else:
+                    from backend.observability.metrics import memory_explicit_total
+                    memory_explicit_total.inc()
+            except Exception:  # 观测面异常不反噬工具
+                pass
+            return result.stored, result.outcome.value
 
     try:
-        ok = memory_manager.run_tool(_store)
+        ok, outcome = memory_manager.run_tool(_store)
     except Exception as e:
         logger.error(f"[Tool:memory_store] 写入失败: {e}")
         return f"❌ 记忆写入失败: {e}"
 
     if ok:
-        try:
-            from backend.observability.metrics import memory_explicit_total
-            memory_explicit_total.inc()
-        except Exception:  # 观测面异常不反噬工具
-            pass
-        logger.info(f"[Tool:memory_store] 已写入 {memory_type} (user={user_id}, origin=explicit)")
-        return f"✅ 已记住（{memory_type}）: {scan.sanitized[:200]}"
+        suffix = "（已覆盖旧值）" if outcome == "SUPERSEDED" else ""
+        keying = f", key={fact.memory_key}" if fact.memory_key else ""
+        logger.info(f"[Tool:memory_store] 已写入 {memory_type} (user={user_id}, "
+                    f"origin=explicit, outcome={outcome}{keying})")
+        return f"✅ 已记住（{memory_type}）{suffix}: {scan.sanitized[:200]}"
+    if outcome == "CONFLICT_BLOCKED_EXPLICIT":
+        return "⏸ 用户此前已明确设定该属性（explicit），自动推断不能覆盖；如需修改请由用户明确说明。"
     return "⏭ 内容与已有记忆重复或重要性不足，未写入。"
 
 

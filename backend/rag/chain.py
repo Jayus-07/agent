@@ -43,7 +43,6 @@ from backend.rag.evidence_gate import EvidenceGateController
 from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
 from backend.rag.reranker import RerankCompressor
 from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetriever
-from backend.memory.token_budget import trim_texts_to_budget
 from backend.shared.logger import logger
 
 
@@ -441,19 +440,39 @@ class RAGChain:
                         logger.debug("[RAGChain] version_filter 事件写入失败", exc_info=True)
             except Exception:  # noqa: BLE001 — 版本过滤故障不得中断主流程
                 logger.debug("[RAGChain] 版本过滤异常，退化为不过滤", exc_info=True)
-            # ── 证据 token 预算（P3）：rerank 后输入顺序即相关性顺序，从头保留，
-            # 超出预算的尾部文档整体丢弃（长文档场景仅靠 top_k 条数会挤爆上下文）。
-            # 首条文档即使超预算也保留（保证至少有证据可引用）。
+            # ── 证据 token 预算（P3 + 生产收口 B2）：预算内保留最高价值、
+            # 尽量多样的证据。有 rerank_score（真实 metadata，reranker 写入
+            # 同一 doc 对象）时走 RAGBudgeter 价值优先 + source 多样性；
+            # 无分（rerank 不可用/被阈值滤）整体回退原序从头保留 = 旧行为。
+            # kept 是非前缀子集，必须按下标映射回 docs（含 metadata）。
             if EVIDENCE_TOKEN_BUDGET > 0 and docs:
                 page_texts = [d.page_content for d in docs]
-                kept_texts, dropped = trim_texts_to_budget(
-                    page_texts, EVIDENCE_TOKEN_BUDGET)
+                rag_scores = [
+                    (d.metadata or {}).get("rerank_score") for d in docs]
+                rag_sources = [
+                    str((d.metadata or {}).get("source_file") or "")
+                    for d in docs]
+                if all(isinstance(s, (int, float)) for s in rag_scores):
+                    from backend.context_budget.rag_budgeter import (
+                        budget_rag_indices,
+                    )
+                    kept_idx, dropped = budget_rag_indices(
+                        page_texts, EVIDENCE_TOKEN_BUDGET,
+                        scores=[float(s) for s in rag_scores],
+                        sources=rag_sources)
+                else:
+                    from backend.context_budget.rag_budgeter import (
+                        budget_rag_indices,
+                    )
+                    kept_idx, dropped = budget_rag_indices(
+                        page_texts, EVIDENCE_TOKEN_BUDGET)
                 if dropped:
-                    docs = docs[:len(kept_texts)]
+                    docs = [docs[i] for i in kept_idx]
                     input_dict["context"] = docs
                     logger.info(
-                        f"[RAGChain] 证据 token 预算裁剪: 丢弃 {dropped} 个尾部文档 "
-                        f"(budget={EVIDENCE_TOKEN_BUDGET})")
+                        f"[RAGChain] 证据 token 预算裁剪: 丢弃 {dropped} 个低价值文档 "
+                        f"(budget={EVIDENCE_TOKEN_BUDGET}, "
+                        f"score_aware={all(isinstance(s, (int, float)) for s in rag_scores)})")
             for i, doc in enumerate(docs, 1):
                 doc.metadata["index"] = i
                 # ── Evidence 边界字段（非空才显示，不浪费 token）──
@@ -804,10 +823,11 @@ class RAGChain:
         """
         if self._memory:
             try:
-                user_id = (getattr(get_context().identity, "user_id", "")
-                           or "default")
+                identity = get_context().identity
+                user_id = (getattr(identity, "user_id", "") or "default")
                 self._memory.end_turn(session_id, question, answer,
-                                      user_id=user_id)
+                                      user_id=user_id,
+                                      tenant_id=getattr(identity, "tenant_id", "") or "")
             except Exception:
                 logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
                              exc_info=True)
@@ -888,10 +908,27 @@ class RAGChain:
             return
         provider = ""
         try:
-            provider = get_llm_factory()._get_provider(LLM_MODEL)
+            # STOP C（身份链）：优先取本次调用的实际解析模型（请求覆盖 /
+            # fallback 接管后的 ResolvedModelContext），import 期常量
+            # LLM_MODEL 只是兜底 —— 否则 trace 头会把覆盖请求记成
+            # 启动默认模型（身份陈旧，STOP A P1-16）。
+            from backend.infra.llm.resolved_model import get_current_resolved_model
+
+            _ctx = get_current_resolved_model()
+            if _ctx is not None and _ctx.model_id:
+                trace_collector.finish(trace, answer, total_ms,
+                                       _ctx.model_id, _ctx.provider)
+                return
+            from backend.config import model_roles as _model_roles
+            from backend.infra.llm.models import resolve_provider as _resolve_provider
+
+            actual_model = str(_model_roles.resolve_effective("main").get("value")
+                               or LLM_MODEL)
+            provider = _resolve_provider(actual_model)
+            trace_collector.finish(trace, answer, total_ms, actual_model, provider)
         except Exception:
             logger.debug("LLM provider 检测失败", exc_info=True)
-        trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
+            trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
 
     def _finish_error(self, trace, t_total: float):
         """异常路径收尾。
@@ -960,8 +997,11 @@ class RAGChain:
         # D1-7：L1 检索按认证 user_id 隔离（context.identity 由 pipeline
         # 从网关验签后的 Principal 回填）；空 = 直调/eval 无身份 → 保留
         # 旧 "default" 兜底
-        user_id = getattr(get_context().identity, "user_id", "") or "default"
-        l1 = (self._memory.start_session(session_id, question, user_id=user_id)
+        identity = get_context().identity
+        user_id = getattr(identity, "user_id", "") or "default"
+        tenant_id = getattr(identity, "tenant_id", "") or ""
+        l1 = (self._memory.start_session(session_id, question, user_id=user_id,
+                                         tenant_id=tenant_id)
               if self._memory else None)
         return list(l1.messages) if l1 else []
 

@@ -10,9 +10,13 @@ class HybridRetriever:
 
     async def retrieve(
         self, query: str, embedding: list[float], user_id: str, top_k: int = 5,
+        tenant_id: str = "",
     ) -> list:
-        # 1. Recall top_20 from pgvector
-        candidates = await self._repo.search_hybrid(embedding, user_id, top_k=20)
+        from backend.memory.keying import normalize_tenant_id
+
+        # 1. Recall top_20 from pgvector（scope = tenant + user）
+        candidates = await self._repo.search_hybrid(
+            embedding, user_id, top_k=20, tenant_id=normalize_tenant_id(tenant_id))
 
         # 2. Compute final score: 0.5×sim + 0.3×importance + 0.2×recency
         scored = []

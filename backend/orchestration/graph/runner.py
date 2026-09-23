@@ -396,7 +396,8 @@ class GraphRunner:
             kind=SpanKind.KB_ROUTING.value,
             input={"session_id": session_id})
         try:
-            l1 = self._memory.start_session(session_id, question, user_id=user_id)
+            l1 = self._memory.start_session(session_id, question, user_id=user_id,
+                                            tenant_id=tenant_id)
             initial_state = make_initial_state(
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
@@ -771,7 +772,7 @@ class GraphRunner:
                 ctx["cs_context_snapshot"].get("conversation_id")
             ):
                 self._memory.end_turn(session_id, question, ctx["final_answer"],
-                                      user_id=user_id)
+                                      user_id=user_id, tenant_id=tenant_id)
 
 
 # =====================================================

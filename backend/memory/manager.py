@@ -105,15 +105,19 @@ class MemoryManager:
         except Exception:
             logger.debug("[P1-10] async engine 关闭失败（进程退出路径）", exc_info=True)
 
-    def start_session(self, session_id: str, question: str, user_id: str = "default") -> ShortTermBuffer:
+    def start_session(self, session_id: str, question: str, user_id: str = "default",
+                      tenant_id: str = "") -> ShortTermBuffer:
         # question 透传给 L3：长期记忆检索用当前问题做语义 query（此前误用 session_id）
-        result = self._run(lambda: self._service.start_session(session_id, user_id, query=question))
+        result = self._run(lambda: self._service.start_session(
+            session_id, user_id, query=question, tenant_id=tenant_id))
         if result is None:
             return ShortTermBuffer()
         return result
 
-    def end_turn(self, session_id: str, question: str, answer: str, user_id: str = "default") -> None:
-        self._run(lambda: self._service.end_turn(session_id, question, answer, user_id))
+    def end_turn(self, session_id: str, question: str, answer: str,
+                 user_id: str = "default", tenant_id: str = "") -> None:
+        self._run(lambda: self._service.end_turn(
+            session_id, question, answer, user_id, tenant_id=tenant_id))
 
     @property
     def service(self) -> MemoryService:

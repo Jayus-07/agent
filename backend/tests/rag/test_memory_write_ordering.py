@@ -19,7 +19,8 @@ class _MemoryRecorder:
     def __init__(self):
         self.calls = []
 
-    def end_turn(self, session_id, question, answer, user_id="default"):
+    def end_turn(self, session_id, question, answer, user_id="default",
+                 tenant_id=""):
         self.calls.append((session_id, question, answer, user_id))
 
 

@@ -19,26 +19,34 @@ template: |
   5. 不要把助手提供的外部知识、RAG 结果、数据库结果、工具结果或系统状态写成用户个人长期记忆。
   6. 用户话语中的不确定表述（"可能""考虑""看看"）只能以低置信度记录，不得升级为确定事实。
 
-  每条一行，严格使用竖线分隔，共 4 段: 类型|内容|置信度|用户原话片段
+  每条一行，严格使用竖线分隔，共 4~6 段: 类型|内容|置信度|用户原话片段[|属性key[|属性值]]
 
   类型: user_fact(用户身份/角色/技能), preference(偏好/习惯), decision(决策), knowledge(知识)
   置信度: 0.0~1.0 之间的小数，表示该事实确属用户的把握
   用户原话片段: 必须是 <user_evidence> 中用户原话的连续片段（逐字摘录，作为证据）。
   找不到用户原话片段作证据的信息 = 助手自己产生的，直接丢弃。
+  属性key（可选）: 仅当事实是「可随时间改变的属性」时填写——小写英文、点分隔、
+  下划线段（如 project.main_llm、project.embedding_model、response.language、
+  response.detail_level、user.nickname、job.target_role）。key 表达「这是哪个属性」，
+  绝不能把具体值编进 key（禁止 project.main_llm.deepseek 这种写法）。
+  属性值（可选）: 与属性key 成对的规范值（如 doubao、deepseek、zh、detailed）。
+  key 与值必须成对给出；泛知识、经历描述、一次性事件不要编 key。
+  同一属性用户改口时，照常提取新值——系统会用 key 自动替换旧版本。
 
   没有重要信息则只输出: NONE
 
   示例:
   <user_evidence>
-  我叫张三，是后端工程师，喜欢用FastAPI
+  我叫张三，是后端工程师，喜欢用FastAPI。主模型用 DeepSeek。
   </user_evidence>
   <assistant_context>
   好的张三，你是后端工程师，你们项目也在用FastAPI
   </assistant_context>
   输出:
-  user_fact|用户名张三|0.95|我叫张三
+  user_fact|用户名张三|0.95|我叫张三|user.nickname|zhangsan
   user_fact|职业是后端工程师|0.95|是后端工程师
   preference|喜欢使用FastAPI框架|0.9|喜欢用FastAPI
+  user_fact|主模型是DeepSeek|0.92|主模型用 DeepSeek|project.main_llm|deepseek
 
   对话:
   {conversation}

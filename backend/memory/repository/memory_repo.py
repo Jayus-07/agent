@@ -1,10 +1,16 @@
-"""MemoryRepository — async CRUD + pgvector hybrid search for memory_records"""
+"""MemoryRepository — async CRUD + pgvector hybrid search for memory_records
+
+scope 契约（STOP C）：所有读写路径必须携带 (tenant_id, user_id) 双维度过滤，
+不存在仅 user_id 的查询。tenant_id 在本仓储层入口统一
+normalize_tenant_id（漏传归一 default 桶——隔离仍精确，绝不 fail-open 查全表）。
+"""
 from uuid import uuid4
 from datetime import datetime, timezone
 from sqlalchemy import select, update, text, type_coerce
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 
+from backend.memory.keying import normalize_tenant_id
 from backend.memory.models.memory import EMBEDDING_DIM, MemoryRecord
 
 
@@ -32,21 +38,23 @@ class MemoryRepository:
 
     async def search_hybrid(
         self, embedding: list[float], user_id: str, top_k: int = 20,
-        memory_type: str | None = None,
+        memory_type: str | None = None, tenant_id: str = "",
     ) -> list[MemoryRecord]:
-        """按 pgvector 余弦相似度降序返回 top_k 条记忆。
+        """按 pgvector 余弦相似度降序返回 top_k 条记忆（scope=tenant+user）。
 
         排序键：cosine similarity（降序）。
-        过滤条件：is_active AND user_id [AND memory_type]。
+        过滤条件：is_active AND tenant_id AND user_id [AND memory_type]。
         注意：本方法**仅**按相似度排序，不做 importance / recency 联合打分。
         如需重排序（如结合 importance_score / last_access_at），由调用方拿到结果后自行处理。
         """
+        tenant_id = normalize_tenant_id(tenant_id)
         query_vec = _query_vector(embedding)
         query = select(
             MemoryRecord,
             (1.0 - (MemoryRecord.embedding.cosine_distance(query_vec))).label("similarity"),
         ).where(
             MemoryRecord.is_active == True,
+            MemoryRecord.tenant_id == tenant_id,
             MemoryRecord.user_id == user_id,
         )
         if memory_type:
@@ -56,33 +64,78 @@ class MemoryRepository:
         result = await self._s.execute(query)
         return [row[0] for row in result.all()]
 
-    async def find_similar(
-        self, embedding: list[float], user_id: str, threshold: float = 0.85,
-    ) -> MemoryRecord | None:
-        """Find most similar active record above threshold via subquery"""
+    async def find_similar_candidates(
+        self, embedding: list[float], user_id: str, tenant_id: str,
+        threshold: float = 0.85, top_n: int = 5,
+    ) -> list[tuple[MemoryRecord, float]]:
+        """unkeyed 语义去重候选：返回相似度 ≥ threshold 的 top-N (record, sim)。
+
+        替代旧 find_similar(top-1)：调用方用最高相似度做 duplicate 判定
+        （sim >= supersede 阈值 → DUPLICATE），**不做事实版本更新**——
+        无 key 时无法区分「同属性新值」与「相似的不同事实」，
+        semantic similarity 不再拥有 supersede 资格（§44-46）。
+        """
+        tenant_id = normalize_tenant_id(tenant_id)
         query_vec = _query_vector(embedding)
-        sub = (
+        query = (
             select(
-                MemoryRecord.id,
+                MemoryRecord,
                 (1.0 - MemoryRecord.embedding.cosine_distance(query_vec)).label("sim"),
             )
-            .where(MemoryRecord.is_active == True, MemoryRecord.user_id == user_id)
-            .subquery()
+            .where(
+                MemoryRecord.is_active == True,
+                MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.user_id == user_id,
+            )
+            .order_by(text("sim DESC"))
+            .limit(top_n)
         )
-        result = await self._s.execute(
-            select(MemoryRecord, sub.c.sim)
-            .join(sub, MemoryRecord.id == sub.c.id)
-            .where(sub.c.sim >= threshold)
-            .order_by(sub.c.sim.desc())
-            .limit(1),
+        result = await self._s.execute(query)
+        return [(row[0], float(row[1])) for row in result.all() if float(row[1]) >= threshold]
+
+    async def find_active_by_key(
+        self, tenant_id: str, user_id: str, memory_key: str, *, for_update: bool = False,
+    ) -> MemoryRecord | None:
+        """按 (tenant, user, memory_key) 精确定位唯一 active 记录。
+
+        keyed 事实版本管理的唯一入口——不再依赖 embedding 相似度找旧版本
+        （top-1 blind spot 对 keyed 路径彻底消失）。for_update=True 时加
+        行锁（SELECT ... FOR UPDATE），供原子 supersede 防并发双写。
+        """
+        tenant_id = normalize_tenant_id(tenant_id)
+        query = (
+            select(MemoryRecord)
+            .where(
+                MemoryRecord.is_active == True,
+                MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.user_id == user_id,
+                MemoryRecord.memory_key == memory_key,
+            )
+            .limit(1)
         )
-        row = result.first()
-        return row[0] if row else None
+        if for_update:
+            query = query.with_for_update()
+        result = await self._s.execute(query)
+        return result.scalar_one_or_none()
 
     async def supersede(self, old_id: str, new_id: str) -> bool:
+        """回填版本链指针（atomic supersede 第 4 步）。
+
+        只按 id 回填：调用方已先 deactivate（is_active=False），此处若再带
+        is_active=True 条件会永远 0 行——旧实现靠「insert 前不 deactivate」
+        规避，原子化后顺序变了，条件必须跟着改。
+        """
+        result = await self._s.execute(
+            update(MemoryRecord).where(MemoryRecord.id == old_id)
+            .values(is_active=False, superseded_by=new_id)
+        )
+        return result.rowcount > 0
+
+    async def deactivate(self, old_id: str) -> bool:
+        """原子 supersede 第 2 步：先置 inactive（superseded_by 等 new 落库后回填）。"""
         result = await self._s.execute(
             update(MemoryRecord).where(MemoryRecord.id == old_id, MemoryRecord.is_active == True)
-            .values(is_active=False, superseded_by=new_id)
+            .values(is_active=False)
         )
         return result.rowcount > 0
 
@@ -98,23 +151,35 @@ class MemoryRepository:
         )
         return result.rowcount > 0
 
-    async def apply_decay(self, days: int, factor: float) -> int:
-        threshold = datetime.now(timezone.utc).isoformat()
+    async def apply_decay(self, days: int, factor: float,
+                          upper_days: int | None = None) -> int:
+        """衰减 [days, upper_days) 天未访问的 active 非 explicit 记录。
+
+        upper_days 构成互斥区间（90~180 → 0.95，>180 → 0.9）——旧实现两档
+        级联（>180 天被 ×0.9×0.95 双重衰减），接线时修正为互斥语义。
+        """
+        clause = "last_access_at < NOW() - (:days || ' days')::INTERVAL"
+        if upper_days is not None:
+            clause += " AND last_access_at >= NOW() - (:upper || ' days')::INTERVAL"
         result = await self._s.execute(
-            text("""
+            text(f"""
                 UPDATE memory_records
                 SET importance_score = importance_score * :factor
                 WHERE is_active = TRUE
-                  AND last_access_at < NOW() - (:days || ' days')::INTERVAL
+                  AND origin <> 'explicit'
+                  AND {clause}
             """),
-            {"factor": factor, "days": str(days)},
+            {"factor": factor, "days": str(days),
+             **({"upper": str(upper_days)} if upper_days is not None else {})},
         )
         return result.rowcount
 
     async def archive_stale(self, min_importance: float = 0.2) -> int:
         result = await self._s.execute(
             update(MemoryRecord)
-            .where(MemoryRecord.is_active == True, MemoryRecord.importance_score < min_importance)
+            .where(MemoryRecord.is_active == True,
+                   MemoryRecord.importance_score < min_importance,
+                   MemoryRecord.origin != "explicit")
             .values(is_active=False)
         )
         return result.rowcount

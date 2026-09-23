@@ -509,6 +509,28 @@ memory_inferred_total = Counter(
     "后台自动提取写入的长期记忆总数（origin=inferred）",
 )
 
+# ── Memory 事实版本管理指标（048，STOP C）──
+# 回答：多少 duplicate/reaffirm/supersede/conflict？label 用固定 outcome 枚举，
+# 禁止 memory_key/user_id/tenant_id/content 等高基数值进 label（§49）。
+memory_store_outcome_total = Counter(
+    "memory_store_outcome_total",
+    "Memory 写入裁决结果总数（按 StoreOutcome 枚举）",
+    labelnames=("outcome",),  # INSERTED|DUPLICATE|REAFFIRMED|SUPERSEDED|CONFLICT_BLOCKED_EXPLICIT|REJECTED
+)
+memory_supersede_total = Counter(
+    "memory_supersede_total",
+    "keyed 事实版本替换总数（同 key 新值 supersede 成功）",
+)
+memory_conflict_total = Counter(
+    "memory_conflict_total",
+    "同 key 冲突裁决总数（含 supersede 与 blocked，用于冲突率观测）",
+)
+memory_decay_records_total = Counter(
+    "memory_decay_records_total",
+    "Memory 衰减/归档任务处理的记录数（按动作）",
+    labelnames=("action",),  # decayed | archived
+)
+
 # 熔断器状态（0=closed 1=half_open 2=open）— 熔断开路告警数据源
 circuit_breaker_state = Gauge(
     "circuit_breaker_state",

@@ -2,6 +2,8 @@
 import asyncio
 import time
 
+from sqlalchemy.exc import IntegrityError
+
 from backend.memory.database import get_session, AsyncSessionLocal
 from backend.memory.repository.session_repo import SessionRepository
 from backend.memory.repository.memory_repo import MemoryRepository
@@ -26,6 +28,7 @@ from langchain_core.messages import SystemMessage
 from backend.shared.logger import logger
 from backend.observability.metrics import (
     degradation_alerts_total,
+    memory_conflict_total,
     memory_extraction_candidate_total,
     memory_extraction_rejected_total,
     memory_explicit_total,
@@ -33,6 +36,8 @@ from backend.observability.metrics import (
     memory_retrieval_failure_total,
     memory_retrieval_latency_seconds,
     memory_retrieval_total,
+    memory_store_outcome_total,
+    memory_supersede_total,
 )
 
 
@@ -68,8 +73,11 @@ class MemoryService:
     # ============================================================
 
     async def start_session(
-        self, session_id: str, user_id: str = "default", query: str = ""
+        self, session_id: str, user_id: str = "default", query: str = "",
+        tenant_id: str = "",
     ) -> ShortTermBuffer:
+        from backend.memory.keying import normalize_tenant_id
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
@@ -122,7 +130,8 @@ class MemoryService:
                         # 召回与当前问题语义无关）；空 query 兜底回退 session_id 保持旧行为
                         l3_query = query or session_id
                         emb = l3.embedding.embed_query(l3_query)
-                        records = await retriever.retrieve(l3_query, emb, user_id, top_k=5)
+                        records = await retriever.retrieve(l3_query, emb, user_id, top_k=5,
+                                                           tenant_id=tenant_id)
                     if records:
                         facts = [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id) for r in records]
                         prompt_text = LongTermMemory.format_for_prompt(facts)
@@ -202,7 +211,8 @@ class MemoryService:
                 logger.error(f"[MemoryService] start_session 失败: {e}")
                 raise
 
-    async def end_turn(self, session_id: str, question: str, answer: str, user_id: str = "default") -> None:
+    async def end_turn(self, session_id: str, question: str, answer: str,
+                       user_id: str = "default", tenant_id: str = "") -> None:
         # save_turn 之前失败的路径同样要能进入后台 store（provenance 允许缺失，
         # 但不能因 UnboundLocalError 让 end_turn 抛异常）
         user_message_id: int | None = None
@@ -245,20 +255,25 @@ class MemoryService:
 
         # L3: background write — caller's loop must keep running (Manager handles this)
         asyncio.ensure_future(self.store(question, answer, session_id, user_id,
-                                         source_message_id=user_message_id))
+                                         source_message_id=user_message_id,
+                                         tenant_id=tenant_id))
 
     # ============================================================
     # Retrieval
     # ============================================================
 
-    async def search(self, query: str, session_id: str, user_id: str = "default", top_k: int = 5) -> list[MemoryFact]:
+    async def search(self, query: str, session_id: str, user_id: str = "default",
+                     top_k: int = 5, tenant_id: str = "") -> list[MemoryFact]:
+        from backend.memory.keying import normalize_tenant_id
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 mrepo = MemoryRepository(db_session)
                 l3 = LongTermMemory(mrepo)
                 retriever = HybridRetriever(mrepo)
                 emb = l3.embedding.embed_query(query)
-                records = await retriever.retrieve(query, emb, user_id, top_k=top_k)
+                records = await retriever.retrieve(query, emb, user_id, top_k=top_k,
+                                                   tenant_id=tenant_id)
 
                 if records:
                     await mrepo.mark_accessed([str(r.id) for r in records])
@@ -279,17 +294,24 @@ class MemoryService:
     # ============================================================
 
     async def store(self, question: str, answer: str, session_id: str, user_id: str = "default",
-                    source_message_id: int | None = None) -> None:
-        """后台管线: extract → evidence gate → PII → classify → score → dedup → write
+                    source_message_id: int | None = None, tenant_id: str = "") -> None:
+        """后台管线: extract → evidence gate → PII → classify → score → conflict resolution → write
 
         provenance 契约（STOP B）：
           - origin 由本方法强制赋值 inferred（写入通道决定，不信任模型输出）
           - source_message_id 由 end_turn 在 save_turn 时确定后透传，
             本方法禁止回查"最新用户消息"（并发 turn 会串轮）
+        版本管理契约（STOP C）：
+          - keyed 事实走 conflict 裁决（同 key 同值 reaffirm / 新值 supersede
+            或 explicit-blocked）；unkeyed 走语义去重（只判 duplicate）
+          - 首建竞态由 partial unique index 兜底，IntegrityError rollback
+            后独立事务重试一次（有界，§40）
         注意：本协程运行在 MemoryManager 的后台 event loop 上，
         LLM 同步调用（提取/分类）必须放到线程池，否则会阻塞整个 loop，
         导致同期其他记忆操作（会话持久化等）超时降级。
         """
+        from backend.memory.keying import normalize_tenant_id
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             write_started = time.perf_counter()
             try:
@@ -322,16 +344,38 @@ class MemoryService:
                     if not self._get_importance().should_store(fact.importance_score):
                         _metric_safe(memory_extraction_rejected_total.labels(reason="low_importance").inc)
                         continue
-                    # 5. Dedup + Write（origin/confidence/source_message_id 随 fact 落库）
-                    ok = await l3.store_single(fact, user_id, session_id)
-                    if ok:
+                    # 5. Conflict resolution + write（per-fact 事务：一个 fact 失败不丢同批其他）
+                    try:
+                        result = await l3.store_with_resolution(fact, user_id, session_id, tenant_id)
+                        await db_session.commit()
+                    except IntegrityError:
+                        # 同 key 首建竞态：unique index 兜底 → rollback 后独立事务重试一次
+                        await db_session.rollback()
+                        logger.info("[MemoryService] keyed 首建竞态，重试一次 "
+                                    f"(user={user_id}, key 已由并发事务创建)")
+                        async with AsyncSessionLocal() as retry_db:
+                            retry_l3 = LongTermMemory(MemoryRepository(retry_db))
+                            result = await retry_l3.store_with_resolution(
+                                fact, user_id, session_id, tenant_id)
+                            await retry_db.commit()
+                    _metric_safe(memory_store_outcome_total.labels(
+                        outcome=result.outcome.value).inc)
+                    if result.outcome.value == "SUPERSEDED":
+                        _metric_safe(memory_supersede_total.inc)
+                        _metric_safe(memory_conflict_total.inc)
+                    elif result.outcome.value == "CONFLICT_BLOCKED_EXPLICIT":
+                        _metric_safe(memory_conflict_total.inc)
+                        logger.info(
+                            "[MemoryService] inferred 与 active explicit 冲突被阻断 "
+                            f"(user={user_id}, source_message_id={source_message_id})")
+                    if result.stored:
                         stored += 1
                         _metric_safe(memory_inferred_total.inc)
                     else:
-                        _metric_safe(memory_extraction_rejected_total.labels(reason="duplicate").inc)
+                        _metric_safe(memory_extraction_rejected_total.labels(
+                            reason="duplicate").inc)
 
                 if stored:
-                    await db_session.commit()
                     logger.info(
                         f"[MemoryService] 后台写入 {stored}/{len(facts)} 条记忆 "
                         f"(origin=inferred, source_message_id={source_message_id}, "

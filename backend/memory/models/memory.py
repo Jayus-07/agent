@@ -16,6 +16,9 @@ class MemoryRecord(Base):
     __tablename__ = "memory_records"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    # scope（048，STOP C）：tenant_id 经 normalize_tenant_id 归一，
+    # quarantine=迁移保留哨兵（无身份表映射的 legacy 行，运行时永不产出）
+    tenant_id = Column(String(64), nullable=False, default="default")
     user_id = Column(String(64), nullable=False, default="default")
     session_id = Column(String(128), nullable=False, default="")
     memory_type = Column(String(32), nullable=False)
@@ -28,6 +31,10 @@ class MemoryRecord(Base):
     # role=user 的 chat_messages.id，仅逻辑外键（会话级联删除不得波及长期记忆）
     origin = Column(String(16), nullable=False, default="legacy")
     source_message_id = Column(Integer, nullable=True)
+    # 事实版本管理（048，STOP C）：key=属性身份，value=规范化属性值，成对出现；
+    # 同 (tenant,user,key) 最多一个 active（partial unique index uq_memory_active_key）
+    memory_key = Column(String(128), nullable=True)
+    structured_value = Column(String(256), nullable=True)
     access_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_access_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

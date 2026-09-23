@@ -62,11 +62,13 @@ def _spy_finish(monkeypatch):
 
 
 class _FakeMemory:
-    def start_session(self, session_id, question, user_id="default"):
+    def start_session(self, session_id, question, user_id="default",
+                      tenant_id=""):
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 
-    def end_turn(self, session_id, question, answer, user_id="default"):
+    def end_turn(self, session_id, question, answer, user_id="default",
+                 tenant_id=""):
         self.last_answer = answer
 
 

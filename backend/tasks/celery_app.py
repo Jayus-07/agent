@@ -24,6 +24,7 @@ from backend.config.tasks import (
     CELERY_RETRY_BACKOFF,
     CELERY_RETRY_BACKOFF_MAX,
     CELERY_TASK_TIMEOUT,
+    TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS,
     TASK_RECOVERY_SWEEP_INTERVAL,
     TASK_ZOMBIE_RECONCILE_INTERVAL,
 )
@@ -42,6 +43,7 @@ celery_app = Celery(
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
              "backend.tasks.side_effect_probe_tasks",  # Step6：副作用幂等实机探针（env 门禁）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
+             "backend.tasks.memory_maintenance_tasks",  # STOP C：Memory 衰减生命周期（beat）
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
              "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
 )
@@ -124,6 +126,14 @@ celery_app.conf.update(
             "schedule": crontab(hour=6, minute=10),
             "options": {"queue": beat_queue("cs.qa_daily_report")},
         },
+        # STOP C（2026-09-24）：Memory 衰减生命周期。每日 04:30 UTC 衰减
+        # 久未访问的 inferred/legacy 记忆并归档低重要性行；explicit 豁免
+        # （用户显式记忆不因时间消失）。幂等条件 UPDATE，失败自动重试。
+        "memory-daily-decay": {
+            "task": "memory.daily_decay",
+            "schedule": crontab(hour=4, minute=30),
+            "options": {"queue": beat_queue("memory.daily_decay")},
+        },
         # B5（2026-09-21 高并发审查）：僵尸任务定期收尸。
         # 阈值与间隔均可经 env 覆盖（TASK_ZOMBIE_*，见 backend/config/tasks.py）
         "tasks-zombie-reconcile": {
@@ -138,6 +148,15 @@ celery_app.conf.update(
             "task": "tasks.stale_execution_recovery",
             "schedule": float(TASK_RECOVERY_SWEEP_INTERVAL),
             "options": {"queue": beat_queue("tasks.stale_execution_recovery")},
+        },
+        # Phase3 STOP B：PENDING recovery accelerator。派发丢失的 stale
+        # PENDING（publish 失败孤儿 / broker 消息丢失 / unacked 死等）主动
+        # CAS 认领并经 QueueRouter 重投；intentional defer 由
+        # dispatch_not_before_at durable 排除；visibility_timeout 仍为最终兜底。
+        "tasks-pending-recovery": {
+            "task": "tasks.pending_recovery",
+            "schedule": float(TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS),
+            "options": {"queue": beat_queue("tasks.pending_recovery")},
         },
         # Phase2 Step6：幂等 ledger 保留策略。只清显式 TTL 已过期的记录，
         # 业务动作类默认无 expires_at（永久保留）→ 本任务常态空跑兜底。

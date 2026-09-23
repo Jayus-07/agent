@@ -368,12 +368,13 @@ async def test_b5_explicit_and_inferred_distinguished_in_same_table(monkeypatch)
 # ============================================================
 
 async def test_b6_concurrent_turns_keep_own_message_id(monkeypatch):
-    _install_fake_llm(
-        monkeypatch,
-        lambda prompt: (
-            f"preference|本轮偏好记录|0.9|{_user_evidence_from_prompt(prompt)}"
-        ),
-    )
+    # content 随用户原话变化：STOP C 后同 content 未 key 事实会被语义去重
+    # 判 DUPLICATE，而 B6 的核心断言是「source_message_id 不串轮」
+    def _llm(prompt):
+        ev = _user_evidence_from_prompt(prompt)
+        return f"preference|偏好：{ev}|0.9|{ev}"
+
+    _install_fake_llm(monkeypatch, _llm)
     # save_turn 两次，拿到各自 user message id（模拟两个真实 turn）
     from backend.memory.repository.session_repo import SessionRepository
     svc = MemoryService()
@@ -422,9 +423,12 @@ async def test_b8_migration_legacy_backfill_and_column_presence():
                  "WHERE table_name='memory_records' AND column_name IN ('origin','source_message_id')"),
         )).all()
         assert {c[0] for c in cols} == {"origin", "source_message_id"}
-        # 存量记录全部 legacy（NOT NULL 约束兜底，无 NULL 分支）
+        # STOP C 跟进：全表 legacy 断言在 048 后不再成立（新写入为
+        # inferred/explicit、部分存量 backfill 至真实租户），迁移不变式的
+        # 本质是 NOT NULL——origin/tenant 无 NULL 分支
         row = (await db.execute(
-            text("SELECT count(*) - count(*) FILTER (WHERE origin='legacy') "
+            text("SELECT count(*) FILTER (WHERE origin IS NULL) + "
+                 "count(*) FILTER (WHERE tenant_id IS NULL) "
                  "FROM memory_records"),
         )).scalar()
         assert row == 0

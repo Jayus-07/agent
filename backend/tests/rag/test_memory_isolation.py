@@ -30,11 +30,13 @@ class _MemoryRecorder:
         self.starts = []
         self.ends = []
 
-    def start_session(self, session_id, question, user_id="default"):
-        self.starts.append((session_id, question, user_id))
+    def start_session(self, session_id, question, user_id="default",
+                      tenant_id=""):
+        self.starts.append((session_id, question, user_id, tenant_id))
 
-    def end_turn(self, session_id, question, answer, user_id="default"):
-        self.ends.append((session_id, question, answer, user_id))
+    def end_turn(self, session_id, question, answer, user_id="default",
+                 tenant_id=""):
+        self.ends.append((session_id, question, answer, user_id, tenant_id))
 
 
 def _chain_with_identity(user_id: str):
@@ -50,8 +52,8 @@ def test_authenticated_user_flows_into_memory_calls():
     chain = _chain_with_identity("alice")
     chain._prepare("问题", "s-1")
     chain._remember_turn("s-1", "问题", "回答")
-    assert chain._memory.starts == [("s-1", "问题", "alice")]
-    assert chain._memory.ends == [("s-1", "问题", "回答", "alice")]
+    assert chain._memory.starts == [("s-1", "问题", "alice", "")]
+    assert chain._memory.ends == [("s-1", "问题", "回答", "alice", "")]
 
 
 def test_empty_identity_keeps_legacy_default():

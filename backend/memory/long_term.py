@@ -21,6 +21,13 @@ from backend.config import (
     MEMORY_ORIGIN_INFERRED,
     MEMORY_ORIGIN_LEGACY,
 )
+from backend.memory.keying import (
+    StoreResult,
+    StoreOutcome,
+    normalize_memory_key,
+    normalize_memory_value,
+    normalize_tenant_id,
+)
 from backend.rag.embedding_singleton import get_embedding
 from backend.config import L3_DEDUP_COSINE_THRESHOLD, L3_SUPERSEDE_THRESHOLD
 from backend.memory.pii_filter import scan_and_sanitize
@@ -58,6 +65,10 @@ class MemoryFact:
     origin: str = MEMORY_ORIGIN_LEGACY
     confidence_score: float = MEMORY_INFERRED_DEFAULT_CONFIDENCE
     source_message_id: int | None = None
+    # 事实版本管理（STOP C）：key/value 由调用方给出候选，store_with_resolution
+    # 入口统一 normalize+validate（非法 key/value 双双置 NULL 走 unkeyed 路径）
+    memory_key: str | None = None
+    structured_value: str | None = None
 
 
 def clamp_confidence(value, default: float = MEMORY_INFERRED_DEFAULT_CONFIDENCE) -> float:
@@ -135,7 +146,10 @@ class LongTermMemory:
 
     @staticmethod
     def _parse_facts(text: str, user_evidence: str = "") -> tuple[list["MemoryFact"], list[str]]:
-        """解析提取输出，协议：`类型|内容|置信度|用户原话片段`（4 段）。
+        """解析提取输出，协议：`类型|内容|置信度|用户原话片段[|memory_key[|structured_value]]`。
+
+        前 4 段必需；第 5/6 段（key/value）可选（STOP C 扩展，不增加 LLM 调用）。
+        key/value 代码层 normalize+validate，非法 → 双双 NULL（unkeyed 路径）。
 
         fail-closed：证据片段缺失 / 不在用户消息中 / 段数不足 → 拒绝。
         旧两段格式（类型|内容）无法证明证据来自用户，一律拒绝——
@@ -152,7 +166,7 @@ class LongTermMemory:
             line = line.strip()
             if not line or line.upper().startswith("NONE") or "|" not in line:
                 continue
-            parts = line.split("|", 3)
+            parts = line.split("|", 5)
             if len(parts) < 4:
                 # 旧协议/残缺协议：无证据片段，无法追溯来源
                 rejections.append(REJECT_ASSISTANT_ONLY)
@@ -161,6 +175,8 @@ class LongTermMemory:
             content = parts[1].strip()
             confidence_raw = parts[2].strip()
             evidence = parts[3].strip()
+            key_raw = parts[4].strip() if len(parts) > 4 else ""
+            value_raw = parts[5].strip() if len(parts) > 5 else ""
             if ft not in valid_types or not content:
                 continue
             confidence = clamp_confidence(confidence_raw, MEMORY_INFERRED_DEFAULT_CONFIDENCE)
@@ -169,60 +185,72 @@ class LongTermMemory:
                 continue
             if _is_hedged(evidence):
                 confidence = min(confidence, MEMORY_HEDGED_CONFIDENCE_CAP)
+            # key/value 成对约束：任一非法 → 双双 NULL（不 reject 事实本身）
+            memory_key = normalize_memory_key(key_raw) if key_raw else None
+            structured_value = None
+            if memory_key is not None:
+                structured_value = normalize_memory_value(value_raw) if value_raw else None
+                if structured_value is None:
+                    memory_key = None
             scan = scan_and_sanitize(content)
             facts.append(MemoryFact(
                 fact_type=ft,
                 content=scan.sanitized,
                 confidence_score=confidence,
                 origin=MEMORY_ORIGIN_INFERRED,
+                memory_key=memory_key,
+                structured_value=structured_value,
             ))
         return facts, rejections
 
     # ── Retrieval ──
-    async def retrieve(self, query: str, user_id: str = "default", k: int = 20) -> list[MemoryFact]:
+    async def retrieve(self, query: str, user_id: str = "default", k: int = 20,
+                       tenant_id: str = "") -> list[MemoryFact]:
         emb = self.embedding.embed_query(query)
-        rows = await self._repo.search_hybrid(emb, user_id, top_k=k)
+        rows = await self._repo.search_hybrid(emb, user_id, top_k=k,
+                                              tenant_id=normalize_tenant_id(tenant_id))
         return [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id, created_at=str(r.created_at)) for r in rows]
 
-    async def store_single(self, fact: MemoryFact, user_id: str, session_id: str) -> bool:
-        """Store one fact with dedup check.
+    async def store_with_resolution(self, fact: MemoryFact, user_id: str,
+                                    session_id: str, tenant_id: str = "") -> StoreResult:
+        """事实写入唯一入口（STOP C）：normalize → 裁决 → 原子落库。
 
-        provenance 防线纵深：入口再次 clamp confidence、origin 非法值
-        强制回退 legacy——调用方构造错误也不得污染数据库。
+        防线纵深：confidence 再 clamp、origin 非法值回退 legacy、key/value
+        再归一（非法 → 双双 NULL 走 unkeyed）——工具路径不经过 parser，
+        此处是最后一道代码级防线。
+        裁决与原子 supersede 见 memory/conflict.py（集中实现）。
         """
-        from backend.memory.models.memory import MemoryRecord
+        tenant_id = normalize_tenant_id(tenant_id)
         fact.confidence_score = clamp_confidence(
             fact.confidence_score, MEMORY_INFERRED_DEFAULT_CONFIDENCE)
         if fact.origin not in _VALID_ORIGINS:
             fact.origin = MEMORY_ORIGIN_LEGACY
+        fact.memory_key = normalize_memory_key(fact.memory_key)
+        if fact.memory_key is not None:
+            # structured_value 与 content 同受 PII 防线（§75：key/value 不得
+            # 成为绕过通道）；脱敏后再 normalize（"[邮箱]" 等占位符合法保留）
+            raw_value = fact.structured_value
+            if raw_value:
+                sanitized_value = scan_and_sanitize(str(raw_value)).sanitized
+            else:
+                sanitized_value = None
+            fact.structured_value = normalize_memory_value(sanitized_value)
+            if fact.structured_value is None:
+                fact.memory_key = None  # key/value 成对约束
+
         emb = self.embedding.embed_query(fact.content)
+        from backend.memory import conflict
+        if fact.memory_key is not None:
+            return await conflict.resolve_keyed(
+                self._repo, fact, user_id, session_id, tenant_id, emb)
+        return await conflict.resolve_unkeyed(
+            self._repo, fact, user_id, session_id, tenant_id, emb)
 
-        existing = await self._repo.find_similar(emb, user_id, threshold=L3_DEDUP_COSINE_THRESHOLD)
-        if existing:
-            # Check supersede
-            from numpy import dot
-            from numpy.linalg import norm
-            sim = dot(emb, existing.embedding) / (norm(emb) * norm(existing.embedding))
-            if sim >= L3_SUPERSEDE_THRESHOLD and existing.memory_type == fact.fact_type:
-                record = MemoryRecord(
-                    user_id=user_id, session_id=session_id, memory_type=fact.fact_type,
-                    content=fact.content, embedding=emb, importance_score=fact.importance_score,
-                    confidence_score=fact.confidence_score, origin=fact.origin,
-                    source_message_id=fact.source_message_id,
-                )
-                await self._repo.insert(record)
-                await self._repo.supersede(str(existing.id), str(record.id))
-                return True
-            return False  # skip duplicate
-
-        record = MemoryRecord(
-            user_id=user_id, session_id=session_id, memory_type=fact.fact_type,
-            content=fact.content, embedding=emb, importance_score=fact.importance_score,
-            confidence_score=fact.confidence_score, origin=fact.origin,
-            source_message_id=fact.source_message_id,
-        )
-        await self._repo.insert(record)
-        return True
+    async def store_single(self, fact: MemoryFact, user_id: str, session_id: str,
+                           tenant_id: str = "") -> bool:
+        """兼容 wrapper（§47）：旧调用方拿到 bool；核心路径用 store_with_resolution。"""
+        result = await self.store_with_resolution(fact, user_id, session_id, tenant_id)
+        return result.stored
 
     @staticmethod
     def format_for_prompt(facts: list[MemoryFact]) -> str:
