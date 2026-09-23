@@ -18,6 +18,7 @@ OpenAI-compatible provider 报 invalid tool call sequence / orphan tool message�
 
 from __future__ import annotations
 
+import contextvars
 from typing import Any
 
 # 显式 pin 种类（观测/日志用）
@@ -110,13 +111,20 @@ class PinnedContext:
     用法（域图节点 / 编排层持有状态，知道什么不能丢）：
         pins = PinnedContext()
         pins.mark_index(12, PIN_CONFIRMATION)          # 按下标
-        pins.mark_message_id("msg_abc", PIN_ENTITY)    # 按消息 id
+        pins.mark_content_match("20260922001", PIN_ENTITY)  # 按内容锚定
         prepared = manager.prepare_llm_context(messages=..., pins=pins)
     """
+
+    # 内容锚定值的最短长度：业务实体 id（订单号/退款单号等）≥4 字符；
+    # 更短的值（如「1」）会命中过多消息，等于变相全量 pin，直接拒绝
+    _MIN_CONTENT_MATCH_LEN = 4
+    # 单个锚定值最多 pin 的消息条数（取最近的 K 条，防御异常值全量命中）
+    _MAX_MATCHES_PER_VALUE = 3
 
     def __init__(self) -> None:
         self._indices: dict[int, str] = {}
         self._message_ids: dict[str, str] = {}
+        self._content: list[tuple[str, str]] = []
 
     def mark_index(self, index: int, kind: str) -> "PinnedContext":
         self._indices[int(index)] = kind
@@ -126,10 +134,74 @@ class PinnedContext:
         self._message_ids[str(message_id)] = kind
         return self
 
+    def mark_content_match(self, value: str, kind: str) -> "PinnedContext":
+        """内容锚定：pin 所有包含该确定性值的消息（解析在 resolve 时进行）。
+
+        生产 active context 的消息不带稳定 id（memory/session.py 只按
+        content 构造），按下标标注对索引移位脆弱——按业务实体值锚定，
+        裁剪时现解析，零猜测、确定性。短值/空值直接忽略（不猜）。
+        """
+        value = str(value or "").strip()
+        if len(value) >= self._MIN_CONTENT_MATCH_LEN:
+            self._content.append((value, kind))
+        return self
+
     def resolve(self, messages: list) -> set[int]:
         pins = collect_pin_indices(
             messages, set(self._message_ids) or None)
         for idx in self._indices:
             if 0 <= idx < len(messages):
                 pins.add(idx)
+        if self._content:
+            pins.update(self._resolve_content(messages))
         return pins
+
+    def _resolve_content(self, messages: list) -> list[int]:
+        """内容锚定解析：逐值倒序扫描，最多 pin 最近 K 条命中（确定性）。"""
+        matched: list[int] = []
+        for value, _kind in self._content:
+            hits: list[int] = []
+            for i in range(len(messages) - 1, -1, -1):
+                if value in str(getattr(messages[i], "content", "") or ""):
+                    hits.append(i)
+                    if len(hits) >= self._MAX_MATCHES_PER_VALUE:
+                        break
+            matched.extend(hits)
+        return matched
+
+
+# ── 请求级业务 pin 注册口（2026-09-23 生产收口 B4）────────────────────
+# 域图入口（如 cs_state_loader）持有快照态，知道「当前请求正确执行必须
+# 保留什么」；LLM 调用点在专家/节点深处，逐层传 pins 不现实——用
+# ContextVar 作请求级通道：同请求内（含 supervisor Send 子任务，任务
+# 创建时继承上下文拷贝）可见，请求结束随上下文销毁 = 天然 supersede/
+# expiry（order A → order B 由下一轮状态重新注册替换，永不跨轮累积）。
+_REQUEST_PINS: "contextvars.ContextVar[tuple[tuple[str, str], ...] | None]" = \
+    contextvars.ContextVar("cb_request_pins", default=None)
+
+
+def register_request_pin(value: str, kind: str) -> None:
+    """登记当前请求的内容锚定 pin（幂等追加；短值按 PinnedContext 规则忽略）。"""
+    value = str(value or "").strip()
+    if len(value) < PinnedContext._MIN_CONTENT_MATCH_LEN:
+        return
+    current = _REQUEST_PINS.get() or ()
+    if (value, kind) in current:
+        return
+    _REQUEST_PINS.set(current + ((value, kind),))
+
+
+def request_pin_values() -> tuple[tuple[str, str], ...]:
+    """读取当前请求已登记的 (锚定值, kind) 列表（无则空元组）。"""
+    return _REQUEST_PINS.get() or ()
+
+
+def pins_from_request() -> "PinnedContext | None":
+    """把请求级注册转成 PinnedContext；未注册任何 pin 时返回 None（零开销）。"""
+    values = request_pin_values()
+    if not values:
+        return None
+    pins = PinnedContext()
+    for value, kind in values:
+        pins.mark_content_match(value, kind)
+    return pins

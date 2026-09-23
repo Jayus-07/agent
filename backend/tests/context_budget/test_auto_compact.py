@@ -333,7 +333,7 @@ class TestPrepareL5Trigger:
 
         calls: list[str] = []
 
-        def _fake(session_id, store):
+        def _fake(session_id, store, extra_facts=None):
             calls.append(session_id)
             assert isinstance(store, SyncMemorySummaryStore)
             return _outcome("[用户目标]\n测试摘要，包含早期对话要点")
@@ -391,7 +391,7 @@ class TestPrepareL5Trigger:
         used, ratio = self._ratio(msgs, m)
         monkeypatch.setattr(config, "CONTEXT_L5_TRIGGER_RATIO", ratio * 0.95)
 
-        def _boom(session_id, store):
+        def _boom(session_id, store, extra_facts=None):
             return None  # 摘要失败
 
         monkeypatch.setattr(ac_mod, "run_incremental_summary", _boom)

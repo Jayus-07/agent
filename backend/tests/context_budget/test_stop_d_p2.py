@@ -189,7 +189,7 @@ class TestPredictedUsageAndHysteresis:
         monkeypatch.setattr(ac_mod, "fold_rebuild", _recording_rebuild)
         monkeypatch.setattr(
             ac_mod, "run_incremental_summary",
-            lambda sid, store: ac_mod.SummaryOutcome(
+            lambda sid, store, extra_facts=None: ac_mod.SummaryOutcome(
                 summary="这是一段足够长的摘要内容，用于占位token",
                 through_id=99, token_count=20, delta_message_count=6,
                 protected_fact_count=0, patched_fact_count=0))

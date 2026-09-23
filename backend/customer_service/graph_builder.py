@@ -60,6 +60,8 @@ def cs_state_loader_node(state: dict[str, Any]) -> dict[str, Any]:
         snapshot.get("confirmation_state"),
     )
 
+    _register_request_pins(snapshot, state, user_id, session_id)
+
     return {
         "conversation_status": snapshot.get("conversation_status", "open"),
         "handling_mode": snapshot.get("handling_mode", "ai"),
@@ -73,6 +75,50 @@ def cs_state_loader_node(state: dict[str, Any]) -> dict[str, Any]:
         "current_expert": "",
     }
 
+
+
+def _register_request_pins(
+    snapshot: dict, state: dict[str, Any],
+    user_id: str, session_id: str,
+) -> None:
+    """Hook C（Context Budget 生产收口 B4）：登记请求级业务 pin。
+
+    「当前请求正确执行必须保留」的结构化状态——确认中的动作实体
+    （pending_action.target_id：订单/退款/售后单号）与 ContextResolver
+    的 last_order_id——注册为内容锚定 pin：L2 裁剪永不丢包含该实体的
+    消息；L5 摘要把同一批值作为 critical 业务事实保护（manager._run_l5
+    消费 request_pin_values）。生命周期 = 请求级 ContextVar：order A→B
+    由下一轮重新注册自然替换，不跨轮累积。失败只降级（无 pin），绝不
+    阻断 CS 主流程。
+    """
+    try:
+        from backend.context_budget.pin import (
+            PIN_CONFIRMATION,
+            PIN_ENTITY,
+            register_request_pin,
+        )
+
+        pending = snapshot.get("pending_action") or {}
+        target = str(pending.get("target_id") or "").strip()
+        if target:
+            register_request_pin(target, PIN_CONFIRMATION)
+
+        tenant_id = str(
+            (state.get("cs_context") or {}).get("tenant_id") or "default")
+        try:
+            from backend.customer_service.context_resolver import (
+                get_recent_business_context,
+            )
+            recent = get_recent_business_context(
+                tenant_id, user_id, session_id) or {}
+            last_order = str(recent.get("last_order_id") or "").strip()
+            if last_order and last_order != target:
+                register_request_pin(last_order, PIN_ENTITY)
+        except Exception:  # noqa: BLE001 — resolver 不可用时跳过该来源
+            logger.debug("[CS StateLoader] context resolver pin 读取失败",
+                         exc_info=True)
+    except Exception:  # noqa: BLE001 — pin 注册失败不影响 CS 主流程
+        logger.debug("[CS StateLoader] 请求级 pin 注册失败", exc_info=True)
 
 
 def build_cs_graph(checkpointer: Any = None) -> StateGraph:

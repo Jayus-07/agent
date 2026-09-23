@@ -48,20 +48,32 @@ def budget_rag_texts(
         (kept_texts, dropped_count)——kept 保持原输入相对顺序（引用
         标注序不被打乱），dropped 为被丢弃条数。
     """
-    if budget_tokens <= 0 or not texts:
-        return list(texts), 0
+    kept_idx, dropped = budget_rag_indices(
+        texts, budget_tokens, scores=scores, sources=sources)
+    return [texts[i] for i in kept_idx], dropped
 
-    # 无分数 → 兼容旧行为：原序即相关性序，从头保留
-    if not scores:
-        kept, dropped = trim_texts_to_budget(texts, budget_tokens)
-        return kept, dropped
 
-    if len(scores) != len(texts):
-        # 口径不一致时保守退回原序裁剪（不做错误假设）
-        kept, dropped = trim_texts_to_budget(texts, budget_tokens)
-        return kept, dropped
+def budget_rag_indices(
+    texts: list[str],
+    budget_tokens: int,
+    *,
+    scores: list[float] | None = None,
+    sources: list[str] | None = None,
+) -> tuple[list[int], int]:
+    """同 budget_rag_texts，但返回保留下标（保持原相对顺序）。
 
+    价值序选择出的 kept 未必是输入前缀，调用方若需把结果映射回带
+    metadata 的对象（如 Document），必须用下标而不是 docs[:len(kept)]。
+    """
     n = len(texts)
+    if budget_tokens <= 0 or not texts:
+        return list(range(n)), 0
+
+    # 无分数 / 口径不一致 → 兼容旧行为：原序即相关性序，从头保留（前缀）
+    if not scores or len(scores) != len(texts):
+        kept, dropped = trim_texts_to_budget(texts, budget_tokens)
+        return list(range(len(kept))), dropped
+
     tokens = [count_tokens(t) for t in texts]
     srcs = [
         (sources[i] if sources and i < len(sources) and sources[i]
@@ -88,8 +100,7 @@ def budget_rag_texts(
         best = min(order, key=lambda i: (-scores[i], i))
         chosen = {best}
 
-    kept = [texts[i] for i in sorted(chosen)]
-    return kept, n - len(kept)
+    return sorted(chosen), n - len(chosen)
 
 
 def summarize_rag_budget(

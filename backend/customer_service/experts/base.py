@@ -82,12 +82,17 @@ def run_expert_safely(
         # 超时孤儿任务会长期占用共享池 worker，后续调用在队列里排队，
         # future.result(timeout) 会在任务开跑前误判超时（2026-09-17 全量回归实证）。
         import concurrent.futures
+        import contextvars
 
         pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix=f"cs-expert-{expert_name}",
         )
+        # ThreadPoolExecutor.submit 不携带 contextvars（新线程是空上下文），
+        # 请求级状态（如 Context Budget 的业务 pin）会在线程内不可见——
+        # 显式拷贝当前上下文执行（2026-09-23 生产收口 B4）。
+        ctx = contextvars.copy_context()
         try:
-            future = pool.submit(fn, state)
+            future = pool.submit(ctx.run, fn, state)
             result = future.result(timeout=timeout_s)
         except concurrent.futures.TimeoutError:
             duration_ms = int((time.monotonic() - t0) * 1000)

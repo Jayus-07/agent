@@ -116,6 +116,7 @@ class ContextBudgetManager:
         rag_scores: list[float] | None = None,
         rag_sources: list[str] | None = None,
         predicted_extra_tokens: int = 0,
+        pins: Any | None = None,
     ) -> PreparedContext:
         """LLM 调用前的统一检查入口（第一版流程，规格 §九）：
 
@@ -128,6 +129,8 @@ class ContextBudgetManager:
         hard trim 走 RAGBudgeter（价值优先 + source 多样性），否则原序裁剪。
         predicted_extra_tokens：预测的后续注入（P2-2，如下一步
         previous_outputs），只参与 L4/L5 触发判定，不参与裁剪目标。
+        pins：PinnedContext（生产收口 B4）——业务级显式 pin（确认态/
+        业务实体内容锚定），与自动 pin 并集参与 L2 裁剪豁免。
 
         仍超 hard budget 时做确定性裁剪（优先级：旧 history → RAG 证据 →
         旧 previous_outputs），SystemMessage 与语义 pin 消息始终保留。
@@ -206,7 +209,7 @@ class ContextBudgetManager:
         history_cap = self.history_budget(
             reserved_tokens=po_tokens + rag_tokens)
         if history_cap > 0:
-            msgs, dropped = _trim_semantic(msgs, history_cap)
+            msgs, dropped = _trim_semantic(msgs, history_cap, pins=pins)
             if dropped:
                 _record_trim(dropped, msgs, list(messages or []))
                 msg_tokens = sum(_count_message(m) for m in msgs)
@@ -267,7 +270,7 @@ class ContextBudgetManager:
         # 1) 收紧 history：预算 = 剩余空间（语义 pin 消息全保留）
         remaining = budget - po_tokens - rag_tokens
         if remaining > 0 and msgs:
-            msgs, dropped = _trim_semantic(msgs, remaining)
+            msgs, dropped = _trim_semantic(msgs, remaining, pins=pins)
             if dropped:
                 _record_trim(dropped, msgs, list(messages or []))
 
@@ -378,10 +381,19 @@ class ContextBudgetManager:
 
         # 事件循环上下文（async 节点内调用）：同步 LLM 摘要不能阻塞 loop，
         # 降级为 fire-and-forget——本轮继续用裁剪结果，摘要落库后下一轮生效。
+        # extra_facts（生产收口 B4）：请求级业务 pin 值（确认态/实体）作为
+        # critical 事实进 ProtectedFactRegistry，摘要后确定性校验保真。
+        try:
+            from backend.context_budget.pin import request_pin_values
+            extra_facts = [(kind, value)
+                           for value, kind in request_pin_values()]
+        except Exception:
+            extra_facts = []
         try:
             loop = asyncio.get_running_loop()
             import backend.context_budget.auto_compact as _ac
-            _t = loop.create_task(_ac.run_auto_compact_async(session_id))
+            _t = loop.create_task(_ac.run_auto_compact_async(
+                session_id, extra_facts=extra_facts))
             _L5_TASKS.add(_t)
             _t.add_done_callback(_L5_TASKS.discard)
             logger.info(
@@ -394,7 +406,8 @@ class ContextBudgetManager:
 
         started = _time.perf_counter()
         outcome = run_incremental_summary(
-            session_id, SyncMemorySummaryStore(session_id))
+            session_id, SyncMemorySummaryStore(session_id),
+            extra_facts=extra_facts)
         record_compaction_latency(
             level="L5", seconds=_time.perf_counter() - started)
 
@@ -506,20 +519,27 @@ class ContextBudgetManager:
 
 # ── 模块级辅助 ──────────────────────────────────────────────────
 
-def _trim_semantic(msgs: list, cap: int) -> tuple[list, int]:
+def _trim_semantic(msgs: list, cap: int,
+                   pins: Any | None = None) -> tuple[list, int]:
     """L2 裁剪（2026-09-23 P1-2 Semantic Pin 版）。
 
     不再依赖「最后一条 = 当前问题」的位置假设：pin 由
     context_budget.pin.collect_pin_indices 语义判定——SystemMessage、
     最后一条 HumanMessage（当前问题）、活跃 tool call 对永不丢弃；
     assistant(tool_calls)+ToolMessage 整组原子保留/丢弃。
+    pins（生产收口 B4）：PinnedContext 显式业务 pin（内容锚定确认态/
+    实体），与自动 pin 并集豁免。
     """
     if not msgs:
         return msgs, 0
-    from backend.context_budget.pin import collect_pin_indices
+    from backend.context_budget.pin import collect_pin_indices, pins_from_request
     from backend.memory.token_budget import trim_messages_to_budget
-    return trim_messages_to_budget(
-        msgs, cap, pin_indices=collect_pin_indices(msgs))
+    if pins is None:
+        pins = pins_from_request()
+    pin_indices = collect_pin_indices(msgs)
+    if pins is not None:
+        pin_indices = pin_indices | pins.resolve(msgs)
+    return trim_messages_to_budget(msgs, cap, pin_indices=pin_indices)
 
 
 def _serialize_po(value: Any) -> str:
