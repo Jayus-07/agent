@@ -26,6 +26,9 @@ from backend.config.conversation_context import (
 )
 from backend.shared.logger import logger
 
+# 漏斗候选跨轮保留上限（2026-09-23 E1）：控制上下文体积，Top-N 即止
+FUNNEL_CANDIDATES_MAX = 5
+
 # 可跨轮携带的结构化槽位（P2.1 推荐字段子集；日期沿用 start_date+days）
 CONTEXT_SLOT_FIELDS = (
     "destination",
@@ -66,6 +69,15 @@ class ConversationContext:
     # ── Evidence 复用（P2.10）：只存 ID，不存生成内容 ──
     last_verified_source_ids: list[str] = field(default_factory=list)
     source_context_fingerprint: str = ""
+
+    # ── Selection Funnel 候选（2026-09-23 E1）：跨聊天轮的漏斗候选载体 ──
+    # 主图 thread_id 每轮唯一（checkpoint 只服务单轮恢复/interrupt），
+    # OrchestratorState.funnel_context 不是跨轮载体；漏斗 Top-N 改由
+    # ConversationContext 承载（主键三元组 + TTL + 新 run 覆盖）。
+    # 只存轻量结构化摘要（Top FUNNEL_CANDIDATES_MAX 条），不存整份 report。
+    funnel_candidates: list[dict] = field(default_factory=list)
+    funnel_run_id: str = ""
+    funnel_candidates_at: float = 0.0
 
     # ── 路由上下文（2026-09-22 路由入口重构：Context Assembler 数据源）──
     # Router（ContinuationResolver / 粗分类）可读的跨轮任务状态。
@@ -114,6 +126,38 @@ class ConversationContext:
             self.last_action = action
         if pending_question is not None:
             self.pending_question = pending_question
+        self.updated_at = time.time()
+
+    # ── Selection Funnel 候选（2026-09-23 E1）──
+
+    def set_funnel_candidates(self, candidates: list[dict], run_id: str) -> None:
+        """记录一次成功漏斗运行的 Top-N 候选（新 run 覆盖旧候选）。
+
+        只保留轻量结构化摘要（cap=FUNNEL_CANDIDATES_MAX），并为每条补充
+        rank/funnel_run_id/generated_at 便于下一轮 selection_decision 归因。
+        """
+        kept = []
+        for i, cand in enumerate((candidates or [])[:FUNNEL_CANDIDATES_MAX]):
+            if not isinstance(cand, dict):
+                continue
+            entry = dict(cand)
+            entry.setdefault("rank", i + 1)
+            entry["funnel_run_id"] = run_id
+            entry["generated_at"] = time.time()
+            kept.append(entry)
+        self.funnel_candidates = kept
+        self.funnel_run_id = run_id if kept else ""
+        if not kept:
+            self.funnel_candidates_at = 0.0
+        else:
+            self.funnel_candidates_at = time.time()
+        self.updated_at = time.time()
+
+    def clear_funnel_candidates(self) -> None:
+        """显式清除候选（会话 reset / 主题切换时由调用方触发）。"""
+        self.funnel_candidates = []
+        self.funnel_run_id = ""
+        self.funnel_candidates_at = 0.0
         self.updated_at = time.time()
 
     # ── P2.5 显式切换：overwrite 清理 ──
@@ -301,3 +345,53 @@ def sync_travel_brief_to_context(
         )
     except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
         logger.warning("[ConversationContext] travel brief 同步失败（软降级）: %s", exc)
+
+
+def sync_funnel_candidates_to_context(
+    tenant_id: str,
+    user_id: str,
+    conversation_id: str,
+    top: list[dict],
+    run_id: str,
+) -> None:
+    """成功漏斗运行的 Top-N 候选 → ConversationContext（2026-09-23 E1）。
+
+    写入时机契约：只允许在候选最终确定（漏斗成功产出）后调用——pool/
+    screen/verify 中途状态不得写入，否则失败的漏斗 run 会污染下一轮。
+    新 run 覆盖旧候选（覆盖即失效）。软失败，绝不影响主链。
+    """
+    try:
+        if not conversation_id or not top:
+            return
+        store = get_conversation_context_store()
+        ctx = store.get(tenant_id, user_id, conversation_id)
+        ctx.set_funnel_candidates(top, run_id)
+        logger.debug(
+            "[ConversationContext] funnel 候选同步: run=%s n=%d conv=%s",
+            run_id, len(ctx.funnel_candidates), conversation_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
+        logger.warning("[ConversationContext] funnel 候选同步失败（软降级）: %s", exc)
+
+
+def read_funnel_candidates_from_context(
+    tenant_id: str,
+    user_id: str,
+    conversation_id: str,
+) -> list[dict]:
+    """读取上一轮漏斗候选（只读 peek；未命中/过期返回空 list）。
+
+    读取优先级契约（E1）：显式请求候选 > 当前 graph state funnel_context >
+    本函数（ConversationContext）> 无候选 → need_info。
+    """
+    try:
+        if not conversation_id:
+            return []
+        ctx = get_conversation_context_store().peek(
+            tenant_id or "", user_id or "", conversation_id)
+        if ctx is None:
+            return []
+        return list(ctx.funnel_candidates or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ConversationContext] funnel 候选读取失败（软降级）: %s", exc)
+        return []

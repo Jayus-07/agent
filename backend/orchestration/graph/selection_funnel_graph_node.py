@@ -63,6 +63,23 @@ def selection_funnel_graph_node(state: dict) -> dict:
     duration_ms = round((time.perf_counter() - t0) * 1000, 1)
     _stamp_execution_tags(final_state, result, run_id=run_id,
                           duration_ms=duration_ms)
+
+    # E1（2026-09-23）：成功的漏斗运行 → 候选写入 ConversationContext
+    # （跨聊天轮载体，主图 thread_id 每轮唯一故 state 不可承载跨轮）。
+    # 只在候选最终确定后写：except 分支/淘空不写，失败 run 不污染下轮。
+    result_ctx = result.get("funnel_context") or {}
+    from backend.orchestration.context.conversation_context import (
+        sync_funnel_candidates_to_context,
+    )
+    sync_funnel_candidates_to_context(
+        tenant_id=state.get("tenant_id", ""),
+        user_id=state.get("user_id", ""),
+        conversation_id=result_ctx.get("conversation_id")
+        or funnel_context.get("conversation_id") or session_id,
+        top=result_ctx.get("top") or [],
+        run_id=run_id,
+    )
+
     return {
         "final_answer": result.get("final_answer") or _FALLBACK_ANSWER,
         "funnel_context": result.get("funnel_context") or {},

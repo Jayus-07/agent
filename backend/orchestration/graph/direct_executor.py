@@ -333,7 +333,20 @@ def _build_workflow_inputs(wf_name: str, state: dict) -> dict:
         "session_id": state.get("session_id", ""),
     }
     if wf_name == "selection_decision":
+        # E1（2026-09-23）读取优先级：显式请求候选 > 当前 graph state
+        # funnel_context > ConversationContext（跨聊天轮载体，主图
+        # thread_id 每轮唯一，state 里的漏斗产出活不过本轮）。显式用户
+        # 输入永远高于历史缓存。
         top = (state.get("funnel_context") or {}).get("top") or []
+        if not top:
+            from backend.orchestration.context.conversation_context import (
+                read_funnel_candidates_from_context,
+            )
+            top = read_funnel_candidates_from_context(
+                tenant_id=state.get("tenant_id", ""),
+                user_id=state.get("user_id", ""),
+                conversation_id=state.get("session_id", ""),
+            )
         if top:
             inputs["funnel_candidates"] = top
     return inputs
