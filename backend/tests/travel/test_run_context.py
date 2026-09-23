@@ -26,8 +26,10 @@ import pytest
 import backend.config.travel as T
 import backend.travel.graph_builder as gb
 from backend.orchestration.context.conversation_context import (
-    get_conversation_context_store,
     sync_travel_run_to_context,
+)
+from backend.orchestration.context.context_repository import (
+    get_conversation_context_repository,
 )
 from backend.orchestration.context.routing_context import (
     assemble_routing_context,
@@ -91,7 +93,7 @@ def _ask(graph, message: str, tid: str, *, user="u-f2",
 
 
 def _ctx(tid: str, tenant="t-f2", user="u-f2"):
-    return get_conversation_context_store().get(tenant, user, tid)
+    return get_conversation_context_repository().get(tenant, user, tid)
 
 
 def _routing(tid: str, tenant="t-f2", user="u-f2") -> dict:

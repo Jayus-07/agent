@@ -15,7 +15,10 @@ import pytest
 
 from backend.orchestration.context.conversation_context import (
     FUNNEL_CANDIDATES_MAX,
-    get_conversation_context_store,
+)
+from backend.orchestration.context.context_repository import (
+    ContextMutation,
+    MutationType,
 )
 from backend.orchestration.graph import selection_funnel_graph_node as node_mod
 from backend.orchestration.graph.direct_executor import _build_workflow_inputs
@@ -26,15 +29,10 @@ from backend.orchestration.graph.selection_funnel_graph_node import (
 _SESSION = "conv-e1"
 
 
-def _setup_store():
-    get_conversation_context_store()._data.clear()
-    yield
-    get_conversation_context_store()._data.clear()
-
-
 @pytest.fixture(autouse=True)
-def clean_store():
-    yield from _setup_store()
+def clean_store(_memory_context_repo):
+    """隔离：每个用例独立 Memory repository（conftest autouse 提供）。"""
+    yield _memory_context_repo
 
 
 def _state(session_id=_SESSION, **extra):
@@ -113,12 +111,15 @@ def test_failed_funnel_run_does_not_pollute(monkeypatch):
     assert "funnel_candidates" not in inputs
 
 
-def test_explicit_candidates_beat_conversation_cache(monkeypatch):
+def test_explicit_candidates_beat_conversation_cache(monkeypatch,
+                                                     _memory_context_repo):
     """显式请求候选 > ConversationContext 缓存。"""
-    set_store = get_conversation_context_store()
-    ctx = set_store.get("t-1", "u-1", _SESSION)
-    ctx.set_funnel_candidates([{"title": "缓存的旧候选", "url": "https://x/old"}],
-                              "sel-old")
+    _memory_context_repo.mutate(
+        "t-1", "u-1", _SESSION,
+        ContextMutation(MutationType.SET_FUNNEL_CANDIDATES,
+                        {"candidates": [{"title": "缓存的旧候选",
+                                         "url": "https://x/old"}],
+                         "run_id": "sel-old"}))
 
     fresh = _state(question="决策",
                    funnel_context={"top": [{"title": "本轮显式候选",

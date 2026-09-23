@@ -78,10 +78,14 @@ def _resolve_followup_for_request(
         from langchain_core.messages import HumanMessage
 
         from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
+            ConversationContext,
+        )
+        from backend.orchestration.context.context_repository import (
+            ContextMutation,
+            MutationType,
+            get_conversation_context_repository,
         )
         from backend.orchestration.context.follow_up_resolver import (
-            apply_resolution_to_context,
             resolve_followup,
         )
 
@@ -91,8 +95,12 @@ def _resolve_followup_for_request(
                 last_user_turn = (msg.content or "").strip()
                 break
 
-        store = get_conversation_context_store()
-        ctx = store.get(tenant_id, user_id, session_id)
+        repo = get_conversation_context_repository()
+        ctx = repo.get(tenant_id, user_id, session_id)
+        if ctx is None:
+            ctx = ConversationContext(tenant_id=tenant_id or "",
+                                      user_id=user_id or "",
+                                      conversation_id=session_id or "")
         resolution = resolve_followup(raw_question, ctx, last_user_turn)
 
         # P2.11 Trace：span attributes + trace tags（只记低敏字段）
@@ -107,14 +115,25 @@ def _resolve_followup_for_request(
         except Exception:
             pass
 
+        # 状态回写走原子 mutation（STOP G：与 apply_resolution_to_context
+        # 语义对齐——overwrite 优先，否则 resolved 时记 topic）
+        write_payload: dict = {}
+        if resolution.get("overwrite_destination"):
+            write_payload["overwrite_destination"] = resolution[
+                "overwrite_destination"]
+        elif resolution.get("follow_up_detected") and resolution.get("resolved"):
+            write_payload = {"resolved": True,
+                             "topic": (resolution.get("standalone_query") or "")[:40]}
+        if write_payload:
+            repo.mutate(tenant_id, user_id, session_id, ContextMutation(
+                MutationType.APPLY_FOLLOWUP_RESOLUTION, write_payload))
+
         if resolution["need_clarification"]:
-            apply_resolution_to_context(ctx, resolution)
             logger.info(
                 "[Runner] follow-up 需要澄清: raw=%s used=%s",
                 resolution["raw_query"][:40], resolution["used_context"])
             return None
 
-        apply_resolution_to_context(ctx, resolution)
         standalone = resolution["standalone_query"] or raw_question
         if standalone != raw_question:
             logger.info(

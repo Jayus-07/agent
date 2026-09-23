@@ -16,6 +16,22 @@ CONVERSATION_CONTEXT_MAX_ENTRIES = int(
     os.getenv("CONVERSATION_CONTEXT_MAX_ENTRIES", "5000")
 )
 
+# ── Distributed backend（STOP G1，2026-09-24）──
+# redis = shared hot state（多 worker 一致）；memory = 进程内（单测/本地）。
+# 默认 redis：生效前置 = REDIS_ENABLED=true 且可连；不可用走 REQUIRE_SHARED
+# 策略（见下），不出现不可观测的静默切换。
+CONVERSATION_CONTEXT_BACKEND = os.getenv(
+    "CONVERSATION_CONTEXT_BACKEND", "redis"
+).strip().lower()
+
+# true = 生产 fail-closed：Redis 不可用时 startup fail-fast、runtime 拒绝
+# 读写（确定性 miss / 不落库），绝不悄悄退回进程内 memory 造成跨 worker
+# 假一致；false = 开发兜底：降级进程内 memory（warning + degraded 可观测）。
+CONVERSATION_CONTEXT_REQUIRE_SHARED = (
+    os.getenv("CONVERSATION_CONTEXT_REQUIRE_SHARED", "false").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
 # 规则不可靠时是否启用轻量 LLM rewrite（P2.6）。
 # 默认关闭：规则层已确定性覆盖高频 follow-up；开启后仅在
 # follow_up detected 且规则无法可靠解决时调用一次 LLM（max_tokens≈200）。

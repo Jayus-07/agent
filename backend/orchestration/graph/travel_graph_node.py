@@ -92,11 +92,11 @@ def _detect_resume_mode(
 
     # thread 无 checkpoint：会话摘要可重建则 reconstruct，否则首轮 fresh
     try:
-        from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
+        from backend.orchestration.context.context_repository import (
+            get_conversation_context_repository,
         )
 
-        ctx = get_conversation_context_store().peek(
+        ctx = get_conversation_context_repository().peek(
             state.get("tenant_id") or "", state.get("user_id") or "",
             conversation_id)
         if ctx is None or not (ctx.destination or ctx.days
@@ -105,7 +105,7 @@ def _detect_resume_mode(
         reconstruct_brief = {
             key: getattr(ctx, key)
             for key in ("destination", "origin", "start_date", "days",
-                        "party_size", "budget_cny", "preferences",
+                        "party_size", "budget_cny", "lodging", "preferences",
                         "must_go", "avoid")
             if getattr(ctx, key)
         }

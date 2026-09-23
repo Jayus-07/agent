@@ -106,13 +106,6 @@ class TestResolveContinuation:
 # =====================================================
 
 class TestRoutingContextAssembler:
-    def _store(self):
-        from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
-        )
-
-        return get_conversation_context_store()
-
     def test_empty_context_when_no_session(self):
         from backend.orchestration.context.routing_context import (
             assemble_routing_context,
@@ -122,14 +115,14 @@ class TestRoutingContextAssembler:
         assert ctx["active_domain"] == ""
         assert ctx["brief_summary"] == {}
 
-    def test_mark_and_assemble_roundtrip(self):
+    def test_mark_and_assemble_roundtrip(self, _memory_context_repo):
         from backend.orchestration.context.routing_context import (
             assemble_routing_context,
             mark_domain_turn,
         )
 
         key = ("t1", "u1", "cont-test-1")
-        self._store().reset(*key)
+        _memory_context_repo.delete(*key)
         mark_domain_turn(*key, domain="travel", intent="travel",
                          action="travel", pending_question="玩几天？")
         ctx = assemble_routing_context(*key)
@@ -137,23 +130,19 @@ class TestRoutingContextAssembler:
         assert ctx["last_intent"] == "travel"
         assert ctx["pending_question"] == "玩几天？"
         assert "destination" in ctx["brief_summary"]
-        self._store().reset(*key)
+        _memory_context_repo.delete(*key)
 
-    def test_pending_question_kept_when_none(self):
-        from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
-        )
+    def test_pending_question_kept_when_none(self, _memory_context_repo):
         from backend.orchestration.context.routing_context import mark_domain_turn
 
         key = ("t1", "u1", "cont-test-2")
-        store = self._store()
-        store.reset(*key)
+        _memory_context_repo.delete(*key)
         mark_domain_turn(*key, domain="travel", pending_question="玩几天？")
         # 后续正常路由（无新追问）不清空旧待答问题
         mark_domain_turn(*key, domain="travel", intent="travel")
-        snap = store.get(*key).snapshot()
+        snap = _memory_context_repo.get(*key).snapshot()
         assert snap["pending_question"] == "玩几天？"
-        store.reset(*key)
+        _memory_context_repo.delete(*key)
 
 
 # =====================================================

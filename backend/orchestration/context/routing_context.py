@@ -34,6 +34,10 @@ def assemble_routing_context(
 ) -> dict:
     """组装 Router 消费的会话上下文（Guard 之后、Router 之前调用一次）。
 
+    STOP G：数据源切 ConversationContextRepository（Redis shared），
+    读失败/未命中返回空上下文（active_domain="" → ContinuationResolver
+    不介入），与原进程内 peek 语义一致。
+
     Returns:
         {
             "active_domain": str,   # 上一任务域（空 = 无活跃任务）
@@ -42,7 +46,6 @@ def assemble_routing_context(
             "brief_summary": dict,   # 跨域摘要槽位（travel brief 为主）
             "pending_question": str, # 上一轮留下的待答问题
         }
-        任何异常返回空上下文（active_domain="" → ContinuationResolver 不介入）。
     """
     empty = {
         "active_domain": "", "last_intent": "", "last_action": "",
@@ -51,11 +54,12 @@ def assemble_routing_context(
     if not session_id:
         return empty
     try:
-        from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
+        from backend.orchestration.context.context_repository import (
+            get_conversation_context_repository,
         )
 
-        ctx = get_conversation_context_store().peek(tenant_id or "", user_id or "", session_id)
+        ctx = get_conversation_context_repository().peek(
+            tenant_id or "", user_id or "", session_id)
         if ctx is None:
             return empty
         snap = ctx.snapshot()
@@ -86,19 +90,23 @@ def mark_domain_turn(
     """回写一轮路由结果（软失败，fire-and-forget）。
 
     调用点：router_node 的 prefilter 命中 / 粗分类拍板 / clarify 路径。
+    STOP G：走 repository 原子 mutation（MARK_TURN），跨 worker 一致。
     """
     if not session_id or not domain:
         return
     try:
-        from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
+        from backend.orchestration.context.context_repository import (
+            ContextMutation,
+            MutationType,
+            get_conversation_context_repository,
         )
 
-        ctx = get_conversation_context_store().get(tenant_id or "", user_id or "", session_id)
-        ctx.mark_turn(
-            domain=domain, intent=intent, action=action,
-            pending_question=pending_question,
-        )
+        get_conversation_context_repository().mutate(
+            tenant_id or "", user_id or "", session_id,
+            ContextMutation(MutationType.MARK_TURN, {
+                "domain": domain, "intent": intent, "action": action,
+                "pending_question": pending_question,
+            }))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[RoutingContext] 回写失败（软降级）: %s", exc)
 
@@ -110,11 +118,15 @@ def set_pending_question(
     if not session_id or not question:
         return
     try:
-        from backend.orchestration.context.conversation_context import (
-            get_conversation_context_store,
+        from backend.orchestration.context.context_repository import (
+            ContextMutation,
+            MutationType,
+            get_conversation_context_repository,
         )
 
-        ctx = get_conversation_context_store().get(tenant_id or "", user_id or "", session_id)
-        ctx.mark_turn(domain="", pending_question=question[:120])
+        get_conversation_context_repository().mutate(
+            tenant_id or "", user_id or "", session_id,
+            ContextMutation(MutationType.MARK_TURN,
+                            {"domain": "", "pending_question": question[:120]}))
     except Exception as exc:  # noqa: BLE001
         logger.debug("[RoutingContext] 待答问题记录失败（软降级）: %s", exc)

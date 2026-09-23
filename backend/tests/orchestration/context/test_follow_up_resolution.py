@@ -169,25 +169,27 @@ def test_deterministic_resolution(store):
     assert a["used_context"] == b["used_context"]
 
 
-def test_travel_brief_sync_updates_context_and_clears_evidence_on_destination_change():
+def test_travel_brief_sync_updates_context_and_clears_evidence_on_destination_change(
+        _memory_context_repo):
     """sync_travel_brief_to_context：槽位单向同步；目的地变化清旧证据。
 
-    sync 写入的是进程级单例 store，用唯一 conv id 隔离并在结束后清理。
+    sync 走 repository 原子 mutation（STOP G）；evidence 复用经 save 提交。
     """
     conv_id = "conv-sync-test-only"
-    store = get_conversation_context_store()
+    repo = _memory_context_repo
     try:
-        store.reset("t1", "u1", conv_id)
+        repo.delete("t1", "u1", conv_id)
         sync_travel_brief_to_context("t1", "u1", conv_id, {"destination": "云南"})
-        ctx = store.get("t1", "u1", conv_id)
+        ctx = repo.get("t1", "u1", conv_id)
         assert ctx.destination == "云南"
         ctx.touch_evidence(["s1"])
+        repo.save(ctx, expected_version=ctx.version)
 
         sync_travel_brief_to_context(
             "t1", "u1", conv_id,
             {"destination": "成都", "cities": ["宽窄巷子"], "days": 4},
         )
-        ctx = store.get("t1", "u1", conv_id)
+        ctx = repo.get("t1", "u1", conv_id)
         assert ctx.destination == "成都"
         assert ctx.cities == ["宽窄巷子"]
         assert ctx.days == 4
@@ -195,7 +197,7 @@ def test_travel_brief_sync_updates_context_and_clears_evidence_on_destination_ch
         assert ctx.last_verified_source_ids == []
         assert ctx.evidence_compatible() is False
     finally:
-        store.reset("t1", "u1", conv_id)
+        repo.delete("t1", "u1", conv_id)
 
 
 def test_topic_change_invalidates_evidence():

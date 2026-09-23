@@ -11,6 +11,9 @@
   **不**新增 date_range 持久化字段（end_date 运行时计算），避免双写冲突。
 - 第一版为进程内存储（TTL + LRU 上限）；不引入新持久化。
 - ``last_verified_source_ids`` 只存证据 ID，不存模型生成 answer（P2.10）。
+- STOP G（2026-09-24）起生产写路径迁移到 ConversationContextRepository
+  （context_repository.py，Redis shared / Memory fallback）；本模块保留
+  dataclass 契约、序列化与进程内 Store（存量测试与降级路径共用）。
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ import hashlib
 import json
 import threading
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 from backend.config.conversation_context import (
     CONVERSATION_CONTEXT_MAX_ENTRIES,
@@ -26,10 +29,21 @@ from backend.config.conversation_context import (
 )
 from backend.shared.logger import logger
 
+
+def _copy_value(value):
+    """list/dict 深拷贝，标量原样（copy() 与 from_dict 共用）。"""
+    if isinstance(value, list):
+        return [ _copy_value(v) for v in value ]
+    if isinstance(value, dict):
+        return {k: _copy_value(v) for k, v in value.items()}
+    return value
+
 # 漏斗候选跨轮保留上限（2026-09-23 E1）：控制上下文体积，Top-N 即止
 FUNNEL_CANDIDATES_MAX = 5
 
-# 可跨轮携带的结构化槽位（P2.1 推荐字段子集；日期沿用 start_date+days）
+# 可跨轮携带的结构化槽位（P2.1 推荐字段子集；日期沿用 start_date+days）。
+# lodging（STOP G0）：brief 既有槽位（models/brief.py），pending 补槽白名单
+# 已含 lodging 但摘要层此前不承载——T7 并发 budget+lodging 需要它跨轮。
 CONTEXT_SLOT_FIELDS = (
     "destination",
     "cities",
@@ -38,11 +52,15 @@ CONTEXT_SLOT_FIELDS = (
     "days",
     "party_size",
     "budget_cny",
+    "lodging",
     "preferences",
     "must_go",
     "avoid",
     "current_topic",
 )
+
+# Redis value schema 版本（STOP G1）：演进时只增不改，from_dict 按版本迁移
+CONTEXT_SCHEMA_VERSION = 1
 
 
 def make_travel_run_id(conversation_id: str, seq: int) -> str:
@@ -51,8 +69,13 @@ def make_travel_run_id(conversation_id: str, seq: int) -> str:
     会话哈希保证不同 conversation 的 run_id 不碰撞；seq 保证同一会话内
     NEW_RUN 后新旧 run_id 可区分（旧 run 只留摘要，不参与归因）。
     """
-    digest = hashlib.sha1((conversation_id or "").encode("utf-8")).hexdigest()[:8]
-    return f"trv_{digest}_{int(seq or 0):03d}"
+    return f"trv_{conversation_hash8(conversation_id)}_{int(seq or 0):03d}"
+
+
+def conversation_hash8(conversation_id: str) -> str:
+    """会话哈希8（run_id 前缀）。STOP G 起 run 序号由仓库服务端递增，
+    本函数只提供 hash 段。"""
+    return hashlib.sha1((conversation_id or "").encode("utf-8")).hexdigest()[:8]
 
 
 @dataclass
@@ -71,6 +94,7 @@ class ConversationContext:
     days: int | None = None
     party_size: int | None = None
     budget_cny: float | None = None
+    lodging: str = ""            # 住宿区域偏好（STOP G0 纳入摘要槽位）
     preferences: list[str] = field(default_factory=list)
     must_go: list[str] = field(default_factory=list)
     avoid: list[str] = field(default_factory=list)
@@ -106,6 +130,11 @@ class ConversationContext:
     travel_run_id: str = ""      # trv_{hash8}_{seq:03d}
     travel_stage: str = ""       # slot / planned / completed / cancelled
     travel_pending: dict | None = None   # TravelPendingQuestion 快照（见下）
+
+    # ── 乐观锁版本（STOP G2）──
+    # 每次成功 mutation +1；Redis/CAS 写路径的版本基准。
+    # 1 = 首次创建即计入版本。
+    version: int = 1
 
     updated_at: float = field(default_factory=time.time)
 
@@ -282,6 +311,7 @@ class ConversationContext:
             "days": self.days,
             "party_size": self.party_size,
             "budget_cny": self.budget_cny,
+            "lodging": self.lodging,
             "preferences": list(self.preferences),
             "must_go": list(self.must_go),
             "avoid": list(self.avoid),
@@ -296,6 +326,29 @@ class ConversationContext:
             "travel_stage": self.travel_stage,
             "travel_pending": dict(self.travel_pending) if self.travel_pending else None,
         }
+
+    # ── 序列化（STOP G1：Redis JSON value 契约，禁 pickle）──
+
+    def copy(self) -> "ConversationContext":
+        """深拷贝快照：repository get/peek 返回副本，改副本不落库。"""
+        return ConversationContext(
+            **{f.name: _copy_value(getattr(self, f.name))
+               for f in fields(self)}
+        )
+
+    def to_dict(self) -> dict:
+        """全量字段 → JSON 兼容 dict（含 schema_version）。"""
+        data = {f.name: getattr(self, f.name) for f in fields(self)}
+        data["schema_version"] = CONTEXT_SCHEMA_VERSION
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ConversationContext":
+        """dict → 实例。只认 dataclass 已知字段（旧 schema 缺字段走默认值，
+        未来新增字段按 schema_version 演进钩子在此迁移）。"""
+        known = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in (data or {}).items() if k in known}
+        return cls(**filtered)
 
 
 class ConversationContextStore:
@@ -384,7 +437,14 @@ def sync_travel_brief_to_context(
 
     TravelBrief 是 Travel 域权威状态；本函数只把跨轮 follow-up 需要的
     槽位**单向**同步到摘要上下文，绝不反向覆盖。同步软失败（不抛）。
+    STOP G：写路径走 repository 原子 mutation（MERGE_TRAVEL_SUMMARY，
+    目的地变化时服务端一并失效 evidence）。
     """
+    from backend.orchestration.context.context_repository import (
+        ContextMutation,
+        MutationType,
+        get_conversation_context_repository,
+    )
     try:
         if not conversation_id:
             return
@@ -395,16 +455,14 @@ def sync_travel_brief_to_context(
         }
         if not slots:
             return
-        store = get_conversation_context_store()
-        ctx = store.get(tenant_id, user_id, conversation_id)
-        old_dest = ctx.destination
-        ctx.merge_slots(slots)
-        # 目的地变化 = 上下文不兼容，旧 evidence 失效（P2.10）
-        if old_dest and slots.get("destination") and slots["destination"] != old_dest:
-            ctx.clear_evidence()
+        get_conversation_context_repository().mutate(
+            tenant_id or "", user_id or "", conversation_id,
+            ContextMutation(MutationType.MERGE_TRAVEL_SUMMARY,
+                            {"slots": slots}),
+        )
         logger.debug(
-            "[ConversationContext] travel brief 同步: dest=%s cities=%s conv=%s",
-            ctx.destination, ctx.cities, conversation_id,
+            "[ConversationContext] travel brief 同步: dest=%s conv=%s",
+            slots.get("destination") or "", conversation_id,
         )
     except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
         logger.warning("[ConversationContext] travel brief 同步失败（软降级）: %s", exc)
@@ -421,62 +479,74 @@ def sync_travel_run_to_context(
 ) -> str | None:
     """旅游域图执行后的 run/pending/stage 结构化同步（STOP F1/F2）。
 
-    与 sync_travel_brief_to_context 的分工：那个只同步槽位摘要；本函数
-    维护 TravelRun 身份（首次/NEW_RUN 时 seq+1）、阶段标记与结构化
-    pending（TravelPendingQuestion 快照）——后者是下一轮路由层
-    TravelPendingResolver 的判定输入（G3/G4 的数据基础）。软失败。
-
-    Returns:
-        本次同步后的 run_id（异常/不可同步时 None）。
+    STOP G 重构：全部写路径走 repository 原子 mutation——run 身份
+    （START_TRAVEL_RUN，seq 服务端递增）、pending 写入带 run CAS、
+    pending 清除带 question_id CAS（stale 不得误清新 pending）。
+    软失败。Returns: 本次同步后的 run_id（异常/不可同步时 None）。
     """
+    from backend.orchestration.context.context_repository import (
+        ContextMutation,
+        MutationType,
+        get_conversation_context_repository,
+    )
     try:
         if not conversation_id:
             return None
-        store = get_conversation_context_store()
-        ctx = store.get(tenant_id or "", user_id or "", conversation_id)
-        # 摘要槽位先同步（begin_travel_run 不依赖槽位，但 stage 判定依赖）
+        repo = get_conversation_context_repository()
+        tid, uid = tenant_id or "", user_id or ""
+        # 摘要槽位先同步（原子 merge；stage 判定依赖槽位）
         sync_travel_brief_to_context(tenant_id, user_id, conversation_id,
                                      brief=brief)
         missing = [s for s in (missing_slots or []) if s]
         # run 身份：首次（无活跃 run）或显式 NEW_RUN 才换；普通补槽/
         # 改约束（CONTINUE/PATCH/REPLAN）保持同 run（任务书 §7）
-        if new_run or not ctx.travel_run_id:
-            prev_run = ctx.travel_run_id
-            run_id = ctx.begin_travel_run()
-            if prev_run:
+        snap = repo.peek(tid, uid, conversation_id)
+        prev_run = snap.travel_run_id if snap else ""
+        if new_run or not prev_run:
+            result = repo.mutate(tid, uid, conversation_id, ContextMutation(
+                MutationType.START_TRAVEL_RUN,
+                {"conv_hash8": conversation_hash8(conversation_id)}))
+            run_id = result.run_id or ""
+            if prev_run and result.status == "applied":
                 logger.info("[travel.run] event=travel.run.new run=%s "
                             "prev=%s new_run=True", run_id, prev_run)
         else:
-            run_id = ctx.travel_run_id
-        # 阶段与 pending：必填槽缺失 = slot 阶段 + 结构化追问；齐备 = 规划
-        # 中（completed 由 reporter 收尾轮的 finished 判定，见调用方）。
+            run_id = prev_run
+        # 阶段与 pending：必填槽缺失 = slot 阶段 + 结构化追问；齐备 =
+        # 清 pending（question_id CAS，stale 不得误清新追问）+ 推进 planned
         if missing:
-            ctx.set_travel_stage("slot")
-            prev = ctx.travel_pending or {}
-            if prev.get("requested_slots") == missing and prev.get("run_id") == run_id:
-                prev["question_id"] = prev.get("question_id") or _new_question_id()
-                ctx.set_travel_pending(prev)  # 同一轮追问：保留 question_id
-            else:
-                ctx.set_travel_pending({
-                    "question_id": _new_question_id(),
-                    "run_id": run_id,
-                    "requested_slots": missing,
-                    "reason": "missing_required",
-                    "created_at": time.time(),
-                })
+            repo.mutate(tid, uid, conversation_id, ContextMutation(
+                MutationType.SET_TRAVEL_STAGE,
+                {"stage": "slot", "expected_run_id": run_id}))
+            pend = repo.mutate(tid, uid, conversation_id, ContextMutation(
+                MutationType.SET_TRAVEL_PENDING,
+                {"run_id": run_id, "requested_slots": missing,
+                 "reason": "missing_required"}))
+            if pend.status == "applied" and not (
+                    (snap.travel_pending or {}).get("requested_slots") == missing
+                    and (snap.travel_pending or {}).get("run_id") == run_id):
                 logger.info("[travel.pending] event=travel.pending.created "
                             "run=%s slots=%s", run_id, missing)
         else:
-            if ctx.travel_pending is not None:
+            current = repo.peek(tid, uid, conversation_id)
+            expected_q = ((current.travel_pending or {}).get("question_id")
+                          if current else None)
+            res = repo.mutate(tid, uid, conversation_id, ContextMutation(
+                MutationType.RESOLVE_TRAVEL_PENDING,
+                {"expected_question_id": expected_q}))
+            if res.status == "applied" and expected_q:
                 logger.info("[travel.pending] event=travel.pending.resolved "
                             "run=%s", run_id)
-            ctx.set_travel_pending(None)
-            if ctx.travel_stage in ("", "slot"):
-                ctx.set_travel_stage("planned")
-        logger.debug(
-            "[ConversationContext] travel run 同步: run=%s stage=%s missing=%s",
-            run_id, ctx.travel_stage, missing,
-        )
+            elif res.status == "stale":
+                logger.warning(
+                    "[ConversationContext] event=conversation_context."
+                    "stale_pending run=%s expected=%s detail=%s",
+                    run_id, expected_q, res.detail)
+            # 仅 slot/空阶段推进 planned（completed 不回退，对齐 STOP F）
+            repo.mutate(tid, uid, conversation_id, ContextMutation(
+                MutationType.SET_TRAVEL_STAGE,
+                {"stage": "planned", "expected_run_id": run_id,
+                 "if_stage_in": ["", "slot"]}))
         return run_id
     except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
         logger.warning("[ConversationContext] travel run 同步失败（软降级）: %s", exc)
@@ -488,18 +558,32 @@ def mark_travel_run_completed(
 ) -> None:
     """行程成功出单后收尾：stage=completed + 清 pending（STOP F2，T15）。
 
-    run_id 与摘要槽位保留（历史归因/后续参考）；pending 必须清掉，否则
-    下一轮普通问题仍被 travel pending 拦截。软失败。
+    run_id 与摘要槽位保留（历史归因/后续参考）。STOP G：run CAS——
+    NEW_RUN 已换 run 后，晚到的旧 run 收尾被拒绝并观测（stale_run）。
+    软失败。
     """
+    from backend.orchestration.context.context_repository import (
+        ContextMutation,
+        MutationType,
+        get_conversation_context_repository,
+    )
     try:
         if not conversation_id:
             return
-        ctx = get_conversation_context_store().get(
-            tenant_id or "", user_id or "", conversation_id)
-        ctx.set_travel_stage("completed")
-        ctx.set_travel_pending(None)
-        logger.info("[travel.run] event=travel.run.completed run=%s",
-                    ctx.travel_run_id)
+        repo = get_conversation_context_repository()
+        tid, uid = tenant_id or "", user_id or ""
+        snap = repo.peek(tid, uid, conversation_id)
+        expected_run = snap.travel_run_id if snap else ""
+        result = repo.mutate(tid, uid, conversation_id, ContextMutation(
+            MutationType.MARK_TRAVEL_COMPLETED,
+            {"expected_run_id": expected_run} if expected_run else {}))
+        if result.status == "applied":
+            logger.info("[travel.run] event=travel.run.completed run=%s",
+                        expected_run)
+        elif result.status == "stale":
+            logger.warning(
+                "[ConversationContext] event=conversation_context.stale_run "
+                "op=completed expected=%s detail=%s", expected_run, result.detail)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[ConversationContext] travel 收尾失败（软降级）: %s", exc)
 
@@ -523,15 +607,21 @@ def sync_funnel_candidates_to_context(
     screen/verify 中途状态不得写入，否则失败的漏斗 run 会污染下一轮。
     新 run 覆盖旧候选（覆盖即失效）。软失败，绝不影响主链。
     """
+    from backend.orchestration.context.context_repository import (
+        ContextMutation,
+        MutationType,
+        get_conversation_context_repository,
+    )
     try:
         if not conversation_id or not top:
             return
-        store = get_conversation_context_store()
-        ctx = store.get(tenant_id, user_id, conversation_id)
-        ctx.set_funnel_candidates(top, run_id)
+        get_conversation_context_repository().mutate(
+            tenant_id or "", user_id or "", conversation_id,
+            ContextMutation(MutationType.SET_FUNNEL_CANDIDATES,
+                            {"candidates": list(top), "run_id": run_id}))
         logger.debug(
             "[ConversationContext] funnel 候选同步: run=%s n=%d conv=%s",
-            run_id, len(ctx.funnel_candidates), conversation_id,
+            run_id, len(top), conversation_id,
         )
     except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
         logger.warning("[ConversationContext] funnel 候选同步失败（软降级）: %s", exc)
@@ -547,10 +637,13 @@ def read_funnel_candidates_from_context(
     读取优先级契约（E1）：显式请求候选 > 当前 graph state funnel_context >
     本函数（ConversationContext）> 无候选 → need_info。
     """
+    from backend.orchestration.context.context_repository import (
+        get_conversation_context_repository,
+    )
     try:
         if not conversation_id:
             return []
-        ctx = get_conversation_context_store().peek(
+        ctx = get_conversation_context_repository().peek(
             tenant_id or "", user_id or "", conversation_id)
         if ctx is None:
             return []
