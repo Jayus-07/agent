@@ -642,3 +642,78 @@ class TestAuditAttribution:
         assert deny
         assert deny[-1]["source_channel"] == "tool"
         assert deny[-1]["deny_code"] == "SQL_TABLE_NOT_ALLOWED"
+
+
+# =====================================================
+# sql.guard span（STOP C §十二 / STOP D 完成标准 F：
+# allow 与 deny 都正常收口、attributes 低基数）
+# =====================================================
+
+class TestSqlGuardSpan:
+    def _trace(self):
+        from backend.observability.tracer import trace_collector
+
+        return trace_collector.start(
+            "sql guard span", "s-sql-guard", workflow_name="agent")
+
+    def _guard_spans(self, trace):
+        return [s for s in trace.spans if s.name == "sql.guard"]
+
+    def test_allow_span_closes_with_low_cardinality_metrics(self):
+        """allow 路径：span 收口 success，metrics 全为低基数枚举。"""
+        from backend.observability.tracer import trace_collector
+        from backend.sql.policy import SQLPolicyGuard
+        from backend.sql.sql_validator import ValidationError
+        from tests.sql.conftest import build_ctx
+
+        trace = self._trace()
+        try:
+            ctx = build_ctx(user_id="3", department="ecom",
+                            tenant_id="t1", roles=("editor",))
+            guarded = SQLPolicyGuard().validate_and_rewrite(
+                "SELECT sku FROM product.products WHERE id = 1", ctx)
+        finally:
+            trace_collector.finish(trace, "", 1, "", "")
+
+        spans = self._guard_spans(trace)
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.status == "success"
+        m = span.metrics
+        assert m["decision"] in ("allow", "allow_no_scope")
+        assert m["source_channel"] == "unknown"  # 直调 Guard 未声明通道
+        # tracer 框架会附加 covered_ms/uncovered_ms——业务字段为低基数五元组
+        assert {"source_channel", "data_scope", "decision",
+                "reason_code", "table_count"} <= set(m)
+
+    def test_deny_span_closes_error_status(self):
+        """deny 路径：span 同样收口（status=error + decision=deny），无 dangling。"""
+        from backend.observability.tracer import trace_collector
+        from backend.sql.policy import SQLPolicyError, SQLPolicyGuard
+        from tests.sql.conftest import make_ctx
+
+        trace = self._trace()
+        try:
+            ctx = make_ctx("department", department="hr", roles=("editor",))
+            with pytest.raises(SQLPolicyError):
+                SQLPolicyGuard().validate_and_rewrite(
+                    "SELECT amount FROM finance.expenses", ctx)
+        finally:
+            trace_collector.finish(trace, "", 1, "", "")
+
+        spans = self._guard_spans(trace)
+        assert len(spans) == 1
+        assert spans[0].status == "error"
+        assert spans[0].metrics["decision"] == "deny"
+        assert spans[0].metrics["reason_code"] == "SQL_TABLE_NOT_ALLOWED"
+
+    def test_noop_span_without_active_trace_does_not_raise(self):
+        """无 active trace（worker 直调等）→ noop span 软失败不阻塞查询。"""
+        from backend.sql.policy import SQLPolicyGuard
+        from tests.sql.conftest import build_ctx
+
+        ctx = build_ctx(user_id="3", department="ecom",
+                        tenant_id="t1", roles=("editor",))
+        guarded = SQLPolicyGuard().validate_and_rewrite(
+            "SELECT sku FROM product.products WHERE id = 1", ctx)
+        assert guarded is not None

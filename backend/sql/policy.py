@@ -205,7 +205,7 @@ class SQLPolicyGuard:
         except Exception:
             _span = None
         try:
-            return self._validate_and_rewrite_inner(sql, policy)
+            guarded = self._validate_and_rewrite_inner(sql, policy)
         except SQLPolicyError as e:
             self._end_guard_span(_span, policy, None, e.code)
             raise
@@ -213,8 +213,11 @@ class SQLPolicyGuard:
             self._end_guard_span(_span, policy, None,
                                  f"validator:{e.reason or 'unknown'}")
             raise
-        else:
-            self._end_guard_span(_span, policy, None, "")
+        # STOP D 修复（2026-09-23）：原 try/return + else 写法中 else 在
+        # return 时不会执行——allow 路径 span 恒为 leaked（D4 观测验证
+        # 发现）；且 else 分支原样传 None 丢失 table_count。改为顺序收口。
+        self._end_guard_span(_span, policy, guarded, "")
+        return guarded
 
     def _end_guard_span(self, span, policy: SQLPolicyContext,
                         guarded: GuardedSQL | None, reason_code: str) -> None:
