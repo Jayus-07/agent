@@ -15,6 +15,18 @@ from datetime import datetime, timedelta
 
 from backend.shared.logger import logger
 
+# hard metadata filter 白名单（2026-09-23 D1-4）：键必须与入库元数据
+# 真实写入字段一一对应（preprocessing/metadata.py / chunking.py /
+# indexer.py），语义稳定且被两侧共同理解。任何新过滤键必须先在入库侧
+# 落字段、再进此表——杜绝「查询侧构造、库内不存在」的幽灵键恒假过滤。
+RETRIEVAL_FILTERABLE_METADATA_FIELDS = frozenset({
+    "person_names",     # 品牌/关键实体（metadata.py）
+    "doc_type",         # 文档类型（metadata.py）
+    "business_domain",  # 业务域（metadata.py）
+    "reporting_period", # 财务报告期（chunking.py 表格版本快照）
+    "is_latest",        # 财务版本快照最新标记（chunking/indexer）
+})
+
 
 @dataclass
 class ParsedQuery:
@@ -46,12 +58,17 @@ class ParsedQuery:
     reporting_period: str = ""  # 报告期（如 "2026-Q3"），从查询中提取或时间表达式推导
 
     def to_metadata_filter(self) -> dict:
-        """Convert parsed entities into a ChromaDB-compatible filter dict."""
+        """Convert parsed entities into a ChromaDB-compatible filter dict.
+
+        白名单防线（2026-09-23 D1-4）：只有入库元数据真实存在、语义稳定的
+        字段（RETRIEVAL_FILTERABLE_METADATA_FIELDS）才允许进入 hard
+        metadata filter。幽灵键一旦进入过滤，pgvector containment 与 BM25
+        匹配恒假 → 带该表达的查询必然 0 召回假拒答，且 Stage1 放宽阶梯
+        不剥这些键、同义词重试同样带毒。
+        """
         f: dict = {}
         if self.persons:
             f["person_names"] = self.persons[0] if len(self.persons) == 1 else self.persons
-        if self.organizations:
-            f["organization"] = self.organizations[0] if len(self.organizations) == 1 else self.organizations
         if self.doc_types:
             # 多 doc_type 与 business_domain 同法：$in 而非裸 list——Chroma where
             # 只接受标量或操作符表达式，裸 list 直接抛
@@ -68,9 +85,19 @@ class ParsedQuery:
                 f["business_domain"] = self.domains[0]
             else:
                 f["business_domain"] = {"$in": self.domains}
+        # 时间表达不进 hard filter（D1-4）：入库侧只有 time_refs 非规范
+        # 字段、从无 time_start/time_end 写入点，构造即恒假。"2025年的库存
+        # 政策"类查询改由语义检索承接 + 证据层时间校验，不再必然 0 召回。
         if self.time_range_start:
-            f["time_start"] = self.time_range_start
-            f["time_end"] = self.time_range_end
+            logger.debug(
+                "[QueryAnalyzer] 时间表达走语义检索不进 hard filter: %s~%s",
+                self.time_range_start, self.time_range_end)
+        # organization 同为幽灵键（入库无写入点）：机构名保留在查询文本里
+        # 由语义检索承接，不再构造恒假过滤
+        if self.organizations:
+            logger.debug(
+                "[QueryAnalyzer] organization 非索引字段，语义检索承接: %s",
+                self.organizations)
         # 财务文档版本快照：有明确报告期 → 按 reporting_period 过滤；
         # 无明确报告期但有财务指标 → 只查最新版本（is_latest=True）
         if self.reporting_period:
