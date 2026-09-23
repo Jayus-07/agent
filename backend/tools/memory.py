@@ -64,6 +64,7 @@ def memory_store_tool(content: str, memory_type: str = "user_fact") -> str:
     memory_type: user_fact（用户事实）| preference（偏好）| decision（决定）| knowledge（领域知识）
     适用场景：用户明确表达偏好/纠正/重要背景时主动记录；不要记录敏感个人信息。
     """
+    from backend.config import MEMORY_EXPLICIT_DEFAULT_CONFIDENCE, MEMORY_ORIGIN_EXPLICIT
     from backend.memory.long_term import LongTermMemory, MemoryFact
     from backend.memory.manager import memory_manager
     from backend.memory.pii_filter import scan_and_sanitize
@@ -80,7 +81,17 @@ def memory_store_tool(content: str, memory_type: str = "user_fact") -> str:
 
     # 写入前强制 PII 脱敏（与后台管线同一口径）
     scan = scan_and_sanitize(content.strip())
-    fact = MemoryFact(fact_type=memory_type, content=scan.sanitized, session_id=session_id)
+    # 显式通道 provenance（STOP B）：用户主动要求记住 → origin=explicit、
+    # 高置信默认值。tool 请求上下文（ContextVar）当前无 message id，
+    # source_message_id 置 NULL（不造假），session 归属仍可追溯。
+    fact = MemoryFact(
+        fact_type=memory_type,
+        content=scan.sanitized,
+        session_id=session_id,
+        origin=MEMORY_ORIGIN_EXPLICIT,
+        confidence_score=MEMORY_EXPLICIT_DEFAULT_CONFIDENCE,
+        source_message_id=None,
+    )
 
     async def _store() -> bool:
         async with AsyncSessionLocal() as db:
@@ -96,7 +107,12 @@ def memory_store_tool(content: str, memory_type: str = "user_fact") -> str:
         return f"❌ 记忆写入失败: {e}"
 
     if ok:
-        logger.info(f"[Tool:memory_store] 已写入 {memory_type} (user={user_id})")
+        try:
+            from backend.observability.metrics import memory_explicit_total
+            memory_explicit_total.inc()
+        except Exception:  # 观测面异常不反噬工具
+            pass
+        logger.info(f"[Tool:memory_store] 已写入 {memory_type} (user={user_id}, origin=explicit)")
         return f"✅ 已记住（{memory_type}）: {scan.sanitized[:200]}"
     return "⏭ 内容与已有记忆重复或重要性不足，未写入。"
 

@@ -33,6 +33,20 @@ L3_PII_FILTER_ENABLED = os.getenv("L3_PII_FILTER_ENABLED", "true").lower() == "t
 L3_DEDUP_COSINE_THRESHOLD = float(os.getenv("L3_DEDUP_COSINE_THRESHOLD", "0.85"))
 L3_SUPERSEDE_THRESHOLD = float(os.getenv("L3_SUPERSEDE_THRESHOLD", "0.92"))
 
+# ── 记忆 provenance（047 迁移，STOP B：Memory Production Closure）──
+# origin 通道语义：explicit=用户显式写入（memory_store_tool）｜
+# inferred=后台自动提取｜legacy=047 之前的历史记录（代码不再新写）。
+MEMORY_ORIGIN_EXPLICIT = "explicit"
+MEMORY_ORIGIN_INFERRED = "inferred"
+MEMORY_ORIGIN_LEGACY = "legacy"
+# explicit 通道默认可信度：由代码指定（不写死在业务深处）；inferred 用
+# extractor 返回值，非法/缺失回退到 MEMORY_INFERRED_DEFAULT_CONFIDENCE
+MEMORY_EXPLICIT_DEFAULT_CONFIDENCE = float(os.getenv("MEMORY_EXPLICIT_DEFAULT_CONFIDENCE", "0.98"))
+MEMORY_INFERRED_DEFAULT_CONFIDENCE = float(os.getenv("MEMORY_INFERRED_DEFAULT_CONFIDENCE", "0.7"))
+# 证据含不确定性措辞（"可能/考虑/看看"…）时的 confidence 上限：
+# 防 assistant 复述把模糊意图强化成高置信"决定"（Case B4），纯规则非 LLM
+MEMORY_HEDGED_CONFIDENCE_CAP = float(os.getenv("MEMORY_HEDGED_CONFIDENCE_CAP", "0.55"))
+
 # ── 上下文预算管理（Context Budget Management，2026-09-22）──
 # 统一管理 active context（发给模型的上下文）的 token 预算；原始 chat_messages 不受影响。
 # 完整设计见 docs/2026-09-22-context-budget-management-实施规格.md

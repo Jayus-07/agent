@@ -20,11 +20,16 @@ from backend.memory.token_budget import (
 )
 from backend.config import HISTORY_TOKEN_BUDGET
 from backend.config import PREVIOUS_OUTPUTS_MAX_TOKENS
+from backend.config import MEMORY_ORIGIN_INFERRED
 from backend.context_budget import context_budget
 from langchain_core.messages import SystemMessage
 from backend.shared.logger import logger
 from backend.observability.metrics import (
     degradation_alerts_total,
+    memory_extraction_candidate_total,
+    memory_extraction_rejected_total,
+    memory_explicit_total,
+    memory_inferred_total,
     memory_retrieval_failure_total,
     memory_retrieval_latency_seconds,
     memory_retrieval_total,
@@ -198,6 +203,9 @@ class MemoryService:
                 raise
 
     async def end_turn(self, session_id: str, question: str, answer: str, user_id: str = "default") -> None:
+        # save_turn 之前失败的路径同样要能进入后台 store（provenance 允许缺失，
+        # 但不能因 UnboundLocalError 让 end_turn 抛异常）
+        user_message_id: int | None = None
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
@@ -205,8 +213,11 @@ class MemoryService:
                 # Ensure chat_sessions row exists (may not if start_session was never called)
                 await srepo.get_or_create(session_id, user_id)
 
-                # L2 persistence
-                await srepo.save_turn(session_id, question, answer)
+                # L2 persistence —— save_turn 返回已落库的 (user_msg, assistant_msg)，
+                # user message id 在此确定并作为不可变参数传入后台 store：
+                # 禁止在后台协程里"查最新用户消息"取 provenance（并发 turn 会串轮）
+                q_msg, _a_msg = await srepo.save_turn(session_id, question, answer)
+                user_message_id = q_msg.id if q_msg is not None else None
 
                 # Check summarization
                 if await srepo.needs_summarization(session_id):
@@ -233,7 +244,8 @@ class MemoryService:
                 logger.error(f"[MemoryService] end_turn 失败: {e}")
 
         # L3: background write — caller's loop must keep running (Manager handles this)
-        asyncio.ensure_future(self.store(question, answer, session_id, user_id))
+        asyncio.ensure_future(self.store(question, answer, session_id, user_id,
+                                         source_message_id=user_message_id))
 
     # ============================================================
     # Retrieval
@@ -266,9 +278,14 @@ class MemoryService:
     # Async store pipeline (background)
     # ============================================================
 
-    async def store(self, question: str, answer: str, session_id: str, user_id: str = "default") -> None:
-        """后台管线: extract → PII → classify → score → dedup → write
+    async def store(self, question: str, answer: str, session_id: str, user_id: str = "default",
+                    source_message_id: int | None = None) -> None:
+        """后台管线: extract → evidence gate → PII → classify → score → dedup → write
 
+        provenance 契约（STOP B）：
+          - origin 由本方法强制赋值 inferred（写入通道决定，不信任模型输出）
+          - source_message_id 由 end_turn 在 save_turn 时确定后透传，
+            本方法禁止回查"最新用户消息"（并发 turn 会串轮）
         注意：本协程运行在 MemoryManager 的后台 event loop 上，
         LLM 同步调用（提取/分类）必须放到线程池，否则会阻塞整个 loop，
         导致同期其他记忆操作（会话持久化等）超时降级。
@@ -279,32 +296,46 @@ class MemoryService:
                 mrepo = MemoryRepository(db_session)
                 l3 = LongTermMemory(mrepo)
 
-                # 1. Extract（LLM 同步调用 → 线程池）
-                facts = await asyncio.to_thread(l3.extract_facts, question, answer)
+                # 1. Extract（LLM 同步调用 → 线程池）；rejections = 证据防线拒绝原因
+                facts, rejections = await asyncio.to_thread(l3.extract_facts, question, answer)
+                for reason in rejections:
+                    _metric_safe(memory_extraction_rejected_total.labels(reason=reason).inc)
                 if not facts:
                     return
 
                 stored = 0
                 for fact in facts:
-                    # 2. PII already applied in extract_facts
+                    # 2. Provenance 强制赋值（代码层，非模型层）
+                    fact.origin = MEMORY_ORIGIN_INFERRED
+                    fact.source_message_id = source_message_id
+                    fact.session_id = session_id
+                    _metric_safe(memory_extraction_candidate_total.inc)
                     # 3. Classify（可能触发 LLM 同步调用 → 线程池）
                     verdict = await asyncio.to_thread(
                         self._get_trigger().classify, fact.content, fact.fact_type
                     )
                     if verdict == "IGNORE":
+                        _metric_safe(memory_extraction_rejected_total.labels(reason="not_worthy").inc)
                         continue
                     # 4. Score
                     fact.importance_score = self._get_importance().score(fact.fact_type, fact.content)
                     if not self._get_importance().should_store(fact.importance_score):
+                        _metric_safe(memory_extraction_rejected_total.labels(reason="low_importance").inc)
                         continue
-                    # 5. Dedup + Write
+                    # 5. Dedup + Write（origin/confidence/source_message_id 随 fact 落库）
                     ok = await l3.store_single(fact, user_id, session_id)
                     if ok:
                         stored += 1
+                        _metric_safe(memory_inferred_total.inc)
+                    else:
+                        _metric_safe(memory_extraction_rejected_total.labels(reason="duplicate").inc)
 
                 if stored:
                     await db_session.commit()
-                    logger.info(f"[MemoryService] 后台写入 {stored}/{len(facts)} 条记忆")
+                    logger.info(
+                        f"[MemoryService] 后台写入 {stored}/{len(facts)} 条记忆 "
+                        f"(origin=inferred, source_message_id={source_message_id}, "
+                        f"rejected={len(rejections)})")
                 _metric_safe(
                     memory_retrieval_total.labels(
                         status="success", operation="write").inc)
@@ -317,6 +348,8 @@ class MemoryService:
                 _metric_safe(
                     memory_retrieval_failure_total.labels(
                         operation="write").inc)
+                _metric_safe(
+                    memory_extraction_rejected_total.labels(reason="error").inc)
             finally:
                 try:
                     memory_retrieval_latency_seconds.labels(

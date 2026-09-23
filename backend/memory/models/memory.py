@@ -23,6 +23,11 @@ class MemoryRecord(Base):
     embedding = Column(Vector(EMBEDDING_DIM))
     importance_score = Column(Float, nullable=False, default=0.5)
     confidence_score = Column(Float, nullable=False, default=1.0)
+    # provenance（047，STOP B）：写入通道 + 证据消息追溯。
+    # origin 由代码层强制赋值（不信任模型输出）；source_message_id 指向
+    # role=user 的 chat_messages.id，仅逻辑外键（会话级联删除不得波及长期记忆）
+    origin = Column(String(16), nullable=False, default="legacy")
+    source_message_id = Column(Integer, nullable=True)
     access_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_access_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

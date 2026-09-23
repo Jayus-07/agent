@@ -4,20 +4,41 @@ category: memory
 risk_level: low
 template_engine: str_format
 variables:
-  - {name: conversation, required: true, description: 对话内容}
+  - {name: conversation, required: true, description: 对话内容（user_evidence + assistant_context 分块）}
 template: |
-  从对话中提取值得长期记忆的关键信息。每条一行，严格使用竖线分隔: 类型|内容
+  从对话中提取值得长期记忆的关键信息。
+
+  <user_evidence> 是用户亲口表达的内容，是唯一的事实证据来源。
+  <assistant_context> 是助手回答，只能用来理解用户话语中的指代和语境。
+
+  铁律（违反任何一条都必须忽略该信息）:
+  1. 只提取用户明确表达、确认、声明、选择或偏好的信息。
+  2. 助手回答只能帮助理解上下文，不能作为用户事实、偏好、决定或身份信息的证据来源。
+  3. 如果某个事实只出现在助手回答中，而用户没有明确表达或确认，必须忽略。
+  4. 禁止因为助手复述、推测、总结、建议而创建长期记忆。
+  5. 不要把助手提供的外部知识、RAG 结果、数据库结果、工具结果或系统状态写成用户个人长期记忆。
+  6. 用户话语中的不确定表述（"可能""考虑""看看"）只能以低置信度记录，不得升级为确定事实。
+
+  每条一行，严格使用竖线分隔，共 4 段: 类型|内容|置信度|用户原话片段
 
   类型: user_fact(用户身份/角色/技能), preference(偏好/习惯), decision(决策), knowledge(知识)
+  置信度: 0.0~1.0 之间的小数，表示该事实确属用户的把握
+  用户原话片段: 必须是 <user_evidence> 中用户原话的连续片段（逐字摘录，作为证据）。
+  找不到用户原话片段作证据的信息 = 助手自己产生的，直接丢弃。
+
   没有重要信息则只输出: NONE
 
   示例:
-  用户: 我叫张三，是后端工程师，喜欢用FastAPI
-  助手: 好的张三，你是后端工程师
+  <user_evidence>
+  我叫张三，是后端工程师，喜欢用FastAPI
+  </user_evidence>
+  <assistant_context>
+  好的张三，你是后端工程师，你们项目也在用FastAPI
+  </assistant_context>
   输出:
-  user_fact|用户名张三
-  user_fact|职业是后端工程师
-  preference|喜欢使用FastAPI框架
+  user_fact|用户名张三|0.95|我叫张三
+  user_fact|职业是后端工程师|0.95|是后端工程师
+  preference|喜欢使用FastAPI框架|0.9|喜欢用FastAPI
 
   对话:
   {conversation}

@@ -487,6 +487,28 @@ memory_retrieval_latency_seconds = Histogram(
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
 
+# ── Memory provenance 指标（047，STOP B：Memory Production Closure）──
+# 回答：今天写了多少 explicit/inferred？多少候选被接受/拒绝（按原因）？
+# reason 为固定枚举（assistant_only/not_worthy/low_importance/duplicate/error），
+# 禁止 content/user_id/message_id 等高基数值进 label。
+memory_extraction_candidate_total = Counter(
+    "memory_extraction_candidate_total",
+    "L3 自动提取候选总数（通过 evidence 校验进入后续 gate 的候选）",
+)
+memory_extraction_rejected_total = Counter(
+    "memory_extraction_rejected_total",
+    "L3 提取候选拒绝总数（按拒绝原因）",
+    labelnames=("reason",),  # assistant_only | not_worthy | low_importance | duplicate | error
+)
+memory_explicit_total = Counter(
+    "memory_explicit_total",
+    "用户显式通道写入的长期记忆总数（origin=explicit，如 memory_store_tool）",
+)
+memory_inferred_total = Counter(
+    "memory_inferred_total",
+    "后台自动提取写入的长期记忆总数（origin=inferred）",
+)
+
 # 熔断器状态（0=closed 1=half_open 2=open）— 熔断开路告警数据源
 circuit_breaker_state = Gauge(
     "circuit_breaker_state",
