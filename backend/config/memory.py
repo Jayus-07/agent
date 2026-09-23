@@ -88,6 +88,14 @@ CONTEXT_L5_MAX_PROTECTED_FACTS = int(os.getenv("CONTEXT_L5_MAX_PROTECTED_FACTS",
 # 折叠只作用于更早的普通 user/assistant 历史（SystemMessage/当前消息永不折叠）
 CONTEXT_L4_KEEP_RECENT_TURNS = int(os.getenv("CONTEXT_L4_KEEP_RECENT_TURNS", "4"))
 
+# ── Token 计数口径（2026-09-23 P0-1，模型感知计数）──
+# estimated 计数（calibrated/fallback 策略）的安全系数：宁可高估不可低估
+CONTEXT_TOKEN_ESTIMATION_MARGIN = float(os.getenv("CONTEXT_TOKEN_ESTIMATION_MARGIN", "1.10"))
+# 多模态图片 part 的 token 估算值（各 provider 口径差异大，只防"计 0"）
+CONTEXT_IMAGE_TOKEN_ESTIMATE = int(os.getenv("CONTEXT_IMAGE_TOKEN_ESTIMATE", "1024"))
+# 每条消息的对话模板包裹开销（chat template / role 标记）
+CONTEXT_MESSAGE_OVERHEAD_TOKENS = int(os.getenv("CONTEXT_MESSAGE_OVERHEAD_TOKENS", "4"))
+
 # PostgreSQL 连接池
 MEMORY_ASYNC_POOL_SIZE = int(os.getenv("MEMORY_ASYNC_POOL_SIZE", "20"))
 MEMORY_ASYNC_MAX_OVERFLOW = int(os.getenv("MEMORY_ASYNC_MAX_OVERFLOW", "10"))

@@ -52,7 +52,9 @@ class TestCompact:
             assert entry["preview"]
 
     def test_meta_preserved_in_degraded_entries(self):
-        po = {"1": "数据" * 900, "2": "数据" * 900}
+        # 2026-09-23 计数口径切换（calibrated CJK ≈0.77 token/字）：
+        # 单条 ~616 token（≤1024 可完整保留），两条总量 >1024 → 旧的降级
+        po = {"1": "数据" * 400, "2": "数据" * 400}
         meta = {
             "1": {"step_id": "1", "tool": "sql.query", "status": "success"},
             "2": {"step_id": "2", "tool": "rag.search", "status": "success"},

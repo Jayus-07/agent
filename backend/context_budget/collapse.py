@@ -1,9 +1,10 @@
 """context_budget.collapse — L4 Context Collapse（零 LLM、可回滚、确定性）
 
 职责：当 active context 用量达到 CONTEXT_L4_TRIGGER_RATIO 时，把较早的普通
-user/assistant 历史折叠为一条确定性的 Projection SystemMessage，回收 token。
+user/assistant 历史折叠为「固定 policy SystemMessage + <historical_context>
+数据 AIMessage」，回收 token。
 
-硬约束（规格 §十二~§二十）：
+硬约束（规格 §十二~§二十；角色安全见 role_safety.py，2026-09-23 P0-2）：
   - 零 LLM API 调用；Projection 是模板文本，不是摘要
   - 非破坏性：只影响 active context，原始 chat_messages 不动
   - 可恢复：FoldRegistry.restore_fold(fold_id) 后，后续 projection 重新
@@ -11,6 +12,8 @@ user/assistant 历史折叠为一条确定性的 Projection SystemMessage，回�
   - 永不折叠：SystemMessage / 最近 CONTEXT_L4_KEEP_RECENT_TURNS 轮 /
     当前用户消息；域图状态（Confirmation/Handoff/Travel/Selection）不在
     消息层，天然不受影响
+  - 用户历史内容不得进入 SystemMessage：数据只出现在 AIMessage 的
+    <historical_context> 标签内
 """
 
 from __future__ import annotations
@@ -84,12 +87,16 @@ def fold_messages(
     *,
     keep_recent_turns: int | None = None,
 ) -> tuple[list, ContextFold | None]:
-    """把较旧的普通历史折叠为一条 Projection SystemMessage。
+    """把较旧的普通历史折叠为「固定 policy SystemMessage + 历史数据 AIMessage」。
 
     返回 (折叠后的消息列表, ContextFold | None)。无可折叠内容时原样返回。
     折叠对象：除 SystemMessage 外、最近 keep_recent_turns 轮之前的普通消息
     （一组 user+assistant 记一轮；尾部孤立的 user 消息算最后一轮的一部分，
     即当前问题，永不折叠）。
+
+    角色安全（P0-2）：被折叠的用户历史**不进入任何 SystemMessage**——
+    数据块放在 AIMessage 的 <historical_context> 标签内（untrusted data），
+    SystemMessage 只承载进程内固定的 policy 声明文本。
     """
     if not messages:
         return messages, None
@@ -129,15 +136,17 @@ def fold_messages(
         from_message_id=str(getattr(candidates[0], "id", "") or "") or None,
         to_message_id=str(getattr(candidates[-1], "id", "") or "") or None,
     )
-    projection = SystemMessage_from_text(build_projection_text(fold))
-    fold.projected_tokens = _count_tokens(projection.content)
+    from backend.context_budget.role_safety import build_historical_context
+    projection_msgs = build_historical_context(build_projection_text(fold))
+    fold.projected_tokens = sum(
+        _count_token_message(m) for m in projection_msgs)
     if fold.projected_tokens >= original_tokens:
         # 折叠无收益（候选太少太小），不折
         return messages, None
 
     folded = (
         list(messages[:fold_start])
-        + [projection]
+        + projection_msgs
         + list(messages[fold_end + 1:])
     )
     return folded, fold

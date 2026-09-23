@@ -547,11 +547,25 @@ def _is_system(msg: Any) -> bool:
 
 
 def _is_replaceable_summary(msg: Any) -> bool:
-    """旧 L2 摘要 / L4 折叠投影：可被新摘要整体替换的消息。"""
-    content = getattr(msg, "content", "")
-    return isinstance(content, str) and (
-        content.startswith(L2_SUMMARY_MARKER) or L4_FOLD_MARKER in content[:80]
+    """旧 L2 摘要 / L4 折叠投影 / 新 <historical_context> 块：可被新摘要整体替换。
+
+    兼容三种历史形态：
+      - 旧 SystemMessage 会话摘要（L2_SUMMARY_MARKER 开头）
+      - 旧 SystemMessage 折叠投影（L4_FOLD_MARKER）
+      - 新形态：固定 policy SystemMessage + <historical_context> AIMessage
+        （role_safety 自产，2026-09-23 P0-2 起）
+    """
+    from backend.context_budget.role_safety import (
+        is_historical_data_message,
+        is_policy_system_message,
     )
+
+    content = getattr(msg, "content", "")
+    if isinstance(content, str) and (
+        content.startswith(L2_SUMMARY_MARKER) or L4_FOLD_MARKER in content[:80]
+    ):
+        return True
+    return is_policy_system_message(msg) or is_historical_data_message(msg)
 
 
 def fold_rebuild(
@@ -560,18 +574,22 @@ def fold_rebuild(
     *,
     keep_recent_turns: int | None = None,
 ) -> tuple[list, int, int | None]:
-    """把较旧历史替换为一条会话摘要 SystemMessage（重建 active projection）。
+    """把较旧历史替换为「固定 policy SystemMessage + <historical_context>
+    摘要 AIMessage」（重建 active projection）。
+
+    角色安全（P0-2）：摘要由用户历史生成，属 untrusted data，只进
+    AIMessage 数据块；SystemMessage 仅承载进程内固定 policy 文本。
 
     保留：SystemMessage（旧摘要/折叠投影除外，它们被新摘要取代）、
     最近 keep_recent_turns 轮、当前消息。返回 (新消息列表, 被替换条数,
     边界下标|None)。无可保留轮时原样返回。
     """
-    from langchain_core.messages import SystemMessage
-
     if not messages:
         return messages, 0, None
     if keep_recent_turns is None:
         keep_recent_turns = int(_cfg("CONTEXT_L4_KEEP_RECENT_TURNS", 4))
+
+    from backend.context_budget.role_safety import build_historical_context
 
     non_system_idx = [i for i, m in enumerate(messages) if not _is_system(m)]
     user_positions = [
@@ -588,9 +606,11 @@ def fold_rebuild(
     if replaced <= 0 and not any(_is_replaceable_summary(m) for m in head):
         return messages, 0, None  # 摘要无可替换内容，不白做
 
-    summary_msg = SystemMessage(
-        content=f"{L2_SUMMARY_MARKER}，可结合它理解用户当前问题：\n{summary_text}")
-    new_messages = kept_head + [summary_msg] + list(messages[boundary:])
+    new_messages = (
+        kept_head
+        + build_historical_context(summary_text)
+        + list(messages[boundary:])
+    )
     return new_messages, replaced, boundary
 
 

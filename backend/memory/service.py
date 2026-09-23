@@ -93,10 +93,16 @@ class MemoryService:
                 # 否则摘要落库后从未参与 prompt，长会话的早期信息完全丢失。
                 # 002 迁移后 title/summary 已分字段，summary 即纯 L2 摘要；
                 # 保留短文本守卫仅为兼容未回填的旧库（summary 里可能残留旧重命名标题）
+                # 角色安全（2026-09-23 P0-2）：摘要源自用户历史，属 untrusted
+                # data——只进 AIMessage <historical_context> 数据块，不进
+                # SystemMessage（SystemMessage 承载固定 policy 声明）。
                 if srow.summary and len(srow.summary) >= 30:
-                    l1._messages.insert(0, SystemMessage(
-                        content=f"以下是本会话早期对话的摘要，可结合它理解用户当前问题：\n{srow.summary}"
-                    ))
+                    from backend.context_budget.role_safety import (
+                        build_historical_context,
+                    )
+                    for _i, _m in enumerate(
+                            build_historical_context(srow.summary)):
+                        l1._messages.insert(_i, _m)
                     logger.info(f"[MemoryService] 注入 L2 会话摘要 (session={session_id}, {len(srow.summary)} 字)")
 
                 # L3 → L1（独立数据库会话 + 显式降级：pgvector/检索异常

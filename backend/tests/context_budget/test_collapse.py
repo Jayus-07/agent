@@ -55,8 +55,9 @@ class TestFoldMessages:
         assert fold.projected_tokens < fold.original_tokens
         # System 保留在最前
         assert type(folded[0]).__name__ == "SystemMessage"
-        # 最近 4 轮（8 条）+ 1 条 projection + 1 条 system = 10
-        assert len(folded) == len(msgs) - fold.message_count + 1
+        # 最近 4 轮（8 条）+ 2 条 projection（policy system + 历史数据 AIMessage）
+        # + 1 条 system = 11
+        assert len(folded) == len(msgs) - fold.message_count + 2
 
     def test_recent_turns_kept_verbatim(self):
         msgs = _history(8)
@@ -109,12 +110,14 @@ class TestFoldRegistry:
 
 class TestL4InPreflight:
     def _long_context(self):
+        # 2026-09-23 计数口径切换（模型感知 calibrated CJK ≈0.77 token/字）：
+        # 数据量级按新口径调整——意图不变：12 轮完整历史存活过 L2（不被挤掉），
+        # po+rag 抬高总量越过 80% 触发线，让 L4 折叠掉最近 4 轮以外的 8 轮。
         msgs = [SystemMessage(content="系统提示必须保留")]
-        msgs += _history(12)
+        msgs += _history(12, msg_len=100)
         msgs.append(HumanMessage(content="当前问题"))
         po = {"1": "前置输出" * 400}
-        # L2 会先把历史压到 ≤2048；要让总量越过 80%×7168≈5734，rag 需 ~3000 token
-        rag = ["证据。" * 300] * 10
+        rag = ["证据。" * 300] * 6
         return msgs, po, rag
 
     def test_no_collapse_below_threshold(self):

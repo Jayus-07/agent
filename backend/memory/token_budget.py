@@ -9,57 +9,29 @@ token 计数与按预算裁剪：
   - trim_texts_to_budget:    按顺序保留的通用文本裁剪（RAG 证据等，
     输入顺序即相关性顺序，从头保留）
 
-计数用 tiktoken（o200k_base）；加载失败时退化为"中文约 2 字符/token"
-的粗估，保证功能可用而非精确。
+计数自 2026-09-23 起统一委托 context_budget.token_counter（P0-1 模型
+感知：openai→tiktoken 兼容口径；DeepSeek/Qwen 等→CJK 标定估算 ×安全
+系数）。本模块只保留裁剪算法；业务层禁止直接调用 tiktoken。
 """
 import threading
 
 from langchain_core.messages import BaseMessage
 
-# 降级粗估：平均每 token 的字符数（中文场景约 1 token ≈ 1.5~2 字符，取保守值 2）
-_CHARS_PER_TOKEN_FALLBACK = 2
-
 _lock = threading.Lock()
-_encoding = None
-_encoding_failed = False
-
-
-def _get_encoding():
-    """懒加载 tiktoken 编码器；失败只尝试一次，之后永久走粗估。"""
-    global _encoding, _encoding_failed
-    if _encoding is not None or _encoding_failed:
-        return _encoding
-    with _lock:
-        if _encoding is None and not _encoding_failed:
-            try:
-                import tiktoken
-                _encoding = tiktoken.get_encoding("o200k_base")
-            except Exception:
-                _encoding_failed = True
-    return _encoding
 
 
 def count_tokens(text: str) -> int:
-    """统计文本 token 数（tiktoken 精确计数，失败时字符数粗估）。"""
+    """统计文本 token 数（模型感知，见 context_budget.token_counter）。"""
     if not text:
         return 0
-    enc = _get_encoding()
-    if enc is None:
-        return max(1, len(text) // _CHARS_PER_TOKEN_FALLBACK)
-    return len(enc.encode(text))
+    from backend.context_budget.token_counter import count_tokens as _count
+    return _count(text)
 
 
 def count_message_tokens(msg: BaseMessage) -> int:
-    """统计单条 LangChain 消息的 token 数（content 兼容 str 与多模态 list）。"""
-    content = getattr(msg, "content", "")
-    if isinstance(content, str):
-        return count_tokens(content)
-    if isinstance(content, list):
-        # 多模态消息：拼接文本 part 估算（图片 part 不计）
-        return count_tokens("".join(
-            p.get("text", "") for p in content if isinstance(p, dict)
-        ))
-    return count_tokens(str(content))
+    """统计单条 LangChain 消息 token 数（含模板开销与多模态图片估算）。"""
+    from backend.context_budget.token_counter import count_message_tokens as _count
+    return _count(msg)
 
 
 def _is_system(msg: BaseMessage) -> bool:

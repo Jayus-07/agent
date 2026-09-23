@@ -581,6 +581,15 @@ context_protected_facts_total = Counter(
     # result: extracted|preserved|patched
 )
 
+# P0-1（2026-09-23）TokenCounterRegistry 观测：模型感知计数口径可见性
+context_token_counter_total = Counter(
+    "context_token_counter_total",
+    "TokenCounter 创建次数（按 provider/策略/是否估算口径）",
+    labelnames=("provider", "strategy", "estimated"),
+    # provider: openai|deepseek|qwen|...|unknown；strategy: native|compatible
+    #           |calibrated|fallback；estimated: true|false（全低基数）
+)
+
 
 def publish_breaker_states() -> None:
     """把全部熔断器状态刷到 Prometheus Gauge（周期调用或 /metrics 请求时调用）。"""

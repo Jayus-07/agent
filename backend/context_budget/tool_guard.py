@@ -52,24 +52,18 @@ def serialize_for_count(output: Any) -> str:
 def truncate_text_to_tokens(text: str, max_tokens: int) -> str:
     """按 token 截取文本（非简单字符切片）。
 
-    tiktoken 精确截取；编码器不可用时退化为字符数近似（2 字符/token，
-    与 token_budget 降级口径一致），仅作极端 fallback。
+    统一走 context_budget.token_counter（P0-1 模型感知）：tiktoken 可用
+    时精确截取；calibrated 策略按估算比例切片——宁可截多不可截少。
     """
     if not text or max_tokens <= 0:
         return ""
-    try:
-        from backend.memory.token_budget import count_tokens
-        if count_tokens(text) <= max_tokens:
-            return text
-    except Exception:  # pragma: no cover
-        pass
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("o200k_base")
-        return enc.decode(enc.encode(text)[:max_tokens])
-    except Exception:
-        # 极端 fallback：字符近似截取（仅编码器完全不可用时）
-        return text[: max_tokens * 2]
+    from backend.context_budget.token_counter import (
+        count_tokens,
+        truncate_text_to_tokens as _truncate,
+    )
+    if count_tokens(text) <= max_tokens:
+        return text
+    return _truncate(text, max_tokens)
 
 
 def is_compacted_preview(output: Any) -> bool:

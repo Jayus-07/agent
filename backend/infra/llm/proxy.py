@@ -18,7 +18,7 @@ import inspect
 import threading
 import time
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
 # chat_models 在装了 transformers 的环境下连带导入 torch（实测 ~8s）。
@@ -109,6 +109,15 @@ def set_request_model(model: str) -> None:
         _request_model_var.set("")
         return
     _request_model_var.set(model)
+
+
+def get_request_model_name() -> str:
+    """读取当前请求的模型覆盖（空串 = 无覆盖，走全局模型）。
+
+    供 token_counter / ContextBudgetManager 解析「这次调用目标模型」，
+    与 set_request_model 同一 ContextVar，无副作用、无 DB 访问。
+    """
+    return _request_model_var.get()
 
 
 # 覆盖模型的实例缓存（独立于全局默认模型，按需构建）
@@ -1252,10 +1261,28 @@ class _BoundLLMProxy:
     调用前登记 ResolvedModelContext，用量按真实模型结算、不串角色。
     """
 
-    def __init__(self, bound, model_name: str | None = None, role: str = "main"):
+    def __init__(self, bound, model_name: str | None = None, role: str = "main",
+                 tools: Any = None):
         self._bound = bound
         self._model_name = model_name or ""
         self._role = role
+        self._tools = tools
+        self._schema_tokens: int | None = None  # 懒算并缓存（schema 静态）
+
+    def _schema_reserved(self) -> int:
+        """bind_tools 的工具 schema token 占用（P0-1：计入输入预算）。"""
+        if self._tools is None:
+            return 0
+        if self._schema_tokens is None:
+            try:
+                from backend.context_budget.token_counter import (
+                    count_tool_schema_tokens,
+                )
+                self._schema_tokens = count_tool_schema_tokens(
+                    self._tools, model=self._model_name or None)
+            except Exception:
+                self._schema_tokens = 0
+        return self._schema_tokens
 
     def _bind_context(self) -> None:
         ctx = _resolve_call_context(
@@ -1267,6 +1294,8 @@ class _BoundLLMProxy:
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
         self._bind_context()
+        args = _preflight_context(args, kwargs,
+                                  extra_reserved_tokens=self._schema_reserved())
         _t0 = time.monotonic()
         result = _call_with_resilience(self._bound.invoke, *args, **kwargs)
         _record_tokens(
@@ -1279,6 +1308,8 @@ class _BoundLLMProxy:
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
         self._bind_context()
+        args = _preflight_context(args, kwargs,
+                                  extra_reserved_tokens=self._schema_reserved())
         _t0 = time.monotonic()
         result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
         _record_tokens(
@@ -1292,6 +1323,7 @@ class _BoundLLMProxy:
         return _BoundLLMProxy(
             self._bound.bind_tools(*args, **kwargs),
             model_name=self._model_name or None, role=self._role,
+            tools=args[0] if args else kwargs.get("tools"),
         )
 
     def __getattr__(self, name: str):
@@ -1316,6 +1348,7 @@ def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
         inst = _get_override_llm(model_name)
         return _BoundLLMProxy(
             inst.bind_tools(tools), model_name=model_name, role="tool_selector",
+            tools=tools,
         )
     except Exception as e:
         logger.warning(f"[LLM:proxy] 专用模型 bind_tools 失败，回退全局: {e}")
@@ -1326,16 +1359,23 @@ def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
 # 代理对象
 # =====================================================
 
-def _preflight_context(args: tuple) -> tuple:
+def _preflight_context(args: tuple, kwargs: dict | None = None,
+                       extra_reserved_tokens: int = 0) -> tuple:
     """统一 Prompt Preflight（2026-09-22，ContextBudgetManager）：LLM 调用前
     对 messages 形态的输入走 ContextBudgetManager.prepare_llm_context
     （L2 历史裁剪 → L4 折叠 → 确定性 hard trim → L5 AutoCompact 触发）。
 
     - list[BaseMessage] 输入 → 超过 input_budget 时进入统一预算链路；
       SystemMessage 与最后一条消息（当前 prompt/问题）永不丢弃；
+    - extra_reserved_tokens：bind_tools 场景的工具 schema 占用（调用方
+      构造时已折算）；kwargs 里的 tools/response_format 此处补算；
     - 其他输入形态（str / PromptValue / 批量 / OpenAI dict）不做改动；
     - 软失败：preflight 异常原样放行，绝不阻断 LLM 调用。
     只影响本次发送给模型的内容，不触碰任何持久化历史。
+
+    2026-09-23 P0 接线修复：此前只挂在 _LLMProxy.__call__（业务层无人
+    使用），invoke/ainvoke/stream/astream/bind_tools 全部绕过——L4/L5
+    在生产聊天链路从未生效。现挂进全部调用形态。
     """
     try:
         from langchain_core.messages import BaseMessage
@@ -1349,16 +1389,32 @@ def _preflight_context(args: tuple) -> tuple:
             return args
 
         from backend.context_budget import context_budget
-        from backend.memory.token_budget import count_message_tokens
+
+        # 非消息占用：bind_tools schema（构造期折算）+ kwargs 里的
+        # tools/response_format（每次调用现算，量小）
+        reserved = max(0, int(extra_reserved_tokens or 0))
+        if kwargs:
+            try:
+                from backend.context_budget.token_counter import (
+                    count_response_format_tokens,
+                    count_tool_schema_tokens,
+                )
+                reserved += count_tool_schema_tokens(kwargs.get("tools"))
+                reserved += count_response_format_tokens(
+                    kwargs.get("response_format"))
+            except Exception:
+                pass
 
         # 快路径：绝大多数调用在预算内原样返回，零改动
-        budget = context_budget.get_input_budget()
+        budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
+        from backend.memory.token_budget import count_message_tokens
         total = sum(count_message_tokens(m) for m in payload)
         if total <= budget:
             return args
 
         # 超预算：统一预算链路（L2 → L4 → hard trim → L5 最后一道防线）
-        prepared = context_budget.prepare_llm_context(messages=payload)
+        prepared = context_budget.prepare_llm_context(
+            messages=payload, extra_reserved_tokens=reserved)
         if prepared.overflow:
             logger.warning(
                 f"[LLM:preflight] 上下文超预算且经 L2/L4/L5 后仍超限: "
@@ -1388,7 +1444,10 @@ class _LLMProxy:
         # 用 _BoundLLMProxy 重新纳入包装（function calling 路径）
         if name == "bind_tools" and callable(attr):
             def bind_tools_wrapper(*args, **kwargs):
-                return _BoundLLMProxy(attr(*args, **kwargs))
+                return _BoundLLMProxy(
+                    attr(*args, **kwargs),
+                    tools=args[0] if args else kwargs.get("tools"),
+                )
             return bind_tools_wrapper
         if name in self._WRAP_METHODS and callable(attr):
             # async generator（astream）：包一层限流 + token 记录。
@@ -1409,6 +1468,7 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
+                    args = _preflight_context(args, kwargs)
                     reserve_model_call(
                         "primary", model_name=get_active_model_name(),
                     )
@@ -1450,6 +1510,7 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
+                    args = _preflight_context(args, kwargs)
                     _t0 = time.monotonic()
                     usage_chunk = None
                     yielded_content = False
@@ -1501,6 +1562,7 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
+                    args = _preflight_context(args, kwargs)
                     _t0 = time.monotonic()
                     result = await _acall_with_resilience(attr, *args, **kwargs)
                     _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
@@ -1514,6 +1576,7 @@ class _LLMProxy:
                 ctx = _resolve_call_context()
                 if ctx is not None:
                     set_current_resolved_model(ctx)
+                args = _preflight_context(args, kwargs)
                 _t0 = time.monotonic()
                 result = _call_with_resilience(attr, *args, **kwargs)
                 _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)

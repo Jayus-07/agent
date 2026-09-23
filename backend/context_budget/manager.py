@@ -34,17 +34,23 @@ class ContextBudgetManager:
 
     # ── 预算计算 ────────────────────────────────────────────────
 
-    def get_input_budget(self) -> int:
-        """active context 总预算 = 模型窗口 - 输出预留 - 安全余量。
+    def get_input_budget(self, *, extra_reserved_tokens: int = 0) -> int:
+        """active context 总预算 = min(配置窗口, 模型注册窗口) - 输出预留
+        - 安全余量 - 额外预留（tools schema / response_format 等）。
 
-        默认配置：4096 - 768 - 256 = 3072。
+        模型窗口经 token_counter.resolve_model_context_window 取
+        llm_models.context_length 与配置窗口的较小值；未注册模型回退
+        配置窗口（行为兼容旧版）。
         """
-        from backend.config.llm import LLM_CONTEXT_LENGTH
+        from backend.context_budget.token_counter import (
+            resolve_model_context_window,
+        )
         return max(
             0,
-            int(LLM_CONTEXT_LENGTH)
+            int(resolve_model_context_window())
             - int(_cfg("CONTEXT_OUTPUT_RESERVE_TOKENS", 768))
-            - int(_cfg("CONTEXT_SAFETY_RESERVE_TOKENS", 256)),
+            - int(_cfg("CONTEXT_SAFETY_RESERVE_TOKENS", 256))
+            - max(0, int(extra_reserved_tokens)),
         )
 
     def calculate_usage(
@@ -105,11 +111,15 @@ class ContextBudgetManager:
         messages: list | None = None,
         previous_outputs: dict[str, Any] | None = None,
         rag_context: list[str] | None = None,
+        extra_reserved_tokens: int = 0,
     ) -> PreparedContext:
         """LLM 调用前的统一检查入口（第一版流程，规格 §九）：
 
           L2 history trim → L3 previous_outputs compact → 复核 count_tokens
           → 确认 <= input_budget
+
+        extra_reserved_tokens：调用方折算的非消息占用（tools schema /
+        response_format / provider 信封），直接从预算中扣除。
 
         仍超 hard budget 时做确定性裁剪（优先级：旧 history → 旧
         previous_outputs → RAG 尾部证据），SystemMessage 与最新消息始终
@@ -124,7 +134,8 @@ class ContextBudgetManager:
         from backend.context_budget.micro_compactor import compact_previous_outputs
         from backend.context_budget.metrics import record_overflow
 
-        budget = self.get_input_budget()
+        budget = self.get_input_budget(
+            extra_reserved_tokens=extra_reserved_tokens)
 
         # L3：previous_outputs 总预算压缩
         po = compact_previous_outputs(previous_outputs or {})

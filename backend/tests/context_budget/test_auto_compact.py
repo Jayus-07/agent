@@ -109,11 +109,23 @@ class TestFoldRebuild:
         assert boundary is not None
         # System 指令保留
         assert rebuilt[0].content == "系统指令"
-        # 新摘要在 System 之后
-        assert rebuilt[1].content.startswith(L2_SUMMARY_MARKER)
-        assert "新摘要内容" in rebuilt[1].content
+        # 角色安全（P0-2）：新摘要 = 固定 policy SystemMessage + 数据 AIMessage，
+        # 摘要内容只出现在 AIMessage 的 <historical_context> 标签内
+        from backend.context_budget.role_safety import (
+            HISTORICAL_CONTEXT_POLICY_TEXT,
+            HISTORICAL_TAG_CLOSE,
+            HISTORICAL_TAG_OPEN,
+        )
+        assert rebuilt[1].content == HISTORICAL_CONTEXT_POLICY_TEXT
+        assert type(rebuilt[2]).__name__ == "AIMessage"
+        assert rebuilt[2].content.startswith(HISTORICAL_TAG_OPEN)
+        assert "新摘要内容" in rebuilt[2].content
+        assert rebuilt[2].content.rstrip().endswith(HISTORICAL_TAG_CLOSE)
+        # 动态摘要内容不得出现在任何 SystemMessage 里
+        assert not any("新摘要内容" in m.content
+                       for m in rebuilt if isinstance(m, SystemMessage))
         # 最近 4 轮保留（4 条 Human + 4 条 AI）
-        tail = rebuilt[2:]
+        tail = rebuilt[3:]
         assert sum(1 for m in tail if isinstance(m, HumanMessage)) == 4
         assert sum(isinstance(m, HumanMessage) and "用户问题7" in m.content
                    for m in tail) == 1
@@ -314,7 +326,14 @@ class TestPrepareL5Trigger:
 
         assert calls == ["sess-l5"]
         contents = [getattr(x, "content", "") for x in prepared.messages]
-        assert any(c.startswith(L2_SUMMARY_MARKER) for c in contents)
+        # 角色安全（P0-2）：重建后 = 固定 policy SystemMessage + 数据 AIMessage
+        from backend.context_budget.role_safety import (
+            HISTORICAL_CONTEXT_POLICY_TEXT,
+            HISTORICAL_TAG_OPEN,
+        )
+        assert any(c == HISTORICAL_CONTEXT_POLICY_TEXT for c in contents)
+        assert any(c.startswith(HISTORICAL_TAG_OPEN) and "测试摘要" in c
+                   for c in contents)
         assert prepared.usage.used_tokens < used
         assert not prepared.overflow
         # 最近 4 轮保留
