@@ -122,6 +122,18 @@ class TestRetryPolicy:
 # DB 集成：impl 失败出口 / retry 决策 / signals / index runtime
 # ═══════════════════════════════════════════════════
 
+# ── STOP D P0（2026-09-23）：执行时授权的外部边界 mock ──────
+# 本文件测错误分类与 retry 决策，不是授权本身；auth.users 查询是外部
+# 边界（只 mock 外部边界），授权解析逻辑仍真实执行。user_id 同步
+# 十进制化（auth.users.id 口径）。
+@pytest.fixture(autouse=True)
+def _task_auth_enabled(monkeypatch):
+    import backend.security.task_authorization as _ta
+
+    monkeypatch.setattr(_ta, "_fetch_auth_user",
+                        lambda uid: ("editor", 1, "ecom", "default"))
+
+
 @pytest.fixture(scope="module")
 def pg():
     pytest.importorskip("psycopg")
@@ -180,7 +192,7 @@ def stub_env(pg, monkeypatch):
 
 
 def _make_task(pg, query="step2 测试") -> str:
-    user = f"step2-{uuid.uuid4().hex[:8]}"
+    user = f"9003{uuid.uuid4().int % (10 ** 12):012d}"
     return pg.create_task(user, query).id
 
 

@@ -33,6 +33,18 @@ def pg():
     return task_service
 
 
+# ── STOP D P0（2026-09-23）：执行时授权的外部边界 mock ──────
+# 本文件测恢复语义，不是授权本身；auth.users 查询是外部边界（只 mock
+# 外部边界），授权解析逻辑（身份口径/租户校验/角色推导）仍真实执行。
+# user_id 同步十进制化（auth.users.id 口径，自由串在 resolver 即拒绝）。
+@pytest.fixture(autouse=True)
+def _task_auth_enabled(monkeypatch):
+    import backend.security.task_authorization as _ta
+
+    monkeypatch.setattr(_ta, "_fetch_auth_user",
+                        lambda uid: ("editor", 1, "ecom", "default"))
+
+
 @pytest.fixture()
 def abc3():
     """A→B→C 图（MemorySaver 单进程共享：两个 executor 实例 = 两个 Worker）。"""
@@ -108,7 +120,7 @@ def enqueue_stub(monkeypatch):
 
 def test_resume_paused_continues_from_checkpoint(pg, abc3, enqueue_stub):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "恢复测试")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "恢复测试")
     _pause_to_b(pg, graph, calls, record)
     assert calls == {"step_a": 1, "step_b": 1, "step_c": 0}
 
@@ -132,7 +144,7 @@ def test_resume_paused_continues_from_checkpoint(pg, abc3, enqueue_stub):
 
 def test_resume_twice_sequential_no_double_enqueue(pg, abc3, enqueue_stub):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "重复恢复")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "重复恢复")
     _pause_to_b(pg, graph, calls, record)
 
     from backend.tasks import task_manager
@@ -145,7 +157,7 @@ def test_resume_twice_sequential_no_double_enqueue(pg, abc3, enqueue_stub):
 
 def test_resume_concurrent_two_clients_single_enqueue(pg, abc3, enqueue_stub):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "并发恢复")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "并发恢复")
     _pause_to_b(pg, graph, calls, record)
 
     from backend.tasks import task_manager
@@ -175,7 +187,7 @@ def test_resume_concurrent_two_clients_single_enqueue(pg, abc3, enqueue_stub):
 
 def test_resume_then_worker_kill_then_takeover(pg, abc3):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "kill 恢复")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "kill 恢复")
     _pause_to_b(pg, graph, calls, record)
 
     from backend.tasks import task_manager
@@ -207,7 +219,7 @@ def test_resume_then_worker_kill_then_takeover(pg, abc3):
 
 def test_resume_terminal_rejected(pg, abc3, enqueue_stub):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "终态恢复拒绝")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "终态恢复拒绝")
     TaskManager.mark_running(record.id)
     TaskManager.mark_cancelled(record.id)
 
@@ -221,7 +233,7 @@ def test_resume_terminal_rejected(pg, abc3, enqueue_stub):
 
 def test_resume_failed_rejected_by_default_allow_admin(pg, abc3, enqueue_stub):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "失败重试")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "失败重试")
     TaskManager.mark_running(record.id)
     TaskManager.mark_failed(record.id, error_message="boom")
 
@@ -237,7 +249,7 @@ def test_resume_failed_rejected_by_default_allow_admin(pg, abc3, enqueue_stub):
 
 def test_resume_enqueue_failure_rolls_back_to_paused(pg, abc3, enqueue_stub):
     graph, calls = abc3
-    record = TaskManager.create(f"resume-user-{uuid.uuid4().hex[:8]}", "入队失败")
+    record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "入队失败")
     _pause_to_b(pg, graph, calls, record)
 
     from backend.tasks import task_manager

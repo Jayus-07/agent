@@ -102,10 +102,14 @@ def test_crashed_worker_lease_takeover(pg):
     record = _new_task(pg)
     old_lease = pg.try_acquire_lease(record.id, worker="worker-dead")
     assert old_lease
-    # 回拨心跳，模拟硬杀/OOM 后无心跳的死 Worker
+    # 回拨租约窗口，模拟硬杀/OOM 后心跳停更的死 Worker
+    # （Phase2 Step1：stale 判定唯一权威 = lease_expires_at，NULL 才回落
+    #   updated_at——只回拨 updated_at 不会触发接管）
     with pg._conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE tasks SET updated_at = now() - interval '2 hours' "
+            "UPDATE tasks SET updated_at = now() - interval '2 hours', "
+            "lease_heartbeat_at = now() - interval '1 hour', "
+            "lease_expires_at = now() - interval '1 hour' "
             "WHERE id = %s", (record.id,))
     new_lease = pg.try_acquire_lease(
         record.id, worker="worker-new", stale_running_seconds=1900)

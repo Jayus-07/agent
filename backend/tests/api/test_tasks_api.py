@@ -25,7 +25,8 @@ def client(monkeypatch, pg):
 
     counter = {"n": 0}
 
-    def _fake_enqueue(record):
+    def _fake_enqueue(record, dispatch_type="initial"):
+        # Step3 起 enqueue_task 带 dispatch_type kwarg（QueueRouter 收口）
         counter["n"] += 1
 
     monkeypatch.setattr(task_manager, "enqueue_task", _fake_enqueue)
@@ -50,8 +51,20 @@ def pg():
     return task_service
 
 
+# ── STOP D P0（2026-09-23）：执行时授权的外部边界 mock ──────
+# 本文件测 API/SSE 集成链路，不是授权本身；auth.users 查询是外部边界
+# （只 mock 外部边界），授权解析逻辑仍真实执行。user_id 同步十进制化
+# （auth.users.id 口径，网关身份头传自由串在 resolver 即拒绝）。
+@pytest.fixture(autouse=True)
+def _task_auth_enabled(monkeypatch):
+    import backend.security.task_authorization as _ta
+
+    monkeypatch.setattr(_ta, "_fetch_auth_user",
+                        lambda uid: ("editor", 1, "ecom", "default"))
+
+
 def _user() -> str:
-    return f"api-user-{uuid.uuid4().hex[:8]}"
+    return f"9004{uuid.uuid4().int % (10 ** 12):012d}"
 
 
 def _h(user: str) -> dict:
