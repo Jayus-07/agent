@@ -1519,17 +1519,32 @@ class _BoundLLMProxy:
 def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
     """为指定模型构建 bind_tools 包装（专用轻量模型场景，如 tool_selector）。
 
-    返回 None（model_name 为空 / 未注册 / 构建失败）时调用方应回退
-    全局 llm.bind_tools(tools)。实例经 _get_override_llm 缓存，且用
+    返回 None（model_name 为空 / 未注册 / 能力不支持 / 构建失败）时调用方
+    应回退全局 llm.bind_tools(tools)。实例经 _get_override_llm 缓存，且用
     _BoundLLMProxy 包装——专用模型同样走限流/韧性链/token 记录。
+
+    STOP D（D1 工具调用能力门）：Registry 显式声明 capabilities.tools=false
+    的模型直接回退，不再让 provider 报 unsupported function calling 后才失败；
+    未声明（存量目录基本为空）维持现状宽松行为，避免一刀切拦截未登记模型。
     """
     if not model_name:
         return None
     try:
-        from backend.infra.llm.models import get_available_models
+        from backend.infra.llm.models import (
+            get_available_models,
+            model_supports,
+            registry_declares,
+        )
         if model_name not in {m["name"] for m in get_available_models()}:
             logger.warning(
                 f"[LLM:proxy] 专用模型未注册: {model_name}，回退全局模型")
+            return None
+        entry = get_model_entry(model_name)
+        if entry is not None and registry_declares(entry, "tools") \
+                and not model_supports(entry, "tools"):
+            logger.warning(
+                f"[LLM:proxy] 模型 {model_name} 已登记不支持工具调用"
+                f"(capabilities.tools=false)，回退全局模型")
             return None
         inst = _get_override_llm(model_name)
         return _BoundLLMProxy(

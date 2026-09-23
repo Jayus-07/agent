@@ -361,6 +361,15 @@ def _model_validation_issue(model_name: str, *, role: str | None = None) -> str 
             f"角色 {role} 只能绑定{models_mod.MODEL_KIND_LABELS[expected]}，"
             f"当前模型是{models_mod.MODEL_KIND_LABELS[actual]}"
         )
+    # STOP D（D7）：依赖工具调用的角色，绑定显式声明不支持 tools 的模型时拒绝
+    if role == "tool_selector" and isinstance(
+        entry.get("capabilities"), dict
+    ) and "tools" in entry["capabilities"] \
+            and entry["capabilities"].get("tools") is not True:
+        return (
+            "角色 tool_selector 依赖工具调用（function calling），"
+            "当前模型已登记 capabilities.tools=false"
+        )
     provider = str(entry.get("provider") or "")
     if provider == "ollama" and not OLLAMA_ENABLED:
         return "Ollama 当前未启用（cloud 模式禁用本地模型）"

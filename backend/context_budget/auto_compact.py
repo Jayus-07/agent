@@ -395,22 +395,15 @@ def _resolve_summary_model() -> str:
 
 
 def _provider_supports_thinking_flag(model_name: str) -> bool:
-    """该模型是否支持 enable_thinking 开关（qwen/siliconflow 系）。
+    """该模型是否支持 enable_thinking 开关。
 
-    与 rag/preprocessing/llm_enrichment.py 同一口径：qwen（DashScope）
-    与 siliconflow 支持顶层 enable_thinking；DeepSeek/Ollama 不识别该参数，
-    保持原调用不传（传了可能报错或被网关拒绝）。
+    STOP D（D4）口径收敛：实现委托 `models.supports_thinking_flag`
+    （Registry capabilities 显式声明优先 + legacy 兼容口径），本模块
+    不再自行判断名称/provider。
     """
-    if not model_name:
-        return False
-    lowered = model_name.lower()
-    if "qwen" in lowered or "qwq" in lowered:
-        return True
-    try:
-        from backend.infra.llm.proxy import _get_provider_for
-        return _get_provider_for(model_name) in ("qwen", "siliconflow")
-    except Exception:
-        return False
+    from backend.infra.llm.models import supports_thinking_flag
+
+    return supports_thinking_flag(model_name)
 
 
 def _summary_invoke_kwargs(model_name: str) -> dict:
@@ -765,11 +758,18 @@ def fold_rebuild(
     return new_messages, replaced, boundary
 
 
-async def run_auto_compact_async(session_id: str) -> SummaryOutcome | None:
+async def run_auto_compact_async(
+    session_id: str,
+    extra_facts: Iterable[Any] | None = None,
+) -> SummaryOutcome | None:
     """异步入口（事件循环上下文的 fire-and-forget / 显式调用）。
 
     核心是同步 DB + 同步 LLM，统一丢线程池，不阻塞事件循环。
+    extra_facts（生产收口 B4）：调用方在创建本任务前读取的请求级业务
+    pin 值——asyncio.to_thread 会传播 contextvars，但显式传参不依赖
+    传播语义，也更可测。
     """
     import asyncio
     return await asyncio.to_thread(
-        run_incremental_summary, session_id, SyncMemorySummaryStore(session_id))
+        run_incremental_summary, session_id, SyncMemorySummaryStore(session_id),
+        extra_facts)

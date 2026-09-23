@@ -554,6 +554,44 @@ def model_supports(entry: dict | None, capability: str) -> bool:
     return model_capabilities(entry)[capability]
 
 
+def supports_thinking_flag(model_name: str) -> bool:
+    """enable_thinking 开关支持的**统一判定**（STOP D / D4 收敛口）。
+
+    此前三套口径漂移（STOP A P1-7）：
+      - auto_compact：名称 qw* OR provider ∈ (qwen, siliconflow)
+      - llm_enrichment：仅 provider ∈ (qwen, siliconflow)
+      - provider_probe：域名 siliconflow.cn + qwen3 名称（探测特例，保守
+        口径系有意设计，保留其额外过滤）
+    收敛优先级：**Registry 显式声明优先**（capabilities.thinking 采信 true /
+    false 双向）> legacy 兼容口径（名称 qw* / provider ∈ qwen|siliconflow）。
+    legacy 兜底保留的原因：enable_thinking 传给不识别的 provider 会被拒绝，
+    未登记模型沿用旧口径 = 现状等价，不做 fail-closed 引发延迟回归。
+    """
+    entry = lookup_model_entry(model_name)
+    if entry is not None:
+        raw = entry.get("capabilities")
+        if isinstance(raw, dict) and "thinking" in raw:
+            return raw.get("thinking") is True
+    lowered = (model_name or "").lower()
+    if "qwen" in lowered or "qwq" in lowered:
+        return True
+    try:
+        return resolve_provider(model_name) in ("qwen", "siliconflow")
+    except Exception:
+        return False
+
+
+def registry_declares(entry: dict | None, capability: str) -> bool:
+    """该能力是否被 Registry **显式声明**过（true/false 均算声明）。
+
+    D1 能力门的判定基础：显式 false → 拦截；未声明 → 维持现状行为
+    （渐进治理：存量 16 行 capabilities 基本为空，一刀切 fail-closed
+    会拦截所有未登记模型，破坏向后兼容）。
+    """
+    raw = (entry or {}).get("capabilities")
+    return isinstance(raw, dict) and capability in raw
+
+
 def resolve_output_token_cap(entry: dict | None, configured_window: int) -> int:
     """本次构建应传给 provider 的 max_tokens（B8：输出上限 ≠ 上下文窗口）。
 
