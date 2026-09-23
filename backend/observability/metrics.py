@@ -23,7 +23,19 @@ HTTP 端点 /metrics 在 server.py 注册。
 """
 from __future__ import annotations
 
+import os as _os
+
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+
+# multiprocess 目录必须在任何指标定义前存在（prometheus_client 创建指标时
+# 即写 mmap 文件；worker 内 import 顺序不可控，故在本模块顶部自建）。
+# app 进程未设 PROMETHEUS_MULTIPROC_DIR → no-op（单进程默认 registry）。
+_mp_dir = _os.getenv("PROMETHEUS_MULTIPROC_DIR", "")
+if _mp_dir:
+    try:
+        _os.makedirs(_mp_dir, exist_ok=True)
+    except Exception:  # noqa: BLE001 — 创建失败由单指标创建异常暴露
+        pass
 
 # ==========================================================
 # 4 个核心 metric（PR-0.3 最小骨架；后续可加 workflow_run_duration 等）
@@ -1193,18 +1205,6 @@ def record_admission_active_global(active: int) -> None:
 # 进程归属：task_enqueued_total 在投递进程计数（API 进程走 app /metrics；
 # resume/recovery 重投在 worker 计数走 worker 端点），其余在 worker
 # 进程计数，经 worker metrics 端点（multiprocess 聚合）暴露。
-
-# multiprocess 目录必须在下方模块级 Histogram 创建前存在（prometheus_client
-# 创建指标时即写 mmap 文件；worker 内 import 顺序不可控，故在本模块内自建）。
-# app 进程未设该 env → no-op。
-import os as _os
-
-_mp_dir = _os.getenv("PROMETHEUS_MULTIPROC_DIR", "")
-if _mp_dir:
-    try:
-        _os.makedirs(_mp_dir, exist_ok=True)
-    except Exception:  # noqa: BLE001 — 创建失败由单指标创建异常暴露
-        pass
 
 task_enqueued_total = Counter(
     "task_enqueued_total",
