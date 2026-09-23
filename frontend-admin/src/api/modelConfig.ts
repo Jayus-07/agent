@@ -193,16 +193,6 @@ export async function listModelHealth(): Promise<{ items: ModelHealth[] }> {
   return request<{ items: ModelHealth[] }>('/api/sys/model-health')
 }
 
-/** 管理员手动触发单模型健康探测（同步执行一次极低成本探测）。 */
-export async function checkModelHealth(modelName: string): Promise<{ status: string; latencyMs: number; error: string }> {
-  return mutationRequest('/api/sys/model-health/check', {
-    operation: `model-health-check:${modelName}`,
-    method: 'POST',
-    body: { modelName },
-    timeout: 30000,
-  })
-}
-
 export async function listProviders(): Promise<ProviderListResponse> {
   return request<ProviderListResponse>('/api/sys/providers')
 }
