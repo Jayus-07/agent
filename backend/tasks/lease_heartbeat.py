@@ -88,3 +88,19 @@ class LeaseHeartbeat:
                     "过期），停止续租；后续写入将被 fencing 拒绝",
                     self.task_id, self.execution_id[:8])
                 return
+            self._renew_admission()
+
+    def _renew_admission(self) -> None:
+        """租约续期成功后顺带续 admission token TTL（Phase2 Step4）。
+
+        概念仍分离（lease=执行权权威，token=容量占用证明）：token 续期
+        失败只影响容量槽位 TTL 自愈，不影响执行与 fencing；owner CAS
+        保证租约被接管的旧 Worker 续不到新 owner 的 token。
+        """
+        try:
+            from backend.tasks.admission import renew_for_execution
+
+            renew_for_execution(self.task_id, self.execution_id)
+        except Exception:  # noqa: BLE001 — token 续期失败下轮重试
+            logger.debug("[LeaseHeartbeat] %s admission token 续期异常，"
+                         "下轮重试", self.task_id, exc_info=True)

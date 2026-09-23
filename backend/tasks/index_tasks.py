@@ -21,6 +21,9 @@ from __future__ import annotations
 from backend.config.tasks import (
     CELERY_MAX_RETRIES,
 )
+# 顶层导入：impl/壳层 except 子句在异常匹配期解析该名字（无循环依赖，
+# admission 包不反向依赖本模块）
+from backend.tasks.admission import AdmissionDeferred
 
 
 def _redis_emit_fn(upload_id: str):
@@ -141,6 +144,10 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     try:
         result = run_with_task_state(db_task_id, upload_id, run_index,
                                      retries=retries)
+    except AdmissionDeferred:
+        # admission defer 非业务失败（Phase2 Step4）：不进失败出口，
+        # 由壳层按 delay countdown 重投（保持 rag_index 队列亲和）
+        raise
     except IndexTaskPaused:
         return {"status": "paused", "skipped": True}
     except IndexTaskCancelled:
@@ -195,6 +202,28 @@ def _register_task():
                 was_overwrite=was_overwrite,
                 db_task_id=db_task_id,
                 retries=self.request.retries)
+        except AdmissionDeferred as deferred:
+            # Phase2 Step4：admission 满载延迟准入——apply_async 新消息
+            # countdown 重投（不走 self.retry：defer 不消耗业务 retry
+            # 计数，budget 由 admission defer key 独立管理）；queue 经
+            # QueueRouter workflow 亲和，不自拼队列名
+            from backend.shared.logger import logger
+            from backend.tasks.queue_router import resolve_for_workflow
+
+            route = resolve_for_workflow("rag_index")
+            logger.warning(
+                "[IndexTask] %s admission deferred，%.1fs 后重投 %s",
+                upload_id, deferred.delay_seconds, route.physical_queue)
+            execute_index_task.apply_async(
+                kwargs=dict(
+                    upload_id=upload_id, filepath=filepath,
+                    filename=filename, kb_id=kb_id, department=department,
+                    source=source, batch_id=batch_id,
+                    upload_elapsed_ms=upload_elapsed_ms,
+                    was_overwrite=was_overwrite, db_task_id=db_task_id),
+                queue=route.physical_queue,
+                countdown=deferred.delay_seconds)
+            return {"status": "ADMISSION_DEFERRED", "skipped": True}
         except TaskRetryScheduled as scheduled:
             if db_task_id:
                 # §十一：retry 入队前最终状态复查（CANCELLED/PAUSED/终态

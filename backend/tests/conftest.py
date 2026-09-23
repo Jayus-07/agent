@@ -156,6 +156,28 @@ def _cb_shared_disabled(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _admission_default_disabled(monkeypatch):
+    """存量测试基线 = admission off（Phase2 Step4，同 _cb_shared_disabled 理由）。
+
+    Worker 执行入口的 admission 走进程级单例；不显式注入时，REDIS_ENABLED=true
+    的环境（.env）会在单测里读写真实 db0 admission key（跨用例残留 + 污染
+    生产命名空间），无 Redis 环境则 fail-closed 把执行路径转成 defer 循环。
+    统一默认 disabled（行为与 Step3 基线一致）；admission 专项测试
+    （test_task_admission*.py）显式安装自己的 controller 覆盖本基线。
+    """
+    try:
+        from backend.tasks.admission import AdmissionController
+        from backend.tasks.admission.policy import AdmissionPolicy
+
+        monkeypatch.setattr(
+            "backend.tasks.admission.controller._controller",
+            AdmissionController(policy=AdmissionPolicy(enabled=False)),
+        )
+    except Exception:  # noqa: BLE001 — admission 未加载时无需基线
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _reset_observability_singletons(monkeypatch):
     """逐用例重置 analytics 单例，防止模块加载时缓存的 enabled 状态泄漏。
     （Langfuse 已于 2026-09-18 随弃用清理删除，exporter 单例复位一并移除。）"""

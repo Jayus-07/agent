@@ -1103,6 +1103,67 @@ def record_cs_qa_satisfaction(avg_rating) -> None:
         pass
 
 
+# ── 任务 Admission Control 指标（Phase2 Step4，2026-09-23）────
+# 基数控制：workflow / scope / reason / kind / result / stage 均为固定
+# 低基数词表；tenant_id / user_id / task_id 禁止作为 label（高基数）。
+
+task_admission_requests_total = Counter(
+    "task_admission_requests_total",
+    "任务准入请求总数",
+    labelnames=("workflow", "stage"),  # stage 固定 execute
+)
+
+task_admission_allowed_total = Counter(
+    "task_admission_allowed_total",
+    "任务准入放行总数",
+    labelnames=("workflow", "kind"),  # kind = new | takeover | fallback
+)
+
+task_admission_rejected_total = Counter(
+    "task_admission_rejected_total",
+    "任务准入拒绝总数",
+    labelnames=("workflow", "scope", "reason"),
+    # scope = global|tenant|user|workflow
+    # reason = global_limit|tenant_limit|user_limit|workflow_limit|
+    #          redis_unavailable|internal_error
+)
+
+task_admission_active_global = Gauge(
+    "task_admission_active_global",
+    "当前全局 admission 活跃任务数（从 store 读真值 set）",
+)
+
+task_admission_acquire_latency_seconds = Histogram(
+    "task_admission_acquire_latency_seconds",
+    "admission acquire 耗时（秒）",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+task_admission_release_total = Counter(
+    "task_admission_release_total",
+    "admission token 释放结果总数",
+    labelnames=("result",),  # released | missing | owner_mismatch | error
+)
+
+task_admission_expired_total = Counter(
+    "task_admission_expired_total",
+    "admission token TTL 过期物理回收总数（reconcile 观测）",
+)
+
+task_admission_defer_total = Counter(
+    "task_admission_defer_total",
+    "满载 defer（延迟准入重投）总数",
+    labelnames=("workflow",),
+)
+
+
+def record_admission_active_global(active: int) -> None:
+    try:
+        task_admission_active_global.set(max(0, int(active)))
+    except Exception:
+        pass
+
+
 __all__ = [
     "chat_request_total",
     "chat_request_duration_seconds",
@@ -1126,6 +1187,16 @@ __all__ = [
     "request_concurrency_queued",
     "request_concurrency_wait_seconds",
     "request_concurrency_reject_total",
+    # 任务 Admission Control（Phase2 Step4）
+    "task_admission_requests_total",
+    "task_admission_allowed_total",
+    "task_admission_rejected_total",
+    "task_admission_active_global",
+    "task_admission_acquire_latency_seconds",
+    "task_admission_release_total",
+    "task_admission_expired_total",
+    "task_admission_defer_total",
+    "record_admission_active_global",
     # 运营指标
     "rag_query_total",
     "feedback_total",

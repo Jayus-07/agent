@@ -129,6 +129,57 @@ def _finalize_failure(task_id: str, exc: BaseException, *, record,
     return False
 
 
+def _defer_admission(task_id: str, record, lease_id: str,
+                     decision_reason: str) -> None:
+    """admission 满载/fail-closed 的 defer 出口（Phase2 Step4）。
+
+    - budget 未超：释放租约回 PENDING（RUNNING→PENDING 例外通道，任务
+      尚未执行任何节点，队列语义与 initial PENDING 等价）+ 消息 countdown
+      重投（bounded 指数退避 + jitter；不消耗业务 retry budget）
+    - budget 耗尽：fencing 落 FAILED(admission_rejected) 终态（管理端可
+      重试），不再重投——避免满载期间无限轮询
+    - 重投失败（broker 故障）：异常上抛 → 消息 unacked → broker 重投，
+      任务保持 PENDING 无 token（无泄漏）
+    """
+    from backend.services import task_service
+    from backend.tasks import admission
+    from backend.tasks.queue_router import resolve_for_task
+
+    if admission.defer_budget_exhausted(task_id):
+        try:
+            task_service.update_status(
+                task_id, TaskStatus.FAILED,
+                error_message=(
+                    f"系统繁忙：延迟准入重试超限（admission {decision_reason}），"
+                    "任务终态收口；可从管理端重试"),
+                progress="admission 满载重投超限（可重试）",
+                execution_id=lease_id,
+                error_type="admission_rejected")
+        except TaskLeaseLost:
+            logger.warning("[AgentTask] %s defer budget 耗尽终态写被 fencing "
+                           "拒绝（租约已易主），放弃", task_id)
+            return
+        from backend.tasks.task_manager import publish_event
+
+        publish_event(task_id, "failed",
+                      message="系统繁忙：延迟准入重试超限（可重试）",
+                      error_type="admission_rejected")
+        logger.warning(
+            "[AgentTask] %s admission defer budget 耗尽，落 FAILED "
+            "(admission_rejected)", task_id)
+        return
+
+    delay = admission.note_deferred(task_id, workflow=record.workflow)
+    task_service.release_lease_for_defer(task_id, lease_id)
+    route = resolve_for_task(record)
+    logger.warning(
+        "[AgentTask] %s admission deferred (reason=%s)，%.1fs 后重投 %s",
+        task_id, decision_reason, delay, route.physical_queue)
+    execute_agent_task.apply_async(args=[task_id],
+                                   queue=route.physical_queue,
+                                   countdown=delay)
+
+
 def execute_agent_task_impl(task_id: str, *,
                             retries: int = 0, hostname: str = "") -> dict:
     """任务执行主体（Celery task 与 eager 测试共用的纯函数）。"""
@@ -190,6 +241,16 @@ def execute_agent_task_impl(task_id: str, *,
     hb = LeaseHeartbeat(task_id, lease_id)
     hb.start()
     ctx_token = set_execution(task_id, lease_id)
+    # ── Admission Control（Phase2 Step4）：lease 认领成功后申请容量槽位。
+    #    拒绝（容量满 / fail-closed）→ defer 出口：不执行任何节点。
+    #    allowed=True 时 token owner=本次 execution_id，续期随心跳走。
+    from backend.tasks import admission
+
+    decision = admission.acquire_for_execution(
+        task_id, owner_execution_id=lease_id, record=record)
+    if not decision.allowed:
+        _defer_admission(task_id, record, lease_id, decision.reason)
+        return {"status": "ADMISSION_DEFERRED"}
     try:
         if retries:
             task_service.increment_retry(task_id)
@@ -263,6 +324,15 @@ def execute_agent_task_impl(task_id: str, *,
     finally:
         hb.stop()
         clear_execution(ctx_token)
+        # 终态/retry/租约丢失统一出口释放容量槽位（owner CAS 幂等：
+        # 租约已易主或 token 已过期时零副作用；defer 路径未持有 token，
+        # 释放为 no-op）——retry countdown 期间不占 admission 容量
+        try:
+            admission.release_for_execution(task_id, lease_id,
+                                            reason="execution_end")
+        except Exception:  # noqa: BLE001 — 释放失败由 token TTL 自愈兜底
+            logger.warning("[AgentTask] %s admission release 异常（TTL 自愈）",
+                           task_id, exc_info=True)
 
 
 def _retry_after_state_recheck(task_self, task_id: str,

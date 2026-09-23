@@ -436,8 +436,21 @@ def reconcile_zombie_tasks() -> dict:
     if reaped:
         logger.warning("[TaskManager] zombie reconcile 最终收尸 %d 个任务: %s",
                        len(reaped), reaped)
+
+    # Phase2 Step4：admission 对账顺带执行（同一 beat 周期，不新增调度器）。
+    # 识别过期残留（物理清理）、token 在但任务已终态（释放）、计数漂移；
+    # admission 关闭或 store 不可用时静默跳过（对账是观测性兜底，不阻塞收尸）。
+    admission_report = None
+    try:
+        from backend.tasks import admission
+
+        if admission.get_admission_controller().policy.enabled:
+            admission_report = admission.reconcile_admission_state()
+    except Exception:  # noqa: BLE001 — 对账失败不影响 zombie 收尸主流程
+        logger.debug("[TaskManager] admission reconcile 失败", exc_info=True)
     return {"ok": True, "count": len(reaped),
-            "threshold_seconds": TASK_ZOMBIE_THRESHOLD_SECONDS}
+            "threshold_seconds": TASK_ZOMBIE_THRESHOLD_SECONDS,
+            "admission": admission_report}
 
 
 def force_cancel_task(task_id: str) -> dict:

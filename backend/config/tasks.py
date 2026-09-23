@@ -122,3 +122,93 @@ CELERY_METADATA_SHADOW_TASK_TIMEOUT = int(
 CELERY_METADATA_SHADOW_MAX_RETRIES = int(
     os.getenv("CELERY_METADATA_SHADOW_MAX_RETRIES", str(CELERY_MAX_RETRIES))
 )
+
+# ── Admission Control（Phase2 Step4：并发准入）────────────────
+# 语义：限制"同时执行的 RUNNING 任务数"（acquire 在 Worker 执行起点、
+# lease 认领之后；排队/倒计时等待不占 admission 槽位，无容量虚占）。
+# token = 本次 execution 占用一个 admission slot 的证明，与执行租约
+# （execution lease，写权 fencing）概念分离；Token TTL 对齐租约 TTL，
+# 由 lease heartbeat 顺带续期，Worker crash 后随 TTL 自动回收容量。
+TASK_ADMISSION_ENABLED = os.getenv("TASK_ADMISSION_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes")
+
+# Admission store（Redis）自身不可用时的行为：
+#   closed = 拒绝准入（fail-closed，走 defer 重投，容量保护不被绕过）
+#   open   = 放行 + 高优告警（break-glass，须显式配置）
+TASK_ADMISSION_FAIL_MODE = os.getenv("TASK_ADMISSION_FAIL_MODE", "closed").strip().lower()
+if TASK_ADMISSION_FAIL_MODE not in ("closed", "open"):
+    raise ValueError(f"TASK_ADMISSION_FAIL_MODE 非法: {TASK_ADMISSION_FAIL_MODE!r}"
+                     "（仅支持 closed/open）")
+
+
+def _int_or_none(name: str, default: str) -> int | None:
+    """admission 限额解析：未设/空 = None（该层不启用限制）；负数 = 配置错误 fail-fast。
+
+    显式 0 = 全拒（极端闸刀，立即拒绝所有任务）——与 None 的"不限制"语义
+    严格区分，不允许 silently unlimited。
+    """
+    raw = os.getenv(name, default).strip()
+    if not raw:
+        return None
+    value = int(raw)  # 非整数直接抛 ValueError（fail-fast）
+    if value < 0:
+        raise ValueError(f"{name} 非法: {value}（负数不合法；0=全拒，未设=不限）")
+    return value
+
+
+TASK_ADMISSION_GLOBAL_LIMIT = _int_or_none("TASK_ADMISSION_GLOBAL_LIMIT", "100")
+TASK_ADMISSION_TENANT_LIMIT = _int_or_none("TASK_ADMISSION_TENANT_LIMIT", "50")
+TASK_ADMISSION_USER_LIMIT = _int_or_none("TASK_ADMISSION_USER_LIMIT", "10")
+# per-workflow 限额（workflow=graph_name 口径，非物理队列名；QueueRouter
+# 负责 workflow→队列，admission 只消费 workflow 字符串本身）
+TASK_ADMISSION_WORKFLOW_LIMITS_RAW = os.getenv(
+    "TASK_ADMISSION_WORKFLOW_LIMITS", "main=50,rag_index=20")
+
+
+def _parse_workflow_limits(raw: str) -> dict[str, int | None]:
+    """main=50,rag_index=20 形态解析；条目值为空 = 该 workflow 不限。"""
+    limits: dict[str, int | None] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(
+                f"TASK_ADMISSION_WORKFLOW_LIMITS 条目非法: {item!r}（应为 workflow=limit）")
+        wf, _, val = item.partition("=")
+        wf = wf.strip()
+        val = val.strip()
+        if not wf:
+            raise ValueError("TASK_ADMISSION_WORKFLOW_LIMITS workflow 名为空")
+        if not val:
+            limits[wf] = None
+            continue
+        limit = int(val)  # 非整数 fail-fast
+        if limit < 0:
+            raise ValueError(f"TASK_ADMISSION_WORKFLOW_LIMITS {wf} 非法: {limit}")
+        limits[wf] = limit
+    return limits
+
+
+TASK_ADMISSION_WORKFLOW_LIMITS = _parse_workflow_limits(
+    TASK_ADMISSION_WORKFLOW_LIMITS_RAW)
+
+# Token TTL（秒）：对齐执行租约 TTL——lease heartbeat 每 15s 续租时顺带续
+# token；Worker crash 后 token 随 TTL 过期自动释放容量（无需 finally）。
+TASK_ADMISSION_TOKEN_TTL_SECONDS = int(
+    os.getenv("TASK_ADMISSION_TOKEN_TTL_SECONDS", str(TASK_LEASE_TTL_SECONDS)))
+
+# 满载 defer（延迟准入）退避：拒绝后任务保持 PENDING，消息按 countdown
+# 重投轮询；bounded + jitter，budget 耗尽落 FAILED(admission_rejected) 可重试。
+TASK_ADMISSION_DEFER_INITIAL_DELAY = int(
+    os.getenv("TASK_ADMISSION_DEFER_INITIAL_DELAY", "10"))
+TASK_ADMISSION_DEFER_MAX_DELAY = int(
+    os.getenv("TASK_ADMISSION_DEFER_MAX_DELAY", "60"))
+TASK_ADMISSION_DEFER_MAX_COUNT = int(
+    os.getenv("TASK_ADMISSION_DEFER_MAX_COUNT", "60"))
+TASK_ADMISSION_DEFER_JITTER = os.getenv(
+    "TASK_ADMISSION_DEFER_JITTER", "true").strip().lower() in ("1", "true", "yes")
+
+# admission key 前缀（挂在任务控制面 TASK_KEY_PREFIX 之下，与 cancel/pause
+# 标志、事件通道同域；计数/令牌/defer 计数均在此命名空间内）
+TASK_ADMISSION_KEY_PREFIX = TASK_KEY_PREFIX + "admission:"

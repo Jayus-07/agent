@@ -158,6 +158,32 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
         logger.warning("[IndexTaskRuntime] %s lease held elsewhere, skip", db_task_id)
         return {"status": "error", "error": "running_elsewhere", "skipped": True}
 
+    # ── Admission Control（Phase2 Step4）：lease 认领后申请容量槽位；
+    #    拒绝 → defer（释放租约回 PENDING，抛 AdmissionDeferred 由壳层
+    #    countdown 重投）——与 agent 执行入口同一语义。
+    from backend.tasks import admission
+
+    decision = admission.acquire_for_execution(
+        db_task_id, owner_execution_id=lease_id, record=record)
+    if not decision.allowed:
+        if admission.defer_budget_exhausted(db_task_id):
+            try:
+                TaskManager.mark_failed(
+                    db_task_id,
+                    error_message=("系统繁忙：延迟准入重试超限"
+                                   f"（admission {decision.reason}），可重试"),
+                    error_code="admission_rejected",
+                    progress="admission 满载重投超限（可重试）",
+                    execution_id=lease_id)
+            except TaskLeaseLost:
+                logger.warning("[IndexTaskRuntime] %s defer budget 终态写被"
+                               " fencing 拒绝", db_task_id)
+            return {"status": "error", "error": "admission_rejected",
+                    "skipped": True}
+        delay = admission.note_deferred(db_task_id, workflow=record.workflow)
+        task_service.release_lease_for_defer(db_task_id, lease_id)
+        raise admission.AdmissionDeferred(db_task_id, delay, decision.reason)
+
     hb = LeaseHeartbeat(db_task_id, lease_id)
     hb.start()
     ctx_token = set_execution(db_task_id, lease_id)
@@ -242,3 +268,12 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
     finally:
         hb.stop()
         clear_execution(ctx_token)
+        # 终态/retry/租约丢失统一出口释放容量槽位（owner CAS 幂等；
+        # defer 路径未持有 token，释放为 no-op）——retry countdown 期间
+        # 不占 admission 容量
+        try:
+            admission.release_for_execution(db_task_id, lease_id,
+                                            reason="execution_end")
+        except Exception:  # noqa: BLE001 — 释放失败由 token TTL 自愈兜底
+            logger.warning("[IndexTaskRuntime] %s admission release 异常"
+                           "（TTL 自愈）", db_task_id, exc_info=True)
