@@ -56,8 +56,8 @@ def main():
     )
     parser.add_argument(
         "module", nargs="?", default="all",
-        choices=["all", "planner", "rag", "sql", "e2e"],
-        help="评估模块 (默认: all)",
+        choices=["all", "planner", "rag", "sql", "e2e", "travel"],
+        help="评估模块 (默认: all)。travel=旅游域规划质量金标（STOP I5）",
     )
     parser.add_argument(
         "--smoke", action="store_true",

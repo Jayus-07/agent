@@ -169,16 +169,54 @@ def _to_int(token: str) -> int | None:
     return _CN_NUM.get(token)
 
 
-def extract_destination(message: str) -> str:
-    """从消息中识别目的地城市（用数据集真实城市名录匹配，不做盲抽）。"""
+# 目的地否定语境（STOP I2，T7）：「不去厦门了，重新规划杭州两天」同时
+# 提到两个城市 —— 被否定/被放弃的那个不是目的地。匹配城市名左边界，
+# 判定其紧邻前缀是否为否定/放弃表达。
+_RE_CITY_NEGATION = re.compile(r"(?:不去|不想去|别去|不要去|避开|离开)$")
+
+
+def extract_destination(message: str, previous_destination: str = "") -> str:
+    """从消息中识别目的地城市（用数据集真实城市名录匹配，不做盲抽）。
+
+    多城市同现时按确定性消歧（STOP I2）：
+      1. 剔除紧邻否定/放弃表达的（「不去厦门了」的厦门）；
+      2. 仍有多个且上一轮目的地在场 → 剔除上一轮目的地（变化目标优先，
+         「换」语义）；单城市时直接取（含与上一轮相同的重申）；
+      3. 其余按**消息出现顺序**取最左（首个提及通常是主目的地，
+         优于目录序——目录序会让「不去厦门…杭州」错取厦门）。
+    无法识别返回空串（由调用方走追问）。
+    """
+    hits: list[tuple[int, str]] = []
     for city in poi_seed.all_cities():
-        if city in message:
-            return city
+        pos = message.find(city)
+        if pos >= 0:
+            hits.append((pos, city))
     # 别名（"榕城"、"鹭岛"、英文名等）
     for alias, city in poi_seed.CITY_ALIASES.items():
-        if alias in message.lower():
-            return city
-    return ""
+        pos = message.lower().find(alias)
+        if pos >= 0:
+            hits.append((pos, city))
+    if not hits:
+        return ""
+
+    candidates = [c for _, c in hits]
+    if len(candidates) > 1:
+        # 1) 否定/放弃语境的城市出局
+        kept: list[str] = []
+        for pos, city in hits:
+            prefix = message[max(0, pos - 4):pos]
+            if _RE_CITY_NEGATION.search(prefix):
+                continue
+            kept.append(city)
+        candidates = kept or candidates
+        # 2) 「换目的地」语义：多个候选含上一轮目的地时，变化目标优先
+        if (len(candidates) > 1 and previous_destination
+                and previous_destination in candidates):
+            candidates = [c for c in candidates if c != previous_destination]
+        # 3) 消息出现顺序取最左
+        order = {c: pos for pos, c in hits}
+        candidates.sort(key=lambda c: order[c])
+    return candidates[0]
 
 
 def extract_days(message: str) -> int | None:
@@ -583,7 +621,8 @@ def extract_brief(message: str, previous: TravelBrief | None = None) -> TravelBr
     先抽 avoid 再抽 must_go —— 前者参与后者的过滤，顺序不能反。
     """
     fresh = TravelBrief(
-        destination=extract_destination(message),
+        destination=extract_destination(
+            message, previous.destination if previous else ""),
         days=extract_days(message),
         party_size=extract_party_size(message) or 1,
         budget_cny=extract_budget(message),

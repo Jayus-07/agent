@@ -29,9 +29,12 @@ def budget_expert_node(state: dict) -> dict:
 
         notes: list[str] = []
         if brief.budget_cny is None or brief.budget_cny <= 0:
+            # 金额不写进提示（STOP I5 Q10 教训）：后续 repair 重排会改费用，
+            # notes 里的金额不会跟着刷新 —— 陈旧金额进行程单就是「unsupported
+            # fact」。权威数字只留费用预估段（reporter 从最终 itinerary 渲染）。
             notes.append(
                 "你未提供预算，本次未做预算校验；"
-                f"以下为按常见消费水平估算的总额 ¥{itinerary.cost.total:.0f}"
+                "行程费用按常见消费水平估算，详见下方「费用预估」"
             )
 
         logger.info("[TravelBudget] total=%.0f breakdown=%s",

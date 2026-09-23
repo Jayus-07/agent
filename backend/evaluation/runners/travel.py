@@ -42,12 +42,17 @@ def _snapshot_actual(final: dict) -> dict:
     val = final.get("validation") or {}
     viols = val.get("violations", [])
     ans = final.get("final_answer") or ""
+    # STOP I5：逐例质量度量（Q1-Q10）随快照出报告
+    from backend.evaluation.travel_quality import case_quality
+
+    quality = case_quality(final)
     return {
         "status": it.get("status"),
         "destination": brief.get("destination"),
         "days": brief.get("days"),
         "party_size": brief.get("party_size"),
         "pace": brief.get("pace"),
+        "budget_cny": brief.get("budget_cny"),
         "plan_version": it.get("plan_version"),
         "parent_plan_version": it.get("parent_plan_version"),
         "repair_rounds": final.get("repair_rounds", 0) or 0,
@@ -60,6 +65,7 @@ def _snapshot_actual(final: dict) -> dict:
         "notes": list(final.get("notes") or []),
         "has_itinerary": bool(it),
         "clarification": (not it) and bool(ans),
+        "quality": quality,
     }
 
 
@@ -79,7 +85,7 @@ def _judge_one(exp: dict, act: dict, turn: str) -> list[str]:
 
     if "status" in exp and act["status"] != exp["status"]:
         _fail(f"status={act['status']}!={exp['status']}")
-    for key in ("destination", "days", "party_size", "pace"):
+    for key in ("destination", "days", "party_size", "pace", "budget_cny"):
         if key in exp and act.get(key) != exp[key]:
             _fail(f"{key}={act.get(key)}!={exp[key]}")
     if "min_plan_version" in exp and (act["plan_version"] or 0) < exp["min_plan_version"]:
@@ -237,10 +243,30 @@ def _run_case(case: TestCase) -> EvalResult:
             restore()
 
     status = "pass" if not reasons else "fail"
+    # STOP I5：质量指标进 metrics（报告/聚合可见；不影响 pass/fail 判定）。
+    # EvalResult.metrics 是 dict[str, float|None]，逐键摊平：turn1 用 qN，
+    # 跨轮 turn2 用 qN_t2。
+    metric_keys = (
+        "q1_valid_poi_rate", "q2_must_go_coverage", "q3_avoid_violations",
+        "q4_duplicate_count", "q5_day_count_accuracy",
+        "q6_max_intraday_transit", "q7_max_daily_load",
+        "q9_error_count", "q10_unsupported_amounts",
+    )
+    metrics: dict = {}
+    for turn_idx, turn in enumerate(actual_turns, start=1):
+        quality = turn.get("quality") or {}
+        suffix = "" if turn_idx == 1 else f"_t{turn_idx}"
+        for key in metric_keys:
+            short = key.split("_")[0]  # q1_valid_poi_rate → q1
+            value = quality.get(key)
+            if key == "q10_unsupported_amounts" and isinstance(value, list):
+                value = float(len(value))  # metrics 只收数值；列表在 actual 里
+            metrics[f"{short}{suffix}"] = value
     return EvalResult(
         case_id=case.id, module="travel", status=status,
         expected=case.expected,
         actual={"turns": actual_turns},
+        metrics=metrics,
         error_msg="; ".join(reasons) or None,
         duration_ms=int((time.time() - t0) * 1000),
     )

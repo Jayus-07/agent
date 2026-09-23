@@ -63,9 +63,44 @@ class TestDatasetIntegrity:
         assert load_dataset("travel") .__len__() == len(lines)
 
     def test_groups_a_f_covered(self):
+        # STOP I5：新增 G 组（质量金标）。A-F 为既有行为组，G 为质量组，
+        # 两组都是数据集契约的一部分——缺组即数据集退化
         cases = load_dataset("travel")
         groups = {c.metadata.get("group") for c in cases}
-        assert groups == {"A", "B", "C", "D", "E", "F"}
+        assert {"A", "B", "C", "D", "E", "F"} <= groups
+        assert "G" in groups
+
+    def test_quality_golden_covers_task_scenarios(self):
+        """STOP I5：金标必须覆盖任务书核心场景（≥30 条 + G 组 12 类）。"""
+        cases = load_dataset("travel")
+        assert len(cases) >= 30
+        g_types = {c.metadata.get("type") for c in cases
+                   if c.metadata.get("group") == "G"}
+        required = {
+            "quality_basic",            # T1 基础
+            "quality_pending",          # T2 缺槽追问
+            "quality_budget_patch",     # T3 预算 PATCH
+            "quality_avoid_patch",      # T4 avoid PATCH
+            "quality_must_go",          # T5 must-go
+            "quality_conflict",         # T6 约束冲突
+            "quality_new_run",          # T7 目的地变更
+            "quality_lodging",          # T8 lodging
+            "quality_budget_impossible",# T9 预算不可能
+            "quality_unknown_must_go",  # T10 未知必去
+            "quality_opening_hours",    # T14 营业时间
+            "quality_grounding",        # T15 reporter grounding
+        }
+        assert required <= g_types, f"金标缺场景: {required - g_types}"
+
+    def test_golden_cross_turn_have_followup(self):
+        """G 组跨轮用例与 C 组同一契约：same_thread 必配 followup。"""
+        for c in load_dataset("travel"):
+            if c.metadata.get("group") != "G":
+                continue
+            if c.metadata.get("same_thread"):
+                assert c.metadata.get("followup"), f"{c.id} 缺 followup 消息"
+                assert c.metadata.get("followup_expected"), \
+                    f"{c.id} 缺 followup_expected（质量金标必须断言第二轮）"
 
     def test_tiers_valid_and_expected_present(self):
         cases = load_dataset("travel")
