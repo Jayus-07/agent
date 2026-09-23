@@ -104,27 +104,56 @@ def _get_conn(timeout: float = None):
 
     使用 psycopg2.pool.ThreadedConnectionPool.getconn() / putconn()。
     归还前执行 rollback() 清理未完成的事务。
+
+    自愈（2026-09-23 D1-1）：PG 重启/网络抖动会杀死池内连接，此前死连接
+    被原样归还并在池里永久循环借出。现借出时做 closed 检查 + SELECT 1
+    低成本探活（有界 3 次），坏连接 close=True 丢弃重取；归还时按健康度
+    决定 close，死连接不再回流池内。
     """
     pool = _get_pool()
     conn = None
     try:
-        try:
-            conn = pool.getconn()
-        except PoolError as e:
-            # 连接池打满：转限流语义（建议项 2026-09-21），不再裸 500
-            raise PoolExhaustedError(
-                f"连接池已满（maxconn={pool.maxconn}）"
-            ) from e
-        conn.autocommit = False
-        conn.set_session(readonly=True)
+        last_err: Exception | None = None
+        for _attempt in range(3):
+            try:
+                conn = pool.getconn()
+            except PoolError as e:
+                # 连接池打满：转限流语义（建议项 2026-09-21），不再裸 500
+                raise PoolExhaustedError(
+                    f"连接池已满（maxconn={pool.maxconn}）"
+                ) from e
+            if conn.closed:
+                # 池内存量死连接（PG 重启残留）：丢弃重取
+                pool.putconn(conn, close=True)
+                conn = None
+                continue
+            try:
+                # 探活：autocommit 下 SELECT 1，不污染事务状态
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchall()
+                conn.autocommit = False
+                conn.set_session(readonly=True)
+                last_err = None
+                break
+            except (OperationalError, psycopg2.InterfaceError) as e:
+                last_err = e
+                logger.warning("[Executor] 借出连接探活失败，丢弃重取: %s", e)
+                pool.putconn(conn, close=True)
+                conn = None
+        if conn is None:
+            raise last_err or OperationalError("连接池内无健康连接")
         yield conn
     finally:
         if conn is not None:
+            broken = bool(getattr(conn, "closed", False))
             try:
                 conn.rollback()
             except Exception:
-                logger.warning("[Executor] 连接 rollback 失败（可能已关闭）", exc_info=True)
-            pool.putconn(conn)
+                # rollback 失败 = 连接已坏（查询中途 PG 断开等），不再回流
+                broken = True
+            pool.putconn(conn, close=broken)
 
 
 def _classify_pg_error(exc: Exception) -> tuple[str, str | None]:
