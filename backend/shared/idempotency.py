@@ -32,6 +32,45 @@ def _record_idempotency_metric(metric_name: str, operation: str, result: str) ->
         logger.warning("[Idempotency] 指标写入失败: %s", exc)
 
 
+def _key_hash(key: IdempotencyKey) -> str:
+    """日志/trace 只落 key 摘要（前 12 位），不落完整业务键。"""
+    return hashlib.sha256(key.storage_key().encode("utf-8")).hexdigest()[:12]
+
+
+def _log_decision(
+    event: str,
+    *,
+    key: IdempotencyKey,
+    decision: str,
+    owner: str = "",
+    reason: str = "",
+    duration_ms: float | None = None,
+) -> None:
+    """结构化决策日志——dedup/conflict/in_doubt 行为可定位（Step6 G17）。"""
+    logger.info(
+        "[Idempotency] event=%s decision=%s operation=%s key_hash=%s "
+        "owner=%s reason=%s duration_ms=%s",
+        event, decision, key.operation, _key_hash(key),
+        owner or "-", reason or "-",
+        f"{duration_ms:.1f}" if duration_ms is not None else "-",
+    )
+
+
+def _trace_idempotency_tags(**attrs: Any) -> None:
+    """best-effort 把幂等决策写进当前 trace tags；失败不影响副作用协议。"""
+    try:
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is None:
+            return
+        for name, value in attrs.items():
+            if value:
+                trace.tags[f"idempotency.{name}"] = str(value)
+    except Exception as exc:
+        logger.debug("[Idempotency] trace 标记失败: %s", exc)
+
+
 def canonical_fingerprint(payload: Any) -> str:
     """对请求体做稳定 JSON 规范化并计算 SHA-256。"""
     canonical = json.dumps(
@@ -86,6 +125,13 @@ class IdempotencyUnavailable(RuntimeError):
 
 class IdempotencyContextMissing(PermissionError):
     """缺少可信租户/操作者上下文；调用方必须拒绝执行副作用。"""
+
+
+class IdempotencyConflict(ValueError):
+    """同 key 不同 payload，或幂等状态不确定；必须中止，不得复用旧结果。
+
+    继承 ValueError 保持与既有调用方（捕获 ValueError）的兼容。
+    """
 
 
 @dataclass(frozen=True)
@@ -408,21 +454,31 @@ class IdempotencyExecutor:
         _record_idempotency_metric(
             "idempotency_claim_total", key.operation, claim.status.value
         )
+        _log_decision(
+            "claim", key=key, decision=claim.status.value,
+            owner=claim.lease_id[:8] if claim.lease_id else "",
+            reason=claim.error_code,
+        )
         if claim.status == ClaimStatus.SUCCEEDED:
+            _trace_idempotency_tags(decision="replayed", reused="true")
             _record_idempotency_metric(
                 "idempotency_execution_total", key.operation, "replay"
             )
             return dict(claim.result or {})
         if claim.status == ClaimStatus.CONFLICT:
             if claim.error_code == _UNCERTAIN_ERROR_CODE:
+                _trace_idempotency_tags(decision="in_doubt", conflict="true")
                 raise IdempotencyUnavailable(
                     "副作用已执行但幂等终态未知，拒绝再次执行"
                 )
-            raise ValueError("IDEMPOTENCY_CONFLICT")
+            _trace_idempotency_tags(decision="conflict", conflict="true")
+            raise IdempotencyConflict("IDEMPOTENCY_CONFLICT")
         if claim.status != ClaimStatus.NEW:
-            raise ValueError("IDEMPOTENCY_CONFLICT")
+            _trace_idempotency_tags(decision="in_progress")
+            raise IdempotencyConflict("IDEMPOTENCY_CONFLICT")
         result_persisted = False
         operation_succeeded = False
+        started = time.monotonic()
         try:
             if self.pre_execute is not None:
                 self.pre_execute()
@@ -436,6 +492,12 @@ class IdempotencyExecutor:
             self.store.complete(claim.lease_id, result, key=key)
             _record_idempotency_metric(
                 "idempotency_execution_total", key.operation, "success"
+            )
+            _trace_idempotency_tags(decision="executed", reused="false")
+            _log_decision(
+                "complete", key=key, decision="success",
+                owner=claim.lease_id[:8],
+                duration_ms=(time.monotonic() - started) * 1000,
             )
             return result
         except Exception as exc:
@@ -458,10 +520,21 @@ class IdempotencyExecutor:
             try:
                 self.store.fail(claim.lease_id, error_code, key=key)
             except Exception:
-                logger.error("[Idempotency] Redis 失败状态回写失败", exc_info=True)
+                logger.error("[Idempotency] 幂等失败状态回写失败", exc_info=True)
             _record_idempotency_metric(
                 "idempotency_execution_total", key.operation,
                 "uncertain" if error_code == _UNCERTAIN_ERROR_CODE else "failure",
+            )
+            _trace_idempotency_tags(
+                decision="uncertain" if error_code == _UNCERTAIN_ERROR_CODE
+                else "failed",
+            )
+            _log_decision(
+                "complete", key=key,
+                decision="uncertain" if error_code == _UNCERTAIN_ERROR_CODE
+                else "failure",
+                owner=claim.lease_id[:8], reason=error_code,
+                duration_ms=(time.monotonic() - started) * 1000,
             )
             raise
 
@@ -593,6 +666,520 @@ class PostgresIdempotencyResultStore:
             raise IdempotencyUnavailable("PG 幂等结果写入失败") from exc
 
 
+class PostgresIdempotencyLedgerStore:
+    """PG durable ledger 存储——claim/complete/fail 与 Redis store 同一协议。
+
+    副作用幂等的权威事实必须落 PG：Redis 重启/TTL 过期不能把「已发生的
+    退款」变成「没发生过」（Step6 §十）。表 = ai.idempotency_records
+    （migration 031/047），PK(tenant_id, actor_id, operation, client_key)
+    本身就是唯一 claim 闸，INSERT ON CONFLICT DO NOTHING 原子抢注，
+    禁止 check-then-act（Step6 §十一）。
+
+    接管（takeover）语义（Step6 §二十，绝不按时间盲目重执行）：
+      - status=failed：已确认未产生副作用，允许接管重试；
+      - status=running 且租约已过期（crash 窗口，副作用是否发生未知）：
+        仅当 takeover_allowed 判定通过才接管；未提供判定时保守阻断
+        （按 UNCERTAIN 冲突处理），由 resolve_stale_side_effect 人工裁决。
+    """
+
+    _SELECT_COLUMNS = (
+        "request_hash, status, error_code, result, lease_id, "
+        "(lease_expires_at IS NOT NULL AND lease_expires_at <= now()) "
+        "AS lease_expired, owner_execution_id, attempt"
+    )
+
+    def __init__(
+        self,
+        connection_factory=None,
+        *,
+        table: str = "ai.idempotency_records",
+        lease_seconds: int = 300,
+        owner_execution_id: str = "",
+        takeover_allowed=None,
+    ):
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds 必须大于 0")
+        self._connection_factory = (
+            connection_factory or _default_memory_ledger_connection
+        )
+        self._table = table
+        self.lease_seconds = lease_seconds
+        self.owner_execution_id = owner_execution_id
+        self._takeover_allowed = takeover_allowed
+
+    def claim(self, key: IdempotencyKey, payload: Any) -> ClaimResult:
+        request_hash = canonical_fingerprint(payload)
+        lease_id = str(uuid.uuid4())
+        try:
+            with self._connection_factory() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {self._table} (
+                        tenant_id, actor_id, operation, client_key,
+                        request_hash, status, attempt,
+                        lease_id, lease_expires_at, owner_execution_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, 'running', 1, %s,
+                            now() + (%s * interval '1 second'), %s)
+                    ON CONFLICT (tenant_id, actor_id, operation, client_key)
+                    DO NOTHING
+                    RETURNING lease_id
+                    """,
+                    (
+                        key.tenant_id, key.actor_id, key.operation,
+                        key.client_key, request_hash, lease_id,
+                        self.lease_seconds, self.owner_execution_id or None,
+                    ),
+                )
+                if cur.fetchone() is not None:
+                    conn.commit()
+                    return ClaimResult(
+                        status=ClaimStatus.NEW,
+                        lease_id=lease_id,
+                        lease_expires_at=time.time() + self.lease_seconds,
+                    )
+                row = self._select_row(cur, key)
+                if row is None:
+                    conn.rollback()
+                    return ClaimResult(
+                        status=ClaimStatus.CONFLICT,
+                        error_code="IDEMPOTENCY_CONFLICT",
+                    )
+                decision = self._decide_claim(cur, conn, key, row, request_hash)
+                return decision
+        except IdempotencyUnavailable:
+            raise
+        except Exception as exc:
+            raise IdempotencyUnavailable("PG ledger claim 失败") from exc
+
+    def _select_row(self, cur: Any, key: IdempotencyKey) -> tuple | None:
+        cur.execute(
+            f"""
+            SELECT {self._SELECT_COLUMNS}
+            FROM {self._table}
+            WHERE tenant_id = %s AND actor_id = %s
+              AND operation = %s AND client_key = %s
+            """,
+            (key.tenant_id, key.actor_id, key.operation, key.client_key),
+        )
+        return cur.fetchone()
+
+    def _decide_claim(
+        self,
+        cur: Any,
+        conn: Any,
+        key: IdempotencyKey,
+        row: tuple,
+        request_hash: str,
+    ) -> ClaimResult:
+        """按已存在记录的状态决定 NEW/RUNNING/SUCCEEDED/CONFLICT。
+
+        全程在 claim 事务内：接管走条件 UPDATE（WHERE 里复核 failed/租约
+        过期），并发抢占由 rowcount 判定，check-then-act 竞态不成立。
+        """
+        (stored_hash, status, error_code, result, stored_lease,
+         lease_expired, owner_execution_id, attempt) = row
+        if stored_hash != request_hash:
+            conn.rollback()
+            return ClaimResult(
+                status=ClaimStatus.CONFLICT, error_code="IDEMPOTENCY_CONFLICT",
+            )
+        if status == ClaimStatus.SUCCEEDED.value:
+            conn.rollback()
+            return ClaimResult(
+                status=ClaimStatus.SUCCEEDED, result=dict(result or {}),
+            )
+        if (status == ClaimStatus.FAILED.value
+                and error_code == _UNCERTAIN_ERROR_CODE):
+            conn.rollback()
+            return ClaimResult(
+                status=ClaimStatus.CONFLICT, error_code=_UNCERTAIN_ERROR_CODE,
+            )
+        if (status == ClaimStatus.RUNNING.value
+                and not lease_expired):
+            conn.rollback()
+            return ClaimResult(
+                status=ClaimStatus.RUNNING, lease_id=str(stored_lease or ""),
+            )
+
+        # ── 接管判定：failed = 已确认未执行（可重试）；
+        #    running+租约过期 = crash 窗口（需 takeover_allowed 判定）──
+        if status == ClaimStatus.RUNNING.value:
+            allowed = bool(
+                self._takeover_allowed
+                and self._takeover_allowed({
+                    "owner_execution_id": owner_execution_id or "",
+                    "attempt": int(attempt or 0),
+                    "error_code": error_code or "",
+                })
+            )
+            if not allowed:
+                conn.rollback()
+                return ClaimResult(
+                    status=ClaimStatus.CONFLICT,
+                    error_code=_UNCERTAIN_ERROR_CODE,
+                )
+        new_lease = str(uuid.uuid4())
+        cur.execute(
+            f"""
+            UPDATE {self._table} SET
+                status = 'running',
+                lease_id = %s,
+                lease_expires_at = now() + (%s * interval '1 second'),
+                owner_execution_id = %s,
+                error_code = NULL,
+                attempt = attempt + 1,
+                updated_at = now()
+            WHERE tenant_id = %s AND actor_id = %s
+              AND operation = %s AND client_key = %s
+              AND (status = 'failed'
+                   OR (status = 'running'
+                       AND lease_expires_at IS NOT NULL
+                       AND lease_expires_at <= now()))
+            """,
+            (
+                new_lease, self.lease_seconds, self.owner_execution_id or None,
+                key.tenant_id, key.actor_id, key.operation, key.client_key,
+            ),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return ClaimResult(
+                status=ClaimStatus.NEW,
+                lease_id=new_lease,
+                lease_expires_at=time.time() + self.lease_seconds,
+            )
+        # 条件 UPDATE 没打中 = 并发被抢先：回滚后按现状重读一次
+        conn.rollback()
+        with self._connection_factory() as conn2, conn2.cursor() as cur2:
+            row2 = self._select_row(cur2, key)
+            conn2.rollback()
+        if row2 is not None and row2[1] == ClaimStatus.SUCCEEDED.value:
+            return ClaimResult(
+                status=ClaimStatus.SUCCEEDED, result=dict(row2[3] or {}),
+            )
+        return ClaimResult(
+            status=ClaimStatus.RUNNING,
+            lease_id=str(row2[4]) if row2 else "",
+        )
+
+    def complete(
+        self,
+        lease_id: str,
+        result: dict[str, Any],
+        *,
+        key: IdempotencyKey | None = None,
+    ) -> None:
+        if key is None:
+            raise ValueError("PG ledger 完成必须提供 IdempotencyKey")
+        if self._finish(key, lease_id, status=ClaimStatus.SUCCEEDED.value,
+                        result=result) != 1:
+            raise ValueError("幂等 lease 不存在或已失效")
+
+    def complete_in_connection(
+        self,
+        conn: Any,
+        lease_id: str,
+        result: dict[str, Any],
+        *,
+        key: IdempotencyKey,
+    ) -> None:
+        """与业务写同一事务内写终态（Step6 §二十一 原子模式）；不提交。"""
+        if self._finish(key, lease_id, status=ClaimStatus.SUCCEEDED.value,
+                        result=result, conn=conn) != 1:
+            raise ValueError("幂等 lease 不存在或已失效")
+
+    def fail(
+        self,
+        lease_id: str,
+        error_code: str = "INTERNAL_ERROR",
+        *,
+        key: IdempotencyKey | None = None,
+    ) -> None:
+        if key is None:
+            raise ValueError("PG ledger 失败收口必须提供 IdempotencyKey")
+        if self._finish(key, lease_id, status=ClaimStatus.FAILED.value,
+                        error_code=error_code) != 1:
+            raise ValueError("幂等 lease 不存在或已失效")
+
+    def _finish(
+        self,
+        key: IdempotencyKey,
+        lease_id: str,
+        *,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        conn: Any = None,
+    ) -> int:
+        """owner CAS 终态写（Step6 §十九）：只认当前 lease + owner。"""
+        owner_clause = ""
+        params: list[Any] = [
+            status,
+            json.dumps(result, ensure_ascii=False, default=str)
+            if result is not None else None,
+            error_code,
+            key.tenant_id, key.actor_id, key.operation, key.client_key,
+            lease_id,
+        ]
+        if self.owner_execution_id:
+            # 旧 execution 不得 complete 新 execution 已接管的记录
+            owner_clause = " AND owner_execution_id = %s"
+            params.append(self.owner_execution_id)
+        sql = f"""
+            UPDATE {self._table} SET
+                status = %s,
+                result = %s,
+                error_code = %s,
+                lease_expires_at = NULL,
+                updated_at = now()
+            WHERE tenant_id = %s AND actor_id = %s
+              AND operation = %s AND client_key = %s
+              AND lease_id = %s AND status = 'running'{owner_clause}
+        """
+        try:
+            if conn is not None:
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    return cur.rowcount
+            with self._connection_factory() as owned, owned.cursor() as cur:
+                cur.execute(sql, params)
+                rowcount = cur.rowcount
+                owned.commit()
+                return rowcount
+        except Exception as exc:
+            raise IdempotencyUnavailable("PG ledger 终态写入失败") from exc
+
+
+def execute_idempotent_in_transaction(
+    conn_factory,
+    key: IdempotencyKey,
+    payload: Any,
+    tx_fn,
+    *,
+    lease_seconds: int = 300,
+    owner_execution_id: str = "",
+    takeover_allowed=None,
+    table: str = "ai.idempotency_records",
+) -> dict[str, Any]:
+    """数据库内部副作用的原子幂等执行（Step6 §二十一 / G13）。
+
+    tx_fn(conn) 在「业务写 + ledger 终态」同一事务里执行：要么一起提交
+    （副作用真实发生一次且标记 SUCCEEDED），要么一起回滚（ledger 标
+    FAILED 可安全重试）——不存在的中间态。绝不把外部 HTTP 调用放进来，
+    那类入口用 run_idempotent_side_effect。
+    """
+    store = PostgresIdempotencyLedgerStore(
+        conn_factory,
+        table=table,
+        lease_seconds=lease_seconds,
+        owner_execution_id=owner_execution_id,
+        takeover_allowed=takeover_allowed,
+    )
+    claim = store.claim(key, payload)
+    _record_idempotency_metric(
+        "idempotency_claim_total", key.operation, claim.status.value
+    )
+    _log_decision(
+        "claim", key=key, decision=claim.status.value,
+        owner=claim.lease_id[:8] if claim.lease_id else "",
+        reason=claim.error_code,
+    )
+    if claim.status == ClaimStatus.SUCCEEDED:
+        _record_idempotency_metric(
+            "idempotency_execution_total", key.operation, "replay"
+        )
+        return dict(claim.result or {})
+    if claim.status == ClaimStatus.CONFLICT:
+        if claim.error_code == _UNCERTAIN_ERROR_CODE:
+            raise IdempotencyUnavailable(
+                "副作用已执行但幂等终态未知，拒绝再次执行"
+            )
+        raise IdempotencyConflict("IDEMPOTENCY_CONFLICT")
+    if claim.status != ClaimStatus.NEW:
+        _record_idempotency_metric(
+            "idempotency_execution_total", key.operation, "in_progress"
+        )
+        raise IdempotencyConflict("IDEMPOTENCY_IN_PROGRESS")
+
+    started = time.monotonic()
+    conn = conn_factory()
+    try:
+        result = tx_fn(conn)
+        if not isinstance(result, dict):
+            raise TypeError("幂等副作用结果必须是 dict")
+        store.complete_in_connection(conn, claim.lease_id, result, key=key)
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.warning("[Idempotency] 原子事务回滚失败", exc_info=True)
+        error_code = (
+            "UPSTREAM_UNAVAILABLE"
+            if isinstance(exc, IdempotencyUnavailable)
+            else "INTERNAL_ERROR"
+        )
+        try:
+            # 业务写已随事务回滚 = 确认未产生副作用 → FAILED 可安全重试
+            store.fail(claim.lease_id, error_code, key=key)
+        except Exception:
+            logger.error("[Idempotency] 幂等失败状态回写失败", exc_info=True)
+        _record_idempotency_metric(
+            "idempotency_execution_total", key.operation, "failure"
+        )
+        _log_decision(
+            "complete", key=key, decision="failure",
+            owner=claim.lease_id[:8], reason=error_code,
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+        raise
+    _record_idempotency_metric(
+        "idempotency_execution_total", key.operation, "success"
+    )
+    _log_decision(
+        "complete", key=key, decision="success",
+        owner=claim.lease_id[:8],
+        duration_ms=(time.monotonic() - started) * 1000,
+    )
+    return result
+
+
+def resolve_stale_side_effect(
+    *,
+    tenant_id: str,
+    actor_id: str,
+    operation: str,
+    client_key: str,
+    decision: str,
+    result: dict[str, Any] | None = None,
+    reason: str = "",
+    connection_factory=None,
+    table: str = "ai.idempotency_records",
+) -> bool:
+    """人工裁决 stale claim（Step6 §五十三 reconcile 最小实现）。
+
+    只允许处理 status='running' 且租约已过期的记录（绝不碰活跃 claim）：
+      decision='executed'     → 副作用已发生：标 SUCCEEDED，后续重放结果
+      decision='not_executed' → 副作用未发生：标 FAILED，允许安全重试
+    返回是否真的裁决了一条记录。
+    """
+    if decision not in ("executed", "not_executed"):
+        raise ValueError("decision 必须是 executed / not_executed")
+    factory = connection_factory or _default_memory_ledger_connection
+    executed = decision == "executed"
+    resolved_result = result if executed else None
+    try:
+        with factory() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {table} SET
+                    status = %s,
+                    result = COALESCE(%s, result),
+                    error_code = %s,
+                    lease_expires_at = NULL,
+                    updated_at = now()
+                WHERE tenant_id = %s AND actor_id = %s
+                  AND operation = %s AND client_key = %s
+                  AND status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= now()
+                """,
+                (
+                    ClaimStatus.SUCCEEDED.value if executed
+                    else ClaimStatus.FAILED.value,
+                    json.dumps(resolved_result, ensure_ascii=False,
+                               default=str)
+                    if resolved_result is not None else None,
+                    "MANUAL_RESOLVED_EXECUTED" if executed
+                    else "RESOLVED_NOT_EXECUTED",
+                    tenant_id, actor_id, operation, client_key,
+                ),
+            )
+            updated = cur.rowcount
+            conn.commit()
+    except Exception as exc:
+        raise IdempotencyUnavailable("PG ledger 裁决失败") from exc
+    if updated == 1:
+        logger.info(
+            "[Idempotency] event=side_effect_reconcile decision=%s "
+            "operation=%s reason=%s", decision, operation, reason or "-",
+        )
+    return updated == 1
+
+
+def run_idempotent_side_effect(
+    operation: str,
+    payload: Any,
+    fn,
+    *,
+    tenant_id: str,
+    actor_id: str,
+    client_key: str,
+    owner_execution_id: str = "",
+    lease_seconds: int = 300,
+    takeover_allowed=None,
+    pre_execute=None,
+) -> dict[str, Any]:
+    """在显式可信身份下执行一次持久化幂等副作用（PG ledger 权威）。
+
+    与 run_idempotent_operation（HTTP 工具语义：Redis claim + PG 终态 +
+    副作用预算门禁）不同，本入口面向任务运行时/客服域等无 HTTP 请求
+    上下文的副作用边界：claim/complete/fail 全部落 PG——Celery retry、
+    recovery、resume、admin retry、重复投递都以同一个
+    (tenant, actor, operation, client_key) 认出同一 logical operation，
+    真实副作用最多发生一次（Step6 G1/G2）。
+
+    约束：
+      - owner_execution_id 只是执行者（每次拾取换发），绝不参与 key；
+      - client_key 必须来自稳定业务身份（confirmation_id、task_id 组合等），
+        禁止每次执行临时生成（uuid4 当 key = 没有幂等）；
+      - fn 内部不要做数据库内部业务写后依赖本函数 complete——那类场景
+        用 execute_idempotent_in_transaction 同事务收口。
+    """
+    if not tenant_id or not actor_id:
+        raise IdempotencyContextMissing(
+            "缺少可信租户或操作者上下文，拒绝执行副作用"
+        )
+    key = IdempotencyKey(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        operation=operation,
+        client_key=client_key,
+    )
+    store = PostgresIdempotencyLedgerStore(
+        lease_seconds=lease_seconds,
+        owner_execution_id=owner_execution_id,
+        takeover_allowed=takeover_allowed,
+    )
+    executor = IdempotencyExecutor(store, None, pre_execute=pre_execute)
+    return executor.execute(key, payload, fn)
+
+
+def purge_expired_idempotency_records(
+    connection_factory=None, *, table: str = "ai.idempotency_records"
+) -> int:
+    """删除显式 TTL 已过期的幂等记录（Step6 §五十二 保留策略）。
+
+    只清理 expires_at IS NOT NULL 且已过期的行——业务动作类记录默认不写
+    expires_at（永久保留，TTL 到期导致不可逆动作重复执行是最危险路径）；
+    stale RUNNING claim 是 IN_DOUBT 裁决对象，绝不在此清理。
+    返回删除行数。
+    """
+    factory = connection_factory or _default_memory_ledger_connection
+    try:
+        with factory() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM {table} "
+                "WHERE expires_at IS NOT NULL AND expires_at < now()"
+            )
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+    except Exception as exc:
+        raise IdempotencyUnavailable("PG ledger 过期清理失败") from exc
+
+
 def _default_memory_connection():
     import psycopg
     from backend.config.database import MEMORY_DB_CONFIG
@@ -603,6 +1190,19 @@ def _default_memory_connection():
         f"@{config['host']}:{config['port']}/{config['dbname']}"
     )
     return psycopg.connect(dsn, autocommit=True)
+
+
+def _default_memory_ledger_connection():
+    import psycopg
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    config = MEMORY_DB_CONFIG
+    dsn = (
+        f"postgresql://{config['user']}:{config['password']}"
+        f"@{config['host']}:{config['port']}/{config['dbname']}"
+    )
+    # 默认 autocommit=False：claim/接管/终态都在显式事务里提交
+    return psycopg.connect(dsn)
 
 
 def _decode_redis_value(value: Any) -> str:
@@ -686,14 +1286,20 @@ def _enforce_side_effect_budget(*, user_id: str, tenant_id: str) -> None:
 __all__ = [
     "ClaimResult",
     "ClaimStatus",
+    "IdempotencyConflict",
     "IdempotencyContextMissing",
     "IdempotencyKey",
     "IdempotencyExecutor",
     "IdempotencyUnavailable",
     "MemoryIdempotencyStore",
+    "PostgresIdempotencyLedgerStore",
     "PostgresIdempotencyResultStore",
     "RedisIdempotencyStore",
     "canonical_fingerprint",
+    "execute_idempotent_in_transaction",
+    "purge_expired_idempotency_records",
+    "resolve_stale_side_effect",
     "run_idempotent_operation",
     "run_idempotent_operation_for_identity",
+    "run_idempotent_side_effect",
 ]

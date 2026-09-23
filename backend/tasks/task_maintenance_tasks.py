@@ -47,6 +47,27 @@ def zombie_reconcile() -> dict:
     return result
 
 
-__all__ = ["stale_execution_recovery", "zombie_reconcile",
+@celery_app.task(name="tasks.idempotency_retention")
+def idempotency_retention() -> dict:
+    """幂等 ledger 保留策略（Phase2 Step6 §五十二）。
+
+    只删除显式设置过 expires_at 且已过期的记录（低风险通知类）；
+    业务动作类记录默认不写 expires_at = 永久保留——TTL 到期把不可逆
+    动作重新放行是最危险路径。stale RUNNING claim 是 IN_DOUBT 裁决
+    对象，绝不在此清理。
+    """
+    from backend.shared.idempotency import purge_expired_idempotency_records
+
+    try:
+        deleted = purge_expired_idempotency_records()
+    except Exception as exc:  # noqa: BLE001 — 维护任务失败不外抛，观测可见
+        logger.error("[TaskMaintenance] idempotency retention failed: %s", exc)
+        return {"ok": False, "deleted": 0, "error": str(exc)}
+    if deleted:
+        logger.info("[TaskMaintenance] idempotency retention deleted=%d", deleted)
+    return {"ok": True, "deleted": deleted}
+
+
+__all__ = ["stale_execution_recovery", "zombie_reconcile", "idempotency_retention",
            "TASK_RECOVERY_SWEEP_INTERVAL",
            "TASK_ZOMBIE_RECONCILE_INTERVAL", "TASK_ZOMBIE_THRESHOLD_SECONDS"]

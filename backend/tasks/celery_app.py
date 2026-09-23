@@ -40,6 +40,7 @@ celery_app = Celery(
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
              "backend.tasks.cs_qa_tasks",  # 批次D：客服质检每日报表（beat）
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
+             "backend.tasks.side_effect_probe_tasks",  # Step6：副作用幂等实机探针（env 门禁）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
              "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
@@ -137,6 +138,13 @@ celery_app.conf.update(
             "task": "tasks.stale_execution_recovery",
             "schedule": float(TASK_RECOVERY_SWEEP_INTERVAL),
             "options": {"queue": beat_queue("tasks.stale_execution_recovery")},
+        },
+        # Phase2 Step6：幂等 ledger 保留策略。只清显式 TTL 已过期的记录，
+        # 业务动作类默认无 expires_at（永久保留）→ 本任务常态空跑兜底。
+        "tasks-idempotency-retention": {
+            "task": "tasks.idempotency_retention",
+            "schedule": crontab(hour=3, minute=30),
+            "options": {"queue": beat_queue("tasks.idempotency_retention")},
         },
         # 治理改造（2026-09-22）：模型健康周期探测 → llm_model_health 缓存。
         # 页面只读缓存；间隔经 env MODEL_HEALTH_SCAN_INTERVAL 可调（默认 300s）。

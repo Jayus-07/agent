@@ -204,6 +204,33 @@ def _record_queue_wait(record) -> None:
         logger.debug("[AgentTask] 队列等待观测失败", exc_info=True)
 
 
+def _bind_task_identity(record):
+    """任务体绑定租户/操作者上下文（Phase2 Step6）。
+
+    side-effect 类 Tool（email/export/data_collection/competitor）的全局
+    幂等以 (tenant, actor) 为隔离身份：此前任务运行时不绑定身份，工具在
+    Celery 上下文里一律走无租户兼容直调路径——工作流邮件等真实副作用
+    只受进程内指纹保护，跨 Worker 的 retry/recovery 重入即重复发送。
+    绑定后任务内工具与 HTTP 请求同一语义（run_idempotent_operation 全局
+    幂等 + 副作用预算门禁）。空值也必须显式绑定：prefork 子进程跨任务
+    复用，不清空会把上一个任务的租户泄漏给下一个任务。
+
+    返回恢复函数，finally 必须调用。
+    """
+    from backend.tools.session import _current_tenant_id, _current_user_id
+
+    tenant_token = _current_tenant_id.set(
+        str(getattr(record, "tenant_id", "") or ""))
+    user_token = _current_user_id.set(
+        str(getattr(record, "user_id", "") or ""))
+
+    def _restore() -> None:
+        _current_tenant_id.reset(tenant_token)
+        _current_user_id.reset(user_token)
+
+    return _restore
+
+
 def execute_agent_task_impl(task_id: str, *,
                             retries: int = 0, hostname: str = "") -> dict:
     """任务执行主体（Celery task 与 eager 测试共用的纯函数）。"""
@@ -282,6 +309,7 @@ def execute_agent_task_impl(task_id: str, *,
     hb = LeaseHeartbeat(task_id, lease_id)
     hb.start()
     ctx_token = set_execution(task_id, lease_id)
+    restore_identity = _bind_task_identity(record)
     exit_status = "FAILED"  # 防御缺省：未被显式标记的异常出口按 FAILED 计
     try:
         if retries:
@@ -367,6 +395,7 @@ def execute_agent_task_impl(task_id: str, *,
     finally:
         hb.stop()
         clear_execution(ctx_token)
+        restore_identity()
         # Phase2-F 出口观测（best-effort）：出口状态 + 执行段耗时
         try:
             from backend.observability.metrics import (
