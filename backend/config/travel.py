@@ -176,3 +176,12 @@ TRAVEL_PREFS_ENABLED = os.getenv("TRAVEL_PREFS_ENABLED", "true").strip().lower()
 # =============================================
 # 命中 ≥ 该数量的旅游强信号词才判为旅游域，避免「周末」这类口语误命中
 TRAVEL_DETECT_MIN_HITS = int(os.getenv("TRAVEL_DETECT_MIN_HITS", "2"))
+
+# =============================================
+# Pending Resume（STOP F2，2026-09-23）
+# =============================================
+# 旅游域追问后的纯槽位值回答（「8万日元」「住难波」）不含旅游/延续信号词，
+# 预过滤与 ContinuationResolver 都接不住。开启后，活跃 travel 任务存在
+# 结构化 pending 时，由 TravelPendingResolver 先行判定并短路回旅游域。
+# 判定纯规则零 LLM（复用 slot_filler 抽取函数）；客服强信号仍优先放行。
+TRAVEL_PENDING_RESUME_ENABLED = os.getenv("TRAVEL_PENDING_RESUME_ENABLED", "true").strip().lower() in ("1", "true", "yes")

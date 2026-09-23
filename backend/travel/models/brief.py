@@ -56,6 +56,7 @@ SLOT_QUESTIONS: dict[str, str] = {
     "start_date": "大概什么时候出发？（不确定可以不说，我按「第 1 天」排）",
     "party_size": "几个人一起？",
     "budget_cny": "有预算范围吗？",
+    "lodging": "希望住在哪个区域？（不确定可以不说）",
 }
 
 # 饮食忌口/偏好关键词（P1-1 偏好管理）：命中即记入 brief.diet。

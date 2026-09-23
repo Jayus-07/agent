@@ -122,6 +122,13 @@ _COMPANION_PLUS = {"爸妈": 2, "父母": 2}  # 其余同伴默认 +1
 # 预算：必须带货币单位（或「万」），否则 "3天" 会被当成钱
 _RE_BUDGET_YUAN = re.compile(r"(\d+(?:\.\d+)?)\s*(?:元|块钱|块|rmb|人民币)", re.I)
 _RE_BUDGET_WAN = re.compile(r"(?:预算|大概|差不多|总共)?\s*(\d+(?:\.\d+)?)\s*[万wW]")
+# 住宿区域（STOP F2）：「住难波」「住在梅田」「酒店订在难波」。排除问句
+# （住哪/住宿）与自指尾缀（「新宿的酒店」→ 新宿）。「住哪」是用户在问，
+# 不是在回答，绝不能进槽位。
+_RE_LODGING_ZHU = re.compile(r"(?:住在|住到|住)(?!宿|哪)[\s的]??([^。，,；;！!？?\s]{2,12})")
+_RE_LODGING_HOTEL = re.compile(
+    r"(?:酒店|民宿|宾馆)(?:在|定在|订在)\s*([^。，,；;！!？?\s]{2,12})")
+_LODGING_TAIL_STRIP = ("的酒店", "的民宿", "的宾馆", "附近", "一带", "那边")
 # 日期：ISO 或「X月X日」
 _RE_DATE_ISO = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
 _RE_DATE_CN = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?")
@@ -268,6 +275,45 @@ def extract_budget(message: str) -> float | None:
     return None
 
 
+def _clean_lodging(name: str) -> str:
+    """剥掉捕获串里的尾缀与边界脏字（「新宿的酒店」→ 新宿）。"""
+    for tail in _LODGING_TAIL_STRIP:
+        if name.endswith(tail):
+            name = name[: -len(tail)]
+    while name and name[-1] in "的了的了":
+        name = name[:-1]
+    return name.strip()
+
+
+def extract_lodging(message: str) -> str:
+    """住宿区域抽取（STOP F2）：「住难波」「住在梅田」「酒店订在难波」。
+
+    lodging 是记录性槽位（P0 无酒店供给数据，不参与排程与指纹——
+    与 diet 同口径）；抽取它的目的是 pending 补槽判定与行程单如实回显。
+    """
+    for pattern in (_RE_LODGING_ZHU, _RE_LODGING_HOTEL):
+        match = pattern.search(message)
+        if match:
+            cleaned = _clean_lodging(match.group(1))
+            if len(cleaned) >= 2:
+                return cleaned
+    return ""
+
+
+# NEW_RUN 显式信号（STOP F2，单一事实源在本模块）：用户明确推翻当前规划
+# 重开。普通补槽/改约束（CONTINUE/PATCH/REPLAN）不含这些词。路由层
+# resolver 与 slot_filler/adapter 都以这里为准（context → travel 单向
+# 依赖，禁止反向 import 造成循环）。
+_NEW_RUN_RE = re.compile(
+    r"重新规划|重新安排|重新来|换个方案|换套方案|换一个方案|不去了|不想去"
+)
+
+
+def is_new_run_query(message: str) -> bool:
+    """消息是否为「重开规划」显式信号（纯函数）。"""
+    return bool(_NEW_RUN_RE.search(message or ""))
+
+
 def extract_start_date(message: str, today: date | None = None) -> date | None:
     """出发日期。只给月日时按「不早于今天」补年份，避免抽到过去的日期。"""
     today = today or date.today()
@@ -411,7 +457,7 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
     不会因为这一轮没提预算就把之前说的预算清空。
     """
     merged = previous.model_copy()
-    for field in ("destination", "origin"):
+    for field in ("destination", "origin", "lodging"):
         value = getattr(fresh, field)
         if value:
             setattr(merged, field, value)
@@ -459,6 +505,7 @@ def extract_brief(message: str, previous: TravelBrief | None = None) -> TravelBr
         preferences=extract_preferences(message),
         pace=extract_pace(message) or "moderate",
         diet=extract_diet(message),
+        lodging=extract_lodging(message),
     )
     fresh.avoid = extract_avoid(message)
     fresh.must_go = extract_must_go(message, fresh.destination, fresh.avoid)
@@ -512,7 +559,10 @@ def slot_filler_node(state: dict) -> dict:
     from backend.travel.graph_state import brief_fingerprint, planning_reset
 
     message = state.get("user_message", "")
-    previous = load_brief(state) if state.get("brief") else None
+    # brief 基底：checkpoint 产物优先；无 checkpoint（STOP F3 reconstruct
+    # 轮）时用适配器从 ConversationContext 重建的事实基底，二者皆无才从零抽
+    raw_brief = state.get("brief") or state.get("reconstruct_brief") or {}
+    previous = load_brief({"brief": raw_brief}) if raw_brief else None
 
     # 持久化状态（任务书 §10，Phase 4）：图入口每轮把当前状态写进 state
     # —— 这是该事实的唯一产生点，下游（supervisor_decision / reporter）
@@ -652,6 +702,18 @@ def slot_filler_node(state: dict) -> dict:
         logger.info("[TravelSlotFiller] 需求指纹变化 %s→%s（brief v%d，变化字段 %s），清空规划产物重排",
                     last_fingerprint, fingerprint, brief.version,
                     brief_changed_fields or "未知")
+
+    if (bool((state.get("travel_route") or {}).get("new_run"))
+            or is_new_run_query(message)):
+        # NEW_RUN（STOP F2）：用户显式「重新规划」。两个来源：路由层
+        # resolver 在 pending 场景打的标记（travel_route.new_run），以及
+        # 无 pending 时（任务已齐备出单）对消息本身的直接判定。与
+        # brief_changed 分级：带新信息时上面指纹分支已重排（此处重复
+        # reset 幂等）；不带新信息（「重新规划一下」指纹不变）时只有
+        # 这里能保证出全新方案，而不是把上一版行程原样再输出一遍。
+        update.update(planning_reset())
+        notes.insert(0, "已按你的要求重新规划（新方案独立生成）")
+        logger.info("[TravelSlotFiller] NEW_RUN 信号，规划产物已清空重排")
 
     update["notes"] = notes
     return update

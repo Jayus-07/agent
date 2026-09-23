@@ -45,6 +45,16 @@ CONTEXT_SLOT_FIELDS = (
 )
 
 
+def make_travel_run_id(conversation_id: str, seq: int) -> str:
+    """travel_run_id 工厂：trv_{会话哈希8}_{seq:03d}。
+
+    会话哈希保证不同 conversation 的 run_id 不碰撞；seq 保证同一会话内
+    NEW_RUN 后新旧 run_id 可区分（旧 run 只留摘要，不参与归因）。
+    """
+    digest = hashlib.sha1((conversation_id or "").encode("utf-8")).hexdigest()[:8]
+    return f"trv_{digest}_{int(seq or 0):03d}"
+
+
 @dataclass
 class ConversationContext:
     """单个 (tenant, user, conversation) 的跨轮摘要状态。"""
@@ -88,6 +98,15 @@ class ConversationContext:
     last_action: str = ""        # 上一轮动作（selected_tool / 域图名 / clarify）
     pending_question: str = ""   # 上一轮留给用户的待答问题（追问卡/澄清/待决项）
 
+    # ── Travel Run（STOP F1，2026-09-23）──
+    # 一次旅游规划任务的身份与结构化 pending。只存结构化事实与摘要，
+    # 不存 itinerary 大对象（域图 checkpointer 才是权威执行状态——
+    # 职责冻结见 docs/2026-09-23-TravelResume-STOPF0-审计与设计.md §三）。
+    travel_run_seq: int = 0      # 会话内 run 序号（0 = 无活跃 run）
+    travel_run_id: str = ""      # trv_{hash8}_{seq:03d}
+    travel_stage: str = ""       # slot / planned / completed / cancelled
+    travel_pending: dict | None = None   # TravelPendingQuestion 快照（见下）
+
     updated_at: float = field(default_factory=time.time)
 
     # ── 槽位合并 ──
@@ -126,6 +145,45 @@ class ConversationContext:
             self.last_action = action
         if pending_question is not None:
             self.pending_question = pending_question
+        self.updated_at = time.time()
+
+    # ── Travel Run 维护（STOP F1）──
+
+    def begin_travel_run(self) -> str:
+        """开启新 run（seq+1）并返回 run_id；旧 pending 一并失效。
+
+        仅在「首次规划」与「用户显式重新规划（NEW_RUN）」时调用——
+        普通补槽/局部修改/约束变化（CONTINUE/PATCH/REPLAN）不得换 run。
+        """
+        self.travel_run_seq = int(self.travel_run_seq or 0) + 1
+        self.travel_run_id = make_travel_run_id(self.conversation_id,
+                                                self.travel_run_seq)
+        self.travel_pending = None
+        self.updated_at = time.time()
+        return self.travel_run_id
+
+    def set_travel_stage(self, stage: str) -> None:
+        """更新 run 阶段（slot / planned / completed / cancelled）。"""
+        if stage:
+            self.travel_stage = stage
+            self.updated_at = time.time()
+
+    def set_travel_pending(self, pending: dict | None) -> None:
+        """写入/清除结构化 pending question（None = 清除）。"""
+        self.travel_pending = dict(pending) if pending else None
+        self.updated_at = time.time()
+
+    def clear_travel_run(self) -> None:
+        """取消/收尾 run：清 run 身份与 pending，保留摘要槽位（任务书 §19）。
+
+        槽位摘要（destination/days/…）是用户已确认的事实，保留供后续
+        「再规划一个」时 slot_filler 预填参考；run 身份与 pending 必须
+        清掉，否则 completed 后普通问题仍被 travel pending 拦截（T15）。
+        """
+        self.travel_run_seq = 0
+        self.travel_run_id = ""
+        self.travel_stage = ""
+        self.travel_pending = None
         self.updated_at = time.time()
 
     # ── Selection Funnel 候选（2026-09-23 E1）──
@@ -232,6 +290,11 @@ class ConversationContext:
             "last_intent": self.last_intent,
             "last_action": self.last_action,
             "pending_question": self.pending_question,
+            # Travel Run 摘要（STOP F1）：pending 结构化快照供路由层
+            # TravelPendingResolver 与 trace 消费
+            "travel_run_id": self.travel_run_id,
+            "travel_stage": self.travel_stage,
+            "travel_pending": dict(self.travel_pending) if self.travel_pending else None,
         }
 
 
@@ -345,6 +408,95 @@ def sync_travel_brief_to_context(
         )
     except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
         logger.warning("[ConversationContext] travel brief 同步失败（软降级）: %s", exc)
+
+
+def sync_travel_run_to_context(
+    tenant_id: str,
+    user_id: str,
+    conversation_id: str,
+    *,
+    brief: dict,
+    missing_slots: list[str],
+    new_run: bool = False,
+) -> str | None:
+    """旅游域图执行后的 run/pending/stage 结构化同步（STOP F1/F2）。
+
+    与 sync_travel_brief_to_context 的分工：那个只同步槽位摘要；本函数
+    维护 TravelRun 身份（首次/NEW_RUN 时 seq+1）、阶段标记与结构化
+    pending（TravelPendingQuestion 快照）——后者是下一轮路由层
+    TravelPendingResolver 的判定输入（G3/G4 的数据基础）。软失败。
+
+    Returns:
+        本次同步后的 run_id（异常/不可同步时 None）。
+    """
+    try:
+        if not conversation_id:
+            return None
+        store = get_conversation_context_store()
+        ctx = store.get(tenant_id or "", user_id or "", conversation_id)
+        # 摘要槽位先同步（begin_travel_run 不依赖槽位，但 stage 判定依赖）
+        sync_travel_brief_to_context(tenant_id, user_id, conversation_id,
+                                     brief=brief)
+        missing = [s for s in (missing_slots or []) if s]
+        # run 身份：首次（无活跃 run）或显式 NEW_RUN 才换；普通补槽/
+        # 改约束（CONTINUE/PATCH/REPLAN）保持同 run（任务书 §7）
+        if new_run or not ctx.travel_run_id:
+            run_id = ctx.begin_travel_run()
+        else:
+            run_id = ctx.travel_run_id
+        # 阶段与 pending：必填槽缺失 = slot 阶段 + 结构化追问；齐备 = 规划
+        # 中（completed 由 reporter 收尾轮的 finished 判定，见调用方）。
+        if missing:
+            ctx.set_travel_stage("slot")
+            prev = ctx.travel_pending or {}
+            if prev.get("requested_slots") == missing and prev.get("run_id") == run_id:
+                prev["question_id"] = prev.get("question_id") or _new_question_id()
+                ctx.set_travel_pending(prev)  # 同一轮追问：保留 question_id
+            else:
+                ctx.set_travel_pending({
+                    "question_id": _new_question_id(),
+                    "run_id": run_id,
+                    "requested_slots": missing,
+                    "reason": "missing_required",
+                    "created_at": time.time(),
+                })
+        else:
+            ctx.set_travel_pending(None)
+            if ctx.travel_stage in ("", "slot"):
+                ctx.set_travel_stage("planned")
+        logger.debug(
+            "[ConversationContext] travel run 同步: run=%s stage=%s missing=%s",
+            run_id, ctx.travel_stage, missing,
+        )
+        return run_id
+    except Exception as exc:  # noqa: BLE001 — 上下文同步失败绝不影响主链
+        logger.warning("[ConversationContext] travel run 同步失败（软降级）: %s", exc)
+        return None
+
+
+def mark_travel_run_completed(
+    tenant_id: str, user_id: str, conversation_id: str,
+) -> None:
+    """行程成功出单后收尾：stage=completed + 清 pending（STOP F2，T15）。
+
+    run_id 与摘要槽位保留（历史归因/后续参考）；pending 必须清掉，否则
+    下一轮普通问题仍被 travel pending 拦截。软失败。
+    """
+    try:
+        if not conversation_id:
+            return
+        ctx = get_conversation_context_store().get(
+            tenant_id or "", user_id or "", conversation_id)
+        ctx.set_travel_stage("completed")
+        ctx.set_travel_pending(None)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[ConversationContext] travel 收尾失败（软降级）: %s", exc)
+
+
+def _new_question_id() -> str:
+    from uuid import uuid4
+
+    return f"tq_{uuid4().hex[:8]}"
 
 
 def sync_funnel_candidates_to_context(

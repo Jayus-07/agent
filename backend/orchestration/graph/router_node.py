@@ -241,6 +241,21 @@ def router_node(state: dict) -> dict:
     # 缺省空 dict = 无活跃任务，延续判定自动失效。
     routing_context = state.get("routing_context") or {}
     if not cs_forced:
+        # Travel Pending Resolver（STOP F2，先于 ContinuationResolver）：
+        # 活跃 travel 任务有结构化 pending 时，纯槽位值回答（「8万日元」
+        # 「住难波」）短路回旅游域——这类话既无旅游信号也无延续信号，
+        # 不拦就丢上下文（追问没人接住）。命中条件与 NEW_RUN 判定见
+        # travel_pending_resolver 模块 docstring；客服强信号在其内部放行。
+        try:
+            from backend.orchestration.context.travel_pending_resolver import (
+                resolve_travel_pending,
+            )
+
+            pending_update = resolve_travel_pending(query, routing_context)
+            if pending_update is not None:
+                return {**state, **_mark_route_from_update(state, pending_update)}
+        except Exception as e:
+            logger.warning(f"[RouterNode] travel pending 判定失败，走正常路由: {e}")
         # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
         cont_update = _try_continuation(state, query, routing_context)
         if cont_update is not None:

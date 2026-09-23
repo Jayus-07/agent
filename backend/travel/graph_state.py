@@ -58,6 +58,12 @@ class TravelGraphState(TypedDict, total=False):
     session_id: str
     conversation_id: str
     travel_route: dict
+    # graceful reconstruction（STOP F3）：checkpoint 缺失但会话摘要存在时，
+    # 适配器从 ConversationContext 重建的 brief 基底。只在 thread 无
+    # checkpoint 时出现；slot_filler 以它为 previous 合并本轮消息。
+    # 它属于「本轮输入」（由本轮适配器构造），不违反 new_travel_graph_input
+    # 的「不预置产物」契约——它不是产物，是恢复的事实基底。
+    reconstruct_brief: dict
 
     # === 槽位 ===
     brief: dict

@@ -60,6 +60,9 @@ def assemble_routing_context(
             return empty
         snap = ctx.snapshot()
         return {
+            # conversation_id 供 TravelPendingResolver 等消费方直接取用
+            # （与 get/peek 的会话键同一口径）
+            "conversation_id": session_id,
             "active_domain": snap.get("active_domain", ""),
             "last_intent": snap.get("last_intent", ""),
             "last_action": snap.get("last_action", ""),

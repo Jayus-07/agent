@@ -21,29 +21,36 @@ def travel_graph_node(state: dict) -> dict:
     travel_context = state.get("travel_context") or {}
     session_id = state.get("session_id", "")
     conversation_id = travel_context.get("conversation_id") or session_id
+    travel_route = travel_context.get("travel_route") or {}
 
     graph_input = new_travel_graph_input(
         user_message=state.get("question") or state.get("query") or "",
         user_id=state.get("user_id", ""),
         session_id=session_id,
         conversation_id=conversation_id,
-        travel_route=travel_context.get("travel_route") or {},
+        travel_route=travel_route,
     )
 
     try:
+        graph = get_travel_graph()
+        config = _build_invoke_config(conversation_id)
+        # ── resume 模式判定（STOP F3）────────────────────────
+        # checkpoint 有值 → checkpoint（自然续跑）；thread 无 checkpoint
+        # 但会话有 travel 摘要 → reconstruct（从 ConversationContext 重建
+        # brief 基底，graceful reconstruction，绝不 500）；两者皆无 → fresh。
+        resume_mode, extra_input = _detect_resume_mode(
+            graph, config, state, conversation_id)
+        if extra_input:
+            graph_input.update(extra_input)
         # resume 通道：上层在 travel_context.resume_decision 带回用户决策时，
         # 用 Command(resume=...) 恢复被 interrupt 暂停的域图（thread_id 必须与
         # 中断轮一致——checkpointer 按 thread 定位暂停态）。
         resume_decision = travel_context.get("resume_decision")
         if resume_decision:
             from langgraph.types import Command
-            final_state = get_travel_graph().invoke(
-                Command(resume=resume_decision), config=_build_invoke_config(conversation_id),
-            )
+            final_state = graph.invoke(Command(resume=resume_decision), config=config)
         else:
-            final_state = get_travel_graph().invoke(
-                graph_input, config=_build_invoke_config(conversation_id),
-            )
+            final_state = graph.invoke(graph_input, config=config)
         result = build_travel_graph_result(final_state)
     except Exception:
         logger.exception("[travel_graph_node] 旅游域图执行异常，降级返回兜底回复")
@@ -54,36 +61,106 @@ def travel_graph_node(state: dict) -> dict:
     if isinstance(final_state, dict) and final_state.get("__interrupt__"):
         return _interrupt_update(state, final_state)
 
-    _stamp_execution_tags(final_state, result)
-    _sync_brief_to_conversation_context(state, final_state)
+    _stamp_execution_tags(final_state, result, resume_mode=resume_mode)
+    _sync_travel_run(state, final_state, result, travel_route)
     return _build_main_state_update(result)
 
 
-def _sync_brief_to_conversation_context(state: dict, final_state: dict) -> None:
-    """P2.2：TravelBrief 摘要槽位 → ConversationContext（单向同步）。
+def _detect_resume_mode(
+    graph, config: dict, state: dict, conversation_id: str,
+) -> tuple[str, dict]:
+    """checkpoint 探测与 graceful reconstruction 判定（STOP F3）。
 
-    Travel 子图仍是 Travel 域权威状态；这里只把跨轮 follow-up 需要的
-    槽位同步给主 Router 可读的摘要上下文。同步软失败（函数内部兜底）。
+    Returns:
+        (resume_mode, extra_input)：
+        - ("checkpoint", {})            thread 有持久化状态，自然续跑
+        - ("reconstruct", {reconstruct_brief})  checkpoint 丢失/不存在，
+          但会话有 travel 摘要 → 从 ConversationContext 重建 brief 基底
+          （slot_filler 以其为 previous 合并本轮消息，不 500）
+        - ("fresh", {})                 首次规划 / checkpointer 未启用
     """
     try:
-        brief = final_state.get("brief") or {}
-        if not isinstance(brief, dict) or not brief:
-            return
+        snap = graph.get_state(config)
+        if snap is not None and getattr(snap, "values", None):
+            return "checkpoint", {}
+    except Exception:
+        # checkpointer 未启用时 get_state 抛错——与「有 checkpointer 但
+        # thread 无数据」同样落到下方摘要探测（摘要存在仍可 reconstruct）
+        logger.debug("[travel_graph_node] checkpoint 探测不可用")
+
+    # thread 无 checkpoint：会话摘要可重建则 reconstruct，否则首轮 fresh
+    try:
         from backend.orchestration.context.conversation_context import (
-            sync_travel_brief_to_context,
+            get_conversation_context_store,
         )
 
-        sync_travel_brief_to_context(
-            tenant_id=state.get("tenant_id") or "",
-            user_id=state.get("user_id") or "",
-            conversation_id=(
-                (state.get("travel_context") or {}).get("conversation_id")
-                or state.get("session_id") or ""
-            ),
-            brief=brief,
+        ctx = get_conversation_context_store().peek(
+            state.get("tenant_id") or "", state.get("user_id") or "",
+            conversation_id)
+        if ctx is None or not (ctx.destination or ctx.days
+                               or ctx.travel_run_id):
+            return "fresh", {}
+        reconstruct_brief = {
+            key: getattr(ctx, key)
+            for key in ("destination", "origin", "start_date", "days",
+                        "party_size", "budget_cny", "preferences",
+                        "must_go", "avoid")
+            if getattr(ctx, key)
+        }
+        logger.warning(
+            "[travel_graph_node] checkpoint 缺失，从会话上下文重建"
+            "（resume_mode=reconstruct, run=%s）", ctx.travel_run_id)
+        return "reconstruct", {"reconstruct_brief": reconstruct_brief}
+    except Exception:
+        logger.debug("[travel_graph_node] 会话摘要读取失败，按 fresh 处理",
+                     exc_info=True)
+        return "fresh", {}
+
+
+def _sync_travel_run(state: dict, final_state: dict, result: dict,
+                     travel_route: dict) -> None:
+    """执行后的 TravelRun 结构化同步（STOP F1/F2，软失败）。
+
+    run 身份（首次/NEW_RUN 时换）、阶段标记与结构化 pending 写进
+    ConversationContext——下一轮路由层 TravelPendingResolver 的数据基础。
+    成功出单（status=success）追加 completed 收尾 + 清 pending（T15）。
+    """
+    try:
+        from backend.orchestration.context.conversation_context import (
+            mark_travel_run_completed,
+            sync_travel_run_to_context,
         )
+
+        conversation_id = (
+            (state.get("travel_context") or {}).get("conversation_id")
+            or state.get("session_id") or "")
+        # NEW_RUN 两个来源（STOP F2）：resolver 在 pending 场景打的
+        # travel_route 标记，以及无 pending 时对消息的直接判定（travel 域
+        # 单一事实源 is_new_run_query——任务齐备出单后再说「重新规划」
+        # 也必须换 run，不能只在有 pending 时生效）。
+        from backend.travel.slot_filler import is_new_run_query
+
+        new_run = (bool((travel_route or {}).get("new_run"))
+                   or is_new_run_query(state.get("question") or ""))
+        run_id = sync_travel_run_to_context(
+            state.get("tenant_id") or "",
+            state.get("user_id") or "",
+            conversation_id,
+            brief=final_state.get("brief") or {},
+            missing_slots=final_state.get("brief_missing") or [],
+            new_run=new_run,
+        )
+        if result.get("status") == "success":
+            mark_travel_run_completed(
+                state.get("tenant_id") or "",
+                state.get("user_id") or "", conversation_id)
+        if run_id:
+            logger.info(
+                "[travel_graph_node] run=%s status=%s resume_mode=%s",
+                run_id, result.get("status", ""),
+                (travel_route or {}).get("resume_mode") or "fresh")
     except Exception:  # noqa: BLE001 — 同步失败绝不影响主链
-        logger.debug("[travel_graph_node] brief→上下文同步失败", exc_info=True)
+        logger.debug("[travel_graph_node] run 同步失败", exc_info=True)
 
 
 def _interrupt_update(state: dict, final_state: dict) -> dict:
@@ -139,7 +216,8 @@ def _fallback_update(state: dict) -> dict:
     }
 
 
-def _stamp_execution_tags(final_state: dict, result: dict) -> None:
+def _stamp_execution_tags(final_state: dict, result: dict,
+                          resume_mode: str = "") -> None:
     """把执行结果写进 trace tags —— 旅游域的质量指标数据源。
 
     status / 校验码 / 修复轮数 / 置信度都打标，后续做「约束违反率」
@@ -151,6 +229,10 @@ def _stamp_execution_tags(final_state: dict, result: dict) -> None:
         if trace is None:
             return
         trace.tags["travel_status"] = result.get("status", "")
+        if resume_mode:
+            # 任务书 §21：resume 模式必须可观测（checkpoint / reconstruct /
+            # fresh / new_run / continue）
+            trace.tags["travel_resume_mode"] = resume_mode
         brief = final_state.get("brief") or {}
         if brief.get("destination"):
             trace.tags["travel_destination"] = brief["destination"]
@@ -194,6 +276,12 @@ def _build_invoke_config(conversation_id: str) -> dict:
     return {
         "recursion_limit": TRAVEL_GRAPH_RECURSION_LIMIT,
         "configurable": {
-            "thread_id": conversation_id or f"travel-{uuid4().hex}",
+            # STOP F3：`travel:` namespace 前缀。域图 checkpoint 表与主图/
+            # 客服域共用（PostgresSaver 同库），而 CS 域图用裸 conversation_id
+            # 做 thread_id——不加前缀，同一会话「先客服后旅游」会互相覆盖
+            # checkpoint 状态。前缀 = namespace 隔离（checkpointer 默认关，
+            # 无存量迁移问题）。
+            "thread_id": (f"travel:{conversation_id}" if conversation_id
+                          else f"travel-{uuid4().hex}"),
         },
     }
