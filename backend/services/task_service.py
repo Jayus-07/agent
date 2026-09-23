@@ -367,9 +367,22 @@ def update_status(task_id: str, status: TaskStatus, *,
             if latest_status is None or not latest_status.can_transition_to(status):
                 raise IllegalTaskTransition(
                     task_id, latest_status or current, status)
+            # 重判通过后必须以 latest_status 为 CAS 期望值重发（2026-09-23
+            # P1-5 修复：此前复用首次快照 current.value——而走到这里恰恰
+            # 说明状态已不等于快照，重试必然 0 行且无人检查，终态写被
+            # 静默丢弃，任务卡 PENDING 被重投重跑）。
+            args[-1] = latest_status.value
             cur.execute(
                 f"UPDATE tasks SET {', '.join(sets)} "
                 f"WHERE id = %s AND status = %s", args)
+            if cur.rowcount == 0:
+                # 二次 CAS 仍被抢占：重判最多一次（防无限循环），绝不静默
+                # 成功——按既有并发冲突语义上抛，由调用方按失败处理。
+                logger.warning(
+                    "[TaskService] %s update_status 二次 CAS 仍被抢占"
+                    "（%s → %s），放弃本次写入",
+                    task_id, latest_status.value, status.value)
+                raise IllegalTaskTransition(task_id, latest_status, status)
 
 
 def update_progress(task_id: str, node_name: str, progress: str = "",
