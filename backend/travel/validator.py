@@ -351,14 +351,17 @@ def check_coverage(itinerary: Itinerary) -> list[Violation]:
 
     命中不了只给 warning：常见原因是数据源没有这个地点（例如用户说的是
     某个小众点位），此时应当如实告知，而不是伪造一个同名条目充数。
+    匹配口径取 planning.names_match（STOP I1 起的单一事实源）。
     """
+    from backend.travel.planning import names_match
+
     present = [p.name for p in itinerary.all_pois()]
     out: list[Violation] = []
     for want in itinerary.brief.must_go:
         needle = (want or "").strip()
         if not needle:
             continue
-        if any(needle in name or name in needle for name in present):
+        if any(names_match(name, needle) for name in present):
             continue
         out.append(Violation(
             code=CODE_MUST_GO_MISSING, level=LEVEL_WARNING, day_index=0,

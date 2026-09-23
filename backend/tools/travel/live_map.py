@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import math
 from typing import Iterable
 
@@ -34,6 +35,16 @@ from backend.travel.models.poi import (
 )
 
 SOURCE_LBS = routing.SOURCE_LIVE
+
+
+def stable_fallback_id(name: str, city: str) -> str:
+    """腾讯未返回 id 时的确定性兜底标识：sha1(name|city) 前 12 位。
+
+    同一 (地点名, 城市) 在任何进程任何时间都得到同一 id——这是
+    「poi_id 稳定性」契约的底线（对照：内建 hash() 带进程盐，不可用）。
+    """
+    digest = hashlib.sha1(f"{name}|{city}".encode("utf-8")).hexdigest()
+    return digest[:12]
 
 # 原点位解析的安全边界：用户说「福州的土楼」时腾讯可能返回 250km 外的永定土楼，
 # 直接塞进行程会造成「一天跨两个城市」的荒谬排程。超出此半径的解析结果丢弃，
@@ -283,8 +294,11 @@ def resolve_place(name: str, city: str, *, required: bool = False) -> Poi | None
 
         city_key = resolve_city(city) or city or hit.get("city") or ""
         poi = Poi(
-            # 用腾讯 POI id 构造稳定标识，跨会话可复现
-            poi_id=f"lbs_{hit['id'] or abs(hash((name, city))) % 10**12}",
+            # 用腾讯 POI id 构造稳定标识，跨会话可复现；腾讯缺 id 时以
+            # sha1(name|city) 兜底——不能用 hash()：Python 字符串 hash 带
+            # 进程级盐（PYTHONHASHSEED），同地点跨进程会得到不同 poi_id，
+            # 违反「poi_id 必须稳定」契约（STOP I1 实测修复）
+            poi_id=f"lbs_{hit['id'] or stable_fallback_id(name, city_key)}",
             name=hit["name"],
             city=city_key,
             category=map_category(hit.get("category", "")),

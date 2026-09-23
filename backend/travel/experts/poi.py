@@ -27,6 +27,7 @@ from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.poi import Poi
+from backend.travel.planning import resolve_must_go
 
 # 候选池上限：足够覆盖 7 天 × intense 档，同时不让状态字典膨胀
 _CANDIDATE_LIMIT = 60
@@ -121,10 +122,7 @@ def _build_notes(
             f"补充候选或放开偏好条件后可排得更满"
         )
 
-    unresolved = [
-        want for want in brief.must_go
-        if not any(want and (want in p.name or p.name in want) for p in candidates)
-    ]
+    unresolved = resolve_must_go(brief, candidates).unresolved
     if unresolved:
         notes.append(
             "以下必去地点在当前候选数据中未匹配到，未能排入："
@@ -168,12 +166,16 @@ def poi_expert_node(state: dict) -> dict:
             }
 
         skeleton = build_skeleton(brief, candidates)
+        # must_go 三态契约（STOP I1）：resolved/unresolved 在此唯一产生，
+        # 金标 Q2（must_go_coverage）与下游披露都消费这里的事实
+        resolution = resolve_must_go(brief, candidates)
         return {
             "status": "success",
             "data": {
                 "candidates": [p.model_dump() for p in candidates],
                 "day_plan": [[p.poi_id for p in day] for day in skeleton.days],
                 "dropped": skeleton.dropped,
+                "must_go_unresolved": resolution.unresolved,
             },
             "notes": extra_notes + skeleton.notes,
         }
@@ -190,5 +192,6 @@ def poi_expert_node(state: dict) -> dict:
         "expert_history": history,
         "candidates": data.get("candidates", []),
         "day_plan": data.get("day_plan", []),
+        "must_go_unresolved": data.get("must_go_unresolved", []),
         "notes": list(state.get("notes", [])) + list(result.get("notes", [])),
     }

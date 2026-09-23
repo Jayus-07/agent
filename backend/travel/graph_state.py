@@ -80,6 +80,10 @@ class TravelGraphState(TypedDict, total=False):
     # === 规划产物 ===
     candidates: list[dict]
     day_plan: list[list[str]]
+    # must_go 三态契约（STOP I1）：poi 专家解析出的「候选池确认没有」的
+    # 点名地点——如实披露与金标 Q2 的数据源，validator coverage 仍以
+    # brief.must_go × 行程为准（此处只承载「数据层不存在」这一事实）。
+    must_go_unresolved: list[str]
     itinerary: dict | None
     validation: dict | None
     repair_rounds: int
@@ -251,6 +255,7 @@ def planning_reset() -> dict:
     return {
         "candidates": [],
         "day_plan": [],
+        "must_go_unresolved": [],
         "itinerary": None,
         "validation": None,
         "repair_rounds": 0,
