@@ -36,6 +36,13 @@ _CJK_RE = re.compile(
 # 供应商标定参数（保守偏高）：CJK token/字 与 ASCII token/字符。
 # 依据：DeepSeek/Qwen 中文 ~0.6-0.7 token/字、英文 ~0.25 token/字符，
 # 取偏高值 + margin，保证估算 >= 实际的概率占优。
+#
+# _CALIBRATION_DEFAULT 实测依据（2026-09-23 STOP D，豆包 doubao-seed-2.0-mini
+# 真实 usage 回测）：CJK ~0.66-0.70 token/字；**非 CJK（数字/字母/全角标点
+# 混排）实测 0.585-1.0+ token/字符**——旧默认 0.33 对 ASCII/混合内容系统性
+# 低估 36-40%（同批样本 CJK 类高估 16-26%，方向安全）。未知 provider 的
+# ASCII 系数提到 0.75（×1.10 margin 后 ~0.83/字符），混合样本实测 +1.2%，
+# 不再出现低估；已有 deepseek/qwen 等条目不动（无新数据不改）。
 _CALIBRATION: dict[str, tuple[float, float]] = {
     # provider: (tokens_per_cjk_char, tokens_per_ascii_char)
     "deepseek": (0.70, 0.30),
@@ -43,7 +50,7 @@ _CALIBRATION: dict[str, tuple[float, float]] = {
     "siliconflow": (0.70, 0.30),
     "ollama": (0.75, 0.33),
 }
-_CALIBRATION_DEFAULT = (0.75, 0.33)
+_CALIBRATION_DEFAULT = (0.75, 0.75)
 
 
 def _cfg(name: str, default: Any) -> Any:
