@@ -78,7 +78,15 @@ class MCPManager:
             if tool_name in tool_names:
                 logger.info(f"[MCP] route {tool_name} -> {server.name}")
                 try:
-                    future = _CALL_EXECUTOR.submit(server.call_tool, tool_name, params)
+                    # STOP D 修复（2026-09-23）：ContextVars 不跨线程——请求
+                    # 线程绑定的可信身份（set_tool_user_id/roles 等）在线程
+                    # 池里全丢，导致 MCP 通道对合法用户也 fail-closed（D4
+                    # 观测验证发现）。显式携带当前 context 执行。
+                    import contextvars as _cv
+
+                    _ctx = _cv.copy_context()
+                    future = _CALL_EXECUTOR.submit(
+                        _ctx.run, server.call_tool, tool_name, params)
                     result = future.result(timeout=MCP_TOOL_TIMEOUT)
                     return {"ok": True, "tool": tool_name, "server": server.name, "result": result}
                 except FutureTimeoutError:
