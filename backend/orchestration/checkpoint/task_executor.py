@@ -22,7 +22,7 @@ from __future__ import annotations
 import time
 from typing import Any, Generator
 
-from backend.models.task import TaskRecord, TaskStatus
+from backend.models.task import TaskLeaseLost, TaskRecord, TaskStatus
 from backend.orchestration.graph.builder import _parse_event
 from backend.orchestration.graph.events import make_initial_state
 from backend.orchestration.graph.runner import _fallback_summary_from_results
@@ -90,6 +90,10 @@ class TaskGraphExecutor:
                  poll_control_flags: bool = True):
         self._graph = graph if graph is not None else build_task_graph()
         self._poll_flags = poll_control_flags
+        # 执行期 fencing 上下文（execute 时绑定；直调/eager 测试可为空）
+        self._execution_id = ""
+        self._heartbeat: Any = None
+        self._task_id = ""
 
     # ── 控制标志（测试可注入 stub 覆盖）────────────────────
     def _cancelled(self, task_id: str) -> bool:
@@ -106,6 +110,23 @@ class TaskGraphExecutor:
 
         return is_pause_requested(task_id)
 
+    # ── 执行期 fencing（Phase2 Step1）─────────────────────
+    def _guard_lease(self) -> None:
+        """租约守卫：执行器绑定 execution_id 后，丢失即抛 TaskLeaseLost。
+
+        检查顺序：心跳线程的 lost 标志（免 DB 往返）→ DB 权威校验。
+        未绑定 execution_id（legacy 调用方/eager 测试直调）不设防。
+        """
+        if not self._execution_id:
+            return
+        if self._heartbeat is not None and self._heartbeat.lost:
+            raise TaskLeaseLost(self._task_id, self._execution_id)
+        from backend.services import task_service
+
+        if not task_service.check_lease_active(self._task_id,
+                                               self._execution_id):
+            raise TaskLeaseLost(self._task_id, self._execution_id)
+
     # ── 事件广播 ──────────────────────────────────────────
     @staticmethod
     def _publish(task_id: str, event: str, **payload) -> None:
@@ -117,17 +138,67 @@ class TaskGraphExecutor:
             logger.debug("[TaskExecutor] publish failed: %s/%s",
                          task_id, event, exc_info=True)
 
+    def _publish_fenced(self, task_id: str, event: str, **payload) -> None:
+        """fencing 事件广播：租约丢失的旧 Worker 不得再发 runtime event。"""
+        if self._execution_id:
+            try:
+                self._guard_lease()
+            except TaskLeaseLost:
+                logger.warning(
+                    "[TaskExecutor] %s 租约丢失，丢弃事件 %s", task_id, event)
+                return
+        self._publish(task_id, event, **payload)
+
+    # ── 执行时授权解析（STOP D P0，2026-09-23）────────────
+    def _build_request_context(self, record: TaskRecord) -> dict:
+        """任务持久化 actor → 当前权威授权 → checkpoint_safe dict。
+
+        身份固定：user_id/tenant_id 只来自 tasks 表记录（创建时网关验签
+        身份落列），不来自 query/tool args/resume body。
+        授权动态：每次执行/恢复都重新解析 auth.users 当前
+        role/status/tenant——撤权、禁用、移出租户后即使任务排队数小时
+        也立即失效，不信任创建时快照，也不信任 checkpoint 里的旧权限。
+        """
+        from backend.core.request_context import RequestContext
+        from backend.security.task_authorization import resolve_task_authorization
+
+        auth_ctx = resolve_task_authorization(record.user_id, record.tenant_id)
+        principal = auth_ctx.principal
+        req_ctx = RequestContext(
+            session_id=record.id,
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+            kb_id=(record.input or {}).get("kb_id", "default"),
+            department=principal.department,
+            roles=principal.roles,
+            # data_scope 由授权层按当前 roles 折算（单一来源），随状态透传
+            data_scope=auth_ctx.data_scope or "",
+            subject_type=principal.subject_type,
+        )
+        # 任务图强制 PostgresSaver：只能放可序列化 dict 形态（同 runner 主图
+        # checkpointer 感知分支），节点入口经 get_context_from_state 还原
+        return req_ctx.checkpoint_safe()
+
     # ── 主入口 ────────────────────────────────────────────
-    def execute(self, record: TaskRecord) -> dict:
+    def execute(self, record: TaskRecord, *,
+                execution_id: str = "", heartbeat: Any = None) -> dict:
         """执行/恢复任务。返回任务输出 dict（Worker 落 tasks.output）。
 
         恢复判定：record.status ∈ {WAITING_USER, PAUSED, FAILED(重试)} 且
         thread_id 存在 → payload=None，LangGraph 从最近 checkpoint 续跑。
+
+        Phase2 Step1：execution_id（租约认领返回值）传入后，本执行器的全部
+        TaskState/checkpoint/event 写走 fencing——租约被接管的旧 Worker 在
+        下一次写点被 TaskLeaseLost 拒绝并退出（heartbeat 用于节点边界零成本
+        预检，None 时退化为逐次 DB 校验）。
         """
         from backend.config import MAIN_GRAPH_RECURSION_LIMIT
         from backend.services import task_service
 
         task_id = record.id
+        self._task_id = task_id
+        self._execution_id = execution_id
+        self._heartbeat = heartbeat
         query = (record.input or {}).get("query", "")
         thread_id = record.thread_id or f"task-{task_id}"
 
@@ -157,34 +228,62 @@ class TaskGraphExecutor:
             "configurable": {"thread_id": thread_id},
         }
 
+        # ── 执行时授权解析（STOP D P0）：resume 与全新执行都重新解析 ──
+        # 失败 fail-closed 终态，绝不以无授权上下文进图（SQLSkill 等授权
+        # 消费方依赖 state["request_context"]，缺省 = 授权未启用旧行为）。
+        from backend.security.task_authorization import TaskAuthorizationDenied
+
+        try:
+            request_ctx = self._build_request_context(record)
+        except TaskAuthorizationDenied as exc:
+            logger.warning("[TaskExecutor] %s 授权解析失败: %s", task_id, exc)
+            task_service.update_status(
+                task_id, TaskStatus.FAILED,
+                error_message=f"授权解析失败: {exc}",
+                progress="执行时授权校验未通过（fail-closed）",
+                execution_id=execution_id or None)
+            self._publish(task_id, "failed", message=str(exc))
+            return {"answer": "任务执行身份授权校验未通过，任务终止。",
+                    "step_results": {}, "blocked": True}
+
         if resume:
+            # 授权刷新覆盖 checkpoint 旧权限：身份归属固定（actor 不变），
+            # 授权权限动态（以本次解析为准）。与 user_input 注入同一
+            # update_state 通道（产生新 checkpoint，下一跳节点立即可读）。
+            state_patch: dict = {"request_context": request_ctx}
             if pending_user_input:
-                # 用户输入合并进暂停时的状态（LangGraph update_state 产生新
-                # checkpoint，下一跳节点立即可读 state["user_input"]）
-                self._graph.update_state(
-                    config, {"user_input": pending_user_input})
-                self._publish(task_id, "user_input_injected",
-                              node=record.current_node)
+                state_patch["user_input"] = pending_user_input
+            self._graph.update_state(config, state_patch)
+            if pending_user_input:
+                self._publish_fenced(task_id, "user_input_injected",
+                                     node=record.current_node)
             payload: Any = None  # LangGraph resume 语义：None 输入 = 从 checkpoint 继续
             task_service.update_status(
                 task_id, TaskStatus.RUNNING,
-                progress=f"从 checkpoint 恢复（节点: {record.current_node}）")
+                progress=f"从 checkpoint 恢复（节点: {record.current_node}）",
+                execution_id=execution_id or None)
         else:
             guard = get_input_guard().guard(query or "", session_id=task_id)
             if guard.action == GuardAction.BLOCK:
                 message = guard.message or "输入被安全策略拦截。"
                 task_service.update_status(
                     task_id, TaskStatus.FAILED,
-                    error_message=message, progress="input_guard 拦截")
+                    error_message=message, progress="input_guard 拦截",
+                    execution_id=execution_id or None)
                 self._publish(task_id, "failed", message=message)
                 return {"answer": message, "step_results": {}, "blocked": True}
             payload = make_initial_state(
                 query, task_id, kb_id=(record.input or {}).get("kb_id", "default"),
                 messages=[], guard_result=guard.model_dump(mode="json"),
-                user_id=record.user_id, department=(record.input or {}).get("department", ""),
+                user_id=record.user_id,
+                # department 用执行时解析的组织属性权威值（auth.users.dept），
+                # 不取创建时可伪造的 input.department
+                department=request_ctx.get("department", ""),
             )
+            payload["request_context"] = request_ctx
             task_service.update_status(
-                task_id, TaskStatus.RUNNING, progress="开始执行")
+                task_id, TaskStatus.RUNNING, progress="开始执行",
+                execution_id=execution_id or None)
 
         # ── 流式执行：节点边界 = checkpoint 边界 = 控制检查点 ──
         # stream_mode="updates" 事件形态：{node_name: update}（Send 并行分支
@@ -203,7 +302,8 @@ class TaskGraphExecutor:
                 # LangGraph 原生 interrupt 语义 → 等待用户输入
                 self._enter_waiting_user(
                     task_id, last_node or record.current_node or "graph",
-                    "LangGraph interrupt：等待用户输入")
+                    "LangGraph interrupt：等待用户输入",
+                    execution_id=execution_id or None)
                 return {"status": TaskStatus.WAITING_USER.value,
                         "interrupted": True}
 
@@ -213,14 +313,20 @@ class TaskGraphExecutor:
 
                 last_node = node_name
                 node_output = node_output or {}
-                task_service.update_progress(
-                    task_id, node_name,
-                    progress=f"节点 {node_name} 完成",
-                    checkpoint_id=self._latest_checkpoint_id(config))
-                task_service.append_checkpoint(task_id, node_name, node_output)
-                self._publish(task_id, "node_finish", node=node_name,
-                              progress=f"节点 {node_name} 完成",
-                              status=TaskStatus.RUNNING.value)
+                # fencing 写：租约被接管的旧 Worker 在此被拒（返回 False → 抛出）
+                if not task_service.update_progress(
+                        task_id, node_name,
+                        progress=f"节点 {node_name} 完成",
+                        checkpoint_id=self._latest_checkpoint_id(config),
+                        execution_id=execution_id or None):
+                    raise TaskLeaseLost(task_id, execution_id)
+                if not task_service.append_checkpoint(
+                        task_id, node_name, node_output,
+                        execution_id=execution_id or None):
+                    raise TaskLeaseLost(task_id, execution_id)
+                self._publish_fenced(task_id, "node_finish", node=node_name,
+                                     progress=f"节点 {node_name} 完成",
+                                     status=TaskStatus.RUNNING.value)
 
                 if node_output.get("needs_user_input"):
                     # 节点主动请求用户输入：状态（含 needs_user_input）已被
@@ -228,7 +334,8 @@ class TaskGraphExecutor:
                     ask = node_output.get("needs_user_input")
                     self._enter_waiting_user(
                         task_id, node_name,
-                        ask.get("message", "") if isinstance(ask, dict) else str(ask))
+                        ask.get("message", "") if isinstance(ask, dict) else str(ask),
+                        execution_id=execution_id or None)
                     return {"status": TaskStatus.WAITING_USER.value,
                             "waiting_node": node_name}
 
@@ -239,6 +346,8 @@ class TaskGraphExecutor:
                     step_results.update(node_output.get("step_results", {}))
 
             # 控制检查：当前节点已完成落库，下一节点尚未开始
+            # （Phase2 Step1：租约丢失也在此退出，不开始下一节点）
+            self._guard_lease()
             if self._cancelled(task_id):
                 raise TaskCancelled(task_id)
             if self._paused(task_id):
@@ -249,7 +358,8 @@ class TaskGraphExecutor:
             final_answer = _fallback_summary_from_results(step_results)
         output = {"answer": final_answer, "step_results": step_results}
         task_service.update_status(
-            task_id, TaskStatus.SUCCESS, progress="执行完成", output=output)
+            task_id, TaskStatus.SUCCESS, error_message="", progress="执行完成",
+            output=output, execution_id=execution_id or None)
         self._publish(task_id, "completed", node="reporter")
         return output
 
@@ -282,12 +392,21 @@ class TaskGraphExecutor:
         return task_service.get_user_input(task_id)
 
     @staticmethod
-    def _enter_waiting_user(task_id: str, node: str, message: str) -> None:
+    def _enter_waiting_user(task_id: str, node: str, message: str,
+                            *, execution_id: str | None = None) -> None:
+        """RUNNING → WAITING_USER；execution_id 传入时为 fencing 写。"""
+        from backend.models.task import TaskLeaseLost
         from backend.services import task_service
 
-        task_service.update_status(
-            task_id, TaskStatus.WAITING_USER,
-            progress=message or f"节点 {node} 等待用户输入")
+        try:
+            task_service.update_status(
+                task_id, TaskStatus.WAITING_USER,
+                progress=message or f"节点 {node} 等待用户输入",
+                execution_id=execution_id)
+        except TaskLeaseLost:
+            logger.warning("[TaskExecutor] %s 租约丢失，WAITING_USER 不落库"
+                           "（新 owner 负责）", task_id)
+            return
         TaskGraphExecutor._publish(task_id, "waiting_user", node=node,
                                    message=message)
         logger.info("[TaskExecutor] task %s WAITING_USER (node=%s)", task_id, node)
