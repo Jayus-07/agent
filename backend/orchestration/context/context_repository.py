@@ -604,10 +604,13 @@ class RedisConversationContextRepository:
 
     @property
     def status(self) -> dict:
+        """backend 观测态。STOP H-D3 修复：healthy 必须以「当前可达」为准，
+        而非「尚未观察到失败」——client 不可得（连不上/cooldown 中）时
+        如实报 degraded，禁止误报 healthy。"""
         from backend.config.redis import REDIS_ENABLED
         if not REDIS_ENABLED:
             return {"backend": self.backend_name, "status": "disabled"}
-        if self._degraded:
+        if self._client() is None or self._degraded:
             return {"backend": self.backend_name, "status": "degraded"}
         return {"backend": self.backend_name, "status": "healthy"}
 
