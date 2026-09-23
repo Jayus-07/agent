@@ -6,15 +6,23 @@ POST /tasks 创建任务后立即返回 task_id，workflow 异步执行；
 """
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.app.api.deps import OperatorIdentity, resolve_operator_role
 from backend.competitor.store import get_store
 from backend.orchestration.workflow.executor import WorkflowExecutor
 from backend.selection_decision.store import get_selection_decision_store
 from backend.shared.logger import logger
 
-router = APIRouter(prefix="/selection-decision", tags=["选品决策"])
+# 域运行时收口（2026-09-24 STOP A）：决策/拍板/回填是管理端运营面，
+# 与 prompts/model_prices 同档——必须过运营角色门禁（JWT 用户取平台角色，
+# 服务凭据走内部令牌映射 admin），此前无任何身份门禁属 P0 权限缺口。
+router = APIRouter(
+    prefix="/selection-decision",
+    tags=["选品决策"],
+    dependencies=[Depends(resolve_operator_role)],
+)
 
 # 后台任务强引用集合（事件循环只持弱引用，防 GC 回收，bpo-88831）
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
@@ -56,7 +64,7 @@ async def _run_task(task_id: str, inputs: dict) -> None:
 
 
 @router.post("/tasks")
-async def create_task(req: TaskRequest):
+async def create_task(req: TaskRequest, operator: OperatorIdentity = Depends(resolve_operator_role)):
     """提交选品决策任务（异步执行）"""
     # watchlist 预校验（同步轻量：只查启用条目数，不查快照）：
     # 空则直接 400，避免创建注定失败的异步任务；有候选但无快照仍走异步失败路径。
@@ -76,7 +84,9 @@ async def create_task(req: TaskRequest):
     task = asyncio.create_task(_run_task(task_id, inputs))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
-    logger.info(f"[SelectionDecision:api] 任务已提交: {task_id} ({req.category})")
+    # 后台 workflow 当前不装配身份（A8 已知缺口），此处至少把操作者留痕进日志
+    logger.info(f"[SelectionDecision:api] 任务已提交: {task_id} ({req.category}) "
+                f"operator={operator.actor}")
     return {"task_id": task_id, "status": "running"}
 
 

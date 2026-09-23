@@ -13,14 +13,21 @@ kind 三类（2026-09-17 第三轮扩展）：
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from backend.app.api.deps import resolve_operator_role
 from backend.selection_funnel import import_pool as _ip
 from backend.selection_funnel import market_data as _md
 from backend.shared.logger import logger
 
-router = APIRouter(prefix="/selection-funnel", tags=["智能选品"])
+# 域运行时收口（2026-09-24 STOP A）：导入通道写共享选品池，与决策任务同档，
+# 必须过运营角色门禁（JWT 用户取平台角色，服务凭据走内部令牌），此前无任何身份门禁。
+router = APIRouter(
+    prefix="/selection-funnel",
+    tags=["智能选品"],
+    dependencies=[Depends(resolve_operator_role)],
+)
 
 _KINDS = ("products", "keywords", "reviews")
 
