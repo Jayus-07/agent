@@ -780,8 +780,24 @@ class RAGChain:
         else:
             self._record_rag_metric("hit")
 
+        self._remember_turn(session_id, question, answer)
         self._finish(trace, answer, t_total)
         return answer
+
+    def _remember_turn(self, session_id: str, question: str, answer: str) -> None:
+        """memory 唯一写点（2026-09-23 D1-5）。
+
+        仅在全部 Gate（EvidenceGate/ClaimVerifier/Faithfulness/META 自报）
+        通过、最终用户可见 answer 确定后调用一次。被 Gate 拒绝的 turn 不再
+        进入 L2/L3（此前被拒答案已随 _verify 写入并回注 prompt 污染后续
+        回答）；self-correction 复用本写点，同一 turn 只写最终版本一次。
+        """
+        if self._memory:
+            try:
+                self._memory.end_turn(session_id, question, answer)
+            except Exception:
+                logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
+                             exc_info=True)
 
     def _record_rag_metric(self, status: str) -> None:
         """埋点 RAG 查询结果到运营指标（2026-08-11）。"""
@@ -805,6 +821,7 @@ class RAGChain:
         if self.corrector.can_retry():
             retried = self._try_self_correct(decision, trace, question, session_id, t_total)
             if retried is not None:
+                self._remember_turn(session_id, question, retried)
                 self._finish(trace, retried, t_total)
                 return retried
 
@@ -1303,8 +1320,10 @@ class RAGChain:
             answer = answer + references
         self._last_sources = self.formatter.extract_sources(verified_docs, answer)
 
-        if self._memory:
-            self._memory.end_turn(session_id, question, answer)
+        # memory 写入已移出本函数（2026-09-23 D1-5）：此前在 ClaimVerifier /
+        # Faithfulness / META 拒答判定之前就 end_turn，被 Gate 拦截的答案
+        # 已持久化进 L2/L3 并回注后续 prompt；self-correction 再次 _verify
+        # 还会双写。现在唯一写点 = _remember_turn（全部 Gate 通过后调用）。
 
         return answer
 
