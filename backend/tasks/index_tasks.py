@@ -201,6 +201,8 @@ def _register_task():
                 # 不被 retry 唤醒）；存量消息（无 TaskState 行）直接重试
                 from backend.models.task import TaskStatus
                 from backend.services import task_service
+                from backend.tasks.queue_router import (log_route,
+                                                        resolve_for_task)
 
                 record = task_service.get_task(db_task_id)
                 if record is None or record.status != TaskStatus.FAILED:
@@ -211,6 +213,15 @@ def _register_task():
                         db_task_id,
                         record.status.value if record else "MISSING")
                     return {"status": "RETRY_CANCELLED", "skipped": True}
+                # Step3：重投队列显式经 QueueRouter（rag_index 亲和 +
+                # 配置变化跟随新 binding）
+                route = resolve_for_task(record)
+                log_route(route, dispatch_type="retry", task_id=db_task_id,
+                          celery_task_name="tasks.execute_index",
+                          previous_queue=record.queue)
+                raise self.retry(exc=scheduled.original,
+                                 countdown=scheduled.delay,
+                                 queue=route.physical_queue)
             raise self.retry(exc=scheduled.original,
                              countdown=scheduled.delay)
 

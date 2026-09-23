@@ -95,6 +95,11 @@ TASK_RECOVERY_MAX_AGE_SECONDS = int(os.getenv("TASK_RECOVERY_MAX_AGE_SECONDS", "
 CELERY_BROKER_VISIBILITY_TIMEOUT = int(
     os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT", "1950"))
 
+# ── 队列名（Phase2 Step3：物理队列名唯一在此与 queue_router 消费）────
+# agent 主队列：interactive_agent workload 的物理队列（beat maintenance/
+# report 暂共享，Step5 拆分时只改 queue_router 的 logical→physical 映射）。
+CELERY_AGENT_QUEUE = os.getenv("CELERY_AGENT_QUEUE", "agent")
+
 # ── RAG 上传索引队列化（固定启用，无开关）──────────────────
 # 上传后索引任务固定投递 Celery（rag_index 队列）由 Worker 执行，
 # SSE 经 Redis 进度镜像跨进程轮询消费；broker 不可达入队失败时
@@ -106,6 +111,11 @@ CELERY_RAG_INDEX_QUEUE = os.getenv("CELERY_RAG_INDEX_QUEUE", "rag_index")
 CELERY_METADATA_SHADOW_QUEUE = os.getenv(
     "CELERY_METADATA_SHADOW_QUEUE", "rag_metadata_shadow"
 )
+
+# 未登记 workflow 的路由降级队列（Phase2 Step3 queue_router 消费）。
+# 默认空 = fail-closed（未登记直接拒绝入队）；显式设为物理队列名时
+# 未登记路由降级 legacy_fallback 并必打 warning（可审计的逃生门）。
+QUEUE_ROUTING_UNKNOWN_FALLBACK = os.getenv("QUEUE_ROUTING_UNKNOWN_FALLBACK", "")
 CELERY_METADATA_SHADOW_TASK_TIMEOUT = int(
     os.getenv("CELERY_METADATA_SHADOW_TASK_TIMEOUT", "120")
 )

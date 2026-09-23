@@ -140,22 +140,71 @@ def _revoke_queued(task_id: str) -> None:
 # 入队 / 恢复
 # ═══════════════════════════════════════════════════
 
-def enqueue_task(record: TaskRecord) -> str | None:
-    """任务投递 Celery 队列；返回 celery async result id（不可用时 None）。"""
+def enqueue_task(record: TaskRecord, *, dispatch_type: str = "initial") -> str | None:
+    """interactive_agent 侧投递（queue 由 QueueRouter 决定，Step3 收口）。
+
+    返回 celery async result id（不可用时 None）。队列名一律取
+    QueueRouter.resolve_for_task(record).physical_queue——本函数与所有
+    调用方（initial/resume/recovery）均不得自拼 queue 字符串。
+    """
     from backend.services import task_service
+    from backend.tasks.queue_router import log_route, resolve_for_task
 
     clear_flags(record.id)
+    route = resolve_for_task(record)  # 未知 workflow 在此 fail-closed（不被下方 broker 兜底吞掉）
     try:
         from backend.tasks.agent_tasks import execute_agent_task
 
         async_result = execute_agent_task.apply_async(
-            args=[record.id], queue="agent")
-        task_service.mark_queued(record.id, async_result.id, queue="agent")
+            args=[record.id], queue=route.physical_queue)
+        task_service.mark_queued(record.id, async_result.id,
+                                 queue=route.physical_queue)
+        log_route(route, dispatch_type=dispatch_type, task_id=record.id,
+                  celery_task_name="tasks.execute_agent",
+                  previous_queue=record.queue)
         return async_result.id
     except Exception as e:
         # broker 不可达：任务留在 PENDING，由 API 返回 503 提示
         logger.error("[TaskManager] enqueue failed: %s (%s)", record.id, e)
         raise
+
+
+def _redispatch_index(task_id: str, dispatch_type: str) -> str | None:
+    """rag_index 侧投递（kwargs 重建 + queue 由 QueueRouter 决定）。
+
+    缺 index_kwargs（无法重建消息）时抛错：resume 路径回滚 PAUSED、
+    recovery 路径回滚认领，任务保留可再次处理。
+    """
+    from backend.tasks.index_task_runtime import redispatch_index_task
+
+    result = redispatch_index_task(task_id, dispatch_type=dispatch_type)
+    if result is None:
+        raise RuntimeError(f"rag_index 任务 {task_id} 缺 index_kwargs，无法重投")
+    return result
+
+
+# workflow → 投递器注册表：唯一一处"哪个 workflow 用哪个 Celery task +
+# 怎么重建 payload"的登记（执行语义）；queue 决策全部在 QueueRouter。
+# lambda 体引用模块 globals（enqueue_task），monkeypatch 该名字仍生效。
+_WORKFLOW_DISPATCHERS = {
+    "main": lambda record, dt: enqueue_task(record, dispatch_type=dt),
+    "rag_index": lambda record, dt: _redispatch_index(record.id, dt),
+}
+
+
+def dispatch_task(record: TaskRecord, *, dispatch_type: str = "initial") -> str | None:
+    """workflow 统一派发入口（resume/recovery 共用；Step3 队列决策收口）。
+
+    未知 workflow → QueueRoutingError（fail-closed，不偷偷投 agent）。
+    """
+    from backend.tasks.queue_router import QueueRoutingError, resolve_for_task
+
+    route = resolve_for_task(record)
+    dispatcher = _WORKFLOW_DISPATCHERS.get(route.workflow)
+    if dispatcher is None:
+        raise QueueRoutingError(
+            f"workflow {route.workflow!r} 未登记投递器（fail-closed）")
+    return dispatcher(record, dispatch_type)
 
 
 def cancel_task(task_id: str) -> dict:
@@ -210,18 +259,22 @@ def cancel_task(task_id: str) -> dict:
 
 
 def resume_task(task_id: str, user_input: str = "",
-                *, allow_failed: bool = False) -> TaskRecord:
+                *, allow_failed: bool = False,
+                dispatch_type: str = "resume") -> TaskRecord:
     """恢复任务（Phase1 Step5：原子认领，重复 resume 不产生第二个执行链）。
 
     1. 清控制标志 → 2. 若带用户输入写入 DB（Worker 续跑时注入 state）→
     3. 原子认领 expected→PENDING（条件 UPDATE，并发双 resume 恰一个胜出，
-    败者幂等返回不重复入队）→ 4. 入队。Worker 拾取后按租约 + checkpoint
-    判定续跑，不重头执行图；真正执行权由 try_acquire_lease 仲裁
-    （max_concurrent_executor_per_task=1）。
+    败者幂等返回不重复入队）→ 4. 经 QueueRouter 按 workflow 派发。
+    Worker 拾取后按租约 + checkpoint 判定续跑，不重头执行图；真正执行权
+    由 try_acquire_lease 仲裁（max_concurrent_executor_per_task=1）。
 
     - 默认仅 PAUSED / WAITING_USER 可恢复（Phase1 规格口径；
       WAITING_USER 为"暂停等人"变体，既有产品能力，登记例外）
     - FAILED 重试走管理端通道（allow_failed=True），保持自愈式续跑语义
+      （管理端传 dispatch_type="admin_retry" 入观测轨迹）
+    - 队列亲和：rag_index resume 永远回 rag_index（QueueRouter binding，
+      不再 if-else 判断 graph_name——Phase1 曾因此误投 agent 队列）
     - 入队失败回滚 PENDING→PAUSED（状态机合法），任务保留可再次 resume
 
     返回最新 TaskRecord（败者返回的是已被对手认领后的行，status=PENDING）。
@@ -255,17 +308,7 @@ def resume_task(task_id: str, user_input: str = "",
 
     record = task_service.get_task(task_id)  # type: ignore[assignment]
     try:
-        if record is not None and record.graph_name == "rag_index":
-            # 执行器路由（实机演练 2026-09-23 修复）：索引任务的 resume 必须
-            # 重投 rag_index 队列（按 tasks.input 持久化的原始 kwargs），
-            # 否则 agent worker 拿到索引任务行 → 空 graph 输入 → EmptyInputError
-            from backend.tasks.index_task_runtime import redispatch_index_task
-
-            if redispatch_index_task(task_id) is None:
-                raise RuntimeError(
-                    f"rag_index 任务 {task_id} 缺 index_kwargs，无法重投")
-        else:
-            enqueue_task(record)  # type: ignore[arg-type]
+        dispatch_task(record, dispatch_type=dispatch_type)  # type: ignore[arg-type]
     except Exception:
         # 入队失败回滚到 PAUSED（PENDING→PAUSED 白名单合法），可再次 resume
         task_service.mark_paused_if_pending(
@@ -332,16 +375,11 @@ def sweep_stale_executions() -> dict:
         try:
             if record is None:
                 raise RuntimeError(f"task row missing: {task_id}")
-            if record.graph_name == "rag_index":
-                # 按原 workflow queue 重投：索引任务必须回 rag_index
-                # （带 index_kwargs 原文，见 index_task_runtime）
-                from backend.tasks.index_task_runtime import redispatch_index_task
-
-                if redispatch_index_task(task_id) is None:
-                    raise RuntimeError(
-                        f"rag_index 任务 {task_id} 缺 index_kwargs，无法重投")
-            else:
-                enqueue_task(record)
+            # Step3：队列决策收口——按 workflow 经 QueueRouter 重投原
+            # workload 队列（rag_index 回 rag_index，agent 回 agent）；
+            # tasks.queue 仅作 trace 对照（binding 变化时打 previous/
+            # resolved，不作为路由依据）
+            dispatch_task(record, dispatch_type="recovery")
         except Exception as e:
             # 重投失败：回滚认领，保持 stale 语义等下一轮（不丢任务）
             task_service.revert_recovery_claim(task_id)
@@ -352,8 +390,8 @@ def sweep_stale_executions() -> dict:
         publish_event(task_id, "recovering",
                       message="检测到 Worker 失联，已自动恢复重投（从 checkpoint 续跑）")
         logger.warning("[TaskManager] stale execution recovered: %s "
-                       "(recovery_count=%s, queue=%s)", task_id,
-                       record.recovery_count, record.queue)
+                       "(recovery_count=%s, previous_queue=%s)",
+                       task_id, record.recovery_count, record.queue)
     if recovered or exhausted:
         logger.warning("[TaskManager] sweep: recovered=%s exhausted=%s "
                        "(scanned=%d)", recovered, exhausted, len(stale_ids))

@@ -60,15 +60,17 @@ def create_index_task_record(upload_id: str, filename: str, *,
         return None
 
 
-def redispatch_index_task(task_id: str) -> str | None:
-    """按 tasks.input 里的原始 kwargs 重投 rag_index 队列（resume 专用）。
+def redispatch_index_task(task_id: str, *,
+                          dispatch_type: str = "resume") -> str | None:
+    """按 tasks.input 里的原始 kwargs 重投 rag_index（resume/recovery 共用）。
 
-    返回 celery async result id；task 行不存在或缺 index_kwargs 时 None
-    （调用方回落通用入队或报错）。
+    queue 由 QueueRouter 按 workflow binding 决定（Step3 收口，不再直接
+    读 CELERY_RAG_INDEX_QUEUE）；返回 celery async result id，task 行不
+    存在或缺 index_kwargs 时 None（调用方回落通用入队或报错）。
     """
     from backend.services import task_service
     from backend.tasks.index_tasks import execute_index_task
-    from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
+    from backend.tasks.queue_router import log_route, resolve_for_task
 
     record = task_service.get_task(task_id)
     if record is None:
@@ -77,13 +79,18 @@ def redispatch_index_task(task_id: str) -> str | None:
     if not index_kwargs:
         logger.error("[IndexTaskRuntime] %s 缺 index_kwargs，无法重投", task_id)
         return None
+    route = resolve_for_task(record)
     async_result = execute_index_task.apply_async(
         kwargs={**index_kwargs, "db_task_id": task_id},
-        queue=CELERY_RAG_INDEX_QUEUE)
+        queue=route.physical_queue)
     task_service.mark_queued(task_id, getattr(async_result, "id", ""),
-                             queue=CELERY_RAG_INDEX_QUEUE)
-    logger.info("[IndexTaskRuntime] %s redispatched to rag_index (%s)",
-                task_id, str(getattr(async_result, "id", ""))[:8])
+                             queue=route.physical_queue)
+    log_route(route, dispatch_type=dispatch_type, task_id=task_id,
+              celery_task_name="tasks.execute_index",
+              previous_queue=record.queue)
+    logger.info("[IndexTaskRuntime] %s redispatched to %s (%s)",
+                task_id, route.physical_queue,
+                str(getattr(async_result, "id", ""))[:8])
     return getattr(async_result, "id", None)
 
 

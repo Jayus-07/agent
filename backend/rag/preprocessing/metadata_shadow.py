@@ -274,13 +274,19 @@ def _load_shadow_input(cache_key: str) -> dict[str, Any] | None:
 
 
 def _enqueue_shadow_task(job_id: str) -> bool:
-    from backend.config.tasks import CELERY_METADATA_SHADOW_QUEUE
+    # Step3：queue 经 QueueRouter 登记（metadata_shadow workload 独立
+    # worker 拓扑不变，仅路由权威统一）
     from backend.tasks.metadata_shadow_tasks import execute_metadata_shadow
+    from backend.tasks.queue_router import (log_route,
+                                            resolve_for_celery_task)
 
+    route = resolve_for_celery_task("tasks.execute_metadata_shadow")
     execute_metadata_shadow.apply_async(
         args=[job_id],
-        queue=CELERY_METADATA_SHADOW_QUEUE,
+        queue=route.physical_queue,
     )
+    log_route(route, dispatch_type="initial", task_id=job_id,
+              celery_task_name="tasks.execute_metadata_shadow")
     return True
 
 

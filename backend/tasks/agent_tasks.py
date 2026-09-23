@@ -272,8 +272,12 @@ def _retry_after_state_recheck(task_self, task_id: str,
     CANCELLED / PAUSED / SUCCESS / WAITING_USER / 非预期态 → 放弃重投
     （NO-OP）；仅当任务仍处于 impl 写下的 FAILED(等待重试) 才执行
     self.retry（新消息 countdown 入队，旧消息 ack）。
+
+    Step3：重投队列显式经 QueueRouter 解析（同 workload 亲和 + 配置
+    变化跟随新 binding），不依赖 task_routes 隐式路由。
     """
     from backend.services import task_service
+    from backend.tasks.queue_router import log_route, resolve_for_task
 
     record = task_service.get_task(task_id)
     if record is None:
@@ -285,11 +289,17 @@ def _retry_after_state_recheck(task_self, task_id: str,
             "（不被 retry 唤醒）", task_id, record.status.value)
         return {"status": record.status.value, "skipped": True,
                 "retry_cancelled": True}
+    route = resolve_for_task(record)
+    log_route(route, dispatch_type="retry", task_id=task_id,
+              celery_task_name="tasks.execute_agent",
+              previous_queue=record.queue)
     logger.warning(
-        "[AgentTask] %s retry #%d/%d scheduled (%s, delay=%ss, 从 checkpoint 续跑)",
+        "[AgentTask] %s retry #%d/%d scheduled (%s, delay=%ss, queue=%s,"
+        " 从 checkpoint 续跑)",
         task_id, scheduled.retry_count + 1, scheduled.max_retries,
-        scheduled.error_type, scheduled.delay)
-    raise task_self.retry(exc=scheduled.original, countdown=scheduled.delay)
+        scheduled.error_type, scheduled.delay, route.physical_queue)
+    raise task_self.retry(exc=scheduled.original, countdown=scheduled.delay,
+                          queue=route.physical_queue)
 
 
 # ═══════════════════════════════════════════════════

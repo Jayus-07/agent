@@ -173,7 +173,7 @@ def test_cancel_then_resume_rejected(pg, monkeypatch):
 
     enqueued: list[str] = []
     monkeypatch.setattr(task_manager, "enqueue_task",
-                        lambda r: enqueued.append(r.id))
+                        lambda r, *a, **k: enqueued.append(r.id))
     record = _new_task(pg)
     TaskManager.mark_running(record.id)
     TaskManager.mark_paused(record.id)

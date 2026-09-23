@@ -93,7 +93,7 @@ def enqueue_stub(monkeypatch):
     """入队计数桩（不依赖 broker）。"""
     counter = {"n": 0, "fail": False}
 
-    def _fake(record):
+    def _fake(record, *args, **kwargs):
         if counter["fail"]:
             raise ConnectionError("broker down")
         counter["n"] += 1
@@ -283,7 +283,7 @@ def test_resume_rag_index_routes_to_index_queue(pg, monkeypatch):
                         lambda *, kwargs, queue: dispatched.append((kwargs, queue))
                         or type("R", (), {"id": "celery-1"})())
     monkeypatch.setattr(task_manager, "enqueue_task",
-                        lambda r: enqueued.append(r.id))
+                        lambda r, *a, **k: enqueued.append(r.id))
     monkeypatch.setattr(task_manager, "mark_queued",
                         lambda *a, **k: None, raising=False)
 

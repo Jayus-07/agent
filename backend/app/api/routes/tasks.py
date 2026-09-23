@@ -23,6 +23,7 @@ from backend.shared.logger import logger
 from backend.shared.error_protocol import error_envelope_from_exception
 from backend.services import task_service
 from backend.tasks import task_manager
+from backend.tasks.queue_router import QueueRoutingError
 
 router = APIRouter(prefix="/tasks", tags=["异步任务"])
 
@@ -86,12 +87,24 @@ async def create_task(body: TaskCreateRequest, request: Request):
             ident.user_id, body.query, tenant_id=tenant_id)
         try:
             task_manager.enqueue_task(record)
+        except QueueRoutingError:
+            # Step3 fail-closed：workflow 未登记路由 → 拒绝入队、不留假
+            # RUNNING（行落 FAILED 说明原因，登记路由后可管理端重试）
+            logger.error("[TasksAPI] workflow 未登记队列路由: %s (graph=%s)",
+                         record.id, record.graph_name)
+            task_service.update_status(
+                record.id, TaskStatus.FAILED,
+                error_message=f"workflow {record.graph_name} 未登记队列路由"
+                              "（QueueRouter fail-closed）",
+                error_type="queue_routing_error")
+            raise HTTPException(
+                status_code=400,
+                detail=f"workflow {record.graph_name} 未登记队列路由，任务已拒绝入队")
         except Exception:
             logger.error("[TasksAPI] enqueue failed: %s", record.id,
                          exc_info=True)
             task_service.update_status(
-                record.id,
-                __import__("backend.models.task", fromlist=["TaskStatus"]).TaskStatus.FAILED,
+                record.id, TaskStatus.FAILED,
                 error_message="任务队列不可用（broker 连接失败）",
             )
             raise
@@ -114,6 +127,8 @@ async def create_task(body: TaskCreateRequest, request: Request):
 
     try:
         return _create_and_enqueue()
+    except HTTPException:
+        raise  # 业务语义明确的 4xx 直接透传（不被 503 兜底吞掉）
     except Exception as e:
         logger.error("[TasksAPI] enqueue failed: %s", e)
         raise HTTPException(status_code=503, detail="任务队列暂不可用，请稍后重试")

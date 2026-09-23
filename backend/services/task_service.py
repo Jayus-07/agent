@@ -98,8 +98,12 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
 
 
 def mark_queued(task_id: str, celery_task_id: str, *,
-                queue: str = "agent") -> None:
-    """apply_async 成功后回填：celery id + 队列 + queued_at（排队耗时起点）。"""
+                queue: str) -> None:
+    """apply_async 成功后回填：celery id + 队列 + queued_at（排队耗时起点）。
+
+    queue 必传（Step3：值一律来自 QueueRouter 解析结果，本层不设默认——
+    tasks.queue 语义 = 本次投递的物理队列快照，非配置源）。
+    """
     ensure_schema()
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(

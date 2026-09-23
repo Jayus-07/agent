@@ -14,11 +14,11 @@ from celery.schedules import crontab
 from celery.signals import worker_process_init
 
 from backend.config.tasks import (
+    CELERY_AGENT_QUEUE,
     CELERY_BROKER_URL,
     CELERY_BROKER_VISIBILITY_TIMEOUT,
     CELERY_HARD_TASK_TIMEOUT,
     CELERY_METADATA_SHADOW_MAX_RETRIES,
-    CELERY_METADATA_SHADOW_QUEUE,
     CELERY_METADATA_SHADOW_TASK_TIMEOUT,
     CELERY_RESULT_BACKEND,
     CELERY_RETRY_BACKOFF,
@@ -28,6 +28,7 @@ from backend.config.tasks import (
     TASK_ZOMBIE_RECONCILE_INTERVAL,
 )
 from backend.shared.logger import logger
+from backend.tasks.queue_router import beat_queue, celery_task_routes
 
 celery_app = Celery(
     "agent_tasks",
@@ -75,14 +76,12 @@ celery_app.conf.update(
     timezone="Asia/Shanghai",
     enable_utc=True,
 
-    # ── 路由：agent 任务专用队列（水平扩展时按队列扩 Worker）──
-    # 阶段4：RAG 上传索引独立队列（索引吃内存/模型，与 agent 图任务隔离扩缩容）
-    task_default_queue="agent",
-    task_routes={"tasks.execute_agent": {"queue": "agent"},
-                 "tasks.execute_index": {"queue": "rag_index"},
-                 "tasks.execute_metadata_shadow": {
-                     "queue": CELERY_METADATA_SHADOW_QUEUE,
-                 }},
+    # ── 路由（Phase2 Step3 收口）────────────────────────────
+    # task_routes / beat 的队列映射一律从 tasks.queue_router（唯一事实源）
+    # 派生，本文件不得手写第二份 workflow→queue 表（G2）。
+    # default queue 仅兜底未登记 task name——正常路径全部显式路由。
+    task_default_queue=CELERY_AGENT_QUEUE,
+    task_routes=celery_task_routes(),
 
     # 影子任务有更短的独立超时；任务自身装饰器会使用同一重试退避策略。
     task_annotations={
@@ -97,43 +96,53 @@ celery_app.conf.update(
 
     # ── Beat 周期任务（P2.4：客服全局维护，60s 兜底扫描）──
     # 幂等（原子条件 UPDATE）：重复调度/多实例并发安全，无需去重键
+    # Step3：每项显式 options.queue（经 QueueRouter beat_queue 解析），
+    # 不再依赖 task_default_queue 隐式决定；maintenance/report 当前
+    # 物理共享 agent worker（Step5 待拆，logical 口径见 queue_router）。
     beat_schedule={
         "cs-handoff-timeout-scan": {
             "task": "cs.handoff_timeout_scan",
             "schedule": 60.0,
+            "options": {"queue": beat_queue("cs.handoff_timeout_scan")},
         },
         "cs-confirmation-expiry-scan": {
             "task": "cs.confirmation_expiry_scan",
             "schedule": 60.0,
+            "options": {"queue": beat_queue("cs.confirmation_expiry_scan")},
         },
         "cs-event-outbox-compensation": {
             "task": "cs.event_outbox_compensation",
             "schedule": 15.0,
+            "options": {"queue": beat_queue("cs.event_outbox_compensation")},
         },
         # 批次D（2026-09-22）：客服质检每日报表。每日 06:10 UTC 聚合昨日
         # 指标（幂等覆盖 qa_daily_reports）；失败自动重试（最多 3 次）。
         "cs-qa-daily-report": {
             "task": "cs.qa_daily_report",
             "schedule": crontab(hour=6, minute=10),
+            "options": {"queue": beat_queue("cs.qa_daily_report")},
         },
-        # B5（2026-09-21 高并发审查）：僵尸 RUNNING 任务定期收尸。
+        # B5（2026-09-21 高并发审查）：僵尸任务定期收尸。
         # 阈值与间隔均可经 env 覆盖（TASK_ZOMBIE_*，见 backend/config/tasks.py）
         "tasks-zombie-reconcile": {
             "task": "tasks.zombie_reconcile",
             "schedule": float(TASK_ZOMBIE_RECONCILE_INTERVAL),
+            "options": {"queue": beat_queue("tasks.zombie_reconcile")},
         },
         # Phase2 Step1：stale execution 自动恢复主路径。租约过期的 RUNNING
-        # 任务由本任务原子认领并按原 queue 重投（不等 visibility_timeout、
+        # 任务由本任务原子认领并经 QueueRouter 重投（不等 visibility_timeout、
         # 无需 admin retry）；zombie reconcile 退化为最终兜底。
         "tasks-stale-execution-recovery": {
             "task": "tasks.stale_execution_recovery",
             "schedule": float(TASK_RECOVERY_SWEEP_INTERVAL),
+            "options": {"queue": beat_queue("tasks.stale_execution_recovery")},
         },
         # 治理改造（2026-09-22）：模型健康周期探测 → llm_model_health 缓存。
         # 页面只读缓存；间隔经 env MODEL_HEALTH_SCAN_INTERVAL 可调（默认 300s）。
         "model-health-scan": {
             "task": "model.health_scan",
             "schedule": float(os.getenv("MODEL_HEALTH_SCAN_INTERVAL", "300")),
+            "options": {"queue": beat_queue("model.health_scan")},
         },
     },
 )

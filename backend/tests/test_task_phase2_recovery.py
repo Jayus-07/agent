@@ -194,7 +194,7 @@ def sweep_env(monkeypatch):
     monkeypatch.setattr(task_manager, "_redis", lambda: _FakeRedis())
     dispatched: list[str] = []
 
-    def _fake_enqueue(record):
+    def _fake_enqueue(record, *args, **kwargs):
         # 模拟真实 enqueue_task 契约：入队成功后回填 celery id + queue
         from backend.services import task_service
 
@@ -273,7 +273,7 @@ def test_case_d_redispatch_failure_reverts_claim(pg, monkeypatch):
 
     monkeypatch.setattr(task_manager, "_redis", lambda: _FakeRedis())
 
-    def _broken_enqueue(record):
+    def _broken_enqueue(record, *args, **kwargs):
         raise RuntimeError("broker down")
 
     monkeypatch.setattr(task_manager, "enqueue_task", _broken_enqueue)

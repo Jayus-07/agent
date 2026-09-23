@@ -137,7 +137,10 @@ async def admin_retry_task(task_id: str, body: AdminOpRequest, request: Request)
                    f"（当前 {record.status.value}）")
     _cooldown(task_id)
     try:
-        task_manager.resume_task(task_id, "", allow_failed=True)
+        # Step3：admin retry 与 resume 共用同一派发链（QueueRouter 决定
+        # 队列），仅 dispatch_type 区分观测口径；Admin API 不指定 queue
+        task_manager.resume_task(task_id, "", allow_failed=True,
+                                 dispatch_type="admin_retry")
     except LookupError:
         raise HTTPException(status_code=404, detail="任务不存在")
     except ValueError as e:

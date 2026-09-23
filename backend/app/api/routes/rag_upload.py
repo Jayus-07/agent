@@ -924,10 +924,14 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
     Phase1 Step8 试点：入队前创建统一 tasks 行（TaskState 接入，失败降级
     不阻断索引）。kwargs 中的 actor_id/tenant_id 仅用于任务归属，不进
     Celery 消息（索引任务签名不感知身份）。
+
+    Phase2 Step3：queue 由 QueueRouter 按 workflow binding 决定（收口，
+    不再直接读 CELERY_RAG_INDEX_QUEUE）。
     """
+    from backend.services import task_service
     from backend.tasks.index_task_runtime import create_index_task_record
     from backend.tasks.index_tasks import execute_index_task
-    from backend.config.tasks import CELERY_RAG_INDEX_QUEUE
+    from backend.tasks.queue_router import log_route, resolve_for_workflow
 
     actor_id = str(kwargs.pop("actor_id", "") or "")
     tenant_id = str(kwargs.pop("tenant_id", "") or "")
@@ -940,15 +944,16 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
     if db_task_id:
         kwargs = {**kwargs, "db_task_id": db_task_id}
 
+    route = resolve_for_workflow("rag_index")
     async_result = execute_index_task.apply_async(
-        kwargs=kwargs, queue=CELERY_RAG_INDEX_QUEUE
+        kwargs=kwargs, queue=route.physical_queue
     )
     if db_task_id:
-        from backend.services import task_service
-
         task_service.mark_queued(db_task_id,
                                  getattr(async_result, "id", ""),
-                                 queue=CELERY_RAG_INDEX_QUEUE)
+                                 queue=route.physical_queue)
+        log_route(route, dispatch_type="initial", task_id=db_task_id,
+                  celery_task_name="tasks.execute_index")
     return {"queued": True, "celery_task_id": getattr(async_result, "id", ""),
             "db_task_id": db_task_id}
 
