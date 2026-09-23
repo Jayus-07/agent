@@ -38,6 +38,8 @@ from backend.travel.models.validation import (
     CODE_GEO_REVISIT,
     CODE_GEO_SCATTER,
     CODE_MUST_GO_MISSING,
+    CODE_POI_DUPLICATED,
+    CODE_POI_NOT_IN_CANDIDATES,
     CODE_PACE_TOO_INTENSE,
     CODE_PACE_TOO_MANY_POIS,
     CODE_TIME_CLOSED,
@@ -57,11 +59,20 @@ from backend.travel.timeutil import from_min, to_min
 AXES: tuple[str, ...] = ("time", "geo", "pace", "budget", "coverage")
 
 
-def check_itinerary(itinerary: Itinerary) -> ValidationReport:
+def check_itinerary(
+    itinerary: Itinerary,
+    valid_poi_ids: set[str] | None = None,
+) -> ValidationReport:
     """对一份行程执行全部约束校验。
 
     这是 validator 的唯一对外入口 —— 域图、修复器、测试都从这里进，
     内部各轴函数不单独对外暴露，避免调用方漏检某一轴。
+
+    Args:
+        itinerary: 待校验行程
+        valid_poi_ids: 本轮候选池的合法 poi_id 全集；None 表示「本轮无候选
+            池事实可用」（如既有单测直接构造行程），此时跳过候选池轴
+            （not_evaluable），不得假通过也不得假失败。
     """
     violations: list[Violation] = []
     violations += _run_axis("time_check", lambda: check_time(itinerary))
@@ -69,6 +80,8 @@ def check_itinerary(itinerary: Itinerary) -> ValidationReport:
     violations += _run_axis("pace_check", lambda: check_pace(itinerary))
     violations += _run_axis("budget_check", lambda: check_budget(itinerary))
     violations += _run_axis("coverage_check", lambda: check_coverage(itinerary))
+    violations += _run_axis(
+        "pool_check", lambda: check_pool(itinerary, valid_poi_ids))
 
     report = ValidationReport(violations=violations, checked_days=len(itinerary.days))
     logger.info(
@@ -372,6 +385,60 @@ def check_coverage(itinerary: Itinerary) -> list[Violation]:
 
 
 # ============================================================
+# 轴六：候选池成员与全行程结构（STOP I4）
+# ============================================================
+def check_pool(
+    itinerary: Itinerary, valid_poi_ids: set[str] | None,
+) -> list[Violation]:
+    """行程内每个 poi_id 必须属于本轮候选池（canonical 数据不变式）。
+
+    这是「行程只能由 canonical 候选池构成」的守护轴：候选池之外的
+    poi_id 出现在行程里，无论来源（上游注入 / 状态污染），都是 error。
+    valid_poi_ids 为 None 时本轴 not_evaluable（调用方无候选池事实可依）。
+
+    同一 POI 跨天重复安排也在此判定（同天重复归轴二 GEO_REVISIT）：
+    skeleton 结构上每个候选只分配一次，多天重复即结构错误 —— 保留首现、
+    后续全部判 error，修复器负责摘除。首现所在天不判（首个安排是合法的）。
+    """
+    out: list[Violation] = []
+
+    if valid_poi_ids is not None:
+        for day in itinerary.days:
+            for item in day.items:
+                if item.poi is None:
+                    continue
+                if item.poi.poi_id not in valid_poi_ids:
+                    out.append(Violation(
+                        code=CODE_POI_NOT_IN_CANDIDATES, level=LEVEL_ERROR,
+                        day_index=day.day_index,
+                        message=(f"第{day.day_index}天「{item.poi.name}」"
+                                 f"不在本轮候选数据中（poi_id={item.poi.poi_id}），"
+                                 "无法核实地名与时段事实"),
+                        detail={"poi_id": item.poi.poi_id,
+                                "poi_name": item.poi.name},
+                    ))
+
+    first_seen_day: dict[str, int] = {}
+    for day in sorted(itinerary.days, key=lambda d: d.day_index):
+        for item in day.items:
+            if item.poi is None:
+                continue
+            seen_day = first_seen_day.get(item.poi.poi_id)
+            if seen_day is None:
+                first_seen_day[item.poi.poi_id] = day.day_index
+            elif day.day_index != seen_day:
+                # 只判「跨不同天」的重复；同一天内的重复归 GEO_REVISIT
+                out.append(Violation(
+                    code=CODE_POI_DUPLICATED, level=LEVEL_ERROR,
+                    day_index=day.day_index,
+                    message=(f"「{item.poi.name}」在第{day.day_index}天重复安排"
+                             "（同一地点只应出现一次）"),
+                    detail={"poi_id": item.poi.poi_id, "poi_name": item.poi.name},
+                ))
+    return out
+
+
+# ============================================================
 # 置信度
 # ============================================================
 def compute_confidence(itinerary: Itinerary, report: ValidationReport) -> float:
@@ -416,7 +483,12 @@ def travel_validator_node(state: dict) -> dict:
             "notes": list(state.get("notes", [])) + ["行程未生成，已跳过约束校验"],
         }
 
-    report = check_itinerary(itinerary)
+    # 候选池成员轴（STOP I4）：合法 poi_id 全集取自本轮 state.candidates
+    # —— 行程只能由 canonical 候选池构成，候选池缺失（空）时按
+    # not_evaluable 处理（不假通过不假失败）
+    valid_ids = {c.get("poi_id", "") for c in (state.get("candidates") or [])
+                 if c.get("poi_id")} or None
+    report = check_itinerary(itinerary, valid_poi_ids=valid_ids)
     itinerary.confidence = compute_confidence(itinerary, report)
     # plan 状态机判定（任务书 §4/§7）：状态在事实产生处落库。
     # errors → degraded；无 error 但有必去冲突等 → needs_user_decision

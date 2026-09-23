@@ -242,10 +242,22 @@ def transit_expert_node(state: dict) -> dict:
             return {"status": "failed", "data": {},
                     "notes": [], "error": "骨架为空，无法排程"}
 
+        extra_notes: list[str] = []
         pois_by_day = [
             [candidates[pid] for pid in day if pid in candidates]
             for day in day_plan
         ]
+        # 候选池成员不变式（STOP I4）：day_plan 里引用了候选池没有的
+        # poi_id 属于结构异常 —— 不排（排不出没有数据的位置），但必须
+        # 显式留痕交给校验/披露，不得静默蒸发
+        known = {pid for day in day_plan for pid in day}
+        unknown = sorted(known - set(candidates))
+        if unknown:
+            logger.warning("[TravelTransit] day_plan 引用了候选池外的 poi_id: %s",
+                           unknown)
+            extra_notes.append(
+                f"行程骨架引用了 {len(unknown)} 个候选数据外的地点标识，已忽略")
+
         _prefetch_day_legs(pois_by_day)
         itinerary, notes = build_itinerary(brief, pois_by_day)
         # 版本章（任务书 §4）：出生即回答「基于哪个需求、哪份数据、为什么产生」。
@@ -264,7 +276,7 @@ def transit_expert_node(state: dict) -> dict:
                     itinerary.change_reason)
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(itinerary)},
-                "notes": notes}
+                "notes": extra_notes + notes}
 
     result = run_expert_safely("transit", _run, state)
     data = result.get("data") or {}

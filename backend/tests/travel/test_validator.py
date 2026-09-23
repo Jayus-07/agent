@@ -271,10 +271,13 @@ class TestReportAndConfidence:
         assert check_itinerary(it).checked_days == 2
 
     def test_codes_are_deduped_and_ordered(self):
-        poi = make_poi(open_time="09:00", close_time="17:00")
+        # STOP I4：两天用不同 poi_id —— 同一 poi_id 跨天重复现在会另判
+        # POI_DUPLICATED（error），不该混进本用例的 codes 去重断言
         it = make_itinerary(days=[
-            make_day(day_index=1, items=[make_item(start="18:00", end="19:00", poi=poi)]),
-            make_day(day_index=2, items=[make_item(start="18:00", end="19:00", poi=poi)]),
+            make_day(day_index=1, items=[make_item(
+                start="18:00", end="19:00", poi=make_poi(poi_id="p1"))]),
+            make_day(day_index=2, items=[make_item(
+                start="18:00", end="19:00", poi=make_poi(poi_id="p2"))]),
         ])
         report = check_itinerary(it)
         assert report.codes().count(CODE_TIME_CLOSED) == 1

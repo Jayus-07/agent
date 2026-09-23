@@ -35,6 +35,8 @@ from backend.travel.models.validation import (
     CODE_BUDGET_OVER,
     CODE_GEO_FAR_LEG,
     CODE_GEO_SCATTER,
+    CODE_POI_DUPLICATED,
+    CODE_POI_NOT_IN_CANDIDATES,
     CODE_PACE_TOO_INTENSE,
     CODE_PACE_TOO_MANY_POIS,
     CODE_TIME_CLOSED,
@@ -162,6 +164,33 @@ def _plan_action(
         pid = violation.detail.get("poi_id", "")
         return _drop_by_id(violation, day, pid, drop,
                            "该时段不可访问（超出开放时间或闭馆日）")
+
+    if code == CODE_POI_NOT_IN_CANDIDATES:
+        # 候选池外条目：数据无法核实（来源不明），唯一正确处理是移除 ——
+        # 即使挂着 required 名义也不保留（unresolved 的点名走披露，不伪造行程）
+        pid = violation.detail.get("poi_id", "")
+        item = _find_item(day, poi_id=pid)
+        if item is None or item.poi is None:
+            return None
+        drop[day.day_index].add(pid)
+        return RepairAction(
+            code=code, day_index=day.day_index, dropped=[item.poi.name],
+            reason="该地点不在本轮候选数据中（事实不可核实），已移除",
+        )
+
+    if code == CODE_POI_DUPLICATED:
+        # 跨天重复：保留首现（必去语义由首现满足），移除后续重复 ——
+        # 后续重复即使挂着 required 也要摘（required 保护只针对「唯一出现」）
+        pid = violation.detail.get("poi_id", "")
+        item = _find_item(day, poi_id=pid)
+        if item is None or item.poi is None:
+            return None
+        drop[day.day_index].add(pid)
+        return RepairAction(
+            code=code, day_index=day.day_index, dropped=[item.poi.name],
+            kept_required=[item.poi.name] if item.poi.required else [],
+            reason="同一地点在行程中重复安排，保留首次安排并移除后续重复",
+        )
 
     if code == CODE_TIME_OVERLAP:
         item = _find_item(day, title=violation.detail.get("title", ""))

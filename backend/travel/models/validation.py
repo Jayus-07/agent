@@ -30,6 +30,10 @@ CODE_GEO_FAR_LEG = "GEO_FAR_LEG"               # 单段通勤过长
 CODE_GEO_SCATTER = "GEO_SCATTER"               # 单日跨度过大（东西/南北反复横跳）
 CODE_GEO_REVISIT = "GEO_REVISIT"               # 同一天重复到访同一 POI
 
+# ── 候选池/覆盖结构（STOP I4：行程只能由 canonical 候选池构成）──
+CODE_POI_DUPLICATED = "POI_DUPLICATED"         # 同一 POI 被安排到多个不同天（error）
+CODE_POI_NOT_IN_CANDIDATES = "POI_NOT_IN_CANDIDATES"  # 行程含候选池之外的 poi_id（error）
+
 # ── 体力轴 ──
 CODE_PACE_TOO_MANY_POIS = "PACE_TOO_MANY_POIS"   # 单日 POI 数超出节奏档位
 CODE_PACE_TOO_INTENSE = "PACE_TOO_INTENSE"       # 单日有效活动时长超出节奏档位
