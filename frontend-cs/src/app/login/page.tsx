@@ -10,7 +10,7 @@
  * - 登录成功 → 跳 redirect 参数指定的原页面（默认 /）
  * - 会话被 401 拦截器踢回时显示"登录已过期"提示（sessionStorage 标记）
  * - 错误内联展示（密码错误 / 网络异常），不用 alert
- * - 记住账号和密码：勾选后 localStorage 保存账号与密码（Base64 防肉眼直读，
+ * - 记住账号：勾选后 localStorage 保存账号（2026-09-23 起不再保存密码，
  *   非加密——2026-09-17 应用户明确要求加入，仅限本机环境），下次自动预填
  * - 2026-09-17 应用户要求移除注册入口：管理端账号由管理员统一开通
  *   （种子账号 admin/admin 由 DBA/脚本写入 auth.users）
@@ -18,13 +18,11 @@
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  clearSavedPassword,
   clearSavedUsername,
   consumeExpiredFlag,
-  getSavedPassword,
   getSavedUsername,
   login,
-  saveCredentials,
+  saveUsername,
 } from "@/lib/auth";
 
 function LoginForm() {
@@ -39,14 +37,12 @@ function LoginForm() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // 挂载：预填"记住的账号和密码"（勾选过记住密码则账号密码一并回填）+ 会话过期标记
+  // 挂载：预填"记住的账号"+ 会话过期标记
   useEffect(() => {
     const saved = getSavedUsername();
     if (saved) {
       setUsername(saved);
       setRemember(true);
-      const savedPwd = getSavedPassword();
-      if (savedPwd) setPassword(savedPwd);
     }
     if (consumeExpiredFlag()) {
       setNotice("登录已过期，请重新登录");
@@ -62,11 +58,9 @@ function LoginForm() {
     setError("");
     try {
       await login(name, pass);
-      if (persist) saveCredentials(name, pass);
-      else {
-        clearSavedUsername();
-        clearSavedPassword();
-      }
+      // 2026-09-23 安全收口：只记账号，密码永不落 localStorage（XSS 可还原）
+      if (persist) saveUsername(name);
+      else clearSavedUsername();
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");

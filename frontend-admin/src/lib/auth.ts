@@ -303,8 +303,7 @@ export function consumeExpiredFlag(): boolean {
 const USERNAME_KEY = "agent.saved_username";
 // 历史版本的明文凭据键（{username, password}），读到即清除
 const LEGACY_CREDS_KEY = "agent.saved_credentials";
-// 记住密码（2026-09-17 用户明确要求）：Base64 仅防肉眼直读，不是加密——
-// localStorage 暴露于 XSS 时可还原，安全语义等同明文，仅限本机演示环境使用
+// 历史版本「记住密码」键（2026-09-23 安全收口废弃）：仅作为迁移清理目标保留
 const PASSWORD_KEY = "agent.saved_password";
 
 export interface RegisterResult {
@@ -343,6 +342,9 @@ export async function register(
 function purgeLegacyCredentials(): void {
   try {
     localStorage.removeItem(LEGACY_CREDS_KEY);
+    // 2026-09-23 安全收口：历史版本「记住密码」落过 localStorage 的
+    // Base64 口令，读到即清除，不允许遗留永久存在
+    localStorage.removeItem(PASSWORD_KEY);
   } catch {
     /* ignore */
   }
@@ -379,37 +381,3 @@ export function clearSavedUsername(): void {
   }
 }
 
-/**
- * 记住账号和密码（登录成功后按需调用）。
- * encodeURIComponent 包一层再 btoa，避免非 Latin1 字符（中文密码）炸 btoa。
- */
-export function saveCredentials(username: string, password: string): void {
-  if (!isBrowser()) return;
-  try {
-    localStorage.setItem(USERNAME_KEY, username);
-    localStorage.setItem(PASSWORD_KEY, btoa(encodeURIComponent(password)));
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 读取记住的密码（无存档返回 null） */
-export function getSavedPassword(): string | null {
-  if (!isBrowser()) return null;
-  try {
-    const raw = localStorage.getItem(PASSWORD_KEY);
-    return raw ? decodeURIComponent(atob(raw)) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** 清除记住的密码（记住密码取消勾选时调用） */
-export function clearSavedPassword(): void {
-  if (!isBrowser()) return;
-  try {
-    localStorage.removeItem(PASSWORD_KEY);
-  } catch {
-    /* ignore */
-  }
-}

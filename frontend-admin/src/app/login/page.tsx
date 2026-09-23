@@ -3,20 +3,18 @@
 /**
  * /login — 管理端登录页（统一门户视觉体系 · 石墨主题）
  *
- * 复用管理端既有登录态逻辑（lib/auth）：登录、记住账号密码（Base64 防肉眼直读）、
+ * 复用管理端既有登录态逻辑（lib/auth）：登录、记住账号、
  * 会话过期标记。视觉对齐设计稿 04：分屏 + 毛玻璃卡 + 石墨色雾团，与门户/三端同源。
  * 管理端账号由管理员统一开通，无注册入口。
  */
 import { Suspense, useEffect, useState, type FormEvent, type InputHTMLAttributes } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  clearSavedPassword,
   clearSavedUsername,
   consumeExpiredFlag,
-  getSavedPassword,
   getSavedUsername,
   login,
-  saveCredentials,
+  saveUsername,
 } from "@/lib/auth";
 
 const ACCENT = "#2E333A";
@@ -74,8 +72,6 @@ function AdminLoginForm() {
     if (saved) {
       setAccount(saved);
       setRemember(true);
-      const savedPwd = getSavedPassword();
-      if (savedPwd) setPassword(savedPwd);
     }
     if (consumeExpiredFlag()) setNotice("登录已过期，请重新登录");
   }, []);
@@ -96,11 +92,9 @@ function AdminLoginForm() {
     setLoading(true);
     try {
       await login(account.trim(), password);
-      if (remember) saveCredentials(account.trim(), password);
-      else {
-        clearSavedUsername();
-        clearSavedPassword();
-      }
+      // 2026-09-23 安全收口：只记账号，密码永不落 localStorage（XSS 可还原）
+      if (remember) saveUsername(account.trim());
+      else clearSavedUsername();
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
@@ -227,7 +221,7 @@ function AdminLoginForm() {
                   onChange={(e) => setRemember(e.target.checked)}
                   style={{ accentColor: ACCENT }}
                 />
-                记住账号和密码（本机保存，下次自动填充）
+                记住账号（本机保存，下次自动填充账号）
               </label>
 
               <button
