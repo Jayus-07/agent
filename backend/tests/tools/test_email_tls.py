@@ -13,6 +13,17 @@ import pytest
 
 @pytest.fixture()
 def tls_capture(monkeypatch):
+    import backend.config as cfg
+    import backend.security.tool_approval as approval
+
+    # SMTP 配置 + 审批自动放行（同 test_email_idempotency 口径）
+    monkeypatch.setattr(cfg, "SMTP_USER", "tester")
+    monkeypatch.setattr(cfg, "SMTP_PASSWORD", "secret")
+    monkeypatch.setattr(cfg, "SMTP_HOST", "smtp.test.local")
+    monkeypatch.setattr(cfg, "SMTP_PORT", 25)
+    monkeypatch.setattr(cfg, "SMTP_FROM", "bot@example.com")
+    monkeypatch.setattr(approval, "ensure_approved", lambda *a, **k: None)
+
     captured = {}
     sent = []
 
