@@ -138,7 +138,38 @@ def travel_graph_node(state: dict) -> dict:
     run_id = _sync_travel_run(state, final_state, result, travel_route)
     _stamp_execution_tags(final_state, result, resume_mode=resume_mode,
                           run_id=run_id)
+    _stamp_context_tags(state, conversation_id, run_id)
     return _build_main_state_update(result)
+
+
+def _stamp_context_tags(state: dict, conversation_id: str, run_id: str) -> None:
+    """STOP G5：ConversationContext backend 观测 tags（任务书 §21）。
+
+    backend / status / version / pending question id——跨轮追问归因与
+    backend 降级可见性。软失败，绝不影响主链。
+    """
+    try:
+        from backend.orchestration.context.context_repository import (
+            get_conversation_context_repository,
+        )
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is None:
+            return
+        repo = get_conversation_context_repository()
+        status = repo.status
+        trace.tags["conversation_context_backend"] = status.get("backend", "")
+        trace.tags["conversation_context_status"] = status.get("status", "")
+        snap = repo.peek(state.get("tenant_id") or "",
+                         state.get("user_id") or "", conversation_id)
+        if snap is not None:
+            trace.tags["conversation_context_version"] = str(snap.version)
+            pending_q = (snap.travel_pending or {}).get("question_id") or ""
+            if pending_q:
+                trace.tags["travel_pending_question_id"] = pending_q
+    except Exception:  # noqa: BLE001
+        logger.debug("[travel_graph_node] context tags 打点失败", exc_info=True)
 
 
 def _detect_resume_mode(

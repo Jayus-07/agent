@@ -31,11 +31,25 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from backend.shared.logger import logger
+from backend.orchestration.context import context_metrics as _m
 from backend.orchestration.context.conversation_context import (
     CONTEXT_SLOT_FIELDS,
     ConversationContext,
     _new_question_id,
 )
+
+
+def _safe(metric_fn) -> None:
+    """指标埋点软失败：观测绝不影响主链。"""
+    try:
+        metric_fn()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _stale_kind(mtype: str) -> str:
+    """stale 拒绝的分类（低基数：pending | run）。"""
+    return "pending" if mtype == MutationType.RESOLVE_TRAVEL_PENDING else "run"
 
 # ── Mutation 类型（任务书 §十一：mutation 表达业务意图，非整对象覆盖）──
 
@@ -402,12 +416,21 @@ class MemoryConversationContextRepository:
             conversation_id: str) -> ConversationContext | None:
         key = self._key(tenant_id, user_id, conversation_id)
         now = time.time()
+        t0 = time.monotonic()
         with self._lock:
             ctx = self._data.get(key)
             if ctx is None or now - ctx.updated_at > self._ttl:
                 if ctx is not None:
                     self._data.pop(key, None)
+                _safe(lambda: _m.conversation_context_read_total.labels(
+                    "memory", "miss").inc())
+                _safe(lambda: _m.conversation_context_operation_seconds.labels(
+                    "get").observe(time.monotonic() - t0))
                 return None
+            _safe(lambda: _m.conversation_context_read_total.labels(
+                "memory", "hit").inc())
+            _safe(lambda: _m.conversation_context_operation_seconds.labels(
+                "get").observe(time.monotonic() - t0))
             return ctx.copy()
 
     peek = get
@@ -416,6 +439,7 @@ class MemoryConversationContextRepository:
                mutation: ContextMutation) -> MutationResult:
         key = self._key(tenant_id, user_id, conversation_id)
         now = time.time()
+        t0 = time.monotonic()
         with self._lock:
             existed_ctx = self._data.get(key)
             existed = existed_ctx is not None and now - existed_ctx.updated_at <= self._ttl
@@ -424,6 +448,8 @@ class MemoryConversationContextRepository:
                 existed_ctx = None
             if existed_ctx is None:
                 if mutation.type not in _CREATING_MUTATIONS:
+                    _safe(lambda: _m.conversation_context_mutation_total.labels(
+                        mutation.type, "missing").inc())
                     return MutationResult(status="missing", detail=mutation.type)
                 ctx = ConversationContext(tenant_id=key[0], user_id=key[1],
                                           conversation_id=key[2])
@@ -439,9 +465,17 @@ class MemoryConversationContextRepository:
                 result.version = ctx.version
                 result.run_id = ctx.travel_run_id
                 result.context = ctx.copy()
+                _safe(lambda: _m.conversation_context_write_total.labels(
+                    "memory").inc())
             elif result.context is None:
                 result.context = ctx.copy()
                 result.version = ctx.version
+            if result.status == "stale":
+                _safe(lambda: _m.record_stale(_stale_kind(mutation.type)))
+            _safe(lambda: _m.conversation_context_mutation_total.labels(
+                mutation.type, result.status).inc())
+            _safe(lambda: _m.conversation_context_operation_seconds.labels(
+                "mutate").observe(time.monotonic() - t0))
             return result
 
     def save(self, context: ConversationContext, *,
@@ -554,6 +588,8 @@ class RedisConversationContextRepository:
         - REQUIRE_SHARED=false → 降级进程内 memory（warning + degraded 标记）
         """
         self._degraded = True
+        _safe(lambda: _m.conversation_context_backend_error_total.labels(
+            "redis", operation).inc())
         if self._require_shared:
             logger.error("[ConversationContext] event=conversation_context."
                          "backend_error op=%s require_shared=true fail-closed: %s",
@@ -562,6 +598,8 @@ class RedisConversationContextRepository:
         logger.warning(
             "[ConversationContext] event=conversation_context.backend_degraded "
             "op=%s → fallback memory: %s", operation, exc)
+        _safe(lambda: _m.conversation_context_fallback_total.labels(
+            "redis_error").inc())
         return None
 
     @property
@@ -582,10 +620,16 @@ class RedisConversationContextRepository:
     def get(self, tenant_id: str, user_id: str,
             conversation_id: str) -> ConversationContext | None:
         r = self._client()
+        t0 = time.monotonic()
         if r is not None:
             try:
-                return self._decode(r.get(self._key(tenant_id, user_id,
-                                                    conversation_id)))
+                ctx = self._decode(r.get(self._key(tenant_id, user_id,
+                                                   conversation_id)))
+                _safe(lambda: _m.conversation_context_read_total.labels(
+                    "redis", "hit" if ctx is not None else "miss").inc())
+                _safe(lambda: _m.conversation_context_operation_seconds.labels(
+                    "get").observe(time.monotonic() - t0))
+                return ctx
             except Exception as exc:  # noqa: BLE001 — redis 异常统一策略
                 # require_shared=true → _policy raise（fail-closed，调用方
                 # 软失败路径吞掉 = 确定性 miss）；false → 落 fallback
@@ -606,13 +650,20 @@ class RedisConversationContextRepository:
                 logger.error("[ConversationContext] event=conversation_context."
                              "backend_error op=mutate require_shared=true "
                              "fail-closed: redis unavailable")
+                _safe(lambda: _m.conversation_context_backend_error_total.labels(
+                    "redis", "mutate").inc())
                 raise ContextBackendUnavailable("redis unavailable")
             logger.warning("[ConversationContext] event=conversation_context."
                            "backend_degraded op=mutate → fallback memory")
             self._degraded = True
+            _safe(lambda: _m.conversation_context_backend_error_total.labels(
+                "redis", "mutate").inc())
+            _safe(lambda: _m.conversation_context_fallback_total.labels(
+                "redis_unavailable").inc())
             return self._fallback.mutate(tenant_id, user_id, conversation_id,
                                          mutation)
         key = self._key(tenant_id, user_id, conversation_id)
+        t0 = time.monotonic()
         try:
             for _ in range(_RETRY_ON_WATCH_ERROR):
                 with r.pipeline() as pipe:
@@ -638,6 +689,11 @@ class RedisConversationContextRepository:
                                     conversation_id=conversation_id or "")
                         result = apply_mutation(ctx, mutation, existed=existed)
                         if result.status != "applied":
+                            if result.status == "stale":
+                                _safe(lambda: _m.record_stale(
+                                    _stale_kind(mutation.type)))
+                            _safe(lambda: _m.conversation_context_mutation_total.labels(
+                                mutation.type, result.status).inc())
                             return result
                         ctx.version += 1
                         ctx.updated_at = time.time()
@@ -649,6 +705,12 @@ class RedisConversationContextRepository:
                         result.version = ctx.version
                         result.run_id = ctx.travel_run_id
                         result.context = ctx.copy()
+                        _safe(lambda: _m.conversation_context_mutation_total.labels(
+                            mutation.type, "applied").inc())
+                        _safe(lambda: _m.conversation_context_write_total.labels(
+                            "redis").inc())
+                        _safe(lambda: _m.conversation_context_operation_seconds.labels(
+                            "mutate").observe(time.monotonic() - t0))
                         return result
                     except WatchError:
                         # 并发写冲突：随机退避后重读重试（version 单调保证）
@@ -669,6 +731,10 @@ class RedisConversationContextRepository:
         # 重试耗尽：并发冲突，拒绝应用（下一轮请求会带最新快照重做）
         logger.warning("[ConversationContext] event=conversation_context.conflict "
                        "op=mutate retries_exhausted type=%s", mutation.type)
+        _safe(lambda: _m.conversation_context_conflict_total.labels(
+            "mutate").inc())
+        _safe(lambda: _m.conversation_context_mutation_total.labels(
+            mutation.type, "conflict").inc())
         return MutationResult(status="conflict", detail="retries exhausted")
 
     def save(self, context: ConversationContext, *,
@@ -734,11 +800,22 @@ _repo_lock = threading.Lock()
 
 
 def _build_repository() -> ConversationContextRepository:
-    from backend.config.conversation_context import CONVERSATION_CONTEXT_BACKEND
+    from backend.config.conversation_context import (
+        CONVERSATION_CONTEXT_BACKEND,
+        CONVERSATION_CONTEXT_REQUIRE_SHARED,
+    )
+    from backend.config.redis import REDIS_ENABLED
 
     if CONVERSATION_CONTEXT_BACKEND == "memory":
         return MemoryConversationContextRepository()
     if CONVERSATION_CONTEXT_BACKEND == "redis":
+        if CONVERSATION_CONTEXT_REQUIRE_SHARED and not REDIS_ENABLED:
+            # startup fail-fast（任务书 §八）：生产声明必须 shared 但
+            # Redis 未启用 = 配置性缺失，拒绝带病启动（瞬态连不上由
+            # 运行时 _policy fail-closed 兜底，不在此列）
+            raise RuntimeError(
+                "CONVERSATION_CONTEXT_REQUIRE_SHARED=true 但 REDIS_ENABLED=false"
+                "——拒绝以进程内 memory 启动（跨 worker 假一致风险）")
         return RedisConversationContextRepository()
     raise ValueError(
         f"CONVERSATION_CONTEXT_BACKEND 非法取值: {CONVERSATION_CONTEXT_BACKEND!r}"
