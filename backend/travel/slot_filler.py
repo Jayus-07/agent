@@ -119,9 +119,17 @@ _RE_COMPANION = re.compile(
     r"(?:带|和|跟|与)\s*(爸妈|父母|家人|孩子|小孩|朋友|女朋友|男朋友|"
     r"老婆|老公|对象|闺蜜|同事)")
 _COMPANION_PLUS = {"爸妈": 2, "父母": 2}  # 其余同伴默认 +1
-# 预算：必须带货币单位（或「万」），否则 "3天" 会被当成钱
+# 预算：必须带货币单位（或「万」），否则 "3天" 会被当成钱。
+# 例外（STOP I2，STOP H Deferred #2）：「预算」关键词锚定的裸数字——
+# "预算改成5000"（无「元」）是 PATCH 高频句式；锚定词在数字之前，
+# 无预算语义的句子（"3天"）不含「预算」二字，不会误捕。
 _RE_BUDGET_YUAN = re.compile(r"(\d+(?:\.\d+)?)\s*(?:元|块钱|块|rmb|人民币)", re.I)
-_RE_BUDGET_WAN = re.compile(r"(?:预算|大概|差不多|总共)?\s*(\d+(?:\.\d+)?)\s*[万wW]")
+# 「万」口径支持中文数字（「预算两万」）：数字与「万」之间无其他成分；
+# 阿拉伯数字不设位数上限（「预算5000万」），中文数字走复合规则
+_RE_BUDGET_WAN = re.compile(
+    r"(?:预算|大概|差不多|总共)?\s*"
+    rf"(\d+(?:\.\d+)?|{_CN_COMPOUND})\s*[万wW]")
+_RE_BUDGET_BARE = re.compile(r"预算[^。，,；;！!？?\d]{0,4}(\d+(?:\.\d+)?)")
 # 住宿区域（STOP F2）：「住难波」「住在梅田」「酒店订在难波」。排除问句
 # （住哪/住宿）与自指尾缀（「新宿的酒店」→ 新宿）。「住哪」是用户在问，
 # 不是在回答，绝不能进槽位。
@@ -265,11 +273,19 @@ def extract_unsupported_city(message: str) -> str:
 
 
 def extract_budget(message: str) -> float | None:
-    """预算：优先认带「万」的说法，其次要求带货币单位。"""
+    """预算：优先认带「万」的说法，其次带货币单位，最后「预算」锚定的裸数字。"""
     match = _RE_BUDGET_WAN.search(message)
     if match:
-        return round(float(match.group(1)) * 10000, 2)
+        token = match.group(1)
+        if token.replace(".", "", 1).isdigit():
+            return round(float(token) * 10000, 2)
+        whole = _to_int(token)
+        if whole:
+            return round(float(whole) * 10000, 2)
     match = _RE_BUDGET_YUAN.search(message)
+    if match:
+        return round(float(match.group(1)), 2)
+    match = _RE_BUDGET_BARE.search(message)
     if match:
         return round(float(match.group(1)), 2)
     return None
@@ -282,6 +298,12 @@ def _clean_lodging(name: str) -> str:
             name = name[: -len(tail)]
     while name and name[-1] in "的了的了":
         name = name[:-1]
+    # 城市尾缀（STOP I2，STOP H 实测「白城沙滩厦门」）：捕获串末端黏着
+    # 城市名时剥掉 —— 住宿区描述的真义是「白城沙滩」，城市属于 destination。
+    for city in _lodging_city_names():
+        if name != city and name.endswith(city):
+            name = name[: -len(city)]
+            break
     return name.strip()
 
 
@@ -290,22 +312,35 @@ def extract_lodging(message: str) -> str:
 
     lodging 是记录性槽位（P0 无酒店供给数据，不参与排程与指纹——
     与 diet 同口径）；抽取它的目的是 pending 补槽判定与行程单如实回显。
+    STOP I2 边界（STOP H Deferred #2）：剥尾缀后若命中城市名（或已知
+    目的地名录），说明用户说的是城市不是住宿区（「住在厦门」），拒绝——
+    城市信息走 destination 槽位，混进 lodging 会以假槽位触发误补槽。
     """
     for pattern in (_RE_LODGING_ZHU, _RE_LODGING_HOTEL):
         match = pattern.search(message)
         if match:
             cleaned = _clean_lodging(match.group(1))
-            if len(cleaned) >= 2:
+            if len(cleaned) >= 2 and cleaned not in _lodging_city_names():
                 return cleaned
     return ""
+
+
+def _lodging_city_names() -> set[str]:
+    """不可作为 lodging 的地名集合：种子城市 ∪ 别名 ∪ 知名城市名录。
+
+    函数化而非模块级常量：poi_seed/名录随数据演进，读取时求值避免陈旧快照。
+    """
+    return set(poi_seed.all_cities()) | set(poi_seed.CITY_ALIASES) | set(_KNOWN_MAJOR_CITIES)
 
 
 # NEW_RUN 显式信号（STOP F2，单一事实源在本模块）：用户明确推翻当前规划
 # 重开。普通补槽/改约束（CONTINUE/PATCH/REPLAN）不含这些词。路由层
 # resolver 与 slot_filler/adapter 都以这里为准（context → travel 单向
 # 依赖，禁止反向 import 造成循环）。
+# 「不想去」必须收紧为「不想去了」（STOP I2）：带地点的「不想去鼓浪屿了」
+# 是 PATCH avoid，不是重开规划——裸「不想去」会把点名排除句误判成 NEW_RUN。
 _NEW_RUN_RE = re.compile(
-    r"重新规划|重新安排|重新来|换个方案|换套方案|换一个方案|不去了|不想去"
+    r"重新规划|重新安排|重新来|换个方案|换套方案|换一个方案|不去了|不想去了"
 )
 
 
@@ -342,6 +377,27 @@ def is_cancel_run_query(message: str) -> bool:
     if _CANCEL_EXCLUDE_RE.search(msg):
         return False
     return bool(_CANCEL_RUN_RE.search(msg))
+
+
+# avoid-PATCH 显式信号（STOP I2，STOP H Deferred #1）：completed 态
+#（无 pending）的「不去鼓浪屿了」。此时 TravelPendingResolver 的补槽通道
+# 不工作（补槽仅 pending 期），travel_prefilter 也不命中（该句 0 强信号词
+# 0 城市名）——没有它，用户的避雷诉求就静默丢失。判定复用 extract_avoid
+#（唯一抽取点）：捕获到具体地点才算（「不想去了」无地点不拦）。
+def is_avoid_patch_query(message: str) -> bool:
+    """消息是否为「避开某地点」的局部修改信号（纯函数，保守）。
+
+    只回答「这句话在表达 avoid」，不回答路由该不该拦——后者由
+    TravelPendingResolver 结合「活跃 travel 任务是否存在」决定。
+    与 cancel/new_run 的优先级：整体取消与重开规划优先，避免
+    「不去厦门了，重新规划杭州」被误判成 avoid。
+    """
+    msg = (message or "").strip()
+    if not msg or len(msg) > 40:
+        return False
+    if is_cancel_run_query(msg) or is_new_run_query(msg):
+        return False
+    return bool(extract_avoid(msg))
 
 
 def extract_start_date(message: str, today: date | None = None) -> date | None:

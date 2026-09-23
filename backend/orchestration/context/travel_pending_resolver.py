@@ -153,6 +153,36 @@ def resolve_travel_pending(query: str, routing_context: dict | None) -> dict | N
                 },
             }
 
+    # ── avoid-PATCH 通道（STOP I2，STOP H Deferred #1）──────────────
+    # completed 态（无 pending）的「不去鼓浪屿了」：补槽通道不工作
+    #（补槽仅 pending 期）、prefilter 不命中（0 强信号词 0 城市名），
+    # 没有这条通道用户的避雷诉求就静默丢失。判定复用 slot_filler 的
+    # is_avoid_patch_query（唯一抽取点）；整体取消/NEW_RUN 已在
+    # is_avoid_patch_query 内部先行排除（优先级：cancel/new_run > avoid）。
+    # 域图内 slot_filler 合并 avoid → 指纹变化 → planning_reset → 重排。
+    if summary_run and summary_stage != "cancelled":
+        from backend.travel.slot_filler import is_avoid_patch_query
+
+        # 客服等其他域强信号在场 → 放行（不与 CS 优先铁律竞争）
+        if is_avoid_patch_query(query) and not _has_cs_strong_signal(query):
+            logger.info(
+                "[TravelPendingResolver] 命中: mode=avoid_patch run=%s",
+                summary_run)
+            return {
+                "route_decision": None,
+                "route_mode": "travel",
+                "travel_context": {
+                    "conversation_id": ctx.get("conversation_id") or "",
+                    "travel_route": {
+                        "source": "pending_resume",
+                        "resume_mode": "patch_avoid",
+                        "new_run": False,
+                        "requested_slots": list(requested or []),
+                        "filled_slots": [],
+                    },
+                },
+            }
+
     if not requested:
         return None  # 无结构化 pending（既有任务完成/无追问），不拦
 
