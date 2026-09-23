@@ -129,6 +129,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "043_readonly_public_revoke.sql": "business",
     # Context Budget 生产加固（STOP C 2026-09-23）：L5 摘要水位线 CAS 版本号
     "044_chat_sessions_summary_version.sql": "memory",
+    # Model Governance STOP B（2026-09-23）：max_output_tokens 列 + 活跃模型
+    # context_length/capabilities 登记
+    "045_llm_models_governance_columns.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

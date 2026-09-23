@@ -72,7 +72,7 @@ _SELECT_PROVIDERS = """
 
 _SELECT_MODELS = """
     SELECT name, provider_id, display_name, description, model_kind, capabilities,
-           context_length, pricing, upstream_model_name
+           context_length, max_output_tokens, pricing, upstream_model_name
     FROM llm_models
     WHERE enabled = true
     ORDER BY name
@@ -190,6 +190,8 @@ def _model_entry(row) -> dict:
         # upstream_model_name（''=与登记名相同）；账目与绑定仍按登记名。
         "upstream_name": str(row.get("upstream_model_name") or "").strip(),
         "context_length": row["context_length"],
+        # 模型支持的最大输出（STOP B 045 迁移；NULL=未登记，消费方回退窗口值）
+        "max_output_tokens": row["max_output_tokens"],
         "capabilities": row["capabilities"] or {},
         "source": "db",
     }

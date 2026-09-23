@@ -10,16 +10,22 @@ ContextVar，usage 结算优先从调用上下文取真实模型，**禁止再�
 
 字段（用户规格）：
   provider        供应商标识（dashscope/openai/...）
-  model_id        本次调用实际使用的模型登记名
+  model_id        本次调用实际使用的模型登记名（canonical，= llm_models.name）
   role            模型角色（main / tool_selector / ...）
   binding_source  request_override | db_binding | env_default | factory |
                   code_default | fallback
   request_id / trace_id  本次请求归属
+
+Model Governance STOP B 扩展（身份链 + 能力 + 限制，全部带默认值向后兼容）：
+  driver / upstream_name / model_kind / context_length / max_output_tokens /
+  capabilities —— 由 models.model_identity_extras() 在解析点一次性填入，
+  下游（usage 结算 / 计费 / Context Budget 接口）**只读 ctx，禁止再各自
+  重新查询或按模型名推断**。
 """
 from __future__ import annotations
 
 import contextvars
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -32,6 +38,15 @@ class ResolvedModelContext:
     binding_source: str = "code_default"
     request_id: str = ""
     trace_id: str = ""
+    # ── STOP B：身份链 ──
+    driver: str = ""            # 协议驱动（openai/anthropic/ollama/specialized）
+    upstream_name: str = ""     # 实际发给上游的 model 字段
+    model_kind: str = "chat"    # 用途（chat/embedding/rerank/vision/speech/ocr）
+    # ── STOP B：限制（None = 未登记，消费方走各自 fail-safe）──
+    context_length: int | None = None
+    max_output_tokens: int | None = None
+    # ── STOP B：能力（MODEL_CAPABILITY_KEYS → bool，未登记 = False）──
+    capabilities: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -41,6 +56,12 @@ class ResolvedModelContext:
             "binding_source": self.binding_source,
             "request_id": self.request_id,
             "trace_id": self.trace_id,
+            "driver": self.driver,
+            "upstream_name": self.upstream_name,
+            "model_kind": self.model_kind,
+            "context_length": self.context_length,
+            "max_output_tokens": self.max_output_tokens,
+            "capabilities": dict(self.capabilities),
         }
 
 

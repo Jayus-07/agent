@@ -371,9 +371,40 @@ def get_available_models() -> list[dict]:
 
 
 def get_model_entry(model_name: str) -> dict | None:
-    """按模型名取条目（DB 注册表）。未注册返回 None。"""
+    """按登记名精确取条目（DB 注册表）。未注册返回 None。
+
+    ⚠️ 语义（STOP B 固化）：本函数**只认登记名**（canonical_name = name，
+    llm_models 主键）。调用方拿到的是上游回传名/别名时，必须先走
+    `lookup_model_entry`（name → upstream 双匹配）或 `canonical_model_id`
+    归一 —— 上游名不该能当登记名用（override 校验依赖这一严格性）。
+    """
     for m in _dynamic_models:
         if m["name"] == model_name:
+            return m
+    return None
+
+
+def lookup_model_entry(model_name: str) -> dict | None:
+    """name → upstream 双匹配的统一 lookup（STOP B，身份链唯一入口）。
+
+    解析顺序：登记名精确命中 → upstream_name 命中（alias）→ None。
+    此前 `canonical_model_id` 认双匹配而 `get_model_entry`/`resolve_provider`
+    只认 name，任何「拿上游回传名反查 provider」的路径都会 miss 并落进
+    名称启发式的 `ollama` 兜底（实机后果：豆包 usage 被记成
+    provider=ollama 且 cost=0，llm_usage 1174 行错位）。消费方一律走本
+    函数，禁止再各自遍历 `_dynamic_models`。
+    """
+    if not model_name:
+        return None
+    name = str(model_name).strip()
+    if not name:
+        return None
+    for m in _dynamic_models:
+        if m["name"] == name:
+            return m
+    for m in _dynamic_models:
+        upstream = str(m.get("upstream_name") or "").strip()
+        if upstream and upstream == name:
             return m
     return None
 
@@ -390,7 +421,8 @@ def canonical_model_id(model_name: str) -> str:
       - 未注册（含空值）→ 原样返回（调用方语义不变，不猜）
 
     alias 唯一事实源 = llm_models DB 注册表的 name/upstream_name 两列，
-    本函数只做反查，不维护第二份映射表。
+    本函数只做反查，不维护第二份映射表。STOP B 起与 `lookup_model_entry`
+    共用同一双匹配口径（本函数=返回登记名，lookup=返回整条 entry）。
     """
     if not model_name:
         return model_name
@@ -425,13 +457,18 @@ def resolve_provider(
 
     `strict=True`：判不出即抛 `ProviderResolutionError`。供管理端校验与探测使用。
 
+    STOP B：入参可能是上游回传名/别名（如豆包 response.model =
+    doubao-seed-2-0-mini-260428），先过 `lookup_model_entry`（name → upstream
+    双匹配）再落启发式 —— 双匹配命中即返回登记的 provider，杜绝「上游名
+    反查 miss → 默认 ollama」的身份错位。双匹配也 miss 时才走历史启发式。
+
     ⚠️ 为什么不默认 fail-closed（设计 B.5#4 的完整落地推迟到 P1b）：
     **Ollama 本地模型名不可穷举**（`llama3` / `qwen2.5:7b` / 任意 pull 下来的名字），
     评测生成等受治理的链路现在要求通过 `eval_gen` 显式绑定已登记模型；
     这里仍保留宽松回落，仅兼容 Ollama 的其它历史调用点。贸然全局改成抛错
     会打断尚未迁移的本地链路。自建模型应显式登记到 DB 覆盖层。
     """
-    entry = get_model_entry(model_name)
+    entry = lookup_model_entry(model_name)
     if entry is not None:
         return entry["provider"]
 
@@ -482,3 +519,75 @@ def get_model_billing(model_name: str) -> str:
         return get_provider_billing(resolve_provider(model_name))
     except ProviderResolutionError:
         return "metered"
+
+
+# =====================================================
+# 能力与限制（Model Governance STOP B：能力/窗口的唯一读取口径）
+# =====================================================
+# capabilities JSONB（llm_models.capabilities）的键 schema。**只认显式 true**：
+# 键缺失 / 非布尔 / false 一律视为不支持（fail-closed，B10）——能力消费方
+# （bind_tools / vision / structured output，STOP D 接线）不得用「默认放行」
+# 兜底，否则登记形同虚设。stream 不进此清单：OpenAI 兼容链路现状全兼容
+# （B10：按已有行为兼容），避免登记负担。
+MODEL_CAPABILITY_KEYS = ("tools", "vision", "structured_output", "thinking")
+
+
+def model_capabilities(entry: dict | None) -> dict[str, bool]:
+    """读取模型能力声明（Registry 唯一口径，禁止消费方自行 grep 模型名）。
+
+    未登记能力 = False。历史代码里 enable_thinking 有三套名称/provider 口径
+    （STOP A 审计 P1-7），STOP D 收敛时统一改读本函数。
+    """
+    raw = (entry or {}).get("capabilities") or {}
+    if not isinstance(raw, dict):
+        return {key: False for key in MODEL_CAPABILITY_KEYS}
+    return {
+        key: raw.get(key) is True
+        for key in MODEL_CAPABILITY_KEYS
+    }
+
+
+def model_supports(entry: dict | None, capability: str) -> bool:
+    """单能力判定便捷口。capability 不在 schema 内按未声明处理（False）。"""
+    if capability not in MODEL_CAPABILITY_KEYS:
+        return False
+    return model_capabilities(entry)[capability]
+
+
+def resolve_output_token_cap(entry: dict | None, configured_window: int) -> int:
+    """本次构建应传给 provider 的 max_tokens（B8：输出上限 ≠ 上下文窗口）。
+
+    优先级：llm_models.max_output_tokens（模型支持的最大输出，登记值）
+    > configured_window（历史行为：构建器拿全局窗口兼任输出上限）。
+    登记值非法（≤0）时忽略 —— 窗口值是经实机验证的安全下限，不因脏数据回退。
+    """
+    cap = (entry or {}).get("max_output_tokens")
+    try:
+        cap_int = int(cap) if cap is not None else 0
+    except (TypeError, ValueError):
+        cap_int = 0
+    if cap_int > 0:
+        return cap_int
+    return configured_window
+
+
+def model_identity_extras(model_name: str) -> dict:
+    """按模型名收集身份链扩展字段（供 ResolvedModelContext 构建，B4）。
+
+    返回 ResolvedModelContext 的扩展 kwargs（driver/upstream_name/model_kind/
+    context_length/max_output_tokens/capabilities）。查不到条目（注册表未加载
+    / 未注册模型）时返回空 dict，调用方用 dataclass 默认值 —— 语义与
+    `_upstream_model_name` 的兜底一致，软失败不新增崩溃点。
+    """
+    entry = lookup_model_entry(model_name)
+    if entry is None:
+        return {}
+    provider = str(entry.get("provider") or "")
+    return {
+        "driver": str(get_provider_driver(provider) or ""),
+        "upstream_name": str(entry.get("upstream_name") or "").strip() or model_name,
+        "model_kind": model_kind_of(entry),
+        "context_length": entry.get("context_length"),
+        "max_output_tokens": entry.get("max_output_tokens"),
+        "capabilities": model_capabilities(entry),
+    }

@@ -163,13 +163,19 @@ class LLMFactory:
             # 与 proxy._build_llm_for 同型收口（2026-09-22）：custom-* 之前
             # 会走到这里抛「未知 provider」。按 llm_providers.driver 分发，
             # 与供应商页测试同一口径；driver 未登记/不受支持才维持 raise。
-            from backend.infra.llm.models import get_provider_driver
+            from backend.infra.llm.models import get_provider_driver, resolve_output_token_cap
 
             driver = (get_provider_driver(provider) or "").strip().lower()
             if driver in ("openai", "anthropic", "ollama"):
                 from backend.infra.llm.providers.driver_compat import build_by_driver
 
-                return build_by_driver(driver, upstream, credentials)
+                # 输出上限与窗口解耦（STOP B B8），与 proxy._build_llm_for 同口径
+                from backend.config import LLM_CONTEXT_LENGTH
+
+                return build_by_driver(
+                    driver, upstream, credentials,
+                    max_tokens=resolve_output_token_cap(entry or {}, LLM_CONTEXT_LENGTH),
+                )
             raise ValueError(f"未知 provider: {provider}")
 
     def _get_provider(self, model_name: str) -> str:

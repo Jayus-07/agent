@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 from backend.config import LLM_MODEL
 from backend.config.llm import (
     LLM_ALLOW_DEGRADED_ANSWER,
+    LLM_CONTEXT_LENGTH,
     LLM_FALLBACK_MODEL,
     LLM_MAX_RETRIES,
     LLM_RETRY_BACKOFF_BASE,
@@ -41,6 +42,8 @@ from backend.infra.llm.models import (
     get_model_entry,
     get_provider_driver,
     is_registered_model,
+    model_identity_extras,
+    resolve_output_token_cap,
     resolve_provider,
 )
 from backend.infra.llm.resolved_model import (
@@ -344,7 +347,13 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     if driver in ("openai", "anthropic"):
         from backend.infra.llm.providers.driver_compat import build_by_driver
 
-        return build_by_driver(driver, upstream, credentials)
+        # 输出上限与窗口解耦（STOP B B8）：登记了 max_output_tokens 的模型
+        # 用登记值，否则维持历史行为（窗口值兼任输出上限）。
+        _entry = get_model_entry(model_name) or {}
+        return build_by_driver(
+            driver, upstream, credentials,
+            max_tokens=resolve_output_token_cap(_entry, LLM_CONTEXT_LENGTH),
+        )
     if driver and driver != "ollama":
         # driver 已登记但不受支持（如 specialized 专项供应商的 chat 误绑）：
         # 保留历史兜底语义（聊天热路径上宁可给明确失败也不新增崩溃点），
@@ -499,6 +508,7 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
                 role="main", binding_source="fallback",
                 request_id=(_prev_ctx.request_id if _prev_ctx else ""),
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
+                **model_identity_extras(fallback_model),
             ))
             result = fb.invoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
@@ -542,13 +552,13 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
         reserve_model_call("fallback", model_name=fallback_model)
         try:
             # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
+            _prev_ctx = get_current_resolved_model()
             set_current_resolved_model(ResolvedModelContext(
                 model_id=fallback_model, provider=_get_provider_for(fallback_model),
                 role="main", binding_source="fallback",
-                request_id=(get_current_resolved_model().request_id
-                            if get_current_resolved_model() else ""),
-                trace_id=(get_current_resolved_model().trace_id
-                          if get_current_resolved_model() else ""),
+                request_id=(_prev_ctx.request_id if _prev_ctx else ""),
+                trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
+                **model_identity_extras(fallback_model),
             ))
             result = await fb.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
@@ -795,6 +805,7 @@ def _resolve_call_context(
                     model_id=override, provider=_get_provider_for(override),
                     role=role, binding_source="request_override",
                     request_id=request_id, trace_id=trace_id,
+                    **model_identity_extras(override),
                 )
 
         # 2. 显式指定模型（专用角色，如 tool_selector 的角色绑定模型）
@@ -834,6 +845,7 @@ def _resolve_call_context(
             model_id=resolved_name, provider=_get_provider_for(resolved_name),
             role=role, binding_source=source,
             request_id=request_id, trace_id=trace_id,
+            **model_identity_extras(resolved_name),
         )
     except Exception:
         return None

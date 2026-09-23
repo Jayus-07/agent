@@ -34,14 +34,21 @@ def build_by_driver(
     driver: str,
     model_name: str,
     credentials: ProviderCredentials | None,
+    *,
+    max_tokens: int | None = None,
 ):
     """按 driver 构建 LangChain 聊天模型实例。
 
     与 providers/* 各构建器同构：温度 / 超时 / max_tokens 取全局配置，
     api_key 与 base_url 只来自凭据（无 env 回退），extra_headers /
     extra_body 透传供应商登记的附加参数。
+
+    max_tokens（STOP B B8）：调用方传 `resolve_output_token_cap(entry, 窗口)`
+    的结果 —— 模型登记了 max_output_tokens 用登记值；不传/None 保持历史
+    行为（全局窗口兼任输出上限）。
     """
     d = (driver or "").strip().lower()
+    effective_max_tokens = max_tokens if max_tokens and max_tokens > 0 else LLM_CONTEXT_LENGTH
 
     if d == "openai":
         try:
@@ -62,7 +69,7 @@ def build_by_driver(
         return ChatOpenAI(
             model=model_name,
             temperature=LLM_TEMPERATURE,
-            max_tokens=LLM_CONTEXT_LENGTH,
+            max_tokens=effective_max_tokens,
             request_timeout=LLM_REQUEST_TIMEOUT,
             api_key=api_key or "EMPTY",  # 未设 Key 的自托管实例用占位符（同 vllm 约定）
             base_url=base_url,
@@ -91,7 +98,7 @@ def build_by_driver(
             anthropic_api_key=api_key,
             anthropic_api_url=base_url or None,
             default_headers=headers,
-            max_tokens=LLM_CONTEXT_LENGTH,
+            max_tokens=effective_max_tokens,
             temperature=LLM_TEMPERATURE,
             timeout=LLM_REQUEST_TIMEOUT,
         )
