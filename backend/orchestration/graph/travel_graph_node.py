@@ -19,11 +19,12 @@ _FALLBACK_ANSWER = "抱歉，旅游规划服务暂时不可用，请稍后再试
 def _maybe_cancel_active_run(state: dict, conversation_id: str) -> dict | None:
     """「取消整个规划」短路（STOP G3，任务书 §16/§17）。
 
-    仅当会话存在活跃 travel run（run_id 非空且非 completed/cancelled）
-    且消息命中保守 cancel 词表（is_cancel_run_query：「不去海游馆了」类
-    局部排除句不触发）时执行：CANCEL_TRAVEL_RUN 原子 mutation（run CAS，
-    seq 保留 → 下一 run 不撞号；pending 清；摘要槽位保留）——不跑专家图。
-    保守失败：无 run / 词表未命中 / CAS stale 一律返回 None 放行正常流程。
+    仅当会话存在 run（run_id 非空且非 cancelled——completed 后反悔仍可
+    取消，STOP H-D1 实机修复）且消息命中保守 cancel 词表（is_cancel_run_query:
+    「不去海游馆了」类局部排除句不触发）时执行：CANCEL_TRAVEL_RUN 原子
+    mutation（run CAS，seq 保留 → 下一 run 不撞号；pending 清；摘要槽位
+    保留）——不跑专家图。保守失败：无 run / 词表未命中 / CAS stale 一律
+    返回 None 放行正常流程。
     """
     question = state.get("question") or state.get("query") or ""
     try:
@@ -40,7 +41,7 @@ def _maybe_cancel_active_run(state: dict, conversation_id: str) -> dict | None:
         snap = repo.peek(state.get("tenant_id") or "",
                          state.get("user_id") or "", conversation_id)
         if (snap is None or not snap.travel_run_id
-                or snap.travel_stage in ("completed", "cancelled")):
+                or snap.travel_stage == "cancelled"):
             return None
         run_id = snap.travel_run_id
         result = repo.mutate(

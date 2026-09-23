@@ -113,7 +113,8 @@ class TestResolverCancel:
         assert route["resume_mode"] == "cancel"
         assert update["route_mode"] == "travel"
 
-    def test_completed_run_no_longer_cancellable_via_route(self):
+    def test_completed_run_still_cancellable_via_route(self):
+        """STOP H-D1：completed 后反悔（「不规划了」）仍可走 cancel 路由。"""
         tid = _tid()
         sync_travel_run_to_context("t-g3", "u-g3", tid,
                                    brief={"destination": "大阪", "days": 2},
@@ -124,9 +125,11 @@ class TestResolverCancel:
         mark_travel_run_completed("t-g3", "u-g3", tid)
         mark_domain_turn("t-g3", "u-g3", tid, domain="travel")
 
-        # completed 后 run 不再是活跃取消对象（保守：放行正常路由）
-        assert resolve_travel_pending("不规划了", assemble_routing_context(
-            "t-g3", "u-g3", tid)) is None
+        update = resolve_travel_pending("不规划了", assemble_routing_context(
+            "t-g3", "u-g3", tid))
+        assert update is not None
+        assert update["travel_context"]["travel_route"][
+            "resume_mode"] == "cancel"
 
     def test_local_exclude_phrase_not_routed_as_cancel(self):
         tid = _tid()

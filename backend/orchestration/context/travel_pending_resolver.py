@@ -127,11 +127,12 @@ def resolve_travel_pending(query: str, routing_context: dict | None) -> dict | N
 
     # 取消整个规划（STOP G3）：活跃 run 期间显式取消 → 短路回域图，
     # 由 travel_graph_node 执行 CANCEL_TRAVEL_RUN（本层只判定不改状态）。
-    # 保守：仅 run 活跃（非 completed/cancelled）且词表命中才拦；
-    # 「不去海游馆了」类局部排除句由 is_cancel_run_query 自行排除。
+    # 保守：仅 run 存在且未取消过才拦（completed 后反悔仍可取消——
+    # STOP H-D1 实机修复：「这次旅行不规划了」在出单后同样成立）；
+    # 「不去鼓浪屿了」类局部排除句由 is_cancel_run_query 自行排除。
     summary_run = summary.get("travel_run_id") or ""
     summary_stage = summary.get("travel_stage") or ""
-    if summary_run and summary_stage not in ("completed", "cancelled"):
+    if summary_run and summary_stage != "cancelled":
         from backend.travel.slot_filler import is_cancel_run_query
 
         if is_cancel_run_query(query):
