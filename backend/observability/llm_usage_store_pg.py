@@ -42,6 +42,20 @@ _COLS = ("ts, trace_id, request_id, session_id, user_id, tenant_id, "
          "output_cost, total_cost, cost_status, currency, "
          "duration_ms, finish_reason, decision")
 _COLS += ", run_id, step_id, role, stage"
+# STOP C：身份链 + 单价快照随查询透出（trace 回填/看板可直接看到
+# upstream 回传名与调用时单价）
+_COLS += (", requested_model, upstream_model_id, binding_source, "
+          "input_unit_price, output_unit_price, cache_input_unit_price")
+
+
+def _optional_decimal(value) -> float | None:
+    """单价快照入库转换：缺省/None → NULL（price_unknown 语义），数值 → float。"""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class PostgresLLMUsageStore(LLMUsageStore):
@@ -170,6 +184,32 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS currency "
                 "TEXT NOT NULL DEFAULT ''"
             )
+            # Model Governance STOP C（2026-09-23）：身份链 + 单价快照，
+            # 与 sql/migrations/046_llm_usage_identity_billing.sql 同口径。
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS requested_model "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS upstream_model_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS binding_source "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS input_unit_price "
+                "NUMERIC(18, 6)"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS output_unit_price "
+                "NUMERIC(18, 6)"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS cache_input_unit_price "
+                "NUMERIC(18, 6)"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_ts ON {t}(ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_model ON {t}(model, ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_trace ON {t}(trace_id)")
@@ -202,10 +242,13 @@ class PostgresLLMUsageStore(LLMUsageStore):
                         cached_tokens, reasoning_tokens, cost_usd,
                         billable_input_tokens, input_cost, cached_input_cost,
                         output_cost, total_cost, cost_status, currency,
+                        requested_model, upstream_model_id, binding_source,
+                        input_unit_price, output_unit_price, cache_input_unit_price,
                         duration_ms, finish_reason, decision,
                         run_id, step_id, role, stage, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     event.get("timestamp") or now,
@@ -230,6 +273,14 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     float(event.get("total_cost") or event.get("cost_usd") or 0.0),
                     str(event.get("cost_status") or ""),
                     str(event.get("currency") or ""),
+                    # 身份链（STOP C C2）：requested/upstream/绑定来源
+                    str(event.get("requested_model") or ""),
+                    str(event.get("upstream_model_id") or ""),
+                    str(event.get("binding_source") or ""),
+                    # 单价快照（C6）：None 落 NULL（price_unknown 语义）
+                    _optional_decimal(event.get("input_unit_price")),
+                    _optional_decimal(event.get("output_unit_price")),
+                    _optional_decimal(event.get("cache_input_unit_price")),
                     float(event.get("duration_ms") or 0.0),
                     str(event.get("finish_reason") or ""),
                     str(event.get("decision") or "primary"),

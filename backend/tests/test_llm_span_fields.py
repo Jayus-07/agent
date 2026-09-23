@@ -20,6 +20,25 @@ from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 # Fixtures
 # ==========================================================
 
+# STOP C 修复顺序耦合：本文件多处断言依赖注册表内的种子价格（031 seed 值），
+# 此前靠前序测试泄漏注册表才偶发通过 —— 模块级自备注入，不再受测试顺序影响。
+@pytest.fixture(autouse=True)
+def _seed_registry_pricing():
+    from backend.infra.llm import models as llm_models
+
+    llm_models.reset_dynamic_models_for_tests()
+    llm_models.set_dynamic_models([
+        {"name": "qwen2.5:3b", "provider": "ollama",
+         "input_price_per_1m": 0.0, "output_price_per_1m": 0.0, "source": "db"},
+        {"name": "deepseek-v4-flash", "provider": "deepseek",
+         "input_price_per_1m": 0.14, "output_price_per_1m": 0.28, "source": "db"},
+        {"name": "MiniMax-M3", "provider": "minimax",
+         "input_price_per_1m": 3.0, "output_price_per_1m": 15.0, "source": "db"},
+    ])
+    yield
+    llm_models.reset_dynamic_models_for_tests()
+
+
 @pytest.fixture(autouse=True)
 def reset_proxy_state():
     """每个测试前后重置 proxy token 状态（ContextVar 不可变替换）"""

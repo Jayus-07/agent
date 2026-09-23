@@ -812,30 +812,15 @@ class TraceCollector:
 
     @staticmethod
     def parse_tokens(result) -> dict:
-        """从 LLM 返回值提取 token 计数字典。"""
-        try:
-            tu = {}
-            if hasattr(result, "response_metadata") and result.response_metadata:
-                tu = result.response_metadata.get("token_usage", {})
-            if not tu and hasattr(result, "usage_metadata") and result.usage_metadata:
-                tu = result.usage_metadata
-            if not tu and hasattr(result, "llm_output") and result.llm_output:
-                tu = result.llm_output.get("token_usage", {})
-            p = tu.get("prompt_tokens", tu.get("input_tokens", 0))
-            c = tu.get("completion_tokens", tu.get("output_tokens", 0))
-            t = tu.get("total_tokens", p + c)
-            if t:
-                # 细粒度明细：缓存命中 / 推理 token（上游未返回时为 0）
-                in_details = tu.get("input_token_details") or {}
-                out_details = tu.get("output_token_details") or {}
-                return {
-                    "prompt_tokens": p, "completion_tokens": c, "total_tokens": t,
-                    "cached_tokens": int(in_details.get("cache_read", 0) or 0),
-                    "reasoning_tokens": int(out_details.get("reasoning", 0) or 0),
-                }
-        except Exception:
-            logger.debug("token 用量解析失败", exc_info=True)
-        return {}
+        """从 LLM 返回值提取 token 计数字典。
+
+        STOP C（C4）：实现收敛到 observability.usage_parse（唯一解析层，
+        与 proxy._record_tokens 同源；llm_output 兼容来源已在其内处理），
+        此处只做委托，不再自行维护口径。
+        """
+        from backend.observability.usage_parse import parse_provider_usage
+
+        return parse_provider_usage(result)
 
     @staticmethod
     def _aggregate_usage(record: TraceRecord):

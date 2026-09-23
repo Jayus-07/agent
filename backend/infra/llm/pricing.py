@@ -370,9 +370,13 @@ def calculate_fallback_cost(
 
 
 # 成本状态（第一阶段 2026-09-22 拍板）：exact / estimated / unpriced
+# STOP C（2026-09-23）补登记 price_unknown：预算硬门缺价时 proxy 按注册表
+# 估价记账的显式标记（此前只写在 proxy 注释里，未进枚举声明，按状态过滤
+# 的对账查询会漏行）。落库见 migration 046 注释。
 COST_STATUS_EXACT = "exact"
 COST_STATUS_ESTIMATED = "estimated"
 COST_STATUS_UNPRICED = "unpriced"
+COST_STATUS_PRICE_UNKNOWN = "price_unknown"
 
 
 def _llm_cost_breakdown(
@@ -404,6 +408,23 @@ def _llm_cost_breakdown(
     return total, breakdown
 
 
+def _unit_price_snapshot(
+    rows: dict[str, PriceLine],
+) -> dict[str, float]:
+    """调用时单价快照（Billing Snapshot / C6）：随 usage 行落库，事后可审计
+    历史成本用的是哪一版价格（per_1m_tokens 口径；缓存价缺行时按当时实际
+    参与计算的 input 价记录，与 cost_status='estimated' 语义对齐）。"""
+    cache_line = rows.get("cache_read")
+    return {
+        "input_unit_price": float(rows["input"].price_per_unit),
+        "output_unit_price": float(rows["output"].price_per_unit),
+        "cache_input_unit_price": float(
+            cache_line.price_per_unit if cache_line is not None
+            else rows["input"].price_per_unit
+        ),
+    }
+
+
 def calculate_llm_cost_with_status(
     model_name: str,
     quantities: dict[str, int | float | Decimal],
@@ -428,12 +449,19 @@ def calculate_llm_cost_with_status(
 
     分项成本（breakdown）恒给出：input_cost / cached_input_cost / output_cost
     （USD float，6 位小数）。货币取自价格行；fallback 场景注册表价固定 USD。
+
+    STOP C（C6 Billing Snapshot）：PG 价格行在场时 breakdown 额外携带
+    input_unit_price / output_unit_price / cache_input_unit_price（per 1M
+    tokens 调用时单价）—— proxy 原样落 llm_usage，改价不污染历史对账。
+    fallback 估价场景无单价可快照（按 0 记，cost_status 已标 estimated/unpriced）。
     """
     billable = max(int(quantities.get("input", 0) or 0), 0)
     cached = max(int(quantities.get("cache_read", 0) or 0), 0)
     output = max(int(quantities.get("output", 0) or 0), 0)
     zero: dict[str, float] = {
         "input_cost": 0.0, "cached_input_cost": 0.0, "output_cost": 0.0,
+        "input_unit_price": 0.0, "output_unit_price": 0.0,
+        "cache_input_unit_price": 0.0,
     }
 
     rows: dict[str, PriceLine] | None
@@ -443,6 +471,17 @@ def calculate_llm_cost_with_status(
         rows = table.require(model_name, "llm", enforce=False)
         currency = table.currency_for(model_name, "llm")
     except PriceTableUnavailable:
+        rows = None
+    except Exception:
+        # 本入口的契约是**永不抛错**（成本统计失败不能影响主链路）：
+        # 价格层的意外异常（连接池耗尽等）与"表不可用"同语义，退注册表估价
+        # 并打日志，绝不把异常透给调用方（STOP C 测试 test_billing_never_raises 锁定）。
+        from backend.shared.logger import logger
+
+        logger.warning(
+            "[Pricing] 价格表读取异常，退注册表估价 model=%s", model_name,
+            exc_info=True,
+        )
         rows = None
 
     if rows is None or "input" not in rows or "output" not in rows:
@@ -454,20 +493,21 @@ def calculate_llm_cost_with_status(
     if cached > 0 and "cache_read" not in rows:
         # 缓存命中但无缓存价：缓存部分按普通 input 价保守估算。
         total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
-        return total, COST_STATUS_ESTIMATED, currency, {
-            key: float(value) for key, value in breakdown.items()
-        }
+        payload = {key: float(value) for key, value in breakdown.items()}
+        payload.update(_unit_price_snapshot(rows))
+        return total, COST_STATUS_ESTIMATED, currency, payload
 
     total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
-    return total, COST_STATUS_EXACT, currency, {
-        key: float(value) for key, value in breakdown.items()
-    }
+    payload = {key: float(value) for key, value in breakdown.items()}
+    payload.update(_unit_price_snapshot(rows))
+    return total, COST_STATUS_EXACT, currency, payload
 
 
 __all__ = [
     "COST_STATUS_ESTIMATED",
     "COST_STATUS_EXACT",
     "COST_STATUS_UNPRICED",
+    "COST_STATUS_PRICE_UNKNOWN",
     "MissingModelPrice",
     "PRICE_DIMENSIONS",
     "PriceLine",

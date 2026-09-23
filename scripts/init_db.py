@@ -132,6 +132,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # Model Governance STOP B（2026-09-23）：max_output_tokens 列 + 活跃模型
     # context_length/capabilities 登记
     "045_llm_models_governance_columns.sql": "memory",
+    # Model Governance STOP C（2026-09-23）：llm_usage 身份链列 + 单价快照
+    "046_llm_usage_identity_billing.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

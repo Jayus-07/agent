@@ -512,11 +512,19 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
             ))
             result = fb.invoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
+            try:
+                from backend.observability.metrics import llm_fallback_total
+                llm_fallback_total.labels(
+                    primary_model=active_model, fallback_model=fallback_model,
+                ).inc()
+            except Exception:
+                pass
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
         except Exception as e:
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
+            _record_failed_attempt(fallback_model, e, decision="fallback")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
     if LLM_ALLOW_DEGRADED_ANSWER:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
@@ -562,11 +570,19 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
             ))
             result = await fb.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
+            try:
+                from backend.observability.metrics import llm_fallback_total
+                llm_fallback_total.labels(
+                    primary_model=active_model, fallback_model=fallback_model,
+                ).inc()
+            except Exception:
+                pass
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
         except Exception as e:
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
+            _record_failed_attempt(fallback_model, e, decision="fallback")
     if LLM_ALLOW_DEGRADED_ANSWER:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
@@ -604,6 +620,11 @@ def _call_with_resilience(attr, *args, **kwargs):
             return _handle_terminal_failure(e, args, kwargs)
         except Exception as e:
             release_model_reservation()
+            # C11：失败 attempt 留痕（provider 侧可能已计费，不能无声消失）
+            _record_failed_attempt(
+                model_name, e,
+                decision="primary" if attempt == 0 else "retry",
+            )
             last_err = e
             if not _is_transient(e):
                 break  # 非瞬时错误（鉴权/参数等）重试无意义
@@ -642,6 +663,11 @@ async def _acall_with_resilience(attr, *args, **kwargs):
             return await _ahandle_terminal_failure(e, args, kwargs)
         except Exception as e:
             release_model_reservation()
+            # C11：失败 attempt 留痕（async 对称）
+            _record_failed_attempt(
+                model_name, e,
+                decision="primary" if attempt == 0 else "retry",
+            )
             last_err = e
             if not _is_transient(e):
                 break
@@ -694,6 +720,14 @@ def get_llm_for_role(role: str) -> BaseChatModel:
     入库链路的不同阶段不能隐式共用 ``main`` 角色。角色解析仍复用现有
     DB → env → code-default/inherit 规则和模型实例缓存；调用包装由调用方
     继续通过 ``_BoundLLMProxy`` 或普通实例完成。
+
+    STOP C（C5 旁路归属修复）：本函数返回的是**裸 LangChain 实例**，不经
+    `_LLMProxy` 包装 → 调用后由 `record_llm_result` 补计量时拿不到调用
+    上下文，usage 被上游回传名带偏（实机：metadata_extract/question_gen
+    链 1174 行 provider=ollama 错位）。这里在返回前登记调用上下文，
+    补计量链即可按登记身份归属。ContextVar 生命周期说明：旁路调用模式
+    都是「get 实例 → invoke → 立即补计量」的同步序列，不会跨请求串味；
+    主链 wrapper 每次调用都会重新 set 覆盖。
     """
 
     from backend.config import model_roles
@@ -702,6 +736,9 @@ def get_llm_for_role(role: str) -> BaseChatModel:
     model_name = str(effective.get("value") or "").strip()
     if not model_name:
         raise RuntimeError(f"模型角色 {role!r} 没有可用模型")
+    ctx = _resolve_call_context(role=role, model_name=model_name)
+    if ctx is not None:
+        set_current_resolved_model(ctx)
     return _get_override_llm(model_name)
 
 
@@ -887,17 +924,27 @@ _turn_usage_var: _contextvars.ContextVar = _contextvars.ContextVar(
 
 
 def _accumulate_turn_usage(model: str, p: int, c: int, t: int,
-                           cached: int, reasoning: int, cost: float) -> None:
-    """把单次 LLM 调用用量累加到当前上下文的 per-turn 汇总。"""
+                           cached: int, reasoning: int, cost: float,
+                           provider: str | None = None) -> None:
+    """把单次 LLM 调用用量累加到当前上下文的 per-turn 汇总。
+
+    provider 由调用方显式传入（STOP C）：此前这里恒按字符串推断，
+    注册表 miss 时把豆包记成 ollama（STOP A 实机 R2）。
+    """
     if not model:
         model = LLM_MODEL
+    resolved_provider = provider or _get_provider_for(model)
     acc = dict(_turn_usage_var.get() or {})
     entry = dict(acc.get(model) or {
-        "provider": _get_provider_for(model),
+        "provider": resolved_provider,
         "calls": 0,
         "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
         "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
     })
+    # 模型已在累计中但 provider 此前推断错误时，以本次权威值纠正
+    entry.setdefault("provider", resolved_provider)
+    if provider:
+        entry["provider"] = provider
     entry["calls"] = int(entry["calls"]) + 1
     entry["prompt_tokens"] = int(entry["prompt_tokens"]) + int(p or 0)
     entry["completion_tokens"] = int(entry["completion_tokens"]) + int(c or 0)
@@ -937,6 +984,98 @@ def _usage_component() -> str:
     return "llm"
 
 
+def _record_failed_attempt(
+    model_name: str, err: BaseException,
+    decision: str = "primary", duration_ms: float = 0.0,
+) -> None:
+    """失败 attempt 也落一行 usage（STOP C / C11）。
+
+    重试/终态失败的 attempt 在 provider 侧可能已产生真实计费（tokens 未知，
+    记 0），此前完全不留痕 —— fallback 分析与成本对账都缺第一跳。行语义：
+    tokens/cost 全 0、finish_reason 带异常类型、cost_status=unpriced、
+    decision 由韧性链标注（primary/retry/fallback）。
+    绝不抛错（usage 软失败原则，与 _record_tokens 一致）。
+    """
+    try:
+        canonical = canonical_model_id(model_name) or model_name
+        provider = _get_provider_for(canonical)
+        from backend.infra.llm.error_taxonomy import classify_model_error
+        from backend.infra.llm.pricing import COST_STATUS_UNPRICED
+
+        error_type = classify_model_error(err)
+        try:
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+                get_llm_usage_store,
+            )
+            attribution = current_usage_attribution()
+            get_llm_usage_store().record({
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+                             + f".{int(time.time() % 1 * 1000):03d}Z",
+                "trace_id": attribution["trace_id"],
+                "request_id": attribution["request_id"],
+                "session_id": attribution["session_id"],
+                "user_id": attribution["user_id"],
+                "tenant_id": attribution["tenant_id"],
+                "component": _usage_component(),
+                "model": canonical,
+                "provider": provider,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "cost_status": COST_STATUS_UNPRICED,
+                "currency": "",
+                "requested_model": "",
+                "upstream_model_id": "",
+                "binding_source": "failed_attempt",
+                "finish_reason": f"error:{type(err).__name__}",
+                "decision": decision,
+                "duration_ms": round(duration_ms, 1),
+                "run_id": attribution["run_id"],
+                "step_id": attribution["step_id"],
+                "role": attribution["role"],
+                "stage": attribution["stage"],
+            })
+        except Exception:
+            pass
+        try:
+            from backend.observability.metrics import (
+                llm_failures_total,
+                llm_requests_total,
+            )
+            llm_failures_total.labels(model=canonical, error_type=error_type).inc()
+            llm_requests_total.labels(
+                model=canonical, provider=provider, status="error",
+            ).inc()
+        except Exception:
+            pass
+    except Exception:
+        logger.debug("[LLM:proxy] 失败 attempt 用量记录异常（忽略）", exc_info=True)
+
+
+def _notify_stream_usage_missing(mode: str) -> None:
+    """流式调用未取得 usage chunk 的显式观测（C13）：计数 + 一次性日志。
+
+    覆盖 provider 不回 stream usage（ChatAnthropic/ChatOllama 无
+    stream_options.include_usage）与客户端提前中断两类场景 —— 禁止沉默。
+    """
+    try:
+        from backend.observability.metrics import llm_usage_missing_total
+        llm_usage_missing_total.inc()
+    except Exception:
+        pass
+    try:
+        model = get_current_resolved_model().model_id \
+            if get_current_resolved_model() is not None else ""
+        logger.warning(
+            "[LLM:proxy] %s 流式结束但未取得 usage chunk（provider 未回传或客户端提前中断），"
+            "本次 token 用量缺失 model=%s", mode, model or "unknown",
+        )
+    except Exception:
+        pass
+
+
 def _record_tokens(
     result,
     duration_ms: float | None = None,
@@ -948,11 +1087,10 @@ def _record_tokens(
     duration_ms: 调用方（wrapper）计得的本次 LLM 调用耗时（含重试/熔断等待）。
     """
     try:
-        tu = {}
-        if hasattr(result, "response_metadata") and result.response_metadata:
-            tu = result.response_metadata.get("token_usage", {})
-        if not tu and hasattr(result, "usage_metadata") and result.usage_metadata:
-            tu = result.usage_metadata
+        # C4 统一解析层：usage 数量提取只此一份实现（tracer.parse_tokens 同源委托）
+        from backend.observability.usage_parse import extract_usage_payload
+
+        tu = extract_usage_payload(result)
         # ChatAnthropic 用 input_tokens/output_tokens，ChatOpenAI 用 prompt_tokens/completion_tokens
         p = tu.get("prompt_tokens", tu.get("input_tokens", 0))
         c = tu.get("completion_tokens", tu.get("output_tokens", 0))
@@ -985,29 +1123,43 @@ def _record_tokens(
             "cached_tokens": cached, "reasoning_tokens": reasoning,
         })
 
-        # 实际模型名归属链（P1 修复）：response_metadata（上游真实返回）>
-        # 调用方显式 model_name > 调用上下文 ResolvedModelContext（流式 chunk
-        # 无 metadata 时的权威来源）> LLM_MODEL（最后兜底，仅在上下文缺失
-        # 时触达 —— 禁止在上下文可用时用 import 期常量推断模型）。
-        model = ""
-        if hasattr(result, "response_metadata") and result.response_metadata:
-            model = (result.response_metadata.get("model_name", "")
-                     or result.response_metadata.get("model", ""))
+        # 模型身份归属（STOP C 重排 / C2：调用方显式声明最权威）：
+        # 显式 model_name 参数（补计量链声明的登记名）> ResolvedModelContext
+        #（调用时解析）> response 回传名（纯观测值，只落 upstream_model_id）。
+        # 此前 response 最优先，旁路补计量链被上游回传名（如豆包
+        # doubao-seed-2-0-mini-260428）带偏：归一 miss → provider 误判
+        # ollama → cost=0（实机 1174 行错位）。
+        # 显式名双匹配归一失败（是残缺 upstream 别名而非登记名）时才信 ctx。
         ctx = get_current_resolved_model()
-        model = model or str(model_name or "")
-        if not model and ctx is not None:
-            model = ctx.model_id
-        # 观测口径统一（路由专项 Step 1）：usage/cost/dashboard 按 canonical
-        # （登记名）聚合；response_metadata 的 upstream 原始值保留在
-        # upstream_model_id 供 trace 透传。
-        upstream_model = model
-        model = canonical_model_id(model)
-        if model == upstream_model and ctx is not None \
-                and upstream_model and upstream_model != ctx.model_id:
-            # 注册表不认识的厂商回传别名（如 doubao 上游真名）→ 归一到本次
-            # 调用的 configured 模型：本次调用就是用它解析发起的
-            model = ctx.model_id
-        model = model or LLM_MODEL
+        observed_model = ""
+        if hasattr(result, "response_metadata") and result.response_metadata:
+            observed_model = (result.response_metadata.get("model_name", "")
+                              or result.response_metadata.get("model", ""))
+        explicit_name = str(model_name or "").strip()
+        if explicit_name:
+            canonical = canonical_model_id(explicit_name)
+            if canonical == explicit_name and ctx is not None and ctx.model_id \
+                    and ctx.model_id != explicit_name:
+                canonical = ctx.model_id
+        elif ctx is not None:
+            canonical = canonical_model_id(ctx.model_id)
+        else:
+            canonical = canonical_model_id(observed_model)
+        model = canonical or LLM_MODEL
+        upstream_model = observed_model or explicit_name or (
+            ctx.model_id if ctx is not None else "")
+        # provider 归属：ctx 在场且与最终归属一致时用 ctx.provider（调用时
+        # 解析的权威值）；否则按 canonical 双匹配直查（内部不再有 ollama 盲猜
+        # 优先——已登记别名可正确归一）。
+        if ctx is not None and ctx.model_id == model:
+            provider_resolved = ctx.provider
+        else:
+            provider_resolved = _get_provider_for(model)
+        requested_override = ""
+        try:
+            requested_override = str(_request_model_var.get() or "")
+        except Exception:
+            requested_override = ""
 
         # Prometheus 指标：LLM token 用量
         try:
@@ -1054,12 +1206,15 @@ def _record_tokens(
                 cost_status, currency = "exact", "USD"
                 cost_breakdown: dict[str, float] = {}
             except Exception as pricing_err:
-                from backend.infra.llm.pricing import calculate_fallback_cost
+                from backend.infra.llm.pricing import (
+                    COST_STATUS_PRICE_UNKNOWN,
+                    calculate_fallback_cost,
+                )
 
                 cost_decimal = calculate_fallback_cost(
                     model, billable_input + cached, c,
                 )
-                cost_status = "price_unknown"
+                cost_status = COST_STATUS_PRICE_UNKNOWN
                 currency = "USD"
                 cost_breakdown = {}
                 logger.warning(
@@ -1099,17 +1254,24 @@ def _record_tokens(
             "input_cost": cost_breakdown.get("input_cost", 0.0),
             "cached_input_cost": cost_breakdown.get("cached_input_cost", 0.0),
             "output_cost": cost_breakdown.get("output_cost", 0.0),
+            # 单价快照（C6）：price_unknown 分支 breakdown 为空 → None（未知）
+            "input_unit_price": cost_breakdown.get("input_unit_price"),
+            "output_unit_price": cost_breakdown.get("output_unit_price"),
+            "cache_input_unit_price": cost_breakdown.get("cache_input_unit_price"),
             "cost_status": cost_status,
             "currency": currency,
             "model": model,
             "canonical_model_id": model,
             "upstream_model_id": upstream_model or "",
+            "requested_model": requested_override,
+            "provider": provider_resolved,
             "configured_model_id": ctx.model_id if ctx is not None else "",
             "model_role": ctx.role if ctx is not None else "",
             "binding_source": ctx.binding_source if ctx is not None else "",
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
         })
-        _accumulate_turn_usage(model, p, c, t, cached, reasoning, cost)
+        _accumulate_turn_usage(model, p, c, t, cached, reasoning, cost,
+                               provider=provider_resolved)
 
         # Token 看板明细落库（每调用一行，软失败不影响主链路）
         try:
@@ -1129,11 +1291,8 @@ def _record_tokens(
                 "tenant_id": attribution["tenant_id"],
                 "component": _usage_component(),
                 "model": model,
-                "provider": (
-                    ctx.provider
-                    if ctx is not None and ctx.model_id == model
-                    else _get_provider_for(model)
-                ),
+                # ctx 在场 = 调用时解析的权威 provider；缺失才按 canonical 直查
+                "provider": provider_resolved,
                 "prompt_tokens": p,
                 "completion_tokens": c,
                 "total_tokens": t,
@@ -1146,6 +1305,13 @@ def _record_tokens(
                 "output_cost": cost_breakdown.get("output_cost", 0.0),
                 "cost_status": cost_status,
                 "currency": currency,
+                # 身份链（STOP C C2）+ 单价快照（C6）
+                "requested_model": requested_override,
+                "upstream_model_id": upstream_model or "",
+                "binding_source": ctx.binding_source if ctx is not None else "",
+                "input_unit_price": cost_breakdown.get("input_unit_price"),
+                "output_unit_price": cost_breakdown.get("output_unit_price"),
+                "cache_input_unit_price": cost_breakdown.get("cache_input_unit_price"),
                 "finish_reason": finish_reason,
                 "decision": current_call_decision(),
                 "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
@@ -1154,6 +1320,14 @@ def _record_tokens(
                 "role": attribution["role"],
                 "stage": attribution["stage"],
             })
+            # C15：调用计数（低基数 label：model/provider/status）
+            try:
+                from backend.observability.metrics import llm_requests_total
+                llm_requests_total.labels(
+                    model=model, provider=provider_resolved, status="ok",
+                ).inc()
+            except Exception:
+                pass
         except Exception:
             pass
     except Exception:
@@ -1500,7 +1674,11 @@ class _LLMProxy:
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                         else:
+                            # C13：provider 未回 usage chunk / 客户端提前中断 →
+                            # 显式打点，不再静默丢量（生产主路径是流式，
+                            # 漏记会系统性低估成本与预算结算）
                             release_model_reservation()
+                            _notify_stream_usage_missing("astream")
                 return astream_wrapper
             # sync generator（stream）：修好此前走通用 wrapper 的坏路径
             # （generator 未消费就被 _record_tokens，token 清空），
@@ -1562,6 +1740,7 @@ class _LLMProxy:
                             )
                         else:
                             release_model_reservation()
+                            _notify_stream_usage_missing("stream")
                 return stream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
             # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。

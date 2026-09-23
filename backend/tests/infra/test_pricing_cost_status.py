@@ -127,8 +127,11 @@ def test_unpriced_model_records_zero_without_error(price_snapshot, monkeypatch):
     assert status == COST_STATUS_UNPRICED
     assert total == Decimal("0")
     assert currency == "USD"
+    # STOP C（C6）：breakdown 新增调用时单价快照键（unpriced=无价格 → 0）
     assert breakdown == {
         "input_cost": 0.0, "cached_input_cost": 0.0, "output_cost": 0.0,
+        "input_unit_price": 0.0, "output_unit_price": 0.0,
+        "cache_input_unit_price": 0.0,
     }
 
 
