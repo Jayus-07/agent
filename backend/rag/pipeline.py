@@ -4,6 +4,7 @@ import json
 import time
 from collections import OrderedDict
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 # R-P0-1（Windows 原生库加载顺序加固）：langchain_text_splitters 顶层会拉起
 # sentence_transformers→torch；若该导入发生在 chroma/doc_db 等原生库已加载
@@ -44,6 +45,23 @@ from backend.infra.async_utils import run_async as _run_async
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
+
+
+@dataclass
+class AskOutcome:
+    """单次问答的请求级结果（2026-09-23 D1-6）。
+
+    answer/sources/answer_meta 随返回值带回，调用方不再从 RAGChain /
+    RAGPipeline 单例实例属性读取——并发请求下后者互相覆盖串扰
+    （A 的响应可能带 B 的 sources）。
+    """
+    answer: str
+    sources: list = None
+    answer_meta: dict = None
+
+    def __post_init__(self):
+        self.sources = list(self.sources or [])
+        self.answer_meta = dict(self.answer_meta or {})
 
 
 class RAGPipeline:
@@ -647,14 +665,57 @@ class RAGPipeline:
         department: str = "",
         permissions: Iterable[str] | None = None,
     ) -> str:
-        """提问入口：3 段式 — 准备 → 执行 → 清理。
+        """兼容出口：只取回答文本。需要 sources/meta 的调用方请用 ask_result。"""
+        return self.ask_result(
+            question, session_id, kb_id=kb_id, kb_ids=kb_ids,
+            subject_type=subject_type, department=department,
+            permissions=permissions).answer
+
+    def ask_result(
+        self,
+        question: str,
+        session_id: str = "default",
+        kb_id: str = "default",
+        kb_ids: list[str] | None = None,
+        subject_type: str = "",
+        department: str = "",
+        permissions: Iterable[str] | None = None,
+    ) -> "AskOutcome":
+        """提问入口（请求级返回，2026-09-23 D1-6）：3 段式 — 准备 → 执行 → 清理。
 
         拆解后便于单测和异常定位；行为完全兼容旧版。
         Phase 4: 首轮问答命中缓存时跳过 LLM 生成（~4.8s），多轮对话不走缓存。
         kb_ids: 多知识库指定（客服系统用），优先级高于 kb_id。
         subject_type/department: 主体属性（customer/employee+部门），检索侧
         授权用；空 = 未声明主体，保持旧行为（见 knowledge_base.authorized_kbs）。
+
+        返回 AskOutcome：answer + 本请求的 sources/answer_meta。此前调用方
+        从 RAGChain 单例实例属性读 sources/meta，并发请求互相覆盖串扰；
+        现随返回值带回（contextvar 状态在本线程内读取后打包）。
         """
+        answer = self._ask_inner(
+            question, session_id, kb_id=kb_id, kb_ids=kb_ids,
+            subject_type=subject_type, department=department,
+            permissions=permissions)
+        from backend.rag.context import get_context
+
+        try:
+            sources = list(get_context().sources)
+        except Exception:  # noqa: BLE001 — context 未初始化等极端情况不阻塞应答
+            sources = []
+        return AskOutcome(answer=answer, sources=sources,
+                          answer_meta=dict(self.last_answer_meta or {}))
+
+    def _ask_inner(
+        self,
+        question: str,
+        session_id: str = "default",
+        kb_id: str = "default",
+        kb_ids: list[str] | None = None,
+        subject_type: str = "",
+        department: str = "",
+        permissions: Iterable[str] | None = None,
+    ) -> str:
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
         self._prepare_context(kb_id, question, kb_ids=kb_ids,

@@ -55,6 +55,10 @@ class RagRequestState:
     meta: dict = field(default_factory=dict)   # LLM 输出 <!--META--> 解析结果
     faithfulness: Any = None                   # FaithfulnessResult（评估结果）
     mq_triggered: bool = False                 # MultiQuery 本次是否触发
+    # 请求级输出（2026-09-23 D1-6）：sources 随 ask_result 返回值带回，
+    # 不再落 RAGChain 单例实例属性（并发请求互相覆盖串扰）
+    sources: list = field(default_factory=list)
+    answer_meta: dict = field(default_factory=dict)
 
     # ── QueryAnalyzer 缓存（避免同一请求内多次调用）──
     query_analysis: Any = None

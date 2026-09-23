@@ -58,7 +58,7 @@ class CSKnowledgeService:
                 f"kb_ids={kb_ids}"
             )
 
-            answer = pipeline.ask(
+            outcome = pipeline.ask_result(
                 question=question,
                 session_id=session_id,
                 kb_id=primary_kb,
@@ -66,8 +66,11 @@ class CSKnowledgeService:
                 # 对客知识问答：检索授权收敛到 audience=="customer" 库（cs_*）
                 subject_type="customer",
             )
+            answer = outcome.answer
 
-            meta = getattr(pipeline, "last_answer_meta", {}) or {}
+            # D1-6：meta 随请求级返回值带回，不再读 pipeline 单例属性
+            # （并发请求互相覆盖串扰）
+            meta = outcome.answer_meta or {}
             # P3.5：remote ask 的 meta 依赖 LLM 输出 <!--META--> 注释，
             # 遵循度不稳（实测 conf 缺失取默认 0.5 → 门禁 refuse 丢弃
             # 真实答案）。兜底：can_answer=True 且有答案 → 0.65（CAUTIOUS

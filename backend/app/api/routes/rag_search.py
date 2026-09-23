@@ -107,8 +107,10 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         raise HTTPException(status_code=503, detail=str(e))
     kb_id = req.kb_id or "default"
     principal = require_principal(request)
-    answer = await asyncio.to_thread(
-        pipeline.ask,
+    # D1-6：sources 随返回值带回（请求级），不再读 RAGChain 单例属性——
+    # 并发请求下单例属性互相覆盖，A 的响应可能带 B 的来源
+    outcome = await asyncio.to_thread(
+        pipeline.ask_result,
         req.question,
         req.session_id,
         kb_id=kb_id,
@@ -116,5 +118,5 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         department=principal.department,
         permissions=principal.permissions,
     )
-    sources = getattr(pipeline.lc_chain, '_last_sources', [])
-    return {"answer": answer, "session_id": req.session_id, "sources": sources}
+    return {"answer": outcome.answer, "session_id": req.session_id,
+            "sources": outcome.sources}

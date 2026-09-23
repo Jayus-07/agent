@@ -48,11 +48,15 @@ class TestAnswerDecision:
 
 class TestCSKnowledgeService:
     def _make_service_with_mock_pipeline(self, answer, meta=None):
-        """构造 CSKnowledgeService，mock pipeline.ask()。"""
+        """构造 CSKnowledgeService，mock pipeline.ask_result()（D1-6 请求级契约）。"""
+        from backend.rag.pipeline import AskOutcome
+
         svc = CSKnowledgeService()
         mock_pipeline = MagicMock()
-        mock_pipeline.ask.return_value = answer
-        mock_pipeline.last_answer_meta = meta or {"confidence": 0.9, "can_answer": True}
+        effective_meta = meta or {"confidence": 0.9, "can_answer": True}
+        mock_pipeline.ask_result.return_value = AskOutcome(
+            answer=answer, sources=[], answer_meta=effective_meta)
+        mock_pipeline.last_answer_meta = effective_meta
         return svc, mock_pipeline
 
     @patch("backend.rag.pipeline._get_local_pipeline")
@@ -121,15 +125,15 @@ class TestCSKnowledgeService:
 
         result = svc.answer("问题", kb_ids=None)
 
-        mock_pipeline.ask.assert_called_once()
-        call_kwargs = mock_pipeline.ask.call_args
+        mock_pipeline.ask_result.assert_called_once()
+        call_kwargs = mock_pipeline.ask_result.call_args
         assert call_kwargs.kwargs.get("kb_id") == "cs_faq" or call_kwargs[1].get("kb_id") == "cs_faq"
         assert result.kb_ids == ["cs_faq"]
 
     @patch("backend.rag.pipeline._get_local_pipeline")
     def test_pipeline_exception_returns_refuse_with_error(self, mock_get):
         mock_pipeline = MagicMock()
-        mock_pipeline.ask.side_effect = RuntimeError("pipeline down")
+        mock_pipeline.ask_result.side_effect = RuntimeError("pipeline down")
         mock_get.return_value = mock_pipeline
 
         svc = CSKnowledgeService()
@@ -151,7 +155,7 @@ class TestCSKnowledgeService:
         kb_ids = ["cs_policy", "cs_aftersales", "cs_faq"]
         result = svc.answer("退货流程", kb_ids=kb_ids)
 
-        call_kwargs = mock_pipeline.ask.call_args
+        call_kwargs = mock_pipeline.ask_result.call_args
         assert call_kwargs.kwargs.get("kb_ids") == kb_ids or call_kwargs[1].get("kb_ids") == kb_ids
         assert result.kb_ids == kb_ids
         assert result.decision == Decision.ANSWER

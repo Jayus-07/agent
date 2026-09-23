@@ -238,9 +238,9 @@ class RAGChain:
         # ── RAGChain 自有状态 ──
         # 决策中间态（_last_meta/_last_faithfulness/_last_query）已迁移到
         # RequestContext（P1 并发隔离），见类底部 property；
-        # _last_sources 是跨线程输出通道（rag_search 在 to_thread 返回后
-        # 于主线程 getattr 读取），必须保留为实例字段。
-        self._last_sources: list = []
+        # _last_sources 同批迁移（D1-6）：此前为单例实例属性，并发请求
+        # 互相覆盖串扰；现随请求上下文隔离，正式出口 = pipeline.ask_result
+        # 随返回值带回。属性名保留仅为兼容既有读取点。
         self._chains_dirty = False
 
         self._build_retrievers()
@@ -273,6 +273,16 @@ class RAGChain:
     @_last_query.setter
     def _last_query(self, value: str) -> None:
         get_context().query = value
+
+    @property
+    def _last_sources(self) -> list:
+        # D1-6：请求级输出，正式出口 = pipeline.ask_result 随返回值带回；
+        # 本 property 仅为兼容既有读取点保留。
+        return get_context().sources
+
+    @_last_sources.setter
+    def _last_sources(self, value: list) -> None:
+        get_context().sources = list(value or [])
 
     @property
     def gate(self):
