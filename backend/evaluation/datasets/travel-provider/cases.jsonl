@@ -1,0 +1,8 @@
+{"id": "P-01", "question": "probe: place success (T1)", "expected": {"status": "success"}, "metadata": {"group": "A", "tier": "smoke", "probe": "place_success"}}
+{"id": "P-02", "question": "probe: place not_found → unresolved (T2)", "expected": {"status": "not_found"}, "metadata": {"group": "A", "tier": "core", "probe": "place_not_found"}}
+{"id": "P-03", "question": "probe: place timeout → fallback (T3)", "expected": {"status": "timeout"}, "metadata": {"group": "A", "tier": "core", "probe": "place_timeout"}}
+{"id": "P-04", "question": "probe: invalid coordinates rejected (T4/T20)", "expected": {"status": "invalid_response"}, "metadata": {"group": "A", "tier": "core", "probe": "place_invalid_coords"}}
+{"id": "P-05", "question": "probe: route success (T5)", "expected": {"status": "success"}, "metadata": {"group": "B", "tier": "smoke", "probe": "route_success"}}
+{"id": "P-06", "question": "probe: route timeout (T6)", "expected": {"status": "timeout"}, "metadata": {"group": "B", "tier": "core", "probe": "route_timeout"}}
+{"id": "P-07", "question": "probe: quota exhausted → rate_limited (T19)", "expected": {"status": "rate_limited"}, "metadata": {"group": "E", "tier": "core", "probe": "quota_exhausted"}}
+{"id": "P-08", "question": "probe: cache hit freshness=cached (T13)", "expected": {"status": "success", "freshness": "cached"}, "metadata": {"group": "D", "tier": "core", "probe": "cache_hit"}}

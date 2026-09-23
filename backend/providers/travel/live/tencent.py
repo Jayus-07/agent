@@ -146,8 +146,14 @@ class TencentPlaceProvider:
             return self._fallback_stale_or(
                 key, ProviderStatus.RATE_LIMITED, str(e), required=required)
 
-        # 3) single-flight + budget 调底层
+        # 3) single-flight + budget 调底层（loader 内先重查缓存：leader
+        # 可能刚写入——并发 identical 请求只打一次 Provider，§56）
         def _load():
+            env2, st2 = pcache.cache_get(key)
+            if st2 == "hit":
+                poi_cached = _poi_from_cached(env2.data, required=required)
+                if poi_cached is not None:
+                    return poi_cached
             return call_with_budget(
                 self.operation,
                 lambda: self._live_map.resolve_place(clean_name, city),

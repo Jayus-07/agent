@@ -1,0 +1,6 @@
+{
+  "version": "1.0",
+  "case_count": 8,
+  "module": "travel-provider",
+  "schema_description": "STOP J9 Provider 层探针集——fake provider 注入验证七态结局/freshness/quota/缓存语义，离线可跑（needs_live=False）。真实第三方链路验收见 scripts/e2e_travel_providers.py。"
+}

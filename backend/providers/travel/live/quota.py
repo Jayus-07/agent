@@ -67,25 +67,48 @@ def _redis_incr(key: str) -> int | None:
         return None
 
 
+def _redis_get(key: str) -> int | None:
+    """读当前计数；Redis 不可用返回 None（调用方退化为进程内计数）。"""
+    try:
+        from backend.infra.redis.client import get_redis
+
+        r = get_redis()
+        if r is None:
+            return None
+        raw = r.get(key)
+        return int(raw) if raw else 0
+    except Exception:  # noqa: BLE001
+        logger.debug("[TravelProviderQuota] Redis 读取不可用", exc_info=True)
+        return None
+
+
 def check_and_consume(provider: str) -> int:
     """消耗一次调用额度并返回当前计数；超预算抛 BudgetExhausted。
 
     预算为 0（不限）时不做任何计数（零 Redis 往返，热路径零开销）。
+    「先查后增」：被拒的调用不消耗计数——软预算的语义是「已放行的
+    调用数 ≤ budget」，被拒尝试虚增计数会让窗口内的合法调用也被误停。
+    先 GET 后 INCR 存在微小竞态（多副本同时通过 GET 检查），对**软**
+    预算可接受（最坏多放行个位数请求，仍有熔断与第三方硬限兜底）。
     """
     budget = daily_budget(provider)
     if budget <= 0:
         return 0
 
     key = _today_key(provider)
-    count = _redis_incr(key)
-    if count is None:
+    current = _redis_get(key)
+    if current is None:  # Redis 不可用 → 进程内计数
         with _local_lock:
-            _local_counters[key] = _local_counters.get(key, 0) + 1
-            count = _local_counters[key]
+            current = _local_counters.get(key, 0)
+        if current >= budget:
+            raise BudgetExhausted(provider, budget)
+        with _local_lock:
+            _local_counters[key] = current + 1
+        return current + 1
 
-    if count > budget:
+    if current >= budget:
         raise BudgetExhausted(provider, budget)
-    return count
+    return _redis_incr(key)
 
 
 def current_usage(provider: str) -> int:
