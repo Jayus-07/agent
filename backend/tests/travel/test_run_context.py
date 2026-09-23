@@ -328,3 +328,27 @@ class TestRunLifecycle:
         pending = _ctx(tid, "t", "u").travel_pending
         assert pending["requested_slots"] == ["days"]
         assert pending["question_id"] != qid1  # 槽位集合变了 = 新追问
+
+    def test_t6_tenant_isolation(self):
+        """T6/G12：同 conversation 下 tenant-A/user-1 的 travel pending，
+        tenant-B/user-1 与 tenant-A/user-2 均不可见（store 三元组主键）。"""
+        tid = _tid()
+        sync_travel_run_to_context("tenant-A", "user-1", tid,
+                                   brief={"destination": "福州"},
+                                   missing_slots=["days"])
+        mark_domain_turn("tenant-A", "user-1", tid, domain="travel",
+                         action="travel_graph_node")
+
+        # 同 tenant 不同 user：无 pending → 不拦
+        rt_other_user = assemble_routing_context("tenant-A", "user-2", tid)
+        assert rt_other_user["active_domain"] == ""
+        assert rt_other_user["brief_summary"].get("travel_pending") is None
+        assert resolve_travel_pending("3天", rt_other_user) is None
+        # 不同 tenant 同 user：无 pending → 不拦
+        rt_other_tenant = assemble_routing_context("tenant-B", "user-1", tid)
+        assert rt_other_tenant["active_domain"] == ""
+        assert resolve_travel_pending("3天", rt_other_tenant) is None
+        # 正主仍命中（互不影响）
+        assert resolve_travel_pending(
+            "3天", assemble_routing_context("tenant-A", "user-1", tid)
+        ) is not None
