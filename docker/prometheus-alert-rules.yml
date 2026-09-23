@@ -491,3 +491,67 @@ groups:
         annotations:
           summary: "10 分钟内超过 10 张工单被 reaper 终态关闭"
           description: "closed_max_attempts/closed_total_deadline 说明坐席侧长期无人接单或派单目标不可达，属于服务体验事件而非技术故障时需人工复盘"
+  # ── Context Budget 生产防线（2026-09-23 生产收口 STOP E3）──────────
+  # 指标由 context_budget 产生：overflow / L5 结果 / 压缩延迟 / 计数器策略。
+  # 定位：overflow=预算防线被击穿（P0 信号）；L5 失败=深防线不可用（降级运行，
+  # 聊天不中断但摘要水位停摆，需人工关注水位推进）；锁冲突/水位线丢弃=
+  # 并发竞争正常现象，突增才告警。
+  - name: agent-platform-context-budget
+    interval: 30s
+    rules:
+      - alert: ContextBudgetOverflow
+        expr: increase(context_budget_overflow_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Context Budget 裁剪后仍溢出（防线被击穿）"
+          description: "10 分钟内出现 preflight 后仍超 hard budget——L1-L5 全部执行后仍超限。检查 LLM_CONTEXT_LENGTH/模型窗口配置是否与真实流量匹配，以及是否存在超大单条注入"
+
+      - alert: ContextL5FailureRateHigh
+        expr: |
+          sum(rate(context_l5_total{status="failed"}[15m]))
+            / clamp_min(sum(rate(context_l5_total[15m])), 0.001) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "L5 增量摘要失败率超过 50%"
+          description: "reason=db_error 多为水位线/迁移问题（确认 chat_sessions.summary_version 已落地）；reason=timeout 检查摘要模型 CONTEXT_L5_SUMMARY_MODEL 健康；lock_conflict/stale_waterline 属并发正常现象，不在此列"
+
+      - alert: ContextL5StaleWaterlineSpike
+        expr: increase(context_l5_total{reason="stale_waterline"}[15m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "15 分钟内 CAS 丢弃旧摘要超过 10 次"
+          description: "说明同会话并发摘要竞争异常激烈（正常应偶发）——检查是否有同一 session 的高并发写入源或 Redis 锁失效"
+
+      - alert: ContextL5LockConflictSpike
+        expr: increase(context_l5_total{reason="lock_conflict"}[15m]) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "15 分钟内 L5 单飞锁冲突超过 30 次"
+          description: "偶发为正常单飞语义；持续突增说明热点会话高并发或锁 TTL 过短被频繁重试"
+
+      - alert: ContextCompactionLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum(rate(context_compaction_latency_seconds_bucket[10m])) by (le, level)) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "压缩层 P95 延迟超过 30s"
+          description: "level=L5 时检查摘要模型（qwen3.8-flash）健康与 CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS；L4 为零 LLM 不应超 1s，超了说明事件循环被阻塞"
+
+      - alert: ContextTokenCounterFallback
+        expr: increase(context_token_counter_total{strategy="fallback"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Token 计数退化为 2 字符/token 粗估"
+          description: "fallback 策略说明模型名解析失败——检查 llm_models 注册表刷新与 get_request_model_name 链路；粗估会导致预算失真"
