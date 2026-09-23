@@ -664,12 +664,15 @@ class RAGPipeline:
         subject_type: str = "",
         department: str = "",
         permissions: Iterable[str] | None = None,
+        user_id: str = "",
+        tenant_id: str = "",
     ) -> str:
         """兼容出口：只取回答文本。需要 sources/meta 的调用方请用 ask_result。"""
         return self.ask_result(
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
-            permissions=permissions).answer
+            permissions=permissions,
+            user_id=user_id, tenant_id=tenant_id).answer
 
     def ask_result(
         self,
@@ -680,6 +683,8 @@ class RAGPipeline:
         subject_type: str = "",
         department: str = "",
         permissions: Iterable[str] | None = None,
+        user_id: str = "",
+        tenant_id: str = "",
     ) -> "AskOutcome":
         """提问入口（请求级返回，2026-09-23 D1-6）：3 段式 — 准备 → 执行 → 清理。
 
@@ -696,7 +701,8 @@ class RAGPipeline:
         answer = self._ask_inner(
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
-            permissions=permissions)
+            permissions=permissions,
+            user_id=user_id, tenant_id=tenant_id)
         from backend.rag.context import get_context
 
         try:
@@ -715,12 +721,15 @@ class RAGPipeline:
         subject_type: str = "",
         department: str = "",
         permissions: Iterable[str] | None = None,
+        user_id: str = "",
+        tenant_id: str = "",
     ) -> str:
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
         self._prepare_context(kb_id, question, kb_ids=kb_ids,
                               subject_type=subject_type, department=department,
-                              permissions=permissions)
+                              permissions=permissions,
+                              user_id=user_id, tenant_id=tenant_id)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
@@ -750,7 +759,8 @@ class RAGPipeline:
 
     def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None,
                          subject_type: str = "", department: str = "",
-                         permissions: Iterable[str] | None = None):
+                         permissions: Iterable[str] | None = None,
+                         user_id: str = "", tenant_id: str = ""):
         """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。
 
         主体属性以本次调用声明为准回填到运行态借读的权威身份实例
@@ -764,6 +774,13 @@ class RAGPipeline:
         from backend.rag.retrieval.kb_filter import build_kb_filter
 
         current_identity = get_context().identity
+        # D1-7：认证身份贯通到运行态身份实例——memory L2/L3 按真实 user_id
+        # 隔离，不再让全部匿名/直调流量共享 "default" 记忆空间。
+        # 请求体/调用参数永远不能伪造它（只来自网关验签后的 Principal）。
+        if user_id:
+            current_identity.user_id = user_id
+        if tenant_id:
+            current_identity.tenant_id = tenant_id
         effective_subject_type = (
             subject_type or getattr(current_identity, "subject_type", "")
         )

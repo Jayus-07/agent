@@ -117,6 +117,8 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         subject_type=principal.subject_type,
         department=principal.department,
         permissions=principal.permissions,
+        user_id=principal.user_id,
+        tenant_id=principal.tenant_id,
     )
     return {"answer": outcome.answer, "session_id": req.session_id,
             "sources": outcome.sources}

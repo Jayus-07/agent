@@ -804,7 +804,10 @@ class RAGChain:
         """
         if self._memory:
             try:
-                self._memory.end_turn(session_id, question, answer)
+                user_id = (getattr(get_context().identity, "user_id", "")
+                           or "default")
+                self._memory.end_turn(session_id, question, answer,
+                                      user_id=user_id)
             except Exception:
                 logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
                              exc_info=True)
@@ -954,7 +957,12 @@ class RAGChain:
 
     def _prepare(self, question: str, session_id: str) -> list:
         """准备阶段：Memory 启动会话，返回 chat_history。"""
-        l1 = self._memory.start_session(session_id, question) if self._memory else None
+        # D1-7：L1 检索按认证 user_id 隔离（context.identity 由 pipeline
+        # 从网关验签后的 Principal 回填）；空 = 直调/eval 无身份 → 保留
+        # 旧 "default" 兜底
+        user_id = getattr(get_context().identity, "user_id", "") or "default"
+        l1 = (self._memory.start_session(session_id, question, user_id=user_id)
+              if self._memory else None)
         return list(l1.messages) if l1 else []
 
     def _execute(self, question: str, chat_history: list) -> dict:
