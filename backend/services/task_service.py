@@ -166,7 +166,17 @@ def try_acquire_lease(task_id: str, *, worker: str | None = None,
             "now() - (%s || ' seconds')::interval))))",
             args,
         )
-        return execution_id if cur.rowcount > 0 else None
+        won = cur.rowcount > 0
+    # 租约事件观测（Phase2-F）：acquire 含 PENDING 认领与 stale 接管；
+    # conflict = 已有活跃 owner。单点计数（agent/index 执行入口共用）。
+    try:
+        from backend.observability.metrics import task_lease_events_total
+
+        task_lease_events_total.labels(
+            event="acquire" if won else "conflict").inc()
+    except Exception:  # noqa: BLE001 — 观测失败不影响认领
+        pass
+    return execution_id if won else None
 
 
 def renew_lease(task_id: str, execution_id: str, *,
@@ -371,7 +381,9 @@ def update_status(task_id: str, status: TaskStatus, *,
                 f"UPDATE tasks SET {', '.join(sets)} "
                 f"WHERE id = %s AND status = %s AND execution_id = %s", args)
             if cur.rowcount == 0:
+                _record_fenced_write("status", "fenced")
                 raise TaskLeaseLost(task_id, execution_id)
+            _record_fenced_write("status", "accepted")
             return
 
         args.extend([task_id, current.value])
@@ -425,6 +437,8 @@ def update_progress(task_id: str, node_name: str, progress: str = "",
                 (node_name, progress[:500], checkpoint_id, task_id,
                  execution_id, TaskStatus.RUNNING.value),
             )
+            _record_fenced_write("progress",
+                                 "accepted" if cur.rowcount > 0 else "fenced")
             return cur.rowcount > 0
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -497,6 +511,33 @@ def release_lease_for_defer(task_id: str, execution_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def _record_fenced_write(operation: str, result: str) -> None:
+    """fencing 写观测（Phase2-F）：低基数 operation/result，best-effort。"""
+    try:
+        from backend.observability.metrics import task_fenced_write_total
+
+        task_fenced_write_total.labels(operation=operation,
+                                       result=result).inc()
+    except Exception:  # noqa: BLE001 — 观测失败不影响任务（§34 best-effort）
+        pass
+
+
+def set_trace_id(task_id: str, trace_id: str) -> None:
+    """回填任务↔trace 关联（Phase2-F）：tasks.trace_id = 本次执行 trace。
+
+    控制面字段写（不带 execution_id fencing）：takeover 后新 owner 的
+    trace 覆盖旧值即期望行为——列语义=最新一次执行的 trace 关联，历史
+    execution 的 trace 经 trace.tags["task_id"] / session_id 反查。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET trace_id = %s, updated_at = now() "
+            "WHERE id = %s",
+            (str(trace_id)[:64], task_id),
+        )
+
+
 def mark_cancelled_if_status(task_id: str, expected: TaskStatus, *,
                              progress: str = "已取消",
                              error_message: str = "用户取消") -> bool:
@@ -555,6 +596,8 @@ def append_checkpoint(task_id: str, node_name: str, state: dict, *,
                 (task_id, node_name, payload, task_id, execution_id,
                  TaskStatus.RUNNING.value),
             )
+            _record_fenced_write("checkpoint",
+                                 "accepted" if cur.rowcount > 0 else "fenced")
             return cur.rowcount > 0
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(

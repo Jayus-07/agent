@@ -18,6 +18,9 @@ indexer 零侵入**。
 """
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
+
 from backend.models.task import TaskStatus
 from backend.shared.logger import logger
 
@@ -104,6 +107,24 @@ def _flags(task_id: str) -> tuple[bool, bool]:
     return is_cancel_requested(task_id), is_pause_requested(task_id)
 
 
+def _record_queue_wait(record) -> None:
+    """排队等待观测（Phase2-F）：queued_at → 租约认领的时长，best-effort。"""
+    try:
+        from backend.observability.metrics import task_queue_wait_seconds
+
+        if record.queued_at is None:
+            return
+        queued = record.queued_at
+        if queued.tzinfo is None:
+            queued = queued.replace(tzinfo=timezone.utc)
+        wait = (datetime.now(timezone.utc) - queued).total_seconds()
+        if 0 <= wait < 86400:
+            task_queue_wait_seconds.labels(
+                workflow=record.workflow).observe(wait)
+    except Exception:  # noqa: BLE001 — 观测失败不影响任务
+        logger.debug("[IndexTaskRuntime] 队列等待观测失败", exc_info=True)
+
+
 def run_with_task_state(db_task_id: str | None, upload_id: str,
                         run_index, *, retries: int = 0) -> dict:
     """索引原子节点的 TaskState 包装（execute_index_task_impl 专用）。
@@ -157,6 +178,7 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
     if not lease_id:
         logger.warning("[IndexTaskRuntime] %s lease held elsewhere, skip", db_task_id)
         return {"status": "error", "error": "running_elsewhere", "skipped": True}
+    _record_queue_wait(record)
 
     # ── Admission Control（Phase2 Step4）：lease 认领后申请容量槽位；
     #    拒绝 → defer（释放租约回 PENDING，抛 AdmissionDeferred 由壳层
@@ -187,14 +209,18 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
     hb = LeaseHeartbeat(db_task_id, lease_id)
     hb.start()
     ctx_token = set_execution(db_task_id, lease_id)
+    exit_status = "FAILED"  # 防御缺省：未被显式标记的异常出口按 FAILED 计
+    t0 = time.monotonic()
     try:
         # ── 节点开始前：标志已置位则不开跑（fencing 写）──
         cancelled, paused = _flags(db_task_id)
         if cancelled:
+            exit_status = "CANCELLED"
             TaskManager.mark_cancelled(db_task_id, message="用户取消（执行前拦截）",
                                        execution_id=lease_id)
             return {"status": "error", "error": "cancelled", "skipped": True}
         if paused:
+            exit_status = "PAUSED"
             TaskManager.mark_paused(db_task_id, message="用户暂停（执行前拦截）",
                                     execution_id=lease_id)
             return {"status": "error", "error": "paused", "skipped": True}
@@ -205,10 +231,12 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
             result = run_index()
         except TaskLeaseLost:
             # 心跳已在节点内判定丢失（罕见：run_index 内部经 fence 写触发）
+            exit_status = "LEASE_LOST"
             return _lease_lost_result("lease_lost")
         except Exception as e:
             # Phase2 Step2：分类落 error_type（不再落异常类名）；
             # 可重试但 budget 耗尽 → retry_exhausted 终态细分
+            exit_status = "FAILED"
             decision = classify_task_error(e)
             exhausted = decision.retryable and retries >= CELERY_MAX_RETRIES
             try:
@@ -230,6 +258,7 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
             if not task_service.update_progress(db_task_id, "index_document",
                                                 progress="索引节点完成",
                                                 execution_id=lease_id):
+                exit_status = "LEASE_LOST"
                 return _lease_lost_result("lease_lost")
             if not task_service.append_checkpoint(db_task_id, "index_document", {
                 "upload_id": upload_id,
@@ -237,16 +266,20 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
                 "doc_id": (result or {}).get("doc", {}).get("doc_id", "")
                 if isinstance((result or {}).get("doc"), dict) else "",
             }, execution_id=lease_id):
+                exit_status = "LEASE_LOST"
                 return _lease_lost_result("lease_lost")
         except TaskLeaseLost:
+            exit_status = "LEASE_LOST"
             return _lease_lost_result("lease_lost")
 
         cancelled, paused = _flags(db_task_id)
         if cancelled:
+            exit_status = "CANCELLED"
             TaskManager.mark_cancelled(db_task_id, message="用户取消（索引完成，结果保留）",
                                        execution_id=lease_id)
             raise IndexTaskCancelled(db_task_id)
         if paused:
+            exit_status = "PAUSED"
             TaskManager.mark_paused(db_task_id, message="用户暂停（索引完成，结果保留）",
                                     execution_id=lease_id)
             raise IndexTaskPaused(db_task_id)
@@ -261,13 +294,28 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
         except TaskLeaseLost:
             # 索引本体已完成（registry/向量库已持久），仅状态写被新 owner 顶替；
             # 恢复链会重跑本节点，由 registry duplicate/upsert 语义吸收
+            exit_status = "LEASE_LOST"
             logger.warning("[IndexTaskRuntime] %s fencing 拒绝 SUCCESS 写"
                            "（租约已被接管）", db_task_id)
             return _lease_lost_result("lease_lost")
+        exit_status = "SUCCESS"
         return result
     finally:
         hb.stop()
         clear_execution(ctx_token)
+        # Phase2-F 出口观测（best-effort）：出口状态 + 执行段耗时
+        try:
+            from backend.observability.metrics import (
+                task_execution_duration_seconds,
+                task_terminal_total,
+            )
+
+            task_terminal_total.labels(
+                workflow=record.workflow, status=exit_status).inc()
+            task_execution_duration_seconds.labels(
+                workflow=record.workflow).observe(time.monotonic() - t0)
+        except Exception:  # noqa: BLE001 — 观测失败不影响任务
+            logger.debug("[IndexTaskRuntime] 出口观测失败", exc_info=True)
         # 终态/retry/租约丢失统一出口释放容量槽位（owner CAS 幂等；
         # defer 路径未持有 token，释放为 no-op）——retry countdown 期间
         # 不占 admission 容量

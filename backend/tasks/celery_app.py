@@ -41,7 +41,8 @@ celery_app = Celery(
              "backend.tasks.cs_qa_tasks",  # 批次D：客服质检每日报表（beat）
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
-             "backend.tasks.signals"],        # 运行时埋点（worker/queue/耗时/异常）
+             "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
+             "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
 )
 
 celery_app.conf.update(

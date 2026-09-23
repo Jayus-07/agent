@@ -140,6 +140,21 @@ def _revoke_queued(task_id: str) -> None:
 # 入队 / 恢复
 # ═══════════════════════════════════════════════════
 
+def _record_enqueued(workflow: str, dispatch_type: str) -> None:
+    """投递观测（Phase2-F）：低基数 workflow/dispatch_type，best-effort。
+
+    放在 enqueue_task/_redispatch_index 两个投递原语（API 直投与
+    dispatch_task 派发共同经过的唯一位置），不重复计数。
+    """
+    try:
+        from backend.observability.metrics import task_enqueued_total
+
+        task_enqueued_total.labels(
+            workflow=workflow, dispatch_type=dispatch_type).inc()
+    except Exception:  # noqa: BLE001 — 观测失败不影响投递
+        logger.debug("[TaskManager] 投递观测失败", exc_info=True)
+
+
 def enqueue_task(record: TaskRecord, *, dispatch_type: str = "initial") -> str | None:
     """interactive_agent 侧投递（queue 由 QueueRouter 决定，Step3 收口）。
 
@@ -152,6 +167,7 @@ def enqueue_task(record: TaskRecord, *, dispatch_type: str = "initial") -> str |
 
     clear_flags(record.id)
     route = resolve_for_task(record)  # 未知 workflow 在此 fail-closed（不被下方 broker 兜底吞掉）
+    _record_enqueued(route.workflow, dispatch_type)
     try:
         from backend.tasks.agent_tasks import execute_agent_task
 
@@ -177,6 +193,7 @@ def _redispatch_index(task_id: str, dispatch_type: str) -> str | None:
     """
     from backend.tasks.index_task_runtime import redispatch_index_task
 
+    _record_enqueued("rag_index", dispatch_type)
     result = redispatch_index_task(task_id, dispatch_type=dispatch_type)
     if result is None:
         raise RuntimeError(f"rag_index 任务 {task_id} 缺 index_kwargs，无法重投")
@@ -349,6 +366,16 @@ def sweep_stale_executions() -> dict:
     stale_ids = task_service.find_stale_executions(
         grace_seconds=TASK_RECOVERY_GRACE_SECONDS,
         legacy_threshold_seconds=legacy_threshold)
+
+    def _record_recovery(result: str) -> None:
+        # Phase2-F 恢复观测（best-effort）：recovered|exhausted|reverted
+        try:
+            from backend.observability.metrics import task_recovery_total
+
+            task_recovery_total.labels(result=result).inc()
+        except Exception:  # noqa: BLE001 — 观测失败不影响恢复
+            logger.debug("[TaskManager] 恢复观测失败", exc_info=True)
+
     recovered: list[str] = []
     exhausted: list[str] = []
     for task_id in stale_ids:
@@ -365,6 +392,7 @@ def sweep_stale_executions() -> dict:
                     message=(
                         f"自动恢复 {TASK_MAX_LEASE_RECOVERIES} 次后仍失败"
                         "（租约持续过期），终态收口；可从管理端重试")):
+                _record_recovery("exhausted")
                 exhausted.append(task_id)
                 clear_flags(task_id)
                 publish_event(task_id, "failed",
@@ -382,10 +410,12 @@ def sweep_stale_executions() -> dict:
             dispatch_task(record, dispatch_type="recovery")
         except Exception as e:
             # 重投失败：回滚认领，保持 stale 语义等下一轮（不丢任务）
+            _record_recovery("reverted")
             task_service.revert_recovery_claim(task_id)
             logger.error("[TaskManager] recovery redispatch 失败，已回滚 %s: %s",
                          task_id, e)
             continue
+        _record_recovery("recovered")
         recovered.append(task_id)
         publish_event(task_id, "recovering",
                       message="检测到 Worker 失联，已自动恢复重投（从 checkpoint 续跑）")

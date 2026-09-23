@@ -49,3 +49,15 @@ scrape_configs:
     # celery_task_{sent,succeeded,failed,retried}_total / celery_task_runtime_seconds
     static_configs:
       - targets: ["celery-exporter:9808"]
+
+  - job_name: task-workers
+    # Phase2-F（2026-09-23）：worker 运行时指标——task_terminal/retry/
+    # recovery/lease_events/fenced_write/execution_duration/queue_wait/
+    # authorization_denied/admission（multiprocess 聚合，容器内 9809，
+    # 不发布宿主机）。每个 worker 副本一个 target（多副本水平扩展）。
+    static_configs:
+      - targets:
+          - "agent-worker:9809"
+          - "rag-index-worker:9809"
+          - "maintenance-worker:9809"
+          - "report-worker:9809"

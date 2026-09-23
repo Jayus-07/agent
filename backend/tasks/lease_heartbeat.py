@@ -83,6 +83,14 @@ class LeaseHeartbeat:
                 continue
             if not ok:
                 self._lost.set()
+                try:
+                    from backend.observability.metrics import (
+                        task_lease_events_total,
+                    )
+
+                    task_lease_events_total.labels(event="renew_fail").inc()
+                except Exception:  # noqa: BLE001 — 观测失败不影响 fencing
+                    pass
                 logger.warning(
                     "[LeaseHeartbeat] %s 租约丢失（execution=%s 已被接管或"
                     "过期），停止续租；后续写入将被 fencing 拒绝",

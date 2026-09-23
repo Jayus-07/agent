@@ -182,23 +182,120 @@ class TaskGraphExecutor:
     # ── 主入口 ────────────────────────────────────────────
     def execute(self, record: TaskRecord, *,
                 execution_id: str = "", heartbeat: Any = None) -> dict:
-        """执行/恢复任务。返回任务输出 dict（Worker 落 tasks.output）。
-
-        恢复判定：record.status ∈ {WAITING_USER, PAUSED, FAILED(重试)} 且
-        thread_id 存在 → payload=None，LangGraph 从最近 checkpoint 续跑。
+        """执行/恢复任务（薄壳）：绑定租约上下文 + 任务级 trace 生命周期。
 
         Phase2 Step1：execution_id（租约认领返回值）传入后，本执行器的全部
         TaskState/checkpoint/event 写走 fencing——租约被接管的旧 Worker 在
         下一次写点被 TaskLeaseLost 拒绝并退出（heartbeat 用于节点边界零成本
         预检，None 时退化为逐次 DB 校验）。
-        """
-        from backend.config import MAIN_GRAPH_RECURSION_LIMIT
-        from backend.services import task_service
 
+        Phase2-F：execution_id 非空（真实 worker 执行）时绑定任务级 trace
+        （session_id=thread_id 携带 task 关联；tags 记录 task_id/execution_id/
+        queue），任何出口（SUCCESS/WAITING_USER/授权拒绝/租约丢失/异常）都在
+        finally 收口——trace 观测 best-effort，失败绝不影响任务执行。
+        """
         task_id = record.id
         self._task_id = task_id
         self._execution_id = execution_id
         self._heartbeat = heartbeat
+
+        trace_record = self._start_task_trace(record) if execution_id else None
+        try:
+            result = self._execute_inner(record, execution_id=execution_id,
+                                         heartbeat=heartbeat)
+        except BaseException as exc:  # noqa: BLE001 — 只读不吞，转给 finally 收口
+            self._finish_task_trace(trace_record, record, result=None, exc=exc)
+            raise
+        self._finish_task_trace(trace_record, record, result=result, exc=None)
+        return result
+
+    def _start_task_trace(self, record: TaskRecord):
+        """任务级 trace 绑定（Phase2-F，best-effort）：None = 观测不可用。
+
+        关联模型（§三十八：可关联优先于单一 trace 形状）：
+        - session_id = thread_id（含 task_id，跨 retry/recovery/resume 不变）
+        - tags["task_id"]/tags["execution_id"] = 本 execution 的归属
+        - tasks.trace_id 回填 = 任务行 ↔ 最新执行 trace 双向可查
+        - 每次 execution 一个 trace（旧 execution 在自身 finally 收口，
+          不制造跨 takeover 的 dangling span）
+        """
+        try:
+            import time as _time
+
+            from backend.observability.tracer import (
+                WorkflowKind,
+                trace_collector,
+            )
+
+            self._trace_t0 = _time.monotonic()
+            query = (record.input or {}).get("query", "")
+            trace = trace_collector.start(
+                str(query)[:200],
+                session_id=record.thread_id or f"task-{record.id}",
+                workflow_name=record.graph_name,
+                workflow_kind=WorkflowKind.LG_WORKFLOW.value)
+            trace.tags.update({
+                "task_id": record.id,
+                "execution_id": self._execution_id or "",
+                "queue": record.queue or "",
+            })
+            trace_collector.start_span(
+                "root", parent_id=None, name="异步任务执行", type="workflow",
+                input={
+                    "task_id": record.id,
+                    "execution_id": self._execution_id,
+                    "thread_id": record.thread_id or f"task-{record.id}",
+                    "retry_count": record.retry_count,
+                    "recovery_count": record.recovery_count,
+                })
+            from backend.services import task_service
+
+            task_service.set_trace_id(record.id, trace.id)
+            return trace
+        except Exception:  # noqa: BLE001 — 观测失败不影响任务（§三十四）
+            logger.debug("[TaskExecutor] 任务 trace 绑定失败（best-effort）",
+                         exc_info=True)
+            return None
+
+    def _finish_task_trace(self, trace_record, record: TaskRecord, *,
+                           result: dict | None,
+                           exc: BaseException | None) -> None:
+        if trace_record is None:
+            return
+        try:
+            import time as _time
+
+            from backend.observability.tracer import trace_collector
+
+            blocked = bool(result and result.get("blocked"))
+            if exc is not None or blocked:
+                # 失败出口：root span 显式 error，顶层状态聚合不再误标 success
+                trace_collector.end_open_span("root", status="error")
+            if exc is not None:
+                answer = f"执行异常: {exc}"[:200]
+            elif result and result.get("status") == TaskStatus.WAITING_USER.value:
+                answer = "等待用户输入（interrupt）"
+            elif result:
+                answer = str(result.get("answer", ""))[:200]
+            else:
+                answer = ""
+            trace_collector.finish(
+                trace_record, answer,
+                total_ms=int((_time.monotonic()
+                              - getattr(self, "_trace_t0", _time.monotonic()))
+                             * 1000),
+                model="")
+        except Exception:  # noqa: BLE001 — 收口失败只记日志
+            logger.debug("[TaskExecutor] 任务 trace 收口失败（best-effort）",
+                         exc_info=True)
+
+    def _execute_inner(self, record: TaskRecord, *, execution_id: str = "",
+                       heartbeat: Any = None) -> dict:
+        """执行主体（原 execute 逻辑；trace/租约上下文已由薄壳绑定）。"""
+        from backend.config import MAIN_GRAPH_RECURSION_LIMIT
+        from backend.services import task_service
+
+        task_id = record.id
         query = (record.input or {}).get("query", "")
         thread_id = record.thread_id or f"task-{task_id}"
 
@@ -237,6 +334,16 @@ class TaskGraphExecutor:
             request_ctx = self._build_request_context(record)
         except TaskAuthorizationDenied as exc:
             logger.warning("[TaskExecutor] %s 授权解析失败: %s", task_id, exc)
+            # Phase2-F：授权拒绝观测（低基数 label，best-effort）
+            try:
+                from backend.observability.metrics import (
+                    task_authorization_denied_total,
+                )
+
+                task_authorization_denied_total.labels(
+                    workflow=record.graph_name).inc()
+            except Exception:  # noqa: BLE001 — 观测失败不影响 fail-closed 语义
+                pass
             task_service.update_status(
                 task_id, TaskStatus.FAILED,
                 error_message=f"授权解析失败: {exc}",

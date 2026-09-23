@@ -47,6 +47,25 @@ llm_tokens_total = Counter(
     labelnames=("model", "direction"),  # direction: prompt | completion
 )
 
+# ── Model Governance STOP C 指标（2026-09-23）──
+# Label 基数红线：model/provider/status/error_type 均为有限枚举集；
+# 禁止 user_id / session_id / trace_id / request_id 进 label（同下方禁令）。
+llm_requests_total = Counter(
+    "llm_requests_total",
+    "LLM 调用次数（按登记模型 / provider / 结果）",
+    labelnames=("model", "provider", "status"),  # status: ok | error
+)
+llm_failures_total = Counter(
+    "llm_failures_total",
+    "LLM 调用失败次数（按登记模型 / 错误分类）",
+    labelnames=("model", "error_type"),  # error_type: error_taxonomy 分类
+)
+llm_fallback_total = Counter(
+    "llm_fallback_total",
+    "fallback 接管次数（primary 失败转备用模型成功）",
+    labelnames=("primary_model", "fallback_model"),
+)
+
 # =====================================================
 # Unified Token Usage Metric (P0 - Backward Compatible)
 # =====================================================
@@ -1164,6 +1183,76 @@ def record_admission_active_global(active: int) -> None:
         pass
 
 
+# ── 任务运行时指标（Phase2-F Worker Observability，2026-09-23）────
+# 基数控制：workflow / queue / status / reason / event / operation /
+# result / dispatch_type 全部为受控枚举；task_id / execution_id /
+# user_id / tenant_id / trace_id 禁止作为 label（高基数，走结构化日志
+# 与 trace attribute）。错误原因必须用 error_taxonomy 词表，禁止
+# str(exc) 入 label。
+#
+# 进程归属：task_enqueued_total 在投递进程计数（API 进程走 app /metrics；
+# resume/recovery 重投在 worker 计数走 worker 端点），其余在 worker
+# 进程计数，经 worker metrics 端点（multiprocess 聚合）暴露。
+
+task_enqueued_total = Counter(
+    "task_enqueued_total",
+    "任务投递总数（initial/resume/recovery 统一口径）",
+    labelnames=("workflow", "dispatch_type"),  # dispatch_type=initial|resume|recovery|retry
+)
+
+task_terminal_total = Counter(
+    "task_terminal_total",
+    "任务终态/出口总数（含非终态出口）",
+    labelnames=("workflow", "status"),
+    # status = SUCCESS|FAILED|CANCELLED|PAUSED|WAITING_USER|LEASE_LOST|
+    #          RETRY_SCHEDULED（本轮以等待重试收口，非终态失败）
+)
+
+task_execution_duration_seconds = Histogram(
+    "task_execution_duration_seconds",
+    "worker 执行段耗时（租约认领→出口，不含排队）",
+    labelnames=("workflow",),
+    buckets=(1, 5, 15, 30, 60, 120, 300, 600, 1800),
+)
+
+task_queue_wait_seconds = Histogram(
+    "task_queue_wait_seconds",
+    "排队等待时长（worker 拾取租约成功 - tasks.queued_at）",
+    labelnames=("workflow",),
+    buckets=(0.5, 1, 5, 10, 30, 60, 300, 900, 3600),
+)
+
+task_lease_events_total = Counter(
+    "task_lease_events_total",
+    "执行租约事件总数",
+    labelnames=("event",),  # acquire|conflict|renew_fail
+)
+
+task_fenced_write_total = Counter(
+    "task_fenced_write_total",
+    "fencing 写结果总数（execution_id 条件写）",
+    labelnames=("operation", "result"),  # operation=status|progress|checkpoint; result=accepted|fenced
+)
+
+task_retry_total = Counter(
+    "task_retry_total",
+    "任务重试调度总数（impl 层显式 retry）",
+    labelnames=("workflow",),
+)
+
+task_recovery_total = Counter(
+    "task_recovery_total",
+    "stale 恢复 sweep 结果总数",
+    labelnames=("result",),  # recovered|exhausted|reverted
+)
+
+task_authorization_denied_total = Counter(
+    "task_authorization_denied_total",
+    "执行时授权解析拒绝总数（fail-closed）",
+    labelnames=("workflow",),
+)
+
+
 __all__ = [
     "chat_request_total",
     "chat_request_duration_seconds",
@@ -1197,6 +1286,16 @@ __all__ = [
     "task_admission_expired_total",
     "task_admission_defer_total",
     "record_admission_active_global",
+    # 任务运行时（Phase2-F Worker Observability）
+    "task_enqueued_total",
+    "task_terminal_total",
+    "task_execution_duration_seconds",
+    "task_queue_wait_seconds",
+    "task_lease_events_total",
+    "task_fenced_write_total",
+    "task_retry_total",
+    "task_recovery_total",
+    "task_authorization_denied_total",
     # 运营指标
     "rag_query_total",
     "feedback_total",

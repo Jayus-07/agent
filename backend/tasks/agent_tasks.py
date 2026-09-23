@@ -26,6 +26,8 @@ Phase2 Step2（错误分类）：
 from __future__ import annotations
 
 import socket
+import time
+from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -180,6 +182,28 @@ def _defer_admission(task_id: str, record, lease_id: str,
                                    countdown=delay)
 
 
+def _record_queue_wait(record) -> None:
+    """排队等待观测（Phase2-F）：queued_at → 租约认领的时长，best-effort。
+
+    只在租约认领成功（=拾取时刻）后调用；负值（时钟偏移）与超过 1 天的
+    陈旧行不计入分布，避免污染直方图。
+    """
+    try:
+        from backend.observability.metrics import task_queue_wait_seconds
+
+        if record.queued_at is None:
+            return
+        queued = record.queued_at
+        if queued.tzinfo is None:
+            queued = queued.replace(tzinfo=timezone.utc)
+        wait = (datetime.now(timezone.utc) - queued).total_seconds()
+        if 0 <= wait < 86400:
+            task_queue_wait_seconds.labels(
+                workflow=record.workflow).observe(wait)
+    except Exception:  # noqa: BLE001 — 观测失败不影响任务
+        logger.debug("[AgentTask] 队列等待观测失败", exc_info=True)
+
+
 def execute_agent_task_impl(task_id: str, *,
                             retries: int = 0, hostname: str = "") -> dict:
     """任务执行主体（Celery task 与 eager 测试共用的纯函数）。"""
@@ -238,12 +262,14 @@ def execute_agent_task_impl(task_id: str, *,
     logger.info("[AgentTask] %s lease acquired execution_id=%s worker=%s",
                 task_id, lease_id[:8], hostname or "unknown")
 
-    hb = LeaseHeartbeat(task_id, lease_id)
-    hb.start()
-    ctx_token = set_execution(task_id, lease_id)
+    # 排队等待观测（Phase2-F）：租约认领成功 = 拾取时刻；queued_at 缺失
+    # （重投/恢复链路未刷新）时跳过，不臆造 0。
+    _record_queue_wait(record)
+
     # ── Admission Control（Phase2 Step4）：lease 认领成功后申请容量槽位。
     #    拒绝（容量满 / fail-closed）→ defer 出口：不执行任何节点。
-    #    allowed=True 时 token owner=本次 execution_id，续期随心跳走。
+    #    位置必须在 heartbeat/执行上下文之前——defer 早退路径不得残留
+    #    ContextVar 与心跳线程（Phase2-F §32 泄漏修复，对齐 index 顺序）。
     from backend.tasks import admission
 
     decision = admission.acquire_for_execution(
@@ -251,15 +277,25 @@ def execute_agent_task_impl(task_id: str, *,
     if not decision.allowed:
         _defer_admission(task_id, record, lease_id, decision.reason)
         return {"status": "ADMISSION_DEFERRED"}
+
+    t0 = time.monotonic()
+    hb = LeaseHeartbeat(task_id, lease_id)
+    hb.start()
+    ctx_token = set_execution(task_id, lease_id)
+    exit_status = "FAILED"  # 防御缺省：未被显式标记的异常出口按 FAILED 计
     try:
         if retries:
+            from backend.observability.metrics import task_retry_total
+
+            task_retry_total.labels(workflow=record.workflow).inc()
             task_service.increment_retry(task_id)
             logger.warning("[AgentTask] retry #%d for %s (从 checkpoint 续跑)",
                            retries, task_id)
 
         executor = TaskGraphExecutor()
         output = executor.execute(record, execution_id=lease_id, heartbeat=hb)
-        return {"status": str(output.get("status", TaskStatus.SUCCESS.value)),
+        exit_status = str(output.get("status", TaskStatus.SUCCESS.value))
+        return {"status": exit_status,
                 "output": output}
     except SoftTimeLimitExceeded as exc:
         # SoftTimeLimit：runtime 层 timeout（进程仍活着）。分类器映射为
@@ -273,6 +309,7 @@ def execute_agent_task_impl(task_id: str, *,
                                             decision.error_type,
                                             decision.retryable)
         if retry_now:
+            exit_status = "RETRY_SCHEDULED"
             _fail(task_id, f"可重试错误（{decision.error_type}）: {exc}",
                   TaskStatus.FAILED,
                   progress=f"等待第 {retries + 1}/{record.max_retries} 次重试"
@@ -284,12 +321,14 @@ def execute_agent_task_impl(task_id: str, *,
                 delay=delay, retry_count=retries,
                 max_retries=int(record.max_retries))
         # budget 耗尽（或分类不可重试）：终态 FAILED，checkpoint 保留
+        exit_status = "FAILED"
         _finalize_failure(task_id, exc, record=record, retries=retries,
                           execution_id=lease_id,
                           timeout_limit_ms=None)
         raise
     except TaskLeaseLost:
         # 租约被接管：禁止写任何状态/事件，立即退出（恢复链由新 owner 继续）
+        exit_status = "LEASE_LOST"
         logger.warning("[AgentTask] %s 租约被接管（execution=%s），本 executor "
                        "退出且不写状态", task_id, lease_id[:8])
         return {"status": "LEASE_LOST"}
@@ -298,10 +337,12 @@ def execute_agent_task_impl(task_id: str, *,
         from backend.orchestration.checkpoint import TaskCancelled, TaskPaused
 
         if isinstance(e, TaskCancelled):
+            exit_status = TaskStatus.CANCELLED.value
             _fail(task_id, "用户取消", TaskStatus.CANCELLED, "已取消",
                   execution_id=lease_id)
             return {"status": "CANCELLED"}
         if isinstance(e, TaskPaused):
+            exit_status = TaskStatus.PAUSED.value
             _fail(task_id, "用户暂停", TaskStatus.PAUSED,
                   "已暂停，可 resume 恢复", execution_id=lease_id)
             return {"status": "PAUSED"}
@@ -316,14 +357,29 @@ def execute_agent_task_impl(task_id: str, *,
             decision = classify_task_error(e)
             _, delay = _budget_decision(record, retries,
                                         decision.error_type, decision.retryable)
+            exit_status = "RETRY_SCHEDULED"
             raise TaskRetryScheduled(
                 e, error_type=decision.error_type, retryable=True,
                 delay=delay, retry_count=retries,
                 max_retries=int(record.max_retries))
+        exit_status = "FAILED"
         raise  # 终态已落库：上抛原始异常 → Celery FAILURE + signals 补 traceback
     finally:
         hb.stop()
         clear_execution(ctx_token)
+        # Phase2-F 出口观测（best-effort）：出口状态 + 执行段耗时
+        try:
+            from backend.observability.metrics import (
+                task_execution_duration_seconds,
+                task_terminal_total,
+            )
+
+            task_terminal_total.labels(
+                workflow=record.workflow, status=exit_status).inc()
+            task_execution_duration_seconds.labels(
+                workflow=record.workflow).observe(time.monotonic() - t0)
+        except Exception:  # noqa: BLE001 — 观测失败不影响任务
+            logger.debug("[AgentTask] 出口观测失败", exc_info=True)
         # 终态/retry/租约丢失统一出口释放容量槽位（owner CAS 幂等：
         # 租约已易主或 token 已过期时零副作用；defer 路径未持有 token，
         # 释放为 no-op）——retry countdown 期间不占 admission 容量
