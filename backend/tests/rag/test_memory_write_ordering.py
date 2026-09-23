@@ -19,8 +19,8 @@ class _MemoryRecorder:
     def __init__(self):
         self.calls = []
 
-    def end_turn(self, session_id, question, answer):
-        self.calls.append((session_id, question, answer))
+    def end_turn(self, session_id, question, answer, user_id="default"):
+        self.calls.append((session_id, question, answer, user_id))
 
 
 class _Decision:
@@ -82,7 +82,7 @@ def test_all_gates_pass_writes_memory_once():
     memory = _MemoryRecorder()
     chain = _make_chain(memory)
     calls = _success_flow(chain, memory)
-    assert calls == [("s-1", "问题Q", "ANSWER")]
+    assert calls == [("s-1", "问题Q", "ANSWER", "default")]
 
 
 def test_claim_reject_does_not_write_memory():
@@ -141,7 +141,7 @@ def test_selfcorrect_success_writes_final_answer_once():
     out = chain._respond({"answer": "raw", "context": []}, None,
                          "问题Q", "s-1", 0.1)
     assert out == "修正后的回答"
-    assert memory.calls == [("s-1", "问题Q", "修正后的回答")]
+    assert memory.calls == [("s-1", "问题Q", "修正后的回答", "default")]
 
 
 def test_verify_no_longer_writes_memory_directly():
