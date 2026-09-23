@@ -6,8 +6,9 @@
   一律经本模块 resolve，禁止业务代码自拼 queue 字符串
 
 不做的事（后续 Step 边界）：
-- 并发/准入/优先级/租户限流（Step4 Admission）
-- Worker 拓扑 / concurrency / prefetch（Step5 资源拆分）
+- 并发/准入/优先级/租户限流（Step4 Admission 已收口于 tasks/admission/）
+- Worker 拓扑 / concurrency / prefetch（Step5：docker-compose 只声明
+  哪个 worker 消费哪些物理队列，本模块仍是唯一业务投递决策源）
 - 幂等语义（Step6）
 
 Fail-closed 原则：未登记 workflow 抛 QueueRoutingError 阻止入队——
@@ -26,8 +27,10 @@ from dataclasses import dataclass
 
 from backend.config.tasks import (
     CELERY_AGENT_QUEUE,
+    CELERY_MAINTENANCE_QUEUE,
     CELERY_METADATA_SHADOW_QUEUE,
     CELERY_RAG_INDEX_QUEUE,
+    CELERY_REPORT_QUEUE,
     QUEUE_ROUTING_UNKNOWN_FALLBACK,
 )
 from backend.shared.logger import logger
@@ -60,15 +63,14 @@ class QueueRoute:
 # Registry（模块级常量：单测可 monkeypatch 模拟配置变化，Case J）
 # ═══════════════════════════════════════════════════
 
-# logical workload class → physical queue。
-# report / maintenance 当前共享 agent worker（物理映射 Step5 待拆）：
-# 只启动有消费者的物理队列，不为队列名字漂亮创建无人消费的 queue。
+# logical workload class → physical queue（Phase2 Step5：五 workload 五队列，
+# 每个物理队列由专属 worker 池消费——资源隔离，互不挤占并发槽）。
 _LOGICAL_QUEUES: dict[str, str] = {
     "interactive_agent": CELERY_AGENT_QUEUE,
     "rag_index": CELERY_RAG_INDEX_QUEUE,
     "metadata_shadow": CELERY_METADATA_SHADOW_QUEUE,
-    "report": CELERY_AGENT_QUEUE,        # Step5 待拆 report worker
-    "maintenance": CELERY_AGENT_QUEUE,   # Step5 待拆 maintenance worker
+    "report": CELERY_REPORT_QUEUE,
+    "maintenance": CELERY_MAINTENANCE_QUEUE,
 }
 
 # workflow（= tasks.graph_name，Phase1 口径单一事实源）→ (workload_class, reason)

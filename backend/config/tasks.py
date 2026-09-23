@@ -39,7 +39,28 @@ TASK_RETRY_MAX_DELAY = int(os.getenv("TASK_RETRY_MAX_DELAY",
 TASK_RETRY_JITTER = os.getenv("TASK_RETRY_JITTER", "true").lower() != "false"
 
 # 单 Worker 并发槽（prefetch=1 + 该并发 = 公平排队）
+# Phase2 Step5：per-workload 并发独立配置（compose command 消费）。
+# CELERY_WORKER_CONCURRENCY 保留为 agent-worker 的兼容回退源。
 CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "4"))
+
+# per-workload 并发（依据见 Step5 验收报告 §参数矩阵）：
+# - agent：IO-bound（LLM API/RAG/SQL），latency 优先
+# - rag_index：CPU/RAM 重（文档解析 + 本地 embedding/rerank 懒加载，每
+#   prefork 子进程各持一份模型内存），保守 2 防 RAM/VRAM 翻倍
+# - metadata_shadow：沿用既有默认 2
+# - maintenance：原子幂等扫描（sweep/zombie CAS），并行无益且 1 并发保证
+#   不重叠执行；准时性由专属 worker 保证
+# - report：低频长任务（每日 qa_daily_report），隔离即可无需吞吐
+AGENT_WORKER_CONCURRENCY = int(
+    os.getenv("AGENT_WORKER_CONCURRENCY", str(CELERY_WORKER_CONCURRENCY)))
+RAG_INDEX_WORKER_CONCURRENCY = int(os.getenv("RAG_INDEX_WORKER_CONCURRENCY", "2"))
+METADATA_SHADOW_WORKER_CONCURRENCY = int(
+    os.getenv("METADATA_SHADOW_WORKER_CONCURRENCY", "2"))
+MAINTENANCE_WORKER_CONCURRENCY = int(os.getenv("MAINTENANCE_WORKER_CONCURRENCY", "1"))
+REPORT_WORKER_CONCURRENCY = int(os.getenv("REPORT_WORKER_CONCURRENCY", "1"))
+
+# 长任务 worker 的 prefetch 基线：1（防止单 worker 进程囤积消息造成
+# head-of-line blocking；全局显式配置于 celery_app.worker_prefetch_multiplier）
 
 # ── 任务运行时 ──────────────────────────────────────────────
 # Redis 控制标志/事件通道前缀（与 infra.redis REDIS_KEY_PREFIX 同源语义）
@@ -96,8 +117,7 @@ CELERY_BROKER_VISIBILITY_TIMEOUT = int(
     os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT", "1950"))
 
 # ── 队列名（Phase2 Step3：物理队列名唯一在此与 queue_router 消费）────
-# agent 主队列：interactive_agent workload 的物理队列（beat maintenance/
-# report 暂共享，Step5 拆分时只改 queue_router 的 logical→physical 映射）。
+# agent 主队列：interactive_agent workload 的物理队列（agent-worker 独占消费）。
 CELERY_AGENT_QUEUE = os.getenv("CELERY_AGENT_QUEUE", "agent")
 
 # ── RAG 上传索引队列化（固定启用，无开关）──────────────────
@@ -111,6 +131,12 @@ CELERY_RAG_INDEX_QUEUE = os.getenv("CELERY_RAG_INDEX_QUEUE", "rag_index")
 CELERY_METADATA_SHADOW_QUEUE = os.getenv(
     "CELERY_METADATA_SHADOW_QUEUE", "rag_metadata_shadow"
 )
+
+# Phase2 Step5：maintenance / report 独立物理队列（各自专属 worker 消费），
+# 不再与 interactive_agent 共享 agent 队列——beat 周期扫描不再排在用户
+# 任务 backlog 之后，报表长任务不再占用 agent 并发槽。
+CELERY_MAINTENANCE_QUEUE = os.getenv("CELERY_MAINTENANCE_QUEUE", "maintenance")
+CELERY_REPORT_QUEUE = os.getenv("CELERY_REPORT_QUEUE", "report")
 
 # 未登记 workflow 的路由降级队列（Phase2 Step3 queue_router 消费）。
 # 默认空 = fail-closed（未登记直接拒绝入队）；显式设为物理队列名时

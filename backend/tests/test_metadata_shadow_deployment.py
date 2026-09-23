@@ -20,9 +20,14 @@ def _queue_arg(command: list[str]) -> str:
 
 
 def _environment(service: dict) -> dict[str, str]:
+    # Phase2 Step5：worker environment 改为 mapping 形式（支撑 YAML anchor
+    # 合并），兼容旧的 list（KEY=VALUE）形式。
+    env = service.get("environment") or {}
+    if isinstance(env, dict):
+        return {str(k): str(v) for k, v in env.items()}
     return {
         item.split("=", 1)[0]: item.split("=", 1)[1]
-        for item in service.get("environment", [])
+        for item in env
         if "=" in item
     }
 
@@ -55,7 +60,9 @@ def test_fresh_database_init_includes_metadata_migrations():
 def test_app_and_index_worker_default_to_full_dev_cascade_without_shadow():
     services = _compose()["services"]
 
-    for service_name in ("app", "worker"):
+    # Phase2 Step5：索引执行体拆至 rag-index-worker（agent-worker 保留
+    # cascade 指针供 agent 图内 RAG 检索使用）。
+    for service_name in ("app", "agent-worker", "rag-index-worker"):
         environment = _environment(services[service_name])
         assert environment["METADATA_CASCADE_ENABLED"] == (
             "${METADATA_CASCADE_ENABLED:-true}"
@@ -78,9 +85,11 @@ def test_app_and_index_worker_default_to_full_dev_cascade_without_shadow():
 
 
 def test_primary_worker_does_not_consume_shadow_queue():
-    worker = _compose()["services"]["worker"]
+    # Phase2 Step5：主 worker 更名 agent-worker 且收窄为仅消费 agent；
+    # rag_index 也已拆独立池，均不消费 shadow 队列。
+    worker = _compose()["services"]["agent-worker"]
 
-    assert _queue_arg(worker["command"]) == "agent,rag_index"
+    assert _queue_arg(worker["command"]) == "${CELERY_AGENT_QUEUE:-agent}"
     assert "rag_metadata_shadow" not in worker["command"]
 
 

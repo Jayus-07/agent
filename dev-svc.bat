@@ -208,7 +208,7 @@ exit /b 0
 :: re-run automatically through the compose depends_on chain.
 :: =====================================================================
 :rebuild_backend
-set "BACKEND_SERVICES=app rag-service mcp-service worker beat cs-dispatcher metadata-shadow-worker"
+set "BACKEND_SERVICES=app rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher metadata-shadow-worker"
 echo   [backend] docker compose build %BACKEND_SERVICES% ...
 pushd "%ROOT%"
 docker compose build %BACKEND_SERVICES%
