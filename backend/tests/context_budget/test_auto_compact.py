@@ -159,7 +159,11 @@ class TestFoldRebuild:
 # ── run_incremental_summary ─────────────────────────────────────
 
 class FakeStore:
-    """水位线 Store 假实现（记录调用，模拟 DB 行为）。"""
+    """水位线 Store 假实现（记录调用，模拟 DB 行为）。
+
+    CAS 语义（2026-09-23 STOP C）：expected_through 与当前 through_id 不符
+    时写入失败返回 False（模拟并发下已有更新摘要落库）。
+    """
 
     def __init__(self, summary=None, through_id=None, boundary_id=100,
                  rows=None):
@@ -172,7 +176,7 @@ class FakeStore:
 
     def get_summary_state(self):
         return {"summary": self.summary, "through_id": self.through_id,
-                "token_count": None}
+                "token_count": None, "version": 1 if self.through_id else 0}
 
     def summarizable_before_id(self, keep_recent_turns):
         return self.boundary_id
@@ -181,10 +185,23 @@ class FakeStore:
         self.load_calls.append((after_id, before_id, limit))
         return self.rows
 
-    def save_summary_state(self, summary, through_id, token_count):
+    def save_summary_state(self, summary, through_id, token_count,
+                           expected_through=None):
+        if expected_through is not None \
+                and int(expected_through) != int(self.through_id or 0):
+            return False  # CAS 冲突
         self.saved = {"summary": summary, "through_id": through_id,
-                      "token_count": token_count}
+                      "token_count": token_count,
+                      "expected_through": expected_through}
+        self.through_id = through_id
         return True
+
+
+@pytest.fixture(autouse=True)
+def _no_redis_lock(monkeypatch):
+    """存量测试统一降级 Redis 锁（单飞/CAS 行为在 test_stop_c_p1.py 专测）。"""
+    monkeypatch.setattr(ac_mod, "_acquire_l5_lock", lambda sid: None,
+                        raising=True)
 
 
 @pytest.fixture()

@@ -182,7 +182,7 @@ class ContextBudgetManager:
         history_cap = self.history_budget(
             reserved_tokens=po_tokens + rag_tokens)
         if history_cap > 0:
-            msgs, dropped = _trim_keep_last(msgs, history_cap)
+            msgs, dropped = _trim_semantic(msgs, history_cap)
             if dropped:
                 _record_trim(dropped, msgs, list(messages or []))
                 msg_tokens = sum(_count_message(m) for m in msgs)
@@ -236,7 +236,7 @@ class ContextBudgetManager:
         #    最新消息从尾部优先保留）
         remaining = budget - po_tokens - rag_tokens
         if remaining > 0 and msgs:
-            msgs, dropped = _trim_keep_last(msgs, remaining)
+            msgs, dropped = _trim_semantic(msgs, remaining)
             if dropped:
                 _record_trim(dropped, msgs, list(messages or []))
 
@@ -273,9 +273,10 @@ class ContextBudgetManager:
     # ── L5 触发与执行 ───────────────────────────────────────────
 
     # 同会话单飞：防止并发请求对同一 session 重复触发摘要 LLM 调用
+    # （进程内第一层；跨进程单飞在 run_incremental_summary 的 Redis 锁 +
+    #   水位线 CAS 兜底，2026-09-23 STOP C）
     _l5_inflight: set[str] = set()
     _l5_inflight_lock = threading.Lock()
-    _l5_thread_local = threading.local()  # 重入守卫（摘要 LLM 自己也走 preflight）
 
     def _maybe_auto_compact(
         self, msgs: list, used: int, budget: int,
@@ -296,8 +297,9 @@ class ContextBudgetManager:
             except Exception:
                 pass
             return msgs, used
-        if getattr(self._l5_thread_local, "active", False):
-            return msgs, used  # 摘要 LLM 调用自身的 preflight，禁止重入
+        from backend.context_budget.auto_compact import is_l5_active
+        if is_l5_active():
+            return msgs, used  # 摘要 LLM 自身的 preflight，禁止重入
 
         from backend.core.request_context import get_current_session_id
         session_id = get_current_session_id() or ""
@@ -349,12 +351,8 @@ class ContextBudgetManager:
             pass  # 无 running loop：worker 线程同步路径，可内联执行
 
         started = _time.perf_counter()
-        self._l5_thread_local.active = True
-        try:
-            outcome = run_incremental_summary(
-                session_id, SyncMemorySummaryStore(session_id))
-        finally:
-            self._l5_thread_local.active = False
+        outcome = run_incremental_summary(
+            session_id, SyncMemorySummaryStore(session_id))
         record_compaction_latency(
             level="L5", seconds=_time.perf_counter() - started)
 
@@ -439,20 +437,20 @@ class ContextBudgetManager:
 
 # ── 模块级辅助 ──────────────────────────────────────────────────
 
-def _trim_keep_last(msgs: list, cap: int) -> tuple[list, int]:
-    """L2 裁剪但**永远保留最后一条消息**（当前问题/prompt）。
+def _trim_semantic(msgs: list, cap: int) -> tuple[list, int]:
+    """L2 裁剪（2026-09-23 P1-2 Semantic Pin 版）。
 
-    trim_messages_to_budget 会把单独超预算的消息整条丢弃——对历史可接受，
-    对最后一条（当前用户问题）不可接受。这里把最后一条先摘出来，只对
-    较旧部分做预算裁剪，再拼回去。
+    不再依赖「最后一条 = 当前问题」的位置假设：pin 由
+    context_budget.pin.collect_pin_indices 语义判定——SystemMessage、
+    最后一条 HumanMessage（当前问题）、活跃 tool call 对永不丢弃；
+    assistant(tool_calls)+ToolMessage 整组原子保留/丢弃。
     """
     if not msgs:
         return msgs, 0
+    from backend.context_budget.pin import collect_pin_indices
     from backend.memory.token_budget import trim_messages_to_budget
-    last = msgs[-1]
-    older_budget = cap - _count_message(last)
-    kept, dropped = trim_messages_to_budget(msgs[:-1], max(0, older_budget))
-    return kept + [last], dropped
+    return trim_messages_to_budget(
+        msgs, cap, pin_indices=collect_pin_indices(msgs))
 
 
 def _serialize_po(value: Any) -> str:

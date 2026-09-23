@@ -84,6 +84,9 @@ CONTEXT_L5_MAX_DELTA_MESSAGES = int(os.getenv("CONTEXT_L5_MAX_DELTA_MESSAGES", "
 # ProtectedFacts 最大条数（超出按发现顺序截断，保护摘要 prompt 体积）
 CONTEXT_L5_MAX_PROTECTED_FACTS = int(os.getenv("CONTEXT_L5_MAX_PROTECTED_FACTS", "40"))
 
+# L5 跨进程单飞 Redis 锁 TTL（秒）：必须 > 摘要超时（30s），锁过期自动释放
+CONTEXT_L5_LOCK_TTL = int(os.getenv("CONTEXT_L5_LOCK_TTL", "60"))
+
 # L4 折叠时保留的最近对话轮数（一组 user+assistant 算一轮），
 # 折叠只作用于更早的普通 user/assistant 历史（SystemMessage/当前消息永不折叠）
 CONTEXT_L4_KEEP_RECENT_TURNS = int(os.getenv("CONTEXT_L4_KEEP_RECENT_TURNS", "4"))

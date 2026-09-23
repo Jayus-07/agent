@@ -20,6 +20,7 @@ Phase 3（2026-09-22）设计要点：
 
 from __future__ import annotations
 
+import contextvars
 import re
 import threading
 import time
@@ -197,6 +198,10 @@ class SyncMemorySummaryStore:
 
     走 infra/db 的共享 Engine（raw_connection 归还池），与 19 个已收口
     store 同一模式。查询层保持原生 SQL（项目决策：非 ORM）。
+
+    并发安全（2026-09-23 STOP C）：save_summary_state 为 CAS 写——仅当
+    库内水位线仍等于调用方读取时的 expected_through 才生效；否则返回
+    False（说明已有更新的摘要落库，当前旧结果必须丢弃）。
     """
 
     def __init__(self, session_id: str):
@@ -212,15 +217,17 @@ class SyncMemorySummaryStore:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT summary, summary_through_message_id, summary_token_count "
-                "FROM public.chat_sessions WHERE session_id = %s",
+                "SELECT summary, summary_through_message_id, summary_token_count, "
+                "summary_version FROM public.chat_sessions WHERE session_id = %s",
                 (self.session_id,),
             )
             row = cur.fetchone()
             conn.commit()
             if not row:
-                return {"summary": None, "through_id": None, "token_count": None}
-            return {"summary": row[0], "through_id": row[1], "token_count": row[2]}
+                return {"summary": None, "through_id": None,
+                        "token_count": None, "version": None}
+            return {"summary": row[0], "through_id": row[1],
+                    "token_count": row[2], "version": row[3]}
         finally:
             conn.close()  # 归还连接池
 
@@ -264,16 +271,37 @@ class SyncMemorySummaryStore:
 
     def save_summary_state(
         self, summary: str, through_id: int, token_count: int,
+        expected_through: int | None = None,
     ) -> bool:
+        """CAS 写入水位线（2026-09-23 STOP C）。
+
+        仅当库内 summary_through_message_id 仍等于 expected_through（调用方
+        开始摘要前读到的值，NULL 视为 0）时更新并 version+1；返回 False =
+        CAS 冲突（已有更新的摘要写入），调用方必须丢弃当前旧结果。
+        expected_through=None 时保持旧的无条件语义（向后兼容显式覆盖入口）。
+        """
         conn = self._engine().raw_connection()
         try:
             cur = conn.cursor()
-            cur.execute(
-                "UPDATE public.chat_sessions SET summary = %s, "
-                "summary_through_message_id = %s, summary_token_count = %s, "
-                "summary_updated_at = NOW() WHERE session_id = %s",
-                (summary, int(through_id), int(token_count), self.session_id),
-            )
+            if expected_through is None:
+                cur.execute(
+                    "UPDATE public.chat_sessions SET summary = %s, "
+                    "summary_through_message_id = %s, summary_token_count = %s, "
+                    "summary_version = summary_version + 1, "
+                    "summary_updated_at = NOW() WHERE session_id = %s",
+                    (summary, int(through_id), int(token_count), self.session_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE public.chat_sessions SET summary = %s, "
+                    "summary_through_message_id = %s, summary_token_count = %s, "
+                    "summary_version = summary_version + 1, "
+                    "summary_updated_at = NOW() "
+                    "WHERE session_id = %s "
+                    "AND COALESCE(summary_through_message_id, 0) = %s",
+                    (summary, int(through_id), int(token_count),
+                     self.session_id, int(expected_through)),
+                )
             conn.commit()
             return cur.rowcount > 0
         except Exception:
@@ -288,6 +316,50 @@ class SyncMemorySummaryStore:
 # ---------------------------------------------------------------------------
 
 _llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="l5-compact")
+
+# L5 递归/重入守卫（2026-09-23 STOP C，替代原 threading.local）：
+# 摘要 LLM 自身也走 proxy preflight，必须阻断再次触发 L5。
+# ContextVar 配合 _invoke_llm_with_timeout 的 copy_context 传播——
+# 摘要调用在 ThreadPoolExecutor 线程内执行时同样可见（threading.local
+# 在 asyncio/线程池混合拓扑下既管不到 worker 线程，也会串任务）。
+L5_ACTIVE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "l5_active", default=False)
+
+
+def is_l5_active() -> bool:
+    return L5_ACTIVE.get()
+
+
+def _acquire_l5_lock(session_id: str):
+    """跨进程单飞 Redis 锁（key 含租户隔离）。
+
+    成功返回已持有的 lock 对象（finally 释放）；None = Redis 不可用
+    （降级放行：只靠进程内单飞 + 水位线 CAS 兜底，绝不阻断聊天）；
+    False = 其他 worker 正在摘要（lock_conflict，本轮直接放弃）。
+    """
+    try:
+        from backend.infra.redis.client import get_redis, is_redis_available
+        if not is_redis_available():
+            return None
+        r = get_redis()
+        if r is None:
+            return None
+        from backend.core.request_context import get_tool_tenant_id
+        ttl = int(_cfg("CONTEXT_L5_LOCK_TTL", 60))
+        key = f"context:l5:{get_tool_tenant_id() or 'default'}:{session_id}"
+        lock = r.lock(key, timeout=ttl, blocking_timeout=0)
+        return lock if lock.acquire(blocking=False) else False
+    except Exception:
+        return None  # 锁层任何异常都降级，不影响主链
+
+
+def _release_l5_lock(lock) -> None:
+    if lock in (None, False):
+        return
+    try:
+        lock.release()
+    except Exception:
+        pass  # 锁已过期/被接管：静默（TTL 兜底，无死锁）
 
 
 def _format_conversation(rows: list[tuple[int, str, str]]) -> str:
@@ -364,6 +436,10 @@ def _invoke_llm_with_timeout(prompt: str):
     线程内 set_request_model 绑定，保留 proxy 的限流/韧性/<think> 剥离/token
     统计链路；调用参数统一收口 _summary_invoke_kwargs（关 thinking + 限输出）。
 
+    ContextVar 传播（STOP C）：ThreadPoolExecutor.submit 不携带 contextvars，
+    显式 copy_context().run 让 session/tenant/L5_ACTIVE 守卫在 worker 线程
+    内同样可见（proxy preflight 据此正确跳过递归触发）。
+
     Fallback 原则（Phase 5 §九）：摘要模型调用失败**不换模型重试**、不自动
     降级到主 reasoning 模型 —— L5 是保险层，直接失败回退确定性裁剪。
     """
@@ -379,7 +455,8 @@ def _invoke_llm_with_timeout(prompt: str):
         return llm.invoke(prompt, **invoke_kwargs)
 
     timeout = float(_cfg("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", 30))
-    future = _llm_executor.submit(_call)
+    ctx = contextvars.copy_context()
+    future = _llm_executor.submit(ctx.run, _call)
     try:
         return future.result(timeout=timeout)
     except FuturesTimeout:
@@ -392,10 +469,40 @@ def run_incremental_summary(
 ) -> SummaryOutcome | None:
     """增量摘要一次：旧 summary + 水位线之后的新消息 → 新 summary。
 
-    返回 None 表示本轮不摘要（无可增量内容 / delta 太小 / LLM 失败），
-    旧摘要与旧水位线原样保留（幂等可重试）。调用方安全回退。
+    并发安全（2026-09-23 STOP C）：
+      - 进程内：L5_ACTIVE ContextVar 递归守卫（调用方 manager 亦有单飞）
+      - 跨进程：Redis 单飞锁（TTL > 摘要超时；Redis 不可用降级放行）
+      - 落库：水位线 CAS——expected_through 不匹配即丢弃结果（stale_waterline）
+
+    返回 None 表示本轮不摘要（无可增量内容 / delta 太小 / LLM 失败 /
+    锁冲突 / CAS 冲突），旧摘要与旧水位线原样保留（幂等可重试）。
+    调用方安全回退，绝不阻断主聊天链。
     """
+    if L5_ACTIVE.get():
+        return None  # 摘要 LLM 自身的 preflight 重入，禁止递归
     started = time.perf_counter()
+    lock = _acquire_l5_lock(session_id)
+    if lock is False:
+        # 其他 worker 正在摘要同一 session：本轮直接用裁剪结果
+        try:
+            from backend.context_budget.metrics import record_l5_attempt
+            record_l5_attempt(status="failed", reason="lock_conflict")
+        except Exception:
+            pass
+        logger.info(
+            f"[AutoCompact:{session_id}] L5 单飞锁被占用，跳过本轮摘要")
+        return None
+    token = L5_ACTIVE.set(True)
+    try:
+        return _run_incremental_summary_locked(session_id, store, started)
+    finally:
+        L5_ACTIVE.reset(token)
+        _release_l5_lock(lock)
+
+
+def _run_incremental_summary_locked(
+    session_id: str, store: SyncMemorySummaryStore, started: float,
+) -> SummaryOutcome | None:
     try:
         state = store.get_summary_state()
         old_summary = state.get("summary") or ""
@@ -425,8 +532,21 @@ def run_incremental_summary(
 
         token_count = _count_tokens(summary)
         new_through = max(int(r[0]) for r in rows)
-        if not store.save_summary_state(summary, new_through, token_count):
-            raise ValueError("摘要水位线落库失败（会话不存在？）")
+        if new_through <= through:
+            return None  # 防御：水位线不允许回退
+        if not store.save_summary_state(
+                summary, new_through, token_count,
+                expected_through=through):
+            # CAS 冲突：已有更新的摘要落库，当前旧结果必须丢弃
+            try:
+                from backend.context_budget.metrics import record_l5_attempt
+                record_l5_attempt(status="failed", reason="stale_waterline")
+            except Exception:
+                pass
+            logger.info(
+                f"[AutoCompact:{session_id}] 水位线 CAS 冲突"
+                f"（expected_through={through}），丢弃本轮旧摘要")
+            return None
 
         usage = getattr(resp, "response_metadata", None) or {}
         tu = usage.get("token_usage", {}) or {}

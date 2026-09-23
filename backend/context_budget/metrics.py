@@ -93,7 +93,7 @@ def record_summary_llm_tokens(*, prompt_tokens: int, completion_tokens: int) -> 
 
 _L5_REASONS = frozenset({
     "success", "timeout", "provider_error", "empty_summary",
-    "db_error", "stale_waterline", "disabled",
+    "db_error", "stale_waterline", "disabled", "lock_conflict",
 })
 _FACT_TYPES = frozenset({
     "amount", "identifier", "percentage", "date", "url", "error_code", "other",

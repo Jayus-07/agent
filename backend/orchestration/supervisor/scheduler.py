@@ -250,8 +250,17 @@ def route_after_supervisor(state: dict) -> str | list:
                 for dep_id in _raw_prev
                 if dep_id in step_results
             }
-            from backend.context_budget.micro_compactor import compact_previous_outputs
-            previous_outputs = compact_previous_outputs(_raw_prev, meta=_prev_meta)
+            from backend.context_budget.micro_compactor import (
+                compact_previous_outputs,
+                compute_dependency_ranks,
+            )
+            # P1-3 依赖感知保留：由执行 DAG + step_results 计算各前驱的
+            # 保留优先级（确定性、零 LLM），超预算时优先完整保留对当前步
+            # 与最终答案最重要的结果，而非机械 latest-first
+            _dep_ranks = compute_dependency_ranks(
+                edges, item["step_id"], step_results)
+            previous_outputs = compact_previous_outputs(
+                _raw_prev, meta=_prev_meta, priorities=_dep_ranks)
 
             sends.append(
                 Send(item["worker"], {
