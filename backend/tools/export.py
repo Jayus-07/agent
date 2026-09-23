@@ -50,12 +50,44 @@ def export_csv_tool(question: str, filename: str = "",
     return _export_csv_after_approval(question, filename)
 
 
+def _safe_export_path(filename: str):
+    """把 LLM 可控的 filename 约束到 exports 目录内（2026-09-23 D1-2）。
+
+    此前 filename 直接拼 `export_dir / f"{filename}.csv"`，传 `../../x`
+    即可写出目录树外任意 .csv（路径穿越写文件）。现四道防线：
+      ① 显式拒绝路径分隔符 `/` `\\` 与 `..`；
+      ② 字符白名单：中文/字母/数字/下划线/连字符（尾部 .csv 先剥除，
+         扩展名永远由服务端追加）；
+      ③ resolve 后 is_relative_to 二次确认仍在 exports 内；
+      ④ 空名回落时间戳默认名。
+    返回安全绝对路径；不合法抛 ValueError。
+    """
+    import re
+    from pathlib import Path
+    from datetime import datetime
+    from backend.config import STORAGE_DOCS_DIR
+
+    name = (filename or "").strip()
+    if not name:
+        name = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if name.lower().endswith(".csv"):
+        name = name[:-4]
+    if not name or "/" in name or "\\" in name or ".." in name \
+            or not re.fullmatch(r"[\w-]+", name, re.UNICODE):
+        raise ValueError(
+            "filename 只允许中文/字母/数字/下划线/连字符，"
+            "不含路径分隔符与扩展名")
+    export_dir = (Path(STORAGE_DOCS_DIR) / "exports").resolve()
+    filepath = (export_dir / f"{name}.csv").resolve()
+    if not filepath.is_relative_to(export_dir):
+        raise ValueError("filename 越界")
+    return filepath
+
+
 def _export_csv_after_approval(question: str, filename: str = "") -> str:
     """审批通过后的导出执行；全局幂等 claim 在调用此函数之前完成。"""
     import csv
     from pathlib import Path
-    from datetime import datetime
-    from backend.config import STORAGE_DOCS_DIR
 
     # STOP C：导出与 sql_query_tool 走同一策略链（权限门/表域/scope 注入/
     # 审计），不再经 agent.ask 旧链旁路；身份来自 contextvars 可信上下文
@@ -73,12 +105,13 @@ def _export_csv_after_approval(question: str, filename: str = "") -> str:
     if not rows:
         return f"[EXPORT FAILED] 查询无结果: {question[:80]}"
 
-    if not filename:
-        filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        filepath = _safe_export_path(filename)
+    except ValueError as e:
+        logger.warning(f"[Tool:export_csv] 拒绝非法 filename: {filename!r}")
+        return f"[EXPORT FAILED] 文件名不合法: {e}"
 
-    export_dir = Path(STORAGE_DOCS_DIR) / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    filepath = export_dir / f"{filename}.csv"
+    filepath.parent.mkdir(parents=True, exist_ok=True)
 
     with open(str(filepath), "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
