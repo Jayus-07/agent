@@ -61,3 +61,4 @@ scrape_configs:
           - "rag-index-worker:9809"
           - "maintenance-worker:9809"
           - "report-worker:9809"
+          - "metadata-shadow-worker:9809"
