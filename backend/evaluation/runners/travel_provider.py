@@ -75,11 +75,17 @@ def _probe_quota_exhausted() -> ProviderResult:
 
     quota.reset_local_counters()
     orig_budget, orig_incr = quota.daily_budget, quota._redis_incr
+    # STOP L 归因修复：原探针只打桩 _redis_incr——Redis **可达**时
+    # _redis_get 永远读到 0（patched INCR 不落库），计数永不增长，探针
+    # 必败；仅当 Redis 不可用（退化进程内计数）才偶然通过。补桩
+    # _redis_get 强制进程内计数路径，软停断言与环境无关（确定性）。
+    orig_get = quota._redis_get
     poi = Poi(poi_id="lbs_q", name="配额点", city="福州",
               lat=26.0, lng=119.3, source="tencent:lbs")
     try:
         quota.daily_budget = lambda p: 1
         quota._redis_incr = lambda key: None
+        quota._redis_get = lambda key: None
         provider = TencentPlaceProvider()
         provider._live_map = type("M", (), {
             "resolve_place": staticmethod(
@@ -92,6 +98,7 @@ def _probe_quota_exhausted() -> ProviderResult:
     finally:
         quota.daily_budget = orig_budget
         quota._redis_incr = orig_incr
+        quota._redis_get = orig_get
         quota.reset_local_counters()
 
 
