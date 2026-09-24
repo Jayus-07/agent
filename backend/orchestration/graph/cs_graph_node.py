@@ -42,7 +42,10 @@ def cs_graph_node(state: dict) -> dict:
 
     try:
         graph = get_cs_graph()
-        invoke_config = _build_invoke_config(conversation_id)
+        invoke_config = _build_invoke_config(
+            conversation_id,
+            tenant_id=cs_context.get("tenant_id", ""),
+            user_id=cs_context.get("authenticated_user_id", ""))
         final_state = graph.invoke(cs_input, config=invoke_config)
         result = build_cs_graph_result(final_state)
     except Exception:
@@ -249,10 +252,15 @@ def _fallback_update(state: dict) -> dict:
     }
 
 
-def _build_invoke_config(conversation_id: str) -> dict:
+def _build_invoke_config(conversation_id: str, tenant_id: str = "",
+                         user_id: str = "") -> dict:
     """构建 CS Graph invoke config。
 
     Phase 5: 当 checkpointer 启用时，thread_id 用于多轮对话状态持久化。
+    Platform Readiness STOP C（与 travel_graph_node 同型 P0-3 修复）：
+    thread 扩展为 ``cs:{tenant}:{user}:{conv}`` namespace——裸 conversation_id
+    在两租户/用户共用同一 conversation_id 时共享 checkpoint（当前
+    CS_CHECKPOINTER_ENABLED=false 未触达，契约先行对齐 travel 侧）。
     """
     from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
 
@@ -260,5 +268,8 @@ def _build_invoke_config(conversation_id: str) -> dict:
         "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
     }
     if conversation_id:
-        config["configurable"] = {"thread_id": conversation_id}
+        namespace = "cs"
+        if tenant_id:
+            namespace = f"cs:{tenant_id}:{user_id or '-'}"
+        config["configurable"] = {"thread_id": f"{namespace}:{conversation_id}"}
     return config

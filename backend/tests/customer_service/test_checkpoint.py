@@ -44,9 +44,14 @@ class TestBuildCsGraphWithCheckpointer:
 
 class TestBuildInvokeConfig:
     def test_with_conversation_id(self):
-        config = _build_invoke_config("conv-123")
-        assert config["configurable"]["thread_id"] == "conv-123"
+        """Platform STOP C P0-3：thread = cs:{tenant}:{user}:{conv}；
+        无租户时退化为 cs:{conv}。"""
+        config = _build_invoke_config("conv-123", tenant_id="t1", user_id="u1")
+        assert config["configurable"]["thread_id"] == "cs:t1:u1:conv-123"
         assert "recursion_limit" in config
+
+        legacy = _build_invoke_config("conv-123")
+        assert legacy["configurable"]["thread_id"] == "cs:conv-123"
 
     def test_without_conversation_id(self):
         config = _build_invoke_config("")

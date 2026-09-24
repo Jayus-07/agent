@@ -5,6 +5,16 @@ from backend.memory.models.session import ChatSession, ChatMessage
 from datetime import datetime, timezone
 
 
+class SessionOwnerMismatch(Exception):
+    """session_id 已存在但属主（user_id）不同。
+
+    Platform Readiness STOP C（C4 修复）：此前任何用户可用他人 session_id
+    「收养」会话——读取其全部 L2 历史并把新消息写入同一历史（chat_messages
+    仅按 session_id 存取）。调用方（MemoryService）捕获本异常后派生
+    隔离存储键重试，实现无 schema 变更的属主隔离。
+    """
+
+
 class SessionRepository:
     def __init__(self, session: AsyncSession):
         self._s = session
@@ -15,6 +25,10 @@ class SessionRepository:
         )
         row = result.scalar_one_or_none()
         if row:
+            if user_id and row.user_id != user_id:
+                raise SessionOwnerMismatch(
+                    f"session {session_id} 属主为 {row.user_id!r}，"
+                    f"与请求身份 {user_id!r} 不符")
             return row
         obj = ChatSession(session_id=session_id, user_id=user_id)
         self._s.add(obj)

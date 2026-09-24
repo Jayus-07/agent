@@ -25,15 +25,23 @@ def _thread(config: dict) -> str:
 
 
 class TestDomainGraphThreadIds:
-    def test_cs_thread_is_bare_conversation_id(self):
-        assert _thread(cs_config("conv-9")) == "conv-9"
+    def test_cs_thread_namespaced_with_tenant_user(self):
+        """2026-09-24 Platform STOP C（P0-3）：thread 扩展 tenant/user namespace
+        ——裸 conversation_id 在两租户同 conv 时共享 checkpoint（实机复现
+        A 厦门/B 杭州互染）。"""
+        cfg = cs_config("conv-9", tenant_id="t1", user_id="u1")
+        assert _thread(cfg) == "cs:t1:u1:conv-9"
+
+    def test_cs_thread_without_tenant_keeps_legacy_shape(self):
+        assert _thread(cs_config("conv-9")) == "cs:conv-9"
 
     def test_cs_thread_without_conversation_has_no_thread(self):
         """conversation_id 为空时 CS 不设 thread（不与任何会话共享）。"""
         assert "configurable" not in cs_config("")
 
-    def test_travel_thread_namespaced(self):
-        assert _thread(travel_config("conv-9")) == "travel:conv-9"
+    def test_travel_thread_namespaced_with_tenant_user(self):
+        cfg = travel_config("conv-9", tenant_id="t1", user_id="u1")
+        assert _thread(cfg) == "travel:t1:u1:conv-9"
 
     def test_travel_thread_fallback_unique_per_call(self):
         a = _thread(travel_config(""))
@@ -44,23 +52,31 @@ class TestDomainGraphThreadIds:
 
     def test_same_conversation_cs_and_travel_threads_differ(self):
         """namespace 隔离不变量：同会话跨域绝不共享 checkpoint thread。"""
-        assert _thread(cs_config("conv-9")) != _thread(travel_config("conv-9"))
+        assert (_thread(cs_config("conv-9", tenant_id="t1", user_id="u1"))
+                != _thread(travel_config("conv-9", tenant_id="t1", user_id="u1")))
+
+    def test_same_conv_different_tenants_threads_differ(self):
+        """P0-3 核心不变量：同 conv 跨租户必不同 thread。"""
+        a = _thread(travel_config("conv-9", tenant_id="tA", user_id="uA"))
+        b = _thread(travel_config("conv-9", tenant_id="tB", user_id="uB"))
+        assert a != b
+
+    def test_same_tenant_different_users_threads_differ(self):
+        a = _thread(travel_config("conv-9", tenant_id="t1", user_id="uA"))
+        b = _thread(travel_config("conv-9", tenant_id="t1", user_id="uB"))
+        assert a != b
 
     def test_travel_thread_never_collides_with_task_thread(self):
-        """task-{task_id} 与 travel:{conv} 构成不同——任务 resume 不会落进
+        """task-{task_id} 与 travel:{ns}:{conv} 构成不同——任务 resume 不会落进
         旅游域图 thread（域图不在任务 resume 路径上）。"""
         assert _thread(travel_config("task-abc")) == "travel:task-abc"
         assert _thread(travel_config("task-abc")) != "task-abc"
 
-
-class TestThreadPrefixConvention:
     def test_all_domain_threads_carry_distinct_roots(self):
-        """四个 thread 根（agent-/task-/裸 conv/travel:）两两不同的可判定表达：
-        同一 conversation 值代入四个构造规则，结果互不相同。"""
+        """四个 thread 根（agent-/task-/cs:/travel:）两两不同。"""
         conv = "conv-x"
         main_like = f"agent-{conv}-1758690000000-deadbeef"
         task_like = f"task-{conv}"
-        cs_like = _thread(cs_config(conv))
-        travel_like = _thread(travel_config(conv))
-        roots = {main_like, task_like, cs_like, travel_like}
-        assert len(roots) == 4
+        cs_like = _thread(cs_config(conv, tenant_id="t1", user_id="u1"))
+        travel_like = _thread(travel_config(conv, tenant_id="t1", user_id="u1"))
+        assert len({main_like, task_like, cs_like, travel_like}) == 4

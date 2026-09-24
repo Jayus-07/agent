@@ -81,11 +81,18 @@ def test_output_mapping_and_context_merge(fake_graph):
 
 
 def test_thread_id_is_conversation_id(fake_graph):
-    """契约 4：checkpointer thread_id 必须用 conversation_id（会话恢复前提）。"""
+    """契约 4：thread_id 由 conversation_id 派生且带 tenant/user namespace
+    （会话恢复前提 + Platform Readiness STOP C P0-3 跨租户隔离：
+    BASE_STATE 未带 tenant_id → namespace 退化为 cs:conv 形态）。"""
     from backend.orchestration.graph.cs_graph_node import cs_graph_node
 
     cs_graph_node(dict(BASE_STATE))
-    assert fake_graph["thread_id"] == "conv-old-000"
+    assert fake_graph["thread_id"] == "cs:conv-old-000"
+
+    state = dict(BASE_STATE)
+    state["cs_context"] = {**BASE_STATE["cs_context"], "tenant_id": "t1"}
+    cs_graph_node(state)
+    assert fake_graph["thread_id"] == "cs:t1:user-42:conv-old-000"
 
 
 def test_exception_falls_back_safely(monkeypatch):

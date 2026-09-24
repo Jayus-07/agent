@@ -107,7 +107,10 @@ def travel_graph_node(state: dict) -> dict:
 
     try:
         graph = get_travel_graph()
-        config = _build_invoke_config(conversation_id)
+        config = _build_invoke_config(
+            conversation_id,
+            tenant_id=state.get("tenant_id", ""),
+            user_id=state.get("user_id", ""))
         # ── resume 模式判定（STOP F3）────────────────────────
         # checkpoint 有值 → checkpoint（自然续跑）；thread 无 checkpoint
         # 但会话有 travel 摘要 → reconstruct（从 ConversationContext 重建
@@ -392,26 +395,36 @@ def _stamp_execution_tags(final_state: dict, result: dict,
         logger.debug("[travel_graph_node] 执行标签写入失败", exc_info=True)
 
 
-def _build_invoke_config(conversation_id: str) -> dict:
+def _build_invoke_config(conversation_id: str, tenant_id: str = "",
+                         user_id: str = "") -> dict:
     """构建域图 invoke config。
 
     thread_id 始终给出：checkpointer 开启时 LangGraph 强制要求，缺失会直接
     抛错。无会话标识时用一次性 id，避免不同请求共享同一份 checkpoint
     （共享比报错更危险 —— 用户会看到别人的行程）。
+
+    Platform Readiness STOP C（P0-3 修复）：namespace 扩展为
+    ``travel:{tenant}:{user}:{conv}``。仅 travel: 前缀时，两个租户/用户使用
+    相同 conversation_id 会共享同一 LangGraph thread——实机复现：A 厦门三日、
+    B 插入杭州两日后，A「改成五天」从共享 thread 恢复出杭州行程（跨租户
+    污染）。旧前缀 checkpoint 成为孤儿，由 graceful reconstruction
+    （ConversationContext 按 (tenant,user,conv) 租户隔离重建）与 7d TTL
+    清理兜底，跨轮连续性无损。
     """
     from uuid import uuid4
 
     from backend.config.travel import TRAVEL_GRAPH_RECURSION_LIMIT
 
+    namespace = "travel"
+    if tenant_id:
+        namespace = f"travel:{tenant_id}:{user_id or '-'}"
     return {
         "recursion_limit": TRAVEL_GRAPH_RECURSION_LIMIT,
         "configurable": {
-            # STOP F3：`travel:` namespace 前缀。域图 checkpoint 表与主图/
-            # 客服域共用（PostgresSaver 同库），而 CS 域图用裸 conversation_id
-            # 做 thread_id——不加前缀，同一会话「先客服后旅游」会互相覆盖
-            # checkpoint 状态。前缀 = namespace 隔离（checkpointer 默认关，
-            # 无存量迁移问题）。
-            "thread_id": (f"travel:{conversation_id}" if conversation_id
+            # STOP F3：`travel:` 前缀与 CS 裸 conversation_id 隔离（域图与
+            # 主图/CS 共用 PostgresSaver 表）；STOP C：再以 tenant/user 扩展
+            # namespace，杜绝跨租户同 conversation_id 的 checkpoint 碰撞。
+            "thread_id": (f"{namespace}:{conversation_id}" if conversation_id
                           else f"travel-{uuid4().hex}"),
         },
     }
