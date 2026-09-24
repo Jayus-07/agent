@@ -16,6 +16,7 @@ import hashlib
 import json
 import time
 
+from backend.observability.log_privacy import query_preview
 from backend.shared.logger import logger
 
 # 版本号本地缓存 TTL（秒）：get/put 每次都查 Redis 版本号会多 1-2 个 RTT，
@@ -113,7 +114,7 @@ class AnswerCache:
             key = self._build_key(query, kb_id, metadata_filter, model, scope)
             cached = self._get_cache().get_json(key)
             if cached:
-                logger.info(f"[AnswerCache] 命中: query={query[:60]}... kb={kb_id}")
+                logger.debug(f"[AnswerCache] 命中: query={query_preview(query)} kb={kb_id}")
                 return cached
             return None
         except Exception as e:

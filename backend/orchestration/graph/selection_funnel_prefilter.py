@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from backend.observability.log_privacy import query_preview
 from backend.shared.logger import logger
 
 # 选品漏斗强信号
@@ -65,7 +66,7 @@ def try_selection_funnel_prefilter(query: str, state: dict) -> dict | None:
     if not is_selection_funnel_request(query):
         return None
 
-    logger.info("[SelectionFunnelPrefilter] 选品域命中: query=%s...", query[:60])
+    logger.info("[SelectionFunnelPrefilter] 选品域命中: query=%s", query_preview(query))
     return {
         "route_decision": None,
         "route_mode": "selection_funnel",

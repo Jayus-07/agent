@@ -36,6 +36,7 @@ from backend.orchestration.router.types import (
     RouteDecision,
 )
 from backend.orchestration.router.vector_router import VectorRouter
+from backend.observability.log_privacy import query_preview
 from backend.shared.logger import logger
 
 _router_cache = get_cache("router", ttl=300)
@@ -194,7 +195,7 @@ class Router:
                          "mode": cached.execution_mode.value},
                 status="success",
             )
-            logger.info(f"[Router] 缓存命中: query={query[:40]}... (latency={int((time.time()-t0)*1000)}ms)")
+            logger.info(f"[Router] 缓存命中: query={query_preview(query)} (latency={int((time.time()-t0)*1000)}ms)")
             return cached
 
         # 1. Rule Router（1ms，关键词匹配）

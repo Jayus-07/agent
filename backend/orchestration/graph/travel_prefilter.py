@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 
+from backend.observability.log_privacy import query_preview
 from backend.shared.logger import logger
 from backend.tools.travel import poi_seed
 
@@ -93,7 +94,7 @@ def try_travel_prefilter(query: str, state: dict) -> dict | None:
     if not is_travel_request(query):
         return None
 
-    logger.info("[TravelPrefilter] 旅游域命中: query=%s...", query[:60])
+    logger.info("[TravelPrefilter] 旅游域命中: query=%s", query_preview(query))
 
     # 改写为域图可读的初始上下文；目的地由域图 slot_filler 负责抽取，
     # 预过滤不越权做抽取（两处抽取必然分叉）
