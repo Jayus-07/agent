@@ -134,6 +134,20 @@ class IdempotencyConflict(ValueError):
     """
 
 
+class SideEffectOutcomeUnknown(RuntimeError):
+    """副作用结果未知（Phase3 STOP C 原语）。
+
+    语义：外部 provider 调用可能已越过副作用边界（请求已发出/可能已被
+    接受），但调用方无法给出确定结果——例如 SMTP DATA 阶段连接中断、
+    HTTP read-timeout-after-write。executor 捕获本异常时把 ledger 落为
+    IDEMPOTENCY_UNCERTAIN（保守阻断），禁止同 key 自动重试；与
+    「operation 成功但 complete 前崩溃」的 UNCERTAIN 同一阻断语义。
+    上层 provider 契约层（backend/shared/provider_idempotency.py）
+    负责在副作用边界处把 UNKNOWN outcome 映射到本异常；
+    明确未越过边界的失败（NOT_SENT）不得使用本异常（保持可重试）。
+    """
+
+
 @dataclass(frozen=True)
 class ClaimResult:
     status: ClaimStatus
@@ -505,9 +519,15 @@ class IdempotencyExecutor:
                 _UNCERTAIN_ERROR_CODE
                 if operation_succeeded and not result_persisted
                 else (
-                    "UPSTREAM_UNAVAILABLE"
-                    if isinstance(exc, IdempotencyUnavailable)
-                    else "INTERNAL_ERROR"
+                    # Phase3 STOP C：副作用边界后结果未知（UNKNOWN outcome）
+                    # 与 crash window 同一保守阻断语义——禁止自动重试
+                    _UNCERTAIN_ERROR_CODE
+                    if isinstance(exc, SideEffectOutcomeUnknown)
+                    else (
+                        "UPSTREAM_UNAVAILABLE"
+                        if isinstance(exc, IdempotencyUnavailable)
+                        else "INTERNAL_ERROR"
+                    )
                 )
             )
             # PG 已经写入 succeeded 时，Redis 回写失败不能把权威成功结果
@@ -1302,4 +1322,5 @@ __all__ = [
     "run_idempotent_operation",
     "run_idempotent_operation_for_identity",
     "run_idempotent_side_effect",
+    "SideEffectOutcomeUnknown",
 ]

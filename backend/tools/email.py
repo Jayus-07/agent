@@ -75,96 +75,178 @@ def send_email_tool(to: str, subject: str, body: str, cc: str = "",
 
     payload = {"to": to, "cc": cc, "subject": subject, "body": body}
     if get_tool_tenant_id():
-        from backend.shared.idempotency import run_idempotent_operation
+        # Phase3 STOP C（E1 收口）：发送幂等权威从 run_idempotent_operation
+        # （Redis claim + PG result store——60s lease 过期后同 key 重新 NEW，
+        # crash window 内可重复发信）升级为 run_idempotent_side_effect
+        # （PG durable ledger：claim/owner CAS/UNCERTAIN 保守阻断）。
+        # Redis 进程内指纹仅保留短时并发抑制职责，不再承担 correctness。
+        from backend.infra.llm.quota import enforce_side_effect_budget
+        from backend.shared.idempotency import run_idempotent_side_effect
 
-        result = run_idempotent_operation(
+        tenant_id = get_tool_tenant_id()
+        actor_id = get_tool_user_id() or ""
+        client_key = (idempotency_key or get_tool_idempotency_key()
+                      or _stable_payload_key(payload))
+        result = run_idempotent_side_effect(
             "email.send",
             payload,
-            lambda: {"message": _send_email_after_approval(to, subject, body, cc)},
-            client_key=idempotency_key or get_tool_idempotency_key(),
+            lambda: {"message": _send_email_effect(to, subject, body, cc)},
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            client_key=client_key,
+            lease_seconds=300,
+            pre_execute=lambda: enforce_side_effect_budget(
+                user_id=actor_id, tenant_id=tenant_id),
         )
         return str(result["message"])
 
-    # 兼容尚未经网关注入租户的旧直调/本地开发路径；一旦有可信租户，
-    # 必须走 Redis claim + PG 结果存储，Redis 故障不得降级放行。
-    return _send_email_after_approval(to, subject, body, cc)
+    # Phase3 STOP C（E2 封死）：无可信租户上下文的直接发信路径已移除。
+    # 原「兼容尚未经网关注入租户的旧直调/本地开发路径」绕过 durable 幂等
+    # 与 provider 契约，构成未登记的外部写旁路——按 fail-closed 拒绝。
+    # 任务运行时链路由 agent_tasks._bind_task_identity 保证身份存在；
+    # HTTP 链路由网关注入租户头；无身份即不允许产生对外副作用。
+    from backend.shared.idempotency import IdempotencyContextMissing
+
+    raise IdempotencyContextMissing(
+        "缺少可信租户上下文，拒绝发送邮件（STOP C：无身份外部写旁路已封死）")
 
 
-def _send_email_after_approval(to: str, subject: str, body: str, cc: str) -> str:
-    """审批通过后的实际发信；全局幂等 claim 在调用此函数之前完成。"""
+def _stable_payload_key(payload: dict) -> str:
+    """无客户端幂等键时的稳定 logical key：同内容同收件人 = 同一 logical effect。"""
+    from backend.shared.idempotency import canonical_fingerprint
+
+    return canonical_fingerprint(payload)
+
+
+def _send_email_effect(to: str, subject: str, body: str, cc: str) -> str:
+    """副作用边界（PG ledger 的 operation() 内执行）。
+
+    返回消息字符串 = SUCCEEDED（executor complete）；
+    NOT_SENT（明确未越过 SMTP 边界：连接/TLS/认证失败、服务器明确拒收）
+        → ProviderEffectError：ledger 落 FAILED，可安全接管重试；
+    UNKNOWN（DATA 阶段中断：sendmail 已写出但无确定结果）
+        → SideEffectOutcomeUnknown：ledger 落 IDEMPOTENCY_UNCERTAIN，
+        同 key 永久保守阻断——Redis 任何窗口过期都不能重新打开发信权限。
+    """
+    from backend.config import EMAIL_ENGINE
+
+    if EMAIL_ENGINE == "agently":
+        return _send_via_agently(to, subject, body, cc)
+    return _send_via_smtp(to, subject, body, cc)
+
+
+def _send_via_smtp(to: str, subject: str, body: str, cc: str) -> str:
+    """SMTP 引擎发送（副作用边界分类版，STOP C）。"""
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     from backend.config import (
-        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, EMAIL_ENGINE,
+        SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM,
     )
+    from backend.shared.idempotency import SideEffectOutcomeUnknown
+    from backend.shared.provider_idempotency import ProviderEffectError
 
-    if EMAIL_ENGINE == "agently":
-        return _send_via_agently(to, subject, body, cc)
-
-    # 收件人规整：中文逗号/顿号/分号/空白皆可分隔（shared/text_split.py）
     to_list = split_list(to)
     cc_list = split_list(cc) if cc else []
     if not to_list:
-        return ("收件人解析为空，请检查 to 参数（多个收件人用逗号分隔，"
-                f"当前值: {to!r}）")
+        raise ProviderEffectError(
+            f"收件人解析为空，请检查 to 参数（当前值: {to!r}）")
 
-    # 幂等拦截：窗口内同指纹视为重试，直接拒绝再次发送
+    # 进程内指纹窗口（短时并发抑制；correctness 在 PG ledger）
+    fingerprint = _email_fingerprint(to_list, cc_list, subject, body)
+    if _dup_blocked(fingerprint):
+        return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
+                f"主题 '{subject}'），为避免重复发送本次已拦截，请勿重试。")
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = SMTP_FROM
+    msg["To"] = ", ".join(to_list)
+    msg["Subject"] = subject
+    if cc_list:
+        msg["Cc"] = ", ".join(cc_list)
+    msg.attach(MIMEText(body, "html" if body.startswith("<") else "plain", "utf-8"))
+
+    # ── 阶段 1：连接/TLS/认证——明确未越过副作用边界（NOT_SENT）──
+    try:
+        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15)
+        # TLS 证书校验（2026-09-23 D1-3）：显式传系统 CA 默认 context
+        server.starttls(context=ssl.create_default_context())
+        server.login(SMTP_USER, SMTP_PASSWORD)
+    except Exception as e:
+        logger.error(f"[Tool:send_email] 连接/认证阶段失败（未发送）：{e}")
+        raise ProviderEffectError(f"SMTP 连接/认证失败（未发送）：{e}") from e
+
+    # ── 阶段 2：DATA 传输——副作用边界 ──
+    try:
+        server.sendmail(SMTP_FROM, to_list + cc_list, msg.as_string())
+    except (smtplib.SMTPRecipientsRefused,
+            smtplib.SMTPSenderRefused) as e:
+        # 服务器明确拒收：消息未被接受（NOT_SENT，按拒绝处理可安全重试）
+        logger.error(f"[Tool:send_email] 服务器明确拒收（未发送）：{e}")
+        raise ProviderEffectError(f"SMTP 明确拒收（未发送）：{e}") from e
+    except Exception as e:
+        # DATA 已写出但无确定结果：服务器可能已接受消息 → UNKNOWN → IN_DOUBT
+        logger.error(f"[Tool:send_email] DATA 阶段中断（结果未知）：{e}")
+        raise SideEffectOutcomeUnknown(
+            f"SMTP DATA 阶段中断，服务器可能已接受消息（结果未知）：{e}") from e
+    finally:
+        try:
+            server.quit()
+        except Exception:  # noqa: BLE001 — 会话收尾失败不影响结果判定
+            pass
+
+    _mark_sent(fingerprint)
+    logger.info(f"[Tool:send_email] 已发送 → {to} ({subject})")
+    return f"邮件已发送: 收件人 {to}, 主题 '{subject}'"
+
+
+def _dup_blocked(fingerprint: str) -> bool:
+    """进程内指纹窗口检查（短时并发抑制，非 correctness）。
+
+    key 含租户前缀：跨租户同内容是不同 logical effect，不得互相抑制
+    （否则 tenant B 的邮件会被 tenant A 的窗口拦下，造成静默丟发）。
+    """
+    from backend.tools.session import get_tool_tenant_id
+
+    tenant = get_tool_tenant_id() or ""
     now = time.time()
     for fp, ts in list(_SENT_FINGERPRINTS.items()):
         if now - ts > _EMAIL_DEDUP_WINDOW_SECONDS:
             _SENT_FINGERPRINTS.pop(fp, None)
-    fingerprint = _email_fingerprint(to_list, cc_list, subject, body)
-    if fingerprint in _SENT_FINGERPRINTS:
-        logger.warning(f"[Tool:send_email] 幂等拦截: 窗口内已发送过 → {to} ({subject})")
-        return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
-                f"主题 '{subject}'），为避免重复发送本次已拦截，请勿重试。")
+    return f"{tenant}:{fingerprint}" in _SENT_FINGERPRINTS
 
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["From"] = SMTP_FROM
-        msg["To"] = ", ".join(to_list)
-        msg["Subject"] = subject
-        if cc_list:
-            msg["Cc"] = ", ".join(cc_list)
-        msg.attach(MIMEText(body, "html" if body.startswith("<") else "plain", "utf-8"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-            # TLS 证书校验（2026-09-23 D1-3）：starttls() 无 context 时走
-            # ssl._create_stdlib_context()（CERT_NONE），可被 MITM 截获
-            # SMTP 口令与邮件内容。显式传系统 CA 默认 context。
-            server.starttls(context=ssl.create_default_context())
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, to_list + cc_list, msg.as_string())
+def _mark_sent(fingerprint: str) -> None:
+    from backend.tools.session import get_tool_tenant_id
 
-        _SENT_FINGERPRINTS[fingerprint] = time.time()
-        logger.info(f"[Tool:send_email] 已发送 → {to} ({subject})")
-        return f"邮件已发送: 收件人 {to}, 主题 '{subject}'"
-    except Exception as e:
-        logger.error(f"[Tool:send_email] 发送失败：{e}")
-        raise
+    tenant = get_tool_tenant_id() or ""
+    _SENT_FINGERPRINTS[f"{tenant}:{fingerprint}"] = time.time()
 
 
 def _send_via_agently(to: str, subject: str, body: str, cc: str) -> str:
     """Agently 引擎发送：审批门已过（ensure_approved），--confirmed 直发。
 
-    幂等指纹与 SMTP 路径共用同一份 _SENT_FINGERPRINTS（收件人+主题+正文
-    哈希同口径），引擎切换不会造成窗口内重复发送。
+    STOP C：作为 ledger 的 operation() 执行——命令级失败（CLI 非零退出并
+    返回 [AGENTLY ERROR:*]）是其"未完成发送"的权威报告，按 NOT_SENT 抛
+    ProviderEffectError（FAILED 可重试）；进程崩溃窗口由 ledger 覆盖
+    （fn 未返回 → running → 过期保守阻断）。
     """
     from backend.tools import agently
+    from backend.shared.provider_idempotency import ProviderEffectError
 
     if not agently.agently_available():
-        return "[AGENTLY ERROR:4] agently-cli 未安装，无法以 agently 引擎发送"
+        raise ProviderEffectError(
+            "[AGENTLY ERROR:4] agently-cli 未安装，无法以 agently 引擎发送")
 
     # 收件人规整：与 SMTP 路径同口径（split_list + 指纹基于规整列表）
     to_list = split_list(to)
     cc_list = split_list(cc) if cc else []
     if not to_list:
-        return ("收件人解析为空，请检查 to 参数（多个收件人用逗号分隔，"
-                f"当前值: {to!r}）")
+        raise ProviderEffectError(
+            f"收件人解析为空，请检查 to 参数（当前值: {to!r}）")
 
     fingerprint = _email_fingerprint(to_list, cc_list, subject, body)
-    if fingerprint in _SENT_FINGERPRINTS:
+    if _dup_blocked(fingerprint):
         return (f"[EMAIL DUPLICATE] 内容相同的邮件已发送成功（收件人 {to}，"
                 f"主题 '{subject}'），为避免重复发送本次已拦截，请勿重试。")
 
@@ -172,10 +254,11 @@ def _send_via_agently(to: str, subject: str, body: str, cc: str) -> str:
         to=to_list, subject=subject, body=body, cc=cc_list or None,
     )
     if result.startswith("[AGENTLY ERROR:"):
-        # 与 SMTP 路径一致：失败不缓存指纹，重试路径畅通
+        # CLI 明确报告发送失败 = 未完成发送（NOT_SENT），失败不缓存指纹，
+        # ledger 落 FAILED，重试路径畅通
         logger.error(f"[Tool:send_email/agently] 发送失败：{result}")
-        return result
-    _SENT_FINGERPRINTS[fingerprint] = time.time()
+        raise ProviderEffectError(f"Agently 发送失败：{result}")
+    _mark_sent(fingerprint)
     logger.info(f"[Tool:send_email/agently] 已发送 → {to} ({subject})")
     return f"邮件已发送(Agently): 收件人 {to}, 主题 '{subject}'"
 
