@@ -1,0 +1,480 @@
+# ============================================
+# Agent AI Platform - Comprehensive .gitignore
+# ============================================
+# Purpose: Exclude unnecessary files to keep repository clean
+#          and under GitHub's size limits
+# 
+# This covers:
+# - Build artifacts & compiled code
+# - Database files (SQLite, Chroma, etc.)  
+# - Log files & temporary data
+# - Cache directories
+# - IDE/Editor configurations
+# - Environment secrets
+# - Test artifacts & coverage reports
+# ============================================
+
+# ============================================
+# PYTHON BUILD ARTIFACTS
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+# 例外：上面 Python 打包遗留的 lib/ 会误伤前端源码目录，
+# 导致 frontend/src/lib/ 下新文件永远进不了 git（auth.ts/authFetch.ts 曾中招）
+!frontend/src/lib/
+!frontend/src/lib/**
+!frontend-admin/src/lib/
+!frontend-admin/src/lib/**
+!frontend-cs/src/lib/
+!frontend-cs/src/lib/**
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================
+# PYTEST & COVERAGE
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*coverage
+.venv/
+venv/
+ENV/
+pyenv.cfg
+
+# ============================================
+# DATABASE FILES (CRITICAL - EXCLUDE THESE!)
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.db-journal
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+backend/data/*.db
+backend/data/*.sqlite
+trace_store.db
+chroma.sqlite3
+doc_registry.db
+daily_reports.db
+demo_sales.db
+feedback.db
+inventory_alerts.db
+keyword_rules.db
+selection.db
+selection_decision.db
+doc_operation_log.db
+eval_history.db
+workflow_runs.db
+chunk_store.db
+competitor.db
+database.db
+report_preferences.json
+doc_registry.sqlite3
+data/chroma_market/
+data/router_index/
+data/cs_router_index/
+data/eval_runs/
+data/bm25/
+data/doc_db/
+data/long_term_memory/
+
+# ============================================
+# CHROMA VECTOR DATABASE CACHES
+# ============================================
+chroma_db/
+data/chroma/
+backend/rag/chroma_*
+
+# ============================================
+# LOG FILES
+# ============================================
+*.log
+logs/
+backend/logs/
+frontend/logs/
+*.log.*
+rag_system.log
+application.log
+error.log
+debug.log
+access.log
+nginx-error.log
+npm-debug.log
+yarn-error.log
+lerna-debug.log
+package-lock.log
+frontend/logs/
+
+# ============================================
+# BACKUP & TEMPORARY FILES  
+# ============================================
+*.bak
+*.backup
+*.tmp
+*.temp
+*.swp
+*.swo
+*.swn
+*~
+.backup.2026*
+*.bak-*
+.bak-*
+autosave*
+*.pid
+.lock
+*.pidfile
+*.lockfile
+
+# ============================================
+# ENVIRONMENT VARIABLES & SECRETS
+# ============================================
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+*.env.example
+.env.*.local
+# 例外：根 .env.example 是「最小可启动集」模板，需要入库；
+# 上面的 *.env.example 会把它一起忽略掉（原来也导致根模板一直没能提交）
+!/.env.example
+*.key
+*.pem
+*.crt
+secrets.json
+credentials.json
+aws_credentials.json
+service-account.json
+google-service-account.json
+api_keys.txt
+tokens.txt
+
+# ============================================
+# FRONTEND & NODE.JS
+# ============================================
+node_modules/
+.next/
+# 通过 NEXT_DIST_DIR 指定的备用构建目录（沙箱/并行构建用）
+# 收敛为通配：各会话常建 .next-dev-* / .next-smoke-* / .next-login-* 等临时目录
+.next-*/
+.out/
+dist/
+dist-build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+.npm
+.npmrc
+.npm-global
+.yarn/
+.pnpm-store/
+.npm-cache/
+.yarn/cache/
+
+# TypeScript build artifacts
+.tsbuildinfo
+next-env.d.ts
+
+# Next.js specific
+out/
+.cache/
+next.config.js.bak
+
+# ============================================
+# IDE & EDITOR SETTINGS
+# ============================================
+.idea/
+.vscode/
+.vs
+.settings/
+.project
+.classpath
+.metadata
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+desktop.ini
+.svn/
+.bzr/
+.hg/
+
+# ============================================
+# DOCKER
+# ============================================
+.docker/
+.dockerignore
+docker-compose.override.yml
+docker-compose.prod.yml
+docker-compose.dev.yml
+
+# ============================================
+# JUPYTER NOTEBOOKS
+# ============================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ============================================
+# TESTING & QUALITY TOOLS
+# ============================================
+.jest/
+.eslintcache
+.eslintrc.js
+.tsconfig.tsbuildinfo
+.mypy_cache/
+.pyright/
+.pyre/
+.ruff_cache/
+
+# ============================================
+# CI/CD AND BUILD ARTIFACTS
+# ============================================
+.github/workflows/*.yml.lock
+*.lock.yaml
+ci-cache/
+artifact-bundles/
+coverage-artifacts/
+test-results/
+build-artifacts/
+/reports/
+
+# ============================================
+# ASSETS & MEDIA FILES
+# ============================================
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.exe
+*.dmg
+*.iso
+# Except for README assets that need to be displayed
+!/README.md
+!/docs/**/*.png
+
+# ============================================
+# PYTHON SPECIFIC CACHE
+# ============================================
+.pip-cache/
+pip-log.txt
+wheelhouse/
+.cache/pip/
+
+# ============================================
+# DATA FILES (if not meant for version control)
+# ============================================
+data/uploads/
+data/test_docs/
+data/baselines/
+data/eval/
+data/report_snapshots/
+docs/**/*.pdf
+docs/**/*.docx
+docs/**/*.pptx
+docs/**/*.xls*
+
+# ============================================
+# PYTHON ENVIRONMENTS
+# ============================================
+.conda/
+conda-meta/
+.conda-prefix/
+miniconda.sh
+anaconda.sh
+
+# ============================================
+# ML/AI FRAMEWORKS
+# ============================================
+*.pth
+*.pt
+*.h5
+*.onnx
+*.pb
+*.params
+*.joblib
+*.pickle
+*.pkl
+checkpoints/
+model_weights/
+trained_models/
+saved_models/
+train_logs/
+
+# ============================================
+# GITHUB ACTIONS
+# ============================================
+actions-runner/
+runner/
+token/
+
+# ============================================
+# LOCAL CONFIGURATION
+# ============================================
+.local/
+.user.ini
+.htpasswd
+.cshrc
+.rhosts
+.resolv.conf
+wp-config.php
+secret.phar
+
+# ============================================
+# PROJECT SPECIFIC DIRECTORIES
+# ============================================
+backend/app/api/deps/__init__.pyc
+frontend/src/app/agents/chat/
+frontend/htmlcov/
+scripts/__pycache__/
+
+# ============================================
+# RESTART & LAUNCH FILES
+# ============================================
+restart_all.bat
+stop_all.bat
+start_all.bat
+activate_python.bat
+*.pid
+run/*
+agent.pid
+backend.pid
+frontend.pid
+
+# ============================================
+# FINAL CHECK
+# ============================================
+# Files that SHOULD be tracked but often aren't
+# Add these to your project if needed:
+# *.sql (database schema)
+# *.yaml / *.yml (configuration)
+# Dockerfile (container setup)
+# docker-compose.yml (container orchestration)
+# requirements*.txt (Python dependencies)
+# pyproject.toml (Python config)
+
+# ============================================
+# RUNTIME ARTIFACTS & LOCAL TOOLS (2026-09-11)
+# ============================================
+# SQLite WAL/SHM 伴随文件（主 .db 文件按原有规则处理）
+*.db-shm
+*.db-wal
+# 前端构建增量缓存
+*.tsbuildinfo
+# 本地 AI 工具目录
+.qoder/
+.workbuddy/
+# 清理脚本产生的备份/隔离目录
+data/_rag_clear_backup_*/
+backend/data/_rag_clear_backup_*/
+backend/data/_quarantine_damaged_*/
+# 记忆库运行时数据目录（索引/向量库/上传文件，不进 git）
+backend/data/
+# LLM token 用量流水
+token_usage.jsonl
+
+# Java 构建产物与本地 agent 配置
+business-service/target/
+# 网关构建产物（P2 本地容器编译会生成；此前只忽略了 business-service 的 target）
+api-gateway/target/
+.zcode/
+
+# 网关鉴权冒烟脚本的临时产物
+.smoke_cookies.tmp
+_smoke*.log
+
+# 评测产物（运行时生成）
+data/eval_reports/
+
+# 跨项目一次性诊断脚本（属 Enterprise_OA，需读其 .env.oaauth 取口令，不入库）
+scripts/_diag_*.py
+
+# code-review-graph 索引库（204MB WAL 反复 churn，暂不入库）
+.code-review-graph/
+
+# Codex 子任务实施使用的隔离 worktree，不进入项目提交
+.worktrees/
+
+# ============================================
+# AI 助手工具产物（本地工作文件，一律不入库）
+# 2026-09-20：以下条目曾因「gitignore 规则晚于 git add」而被跟踪，
+# 已用 git rm --cached 取消跟踪（本地文件保留）。
+# 再次 git add -A 前请确认不属于此类。
+# ============================================
+.claude/
+.codex/
+.learnings/
+.superpowers/
+.qoderignore
+.mcp.json
+# 测试夹具临时输出（scripts 侧生成）
+.tmp-sf/
+# 手工备份文件
+AGENTS.md.bak-*
+*.bak-20*
+
+# 路由专项收口（2026-09-22 Step 4）：数据库备份与本地验证产物不进版本库
+backups/
+tmp/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+pip-wheel-metadata/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
