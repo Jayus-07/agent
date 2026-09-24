@@ -259,6 +259,8 @@ def _flights_for(origin_city: str, dest_city: str, departure_date: str,
         )
 
     link = f"https://fake-commerce.example.com/flight?date={departure_date}"
+    if st == "empty":
+        return []
     if st == "connection":
         segs = _segments_for(origin_city, dest_city, departure_date,
                              connection=True)
@@ -286,6 +288,11 @@ def _flights_for(origin_city: str, dest_city: str, departure_date: str,
         return [_record(5, _segments_for(origin_city, dest_city,
                                          departure_date, connection=False),
                         "920", AVAIL_UNKNOWN, deeplink=link + "&id=5")]
+    if st == "deeplink_invalid":
+        return [_record(6, _segments_for(origin_city, dest_city,
+                                         departure_date, connection=False),
+                        "880",
+                        deeplink="javascript:alert(1)")]
 
     return [_record(1, _segments_for(origin_city, dest_city, departure_date,
                                      connection=False),

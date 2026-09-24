@@ -56,9 +56,10 @@ def main():
     )
     parser.add_argument(
         "module", nargs="?", default="all",
-        choices=["all", "planner", "rag", "sql", "e2e", "travel", "travel-provider"],
+        choices=["all", "planner", "rag", "sql", "e2e", "travel", "travel-provider", "travel-commerce"],
         help="评估模块 (默认: all)。travel=旅游规划质量金标（STOP I5）；"
-             "travel-provider=Provider 层探针（STOP J9）",
+             "travel-provider=Provider 层探针（STOP J9）；"
+             "travel-commerce=Commerce 金标探针（STOP K7）",
     )
     parser.add_argument(
         "--smoke", action="store_true",

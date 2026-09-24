@@ -16,6 +16,7 @@ from backend.evaluation.runners.e2e import _run_e2e
 from backend.evaluation.runners.cs import _run_cs
 from backend.evaluation.runners.travel import _run_travel
 from backend.evaluation.runners.travel_provider import _run_travel_provider
+from backend.evaluation.runners.travel_commerce import _run_travel_commerce
 
 # --- 测试兼容：直接 import 的工具函数 ---
 from backend.evaluation.runners._common import (
@@ -30,6 +31,7 @@ __all__ = [
     "_run_rag",
     "_run_sql",
     "_run_travel_provider",
+    "_run_travel_commerce",
     "_run_e2e",
     "_run_cs",
     "_match_by_snippet",

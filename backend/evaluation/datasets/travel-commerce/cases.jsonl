@@ -1,0 +1,26 @@
+{"id": "K-H01", "question": "golden: hotel normal search (H1)", "expected": {"status": "success"}, "metadata": {"group": "hotel", "tier": "smoke", "probe": "h1"}}
+{"id": "K-H02", "question": "golden: hotel empty result = 无结果非失败 (H2)", "expected": {"status": "empty"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h2"}}
+{"id": "K-H03", "question": "golden: hotel timeout ≠ sold out (H3)", "expected": {"status": "timeout"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h3"}}
+{"id": "K-H04", "question": "golden: hotel unavailable 如实披露 (H4)", "expected": {"status": "unavailable"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h4"}}
+{"id": "K-H05", "question": "golden: hotel stale fallback 标注非实时 (H5)", "expected": {"status": "success", "freshness": "stale"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h5"}}
+{"id": "K-H06", "question": "golden: hotel invalid price fail-closed (H6)", "expected": {"status": "invalid_response"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h6"}}
+{"id": "K-H07", "question": "golden: hotel currency 保真 JPY (H7)", "expected": {"currency": "JPY"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h7"}}
+{"id": "K-H08", "question": "golden: hotel tax unknown 保真 (H8)", "expected": {"taxes": null}, "metadata": {"group": "hotel", "tier": "core", "probe": "h8"}}
+{"id": "K-H09", "question": "golden: hotel sold out 仅 Provider 明示 (H9)", "expected": {"availability": "sold_out"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h9"}}
+{"id": "K-H10", "question": "golden: hotel deep-link invalid 拒收 (H10)", "expected": {"deeplink": "rejected"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h10"}}
+{"id": "K-H11", "question": "golden: hotel cache replay 零增量 (H11)", "expected": {"freshness": "cached"}, "metadata": {"group": "hotel", "tier": "core", "probe": "h11"}}
+{"id": "K-H12", "question": "golden: hotel multi-room occupancy 回显 (H12)", "expected": {"status": "success"}, "metadata": {"group": "hotel", "tier": "extended", "probe": "h12"}}
+{"id": "K-F01", "question": "golden: flight direct success (F1)", "expected": {"status": "success"}, "metadata": {"group": "flight", "tier": "smoke", "probe": "f1"}}
+{"id": "K-F02", "question": "golden: flight connection stops 推导 (F2)", "expected": {"stops": 1}, "metadata": {"group": "flight", "tier": "core", "probe": "f2"}}
+{"id": "K-F03", "question": "golden: flight empty result (F3)", "expected": {"status": "empty"}, "metadata": {"group": "flight", "tier": "core", "probe": "f3"}}
+{"id": "K-F04", "question": "golden: flight timeout ≠ 售罄 (F4)", "expected": {"status": "timeout"}, "metadata": {"group": "flight", "tier": "core", "probe": "f4"}}
+{"id": "K-F05", "question": "golden: flight unavailable 如实披露 (F5)", "expected": {"status": "unavailable"}, "metadata": {"group": "flight", "tier": "core", "probe": "f5"}}
+{"id": "K-F06", "question": "golden: flight stale fallback 标注 (F6)", "expected": {"freshness": "stale"}, "metadata": {"group": "flight", "tier": "core", "probe": "f6"}}
+{"id": "K-F07", "question": "golden: flight invalid price fail-closed (F7)", "expected": {"status": "invalid_response"}, "metadata": {"group": "flight", "tier": "core", "probe": "f7"}}
+{"id": "K-F08", "question": "golden: flight currency 保真 (F8)", "expected": {"currency": "JPY"}, "metadata": {"group": "flight", "tier": "core", "probe": "f8"}}
+{"id": "K-F09", "question": "golden: flight invalid segment 拒收 (F9)", "expected": {"status": "invalid_response"}, "metadata": {"group": "flight", "tier": "core", "probe": "f9"}}
+{"id": "K-F10", "question": "golden: flight deep-link invalid 拒收 (F10)", "expected": {"deeplink": "rejected"}, "metadata": {"group": "flight", "tier": "core", "probe": "f10"}}
+{"id": "K-F11", "question": "golden: flight cache replay 零增量 (F11)", "expected": {"freshness": "cached"}, "metadata": {"group": "flight", "tier": "core", "probe": "f11"}}
+{"id": "K-F12", "question": "golden: flight round-trip 越契约 fail-closed (F12)", "expected": {"status": "invalid_response"}, "metadata": {"group": "flight", "tier": "extended", "probe": "f12"}}
+{"id": "K-G10", "question": "golden: provider failure 经域图主链不 500 (C10/G19)", "expected": {"answer": "honest"}, "metadata": {"group": "gate", "tier": "core", "probe": "c10"}}
+{"id": "K-G26", "question": "golden: tenant scope 无身份分量 (C12/G26)", "expected": {"violation": 0}, "metadata": {"group": "gate", "tier": "core", "probe": "c12"}}
