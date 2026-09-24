@@ -9,10 +9,10 @@ travel.booking_recovery_scan：确认过期兜底 + stale SUBMITTING/IN_DOUBT
 """
 from __future__ import annotations
 
-from backend.tasks.celery_app import app
+from backend.tasks.celery_app import celery_app
 
 
-@app.task(
+@celery_app.task(
     name="travel.booking_recovery_scan",
     bind=True,
     max_retries=1,
