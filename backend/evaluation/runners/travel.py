@@ -211,9 +211,43 @@ def _run_travel(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     return results
 
 
+def _next_monday_text() -> str:
+    """下一个周一的「M月D日」文本（日期锚用例的动态归一）。"""
+    from datetime import date, timedelta
+
+    today = date.today()
+    ahead = (7 - today.weekday()) % 7
+    m = today + timedelta(days=ahead or 7)
+    return f"{m.month}月{m.day}日"
+
+
+def _normalize_date_anchors(case: TestCase) -> None:
+    """数据集里的日期锚随真实日期漂移（「9月21日」既成过去、星期不再落
+    周一，闭馆场景永不触发）。runner 层统一归一到动态下一个周一——
+    golden 数据集文本本身不动（与 tests/travel 的归一口径一致）。"""
+    meta = case.metadata or {}
+    if meta.get("group") in ("E", "G"):
+        for anchor in ("9月21日", "9月28日"):
+            if anchor in case.question:
+                case.question = case.question.replace(anchor, _next_monday_text())
+
+
 def _run_case(case: TestCase) -> EvalResult:
     t0 = time.time()
     meta = case.metadata or {}
+    # offline-only 用例（如 T-G10「未知必去→unresolved」）：联网模式下真实
+    # Provider 会模糊命中真实地点，该断言只在确定性（离线）环境成立——
+    # 如实标 skip，不算失败（Live≠Better：环境语义不同，不硬凑）
+    if meta.get("requires_offline"):
+        from backend.tools.travel.live_map import is_enabled as live_enabled
+
+        if live_enabled():
+            return EvalResult(
+                case_id=case.id, module="travel", status="skip",
+                expected=case.expected,
+                actual={"skipped": "requires_offline（live map 已启用）"},
+                error_msg=None)
+    _normalize_date_anchors(case)
     cross = bool(meta.get("same_thread"))
     tid = f"travel-eval-{case.id}-{uuid.uuid4().hex[:8]}"
     session = f"travel-eval-{case.id}"

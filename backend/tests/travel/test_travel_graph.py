@@ -290,7 +290,14 @@ class TestEndToEnd:
         message = "厦门3天行程，2个人，想吃美食"
         first = self._invoke(message)
         second = self._invoke(message)
-        assert first["itinerary"] == second["itinerary"]
+        # 确定性断言的是「规划产物」（天数/POI 序列/时刻/费用），不含生成
+        # 时刻。created_at 是时钟字段：接真实路线 Provider 后两次调用常跨秒
+        # （首跑冷缓存走 live API），直接整字典比较会因时钟字段假失败。
+        a = dict(first["itinerary"] or {})
+        b = dict(second["itinerary"] or {})
+        a.pop("created_at", None)
+        b.pop("created_at", None)
+        assert a == b
 
     def test_report_mentions_data_source_disclosure(self):
         final = self._invoke("杭州2天行程，1个人")
