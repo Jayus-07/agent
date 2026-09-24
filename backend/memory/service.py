@@ -144,6 +144,13 @@ class MemoryService:
                 # （policy SystemMessage + <memory_context> AIMessage 数据块，
                 # 记忆原文绝不进 SystemMessage）→ 仅注入条 mark_accessed。
                 l3_started = time.perf_counter()
+                # STOP G observability：memory.retrieve span 贯穿。无 active
+                # trace 时 trace_collector 返回 noop span（软失败不阻断）；
+                # span 属性只有 count/threshold 枚举——严禁写入记忆原文/
+                # PII/租户标识（§七 trace 红线）。
+                from backend.observability.tracer import trace_collector
+                retrieve_span = trace_collector.start_span(
+                    "memory.retrieve", name="长期记忆检索", type="retrieval")
                 try:
                     async with AsyncSessionLocal() as l3_db:
                         l3_repo = MemoryRepository(l3_db)
@@ -155,6 +162,15 @@ class MemoryService:
                         emb = l3.embedding.embed_query(l3_query)
                         retrieved = await retriever.retrieve(l3_query, emb, user_id,
                                                              tenant_id=tenant_id)
+                    try:
+                        trace_collector.end_span(
+                            retrieve_span, metrics=dict(retriever.last_stage_counts))
+                    except Exception:  # pragma: no cover - 观测面异常不外泄
+                        pass
+                    # 阶段计数随缓冲带回：span 由持有 ambient trace 的
+                    # runner 侧创建（本协程跑在 memory 后台 loop，无 trace
+                    # 上下文，此处创建的 span 是 noop）
+                    l1.retrieval_stats = dict(retriever.last_stage_counts)
                     if retrieved:
                         records = [m.record for m in retrieved]
                         # 白名单字段（§34）：不带 tenant/user/UUID/embedding 分数/
@@ -200,6 +216,12 @@ class MemoryService:
                     # 降级：记录日志 + metric，主流程继续（不允许 L3 失败打挂聊天）
                     logger.error(
                         f"[MemoryService] L3 检索失败，降级继续 (session={session_id}): {l3_exc}")
+                    try:
+                        trace_collector.end_span(
+                            retrieve_span, status="error",
+                            metrics={"error": str(l3_exc)[:100]})
+                    except Exception:  # pragma: no cover - 观测面异常不外泄
+                        pass
                     _metric_safe(
                         memory_retrieval_total.labels(
                             status="degraded", operation="retrieve").inc)

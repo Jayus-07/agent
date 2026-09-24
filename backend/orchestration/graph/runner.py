@@ -395,9 +395,18 @@ class GraphRunner:
             "session_load", name="会话/记忆加载", type="workflow",
             kind=SpanKind.KB_ROUTING.value,
             input={"session_id": session_id})
+        # STOP G observability：memory.retrieve span 贯穿（§七）。span 须在
+        # 本侧创建——start_session 协程跑在 memory 后台 loop，无 ambient
+        # trace；阶段计数由 service 经 l1.retrieval_stats 带回（仅
+        # count/threshold 枚举，无记忆原文/PII）。
+        retrieve_span = trace_collector.start_span(
+            "memory.retrieve", name="长期记忆检索", type="retrieval",
+            input={"session_id": session_id})
         try:
             l1 = self._memory.start_session(session_id, question, user_id=user_id,
                                             tenant_id=tenant_id)
+            trace_collector.end_span(
+                retrieve_span, metrics=dict(getattr(l1, "retrieval_stats", {}) or {}))
             initial_state = make_initial_state(
                 question, session_id, kb_id, l1.messages,
                 guard_result=guard_result.model_dump(mode="json"),
@@ -405,6 +414,8 @@ class GraphRunner:
                 domain_hint=domain_hint, tenant_id=tenant_id,
             )
         except Exception as e:
+            trace_collector.end_span(retrieve_span, status="error",
+                                     metrics={"error": str(e)[:100]})
             trace_collector.end_span(load_span, status="error",
                                      metrics={"error": str(e)[:100]})
             yield {"event": "error", "data": {"message": f"会话加载失败: {e}", "ts": time.time()}}

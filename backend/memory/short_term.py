@@ -16,6 +16,11 @@ class ShortTermBuffer:
     def __init__(self, max_messages: int | None = None):
         self._messages: list[BaseMessage] = []
         self._max = max_messages or SHORT_TERM_MAX_MESSAGES
+        # STOP G observability：最近一次装配的 L3 检索阶段计数
+        # （candidate/accepted/rejected/global/final/threshold），
+        # 由 runner 侧写入 memory.retrieve span（service 运行在无
+        # ambient trace 的后台 loop，span 须由 runner 创建）。
+        self.retrieval_stats: dict = {}
 
     def add(self, msg: BaseMessage) -> None:
         self._messages.append(msg)

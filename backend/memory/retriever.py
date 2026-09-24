@@ -57,6 +57,9 @@ def _metric_safe(fn, **labels) -> None:
 class HybridRetriever:
     def __init__(self, repo):
         self._repo = repo
+        # 最近一次 retrieve 的阶段计数（STOP G observability：供
+        # memory.retrieve span 归因；只含 count/threshold，无任何内容）
+        self.last_stage_counts: dict = {}
 
     async def retrieve(
         self, query: str, embedding: list[float], user_id: str,
@@ -88,6 +91,7 @@ class HybridRetriever:
         globals_: list[RetrievedMemory] = []
         semantic: list[RetrievedMemory] = []
         rejected = 0
+        global_accepted = 0
         for record, sim in candidates:  # [(record, cosine_similarity)]
             if enforce_gate and not _is_global_key(record.memory_key) and sim < threshold:
                 rejected += 1
@@ -136,6 +140,17 @@ class HybridRetriever:
 
         for m in merged:
             _metric_safe(memory_retrieval_accepted_total.labels(source=m.source).inc)
+        # 阶段计数快照（STOP G：memory.retrieve span 归因）——accepted 为
+        # gate 后、merge 前的口径；final_injected 为 merge/max-K 后终值。
+        # 只含 count/threshold 枚举，无任何记忆内容/PII。
+        self.last_stage_counts = {
+            "candidate_count": len(candidates),
+            "semantic_accepted": len(semantic),
+            "semantic_rejected": rejected,
+            "global_accepted": len(globals_),
+            "final_injected": len(merged),
+            "threshold": float(threshold) if enforce_gate else 0.0,
+        }
         return merged
 
     @staticmethod

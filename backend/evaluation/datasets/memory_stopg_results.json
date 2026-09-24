@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "date": "2026-09-24T01:34:47.847542+00:00",
+    "runtime": "MultiAgentSystem→GraphRunner 全真运行时（进程内）",
+    "chat_provider": "DB role main（doubao-seed-2.0-mini）",
+    "embedding_provider": "DB specialized embedding（qwen3.7-text-embedding）",
+    "elapsed_seconds": 202.2
+  },
+  "scenarios": [
+    {
+      "id": "G1",
+      "desc": "相关记忆注入并生效",
+      "pass": true,
+      "injected_access_count": 1,
+      "answer_excerpt": "您好呀！如果您喜欢醇厚浓郁的口感，推荐意式浓缩或拿铁；偏爱清爽低负担的，美式或冷萃会很合适~要是您有其他需求，比如旅游行程规划、订单售后咨询、商品选品、经营数据查询这类，我也能帮您处理哦。"
+    },
+    {
+      "id": "G2",
+      "desc": "无关记忆最终注入=0",
+      "pass": true,
+      "injected_access_count": 0,
+      "answer_excerpt": "这条请求我暂时无法直接处理。请从下方选项中选择，或换个说法描述您的需求。"
+    },
+    {
+      "id": "G3",
+      "desc": "global 偏好跨主题注入",
+      "pass": true,
+      "injected_access_count": 1,
+      "marker_in_answer": true,
+      "answer_excerpt": "北极熊的皮肤其实是黑色的，它的毛发并非白色，而是透明中空的结构，这些透明毛发会散射和反射光线，所以我们看到的北极熊整体呈现白色。<GLOBAL_OK>"
+    },
+    {
+      "id": "G4",
+      "desc": "主题型偏好不因「偏好」跨主题进入",
+      "pass": true,
+      "injected_access_count": 0,
+      "answer_excerpt": "《海的信》潮声是风寄的信，每朵浪都写着蓝，贝壳藏着星子的碎，等你弯腰听。"
+    },
+    {
+      "id": "G5",
+      "desc": "expired/inactive/wrong-user/wrong-tenant 全不可见",
+      "pass": true,
+      "access_counts": {
+        "wrong_user": 0,
+        "wrong_tenant": 0,
+        "inactive": 0,
+        "expired": 0
+      },
+      "answer_excerpt": "很抱歉，我暂时没有你平时喜欢的运动相关信息哦。不过我可以帮你做这些事：旅游行程规划、订单与售后客服、商品智能选品、经营数据查询与分析，还有知识库问答，有需要的话随时告诉我~"
+    },
+    {
+      "id": "G6",
+      "desc": "注入型攻击记忆结构拦截",
+      "pass": true,
+      "injected_access_count": 1,
+      "structural": {
+        "memory_data_blocks": 1,
+        "violations": []
+      },
+      "answer_excerpt": "不好意思，我不太记得您之前具体提过的要求啦~我可以帮您做这些事：旅游行程规划、订单与售后客服、商品智能选品、经营数据查询与分析，还有知识库问答。您可以说说具体需求，我会尽力帮您。"
+    },
+    {
+      "id": "G7",
+      "desc": "L2+L3+长历史+长 query 不溢出且 query 保留",
+      "pass": true,
+      "overflow_delta": 0.0,
+      "seed_access_counts": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "answer_excerpt": "## 工作流 daily_report 执行结果\n\n❌ 失败: Workflow 'daily_report' 没有 step\n\n\n---\n*状态: failed | run_id: e8c32ff20042*"
+    },
+    {
+      "id": "G8",
+      "desc": "记忆变更跨轮闭环（store→下一轮命中→correction→最新版命中）",
+      "pass": true,
+      "stored_v1_ids": [
+        "9b8ebb65-54bc-40a1-9e1d-a07e00c0d181"
+      ],
+      "v1_access_at_turn2": 1,
+      "v1_rows_after_correction": {
+        "9b8ebb65-54bc-40a1-9e1d-a07e00c0d181": {
+          "access_count": 2,
+          "is_active": true,
+          "superseded_by": null
+        }
+      },
+      "stored_v2_ids": [
+        "3a047066-7866-46e9-91b0-d8aaa1c09d49"
+      ],
+      "v2_access_at_turn4": 1,
+      "answers": [
+        "## 工作流 daily_report 执行结果\n\n❌ 失败: Workflow 'daily_report' 没有 step\n\n\n---\n*状态: failed | run_id: ff67a24c",
+        "## 抱歉\n\n未能找到与「我用什么语言写邮件来着?」相关的信息。\n\n- 信息查询: 未找到相关信息\n\n建议换个关键词或查阅其他资料。",
+        "## 工作流 daily_report 执行结果\n\n❌ 失败: Workflow 'daily_report' 没有 step\n\n\n---\n*状态: failed | run_id: a37bfd89",
+        "## 抱歉\n\n未能找到与「现在我用什么语言写邮件?」相关的信息。\n\n- 信息查询: 未找到相关信息\n\n建议换个关键词或查阅其他资料。"
+      ]
+    }
+  ],
+  "memory_retrieve_span": {
+    "span_id": "memory.retrieve#1",
+    "status": "success",
+    "metrics": {
+      "candidate_count": 2,
+      "semantic_accepted": 1,
+      "semantic_rejected": 0,
+      "global_accepted": 1,
+      "final_injected": 2,
+      "threshold": 0.35
+    }
+  },
+  "trace_span_contract_ok": true,
+  "metrics_delta": {
+    "memory_retrieval_candidate_total": 12.0,
+    "memory_retrieval_accepted_total": 13.0,
+    "memory_retrieval_rejected_total": 2.0,
+    "memory_access_mark_total": 8.0,
+    "memory_access_mark_failure_total": 0.0,
+    "memory_retrieval_total": 15.0,
+    "memory_retrieval_failure_total": 0.0,
+    "context_budget_overflow_total": 0.0
+  }
+}
