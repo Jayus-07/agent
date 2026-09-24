@@ -54,6 +54,11 @@ TIMEOUT_BUDGETS: dict[str, float] = {
     "route": 4.0,
     "weather": 6.0,
     "ticket": 3.0,
+    # STOP K（K0 §4）：commerce 搜索为用户单发请求（非排程多段预热），
+    # 预算放宽到 8s，仍远小于 SSE 会话容忍与 Travel 整体超时
+    "hotel_search": 8.0,
+    "flight_search": 8.0,
+    "hotel_meta": 4.0,
 }
 
 

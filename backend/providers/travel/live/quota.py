@@ -39,10 +39,18 @@ class BudgetExhausted(Exception):
 
 def daily_budget(provider: str) -> int:
     """provider → 本项目侧日软预算；0 = 不限（开发默认）。"""
-    if provider == "tencent:lbs":
-        import os
+    import os
 
+    if provider == "tencent:lbs":
         return int(os.getenv("TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET", "0"))
+    # STOP K（K0 §4）：commerce provider 显式登记（新 Provider 接入时在此
+    # 加一行；未登记 = 不限，保持「未知 provider 零行为变化」）
+    commerce_budget_env = {
+        "fake:commerce": "TRAVEL_PROVIDER_FAKE_COMMERCE_DAILY_BUDGET",
+    }
+    env_name = commerce_budget_env.get(provider)
+    if env_name:
+        return int(os.getenv(env_name, "0"))
     return 0
 
 

@@ -352,6 +352,20 @@ def router_node(state: dict) -> dict:
         except Exception as e:
             logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
+        # ── 商务预过滤（STOP K6）：纯正则，旅游/选品之后 ──
+        # 「找酒店/查机票」类纯库存查询短路进 commerce 域图；行程信号词
+        # （酒店推荐/住宿推荐/行程/攻略）已由旅游 prefilter 先行承接或在
+        # extract 内让路——优先级：客服 > 旅游 > 选品 > 商务（STOPK0 §1）。
+        try:
+            from backend.orchestration.graph.commerce_prefilter import (
+                try_commerce_prefilter,
+            )
+            commerce_update = try_commerce_prefilter(query, state)
+            if commerce_update is not None:
+                return {**state, **_mark_route_from_update(state, commerce_update)}
+        except Exception as e:
+            logger.warning(f"[RouterNode] 商务预过滤失败，回退到主 Router: {e}")
+
     # ── CS 兜底（全局入口）：无 CS 规则命中时再走一次完整 CS 预过滤 ──
     # 检测器已无向量通道（3f88b4f 删除），与上面的规则预判同源；保留是为
     # 走通 detect_cached + 灰度判定路径，行为与旧版一致。

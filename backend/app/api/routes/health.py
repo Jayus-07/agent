@@ -36,6 +36,9 @@ async def health():
         # STOP J §98：Provider health 组件（healthy/degraded/disabled）——
         # 非关键 Provider 降级不拖垮整体 /health（travel 域全部 required=false）
         "travel_providers": _travel_providers_status(),
+        # STOP K §20：Commerce 组件（hotel/flight 各自 healthy/degraded/
+        # disabled；fake=healthy 仅指链路可用，off/live 未接入=disabled/degraded）
+        "travel_commerce": _travel_commerce_status(),
     }
 
 
@@ -90,5 +93,14 @@ def _travel_providers_status() -> dict:
         from backend.providers.travel.live.health import provider_health
 
         return provider_health()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _travel_commerce_status() -> dict:
+    try:
+        from backend.travel.commerce.health import commerce_health
+
+        return commerce_health()
     except Exception:  # noqa: BLE001
         return {}

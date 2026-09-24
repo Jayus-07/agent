@@ -5,4 +5,5 @@ import 此包即触发所有域图向 domain_graph_registry 注册。
 """
 import backend.customer_service.register  # noqa: F401
 import backend.travel.register  # noqa: F401
+import backend.travel.commerce.register  # noqa: F401  # 旅游商务域（STOP K，默认关，TRAVEL_COMMERCE_ENABLED）
 import backend.selection_funnel.register  # noqa: F401  # 智能选品漏斗域（默认关闭，SELECTION_FUNNEL_ENABLED）

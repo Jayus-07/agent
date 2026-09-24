@@ -33,9 +33,13 @@ _PROVIDER_CAPABILITIES: tuple[ProviderCapability, ...] = (
                        "腾讯 WebService 无票价/营业时间字段（J0-4 实测）；"
                        "契约已冻结（contracts.TicketProvider），无真实适配器——"
                        "继续 unknown/unverified，不硬凑"),
-    ProviderCapability("hotel.search", False, None,
-                       "HOTEL_PROVIDER_SCOPE=OUT（无消费链，STOP K）"),
-    ProviderCapability("flight.search", False, None, "FLIGHT_PROVIDER_SCOPE=OUT"),
+    ProviderCapability("hotel.search", True, "fake:commerce",
+                       "STOP K 落地：契约+执行流+Fake 适配器（mode=fake，"
+                       "显式测试数据源）；live 适配器未实现——无真实供应商"
+                       "凭据，BLOCKED_BY_EXTERNAL_PROVIDER，mode=live 恒 "
+                       "DISABLED，绝不以 fake 冒充生产（STOPK0 §13）"),
+    ProviderCapability("flight.search", True, "fake:commerce",
+                       "同 hotel.search：fake-only，live 待真实供应商"),
 )
 
 

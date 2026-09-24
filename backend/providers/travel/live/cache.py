@@ -37,6 +37,18 @@ FRESH_TTLS: dict[str, int] = {
     "route": 120,
     "weather": 300,
     "ticket": 600,
+    # ── STOP K（K0 §8）：commerce 分数据 TTL ──
+    # 五类语义条目（hotel_meta/hotel_avail/hotel_price/flight_offer/
+    # flight_price）；当前搜索契约将 avail+price 捆绑在 offer 列表内一次
+    # 返回，故 *_search 操作绑定其中**最易变**分量的 TTL（保守：绝不把
+    # 旧价格当新价展示）。真实供应商拆分端点后各条目独立启用。
+    "hotel_meta": 3600,     # 静态属性（名称/地址/星级）慢变
+    "hotel_avail": 120,     # 可订状态快变
+    "hotel_price": 180,     # 价格快变且商业敏感
+    "flight_offer": 120,    # 航班时刻+舱位当日有效
+    "flight_price": 180,    # 票价随时段波动
+    "hotel_search": 120,    # = min(hotel_avail, hotel_price) 捆绑保守值
+    "flight_search": 120,   # = min(flight_offer, flight_price) 捆绑保守值
 }
 # negative cache：仅 NOT_FOUND，短 TTL（§31）
 NEGATIVE_TTL = 60
