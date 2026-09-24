@@ -1,0 +1,18 @@
+{"id": "K-B01", "question": "golden: B1 正常成功 Quote→Confirm→Create→BOOKED", "expected": {"result": "booked", "create": 1}, "metadata": {"group": "lifecycle", "tier": "smoke", "probe": "b1"}}
+{"id": "K-B02", "question": "golden: B2 双击确认 1 order 1 create", "expected": {"create": 1, "order": 1}, "metadata": {"group": "idempotency", "tier": "core", "probe": "b2"}}
+{"id": "K-B04", "question": "golden: B4 worker retry 零新增 create", "expected": {"create_delta": 0}, "metadata": {"group": "idempotency", "tier": "core", "probe": "b4"}}
+{"id": "K-B06", "question": "golden: B6 timeout after send → IN_DOUBT 零盲重试", "expected": {"status": "in_doubt", "blind_retry": 0}, "metadata": {"group": "in_doubt", "tier": "core", "probe": "b6"}}
+{"id": "K-B07", "question": "golden: B7 provider 成功后本地 crash → 恢复收敛零二单", "expected": {"logical_orders": 1}, "metadata": {"group": "recovery", "tier": "core", "probe": "b7"}}
+{"id": "K-B08", "question": "golden: B8 native idempotency 多次调用一个逻辑订单", "expected": {"logical_orders": 1}, "metadata": {"group": "capability", "tier": "core", "probe": "b8"}}
+{"id": "K-B09", "question": "golden: B9 clientref lookup-before-retry", "expected": {"status": "booked", "resend": 0}, "metadata": {"group": "capability", "tier": "core", "probe": "b9"}}
+{"id": "K-B10", "question": "golden: B10 bare 模型 IN_DOUBT + 人工裁决", "expected": {"final": "booked_via_manual"}, "metadata": {"group": "capability", "tier": "core", "probe": "b10"}}
+{"id": "K-B11", "question": "golden: B11 价格变化强制重确认 create=0", "expected": {"create": 0}, "metadata": {"group": "gates", "tier": "core", "probe": "b11"}}
+{"id": "K-B12", "question": "golden: B12 售罄 create=0", "expected": {"create": 0}, "metadata": {"group": "gates", "tier": "core", "probe": "b12"}}
+{"id": "K-B13", "question": "golden: B13 Quote 过期 create=0", "expected": {"create": 0}, "metadata": {"group": "gates", "tier": "core", "probe": "b13"}}
+{"id": "K-B15", "question": "golden: B15 跨租户 fail-closed create=0", "expected": {"create": 0}, "metadata": {"group": "security", "tier": "core", "probe": "b15"}}
+{"id": "K-B16", "question": "golden: B16 重复 webhook 终态相同副作用一次", "expected": {"duplicate_dedup": true}, "metadata": {"group": "webhook", "tier": "core", "probe": "b16"}}
+{"id": "K-B17", "question": "golden: B17 乱序 webhook 状态不倒退", "expected": {"no_regression": true}, "metadata": {"group": "webhook", "tier": "core", "probe": "b17"}}
+{"id": "K-B18", "question": "golden: B18 非法签名拒绝订单不变", "expected": {"rejected": true}, "metadata": {"group": "webhook", "tier": "core", "probe": "b18"}}
+{"id": "K-B19", "question": "golden: B19 未知订单 webhook 隔离", "expected": {"quarantined": true}, "metadata": {"group": "webhook", "tier": "core", "probe": "b19"}}
+{"id": "K-B20", "question": "golden: B20 重启恢复过期兜底收敛", "expected": {"status": "expired"}, "metadata": {"group": "recovery", "tier": "core", "probe": "b20"}}
+{"id": "K-C44", "question": "golden: §四十四 10 并发相同请求 1 order 1 intent", "expected": {"order": 1, "logical": 1}, "metadata": {"group": "concurrency", "tier": "hard", "probe": "c44"}}
