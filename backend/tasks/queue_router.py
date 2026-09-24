@@ -95,6 +95,7 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "cs.event_outbox_compensation": ("maintenance", "beat_binding"),
     "cs.qa_daily_report": ("report", "beat_binding"),
     "memory.daily_decay": ("maintenance", "beat_binding"),
+    "tasks.pending_recovery": ("maintenance", "beat_binding"),
     "tasks.zombie_reconcile": ("maintenance", "beat_binding"),
     "tasks.stale_execution_recovery": ("maintenance", "beat_binding"),
     "tasks.idempotency_retention": ("maintenance", "beat_binding"),

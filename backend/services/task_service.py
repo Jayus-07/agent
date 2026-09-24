@@ -488,7 +488,8 @@ def claim_for_resume(task_id: str, expected: TaskStatus) -> bool:
         return cur.rowcount > 0
 
 
-def release_lease_for_defer(task_id: str, execution_id: str) -> bool:
+def release_lease_for_defer(task_id: str, execution_id: str, *,
+                            not_before_seconds: float | None = None) -> bool:
     """admission defer 专用：释放刚认领的租约回 PENDING（Phase2 Step4）。
 
     状态机例外通道（原生条件 SQL，与 try_acquire_lease 的 stale 接管、
@@ -497,17 +498,34 @@ def release_lease_for_defer(task_id: str, execution_id: str) -> bool:
     过任何原子操作，回到队列语义与 initial PENDING 等价，消息层由调用方
     countdown 重投。不做并发重判：租约已被接管（rowcount=0）说明已有新
     owner 在跑，调用方不得再动这行。
+
+    Phase3 STOP B：not_before_seconds 非空时同条 UPDATE 写
+    dispatch_not_before_at（= countdown 重投窗口）——PENDING recovery
+    sweeper 的 durable 排除证据，防止 intentional defer 被当作 orphan
+    提前重投。与租约释放同条 SQL 保证原子。
     """
     ensure_schema()
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "UPDATE tasks SET status = %s, execution_id = '', "
-            "lease_heartbeat_at = NULL, lease_expires_at = NULL, "
-            "updated_at = now() "
-            "WHERE id = %s AND execution_id = %s AND status = %s",
-            (TaskStatus.PENDING.value, task_id, execution_id,
-             TaskStatus.RUNNING.value),
-        )
+        if not_before_seconds:
+            cur.execute(
+                "UPDATE tasks SET status = %s, execution_id = '', "
+                "lease_heartbeat_at = NULL, lease_expires_at = NULL, "
+                "dispatch_not_before_at = now() + "
+                "(%s || ' seconds')::interval, "
+                "updated_at = now() "
+                "WHERE id = %s AND execution_id = %s AND status = %s",
+                (TaskStatus.PENDING.value, str(float(not_before_seconds)),
+                 task_id, execution_id, TaskStatus.RUNNING.value),
+            )
+        else:
+            cur.execute(
+                "UPDATE tasks SET status = %s, execution_id = '', "
+                "lease_heartbeat_at = NULL, lease_expires_at = NULL, "
+                "updated_at = now() "
+                "WHERE id = %s AND execution_id = %s AND status = %s",
+                (TaskStatus.PENDING.value, task_id, execution_id,
+                 TaskStatus.RUNNING.value),
+            )
         return cur.rowcount > 0
 
 
@@ -721,6 +739,145 @@ def fail_recovered_task(task_id: str, *, grace_seconds: int,
             (TaskStatus.FAILED.value, message[:2000], task_id,
              TaskStatus.RUNNING.value, str(int(grace_seconds)),
              str(int(legacy_threshold_seconds)), int(TASK_MAX_LEASE_RECOVERIES)),
+        )
+        return cur.rowcount > 0
+
+
+# ═══════════════════════════════════════════════════
+# PENDING Recovery Accelerator（Phase3 STOP B：delivery recovery）
+# 与 stale execution recovery（上方 RUNNING 域）严格分层：
+# 本组只处理 status='PENDING' 的派发丢失，全部条件 SQL/CAS，
+# 不改状态机、不触碰租约/admission/RetryPolicy budget。
+# ═══════════════════════════════════════════════════
+
+def find_stale_pending(*, threshold_seconds: int,
+                       cooldown_seconds: int = 0,
+                       max_age_seconds: int | None = None,
+                       limit: int = 50,
+                       max_recovery_count: int | None = None) -> list[str]:
+    """stale PENDING 候选查询（只读，认领权在 claim CAS）。
+
+    候选条件（全部在 SQL 内判定，禁止 Python 侧二次过滤产生 TOCTOU）：
+    - status = PENDING（terminal/PAUSED/WAITING_USER/FAILED/RUNNING 一律不看）
+    - 无未到期的 intentional delay：dispatch_not_before_at IS NULL 或已过期
+      （admission defer 的 countdown 重投窗口由该列 durable 排除）
+    - 停滞判定（STOP B §25 eligible_at 语义）：无 recovery 历史时按
+      COALESCE(queued_at, created_at) 等 threshold；有 recovery 历史
+      （pending_recovery_last_at 非空）时按 last_at 等 cooldown——
+      首次发现阈值与失败冷却两个语义不混用
+    - 时效上限：updated_at > now() - max_age（不复活远古行，与 RUNNING
+      sweep 的 TASK_RECOVERY_MAX_AGE_SECONDS 同语义）
+    - 计数上限：pending_recovery_count < max_recovery_count（None = 不过滤，
+      供超限收口路径复用同一查询）
+    """
+    from backend.config.tasks import TASK_RECOVERY_MAX_AGE_SECONDS
+
+    if max_age_seconds is None:
+        max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
+    count_cap = (2 ** 31 - 1) if max_recovery_count is None else int(max_recovery_count)
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM tasks WHERE status = %s "
+            "AND (dispatch_not_before_at IS NULL OR dispatch_not_before_at <= now()) "
+            "AND (CASE WHEN pending_recovery_last_at IS NOT NULL THEN "
+            "pending_recovery_last_at <= now() - (%s || ' seconds')::interval "
+            "ELSE COALESCE(queued_at, created_at) "
+            "<= now() - (%s || ' seconds')::interval END) "
+            "AND updated_at > now() - (%s || ' seconds')::interval "
+            "AND pending_recovery_count < %s "
+            "ORDER BY COALESCE(pending_recovery_last_at, queued_at, created_at) "
+            "LIMIT %s",
+            (TaskStatus.PENDING.value, str(int(cooldown_seconds)),
+             str(int(threshold_seconds)),
+             str(int(max_age_seconds)), count_cap, int(limit)),
+        )
+        return [str(r[0]) for r in cur.fetchall()]
+
+
+def claim_stale_pending_for_recovery(
+        task_id: str, *, threshold_seconds: int,
+        cooldown_seconds: int, max_recovery_count: int,
+        max_age_seconds: int | None = None) -> dict | None:
+    """PENDING delivery recovery 原子认领（CAS，唯一仲裁点）。
+
+    条件 UPDATE + RETURNING：同一 stale PENDING 被多个 sweeper/重复 scan
+    并发发现时，只有一个 rowcount=1——本轮 recovery claim 唯一，重复
+    republish 在认领层被消灭（不依赖 broker introspection）。写入
+    pending_recovery_last_at=now() 同时承担两个语义：
+    - 失败冷却：publish 失败后 cooldown 内不再 eligible（下轮 scan 自然跳过）
+    - 阈值基准推进：重投成功后若消息再次丢失，从本次起重新计阈值
+
+    判定条件与 find_stale_pending 完全一致（claim 是同一判定的原子化），
+    另加 pending_recovery_last_at 冷却项。返回认领到的行快照（workflow/
+    queue/celery_task_id/pending_recovery_count），rowcount=0 返回 None。
+    """
+    from backend.config.tasks import TASK_RECOVERY_MAX_AGE_SECONDS
+
+    if max_age_seconds is None:
+        max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET pending_recovery_last_at = now(), "
+            "pending_recovery_count = pending_recovery_count + 1, "
+            "updated_at = now() "
+            "WHERE id = %s AND status = %s "
+            "AND (dispatch_not_before_at IS NULL OR dispatch_not_before_at <= now()) "
+            "AND (CASE WHEN pending_recovery_last_at IS NOT NULL THEN "
+            "pending_recovery_last_at <= now() - (%s || ' seconds')::interval "
+            "ELSE COALESCE(queued_at, created_at) "
+            "<= now() - (%s || ' seconds')::interval END) "
+            "AND updated_at > now() - (%s || ' seconds')::interval "
+            "AND pending_recovery_count < %s "
+            "RETURNING id, graph_name, queue, celery_task_id, "
+            "pending_recovery_count",
+            (task_id, TaskStatus.PENDING.value,
+             str(int(cooldown_seconds)), str(int(threshold_seconds)),
+             str(int(max_age_seconds)), int(max_recovery_count)),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {"id": str(row[0]), "workflow": str(row[1]),
+                "queue": str(row[2]), "celery_task_id": str(row[3]),
+                "pending_recovery_count": int(row[4])}
+
+
+def fail_stale_pending_delivery(task_id: str, *, message: str,
+                                max_recovery_count: int,
+                                threshold_seconds: int,
+                                max_age_seconds: int | None = None) -> bool:
+    """delivery recovery 计数超限的终态收口：stale PENDING → FAILED。
+
+    与 fail_recovered_task（RUNNING 域）同型：只在"停滞超阈值且
+    pending_recovery_count 已达上限"时落 FAILED(delivery_recovery_
+    exhausted)，可恢复任务永远先走 recovery 重投。FAILED 是可恢复终态
+    （管理端 retry 通道 + broker visibility 重投到达时 FAILED→PENDING
+    显式回队复活），不是死信。
+    """
+    from backend.config.tasks import TASK_RECOVERY_MAX_AGE_SECONDS
+
+    if max_age_seconds is None:
+        max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET status = %s, "
+            "error_type = 'DELIVERY_RECOVERY_EXHAUSTED', "
+            "error_message = %s, finished_at = now(), updated_at = now(), "
+            "duration_ms = CASE WHEN started_at IS NOT NULL THEN "
+            "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
+            "ELSE duration_ms END "
+            "WHERE id = %s AND status = %s "
+            "AND (dispatch_not_before_at IS NULL OR dispatch_not_before_at <= now()) "
+            "AND COALESCE(pending_recovery_last_at, queued_at, created_at) "
+            "<= now() - (%s || ' seconds')::interval "
+            "AND updated_at > now() - (%s || ' seconds')::interval "
+            "AND pending_recovery_count >= %s",
+            (TaskStatus.FAILED.value, message[:2000], task_id,
+             TaskStatus.PENDING.value, str(int(threshold_seconds)),
+             str(int(max_age_seconds)), int(max_recovery_count)),
         )
         return cur.rowcount > 0
 

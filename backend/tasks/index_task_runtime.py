@@ -203,7 +203,9 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
             return {"status": "error", "error": "admission_rejected",
                     "skipped": True}
         delay = admission.note_deferred(db_task_id, workflow=record.workflow)
-        task_service.release_lease_for_defer(db_task_id, lease_id)
+        # Phase3 STOP B：defer countdown 窗口写入 durable not_before 证据
+        task_service.release_lease_for_defer(db_task_id, lease_id,
+                                             not_before_seconds=delay)
         raise admission.AdmissionDeferred(db_task_id, delay, decision.reason)
 
     hb = LeaseHeartbeat(db_task_id, lease_id)

@@ -131,6 +131,10 @@ class TaskRecord:
     max_retries: int = 3
     recovery_count: int = 0         # 自动恢复次数（Phase2 Step1：租约过期重投计数）
     retry_exhausted: bool = False   # 重试耗尽（Phase2 Step2：FAILED 终态细分）
+    # Phase3 STOP B：PENDING delivery recovery 元数据（≠ 业务 RetryPolicy budget）
+    dispatch_not_before_at: datetime | None = None   # intentional future delivery 证据（admission defer 写入）
+    pending_recovery_last_at: datetime | None = None # 最近一次 pending recovery 认领时刻（冷却基准）
+    pending_recovery_count: int = 0                  # delivery recovery 计数（上限见 TASK_PENDING_RECOVERY_MAX_COUNT）
     duration_ms: int | None = None
     queue: str = "agent"
     worker: str = ""
@@ -173,6 +177,9 @@ class TaskRecord:
             max_retries=int(row.get("max_retries") or 3),
             recovery_count=int(row.get("recovery_count") or 0),
             retry_exhausted=bool(row.get("retry_exhausted") or False),
+            dispatch_not_before_at=row.get("dispatch_not_before_at"),
+            pending_recovery_last_at=row.get("pending_recovery_last_at"),
+            pending_recovery_count=int(row.get("pending_recovery_count") or 0),
             duration_ms=int(row["duration_ms"]) if row.get("duration_ms") is not None else None,
             queue=row.get("queue") or "agent",
             worker=row.get("worker") or "",

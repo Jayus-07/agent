@@ -172,7 +172,10 @@ def _defer_admission(task_id: str, record, lease_id: str,
         return
 
     delay = admission.note_deferred(task_id, workflow=record.workflow)
-    task_service.release_lease_for_defer(task_id, lease_id)
+    # Phase3 STOP B：defer countdown 窗口写入 durable not_before 证据——
+    # PENDING recovery sweeper 在该时刻前不得把本行当 orphan 提前重投
+    task_service.release_lease_for_defer(task_id, lease_id,
+                                         not_before_seconds=delay)
     route = resolve_for_task(record)
     logger.warning(
         "[AgentTask] %s admission deferred (reason=%s)，%.1fs 后重投 %s",

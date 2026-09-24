@@ -47,6 +47,21 @@ def zombie_reconcile() -> dict:
     return result
 
 
+@celery_app.task(name="tasks.pending_recovery")
+def pending_recovery() -> dict:
+    """stale PENDING 派发恢复（Phase3 STOP B：delivery recovery accelerator）。
+
+    只恢复 delivery 不执行 workflow：CAS 认领 → 经 dispatch_task（QueueRouter）
+    重投 → 正常 worker pickup（terminal 短路 → lease → admission）。
+    """
+    from backend.tasks.pending_recovery import recover_stale_pending_tasks
+
+    result = recover_stale_pending_tasks()
+    if not result.get("ok"):
+        logger.error("[TaskMaintenance] pending recovery failed: %s", result)
+    return result
+
+
 @celery_app.task(name="tasks.idempotency_retention")
 def idempotency_retention() -> dict:
     """幂等 ledger 保留策略（Phase2 Step6 §五十二）。

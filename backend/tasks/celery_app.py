@@ -24,6 +24,7 @@ from backend.config.tasks import (
     CELERY_RETRY_BACKOFF,
     CELERY_RETRY_BACKOFF_MAX,
     CELERY_TASK_TIMEOUT,
+    TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS,
     TASK_RECOVERY_SWEEP_INTERVAL,
     TASK_ZOMBIE_RECONCILE_INTERVAL,
 )
@@ -147,6 +148,15 @@ celery_app.conf.update(
             "task": "tasks.stale_execution_recovery",
             "schedule": float(TASK_RECOVERY_SWEEP_INTERVAL),
             "options": {"queue": beat_queue("tasks.stale_execution_recovery")},
+        },
+        # Phase3 STOP B：PENDING recovery accelerator。派发丢失的 stale
+        # PENDING（publish 失败孤儿 / broker 消息丢失 / unacked 死等）主动
+        # CAS 认领并经 QueueRouter 重投；intentional defer 由
+        # dispatch_not_before_at durable 排除；visibility_timeout 仍为最终兜底。
+        "tasks-pending-recovery": {
+            "task": "tasks.pending_recovery",
+            "schedule": float(TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS),
+            "options": {"queue": beat_queue("tasks.pending_recovery")},
         },
         # Phase2 Step6：幂等 ledger 保留策略。只清显式 TTL 已过期的记录，
         # 业务动作类默认无 expires_at（永久保留）→ 本任务常态空跑兜底。

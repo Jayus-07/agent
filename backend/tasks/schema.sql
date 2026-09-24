@@ -62,9 +62,26 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recovery_count     INT NOT NULL DEFAU
 -- Phase2 Step2：重试耗尽标记（FAILED 终态的可观测细分；普通 FAILED 为 FALSE）
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_exhausted    BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Phase3 STOP B：PENDING Recovery Accelerator 派发元数据
+-- dispatch_not_before_at：intentional future delivery 证据（admission defer
+--   写入 countdown 重投窗口；该时刻之前 pending sweeper 不允许主动重投）。
+--   NULL = 无已知 intentional delay；值过期（<= now）后恢复保守接手资格
+--   ——届时若 countdown 消息仍在途中，重复 delivery 由 lease CAS 短路兜底。
+-- pending_recovery_last_at / pending_recovery_count：delivery recovery 记账
+--   （claim CAS 冷却 + 计数上限），delivery 恢复计数≠业务 RetryPolicy budget。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dispatch_not_before_at TIMESTAMPTZ NULL;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pending_recovery_last_at TIMESTAMPTZ NULL;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pending_recovery_count INT NOT NULL DEFAULT 0;
+
 -- stale recovery sweeper 扫描路径：RUNNING + 租约过期
 CREATE INDEX IF NOT EXISTS idx_tasks_lease_expiry ON tasks (lease_expires_at)
     WHERE status = 'RUNNING';
+
+-- Phase3 STOP B：pending recovery sweeper 扫描路径：PENDING（阈值判定走
+-- COALESCE(pending_recovery_last_at, queued_at, created_at)，取 queued_at
+-- 作索引列，无 queued_at 的孤儿行量级小、走 idx_tasks_status 兜底即可）
+CREATE INDEX IF NOT EXISTS idx_tasks_pending_queued ON tasks (queued_at)
+    WHERE status = 'PENDING';
 
 CREATE INDEX IF NOT EXISTS idx_tasks_user_created ON tasks (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON tasks (tenant_id, created_at DESC);

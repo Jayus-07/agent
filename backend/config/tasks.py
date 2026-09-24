@@ -107,6 +107,50 @@ TASK_MAX_LEASE_RECOVERIES = int(os.getenv("TASK_MAX_LEASE_RECOVERIES", "3"))
 # 旧任务；这些行由 zombie reconcile（最终兜底）收尸为 FAILED 可重试。
 TASK_RECOVERY_MAX_AGE_SECONDS = int(os.getenv("TASK_RECOVERY_MAX_AGE_SECONDS", "86400"))
 
+# ── PENDING Recovery Accelerator（Phase3 STOP B）──────────────
+# 目标：PENDING stranded task（broker 消息丢失 / publish 失败孤儿 /
+# unacked 死等）从唯一依赖 visibility_timeout(1950s) 被动恢复，升级为
+# application 级主动发现重投；visibility timeout 仍是最后一道保险。
+# 阈值推导（不机械取值）：
+# - admission defer 最大 countdown = 60s×1.25 jitter = 75s，defer 释放时
+#   写 dispatch_not_before_at durable 证据排除（不靠阈值硬扛）
+# - RetryPolicy 最大 countdown = 120s，但等待期行是 FAILED（非 PENDING），
+#   本 sweeper 天然不碰
+# - after=60s 仅覆盖"无 intentional delay 证据"的 PENDING；实际 defer 场景
+#   最早 eligible ≈ not_before(≤75s) + scan 间隔，仍远小于 1950s
+TASK_PENDING_RECOVERY_ENABLED = os.getenv(
+    "TASK_PENDING_RECOVERY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+TASK_PENDING_RECOVERY_AFTER_SECONDS = int(
+    os.getenv("TASK_PENDING_RECOVERY_AFTER_SECONDS", "60"))
+if TASK_PENDING_RECOVERY_AFTER_SECONDS <= 0:
+    raise ValueError("TASK_PENDING_RECOVERY_AFTER_SECONDS 必须为正整数")
+TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS = int(
+    os.getenv("TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS", "30"))
+if TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS <= 0:
+    raise ValueError("TASK_PENDING_RECOVERY_SCAN_INTERVAL_SECONDS 必须为正整数")
+# 重投失败（broker 仍不可达）后的冷却：cooldown > scan 间隔，避免每轮空转重试；
+# 默认 120s×5 次 ≈ 10min 仍远小于 broker visibility 1950s 兜底窗口
+TASK_PENDING_RECOVERY_COOLDOWN_SECONDS = int(
+    os.getenv("TASK_PENDING_RECOVERY_COOLDOWN_SECONDS", "120"))
+if TASK_PENDING_RECOVERY_COOLDOWN_SECONDS <= 0:
+    raise ValueError("TASK_PENDING_RECOVERY_COOLDOWN_SECONDS 必须为正整数")
+TASK_PENDING_RECOVERY_BATCH_SIZE = int(
+    os.getenv("TASK_PENDING_RECOVERY_BATCH_SIZE", "50"))
+if TASK_PENDING_RECOVERY_BATCH_SIZE <= 0:
+    raise ValueError("TASK_PENDING_RECOVERY_BATCH_SIZE 必须为正整数")
+# 单任务 delivery recovery 计数上限（≠ 业务 retry budget，不占 RetryPolicy）；
+# 超限落 FAILED(delivery_recovery_exhausted) 终态可管理端重试，broker
+# visibility 重投到达时仍会经 FAILED→PENDING 显式回队复活（双层兜底）。
+TASK_PENDING_RECOVERY_MAX_COUNT = int(
+    os.getenv("TASK_PENDING_RECOVERY_MAX_COUNT", "5"))
+if TASK_PENDING_RECOVERY_MAX_COUNT <= 0:
+    raise ValueError("TASK_PENDING_RECOVERY_MAX_COUNT 必须为正整数")
+# pending recovery 时效上限（与 TASK_RECOVERY_MAX_AGE_SECONDS 同语义）：
+# 陈旧 PENDING 行（部署过渡期垃圾、历史遗留）不自动复活，人工处置
+TASK_PENDING_RECOVERY_MAX_AGE_SECONDS = int(
+    os.getenv("TASK_PENDING_RECOVERY_MAX_AGE_SECONDS", "86400"))
+
+
 # Redis broker visibility_timeout（Phase2 Step1 显式化，原为 kombu 默认 3600s）：
 # 必须 > 单条消息"取出到 ack"的最长未 ack 时长上界 = hard limit 1830s
 #（soft 1800s 超时处理器仍需落库+广播后才 ack，hard 1830s 杀进程后消息本就该重投）
