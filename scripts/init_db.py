@@ -141,11 +141,34 @@ MIGRATION_TARGETS: dict[str, str] = {
     # db-migrate fail-fast 挡住共享栈；与 047_side_effect 同号不同名，按
     # 文件名排序可共存。
     "047_memory_provenance.sql": "memory",
+    # Memory scope + 事实版本管理（Memory STOP C，2026-09-24）：memory_records
+    # tenant_id/user_key/memory_key/version 等列。Platform Readiness STOP B
+    # 登记：此前未登记 + db-migrate 镜像漂移，导致「git 有 048、镜像无 048、
+    # migration 静默跳过」事故复现（实库对象已被并行会话手工补齐；本登记使
+    # schema_migrations 收敛，避免下次重建 rc=2 整栈拒绝启动）。
+    "048_memory_scope_and_versioning.sql": "memory",
+    # Phase3 STOP B（2026-09-24）：tasks PENDING Recovery 列 + 索引。
+    # tasks 表演进权威在 backend/tasks/schema.sql（ensure_schema 幂等），
+    # 本文件为 db-migrate 流程的实库执行留痕，语句全部 IF NOT EXISTS 幂等。
+    # 文件当前 untracked（Phase3 会话所有）：漏登记会在下次重建触发
+    # fail-fast 整栈拒绝启动，故先行登记；文件缺失的干净检出不受影响
+    # （discover 按目录扫描，登记表多出条目无害）。
+    "049_task_pending_recovery.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
 ORDER_LAST = ["004_readonly_role.sql"]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
+
+# 运行时管理的迁移（Platform Readiness STOP B）：对象由应用启动时的
+# ensure_schema() 幂等建立，而非迁移链。fresh 库上没有这些对象，直接执行
+# 会 UndefinedTable 导致整链 rc=1——统一 skip 并登记 status='skipped'，
+# 实库 schema 由 ensure_schema 幂等保证（这与「登记表防 fail-fast」并不
+# 冲突：登记仍在 MIGRATION_TARGETS，只是执行态为运行时托管）。
+RUNTIME_MANAGED_MIGRATIONS: dict[str, str] = {
+    "049_task_pending_recovery.sql":
+        "tasks 表演进权威 = backend/tasks/schema.sql ensure_schema()",
+}
 
 # 可选的额外种子（--demo-sandbox）
 DEMO_SANDBOX_SEED = "demo_sandbox.sql"
@@ -589,6 +612,13 @@ def main() -> int:
                 print(f"[init_db] ── {dbname} ──")
                 for name, target in plan:
                     if target != db_key:
+                        continue
+                    if name in RUNTIME_MANAGED_MIGRATIONS:
+                        sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
+                        _record(conn, name, sql, "skipped")
+                        conn.commit()
+                        print(f"[init_db]   = {name}: skipped — "
+                              f"{RUNTIME_MANAGED_MIGRATIONS[name]}")
                         continue
                     sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
                     t0 = time.time()

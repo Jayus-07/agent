@@ -17,6 +17,17 @@ networks:
   agent-net:
     driver: bridge
 
+# ── Build Identity 锚（Platform Readiness STOP B1）──────────────
+# 所有代码承载服务共用：构建时注入 git commit / 构建时间（启动日志与
+# /health 回读）。发布脚本（scripts/release.sh / release checklist）负责
+# export GIT_COMMIT=$(git rev-parse --short HEAD)；未设置时 unknown——
+# 「运行容器不知道自己是哪个 commit」即视为发布流程违规（A8/P1-17）。
+x-build: &build
+  context: .
+  args:
+    GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    BUILD_TIME: ${BUILD_TIME:-unknown}
+
 # ── Worker 公共锚（Phase2 Step5：五 workload 五 worker）────────
 # 所有 Celery worker 共享：镜像/env_file/数据卷/网络/重启与温停策略/
 # broker+result+PG+Redis 基础环境。差异只声明在各 worker：
@@ -46,7 +57,7 @@ x-worker-base-env: &worker-base-env
   WORKER_METRICS_PORT: "9809"
 
 x-worker-common: &worker-common
-  build: .
+  build: *build
   env_file:
     - .env
   volumes:
@@ -103,7 +114,7 @@ services:
   # ── API Gateway（Spring Cloud Gateway，统一入口）──
   # ── 应用服务（AI 系统：RAG/Agent/LLM）──
   app:
-    build: .
+    build: *build
     ports:
       # P3（docs/auth 修复清单④）：信任边界=网络边界——app 信任网关注入的
       # 身份头（IDENTITY_SOURCE=header/strict），8000 只允许宿主机内部访问，
@@ -239,7 +250,7 @@ services:
   # remote 模式下 app 不再写索引路径，实际写路径归本服务独占）；
   # 共享 app_cache 卷（embedding/reranker 模型只存一份，不重复下载）
   rag-service:
-    build: .
+    build: *build
     # B6：--timeout-graceful-shutdown 600 —— SIGTERM 后最多等 600s 让在途
     # 请求（长 RAG 检索/SSE）自然收尾，避免 docker stop 10s 默认硬断
     command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090", "--timeout-graceful-shutdown", "600"]
@@ -293,7 +304,7 @@ services:
   # 工具执行复用 MCPServer.call_tool；RAG 工具经代理转发 rag-service（不重复
   # 加载 embedding/Chroma）；鉴权沿用全局 API_KEY（X-API-Key，fail-closed）
   mcp-service:
-    build: .
+    build: *build
     # B6：MCP streamable HTTP 为长连接，同样给 600s 优雅收尾窗口
     command: ["python", "-m", "uvicorn", "mcp_servers.protocol_app:app", "--host", "0.0.0.0", "--port", "8091", "--timeout-graceful-shutdown", "600"]
     ports:
@@ -356,7 +367,7 @@ services:
   #   - 上线切换：真实 Java 服务就绪后改 BUSINESS_SERVICE_URL 指向之，
   #     本服务直接下线，无任何代码改动。
   business-mock:
-    build: .
+    build: *build
     command:
       ["python", "-m", "uvicorn", "backend.mock.business_service.main:app",
        "--host", "0.0.0.0", "--port", "8081"]
@@ -576,7 +587,7 @@ services:
   # （D:\tmp\agent-worker-branch.override.yml，已删除），按主干 up 不会起
   # beat → 客服三条周期任务静默停摆。现正式纳入主干，禁止再移除。
   beat:
-    build: .
+    build: *build
     command:
       ["celery", "-A", "backend.tasks.celery_app", "beat",
        "--loglevel=info"]
@@ -633,7 +644,7 @@ services:
   #   - 默认 CS_DISPATCH_MODE=off：容器可以先起，确认候选与容量后再切
   #     shadow/enforce，不需要重建镜像。
   cs-dispatcher:
-    build: .
+    build: *build
     command: ["python", "-m", "backend.workers.cs_dispatcher"]
     env_file:
       - .env
@@ -757,7 +768,7 @@ services:
   # 杜绝「迁移残缺但服务照起」。新增迁移文件只需落进 migrations 目录并在
   # MIGRATION_TARGETS 登记一行，无需再改本文件。
   db-migrate:
-    build: .
+    build: *build
     env_file:
       - .env
     environment:

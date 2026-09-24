@@ -39,6 +39,14 @@ FROM python:3.10-slim
 
 LABEL description="Agent Platform: LangGraph + MCP + RAG + NL2SQL"
 
+# ── Build Identity（Platform Readiness STOP B1）──────────────────
+# 运行容器必须可回答「我是哪个 commit 构建的」。compose 侧以 build args
+# 注入（未设置时 unknown）；启动日志与 /health 读取这两个 env。
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    BUILD_TIME=${BUILD_TIME}
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

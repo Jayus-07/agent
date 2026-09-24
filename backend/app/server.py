@@ -128,6 +128,22 @@ register_mcp_servers()
 # 启动配置校验（P1-14：pydantic Settings fail-fast）
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")
+async def log_build_identity():
+    """启动身份日志（Platform Readiness STOP B2）：本进程是哪个 commit 构建。
+
+    GIT_COMMIT/BUILD_TIME 由镜像构建时注入（Dockerfile ARG→ENV，compose
+    x-build 锚从发布脚本环境透传）；缺失 = unknown = 发布流程违规（A8）。
+    只记身份三要素，禁止携带任何 secret。
+    """
+    logger.info(
+        "[Build] service=app commit=%s build_time=%s env=%s",
+        os.getenv("GIT_COMMIT", "unknown"),
+        os.getenv("BUILD_TIME", "unknown"),
+        os.getenv("ENVIRONMENT", "unknown"),
+    )
+
+
+@app.on_event("startup")
 async def bind_agent_hub_loop():
     """坐席 WS Hub 绑定主 loop：业务线程 publish() 跳板（2026-09-17）。"""
     import asyncio
