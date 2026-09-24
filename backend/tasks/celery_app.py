@@ -44,6 +44,7 @@ celery_app = Celery(
              "backend.tasks.side_effect_probe_tasks",  # Step6：副作用幂等实机探针（env 门禁）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
              "backend.tasks.memory_maintenance_tasks",  # STOP C：Memory 衰减生命周期（beat）
+             "backend.tasks.travel_booking_tasks",  # STOP L：Booking 恢复扫描（beat）
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
              "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
 )
@@ -118,6 +119,13 @@ celery_app.conf.update(
             "task": "cs.event_outbox_compensation",
             "schedule": 15.0,
             "options": {"queue": beat_queue("cs.event_outbox_compensation")},
+        },
+        # STOP L：Booking 恢复扫描（确认过期兜底 + stale SUBMITTING/IN_DOUBT
+        # 按能力对账/重放；全部动作经状态机与幂等账本白名单，重复执行无害）
+        "travel-booking-recovery": {
+            "task": "travel.booking_recovery_scan",
+            "schedule": 60.0,
+            "options": {"queue": beat_queue("travel.booking_recovery_scan")},
         },
         # 批次D（2026-09-22）：客服质检每日报表。每日 06:10 UTC 聚合昨日
         # 指标（幂等覆盖 qa_daily_reports）；失败自动重试（最多 3 次）。

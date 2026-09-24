@@ -352,6 +352,19 @@ def router_node(state: dict) -> dict:
         except Exception as e:
             logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
+        # ── 预订域预过滤（STOP L9）：选品与商务之间加法插入 ──
+        # 「订/预订」是交易意图，先于商务承接（L0 §20 冻结触碰：既有四域
+        # 两两顺序不变，仅新增一域；CS 售后/行程信号已在词表让路）。
+        try:
+            from backend.orchestration.graph.booking_prefilter import (
+                try_booking_prefilter,
+            )
+            booking_update = try_booking_prefilter(query, state)
+            if booking_update is not None:
+                return {**state, **_mark_route_from_update(state, booking_update)}
+        except Exception as e:
+            logger.warning(f"[RouterNode] 预订预过滤失败，回退到主 Router: {e}")
+
         # ── 商务预过滤（STOP K6）：纯正则，旅游/选品之后 ──
         # 「找酒店/查机票」类纯库存查询短路进 commerce 域图；行程信号词
         # （酒店推荐/住宿推荐/行程/攻略）已由旅游 prefilter 先行承接或在

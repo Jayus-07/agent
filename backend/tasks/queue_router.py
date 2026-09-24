@@ -99,6 +99,7 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.zombie_reconcile": ("maintenance", "beat_binding"),
     "tasks.stale_execution_recovery": ("maintenance", "beat_binding"),
     "tasks.idempotency_retention": ("maintenance", "beat_binding"),
+    "travel.booking_recovery_scan": ("maintenance", "beat_binding"),
     "tasks.side_effect_probe": ("maintenance", "beat_binding"),
     "model.health_scan": ("maintenance", "beat_binding"),
     "model.health_check_one": ("maintenance", "beat_binding"),

@@ -163,6 +163,37 @@ PROVIDER_CONTRACTS: dict[str, ProviderIdempotencyCapabilities] = {
         evidence="business_client.py 现契约无幂等键字段；Java 侧支持未证实（UNKNOWN）",
         activation_gate=True,
     ),
+    # ── STOP L（Travel Booking）：三类 fake profile 与任务书 §十七 三模型
+    #    一一对应；能力证据 = fake 适配器行为（测试钉死）。真实供应商落地时
+    #    按实测证据登记新条目，UNKNOWN 一律 fail-closed（§五.E）。
+    "fake_booking_native": ProviderIdempotencyCapabilities(
+        provider_name="fake_booking_native",
+        native_support=NativeIdempotencySupport.SUPPORTED,
+        key_transport=IdempotencyKeyTransport.BODY,
+        key_header_name="idempotency_key",
+        status_lookup_supported=True,
+        duplicate_response_recognizable=True,
+        unknown_result_policy=UnknownResultPolicy.SAFE_RETRY,
+        evidence="fake 适配器实现：同 idempotency key 同 payload 返回同一 "
+                 "provider 订单（Model A；tests/travel/booking 钉死）",
+    ),
+    "fake_booking_clientref": ProviderIdempotencyCapabilities(
+        provider_name="fake_booking_clientref",
+        native_support=NativeIdempotencySupport.UNSUPPORTED,
+        key_transport=IdempotencyKeyTransport.NONE,
+        status_lookup_supported=True,
+        unknown_result_policy=UnknownResultPolicy.RECONCILE_FIRST,
+        evidence="fake 适配器实现：merchant_order_id 落库可按 ref 查询，"
+                 "无原生幂等键（Model B）",
+    ),
+    "fake_booking_bare": ProviderIdempotencyCapabilities(
+        provider_name="fake_booking_bare",
+        native_support=NativeIdempotencySupport.UNSUPPORTED,
+        key_transport=IdempotencyKeyTransport.NONE,
+        status_lookup_supported=False,
+        unknown_result_policy=UnknownResultPolicy.IN_DOUBT,
+        evidence="fake 适配器实现：无幂等键、无 lookup（Model C）",
+    ),
 }
 
 

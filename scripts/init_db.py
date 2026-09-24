@@ -159,6 +159,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 与 006 六值枚举交集仅 failed）——此前同事务审计落库在真实确认动作上
     # 必然 CheckViolation 回滚，agent_actions 生产表零落库。additive 扩枚举。
     "050_agent_actions_status_enum.sql": "memory",
+    # Phase3 STOP D：confirmations 业务操作身份两列 + state CHECK 收编
+    # verifying + active 语义操作 partial unique index（跨 confirmation 去重）
+    "051_cs_business_operation_guard.sql": "memory",
+    "052_travel_booking.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
