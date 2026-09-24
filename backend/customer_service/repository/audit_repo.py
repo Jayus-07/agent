@@ -58,6 +58,19 @@ class AuditRepository:
 
     async def insert_agent_action(self, record: dict) -> None:
         """写入一条业务动作记录（record 由 AgentActionRecord.to_dict() 构建）。"""
+        from datetime import datetime
+
+        # to_dict() 把 executed_at 序列化成 ISO 字符串；asyncpg 对 TIMESTAMPTZ
+        # 列拒绝字符串（2026-09-24 实测：整笔审计事务回滚，agent_actions
+        # 零落库）——与 insert_audit_log 的 created_at 同款宽容转换。
+        # 无法解析时置 NULL（列可空），绝不杜撰执行时间。
+        executed_at = record.get("executed_at")
+        if isinstance(executed_at, str):
+            try:
+                executed_at = datetime.fromisoformat(executed_at)
+            except ValueError:
+                executed_at = None
+
         obj = CSAgentAction(
             action_id=record.get("action_id", ""),
             conversation_id=record.get("conversation_id", ""),
@@ -70,7 +83,7 @@ class AuditRepository:
             confirmation_state=record.get("confirmation_state", "not_required"),
             status=record.get("status", "pending"),
             executed_by=record.get("agent_type", "ai"),
-            executed_at=record.get("executed_at"),
+            executed_at=executed_at,
         )
         self._s.add(obj)
         await self._s.flush()

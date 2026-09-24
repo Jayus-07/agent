@@ -211,6 +211,11 @@ def _handle_confirm(
             target_type=pending_action.get("target_type", ""),
             target_id=pending_action.get("target_id", ""),
             detail=f"simulated execution, action_id={record.get('action_id', '')}",
+            # agent_actions.conversation_id NOT NULL + FK（006）：审计落库
+            # 必须带会话归属——session_id 即 conversations.conversation_id
+            # （confirmation 落库时已幂等 get_or_create，2026-09-24 实测：
+            # 缺该值 FK violation 整笔审计回滚）。
+            conversation_id=session_id,
         )
 
         label = _ACTION_TYPE_LABELS.get(action_type, action_type)

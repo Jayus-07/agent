@@ -154,6 +154,11 @@ MIGRATION_TARGETS: dict[str, str] = {
     # fail-fast 整栈拒绝启动，故先行登记；文件缺失的干净检出不受影响
     # （discover 按目录扫描，登记表多出条目无害）。
     "049_task_pending_recovery.sql": "memory",
+    # Side-Effect 幂等人工生产验收（STOP F1，2026-09-24）：agent_actions
+    # .status 枚举对齐应用契约（AgentActionRecord = simulated|executed|failed
+    # 与 006 六值枚举交集仅 failed）——此前同事务审计落库在真实确认动作上
+    # 必然 CheckViolation 回滚，agent_actions 生产表零落库。additive 扩枚举。
+    "050_agent_actions_status_enum.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
