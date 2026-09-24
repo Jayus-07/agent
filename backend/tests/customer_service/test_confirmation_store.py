@@ -9,7 +9,8 @@ from backend.customer_service.confirmation_store import ConfirmationStore
 @pytest.fixture(autouse=True)
 def mock_db_success(monkeypatch):
     """Store 单测只验证缓存语义，持久化成功由显式桩表示。"""
-    monkeypatch.setattr(ConfirmationStore, "_db_save", lambda *args: True)
+    # STOP D：save 增加 tenant_id kwarg —— mock 签名跟进（断言意图不变）
+    monkeypatch.setattr(ConfirmationStore, "_db_save", lambda *args, **kwargs: True)
     monkeypatch.setattr(ConfirmationStore, "_db_clear", lambda *args: True)
     monkeypatch.setattr(ConfirmationStore, "_db_load", lambda *args: None)
 

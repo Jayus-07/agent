@@ -37,6 +37,8 @@ class ConfirmationRepository:
         user_id: str,
         conversation_id: str,
         pending_action: dict,
+        tenant_id: str = "",
+        semantic_fingerprint: str | None = None,
     ) -> CSConfirmation:
         confirmation_id = pending_action.get("action_id", str(uuid.uuid4()))
         obj = CSConfirmation(
@@ -46,6 +48,9 @@ class ConfirmationRepository:
             action_type=pending_action.get("action_type", ""),
             target_type=pending_action.get("target_type", ""),
             target_id=pending_action.get("target_id", ""),
+            # Phase3 STOP D：业务操作身份两列（占位行可无指纹，051 谓词排除）
+            tenant_id=tenant_id or None,
+            semantic_fingerprint=semantic_fingerprint,
             proposal=pending_action,
             state=pending_action.get("confirmation_state", "pending"),
             expires_at=_parse_dt(pending_action.get("expires_at")),
@@ -78,12 +83,18 @@ class ConfirmationRepository:
         self,
         confirmation_id: str,
         pending_action: dict,
+        tenant_id: str = "",
+        semantic_fingerprint: str | None = None,
     ) -> bool:
         """整行覆盖 pending 行的 proposal JSON 及其派生列（缺陷6.3）。
 
         need_info（缺槽位追问）升级为正式 proposal、reask 更新 retry_count
         时，仅 update_state 不够 —— proposal JSON 必须同步落库，否则补槽
         结果/追问计数在 L1 缓存失效后丢失。
+        Phase3 STOP D（D19）：语义身份（fingerprint/tenant）必须在同一
+        条 UPDATE 内原子刷新 —— 否则 row 指纹=旧、proposal=新，唯一守卫
+        被架空；身份变更撞上另一 active 操作时由 051 唯一索引拒绝（D20），
+        调用方转译为 BusinessOperationConflict。
         """
         values: dict = {
             "proposal": pending_action,
@@ -92,6 +103,10 @@ class ConfirmationRepository:
             "target_type": pending_action.get("target_type", ""),
             "target_id": pending_action.get("target_id", ""),
         }
+        if tenant_id:
+            values["tenant_id"] = tenant_id
+        if semantic_fingerprint is not None:
+            values["semantic_fingerprint"] = semantic_fingerprint
         expires = _parse_dt(pending_action.get("expires_at"))
         if expires is not None:
             values["expires_at"] = expires
@@ -151,7 +166,9 @@ class ConfirmationRepository:
         审计口径失真（audit-report §P1-14）。
         """
         values: dict = {"state": final_state}
-        if final_state in ("success", "failed"):
+        if final_state in ("success", "failed", "verifying"):
+            # verifying（STOP D IN_DOUBT）：执行已发生（结果未知），executed_at
+            # 记录执行时刻，供 STOP E reconciliation 定位
             values["executed_at"] = datetime.now(timezone.utc)
         result = await self._s.execute(
             update(CSConfirmation)
@@ -175,6 +192,78 @@ class ConfirmationRepository:
             )
         )
         return bool(result.scalar())
+
+    # ── Phase3 STOP D：Business Operation Guard 查询 ────────────────
+
+    async def find_by_identity(
+        self, *, tenant_id: str, action_type: str, target_type: str,
+        target_id: str, semantic_fingerprint: str,
+        states: tuple[str, ...],
+    ) -> CSConfirmation | None:
+        """按业务操作身份查既有行（冲突定位 §66 / 终态策略 D18）。
+
+        身份列与 051 唯一索引完全同构 —— 查询与约束共用同一套键，
+        禁止两套口径（§34）。确定性排序保证多行时返回稳定结果。
+        """
+        result = await self._s.execute(
+            select(CSConfirmation)
+            .where(
+                CSConfirmation.tenant_id == tenant_id,
+                CSConfirmation.action_type == action_type,
+                CSConfirmation.target_type == target_type,
+                CSConfirmation.target_id == target_id,
+                CSConfirmation.semantic_fingerprint == semantic_fingerprint,
+                CSConfirmation.state.in_(states),
+            )
+            .order_by(CSConfirmation.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_ids_by_identity(
+        self, *, tenant_id: str, action_type: str, target_type: str,
+        target_id: str, semantic_fingerprint: str,
+        states: tuple[str, ...],
+    ) -> list[tuple[str, str]]:
+        """同身份全部行的 (confirmation_id, user_id)——IN_DOUBT ledger 防线用。"""
+        result = await self._s.execute(
+            select(
+                CSConfirmation.confirmation_id,
+                CSConfirmation.user_id,
+            ).where(
+                CSConfirmation.tenant_id == tenant_id,
+                CSConfirmation.action_type == action_type,
+                CSConfirmation.target_type == target_type,
+                CSConfirmation.target_id == target_id,
+                CSConfirmation.semantic_fingerprint == semantic_fingerprint,
+                CSConfirmation.state.in_(states),
+            )
+        )
+        return [(r[0], r[1]) for r in result.all()]
+
+    async def has_in_doubt_ledger(
+        self, *, tenant_id: str, user_id: str, confirmation_id: str,
+    ) -> bool:
+        """Phase2 durable ledger 是否留有该确认的未决副作用记录。
+
+        STOP C 语义（shared/idempotency）：status=running（含租约过期
+        crash 窗）或 status=failed 且 error_code=IDEMPOTENCY_UNCERTAIN
+        —— 副作用结果未知，guard 不得释放（STOP D §15/§37）。
+        """
+        from sqlalchemy import text
+        check = await self._s.execute(
+            text(
+                "SELECT 1 FROM ai.idempotency_records "
+                "WHERE tenant_id = :t AND actor_id = :u "
+                "AND operation = 'cs.action.execute' AND client_key = :k "
+                "AND (status = 'running' "
+                "     OR (status = 'failed' AND error_code = 'IDEMPOTENCY_UNCERTAIN')) "
+                "LIMIT 1"
+            ),
+            {"t": tenant_id, "u": user_id,
+             "k": f"cs_action:{confirmation_id}"},
+        )
+        return check.first() is not None
 
     async def expire_stale(self) -> list[dict]:
         """全局扫描：pending 且已过 expires_at 的确认 → expired（P2.4）。

@@ -38,6 +38,15 @@ _ACTION_TYPE_LABELS = {
 }
 
 
+def _resolve_tenant(state: dict[str, Any]) -> str:
+    """可信租户解析（STOP D §67）：cs_context（runner 身份链注入）优先，
+    回退请求上下文；绝不信任请求体自行携带的租户字段。"""
+    from backend.core.request_context import get_tool_tenant_id
+
+    ctx_tenant = str(((state.get("cs_context") or {}).get("tenant_id")) or "")
+    return ctx_tenant or get_tool_tenant_id() or "default"
+
+
 def execute_action(
     user_message: str,
     cs_route: dict,
@@ -74,6 +83,7 @@ def execute_action(
     )
 
     store = get_confirmation_store()
+    tenant_id = _resolve_tenant(state)
 
     pending_action = state.get("pending_action") or store.load(user_id, session_id)
 
@@ -82,20 +92,24 @@ def execute_action(
     if pending_action and pending_action.get("status") == "need_info":
         return _handle_slot_fill(
             pending_action, user_message, user_id, session_id, store, cs_route,
+            tenant_id=tenant_id,
         )
 
     if pending_action:
         return _handle_pending_confirmation(
             pending_action, user_message, user_id, session_id,
+            tenant_id=tenant_id,
         )
 
     # 缺陷6.2（2026-09-23）：副作用动作缺订单号时必须结构化追问，
     # 禁止 fallback "latest"（最近一单）替用户决定操作对象。
     if intent in _SLOT_ORDER_INTENTS and not _resolve_order_id(cs_route, user_message):
-        return _ask_missing_slot(user_id, intent, session_id, store)
+        return _ask_missing_slot(user_id, intent, session_id, store,
+                                 tenant_id=tenant_id)
 
     try:
-        return _build_new_proposal(user_id, intent, cs_route, session_id, store, user_message)
+        return _build_new_proposal(user_id, intent, cs_route, session_id, store,
+                                   user_message, tenant_id=tenant_id)
     except DatabaseError:
         # 业务网关不可用（http 模式下订单事实源连接失败/超时/5xx）：显式
         # 告知暂不可用 —— 绝不 fallback 本地演示库（缺陷6.5 红线）；
@@ -200,10 +214,21 @@ def _build_new_proposal(
     session_id: str,
     store: Any,
     user_message: str = "",
+    tenant_id: str = "",
 ) -> ExpertResult:
-    """构建新 proposal 并保存到 confirmation store。"""
+    """构建新 proposal 并保存到 confirmation store。
+
+    Phase3 STOP D：保存即过 Business Operation Unique Guard —— 语义等价
+    的 active 操作已存在 / 已成功终结 / 修改冲突时返回稳定业务语义
+    （§20），绝不把 IntegrityError 漏成 500。
+    """
     from backend.customer_service.action import build_pending_action
     from backend.customer_service.audit import build_audit_entry
+    from backend.customer_service.business_guard import (
+        BusinessOperationAlreadyActive,
+        BusinessOperationAlreadyCompleted,
+        BusinessOperationConflict,
+    )
     from backend.customer_service.confirmation import ConfirmationState
     from backend.customer_service.risk import RiskLevel, requires_human_review
     from backend.observability.metrics import record_cs_confirmation
@@ -211,7 +236,44 @@ def _build_new_proposal(
     proposal = _build_proposal(user_id, intent, cs_route, user_message)
     pending = build_pending_action(proposal)
 
-    store.save(user_id, session_id, pending)
+    try:
+        store.save(user_id, session_id, pending, tenant_id=tenant_id)
+    except BusinessOperationAlreadyActive as e:
+        logger.info(
+            "[ActionExpert] business guard duplicate: existing=%s state=%s",
+            e.existing_confirmation_id, e.existing_state,
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "该操作已在处理中，请勿重复提交；您可以在会话中回复"
+                "「取消」后再重新发起，或回复「转人工」由人工客服协助。"
+            ),
+            data={"business_guard": "duplicate",
+                  "existing_confirmation_id": e.existing_confirmation_id,
+                  "existing_state": e.existing_state},
+        )
+    except BusinessOperationAlreadyCompleted:
+        logger.info("[ActionExpert] business guard terminal-duplicate: type=%s",
+                    proposal.action_type)
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft="该订单的此项操作此前已提交成功，无需重复发起；如需其他帮助请告诉我。",
+            data={"business_guard": "terminal_duplicate"},
+        )
+    except BusinessOperationConflict as e:
+        logger.warning("[ActionExpert] business guard conflict: %s", e.message)
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "您要发起的操作与当前处理中的另一操作冲突，"
+                "请先取消当前操作或回复「转人工」由人工客服协助。"
+            ),
+            data={"business_guard": "conflict"},
+        )
 
     record_cs_confirmation("initiated")
 
@@ -251,6 +313,7 @@ def _handle_pending_confirmation(
     user_message: str,
     user_id: str,
     session_id: str,
+    tenant_id: str = "",
 ) -> ExpertResult:
     """处理用户对 pending action 的确认/取消响应。
 
@@ -262,6 +325,7 @@ def _handle_pending_confirmation(
 
     outcome = process_confirmation(
         pending_action, user_message, user_id, session_id,
+        tenant_id=tenant_id,
     )
 
     data: dict[str, Any] = {
@@ -354,6 +418,7 @@ def _extract_order_id_from_message(user_message: str) -> str:
 
 def _ask_missing_slot(
     user_id: str, intent: str, session_id: str, store: Any,
+    tenant_id: str = "",
 ) -> ExpertResult:
     """缺订单槽位：持久化 need_info 型 pending_action 并结构化追问。
 
@@ -393,7 +458,7 @@ def _ask_missing_slot(
             now, CS_CONFIRMATION_TTL_SECONDS
         ).isoformat(),
     }
-    store.save(user_id, session_id, pending)
+    store.save(user_id, session_id, pending, tenant_id=tenant_id)
     logger.info(
         "[ActionExpert] missing slot order_id, ask user: intent=%s user_id=%s",
         intent, user_id,
@@ -420,6 +485,7 @@ def _handle_slot_fill(
     session_id: str,
     store: Any,
     cs_route: dict,
+    tenant_id: str = "",
 ) -> ExpertResult:
     """need_info 补槽：下一轮消息优先尝试填充缺失的 order_id。
 
@@ -443,6 +509,7 @@ def _handle_slot_fill(
         try:
             return _build_new_proposal(
                 user_id, intent, cs_route, session_id, store, user_message,
+                tenant_id=tenant_id,
             )
         except OrderNotEligibleError as e:
             logger.info("[ActionExpert] proposal declined after slot fill: %s", e)

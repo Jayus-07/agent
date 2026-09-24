@@ -46,7 +46,7 @@ class FakeStore:
     def load(self, user_id, session_id):
         return self.pending
 
-    def save(self, user_id, session_id, pending_action):
+    def save(self, user_id, session_id, pending_action, tenant_id=""):
         self.saved.append(pending_action)
         self.pending = pending_action
 
@@ -337,6 +337,19 @@ class _FakeSessionCtx:
     async def commit(self):
         self._log.append("commit")
 
+    def begin_nested(self):
+        # STOP D：_async_save 的会话 ensure 走 savepoint（并发双提交
+        # 竞争补强）—— fake 会话无真事务，语义等价的穿透 stub。
+        return _FakeNested()
+
+
+class _FakeNested:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
 
 class _FakeRepo:
     """load 首次返回 None、之后返回既有行 —— 模拟「首插后升级」生命周期。"""
@@ -353,11 +366,11 @@ class _FakeRepo:
             return row
         return self._existing
 
-    async def save(self, user_id, conversation_id, pending_action):
+    async def save(self, user_id, conversation_id, pending_action, tenant_id="", semantic_fingerprint=None):
         self.saved.append((user_id, conversation_id))
         return MagicMock()
 
-    async def update_proposal(self, confirmation_id, pending_action):
+    async def update_proposal(self, confirmation_id, pending_action, tenant_id="", semantic_fingerprint=None):
         self.updated.append(confirmation_id)
         return True
 

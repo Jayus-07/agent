@@ -162,6 +162,7 @@ def _handle_confirm(
     from backend.customer_service.confirmation_store import get_confirmation_store
     from backend.customer_service.experts.action import _ACTION_TYPE_LABELS
     from backend.observability.metrics import record_cs_action, record_cs_confirmation
+    from backend.shared.idempotency import SideEffectOutcomeUnknown
 
     store = get_confirmation_store()
     CS = confirmation_sm.ConfirmationState
@@ -232,6 +233,40 @@ def _handle_confirm(
             action_type=action_type,
             confirmation_state=CS.SUCCESS.value,
             action_result=action_result,
+            audit_entry=audit_entry,
+        )
+
+    except SideEffectOutcomeUnknown as e:
+        # Phase3 STOP D（§15/§37/R4）：副作用结果未知 —— confirmation 落
+        # verifying（IN_DOUBT_LOCKED），继续占住 051 唯一索引（active
+        # 生命周期含 verifying），STOP E reconciliation 裁决前禁止同语义
+        # 操作再次创建。绝不落 failed（那会释放 guard 绕过 STOP C）。
+        from backend.customer_service.confirmation import ConfirmationState
+        confirmation_sm.transition(CS.EXECUTING, ConfirmationState.VERIFYING)
+        store.clear(user_id, session_id,
+                    final_state=ConfirmationState.VERIFYING.value)
+        record_cs_action(action_type, "verifying")
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type=action_type,
+            result="in_doubt",
+            target_type=pending_action.get("target_type", ""),
+            target_id=pending_action.get("target_id", ""),
+            detail=f"side-effect outcome unknown: {e}",
+            conversation_id=session_id,
+        )
+        logger.error(
+            "[CSConfirmationFlow] side-effect IN_DOUBT → verifying: type=%s",
+            action_type, exc_info=True,
+        )
+        return ConfirmationOutcome(
+            kind="failed",
+            answer=(
+                "操作提交后系统无法确认最终结果，为避免重复执行已暂停该操作；"
+                "请稍后联系人工客服核实处理进度，请勿重复提交。"
+            ),
+            action_type=action_type,
+            confirmation_state=ConfirmationState.VERIFYING.value,
             audit_entry=audit_entry,
         )
 
