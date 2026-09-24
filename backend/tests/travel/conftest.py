@@ -148,6 +148,6 @@ def _isolated_provider_cache(monkeypatch):
     from backend.infra.cache.backend import InMemoryCache
     from backend.providers.travel.live import cache as pcache
 
-    monkeypatch.setattr(pcache, "_backend",
-                        lambda: InMemoryCache(default_ttl=600))
+    store = InMemoryCache(default_ttl=600)  # 单实例：写读同源
+    monkeypatch.setattr(pcache, "_backend", lambda: store)
     yield
