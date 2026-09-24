@@ -59,9 +59,13 @@ MEMORY_RETRIEVAL_CANDIDATES = int(os.getenv("MEMORY_RETRIEVAL_CANDIDATES", "20")
 # 最终注入上限（0~K，0 条合法；不再强凑 top5）
 MEMORY_MAX_INJECTED = int(os.getenv("MEMORY_MAX_INJECTED", "5"))
 # 语义相关性硬门（cosine similarity，1.0-cosine_distance 口径，越高越相关）。
-# 初值 0.45 与 RAG 语义边界阈值（SEMANTIC_SIMILARITY_THRESHOLD）同源参照，
-# 目标是先阻止明显无关记忆陪跑；精确调优留 STOP F Memory Golden。
-MEMORY_MIN_RELEVANCE_SCORE = float(os.getenv("MEMORY_MIN_RELEVANCE_SCORE", "0.45"))
+# 0.35 由 STOP F Memory Golden 实证定标（2026-09-24，60 例 7 类别，
+# 生产同款 embedding qwen3.7-text-embedding 真库 sweep）：
+# 0.30~0.35 平台 recall=1.0 / precision=0.889 / irr_inj=0.105，0.45 处
+# recall 崩至 0.797（过敏类安全记忆 0.448 被拒）换 irr 仅 0.069。
+# 选 0.35：与 0.30 指标全同，且距无关带主体（0.24~0.31）有 0.05 边距。
+# 依据与 sweep 全表见 docs/2026-09-24-Memory-Production-Closure-STOPF-Golden-Evaluation.md
+MEMORY_MIN_RELEVANCE_SCORE = float(os.getenv("MEMORY_MIN_RELEVANCE_SCORE", "0.35"))
 # 全局响应偏好：memory_key 命中这些前缀的 active 记忆免 semantic gate
 # （"回答用中文"与问题主题无关但任何轮次都适用）；白名单为确定性策略，
 # 禁止 LLM 决定 global（§90 防 key 扩权）。普通主题型偏好不在白名单，
