@@ -29,7 +29,9 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))  # 仓库根 → backend 包
 
 from e2e_travel_runtime import chat_stream, jwt_claims, login  # noqa: E402
 
