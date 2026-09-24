@@ -5,7 +5,7 @@ import time
 from sqlalchemy.exc import IntegrityError
 
 from backend.memory.database import get_session, AsyncSessionLocal
-from backend.memory.repository.session_repo import SessionRepository
+from backend.memory.repository.session_repo import SessionRepository, SessionOwnerMismatch
 from backend.memory.repository.memory_repo import MemoryRepository
 from backend.memory.session import SessionMemory
 from backend.memory.long_term import LongTermMemory, MemoryFact
@@ -85,7 +85,17 @@ class MemoryService:
                 srepo = SessionRepository(db_session)
 
                 # Ensure chat_sessions row exists (FK target for chat_messages)
-                srow = await srepo.get_or_create(session_id, user_id)
+                # STOP C（C4 属主隔离）：session 被其他用户占用时派生隔离
+                # 存储键——该用户的所有读写落到自己的键下，互不可见
+                try:
+                    srow = await srepo.get_or_create(session_id, user_id)
+                except SessionOwnerMismatch:
+                    original = session_id
+                    session_id = self._scoped_session_id(session_id, user_id)
+                    logger.warning(
+                        "[MemoryService] session %s 属主不匹配（跨用户收养拦截），"
+                        "隔离至派生键", original)
+                    srow = await srepo.get_or_create(session_id, user_id)
 
                 # L2 → L1（只取最近 SHORT_TERM_MAX_MESSAGES*2 条：
                 #  ① 查询层限量，避免长会话全量拉取；② 多取一倍给去重留余量）
@@ -267,7 +277,12 @@ class MemoryService:
                 srepo = SessionRepository(db_session)
 
                 # Ensure chat_sessions row exists (may not if start_session was never called)
-                await srepo.get_or_create(session_id, user_id)
+                # STOP C（C4 属主隔离）：与 start_session 同口径派生隔离键
+                try:
+                    await srepo.get_or_create(session_id, user_id)
+                except SessionOwnerMismatch:
+                    session_id = self._scoped_session_id(session_id, user_id)
+                    await srepo.get_or_create(session_id, user_id)
 
                 # L2 persistence —— save_turn 返回已落库的 (user_msg, assistant_msg)，
                 # user message id 在此确定并作为不可变参数传入后台 store：
@@ -275,34 +290,81 @@ class MemoryService:
                 q_msg, _a_msg = await srepo.save_turn(session_id, question, answer)
                 user_message_id = q_msg.id if q_msg is not None else None
 
-                # Check summarization
-                if await srepo.needs_summarization(session_id):
-                    l2 = self._sessions.get(session_id)
-                    if l2:
-                        l2._repo = srepo
-                        summary = await l2.summarize()
-                        if summary is not None:
-                            # 摘要必须落库，否则下次会话列表/历史读取时 summary 永远为空
-                            await srepo.update_summary(session_id, summary)
-                        else:
-                            # 摘要失败：保留旧摘要并留痕（静默丢失上下文最难排查）
-                            try:
-                                from backend.observability.metrics import degradation_alerts_total
-                                degradation_alerts_total.labels(
-                                    code="memory_summary_failed", level="warn",
-                                ).inc()
-                            except Exception:
-                                pass
-
                 await db_session.commit()
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] end_turn 失败: {e}")
 
+        # L2 摘要后台化（STOP E E2/E8）：摘要触发的 LLM 调用（秒级）不得在
+        # 请求关闭路径同步等待——稳态长会话会把每次流关闭阻塞至多 5s
+        # （MemoryManager._MEMORY_TIMEOUT），超时还会误报 memory_op_failed。
+        # save_turn 已提交，摘要读独立会话；失败安全回退（旧摘要保留）。
+        asyncio.ensure_future(self._summarize_if_needed(session_id))
+
         # L3: background write — caller's loop must keep running (Manager handles this)
         asyncio.ensure_future(self.store(question, answer, session_id, user_id,
                                          source_message_id=user_message_id,
                                          tenant_id=tenant_id))
+
+    async def _summarize_if_needed(self, session_id: str) -> None:
+        """L2 摘要后台任务（STOP E）。
+
+        触发（既有口径不变）：message_count >= SESSION_MAX_MESSAGES（条数制）。
+        滞后门（E2 新增）：水位线之后可摘要增量 >=
+        CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES 才调 LLM——条数制触发在稳态
+        （每轮 +2 条）下每轮都成立，增量又恰好达到 L5 的 MIN_DELTA=2，
+        原实现稳态每轮一次摘要 LLM 调用（每轮重复 summary）。
+
+        失败安全回退：任何异常仅 metric+log，旧摘要与水位线保留，
+        绝不影响主聊天链（E-I8）。
+        """
+        try:
+            async with AsyncSessionLocal() as db_session:
+                try:
+                    srepo = SessionRepository(db_session)
+                    if not await srepo.needs_summarization(session_id):
+                        return
+                    from backend.config import (
+                        CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES,
+                        CONTEXT_L4_KEEP_RECENT_TURNS,
+                    )
+                    state = await srepo.get_summary_state(session_id)
+                    through = int(state.get("through_id") or 0)
+                    boundary = await srepo.summarizable_before_id(
+                        session_id, CONTEXT_L4_KEEP_RECENT_TURNS)
+                    if not boundary or boundary <= through:
+                        return
+                    rows = await srepo.load_messages_since(
+                        session_id, through, boundary,
+                        limit=CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES)
+                    if len(rows) < CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES:
+                        return  # 攒批：增量不足，等后续轮次凑批
+                    l2 = await SessionMemory.create(session_id, srepo)
+                    summary = await l2.summarize()
+                    if summary is not None:
+                        # 摘要必须落库，否则下次会话列表/历史读取时 summary 永远为空
+                        await srepo.update_summary(session_id, summary)
+                    else:
+                        # 摘要失败：保留旧摘要并留痕（静默丢失上下文最难排查）
+                        try:
+                            from backend.observability.metrics import degradation_alerts_total
+                            degradation_alerts_total.labels(
+                                code="memory_summary_failed", level="warn",
+                            ).inc()
+                        except Exception:
+                            pass
+                    await db_session.commit()
+                except Exception as e:
+                    await db_session.rollback()
+                    logger.error(
+                        f"[MemoryService] L2 摘要失败（后台，旧摘要保留）"
+                        f"(session={session_id}): {e}")
+                    _metric_safe(degradation_alerts_total.labels(
+                        code="memory_summary_failed", level="warn").inc())
+        except Exception as e:
+            # 会话工厂/连接层失败：与 L3 同级降级，不允许反噬主链
+            logger.error(
+                f"[MemoryService] L2 摘要任务无法打开会话 (session={session_id}): {e}")
 
     # ============================================================
     # Retrieval
@@ -481,7 +543,12 @@ class MemoryService:
         try:
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
-                await repo.get_or_create(session_id, user_id)
+                # STOP C（C4 属主隔离）：与 start/end_turn 同口径
+                try:
+                    await repo.get_or_create(session_id, user_id)
+                except SessionOwnerMismatch:
+                    session_id = self._scoped_session_id(session_id, user_id)
+                    await repo.get_or_create(session_id, user_id)
                 for m in messages:
                     await repo.save_message(session_id, m.get("role", "user"), m.get("content", ""))
                     saved += 1
@@ -489,6 +556,14 @@ class MemoryService:
         except Exception as e:
             logger.error(f"[MemoryService] save_messages 失败: {e}")
         return {"saved": saved}
+
+    @staticmethod
+    def _scoped_session_id(session_id: str, user_id: str) -> str:
+        """跨用户收养拦截后的隔离存储键（确定性：同一用户恒映射同键）。"""
+        import hashlib
+
+        digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
+        return f"{session_id}::u:{digest}"
 
     async def run_decay(self) -> dict:
         async with AsyncSessionLocal() as db_session:

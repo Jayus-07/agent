@@ -72,10 +72,20 @@ class SessionMemory:
             for r in rows[-SESSION_MAX_MESSAGES:]
         )
         try:
+            from backend.config import (
+                CONTEXT_L5_SUMMARY_MAX_TOKENS,
+                CONTEXT_L5_SUMMARY_TEMPERATURE,
+            )
             from backend.infra.llm import llm
             from backend.prompts.service import prompt_service
             r = prompt_service.render_sync("memory.session.summary", conversation=conversation)
-            resp = llm.invoke(r.text)
+            # STOP E E3：fallback 全量摘要与增量路径同一输出预算——
+            # provider 级 max_tokens 硬帽，防异常 provider 无限长输出
+            resp = llm.invoke(
+                r.text,
+                max_tokens=int(CONTEXT_L5_SUMMARY_MAX_TOKENS),
+                temperature=float(CONTEXT_L5_SUMMARY_TEMPERATURE),
+            )
             self._summary = resp.content if hasattr(resp, "content") else str(resp)
             return self._summary
         except Exception as e:

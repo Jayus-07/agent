@@ -25,6 +25,12 @@ HISTORY_TOKEN_BUDGET = int(os.getenv("HISTORY_TOKEN_BUDGET", "2048"))
 # 会话记忆 (L2)
 SESSION_MAX_MESSAGES = int(os.getenv("SESSION_MAX_MESSAGES", "50"))
 
+# L2 摘要滞后门（STOP E E2）：触发条件为条数制（SESSION_MAX_MESSAGES），
+# 稳态每轮新增 2 条消息都会满足"水位线后有新增量"，若无最小增量门会导致
+# 每轮一次摘要 LLM 调用（每轮重复 summary）。攒批到 ≥K 条增量才摘要。
+CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES = int(
+    os.getenv("CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES", "10"))
+
 # 长期记忆 (L3)
 ENABLE_LONG_TERM_MEMORY = os.getenv("ENABLE_LONG_TERM_MEMORY", "true").lower() == "true"
 # PII 过滤器

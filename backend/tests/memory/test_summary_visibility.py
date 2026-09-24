@@ -76,10 +76,15 @@ class TestSummarizeFailureContract:
 
 class TestEndTurnSkipsOverwrite:
     def test_end_turn_skips_update_summary_on_failure(self, broken_llm, monkeypatch):
-        """summarize 返回 None 时不得调用 update_summary（防坏摘要覆盖 DB）。"""
+        """summarize 返回 None 时不得调用 update_summary（防坏摘要覆盖 DB）。
+
+        STOP E 起摘要在后台任务执行（end_turn 不阻塞等待），此处显式
+        驱动被捕获的后台协程，保持原断言意图不变。
+        """
         from backend.memory import service as service_mod
 
         calls = {"update_summary": 0, "save_turn": 0}
+        background_coros = []
 
         class _FakeSRepo:
             async def get_or_create(self, *a, **kw):
@@ -90,6 +95,15 @@ class TestEndTurnSkipsOverwrite:
 
             async def needs_summarization(self, *a, **kw):
                 return True
+
+            async def get_summary_state(self, *a, **kw):
+                return {"summary": None, "through_id": None, "token_count": None}
+
+            async def summarizable_before_id(self, *a, **kw):
+                return 99
+
+            async def load_messages_since(self, *a, **kw):
+                return [_FakeRow("user", "内容")] * 16
 
             async def load_messages(self, session_id, limit=None):
                 return [_FakeRow("user", "内容")]
@@ -111,16 +125,23 @@ class TestEndTurnSkipsOverwrite:
             async def __aexit__(self, *a):
                 return False
 
-        sm = SessionMemory("s-3")
-        sm._repo = _FakeRepo()
+        def _capture_future(coro):
+            background_coros.append(coro)
+            return None
+
         service = service_mod.MemoryService.__new__(service_mod.MemoryService)
-        service._sessions = {"s-3": sm}
+        service._sessions = {}
         monkeypatch.setattr(service_mod, "AsyncSessionLocal", lambda: _FakeCtx())
         monkeypatch.setattr(service_mod, "SessionRepository", lambda db: _FakeSRepo())
+        monkeypatch.setattr(service_mod.asyncio, "ensure_future", _capture_future)
 
         asyncio.run(service.end_turn("s-3", "q", "a", user_id="u"))
         assert calls["save_turn"] == 1, "正常落库不受摘要失败影响"
+        # STOP E：end_turn 本身不得等待摘要完成（后台协程被捕获而非执行）
         assert calls["update_summary"] == 0, "摘要失败时不得调用 update_summary 覆盖 DB"
+        assert background_coros, "摘要必须以后台任务形式调度"
+        for coro in background_coros:
+            coro.close()
 
 
 class TestMemoryManagerShutdown:
