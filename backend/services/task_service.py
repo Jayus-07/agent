@@ -15,7 +15,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from backend.config.database import MEMORY_DB_CONFIG
+from backend.config.database import DB_CONNECT_TIMEOUT, MEMORY_DB_CONFIG
 from backend.models.task import TaskRecord, TaskStatus
 from backend.shared.logger import logger
 
@@ -34,7 +34,11 @@ def _dsn() -> str:
 def _conn():
     import psycopg
 
-    return psycopg.connect(_dsn(), autocommit=True)
+    return psycopg.connect(
+        _dsn(),
+        autocommit=True,
+        connect_timeout=DB_CONNECT_TIMEOUT,
+    )
 
 
 def ensure_schema() -> None:

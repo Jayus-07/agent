@@ -36,6 +36,27 @@ def pg():
     return task_service
 
 
+def test_task_service_connection_uses_configured_timeout(monkeypatch):
+    """任务运行时直连必须受统一连接超时保护，避免故障时无限等待。"""
+    import psycopg
+    from backend.services import task_service
+
+    captured = {}
+    sentinel = object()
+
+    def fake_connect(dsn, **kwargs):
+        captured["dsn"] = dsn
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    monkeypatch.setattr(task_service, "DB_CONNECT_TIMEOUT", 7,
+                        raising=False)
+
+    assert task_service._conn() is sentinel
+    assert captured["kwargs"] == {"autocommit": True, "connect_timeout": 7}
+
+
 def _new_record(pg) -> str:
     record = TaskManager.create(f"idx-user-{uuid.uuid4().hex[:8]}", "索引任务",
                                 graph_name="rag_index",
