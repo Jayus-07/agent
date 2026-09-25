@@ -166,8 +166,47 @@ ledger 状态短路，无需人工干预。
 
 ## 9. 已登记 Deferred（勿顺手实现）
 
-- IN_DOUBT admin 列表页 / 告警规则（现发现路径：stale CLI + SQL + 日志，本轮实测可用）
-- resolve 未记录 operator 身份字段（以 reason 纪律 + 值班记录替代）
+- IN_DOUBT admin 列表页 / 告警规则（现发现路径：stale CLI + `verifying` CLI + SQL + 日志，本轮实测可用）
+- ~~resolve 未记录 operator 身份字段~~（**STOP E 已部分关闭**：CS 确认行裁决新增 `--operator`（executed 必填）+ `customer_service.audit_logs` 结构化审计；ledger 侧沿用 reason 纪律）
 - provider 幂等透传协议（business-service POST / Kafka，激活前必须补，
   `PROVIDER_IDEMPOTENCY_BEFORE_ACTIVATION_REQUIRED=true`）
 - alerts webhook 重复通知可容忍（best-effort 观测面）
+
+## 10. Phase3 STOP E：verifying/executing 卡死确认行的裁决（2026-09-25 新增）
+
+CS 域副作用结果未知时（`SideEffectOutcomeUnknown`），confirmation 行落
+`verifying` 并持续占住 051 业务实体唯一守卫（`_GUARD_ACTIVE_STATES`）。
+唯一合法出口 = `idempotency_ops.py` 的三个 STOP E 子命令（账本+确认行+
+审计**同事务**收敛，实现见 `backend/customer_service/reconciliation.py`）：
+
+```bash
+# 1) 列出全部卡死行（verifying/executing + 账本未决标记）
+docker exec -i agent-app-1 python - < backend/scripts/idempotency_ops.py -- verifying
+
+# 2) 单条完整关联链（确认行+账本行+守卫语义）
+docker exec -i agent-app-1 python - < backend/scripts/idempotency_ops.py \
+  -- inspect-confirmation --confirmation-id <id>
+
+# 3) 裁决（三出口；reason 必须含 operator 与依据）
+docker exec -i agent-app-1 python - < backend/scripts/idempotency_ops.py \
+  -- resolve-confirmation --confirmation-id <id> \
+     --decision executed|not_executed|unresolved \
+     --operator <姓名> --reason "op:<姓名> <依据/工单号>" [--result-json '{...}']
+```
+
+裁决语义（冻结，`UNKNOWN != FAILED != SUCCESS`）：
+
+| decision | 账本（ai.idempotency_records） | 确认行 | 守卫 | 语义 |
+|---|---|---|---|---|
+| `executed` | SUCCEEDED + `MANUAL_RESOLVED_EXECUTED`（后续同 key 重放结果，绝不重执行） | verifying→success | 终态策略接管 | 副作用确认已发生（须 operator 身份） |
+| `not_executed` | `RESOLVED_NOT_EXECUTED`（解除 UNCERTAIN 阻断，FAILED 可接管重试） | verifying→failed | 释放 | 确认未执行，可安全重试 |
+| `unresolved` | **不动** | **不动** | **持续占住** | 证据不足保持调查，只落审计 |
+
+安全不变量（测试钉死 `tests/test_stop_e_verifying_reconciliation.py`）：
+- 账本双形态（`failed+UNCERTAIN` 主形态 / stale running 崩溃窗）自动分流；
+  账本无未决记录时拒绝收敛（不猜）。
+- 并发/重复裁决 CAS 单胜出；跨租户游标零影响（`cross_tenant_access=0`）。
+- `false_success=0 / false_failure=0 / duplicate_side_effect=0`。
+- booking 域 Model C 同语义收敛：`travel.booking.reconciliation.manual_resolve`
+  （订单 IN_DOUBT → BOOKED/FAILED + 账本同步，回归钉死
+  `tests/travel/booking/test_stop_e_manual_resolve_ledger.py`）。

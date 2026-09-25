@@ -1065,6 +1065,120 @@ def execute_idempotent_in_transaction(
     return result
 
 
+def _resolve_side_effect_in_connection(
+    conn: Any,
+    *,
+    tenant_id: str,
+    actor_id: str,
+    operation: str,
+    client_key: str,
+    decision: str,
+    result: dict[str, Any] | None = None,
+    table: str = "ai.idempotency_records",
+) -> dict[str, bool]:
+    """人工裁决 SQL 的同事务形态（Phase3 STOP E）。
+
+    IN_DOUBT 账本行有两种落库形态，WHERE 互斥、CAS 互不命中：
+      - uncertain      = status='failed' AND error_code=UNCERTAIN
+                        （SideEffectOutcomeUnknown 上抛后 executor 已收口；
+                        re-claim 恒 CONFLICT——_decide_claim，不裁决则永久阻断）
+      - stale_running  = status='running' AND 租约已过期
+                        （进程崩溃窗，fail 未及写入；绝不碰活跃 claim）
+
+    与确认行/订单等其他对象收敛共用调用方事务（同事务终态先例：
+    complete_in_connection，Step6 §二十一），保证多对象原子；不提交、
+    不记日志——由公共入口按总结果记录。返回各形态是否真的裁决了一行。
+    """
+    if decision not in ("executed", "not_executed"):
+        raise ValueError("decision 必须是 executed / not_executed")
+    executed = decision == "executed"
+    resolved_result = result if executed else None
+    target_status = ClaimStatus.SUCCEEDED.value if executed \
+        else ClaimStatus.FAILED.value
+    resolved_code = "MANUAL_RESOLVED_EXECUTED" if executed \
+        else "RESOLVED_NOT_EXECUTED"
+    result_json = (
+        json.dumps(resolved_result, ensure_ascii=False, default=str)
+        if resolved_result is not None else None
+    )
+    flags: dict[str, bool] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE {table} SET
+                status = %s,
+                result = COALESCE(%s, result),
+                error_code = %s,
+                lease_expires_at = NULL,
+                updated_at = now()
+            WHERE tenant_id = %s AND actor_id = %s
+              AND operation = %s AND client_key = %s
+              AND status = 'failed'
+              AND error_code = %s
+            """,
+            (target_status, result_json, resolved_code,
+             tenant_id, actor_id, operation, client_key,
+             _UNCERTAIN_ERROR_CODE),
+        )
+        flags["uncertain"] = cur.rowcount == 1
+        cur.execute(
+            f"""
+            UPDATE {table} SET
+                status = %s,
+                result = COALESCE(%s, result),
+                error_code = %s,
+                lease_expires_at = NULL,
+                updated_at = now()
+            WHERE tenant_id = %s AND actor_id = %s
+              AND operation = %s AND client_key = %s
+              AND status = 'running'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= now()
+            """,
+            (target_status, result_json, resolved_code,
+             tenant_id, actor_id, operation, client_key),
+        )
+        flags["stale_running"] = cur.rowcount == 1
+    return flags
+
+
+def _resolve_side_effect(
+    *,
+    tenant_id: str,
+    actor_id: str,
+    operation: str,
+    client_key: str,
+    decision: str,
+    result: dict[str, Any] | None,
+    reason: str,
+    event: str,
+    connection_factory=None,
+    table: str = "ai.idempotency_records",
+) -> dict[str, bool]:
+    """公共裁决入口的共享实现：开连接 → 同事务双形态 CAS → 提交 → 日志。"""
+    if decision not in ("executed", "not_executed"):
+        raise ValueError("decision 必须是 executed / not_executed")
+    factory = connection_factory or _default_memory_ledger_connection
+    try:
+        with factory() as conn:
+            flags = _resolve_side_effect_in_connection(
+                conn, tenant_id=tenant_id, actor_id=actor_id,
+                operation=operation, client_key=client_key,
+                decision=decision, result=result, table=table)
+            conn.commit()
+    except IdempotencyUnavailable:
+        raise
+    except Exception as exc:
+        raise IdempotencyUnavailable("PG ledger 人工裁决失败") from exc
+    if any(flags.values()):
+        logger.info(
+            "[Idempotency] event=%s forms=%s decision=%s "
+            "operation=%s reason=%s", event, flags, decision, operation,
+            reason or "-",
+        )
+    return flags
+
+
 def resolve_stale_side_effect(
     *,
     tenant_id: str,
@@ -1084,48 +1198,85 @@ def resolve_stale_side_effect(
       decision='not_executed' → 副作用未发生：标 FAILED，允许安全重试
     返回是否真的裁决了一条记录。
     """
-    if decision not in ("executed", "not_executed"):
-        raise ValueError("decision 必须是 executed / not_executed")
-    factory = connection_factory or _default_memory_ledger_connection
-    executed = decision == "executed"
-    resolved_result = result if executed else None
-    try:
-        with factory() as conn, conn.cursor() as cur:
-            cur.execute(
-                f"""
-                UPDATE {table} SET
-                    status = %s,
-                    result = COALESCE(%s, result),
-                    error_code = %s,
-                    lease_expires_at = NULL,
-                    updated_at = now()
-                WHERE tenant_id = %s AND actor_id = %s
-                  AND operation = %s AND client_key = %s
-                  AND status = 'running'
-                  AND lease_expires_at IS NOT NULL
-                  AND lease_expires_at <= now()
-                """,
-                (
-                    ClaimStatus.SUCCEEDED.value if executed
-                    else ClaimStatus.FAILED.value,
-                    json.dumps(resolved_result, ensure_ascii=False,
-                               default=str)
-                    if resolved_result is not None else None,
-                    "MANUAL_RESOLVED_EXECUTED" if executed
-                    else "RESOLVED_NOT_EXECUTED",
-                    tenant_id, actor_id, operation, client_key,
-                ),
-            )
-            updated = cur.rowcount
-            conn.commit()
-    except Exception as exc:
-        raise IdempotencyUnavailable("PG ledger 裁决失败") from exc
-    if updated == 1:
-        logger.info(
-            "[Idempotency] event=side_effect_reconcile decision=%s "
-            "operation=%s reason=%s", decision, operation, reason or "-",
-        )
-    return updated == 1
+    flags = _resolve_side_effect(
+        tenant_id=tenant_id, actor_id=actor_id, operation=operation,
+        client_key=client_key, decision=decision, result=result,
+        reason=reason, event="side_effect_reconcile",
+        connection_factory=connection_factory, table=table,
+    )
+    return flags["stale_running"]
+
+
+def resolve_uncertain_side_effect(
+    *,
+    tenant_id: str,
+    actor_id: str,
+    operation: str,
+    client_key: str,
+    decision: str,
+    result: dict[str, Any] | None = None,
+    reason: str = "",
+    connection_factory=None,
+    table: str = "ai.idempotency_records",
+) -> bool:
+    """人工裁决 failed+IDEMPOTENCY_UNCERTAIN 形态（Phase3 STOP E，缺口 G-E0）。
+
+    覆盖 stale running 之外的另一种 IN_DOUBT 落库形态：副作用边界后结果
+    未知（UNKNOWN outcome / 终态回写失败）由 executor 以 FAILED+UNCERTAIN
+    收口（confirmation_flow verifying / booking executor IN_DOUBT 即此形态），
+    该行 re-claim 恒 CONFLICT，不裁决则同 key 永久阻断：
+
+      decision='executed'     → 副作用确认已发生：SUCCEEDED +
+                                MANUAL_RESOLVED_EXECUTED，同 key 后续重放结果
+      decision='not_executed' → 确认未执行：保持 FAILED，error_code 改为
+                                RESOLVED_NOT_EXECUTED（解除 UNCERTAIN 阻断，
+                                「FAILED 可接管重试」语义随之恢复）
+      unresolved 不调用本函数——保持阻断是显式选择，无操作
+
+    返回是否真的裁决了一条记录。
+    """
+    flags = _resolve_side_effect(
+        tenant_id=tenant_id, actor_id=actor_id, operation=operation,
+        client_key=client_key, decision=decision, result=result,
+        reason=reason, event="side_effect_uncertain_resolve",
+        connection_factory=connection_factory, table=table,
+    )
+    return flags["uncertain"]
+
+
+def resolve_side_effect(
+    *,
+    tenant_id: str,
+    actor_id: str,
+    operation: str,
+    client_key: str,
+    decision: str,
+    result: dict[str, Any] | None = None,
+    reason: str = "",
+    conn: Any = None,
+    connection_factory=None,
+    table: str = "ai.idempotency_records",
+) -> dict[str, bool]:
+    """人工裁决统一入口（Phase3 STOP E）：按账本行实际形态自动分流。
+
+    调用方无需预判 IN_DOUBT 落库形态（uncertain / stale_running 双形态
+    一次事务内各试一次）；两处都 no-op = 无未决记录（已裁决/已收敛/
+    键不存在），绝不误伤活跃 claim 与已收敛行。
+    传 conn 时参与调用方既有事务（多对象同事务收敛，如确认行裁决），
+    此时只执行 CAS 不提交不记日志；否则自管连接与日志。
+    返回 {"uncertain": bool, "stale_running": bool}，True=该形态裁决成功。
+    """
+    if conn is not None:
+        return _resolve_side_effect_in_connection(
+            conn, tenant_id=tenant_id, actor_id=actor_id,
+            operation=operation, client_key=client_key,
+            decision=decision, result=result, table=table)
+    return _resolve_side_effect(
+        tenant_id=tenant_id, actor_id=actor_id, operation=operation,
+        client_key=client_key, decision=decision, result=result,
+        reason=reason, event="side_effect_manual_resolve",
+        connection_factory=connection_factory, table=table,
+    )
 
 
 def run_idempotent_side_effect(
@@ -1318,7 +1469,9 @@ __all__ = [
     "canonical_fingerprint",
     "execute_idempotent_in_transaction",
     "purge_expired_idempotency_records",
+    "resolve_side_effect",
     "resolve_stale_side_effect",
+    "resolve_uncertain_side_effect",
     "run_idempotent_operation",
     "run_idempotent_operation_for_identity",
     "run_idempotent_side_effect",

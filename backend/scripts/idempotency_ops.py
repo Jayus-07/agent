@@ -6,6 +6,9 @@
   - IN_DOUBT（stale running）发现与人工裁决：resolve_stale_side_effect 的
     受控封装——只允许处理租约已过期的 running 行，decision/result/reason
     全部落库（error_code 标记 + 结构化日志），禁止绕过 ledger 直改。
+  - Phase3 STOP E（verifying/executing 卡死确认行）：verifying 清单 /
+    inspect-confirmation 关联链 / resolve-confirmation 同事务裁决
+    （账本双形态 + 确认行 + audit_logs 三方原子收敛，唯一合法出口）。
   - ledger 行只读查询（跨 actor 的运维视图；自助查询走
     GET /api/idempotency/operations/{client_key}）。
   - 探针任务投递/计数（仅测试窗口：SIDE_EFFECT_PROBE_ENABLED=1 的 worker）。
@@ -107,6 +110,57 @@ def cmd_resolve(args) -> int:
     return 0 if ok else 1
 
 
+def _cs_reconciliation():
+    from backend.customer_service.reconciliation import (
+        inspect_verifying_confirmation,
+        list_verifying_confirmations,
+        resolve_verifying_confirmation,
+    )
+
+    return (list_verifying_confirmations, inspect_verifying_confirmation,
+            resolve_verifying_confirmation)
+
+
+def cmd_verifying_list(args) -> int:
+    """STOP E：verifying/executing 卡死确认行清单（含账本未决标记）。"""
+    list_verifying, _, _ = _cs_reconciliation()
+    rows = list_verifying(limit=args.limit)
+    print(json.dumps(rows, ensure_ascii=False, default=str, indent=2))
+    print(f"total={len(rows)}", file=sys.stderr)
+    return 0
+
+
+def cmd_verifying_inspect(args) -> int:
+    """STOP E：单条卡死确认行的完整关联链（确认行+账本+守卫语义）。"""
+    _, inspect_verifying, _ = _cs_reconciliation()
+    record = inspect_verifying(confirmation_id=args.confirmation_id)
+    if record is None:
+        print("NOT_FOUND")
+        return 1
+    print(json.dumps(record, ensure_ascii=False, default=str, indent=2))
+    return 0
+
+
+def cmd_verifying_resolve(args) -> int:
+    """STOP E：裁决卡死确认行——账本+确认行+审计同事务收敛。
+
+    decision=unresolved 只落审计、状态不动（守卫保持阻断）；
+    executed/not_executed 双 CAS 原子生效，重复执行幂等返回 False。
+    reason 必须含 operator 标识；executed 另须 --operator 显式身份。
+    """
+    _, _, resolve_verifying = _cs_reconciliation()
+    result = json.loads(args.result_json) if args.result_json else None
+    outcome = resolve_verifying(
+        confirmation_id=args.confirmation_id,
+        decision=args.decision,
+        reason=args.reason,
+        operator=args.operator,
+        result=result,
+    )
+    print(json.dumps(outcome, ensure_ascii=False, default=str, indent=2))
+    return 0 if outcome.get("resolved") else 1
+
+
 def cmd_dispatch_probe(args) -> int:
     from backend.tasks.celery_app import celery_app
 
@@ -174,6 +228,32 @@ def main() -> int:
     sp.add_argument("--result-json", default=None,
                     help="decision=executed 时可选的已知结果 JSON")
     sp.set_defaults(fn=cmd_resolve)
+
+    # ── Phase3 STOP E：verifying/executing 卡死确认行（CS 域）────────
+    sp = sub.add_parser(
+        "verifying", help="列出 verifying/executing 卡死确认行（STOP E）")
+    sp.add_argument("--limit", type=int, default=50)
+    sp.set_defaults(fn=cmd_verifying_list)
+
+    sp = sub.add_parser(
+        "inspect-confirmation",
+        help="单条卡死确认行完整关联链（确认行+账本+守卫语义）")
+    sp.add_argument("--confirmation-id", required=True)
+    sp.set_defaults(fn=cmd_verifying_inspect)
+
+    sp = sub.add_parser(
+        "resolve-confirmation",
+        help="裁决卡死确认行：账本+确认行+审计同事务收敛（STOP E 唯一出口）")
+    sp.add_argument("--confirmation-id", required=True)
+    sp.add_argument("--decision", required=True,
+                    choices=["executed", "not_executed", "unresolved"])
+    sp.add_argument("--reason", required=True,
+                    help="裁决依据，必须含 operator 标识")
+    sp.add_argument("--operator", default="",
+                    help="裁决人身份（executed 必填，审计 actor_id）")
+    sp.add_argument("--result-json", default=None,
+                    help="decision=executed 时可选的已知结果 JSON")
+    sp.set_defaults(fn=cmd_verifying_resolve)
 
     sp = sub.add_parser("dispatch-probe", help="投递探针任务（测试窗口）")
     sp.add_argument("--probe-key", required=True)

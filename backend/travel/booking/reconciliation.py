@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backend.providers.travel.booking.contracts import LookupUnsupported
-from backend.shared.idempotency import resolve_stale_side_effect
+from backend.shared.idempotency import resolve_side_effect
 from backend.shared.provider_idempotency import reconcile_provider_effect
 from backend.travel.booking.state import BookingOrderStatus
 from backend.travel.booking.store import StaleTransition, BookingStore
@@ -71,9 +71,10 @@ def reconcile_order(*, store: BookingStore, provider, contract,
         record_reconciliation(provider.name, "known_failure")
         return ReconcileOutcome("failed", order)
     if verdict.value == "not_found_safe_to_retry":
-        # Provider 契约保证权威「不存在」→ 解除 ledger 保守阻断，
+        # Provider 契约保证权威「不存在」→ 解除账本保守阻断（IN_DOUBT 双
+        # 形态自动分流：Model C 的 failed+UNCERTAIN 与崩溃窗 stale-running），
         # 订单回 FAILED(not_sent)（可安全重入 executor 重新走全部门）
-        resolve_stale_side_effect(
+        resolve_side_effect(
             tenant_id=order["tenant_id"], actor_id=order["user_id"],
             operation="travel.booking.create",
             client_key=order["merchant_order_id"],
@@ -93,20 +94,23 @@ def reconcile_order(*, store: BookingStore, provider, contract,
 
 def manual_resolve(*, store: BookingStore, order: dict, decision: str,
                    provider_order_id: str | None = None,
-                   actor: str = "admin", conn_factory=None,
+                   actor: str = "admin", reason: str = "manual_resolution",
+                   conn_factory=None,
                    ledger_table: str = "ai.idempotency_records") -> dict:
     """人工裁决（Model C 唯一出口；decision: executed|not_executed）。
 
-    ledger 侧经 resolve_stale_side_effect 收口；订单状态经状态机
-    （IN_DOUBT 出口 cause=manual，白名单唯一放行路径）。
+    ledger 侧经 resolve_side_effect 双形态分流收口（STOP E：Model C 的
+    IN_DOUBT 主形态是 failed+UNCERTAIN，旧的 stale-running 专用通道对它
+    静默 no-op）；订单状态经状态机（IN_DOUBT 出口 cause=manual，白名单
+    唯一放行路径）。reason 透传裁决依据（须含 operator 标识）。
     """
     if decision not in ("executed", "not_executed"):
         raise ValueError("decision 必须是 executed / not_executed")
-    resolve_stale_side_effect(
+    resolve_side_effect(
         tenant_id=order["tenant_id"], actor_id=order["user_id"],
         operation="travel.booking.create",
         client_key=order["merchant_order_id"],
-        decision=decision, reason="manual_resolution",
+        decision=decision, reason=reason,
         connection_factory=conn_factory, table=ledger_table,
     )
     target = BookingOrderStatus.BOOKED if decision == "executed" \
