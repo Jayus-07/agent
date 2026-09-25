@@ -346,5 +346,18 @@ FULL_ROADMAP_COMPLETE=false
 依赖不完整），不改变上面的任务状态机判定；后续应使用带 dev 依赖的专用测试镜像
 再做模块级全量复跑。
 
+任务族复跑收口：使用带 pytest 开发依赖的临时测试容器，源码挂载当前工作树，
+PostgreSQL 指向隔离库 `agent_memory_rc_test`，Redis/Celery 使用隔离 DB，容器内网
+直连 `postgres`/`redis`。运行时四模块 `49 passed`（41.08s），其余任务 API、授权、
+队列、checkpoint、pending recovery、状态机及 zombie 模块 `178 passed`（60.41s），
+合计 `227 passed`，无失败、错误或跳过。该路径未停止共享 beat/worker，未修改任务
+生产代码；宿主 vpnkit 两项续租超时因此确认为 `FIX_ENVIRONMENT`，不能作为任务债。
+
+```text
+TASK_RUNTIME_ISOLATED_PASS=true
+TASK_RUNTIME_ISOLATED_TESTS=227
+TASK_RUNTIME_HOST_PATH=ENV_BLOCKED（vpnkit 续租窗口）
+```
+
 本会话提交：`f87b01e`、`da7949b`、`816198f`。工作区内 `data/**` 为测试/其他会话生成的既有
 改动，未纳入本次提交。
