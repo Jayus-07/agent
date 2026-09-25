@@ -185,6 +185,23 @@ chat_stream_event_produced_total = Counter(
     labelnames=("event",),  # status | delta | log | done | error | meta
 )
 
+# ── SSE 断线恢复（F2 Resume Protocol；§十八 Release Signals）──
+# result: hit(live 续流) | finished(重放到终端) | not_found(不可恢复) | forbidden(身份不符)
+sse_resume_total = Counter(
+    "sse_resume_total",
+    "SSE resume 请求总数（按结果）",
+    labelnames=("result",),
+)
+sse_replay_events_total = Counter(
+    "sse_replay_events_total",
+    "SSE resume 重放的事件总数",
+)
+sse_resume_failure_total = Counter(
+    "sse_resume_failure_total",
+    "SSE resume 失败总数（reason: not_found | forbidden | invalid_cursor）",
+    labelnames=("reason",),
+)
+
 # ── 索引一致性 Sweeper（2026-09-17 P0-1 告警闭环）──
 # 五路存储对账检出的问题数：error 级持续增长 = 有数据不一致未修复，需告警
 # ── 元数据管道路由指标（规划阶段 4.2/8.1，2026-09-19）──
@@ -1351,6 +1368,9 @@ __all__ = [
     "feedback_candidate_total",
     "chat_stream_event_dropped_total",
     "chat_stream_event_produced_total",
+    "sse_resume_total",
+    "sse_replay_events_total",
+    "sse_resume_failure_total",
     "chat_tpot_seconds",
     "StreamLatencyTracker",
     # 并发控制指标

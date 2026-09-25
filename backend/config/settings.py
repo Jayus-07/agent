@@ -26,6 +26,15 @@ CHAT_SSE_QUEUE_MAXSIZE = int(os.getenv("CHAT_SSE_QUEUE_MAXSIZE", "1024"))
 # consumer 阻塞拉取超时（秒）→ CPU 占用从 100Hz 轮询降到 ~0.5Hz
 CHAT_SSE_GET_TIMEOUT = float(os.getenv("CHAT_SSE_GET_TIMEOUT", "0.5"))
 
+# ── SSE 断线恢复（F2 Resume Protocol，2026-09-25）──
+# 客户端断开只脱离订阅，服务端跑完并缓冲事件供 resume 重放（有界）。
+# 缓冲超限丢最老并置 gap；resume 命中 gap / 进程重启 → STREAM_NOT_RESUMABLE。
+SSE_RESUME_BUFFER_MAX_EVENTS = int(os.getenv("SSE_RESUME_BUFFER_MAX_EVENTS", "4096"))
+SSE_RESUME_FINISHED_TTL_SECONDS = float(
+    os.getenv("SSE_RESUME_FINISHED_TTL_SECONDS", "600"))
+# 客户端最多重连尝试次数（前端同口径，双端常量一致）
+SSE_RESUME_MAX_ATTEMPTS = int(os.getenv("SSE_RESUME_MAX_ATTEMPTS", "3"))
+
 # ── Tool 失败治理（core/tool_runtime，2026-09-22）──
 # 请求级 Deadline（在线交互请求专用；Celery 后台任务不走图链路，不受此约束）
 # business_deadline 30s = 请求端到端上限；workflow 25s = 图执行可用预算；

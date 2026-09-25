@@ -34,6 +34,7 @@ from backend.config.settings import (
 
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
+from backend.app.api.stream_resume import get_stream_registry
 from backend.infra.llm.rate_limiter import require_rate_limit
 from backend.observability.metrics import (
     StreamLatencyTracker,
@@ -41,6 +42,9 @@ from backend.observability.metrics import (
     chat_request_duration_seconds,
     chat_stream_event_dropped_total,
     chat_stream_event_produced_total,
+    sse_resume_total,
+    sse_replay_events_total,
+    sse_resume_failure_total,
 )
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -135,10 +139,22 @@ from backend.orchestration.graph.builder import _NODE_LABELS
 
 
 def _sse_encode(event: dict) -> str:
-    """将事件字典编码为 SSE 文本帧: event: <type>\ndata: <json>\n\n"""
+    """将事件字典编码为 SSE 文本帧: event: <type>[+id: <seq>]\ndata: <json>\n\n
+
+    F2 Resume Protocol：带 seq 的事件附加 id: 行（置于 event: 行之后——
+    SSE 字段顺序无关，且存量「帧以 event: 开头」的解析器保持兼容）；
+    seq 同时注入 data JSON，是前端去重的权威载体。
+    """
     evt_type = event["event"]
-    payload = json.dumps(event["data"], ensure_ascii=False, separators=(",", ":"))
-    return f"event: {evt_type}\ndata: {payload}\n\n"
+    data = event["data"]
+    seq = event.get("seq")
+    id_line = ""
+    if isinstance(seq, int):
+        id_line = f"id: {seq}\n"
+        if isinstance(data, dict):
+            data = {**data, "seq": seq}
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {evt_type}\n{id_line}data: {payload}\n\n"
 
 
 def _sse_error_event(exc: BaseException, trace_id: str = "") -> dict:
@@ -291,11 +307,20 @@ async def chat_stream(
     loop = asyncio.get_running_loop()
     aq: asyncio.Queue = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
 
+    # —— F2 Resume Protocol：注册流记录，producer 全量事件入有界缓冲，——
+    # —— 客户端断开只脱离订阅，服务端跑完供 resume 重放。——
+    record = get_stream_registry().create(
+        stream_id=request_id, session_id=req.session_id,
+        user_id=user_id, tenant_id=ident.tenant_id or "",
+    )
+
     # —— 握手事件：发送 node_labels 映射表 + 服务端 request_id（#14 回传）——
-    meta_event = _sse_encode({
+    # meta 也入注册表（seq=1）：客户端在 meta 前断开时 resume 可补发
+    meta_event = _sse_encode(record.append({
         "event": "meta",
-        "data": {"node_labels": _NODE_LABELS, "request_id": request_id},
-    })
+        "data": {"node_labels": _NODE_LABELS, "request_id": request_id,
+                 "stream_id": request_id, "resume_supported": True},
+    }).event)
 
     def _threadsafe_put(evt) -> bool:
         """producer 线程跨线程投递到 consumer 的 asyncio.Queue；loop 已关则放弃。"""
@@ -305,6 +330,11 @@ async def chat_stream(
         except RuntimeError:
             return False
 
+    def _emit_error_frame(err_evt) -> None:
+        """错误终帧：先入注册表（resume 可重放）再投递当前 consumer。"""
+        record.append(err_evt)
+        _put_final_frame(aq, loop, stop_event, err_evt)
+
     def producer():
         """在 executor 线程中运行 LangGraph，事件跨线程投递到 asyncio.Queue。
 
@@ -313,6 +343,9 @@ async def chat_stream(
           ② 先入队 error 帧告知前端「流被截断」（不能静默收尾让前端误判正常结束）；
           ③ 设 stop_event 让上游 LLM 链路尽快退出；
           ④ 投递 sentinel 让 consumer 干净收尾。
+
+        F2：每个事件先 record.append（seq 编号 + 入恢复缓冲）再投递——
+        客户端断开后 producer 继续跑到自然终态，注册表持有完整事件尾。
         """
         try:
             for evt in agent.stream_events(
@@ -329,14 +362,16 @@ async def chat_stream(
                 idempotency_key=(r.headers.get("Idempotency-Key") or "").strip(),
                 roles=ident.roles,
             ):
-                if stop_event.is_set():
-                    break
-                # 累计产出 metric（与 dropped 对比，监控常态丢弃率）
+                # 先入恢复缓冲再检查 stop：abort 的「用户中止」error 帧本身
+                # 就是 stop 置位后的第一帧——丢弃它会让注册表缺终端帧
                 evt_name = evt.get("event", "?")
                 try:
                     chat_stream_event_produced_total.labels(event=evt_name).inc()
                 except Exception:
                     logger.debug("[P1-10] produced_total 指标上报失败", exc_info=True)
+                record.append(evt)
+                if stop_event.is_set():
+                    break
                 if aq.full():
                     time.sleep(0.05)  # 给 consumer 腾位（与旧 q.put(timeout=0.05) 节流等价）
                 if aq.full():
@@ -345,7 +380,7 @@ async def chat_stream(
                     if stop_event.is_set():
                         break
                     # #16：先入队 error 帧再置 stop，前端才能区分「截断」与「正常结束」
-                    _put_final_frame(aq, loop, stop_event, _sse_error_event(
+                    _emit_error_frame(_sse_error_event(
                         RuntimeError("服务端背压：客户端消费过慢，流已截断"),
                     ))
                     stop_event.set()
@@ -354,9 +389,11 @@ async def chat_stream(
                     break
         except Exception as exc:
             chat_stream_event_dropped_total.labels(reason="producer_error").inc()
-            _put_final_frame(aq, loop, stop_event, _sse_error_event(exc))
+            _emit_error_frame(_sse_error_event(exc))
         finally:
             _put_final_frame(aq, loop, stop_event, None)  # sentinel
+            record.finish()
+            _active_stops.pop(key, None)  # 断连脱离后 /chat/abort 仍可命中直至终态
 
     async def event_generator():
         """异步生成器：从 asyncio.Queue 取事件 → SSE 格式化 → yield。"""
@@ -416,20 +453,26 @@ async def chat_stream(
                 last_yield_at = time.monotonic()  # 有真实事件流动，心跳计时重置
                 await asyncio.sleep(0)  # 让出事件循环
 
-        except GeneratorExit:
-            # 前端主动断开连接 → 触发后端停止
+        except (GeneratorExit, asyncio.CancelledError):
+            # 客户端断开 → F2 Resume Protocol：只脱离订阅，绝不 stop_event。
+            # 注意真机断连路径是 uvicorn 取消请求任务（CancelledError），
+            # 生成器 .close() 才走 GeneratorExit——两者同等对待。
+            # 服务端继续跑完，事件留在注册表供 resume(after_seq) 重放；
+            # 显式中止仍走 /chat/abort。
             client_aborted = True
-            stop_event.set()
         finally:
-            # 兜底：确保生产者退出（即便异常路径），避免线程悬挂
-            stop_event.set()
-            _active_stops.pop(key, None)
-
-            # 等待 producer 真正结束再算耗时（更准确）
-            try:
-                await asyncio.wait_for(future, timeout=2.0)
-            except (asyncio.TimeoutError, Exception):
+            if client_aborted:
+                # 断连：不等待 producer（它在后台跑到自然终态）；
+                # _active_stops 由 producer finally 移除，abort 窗口保持
                 pass
+            else:
+                # 兜底：非断连退出（异常路径）确保生产者退出，避免线程悬挂
+                stop_event.set()
+                _active_stops.pop(key, None)
+                try:
+                    await asyncio.wait_for(future, timeout=2.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
 
             if client_aborted:
                 _record_status("aborted")
@@ -446,6 +489,120 @@ async def chat_stream(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
             "X-Request-Id": request_id,  # #14：服务端唯一 request_id 回传（meta 事件冗余一份）
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════
+# POST /chat/stream/resume — SSE 断线恢复（F2 Resume Protocol）
+# ═══════════════════════════════════════════════════
+
+def _resume_error(status_code: int, code: ErrorCode, message: str,
+                  reason: str) -> JSONResponse:
+    envelope = ErrorEnvelope(
+        code=code, retryable=False, handoff_available=False,
+        message=message, source="http", details={"reason": reason},
+    )
+    from backend.app.exceptions import _http_payload
+    return JSONResponse(status_code=status_code,
+                        content=_http_payload(envelope))
+
+
+@router.post("/stream/resume")
+async def chat_stream_resume(
+    r: Request,
+    _rate=Depends(require_rate_limit),
+):
+    """断线重连续播：先重放 buffer[seq > after_seq]（含终端帧），未完则无缝切 live。
+
+    - 无丢洞：重放尾拷贝与 live 订阅注册在注册表追加锁内原子完成。
+    - 传输 at-least-once，客户端按 (stream_id, seq) 去重 → UI effectively-once。
+    - 不可恢复（进程重启/记录过期/缓冲 gap）→ 404 STREAM_NOT_RESUMABLE；
+      身份不匹配 → 403；游标非法 → 422。
+    """
+    from backend.app.api.identity import resolve_identity
+
+    try:
+        raw = await r.json()
+        request_id = str((raw or {}).get("request_id") or "")
+        after_seq = (raw or {}).get("after_seq")
+    except Exception:
+        request_id, after_seq = "", None
+
+    if not isinstance(after_seq, int) or isinstance(after_seq, bool) \
+            or after_seq < 0 or not request_id:
+        sse_resume_failure_total.labels(reason="invalid_cursor").inc()
+        return _resume_error(422, ErrorCode.INVALID_PARAM,
+                             "请求参数有误，请检查后重试。", "INVALID_CURSOR")
+
+    record = get_stream_registry().get(request_id)
+    if record is None:
+        sse_resume_failure_total.labels(reason="not_found").inc()
+        sse_resume_total.labels(result="not_found").inc()
+        return _resume_error(
+            404, ErrorCode.NOT_FOUND,
+            "原流已结束且超出恢复窗口，请重新发起提问。", "STREAM_NOT_RESUMABLE")
+
+    ident = resolve_identity(r)
+    if not record.identity_matches(user_id=ident.user_id or "default",
+                                   tenant_id=ident.tenant_id or ""):
+        sse_resume_failure_total.labels(reason="forbidden").inc()
+        sse_resume_total.labels(result="forbidden").inc()
+        return _resume_error(403, ErrorCode.PERMISSION_DENIED,
+                             "无权恢复此对话流。", "FORBIDDEN")
+
+    replay, gap, live_q = record.subscribe_after(after_seq)
+    if gap:
+        sse_resume_failure_total.labels(reason="not_found").inc()
+        sse_resume_total.labels(result="not_found").inc()
+        return _resume_error(
+            404, ErrorCode.NOT_FOUND,
+            "原流事件已超出恢复缓冲，请重新发起提问。", "STREAM_NOT_RESUMABLE")
+
+    sse_resume_total.labels(
+        result="finished" if record.status == "finished" else "hit").inc()
+    if replay:
+        sse_replay_events_total.inc(len(replay))
+
+    async def resume_generator():
+        try:
+            for e in replay:
+                yield _sse_encode(e.event)
+                await asyncio.sleep(0)
+            # 重放尾已含终端帧（done/error 必发其一）→ 无 live 段
+            if record.status == "finished" \
+                    or (replay and replay[-1].event.get("event") in ("done", "error")):
+                return
+            last_yield_at = time.monotonic()
+            while True:
+                try:
+                    evt = await asyncio.wait_for(live_q.get(),
+                                                 timeout=_SSE_GET_TIMEOUT)
+                except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    if now - last_yield_at >= _SSE_PING_INTERVAL:
+                        last_yield_at = now
+                        yield _sse_encode({"event": "ping",
+                                           "data": {"ts": time.time()}})
+                    if record.status == "finished" and live_q.empty():
+                        return  # producer 终态但无终端帧（极端路径）：诚实收尾
+                    continue
+                yield _sse_encode(evt.event)
+                if evt.event.get("event") in ("done", "error"):
+                    return
+                last_yield_at = time.monotonic()
+                await asyncio.sleep(0)
+        finally:
+            record.unsubscribe(live_q)
+
+    return StreamingResponse(
+        resume_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Request-Id": request_id,
         },
     )
 

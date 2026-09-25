@@ -31,15 +31,27 @@ export interface ChatRequest {
  */
 export type SSEStreamEvent = TypedSSEStreamEvent;
 
+/** F2 SSE Resume：断线后最多续播尝试次数（与后端 SSE_RESUME_MAX_ATTEMPTS 同口径） */
+const MAX_RESUME_ATTEMPTS = 3;
+
+function seqOf(evt: SSEStreamEvent): number | null {
+  const d = evt.data as { seq?: unknown };
+  return typeof d?.seq === "number" ? d.seq : null;
+}
+
 /**
- * POST /chat/stream — 流式对话
+ * POST /chat/stream — 流式对话（F2 可恢复）
+ *
+ * 传输 at-least-once：断流（非 done/error 的意外终止）自动调
+ * /chat/stream/resume 从 last seq 续播，按 seq 去重 → UI effectively-once。
+ * 404 STREAM_NOT_RESUMABLE（进程重启/超出缓冲窗口）如实上抛，由用户重发。
  */
 export async function* streamChat(
   req: ChatRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<SSEStreamEvent> {
-  const doFetch = () =>
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}/api/chat/stream`, {
+  const doFetch = (path: string, body: string) =>
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -49,35 +61,69 @@ export async function* streamChat(
         // NEXT_PUBLIC_* 会被 Next 内联进浏览器 bundle，等于重新泄漏服务级密钥。
         ...bearerHeaders(),
       },
-      body: JSON.stringify(req),
+      body,
       signal,
     });
 
-  let res = await doFetch();
+  let attempt = 0;
+  let afterSeq = 0;
+  let sawTerminal = false;
+  // 流式内容本体只发一次：重试仅走 resume（重放+续播），绝不重发提问
+  const askBody = JSON.stringify(req);
+  const resumeBodyFor = () => JSON.stringify({
+    request_id: req.request_id,
+    after_seq: afterSeq,
+  });
 
-  // 401：静默刷新一次并重试；刷新失败则清态跳登录页
-  if (res.status === 401) {
-    if (await tryRefreshOnce()) {
-      res = await doFetch();
-    } else {
-      handleAuthFailure();
-      throw apiErrorFromEnvelope({
-        code: "PERMISSION_DENIED",
-        message: "登录已过期",
-        retryable: false,
-      }, 401);
+  while (true) {
+    const path = attempt === 0 ? "/api/chat/stream" : "/api/chat/stream/resume";
+    const body = attempt === 0 ? askBody : resumeBodyFor();
+    let res = await doFetch(path, body);
+
+    // 401：静默刷新一次并重试；刷新失败则清态跳登录页
+    if (res.status === 401) {
+      if (await tryRefreshOnce()) {
+        res = await doFetch(path, body);
+      } else {
+        handleAuthFailure();
+        throw apiErrorFromEnvelope({
+          code: "PERMISSION_DENIED",
+          message: "登录已过期",
+          retryable: false,
+        }, 401);
+      }
     }
-  }
 
-  if (!res.ok || !res.body) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    const protocol = err && typeof err === "object" && typeof err.code === "string"
-      ? err
-      : err?.detail && typeof err.detail === "object" ? err.detail : undefined;
-    throw apiErrorFromEnvelope(protocol ?? err, res.status);
-  }
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      const protocol = err && typeof err === "object" && typeof err.code === "string"
+        ? err
+        : err?.detail && typeof err.detail === "object" ? err.detail : undefined;
+      throw apiErrorFromEnvelope(protocol ?? err, res.status);
+    }
 
-  yield* parseSSEStream(res.body, signal) as AsyncGenerator<SSEStreamEvent>;
+    for await (const evt of parseSSEStream(res.body, signal) as AsyncGenerator<SSEStreamEvent>) {
+      const seq = seqOf(evt);
+      if (seq !== null) {
+        if (seq <= afterSeq) continue; // 重放与 live 交叠：seq 去重
+        afterSeq = seq;
+      }
+      if (evt.event === "done" || evt.event === "error") sawTerminal = true;
+      yield evt;
+    }
+
+    if (sawTerminal || signal?.aborted) return;
+    attempt += 1;
+    if (attempt > MAX_RESUME_ATTEMPTS) {
+      throw apiErrorFromEnvelope({
+        code: "UPSTREAM_UNAVAILABLE",
+        message: "连接多次中断且无法恢复，请重新发送。",
+        retryable: true,
+      }, 504);
+    }
+    // 指数退避后重连（1s/2s/3s 封顶）
+    await new Promise((r) => setTimeout(r, Math.min(1000 * attempt, 3000)));
+  }
 }
 
 /**
