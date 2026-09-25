@@ -313,9 +313,9 @@ IllegalTaskTransition: FAILED → RUNNING
 `test_task_phase2_recovery`、`test_task_resume` 失败形态一致，属于
 `FIX_ENVIRONMENT`（需独占 beat/worker 或测试专用队列/表），不能计为生产状态机回归。
 
-本会话未停止共享容器，也未修改任务状态机；在没有独占维护进程的条件下，任务族
-不能签发“全绿”结论。若要完成该族复判，必须先按 `AGENTS.md` 的容器纪律取得
-停用/隔离常驻 beat 与 worker 的明确授权，然后单进程复跑该四个模块。
+本会话未停止共享容器，也未修改任务状态机；在没有独占维护进程/数据库的条件下，
+任务族不能签发“宿主全绿”结论。后续复判可沿用本节的专用数据库 + Docker 内网
+路径，不必停止共享 beat/worker；若选择停容器，仍须遵守 `AGENTS.md` 的容器纪律。
 
 ### 10.3 当前判定
 
