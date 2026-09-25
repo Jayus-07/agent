@@ -19,6 +19,7 @@ stream_mode="updates" 的 {node: update} 形态，对任意图拓扑通用。
 """
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Generator
 
@@ -48,17 +49,30 @@ def build_task_checkpointer() -> Any:
 
     不走 build_main_checkpointer()（受全局开关控制且含 MemorySaver 降级——
     MemorySaver 下重启即丢 checkpoint，任务恢复语义不成立，只能硬失败）。
+
+    连接载体用 psycopg_pool 连接池（langgraph _internal.get_connection 原生
+    支持 ConnectionPool 类型）：checkout 时探活、死连接自动换新。修复缺陷
+    （F3 演练 P3 实锤，2026-09-25）：此前的单条裸 psycopg 连接在 PG 重启后
+    死亡且永不重建，worker 内所有后续任务一律 "the connection is closed"
+    失败直至进程重启。
     """
-    import psycopg
     from backend.config.database import MEMORY_DB_CONFIG
 
     c = MEMORY_DB_CONFIG
-    dsn = (f"postgresql://{c['user']}:{c['password']}"
-           f"@{c['host']}:{c['port']}/{c['dbname']}")
-    conn = psycopg.Connection.connect(dsn, autocommit=True)
+    from psycopg_pool import ConnectionPool
+
+    pool = ConnectionPool(
+        kwargs={
+            "host": c["host"], "port": c["port"], "dbname": c["dbname"],
+            "user": c["user"], "password": c["password"],
+            "autocommit": True,
+        },
+        min_size=1, max_size=4, open=True,
+        check=ConnectionPool.check_connection,  # 借出前探活，坏连接自动重建
+    )
     from langgraph.checkpoint.postgres import PostgresSaver
 
-    checkpointer = PostgresSaver(conn)
+    checkpointer = PostgresSaver(pool)
     checkpointer.setup()  # 幂等建表
     return checkpointer
 
