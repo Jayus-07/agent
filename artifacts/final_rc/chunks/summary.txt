@@ -1,0 +1,43 @@
+=== CHUNK cs START 16:01:17 ===
+CHUNK cs attempt1 RC=1 | 
+=== CHUNK rag START 16:09:32 ===
+CHUNK rag attempt1 RC=1 | 
+=== CHUNK orch START 16:14:00 ===
+CHUNK orch attempt1 RC=1 | 
+=== CHUNK travel START 16:21:58 ===
+CHUNK travel attempt1 RC=0 | 
+=== CHUNK api START 16:35:56 ===
+CHUNK api attempt1 RC=1 | 
+=== CHUNK eval START 16:36:10 ===
+CHUNK eval attempt1 RC=1 | 
+=== CHUNK sql START 16:36:31 ===
+CHUNK sql attempt1 RC=1 | 
+=== CHUNK infra START 16:36:58 ===
+CHUNK infra attempt1 RC=1 | 
+=== CHUNK tools START 16:37:11 ===
+=== CHUNK travel START 16:38:12 ===
+CHUNK travel attempt1 RC=127 (STALL/TIMEOUT/KILLED)
+CHUNK travel attempt2 RC=127 (STALL/TIMEOUT/KILLED)
+CHUNK travel FINAL=HANG
+=== CHUNK api START 17:01:26 ===
+CHUNK api attempt1 RC=1 | 11 failed, 434 passed, 24 warnings in 1233.00s
+=== CHUNK eval START 17:22:24 ===
+CHUNK eval attempt1 RC=1 | 2 failed, 298 passed, 112 skipped, 17 warnings, 1 error in 45.55s
+=== CHUNK sql START 17:23:27 ===
+CHUNK sql attempt1 RC=1 | 1 failed, 296 passed, 8 warnings in 67.38s
+=== CHUNK infra START 17:24:49 ===
+CHUNK infra attempt1 RC=1 | 9 failed, 463 passed, 1 skipped, 1 warning in 72.44s
+=== CHUNK tools START 17:26:12 ===
+CHUNK tools attempt1 RC=1 | 24 failed, 420 passed, 5 warnings in 96.88s
+=== CHUNK platform START 17:28:15 ===
+CHUNK platform attempt1 RC=1 | 6 failed, 557 passed, 18 warnings in 166.53s
+=== CHUNK root-a START 17:31:18 ===
+CHUNK root-a attempt1 RC=5 (STALL/TIMEOUT/KILLED)
+CHUNK root-a attempt2 RC=5 (STALL/TIMEOUT/KILLED)
+CHUNK root-a FINAL=HANG
+=== CHUNK root-b START 17:32:07 ===
+CHUNK root-b attempt1 RC=127 (STALL/TIMEOUT/KILLED)
+=== CHUNK root-a START 17:49:52 ===
+CHUNK root-a attempt1 RC=0 | 
+=== CHUNK root-b START 17:54:16 ===
+=== CHUNK root-b START 17:59:55 ===
