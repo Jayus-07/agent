@@ -3,7 +3,7 @@
 import asyncio
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
 
 import pytest
 
@@ -25,8 +25,13 @@ class _StageEmbedding:
 
 
 @pytest.fixture
-def stage():
-    return MetadataStage(_EmptyRegistry(), _StageEmbedding(), department="test")
+def stage(monkeypatch):
+    # 先创建 monkeypatch，再创建 stage，保证 teardown 时先等待后台任务，
+    # 再恢复 submit_shadow_job 等桩，避免线程在 pytest 捕获流关闭后写日志。
+    del monkeypatch
+    value = MetadataStage(_EmptyRegistry(), _StageEmbedding(), department="test")
+    yield value
+    wait_futures(tuple(value._shadow_tasks), timeout=2.0)
 
 
 @pytest.mark.asyncio

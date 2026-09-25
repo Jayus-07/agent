@@ -69,11 +69,12 @@ def _require_real_pg():
     _require_pg()
 
 
-def _client() -> TestClient:
+def _client(monkeypatch) -> TestClient:
     """admin 身份 + 真实数据库的 RBAC TestClient。"""
     app = FastAPI()
     app.include_router(rbac_router, prefix="/api")
-    monkeypatch_free_identity()
+    # 用 pytest monkeypatch 管理守卫模式，避免污染后续 API 族的 audit 用例。
+    monkeypatch.setattr(deps, "get_mode", lambda _key: "enforce")
     client = TestClient(app, raise_server_exceptions=False)
     client.headers.update({
         "X-Auth-Type": "jwt",
@@ -82,10 +83,6 @@ def _client() -> TestClient:
         "X-Tenant-Id": "tenant-p6",
     })
     return client
-
-
-def monkeypatch_free_identity():
-    deps.get_mode = lambda _key: "enforce"
 
 
 def _cleanup(username_prefix: str) -> None:
@@ -113,8 +110,8 @@ def _psql_row(sql: str, params: dict):
             return cursor.fetchone()
 
 
-def test_user_lifecycle_end_to_end():
-    client = _client()
+def test_user_lifecycle_end_to_end(monkeypatch):
+    client = _client(monkeypatch)
     prefix = f"p6lc{uuid.uuid4().hex[:8]}"
     username = f"{prefix}a"
     _seed_tenant_department("general")

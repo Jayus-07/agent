@@ -40,6 +40,20 @@ def memory_idempotency(monkeypatch):
         return IdempotencyExecutor(store).execute(key, payload, callback)
 
     monkeypatch.setattr(module, "run_idempotent_operation", run)
+
+    def run_side_effect(operation, payload, callback, *, tenant_id,
+                        actor_id, client_key, **_kwargs):
+        key = IdempotencyKey(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            operation=operation,
+            client_key=client_key,
+        )
+        return IdempotencyExecutor(store).execute(key, payload, callback)
+
+    # 邮件已切换到 PG durable ledger 入口；测试仍使用内存账本，保证
+    # 每个 fixture 的 logical key 隔离，不依赖外部数据库残留状态。
+    monkeypatch.setattr(module, "run_idempotent_side_effect", run_side_effect)
     return store
 
 

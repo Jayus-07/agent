@@ -201,9 +201,11 @@ SERVICE_HEADERS = {"X-Internal-Token": "tok-1"}
 
 
 @pytest.fixture
-def guard_client():
+def guard_client(monkeypatch):
     from backend.app.api.deps import require_admin_user, require_user_actor
 
+    # 本文件验证 env 灰度，不应继承前序配置 API 测试写入的 DB 覆盖值。
+    monkeypatch.setattr("backend.services.sys_config._values", {})
     app = FastAPI()
 
     @app.get("/user-only")

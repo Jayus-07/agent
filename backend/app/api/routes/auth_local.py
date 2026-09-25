@@ -732,8 +732,34 @@ _SECURITY_ENDPOINTS_CURATED = [
 
 def _scan_guarded_endpoints(app) -> list[dict]:
     """扫描 FastAPI 路由表，找出以统一守卫作为 Depends 的端点（运行时口径）。"""
+
+    def _iter_routes(routes, prefix: str = ""):
+        """兼容 FastAPI 0.141 的 ``_IncludedRouter`` 路由容器。
+
+        新版 FastAPI 不再把 include_router 展开到父路由的 ``routes``，
+        而是保留包装器并把真实 APIRoute 放在 ``original_router``。扫描
+        不能只看顶层，否则安全运营面会漏报被 include 的敏感端点。
+        ``include_context.prefix`` 是父级新增前缀，子路由自身 path 已含
+        原 APIRouter prefix，二者拼接一次即可。
+        """
+        for route in routes or []:
+            dependant = getattr(route, "dependant", None)
+            path = getattr(route, "path", None)
+            if dependant is not None and path is not None:
+                yield route, f"{prefix}{path}"
+
+            original = getattr(route, "original_router", None)
+            if original is None:
+                continue
+            context = getattr(route, "include_context", None)
+            nested_prefix = getattr(context, "prefix", "") or ""
+            yield from _iter_routes(
+                getattr(original, "routes", None),
+                f"{prefix}{nested_prefix}",
+            )
+
     out: list[dict] = []
-    for route in getattr(app, "routes", []):
+    for route, effective_path in _iter_routes(getattr(app, "routes", [])):
         dep = getattr(route, "dependant", None)
         if dep is None:
             continue
@@ -747,7 +773,7 @@ def _scan_guarded_endpoints(app) -> list[dict]:
             continue
         methods_raw = getattr(route, "methods", None) or set()
         methods = sorted(methods_raw - {"HEAD", "OPTIONS"})
-        out.append({"path": route.path, "methods": methods,
+        out.append({"path": effective_path, "methods": methods,
                     "guard": guard, "source": "runtime"})
     return out
 

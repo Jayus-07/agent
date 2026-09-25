@@ -8,6 +8,7 @@
 """
 import pytest
 from contextlib import nullcontext
+from concurrent.futures import wait as wait_futures
 
 from backend.rag.preprocessing.metadata_router import CascadeDecision
 from backend.rag.preprocessing.metadata_schema import DecisionEnvelope
@@ -26,8 +27,13 @@ class _FakeEmbedding:
 
 
 @pytest.fixture
-def _stage():
-    return MetadataStage(_FakeRegistry(), _FakeEmbedding(), department="qa")
+def _stage(monkeypatch):
+    # teardown 时先等 stage 的非阻塞 shadow future，再恢复测试桩，避免
+    # 后台线程在 pytest capture 关闭后继续向日志流写入。
+    del monkeypatch
+    value = MetadataStage(_FakeRegistry(), _FakeEmbedding(), department="qa")
+    yield value
+    wait_futures(tuple(value._shadow_tasks), timeout=2.0)
 
 
 _TEXT = ("本合同由甲方与乙方签订，第一条 违约责任；第二条 保密条款；"

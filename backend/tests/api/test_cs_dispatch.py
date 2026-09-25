@@ -226,8 +226,16 @@ def test_success_response_contains_handoff_contract(
 def test_main_router_registers_user_handoff_route():
     from backend.app.api.router import api_router
 
+    def iter_routes(routes):
+        for route in routes:
+            if getattr(route, "path", None) is not None:
+                yield route
+            original = getattr(route, "original_router", None)
+            if original is not None:
+                yield from iter_routes(getattr(original, "routes", []))
+
     assert any(
         route.path == "/cs/conversations/{conversation_id}/handoff"
         and "POST" in route.methods
-        for route in api_router.routes
+        for route in iter_routes(api_router.routes)
     )

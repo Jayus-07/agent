@@ -442,7 +442,15 @@ def test_remove_model_conflict_maps_to_409() -> None:
 
 
 def test_model_config_routes_are_registered_on_main_router() -> None:
-    paths = {route.path for route in api_router.routes}
+    def iter_routes(routes):
+        for route in routes:
+            if getattr(route, "path", None) is not None:
+                yield route
+            original = getattr(route, "original_router", None)
+            if original is not None:
+                yield from iter_routes(getattr(original, "routes", []))
+
+    paths = {route.path for route in iter_routes(api_router.routes)}
     assert {
         "/sys/providers",
         "/sys/providers/verify-draft",

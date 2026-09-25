@@ -51,6 +51,9 @@ def client(monkeypatch, fake_redis):
     """fresh app + sys_router（不挂 API Key 中间件，身份走网关注入头语义）。"""
     monkeypatch.setenv("JWT_SECRET", "k" * 32)
     monkeypatch.setenv("SENSITIVE_API_GUARD_MODE", "enforce")
+    # 该文件只验证 env 灰度语义；清掉其他测试可能留下的 DB 覆盖，
+    # 否则后续 audit 用例会被持久化的 enforce 值污染。
+    monkeypatch.setattr("backend.services.sys_config._values", {})
     app = FastAPI()
     app.include_router(auth_local.sys_router, prefix="/api")
     return TestClient(app)
