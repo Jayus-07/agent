@@ -43,6 +43,7 @@ class RuleBasedRetriever:
                 metadata={
                     "chunk_id": chunk_id,
                     "chunk_type": "faq_match",
+                    "match_type": "faq_pattern",
                     "source_file": "knowledge_base",
                     "rule_match_score": 1.0,  # 完美匹配
                 }

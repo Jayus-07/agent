@@ -147,8 +147,16 @@ def _enhanced_hybrid_retrieve_impl(
         from backend.rag.retrieval.hybrid import hybrid_retrieve
         fallback_docs = hybrid_retrieve(query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter, expanded_queries=expanded_queries)
         metrics["fallback_used"] = True
-        trace_collector.end_span(span, metrics={"status": "fallback", "retrieved_chunks": len(fallback_docs)})
-        return fallback_docs, {"confidence": 0.0, "strategy": "fallback"}
+        metrics["retrieved_chunks"] = len(fallback_docs)
+        trace_collector.end_span(span, metrics={"status": "fallback", **metrics})
+        # 与正常出口保持同一 meta 形状；保留旧键以兼容早期调用方。
+        return fallback_docs, {
+            "confidence_score": 0.0,
+            "retrieval_strategy": "fallback",
+            "confidence": 0.0,
+            "strategy": "fallback",
+            "metrics": metrics,
+        }
     
     # Step 5: RRF 融合（各路径独立计分，保留跨路径一致性信号）
     merged_docs = _ultimate_rrf_fusion(path_results, rrf_k, k, query=query)
@@ -255,7 +263,23 @@ def assess_query_complexity(query: str) -> dict:
     """
     import re
     
+    query = query or ""
     char_count = len(query)
+
+    # 业务类型阈值来自 config/rag.py 的单一事实源。复杂度阈值仍负责
+    # k_multiplier，但高风险业务不得因问题短而降到通用 0.25 门槛以下。
+    from backend.config.rag import (
+        ADAPTIVE_VEC_THRESHOLDS,
+        FINANCIAL_QUERY_THRESHOLD,
+    )
+    normalized = re.sub(r"\s+", "", query).lower()
+    business_threshold = None
+    if any(token in normalized for token in ("财务", "毛利率", "销售额", "财务指标")):
+        business_threshold = FINANCIAL_QUERY_THRESHOLD
+    elif any(token in normalized for token in ("退货政策", "售后faq", "常见问题")):
+        business_threshold = ADAPTIVE_VEC_THRESHOLDS["faq"]
+    elif any(token in normalized for token in ("报销", "制度", "合规")):
+        business_threshold = ADAPTIVE_VEC_THRESHOLDS["policy"]
     
     # 实体数量统计
     entities = []
@@ -267,16 +291,19 @@ def assess_query_complexity(query: str) -> dict:
         entities.append("acronym")
     
     # FAQ/条款特征检测
-    is_faq_like = bool(re.search(r'Q[:：].*?A[:：]|退货.*?流程 | 退款.*?时效', query, re.IGNORECASE))
+    is_faq_like = bool(re.search(r'Q[:：].*?A[:：]|退货.*?(?:政策|范围|条件)|退款.*?时效', query, re.IGNORECASE))
     has_clause = bool(re.search(r'第 [一二三四五六七八九十\d]+条', query))
     
     # 复杂度判断
     if char_count < 15 and len(entities) <= 1 and not is_faq_like:
-        return {"level": "simple", "threshold": 0.25, "k_multiplier": 1.0}
+        threshold = max(0.25, business_threshold or 0.25)
+        return {"level": "simple", "threshold": threshold, "k_multiplier": 1.0}
     elif char_count < 30 and len(entities) <= 2:
-        return {"level": "medium", "threshold": 0.30, "k_multiplier": 1.2}
+        threshold = max(0.30, business_threshold or 0.30)
+        return {"level": "medium", "threshold": threshold, "k_multiplier": 1.2}
     else:
-        return {"level": "complex", "threshold": 0.35, "k_multiplier": 1.5}
+        threshold = max(0.35, business_threshold or 0.35)
+        return {"level": "complex", "threshold": threshold, "k_multiplier": 1.5}
 
 
 class ConfidenceAggregator:

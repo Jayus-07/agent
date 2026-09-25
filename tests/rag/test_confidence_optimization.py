@@ -121,8 +121,16 @@ class TestEvidenceGateIntegration:
         from backend.rag.retrieval.enhanced_hybrid_retrieval import enhanced_hybrid_retrieve
         
         # Mock all retrievers
-        mock_vector = type('MockRetriever', (), {'retrieve': lambda **kw: []})()
-        mock_bm25 = type('MockRetriever', (), {'invoke': lambda q: []})()
+        mock_vector = type(
+            'MockRetriever',
+            (),
+            {'retrieve': lambda self, *args, **kwargs: []},
+        )()
+        mock_bm25 = type(
+            'MockRetriever',
+            (),
+            {'invoke': lambda self, *args, **kwargs: []},
+        )()
         
         query = "完全不符合知识库的问题 xxxxxxxx"
         docs, meta = enhanced_hybrid_retrieve(query, mock_vector, mock_bm25, k=5)
