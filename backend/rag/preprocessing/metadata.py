@@ -145,7 +145,10 @@ def compute_minhash(text: str, n_gram: int | None = None, n_hashes: int | None =
         n_hashes = _irules.minhash_n_hashes
     # 提取 n-gram token（中文按字级 3-gram）
     tokens: set[str] = set()
-    clean = re.sub(r'\s+', '', text)[:_irules.minhash_text_max_chars]  # 取前 N 字，去空格
+    clean = re.sub(r'\s+', '', text)[:_irules.minhash_text_max_chars]
+    # 标点不携带文档语义；过滤后若无字符，返回全零签名，避免
+    # "...,,,!!!" 等噪声被当成可去重文档。
+    clean = re.sub(r'[^\w\u4e00-\u9fff]', '', clean)
     for i in range(len(clean) - n_gram + 1):
         tokens.add(clean[i:i + n_gram])
 
