@@ -436,3 +436,42 @@ FULL_ROADMAP_COMPLETE=false
 本节之后的判定仍沿用 §10.3：任务测试必须使用独占测试库/队列或 Docker 内网
 路径，随后才能进入 STOP C-F；共享容器未停止，隔离库 `agent_memory_rc_test`
 保留供下一轮复判。
+
+### 10.6 隔离复判收口（2026-09-26）
+
+按 §10.5 的环境边界创建了独立测试库 `agent_memory_rc_task`、
+`agent_memory_rc_api3`，测试容器挂载当前工作树，容器内网直连 PostgreSQL，
+Redis/Celery 使用独立 DB，未停止或重启任何共享服务。
+
+结果：
+
+- 任务 API、任务 admission/orchestration/recovery/resume、queue/checkpoint/
+  pending/state/zombie 族：`227 passed in 95.02s`；
+- `backend/tests/api` 全量：`445 passed in 109.19s`，`0 failed / 0 error / 0 skipped /
+  0 warning`；
+- API 全量使用 compose 同口径 `RAG_MODE=remote`，未再出现本地 warmup 线程在
+  pytest capture 关闭后写日志的错误。
+
+API 全量第二轮之前，已移除唯一同步测试错误套用的 `pytest.mark.asyncio`（提交
+`8341946`）；该修复仅减少测试标注噪声，不改变业务行为。此前宿主机
+`444 passed / 1 environment race` 的 409 已由隔离复判排除，不能再作为 API 债务。
+
+STOP B 的 174 个 census 节点现已全部有归因：persistent 89 个已修复并复跑，
+environment-flaky 85 个已按串行/隔离路径复绿；未分类数归零。这里的“PASS”只
+表示 STOP B 分类与目标族清偿完成，不等同于全量回归或发布 Gate。
+
+```text
+STOP_B_CLASSIFICATION_CURRENT=PASS
+TEST_DEBT_UNCLASSIFIED=0
+TASK_RUNTIME_ISOLATED_PASS=true
+TASK_RUNTIME_ISOLATED_TESTS=227
+API_FINAL_ISOLATED_PASS=true
+API_FINAL_ISOLATED_TESTS=445
+GLOBAL_REGRESSION_PASS=false
+PROJECT_INTERNAL_CLOSURE_PASS=false
+PRODUCTION_RELEASE_GATE_PASS=false
+FULL_ROADMAP_COMPLETE=false
+```
+
+下一步进入 STOP C/D 的最终复判：按锁定 runbook 对其余块做全量无并发复跑，
+再执行 STOP E 全量归零与 STOP F 六 Gate 签发；在此之前不宣称项目闭环或可发布。
