@@ -176,6 +176,7 @@ class TestExecuteIndexTaskImpl:
         assert settle.call_args.args[0] == "u1"
 
     def test_transient_error_notifies_retry_and_reraises(self, monkeypatch):
+        from backend.tasks.retry_policy import TaskRetryScheduled
         redis_writes = []
         monkeypatch.setattr(ru, "_write_progress_redis",
                             lambda uid, stage, message="", **ex:
@@ -184,8 +185,10 @@ class TestExecuteIndexTaskImpl:
                             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("embed down")))
         monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(TaskRetryScheduled) as exc_info:
             it.execute_index_task_impl("u1", "/docs/a.pdf", "a.pdf", retries=0)
+        assert isinstance(exc_info.value.original, RuntimeError)
+        assert exc_info.value.error_type == "internal_error"
 
         stages = [w["stage"] for w in redis_writes]
         assert "error" not in stages, "重试期间不得发终态 error 事件"
@@ -222,8 +225,11 @@ class TestExecuteIndexTaskImpl:
                                 ru.FileLockedByOtherError("locked")))
         monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
 
-        with pytest.raises(ru.FileLockedByOtherError):
+        from backend.tasks.retry_policy import TaskRetryScheduled
+        with pytest.raises(TaskRetryScheduled) as exc_info:
             it.execute_index_task_impl("u1", "/docs/a.pdf", "a.pdf", retries=0)
+        assert isinstance(exc_info.value.original, ru.FileLockedByOtherError)
+        assert exc_info.value.error_type == "internal_error"
 
         assert not any(w["stage"] == "error" for w in redis_writes), \
             "锁冲突重试期间不得发终态 error"

@@ -533,7 +533,7 @@ def client(monkeypatch):
 
     async def fake_sync_impl(file, request, max_size, tmp_dir, chunk_size,
                              emit_bytes, emit_ms, kb_id="policy_general",
-                             department="general"):
+                             department="general", **kwargs):
         captured["called"] = True
         captured["filename"] = file.filename
         return {
@@ -550,6 +550,18 @@ def client(monkeypatch):
 
     app = FastAPI()
     app.include_router(ru.router)
+    # 路由当前有真实 JWT editor/user 门禁；端点行为测试用固定的
+    # 合法身份替换依赖，避免把每个用例都变成网关认证集成测试。
+    from backend.app.api.deps import require_rag_editor, require_rag_user
+    from backend.app.api.identity import Identity
+
+    identity = Identity(
+        user_id="7", user_name="pytest", department="general",
+        auth_type="jwt", source="test", roles=("editor",),
+        tenant_id="test-tenant",
+    )
+    app.dependency_overrides[require_rag_user] = lambda: identity
+    app.dependency_overrides[require_rag_editor] = lambda: identity
     return TestClient(app), captured
 
 
@@ -562,7 +574,7 @@ class TestUploadEndpoint:
                        data={"kb_id": "policy_general", "department": "general"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["ok"] is True
+        assert body["ok"] is True, body
         assert body["upload_id"] == "uid123456789"
         assert captured.get("called") is True
 
@@ -595,7 +607,7 @@ class TestUploadEndpoint:
         resp = tc.post("/upload",
                        files={"file": ("a.md", b"x", "application/octet-stream")},
                        data={"kb_id": "policy_general", "department": "general"})
-        assert resp.json()["ok"] is True
+        assert resp.json()["ok"] is True, resp.json()
         assert captured.get("called") is True, "octet-stream 应进入上传流程"
 
     def test_content_length_oversize_precheck(self, client, monkeypatch):
@@ -626,7 +638,7 @@ class TestUploadEndpoint:
         resp = tc.post("/upload",
                        files={"file": ("ok.md", b"# hi", "text/markdown")},
                        data={"kb_id": "policy_general", "department": "general"})
-        assert resp.json()["ok"] is True
+        assert resp.json()["ok"] is True, resp.json()
         assert captured.get("called") is True, "预检余量内应进入流式实现"
 
     def test_rag_not_ready_returns_503(self, client, monkeypatch):

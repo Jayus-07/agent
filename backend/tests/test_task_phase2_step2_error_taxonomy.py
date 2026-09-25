@@ -99,6 +99,10 @@ class TestClassify:
         c = classify_task_error(RuntimeError("mystery"))
         assert (c.error_type, c.retryable) == ("internal_error", True)
 
+    def test_chunking_empty_is_terminal_validation_error(self):
+        c = classify_task_error(_stub_exc("ChunkingEmptyError", "0 chunks"))
+        assert (c.error_type, c.retryable) == ("validation_error", False)
+
     def test_retryable_of(self):
         assert retryable_of("provider_timeout") is True
         assert retryable_of("quota_exhausted") is False

@@ -108,6 +108,12 @@ def classify_task_error(exc: BaseException) -> TaskErrorClassification:
         if isinstance(exc, PermissionError):
             return TaskErrorClassification(
                 "permission_denied", False, _SOURCE_BY_TYPE["permission_denied"])
+        # 0-chunk 文档是可诊断的业务输入终态：保留源文件供排查，
+        # 不应按未知 RuntimeError 消耗 Celery 重试预算。
+        if type(exc).__name__ == "ChunkingEmptyError":
+            return TaskErrorClassification(
+                "validation_error", False,
+                _SOURCE_BY_TYPE["validation_error"])
 
         # 2) provider 层已分类（ModelProviderError / 带 error_type 的包装异常）
         model_type = getattr(exc, "error_type", "")
