@@ -93,7 +93,9 @@ def _pool_key(config: dict) -> tuple[tuple[str, str], ...]:
 # 查询前校验 runtime embedding 与之一致，不一致禁止检索（INDEX_EMBEDDING_MISMATCH）。
 
 _INDEX_META_TABLE_SUFFIX = "rag_index_meta"
-_META_DDL_DONE = threading.Event()
+# 与向量表 DDL 一样按实际表名缓存；不能用进程级单一 Event，
+# 否则测试/多租户切换 VECTOR_PG_TABLE_PREFIX 后会跳过新元数据表建表。
+_META_DDL_DONE: set[str] = set()
 
 
 def _meta_table_name() -> str:
@@ -103,10 +105,11 @@ def _meta_table_name() -> str:
 
 def _ensure_meta_table(conn: Any) -> None:
     """幂等建 rag_index_meta（复用借出连接，调用方负责提交/回滚）。"""
-    if _META_DDL_DONE.is_set():
+    table = _meta_table_name()
+    if table in _META_DDL_DONE:
         return
     conn.cursor().execute(f"""
-        CREATE TABLE IF NOT EXISTS {_meta_table_name()} (
+        CREATE TABLE IF NOT EXISTS {table} (
             collection          TEXT PRIMARY KEY,
             embedding_provider  TEXT NOT NULL DEFAULT '',
             embedding_model     TEXT NOT NULL DEFAULT '',
@@ -120,7 +123,7 @@ def _ensure_meta_table(conn: Any) -> None:
                 CHECK (status IN ('ready', 'rebuild_required', 'rebuilding', 'failed'))
         )
     """)
-    _META_DDL_DONE.set()
+    _META_DDL_DONE.add(table)
 
 
 def _runtime_embedding_identity(embedding_function: Any) -> dict[str, str]:

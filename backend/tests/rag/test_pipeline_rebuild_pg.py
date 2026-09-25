@@ -61,6 +61,7 @@ def _pg_iso(monkeypatch):
     monkeypatch.setenv("VECTOR_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
     yield
     pvs_mod._DDL_DONE.discard(TEST_TABLE_PREFIX + "rag_vectors")
+    pvs_mod._META_DDL_DONE.discard(TEST_TABLE_PREFIX + "rag_index_meta")
     drop_pgtest_tables()
 
 
