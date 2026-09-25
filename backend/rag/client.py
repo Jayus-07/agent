@@ -67,6 +67,8 @@ class RAGServiceProxy:
                     "subject_type": subject_type,
                     "department": department,
                     "permissions": permissions,
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
                 },
                 timeout=_ASK_TIMEOUT_S,
             )
@@ -99,8 +101,6 @@ class RAGServiceProxy:
                     "subject_type": subject_type,
                     "department": department,
                     "permissions": permissions,
-                    "user_id": user_id,
-                    "tenant_id": tenant_id,
                 },
                 timeout=_RETRIEVE_TIMEOUT_S,
             )
