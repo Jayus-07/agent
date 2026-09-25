@@ -49,7 +49,8 @@
     ".next-dev-227586961/types/**/*.ts",
     ".next-dev-176024513/types/**/*.ts",
     ".next-dev-126627241/types/**/*.ts",
-    ".next-dev-267517170/types/**/*.ts"
+    ".next-dev-267517170/types/**/*.ts",
+    ".next-dev-rot8731/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
