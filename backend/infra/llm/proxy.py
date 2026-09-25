@@ -1635,6 +1635,11 @@ class _LLMProxy:
     """代理对象：每次调用都实时委派给当前活跃 LLM，并全局剥离 <think> 块"""
 
     __slots__ = ()
+    # LangChain 在把可调用对象包装成 RunnableLambda 时会读取
+    # ``__name__``。这个元数据不应触发真正模型解析；否则仅构建检索链
+    # 也会提前初始化 provider，导致无凭据环境在构造期失败，并破坏代理
+    # 的惰性解析语义。
+    __name__ = "llm_proxy"
     _WRAP_METHODS = {'invoke', 'ainvoke', 'generate', 'agenerate', 'batch', 'stream', 'astream'}
 
     def __getattr__(self, name: str):
