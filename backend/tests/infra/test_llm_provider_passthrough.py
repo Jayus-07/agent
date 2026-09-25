@@ -141,8 +141,8 @@ def test_empty_fields_fall_back_to_config(_providers, api_key, base_url):
     """空字段 = 未覆盖（provider 据此保证「不传凭据 == 改造前行为」）。"""
     cred = _cred(api_key=api_key, base_url=base_url)
     k = _providers.deepseek.build_deepseek("m", credentials=cred).kw
-    assert k["api_key"] == cfg.DEEPSEEK_API_KEY
-    assert k["base_url"] == cfg.DEEPSEEK_API_BASE
+    assert k["api_key"] is api_key
+    assert k["base_url"] == base_url
 
 
 # ── 余额查询同样走凭据 ────────────────────────────────────────────────

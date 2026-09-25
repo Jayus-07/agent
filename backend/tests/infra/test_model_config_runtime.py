@@ -100,7 +100,7 @@ def test_specialized_role_requires_registered_model(monkeypatch):
     """专项角色也必须从已登记目录选择，不能保存自由文本模型名。"""
     models.set_dynamic_models([
         {"name": "BAAI/bge-m3", "provider": "siliconflow", "model_kind": "embedding"},
-        {"name": "qwen-vl-max", "provider": "qwen", "model_kind": "chat"},
+        {"name": "qwen-vl-max", "provider": "qwen", "model_kind": "ocr"},
     ])
     monkeypatch.setattr(
         "backend.infra.llm.credentials.resolve_credentials",

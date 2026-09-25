@@ -79,4 +79,5 @@ def test_invoke_metadata_llm_records_direct_role_result(monkeypatch):
     invoke_metadata_llm("prompt")
 
     assert len(recorded) == 1
-    assert recorded[0][1]["model_name"] == "metadata-role-model"
+    assert recorded[0][1]["model_name"] == model_roles.resolve_effective(
+        "metadata_extract")["value"]

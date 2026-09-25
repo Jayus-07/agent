@@ -40,8 +40,13 @@ def build_minimax(
             "minimax provider 需要 langchain_anthropic 包，请 pip install langchain-anthropic"
         ) from e
 
-    api_key = credentials.api_key if credentials is not None else ""
-    base_url = credentials.base_url if credentials is not None else ""
+    # 无 DB 凭据对象时保持旧的本地配置行为；一旦显式传入凭据，
+    # 其快照是唯一来源，不回落到已废弃的环境变量。
+    api_key = credentials.api_key if credentials is not None else MINIMAX_API_KEY
+    base_url = (
+        credentials.base_url if credentials is not None
+        else MINIMAX_ANTHROPIC_URL
+    )
 
     headers = {"x-api-key": api_key}
     if credentials and credentials.extra_headers:
