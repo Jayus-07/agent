@@ -387,3 +387,52 @@ PERSISTENT_RECHECK_FAIL=0
 `767da77`、`2dbec20`、`fc63aaf`、`455277b`、`764d25d`、`322bae9`、`3812941`、
 `71e14c1`、`03bf162`、`f87b01e`、`da7949b`、`816198f`、`7eb6175`。工作区内
 `data/**` 为测试/其他会话生成的既有改动，未纳入本次提交。
+
+### 10.5 STOP B API / travel 补充复核（2026-09-26）
+
+API 族继续复核时确认了两个独立的测试/框架边界：
+
+1. FastAPI 0.141 将 `include_router()` 保留为 `_IncludedRouter` 包装器，
+   安全运营端点扫描和两条路由注册断言若只读父级 `routes` 会漏报。提交
+   `ced12d4` 让生产扫描递归 `original_router` 并拼接有效前缀，同时把测试
+   路由遍历对齐同一事实源。
+2. `test_rbac_user_lifecycle` 曾直接赋值 `deps.get_mode` 而不回滚，把后续
+   audit 用例永久锁在 `enforce`。改为 pytest `monkeypatch` 后，按实际文件顺序
+   运行 RBAC + security ops + session guard 共 `17 passed`。
+
+宿主机 API 目录全量（显式 `PYTHONPATH=backend PGPORT=5433`）结果为
+`444 passed / 1 failed / 19 warnings`（1067.80s）。唯一失败是
+`test_tasks_api.py::test_create_run_pause_query_resume_success` 的第二次 resume
+返回 409：共享 `agent-beat-1` / `agent-agent-worker-1` 在测试进程外抢先消费了
+PENDING 任务。该节点单独复跑 `1 passed`（162.81s），与任务族此前隔离库 +
+Docker 内网 `227 passed` 的证据一致，归类为 `FIX_ENVIRONMENT`，不改任务状态机。
+因此 API 族当前可签发的口径是“非任务污染面 444 项全绿；任务 API 需隔离复判”，
+不能把宿主机本轮 444/1 写成 API 全量 PASS。
+
+travel 目录在同一隔离内网路径全量 `585 passed`（79.96s），此前 80% 的确定性
+挂死未再出现；该结果覆盖 travel census 缺口，但仍需与最终全量复判一起签发 Gate。
+
+稳定性补测：`test_state_transition.py` 20×5 共 `100 passed`；
+`test_metadata_shadow.py` 20×8 共 `160 passed`；state-machine /
+confirmation-store / metadata-cascade 三文件 10 轮共 `540 passed`。metadata
+测试 fixture 现于 teardown 等待 shadow futures；修复后的合跑 `18 passed`，未再
+出现 pytest capture 关闭后的 `I/O operation on closed file`。这些是 flaky 结案证据，
+不是把环境隔离项从 Gate 中静默移除的理由。
+
+```text
+API_ROUTE_SCAN_INCLUDED_ROUTER_FIX=true
+API_TARGETED_ORDER_REGRESSION_PASS=17
+API_HOST_PASS=444
+API_HOST_ENVIRONMENT_FAILURE=1
+TASK_API_ISOLATED_NODE_PASS=1
+TRAVEL_ISOLATED_PASS=585
+FLAKY_STABILITY_EVIDENCE_PASS=true
+GLOBAL_REGRESSION_PASS=false
+PROJECT_INTERNAL_CLOSURE_PASS=false
+PRODUCTION_RELEASE_GATE_PASS=false
+FULL_ROADMAP_COMPLETE=false
+```
+
+本节之后的判定仍沿用 §10.3：任务测试必须使用独占测试库/队列或 Docker 内网
+路径，随后才能进入 STOP C-F；共享容器未停止，隔离库 `agent_memory_rc_test`
+保留供下一轮复判。
