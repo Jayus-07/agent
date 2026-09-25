@@ -27,9 +27,6 @@ from backend.config import auth as auth_config
 from backend.config.database import MEMORY_DB_CONFIG
 from backend.security.local_jwt import hash_password, issue_access_token, verify_access_token
 
-pytestmark = pytest.mark.asyncio
-
-
 def _require_pg() -> None:
     try:
         with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2) as conn:
