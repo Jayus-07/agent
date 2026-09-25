@@ -100,7 +100,9 @@ class TestTryRewrite:
         """LLM 返回 3 行改写，取第一行。"""
         fresh_collector.start("test")
         s = SelfCorrectionStrategy()
-        with patch("backend.infra.llm.llm") as mock_llm:
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
             mock_llm.invoke.return_value = self._mock_llm(
                 "改写 query A\n改写 query B\n改写 query C"
             )
@@ -111,7 +113,9 @@ class TestTryRewrite:
         """每行应 strip 首尾空格。"""
         fresh_collector.start("test")
         s = SelfCorrectionStrategy()
-        with patch("backend.infra.llm.llm") as mock_llm:
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
             mock_llm.invoke.return_value = self._mock_llm(
                 "  改写 A  \n  改写 B  "
             )
@@ -122,7 +126,9 @@ class TestTryRewrite:
         """LLM 返回空 → fallback 到原 question。"""
         fresh_collector.start("test")
         s = SelfCorrectionStrategy()
-        with patch("backend.infra.llm.llm") as mock_llm:
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
             mock_llm.invoke.return_value = self._mock_llm("")
             result = s.try_rewrite("原问题", "no_evidence")
         assert result == "原问题"
@@ -131,7 +137,9 @@ class TestTryRewrite:
         """LLM 抛异常 → 返回 None + logger.warning + trace status=error。"""
         fresh_collector.start("test")
         s = SelfCorrectionStrategy()
-        with patch("backend.infra.llm.llm") as mock_llm:
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
             mock_llm.invoke.side_effect = RuntimeError("LLM boom")
             result = s.try_rewrite("原问题", "no_evidence")
         assert result is None
@@ -140,7 +148,9 @@ class TestTryRewrite:
         """成功时 trace span 含 metrics.rewrites + metrics.selected。"""
         fresh_collector.start("test")
         s = SelfCorrectionStrategy()
-        with patch("backend.infra.llm.llm") as mock_llm:
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
             mock_llm.invoke.return_value = self._mock_llm("A\nB")
             s.try_rewrite("原问题", "no_evidence")
         # span 应已 end_span，从 contextvar 拿不到（已 finish）
