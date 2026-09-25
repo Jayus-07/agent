@@ -359,5 +359,31 @@ TASK_RUNTIME_ISOLATED_TESTS=227
 TASK_RUNTIME_HOST_PATH=ENV_BLOCKED（vpnkit 续租窗口）
 ```
 
-本会话提交：`f87b01e`、`da7949b`、`816198f`。工作区内 `data/**` 为测试/其他会话生成的既有
-改动，未纳入本次提交。
+### 10.4 STOP B persistent 清单复核
+
+基线 `baseline-failures-persistent.txt` 去重得到 35 个文件、89 个历史 persistent
+节点。带完整 memory migrations 的隔离库 + Docker 内网测试容器中，按文件复跑共
+`432 passed`；其中最后一轮先得到 `430 passed / 2 failed`，修正 durable side-effect
+测试 fixture 后，两个节点在宿主 `--no-cov` 复跑均通过（`4 passed`）。该结果覆盖
+全部 89 个 persistent 节点，未发现当前源码失败；原清单仍保留作为 census 快照。
+
+lazy LLM proxy 的纯元数据探测缺口已由提交 `7eb6175` 修复；同提交同步对齐 TLS
+身份 fixture 与 global idempotency durable 入口测试。任务族提交的 `227 passed` 与
+本节 432 项有文件重叠，不做简单相加。
+
+```text
+PERSISTENT_BASELINE_NODES=89
+PERSISTENT_RECHECK_FILES=35
+PERSISTENT_RECHECK_PASS=432
+PERSISTENT_RECHECK_FAIL=0
+```
+
+说明：§9.4 的 `PRODUCTION_CODE_CHANGE_COUNT=0` 是 STOP A 历史快照；STOP B 已有
+生产修复提交（含 `649a010`、`767da77`、`fc63aaf`、`f87b01e`、`7eb6175` 等），
+不能将该历史字段解释为当前工作树零生产代码改动。全局 Gate 仍按 §10.3 保持 false，
+因为尚未完成全量复判、flaky/挂死结案和 STOP F 六 Gate 签发。
+
+本会话文档提交：`ad6e31f`、`34873d0`；生产/测试提交：`649a010`、`4b4b64f`、
+`767da77`、`2dbec20`、`fc63aaf`、`455277b`、`764d25d`、`322bae9`、`3812941`、
+`71e14c1`、`03bf162`、`f87b01e`、`da7949b`、`816198f`、`7eb6175`。工作区内
+`data/**` 为测试/其他会话生成的既有改动，未纳入本次提交。
