@@ -340,5 +340,11 @@ FULL_ROADMAP_COMPLETE=false
 故任务生产状态机不改，剩余两项归类为 `FIX_ENVIRONMENT`。该临时测试库未触碰
 业务库，保留供后续复判。
 
+补充边界：尝试在同一 `agent-app` 镜像内直接收集四个任务测试模块时，镜像未安装
+`langchain_core` 等开发测试依赖，setup 阶段即报 `ModuleNotFoundError`，没有产生
+可归因于源码的测试结果。该次 collection 阻断归类为 `FIX_ENVIRONMENT`（测试镜像
+依赖不完整），不改变上面的任务状态机判定；后续应使用带 dev 依赖的专用测试镜像
+再做模块级全量复跑。
+
 本会话提交：`f87b01e`、`da7949b`、`816198f`。工作区内 `data/**` 为测试/其他会话生成的既有
 改动，未纳入本次提交。
