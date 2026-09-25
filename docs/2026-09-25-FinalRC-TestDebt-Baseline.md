@@ -330,5 +330,8 @@ EXTERNAL_BLOCKERS_PRESENT=true
 FULL_ROADMAP_COMPLETE=false
 ```
 
-本会话提交：`f87b01e`、`da7949b`。工作区内 `data/**` 为测试/其他会话生成的既有
+补充校验：remote RAG/CS/rerank/embedding guard 组合 `62 passed`（57.11s）；
+随后修正 identity 字段只进入 `ask` payload，提交 `816198f`。
+
+本会话提交：`f87b01e`、`da7949b`、`816198f`。工作区内 `data/**` 为测试/其他会话生成的既有
 改动，未纳入本次提交。
