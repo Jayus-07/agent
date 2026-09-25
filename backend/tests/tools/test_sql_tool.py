@@ -11,6 +11,27 @@ import json
 from unittest.mock import MagicMock, patch
 
 
+@pytest.fixture(autouse=True)
+def _trusted_tool_context():
+    """为 SQL Tool 测试绑定最小可信身份，走现行 fail-closed 策略链。"""
+    from backend.core.request_context import (
+        set_tool_department,
+        set_tool_roles,
+        set_tool_tenant_id,
+        set_tool_user_id,
+    )
+
+    set_tool_user_id("3")
+    set_tool_department("sales")
+    set_tool_tenant_id("test-tenant")
+    set_tool_roles(("editor",))
+    yield
+    set_tool_user_id("")
+    set_tool_department("")
+    set_tool_tenant_id("")
+    set_tool_roles(())
+
+
 class TestSQLToolRegistry:
     """SQL Tool 注册中心测试"""
     
@@ -157,7 +178,7 @@ class TestExecuteSQLToolSecurity:
         safe_queries = [
             "SELECT * FROM products",
             "SELECT name, price FROM inventory WHERE quantity > 0",
-            "SELECT COUNT(*) FROM orders WHERE status = 'completed'",
+            "SELECT COUNT(*) FROM product.products WHERE status = 'active'",
         ]
 
         with patch("backend.sql.executor.execute_sql_struct",
@@ -294,7 +315,8 @@ class TestExecuteSQLToolIntegration:
         mock_result.row_count = 1
         
         with patch('backend.sql.executor.execute_sql_struct', return_value=mock_result):
-            result = execute_sql_tool.invoke({"query": "SELECT COUNT(*) FROM orders"})
+            result = execute_sql_tool.invoke(
+                {"query": "SELECT COUNT(*) FROM product.products"})
             parsed = json.loads(result)
             
             assert parsed['data']['rows'][0]['count'] == 150
@@ -324,88 +346,88 @@ class TestSQLQueryToolIntegration:
     def test_natural_language_query(self):
         """自然语言转 SQL 并执行"""
         from backend.tools.sql import sql_query_tool
-        
-        mock_response = """
-| id | name | price |
-|----|------|-------|
-| 1  | Apple | 5.5  |
-| 2  | Banana | 3.2  |
-"""
-        
+        from backend.sql.sql_result import SQLResult
+
+        mock_response = SQLResult.success(
+            [{"id": 1, "name": "Apple", "price": 5.5},
+             {"id": 2, "name": "Banana", "price": 3.2}],
+            ["id", "name", "price"], "SELECT 1")
+
         with patch('backend.tools.sql._get_sql_agent') as mock_getter:
             mock_agent = MagicMock()
-            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_agent.ask_struct = MagicMock(return_value=mock_response)
             mock_getter.return_value = mock_agent
             
             result = sql_query_tool.invoke({
                 "question": "查询所有价格超过 4 元的水果"
             })
             
-            assert mock_agent.ask.called
+            assert mock_agent.ask_struct.called
             assert "Apple" in result
             assert "Banana" in result  # mock 表格含两行，均应原样透传
     
     def test_empty_result_handling(self):
         """无匹配结果返回空表格"""
         from backend.tools.sql import sql_query_tool
-        
-        mock_response = "| 无匹配数据 |"
-        
+        from backend.sql.sql_result import SQLResult
+
+        mock_response = SQLResult.success([], [], "SELECT 1 WHERE false")
+
         with patch('backend.tools.sql._get_sql_agent') as mock_getter:
             mock_agent = MagicMock()
-            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_agent.ask_struct = MagicMock(return_value=mock_response)
             mock_getter.return_value = mock_agent
             
             result = sql_query_tool.invoke({
                 "question": "查询不存在的商品 XXXXXX"
             })
             
-            assert "无匹配" in result or "no data" in result.lower() or "empty" in result.lower()
+            assert ("无匹配" in result or "无结果" in result
+                    or "no data" in result.lower()
+                    or "empty" in result.lower())
     
     def test_aggregation_query_summary(self):
         """聚合查询返回统计摘要"""
         from backend.tools.sql import sql_query_tool
-        
-        mock_response = """
-| 统计项 | 值 |
-|--------|--------|
-| 总订单数 | 1,234  |
-| 总金额 | $56,789 |
-"""
-        
+        from backend.sql.sql_result import SQLResult
+
+        mock_response = SQLResult.success(
+            [{"统计项": "总订单数", "值": "1,234"},
+             {"统计项": "总金额", "值": "$56,789"}],
+            ["统计项", "值"], "SELECT 1")
+
         with patch('backend.tools.sql._get_sql_agent') as mock_getter:
             mock_agent = MagicMock()
-            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_agent.ask_struct = MagicMock(return_value=mock_response)
             mock_getter.return_value = mock_agent
             
             result = sql_query_tool.invoke({
                 "question": "统计本月订单总数和总金额"
             })
             
-            assert mock_agent.ask.called
+            assert mock_agent.ask_struct.called
             assert "总订单数" in result or "orders" in result.lower()
     
     def test_complex_filter_query(self):
         """复杂筛选条件查询"""
         from backend.tools.sql import sql_query_tool
-        
-        mock_response = """
-| product_id | name | stock_quantity |
-|------------|------|----------------|
-| 101 | Premium Widget | 150 |
-| 102 | Deluxe Gadget | 75 |
-"""
-        
+        from backend.sql.sql_result import SQLResult
+
+        mock_response = SQLResult.success(
+            [{"product_id": 101, "name": "Premium Widget", "stock_quantity": 150},
+             {"product_id": 102, "name": "Deluxe Gadget", "stock_quantity": 75}],
+            ["product_id", "name", "stock_quantity"], "SELECT 1")
+
         with patch('backend.tools.sql._get_sql_agent') as mock_getter:
             mock_agent = MagicMock()
-            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_agent.ask_struct = MagicMock(return_value=mock_response)
             mock_getter.return_value = mock_agent
             
             result = sql_query_tool.invoke({
                 "question": "查询库存大于 100 的高端产品"
             })
             
-            assert mock_agent.ask.called
+            assert mock_agent.ask_struct.called
             assert "Premium Widget" in result
 
 
@@ -463,15 +485,15 @@ class TestSQLToolPerformance:
     def test_sql_query_natural_language_response(self):
         """自然语言查询响应时间<300ms"""
         from backend.tools.sql import sql_query_tool
-        
-        mock_response = "\n".join([
-            "| id | name |",
-            "|----|------|" + "|" * 20,
-        ] + [f"| {i} | Item {i} |" for i in range(50)])
-        
+        from backend.sql.sql_result import SQLResult
+
+        mock_response = SQLResult.success(
+            [{"id": i, "name": f"Item {i}"} for i in range(50)],
+            ["id", "name"], "SELECT 1")
+
         with patch('backend.tools.sql._get_sql_agent') as mock_getter:
             mock_agent = MagicMock()
-            mock_agent.ask = MagicMock(return_value=mock_response)
+            mock_agent.ask_struct = MagicMock(return_value=mock_response)
             mock_getter.return_value = mock_agent
             
             import time
