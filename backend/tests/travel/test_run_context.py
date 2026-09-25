@@ -38,6 +38,7 @@ from backend.orchestration.context.routing_context import (
 from backend.orchestration.context.travel_pending_resolver import (
     resolve_travel_pending,
 )
+from backend.orchestration.graph.travel_graph_node import _build_invoke_config
 from backend.travel.graph_builder import build_travel_graph
 from backend.travel.graph_state import new_travel_graph_input
 
@@ -83,13 +84,19 @@ def _node_state(message: str, tid: str, *, tenant="t-f2", user="u-f2",
 
 def _ask(graph, message: str, tid: str, *, user="u-f2",
          travel_route=None) -> dict:
+    config = _build_invoke_config(tid, tenant_id="t-f2", user_id=user)
+    config["recursion_limit"] = 40
     return graph.invoke(
         new_travel_graph_input(message, user_id=user, session_id=tid,
                                conversation_id=tid,
                                travel_route=travel_route or {}),
-        config={"recursion_limit": 40,
-                "configurable": {"thread_id": f"travel:{tid}"}},
+        config=config,
     )
+
+
+def _thread_config(tid: str, tenant="t-f2", user="u-f2") -> dict:
+    """使用适配器同源的租户/用户隔离 thread 命名。"""
+    return _build_invoke_config(tid, tenant_id=tenant, user_id=user)
 
 
 def _ctx(tid: str, tenant="t-f2", user="u-f2"):
@@ -131,7 +138,7 @@ class TestCrossTurnRun:
         # （走 adapter：run/pending 同步是 adapter 职责）
         travel_graph_node(_node_state("三天", tid, travel_route=route))
         snap = memory_graph.get_state(
-            {"configurable": {"thread_id": f"travel:{tid}"}})
+            _thread_config(tid))
         values = snap.values or {}
         assert values.get("itinerary") is not None
         assert values["itinerary"]["brief"]["destination"] == "福州"
@@ -154,7 +161,7 @@ class TestCrossTurnRun:
         assert _ctx(tid).budget_cny == 60000.0
         # 域图状态同样只有新值（merge_brief 覆盖语义）
         snap = memory_graph.get_state(
-            {"configurable": {"thread_id": f"travel:{tid}"}})
+            _thread_config(tid))
         brief = (snap.values or {}).get("brief") or {}
         assert brief.get("budget_cny") == 60000.0
 
@@ -225,7 +232,7 @@ class TestReconstruct:
         graph = build_travel_graph(checkpointer=None)  # 无 checkpointer 实例
         state = _node_state("改成3天", tid)
         mode, extra = _detect_resume_mode(
-            graph, {"configurable": {"thread_id": f"travel:{tid}"}},
+            graph, _thread_config(tid),
             state, tid)
         assert mode == "reconstruct"
         base = extra["reconstruct_brief"]
@@ -240,7 +247,7 @@ class TestReconstruct:
         tid = _tid()
         graph = build_travel_graph(checkpointer=None)
         mode, extra = _detect_resume_mode(
-            graph, {"configurable": {"thread_id": f"travel:{tid}"}},
+            graph, _thread_config(tid),
             _node_state("规划行程", tid), tid)
         assert mode == "fresh"
         assert extra == {}
@@ -255,8 +262,7 @@ class TestReconstruct:
             {**new_travel_graph_input("改成3天", user_id="u-f2", session_id=tid,
                                       conversation_id=tid),
              "reconstruct_brief": reconstruct},
-            config={"recursion_limit": 40,
-                    "configurable": {"thread_id": f"travel:{tid}"}},
+            config={"recursion_limit": 40, **_thread_config(tid)},
         )
         assert final.get("itinerary") is not None
         assert final["itinerary"]["brief"]["destination"] == "福州"
