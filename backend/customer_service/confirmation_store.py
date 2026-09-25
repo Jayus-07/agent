@@ -189,6 +189,10 @@ class ConfirmationStore:
 
     def __init__(self):
         self._data: dict[tuple[str, str], dict] = {}
+        # DB 认领异常时，L1 只能先消费 pending；若 DB 随后恢复而原行仍
+        # 为 pending，下一次确认不能再次把同一动作认领出来。该 tombstone
+        # 只覆盖当前进程的降级窗口，新动作 save/cache 时会清除。
+        self._claimed_l1: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
 
     def load(self, user_id: str, session_id: str) -> dict | None:
@@ -213,6 +217,7 @@ class ConfirmationStore:
     def cache_l1(self, user_id: str, session_id: str, pending: dict) -> None:
         """P3.5：DB 读回填 L1 缓存（与 load 的缓存行为一致）。"""
         with self._lock:
+            self._claimed_l1.discard((user_id, session_id))
             self._data[(user_id, session_id)] = pending
 
     def save(self, user_id: str, session_id: str, pending_action: dict,
@@ -221,6 +226,7 @@ class ConfirmationStore:
         # L1，否则后续 claim 可能把未落库的动作当成可执行状态。
         if self._db_save(user_id, session_id, pending_action, tenant_id=tenant_id):
             with self._lock:
+                self._claimed_l1.discard((user_id, session_id))
                 self._data[(user_id, session_id)] = pending_action
 
     def clear(self, user_id: str, session_id: str, *, final_state: str = "cancelled") -> None:
@@ -241,18 +247,24 @@ class ConfirmationStore:
         之险）；非严格模式（测试/本地调试）降级为进程内 L1 认领并告警。
         返回 confirmation_id；已被处理/不存在 pending 返回 None。
         """
+        key = (user_id, session_id)
+        with self._lock:
+            if key in self._claimed_l1:
+                return None
         try:
             claimed_id = self._db_claim(user_id, session_id)
             if claimed_id is not None:
                 # DB 认领成功 → 移除 L1 pending 条目
                 with self._lock:
-                    self._data.pop((user_id, session_id), None)
+                    self._data.pop(key, None)
                 return claimed_id
             # DB 确认无行（可能是 save 降级未落库）→ 回退 L1 认领。
             # L1 pop 原子，单进程内幂等保持；DB 有行时走 DB 闸门
             # （多实例安全），两分支都只认领一次。
             with self._lock:
-                pending = self._data.pop((user_id, session_id), None)
+                pending = self._data.pop(key, None)
+                if pending is not None:
+                    self._claimed_l1.add(key)
             return pending.get("action_id") if pending else None
         except Exception as exc:
             try:
@@ -271,7 +283,9 @@ class ConfirmationStore:
                 exc,
             )
             with self._lock:
-                pending = self._data.pop((user_id, session_id), None)
+                pending = self._data.pop(key, None)
+                if pending is not None:
+                    self._claimed_l1.add(key)
             return pending.get("action_id") if pending else None
 
     def has_pending(self, user_id: str) -> bool:
