@@ -245,10 +245,17 @@ class _InvokeAdapter:
         return self._fn(params)
 
 
-def _run_probe(tool_fn, capability="probe.cap", params=None, **skill_kw) -> dict:
-    """执行探针 Skill，返回 {"step_results": ...}。"""
+def _run_probe(tool_fn, capability: str | None = None, params=None,
+               **skill_kw) -> dict:
+    """执行探针 Skill，返回 {"step_results": ...}。
+
+    每个离线探针默认使用独立 capability，避免前一条故障注入打开全局
+    熔断器后污染后续探针；调用方显式传入 capability 时仍保留可复现口径。
+    """
+    import uuid
     import asyncio
 
+    capability = capability or f"probe.{uuid.uuid4().hex}"
     if not hasattr(tool_fn, "invoke"):
         tool_fn = _InvokeAdapter(tool_fn)
     skill = _FaultProbeSkill.build(tool_fn, **skill_kw)
@@ -305,9 +312,9 @@ def _eval_fault_case(case: TestCase, exp: dict) -> EvalResult:
         metrics["tool_calls"] = calls["n"]
         if sr.get("status") != "failed":
             problems.append(f"status 期望 failed，实际 {sr.get('status')}")
-        if sr.get("error_type") != "unknown":
+        if sr.get("error_type") != "network":
             problems.append(
-                f"error_type 期望 unknown，实际 {sr.get('error_type')}")
+                f"error_type 期望 network，实际 {sr.get('error_type')}")
         if calls["n"] != 3:  # 首次 + max_retries=2
             problems.append(f"可重试错误应耗尽 3 次，实际 {calls['n']} 次")
 
