@@ -59,7 +59,7 @@ docker exec agent-agent-worker-1 python -c \
 | 故障 | 现象 | 处置 |
 |---|---|---|
 | Redis down | 会话上下文降级 memory fallback，chat 仍可用 | `docker restart agent-redis-1` |
-| PG down | app/worker 全部不可用（compose 门 fail-closed） | `docker restart agent-postgres-1`，池自愈 |
+| PG down | chat 降级可用（LLM 外呼+会话降级，实测 2026-09-25 F3）；任务路径连接池曾毒化——已修（task_executor 连接池 checkout 探活，5007b43）；compose 启动门仍 fail-closed | `docker restart agent-postgres-1` → wait_healthy → 提交新任务验证 SUCCESS（修复后无需重启 worker；旧镜像行为需重启 worker） |
 | APISIX down | 网关不可达；app 仅环回可达无外部暴露 | `docker start agent-apisix` |
 | Worker 崩溃 | unless-stopped 自动重启；RUNNING 任务经 lease 回拨+sweep recovery | 崩溃自动恢复；**手动 stop 需手动 start** |
 | LLM provider | Governance fallback 链；llm_failures/fallback 指标 | 管理端 /sys/model-health 排查 |

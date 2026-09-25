@@ -26,10 +26,10 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 - **域图两条入口，勿混为一谈**：①**客服窗口锁域** —— 前端客服抽屉 `CSDrawer`（`useCSChat.ts`）每条消息带 `domain_hint=customer_service`，`router_node` 置 `cs_forced` 后**跳过域检测门/灰度/旅游与选品 prefilter** 直进 CS 管线（仍受 `CS_ENABLED` 总闸，关闭则降级主路由）；②**全局入口**（`domain_hint` 空）—— 走 CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测，CS 命中后再过 `CS_ROLLOUT_PERCENT` 灰度。锁域**非绝对**：无客服规则信号且命中旅游/选品强信号时仍走 `redirect_main` 转出（LLM 仲裁阶段默认 OFF = `CS_REDIRECT_MAIN_LLM_ENABLED`）。守护用例 `tests/orchestration/graph/test_router_prefilter_order.py`。
 - 域开关代码默认**全关**（`CS_ENABLED`/`TRAVEL_ENABLED`/`SELECTION_FUNNEL_ENABLED` 均 `false`），由根 `.env` 决定实际取值；三个 prefilter 均已接线（选品漏斗 2026-09-17 与旅游同层），无「待接线」项。
 
-- 主图核心节点固定 8 个，顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
+- 主图核心节点固定 9 个（含 general_chat，2026-09-25 口径对齐 builder.py:142），顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
 - planner→critique→supervisor 是 plan 支线专属；direct/workflow/三个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
 - 客服子图：state_loader → pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 专家 → 回 supervisor → cs_reporter
-- 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk 专家 → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
+- 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk/weather 五专家 → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
 - RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定
 - 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error
 
@@ -41,7 +41,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 ### 节点职责与口径
 
 - **Planner**：只做任务拆解 → Capability DAG，禁调 Tool/Skill/DB ｜ **Critique**：规则校验优先，仅 anomaly 调 LLM ｜ **Supervisor**：纯规则 DAG 调度，Send[] 并行 + 注入 previous_outputs ｜ **Skill**：业务封装不碰外部系统 ｜ **Tool**：无状态可测试 ｜ **Reporter**：step_results → Markdown
-- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 34 Tool / 4 workflow / 2 域图 / 主图 8 核心节点 / MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
+- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 34 Tool / 4 workflow / 2 域图 / 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
 - `routed: false` 只约束路由层，Planner/critique 仍遍历全量 17 个（`email.watch` 是 120s 阻塞长轮询，收紧属行为变更，台账 E9）。
 
 ### Capability DAG

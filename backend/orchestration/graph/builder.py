@@ -209,7 +209,7 @@ def build_graph(checkpointer=None):
 
     skill_count = len(tool_registry.get_skill_nodes())
     logger.info(
-        f"[Graph] 图编译完成 (内置10节点+Router/executors + {skill_count} Skill = {10 + skill_count}节点,"
+        f"[Graph] 图编译完成 (内置9节点+Router/executors + {skill_count} Skill = {9 + skill_count}节点,"
         f"checkpointer={'on' if checkpointer is not None else 'off'})"
     )
     return wf.compile(checkpointer=checkpointer)
