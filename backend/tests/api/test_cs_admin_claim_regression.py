@@ -9,6 +9,7 @@ from backend.app.api.routes import cs_admin
 class _HandoffRow:
     conversation_id = "conv-1"
     user_id = "user-1"
+    tenant_id = "default"
     handoff_state = "waiting_human"
 
 
@@ -32,6 +33,19 @@ class _FakeDB:
     async def __aexit__(self, *args):
         return False
 
+    def begin(self):
+        db = self
+
+        class _Transaction:
+            async def __aenter__(self):
+                return db
+
+            async def __aexit__(self, *args):
+                db.committed = True
+                return False
+
+        return _Transaction()
+
     async def execute(self, query):
         self.execute_count += 1
         if self.execute_count == 1:
@@ -42,6 +56,10 @@ class _FakeDB:
 
     async def commit(self):
         self.committed = True
+
+    def add(self, _entity):
+        """Outbox 事件由事务统一提交；桩只需接受 session.add。"""
+        return None
 
 
 class _FakeConversationManager:
@@ -151,6 +169,16 @@ class _RaceDB:
 
     async def __aexit__(self, *args):
         return False
+
+    def begin(self):
+        class _Transaction:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        return _Transaction()
 
     async def execute(self, query):
         self.execute_count += 1

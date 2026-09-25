@@ -340,6 +340,14 @@ class TestReplayConversationEvents:
     def test_replays_events_after_cursor_in_order(self, client, monkeypatch):
         """断线补发透传游标，并保持 seq 升序与 event_id。"""
         class _Result:
+            def first(self):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    user_id="user-1", tenant_id="default",
+                    assigned_agent_id=None,
+                )
+
             def scalar_one_or_none(self):
                 return "user-1"
 

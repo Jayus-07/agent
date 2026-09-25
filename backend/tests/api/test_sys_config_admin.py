@@ -151,9 +151,14 @@ def test_get_config_lists_registered_switches(client):
     r = client.get("/api/sys/config", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     items = {i["key"]: i for i in r.json()["items"]}
-    assert set(items) == {"JWT_SESSION_GUARD_MODE", "SENSITIVE_API_GUARD_MODE"}
+    assert set(items) == {
+        "JWT_SESSION_GUARD_MODE", "SENSITIVE_API_GUARD_MODE",
+        "CS_DISPATCH_ROLLOUT_PERCENT",
+    }
     assert items["JWT_SESSION_GUARD_MODE"]["allowed"] == ["off", "audit", "enforce"]
     assert items["SENSITIVE_API_GUARD_MODE"]["source"] == "env-default"
+    assert items["CS_DISPATCH_ROLLOUT_PERCENT"]["mode"] == "100"
+    assert items["CS_DISPATCH_ROLLOUT_PERCENT"]["allowed"] == []
 
 
 def test_get_config_viewer_403(client):

@@ -222,7 +222,9 @@ async def set_value(env_key: str, value: str, operator: str) -> dict[str, Any]:
         raise KeyError(f"未登记的配置键: {env_key}")
     new = _normalize(env_key, value)
     if new is None:
-        raise ValueError(f"{env_key} 合法值为 {'/'.join(spec['allowed'])}，收到 {value!r}")
+        allowed = spec.get("allowed", ())
+        rule = "/".join(allowed) if allowed else "注册校验规则"
+        raise ValueError(f"{env_key} 合法值为 {rule}，收到 {value!r}")
 
     old: str | None = None
     async for session in get_session():
@@ -260,7 +262,7 @@ async def list_effective() -> list[dict[str, Any]]:
     for env_key, spec in _SWITCHES.items():
         info = get_info(env_key)
         out.append({"key": env_key, "description": spec["desc"],
-                    "allowed": list(spec["allowed"]), **info})
+                    "allowed": list(spec.get("allowed", ())), **info})
     return out
 
 

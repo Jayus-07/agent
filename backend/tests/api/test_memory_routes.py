@@ -135,7 +135,9 @@ def test_memory_db_unavailable_is_handled_as_503(client_factory):
     client = client_factory(_BrokenService())
     res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
     assert res.status_code == 503
-    assert res.json()["error"] == "MemoryDatabaseUnavailable"
+    # HTTP 错误协议对依赖不可用统一使用 UPSTREAM_UNAVAILABLE；异常类名
+    # 仅用于服务端日志，不作为外部契约泄露。
+    assert res.json()["error"] == "UPSTREAM_UNAVAILABLE"
     # 完整配置细节只进日志，不能泄到 HTTP 响应体
     assert "PGPASSWORD" not in res.json()["detail"]
 
