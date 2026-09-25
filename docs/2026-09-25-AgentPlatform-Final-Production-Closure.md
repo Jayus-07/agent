@@ -47,7 +47,7 @@ NEW_REGRESSION_COUNT=0
 | T-2 | STOP M（支付/取消/退款） | **STOP_M_DEFERRED=true** | 产品能力扩展，非生产核心缺口；Booking 交易核心已独立冻结 |
 | C-6 | P6 多模态 | **CS_MULTIMODAL_DEFERRED=true** | 前置条件（文本链路 100% 稳定 7 天）未满足 |
 | C-3/C-4/C-7 | 客服 P2 降本/P4 交付校验/缺陷收口尾巴 | **DEFERRED** | 成本/质量优化项，不阻塞发布安全 |
-| R-2 | API Key 服务端轮换 | **BLOCKED_BY_EXTERNAL_SECURITY_ACTION** | Runbook 轮换步骤就绪；严禁写 PASS |
+| R-2 | API Key 服务端轮换 | **DONE（2026-09-25 补做，API_KEY_ROTATION_PASS=true）** | 新 key 生成替换 4 处配置 → app/mcp-service 容器重建 → 三 BFF 重启；旧 key 全路径 401、新 key 全链 200 |
 | T-1 | 真实 Booking 供应商 | **BLOCKED_BY_EXTERNAL_BOOKING_PROVIDER**（维持） | 契约/registry/评测驱动就绪，签约即接 |
 
 ## 4. Changed Files（按业务线）
@@ -80,7 +80,7 @@ P1 请求前 down（有界响应+恢复自愈）✓｜P2 执行中 down（不崩
 | 阻塞 | 判定 | 解除路径 |
 |---|---|---|
 | 真实 Booking 供应商签约 | BLOCKED_BY_EXTERNAL_BOOKING_PROVIDER=true | registry 登记+新适配器+G45/G46 实机 E2E |
-| API Key 服务端轮换 | BLOCKED_BY_EXTERNAL_SECURITY_ACTION=true | 旧 key revoke→新 key→.env→worker→smoke→旧 key 负测→history 评估（Runbook 化） |
+| API Key 服务端轮换 | **已完成（2026-09-25 补做，API_KEY_ROTATION_PASS=true）** | 新 key 生成并替换 4 处配置（.env + 三前端 .env.local）→ app/mcp-service 容器重建 → 三前端 BFF 重启；**旧 key 全路径 401（作废实证）+ 新 key 全链 200（网关/直连/三 BFF 代理）**；git 历史仍含旧值但已死（本仓库本地私有，风险接受）。剩余外部阻塞：灰度观察窗、Booking 供应商 |
 | 灰度观察窗 24h×4 | BLOCKED_BY_OBSERVATION_WINDOW=true | 按阶段定义执行并逐小时采样 |
 | （登记）Grafana 口令/RBAC 收口 | 生产部署前置 | GRAFANA_PASSWORD 注入；业务写端点角色闸 |
 
