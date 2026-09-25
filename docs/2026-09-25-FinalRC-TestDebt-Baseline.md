@@ -333,5 +333,12 @@ FULL_ROADMAP_COMPLETE=false
 补充校验：remote RAG/CS/rerank/embedding guard 组合 `62 passed`（57.11s）；
 随后修正 identity 字段只进入 `ask` payload，提交 `816198f`。
 
+任务族补充证据：8 个历史失败节点在隔离库 `agent_memory_rc_test` 串行为
+`6 passed / 2 failed`；剩余两项均为宿主机 vpnkit 续租阻塞窗口内的超时形态。
+同一源码在 Docker 内网直连 PostgreSQL/Redis 的最小真实探针输出
+`HEARTBEAT_PROBES_OK`（admission token 续期、lease takeover 两项均通过），
+故任务生产状态机不改，剩余两项归类为 `FIX_ENVIRONMENT`。该临时测试库未触碰
+业务库，保留供后续复判。
+
 本会话提交：`f87b01e`、`da7949b`、`816198f`。工作区内 `data/**` 为测试/其他会话生成的既有
 改动，未纳入本次提交。
