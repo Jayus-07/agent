@@ -30,6 +30,7 @@ def test_cloud_embedding_sets_bounded_request_timeout():
         provider_id="dashscope-rag",
         adapter="dashscope_embedding",
         model_name="qwen3.7-text-embedding",
+        upstream_name="text-embedding-v3",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         options={"dimensions": 1024},
     )

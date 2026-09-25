@@ -13,17 +13,22 @@
 
 import os
 import sys
-import tempfile
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
 
 from backend.rag.indexing.doc_registry import DocumentRegistry
 
 
-def _make_registry() -> tuple[DocumentRegistry, str]:
-    tmpdir = tempfile.mkdtemp(prefix="reg_f2_")
-    db_path = os.path.join(tmpdir, "doc_registry.db")
-    return DocumentRegistry(db_path), db_path
+@pytest.fixture
+def registry(monkeypatch):
+    """使用隔离 PG 表，匹配当前唯一的 PostgreSQL registry 实现。"""
+    monkeypatch.setenv("DOC_REGISTRY_PG_TABLE", "doc_registry_f2_test")
+    reg = DocumentRegistry("ignored/path.db")
+    reg.clear()
+    yield reg
+    reg.clear()
 
 
 def _register(reg, file_path, doc_id, kb_id, department):
@@ -38,16 +43,14 @@ def _register(reg, file_path, doc_id, kb_id, department):
     )
 
 
-def test_get_by_doc_id_prefers_active_row():
-    """deleted 行 rowid 更小（先插入）时，仍必须返回 active 行。"""
-    reg, _ = _make_registry()
+def test_get_by_doc_id_prefers_active_row(registry):
+    """deleted 行先插入时，仍必须返回 active 行。"""
+    reg = registry
     doc_id = "abc1234567"
     # 先注册"损坏"行（模拟历史 bug 产物），再手动置为 deleted
     _register(reg, r"D:\docs\policy_general\general\dup.md", doc_id,
               "policy_general", "general")
-    with reg._lock, reg._conn() as conn:
-        conn.execute(
-            "UPDATE doc_registry SET status = 'deleted' WHERE doc_id = ?", (doc_id,))
+    reg.mark_deleted_by_doc_id(doc_id)
     # 后注册健康行（active，rowid 更大）
     _register(reg, r"D:\docs\biz_order\ops\dup.md", doc_id, "biz_order", "ops")
 
@@ -58,9 +61,9 @@ def test_get_by_doc_id_prefers_active_row():
     assert reg.count_active_by_doc_id(doc_id) == 1
 
 
-def test_count_active_by_doc_id_detects_duplicates():
+def test_count_active_by_doc_id_detects_duplicates(registry):
     """两条 active 重复行（历史损坏形态）必须被计数暴露，供路由拒绝。"""
-    reg, _ = _make_registry()
+    reg = registry
     doc_id = "def9876543"
     _register(reg, r"D:\docs\rag_test_kb\general\dup.md", doc_id,
               "rag_test_kb", "general")
@@ -74,9 +77,9 @@ def test_count_active_by_doc_id_detects_duplicates():
     assert row is not None and row["doc_id"] == doc_id
 
 
-def test_get_by_doc_id_single_row_unchanged():
+def test_get_by_doc_id_single_row_unchanged(registry):
     """正常单行场景行为不变。"""
-    reg, _ = _make_registry()
+    reg = registry
     _register(reg, r"D:\docs\policy_general\finance\budget.md", "aaa1112223",
               "policy_general", "finance")
     row = reg.get_by_doc_id("aaa1112223")
