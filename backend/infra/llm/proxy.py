@@ -1640,6 +1640,13 @@ class _LLMProxy:
     # 也会提前初始化 provider，导致无凭据环境在构造期失败，并破坏代理
     # 的惰性解析语义。
     __name__ = "llm_proxy"
+    # inspect.isasyncgenfunction / LangChain 的 runnable 适配还会读取
+    # ``__code__``。显式提供空值，避免这些纯元数据探测落入 __getattr__
+    # 解析真实 provider；有凭据与否都必须不影响链装配期。
+    __code__ = None
+    __defaults__ = None
+    __kwdefaults__ = None
+    __annotations__ = None
     _WRAP_METHODS = {'invoke', 'ainvoke', 'generate', 'agenerate', 'batch', 'stream', 'astream'}
 
     def __getattr__(self, name: str):

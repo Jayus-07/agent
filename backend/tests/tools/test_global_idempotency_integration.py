@@ -55,7 +55,7 @@ def test_email_approval_precedes_global_idempotency_and_replays(
     calls = []
     monkeypatch.setattr(
         email_module,
-        "_send_email_after_approval",
+        "_send_email_effect",
         lambda *args: calls.append(args) or "邮件已发送",
     )
 
@@ -86,7 +86,7 @@ def test_email_same_key_different_payload_is_rejected(
     calls = []
     monkeypatch.setattr(
         email_module,
-        "_send_email_after_approval",
+        "_send_email_effect",
         lambda *args: calls.append(args) or "邮件已发送",
     )
 

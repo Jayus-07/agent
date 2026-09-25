@@ -7,6 +7,7 @@ ssl._create_stdlib_context()（CERT_NONE），TLS 握手不校验服务器证书
 """
 import smtplib
 import ssl
+import uuid
 
 import pytest
 
@@ -23,6 +24,13 @@ def tls_capture(monkeypatch):
     monkeypatch.setattr(cfg, "SMTP_PORT", 25)
     monkeypatch.setattr(cfg, "SMTP_FROM", "bot@example.com")
     monkeypatch.setattr(approval, "ensure_approved", lambda *a, **k: None)
+
+    # 发送邮件生产契约要求可信租户/用户上下文；TLS 断言必须在与真实
+    # 网关注入一致的身份边界内执行，而不是走已封死的匿名旁路。
+    from backend.tools.session import _current_tenant_id, _current_user_id
+    tenant_token = _current_tenant_id.set(
+        f"test-tenant-{uuid.uuid4().hex[:8]}")
+    user_token = _current_user_id.set("test-user")
 
     captured = {}
     sent = []
@@ -52,6 +60,8 @@ def tls_capture(monkeypatch):
     email_mod._SENT_FINGERPRINTS.clear()
     yield captured, sent
     email_mod._SENT_FINGERPRINTS.clear()
+    _current_tenant_id.reset(tenant_token)
+    _current_user_id.reset(user_token)
 
 
 def test_starttls_receives_verifying_default_context(tls_capture):
