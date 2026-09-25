@@ -48,10 +48,14 @@ class TestRetries:
             calls["n"] += 1
             raise FakeAuthError("401")
 
-        # 非瞬时 + 不允许降级话术 → 原异常抛出
+        # 非瞬时 + 不允许降级话术 → 统一模型错误包装，原异常保留为 cause
+        from backend.infra.llm.error_taxonomy import ModelProviderError
+
         with patch.object(proxy, "LLM_ALLOW_DEGRADED_ANSWER", False):
-            with pytest.raises(FakeAuthError):
+            with pytest.raises(ModelProviderError) as exc_info:
                 proxy._call_with_resilience(bad)
+        assert exc_info.value.error_type == "provider_error"
+        assert isinstance(exc_info.value.origin, FakeAuthError)
         assert calls["n"] == 1  # 未重试
 
     def test_transient_exhausted_degrades_to_answer(self):
@@ -144,9 +148,13 @@ class TestFailFastMode:
         def always_fail():
             raise FakeTimeoutError("always down")
 
+        from backend.infra.llm.error_taxonomy import ModelProviderError
+
         with patch.object(proxy, "LLM_ALLOW_DEGRADED_ANSWER", False):
-            with pytest.raises(FakeTimeoutError):
+            with pytest.raises(ModelProviderError) as exc_info:
                 proxy._call_with_resilience(always_fail)
+        assert exc_info.value.error_type == "timeout"
+        assert isinstance(exc_info.value.origin, FakeTimeoutError)
 
     def test_open_circuit_raises_when_disabled(self):
         cb = CircuitBreaker("test-llm-ff", fail_threshold=5, timeout=30.0)

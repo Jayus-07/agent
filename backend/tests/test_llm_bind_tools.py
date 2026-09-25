@@ -134,7 +134,24 @@ class TestSetRequestModelValidation:
         assert proxy_mod._request_model_var.get() == ""
 
     def test_valid_model_with_key_accepted(self, monkeypatch):
+        from backend.infra.llm import models
+        from backend.infra.llm import credentials
+        from backend.infra.llm.credentials import ProviderCredentials
+
         monkeypatch.setenv("QWEN_TP_API_KEY", "sk-sp-test")
+        # 注册表已改为 DB-only；单测显式注入当前模型和凭据快照，
+        # 不依赖本机是否运行 registry 刷新循环。
+        monkeypatch.setattr(
+            models, "get_available_models",
+            lambda: [{"name": "qwen3.7-plus@tp", "provider": "qwen_tp"}],
+        )
+        monkeypatch.setattr(models, "is_registered_model", lambda name: (
+            name == "qwen3.7-plus@tp"))
+        monkeypatch.setattr(credentials, "_db_overrides", {
+            "qwen_tp": ProviderCredentials(
+                provider="qwen_tp", api_key="sk-sp-test", source="test",
+            ),
+        })
         proxy_mod.set_request_model("qwen3.7-plus@tp")
         assert proxy_mod._request_model_var.get() == "qwen3.7-plus@tp"
 
