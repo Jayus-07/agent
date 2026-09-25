@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from backend.app.api.routes.chat import router as chat_router
+from backend.config.chat_input import CHAT_INPUT_MAX_CHARS
 
 
 @pytest.fixture
@@ -77,10 +78,11 @@ class TestChatStreamBody:
         assert resp.status_code == 422
 
     def test_long_chinese_question(self, client):
-        """超长中文问题应该 422（max_length=2000）。"""
+        """超出当前统一输入上限的中文问题应该 422。"""
         with patch("backend.app.api.routes.chat._active_stops", {}):
             resp = client.post(
                 "/chat/stream",
-                json={"question": "退货" * 1500, "session_id": "t1", "request_id": "r1"},
+                json={"question": "退货" * ((CHAT_INPUT_MAX_CHARS // 2) + 1),
+                      "session_id": "t1", "request_id": "r1"},
             )
         assert resp.status_code == 422

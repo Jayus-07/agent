@@ -53,6 +53,8 @@ class RAGServiceProxy:
         subject_type: str = "",
         department: str = "",
         permissions: Iterable[str] | None = None,
+        user_id: str = "",
+        tenant_id: str = "",
     ) -> str:
         try:
             resp = self._client.post(
@@ -97,6 +99,8 @@ class RAGServiceProxy:
                     "subject_type": subject_type,
                     "department": department,
                     "permissions": permissions,
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
                 },
                 timeout=_RETRIEVE_TIMEOUT_S,
             )

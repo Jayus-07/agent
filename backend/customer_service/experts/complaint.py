@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -63,10 +64,16 @@ def execute_complaint(
             # 多条历史未关闭 handoff 时返回任意一条，会漏判同会话重复投诉
             if conversation_id:
                 active = store.get_active_by_conversation(conversation_id)
+                if not isinstance(active, Mapping):
+                    active = None
             if active is None and session_id and session_id != conversation_id:
                 active = store.get_active_by_conversation(session_id)
+                if not isinstance(active, Mapping):
+                    active = None
             if active is None:
                 active = store.get_active_handoff(user_id)
+                if not isinstance(active, Mapping):
+                    active = None
             if active and active.get("trigger_type") == "complaint_escalation":
                 existing_ticket = active.get("ticket_id")
         except Exception:

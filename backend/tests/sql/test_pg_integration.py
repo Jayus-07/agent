@@ -144,10 +144,12 @@ class TestUserOriginalQuestion:
 
     def test_high_price_product_query_returns_real_data(self):
         # 这就是用户原 SSE 失败流截图里的目标查询，等价 SQL
+        # executor 使用 psycopg2 named params，即使本查询没有参数也会把
+        # % 当格式占位符；字面量百分号需写成 %%。
         sql = """
         SELECT p.product_name, p.sale_price, p.brand
         FROM product.products p
-        WHERE p.status = 'active'
+        WHERE p.status = 'active' AND p.sku LIKE 'A%%'
         ORDER BY p.sale_price DESC
         LIMIT 5
         """
