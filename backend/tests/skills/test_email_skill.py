@@ -7,6 +7,7 @@
   - capabilities.yaml manifest 含新能力（一致性由 test_registry_consistency 守）
 """
 import json
+import uuid
 from unittest.mock import patch
 
 import pytest
@@ -23,8 +24,14 @@ def budget_not_enforced(monkeypatch):
     预算门是独立关注点，这里固定为 monitor 保持测试 hermetic。
     """
     import backend.config.llm as llm_config
+    from backend.tools.session import _current_tenant_id, _current_user_id
 
     monkeypatch.setattr(llm_config, "LLM_BUDGET_MODE", "monitor")
+    tenant_token = _current_tenant_id.set("test-tenant")
+    user_token = _current_user_id.set("test-user")
+    yield
+    _current_tenant_id.reset(tenant_token)
+    _current_user_id.reset(user_token)
 
 
 # ==================== 能力分发 ====================
@@ -84,7 +91,8 @@ class TestSendEngineSwitch:
         with patch("backend.config.EMAIL_ENGINE", "smtp"), \
              patch("backend.config.SMTP_USER", ""), \
              patch("backend.config.SMTP_PASSWORD", ""):
-            result = send_email_tool.invoke({"to": "a@b.c", "subject": "s", "body": "b"})
+            result = send_email_tool.invoke(
+                {"to": "a@b.c", "subject": "s", "body": "b"})
         assert "[EMAIL DISABLED]" in result
 
     def test_agently_engine_bypasses_smtp_check(self):
@@ -97,7 +105,10 @@ class TestSendEngineSwitch:
              patch("backend.security.tool_approval.TOOL_APPROVAL_MODE", "auto"), \
              patch("backend.tools.email._send_via_agently",
                    return_value="邮件已发送(Agently): 收件人 a@b.c") as mock_send:
-            result = send_email_tool.invoke({"to": "a@b.c", "subject": "s", "body": "b"})
+            result = send_email_tool.invoke({
+                "to": "a@b.c", "subject": "s", "body": "b",
+                "idempotency_key": f"test-agently-bypass-{uuid.uuid4().hex}",
+            })
         assert "[EMAIL DISABLED]" not in result
         assert "已发送" in result
         mock_send.assert_called_once()
@@ -119,10 +130,12 @@ class TestSendEngineSwitch:
         """窗口内同指纹拦截——agently 与 smtp 共用同一份指纹缓存。"""
         from backend.tools import email as email_mod
         email_mod._SENT_FINGERPRINTS[
-            email_mod._email_fingerprint(["a@b.c"], [], "周报", "# 数据")] = 1e18
+            "test-tenant:" + email_mod._email_fingerprint(
+                ["a@b.c"], [], "周报", "# 数据")] = 1e18
         with patch("backend.config.EMAIL_ENGINE", "agently"), \
              patch("backend.tools.agently.agently_available", return_value=True), \
-             patch("backend.tools.agently.agently_send") as mock_send:
+             patch("backend.tools.agently.agently_send",
+                   return_value=json.dumps({"ok": True})) as mock_send:
             result = email_mod._send_via_agently("a@b.c", "周报", "# 数据", "")
         assert "[EMAIL DUPLICATE]" in result
         mock_send.assert_not_called()
@@ -130,21 +143,23 @@ class TestSendEngineSwitch:
     def test_agently_send_failure_not_cached(self):
         """发送失败不缓存指纹，重试路径保持畅通（与 SMTP 路径同语义）。"""
         from backend.tools import email as email_mod
+        from backend.shared.provider_idempotency import ProviderEffectError
         with patch("backend.config.EMAIL_ENGINE", "agently"), \
              patch("backend.tools.agently.agently_available", return_value=True), \
              patch("backend.tools.agently.agently_send",
                    return_value="[AGENTLY ERROR:1] 服务端错误"):
-            r1 = email_mod._send_via_agently("a@b.c", "周报", "# 数据", "")
-        assert r1.startswith("[AGENTLY ERROR:1]")
+            with pytest.raises(ProviderEffectError, match="AGENTLY ERROR:1"):
+                email_mod._send_via_agently("a@b.c", "周报", "# 数据", "")
         assert email_mod._email_fingerprint(["a@b.c"], [], "周报", "# 数据") \
             not in email_mod._SENT_FINGERPRINTS
 
     def test_agently_send_cli_missing(self):
         from backend.tools import email as email_mod
+        from backend.shared.provider_idempotency import ProviderEffectError
         with patch("backend.config.EMAIL_ENGINE", "agently"), \
              patch("backend.tools.agently.agently_available", return_value=False):
-            result = email_mod._send_via_agently("a@b.c", "周报", "# 数据", "")
-        assert "agently-cli 未安装" in result
+            with pytest.raises(ProviderEffectError, match="agently-cli 未安装"):
+                email_mod._send_via_agently("a@b.c", "周报", "# 数据", "")
 
 
 # ==================== agently 包装层 ====================

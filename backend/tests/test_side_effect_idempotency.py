@@ -86,6 +86,24 @@ def _factory():
     return psycopg.connect(_dsn())
 
 
+def test_default_memory_ledger_connection_uses_configured_timeout(monkeypatch):
+    """ledger 默认连接必须有界，避免宿主机 PG 半开时无限等待。"""
+    from backend.shared import idempotency
+    from backend.config import database
+    captured = {}
+    sentinel = object()
+
+    def fake_connect(dsn, **kwargs):
+        captured["dsn"] = dsn
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    monkeypatch.setattr(database, "DB_CONNECT_TIMEOUT", 7)
+    assert idempotency._default_memory_ledger_connection() is sentinel
+    assert captured["kwargs"] == {"connect_timeout": 7}
+
+
 @pytest.fixture()
 def ledger_env():
     """建 pgtest 隔离表 + 返回 (store_factory, 探针计数 helper)。"""

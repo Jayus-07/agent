@@ -1365,7 +1365,7 @@ def _default_memory_connection():
 
 def _default_memory_ledger_connection():
     import psycopg
-    from backend.config.database import MEMORY_DB_CONFIG
+    from backend.config.database import DB_CONNECT_TIMEOUT, MEMORY_DB_CONFIG
 
     config = MEMORY_DB_CONFIG
     dsn = (
@@ -1373,7 +1373,7 @@ def _default_memory_ledger_connection():
         f"@{config['host']}:{config['port']}/{config['dbname']}"
     )
     # 默认 autocommit=False：claim/接管/终态都在显式事务里提交
-    return psycopg.connect(dsn)
+    return psycopg.connect(dsn, connect_timeout=DB_CONNECT_TIMEOUT)
 
 
 def _decode_redis_value(value: Any) -> str:

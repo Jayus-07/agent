@@ -5,6 +5,8 @@
 取消——SMTP 实际已发出而 Skill 层判超时重试会重复发信。同内容指纹在
 窗口内只允许发出一次。
 """
+import uuid
+
 import pytest
 
 
@@ -49,8 +51,14 @@ def smtp_env(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
 
     from backend.tools import email as email_mod
+    from backend.tools.session import _current_tenant_id, _current_user_id
     email_mod._SENT_FINGERPRINTS.clear()
+    tenant_token = _current_tenant_id.set(
+        f"test-tenant-{uuid.uuid4().hex[:8]}")
+    user_token = _current_user_id.set("test-user")
     yield sent
+    _current_tenant_id.reset(tenant_token)
+    _current_user_id.reset(user_token)
     email_mod._SENT_FINGERPRINTS.clear()
 
 
@@ -65,12 +73,14 @@ class TestEmailIdempotency:
         assert len(smtp_env) == 1
 
     def test_duplicate_within_window_blocked(self, smtp_env):
-        """同指纹窗口内重发被拦截，SMTP 只收到一次"""
+        """同 logical effect 重发只重放结果，SMTP 只收到一次。"""
         from backend.tools.email import send_email_tool
 
         assert "已发送" in send_email_tool.invoke(dict(self.ARGS))
         result = send_email_tool.invoke(dict(self.ARGS))
-        assert "EMAIL DUPLICATE" in result
+        # 现行 STOP C 契约由 PG durable ledger 返回成功结果；进程内
+        # 指纹只负责并发抑制，不能要求第二次调用必须返回旧 duplicate 文案。
+        assert "已发送" in result or "EMAIL DUPLICATE" in result
         assert len(smtp_env) == 1
 
     def test_different_content_not_blocked(self, smtp_env):
@@ -91,9 +101,10 @@ class TestEmailIdempotency:
             raise ConnectionError("smtp down")
 
         # 故障只限第一次调用，之后恢复正常 SMTP
+        from backend.shared.provider_idempotency import ProviderEffectError
         with monkeypatch.context() as m:
             m.setattr(smtplib, "SMTP", _boom)
-            with pytest.raises(ConnectionError):
+            with pytest.raises(ProviderEffectError, match="SMTP 连接/认证失败"):
                 send_email_tool.invoke(dict(self.ARGS))
 
         # 恢复正常 SMTP 后重试可达
@@ -124,7 +135,8 @@ class TestEmailIdempotency:
     def test_empty_recipients_after_parse(self, smtp_env):
         """to 只含分隔符时显式报错，不进 SMTP"""
         from backend.tools.email import send_email_tool
+        from backend.shared.provider_idempotency import ProviderEffectError
 
-        result = send_email_tool.invoke({**self.ARGS, "to": "，、 "})
-        assert "收件人解析为空" in result
+        with pytest.raises(ProviderEffectError, match="收件人解析为空"):
+            send_email_tool.invoke({**self.ARGS, "to": "，、 "})
         assert len(smtp_env) == 0
