@@ -275,3 +275,60 @@ FINAL_RC_STOP_A_PASS=true
 GLOBAL_REGRESSION_PASS=false（本轮总目标，待 STOP B-F）
 TEST_DEBT_UNCLASSIFIED=0 的归类工作 = STOP B，待并发窗口清空后启动
 ```
+
+## 10. STOP B 增量复核（2026-09-26，本会话）
+
+本节只记录本会话在 STOP A 收官后的增量证据；不回写 §1-§9 的历史快照，
+也不把定向回归结果冒充全量回归。
+
+### 10.1 已复核并收敛的失败族
+
+以下族均在同一口径（`PYTHONPATH=backend`、`PGPORT=5433`、单进程、`--no-cov`）
+下完成定向复跑，当前结果为全绿：
+
+| 族 | 证据 |
+|---|---|
+| RAG 评估/上传/置信度/优化/文档注册/进度 | `105 passed`，163.04s |
+| RAG pgvector 重建 | `6 passed`，47.42s；提交 `f87b01e` |
+| SQL/CS/API/remote RAG/rerank/chat 契约 | 修复后目标用例全绿；提交 `da7949b` |
+| 幂等、邮件、SQL Tool、选择理由/自纠、离线评测、LLM lazy proxy | 前序定向组合已全绿；提交链见 `git log` |
+
+本轮新增的生产/契约修复包括：pgvector 元数据 DDL 按表名缓存、投诉 handoff
+非映射桩安全回退、remote RAG `user_id/tenant_id` 签名透传、rerank 旧 binding
+兼容、演示商品数据下 SQL 基线筛选、聊天输入上限测试改为读取统一配置。
+
+### 10.2 仍未闭合：任务恢复族（环境污染证据）
+
+`backend/tests/test_task_resume.py::test_resume_paused_continues_from_checkpoint`
+单独运行仍耗时约 120s 后失败，错误为：
+
+```text
+IllegalTaskTransition: FAILED → RUNNING
+```
+
+同一测试的任务行在 60s 阈值后被宿主常驻 `agent-beat-1` 的
+`tasks.pending_recovery` 扫描并投递到 `agent-agent-worker-1`；worker 不在 pytest
+进程内，无法看到该用例的授权 monkeypatch，随后将测试任务写成授权失败。该证据与
+此前批量复跑的 `test_task_admission_runtime`、`test_task_orchestration`、
+`test_task_phase2_recovery`、`test_task_resume` 失败形态一致，属于
+`FIX_ENVIRONMENT`（需独占 beat/worker 或测试专用队列/表），不能计为生产状态机回归。
+
+本会话未停止共享容器，也未修改任务状态机；在没有独占维护进程的条件下，任务族
+不能签发“全绿”结论。若要完成该族复判，必须先按 `AGENTS.md` 的容器纪律取得
+停用/隔离常驻 beat 与 worker 的明确授权，然后单进程复跑该四个模块。
+
+### 10.3 当前判定
+
+```text
+STOP_B_CLASSIFICATION=PARTIAL
+NON_TASK_TARGETED_REGRESSION_PASS=true
+TASK_RUNTIME_ENV_ISOLATION_REQUIRED=true
+GLOBAL_REGRESSION_PASS=false
+PROJECT_INTERNAL_CLOSURE_PASS=false
+PRODUCTION_RELEASE_GATE_PASS=false
+EXTERNAL_BLOCKERS_PRESENT=true
+FULL_ROADMAP_COMPLETE=false
+```
+
+本会话提交：`f87b01e`、`da7949b`。工作区内 `data/**` 为测试/其他会话生成的既有
+改动，未纳入本次提交。
