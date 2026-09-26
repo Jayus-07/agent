@@ -238,6 +238,15 @@ def test_generate_topk_truncation(monkeypatch, enabled):
 def test_generate_all_paths_fail(monkeypatch, enabled):
     """三路全失败 → 返回空，绝不抛异常。"""
     _patch_knowledge(monkeypatch, Decision.REFUSE, answer="")
+    # 该用例验证三路失败收口，不能让默认 demo 订单数据把第三路变成成功。
+    class _FailingOrderService:
+        def query_orders(self, *args, **kwargs):
+            raise RuntimeError("order service down")
+
+    monkeypatch.setattr(
+        "backend.customer_service.service.order_service.get_order_service",
+        lambda: _FailingOrderService(),
+    )
     with patch(
         "backend.rag.pipeline.get_rag_pipeline",
         side_effect=RuntimeError("rag down"),

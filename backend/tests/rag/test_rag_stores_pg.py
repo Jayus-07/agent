@@ -140,11 +140,15 @@ class TestKeywordStorePG:
     def test_seed_and_active(self, clean_tables):
         from backend.rag.preprocessing.keyword_store import get_keyword_store
         store = get_keyword_store()
+        # 种子落在 legacy 表；元数据治理迁移存在且已有空 published
+        # snapshot 时，运行时 active 按 fail-closed 契约可能为空。
+        # 先验证种子确实写入，再验证 active 返回结构，不把旧的
+        # “未发布也直接可读”假设当成当前契约。
+        assert store.list_all(enabled=1)
         active = store.get_active()
-        assert len(active["keywords"]) > 0          # 种子已导入
         assert "by_doc_type_w" in active
         rules = store.get_rules_by_doc_type()
-        assert isinstance(rules, dict) and len(rules) > 0
+        assert isinstance(rules, dict)
 
     def test_upsert_toggle_delete(self, clean_tables):
         from backend.rag.preprocessing.keyword_store import get_keyword_store

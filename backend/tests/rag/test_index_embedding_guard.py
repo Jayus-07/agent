@@ -103,7 +103,12 @@ def _cleanup(collection: str) -> None:
     conn = psycopg2.connect(**VECTOR_PG_CONFIG)
     conn.autocommit = True
     cur = conn.cursor()
-    cur.execute("DELETE FROM test_rag_vectors WHERE collection = %s", (collection,))
+    # 向量表由 PgVectorKnowledgeStore 首次构造时懒建；fixture 的首个
+    # cleanup 可能早于 store 初始化，缺表应视为空而不是 collection error。
+    try:
+        cur.execute("DELETE FROM test_rag_vectors WHERE collection = %s", (collection,))
+    except psycopg2.errors.UndefinedTable:
+        pass
     try:
         # meta 表由 store 懒建；首跑可能尚不存在
         cur.execute("DELETE FROM test_rag_index_meta WHERE collection = %s", (collection,))
