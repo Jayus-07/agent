@@ -12,7 +12,7 @@ class TimeoutError(Exception):
     pass
 
 
-def _timeout_unix(func: Callable, seconds: int, error_message: str, *args, **kwargs):
+def _timeout_unix(func: Callable, seconds: float, error_message: str, *args, **kwargs):
     """Unix/Linux/Mac超时实现（使用signal）"""
     import threading
 
@@ -27,18 +27,21 @@ def _timeout_unix(func: Callable, seconds: int, error_message: str, *args, **kwa
         return _timeout_windows(func, seconds, error_message, *args, **kwargs)
 
     old_handler = signal.signal(signal.SIGALRM, handler)
-    signal.alarm(seconds)
+    # selector 的请求级预算可能只剩小数秒；signal.alarm 只接受整数，
+    # 会把合法的 fractional timeout 误报成 TypeError。setitimer 保留
+    # 小数精度，同时仍使用同一个 SIGALRM 超时闸。
+    signal.setitimer(signal.ITIMER_REAL, max(float(seconds), 0.001))
 
     try:
         result = func(*args, **kwargs)
     finally:
-        signal.alarm(0)
+        signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old_handler)
 
     return result
 
 
-def _timeout_windows(func: Callable, seconds: int, error_message: str, *args, **kwargs):
+def _timeout_windows(func: Callable, seconds: float, error_message: str, *args, **kwargs):
     """
     Windows超时实现（使用threading）
     注意：这不会真正中断函数执行，只是提前返回
@@ -71,7 +74,7 @@ def _timeout_windows(func: Callable, seconds: int, error_message: str, *args, **
 
 def safe_call_with_timeout(
     func: Callable,
-    timeout: int,
+    timeout: float,
     default_value: Any = None,
     error_message: str = "操作超时",
     *args,
@@ -82,7 +85,7 @@ def safe_call_with_timeout(
 
     Args:
         func: 要调用的函数
-        timeout: 超时秒数
+        timeout: 超时秒数（允许小数，用于请求级剩余预算）
         default_value: 超时或出错时的默认返回值
         error_message: 超时错误消息
         *args: 函数位置参数
