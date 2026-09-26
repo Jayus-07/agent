@@ -15,6 +15,10 @@ from langchain_core.documents import Document
 
 from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
+from backend.tests.fixtures.pg_env import (  # noqa: F401
+    pg_clean_tables,
+    pg_iso_env,
+)
 
 
 class _LineageRepository:
@@ -120,7 +124,7 @@ def _raw_ast(
     ],
 )
 def test_four_format_indexing_records_stage_matrix(
-    tmp_path, monkeypatch, filename, tabular, ocr, table_status,
+    tmp_path, monkeypatch, pg_clean_tables, filename, tabular, ocr, table_status,
     ocr_required, ocr_attempted, ocr_status, ocr_pages, ocr_outcome,
 ):
     """不同文件格式必须产生正确的 OCR/表格阶段和成功 current pointer。"""

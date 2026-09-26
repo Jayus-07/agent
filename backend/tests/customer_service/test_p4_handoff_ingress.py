@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 
 from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
@@ -20,6 +22,8 @@ from backend.customer_service.dispatch.service import (
 from backend.memory.database import AsyncSessionLocal
 
 pytestmark = pytest.mark.asyncio
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _require_customer_service_pg() -> None:
@@ -77,10 +81,23 @@ async def _dispose_memory_engine() -> None:
 
     engine = database._engine
     if engine is not None:
-        await engine.dispose()
+        try:
+            await engine.dispose()
+        except Exception as exc:
+            # 上一条 async 用例可能已关闭其 event loop；清空模块引用仍可
+            # 阻止下一条用例复用旧池，底层连接由 asyncpg/GC 回收。
+            _LOGGER.debug("释放旧 asyncpg pool 时 loop 已关闭: %s", exc)
         database._engine = None
         database._sessionmaker = None
         database._engine_loop = None
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _isolate_memory_engine():
+    """P4 并发前后释放前序用例遗留的 asyncpg pool。"""
+    await _dispose_memory_engine()
+    yield
+    await _dispose_memory_engine()
 
 
 async def _seed_conversation(

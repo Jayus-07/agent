@@ -251,3 +251,57 @@ def _trace_writer_local_only(monkeypatch):
     except Exception:
         pass
     yield
+
+
+def _reset_request_scoped_state() -> None:
+    """清掉进程级/ContextVar 请求态，避免全量顺序运行串味。
+
+    这些状态在真实请求入口由 bind/finish 收口；纯单测不会经过完整入口，
+    因而前一条用例留下的模型、租户、trace 或幂等上下文会改变后一条用例的
+    分支（例如把显式模型改写成上一条请求的模型）。测试基线必须每条从空态起步。
+    """
+    from backend.core.request_context import (
+        set_session_id,
+        set_tool_department,
+        set_tool_idempotency_key,
+        set_tool_permissions,
+        set_tool_roles,
+        set_tool_tenant_id,
+        set_tool_user_id,
+    )
+    from backend.infra.llm import models
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import clear_request_budget
+    from backend.infra.llm.resolved_model import reset_current_resolved_model
+    from backend.observability import tracer as tracer_module
+    from backend.rag.context import clear_context
+    from backend.shared.logger import clear_log_context
+
+    set_session_id("multi-agent-default")
+    set_tool_user_id("")
+    set_tool_tenant_id("")
+    set_tool_idempotency_key("")
+    set_tool_department("")
+    set_tool_permissions(None)
+    set_tool_roles(())
+    proxy.set_current_user_id(None)
+    proxy.set_request_model("")
+    proxy.reset_stream_sink()
+    proxy.reset_turn_usage()
+    reset_current_resolved_model()
+    clear_request_budget()
+    collector = tracer_module.trace_collector
+    clear_for_test = getattr(collector, "clear_for_test", None)
+    if callable(clear_for_test):
+        clear_for_test()
+    clear_log_context()
+    clear_context()
+    models.reset_dynamic_models_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_request_context():
+    """每条用例前后复位请求级单例/ContextVar。"""
+    _reset_request_scoped_state()
+    yield
+    _reset_request_scoped_state()

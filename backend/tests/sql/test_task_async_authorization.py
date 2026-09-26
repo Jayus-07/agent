@@ -179,13 +179,24 @@ def _product_table():
     from backend.sql.schema_loader import TablePolicy, schema_loader
 
     qname = "product.products"
+    existed = qname in schema_loader.allowed_tables
+    previous_config = schema_loader._config["tables"].get(qname)
+    previous_policy = schema_loader.table_policies.get(qname)
     schema_loader.register_table(
         qname, {"id": "PK", "sku": "VARCHAR"},
         description="fixture", policy=TablePolicy(data_domain="shared"))
     yield
-    schema_loader.allowed_tables.discard(qname)
-    schema_loader.table_policies.pop(qname, None)
-    schema_loader._config["tables"].pop(qname, None)
+    if existed:
+        schema_loader.allowed_tables.add(qname)
+        schema_loader._config["tables"][qname] = previous_config
+        if previous_policy is None:
+            schema_loader.table_policies.pop(qname, None)
+        else:
+            schema_loader.table_policies[qname] = previous_policy
+    else:
+        schema_loader.allowed_tables.discard(qname)
+        schema_loader.table_policies.pop(qname, None)
+        schema_loader._config["tables"].pop(qname, None)
 
 
 # ── A1：viewer（无 sql.read）异步任务 → precheck 拒绝 ──────

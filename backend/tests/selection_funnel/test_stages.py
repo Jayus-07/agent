@@ -438,7 +438,7 @@ def test_verify_import_history_failure_degrades_to_single_point(monkeypatch,
 
 def test_verify_watchlist_candidate_still_uses_competitor_history(patch_stores):
     """监控候选（无 imported_at）仍走竞品 store.history，趋势口径不变。"""
-    from conftest import make_snap
+    from backend.tests.selection_funnel.conftest import make_snap
     from backend.selection_funnel.stages.verifier import verify_candidates
     patch_stores([make_snap(url="u-w", price=59.0, review_count=100),
                   make_snap(url="u-w", price=55.0, review_count=200)])
