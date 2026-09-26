@@ -163,6 +163,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # verifying + active 语义操作 partial unique index（跨 confirmation 去重）
     "051_cs_business_operation_guard.sql": "memory",
     "052_travel_booking.sql": "memory",
+    # Model Governance：补齐 031 已声明但未挂载的 model_price append-only trigger。
+    "053_model_price_immutable_trigger.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
