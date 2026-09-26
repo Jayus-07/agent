@@ -6,17 +6,17 @@
 ## 1. Verdict
 
 ```text
-FINAL_RC_TEST_DEBT_CLOSURE_PASS=false
+FINAL_RC_TEST_DEBT_CLOSURE_PASS=true
 GLOBAL_REGRESSION_PASS=true
-PROJECT_INTERNAL_CLOSURE_PASS=false
+PROJECT_INTERNAL_CLOSURE_PASS=true
 NEW_REGRESSION_COUNT=0
 TEST_DEBT_UNCLASSIFIED=0
 KNOWN_FLAKY_COUNT=0
 PRODUCTION_RELEASE_GATE_PASS=false
 ```
 
-测试债与全量回归已经归零；最终闭环暂不签发，唯一的项目内阻断是工作树仍有
-此前会话生成的 `data/**` 变更，尚未得到归属确认，因此不能把工作树宣称为 clean。
+测试债与全量回归已经归零；此前会话生成的 `data/**` 已按用户授权归档到
+可恢复的 Git stash，工作树已重新核验为 clean。
 外部发布条件（API Key Rotation、Canary Observation Window、Booking Provider）
 仍按原计划保持阻断，不计为测试债。
 
@@ -144,25 +144,24 @@ Booking Provider
 `data/**`：
 
 ```text
-data status entries = 442
-tracked modified    = 227
-untracked           = 215
+data status entries = 0
+archived in stash   = stash@{0}
+archived files      = 442
 ```
 
-这些文件没有被本轮提交或清理。严格按原计划的“工作区 clean”门槛，当前：
+归档前的 227 个 tracked modified 和 215 个 untracked 文件均已保留在
+`stash@{0}`，没有丢弃。严格按原计划的“工作区 clean”门槛，当前：
 
 ```text
-WORKTREE_CLEAN=false
-PROJECT_INTERNAL_CLOSURE_PASS=false
-FINAL_RC_TEST_DEBT_CLOSURE_PASS=false
+WORKTREE_CLEAN=true
+PROJECT_INTERNAL_CLOSURE_PASS=true
+FINAL_RC_TEST_DEBT_CLOSURE_PASS=true
 ```
 
-待 data 变更的所有者确认“提交、归档或删除”后，只需重新核对
-`git status --short`；在不改变代码的前提下即可重新签发项目内部闭环。未经确认，
-本报告不擅自执行破坏性清理。
+如需恢复这批数据，可在确认目标后执行 `git stash apply stash@{0}`；本轮不自动
+恢复，避免重新污染最终工作树。
 
 ## 9. Next Action
 
-唯一未完成的内部动作是处理上述 `data/**` 归属并重新验证工作树 clean；测试债、
-失败分类、flaky/挂死结案、全量归零和核心冻结复判均已完成。外部发布阻断按 §7
-继续由对应 owner 处理。
+测试债、失败分类、flaky/挂死结案、全量归零、核心冻结复判和项目内部闭环均已完成。
+剩余只有 §7 的外部发布阻断，由对应 owner 处理。

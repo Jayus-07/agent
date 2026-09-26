@@ -529,3 +529,23 @@ GLOBAL_REGRESSION_PASS=true
 最终 Gate 是否签发仍以 `docs/2026-09-25-FinalRC-TestDebt-Closure.md` 为准：
 该工作树还保留此前会话生成的 `data/**` 变更，未获授权前不回滚；因此严格的
 `PROJECT_INTERNAL_CLOSURE_PASS`/最终闭环 Gate 需等 data 变更归属确认后再判。
+
+### 10.8 data 归档与项目内部 Gate 重开（2026-09-26）
+
+用户已授权处理 `data/**`。在确认工作树仅有 data 变更后，将 227 个 tracked
+modified 与 215 个 untracked（合计 442 个文件）按路径归档到可恢复的
+`stash@{0}`：`final-rc: archive generated data before closure`。未删除代码、测试
+或文档，也未丢弃这些数据。
+
+归档后 `git status --short` 为空，项目内部 Gate 重新签发：
+
+```text
+WORKTREE_CLEAN=true
+PROJECT_INTERNAL_CLOSURE_PASS=true
+FINAL_RC_TEST_DEBT_CLOSURE_PASS=true
+GLOBAL_REGRESSION_PASS=true
+```
+
+恢复入口仅在数据所有者确认后使用：`git stash apply stash@{0}`。外部发布 Gate
+仍由 API Key Rotation、Canary Observation Window、Booking Provider 三项阻断，
+保持 `PRODUCTION_RELEASE_GATE_PASS=false`。
