@@ -475,3 +475,57 @@ FULL_ROADMAP_COMPLETE=false
 
 下一步进入 STOP C/D 的最终复判：按锁定 runbook 对其余块做全量无并发复跑，
 再执行 STOP E 全量归零与 STOP F 六 Gate 签发；在此之前不宣称项目闭环或可发布。
+
+### 10.7 STOP C-F 收尾证据（2026-09-26）
+
+本节覆盖 §10.6 之后的最终复判，不回写前文历史快照。
+
+#### STOP C/D：逐族清偿与隔离收口
+
+- 任务运行族独占库/容器内网复跑：`227 passed`；API 全量：`445 passed`；travel
+  全量：`585 passed`。此前 89 个 persistent census 节点按 35 个文件复跑，
+  `432 passed / 0 failed`；85 个 environment-flaky 节点均有串行或隔离复绿证据。
+- 最终串行前置回归暴露 30 个顺序污染节点；30 个节点分别在独立进程/隔离库中
+  `30/30 passed`，归因收敛为：请求级 ContextVar/单例污染 11 个、数据库/fixture
+  生命周期污染 19 个，不计为稳定生产回归。
+- 测试隔离收口提交：`2f91063`。它只修改测试 fixture/测试状态清理，不修改生产
+  行为；P4 asyncpg 池隔离定向复验 `5 passed`。
+
+#### STOP E：全量归零
+
+当前独立收集口径为 `7398 tests collected`（见
+`artifacts/final_rc/collect-final.log`）。使用 PostgreSQL/Redis 容器内网和
+独占 `agent_memory_rc_full10`，单进程、`--no-cov` 全量命令完成：
+
+```text
+7276 passed, 122 skipped, 0 failed, 0 errors, 20 warnings
+616.72s (0:10:16)
+```
+
+原始完整日志：`artifacts/final_rc/full-local-serial-final-hermetic.log`。
+`122 skipped` 是既有质量门禁跳过项；本轮没有新增 skip/xfail，也没有降低
+collection 范围。此前 7397 的历史收集快照与本次 7398 的差异来自闭环前既有的
+单项测试覆盖补充，不是 mass skip/xfail。
+
+#### STOP F：核心冻结契约复判
+
+核心 smoke/contract 组合（registry/layer/ADR、Authorization、SQL、RAG、Memory、
+Context Budget、Async/Idempotency、SSE Resume、CS、Travel、Model Governance、
+Domain Runtime）结果为 `564 passed / 5 skipped`，耗时 93.91 秒；日志见
+`artifacts/final_rc/core-smoke-final.log`。
+
+```text
+STOP_B_CLASSIFICATION_CURRENT=PASS
+STOP_C_FAMILY_CLOSURE_CURRENT=PASS
+STOP_D_ISOLATION_FLAKY_CURRENT=PASS
+STOP_E_FULL_REGRESSION_CURRENT=PASS
+STOP_F_CORE_FROZEN_CURRENT=PASS
+TEST_DEBT_UNCLASSIFIED=0
+KNOWN_FLAKY_COUNT=0
+NEW_REGRESSION_COUNT=0
+GLOBAL_REGRESSION_PASS=true
+```
+
+最终 Gate 是否签发仍以 `docs/2026-09-25-FinalRC-TestDebt-Closure.md` 为准：
+该工作树还保留此前会话生成的 `data/**` 变更，未获授权前不回滚；因此严格的
+`PROJECT_INTERNAL_CLOSURE_PASS`/最终闭环 Gate 需等 data 变更归属确认后再判。
