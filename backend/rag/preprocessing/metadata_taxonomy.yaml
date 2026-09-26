@@ -423,6 +423,16 @@
           "rule_id": "doc_type.faq.022",
           "pattern": "refund policy",
           "weight": 6
+        },
+        {
+          "rule_id": "doc_type.faq.023",
+          "pattern": "无理由退货",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.faq.024",
+          "pattern": "退款时效",
+          "weight": 8
         }
       ]
     },
