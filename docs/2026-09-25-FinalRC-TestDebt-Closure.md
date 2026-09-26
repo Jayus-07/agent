@@ -12,13 +12,14 @@ PROJECT_INTERNAL_CLOSURE_PASS=true
 NEW_REGRESSION_COUNT=0
 TEST_DEBT_UNCLASSIFIED=0
 KNOWN_FLAKY_COUNT=0
+API_KEY_ROTATION_PASS=true
 PRODUCTION_RELEASE_GATE_PASS=false
 ```
 
 测试债与全量回归已经归零；此前会话生成的 `data/**` 已按用户授权归档到
 可恢复的 Git stash，工作树已重新核验为 clean。
-外部发布条件（API Key Rotation、Canary Observation Window、Booking Provider）
-仍按原计划保持阻断，不计为测试债。
+API Key 服务端轮换已在 `0891350` 完成并有旧 key 失效/新 key 全链路验证；当前仍阻断的外部发布条件只有
+Canary Observation Window 与真实 Booking Provider，不计为测试债。
 
 ## 2. Baseline 与最终结果
 
@@ -127,21 +128,32 @@ P4 handoff asyncpg 池隔离定向复验另为：
 
 ## 7. Remaining External Blockers
 
-下列项目不属于本轮测试债，继续保持原计划状态：
+下列项目不属于本轮测试债；API Key 轮换已完成，不能再计作阻塞项：
 
 ```text
-API Key Rotation
-Canary Observation Window
-Booking Provider
+API_KEY_ROTATION_PASS=true             # 0891350，已完成
+BLOCKED_BY_OBSERVATION_WINDOW=true    # 24h×4 尚未启动
+BLOCKED_BY_EXTERNAL_BOOKING_PROVIDER=true
 ```
+
+当前实机核查证据（2026-09-26）：
+
+- `agent-app-1` 的级联配置为 `METADATA_CASCADE_ENABLED=true`、
+  `METADATA_CASCADE_ROLLOUT_PERCENT=100`，但
+  `METADATA_CASCADE_SHADOW_ENABLED=false`；Prometheus 的
+  `metadata_route_total{level=~"shadow_.*"}` 总样本仅 1，近 24h 增量为 0，
+  因而不能冒充 1%→10%→50%→100% 的观察窗证据。
+- Booking 配置实测为 `booking_enabled=false`、`provider=off`；Booking 相关注册表只含
+  `fake_booking_native/clientref/bare` 三个 fake profile，没有真实供应商适配器或凭据，
+  G45/G46 仍不可执行。
 
 因此 `PRODUCTION_RELEASE_GATE_PASS=false`，即使测试 Gate 已经归零，也不能据此
 宣称对外发布可行。
 
 ## 8. Final Git State
 
-本次代码/测试/文档路径已按 pathspec 提交；工作树当前剩余的是此前会话生成的
-`data/**`：
+本次代码/测试/文档路径已按 pathspec 提交；此前会话生成的 `data/**` 已归档到
+可恢复的 `stash@{0}`，当前工作树不含这批运行产物：
 
 ```text
 data status entries = 0
@@ -164,4 +176,5 @@ FINAL_RC_TEST_DEBT_CLOSURE_PASS=true
 ## 9. Next Action
 
 测试债、失败分类、flaky/挂死结案、全量归零、核心冻结复判和项目内部闭环均已完成。
-剩余只有 §7 的外部发布阻断，由对应 owner 处理。
+剩余只有 §7 的两项外部发布阻断：先由发布 owner 启动合规的灰度观察窗，再由采购/供应商
+提供真实 Booking 契约与凭据；在这两项没有证据前，保持生产发布 Gate 为 false。

@@ -167,7 +167,7 @@ SKIPPED=117
 - [ ] 核心 smoke/contract 套件复跑（Authorization/SQL/RAG/Memory/Context Budget/Async/Idempotency/STOP E/SSE Resume/CS/Travel/Model Governance/Domain Runtime）
 - [ ] 六 Gate 重判：GLOBAL_REGRESSION_PASS / PROJECT_INTERNAL_CLOSURE_PASS 如实落笔
 - [ ] 最终报告 `docs/2026-09-25-FinalRC-TestDebt-Closure.md`
-- [ ] External Gate 保持不动：PRODUCTION_RELEASE_GATE_PASS=false / EXTERNAL_BLOCKERS_PRESENT=true / FULL_ROADMAP_COMPLETE=false（API Key 轮换已完成除外）
+- [ ] External Gate 保持不动：PRODUCTION_RELEASE_GATE_PASS=false / EXTERNAL_BLOCKERS_PRESENT=true / FULL_ROADMAP_COMPLETE=false；API Key 轮换已由 `0891350` 完成，当前只剩灰度观察窗与真实 Booking Provider 两项外部阻断
 
 ---
 
@@ -546,6 +546,6 @@ FINAL_RC_TEST_DEBT_CLOSURE_PASS=true
 GLOBAL_REGRESSION_PASS=true
 ```
 
-恢复入口仅在数据所有者确认后使用：`git stash apply stash@{0}`。外部发布 Gate
-仍由 API Key Rotation、Canary Observation Window、Booking Provider 三项阻断，
-保持 `PRODUCTION_RELEASE_GATE_PASS=false`。
+恢复入口仅在数据所有者确认后使用：`git stash apply stash@{0}`。API Key Rotation
+已完成（`API_KEY_ROTATION_PASS=true`）；外部发布 Gate 仍由 Canary Observation
+Window 与 Booking Provider 两项阻断，保持 `PRODUCTION_RELEASE_GATE_PASS=false`。
