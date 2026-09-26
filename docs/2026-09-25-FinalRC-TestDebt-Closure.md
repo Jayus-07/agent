@@ -1,6 +1,6 @@
 # FINAL RC — Test Debt Closure 与 Global Regression Closure
 
-日期：2026-09-26  
+日期：2026-09-26
 范围：Final RC 测试债、全量回归和项目内部闭环；不扩展产品功能，不处理外部发布条件。
 
 ## 1. Verdict
