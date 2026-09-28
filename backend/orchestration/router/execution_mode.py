@@ -55,7 +55,10 @@ class ExecutionModeResolver:
                 compat_route_mode="clarify",
             )
 
-        override_mode = str(override.get("execution_mode") or "")
+        override_mode_value = override.get("execution_mode") or ""
+        override_mode = str(
+            getattr(override_mode_value, "value", override_mode_value)
+        )
         if override_mode == "workflow":
             target = str(
                 override.get("workflow_name")
@@ -142,6 +145,9 @@ class ExecutionModeResolver:
             return {}
         if hasattr(value, "model_dump"):
             dumped = value.model_dump()
+            mode = dumped.get("execution_mode")
+            if hasattr(mode, "value"):
+                dumped["execution_mode"] = mode.value
             return dumped if isinstance(dumped, Mapping) else {}
         return {}
 

@@ -76,5 +76,66 @@ class CapabilityRouter:
             ),
         }
 
+    @staticmethod
+    def from_routing_meta(
+        domain: str,
+        meta: dict[str, Any],
+    ) -> CapabilityDecision:
+        """从既有 hierarchical 元数据派生候选，不重复向量检索。"""
+
+        names = list(meta.get("candidate_tools") or [])
+        top1 = str(meta.get("fine_top1") or "")
+        top1_score = float(meta.get("fine_top1_score") or 0.0)
+        rows = [
+            {
+                "name": name,
+                "score": round(top1_score if name == top1 else 0.3, 3),
+                "risk": "UNKNOWN",
+                "source": "hierarchical",
+            }
+            for name in names
+        ]
+        return {
+            "domain": domain,
+            "capability": top1 or None,
+            "candidates": rows,
+            "confidence": top1_score,
+            "source": "hierarchical",
+            "reasoning": str(meta.get("reason_code") or "hierarchical metadata"),
+        }
+
+    @staticmethod
+    def from_route_decision(
+        domain: str,
+        decision: Any,
+    ) -> CapabilityDecision:
+        """把 legacy RouteDecision 变成候选快照，不触发任何执行。"""
+
+        if hasattr(decision, "model_dump"):
+            decision = decision.model_dump()
+        if not isinstance(decision, dict):
+            decision = {}
+        rows = []
+        for candidate in decision.get("candidates") or []:
+            if hasattr(candidate, "model_dump"):
+                candidate = candidate.model_dump()
+            if not isinstance(candidate, dict):
+                continue
+            rows.append({
+                "name": str(candidate.get("name") or ""),
+                "score": float(candidate.get("score") or 0.0),
+                "risk": "UNKNOWN",
+                "source": "legacy",
+            })
+        capability = rows[0]["name"] if rows else None
+        return {
+            "domain": domain,
+            "capability": capability,
+            "candidates": rows,
+            "confidence": float(decision.get("confidence") or 0.0),
+            "source": "legacy",
+            "reasoning": str(decision.get("reason") or "legacy RouteDecision"),
+        }
+
 
 __all__ = ["CapabilityRouter"]

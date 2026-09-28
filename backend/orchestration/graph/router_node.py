@@ -54,6 +54,107 @@ def _mark_route_from_update(state: dict, update: dict) -> dict:
     return update
 
 
+def _with_router_decisions(
+    state: dict,
+    update: dict,
+    query: str,
+    *,
+    existing_override=None,
+    hierarchical_meta: dict | None = None,
+) -> dict:
+    """把新适配器结果增量写回 state，旧路由字段仍保持权威。
+
+    该函数只做决策对象组装，不执行 Tool/Skill/Workflow；prefilter 的调用顺序
+    仍由 ``router_node`` 原有分支控制。任何适配器异常都软失败，不阻断旧路径。
+    """
+
+    result = {**state, **(update or {})}
+    try:
+        from backend.orchestration.router.capability_router import CapabilityRouter
+        from backend.orchestration.router.domain_router import DomainRouter
+        from backend.orchestration.router.execution_mode import ExecutionModeResolver
+
+        domain_router = DomainRouter()
+        if hierarchical_meta is not None:
+            domain_decision = DomainRouter.from_hierarchical_meta(
+                hierarchical_meta,
+            )
+        elif hasattr(existing_override, "model_dump") or (
+            isinstance(existing_override, dict)
+            and (
+                "execution_mode" in existing_override
+                or "candidates" in existing_override
+            )
+        ):
+            # legacy 已经完成 rule/vector/LLM 拍板，不重复做一次 embedding。
+            domain_decision = {
+                "domain": "unknown",
+                "subflow": None,
+                "confidence": 0.0,
+                "source": "legacy",
+                "reasoning": "legacy RouteDecision 已完成域外拍板",
+            }
+        else:
+            domain_decision = domain_router.route(
+                query, state, prefilter_update=update,
+            )
+
+        if hierarchical_meta is not None:
+            capability_decision = CapabilityRouter.from_routing_meta(
+                domain_decision["domain"], hierarchical_meta,
+            )
+        elif (
+            hasattr(existing_override, "model_dump")
+            or (
+                isinstance(existing_override, dict)
+                and (
+                    "execution_mode" in existing_override
+                    or "candidates" in existing_override
+                )
+            )
+        ):
+            capability_decision = CapabilityRouter.from_route_decision(
+                domain_decision["domain"], existing_override,
+            )
+        else:
+            capability_decision = {
+                "domain": domain_decision["domain"],
+                "capability": None,
+                "candidates": [],
+                "confidence": 0.0,
+                "source": "prefilter",
+                "reasoning": "域图/兼容短路不选择主图 capability",
+            }
+
+        resolver_override = existing_override or update
+        if isinstance(existing_override, dict):
+            nested_decision = existing_override.get("route_decision")
+            if isinstance(nested_decision, dict):
+                resolver_override = {
+                    **nested_decision,
+                    "route_mode": existing_override.get("route_mode") or "",
+                }
+        execution_decision = ExecutionModeResolver().resolve(
+            domain_decision,
+            capability_decision,
+            resolver_override,
+        )
+        result.update({
+            "domain_decision": domain_decision,
+            "capability_decision": capability_decision,
+            "execution_decision": execution_decision.to_dict(),
+            "router_fallback_reason": result.get("router_fallback_reason", ""),
+            "legacy_used": bool(result.get("legacy_used", False)),
+        })
+    except Exception as exc:
+        logger.warning("[RouterNode] Router 决策适配器失败，保持旧字段: %s", exc)
+        result.update({
+            "router_fallback_reason": f"decision_adapter:{exc}",
+            "legacy_used": True,
+        })
+    return result
+
+
 def _try_continuation(state: dict, query: str, routing_context: dict) -> dict | None:
     """ContinuationResolver 命中 → 直接回活跃域（复用既有域图入口）。
 
@@ -198,11 +299,12 @@ def router_node(state: dict) -> dict:
     """
     query = state.get("question") or state.get("query") or ""
     if not query:
-        return {
-            **state,
-            "route_decision": None,
-            "route_mode": "plan",
-        }
+        return _with_router_decisions(
+            state,
+            {"route_decision": None, "route_mode": "plan"},
+            query,
+            existing_override={"route_mode": "plan"},
+        )
 
     # ── 预过滤顺序（2026-09-15 定序；2026-09-18 起已无性能收益）──────
     # 该顺序最初为省掉 CS 向量通道的云端 embedding 往返而设计（2026-09-15
@@ -253,17 +355,25 @@ def router_node(state: dict) -> dict:
 
             pending_update = resolve_travel_pending(query, routing_context)
             if pending_update is not None:
-                return {**state, **_mark_route_from_update(state, pending_update)}
+                return _with_router_decisions(
+                    state, _mark_route_from_update(state, pending_update), query,
+                    existing_override=pending_update,
+                )
         except Exception as e:
             logger.warning(f"[RouterNode] travel pending 判定失败，走正常路由: {e}")
         # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
         cont_update = _try_continuation(state, query, routing_context)
         if cont_update is not None:
-            return {**state, **_mark_route_from_update(state, cont_update)}
+            return _with_router_decisions(
+                state, _mark_route_from_update(state, cont_update), query,
+                existing_override=cont_update,
+            )
         # 问候/能力咨询 → general_chat 主 LLM 直答（禁 RAG，不进域图）
         general_update = _try_general_chat(state)
         if general_update is not None:
-            return {**state, **general_update}
+            return _with_router_decisions(
+                state, general_update, query, existing_override=general_update,
+            )
 
     def _try_cs_prefilter(forced: bool = False) -> dict | None:
         # 逻辑在 cs_prefilter.py（只判断"是不是客服"，不判断"走哪个 expert"）
@@ -320,13 +430,19 @@ def router_node(state: dict) -> dict:
     if cs_forced and not cs_redirect:
         cs_update = _try_cs_prefilter(forced=True)
         if cs_update is not None:
-            return {**state, **_mark_route_from_update(
-                state, _enrich_with_understanding(cs_update, query))}
+            update = _mark_route_from_update(
+                state, _enrich_with_understanding(cs_update, query))
+            return _with_router_decisions(
+                state, update, query, existing_override=update,
+            )
     elif not cs_forced and cs_rule_hits:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
-            return {**state, **_mark_route_from_update(
-                state, _enrich_with_understanding(cs_update, query))}
+            update = _mark_route_from_update(
+                state, _enrich_with_understanding(cs_update, query))
+            return _with_router_decisions(
+                state, update, query, existing_override=update,
+            )
 
     # ── 旅游预过滤：纯正则 ─────────────────────────────────────────
     # 域锁且未转出时跳过；转出（redirect_main）或全局入口正常执行。
@@ -335,7 +451,10 @@ def router_node(state: dict) -> dict:
             from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
             travel_update = try_travel_prefilter(query, state)
             if travel_update is not None:
-                return {**state, **_mark_route_from_update(state, travel_update)}
+                update = _mark_route_from_update(state, travel_update)
+                return _with_router_decisions(
+                    state, update, query, existing_override=update,
+                )
         except Exception as e:
             logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
 
@@ -348,7 +467,10 @@ def router_node(state: dict) -> dict:
             )
             funnel_update = try_selection_funnel_prefilter(query, state)
             if funnel_update is not None:
-                return {**state, **_mark_route_from_update(state, funnel_update)}
+                update = _mark_route_from_update(state, funnel_update)
+                return _with_router_decisions(
+                    state, update, query, existing_override=update,
+                )
         except Exception as e:
             logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
@@ -361,7 +483,10 @@ def router_node(state: dict) -> dict:
             )
             booking_update = try_booking_prefilter(query, state)
             if booking_update is not None:
-                return {**state, **_mark_route_from_update(state, booking_update)}
+                update = _mark_route_from_update(state, booking_update)
+                return _with_router_decisions(
+                    state, update, query, existing_override=update,
+                )
         except Exception as e:
             logger.warning(f"[RouterNode] 预订预过滤失败，回退到主 Router: {e}")
 
@@ -375,7 +500,10 @@ def router_node(state: dict) -> dict:
             )
             commerce_update = try_commerce_prefilter(query, state)
             if commerce_update is not None:
-                return {**state, **_mark_route_from_update(state, commerce_update)}
+                update = _mark_route_from_update(state, commerce_update)
+                return _with_router_decisions(
+                    state, update, query, existing_override=update,
+                )
         except Exception as e:
             logger.warning(f"[RouterNode] 商务预过滤失败，回退到主 Router: {e}")
 
@@ -385,8 +513,11 @@ def router_node(state: dict) -> dict:
     if not cs_rule_hits and not cs_forced:
         cs_update = _try_cs_prefilter()
         if cs_update is not None:
-            return {**state, **_mark_route_from_update(
-                state, _enrich_with_understanding(cs_update, query))}
+            update = _mark_route_from_update(
+                state, _enrich_with_understanding(cs_update, query))
+            return _with_router_decisions(
+                state, update, query, existing_override=update,
+            )
 
     # ── L1 入口弱命中追问（2026-09-19 拒答转追问）────────────────
     # 放在全部域预过滤与 CS 兜底之后：客服优先级不被追问抢夺。
@@ -425,12 +556,14 @@ def router_node(state: dict) -> dict:
             )
         except Exception:
             logger.debug("[RouterNode] 待答问题记录失败（软降级）", exc_info=True)
-        return {
-            **state,
+        update = {
             "route_decision": None,
             "route_mode": "clarify",
             "_clarify": clarify,
         }
+        return _with_router_decisions(
+            state, update, query, existing_override=update,
+        )
 
     try:
         # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献
@@ -472,11 +605,15 @@ def router_node(state: dict) -> dict:
         )
     except Exception as e:
         logger.warning(f"[RouterNode] 路由失败，回退到 plan: {e}")
-        return {
-            **state,
+        update = {
             "route_decision": None,
             "route_mode": "plan",
+            "router_fallback_reason": f"router:{e}",
+            "legacy_used": True,
         }
+        return _with_router_decisions(
+            state, update, query, existing_override=update,
+        )
 
     # V2: workflow / direct 不再降级到 plan
     mode = decision.execution_mode
@@ -490,7 +627,13 @@ def router_node(state: dict) -> dict:
     if meta:
         early = _handle_hierarchical_meta(meta, state, query, route_context)
         if early is not None:
-            return early
+            return _with_router_decisions(
+                state,
+                early,
+                query,
+                existing_override=early,
+                hierarchical_meta=meta,
+            )
         hierarchical_fields = _hierarchical_state_fields(meta)
 
     # ── QueryRouter 统一问题理解（治理改造 2026-09-22）──────────
@@ -523,13 +666,20 @@ def router_node(state: dict) -> dict:
     except Exception as e:
         logger.warning(f"[RouterNode] QueryRouter 理解失败（软降级，保持原路由）: {e}")
 
-    return {
-        **state,
+    update = {
         "route_decision": decision.model_dump(),
         "route_mode": mode.value,
         "query_understanding": understanding,
         **hierarchical_fields,
+        "legacy_used": meta is None,
     }
+    return _with_router_decisions(
+        state,
+        update,
+        query,
+        existing_override=decision,
+        hierarchical_meta=meta,
+    )
 
 
 def _hierarchical_state_fields(meta: dict) -> dict:

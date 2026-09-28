@@ -221,6 +221,52 @@ def test_decisions_are_serializable():
     assert decision.to_dict()["target"] == "sql.query"
 
 
+def test_router_node_compat_update_adds_serializable_snapshots():
+    from backend.orchestration.graph.router_node import _with_router_decisions
+
+    result = _with_router_decisions(
+        {"question": "帮我规划大阪3天行程"},
+        {
+            "route_decision": None,
+            "route_mode": "travel",
+        },
+        "帮我规划大阪3天行程",
+    )
+    assert result["route_mode"] == "travel"
+    assert result["domain_decision"]["domain"] == "travel"
+    assert result["execution_decision"]["mode"] == "domain_graph"
+    assert result["execution_decision"]["target"] == "travel"
+    assert result["legacy_used"] is False
+
+
+def test_router_node_legacy_route_decision_becomes_capability_snapshot():
+    from backend.orchestration.graph.router_node import _with_router_decisions
+    from backend.orchestration.router.types import (
+        CapabilityScore,
+        ExecutionMode,
+        RouteDecision,
+    )
+
+    decision = RouteDecision(
+        execution_mode=ExecutionMode.DIRECT,
+        candidates=[CapabilityScore(name="sql.query", score=0.9)],
+        confidence=0.9,
+    )
+    result = _with_router_decisions(
+        {"question": "查销售额"},
+        {
+            "route_decision": decision.model_dump(),
+            "route_mode": "direct",
+            "legacy_used": True,
+        },
+        "查销售额",
+        existing_override=decision,
+    )
+    assert result["capability_decision"]["capability"] == "sql.query"
+    assert result["execution_decision"]["mode"] == "direct"
+    assert result["legacy_used"] is True
+
+
 @pytest.mark.parametrize(
     "module_name",
     ["domain_router.py", "capability_router.py", "execution_mode.py"],

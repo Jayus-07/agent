@@ -72,6 +72,12 @@ class DomainRouter:
             query,
             context if isinstance(context, Mapping) else None,
         )
+        return self.from_prediction(prediction)
+
+    @staticmethod
+    def from_prediction(prediction: Any) -> DomainDecision:
+        """把既有粗分类结果转换为新契约，不重新执行分类。"""
+
         source = {
             "rule": "rule",
             "classifier": "embedding",
@@ -87,13 +93,38 @@ class DomainRouter:
         }
 
     @staticmethod
+    def from_hierarchical_meta(meta: Mapping[str, Any]) -> DomainDecision:
+        """从既有 ``routing_meta`` 派生 DomainDecision，避免二次 embedding。"""
+
+        domain = str(meta.get("domain") or "unknown")
+        source = {
+            "rule": "rule",
+            "classifier": "embedding",
+            "gate": "embedding",
+            "degraded": "fallback",
+        }.get(str(meta.get("domain_source") or ""),
+               str(meta.get("domain_source") or "legacy"))
+        return {
+            "domain": domain,
+            "subflow": None,
+            "confidence": float(meta.get("domain_confidence") or 0.0),
+            "source": source,
+            "reasoning": str(meta.get("reason_code") or "hierarchical"),
+        }
+
+    @staticmethod
     def _from_prefilter(update: Mapping[str, Any]) -> DomainDecision | None:
         route_mode = str(update.get("route_mode") or "")
         mapped = _PREFILTER_DOMAIN_MAP.get(route_mode)
         if mapped is None and route_mode == "clarify":
             # 客服 InputGuard 的 clarify 更新不带 cs_context，仍需保留客服域语义。
-            if "cs_context" in update or "final_answer" in update:
+            if (
+                "cs_context" in update
+                or "final_answer" in update
+            ):
                 mapped = ("customer_service", "clarify")
+            elif "_clarify" in update:
+                mapped = ("unknown", "clarify")
         if mapped is None:
             return None
         domain, subflow = mapped

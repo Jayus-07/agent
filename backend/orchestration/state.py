@@ -139,6 +139,12 @@ class AgentState(TypedDict):
     tool_route_mode: str                         # fast_path | llm_selection | ""
     need_clarification: bool                     # unknown / 低置信 → 澄清
     clarification_reason: str                    # LOW_CONFIDENCE | LOW_MARGIN | ...
+    # STOP B Router 收口：三类决策对象的可序列化快照；旧字段继续为兼容事实源。
+    domain_decision: dict
+    capability_decision: dict
+    execution_decision: dict
+    router_fallback_reason: str
+    legacy_used: bool
 
 
 class OrchestratorState(AgentState):
