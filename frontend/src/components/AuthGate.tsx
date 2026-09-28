@@ -4,10 +4,11 @@
  * AuthGate — 全局路由守卫（客户端方案，未引入 middleware）
  *
  * 规则：
- * - /login 为公开页，直接放行；
+ * - /login、/register、/（统一门户主页）为公开页，直接放行；
  * - 其余路径：有 access token → 放行；无 token 时先试 HttpOnly Cookie
- *   静默续期（tryRefreshOnce，single-flight），仍失败 → 跳 /login 并带
- *   redirect 参数（登录成功后由登录页跳回原路径）。
+ *   静默续期（tryRefreshOnce，single-flight），仍失败 → 跳 / 统一门户，
+ *   由门户引导进对应端登录（产品口径：未登录一律回门户；登录页无
+ *   redirect 参数时默认进 /agent，闭环不受影响）。
  * - 检查期间渲染 null，避免受保护内容闪烁。
  *
  * 复用 lib/auth 的既有约定：token 存 sessionStorage（agent.access_token），
@@ -43,8 +44,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       if (ok) {
         setState("ok");
       } else {
-        const redirect = encodeURIComponent(pathname);
-        window.location.assign(`/login?redirect=${redirect}`);
+        // 未登录兜底：弹回统一门户主页（redirect 不带——门户卡片的
+        // /login 链接不透传参数，带了也无消费方）
+        window.location.assign("/");
       }
     });
     return () => {
