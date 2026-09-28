@@ -1,0 +1,291 @@
+{
+  "summary": {
+    "timestamp": "2026-09-28T16:23:12",
+    "total_cases": 28,
+    "runtime_success_rate": 0.7143,
+    "infra_error_count": 0,
+    "p50_latency_ms": 1656,
+    "p95_latency_ms": 32500,
+    "refusal_correctness": 1.0,
+    "citation_present_rate": 1.0,
+    "critical_fact_accuracy": 1.0,
+    "retrieval_success_rate": 0.6667,
+    "chat_route_success_rate": 0.8,
+    "gate": {
+      "infra_errors_must_be_zero": true
+    },
+    "PRODUCTION_SMOKE_EVAL_PASS": true
+  },
+  "cases": [
+    {
+      "id": "RT-01",
+      "suite": "rag_retrieval",
+      "latency_ms": 1265,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-02",
+      "suite": "rag_retrieval",
+      "latency_ms": 875,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['会议室', '预订', '小时']，top1='场景A第0条：任务运行时状态机验证，包含checkpoint、pause、resume与cancel全链路。\\n场景A第1'"
+    },
+    {
+      "id": "RT-03",
+      "suite": "rag_retrieval",
+      "latency_ms": 1422,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-04",
+      "suite": "rag_retrieval",
+      "latency_ms": 1547,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-05",
+      "suite": "rag_retrieval",
+      "latency_ms": 1391,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-06",
+      "suite": "rag_retrieval",
+      "latency_ms": 1172,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-07",
+      "suite": "rag_retrieval",
+      "latency_ms": 1157,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-08",
+      "suite": "rag_retrieval",
+      "latency_ms": 1328,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-09",
+      "suite": "rag_retrieval",
+      "latency_ms": 547,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['招聘']，top1='Q：支持哪些支付方式?\\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\\n\\n---\\n\\n合同'"
+    },
+    {
+      "id": "RT-10",
+      "suite": "rag_retrieval",
+      "latency_ms": 546,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['印章']，top1='3. 采购审批权限\\n单笔 < 1 万元：部门负责人审批\\n1 万 - 5 万元：部门负责人 + 财务经理\\n> 5 万元：追'"
+    },
+    {
+      "id": "RT-11",
+      "suite": "rag_retrieval",
+      "latency_ms": 735,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-12",
+      "suite": "rag_retrieval",
+      "latency_ms": 891,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['知识产权', '转让']，top1='第6章 售后上门服务\\n售后上门服务条款 6.1：用户在订单确认后 7 个自然日内可发起申请，客服须在 48 小时内响应，'"
+    },
+    {
+      "id": "QA-01",
+      "suite": "rag_qa",
+      "latency_ms": 8953,
+      "status_http": 200,
+      "passed": true,
+      "refused": false,
+      "cited": true,
+      "reason": "",
+      "critical": true,
+      "critical_ok": true
+    },
+    {
+      "id": "QA-02",
+      "suite": "rag_qa",
+      "latency_ms": 31359,
+      "status_http": 200,
+      "passed": false,
+      "refused": true,
+      "cited": true,
+      "reason": "answer='知识库暂无相关资料。\\n（已尝试改写提问重新检索，仍未找到可靠答案）'"
+    },
+    {
+      "id": "QA-03",
+      "suite": "rag_qa",
+      "latency_ms": 8421,
+      "status_http": 200,
+      "passed": false,
+      "refused": true,
+      "cited": false,
+      "reason": "answer='知识库暂无相关资料。'"
+    },
+    {
+      "id": "QA-04",
+      "suite": "rag_qa",
+      "latency_ms": 13422,
+      "status_http": 200,
+      "passed": true,
+      "refused": false,
+      "cited": true,
+      "reason": ""
+    },
+    {
+      "id": "QA-05",
+      "suite": "rag_qa",
+      "latency_ms": 4281,
+      "status_http": 200,
+      "passed": true,
+      "refused": true,
+      "cited": false,
+      "reason": ""
+    },
+    {
+      "id": "QA-06",
+      "suite": "rag_qa",
+      "latency_ms": 13859,
+      "status_http": 200,
+      "passed": true,
+      "refused": true,
+      "cited": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-01",
+      "suite": "chat_route",
+      "latency_ms": 32500,
+      "status_http": 200,
+      "expect_route": "rag",
+      "passed": false,
+      "refused": true,
+      "reason": "answer='## 抱歉\\n\\n未能找到与「根据公司制度,员工差旅报销的上限金额是多少?」相关的信息。\\n\\n- 数据库查询: 未找到相关信息\\n\\n建议换个关键词或查阅其他资料。'"
+    },
+    {
+      "id": "CH-02",
+      "suite": "chat_route",
+      "latency_ms": 8734,
+      "status_http": 200,
+      "expect_route": "rag",
+      "passed": true,
+      "refused": true,
+      "reason": ""
+    },
+    {
+      "id": "CH-03",
+      "suite": "chat_route",
+      "latency_ms": 5406,
+      "status_http": 200,
+      "expect_route": "general",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-04",
+      "suite": "chat_route",
+      "latency_ms": 6344,
+      "status_http": 200,
+      "expect_route": "general",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-05",
+      "suite": "chat_route",
+      "latency_ms": 1860,
+      "status_http": 200,
+      "expect_route": "sql",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-06",
+      "suite": "chat_route",
+      "latency_ms": 1422,
+      "status_http": 200,
+      "expect_route": "travel",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-07",
+      "suite": "chat_route",
+      "latency_ms": 3296,
+      "status_http": 200,
+      "expect_route": "cs",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-08",
+      "suite": "chat_route",
+      "latency_ms": 1656,
+      "status_http": 200,
+      "expect_route": "general",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-09",
+      "suite": "chat_route",
+      "latency_ms": 1266,
+      "status_http": 200,
+      "expect_route": "rag+travel",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-10",
+      "suite": "chat_route",
+      "latency_ms": 58594,
+      "status_http": 200,
+      "expect_route": "rag",
+      "passed": false,
+      "refused": true,
+      "reason": "answer='## 抱歉\\n\\n未能找到与「再问一次:员工差旅报销的上限金额是多少?」相关的信息。\\n\\n- 数据库查询: 未找到相关信息\\n\\n建议换个关键词或查阅其他资料。'"
+    }
+  ]
+}

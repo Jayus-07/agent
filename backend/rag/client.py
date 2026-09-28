@@ -112,6 +112,33 @@ class RAGServiceProxy:
             ) from e
         return resp.json()["result"]
 
+    def ask_result(
+        self,
+        question: str,
+        session_id: str = "default",
+        kb_id: str = "default",
+        kb_ids: list[str] | None = None,
+        subject_type: str = "",
+        department: str = "",
+        permissions: Iterable[str] | None = None,
+        user_id: str = "",
+        tenant_id: str = "",
+    ):
+        """问答面补齐（2026-09-28 生产冒烟实测缺陷）：/rag/ask 路由调用
+        ask_result，此前代理未覆盖 → remote 部署形态下该 API 恒 500。
+        复用 /ask（meta 随响应带回），映射为 AskOutcome 同形返回。
+        """
+        from backend.rag.pipeline import AskOutcome
+
+        answer = self.ask(
+            question, session_id=session_id, kb_id=kb_id, kb_ids=kb_ids,
+            subject_type=subject_type, department=department,
+            permissions=permissions, user_id=user_id, tenant_id=tenant_id,
+        )
+        meta = dict(self.last_answer_meta or {})
+        sources = list(meta.pop("sources", []) or [])
+        return AskOutcome(answer=answer, sources=sources, answer_meta=meta)
+
     # ── 索引管理面：明确拒绝 ──
 
     def __getattr__(self, name: str) -> Any:

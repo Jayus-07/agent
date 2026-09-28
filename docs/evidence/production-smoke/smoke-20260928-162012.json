@@ -1,0 +1,291 @@
+{
+  "summary": {
+    "timestamp": "2026-09-28T16:20:12",
+    "total_cases": 28,
+    "runtime_success_rate": 0.6786,
+    "infra_error_count": 1,
+    "p50_latency_ms": 1437,
+    "p95_latency_ms": 22062,
+    "refusal_correctness": 1.0,
+    "citation_present_rate": 1.0,
+    "critical_fact_accuracy": 1.0,
+    "retrieval_success_rate": 0.6667,
+    "chat_route_success_rate": 0.7,
+    "gate": {
+      "infra_errors_must_be_zero": false
+    },
+    "PRODUCTION_SMOKE_EVAL_PASS": false
+  },
+  "cases": [
+    {
+      "id": "RT-01",
+      "suite": "rag_retrieval",
+      "latency_ms": 1407,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-02",
+      "suite": "rag_retrieval",
+      "latency_ms": 1391,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['会议室', '预订', '小时']，top1='场景A第0条：任务运行时状态机验证，包含checkpoint、pause、resume与cancel全链路。\\n场景A第1'"
+    },
+    {
+      "id": "RT-03",
+      "suite": "rag_retrieval",
+      "latency_ms": 1297,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-04",
+      "suite": "rag_retrieval",
+      "latency_ms": 1437,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-05",
+      "suite": "rag_retrieval",
+      "latency_ms": 1312,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-06",
+      "suite": "rag_retrieval",
+      "latency_ms": 1344,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-07",
+      "suite": "rag_retrieval",
+      "latency_ms": 1375,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-08",
+      "suite": "rag_retrieval",
+      "latency_ms": 1469,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-09",
+      "suite": "rag_retrieval",
+      "latency_ms": 515,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['招聘']，top1='Q：支持哪些支付方式?\\nA：支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。\\n\\n---\\n\\n合同'"
+    },
+    {
+      "id": "RT-10",
+      "suite": "rag_retrieval",
+      "latency_ms": 516,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['印章']，top1='3. 采购审批权限\\n单笔 < 1 万元：部门负责人审批\\n1 万 - 5 万元：部门负责人 + 财务经理\\n> 5 万元：追'"
+    },
+    {
+      "id": "RT-11",
+      "suite": "rag_retrieval",
+      "latency_ms": 468,
+      "status_http": 200,
+      "passed": true,
+      "no_result": false,
+      "reason": ""
+    },
+    {
+      "id": "RT-12",
+      "suite": "rag_retrieval",
+      "latency_ms": 844,
+      "status_http": 200,
+      "passed": false,
+      "no_result": false,
+      "reason": "top3 未命中 ['知识产权', '转让']，top1='第6章 售后上门服务\\n售后上门服务条款 6.1：用户在订单确认后 7 个自然日内可发起申请，客服须在 48 小时内响应，'"
+    },
+    {
+      "id": "QA-01",
+      "suite": "rag_qa",
+      "latency_ms": 7406,
+      "status_http": 200,
+      "passed": true,
+      "refused": false,
+      "cited": true,
+      "reason": "",
+      "critical": true,
+      "critical_ok": true
+    },
+    {
+      "id": "QA-02",
+      "suite": "rag_qa",
+      "latency_ms": 22062,
+      "status_http": 200,
+      "passed": false,
+      "refused": true,
+      "cited": true,
+      "reason": "answer='知识库暂无相关资料。\\n（已尝试改写提问重新检索，仍未找到可靠答案）'"
+    },
+    {
+      "id": "QA-03",
+      "suite": "rag_qa",
+      "latency_ms": 6765,
+      "status_http": 200,
+      "passed": false,
+      "refused": true,
+      "cited": false,
+      "reason": "answer='知识库暂无相关资料。'"
+    },
+    {
+      "id": "QA-04",
+      "suite": "rag_qa",
+      "latency_ms": 12328,
+      "status_http": 200,
+      "passed": true,
+      "refused": false,
+      "cited": true,
+      "reason": ""
+    },
+    {
+      "id": "QA-05",
+      "suite": "rag_qa",
+      "latency_ms": 9219,
+      "status_http": 200,
+      "passed": true,
+      "refused": true,
+      "cited": false,
+      "reason": ""
+    },
+    {
+      "id": "QA-06",
+      "suite": "rag_qa",
+      "latency_ms": 4515,
+      "status_http": 200,
+      "passed": true,
+      "refused": true,
+      "cited": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-01",
+      "suite": "chat_route",
+      "latency_ms": 60094,
+      "status_http": 504,
+      "expect_route": "rag",
+      "passed": false,
+      "infra_error": true,
+      "reason": "infra: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n<hr><c"
+    },
+    {
+      "id": "CH-02",
+      "suite": "chat_route",
+      "latency_ms": 15985,
+      "status_http": 200,
+      "expect_route": "rag",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-03",
+      "suite": "chat_route",
+      "latency_ms": 10906,
+      "status_http": 200,
+      "expect_route": "general",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-04",
+      "suite": "chat_route",
+      "latency_ms": 8531,
+      "status_http": 200,
+      "expect_route": "general",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-05",
+      "suite": "chat_route",
+      "latency_ms": 1032,
+      "status_http": 200,
+      "expect_route": "sql",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-06",
+      "suite": "chat_route",
+      "latency_ms": 906,
+      "status_http": 200,
+      "expect_route": "travel",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-07",
+      "suite": "chat_route",
+      "latency_ms": 10437,
+      "status_http": 200,
+      "expect_route": "cs",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-08",
+      "suite": "chat_route",
+      "latency_ms": 1094,
+      "status_http": 200,
+      "expect_route": "general",
+      "passed": true,
+      "refused": false,
+      "reason": ""
+    },
+    {
+      "id": "CH-09",
+      "suite": "chat_route",
+      "latency_ms": 485,
+      "status_http": 200,
+      "expect_route": "rag+travel",
+      "passed": false,
+      "refused": false,
+      "reason": "answer='为了把行程排准，还需要确认：\\n1. 打算玩几天？\\n\\n（当前可规划的城市：福州、厦门、杭州）'"
+    },
+    {
+      "id": "CH-10",
+      "suite": "chat_route",
+      "latency_ms": 15609,
+      "status_http": 200,
+      "expect_route": "rag",
+      "passed": false,
+      "refused": false,
+      "reason": "answer='### 数据库查询\\n\\n| ?column? |\\n|:---:|'"
+    }
+  ]
+}
