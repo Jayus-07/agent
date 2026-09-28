@@ -321,28 +321,21 @@ class IncrementalIndexer:
         if os.getenv("RAG_FORCE_REINDEX", "false").lower() == "true":
             delta = Delta(
                 added=sorted(disk_files.keys()),
-                modified=set(), deleted=set(), unchanged=set(),
+                modified=[], deleted=[], unchanged=[],
             )
             logger.warning("RAG_FORCE_REINDEX=true：强制全量重扫（忽略增量 diff）")
         else:
             delta = self._compute_delta(disk_files, active_registry)
-            # 非 active 已知文件：hash 未变 → 从 ADDED 剔除（跳过重试）；
-            # hash 变了 → 内容真的改了，保留重评。
-            retry_added: list[str] = []
-            skipped_nonactive = 0
-            for p in delta.added:
-                row = nonactive_registry.get(p)
-                if row is not None and disk_files[p][0] == row.get("file_hash"):
-                    skipped_nonactive += 1
-                else:
-                    retry_added.append(p)
-            if skipped_nonactive:
-                delta.unchanged |= set(delta.added) - set(retry_added)
-                delta.added = retry_added
+            # STOP C：非 active 已知文件 hash 未变 → 从 ADDED 剔除（跳过重试）
+            retry_added, skipped_paths = self._filter_nonactive_additions(
+                disk_files, nonactive_registry, delta.added)
+            if skipped_paths:
+                delta.unchanged = sorted(set(delta.unchanged) | skipped_paths)
                 logger.info(
-                    f"[Sync] 跳过 {skipped_nonactive} 个 pending_review/failed "
+                    f"[Sync] 跳过 {len(skipped_paths)} 个 pending_review/failed "
                     "已知文件（hash 未变，不重试；审核激活或 RAG_FORCE_REINDEX 才会重扫）"
                 )
+            delta.added = retry_added
         failed_files = self._apply_delta(delta, disk_files, active_registry)
 
         result = SyncResult(
@@ -452,6 +445,27 @@ class IncrementalIndexer:
         return h.hexdigest()
 
     # ---- Diff 计算 ----
+
+    @staticmethod
+    def _filter_nonactive_additions(
+        disk_files: dict[str, tuple[str, int, float]],
+        nonactive_registry: dict[str, dict],
+        added: list[str],
+    ) -> tuple[list[str], set[str]]:
+        """从 ADDED 中剔除 hash 未变的 pending_review/failed 已知文件。
+
+        返回 (保留的 added, 被跳过的路径集合)。hash 变了 = 内容真改了，
+        保留重评；hash 未变 = 启动重试无意义（STOP C，2026-09-28）。
+        """
+        keep: list[str] = []
+        skipped: set[str] = set()
+        for p in added:
+            row = nonactive_registry.get(p)
+            if row is not None and disk_files[p][0] == row.get("file_hash"):
+                skipped.add(p)
+            else:
+                keep.append(p)
+        return keep, skipped
 
     def _compute_delta(
         self,
