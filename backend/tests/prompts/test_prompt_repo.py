@@ -13,7 +13,17 @@ pytestmark = pytest.mark.pg
 
 @pytest_asyncio.fixture
 async def repo_session():
-    """Create an async session with the prompt tables."""
+    """Create an async session with the prompt tables.
+
+    2026-09-28 STOP A3 根因修复：teardown 原为 Base.metadata.drop_all——
+    本测试打真实库（PGPORT=5433）跑时把权威库 prompts 三表删除，而
+    init_db 见台账 checksum 一致直接 skip，导致 /prompts 整页 500。
+    改为：setup 仍 create_all（幂等），teardown 只删本测试创建的
+    test.* 数据（prompt_versions 由 FK ON DELETE CASCADE 连带删除；
+    prompt_audit_log 无 FK 显式删），任何环境下不再 drop 表。
+    """
+    from sqlalchemy import delete
+
     import backend.memory.database as db_mod
     from backend.memory.models.prompt import Base
 
@@ -28,7 +38,10 @@ async def repo_session():
         yield session
 
     async with db_mod._engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(
+            delete(PromptAuditLog).where(PromptAuditLog.prompt_key.like("test.%"))
+        )
+        await conn.execute(delete(Prompt).where(Prompt.key.like("test.%")))
     await db_mod._engine.dispose()
     db_mod._engine = None
     db_mod._sessionmaker = None

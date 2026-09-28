@@ -20,6 +20,10 @@ async def health():
       "drifted" 表示镜像内迁移领先于 DB 已登记水位（历史静默跳过场景）。
       观测面而非硬门：fail-closed 责任链 = db-migrate fail-fast（未登记
       rc=2 阻断下游）+ 发布前 verify_migration_state.py preflight。
+    - schema_consistency：生产关键对象实存校验（2026-09-28 STOP A4）——
+      台账只证明「曾经执行过」，018 标 applied 但 prompts 表被测试
+      teardown 删除的实测证明必须实查对象。status != ok 时本段给出
+      缺失清单；观测面而非硬门（软失败返回 unknown 不影响存活判定）。
     """
     from backend.app.api.deps import get_rag_status
     return {
@@ -29,6 +33,7 @@ async def health():
             "build_time": os.getenv("BUILD_TIME", "unknown"),
         },
         "migrations": _migration_watermark(),
+        "schema_consistency": _schema_consistency(),
         "rag": get_rag_status(),
         # STOP G5：ConversationContext backend 观测（healthy/degraded/
         # disabled + backend 名称）。软失败：观测缺失不影响存活判定。
@@ -51,7 +56,10 @@ def _migration_watermark() -> dict:
 
         from backend.config.database import MEMORY_DB_CONFIG
 
-        migrations_dir = Path(__file__).resolve().parents[4] / "sql" / "migrations"
+        # 仓库根 sql/migrations 不存在（迁移唯一目录 = backend/sql/migrations，
+        # 2026-09-28 修正 parents[4]→parents[3]：旧路径使 packaged 恒为空、
+        # drifted 永不触发）
+        migrations_dir = Path(__file__).resolve().parents[3] / "sql" / "migrations"
         packaged = sorted(p.name for p in migrations_dir.glob("*.sql")) if migrations_dir.is_dir() else []
         packaged_max = packaged[-1] if packaged else ""
         cfg = MEMORY_DB_CONFIG
@@ -73,6 +81,16 @@ def _migration_watermark() -> dict:
             "applied_max": applied_max,
             "applied_count": applied_count,
         }
+    except Exception:  # noqa: BLE001
+        return {"status": "unknown"}
+
+
+def _schema_consistency() -> dict:
+    """生产关键对象实存校验（软失败；细节见 backend/app/schema_consistency.py）。"""
+    try:
+        from backend.app.schema_consistency import check_critical_objects
+
+        return check_critical_objects()
     except Exception:  # noqa: BLE001
         return {"status": "unknown"}
 
