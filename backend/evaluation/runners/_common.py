@@ -108,7 +108,7 @@ def init_rag_pipeline():
         _rag_pipeline_error = "RAG pipeline import failed"
         return None
     try:
-        _rag_pipeline = RAGPipeline()
+        _rag_pipeline = RAGPipeline(mode="evaluation")
         return _rag_pipeline
     except Exception as e:
         # 治理 A：构建失败必须留痕 —— 此处静默吞错会让后续所有用例

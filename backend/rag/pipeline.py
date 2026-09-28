@@ -67,8 +67,14 @@ class AskOutcome:
 class RAGPipeline:
     # 进程内已见会话标记上限（有界 LRU）：原 set 永不清理，长期运行内存无界增长
     _SEEN_SESSIONS_MAX = 10000
+    _VALID_MODES = frozenset({"index", "runtime", "evaluation"})
 
-    def __init__(self):
+    def __init__(self, mode: str = "index"):
+        if mode not in self._VALID_MODES:
+            raise ValueError(
+                f"RAGPipeline mode 必须是 {sorted(self._VALID_MODES)}，实际为 {mode!r}"
+            )
+        self.mode = mode
         self.vectordb = None
         self.doc_db = None
         self.chunk_retriever = None
@@ -126,7 +132,14 @@ class RAGPipeline:
             self._build_doc_index()
 
     def _prepare_vector_store(self):
-        """阶段 2：构建向量库（增量优先，回退全量重建）。"""
+        """阶段 2：按运行模式准备向量库。"""
+        if self.mode in {"runtime", "evaluation"}:
+            # 在线与评估进程只加载既有索引；任何索引构建必须由显式 index
+            # 入口完成，避免冷启动扫描 data/docs 并触发昂贵的 metadata LLM。
+            self.vectordb = self._load_existing_db(CHROMA_PATH, "chunk 级")
+            self.doc_db = self._load_existing_db(DOC_DB_PATH, "文档级")
+            return
+
         used_incremental = (
             self._init_vector_dbs_incremental()
             if ENABLE_INCREMENTAL_INDEX
@@ -193,6 +206,8 @@ class RAGPipeline:
 
     def _init_vector_dbs_full(self):
         """全量重建向量库（兜底/首次运行）。"""
+        if getattr(self, "mode", "index") != "index":
+            raise RuntimeError(f"{self.mode} 模式禁止全量重建向量库")
         self.vectordb = self._load_or_create_db(
             CHROMA_PATH,
             create_fn=lambda: PgVectorKnowledgeStore.from_documents(
@@ -213,6 +228,8 @@ class RAGPipeline:
 
     def _init_vector_dbs_incremental(self) -> bool:
         """增量索引向量库。成功返回 True，回退全量重建返回 False。"""
+        if getattr(self, "mode", "index") != "index":
+            raise RuntimeError(f"{self.mode} 模式禁止增量同步向量库")
         from backend.rag.indexing.doc_registry import DocumentRegistry
         from backend.rag.indexing.indexer import IncrementalIndexer
 
@@ -451,6 +468,7 @@ class RAGPipeline:
 
     def _init_retrievers(self):
         self.chunk_retriever = CustomRetriever(self.vectordb)
+        read_only = getattr(self, "mode", "index") in {"runtime", "evaluation"}
 
         # BM25: 优先从磁盘加载持久化索引，避免每次启动重建
         bm25_store = BM25Store()
@@ -462,13 +480,39 @@ class RAGPipeline:
         # 向量库语料保证 BM25 与向量检索的 chunk 集合一致。
         # 增量模式下 self.docs 平时不加载，仅向量库语料不可用时懒加载兜底
         vectorstore_docs = self._build_bm25_corpus_from_vectorstore()
+        if not vectorstore_docs and read_only:
+            raise RuntimeError(
+                f"{self.mode} 模式只读索引不可用：向量库没有可用于 BM25 校验的 chunk"
+            )
         if vectorstore_docs:
             bm25_source = vectorstore_docs
         else:
             self._ensure_docs_loaded()
             bm25_source = self.docs
 
-        if self.bm25 is None:
+        if read_only:
+            if self.bm25 is None:
+                raise RuntimeError(
+                    f"{self.mode} 模式只读索引不可用：BM25 索引不存在，请先执行 index/import_fixture"
+                )
+            if bm25_store.is_stale:
+                raise RuntimeError(
+                    f"{self.mode} 模式只读索引不可用：BM25 索引已过期，请先执行 index/import_fixture"
+                )
+            if source_files_out_of_sync(self.bm25.docs, bm25_source):
+                raise RuntimeError(
+                    f"{self.mode} 模式只读索引不可用：BM25 与向量库文档集合不一致"
+                )
+            content_hash = bm25_store.get_content_hash()
+            if content_hash and content_hash != compute_content_hash(bm25_source):
+                raise RuntimeError(
+                    f"{self.mode} 模式只读索引不可用：BM25 内容 hash 不匹配"
+                )
+            logger.info(
+                f"[RAG] {self.mode} 模式加载只读 BM25 索引 "
+                f"({bm25_store.doc_count()} 文档, hash={content_hash})"
+            )
+        elif self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
             self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
         elif bm25_store.is_stale:
@@ -511,6 +555,8 @@ class RAGPipeline:
         只更新内存中的 self.bm25 与磁盘持久化索引，不动 Chroma 向量。
         file_paths 作为第二过滤键（P0-2：doc_id 协议分裂时按文件名兜底命中）。
         """
+        if getattr(self, "mode", "index") == "evaluation":
+            raise RuntimeError("evaluation 模式禁止修改 BM25 索引")
         if not doc_ids or self.bm25_store is None:
             return
         try:
@@ -1151,7 +1197,7 @@ def _get_local_pipeline() -> RAGPipeline:
             if _pipeline_singleton is None:
                 _pipeline_initializing = True
                 try:
-                    _pipeline_singleton = RAGPipeline()
+                    _pipeline_singleton = RAGPipeline(mode="runtime")
                     _pipeline_init_error = None
                     logger.info("[pipeline] RAGPipeline 单例初始化成功")
                 except Exception as e:
