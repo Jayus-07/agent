@@ -306,8 +306,13 @@ def main() -> int:
 
     def _version_meta(slug: str) -> dict:
         v = _ver_by_slug.get(slug) or {}
+        version_id = v.get("version_id") or (
+            f"{KB_ID}-{requested_set}-{catalog.fixture_version}"
+            if catalog.fixture_version
+            else ""
+        )
         return {
-            "version_id": v.get("version_id", ""),
+            "version_id": version_id,
             "effective_from": v.get("effective_from"),
             "effective_to": v.get("effective_to"),
             "supersedes_version_id": v.get("supersedes") or "",
@@ -324,9 +329,9 @@ def main() -> int:
         )
     print(f"slug 行注册: {len(paths)}；待清理 hash doc_id: {len(hash_ids)}")
 
-    # ③ 干净启动（sync：25 slug 行 unchanged、主语料 unchanged、无扫描件）
-    from backend.rag.pipeline import get_rag_pipeline
-    pipeline = get_rag_pipeline()
+    # ③ 显式离线 index 模式：fixture 导入允许写入，但不能复用 runtime singleton。
+    from backend.rag.pipeline import RAGPipeline
+    pipeline = RAGPipeline(mode="index")
 
     from backend.rag.indexing.indexer import IncrementalIndexer
     from backend.rag.indexing.processing_lineage_pg import (
@@ -396,7 +401,15 @@ def main() -> int:
     main_pending = sum(1 for p, r in rows.items()
                        if r.get("kb_id") != KB_ID and r.get("status") == "pending_review")
     print(f"主语料: active={main_active}, pending_review={main_pending}（基线应为 24+4）")
-    return 1 if (failed or bad) else 0
+    if failed or bad:
+        print("\nfixture import failed")
+        return 1
+    print("\nfixture import success")
+    print(f"documents: {len(ok)}")
+    print(f"chunks: {sum(chunk_count for _, chunk_count in ok)}")
+    print(f"collection: {KB_ID}")
+    print(f"version: {KB_ID}-{requested_set}-{catalog.fixture_version or 'unversioned'}")
+    return 0
 
 
 if __name__ == "__main__":

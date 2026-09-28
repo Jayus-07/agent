@@ -61,14 +61,31 @@ _DOC_LEVEL_BODY_MIN_CHARS = 2000
 _EVAL_FIXTURE_SETS = frozenset({"baseline", "expanded_100", "scale_20k"})
 
 
+def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """返回评测 chunk 必须携带的稳定身份字段。"""
+    fixture_set = str(metadata.get("fixture_set") or "").strip()
+    if not fixture_set:
+        return {}
+    if fixture_set not in _EVAL_FIXTURE_SETS:
+        raise ValueError(f"未知评测 fixture_set: {fixture_set}")
+    return {
+        "doc_id": str(metadata.get("doc_id") or ""),
+        "kb_id": str(metadata.get("kb_id") or ""),
+        "fixture_set": fixture_set,
+        "dataset": "rag_eval",
+        "version_id": str(metadata.get("version_id") or ""),
+    }
+
+
 def _apply_fixture_metadata(metadata: dict[str, Any], fixture_set: str | None) -> None:
     """把评测语料范围写入索引元数据；生产文档不强制携带该字段。"""
     if not fixture_set:
         return
     if fixture_set not in _EVAL_FIXTURE_SETS:
         raise ValueError(f"未知评测 fixture_set: {fixture_set}")
-    # fixture_set 只用于评测范围和诊断，不参与生产授权裁决；授权仍由 kb/permission_scope 控制。
     metadata["fixture_set"] = fixture_set
+    # fixture_set 只用于评测范围和诊断，不参与生产授权裁决；授权仍由 kb/permission_scope 控制。
+    metadata["dataset"] = "rag_eval"
 
 
 def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
@@ -1102,6 +1119,7 @@ class IncrementalIndexer:
             "file_path": file_path,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
             "fixture_set": fixture_set or "",
+            "dataset": "rag_eval" if fixture_set else "",
             "department": department,  # 同上：用路径派生值，否则部门隔离失效
             "permission_scope": permission_scope,  # §4 权限范围：registry 行声明值
             # §6 版本治理：registry 行声明值（R4）
@@ -1393,7 +1411,16 @@ class IncrementalIndexer:
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
             ch.metadata["kb_id"] = kb_id_val
-            _apply_fixture_metadata(ch.metadata, fixture_set_val)
+            ch.metadata.update(
+                build_fixture_chunk_metadata(
+                    {
+                        "doc_id": doc_id,
+                        "kb_id": kb_id_val,
+                        "fixture_set": fixture_set_val,
+                        "version_id": version_id,
+                    }
+                )
+            )
             ch.metadata["business_domain"] = domain_val
             ch.metadata["department"] = department
             # §4 权限范围：随 chunk 进向量库/doc_db，检索侧按请求者持有权限
@@ -1471,6 +1498,7 @@ class IncrementalIndexer:
                  "doc_type": doc_type_val,
                  "kb_id": kb_id_val,
                  "fixture_set": fixture_set_val or "",
+                 "dataset": "rag_eval" if fixture_set_val else "",
                  "department": department,
                  "simulated_questions": ch.metadata.get("simulated_questions", [])}
                 for i, ch in enumerate(chunks)
@@ -1746,6 +1774,7 @@ class IncrementalIndexer:
                     "source_priority": doc_meta.get("source_priority", 0),
                     "quality_status": doc_meta.get("quality_status", "unknown"),
                     "fixture_set": fixture_set_val or "",
+                    "dataset": doc_meta.get("dataset", ""),
                     **lineage_registry_meta,
                 },
             )
