@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.documents import Document
 
 
 def test_evaluation_mode_does_not_sync(monkeypatch):
@@ -57,3 +58,38 @@ def test_runtime_mode_never_builds_bm25(monkeypatch):
 
     with pytest.raises(RuntimeError, match="BM25"):
         pipeline._init_retrievers()
+
+
+def test_index_mode_can_skip_implicit_sync_for_explicit_import(monkeypatch):
+    from backend.rag import pipeline as module
+
+    calls: list[str] = []
+    monkeypatch.setattr(module, "get_embedding", lambda: object())
+    monkeypatch.setattr(
+        module.RAGPipeline,
+        "_load_existing_db",
+        lambda self, path, kind: object(),
+    )
+    monkeypatch.setattr(
+        module.RAGPipeline,
+        "_init_vector_dbs_incremental",
+        lambda self: calls.append("sync"),
+    )
+    monkeypatch.setattr(module.RAGPipeline, "_init_retrievers", lambda self: None)
+
+    module.RAGPipeline(mode="index", auto_sync=False)
+
+    assert calls == []
+
+
+def test_unordered_bm25_hash_accepts_vector_store_return_order():
+    from backend.rag.retrieval.bm25_store import compute_content_hash_unordered
+
+    docs = [
+        Document(page_content="a", metadata={"source_file": "one.md"}),
+        Document(page_content="b", metadata={"source_file": "two.md"}),
+    ]
+
+    assert compute_content_hash_unordered(docs) == compute_content_hash_unordered(
+        list(reversed(docs))
+    )

@@ -16,8 +16,15 @@ def test_import_fixture_delegates_to_canonical_fixture_set(monkeypatch):
         return 0
 
     monkeypatch.setattr(ingest_eval_fixtures, "main", fake_main)
+    bootstrapped: list[bool] = []
+    monkeypatch.setattr(
+        import_fixture,
+        "_bootstrap_llm_registry",
+        lambda: bootstrapped.append(True),
+    )
 
     assert import_fixture.main(["baseline"]) == 0
+    assert bootstrapped == [True]
     assert "--fixture-set" in seen[0]
     assert "baseline" in seen[0]
     assert sys.argv[0] != "--fixture-set"

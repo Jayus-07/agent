@@ -1,8 +1,8 @@
 # Architecture Simplification — STOP B Router Consolidation Report
 
-日期：2026-09-28
-范围：STOP B Step 0～Step 6
-结论：适配器已接入且旧行为回归通过；RAG 真实 smoke 被环境配置阻断，因此暂不宣告 STOP B 通过，也不进入 STOP C。
+日期：2026-09-29
+范围：STOP B Step 0～Step 6 + Evaluation Runtime 隔离修复
+结论：Router Consolidation 与 RAG Evaluation Runtime 隔离均通过；评估冷启动只读已有索引，真实 RAG smoke 已产出指标。
 
 ## 1. 本阶段完成内容
 
@@ -85,6 +85,7 @@ LEGACY_FALLBACK_AVAILABLE=true
 | registry/layer/ADR0001 一致性守护 | 36 passed |
 | Python 编译检查 | 通过 |
 | `git diff --check` | 通过 |
+| Router focused regression（本次复验） | 112 passed |
 
 ### 业务评估
 
@@ -94,35 +95,62 @@ LEGACY_FALLBACK_AVAILABLE=true
 | Travel evaluation | 通过 | `test_quality_golden.py` 2 passed，聚合 34 条旅游金标 |
 | SQL evaluation | 通过 | `test_sql_eval.py` 14 passed，离线 runner 无 fail |
 | RAG 评测契约 | 通过 | suites/scope/migration 共 16 passed |
-| RAG 真实离线 smoke | 阻断 | 5 条均无法运行：数据库没有可用 embedding provider API Key |
+| RAG 真实离线 smoke | 通过 | 5/5，通过率 100%，使用 evaluation 只读模式 |
 
-RAG smoke 的实际错误是：
+此前 RAG smoke 的实际错误是：
 
 ```text
 数据库未配置可用的 embedding 供应商 API Key
 RAGPipeline 构建失败
 ```
 
-这是运行环境阻断，不是 Router 断言失败；但由于 RAG 真实链路没有得到有效结果，不能把最终门禁写成通过。
+该问题已通过评估 CLI 启动时刷新数据库 LLM/embedding registry 覆盖层解决。当前日志确认 embedding 配置正常加载：
+
+```text
+[Embedding] Cloud 模式初始化完成 (model=qwen3.7-text-embedding, ...)
+```
+
+### Evaluation Runtime 隔离验收
+
+- `RAGPipeline(mode="index")` 保留扫描、解析、chunk、embedding、metadata 与 vector upsert 能力。
+- `RAGPipeline(mode="runtime")` 只加载已有向量/BM25 索引；运行时不构建 BM25、不写 vector。
+- `RAGPipeline(mode="evaluation")` 只读已有索引，禁止自动 sync、metadata LLM 与 vector 写入。
+- `RAGPipeline(mode="index", auto_sync=False)` 供显式 fixture 导入使用，避免构造 index shell 时误触发全库同步。
+- 评估 scope 固定绑定 `kb_id + fixture_set + version_id`；baseline 快照为
+  `rag_eval_kb / baseline / rag_eval_kb-baseline-2026-09-18`。
+- chunk metadata 已包含 `doc_id`、`kb_id`、`fixture_set`、`dataset=rag_eval`、`version_id`。
+- `python -m backend.evaluation.import_fixture baseline` 导入结果：16 documents、185 chunks、collection=`rag_eval_kb`。
+- 只读启动对 BM25 内容执行集合级一致性校验，允许向量库与 BM25 返回顺序差异，不放宽内容或文档集合校验。
+
+真实 smoke 命令：
+
+```text
+python -m backend.evaluation.cli rag --smoke --selection pr_baseline --no-ragas --no-resume
+```
+
+结果：
+
+```text
+5/5 通过（100%）
+Recall@5 = 1.0000
+MRR       = 0.7333
+NDCG@10   = 0.8000
+```
+
+冷启动日志出现“加载已有 chunk/文档级向量库”和“evaluation 模式加载只读 BM25 索引”，未出现 docs 扫描、index sync 或 vector upsert。
 
 ## 5. 路由漂移判断
 
 - 旧 `route_mode` 值及 `route_selector` 映射未改动；CS 锁域、旅游/选品优先级、澄清路径回归均通过。
 - legacy/hierarchical 旧 `RouteDecision` 继续作为兼容事实源；新增对象是旁路快照，不覆盖旧字段。
-- 本阶段没有可用的同口径历史 live RAG baseline，因此没有虚构 capability/domain 数值差异；真实 RAG comparison 待 embedding 配置恢复后重跑。
+- 本次 smoke 使用固定 baseline snapshot；未虚构与历史 live baseline 的差异，后续如需趋势对比应沿用同一 `kb_id + fixture_set + version_id`。
 
 ## 6. STOP B 判定
 
 ```text
-ROUTER_CONSOLIDATION_PASS=false
+ROUTER_CONSOLIDATION_PASS=true
 ```
 
-原因只有一项：RAG 真实 smoke 被 embedding provider 配置阻断，尚不能证明全链路 evaluation 不下降。代码层面已满足职责收口、旧字段兼容、legacy fallback 和域图 registry 动态解析要求。
+验收依据：Router focused regression 112 passed；baseline fixture 可导入；evaluation 冷启动不会触发 index 同步；embedding registry 正常加载；RAG smoke 真实指标已生成。
 
-恢复 embedding 配置后，必须重跑：
-
-```text
-python -m backend.evaluation rag --smoke --no-ragas --selection pr_baseline --no-resume
-```
-
-并补充同口径 baseline 对比；在该门禁通过前，不进入 STOP C，不删除 legacy Router 或 TaskRouter。
+本次未删除 legacy Router 或 TaskRouter，也未进入 STOP C；后续如需继续减法，仍应以独立 STOP C 任务为边界。

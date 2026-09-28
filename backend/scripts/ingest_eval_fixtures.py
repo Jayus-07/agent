@@ -331,7 +331,7 @@ def main() -> int:
 
     # ③ 显式离线 index 模式：fixture 导入允许写入，但不能复用 runtime singleton。
     from backend.rag.pipeline import RAGPipeline
-    pipeline = RAGPipeline(mode="index")
+    pipeline = RAGPipeline(mode="index", auto_sync=False)
 
     from backend.rag.indexing.indexer import IncrementalIndexer
     from backend.rag.indexing.processing_lineage_pg import (

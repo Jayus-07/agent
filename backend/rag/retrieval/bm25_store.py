@@ -89,6 +89,28 @@ def compute_content_hash(docs: list) -> str:
     return h.hexdigest()[:16]
 
 
+def compute_content_hash_unordered(docs: list) -> str:
+    """按内容集合计算摘要，忽略向量库与 BM25 的返回顺序差异。
+
+    向量数据库通常按内部 id 返回 chunk，而 BM25 按写入顺序持久化；
+    两者内容一致时不应因顺序不同被只读启动校验误判为漂移。
+    """
+    import hashlib
+
+    records = sorted(
+        (
+            str(d.metadata.get("source_file") or ""),
+            str(d.page_content or ""),
+        )
+        for d in docs
+    )
+    h = hashlib.sha256()
+    for source_file, page_content in records:
+        h.update(page_content.encode("utf-8", errors="replace"))
+        h.update(source_file.encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
 class BM25Store:
     """磁盘持久化 BM25 索引。
 

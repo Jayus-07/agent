@@ -24,7 +24,12 @@ from backend.rag.preprocessing.metadata import build_all_metadata_async
 from backend.rag.preprocessing.loader import load_documents_from_directory
 from backend.rag.indexing.doc_id import derive_doc_id_from_path
 from backend.rag.base import CustomRetriever
-from backend.rag.retrieval.bm25_store import BM25Store, source_files_out_of_sync, compute_content_hash
+from backend.rag.retrieval.bm25_store import (
+    BM25Store,
+    compute_content_hash,
+    compute_content_hash_unordered,
+    source_files_out_of_sync,
+)
 from backend.rag.chain import RAGChain
 from backend.config import (
     EMBEDDING_MODEL_PATH,
@@ -69,12 +74,13 @@ class RAGPipeline:
     _SEEN_SESSIONS_MAX = 10000
     _VALID_MODES = frozenset({"index", "runtime", "evaluation"})
 
-    def __init__(self, mode: str = "index"):
+    def __init__(self, mode: str = "index", *, auto_sync: bool = True):
         if mode not in self._VALID_MODES:
             raise ValueError(
                 f"RAGPipeline mode 必须是 {sorted(self._VALID_MODES)}，实际为 {mode!r}"
             )
         self.mode = mode
+        self.auto_sync = bool(auto_sync)
         self.vectordb = None
         self.doc_db = None
         self.chunk_retriever = None
@@ -136,6 +142,13 @@ class RAGPipeline:
         if self.mode in {"runtime", "evaluation"}:
             # 在线与评估进程只加载既有索引；任何索引构建必须由显式 index
             # 入口完成，避免冷启动扫描 data/docs 并触发昂贵的 metadata LLM。
+            self.vectordb = self._load_existing_db(CHROMA_PATH, "chunk 级")
+            self.doc_db = self._load_existing_db(DOC_DB_PATH, "文档级")
+            return
+
+        if not self.auto_sync:
+            # 显式离线导入需要拿到既有存储句柄，再由调用方针对指定 fixture
+            # 直调 IncrementalIndexer；不能因为构造 index shell 就同步全库。
             self.vectordb = self._load_existing_db(CHROMA_PATH, "chunk 级")
             self.doc_db = self._load_existing_db(DOC_DB_PATH, "文档级")
             return
@@ -505,8 +518,15 @@ class RAGPipeline:
                 )
             content_hash = bm25_store.get_content_hash()
             if content_hash and content_hash != compute_content_hash(bm25_source):
-                raise RuntimeError(
-                    f"{self.mode} 模式只读索引不可用：BM25 内容 hash 不匹配"
+                persisted_hash = compute_content_hash_unordered(self.bm25.docs)
+                current_hash = compute_content_hash_unordered(bm25_source)
+                if persisted_hash != current_hash:
+                    raise RuntimeError(
+                        f"{self.mode} 模式只读索引不可用：BM25 内容 hash 不匹配"
+                    )
+                logger.info(
+                    f"[RAG] {self.mode} 模式 BM25 内容一致，忽略存储顺序差异 "
+                    f"(stored_hash={content_hash})"
                 )
             logger.info(
                 f"[RAG] {self.mode} 模式加载只读 BM25 索引 "
