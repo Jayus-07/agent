@@ -386,6 +386,7 @@ class MetadataStage:
                         fallback_reason=None if unified else "llm_unavailable",
                         prompt_key="rag.preprocessing.metadata_extract",
                         prompt_version=str((unified or {}).get("prompt_version", "") or "") or None,
+                        prompt_hash=str((unified or {}).get("prompt_hash") or "") or None,
                         schema_fingerprint=_metadata_fp,
                         metadata={
                             "llm_usage_status": str(
@@ -396,6 +397,12 @@ class MetadataStage:
                                     else "unavailable"
                                 )
                             ),
+                            "prompt_source": str((unified or {}).get("prompt_source") or ""),
+                            # STOP B4：非 DB 来源显式打标，不允许静默 fallback
+                            "prompt_fallback": str(
+                                (unified or {}).get("prompt_source") or ""
+                            )
+                            not in ("db", ""),
                         },
                     )
                 except Exception as e:

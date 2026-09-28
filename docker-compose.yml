@@ -270,7 +270,10 @@ services:
       # MetaShadow 影子任务经 Celery 投递（apply_async → CELERY_BROKER_URL）。
       # 2026-09-28 修复：此前未覆盖，env_file 的宿主值 localhost:6380 漏进
       # 容器 → 投递恒 Error 111、metadata-shadow-worker 空转。
+      # CELERY_RESULT_BACKEND 同理必须覆盖（send_task 的 on_task_call 连
+      # result backend，漏了同样 Error 111）。
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
       # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
       - PGDATABASE=agent_memory
       - PGUSER=postgres

@@ -203,7 +203,28 @@ def refresh_worker_model_registry() -> bool:
         return False
 
 
+def refresh_worker_prompt_snapshot() -> bool:
+    """worker 子进程加载 Prompt DB 快照（STOP B，2026-09-28）。
+
+    索引管线跑在 worker 进程里，metadata_extract 走 render_sync（同步、
+    只读进程内 snapshot、不查 DB）——不刷新的话永远落到内置 defaults，
+    DB 发布的版本对 worker 不生效（prompt_fallback=true）。fresh fork
+    子进程无运行中的 event loop，asyncio.run 安全（与模型注册表刷新同款）；
+    失败回退 defaults 并由 metadata_llm 侧显式告警，不阻塞 worker 启动。
+    """
+    try:
+        from backend.prompts.service import prompt_service
+
+        asyncio.run(prompt_service.refresh_snapshot())
+        logger.info("[Worker] Prompt DB 快照加载完成")
+        return True
+    except Exception:
+        logger.warning("[Worker] Prompt DB 快照加载失败，索引期提示词回退 defaults", exc_info=True)
+        return False
+
+
 @worker_process_init.connect(weak=False)
 def _on_worker_process_init(**_kwargs) -> None:
     """prefork 子进程启动时建立自己的模型配置快照。"""
     refresh_worker_model_registry()
+    refresh_worker_prompt_snapshot()

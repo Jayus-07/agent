@@ -335,6 +335,9 @@ async def decide_metadata(
                             else "unavailable"
                         )
                     ),
+                    # STOP B3：Prompt 来源/指纹随信封进入处理血缘
+                    "prompt_source": str(llm_result.get("prompt_source") or ""),
+                    "prompt_hash": str(llm_result.get("prompt_hash") or ""),
                 },
             )
             _observe_route_latency(envelope.source, started)
