@@ -33,7 +33,9 @@ class ExecutionModeResolver:
             else (workflow.name for workflow in load_manifest().workflows)
         )
         self._domain_graph_modes = dict(
-            domain_graph_modes or _DEFAULT_DOMAIN_GRAPH_MODES,
+            _DEFAULT_DOMAIN_GRAPH_MODES
+            if domain_graph_modes is None
+            else domain_graph_modes
         )
 
     def resolve(

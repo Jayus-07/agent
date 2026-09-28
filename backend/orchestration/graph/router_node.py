@@ -73,6 +73,7 @@ def _with_router_decisions(
         from backend.orchestration.router.capability_router import CapabilityRouter
         from backend.orchestration.router.domain_router import DomainRouter
         from backend.orchestration.router.execution_mode import ExecutionModeResolver
+        from backend.orchestration.domain_registry import domain_graph_registry
 
         domain_router = DomainRouter()
         if hierarchical_meta is not None:
@@ -134,7 +135,11 @@ def _with_router_decisions(
                     **nested_decision,
                     "route_mode": existing_override.get("route_mode") or "",
                 }
-        execution_decision = ExecutionModeResolver().resolve(
+        registered_domains = domain_graph_registry.get_all()
+        graph_modes = {name: name for name in registered_domains}
+        execution_decision = ExecutionModeResolver(
+            domain_graph_modes=graph_modes or None,
+        ).resolve(
             domain_decision,
             capability_decision,
             resolver_override,
