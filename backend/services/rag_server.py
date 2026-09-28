@@ -161,6 +161,21 @@ async def _startup() -> None:
             "[rag-server] LLM 注册表启动加载失败，继续使用 env 兜底",
             exc_info=True,
         )
+    # STOP B：Prompt DB 快照加载。render_sync 是同步路径、不查 DB，只读
+    # 进程内 snapshot——不在这里从 DB 刷新的话，索引期提示词（metadata_extract
+    # 等）永远落到内置 defaults（yaml），DB 发布的版本对 rag-service 不生效。
+    try:
+        from backend.prompts.service import prompt_service
+
+        await prompt_service.refresh_snapshot()
+        logger.info("[rag-server] Prompt DB 快照加载完成")
+    except Exception:
+        # prompts 表缺失/DB 不可用时回退 defaults（metadata_llm 侧会打
+        # prompt_fallback=true 警告，不静默）。
+        logger.warning(
+            "[rag-server] Prompt DB 快照加载失败，索引期提示词回退 defaults",
+            exc_info=True,
+        )
     _kick_init()
 
 
