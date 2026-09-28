@@ -165,6 +165,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "052_travel_booking.sql": "memory",
     # Model Governance：补齐 031 已声明但未挂载的 model_price append-only trigger。
     "053_model_price_immutable_trigger.sql": "memory",
+    # 三端账号权限最小上线改造：静态角色扩展，不引入动态角色表。
+    "054_auth_super_admin.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
