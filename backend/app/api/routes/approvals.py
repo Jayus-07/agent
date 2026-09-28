@@ -10,7 +10,11 @@ P3（docs/auth 03 修复清单②）：reviewer 不再默认 "admin"——
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity,
+    is_platform_admin,
+    resolve_operator_role,
+)
 from backend.app.api.identity import resolve_identity
 from backend.security.tool_approval import decide_request, is_degraded, list_requests
 
@@ -39,7 +43,7 @@ def _require_admin(operator: OperatorIdentity) -> None:
     viewer/editor 在管理端审批页能看到队列（read 不限），但处置按钮会收到 403。
     服务凭据（internal-token）映射 admin，内部闭环不受影响。
     """
-    if operator.role != "admin":
+    if not is_platform_admin(operator.role):
         raise HTTPException(403, f"仅 admin 可处置审批单（当前角色 {operator.role}）")
 
 

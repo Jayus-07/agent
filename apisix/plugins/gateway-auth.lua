@@ -256,7 +256,7 @@ end
 --   * roles 缺省（旧令牌/服务 key 通道）不拦，交给后端判定；
 --   * 匹配用**原始请求 URI**（request_uri，proxy-rewrite 只改 upstream 路径），
 --     所以前缀必须写成 /api/... 形态。
-local ROLE_RANK = { viewer = 0, editor = 1, admin = 2 }
+local ROLE_RANK = { viewer = 0, editor = 1, admin = 2, super_admin = 3 }
 local READ_METHODS = { GET = true, HEAD = true, OPTIONS = true }
 local ROLE_GATE_PREFIXES = {
     ["/api/approvals"] = { write = "admin" },   -- 审批处置权（后端已同语义 403，网关是外层硬闸）

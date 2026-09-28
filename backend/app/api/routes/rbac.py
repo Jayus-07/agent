@@ -13,7 +13,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
-from backend.app.api.deps import OperatorIdentity, require_admin_user
+from backend.app.api.deps import (
+    OperatorIdentity,
+    is_platform_admin,
+    require_admin_user,
+)
 from backend.app.api.identity import resolve_identity
 from backend.memory.database import get_session
 from backend.security.local_jwt import hash_password
@@ -40,7 +44,7 @@ async def require_rbac_admin(
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> OperatorIdentity:
     """RBAC 管理面强制 admin，避免敏感端点 audit 灰度放行非管理员。"""
-    if operator.role != "admin":
+    if not is_platform_admin(operator.role):
         raise HTTPException(status_code=403, detail="仅 admin 可访问 RBAC 管理端")
     return operator
 

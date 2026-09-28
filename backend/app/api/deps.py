@@ -248,8 +248,18 @@ class OperatorIdentity:
         return "user" if self.actor.startswith("user:") else "service"
 
 
-_KNOWN_ROLES = ("viewer", "editor", "admin")
-_ROLE_RANK = {"viewer": 0, "editor": 1, "admin": 2}
+_KNOWN_ROLES = ("viewer", "editor", "admin", "super_admin")
+_ROLE_RANK = {
+    "viewer": 0,
+    "editor": 1,
+    "admin": 2,
+    "super_admin": 3,
+}
+
+
+def is_platform_admin(role: str) -> bool:
+    """返回角色是否具备既有平台管理员能力。"""
+    return role in {"admin", "super_admin"}
 
 
 def _highest_known_role(roles: tuple[str, ...]) -> str | None:
@@ -334,7 +344,7 @@ async def require_admin_user(request: Request):
     放行日志），这里只叠加角色判定。
     """
     ident = await require_user_actor(request)
-    if ident.role == "admin":
+    if is_platform_admin(ident.role):
         return ident
     # 2026-09-16 动态化：DB 覆盖层（免重启）→ env 兜底，见 services/sys_config.py
     mode = get_mode("SENSITIVE_API_GUARD_MODE")
@@ -449,9 +459,9 @@ async def require_rag_editor(request: Request):
 
     identity = require_identity(request)
     role = _highest_known_role(identity.roles)
-    if role not in ("editor", "admin"):
+    if role is None or _ROLE_RANK[role] < _ROLE_RANK["editor"]:
         raise HTTPException(
             status_code=403,
-            detail="RAG 文档写操作仅限 editor/admin",
+            detail="RAG 文档写操作仅限 editor/admin/super_admin",
         )
     return identity

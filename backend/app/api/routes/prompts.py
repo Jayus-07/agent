@@ -28,7 +28,11 @@ import difflib
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity,
+    is_platform_admin,
+    resolve_operator_role,
+)
 from backend.prompts.registry import PROMPT_REGISTRY, PromptSpec
 from backend.prompts.renderer import PromptRenderer, PromptRenderError
 from backend.prompts.service import prompt_service
@@ -644,7 +648,7 @@ async def seed_defaults(
     body: SeedRequest = SeedRequest(),
     operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
-    if operator.role != "admin":
+    if not is_platform_admin(operator.role):
         raise HTTPException(403, "Only admin can seed defaults")
 
     from backend.prompts.loader import seed
