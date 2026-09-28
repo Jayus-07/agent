@@ -2,10 +2,16 @@ import { act } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import AccessControlPage from "@/app/settings/access/page";
-import { listRbacAudit, listRbacUsers, updateRbacUser } from "@/api/rbac";
+import {
+  listRbacAudit,
+  listRbacDepartments,
+  listRbacUsers,
+  updateRbacUser,
+} from "@/api/rbac";
 
 vi.mock("@/api/rbac", () => ({
   listRbacAudit: vi.fn(),
+  listRbacDepartments: vi.fn(),
   listRbacUsers: vi.fn(),
   updateRbacUser: vi.fn(),
 }));
@@ -19,6 +25,7 @@ let mounted: { container: HTMLElement; root: Root } | null = null;
 beforeEach(() => {
   sessionStorage.clear();
   vi.mocked(listRbacUsers).mockReset();
+  vi.mocked(listRbacDepartments).mockReset().mockResolvedValue([]);
   vi.mocked(listRbacAudit).mockReset();
   vi.mocked(updateRbacUser).mockReset();
 });
