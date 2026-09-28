@@ -67,7 +67,7 @@ async def list_model_price_versions(
     limit: int = Query(100, ge=1, le=200),
     operator: OperatorIdentity = Depends(resolve_operator_role),
 ) -> dict[str, Any]:
-    if operator.role not in {"viewer", "editor", "admin"}:
+    if operator.role not in {"viewer", "editor", "admin", "super_admin"}:
         raise HTTPException(403, "无权查看价格版本")
     try:
         return {"items": _repo().list_versions(limit)}

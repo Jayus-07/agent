@@ -260,7 +260,7 @@ export function bearerHeaders(): Record<string, string> {
 
 /* ────────────────────────────────────────────────────────────
  * 角色工具（2026-09-16）：roles 来自 login/refresh 响应的 userInfo.roles
- * （后端 auth.users.role，viewer/editor/admin）。序与后端 _ROLE_RANK 同构。
+ * （后端 auth.users.role，viewer/editor/admin/super_admin）。序与后端 _ROLE_RANK 同构。
  * 仅用于 UI 呈现（导航显隐）；真正的权限判定在后端（403 兜底），
  * 角色变更在下次登录/refresh 后进入本地缓存。
  * ──────────────────────────────────────────────────────────── */
