@@ -1,29 +1,177 @@
 {
-  "version": 1,
+  "version": "1+smoke-collision",
   "description": "Router Evaluation 数据集（分层路由 2026-09-22）：粗分类域判定 + 域内细工具选择。expected.domain=unknown 表示应进澄清；expected.tool 仅供细路由对照（可选）。",
   "cases": [
-    {"query": "公司的年假规定是什么", "expected": {"domain": "knowledge", "tool": "rag.search"}},
-    {"query": "退款审核的时效是怎么规定的", "expected": {"domain": "knowledge", "tool": "rag.search"}},
-    {"query": "差评处理的 SOP 在哪里", "expected": {"domain": "knowledge", "tool": "rag.search"}},
-    {"query": "查一下最近30天销售额", "expected": {"domain": "data", "tool": "sql.query"}},
-    {"query": "统计本月各品类商品数量", "expected": {"domain": "data", "tool": "sql.query"}},
-    {"query": "导出上个月的订单明细到 Excel", "expected": {"domain": "data", "tool": "data.export"}},
-    {"query": "分析 SKU001 为什么销量下降", "expected": {"domain": "business", "tool": "business.analyze"}},
-    {"query": "毛利率连续三个月下降是什么原因", "expected": {"domain": "business", "tool": "business.analyze"}},
-    {"query": "看看竞品这个链接的价格变化", "expected": {"domain": "business", "tool": "competitor.analyze"}},
-    {"query": "查订单 123456 的物流", "expected": {"domain": "customer_service"}},
-    {"query": "帮我申请退款", "expected": {"domain": "customer_service"}},
-    {"query": "我要投诉这个商家的发货速度", "expected": {"domain": "customer_service"}},
-    {"query": "生成本月经营分析报告", "expected": {"domain": "report", "tool": "report.generate"}},
-    {"query": "出一份上月库存分析报告", "expected": {"domain": "report", "tool": "report.generate"}},
-    {"query": "帮我发一封邮件给采购部", "expected": {"domain": "communication", "tool": "email.send"}},
-    {"query": "你好", "expected": {"domain": "general"}},
-    {"query": "你能做什么", "expected": {"domain": "general"}},
-    {"query": "帮我看看这个", "expected": {"domain": "unknown"}},
-    {"query": "随便说点啥", "expected": {"domain": "unknown"}},
-    {"query": "根据公司库存规定查询 SKU001 当前库存", "expected": {"domain": "unknown"}},
-    {"query": "规划福州 2 天的行程", "expected": {"domain": "travel"}},
-    {"query": "厦门有哪些值得去的景点", "expected": {"domain": "travel"}},
-    {"query": "给宠物零食做一次智能选品", "expected": {"domain": "selection_funnel"}}
+    {
+      "query": "公司的年假规定是什么",
+      "expected": {
+        "domain": "knowledge",
+        "tool": "rag.search"
+      }
+    },
+    {
+      "query": "退款审核的时效是怎么规定的",
+      "expected": {
+        "domain": "knowledge",
+        "tool": "rag.search"
+      }
+    },
+    {
+      "query": "差评处理的 SOP 在哪里",
+      "expected": {
+        "domain": "knowledge",
+        "tool": "rag.search"
+      }
+    },
+    {
+      "query": "查一下最近30天销售额",
+      "expected": {
+        "domain": "data",
+        "tool": "sql.query"
+      }
+    },
+    {
+      "query": "统计本月各品类商品数量",
+      "expected": {
+        "domain": "data",
+        "tool": "sql.query"
+      }
+    },
+    {
+      "query": "导出上个月的订单明细到 Excel",
+      "expected": {
+        "domain": "data",
+        "tool": "data.export"
+      }
+    },
+    {
+      "query": "分析 SKU001 为什么销量下降",
+      "expected": {
+        "domain": "business",
+        "tool": "business.analyze"
+      }
+    },
+    {
+      "query": "毛利率连续三个月下降是什么原因",
+      "expected": {
+        "domain": "business",
+        "tool": "business.analyze"
+      }
+    },
+    {
+      "query": "看看竞品这个链接的价格变化",
+      "expected": {
+        "domain": "business",
+        "tool": "competitor.analyze"
+      }
+    },
+    {
+      "query": "查订单 123456 的物流",
+      "expected": {
+        "domain": "customer_service"
+      }
+    },
+    {
+      "query": "帮我申请退款",
+      "expected": {
+        "domain": "customer_service"
+      }
+    },
+    {
+      "query": "我要投诉这个商家的发货速度",
+      "expected": {
+        "domain": "customer_service"
+      }
+    },
+    {
+      "query": "生成本月经营分析报告",
+      "expected": {
+        "domain": "report",
+        "tool": "report.generate"
+      }
+    },
+    {
+      "query": "出一份上月库存分析报告",
+      "expected": {
+        "domain": "report",
+        "tool": "report.generate"
+      }
+    },
+    {
+      "query": "帮我发一封邮件给采购部",
+      "expected": {
+        "domain": "communication",
+        "tool": "email.send"
+      }
+    },
+    {
+      "query": "你好",
+      "expected": {
+        "domain": "general"
+      }
+    },
+    {
+      "query": "你能做什么",
+      "expected": {
+        "domain": "general"
+      }
+    },
+    {
+      "query": "帮我看看这个",
+      "expected": {
+        "domain": "unknown"
+      }
+    },
+    {
+      "query": "随便说点啥",
+      "expected": {
+        "domain": "unknown"
+      }
+    },
+    {
+      "query": "根据公司库存规定查询 SKU001 当前库存",
+      "expected": {
+        "domain": "unknown"
+      }
+    },
+    {
+      "query": "规划福州 2 天的行程",
+      "expected": {
+        "domain": "travel"
+      }
+    },
+    {
+      "query": "厦门有哪些值得去的景点",
+      "expected": {
+        "domain": "travel"
+      }
+    },
+    {
+      "query": "给宠物零食做一次智能选品",
+      "expected": {
+        "domain": "selection_funnel"
+      }
+    },
+    {
+      "query": "根据公司制度，员工差旅报销的上限金额是多少？",
+      "expected": {
+        "domain": "knowledge",
+        "tool": "rag.search"
+      }
+    },
+    {
+      "query": "差旅报销制度里住宿标准是多少",
+      "expected": {
+        "domain": "knowledge",
+        "tool": "rag.search"
+      }
+    },
+    {
+      "query": "本月的报销金额总额是多少",
+      "expected": {
+        "domain": "data",
+        "tool": "sql.query"
+      }
+    }
   ]
 }
