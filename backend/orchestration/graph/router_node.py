@@ -144,12 +144,32 @@ def _with_router_decisions(
             capability_decision,
             resolver_override,
         )
+        current_legacy_used = bool((update or {}).get("legacy_used", False))
+        if hierarchical_meta is None and (
+            hasattr(existing_override, "model_dump")
+            or (
+                isinstance(existing_override, dict)
+                and (
+                    "execution_mode" in existing_override
+                    or "candidates" in existing_override
+                )
+            )
+        ):
+            current_legacy_used = True
+        if isinstance(existing_override, dict):
+            nested_decision = existing_override.get("route_decision")
+            if isinstance(nested_decision, dict) and nested_decision.get(
+                "execution_mode"
+            ):
+                current_legacy_used = True
         result.update({
             "domain_decision": domain_decision,
             "capability_decision": capability_decision,
             "execution_decision": execution_decision.to_dict(),
-            "router_fallback_reason": result.get("router_fallback_reason", ""),
-            "legacy_used": bool(result.get("legacy_used", False)),
+            "router_fallback_reason": (update or {}).get(
+                "router_fallback_reason", "",
+            ),
+            "legacy_used": current_legacy_used,
         })
     except Exception as exc:
         logger.warning("[RouterNode] Router 决策适配器失败，保持旧字段: %s", exc)
