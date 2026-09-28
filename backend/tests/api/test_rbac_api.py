@@ -238,7 +238,7 @@ class _FakeRbacSession:
             return _FakeResult(rows=[
                 {"id": user["id"]}
                 for user in self.users
-                if user["role"] == "admin" and user["status"] == 1
+                if user["role"] in {"admin", "super_admin"} and user["status"] == 1
                 and (tenant_id is None or user["tenant_id"] == tenant_id)
             ])
 
@@ -479,7 +479,63 @@ def test_update_rejects_invalid_role_and_version_conflict(monkeypatch):
     assert session.committed is False
 
 
-def test_last_active_admin_cannot_be_downgraded_or_disabled(monkeypatch):
+@pytest.mark.parametrize(
+    ("operator_role", "current_role", "new_role", "new_status"),
+    [
+        ("admin", "viewer", "admin", 1),
+        ("admin", "admin", "viewer", 1),
+        ("admin", "admin", "admin", 0),
+        ("admin", "super_admin", "super_admin", 1),
+        ("super_admin", "super_admin", "super_admin", 1),
+        ("super_admin", "viewer", "super_admin", 1),
+    ],
+)
+def test_role_transition_rejects_http_paths_to_or_from_super_admin_and_admin(
+    operator_role,
+    current_role,
+    new_role,
+    new_status,
+):
+    """缺少集中转换闸时，普通 admin 可制造或降级 admin。"""
+
+    with pytest.raises(HTTPException) as exc_info:
+        rbac._validate_role_transition(
+            operator_role,
+            current_role,
+            new_role,
+            new_status,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("current_role", "new_role", "new_status"),
+    [
+        ("viewer", "editor", 1),
+        ("editor", "viewer", 1),
+        ("admin", "viewer", 1),
+        ("admin", "admin", 0),
+        (None, "admin", 1),
+    ],
+)
+def test_super_admin_role_transition_allows_admin_management(
+    current_role,
+    new_role,
+    new_status,
+):
+    """若 super_admin 无法管理普通 admin，将无法承担运维升级职责。"""
+
+    rbac._validate_role_transition(
+        "super_admin",
+        current_role,
+        new_role,
+        new_status,
+        creating=current_role is None,
+    )
+
+
+def test_admin_cannot_downgrade_admin_even_when_it_is_last_active_admin(monkeypatch):
     session = _FakeRbacSession()
     client = _client(monkeypatch, session)
 
@@ -487,6 +543,21 @@ def test_last_active_admin_cannot_be_downgraded_or_disabled(monkeypatch):
         "/api/sys/rbac/users/1",
         json={"version": 0, "platformRole": "viewer"},
     )
+    assert response.status_code == 403
+    assert session.users[0]["role"] == "admin"
+    assert session.committed is False
+
+
+def test_super_admin_cannot_remove_last_active_high_privilege_account(monkeypatch):
+    """即使操作者是 super_admin，也不能留下没有高权限账户的租户。"""
+    session = _FakeRbacSession()
+    client = _client(monkeypatch, session, role="super_admin")
+
+    response = client.patch(
+        "/api/sys/rbac/users/1",
+        json={"version": 0, "platformRole": "viewer"},
+    )
+
     assert response.status_code == 409
     assert session.users[0]["role"] == "admin"
     assert session.committed is False
@@ -562,19 +633,27 @@ def test_cs_role_change_revokes_access_and_refresh_authority(monkeypatch, body):
     assert session.redis.smembers(session_index_key(2, "sid-2")) == set()
 
 
-def test_accepting_change_revokes_session_authority(monkeypatch):
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"version": 0, "accepting": False},
+        {"version": 0, "maxConversations": 20},
+    ],
+)
+def test_operational_cs_changes_do_not_revoke_session_authority(monkeypatch, body):
+    """运营参数若误触发吊销，客服停止接单会造成无意义下线。"""
     session = _FakeRbacSession()
     client = _client(monkeypatch, session)
 
     response = client.patch(
         "/api/sys/rbac/users/2",
-        json={"version": 0, "accepting": False},
+        json=body,
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["revokedSessionCount"] == 1
-    assert session.sessions[0]["revoked_at"] is not None
-    assert all(token["revoked"] for token in session.refresh_tokens)
+    assert response.json()["revokedSessionCount"] == 0
+    assert session.sessions[0]["revoked_at"] is None
+    assert not any(token["revoked"] for token in session.refresh_tokens)
 
 
 def test_cross_tenant_user_list_and_update_are_isolated(monkeypatch):
