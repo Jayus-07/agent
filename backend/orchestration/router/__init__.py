@@ -31,6 +31,14 @@ from .router import Router, get_router
 from .rule_router import RuleRouter
 from .vector_router import VectorRouter
 from .llm_router import LLMRouter
+from .models import (
+    CapabilityDecision,
+    DomainDecision,
+    ExecutionModeDecision,
+)
+from .domain_router import DomainRouter
+from .capability_router import CapabilityRouter
+from .execution_mode import ExecutionModeResolver
 
 __all__ = [
     "ExecutionMode",
@@ -43,4 +51,10 @@ __all__ = [
     "RuleRouter",
     "VectorRouter",
     "LLMRouter",
+    "DomainDecision",
+    "CapabilityDecision",
+    "ExecutionModeDecision",
+    "DomainRouter",
+    "CapabilityRouter",
+    "ExecutionModeResolver",
 ]
