@@ -60,6 +60,19 @@ def test_runtime_mode_never_builds_bm25(monkeypatch):
         pipeline._init_retrievers()
 
 
+@pytest.mark.parametrize("mode", ["runtime", "evaluation"])
+def test_read_only_modes_reject_vector_sync(mode):
+    from backend.rag.pipeline import RAGPipeline
+
+    pipeline = RAGPipeline.__new__(RAGPipeline)
+    pipeline.mode = mode
+
+    with pytest.raises(RuntimeError, match="禁止.*向量库"):
+        pipeline._init_vector_dbs_incremental()
+    with pytest.raises(RuntimeError, match="禁止.*向量库"):
+        pipeline._init_vector_dbs_full()
+
+
 def test_index_mode_can_skip_implicit_sync_for_explicit_import(monkeypatch):
     from backend.rag import pipeline as module
 
