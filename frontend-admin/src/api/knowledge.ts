@@ -25,6 +25,11 @@ const qs = (params: Record<string, any>) => {
 export const knowledgeService: any = {
   getStats: () => fetchRaw(`${BASE}/stats`).then(r => r.json()).catch(() => ({})),
 
+  // G2（2026-09-28）：知识库列表改真实数据源——后端 /knowledge-bases 返回
+  // 注册库 + 文档计数；筛选器不再硬编码业务库名单
+  listKnowledgeBases: () =>
+    fetchRaw(`${BASE}/knowledge-bases`).then(r => r.json()).catch(() => ({ knowledge_bases: [] })),
+
   getDocuments: (params: any = {}) =>
     fetchRaw(`${BASE}/documents?${qs(params)}`).then(r => r.json()).catch(() => ({ documents: [], total: 0 })),
 

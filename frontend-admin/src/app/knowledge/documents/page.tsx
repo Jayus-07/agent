@@ -76,6 +76,8 @@ export default function DocumentsPage() {
   const [lineageRuns, setLineageRuns] = useState<any[]>([])
   const [lineageDetail, setLineageDetail] = useState<any | null>(null)
   const [lineageLoading, setLineageLoading] = useState(false)
+  // G2：知识库筛选选项 = 后端注册库真实清单（含文档计数），不再硬编码
+  const [kbOptions, setKbOptions] = useState<Array<{ id: string; name: string; doc_count?: number }>>([])
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
   const [inputValue, setInputValue] = useState(keyword)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
@@ -96,6 +98,14 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [])
+
+  // G2：加载真实知识库清单（注册库 + 文档计数）
+  useEffect(() => {
+    knowledgeService.listKnowledgeBases().then((d: any) => {
+      const kbs = Array.isArray(d?.knowledge_bases) ? d.knowledge_bases : []
+      setKbOptions(kbs.map((k: any) => ({ id: k.id, name: k.name || k.id, doc_count: k.doc_count })))
+    })
   }, [])
 
   // 翻页/搜索/过滤变化时清空选择（选中集只对当前页有意义）
@@ -281,16 +291,13 @@ export default function DocumentsPage() {
             <option value="txt">TXT</option>
             <option value="docx">DOCX</option>
           </select>
-          {/* KB 过滤 */}
+          {/* KB 过滤（G2：真实注册库清单） */}
           <select value={kbId} onChange={e => setKbId(e.target.value)}
             className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors">
             <option value="">全部知识库</option>
-            <option value="biz_inventory">库存业务</option>
-            <option value="biz_order">订单业务</option>
-            <option value="biz_product">商品业务</option>
-            <option value="policy_hr">人事制度</option>
-            <option value="policy_finance">财务制度</option>
-            <option value="policy_general">企业公共</option>
+            {kbOptions.map(k => (
+              <option key={k.id} value={k.id}>{k.name}{typeof k.doc_count === 'number' ? `（${k.doc_count}）` : ''}</option>
+            ))}
           </select>
           {/* 部门过滤 */}
           <select value={dept} onChange={e => setDept(e.target.value)}
