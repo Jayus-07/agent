@@ -122,6 +122,15 @@ Backend: `py_compile` + `pytest tests/sql/ -v` ｜ Frontend: `npx tsc --noEmit` 
 管理端对账：`GET /api/agents`、`GET /api/capabilities`
 文档索引 `docs/README.md`；四层规范与新增资产手册见上文链接；记忆 用户级 `~/.Codex/projects/<project>/memory/MEMORY.md`
 
+### 本机测试超级管理员（仅限 local）
+
+- 用户名：`local_super_admin`
+- 租户：`default`
+- 角色：`super_admin`
+- 登录入口：本机前端 `/login`，或经 APISIX `http://127.0.0.1:9080/api/auth/login`
+- 密码不写入仓库文档或版本库；遗失时应通过受控的本机密码重置流程处理。
+- 重新执行提权（幂等）：`$env:PGPORT='5433'; D:/Python/python.exe -m backend.scripts.bootstrap_super_admin --tenant default --username local_super_admin`
+
 ## 服务启停与网关边界
 
 **唯一启停入口 = `devctl.bat` 系列**（旧的 start_py/start_frontend 等 .bat 已删除）。完整实测踩坑清单见 `命令文档.md` 与 `docs/gateway-apisix-final-report.md`。

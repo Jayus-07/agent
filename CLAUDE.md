@@ -217,6 +217,15 @@ Backend: `py_compile` + `pytest tests/sql/ -v` ｜ Frontend: `npx tsc --noEmit` 
 next dev（:3300）｜`web` = `frontend` next dev（:3100）。网关入口
 `http://127.0.0.1:9080`（APISIX）。
 
+### 本机测试超级管理员（仅限 local）
+
+- 用户名：`local_super_admin`
+- 租户：`default`
+- 角色：`super_admin`
+- 登录入口：本机前端 `/login`，或经 APISIX `http://127.0.0.1:9080/api/auth/login`
+- 密码不写入仓库文档或版本库；遗失时应通过受控的本机密码重置流程处理。
+- 重新执行提权（幂等）：`$env:PGPORT='5433'; D:/Python/python.exe -m backend.scripts.bootstrap_super_admin --tenant default --username local_super_admin`
+
 - **`backend` 只按“服务名”操作**：`stop backend` = `docker compose stop app`，**不会**
   停 postgres/redis/apisix/rag-service/mcp-service/worker；`up -d --build app`（**带重建**，见下方已知坑）
   也只拉起 app 一个容器。
