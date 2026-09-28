@@ -58,22 +58,44 @@ class EvalScope:
     kb_id: str
     fixture_set: str
     multiquery: bool
+    version_id: str | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload = {
             "kb_id": self.kb_id,
             "fixture_set": self.fixture_set,
             "multiquery": self.multiquery,
         }
+        if self.version_id:
+            payload["version_id"] = self.version_id
+        return payload
 
 
-def build_eval_scope(*, kb_id: str, fixture_set: str, multiquery: bool) -> EvalScope:
+def build_eval_scope(
+    *,
+    kb_id: str,
+    fixture_set: str,
+    multiquery: bool,
+    version_id: str | None = None,
+) -> EvalScope:
     """校验评测范围，拒绝未知集合和旧 KB 的静默回退。"""
     if kb_id != "rag_eval_kb":
         raise ValueError(f"评测必须使用统一 KB rag_eval_kb，实际为: {kb_id}")
     if fixture_set not in {"baseline", "expanded_100", "scale_20k"}:
         raise ValueError(f"未知 fixture_set: {fixture_set}")
-    return EvalScope(kb_id=kb_id, fixture_set=fixture_set, multiquery=bool(multiquery))
+    if fixture_set == "baseline" and not version_id:
+        from backend.evaluation.datasets.rag.snapshots import load_rag_snapshot
+
+        snapshot = load_rag_snapshot("baseline")
+        if snapshot["kb_id"] != kb_id or snapshot["fixture_set"] != fixture_set:
+            raise ValueError("baseline snapshot 与评测 KB/fixture_set 不一致")
+        version_id = str(snapshot["version_id"])
+    return EvalScope(
+        kb_id=kb_id,
+        fixture_set=fixture_set,
+        multiquery=bool(multiquery),
+        version_id=version_id,
+    )
 
 
 def _doc_id_match(actual_id: str, expected_set: set[str], resolver=None, kb_id: str = "", department: str = "") -> bool:
@@ -303,7 +325,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
                 if ablation_mode != "full":
                     retriever = build_ablation_retriever(
-                        pipeline, ablation_mode, kb_id, department, scope.fixture_set,
+                        pipeline, ablation_mode, kb_id, department,
+                        scope.fixture_set, scope.version_id,
                     )
                 else:
                     # --multiquery：评测链套上生产链的 MultiQuery 层（口径对齐）
@@ -323,7 +346,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 if kb_id and kb_id != "*" and kb_id != "default":
                     from backend.rag.context import RagRequestState, set_context
                     mf = build_scope_metadata_filter(
-                        kb_id, department, scope.fixture_set,
+                        kb_id, department, scope.fixture_set, scope.version_id,
                     )
                     ctx = RagRequestState(
                         metadata_filter=mf,
@@ -338,7 +361,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
                 # === Stage 1: Doc 级检索 ===
                 doc_filter = build_scope_metadata_filter(
-                    kb_id, department, scope.fixture_set,
+                    kb_id, department, scope.fixture_set, scope.version_id,
                 )
                 doc_results = (
                     pipeline.doc_db.similarity_search(question, k=stage1_probe_k, filter=doc_filter)

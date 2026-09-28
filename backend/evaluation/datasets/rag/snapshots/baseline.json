@@ -1,0 +1,8 @@
+{
+  "name": "baseline",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline",
+  "version_id": "rag_eval_kb-baseline-2026-09-18",
+  "dataset_version": "5.0.0-unified",
+  "cases_path": "backend/evaluation/datasets/rag/suites/pr_baseline.json"
+}

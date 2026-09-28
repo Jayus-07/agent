@@ -13,6 +13,7 @@ def build_scope_metadata_filter(
     kb_id: str,
     department: str = "",
     fixture_set: str | None = None,
+    version_id: str | None = None,
 ) -> dict[str, str]:
     """构造评测与生产检索共用的 metadata filter。"""
     metadata_filter: dict[str, str] = {}
@@ -22,6 +23,8 @@ def build_scope_metadata_filter(
         metadata_filter["department"] = department
     if fixture_set:
         metadata_filter["fixture_set"] = fixture_set
+    if version_id:
+        metadata_filter["version_id"] = version_id
     return metadata_filter
 
 # ==================== 文本归一化 ====================
@@ -194,6 +197,7 @@ def build_ablation_retriever(
     kb_id: str,
     department: str,
     fixture_set: str | None = None,
+    version_id: str | None = None,
 ):
     """构建消融实验检索器 — 隔离各组件贡献。"""
     if mode == "full":
@@ -201,7 +205,7 @@ def build_ablation_retriever(
 
     from backend.config import HYBRID_SEARCH_K
 
-    mf = build_scope_metadata_filter(kb_id, department, fixture_set)
+    mf = build_scope_metadata_filter(kb_id, department, fixture_set, version_id)
 
     if mode == "vector_only":
         base = _copied_base(pipeline, HYBRID_SEARCH_K)
