@@ -302,6 +302,8 @@ class MetadataStage:
                         envelope_metadata.get("llm_usage_status")
                         or ("reported" if llm_usage else "unavailable")
                     )
+                    prompt_source = str(envelope_metadata.get("prompt_source") or "")
+                    prompt_hash = str(envelope_metadata.get("prompt_hash") or "")
                     self._finish_lineage_stage(
                         processing_recorder, decision_lineage, status="success",
                         model=self._role_model_identity(
@@ -310,11 +312,17 @@ class MetadataStage:
                         input_count=1, output_count=1,
                         prompt_key="rag.preprocessing.metadata_extract",
                         prompt_version=str(getattr(envelope, "prompt_version", "") or "") or None,
+                        prompt_hash=prompt_hash or None,
                         taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
                         rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
                         schema_fingerprint=_metadata_fp,
                         usage=llm_usage or None,
-                        metadata={"llm_usage_status": usage_status},
+                        metadata={
+                            "llm_usage_status": usage_status,
+                            "prompt_source": prompt_source,
+                            # STOP B4：非 DB 来源显式打标，不允许静默 fallback
+                            "prompt_fallback": bool(prompt_source and prompt_source != "db"),
+                        },
                     )
                 else:
                     actual_model = str(
@@ -770,6 +778,9 @@ class MetadataStage:
                     unified.get("llm_usage_status")
                     or ("reported" if unified.get("llm_tokens") else "unavailable")
                 ),
+                # STOP B3：Prompt 来源与内容指纹随信封进入处理血缘
+                "prompt_source": str(unified.get("prompt_source") or ""),
+                "prompt_hash": str(unified.get("prompt_hash") or ""),
             },
         )
 

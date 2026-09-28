@@ -135,6 +135,13 @@ class PromptService:
 
         default = self._defaults.get(key)
         if default is not None:
+            # STOP B4：DB 无行/无 active 版本而回落 defaults 必须显式暴露，
+            # 禁止静默 fallback（2026-09-28 prompts 表缺失导致全站回退
+            # yaml 而无人察觉的事故教训）。
+            logger.warning(
+                f"[PromptService] prompt_fallback=true key={key} source=default"
+                "（DB 无该 prompt 或无 active 版本，回退内置 defaults）"
+            )
             return default, None, "default"
 
         raise KeyError(f"Prompt not found: {key}")

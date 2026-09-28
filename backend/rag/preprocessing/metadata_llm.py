@@ -13,6 +13,7 @@ keywords / entities / time_refs，正则链路整体降级为 fallback。
     调用方把 llm_used 置 True、来源标 metadata_llm；
   - 任何失败（超时/坏 JSON/doc_type 越界）→ 返回 None，调用方走原规则路径。
 """
+import hashlib
 import json
 import re
 
@@ -195,6 +196,16 @@ async def extract_metadata_llm_async(
         )
         prompt = prompt_result.text
         prompt_version = getattr(prompt_result, "version", None)
+        # STOP B3/B4：显式记录 Prompt 来源与内容指纹。version 为 int = DB
+        # active 版本（seed/publish 产生）；None = 内置 defaults（DB 缺失或
+        # 未 seed），必须 warning 显式暴露，不允许静默 fallback。
+        prompt_source = "db" if isinstance(prompt_version, int) else "yaml"
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+        if prompt_source != "db":
+            logger.warning(
+                "[MetaLLM] prompt_fallback=true key=rag.preprocessing.metadata_extract "
+                f"source={prompt_source}（DB 无 active 版本，回退内置 defaults）"
+            )
     except Exception as e:
         logger.warning(f"[MetaLLM] 渲染抽取提示词失败（降级规则路径）: {e}")
         return None
@@ -234,6 +245,8 @@ async def extract_metadata_llm_async(
         result["prompt_version"] = (
             f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
         )
+        result["prompt_source"] = prompt_source
+        result["prompt_hash"] = prompt_hash
         result["llm_tokens"] = _normalize_usage_metadata(
             getattr(response, "usage_metadata", {}) or {}
         )

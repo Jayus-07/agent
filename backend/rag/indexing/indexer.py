@@ -293,6 +293,14 @@ class IncrementalIndexer:
         服务重启会把 registry 留在 uploading/parsing/embedding 的文档悬在
         半途。sync() 先显式恢复这批文档（文件还在 → 重索引；文件没了 →
         清理悬空行），再做常规增量 diff。
+
+        STOP C（2026-09-28）：pending_review / failed 的**已知文件**不再按
+        ADDED 无限重试。sync 只认 active 行，near-dup 待审与结构性失败
+        （如 0-chunk CSV）的文件此前每次启动都会重走元数据 LLM（~20s/文件）
+        ——实测一次启动重处理 89 个文件、烧 ~30 分钟并反复追加 failed 行
+        （rag_eval_kb 20 个文件攒出 547 条 failed）。改为：hash 未变 → 跳过
+        （计入 skipped，留待人工审核/显式重建）；hash 变了（内容真改了）→
+        仍按 ADDED 重评。RAG_FORCE_REINDEX=true 强制全量重扫。
         """
         disk_files = self._scan_disk()
         self._recover_interrupted(disk_files)
@@ -302,12 +310,39 @@ class IncrementalIndexer:
         # 只考虑 active 的条目（排除已标记 deleted 的）
         # 归一化路径为绝对路径：旧数据可能有相对路径，与 disk_files 的绝对路径不匹配
         active_registry = {}
+        nonactive_registry: dict[str, dict] = {}
         for p, r in registry_rows.items():
+            norm_path = os.path.abspath(p)
             if r.get("status") == "active":
-                norm_path = os.path.abspath(p)
                 active_registry[norm_path] = r
+            elif r.get("status") in ("pending_review", "failed"):
+                nonactive_registry[norm_path] = r
 
-        delta = self._compute_delta(disk_files, active_registry)
+        if os.getenv("RAG_FORCE_REINDEX", "false").lower() == "true":
+            delta = Delta(
+                added=sorted(disk_files.keys()),
+                modified=set(), deleted=set(), unchanged=set(),
+            )
+            logger.warning("RAG_FORCE_REINDEX=true：强制全量重扫（忽略增量 diff）")
+        else:
+            delta = self._compute_delta(disk_files, active_registry)
+            # 非 active 已知文件：hash 未变 → 从 ADDED 剔除（跳过重试）；
+            # hash 变了 → 内容真的改了，保留重评。
+            retry_added: list[str] = []
+            skipped_nonactive = 0
+            for p in delta.added:
+                row = nonactive_registry.get(p)
+                if row is not None and disk_files[p][0] == row.get("file_hash"):
+                    skipped_nonactive += 1
+                else:
+                    retry_added.append(p)
+            if skipped_nonactive:
+                delta.unchanged |= set(delta.added) - set(retry_added)
+                delta.added = retry_added
+                logger.info(
+                    f"[Sync] 跳过 {skipped_nonactive} 个 pending_review/failed "
+                    "已知文件（hash 未变，不重试；审核激活或 RAG_FORCE_REINDEX 才会重扫）"
+                )
         failed_files = self._apply_delta(delta, disk_files, active_registry)
 
         result = SyncResult(
