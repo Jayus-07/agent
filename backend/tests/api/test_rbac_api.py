@@ -794,8 +794,10 @@ def test_real_postgres_last_admin_concurrency_is_serialized():
                         session,
                         user_id=target_id,
                         body={"version": 0, "platformRole": "viewer", "status": 0},
+                        # 普通 admin 不能管理另一个 admin；并发锁语义由
+                        # super_admin 执行者验证，避免把 RBAC 层级限制误判为锁失败。
                         operator=deps.OperatorIdentity(
-                            role="admin", actor=f"user:{user_ids[0]}"
+                            role="super_admin", actor="service:super-admin-test"
                         ),
                         tenant_id=tenant_id,
                     )
