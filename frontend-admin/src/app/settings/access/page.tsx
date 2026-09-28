@@ -82,6 +82,7 @@ function readableError(error: unknown, fallback: string): string {
 
 function roleLabel(role: string | null | undefined): string {
   if (role === "admin") return "管理员";
+  if (role === "super_admin") return "超级管理员";
   if (role === "editor") return "编辑者";
   if (role === "viewer") return "查看者";
   if (role === "supervisor") return "主管";
@@ -528,6 +529,7 @@ function AccessControlContent() {
                                 <option value="viewer">查看者</option>
                                 <option value="editor">编辑者</option>
                                 <option value="admin">管理员</option>
+                                <option value="super_admin" disabled>超级管理员（仅运维）</option>
                               </select>
                               <label className="sr-only" htmlFor={`user-dept-${user.userId}`}>部门</label>
                               <select

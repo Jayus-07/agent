@@ -265,7 +265,7 @@ export function bearerHeaders(): Record<string, string> {
  * 角色变更在下次登录/refresh 后进入本地缓存。
  * ──────────────────────────────────────────────────────────── */
 
-const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2 }
+const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, super_admin: 3 }
 export type RoleName = keyof typeof ROLE_RANK
 
 /** 当前登录用户的角色列表（未登录/无信息返回空数组） */
