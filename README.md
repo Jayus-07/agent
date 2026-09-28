@@ -2,58 +2,184 @@
 
 电商 RAG + Multi-Agent 平台 — FastAPI + LangGraph + Skill/Tool 四层分层 + APISIX 网关
 
-> 本文件只保留「一眼看懂系统规模 + 怎么跑起来」。架构约束、新增资产规范、待办以下文链接的文档为唯一事实源，**不要**在 README 里维护第二份口径表。
+> 本文件只保留「一眼看懂系统 + 架构三张图 + 怎么跑起来」。架构细节、新增资产规范、待办以下文链接的文档为唯一事实源，**不要**在 README 里维护第二份口径表。
 
 ---
 
-## 总览
+## Architecture
 
-**主线**（实线，默认启用）：用户端 / 管理端 → APISIX 网关 → `app` → 主图支线（direct / workflow / plan + 寒暄直答）→ reporter。
-**扩展**（虚线，由开关控制）：5 个域图（客服 / 旅游 / 选品漏斗 + 旅游商务 / 旅游预订，**代码默认全部关闭**）、Kafka `java-loop`、Ollama `local-llm`、Prometheus/Grafana。小程序已退役冻结，移动端由用户端响应式 Web 承接。
+三张图各答一个问题：**系统由什么组成**（图 1）、**一次请求怎么跑**（图 2）、**AI 怎么编排**（图 3）。
+部署细节（端口 / 异步层 / 网关认证）见 [docs/architecture/system-overview.md](docs/architecture/system-overview.md)；
+编排细节（主图节点职责 / 域图 / 客服锁域）见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
+
+### 1. System Architecture
+
+用户端 / 管理端 / 客服坐席工作台三个 Next.js 前端，经 APISIX 网关进入 FastAPI 应用；`/chat/stream` 同步直返不经队列；5 个业务域图由开关控制（**代码默认全关**，当前 `.env` 打开客服 / 旅游 / 选品三个）；能力层统一以 Capability → Skill → Tool 分层；MCP 是 Tool 对外暴露的第二出口。
 
 ```mermaid
 flowchart TB
-    classDef main fill:#e8f3ff,stroke:#2b7de9,stroke-width:2px,color:#0b2545
-    classDef ext  fill:#f6f7f9,stroke:#9aa4b2,stroke-dasharray:4 3,color:#4a5568
-    classDef store fill:#eefaf1,stroke:#2f9e5f,color:#0b3d20
+    subgraph EXP["接入层 Experience"]
+        WEB["用户端 :3100"]
+        ADM["管理端 :3200"]
+        CSW["客服坐席工作台 :3300"]
+    end
 
-    W["用户端 :3100"]:::main
-    AD["管理端 :3200"]:::main
-    CSW["客服坐席工作台 :3300"]:::main
-    MP["微信小程序（已退役冻结）"]:::ext
-    GW["APISIX :9080 · 唯一入口<br/>验签 Bearer / Redis 黑名单 / 限流 → 注入身份头"]:::main
-    APP["app · FastAPI :8000（仅绑 127.0.0.1）<br/>POST /chat/stream（SSE 直返，不经队列）"]:::main
+    GW["APISIX :9080 网关 · 唯一入口<br/>JWT 验签 · 限流 · 注入身份头"]
 
-    W --> GW
-    AD --> GW
+    subgraph APPL["应用层 Application"]
+        APP["FastAPI app :8000<br/>REST API · Chat Runtime SSE · Admin API"]
+        RAGS["rag-service :8090<br/>embedding / rerank / 索引"]
+        MCPS["mcp-service :8091<br/>MCP 协议出口"]
+    end
+
+    subgraph AIRT["AI Runtime（LangGraph）"]
+        MAIN["主图：router → direct / workflow / plan 支线"]
+        DOM["5 个域图：客服 / 旅游 / 旅游商务 / 旅游预订 / 选品漏斗"]
+    end
+
+    subgraph CAPL["能力层 Capability / Skill"]
+        SK["12 Skill · 17 Capability · 34 Tool<br/>RAG · SQL · 报告 · 邮件 · 搜索 · 地图 …"]
+    end
+
+    subgraph INFRA["数据与基础设施"]
+        PG[("PostgreSQL + pgvector<br/>agent_business / agent_memory")]
+        RD[("Redis<br/>缓存 · Celery broker/result")]
+        CEL["Celery worker 池 + beat<br/>agent ｜ rag_index 双队列"]
+    end
+
+    WEB --> GW
+    ADM --> GW
     CSW --> GW
-    MP -.->|已退役| GW
     GW --> APP
-
-    APP --> ROUTER{"主图 router · 三层路由<br/>rule → vector → LLM"}
-    ROUTER -->|direct| SE["skill_executor"]:::main
-    ROUTER -->|workflow| WE["workflow_executor"]:::main
-    ROUTER -->|"plan（主线）"| PL["planner → critique → supervisor（Send 并行）"]:::main
-    ROUTER -->|寒暄/能力咨询| GC["general_chat 直答"]:::main
-    SE --> REP["reporter → END"]:::main
-    WE --> REP
-    PL --> REP
-    GC --> END0["END"]:::main
-
-    ROUTER -.->|"域锁 · domain_hint=cs"| CS["客服域图"]:::ext
-    ROUTER -.->|"预过滤命中 · CS_ENABLED"| CS
-    ROUTER -.->|"TRAVEL_ENABLED"| TR["旅游域图"]:::ext
-    ROUTER -.->|"SELECTION_FUNNEL_ENABLED"| SF["选品漏斗域图"]:::ext
-
-    APP --> SQL["NL2SQL 子系统<br/>6 层硬校验 + 行级权限"]:::main
-    APP --> RAGS["rag-service :8090<br/>混合检索 + Rerank + Evidence Gate"]:::main
-    APP --> PG["PostgreSQL :5432<br/>agent_business + agent_memory"]:::store
-    APP --> RD["Redis :6379<br/>Celery broker + result"]:::store
-    APP --> OBS["自建 Tracer（44 种 SpanKind）+ Prometheus"]:::main
-    RAGS --> CH["pgvector<br/>rag_vectors 表（agent_memory）"]:::store
+    APP --> MAIN
+    MAIN --> DOM
+    MAIN --> SK
+    DOM -.->|"复用（如客服知识专家调 RAG）"| SK
+    SK --> RAGS
+    SK --> PG
+    APP --> CEL
+    APP --> PG
+    APP --> RD
+    CEL --> RD
+    RAGS --> PG
+    SK -.->|"能力第二出口"| MCPS
+    CEL -.->|"checkpoint 续跑"| MAIN
 ```
 
-> Java 侧（Spring Boot + SCG）是**独立项目**，不在本仓库的启动链路里；`--profile java-loop` 只为联调保留。
+> Java 侧（Spring Boot + SCG）是**独立项目**，不在本仓库的启动链路里；`--profile java-loop` 只为联调保留。小程序已退役冻结，移动端由用户端响应式 Web 承接。
+
+### 2. Chat Request Runtime
+
+一次 `POST /chat/stream` 的真实执行顺序：网关验签 → Input Guard 门禁（拦截即短路）→ 记忆装配 → 指代解析 → 进图路由（域预过滤优先于三层路由）→ 四条支线之一 → reporter / 域图自带 reporter → SSE 收尾。`rag-service`、模型、数据库都在 Skill / Tool 层之后，不在主流程图上单独展开。
+
+```mermaid
+flowchart TB
+    OUT["SSE 流式返回<br/>status / log / delta → done ｜ memory.end_turn + trace 收尾"]
+    U["用户消息"] --> GW["APISIX 网关<br/>验签 + 注入身份头"]
+    GW --> API["POST /chat/stream<br/>FastAPI Chat Runtime"]
+    API --> IG
+
+    subgraph PRE["GraphRunner 前置（图执行前）"]
+        IG["Input Guard 输入门禁"] -->|"拦截 / 澄清 → 短路"| OUT
+        IG --> MEM["记忆装配 memory.start_session（L1 上下文）"]
+        MEM --> FU["Follow-up 指代解析"]
+    end
+
+    FU --> RT
+
+    subgraph G["LangGraph 主图"]
+        RT["router 节点<br/>域预过滤 + 三层路由 rule → vector → LLM"]
+        RT -->|"direct"| DE["tool_selector → skill_executor"]
+        RT -->|"workflow"| WE["workflow_executor"]
+        RT -->|"plan"| PL["planner → critique → supervisor（Send 并行）"]
+        RT -->|"寒暄 / 能力咨询"| GC["general_chat 直答"]
+        RT -->|"域命中（开关 + 灰度）"| DG["域图执行<br/>客服 / 旅游 / 选品 …"]
+        DE --> REP["reporter"]
+        WE --> REP
+        PL --> REP
+    end
+
+    DG --> OUT
+    GC --> OUT
+    REP --> OUT
+```
+
+### 3. AI Runtime / Multi-Agent
+
+编排层的责任边界：GraphRunner 负责图外的 Guard / 记忆 / 指代解析；主图 `router` 节点先做**域预过滤**（命中即整请求交给域图），再做**三层路由**拍板 route_mode；plan 支线的 planner → critique → supervisor 是唯一的任务拆解链，supervisor 以 `Send` 并行派发 Skill 节点；direct / workflow 支线绕过 Planner。右侧公共平台能力是横切支撑，**不是主流程节点**。
+
+```mermaid
+flowchart TB
+    RUNNER["GraphRunner<br/>Input Guard · 记忆装配 · Follow-up 解析"]
+
+    subgraph MAIN3["LangGraph 主图（9 核心节点 + 自动发现）"]
+        ROUTER["router<br/>① 域预过滤（CS 域锁 / 旅游 / 选品 / 商务 / 预订）<br/>② 三层路由 rule → vector → LLM"]
+        DE["tool_selector → skill_executor（direct 支线）"]
+        WE["workflow_executor（workflow 支线）"]
+        PC["planner → critique（plan 支线）"]
+        SUP["supervisor · Send 并行调度"]
+        GC["general_chat 直答"]
+        REP["reporter"]
+    end
+
+    subgraph DOMS["Domain Runtime · 5 个域图（开关控制，自带专家与 reporter）"]
+        CS["客服<br/>supervisor + 5 专家"]
+        TR["旅游<br/>slot_filler + 5 专家 + validator/repair"]
+        TC["旅游商务"]
+        TB["旅游预订"]
+        SF["选品漏斗"]
+    end
+
+    subgraph CAP["Capability / Skill 层"]
+        SKN["Skill 图节点 ×12（自动发现）<br/>SQL · RAG · 报告 · 邮件 · 搜索 · 地图 …"]
+        WF["Workflow ×4<br/>日报 · 库存预警 · 市场调研 · 选品决策"]
+    end
+
+    subgraph GOV["Shared Platform · 横切支撑（非主流程节点）"]
+        AUTH["Authorization"]
+        MEM["Memory L1/L2/L3"]
+        CTX["Context Budget"]
+        MODEL["Model Gateway"]
+        IDEM["Idempotency"]
+        OBS["Observability"]
+        EVAL["Evaluation"]
+    end
+
+    RUNNER --> ROUTER
+    ROUTER -->|"域命中"| DOMS
+    ROUTER -->|"direct"| DE
+    ROUTER -->|"workflow"| WE
+    ROUTER -->|"plan"| PC --> SUP
+    ROUTER -->|"寒暄 / 咨询"| GC
+    SUP <-->|"Send 派发 / 完成回填"| SKN
+    DE --> REP
+    WE --> REP
+    SUP -->|"计划完成"| REP
+    RUNNER -.->|"全程支撑"| GOV
+    SKN -.->|"模型调用"| MODEL
+```
+
+### Architecture Vocabulary
+
+README 与架构文档统一使用以下术语（四层完整定义与例外台账见
+[docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)）：
+
+| 术语 | 一句话定义 |
+|------|-----------|
+| Application（应用层） | FastAPI `app`：REST API、Chat Runtime（SSE）、Admin API、任务编排 API 的宿主 |
+| Chat Runtime | `POST /chat/stream` 的应用层宿主：SSE 帧协议、流注册表、中止与 resume |
+| GraphRunner | 统一图执行核心：Input Guard → 记忆装配 → 指代解析 → `graph.stream` → trace / `memory.end_turn` |
+| Orchestration（编排层） | LangGraph 主图：9 个核心节点 + 自动发现的 Skill / 域图节点（`builder.py`） |
+| Router（主图） | 主图入口节点：域预过滤 + 三层路由（rule → vector → LLM），拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
+| Planner / Critique / Supervisor | plan 支线专属：任务拆解 → 计划校验 → 纯规则 DAG 调度（Send 并行） |
+| Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带专家与 reporter；5 个（客服 / 旅游 / 旅游商务 / 旅游预订 / 选品漏斗） |
+| Capability | 路由与规划的最小能力单元（17 个，唯一事实源 `capabilities.yaml`） |
+| Skill | Capability 的业务执行封装（12 个）；RAG / SQL 是 Skill，不是独立 Agent |
+| Tool | 无状态原子操作（34 个），Skill 之下、基础设施之上 |
+| Workflow | 预定义多步编排（4 个），绕过 Planner |
+| Model Gateway（模型网关） | `infra/llm`：统一 LLM 出口 proxy + DB 治理注册表 + providers；具体模型绑定不进架构图 |
+| Shared Platform（公共平台能力） | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation |
+| Infrastructure（基础设施） | PostgreSQL(pgvector) / Redis / Celery / Kafka 与 Ollama（profile，默认不启） |
 
 ---
 
@@ -88,73 +214,26 @@ flowchart TB
 
 ### Multi-Agent 编排（主图）
 
-固定 9 个核心节点，**顺序与命名不得随意改动**；Skill 节点与域图节点由自动发现加入：
-
-```
-START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度）→ 客服域图 → END
-                ├─ 客服预过滤命中（CS_ENABLED + 灰度）     → 客服域图 → END
-                ├─ 旅游预过滤命中（TRAVEL_ENABLED）        → 旅游域图 → END
-                ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
-                └─ 三层 Router（rule → vector → LLM）→ route_selector
-                      ├─ direct   → skill_executor   → reporter → END
-                      ├─ workflow → workflow_executor → reporter → END
-                      ├─ general_chat（寒暄/能力咨询）→ 主 LLM 直答 → END
-                      └─ plan     → planner → critique → supervisor（Send 并行）
-                                                    → reporter → END
-```
-
-| 节点 | 职责边界 |
-|------|----------|
-| Router | 三层路由：规则强信号 → 向量召回（pgvector 路由索引）→ LLM 兜底；域图预过滤（客服/旅游/选品）与 CS 域检测为**纯正则**、不走向量 |
-| Planner | 只做任务拆解 → Capability DAG，**禁调 Tool/Skill/DB** |
-| Critique | 规则校验优先，仅 anomaly 才调 LLM；含计划深度上限（≤8） |
-| Supervisor | 纯规则 DAG 调度，`Send[]` 并行 + 注入 `previous_outputs` |
-| skill_executor / workflow_executor | 单能力直调 / 工作流执行，均绕过 Planner |
-| general_chat | 寒暄/能力咨询直答（2026-09-22 接线）：主 LLM 直连节点，不进 Planner/Skill 链路 |
-| Reporter | `step_results` → Markdown + 引用格式化 |
-
-**LLM 决策节点仅 4 个**（Planner / Critique / Reporter / general_chat 直答）；Router 与 CS Supervisor 的 LLM 层是兜底分支；Supervisor 本身是纯规则调度器。
+主图固定 **9 个核心节点**（router / tool_selector / skill_executor / workflow_executor / planner / critique / supervisor / reporter / general_chat），Skill 节点与域图节点由自动发现加入；**LLM 决策节点仅 4 个**（Planner / Critique / Reporter / general_chat），Router 与 CS Supervisor 的 LLM 层是兜底分支，Supervisor 是纯规则调度器。
+节点职责边界、完整拓扑与三层路由细节见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
 
 ### 垂直域图（Domain Graph）
 
-五个域图的**代码默认全关**（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `TRAVEL_COMMERCE_ENABLED` / `TRAVEL_BOOKING_ENABLED` 均为 `false`，新 clone 拿到的是这个）；当前仓库根 `.env` 客服 / 旅游 / 选品三个已打开。进入域图有**两条独立通路**：
-
-| 入口 | 触发方式 | 行为 |
+| 域图 | 开关（代码默认全关） | 构成 |
 |---|---|---|
-| **客服窗口锁域** | 用户端客服抽屉 `CSDrawer` 每条消息带 `domain_hint=customer_service`（`frontend/src/hooks/useCSChat.ts`） | `router_node` 置 `cs_forced` → **跳过域检测门、跳过灰度判定（恒 treatment）、跳过旅游/选品 prefilter**，直接进客服管线。仍受 `CS_ENABLED` 总闸约束（关闭则降级回主路由） |
-| **全局入口** | `domain_hint` 为空（普通对话页） | 在 router 内按序判定：CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测（同为纯正则，与第一步同源）；CS 命中后还须过服务端灰度 `CS_ROLLOUT_PERCENT`（默认 100），落 control 组则回主图 |
+| 客服 | `CS_ENABLED` | supervisor + 5 专家（knowledge/query/action/complaint/handoff） |
+| 旅游 | `TRAVEL_ENABLED` | slot_filler + 5 专家 + validator/repair（四轴校验） |
+| 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | 预过滤已接线，与旅游同层 |
+| 旅游商务 | `TRAVEL_COMMERCE_ENABLED` | 独立域图（STOP K） |
+| 旅游预订 | `TRAVEL_BOOKING_ENABLED` | 预订事务 + 幂等账本复用（STOP L） |
 
-预过滤优先级 **客服 > 旅游**（"订单里的行程单"按客服诉求处理）。
-
-> **客服窗口为什么必须锁域**：此处**不存在"漏进主图"的 A/B 对照语义**（用户已显式进入客服窗口），而每条消息重新判域有两个实测代价——
-> ① **召回漏判**：CS 规则阈值 `CS_RULE_MIN_HITS=2`，实测「东西坏了咋办」「我的订单三天前就显示已发货，为什么还没收到」规则命中**均仅 1** → 全局入口判非客服、落到 `route_mode=plan`，白跑一轮 Planner/LLM；
-> ② **域错配**：非客服问法被甩到主图 plan 支线（实测「下周去大阪怎么玩」`cs规则=0` → `route_mode=plan`）。
-> 锁域顺带把该窗口的 token 用量归因到 `component="customer_service"`（trace 打 `cs_domain_lock=1`）。
->
-> ⚠️ **锁域几乎不省时间，别当性能优化看**：全部域预过滤合计 **< 0.1ms**（实测 CS 规则预判 14~35µs / 旅游正则 22~53µs / 选品正则 9~20µs）；CS 域检测自 2026-09-18 起已无向量通道，冷路径 ~21µs、命中缓存 ~1µs。
->
-> **锁域不等于绝对**：域锁下若「无任何客服规则信号 **且** 命中旅游/选品强信号」，仍会走 `redirect_main` 正则阶段转出主路由——但该正则**只认种子城市（福州/厦门/杭州）**，故「去大阪怎么玩」这类问法仍留守客服管线（阶段二 LLM 语义仲裁默认 OFF，`CS_REDIRECT_MAIN_LLM_ENABLED`）。混合信号（如"订单里的行程单怎么退款"含客服规则）**仍守 CS 优先**。行为有测试守护：`backend/tests/orchestration/graph/test_router_prefilter_order.py`（**19 例全绿**，覆盖锁域越过检测失败 / CS 关闭降级主路由 / 旅游转出 / 混合信号留守 / 灰度顺序等）。
-
-- **客服域图**：`state_loader → pending_handler → cs_supervisor → 5 专家 → cs_reporter`
-  - `cs_supervisor` 承担三件事：handoff 拦截、循环上限、LLM 兜底
-- **旅游域图**：`travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair → travel_reporter`
-  - `travel_validator` 是旅游域的 Evidence Gate：纯规则零 LLM 零 IO，**只判定不修改**（修复在 `repair.py`），四轴校验（时间/地理/体力/预算）
-  - error 级违反**阻塞交付**并触发修复；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）
-- **选品漏斗域图**：prefilter **已接线**（`router_node` 内与旅游同层，2026-09-17）；仅受 `SELECTION_FUNNEL_ENABLED` 开关控制，无域锁通路
-- **旅游商务域图**（`backend/travel/commerce/`，2026-09-24 STOP K）：独立域图，`TRAVEL_COMMERCE_ENABLED`，默认关
-- **旅游预订域图**（`backend/travel/booking/`，2026-09-25 STOP L）：预订事务与幂等账本复用，`TRAVEL_BOOKING_ENABLED`，默认关
-
-**跨轮状态契约**（checkpointer 关闭时同样必须遵守，Domained Graph 通用）：
-
-1. `new_*_graph_input()` **只放本轮输入**，不预置产物/执行态默认值 —— checkpointer 会把 input 当对上轮状态的**更新**合并，预置 `brief: {}` 等于每轮清空成果
-2. 读状态一律 `.get()` —— 本轮没写过的键不在最终状态里
-3. `brief_fingerprint` 变 → 只在 slot_filler 里 `planning_reset()`；不清则 supervisor 会把**上一轮行程**当新需求输出
+进入域图有两条独立通路（客服窗口锁域 `domain_hint` / 全局预过滤 + 灰度）；预过滤优先级**客服 > 旅游**。锁域动机、灰度顺序、跨轮状态契约见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
 
 ### NL2SQL 数据分析
 
 ```
 "分析最近 30 天库存异常"
-   ↓ Schema Router（自动选表）→ SQL Generator → Validator（6 层硬校验 + 行级权限）
+   ↓ SQL Schema Router（SQL 子系统内部，自动选表）→ SQL Generator → Validator（6 层硬校验 + 行级权限）
    ↓ Executor（连接池 + 脱敏）→ Markdown
 ```
 
@@ -164,13 +243,19 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 日报生成｜库存预警｜市场调研（证据管线 → 12 章节报告）｜选品决策（市场评估 → 差异化 → 财务测算 → AI 评审团）
 
-### 三层记忆
+### 公共平台能力（Shared Platform）
 
-| 层级 | 存储 | 生命周期 |
-|------|------|---------|
-| L1 短期 | 消息缓冲区 | 单次会话 |
-| L2 会话 | PostgreSQL | 持久化 |
-| L3 长期 | pgvector | 跨会话检索 + 衰减归档 |
+以下能力是**横切支撑，不是业务 Agent**，不与客服 / 旅游 / 选品并列（层级关系见图 3）：
+
+| 能力 | 位置 | 说明 |
+|------|------|------|
+| Authorization | `security/` + `/api/rbac` | Principal 统一、RBAC、写操作审批门 `tool_approval` |
+| Memory（三层记忆） | `memory/` | L1 短期（消息缓冲）｜ L2 会话（PostgreSQL）｜ L3 长期（pgvector + 衰减归档） |
+| Context Budget | `context_budget/` | 上下文装配 / 压缩预算（GraphRunner 与调度器内侧） |
+| Model Governance | `infra/llm` + 管理端 | 模型注册表 DB 治理、价格双人审核、配额与健康探测 |
+| Idempotency | `ai.idempotency_records` | 副作用幂等账本 + IN_DOUBT 裁决 + 运维 CLI |
+| Observability | `observability/` + Prometheus | Tracer（44 种 SpanKind）/ metrics / 告警 / trace 留存，详见下文 [Observability](#observability) |
+| Evaluation | `evaluation/` | planner / rag / sql / e2e / travel 数据集与 runners，详见「评测结果」 |
 
 ---
 
@@ -197,18 +282,18 @@ python -m backend.evaluation rag --selection expanded_100 --live --compare lates
 
 ---
 
-## 架构
+## 架构约束与分层
 
 ### 分层与调用方向
 
 ```
-Agent      — 任务理解、规划、决策（不直接操作业务）
+Orchestration  — 编排层：router / planner / supervisor（不直接操作业务数据）
+   ↓ Capability — 路由与规划的最小能力单元（sql.query / rag.search / report.generate …）
+Skill          — 业务能力封装（SQLSkill / RAGSkill / ReportSkill …）
    ↓
-Skill      — 业务能力封装（rag.search / sql.query / report.generate）
+Tool           — 无状态底层执行（vector_search / postgres_query / send_email）
    ↓
-Tool       — 无状态底层执行（vector_search / postgres_query / send_email）
-   ↓
-External   — PostgreSQL（含 pgvector）/ SMTP / MCP / 地图服务
+Infrastructure — PostgreSQL（含 pgvector）/ Redis / SMTP / 地图服务 / MCP
 ```
 
 方向固定：`Planner → capability → Skill → Tool → Infrastructure`。
@@ -216,36 +301,13 @@ External   — PostgreSQL（含 pgvector）/ SMTP / MCP / 地图服务
 
 三条铁律：**G1** 声明式注册、启动期派生、fail-fast ｜ **G2** 单一事实源，派生量禁止手写回去 ｜ **G3** 谁定义谁注册，禁止集中代注册。
 
-### 运行拓扑与端口
+### 运行拓扑 / 异步层 / 网关认证
 
-| 端口 | 组件 | 说明 |
-|------|------|------|
-| **9080** | **APISIX 网关** | **唯一入口**：验签 Bearer / Redis 黑名单 / 限流 → 注入身份头 |
-| 8000 | `app`（FastAPI） | 仅绑 `127.0.0.1`，外部流量一律走 9080 |
-| 8090 | `rag-service` | 独立 RAG 服务 |
-| 8091 | `mcp-service` | MCP 服务 |
-| 3100 / 3200 / 3300 | 用户端 / 管理端 / 客服坐席工作台 | `next dev`（本地进程，非容器） |
-| 5433 → 5432 | `postgres` | `agent_business` + `agent_memory` |
-| 6379 | `redis` | Celery broker + result backend |
-| 9090 / 3001 | Prometheus / Grafana | `--profile observability` |
-| 9094 / 11434 | `kafka` / `ollama` | `--profile java-loop` / `--profile local-llm`，默认不启 |
+端口表、部署拓扑图、Celery 异步层与 APISIX 认证细节已收敛到
+[docs/architecture/system-overview.md](docs/architecture/system-overview.md)，README 不再维护第二份口径。速记两条：
 
-**请求链路**：前端 rewrite → APISIX:9080 → `X-User-Id` 等身份头 → app（`IDENTITY_SOURCE=header` 只认头）。
-
-### 异步层
-
-- `/chat/stream` 主链路**同步执行、不经队列**，SSE 直返（帧序 `meta → status/log/delta → done/error`）
-- Celery 双队列 `agent` ｜ `rag_index`（`backend/tasks/celery_app.py::task_routes` 固定路由）
-- 状态权威在 PostgreSQL（`agent_memory.tasks`），payload 仅 `task_id`；`acks_late` + `prefetch=1` + 软/硬双层超时
-- 重试 = 从最近 LangGraph checkpoint 自愈式续跑；业务终态异常不重试
-
-细节见 [docs/OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md](docs/OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md)。
-
-### 网关与认证
-
-- Python 侧自建认证：`local_jwt.py`（HS512 + pbkdf2），`/auth/*` + `/sys/users/register`
-- APISIX standalone 声明式配置进 Git（`apisix/apisix.yaml`），改宿主文件后 `docker compose restart apisix` 即生效，无需 build
-- ⚠️ 网关伪头剥离**无条件执行**（不受 `GATEWAY_AUTH_MODE` 门控）；验收必须用回显桩看请求头，不能用"行为观察法"
+- `/chat/stream` 主链路**同步执行、不经队列**，SSE 直返；Celery 双队列 `agent` ｜ `rag_index` 只承接异步任务
+- 请求链路：前端 rewrite → APISIX:9080（注入 `X-User-Id` 身份头）→ app（`IDENTITY_SOURCE=header` 只认头）
 
 ---
 
@@ -285,7 +347,7 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | 层次 | 技术 |
 |------|------|
 | 接入 | Apache APISIX（standalone）+ FastAPI + SSE Streaming |
-| Agent | LangGraph（StateGraph + Send API + checkpointer） |
+| 编排 | LangGraph（StateGraph + Send API + checkpointer） |
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
 | 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
@@ -469,6 +531,8 @@ agent/
 | [AGENTS.md](AGENTS.md) | 项目级硬约束与架构知识（**改代码前先读**） |
 | [命令文档.md](命令文档.md) | 启停 / 评测 CLI / 可观测性速查 |
 | [docs/README.md](docs/README.md) | 文档总索引 |
+| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | 部署拓扑 / 端口表 / 异步层 / 网关认证 |
+| [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md) | 主图节点职责 / 域图细节 / 客服锁域 / 跨轮状态契约 |
 | [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md) | 四层定义、写法、例外台账 |
 | [docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md) | 新增资产 checklist |
 | [docs/gateway-apisix-migration-plan.md](docs/gateway-apisix-migration-plan.md) | 网关迁移计划（B0→B4 分批 + 审批门禁） |
