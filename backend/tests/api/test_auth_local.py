@@ -6,6 +6,7 @@ import pytest
 from starlette.requests import Request
 
 from backend.app.api import deps
+from backend.app.api.routes import auth_local
 
 
 def _request() -> Request:
@@ -35,3 +36,29 @@ def test_internal_token_never_maps_to_super_admin():
     )
 
     assert identity.role == "admin"
+
+
+def test_super_admin_login_and_refresh_claims_keep_platform_and_cs_roles():
+    """角色遗漏到 JWT 或 userInfo 会使重登后权限回退或客服端被误拒。"""
+
+    row = {
+        "id": 7,
+        "username": "alice",
+        "real_name": "Alice",
+        "role": "super_admin",
+        "tenant_id": "tenant-a",
+        "cs_role": "agent",
+    }
+
+    assert auth_local._jwt_roles(row) == ["super_admin", "agent"]
+    assert auth_local._user_info(row) == {
+        "userId": 7,
+        "username": "alice",
+        "realName": "Alice",
+        "roles": ["super_admin"],
+        "platformRole": "super_admin",
+        "tenantId": "tenant-a",
+        "csRole": "agent",
+        "dept": "",
+        "mustChangePassword": False,
+    }
