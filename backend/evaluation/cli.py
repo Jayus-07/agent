@@ -49,6 +49,19 @@ def _bootstrap_runners(config_module: str | None = None):
             print("   没有注册任何 runner，所有模块将返回 'skip'。")
 
 
+def _bootstrap_llm_registry() -> None:
+    """独立评估进程启动时加载数据库模型、供应商和凭据覆盖层。"""
+    try:
+        import asyncio
+
+        from backend.infra.llm.registry_store import refresh_registry
+
+        asyncio.run(refresh_registry())
+    except Exception as exc:  # noqa: BLE001
+        # 注册表刷新失败不阻止纯离线评估；需要真实 RAG 时由下游给出明确错误。
+        print(f"[bootstrap] refresh_registry 失败: {exc}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="python -m evaluation",
@@ -158,6 +171,9 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # RAGPipeline 会在 runner 执行阶段读取进程内 DB 覆盖层，必须先刷新。
+    _bootstrap_llm_registry()
 
     # 注册 runner（在 run_all 之前）
     _bootstrap_runners(args.runner_config)
