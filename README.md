@@ -8,8 +8,8 @@
 
 ## 总览
 
-**主线**（实线，默认启用）：用户端 / 管理端 → APISIX 网关 → `app` → 主图三条支线（direct / workflow / plan）→ reporter。
-**扩展**（虚线，由开关控制）：3 个垂直域图（客服 / 旅游 / 选品漏斗，代码默认关闭）、Kafka `java-loop`、Ollama `local-llm`、Prometheus/Grafana。小程序为客户端扩展。
+**主线**（实线，默认启用）：用户端 / 管理端 → APISIX 网关 → `app` → 主图支线（direct / workflow / plan + 寒暄直答）→ reporter。
+**扩展**（虚线，由开关控制）：5 个域图（客服 / 旅游 / 选品漏斗 + 旅游商务 / 旅游预订，**代码默认全部关闭**）、Kafka `java-loop`、Ollama `local-llm`、Prometheus/Grafana。小程序已退役冻结，移动端由用户端响应式 Web 承接。
 
 ```mermaid
 flowchart TB
@@ -19,22 +19,26 @@ flowchart TB
 
     W["用户端 :3100"]:::main
     AD["管理端 :3200"]:::main
-    MP["微信小程序（Taro）"]:::ext
+    CSW["客服坐席工作台 :3300"]:::main
+    MP["微信小程序（已退役冻结）"]:::ext
     GW["APISIX :9080 · 唯一入口<br/>验签 Bearer / Redis 黑名单 / 限流 → 注入身份头"]:::main
     APP["app · FastAPI :8000（仅绑 127.0.0.1）<br/>POST /chat/stream（SSE 直返，不经队列）"]:::main
 
     W --> GW
     AD --> GW
-    MP --> GW
+    CSW --> GW
+    MP -.->|已退役| GW
     GW --> APP
 
     APP --> ROUTER{"主图 router · 三层路由<br/>rule → vector → LLM"}
     ROUTER -->|direct| SE["skill_executor"]:::main
     ROUTER -->|workflow| WE["workflow_executor"]:::main
     ROUTER -->|"plan（主线）"| PL["planner → critique → supervisor（Send 并行）"]:::main
+    ROUTER -->|寒暄/能力咨询| GC["general_chat 直答"]:::main
     SE --> REP["reporter → END"]:::main
     WE --> REP
     PL --> REP
+    GC --> END0["END"]:::main
 
     ROUTER -.->|"域锁 · domain_hint=cs"| CS["客服域图"]:::ext
     ROUTER -.->|"预过滤命中 · CS_ENABLED"| CS
@@ -53,19 +57,19 @@ flowchart TB
 
 ---
 
-## 系统规模（2026-09-20 实测口径）
+## 系统规模（2026-09-28 实测口径）
 
 | 资产 | 数量 | 事实源 |
 |------|------|--------|
-| 主图核心节点 | 8 | `backend/orchestration/graph/builder.py` |
+| 主图核心节点 | 9（含 `general_chat` 寒暄直答，2026-09-25 口径对齐） | `backend/orchestration/graph/builder.py` |
 | Skill | 12 | `backend/skills/registry.py::_instances` |
 | Capability | 17（其中 3 个 `routed: false` 内部能力） | `backend/orchestration/router/capabilities.yaml` |
 | Tool | 34 | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
-| 域图 / 业务 Agent | 3（客服 / 旅游 / 选品漏斗，代码默认关闭；进法见「垂直域图」） | `backend/domains/__init__.py` |
+| 域图 | 5（客服 / 旅游 / 选品漏斗 / 旅游商务 / 旅游预订；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
-| 后端用例 | 5293（`pytest --collect-only`，55s） | `backend/tests/` |
-| 前端路由 | 用户端 7 / 管理端 41 | `*/src/app/**/page.tsx` |
+| 后端用例 | 7336（`pytest --collect-only`，2026-09-28） | `backend/tests/` |
+| 前端路由 | 用户端 5 / 管理端 38 / 客服坐席 8 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
 > [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)。
@@ -84,7 +88,7 @@ flowchart TB
 
 ### Multi-Agent 编排（主图）
 
-固定 8 个核心节点，**顺序与命名不得随意改动**；Skill 节点与域图节点由自动发现加入：
+固定 9 个核心节点，**顺序与命名不得随意改动**；Skill 节点与域图节点由自动发现加入：
 
 ```
 START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度）→ 客服域图 → END
@@ -94,6 +98,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
                 └─ 三层 Router（rule → vector → LLM）→ route_selector
                       ├─ direct   → skill_executor   → reporter → END
                       ├─ workflow → workflow_executor → reporter → END
+                      ├─ general_chat（寒暄/能力咨询）→ 主 LLM 直答 → END
                       └─ plan     → planner → critique → supervisor（Send 并行）
                                                     → reporter → END
 ```
@@ -105,13 +110,14 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | Critique | 规则校验优先，仅 anomaly 才调 LLM；含计划深度上限（≤8） |
 | Supervisor | 纯规则 DAG 调度，`Send[]` 并行 + 注入 `previous_outputs` |
 | skill_executor / workflow_executor | 单能力直调 / 工作流执行，均绕过 Planner |
+| general_chat | 寒暄/能力咨询直答（2026-09-22 接线）：主 LLM 直连节点，不进 Planner/Skill 链路 |
 | Reporter | `step_results` → Markdown + 引用格式化 |
 
-**LLM 决策节点仅 3 个**（Planner / Critique / Reporter）；Router 与 CS Supervisor 的 LLM 层是兜底分支；Supervisor 本身是纯规则调度器。
+**LLM 决策节点仅 4 个**（Planner / Critique / Reporter / general_chat 直答）；Router 与 CS Supervisor 的 LLM 层是兜底分支；Supervisor 本身是纯规则调度器。
 
 ### 垂直域图（Domain Graph）
 
-三个域图的**代码默认全关**（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` 均为 `false`，新 clone 拿到的是这个）；当前仓库根 `.env` 三个已全部打开。进入域图有**两条独立通路**：
+五个域图的**代码默认全关**（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `TRAVEL_COMMERCE_ENABLED` / `TRAVEL_BOOKING_ENABLED` 均为 `false`，新 clone 拿到的是这个）；当前仓库根 `.env` 客服 / 旅游 / 选品三个已打开。进入域图有**两条独立通路**：
 
 | 入口 | 触发方式 | 行为 |
 |---|---|---|
@@ -131,10 +137,12 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 - **客服域图**：`state_loader → pending_handler → cs_supervisor → 5 专家 → cs_reporter`
   - `cs_supervisor` 承担三件事：handoff 拦截、循环上限、LLM 兜底
-- **旅游域图**：`travel_slot_filler → travel_supervisor → poi/transit/budget/risk 专家 → travel_validator →（未过）travel_repair → travel_reporter`
+- **旅游域图**：`travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair → travel_reporter`
   - `travel_validator` 是旅游域的 Evidence Gate：纯规则零 LLM 零 IO，**只判定不修改**（修复在 `repair.py`），四轴校验（时间/地理/体力/预算）
   - error 级违反**阻塞交付**并触发修复；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）
 - **选品漏斗域图**：prefilter **已接线**（`router_node` 内与旅游同层，2026-09-17）；仅受 `SELECTION_FUNNEL_ENABLED` 开关控制，无域锁通路
+- **旅游商务域图**（`backend/travel/commerce/`，2026-09-24 STOP K）：独立域图，`TRAVEL_COMMERCE_ENABLED`，默认关
+- **旅游预订域图**（`backend/travel/booking/`，2026-09-25 STOP L）：预订事务与幂等账本复用，`TRAVEL_BOOKING_ENABLED`，默认关
 
 **跨轮状态契约**（checkpointer 关闭时同样必须遵守，Domained Graph 通用）：
 
@@ -172,9 +180,12 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 |------|--------------|:---:|------|------|
 | RAG 检索 | `datasets/rag/suites/expanded_100.json` | 100 | Recall@5 **0.9588** ｜ MRR **0.8980** ｜ Top-1 **1.0000** ｜ 通过 **99%** | `data/eval_runs/2026-09-17T20-54-57-c76a1b/` |
 | RAG 快评 | 20 例子集 | 20 | Recall@5 **0.9608** ｜ MRR **0.9314** ｜ Top-1 **1.0000** ｜ 通过 **100%** | `data/eval_runs/2026-09-18T04-12-24-efe47d/` |
-| 旅游规划 | `datasets/travel/cases.jsonl` | 22 | **22/22**，pass_rate **1.000**（A–F 六组 × smoke/core/hard/regression 分层） | `docs/2026-09-18-旅游域P1候选交接.md` |
+| 旅游规划 | `datasets/travel/cases.jsonl` | 34（金标已冻结） | **33 通过 + 1 skip**（T-G10 需关闭 live map 的环境性跳过，2026-09-25 全量） | `data/eval_runs/2026-09-25T01-45-11-9b68f7/` |
+| 旅游 Provider | travel-provider（探针七态契约） | 8 | **8/8** | `data/eval_runs/2026-09-25T01-50-40-cf40ea/` |
+| 旅游商务 | travel-commerce | 26 | **26/26** | `data/eval_runs/2026-09-25T01-46-26-091445/` |
+| 旅游预订 | travel-booking | 18 | **18/18** | `data/eval_runs/2026-09-25T01-46-35-931e90/` |
 | NL2SQL | `datasets/sql/cases.jsonl` | 15 | Release Gate **PASS**（准确率 / 拒答指标当前为「无数据」，尚未启用） | `data/eval_runs/2026-09-10T09-01-00-e81bc8/` |
-| 端到端 | `datasets/e2e/cases.jsonl` | 13（报告口径） | Release Gate **PASS** | `data/eval_runs/2026-09-11T08-55-26-153602/` |
+| 端到端 | `datasets/e2e/cases.jsonl` | 25（含 F-* 故障注入） | Release Gate **PASS**（最近全量运行记录为 2026-09-11，当时 13 例口径） | `data/eval_runs/2026-09-11T08-55-26-153602/` |
 
 复现：
 ```bash
@@ -213,7 +224,7 @@ External   — PostgreSQL（含 pgvector）/ SMTP / MCP / 地图服务
 | 8000 | `app`（FastAPI） | 仅绑 `127.0.0.1`，外部流量一律走 9080 |
 | 8090 | `rag-service` | 独立 RAG 服务 |
 | 8091 | `mcp-service` | MCP 服务 |
-| 3100 / 3200 | 用户端 / 管理端 | `next dev`（本地进程，非容器） |
+| 3100 / 3200 / 3300 | 用户端 / 管理端 / 客服坐席工作台 | `next dev`（本地进程，非容器） |
 | 5433 → 5432 | `postgres` | `agent_business` + `agent_memory` |
 | 6379 | `redis` | Celery broker + result backend |
 | 9090 / 3001 | Prometheus / Grafana | `--profile observability` |
@@ -278,11 +289,11 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
 | 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
-| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库 17 表，含向量表 `rag_vectors`） |
+| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 053） |
 | 异步 | Celery + Redis（双队列）+ Kafka（`java-loop` profile，默认不启） |
 | 可观测 | 自建 Tracer + Prometheus + Grafana |
 | MCP | stdio / HTTP SSE |
-| 前端 | Next.js 14 + React 18 + Tailwind 3 + Zustand + TanStack Query｜小程序 Taro |
+| 前端 | Next.js 14 + React 18 + Tailwind 3 + Zustand + TanStack Query（用户端 / 管理端 / 客服坐席三端）｜小程序 Taro 已退役冻结（移动端由用户端响应式承接） |
 
 ---
 
@@ -340,6 +351,7 @@ docker compose down               # ⚠️ 加 -v 会连数据卷一起删
 docker compose up -d --build                                   # 等价 devctl start backend
 cd frontend       && npm install && npx next dev -p 3100       # 等价 devctl start web
 cd frontend-admin && npm install && npx next dev -p 3200       # 等价 devctl start admin
+cd frontend-cs    && npm install && npx next dev -p 3300       # 等价 devctl start cs
 ```
 
 ### 访问入口
@@ -348,6 +360,7 @@ cd frontend-admin && npm install && npx next dev -p 3200       # 等价 devctl s
 |------|------|
 | 用户端（登录页 `/login`） | http://localhost:3100 |
 | 管理端 | http://localhost:3200 |
+| 客服坐席工作台 | http://localhost:3300 |
 | API 文档 | http://localhost:8000/docs |
 | 网关 | http://localhost:9080（本地 dev 必启，否则前端所有 `/api/*` 请求失败） |
 
@@ -416,7 +429,7 @@ agent/
 │   ├── tools/                 # 34 个 Tool（无状态可测试）
 │   ├── domains/               # 域图注册入口（→ 下面三个垂直域）
 │   ├── customer_service/      # 客服域图
-│   ├── travel/                # 旅游域图
+│   ├── travel/                # 旅游域图（含 commerce / booking 两个子域，默认关）
 │   ├── selection_funnel/      # 选品漏斗域图（prefilter 已接线）
 │   ├── rag/                   # RAG 管道（检索 / 索引 / 预处理）
 │   ├── sql/                   # NL2SQL（6 层校验 + 行级权限）
@@ -426,11 +439,12 @@ agent/
 │   ├── observability/         # Tracer / Metrics / Alerts
 │   ├── security/              # 认证 / 审批门 / 守卫
 │   ├── infra/                 # LLM 代理 / 计价 / 预算 / 限流
-│   └── tests/                 # 5293 用例
+│   └── tests/                 # 7336 用例
 ├── mcp_servers/               # MCP 服务（2 server / 5 tool）
 ├── frontend/                  # 用户端 Next.js（:3100）
 ├── frontend-admin/            # 管理端 Next.js（:3200）
-├── frontend-mp/               # 微信小程序（Taro，客户端扩展）
+├── frontend-cs/               # 客服坐席工作台 Next.js（:3300）
+├── frontend-mp/               # 微信小程序（Taro）——已退役冻结（2026-09-17），仅存档
 ├── docker/                    # init-dbs.sh + Prometheus 告警规则等
 ├── 部署/                       # 部署脚本与说明
 ├── scripts/                   # 运维 / 验收 / 网关基线脚本
@@ -460,6 +474,11 @@ agent/
 | [docs/gateway-apisix-migration-plan.md](docs/gateway-apisix-migration-plan.md) | 网关迁移计划（B0→B4 分批 + 审批门禁） |
 | [docs/2026-09-16-总交接与实施计划.md](docs/2026-09-16-总交接与实施计划.md) | 跨会话交接与施工顺序（推荐入口） |
 | [docs/未完成功能进度汇总-2026-09-16.md](docs/未完成功能进度汇总-2026-09-16.md) | 功能欠账 + 开工顺序 |
+| [docs/2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md](docs/2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md) | 五线进度盘点（客服/旅游/记忆/上下文/代码审查，**最新欠账口径**） |
+| [docs/2026-09-25-FinalRC-TestDebt-Closure.md](docs/2026-09-25-FinalRC-TestDebt-Closure.md) | 全量回归收官：测试债清偿与 flaky 甄别 |
+| [docs/gateway-apisix-final-report.md](docs/gateway-apisix-final-report.md) | APISIX 网关迁移收官与实测踩坑清单 |
+| [docs/java-side-handover.md](docs/java-side-handover.md) | Java 侧（Enterprise_OA）割接清单 |
+| [docs/contracts/identity-header-protocol.md](docs/contracts/identity-header-protocol.md) | 网关注入身份头（X-User-Id）契约 |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | 会话交接记录 |
 | [docs/TRAVEL_ARCHITECTURE_AUDIT.md](docs/TRAVEL_ARCHITECTURE_AUDIT.md) | 旅游域架构审计（Phase 0，含数据 Provider 层缺口） |
 | [docs/production-readiness-assessment.md](docs/production-readiness-assessment.md) | 生产就绪风险清单（P0/P1，含未修复项） |
