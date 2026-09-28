@@ -16,12 +16,16 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { getAccessToken, tryRefreshOnce } from "@/lib/auth";
+import { getAccessToken, getCsRole, tryRefreshOnce } from "@/lib/auth";
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";
   const isPublic = pathname.startsWith("/login");
-  const [state, setState] = useState<"checking" | "ok">("checking");
+  const [state, setState] = useState<"checking" | "ok" | "forbidden">("checking");
+
+  const setAccessState = () => {
+    setState(getCsRole() ? "ok" : "forbidden");
+  };
 
   useEffect(() => {
     if (isPublic) {
@@ -29,7 +33,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       return;
     }
     if (getAccessToken()) {
-      setState("ok");
+      setAccessState();
       return;
     }
     let cancelled = false;
@@ -37,7 +41,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     tryRefreshOnce().then((ok) => {
       if (cancelled) return;
       if (ok) {
-        setState("ok");
+        setAccessState();
       } else {
         const redirect = encodeURIComponent(pathname);
         window.location.assign(`/login?redirect=${redirect}`);
@@ -49,6 +53,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   }, [pathname, isPublic]);
 
   if (isPublic) return <>{children}</>;
-  if (state !== "ok") return null;
+  if (state === "checking") return null;
+  if (state === "forbidden") {
+    return <div role="alert">无客服工作台访问权限</div>;
+  }
   return <>{children}</>;
 }

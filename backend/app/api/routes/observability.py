@@ -49,11 +49,14 @@ def _sensitive_guard_mode() -> str:
 
 async def require_admin_operator(request: Request) -> None:
     """网关审计类端点的管理员闸（A3 收口；enforce 默认 / audit 可回退）。"""
-    from backend.app.api.deps import resolve_operator_role  # 局部导入避免循环依赖
+    from backend.app.api.deps import (  # 局部导入避免循环依赖
+        is_platform_admin,
+        resolve_operator_role,
+    )
 
     ident = await resolve_operator_role(request)
     # actor 形如 "user:<id>"（JWT 通道）或 "service:internal-token"（服务凭据）
-    if ident.role == "admin" and ident.actor.startswith("user:"):
+    if is_platform_admin(ident.role) and ident.actor.startswith("user:"):
         return
     if _sensitive_guard_mode() == "audit":
         logger.warning(

@@ -13,7 +13,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
-from backend.app.api.deps import OperatorIdentity, require_admin_user
+from backend.app.api.deps import (
+    OperatorIdentity,
+    is_platform_admin,
+    require_admin_user,
+)
 from backend.app.api.identity import resolve_identity
 from backend.memory.database import get_session
 from backend.security.local_jwt import hash_password
@@ -22,7 +26,7 @@ from backend.shared.logger import logger
 
 router = APIRouter(prefix="/sys/rbac", tags=["管理端-RBAC"])
 
-_ALLOWED_PLATFORM_ROLES = {"viewer", "editor", "admin"}
+_ALLOWED_PLATFORM_ROLES = {"viewer", "editor", "admin", "super_admin"}
 _ALLOWED_CS_ROLES = {"agent", "supervisor"}
 _MISSING = object()
 _session_service = SessionService()
@@ -40,7 +44,7 @@ async def require_rbac_admin(
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> OperatorIdentity:
     """RBAC 管理面强制 admin，避免敏感端点 audit 灰度放行非管理员。"""
-    if operator.role != "admin":
+    if not is_platform_admin(operator.role):
         raise HTTPException(status_code=403, detail="仅 admin 可访问 RBAC 管理端")
     return operator
 
@@ -103,6 +107,28 @@ def _http_error(message: str, status_code: int) -> HTTPException:
     return HTTPException(status_code=status_code, detail=message)
 
 
+def _validate_role_transition(
+    operator_role: str,
+    current_role: str | None,
+    new_role: str,
+    new_status: int,
+    *,
+    creating: bool = False,
+) -> None:
+    """校验普通管理 HTTP API 的平台角色与状态变更边界。"""
+    del creating
+    if not is_platform_admin(operator_role):
+        raise _http_error("仅管理员可管理 RBAC", 403)
+    if current_role == "super_admin" or new_role == "super_admin":
+        raise _http_error("super_admin 只能由运维 bootstrap 管理", 403)
+    if operator_role != "super_admin" and (
+        current_role == "admin" or new_role == "admin"
+    ):
+        raise _http_error("仅 super_admin 可管理 admin", 403)
+    if new_status not in (0, 1):
+        raise _http_error("status 必须是 0/1", 400)
+
+
 def _stable_display_name(user: Any, user_id: int) -> str:
     """客服档案显示名只取服务端用户资料，并提供稳定的最终回退。"""
     for key in ("real_name", "username"):
@@ -132,7 +158,7 @@ def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
         not isinstance(platform_role, str)
         or platform_role not in _ALLOWED_PLATFORM_ROLES
     ):
-        raise _http_error("platformRole 必须是 viewer/editor/admin", 400)
+        raise _http_error("platformRole 必须是 viewer/editor/admin/super_admin", 400)
 
     status = body.get("status", _MISSING)
     if status is not _MISSING:
@@ -275,13 +301,14 @@ async def update_user_in_transaction(
     """执行用户、客服档案、会话撤销与审计的同事务部分。"""
     parsed = _validate_body(body, require_version=require_version)
     # 所有 RBAC 写操作先争抢同一事务级 advisory lock，再按固定顺序锁
-    # active admin 与目标用户，避免两个管理员并发降权时交叉持锁死锁。
+    # 活动高权限管理员与目标用户，避免两个管理员并发降权时交叉持锁死锁。
     await db.execute(text(
         "SELECT pg_advisory_xact_lock(hashtext("
         "'auth.users:rbac-active-admins'))"))
     admin_rows = (await db.execute(text(
         "SELECT id FROM auth.users "
-        "WHERE tenant_id = :tenant_id AND role = 'admin' AND status = 1 "
+        "WHERE tenant_id = :tenant_id AND role IN ('admin', 'super_admin') "
+        "AND status = 1 "
         "ORDER BY id FOR UPDATE"),
         {"tenant_id": tenant_id})).mappings().all()
     current = (await db.execute(text(
@@ -307,6 +334,12 @@ async def update_user_in_transaction(
         if parsed["status"] is _MISSING
         else parsed["status"]
     )
+    _validate_role_transition(
+        operator.role,
+        _row_value(current, "role", "viewer"),
+        new_role,
+        new_status,
+    )
     # dept（P9）：未携带 = 保持现状；携带空串 = 清空；非空 = 主数据校验
     current_dept = str(_row_value(current, "dept", "") or "")
     new_dept = current_dept if parsed["dept"] is _MISSING else parsed["dept"]
@@ -316,10 +349,10 @@ async def update_user_in_transaction(
                 f"部门 '{new_dept}' 不存在或未启用（须为本租户 active 部门）", 400)
 
     was_active_admin = (
-        _row_value(current, "role") == "admin"
+        _row_value(current, "role") in {"admin", "super_admin"}
         and int(_row_value(current, "status", 1)) == 1
     )
-    loses_admin_access = new_role != "admin" or new_status != 1
+    loses_admin_access = new_role not in {"admin", "super_admin"} or new_status != 1
     if was_active_admin and loses_admin_access:
         if len(admin_rows) <= 1:
             raise _http_error("不能降级或禁用最后一个 active admin", 409)
@@ -454,7 +487,7 @@ async def update_user_in_transaction(
     dept_changed = new_dept != current_dept
     cs_authorization_changed = any(
         before_state.get(field) != after_state.get(field)
-        for field in ("csRole", "enabled", "accepting")
+        for field in ("csRole", "enabled")
     )
     revoked_sessions: list[SessionRef] = []
     if role_changed or disabled or dept_changed or cs_authorization_changed:
@@ -699,7 +732,14 @@ async def create_user(
         raise _http_error("username 必须为 2-20 位字母/数字/_.-", 400)
     platform_role = body.get("platformRole") or "viewer"
     if platform_role not in _ALLOWED_PLATFORM_ROLES:
-        raise _http_error("platformRole 必须是 viewer/editor/admin", 400)
+        raise _http_error("platformRole 必须是 viewer/editor/admin/super_admin", 400)
+    _validate_role_transition(
+        operator.role,
+        None,
+        platform_role,
+        1,
+        creating=True,
+    )
     real_name = str(body.get("realName") or "").strip()[:50]
     dept = str(body.get("dept") or "").strip()[:50]
     email = str(body.get("email") or "").strip()[:255]

@@ -75,7 +75,7 @@ async def get_my_budget(request: Request) -> dict[str, Any]:
 async def get_budget_summary(
     operator: OperatorIdentity = Depends(resolve_operator_role),
 ) -> dict[str, Any]:
-    if operator.role not in {"viewer", "editor", "admin"}:
+    if operator.role not in {"viewer", "editor", "admin", "super_admin"}:
         raise HTTPException(403, "无权查看预算汇总")
     try:
         return _json_value(_store().summary())

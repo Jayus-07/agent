@@ -28,7 +28,11 @@ import difflib
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity,
+    is_platform_admin,
+    resolve_operator_role,
+)
 from backend.prompts.registry import PROMPT_REGISTRY, PromptSpec
 from backend.prompts.renderer import PromptRenderer, PromptRenderError
 from backend.prompts.service import prompt_service
@@ -83,7 +87,7 @@ class TransitionRequest(BaseModel):
 def _check_permission(risk_level: str, action: str, role: str) -> None:
     """Permission matrix:
       critical: read-only (template masked for non-admin)
-      high:     viewer=read, editor=draft, admin=publish/rollback
+      high:     viewer=read, editor=draft, admin/super_admin=publish/rollback
       medium:   viewer=read, editor=draft+publish+rollback
       low:      viewer=read, editor=draft+publish+rollback
     """
@@ -93,9 +97,9 @@ def _check_permission(risk_level: str, action: str, role: str) -> None:
         return
 
     matrix = {
-        "high":   {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["admin"], "transition": ["admin"], "rollback": ["admin"]},
-        "medium": {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["editor", "admin"], "transition": ["editor", "admin"], "rollback": ["editor", "admin"]},
-        "low":    {"read": ["viewer", "editor", "admin"], "draft": ["editor", "admin"], "publish": ["editor", "admin"], "transition": ["editor", "admin"], "rollback": ["editor", "admin"]},
+        "high":   {"read": ["viewer", "editor", "admin", "super_admin"], "draft": ["editor", "admin", "super_admin"], "publish": ["admin", "super_admin"], "transition": ["admin", "super_admin"], "rollback": ["admin", "super_admin"]},
+        "medium": {"read": ["viewer", "editor", "admin", "super_admin"], "draft": ["editor", "admin", "super_admin"], "publish": ["editor", "admin", "super_admin"], "transition": ["editor", "admin", "super_admin"], "rollback": ["editor", "admin", "super_admin"]},
+        "low":    {"read": ["viewer", "editor", "admin", "super_admin"], "draft": ["editor", "admin", "super_admin"], "publish": ["editor", "admin", "super_admin"], "transition": ["editor", "admin", "super_admin"], "rollback": ["editor", "admin", "super_admin"]},
     }
     allowed = matrix.get(risk_level, matrix["low"]).get(action, [])
     if role not in allowed:
@@ -644,7 +648,7 @@ async def seed_defaults(
     body: SeedRequest = SeedRequest(),
     operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
-    if operator.role != "admin":
+    if not is_platform_admin(operator.role):
         raise HTTPException(403, "Only admin can seed defaults")
 
     from backend.prompts.loader import seed

@@ -191,7 +191,7 @@ class TestPermissionMatrix:
 
     # critical：代码受控，任何角色都不可写
     @pytest.mark.parametrize("action", ["draft", "publish", "rollback", "transition"])
-    @pytest.mark.parametrize("role", ["viewer", "editor", "admin"])
+    @pytest.mark.parametrize("role", ["viewer", "editor", "admin", "super_admin"])
     def test_critical_is_read_only(self, action, role):
         with pytest.raises(HTTPException) as e:
             self._check("critical", action, role)
@@ -213,6 +213,10 @@ class TestPermissionMatrix:
     @pytest.mark.parametrize("action", ["draft", "publish", "rollback", "transition"])
     def test_high_admin_can_all(self, action):
         self._check("high", action, "admin")
+
+    @pytest.mark.parametrize("action", ["draft", "publish", "rollback", "transition"])
+    def test_high_super_admin_can_all(self, action):
+        self._check("high", action, "super_admin")
 
     # medium / low：editor 全权
     @pytest.mark.parametrize("risk", ["medium", "low"])

@@ -30,6 +30,7 @@ from sqlalchemy import text
 
 from backend.app.api.deps import (
     OperatorIdentity,
+    is_platform_admin,
     require_admin_user,
     resolve_operator_role,
 )
@@ -644,14 +645,14 @@ async def register(request: Request):
                     "realName": row["real_name"], "message": "注册成功"})
 
 
-_ALLOWED_ROLES = ("viewer", "editor", "admin")
+_ALLOWED_ROLES = ("viewer", "editor", "admin", "super_admin")
 
 
 @sys_router.patch("/users/{user_id}/role")
 async def change_role(user_id: int, request: Request,
                       operator: "OperatorIdentity" = Depends(resolve_operator_role)):
     """兼容旧角色路径，并转发到 RBAC 事务实现。"""
-    if operator.role != "admin":
+    if not is_platform_admin(operator.role):
         raise HTTPException(status_code=403, detail="仅 admin 可变更用户角色")
 
     body = await request.json()

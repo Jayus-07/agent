@@ -85,3 +85,13 @@ Vitest/TypeScript 检查。
 最终 HTTP/浏览器验收会覆盖用户、管理、客服三端矩阵，super_admin 登录与 refresh，
 角色变更后旧 access/refresh 的失效，以及修改 `accepting` 不退出登录。Docker
 Desktop 当前不可用，因此该真实验收在运行环境恢复前不能标记为通过。
+
+## 实施验证记录
+
+- 后端角色、RBAC、会话与一致性套件：`72 passed, 1 skipped`。
+- 后端迁移/bootstrap 套件：`5 passed`；`bootstrap_super_admin.py` 通过 `py_compile`。
+- 管理端前端：指定 Vitest `9 passed`，TypeScript `npx tsc --noEmit` 退出码 0。
+- 客服端前端：指定 Vitest `9 passed`，TypeScript `npx tsc --noEmit` 退出码 0。
+- 用户端 AuthGate：指定 Vitest `7 passed`，TypeScript `npx tsc --noEmit` 退出码 0。
+- `scripts/init_db.py --port 5433 --check` 已确认迁移目录 57 个、登记 57 个；
+  PostgreSQL 连接被拒绝（Docker Desktop 未运行），因此数据库迁移落库与真实 HTTP/浏览器矩阵尚未验证。

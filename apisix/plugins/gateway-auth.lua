@@ -256,7 +256,7 @@ end
 --   * roles 缺省（旧令牌/服务 key 通道）不拦，交给后端判定；
 --   * 匹配用**原始请求 URI**（request_uri，proxy-rewrite 只改 upstream 路径），
 --     所以前缀必须写成 /api/... 形态。
-local ROLE_RANK = { viewer = 0, editor = 1, admin = 2 }
+local ROLE_RANK = { viewer = 0, editor = 1, admin = 2, super_admin = 3 }
 local READ_METHODS = { GET = true, HEAD = true, OPTIONS = true }
 local ROLE_GATE_PREFIXES = {
     ["/api/approvals"] = { write = "admin" },   -- 审批处置权（后端已同语义 403，网关是外层硬闸）
@@ -266,13 +266,13 @@ local ROLE_GATE_PREFIXES = {
     -- require_admin_operator 仍保留，双层分工）。api-key 通道无 roles，
     -- 按既有设计不在此拦，由后端统一守卫判定
     ["/api/observability/gateway"] = { read = "admin", write = "admin" },
-    -- 客服端（2026-09-21 三端拆分 + 身份接线）：/api/cs/* 仅限平台 admin
-    -- 与客服域角色（cs_agents.role=agent/supervisor，登录/刷新时并入 JWT
-    -- roles claim）。any_of 语义：命中任一角色即放行，**不走 ROLE_RANK**
-    -- —— 坐席不是平台 editor，不得借此通过 /api/prompts 等其他闸。
+    -- 客服端（2026-09-21 三端拆分 + 身份接线）：/api/cs/* 仅限客服域角色
+    -- （cs_agents.role=agent/supervisor，登录/刷新时并入 JWT roles claim）。
+    -- any_of 语义：命中任一角色即放行，**不走 ROLE_RANK**——坐席不是平台
+    -- editor，平台 admin/super_admin 也不因平台角色获得客服工作台权限。
     -- api-key 通道无 roles，按既有设计不在此拦，由后端守卫判定；
     -- /ws/cs/* 是 ticket 一次性鉴权（无 JWT 可验），不在本闸范围。
-    ["/api/cs"] = { any_of = { admin = true, supervisor = true, agent = true } },
+    ["/api/cs"] = { any_of = { supervisor = true, agent = true } },
 }
 
 -- 用户侧客服端点豁免（2026-09-21 实机验证发现：/api/cs 前缀闸把普通用户的

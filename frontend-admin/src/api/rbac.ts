@@ -1,6 +1,6 @@
 import { ApiError, request } from "@/lib/fetcher";
 
-export type PlatformRole = "viewer" | "editor" | "admin";
+export type PlatformRole = "viewer" | "editor" | "admin" | "super_admin";
 export type CsRole = "agent" | "supervisor";
 
 export interface RbacAgent {

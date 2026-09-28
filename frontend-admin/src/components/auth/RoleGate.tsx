@@ -9,7 +9,7 @@
  * 不整页跳转、不闪屏）。
  *
  * 角色来源：lib/auth.getRoles()/atLeast()（login 时写入的 userInfo.roles，
- * 与后端 auth.users.role 枚举 viewer/editor/admin 同构）。
+ * 与后端 auth.users.role 枚举 viewer/editor/admin/super_admin 同构）。
  * 权限真闸在后端（403 兜底），本组件只是体验层——后端拒了的请求这里
  * 不会提前放行任何数据。
  *
