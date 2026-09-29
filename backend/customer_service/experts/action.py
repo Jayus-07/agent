@@ -386,19 +386,18 @@ def _build_proposal(
 
 
 def _resolve_order_id(cs_route: dict, user_message: str) -> str:
-    """订单槽位解析：router metadata 显式值优先，其次当前轮消息实体。
+    """订单槽位解析（B4 收敛：优先级单一实现见 context_manager）。
 
-    两处都取不到时返回空串 —— 由调用方进入缺槽位追问（缺陷6.2），
-    绝不回退 "latest"。当前轮显式实体永远优先于任何继承值。
+    router metadata 显式值优先，其次当前轮消息实体。两处都取不到时返回
+    空串 —— 由调用方进入缺槽位追问（缺陷6.2），绝不回退 "latest"。
     """
-    explicit = (cs_route.get("metadata", {}).get("order_id") or "").strip()
-    if explicit:
-        return explicit
-    return _extract_order_id_from_message(user_message)
+    from backend.customer_service.context_manager import resolve_order_slot
+
+    return resolve_order_slot(cs_route, user_message)
 
 
 def _extract_order_id_from_message(user_message: str) -> str:
-    """订单号提取（P1 收敛：委托 understanding.entities 单一事实源）。
+    """订单号提取（B4 收敛：委托 context_manager 单一实现，保留签名供测试）。
 
     understanding 层在规范化文本上抽取（NFKC/零宽剥离复用 Input Guard
     事实源），支持字母数字混合段（两段式、形近错别字原样认领）与关键词
@@ -406,14 +405,9 @@ def _extract_order_id_from_message(user_message: str) -> str:
     "latest"（2026-09-19 引入的语义化兜底已被缺陷6否决：有副作用的动作
     不能替用户猜操作对象）。
     """
-    from backend.customer_service.understanding.entities import extract_entities
-    from backend.customer_service.understanding.types import EntityType
-    from backend.security.input_guard.normalize import normalize_query
+    from backend.customer_service.context_manager import extract_order_entity
 
-    for e in extract_entities(normalize_query(user_message or "")):
-        if e.type == EntityType.ORDER_ID:
-            return e.match()
-    return ""
+    return extract_order_entity(user_message)
 
 
 def _ask_missing_slot(

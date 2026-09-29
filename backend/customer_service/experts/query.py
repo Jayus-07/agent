@@ -194,6 +194,7 @@ def _dispatch_service(
     service_type = _INTENT_SERVICE_MAP.get(intent, "order")
 
     if service_type == "order":
+        from backend.customer_service.context_manager import resolve_order_slot
         from backend.customer_service.service.order_service import get_order_service
         order_service = get_order_service()
 
@@ -201,12 +202,10 @@ def _dispatch_service(
             # 缺陷9（2026-09-23）：回指承接解析出的订单号经 cs_route.metadata
             # 注入，优先于当前轮文本抽取——「那它到哪了」resolved_query 里
             # 的订单号是权威 referent。
-            injected_order = str(
-                (cs_route.get("metadata") or {}).get("order_id") or ""
-            ).strip()
             # P3.5：问句带具体订单号 → detail 精确查（此前一律全量列表，
-            # 「DEMO-1001 到哪了」返回整个订单列表，答非所问）
-            order_no = injected_order or _extract_order_no(question)
+            # 「DEMO-1001 到哪了」返回整个订单列表，答非所问）。
+            # B4 收敛：注入值 > 当前轮实体的优先级在 context_manager 单一实现
+            order_no = resolve_order_slot(cs_route, question) or None
             if order_no:
                 try:
                     result = order_service.query_orders(
@@ -267,19 +266,14 @@ def _dispatch_service(
 
 
 def _extract_order_no(question: str) -> str | None:
-    """订单号提取（P1 收敛：委托 understanding.entities 单一事实源）。
+    """订单号提取（B4 收敛：委托 context_manager 单一实现）。
 
     规范化文本上抽取（字母数字混合段/关键词纯数字），识别不到返回 None
     走全量列表语义。
     """
-    from backend.customer_service.understanding.entities import extract_entities
-    from backend.customer_service.understanding.types import EntityType
-    from backend.security.input_guard.normalize import normalize_query
+    from backend.customer_service.context_manager import extract_order_entity
 
-    for e in extract_entities(normalize_query(question or "")):
-        if e.type == EntityType.ORDER_ID:
-            return e.match()
-    return None
+    return extract_order_entity(question) or None
 
 
 def _get_latest_order_id(user_id: str) -> str | None:
