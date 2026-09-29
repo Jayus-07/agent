@@ -874,6 +874,11 @@ cs_store_db_failure_total = Counter(
     "客服状态 Store DB 写失败总数（strict 模式抛错，非 strict 告警降级）",
     labelnames=("store", "op"),
 )
+cs_knowledge_meta_fallback_total = Counter(
+    "cs_knowledge_meta_fallback_total",
+    "知识问答 META 缺失兜底计数（B9 收紧为 REFUSE；兜底率上升 = 模型 "
+    "META 注释遵循度劣化信号，设计方案 §4.3 兜底值监控）",
+)
 
 # ── CS Graph 独立架构指标（Phase 0 新增）──
 cs_supervisor_decision_total = Counter(
@@ -1041,6 +1046,14 @@ def record_cs_rag_status(status: str) -> None:
     """埋点客服 RAG 查询状态（hit/miss/rejected）。"""
     try:
         cs_rag_status_total.labels(status=status).inc()
+    except Exception:
+        pass
+
+
+def record_cs_knowledge_meta_fallback() -> None:
+    """埋点知识问答 META 缺失兜底（B9：兜底即 REFUSE，监控兜底率）。"""
+    try:
+        cs_knowledge_meta_fallback_total.inc()
     except Exception:
         pass
 

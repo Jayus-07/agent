@@ -83,20 +83,28 @@ class CSKnowledgeService:
             # D1-6：meta 随请求级返回值带回，不再读 pipeline 单例属性
             # （并发请求互相覆盖串扰）
             meta = outcome.answer_meta or {}
-            # P3.5：remote ask 的 meta 依赖 LLM 输出 <!--META--> 注释，
-            # 遵循度不稳（实测 conf 缺失取默认 0.5 → 门禁 refuse 丢弃
-            # 真实答案）。兜底：can_answer=True 且有答案 → 0.65（CAUTIOUS
-            # 档放行，带低置信提示）；can_answer=False → 0.5（走 refuse，
-            # 证据门禁仍守门）。
-            confidence = meta.get("confidence")
-            if confidence is None:
-                answer_ok = bool(answer and answer.strip())
-                confidence = (
-                    0.65 if meta.get("can_answer", True) and answer_ok else 0.5
+            # B9（2026-09-29 迁移）：置信度三档门禁 = ≥0.85 直接回答 /
+            # 0.60~0.85 CAUTIOUS / <0.60 拒答+建议人工（由
+            # CSAnswerDecision 按 CS_CONFIDENCE_ANSWER/CAUTIOUS 执行）。
+            # META 缺失（模型 <!--META--> 注释遵循度不稳）= 置信度与证据
+            # 均不可信——P3.5 时代的「can_answer 默认 True → 兜底 0.65
+            # 放行 CAUTIOUS」使两道门禁对该流量形同虚设，现收紧为 REFUSE
+            # （设计方案 §4.3 兜底值必须保守 / §14.1 兜底收紧 REFUSE），
+            # 并打兜底指标：兜底率上升 = META 遵循度劣化信号。
+            meta_confidence = meta.get("confidence")
+            if meta_confidence is not None:
+                confidence = float(meta_confidence)
+                has_evidence = bool(meta.get("can_answer", True)) and bool(
+                    answer and answer.strip()
                 )
-            has_evidence = meta.get("can_answer", True) and bool(
-                answer and answer.strip()
-            )
+            else:
+                from backend.observability.metrics import (
+                    record_cs_knowledge_meta_fallback,
+                )
+
+                record_cs_knowledge_meta_fallback()
+                confidence = 0.0
+                has_evidence = False
 
             cs_decision = CSAnswerDecision.decide(confidence, has_evidence)
 

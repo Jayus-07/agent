@@ -159,3 +159,77 @@ class TestCSKnowledgeService:
         assert call_kwargs.kwargs.get("kb_ids") == kb_ids or call_kwargs[1].get("kb_ids") == kb_ids
         assert result.kb_ids == kb_ids
         assert result.decision == Decision.ANSWER
+
+
+# ── B9（2026-09-29 迁移）：META 缺失兜底收紧 REFUSE ──────────────
+# 旧兜底 can_answer 默认 True → 0.65 放行 CAUTIOUS，0.85/0.60 两道门禁
+# 对 META 遵循度不稳的流量形同虚设；收紧后兜底 = REFUSE + 兜底指标。
+
+
+class TestMetaFallbackB9:
+
+    def _make(self, answer, meta):
+        from backend.rag.pipeline import AskOutcome
+
+        svc = CSKnowledgeService()
+        mock_pipeline = MagicMock()
+        mock_pipeline.ask_result.return_value = AskOutcome(
+            answer=answer, sources=[], answer_meta=meta)
+        return svc, mock_pipeline
+
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_meta_missing_refuses_even_with_answer(self, mock_get):
+        """META 完全缺失 = 置信/证据不可信 → REFUSE（不再 0.65 放行）。"""
+        svc, mock_pipeline = self._make("看起来像答案", {})
+        mock_get.return_value = mock_pipeline
+
+        result = svc.answer("问题", kb_ids=["cs_faq"])
+
+        assert result.decision == Decision.REFUSE
+        assert result.confidence == 0.0
+        assert "人工" in result.answer
+
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_meta_none_entirely_refuses(self, mock_get):
+        svc, mock_pipeline = self._make("答案", None)
+        mock_get.return_value = mock_pipeline
+
+        result = svc.answer("问题", kb_ids=["cs_faq"])
+
+        assert result.decision == Decision.REFUSE
+
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_confidence_present_can_answer_missing_uses_real_value(self, mock_get):
+        """confidence 存在且 can_answer 缺失（默认 True）→ 按真实分值走三档。"""
+        svc, mock_pipeline = self._make("正常回答", {"confidence": 0.9})
+        mock_get.return_value = mock_pipeline
+
+        result = svc.answer("问题", kb_ids=["cs_faq"])
+
+        assert result.decision == Decision.ANSWER
+        assert result.confidence == 0.9
+
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_high_score_without_evidence_still_refuses(self, mock_get):
+        """禁无证据生成：can_answer=False 时高分也必须拒答。"""
+        svc, mock_pipeline = self._make("编造的答案", {"confidence": 0.95, "can_answer": False})
+        mock_get.return_value = mock_pipeline
+
+        result = svc.answer("问题", kb_ids=["cs_faq"])
+
+        assert result.decision == Decision.REFUSE
+        assert result.answer == REFUSAL_MESSAGES["no_evidence"]
+
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_meta_missing_increments_fallback_metric(self, mock_get):
+        """兜底必须可观测（设计方案 §4.3 兜底值监控）。"""
+        from backend.observability import metrics as obs_metrics
+
+        svc, mock_pipeline = self._make("答案", {})
+        mock_get.return_value = mock_pipeline
+
+        before = obs_metrics.cs_knowledge_meta_fallback_total._value.get()
+        svc.answer("问题", kb_ids=["cs_faq"])
+        after = obs_metrics.cs_knowledge_meta_fallback_total._value.get()
+
+        assert after == before + 1
