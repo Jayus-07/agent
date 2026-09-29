@@ -159,6 +159,44 @@ class TestMultiConditionArbitration:
             }))
         assert d["next_expert"] == ExpertType.COMPLAINT.value
 
+    def test_p0_direct_only_once_per_turn(self):
+        """B6 实机修复回归：P0 直通仅限本轮首次——complaint 已执行后不再
+        直通（静态信号 + 无防重入 = supervisor⇄complaint 死循环直至
+        GraphRecursionError，本用例锁死该回归）。"""
+        d = make_supervisor_decision(_state(
+            expert_history=[{"expert": "complaint"}],
+            cs_route={
+                "domain": "COMPLAINT", "route_path": "complaint_flow",
+                "intent": "c_complaint", "confidence": 0.9,
+                "metadata": {"sentiment_hits": ["angry:12315"]},
+            }))
+        assert "P0 投诉信号直通" not in d["reason"]
+        assert "[v2·L5]" in d["reason"]
+
+    def test_p0_second_visit_hits_repeat_guard(self):
+        d = make_supervisor_decision(_state(
+            expert_history=[{"expert": "complaint"}, {"expert": "complaint"}],
+            cs_route={
+                "domain": "COMPLAINT", "route_path": "complaint_flow",
+                "intent": "c_complaint", "confidence": 0.9,
+                "metadata": {"sentiment_hits": ["angry:12315"]},
+            }))
+        assert d["next_action"] == ExpertAction.FINISH.value
+        assert "[v2·L4]" in d["reason"]
+
+    def test_v1_p0_direct_also_guarded(self, monkeypatch):
+        """v1 回退路径同缺陷同修：complaint 已执行后不再直通。"""
+        monkeypatch.setattr(cs_config, "CS_DECISION_V2", False)
+        d = make_supervisor_decision(_state(
+            expert_history=[{"expert": "complaint"}],
+            cs_route={
+                "domain": "COMPLAINT", "route_path": "complaint_flow",
+                "intent": "c_complaint", "confidence": 0.9,
+                "metadata": {"sentiment_hits": ["angry:12315"]},
+            }))
+        assert "P0 投诉信号直通" not in d["reason"]
+        assert d["next_expert"] == "complaint"  # 走默认路由（存量语义）
+
     def test_route_wins_over_lowconf_branch_when_confident(self):
         """置信达标时低置信分支不参与（L5 直达路由）。"""
         d = make_supervisor_decision(_state(expert_history=[{"expert": "query"}]))

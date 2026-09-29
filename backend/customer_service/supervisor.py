@@ -188,12 +188,19 @@ def _decision_v1(state: dict[str, Any]) -> CSSupervisorDecision:
 
         # P0 投诉直通：监管/舆情信号（12315/曝光/报警）不再依赖路由置信度，
         # 强制派 complaint expert（防重入与升级转人工为该专家既有链路）。
+        # 直通仅限本轮 complaint 未执行过——信号是静态的，不设防重入会
+        # 压过 2b 重复检测形成 supervisor⇄complaint 死循环（B6 实机验证
+        # 暴露的 GraphRecursionError，与 v2 L3 同缺陷，两处同修）。
         if metadata.get("sentiment_hits"):
             from backend.customer_service.understanding.signals import (
                 is_p0_escalation,
             )
 
-            if is_p0_escalation(list(metadata["sentiment_hits"])):
+            complaint_ran = any(
+                h.get("expert") == ExpertType.COMPLAINT.value
+                for h in expert_history
+            )
+            if is_p0_escalation(list(metadata["sentiment_hits"])) and not complaint_ran:
                 decision = _make_decision(
                     ExpertAction.RUN_EXPERT, ExpertType.COMPLAINT, layer=1,
                     reason=(
@@ -360,7 +367,14 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
                 is_p0_escalation,
             )
 
-            if is_p0_escalation(list(metadata["sentiment_hits"])):
+            # 直通仅限本轮 complaint 未执行过——信号是静态的，不设防重入
+            # 会压过第 4 层循环守卫形成死循环（B6 实机验证暴露的
+            # GraphRecursionError；v1 同位置同缺陷已同修）
+            complaint_ran = any(
+                h.get("expert") == ExpertType.COMPLAINT.value
+                for h in expert_history
+            )
+            if is_p0_escalation(list(metadata["sentiment_hits"])) and not complaint_ran:
                 decision = _make_decision(
                     ExpertAction.RUN_EXPERT, ExpertType.COMPLAINT, layer=1,
                     reason=(
