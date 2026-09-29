@@ -1315,6 +1315,10 @@ def _record_tokens(
                 "finish_reason": finish_reason,
                 "decision": current_call_decision(),
                 "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
+                # 业务归因（M5）：skill/tool/域维度，随 attribution 落库
+                "skill_id": attribution["skill_id"],
+                "tool_id": attribution["tool_id"],
+                "agent_domain": attribution["agent_domain"],
                 "run_id": attribution["run_id"],
                 "step_id": attribution["step_id"],
                 "role": attribution["role"],

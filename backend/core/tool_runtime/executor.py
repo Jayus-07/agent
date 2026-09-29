@@ -45,9 +45,25 @@ _BUDGET_MARGIN_MS = 250.0
 EventCallback = Callable[[str, dict], None]
 
 
+def _with_tool_attribution(func):
+    """Tool 执行栈内绑定 tool 归因（M5 / 台账 D5），叠加语义：外层
+    skill_id 保持，tool_id 收窄到当前 Tool。"""
+    import functools  # 局部导入：模块头部未引入，避免影响既有导入面
+
+    @functools.wraps(func)
+    async def wrapper(self, *, tool_key: str, **kwargs):
+        from backend.observability.llm_context import llm_attribution_scope
+
+        with llm_attribution_scope(tool_id=tool_key):
+            return await func(self, tool_key=tool_key, **kwargs)
+
+    return wrapper
+
+
 class SafeToolExecutor:
     """无状态执行器（共享全局熔断/隔离舱注册表），可进程内单例复用。"""
 
+    @_with_tool_attribution
     async def run(
         self,
         *,

@@ -210,6 +210,20 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS cache_input_unit_price "
                 "NUMERIC(18, 6)"
             )
+            # 业务归因（M5 / 台账 D5）：skill/tool/域维度成本归因，
+            # 与 sql/migrations/055_llm_usage_attribution.sql 同口径，启动即自愈补列。
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS skill_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS tool_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS agent_domain "
+                "TEXT NOT NULL DEFAULT ''"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_ts ON {t}(ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_model ON {t}(model, ts)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_trace ON {t}(trace_id)")
@@ -222,6 +236,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
             cur.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{t}_processing "
                 f"ON {t}(run_id, step_id, ts)"
+            )
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{t}_attribution "
+                f"ON {t}(skill_id, tool_id, agent_domain, ts)"
             )
 
     # ---- 写入 ----
@@ -245,11 +263,13 @@ class PostgresLLMUsageStore(LLMUsageStore):
                         requested_model, upstream_model_id, binding_source,
                         input_unit_price, output_unit_price, cache_input_unit_price,
                         duration_ms, finish_reason, decision,
-                        run_id, step_id, role, stage, created_at
+                        run_id, step_id, role, stage,
+                        skill_id, tool_id, agent_domain, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s)
                 """, (
                     event.get("timestamp") or now,
                     str(event.get("trace_id") or ""),
@@ -288,6 +308,9 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     str(event.get("step_id") or ""),
                     str(event.get("role") or ""),
                     str(event.get("stage") or ""),
+                    str(event.get("skill_id") or ""),
+                    str(event.get("tool_id") or ""),
+                    str(event.get("agent_domain") or ""),
                     now,
                 ))
                 self._write_count += 1

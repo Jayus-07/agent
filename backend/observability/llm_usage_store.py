@@ -74,6 +74,18 @@ def current_usage_attribution() -> dict[str, str]:
             stage = binding.stage
     except Exception:
         pass
+    skill_id = ""
+    tool_id = ""
+    agent_domain = ""
+    try:
+        from backend.observability.llm_context import get_llm_attribution
+
+        attr = get_llm_attribution()
+        skill_id = attr.skill_id or ""
+        tool_id = attr.tool_id or ""
+        agent_domain = attr.agent_domain or ""
+    except Exception:
+        pass
 
     return {
         "user_id": user_id,
@@ -85,6 +97,10 @@ def current_usage_attribution() -> dict[str, str]:
         "step_id": step_id,
         "role": role,
         "stage": stage,
+        # 业务归因（M5：skill/tool/域维度，未绑定时空串）
+        "skill_id": skill_id,
+        "tool_id": tool_id,
+        "agent_domain": agent_domain,
     }
 
 

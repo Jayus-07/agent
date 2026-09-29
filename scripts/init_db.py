@@ -167,6 +167,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     "053_model_price_immutable_trigger.sql": "memory",
     # 三端账号权限最小上线改造：静态角色扩展，不引入动态角色表。
     "054_auth_super_admin.sql": "memory",
+    # 企业治理 M5（2026-09-30）：llm_usage 业务归因三列（skill/tool/域），
+    # 成本六维聚合补齐 Skill/Tool/Agent 维度。与 llm_usage_store_pg
+    # ensure_schema 自愈段同口径。
+    "055_llm_usage_attribution.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

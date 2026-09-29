@@ -116,6 +116,25 @@ def validate_params(params_schema: dict, params: dict) -> str | None:
     return "; ".join(errors) or None
 
 
+def _with_llm_attribution(func):
+    """Skill 执行栈内绑定 skill 归因（M5 / 台账 D5）。
+
+    Skill→Tool→LLM 深栈内的模型调用（RAG 生成、SQL 生成等）经
+    ``llm_usage.skill_id`` 列记账；作用域结束恢复上层绑定。软失败：
+    归因绑定异常不影响 Skill 执行本身。
+    """
+    import functools
+
+    @functools.wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        from backend.observability.llm_context import llm_attribution_scope
+
+        with llm_attribution_scope(skill_id=self.name):
+            return await func(self, *args, **kwargs)
+
+    return wrapper
+
+
 class BaseSkill(ABC):
     """Skill 抽象基类。每个 Skill 封装一组 Capability。
 
@@ -240,6 +259,7 @@ class BaseSkill(ABC):
             return json.dumps(output, ensure_ascii=False, default=str)
         return str(output)
 
+    @_with_llm_attribution
     async def execute(
         self,
         state: dict,

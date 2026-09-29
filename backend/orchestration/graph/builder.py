@@ -26,7 +26,7 @@ from backend.agents.planner.critique import critique_node
 from backend.agents.planner.planner import planner_node
 from backend.agents.reporter.reporter import reporter_node
 from backend.observability.trace_middleware import trace_middleware
-from backend.orchestration.domain_registry import domain_graph_registry
+from backend.orchestration.domain_registry import domain_graph_registry, with_domain_attribution
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.orchestration.graph.general_chat_node import general_chat_node
 from backend.orchestration.graph.router_node import route_selector, router_node
@@ -144,7 +144,10 @@ def build_graph(checkpointer=None):
     # ── 域图节点（自动发现，每个域图自带 reporter，直接到 END）──
     domains = domain_graph_registry.get_all()
     for domain in domains.values():
-        wf.add_node(domain.node_name, trace_middleware.wrap_sync_node(domain.node_name, domain.adapter))
+        # agent_domain 归因包裹（M5）：adapter 唯一消费点在此，未来新增域图自动获得
+        attributed_adapter = with_domain_attribution(domain.name, domain.adapter)
+        wf.add_node(domain.node_name,
+                    trace_middleware.wrap_sync_node(domain.node_name, attributed_adapter))
         _NODE_LABELS[domain.node_name] = domain.label
         logger.debug(f"[Graph] 自动注册域图节点: {domain.name} → {domain.node_name}")
     if domains:

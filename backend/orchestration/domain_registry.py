@@ -5,8 +5,29 @@ builder.py / route_selector / system.py 通过此注册表动态发现域图。
 """
 from __future__ import annotations
 
+import functools
+
 from backend.orchestration.domain_graph import DomainGraph
 from backend.shared.logger import logger
+
+
+def with_domain_attribution(domain_name: str, adapter):
+    """域图适配器统一包裹 LLM 用量归因（M5 / 台账 D5）。
+
+    在 builder 布线处包裹（adapter 的唯一消费点）而非 register()——注册表
+    保持「存调用方原对象」的既有语义（identity 有测试冻结）。未来新增域图
+    经 builder 自动获得 agent_domain 归因；域图子流为串行执行，ContextVar
+    可传播到子图内部全部 LLM 调用；异常路径不吞（原样上抛）。
+    """
+
+    @functools.wraps(adapter)
+    def wrapper(state: dict) -> dict:
+        from backend.observability.llm_context import llm_attribution_scope
+
+        with llm_attribution_scope(agent_domain=domain_name):
+            return adapter(state)
+
+    return wrapper
 
 
 class DomainGraphRegistry:
