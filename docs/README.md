@@ -95,7 +95,7 @@ docs/
 
 ## 6. 相关索引
 
-- 项目根 [AGENTS.md](../AGENTS.md) — 项目级硬约束与架构知识（**改代码前先读**；`CLAUDE.md` 为其早期同源文件）
+- 项目根 [AGENTS.md](../AGENTS.md) — 项目级硬约束与架构知识（**改代码前先读**，唯一入口；根 `CLAUDE.md` 为指向它的薄指针，2026-09-29 起废止双维护）
 - 根 [README.md](../README.md) — 系统规模实测口径 + 快速开始
 - 根 [命令文档.md](../命令文档.md) — 启停 / 评测 CLI 速查
 - [HANDOFF.md](HANDOFF.md) — 会话交接记录
