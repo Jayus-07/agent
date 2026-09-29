@@ -18,7 +18,7 @@
  * 运维逃生开关：NEXT_PUBLIC_ROLE_GATE_DISABLED=1 时整体放行（可关，v3 P2-1 验收项）。
  *
  * 无水合风险：本组件只出现在 AuthGate 子树内，AuthGate 检查期渲染 null
- * （见 AuthGate L52），故本组件不会在 SSR 产物中出现。
+ * （见 AuthGate 的 checking 分支），故本组件不会在 SSR 产物中出现。
  */
 import type { ReactNode } from "react";
 import { atLeast, type RoleName } from "@/lib/auth";
