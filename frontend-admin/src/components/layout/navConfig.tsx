@@ -73,6 +73,8 @@ export const NAV: NavEntry[] = [
       { label: 'Prompt 管理', path: '/prompts' },
       { label: 'Agent 节点', path: '/agents' },
       { label: 'Skill 能力', path: '/skills' },
+      { label: 'Tool 治理', path: '/tools', minRole: 'admin' },
+      { label: '资产一致性', path: '/consistency', minRole: 'admin' },
       { label: '预算策略', path: '/cost-governance/budgets' },
       { label: '模型与供应商', path: '/settings/models', minRole: 'admin' },
       { label: '工具审批', path: '/approvals', minRole: 'admin' },

@@ -16,15 +16,17 @@ import path from 'node:path'
 const SRC_ROOT = path.resolve(process.cwd(), 'src')
 const API_DIR = path.join(SRC_ROOT, 'api')
 
-// P0-3 之后应存在的域模块（不含 client/errors 这类基础件）
+// P0-3 之后应存在的域模块（不含 client/errors 这类基础件）。
+// 2026-09-30 治理批次：移除 'cs'——三端拆分后管理端无 CS 消费方
+// （cs.ts 与 csAgentWs 死代码一并清理，坐席链路在 frontend-cs）。
 const DOMAINS = [
   'approvals',
   'alerts',
   'chat',
-  'cs',
   'competitor',
   'evaluation',
   'feedback',
+  'governance',
   'keyword',
   'knowledge',
   'llm',

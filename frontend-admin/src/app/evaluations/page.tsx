@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward } from 'lucide-react'
+import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward, PlayCircle } from 'lucide-react'
 import { evaluationService, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
 import { useToast } from '@/components/shared/Toast'
 import EmptyState from '@/components/shared/EmptyState'
@@ -23,6 +23,7 @@ const STATUS_ICON = {
 export default function EvaluationsPage() {
   const toast = useToast()
   const [runs, setRuns] = useState<RunSummary[]>([])
+  const [running, setRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [selectedRun, setSelectedRun] = useState<string | null>(null)
   const [runDetail, setRunDetail] = useState<EvalRunDetail | null>(null)
@@ -40,6 +41,20 @@ export default function EvaluationsPage() {
       setLoading(false)
     }
   }, [toast])
+
+  const handleRunEval = async () => {
+    if (!confirm('发起 RAG 评测？（离线 smoke 口径，完成后自动刷新列表）')) return
+    setRunning(true)
+    try {
+      const result = await evaluationService.runEval('rag')
+      toast.success(`评测完成：通过率 ${(result.pass_rate * 100).toFixed(1)}%`)
+      await loadRuns()
+    } catch (e) {
+      toast.error(`评测失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRunning(false)
+    }
+  }
 
   useEffect(() => { loadRuns() }, [loadRuns])
 
@@ -83,14 +98,24 @@ export default function EvaluationsPage() {
             <h1 className="text-lg font-semibold text-text-primary">评测结果</h1>
             <p className="text-xs text-text-muted mt-0.5">RAG 检索评测历史与详情</p>
           </div>
-          <button
-            onClick={loadRuns}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            刷新
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRunEval}
+              disabled={running}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              <PlayCircle size={14} />
+              {running ? '评测执行中…' : '发起 RAG 评测'}
+            </button>
+            <button
+              onClick={loadRuns}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              刷新
+            </button>
+          </div>
         </div>
 
         {/* 指标卡片 */}
