@@ -460,12 +460,70 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     ORDER BY total_tokens DESC
                 """, tuple(params_base)).fetchall()]
 
+                # M11（台账 D11）：成本按币种分组（currency 混算口径修正——
+                # CNY 价格行与 USD 行此前混进同一个 cost_usd 总数）
+                by_currency = [dict(r) for r in self._exec(conn, f"""
+                    SELECT COALESCE(NULLIF(currency, ''), 'USD') AS currency,
+                           COUNT(*) AS calls,
+                           COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                           COALESCE(SUM(total_cost), 0)   AS cost
+                    FROM {self._table} WHERE {where_sql}
+                    GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
+                    ORDER BY cost DESC
+                """, tuple(params_base)).fetchall()]
+
             totals["cost_usd"] = round(totals.get("cost_usd", 0) or 0, 6)
             for d in daily:
                 d["cost_usd"] = round(d.get("cost_usd", 0) or 0, 6)
             for m in models:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
-            return {"totals": totals, "daily": daily, "models": models}
+            result = {"totals": totals, "daily": daily, "models": models}
+            result["by_currency"] = by_currency
+
+            return result
         except Exception as e:
             logger.warning(f"[LLMUsageStore-PG] dashboard 聚合失败: {e}")
             return empty
+
+    # M5 归因列 → group_by 合法维度白名单（防注入：列名不进参数）
+    _GROUP_BY_COLUMNS = {
+        "user": "user_id", "tenant": "tenant_id", "model": "model",
+        "skill": "skill_id", "tool": "tool_id", "domain": "agent_domain",
+    }
+
+    def breakdown(self, days: int = 7, group_by: str = "model",
+                  component: str | None = None, limit: int = 50) -> list[dict]:
+        """M11（台账 D11）：按六维（user/tenant/model/skill/tool/domain）聚合
+        用量与成本。列名走白名单（不拼接用户输入），skill/tool/domain 维度
+        依赖 M5 归因列（空串=未归因桶）。软失败返回空列表。"""
+        column = self._GROUP_BY_COLUMNS.get(group_by)
+        if column is None:
+            return []
+        try:
+            cutoff = self._cutoff_iso(days)
+            where = ["ts >= %s"]
+            params: list = [cutoff]
+            if component and component != "all":
+                where.append("component = %s")
+                params.append(component)
+            with self._lock, self._conn() as conn:
+                rows = self._exec(conn, f"""
+                    SELECT {column} AS bucket,
+                           COUNT(*) AS calls,
+                           COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                           COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+                           COALESCE(SUM(cost_usd), 0)     AS cost_usd
+                    FROM {self._table} WHERE {' AND '.join(where)}
+                    GROUP BY {column}
+                    ORDER BY total_tokens DESC
+                    LIMIT %s
+                """, tuple(params + [limit])).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["cost_usd"] = round(d.get("cost_usd", 0) or 0, 6)
+                out.append(d)
+            return out
+        except Exception as e:
+            logger.warning(f"[LLMUsageStore-PG] breakdown 聚合失败: {e}")
+            return []

@@ -180,6 +180,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 企业治理 M9（2026-09-30）：安全事件统一表（403/JWT/Guard/Evidence
     # 四类旁路落库，writer=security/events.py 软失败）。
     "059_security_events.sql": "memory",
+    # 企业治理 M10（2026-09-30）：任务操作审计表（admin retry/revoke/
+    # reexecute 双写，软失败）。
+    "060_task_operation_audits.sql": "memory",
     # 客服域迁移 B12（2026-09-29）：统一案件 cs_case（工单/投诉/售后收敛基座）
     "058_cs_case.sql": "memory",
 }

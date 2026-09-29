@@ -258,7 +258,9 @@ async def get_rag_trace(trace_id: str):
 @router.get("/tokens/summary")
 async def token_summary(days: int = Query(7, ge=1, le=365),
                         component: str | None = Query(None)):
-    """Token 用量看板聚合（近 N 天）：总量 / 日趋势 / 按模型细分。
+    """Token 用量看板聚合（近 N 天）：总量 / 日趋势 / 按模型细分 / 按币种分组。
+
+    by_currency（M11）：CNY/USD 价格行分列——此前混进单一 cost_usd 总数。
 
     数据源：llm_usage 明细表（每次调用一行，proxy/TokenTracker 层写入），
     按组件类型（llm/embedding/rerank）和模型精确聚合。
@@ -271,6 +273,27 @@ async def token_summary(days: int = Query(7, ge=1, le=365),
     data = get_llm_usage_store().dashboard(days, component=component)
     data["days"] = days
     return data
+
+
+@router.get("/tokens/breakdown")
+async def token_breakdown(
+    request: Request,
+    days: int = Query(7, ge=1, le=365),
+    group_by: str = Query("model",
+                          description="聚合维度：user/tenant/model/skill/tool/domain"),
+    component: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """M11（台账 D11）：用量/成本按六维聚合。
+
+    skill/tool/domain 依赖 M5 归因列（空串=未归因桶——历史行或未接
+    contextvar 的链路）。权限：管理员（成本归属含用户维度）。
+    """
+    await require_admin_operator(request)
+    from backend.observability.llm_usage_store import get_llm_usage_store
+    rows = get_llm_usage_store().breakdown(
+        days=days, group_by=group_by, component=component, limit=limit)
+    return {"group_by": group_by, "days": days, "rows": rows}
 
 
 @router.get("/tokens/calls")
