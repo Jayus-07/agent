@@ -43,6 +43,21 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
     # 补不到按 retry 上限追问/释放。否则「MO-1001」会被当作确认意图
     # reask，或过期后落回 KB/RAG 拒答。
     if pending_action.get("status") == "need_info":
+        # 设计方案 场景4（迁移 B6 实机验证补齐）：need_info 阶段用户说
+        # 「算了/取消」→ 就地短路取消（与 proposal 阶段取消同层）——
+        # 若转发 action expert 处理，取消后消息会回 supervisor 再路由，
+        # 低置信时被兜底话术覆盖取消确认（B6 实机复现）。复用 confirmation
+        # 单一取消词表源（含疑问句保护）。
+        from backend.customer_service.confirmation import (
+            ConfirmationIntent,
+            detect_confirmation_intent,
+        )
+
+        if detect_confirmation_intent(
+            str(state.get("user_message", "")),
+        ) == ConfirmationIntent.CANCEL:
+            return _cancel_need_info(pending_action, state)
+
         confirmation_state = state.get("confirmation_state", "")
         if confirmation_state in _PENDING_STATES:
             return Command(goto="cs_action_expert", update={})
@@ -63,6 +78,54 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
 
     return _process_pending(
         pending_action, user_message, user_id, session_id,
+    )
+
+
+def _cancel_need_info(
+    pending_action: dict, state: dict[str, Any]
+) -> Command:
+    """need_info 阶段用户取消：释放 pending + 取消确认短路到 reporter。
+
+    形态镜像 _process_pending 终态分支（finish 决策 + response_draft +
+    审计同轮落库）；store.clear(final_state="cancelled") 与 proposal 阶段
+    取消同终态口径（审计失真防线）。
+    """
+    from backend.customer_service.audit import append_audit, build_audit_entry
+    from backend.customer_service.confirmation_store import get_confirmation_store
+
+    user_id = str(state.get("user_id", ""))
+    session_id = str(state.get("session_id", ""))
+    get_confirmation_store().clear(user_id, session_id, final_state="cancelled")
+    logger.info(
+        "[CS PendingHandler] need_info cancelled by user: user=%s session=%s",
+        user_id, session_id,
+    )
+
+    audit_entry = build_audit_entry(
+        user_id=user_id or "anonymous",
+        action_type="pending_cancelled",
+        result="success",
+        target_type="need_info",
+        target_id=str(pending_action.get("intent", "")),
+        detail="need_info pending cancelled by user in slot-fill stage",
+        conversation_id=state.get("conversation_id", ""),
+    )
+    return Command(
+        goto="cs_reporter",
+        update={
+            "confirmation_state": "not_required",
+            "pending_action": dict(pending_action, status="cancelled"),
+            "supervisor_decision": {
+                "next_action": "finish",
+                "decision_layer": 2,
+                "reason": "pending_handler — need_info 阶段用户取消",
+                "is_finished": True,
+            },
+            "last_expert_result": {
+                "response_draft": "好的，已为您取消本次申请。如需再次办理，随时告诉我。",
+            },
+            "cs_audit_entries": append_audit([], audit_entry),
+        },
     )
 
 

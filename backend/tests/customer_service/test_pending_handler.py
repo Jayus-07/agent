@@ -168,3 +168,83 @@ class TestPendingHandlerUnclear:
         draft = cmd.update["last_expert_result"]["response_draft"]
         assert "确认" in draft
         assert "取消" in draft
+
+
+# ── need_info 阶段取消短路（设计方案 场景4，迁移 B6 实机验证补齐）──
+# 此前 need_info 无取消消费者，「算了，取消」被当答非所问继续追问；
+# 在 action expert 内处理则取消后消息会回 supervisor 再路由，低置信时
+# 被兜底话术覆盖取消确认（B6 实机复现），故与 proposal 阶段取消同层
+# 就地短路。
+
+
+def _need_info_pending(**overrides) -> dict:
+    base = {
+        "action_id": "act-1",
+        "action_type": "return_request",
+        "intent": "as_return",
+        "status": "need_info",
+        "missing_slots": ["order_id"],
+        "collected_slots": {},
+        "confirmation_state": "pending_confirmation",
+        "retry_count": 0,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestNeedInfoCancel:
+
+    @patch("backend.customer_service.confirmation.is_expired", return_value=False)
+    def test_cancel_short_circuits_to_reporter(self, _mock_expired):
+        """「算了，取消」→ 释放 pending + 取消确认直达 reporter，不进
+        supervisor 再路由（finish 决策短路）。"""
+        store = MagicMock()
+        with patch(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+            return_value=store,
+        ):
+            cmd = cs_pending_handler_node(_state(
+                pending_action=_need_info_pending(),
+                confirmation_state="pending_confirmation",
+                user_message="算了，取消",
+            ))
+
+        assert cmd.goto == "cs_reporter"
+        assert cmd.update["confirmation_state"] == "not_required"
+        assert cmd.update["pending_action"]["status"] == "cancelled"
+        assert "取消" in cmd.update["last_expert_result"]["response_draft"]
+        assert cmd.update["supervisor_decision"]["next_action"] == "finish"
+        store.clear.assert_called_once_with("u1", "s1", final_state="cancelled")
+        assert cmd.update["cs_audit_entries"][0]["action_type"] == "pending_cancelled"
+
+    @patch("backend.customer_service.confirmation.is_expired", return_value=False)
+    def test_question_mark_not_cancelled_forwards_to_action(self, _mock_expired):
+        """疑问句不算表态（confirmation 单源保护）：继续转发 action 补槽。"""
+        with patch(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+        ), patch(
+            "backend.customer_service.confirmation.is_expired", return_value=False,
+        ):
+            cmd = cs_pending_handler_node(_state(
+                pending_action=_need_info_pending(),
+                confirmation_state="pending_confirmation",
+                user_message="可以取消吗",
+            ))
+
+        assert cmd.goto == "cs_action_expert"
+
+    @patch("backend.customer_service.confirmation.is_expired", return_value=False)
+    def test_plain_new_question_still_forwards_to_action(self, _mock_expired):
+        """纯新问题（无取消词）不吞掉：照常转发补槽（缺陷6.3 语义保留）。"""
+        with patch(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+        ), patch(
+            "backend.customer_service.confirmation.is_expired", return_value=False,
+        ):
+            cmd = cs_pending_handler_node(_state(
+                pending_action=_need_info_pending(),
+                confirmation_state="pending_confirmation",
+                user_message="帮我查一下保修政策",
+            ))
+
+        assert cmd.goto == "cs_action_expert"
