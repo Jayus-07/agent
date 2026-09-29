@@ -468,7 +468,7 @@ def _ask_missing_slot(
         expert="action",
         status=ExpertStatus.SUCCESS.value,
         response_draft=(
-            f"请提供需要办理{label}的订单号（例如 MO-1002），"
+            f"请提供需要办理{label}的订单号（例如 DEMO-1002），"
             "我会先为您核对订单，确认无误后再提交申请。"
         ),
         data={
@@ -572,7 +572,7 @@ def _handle_slot_fill(
         expert="action",
         status=ExpertStatus.SUCCESS.value,
         response_draft=(
-            f"请提供需要办理{label}的订单号（例如 MO-1002），"
+            f"请提供需要办理{label}的订单号（例如 DEMO-1002），"
             "我会先为您核对订单，确认无误后再提交申请。"
         ),
         data={
