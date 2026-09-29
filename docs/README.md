@@ -58,13 +58,13 @@ docs/
 ├── reports/ evidence/ coordination/ features/ feasibility/
 ├── prompt-management/ prompt/ team-prompts/ rag_eval/ samples/
 ├── archive/
-│   ├── 2026-09/         ← 已归档的带日期过程报告（102 个，只读）
+│   ├── 2026-09/         ← 已归档的过程报告（128 个：102 带日期 + 26 非日期，只读）
 │   ├── superpowers/     ← AI 工作计划 / 设计规格归档（37 个）
 │   └── reports/         ← 已完结的脚本验收输出
 └── 其余根目录散文件      ← 被源码注释 / 脚本 / AGENTS.md 点名引用的规格、审计、交接文档
 ```
 
-全目录约 **370 个文件**，其中归档区 [archive/](archive/) 约 150 个（历史事实记录，只读）。
+全目录约 **370 个文件**，其中归档区 [archive/](archive/) 约 180 个（历史事实记录，只读）。
 找最新状态：先看根 [README.md](../README.md) 与 [AGENTS.md](../AGENTS.md)，再看下方「近期专项」。
 
 ---
