@@ -140,6 +140,33 @@ def execute_complaint(
             exc_info=True,
         )
 
+    # 迁移 B12：统一案件 cs_case 并行写入（设计方案 §10.1「case 是唯一
+    # 案件事实源」；与 tickets 并存过渡，全面并表走后续批次）。SLA 按
+    # severity 映射优先级（critical→P0/high→P1/其余→P2）由服务层计算。
+    # fire-and-forget：案件落库失败只损失可查询性，不阻断安抚与转人工。
+    try:
+        from backend.customer_service.case.service import get_case_service
+
+        _SEVERITY_TO_PRIORITY = {"critical": "P0", "high": "P1"}
+        get_case_service().create_sync(
+            conversation_id=conversation_id or session_id,
+            user_id=user_id,
+            case_type="complaint",
+            priority=_SEVERITY_TO_PRIORITY.get(detection.severity, "P2"),
+            title=f"投诉案件（{detection.severity}）：{user_message[:80]}",
+            context={
+                "source": "complaint_expert",
+                "ticket_id": ticket.ticket_id,
+                "severity": detection.severity,
+                "summary": user_message[:500],
+            },
+        )
+    except Exception:
+        logger.warning(
+            "[ComplaintExpert] 投诉案件落库失败（不阻断主流程）",
+            exc_info=True,
+        )
+
     answer = service.build_comfort_response(detection, ticket)
 
     # P1 重构（2026-09-17）：投诉升级与显式转人工同流程 ——
