@@ -12,7 +12,10 @@
 --   ticket/after_sales 全面并表走后续批次。
 
 CREATE TABLE IF NOT EXISTS customer_service.cs_case (
-    case_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- id 自增主键与 ORM（models/case.py，跟随 tickets/confirmations 表形态）；
+    -- case_id UUID 为对外唯一标识。两处 DDL↔ORM 必须成对改。
+    id                      BIGSERIAL PRIMARY KEY,
+    case_id                 UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
     tenant_id               TEXT NOT NULL DEFAULT 'default',
     conversation_id         TEXT NOT NULL,
     user_id                 TEXT NOT NULL,
