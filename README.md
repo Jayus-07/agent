@@ -146,16 +146,17 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | GraphRunner | 统一图执行核心：Input Guard → 记忆装配 → 指代解析 → `graph.stream` → trace / `memory.end_turn` |
 | Orchestration（编排层） | LangGraph 主图：9 个核心节点 + 自动发现的 Skill / 域图节点（`builder.py`） |
 | Router Runtime | 平台第一层：域预过滤 + 三层路由（rule → vector → LLM），拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
-| Domain Runtime | 垂直业务域的独立子图层：3 个顶级业务域 / 5 个物理域图，自带专家与 reporter |
+| Domain Runtime | 垂直业务域的独立子图层：3 个顶级业务域 / 5 个物理域图，自带子 Agent 与 reporter |
 | Capability Runtime | 能力执行调度层：capability → Skill 解析与 direct / workflow 支线执行 |
 | Plan Runtime | 复杂请求的任务拆解与并行调度支线（细节属编排内幕，见 ai-runtime.md） |
-| Expert Runtime | 域内专家节点的公共执行生命周期（超时/异常/计时/遥测钩子，`core/node_runtime`） |
-| Tool Contract Boundary | Tool 输出契约边界：两型（text / structured）声明 + 封套解包 + 失败语义（STOP G） |
+| Expert Runtime（子 Agent Runtime） | 域内子 Agent 节点的公共执行生命周期（超时/异常/计时/遥测钩子，`core/node_runtime`；代码名 Expert 保留） |
+| 域主 Agent / 子 Agent | 域内统一 Agent 口径（2026-09-29 拍板）：域调度者=域主 Agent（代码 supervisor），域内执行节点=子 Agent（旧文档「专家/Expert」= 子 Agent 的代码名） |
+| Tool Contract Boundary | Tool 输出契约边界：两型（text / structured）声明 + 封套解包 + 失败语义（STOP G）；契约快照 `tool_contracts.lock.json`（2026-09-30，派生禁手编） |
 | Tool Runtime | Tool 执行治理层：超时 / 重试 / 熔断 / 隔离舱 / 错误映射（`core/tool_runtime`） |
 | Integration Adapter | MCP 对外暴露层：Tool 的第二出口（REST /api/mcp · :8091 标准协议 · internal_ai） |
-| Shared Governance | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation |
+| Shared Governance | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation / 契约 lock · 错误七分类 · 成本归因 · 资产一致性（治理平面 2026-09-30） |
 | Planner / Critique / Supervisor | Plan Runtime 内部的三段链：任务拆解 → 计划校验 → 纯规则 DAG 调度（Send 并行）；定义见此，细节见 ai-runtime.md |
-| Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带专家与 reporter；架构上 3 个顶级业务域（客服 / 旅游 / 选品漏斗），旅游含 planning / commerce / booking 三个子流，落地为 5 个物理域图（commerce / booking 保留独立生命周期与独立开关） |
+| Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带子 Agent 与 reporter；架构上 3 个顶级业务域（客服 / 旅游 / 选品漏斗），旅游含 planning / commerce / booking 三个子流，落地为 5 个物理域图（commerce / booking 保留独立生命周期与独立开关） |
 | Capability | 路由与规划的最小能力单元（17 个，唯一事实源 `capabilities.yaml`） |
 | Skill | Capability 的业务执行封装（12 个）；RAG / SQL 是 Skill，不是独立 Agent |
 | Tool | 无状态原子操作（34 个），Skill 之下、基础设施之上 |
@@ -239,8 +240,8 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 | 域图 | 开关（代码默认全关） | 构成 |
 |---|---|---|
-| 客服 | `CS_ENABLED` | supervisor + 5 专家（knowledge/query/action/complaint/handoff） |
-| 旅游 | `TRAVEL_ENABLED` | slot_filler + 5 专家 + validator/repair（四轴校验） |
+| 客服 | `CS_ENABLED` | 域主 Agent（supervisor）+ 5 子 Agent（knowledge/query/action/complaint/handoff，代码名 Expert） |
+| 旅游 | `TRAVEL_ENABLED` | slot_filler + 5 子 Agent + validator/repair（四轴校验） |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | 预过滤已接线，与旅游同层 |
 | 旅游商务 | `TRAVEL_COMMERCE_ENABLED` | 独立域图（STOP K） |
 | 旅游预订 | `TRAVEL_BOOKING_ENABLED` | 预订事务 + 幂等账本复用（STOP L） |

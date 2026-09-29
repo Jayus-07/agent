@@ -28,8 +28,8 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 - 主图核心节点固定 9 个（含 general_chat，2026-09-25 口径对齐 builder.py:142），顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
 - planner→critique→supervisor 是 plan 支线专属；direct/workflow/三个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
-- 客服子图：state_loader → pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 专家 → 回 supervisor → cs_reporter
-- 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk/weather 五专家 → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
+- 客服子图：state_loader → pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 子 Agent（代码名 Expert）→ 回 supervisor → cs_reporter
+- 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk/weather 五子 Agent → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
 - RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定
 - 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error
 
@@ -37,6 +37,19 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 - **APISIX(9080) 是唯一入口**；主链路 `/chat/stream` 同步执行、不经队列，SSE 直返。
 - **Celery**（`backend/tasks/`，Redis 兼 broker/result backend）：双队列 `agent`｜`rag_index`（`celery_app.py::task_routes` 固定路由）；状态权威在 PG（agent_memory.tasks）；payload 仅 task_id、acks_late+prefetch=1、软/硬双层超时；重试 = 从最近 LangGraph checkpoint 自愈式续跑（业务终态异常不重试）。细节见 `docs/OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md`。
+
+### 治理平面（Governance Plane，2026-09-30 M1-M7 落地）
+
+治理是**平面不是层**：不进请求执行路径（仅旁路埋点），不新增 Agent，载体复用 PG/Redis/Prometheus/自研 Trace。台账与设计方案见 `docs/2026-09-30-企业级治理技术债修复台账.md`。
+
+- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 34 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
+- **错误统一口径（M3）**：`observability/error_taxonomy.py::unify_*` 是三套既有词表（模型层 5 类/任务层 10 类/ToolStatus 8 值）→ 七分类（timeout/network_error/permission_denied/validation_error/business_error/contract_error/provider_error）的**唯一映射出口**；管理端失败分布与新指标 `agent_tool_error_class_total` 只用此口径，禁止再造第四套词表。
+- **成本归因（M5）**：`observability/llm_context.py`（ContextVar，叠加语义）+ `llm_usage.skill_id/tool_id/agent_domain` 三列；注入点三处（skill execute 装饰器/tool executor 装饰器/builder 域图布线 `with_domain_attribution`），新增调用链记得在入口包 scope。
+- **资产一致性（M6）**：`GET /api/consistency/report` 七段对账矩阵全部实时派生（禁手抄数字）；管理端/巡检消费此端点，不另建清单。
+- **Tool 统计（M2）**：`GET /api/admin/tools(/stats)` 进程内 Prometheus 直读；`skill_failure_total` 已埋点（skill 失败出口，error_type=七分类）。
+- **评测台账（M7）**：`ai.eval_run_records` 是**索引非替代**（明细仍在 `data/eval_runs/`）；评测跑完自动 upsert；`prompt_versions` 口径 = PG 权威（`snapshot_prompt_versions()`）优先、yaml 扫描兜底；CLI `--triggered-by` 记录触发者。
+- **Prompt 版本语义与指针（M4）**：`prompt_versions.change_kind ∈ major/minor/patch`（存量 NULL）；`prompt_aliases` 中 **production 与 active_version 恒同步**（切 production=完整发布语义，走 publish），staging 只动指针不影响运行时读路径（staging 运行时消费属 Phase 2 灰度）。
+- **术语口径（2026-09-29 拍板）**：域内统一叫 Agent——域调度者=**域主 Agent**（代码 supervisor），域内执行节点=**子 Agent**（代码/旧文档中「专家/Expert」= 子 Agent 的代码名，代码名保留不改）；勿在新文档再用「专家」指称运行时组件。
 
 ### 节点职责与口径
 
@@ -73,7 +86,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 **新 Tool 三规**：`@tool`｜底部注册｜返回 JSON 字符串（失败返 `{"error":…}`，「查不到」与「查不了」分开），统一走 `tools/map/_base.py` 的 `ok/fail/not_configured`（存量 18 个返 Markdown 是例外 E8，别参照）。副作用 Tool 必须过 `security/tool_approval.ensure_approved()`；user_id 取 `tools/session.get_tool_user_id()`，禁止硬编码。
 **易漏接线**：新 capability 加 `direct_executor.py::_USER_CAP_LABELS`。
 
-**验证（改完必跑）**：`cd backend && "$PY" -m pytest tests/test_registry_consistency.py tests/test_layer_consistency.py tests/test_adr0001_dual_registry_merge.py -q --no-cov`
+**验证（改完必跑）**：`cd backend && "$PY" -m pytest tests/test_registry_consistency.py tests/test_layer_consistency.py tests/test_adr0001_dual_registry_merge.py tests/test_tool_contract_lock.py -q --no-cov`（改 Tool 签名/args 后另跑 `"$PY" -m backend.scripts.gen_tool_contract_lock` 重新生成 lock 并随变更提交）
 ⚠️ 局部跑**必须加 `--no-cov`**（`pytest.ini` 挂死 `--cov-fail-under=55` 且无运行范围隔离 → 用例全绿但 EXIT=1，并覆写项目级覆盖率产物）；改 `params_schema`/描述/prompt 后另跑 planner 评估（`datasets/planner_params.json`）。
 
 ### SQL 子系统与数据库
