@@ -18,9 +18,15 @@ class DomainGraph:
         node_name: Main Graph 中的 LangGraph 节点名
         label: 可视化标签（前端展示用）
         adapter: 适配器函数 (state: dict) -> dict，负责状态转换 + 子图调用 + 结果映射
+        subflow: 顶级域子流标签（STOP E 展示语义）。None = 本图即顶级域本身；
+            非 None 表示本图是某顶级域的子流（如 travel 的 commerce/booking），
+            取值必须与 DomainRouter._PREFILTER_DOMAIN_MAP 的归一结果一致
+            （由 tests/orchestration/test_domain_semantic_consistency.py 守护）。
+            纯展示/对账字段：route_selector 查表键仍是 name，不参与调度。
     """
 
     name: str
     node_name: str
     label: str
     adapter: Callable[[dict], dict]
+    subflow: str | None = None

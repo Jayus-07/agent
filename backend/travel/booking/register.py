@@ -12,4 +12,5 @@ domain_graph_registry.register(DomainGraph(
     node_name="travel_booking_graph_node",
     label="旅游预订（Booking Transaction）",
     adapter=travel_booking_graph_node,
+    subflow="booking",  # STOP E 语义展示：Travel Domain 的 booking 子流，与 DomainRouter 归一口径一致
 ))

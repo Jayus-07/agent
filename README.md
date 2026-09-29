@@ -14,7 +14,7 @@
 
 ### 1. System Architecture
 
-用户端 / 管理端 / 客服坐席工作台三个 Next.js 前端，经 APISIX 网关进入 FastAPI 应用；`/chat/stream` 同步直返不经队列；5 个业务域图由开关控制（**代码默认全关**，当前 `.env` 打开客服 / 旅游 / 选品三个）；能力层统一以 Capability → Skill → Tool 分层；MCP 是 Tool 对外暴露的第二出口。
+用户端 / 管理端 / 客服坐席工作台三个 Next.js 前端，经 APISIX 网关进入 FastAPI 应用；`/chat/stream` 同步直返不经队列；3 个顶级业务域（客服 / 旅游 / 选品漏斗）由开关控制——旅游域含 planning / commerce / booking 三个子流，落地为 5 个物理域图（**代码默认全关**，当前 `.env` 打开客服 / 旅游 / 选品三个）；能力层统一以 Capability → Skill → Tool 分层；MCP 是 Tool 对外暴露的第二出口。
 
 ```mermaid
 flowchart TB
@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph AIRT["AI Runtime（LangGraph）"]
         MAIN["主图：router → direct / workflow / plan 支线"]
-        DOM["5 个域图：客服 / 旅游 / 旅游商务 / 旅游预订 / 选品漏斗"]
+        DOM["3 个顶级业务域 · 5 个物理域图<br/>客服 / 旅游（planning · commerce · booking）/ 选品漏斗"]
     end
 
     subgraph CAPL["能力层 Capability / Skill"]
@@ -122,11 +122,11 @@ flowchart TB
         REP["reporter"]
     end
 
-    subgraph DOMS["Domain Runtime · 5 个域图（开关控制，自带专家与 reporter）"]
+    subgraph DOMS["Domain Runtime · 3 个顶级业务域 / 5 个物理域图（开关控制，自带专家与 reporter）"]
         CS["客服<br/>supervisor + 5 专家"]
         TR["旅游<br/>slot_filler + 5 专家 + validator/repair"]
-        TC["旅游商务"]
-        TB["旅游预订"]
+        TC["旅游商务<br/>Travel · commerce 子流"]
+        TB["旅游预订<br/>Travel · booking 子流"]
         SF["选品漏斗"]
     end
 
@@ -172,7 +172,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Orchestration（编排层） | LangGraph 主图：9 个核心节点 + 自动发现的 Skill / 域图节点（`builder.py`） |
 | Router（主图） | 主图入口节点：域预过滤 + 三层路由（rule → vector → LLM），拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
 | Planner / Critique / Supervisor | plan 支线专属：任务拆解 → 计划校验 → 纯规则 DAG 调度（Send 并行） |
-| Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带专家与 reporter；5 个（客服 / 旅游 / 旅游商务 / 旅游预订 / 选品漏斗） |
+| Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带专家与 reporter；架构上 3 个顶级业务域（客服 / 旅游 / 选品漏斗），旅游含 planning / commerce / booking 三个子流，落地为 5 个物理域图（commerce / booking 保留独立生命周期与独立开关） |
 | Capability | 路由与规划的最小能力单元（17 个，唯一事实源 `capabilities.yaml`） |
 | Skill | Capability 的业务执行封装（12 个）；RAG / SQL 是 Skill，不是独立 Agent |
 | Tool | 无状态原子操作（34 个），Skill 之下、基础设施之上 |
@@ -192,7 +192,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Capability | 17（其中 3 个 `routed: false` 内部能力） | `backend/orchestration/router/capabilities.yaml` |
 | Tool | 34 | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
-| 域图 | 5（客服 / 旅游 / 选品漏斗 / 旅游商务 / 旅游预订；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
+| 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
 | 后端用例 | 7336（`pytest --collect-only`，2026-09-28） | `backend/tests/` |
 | 前端路由 | 用户端 5 / 管理端 38 / 客服坐席 8 | `*/src/app/**/page.tsx` |
@@ -307,6 +307,8 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | 旅游预订 | travel-booking | 18 | **18/18** | `data/eval_runs/2026-09-25T01-46-35-931e90/` |
 | NL2SQL | `datasets/sql/cases.jsonl` | 15 | Release Gate **PASS**（准确率 / 拒答指标当前为「无数据」，尚未启用） | `data/eval_runs/2026-09-10T09-01-00-e81bc8/` |
 | 端到端 | `datasets/e2e/cases.jsonl` | 25（含 F-* 故障注入） | Release Gate **PASS**（最近全量运行记录为 2026-09-11，当时 13 例口径） | `data/eval_runs/2026-09-11T08-55-26-153602/` |
+
+> 注：旅游商务 / 旅游预订两行的 `travel-commerce` / `travel-booking` 是评测模块 ID（runner 命名空间，历史可比性绑定），对应 Travel Domain 的 commerce / booking 子流域图，**不是独立业务域**（STOP E 口径）。
 
 复现：
 ```bash

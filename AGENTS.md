@@ -41,7 +41,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 ### 节点职责与口径
 
 - **Planner**：只做任务拆解 → Capability DAG，禁调 Tool/Skill/DB ｜ **Critique**：规则校验优先，仅 anomaly 调 LLM ｜ **Supervisor**：纯规则 DAG 调度，Send[] 并行 + 注入 previous_outputs ｜ **Skill**：业务封装不碰外部系统 ｜ **Tool**：无状态可测试 ｜ **Reporter**：step_results → Markdown
-- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 34 Tool / 4 workflow / 2 域图 / 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
+- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 34 Tool / 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
 - `routed: false` 只约束路由层，Planner/critique 仍遍历全量 17 个（`email.watch` 是 120s 阻塞长轮询，收紧属行为变更，台账 E9）。
 
 ### Capability DAG

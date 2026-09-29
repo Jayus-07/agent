@@ -22,6 +22,13 @@ const KIND_META: Record<AgentKind, { label: string; icon: typeof Bot; desc: stri
 
 const KIND_ORDER: AgentKind[] = ['orchestration', 'skill', 'domain_graph']
 
+// STOP E 语义展示：travel_commerce / travel_booking 是 Travel Domain 的子流（非独立业务域）。
+// 后端 route_mode 字段值原样透传（运行时契约，永久不改名），此处只加展示层归属说明。
+const ROUTE_MODE_DOMAIN_META: Record<string, string> = {
+  travel_commerce: 'Travel Domain · commerce 子流',
+  travel_booking: 'Travel Domain · booking 子流',
+}
+
 function AgentCard({ node }: { node: AgentNode }) {
   return (
     <div className="rounded-lg border border-black/5 bg-white p-3">
@@ -33,7 +40,12 @@ function AgentCard({ node }: { node: AgentNode }) {
         )}
       </div>
       {node.route_mode && (
-        <div className="mt-1 text-[11px] text-text-muted">route_mode: {node.route_mode}</div>
+        <div className="mt-1 text-[11px] text-text-muted">
+          route_mode: {node.route_mode}
+          {ROUTE_MODE_DOMAIN_META[node.route_mode] && (
+            <span className="ml-1 text-text-secondary">· {ROUTE_MODE_DOMAIN_META[node.route_mode]}</span>
+          )}
+        </div>
       )}
       {(node.capabilities?.length ?? 0) > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
