@@ -176,6 +176,21 @@ DB 生产标准：P0 只读角色 + scram-sha-256 + 连接池 + connect_timeout/
 - recursion_limit: MAIN_GRAPH_RECURSION_LIMIT（默认 80），runner 每次 stream 传入
 - checkpointer: MAIN_GRAPH_CHECKPOINTER_ENABLED（默认关）；开启后 request_context 以 `checkpoint_safe()` dict 进状态（trace/sink 不序列化），thread_id 每轮唯一
 
+## 文档体系（顶级文档与维护责任）
+
+**入口顺序**（新会话/新人）：根 `README.md`（「系统规模」= 一切数量类口径**唯一权威**，G2 禁止第二处手抄）→ `AGENTS.md` / `CLAUDE.md`（本文件同源双入口，按工具读取）→ `docs/README.md`（文档总索引）→ 按需深读。
+
+**顶级文档 = 改代码必须同步维护的部分**（文末「最后验证」日期不得落后于其覆盖范围的结构性变更；只做口径校准则更新日期并注口径）：
+
+| 文档 | 何时必须改 |
+|---|---|
+| `docs/` 顶层 8 文档：PRD / ARCHITECTURE / **DESIGN**（三端设计规范）/ RAG_DESIGN / AGENT_DESIGN / DATABASE / API / ROADMAP | 对应产品定位 / 顶层架构 / 前端 UI 与 token / RAG 链路 / 编排 / 库表 / 接口契约 / 规划变更时 |
+| `docs/architecture/system-overview.md` | 部署拓扑 / 端口 / 异步层 / 网关认证变更 |
+| `docs/architecture/ai-runtime.md` | 图结构 / 节点职责 / 域图契约 / 路由通路变更 |
+| `docs/architecture/domain-service-map.md` | 专家依赖 / 新增第三方服务 / 凭据 / 降级策略变更（新服务必须补全：用途 / 消费方 / 凭据变量 / 开关 / 降级 五行） |
+
+**文档纪律**：① 过程报告写 `docs/reports/`，完结归档 `docs/archive/<年-月>/`，禁止堆 docs 顶层；② 被 source code 注释 / 测试 / 本文件按路径引用的 docs 文件**移动必须同步改引用方**；③ 前端设计 token 改动必须三端 `globals.css` + `tailwind.config.ts` 同步；④ 「专家→工具」「capability→Skill」等可派生映射**以代码与 `capabilities.yaml` 为准**，任何文档不手抄明细（G2）。
+
 ## Change Flow
 
 明确目标 → 阅读代码 → 分析影响 → 修改 → 测试 ｜ Bug 先复现、Refactor 测试通过、Feature 优先补测试
