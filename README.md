@@ -8,7 +8,9 @@
 
 ## Architecture
 
-三张图各答一个问题：**系统由什么组成**（图 1）、**一次请求怎么跑**（图 2）、**AI 怎么编排**（图 3）。
+> **架构基线已冻结**（2026-09-29，Architecture Simplification STOP A-H 收官）：九层 Runtime 分层与请求生命周期以 [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md) 为基线，契约红线见 [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md)，扩展入口见 [docs/architecture/Extension-Guide.md](docs/architecture/Extension-Guide.md)。
+
+三张图各答一个问题：**系统由什么组成**（图 1）、**一次请求怎么跑**（图 2）、**平台分层**（图 3）。
 部署细节（端口 / 异步层 / 网关认证）见 [docs/architecture/system-overview.md](docs/architecture/system-overview.md)；
 编排细节（主图节点职责 / 域图 / 客服锁域）见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
 
@@ -165,7 +167,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ---
 
-## 系统规模（2026-09-28 实测口径）
+## 系统规模（2026-09-29 实测口径）
 
 | 资产 | 数量 | 事实源 |
 |------|------|--------|
@@ -176,7 +178,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
-| 后端用例 | 7336（`pytest --collect-only`，2026-09-28） | `backend/tests/` |
+| 后端用例 | 7687（`pytest --collect-only`，2026-09-29） | `backend/tests/` |
 | 前端路由 | 用户端 5 / 管理端 38 / 客服坐席 8 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
@@ -521,7 +523,7 @@ agent/
 │   ├── observability/         # Tracer / Metrics / Alerts
 │   ├── security/              # 认证 / 审批门 / 守卫
 │   ├── infra/                 # LLM 代理 / 计价 / 预算 / 限流
-│   └── tests/                 # 7336 用例
+│   └── tests/                 # 7687 用例
 ├── mcp_servers/               # MCP 服务（2 server / 5 tool）
 ├── frontend/                  # 用户端 Next.js（:3100）
 ├── frontend-admin/            # 管理端 Next.js（:3200）
