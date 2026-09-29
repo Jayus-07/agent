@@ -129,7 +129,6 @@ flowchart TB
         DR --> ER --> TCB
         CR --> TCB --> TR
         TR -.->|"第二出口"| MCP
-        PLATFORM -.-> GOV
     end
 ```
 
