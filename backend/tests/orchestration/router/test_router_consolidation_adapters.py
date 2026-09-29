@@ -267,6 +267,46 @@ def test_router_node_legacy_route_decision_becomes_capability_snapshot():
     assert result["legacy_used"] is True
 
 
+def test_router_node_records_sanitized_decision_in_current_trace_metadata():
+    """缺少 trace metadata 注入时，此测试必须失败。"""
+    from backend.observability.tracer import trace_collector
+    from backend.orchestration.graph.router_node import _with_router_decisions
+    from backend.orchestration.router.types import (
+        CapabilityScore,
+        ExecutionMode,
+        RouteDecision,
+    )
+
+    trace_collector.clear_for_test()
+    trace = trace_collector.start("测试问题", session_id="router-trace-test")
+    decision = RouteDecision(
+        execution_mode=ExecutionMode.DIRECT,
+        candidates=[CapabilityScore(name="sql.query", score=0.93)],
+        confidence=0.93,
+    )
+    try:
+        _with_router_decisions(
+            {"question": "查本月销售额"},
+            {
+                "route_decision": decision.model_dump(),
+                "route_mode": "direct",
+            },
+            "查本月销售额",
+            existing_override=decision,
+        )
+
+        assert trace.metadata["router"] == {
+            "domain": "unknown",
+            "subflow": None,
+            "capability": "sql.query",
+            "mode": "direct",
+            "confidence": 0.93,
+            "source": "legacy",
+        }
+    finally:
+        trace_collector.clear_for_test()
+
+
 @pytest.mark.parametrize(
     "module_name",
     ["domain_router.py", "capability_router.py", "execution_mode.py"],

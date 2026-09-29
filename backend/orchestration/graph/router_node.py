@@ -171,6 +171,13 @@ def _with_router_decisions(
             ),
             "legacy_used": current_legacy_used,
         })
+        from backend.orchestration.router.router_trace import record_router_decision
+
+        record_router_decision(
+            domain_decision,
+            capability_decision,
+            execution_decision.to_dict(),
+        )
     except Exception as exc:
         logger.warning("[RouterNode] Router 决策适配器失败，保持旧字段: %s", exc)
         result.update({
