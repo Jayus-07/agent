@@ -354,6 +354,18 @@ async def require_admin_user(request: Request):
             f"actor={ident.actor} role={ident.role}"
         )
         return ident
+    # M9：权限拒绝旁路落 security_events（此前零记录；软失败）
+    try:
+        from backend.security.events import record_security_event
+
+        record_security_event(
+            "AUTHZ_DENIED",
+            category="admin_endpoint",
+            detail={"path": str(getattr(request.url, "path", ""))[:200],
+                    "actor": ident.actor, "role": ident.role},
+        )
+    except Exception:
+        pass
     raise HTTPException(
         status_code=403,
         detail={

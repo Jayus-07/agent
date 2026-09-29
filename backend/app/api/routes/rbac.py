@@ -45,6 +45,16 @@ async def require_rbac_admin(
 ) -> OperatorIdentity:
     """RBAC 管理面强制 admin，避免敏感端点 audit 灰度放行非管理员。"""
     if not is_platform_admin(operator.role):
+        # M9：RBAC 硬拒旁路落 security_events（audit 灰度放行后的兜底拒绝）
+        try:
+            from backend.security.events import record_security_event
+
+            record_security_event(
+                "AUTHZ_DENIED", category="rbac_admin",
+                detail={"actor": operator.actor, "role": operator.role},
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=403, detail="仅 admin 可访问 RBAC 管理端")
     return operator
 

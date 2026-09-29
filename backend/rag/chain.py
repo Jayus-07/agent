@@ -875,6 +875,18 @@ class RAGChain:
         from backend.rag.evidence_gate import build_rejection_response
         msg, info = build_rejection_response(decision, layer,
                                              self_correction_attempted=self_correction_attempted)
+        # M9：拒答旁路落 security_events（category=RejectReason 枚举，可统计；软失败）
+        try:
+            from backend.security.events import record_security_event
+
+            record_security_event(
+                "EVIDENCE_REJECT",
+                category=str(getattr(decision, "reason", "") or "unknown"),
+                detail={"layer": layer,
+                        "self_correction_attempted": self_correction_attempted},
+            )
+        except Exception:
+            pass
         try:
             trace.metadata["rejection"] = info.to_dict()
         except Exception:

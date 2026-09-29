@@ -350,6 +350,20 @@ class InputGuard:
         敏感输入保护：HIGH/CRITICAL 风险不落原文，仅记录长度 + SHA256 摘要
         前缀（可关联取证，又不会把恶意/敏感内容扩散到日志）。
         """
+        # M9：BLOCK 拦截旁路落 security_events（可统计；软失败不影响判定）
+        if result.action.value == "block":
+            try:
+                from backend.security.events import record_security_event
+
+                record_security_event(
+                    "INPUT_GUARD_BLOCK",
+                    category=result.category.value,
+                    detail={"action": result.action.value, "risk": result.risk_level.value,
+                            "layer": result.layer, "confidence": round(result.confidence, 2),
+                            "policy_version": result.policy_version, "input_len": len(normalized)},
+                )
+            except Exception:
+                pass
         base = (
             f"[GuardAudit] session={session_id or '-'} "
             f"action={result.action.value} category={result.category.value} "

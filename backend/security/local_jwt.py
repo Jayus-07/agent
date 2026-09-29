@@ -109,7 +109,7 @@ def verify_access_token(token: str) -> dict[str, Any] | None:
     """验签 + exp 校验（自签自验，宽差 30s）。失败返回 None，不抛异常。
 
     用途：logout 解析 Bearer（决定是否写黑名单）。业务鉴权仍由 APISIX 插件执行，
-    本函数不承担网关职责。
+    本函数不承担网关职责。失败路径旁路落 security_events（M9，软失败）。
     """
     try:
         secret = _secret()
@@ -117,15 +117,29 @@ def verify_access_token(token: str) -> dict[str, Any] | None:
         signing_input = f"{h}.{p}"
         expect = _b64url(hmac.new(secret.encode(), signing_input.encode(), hashlib.sha512).digest())
         if not hmac.compare_digest(expect, s):
+            _record_jwt_invalid("bad_signature")
             return None
         payload = json.loads(_b64url_decode(p))
         if payload.get("iss") != _ISSUER:
+            _record_jwt_invalid("wrong_issuer")
             return None
         if int(payload.get("exp", 0)) + 30 < int(time.time()):
+            _record_jwt_invalid("expired")
             return None
         return payload
     except Exception:
+        _record_jwt_invalid("malformed")
         return None
+
+
+def _record_jwt_invalid(reason: str) -> None:
+    """JWT 校验失败旁路记录（M9：此前静默 None 零记录；软失败）。"""
+    try:
+        from backend.security.events import record_security_event
+
+        record_security_event("JWT_INVALID", category=reason, detail={"reason": reason})
+    except Exception:
+        pass
 
 
 def token_ttl_seconds(token: str) -> int:

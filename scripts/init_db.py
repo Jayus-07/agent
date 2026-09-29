@@ -177,6 +177,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 企业治理 M4（2026-09-30）：prompt 版本语义（change_kind）+ 命名指针
     # （production 与 active_version 同步 / staging 预发指向）。
     "057_prompt_alias.sql": "memory",
+    # 企业治理 M9（2026-09-30）：安全事件统一表（403/JWT/Guard/Evidence
+    # 四类旁路落库，writer=security/events.py 软失败）。
+    "059_security_events.sql": "memory",
     # 客服域迁移 B12（2026-09-29）：统一案件 cs_case（工单/投诉/售后收敛基座）
     "058_cs_case.sql": "memory",
 }
