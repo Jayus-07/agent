@@ -4,14 +4,22 @@ Expert 统一输出类型 + 安全执行包装器。
 所有 Expert 共享此契约，Supervisor 通过 run_expert_safely 调度。
 
 设计参考: docs/customer-service/langgraph-multi-expert-design.md §6
+STOP F（2026-09-29）：执行生命周期内部收敛到 core/node_runtime（六段公共
+生命周期 + THREAD_ISOLATED 超时唯一实现）；本模块公开契约（函数签名/
+ExpertResult 字段/status 枚举/日志前缀/metrics 名）逐字节冻结不变。
 """
 from __future__ import annotations
 
-import time
 from enum import Enum
 from typing import Any, Callable, TypedDict
 
-from backend.shared.logger import logger
+from backend.core.node_runtime import (
+    CsExpertHooks,
+    ErrorPolicy,
+    ExecutionContext,
+    NodeRunner,
+    TimeoutStrategy,
+)
 
 
 class ExpertStatus(str, Enum):
@@ -55,13 +63,17 @@ def run_expert_safely(
 ) -> dict[str, Any]:
     """安全执行 Expert，异常不穿透。
 
-    职责:
+    职责（内部经 core/node_runtime 六段生命周期实现，行为与迁移前手写
+    实现一致）:
     1. 记录执行耗时
     2. 捕获异常 → 转为 status=failed 的 ExpertResult
-    3. 可选显式超时（timeout_s）→ 转为 status=timeout（P2.3）：
-       LLM invoke 的 config={"timeout"} 在当前 ChatOpenAI 版本实测不生效，
-       线程级限时是唯一可靠手段（复用 infra.async_utils 的共享线程池）
-    4. 埋点 metrics + 记录 trace span
+    3. 可选显式超时（timeout_s）→ THREAD_ISOLATED 线程级限时 →
+       status=timeout（P2.3）：LLM invoke 的 config={"timeout"} 在当前
+       ChatOpenAI 版本实测不生效，线程级限时是唯一可靠手段；
+       per-call 独立单 worker 池 + contextvars 拷贝（P2.3 防共享池饿死
+       误判超时 / B4 防线程丢上下文）锁定为 core/node_runtime 的
+       TimeoutStrategy.THREAD_ISOLATED 唯一实现
+    4. 埋点 metrics + 日志（经 CsExpertHooks，metrics-only 无 span）
 
     Args:
         expert_name: Expert 标识（用于 metrics/日志）
@@ -72,87 +84,42 @@ def run_expert_safely(
     Returns:
         ExpertResult — 保证包含 expert + status 字段
     """
-    from backend.observability.metrics import record_cs_expert_result
+    deadline = timeout_s if timeout_s is not None and timeout_s > 0 else None
+    ctx = ExecutionContext(node_name=expert_name, domain="cs", deadline=deadline)
+    node_result = NodeRunner().run(
+        ctx,
+        fn,
+        state,
+        policy=ErrorPolicy.SWALLOW_TO_STATUS,
+        hooks=CsExpertHooks(),
+        timeout_strategy=(
+            TimeoutStrategy.THREAD_ISOLATED if deadline is not None
+            else TimeoutStrategy.NONE
+        ),
+    )
 
-    t0 = time.monotonic()
-    logger.info("[CS Expert] start expert=%s", expert_name)
+    if node_result.status == ExpertStatus.TIMEOUT.value:
+        return {
+            "expert": expert_name,
+            "status": ExpertStatus.TIMEOUT.value,
+            "response_draft": "",
+            "error": f"expert timed out after {timeout_s}s",
+            "duration_ms": node_result.duration_ms,
+        }
+    if node_result.status == ExpertStatus.FAILED.value:
+        return {
+            "expert": expert_name,
+            "status": ExpertStatus.FAILED.value,
+            "response_draft": "",
+            "error": node_result.error or "",
+            "duration_ms": node_result.duration_ms,
+        }
 
-    if timeout_s is not None and timeout_s > 0:
-        # P2.3：per-call 独立线程限时——不用 infra 的共享池（max_workers=2），
-        # 超时孤儿任务会长期占用共享池 worker，后续调用在队列里排队，
-        # future.result(timeout) 会在任务开跑前误判超时（2026-09-17 全量回归实证）。
-        import concurrent.futures
-        import contextvars
-
-        pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix=f"cs-expert-{expert_name}",
-        )
-        # ThreadPoolExecutor.submit 不携带 contextvars（新线程是空上下文），
-        # 请求级状态（如 Context Budget 的业务 pin）会在线程内不可见——
-        # 显式拷贝当前上下文执行（2026-09-23 生产收口 B4）。
-        ctx = contextvars.copy_context()
-        try:
-            future = pool.submit(ctx.run, fn, state)
-            result = future.result(timeout=timeout_s)
-        except concurrent.futures.TimeoutError:
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            future.cancel()  # 未开跑则取消；已开跑的孤儿线程无法强杀，自行结束
-            logger.error(
-                "[CS Expert] timeout expert=%s after %.1fs",
-                expert_name, timeout_s,
-            )
-            record_cs_expert_result(expert_name, "timeout")
-            return {
-                "expert": expert_name,
-                "status": ExpertStatus.TIMEOUT.value,
-                "response_draft": "",
-                "error": f"expert timed out after {timeout_s}s",
-                "duration_ms": duration_ms,
-            }
-        except Exception as e:
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            logger.error(
-                "[CS Expert] exception expert=%s: %s", expert_name, e,
-                exc_info=True,
-            )
-            record_cs_expert_result(expert_name, "failed")
-            return {
-                "expert": expert_name,
-                "status": ExpertStatus.FAILED.value,
-                "response_draft": "",
-                "error": str(e),
-                "duration_ms": duration_ms,
-            }
-        finally:
-            pool.shutdown(wait=False)
-    else:
-        try:
-            result = fn(state)
-        except Exception as e:
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            logger.error(
-                "[CS Expert] exception expert=%s: %s", expert_name, e,
-                exc_info=True,
-            )
-            record_cs_expert_result(expert_name, "failed")
-            return {
-                "expert": expert_name,
-                "status": ExpertStatus.FAILED.value,
-                "response_draft": "",
-                "error": str(e),
-                "duration_ms": duration_ms,
-            }
-
-    duration_ms = int((time.monotonic() - t0) * 1000)
-
+    # 成功包装刻意留在 runner 之外（与旧实现同构）：包装阶段异常
+    # （fn 返回非 dict 时 .get 抛 AttributeError）与旧实现一样向外抛。
+    result = node_result.data
     status = result.get("status", ExpertStatus.SUCCESS.value)
     result.setdefault("expert", expert_name)
     result.setdefault("status", status)
-    result["duration_ms"] = duration_ms
-
-    record_cs_expert_result(expert_name, status)
-    logger.info(
-        "[CS Expert] done expert=%s status=%s duration_ms=%d",
-        expert_name, status, duration_ms,
-    )
+    result["duration_ms"] = node_result.duration_ms
     return result

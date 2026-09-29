@@ -4,14 +4,23 @@
 但刻意不复用其实现：CS 的 ExpertResult 绑定了 response_draft / evidence 等
 客服语义字段，旅游专家之间传递的是结构化 POI/行程对象，硬套会造成
 「字段名对不上、只能塞进 data 里当黑盒」的假复用。
+
+STOP F（2026-09-29）：执行生命周期内部收敛到 core/node_runtime；公开契约
+（签名/TravelExpertResult 字段/status 枚举）与遥测形态（travel_expert_{name}
+span 软失败 + start/done 日志，经 TravelExpertHooks 原样迁移）逐字节冻结
+不变。旅游专家是纯规则快路径：无 timeout 参数、无领域 metrics。
 """
 from __future__ import annotations
 
-import time
 from enum import Enum
 from typing import Any, Callable, TypedDict
 
-from backend.shared.logger import logger
+from backend.core.node_runtime import (
+    ErrorPolicy,
+    ExecutionContext,
+    NodeRunner,
+    TravelExpertHooks,
+)
 
 
 class TravelExpertStatus(str, Enum):
@@ -56,62 +65,37 @@ def run_expert_safely(
     Phase 4（任务书 §11）：每个专家调用统一建 span —— 此前专家只有
     duration_ms 日志，与 validator（每轴独立 span）不一致，专家延迟与
     失败率在 trace 里不可见。软失败：无活跃 trace 时为 noop span。
+    （span 生命周期自 STOP F 起在 core/node_runtime 的 TravelExpertHooks
+    内，命名与形态不变。）
     """
-    t0 = time.monotonic()
-    logger.info("[Travel Expert] start expert=%s", expert_name)
-    span = _start_expert_span(expert_name)
-    try:
-        result = fn(state)
-        duration_ms = int((time.monotonic() - t0) * 1000)
+    ctx = ExecutionContext(node_name=expert_name, domain="travel")
+
+    # 包装放在 fn 侧而非 runner 返回之后（与旧实现同构）：包装阶段异常
+    # （如 fn 返回非 dict）按专家失败处理（status=failed），不穿透。
+    def _invoke(s: dict[str, Any]) -> dict:
+        result = fn(s)
         result.setdefault("expert", expert_name)
         result.setdefault("status", TravelExpertStatus.SUCCESS.value)
-        result["duration_ms"] = duration_ms
-        _end_expert_span(span, result["status"], duration_ms)
-        logger.info("[Travel Expert] done expert=%s status=%s duration_ms=%d",
-                    expert_name, result["status"], duration_ms)
         return result
-    except Exception as e:
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        _end_expert_span(span, TravelExpertStatus.FAILED.value, duration_ms,
-                         error=str(e))
-        logger.exception("[Travel Expert] exception expert=%s", expert_name)
+
+    node_result = NodeRunner().run(
+        ctx,
+        _invoke,
+        state,
+        policy=ErrorPolicy.SWALLOW_TO_STATUS,
+        hooks=TravelExpertHooks(),
+    )
+
+    if node_result.status == TravelExpertStatus.FAILED.value:
         return TravelExpertResult(
             expert=expert_name,
             status=TravelExpertStatus.FAILED.value,
             data={},
             notes=[],
-            error=str(e),
-            duration_ms=duration_ms,
+            error=node_result.error or "",
+            duration_ms=node_result.duration_ms,
         )
 
-
-def _start_expert_span(expert_name: str):
-    """开专家 span（软失败：任何埋点异常都不影响专家执行）。"""
-    try:
-        from backend.observability.tracer import trace_collector
-        return trace_collector.start_span(
-            f"travel_expert_{expert_name}", name=f"旅游专家:{expert_name}",
-            type="agent", kind="agent", input={},
-        )
-    except Exception:
-        logger.debug("[Travel Expert] span 开启失败（不影响执行）", exc_info=True)
-        return None
-
-
-def _end_expert_span(span, status: str, duration_ms: int,
-                     error: str = "") -> None:
-    """收口专家 span（软失败；span 为 None 说明开启时已失败，直接跳过）。"""
-    if span is None:
-        return
-    try:
-        from backend.observability.tracer import trace_collector
-        metrics = {"expert_status": status, "duration_ms": duration_ms}
-        if error:
-            metrics["error"] = error
-        trace_collector.end_span(
-            span, output={"status": status}, metrics=metrics,
-            status="error" if status == TravelExpertStatus.FAILED.value
-            else "success",
-        )
-    except Exception:
-        logger.debug("[Travel Expert] span 收口失败", exc_info=True)
+    result = node_result.data
+    result["duration_ms"] = node_result.duration_ms
+    return result
