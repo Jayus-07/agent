@@ -1,13 +1,15 @@
 # API — 接口设计
 
-> 22 路由文件、~90 端点、鉴权现状、SSE 协议、数据契约。
+> 54 路由文件、~291 端点（2026-09-29 实测）、鉴权、SSE 协议、数据契约。
 > 配套阅读：[PRD.md](PRD.md) / [ARCHITECTURE.md](ARCHITECTURE.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md) / [RAG_DESIGN.md](RAG_DESIGN.md) / [DATABASE.md](DATABASE.md)
+>
+> ⚠️ **2026-09-29 口径注**：本文端点清单为 2026-08 口径（当时 22 文件 / ~90 端点），现路由文件数已翻倍以上，逐端点清单以 `backend/app/api/routes/` 目录为准；§2 的「单 API Key 鉴权」已被 **JWT + APISIX 网关验签** 替代（保留作历史记录）。
 
 ---
 
 ## 1. 总览
 
-### 1.1 22 路由文件 [backend/app/api/routes/](../backend/app/api/routes/)
+### 1.1 路由文件（下表为 2026-08 口径 22 个；现 54 个，清单以目录为准）[backend/app/api/routes/](../backend/app/api/routes/)
 
 | 路由文件 | 端点数 | 用途 |
 |---|---|---|
@@ -56,7 +58,9 @@
 
 ---
 
-## 2. 鉴权现状
+## 2. 鉴权（✅ 2026-09 已切换为 JWT + 网关验签，下文为历史方案记录）
+
+> **当前实现**：自建 JWT（issuer=agent-platform，`backend/security/local_jwt.py`，migration 008），登录链路 前端 `/login` → APISIX `/api/auth/**` → auth-service；APISIX `gateway-auth` 插件验签（**Bearer 优先于 X-API-Key**）并注入 X-User-Id 身份头（契约见 [contracts/identity-header-protocol.md](contracts/identity-header-protocol.md)）。RBAC 见 `backend/app/api/routes/rbac.py`。以下历史方案仅作对照：
 
 ### 2.1 当前实现（[backend/app/api/middleware/auth.py](../backend/app/api/middleware/auth.py)）
 
@@ -449,21 +453,13 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 ## 7. 已知问题
 
-### 7.1 鉴权缺失（[ROADMAP.md §1 P0](ROADMAP.md)）
+### 7.1 鉴权缺失（✅ 已于 2026-09 解决）
 
-- 单 API Key 默认空 = 全开放
-- 前端不发 X-API-Key
-- 无 RBAC / 角色 / 权限
-- `user_id` 客户端自报，可越权
+原四项缺口（单 API Key 全开放 / 前端不发 key / 无 RBAC / user_id 自报可越权）已由 JWT + 网关验签 + RBAC + 身份头注入全部关闭，见 §2 口径注。
 
-### 7.2 前端两套 API 客户端
+### 7.2 前端两套 API 客户端（✅ 已于 2026-09 统一）
 
-```
-lib/fetcher.ts + lib/api/*    ← 走 NEXT_PUBLIC_API_URL，无 /api 前缀
-services/*                    ← 走 /api/xxx，依赖 next.config.js rewrite
-```
-
-**路径不一致**是真实风险：鉴权 / 错误处理 / 超时行为完全不同。
+三端现为统一形态：`src/api/*` 域模块 + `src/app/api/[...path]/route.ts` BFF 代理（服务端注入凭据）+ react-query。
 
 ### 7.3 前端错误语义不一致
 
@@ -500,4 +496,4 @@ services/*                    ← 走 /api/xxx，依赖 next.config.js rewrite
 
 ## 验证
 
-最后验证：2026-08-10 · 与代码一致（22 路由 / ~90 端点 / SSE v2 6 事件 / 8 种 SQLStatus）。
+最后验证：2026-09-29 · 路由/端点数实测（54 文件 / ~291 端点）+ 鉴权切换状态复核；端点明细以 `backend/app/api/routes/` 目录为准，SSE 帧序与 8 种 SQLStatus 契约未变。

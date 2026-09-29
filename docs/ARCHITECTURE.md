@@ -1,6 +1,8 @@
 # ARCHITECTURE — 顶层架构
 
-> 项目的"5 分钟看完"视图。配套阅读：[PRD.md](PRD.md) / [RAG_DESIGN.md](RAG_DESIGN.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md) / [DATABASE.md](DATABASE.md) / [API.md](API.md) / [ROADMAP.md](ROADMAP.md)
+> 项目的"5 分钟看完"视图。配套阅读：[PRD.md](PRD.md) / [DESIGN.md](DESIGN.md) / [RAG_DESIGN.md](RAG_DESIGN.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md) / [DATABASE.md](DATABASE.md) / [API.md](API.md) / [ROADMAP.md](ROADMAP.md)
+>
+> ⚠️ **2026-09-29 口径注**：本文保留 2026-08 的顶层视图骨架。当前权威视图（三张分层架构图 + 部署拓扑 + 端口表）见 [architecture/system-overview.md](architecture/system-overview.md)；与 8 月版的差异：鉴权已落地（JWT + 网关验签）、SQLite 散落存储已下线、向量存储统一 PG + pgvector、主图 9 核心节点 + 5 域图。
 
 ---
 
@@ -15,7 +17,7 @@
                                             ▼
                            ┌─────────────────────────────────────┐
                            │      FastAPI Backend (8000)         │
-                           │  Router / Rate Limit / Auth (TODO)  │
+                           │  Router / Rate Limit / Auth (JWT+网关) │
                            └────────────────┬────────────────────┘
                                             ▼
    ┌────────────────────────────────────────────────────────────────┐
@@ -42,9 +44,9 @@
                             ┌─────────────────┼─────────────────┐
                             ▼                 ▼                 ▼
                   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-                  │  PostgreSQL  │   │   ChromaDB   │   │   SQLite     │
-                  │  agent_business│  │  + bm25      │   │  (14 个散落)  │
-                  │  agent_memory │   │  doc/ chunk  │   │  待治理       │
+                  │  PostgreSQL  │   │  PG + pgvector│  │ SQLite       │
+                  │ agent_business│ │  向量+BM25    │  │ (已于 2026-09│
+                  │ agent_memory │   │  唯一存储     │  │  全量下线)   │
                   └──────────────┘   └──────────────┘   └──────────────┘
 ```
 
@@ -70,7 +72,7 @@
 | 定位 | 复杂任务自动拆解 / 调度 / 执行的"大脑" |
 | 关键文件 | [backend/orchestration/](../backend/orchestration/)（graph / supervisor / state / workflow） |
 | 关键 API | `POST /chat` / `POST /chat/stream` / `POST /chat/abort` |
-| 当前边界 | 5 节点 + 9 Capability + 10 轮 Supervisor 上限 + 3 条降级链 |
+| 当前边界 | 主图 9 核心节点 + 17 Capability（3 个 `routed:false`）+ 10 轮 Supervisor 上限 + recursion_limit 80 + 3 条降级链；另有 5 个垂直域图（代码默认关） |
 | 详细设计 | [AGENT_DESIGN.md](AGENT_DESIGN.md) |
 
 ### 2.2 RAG（企业知识库）
@@ -91,7 +93,7 @@
 | 关键文件 | [backend/sql/](../backend/sql/)（sql_agent / router / sql_validator / row_security / executor） |
 | 关键 API | `POST /sql` |
 | 当前边界 | 6 层硬校验 + agent_readonly 4 层防线 + Row Security + 8 种 SQLStatus |
-| 详细设计 | [PRD.md §4.3](PRD.md) + [AGENT_DESIGN.md 9 Capability](AGENT_DESIGN.md) |
+| 详细设计 | [PRD.md §4.3](PRD.md) + [AGENT_DESIGN.md](AGENT_DESIGN.md) |
 
 ### 2.4 Memory（3 层记忆）
 
@@ -101,7 +103,7 @@
 | 关键文件 | [backend/memory/](../backend/memory/)（manager / short_term / session / long_term / importance / decay / pii_filter） |
 | 关键 API | `/memory/sessions` / `/memory/sessions/{id}/context` |
 | 当前边界 | L1 进程内（20 条）/ L2 PG 持久化 / L3 pgvector（pgvector cosine + ivfflat） |
-| 待补 | 衰减 cron 入口 / 多用户隔离（依赖鉴权） |
+| 已补齐 | 衰减 cron（Celery beat `memory-daily-decay`）/ 多用户隔离（JWT + 多租户，2026-09 落地） |
 
 ### 2.5 Observability（可观测性）
 
@@ -120,8 +122,8 @@
 | **Workflow** | 确定性业务流程（daily_report / inventory_alert） | [AGENT_DESIGN.md §8](AGENT_DESIGN.md) |
 | **Report** | 6 种内置报告 + 模板 + 图表 | [PRD.md §4.5](PRD.md) |
 | **Data Collection** | 5 阶段 Pipeline（Fetcher / Parser / Cleaner / Analyzer / Writer） | [PRD.md §4.5](PRD.md) |
-| **Seed** | 演示数据生成（real 真实品类名） | [learn/07-seed-data.md](learn/07-seed-data.md) |
-| **Evaluation** | 评测框架（Faithfulness / 引用率） | [learn/08-evaluation-framework.md](learn/08-evaluation-framework.md) |
+| **Seed** | 演示数据生成（real 真实品类名） | [PRD.md](PRD.md)（原 learn/07 文档已删） |
+| **Evaluation** | 评测框架（Faithfulness / 引用率） | [PRD.md](PRD.md) + [backend/evaluation/](../backend/evaluation/)（原 learn/08 文档已删） |
 
 ---
 
@@ -274,7 +276,7 @@
 | 层 | 技术 |
 |---|---|
 | 容器 | Docker + Docker Compose |
-| 数据库 | PostgreSQL 18（[CLAUDE.md 全局配置](../.claude/CLAUDE.md)） |
+| 数据库 | PostgreSQL 18（双实例：docker 5433 权威库 + 宿主机 5432，见根 [AGENTS.md](../AGENTS.md)） |
 | 进程 | Uvicorn（生产） |
 | 监控 | 自建 Trace + Prometheus metrics |
 | 日志 | 结构化 JSON + 日志中间件 |
@@ -311,7 +313,7 @@ docker compose -f docker-compose.yml up -d
 
 - Python 3.10+
 - Node 20+
-- PostgreSQL 18（[GLB 全局配置：scram-sha-256 + 只读角色](../.claude/CLAUDE.md)）
+- PostgreSQL 18（scram-sha-256 + 只读角色，见根 [AGENTS.md](../AGENTS.md)）
 - Windows: 数据卷挂载注意 CRLF；Docker in Docker 限制
 
 ---
@@ -326,10 +328,10 @@ docker compose -f docker-compose.yml up -d
 
 `decisions/` 跨主题决策：
 
-- [auth-decision.md](decisions/auth-decision.md) — 认证方案（**当前未实现，Phase 3 P0**）
+- [auth-decision.md](decisions/auth-decision.md) — 认证方案（✅ 已实现：自建 JWT，`security/local_jwt.py`，migration 008）
 
 ---
 
 ## 验证
 
-最后验证：2026-08-10 · 与代码一致（5 个子系统 + 9 Capability + 7 schema × 19 表 + 22 路由）。
+最后验证：2026-09-29 · 过时口径已按根 [README.md](../README.md)「系统规模」校准（鉴权/存储/节点数）；数量类以根 README 为唯一权威。

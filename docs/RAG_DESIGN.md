@@ -2,6 +2,8 @@
 
 > 文档入库 → 索引 → 检索 → 重排序 → 校验 → LLM 生成 完整设计。
 > 配套阅读：[PRD.md](PRD.md) / [ARCHITECTURE.md](ARCHITECTURE.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md)
+>
+> ⚠️ **2026-09-29 口径注**：本文 §3 的六段流水线（HistoryAware → MultiQuery → ChunkLevel → Adaptive → Rerank → Generate）为 2026-08 口径；对应检索器类仍在 `backend/rag/retrieval/retrievers.py`。当前生产链路口径为「**改写 → MultiQuery → 混合检索（Vector+BM25→RRF）→ 同文档扩展 → Rerank → Evidence Gate → 带引用生成 → META 尾拒答判定**」（见根 README「核心能力」），向量存储已统一 PG + pgvector（Chroma 下线）。
 
 ---
 
@@ -649,7 +651,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 | `judge_latency_p95_ms` | 推理 P95 延迟 | < 10000ms |
 | `judge_consistency` | 同一 (answer, context) 多次评分方差 | < 0.10 |
 
-详见 [评测方案 §Faithfulness NLI](../rag_eval/README.md)。
+详见 [评测方案 §Faithfulness NLI](rag_eval/README.md)。
 
 ---
 
@@ -718,4 +720,4 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 
 ## 验证
 
-最后验证：2026-08-10 · 与代码一致（6 段流水线 + 9 阶段埋点 + Evidence Gate 3 层 + Faithfulness NLI）。
+最后验证：2026-09-29 · 检索器类 / Evidence Gate / Faithfulness 结构对照代码复核仍准确；流水线阶段命名与存储口径见文首口径注，以根 [README.md](../README.md)「核心能力」为准。

@@ -38,15 +38,19 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 ## 垂直域图（Domain Graph）
 
-五个域图的**代码默认全关**（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `TRAVEL_COMMERCE_ENABLED` / `TRAVEL_BOOKING_ENABLED` 均为 `false`，新 clone 拿到的是这个）；当前仓库根 `.env` 客服 / 旅游 / 选品三个已打开。
+**语义口径（STOP E，2026-09-29）**：架构上只有 **3 个顶级业务域**——Customer Service / Travel / Selection——Travel 含 **planning / commerce / booking 三个子流**。3 个顶级域落地为 **5 个物理域图**（commerce / booking 保留独立生命周期与独立开关，物理不合并）。
+
+5 个物理域图的**代码默认全关**（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `TRAVEL_COMMERCE_ENABLED` / `TRAVEL_BOOKING_ENABLED` 均为 `false`，新 clone 拿到的是这个）；当前仓库根 `.env` 客服 / 旅游 / 选品三个已打开。
 
 | 域图 | 开关 | 节点序列 |
 |---|---|---|
 | 客服 | `CS_ENABLED` | `state_loader → pending_handler → cs_supervisor → 5 专家（knowledge/query/action/complaint/handoff）→ cs_reporter`；`cs_supervisor` 承担 handoff 拦截、循环上限、LLM 兜底 |
-| 旅游 | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair → travel_reporter`；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`） |
+| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair → travel_reporter`；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`） |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | prefilter 已接线（`router_node` 内与旅游同层，2026-09-17）；仅受开关控制，无域锁通路 |
-| 旅游商务 | `TRAVEL_COMMERCE_ENABLED`（默认关） | `backend/travel/commerce/`，2026-09-24 STOP K |
-| 旅游预订 | `TRAVEL_BOOKING_ENABLED`（默认关） | `backend/travel/booking/`，预订事务与幂等账本复用，2026-09-25 STOP L |
+| 旅游商务（Travel · commerce 子流） | `TRAVEL_COMMERCE_ENABLED`（默认关） | `backend/travel/commerce/`，2026-09-24 STOP K |
+| 旅游预订（Travel · booking 子流） | `TRAVEL_BOOKING_ENABLED`（默认关） | `backend/travel/booking/`，预订事务与幂等账本复用，2026-09-25 STOP L |
+
+> **`travel_commerce` / `travel_booking` 是内部调度标识，不是独立业务域**：两者以 `route_mode` 形态存在的唯一身份是 prefilter → route_selector → 域图注册表（`domain_graph_registry`）的查表键，**永久保留不改名**——`route_selector` 查表未命中会**静默落入 planner 兜底**（非响亮失败）。语义投影在决策层已完成（STOP B 起）：DomainRouter 把两者归一为 `domain=travel + subflow=commerce/booking` 并随 trace metadata 持久化；注册表以 `DomainGraph.subflow` 展示字段表达同一语义，两层口径由 `backend/tests/orchestration/test_domain_semantic_consistency.py` 守护。
 
 ### 进入域图的两条独立通路
 

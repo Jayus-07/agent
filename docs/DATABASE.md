@@ -1,7 +1,9 @@
 # DATABASE — 数据库设计
 
-> PostgreSQL 双库 + 14 个 SQLITE 散落 + Migration 治理。
+> PostgreSQL 双库 + Migration 治理。
 > 配套阅读：[PRD.md](PRD.md) / [ARCHITECTURE.md](ARCHITECTURE.md)
+>
+> ⚠️ **2026-09-29 口径注**：本文 §5 的「14 个 SQLite 散落」已于 **2026-09 全量收口下线**——PG + pgvector 是唯一存储实现（含 trace / 文档注册表 / chunk / 关键词 / 告警 / 报告 / workflow 运行），§5 保留作历史债务记录。Migration 已治理（`sql/migrations/` 编号至 054 + db-migrate 工具 + 三层校验），§6 的「003 编号重复」等问题已修复。
 
 ---
 
@@ -451,7 +453,7 @@ CREATE INDEX memory_embedding_idx ON memory_records USING ivfflat (embedding vec
 ### 3.3 关键说明
 
 - ⚠️ `chat_sessions.user_id VARCHAR NOT NULL`（与 `auth-decision.md` 描述不一致，后者说"设为可空"）
-- ⚠️ 跨用户 / 跨租户的 memory 隔离**未实现**（仅靠 user_id 字符串，建议作为 Phase 3 鉴权接入首要价值）
+- ✅ 跨用户 / 跨租户隔离**已实现**（2026-09：JWT tenant claim + 网关注入租户头 + checkpoint 跨租户防护；auth.sessions 设备登录）
 
 ---
 
@@ -502,11 +504,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 - sqlglot 重写 AST，为受保护表注入 `AND table.col = %(param)s` 参数化占位符
 - 引用受保护表却缺参数 → 抛 `RowSecurityError`
 - **当前缺陷**：`current_user_id` 来自 HTTP 请求体（非可信鉴权源）→ 攻击者可越权
-- **修复路径**：接上 JWT 后立刻生效（机制已就绪）
+- **落地结果**：✅ JWT 已接入，行级安全按可信身份源生效（2026-09）
 
 ---
 
-## 5. 14 个 SQLite 散落（架构债务）
+## 5. 14 个 SQLite 散落（架构债务）— ✅ 已于 2026-09 全量收口下线
+
+> 本节为历史记录。当前 PG + pgvector 是唯一存储实现，下表 SQLite 文件已迁移或删除；血缘与容器安全面见全站存储收口报告（docs/archive/2026-09/）。
 
 `data/` 目录下的 SQLite 单文件：
 
@@ -541,7 +545,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 6. Migration 治理
 
-### 6.1 当前 5 个 migration
+### 6.1 migration 治理现状（2026-09-29）
+
+`sql/migrations/` 顺序编号治理，最新编号 **054**（auth_super_admin）；配套 db-migrate 工具与迁移三层校验（发布门禁）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
@@ -592,4 +598,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 验证
 
-最后验证：2026-08-10 · 与代码一致（18 业务表 + 5 migration + 4 层只读防线 + 14 SQLite 散落）。
+最后验证：2026-09-29 · 18 业务表结构复核仍准确；SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。

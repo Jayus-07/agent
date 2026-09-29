@@ -1,12 +1,14 @@
 # AGENT_DESIGN — Multi-Agent 编排 + Workflow 引擎
 
 > 多 Agent 编排与 Workflow 引擎的设计文档。配套阅读：[PRD.md](PRD.md) / [ARCHITECTURE.md](ARCHITECTURE.md) / [RAG_DESIGN.md](RAG_DESIGN.md)
+>
+> ⚠️ **2026-09-29 口径注**：本文详述的是 **plan 支线**（Planner → Critique → Supervisor → Skills → Reporter）与 Workflow 引擎，该支线至今有效。当前主图为 **9 个核心节点**（含 router / tool_selector / skill_executor / workflow_executor / general_chat），另有 direct / workflow 两条支线与 **5 个垂直域图**（客服 / 旅游 / 选品漏斗 / 旅游商务 / 旅游预订），Capability 为 **17 个**（3 个 `routed:false`）。编排全貌与节点职责见 [architecture/ai-runtime.md](architecture/ai-runtime.md)，数量以根 [README.md](../README.md)「系统规模」为准。
 
 ---
 
 ## 1. 概览
 
-### 1.1 5 节点 + 9 Capability 一图
+### 1.1 plan 支线 5 节点编排一图
 
 ```
                       ┌──────────────┐
@@ -53,7 +55,7 @@
                       └──────────────┘
 ```
 
-### 1.2 9 个 Capability 矩阵
+### 1.2 Capability 矩阵（下表为 2026-08 的 9 个；现为 17 个，唯一事实源 `capabilities.yaml`）
 
 | Capability | Skill | 输入 | 输出 |
 |---|---|---|---|
@@ -590,4 +592,4 @@ def route(self, question: str) -> tuple[str, float]:
 
 ## 验证
 
-最后验证：2026-08-10 · 与代码一致（5 节点 + 9 Capability + 10 轮 Supervisor + 3 条降级链）。
+最后验证：2026-09-29 · plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。

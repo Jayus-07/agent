@@ -10,19 +10,20 @@
 
 ---
 
-## 1. 顶层 7 个文档（PRD + TRD 融合，新人入口）
+## 1. 顶层 8 个文档（PRD + TRD + 设计规范，新人入口）
 
 | 文档 | 内容 |
 |---|---|
-| [PRD.md](PRD.md) | 业务背景 / 目标 / 用户角色 / 4 大功能需求 / 非功能 / 当前状态 / 后续规划 |
+| [PRD.md](PRD.md) | 业务背景 / 目标 / 用户角色 / 8 大功能需求 / 非功能 / 当前状态 / 后续规划（2026-09-29 刷新） |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 顶层架构图 + 子系统地图 + 关键数据流 + 设计原则 |
+| [DESIGN.md](DESIGN.md) | 前端三端设计规范：设计 token / 布局骨架 / 页面清单 / 组件与四态规范 / 独特约定与反模式（2026-09-29 新建） |
 | [RAG_DESIGN.md](RAG_DESIGN.md) | RAG 流水线 + 索引链路 + Evidence Gate + Faithfulness |
 | [AGENT_DESIGN.md](AGENT_DESIGN.md) | Multi-Agent 编排 + Workflow 引擎 + AgentState（capability/节点口径见根 README） |
 | [DATABASE.md](DATABASE.md) | 业务库 schema + agent_memory + Migration（SQLite 散落存储已于 2026-09 收口下线） |
 | [API.md](API.md) | 路由 / 端点 + 鉴权 + SSE 协议 + DTO + 错误处理 |
-| [ROADMAP.md](ROADMAP.md) | 现状差距矩阵 + 路线图 + 关键风险 |
+| [ROADMAP.md](ROADMAP.md) | 现状差距矩阵 + 路线图 + 关键风险（P0/Phase3 已于 2026-09 关闭，剩余见 §6.3） |
 
-> ⚠️ 这 7 份成文较早，部分数字为 8 月口径；**数量类信息一律以根 README「系统规模」（2026-09-28 实测）为准**。
+> 8 份均已按 2026-09-29 口径校准（数量类以根 README「系统规模」为唯一权威，文档内不复抄）。
 
 ---
 
@@ -47,8 +48,8 @@
 
 ```
 docs/
-├── PRD.md / ARCHITECTURE.md / RAG_DESIGN.md / AGENT_DESIGN.md
-├── DATABASE.md / API.md / ROADMAP.md      ← 顶层 7 文档（新人入口）
+├── PRD.md / ARCHITECTURE.md / DESIGN.md / RAG_DESIGN.md / AGENT_DESIGN.md
+├── DATABASE.md / API.md / ROADMAP.md      ← 顶层 8 文档（新人入口）
 ├── architecture/adr/    ← ADR 决策记录
 ├── contracts/           ← 跨端契约（身份头协议等）
 ├── customer-service/    ← 客服域专项（refactor-plan / target-architecture / 五剧本）
@@ -84,7 +85,7 @@ docs/
 ## 5. 维护约定
 
 1. **新文档必须归档到对应目录**；过程类交接 / 收口报告按 `YYYY-MM-DD-主题.md` 命名放 `reports/`，**不要堆根目录**；完结后移入 `archive/<年-月>/`（2026-09-29 已归档一批，`git mv` 保留血缘）
-2. **PRD / ARCHITECTURE 等 7 个顶层文档** 是新人入口，**必须与代码同步更新**；滞后口径以上方「口径提示」为准
+2. **PRD / ARCHITECTURE / DESIGN 等 8 个顶层文档** 是新人入口，**必须与代码同步更新**；滞后口径以上方「口径提示」为准
 3. **重大决策** 写 ADR → `architecture/adr/NNNN-xxx.md`
 4. **数量 / 规模类口径** 只维护根 README「系统规模」表与 AGENTS.md，禁止在第二处手抄（G2）
 5. **被源码注释 / 测试 / AGENTS.md 按路径引用的文档不移动**；确需移动时必须同步改引用方

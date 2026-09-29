@@ -2,7 +2,7 @@
 
 > **产品需求文档** + **技术需求说明（TRD）** 融合版
 > 范围：业务背景、产品定位、能力边界、模块需求、后续规划
-> 配套阅读：[ARCHITECTURE.md](ARCHITECTURE.md) / [RAG_DESIGN.md](RAG_DESIGN.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md) / [DATABASE.md](DATABASE.md) / [API.md](API.md) / [ROADMAP.md](ROADMAP.md)
+> 配套阅读：[ARCHITECTURE.md](ARCHITECTURE.md) / [DESIGN.md](DESIGN.md) / [RAG_DESIGN.md](RAG_DESIGN.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md) / [DATABASE.md](DATABASE.md) / [API.md](API.md) / [ROADMAP.md](ROADMAP.md)；部署与编排细节见 [architecture/system-overview.md](architecture/system-overview.md) 与 [architecture/ai-runtime.md](architecture/ai-runtime.md)
 
 ---
 
@@ -19,6 +19,7 @@
 | **销售数据** | 订单、客单价、转化率、退货 | Excel 透视，依赖分析师 |
 | **业务规则** | SOP、审批流、合规检查 | Word / PDF，靠人传话 |
 | **运营报告** | 日报 / 周报 / 库存预警 | 人工统计 + 邮件发送 |
+| **客户咨询** | 售前售后、订单查询、投诉 | 人工客服逐单应答，高峰积压 |
 
 **当前信息获取方式**：
 
@@ -36,14 +37,16 @@
 | **文档知识无法快速复用** | 老员工经验流失，新人重复踩坑 |
 | **数据分析依赖人工经验** | 同样的数据，不同人解读不同 |
 | **日常报告重复劳动** | 日报 / 周报占团队 30% 时间 |
+| **客服人力成本高** | 重复问题占比高，7×24 无法覆盖 |
 
 ### 1.3 解决方案
 
 **RAG + Multi-Agent + 数据分析** 融合的企业级 AI 平台：
 
 - **RAG** —— 让企业文档成为"可对话的知识库"
-- **Multi-Agent** —— 把复杂任务自动拆解、自动调度、自动执行
+- **Multi-Agent** —— 把复杂任务自动拆解、自动调度、自动执行；垂直场景（客服 / 旅游 / 选品）走专属域图
 - **数据分析** —— 自然语言查询业务数据库，自动生成报告
+- **人机协作** —— AI 客服一线应答，复杂问题转人工坐席接管
 
 **业务价值**：从「查数据要 30 分钟」缩短到「问一句话 5 秒出答案」。
 
@@ -58,34 +61,32 @@
 ```
 用户提出问题（自然语言）
         ↓
-   系统自动理解
+   系统自动理解（路由 / 域检测 / 任务规划）
         ↓
-   任务规划（拆解 + 排序）
+   调用业务能力（RAG / SQL / Report / 客服 / 旅游 / Workflow）
         ↓
-   调用业务能力（RAG / SQL / Report / Email）
-        ↓
-   查询数据 + 分析结果
+   查询数据 + 分析结果（全程 Trace + 证据引用）
         ↓
    生成报告 / 输出结论
         ↓
-   用户拿到可决策的答案
+   用户拿到可决策的答案（AI 兜不住时转人工）
 ```
 
-### 2.2 三大核心能力
+### 2.2 五大核心能力
 
 #### ① 企业知识问答
 
 支持制度、产品资料、SOP、项目文档等。例如：
 
 > 用户：退货流程是什么？
-> 系统：RAG 检索 → 引用来源 → 标注可信度
+> 系统：RAG 检索 → 引用来源 → 标注可信度（证据不足主动拒答）
 
 #### ② 数据智能分析
 
 支持自然语言查询业务数据库。例如：
 
 > 用户：最近 30 天销售下降超过 20% 的商品有哪些？
-> Agent：NL2SQL → 校验 → 执行 → 业务解释
+> Agent：NL2SQL → 6 层校验 → 执行 → 业务解释
 
 #### ③ 自动运营报告
 
@@ -95,21 +96,34 @@
 定时任务 → SQL 查询 → Agent 分析 → Markdown 报告 → 邮件发送
 ```
 
+#### ④ 智能客服（AI 一线 + 人工坐席）
+
+客服窗口内 AI 按 5 专家（知识 / 查询 / 行动 / 投诉 / 转接）分工应答；
+涉及退款、改单等敏感操作生成待确认动作；AI 兜不住时转人工，
+坐席在独立工作台（:3300）接管会话、查工单、看统计。
+
+#### ⑤ 垂直场景域图（旅游 / 选品）
+
+旅游行程规划：表单或对话提交需求 → 槽位补全 → 多专家编排 → 四轴校验（时间/地理/体力/预算）→ 结构化行程 + ICS 日历导出。
+选品决策：市场评估 → 差异化分析 → 财务测算 → AI 评审团，漏斗指标在管理端看板跟踪。
+
 ---
 
 ## 3. 用户角色
 
-| 角色 | 需求 | 当前权限 |
-|---|---|---|
-| **运营人员** | 查询商品 / 库存 / 销售 | 知识查询、数据分析、报告查看 |
-| **管理人员** | 经营指标 / 趋势分析 | 报告生成、数据分析、决策辅助 |
-| **管理员** | 知识库管理 / 文档上传 / 配置 | KB 管理、文档管理、系统配置 |
+| 角色 | 入口 | 需求 | 平台权限 |
+|---|---|---|---|
+| **普通用户 / 运营人员** | 用户端 :3100 | 知识问答、数据查询、旅游规划、客服咨询 | 默认 `viewer`（注册兜底） |
+| **管理员** | 管理端 :3200 | 知识库 / 模型 / 预算 / RBAC / 审批 / 可观测 | `platformRole` 分级（`super_admin` 最高） |
+| **客服坐席** | 坐席工作台 :3300 | 接管 AI 转人工会话、工单流转、统计 | `cs_agents` 名单制（`csRole`） |
+| **未登录访客** | 统一门户 `/` | 三端入口导航 | 仅门户页 |
 
-**当前实现状态**：
+**当前实现状态**（2026-09-29）：
 
-- 角色概念在代码中**未完整实现**（无 users / roles / permissions 表，无登录页）
-- 现有"用户"是**未受约束的字符串入参**（如 `user_id="default"`）
-- 鉴权仅靠单 API Key（默认空 = 全开放）—— 详见 [ROADMAP.md P0 项](ROADMAP.md)
+- ✅ 自建 JWT 鉴权（`backend/security/local_jwt.py`，auth.sessions 设备登录 + sid claim），APISIX 网关 `gateway-auth` 插件统一验签并注入 X-User-Id 身份头
+- ✅ RBAC：`rbac.py` 平台角色 + 坐席角色 + 乐观锁，注册兜底 viewer
+- ✅ 多租户为默认口径（JWT 携带 tenant claim，网关注入租户头）
+- ✅ 三端均有全局 AuthGate；超级管理员账号走受控本机提权脚本
 
 ---
 
@@ -117,40 +131,40 @@
 
 ### 4.1 Agent 对话中心（FR-001 ~ FR-002）
 
-**功能**：统一聊天入口。
+**功能**：统一聊天入口，一个问题框内按语义自动分流（知识问答 / 数据查询 / 报告 / 客服 / 旅游）。
 
 | ID | 需求 |
 |---|---|
-| FR-001 | 用户输入自然语言问题 |
-| FR-002 | 系统自动识别任务类型：知识查询 / 数据查询 / 报告生成 / 复杂任务 |
+| FR-001 | 用户输入自然语言问题，流式返回答案与执行过程 |
+| FR-002 | 系统自动识别任务类型并路由：直接执行 / Workflow / 任务规划 / 垂直域图 |
 
 **当前实现**：
 
-- ✅ [frontend/src/app/agent/page.tsx](frontend/src/app/agent/page.tsx) — 聊天主页
-- ✅ SSE 流式响应（`POST /chat/stream`）
-- ✅ 中断生成（`POST /chat/abort`）
-- ✅ 历史会话加载
+- ✅ [frontend/src/app/agent/page.tsx](../frontend/src/app/agent/page.tsx) — 聊天主界面（`/agent`）
+- ✅ SSE 流式响应（`POST /chat/stream`，meta → status/log/delta → done/error，支持断线恢复）
+- ✅ 中断生成（发送键兼任停止键）、历史会话加载
+- ✅ 客服抽屉（右上角，走客服锁域链路）
+- ✅ 三层 Router（规则 → 向量 → LLM）+ 三域预过滤（客服 > 旅游 > 选品）+ 灰度放量开关
 
 ### 4.2 RAG 知识库（FR-RAG-001 ~ FR-RAG-003）
 
-**功能**：企业文档智能检索。
+**功能**：企业文档智能检索，证据不足主动拒答。
 
-支持文件：PDF / DOCX / Markdown / TXT。
+支持文件：PDF / DOCX / Markdown / TXT（含 OCR 兜底）。
 
 | ID | 需求 |
 |---|---|
-| FR-RAG-001 | 支持多知识库（库存 / 订单 / 商品 / 制度 等按 kb_id 隔离） |
-| FR-RAG-002 | 支持文档元数据：`doc_type` / `business_domain` / `summary` / `chunk_keywords` |
-| FR-RAG-003 | 回答必须包含引用（来源文档 + 匹配关键词） |
+| FR-RAG-001 | 多知识库按 kb_id 隔离，支持 fixture 评测集管理 |
+| FR-RAG-002 | 文档元数据治理：doc_type / business_domain / summary / chunk_keywords（规则 + LLM 统一抽取双链） |
+| FR-RAG-003 | 回答必须带内联引用 `[1][2]` + 参考文献列表；检索质量不足时三层拒答 |
 
 **当前实现**：
 
-- ✅ 11 个端点（`/rag/*`）：上传 / 搜索 / 重索引 / 删除 / 操作日志
-- ✅ 6 段流水线：HistoryAware → MultiQuery → ChunkLevel → Adaptive → Rerank → LLM Generate
-- ✅ Hybrid 检索（向量 + BM25 + RRF 60）
-- ✅ CrossEncoder Rerank + sigmoid 归一化（阈值 0.3）
-- ✅ Citation 内联标注 `[1][2]` + Evidence Gate 三层拒答 + Faithfulness NLI 校验
-- ✅ 11 个前端端点 + 4 个知识库管理页面
+- ✅ 类型感知切片 + Metadata 治理（含灰度与影子一致率链路）
+- ✅ 混合检索：Vector + BM25 → RRF 融合 → 同文档扩展 → CrossEncoder Rerank
+- ✅ Evidence Gate 三层主动拒答（Retrieval / Rerank / Faithfulness NLI）+ META 尾拒答判定
+- ✅ 管理端知识库页面：上传 / 关键词 / 待审队列 / 运营指标 / 索引 trace / 重索引
+- ⚠️ 评测基线：现行模型栈（DB 治理）下评测需先重建 fixture 库（历史基线数字与现行栈不可比）
 
 详细设计：[RAG_DESIGN.md](RAG_DESIGN.md)
 
@@ -160,23 +174,21 @@
 
 | ID | 需求 |
 |---|---|
-| FR-SQL-001 | 用户输入自然语言问题，自动生成 SQL 并执行 |
+| FR-SQL-001 | 自然语言问题自动生成 SQL 并执行，返回业务解释 |
 | FR-SQL-002 | SQL 执行前必须经过 6 层验证 |
 | FR-SQL-003 | 禁止危险 SQL（DROP / DELETE / UPDATE / TRUNCATE / 写函数） |
 
 **当前实现**：
 
-- ✅ 6 层安全：① SELECT 类型校验 ② 表名白名单 ③ 敏感列拒绝 ④ 禁止函数黑名单 ⑤ LIMIT 强制 ⑥ agent_readonly 只读账号
-- ✅ 双 API：旧 `ask()`（Markdown 字符串）/ 新 `ask_struct()`（SQLResult dataclass）
-- ✅ 8 种 SQLStatus 状态（success / no_data / failed / timeout / syntax_error / permission_denied / validation_error / no_table）
-- ✅ 行级安全（sqlglot 重写 AST + 参数化注入）
-- ✅ 连接池（ThreadedConnectionPool min=2 max=10）
+- ✅ 链路：SQLSkill → SQLAgent → Router → Generator → Validator（6 层）→ RowSecurity → Executor（连接池）→ PostgreSQL
+- ✅ 6 层安全：① SELECT 校验 ② 表名白名单 ③ 敏感列拒绝 ④ 函数黑名单 ⑤ LIMIT 强制 ⑥ `agent_readonly` 只读角色
+- ✅ 8 种 SQLStatus 状态机 + 行级安全（sqlglot AST 重写 + 参数化）
+- ✅ 数据协议 SQLResult / BusinessInsight，供 Supervisor 跨步骤注入
 
 **已知限制**：
 
-- 仅支持 PostgreSQL
+- 仅支持 PostgreSQL（业务库 7 schema × 18 表）
 - 关键词快路硬编码（新增业务域需手动维护）
-- 仅 PG schema 白名单静态配置
 
 ### 4.4 Multi-Agent 编排（FR-AGENT-001 ~ FR-AGENT-005）
 
@@ -184,47 +196,80 @@
 
 | ID | 需求 |
 |---|---|
-| FR-AGENT-001 | 5 节点编排：Planner → Critique → Supervisor → Skills → Reporter |
-| FR-AGENT-002 | 自动派发 9 个 Capability（sql / rag / report / email / export / web / data 等） |
-| FR-AGENT-003 | DAG 依赖调度 + Send[] 并行执行 |
+| FR-AGENT-001 | 主图 9 核心节点编排；LLM 决策节点仅 4 个（Planner / Critique / Reporter / general_chat） |
+| FR-AGENT-002 | Capability 声明式注册（现 17 个，其中 3 个内部能力不对路由开放） |
+| FR-AGENT-003 | Capability DAG 依赖调度 + Send[] 并行执行 |
 | FR-AGENT-004 | 降级链（sql 空 → rag；rag 空 → sql） |
-| FR-AGENT-005 | 实时 SSE 事件（status / log / delta / done） |
+| FR-AGENT-005 | 实时 SSE 事件（status / log / delta / done / error） |
 
 **当前实现**：
 
-- ✅ 9 个 Capability（[AGENT_DESIGN.md 第 4 节](AGENT_DESIGN.md)）
-- ✅ Capability DAG（nodes + edges）由 LLM Planner 生成
-- ✅ 4 层 JSON 修复管道 + 5min LRU 缓存
-- ✅ 规则引擎 critique（0ms 规则 + anomaly 时 LLM 兜底）
-- ✅ Supervisor 依赖检查 + 就绪派发 + 卡死检测（上限 10 轮）
-- ✅ 降级链 + 引用来源合并 + LLM 一句话总结
+- ✅ direct / workflow / plan 三条执行支线；plan 支线 Planner → Critique → Supervisor（纯规则 DAG 调度，recursion_limit 80）
+- ✅ 12 Skill / 34 Tool / 4 Workflow 声明式注册，启动期一致性测试门禁（registry/layer/adr0001/base_output 四测试）
+- ✅ 5 个垂直域图（客服 / 旅游 / 选品漏斗 / 旅游商务 / 旅游预订），代码默认全关、由环境开关放量
+- ✅ MCP 双 Server（5 Tool）作为 Tool 层第二出口
+
+**数量口径纪律**：以根 [README.md](../README.md)「系统规模」表为唯一权威，本文不复抄数字。
 
 详细设计：[AGENT_DESIGN.md](AGENT_DESIGN.md)
 
-### 4.5 自动报告（FR-REPORT-001 ~ FR-REPORT-003）
+### 4.5 自动报告与 Workflow（FR-REPORT-001 ~ FR-REPORT-003）
 
-**功能**：自动生成 + 推送运营报告。
+**功能**：自动生成 + 推送运营报告；多步业务流程自动化。
 
 | ID | 需求 |
 |---|---|
-| FR-REPORT-001 | 支持 6 种内置报告（日销售 / 商品表现 / 库存健康 / 广告表现 / 订单履约 / 客户分析） |
-| FR-REPORT-002 | 模板引擎（Jinja2 沙箱）+ 图表（matplotlib Agg） |
+| FR-REPORT-001 | 内置报告模板（日销售 / 商品表现 / 库存健康 等） |
+| FR-REPORT-002 | 模板引擎（Jinja2 沙箱）+ 图表 + LLM 润色 + 数值硬校验 |
 | FR-REPORT-003 | 定时任务 + 邮件推送 |
 
 **当前实现**：
 
-- ✅ ReportSkill（生成）+ EmailSkill（推送）
-- ✅ TemplateEngine 沙箱 + 6 个内置 .j2 模板
-- ✅ ChartGenerator（bar / pie / line）+ LLM 润色 + 数值硬校验
-- ✅ 30 天数据快照 + 用户偏好学习
-- ✅ Workflow 引擎已集成（daily_report / inventory_alert 两个实例）
+- ✅ Workflow 引擎（@workflow / @step + DAG + Scheduler），4 个 Workflow：日报 / 库存预警 / 市场调研（12 章节证据管线报告）/ 选品决策
+- ✅ 邮件发送走 PG 幂等账本（重复触发不重发）
+- ✅ 长任务走 Celery 异步队列（agent ｜ rag_index 双队列），状态权威在 PG tasks 表，失败从最近 checkpoint 自愈续跑
 
-**已知限制**：
+### 4.6 智能客服与人工坐席（FR-CS-001 ~ FR-CS-004）
 
-- 报告生成是同步阻塞（用 `asyncio.to_thread` 包装）
-- 图表不支持 scatter / heatmap / dual-axis
-- 无 PDF / HTML / Excel 导出（仅 Markdown）
-- 无国际化（中文硬编码）
+**功能**：AI 客服一线应答，复杂场景人机协作。
+
+| ID | 需求 |
+|---|---|
+| FR-CS-001 | 客服窗口内 AI 按专家分工应答（知识 / 订单查询 / 行动办理 / 投诉 / 转接） |
+| FR-CS-002 | 敏感操作（退款 / 改单）生成待确认动作，用户确认后才执行（确认链接线 + 幂等账本） |
+| FR-CS-003 | AI 兜不住时转人工（handoff），坐席工作台接管 |
+| FR-CS-004 | 坐席工作台：会话列表 / 会话详情 / handoff 流转 / 工单 / 统计 |
+
+**当前实现**：
+
+- ✅ 客服域图：supervisor（handoff 拦截 / 循环上限 / LLM 兜底）+ 5 专家 + pending 动作确认
+- ✅ 坐席工作台 `frontend-cs`（:3300）：`/cs`、`/cs/conversations`、`/cs/handoff`、`/cs/tickets`、`/cs/stats`，坐席名单制鉴权
+- ✅ 双向输入中指示器、会话历史徽章、2s 轮询（v1）
+
+### 4.7 旅游行程规划（FR-TRAVEL-001 ~ FR-TRAVEL-003）
+
+**功能**：多轮补全旅行需求，产出可执行的结构化行程。
+
+| ID | 需求 |
+|---|---|
+| FR-TRAVEL-001 | 双通路：独立表单页（`/travel`）或主对话框对话式规划，共用同一旅游域 |
+| FR-TRAVEL-002 | 行程必须通过四轴校验（时间 / 地理 / 体力 / 预算），不通过自动局部修复，用户点名必去条目不丢弃 |
+| FR-TRAVEL-003 | 结构化行程（逐日时间轴 + 地图打点）+ ICS 日历导出 |
+
+**当前实现**：
+
+- ✅ 旅游域图：slot_filler → supervisor（纯规则）→ 5 专家（POI / 交通 / 预算 / 风险 / 天气）→ validator → repair
+- ✅ 跨轮补槽（brief 指纹变更自动重置规划）、断点恢复
+- ⚠️ 数据源 P0 为本地种子（坐标示例值）；预订 / 商务域图机制完成但无真实供应商接入
+
+### 4.8 选品决策与漏斗（FR-SEL-001 ~ FR-SEL-002）
+
+| ID | 需求 |
+|---|---|
+| FR-SEL-001 | 选品 Workflow：市场评估 → 差异化分析 → 财务测算 → AI 评审团 |
+| FR-SEL-002 | 选品漏斗域图 + 管理端漏斗指标看板（趋势已接线） |
+
+**当前实现**：✅ 选品漏斗域图（预过滤与旅游同层）、管理端选品决策 / 漏斗 / 竞品监控 / 预警 / 报告页面。
 
 ---
 
@@ -241,120 +286,99 @@
 
 ### 5.2 可扩展性
 
-**新增能力**（即 Skill 注册）只需 3 步：
+新增能力走声明式注册 + 启动期派生 + fail-fast（G1~G3 铁律）：
 
-```
-1. backend/skills/<name>/skill.py    创建 Skill 类
-2. backend/skills/registry.py        import 注册
-3. Planner 自动发现                  Capability DAG 自动可用
-```
+- 新增 Tool：`@tool` + 文件底部注册，2 处
+- 新增 Skill + capability：5 处接线，漏 `capabilities.yaml` 启动即报错
+- 契约回归门：registry / layer / adr0001 / base_output 四个一致性测试 + e2e 故障注入
 
-无需修改框架代码。
+完整模板见 [2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md)。
 
 ### 5.3 可观测性
 
 每个请求产出完整 Trace 树：
 
-- HTTP 层埋点（trace_middleware）
-- LangGraph 节点级 Span
-- LLM 调用（Token / cost / latency）
-- 检索结果（向量 / BM25 / Rerank 分数）
-- 工具调用（SQL / RAG / Report）
-- 时间轴 + 火焰图 + 拓扑图 + 成本面板
+- HTTP 层埋点（trace_middleware）+ LangGraph 节点级 Span + LLM 调用（token / cost / latency）
+- 检索分数（向量 / BM25 / Rerank）、工具调用、任务执行全程贯穿（session_id = thread_id）
+- 管理端分布式 Traces / 告警 / 网关日志 / Token 用量页面；Celery worker 独立指标端口
 
-### 5.4 稳定性
+### 5.4 稳定性与可靠性
 
-- ✅ 重试 + 降级 + 超时 + 限流（429）+ 熔断器
-- ✅ SSE 队列满触发 backpressure（不丢流式内容）
-- ✅ 错误兜底（业务异常 → Markdown 友好提示，不曝 500）
+- ✅ 重试 + 降级 + 超时 + 限流（429）+ 熔断器（状态跨进程 Redis 共享）
+- ✅ SSE backpressure（队列满不丢流式内容）+ 断线恢复协议
+- ✅ 异步任务运行时：PG 状态权威 + 租约 / fencing + admission 控制 + 错误分类学重试，at-least-once 且单 owner
+- ✅ 副作用幂等：`ai.idempotency_records` 复用账本 + IN_DOUBT 裁决 + 运维 CLI 与 Runbook
+- ✅ 全量回归基线：7336 用例分块执行口径（2026-09 收官），生产冒烟脚本 production_smoke_v1
 
 ### 5.5 安全性
 
 | 防护 | 层级 |
 |---|---|
+| 身份鉴权 | 自建 JWT（issuer=agent-platform）+ APISIX 网关验签 + X-User-Id 身份头契约 |
+| 授权 | RBAC（平台角色 + 坐席名单制），注册兜底最低权限 |
 | SQL 写操作 | 6 层硬校验 + 只读账号 + 事务级只读 |
+| 副作用工具 | 写操作审批门（`tool_approval.ensure_approved()`，管理员经 `/api/approvals` 批准放行） |
+| 多租户隔离 | JWT tenant claim + 网关注入租户头 + checkpoint 跨租户防护 |
 | LLM 提示词注入 | Faithfulness NLI 校验 + Evidence Gate 拒答 |
-| 数据越权 | Row Security（参数化行级注入，**待鉴权接入可信源**） |
-| API 暴露 | 单 API Key（**当前默认空 = 全开放，待补**） |
+| 数据越权 | Row Security 参数化行级注入（可信身份源已接入） |
+| 审计 | 幂等账本 / 审批单 / Token 用量 / 网关日志全量落库 |
 
 ---
 
 ## 6. 当前开发状态
 
-### 6.1 ✅ 已完成（Phase 1 — 基础智能助手）
+### 6.1 ✅ 已完成
 
-| 模块 | 能力 |
+| 阶段 | 内容 |
 |---|---|
-| **RAG** | 文档上传 / 解析 / Chunk / Hybrid 检索 / Rerank / Citation / Evidence Gate |
-| **Agent 框架** | LangGraph / Router / Planner / Supervisor / Skill 体系 |
-| **SQL Agent** | NL2SQL / 6 层校验 / 连接池 / 数据分析 |
-| **Memory** | L1 短期 / L2 会话 / L3 长期（pgvector） |
-| **报告** | 6 种内置报告 / 模板引擎 / 图表 / 邮件 |
-| **观测性** | Trace / Token / Span / 火焰图 / 拓扑图 |
+| **Phase 1 — 基础智能助手** | RAG / SQL Agent / Agent 框架 / 报告 / Memory 三层 / Trace 观测 |
+| **Phase 2 — 运营自动化** | Workflow 引擎 / 库存预警 / 数据采集 / 邮件幂等 |
+| **Phase 3 — 企业平台化** | JWT 鉴权 / RBAC / 多租户 / 审计落库 / SQLite→PG 全量收口 / Migration 治理（sql/migrations/，编号至 054） |
+| **垂直域 + 生产收口（2026-09 下旬）** | 5 域图 / 坐席工作台 / 异步任务运行时 / 副作用幂等 / 记忆与上下文预算收口 / 模型治理 / 发布门禁（release.sh + 12 Gate）/ Final RC 全量回归（7336 用例）/ 生产冒烟七个 PASS |
 
-### 6.2 🚧 进行中（Phase 2 — 运营自动化）
+### 6.2 🚧 进行中 / 已知缺口
 
-| 模块 | 状态 |
+| 项 | 状态 |
 |---|---|
-| **Workflow 引擎** | ✅ @workflow / @step / DAG / Scheduler；2 个实例（daily_report / inventory_alert） |
-| **数据采集中心** | ✅ 5 阶段 Pipeline / 5 个本地数据集 / 通用清洗 |
-| **库存预警** | ✅ 阈值规则 / 告警中心 / 通知策略 |
-| **长期 Memory 衰减** | ✅ 衰减服务；🚧 cron 入口未接 |
-| **Workflow LLM 兜底** | 🚧 `_llm_fallback` 是 stub |
-
-### 6.3 📋 待启动（Phase 3 — 平台化）
-
-| 优先级 | 模块 | 原因 |
-|---|---|---|
-| **P0** | 身份鉴权 / RBAC | 无 users / roles 表，所有 user_id 客户端自报 |
-| **P0** | 多租户 / 数据隔离 | row_security 机制已就绪，缺可信身份源 |
-| **P0** | 审计日志 | 0 写入点 |
-| **P0** | 核心数据迁 PostgreSQL | 14 个 SQLite 文件散落（含告警 / 报告 / 链路） |
-| **P1** | Migration 治理 | 裸 SQL + 编号冲突（003 重复） |
-| **P1** | 密钥管理 | 只读库密码硬编码默认值 |
-| **P1** | 前端数据层统一 | react-query 装但未用 / 两套 API 客户端 |
-| **P2** | 可观测性接入 OTel | 当前自建 Tracer |
-| **P2** | 测试覆盖 + E2E | 部分覆盖 |
-
-详见 [ROADMAP.md](ROADMAP.md)
+| RBAC super_admin 两级授权与撤权即时吊销 | 机制在库（migration 054），推广待实施 |
+| RAG 评测栈 | 现行模型栈（DB 治理）下需重建 fixture 库后重跑基线 |
+| 旅游预订真实供应商 | 域图 / 幂等 / 契约就绪，等真实供应商接入 |
+| 灰度放量与真实故障演练 | 发布前门禁类遗留项 |
+| 管理端重索引按钮 remote 断层 | 已登记待修 |
 
 ---
 
 ## 7. 后续规划
 
-### 7.1 Phase 1 — 基础智能助手（已完成）
+### 7.1 近期（生产补强）
 
-- ✅ RAG + SQL Agent + Agent 框架 + 报告生成
-- ✅ 单一 Agent 入口（chat）
-- ✅ 可观测性 + 稳定性基础
+- RBAC 两级授权收口 + 会话即时吊销
+- RAG 评测基线在现行栈重建（fixture 重 ingest → 双跑 → 门禁刷新）
+- 灰度放量机制落地（域开关从手动 env 走灰度面板）+ 一次真实故障演练
+- 架构减法 STOP E / STOP M（遗留收尾）
 
-### 7.2 Phase 2 — 运营自动化（进行中）
+### 7.2 中期（业务扩展）
 
-- ✅ Workflow 引擎（@workflow / @step + DAG）
-- ✅ 库存预警 + 告警中心
-- ✅ 数据采集中心
-- 🚧 Memory 衰减 cron
-- 🚧 Workflow LLM 兜底
+- 三方系统集成（ERP / WMS / 财务系统）
+- 旅游真实供应商接入（P1 地图 / 票务 MCP，契约不变）
+- 移动端 / 微信 / 钉钉入口
 
-### 7.3 Phase 3 — 企业平台化（待启动）
+### 7.3 远期
 
-- 🔴 身份鉴权 → RBAC → 多租户（**作为整体价值主张**）
-- 🔴 审计日志
-- 🔴 Agent 市场（Skill 共享 + 第三方集成）
-- 🔴 三方系统集成（ERP / WMS / 财务系统）
-- 🔴 移动端 / 微信 / 钉钉入口
+- Agent 市场（Skill 共享 + 第三方集成）
+- 可观测性接入 OTel 生态
 
 ### 7.4 关键风险（详见 [ROADMAP.md](ROADMAP.md)）
 
 | 风险 | 缓解 |
 |---|---|
-| 鉴权缺失无法上线 | P0 立项，机制已就绪（row_security + JWT） |
-| SQLite 数据层不可扩展 | P0 立项，迁移 PG backup 文件 |
-| LLM 成本失控 | rate_limit + 成本埋点 + 缓存 |
+| LLM 成本失控 | 预算闭环（租户级）+ Token 用量看板 + 模型价格双人审核 |
 | LLM 幻觉 | Faithfulness NLI + Evidence Gate 三层拒答 |
+| 域图误触发 | 三层 Router + 灰度开关默认全关 + 路由守护测试 |
+| 并行会话协作事故 | pathspec 提交纪律 + 阶段完成立即落库（见 AGENTS.md） |
 
 ---
 
 ## 验证
 
-最后验证：2026-08-10 · 与代码一致（[7 schema × 19 表](DATABASE.md) + 22 路由 / [API.md](API.md) + 9 Capability / [AGENT_DESIGN.md](AGENT_DESIGN.md)）。
+最后验证：2026-09-29 · 结构与能力口径对照根 [README.md](../README.md)「系统规模」（2026-09-28 实测）与 [AGENTS.md](../AGENTS.md)；数量类信息以根 README 为唯一权威，本文不复抄。
