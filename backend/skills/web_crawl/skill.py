@@ -6,6 +6,8 @@ from backend.shared.logger import logger
 
 class WebCrawlSkill(BaseSkill):
     name = "web_crawl"
+    # STOP G M1 显式声明（禁止隐式默认）：网页正文 Markdown/raw HTML 给 LLM 阅读，text 型。
+    output_type = "text"
 
     @property
     def _tool_fn(self):

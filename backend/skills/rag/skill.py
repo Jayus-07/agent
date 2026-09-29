@@ -13,6 +13,9 @@ class RAGSkill(BaseSkill):
     """知识库检索 Skill"""
 
     name = "rag"
+    # STOP G M1 显式声明（禁止隐式默认）：检索答案 pipeline.ask -> str，
+    # 给 LLM 阅读，text 型不套封套。
+    output_type = "text"
 
     @property
     def _tool_fn(self):

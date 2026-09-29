@@ -18,7 +18,13 @@ from backend.tools.map.lookup import ACTIONS, map_lookup_tool  # noqa: F401
 
 class MapLookupSkill(BaseSkill):
     name = "map_lookup"
-    output_type = "text"
+    # STOP G M4：map 全部 14 个 Tool 走统一封套（tools/map/_base.py 的
+    # ok/fail/not_configured → {"status","data"}），本 Skill 的实际输出契约
+    # 是 structured 而非 text。此前声明 text 导致封套 JSON 字符串原样穿透
+    # skill 边界，direct 支线 _coerce_final_answer 直透用户（裸 JSON）。
+    # structured + 边界解包（BaseSkill._normalize_output → unwrap_envelope）
+    # 后：成功 = 裸业务 data dict，失败 = validate_semantics 判 failed。
+    output_type = "structured"
 
     @property
     def _tool_fn(self):

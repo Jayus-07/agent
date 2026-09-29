@@ -196,26 +196,33 @@ class BaseSkill(ABC):
           背景: sql.query 曾把 SQLResult dict 原样透传进 final_answer，
           下游所有按字符串处理的地方（done 事件 sources、emit_delta、
           记忆落库写 VARCHAR）全部崩溃，且日志中 2026-09-07 已有同类报错。
-        structured: 保证返回 dict——str 尝试 json.loads，失败保持原样并告警。
+        structured: 保证返回 dict——str 尝试 json.loads，失败保持原样并告警；
+          命中统一封套（shared/tool_envelope.py）时经 unwrap_envelope 解包：
+          成功 → 裸业务 data dict，失败 → 保留封套 dict 交 validate_semantics
+          判失败（STOP G M4：封套不允许透出 skill 边界流到 Reporter）。
         """
         import json
+
+        from backend.shared.tool_envelope import unwrap_envelope
 
         declared = self.output_types.get(capability, self.output_type)
         type_name = type(output).__name__
         if declared == "structured":
             if isinstance(output, dict):
-                return output
+                is_envelope, payload = unwrap_envelope(output)
+                return payload if is_envelope else output
             if isinstance(output, str):
                 try:
                     parsed = json.loads(output)
-                    if isinstance(parsed, dict):
-                        logger.warning(
-                            f"[{self.name}] capability={capability} 声明 structured "
-                            f"但 Tool 返回 str，已从 JSON 解析"
-                        )
-                        return parsed
                 except (ValueError, TypeError):
-                    pass
+                    parsed = None
+                if isinstance(parsed, dict):
+                    logger.warning(
+                        f"[{self.name}] capability={capability} 声明 structured "
+                        f"但 Tool 返回 str，已从 JSON 解析"
+                    )
+                    is_envelope, payload = unwrap_envelope(parsed)
+                    return payload if is_envelope else parsed
             logger.warning(
                 f"[{self.name}] capability={capability} 声明 structured "
                 f"但 Tool 返回 {type_name}，保持原样"

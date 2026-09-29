@@ -6,6 +6,8 @@ from backend.shared.logger import logger
 
 class WebSearchSkill(BaseSkill):
     name = "web_search"
+    # STOP G M1 显式声明（禁止隐式默认）：搜索结果 Markdown 给 LLM 阅读，text 型。
+    output_type = "text"
 
     @property
     def _tool_fn(self):

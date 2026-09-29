@@ -20,6 +20,10 @@ class EmailSkill(BaseSkill):
     """邮件 Skill（发送 + 收/搜/读/监听）"""
 
     name = "email"
+    # STOP G M1 显式声明（禁止隐式默认）：四个 capability 全部 text——
+    # 发送回执/审批提示是文本；search/read 的成功体是 agently CLI 自有 JSON
+    # 信封（非本平台封套），维持文本透传不做解包。
+    output_type = "text"
 
     @property
     def _tool_fn(self):

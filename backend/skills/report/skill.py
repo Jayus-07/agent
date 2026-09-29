@@ -13,6 +13,8 @@ class ReportSkill(BaseSkill):
     """报告生成 Skill"""
 
     name = "report"
+    # STOP G M1 显式声明（禁止隐式默认）：Markdown 报告本体即交付物，text 型。
+    output_type = "text"
 
     @property
     def _tool_fn(self):

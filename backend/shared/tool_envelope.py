@@ -20,7 +20,8 @@ from typing import Any
 
 from backend.shared.error_protocol import error_envelope_from_exception
 
-__all__ = ["tool_success_result", "tool_error_result", "parse_tool_envelope"]
+__all__ = ["tool_success_result", "tool_error_result", "parse_tool_envelope",
+           "unwrap_envelope"]
 
 
 def tool_success_result(data: Any, **extra: Any) -> str:
@@ -77,3 +78,37 @@ def parse_tool_envelope(raw: str) -> dict[str, Any]:
     这一步（解析失败抛 ValueError，由调用方决定降级语义）。
     """
     return json.loads(raw)
+
+
+def unwrap_envelope(raw: "str | dict[str, Any]") -> "tuple[bool, Any]":
+    """识别并解包统一封套（structured 边界的唯一解包出口，STOP G M2）。
+
+    判定形状：dict 含 ``status`` 键且值为 ``success``/``failed``——
+      - ``{"status": "success", "data": ...}`` → ``(True, data)``
+      - ``{"status": "failed", ...}``          → ``(True, 原封套 dict)``
+        （失败语义不在此吞掉：封套整体交还调用方/校验层决定失败路径）
+    非 str、非合法 JSON、无 ``status`` 键的历史形态 → ``(False, 原样)``。
+
+    消费方（全仓仅两处，勿新增第三种手写解包）：
+      - ``skills/base.py::_normalize_output`` structured 边界归一；
+      - ``orchestration/workflow/skill_adapter.py`` workflow 适配层。
+    """
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return False, raw
+        if not isinstance(parsed, dict):
+            return False, raw
+        candidate = parsed
+    elif isinstance(raw, dict):
+        candidate = raw
+    else:
+        return False, raw
+
+    status = candidate.get("status")
+    if status == "success" and "data" in candidate:
+        return True, candidate["data"]
+    if status == "failed":
+        return True, candidate
+    return False, raw

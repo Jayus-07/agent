@@ -17,8 +17,10 @@ class CompetitorAnalysisSkill(BaseSkill):
     """竞品分析 Skill — 抓取竞品页面，抽取价格/促销/评价，快照存档与变价对比"""
 
     name = "competitor_analysis"
+    # STOP G M1 显式声明（禁止隐式默认）：四个 capability 全部 Markdown 报告，text 型。
     # 单次页面抓取自身 timeout=90s（crawler_runtime），Skill 层必须大于它，
     # 否则抓取未完成就被判超时重试，重复发起完整抓取流程
+    output_type = "text"
     default_timeout = 120.0
 
     @property

@@ -6,6 +6,8 @@ from backend.shared.logger import logger
 
 class DataExportSkill(BaseSkill):
     name = "data_export"
+    # STOP G M1 显式声明（禁止隐式默认）：导出结果为文本回执（路径/失败标记），text 型。
+    output_type = "text"
 
     @property
     def _tool_fn(self):

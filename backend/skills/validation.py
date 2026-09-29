@@ -298,6 +298,21 @@ def validate_semantics(capability: str, params: dict, output: Any) -> None:
 
     # Tool 统一错误协议允许以 JSON 字符串或 dict 形式返回；两种形式都
     # 必须在 Skill 边界被识别，不能被误报成成功并继续交给 Reporter。
+    # STOP G M3：封套的 status 字段是失败判定的第一等依据（声明契约），
+    # error 键嗅探保留为历史形态（无 status 的裸 error dict）的兼容兜底。
+    if isinstance(structured, dict) and structured.get("status") == "failed":
+        detail = str(structured.get("error") or "工具返回失败封套")
+        code = (
+            ErrorCode.NOT_FOUND
+            if any(word in detail for word in ("未找到", "不存在", "查不到"))
+            else ErrorCode.UPSTREAM_UNAVAILABLE
+        )
+        _record_validation_metric("semantic", "rejected")
+        raise ValidationFailure(
+            "semantic", code,
+            f"{capability} 返回工具错误: {detail[:120]}",
+        )
+
     if isinstance(structured, dict) and structured.get("error"):
         detail = str(structured["error"])
         code = (

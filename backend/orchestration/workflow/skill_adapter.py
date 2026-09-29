@@ -91,20 +91,27 @@ async def call_sql(params: dict) -> dict:
     """
     if "query" in params:
         # 直接执行 raw SQL（绕过 Agent，避免 NL→SQL 开销和误差）
-        import json as _json  # noqa: F811
         from backend.orchestration.tools import execute_sql_tool
+        from backend.shared.tool_envelope import unwrap_envelope
         result_str = await execute_sql_tool.ainvoke({"query": params["query"]})
-        # 边界归一（同 f14/f16b 模式）：execute_sql_tool 已统一封套
+        # 边界归一（STOP G M2：解包统一走 shared/tool_envelope.unwrap_envelope，
+        # 不再手写 json.loads + status 判断）：execute_sql_tool 已统一封套
         # （shared/tool_envelope.py）——成功拆出 data 返回；失败上抛，
         # 让 step 走失败路径，而不是把 error dict 当业务数据往下传。
-        envelope = _json.loads(result_str)
-        if isinstance(envelope, dict) and envelope.get("status") == "success":
-            return envelope.get("data") or {}
-        if isinstance(envelope, dict) and envelope.get("status") == "failed":
+        is_envelope, payload = unwrap_envelope(result_str)
+        if is_envelope and isinstance(payload, dict) and payload.get("status") == "failed":
             raise ValueError(
-                f"execute_sql_tool 失败: {envelope.get('error', '未知错误')}"
+                f"execute_sql_tool 失败: {payload.get('error', '未知错误')}"
             )
-        return envelope  # 兼容：无 status 的历史形态原样透传
+        if is_envelope:
+            return payload or {}
+        # 兼容：无 status 的历史形态——维持旧语义「解析后原样透传 dict」
+        # （消费方按 dict 消费；非 JSON 字符串原样返回不炸）
+        import json as _json  # noqa: F811
+        try:
+            return _json.loads(result_str)
+        except (ValueError, TypeError):
+            return result_str
     return await call_skill("sql", "sql.query", params)
 
 
