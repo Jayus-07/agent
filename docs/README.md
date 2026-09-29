@@ -31,6 +31,9 @@
 
 | 文档 | 用途 |
 |---|---|
+| [architecture/Architecture-Baseline.md](architecture/Architecture-Baseline.md) | **架构基线（STOP H 冻结版）**：Runtime 九层分层 / 请求生命周期 / 数据流 / 权威口径指针 |
+| [architecture/Extension-Guide.md](architecture/Extension-Guide.md) | 扩展指南：新增 Domain / Capability / Skill / Tool / Workflow / MCP 的流程与验证门 |
+| [architecture/Frozen-Contracts.md](architecture/Frozen-Contracts.md) | 冻结契约清单：SSE / checkpoint / node id / route_mode / ToolRuntime / Tool Contract / MCP boundary 等红线、守卫与变更流程 |
 | [architecture/system-overview.md](architecture/system-overview.md) | 部署拓扑 / 端口表 / 异步层 / 网关认证（承接 README 收敛出的部署细节） |
 | [architecture/ai-runtime.md](architecture/ai-runtime.md) | 主图节点职责 / 域图细节 / 客服锁域 / 跨轮状态契约（承接 README 收敛出的编排细节） |
 | [architecture/domain-service-map.md](architecture/domain-service-map.md) | 域图 × 专家 × 工具 × 第三方服务 × 凭据地图：每个专家用什么、调什么外部服务、凭据怎么管、挂了怎么降级（2026-09-29 新建） |

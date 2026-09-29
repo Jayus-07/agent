@@ -70,7 +70,7 @@ flowchart TB
 
 ### 2. Chat Request Runtime
 
-一次 `POST /chat/stream` 的真实执行顺序：网关验签 → Input Guard 门禁（拦截即短路）→ 记忆装配 → 指代解析 → 进图路由（域预过滤优先于三层路由）→ 四条支线之一 → reporter / 域图自带 reporter → SSE 收尾。`rag-service`、模型、数据库都在 Skill / Tool 层之后，不在主流程图上单独展开。
+一次 `POST /chat/stream` 的真实执行顺序：网关验签 → Input Guard 门禁（拦截即短路）→ 记忆装配 → 指代解析 → 进图路由（域预过滤优先于三层路由）→ 按路由结果分流执行 → reporter / 域图自带 reporter → SSE 收尾。`rag-service`、模型、数据库都在 Skill / Tool 层之后，不在主流程图上单独展开。
 
 ```mermaid
 flowchart TB
@@ -88,12 +88,12 @@ flowchart TB
     FU --> RT
 
     subgraph G["LangGraph 主图"]
-        RT["router 节点<br/>域预过滤 + 三层路由 rule → vector → LLM"]
-        RT -->|"direct"| DE["tool_selector → skill_executor"]
+        RT["Router Runtime<br/>域预过滤 + 三层路由 rule → vector → LLM"]
+        RT -->|"direct"| DE["Capability Runtime<br/>skill_executor 直连执行"]
         RT -->|"workflow"| WE["workflow_executor"]
-        RT -->|"plan"| PL["planner → critique → supervisor（Send 并行）"]
+        RT -->|"plan"| PL["Plan Runtime<br/>任务拆解 → 并行调度（Send）"]
         RT -->|"寒暄 / 能力咨询"| GC["general_chat 直答"]
-        RT -->|"域命中（开关 + 灰度）"| DG["域图执行<br/>客服 / 旅游 / 选品 …"]
+        RT -->|"域命中（开关 + 灰度）"| DG["Domain Runtime<br/>客服 / 旅游 / 选品 …"]
         DE --> REP["reporter"]
         WE --> REP
         PL --> REP
@@ -104,60 +104,34 @@ flowchart TB
     REP --> OUT
 ```
 
-### 3. AI Runtime / Multi-Agent
+### 3. Runtime 分层（架构基线）
 
-编排层的责任边界：GraphRunner 负责图外的 Guard / 记忆 / 指代解析；主图 `router` 节点先做**域预过滤**（命中即整请求交给域图），再做**三层路由**拍板 route_mode；plan 支线的 planner → critique → supervisor 是唯一的任务拆解链，supervisor 以 `Send` 并行派发 Skill 节点；direct / workflow 支线绕过 Planner。右侧公共平台能力是横切支撑，**不是主流程节点**。
+平台最终形态是九层 Runtime 分层，不是万能 Agent Runtime——每层只做一件事，层间契约冻结（详见 [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md) 与 [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md)）：
 
 ```mermaid
 flowchart TB
-    RUNNER["GraphRunner<br/>Input Guard · 记忆装配 · Follow-up 解析"]
-
-    subgraph MAIN3["LangGraph 主图（9 核心节点 + 自动发现）"]
-        ROUTER["router<br/>① 域预过滤（CS 域锁 / 旅游 / 选品 / 商务 / 预订）<br/>② 三层路由 rule → vector → LLM"]
-        DE["tool_selector → skill_executor（direct 支线）"]
-        WE["workflow_executor（workflow 支线）"]
-        PC["planner → critique（plan 支线）"]
-        SUP["supervisor · Send 并行调度"]
-        GC["general_chat 直答"]
-        REP["reporter"]
+    subgraph PLATFORM["Agent Platform"]
+        direction TB
+        RR["Router Runtime — 每请求拍板去向（域预过滤 + 三层路由）"]
+        DR["Domain Runtime — 3 个顶级业务域 / 5 个物理域图（客服 · 旅游〔planning/commerce/booking〕· 选品漏斗）"]
+        CR["Capability Runtime — 17 capability · 12 Skill · 4 Workflow 的执行调度"]
+        PR["Plan Runtime — 复杂请求的任务拆解与并行调度"]
+        ER["Expert Runtime — 域内专家节点的公共执行生命周期"]
+        TCB["Tool Contract Boundary — 两型输出契约（text 给 LLM 读 / structured 给程序）+ 边界归一"]
+        TR["Tool Runtime — 执行治理（超时 · 重试 · 熔断 · 隔离舱）"]
+        MCP["Integration Adapter — MCP 对外暴露（2 server / 5 tool，平台自身不是 MCP client）"]
+        GOV["Shared Governance — 认证 · 三层记忆 · 上下文预算 · 模型治理 · 幂等 · 可观测 · 评测"]
+        RR --> DR
+        RR --> CR
+        RR --> PR --> CR
+        DR --> ER --> TCB
+        CR --> TCB --> TR
+        TR -.->|"第二出口"| MCP
+        PLATFORM -.-> GOV
     end
-
-    subgraph DOMS["Domain Runtime · 3 个顶级业务域 / 5 个物理域图（开关控制，自带专家与 reporter）"]
-        CS["客服<br/>supervisor + 5 专家"]
-        TR["旅游<br/>slot_filler + 5 专家 + validator/repair"]
-        TC["旅游商务<br/>Travel · commerce 子流"]
-        TB["旅游预订<br/>Travel · booking 子流"]
-        SF["选品漏斗"]
-    end
-
-    subgraph CAP["Capability / Skill 层"]
-        SKN["Skill 图节点 ×12（自动发现）<br/>SQL · RAG · 报告 · 邮件 · 搜索 · 地图 …"]
-        WF["Workflow ×4<br/>日报 · 库存预警 · 市场调研 · 选品决策"]
-    end
-
-    subgraph GOV["Shared Platform · 横切支撑（非主流程节点）"]
-        AUTH["Authorization"]
-        MEM["Memory L1/L2/L3"]
-        CTX["Context Budget"]
-        MODEL["Model Gateway"]
-        IDEM["Idempotency"]
-        OBS["Observability"]
-        EVAL["Evaluation"]
-    end
-
-    RUNNER --> ROUTER
-    ROUTER -->|"域命中"| DOMS
-    ROUTER -->|"direct"| DE
-    ROUTER -->|"workflow"| WE
-    ROUTER -->|"plan"| PC --> SUP
-    ROUTER -->|"寒暄 / 咨询"| GC
-    SUP <-->|"Send 派发 / 完成回填"| SKN
-    DE --> REP
-    WE --> REP
-    SUP -->|"计划完成"| REP
-    RUNNER -.->|"全程支撑"| GOV
-    SKN -.->|"模型调用"| MODEL
 ```
+
+分层关系三条：**调用方向固定**（Router → Capability/Domain →（Expert）→ Tool Contract → Tool Runtime → 基础设施；Tool 不得 import Skill）；**执行态与业务态正交**（Tool 超时/熔断 ≠ 业务成败 ≠ 步骤语义）；**域图自带交付**（四个域图 reporter 各有类型化交付契约，不经主图 step_results）。
 
 ### Architecture Vocabulary
 
@@ -170,8 +144,16 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Chat Runtime | `POST /chat/stream` 的应用层宿主：SSE 帧协议、流注册表、中止与 resume |
 | GraphRunner | 统一图执行核心：Input Guard → 记忆装配 → 指代解析 → `graph.stream` → trace / `memory.end_turn` |
 | Orchestration（编排层） | LangGraph 主图：9 个核心节点 + 自动发现的 Skill / 域图节点（`builder.py`） |
-| Router（主图） | 主图入口节点：域预过滤 + 三层路由（rule → vector → LLM），拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
-| Planner / Critique / Supervisor | plan 支线专属：任务拆解 → 计划校验 → 纯规则 DAG 调度（Send 并行） |
+| Router Runtime | 平台第一层：域预过滤 + 三层路由（rule → vector → LLM），拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
+| Domain Runtime | 垂直业务域的独立子图层：3 个顶级业务域 / 5 个物理域图，自带专家与 reporter |
+| Capability Runtime | 能力执行调度层：capability → Skill 解析与 direct / workflow 支线执行 |
+| Plan Runtime | 复杂请求的任务拆解与并行调度支线（细节属编排内幕，见 ai-runtime.md） |
+| Expert Runtime | 域内专家节点的公共执行生命周期（超时/异常/计时/遥测钩子，`core/node_runtime`） |
+| Tool Contract Boundary | Tool 输出契约边界：两型（text / structured）声明 + 封套解包 + 失败语义（STOP G） |
+| Tool Runtime | Tool 执行治理层：超时 / 重试 / 熔断 / 隔离舱 / 错误映射（`core/tool_runtime`） |
+| Integration Adapter | MCP 对外暴露层：Tool 的第二出口（REST /api/mcp · :8091 标准协议 · internal_ai） |
+| Shared Governance | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation |
+| Planner / Critique / Supervisor | Plan Runtime 内部的三段链：任务拆解 → 计划校验 → 纯规则 DAG 调度（Send 并行）；定义见此，细节见 ai-runtime.md |
 | Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带专家与 reporter；架构上 3 个顶级业务域（客服 / 旅游 / 选品漏斗），旅游含 planning / commerce / booking 三个子流，落地为 5 个物理域图（commerce / booking 保留独立生命周期与独立开关） |
 | Capability | 路由与规划的最小能力单元（17 个，唯一事实源 `capabilities.yaml`） |
 | Skill | Capability 的业务执行封装（12 个）；RAG / SQL 是 Skill，不是独立 Agent |
@@ -250,8 +232,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ### Multi-Agent 编排（主图）
 
-主图固定 **9 个核心节点**（router / tool_selector / skill_executor / workflow_executor / planner / critique / supervisor / reporter / general_chat），Skill 节点与域图节点由自动发现加入；**LLM 决策节点仅 4 个**（Planner / Critique / Reporter / general_chat），Router 与 CS Supervisor 的 LLM 层是兜底分支，Supervisor 是纯规则调度器。
-节点职责边界、完整拓扑与三层路由细节见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
+主图按请求特征智能分流：简单查询**直连**能力立即执行；预定义**工作流**（日报 / 预警 / 调研 / 选品决策）绕过规划直接跑；复杂请求进入**任务规划**，拆成能力 DAG 后并行调度；闲聊与能力咨询由轻量直答承接。LLM 只在必要的少数决策点介入，调度规则由代码保证确定性。节点级拓扑与编排细节见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
 
 ### 垂直域图（Domain Graph）
 
@@ -336,6 +317,7 @@ Infrastructure — PostgreSQL（含 pgvector）/ Redis / SMTP / 地图服务 / M
 
 方向固定：`Planner → capability → Skill → Tool → Infrastructure`。
 **MCP 不是第 5 层**，是 Tool 的第二出口（Tool 不得 import Skill）。
+Runtime 视角的九层分层与请求生命周期见 [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md)。
 
 三条铁律：**G1** 声明式注册、启动期派生、fail-fast ｜ **G2** 单一事实源，派生量禁止手写回去 ｜ **G3** 谁定义谁注册，禁止集中代注册。
 
@@ -569,6 +551,9 @@ agent/
 | [AGENTS.md](AGENTS.md) | 项目级硬约束与架构知识（**改代码前先读**） |
 | [命令文档.md](命令文档.md) | 启停 / 评测 CLI / 可观测性速查 |
 | [docs/README.md](docs/README.md) | 文档总索引 |
+| [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md) | **架构基线**：Runtime 九层分层 / 请求生命周期 / 数据流（STOP H 冻结版） |
+| [docs/architecture/Extension-Guide.md](docs/architecture/Extension-Guide.md) | 扩展指南：新增 Domain / Capability / Skill / Tool / MCP |
+| [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md) | 冻结契约清单：SSE / checkpoint / route_mode / Tool Contract 等红线与变更流程 |
 | [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | 部署拓扑 / 端口表 / 异步层 / 网关认证 |
 | [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md) | 主图节点职责 / 域图细节 / 客服锁域 / 跨轮状态契约 |
 | [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md) | 四层定义、写法、例外台账 |
