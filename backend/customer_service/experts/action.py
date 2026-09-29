@@ -490,6 +490,43 @@ def _handle_slot_fill(
     """
     from backend.config.customer_service import CS_MAX_CONFIRMATION_RETRIES
 
+    # 设计方案 场景4（迁移 B6 实机验证补齐）：need_info 阶段用户说
+    # 「算了/取消」应取消 pending，语义不残留——此前补槽路径不检测取消
+    # 意图，「算了，取消」被当答非所问继续追问。复用 confirmation 的
+    # 单一取消词表源（含疑问句保护）。
+    from backend.customer_service.audit import build_audit_entry
+    from backend.customer_service.confirmation import (
+        ConfirmationIntent,
+        detect_confirmation_intent,
+    )
+
+    if detect_confirmation_intent(user_message) == ConfirmationIntent.CANCEL:
+        store.clear(user_id, session_id, final_state="cancelled")
+        logger.info(
+            "[ActionExpert] need_info cancelled by user: user=%s session=%s",
+            user_id, session_id,
+        )
+        cancelled = dict(pending_action)
+        cancelled["status"] = "cancelled"
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft="好的，已为您取消本次申请。如需再次办理，随时告诉我。",
+            data={
+                "pending_action": cancelled,
+                "confirmation_state": "not_required",
+                "audit_entry": build_audit_entry(
+                    user_id=user_id,
+                    action_type="pending_cancelled",
+                    result="success",
+                    target_type="need_info",
+                    target_id=str(pending_action.get("intent", "")),
+                    detail="need_info pending cancelled by user in slot-fill stage",
+                    conversation_id=str(pending_action.get("conversation_id", "")),
+                ),
+            },
+        )
+
     order_id = _extract_order_id_from_message(user_message)
     if order_id:
         cs_route = dict(cs_route or {})

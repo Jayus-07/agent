@@ -456,9 +456,60 @@ def test_j_non_order_reply_reasks_without_swallowing(monkeypatch):
     _forbid_proposal_services(monkeypatch)
 
     result = execute_action(
-        "算了，帮我查一下保修政策", {"intent": "k_faq", "metadata": {}}, _state()
+        # B6 语义对齐：「算了，帮我查…」含取消词，与 proposal 阶段一致判
+        # CANCEL（见 B2 用例）；本用例锁「纯新问题不吞掉→继续追问」，
+        # 消息不再携带取消词。
+        "帮我查一下保修政策", {"intent": "k_faq", "metadata": {}}, _state()
     )
 
     assert result["data"]["pending_action"]["retry_count"] == 1
     assert result["data"]["pending_action"]["status"] == "need_info"
     assert "订单号" in result["response_draft"], "无法识别槽位时继续追问，不强行解析"
+
+
+# ── B2. need_info 取消：用户说「算了/取消」→ pending 释放 ──────────
+# 设计方案 场景4（迁移 B6 实机验证补齐）：need_info 阶段取消意图此前
+# 无消费者，「算了，取消」被当答非所问继续追问、语义残留。
+
+
+def _need_info_fixture() -> dict:
+    return {
+        "action_id": "act-1",
+        "action_type": "return_request",
+        "intent": "as_return",
+        "status": "need_info",
+        "missing_slots": ["order_id"],
+        "collected_slots": {},
+        "confirmation_state": "pending_confirmation",
+        "retry_count": 0,
+    }
+
+
+def test_b2_need_info_cancel_releases_pending(monkeypatch):
+    store = FakeStore(pending=_need_info_fixture())
+    _patch_store(monkeypatch, store)
+    _forbid_proposal_services(monkeypatch)
+
+    result = execute_action(
+        "算了，取消", {"intent": "as_refund", "metadata": {}}, _state()
+    )
+
+    assert "取消" in result["response_draft"]
+    assert store.cleared == ["cancelled"], "取消必须以 cancelled 终态释放 pending"
+    assert result["data"]["pending_action"]["status"] == "cancelled"
+    assert result["data"]["confirmation_state"] == "not_required"
+    assert result["data"]["audit_entry"]["action_type"] == "pending_cancelled"
+
+
+def test_b2_need_info_question_mark_not_cancelled(monkeypatch):
+    """疑问句不算表态（confirmation 单源保护）：「可以取消吗」继续追问。"""
+    store = FakeStore(pending=_need_info_fixture())
+    _patch_store(monkeypatch, store)
+    _forbid_proposal_services(monkeypatch)
+
+    result = execute_action(
+        "可以取消吗", {"intent": "as_refund", "metadata": {}}, _state()
+    )
+
+    assert store.cleared == [], "疑问句不得触发取消"
+    assert "订单号" in result["response_draft"]
