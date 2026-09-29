@@ -49,6 +49,15 @@ def provider_health() -> dict[str, str]:
     except Exception:  # noqa: BLE001
         out["weather"] = "degraded"
 
+    # qweather：天气备用源（配置即参与 fallback；无独立网络探测，
+    # Key 缺失 = disabled 是配置选择非事故）
+    try:
+        from backend.config.map import is_qweather_configured
+
+        out["qweather_backup"] = "healthy" if is_qweather_configured() else "disabled"
+    except Exception:  # noqa: BLE001
+        out["qweather_backup"] = "degraded"
+
     # ticket：契约冻结、无真实适配器（J0-6 决策 B）
     out["ticket"] = "disabled"
 

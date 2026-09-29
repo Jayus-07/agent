@@ -43,6 +43,8 @@ def daily_budget(provider: str) -> int:
 
     if provider == "tencent:lbs":
         return int(os.getenv("TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET", "0"))
+    if provider == "qweather":
+        return int(os.getenv("TRAVEL_PROVIDER_QWEATHER_DAILY_BUDGET", "0"))
     # STOP K（K0 §4）：commerce provider 显式登记（新 Provider 接入时在此
     # 加一行；未登记 = 不限，保持「未知 provider 零行为变化」）
     commerce_budget_env = {

@@ -112,3 +112,20 @@ def is_configured() -> bool:
 def is_live_map_enabled() -> bool:
     """旅行域是否启用真实地图数据（需同时满足总开关与 Key 非空）。"""
     return bool(TRAVEL_USE_LIVE_MAP and is_configured())
+
+
+# =============================================
+# 和风天气（腾讯天气的备用源，2026-09-28）
+# =============================================
+# 配置 Key 即自动作为天气备用源：主源（腾讯 LBS）失败（超时/限流/鉴权/
+# 城市未收录）时降级到和风；不配置则行为与旧版完全一致（零行为变化）。
+# 注意：2024-10 后注册的和风账号须用控制台分配的专属 API Host
+# （本机实测 key 走 api.qweather.com）；老账号默认 devapi.qweather.com。
+QWEATHER_API_KEY = os.getenv("QWEATHER_API_KEY", "").strip()
+QWEATHER_API_HOST = (os.getenv("QWEATHER_API_HOST", "").strip()
+                     or "devapi.qweather.com")
+
+
+def is_qweather_configured() -> bool:
+    """和风备用源是否参与 fallback（Key 非空即启用，开关随天气总闸）。"""
+    return bool(QWEATHER_API_KEY)
