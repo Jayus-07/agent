@@ -97,7 +97,11 @@ def derive_snapshot() -> dict[str, Any]:
     from backend.skills import registry as skill_registry
     from backend.tools.tool_registry import tool_registry
 
-    # Skill 主链归属：_tool_fn property → 主 Tool；capabilities/output_type 随行
+    # Skill 主链归属：_tool_fn property → 主 Tool；capabilities/output_type 随行。
+    # 已知限制（Phase 2 增强）：SQLSkill(_tool_fn=NotImplementedError) 与多 Tool
+    # 分发 Skill（CompetitorAnalysis 覆盖 _select_tool）不可静态求值——这些
+    # tool 的 capabilities 为空列表。归属变化分类为 COMPATIBLE，不影响
+    # 契约核心（args_schema/hash/BREAKING 判定）。
     ownership: dict[str, dict[str, Any]] = {}
     for inst in skill_registry._instances:
         try:

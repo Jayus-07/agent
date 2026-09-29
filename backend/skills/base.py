@@ -135,6 +135,23 @@ def _with_llm_attribution(func):
     return wrapper
 
 
+def _record_skill_failure(skill_name: str, tool_status, error_code: str = "") -> None:
+    """skill_failure_total 埋点（M2 / 台账 D2：该指标此前定义了但零埋点）。
+
+    error_type 用统一七分类（M3），与 Tool 指标同口径；软失败不影响主路径。
+    """
+    try:
+        from backend.observability import metrics as m
+        from backend.observability.error_taxonomy import unify_tool_status
+
+        m.skill_failure_total.labels(
+            skill=skill_name,
+            error_type=unify_tool_status(tool_status),
+        ).inc()
+    except Exception:  # pragma: no cover — 指标软失败
+        pass
+
+
 class BaseSkill(ABC):
     """Skill 抽象基类。每个 Skill 封装一组 Capability。
 
@@ -439,6 +456,7 @@ class BaseSkill(ABC):
                 validate_semantics(cap, params, output)
             except ValidationFailure as e:
                 # 后置校验失败是确定性错误，不重试（与旧循环同语义）
+                _record_skill_failure(self.name, ToolStatus.INVALID_REQUEST)
                 sr.update(status="failed", output=None,
                           error=f"输出校验失败: {e.layer}", error_type="invalid_param",
                           finished_at=time.time())
@@ -494,6 +512,7 @@ class BaseSkill(ABC):
         sr.update(status="failed", output=None, error=user_msg,
                   error_type=_status_to_error_type(result.status, result.error_code or ""),
                   error_protocol=error_protocol, finished_at=time.time())
+        _record_skill_failure(self.name, result.status, result.error_code or "")
         step_results[sr["step_id"]] = dict(sr)
 
         trace_collector.end_span(tool_span, status="error",
