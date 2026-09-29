@@ -1,17 +1,18 @@
-"""travel/experts/budget.py — 预算专家
+"""travel/experts/budget.py — 预算专家节点（Phase 3 改造：节点编排 + 兼容入口）
 
-职责：算清花费并拆分口径。**不判定是否超预算** —— 那是 validator 的
-轴四（这样"超支"的判定口径只有一处，改阈值不会两处不同步）。
-
-只做一件判定之外的事：当用户没给预算时，把「本次没做预算校验」如实
-写进提示，避免用户误以为行程已经过预算把关。
+费用核算的调用点收敛至 services/budget_service.py（estimate_cost，城市档位）。
+本文件保留 LangGraph 节点 `budget_expert_node`（state 读写 / run_expert_safely /
+遥测——Node 边界冻结）。**只算不判**：超支判定是 validator 的轴四（口径
+只有一处的既有纪律）；无预算时如实披露「未做预算校验」。
 """
 from __future__ import annotations
 
 from backend.shared.logger import logger
-from backend.tools.travel.cost import estimate_cost
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
+
+# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：真身在 services/budget_service.py
+from backend.travel.services.budget_service import estimate_cost  # noqa: F401
 
 
 def budget_expert_node(state: dict) -> dict:
@@ -24,7 +25,8 @@ def budget_expert_node(state: dict) -> dict:
                     "error": "行程尚未生成，无法核算预算"}
 
         # 城市档位（P0-3）：餐饮/住宿按目的地消费水平核算，未登记城市回落全局定额
-        itinerary.cost = estimate_cost(itinerary.days, brief.party_size,
+        itinerary.cost = estimate_cost(itinerary.days,
+                                       brief.party_size,
                                        city=brief.destination)
 
         notes: list[str] = []

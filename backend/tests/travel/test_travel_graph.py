@@ -327,7 +327,10 @@ class TestEndToEnd:
         """
         import backend.travel.experts.poi as poi_expert
 
-        monkeypatch.setattr(poi_expert, "search_poi", lambda **kwargs: [])
+        # Phase 3 补丁缝迁移：search_poi 已下沉 poi_service（节点级缝 =
+        # retrieve_candidates），行为断言不变（候选池空 → 如实披露）
+        monkeypatch.setattr(poi_expert, "retrieve_candidates",
+                            lambda brief: ([], []))
         final = self._invoke("福州3天行程，1个人")
         result = build_travel_graph_result(final)
         assert result["status"] == STATUS_NO_DATA

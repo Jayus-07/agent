@@ -1,18 +1,13 @@
-"""travel/experts/risk.py — 风险与数据可信度专家
+"""travel/experts/risk.py — 风险与数据可信度专家节点（Phase 3 改造：节点编排 + 兼容入口）
 
-这是四个专家中唯一**不产出规划结果**、只产出「免责与溯源」的节点。
+真身已迁 services/risk_service.py（assess_risks 纯函数 / retrieve_knowledge
+软失败封装，逐字搬运零改动）。本文件保留 LangGraph 节点 `risk_expert_node`
+（state 读写 / run_expert_safely / sources 合并 / expert_history——Node
+边界冻结）并 re-export 历史公开符号（experts/__init__ 等）。
 
-它存在的理由：行程单必须能回答「你凭什么这么说」。营业时间错了、票价
-过期了、某个馆临时闭馆，用户按这份行程真的会白跑一趟。P0 时代未接入
-实时数据源时本节点只做如实披露；2026-09-22（P0-1）起接入既有 RAG
-知识库（pgvector），在免责声明之外**补一层知识库摘录**：
-
-  - 检索到原文 → 摘录进行程单「知识库参考」段（knowledge_refs），
-    来源标识登记进 sources，reporter 渲染时说明「未核实时效」
-  - 检索为空 / 失败 → 自动退回纯免责声明，不报错不阻塞
-
-P1 接入 MCP 数据源后，本节点应扩充为真正的外部风险核查（台风季、
-景区限流、口岸政策），但「先声明能力边界」这一层不要去掉。
+这是五专家中唯一**不产出规划结果**、只产出「免责与溯源」的节点：
+行程单必须能回答「你凭什么这么说」。检索到知识库原文 → 摘录进
+knowledge_refs；检索为空 / 失败 → 自动退回纯免责声明，不报错不阻塞。
 """
 from __future__ import annotations
 
@@ -20,32 +15,11 @@ from backend.shared.logger import logger
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
-# 明确未接入的数据能力 —— 措辞要具体到用户能动作的地步
-# （2026-09-22 起天气预报已接入域图 weather 专家，天气条目改为时效提示）
-_UNAVAILABLE_DISCLAIMERS: tuple[str, ...] = (
-    "行程使用的天气预报为规划时点的预报，临近出发可能变化，出行前请再次确认",
-    "门票预约余量、索道/演出等需预约项目未接入，热门点位请提前预约",
-    "签证、入境与当地政策未接入数据源，跨境行程请以官方公布为准",
+# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：真身在 services/risk_service.py
+from backend.travel.services.risk_service import (  # noqa: F401
+    assess_risks,
+    retrieve_knowledge,
 )
-
-
-def assess_risks(itinerary) -> tuple[list[str], list[str]]:
-    """产出 (warnings, sources)（纯函数，可单测）。"""
-    warnings: list[str] = []
-    sources: list[str] = []
-
-    for poi in itinerary.all_pois():
-        if poi.source and poi.source not in sources:
-            sources.append(poi.source)
-
-    if any(s.startswith("seed") for s in sources):
-        warnings.append(
-            "本行程使用的坐标、营业时段与票价为本地示例数据，"
-            "尚未接入实时数据源；出行前请以景区/官方渠道公布的时刻与票价为准"
-        )
-
-    warnings.extend(_UNAVAILABLE_DISCLAIMERS)
-    return warnings, sources
 
 
 def risk_expert_node(state: dict) -> dict:
@@ -60,24 +34,19 @@ def risk_expert_node(state: dict) -> dict:
         itinerary.warnings = warnings
         itinerary.sources = sources
 
-        # P0-1：知识库检索（软失败）。摘录进 state.knowledge_refs，
-        # 由 reporter 渲染为独立「知识库参考」段；来源标识补进 sources。
+        # P0-1：知识库检索（软失败，封装在 risk_service）。摘录进
+        # state.knowledge_refs，由 reporter 渲染为独立「知识库参考」段；
+        # 来源标识补进 sources。
         knowledge_refs: list[str] = []
         try:
-            from backend.tools.travel.knowledge import (
-                build_knowledge_query,
-                retrieve_travel_knowledge,
-            )
-
             brief = load_brief(_state)
-            if brief.destination:
-                chunks, source_tag = retrieve_travel_knowledge(
-                    build_knowledge_query(brief.destination, brief.preferences))
-                if chunks:
-                    knowledge_refs = chunks
-                    if source_tag and source_tag not in itinerary.sources:
-                        itinerary.sources.append(source_tag)
-        except Exception:  # noqa: BLE001 — 双保险：检索层已兜底，这里防意外
+            chunks, source_tag = retrieve_knowledge(
+                brief.destination, brief.preferences)
+            if chunks:
+                knowledge_refs = chunks
+                if source_tag and source_tag not in itinerary.sources:
+                    itinerary.sources.append(source_tag)
+        except Exception:  # noqa: BLE001 — 双保险：service 已兜底，这里防意外
             logger.debug("[TravelRisk] 知识库检索意外失败（已跳过）", exc_info=True)
 
         logger.info("[TravelRisk] sources=%s warnings=%d knowledge_refs=%d",
