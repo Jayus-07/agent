@@ -3,9 +3,10 @@
 > **电商 RAG + Multi-Agent 平台** 的文档总入口。
 > 文档随代码一同演进，最后验证：2026-09-28。
 >
-> ⚠️ **口径提示**：`docs/` 下有大量**带日期的交接 / 收口 / 审计报告**，它们是历史事实记录，
-> **不随后续代码演进回写**。引用系统规模、架构口径时，以根 [README.md](../README.md) 的
-> 「系统规模」表与 [AGENTS.md](../AGENTS.md) 为唯一权威；本文件只负责导览。
+> ⚠️ **口径提示**：`docs/` 历史上堆积过大量**带日期的交接 / 收口 / 审计报告**（2026-09-29 已归档
+> 146 个至 [archive/](archive/)），它们是历史事实记录，**不随后续代码演进回写**。引用系统规模、
+> 架构口径时，以根 [README.md](../README.md) 的「系统规模」表与 [AGENTS.md](../AGENTS.md) 为
+> 唯一权威；本文件只负责导览。
 
 ---
 
@@ -54,11 +55,15 @@ docs/
 ├── decisions/ auth/     ← 技术决策与鉴权
 ├── observability/ operations/  ← Trace 模型 / 运维命令 / 排查清单
 ├── reports/ evidence/ coordination/ features/ feasibility/
-├── prompt-management/ prompt/ team-prompts/ rag_eval/ samples/ archive/
-└── 带日期报告（根目录大量 *.md）          ← 交接 / 收口 / 审计记录（只增不改）
+├── prompt-management/ prompt/ team-prompts/ rag_eval/ samples/
+├── archive/
+│   ├── 2026-09/         ← 已归档的带日期过程报告（102 个，只读）
+│   ├── superpowers/     ← AI 工作计划 / 设计规格归档（37 个）
+│   └── reports/         ← 已完结的脚本验收输出
+└── 其余根目录散文件      ← 被源码注释 / 脚本 / AGENTS.md 点名引用的规格、审计、交接文档
 ```
 
-全目录约 **200 个文件**：顶层 7 文档 + 子目录专项 + 按日期归档的过程报告。
+全目录约 **370 个文件**，其中归档区 [archive/](archive/) 约 150 个（历史事实记录，只读）。
 找最新状态：先看根 [README.md](../README.md) 与 [AGENTS.md](../AGENTS.md)，再看下方「近期专项」。
 
 ---
@@ -78,10 +83,11 @@ docs/
 
 ## 5. 维护约定
 
-1. **新文档必须归档到对应目录**；过程类交接 / 收口报告按 `YYYY-MM-DD-主题.md` 命名放根目录或 `reports/`
+1. **新文档必须归档到对应目录**；过程类交接 / 收口报告按 `YYYY-MM-DD-主题.md` 命名放 `reports/`，**不要堆根目录**；完结后移入 `archive/<年-月>/`（2026-09-29 已归档一批，`git mv` 保留血缘）
 2. **PRD / ARCHITECTURE 等 7 个顶层文档** 是新人入口，**必须与代码同步更新**；滞后口径以上方「口径提示」为准
 3. **重大决策** 写 ADR → `architecture/adr/NNNN-xxx.md`
 4. **数量 / 规模类口径** 只维护根 README「系统规模」表与 AGENTS.md，禁止在第二处手抄（G2）
+5. **被源码注释 / 测试 / AGENTS.md 按路径引用的文档不移动**；确需移动时必须同步改引用方
 
 ---
 
@@ -101,16 +107,16 @@ docs/
 
 - [2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md](2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md) — 客服/旅游/记忆/上下文/代码审查五线收口状态 + 全局遗漏（**最新欠账口径**）
 - [2026-09-25-FinalRC-TestDebt-Closure.md](2026-09-25-FinalRC-TestDebt-Closure.md) — 全量回归收官：分块执行闭合、flaky 甄别（89 persistent + 85 env_flaky）
-- [2026-09-25-FinalRC-TestDebt-Baseline.md](2026-09-25-FinalRC-TestDebt-Baseline.md) — 回归基线三件套口径（PYTHONPATH + PGPORT=5433 + 分块）
+- [2026-09-25-FinalRC-TestDebt-Baseline.md](archive/2026-09/2026-09-25-FinalRC-TestDebt-Baseline.md) — 回归基线三件套口径（PYTHONPATH + PGPORT=5433 + 分块）
 - [gateway-apisix-final-report.md](gateway-apisix-final-report.md) — APISIX 网关迁移收官与实测踩坑
 - [java-side-handover.md](java-side-handover.md) — Java 侧（Enterprise_OA）割接清单
 
 **生产收口系列（2026-09-23 ~ 09-25）**
 
-- 幂等运维（OPERATIONAL_FROZEN）、Task Runtime（Phase1/2 全链路 FROZEN）、Memory 收口、Context Budget 收口、Model Governance 收口、SQL Agent 收口（STOP A-D+D0）、旅游线 STOP I/J/K/L（质量 / Provider / 商务 / 预订）——过程报告见根目录对应日期文档与 [HANDOFF.md](HANDOFF.md)
+- 幂等运维（OPERATIONAL_FROZEN）、Task Runtime（Phase1/2 全链路 FROZEN）、Memory 收口、Context Budget 收口、Model Governance 收口、SQL Agent 收口（STOP A-D+D0）、旅游线 STOP I/J/K/L（质量 / Provider / 商务 / 预订）——过程报告见 [archive/2026-09/](archive/2026-09/) 与 [HANDOFF.md](HANDOFF.md)
 
 **智能客服优化（2026-09-19 规划波次）**
 
-- [2026-09-19-智能客服Agent优化方案-规划稿.md](2026-09-19-智能客服Agent优化方案-规划稿.md) — 客服上线级优化的实施依据（P0~P6 分阶段）
-- [2026-09-19-智能客服优化-P0基线报告.md](2026-09-19-智能客服优化-P0基线报告.md) — 未提交改动 176 项所有权清单 + 配置快照
+- [2026-09-19-智能客服Agent优化方案-规划稿.md](archive/2026-09/2026-09-19-智能客服Agent优化方案-规划稿.md) — 客服上线级优化的实施依据（P0~P6 分阶段）
+- [2026-09-19-智能客服优化-P0基线报告.md](archive/2026-09/2026-09-19-智能客服优化-P0基线报告.md) — 未提交改动 176 项所有权清单 + 配置快照
 - 客服域既有文档：[customer-service/](customer-service/)（refactor-plan / target-architecture / REFACTOR-TASK-SPEC 五剧本）
