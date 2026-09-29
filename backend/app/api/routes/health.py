@@ -2,6 +2,7 @@
 
 提供 /health 用于负载均衡器/监控系统探测服务存活。
 """
+import asyncio
 import os
 
 from fastapi import APIRouter
@@ -26,14 +27,23 @@ async def health():
       缺失清单；观测面而非硬门（软失败返回 unknown 不影响存活判定）。
     """
     from backend.app.api.deps import get_rag_status
+
+    # 迁移水位与 schema 实查均使用同步 psycopg2，并且会打开独立连接。
+    # 直接在 async handler 中调用会阻塞 event loop：100 个并发探针会串行
+    # 排队，表现为 APISIX health P99 接近 10s。移到线程池保持响应契约不变，
+    # 同时让存活探针不会阻塞聊天 SSE。
+    migrations, schema_consistency = await asyncio.gather(
+        asyncio.to_thread(_migration_watermark),
+        asyncio.to_thread(_schema_consistency),
+    )
     return {
         "status": "ok",
         "build": {
             "commit": os.getenv("GIT_COMMIT", "unknown"),
             "build_time": os.getenv("BUILD_TIME", "unknown"),
         },
-        "migrations": _migration_watermark(),
-        "schema_consistency": _schema_consistency(),
+        "migrations": migrations,
+        "schema_consistency": schema_consistency,
         "rag": get_rag_status(),
         # STOP G5：ConversationContext backend 观测（healthy/degraded/
         # disabled + backend 名称）。软失败：观测缺失不影响存活判定。
