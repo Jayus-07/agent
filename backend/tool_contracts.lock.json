@@ -1,0 +1,1170 @@
+{
+  "version": 1,
+  "generated_at": "2026-09-30T00:50:46+08:00",
+  "git_sha": "b71f912",
+  "tool_count": 34,
+  "tools": {
+    "calculate_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/calculator.py",
+      "description_hash": "0a4bad62450f5756",
+      "args_schema": {
+        "expression": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "7fc69f2e3723b63a"
+    },
+    "competitor_analyze_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "description_hash": "95a05d8b0a031daa",
+      "args_schema": {
+        "idempotency_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "name": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "question": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "url": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [
+        "competitor.analyze",
+        "competitor.history",
+        "competitor.watch"
+      ],
+      "output_types": {
+        "competitor.analyze": "text",
+        "competitor.watch": "text",
+        "competitor.history": "text"
+      },
+      "content_hash": "feafd216f1f571da"
+    },
+    "competitor_history_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "description_hash": "fd2592682b4e14b7",
+      "args_schema": {
+        "question": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "url": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "2578615c64b1106c"
+    },
+    "competitor_watch_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "description_hash": "9b922fc4240d079f",
+      "args_schema": {
+        "idempotency_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "ff6a220499108e7e"
+    },
+    "competitor_watchlist_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "description_hash": "77c1b270cdb5969c",
+      "args_schema": {
+        "action": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "list"
+        },
+        "enabled": {
+          "schema": {
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true
+        },
+        "idempotency_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "name": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "url": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "16a6f1fc22bc604c"
+    },
+    "data_collection_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/data_collection.py",
+      "description_hash": "140f080a61b5b6b8",
+      "args_schema": {
+        "dedup_keys": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "enable_analysis": {
+          "schema": {
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true
+        },
+        "fetcher_type": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "static"
+        },
+        "groupby_keys": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "idempotency_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "source": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "target_table": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "stg_products"
+        },
+        "write_mode": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "append"
+        }
+      },
+      "capabilities": [
+        "data.collect"
+      ],
+      "output_types": {
+        "data.collect": "text"
+      },
+      "content_hash": "b42e4b2201eb2e26"
+    },
+    "execute_sql_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
+      "description_hash": "95c523fde60caf18",
+      "args_schema": {
+        "query": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "b69a0ff373e3599a"
+    },
+    "export_csv_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/export.py",
+      "description_hash": "1b9696b7617612ed",
+      "args_schema": {
+        "filename": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "idempotency_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "question": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [
+        "data.export"
+      ],
+      "output_types": {
+        "data.export": "text"
+      },
+      "content_hash": "9c4c56175e0189f2"
+    },
+    "generate_report_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/report.py",
+      "description_hash": "85c450991f3e72d7",
+      "args_schema": {
+        "filters": {
+          "schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "required": false,
+          "default": null
+        },
+        "report_type": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [
+        "report.generate"
+      ],
+      "output_types": {
+        "report.generate": "text"
+      },
+      "content_hash": "ec17a7fc00e087be"
+    },
+    "map_coord_convert_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "description_hash": "b4a9e24dcb9a14eb",
+      "args_schema": {
+        "from_type": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "wgs84"
+        },
+        "location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "71a868a1490a4723"
+    },
+    "map_distance_matrix_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "description_hash": "baf8ac3cce07b5c5",
+      "args_schema": {
+        "from_locations": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "mode": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "driving"
+        },
+        "to_locations": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "ebcfc9eff8cb3abe"
+    },
+    "map_district_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "description_hash": "e304a41867c33678",
+      "args_schema": {
+        "district_id": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "keyword": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "25555712e2cf3a8d"
+    },
+    "map_geocode_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "description_hash": "b543af5d97ee877e",
+      "args_schema": {
+        "address": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "0a1edb139968f854"
+    },
+    "map_ip_location_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "description_hash": "42fddc4e146d6bcb",
+      "args_schema": {
+        "ip": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "3b2d21699b960852"
+    },
+    "map_lookup_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/lookup.py",
+      "description_hash": "fe93496e0e75f89b",
+      "args_schema": {
+        "action": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "address": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "district_id": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "from_location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "keyword": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "kind": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "now"
+        },
+        "location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "markers": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "mode": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "near": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "page_size": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 10
+        },
+        "radius_m": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 0
+        },
+        "size": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "600*400"
+        },
+        "to_location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "to_name": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "zoom": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 14
+        }
+      },
+      "capabilities": [
+        "map.lookup"
+      ],
+      "output_types": {
+        "map.lookup": "structured"
+      },
+      "content_hash": "8641d1253e64288d"
+    },
+    "map_navigation_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "description_hash": "c7e1265e71884784",
+      "args_schema": {
+        "from_location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "from_name": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "mode": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "drive"
+        },
+        "policy": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 0
+        },
+        "to_location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "to_name": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "0728c27f5a79d3f9"
+    },
+    "map_place_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
+      "description_hash": "613597c0e5f6e7c8",
+      "args_schema": {
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "keyword": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "near": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "page_size": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 10
+        },
+        "radius_m": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 3000
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "a9153f228dd6983c"
+    },
+    "map_place_suggest_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
+      "description_hash": "d42225f7bbb5f9bb",
+      "args_schema": {
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "keyword": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "08a51da5b5c18af3"
+    },
+    "map_reverse_geocode_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "description_hash": "96528ef829a9ee21",
+      "args_schema": {
+        "location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "with_poi": {
+          "schema": {
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "1bd2d81e56cbbfd3"
+    },
+    "map_route_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "description_hash": "e364eadcee135612",
+      "args_schema": {
+        "from_location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "mode": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "driving"
+        },
+        "policy": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "to_location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "aa2e16777fcfc85f"
+    },
+    "map_static_map_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/static_map.py",
+      "description_hash": "cfcdf3a4f66ca538",
+      "args_schema": {
+        "center": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "maptype": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "roadmap"
+        },
+        "markers": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "size": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "600*400"
+        },
+        "zoom": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 14
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "92312c78a68ee3ab"
+    },
+    "map_street_view_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/street_view.py",
+      "description_hash": "9dc5f966a99d17d2",
+      "args_schema": {
+        "heading": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 0
+        },
+        "location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "pitch": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 0
+        },
+        "radius_m": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 50
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "e29b4024083f49c8"
+    },
+    "map_weather_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/map/weather.py",
+      "description_hash": "8915d5a595eb251b",
+      "args_schema": {
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "kind": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "now"
+        },
+        "location": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "ef10f24a65688cd9"
+    },
+    "memory_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "description_hash": "306fe94770e4d6f2",
+      "args_schema": {
+        "query": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "top_k": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 5
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "39e11f1a94de7939"
+    },
+    "memory_store_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "description_hash": "98066de659309c96",
+      "args_schema": {
+        "content": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "memory_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "memory_type": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "user_fact"
+        },
+        "structured_value": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "a5c7d0ca80c913cd"
+    },
+    "read_email_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "description_hash": "9d169a15bb8f3e95",
+      "args_schema": {
+        "message_id": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "e2104ca1f07b940a"
+    },
+    "search_email_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "description_hash": "1778923c62ba18fb",
+      "args_schema": {
+        "cursor": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "folder": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "limit": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 10
+        },
+        "query": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "73560b7f8fba3a74"
+    },
+    "search_knowledge_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/rag.py",
+      "description_hash": "fa54572818b6b08a",
+      "args_schema": {
+        "kb_id": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "default"
+        },
+        "question": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [
+        "rag.search"
+      ],
+      "output_types": {
+        "rag.search": "text"
+      },
+      "content_hash": "b2295344e9798489"
+    },
+    "send_email_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "description_hash": "007021fbb3ea3706",
+      "args_schema": {
+        "body": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "cc": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "idempotency_key": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "subject": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "to": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [
+        "email.read",
+        "email.search",
+        "email.send",
+        "email.watch"
+      ],
+      "output_types": {
+        "email.send": "text",
+        "email.search": "text",
+        "email.read": "text",
+        "email.watch": "text"
+      },
+      "content_hash": "ee42ff9f1a8446a5"
+    },
+    "sql_query_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
+      "description_hash": "43a60f429eab4d5a",
+      "args_schema": {
+        "question": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "bb96a1893da888f7"
+    },
+    "travel_poi_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/travel/poi.py",
+      "description_hash": "5cb02a4fe7702eba",
+      "args_schema": {
+        "avoid": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "limit": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 20
+        },
+        "must_go": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "preferences": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [
+        "travel.poi_search"
+      ],
+      "output_types": {
+        "travel.poi_search": "structured"
+      },
+      "content_hash": "dc6e1969551b83c4"
+    },
+    "watch_email_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "description_hash": "d995c994529679ce",
+      "args_schema": {
+        "timeout_sec": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 120
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "6bfc600331764b6d"
+    },
+    "web_crawl_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
+      "description_hash": "572e3dbc71e62b5f",
+      "args_schema": {
+        "mode": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": "markdown"
+        },
+        "url": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [
+        "web.crawl"
+      ],
+      "output_types": {
+        "web.crawl": "text"
+      },
+      "content_hash": "41bed023616e1b8c"
+    },
+    "web_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
+      "description_hash": "8efa157629e8d0e3",
+      "args_schema": {
+        "num_results": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 5
+        },
+        "query": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [
+        "web.search"
+      ],
+      "output_types": {
+        "web.search": "text"
+      },
+      "content_hash": "7a0bc6126da98991"
+    }
+  }
+}
