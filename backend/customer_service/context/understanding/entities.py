@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from backend.customer_service.understanding.types import EntitySpan, EntityType
+from backend.customer_service.context.understanding.types import EntitySpan, EntityType
 
 # 订单号：字母数字混合前缀 + 至少一段连字数字字母段，且整串必须含字母
 # （排除 2026-09-15 日期、138-0000 电话分段等纯数字形态）。

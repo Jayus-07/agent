@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from backend.customer_service.understanding.types import EntityType
+from backend.customer_service.context.understanding.types import EntityType
 
 # intent → 必填槽位（槽位名即 EntityType.value 或业务槽位名）
 REQUIRED_SLOTS: dict[str, list[str]] = {

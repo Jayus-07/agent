@@ -24,7 +24,7 @@ from backend.config.cs_dispatch import (
     CS_AGENT_AUTO_BUSY_THRESHOLD,
     CS_AGENT_AUTO_BUSY_WINDOW_SECONDS,
 )
-from backend.customer_service.dispatch.presence import _redis_client
+from backend.customer_service.handoff.dispatch.presence import _redis_client
 
 REJECT_COUNT_KEY_PREFIX = "cs:agent:reject:"
 BUSY_KEY_PREFIX = "cs:agent:busy:"

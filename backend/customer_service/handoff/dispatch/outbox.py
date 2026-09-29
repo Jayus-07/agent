@@ -26,7 +26,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.cs_dispatch import CS_OUTBOX_RELAY_BATCH_LIMIT
-from backend.customer_service.dispatch import repository
+from backend.customer_service.handoff.dispatch import repository
 from backend.customer_service.models.event import CSEvent
 from backend.shared.logger import logger
 

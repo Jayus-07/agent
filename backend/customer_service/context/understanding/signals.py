@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from backend.customer_service.understanding.types import Sentiment, Urgency
+from backend.customer_service.context.understanding.types import Sentiment, Urgency
 
 # 情绪/紧迫/风险标记已收敛至 vocab.py 单一事实源（迁移 B8，值逐字
 # 搬移）；本模块保留检测逻辑，标记从 vocab import。

@@ -25,7 +25,7 @@ from backend.config.cs_dispatch import (
     CS_MAX_DISPATCH_ATTEMPTS,
     CS_REAPER_BATCH_LIMIT,
 )
-from backend.customer_service.dispatch import agent_busy, outbox, repository
+from backend.customer_service.handoff.dispatch import agent_busy, outbox, repository
 
 EVENT_OFFER_EXPIRED = "conversation.offer_expired"
 EVENT_HANDOFF_CLOSED = "conversation.handoff_closed"

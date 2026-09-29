@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import cs_dispatch as config
 from backend.config.cs_dispatch import CS_OFFER_TIMEOUT_SECONDS
 from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
-from backend.customer_service.dispatch import (
+from backend.customer_service.handoff.dispatch import (
     agent_busy,
     event_relay,
     outbox,

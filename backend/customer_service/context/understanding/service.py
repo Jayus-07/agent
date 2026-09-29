@@ -15,15 +15,15 @@ from typing import Any
 
 from backend.customer_service.router.intents import INTENT_PROFILES
 from backend.customer_service.router.types import CSDomain, CSRouteResult
-from backend.customer_service.understanding.entities import extract_entities
-from backend.customer_service.understanding.slots import compute_missing_slots
-from backend.customer_service.understanding.signals import (
+from backend.customer_service.context.understanding.entities import extract_entities
+from backend.customer_service.context.understanding.slots import compute_missing_slots
+from backend.customer_service.context.understanding.signals import (
     detect_risk_hits,
     detect_sentiment,
     detect_urgency,
     escalate,
 )
-from backend.customer_service.understanding.types import (
+from backend.customer_service.context.understanding.types import (
     CSUnderstanding,
     DecisionLayer,
     NextAction,
