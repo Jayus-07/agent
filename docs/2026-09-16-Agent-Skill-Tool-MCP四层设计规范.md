@@ -251,7 +251,7 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 | **E6** | 两套路由索引 | capability/workflow 走 `vector_router`（manifest 派生）；`orchestration/workflow/router.py::TaskRouter` 自建 embed 索引 | TaskRouter 现仅测试在用 | 生产路由一律以 manifest + `vector_router` 为准；**禁止向 TaskRouter 加新依赖**，长期应下线 |
 | **E7** | ~~两个同名 `tool_registry` 模块~~ **✅ 已解决（2026-09-17）** | orchestration 侧已改名 `orchestration/capability_registry.py`，35 处 import 同步更新；旧路径 `orchestration/tool_registry.py` 保留为废弃 shim（import 即 DeprecationWarning）；全仓不得再出现旧路径引用，由 `test_orchestration_debt_fixes.py::test_no_stray_old_import_paths` 机器守护 |
 | **E8** | 存量 Tool 返回非 JSON（Markdown / 纯文本） | 34 个 Tool 中 **16 个 JSON**（`map/` 全部 14 + `travel/poi` + `sql.execute_sql_tool`），**18 个非 JSON**（`competitor` 4 · `email` 4 · `web` 2 · `memory` 2 · `sql.sql_query_tool` 1 · `rag` 1 · `report` 1 · `data_collection` 1 · `calculator` 1 · `export` 1）<br>另：`sql.execute_sql_tool` 的异常分支是 `raise` 而非 `fail(...)`，同样偏离 | 存量 Tool 多为「委托子系统 + 返回人类可读结果」：`sql_query_tool` 走 NL→SQL Agent 输出 Markdown 表格，`search_knowledge_tool` 输出 RAG 生成的文本，`competitor.*` 直接产出 Markdown 报告。这些契约已被前端渲染、evaluation runner 与 `final_answer` 消费，改 JSON 是**破坏性变更**且无功能收益 | 保留。**§3.3 第 3 条已同步收窄为「仅对新增 Tool 强制」**。存量若要统一，须先盘点下游消费方并单独立项，不得在无关改动中顺手改造 |
-| **E9** | `routed: false` 的隔离只覆盖**路由层**，未覆盖 Planner / Critique | 3 个内部能力：`email.watch` · `competitor.watch` · `competitor.history`<br>**已隔离**：`rule_router`（`_COMPETITOR_KEYWORDS` 只指向 `competitor.analyze`）· `vector_router`（`ROUTE_EXAMPLES` 只取 `routed_capabilities`）· `llm_router`（校验 `ALL_CAPABILITIES`，仅 14 个）<br>**未隔离**：`agents/planner/planner.py::_format_capabilities_schema()` 与 `agents/planner/critique.py` 规则 1 都遍历 `tool_registry.get_available_capabilities()`（**17 个全含**） | 数据源不同：路由层消费 `router/types.py::ALL_CAPABILITIES`（manifest 的 `routed_capabilities`），Planner / Critique 消费 `orchestration/capability_registry`（由 Skill 自注册派生，按设计含全部声明过的能力）。`routed` 字段从未被 Planner 链消费 | **保留，但须明确语义**：`routed: false` = 「不参与**用户问题路由**」，**不等于**「Planner 不可见」。<br>**风险点**：Planner prompt 只渲染 `description / params / 示例`，**不渲染 `routed` 与 `reason`**，LLM 无从判断某能力是内部的。`email.watch` 是默认 `timeout_sec=120` 的阻塞长轮询（`tools/email.py::watch_email_tool` → `agently_watch`），其 `reason` 自述「仅通知闭环与 automation 内部使用」，却与 14 个公开能力并列出现在可选清单中。<br>**若需收紧**：在 `_format_capabilities_schema()` 过滤非 routed 能力、或为其追加「内部能力」标记 —— 属**行为变更**（影响 LLM 可见能力集），须单独评估，不在本次改动范围 |
+| **E9** | `routed: false` 的隔离只覆盖**路由层**，未覆盖 Planner / Critique | 3 个内部能力：`email.watch` · `competitor.watch` · `competitor.history`<br>**已隔离**：`rule_router`（`_COMPETITOR_KEYWORDS` 只指向 `competitor.analyze`）· `vector_router`（`ROUTE_EXAMPLES` 只取 `routed_capabilities`）· `llm_router`（校验 `ALL_CAPABILITIES`，仅 14 个）<br>**未隔离**：`agents/planner/planner.py::_format_capabilities_schema()` 与 `agents/planner/critique.py` 规则 1 都遍历 `tool_registry.get_available_capabilities()`（**17 个全含**） | 数据源不同：路由层消费 `router/types.py::ALL_CAPABILITIES`（manifest 的 `routed_capabilities`），Planner / Critique 消费 `orchestration/capability_registry`（从 manifest 派生，按设计含全部声明过的能力）。`routed` 字段从未被 Planner 链消费 | **保留，但须明确语义**：`routed: false` = 「不参与**用户问题路由**」，**不等于**「Planner 不可见」。<br>**风险点**：Planner prompt 只渲染 `description / params / 示例`，**不渲染 `routed` 与 `reason`**，LLM 无从判断某能力是内部的。`email.watch` 是默认 `timeout_sec=120` 的阻塞长轮询（`tools/email.py::watch_email_tool` → `agently_watch`），其 `reason` 自述「仅通知闭环与 automation 内部使用」，却与 14 个公开能力并列出现在可选清单中。<br>**若需收紧**：在 `_format_capabilities_schema()` 过滤非 routed 能力、或为其追加「内部能力」标记 —— 属**行为变更**（影响 LLM 可见能力集），须单独评估，不在本次改动范围 |
 | **E10** | `memory_store_tool` 直写记忆库未接 `ensure_approved()` 审批门（审查基线 P2-㉑） | 写路径自带 PII 脱敏 + 仅限操作者自身记忆（限自身语义），审批门主链（写业务库/发消息/花钱）不受影响；2026-09-25 Final Closure 对账登记为知情例外（ACCEPTED_RISK） | **保留例外，登记在案**：若未来记忆写放宽为跨用户/跨租户，必须先接审批门 |
 
 ---
@@ -270,7 +270,7 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 4. 跑 `test_layer_consistency.py`
 
 ### 加一个 Skill（含新 capability）
-1. `skills/<name>/skill.py`：继承 `BaseSkill`，声明 `name` / `capabilities` / `description` / `params_schema` / `examples`
+1. `skills/<name>/skill.py`：继承 `BaseSkill`，只声明 `name` 与执行行为；`capabilities` / `description` / `params_schema` / `examples` 统一声明在 `orchestration/router/capabilities.yaml` 并于启动期绑定
 2. `skills/<name>/__init__.py`：`tool_registry.register_skill_node("<name>_skill", <name>_skill_node)`
 3. `skills/registry.py`：import 该 Skill 类并加进 `_instances`
 4. `skills/__init__.py`：加进 re-export 与 `__all__`（保持包面一致）
@@ -306,7 +306,7 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 |---|---|
 | capability 注册表从 Skill 派生（非硬编码） | `test_registry_consistency.py::TestCapabilityDerivation` |
 | manifest ↔ skills registry 双向对账 | `test_registry_consistency.py::TestCapabilityManifest` |
-| Skill `params_schema` 与 Tool 实际参数不脱节 | `test_registry_consistency.py::TestSkillToolAlignment` |
+| manifest `params_schema` 与 Tool 实际参数不脱节 | `test_registry_consistency.py::TestSkillToolAlignment` |
 | MCP 参数从 `args_schema` 派生 | `test_registry_consistency.py::TestMcpListToolsDerivation` |
 | 协议端点工具集 == `manager.discover()` | `test_registry_consistency.py::TestProtocolEndpointParity` |
 | 每个 Skill 的节点名同时出现在 `_skill_nodes` 与 `CAPABILITY_MAP` | `test_adr0001_dual_registry_merge.py` |

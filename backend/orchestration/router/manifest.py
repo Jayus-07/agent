@@ -61,6 +61,9 @@ class CapabilityDecl:
     name: str
     skill: str
     routed: bool
+    description: str
+    params_schema: dict[str, object]
+    planner_examples: tuple[dict[str, object], ...]
     examples: tuple[str, ...]
     reason: str = ""
     # 规则路由关键词（可选，2026-09-15 迁入）：单意图强/弱信号判定用。
@@ -220,6 +223,26 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         if not skill:
             raise ManifestError(f"{where} ({name}): skill 字段必填（供一致性测试对账）")
 
+        description = str(item.get("description", "")).strip()
+        if not description:
+            raise ManifestError(
+                f"{where} ({name}): description 必填（Planner runtime metadata）"
+            )
+        params_schema = item.get("params_schema")
+        if not isinstance(params_schema, dict) or not params_schema:
+            raise ManifestError(
+                f"{where} ({name}): params_schema 必须为非空 mapping"
+            )
+        planner_examples_raw = item.get("planner_examples")
+        if not isinstance(planner_examples_raw, list) or not planner_examples_raw:
+            raise ManifestError(
+                f"{where} ({name}): planner_examples 必须为非空 list"
+            )
+        if not all(isinstance(example, dict) for example in planner_examples_raw):
+            raise ManifestError(
+                f"{where} ({name}): planner_examples 每项必须为 mapping"
+            )
+
         routed = bool(item.get("routed", True))
         examples = tuple(str(e).strip() for e in (item.get("examples") or []) if str(e).strip())
         if len(examples) != len(item.get("examples") or []):
@@ -261,6 +284,11 @@ def load_manifest(path: str | None = None) -> RouterManifest:
                 name=name,
                 skill=skill,
                 routed=routed,
+                description=description,
+                params_schema=dict(params_schema),
+                planner_examples=tuple(
+                    dict(example) for example in planner_examples_raw
+                ),
                 examples=examples,
                 reason=str(item.get("reason", "")).strip(),
                 rule_keywords=tuple(

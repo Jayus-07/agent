@@ -194,6 +194,31 @@ class TestCapabilityManifest:
 
         assert set(ROUTE_EXAMPLES) == set(ALL_CAPABILITIES)
 
+    def test_capability_runtime_metadata_is_declared_in_manifest(self):
+        """Planner schema 的业务 metadata 必须由 manifest 提供。
+
+        此回归防止把 description / params / Planner 示例重新写回 Skill，
+        否则路由 manifest 与规划 runtime 会再次成为两份作者维护的定义。
+        """
+        from backend.orchestration.capability_registry import tool_registry
+        from backend.orchestration.router.manifest import load_manifest
+
+        declaration = next(
+            cap for cap in load_manifest().capabilities
+            if cap.name == "rag.search"
+        )
+
+        assert hasattr(declaration, "description")
+        assert hasattr(declaration, "params_schema")
+        assert hasattr(declaration, "planner_examples")
+
+        schema = tool_registry.get_schema("rag.search")
+        assert schema == {
+            "description": declaration.description,
+            "params": declaration.params_schema,
+            "示例": declaration.planner_examples[0],
+        }
+
     def test_manifest_load_is_fail_fast(self, tmp_path):
         """坏 manifest 必须炸而非静默：重复名 / examples 不足 / 缺 reason。"""
         import yaml
@@ -208,6 +233,11 @@ class TestCapabilityManifest:
         good_cap = {
             "name": "x.y", "skill": "s", "routed": True,
             "examples": ["例一", "例二"],
+            "description": "测试能力",
+            "params_schema": {
+                "question": {"type": "string", "required": True},
+            },
+            "planner_examples": [{"question": "例一"}],
         }
         # 分层路由（2026-09-22）起 manifest 必须含 domains 段：
         # capability 的 domain 必填，域必须已声明（fail-fast 顺序在最后）

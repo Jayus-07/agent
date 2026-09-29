@@ -119,30 +119,33 @@ class TestADRDualRegistryMerge:
 
 
 class TestNewSkillWorkflow:
-    """验证新增 Skill 的最小改动路径（ADR-0001 目标）"""
+    """验证新增 Skill 的运行时 metadata 绑定路径。"""
 
-    def test_base_skill_rejects_missing_metadata(self):
-        """缺 description 时，子类加载直接报错（编译期防御）"""
+    def test_base_skill_rejects_missing_name(self):
+        """Skill 必须有 name，才能与 manifest 的 skill binding 对账。"""
         from backend.skills.base import BaseSkill
 
-        with pytest.raises(TypeError, match="description"):
+        with pytest.raises(TypeError, match="name"):
             class BadSkill(BaseSkill):
-                name = "bad"
-                capabilities = ["bad.do"]
-                # 故意缺 description
                 @property
                 def _tool_fn(self):
                     return None
 
-    def test_base_skill_rejects_missing_examples(self):
-        """缺 examples 时报错"""
-        from backend.skills.base import BaseSkill
+    def test_registry_binds_manifest_metadata_to_legacy_skill_fields(self):
+        """旧消费方读取 Skill 属性时，值仍来自 manifest 而非类内声明。"""
+        from backend.orchestration.router.manifest import load_manifest
+        from backend.skills.registry import get
 
-        with pytest.raises(TypeError, match="examples"):
-            class BadSkill(BaseSkill):
-                name = "bad"
-                capabilities = ["bad.do"]
-                description = "for test"
-                @property
-                def _tool_fn(self):
-                    return None
+        declaration = next(
+            cap for cap in load_manifest().capabilities
+            if cap.name == "rag.search"
+        )
+        skill = get("rag.search")
+
+        assert skill is not None
+        assert skill.description == declaration.description
+        assert skill.params_schema == declaration.params_schema
+        assert skill.examples == list(declaration.planner_examples)
+        assert skill.capability_metadata["rag.search"]["params_schema"] == (
+            declaration.params_schema
+        )

@@ -119,15 +119,11 @@ def validate_params(params_schema: dict, params: dict) -> str | None:
 class BaseSkill(ABC):
     """Skill 抽象基类。每个 Skill 封装一组 Capability。
 
-    子类需声明:
-      - capabilities:    ClassVar[list[str]]  — 如 ["sql.query", "sql.analyze"]
-      - description:     str                   — Planner prompt 用（必填）
-      - params_schema:   dict                  — 参数说明（必填）。推荐类型化格式
-                        {"param": {"type": "string|int|object|boolean", "required": bool,
-                                   "description": str, "enum": [...]}}；
-                        旧式纯字符串值向后兼容（视为 string 可选）
-      - examples:        list[dict]            — Planner 用的示例（至少 1 个）
-      - _tool_fn:        property → LangChain Tool
+    子类只声明 ``name`` 与执行行为；Capability 的 description、参数、示例
+    由 ``capabilities.yaml`` 在 Skill Registry 启动期绑定。保留下列属性是
+    为旧调用方兼容，禁止在 Skill 子类作者维护：
+      - capabilities / description / params_schema / examples
+      - _tool_fn: property → LangChain Tool
       - default_timeout / default_max_retries — 类级执行参数（可选覆盖）
       - output_type / output_types — 输出契约（可选，见下）
 
@@ -148,6 +144,7 @@ class BaseSkill(ABC):
     examples: ClassVar[list[dict]] = []
     output_type: ClassVar[str] = "text"
     output_types: ClassVar[dict] = {}
+    capability_metadata: ClassVar[dict[str, dict]] = {}
     # 类级默认：execute 未显式传参时生效。子类可覆盖（如 competitor
     # 单次抓取自身 timeout=90s，必须大于它，否则被 Skill 层先判超时重试）
     default_timeout: ClassVar[float] = DEFAULT_TIMEOUT
@@ -158,19 +155,8 @@ class BaseSkill(ABC):
         # 内部兼容类（_CompatSkill）跳过校验
         if cls.__name__.startswith("_"):
             return
-        # 必填校验：避免漏写 description 导致 Planner 拿不到能力描述
-        if not getattr(cls, "description", ""):
-            raise TypeError(
-                f"{cls.__name__} 必须声明 description（Planner prompt 需要）"
-            )
-        if not getattr(cls, "capabilities", []):
-            raise TypeError(
-                f"{cls.__name__} 必须声明 capabilities（至少 1 个）"
-            )
-        if not getattr(cls, "examples", []):
-            raise TypeError(
-                f"{cls.__name__} 必须声明 examples（至少 1 个，Planner 参考）"
-            )
+        if not getattr(cls, "name", ""):
+            raise TypeError(f"{cls.__name__} 必须声明 name（manifest skill 绑定需要）")
 
     @property
     @abstractmethod
@@ -191,7 +177,7 @@ class BaseSkill(ABC):
     # 历史名保留（子类/测试可能引用）：指向模块级 PARAM_TYPE_CHECKS
     _PARAM_TYPE_CHECKS = PARAM_TYPE_CHECKS
 
-    def _validate_params(self, params: dict) -> str | None:
+    def _validate_params(self, params: dict, capability: str = "") -> str | None:
         """按 params_schema 运行时校验入参，返回错误消息（None=通过）。
 
         校验语义收敛在模块级 validate_params()（tool_selector 的 FC
@@ -199,7 +185,9 @@ class BaseSkill(ABC):
         让 Tool 深处报晦涩错误再空转重试，不如在 Skill 边界给模型可读
         的失败原因。
         """
-        return validate_params(self.params_schema, params)
+        metadata = self.capability_metadata.get(capability, {})
+        schema = metadata.get("params_schema", self.params_schema)
+        return validate_params(schema, params)
 
     def _normalize_output(self, capability: str, output: Any) -> Any:
         """输出契约边界：按 capability 声明的类型归一化 Tool 返回值。
@@ -292,10 +280,13 @@ class BaseSkill(ABC):
         params.pop("_previous_outputs", None)
 
         # ── 四层前置校验：参数 + 权限失败不可进入 Tool ──
+        capability = sr["capability"]
         try:
             validate_invocation(
                 sr["capability"], params,
-                self._validate_params,
+                lambda candidate_params: self._validate_params(
+                    candidate_params, capability,
+                ),
             )
         except ValidationFailure as exc:
             reason = (exc.envelope.details or {}).get("reason", "")

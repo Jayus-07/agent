@@ -98,12 +98,6 @@ class SQLSkill(BaseSkill):
     """
 
     name = "sql"
-    capabilities = ["sql.query"]
-    description = "查询 PostgreSQL 数据库并返回结构化 SQLResult（行/列/耗时）"
-    params_schema = {
-        "question": {"type": "string", "required": True, "description": "自然语言查询问题（中文/英文）"},
-    }
-    examples = [{"question": "查询库存低于安全库存的商品及其库存量"}]
     # 输出契约：SQLResult.model_dump()（execute 已重写并用 Pydantic 收口，
     # 此声明供注册表/下游消费方识别输出形态）
     output_type = "structured"

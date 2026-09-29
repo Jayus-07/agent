@@ -61,7 +61,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 | 加什么 | 改几处 | 关键动作 |
 |---|---|---|
 | Tool（原子操作） | 2 | `backend/tools/<域>/<mod>.py`：`@tool` + **文件底部** `tool_registry.register(my_tool, __file__)`；❌ 不得定义在 `skills/` |
-| Skill + capability | 5 | ①skill.py ②`__init__.py` 自注册图节点 ③`skills/registry.py::_instances` ④`skills/__init__.py` re-export ⑤`capabilities.yaml` —— **漏⑤ = 永远路由不到** |
+| Skill + capability | 5 | ①skill.py（仅执行实现 + `name`）②`__init__.py` 自注册图节点 ③`skills/registry.py::_instances` ④`skills/__init__.py` re-export ⑤`capabilities.yaml`（唯一业务 metadata）—— **漏⑤ = 启动 fail-fast** |
 | Workflow | 3 | 类实现 + `workflows/__init__.py::register_all()` + `capabilities.yaml` 的 `workflows` 段（漏第三处 = 向量路由失明） |
 | MCP Server | 2 | 继承 `MCPServer` + `servers/__init__.py::register_all()`；参数一律 `langchain_tool_to_mcp_meta` 从 `args_schema` 派生，**禁止手写** |
 | 域图 / 业务 Agent | 5~7 / 2 | 手册 §6/§7；域图用技能 `agent-platform-add-domain-graph`（prefilter 必须插进 `router_node.py`，否则域永不触发） |
@@ -69,7 +69,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 **铁律**：**G1** 声明式注册、启动期派生、fail-fast｜**G2** 单一事实源，派生量禁止手写回去｜**G3** 谁定义谁注册，禁止集中代注册｜**G4** 例外必须登记规范 §4 台账。
 **方向**：`Planner → capability → Skill → Tool → Infrastructure`，上层调下层；MCP 不是第 5 层，是 Tool 的第二出口（Tool 不得 import Skill）。
 
-**Skill 硬约束**：`name` = 目录名（节点名 `<name>_skill` 由其推导）；必填 `name/capabilities/description/examples/params_schema`（`__init_subclass__` 类定义期抛 TypeError）；capability 恰一个点 `<域>.<动作>` 全域唯一，workflow 纯蛇形不带点。❌ Skill 层定义 `@tool`、直接写 SQL/调 HTTP；多 Tool 覆写 `_select_tool()` 分发并把 params 裁到目标 Tool 签名内。
+**Skill 硬约束**：`name` = 目录名（节点名 `<name>_skill` 由其推导）；Skill 类只定义执行行为，`capabilities/description/examples/params_schema` 必须只写在 `capabilities.yaml`，由 `skills.metadata.bind_manifest_metadata()` 启动期绑定兼容字段并 fail-fast；capability 恰一个点 `<域>.<动作>` 全域唯一，workflow 纯蛇形不带点。❌ Skill 层定义 `@tool`、直接写 SQL/调 HTTP；多 Tool 覆写 `_select_tool()` 分发并把 params 裁到目标 Tool 签名内。
 **新 Tool 三规**：`@tool`｜底部注册｜返回 JSON 字符串（失败返 `{"error":…}`，「查不到」与「查不了」分开），统一走 `tools/map/_base.py` 的 `ok/fail/not_configured`（存量 18 个返 Markdown 是例外 E8，别参照）。副作用 Tool 必须过 `security/tool_approval.ensure_approved()`；user_id 取 `tools/session.get_tool_user_id()`，禁止硬编码。
 **易漏接线**：新 capability 加 `direct_executor.py::_USER_CAP_LABELS`。
 

@@ -39,6 +39,10 @@ _instances: list = [
     MapLookupSkill(),
 ]
 
+from backend.skills.metadata import bind_manifest_metadata
+
+bind_manifest_metadata(_instances)
+
 # capability → Skill 实例
 _registry: dict[str, "BaseSkill"] = {}
 for _inst in _instances:

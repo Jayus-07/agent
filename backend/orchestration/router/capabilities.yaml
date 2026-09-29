@@ -222,6 +222,14 @@ domains:
 capabilities:
   - name: sql.query
     skill: sql
+    description: 查询 PostgreSQL 数据库并返回结构化 SQLResult（行/列/耗时）
+    params_schema:
+      question:
+        type: string
+        required: true
+        description: 自然语言查询问题（中文/英文）
+    planner_examples:
+    - question: 查询库存低于安全库存的商品及其库存量
     routed: true
     domain: data
     risk_level: LOW
@@ -280,6 +288,14 @@ capabilities:
 
   - name: rag.search
     skill: rag
+    description: 从跨境电商知识库中检索 SOP/规范/FAQ/Listing指南等非结构化内容
+    params_schema:
+      question:
+        type: string
+        required: true
+        description: 检索问题
+    planner_examples:
+    - question: Amazon FBA发货的标准操作流程SOP
     routed: true
     domain: knowledge
     risk_level: LOW
@@ -315,6 +331,15 @@ capabilities:
 
   - name: business.analyze
     skill: business_analysis
+    description: 对 SQL 查询结果进行业务分析，结合 RAG 知识库中的业务规则，生成风险洞察和行动建议。依赖前置 sql.query 步骤的 SQLResult。
+    params_schema:
+      sql_result:
+        type: object
+        required: true
+        auto: sql.query
+        description: 前置 sql.query 步骤产出的 SQLResult（由 previous_outputs 自动传递，无需手动指定）
+    planner_examples:
+    - sql_result: '{sql: ''SELECT ...'', tables: [''inventory.inventory''], rows: [...], ...}'
     routed: true
     domain: business
     risk_level: LOW
@@ -329,6 +354,27 @@ capabilities:
 
   - name: report.generate
     skill: report
+    description: 生成结构化 Markdown 报告（含图表），基于数据库中的实时数据。必须有前序步骤提供数据后再调用。
+    params_schema:
+      report_type:
+        type: string
+        required: true
+        enum:
+        - daily_sales
+        - product_performance
+        - inventory_health
+        - ad_performance
+        - order_fulfillment
+        - customer_analysis
+        description: 报告类型：daily_sales=销售日报, product_performance=商品动销, inventory_health=库存健康, ad_performance=广告效果, order_fulfillment=订单履约, customer_analysis=客户分析
+      filters:
+        type: object
+        required: false
+        description: '筛选条件字典，如 {''channel'': ''Amazon''}'
+    planner_examples:
+    - report_type: daily_sales
+      filters:
+        channel: Amazon
     routed: true
     domain: report
     risk_level: LOW
@@ -343,6 +389,72 @@ capabilities:
 
   - name: email.send
     skill: email
+    description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - send
+        - search
+        - read
+        - watch
+        description: 操作类型（默认 send）
+      to:
+        type: string
+        required: false
+        description: 收件人邮箱，多个用逗号分隔（send 必填）
+      subject:
+        type: string
+        required: false
+        description: 邮件主题（send 必填）
+      body:
+        type: string
+        required: false
+        description: 邮件正文（支持 Markdown/HTML）（send 必填）
+      cc:
+        type: string
+        required: false
+        description: 抄送邮箱
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复发信
+      query:
+        type: string
+        required: false
+        description: 搜索关键词（search 必填）
+      folder:
+        type: string
+        required: false
+        description: 文件夹 inbox/sent/trash/spam（search 可选）
+      message_id:
+        type: string
+        required: false
+        description: 邮件 ID，形如 msg_xxx（read 必填）
+      limit:
+        type: int
+        required: false
+        description: 返回条数（search 默认 10）
+      timeout_sec:
+        type: int
+        required: false
+        description: watch 等待窗口秒数（默认 120）
+    planner_examples:
+    - action: send
+      to: team@company.com
+      subject: 运营周报
+      body: '# 本周运营数据
+    
+    
+        ...'
+    - action: search
+      query: 发货单
+      folder: inbox
+    - action: read
+      message_id: msg_xxx
+    - action: watch
+      timeout_sec: 60
     routed: true
     domain: communication
     risk_level: HIGH
@@ -359,6 +471,72 @@ capabilities:
   # 未安装 CLI 时工具层返回不可用提示，不炸路由
   - name: email.search
     skill: email
+    description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - send
+        - search
+        - read
+        - watch
+        description: 操作类型（默认 send）
+      to:
+        type: string
+        required: false
+        description: 收件人邮箱，多个用逗号分隔（send 必填）
+      subject:
+        type: string
+        required: false
+        description: 邮件主题（send 必填）
+      body:
+        type: string
+        required: false
+        description: 邮件正文（支持 Markdown/HTML）（send 必填）
+      cc:
+        type: string
+        required: false
+        description: 抄送邮箱
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复发信
+      query:
+        type: string
+        required: false
+        description: 搜索关键词（search 必填）
+      folder:
+        type: string
+        required: false
+        description: 文件夹 inbox/sent/trash/spam（search 可选）
+      message_id:
+        type: string
+        required: false
+        description: 邮件 ID，形如 msg_xxx（read 必填）
+      limit:
+        type: int
+        required: false
+        description: 返回条数（search 默认 10）
+      timeout_sec:
+        type: int
+        required: false
+        description: watch 等待窗口秒数（默认 120）
+    planner_examples:
+    - action: send
+      to: team@company.com
+      subject: 运营周报
+      body: '# 本周运营数据
+    
+    
+        ...'
+    - action: search
+      query: 发货单
+      folder: inbox
+    - action: read
+      message_id: msg_xxx
+    - action: watch
+      timeout_sec: 60
     routed: true
     domain: communication
     risk_level: LOW
@@ -373,6 +551,72 @@ capabilities:
 
   - name: email.read
     skill: email
+    description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - send
+        - search
+        - read
+        - watch
+        description: 操作类型（默认 send）
+      to:
+        type: string
+        required: false
+        description: 收件人邮箱，多个用逗号分隔（send 必填）
+      subject:
+        type: string
+        required: false
+        description: 邮件主题（send 必填）
+      body:
+        type: string
+        required: false
+        description: 邮件正文（支持 Markdown/HTML）（send 必填）
+      cc:
+        type: string
+        required: false
+        description: 抄送邮箱
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复发信
+      query:
+        type: string
+        required: false
+        description: 搜索关键词（search 必填）
+      folder:
+        type: string
+        required: false
+        description: 文件夹 inbox/sent/trash/spam（search 可选）
+      message_id:
+        type: string
+        required: false
+        description: 邮件 ID，形如 msg_xxx（read 必填）
+      limit:
+        type: int
+        required: false
+        description: 返回条数（search 默认 10）
+      timeout_sec:
+        type: int
+        required: false
+        description: watch 等待窗口秒数（默认 120）
+    planner_examples:
+    - action: send
+      to: team@company.com
+      subject: 运营周报
+      body: '# 本周运营数据
+    
+    
+        ...'
+    - action: search
+      query: 发货单
+      folder: inbox
+    - action: read
+      message_id: msg_xxx
+    - action: watch
+      timeout_sec: 60
     routed: true
     domain: communication
     risk_level: LOW
@@ -388,6 +632,72 @@ capabilities:
   # 内部能力：watch 长轮询不适合对话内触发，供通知闭环/automation 消费
   - name: email.watch
     skill: email
+    description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - send
+        - search
+        - read
+        - watch
+        description: 操作类型（默认 send）
+      to:
+        type: string
+        required: false
+        description: 收件人邮箱，多个用逗号分隔（send 必填）
+      subject:
+        type: string
+        required: false
+        description: 邮件主题（send 必填）
+      body:
+        type: string
+        required: false
+        description: 邮件正文（支持 Markdown/HTML）（send 必填）
+      cc:
+        type: string
+        required: false
+        description: 抄送邮箱
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复发信
+      query:
+        type: string
+        required: false
+        description: 搜索关键词（search 必填）
+      folder:
+        type: string
+        required: false
+        description: 文件夹 inbox/sent/trash/spam（search 可选）
+      message_id:
+        type: string
+        required: false
+        description: 邮件 ID，形如 msg_xxx（read 必填）
+      limit:
+        type: int
+        required: false
+        description: 返回条数（search 默认 10）
+      timeout_sec:
+        type: int
+        required: false
+        description: watch 等待窗口秒数（默认 120）
+    planner_examples:
+    - action: send
+      to: team@company.com
+      subject: 运营周报
+      body: '# 本周运营数据
+    
+    
+        ...'
+    - action: search
+      query: 发货单
+      folder: inbox
+    - action: read
+      message_id: msg_xxx
+    - action: watch
+      timeout_sec: 60
     routed: false
     domain: communication
     risk_level: HIGH
@@ -396,6 +706,23 @@ capabilities:
 
   - name: data.export
     skill: data_export
+    description: 查询数据库并导出结果为 CSV 文件（UTF-8 BOM，Excel 可直接打开）。适用场景：导出报表、数据明细给业务团队。
+    params_schema:
+      question:
+        type: string
+        required: true
+        description: 自然语言查询问题（如 '上周各渠道销售额和订单数'）
+      filename:
+        type: string
+        required: false
+        description: 导出文件名（不含扩展名）
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复导出
+    planner_examples:
+    - question: 上周各渠道销售额和订单数
+      filename: weekly_sales
     routed: true
     domain: data
     risk_level: MEDIUM
@@ -410,6 +737,18 @@ capabilities:
 
   - name: web.search
     skill: web_search
+    description: 搜索外部网页，补充知识库未覆盖的最新信息（市场动态、竞品信息、行业趋势等）。仅在内部知识库无法回答时使用。
+    params_schema:
+      query:
+        type: string
+        required: true
+        description: 搜索关键词
+      num_results:
+        type: integer
+        required: false
+        description: 返回结果数（默认 5）
+    planner_examples:
+    - query: Amazon FBA fee changes 2026
     routed: true
     domain: knowledge
     risk_level: LOW
@@ -424,6 +763,22 @@ capabilities:
 
   - name: web.crawl
     skill: web_crawl
+    description: 抓取指定网页的正文内容，输出干净 Markdown。用于获取竞品页面详情、行业资讯全文、平台政策原文。建议先通过 web.search 发现目标链接后再调用本能力。
+    params_schema:
+      url:
+        type: string
+        required: true
+        description: 目标网页 URL（完整地址）
+      mode:
+        type: string
+        required: false
+        enum:
+        - markdown
+        - raw
+        description: markdown=干净正文（默认）, raw=原始 HTML
+    planner_examples:
+    - url: https://www.amazon.com/dp/B0EXAMPLE
+      mode: markdown
     routed: true
     domain: data
     risk_level: MEDIUM
@@ -438,6 +793,35 @@ capabilities:
 
   - name: data.collect
     skill: data_collection
+    description: 从外部数据源采集电商业务数据（商品/订单/店铺/库存/供应商），经 Pandas 清洗分析后写入数据库。支持本地文件和 HTTP API 两种数据源。
+    params_schema:
+      source:
+        type: string
+        required: true
+        description: '数据源标识: static://datasets/products.json 或 http://localhost:8001/mock/products'
+      target_table:
+        type: string
+        required: false
+        description: 目标数据库表名（默认 stg_products）
+      fetcher_type:
+        type: string
+        required: false
+        enum:
+        - static
+        - http
+        description: 数据源类型（默认 static）
+      dedup_keys:
+        type: string
+        required: false
+        description: 去重键字段，逗号分隔（如 SKU,仓库）
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复写入
+    planner_examples:
+    - source: static://datasets/products.json
+      target_table: stg_products
+      fetcher_type: static
     routed: true
     domain: data
     risk_level: MEDIUM
@@ -472,6 +856,36 @@ capabilities:
   # 不经主 Router（见 orchestration/graph/travel_prefilter.py）
   - name: travel.poi_search
     skill: travel_poi
+    description: 检索旅行目的地城市（当前支持：福州、厦门、杭州）的候选兴趣点（POI），返回含营业时段、坐标、票价、建议停留时长的结构化列表。适用于行程规划前的候选池获取，或选址/周边分析中的地点摸底。注意：返回的是候选池，不含排程、通勤与时间可行性校验。
+    params_schema:
+      city:
+        type: string
+        required: true
+        description: 目的地城市名，如「福州」「厦门」「杭州」
+      preferences:
+        type: string
+        required: false
+        description: 逗号分隔偏好标签：自然/人文/美食/亲子/购物/夜生活/摄影
+      avoid:
+        type: string
+        required: false
+        description: 逗号分隔的避雷关键词（地名或类别），命中即剔除
+      must_go:
+        type: string
+        required: false
+        description: 逗号分隔的必去地点名，命中项标记 required 并优先返回
+      limit:
+        type: integer
+        required: false
+        description: 返回条数上限（默认 20）
+    planner_examples:
+    - city: 福州
+      preferences: 人文,摄影
+      must_go: 三坊七巷
+      limit: 10
+    - city: 厦门
+      avoid: 购物
+      limit: 8
     routed: true
     domain: travel
     risk_level: LOW
@@ -486,6 +900,104 @@ capabilities:
 
   - name: map.lookup
     skill: map_lookup
+    description: 查询地理位置类事实：天气、地址与坐标互转、地点检索、路线规划与耗时、导航调起链接、静态地图图片、行政区划、街景。适用于「福州现在天气怎么样」「三坊七巷在哪」「从这里到机场要多久」「把这个地方画出来」这类问题。注意：本能力只回答事实查询，不做行程安排（排期请用旅行域能力）；坐标入参统一为「纬度,经度」；街景需企业开发者权限，未开通会返回明确指引。
+    params_schema:
+      action:
+        type: string
+        required: true
+        enum:
+        - weather
+        - geocode
+        - reverse_geocode
+        - place_search
+        - route
+        - navigation
+        - static_map
+        - district
+        - street_view
+        description: 查询类型：weather 天气 / geocode 地址转坐标 / reverse_geocode 坐标转地址 / place_search 地点检索 / route 路线规划 / navigation 导航调起 / static_map 静态图 / district 行政区划 / street_view 街景
+      city:
+        type: string
+        required: false
+        description: 城市名，如「福州」；weather/place_search/geocode 用于消歧
+      address:
+        type: string
+        required: false
+        description: 待解析的地址文本（geocode 用）
+      keyword:
+        type: string
+        required: false
+        description: 检索词（place_search/district 用，也可作为 geocode 的地址）
+      location:
+        type: string
+        required: false
+        description: 坐标「纬度,经度」（weather/reverse_geocode/static_map/street_view 用）
+      from_location:
+        type: string
+        required: false
+        description: 起点坐标「纬度,经度」（route/navigation 用）
+      to_location:
+        type: string
+        required: false
+        description: 终点坐标「纬度,经度」（route/navigation 用）
+      to_name:
+        type: string
+        required: false
+        description: 终点名称，显示在导航调起页上（navigation 用）
+      mode:
+        type: string
+        required: false
+        description: 出行方式：route 用 driving/walking/bicycling/transit；navigation 用 drive/walk/bus/bike（传前者会自动转换）
+      kind:
+        type: string
+        required: false
+        description: 天气类型：now 实时 / future 未来几天 / hourly 逐小时（默认 now）
+      near:
+        type: string
+        required: false
+        description: 周边检索中心坐标「纬度,经度」（place_search 用）
+      zoom:
+        type: integer
+        required: false
+        description: 静态图缩放级别 4~18，默认 14
+      size:
+        type: string
+        required: false
+        description: 静态图尺寸「宽*高」，默认 600*400
+      markers:
+        type: string
+        required: false
+        description: 静态图标注点，分号分隔，每项「纬度,经度」或「纬度,经度,标注字符」
+      radius_m:
+        type: integer
+        required: false
+        description: 半径（米）：place_search 默认 3000 / street_view 默认 50
+      page_size:
+        type: integer
+        required: false
+        description: 地点检索返回条数，默认 10，上限 20
+      district_id:
+        type: string
+        required: false
+        description: 行政区划 id（district 用，与 keyword 二选一）
+    planner_examples:
+    - action: weather
+      city: 福州
+    - action: geocode
+      address: 福州市鼓楼区南后街139号
+      city: 福州
+    - action: place_search
+      keyword: 咖啡
+      city: 福州
+      page_size: 5
+    - action: route
+      from_location: 26.0824,119.2968
+      to_location: 26.049,119.389
+      mode: driving
+    - action: static_map
+      location: 26.0824,119.2968
+      zoom: 13
+      markers: 26.0824,119.2968,A
     routed: true
     domain: travel
     risk_level: LOW
@@ -504,6 +1016,54 @@ capabilities:
   # 后正式纳入路由，规则强信号依旧优先生效。
   - name: competitor.analyze
     skill: competitor_analysis
+    description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - analyze
+        - watch
+        - history
+        - add
+        - remove
+        - toggle
+        - list
+        description: 操作类型（默认 analyze）
+      url:
+        type: string
+        required: false
+        description: 竞品页面完整 URL（analyze/history/add/remove/toggle 需要）
+      name:
+        type: string
+        required: false
+        description: 竞品名称（add 时可选）
+      question:
+        type: string
+        required: false
+        description: 用户原始问题（其中的 URL 会被自动提取）
+      enabled:
+        type: boolean
+        required: false
+        description: toggle 时是否启用（默认 True）
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复抓取或修改
+    planner_examples:
+    - action: analyze
+      url: https://item.jd.com/100012043978.html
+      question: 帮我分析这个竞品的价格
+    - action: watch
+      question: 巡检一下所有监控的竞品
+    - action: history
+      url: https://item.jd.com/100012043978.html
+      question: 这个竞品最近价格走势如何
+    - action: add
+      url: https://item.jd.com/100012043978.html
+      name: iPhone 15 Pro Max
+    - action: remove
+      url: https://item.jd.com/100012043978.html
     routed: true
     domain: business
     risk_level: LOW
@@ -520,6 +1080,54 @@ capabilities:
   # competitor.analyze 的 examples 承接，再经 action=watch 分发。
   - name: competitor.watch
     skill: competitor_analysis
+    description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - analyze
+        - watch
+        - history
+        - add
+        - remove
+        - toggle
+        - list
+        description: 操作类型（默认 analyze）
+      url:
+        type: string
+        required: false
+        description: 竞品页面完整 URL（analyze/history/add/remove/toggle 需要）
+      name:
+        type: string
+        required: false
+        description: 竞品名称（add 时可选）
+      question:
+        type: string
+        required: false
+        description: 用户原始问题（其中的 URL 会被自动提取）
+      enabled:
+        type: boolean
+        required: false
+        description: toggle 时是否启用（默认 True）
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复抓取或修改
+    planner_examples:
+    - action: analyze
+      url: https://item.jd.com/100012043978.html
+      question: 帮我分析这个竞品的价格
+    - action: watch
+      question: 巡检一下所有监控的竞品
+    - action: history
+      url: https://item.jd.com/100012043978.html
+      question: 这个竞品最近价格走势如何
+    - action: add
+      url: https://item.jd.com/100012043978.html
+      name: iPhone 15 Pro Max
+    - action: remove
+      url: https://item.jd.com/100012043978.html
     routed: false
     domain: business
     risk_level: HIGH
@@ -528,6 +1136,54 @@ capabilities:
 
   - name: competitor.history
     skill: competitor_analysis
+    description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
+    params_schema:
+      action:
+        type: string
+        required: false
+        enum:
+        - analyze
+        - watch
+        - history
+        - add
+        - remove
+        - toggle
+        - list
+        description: 操作类型（默认 analyze）
+      url:
+        type: string
+        required: false
+        description: 竞品页面完整 URL（analyze/history/add/remove/toggle 需要）
+      name:
+        type: string
+        required: false
+        description: 竞品名称（add 时可选）
+      question:
+        type: string
+        required: false
+        description: 用户原始问题（其中的 URL 会被自动提取）
+      enabled:
+        type: boolean
+        required: false
+        description: toggle 时是否启用（默认 True）
+      idempotency_key:
+        type: string
+        required: false
+        description: 客户端幂等键；重复提交同键不会重复抓取或修改
+    planner_examples:
+    - action: analyze
+      url: https://item.jd.com/100012043978.html
+      question: 帮我分析这个竞品的价格
+    - action: watch
+      question: 巡检一下所有监控的竞品
+    - action: history
+      url: https://item.jd.com/100012043978.html
+      question: 这个竞品最近价格走势如何
+    - action: add
+      url: https://item.jd.com/100012043978.html
+      name: iPhone 15 Pro Max
+    - action: remove
+      url: https://item.jd.com/100012043978.html
     routed: false
     domain: business
     risk_level: LOW

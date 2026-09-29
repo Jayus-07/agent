@@ -201,7 +201,9 @@ class TestNamingConvention:
             ],
             "capabilities": [
                 {"name": "x.y", "skill": "s", "routed": True, "examples": ["a", "b"],
-                 "domain": "knowledge"}
+                 "domain": "knowledge", "description": "测试能力",
+                 "params_schema": {"question": {"type": "string", "required": True}},
+                 "planner_examples": [{"question": "a"}]}
             ],
             "workflows": [{"name": "bad.name", "examples": ["a"]}],
         }

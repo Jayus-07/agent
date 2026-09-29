@@ -19,8 +19,8 @@ direct_executor / builder / system 重度消费的那一个 ——
 
 ADR-0001: 合并双注册表
   - 静态字典 CAPABILITY_MAP / CAPABILITY_SCHEMA 已废弃
-  - 改为从 backend.skills.registry 的 Skill 实例动态派生
-  - 单一事实来源：Skill 类自身的 description/params_schema/examples
+  - Capability business metadata 从 capabilities.yaml 派生
+  - Skill Registry 仅提供 executor node；兼容属性也由 manifest 启动期绑定
 
 Skill 自己持有 Tool，Tool 调用 Infrastructure。
 Planner → Capability → Skill → Tool → Infrastructure
@@ -63,7 +63,7 @@ def format_params_schema(schema_params: dict) -> str:
 class ToolRegistry:
     """Capability 派生注册表。
 
-    所有 capability 元数据从已注册的 Skill 实例派生（不是硬编码）：
+    capability→Skill node 从已注册的执行器派生；业务 metadata 从 manifest 派生：
       - CAPABILITY_MAP:    capability → 节点名（f"{skill.name}_skill"）
       - CAPABILITY_SCHEMA: capability → {description, params, 示例}
 
@@ -121,14 +121,16 @@ class ToolRegistry:
     @cached_property
     def CAPABILITY_SCHEMA(self) -> Dict[str, dict]:
         """派生：capability → Planner prompt schema"""
-        result = {}
-        for cap, inst in self._get_skill_registry().items():
-            result[cap] = {
-                "description": inst.description,
-                "params": dict(inst.params_schema),
-                "示例": inst.examples[0] if inst.examples else {},
+        from backend.orchestration.router.manifest import load_manifest
+
+        return {
+            declaration.name: {
+                "description": declaration.description,
+                "params": dict(declaration.params_schema),
+                "示例": dict(declaration.planner_examples[0]),
             }
-        return result
+            for declaration in load_manifest().capabilities
+        }
 
     # =====================================================
     # 公开 API（保持兼容）

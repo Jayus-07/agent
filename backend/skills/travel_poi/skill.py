@@ -17,29 +17,6 @@ from backend.tools.travel.poi import travel_poi_search_tool
 
 class TravelPoiSkill(BaseSkill):
     name = "travel_poi"
-    capabilities = ["travel.poi_search"]
-    description = (
-        "检索旅行目的地城市（当前支持：福州、厦门、杭州）的候选兴趣点（POI），"
-        "返回含营业时段、坐标、票价、建议停留时长的结构化列表。"
-        "适用于行程规划前的候选池获取，或选址/周边分析中的地点摸底。"
-        "注意：返回的是候选池，不含排程、通勤与时间可行性校验。"
-    )
-    params_schema = {
-        "city": {"type": "string", "required": True,
-                 "description": "目的地城市名，如「福州」「厦门」「杭州」"},
-        "preferences": {"type": "string", "required": False,
-                        "description": "逗号分隔偏好标签：自然/人文/美食/亲子/购物/夜生活/摄影"},
-        "avoid": {"type": "string", "required": False,
-                  "description": "逗号分隔的避雷关键词（地名或类别），命中即剔除"},
-        "must_go": {"type": "string", "required": False,
-                    "description": "逗号分隔的必去地点名，命中项标记 required 并优先返回"},
-        "limit": {"type": "integer", "required": False,
-                  "description": "返回条数上限（默认 20）"},
-    }
-    examples = [
-        {"city": "福州", "preferences": "人文,摄影", "must_go": "三坊七巷", "limit": 10},
-        {"city": "厦门", "avoid": "购物", "limit": 8},
-    ]
     # Tool 返回 JSON 字符串，声明 structured 让边界归一化成 dict
     output_type = "structured"
 

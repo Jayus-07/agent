@@ -464,7 +464,7 @@ cd backend
 |---|---|
 | capability 注册表从 Skill 派生（非硬编码） | `test_registry_consistency.py::TestCapabilityDerivation` |
 | manifest ↔ skills registry 双向对账 | `test_registry_consistency.py::TestCapabilityManifest` |
-| Skill `params_schema` 与 Tool 实际参数不脱节 | `test_registry_consistency.py::TestSkillToolAlignment` |
+| manifest `params_schema` 与 Tool 实际参数不脱节 | `test_registry_consistency.py::TestSkillToolAlignment` |
 | MCP 参数从 `args_schema` 派生 | `test_registry_consistency.py::TestMcpListToolsDerivation` |
 | 协议端点工具集 == `manager.discover()` | `test_registry_consistency.py::TestProtocolEndpointParity` |
 | 每个 Skill 的节点名同现在 `_skill_nodes` 与 `CAPABILITY_MAP` | `test_adr0001_dual_registry_merge.py` |

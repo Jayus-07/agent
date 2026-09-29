@@ -35,24 +35,6 @@ class BusinessAnalysisSkill(BaseSkill):
     """
 
     name = "business_analysis"
-    capabilities = ["business.analyze"]
-    description = (
-        "对 SQL 查询结果进行业务分析，结合 RAG 知识库中的业务规则，"
-        "生成风险洞察和行动建议。依赖前置 sql.query 步骤的 SQLResult。"
-    )
-    params_schema = {
-        # auto="<capability>": 参数由指定 capability 的 previous_outputs 自动
-        # 注入，不参与参数校验、不暴露给 function calling（tool_schema 转换器
-        # 据此剔除）。同时是 direct 模式自动补前置步骤的唯一声明源
-        # （direct_executor 读此字段，不再硬编码 _PREDECESSOR_CAPS）。
-        "sql_result": {"type": "object", "required": True, "auto": "sql.query",
-                       "description": "前置 sql.query 步骤产出的 SQLResult（由 previous_outputs 自动传递，无需手动指定）"},
-    }
-    examples = [
-        {
-            "sql_result": "{sql: 'SELECT ...', tables: ['inventory.inventory'], rows: [...], ...}"
-        }
-    ]
     # 输出契约：BusinessInsight.model_dump()（execute 已重写并用 Pydantic 收口）
     output_type = "structured"
 
