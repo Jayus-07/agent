@@ -15,11 +15,20 @@ from backend.shared.logger import logger
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
-# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：真身在 services/risk_service.py
-from backend.travel.services.risk_service import (  # noqa: F401
-    assess_risks,
-    retrieve_knowledge,
-)
+# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：委托 ResearchAgent
+from backend.travel.agents.research_agent import ResearchAgent
+
+_research = ResearchAgent()
+
+
+def assess_risks(itinerary):
+    """溯源与免责（Research 能力）：委托 ResearchAgent。"""
+    return _research.assess_risks(itinerary)
+
+
+def retrieve_knowledge(destination, preferences):
+    """知识库摘录（Research 能力）：委托 ResearchAgent。"""
+    return _research.retrieve_knowledge(destination, preferences)
 
 
 def risk_expert_node(state: dict) -> dict:

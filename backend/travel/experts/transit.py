@@ -24,14 +24,26 @@ from backend.travel.models.itinerary import CHANGE_INITIAL, KIND_VISIT
 from backend.travel.models.poi import Poi
 
 # 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：experts/__init__、
-# repair.py:26、test_p0_mvp 等的历史符号；算法真身在 services/transit_service.py
+# repair.py:26、test_p0_mvp 等的历史符号；rebuild_days 真身在
+# services/transit_service.py（repair 经此 re-export 零改动）
+from backend.travel.agents.optimization_agent import OptimizationAgent
 from backend.travel.services.transit_service import (  # noqa: F401
-    build_itinerary,
     order_pois,
-    prefetch_day_legs,
     rebuild_days,
     schedule_day,
 )
+
+_optimization = OptimizationAgent()
+
+
+def prefetch_day_legs(pois_by_day):
+    """路段预热（Optimization 能力）：委托 OptimizationAgent。"""
+    _optimization.prefetch_day_legs(pois_by_day)
+
+
+def build_itinerary(brief, pois_by_day):
+    """排程（Optimization 能力）：委托 OptimizationAgent。"""
+    return _optimization.build_itinerary(brief, pois_by_day)
 
 
 def transit_expert_node(state: dict) -> dict:

@@ -19,13 +19,27 @@ from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
 # 兼容面 + 节点调用面（本模块命名空间 = 测试补丁缝：存量测试
-# monkeypatch.setattr(W, "fetch_forecast", ...) 必须可拦截）
+# monkeypatch.setattr(W, "fetch_forecast", ...) 必须可拦截——委托函数
+# 整体可被替换，补丁语义不变）；纯解析器直通 service
+from backend.travel.agents.optimization_agent import OptimizationAgent
+from backend.travel.agents.research_agent import ResearchAgent
 from backend.travel.services.weather_service import (  # noqa: F401
     bad_weather_dates,
-    fetch_forecast,
     is_bad_weather,
-    plan_weather_swaps,
 )
+
+_research = ResearchAgent()
+_optimization = OptimizationAgent()
+
+
+def fetch_forecast(destination):
+    """预报获取（Research 能力）：委托 ResearchAgent。"""
+    return _research.fetch_forecast(destination)
+
+
+def plan_weather_swaps(itinerary, candidates, bad_dates):
+    """坏天气适应（Optimization 能力）：委托 OptimizationAgent。"""
+    return _optimization.plan_weather_swaps(itinerary, candidates, bad_dates)
 
 
 def weather_expert_node(state: dict) -> dict:

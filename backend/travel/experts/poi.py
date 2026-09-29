@@ -15,13 +15,24 @@ from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief
 from backend.travel.planning import resolve_must_go
 
-# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：算法真身在
-# services/poi_service.py，Phase 3 Commit B 起裸名改委托 Agent
-from backend.travel.services.poi_service import (  # noqa: F401
-    Skeleton,
-    build_skeleton,
-    retrieve_candidates,
-)
+# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：Agent 封装落地后，
+# 能力调用走 Node → Agent → Service；纯数据契约（Skeleton）直通 service
+from backend.travel.agents.planning_agent import PlanningAgent
+from backend.travel.agents.research_agent import ResearchAgent
+from backend.travel.services.poi_service import Skeleton  # noqa: F401
+
+_research = ResearchAgent()
+_planning = PlanningAgent()
+
+
+def retrieve_candidates(brief):
+    """候选检索（Research 能力）：委托 ResearchAgent。"""
+    return _research.retrieve_candidates(brief)
+
+
+def build_skeleton(brief, candidates):
+    """骨架分配（Planning 能力）：委托 PlanningAgent。"""
+    return _planning.build_skeleton(brief, candidates)
 
 
 def poi_expert_node(state: dict) -> dict:

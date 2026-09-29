@@ -11,8 +11,15 @@ from backend.shared.logger import logger
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
-# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：真身在 services/budget_service.py
-from backend.travel.services.budget_service import estimate_cost  # noqa: F401
+# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：委托 OptimizationAgent
+from backend.travel.agents.optimization_agent import OptimizationAgent
+
+_optimization = OptimizationAgent()
+
+
+def estimate_cost(days, party_size, city=""):
+    """费用核算（Optimization 能力）：委托 OptimizationAgent。"""
+    return _optimization.estimate_cost(days, party_size, city=city)
 
 
 def budget_expert_node(state: dict) -> dict:
