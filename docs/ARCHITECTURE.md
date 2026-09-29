@@ -2,63 +2,43 @@
 
 > 项目的"5 分钟看完"视图。配套阅读：[PRD.md](PRD.md) / [DESIGN.md](DESIGN.md) / [RAG_DESIGN.md](RAG_DESIGN.md) / [AGENT_DESIGN.md](AGENT_DESIGN.md) / [DATABASE.md](DATABASE.md) / [API.md](API.md) / [ROADMAP.md](ROADMAP.md)
 >
-> ⚠️ **2026-09-29 口径注**：本文保留 2026-08 的顶层视图骨架。当前权威视图（三张分层架构图 + 部署拓扑 + 端口表）见 [architecture/system-overview.md](architecture/system-overview.md)；与 8 月版的差异：鉴权已落地（JWT + 网关验签）、SQLite 散落存储已下线、向量存储统一 PG + pgvector、主图 9 核心节点 + 5 域图。
+> ⚠️ **2026-09-29 口径注**：§1 概览与数据流已按 **STOP A-H 冻结基线**刷新。分层权威视图 = [architecture/Architecture-Baseline.md](architecture/Architecture-Baseline.md)（Runtime 九层 + 请求生命周期，契约红线见 [Frozen-Contracts.md](architecture/Frozen-Contracts.md)）；部署权威 = [architecture/system-overview.md](architecture/system-overview.md)。与 8 月版的关键差异：主链路为**四分流**（域预过滤 + direct/workflow/plan/寒暄直答），plan 链只是支线之一；存储统一 PG + pgvector（SQLite / ChromaDB 均已下线）；鉴权落地（JWT + 网关验签）；主图 9 核心节点 + 5 域图。
 
 ---
 
 ## 1. 一页纸概览
 
 ```
-                           ┌─────────────────────────────────────┐
-   User (Browserr/CLI) ───►│         Next.js 14 Frontend         │
-                           │  /agent /knowledge /reports /...    │
-                           └────────────────┬────────────────────┘
-                                            │ HTTP / SSE
-                                            ▼
-                           ┌─────────────────────────────────────┐
-                           │      FastAPI Backend (8000)         │
-                           │  Router / Rate Limit / Auth (JWT+网关) │
-                           └────────────────┬────────────────────┘
-                                            ▼
-   ┌────────────────────────────────────────────────────────────────┐
-   │              LangGraph Multi-Agent Orchestration               │
-   │                                                                │
-   │  ┌─────────┐   ┌─────────┐   ┌──────────┐   ┌──────────┐     │
-   │  │ Planner │──►│Critique │──►│Supervisor│⇄►│  Skills  │     │
-   │  └─────────┘   └─────────┘   └────┬─────┘   └────┬─────┘     │
-   │                                     │              │          │
-   │                                     ▼              ▼          │
-   │                                ┌─────────────────────┐       │
-   │                                │      Reporter       │       │
-   │                                └─────────┬───────────┘       │
-   └──────────────────────────────────────────┼────────────────────┘
-                                              ▼
-                            ┌──────────────────────────────────┐
-                            │     5 大子系统（Skill 池）        │
-                            ├──────────────────────────────────┤
-                            │  RAG        SQL      Memory      │
-                            │  Report     Email    Web         │
-                            │  DataExport DataColl Workflow    │
-                            └──────────────────────────────────┘
-                                              │
-                            ┌─────────────────┼─────────────────┐
-                            ▼                 ▼                 ▼
-                  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-                  │  PostgreSQL  │   │  PG + pgvector│  │ SQLite       │
-                  │ agent_business│ │  向量+BM25    │  │ (已于 2026-09│
-                  │ agent_memory │   │  唯一存储     │  │  全量下线)   │
-                  └──────────────┘   └──────────────┘   └──────────────┘
+  用户（三端 Next.js :3100/:3200/:3300）
+        │ HTTP / SSE
+        ▼
+  APISIX 网关 :9080 ── JWT 验签 · 注入身份头（唯一入口）
+        ▼
+  ┌──────────────── Agent Platform（FastAPI :8000 + LangGraph）────────────────┐
+  │ Router Runtime ── 域预过滤 + 三层路由，拍板 route_mode                      │
+  │   ├─ 域命中 ──► Domain Runtime（3 顶级域 / 5 物理域图，自带专家与 reporter）│
+  │   ├─ direct/workflow ──► Capability Runtime（17 capability · 12 Skill）    │
+  │   ├─ plan ──► Plan Runtime（任务拆解 → 并行调度）──► Capability Runtime     │
+  │   └─ 寒暄/咨询 ──► general_chat 直答                                       │
+  │ Expert Runtime ── 域内专家公共生命周期（超时/异常/遥测钩子）                 │
+  │ Tool Contract Boundary ── 两型输出契约（text/structured）+ 边界归一          │
+  │ Tool Runtime ── 执行治理（超时/重试/熔断/隔离舱）   Integration Adapter(MCP)│
+  │ Shared Governance ── 认证 · 记忆 · 上下文预算 · 模型治理 · 幂等 · 可观测     │
+  └────────────────────────────────┬───────────────────────────────────────────┘
+                                   ▼
+        PostgreSQL + pgvector（agent_business / agent_memory，唯一存储）
+        Redis + Celery 双队列 · rag-service :8090 · mcp-service :8091
 ```
 
 **核心链路（用户问问题）**：
 
 ```
-1. 用户 input → POST /chat/stream
-2. FastAPI → MultiAgentSystem.stream_events()
-3. Planner 生成 DAG → Critique 审查 → Supervisor 调度
-4. Skill 并行执行（多路 RAG / SQL / Report）
-5. Reporter 汇总 → SSE 流式输出 → 前端增量渲染
-6. 写入 Trace（每请求一棵 Span 树）
+1. 用户 input → POST /chat/stream（网关验签 → Input Guard → 记忆装配 → 指代解析）
+2. Router Runtime：域预过滤优先，三层路由拍板 route_mode
+3. 按路由分流：direct 直连 / workflow 预定义编排 / plan 拆解并行 / 域图接管 / 寒暄直答
+4. 能力执行：Skill → Tool Contract Boundary 归一 → Tool Runtime 治理执行
+5. Reporter / 域图 reporter 汇总 → SSE 流式输出 → 前端增量渲染
+6. 写入 Trace（每请求一棵 Span 树）+ memory.end_turn
 ```
 
 ---
@@ -140,15 +120,20 @@
         ↓
 [ThreadPoolExecutor] 启动 producer()
         ↓
-[MultiAgentSystem.stream_events()]
-   ├─ Planner  → 生成 DAG
-   ├─ Critique → 审查
-   ├─ Supervisor → 调度
-   ├─ Skills (Send[] 并行):
-   │   ├─ SQLSkill → SQL Agent → 6 层校验 → PG
-   │   ├─ RAGSkill → 6 段流水线 → ChromaDB
-   │   └─ ReportSkill → DataFetcher → 模板引擎 → 图表
-   └─ Reporter → 汇总 → SSE 编码
+[GraphRunner 前置] Input Guard 门禁 → memory.start_session → Follow-up 指代解析
+        ↓
+[Router Runtime] 域预过滤（客服锁域/旅游/选品）→ 三层路由拍板 route_mode
+   ├─ direct:  tool_selector → skill_executor（直连能力）
+   ├─ workflow: workflow_executor（预定义编排）
+   ├─ plan:    任务拆解 → 并行调度（Send）→ Skills
+   ├─ 域命中:   Domain Runtime 域图接管（客服/旅游/选品…）
+   └─ 寒暄/咨询: general_chat 直答
+[Skills（主图支线经 Tool Contract Boundary 归一 → Tool Runtime 治理执行）]:
+   ├─ SQLSkill → SQL Agent → 6 层校验 → PG
+   ├─ RAGSkill → 6 段流水线 → PG + pgvector
+   └─ ReportSkill → DataFetcher → 模板引擎 → 图表
+        ↓
+[Reporter / 域图自有 reporter] 汇总 → SSE 编码
         ↓
 [event_generator() 异步取事件 → yield "event: type\ndata: {...}\n\n"]
         ↓
@@ -169,8 +154,8 @@
    ④ index_dedup      → SHA256 比对
    ⑤ index_chunk      → ChunkStrategyRouter + ChunkFilter
    ⑥ index_metadata   → LLM+规则: 分类/摘要/关键词/实体
-   ⑦ index_embed      → HuggingFace 嵌入
-   ⑧ index_vector_db  → ChromaKB.add_documents()
+   ⑦ index_embed      → 模型网关 embedding（DB 治理注册表）
+   ⑧ index_vector_db  → PG + pgvector（rag_vectors）写入
    ⑨ registry         → DocumentRegistry.register()
         ↓
 [Trace 上报 SSE] → 前端 /knowledge/operations/traces/{id}
@@ -205,7 +190,7 @@
    → evaluate_thresholds → alert_state_machine
    → create_event → load_policies → send_alert_email
         ↓
-[DB inventory_alerts.db（SQLite ⚠️）]
+[PostgreSQL（SQLite 散落存储已于 2026-09 全量下线）]
         ↓
 [前端 /alerts 页面]
 ```
