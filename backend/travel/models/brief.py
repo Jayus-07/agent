@@ -89,6 +89,13 @@ class TravelBrief(BaseModel):
     start_date: date | None = None
     days: int | None = None
     party_size: int = 1
+    # 成人/儿童显式拆分（Phase 2，D4 修复）：仅存用户显式表达（「2个大人」
+    # 「1个小孩」）；party_size 为派生语义——adults 显式时 = adults +
+    # (children or 0)，由 RequirementAgent/RequirementService 唯一写点维护，
+    # 本模型不做自动派生（兼容存量 checkpoint 反序列化）。不参与指纹
+    # （party_size 已在指纹内，经派生传导）。
+    adults: int | None = Field(default=None, ge=1)
+    children: int | None = Field(default=None, ge=0)
     budget_cny: float | None = None
     preferences: list[str] = Field(default_factory=list)
     must_go: list[str] = Field(default_factory=list)
