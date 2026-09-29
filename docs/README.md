@@ -33,6 +33,7 @@
 |---|---|
 | [architecture/system-overview.md](architecture/system-overview.md) | 部署拓扑 / 端口表 / 异步层 / 网关认证（承接 README 收敛出的部署细节） |
 | [architecture/ai-runtime.md](architecture/ai-runtime.md) | 主图节点职责 / 域图细节 / 客服锁域 / 跨轮状态契约（承接 README 收敛出的编排细节） |
+| [architecture/domain-service-map.md](architecture/domain-service-map.md) | 域图 × 专家 × 工具 × 第三方服务 × 凭据地图：每个专家用什么、调什么外部服务、凭据怎么管、挂了怎么降级（2026-09-29 新建） |
 | [architecture/adr/0001-merge-dual-registry.md](architecture/adr/0001-merge-dual-registry.md) | 决策：合并双注册表 |
 | [architecture/adr/0002-ragchain-decomposition.md](architecture/adr/0002-ragchain-decomposition.md) | 决策：RAGChain 拆解 |
 | [architecture/adr/0003-directory-layering.md](architecture/adr/0003-directory-layering.md) | 决策：目录分层规范 |

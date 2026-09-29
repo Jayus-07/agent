@@ -90,6 +90,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 ## 相关文档
 
+- [domain-service-map.md](domain-service-map.md) — 域图 × 专家 × 工具 × 第三方服务 × 凭据地图（依赖/降级/治理）
 - [2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](../2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md) — 四层定义与例外台账
 - [2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](../2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md) — 新增资产 checklist
 - [OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md](../OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md) — Celery 异步运行时
