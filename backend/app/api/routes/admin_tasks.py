@@ -49,9 +49,30 @@ def _cooldown(task_id: str) -> None:
         _op_last[task_id] = now
 
 
-def _audit(actor: str, action: str, task_id: str, result: str) -> None:
+def _audit(actor: str, action: str, task_id: str, result: str, *,
+           reason: str = "", before_status: str = "", after_status: str = "",
+           new_task_id: str = "") -> None:
+    """审计双写：结构化日志（原有）+ ai.task_operation_audits（M10 补，软失败）。"""
     logger.warning("[AdminTaskAudit] actor=%s action=%s task=%s result=%s",
                    actor, action, task_id, result)
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            conn.cursor().execute(
+                """
+                INSERT INTO ai.task_operation_audits (
+                    task_id, new_task_id, operation, actor, reason,
+                    before_status, after_status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (task_id, new_task_id or None, action, actor, reason[:500],
+                 before_status, after_status),
+            )
+            conn.commit()
+    except Exception as e:  # noqa: BLE001 — 审计软失败不阻断操作
+        logger.warning(f"[AdminTaskAudit] DB 审计写入失败（日志已在）: {e}")
 
 
 # ═══════════════════════════════════════════════════
@@ -94,6 +115,55 @@ async def admin_task_stats(request: Request,
                            hours: float = Query(24, gt=0, le=24 * 90)):
     await require_admin_operator(request)
     return task_service.stats_tasks(hours=hours)
+
+
+# ═══════════════════════════════════════════════════
+# GET /admin/tasks/queues — 队列 backlog（M10；须在 /{task_id} 前注册）
+# ═══════════════════════════════════════════════════
+
+@router.get("/queues")
+async def admin_task_queues(request: Request):
+    """五队列等待深度 + worker 存活（Redis LLEN 直读，本机自包含）。"""
+    await require_admin_operator(request)
+    from backend.config.tasks import (
+        CELERY_AGENT_QUEUE,
+        CELERY_MAINTENANCE_QUEUE,
+        CELERY_METADATA_SHADOW_QUEUE,
+        CELERY_RAG_INDEX_QUEUE,
+        CELERY_REPORT_QUEUE,
+    )
+
+    queues = {
+        "agent": CELERY_AGENT_QUEUE,
+        "rag_index": CELERY_RAG_INDEX_QUEUE,
+        "metadata_shadow": CELERY_METADATA_SHADOW_QUEUE,
+        "report": CELERY_REPORT_QUEUE,
+        "maintenance": CELERY_MAINTENANCE_QUEUE,
+    }
+    depths: dict[str, int | None] = {}
+    try:
+        from backend.infra.redis.client import get_redis
+
+        r = get_redis()
+        for logical, physical in queues.items():
+            try:
+                depths[logical] = int(r.llen(physical))
+            except Exception:
+                depths[logical] = None
+    except Exception as e:  # noqa: BLE001 — Redis 不可达时仍返回骨架
+        logger.warning(f"[AdminTasksAPI] 队列深度读取失败: {e}")
+        depths = {logical: None for logical in queues}
+    workers: list[str] = []
+    try:
+        workers = list(task_manager.celery_app.control.ping(timeout=2.0) or []) \
+            if hasattr(task_manager, "celery_app") else []
+    except Exception:
+        workers = []
+    return {
+        "queues": [{"logical": logical, "physical": physical,
+                    "waiting": depths.get(logical)} for logical, physical in queues.items()],
+        "workers_online": len(workers),
+    }
 
 
 # ═══════════════════════════════════════════════════
@@ -145,7 +215,9 @@ async def admin_retry_task(task_id: str, body: AdminOpRequest, request: Request)
         raise HTTPException(status_code=404, detail="任务不存在")
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    _audit(actor, "retry", task_id, f"reason={body.reason or '-'}")
+    _audit(actor, "retry", task_id, f"reason={body.reason or '-'}",
+           reason=body.reason, before_status=record.status.value,
+           after_status="PENDING")
     return {"task_id": task_id, "status": "PENDING", "message": "已重新入队（checkpoint 续跑）"}
 
 
@@ -176,6 +248,94 @@ async def admin_revoke_task(task_id: str, body: AdminOpRequest, request: Request
                if result.get("forced")
                else "撤销请求已下发（节点边界生效 / 队列内直接 revoke）")
     _audit(actor, "revoke", task_id,
-           f"reason={body.reason or '-'} forced={result.get('forced')}")
+           f"reason={body.reason or '-'} forced={result.get('forced')}",
+           reason=body.reason, before_status=record.status.value,
+           after_status=result.get("status", ""))
     return {"task_id": task_id, "status": result.get("status", ""),
             "forced": result.get("forced", False), "message": message}
+
+
+# ═══════════════════════════════════════════════════
+# POST /admin/tasks/{task_id}/reexecute — 克隆重执行（M10）
+# ═══════════════════════════════════════════════════
+
+@router.post("/{task_id}/reexecute")
+async def admin_reexecute_task(task_id: str, body: AdminOpRequest, request: Request):
+    """从头重跑：以原任务 input 克隆新任务（parent_task_id 关联源任务）。
+
+    与 retry（checkpoint 续跑）的区别：SUCCESS/CANCELLED 终态封闭是冻结
+    语义（models/task.py 状态机白名单），本端点**不解锁状态机**——克隆是
+    新任务新 thread_id，从头执行。任何状态都可克隆。
+    """
+    await require_admin_operator(request)
+    actor = request.state.actor if hasattr(request.state, "actor") else "admin"
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="需要 confirm=true（二次确认）")
+    record = task_service.get_task(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    _cooldown(task_id)
+    source_input = record.input if isinstance(record.input, dict) else {}
+    query = str(source_input.get("query", ""))
+    extra = {k: v for k, v in source_input.items() if k != "query"}
+    from backend.tasks.queue_router import QueueRoutingError
+
+    try:
+        clone = task_service.create_task(
+            record.user_id, query,
+            tenant_id=record.tenant_id,
+            graph_name=record.graph_name,
+            conversation_id=record.conversation_id or "",
+            biz_type=record.biz_type or "",
+            biz_id=record.biz_id or "",
+            parent_task_id=record.id,
+            extra_input=extra or None,
+        )
+        task_manager.enqueue_task(clone)
+    except QueueRoutingError:
+        raise HTTPException(status_code=400, detail="源任务 workflow 未登记队列路由，无法克隆")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("[AdminTasksAPI] reexecute 克隆失败: %s", task_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="任务队列暂不可用，克隆失败")
+    _audit(actor, "reexecute", task_id,
+           f"reason={body.reason or '-'} new_task={clone.id}",
+           reason=body.reason, before_status=record.status.value,
+           after_status="PENDING", new_task_id=clone.id)
+    return {"task_id": clone.id, "source_task_id": task_id,
+            "status": "PENDING", "message": "已克隆新任务从头执行"}
+
+
+# ═══════════════════════════════════════════════════
+# GET /admin/tasks/{task_id}/operations — 操作审计历史（M10）
+# ═══════════════════════════════════════════════════
+
+@router.get("/{task_id}/operations")
+async def admin_task_operations(task_id: str, request: Request):
+    await require_admin_operator(request)
+    if task_service.get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT operation, actor, reason, before_status, after_status, "
+                "new_task_id, created_at FROM ai.task_operation_audits "
+                "WHERE task_id = %s ORDER BY id DESC LIMIT 100", (task_id,))
+            rows = cur.fetchall()
+    except Exception as e:  # noqa: BLE001 — 审计查询软失败
+        logger.warning(f"[AdminTasksAPI] 操作审计查询失败: {e}")
+        rows = []
+    return {"operations": [
+        {"operation": r[0], "actor": r[1], "reason": r[2],
+         "before_status": r[3], "after_status": r[4],
+         "new_task_id": r[5] or "", "created_at": str(r[6])}
+        for r in rows
+    ]}
+
+
+
