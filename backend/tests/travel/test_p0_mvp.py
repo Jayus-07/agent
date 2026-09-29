@@ -156,3 +156,23 @@ def test_ics_escapes_special_chars():
     from backend.app.api.routes.travel import _ics_escape
 
     assert _ics_escape("a,b;c\\d\ne") == "a\\,b\\;c\\\\d\\ne"
+
+
+def test_ics_content_disposition_chinese_destination():
+    """D1 回归：中文目的地导出 ICS 时 Content-Disposition 必须可按 HTTP 头编码。
+
+    星座框架发送响应头前会做 latin-1 编码，中文直接内嵌 filename 必 500。
+    修复后：ASCII fallback 固定名 + filename*=UTF-8'' 百分号编码携带真实名。
+    """
+    from urllib.parse import unquote
+
+    from backend.app.api.routes.travel import ics_content_disposition
+
+    header = ics_content_disposition("杭州")
+    # 强断言：头值必须能按 HTTP 头编码（修复前这里抛 UnicodeEncodeError）
+    header.encode("latin-1")
+    assert header.startswith('attachment; filename="travel-plan.ics"')
+    assert "filename*=UTF-8''" in header
+    # 百分号编码无损往返：解码还原出原始目的地
+    encoded_part = header.split("filename*=UTF-8''", 1)[1].removesuffix(".ics")
+    assert unquote(encoded_part) == "杭州"

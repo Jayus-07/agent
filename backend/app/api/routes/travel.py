@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -175,6 +176,16 @@ def itinerary_to_ics(itinerary: dict) -> str:
     return "\r\n".join(lines) + "\r\n"
 
 
+def ics_content_disposition(destination: str) -> str:
+    """构造 RFC 6266 合规的 Content-Disposition。
+
+    HTTP 头只能 latin-1 编码，中文目的地直接内嵌 filename 会 500（D1）。
+    ASCII fallback 用固定名，真实文件名经 filename*=UTF-8'' 百分号编码携带。
+    """
+    encoded = quote(destination, safe="")
+    return f"attachment; filename=\"travel-plan.ics\"; filename*=UTF-8''{encoded}.ics"
+
+
 @router.post("/export/ics", summary="行程导出为 ICS 日历文件",
              responses={200: {"content": {"text/calendar": {}}}})
 async def travel_export_ics(request: Request):
@@ -202,8 +213,7 @@ async def travel_export_ics(request: Request):
     return Response(
         content=ics_text,
         media_type="text/calendar; charset=utf-8",
-        headers={"Content-Disposition":
-                 f'attachment; filename="travel-{filename}.ics"'},
+        headers={"Content-Disposition": ics_content_disposition(filename)},
     )
 
 
