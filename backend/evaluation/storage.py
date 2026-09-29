@@ -75,6 +75,8 @@ def collect_env_info() -> dict[str, str]:
         ).strip() if _cmd_exists("python") else "unknown",
         "trigger": os.getenv("EVAL_TRIGGER", "manual"),
         "ci_pr": os.getenv("GITHUB_PR_NUMBER", ""),
+        # M7：触发者身份（CLI --triggered-by / admin 发起时由调用方注入）
+        "triggered_by": os.getenv("EVAL_TRIGGERED_BY", ""),
     }
     return env
 
@@ -189,7 +191,10 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
         "dataset_version": {
             m.module: get_dataset_version(m.module) for m in report.summaries
         },
-        "prompt_versions": collect_prompt_versions(),
+        # M7 口径修正：PG 权威优先（prompts 表活跃版本），DB 不可达回退
+        # 下方 yaml 文件扫描（旧口径保留在 meta.prompt_versions_yaml_source）
+        "prompt_versions": _collect_prompt_versions_authoritative(),
+        "prompt_versions_yaml_source": collect_prompt_versions(),
         "env": collect_env_info(),
         "run_at": datetime.now().isoformat(),
     }
@@ -198,8 +203,29 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
         encoding="utf-8",
     )
 
+    # 4. run 级摘要落 DB 台账（M7：ai.eval_run_records，软失败不影响文件主流程）
+    try:
+        from backend.evaluation.run_records import record_run
+
+        record_run(report, run_id, meta)
+    except Exception as e:  # noqa: BLE001 — 台账软失败
+        print(f"[storage] eval_run_records 台账写入失败（不影响文件）: {e}")
+
     print(f"[storage] 报告已持久化到: {run_dir}")
     return run_dir
+
+
+def _collect_prompt_versions_authoritative() -> dict[str, str]:
+    """PG 权威 prompt 版本快照，失败回退 yaml 扫描（口径见 run_records D7）。"""
+    try:
+        from backend.evaluation.run_records import collect_prompt_snapshot
+
+        snapshot = collect_prompt_snapshot()
+        if snapshot:
+            return {k: str(v) for k, v in snapshot.items()}
+    except Exception:
+        pass
+    return collect_prompt_versions()
 
 
 

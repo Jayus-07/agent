@@ -171,6 +171,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 成本六维聚合补齐 Skill/Tool/Agent 维度。与 llm_usage_store_pg
     # ensure_schema 自愈段同口径。
     "055_llm_usage_attribution.sql": "memory",
+    # 企业治理 M7（2026-09-30）：评测 run 台账（索引非替代，明细仍在
+    # data/eval_runs 文件），prompt/模型指纹/触发者随行落库。
+    "056_eval_run_records.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

@@ -171,8 +171,16 @@ def main():
         "--full-trace", action="store_true",
         help="per_case 保留完整 page_content 与 span input/output（默认瘦身）",
     )
+    parser.add_argument(
+        "--triggered-by", type=str, default=None, metavar="ACTOR",
+        help="触发者身份（M7：落 eval_run_records.triggered_by；"
+             "admin 发起时传操作者，CI 传 pipeline 名）",
+    )
 
     args = parser.parse_args()
+    if args.triggered_by:
+        import os as _os
+        _os.environ["EVAL_TRIGGERED_BY"] = args.triggered_by
 
     # RAGPipeline 会在 runner 执行阶段读取进程内 DB 覆盖层，必须先刷新。
     _bootstrap_llm_registry()
