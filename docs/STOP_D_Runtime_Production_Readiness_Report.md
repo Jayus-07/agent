@@ -11,11 +11,13 @@
 
 ```ini
 CHECKPOINT_RECOVERY_CONTRACT_PASS=true
+POSTGRES_CHECKPOINT_PASS=true
 ERROR_FALLBACK_PASS=true
 RUNTIME_TRACE_PASS=true
 TOKEN_ACCOUNTING_PASS=true
 CONCURRENCY_SMOKE_PASS=true
 REGISTRY_LAYER_GUARDS_PASS=true
+GATEWAY_HEALTH_LOAD_PASS=true
 ```
 
 当前最终 verdict：
@@ -25,7 +27,7 @@ STOP_D_PASS=false
 RUNTIME_PRODUCTION_READY=false
 ```
 
-原因不是本次代码矩阵失败，而是生产 PostgreSQL checkpoint 复验未完成：既有真实 PostgreSQL checkpoint 用例 4 个在获取连接时 `psycopg_pool.PoolTimeout`，无法把共享环境的连接池阻塞误报为“生产已就绪”。待释放连接或在隔离环境复验后，再将最终 verdict 更新为 true。
+真实 PostgreSQL checkpoint 已在明确 IPv4 地址后复验通过；当前仍未通过最终门禁的原因是高并发网关健康检查的尾延迟较高，且尚未在受控凭证下压测 `/chat/stream` 主链路。不能把只读健康端点结果直接等同于完整 Agent 请求生产就绪。
 
 ## 2. Runtime 架构边界审计
 
@@ -91,13 +93,21 @@ D:/Python/python.exe -m pytest tests/test_registry_consistency.py tests/test_lay
 - `RequestContext` 可恢复 `user_id`、`tenant_id`、`roles`、`data_scope`。
 - 恢复后的上下文 `bind_sink=False`，不会覆盖当前线程的流式 sink/trace。
 
-既有真实 PostgreSQL checkpoint 回归结果：99 个用例通过，4 个 setup error，均为：
+既有真实 PostgreSQL checkpoint 首轮回归结果：99 个用例通过，4 个 setup error，均为：
 
 ```text
 psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec
 ```
 
-数据库容器只读核查显示 `agent-postgres-1` healthy，但 `agent_memory` 当前存在 50 个 idle 连接。未执行强制断连、重启或清理共享连接，因此生产 PostgreSQL 恢复证据暂记 `DEFERRED`。
+根因复核：测试配置使用 `localhost:5433`。Windows/psycopg 先尝试 IPv6 `::1`，约 5 秒后才落到 IPv4，连接池初始化窗口内反复等待，最终表现为 `PoolTimeout`。Docker PostgreSQL 当时 healthy，现有约 46 个 idle 连接分别来自 app/worker 的正常连接池，并非测试残留，也没有 `idle in transaction`。没有执行无目标的 `pg_terminate_backend`；宿主机测试连接数为 0，因此不存在需要强制释放的测试连接。
+
+使用明确 IPv4 和项目端口复验：
+
+```text
+$env:PGHOST='127.0.0.1'; $env:PGPORT='5433'
+D:/Python/python.exe -m pytest tests/test_task_checkpoint_recovery.py -q --no-cov
+4 passed in 9.70s
+```
 
 ## 5. 异常与降级矩阵
 
@@ -117,7 +127,7 @@ psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec
 
 ## 6. 并发与资源保护
 
-这是本地受控 `_PriorityGate` smoke，不是对共享 Docker、Redis、PostgreSQL 或外部 LLM 的压测。
+这是两层证据：本地受控 `_PriorityGate` smoke，以及经 APISIX `127.0.0.1:9080` 的真实只读网关健康检查负载。后者不写业务数据、不调用 LLM。
 
 | 并发数 | P50 | P95 | P99 | error rate | active/queued 收口 |
 |---:|---:|---:|---:|---:|---|
@@ -127,7 +137,17 @@ psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec
 
 另验证：排队超时快速返回、high 优先级在 normal 前唤醒，且释放后 active 归零。
 
-真实生产依赖压测（10/50/100 请求打到 APISIX、Redis、PostgreSQL、LLM provider）未执行，避免影响其他会话和共享容器，记为 `DEFERRED`。
+真实网关健康检查负载结果：
+
+| 并发数 | P50 | P95 | P99 | error rate | 说明 |
+|---:|---:|---:|---:|---:|---|
+| 10 | 904.52 ms | 915.26 ms | 915.26 ms | 0% | 首轮冷请求 |
+| 50 | 3895.01 ms | 5114.30 ms | 5117.52 ms | 0% | 60s 客户端窗口 |
+| 100 | 7124.95 ms | 10310.96 ms | 10325.12 ms | 0% | 60s 客户端窗口 |
+
+首轮 20s 客户端窗口下，50 并发全部 ReadTimeout，但 app 日志最终均返回 200；延长窗口后 50/100 均 0 错误，说明主要问题是冷/高并发尾延迟，而非连接泄漏。
+
+尚未执行带真实用户凭证的 `/chat/stream` 10/50/100 负载；该路径会触发 LLM 与业务链路，需单独压测窗口，记为 `DEFERRED`。
 
 ## 7. Token 与成本治理
 
@@ -159,8 +179,9 @@ psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec
 
 | 风险 | 状态 | 后续 |
 |---|---|---|
-| PostgreSQL checkpoint 连接池耗尽/长期 idle | DEFERRED | 在隔离窗口释放连接或重启专用测试实例后重跑 4 个真实 checkpoint 用例 |
-| APISIX + Redis + PG + LLM 真实 10/50/100 压测 | DEFERRED | 单独压测窗口执行，记录 provider 限流、队列等待、PG pool、Redis 延迟 |
+| PostgreSQL 测试使用 localhost 导致 IPv6 首次连接慢 | 已定位 | 测试命令固定 `PGHOST=127.0.0.1`；生产容器使用服务名不受此问题影响 |
+| APISIX 健康检查高并发尾延迟 | 已观测 | 继续拆分健康检查依赖耗时；不在 STOP D 扩大架构改造 |
+| APISIX + Redis + PG + LLM 真实 `/chat/stream` 10/50/100 压测 | DEFERRED | 需要受控凭证和独立压测窗口，记录 provider 限流、队列等待、PG pool、Redis 延迟 |
 | 外部 provider token/cost 实账 | DEFERRED | 使用带 usage 的测试凭证执行一次受控调用，核对 llm_usage 明细 |
 | 生产告警阈值与 SLO | DEFERRED | 由部署环境按现有 Prometheus 指标配置，不在 STOP D 改架构 |
 
@@ -168,7 +189,7 @@ psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec
 
 STOP D 的本地代码契约、异常治理、Trace、Token 记账和并发门验证均通过；并发门残留 waiter 已修复并回归通过。
 
-由于真实 PostgreSQL checkpoint 连接池当前不可用，以及真实外部依赖压测尚未执行，本报告不宣称“生产已就绪”：
+由于完整 `/chat/stream` 真实负载尚未执行，且健康检查在 100 并发时 P99 约 10.3 秒，本报告不宣称“生产已就绪”：
 
 ```ini
 STOP_D_PASS=false
