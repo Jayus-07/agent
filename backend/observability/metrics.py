@@ -639,6 +639,12 @@ agent_tool_circuit_open_total = Counter(
     "熔断器进入 OPEN 的次数（按 tool）",
     labelnames=("tool",),
 )
+agent_tool_error_class_total = Counter(
+    "agent_tool_error_class_total",
+    "Tool 失败按统一错误七分类计数（error_class=observability.error_taxonomy 口径；"
+    "success 不计）",
+    labelnames=("tool", "domain", "error_class"),
+)
 agent_request_degraded_total = Counter(
     "agent_request_degraded_total",
     "业务结果为 degraded 的请求数",

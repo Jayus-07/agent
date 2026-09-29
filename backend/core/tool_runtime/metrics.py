@@ -20,9 +20,24 @@ def _record(metric_name: str, labels: dict, value: float = 1) -> None:
         pass
 
 
+def _record_unified_error_class(result: ToolResult, domain: str) -> None:
+    """失败结果按统一七分类计数（M3），分类失败静默不影响主路径。"""
+    try:
+        from backend.observability.error_taxonomy import SUCCESS, unify_tool_status
+
+        error_class = unify_tool_status(result.status)
+        if error_class != SUCCESS:
+            _record("agent_tool_error_class_total",
+                    {"tool": result.tool_name, "domain": domain, "error_class": error_class})
+    except Exception:  # pragma: no cover — 分类失败不影响指标主路径
+        pass
+
+
 def record_tool_result(result: ToolResult, domain: str) -> None:
     labels = {"tool": result.tool_name, "domain": domain, "status": result.status.value}
     _record("agent_tool_calls_total", labels)
+    if result.status is not ToolStatus.SUCCESS:
+        _record_unified_error_class(result, domain)
     if result.status is ToolStatus.TIMEOUT:
         _record("agent_tool_timeout_total", {"tool": result.tool_name, "domain": domain})
     elif result.status is ToolStatus.RATE_LIMITED or result.status is ToolStatus.FAILED or result.status is ToolStatus.UNAVAILABLE:
