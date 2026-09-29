@@ -45,6 +45,8 @@ router = APIRouter(prefix="/prompts", tags=["Prompt管理"])
 
 class DraftRequest(BaseModel):
     template: str
+    # M4：版本语义 major(行为改变)/minor(能力增强)/patch(文字修复)；缺省 NULL=未标注
+    change_kind: str | None = None
     change_note: str = ""
 
 
@@ -296,6 +298,11 @@ async def get_prompt(
     result["source"] = "db"
     result["code_controlled"] = spec.code_controlled
     result["required_substrings"] = list(spec.required_substrings)
+    # M4：命名指针视图（production 与 active_version 同步；staging 预发指向）
+    try:
+        result["aliases"] = await prompt_service.get_aliases(key)
+    except Exception:
+        result["aliases"] = {}
     return result
 
 
@@ -418,9 +425,15 @@ async def create_draft(
 
     _check_permission(spec.risk_level, "draft", operator.role)
 
+    if body.change_kind is not None and body.change_kind not in ("major", "minor", "patch"):
+        raise HTTPException(
+            422, f"change_kind 必须是 major/minor/patch，实际: {body.change_kind!r}"
+        )
+
     try:
         result = await prompt_service.create_draft(
             key, body.template,
+            change_kind=body.change_kind,
             change_note=body.change_note,
             created_by=operator.actor,
         )
@@ -475,6 +488,43 @@ async def rollback(
     try:
         result = await prompt_service.rollback(
             key, body.version,
+            actor=operator.actor,
+            role=operator.role,
+        )
+        return result
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+# ── POST /prompts/{key}/aliases/{alias}（M4 命名指针切换）────────
+
+class AliasRequest(BaseModel):
+    version: int
+
+
+@router.post("/{key}/aliases/{alias}")
+async def set_alias(
+    key: str,
+    alias: str,
+    body: AliasRequest,
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+):
+    """切换命名指针。
+
+    production：完整发布语义（等价 publish，含工作流校验/审计/快照刷新）。
+    staging：只动指针（预发验收指向），不影响运行时读路径。
+    """
+    spec = PROMPT_REGISTRY.get(key)
+    if not spec:
+        raise HTTPException(404, f"Prompt not found: {key}")
+
+    _check_permission(spec.risk_level, "publish", operator.role)
+
+    try:
+        result = await prompt_service.set_alias(
+            key, alias, body.version,
             actor=operator.actor,
             role=operator.role,
         )

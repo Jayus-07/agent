@@ -174,6 +174,11 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 企业治理 M7（2026-09-30）：评测 run 台账（索引非替代，明细仍在
     # data/eval_runs 文件），prompt/模型指纹/触发者随行落库。
     "056_eval_run_records.sql": "memory",
+    # 企业治理 M4（2026-09-30）：prompt 版本语义（change_kind）+ 命名指针
+    # （production 与 active_version 同步 / staging 预发指向）。
+    "057_prompt_alias.sql": "memory",
+    # 客服域迁移 B12（2026-09-29）：统一案件 cs_case（工单/投诉/售后收敛基座）
+    "058_cs_case.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

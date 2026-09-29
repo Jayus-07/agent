@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.memory.models.prompt import Prompt, PromptAuditLog, PromptVersion
+from backend.memory.models.prompt import Prompt, PromptAlias, PromptAuditLog, PromptVersion
 
 
 class PromptRepository:
@@ -85,6 +85,7 @@ class PromptRepository:
         *,
         variables: list | None = None,
         status: str = "draft",
+        change_kind: str | None = None,
         change_note: str = "",
         created_by: str = "system",
     ) -> PromptVersion:
@@ -107,6 +108,7 @@ class PromptRepository:
             template=template,
             variables=variables or [],
             status=status,
+            change_kind=change_kind,
             change_note=change_note,
             created_by=created_by,
         )
@@ -138,6 +140,37 @@ class PromptRepository:
             .values(active_version=version, updated_at=datetime.now(timezone.utc))
         )
         await self._s.flush()
+
+    async def upsert_alias(
+        self, prompt_id: int, alias: str, version: int, updated_by: str = "system"
+    ) -> PromptAlias:
+        """M4：命名指针 upsert（prompt_id+alias 唯一）。"""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(PromptAlias).values(
+            prompt_id=prompt_id, alias=alias, version=version, updated_by=updated_by,
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_prompt_alias",
+            set_={"version": version, "updated_by": updated_by,
+                  "updated_at": datetime.now(timezone.utc)},
+        )
+        await self._s.execute(stmt)
+        await self._s.flush()
+        result = await self._s.execute(
+            select(PromptAlias).where(
+                PromptAlias.prompt_id == prompt_id, PromptAlias.alias == alias
+            )
+        )
+        return result.scalar_one()
+
+    async def list_aliases(self, prompt_id: int) -> list[PromptAlias]:
+        result = await self._s.execute(
+            select(PromptAlias)
+            .where(PromptAlias.prompt_id == prompt_id)
+            .order_by(PromptAlias.alias)
+        )
+        return list(result.scalars().all())
 
     async def update_version_status(
         self, version_id: int, status: str

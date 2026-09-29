@@ -199,12 +199,17 @@ class PromptService:
         key: str,
         template: str,
         *,
+        change_kind: str | None = None,
         change_note: str = "",
         created_by: str = "system",
     ) -> dict:
         spec = PROMPT_REGISTRY.get(key)
         if spec and spec.code_controlled:
             raise ValueError(f"Prompt {key} is code-controlled and cannot be modified")
+        if change_kind is not None and change_kind not in ("major", "minor", "patch"):
+            raise ValueError(
+                f"change_kind 必须是 major/minor/patch，实际: {change_kind!r}"
+            )
 
         async with AsyncSessionLocal() as session:
             repo = PromptRepository(session)
@@ -217,6 +222,7 @@ class PromptService:
                 template,
                 variables=[v.name for v in spec.variables] if spec else [],
                 status="draft",
+                change_kind=change_kind,
                 change_note=change_note,
                 created_by=created_by,
             )
@@ -224,10 +230,11 @@ class PromptService:
                 key, "create_draft",
                 to_version=ver.version,
                 actor=created_by,
-                detail={"template_length": len(template)},
+                detail={"template_length": len(template),
+                        "change_kind": change_kind},
             )
             await session.commit()
-            return {"version": ver.version, "status": "draft"}
+            return {"version": ver.version, "status": "draft", "change_kind": change_kind}
 
     async def publish(
         self,
@@ -264,6 +271,9 @@ class PromptService:
 
             old_version = prompt.active_version
             await repo.set_active_version(prompt.id, version)
+            # M4：production 指针与 active_version 保持同步（单一事实=active_version，
+            # alias 是它的命名视图；切 production=set_alias 的发布路径落到这里）
+            await repo.upsert_alias(prompt.id, "production", version, updated_by=actor)
             await repo.update_version_status(ver.id, "published")
             self._cache.delete(f"prompt:{key}")
 
@@ -296,6 +306,57 @@ class PromptService:
         role: str = "",
     ) -> dict:
         return await self.publish(key, version, actor=actor, role=role, skip_workflow=True)
+
+    async def set_alias(
+        self,
+        key: str,
+        alias: str,
+        version: int,
+        *,
+        actor: str = "system",
+        role: str = "",
+    ) -> dict:
+        """M4（台账 D4）：切换命名指针。
+
+        production：完整发布语义（复用 publish——工作流校验/snapshot 刷新/
+          cache 失效/reload 钩子/审计/active_version 同步全部生效）。
+        staging：只动指针 + 审计，不影响运行时读路径（读仍走 active_version；
+          staging 的运行时消费属 Phase 2 灰度）。
+        """
+        if alias not in ("production", "staging"):
+            raise ValueError(f"alias 必须是 production/staging，实际: {alias!r}")
+
+        if alias == "production":
+            result = await self.publish(key, version, actor=actor, role=role)
+            result["alias"] = "production"
+            return result
+
+        async with AsyncSessionLocal() as session:
+            repo = PromptRepository(session)
+            prompt = await repo.get_by_key(key)
+            if not prompt:
+                raise KeyError(f"Prompt not found: {key}")
+            ver = await repo.get_version(prompt.id, version)
+            if not ver:
+                raise KeyError(f"Version {version} not found for {key}")
+            await repo.upsert_alias(prompt.id, alias, version, updated_by=actor)
+            await repo.write_audit(
+                key, "set_alias",
+                to_version=version,
+                actor=actor, role=role,
+                detail={"alias": alias},
+            )
+            await session.commit()
+        return {"alias": alias, "version": version}
+
+    async def get_aliases(self, key: str) -> dict[str, int]:
+        """读当前命名指针（无指针的 alias 不出现在结果里）。"""
+        async with AsyncSessionLocal() as session:
+            repo = PromptRepository(session)
+            prompt = await repo.get_by_key(key)
+            if not prompt:
+                raise KeyError(f"Prompt not found: {key}")
+            return {a.alias: a.version for a in await repo.list_aliases(prompt.id)}
 
     async def transition_status(
         self,
