@@ -191,6 +191,14 @@ def slot_filler_node(state: dict) -> dict:
 
     missing = brief.missing_slots()
     clarification = _requirement_agent.build_clarification(brief, message)
+    if clarification:  # M12：slot 追问计数（缺槽数分桶，软失败）
+        try:
+            from backend.observability.metrics import travel_slot_clarify_total
+            n = len(brief.missing_slots())
+            bucket = "0" if n <= 0 else ("1" if n == 1 else ("2-3" if n <= 3 else "4+"))
+            travel_slot_clarify_total.labels(missing_count_bucket=bucket).inc()
+        except Exception:
+            pass
 
     # 指纹/版本/变更追踪（RequirementService，单一事实源在 graph_state）
     last_fingerprint = state.get("brief_fingerprint") or ""

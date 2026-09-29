@@ -184,6 +184,11 @@ def _decision_v1(state: dict[str, Any]) -> CSSupervisorDecision:
                 is_finished=True,
             )
             _record_decision(decision)
+            try:  # M12：拒答计数（/domain-ops 指标，软失败）
+                from backend.observability.metrics import cs_rejection_total
+                cs_rejection_total.labels(layer="risk_gate").inc()
+            except Exception:
+                pass
             return decision
 
         # P0 投诉直通：监管/舆情信号（12315/曝光/报警）不再依赖路由置信度，
@@ -361,6 +366,11 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
                 is_finished=True,
             )
             _record_decision(decision)
+            try:  # M12：拒答计数（/domain-ops 指标，软失败）
+                from backend.observability.metrics import cs_rejection_total
+                cs_rejection_total.labels(layer="risk_gate").inc()
+            except Exception:
+                pass
             return decision
         if metadata.get("sentiment_hits"):
             from backend.customer_service.understanding.signals import (

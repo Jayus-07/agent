@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from backend.app.api.routes import (
     admin_tasks,
     admin_tools,
+    admin_security,
     agents,
     approvals,
     auth_local,

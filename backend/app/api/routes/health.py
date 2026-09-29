@@ -54,7 +54,23 @@ async def health():
         # STOP K §20：Commerce 组件（hotel/flight 各自 healthy/degraded/
         # disabled；fake=healthy 仅指链路可用，off/live 未接入=disabled/degraded）
         "travel_commerce": _travel_commerce_status(),
+        # M13（治理台账 D13）：Redis 探测（broker/cache 双角色）——软失败，
+        # 观测缺失不影响存活判定（compose healthcheck 只看 status=ok）
+        "redis": await asyncio.to_thread(_redis_status),
     }
+
+
+def _redis_status() -> dict:
+    """Redis 连通性观测（软失败，异常返回 status=unknown）。"""
+    try:
+        from backend.infra.redis.client import get_redis
+
+        r = get_redis()
+        pong = r.ping()
+        return {"status": "healthy" if pong else "degraded",
+                "detail": "ping=" + ("pong" if pong else "silent")}
+    except Exception as e:  # noqa: BLE001 — 观测软失败
+        return {"status": "unknown", "detail": str(e)[:120]}
 
 
 def _migration_watermark() -> dict:

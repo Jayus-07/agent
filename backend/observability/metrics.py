@@ -875,6 +875,16 @@ cs_rag_status_total = Counter(
     "客服 RAG 查询状态总数",
     labelnames=("status",),
 )
+cs_rejection_total = Counter(
+    "cs_rejection_total",
+    "客服域拒答收尾总数（风险兜底拦截等，M12 /domain-ops 指标）",
+    labelnames=("layer",),
+)
+travel_slot_clarify_total = Counter(
+    "travel_slot_clarify_total",
+    "旅游域 slot_filler 追问次数（缺槽触发 build_clarification，M12 指标）",
+    labelnames=("missing_count_bucket",),
+)
 cs_store_db_failure_total = Counter(
     "cs_store_db_failure_total",
     "客服状态 Store DB 写失败总数（strict 模式抛错，非 strict 告警降级）",
