@@ -214,14 +214,18 @@ def execute_complaint(
 
 def complaint_expert_node(state: dict[str, Any]) -> dict[str, Any]:
     """CS Graph ComplaintExpert 节点函数。"""
+    from backend.config.customer_service import CS_EXPERT_TIMEOUT_S
     from backend.customer_service.experts.base import run_expert_safely
 
     user_message = state.get("user_message", "")
 
+    # 专家级兜底限时：内部各环节自有限时，此层保证整节点上界（与
+    # knowledge/action 同口径）；不传则任一环节挂起即无上界
     result = run_expert_safely(
         expert_name="complaint",
         fn=lambda _state: execute_complaint(user_message, state),
         state=state,
+        timeout_s=CS_EXPERT_TIMEOUT_S,
     )
 
     expert_history = list(state.get("expert_history", []))

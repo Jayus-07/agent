@@ -81,6 +81,28 @@ class TestComplaintDetectCascade:
             assert svc._llm_assess("随便什么") is None
         assert llm.calls == 1
 
+    def test_llm_hang_returns_none_within_timeout(self):
+        """回归（迁移 B1，2026-09-29）：_llm_assess 曾用 config={"timeout"}
+        限时（该参数实测不生效）——规则 0 命中走 LLM 兜底时投诉路径存在
+        无界挂起窗口。修复后必须线程级限时：LLM 挂死时在
+        CS_COMPLAINT_LLM_TIMEOUT_MS 内返回 None（确定性回退规则结果）。"""
+        import time
+
+        from backend.config import customer_service as cs_config
+
+        class _HangingLLM:
+            def invoke(self, messages, config=None):
+                time.sleep(2)  # 远超测试超时——模拟无界挂起
+                return _FakeResp('{"is_complaint": true, "severity": "high"}')
+
+        svc = ComplaintService()
+        with patch.object(cs_config, "CS_COMPLAINT_LLM_TIMEOUT_MS", 300), \
+             patch("backend.infra.llm.get_llm", return_value=_HangingLLM()):
+            t0 = time.monotonic()
+            assert svc._llm_assess("委婉表达的不满") is None
+            elapsed = time.monotonic() - t0
+        assert elapsed < 1.5  # 0.3s 限时 + 线程调度开销；修复前会挂满 2s
+
 
 # =====================================================
 # 复合问题意图分解
