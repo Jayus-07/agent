@@ -102,21 +102,13 @@ def is_terminal(state: ConfirmationState) -> bool:
     return state in TERMINAL_STATES
 
 
-_CONFIRM_KEYWORDS = frozenset({
-    "确认", "确定", "好的", "同意", "可以", "没问题", "是的", "对的",
-    "嗯", "ok", "yes", "confirm",
-})
-
-# P1 修正（2026-09-17）：移除裸词「不」「对」——子串匹配误伤严重：
-#   "确认不要了" 因「不」…仍由「不要」命中 CANCEL（保留）；
-#   "对吧" 曾因「对」误判 CONFIRM → 已移除，改用「对的」。
-_CANCEL_KEYWORDS = frozenset({
-    "取消", "算了", "不要", "否", "放弃", "cancel", "no",
-})
-
-# 疑问句不算表态："这个可以取消吗" / "可不可以退" / "确认吗？" → NONE
-# （此前「可以取消吗」会被判成 CANCEL 直接取消用户pending —— P0 级误判）
-_QUESTION_MARKERS = ("吗", "么", "?", "？", "可不可以", "能不能", "要不要", "行不行", "是否")
+# 确认/取消词表收敛至 vocab.py 单一事实源（迁移 B8，P1 修正版为唯一
+# 权威）；经 accessor 读取以支持热加载（override 文件 + 变更台账）。
+from backend.customer_service.vocab import (  # noqa: E402
+    QUESTION_MARKERS as _QUESTION_MARKERS,
+    get_cancel_keywords as _get_cancel_keywords,
+    get_confirm_keywords as _get_confirm_keywords,
+)
 
 
 def detect_confirmation_intent(text: str) -> ConfirmationIntent:
@@ -128,11 +120,11 @@ def detect_confirmation_intent(text: str) -> ConfirmationIntent:
     if any(marker in text_lower for marker in _QUESTION_MARKERS):
         return ConfirmationIntent.NONE
 
-    for kw in _CANCEL_KEYWORDS:
+    for kw in _get_cancel_keywords():
         if kw in text_lower:
             return ConfirmationIntent.CANCEL
 
-    for kw in _CONFIRM_KEYWORDS:
+    for kw in _get_confirm_keywords():
         if kw in text_lower:
             return ConfirmationIntent.CONFIRM
 

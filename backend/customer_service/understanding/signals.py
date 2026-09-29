@@ -9,23 +9,18 @@ import re
 
 from backend.customer_service.understanding.types import Sentiment, Urgency
 
-_ANGRY_MARKERS = (
-    "骗子", "欺诈", "垃圾", "气死", "忍无可忍", "曝光", "报警",
-    "12315", "受骗", "胡说", "恶心", "无耻",
+# 情绪/紧迫/风险标记已收敛至 vocab.py 单一事实源（迁移 B8，值逐字
+# 搬移）；本模块保留检测逻辑，标记从 vocab import。
+from backend.customer_service.vocab import (  # noqa: E402
+    ANGRY_MARKERS as _ANGRY_MARKERS,
+    DISSATISFIED_MARKERS as _DISSATISFIED_MARKERS,
+    P0_ESCALATION_MARKERS as _P0_ESCALATION_MARKERS,
+    RISK_MARKERS as _RISK_MARKERS,
+    URGENT_MARKERS as _URGENT_MARKERS,
 )
-_DISSATISFIED_MARKERS = (
-    "不满意", "太慢", "拖了", "敷衍", "第四次", "又", "再也不", "受不了",
-    "没人管", "没人处理",
-)
-_URGENT_MARKERS = (
-    "立刻", "马上", "尽快", "现在就", "紧急", "今天必须", "等着用",
-)
-# 跨用户/越权探测与工具滥用信号（只升风险，不做拦截——拦截是 Input Guard 职责）
-_RISK_MARKERS = (
-    "别人的订单", "他人的订单", "他的订单", "她的订单", "所有用户的",
-    "全部用户", "别人的手机号", "后台取消", "直接改数据库", "忽略之前的指令",
-    "忽略以上", "打印你的系统提示词", "开发者模式",
-)
+
+P0_ESCALATION_MARKERS = _P0_ESCALATION_MARKERS  # 对外名字保持（B5 契约）
+
 _ANGRY_PUNCT = re.compile(r"[!！?？]{2,}")
 
 
@@ -62,16 +57,10 @@ def detect_risk_hits(normalized_text: str) -> list[str]:
     return [f"risk:{w}" for w in _RISK_MARKERS if w in text]
 
 
-# P0 升级子集（监管/舆情信号，设计方案 §4.6 P0 档）：_ANGRY_MARKERS 的高危
-# 子集，命中即 Supervisor 直通投诉专家（迁移 B5 消费）。只做既有词条的
-# 子集选择、不新增词条——词表扩充归词表单一源治理（迁移 B8）。
-P0_ESCALATION_MARKERS = ("12315", "曝光", "报警")
-
-
 def is_p0_escalation(sentiment_hits: list[str]) -> bool:
     """情绪信号命中 P0 升级子集（hits 形如 "angry:12315"）。"""
     for h in sentiment_hits or []:
-        if h.split(":", 1)[-1] in P0_ESCALATION_MARKERS:
+        if h.split(":", 1)[-1] in _P0_ESCALATION_MARKERS:
             return True
     return False
 

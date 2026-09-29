@@ -22,10 +22,6 @@ _INTENT_SERVICE_MAP = {
 }
 
 # 复合问题预判：问题命中 ≥2 个不同服务域的关键词 → 疑似复合诉求
-_SERVICE_KEYWORDS = {
-    "order": ["订单", "退款", "退货", "换货", "售后", "维修", "保修", "质量", "破损", "发票"],
-    "logistics": ["物流", "快递", "发货", "收货", "签收", "配送", "到货", "运输", "到哪"],
-}
 
 
 def execute_query(
@@ -96,8 +92,10 @@ def execute_query(
 
 def _compound_suspected(question: str) -> bool:
     """规则预判：关键词命中 ≥2 个服务域才触发 LLM 分解，控制成本。"""
+    from backend.customer_service.vocab import QUERY_SERVICE_KEYWORDS
+
     hits = {
-        svc for svc, keywords in _SERVICE_KEYWORDS.items()
+        svc for svc, keywords in QUERY_SERVICE_KEYWORDS.items()
         if any(k in question for k in keywords)
     }
     return len(hits) >= 2
