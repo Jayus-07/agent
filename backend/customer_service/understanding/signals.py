@@ -62,6 +62,20 @@ def detect_risk_hits(normalized_text: str) -> list[str]:
     return [f"risk:{w}" for w in _RISK_MARKERS if w in text]
 
 
+# P0 升级子集（监管/舆情信号，设计方案 §4.6 P0 档）：_ANGRY_MARKERS 的高危
+# 子集，命中即 Supervisor 直通投诉专家（迁移 B5 消费）。只做既有词条的
+# 子集选择、不新增词条——词表扩充归词表单一源治理（迁移 B8）。
+P0_ESCALATION_MARKERS = ("12315", "曝光", "报警")
+
+
+def is_p0_escalation(sentiment_hits: list[str]) -> bool:
+    """情绪信号命中 P0 升级子集（hits 形如 "angry:12315"）。"""
+    for h in sentiment_hits or []:
+        if h.split(":", 1)[-1] in P0_ESCALATION_MARKERS:
+            return True
+    return False
+
+
 def escalate(base_risk: str, hits: list[str]) -> tuple[str, bool]:
     """风险只升不降：命中越权/注入信号 → high。返回 (risk, escalated)。"""
     if hits:

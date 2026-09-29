@@ -156,6 +156,48 @@ def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
         _record_decision(decision)
         return decision
 
+    # ── Layer 1 信号兜底（迁移 B5，2026-09-29）：understanding 信号消费 ──
+    # 信号源 = router_node._enrich_with_understanding 写入 cs_route.metadata
+    # 的规则信号（零 LLM）；metadata 缺字段（旧状态/直测）时整段跳过，
+    # 行为与接线前一致。定位是「兜底」：注入/越权的主拦截在图前 Input Guard。
+    # 位置刻意在 2a pending 之后——确认等待中的会话不被信号门改道。
+    from backend.config.customer_service import CS_SIGNAL_GATE_ENABLED
+    if CS_SIGNAL_GATE_ENABLED:
+        metadata = cs_route.get("metadata") or {}
+        risk_hits = list(metadata.get("risk_hits") or [])
+
+        # 风险兜底拦截：越权/注入信号 → 拒答收尾（附转人工建议）。
+        # 确定性拒绝优先于一切执行类分支（含下方 P0 直通）。
+        if risk_hits:
+            decision = _make_decision(
+                ExpertAction.FINISH, None, layer=1,
+                reason=(
+                    f"风险信号兜底拦截: {','.join(risk_hits[:3])} — "
+                    "拒答+建议转人工"
+                ),
+                is_finished=True,
+            )
+            _record_decision(decision)
+            return decision
+
+        # P0 投诉直通：监管/舆情信号（12315/曝光/报警）不再依赖路由置信度，
+        # 强制派 complaint expert（防重入与升级转人工为该专家既有链路）。
+        if metadata.get("sentiment_hits"):
+            from backend.customer_service.understanding.signals import (
+                is_p0_escalation,
+            )
+
+            if is_p0_escalation(list(metadata["sentiment_hits"])):
+                decision = _make_decision(
+                    ExpertAction.RUN_EXPERT, ExpertType.COMPLAINT, layer=1,
+                    reason=(
+                        "P0 投诉信号直通: "
+                        f"{','.join(metadata['sentiment_hits'][:3])}"
+                    ),
+                )
+                _record_decision(decision)
+                return decision
+
     # ── Layer 2b: expert 重复检测 ──
     if _is_expert_repeating(expert_history):
         decision = _make_decision(

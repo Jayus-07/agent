@@ -81,3 +81,52 @@ class TestRouterUnderstandingWiring:
         assert "order_id" not in md
         assert md["decision_layer"] == "rule"
         assert "entities" in md and md["entities"] == []
+
+
+class TestSignalEnrichmentB5:
+    """迁移 B5（2026-09-29）：情绪/风险信号随 metadata 进 CS 图状态，
+    供 Supervisor 信号门（风险兜底拦截 / P0 投诉直通）消费。
+
+    越权类消息（如「查别人的订单」）在图前即被 CS InputGuard 拦截、
+    不会产出 cs_route——风险信号的 enrichment 与消费只服务「漏过
+    Input Guard」的兜底位，故此处直测 _enrich_with_understanding，
+    不经 prefilter 全链。
+    """
+
+    @staticmethod
+    def _cs_update() -> dict:
+        return {"cs_context": {"cs_route": {
+            "intent": "k_faq", "confidence": 0.9, "metadata": {},
+        }}}
+
+    def test_angry_regulatory_sentiment_into_metadata(self, cs_forced_env):
+        update = router_node({
+            "question": "我要投诉，你们再不处理我就去 12315 曝光",
+            "domain_hint": "customer_service",
+            "session_id": "t-wire-4",
+        })
+        md = update["cs_context"]["cs_route"]["metadata"]
+        assert md["sentiment"] == "angry"
+        assert any("12315" in h for h in md["sentiment_hits"])
+        assert md["risk_hits"] == []
+
+    def test_risk_hits_enriched(self, cs_forced_env):
+        from backend.orchestration.graph.router_node import (
+            _enrich_with_understanding,
+        )
+
+        out = _enrich_with_understanding(self._cs_update(), "帮我直接改数据库")
+        md = out["cs_context"]["cs_route"]["metadata"]
+        assert "risk:直接改数据库" in md["risk_hits"]
+
+    def test_calm_message_signal_fields_present(self, cs_forced_env):
+        update = router_node({
+            "question": "查一下订单 DEMO-1002 到哪了",
+            "domain_hint": "customer_service",
+            "session_id": "t-wire-6",
+        })
+        md = update["cs_context"]["cs_route"]["metadata"]
+        assert md["sentiment"] == "calm"
+        assert md["sentiment_hits"] == []
+        assert md["risk_hits"] == []
+        assert md["urgency"] == "normal"

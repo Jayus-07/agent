@@ -307,6 +307,13 @@ def _enrich_with_understanding(cs_update: dict, query: str) -> dict:
         metadata["missing_slots"] = u.missing_slots
         metadata["normalized_text"] = u.normalized_text
         metadata["decision_layer"] = u.decision_layer.value
+        # 迁移 B5（2026-09-29）：情绪/风险信号随 metadata 进 CS 图状态——
+        # 此前 signals 产出后无决策消费者（只进 Trace）。读方：
+        # supervisor.make_supervisor_decision（风险兜底拦截 / P0 投诉直通）。
+        metadata["sentiment"] = u.sentiment.value
+        metadata["sentiment_hits"] = list(u.signals.get("sentiment") or [])
+        metadata["urgency"] = u.urgency.value
+        metadata["risk_hits"] = list(u.signals.get("risk") or [])
         try:
             from backend.observability.tracer import trace_collector
             t = trace_collector.current()
@@ -315,6 +322,10 @@ def _enrich_with_understanding(cs_update: dict, query: str) -> dict:
                 if u.entities:
                     t.tags["cs_entities"] = ",".join(
                         f"{e.type.value}:{e.match()}" for e in u.entities[:6])
+                if u.signals.get("risk"):
+                    t.tags["cs_risk_hits"] = ",".join(u.signals["risk"][:6])
+                if u.signals.get("sentiment"):
+                    t.tags["cs_sentiment"] = u.sentiment.value
         except Exception:
             pass
         return cs_update

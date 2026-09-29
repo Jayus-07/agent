@@ -241,6 +241,14 @@ CS_COMPLAINT_LLM_ENABLED = os.getenv("CS_COMPLAINT_LLM_ENABLED", "true").strip()
 CS_COMPLAINT_LLM_TIMEOUT_MS = int(os.getenv("CS_COMPLAINT_LLM_TIMEOUT_MS", "3000"))
 
 # =============================================
+# Supervisor understanding 信号门（迁移 B5，2026-09-29）
+# 风险兜底拦截（越权/注入信号拒答）+ P0 投诉直通（监管舆情信号强制派
+# complaint）。信号源为纯规则零 LLM；关闭 = 回到接线前行为（只影响这两
+# 个兜底分支，Input Guard 图前拦截不受影响）。
+# =============================================
+CS_SIGNAL_GATE_ENABLED = os.getenv("CS_SIGNAL_GATE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
+# =============================================
 # Query 专家复合问题 LLM 意图分解
 # =============================================
 CS_QUERY_LLM_DECOMPOSE_ENABLED = os.getenv("CS_QUERY_LLM_DECOMPOSE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
