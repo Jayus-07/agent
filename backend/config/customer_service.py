@@ -249,6 +249,15 @@ CS_COMPLAINT_LLM_TIMEOUT_MS = int(os.getenv("CS_COMPLAINT_LLM_TIMEOUT_MS", "3000
 CS_SIGNAL_GATE_ENABLED = os.getenv("CS_SIGNAL_GATE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
 # =============================================
+# Supervisor 决策 v2——七层固定优先级（迁移 B6，2026-09-29）
+# 顺序即语义：1 handoff → 2 pending → 3 风险 → 4 循环预算 →
+# 5 意图路由 → 6 低置信处理 → 7 LLM 兜底（设计方案 §4.2）。
+# 与 v1 只在多条件并存时的裁决不同（单条件行为等价）。
+# 默认启用；置 false 一键回退 v1 存量顺序（本机回退开关）。
+# =============================================
+CS_DECISION_V2 = os.getenv("CS_DECISION_V2", "true").strip().lower() in ("1", "true", "yes")
+
+# =============================================
 # Query 专家复合问题 LLM 意图分解
 # =============================================
 CS_QUERY_LLM_DECOMPOSE_ENABLED = os.getenv("CS_QUERY_LLM_DECOMPOSE_ENABLED", "true").strip().lower() in ("1", "true", "yes")

@@ -1,13 +1,15 @@
 """
-customer_service/supervisor.py — CS Supervisor 三层决策引擎
+customer_service/supervisor.py — CS Supervisor 决策引擎
 
 职责: 结合状态 + 上下文决定下一步调用哪个 Expert。
 不做: 不执行业务逻辑、不操作 DB、不生成最终回复。
 
-三层决策模型:
-  Layer 1 — 硬规则: handoff 拦截 / loop guard / confidence 降级
-  Layer 2 — 状态组合: confirmation pending / expert history 模式
-  Layer 3 — LLM 决策: 低置信度 + 复杂状态时启用（带超时 + 确定性降级）
+两套决策顺序，按 CS_DECISION_V2 分发（默认 v2）:
+  v2 — 七层固定优先级（设计方案 §4.2）: handoff → pending → 风险 →
+       循环预算 → 意图路由 → 低置信处理 → LLM 兜底（_decision_v2）
+  v1 — 存量三层顺序，回退开关用（_decision_v1）
+
+decision_layer 度量口径不变: {1: rule, 2: combination, 3: llm}。
 
 设计参考: docs/customer-service/langgraph-multi-expert-design.md §5.3
 """
@@ -93,19 +95,23 @@ def _resolve_expert(cs_route: dict) -> str:
 
 
 def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
-    """三层决策引擎。
+    """Supervisor 决策入口 —— 按 CS_DECISION_V2 分发。
 
-    Layer 1 — 硬规则（零延迟、确定性）:
-      1a. handoff 拦截 — handoff_state != ai_active 时强制转 handoff expert
-      1b. loop guard — expert_loop_count >= MAX 时强制 finish
-      1c. confidence 降级 — confidence < 阈值 且无 expert 历史 → 直接 finish
+    v2（默认）：七层固定优先级（设计方案 §4.2，见 _decision_v2）；
+    v1（CS_DECISION_V2=false 本机回退）：存量三层顺序，语义保留不动。
+    """
+    from backend.config.customer_service import CS_DECISION_V2
 
-    Layer 2 — 状态组合（零延迟、确定性）:
-      2a. confirmation pending → finish（等用户回复）
-      2b. expert 重复检测 — 同一 expert 连续执行 2 次 → finish
+    if CS_DECISION_V2:
+        return _decision_v2(state)
+    return _decision_v1(state)
 
-    Layer 3 — LLM 决策（带超时 + 确定性降级）:
-      仅在低置信度 + 复杂状态时启用。
+
+def _decision_v1(state: dict[str, Any]) -> CSSupervisorDecision:
+    """存量决策顺序（v1，CS_DECISION_V2=false 回退用）。
+
+    1a handoff 拦截 → 1b loop guard → 2a pending → B5 信号门 →
+    2b 重复检测 → 1c 低置信降级 → L3 LLM → 默认路由。
     """
     cs_route = state.get("cs_route", {})
     confidence = cs_route.get("confidence", 0.0)
@@ -278,6 +284,182 @@ def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
         ExpertType(expert),
         layer=layer,
         reason=f"route → expert={expert} (confidence={confidence:.2f}){layer_note}",
+    )
+    _record_decision(decision)
+    return decision
+
+
+def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
+    """七层固定优先级（迁移 B6，设计方案 §4.2；顺序即语义，禁止重排）。
+
+      1 handoff 状态   2 pending 确认   3 风险状态     4 循环与预算
+      5 意图路由       6 低置信处理      7 LLM 兜底
+
+    与 v1 的差异只在多条件并存时的裁决（单条件行为等价）：
+    pending/风险先于循环；意图路由（强先验）先于低置信分支。
+    decision_layer 标签保持 {1:rule, 2:combination, 3:llm} 度量口径不变，
+    优先级层号以 [v2·L*] 前缀写入 reason（trace 可归因）。
+    """
+    cs_route = state.get("cs_route", {})
+    confidence = cs_route.get("confidence", 0.0)
+    handoff_state = state.get("handoff_state", "ai_active")
+    confirmation_state = state.get("confirmation_state", "not_required")
+    expert_loop_count = state.get("expert_loop_count", 0)
+    expert_history = state.get("expert_history", [])
+
+    from backend.config.customer_service import (
+        CS_CONFIDENCE_CAUTIOUS,
+        CS_EXPERT_MAX_LOOPS,
+        CS_SIGNAL_GATE_ENABLED,
+    )
+
+    # ── 第 1 层：handoff 状态（人工排队/接管中，AI 零抢答）──
+    from backend.customer_service.handoff import HandoffState, should_intercept
+    try:
+        _hs = HandoffState(handoff_state) if handoff_state else HandoffState.AI_ACTIVE
+    except ValueError:
+        _hs = HandoffState.AI_ACTIVE
+    if should_intercept(_hs):
+        decision = _make_decision(
+            ExpertAction.HANDOFF, ExpertType.HANDOFF, layer=1,
+            reason=f"[v2·L1] handoff 拦截: state={handoff_state}",
+            requires_handoff=True,
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+
+    # ── 第 2 层：pending 确认（等用户确认，不被任何分支打断）──
+    if confirmation_state in ("pending", "pending_confirmation"):
+        decision = _make_decision(
+            ExpertAction.PENDING, None, layer=2,
+            reason="[v2·L2] confirmation pending — 等待用户确认",
+            requires_confirmation=True,
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+
+    # ── 第 3 层：风险状态（understanding 信号兜底，B5 同款两分支）──
+    if CS_SIGNAL_GATE_ENABLED:
+        metadata = cs_route.get("metadata") or {}
+        risk_hits = list(metadata.get("risk_hits") or [])
+        if risk_hits:
+            decision = _make_decision(
+                ExpertAction.FINISH, None, layer=1,
+                reason=(
+                    f"[v2·L3] 风险信号兜底拦截: {','.join(risk_hits[:3])} — "
+                    "拒答+建议转人工"
+                ),
+                is_finished=True,
+            )
+            _record_decision(decision)
+            return decision
+        if metadata.get("sentiment_hits"):
+            from backend.customer_service.understanding.signals import (
+                is_p0_escalation,
+            )
+
+            if is_p0_escalation(list(metadata["sentiment_hits"])):
+                decision = _make_decision(
+                    ExpertAction.RUN_EXPERT, ExpertType.COMPLAINT, layer=1,
+                    reason=(
+                        "[v2·L3] P0 投诉信号直通: "
+                        f"{','.join(metadata['sentiment_hits'][:3])}"
+                    ),
+                )
+                _record_decision(decision)
+                return decision
+
+    # ── 第 4 层：循环与预算（防死循环守卫）──
+    if expert_loop_count >= CS_EXPERT_MAX_LOOPS:
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=1,
+            reason=f"[v2·L4] expert 循环达上限 ({CS_EXPERT_MAX_LOOPS})",
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+    if _is_expert_repeating(expert_history):
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=2,
+            reason="[v2·L4] expert 重复执行 — 终止防止死循环",
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+
+    # ── 第 5 层：意图路由（route_path 强先验，绝大多数流量到此为止）──
+    if confidence >= CS_CONFIDENCE_CAUTIOUS:
+        expert = _resolve_expert(cs_route)
+        decision = _make_decision(
+            ExpertAction.RUN_EXPERT, ExpertType(expert), layer=1,
+            reason=f"[v2·L5] route → expert={expert} (confidence={confidence:.2f})",
+        )
+        _record_decision(decision)
+        return decision
+
+    # ── 第 6 层：低置信处理（无专家历史）──
+    if not expert_history:
+        # P2.1（audit #156）：低置信但意图明确的知识类请求放行检索——
+        # 知识库命中自带相关性校验，比泛化兜底回复更可用；
+        # 高权限（requires_auth）或非知识类维持拦截（低置信执行动作危险）。
+        expert = _resolve_expert(cs_route)
+        requires_auth = bool(cs_route.get("requires_auth"))
+        risk_level = str(cs_route.get("risk_level", "low"))
+        if (
+            expert == ExpertType.KNOWLEDGE.value
+            and not requires_auth
+            and risk_level == "low"
+        ):
+            decision = _make_decision(
+                ExpertAction.RUN_EXPERT, ExpertType.KNOWLEDGE, layer=1,
+                reason=(
+                    f"[v2·L6] 低置信度 ({confidence:.2f} < {CS_CONFIDENCE_CAUTIOUS}) "
+                    "但意图为知识类（低风险无权限）— 放行知识检索兜底"
+                ),
+            )
+            _record_decision(decision)
+            return decision
+
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=1,
+            reason=(
+                f"[v2·L6] 低置信度 ({confidence:.2f} < {CS_CONFIDENCE_CAUTIOUS}) "
+                "且无历史 — 降级兜底"
+            ),
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+
+    # ── 第 7 层：LLM 兜底（低置信 + 有专家历史，CS_SUPERVISOR_LLM_ENABLED 可关）──
+    llm_decision = _llm_decision(state)
+    if llm_decision is not None:
+        _record_decision(llm_decision)
+        return llm_decision
+
+    # 确定性回退：不重复派发刚执行过的同一 expert（回答已产出，重跑纯浪费）
+    expert = _resolve_expert(cs_route)
+    if expert_history and expert_history[-1].get("expert") == expert:
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=3,
+            reason=(
+                f"[v2·L7] 低置信度 ({confidence:.2f}) 且 LLM 决策不可用 — "
+                f"{expert} 刚已执行，直接收尾防止重复"
+            ),
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+    decision = _make_decision(
+        ExpertAction.RUN_EXPERT,
+        ExpertType(expert),
+        layer=3,
+        reason=(
+            f"[v2·L7] 低置信度 ({confidence:.2f}) LLM 决策不可用 — "
+            f"规则降级 route → expert={expert}"
+        ),
     )
     _record_decision(decision)
     return decision
