@@ -119,7 +119,17 @@ class _PriorityGate:
         Returns:
             True 表示 fut 在失败前已被授予（槽位已归还，调用方需按未获得处理）。
         """
-        if fut.done() and not fut.cancelled() and fut.result():
+        granted = False
+        async with self._cond:
+            if fut.done() and not fut.cancelled() and fut.result():
+                granted = True
+            else:
+                # wait_for 超时会取消 Future；必须同步从堆中移除，
+                # 否则大量超时请求会留下不可唤醒的幽灵 waiter，污染队列状态。
+                self._waiters = [entry for entry in self._waiters if entry[2] is not fut]
+                heapq.heapify(self._waiters)
+                request_concurrency_queued.set(len(self._waiters))
+        if granted:
             await self.release()
             return True
         return False
