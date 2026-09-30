@@ -40,6 +40,8 @@ from backend.observability.metrics import (
     StreamLatencyTracker,
     chat_request_total,
     chat_request_duration_seconds,
+    chat_sse_executor_active,
+    chat_sse_executor_wait_seconds,
     chat_stream_event_dropped_total,
     chat_stream_event_produced_total,
     sse_resume_total,
@@ -65,6 +67,18 @@ _SSE_QUEUE_MAXSIZE = CHAT_SSE_QUEUE_MAXSIZE
 _SSE_GET_TIMEOUT = CHAT_SSE_GET_TIMEOUT
 # SSE 心跳间隔（秒）：空闲超过此值发 ping 保活（实测链路空闲 ~97s 断流，15s 余量充足）
 _SSE_PING_INTERVAL = 15.0
+
+
+def _record_executor_wait(submitted_at: float | None) -> None:
+    """P1-3 执行池观测：producer 排队等待时长（提交→开始执行近似）。
+
+    submitted_at 为 None（异常路径锚丢失）时静默跳过；指标上报软失败。
+    """
+    try:
+        if submitted_at is not None:
+            chat_sse_executor_wait_seconds.observe(time.monotonic() - submitted_at)
+    except Exception:
+        logger.debug("[P1-3] executor wait 指标上报失败", exc_info=True)
 
 
 def _request_key(session_id: str, request_id: str) -> str:
@@ -306,6 +320,9 @@ async def chat_stream(
     stop_event: threading.Event = threading.Event()
     loop = asyncio.get_running_loop()
     aq: asyncio.Queue = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
+    # P1-3 执行池观测：提交时刻锚（event_generator 写，producer 首行读，
+    # dict 跨闭包共享；wait = 提交 → 开始执行的近似排队时长）
+    pool_wait_anchor: dict = {"submitted_at": None}
 
     # —— F2 Resume Protocol：注册流记录，producer 全量事件入有界缓冲，——
     # —— 客户端断开只脱离订阅，服务端跑完供 resume 重放。——
@@ -347,6 +364,9 @@ async def chat_stream(
         F2：每个事件先 record.append（seq 编号 + 入恢复缓冲）再投递——
         客户端断开后 producer 继续跑到自然终态，注册表持有完整事件尾。
         """
+        # P1-3：进入 worker 线程即活跃（finally 对称 dec）；wait 在此观测
+        chat_sse_executor_active.inc()
+        _record_executor_wait(pool_wait_anchor.get("submitted_at"))
         try:
             for evt in agent.stream_events(
                 req.question,
@@ -394,11 +414,14 @@ async def chat_stream(
             _put_final_frame(aq, loop, stop_event, None)  # sentinel
             record.finish()
             _active_stops.pop(key, None)  # 断连脱离后 /chat/abort 仍可命中直至终态
+            chat_sse_executor_active.dec()  # P1-3：与入口 inc 对称，任何出口都归零
 
     async def event_generator():
         """异步生成器：从 asyncio.Queue 取事件 → SSE 格式化 → yield。"""
         # 注册中止标志（cleanup 在 finally 强制执行）
         _active_stops[key] = stop_event
+        # P1-3：锚定提交时刻（run_in_executor 后 producer 可能因池满排队）
+        pool_wait_anchor["submitted_at"] = time.monotonic()
         future = loop.run_in_executor(_executor, producer)
 
         client_aborted = False

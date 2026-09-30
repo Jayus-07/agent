@@ -17,7 +17,11 @@ LOG_FILE = os.getenv("LOG_FILE", "rag_system.log")
 OVERALL_REQUEST_TIMEOUT = int(os.getenv("OVERALL_REQUEST_TIMEOUT", "60"))
 
 # ── SSE 流式对话运行时配置（P1-14：自 chat.py 收敛到 config）──
-# worker 数 = SSE 并发上限；第 N+1 路排队等待空闲 worker；0 = 按 CPU 自适应
+# worker 数 = SSE 并发上限；第 N+1 路排队等待空闲 worker；0 = 按 CPU 自适应。
+# sizing 口径（P1-3，2026-09-30）：workers ≈ 目标 SSE 并发数（每路流全程
+# 占用 1 个 worker 线程直到终帧，不是短任务）；排队即背压信号——
+# chat_sse_executor_active 持平 max_workers 且 chat_sse_executor_wait_seconds
+# 分布右移 = 容量不足，应上调本值或前端限流，而不是让它表现为首字延迟升高。
 CHAT_SSE_MAX_WORKERS = int(os.getenv("CHAT_SSE_MAX_WORKERS", "0")) or max(
     4, (os.cpu_count() or 4) * 2
 )

@@ -416,6 +416,19 @@ state_unknown_key_total = Counter(
     labelnames=("node",),
 )
 
+# ── SSE 执行池观测（P1-3，2026-09-30）──
+# 容量不足的外在症状只有 503/首字延迟升高，这两项指标用于定位是否池排队：
+# active 持平于 max_workers 且 wait 分布右移 = 容量瓶颈信号
+chat_sse_executor_active = Gauge(
+    "chat_sse_executor_active",
+    "chat-sse 线程池当前正在执行的 producer 数（ producer 进出对称 inc/dec）",
+)
+chat_sse_executor_wait_seconds = Histogram(
+    "chat_sse_executor_wait_seconds",
+    "producer 从提交线程池到开始执行的等待时长（近似=提交→首个事件产出前）",
+    buckets=(0.005, 0.025, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+)
+
 # ── 运营指标（2026-08-11 新增）──
 # 累计计数（用于计算 rates）
 rag_query_total = Counter(
@@ -1435,6 +1448,9 @@ __all__ = [
     "dist_gate_unavailable_total",
     # 状态键登记守卫（P1-1）
     "state_unknown_key_total",
+    # SSE 执行池观测（P1-3）
+    "chat_sse_executor_active",
+    "chat_sse_executor_wait_seconds",
     # 任务 Admission Control（Phase2 Step4）
     "task_admission_requests_total",
     "task_admission_allowed_total",
