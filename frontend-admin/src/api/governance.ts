@@ -41,6 +41,28 @@ export function getToolInventory(): Promise<ToolInventory> {
   return request<ToolInventory>('/api/admin/tools')
 }
 
+// ── Tool 契约变更历史（治理验收 #9） ──────────────────
+
+export interface ToolContractChange {
+  id: number
+  from_lock_hash: string
+  to_lock_hash: string
+  classification: 'BREAKING' | 'DEGRADED' | 'COMPATIBLE' | 'INIT'
+  changed_tools: {
+    tool: string
+    classification?: string
+    changes?: { kind: string; param?: string; classification?: string }[]
+  }[]
+  tool_count: number
+  git_sha: string
+  detected_by: string
+  created_at: string
+}
+
+export function getToolContractChanges(limit = 20): Promise<{ changes: ToolContractChange[] }> {
+  return request<{ changes: ToolContractChange[] }>(`/api/admin/tools/changes?limit=${limit}`)
+}
+
 export interface ToolStats {
   scope: string
   totals: {

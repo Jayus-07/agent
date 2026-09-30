@@ -13,8 +13,10 @@ import PageHeader from '@/components/layout/PageHeader'
 import ErrorState from '@/components/shared/ErrorState'
 import EmptyState from '@/components/shared/EmptyState'
 import {
+  getToolContractChanges,
   getToolInventory,
   getToolStats,
+  type ToolContractChange,
   type ToolContractEntry,
   type ToolInventory,
   type ToolStats,
@@ -29,6 +31,26 @@ const ERROR_CLASS_LABEL: Record<string, string> = {
   contract_error: '契约',
   provider_error: '供应商',
   unknown: '未知',
+}
+
+const CHANGE_KIND_LABEL: Record<string, string> = {
+  tool_removed: '删除 Tool',
+  tool_added: '新增 Tool',
+  param_removed: '删除参数',
+  param_added: '新增参数',
+  param_type_changed: '参数类型变更',
+  required_changed: '必填性变更',
+  default_changed: '默认值变更',
+  output_type_changed: '输出类型变更',
+  capability_binding_changed: 'Capability 归属变更',
+  description_changed: '描述变更',
+}
+
+const CLASS_META: Record<string, { label: string; cls: string }> = {
+  BREAKING: { label: 'BREAKING', cls: 'bg-red-100 text-red-700' },
+  DEGRADED: { label: 'DEGRADED', cls: 'bg-amber-100 text-amber-700' },
+  COMPATIBLE: { label: 'COMPATIBLE', cls: 'bg-emerald-100 text-emerald-700' },
+  INIT: { label: 'INIT', cls: 'bg-slate-100 text-slate-600' },
 }
 
 function StatCard({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'warn' }) {
@@ -97,16 +119,18 @@ function ToolRow({ tool }: { tool: ToolContractEntry }) {
 export default function ToolsPage() {
   const [inventory, setInventory] = useState<ToolInventory | null>(null)
   const [stats, setStats] = useState<ToolStats | null>(null)
+  const [changes, setChanges] = useState<ToolContractChange[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   const load = () => {
     setLoading(true)
     setError(null)
-    Promise.all([getToolInventory(), getToolStats()])
-      .then(([inv, st]) => {
+    Promise.all([getToolInventory(), getToolStats(), getToolContractChanges()])
+      .then(([inv, st, ch]) => {
         setInventory(inv)
         setStats(st)
+        setChanges(ch.changes)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
@@ -203,6 +227,50 @@ export default function ToolsPage() {
             <CheckCircle2 size={12} />
             契约与代码同源派生（G2 禁手抄）；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL/Competitor）
           </p>
+
+          {changes.length > 0 && (
+            <div className="mt-6 overflow-hidden rounded-lg border border-black/5 bg-white">
+              <div className="border-b border-black/5 bg-slate-50/60 px-4 py-2.5 text-[13px] font-medium text-text-primary">
+                契约变更历史（生成器检测到变更时自动落库，最新在前）
+              </div>
+              <ul className="divide-y divide-black/[0.04]">
+                {changes.map((ch) => {
+                  const meta = CLASS_META[ch.classification] ?? CLASS_META.INIT
+                  return (
+                    <li key={ch.id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold ${meta.cls}`}>
+                          {meta.label}
+                        </span>
+                        <span className="font-mono text-[11px] text-text-muted">
+                          {ch.created_at.replace('T', ' ').slice(0, 19)}
+                        </span>
+                        <span className="font-mono text-[11px] text-text-secondary">git:{ch.git_sha}</span>
+                        <span className="text-[11px] text-text-muted">{ch.tool_count} Tool</span>
+                        <span className="text-[11px] text-text-muted/70">via {ch.detected_by}</span>
+                      </div>
+                      {ch.changed_tools.length > 0 && (
+                        <ul className="mt-1.5 space-y-0.5">
+                          {ch.changed_tools.map((t) => (
+                            <li key={t.tool} className="text-[12px] text-text-secondary">
+                              <span className="font-mono text-text-primary">{t.tool}</span>
+                              {t.changes && t.changes.length > 0 && (
+                                <span className="ml-2 text-[11px] text-text-muted">
+                                  {t.changes
+                                    .map((c) => CHANGE_KIND_LABEL[c.kind] ?? c.kind + (c.param ? `:${c.param}` : ''))
+                                    .join(' · ')}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </div>
