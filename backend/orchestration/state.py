@@ -82,6 +82,12 @@ class AgentState(TypedDict):
     executor_workflow: str | None                # V2 executor 实际执行的 workflow 名
     workflow_result: dict | None                 # V2 workflow executor 结果快照
     guard_result: dict                           # Input Guard 判定快照（风险标注，供 Tool Guard 预留）
+    # 请求级 Prompt 版本快照（治理 M4/#5：{key: active_version}）。请求开始时
+    # 由 runner 写入——回答「这次执行用的是哪版 prompt」，发布中途换版可追溯；
+    # checkpointer 开启时随 state 持久化，Celery 断点续跑恢复原版本。
+    # **必须入 schema**：LangGraph updates 流剥离 schema 外键（同
+    # selection_blocked/_clarify 坑，见 OrchestratorState 注释）。
+    prompt_versions: dict
     # ⭐ 新增：可观测性 + 流程控制字段
     alerts: list[dict]                          # PlanAlert 列表（SSE 流展示）
     _supervisor_loop_count: int                 # Supervisor 调度轮次计数

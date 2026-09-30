@@ -1,0 +1,82 @@
+# 契约质量门禁（治理 M1/#3/#8，2026-09-30 重启用并更新为新守卫形态）
+#
+# 检查内容：
+# 1. Tool 契约 lock 漂移（--check：改签名不重生成 lock = FAIL，
+#    BREAKING/DEGRADED/COMPATIBLE 自动分类）
+# 2. 四组资产一致性测试（registry/layer/adr0001/tool_contract_lock）
+# 3. Tool 重复定义检测（既有 P0 质量脚本）
+# 4. prompts.lock.json 结构校验（强校验需 DB，本地/release preflight 跑）
+#
+# 触发：PR 涉及 backend/tools、backend/skills、契约 lock 文件、prompts；
+#       每日定时；手动。
+
+name: Contract Quality Check
+
+on:
+  pull_request:
+    paths:
+      - 'backend/tools/**/*.py'
+      - 'backend/skills/**/*.py'
+      - 'backend/tool_contracts.lock.json'
+      - 'backend/prompts.lock.json'
+      - 'backend/prompts/**/*.yaml'
+      - '.github/workflows/tool_quality.yml'
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: contract-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+
+      - name: Tool contract lock drift check
+        run: |
+          echo "=== Tool 契约 lock 漂移检测（BREAKING/DEGRADED/COMPATIBLE）==="
+          python -m backend.scripts.gen_tool_contract_lock --check
+
+      - name: Asset consistency tests
+        run: |
+          echo "=== 资产一致性四件套（registry/layer/adr0001/lock）==="
+          cd backend && pytest tests/test_registry_consistency.py \
+            tests/test_layer_consistency.py \
+            tests/test_adr0001_dual_registry_merge.py \
+            tests/test_tool_contract_lock.py \
+            -q --no-cov
+
+      - name: Tool duplicate check (P0)
+        run: |
+          echo "=== Tool 重复定义检测 ==="
+          python scripts/tool_quality_check_clean.py
+
+      - name: Prompt lock structure check (no-DB)
+        run: |
+          echo "=== prompts.lock.json 结构校验（强校验需 DB，本地跑）==="
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("backend/prompts.lock.json", encoding="utf-8"))
+          assert data["version"] == 1, "lock 格式版本"
+          assert data["prompt_count"] == len(data["prompts"]) > 0, "计数一致"
+          for k, e in data["prompts"].items():
+              assert set(e) == {"active_version", "template_hash", "change_kind"}, k
+          print(f"prompt lock OK: {data['prompt_count']} prompts")
+          PY

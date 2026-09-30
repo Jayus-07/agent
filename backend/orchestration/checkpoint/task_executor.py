@@ -253,6 +253,17 @@ class TaskGraphExecutor:
                 "execution_id": self._execution_id or "",
                 "queue": record.queue or "",
             })
+            # 任务级 Prompt 版本 pin（治理 #5）：本 execution 开始时定格；
+            # 断点续跑的新 execution 重新快照（恢复时用的是恢复时点的版本，
+            # 与 checkpoint 内 state.prompt_versions 对照可发现中途换版）。
+            try:
+                from backend.prompts.service import prompt_service
+
+                _pv = prompt_service.current_versions()
+                trace.tags["prompt_versions"] = ",".join(
+                    f"{k}={v}" for k, v in sorted(_pv.items())[:12]) or "none"
+            except Exception:
+                pass
             trace_collector.start_span(
                 "root", parent_id=None, name="异步任务执行", type="workflow",
                 input={

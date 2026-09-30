@@ -385,6 +385,16 @@ class GraphRunner:
 
         # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
         trace = trace_collector.start(question, session_id, workflow_name="agent")
+        # 请求级 Prompt 版本 pin（治理 #5）：本次执行所用版本在开始时定格，
+        # 发布中途换版不影响已快照的值；trace 按此 tag 回答「当时用的哪版」。
+        try:
+            from backend.prompts.service import prompt_service
+
+            _pv = prompt_service.current_versions()
+            trace.tags["prompt_versions"] = ",".join(
+                f"{k}={v}" for k, v in sorted(_pv.items())[:12]) or "none"
+        except Exception:
+            _pv = {}
         trace_collector.start_span("root", parent_id=None,
                                    name="多 Agent 协作管线", type="workflow",
                                    input={"question": question, "kb_id": kb_id})
@@ -413,6 +423,9 @@ class GraphRunner:
                 user_id=user_id, department=department,
                 domain_hint=domain_hint, tenant_id=tenant_id,
             )
+            # 请求级 Prompt 版本随 state 流动（AgentState.prompt_versions，
+            # checkpointer 开启时持久化——Celery 断点续跑恢复原版本）
+            initial_state["prompt_versions"] = _pv
         except Exception as e:
             trace_collector.end_span(retrieve_span, status="error",
                                      metrics={"error": str(e)[:100]})

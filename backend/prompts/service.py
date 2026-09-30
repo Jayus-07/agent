@@ -194,6 +194,16 @@ class PromptService:
             entry = self._snapshot.get(key)
             return entry.version if entry else None
 
+    def current_versions(self) -> dict[str, int]:
+        """进程内快照的全量 prompt 版本（纯内存零 IO，请求入口 pin 用）。
+
+        M4/#5：runner/task_executor 在请求开始时调用，把结果写进
+        AgentState.prompt_versions 与 trace.tags——保证 in-flight 流程
+        的版本可追溯（快照语义：后续发布不影响已记录的值）。
+        """
+        with self._snapshot_lock:
+            return {k: e.version for k, e in self._snapshot.items()}
+
     async def create_draft(
         self,
         key: str,

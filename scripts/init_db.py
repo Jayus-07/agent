@@ -185,6 +185,13 @@ MIGRATION_TARGETS: dict[str, str] = {
     "060_task_operation_audits.sql": "memory",
     # 客服域迁移 B12（2026-09-29）：统一案件 cs_case（工单/投诉/售后收敛基座）
     "058_cs_case.sql": "memory",
+    # 企业治理 M8（2026-09-30）：发布记录表（12 门 Release Gate 结果落库，
+    # verify_release_gate.py 收尾直写；/releases 页消费）。编号 063：
+    # 061/062 均已被并行会话 tool_contract_changes 占用（撞号连续让位）。
+    "063_release_records.sql": "memory",
+    # 企业治理验收 #9（2026-09-30）：Tool 契约变更历史台账（生成器检测到
+    # 变更自动追加，GET /api/admin/tools/changes 消费）。
+    "062_tool_contract_changes.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

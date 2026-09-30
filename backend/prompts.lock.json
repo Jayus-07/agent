@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "generated_at": "2026-09-30T08:00:11+08:00",
+  "git_sha": "d4867d2",
+  "source": "postgres://agent_memory.prompts",
+  "prompt_count": 39,
+  "prompts": {
+    "business_report.polish": {
+      "active_version": 1,
+      "template_hash": "01ec03db648aaaee",
+      "change_kind": null
+    },
+    "capability.inventory_analyzer": {
+      "active_version": 1,
+      "template_hash": "d2f9e45e71222a8c",
+      "change_kind": null
+    },
+    "competitor.extractor": {
+      "active_version": 1,
+      "template_hash": "56c4d713982fab11",
+      "change_kind": null
+    },
+    "customer_service.answer": {
+      "active_version": 1,
+      "template_hash": "8de70af74dfcb1e8",
+      "change_kind": null
+    },
+    "customer_service.system": {
+      "active_version": 1,
+      "template_hash": "5cc00c98aac43411",
+      "change_kind": null
+    },
+    "evaluation.judge.user": {
+      "active_version": 1,
+      "template_hash": "17cfb667fbb531e2",
+      "change_kind": null
+    },
+    "market_research.analyzer": {
+      "active_version": 1,
+      "template_hash": "bb1e27d6c8223ec5",
+      "change_kind": null
+    },
+    "memory.long_term.fact_extraction": {
+      "active_version": 1,
+      "template_hash": "4cd2882a183fed0a",
+      "change_kind": null
+    },
+    "memory.session.auto_compact": {
+      "active_version": 1,
+      "template_hash": "3fd24ba99c64a7ca",
+      "change_kind": null
+    },
+    "memory.session.summary": {
+      "active_version": 1,
+      "template_hash": "812c1e6e085c33b8",
+      "change_kind": null
+    },
+    "memory.trigger": {
+      "active_version": 1,
+      "template_hash": "b954c25f80348316",
+      "change_kind": null
+    },
+    "planner.critique": {
+      "active_version": 1,
+      "template_hash": "e9ac1e39e50dcddd",
+      "change_kind": null
+    },
+    "planner.system": {
+      "active_version": 1,
+      "template_hash": "5a60f45502773532",
+      "change_kind": null
+    },
+    "rag.contextualize": {
+      "active_version": 1,
+      "template_hash": "bdaf4092e261e77d",
+      "change_kind": null
+    },
+    "rag.document": {
+      "active_version": 1,
+      "template_hash": "53b6a34cdc5a437d",
+      "change_kind": null
+    },
+    "rag.evidence_gate.self_correction": {
+      "active_version": 1,
+      "template_hash": "5be25a5633a9cdfa",
+      "change_kind": null
+    },
+    "rag.guardrails.judge": {
+      "active_version": 1,
+      "template_hash": "0c72bf956f4e8ef5",
+      "change_kind": null
+    },
+    "rag.guardrails.rewrite": {
+      "active_version": 1,
+      "template_hash": "5507c6d28a019c87",
+      "change_kind": null
+    },
+    "rag.indexing.doc_type": {
+      "active_version": 1,
+      "template_hash": "c54511ae8a3e1cf5",
+      "change_kind": null
+    },
+    "rag.multi_query": {
+      "active_version": 1,
+      "template_hash": "d3ea6cc684a20879",
+      "change_kind": null
+    },
+    "rag.preprocessing.arbitration": {
+      "active_version": 1,
+      "template_hash": "a87c4fcbadfbe83e",
+      "change_kind": null
+    },
+    "rag.preprocessing.chunk_batch": {
+      "active_version": 1,
+      "template_hash": "c438ef25e227dbb0",
+      "change_kind": null
+    },
+    "rag.preprocessing.chunk_single": {
+      "active_version": 1,
+      "template_hash": "f11bca63cbea308f",
+      "change_kind": null
+    },
+    "rag.preprocessing.doc_ollama": {
+      "active_version": 1,
+      "template_hash": "75a71a0d929d8601",
+      "change_kind": null
+    },
+    "rag.preprocessing.doc_proxy": {
+      "active_version": 1,
+      "template_hash": "0a229220cedf1b29",
+      "change_kind": null
+    },
+    "rag.preprocessing.llm_enrichment": {
+      "active_version": 1,
+      "template_hash": "9f355464da99b66a",
+      "change_kind": null
+    },
+    "rag.preprocessing.metadata_extract": {
+      "active_version": 1,
+      "template_hash": "ab5a64d40cdf9fb7",
+      "change_kind": null
+    },
+    "rag.preprocessing.summary": {
+      "active_version": 1,
+      "template_hash": "c37a5cdeb55afac6",
+      "change_kind": null
+    },
+    "rag.qa": {
+      "active_version": 1,
+      "template_hash": "a15d5e85cabbdfc3",
+      "change_kind": null
+    },
+    "reporter.summary": {
+      "active_version": 1,
+      "template_hash": "6146f08b00c3417f",
+      "change_kind": null
+    },
+    "reporter.system": {
+      "active_version": 1,
+      "template_hash": "c3290de8b863f4cc",
+      "change_kind": null
+    },
+    "router.llm": {
+      "active_version": 1,
+      "template_hash": "79f253e911132d45",
+      "change_kind": null
+    },
+    "selection_decision.differentiation": {
+      "active_version": 1,
+      "template_hash": "5edef806aa3c369d",
+      "change_kind": null
+    },
+    "selection_decision.review_pain": {
+      "active_version": 1,
+      "template_hash": "d2c24f5a6b4f4c1d",
+      "change_kind": null
+    },
+    "selection.panel.vote": {
+      "active_version": 1,
+      "template_hash": "2ce27816ad62578b",
+      "change_kind": null
+    },
+    "selection.recommender.reason": {
+      "active_version": 1,
+      "template_hash": "7b00238a4553c96e",
+      "change_kind": null
+    },
+    "skill.business_analysis": {
+      "active_version": 1,
+      "template_hash": "659aaa674d59273f",
+      "change_kind": null
+    },
+    "sql.generator": {
+      "active_version": 1,
+      "template_hash": "ac5992770f700351",
+      "change_kind": null
+    },
+    "sql.router": {
+      "active_version": 1,
+      "template_hash": "88c93d6fb4c27426",
+      "change_kind": null
+    }
+  }
+}

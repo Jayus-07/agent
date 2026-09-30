@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException as _HTTP, Request
 
 from backend.app.api.deps import require_admin_user
 
@@ -168,6 +168,38 @@ async def tool_inventory(request: Request):
         "lock_error": lock_error,
         "tools": inventory,
     }
+
+
+@router.get("/changes")
+async def tool_contract_changes(request: Request, limit: int = 20):
+    """契约变更历史（治理 #9：gen_tool_contract_lock 检测到变更时自动落库）。"""
+    await require_admin_user(request)
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, from_lock_hash, to_lock_hash, classification, "
+                "changed_tools, tool_count, git_sha, detected_by, created_at "
+                "FROM ai.tool_contract_changes ORDER BY id DESC LIMIT %s",
+                (min(limit, 100),))
+            rows = cur.fetchall()
+    except Exception as e:  # noqa: BLE001 — 历史查询软失败
+        raise _HTTP(503, f"契约历史查询失败: {e}")
+    import json as _json
+
+    def _parse(v):
+        return v if isinstance(v, list) else _json.loads(v or "[]")
+
+    return {"changes": [
+        {"id": r[0], "from_lock_hash": r[1], "to_lock_hash": r[2],
+         "classification": r[3], "changed_tools": _parse(r[4]),
+         "tool_count": r[5], "git_sha": r[6], "detected_by": r[7],
+         "created_at": str(r[8])}
+        for r in rows
+    ]}
 
 
 __all__ = ["router"]

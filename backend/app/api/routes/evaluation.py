@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -156,6 +158,46 @@ async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返�
         except Exception:
             summaries.append(RunSummary(run_id=run_id))
     return summaries
+
+
+@router.get("/prompt-version-runs")
+async def eval_runs_for_prompt_version(
+    key: str = Query(..., description="prompt key"),
+    version: int = Query(..., ge=1, description="prompt 版本号"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """治理验收 #4a：某 prompt 版本关联的评测 run（JSONB 包含反查）。
+
+    数据源 ai.eval_run_records.prompt_snapshot（run 时的 PG 权威版本快照），
+    返回使用过该版本的 run（含其后发布了新版的对照）——回答「这个版本
+    上线时跑过什么评测、结果如何」。
+    """
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT run_id, module, pass_rate, case_count, pass_count,
+                       trigger, triggered_by, git_sha, created_at
+                FROM ai.eval_run_records
+                WHERE prompt_snapshot @> %s::jsonb
+                ORDER BY created_at DESC LIMIT %s
+                """,
+                # 台账写入侧口径 = str(version)（run_records.collect_prompt_snapshot），
+                # JSONB @> 严格类型匹配：这里同样转 str 才能命中
+                (json.dumps({key: str(version)}), limit))
+            rows = cur.fetchall()
+    except Exception as e:  # noqa: BLE001 — 查询软失败
+        raise HTTPException(503, f"评测台账查询失败: {e}")
+    return {"key": key, "version": version, "runs": [
+        {"run_id": r[0], "module": r[1], "pass_rate": r[2],
+         "case_count": r[3], "pass_count": r[4], "trigger": r[5],
+         "triggered_by": r[6], "git_sha": r[7], "created_at": str(r[8])}
+        for r in rows
+    ]}
 
 
 @router.get("/runs/{run_id}")

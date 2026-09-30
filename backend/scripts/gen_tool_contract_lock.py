@@ -212,10 +212,59 @@ def _load_lock_file(path: Path = LOCK_PATH) -> dict[str, Any] | None:
         return None
 
 
+def _lock_hash(tools: dict[str, Any]) -> str:
+    blob = json.dumps(
+        {n: tools[n].get("content_hash", "") for n in sorted(tools)},
+        ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def record_change_history(
+    old_tools: dict[str, Any] | None, new_tools: dict[str, Any],
+    classification: str, changed_tools: list[dict[str, Any]],
+    git_sha: str, detected_by: str,
+) -> bool:
+    """契约变更落 ai.tool_contract_changes（治理 #9，soft-fail 不阻断生成）。"""
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            conn.cursor().execute(
+                """
+                INSERT INTO ai.tool_contract_changes (
+                    from_lock_hash, to_lock_hash, classification,
+                    changed_tools, tool_count, git_sha, detected_by
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (_lock_hash(old_tools or {}), _lock_hash(new_tools),
+                 classification,
+                 json.dumps(changed_tools, ensure_ascii=False),
+                 len(new_tools), git_sha, detected_by),
+            )
+            conn.commit()
+        return True
+    except Exception as e:  # noqa: BLE001 — 台账软失败
+        print(f"[tool-contract-lock] 变更台账写入失败（不影响主流程）: {e}",
+              file=sys.stderr)
+        return False
+
+
 def run(mode: str, as_json: bool) -> int:
     snapshot = derive_snapshot()
 
     if mode == "update":
+        existing = _load_lock_file()
+        if existing is None:
+            record_change_history(None, snapshot["tools"], "INIT", [],
+                                  snapshot["git_sha"], "gen")
+        else:
+            report = classify_lock_diff(existing.get("tools", {}), snapshot["tools"])
+            if report["classification"] != "IN_SYNC":
+                record_change_history(
+                    existing.get("tools", {}), snapshot["tools"],
+                    report["classification"], report["changed_tools"],
+                    snapshot["git_sha"], "gen")
         LOCK_PATH.write_text(
             json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=False) + "\n",
             encoding="utf-8",
