@@ -3,7 +3,8 @@
 **Timeout Budget（§21）**——按 operation 冻结硬上限，实测口径：
   place  = 3.0s   （单次地点解析；底层 httpx connect 3s 已对齐）
   route  = 4.0s   （单段路线；预热并发池另有 4s 总预算不变）
-  weather= TRAVEL_WEATHER_TIMEOUT_S（默认 6s——J0 缺口 D3，此处接线生效）
+  weather= TRAVEL_WEATHER_TIMEOUT_S（默认 5s——J0 缺口 D3 接线生效；
+           Phase 4 按 v4 §9.3 时延预算 6s→5s 拍板调整）
   ticket = 3.0s   （本轮无真实适配器，预算为契约预留）
 
 原则：``Provider timeout < Travel 整体超时`` 且有界；预算到点立即失败，
@@ -48,11 +49,11 @@ def _provider_pool() -> ThreadPoolExecutor:
 
 # per-operation timeout budget（秒）。改动须同步 J0 文档 §9 与最终报告。
 # weather 的实际生效值走 resolve_budget（接线 TRAVEL_WEATHER_TIMEOUT_S），
-# 表内值仅作缺省文档。
+# 表内值仅作缺省文档（Phase 4：weather 缺省 6.0→5.0 对齐 config 默认）。
 TIMEOUT_BUDGETS: dict[str, float] = {
     "place": 3.0,
     "route": 4.0,
-    "weather": 6.0,
+    "weather": 5.0,
     "ticket": 3.0,
     # STOP K（K0 §4）：commerce 搜索为用户单发请求（非排程多段预热），
     # 预算放宽到 8s，仍远小于 SSE 会话容忍与 Travel 整体超时

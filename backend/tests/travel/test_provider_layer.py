@@ -498,6 +498,7 @@ class TestHardening:
         from backend.providers.travel.live.health import provider_health
 
         health = provider_health()
-        assert set(health) == {"tencent_lbs", "weather", "ticket"}
+        # Phase 4：qweather 备用源接入 health（f4f9628）后补录期望键
+        assert set(health) == {"tencent_lbs", "weather", "ticket", "qweather_backup"}
         assert health["ticket"] == "disabled"
         assert health["tencent_lbs"] in ("healthy", "degraded", "disabled")

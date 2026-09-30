@@ -115,13 +115,9 @@ def get_qweather_provider():
 
 def get_weather_provider():
     if "weather" not in _SINGLETONS:
-        from backend.config.map import is_qweather_configured
-        from backend.providers.travel.live.tencent import TencentWeatherProvider
+        # Phase 4（D2）：装配改经 ProviderRouter 链账驱动，装配产物与原
+        # 硬编码逐字节同构（有 key→Fallback(主,备)/无 key→裸腾讯）
+        from backend.providers.travel.live.router import assemble_weather_provider
 
-        primary = TencentWeatherProvider()
-        if is_qweather_configured():
-            _SINGLETONS["weather"] = FallbackWeatherProvider(
-                primary, get_qweather_provider())
-        else:
-            _SINGLETONS["weather"] = primary
+        _SINGLETONS["weather"] = assemble_weather_provider()
     return _SINGLETONS["weather"]

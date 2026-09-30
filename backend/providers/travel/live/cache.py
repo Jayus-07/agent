@@ -5,8 +5,10 @@
 
 四条契约：
 
-1. **分数据 TTL（§28）**：place 600s（基本事实稳定）/ route 120s（含路况）/
-   weather 300s（预报快变）/ ticket 600s。禁止一个 TTL 管所有。
+1. **分数据 TTL（§28；Phase 4 按目标设计 v4 调整并经用户拍板）**：
+   place 86400s=24h（坐标/名称等稳定事实）/ route 1800s=30min（含路况，
+   陈旧上界放宽已拍板）/ weather 600s=10min（预报快变）/ ticket 600s。
+   禁止一个 TTL 管所有。
 2. **缓存键含全部影响参数（§29）+ 归一化（§30）**：坐标统一 4 位小数
    （≈11m，与 live_map 既有路段缓存同精度）；mode/日期窗/provider 进键。
 3. **Negative cache（§31）**：只有 NOT_FOUND 允许短缓存（60s）——相同
@@ -32,10 +34,12 @@ from typing import Any, Callable
 from backend.shared.logger import logger
 
 # 分数据 TTL（秒）。改动须同步 J0 文档与最终报告。
+# Phase 4 调整（v4 目标值）：place 600→86400 / route 120→1800 / weather 300→600；
+# ticket 与 commerce 各条不变；键格式不变，存量条目自然过期无迁移。
 FRESH_TTLS: dict[str, int] = {
-    "place": 600,
-    "route": 120,
-    "weather": 300,
+    "place": 86400,
+    "route": 1800,
+    "weather": 600,
     "ticket": 600,
     # ── STOP K（K0 §8）：commerce 分数据 TTL ──
     # 五类语义条目（hotel_meta/hotel_avail/hotel_price/flight_offer/

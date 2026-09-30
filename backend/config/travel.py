@@ -152,7 +152,8 @@ def city_cost_tier(city: str) -> dict[str, float]:
 # =============================================
 TRAVEL_WEATHER_ENABLED = os.getenv("TRAVEL_WEATHER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 # 天气 API 失败/超时的整体预算（秒）：天气检查是增强项，不能拖垮排程主链
-TRAVEL_WEATHER_TIMEOUT_S = float(os.getenv("TRAVEL_WEATHER_TIMEOUT_S", "6"))
+# （Phase 4 按 v4 §9.3 时延预算 6→5s；fallback 链与 stale 兜底已存在）
+TRAVEL_WEATHER_TIMEOUT_S = float(os.getenv("TRAVEL_WEATHER_TIMEOUT_S", "5"))
 # 预报文本命中这些词判为「坏天气日」（腾讯天气字段为中文短语，如"中雨"）
 TRAVEL_BAD_WEATHER_KEYWORDS: tuple[str, ...] = (
     "雨", "雪", "雷", "雹", "台风", "沙尘", "冻",
