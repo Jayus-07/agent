@@ -196,3 +196,28 @@ class OrchestratorState(AgentState):
     # 流剥离 schema 外键」的活证据：任何改为从 state 读的消费方都会拿到
     # None。登记后与 cs_context 等域上下文字段同语义。
     cs_pending_action: dict | None
+
+
+# ── 状态键登记守卫（P1-1，2026-09-30）─────────────────────────────
+# 由注解派生，禁止手抄键名（G2）。OrchestratorState 的 TypedDict 继承
+# 在部分 Python 版本不合并基类 __annotations__，并集写法两种行为下都正确。
+KNOWN_STATE_KEYS: frozenset[str] = (
+    frozenset(AgentState.__annotations__)
+    | frozenset(OrchestratorState.__annotations__)
+)
+
+
+def validate_state_update(node_name: str, update: dict) -> list[str]:
+    """校验节点 update 只含已登记状态键，返回未知键列表（纯函数，可单测）。
+
+    背景：LangGraph 会剥离 schema 外的键——state 与 updates 流均不可见
+    （2026-09-30 实验证实），selection_blocked / _clarify / funnel_context /
+    travel_context / prompt_versions 均踩过：写入点静默丢失，只能人工排查。
+    守卫接线（trace_middleware.check_state_update）在节点返回后、交回
+    LangGraph 前调用本函数——发现未知键的正确修法是补登记进 schema，
+    不接受 exclude 黑名单。node_name 供调用方告警定位，此处保持纯校验。
+    """
+    _ = node_name
+    if not isinstance(update, dict):
+        return []
+    return [key for key in update if key not in KNOWN_STATE_KEYS]
