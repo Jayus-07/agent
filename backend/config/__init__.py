@@ -30,6 +30,19 @@ MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 # 低优先级（上传/重索引/导出）几乎不等待直接拒绝。0 表示禁用排队（恢复纯 503）。
 CONCURRENCY_QUEUE_TIMEOUT = float(os.getenv("CONCURRENCY_QUEUE_TIMEOUT", "10"))
 
+# 分布式准入门（2026-09-30 主架构改造 P0-1）：Redis 全局硬上限，多副本共享。
+# 进程内 _PriorityGate 只管单副本，扩 N 副本实际放行 N×MAX_CONCURRENT_REQUESTS；
+# 本门用 Redis sorted set 槽位补全局口径。分层语义：本门=硬上限无等待队列
+# （满即 503+Retry-After），排队/优先级仍由进程内门承担；Redis 不可用
+# fail-open 放行（进程内门兜底）。默认 false——关闭时零 Redis 访问、行为与主线一致。
+DIST_CONCURRENCY_ENABLED = os.getenv("DIST_CONCURRENCY_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# 全局并发上限（跨全部副本合计）
+DIST_MAX_CONCURRENT_REQUESTS = int(os.getenv("DIST_MAX_CONCURRENT_REQUESTS", "50"))
+# 槽位租约 TTL（秒）：持槽进程崩溃后，过期槽位由后续 acquire 顺带回收
+DIST_GATE_LEASE_TTL_SECONDS = int(os.getenv("DIST_GATE_LEASE_TTL_SECONDS", "30"))
+# 租户级上限（按 JWT tenant_id claim 分桶，与全局上限叠加判定）；0=不启用
+DIST_TENANT_MAX_CONCURRENT = int(os.getenv("DIST_TENANT_MAX_CONCURRENT", "0"))
+
 # 安全
 API_KEY = os.getenv("API_KEY", "")
 # 显式豁免认证（仅限本地开发调试；生产环境禁止开启）
@@ -406,6 +419,10 @@ __all__ = [
     "MAIN_GRAPH_RECURSION_LIMIT", "MAIN_GRAPH_CHECKPOINTER_ENABLED",
     # 拒答转追问
     "REFUSAL_CLARIFY_ENABLED",
+    # 并发控制 / 分布式准入门
+    "MAX_CONCURRENT_REQUESTS", "CONCURRENCY_QUEUE_TIMEOUT",
+    "DIST_CONCURRENCY_ENABLED", "DIST_MAX_CONCURRENT_REQUESTS",
+    "DIST_GATE_LEASE_TTL_SECONDS", "DIST_TENANT_MAX_CONCURRENT",
     # database
     "RAG_DATA_DIR", "CHUNK_STORE_PATH",
     "BM25_INDEX_DIR", "CHROMA_PATH", "DOC_DB_PATH", "DOCS_DIRECTORY",

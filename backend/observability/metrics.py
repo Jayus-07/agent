@@ -394,6 +394,21 @@ request_concurrency_reject_total = Counter(
     labelnames=("reason",),  # queue_timeout
 )
 
+# ── 分布式准入门（2026-09-30 主架构改造 P0-1）──
+dist_gate_active = Gauge(
+    "dist_gate_active",
+    "本进程当前持有的分布式准入槽数（全局总量在 Redis zset，本指标仅为进程视角）",
+)
+dist_gate_reject_total = Counter(
+    "dist_gate_reject_total",
+    "分布式门上限拒绝（503）的请求数（按原因）",
+    labelnames=("reason",),  # global_limit | tenant_limit
+)
+dist_gate_unavailable_total = Counter(
+    "dist_gate_unavailable_total",
+    "分布式门 Redis 不可用而 fail-open 放行的请求数",
+)
+
 # ── 运营指标（2026-08-11 新增）──
 # 累计计数（用于计算 rates）
 rag_query_total = Counter(
@@ -1407,6 +1422,10 @@ __all__ = [
     "request_concurrency_queued",
     "request_concurrency_wait_seconds",
     "request_concurrency_reject_total",
+    # 分布式准入门（P0-1）
+    "dist_gate_active",
+    "dist_gate_reject_total",
+    "dist_gate_unavailable_total",
     # 任务 Admission Control（Phase2 Step4）
     "task_admission_requests_total",
     "task_admission_allowed_total",

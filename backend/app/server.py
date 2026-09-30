@@ -19,6 +19,7 @@ from backend.app.exceptions import (
 )
 from backend.app.api.middleware.access_log import access_log_middleware
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
+from backend.app.api.middleware.distributed_gate import distributed_gate_middleware
 from backend.app.api.middleware.auth import api_key_middleware, must_change_password_gate
 from backend.observability.metrics import render_metrics
 from backend.shared.logger import logger
@@ -58,6 +59,11 @@ async def upload_size_limit_middleware(request, call_next):
                 status_code=413,
             )
     return await call_next(request)
+
+# 2.5 分布式准入门（P0-1，2026-09-30）：Redis 全局硬上限，多副本共享；
+#     注册在 concurrency 之前（= 执行时在其内层）——先拿进程内槽再占全局槽，
+#     不持全局槽空等排队。DIST_CONCURRENCY_ENABLED 默认关，关闭时零 Redis 访问
+app.middleware("http")(distributed_gate_middleware)
 
 # 3. 并发控制：最后，只限流已认证的合法请求
 app.middleware("http")(concurrency_limit_middleware)
