@@ -135,6 +135,32 @@ def _with_llm_attribution(func):
     return wrapper
 
 
+_contract_hash_cache: dict[str, str] | None = None
+
+
+def _tool_contract_hash(tool_name: str) -> str:
+    """Tool 名 → 契约 hash（治理 #5：Tool 版本随 trace span 可追溯）。
+
+    数据源 tool_contracts.lock.json（构建期随镜像），进程内缓存一次；
+    lock 缺失/未命中返回空串——观测软失败，绝不影响执行。
+    """
+    global _contract_hash_cache
+    if _contract_hash_cache is None:
+        try:
+            import json
+            from pathlib import Path
+
+            lock_path = Path(__file__).resolve().parents[1] / "tool_contracts.lock.json"
+            data = json.loads(lock_path.read_text(encoding="utf-8"))
+            _contract_hash_cache = {
+                name: entry.get("content_hash", "")
+                for name, entry in data.get("tools", {}).items()
+            }
+        except Exception:
+            _contract_hash_cache = {}
+    return _contract_hash_cache.get(tool_name, "")
+
+
 def _record_skill_failure(skill_name: str, tool_status, error_code: str = "") -> None:
     """skill_failure_total 埋点（M2 / 台账 D2：该指标此前定义了但零埋点）。
 
@@ -375,12 +401,16 @@ class BaseSkill(ABC):
         )
 
         tool_fn, invoke_params = self._select_tool(sr["capability"], params)
+        # Tool 契约版本随 span（治理 #5：Tool 版本可追溯；hash 来自
+        # tool_contracts.lock.json 进程内缓存，未命中=空）
+        contract_md = {"contract_hash": _tool_contract_hash(
+            getattr(tool_fn, "name", ""))}
 
         # ── 执行：统一治理层（默认）或旧执行循环（紧急回滚开关）──
         if _tool_runtime_enabled():
             await self._execute_governed(
                 state, sr, step_results, tool_fn, invoke_params, params,
-                raw_timeout, raw_max_retries, tool_span,
+                raw_timeout, raw_max_retries, tool_span, contract_md=contract_md,
             )
         else:
             await self._execute_legacy_loop(
@@ -397,7 +427,7 @@ class BaseSkill(ABC):
         self, state: dict, sr: dict, step_results: dict,
         tool_fn: Any, invoke_params: dict, params: dict,
         timeout: float | None, max_retries: int | None,
-        tool_span: str,
+        tool_span: str, contract_md: dict | None = None,
     ) -> None:
         from dataclasses import replace as dc_replace
 
@@ -462,7 +492,8 @@ class BaseSkill(ABC):
                           finished_at=time.time())
                 step_results[sr["step_id"]] = dict(sr)
                 trace_collector.end_span(tool_span, status="error",
-                    metrics={"error": f"validation:{e.layer}", "retries": result.retry_count})
+                    metrics={"error": f"validation:{e.layer}", "retries": result.retry_count,
+                             **(contract_md or {})})
                 logger.warning(f"[{self.name}] step={sr['step_id']} 输出校验失败: {e.layer}")
                 return
             sr.update(status="success", output=output, error=None, error_type=None,
@@ -481,7 +512,8 @@ class BaseSkill(ABC):
             logger.info(f"[{self.name}] step={sr['step_id']} 成功 (耗时 {elapsed:.2f}s)")
             trace_collector.end_span(tool_span,
                 output={"result": output},
-                metrics={"elapsed_s": round(elapsed, 2), "retries": result.retry_count})
+                metrics={"elapsed_s": round(elapsed, 2), "retries": result.retry_count,
+                         **(contract_md or {})})
             return
 
         # ── 失败/降级分支：按 criticality 决定 workflow 走向（§8/§15/§16）──
@@ -498,7 +530,7 @@ class BaseSkill(ABC):
             step_results[sr["step_id"]] = dict(sr)
             trace_collector.end_span(tool_span, status="skipped",
                 metrics={"error": result.error_code or "", "retries": result.retry_count,
-                         "fallback": result.fallback_used or ""})
+                         "fallback": result.fallback_used or "", **(contract_md or {})})
             logger.warning(
                 f"[{self.name}] step={sr['step_id']} optional 失败已跳过: {result.error_code}")
             return
@@ -519,7 +551,7 @@ class BaseSkill(ABC):
             metrics={"error": result.error_message or user_msg,
                      "error_code": result.error_code or "",
                      "retries": result.retry_count,
-                     "fallback": result.fallback_used or ""})
+                     "fallback": result.fallback_used or "", **(contract_md or {})})
 
         code = ("WORKER_TIMEOUT" if result.status is ToolStatus.TIMEOUT
                 else "WORKER_RETRY_EXHAUST")
