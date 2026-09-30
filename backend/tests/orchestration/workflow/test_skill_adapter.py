@@ -107,6 +107,47 @@ class TestSkillCalls:
                 assert result == {"rows": [], "total": 0}
         asyncio.run(run())
 
+    def test_call_sql_governed_records_tool_stats(self):
+        """query 模式经 safe_tool_executor：record_tool_result 以 sql.query
+        记账（P1-4 补盲区——workflow 侧工具调用进 /tools merged 统计）"""
+        async def run():
+            fake_tool = MagicMock()
+            fake_tool.ainvoke = AsyncMock(
+                return_value='{"status": "success", "data": {"rows": [1], "total": 1}}')
+            recorded: list = []
+            import backend.core.tool_runtime.executor as exec_mod
+            with mp("backend.orchestration.tools.execute_sql_tool", fake_tool), \
+                 mp.object(exec_mod, "record_tool_result",
+                           lambda r, d="": recorded.append((r.tool_name, r.status, d))):
+                result = await call_sql({"query": "SELECT 1"})
+                assert result == {"rows": [1], "total": 1}
+            assert recorded, "治理路径必须落 record_tool_result"
+            name, _status, domain = recorded[0]
+            assert name == "sql.query"
+            assert domain == "sql"
+        asyncio.run(run())
+
+    def test_call_sql_governed_failure_raises(self):
+        """治理层失败（如连接异常）→ 上抛 ValueError 进 step 失败路径
+        （与旧裸调行为等价：step 失败，只是消息来自治理层归一）"""
+        async def _noop(_delay_ms):
+            return None
+
+        async def run():
+            fake_tool = MagicMock()
+            fake_tool.ainvoke = AsyncMock(side_effect=ConnectionError("PG 不可达"))
+            import backend.core.tool_runtime.executor as exec_mod
+            with mp("backend.orchestration.tools.execute_sql_tool", fake_tool), \
+                 mp.object(exec_mod, "sleep_before_retry", _noop):
+                try:
+                    await call_sql({"query": "SELECT 1"})
+                    raised = False
+                except ValueError as e:
+                    raised = True
+                    assert "execute_sql_tool 失败" in str(e)
+                assert raised, "治理层失败应上抛 ValueError"
+        asyncio.run(run())
+
     def test_call_sql_question_mode(self):
         """call_sql 的 question 模式走 NL→SQL Agent（call_skill）"""
         async def run():

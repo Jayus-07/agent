@@ -90,10 +90,27 @@ async def call_sql(params: dict) -> dict:
     - params 含 "question" 键 → 走 NL→SQL Agent（自然语言查询）
     """
     if "query" in params:
-        # 直接执行 raw SQL（绕过 Agent，避免 NL→SQL 开销和误差）
+        # 直接执行 raw SQL（绕过 Agent，避免 NL→SQL 开销和误差）。
+        # P1-4 补盲区（2026-09-30）：此前裸调 ainvoke 不经治理层，workflow
+        # 侧工具调用不进 record_tool_result（/tools 页 merged 口径看不到）。
+        # 现经统一 safe_tool_executor：获得统计 + 超时/重试/熔断治理。
+        # 封套语义不变——failed 封套仍由本层上抛 ValueError 进 step 失败
+        # 路径（与 BaseSkill 治理路径同口径：语义失败计 ok，异常才计错误
+        # 分类）；治理层拦截（熔断/隔离舱/超时）同样上抛保持 step 失败。
+        from backend.core.tool_runtime.executor import safe_tool_executor
+        from backend.core.tool_runtime.models import ToolStatus
         from backend.orchestration.tools import execute_sql_tool
         from backend.shared.tool_envelope import unwrap_envelope
-        result_str = await execute_sql_tool.ainvoke({"query": params["query"]})
+        executed = await safe_tool_executor.run(
+            tool_key="sql.query",
+            call=lambda: execute_sql_tool.ainvoke({"query": params["query"]}),
+            domain="sql",
+        )
+        if executed.status is not ToolStatus.SUCCESS:
+            raise ValueError(
+                f"execute_sql_tool 失败: {executed.error_message or executed.error_code}"
+            )
+        result_str = executed.data
         # 边界归一（STOP G M2：解包统一走 shared/tool_envelope.unwrap_envelope，
         # 不再手写 json.loads + status 判断）：execute_sql_tool 已统一封套
         # （shared/tool_envelope.py）——成功拆出 data 返回；失败上抛，

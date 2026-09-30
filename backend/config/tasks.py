@@ -182,6 +182,12 @@ CELERY_METADATA_SHADOW_QUEUE = os.getenv(
 CELERY_MAINTENANCE_QUEUE = os.getenv("CELERY_MAINTENANCE_QUEUE", "maintenance")
 CELERY_REPORT_QUEUE = os.getenv("CELERY_REPORT_QUEUE", "report")
 
+# worker 存活探测超时（秒，/admin/tasks/queues 用）。2s 在 worker 事件循环
+# 滞后（重启后 gossip/心跳积压，实测 drift 183s 警告伴随）时会误报全部
+# offline——2026-09-30 实测 5/5 在线但 2s ping 0 响应、5s 全 pong，放宽默认
+# 并允许 env 覆盖（管理端低频只读端点，可接受最坏 5s 延迟）。
+TASK_WORKERS_PING_TIMEOUT = float(os.getenv("TASK_WORKERS_PING_TIMEOUT", "5"))
+
 # 未登记 workflow 的路由降级队列（Phase2 Step3 queue_router 消费）。
 # 默认空 = fail-closed（未登记直接拒绝入队）；显式设为物理队列名时
 # 未登记路由降级 legacy_fallback 并必打 warning（可审计的逃生门）。

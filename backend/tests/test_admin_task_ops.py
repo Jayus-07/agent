@@ -149,3 +149,53 @@ class TestQueuesEndpoint:
         assert len(resp["queues"]) == 5
         assert all(q["waiting"] is None for q in resp["queues"])
         assert "physical" in resp["queues"][0]
+
+    @pytest.mark.asyncio
+    async def test_workers_ping_uses_config_timeout(self, monkeypatch):
+        """worker 存活探测超时来自 config（默认 5s，env 可覆盖）。
+
+        2026-09-30 实测：worker 全在线但事件循环滞后时 2s ping 0 响应，
+        workers_online 误报 0——超时放宽为配置项而非写死。
+        """
+        from backend.app.api.routes import admin_tasks as mod
+        from backend.config import tasks as tasks_cfg
+
+        captured: dict = {}
+
+        class _FakeCelery:
+            class control:
+                @staticmethod
+                def ping(**kwargs):
+                    captured.update(kwargs)
+                    return [{"agent-worker@x": {"ok": "pong"}}]
+
+        class _TM:
+            celery_app = type("App", (), {"control": _FakeCelery.control})()
+
+        class _Req:
+            pass
+
+        import backend.infra.redis.client as redis_mod
+
+        monkeypatch.setattr(redis_mod, "get_redis",
+                            lambda: (_ for _ in ()).throw(RuntimeError("redis down")))
+        monkeypatch.setattr(mod, "task_manager", _TM)
+        monkeypatch.setattr(tasks_cfg, "TASK_WORKERS_PING_TIMEOUT", 5.0)
+        resp = await mod.admin_task_queues(_Req())
+        assert captured.get("timeout") == 5.0
+        assert resp["workers_online"] == 1
+
+    @pytest.mark.asyncio
+    async def test_workers_ping_timeout_env_override(self, monkeypatch):
+        """env TASK_WORKERS_PING_TIMEOUT 覆盖默认值（口径进 config 单点）。"""
+        import importlib
+
+        from backend.config import tasks as tasks_cfg
+
+        monkeypatch.setenv("TASK_WORKERS_PING_TIMEOUT", "7.5")
+        importlib.reload(tasks_cfg)
+        try:
+            assert tasks_cfg.TASK_WORKERS_PING_TIMEOUT == 7.5
+        finally:
+            monkeypatch.delenv("TASK_WORKERS_PING_TIMEOUT")
+            importlib.reload(tasks_cfg)

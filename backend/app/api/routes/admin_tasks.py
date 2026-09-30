@@ -131,6 +131,7 @@ async def admin_task_queues(request: Request):
         CELERY_METADATA_SHADOW_QUEUE,
         CELERY_RAG_INDEX_QUEUE,
         CELERY_REPORT_QUEUE,
+        TASK_WORKERS_PING_TIMEOUT,
     )
 
     queues = {
@@ -155,7 +156,8 @@ async def admin_task_queues(request: Request):
         depths = {logical: None for logical in queues}
     workers: list[str] = []
     try:
-        workers = list(task_manager.celery_app.control.ping(timeout=2.0) or []) \
+        workers = list(task_manager.celery_app.control.ping(
+            timeout=TASK_WORKERS_PING_TIMEOUT) or []) \
             if hasattr(task_manager, "celery_app") else []
     except Exception:
         workers = []

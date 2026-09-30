@@ -212,6 +212,10 @@ services:
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
+      # 评测明细单一事实源（M7：明细在 data/eval_runs/）：宿主 CLI 产生
+      # 的 run 直接对容器可见，/evaluation/runs 不再只见容器内写入的 run
+      # （2026-09-30 实测宿主两条 smoke run 在具名卷模型下页面不可见）
+      - ./data/eval_runs:/app/data/eval_runs
     # 健康检查统一在 compose 定义（镜像级 HEALTHCHECK 已从 Dockerfile 移除——
     # 它写死 8000 端口，对同镜像的非 8000 服务是永久 unhealthy 陷阱）
     healthcheck:
