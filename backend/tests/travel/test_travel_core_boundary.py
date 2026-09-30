@@ -10,12 +10,15 @@ from pathlib import Path
 TRAVEL_DIR = Path(__file__).resolve().parents[2] / "travel"
 CORE_DIR = TRAVEL_DIR / "core"
 
-# Phase 1 冻结的 core/ 文件集（Phase 2 增 intent_signals.py；Phase 3 将有意追加 supervisor.py）
+# Phase 1 冻结的 core/ 文件集（Phase 2 增 intent_signals.py；Phase 3 将有意追加
+# supervisor.py；Phase 4 增 evidence_utils.py——Evidence 组装/序列化转换薄层，
+# 模型唯一归属 contracts.py，用户拍板不并入 contracts 以免污染冻结契约文件）
 EXPECTED_CORE_FILES = {
     "__init__.py",
     "actions.py",
     "agent_base.py",
     "contracts.py",
+    "evidence_utils.py",
     "events.py",
     "intent_signals.py",
     "plan_diff.py",

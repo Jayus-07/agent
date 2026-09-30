@@ -214,7 +214,8 @@ class TestWeatherProvider:
         far = date.today() + timedelta(days=60)
         forecast = {"days": [{"date": date.today().isoformat(),
                               "day": {"weather": "晴"}, "night": {}}]}
-        monkeypatch.setattr(W, "fetch_forecast", lambda city: (forecast, ""))
+        monkeypatch.setattr(W, "fetch_forecast_evidence",
+                            lambda city: (forecast, "", None))
         itinerary = make_itinerary(brief=TravelBrief(
             destination="测试城", days=1, start_date=far))
         state = {"brief": itinerary.brief.model_dump(),
@@ -229,8 +230,8 @@ class TestWeatherProvider:
         from backend.travel.models.brief import TravelBrief
         from backend.tests.travel.conftest import make_itinerary
 
-        monkeypatch.setattr(W, "fetch_forecast",
-                            lambda city: (None, "天气服务暂时不可用"))
+        monkeypatch.setattr(W, "fetch_forecast_evidence",
+                            lambda city: (None, "天气服务暂时不可用", None))
         itinerary = make_itinerary(brief=TravelBrief(
             destination="测试城", days=1, start_date=date.today()))
         state = {"brief": itinerary.brief.model_dump(),
