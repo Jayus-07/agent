@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from backend.app.api.routes import (
     admin_tasks,
     admin_tools,
+    admin_releases,
     admin_security,
     agents,
     approvals,
@@ -89,6 +90,7 @@ api_router.include_router(capabilities.router)  # Capability 清单只读对账�
 api_router.include_router(consistency.router)  # 资产一致性单页对账矩阵（治理 M6）
 api_router.include_router(admin_tools.router)  # Tool 治理统计与清单（治理 M2）
 api_router.include_router(admin_security.router)  # 安全事件查询（治理 M9）
+api_router.include_router(admin_releases.router)  # 发布记录查询（治理 M8）
 api_router.include_router(workflows.router)
 api_router.include_router(inventory_alerts.router)
 api_router.include_router(demo.router)

@@ -16,6 +16,12 @@
   Gate 11 Model           /sys/model-health 200（治理面可达）
   Gate 12 Observability   /metrics 指标族在册 + prometheus targets up
 
+收尾落库（M8 / 台账 D8）：12 门跑完直连 agent_memory（5433）写
+ai.release_records 一行（gates/gate_details JSONB）。设计为「POST 落库」
+改直连的原因：e2e_domain 是 editor 无 admin 权限、--skip-build 场景旧容器
+无新端点、最小凭据原则（偏差已记台账）。落库失败 = 发布无记录 = 违规，
+exit 1 fail-loud；本地调试用 --no-record 跳过。
+
 用法：cd backend && PYTHONPATH=.. python scripts/verify_release_gate.py --password <pwd>
 严重级：P0=Blocker（任一 Gate FAIL 即 exit 1）；P1 默认 Blocker 需 waiver；P2 登记后可发布。
 """
@@ -41,6 +47,9 @@ except ImportError:
 GATEWAY = "http://127.0.0.1:9080"
 RESULTS: dict[str, bool] = {}
 DETAIL: dict[str, str] = {}
+
+# 发布记录直连（显式 5433：agent 权威库；5432 是宿主机原生同名库）
+PG_HOST, PG_PORT, PG_DB = "127.0.0.1", 5433, "agent_memory"
 
 
 def _request(method, url, body=None, token=None, headers=None, timeout=240):
@@ -202,10 +211,55 @@ def g12_observability() -> bool:
     return fam_ok and ups > 0
 
 
+def _pg_password() -> str:
+    """超级用户口令：PGPASSWORD_SUPERUSER 优先，回退根 .env 的 PGPASSWORD。"""
+    return (os.environ.get("PGPASSWORD_SUPERUSER")
+            or os.environ.get("PGPASSWORD") or "postgres")
+
+
+def _live_build() -> tuple[str, str]:
+    """线上容器实际构建身份（g0 同源；env 兜底供直连 :8000 不可达场景）。"""
+    try:
+        st, body = _request("GET", "http://127.0.0.1:8000/health", timeout=10)
+        if st == 200:
+            build = json.loads(body).get("build") or {}
+            return build.get("commit") or "?", build.get("build_time") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    return os.getenv("GIT_COMMIT", "unknown"), os.getenv("BUILD_TIME", "")
+
+
+def persist_release_record(started_at: float) -> bool:
+    """12 门结果落 ai.release_records（M8）。失败 fail-loud（发布无记录=违规）。"""
+    import psycopg2
+
+    git_sha, build_time = _live_build()
+    operator = os.environ.get("RELEASE_OPERATOR", "")
+    sql = ("INSERT INTO ai.release_records "
+           "(git_sha, build_time, gates, gate_details, result, operator, started_at) "
+           "VALUES (%s, %s, %s, %s, %s, %s, to_timestamp(%s))")
+    conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB,
+                            user="postgres", password=_pg_password(),
+                            connect_timeout=5)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (git_sha, build_time,
+                              json.dumps(RESULTS), json.dumps(DETAIL),
+                              "PASS" if all(RESULTS.values()) else "FAIL",
+                              operator, started_at))
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--password", required=True)
+    ap.add_argument("--no-record", action="store_true",
+                    help="本地调试：跳过发布记录落库")
     args = ap.parse_args()
+    started_at = time.time()
 
     editor = login("e2e_domain", args.password)
     # 跨租户探针：tenant-b 租户用户（直连 + 显式可信租户头）
@@ -245,6 +299,19 @@ def main() -> int:
     failed = [k for k, v in RESULTS.items() if not v]
     print("\n===== RELEASE GATE =====")
     print(json.dumps(RESULTS, indent=1))
+
+    # M8 收尾落库：任何门结果（含 FAIL）都留痕；落库失败使发布 exit 1
+    if not args.no_record:
+        try:
+            persist_release_record(started_at)
+            print("[record] ai.release_records 落库 OK")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[record][FATAL] 发布记录落库失败（无记录的发布视为违规）: "
+                  f"{str(exc)[:200]}")
+            failed.append("ReleaseRecord")
+    else:
+        print("[record] --no-record：跳过落库")
+
     print(f"\n[result] {'RELEASE_GATE_PASS' if not failed else 'RELEASE_GATE_FAIL: ' + ','.join(failed)}")
     return 0 if not failed else 1
 

@@ -14,6 +14,10 @@ if [ "$GIT_COMMIT" = "unknown" ]; then
   echo "[release][FATAL] 无法确定构建 commit（非 git 仓库？）"; exit 1
 fi
 
+echo "== 0. Tool 契约 lock 漂移检测（治理 M1/M8）=="
+(cd backend && PYTHONPATH=".." python -m backend.scripts.gen_tool_contract_lock --check) \
+  || { echo "[release][FATAL] 契约 lock 与代码漂移：先重新生成 lock 并随变更提交"; exit 1; }
+
 echo "== 1. Migration preflight =="
 (cd backend && PYTHONPATH=".." python scripts/verify_migration_state.py --image agent-db-migrate) \
   || { echo "[release][FATAL] 迁移三层不一致，先重建 db-migrate 并核对登记"; exit 1; }

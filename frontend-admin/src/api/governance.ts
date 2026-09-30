@@ -176,3 +176,46 @@ export function getTokenBreakdown(
   return request<BreakdownResponse>(
     `/api/observability/tokens/breakdown?group_by=${group_by}&days=${days}`)
 }
+
+// ── 发布记录（M8） ────────────────────────────────────
+
+export interface ReleaseRecord {
+  id: number
+  git_sha: string
+  build_time: string
+  gates: Record<string, boolean>
+  gate_details: Record<string, string>
+  result: 'PASS' | 'FAIL'
+  operator: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface ReleaseLatestResponse {
+  latest: ReleaseRecord | null
+  last_pass: ReleaseRecord | null
+}
+
+export function getReleaseLatest(): Promise<ReleaseLatestResponse> {
+  return request<ReleaseLatestResponse>('/api/admin/releases/latest')
+}
+
+export interface ReleaseListResponse {
+  total: number
+  limit: number
+  offset: number
+  releases: ReleaseRecord[]
+}
+
+export function getReleases(params: {
+  result?: string
+  limit?: number
+  offset?: number
+} = {}): Promise<ReleaseListResponse> {
+  const q = new URLSearchParams()
+  if (params.result) q.set('result', params.result)
+  q.set('limit', String(params.limit ?? 20))
+  q.set('offset', String(params.offset ?? 0))
+  return request<ReleaseListResponse>(`/api/admin/releases?${q.toString()}`)
+}
