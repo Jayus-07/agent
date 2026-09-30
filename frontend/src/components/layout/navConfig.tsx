@@ -18,8 +18,18 @@
  *   /agent?cs=1（CSDrawer 智能客服抽屉，非独立路由）。
  *   注意：api 层（src/api/*）整份保留不动 —— surface.test.ts 契约要求所有
  *   域模块共存，未用到的域模块是死代码但无害。
+ * - 2026-09-30 四次追加：新增顶层「旅游规划」→ /travel。
+ *   背景：/travel 页面 2026-09-22（P0-5）就已建成（逐日时间轴 + 费用拆分 +
+ *   地图打点 + ICS 导出），但从未挂进任何导航 —— 站内点不到，功能等于不存在。
+ *   说明：本次追加不违反 09-21 三次收敛的本意 —— 那次收敛要赶走的是
+ *   **运营/管理后台**（知识库、竞品、选品、告警工单），而旅游规划是**面向
+ *   普通用户的业务功能**，与「AI 对话」同类。且 /travel 建于收敛次日，
+ *   当时并不在「被裁撤」范围内。
+ *   生效范围：NAV 是用户端导航唯一数据源 —— 全局侧栏（Sidebar）与 /agent
+ *   任务模式侧栏（TaskSidebar 的「全部功能」折叠组）均直接 map 本数组，
+ *   故加一项即两处同时生效。
  */
-import { Brain } from 'lucide-react'
+import { Brain, Plane } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 export interface NavItem {
@@ -44,5 +54,11 @@ export const NAV: NavEntry[] = [
       // UX P1-⑤：客服直达（/agent 检测 cs=1 自动开抽屉，见 app/agent/page.tsx）
       { label: '智能客服', path: '/agent?cs=1' },
     ],
+  },
+  {
+    // 2026-09-30 新增：旅游规划独立整页（非对话子项 —— 该页输出结构化行程，
+    // 需要逐日时间轴 / 地图 / 导出，塞进对话流会丢结构）。
+    icon: <Plane size={18} />, label: '旅游规划',
+    path: '/travel',
   },
 ]

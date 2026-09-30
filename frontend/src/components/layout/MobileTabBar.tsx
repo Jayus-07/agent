@@ -3,15 +3,21 @@
 /**
  * MobileTabBar — workspace 移动断点底部导航（UX P2-⑨，≤768px）
  *
- * 设计文档 §4.1：仅 (workspace) 做 ≤768px 断点——侧栏收纳为底部四 tab
- * （对话/任务/报告/我的），移动端可完成「问答 → 报告」全旅程。
+ * 设计文档 §4.1：仅 (workspace) 做 ≤768px 断点——侧栏收纳为底部 tab，
  * (admin) 在 frontend-admin，桌面优先，不在本组件职责内。
  *
  * 断点用 Tailwind md=768px：本组件 md:hidden，桌面由 Sidebar 接管。
+ *
+ * - 2026-09-30 修正（**修复失效导航**）：原四 tab（对话/任务/报告/我的告警）
+ *   中后三个指向 /agent/tasks、/reports、/alerts —— 这三个页面目录已在
+ *   2026-09-21 三次收敛时删除（见 navConfig.tsx 演进记录），**移动端点进去
+ *   直接 404**；而 MobileTabBar.test.ts 当时仍在断言这三个 tab 存在，即
+ *   测试在保护一段失效代码。现收敛为「对话 + 旅游规划」两个**真实可达**的 tab，
+ *   与 navConfig.tsx 的用户端边界（AI 对话 + 旅游规划）保持一致。
  */
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Bell, FileText, ListChecks, MessageCircle } from 'lucide-react'
+import { MessageCircle, Plane } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 export interface TabItem {
@@ -30,9 +36,8 @@ export function isTabActive(pathname: string, tab: Pick<TabItem, 'path' | 'match
 
 export const MOBILE_TABS: TabItem[] = [
   { label: '对话', path: '/agent', match: 'exact', icon: <MessageCircle size={20} /> },
-  { label: '任务', path: '/agent/tasks', match: 'prefix', icon: <ListChecks size={20} /> },
-  { label: '报告', path: '/reports', match: 'prefix', icon: <FileText size={20} /> },
-  { label: '我的告警', path: '/alerts', match: 'prefix', icon: <Bell size={20} /> },
+  // 2026-09-30：旅游规划（/travel 页面 2026-09-22 建成，此前移动端无法触达）
+  { label: '旅游规划', path: '/travel', match: 'prefix', icon: <Plane size={20} /> },
 ]
 
 export default function MobileTabBar() {

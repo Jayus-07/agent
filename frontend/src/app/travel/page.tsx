@@ -302,7 +302,8 @@ export default function TravelPage() {
       <header>
         <h1 className="text-xl font-bold text-gray-900">旅游行程规划</h1>
         <p className="mt-1 text-sm text-gray-500">
-          填多少算多少，缺的会追问；规划完全基于规则与真实路况/天气数据，无模型发挥。
+          填多少算多少，缺的会追问；规划基于确定性规则与真实路况/天气数据，无模型发挥。
+          景点与票价为参考值，出发前请核实。
         </p>
       </header>
 

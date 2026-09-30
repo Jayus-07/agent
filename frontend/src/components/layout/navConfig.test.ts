@@ -15,6 +15,10 @@
  *   /agent/tasks、/reports、/alerts 页面目录与导航项一并移除（报告中心归
  *   管理端业务分析组、告警工单归管理端审批与安全组），核心路由断言收缩到
  *   仅 /agent；管理端路由黑名单不变。
+ * - 2026-09-30 四次追加：新增顶层「旅游规划」→ /travel（页面 09-22 已建成，
+ *   但从未挂进导航）。**不违反 09-21 收敛本意** —— 收敛针对的是运营/管理后台
+ *   （知识库/竞品/选品/告警），旅游规划属于消费者业务功能，且建于收敛次日。
+ *   故本文件「单组」断言相应放宽为「AI 对话 + 旅游规划」，管理端黑名单不变。
  */
 import { describe, it, expect } from 'vitest'
 import { NAV } from './navConfig'
@@ -38,16 +42,24 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('用户端导航 = AI 对话单组（2026-09-21 三次收敛）', () => {
+  it('用户端导航 = AI 对话 + 旅游规划（2026-09-30 四次追加）', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['AI 对话'])
-    for (const p of ['/agent']) {
+    expect(labels).toEqual(['AI 对话', '旅游规划'])
+    for (const p of ['/agent', '/travel']) {
       expect(allPaths, `用户端核心路由 ${p} 丢失`).toContain(p)
     }
     // 已裁撤页面不得回渗（页面目录已删，导航也不得再挂）
     for (const p of ['/agent/tasks', '/reports', '/alerts']) {
       expect(allPaths, `已裁撤路由 ${p} 不应出现在用户端`).not.toContain(p)
     }
+  })
+
+  it('「旅游规划」为顶层直达入口 → /travel（2026-09-30 四次追加）', () => {
+    const entry = NAV.find((e) => e.label === '旅游规划')
+    expect(entry, '「旅游规划」顶层入口丢失').toBeTruthy()
+    expect(entry?.path).toBe('/travel')
+    // 顶层直达：页面自身承载表单 + 结果（逐日时间轴/地图/导出），不需要子项
+    expect(entry?.items ?? []).toHaveLength(0)
   })
 
   it('AI 对话组含「智能客服」直达子项 → /agent?cs=1（UX P1-⑤）', () => {

@@ -4,8 +4,10 @@
  * TaskSidebar — /agent 路由的左侧任务栏
  *
  * 结构（自上而下）：品牌 + 收起 / 搜索 / 新建任务 / 全部功能（折叠）/ 时间分组会话列表 / 底部用户区。
- * 全局控制台导航在 /agent 下不渲染（见 app/layout.tsx），其 12 个业务入口被
- * 收进「全部功能」折叠分组，避免业务入口随改造丢失。
+ * 全局控制台导航在 /agent 下不渲染（见 app/layout.tsx），业务入口被收进
+ * 「全部功能」折叠分组，避免业务入口随改造丢失 —— 与全局 Sidebar 一样，
+ * 本组件直接 map navConfig 的 NAV，故 NAV 加一项此处自动出现。
+ * （2026-09-30 修正过期注释：原文「12 个业务入口」是 09-21 收敛前口径。）
  */
 import { useState } from 'react'
 import { Brain, ChevronDown, PanelLeftClose, Plus, RefreshCw, Search, User } from 'lucide-react'
