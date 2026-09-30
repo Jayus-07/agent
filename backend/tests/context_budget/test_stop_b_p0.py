@@ -304,8 +304,9 @@ class TestPreflightWiring:
         assert bound._schema_reserved() == reserved  # 缓存一致
 
         monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda u: None)
-        # 窗口 400：schema 挤占后消息只剩 ~400-reserved 的空间
-        self._small_window(monkeypatch, window=400)
+        # 窗口 600：schema（fallback 口径约 399）挤占后消息只剩 ~200 的空间，
+        # 历史必须被裁——2026-10-01 STOP A 起若保护项也放不下则硬门禁拒绝
+        self._small_window(monkeypatch, window=600)
         msgs = [SystemMessage(content="s")] + _history(2) \
             + [HumanMessage(content="当前问题")]
         bound.invoke(msgs)
@@ -314,8 +315,9 @@ class TestPreflightWiring:
         assert len(sent) < len(msgs)  # schema 挤占预算 → 历史被裁
         assert sent[-1].content == "当前问题"
 
-    def test_preflight_soft_fail_passthrough(self, monkeypatch):
-        """preflight 任何异常都原样放行（软失败，绝不阻断 LLM 调用）。"""
+    def test_preflight_fail_closed(self, monkeypatch):
+        """preflight 自身故障 → fail-closed 拒发（2026-10-01 STOP A：
+        移除「原样放行」——无法证明预算内的请求不得发给 provider）。"""
         from backend.infra.llm import proxy
         from backend.context_budget import context_budget as budget_manager
 
@@ -324,8 +326,8 @@ class TestPreflightWiring:
 
         monkeypatch.setattr(budget_manager, "get_input_budget", _boom)
         msgs = [SystemMessage(content="s"), HumanMessage(content="q")]
-        out = proxy._preflight_context((msgs,))
-        assert out[0] == msgs
+        with pytest.raises(RuntimeError, match="budget down"):
+            proxy._preflight_context((msgs,))
 
     def test_kwargs_tools_counted_in_preflight(self, monkeypatch):
         from backend.infra.llm import proxy

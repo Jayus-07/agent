@@ -179,7 +179,10 @@ class ContextBudgetManager:
             folds: list | None = None,
         ) -> PreparedContext:
             comps = _components(m, p, r)
-            used = sum(comps.values())
+            # tool_schema（extra_reserved_tokens）已在 get_input_budget 中
+            # 从预算扣除，用量对比不得再累加一次（双重扣除会把未超窗
+            # 误判成超窗）；schema 分项仍单独进指标
+            used = sum(v for k, v in comps.items() if k != "tool_schema")
             usage = ContextUsage(
                 used_tokens=used,
                 input_budget=budget,
@@ -197,7 +200,8 @@ class ContextBudgetManager:
                 logger.warning(
                     f"[ContextBudget] preflight 后仍超 hard budget: "
                     f"used={used} budget={budget} components={comps}"
-                    f"（已最大化裁剪，安全降级放行）"
+                    f"（已最大化裁剪；调用方硬门禁必须拒绝发送，"
+                    f"provider 调用次数为 0）"
                 )
                 record_overflow("preflight")
             return PreparedContext(
@@ -205,10 +209,12 @@ class ContextBudgetManager:
                 usage=usage, overflow=overflow, folds=folds or [],
             )
 
-        # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag；语义 pin 永不丢）
+        # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag；语义 pin 永不丢）。
+        # history_cap == 0 = 历史没有空间（不是关闭裁剪）：仍执行裁剪，
+        # 只保留 System 与语义 pin（2026-10-01 STOP A 语义统一）。
         history_cap = self.history_budget(
             reserved_tokens=po_tokens + rag_tokens)
-        if history_cap > 0:
+        if msgs:
             msgs, dropped = _trim_semantic(msgs, history_cap, pins=pins)
             if dropped:
                 _record_trim(dropped, msgs, list(messages or []))
@@ -267,10 +273,10 @@ class ContextBudgetManager:
             return _finalize(msgs, po, rag_texts, folds=folds)
 
         # ── 确定性裁剪（仍超限时）：旧 history → RAG 证据 → 旧 previous_outputs ──
-        # 1) 收紧 history：预算 = 剩余空间（语义 pin 消息全保留）
+        # 1) 收紧 history：预算 = 剩余空间（可为 0 = 只留保护项；语义 pin 全保留）
         remaining = budget - po_tokens - rag_tokens
-        if remaining > 0 and msgs:
-            msgs, dropped = _trim_semantic(msgs, remaining, pins=pins)
+        if msgs:
+            msgs, dropped = _trim_semantic(msgs, max(0, remaining), pins=pins)
             if dropped:
                 _record_trim(dropped, msgs, list(messages or []))
 
@@ -359,6 +365,21 @@ class ContextBudgetManager:
             self._l5_inflight.add(session_id)
         try:
             return self._run_l5(msgs, used, budget, session_id)
+        except Exception:
+            # L5 局部故障边界（2026-10-01 STOP A）：L5 链路任何异常（后台
+            # 调度失败 / 摘要异常 / projection 重建异常）都不得外溢——一旦
+            # 外溢，调用方 preflight 整体失败并回退原始消息，本轮已完成的
+            # L2/L4/硬裁全部作废（超窗直发 provider）。
+            logger.warning(
+                "[ContextBudget] L5 执行异常，沿用 L2/L4/硬裁后的"
+                "确定性结果（安全降级）", exc_info=True)
+            try:
+                from backend.observability.metrics import degradation_alerts_total
+                degradation_alerts_total.labels(
+                    code="context_autocompact_failed", level="warn").inc()
+            except Exception:
+                pass
+            return msgs, used
         finally:
             with self._l5_inflight_lock:
                 self._l5_inflight.discard(session_id)
@@ -391,18 +412,25 @@ class ContextBudgetManager:
             extra_facts = []
         try:
             loop = asyncio.get_running_loop()
-            import backend.context_budget.auto_compact as _ac
-            _t = loop.create_task(_ac.run_auto_compact_async(
-                session_id, extra_facts=extra_facts))
-            _L5_TASKS.add(_t)
-            _t.add_done_callback(_L5_TASKS.discard)
-            logger.info(
-                "[ContextBudget] L5 触发（async 上下文）→ 后台摘要，本轮安全降级")
-            emit_context_event(level="L5", action="deferred",
-                               before_tokens=used, after_tokens=used)
-            return msgs, used
         except RuntimeError:
-            pass  # 无 running loop：worker 线程同步路径，可内联执行
+            loop = None  # 无 running loop：worker 线程同步路径，可内联执行
+        if loop is not None:
+            try:
+                import backend.context_budget.auto_compact as _ac
+                _t = loop.create_task(_ac.run_auto_compact_async(
+                    session_id, extra_facts=extra_facts))
+                _t.add_done_callback(_on_l5_task_done)
+                _L5_TASKS.add(_t)
+                logger.info(
+                    "[ContextBudget] L5 触发（async 上下文）→ 后台摘要，本轮安全降级")
+                emit_context_event(level="L5", action="deferred",
+                                   before_tokens=used, after_tokens=used)
+            except Exception:
+                # 调度失败（loop 关闭中/任务创建失败等）只降级本轮，绝不外溢
+                logger.warning(
+                    "[ContextBudget] L5 后台摘要调度失败，本轮沿用"
+                    "确定性裁剪结果", exc_info=True)
+            return msgs, used
 
         started = _time.perf_counter()
         outcome = run_incremental_summary(
@@ -519,6 +547,26 @@ class ContextBudgetManager:
 
 # ── 模块级辅助 ──────────────────────────────────────────────────
 
+# L5 后台摘要任务的强引用注册表：事件循环对 Task 只持弱引用，无强引用的
+# 任务可能在完成前被 GC（asyncio 官方文档明确要求调用方自持引用）。
+# 任务异常在回调里观测，绝不外溢——外溢会让 proxy 预检整体失败并回退
+# 原始未裁剪消息（2026-10-01 STOP A：此前该集合未定义，async 分支一触发
+# 即 NameError，已完成的 L2/L4/硬裁全部作废）。
+_L5_TASKS: set = set()
+
+
+def _on_l5_task_done(task: "asyncio.Task") -> None:
+    """L5 后台任务收尾：异常观测 + 强引用释放（不外溢）。"""
+    _L5_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(
+            "[ContextBudget] L5 后台摘要任务异常（旧摘要与水位线保留，"
+            "不影响主链）", exc_info=exc)
+
+
 def _trim_semantic(msgs: list, cap: int,
                    pins: Any | None = None) -> tuple[list, int]:
     """L2 裁剪（2026-09-23 P1-2 Semantic Pin 版）。
@@ -582,7 +630,15 @@ def _shrink_po(po: dict[str, Any], budget: int) -> dict[str, Any]:
     from backend.context_budget.tool_guard import serialize_for_count
     from backend.context_budget.micro_compactor import _degrade_entry
 
-    if budget <= 0 or not po:
+    if budget <= 0:
+        # 零预算 = 没有空间：真正清空（2026-10-01 STOP A），不是保留原样。
+        # 降级后的最小摘要条目也占 token，放不下就是放不下。
+        if po:
+            logger.warning(
+                "[ContextBudget] previous_outputs 剩余空间为 0，整体清空"
+                f"（原 {len(po)} 条）")
+        return {}
+    if not po:
         return po
     result: dict[str, Any] = {}
     used = 0

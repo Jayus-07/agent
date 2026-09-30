@@ -62,7 +62,8 @@ class PreparedContext:
     """prepare_llm_context 的产出：裁剪/压缩后的 active context + 用量。
 
     overflow=True 表示经过全部确定性裁剪后仍超 hard budget（已记 warning +
-    metric，调用方拿到的是最大程度压缩后的结果，属安全降级而非静默超限）。
+    metric）。2026-10-01 STOP A 起这是硬门禁信号：调用方（llm proxy）必须
+    拒绝本次 provider 调用并抛 ContextBudgetExceededError，不得原样放行。
     folds：本轮发生的 L4 折叠台账（可序列化，供图状态留痕）。
     """
 

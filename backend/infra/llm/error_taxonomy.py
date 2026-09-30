@@ -53,6 +53,13 @@ def classify_model_error(err: BaseException) -> str:
         name = type(err).__name__.lower()
         msg = str(err).lower()
 
+        # 0) 上下文超长（2026-10-01 STOP A）：语义上属「本次输入无法
+        #    发送」，换模型/重试都无意义，由 proxy 短路成
+        #    ContextBudgetExceededError。五类词表保持不变——该异常在
+        #    到达本分类器之前已被拦截，这里是兜底探测入口。
+        if is_context_length_error(err):
+            return "provider_error"
+
         # 1) 限流（429 / rate limit 语义）
         if status == 429 or "ratelimit" in name or "rate limit" in msg \
                 or "too many requests" in msg:
@@ -81,3 +88,38 @@ def classify_model_error(err: BaseException) -> str:
         return "provider_error"
     except Exception:
         return "provider_error"
+
+
+# 上下文超长的确定性特征（2026-10-01 STOP A）。只认显式语义标记，
+# 不凭 400 状态码推断——普通参数 400 仍应走正常 provider 错误路径。
+_CONTEXT_LENGTH_MARKERS = (
+    "maximum context length",
+    "context length",
+    "context_length",
+    "context window",
+    "prompt is too long",
+    "input is too long",
+    "prompt too long",
+    "input too long",
+    "exceeds the maximum length",
+    "input length exceeds",
+    "requested too many tokens",
+    "longer than the model's context",
+)
+
+
+def is_context_length_error(err: BaseException) -> bool:
+    """provider 异常是否为「输入超出模型上下文窗口」类错误（永不抛错）。
+
+    判定通道：异常类名（ContextLengthError 等）→ 消息文本显式标记。
+    刻意保守：避免把普通 400 参数错误误判成超长（误判会让本可成功的
+    请求被硬门禁拒绝）。
+    """
+    try:
+        name = type(err).__name__.lower().replace("_", "")
+        if "contextlength" in name:
+            return True
+        msg = str(err).lower()
+        return any(m in msg for m in _CONTEXT_LENGTH_MARKERS)
+    except Exception:
+        return False

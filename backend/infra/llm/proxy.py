@@ -419,6 +419,18 @@ def _is_transient(err: BaseException) -> bool:
     return any(m in name for m in _TRANSIENT_MARKERS)
 
 
+def _is_context_length_provider_error(err: BaseException) -> bool:
+    """provider 异常是否为输入超长（判定逻辑收口在 error_taxonomy）。"""
+    from backend.infra.llm.error_taxonomy import is_context_length_error
+    return is_context_length_error(err)
+
+
+def _context_length_error() -> Exception:
+    """构造统一的超长输入错误（稳定错误码，SSE/API 层据此映射）。"""
+    from backend.context_budget.errors import ContextBudgetExceededError
+    return ContextBudgetExceededError(stage="provider")
+
+
 def _degraded_answer(reason: str = "", error_type: str = "",
                      provider: str = "", model: str = ""):
     """构造降级 AIMessage（结构与正常 LLM 返回一致）。
@@ -601,6 +613,7 @@ def _call_with_resilience(attr, *args, **kwargs):
     from backend.infra.llm.budget import (
         release_model_reservation,
         reserve_model_call,
+        review_model_reservation,
     )
 
     last_err: BaseException | None = None
@@ -614,18 +627,28 @@ def _call_with_resilience(attr, *args, **kwargs):
             return llm_circuit_breaker.call(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
             release_model_reservation()
-            # 熔断开路：立即兜底（快速失败是熔断的目的，不做无意义等待）
+            # 熔断开路：调用未发出，立即兜底（快速失败是熔断的目的，不做无意义等待）
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return _handle_terminal_failure(e, args, kwargs)
         except Exception as e:
-            release_model_reservation()
+            # 2026-10-01 P0 修复：瞬时类失败（超时/网络）供应商可能已处理并计费，
+            # 不再直接释放（等于按零成本放走）——转待对账；非瞬时（鉴权/参数等）
+            # 确定未计费，维持释放。
+            if _is_transient(e):
+                review_model_reservation("call_failed_possibly_billed")
+            else:
+                release_model_reservation()
             # C11：失败 attempt 留痕（provider 侧可能已计费，不能无声消失）
             _record_failed_attempt(
                 model_name, e,
                 decision="primary" if attempt == 0 else "retry",
             )
             last_err = e
+            if _is_context_length_provider_error(e):
+                # 超长输入：重试与换 fallback 模型都必然再超同一份输入——
+                # 以稳定错误码终止，不走兜底链（2026-10-01 STOP A）
+                raise _context_length_error() from e
             if not _is_transient(e):
                 break  # 非瞬时错误（鉴权/参数等）重试无意义
             if attempt >= LLM_MAX_RETRIES:
@@ -645,6 +668,7 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     from backend.infra.llm.budget import (
         release_model_reservation,
         reserve_model_call,
+        review_model_reservation,
     )
 
     last_err: BaseException | None = None
@@ -662,13 +686,20 @@ async def _acall_with_resilience(attr, *args, **kwargs):
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return await _ahandle_terminal_failure(e, args, kwargs)
         except Exception as e:
-            release_model_reservation()
+            # async 对称（2026-10-01 P0 修复）：瞬时失败可能已计费 → 待对账
+            if _is_transient(e):
+                review_model_reservation("call_failed_possibly_billed")
+            else:
+                release_model_reservation()
             # C11：失败 attempt 留痕（async 对称）
             _record_failed_attempt(
                 model_name, e,
                 decision="primary" if attempt == 0 else "retry",
             )
             last_err = e
+            if _is_context_length_provider_error(e):
+                # 超长输入短路（async 对称）：不重试、不 fallback
+                raise _context_length_error() from e
             if not _is_transient(e):
                 break
             if attempt >= LLM_MAX_RETRIES:
@@ -1101,7 +1132,7 @@ def _record_tokens(
             try:
                 from backend.infra.llm.budget import record_model_usage
 
-                record_model_usage(total_tokens=0, cost_usd=0)
+                record_model_usage(total_tokens=0, cost=0)
             except Exception:
                 pass
             return
@@ -1237,7 +1268,7 @@ def _record_tokens(
                 prompt_tokens=p,
                 completion_tokens=c,
                 total_tokens=t,
-                cost_usd=cost_decimal,
+                cost=cost_decimal,
             )
         except Exception:
             # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
@@ -1574,65 +1605,144 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
       SystemMessage 与最后一条消息（当前 prompt/问题）永不丢弃；
     - extra_reserved_tokens：bind_tools 场景的工具 schema 占用（调用方
       构造时已折算）；kwargs 里的 tools/response_format 此处补算；
-    - 其他输入形态（str / PromptValue / 批量 / OpenAI dict）不做改动；
-    - 软失败：preflight 异常原样放行，绝不阻断 LLM 调用。
+    - 其他输入形态（str / PromptValue / 批量 / OpenAI dict）无法安全
+      改写：只做用量门禁，超预算直接拒绝（当前问题属保护项，放不下
+      = 明确报错，而不是静默超窗）；
     只影响本次发送给模型的内容，不触碰任何持久化历史。
 
-    2026-09-23 P0 接线修复：此前只挂在 _LLMProxy.__call__（业务层无人
-    使用），invoke/ainvoke/stream/astream/bind_tools 全部绕过——L4/L5
-    在生产聊天链路从未生效。现挂进全部调用形态。
+    2026-09-23 P0 接线修复：invoke/ainvoke/stream/astream/bind_tools
+    全部挂进本函数（此前只有 _LLMProxy.__call__ 单点）。
+
+    2026-10-01 STOP A fail-closed 收口：
+      - 移除「预检失败原样放行」：预检链路自身异常 = 无法证明预算内，
+        计数 + error 日志后向上抛，由调用方终止本次模型调用；
+      - 全部裁剪后仍超预算（prepared.overflow）→ 抛
+        ContextBudgetExceededError，provider 调用次数必须为 0；
+      - 未知输入形态留 debug 日志后放行（仓库现有调用形态已全覆盖）。
     """
-    try:
-        from langchain_core.messages import BaseMessage
+    from langchain_core.messages import BaseMessage
 
-        from backend.config import CONTEXT_BUDGET_ENABLED
-        if not CONTEXT_BUDGET_ENABLED or not args:
-            return args
-        payload = args[0]
-        if not (isinstance(payload, list) and payload
-                and all(isinstance(m, BaseMessage) for m in payload)):
-            return args
+    from backend.config import CONTEXT_BUDGET_ENABLED
+    if not CONTEXT_BUDGET_ENABLED or not args:
+        return args
+    payload = args[0]
 
-        from backend.context_budget import context_budget
+    from backend.context_budget import context_budget
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.context_budget.metrics import record_overflow
 
-        # 非消息占用：bind_tools schema（构造期折算）+ kwargs 里的
-        # tools/response_format（每次调用现算，量小）
-        reserved = max(0, int(extra_reserved_tokens or 0))
-        if kwargs:
-            try:
-                from backend.context_budget.token_counter import (
-                    count_response_format_tokens,
-                    count_tool_schema_tokens,
-                )
-                reserved += count_tool_schema_tokens(kwargs.get("tools"))
-                reserved += count_response_format_tokens(
-                    kwargs.get("response_format"))
-            except Exception:
-                pass
+    # 非消息占用：bind_tools schema（构造期折算）+ kwargs 里的
+    # tools/response_format（每次调用现算，量小）
+    reserved = max(0, int(extra_reserved_tokens or 0))
+    if kwargs:
+        try:
+            from backend.context_budget.token_counter import (
+                count_response_format_tokens,
+                count_tool_schema_tokens,
+            )
+            reserved += count_tool_schema_tokens(kwargs.get("tools"))
+            reserved += count_response_format_tokens(
+                kwargs.get("response_format"))
+        except Exception:
+            pass
 
-        # 快路径：绝大多数调用在预算内原样返回，零改动
-        budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
+    budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
+
+    def _reject(used: int, stage: str) -> None:
+        record_overflow(stage)
+        logger.error(
+            f"[LLM:preflight] {stage}: 输入无法容纳于预算 "
+            f"used={used} budget={budget}，拒绝调用 provider")
+        raise ContextBudgetExceededError(
+            used_tokens=used, input_budget=budget, stage=stage)
+
+    # ── 形态 1：list[BaseMessage]（生产主路径）─────────────────────
+    if isinstance(payload, list) and payload \
+            and all(isinstance(m, BaseMessage) for m in payload):
         from backend.memory.token_budget import count_message_tokens
         total = sum(count_message_tokens(m) for m in payload)
+        # 快路径：预算内原样返回，零改动（L5 的 90%~100% 触发入口
+        # 统一属 STOP D 口径收口）
         if total <= budget:
             return args
-
-        # 超预算：统一预算链路（L2 → L4 → hard trim → L5 最后一道防线）
-        prepared = context_budget.prepare_llm_context(
-            messages=payload, extra_reserved_tokens=reserved)
+        try:
+            prepared = context_budget.prepare_llm_context(
+                messages=payload, extra_reserved_tokens=reserved)
+        except ContextBudgetExceededError:
+            raise
+        except Exception:
+            # 预检自身故障 = 无法证明预算内：fail-closed，不再原样放行
+            try:
+                from backend.observability.metrics import degradation_alerts_total
+                degradation_alerts_total.labels(
+                    code="context_preflight_failed", level="warn").inc()
+            except Exception:
+                pass
+            logger.error(
+                "[LLM:preflight] 预检失败，无法证明预算内，拒绝发送"
+                "（fail-closed）", exc_info=True)
+            raise
         if prepared.overflow:
-            logger.warning(
-                f"[LLM:preflight] 上下文超预算且经 L2/L4/L5 后仍超限: "
-                f"{prepared.usage.used_tokens} tokens (budget={budget})，"
-                f"安全降级放行")
-        else:
-            logger.info(
-                f"[LLM:preflight] 上下文超预算已压缩: {total}→"
-                f"{prepared.usage.used_tokens} tokens (budget={budget})")
+            _reject(prepared.usage.used_tokens if prepared.usage else total,
+                    "final_gate")
+        logger.info(
+            f"[LLM:preflight] 上下文超预算已压缩: {total}→"
+            f"{prepared.usage.used_tokens} tokens (budget={budget})")
         return (prepared.messages, *args[1:])
-    except Exception:
-        logger.debug("context preflight 失败，原样放行", exc_info=True)
+
+    # ── 形态 2：批量 list[list[BaseMessage]]（逐条过预算链路）──────
+    if isinstance(payload, list) and payload and all(
+            isinstance(item, list) and item
+            and all(isinstance(m, BaseMessage) for m in item)
+            for item in payload):
+        gated: list[list] = []
+        for item in payload:
+            prepared = context_budget.prepare_llm_context(
+                messages=item, extra_reserved_tokens=reserved)
+            if prepared.overflow:
+                _reject(
+                    prepared.usage.used_tokens if prepared.usage else 0,
+                    "final_gate_batch")
+            gated.append(prepared.messages)
+        return (gated, *args[1:])
+
+    # ── 形态 3~5：不可安全改写的输入 → 只做用量门禁 ────────────────
+    def _count_text(t: Any) -> int:
+        from backend.context_budget.token_counter import count_tokens
+        return count_tokens(t)
+
+    if isinstance(payload, str):
+        used = _count_text(payload)
+        if used > budget:
+            _reject(used, "str_input")
         return args
+    if isinstance(payload, list) and payload \
+            and all(isinstance(s, str) for s in payload):
+        used = sum(_count_text(s) for s in payload)
+        if used > budget:
+            _reject(used, "batch_str")
+        return args
+    if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+        # OpenAI dict 形态：逐条累计 content（无法安全改写，只做门禁）
+        used = 0
+        for m in payload["messages"]:
+            content = m.get("content") if isinstance(m, dict) else None
+            if isinstance(content, str):
+                used += _count_text(content)
+        if used > budget:
+            _reject(used, "dict_messages")
+        return args
+    to_string = getattr(payload, "to_string", None)
+    if callable(to_string):  # PromptValue 形态
+        used = _count_text(str(to_string()))
+        if used > budget:
+            _reject(used, "prompt_value")
+        return args
+
+    logger.debug(
+        f"[LLM:preflight] 未知输入形态，跳过预算门禁: "
+        f"{type(payload).__name__}")
+    return args
 
 
 class _LLMProxy:
@@ -1676,6 +1786,7 @@ class _LLMProxy:
                     from backend.infra.llm.budget import (
                         release_model_reservation,
                         reserve_model_call,
+                        review_model_reservation,
                     )
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
@@ -1697,6 +1808,16 @@ class _LLMProxy:
                             if getattr(chunk, "usage_metadata", None):
                                 usage_chunk = chunk
                             yield _wrap_result(chunk)
+                    except Exception as e:
+                        # 超长输入不重试不降级：稳定错误码透传（astream 无韧性链，
+                        # 这里是 provider 原始异常唯一的映射点）
+                        if _is_context_length_provider_error(e):
+                            release_model_reservation()
+                            raise _context_length_error() from e
+                        # 2026-10-01 P0 修复：流中途失败，供应商可能已处理并计费
+                        # （生产主路径是流式），转待对账而非释放
+                        review_model_reservation("stream_failed_possibly_billed")
+                        raise
                     finally:
                         # 正常结束或客户端中断都记录（finally 在 generator close 时也执行）
                         if usage_chunk is not None:
@@ -1707,8 +1828,10 @@ class _LLMProxy:
                         else:
                             # C13：provider 未回 usage chunk / 客户端提前中断 →
                             # 显式打点，不再静默丢量（生产主路径是流式，
-                            # 漏记会系统性低估成本与预算结算）
-                            release_model_reservation()
+                            # 漏记会系统性低估成本与预算结算）。
+                            # 2026-10-01 P0 修复：缺 usage ≠ 没花钱——转待对账
+                            # （占额保留到周期结束），不再按零成本释放。
+                            review_model_reservation("stream_usage_missing")
                             _notify_stream_usage_missing("astream")
                 return astream_wrapper
             # sync generator（stream）：修好此前走通用 wrapper 的坏路径
@@ -1752,6 +1875,10 @@ class _LLMProxy:
                                 break  # 正常结束
                             except Exception as e:
                                 release_model_reservation()
+                                if _is_context_length_provider_error(e):
+                                    # 超长输入：首 chunk 前短路成稳定错误码，
+                                    # 不参与首 chunk 重试（同一份输入必再超）
+                                    raise _context_length_error() from e
                                 if yielded_content or not _is_transient(e) \
                                         or attempt >= LLM_MAX_RETRIES:
                                     raise

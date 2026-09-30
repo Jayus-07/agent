@@ -23,10 +23,18 @@ def test_count_message_tokens_multimodal():
     assert count_message_tokens(msg) > 0
 
 
-def test_trim_messages_no_budget():
+def test_trim_messages_zero_budget_means_no_space():
+    # 2026-10-01 STOP A：budget=0 = 没有空间（不是关闭限制）——
+    # 无保护项时全部丢弃；保护项（System/pin）仍无条件保留
     msgs = [HumanMessage(content="a" * 500), AIMessage(content="b" * 500)]
     kept, dropped = trim_messages_to_budget(msgs, 0)
-    assert kept == msgs and dropped == 0
+    assert kept == [] and dropped == 2
+
+    msgs_with_system = [SystemMessage(content="系统指令"),
+                        HumanMessage(content="a" * 500)]
+    kept, dropped = trim_messages_to_budget(msgs_with_system, 0)
+    assert [type(m).__name__ for m in kept] == ["SystemMessage"]
+    assert dropped == 1
 
 
 def test_trim_messages_keeps_system_and_recent():
@@ -72,7 +80,8 @@ def test_trim_texts_first_doc_over_budget_kept():
     assert kept == texts and dropped == 0
 
 
-def test_trim_texts_no_budget():
+def test_trim_texts_zero_budget_keeps_none():
+    # 2026-10-01 STOP A：budget=0 = 没有空间 → 保留零条
     texts = ["a", "b"]
     kept, dropped = trim_texts_to_budget(texts, 0)
-    assert kept == texts and dropped == 0
+    assert kept == [] and dropped == 2

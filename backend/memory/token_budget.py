@@ -51,14 +51,13 @@ def trim_messages_to_budget(
       - assistant(tool_calls) + 紧随的 ToolMessage 为**原子组**：整组保留
         或整组丢弃（2026-09-23 STOP C，防 orphan tool message 协议错误）
       - 其余消息从最新往回保留，放不下的旧消息丢弃
-      - budget <= 0 表示关闭预算，原样返回
+      - budget <= 0 = **没有空间**（不是关闭限制）：只保留 SystemMessage
+        与语义 pin 组，其余全部丢弃（2026-10-01 STOP A 语义统一）；
+        保护项自身放不下由调用方最终预算检查判定并拒绝发送
 
     Returns:
         (kept_messages, dropped_count)
     """
-    if budget <= 0:
-        return list(messages), 0
-
     from backend.context_budget.pin import build_atomic_groups
 
     pins = pin_indices or set()
@@ -99,13 +98,14 @@ def trim_texts_to_budget(
     """按 token 预算保留文本序列（顺序即优先级，从头保留）。
 
     用于 RAG 证据裁剪：rerank 后的文档按相关性排序，超出预算的尾部
-    整体丢弃（不截断单条文本，避免破坏引用标注）。
+    整体丢弃（不截断单条文本，避免破坏引用标注）。budget <= 0 = 没有空间，
+    保留零条（2026-10-01 STOP A：不是关闭限制）。
 
     Returns:
         (kept_texts, dropped_count)
     """
     if budget <= 0:
-        return list(texts), 0
+        return [], len(texts)
 
     kept: list[str] = []
     dropped = 0
