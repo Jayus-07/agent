@@ -10,7 +10,16 @@ CrossEncoder 不可用时自动降级为 BM25 关键词匹配。
 import re
 
 from backend.config import RERANKER_THRESHOLD as _CONTEXT_RELEVANCE_THRESHOLD
+from backend.rag.preprocessing.taxonomy_spec import DOC_TYPE_LABELS
 from backend.shared.logger import logger
+
+# 引用标注里的中文标签 → doc_type 的反查表。
+# 这是「doc_type 中文名」这份事实的**第二种表达**——历史上它是手写反表
+# （与 citation._TYPE_LABEL_MAP 一一对应），两侧都只覆盖 9 类，任一侧改了文案
+# 另一侧就静默失配。现改为对唯一事实源求逆，标签一改反表自动跟随。
+_TYPE_LABEL_TO_DOC_TYPE: dict[str, str] = {
+    label: doc_type for doc_type, label in DOC_TYPE_LABELS.items()
+}
 
 
 def check_reranker_available() -> bool:
@@ -170,12 +179,6 @@ def parse_sources_from_text(text: str) -> list[dict]:
 
     纯函数，无副作用。
     """
-    type_label_map = {
-        "Listing": "listing", "SOP": "sop", "广告政策": "ad_policy",
-        "FAQ": "faq", "产品规格": "product_spec", "培训": "training",
-        "制度规范": "policy", "报告": "report", "操作手册": "manual",
-    }
-
     seen = {}
     for marker in ["### 参考文献", "### 参考来源"]:
         idx = text.find(marker)
@@ -189,7 +192,7 @@ def parse_sources_from_text(text: str) -> list[dict]:
                 label = (m.group(2) or "").strip()
                 score = float(m.group(3)) if m.group(3) else None
                 if fname and fname not in seen:
-                    doc_type = type_label_map.get(label, "general")
+                    doc_type = _TYPE_LABEL_TO_DOC_TYPE.get(label, "general")
                     seen[fname] = {
                         "filename": fname,
                         "doc_type": doc_type,

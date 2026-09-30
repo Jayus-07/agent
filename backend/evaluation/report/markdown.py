@@ -95,17 +95,21 @@ def write_markdown_report(
     # ── 3. Retrieval 评测 ──
     lines.append("## 3. Retrieval 评测")
     lines.append("")
+    # 指标中文名唯一事实源 = builder.METRIC_LABELS。
+    # 本文件历史上把名字内联写死（"Recall@5" / "语义上下文召回"），已与权威表
+    # 漂移（pr_comment_metrics 那份写成「语义召回」，丢了「上下文」二字）。
     retrieval_metrics = [
-        ("recall@5", "Recall@5", "自研"),
-        ("mrr", "MRR", "自研"),
-        ("top1_accuracy", "Top-1 准确率", "自研"),
-        ("sem_context_recall", "语义上下文召回", "自研"),
-        ("ragas_context_recall", "Context Recall", "RAGAS"),
-        ("ragas_context_precision", "Context Precision", "RAGAS"),
+        ("recall@5", "自研"),
+        ("mrr", "自研"),
+        ("top1_accuracy", "自研"),
+        ("sem_context_recall", "自研"),
+        ("ragas_context_recall", "RAGAS"),
+        ("ragas_context_precision", "RAGAS"),
     ]
     lines.append("| 指标 | 数值 | 阈值 | 来源 | 状态 |")
     lines.append("|------|------|------|------|------|")
-    for key, label, source in retrieval_metrics:
+    for key, source in retrieval_metrics:
+        label = METRIC_LABELS.get(key, key)
         val = metrics.get(key)
         th = DEFAULT_THRESHOLDS.get(key)
         if val is None:
@@ -120,14 +124,15 @@ def write_markdown_report(
     lines.append("## 4. Generation 评测")
     lines.append("")
     gen_metrics = [
-        ("ragas_faithfulness", "Faithfulness", "RAGAS"),
-        ("ragas_answer_relevancy", "Answer Relevancy", "RAGAS"),
-        ("ragas_answer_correctness", "Answer Correctness", "RAGAS"),
-        ("required_fact_coverage", "事实覆盖率", "自研"),
+        ("ragas_faithfulness", "RAGAS"),
+        ("ragas_answer_relevancy", "RAGAS"),
+        ("ragas_answer_correctness", "RAGAS"),
+        ("required_fact_coverage", "自研"),
     ]
     lines.append("| 指标 | 数值 | 阈值 | 来源 | 状态 |")
     lines.append("|------|------|------|------|------|")
-    for key, label, source in gen_metrics:
+    for key, source in gen_metrics:
+        label = METRIC_LABELS.get(key, key)
         val = metrics.get(key)
         th = DEFAULT_THRESHOLDS.get(key)
         if val is None:
@@ -142,12 +147,13 @@ def write_markdown_report(
     lines.append("## 5. Negative Reject 评测")
     lines.append("")
     reject_metrics = [
-        ("reject_accuracy", "拒答准确率", "自研"),
-        ("false_answer_rate", "误答率", "自研"),
+        ("reject_accuracy", "自研"),
+        ("false_answer_rate", "自研"),
     ]
     lines.append("| 指标 | 数值 | 阈值 | 来源 | 状态 |")
     lines.append("|------|------|------|------|------|")
-    for key, label, source in reject_metrics:
+    for key, source in reject_metrics:
+        label = METRIC_LABELS.get(key, key)
         val = metrics.get(key)
         th = DEFAULT_THRESHOLDS.get(key)
         if val is None:
@@ -178,12 +184,13 @@ def write_markdown_report(
     lines.append("## 6. Citation 评测")
     lines.append("")
     citation_metrics = [
-        ("citation_accuracy", "引用准确度", "自研"),
-        ("citation_completeness", "引用完整度", "自研"),
+        ("citation_accuracy", "自研"),
+        ("citation_completeness", "自研"),
     ]
     lines.append("| 指标 | 数值 | 阈值 | 来源 | 状态 |")
     lines.append("|------|------|------|------|------|")
-    for key, label, source in citation_metrics:
+    for key, source in citation_metrics:
+        label = METRIC_LABELS.get(key, key)
         val = metrics.get(key)
         th = DEFAULT_THRESHOLDS.get(key)
         if val is None:
@@ -198,7 +205,7 @@ def write_markdown_report(
     lines.append("## 7. 按问题类型分析")
     lines.append("")
     if qt_stats:
-        lines.append("| 题型 | 用例数 | 通过 | 通过率 | 语义召回 |")
+        lines.append(f"| 题型 | 用例数 | 通过 | 通过率 | {METRIC_LABELS['sem_context_recall']} |")
         lines.append("|------|--------|------|--------|----------|")
         for qt in sorted(qt_stats.keys()):
             s = qt_stats[qt]
@@ -290,15 +297,16 @@ def write_markdown_report(
     lines.append("## 10. RAGAS 指标")
     lines.append("")
     ragas_metrics_list = [
-        ("ragas_context_recall", "Context Recall"),
-        ("ragas_context_precision", "Context Precision"),
-        ("ragas_faithfulness", "Faithfulness"),
-        ("ragas_answer_relevancy", "Answer Relevancy"),
-        ("ragas_answer_correctness", "Answer Correctness"),
+        "ragas_context_recall",
+        "ragas_context_precision",
+        "ragas_faithfulness",
+        "ragas_answer_relevancy",
+        "ragas_answer_correctness",
     ]
     lines.append("| 指标 | 数值 | 阈值 | 状态 |")
     lines.append("|------|------|------|------|")
-    for key, label in ragas_metrics_list:
+    for key in ragas_metrics_list:
+        label = METRIC_LABELS.get(key, key)
         val = metrics.get(key)
         th = DEFAULT_THRESHOLDS.get(key)
         if val is None:

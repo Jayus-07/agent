@@ -9,7 +9,20 @@ interface Props {
   onClose: () => void;
 }
 
-const MODULES = ["cs", "rag", "sql", "planner", "e2e"] as const;
+// 评测模块清单必须与后端 models.ModuleKind 一致（唯一事实源在后端）。
+// 旧版这里只写了 5 个（漏 travel 系整套），与后端 9 个口径不一致——
+// 漂移由 backend/tests/evaluation/test_module_kind_single_source.py 在 CI 拦截。
+const MODULES = [
+  "planner",
+  "rag",
+  "cs",
+  "sql",
+  "e2e",
+  "travel",
+  "travel-provider",
+  "travel-commerce",
+  "travel-booking",
+] as const;
 
 export default function AddToEvalModal({ traceId, question, onClose }: Props) {
   const [module, setModule] = useState<string>("");

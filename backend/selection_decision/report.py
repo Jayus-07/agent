@@ -2,20 +2,18 @@
 
 所有数字直接取自 workflow outputs（事实锁定：报告层不做任何推算）。
 被 run_if 跳过的 step（outputs 含 skipped=True）渲染为「未执行」。
-约定：failed_gates 传 step key（market/differentiation/finance/panel），
-经 GATE_LABELS 映射渲染。
+
+约定：failed_gates 传门控 key（market/differentiation/finance/panel）。
+显示名**不在本模块定义**——由调用方经 `gate_labels` 传入，唯一事实源是各 step
+的 `@step(name=)`（见 orchestration/workflows/selection_decision.py:gate_display_names）。
+历史上本模块自持一份 GATE_LABELS，已与 step 声明漂移：
+「证据评估与市场门控」vs step 的「市场门控」、「AI 评审团」vs「AI评审团」。
+未传映射时回落原始 key（报告照出，绝不臆造文案）。
 """
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-
-GATE_LABELS = {
-    "market": "证据评估与市场门控",
-    "differentiation": "差异化分析",
-    "finance": "财务测算",
-    "panel": "AI 评审团",
-}
+from typing import Any, Mapping
 
 
 def _skipped(out: dict[str, Any] | None) -> bool:
@@ -23,7 +21,8 @@ def _skipped(out: dict[str, Any] | None) -> bool:
 
 
 def build_report(inputs: dict[str, Any], outputs: dict[str, Any],
-                 verdict: str, failed_gates: list[str]) -> str:
+                 verdict: str, failed_gates: list[str],
+                 gate_labels: Mapping[str, str] | None = None) -> str:
     lines: list[str] = [
         "# 选品决策报告（Go/No-Go 决策包）",
         "",
@@ -38,7 +37,7 @@ def build_report(inputs: dict[str, Any], outputs: dict[str, Any],
         lines.append(f"- **最终决策：{'🚀 Go — 建议入场' if verdict == 'go' else '❌ No-Go — 不建议入场'}**")
     if failed_gates:
         lines += ["- 未通过环节：" + "、".join(
-            GATE_LABELS.get(g, g) for g in failed_gates), ""]
+            (gate_labels or {}).get(g, g) for g in failed_gates), ""]
 
     # ── 市场证据评估 + 决策门控（批次3：两段式）──
     evidence = outputs.get("market_evidence_assess")

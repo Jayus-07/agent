@@ -17,14 +17,14 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 EVAL_RUNS_DIR = Path(os.environ.get("EVAL_RUNS_DIR", _PROJECT_ROOT / "data" / "eval_runs"))
 
-METRIC_DISPLAY = {
-    "sem_context_recall": "语义召回",
-    "sem_faithfulness": "忠实度",
-    "sem_answer_correctness": "答案正确性",
-    "reject_accuracy": "拒答准确率",
-    "top1_accuracy": "Top-1 准确率",
-    "mrr": "MRR",
-}
+# 指标中文名唯一事实源 = evaluation.report.METRIC_LABELS。
+# 本脚本历史上自持一份 METRIC_DISPLAY，且已与权威表漂移
+# （sem_context_recall 被写成「语义召回」，丢了「上下文」两个字）。
+# 脚本可能脱离后端进程单独运行，故显式把仓库根加入 sys.path 后再导入。
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from backend.evaluation.report import METRIC_LABELS as METRIC_DISPLAY  # noqa: E402
 
 METRIC_ORDER = [
     "sem_context_recall",
@@ -109,7 +109,8 @@ def build_comment(data: dict) -> str:
         "",
         "<details><summary>逐用例明细</summary>",
         "",
-        "| Case | 状态 | 语义召回 | 忠实度 |",
+        f"| Case | 状态 | {METRIC_DISPLAY.get('sem_context_recall', 'sem_context_recall')} "
+        f"| {METRIC_DISPLAY.get('sem_faithfulness', 'sem_faithfulness')} |",
         "|------|------|---------|--------|",
     ])
 

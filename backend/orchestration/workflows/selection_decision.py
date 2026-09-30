@@ -35,6 +35,17 @@ from backend.shared.logger import logger
 MIN_CANDIDATES = 3       # 证据/门控：候选竞品数下限
 MIN_TOTAL_REVIEWS = 100  # 证据/门控：评价总量下限
 
+# 门控 key → (step 方法名, 判定字段, 通过值)。
+# 这里只声明「哪个门控读哪个 step 的哪个字段」这层**别名关系**；
+# 门控的**显示名**一律由各 step 的 @step(name=) 派生（见下方 gate_display_names），
+# 本表不含任何文案，避免与 step 声明各写一份（旧 report.GATE_LABELS 已漂移过）。
+_GATE_CHECKS: dict[str, tuple[str, str, str]] = {
+    "market": ("selection_decision_gate", "verdict", "go"),
+    "differentiation": ("differentiation", "verdict", "go"),
+    "finance": ("finance_model", "verdict", "pass"),
+    "panel": ("review_panel", "verdict", "pass"),
+}
+
 # 候选字段 → 决策工作流候选格式（漏斗 Top-N 衔接与 watchlist 共用）
 _CANDIDATE_FIELDS = ("url", "title", "platform", "price", "rating",
                      "review_count", "highlights")
@@ -315,15 +326,15 @@ class SelectionDecision:
         outputs = ctx.outputs
         gate = outputs.get("selection_decision_gate") or {}
         checks = {
-            "market": gate.get("verdict") == "go",
-            "differentiation": (outputs.get("differentiation") or {}).get("verdict") == "go",
-            "finance": (outputs.get("finance_model") or {}).get("verdict") == "pass",
-            "panel": (outputs.get("review_panel") or {}).get("verdict") == "pass",
+            key: (outputs.get(step_name) or {}).get(field) == ok
+            for key, (step_name, field, ok) in _GATE_CHECKS.items()
         }
         failed = [k for k, ok in checks.items() if not ok]
         verdict = "go" if not failed else "no_go"
         recommendation = _recommendation_of(verdict, gate.get("recommendation_cap"))
-        report_md = build_report(ctx.inputs, outputs, verdict=verdict, failed_gates=failed)
+        report_md = build_report(ctx.inputs, outputs, verdict=verdict,
+                                 failed_gates=failed,
+                                 gate_labels=gate_display_names())
         task_id = ctx.inputs.get("task_id")
         decision_id = None
         if task_id:
@@ -359,6 +370,22 @@ class SelectionDecision:
                 "evidence_verdict": gate.get("evidence_verdict"),
                 "decision_id": decision_id,
                 "failed_gates": failed, "report_md": report_md}
+
+
+def gate_display_names() -> dict[str, str]:
+    """门控显示名 —— 唯一事实源是各 step 的 `@step(name=)` 声明。
+
+    本函数**不含任何文案**：只把 `_GATE_CHECKS` 里的门控 key 落到具体 step 方法，
+    再读回该方法装饰器上声明的 display_name。step 改名 → 报告文案自动跟随，
+    不会出现「报告写一套、step 声明写另一套」的漂移（旧 report.GATE_LABELS 即如此）。
+    """
+    from backend.orchestration.workflow.meta import get_step_config
+
+    labels: dict[str, str] = {}
+    for key, (method_name, _field, _ok) in _GATE_CHECKS.items():
+        config = get_step_config(getattr(SelectionDecision, method_name, None))
+        labels[key] = (config.display_name if config else "") or method_name
+    return labels
 
 
 __all__ = ["SelectionDecision"]

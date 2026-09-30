@@ -15,6 +15,7 @@ from backend.evaluation.metrics import aggregate_metrics
 from backend.evaluation.generation import reset_token_usage
 from backend.shared.logger import logger
 from backend.evaluation.models import (
+    ALL_RUN_MODULES,
     EvalReport,
     EvalResult,
     ModuleKind,
@@ -280,8 +281,10 @@ class EvaluationService:
                 },
             )
 
+        # 模块清单派生自 models.ModuleKind（唯一事实源）；`all` 的取/舍口径见
+        # models.ALL_RUN_MODULES（排除项逐个带理由），此处不再手写列表
         module_kinds: list[ModuleKind] = (
-            ["planner", "rag", "sql", "e2e", "travel"] if config.module == "all" else [config.module]  # type: ignore
+            list(ALL_RUN_MODULES) if config.module == "all" else [config.module]  # type: ignore
         )
 
         all_results: list[EvalResult] = []

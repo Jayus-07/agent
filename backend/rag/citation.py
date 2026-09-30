@@ -27,23 +27,15 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from backend.rag.preprocessing.taxonomy_spec import doc_type_label
 from backend.shared.logger import logger
 
 # Citation 校验阈值（与 RAGChain._verify_support 一致）
 CITATION_SUPPORT_THRESHOLD = 0.0  # 默认不做事后过滤，依靠 Rerank 分数已足够
 
-# 文档类型中文标签
-_TYPE_LABEL_MAP: dict[str, str] = {
-    "listing": "Listing",
-    "sop": "SOP",
-    "ad_policy": "广告政策",
-    "faq": "FAQ",
-    "product_spec": "产品规格",
-    "training": "培训",
-    "policy": "制度规范",
-    "report": "报告",
-    "manual": "操作手册",
-}
+# 文档类型中文标签：唯一事实源是 taxonomy_spec.DOC_TYPE_LABELS（含启动期覆盖度校验）。
+# 本模块历史上自持一份 _TYPE_LABEL_MAP，只覆盖 9 类、且含 yaml 里根本不存在的
+# report / manual 两个过期项，导致其余类型在引用标注里回落英文原始码。
 
 
 class CitationFormatter:
@@ -141,7 +133,7 @@ class CitationFormatter:
         for idx, meta in items:
             doc_type = meta.get("doc_type", "")
             score = meta.get("score", meta.get("rerank_score", None))
-            type_label = _TYPE_LABEL_MAP.get(doc_type, doc_type)
+            type_label = doc_type_label(doc_type)
             fname = meta.get("source_file", meta.get("source", ""))
             parts = [f"{idx}. **{fname}**"]
             if type_label:
@@ -181,7 +173,7 @@ class CitationFormatter:
                     "index": idx,
                     "filename": fname,
                     "doc_type": doc_type,
-                    "type_label": _TYPE_LABEL_MAP.get(doc_type, doc_type),
+                    "type_label": doc_type_label(doc_type),
                     "score": round(float(score), 2) if score is not None else None,
                 }
 

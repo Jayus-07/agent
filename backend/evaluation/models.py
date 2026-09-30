@@ -4,10 +4,28 @@
 """
 
 from datetime import datetime
-from typing import Any, Literal, Protocol, Callable
+from typing import Any, Literal, Protocol, Callable, get_args
 from pydantic import BaseModel, Field
 
 ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-provider", "travel-commerce", "travel-booking"]
+
+# 模块清单的唯一事实源就是上面的 Literal——这里只是它的运行期视图。
+# 历史上「有哪些模块」被手写 5 份（CLI choices / service 的 all 清单 / MODULE_LABELS /
+# 前端 AddToEvalModal），彼此口径已不一致（5 vs 9）。新增模块只改 Literal 一处，
+# 其余全部经此常量派生（守护见 tests/evaluation/test_module_kind_single_source.py）。
+MODULE_KINDS: tuple[ModuleKind, ...] = get_args(ModuleKind)
+
+# `all` 默认跑的模块集：可离线完成的常规质量评测。
+# 显式排除项各带理由，且以「差集」形式表达——新模块默认进来，
+# 若要排除必须在这里写清楚为什么（避免又一次静默的口径漂移）：
+#   - cs：结构 sanity 锁版校验，语义与质量评测不同，单独跑
+#   - travel-provider / travel-commerce / travel-booking：探针，需 --live 才有意义
+ALL_EXCLUDED_MODULES: frozenset[str] = frozenset(
+    {"cs", "travel-provider", "travel-commerce", "travel-booking"}
+)
+ALL_RUN_MODULES: tuple[ModuleKind, ...] = tuple(
+    m for m in MODULE_KINDS if m not in ALL_EXCLUDED_MODULES
+)
 
 
 class RunnerFunc(Protocol):

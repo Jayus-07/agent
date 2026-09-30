@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from backend.evaluation.gate import flag_regressions
+from backend.evaluation.models import MODULE_KINDS
 from backend.evaluation.report import (
     print_summary,
     write_markdown_report,
@@ -62,14 +63,20 @@ def _bootstrap_llm_registry() -> None:
         print(f"[bootstrap] refresh_registry 失败: {exc}", file=sys.stderr)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """构建 CLI 参数解析器。
+
+    独立成函数是为了让单测能直接校验 `module` 的 choices 与
+    `models.ModuleKind` 完全一致（历史上这里手写过一份模块清单，与后端漂移）。
+    """
     parser = argparse.ArgumentParser(
         prog="python -m evaluation",
         description="Agent Platform 评估框架 — 度量 Planner/RAG/SQL 质量",
     )
     parser.add_argument(
         "module", nargs="?", default="all",
-        choices=["all", "planner", "rag", "sql", "e2e", "cs", "travel", "travel-provider", "travel-commerce", "travel-booking"],
+        # 模块清单派生自 models.ModuleKind（唯一事实源），不再手写一份
+        choices=["all", *MODULE_KINDS],
         help="评估模块 (默认: all)。cs=客服域（offline sanity=320 条锁版结构校验，"
              "--live 走真实图；runner 注册于 runners/cs.py）；"
              "travel=旅游规划质量金标（STOP I5）；"
@@ -176,7 +183,11 @@ def main():
         help="触发者身份（M7：落 eval_run_records.triggered_by；"
              "admin 发起时传操作者，CI 传 pipeline 名）",
     )
+    return parser
 
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     if args.triggered_by:
         import os as _os

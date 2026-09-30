@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Optional
 
+from backend.rag.preprocessing.cn_numerals import CN_QUARTER_DIGITS
 from backend.shared.logger import logger
 
 # ── 数量级后缀映射 ──────────────────────────────────
@@ -215,7 +216,8 @@ _REPORTING_PERIOD_PATTERNS = [
     re.compile(r"20(\d{2})年度?报?"),
 ]
 
-_CN_QUARTER_MAP = {"一": "1", "二": "2", "三": "3", "四": "4"}
+# 季度中文数字映射：唯一事实源 preprocessing/cn_numerals.CN_QUARTER_DIGITS
+# （查询侧 query_analyzer 历史上另写了一份逐字相同的副本，已一并收口）
 
 
 def extract_reporting_period(file_path: str, section_title: str = "") -> tuple[str, str]:
@@ -247,7 +249,7 @@ def extract_reporting_period(file_path: str, section_title: str = "") -> tuple[s
     m = _REPORTING_PERIOD_PATTERNS[1].search(search_text)
     if m:
         year = f"20{m.group(1)}"
-        quarter = _CN_QUARTER_MAP.get(m.group(2), m.group(2))
+        quarter = CN_QUARTER_DIGITS.get(m.group(2), m.group(2))
         return f"{year}-Q{quarter}", year
 
     # 模式 3: 2026-07 （年月）

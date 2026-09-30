@@ -79,11 +79,20 @@ STATUS_ICONS: dict[str, str] = {
     "skip": "○",
 }
 
+# 评测模块中文名。键必须是 models.MODULE_KINDS 的**全集**——
+# 缺一个，报告里就回落成英文原始码（"travel-booking" 这种），
+# 属静默的品质降级。旧版只写了 4 个（漏 cs 与 4 个 travel 系）。
+# 覆盖度由 tests/evaluation/test_module_kind_single_source.py 钉住。
 MODULE_LABELS: dict[str, str] = {
     "rag": "RAG 检索",
     "planner": "任务规划",
     "sql": "SQL 查询",
     "e2e": "Graph 全链路",
+    "cs": "客服域",
+    "travel": "旅游规划",
+    "travel-provider": "旅游 Provider 探针",
+    "travel-commerce": "旅游比价",
+    "travel-booking": "旅游预订",
 }
 
 # ============ 指标分层分类（双轨架构） ============

@@ -7,42 +7,45 @@ from backend.seed.core.validator import BaseValidator, ValidationResult
 
 # 内置 FK 映射: entity_name → {field_name: referenced_entity}
 # Generator 可覆盖此映射
+#
+# ⚠️ 一个实体**只允许出现一次**。历史上这张表被两份清单首尾相接拼在同一个字面量里
+# （35 个键、其中 12 个重复：order/order_item/shipment/review/campaign/…），
+# 重复键在 Python 里后者静默覆盖前者——改第一份不生效、也没有任何报错。
+# 现已合并去重为 23 个实体（重复项取值逐字相同，行为零变化），
+# 并由 tests/test_referential_fk_map.py 用 AST 解析源码守住「不得再出现重复键」。
 BUILTIN_FK_MAP: dict[str, dict[str, str]] = {
-    "product":     {"brand_id": "brand", "category_id": "category"},
-    "sku":         {"product_id": "product"},
-    "listing":     {"sku_id": "sku", "channel_id": "channel"},
-    "order":       {"channel_id": "channel", "customer_id": "customer"},
-    "order_item":  {"order_id": "order", "sku_id": "sku"},
-    "shipment":    {"order_id": "order", "warehouse_id": "warehouse"},
-    "shipment_item": {"shipment_id": "shipment", "order_item_id": "order_item", "sku_id": "sku"},
-    "tracking_event": {"shipment_id": "shipment"},
-    "inventory_level": {"warehouse_id": "warehouse", "sku_id": "sku"},
-    "inventory_transaction": {"warehouse_id": "warehouse", "sku_id": "sku"},
-    "review":      {"customer_id": "customer", "sku_id": "sku", "order_id": "order"},
-    "campaign":    {"ad_account_id": "ad_account"},
-    "ad_group":    {"campaign_id": "campaign"},
-    "ad":          {"ad_group_id": "ad_group"},
-    "spend_record": {"ad_id": "ad"},
-    "performance_metric": {"ad_id": "ad", "sku_id": "sku"},
+    # ── 商品与内容 ──
+    "product": {"brand_id": "brand", "category_id": "category"},
+    "sku": {"product_id": "product"},
+    "listing": {"sku_id": "sku", "channel_id": "channel"},
     "knowledge_chunk": {"doc_id": "knowledge_doc"},
-    "order":          {"channel_id": "channel", "customer_id": "customer"},
-    "order_item":     {"order_id": "order", "sku_id": "sku"},
-    "order_event":    {"order_id": "order"},
+    # ── 订单与履约 ──
+    "order": {"channel_id": "channel", "customer_id": "customer"},
+    "order_item": {"order_id": "order", "sku_id": "sku"},
+    "order_event": {"order_id": "order"},
     "customer_address": {"customer_id": "customer"},
-    "review":         {"customer_id": "customer", "sku_id": "sku", "order_id": "order"},
+    "shipment": {"order_id": "order", "warehouse_id": "warehouse"},
+    "shipment_item": {"shipment_id": "shipment", "order_item_id": "order_item",
+                      "sku_id": "sku"},
+    "tracking_event": {"shipment_id": "shipment"},
+    "return_authorization": {"order_id": "order", "customer_id": "customer"},
+    # ── 库存 ──
     "inventory_level": {"warehouse_id": "warehouse", "sku_id": "sku"},
     "inventory_transaction": {"warehouse_id": "warehouse", "sku_id": "sku"},
     "inventory_health": {"sku_id": "sku", "warehouse_id": "warehouse"},
-    "freight_booking": {"supplier_id": "supplier", "origin_warehouse_id": "warehouse",
-                         "dest_warehouse_id": "warehouse"},
-    "shipment":       {"order_id": "order", "warehouse_id": "warehouse"},
-    "tracking_event": {"shipment_id": "shipment"},
-    "return_authorization": {"order_id": "order", "customer_id": "customer"},
-    "campaign":       {"ad_account_id": "ad_account"},
-    "ad_group":       {"campaign_id": "campaign"},
-    "ad":             {"ad_group_id": "ad_group"},
-    "spend_record":   {"ad_id": "ad"},
+    # ── 评价 ──
+    "review": {"customer_id": "customer", "sku_id": "sku", "order_id": "order"},
+    # ── 广告 ──
+    "campaign": {"ad_account_id": "ad_account"},
+    "ad_group": {"campaign_id": "campaign"},
+    "ad": {"ad_group_id": "ad_group"},
+    "spend_record": {"ad_id": "ad"},
     "performance_metric": {"ad_id": "ad", "sku_id": "sku"},
+    # ── 物流 ──
+    "freight_booking": {"supplier_id": "supplier",
+                        "origin_warehouse_id": "warehouse",
+                        "dest_warehouse_id": "warehouse"},
+    # ── 报表 ──
     "report_execution": {"report_id": "report_definition"},
 }
 

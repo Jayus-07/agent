@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from backend.rag.preprocessing.cn_numerals import CN_QUARTER_DIGITS
 from backend.shared.logger import logger
 
 # hard metadata filter 白名单（2026-09-23 D1-4）：键必须与入库元数据
@@ -414,7 +415,8 @@ _QUERY_CN_QUARTER_RE = re.compile(r"(20\d{2})?年第([一二三四])季度")
 _QUERY_YEAR_MONTH_RE = re.compile(r"(20\d{2})年(\d{1,2})月")
 _QUERY_YEAR_RE = re.compile(r"(20\d{2})年度?")
 
-_QUERY_CN_QUARTER_MAP = {"一": "1", "二": "2", "三": "3", "四": "4"}
+# 季度中文数字映射：与入库侧共用一份（preprocessing/cn_numerals.CN_QUARTER_DIGITS），
+# 本模块不再自持副本
 
 
 def _current_quarter() -> tuple[str, str]:
@@ -448,7 +450,7 @@ def _extract_reporting_period_from_query(
     m = _QUERY_CN_QUARTER_RE.search(query)
     if m:
         year = m.group(1) if m.group(1) else _current_quarter()[0]
-        quarter = _QUERY_CN_QUARTER_MAP.get(m.group(2), m.group(2))
+        quarter = CN_QUARTER_DIGITS.get(m.group(2), m.group(2))
         return f"{year}-Q{quarter}"
 
     # 3. 年月模式：2026年7月

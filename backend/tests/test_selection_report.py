@@ -1,4 +1,8 @@
 """report 组装测试（批次3 v2：证据评估与门控分离后的报告结构）"""
+import ast
+from pathlib import Path
+
+from backend.orchestration.workflows.selection_decision import gate_display_names
 from backend.selection_decision.report import build_report
 
 OUTPUTS = {
@@ -62,15 +66,64 @@ def test_malformed_none_fields_not_crash():
     outputs["finance_model"] = {"verdict": "fail", "final_model": None,
                                 "rounds": None}
     md = build_report({"category": "x", "platforms": []}, outputs,
-                      verdict="no_go", failed_gates=["finance"])
+                      verdict="no_go", failed_gates=["finance"],
+                      gate_labels={"finance": "财务测算"})
     assert "证据资格" in md and "财务测算" in md
 
 
 def test_failed_gates_key_mapping():
-    """failed_gates 传 step key，经 GATE_LABELS 映射为中文"""
+    """failed_gates 传门控 key，显示名由 workflow 从 @step(name=) 派生后传入"""
+    labels = gate_display_names()
     md = build_report({"category": "x", "platforms": []}, OUTPUTS,
-                      verdict="no_go", failed_gates=["finance", "panel"])
+                      verdict="no_go", failed_gates=["finance", "panel"],
+                      gate_labels=labels)
+    assert labels["finance"] in md and labels["panel"] in md
+    # 字面量锁：派生值必须就是当前 step 声明的文案（两边一起改错也会被咬住）
     assert "财务测算" in md and "评审团" in md
+
+
+def test_gate_labels_derived_from_step_declarations():
+    """门控显示名唯一事实源 = 各 step 的 @step(name=)。
+
+    旧实现是 report.py 自持一份 GATE_LABELS，已与 step 声明漂移
+    （「证据评估与市场门控」vs「市场门控」、「AI 评审团」vs「AI评审团」）。
+    """
+    from backend.orchestration.workflow.meta import get_step_config
+    from backend.orchestration.workflows.selection_decision import (
+        SelectionDecision,
+        _GATE_CHECKS,
+        gate_display_names,
+    )
+
+    labels = gate_display_names()
+    assert set(labels) == set(_GATE_CHECKS), "门控 key 集合与报告渲染口径不一致"
+
+    for key, (method_name, _field, _ok) in _GATE_CHECKS.items():
+        cfg = get_step_config(getattr(SelectionDecision, method_name))
+        assert cfg is not None, f"门控 {key} 指向的 step {method_name} 没有 @step 声明"
+        assert labels[key] == cfg.display_name, (
+            f"门控 {key} 显示名 {labels[key]!r} != step {method_name} 声明 {cfg.display_name!r}"
+        )
+
+    # 锁字面量（防 M8 那种「两边同源所以恒真」的假测试）
+    assert labels == {
+        "market": "市场门控",
+        "differentiation": "差异化分析",
+        "finance": "财务测算",
+        "panel": "AI评审团",
+    }
+
+
+def test_report_module_holds_no_gate_wording():
+    """防回退：report.py 不得再自持门控文案（唯一出口是调用方传入的 gate_labels）。"""
+    src = (Path(__file__).resolve().parent.parent
+           / "selection_decision" / "report.py").read_text(encoding="utf-8")
+    # 取字符串常量而非扫文本：注释/文档字符串里提旧名（说明病史）是允许的
+    consts = [n.value for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    for stale in ("证据评估与市场门控", "市场门控", "差异化分析",
+                  "财务测算", "AI 评审团", "AI评审团"):
+        assert stale not in consts, f"report.py 回退到自持门控文案: {stale}"
 
 
 def test_missing_output_key_renders_not_executed():

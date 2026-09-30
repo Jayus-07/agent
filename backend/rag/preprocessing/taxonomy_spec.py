@@ -68,6 +68,38 @@ class MetadataTaxonomy:
 
 _TAXONOMY_PATH = Path(__file__).with_name("metadata_taxonomy.yaml")
 
+# doc_type → 中文**显示名**（引用标注等展示层用）。
+#
+# 为什么放在这里：doc_type 清单的事实源是 metadata_taxonomy.yaml，而「某个类型
+# 该显示成什么」也是同一份事实的一部分——此前它被手写在两处且互为反表
+# （rag/citation.py 的 _TYPE_LABEL_MAP 与 agents/reporter/context_filter.py 的
+# type_label_map），两侧还都只覆盖 9 类（缺 7 类 → 展示层悄悄回落英文原始码）。
+# 现在只此一份，反向映射由消费方对这份 dict 求逆得到。
+#
+# 不加进 yaml 是有意的：yaml 的 sha256 指纹（taxonomy_fingerprint）被写进
+# 入库 lineage 与 LR 模型版本号，改它会让新旧数据口径对不上。
+DOC_TYPE_LABELS: Mapping[str, str] = {
+    "general": "通用",
+    "listing": "Listing",
+    "sop": "SOP",
+    "ad_policy": "广告政策",
+    "faq": "FAQ",
+    "product_spec": "产品规格",
+    "training": "培训",
+    "policy": "制度规范",
+    "compliance": "合规",
+    "legal": "法务",
+    "security": "安全",
+    "financial": "财务",
+    "customer_data": "客户数据",
+    "contract_template": "合同模板",
+}
+
+
+def doc_type_label(doc_type: str) -> str:
+    """doc_type 的中文显示名；未知类型原样返回（不臆造）。"""
+    return DOC_TYPE_LABELS.get(doc_type, doc_type)
+
 
 def _error(message: str) -> TaxonomyConfigError:
     return TaxonomyConfigError(f"metadata taxonomy invalid: {message}")
@@ -130,6 +162,19 @@ def _load_taxonomy(path: Path) -> MetadataTaxonomy:
         raise _error("duplicate domain")
     if "general" not in doc_types or "general" not in domains:
         raise _error("general must exist in doc_types and domains")
+
+    # 展示名覆盖度：yaml 新增了 doc_type 但 DOC_TYPE_LABELS 没跟上 → 启动即失败。
+    # 宁可拒绝启动，也不要让引用标注悄悄把英文原始码当标签显示给用户。
+    missing_labels = [d for d in doc_types if d not in DOC_TYPE_LABELS]
+    if missing_labels:
+        raise _error(
+            f"doc_types 缺中文显示名，请补 taxonomy_spec.DOC_TYPE_LABELS：{missing_labels}"
+        )
+    unknown_labels = sorted(set(DOC_TYPE_LABELS) - set(doc_types))
+    if unknown_labels:
+        raise _error(
+            f"DOC_TYPE_LABELS 有 yaml 里不存在的 doc_type（标签已过期）：{unknown_labels}"
+        )
 
     doc_type_descriptions: dict[str, str] = {}
     doc_type_rules: dict[str, tuple[RuleSpec, ...]] = {}
