@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import ast
+import importlib
+from pathlib import Path
 
 import pytest
 
@@ -312,7 +314,16 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
     ["domain_router.py", "capability_router.py", "execution_mode.py"],
 )
 def test_adapters_do_not_import_execution_layers(module_name):
-    path = __import__("pathlib").Path("orchestration/router", module_name)
+    """适配器源码不得 import 执行层（tools/skills/planner/workflow/sql/rag）。
+
+    路径从**模块自身**解析，不再用 cwd 相对路径——原实现
+    ``Path("orchestration/router", module_name)`` 只在 cwd=backend/ 时成立，
+    从仓库根运行时 3 例全部 FileNotFoundError，守卫在常规运行方式下静默失效。
+    """
+    module = importlib.import_module(
+        f"backend.orchestration.router.{module_name[:-3]}"
+    )
+    path = Path(module.__file__)
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported = []
     for node in ast.walk(tree):
