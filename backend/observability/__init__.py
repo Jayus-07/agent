@@ -11,12 +11,11 @@
 # 核心 tracer（其他模块直接依赖）
 # 拓扑（前端渲染用）
 from backend.observability.topology import (  # noqa: F401
-    GRAPH_TOPOLOGY,
     INDEXING_LABELS,
     INDEXING_TOPOLOGY,
     NODE_LABELS,
-    TOPOLOGY_REGISTRY,
     get_topology,
+    graph_topology,
 )
 from backend.observability.tracer import (  # noqa: F401
     Span,

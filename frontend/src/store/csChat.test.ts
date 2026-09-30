@@ -45,7 +45,7 @@ describe('addStreamEvent — 共享归约（stream-reduce）', () => {
   })
 
   it('error 终态事件清空 currentStatus（StatusBar 残留修复）', () => {
-    useCSChatStore.setState({ currentStatus: 'cs_knowledge', currentNode: 'cs_knowledge' })
+    useCSChatStore.setState({ currentStatus: 'cs_graph_node', currentNode: 'cs_graph_node' })
     useCSChatStore.getState().addStreamEvent({ event: 'error', data: { message: '失败' } } as any, 'cs1')
     const state = useCSChatStore.getState()
     expect(state.currentStatus).toBe('')
@@ -54,18 +54,18 @@ describe('addStreamEvent — 共享归约（stream-reduce）', () => {
 })
 
 describe('addStreamEvent — CS 私有字段', () => {
-  it('cs_ 节点追加 csTimeline 并识别业务意图', () => {
-    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_knowledge' } } as any, 'cs1')
-    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_business_query' } } as any, 'cs1')
+  it('cs_ 节点追加 csTimeline 并识别业务意图（真实节点名）', () => {
+    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_graph_node' } } as any, 'cs1')
+    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_query_expert' } } as any, 'cs1')
 
     const state = useCSChatStore.getState()
-    expect(state.csTimeline).toEqual(['cs_knowledge', 'cs_business_query'])
+    expect(state.csTimeline).toEqual(['cs_graph_node', 'cs_query_expert'])
     expect(state.intentDetected).toBe('业务查询')
-    expect(state.currentNode).toBe('cs_business_query')
+    expect(state.currentNode).toBe('cs_query_expert')
   })
 
-  it('cs_knowledge 不触发意图识别', () => {
-    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_knowledge' } } as any, 'cs1')
+  it('cs_knowledge_expert 不触发意图识别', () => {
+    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_knowledge_expert' } } as any, 'cs1')
     expect(useCSChatStore.getState().intentDetected).toBeNull()
   })
 })
@@ -74,20 +74,20 @@ describe('replaceLastAssistant — 终态写入', () => {
   it('写入完整内容 + csNodes（时间线在终态一次性落消息）', () => {
     useCSChatStore.getState().addMessage('user', '退货政策', 'cs1')
     useCSChatStore.getState().addMessage('assistant', '', 'cs1')
-    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_knowledge' } } as any, 'cs1')
+    useCSChatStore.getState().addStreamEvent({ event: 'status', data: { node: 'cs_graph_node' } } as any, 'cs1')
     useCSChatStore.getState().addStreamEvent({ event: 'delta', data: { content: '七天内可退。' } } as any, 'cs1')
 
     useCSChatStore.getState().replaceLastAssistant('七天内可退。', 'cs1')
 
     const msgs = useCSChatStore.getState().sessions.find((s) => s.id === 'cs1')!.messages
     expect(msgs[1].content).toBe('七天内可退。')
-    expect(msgs[1].csNodes).toEqual(['cs_knowledge'])
+    expect(msgs[1].csNodes).toEqual(['cs_graph_node'])
   })
 })
 
 describe('resetStream', () => {
   it('清空流式字段但保留会话', () => {
-    useCSChatStore.setState({ deltaText: 'abc', currentStatus: 'cs_knowledge', csTimeline: ['cs_knowledge'] })
+    useCSChatStore.setState({ deltaText: 'abc', currentStatus: 'cs_graph_node', csTimeline: ['cs_graph_node'] })
     useCSChatStore.getState().resetStream()
     const state = useCSChatStore.getState()
     expect(state.deltaText).toBe('')

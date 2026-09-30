@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, Response
 
 from backend.shared.logger import logger
 
-from backend.observability.topology import GRAPH_TOPOLOGY, NODE_LABELS
+from backend.observability.topology import NODE_LABELS, graph_topology
 from backend.observability.resource import resource_monitor
 from backend.rag.metrics import metrics_collector
 from backend.observability.tracer import trace_collector, TraceRecord, Span
@@ -511,10 +511,14 @@ async def replay_trace(trace_id: str):
 
 @router.get("/graph")
 async def get_graph():
-    """返回 LangGraph 静态拓扑 + 节点标签"""
+    """返回 LangGraph 静态拓扑 + 节点标签
+
+    topology.nodes / node_labels 均由 builder 真源派生（零手写），
+    topology.edges 为人工语义示意（端点受测试守护，防断链）。
+    """
     return {
-        "topology": GRAPH_TOPOLOGY,
-        "node_labels": NODE_LABELS,
+        "topology": graph_topology(),
+        "node_labels": dict(NODE_LABELS),
     }
 
 

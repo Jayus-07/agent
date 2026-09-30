@@ -252,12 +252,16 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
           currentNode = evt.data.node
           if (evt.data.node.startsWith('cs_')) {
             csTimeline = [...csTimeline, evt.data.node]
-            if (!intentDetected && evt.data.node !== 'cs_knowledge') {
+            // 键 = 后端真实节点名（backend/customer_service/graph_state.py 的 `CS_*` 常量）。
+            // 刻意跳过知识专家（它不是「业务意图」）。
+            // ⚠️ 当前 SSE 只下发主图节点名（cs_graph_node），子图内部节点未转发，
+            // 故 intentDetected 实际恒为 null——待后端转发子图事件后自动生效。
+            if (!intentDetected && evt.data.node !== 'cs_knowledge_expert') {
               const intentMap: Record<string, string> = {
-                cs_business_query: '业务查询',
-                cs_business_action: '业务办理',
-                cs_complaint: '投诉处理',
-                cs_handoff: '人工转接',
+                cs_query_expert: '业务查询',
+                cs_action_expert: '业务办理',
+                cs_complaint_expert: '投诉处理',
+                cs_handoff_expert: '人工转接',
               }
               intentDetected = intentMap[evt.data.node] ?? null
             }

@@ -5,7 +5,7 @@ import { Database, ChevronDown, ChevronRight, BarChart3, Table2 } from 'lucide-r
 import type { SSEStreamEvent } from '@/lib/types'
 
 interface Props {
-  /** SSE v2 流式事件列表，从中提取 sql_worker 的输出 */
+  /** SSE v2 流式事件列表，从中提取 SQL Skill 节点的输出 */
   streamEvents?: SSEStreamEvent[]
 }
 
@@ -17,16 +17,20 @@ interface SqlData {
   chartData: { labels: string[]; values: number[] }
 }
 
-/** 从 streamEvents 中提取 sql_worker 的 SQL 数据 */
+/** 从 streamEvents 中提取 sql_skill 的 SQL 数据 */
 function extractSqlData(events?: SSEStreamEvent[]): SqlData | null {
   if (!events?.length) return null
 
+  // 节点名真源在后端：Skill 节点统一注册为 `f"{skill_name}_skill"`
+  // （backend/orchestration/capability_registry.py 的 _skill_node_name）。
+  // 该字面量由 backend/tests/test_frontend_node_ids_consistency.py 校验
+  // 「必须存在于后端真实节点集」——曾写错为 sql_worker 导致整块 UI 静默不渲染。
   const sqlEvents = events.filter(
-    e => e.event === 'log' && e.data.node === 'sql_worker'
+    e => e.event === 'log' && e.data.node === 'sql_skill'
   )
   if (!sqlEvents.length) return null
 
-  // 找最后一个 sql_worker 事件（含完整结果）
+  // 找最后一个 sql_skill 事件（含完整结果）
   const lastSql = sqlEvents[sqlEvents.length - 1].data as import('@/lib/types').LogEvent
   const p = lastSql.payload || {}
 
