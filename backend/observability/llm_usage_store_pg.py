@@ -398,7 +398,14 @@ class PostgresLLMUsageStore(LLMUsageStore):
             logger.warning(f"[LLMUsageStore-PG] list_calls 失败: {e}")
             return {"calls": [], "total": 0}
 
-    def dashboard(self, days: int = 7, component: str | None = None) -> dict:
+    def dashboard(self, days: int = 7, component: str | None = None,
+                  period: str = "day") -> dict:
+        """period="month"（M11 尾项/D11）：趋势按自然月分桶（substr(ts,1,7)），
+        时间窗仍由 days 决定（查询时现算，量级小不物化）。day 为默认，行为不变。"""
+        if period not in ("day", "month"):
+            period = "day"
+        bucket_key = "month" if period == "month" else "day"
+        bucket_expr = "substr(ts, 1, 7)" if period == "month" else "substr(ts, 1, 10)"
         empty = {
             "totals": {
                 "requests": 0, "calls": 0,
@@ -406,6 +413,7 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
             },
             "daily": [],
+            "monthly": [],
             "models": [],
         }
         try:
@@ -417,6 +425,8 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 params_base.append(component)
             where_sql = " AND ".join(where_base)
 
+            daily: list[dict] = []
+            monthly: list[dict] = []
             with self._lock, self._conn() as conn:
                 # ① 总量（requests = 去重轮次；calls = 调用次数）
                 totals = dict(self._exec(conn, f"""
@@ -431,18 +441,24 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     FROM {self._table} WHERE {where_sql}
                 """, tuple(params_base)).fetchone())
 
-                # ② 日趋势（日 × 输入/输出/成本）
-                daily = [dict(r) for r in self._exec(conn, f"""
-                    SELECT substr(ts, 1, 10)             AS day,
+                # ② 趋势（日/月 × 输入/输出/成本；period=month 时 monthly 有值）
+                trend_sql = f"""
+                    SELECT {bucket_expr}             AS {bucket_key},
                            COUNT(*)                      AS calls,
                            COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd
                     FROM {self._table} WHERE {where_sql}
-                    GROUP BY substr(ts, 1, 10)
-                    ORDER BY day ASC
-                """, tuple(params_base)).fetchall()]
+                    GROUP BY {bucket_expr}
+                    ORDER BY {bucket_key} ASC
+                """
+                trend = [dict(r) for r in self._exec(
+                    conn, trend_sql, tuple(params_base)).fetchall()]
+                if period == "month":
+                    monthly = trend
+                else:
+                    daily = trend
 
                 # ③ 按模型细分（Provider/Model 维度）
                 models = [dict(r) for r in self._exec(conn, f"""
@@ -475,9 +491,13 @@ class PostgresLLMUsageStore(LLMUsageStore):
             totals["cost_usd"] = round(totals.get("cost_usd", 0) or 0, 6)
             for d in daily:
                 d["cost_usd"] = round(d.get("cost_usd", 0) or 0, 6)
+            for m in monthly:
+                m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
             for m in models:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
-            result = {"totals": totals, "daily": daily, "models": models}
+            result = {"totals": totals, "daily": daily, "monthly": monthly,
+                      "models": models,
+                      "period": period}
             result["by_currency"] = by_currency
 
             return result

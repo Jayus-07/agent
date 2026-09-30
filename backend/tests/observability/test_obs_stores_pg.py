@@ -294,3 +294,27 @@ class TestLLMUsageStorePG:
         assert len(dash["daily"]) == 1
         assert len(dash["models"]) == 1
         assert dash["models"][0]["model"] == "gpt-test"
+        assert dash["monthly"] == [] and dash["period"] == "day"
+
+    def test_dashboard_period_month(self, _clean_tables):
+        """M11 尾项：period=month 按自然月分桶（monthly 键），默认 day 零变化。"""
+        from backend.observability.llm_usage_store import get_llm_usage_store
+        store = get_llm_usage_store()
+        today = time.strftime("%Y-%m-%dT%H:%M:%S")
+        store.record(_usage_event("pgtidm100", ts=today))
+        store.record(_usage_event("pgtidm101", ts=today))
+        # 上月历史行（ts 由 record 原样落库）
+        import datetime as _dt
+        last_month = (_dt.datetime.now() - _dt.timedelta(days=32)).strftime("%Y-%m-%dT%H:%M:%S")
+        store.record(_usage_event("pgtidm200", ts=last_month))
+
+        dash = store.dashboard(days=120, period="month")
+        assert dash["period"] == "month"
+        assert dash["daily"] == []
+        assert {r["month"] for r in dash["monthly"]} == {
+            today[:7], last_month[:7]}
+        assert sum(r["calls"] for r in dash["monthly"]) == 3
+        assert dash["totals"]["calls"] == 3  # 总量不受 period 影响
+        # 非法 period 回落 day（fail-safe）
+        dash2 = store.dashboard(days=7, period="week")
+        assert dash2["period"] == "day"

@@ -257,20 +257,25 @@ async def get_rag_trace(trace_id: str):
 
 @router.get("/tokens/summary")
 async def token_summary(days: int = Query(7, ge=1, le=365),
-                        component: str | None = Query(None)):
-    """Token 用量看板聚合（近 N 天）：总量 / 日趋势 / 按模型细分 / 按币种分组。
+                        component: str | None = Query(None),
+                        period: str = Query("day",
+                                            description="趋势分桶粒度：day/month")):
+    """Token 用量看板聚合（近 N 天）：总量 / 趋势 / 按模型细分 / 按币种分组。
 
     by_currency（M11）：CNY/USD 价格行分列——此前混进单一 cost_usd 总数。
+    period=month（M11 尾项）：趋势按自然月分桶（monthly 键，查询现算）。
 
     数据源：llm_usage 明细表（每次调用一行，proxy/TokenTracker 层写入），
     按组件类型（llm/embedding/rerank）和模型精确聚合。
-    
+
     Args:
         days: 时间窗天数（默认 7）
         component: 组件类型过滤（all/llm/embedding/rerank，默认 all）
+        period: 趋势分桶粒度（day 默认 / month）
     """
     from backend.observability.llm_usage_store import get_llm_usage_store
-    data = get_llm_usage_store().dashboard(days, component=component)
+    data = get_llm_usage_store().dashboard(days, component=component,
+                                           period=period)
     data["days"] = days
     return data
 
