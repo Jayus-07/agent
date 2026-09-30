@@ -55,17 +55,100 @@ def detect_booking_action(message: str) -> str:
     return "unknown"
 
 
+# ── 跨轮续填辅助（Phase 5 / D2）─────────────────────────────────
+# 槽位契约（必填名 / 展示名）与「本轮抽取并入上轮 collected」的合并逻辑
+# 都在 commerce/extract.py（单一事实源）——预订与比价两个子图共用同一份，
+# 避免两侧追问文案与缺失判定分叉。本文件只保留 booking 专有的
+# collected → search_params 形态转换。
+
+
+def _search_params(kind: str, collected: dict) -> dict:
+    """collected → BookingService.search_params（缺省值在此单点补齐）。
+
+    首跑与续填共用——原先是 new 分支内联，两处必然会漂移。
+    """
+    if kind == "hotel":
+        return {
+            "city": collected.get("city", ""),
+            "check_in": collected.get("check_in", ""),
+            "check_out": collected.get("check_out", ""),
+            "adults": collected.get("adults", 2),
+            "children": collected.get("children", 0),
+            "rooms": collected.get("rooms", 1),
+        }
+    return {
+        "origin": collected.get("origin", ""),
+        "destination": collected.get("destination", ""),
+        "departure_date": collected.get("departure_date", ""),
+        "adults": collected.get("adults", 1),
+        "children": collected.get("children", 0),
+    }
+
+
+def _resume_booking(kind: str, message: str, pending: dict) -> dict:
+    """挂起在场时的续填：合并槽位 → 齐备转 new 流 / 仍缺继续追问。
+
+    合并与缺失判定复用 commerce/extract 的共享实现（与比价子图同源），
+    本函数只做「booking 侧结果形态」的组装。
+    """
+    from backend.travel.commerce.extract import (
+        merge_slot_values,
+        missing_slots_clarification,
+    )
+
+    collected, missing = merge_slot_values(
+        kind, message, base=pending.get("collected") or {})
+    if missing:
+        logger.info("[BookingResolver] 续填未齐 kind=%s missing=%s",
+                    kind, missing)
+        return {
+            "booking_action": "unknown",
+            "booking_params": {},
+            "booking_clarification": missing_slots_clarification(missing),
+            "booking_kind": kind, "booking_missing": missing,
+            "booking_collected": collected,
+        }
+    logger.info("[BookingResolver] 续填齐备转新预订 kind=%s", kind)
+    return {
+        "booking_action": "new",
+        "booking_params": {
+            "commerce_type": kind,
+            "search_params": _search_params(kind, collected),
+            "selection": {"index": 1},
+        },
+        "booking_clarification": "",
+        "booking_kind": kind, "booking_missing": [],
+        "booking_collected": collected,
+    }
+
+
 def booking_resolver_node(state: dict) -> dict:
     from backend.travel.commerce.extract import (
+        REQUIRED_SLOTS_BY_KIND,
         detect_commerce_intent,
-        extract_flight_params,
-        extract_hotel_params,
+        merge_slot_values,
+        missing_slots_clarification,
     )
 
     message = state.get("user_message", "")
+
+    # ── 跨轮续填（Phase 5 / D2 两跳断修复）────────────────────────
+    # 上轮反问「预订还需要：入住日期、退房日期」，本轮用户只答
+    # 「10月3日到5日」——纯槽位值回答不含预订动词，走下面的意图判定会落到
+    # unknown 并再问一遍（实测的用户可见症状）。挂起在场时优先走续填：
+    # 本轮抽到的槽位并入上轮 collected，齐备即转入**与首跑完全相同**的
+    # new 流程（不新增执行分支语义，executor 零改动）。
+    pending = state.get("pending_intent") or {}
+    pending_kind = pending.get("kind") or ""
+    if pending_kind in REQUIRED_SLOTS_BY_KIND:
+        return _resume_booking(pending_kind, message, pending)
+
     action = detect_booking_action(message)
     params: dict = {"search_params": {}, "selection": {}}
     clarification = ""
+    kind_out = ""
+    missing_out: list[str] = []
+    collected_out: dict = {}
 
     if action == "new":
         intent = detect_commerce_intent(message)  # 复用 STOP K 意图（hotel/flight）
@@ -75,40 +158,15 @@ def booking_resolver_node(state: dict) -> dict:
                 "请告诉我要预订的酒店或机票信息（城市、日期，例："
                 "帮我预订大阪10月3日到5日的酒店）。")
         else:
+            kind_out = intent
+            collected, missing = merge_slot_values(intent, message)
+            collected_out = collected
             params["commerce_type"] = intent
-            if intent == "hotel":
-                raw = extract_hotel_params(message)
-                missing = [k for k in ("city", "check_in", "check_out")
-                           if k not in raw]
-                params["search_params"] = {
-                    "city": raw.get("city", ""),
-                    "check_in": raw["check_in"].isoformat() if "check_in" in raw else "",
-                    "check_out": raw["check_out"].isoformat() if "check_out" in raw else "",
-                    "adults": raw.get("adults", 2),
-                    "children": raw.get("children", 0),
-                    "rooms": raw.get("rooms", 1),
-                }
-            else:
-                raw = extract_flight_params(message)
-                missing = [k for k in ("origin", "destination", "departure_date")
-                           if k not in raw]
-                params["search_params"] = {
-                    "origin": raw.get("origin", ""),
-                    "destination": raw.get("destination", ""),
-                    "departure_date": raw["departure_date"].isoformat()
-                    if "departure_date" in raw else "",
-                    "adults": raw.get("adults", 1),
-                    "children": raw.get("children", 0),
-                }
+            params["search_params"] = _search_params(intent, collected)
             if missing:
                 action = "unknown"
-                clarification = (
-                    "预订还需要：" + "、".join(
-                        {"city": "城市", "check_in": "入住日期",
-                         "check_out": "退房日期", "origin": "出发城市",
-                         "destination": "目的地城市",
-                         "departure_date": "出发日期"}.get(m, m)
-                        for m in missing) + "。")
+                missing_out = missing
+                clarification = missing_slots_clarification(missing)
             else:
                 # 默认选第 1 顺位（确定性排序：价格从低到高）
                 params["selection"] = {"index": 1}
@@ -118,7 +176,9 @@ def booking_resolver_node(state: dict) -> dict:
             "或查询「我的预订」状态。")
 
     return {"booking_action": action, "booking_params": params,
-            "booking_clarification": clarification}
+            "booking_clarification": clarification,
+            "booking_kind": kind_out, "booking_missing": missing_out,
+            "booking_collected": collected_out}
 
 
 def booking_executor_node(state: dict) -> dict:

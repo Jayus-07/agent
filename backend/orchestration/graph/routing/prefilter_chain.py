@@ -17,10 +17,17 @@ from backend.shared.logger import logger
 
 # route_mode → ConversationContext.active_domain（预过滤命中回写用）。
 # 客服 clarify（route_mode=clarify，出自 cs_prefilter）也归属客服域。
+#
+# 交易两域（Phase 5 / D2）：travel_booking / travel_commerce 原缺登记，
+# 命中后 domain=None → mark_domain_turn 早退 → active_domain 永远为空，
+# 下一轮「10月3日」这类纯槽位值回答既拉不回也无人续填（两跳断片 G1）。
+# 补齐后 prefilter/挂起续填命中即回写活跃域，与规划域同口径。
 _ROUTE_MODE_DOMAIN = {
     "travel": "travel",
     "customer_service": "customer_service",
     "selection_funnel": "selection_funnel",
+    "travel_booking": "travel_booking",
+    "travel_commerce": "travel_commerce",
 }
 
 

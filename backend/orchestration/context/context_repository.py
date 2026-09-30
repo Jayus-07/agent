@@ -49,7 +49,9 @@ def _safe(metric_fn) -> None:
 
 def _stale_kind(mtype: str) -> str:
     """stale 拒绝的分类（低基数：pending | run）。"""
-    return "pending" if mtype == MutationType.RESOLVE_TRAVEL_PENDING else "run"
+    return ("pending" if mtype in (MutationType.RESOLVE_TRAVEL_PENDING,
+                                   MutationType.RESOLVE_BOOKING_INTENT)
+            else "run")
 
 # ── Mutation 类型（任务书 §十一：mutation 表达业务意图，非整对象覆盖）──
 
@@ -62,6 +64,11 @@ class MutationType:
     SET_TRAVEL_STAGE = "set_travel_stage"
     SET_TRAVEL_PENDING = "set_travel_pending"
     RESOLVE_TRAVEL_PENDING = "resolve_travel_pending"
+    # 交易挂起（Phase 5 / D2 两跳断修复）：预订/比价子图澄清期的参数挂起。
+    # 与 travel pending 并列但独立——两个子图无 checkpointer，澄清期参数
+    # 不在 PG，必须由会话上下文承载，否则用户答槽位值时掉域。
+    SET_BOOKING_INTENT = "set_booking_intent"
+    RESOLVE_BOOKING_INTENT = "resolve_booking_intent"
     MARK_TRAVEL_COMPLETED = "mark_travel_completed"
     CANCEL_TRAVEL_RUN = "cancel_travel_run"
     CLEAR_TRAVEL_RUN = "clear_travel_run"
@@ -80,6 +87,8 @@ _CREATING_MUTATIONS = frozenset({
     MutationType.MERGE_TRAVEL_SUMMARY,
     MutationType.PATCH_TRAVEL_SUMMARY,
     MutationType.START_TRAVEL_RUN,
+    # 交易挂起允许惰性创建：用户第一条消息就是「订酒店」，此前无上下文
+    MutationType.SET_BOOKING_INTENT,
     MutationType.SET_TOPIC,
     MutationType.OVERWRITE_DESTINATION,
     MutationType.SET_FUNNEL_CANDIDATES,
@@ -261,6 +270,49 @@ def apply_mutation(
         ctx.set_travel_pending(None)
         if ctx.travel_stage in ("", "slot"):
             ctx.set_travel_stage("planned")
+
+    elif mtype == MutationType.SET_BOOKING_INTENT:
+        route_mode = payload.get("route_mode") or ""
+        kind = payload.get("kind") or ""
+        missing = [s for s in (payload.get("missing_slots") or []) if s]
+        if not route_mode or not kind or not missing:
+            # 参数齐备时不该写挂起（调用方应发 RESOLVE）——缺失即无意义挂起
+            return MutationResult(status="noop", context=ctx.copy(),
+                                  version=ctx.version,
+                                  detail="incomplete booking intent")
+        prev = ctx.booking_intent or {}
+        # 同一挂起（同域同类型）持续更新 → 保留 question_id：续填是同一件
+        # 事的推进，不是新挂起；换域/换类型才算新挂起（旧 question_id 作废）
+        if (prev.get("route_mode") == route_mode
+                and prev.get("kind") == kind
+                and prev.get("question_id")):
+            question_id = prev["question_id"]
+        else:
+            question_id = _new_question_id()
+        ctx.set_booking_intent({
+            "question_id": question_id,
+            "route_mode": route_mode,
+            "kind": kind,
+            "missing_slots": missing,
+            "collected": dict(payload.get("collected") or {}),
+            "reason": payload.get("reason") or "missing_required",
+            "created_at": prev.get("created_at") or time.time(),
+            "updated_at": time.time(),
+        })
+
+    elif mtype == MutationType.RESOLVE_BOOKING_INTENT:
+        current = ctx.booking_intent or {}
+        if not current:
+            # 无挂起：合法终态（如用户直接给出完整信息，从未产生澄清）
+            return MutationResult(status="noop", context=ctx.copy(),
+                                  version=ctx.version, detail="no pending intent")
+        expected_q = payload.get("expected_question_id")
+        current_q = current.get("question_id") or ""
+        if expected_q is not None and current_q and current_q != expected_q:
+            return MutationResult(
+                status="stale", context=ctx.copy(),
+                detail=f"resolve intent: {current_q} != expected {expected_q}")
+        ctx.set_booking_intent(None)
 
     elif mtype == MutationType.MARK_TRAVEL_COMPLETED:
         expected_run = payload.get("expected_run_id")

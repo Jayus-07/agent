@@ -17,6 +17,7 @@
 """
 from backend.orchestration.graph.routing.continuation import (
     _try_continuation,
+    try_booking_pending,
     try_travel_pending,
 )
 from backend.orchestration.graph.routing.cs_understanding import (
@@ -57,6 +58,7 @@ __all__ = [
     # continuation
     "_try_continuation",
     "try_travel_pending",
+    "try_booking_pending",
     # cs_understanding
     "_enrich_with_understanding",
     # hierarchical

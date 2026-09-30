@@ -20,9 +20,12 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.shared.logger import logger
 from backend.travel.commerce.extract import (
+    REQUIRED_SLOTS_BY_KIND,
     detect_commerce_intent,
     extract_flight_params,
     extract_hotel_params,
+    iso_value,
+    merge_slot_values,
 )
 from backend.travel.commerce.graph_state import (
     COMMERCE_EXECUTOR,
@@ -41,8 +44,19 @@ from backend.travel.commerce.service import search_flights, search_hotels
 
 
 def commerce_slot_filler_node(state: dict) -> dict:
-    """意图 + 槽位 + 确定性校验（纯函数式，无 IO）。"""
+    """意图 + 槽位 + 确定性校验（纯函数式，无 IO）。
+
+    Phase 5 / D2：挂起在场时先走**跨轮续填**——上轮追问「入住/退房日期」
+    后用户只答「10月3日到5日」，这类纯槽位值回答不含酒店/机票词，
+    ``detect_commerce_intent`` 会判 None 并让用户重说一遍（掉域症状）。
+    """
     message = state.get("user_message", "")
+
+    pending = state.get("pending_intent") or {}
+    pending_kind = pending.get("kind") or ""
+    if pending_kind in REQUIRED_SLOTS_BY_KIND:
+        return _resume_commerce(pending_kind, message, pending)
+
     intent = detect_commerce_intent(message)
     if intent is None:
         # prefilter 已挡；图内兜底 = 如实说明（不猜意图、不误路由）
@@ -55,51 +69,78 @@ def commerce_slot_filler_node(state: dict) -> dict:
             ),
         }
 
-    if intent == "hotel":
-        params = extract_hotel_params(message)
-        missing = [k for k in ("city", "check_in", "check_out")
-                   if k not in params]
-        request = None
-        if not missing:
-            try:
-                req = HotelSearchRequest(
-                    city=params["city"], check_in=params["check_in"],
-                    check_out=params["check_out"],
-                    adults=params.get("adults", 2),
-                    children=params.get("children", 0),
-                    rooms=params.get("rooms", 1))
-                request = {
-                    "city": req.city, "check_in": req.check_in.isoformat(),
-                    "check_out": req.check_out.isoformat(),
-                    "nights": req.nights, "adults": req.adults,
-                    "children": req.children, "rooms": req.rooms,
-                    "star_rating": req.star_rating,
-                }
-            except ValueError as e:
-                return _invalid_params(intent, str(e))
-        return {"commerce_type": intent, "commerce_request": request,
-                "commerce_missing": missing}
-
-    params = extract_flight_params(message)
-    missing = [k for k in ("origin", "destination", "departure_date")
-               if k not in params]
+    collected = {
+        k: iso_value(v) for k, v in (
+            extract_hotel_params(message) if intent == "hotel"
+            else extract_flight_params(message)
+        ).items()
+    }
+    missing = [k for k in REQUIRED_SLOTS_BY_KIND[intent]
+               if not collected.get(k)]
     request = None
     if not missing:
-        try:
-            req = FlightSearchRequest(
-                origin=params["origin"], destination=params["destination"],
-                departure_date=params["departure_date"],
-                adults=params.get("adults", 1),
-                children=params.get("children", 0))
-            request = {
-                "origin": req.origin, "destination": req.destination,
-                "departure_date": req.departure_date.isoformat(),
-                "adults": req.adults, "children": req.children,
-            }
-        except ValueError as e:
-            return _invalid_params(intent, str(e))
+        request, err = _build_request(intent, collected)
+        if err:
+            return _invalid_params(intent, err)
     return {"commerce_type": intent, "commerce_request": request,
-            "commerce_missing": missing}
+            "commerce_missing": missing, "commerce_collected": collected}
+
+
+def _build_request(intent: str, collected: dict) -> tuple[dict | None, str]:
+    """collected（ISO 化值）→ 请求 dict。Returns: (request, 错误原因)。
+
+    首跑与续填共用——此前内联在 slot_filler 里，续填另写一套必然漂移。
+    """
+    try:
+        if intent == "hotel":
+            req = HotelSearchRequest(
+                city=collected["city"],
+                check_in=_to_date(collected["check_in"]),
+                check_out=_to_date(collected["check_out"]),
+                adults=collected.get("adults", 2),
+                children=collected.get("children", 0),
+                rooms=collected.get("rooms", 1))
+            return {
+                "city": req.city, "check_in": req.check_in.isoformat(),
+                "check_out": req.check_out.isoformat(),
+                "nights": req.nights, "adults": req.adults,
+                "children": req.children, "rooms": req.rooms,
+                "star_rating": req.star_rating,
+            }, ""
+        req = FlightSearchRequest(
+            origin=collected["origin"], destination=collected["destination"],
+            departure_date=_to_date(collected["departure_date"]),
+            adults=collected.get("adults", 1),
+            children=collected.get("children", 0))
+        return {
+            "origin": req.origin, "destination": req.destination,
+            "departure_date": req.departure_date.isoformat(),
+            "adults": req.adults, "children": req.children,
+        }, ""
+    except ValueError as e:
+        return None, str(e)
+
+
+def _resume_commerce(kind: str, message: str, pending: dict) -> dict:
+    """挂起在场时的续填：合并槽位 → 齐备转正常查询 / 仍缺继续追问。
+
+    合并与缺失判定复用 commerce/extract 共享实现（与预订子图同源）。
+    不设 ``commerce_clarification``——executor 会走 ``build_clarification``
+    生成与首跑一致的追问文案（单一事实源）。
+    """
+    collected, missing = merge_slot_values(
+        kind, message, base=pending.get("collected") or {})
+    if missing:
+        logger.info("[CommerceSlotFiller] 续填未齐 kind=%s missing=%s",
+                    kind, missing)
+        return {"commerce_type": kind, "commerce_request": None,
+                "commerce_missing": missing, "commerce_collected": collected}
+    request, err = _build_request(kind, collected)
+    if err:
+        return _invalid_params(kind, err)
+    logger.info("[CommerceSlotFiller] 续填齐备 kind=%s", kind)
+    return {"commerce_type": kind, "commerce_request": request,
+            "commerce_missing": [], "commerce_collected": collected}
 
 
 def _invalid_params(intent: str, reason: str) -> dict:

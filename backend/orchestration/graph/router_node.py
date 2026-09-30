@@ -27,6 +27,7 @@ from backend.orchestration.graph.routing import (
     detect_cs_redirect,
     is_cs_forced,
     run_domain_prefilters,
+    try_booking_pending,
     try_travel_pending,
 )
 from backend.orchestration.router import get_router
@@ -92,6 +93,15 @@ def router_node(state: dict) -> dict:
             return _with_router_decisions(
                 state, _mark_route_from_update(state, pending_update), query,
                 existing_override=pending_update,
+            )
+        # 交易挂起续填（Phase 5 / D2）：预订/比价子图澄清期，用户答纯槽位值
+        # （「10月3日」）——两子图无 checkpointer，不拦就掉域。命中条件与
+        # 异常语义见 routing/continuation.py::try_booking_pending
+        booking_pending = try_booking_pending(query, routing_context)
+        if booking_pending is not None:
+            return _with_router_decisions(
+                state, _mark_route_from_update(state, booking_pending), query,
+                existing_override=booking_pending,
             )
         # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
         cont_update = _try_continuation(state, query, routing_context)

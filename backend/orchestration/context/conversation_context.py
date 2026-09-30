@@ -131,6 +131,24 @@ class ConversationContext:
     travel_stage: str = ""       # slot / planned / completed / cancelled
     travel_pending: dict | None = None   # TravelPendingQuestion 快照（见下）
 
+    # ── 交易挂起（Phase 5 / D2 两跳断修复，2026-09-30）──
+    # 预订（travel_booking）与商务查询（travel_commerce）两子图**澄清期**的
+    # 结构化挂起：本轮在等哪些参数、已收到什么。
+    #
+    # 为什么必须跨轮存：两个子图均无 checkpointer（订单/报价事实全在 PG，
+    # 「图状态不承载业务事实」是既有纪律），但**澄清期的参数不在 PG** ——
+    # 没人记住。实测 D2：用户「帮我预订大阪的酒店」→ 系统反问「哪天入住」
+    # → 用户答「10月3日到5日」→ 这类纯槽位值回答既无交易信号词也无延续
+    # 信号，prefilter/ContinuationResolver 都不命中 → 掉域，用户被迫重说。
+    #
+    # 结构（只存结构化槽位，不存模型生成内容）：
+    #   route_mode:    travel_booking | travel_commerce（回哪个子图）
+    #   kind:          hotel | flight
+    #   missing_slots: 当前仍缺的必填槽位名
+    #   collected:     已收到的槽位（值已 ISO 化，可直接并入 search_params）
+    #   question_id:   本次挂起标识（下一轮续填 / 收尾的 CAS 依据）
+    booking_intent: dict | None = None
+
     # ── 乐观锁版本（STOP G2）──
     # 每次成功 mutation +1；Redis/CAS 写路径的版本基准。
     # 1 = 首次创建即计入版本。
@@ -200,6 +218,16 @@ class ConversationContext:
     def set_travel_pending(self, pending: dict | None) -> None:
         """写入/清除结构化 pending question（None = 清除）。"""
         self.travel_pending = dict(pending) if pending else None
+        self.updated_at = time.time()
+
+    def set_booking_intent(self, intent: dict | None) -> None:
+        """写入/清除交易挂起（None = 清除）。
+
+        与 travel_pending 并列但**语义独立**：travel_pending 是规划域缺槽，
+        booking_intent 是交易域（预订/比价）澄清期缺参。两者可同时存在
+        （用户先规划行程、再在会话里订酒店），互不覆盖。
+        """
+        self.booking_intent = dict(intent) if intent else None
         self.updated_at = time.time()
 
     def clear_travel_run(self) -> None:
@@ -325,6 +353,10 @@ class ConversationContext:
             "travel_run_id": self.travel_run_id,
             "travel_stage": self.travel_stage,
             "travel_pending": dict(self.travel_pending) if self.travel_pending else None,
+            # 交易挂起（Phase 5 / D2）：供路由层 BookingPendingResolver 消费；
+            # 经 assemble_routing_context 落进 brief_summary
+            "booking_intent": (dict(self.booking_intent)
+                               if self.booking_intent else None),
         }
 
     # ── 序列化（STOP G1：Redis JSON value 契约，禁 pickle）──

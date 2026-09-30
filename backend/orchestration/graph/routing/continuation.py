@@ -1,8 +1,9 @@
-"""routing/continuation.py — 跨轮续跑与旅游 pending（P1-2 拆自 router_node.py）
+"""routing/continuation.py — 跨轮续跑与旅游/交易 pending（P1-2 拆自 router_node.py）
 
 迁入内容（2026-09-30 纯移动，函数体逐字保留）：
   - _try_continuation：ContinuationResolver 命中 → 回活跃域
   - try_travel_pending：Travel Pending Resolver（STOP F2，先于 ContinuationResolver）
+  - try_booking_pending：交易挂起续填 Resolver（Phase 5 / D2），与 travel 并列
 """
 from __future__ import annotations
 
@@ -99,4 +100,24 @@ def try_travel_pending(query: str, routing_context: dict) -> dict | None:
         return resolve_travel_pending(query, routing_context)
     except Exception as e:
         logger.warning(f"[RouterNode] travel pending 判定失败，走正常路由: {e}")
+        return None
+
+
+def try_booking_pending(query: str, routing_context: dict) -> dict | None:
+    """交易挂起续填 Resolver（Phase 5 / D2，与 try_travel_pending 并列）。
+
+    活跃域为 travel_booking / travel_commerce 且存在结构化 booking_intent
+    挂起时，判定纯槽位值回答（「10月3日」「大阪」）能否补上缺失参数——
+    能则短路回原子图（子图 resolver 走续填档），否则交回正常路由。
+    命中条件与异常语义见 booking_pending_resolver 模块 docstring；
+    客服强信号在其内部放行。异常软失败返回 None（走正常路由）。
+    """
+    try:
+        from backend.orchestration.context.booking_pending_resolver import (
+            resolve_booking_pending,
+        )
+
+        return resolve_booking_pending(query, routing_context)
+    except Exception as e:
+        logger.warning(f"[RouterNode] 交易挂起判定失败，走正常路由: {e}")
         return None

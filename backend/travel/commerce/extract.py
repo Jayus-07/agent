@@ -189,3 +189,78 @@ def _extract_single_date(message: str, today: date) -> date | None:
             if candidate >= today:
                 return candidate
     return None
+
+
+def extract_single_date(message: str, today: date | None = None) -> date | None:
+    """单日期抽取（公开入口，Phase 5 / D2 跨轮续填用）。
+
+    **不是新实现**——薄包装模块内 ``_extract_single_date``（与机票出发日
+    抽取同一份正则与补年规则），避免续填路径另写一套日期解析而与主抽取
+    分叉（本项目「同一口径单一事实源」纪律）。
+
+    场景：用户被问「入住日期」后答「10月3日」（只有单日期、没有区间词），
+    ``_extract_date_pair`` 不匹配 → check_in 补不上 → 系统再问一遍。
+    区间表达（「10月3日到5日」）仍由 ``_extract_date_pair`` 在
+    ``extract_hotel_params`` 内处理；本函数只兜单日期那一档。
+    """
+    return _extract_single_date(message or "", today or date.today())
+
+
+# ── 跨轮续填的槽位契约（Phase 5 / D2 两跳断修复）─────────────────
+# 必填槽位与展示名在此单点定义：预订（booking）与比价（commerce）两个
+# 子图的追问文案、缺失判定、挂起回写三处共用，避免「追问说缺 A、挂起记
+# B」这类分叉。两侧的「续填」都走下面的 merge_slot_values。
+HOTEL_REQUIRED_SLOTS: tuple[str, ...] = ("city", "check_in", "check_out")
+FLIGHT_REQUIRED_SLOTS: tuple[str, ...] = ("origin", "destination",
+                                          "departure_date")
+REQUIRED_SLOTS_BY_KIND: dict[str, tuple[str, ...]] = {
+    "hotel": HOTEL_REQUIRED_SLOTS,
+    "flight": FLIGHT_REQUIRED_SLOTS,
+}
+SLOT_LABELS: dict[str, str] = {
+    "city": "城市", "check_in": "入住日期", "check_out": "退房日期",
+    "origin": "出发城市", "destination": "目的地城市",
+    "departure_date": "出发日期",
+}
+
+
+def iso_value(value):
+    """date → ISO 字符串；其余原样。
+
+    挂起落 ConversationContext（Redis JSON value），date 对象不可序列化。
+    """
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def merge_slot_values(kind: str, message: str,
+                      base: dict | None = None) -> tuple[dict, list[str]]:
+    """本轮抽取并入 base，返回 ``(collected, missing)``——跨轮续填的唯一合并点。
+
+    唯一抽取来源仍是本模块的 ``extract_hotel_params`` /
+    ``extract_flight_params``（与 prefilter 同源）；``base`` 是上轮挂起里
+    已收到的槽位。collected 的值统一 ISO 化（可直接落 JSON、可直接并入
+    子图 request 的 ISO 字段）。
+
+    额外兜一层单日期：酒店缺 check_in 时用 ``extract_single_date`` 补——
+    「10月3日」这类只答一个日期的形态，区间正则覆盖不到。
+    """
+    required = REQUIRED_SLOTS_BY_KIND.get(kind)
+    if not required:
+        return {}, []
+    collected = {k: iso_value(v) for k, v in dict(base or {}).items()}
+    fresh = (extract_hotel_params(message) if kind == "hotel"
+             else extract_flight_params(message))
+    collected.update({k: iso_value(v) for k, v in fresh.items()})
+    if kind == "hotel" and not collected.get("check_in"):
+        single = extract_single_date(message)
+        if single:
+            collected["check_in"] = iso_value(single)
+    missing = [k for k in required if not collected.get(k)]
+    return collected, missing
+
+
+def missing_slots_clarification(missing: list[str],
+                                prefix: str = "预订还需要：") -> str:
+    """缺槽追问文案（预订侧用；比价侧走 graph_node_render.build_clarification）。"""
+    return prefix + "、".join(SLOT_LABELS.get(m, m) for m in missing) + "。"
+

@@ -25,12 +25,18 @@ class CommerceGraphState(TypedDict, total=False):
     session_id: str
     conversation_id: str
     tenant_id: str
+    # 上轮挂起（Phase 5 / D2）：主图适配器从 ConversationContext 读取后传入。
+    # 本图无 checkpointer，跨轮参数不可能从图状态拿——这是唯一入口。
+    # 只读；回写挂起是适配器职责（图内零 IO 纪律不变）。
+    pending_intent: dict
 
     # ── slot_filler 产物 ──
     commerce_type: str            # hotel | flight
     commerce_request: dict        # 校验通过的请求参数（date 已转 ISO str）
     commerce_missing: list[str]   # 缺失必填槽位名
     commerce_clarification: str   # 缺槽位时的追问文案（executor 直通渲染）
+    # 已收集槽位（Phase 5 / D2）：值已 ISO 化，适配器据此回写挂起
+    commerce_collected: dict
 
     # ── executor 产物 ──
     final_answer: str
@@ -41,12 +47,18 @@ class CommerceGraphState(TypedDict, total=False):
 def new_commerce_graph_input(
     *, user_message: str, user_id: str = "", session_id: str = "",
     conversation_id: str = "", tenant_id: str = "",
+    pending_intent: dict | None = None,
 ) -> dict[str, Any]:
-    """主图 state → commerce 图输入（只带本轮输入，零产物预置）。"""
+    """主图 state → commerce 图输入（只带本轮输入，零产物预置）。
+
+    ``pending_intent`` 无挂起时写入空 dict（slot_filler 一律 .get 读），
+    与「读状态一律 .get()」契约一致。
+    """
     return {
         "user_message": user_message or "",
         "user_id": user_id or "",
         "session_id": session_id or "",
         "conversation_id": conversation_id or "",
         "tenant_id": tenant_id or "",
+        "pending_intent": dict(pending_intent) if pending_intent else {},
     }
