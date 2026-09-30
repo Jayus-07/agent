@@ -17,7 +17,8 @@ import threading
 
 from langgraph.graph import END, START, StateGraph
 
-# 触发域图自注册
+# 触发域图自注册（P2-2：包级 import 保留，build_graph 内另有显式调用双保险；
+# 显式入口须函数内 import——模块级 from-import 会与 domains 包级注册循环）
 import backend.domains  # noqa: F401
 
 # 触发 Skill 包自注册（必须在 build_graph() 之前 import）
@@ -122,6 +123,12 @@ def build_graph(checkpointer=None):
     checkpointer: 主图状态持久化（MAIN_GRAPH_CHECKPOINTER_ENABLED 开启时由
     system.py 传入 build_main_checkpointer() 的结果；None = 不持久化）。
     """
+    # 域图注册显式化（P2-2）：幂等（sys.modules 判定，已导入直接跳过），
+    # 与模块级 import 双保险——绕过 import 链构建图的调用方也能拿到全部域。
+    # 函数内 import：模块级 from-import 会与 domains 包级注册形成循环
+    from backend.domains import register_all_domains
+
+    register_all_domains()
     wf = StateGraph(OrchestratorState)
 
     # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
