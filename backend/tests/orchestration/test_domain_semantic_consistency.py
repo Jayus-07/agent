@@ -1,32 +1,54 @@
-"""tests/orchestration/test_domain_semantic_consistency.py — Domain 语义一致性守护（STOP E / Phase 5 D2）
+"""tests/orchestration/test_domain_semantic_consistency.py — 域归属单一事实源守护
 
-锁「注册表 / 决策 / 回写」三处口径不漂移：
-1. 决策层（DomainRouter）：route_mode 归一为 (顶级域, subflow)——travel_commerce /
-   travel_booking 归一为 domain=travel 的子流，不是独立业务域；
-2. 展示层（DomainGraphRegistry）：DomainGraph.subflow 表达同一语义；
-3. 回写层（_ROUTE_MODE_DOMAIN）：prefilter 命中后 active_domain 记**物理域图名**
-   （与决策层记顶级域**刻意不同**——续轮需精确重入子图，不是重入顶级域）。
+口径：**注册表（DomainGraphRegistry）是域归属的唯一事实源**。
 
-第 3 处在 Phase 5 之前无任何守护，正是 D2「订酒店订到一半忘了」的根因（G1）：
-漏登记 travel_booking / travel_commerce → prefilter 命中取 domain=None →
-mark_domain_turn 早退 → active_domain 永不写 → 下一轮纯槽位值回答无人认领。
-末尾两例延伸到执行层：一例做「route_mode → 决策 → 执行」往返校验，另一例锁
-最简构造下子流仍解析到自身——令 execution_mode 内 ``f"travel_{subflow}"``
-那第四处手写无法与其余两处悄悄分叉。
+同一份「谁属于谁 / 命中后活跃域记谁 / 执行选哪张图」曾在四处各自手写，任一处
+漏改都是**静默失败**——D2「订酒店订到一半忘了」正是漏了回写层一处（G1）。
+自 2026-09-30 起，三处消费方全部改为注册表派生（零手写），本文件也从
+「锁三处口径一致」升级为「锁三处口径**确由注册表生成**」：
+
+1. 决策层 ``DomainRouter._PREFILTER_DOMAIN_MAP``：route_mode → (顶级域, subflow)
+2. 回写层 ``prefilter_chain._ROUTE_MODE_DOMAIN``：route_mode → active_domain
+3. 执行层 ``execution_mode._DEFAULT_DOMAIN_GRAPH_MODES`` + 子流选图
+
+三层语义**刻意不同**，不是漂移：
+  - 回写层记**物理域图名**（续轮要精确重入子图，记 travel 会重入规划图）；
+  - 决策层记**顶级域**（供能力路由/展示，travel_booking → travel）；
+  - 执行层把两者合起来选图（子流查注册表归属，不再 ``f"travel_{subflow}"`` 拼接）。
+
+唯一保留的手写项是 ``_NON_GRAPH_ROUTE_MODES`` 里的 ``general_chat``：有路由模式
+但**没有域图**（寒暄直答），注册表装不下；它不得进回写层，否则一句「你好」会
+把进行中的跨轮任务上下文冲掉。
+
+注册表上三个语义**必须分清**（混用即漂移）：
+  - ``domain``：归属——谁属于谁（唯一事实源，2026-09-30 新增）；
+  - ``subflow``：**独立生命周期子流**标签（STOP E §6.2 冻结口径，只给
+    commerce/booking；顶级域图必须为空）；
+  - ``decision_subflow``：顶级域**自身的活动标签**（travel→planning），
+    仅用于决策层 subflow 展示位，``None`` 时回退 ``subflow``。
 
 route_mode / 注册键本身是永久保留的内部调度标识（改名会静默落入 planner 兜底），
-本测试只锁「语义一致」，不锁、也不应锁任何调度行为变更。
+本测试只锁「归属口径」，不锁、也不应锁任何调度行为变更。
 """
 from __future__ import annotations
 
 import backend.domains  # noqa: F401  # import 即触发五个域图自注册
-from backend.orchestration.domain_registry import domain_graph_registry
+from backend.orchestration.domain_graph import DomainGraph
+from backend.orchestration.domain_registry import (
+    DerivedDomainMap,
+    DomainGraphRegistry,
+    domain_graph_registry,
+)
 from backend.orchestration.graph.routing.prefilter_chain import _ROUTE_MODE_DOMAIN
 from backend.orchestration.router.domain_router import (
+    _NON_GRAPH_ROUTE_MODES,
     _PREFILTER_DOMAIN_MAP,
     DomainRouter,
 )
-from backend.orchestration.router.execution_mode import ExecutionModeResolver
+from backend.orchestration.router.execution_mode import (
+    _DEFAULT_DOMAIN_GRAPH_MODES,
+    ExecutionModeResolver,
+)
 
 # 三个顶级业务域（STOP E 口径）；子流域图 → (顶级域, subflow) 的期望归一。
 _TOP_LEVEL_DOMAINS = {"customer_service", "travel", "selection_funnel"}
@@ -34,6 +56,35 @@ _SUBFLOW_GRAPHS = {
     "travel_commerce": ("travel", "commerce"),
     "travel_booking": ("travel", "booking"),
 }
+# 决策层 subflow 展示位的**契约值**（trace/管理端展示口径，改这里=改对外展示）。
+_EXPECTED_DECISION_SUBFLOW = {
+    "customer_service": None,
+    "travel": "planning",
+    "selection_funnel": "funnel",
+    "travel_booking": "booking",
+    "travel_commerce": "commerce",
+    "general_chat": None,
+}
+
+
+def _noop_adapter(state: dict) -> dict:  # pragma: no cover - 仅需「可调用」
+    return state
+
+
+def _graph_modes() -> dict[str, str]:
+    """回写/执行层共用的域图模式表（与 prefilter_chain._with_router_decisions 同构）。"""
+    return {name: name for name in domain_graph_registry.get_all()}
+
+
+def _capability_stub(domain: str = "") -> dict:
+    """域内 capability 决策占位（本例只校验域图目标，不需要真实候选）。"""
+    return {
+        "domain": domain, "capability": None, "candidates": [],
+        "confidence": 0.0, "source": "prefilter", "reasoning": "consistency-guard",
+    }
+
+
+# ── 一、注册表 ↔ 三层口径的语义一致（原 4 例）──────────────────────────────
 
 
 def test_every_registered_graph_is_projectable_by_router():
@@ -45,19 +96,56 @@ def test_every_registered_graph_is_projectable_by_router():
 
 
 def test_top_level_graphs_project_to_themselves():
-    """顶级域图：归一的顶级域必须是自身（无跨域投影），且不带 subflow 展示元数据。"""
+    """顶级域图：归一的顶级域必须是自身；归属判据是 ``domain is None``。
+
+    同时钉住 STOP E §6.2 的**冻结口径**：顶级域图的 ``subflow`` 必须为空——
+    ``subflow`` 只表示「独立生命周期的子流」（commerce/booking），不承载顶级域
+    自身的活动标签（那由 ``decision_subflow`` 表达）。若有人把 travel 的
+    planning 标签塞进 ``subflow``，本例如红。
+    """
     for name in _TOP_LEVEL_DOMAINS:
         graph = domain_graph_registry.get(name)
         assert graph is not None, f"顶级域 {name} 未注册"
-        assert graph.subflow is None, f"顶级域 {name} 不应声明 subflow"
+        assert graph.domain is None, (
+            f"顶级域 {name} 不应声明归属域（domain={graph.domain!r}）"
+        )
+        assert graph.subflow is None, (
+            f"顶级域 {name} 的 subflow 应为空（STOP E §6.2 冻结口径）："
+            f"独立生命周期子流才写 subflow={graph.subflow!r}；"
+            f"顶级域自身的活动标签请写 decision_subflow"
+        )
         assert _PREFILTER_DOMAIN_MAP[name][0] == name
 
 
+def test_decision_subflow_slot_is_derived_from_graph_metadata():
+    """决策层的 subflow 展示位取自注册表声明，并锁定其**契约值**（非重算式）。
+
+    travel/selection_funnel 是顶级域但各有活动标签（planning/funnel），由
+    ``decision_subflow`` 承载；booking/commerce 是子流，回退 ``subflow``。
+
+    期望值刻意写成**字面量**：若改写成 ``graph.decision_subflow or graph.subflow``
+    去比对 ``_PREFILTER_DOMAIN_MAP``，两边同源，改了注册表会一起变——恒真断言，
+    什么都测不出（本用例初版即踩此坑，反向验证时暴露，已修正）。
+    """
+    for name, expected in _EXPECTED_DECISION_SUBFLOW.items():
+        actual = _PREFILTER_DOMAIN_MAP[name][1]
+        assert actual == expected, (
+            f"{name} 决策层 subflow 展示位 = {actual!r}，期望 {expected!r}："
+            f"展示标签漂移（trace/前端归属说明会跟着错）"
+        )
+    # 顶级域的活动标签必须在 decision_subflow 上，而不是塞进冻结的 subflow
+    assert domain_graph_registry.get("travel").decision_subflow == "planning"
+    assert domain_graph_registry.get("selection_funnel").decision_subflow == "funnel"
+
+
 def test_subflow_graphs_consistent_between_router_and_registry():
-    """子流域图：registry.subflow 与 Router 归一的 (顶级域, subflow) 完全一致，且顶级域真实注册。"""
+    """子流域图：registry 的 (domain, subflow) 与 Router 归一的完全一致，且顶级域真实注册。"""
     for name, (domain, subflow) in _SUBFLOW_GRAPHS.items():
         graph = domain_graph_registry.get(name)
         assert graph is not None, f"子流域图 {name} 未注册"
+        assert graph.domain == domain, (
+            f"{name} 归属域为 {graph.domain!r}，与 DomainRouter 归一 {domain!r} 不一致"
+        )
         assert graph.subflow == subflow, (
             f"{name} 注册元数据 subflow={graph.subflow!r}，与 DomainRouter 归一 {subflow!r} 不一致"
         )
@@ -77,22 +165,8 @@ def test_domain_router_decision_matches_registry_metadata():
         assert decision["subflow"] == domain_graph_registry.get(name).subflow
 
 
-# ── 回写层守护（第三处口径，Phase 5 / D2 新增，共 6 例）────────────────────
-# 这一处在修复前无任何守护，且正是 D2 两跳断片的根因所在；下面六例把它与
-# 已受守护的决策层/展示层锁死，并延伸到执行层做行为等价校验。
-
-
-def _graph_modes() -> dict[str, str]:
-    """回写/执行层共用的域图模式表（与 prefilter_chain._with_router_decisions 同构）。"""
-    return {name: name for name in domain_graph_registry.get_all()}
-
-
-def _capability_stub(domain: str = "") -> dict:
-    """域内 capability 决策占位（本例只校验域图目标，不需要真实候选）。"""
-    return {
-        "domain": domain, "capability": None, "candidates": [],
-        "confidence": 0.0, "source": "prefilter", "reasoning": "consistency-guard",
-    }
+# ── 二、回写层守护（Phase 5 / D2 新增）────────────────────────────────────
+# 这一处在修复前无任何守护，且正是 D2 两跳断片的根因所在。
 
 
 def test_every_registered_graph_is_write_back_registered():
@@ -155,13 +229,119 @@ def test_write_back_records_physical_graph_not_top_level():
         )
 
 
+# ── 三、派生守护（2026-09-30：口径改为注册表生成，共 5 例）─────────────────
+# 前三例锁「三处确是活视图、不是照抄的手写字典」，后两例锁「派生对新域同样成立」。
+
+
+def test_layer_tables_are_live_registry_views():
+    """三处口径必须是注册表**活视图**（结构守护）。
+
+    若有人把某处换回字面量 dict，本例如红——手写就等于给「漏改」重新留了口子，
+    而那正是 D2/G1 的成因。
+    """
+    for name, table in (
+        ("_ROUTE_MODE_DOMAIN", _ROUTE_MODE_DOMAIN),
+        ("_PREFILTER_DOMAIN_MAP", _PREFILTER_DOMAIN_MAP),
+        ("_DEFAULT_DOMAIN_GRAPH_MODES", _DEFAULT_DOMAIN_GRAPH_MODES),
+    ):
+        assert isinstance(table, DerivedDomainMap), (
+            f"{name} 不是注册表派生视图（疑被改回手写字典）："
+            f"手写即可能再漏一处，退化成 D2/G1 类静默故障"
+        )
+
+
+def test_derived_tables_equal_registry_derivations():
+    """模块级口径 === 注册表派生结果（接线守护：忘换源 / 混入手写项会在此红）。"""
+    assert dict(_ROUTE_MODE_DOMAIN) == domain_graph_registry.route_mode_to_active_domain()
+
+    assert dict(_DEFAULT_DOMAIN_GRAPH_MODES) == domain_graph_registry.route_mode_to_graph_mode()
+
+    expected = dict(domain_graph_registry.route_mode_to_domain_decision())
+    expected.update(_NON_GRAPH_ROUTE_MODES)
+    assert dict(_PREFILTER_DOMAIN_MAP) == expected, (
+        "决策层口径与注册表派生不一致：除 general_chat 伪模式外不应有任何手写项"
+    )
+    assert set(_NON_GRAPH_ROUTE_MODES) == {"general_chat"}, (
+        "决策层手写残留只允许 general_chat（无域图的伪模式）；"
+        "新增其它手写项说明域归属又分叉了"
+    )
+
+
+def test_derivations_generalize_to_a_new_domain():
+    """派生函数对「还不存在的域」同样成立——证明是**生成**，不是照抄现值。
+
+    用自建注册表实例（不污染全局单例）断言：新增顶级域 + 新增子流域，
+    三层派生结果自动正确，无需任何手工登记。
+    """
+    registry = DomainGraphRegistry()
+    registry.register(DomainGraph(
+        name="newtop", node_name="newtop_node", label="新顶级域", adapter=_noop_adapter))
+    registry.register(DomainGraph(
+        name="newsub", node_name="newsub_node", label="新子流", adapter=_noop_adapter,
+        domain="newtop", subflow="sub"))
+
+    assert registry.route_mode_to_active_domain() == {
+        "newtop": "newtop", "newsub": "newsub",
+    }
+    assert registry.route_mode_to_domain_decision() == {
+        "newtop": ("newtop", None), "newsub": ("newtop", "sub"),
+    }
+    # 子流图不作为顶级域入口单列
+    assert registry.route_mode_to_graph_mode() == {"newtop": "newtop"}
+    assert registry.find_subflow_graph("newtop", "sub") == "newsub"
+    assert registry.find_subflow_graph("newsub", "sub") is None  # 归属域不匹配
+
+
+def test_registering_new_domain_propagates_to_all_layers():
+    """新增域图注册进全局单例 → 三层口径**自动**收录，零手工改动。
+
+    这是「派生」的直接证据：执行层刻意只传顶级域表（不含探针），子流仍被正确
+    选中，说明选图走的是注册表归属查询，而不是手写映射或字符串拼接。
+    探针用后立即还原，不污染其它用例。
+    """
+    probe_top = DomainGraph(
+        name="_probe_top", node_name="_probe_top_node",
+        label="探针顶级域", adapter=_noop_adapter)
+    probe_sub = DomainGraph(
+        name="_probe_sub", node_name="_probe_sub_node",
+        label="探针子流", adapter=_noop_adapter,
+        domain="_probe_top", subflow="probe")
+
+    snapshot = domain_graph_registry.get_all()
+    try:
+        domain_graph_registry.register(probe_top)
+        domain_graph_registry.register(probe_sub)
+
+        assert _ROUTE_MODE_DOMAIN["_probe_top"] == "_probe_top"
+        assert _ROUTE_MODE_DOMAIN["_probe_sub"] == "_probe_sub"
+        assert _PREFILTER_DOMAIN_MAP["_probe_top"] == ("_probe_top", None)
+        assert _PREFILTER_DOMAIN_MAP["_probe_sub"] == ("_probe_top", "probe")
+
+        resolver = ExecutionModeResolver(domain_graph_modes={"travel": "travel"})
+        decision = DomainRouter._from_prefilter({"route_mode": "_probe_sub"})
+        assert decision is not None
+        resolved = resolver.resolve(
+            decision, _capability_stub(decision["domain"]), {"route_mode": "_probe_sub"})
+        assert resolved.mode == "domain_graph", (
+            f"新增子流域图执行层未落 domain_graph（mode={resolved.mode}）"
+        )
+        assert resolved.target == "_probe_sub", (
+            f"新增子流域图解析为 {resolved.target!r}：说明选图仍在靠手写/拼接，"
+            f"而非注册表归属"
+        )
+    finally:
+        domain_graph_registry._domains.clear()
+        domain_graph_registry._domains.update(snapshot)
+
+
+# ── 四、执行层往返与选图（原 2 例，语义随派生更新）────────────────────────
+
+
 def test_route_mode_round_trips_to_its_own_graph():
     """端到端往返：route_mode → 决策层归一 → 执行层解析，必须回到同一个物理域图，
     且与回写层记录的 active_domain 逐字一致。
 
-    这是三处口径的**行为等价**校验（非仅字面相等），顺带把 execution_mode 中
-    ``f"travel_{subflow}"`` 那第四处手写拼接收进防线——它与 _PREFILTER_DOMAIN_MAP
-    或 _ROUTE_MODE_DOMAIN 一旦分叉，续轮就会重入错图（静默失败）。
+    这是三层口径的**行为等价**校验（非仅字面相等）。
     """
     resolver = ExecutionModeResolver(domain_graph_modes=_graph_modes())
     for name in domain_graph_registry.get_all():
@@ -182,14 +362,13 @@ def test_route_mode_round_trips_to_its_own_graph():
 
 
 def test_subflow_resolution_holds_without_explicit_graph_modes():
-    """旅行子流在**最简构造**（不传 domain_graph_modes）下仍须解析到自身。
+    """子流选图在**最简构造**（不传 domain_graph_modes）下仍须解析到自身。
 
-    execution_mode 内 ``f"travel_{subflow}"`` 拼接分支因此是**承重代码**：
-    默认域图表 ``_DEFAULT_DOMAIN_GRAPH_MODES`` 只列了三个顶级域，若删掉
-    拼接分支，未显式传表的调用会把 travel_booking 解析成 travel → 静默落回
-    规划图（非响亮失败）。本例锁住该行为，避免「以为表里有、就把分支删了」。
+    执行层默认表由 ``route_mode_to_graph_mode()`` 派生，**只含顶级域图**——
+    所以子流能解析到自身，只可能来自注册表归属查询（``find_subflow_graph``），
+    不可能来自默认表。本例锁死这条路径，避免「以为默认表里有，就把归属查询删了」。
     """
-    resolver = ExecutionModeResolver()  # 走默认表：刻意不传 domain_graph_modes
+    resolver = ExecutionModeResolver()  # 走派生默认表：刻意不传 domain_graph_modes
     for name in _SUBFLOW_GRAPHS:
         decision = DomainRouter._from_prefilter({"route_mode": name})
         assert decision is not None
@@ -197,9 +376,24 @@ def test_subflow_resolution_holds_without_explicit_graph_modes():
             decision, _capability_stub(decision["domain"]), {"route_mode": name})
         assert resolved.mode == "domain_graph", (
             f"{name} 最简构造下未落到 domain_graph（mode={resolved.mode}）："
-            f"拼接分支可能已被删除"
+            f"注册表归属查询可能已被删除"
         )
         assert resolved.target == name, (
             f"{name} 最简构造下解析为 {resolved.target!r}："
             f"子流会被静默重定向到顶级域图"
         )
+
+
+def test_subflow_lookup_is_ownership_driven():
+    """执行层选图只看注册表归属：非子流标签 / 错域 / 空值都必须查不到。
+
+    关键回归：travel 自身的活动标签是 ``planning``，它**不是**子流图——
+    旧实现 ``f"travel_{subflow}"`` 只在 subflow ∈ {booking, commerce} 时才拼接，
+    靠硬编码集合兜住；派生后由归属事实保证，本例钉住该性质。
+    """
+    assert domain_graph_registry.find_subflow_graph("travel", "booking") == "travel_booking"
+    assert domain_graph_registry.find_subflow_graph("travel", "commerce") == "travel_commerce"
+    assert domain_graph_registry.find_subflow_graph("travel", "planning") is None
+    assert domain_graph_registry.find_subflow_graph("customer_service", None) is None
+    assert domain_graph_registry.find_subflow_graph("travel", "") is None
+    assert domain_graph_registry.find_subflow_graph("unknown", "booking") is None

@@ -21,6 +21,9 @@ domain_graph_registry.register(DomainGraph(
     node_name="travel_graph_node",
     label="旅游规划图执行",
     adapter=travel_graph_node,
+    # 顶级域自身的活动标签（决策层 subflow 展示位）：travel 图即 Travel Domain 本体，
+    # 不是独立生命周期子流，故**不写 subflow**（STOP E §6.2 冻结口径）。
+    decision_subflow="planning",
 ))
 
 # 幂等：未配置 Key 或开关关闭时保持本地估算，不影响域可用性

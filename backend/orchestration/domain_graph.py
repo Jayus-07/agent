@@ -18,11 +18,21 @@ class DomainGraph:
         node_name: Main Graph 中的 LangGraph 节点名
         label: 可视化标签（前端展示用）
         adapter: 适配器函数 (state: dict) -> dict，负责状态转换 + 子图调用 + 结果映射
-        subflow: 顶级域子流标签（STOP E 展示语义）。None = 本图即顶级域本身；
-            非 None 表示本图是某顶级域的子流（如 travel 的 commerce/booking），
-            取值必须与 DomainRouter._PREFILTER_DOMAIN_MAP 的归一结果一致
-            （由 tests/orchestration/test_domain_semantic_consistency.py 守护）。
-            纯展示/对账字段：route_selector 查表键仍是 name，不参与调度。
+        domain: 所属顶级域（2026-09-30 归属单一事实源化）。None = 本图即顶级域；
+            非 None = 本图是 domain 的子流图（如 travel 的 booking / commerce）。
+            回写层登记 active_domain、执行层选图、注册表自校验三处**全部由本字段
+            派生**，不再各自手写（守护见
+            tests/orchestration/test_domain_semantic_consistency.py）。
+        subflow: 独立生命周期的子流标签（STOP E 展示语义，**已冻结**）。None = 本图
+            即顶级域本身；非 None 表示本图是某顶级域的子流（如 travel 的
+            commerce/booking）。语义严格限于「独立生命周期的子流」，**不承载**顶级域
+            自身的活动标签（见下 decision_subflow）——这是 STOP E §6.2 的既定取舍，
+            勿再往里塞标签。
+        decision_subflow: 决策层归一的 subflow 展示位。None 时回退 ``subflow``。
+            只为**顶级域自身的活动标签**而存在（travel→"planning"、
+            selection_funnel→"funnel"）——STOP E §6.2 原先把它们只放在 Router
+            归一里，2026-09-30 归属单一事实源化后随图注册声明，避免决策层再留手写
+            标签表。纯展示/对账字段，不参与调度选图。
     """
 
     name: str
@@ -30,3 +40,5 @@ class DomainGraph:
     label: str
     adapter: Callable[[dict], dict]
     subflow: str | None = None
+    domain: str | None = None
+    decision_subflow: str | None = None

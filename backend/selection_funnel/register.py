@@ -21,4 +21,6 @@ domain_graph_registry.register(DomainGraph(
     node_name="selection_funnel_graph_node",
     label="智能选品漏斗执行",
     adapter=selection_funnel_graph_node,
+    # 顶级域自身的活动标签（决策层 subflow 展示位）：同上，不写 subflow（冻结口径）。
+    decision_subflow="funnel",
 ))

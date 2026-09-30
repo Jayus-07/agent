@@ -4,6 +4,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from backend.orchestration.domain_registry import (
+    DerivedDomainMap,
+    domain_graph_registry,
+)
 from backend.orchestration.router.manifest import load_manifest
 from backend.orchestration.router.models import (
     CapabilityDecision,
@@ -12,11 +16,12 @@ from backend.orchestration.router.models import (
 )
 
 
-_DEFAULT_DOMAIN_GRAPH_MODES = {
-    "customer_service": "customer_service",
-    "selection_funnel": "selection_funnel",
-    "travel": "travel",
-}
+# 顶级域图名 → 自身。**派生，零手写**（原为手写三键字典，与决策层/回写层重复）：
+# 只含 domain is None 的顶级域图，子流图不作为顶级域入口单列。
+_DEFAULT_DOMAIN_GRAPH_MODES: Mapping[str, str] = DerivedDomainMap(
+    domain_graph_registry.route_mode_to_graph_mode,
+    label="_DEFAULT_DOMAIN_GRAPH_MODES",
+)
 
 
 class ExecutionModeResolver:
@@ -134,9 +139,15 @@ class ExecutionModeResolver:
         if decision.get("source") not in {"prefilter", "continuation"}:
             return None
         domain = str(decision.get("domain") or "")
-        subflow = decision.get("subflow")
-        if domain == "travel" and subflow in {"booking", "commerce"}:
-            return f"travel_{subflow}"
+        # 子流选图：查注册表归属（取代原 f"travel_{subflow}" 字符串拼接）。
+        # 拼接把「谁是 travel 的子流」编码进命名约定——注册表新增子流而漏改
+        # 拼接时，会**静默**落回顶级域图（不报错、办错事）。此处改为查表：
+        # 查不到就按顶级域兜底，行为与拼接期等价（travel+planning 仍落 travel）。
+        subflow_graph = domain_graph_registry.find_subflow_graph(
+            domain, decision.get("subflow"),
+        )
+        if subflow_graph is not None:
+            return subflow_graph
         return self._domain_graph_modes.get(domain)
 
     @staticmethod

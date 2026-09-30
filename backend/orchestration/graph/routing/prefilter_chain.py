@@ -8,27 +8,33 @@
   - _try_cs_prefilter：CS 预过滤薄包装
   - run_domain_prefilters：旅游 → 选品 → 预订 → 商务四连 prefilter
 
-依赖方向（方案冻结）：prefilter_chain 不 import 本包其他模块；
-被 router_node / hierarchical 消费。
+依赖方向（方案冻结）：prefilter_chain 不 import 本包（routing/）其他模块；
+被 router_node / hierarchical 消费。唯一新增外部依赖是
+``backend.orchestration.domain_registry``（叶子模块：仅依赖 domain_graph +
+logger）——用于把回写层口径改为注册表派生（2026-09-30 归属单一事实源化）。
 """
 from __future__ import annotations
 
 from backend.shared.logger import logger
+from backend.orchestration.domain_registry import (
+    DerivedDomainMap,
+    domain_graph_registry,
+)
 
 # route_mode → ConversationContext.active_domain（预过滤命中回写用）。
-# 客服 clarify（route_mode=clarify，出自 cs_prefilter）也归属客服域。
+# 客服 clarify（route_mode=clarify，出自 cs_prefilter）不在此表，由
+# _mark_route_from_update 单独兜底为客服域。
 #
-# 交易两域（Phase 5 / D2）：travel_booking / travel_commerce 原缺登记，
-# 命中后 domain=None → mark_domain_turn 早退 → active_domain 永远为空，
-# 下一轮「10月3日」这类纯槽位值回答既拉不回也无人续填（两跳断片 G1）。
-# 补齐后 prefilter/挂起续填命中即回写活跃域，与规划域同口径。
-_ROUTE_MODE_DOMAIN = {
-    "travel": "travel",
-    "customer_service": "customer_service",
-    "selection_funnel": "selection_funnel",
-    "travel_booking": "travel_booking",
-    "travel_commerce": "travel_commerce",
-}
+# 【派生，零手写】本表内容 = 注册表现有域图（谁注册就登记谁），由
+# domain_graph_registry.route_mode_to_active_domain() 现算，不再手工维护。
+# 历史教训（Phase 5 / D2 G1）：手写期漏了 travel_booking / travel_commerce →
+# prefilter 命中取 domain=None → mark_domain_turn 早退 → active_domain 永不写 →
+# 下一轮「10月3日」这类纯槽位值回答既拉不回也无人续填（两跳断片）。
+# 派生后「漏登记」在结构上不可能发生；活视图保证不因注册时序而拿到空表。
+_ROUTE_MODE_DOMAIN = DerivedDomainMap(
+    domain_graph_registry.route_mode_to_active_domain,
+    label="_ROUTE_MODE_DOMAIN",
+)
 
 
 def _mark_route_from_update(state: dict, update: dict) -> dict:

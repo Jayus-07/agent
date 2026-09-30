@@ -9,6 +9,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from backend.orchestration.domain_registry import (
+    DerivedDomainMap,
+    domain_graph_registry,
+)
 from backend.orchestration.router.domain_classifier import (
     CoarseIntentClassifier,
     get_coarse_classifier,
@@ -16,14 +20,30 @@ from backend.orchestration.router.domain_classifier import (
 from backend.orchestration.router.models import DomainDecision
 
 
-_PREFILTER_DOMAIN_MAP: dict[str, tuple[str, str | None]] = {
-    "customer_service": ("customer_service", None),
-    "travel": ("travel", "planning"),
-    "selection_funnel": ("selection_funnel", "funnel"),
-    "travel_booking": ("travel", "booking"),
-    "travel_commerce": ("travel", "commerce"),
+# 伪路由模式：有 route_mode 但**没有域图**——寒暄/能力咨询走 general_chat 直答
+# （general 无 Tool、无域图节点），注册表装不下，故这里是全表唯一的手写项。
+# 刻意不进回写层（否则一句「你好」会冲掉进行中的跨轮任务上下文），
+# 由 tests/orchestration/test_domain_semantic_consistency.py 守。
+_NON_GRAPH_ROUTE_MODES: dict[str, tuple[str, str | None]] = {
     "general_chat": ("general", None),
 }
+
+
+def _derive_prefilter_domain_map() -> dict[str, tuple[str, str | None]]:
+    """域图部分全部由注册表派生（顶级域看 graph.domain，subflow 看展示标签）。"""
+    return {
+        **domain_graph_registry.route_mode_to_domain_decision(),
+        **_NON_GRAPH_ROUTE_MODES,
+    }
+
+
+# route_mode → (顶级域, subflow)。**派生，零手写**：内容 = 注册表每个域图
+# 的归属归一 + 上面的无图伪模式。原为手写字典，与注册表/回写层三处各写一份，
+# 漏改任一处都是静默错误的入口（详见 domain_registry 顶部说明）。
+_PREFILTER_DOMAIN_MAP: Mapping[str, tuple[str, str | None]] = DerivedDomainMap(
+    _derive_prefilter_domain_map,
+    label="_PREFILTER_DOMAIN_MAP",
+)
 
 
 class DomainRouter:

@@ -14,5 +14,6 @@ domain_graph_registry.register(DomainGraph(
     node_name="travel_commerce_graph_node",
     label="旅游商务查询（酒店/机票）",
     adapter=travel_commerce_graph_node,
-    subflow="commerce",  # STOP E 语义展示：Travel Domain 的 commerce 子流，与 DomainRouter 归一口径一致
+    subflow="commerce",  # 域内子流标签（展示语义）：与决策层归一 travel_commerce → (travel, commerce) 一致
+    domain="travel",  # 归属顶级域：执行层选图/回写层登记均由此派生，不再靠 f"travel_{subflow}" 拼接
 ))
