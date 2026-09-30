@@ -43,6 +43,14 @@ _BIZ_KEYS = (
 _BIZ_CAP_PREFIXES = ("order.", "customer.", "inventory.", "finance.",
                      "approval.")
 
+# 能力（capability）命名空间前缀 —— 分型压缩与依赖打分按「能力族」选键/加权。
+# 结构病审查 P3-1：这些前缀此前在下方三处内联各写一遍，改名即静默落错分支
+# （表现为压缩后挑不到关键字段 / 优先级算错，不报错）。现集中于此，只此一份；
+# capability 的命名权威在能力注册表（capability_registry），改名需同步这里。
+_SQL_CAP_PREFIX = "sql."
+_RAG_CAP_PREFIXES = ("rag.", "knowledge.")
+_DECISION_CAP_PREFIXES = ("sql.", "business.")
+
 # 依赖感知打分权重（规格 §十二 推荐优先级的确定性近似）
 _SCORE_DIRECT_DEP = 1.0        # 当前步骤直接前驱（注入集合全部满足）
 _SCORE_ON_FINAL_PATH = 2.0     # 可达终局步骤（report/final answer）
@@ -159,9 +167,9 @@ def _degrade_output(
 
     cap = ((meta or {}).get("tool") or "").strip()
     typed: dict | None = None
-    if cap.startswith("sql."):
+    if cap.startswith(_SQL_CAP_PREFIX):
         typed = _pick_typed(output, _SQL_KEYS)
-    elif cap.startswith(("rag.", "knowledge.")):
+    elif cap.startswith(_RAG_CAP_PREFIXES):
         typed = _pick_typed(output, _RAG_KEYS)
     elif cap.startswith(_BIZ_CAP_PREFIXES):
         typed = _pick_typed(output, _BIZ_KEYS)
@@ -218,9 +226,9 @@ def compute_dependency_ranks(
         score += 0.5 * len(reach)
         capability = str(
             (step_results or {}).get(dep, {}).get("capability") or "")
-        if capability.startswith(("sql.", "business.")):
+        if capability.startswith(_DECISION_CAP_PREFIXES):
             score += _SCORE_DECISION_CAP
-        elif capability.startswith(("rag.", "knowledge.")):
+        elif capability.startswith(_RAG_CAP_PREFIXES):
             score += _SCORE_RAG_CAP
         ranks[dep] = score
     return ranks

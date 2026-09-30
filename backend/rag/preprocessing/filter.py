@@ -3,6 +3,7 @@ import hashlib
 import re
 
 from backend import config
+from backend.rag.preprocessing.chunking import is_table_chunk
 from backend.shared.logger import logger
 
 
@@ -213,8 +214,11 @@ class ChunkFilter:
         # 6. PII 脱敏（不拒绝内容，仅修改文本）
         # 财务文档强制 PII 脱敏：覆写全局开关，始终对 financial doc_type 执行
         doc_type = metadata.get("doc_type", "")
-        is_financial = (doc_type == "financial") or (
-            metadata.get("chunk_type", "").startswith("table_")
+        # 「是不是表格 chunk」的判定口径只有一份（chunking.is_table_chunk）——
+        # 此前这里内联 startswith("table_")，与生产点的类型名各写一套
+        # （结构病审查 P3-1：失配的后果是财务表格 PII 漏脱敏）。
+        is_financial = (doc_type == "financial") or is_table_chunk(
+            metadata.get("chunk_type")
         )
         should_mask = self.enable_pii or (is_financial and self.financial_pii_force)
         if should_mask:

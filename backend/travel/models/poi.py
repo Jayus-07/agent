@@ -22,6 +22,25 @@ CATEGORY_SHOPPING = "购物"
 CATEGORY_NIGHT = "夜生活"
 CATEGORY_PARK = "公园"
 
+# ── 来源标识的解析口径（唯一一份）──────────────────────────────
+# 约定：`provider[:variant]`，如 `seed:local`、`tencent:lbs`、`estimate:local`。
+# 判定「这份数据是不是本地种子数据」**必须比提供方段**，不要用 str.startswith：
+# 前者把 `seeded:cache` 这种将来新增的非种子来源正确排除，后者会把它误算成种子
+# —— 后果是证据层标成 SEED、风险层误加「本地示例数据」免责声明、校验层误扣分。
+# 结构病审查 P3-1：此前同一份判定被三处各写一遍（且都是 startswith），
+# reporter 的 `describe_source` 用的又是按 `:` 切分，四份口径并不一致。
+SOURCE_PROVIDER_SEED = "seed"
+
+
+def source_provider(source: str | None) -> str:
+    """来源标识的提供方段（``seed:local`` → ``seed``；无来源 → ``""``）。"""
+    return (source or "").split(":")[0]
+
+
+def is_seed_source(source: str | None) -> bool:
+    """是否本地种子数据（按提供方段判定，理由见 SOURCE_PROVIDER_SEED 注释）。"""
+    return source_provider(source) == SOURCE_PROVIDER_SEED
+
 
 class Poi(BaseModel):
     """单个兴趣点的静态属性（不可变事实，不含排程结果）"""

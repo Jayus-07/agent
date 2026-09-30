@@ -57,6 +57,10 @@ class PreferenceStore:
         self.file_path = file_path or _get_pref_path()
         self._lock = threading.Lock()
         self._data: Dict[str, Dict[str, Any]] = {}
+        # 「读失败」≠「本来就没有」（结构病审查 P3-3）：文件不存在 = 首次使用，
+        # 正常；文件在但读不了/解析不了 = 异常，偏好**退化成空**而不是没有偏好。
+        # 两者此前都落成 _data={} 且只打 warning，调用方无法区分。
+        self.load_error: str | None = None
         self._load()
 
     # ---------------------------------------------------
@@ -64,7 +68,13 @@ class PreferenceStore:
     # ---------------------------------------------------
 
     def _load(self):
-        """从 JSON 文件加载偏好数据"""
+        """从 JSON 文件加载偏好数据。
+
+        - 文件不存在：首次使用，`_data={}`，`load_error=None`
+        - 文件存在但读/解析失败：`_data={}` + `load_error` 记原因（error 级日志），
+          调用方可据此判断「这次报告是按无偏好出的」还是「本来就没偏好」。
+        """
+        self.load_error = None
         try:
             if os.path.exists(self.file_path):
                 with open(self.file_path, "r", encoding="utf-8") as f:
@@ -73,8 +83,17 @@ class PreferenceStore:
             else:
                 self._data = {}
         except Exception as e:
-            logger.warning(f"[Preference] 加载失败: {e}，使用空偏好")
+            self.load_error = f"{type(e).__name__}: {e}"
+            logger.error(
+                f"[Preference] 偏好文件存在但读取失败（{self.load_error}），"
+                f"本次按空偏好运行；path={self.file_path}"
+            )
             self._data = {}
+
+    @property
+    def degraded(self) -> bool:
+        """偏好是否因读取失败而退化为空（供上层如实告知，而非当作「无偏好」）。"""
+        return self.load_error is not None
 
     def _save(self):
         """持久化到 JSON 文件（线程安全）"""

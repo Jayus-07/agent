@@ -136,8 +136,14 @@ def clear_recent_context(tenant_id: str, user_id: str, session_id: str) -> None:
     """会话结束/需要失效时清除（供显式调用；TTL 是兜底）。"""
     try:
         _cache().set_json(context_key(tenant_id, user_id, session_id), None, ttl=1)
-    except Exception:
-        pass
+    except Exception as exc:
+        # 失效失败 ≠ 没有要失效的东西（结构病审查 P3-3）：静默 pass 会让上一轮
+        # 的上下文在 TTL 到期前一直生效，表现为「新会话答了旧会话的事」，
+        # 而且没有任何线索可查。写不清楚为什么失败 = 排查从零开始。
+        logger.warning(
+            "[ContextResolver] 清除会话上下文失败（旧上下文会保留到 TTL 到期）: %s",
+            exc,
+        )
 
 
 def extract_explicit_order(query: str) -> str | None:

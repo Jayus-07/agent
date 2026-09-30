@@ -364,8 +364,14 @@ async def require_admin_user(request: Request):
             detail={"path": str(getattr(request.url, "path", ""))[:200],
                     "actor": ident.actor, "role": ident.role},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        # 审计留痕失败 ≠ 没发生（结构病审查 P3-3）：静默 pass 会丢掉「谁被拒了」
+        # 的证据，而拒绝动作照常返回 403 —— 事后审计时这段空白无法解释。
+        # 请求本身不能被审计故障带崩（fail-open），但必须在日志里留下痕迹。
+        logger.warning(
+            "[Authz] 记录 AUTHZ_DENIED 安全事件失败（拒绝动作照常执行）: %s: %s",
+            type(exc).__name__, exc,
+        )
     raise HTTPException(
         status_code=403,
         detail={

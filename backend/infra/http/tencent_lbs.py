@@ -444,12 +444,28 @@ def safe_call(path: str, params: dict | None = None, *, ttl: float | None = None
 
 # ── 便捷取字段：绝大多数调用方只关心 payload["result"]
 def result_of(payload: dict | None) -> dict | None:
-    """从 payload 中取出 result 段；payload 为 None 时返回 None。
+    """从 payload 中取出 result 段；没有 result 段时原样返回 payload。
 
-    腾讯部分端点把数据放在 ``data``（检索类）而非 ``result``，
-    调用方需要什么就取什么 —— 这里只做 None 安全，不做字段搬运。
+    两件事都是为了「别把坏消息当数据用」：
+      1. payload 为 None → None（调用方拿不到结果时自行降级）。
+      2. **业务错误响应 → None + 告警**，绝不原样返回。腾讯 HTTP 恒为 200，
+         错误藏在响应体的 ``status`` 里；若调用方绕过了 call_sync 的校验
+         （或复用了别处来的 payload），``{"status": 120, "message": …}`` 会被
+         当成数据段去读一堆不存在的字段 —— 表现为「有数据但全空」而不是报错。
+         结构病审查 P3-2：原实现只做 None 安全、完全不看 status。
+
+    数据段位置随端点而异：有 ``result`` 取 ``result``（检索类端点的 ``data``
+    不在搬运范围内，仍是原样返回，调用方需要什么就取什么）。
     """
     if payload is None:
+        return None
+    status = payload.get("status")
+    if status is not None and status != 0:
+        logger.warning(
+            "[TencentLBS] 响应体为错误状态（status=%s, message=%s），"
+            "result_of 返回 None —— 不把错误体当数据段",
+            status, payload.get("message"),
+        )
         return None
     if "result" in payload:
         return payload["result"]

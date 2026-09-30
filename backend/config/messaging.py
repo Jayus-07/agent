@@ -23,6 +23,10 @@ KAFKA_CLIENT_ID = os.getenv("KAFKA_CLIENT_ID", "ai-service")
 # Topic 契约（与 business-service KafkaTopicsConfig 对齐）
 TOPIC_CONVERSATION_EVENTS = "cs.conversation.events"
 TOPIC_MESSAGE_EVENTS = "cs.message.events"
+# 以下两个 topic 目前**Python 侧只声明、不生产**（handoff/action 事件由
+# Java business-service 侧消费）。保留是因为它们是跨服务契约名的一部分
+# —— 删掉并不会让「谁在用」更清楚，反而让契约清单在三处各缺一段。
+# 结构病审查 P3-4 已登记：这不是死代码，是未生产的契约常量。
 TOPIC_HANDOFF_EVENTS = "cs.handoff.events"
 TOPIC_ACTION_EVENTS = "cs.action.events"
 TOPIC_AI_REPLY_EVENTS = "ai.reply.events"

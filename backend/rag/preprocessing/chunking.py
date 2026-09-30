@@ -283,6 +283,35 @@ def _merge_small_with_section(leaf_items: list, budget: int) -> list:
     return merged
 
 
+# ── 表格类 chunk 的类型标识（唯一一份）────────────────────────────────
+# 结构病审查 P3-1：判定「这条 chunk 是不是表格」此前有三处口径 —— 生产点写字面量、
+# 下方 reporting_period 回填用元组白名单、`filter.py` 用 ``startswith("table_")``。
+# 任一处改名，其余两处静默失配；filter 失配的后果是**财务表格的 PII 不再强制脱敏**
+# （隐私方向必须 fail-closed）。现在值只定义在这里，判定一律走 is_table_chunk()。
+CHUNK_TYPE_TABLE_ROW = "table_row"
+CHUNK_TYPE_TABLE_SUMMARY = "table_summary"
+CHUNK_TYPE_TABLE_FALLBACK = "table_fallback"
+TABLE_CHUNK_TYPES: tuple[str, ...] = (
+    CHUNK_TYPE_TABLE_ROW, CHUNK_TYPE_TABLE_SUMMARY, CHUNK_TYPE_TABLE_FALLBACK,
+)
+TABLE_CHUNK_PREFIX = "table_"
+
+
+def is_table_chunk(chunk_type: str | None) -> bool:
+    """是否表格类 chunk。
+
+    判定 = 「已知三种（白名单）」或「table_ 前缀」，两者取并：
+
+    - 前缀保证 fail-closed：将来新增表格类型（如 table_header）自动被认作表格。
+      漏判会让财务表格的 PII 漏脱敏，多判只是多脱敏一次 —— 隐私方向宁可多判。
+    - 白名单兜住命名约定被改的情形（table_ → tbl_），且
+      tests/rag/test_chunk_type_contract.py 会在改名时变红，而不是静默放行。
+    """
+    if not chunk_type:
+        return False
+    return chunk_type in TABLE_CHUNK_TYPES or chunk_type.startswith(TABLE_CHUNK_PREFIX)
+
+
 def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
     """表格节点双层切分（C2 通用化）——表级摘要(parent) + 行级 kv(leaf)。
 
@@ -314,7 +343,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
             "section_path": list(path),
             "section_title": sec.text,
             "section_level": sec.level,
-            "chunk_type": "table_fallback",
+            "chunk_type": CHUNK_TYPE_TABLE_FALLBACK,
             "chunk_tokens": count_tokens(node.text),
         }))
         return chunks
@@ -329,7 +358,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
         "section_path": list(path),
         "section_title": sec.text,
         "section_level": sec.level,
-        "chunk_type": "table_summary",
+        "chunk_type": CHUNK_TYPE_TABLE_SUMMARY,
         "row_count": len(data_rows),
         "col_count": len(flat_header),
         "chunk_tokens": count_tokens(summary),
@@ -350,7 +379,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
             "section_path": list(path),
             "section_title": sec.text,
             "section_level": sec.level,
-            "chunk_type": "table_row",
+            "chunk_type": CHUNK_TYPE_TABLE_ROW,
             "row_index": ri,
             "chunk_tokens": count_tokens(kv_text),
         }
@@ -1022,9 +1051,7 @@ class FinancialTableChunkStrategy:
                 table_chunks = _split_table_node(leaf, sec, path, file_path)
                 if reporting_period:
                     for c in table_chunks:
-                        if c.metadata.get("chunk_type") in (
-                            "table_summary", "table_row", "table_fallback",
-                        ):
+                        if is_table_chunk(c.metadata.get("chunk_type")):
                             c.metadata["reporting_period"] = reporting_period
                             c.metadata["fiscal_year"] = fiscal_year
                             c.metadata["is_latest"] = True

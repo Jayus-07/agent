@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from backend.shared.logger import logger
+from backend.travel.models.poi import is_seed_source
 
 # 明确未接入的数据能力 —— 措辞要具体到用户能动作的地步
 # （2026-09-22 起天气预报已接入域图 weather 专家，天气条目改为时效提示）
@@ -30,7 +31,7 @@ def assess_risks(itinerary) -> tuple[list[str], list[str]]:
         if poi.source and poi.source not in sources:
             sources.append(poi.source)
 
-    if any(s.startswith("seed") for s in sources):
+    if any(is_seed_source(s) for s in sources):
         warnings.append(
             "本行程使用的坐标、营业时段与票价为本地示例数据，"
             "尚未接入实时数据源；出行前请以景区/官方渠道公布的时刻与票价为准"

@@ -31,6 +31,7 @@ from backend.travel.models.itinerary import (
     PLAN_STATUS_READY,
     Itinerary,
 )
+from backend.travel.models.poi import is_seed_source
 from backend.travel.models.validation import (
     CODE_BUDGET_OVER,
     CODE_BUDGET_TIGHT,
@@ -526,7 +527,7 @@ def compute_confidence(itinerary: Itinerary, report: ValidationReport) -> float:
     # 提示重），但已如实摆明取舍（比纯 error 轻）
     score -= 0.10 * len(report.decision_required)
     score -= 0.05 * len(report.warnings)
-    if any(p.source.startswith("seed") for p in itinerary.all_pois()):
+    if any(is_seed_source(p.source) for p in itinerary.all_pois()):
         score -= 0.20
     if itinerary.brief.start_date is None:
         score -= 0.05

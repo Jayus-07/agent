@@ -8,11 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterator
 
-VALID_NODE_TYPES = {
-    "heading", "section", "paragraph", "list", "table",
-    "qa_question", "qa_answer",
-}
-
 LEAF_TYPES = {"paragraph", "list", "table", "qa_question", "qa_answer"}
 
 

@@ -19,6 +19,7 @@ from backend.travel.graph_state import (
     load_validation,
 )
 from backend.travel.models.itinerary import KIND_MEAL
+from backend.travel.models.poi import source_provider
 from backend.travel.slot_filler import build_clarification
 
 # 数据来源标识 → 面向用户的说明。
@@ -40,7 +41,9 @@ def describe_source(source: str) -> str:
     """
     if source in _SOURCE_LABELS:
         return _SOURCE_LABELS[source]
-    prefix = (source or "").split(":")[0]
+    # 提供方段的解析口径与 POI.source 的判定共用一份（models/poi.source_provider），
+    # 避免「这里按 : 切、那里按 startswith」两套口径（结构病审查 P3-1）
+    prefix = source_provider(source)
     if prefix in _SOURCE_LABELS:
         return _SOURCE_LABELS[prefix]
     return "来源未登记（请在 reporter._SOURCE_LABELS 中补充说明）"

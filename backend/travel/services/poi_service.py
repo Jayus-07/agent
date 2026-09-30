@@ -17,7 +17,7 @@ from backend.tools.travel.routing import day_radius_km
 from backend.travel.core.contracts import SourceType
 from backend.travel.core.evidence_utils import evidence_to_dict, make_evidence, parse_iso
 from backend.travel.models.brief import TravelBrief
-from backend.travel.models.poi import Poi
+from backend.travel.models.poi import Poi, is_seed_source
 from backend.travel.planning import resolve_must_go
 
 # 候选池上限：足够覆盖 7 天 × intense 档，同时不让状态字典膨胀
@@ -85,7 +85,7 @@ def build_candidate_evidences(candidates: list[Poi]) -> dict[str, dict]:
     evidences: dict[str, dict] = {}
     for poi in candidates:
         value = {"name": poi.name, "verification_status": poi.verification_status}
-        if poi.source.startswith("seed"):
+        if is_seed_source(poi.source):
             ev = make_evidence(poi.poi_id, value=value, source=poi.source,
                                source_type=SourceType.SEED)
         else:

@@ -109,24 +109,6 @@ CARRIERS = {
 
 TAIL_CARRIERS = ["USPS", "FedEx", "UPS", "DHL", "Yamato", "Hermes", "Deutsche Post"]
 
-# ==================== 订单状态 ====================
-ORDER_STATUSES = [
-    "PENDING", "PAID", "ALLOCATED", "PICKING",
-    "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED",
-]
-
-# 合法状态转换
-VALID_TRANSITIONS = {
-    "PENDING": ["PAID", "CANCELLED"],
-    "PAID": ["ALLOCATED", "CANCELLED"],
-    "ALLOCATED": ["PICKING", "CANCELLED"],
-    "PICKING": ["SHIPPED", "CANCELLED"],
-    "SHIPPED": ["DELIVERED", "REFUNDED"],
-    "DELIVERED": ["REFUNDED"],
-    "CANCELLED": [],
-    "REFUNDED": [],
-}
-
 # ==================== 知识文档分类 ====================
 KNOWLEDGE_CATEGORIES = [
     {"code": "AMAZON_SOP", "name": "Amazon SOP"},
@@ -148,4 +130,3 @@ AD_CHANNELS = [
 ]
 
 CAMPAIGN_TYPES = ["SP", "PRODUCT_DISPLAY", "BRAND", "VIDEO"]
-MATCH_TYPES = ["EXACT", "PHRASE", "BROAD"]
