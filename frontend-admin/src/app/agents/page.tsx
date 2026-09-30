@@ -15,7 +15,7 @@ import { clsx } from 'clsx'
 import PageHeader from '@/components/layout/PageHeader'
 import ErrorState from '@/components/shared/ErrorState'
 import { getAgents, type AgentKind, type AgentNode } from '@/api/registry'
-import { subflowAttribution } from '@/lib/domain-attribution'
+import { subflowAttribution, orderDomainGraphs } from '@/lib/domain-attribution'
 
 const KIND_META: Record<AgentKind, { label: string; icon: typeof Bot; desc: string }> = {
   orchestration: { label: '编排节点', icon: Bot, desc: '主图内置：路由 / 规划 / 调度 / 汇总' },
@@ -123,7 +123,9 @@ export default function AgentsPage() {
 
           {/* 分组列表 */}
           {KIND_ORDER.map((kind) => {
-            const nodes = data.agents.filter((a) => a.kind === kind)
+            const inKind = data.agents.filter((a) => a.kind === kind)
+            // 域图节点按归属排：父域在前、其子流紧随（顺序由后端 domain 字段派生）
+            const nodes = kind === 'domain_graph' ? orderDomainGraphs(inKind) : inKind
             if (nodes.length === 0) return null
             const meta = KIND_META[kind]
             return (

@@ -30,3 +30,28 @@ export function subflowAttribution(node: DomainAttributionSource): string | null
   if (!node.domain || !node.subflow) return null
   return `${node.domain_label ?? node.domain} · ${node.subflow} 子流`
 }
+
+/**
+ * 域图节点排序：每个父域**紧跟**它的子流，让归属关系在版面上也一眼可见。
+ *
+ * 排序依据是后端下发的 `domain` 字段（不是前端写死的顺序），所以新增子流域图
+ * 自动归位。父域之间、同一父域的子流之间都保持后端给的相对顺序。
+ *
+ * **长度恒等**：任何节点都不会被丢掉——父域不在本列表里的子流（异常数据）
+ * 兜底追加到末尾，宁可排得难看，也不能让节点从页面上消失。
+ */
+export function orderDomainGraphs<
+  T extends { route_mode?: string | null; domain?: string | null },
+>(nodes: readonly T[]): T[] {
+  const parents = nodes.filter((n) => !n.domain)
+  const children = nodes.filter((n) => n.domain)
+  if (children.length === 0) return [...nodes]
+
+  const ordered: T[] = []
+  for (const parent of parents) {
+    ordered.push(parent)
+    ordered.push(...children.filter((c) => c.domain === parent.route_mode))
+  }
+  ordered.push(...children.filter((c) => !parents.some((p) => p.route_mode === c.domain)))
+  return ordered
+}

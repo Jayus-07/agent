@@ -43,6 +43,7 @@ from backend.orchestration.domain_registry import (
     DomainGraphRegistry,
     domain_graph_registry,
 )
+from backend.orchestration.graph.router_node import route_selector
 from backend.orchestration.graph.routing.prefilter_chain import _ROUTE_MODE_DOMAIN
 from backend.orchestration.router.domain_router import (
     _NON_GRAPH_ROUTE_MODES,
@@ -467,3 +468,50 @@ def test_frontend_does_not_redeclare_subflow_attribution():
         "（原 ROUTE_MODE_DOMAIN_META 已因此漂移过）：\n"
         + "\n".join(f"  - {h}" for h in hits)
     )
+
+
+# ── 六、伪模式例外：无法派生，但必须「可证最小、可证有归宿」──────────────────
+#
+# ``general_chat`` 有 route_mode、能被 prefilter 命中，却**没有域图**——它是主图
+# 内置节点（``route_selector`` 的 ``general_chat`` 分支 → 同名节点）。注册表结构上
+# 装不下它：给它造一张假域图会让 builder 重复布线，并把它写进回写层的活跃域，
+# 一句「你好」就冲掉进行中的跨轮任务上下文。
+#
+# 所以这处**不可能靠派生消除**。企业做法 = 显式例外 + 可证最小 + 可证有归宿 +
+# 禁止它外溢到其它层（下面三例），而不是硬把它塞进事实源、或把它藏进一层 if。
+
+
+def test_non_graph_exception_does_not_shadow_registry():
+    """例外表不得与注册表相交——合并时例外表在后，**会覆盖**派生值。
+
+    若有人把 ``travel`` 之类写进例外表，路由归属被手写改写，且派生层毫无异常信号
+    （表还是「派生」的，只是被盖住了）。本例如红即说明有人又用手写改写了归属。
+    """
+    overlap = sorted(set(_NON_GRAPH_ROUTE_MODES) & set(domain_graph_registry.get_all()))
+    assert not overlap, (
+        f"伪模式例外表与注册表重叠 {overlap}：例外表在合并时后置，会静默覆盖派生归属"
+    )
+
+
+def test_non_graph_exception_has_a_main_graph_home():
+    """例外表的每个键都必须**真有归宿**：主图内置分支能处理它，且落点不是域图。
+
+    ``general_chat`` 的归宿是主图节点 ``general_chat``，这正是它不需要域图的原因。
+    若哪天该分支被删/改名，本例如红——那时这条例外就不再「有归宿」，
+    必须重新裁决，而不是继续挂在表里当历史遗留。
+    """
+    for mode in _NON_GRAPH_ROUTE_MODES:
+        target = route_selector({"route_mode": mode})
+        assert target != "planner", (
+            f"伪模式 {mode!r} 落到 planner 兜底：它没有主图归宿，不该挂在例外表里"
+        )
+        assert target not in domain_graph_registry.get_node_names(), (
+            f"伪模式 {mode!r} 解析到域图节点 {target!r}：那它就是正常域图，应进注册表"
+        )
+
+
+def test_non_graph_exception_never_reaches_write_back_or_execution():
+    """伪模式不得外溢到回写层/执行层：否则会写活跃域（冲掉跨轮上下文）或参与选图。"""
+    for mode in _NON_GRAPH_ROUTE_MODES:
+        assert mode not in _ROUTE_MODE_DOMAIN, f"{mode!r} 出现在回写层：会写活跃域"
+        assert mode not in _DEFAULT_DOMAIN_GRAPH_MODES, f"{mode!r} 出现在执行层默认表"
