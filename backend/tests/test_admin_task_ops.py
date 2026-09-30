@@ -152,25 +152,27 @@ class TestQueuesEndpoint:
 
     @pytest.mark.asyncio
     async def test_workers_ping_uses_config_timeout(self, monkeypatch):
-        """worker 存活探测超时来自 config（默认 5s，env 可覆盖）。
+        """worker 存活探测超时来自 config（默认 5s），Celery app 单例直连。
 
-        2026-09-30 实测：worker 全在线但事件循环滞后时 2s ping 0 响应，
-        workers_online 误报 0——超时放宽为配置项而非写死。
+        2026-09-30 实测双根因：①旧代码 task_manager.celery_app 引用不
+        存在（task_manager 是模块非实例，hasattr 恒 False 静默吞成空列表
+        → workers_online 恒 0）；②2s ping 在 worker 事件循环滞后时 0 响应。
+        修后：celery_app 单例直连 + 超时入 config 单点可 env 覆盖。
         """
         from backend.app.api.routes import admin_tasks as mod
         from backend.config import tasks as tasks_cfg
+        import sys
+        # 注意：backend/tasks/__init__ 的 from-import 让包属性 celery_app
+        # 遮蔽同名模块，import as 会拿到 Celery 实例——必须走 sys.modules
+        celery_mod = sys.modules["backend.tasks.celery_app"]
 
         captured: dict = {}
 
-        class _FakeCelery:
-            class control:
-                @staticmethod
-                def ping(**kwargs):
-                    captured.update(kwargs)
-                    return [{"agent-worker@x": {"ok": "pong"}}]
-
-        class _TM:
-            celery_app = type("App", (), {"control": _FakeCelery.control})()
+        class _FakeControl:
+            @staticmethod
+            def ping(**kwargs):
+                captured.update(kwargs)
+                return [{"agent-worker@x": {"ok": "pong"}}]
 
         class _Req:
             pass
@@ -179,7 +181,8 @@ class TestQueuesEndpoint:
 
         monkeypatch.setattr(redis_mod, "get_redis",
                             lambda: (_ for _ in ()).throw(RuntimeError("redis down")))
-        monkeypatch.setattr(mod, "task_manager", _TM)
+        monkeypatch.setattr(celery_mod, "celery_app",
+                            type("App", (), {"control": _FakeControl})())
         monkeypatch.setattr(tasks_cfg, "TASK_WORKERS_PING_TIMEOUT", 5.0)
         resp = await mod.admin_task_queues(_Req())
         assert captured.get("timeout") == 5.0

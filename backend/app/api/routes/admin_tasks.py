@@ -156,9 +156,12 @@ async def admin_task_queues(request: Request):
         depths = {logical: None for logical in queues}
     workers: list[str] = []
     try:
-        workers = list(task_manager.celery_app.control.ping(
-            timeout=TASK_WORKERS_PING_TIMEOUT) or []) \
-            if hasattr(task_manager, "celery_app") else []
+        # 2026-09-30 修 workers_online 恒 0：旧代码 task_manager.celery_app
+        # 引用不存在（task_manager 是模块非实例，hasattr 恒 False 静默吞成
+        # 空列表）——Celery app 单例在 backend.tasks.celery_app 模块级。
+        from backend.tasks.celery_app import celery_app
+        workers = list(celery_app.control.ping(
+            timeout=TASK_WORKERS_PING_TIMEOUT) or [])
     except Exception:
         workers = []
     return {
