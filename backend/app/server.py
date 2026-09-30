@@ -134,6 +134,14 @@ register_mcp_servers()
 # 启动配置校验（P1-14：pydantic Settings fail-fast）
 # ═══════════════════════════════════════════════════
 @app.on_event("startup")
+async def install_otel_mirror():
+    """OTel 第二出口（P2-3）：开关开 + endpoint 已配置时镜像自研 trace 到
+    OTLP；默认关（no-op），自研 trace/PG 存储始终权威不变。"""
+    from backend.observability.otel_exporter import install_if_enabled
+    install_if_enabled()
+
+
+@app.on_event("startup")
 async def log_build_identity():
     """启动身份日志（Platform Readiness STOP B2）：本进程是哪个 commit 构建。
 

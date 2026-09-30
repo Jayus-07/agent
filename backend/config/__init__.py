@@ -121,6 +121,13 @@ STATE_KEY_GUARD_MODE = os.getenv("STATE_KEY_GUARD_MODE", "log").strip().lower()
 if STATE_KEY_GUARD_MODE not in ("log", "enforce"):
     STATE_KEY_GUARD_MODE = "log"
 
+# OTel 第二出口（P2-3，2026-09-30）：自研 trace（PG 存储）保持权威不变，
+# 开启时每个 span 收口镜像一份到 OTLP collector（BatchSpanProcessor 后台
+# 异步导出，失败仅 debug 不影响主链路）。双条件启用：总开关默认关 +
+# 标准 OTLP endpoint 已配置。零新增依赖（sdk/exporter 已在锁文件 1.41.1）。
+OTEL_TRACE_OTLP_ENABLED = os.getenv("OTEL_TRACE_OTLP_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip().rstrip("/")
+
 # 拒答转追问（2026-09-19）：L1 入口弱命中追问 + L2 拒答后业务导航追问。
 # 关闭即回滚为纯拒答行为；追问内容与接线见 orchestration/graph/clarify_content.py
 REFUSAL_CLARIFY_ENABLED = os.getenv("REFUSAL_CLARIFY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
@@ -436,6 +443,8 @@ __all__ = [
     "TOOL_APPROVAL_MODE", "TOOL_APPROVAL_TTL_SECONDS", "MCP_TOOL_TIMEOUT",
     "MAIN_GRAPH_RECURSION_LIMIT", "MAIN_GRAPH_CHECKPOINTER_ENABLED",
     "STATE_KEY_GUARD_MODE",
+    # OTel 第二出口（P2-3）
+    "OTEL_TRACE_OTLP_ENABLED", "OTEL_EXPORTER_OTLP_ENDPOINT",
     # 拒答转追问
     "REFUSAL_CLARIFY_ENABLED",
     # 并发控制 / 分布式准入门

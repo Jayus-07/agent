@@ -103,6 +103,10 @@ dependencies = [
     "prometheus-client>=0.20",
     "psutil>=5.9",
     "langfuse>=4.0",  # LLM 可观测性平台（自托管，见 docker-compose.langfuse.yml）
+    # OTel 第二出口（P2-3，2026-09-30）：自研 trace 镜像导出 OTLP；此前仅作为
+    # instrumentation-fastapi 的传递依赖存在于锁文件，代码直接 import 后显式声明
+    "opentelemetry-sdk>=1.41",
+    "opentelemetry-exporter-otlp-proto-http>=1.41",
 
     # ═══════════════════════════════════════════
     # 工具
