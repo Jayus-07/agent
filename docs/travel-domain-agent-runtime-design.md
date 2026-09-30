@@ -1,6 +1,8 @@
 # 旅游域 Agent Runtime 目标设计 v3（7-Agent 收敛版）
 
-> **状态更新（2026-09-29）**：现行冻结版 = `docs/travel-domain-agent-runtime-design-v4.md`（v4 在本文基础上冻结企业级治理层：TravelPlan 生命周期 / Plan Version 管理 / Evidence 事实可信模型 / Tool Governance / Human Approval 统一模型 / Evaluation 与 Cost-Latency Budget / ProviderRouter）。本文 §1/§2/§3/§5/§7 架构与执行卡被 v4 §10 承接继续有效，执行时以 v4 + 本文组合阅读。
+> **状态更新（2026-09-30）**：**现行唯一设计书 = `docs/travel-domain-design-v5.md`**（自包含定稿：本文架构与执行卡 + v4 治理层 + **新增产品面**）。本文与 v4 均转为**历史留档**，不再单独更新；本文 §1/§2/§3/§5/§7 的架构与执行卡在 v5 第二部分中原样承接。执行以 v5 为准，无需再「v3+v4 组合读」。
+>
+> 历史状态（2026-09-29）：当时现行冻结版 = `docs/travel-domain-agent-runtime-design-v4.md`（v4 在本文基础上冻结企业级治理层：TravelPlan 生命周期 / Plan Version 管理 / Evidence 事实可信模型 / Tool Governance / Human Approval 统一模型 / Evaluation 与 Cost-Latency Budget / ProviderRouter）。
 >
 > 状态：设计稿 v3（2026-09-29）。前置：`docs/travel-domain-current-audit.md`（审计，文件/行号以它为准）、`docs/travel-domain-design-v2-mapping-plan.md`（v2 映射与裁决，其架构章节被本文取代，差异裁决 A1-A3/R4/R6 等继续有效）。
 > 用户拍板（2026-09-29）：不保留"五专家规则引擎"形态，升级为企业级 Travel Agent Runtime；**不拆过细 Agent，不复制 Hotel/Flight/Ticket 三套 Agent**；五专家能力迁移为 Agent 内部 Service/Tool；Memory 横向能力不设节点；Route Optimization 轻量算法（不引 OR-Tools）。

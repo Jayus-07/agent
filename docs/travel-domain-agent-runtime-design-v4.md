@@ -1,5 +1,7 @@
 # 旅游域 Agent Runtime 企业级目标设计 v4（最终冻结稿）
 
+> **状态更新（2026-09-30）**：**现行唯一设计书 = `docs/travel-domain-design-v5.md`**（v5 自包含定稿：v3 架构 + v4 治理层 + **新增产品面**，并含 TripStar 参考对比）。本文转为**历史留档**，不再单独更新；v3/v4 已冻结的架构决策与契约在 v5 中原样承接，**一条未改**。执行以 v5 为准。
+>
 > 状态：**v4 冻结稿**（2026-09-29）。基线链：`docs/travel-domain-current-audit.md`（审计，文件/行号事实源）→ `docs/travel-domain-agent-runtime-design.md`（v3，7-Agent 架构与 Phase 执行卡，**继续有效**）→ 本文档（v4，在其上冻结企业级治理层）。
 > v4 新增内容（用户 2026-09-29 拍板的 8 项补充）：①TravelPlan 生命周期 ②Plan Version 管理 ③Evidence 事实可信模型 ④Tool Governance ⑤Human Approval 统一模型 ⑥Agent Evaluation ⑦Cost/Latency Budget ⑧Provider Selection Strategy。
 > 四优先级不变：**稳定性 > Agent 数量；确定性 > 模型自由生成；数据真实性 > 内容丰富；不重复实现既有生产资产。**
