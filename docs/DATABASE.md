@@ -545,9 +545,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 6. Migration 治理
 
-### 6.1 migration 治理现状（2026-09-29）
+### 6.1 migration 治理现状（2026-09-30）
 
-`sql/migrations/` 顺序编号治理，最新编号 **054**（auth_super_admin）；配套 db-migrate 工具与迁移三层校验（发布门禁）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
+`sql/migrations/` 顺序编号治理，最新编号 **062**（tool_contract_changes）；配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
@@ -558,13 +558,23 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 | `004_readonly_role.sql` | 只读角色 + 权限 | 71 |
 | `005_schema_hardening.sql` | 补 FK + CHECK + 索引 | 208 |
 
-**问题**：
+**问题（历史遗留，大部分已被 db-migrate/checksum 体系收敛）**：
 
-- ❌ 003 编号重复（两个文件），破坏有序性
-- ❌ 裸 SQL + 手工 `psql -f` 执行
-- ❌ 无版本表（不知道库当前跑到哪个 migration）
-- ❌ 无回滚脚本（出错只能手动反写）
-- ❌ 不在 CI 流程内（schema 漂移无人察觉）
+- ⚠️ 003 编号重复（两个文件），init_db.py 有说明并共存
+- ✅ 版本表 = 两库 `public.schema_migrations`（checksum 三层校验）
+
+**治理平面新增表（2026-09-30 批次A/B + 验收补齐；memory 库；全部 IF NOT EXISTS 幂等；执行状态以 `schema_migrations` 为权威）**：
+
+| 迁移 | 表/变更 | 用途 |
+|---|---|---|
+| 055 | `llm_usage` +skill_id/tool_id/agent_domain 三列+索引 | 成本六维归因（M5，与 store 启动自愈段同口径） |
+| 056 | `ai.eval_run_records` | 评测 run 台账（M7；run_id UNIQUE upsert；索引非替代，明细在 data/eval_runs/） |
+| 057 | `prompt_aliases` + `prompt_versions.change_kind` 列 | Prompt 命名指针（production/staging）+ 版本语义（M4） |
+| 058 | cs_case 等 | 客服统一案件（CS B12，并行批次） |
+| 059 | `ai.security_events` | 安全事件五类统一落库（M9；旁路软失败） |
+| 060 | `ai.task_operation_audits` | 任务操作审计双写（M10） |
+| 061 | `ai.release_records` | 发布记录 + 12 门结果（M8，并行批次） |
+| 062 | `ai.tool_contract_changes` | Tool 契约变更历史（生成器检测变更自动落库） |
 
 ### 6.2 P1 治理目标
 

@@ -108,7 +108,13 @@ docs/
 
 ## 7. 近期专项（2026-09）
 
-**收官与盘点（最新）**
+**企业级治理平面（2026-09-29 ~ 09-30，最新）**
+
+- [reports/2026-09-29-企业级生产化治理设计审查报告.md](reports/2026-09-29-企业级生产化治理设计审查报告.md) — 6 路只读审查：16 项缺失 M1-M16 + Phase 1-3 路线
+- [2026-09-30-企业级治理技术债修复台账.md](2026-09-30-企业级治理技术债修复台账.md) — **权威进度表**（10/16 完成 + 3 部分完成；每项方案/提交号/验证记录；版本化设计口径三问三答）
+- 治理资产速记：契约双 lock（`backend/tool_contracts.lock.json` 代码派生 / `backend/prompts.lock.json` DB 发布镜像）· 错误七分类 `observability/error_taxonomy.py` · 成本归因 `observability/llm_context.py` · 一致性端点 `/api/consistency/report` · 安全事件 `ai.security_events` · CI `tool_quality.yml`（已重启用）
+
+**收官与盘点（2026-09-25 波次）**
 
 - [2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md](2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md) — 客服/旅游/记忆/上下文/代码审查五线收口状态 + 全局遗漏（**最新欠账口径**）
 - [2026-09-25-FinalRC-TestDebt-Closure.md](2026-09-25-FinalRC-TestDebt-Closure.md) — 全量回归收官：分块执行闭合、flaky 甄别（89 persistent + 85 env_flaky）

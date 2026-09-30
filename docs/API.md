@@ -9,7 +9,7 @@
 
 ## 1. 总览
 
-### 1.1 路由文件（下表为 2026-08 口径 22 个；现 54 个，清单以目录为准）[backend/app/api/routes/](../backend/app/api/routes/)
+### 1.1 路由文件（下表为 2026-08 口径 22 个；现 59 个，清单以目录为准）[backend/app/api/routes/](../backend/app/api/routes/)
 
 | 路由文件 | 端点数 | 用途 |
 |---|---|---|
@@ -54,7 +54,15 @@
 | `/data` | POST `/upload` · `/generate` · `/collect` · `/collect/all` · `/pipeline/run` · `/datasets` · `/pipeline/history` · `/collect/history` |
 | `/mcp` | `/tools` · `/servers` · POST `/call` |
 | `/demo` | POST `/seed` · `/run/{scenario_id}` |
-| 系统 | `/health` · `/metrics`（绕过 auth + CORS，供 K8s scrape） |
+| `/admin/tools` | GET `/`（契约 lock×运行统计合并）· `/stats`（Prometheus 直读聚合）· `/changes`（契约变更历史）【治理 M1/M2】 |
+| `/consistency` | GET `/report`（七段资产对账矩阵，全实时派生）【治理 M6】 |
+| `/admin/security` | GET `/events` · `/stats`（安全事件五类查询，M9） |
+| `/admin/tasks` | 既有 CRUD + POST `/{id}/reexecute`（克隆重执行）· GET `/{id}/operations`（操作审计）· GET `/queues`（五队列 backlog）【M10】 |
+| `/admin/releases` | 发布记录 + 12 门结果（M8） |
+| `/evaluation` | 既有 + GET `/prompt-version-runs?key&version`（版本→评测 run 反查）· POST `/run` |
+| `/observability/tokens` | 既有 + GET `/breakdown?group_by=user\|tenant\|model\|skill\|tool\|domain`（六维聚合）· summary 含 by_currency 分列【M11】 |
+| `/prompts` | 既有 + POST `/{key}/aliases/{alias}`（production=发布语义 / staging=预发指针）· 版本带 change_kind |
+| 系统 | `/health`（含 build/migrations/schema_consistency/redis 探测）· `/metrics`（绕过 auth + CORS，供 K8s scrape） |
 
 ---
 

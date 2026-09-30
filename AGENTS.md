@@ -46,9 +46,13 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 - **错误统一口径（M3）**：`observability/error_taxonomy.py::unify_*` 是三套既有词表（模型层 5 类/任务层 10 类/ToolStatus 8 值）→ 七分类（timeout/network_error/permission_denied/validation_error/business_error/contract_error/provider_error）的**唯一映射出口**；管理端失败分布与新指标 `agent_tool_error_class_total` 只用此口径，禁止再造第四套词表。
 - **成本归因（M5）**：`observability/llm_context.py`（ContextVar，叠加语义）+ `llm_usage.skill_id/tool_id/agent_domain` 三列；注入点三处（skill execute 装饰器/tool executor 装饰器/builder 域图布线 `with_domain_attribution`），新增调用链记得在入口包 scope。
 - **资产一致性（M6）**：`GET /api/consistency/report` 七段对账矩阵全部实时派生（禁手抄数字）；管理端/巡检消费此端点，不另建清单。
-- **Tool 统计（M2）**：`GET /api/admin/tools(/stats)` 进程内 Prometheus 直读；`skill_failure_total` 已埋点（skill 失败出口，error_type=七分类）。
-- **评测台账（M7）**：`ai.eval_run_records` 是**索引非替代**（明细仍在 `data/eval_runs/`）；评测跑完自动 upsert；`prompt_versions` 口径 = PG 权威（`snapshot_prompt_versions()`）优先、yaml 扫描兜底；CLI `--triggered-by` 记录触发者。
+- **Tool 统计（M2）**：`GET /api/admin/tools(/stats|/changes)` 进程内 Prometheus 直读 + 契约变更历史（`ai.tool_contract_changes`，生成器检测到变更自动落库）；`skill_failure_total` 已埋点（skill 失败出口，error_type=七分类）。
+- **评测台账（M7）**：`ai.eval_run_records` 是**索引非替代**（明细仍在 `data/eval_runs/`）；评测跑完自动 upsert；`prompt_versions` 口径 = PG 权威（`snapshot_prompt_versions()`）优先、yaml 扫描兜底；CLI `--triggered-by` 记录触发者；`GET /api/evaluation/prompt-version-runs?key&version` 反查某 prompt 版本关联的评测（JSONB 包含，值口径 str）。
 - **Prompt 版本语义与指针（M4）**：`prompt_versions.change_kind ∈ major/minor/patch`（存量 NULL）；`prompt_aliases` 中 **production 与 active_version 恒同步**（切 production=完整发布语义，走 publish），staging 只动指针不影响运行时读路径（staging 运行时消费属 Phase 2 灰度）。
+- **Prompt 发布镜像 lock（第三批）**：`backend/prompts.lock.json` = DB 发布状态的仓库对照物（active_version+模板哈希+change_kind），**发布/回滚后必须 `python -m backend.scripts.gen_prompt_contract_lock` 重新生成并随变更提交**——lock 与 DB 漂移 = 有发布没留痕，被 `test_prompt_contract_lock` 与 `--check` 拦截；同版本 template_hash 变化 = prompt_versions 被手工 DML 的信号。
+- **请求级 Prompt 版本 pin（第三批 #5）**：`AgentState.prompt_versions`（**必须入 schema**——LangGraph updates 剥离 schema 外键）随 runner/task_executor 开始时快照 + `trace.tags["prompt_versions"]`；发布不影响已快照的值；checkpointer 开启时随 checkpoint 持久化，Celery 断点续跑在恢复时点重新快照。排障/审计按此 tag 回答「当时用的哪版」。
+- **安全事件（M9）**：`ai.security_events` 五类统一落库（`security/events.py` 旁路软失败），四埋点 = Input Guard BLOCK / deps+rbac 403 / JWT 失败四分类 / Evidence 拒答；查询 `GET /api/admin/security/events(/stats)`。新增拒绝类路径记得旁路补埋点。
+- **CI 契约门禁（第三批 #8）**：`tool_quality.yml` 已重启用——Tool lock `--check` + 一致性四件套测试 + 重复定义 + prompt lock 结构校验；PR 触发路径覆盖 backend/tools|skills/两个 lock/prompts yaml。
 - **术语口径（2026-09-29 拍板）**：域内统一叫 Agent——域调度者=**域主 Agent**（代码 supervisor），域内执行节点=**子 Agent**（代码/旧文档中「专家/Expert」= 子 Agent 的代码名，代码名保留不改）；勿在新文档再用「专家」指称运行时组件。
 
 ### 节点职责与口径

@@ -167,7 +167,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ---
 
-## 系统规模（2026-09-29 实测口径）
+## 系统规模（2026-09-30 实测口径）
 
 | 资产 | 数量 | 事实源 |
 |------|------|--------|
@@ -178,8 +178,8 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
-| 后端用例 | 7687（`pytest --collect-only`，2026-09-29） | `backend/tests/` |
-| 前端路由 | 用户端 5 / 管理端 38 / 客服坐席 8 | `*/src/app/**/page.tsx` |
+| 后端用例 | 7918（`pytest --collect-only`，2026-09-30） | `backend/tests/` |
+| 前端路由 | 用户端 5 / 管理端 41（含 /tools Tool 治理、/consistency 资产一致性，2026-09-30）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
 > [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)。
