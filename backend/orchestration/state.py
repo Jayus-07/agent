@@ -196,6 +196,15 @@ class OrchestratorState(AgentState):
     # 流剥离 schema 外键」的活证据：任何改为从 state 读的消费方都会拿到
     # None。登记后与 cs_context 等域上下文字段同语义。
     cs_pending_action: dict | None
+    # ── ephemeral 透出键补登记（P1-1 守卫落地时发现，2026-09-30）──────
+    # 三个下划线键历史上「有意不进 schema、仅随 stream update 透出」
+    # （tool_selector.py 尾注），但这正是 LangGraph 剥离的暗雷形态：任何
+    # 改为从 state 读的消费方都会拿到 None（cs_pending_action 的同款教训）。
+    # 消费方（events.py / supervisor 调度 / eval）均从节点输出读取，登记后
+    # 行为零变化；checkpointer 开启时会随 state 持久化（可序列化，无害）。
+    _tool_selection: dict       # tool_selector 决策快照（source/reason/candidates）
+    _ready_dispatch: list       # supervisor 本轮可派发步骤（Send 依据）
+    _all_steps_done: bool       # supervisor 全部步骤完成标记
 
 
 # ── 状态键登记守卫（P1-1，2026-09-30）─────────────────────────────

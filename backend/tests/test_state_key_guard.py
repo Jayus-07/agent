@@ -1,10 +1,20 @@
 """state_key_guard 单测 — 状态键登记守卫（P1-1）。
 
-本文件第一阶段覆盖纯校验函数与派生性；接线层（trace_middleware）
-测试在接线提交时追加。
+覆盖：纯校验函数（已知键零告警 / 未知键点名 / 非 dict 输入防御）、
+派生性（KNOWN_STATE_KEYS 恒等于两个 TypedDict 注解并集，G2）、
+历史踩坑键全数登记（selection_blocked/_clarify/funnel_context/
+travel_context/prompt_versions/cs_pending_action/tenant_id）、
+接线层（log 模式告警 + 指标；enforce 模式抛错；守卫自身异常软失败；
+wrapper 内嵌守卫；router 专用纯守卫包装）。
+
+真实图零误报检查不在此文件：以 STATE_KEY_GUARD_MODE=enforce 跑
+tests/orchestration/graph/ 既有集成测试完成（任何未登记键直接抛错）。
 """
 from __future__ import annotations
 
+import pytest
+
+import backend.observability.trace_middleware as tm
 from backend.orchestration.state import (
     AgentState,
     KNOWN_STATE_KEYS,
@@ -56,3 +66,90 @@ def test_validate_empty_and_non_dict():
     assert validate_state_update("node", {}) == []
     assert validate_state_update("node", None) == []
     assert validate_state_update("node", "not-a-dict") == []
+
+
+# ── 接线层（trace_middleware.check_state_update）──────────────
+
+
+def test_check_log_mode_warns_without_raising(monkeypatch, caplog):
+    """默认 log 模式：告警 + 指标，不阻断节点返回。"""
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "log")
+    before = tm.state_unknown_key_total.labels(node="router")._value.get()
+    with caplog.at_level("WARNING"):
+        tm.check_state_update("router", {"question": "q", "ghost": 1})
+    assert tm.state_unknown_key_total.labels(node="router")._value.get() == before + 1
+    assert any("ghost" in r.message for r in caplog.records)
+
+
+def test_check_log_mode_counts_per_key(monkeypatch):
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "log")
+    before = tm.state_unknown_key_total.labels(node="planner")._value.get()
+    tm.check_state_update("planner", {"a_ghost": 1, "b_ghost": 2, "plan": {}})
+    assert tm.state_unknown_key_total.labels(node="planner")._value.get() == before + 2
+
+
+def test_check_enforce_mode_raises(monkeypatch):
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "enforce")
+    with pytest.raises(RuntimeError, match="ghost"):
+        tm.check_state_update("planner", {"ghost": 1})
+
+
+def test_check_enforce_mode_clean_update_passes(monkeypatch):
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "enforce")
+    tm.check_state_update("planner", {"plan": {}, "_plan_critiqued": True})
+
+
+def test_check_soft_fail_on_internal_error(monkeypatch):
+    """守卫自身异常必须软失败：不能因守卫弄挂节点。"""
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "enforce")
+    monkeypatch.setattr(tm, "validate_state_update", lambda *a: 1 / 0)
+    tm.check_state_update("planner", {"plan": {}})  # 不抛即通过
+
+
+def test_check_skips_non_dict():
+    # 节点返回 None / 非 dict（LangGraph 允许，supervisor 返回 Send 列表）时静默跳过
+    tm.check_state_update("supervisor", None)
+    tm.check_state_update("supervisor", "not-a-dict")
+
+
+# ── wrapper 集成（wrap_sync_node 内嵌守卫）──────────────────
+
+
+def test_wrap_sync_node_invokes_guard(monkeypatch):
+    """wrap_sync_node 包裹的节点返回未知键时触发守卫（无 trace 也检查）。"""
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "enforce")
+    calls = []
+
+    def node(state):
+        calls.append(state)
+        return {"question": "q", "ghost": 1}
+
+    wrapped = tm.trace_middleware.wrap_sync_node("planner", node)
+    with pytest.raises(RuntimeError, match="ghost"):
+        wrapped({"question": "q"})
+    assert calls, "节点本体必须已被执行"
+
+
+def test_wrap_sync_node_clean_update(monkeypatch):
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "enforce")
+
+    def node(state):
+        return {"final_answer": "ok"}
+
+    wrapped = tm.trace_middleware.wrap_sync_node("reporter", node)
+    assert wrapped({}) == {"final_answer": "ok"}
+
+
+def test_guard_node_update_wrapper_pure_guard(monkeypatch):
+    """router 专用纯守卫包装：只校验，不改返回值。"""
+    monkeypatch.setattr(tm, "STATE_KEY_GUARD_MODE", "enforce")
+
+    def good(state):
+        return {"route_mode": "direct"}
+
+    def bad(state):
+        return {"route_mode": "direct", "ghost": 1}
+
+    assert tm.guard_node_update("router", good)({}) == {"route_mode": "direct"}
+    with pytest.raises(RuntimeError, match="ghost"):
+        tm.guard_node_update("router", bad)({})

@@ -103,6 +103,14 @@ MAIN_GRAPH_RECURSION_LIMIT = int(os.getenv("MAIN_GRAPH_RECURSION_LIMIT", "80"))
 # Send 并行分支的流式/trace 绑定降级 — 见 orchestration/request_context.py）
 MAIN_GRAPH_CHECKPOINTER_ENABLED = os.getenv("MAIN_GRAPH_CHECKPOINTER_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
+# 状态键登记守卫（P1-1，2026-09-30）：节点 update 写入未登记 schema 的键会被
+# LangGraph updates 流与 state 双静默剥离（历史事故 ×4）。log = warning +
+# state_unknown_key_total 指标（默认，行为零变化）；enforce = 抛错（测试/预发
+# 验证用）。发现未知键的正确修法是补登记进 state.py，不接受 exclude 黑名单。
+STATE_KEY_GUARD_MODE = os.getenv("STATE_KEY_GUARD_MODE", "log").strip().lower()
+if STATE_KEY_GUARD_MODE not in ("log", "enforce"):
+    STATE_KEY_GUARD_MODE = "log"
+
 # 拒答转追问（2026-09-19）：L1 入口弱命中追问 + L2 拒答后业务导航追问。
 # 关闭即回滚为纯拒答行为；追问内容与接线见 orchestration/graph/clarify_content.py
 REFUSAL_CLARIFY_ENABLED = os.getenv("REFUSAL_CLARIFY_ENABLED", "true").strip().lower() in ("1", "true", "yes")
@@ -414,9 +422,10 @@ __all__ = [
     # sql 数据安全
     "TRUST_USER_HEADER", "USER_ID_HEADER", "SQL_ROW_SECURITY_ENABLED",
     "SQL_AGENT_ENABLED",
-    # tool 审批门 / MCP / 主图保护
+    # tool 审批门 / MCP / 主图保护 / 状态键守卫
     "TOOL_APPROVAL_MODE", "TOOL_APPROVAL_TTL_SECONDS", "MCP_TOOL_TIMEOUT",
     "MAIN_GRAPH_RECURSION_LIMIT", "MAIN_GRAPH_CHECKPOINTER_ENABLED",
+    "STATE_KEY_GUARD_MODE",
     # 拒答转追问
     "REFUSAL_CLARIFY_ENABLED",
     # 并发控制 / 分布式准入门

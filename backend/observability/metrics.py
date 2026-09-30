@@ -409,6 +409,13 @@ dist_gate_unavailable_total = Counter(
     "分布式门 Redis 不可用而 fail-open 放行的请求数",
 )
 
+# ── 状态键登记守卫（P1-1，2026-09-30）──
+state_unknown_key_total = Counter(
+    "state_unknown_key_total",
+    "节点 update 写入未登记状态键的次数（该键将被 LangGraph 剥离，按节点）",
+    labelnames=("node",),
+)
+
 # ── 运营指标（2026-08-11 新增）──
 # 累计计数（用于计算 rates）
 rag_query_total = Counter(
@@ -1426,6 +1433,8 @@ __all__ = [
     "dist_gate_active",
     "dist_gate_reject_total",
     "dist_gate_unavailable_total",
+    # 状态键登记守卫（P1-1）
+    "state_unknown_key_total",
     # 任务 Admission Control（Phase2 Step4）
     "task_admission_requests_total",
     "task_admission_allowed_total",

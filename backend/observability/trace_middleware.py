@@ -14,7 +14,11 @@ observability/trace_middleware.py — 统一 Trace 中间件
 import functools
 import time
 
+from backend.config import STATE_KEY_GUARD_MODE
+from backend.observability.metrics import state_unknown_key_total
 from backend.observability.tracer import trace_collector
+from backend.orchestration.state import validate_state_update
+from backend.shared.logger import logger
 
 # 节点名 → 用户可读标签
 _NODE_LABELS: dict[str, str] = {
@@ -63,6 +67,55 @@ _NODE_KINDS: dict[str, str] = {
 }
 
 
+def check_state_update(node_name: str, result) -> None:
+    """状态键守卫（P1-1）：节点 update 含未登记 schema 的键时告警/抛错。
+
+    该键会被 LangGraph updates 流与 state 双静默剥离（写入点丢失，
+    历史事故 ×4），必须在节点返回后、交回 LangGraph 前检查——下沉到
+    runner 事件流层看不到被剥离的键（2026-09-30 实验证实）。
+    log（默认）：state_unknown_key_total{node} + warning；enforce：raise。
+    守卫自身异常软失败（不能因守卫弄挂节点）。正确修法 = 补登记进
+    backend/orchestration/state.py，不接受 exclude 黑名单。
+    """
+    try:
+        unknown = validate_state_update(node_name, result)
+        if not unknown:
+            return
+        for _key in unknown:
+            state_unknown_key_total.labels(node=node_name).inc()
+        if STATE_KEY_GUARD_MODE == "enforce":
+            raise RuntimeError(
+                f"[StateKeyGuard] 节点 {node_name} 返回未登记状态键 {unknown}"
+                "——将被 LangGraph 剥离；请补登记进 state.py 或修正键名"
+            )
+        logger.warning(
+            "[StateKeyGuard] 节点 %s 返回未登记状态键 %s —— 将被 LangGraph "
+            "静默剥离；请补登记进 backend/orchestration/state.py",
+            node_name, unknown,
+        )
+    except RuntimeError:
+        raise
+    except Exception:  # noqa: BLE001 — 守卫软失败
+        logger.debug("[StateKeyGuard] 守卫内部异常（软失败）", exc_info=True)
+
+
+def guard_node_update(node_name: str, node_fn):
+    """纯守卫包装（无 span）：router 等自建 span 的节点专用。
+
+    builder 里 router 不走 wrap_sync_node（MultiTierRouter 内部自建完整
+    span，双包装会产生同名重复 span），但它的 update 同样会被剥离——
+    本包装只挂守卫不加 trace。
+    """
+
+    @functools.wraps(node_fn)
+    def wrapper(state: dict) -> dict:
+        result = node_fn(state)
+        check_state_update(node_name, result)
+        return result
+
+    return wrapper
+
+
 class TraceMiddleware:
     """统一 Trace 中间件。
 
@@ -83,7 +136,10 @@ class TraceMiddleware:
 
             trace = trace_collector.current()
             if trace is None:
-                return node_fn(state)
+                result = node_fn(state)
+                # 状态键守卫（P1-1）：无 trace 也要检查（剥离与 trace 无关）
+                check_state_update(node_name, result)
+                return result
 
             label = _NODE_LABELS.get(node_name, node_name)
             kind = _NODE_KINDS.get(node_name, "agent")
@@ -103,6 +159,8 @@ class TraceMiddleware:
             t0 = time.monotonic()
             try:
                 result = node_fn(state)
+                # 守卫在 span 收口前：enforce 抛错时 span 以 error 收口
+                check_state_update(node_name, result)
                 elapsed_ms = (time.monotonic() - t0) * 1000
                 trace_collector.end_span(
                     span,
@@ -132,7 +190,9 @@ class TraceMiddleware:
         async def wrapper(state: dict) -> dict:
             trace = trace_collector.current()
             if trace is None:
-                return await node_fn(state)
+                result = await node_fn(state)
+                check_state_update(node_name, result)
+                return result
 
             label = _NODE_LABELS.get(node_name, node_name)
             kind = _NODE_KINDS.get(node_name, "agent")
@@ -152,6 +212,7 @@ class TraceMiddleware:
             t0 = time.monotonic()
             try:
                 result = await node_fn(state)
+                check_state_update(node_name, result)
                 elapsed_ms = (time.monotonic() - t0) * 1000
                 trace_collector.end_span(
                     span,

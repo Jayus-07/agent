@@ -25,7 +25,7 @@ import backend.skills  # noqa: F401
 from backend.agents.planner.critique import critique_node
 from backend.agents.planner.planner import planner_node
 from backend.agents.reporter.reporter import reporter_node
-from backend.observability.trace_middleware import trace_middleware
+from backend.observability.trace_middleware import guard_node_update, trace_middleware
 from backend.orchestration.domain_registry import domain_graph_registry, with_domain_attribution
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.orchestration.graph.general_chat_node import general_chat_node
@@ -128,7 +128,9 @@ def build_graph(checkpointer=None):
     # 注意：router 不用中间件包装 —— MultiTierRouter.route() 内部已自建
     # 完整 span（含 rule/vector/llm 三层事件与 metrics）。双重包装会产生
     # 同名重复 span（浏览器实测发现的 0ms+真实时长两条"路由决策"）。
-    wf.add_node("router", router_node)
+    # guard_node_update = 纯状态键守卫包装（P1-1，无 span）：router 的
+    # update 同样会被 LangGraph 剥离，必须纳入守卫覆盖。
+    wf.add_node("router", guard_node_update("router", router_node))
     # direct 路径: router --direct--> tool_selector（FC 门控选工具+填参，
     # 失败/快路径直通零开销）→ skill_executor
     wf.add_node("tool_selector", trace_middleware.wrap_sync_node("tool_selector", tool_selector_node))
