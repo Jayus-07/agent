@@ -6,12 +6,13 @@
 
 本测试真实调用 _index_file_inner 验证契约（只 mock 外部边界：
 解析入口 parse_and_chunk_full / LLM 元数据 / embedding / chunk_store / 各存储）：
-  1. bm25_store 配置时 → replace_documents 必须被调用（携带 doc_id/file_path/k）
-  2. replace_documents 失败 → 仅记日志，不得中断索引主流程
+  1. bm25_store 配置时 → 从向量库重建 BM25，并携带替换旧 chunk 的排除集
+  2. BM25 重建失败 → 清理本次新向量并中断索引主流程
   3. bm25_store=None（启动期 sync 场景）→ 跳过 BM25，索引正常完成
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from langchain_core.documents import Document
 
 from backend.rag.indexing.indexer import IncrementalIndexer
@@ -57,32 +58,34 @@ def _run_inner(indexer: IncrementalIndexer, tmp_path) -> dict:
 
 class TestBM25IncrementalSync:
 
-    def test_replace_documents_called_when_store_present(self, tmp_path):
-        """有 bm25_store + chunks 时，replace_documents 必须被调用（携带 doc_id/file_path/k）。"""
+    def test_rebuild_from_vectorstore_called_when_store_present(self, tmp_path):
+        """有 bm25_store + chunks 时，必须从向量库重建 BM25。"""
         from backend.config.rag import BM25_CANDIDATE_K
 
         bm25_store = MagicMock()
+        bm25_store.rebuild_from_vectorstore = MagicMock()
         indexer = _make_indexer(tmp_path, bm25_store)
 
         result = _run_inner(indexer, tmp_path)
 
-        bm25_store.replace_documents.assert_called_once()
-        kwargs = bm25_store.replace_documents.call_args.kwargs
-        assert kwargs["doc_id"] == "doc1"
+        bm25_store.rebuild_from_vectorstore.assert_called_once()
+        args, kwargs = bm25_store.rebuild_from_vectorstore.call_args
+        assert args[0] is indexer.vectordb
         assert kwargs["k"] == BM25_CANDIDATE_K
-        assert kwargs["file_path"].endswith("doc.md")
+        assert kwargs["exclude_ids"] == set()
         assert result["chunk_count"] == 1
 
-    def test_bm25_sync_failure_does_not_break_indexing(self, tmp_path):
-        """BM25 同步抛异常时仅记日志，不得中断索引主流程。"""
+    def test_bm25_sync_failure_cleans_up_and_breaks_indexing(self, tmp_path):
+        """BM25 重建失败时不得把向量或 registry 标记为成功。"""
         bm25_store = MagicMock()
-        bm25_store.replace_documents.side_effect = RuntimeError("BM25 disk full")
+        bm25_store.rebuild_from_vectorstore.side_effect = RuntimeError("BM25 disk full")
         indexer = _make_indexer(tmp_path, bm25_store)
 
-        result = _run_inner(indexer, tmp_path)  # 不抛即通过
+        with pytest.raises(RuntimeError, match="BM25 disk full"):
+            _run_inner(indexer, tmp_path)
 
-        assert result["chunk_count"] == 1
-        indexer.registry.register.assert_called_once()  # 索引照常收尾
+        indexer.registry.register.assert_not_called()
+        indexer.vectordb.delete.assert_called()
 
     def test_bm25_skipped_when_store_none(self, tmp_path):
         """bm25_store=None（启动期 sync）时跳过 BM25 阶段，索引正常完成。"""

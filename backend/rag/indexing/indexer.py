@@ -4,9 +4,9 @@
 保持现有 Retriever 和 RAG API 完全不变。
 
 Trace 集成（Phase 1）：
-  每个 _index_file() 启动一棵 indexer trace，6 个标准 span:
+  每个 _index_file() 启动一棵 indexer trace，包含向量与 BM25 发布阶段:
     index_upload → index_parse → index_chunk → index_embed
-                  → index_vector_db → index_metadata
+                  → index_vector_db → bm25_write → index_metadata
   每文件一棵 span 树；嵌入失败的 chunk 单独 child span（默认聚合）。
 
 用法:
@@ -1690,19 +1690,70 @@ class IncrementalIndexer:
                                         new_doc_db_id=doc_db_id)
             raise
 
-        # ── ⑤.5 BM25 同步（P0-1：上传/重索引后立即同步，避免"上传成功但 BM25 未更新"）──
-        # 仅在显式传入 bm25_store 时执行（上传/重索引路径）；pipeline 启动 sync 不传（BM25 随后全量重建）。
-        # 注意：chunk metadata 需含 doc_id/source_file 等字段（BM25 删除/去重依赖），_enrich 与上方注入已提供。
+        # ── ⑤.5 BM25 同步（向量库为唯一 canonical chunk 来源）──
+        # 仅在显式传入 bm25_store 时执行（上传/重索引路径）；pipeline 启动 sync 不传。
+        # 不能再用「旧 BM25 + 当前文件」增量拼接：旧 BM25 可能已经属于另一批
+        # 文档，必须从当前向量集合一次性重建。重索引的旧 chunk 仍在向量库中，
+        # 由 exclude_ids 排除，待 _cleanup_superseded 删除后集合仍保持一致。
         if self.bm25_store is not None and chunks:
-            try:
-                self.bm25_store.replace_documents(
-                    chunks, k=BM25_CANDIDATE_K, doc_id=doc_id, file_path=file_path,
+            bm25_lineage = None
+            if lineage_recorder is not None:
+                bm25_lineage = lineage_recorder.begin_stage(
+                    "bm25_write", role=None, engine_type="bm25",
+                    metadata={
+                        "collection": getattr(
+                            self.vectordb, "_collection", ""
+                        ),
+                    },
                 )
+            try:
+                rebuild = getattr(
+                    self.bm25_store, "rebuild_from_vectorstore", None
+                )
+                if callable(rebuild):
+                    old_chunk_ids = set(
+                        str(item)
+                        for item in (reindex_ctx or {}).get("old_chunk_ids", [])
+                    )
+                    rebuild(
+                        self.vectordb,
+                        exclude_ids=old_chunk_ids,
+                        k=BM25_CANDIDATE_K,
+                    )
+                else:
+                    # 兼容外部测试桩和旧实现；生产 BM25Store 一定走上面的
+                    # 向量集合全量重建路径。
+                    self.bm25_store.replace_documents(
+                        chunks, k=BM25_CANDIDATE_K,
+                        doc_id=doc_id, file_path=file_path,
+                    )
+                if bm25_lineage is not None:
+                    lineage_recorder.finish_stage(
+                        bm25_lineage[0], status="success",
+                        started_at=bm25_lineage[1], input_count=len(chunks),
+                        output_count=len(chunks),
+                    )
                 logger.info(
-                    f"[BM25] 文档已替换 {len(chunks)} chunks: {os.path.basename(file_path)}"
+                    f"[BM25] 已从向量集合发布快照: {len(chunks)} 新 chunks, "
+                    f"{os.path.basename(file_path)}"
                 )
             except Exception as e:
-                logger.error(f"[BM25] 替换同步失败 (doc_id={doc_id}): {e}")
+                if bm25_lineage is not None:
+                    lineage_recorder.finish_stage(
+                        bm25_lineage[0], status="failed",
+                        started_at=bm25_lineage[1],
+                        error_message=str(e),
+                    )
+                logger.error(
+                    f"[BM25] 快照发布失败 (doc_id={doc_id}): {e}"
+                )
+                # BM25Store.build 是原子发布，失败时旧 BM25 仍可读；
+                # 这里清理本次新向量，阻止 registry 进入 active。
+                self._cleanup_partial_write(
+                    doc_id, file_path=file_path,
+                    reindex_ctx=reindex_ctx, new_doc_db_id=doc_db_id,
+                )
+                raise
 
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
         # P1-4：阻止 chunk_count=0 的"假成功"入库。
@@ -1992,8 +2043,8 @@ class IncrementalIndexer:
         """重索引成功后清理被取代的旧向量（"先写后删"的删半边）。
 
         只按旧 ID 精确删除，绝不按 doc_id 条件删 —— 新旧 chunk 共享同一
-        doc_id，条件删会把刚写入的新向量一起删掉。BM25 无需处理：
-        replace_documents 在单次重建里已完成旧条目移除 + 新条目写入。
+        doc_id，条件删会把刚写入的新向量一起删掉。BM25 在写入阶段已经
+        从当前向量集合重建，并通过 old_chunk_ids 排除了这些旧条目。
         """
         if not old_doc_id:
             return
@@ -2124,9 +2175,15 @@ class IncrementalIndexer:
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
         if self.bm25_store is not None:
             try:
-                self.bm25_store.remove_documents(
-                    [doc_id], file_paths=[file_path] if file_path else None,
+                rebuild = getattr(
+                    self.bm25_store, "rebuild_from_vectorstore", None
                 )
+                if callable(rebuild):
+                    rebuild(self.vectordb, k=BM25_CANDIDATE_K)
+                else:
+                    self.bm25_store.remove_documents(
+                        [doc_id], file_paths=[file_path] if file_path else None,
+                    )
             except Exception as e:
                 logger.warning(f"删除 BM25 失败 (doc_id={doc_id}): {e}")
 

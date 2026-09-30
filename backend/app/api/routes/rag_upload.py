@@ -1214,7 +1214,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
             registry=reg,
             kb_id=kb_id,
             department=department,
-            bm25_store=pipeline.bm25_store,  # P0-1: 上传后立即同步 BM25
+            # 生产 BM25Store 会从向量集合原子重建；不是旧索引的单文档追加。
+            bm25_store=pipeline.bm25_store,
             processing_lineage_repository=get_processing_lineage_repository(),
             processing_task_id=upload_id,
             processing_batch_id=batch_id,
@@ -1223,7 +1224,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
             result = indexer.reindex_file(filepath, file_hash=file_hash)
         finally:
             listener.unsub()  # 索引失败也必须退订，防 trace 订阅泄漏
-        # 上传后刷新 pipeline 内存 BM25（indexer 已写入磁盘）
+        # 上传后刷新 pipeline 内存 BM25（indexer 已发布同源快照）
         try:
             pipeline.refresh_bm25_from_store()
         except Exception as e:

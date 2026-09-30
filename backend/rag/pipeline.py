@@ -28,6 +28,7 @@ from backend.rag.retrieval.bm25_store import (
     BM25Store,
     compute_content_hash,
     compute_content_hash_unordered,
+    compute_vector_manifest_hash,
     source_files_out_of_sync,
 )
 from backend.rag.chain import RAGChain
@@ -502,6 +503,18 @@ class RAGPipeline:
         else:
             self._ensure_docs_loaded()
             bm25_source = self.docs
+        bm25_snapshot_metadata = None
+        if vectorstore_docs:
+            bm25_snapshot_metadata = {
+                "source": "vectorstore",
+                "collection": str(
+                    getattr(self.vectordb, "_collection", None)
+                    or getattr(self.vectordb, "_collection_name", None)
+                    or "unknown"
+                ),
+                "vector_count": len(vectorstore_docs),
+                "vector_set_hash": compute_vector_manifest_hash(vectorstore_docs),
+            }
 
         if read_only:
             if self.bm25 is None:
@@ -516,6 +529,15 @@ class RAGPipeline:
                 raise RuntimeError(
                     f"{self.mode} 模式只读索引不可用：BM25 与向量库文档集合不一致"
                 )
+            get_metadata = getattr(bm25_store, "get_metadata", None)
+            snapshot_meta = get_metadata() if callable(get_metadata) else {}
+            expected_vector_hash = snapshot_meta.get("vector_set_hash")
+            if expected_vector_hash:
+                current_vector_hash = compute_vector_manifest_hash(bm25_source)
+                if current_vector_hash != expected_vector_hash:
+                    raise RuntimeError(
+                        f"{self.mode} 模式只读索引不可用：BM25 向量集合 hash 不匹配"
+                    )
             content_hash = bm25_store.get_content_hash()
             if content_hash and content_hash != compute_content_hash(bm25_source):
                 persisted_hash = compute_content_hash_unordered(self.bm25.docs)
@@ -534,16 +556,28 @@ class RAGPipeline:
             )
         elif self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
+            self.bm25 = bm25_store.build(
+                bm25_source, k=BM25_CANDIDATE_K,
+                metadata=bm25_snapshot_metadata,
+            )
         elif bm25_store.is_stale:
             logger.info("[RAG] BM25 索引已过期（文档数为 0），重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
+            self.bm25 = bm25_store.build(
+                bm25_source, k=BM25_CANDIDATE_K,
+                metadata=bm25_snapshot_metadata,
+            )
         elif source_files_out_of_sync(self.bm25.docs, bm25_source):
             logger.info("[RAG] BM25 索引与文档目录不一致（残留/缺失），重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
+            self.bm25 = bm25_store.build(
+                bm25_source, k=BM25_CANDIDATE_K,
+                metadata=bm25_snapshot_metadata,
+            )
         elif bm25_store.get_content_hash() and bm25_store.get_content_hash() != compute_content_hash(bm25_source):
             logger.info("[RAG] BM25 索引内容 hash 不匹配（文档已修改），重建...")
-            self.bm25 = bm25_store.build(bm25_source, k=BM25_CANDIDATE_K)
+            self.bm25 = bm25_store.build(
+                bm25_source, k=BM25_CANDIDATE_K,
+                metadata=bm25_snapshot_metadata,
+            )
         else:
             logger.info(
                 f"[RAG] BM25 索引从磁盘加载成功 "
@@ -580,11 +614,19 @@ class RAGPipeline:
         if not doc_ids or self.bm25_store is None:
             return
         try:
-            new_retriever = self.bm25_store.remove_documents(
-                doc_ids, k=BM25_CANDIDATE_K, file_paths=file_paths,
-            )
-            if new_retriever is not None:
-                self.bm25 = new_retriever
+            rebuild = getattr(type(self.bm25_store), "rebuild_from_vectorstore", None)
+            if callable(rebuild):
+                # 向量删除已经完成，BM25 必须从删除后的完整向量集合重建，
+                # 不能再沿用旧 BM25 做单文档过滤，否则历史残留会继续存在。
+                rebuild(self.bm25_store, self.vectordb, k=BM25_CANDIDATE_K)
+                self.bm25 = self.bm25_store.load(k=BM25_CANDIDATE_K)
+            else:
+                # 兼容旧测试桩/外部实现；生产 BM25Store 一定走全量同源重建。
+                new_retriever = self.bm25_store.remove_documents(
+                    doc_ids, k=BM25_CANDIDATE_K, file_paths=file_paths,
+                )
+                if new_retriever is not None:
+                    self.bm25 = new_retriever
             logger.info(f"[RAG] BM25 已移除文档 {doc_ids} (file_paths={file_paths})")
         except Exception as e:
             logger.warning(f"[RAG] BM25 移除文档失败 ({doc_ids}): {e}")

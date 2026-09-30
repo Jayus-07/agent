@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, List, Optional
@@ -26,6 +28,10 @@ from backend.shared.logger import logger
 
 # 索引格式版本：分词器等影响倒排统计的变更需递增，load 时版本不符自动重建
 BM25_META_VERSION = 2
+
+# 同一进程内的读写互斥。跨进程读取使用单文件 bundle，避免看到
+# corpus.pkl 与 docs.pkl 来自不同一代索引的中间状态。
+_BUILD_LOCK = threading.RLock()
 
 
 def _tokenize_chinese(text: str) -> List[str]:
@@ -111,6 +117,23 @@ def compute_content_hash_unordered(docs: list) -> str:
     return h.hexdigest()[:16]
 
 
+def compute_vector_manifest_hash(docs: list) -> str:
+    """按向量 chunk 身份和内容计算稳定 manifest hash。"""
+    import hashlib
+
+    records = sorted(
+        (
+            str((doc.metadata or {}).get("vector_id") or ""),
+            str((doc.metadata or {}).get("doc_id") or ""),
+            str((doc.metadata or {}).get("chunk_id") or ""),
+            str(doc.page_content or ""),
+        )
+        for doc in docs
+    )
+    payload = json.dumps(records, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 class BM25Store:
     """磁盘持久化 BM25 索引。
 
@@ -124,6 +147,7 @@ class BM25Store:
     def __init__(self, index_dir: Optional[str] = None):
         self.index_dir = Path(index_dir or BM25_INDEX_DIR)
         self.index_dir.mkdir(parents=True, exist_ok=True)
+        self._bundle_path = self.index_dir / "index.pkl"
         self._meta_path = self.index_dir / "meta.json"
         self._corpus_path = self.index_dir / "corpus.pkl"
         self._docs_path = self.index_dir / "docs.pkl"
@@ -131,7 +155,8 @@ class BM25Store:
     # ── 公共方法 ──────────────────────────────────────
 
     def build(
-        self, docs: List[Document], k: int = None
+        self, docs: List[Document], k: int = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Optional[BM25Retriever]:
         """构建并持久化 BM25 索引。
 
@@ -148,34 +173,44 @@ class BM25Store:
         logger.info(f"[BM25Store] 构建索引，{len(docs)} 个文档...")
         t0 = time.time()
 
-        # 空文档列表：BM25Retriever.from_documents([]) 会抛异常
-        if not docs:
-            elapsed = time.time() - t0
-            self._write_meta(0, elapsed)
-            # 清理旧的持久化文件
-            for p in (self._corpus_path, self._docs_path):
-                if p.exists():
-                    p.unlink()
-            logger.info("[BM25Store] 空文档列表，跳过索引构建")
-            return None
-
-        retriever = BM25Retriever.from_documents(docs, k=k, preprocess_func=_tokenize_chinese)
-
-        # 持久化 CountVectorizer（已拟合）+ SHA256 校验
-        corpus_data = pickle.dumps(retriever.vectorizer)
-        with open(self._corpus_path, "wb") as f:
-            f.write(corpus_data)
-        self._write_checksum(self._corpus_path, corpus_data)
-
-        # 持久化原始 Document 列表 + SHA256 校验
-        docs_data = pickle.dumps(docs)
-        with open(self._docs_path, "wb") as f:
-            f.write(docs_data)
-        self._write_checksum(self._docs_path, docs_data)
+        retriever = None
+        if docs:
+            retriever = BM25Retriever.from_documents(
+                docs, k=k, preprocess_func=_tokenize_chinese
+            )
 
         elapsed = time.time() - t0
-        content_hash = compute_content_hash(docs)
-        self._write_meta(len(docs), elapsed, content_hash=content_hash)
+        content_hash = compute_content_hash(docs) if docs else ""
+        meta = self._make_meta(
+            len(docs), elapsed, content_hash=content_hash, metadata=metadata
+        )
+
+        # index.pkl 是跨进程读取的单文件快照；旧的三个文件仍保留，
+        # 供旧运维脚本和历史索引平滑升级。
+        bundle = {
+            "version": BM25_META_VERSION,
+            "vectorizer": retriever.vectorizer if retriever else None,
+            "docs": list(docs),
+            "meta": meta,
+        }
+        bundle_data = pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL)
+        corpus_data = pickle.dumps(
+            retriever.vectorizer if retriever else None,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        docs_data = pickle.dumps(list(docs), protocol=pickle.HIGHEST_PROTOCOL)
+        with _BUILD_LOCK:
+            self._write_atomic(self._bundle_path, bundle_data)
+            self._write_atomic_checksum(self._bundle_path, bundle_data)
+            self._write_atomic(self._corpus_path, corpus_data)
+            self._write_atomic_checksum(self._corpus_path, corpus_data)
+            self._write_atomic(self._docs_path, docs_data)
+            self._write_atomic_checksum(self._docs_path, docs_data)
+            self._write_meta_dict(meta)
+
+        if not docs:
+            logger.info("[BM25Store] 空文档列表，已发布空索引")
+            return None
         logger.info(
             f"[BM25Store] 索引构建完成: {len(docs)} 文档, {elapsed:.1f}s, hash={content_hash}"
         )
@@ -190,15 +225,25 @@ class BM25Store:
         Returns:
             BM25Retriever 实例，索引不存在或损坏时返回 None
         """
-        if k is None:
-            k = BM25_CANDIDATE_K
-        if not self._corpus_path.exists() or not self._docs_path.exists():
-            logger.info("[BM25Store] 索引文件不存在，需要重建")
-            return None
-
         try:
-            vectorizer = self._safe_load_pickle(self._corpus_path)
-            docs = self._safe_load_pickle(self._docs_path)
+            if k is None:
+                k = BM25_CANDIDATE_K
+            bundle = (
+                self._safe_load_pickle(self._bundle_path)
+                if self._bundle_path.exists()
+                else None
+            )
+            if isinstance(bundle, dict) and "docs" in bundle:
+                vectorizer = bundle.get("vectorizer")
+                docs = bundle.get("docs")
+                meta = bundle.get("meta") or {}
+            else:
+                if not self._corpus_path.exists() or not self._docs_path.exists():
+                    logger.info("[BM25Store] 索引文件不存在，需要重建")
+                    return None
+                vectorizer = self._safe_load_pickle(self._corpus_path)
+                docs = self._safe_load_pickle(self._docs_path)
+                meta = self._read_meta()
             if vectorizer is None or docs is None:
                 return None
 
@@ -211,7 +256,6 @@ class BM25Store:
                 preprocess_func=_tokenize_chinese,
             )
 
-            meta = self._read_meta()
             # 版本不匹配（如分词器变更）→ 旧索引的倒排统计与新查询分词不一致，需重建
             if meta.get("version", 0) < BM25_META_VERSION:
                 logger.info(
@@ -361,16 +405,95 @@ class BM25Store:
         )
         return self.build(remaining, k=k)
 
+    def rebuild_from_vectorstore(
+        self,
+        vectorstore: Any,
+        *,
+        exclude_ids: set[str] | None = None,
+        k: int | None = None,
+    ) -> dict[str, Any]:
+        """从当前向量集合重建 BM25，保证两者使用同一批 chunk。
+
+        ``exclude_ids`` 用于重索引的先写后删窗口：旧 chunk 仍在向量库中，
+        但已不属于待发布版本，必须在 BM25 快照中排除。构建完成后才会原子
+        发布 bundle；构建失败会保留上一代 BM25。
+        """
+        payload = vectorstore.get()
+        ids = list(payload.get("ids") or [])
+        texts = list(payload.get("documents") or [])
+        metadatas = list(payload.get("metadatas") or [])
+        if not (len(ids) == len(texts) == len(metadatas)):
+            raise ValueError(
+                "向量库返回的 ids/documents/metadatas 数量不一致"
+            )
+
+        excluded = {str(item) for item in (exclude_ids or set())}
+        docs: list[Document] = []
+        for vector_id, text, raw_meta in zip(ids, texts, metadatas):
+            vector_id = str(vector_id)
+            if vector_id in excluded:
+                continue
+            if not str(text or "").strip():
+                raise ValueError(f"向量 chunk 内容为空，拒绝发布 BM25: {vector_id}")
+            meta = dict(raw_meta or {})
+            meta.setdefault("vector_id", vector_id)
+            meta.setdefault("chunk_id", vector_id)
+            docs.append(Document(page_content=str(text), metadata=meta))
+
+        collection = str(
+            getattr(vectorstore, "_collection", None)
+            or getattr(vectorstore, "_collection_name", None)
+            or "unknown"
+        )
+        vector_hash = compute_vector_manifest_hash(docs)
+        self.build(
+            docs,
+            k=k,
+            metadata={
+                "source": "vectorstore",
+                "collection": collection,
+                "vector_count": len(docs),
+                "vector_set_hash": vector_hash,
+                "excluded_vector_count": len(excluded),
+            },
+        )
+        loaded_ids = {
+            str((doc.metadata or {}).get("vector_id"))
+            for doc in self.load_docs()
+        }
+        expected_ids = {
+            str((doc.metadata or {}).get("vector_id")) for doc in docs
+        }
+        if loaded_ids != expected_ids:
+            raise RuntimeError(
+                "BM25 发布后集合校验失败: "
+                f"expected={len(expected_ids)} actual={len(loaded_ids)}"
+            )
+        return {
+            "collection": collection,
+            "doc_count": len(docs),
+            "vector_set_hash": vector_hash,
+            "excluded_vector_count": len(excluded),
+        }
+
     def load_docs(self) -> List[Document]:
         """从磁盘加载持久化的 Document 列表（供一致性检查等外部消费者使用）。
 
         Returns:
             Document 列表；索引不存在或损坏时返回空列表
         """
-        if not self._docs_path.exists():
-            return []
         try:
-            loaded = self._safe_load_pickle(self._docs_path)
+            bundle = (
+                self._safe_load_pickle(self._bundle_path)
+                if self._bundle_path.exists()
+                else None
+            )
+            if isinstance(bundle, dict) and "docs" in bundle:
+                loaded = bundle.get("docs")
+            else:
+                if not self._docs_path.exists():
+                    return []
+                loaded = self._safe_load_pickle(self._docs_path)
             return loaded if loaded is not None else []
         except Exception:
             logger.warning("[BM25Store] load_docs 加载失败")
@@ -379,24 +502,38 @@ class BM25Store:
     @property
     def is_stale(self) -> bool:
         """检查索引是否过期（文档数为 0 视为过期）。"""
-        if not self._meta_path.exists():
+        if not self._bundle_path.exists() and not self._meta_path.exists():
             return True
-        meta = self._read_meta()
+        meta = self.get_metadata()
         return meta.get("doc_count", 0) == 0
 
     def doc_count(self) -> int:
         """返回已持久化的文档数量。"""
-        meta = self._read_meta()
+        meta = self.get_metadata()
         return meta.get("doc_count", 0)
 
     def get_content_hash(self) -> str:
         """返回已持久化的内容 hash（空字符串表示无记录）。"""
-        return self._read_meta().get("content_hash", "")
+        return self.get_metadata().get("content_hash", "")
+
+    def get_metadata(self) -> dict[str, Any]:
+        """返回 BM25 快照元数据，供启动门禁和管理端审计使用。"""
+        if self._bundle_path.exists():
+            bundle = self._safe_load_pickle(self._bundle_path)
+            if isinstance(bundle, dict) and isinstance(bundle.get("meta"), dict):
+                return dict(bundle["meta"])
+        return self._read_meta()
 
     # ── 内部方法 ──────────────────────────────────────
 
-    def _write_meta(self, doc_count: int, build_time_s: float, content_hash: str = "") -> None:
-        """写入元数据 JSON 文件。"""
+    def _make_meta(
+        self,
+        doc_count: int,
+        build_time_s: float,
+        content_hash: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """生成索引元数据。"""
         meta = {
             "doc_count": doc_count,
             "build_time_s": round(build_time_s, 1),
@@ -405,8 +542,54 @@ class BM25Store:
         }
         if content_hash:
             meta["content_hash"] = content_hash
-        with open(self._meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        if metadata:
+            meta.update(metadata)
+        return meta
+
+    def _write_meta(
+        self,
+        doc_count: int,
+        build_time_s: float,
+        content_hash: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """写入元数据 JSON 文件。"""
+        self._write_meta_dict(
+            self._make_meta(doc_count, build_time_s, content_hash, metadata)
+        )
+
+    def _write_meta_dict(self, meta: dict[str, Any]) -> None:
+        """原子写入元数据 JSON 文件。"""
+        data = json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")
+        self._write_atomic(self._meta_path, data)
+
+    @staticmethod
+    def _write_atomic(path: Path, data: bytes) -> None:
+        """同目录临时文件 + replace，避免半写文件被读取。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
+        os.close(temp_fd)
+        temp_path = Path(temp_name)
+        try:
+            with open(temp_path, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    def _write_atomic_checksum(self, data_path: Path, data: bytes) -> None:
+        """原子写入数据文件的 SHA256 校验文件。"""
+        import hashlib
+
+        self._write_atomic(
+            self._checksum_path(data_path),
+            hashlib.sha256(data).hexdigest().encode("ascii"),
+        )
 
     def _read_meta(self) -> dict:
         """读取元数据 JSON 文件。"""

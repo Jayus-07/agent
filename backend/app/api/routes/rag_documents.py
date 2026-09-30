@@ -417,7 +417,8 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
             DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
             kb_id=reg_kb or "default",
             department=reg_dept or "general",
-            bm25_store=pipeline.bm25_store,  # P0-1: 重索引后立即同步 BM25
+            # 生产 BM25Store 会从向量集合原子重建，并排除旧 chunk。
+            bm25_store=pipeline.bm25_store,
             processing_lineage_repository=get_processing_lineage_repository(),
             processing_task_id=f"reindex:{doc_id}",
             processing_batch_id=batch_id,
@@ -427,7 +428,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         result = indexer.reindex_file(file_path)
         elapsed_ms = int((time.time() - _t0) * 1000)
 
-        # 重索引后刷新 pipeline 内存 BM25（indexer 已写入磁盘，这里同步内存引用）
+        # 重索引后刷新 pipeline 内存 BM25（indexer 已发布同源快照）
         try:
             pipeline.refresh_bm25_from_store()
         except Exception as e:
