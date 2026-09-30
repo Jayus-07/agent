@@ -30,8 +30,9 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
         未命中客服域 / CS 关闭 / 未命中灰度 → None（走主图 = control 组）。
     """
     try:
-        from backend.config.customer_service import CS_ENABLED
-        if not CS_ENABLED:
+        # M16：域开关迁 sys_config——DB 覆盖免重启生效，env 作默认值
+        from backend.services import sys_config
+        if sys_config.get_mode("CS_ENABLED") != "true":
             return None
     except Exception:
         return None
@@ -263,15 +264,17 @@ def _in_rollout(session_id: str) -> bool:
 
     用 md5 而非内置 hash——Python hash 有随机盐，进程重启会改变分组。
     """
-    from backend.config.customer_service import (
-        CS_ROLLOUT_PERCENT, CS_ROLLOUT_WHITELIST,
-    )
+    from backend.config.customer_service import CS_ROLLOUT_WHITELIST
+    # M16：放量百分比走 sys_config 动态读（灰度梯子免重启）；get_mode
+    # fail-closed 恒返回合法 digit，or "0" 兜底=异常时不放量
+    from backend.services import sys_config
+    percent = int(sys_config.get_mode("CS_ROLLOUT_PERCENT") or "0")
     if session_id in CS_ROLLOUT_WHITELIST:
         return True
-    if CS_ROLLOUT_PERCENT >= 100:
+    if percent >= 100:
         return True
     digest = int(__import__("hashlib").md5(session_id.encode()).hexdigest(), 16)
-    return (digest % 100) < CS_ROLLOUT_PERCENT
+    return (digest % 100) < percent
 
 
 def _stamp_variant(session_id: str, variant: str) -> None:

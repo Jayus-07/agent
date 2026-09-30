@@ -85,8 +85,9 @@ def try_travel_prefilter(query: str, state: dict) -> dict | None:
         未命中 / 域关闭 / 判定异常 → None（继续走主 Router）。
     """
     try:
-        from backend.config.travel import TRAVEL_ENABLED
-        if not TRAVEL_ENABLED:
+        # M16：域开关迁 sys_config——DB 覆盖免重启生效，env 作默认值
+        from backend.services import sys_config
+        if sys_config.get_mode("TRAVEL_ENABLED") != "true":
             return None
     except Exception:
         return None

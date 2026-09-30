@@ -49,6 +49,20 @@ from backend.shared.logger import logger
 #   3. 模型角色的解析入口是 model_roles.resolve_model，热路径在配置导入链上，
 #      不能依赖本模块（本模块 import SQLAlchemy + asyncio，会拖重配置导入）。
 
+def _bool_norm(v: str) -> str | None:
+    """布尔归一 validator：对齐 config 常量的宽容解析（1/true/yes=true）。
+
+    返回 str = 归一化后的合法形态（_normalize_with 会采用），保证缓存与
+    get_mode 的返回值恒为 "true"/"false"，消费方统一 == "true" 判断；
+    None = 非法（回退注册表缺省）。
+    """
+    if v in ("1", "true", "yes"):
+        return "true"
+    if v in ("0", "false", "no"):
+        return "false"
+    return None
+
+
 _SWITCHES: dict[str, dict[str, Any]] = {
     "JWT_SESSION_GUARD_MODE": {
         "allowed": ("off", "audit", "enforce"),
@@ -64,6 +78,31 @@ _SWITCHES: dict[str, dict[str, Any]] = {
         "validator": lambda v: v.isdigit() and 0 <= int(v) <= 100,
         "default": "100",
         "desc": "客服自动派单灰度放量百分比（enforce 下按会话稳定哈希分桶；P9 梯子 5/20/50/100）",
+    },
+    # ── M16（治理台账 D16）：业务域开关迁 sys_config ─────────────
+    # env 作默认值（_env_default 自动读同名 env，布尔归一对齐 config 常量的
+    # 1/true/yes 宽容解析）；DB 覆盖免重启生效（15s 轮询）。消费点 = 三个
+    # prefilter 总闸 + CS 灰度判定（get_mode 动态读）；config 模块常量保留
+    # 为启动期快照（兼容既有 re-export），运行时行为以本表覆盖层为唯一出口。
+    "CS_ENABLED": {
+        "validator": _bool_norm,
+        "default": "false",
+        "desc": "客服域总闸（false=CS 预过滤降级主路由；true 时另受 CS_ROLLOUT_PERCENT 灰度约束）",
+    },
+    "TRAVEL_ENABLED": {
+        "validator": _bool_norm,
+        "default": "false",
+        "desc": "旅游域总闸（false=旅游预过滤不命中，走主 Router）",
+    },
+    "SELECTION_FUNNEL_ENABLED": {
+        "validator": _bool_norm,
+        "default": "false",
+        "desc": "选品漏斗域总闸（false=选品预过滤不命中，走主 Router）",
+    },
+    "CS_ROLLOUT_PERCENT": {
+        "validator": lambda v: v if v.isdigit() and 0 <= int(v) <= 100 else None,
+        "default": "100",
+        "desc": "客服域灰度放量百分比（按会话稳定哈希分桶，白名单恒 treatment；100=全量）",
     },
 }
 
@@ -94,7 +133,14 @@ def _normalize_with(spec: dict[str, Any] | None, raw: Any) -> str | None:
     value = value.strip() if spec.get("case_sensitive") else value.strip().lower()
     validator = spec.get("validator")
     if validator is not None:
-        return value if validator(value) else None
+        checked = validator(value)
+        if checked is None:
+            return None
+        if isinstance(checked, str):
+            # 归一化 validator：返回值即合法形态（如布尔归一 1/yes→true），
+            # 保证缓存与 get_mode 的返回值落在规范集上，消费方统一判断
+            return checked
+        return value if checked else None   # 谓词 validator：原值放行（既有语义）
     return value if value in spec.get("allowed", ()) else None
 
 

@@ -57,8 +57,9 @@ def try_selection_funnel_prefilter(query: str, state: dict) -> dict | None:
         未命中 / 域关闭 / 异常 → None（继续走主 Router）。
     """
     try:
-        from backend.config.selection_funnel import SELECTION_FUNNEL_ENABLED
-        if not SELECTION_FUNNEL_ENABLED:
+        # M16：域开关迁 sys_config——DB 覆盖免重启生效，env 作默认值
+        from backend.services import sys_config
+        if sys_config.get_mode("SELECTION_FUNNEL_ENABLED") != "true":
             return None
     except Exception:
         return None

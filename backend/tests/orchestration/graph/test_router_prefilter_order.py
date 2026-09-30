@@ -42,16 +42,29 @@ def fake_detector(monkeypatch):
     return det
 
 
-@pytest.fixture
-def travel_on(monkeypatch):
-    import backend.config.travel as tc
-    monkeypatch.setattr(tc, "TRAVEL_ENABLED", True)
+@pytest.fixture(autouse=True)
+def _reset_switch_cache():
+    """M16 后 prefilter 总闸读 sys_config 缓存：前后各清，防污染其他测试。"""
+    from backend.services import sys_config
+
+    sys_config.reset_cache_for_tests()
+    yield
+    sys_config.reset_cache_for_tests()
 
 
 @pytest.fixture
-def cs_on(monkeypatch):
-    import backend.config.customer_service as cc
-    monkeypatch.setattr(cc, "CS_ENABLED", True)
+def travel_on():
+    """M16：经 sys_config 缓存开旅游总闸（patch config 常量已不生效）。"""
+    from backend.services import sys_config
+
+    sys_config._values["TRAVEL_ENABLED"] = "true"
+
+
+@pytest.fixture
+def cs_on():
+    from backend.services import sys_config
+
+    sys_config._values["CS_ENABLED"] = "true"
 
 
 class TestPrefilterOrder:
@@ -172,8 +185,8 @@ class TestDomainHintLock:
         self, fake_detector, travel_on, monkeypatch,
     ):
         """CS 总闸关闭：域锁降级回主路由（旅游 prefilter 也被跳过）。"""
-        import backend.config.customer_service as cc
-        monkeypatch.setattr(cc, "CS_ENABLED", False)
+        from backend.services import sys_config
+        sys_config._values["CS_ENABLED"] = "false"  # M16：DB 覆盖关闭语义
 
         def _boom():
             raise RuntimeError("router off in test")

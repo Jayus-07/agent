@@ -147,18 +147,30 @@ def test_override_removed_falls_back_to_env(fresh, monkeypatch):
 
 # ── GET /sys/config ─────────────────────────────────────────
 
-def test_get_config_lists_registered_switches(client):
+def test_get_config_lists_registered_switches(client, monkeypatch):
+    # M16 域开关默认值断言须排除根 .env 的真实取值（测试基线=env 未设置）
+    for k in ("CS_ENABLED", "TRAVEL_ENABLED", "SELECTION_FUNNEL_ENABLED",
+              "CS_ROLLOUT_PERCENT"):
+        monkeypatch.delenv(k, raising=False)
     r = client.get("/api/sys/config", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     items = {i["key"]: i for i in r.json()["items"]}
+    # M16：+4 域开关（三总闸 + CS 灰度），GET /sys/config 即全量开关视图
     assert set(items) == {
         "JWT_SESSION_GUARD_MODE", "SENSITIVE_API_GUARD_MODE",
         "CS_DISPATCH_ROLLOUT_PERCENT",
+        "CS_ENABLED", "TRAVEL_ENABLED", "SELECTION_FUNNEL_ENABLED",
+        "CS_ROLLOUT_PERCENT",
     }
     assert items["JWT_SESSION_GUARD_MODE"]["allowed"] == ["off", "audit", "enforce"]
     assert items["SENSITIVE_API_GUARD_MODE"]["source"] == "env-default"
     assert items["CS_DISPATCH_ROLLOUT_PERCENT"]["mode"] == "100"
     assert items["CS_DISPATCH_ROLLOUT_PERCENT"]["allowed"] == []
+    # 域开关默认关（env 未设置时），布尔归一合法集展示为空（validator 项）
+    assert items["CS_ENABLED"]["mode"] == "false"
+    assert items["TRAVEL_ENABLED"]["mode"] == "false"
+    assert items["SELECTION_FUNNEL_ENABLED"]["mode"] == "false"
+    assert items["CS_ROLLOUT_PERCENT"]["mode"] == "100"
 
 
 def test_get_config_viewer_403(client):
@@ -221,3 +233,44 @@ def test_overview_reflects_db_override(client, fresh, monkeypatch):
     assert m["allowed"] == ["off", "audit", "enforce"]
     gw = r.json()["data"]["modes"]["gatewaySessionCheck"]
     assert gw["mode"] is None and "allowed" not in gw   # 部署层不猜值、不可切
+
+
+# ── M16：域开关迁 sys_config（布尔归一 + env 兜底语义）────────
+
+def test_bool_env_values_normalized(fresh, monkeypatch):
+    """env 写 1/yes 与 true 等价（对齐 config 常量历史解析口径）；
+    0/no/false 等价；非法值回落注册表缺省 false。"""
+    for raw, expect in (("1", "true"), ("yes", "true"), ("TRUE", "true"),
+                        ("0", "false"), ("no", "false"), ("", "false")):
+        sys_config.reset_cache_for_tests()
+        monkeypatch.setenv("CS_ENABLED", raw)
+        assert sys_config.get_mode("CS_ENABLED") == expect, raw
+    sys_config.reset_cache_for_tests()
+    monkeypatch.delenv("CS_ENABLED", raising=False)
+    assert sys_config.get_mode("CS_ENABLED") == "false"
+
+
+def test_put_bool_domain_switch_roundtrip(client, fresh):
+    """域开关 PUT 写入即生效（免重启）+ 审计历史落 old→new。"""
+    r = client.put("/api/sys/config/TRAVEL_ENABLED", json={"value": "true"},
+                   headers=ADMIN_HEADERS)
+    assert r.status_code == 200
+    assert sys_config.get_mode("TRAVEL_ENABLED") == "true"
+    # 归一形态写入（1/yes）也合法
+    r = client.put("/api/sys/config/TRAVEL_ENABLED", json={"value": "yes"},
+                   headers=ADMIN_HEADERS)
+    assert r.status_code == 200
+    assert sys_config.get_mode("TRAVEL_ENABLED") == "true"
+    # 历史审计两跳
+    hist = fresh.history
+    assert [h[2] for h in hist if h[0] == "TRAVEL_ENABLED"] == ["true", "true"]
+
+
+def test_rollout_percent_put_and_getmode(client, fresh):
+    r = client.put("/api/sys/config/CS_ROLLOUT_PERCENT", json={"value": "20"},
+                   headers=ADMIN_HEADERS)
+    assert r.status_code == 200
+    assert sys_config.get_mode("CS_ROLLOUT_PERCENT") == "20"
+    r = client.put("/api/sys/config/CS_ROLLOUT_PERCENT", json={"value": "101"},
+                   headers=ADMIN_HEADERS)
+    assert r.status_code == 400

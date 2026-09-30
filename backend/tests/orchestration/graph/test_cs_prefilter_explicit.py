@@ -6,15 +6,24 @@
 import pytest
 
 from backend.orchestration.graph.cs_prefilter import try_cs_prefilter
+from backend.services import sys_config
+
+
+@pytest.fixture(autouse=True)
+def _reset_switch_cache():
+    """M16 后总闸/灰度读 sys_config 缓存：前后各清，防污染其他测试。"""
+    sys_config.reset_cache_for_tests()
+    yield
+    sys_config.reset_cache_for_tests()
 
 
 @pytest.fixture()
 def cs_enabled(monkeypatch):
-    """CS_ENABLED=true + 关闭真实域检测/路由干扰。"""
+    """CS 总闸开 + 灰度全关（M16：经 sys_config 缓存=运行时唯一事实源）。"""
     import backend.config.customer_service as cs_config
 
-    monkeypatch.setattr(cs_config, "CS_ENABLED", True)
-    monkeypatch.setattr(cs_config, "CS_ROLLOUT_PERCENT", 0)  # 灰度全关
+    sys_config._values["CS_ENABLED"] = "true"
+    sys_config._values["CS_ROLLOUT_PERCENT"] = "0"  # 灰度全关
     monkeypatch.setattr(cs_config, "CS_ROLLOUT_WHITELIST", set())
     return cs_config
 
@@ -121,8 +130,7 @@ def test_cs_guard_block_short_circuits_before_cs_graph(cs_enabled, monkeypatch):
 
 def test_cs_disabled_blocks_explicit_too(cs_enabled, monkeypatch):
     """CS_ENABLED=false 时直通层同样关闭（CS 节点未挂载，不能路由过去）。"""
-    import backend.config.customer_service as cs_config
-    monkeypatch.setattr(cs_config, "CS_ENABLED", False)
+    sys_config._values["CS_ENABLED"] = "false"  # M16：DB 覆盖关闭语义
 
     result = try_cs_prefilter("转人工", {"session_id": "s4", "user_id": "u1"})
     assert result is None
@@ -180,8 +188,7 @@ def test_domain_lock_bypasses_rollout_control(cs_enabled, monkeypatch):
 
 def test_domain_lock_still_respects_cs_enabled(cs_enabled, monkeypatch):
     """CS_ENABLED=false 时域锁同样降级（CS 节点未挂载，不能路由过去）。"""
-    import backend.config.customer_service as cs_config
-    monkeypatch.setattr(cs_config, "CS_ENABLED", False)
+    sys_config._values["CS_ENABLED"] = "false"  # M16：DB 覆盖关闭语义
 
     result = try_cs_prefilter(
         "退款怎么处理", {"session_id": "s8", "user_id": "u1"}, forced=True,
