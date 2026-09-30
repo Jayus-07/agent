@@ -210,9 +210,10 @@ class TestDegradation:
         def fake_forecast(city):
             calls["n"] += 1
             return ({"days": [{"date": date.today().isoformat(),
-                               "day": {"weather": "暴雨"}, "night": {"weather": "晴"}}]}, "")
+                               "day": {"weather": "暴雨"}, "night": {"weather": "晴"}}]},
+                    "", None)
 
-        monkeypatch.setattr(W, "fetch_forecast", fake_forecast)
+        monkeypatch.setattr(W, "fetch_forecast_evidence", fake_forecast)
         far = date.today() + __import__("datetime").timedelta(days=60)
         itinerary = make_itinerary(brief=TravelBrief(
             destination="测试城", days=1, start_date=far))
@@ -232,9 +233,9 @@ class TestDegradation:
         from backend.travel.models.brief import TravelBrief
 
         today_iso = date.today().isoformat()
-        monkeypatch.setattr(W, "fetch_forecast", lambda city: ({
+        monkeypatch.setattr(W, "fetch_forecast_evidence", lambda city: ({
             "days": [{"date": today_iso, "day": {"weather": "大雨"},
-                      "night": {"weather": "晴"}}]}, ""))
+                      "night": {"weather": "晴"}}]}, "", None))
         outdoor = make_poi(poi_id="p_out", name="登山步道", tags=["自然"])
         itinerary = make_itinerary(brief=TravelBrief(
             destination="测试城", days=1, start_date=date.today()))

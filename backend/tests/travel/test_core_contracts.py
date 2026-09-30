@@ -4,7 +4,7 @@ Evidence 两条 fail-fast 不变量 + 三档消费口径 + 信封/事件可序�
 """
 import dataclasses
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -18,7 +18,10 @@ from backend.travel.core.events import build_travel_event, emit_travel_event
 
 
 def _ts(**kwargs) -> datetime:
-    return datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc, **kwargs)
+    # Phase 4 修复时间炸弹：原固定 2026-09-29T12:00Z，expire_at=+1h 的
+    # "fresh" 断言自 09-30 起必红（evidence_level 对比 datetime.now()）。
+    # 改为 now 相对基准，±timedelta 语义不变。
+    return datetime.now().astimezone() + timedelta(**kwargs)
 
 
 class TestTravelContext:

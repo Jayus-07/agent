@@ -101,6 +101,13 @@ class TravelGraphState(TypedDict, total=False):
     # 「知识库参考」段。与 notes 分开：notes 是「行程被迫做的取舍」，
     # 摘录是「可引用的外部知识」，语义不同不应混排。
     knowledge_refs: list[str]
+    # 统一证据表（v4 §4，Phase 4）：fact_id → Evidence dict。模型唯一归属
+    # core/contracts.py，本文件只声明 state 键。纪律：不进
+    # new_travel_graph_input 预置（跨轮契约 1）；读取一律 .get()（跨轮契约
+    # 2——旧 checkpoint 无此键 = 无证据，SOURCE_STALE 不误报）；写入走
+    # {**state.get("evidences", {}), **新证据} 合并（无 reducer 键是覆盖
+    # 语义，直接写会冲掉前序节点证据）。纯 dict 可序列化。
+    evidences: dict[str, dict]
 
     # === 执行态 ===
     stage: str

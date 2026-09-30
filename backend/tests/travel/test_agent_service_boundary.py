@@ -165,8 +165,15 @@ class TestReExportCompat:
         from backend.travel.experts.weather import (  # noqa: F401
             bad_weather_dates,
             fetch_forecast,
+            fetch_forecast_evidence,
             is_bad_weather,
             plan_weather_swaps,
+        )
+        from backend.travel.experts.poi import (  # noqa: F401
+            build_candidate_evidences,
+        )
+        from backend.travel.experts.risk import (  # noqa: F401
+            build_knowledge_evidence,
         )
 
 

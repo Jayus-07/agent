@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from backend.config import travel as T
 from backend.tools.travel.poi import search_poi
 from backend.tools.travel.routing import day_radius_km
+from backend.travel.core.contracts import SourceType
+from backend.travel.core.evidence_utils import evidence_to_dict, make_evidence, parse_iso
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.poi import Poi
 from backend.travel.planning import resolve_must_go
@@ -69,6 +71,29 @@ def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
             if added:
                 candidates = candidates + added
     return candidates, extra_notes
+
+
+def build_candidate_evidences(candidates: list[Poi]) -> dict[str, dict]:
+    """候选池证据表（v4 §4，Phase 4；纯函数派生，检索逻辑零改动）。
+
+    - 种子 POI → SEED/0.5/expire_at=None（坐标/营业时间/票价是自声明示例值，
+      诚实标注且不冒充时效）；
+    - 外部补全 POI → LIVE/0.95/verified_at=observed_at（坐标权威性归
+      Evidence；营业时间/票价的占位语义归 verification_status 字段，
+      由 validator POI_UNVERIFIED 消费——字段级真相不并入证据单值）。
+    """
+    evidences: dict[str, dict] = {}
+    for poi in candidates:
+        value = {"name": poi.name, "verification_status": poi.verification_status}
+        if poi.source.startswith("seed"):
+            ev = make_evidence(poi.poi_id, value=value, source=poi.source,
+                               source_type=SourceType.SEED)
+        else:
+            ev = make_evidence(poi.poi_id, value=value, source=poi.source,
+                               source_type=SourceType.LIVE,
+                               verified_at=parse_iso(poi.observed_at))
+        evidences[poi.poi_id] = evidence_to_dict(ev)
+    return evidences
 
 
 def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:

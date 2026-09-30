@@ -291,12 +291,19 @@ class TestEndToEnd:
         first = self._invoke(message)
         second = self._invoke(message)
         # 确定性断言的是「规划产物」（天数/POI 序列/时刻/费用），不含生成
-        # 时刻。created_at 是时钟字段：接真实路线 Provider 后两次调用常跨秒
-        # （首跑冷缓存走 live API），直接整字典比较会因时钟字段假失败。
+        # 时刻。时钟字段剥离（STOP J9 模式，Phase 4 补全）：
+        # - created_at：行程生成时刻；
+        # - legs[].observed_at：STOP J 时效语义给本地估算腿打的「此刻估算」
+        #   观测戳（秒级，逐腿独立取时）——两轮间隔跨秒即假失败。实测触发：
+        #   run1 的 risk 节点 RAG 初始化重试（known debt，knowledge 无显式
+        #   超时）把轮间隔拉到 16s，观测戳必不同。同族时钟字段，同款剥离。
         a = dict(first["itinerary"] or {})
         b = dict(second["itinerary"] or {})
-        a.pop("created_at", None)
-        b.pop("created_at", None)
+        for d in (a, b):
+            d.pop("created_at", None)
+            for day in d.get("days", []):
+                for leg in day.get("legs", []):
+                    leg.pop("observed_at", None)
         assert a == b
 
     def test_report_mentions_data_source_disclosure(self):

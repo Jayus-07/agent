@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from backend.shared.logger import logger
 
 # 明确未接入的数据能力 —— 措辞要具体到用户能动作的地步
@@ -61,3 +63,31 @@ def retrieve_knowledge(
     except Exception:  # noqa: BLE001 — 双保险：检索层已兜底，这里防意外
         logger.debug("[TravelRiskService] 知识库检索失败（已跳过）", exc_info=True)
         return [], ""
+
+
+def build_knowledge_evidence(
+    destination: str, chunks: list[str], source_tag: str,
+) -> dict[str, dict]:
+    """知识摘录证据表（v4 §4，Phase 4；纯函数，检索逻辑零改动）。
+
+    source_type=RAG（基线 0.7）；verified_at=检索时点——检索即核实事件，
+    来源文档经 source_tag 锚定进 source。value 只存摘录索引不存全文
+    （全文在 state.knowledge_refs，控 checkpoint 体积）；expire_at=None
+    （知识摘录无时效边界，信任档位由 RAG 基线表达）。"""
+    if not chunks:
+        return {}
+    from backend.travel.core.contracts import SourceType
+    from backend.travel.core.evidence_utils import evidence_to_dict, make_evidence
+
+    verified_at = datetime.now().astimezone()
+    evidences: dict[str, dict] = {}
+    for i, chunk in enumerate(chunks):
+        ev = make_evidence(
+            f"kb:{destination}:{i}",
+            value={"chunk_index": i, "chars": len(chunk)},
+            source=f"rag:{source_tag}" if source_tag else "rag:unknown",
+            source_type=SourceType.RAG,
+            verified_at=verified_at,
+        )
+        evidences[ev.fact_id] = evidence_to_dict(ev)
+    return evidences

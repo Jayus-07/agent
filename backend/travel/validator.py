@@ -40,8 +40,11 @@ from backend.travel.models.validation import (
     CODE_MUST_GO_MISSING,
     CODE_POI_DUPLICATED,
     CODE_POI_NOT_IN_CANDIDATES,
+    CODE_POI_UNVERIFIED,
+    CODE_PREFERENCE_VIOLATION,
     CODE_PACE_TOO_INTENSE,
     CODE_PACE_TOO_MANY_POIS,
+    CODE_SOURCE_STALE,
     CODE_TIME_CLOSED,
     CODE_TIME_CLOSED_WEEKDAY,
     CODE_TIME_DAY_OVERRUN,
@@ -439,6 +442,75 @@ def check_pool(
 
 
 # ============================================================
+# 数据可信轴与负偏好轴（Phase 4，v4 §4）
+# 全 warning 级、零 IO；不进 AXES 六轴（SOURCE_STALE 消费 state.evidences、
+# PREFERENCE_VIOLATION 消费 brief——轴函数签名只吃 itinerary），由
+# travel_validator_node 在六轴之后追加进同一 violations 列表。
+# ============================================================
+def check_source_trust(
+    itinerary: Itinerary, evidences: dict[str, dict] | None,
+) -> list[Violation]:
+    """数据可信检查（Evidence 口径，零 IO——只读行程与 state 内证据）：
+
+    - POI_UNVERIFIED：行程含 verification_status=unverified 的 POI。种子
+      数据默认 verified（自声明示例值的诚实语义走 Evidence SEED 档），
+      此处只命中外部解析补全的占位事实（营业时间/票价待核实）；
+    - SOURCE_STALE：规划引用的证据已过期（expire_at 已过，stale-if-error
+      降级服务的旧数据 observed_at 早、同样命中）。旧 checkpoint 无
+      evidences 键 → 不判（不误报）。"""
+    from backend.travel.core.evidence_utils import is_stale
+
+    violations: list[Violation] = []
+    for poi in itinerary.all_pois():
+        # "unverified" 语义单一源 = providers/travel/facts.py（validator
+        # 禁 import provider 层——边界扫描红线，故用字面量并对齐该常量）
+        if poi.verification_status == "unverified":
+            violations.append(Violation(
+                code=CODE_POI_UNVERIFIED, level=LEVEL_WARNING,
+                day_index=0,
+                message=(f"「{poi.name}」的信息来自地图服务解析，营业时间"
+                         "与票价尚未核实，出行前请以官方渠道为准"),
+                detail={"poi_id": poi.poi_id, "source": poi.source},
+            ))
+    for fact_id, ev in (evidences or {}).items():
+        if is_stale(ev):
+            violations.append(Violation(
+                code=CODE_SOURCE_STALE, level=LEVEL_WARNING,
+                day_index=0,
+                message=(f"规划引用的数据（{fact_id}）生成时已接近或超过"
+                         "时效边界，出发前请复核最新情况"),
+                detail={"fact_id": fact_id,
+                        "expire_at": (ev or {}).get("expire_at")},
+            ))
+    return violations
+
+
+def check_preference(itinerary: Itinerary, brief) -> list[Violation]:
+    """负偏好轴（Phase 4）：行程命中 brief.avoid → warning 披露冲突。
+
+    判定复用 tools/travel/poi.is_excluded 单一语义源（G2：与候选池过滤
+    同规）。候选池已被 avoid 前置过滤，此处只可能命中补全/换点旁路引入
+    的点位；不阻断——用户点名必去与 avoid 冲突时 kept_required 纪律
+    优先（点名永不被静默丢弃），warning 只做冲突披露。"""
+    from backend.tools.travel.poi import is_excluded
+
+    avoid = list(brief.avoid or [])
+    if not avoid:
+        return []
+    violations: list[Violation] = []
+    for poi in itinerary.all_pois():
+        if is_excluded(poi, avoid):
+            violations.append(Violation(
+                code=CODE_PREFERENCE_VIOLATION, level=LEVEL_WARNING,
+                day_index=0,
+                message=(f"「{poi.name}」与你设定的负偏好（{'、'.join(avoid)}）"
+                         "存在冲突；已按你的点名保留，如需调整请告知"),
+                detail={"poi_id": poi.poi_id, "avoid": avoid},
+            ))
+    return violations
+
+
+# ============================================================
 # 置信度
 # ============================================================
 def compute_confidence(itinerary: Itinerary, report: ValidationReport) -> float:
@@ -472,7 +544,7 @@ def travel_validator_node(state: dict) -> dict:
     必须在校验之后才能得出；放在专家侧只能拿到一个不完整的视图。
     """
     from backend.travel.graph_state import (
-        load_itinerary, save_itinerary, save_validation,
+        load_brief, load_itinerary, save_itinerary, save_validation,
     )
 
     itinerary = load_itinerary(state)
@@ -489,6 +561,14 @@ def travel_validator_node(state: dict) -> dict:
     valid_ids = {c.get("poi_id", "") for c in (state.get("candidates") or [])
                  if c.get("poi_id")} or None
     report = check_itinerary(itinerary, valid_poi_ids=valid_ids)
+
+    # 数据可信与负偏好检查（Phase 4，v4 §4）：全 warning 级追加进同一
+    # violations 列表——后续 compute_confidence / 结论映射 / 遥测按既有
+    # 逻辑自然消费，本节点不再特判。warning 不翻结论（errors 才翻）。
+    report.violations.extend(
+        check_source_trust(itinerary, state.get("evidences"))
+        + check_preference(itinerary, load_brief(state)),
+    )
 
     # STOP I6 遥测（软失败）：校验轮次 / 违反码分布 / 置信度
     try:

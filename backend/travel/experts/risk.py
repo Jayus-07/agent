@@ -31,6 +31,11 @@ def retrieve_knowledge(destination, preferences):
     return _research.retrieve_knowledge(destination, preferences)
 
 
+def build_knowledge_evidence(destination, chunks, source_tag):
+    """知识摘录证据表（Research 能力，Phase 4）：委托 ResearchAgent。"""
+    return _research.build_knowledge_evidence(destination, chunks, source_tag)
+
+
 def risk_expert_node(state: dict) -> dict:
     """风险专家节点：填充行程的 warnings / sources，并检索知识库补充摘录。"""
     def _run(_state: dict) -> dict:
@@ -47,6 +52,7 @@ def risk_expert_node(state: dict) -> dict:
         # state.knowledge_refs，由 reporter 渲染为独立「知识库参考」段；
         # 来源标识补进 sources。
         knowledge_refs: list[str] = []
+        evidences: dict = {}
         try:
             brief = load_brief(_state)
             chunks, source_tag = retrieve_knowledge(
@@ -55,6 +61,9 @@ def risk_expert_node(state: dict) -> dict:
                 knowledge_refs = chunks
                 if source_tag and source_tag not in itinerary.sources:
                     itinerary.sources.append(source_tag)
+                # 摘录证据表（Phase 4，v4 §4）：RAG/0.7，检索时点即核实事件
+                evidences = build_knowledge_evidence(
+                    brief.destination, chunks, source_tag)
         except Exception:  # noqa: BLE001 — 双保险：service 已兜底，这里防意外
             logger.debug("[TravelRisk] 知识库检索意外失败（已跳过）", exc_info=True)
 
@@ -62,7 +71,8 @@ def risk_expert_node(state: dict) -> dict:
                     itinerary.sources, len(warnings), len(knowledge_refs))
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(itinerary),
-                         "knowledge_refs": knowledge_refs},
+                         "knowledge_refs": knowledge_refs,
+                         "evidences": evidences},
                 "notes": []}
 
     result = run_expert_safely("risk", _run, state)
@@ -81,4 +91,8 @@ def risk_expert_node(state: dict) -> dict:
         update["itinerary"] = data["itinerary"]
     if data.get("knowledge_refs"):
         update["knowledge_refs"] = list(data["knowledge_refs"])
+    evidences = data.get("evidences") or {}
+    if evidences:
+        # 合并写入（无 reducer 键是覆盖语义，直接写会冲掉前序节点证据）
+        update["evidences"] = {**state.get("evidences", {}), **evidences}
     return update

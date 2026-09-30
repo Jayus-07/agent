@@ -37,6 +37,12 @@ def fetch_forecast(destination):
     return _research.fetch_forecast(destination)
 
 
+def fetch_forecast_evidence(destination):
+    """预报获取+Evidence（Research 能力）：委托 ResearchAgent（补丁缝——
+    Phase 4 起节点走本通道，返回 (forecast, reason, evidence) 三元组）。"""
+    return _research.fetch_forecast_evidence(destination)
+
+
 def plan_weather_swaps(itinerary, candidates, bad_dates):
     """坏天气适应（Optimization 能力）：委托 OptimizationAgent。"""
     return _optimization.plan_weather_swaps(itinerary, candidates, bad_dates)
@@ -60,7 +66,7 @@ def weather_expert_node(state: dict) -> dict:
                 "未提供出发日期，已跳过天气检查；提供日期后可重新规划以纳入天气因素"
             ]}
 
-        forecast, degrade_reason = fetch_forecast(brief.destination)
+        forecast, degrade_reason, evidence = fetch_forecast_evidence(brief.destination)
         if not forecast:
             # §44：Provider down 行程仍出单，只披露；降级原因来自
             # Provider 状态分类（timeout/配额/不可用），不再笼统一句话
@@ -89,7 +95,9 @@ def weather_expert_node(state: dict) -> dict:
             ]}
         hit_dates = sorted(set(bad_dates) & trip_dates)
         if not hit_dates:
-            return {"status": "success", "data": {}, "notes": []}
+            # 预报已参与规划判定（无坏天气），证据照记：SOURCE_STALE 据此
+            # 判「规划引用的天气数据是否已过期」
+            return {"status": "success", "data": {"evidences": evidence}, "notes": []}
 
         new_itinerary, actions, extra_notes = plan_weather_swaps(
             itinerary, _state.get("candidates", []), hit_dates,
@@ -108,7 +116,8 @@ def weather_expert_node(state: dict) -> dict:
                     hit_dates, len(actions))
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(new_itinerary),
-                         "weather_actions": actions},
+                         "weather_actions": actions,
+                         "evidences": evidence},
                 "notes": notes}
 
     result = run_expert_safely("weather", _run, state)
@@ -123,6 +132,10 @@ def weather_expert_node(state: dict) -> dict:
         "expert_history": history,
         "notes": list(state.get("notes", [])) + list(result.get("notes", [])),
     }
+    evidences = data.get("evidences") or {}
+    if evidences:
+        # 合并写入（无 reducer 键是覆盖语义，直接写会冲掉 poi 节点证据）
+        update["evidences"] = {**state.get("evidences", {}), **evidences}
     if data.get("itinerary"):
         update["itinerary"] = data["itinerary"]
     # 天气替换动作进 repair_log 展示通道：reporter 的「行程自动调整说明」

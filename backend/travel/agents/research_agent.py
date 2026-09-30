@@ -28,6 +28,24 @@ class ResearchAgent:
         """天气预报获取与七态降级映射（经 weather_service）。"""
         return weather_service.fetch_forecast(destination)
 
+    def fetch_forecast_evidence(
+        self, destination: str,
+    ) -> tuple[dict | None, str, dict | None]:
+        """天气预报获取 + Evidence 组装（Phase 4 三元组通道，经
+        weather_service；Evidence 在 service 层组装，provider 层零改动）。"""
+        return weather_service.fetch_forecast_evidence(destination)
+
+    def build_candidate_evidences(self, candidates: list[Poi]) -> dict[str, dict]:
+        """候选池证据表（Phase 4，经 poi_service 纯函数派生）。"""
+        return poi_service.build_candidate_evidences(candidates)
+
+    def build_knowledge_evidence(
+        self, destination: str, chunks: list[str], source_tag: str,
+    ) -> dict[str, dict]:
+        """知识摘录证据表（Phase 4，经 risk_service 纯函数派生）。"""
+        return risk_service.build_knowledge_evidence(
+            destination, chunks, source_tag)
+
     def assess_risks(self, itinerary) -> tuple[list[str], list[str]]:
         """行程溯源与能力边界披露（经 risk_service）。"""
         return risk_service.assess_risks(itinerary)

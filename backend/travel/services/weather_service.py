@@ -1,9 +1,10 @@
 """travel/services/weather_service.py — 天气服务（Phase 3 Commit A）
 
 真身自 experts/weather.py 逐字迁入。职责分两段：
-  - 取数与解析（Research 面）：fetch_forecast（**V2 收敛点**——Provider
-    facade 直连自 expert 迁入本 service，七态降级映射逐字保留；Phase 4
-    ProviderRouter 插入点）/ is_bad_weather / bad_weather_dates
+  - 取数与解析（Research 面）：fetch_forecast_evidence（**V2 收敛点**——
+    Provider facade 直连自 expert 迁入本 service；Phase 4 起经
+    ProviderRouter 链账装配取数，并组装 Evidence 三元组；fetch_forecast
+    保留为兼容 wrapper）/ is_bad_weather / bad_weather_dates
   - 坏天气适应（Optimization 面）：plan_weather_swaps（户外→室内替换，
     必去永不换；重排复用 transit_service.rebuild_days 唯一实现）
 
@@ -14,6 +15,8 @@ from __future__ import annotations
 
 from backend.config import travel as T
 from backend.shared.logger import logger
+from backend.travel.core.contracts import SourceType
+from backend.travel.core.evidence_utils import evidence_to_dict, make_evidence, parse_iso
 from backend.travel.models.poi import (
     CATEGORY_MEAL,
     CATEGORY_NIGHT,
@@ -59,32 +62,69 @@ def is_bad_weather(weather_text: str) -> bool:
     return any(k in text for k in T.TRAVEL_BAD_WEATHER_KEYWORDS)
 
 
-def fetch_forecast(destination: str) -> tuple[dict | None, str]:
-    """查未来几天预报（STOP J5：经 Provider 层——6s 预算/共享缓存/遥测）。
+def fetch_forecast_evidence(destination: str) -> tuple[dict | None, str, dict | None]:
+    """查未来几天预报 + 组装天气 Evidence（Phase 4 三元组通道）。
+
+    fetch_forecast 的证据增强版：预报与七态降级说明语义逐字保留，第三位
+    返回 Evidence dict（取不到数据时为 None）。Evidence 在 service 层组装
+    （provider 层零改动）：status×Freshness→LIVE/CACHE，stale 降 0.6，
+    expire_at=observed_at+TTL(weather)（v4 §4「现有 TTL 即 expire_at」）；
+    降级链的实际服务源由 result.provider 自带——qweather 接管后信任口径
+    自动反映（v4 §8「每次降级记 Evidence」）。
 
     Returns:
-        (预报 dict 或 None, 降级说明)；任何失败返回 (None, 原因)，
-        调用方跳过检查并向用户披露。
+        (预报 dict 或 None, 降级说明, Evidence dict 或 None)
     """
     try:
         from backend.providers.travel.live import get_weather_provider
-        from backend.providers.travel.live.result import ProviderStatus
+        from backend.providers.travel.live.result import (
+            Freshness,
+            ProviderStatus,
+        )
+        from backend.providers.travel.live.router import ttl_for
 
         result = get_weather_provider().forecast_payload(destination)
         if result.ok:
-            return result.data, ""
+            from datetime import timedelta
+
+            evidence = evidence_to_dict(make_evidence(
+                f"weather:{destination}",
+                value={"city": destination,
+                       "days": len((result.data or {}).get("days", [])),
+                       "served_by": result.provider},
+                source=result.provider,
+                source_type=(SourceType.CACHE
+                             if result.freshness in (Freshness.CACHED,
+                                                      Freshness.STALE)
+                             else SourceType.LIVE),
+                verified_at=parse_iso(result.observed_at),
+                expire_at=(parse_iso(result.observed_at)
+                           + timedelta(seconds=ttl_for("weather"))
+                           ) if parse_iso(result.observed_at) else None,
+                confidence=(0.6
+                            if result.freshness == Freshness.STALE else None),
+            ))
+            return result.data, "", evidence
         if result.status == ProviderStatus.DISABLED:
-            return None, ""
+            return None, "", None
         if result.status == ProviderStatus.TIMEOUT:
-            return None, "天气服务响应超时"
+            return None, "天气服务响应超时", None
         if result.status == ProviderStatus.RATE_LIMITED:
-            return None, "天气服务配额已达软预算"
+            return None, "天气服务配额已达软预算", None
         if result.status == ProviderStatus.NOT_FOUND:
-            return None, "未获取到该城市的预报数据"
-        return None, "天气服务暂时不可用"
+            return None, "未获取到该城市的预报数据", None
+        return None, "天气服务暂时不可用", None
     except Exception as e:  # noqa: BLE001 — 天气失败软降级
         logger.warning("[TravelWeather] 天气查询失败（跳过检查）: %s", e)
-        return None, "天气服务暂时不可用"
+        return None, "天气服务暂时不可用", None
+
+
+def fetch_forecast(destination: str) -> tuple[dict | None, str]:
+    """查未来几天预报（兼容入口：签名/语义不变——补丁缝与存量消费面）。
+
+    证据增强通道见 fetch_forecast_evidence（Phase 4 起节点走该通道）。"""
+    forecast, reason, _ = fetch_forecast_evidence(destination)
+    return forecast, reason
 
 
 def bad_weather_dates(forecast: dict) -> list[str]:

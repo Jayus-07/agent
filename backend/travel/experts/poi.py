@@ -30,6 +30,11 @@ def retrieve_candidates(brief):
     return _research.retrieve_candidates(brief)
 
 
+def build_candidate_evidences(candidates):
+    """候选池证据表（Research 能力，Phase 4）：委托 ResearchAgent。"""
+    return _research.build_candidate_evidences(candidates)
+
+
 def build_skeleton(brief, candidates):
     """骨架分配（Planning 能力）：委托 PlanningAgent。"""
     return _planning.build_skeleton(brief, candidates)
@@ -40,6 +45,9 @@ def poi_expert_node(state: dict) -> dict:
     def _run(_state: dict) -> dict:
         brief = load_brief(state)
         candidates, extra_notes = retrieve_candidates(brief)
+        # 候选池证据表（Phase 4，v4 §4）：种子=SEED/腾讯补全=LIVE，
+        # 纯函数派生自 Poi 字段，随 candidates 一起进 state
+        evidences = build_candidate_evidences(candidates)
 
         if not candidates:
             logger.info("[TravelPOI] 无候选: destination=%r", brief.destination)
@@ -76,6 +84,7 @@ def poi_expert_node(state: dict) -> dict:
                 "day_plan": [[p.poi_id for p in day] for day in skeleton.days],
                 "dropped": skeleton.dropped,
                 "must_go_unresolved": resolution.unresolved,
+                "evidences": evidences,
             },
             "notes": extra_notes + skeleton.notes,
         }
@@ -87,7 +96,7 @@ def poi_expert_node(state: dict) -> dict:
     history.append({"expert": "poi", "status": result.get("status", "failed"),
                     "duration_ms": result.get("duration_ms", 0)})
 
-    return {
+    update = {
         "last_expert_result": dict(result),
         "expert_history": history,
         "candidates": data.get("candidates", []),
@@ -95,3 +104,8 @@ def poi_expert_node(state: dict) -> dict:
         "must_go_unresolved": data.get("must_go_unresolved", []),
         "notes": list(state.get("notes", [])) + list(result.get("notes", [])),
     }
+    evidences = data.get("evidences") or {}
+    if evidences:
+        # 合并写入（无 reducer 键是覆盖语义，直接写会冲掉既有证据）
+        update["evidences"] = {**state.get("evidences", {}), **evidences}
+    return update

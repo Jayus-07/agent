@@ -45,6 +45,11 @@ CODE_BUDGET_TIGHT = "BUDGET_TIGHT"             # 逼近预算上限（预警，�
 # ── 覆盖度 ──
 CODE_MUST_GO_MISSING = "MUST_GO_MISSING"       # 用户点名必去的地点未落入行程（仅提示）
 
+# ── 数据可信与负偏好（v4 §4，Phase 4；全 warning 级不阻塞交付）──
+CODE_POI_UNVERIFIED = "POI_UNVERIFIED"             # 行程含未核实 POI（外部解析补全的占位事实）
+CODE_SOURCE_STALE = "SOURCE_STALE"                 # 规划引用的证据已过期/陈旧（Evidence 口径）
+CODE_PREFERENCE_VIOLATION = "PREFERENCE_VIOLATION"  # 行程命中用户负偏好（披露冲突，点名保留）
+
 
 class Violation(BaseModel):
     """单条约束违反记录"""
