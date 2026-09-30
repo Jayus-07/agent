@@ -13,6 +13,19 @@
     同一会话无论走 SSE 还是 REST，跨轮状态一致；
   - 天气/RAG/偏好等外部调用在域图内部已有软降级，本层不重复兜底；
   - ICS/推荐为纯函数转换，无状态、无 IO，可任意水平扩展。
+
+鉴权口径（2026-09-30 收口）：本模块**全部端点要求已认证身份**
+（``require_identity`` → 未认证 401）。此前用宽容 ``resolve_identity``：
+未登录请求按 ``guest`` 放行、``user_id=""`` 落库——偏好读写与反馈会
+写进空账号、规划可被匿名调用。
+
+为什么是纵深防御而非唯一闸门：网关 APISIX 的 ``/api/*`` 兜底路由已挂
+``gateway-auth``（``GATEWAY_AUTH_MODE=enforce``），未认证请求在网关层
+即 401；本层收口拦的是**绕过网关直连后端**的通道（内部脚本 / 未来的
+服务间调用）。两者互补：网关管外部入口，本层管进程边界。
+
+前端不受影响：``AuthGate`` 未登录时 ``return null``（不渲染受保护子树），
+``/travel`` 页根本不会 mount，因此不会发出匿名请求。
 """
 from __future__ import annotations
 
@@ -24,7 +37,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from backend.app.api.identity import resolve_identity
+from backend.app.api.identity import require_identity
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/travel", tags=["旅游域"])
@@ -60,6 +73,9 @@ async def travel_plan(request: Request):
     from backend.travel.graph_state import new_travel_graph_input
     from backend.travel.models.graph_result import build_travel_graph_result
 
+    # 鉴权先于 body 解析：未认证不消费请求体（fail-closed）
+    identity = require_identity(request)
+
     try:
         raw = await request.json()
         req = TravelPlanRequest(**raw)
@@ -69,7 +85,6 @@ async def travel_plan(request: Request):
         raise HTTPException(status_code=422,
                             detail=f"TravelPlanRequest 解析失败: {e}")
 
-    identity = resolve_identity(request, body_user_id=req.session_id or None)
     conversation_id = req.conversation_id or req.session_id
     graph_input = new_travel_graph_input(
         user_message=req.message,
@@ -189,6 +204,7 @@ def ics_content_disposition(destination: str) -> str:
 @router.post("/export/ics", summary="行程导出为 ICS 日历文件",
              responses={200: {"content": {"text/calendar": {}}}})
 async def travel_export_ics(request: Request):
+    require_identity(request)
     # 手动解析（对齐 chat_stream 先例，规避 FastAPI 中文 payload 自动解析 bug）
     try:
         req = IcsExportRequest(**(await request.json()))
@@ -231,13 +247,13 @@ class TravelFeedbackRequest(BaseModel):
 
 @router.post("/feedback", summary="行程单反馈（收藏/不满意）")
 async def travel_feedback(request: Request):
+    identity = require_identity(request)
     try:
         req = TravelFeedbackRequest(**(await request.json()))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"解析失败: {e}")
     from backend.feedback import add_feedback
 
-    identity = resolve_identity(request)
     feedback_id = add_feedback(
         session_id=req.session_id,
         vote=req.vote,
@@ -255,7 +271,7 @@ async def travel_feedback(request: Request):
 def travel_get_preferences(request: Request):
     from backend.tools.travel import preferences as prefs_store
 
-    identity = resolve_identity(request)
+    identity = require_identity(request)
     return prefs_store.get_preferences(identity.user_id or "")
 
 
@@ -270,13 +286,13 @@ class TravelPreferencesRequest(BaseModel):
 
 @router.put("/preferences", summary="写入/更新用户旅游偏好")
 async def travel_put_preferences(request: Request):
+    identity = require_identity(request)
     try:
         req = TravelPreferencesRequest(**(await request.json()))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"解析失败: {e}")
     from backend.tools.travel import preferences as prefs_store
 
-    identity = resolve_identity(request)
     ok = prefs_store.upsert_preferences(
         identity.user_id or "",
         origin=req.origin,
@@ -293,9 +309,10 @@ async def travel_put_preferences(request: Request):
 # GET /travel/recommend — 目的地推荐（P1-3）
 # ============================================================
 @router.get("/recommend", summary="按偏好推荐目的地")
-def travel_recommend(preferences: str = "", top: int = 3):
+def travel_recommend(request: Request, preferences: str = "", top: int = 3):
     from backend.travel.recommend import recommend_cities
 
+    require_identity(request)
     tags = [p.strip() for p in preferences.split(",") if p.strip()]
     recs = recommend_cities(tags, top=max(1, min(top, 5)))
     return {"recommendations": [r.to_dict() for r in recs]}
