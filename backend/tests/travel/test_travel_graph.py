@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from backend.config import travel as T
 from backend.orchestration.graph.travel_prefilter import (
     is_travel_request,
@@ -212,6 +214,24 @@ class TestSupervisorDecide:
 
 
 class TestTravelPrefilter:
+    @pytest.fixture(autouse=True)
+    def _reset_travel_switch_cache(self):
+        """总闸经 sys_config 缓存动态读：前后各清，防污染本文件其它用例。
+
+        背景（2026-09-30 修正）：M16（``2f5fbb5``）把旅游域总闸从
+        ``config.travel.TRAVEL_ENABLED`` 常量改为 ``sys_config.get_mode``
+        动态读，本次迁移的「存量测试基线修正」改了两个文件却漏了本文件——
+        下面两条用例仍在 patch 已经没人读的常量，**patch 恒不生效**：
+        「关闭」用例因此变成恒失败的空转守护（实测单跑即失败）。
+        此处按 M16 既有口径（与 ``test_cs_prefilter_explicit`` 同款）改走
+        sys_config 缓存，恢复该守护的真实拦截力。
+        """
+        from backend.services import sys_config
+
+        sys_config.reset_cache_for_tests()
+        yield
+        sys_config.reset_cache_for_tests()
+
     def test_trip_request_detected(self):
         assert is_travel_request("帮我规划福州3天行程") is True
 
@@ -233,14 +253,16 @@ class TestTravelPrefilter:
         assert is_travel_request("福州的近3天订单量") is False
         assert is_travel_request("最近30天厦门的销量") is False
 
-    def test_prefilter_disabled_returns_none(self, monkeypatch):
-        import backend.config.travel as cfg
-        monkeypatch.setattr(cfg, "TRAVEL_ENABLED", False)
+    def test_prefilter_disabled_returns_none(self):
+        from backend.services import sys_config
+
+        sys_config._values["TRAVEL_ENABLED"] = "false"  # M16：DB 覆盖关闭语义
         assert try_travel_prefilter("福州3天行程", {}) is None
 
-    def test_prefilter_hit_sets_route_mode(self, monkeypatch):
-        import backend.config.travel as cfg
-        monkeypatch.setattr(cfg, "TRAVEL_ENABLED", True)
+    def test_prefilter_hit_sets_route_mode(self):
+        from backend.services import sys_config
+
+        sys_config._values["TRAVEL_ENABLED"] = "true"  # M16：经缓存开总闸
         got = try_travel_prefilter("帮我规划福州3天行程", {"session_id": "s1"})
         assert got is not None
         assert got["route_mode"] == "travel"
