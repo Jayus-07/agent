@@ -43,6 +43,16 @@ DIST_GATE_LEASE_TTL_SECONDS = int(os.getenv("DIST_GATE_LEASE_TTL_SECONDS", "30")
 # 租户级上限（按 JWT tenant_id claim 分桶，与全局上限叠加判定）；0=不启用
 DIST_TENANT_MAX_CONCURRENT = int(os.getenv("DIST_TENANT_MAX_CONCURRENT", "0"))
 
+# 工具统计多副本聚合（P1-4，2026-09-30）：管理端 /admin/tools/stats 原为进程内
+# Prometheus 直读（scope=process），多副本数字不完整。写侧开关开启后
+# record_tool_result 旁路向 Redis 日键 HINCRBY（tool:total/ok/七分类错误码，
+# TTL 8 天，fire-and-forget 软失败，不阻塞工具热路径）；读侧按 source 取数：
+# process=仅进程内（默认，行为零变化）| redis=仅 Redis 合计 | merged=两者相加。
+TOOL_STATS_REDIS_ENABLED = os.getenv("TOOL_STATS_REDIS_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+TOOL_STATS_SOURCE = os.getenv("TOOL_STATS_SOURCE", "process").strip().lower()
+if TOOL_STATS_SOURCE not in ("process", "redis", "merged"):
+    TOOL_STATS_SOURCE = "process"
+
 # 安全
 API_KEY = os.getenv("API_KEY", "")
 # 显式豁免认证（仅限本地开发调试；生产环境禁止开启）
@@ -432,6 +442,8 @@ __all__ = [
     "MAX_CONCURRENT_REQUESTS", "CONCURRENCY_QUEUE_TIMEOUT",
     "DIST_CONCURRENCY_ENABLED", "DIST_MAX_CONCURRENT_REQUESTS",
     "DIST_GATE_LEASE_TTL_SECONDS", "DIST_TENANT_MAX_CONCURRENT",
+    # 工具统计多副本聚合
+    "TOOL_STATS_REDIS_ENABLED", "TOOL_STATS_SOURCE",
     # database
     "RAG_DATA_DIR", "CHUNK_STORE_PATH",
     "BM25_INDEX_DIR", "CHROMA_PATH", "DOC_DB_PATH", "DOCS_DIRECTORY",
