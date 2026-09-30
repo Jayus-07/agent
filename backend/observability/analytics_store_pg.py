@@ -260,3 +260,29 @@ class PostgresAnalyticsStore(AnalyticsStore):
                     conn, f"SELECT COUNT(*) FROM {self._table}").fetchone()[0]
         except Exception:
             return 0
+
+
+def update_ttft_ms(trace_id: str, ttft_ms: int) -> bool:
+    """旁路补写 trace_summary.ttft_ms（M13 尾项）。
+
+    TTFT 产生在 SSE API 层（StreamLatencyTracker），与 runner 的 trace
+    分属不同线程——桥接需穿 sink/runner 三层，改为 API 收尾旁路 UPDATE
+    （偏差已记台账 D13）。save_dict 的 ON CONFLICT UPDATE SET 不含本列，
+    任何写入时序都不会互相清值；失败软退化（Prometheus 侧仍有分布）。
+    """
+    if not _cfg_enabled() or not trace_id:
+        return False
+    from backend.observability.analytics_store import get_analytics_store
+
+    store = get_analytics_store()
+    try:
+        with store._lock, store._conn() as conn:
+            store._exec_scalar(
+                conn,
+                f"UPDATE {store._table} SET ttft_ms = %s WHERE trace_id = %s",
+                (int(ttft_ms), trace_id),
+            )
+        return True
+    except Exception as e:  # noqa: BLE001 — 观测旁路，失败不影响主链
+        logger.warning(f"[AnalyticsStore-PG] update_ttft_ms 失败 {trace_id}: {e}")
+        return False

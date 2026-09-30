@@ -300,6 +300,10 @@ async def chat_stream(
     _validate_model_override(req.model)
 
     t0 = time.monotonic()
+    # TTFT 追踪器建在 handler 层：producer（TTFT 落库）与 event_generator
+    # （on_delta 采样）两处闭包都要可见——放 event_generator 内 producer
+    # 线程读不到（M13 尾项实施时发现的跨作用域 bug）
+    _latency_tracker = StreamLatencyTracker(start=t0)
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
     request_id = _resolve_request_id(req.request_id)
@@ -353,6 +357,27 @@ async def chat_stream(
         _put_final_frame(aq, loop, stop_event, err_evt)
 
     def producer():
+        def _record_ttft_to_store():
+            """M13 尾项：TTFT 落 trace_summary.ttft_ms（旁路软失败）。
+
+            本函数跑在 producer 线程（与 runner 同线程，
+            trace_collector.current() 可用——ContextVar 不跨线程，
+            generator 层拿不到 trace）。
+            """
+            try:
+                from backend.observability.tracer import trace_collector
+
+                ttft_ms = _latency_tracker.ttft_ms
+                trace = trace_collector.current()
+                trace_id = str(getattr(trace, "id", "") or "") if trace else ""
+                if ttft_ms is None or not trace_id:
+                    return
+                from backend.observability.analytics_store_pg import update_ttft_ms
+    
+                update_ttft_ms(trace_id, ttft_ms)
+            except Exception:  # noqa: BLE001 — 观测旁路绝不影响响应链
+                logger.debug("[chat] TTFT 落库失败", exc_info=True)
+
         """在 executor 线程中运行 LangGraph，事件跨线程投递到 asyncio.Queue。
 
         Backpressure（P0-1 + #16）：队列满时不再静默丢弃——
@@ -410,9 +435,11 @@ async def chat_stream(
         except Exception as exc:
             chat_stream_event_dropped_total.labels(reason="producer_error").inc()
             _emit_error_frame(_sse_error_event(exc))
+
         finally:
             _put_final_frame(aq, loop, stop_event, None)  # sentinel
             record.finish()
+            _record_ttft_to_store()  # M13 尾项：TTFT 旁路落 trace_summary（软失败）
             _active_stops.pop(key, None)  # 断连脱离后 /chat/abort 仍可命中直至终态
             chat_sse_executor_active.dec()  # P1-3：与入口 inc 对称，任何出口都归零
 
@@ -426,7 +453,6 @@ async def chat_stream(
 
         client_aborted = False
         final_status = "ok"
-        _latency_tracker = StreamLatencyTracker(start=t0)
 
         def _record_status(status: str):
             """真实记录 ok/error/abort 计数（P0-2：原 _record_stream_metrics 是死代码）。"""

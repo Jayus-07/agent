@@ -349,6 +349,16 @@ class StreamLatencyTracker:
     def delta_count(self) -> int:
         return self._delta_count
 
+    @property
+    def ttft_ms(self) -> int | None:
+        """首 token 延迟毫秒（M13 尾项：落 trace_summary.ttft_ms 用）。
+
+        None = 未收到任何 delta（流式前失败/纯 status 流），调用方跳过落库。
+        """
+        if self._first_delta is None:
+            return None
+        return max(1, round((self._first_delta - self._start) * 1000))
+
     def on_delta(self, now: float) -> None:
         """每收到一个 delta 事件调用一次。首个 delta 同时记 TTFT。"""
         self._delta_count += 1

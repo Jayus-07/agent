@@ -75,6 +75,7 @@ _MEMORY_COLUMNS = [
     "auth.users.must_change_password",  # 033
     "doc_registry.fixture_set",         # 024
     "tasks.execution_id",               # 任务运行时租约
+    "trace_summary.ttft_ms",            # 064（M13 尾项：TTFT 落库列）
 ]
 
 # 扩展：库 → 扩展名

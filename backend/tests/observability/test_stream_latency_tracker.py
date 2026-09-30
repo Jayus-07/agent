@@ -78,3 +78,22 @@ def test_no_delta_no_metrics():
     tracker = StreamLatencyTracker(start=0.0)
     tracker.finish()  # 不应抛错，也不采样
     assert tracker.delta_count == 0
+
+
+# ── M13 尾项：ttft_ms 暴露（落 trace_summary.ttft_ms 用）──────
+
+def test_ttft_ms_property_ms_rounding():
+    tracker = StreamLatencyTracker(start=100.0)
+    tracker.on_delta(100.2505)  # 250.5ms → 251（round half even 上取整到 250 or 251 均合理）
+    assert tracker.ttft_ms in (250, 251)
+
+
+def test_ttft_ms_none_without_delta():
+    tracker = StreamLatencyTracker(start=0.0)
+    assert tracker.ttft_ms is None
+
+
+def test_ttft_ms_minimum_one_ms():
+    tracker = StreamLatencyTracker(start=100.0)
+    tracker.on_delta(100.0)  # 同刻 delta：max(1, 0) 防零值污染聚合
+    assert tracker.ttft_ms == 1

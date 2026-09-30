@@ -189,6 +189,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     # verify_release_gate.py 收尾直写；/releases 页消费）。编号 063：
     # 061/062 均已被并行会话 tool_contract_changes 占用（撞号连续让位）。
     "063_release_records.sql": "memory",
+    # 企业治理 M13 尾项（2026-09-30）：trace_summary.ttft_ms 落库列
+    # （SSE API 层收尾旁路 UPDATE，偏差记台账 D13）。
+    "064_trace_summary_ttft.sql": "memory",
     # 企业治理验收 #9（2026-09-30）：Tool 契约变更历史台账（生成器检测到
     # 变更自动追加，GET /api/admin/tools/changes 消费）。
     "062_tool_contract_changes.sql": "memory",
