@@ -290,13 +290,18 @@ def validate_startup_settings() -> List[str]:
         )
         if _env(_flag, "false").lower() in ("1", "true", "yes")
     ]
+    # 是否显式接受「内存检查点」部署（默认否）。与 config/checkpointer.degrade_allowed()
+    # 同一开关、同一口径；这里用 _env 现读，便于单测与运维改 env。
+    _cp_degrade_allowed = _env("CHECKPOINTER_ALLOW_DEGRADE", "false").lower() in (
+        "1", "true", "yes",
+    )
     if _cp_owners and not _postgres_checkpointer_available():
         warnings.append(
             "以下子图开启了 checkpointer，但当前环境的 Postgres 后端不可用："
             + "、".join(_cp_owners)
             + "。缺少 psycopg v3 / langgraph-checkpoint-postgres"
               "（pyproject 与 requirements-lock 都已声明，仅本环境未安装），"
-              "运行期会静默降级为 MemorySaver：状态仅存于进程内、重启即失、"
+              "运行期将降级为 MemorySaver：状态仅存于进程内、重启即失、"
               "多 worker 各存一份。补齐：pip install langgraph-checkpoint-postgres"
               "（版本取 requirements-lock.txt 中的锁定值）；"
               "或关闭上述开关，避免误以为已持久化。"
@@ -336,6 +341,21 @@ def validate_startup_settings() -> List[str]:
         _fatal.append(
             "ENVIRONMENT=production + PG_READONLY_PASSWORD 未配置：生产环境"
             "禁止静默使用内置开发口令（agent_readonly_dev），必须显式配置。"
+        )
+
+    # 检查点后端：开关开着但 Postgres 后端不可用 —— 生产环境拒绝启动（结构病审查
+    # P2-10）。运行期会降级为 MemorySaver（跨轮状态只在进程内、重启即失、多副本
+    # 各存一份），而日志里的 "enabled" 会让人以为已持久化。拦在第一次用到之前，
+    # 而不是等第一次客服会话才发现「上下文没接上」。
+    if _is_prod and _cp_owners and not _postgres_checkpointer_available() \
+            and not _cp_degrade_allowed:
+        _fatal.append(
+            "ENVIRONMENT=production + 以下子图开启了 checkpointer，但 Postgres 后端"
+            "不可用：" + "、".join(_cp_owners) + "。生产环境禁止静默降级为 MemorySaver"
+            "（状态仅存进程内、重启即失、多 worker 各存一份）。处理：补齐 psycopg v3 /"
+            " langgraph-checkpoint-postgres；或关闭上述开关（明确不用）；"
+            "或显式设置 CHECKPOINTER_ALLOW_DEGRADE=true（接受内存检查点，"
+            "应写进部署说明）。"
         )
 
     if _fatal:

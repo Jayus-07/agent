@@ -13,6 +13,7 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from backend.config.checkpointer import degrade_or_raise
 from backend.customer_service.experts.action import action_expert_node
 from backend.customer_service.experts.complaint import complaint_expert_node
 from backend.customer_service.experts.handoff import handoff_expert_node
@@ -168,7 +169,8 @@ _cs_graph_lock = threading.Lock()
 def get_cs_graph() -> Any:
     """获取 CS Graph 单例（double-checked locking）
 
-    Phase 5: 当 CS_CHECKPOINTER_ENABLED=true 时注入 InMemorySaver checkpointer。
+    Phase 5: 当 CS_CHECKPOINTER_ENABLED=true 时注入 checkpointer（Postgres 优先，
+    不可用则按 config/checkpointer.py 的判据降级或硬失败）。
     """
     global _cs_graph_instance
     if _cs_graph_instance is None:
@@ -185,6 +187,10 @@ def _build_checkpointer() -> Any:
     企业实践：会话状态持久化用 Postgres（跨进程/重启保留，多 worker 共享），
     MemorySaver 仅作初始化失败时的降级兜底。
     通过 CS_CHECKPOINTER_BACKEND=memory 可强制回退内存模式（本地调试用）。
+
+    降级判据（结构病审查 P2-10）：本地开发降级 + 告警；生产环境 fail-loud
+    （除非 CHECKPOINTER_ALLOW_DEGRADE=true）——原实现是「一条 warning 就地吞掉」，
+    生产上会静默失去跨轮上下文，而日志里的 enabled 让人误以为已持久化。
     """
     from backend.config.customer_service import CS_CHECKPOINTER_ENABLED
 
@@ -215,13 +221,19 @@ def _build_checkpointer() -> Any:
             start_cleanup_daemon()
             return checkpointer
         except Exception:
-            logger.warning("[CS Graph] PostgresSaver init failed, "
-                           "falling back to MemorySaver", exc_info=True)
+            # 降级判据统一走 config.checkpointer（结构病审查 P2-10）：不再一条
+            # warning 就地吞掉 —— 开发环境降级 + 告警；生产环境 fail-loud。
+            degrade_or_raise(
+                "CS Graph",
+                "PostgresSaver 初始化失败（多为缺 psycopg v3 / "
+                "langgraph-checkpoint-postgres，或 PG 连不上 / setup 建表失败）",
+                exc_info=True,
+            )
 
     try:
         from langgraph.checkpoint.memory import MemorySaver
         logger.info("[CS Graph] checkpointer enabled (MemorySaver)")
         return MemorySaver()
     except Exception:
-        logger.warning("[CS Graph] checkpointer init failed, running without")
+        degrade_or_raise("CS Graph", "MemorySaver 也不可用（langgraph 安装不完整）")
         return None

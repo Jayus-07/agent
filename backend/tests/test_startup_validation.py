@@ -35,7 +35,7 @@ def _clean_env(monkeypatch):
         "ALERT_WEBHOOK_COOLDOWN",
         # checkpointer 开关：宿主 .env 里可能已打开，须隔离后再断言
         "MAIN_GRAPH_CHECKPOINTER_ENABLED", "CS_CHECKPOINTER_ENABLED",
-        "TRAVEL_CHECKPOINTER_ENABLED",
+        "TRAVEL_CHECKPOINTER_ENABLED", "CHECKPOINTER_ALLOW_DEGRADE",
     ):
         monkeypatch.delenv(var, raising=False)
     model_roles.reset_overrides()
@@ -251,6 +251,66 @@ class TestCheckpointerBackendValidation:
         warnings = su.validate_startup_settings()
         assert not any(
             "checkpointer" in w and "Postgres" in w for w in warnings)
+
+
+class TestCheckpointerProductionFatal:
+    """结构病审查 P2-10：生产环境「开关开着 + 后端不可用」必须拒绝启动。
+
+    只有 warning 时，生产上会静默降级为 MemorySaver（跨轮状态只在进程内、
+    重启即失、多副本各存一份），而日志里的 "enabled" 让人以为已持久化。
+    判据与 backend/config/checkpointer.py 同口径，可用
+    CHECKPOINTER_ALLOW_DEGRADE=true 显式接受内存检查点。
+    """
+
+    @staticmethod
+    def _no_postgres_driver(monkeypatch):
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", None)
+
+    def test_enabled_without_driver_is_fatal_in_production(
+        self, valid_env, monkeypatch,
+    ):
+        self._no_postgres_driver(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("CS_CHECKPOINTER_ENABLED", "true")
+
+        with pytest.raises(su.SettingsValidationError) as exc_info:
+            su.validate_startup_settings()
+
+        text = str(exc_info.value)
+        assert "客服域" in text
+        assert "MemorySaver" in text
+        assert "CHECKPOINTER_ALLOW_DEGRADE=true" in text
+
+    def test_explicit_optin_allows_degrade_in_production(
+        self, valid_env, monkeypatch,
+    ):
+        """显式接受内存检查点 → 不再致命（决定权留给运维，但必须写下来）。"""
+        self._no_postgres_driver(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("CS_CHECKPOINTER_ENABLED", "true")
+        monkeypatch.setenv("CHECKPOINTER_ALLOW_DEGRADE", "true")
+
+        warnings = su.validate_startup_settings()
+        assert any("checkpointer" in w and "MemorySaver" in w for w in warnings)
+
+    def test_development_never_fatal(self, valid_env, monkeypatch):
+        self._no_postgres_driver(monkeypatch)
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        monkeypatch.setenv("CS_CHECKPOINTER_ENABLED", "true")
+
+        warnings = su.validate_startup_settings()
+        assert any("checkpointer" in w and "MemorySaver" in w for w in warnings)
+
+    def test_all_switches_off_never_fatal_in_production(
+        self, valid_env, monkeypatch,
+    ):
+        """全关（明确不使用）不该被拦 —— 只有「开着却不可用」才是问题。"""
+        self._no_postgres_driver(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        warnings = su.validate_startup_settings()
+        assert not any("checkpointer" in w and "Postgres" in w for w in warnings)
 
 
 class TestReadonlyPassword:

@@ -5,6 +5,10 @@ MemorySaver 仅作初始化失败时的降级兜底。开关 MAIN_GRAPH_CHECKPOI
 （默认关——开启后 request_context 以 checkpoint 安全 dict 进状态，
 Send 并行分支的流式/trace 绑定降级，见 orchestration/request_context.py）。
 
+降级判据（结构病审查 P2-10）：不再「一条 warning 就地吞掉」。开发环境降级 + 告警；
+生产环境（ENVIRONMENT=production）硬失败，除非显式 CHECKPOINTER_ALLOW_DEGRADE=true。
+统一裁决见 config/checkpointer.py。
+
 thread_id 语义：主图多轮记忆由 MemoryService 负责（不靠 checkpoint 回放），
 thread_id 取每轮唯一值（session+毫秒时间戳）——checkpoint 定位是崩溃恢复/
 审计/未来 interrupt-resume，不是跨轮状态合并（避免 messages 通道累积）。
@@ -12,6 +16,7 @@ thread_id 取每轮唯一值（session+毫秒时间戳）——checkpoint 定位
 from typing import Any
 
 from backend.config import MAIN_GRAPH_CHECKPOINTER_ENABLED
+from backend.config.checkpointer import degrade_or_raise
 from backend.shared.logger import logger
 
 
@@ -46,13 +51,19 @@ def build_main_checkpointer() -> Any:
             logger.debug("[MainGraph] cleanup daemon 启动失败（非致命）", exc_info=True)
         return checkpointer
     except Exception:
-        logger.warning("[MainGraph] PostgresSaver init failed, "
-                       "falling back to MemorySaver", exc_info=True)
+        # 降级判据统一走 config.checkpointer（结构病审查 P2-10）：
+        # 开发环境降级 + 告警；生产环境 fail-loud，除非显式放行降级。
+        degrade_or_raise(
+            "MainGraph",
+            "PostgresSaver 初始化失败（多为缺 psycopg v3 / "
+            "langgraph-checkpoint-postgres，或 PG 连不上 / setup 建表失败）",
+            exc_info=True,
+        )
 
     try:
         from langgraph.checkpoint.memory import MemorySaver
         logger.info("[MainGraph] checkpointer enabled (MemorySaver)")
         return MemorySaver()
     except Exception:
-        logger.warning("[MainGraph] checkpointer init failed, running without")
+        degrade_or_raise("MainGraph", "MemorySaver 也不可用（langgraph 安装不完整）")
         return None
