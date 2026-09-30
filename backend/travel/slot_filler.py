@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from backend.config import travel as T
 from backend.shared.logger import logger
+from backend.travel.node_span import traced_node
 from backend.travel.agents.requirement_agent import (
     RequirementAgent,
     _RE_DATE_ISO,
@@ -114,6 +115,14 @@ def is_avoid_patch_query(message: str) -> bool:
     return bool(extract_avoid(msg))
 
 
+@traced_node(
+    "travel_slot_filler", "旅游·槽位填充",
+    metrics_fn=lambda u: {
+        "missing_slots": len(u.get("brief_missing") or []),
+        "brief_changed": int(bool(u.get("brief_change_reason"))),
+        "clarify": int(bool(u.get("clarifications"))),
+    },
+)
 def slot_filler_node(state: dict) -> dict:
     """槽位节点：抽取 → 合并 → 判定需求是否变化 → 计算缺失槽位与追问文案。
 

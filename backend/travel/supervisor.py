@@ -29,6 +29,7 @@ from langgraph.types import Command
 
 from backend.config import travel as T
 from backend.shared.logger import logger
+from backend.travel.node_span import traced_node
 from backend.travel.graph_state import (
     EXPERT_TO_NODE,
     TRAVEL_BUDGET_EXPERT,
@@ -204,6 +205,13 @@ def stage_targets() -> dict[str, str]:
     return {stage.value: node for stage, node in _STAGE_TO_NODE.items()}
 
 
+@traced_node(
+    "travel_supervisor", "旅游·调度",
+    metrics_fn=lambda cmd: {
+        "stage": str((getattr(cmd, "update", None) or {}).get("stage", "")),
+        "step": int((getattr(cmd, "update", None) or {}).get("supervisor_decision", {}).get("step") or 0),
+    },
+)
 def travel_supervisor_node(state: dict) -> Command:
     """调度节点：返回 Command(goto=...) 驱动条件跳转。"""
     decision = decide(state)

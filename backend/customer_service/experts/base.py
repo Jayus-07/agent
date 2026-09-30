@@ -73,7 +73,8 @@ def run_expert_safely(
        per-call 独立单 worker 池 + contextvars 拷贝（P2.3 防共享池饿死
        误判超时 / B4 防线程丢上下文）锁定为 core/node_runtime 的
        TimeoutStrategy.THREAD_ISOLATED 唯一实现
-    4. 埋点 metrics + 日志（经 CsExpertHooks，metrics-only 无 span）
+    4. 埋点 metrics + 日志 + span（经 CsExpertHooks，全部软失败；span 为
+       M14 治理台账 D14 补齐，kind=SpanKind.CS_EXPERT）
 
     Args:
         expert_name: Expert 标识（用于 metrics/日志）

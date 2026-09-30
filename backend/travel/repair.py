@@ -24,6 +24,7 @@ from backend.shared.logger import logger
 from backend.tools.travel.cost import estimate_cost
 from backend.tools.travel.routing import route_km
 from backend.travel.experts.transit import rebuild_days
+from backend.travel.node_span import traced_node
 from backend.travel.models.itinerary import (
     CHANGE_REPAIR,
     Itinerary,
@@ -367,6 +368,13 @@ def _farthest_from_center(day: ItineraryDay) -> ItineraryItem | None:
         center_lat, center_lng, i.poi.lat, i.poi.lng))
 
 
+@traced_node(
+    "travel_repair", "旅游·局部修复",
+    metrics_fn=lambda u: {
+        "repair_round": int(u.get("itinerary", {}).get("repair_rounds") or 0)
+        if isinstance(u.get("itinerary"), dict) else 0,
+    },
+)
 def repair_node(state: dict) -> dict:
     """修复节点：执行一轮局部修复，并清除上一轮校验结果以触发复检。
 
