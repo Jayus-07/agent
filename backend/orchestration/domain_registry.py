@@ -4,9 +4,10 @@
 builder.py / route_selector / system.py 通过此注册表动态发现域图。
 
 自 2026-09-30 起，本模块同时是**域归属关系的唯一事实源**：决策层归一、
-回写层登记活跃域、执行层选图三处口径全部由 ``DomainGraphRegistry`` 上的
-``route_mode_to_*`` / ``find_subflow_graph`` 派生，不再各自手写
-（守护见 tests/orchestration/test_domain_semantic_consistency.py）。
+回写层登记活跃域、执行层选图、只读管理端展示（``GET /agents``）四处口径
+全部由 ``DomainGraphRegistry`` 上的 ``route_mode_to_*`` / ``find_subflow_graph``
+/ ``route_mode_attribution`` 派生，不再各自手写（守护见
+tests/orchestration/test_domain_semantic_consistency.py）。
 """
 from __future__ import annotations
 
@@ -23,7 +24,8 @@ from backend.shared.logger import logger
 # 各自手写：决策层 _PREFILTER_DOMAIN_MAP、回写层 _ROUTE_MODE_DOMAIN、执行层
 # _DEFAULT_DOMAIN_GRAPH_MODES 与 f"travel_{subflow}" 字符串拼接。任一处漏改
 # 都是**静默失败**——D2「订酒店订到一半忘了」正是漏了回写层一处（G1）。
-# 现改为：注册表是唯一事实源，其余三处全部由下方派生方法生成，零手写。
+# 现改为：注册表是唯一事实源，其余各处（含只读管理端展示）全部由下方派生方法
+# 生成，零手写。
 #
 # 为何是「活视图」而非快照：注册发生在 backend.domains 被 import 时，早于
 # 多数模块的 import；若在模块级 `{... for g in registry.get_all()}` 直接取值，
@@ -167,6 +169,26 @@ class DomainGraphRegistry:
             for graph in self._snapshot().values()
             if graph.domain is None
         }
+
+    def route_mode_attribution(
+        self, route_mode: str
+    ) -> tuple[str | None, str | None, str | None]:
+        """【展示层】route_mode → (顶级域 route_mode, 顶级域展示标签, subflow)。
+
+        顶级域图自身返回 ``(None, None, None)``——「本图即顶级域」不是子流。
+        顶级域展示标签取**父图自身的 ``label``**（与父图在管理端卡片上的标题
+        同源），不另造业务名：前端原先手写的「Travel Domain」在后端并不存在，
+        是展示层自己发明的名字，且已与父图 label 漂移（实证见 STOP E §9）。
+
+        供只读管理端接口 ``GET /agents`` 透传归属，取代前端手写映射
+        ``ROUTE_MODE_DOMAIN_META``（第五处手写副本，2026-09-30 消除）。
+        """
+        graphs = self._snapshot()
+        graph = graphs.get(route_mode)
+        if graph is None or not graph.domain:
+            return (None, None, None)
+        parent = graphs.get(graph.domain)
+        return (graph.domain, parent.label if parent else None, graph.subflow)
 
     def find_subflow_graph(self, domain: str, subflow: str | None) -> str | None:
         """【执行层选图】给定 (顶级域, subflow) → 物理域图名；无则 None。

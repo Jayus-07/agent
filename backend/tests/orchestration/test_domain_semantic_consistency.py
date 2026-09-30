@@ -10,6 +10,8 @@
 1. 决策层 ``DomainRouter._PREFILTER_DOMAIN_MAP``：route_mode → (顶级域, subflow)
 2. 回写层 ``prefilter_chain._ROUTE_MODE_DOMAIN``：route_mode → active_domain
 3. 执行层 ``execution_mode._DEFAULT_DOMAIN_GRAPH_MODES`` + 子流选图
+4. 展示层 ``GET /agents`` 的 ``domain`` / ``domain_label`` / ``subflow``
+   （第五处手写副本 = frontend-admin ``ROUTE_MODE_DOMAIN_META``，同日收口）
 
 三层语义**刻意不同**，不是漂移：
   - 回写层记**物理域图名**（续轮要精确重入子图，记 travel 会重入规划图）；
@@ -31,6 +33,8 @@ route_mode / 注册键本身是永久保留的内部调度标识（改名会静�
 本测试只锁「归属口径」，不锁、也不应锁任何调度行为变更。
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 import backend.domains  # noqa: F401  # import 即触发五个域图自注册
 from backend.orchestration.domain_graph import DomainGraph
@@ -397,3 +401,69 @@ def test_subflow_lookup_is_ownership_driven():
     assert domain_graph_registry.find_subflow_graph("customer_service", None) is None
     assert domain_graph_registry.find_subflow_graph("travel", "") is None
     assert domain_graph_registry.find_subflow_graph("unknown", "booking") is None
+
+
+# ── 五、展示层：归属只由只读接口下发，前端不得复写（2026-09-30 收口）──────────
+#
+# 第五处手写副本曾是 frontend-admin 的 ``ROUTE_MODE_DOMAIN_META``，且**已实证漂移**：
+# 它写「Travel Domain」，而后端注册表里 travel 图的 label 是「旅游规划图执行」——
+# 那个英文业务名后端根本没有，是展示层自己发明的。现归属由 ``GET /agents`` 的
+# ``domain`` / ``domain_label`` / ``subflow`` 下发（注册表派生），前端只做拼装。
+
+
+def test_attribution_derivations_generalize_to_a_new_domain():
+    """归属派生对「还不存在的域」同样成立——证明是**生成**，不是照抄现值。
+
+    用自建注册表实例（不污染全局单例）：新增顶级域 + 新增子流域后，
+    归属三元组自动正确；顶级域图与未注册模式一律返回全 ``None``。
+    """
+    registry = DomainGraphRegistry()
+    registry.register(DomainGraph(
+        name="newtop", node_name="newtop_node", label="新顶级域", adapter=_noop_adapter))
+    registry.register(DomainGraph(
+        name="newsub", node_name="newsub_node", label="新子流", adapter=_noop_adapter,
+        domain="newtop", subflow="sub"))
+
+    # 子流图：顶级域名 + 父图 label + 子流标签（父图 label 与父图卡片标题同源）
+    assert registry.route_mode_attribution("newsub") == ("newtop", "新顶级域", "sub")
+    # 顶级域图自身不是任何图的子流
+    assert registry.route_mode_attribution("newtop") == (None, None, None)
+    # 未注册的 route_mode 不得凭空造归属（否则展示层会显示错误的父域）
+    assert registry.route_mode_attribution("nope") == (None, None, None)
+
+
+def test_frontend_does_not_redeclare_subflow_attribution():
+    """展示层源码里不得出现子流域图的 route_mode 字面量（结构守护）。
+
+    判据来源是注册表（有新子流域图，本用例自动覆盖），不是这里再列一份名单——
+    再列一份名单本身就是同一个病。
+
+    若某天确有正当用途（如深链到某个子流域图），请在该用例里显式加豁免并写明
+    理由，不要直接把用例删掉：删掉等于把「展示层自己发明归属名」的口子重新打开。
+    """
+    subflow_modes = sorted(
+        g.name for g in domain_graph_registry.get_all().values() if g.subflow
+    )
+    assert subflow_modes, "前置条件：注册表里应至少有一张子流域图"
+
+    repo_root = Path(__file__).resolve().parents[3]
+    hits: list[str] = []
+    for frontend_dir in ("frontend", "frontend-admin", "frontend-cs"):
+        src = repo_root / frontend_dir / "src"
+        if not src.is_dir():
+            continue
+        for path in sorted(src.rglob("*")):
+            if path.suffix not in {".ts", ".tsx"} or ".test." in path.name:
+                continue  # 测试夹具里出现字面量属正常
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for lineno, line in enumerate(text.splitlines(), 1):
+                for mode in subflow_modes:
+                    if mode in line:
+                        hits.append(f"{path.relative_to(repo_root)}:{lineno} → {mode}")
+
+    assert not hits, (
+        "展示层出现了子流域图的 route_mode 字面量：域归属的唯一事实源是后端注册表，"
+        "管理端只读 GET /agents 的 domain/domain_label/subflow 字段，不得自己再写一份"
+        "（原 ROUTE_MODE_DOMAIN_META 已因此漂移过）：\n"
+        + "\n".join(f"  - {h}" for h in hits)
+    )

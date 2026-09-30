@@ -53,7 +53,7 @@ STOP_E_PASS=true
 
 | 文件 | 改动 |
 |---|---|
-| `frontend-admin/src/app/agents/page.tsx` | `ROUTE_MODE_DOMAIN_META` 展示映射：`travel_commerce` → 「Travel Domain · commerce 子流」、`travel_booking` → 「Travel Domain · booking 子流」；`route_mode` 原样透传，**后端 `/api/agents` 字段与值零改动** |
+| `frontend-admin/src/app/agents/page.tsx` | `ROUTE_MODE_DOMAIN_META` 展示映射：`travel_commerce` → 「Travel Domain · commerce 子流」、`travel_booking` → 「Travel Domain · booking 子流」；`route_mode` 原样透传，**后端 `/api/agents` 字段与值零改动**<br>⚠️ **2026-09-30 后续变更**：该前端映射**已删除**（实证漂移：「Travel Domain」后端并不存在）。归属改由 `/api/agents` 纯新增 `domain`/`domain_label`/`subflow` 下发，详见 §9。 |
 
 ## 4. 测试结果（2026-09-29 实跑）
 
@@ -77,12 +77,13 @@ STOP_E_PASS=true
 | `DomainGraph.name` 注册键（5 个）与 `node_name`（5 个 `*_graph_node`） | registry 查表 + builder 自动布线 |
 | 代码包布局：`travel/`、`travel/commerce/`、`travel/booking/` | 独立生命周期（commerce/booking 无 checkpointer，booking 走 PG+celery 恢复） |
 | checkpoint / SSE / state / evaluation 契约 | travel 图 `travel:{tenant:user}:{conv}` 前缀；评测模块 ID 与历史 run 可比性绑定 |
-| `/api/agents` 字段结构与值 | 运行时契约；admin 归属说明只做在前端展示层 |
+| `/api/agents` 的 `route_mode` **取值**（值本身不改名） | prefilter → route_selector → registry 查表键的展示穿透；**接口结构层不是运行时契约**——只读管理端接口允许纯新增字段，旧消费方读不到新键也不受影响（2026-09-30 新增归属三元组，见 §9。原「字段结构与值一并冻结」的写法把「内部调度标识」与「只读接口结构」混为一谈，已修正） |
 | 三个 prefilter 的优先级与开关语义 | `test_router_prefilter_order.py` 19 例守护（本次 134 例中含） |
 
 ## 6. Deferred / 知情取舍
 
 1. **admin 后端不加 `subflow` 字段**：`/api/agents` 保持零契约变化，归属语义由前端展示映射承担。代价：前端 `ROUTE_MODE_DOMAIN_META` 与后端 `DomainGraph.subflow` 是物理两份同源语义——漂移风险由注释指源 + `test_domain_semantic_consistency.py` 锁后端两层兜住；若未来加第四个子流域图，需同步改前端映射（在新增域图手册已有 prefilter 接线清单，此处不再加机制）。
+   > ⚠️ **2026-09-30 反转（已实施）**：本项作废。取舍的前提「前端映射不会漂移」被证伪——`ROUTE_MODE_DOMAIN_META` 写的是「Travel Domain」，而注册表里 travel 图的 label 是「旅游规划图执行」，**那个英文业务名后端根本不存在，是展示层自己发明的**，且已经和父图标题不一致。改为 `GET /agents` **纯新增**归属三元组 `domain` / `domain_label` / `subflow`（注册表派生），前端那份手写映射删除。详见 §9。
 2. **travel 图本体的 `planning` 子流标签不进 registry**：registry 只对「独立生命周期的子流」声明 subflow（commerce/booking）；travel 图即 Travel Domain 本体，其 `planning` 标签只存在于 Router 归一与 trace metadata，文档叙事已表达，不新增第三处存储。
    > ⚠️ **2026-09-30 部分反转**：**不写 `subflow` 的部分继续有效**（冻结口径，已被守护测试钉住：顶级域图 `subflow` 必须为空）；但「标签完全不进 registry」被反转——新增独立字段 `decision_subflow` 承载它，理由是消灭决策层里那张手写标签表。这是**同一处语义的搬家（Router 手写表 → 注册表声明），不是新增第二份**。详见 §8。
 3. **`general_chat → ("general", None)`**：Router 决策枚举项，无对应域图（寒暄直答走主图 general_chat 节点），不属 Domain Registry 表达范围，维持现状。
@@ -107,7 +108,7 @@ STOP E 完成「**语义合并、物理隔离**」的最后一公里：决策层
 | ② | `graph/routing/prefilter_chain._ROUTE_MODE_DOMAIN` | route_mode → active_domain（回写） |
 | ③ | `router/execution_mode._DEFAULT_DOMAIN_GRAPH_MODES` + `f"travel_{subflow}"` | 顶级域表 + **字符串拼接**反推子流图 |
 | ④ | `DomainGraph.subflow`（注册表） | 展示元数据 |
-| ⑤ | `frontend-admin` `ROUTE_MODE_DOMAIN_META` | 管理端展示映射（E2 既定取舍） |
+| ⑤ | `frontend-admin` `ROUTE_MODE_DOMAIN_META` | 管理端展示映射（E2 既定取舍）**← 2026-09-30 已消除，见 §9** |
 
 **实证后果**：Phase 5 的 D2（「订酒店订到一半忘了」）根因 G1 就是 ② 漏登记 `travel_booking`/`travel_commerce` —— 命中后 `domain=None` → `mark_domain_turn` 早退 → `active_domain` 永不写 → 下一轮纯槽位值回答无人认领。
 
@@ -133,10 +134,85 @@ STOP E 完成「**语义合并、物理隔离**」的最后一公里：决策层
 
 ### 8.4 遗留
 
-1. **⑤ 管理端 `ROUTE_MODE_DOMAIN_META` 仍为手写**。消除它需 `/api/agents` 增加 `subflow`/`domain` 字段，而该字段被本文 §5 列为运行时契约冻结项——**属契约变更，需单独评审后再动**。当前风险等级：展示层漂移（管理端标签可能过期），不影响路由正确性。
+1. ~~**⑤ 管理端 `ROUTE_MODE_DOMAIN_META` 仍为手写**。消除它需 `/api/agents` 增加 `subflow`/`domain` 字段，而该字段被本文 §5 列为运行时契约冻结项——**属契约变更，需单独评审后再动**。当前风险等级：展示层漂移（管理端标签可能过期），不影响路由正确性。~~
+   > ✅ **2026-09-30 已收口（§9）**：`GET /agents` 纯新增归属三元组，管理端手写映射删除，并加两条守护（接口契约对齐注册表 + 展示层源码禁出现子流域图 route_mode 字面量）。
 2. `_NON_GRAPH_ROUTE_MODES = {"general_chat": ...}` 是全后端**唯一保留**的手写项：有路由模式但无域图（寒暄直答），注册表结构上装不下，亦不得进回写层。
 
 ### 8.5 顺带修复（独立提交）
 
 `tests/travel/test_travel_graph.py` 两条 prefilter 用例仍在 patch `config.travel.TRAVEL_ENABLED` 常量，而 M16（`2f5fbb5`）已把总闸改为 `sys_config.get_mode` 动态读——**patch 恒不生效**，「关闭」用例变成恒失败的空转守护。按 M16 既有口径（`test_cs_prefilter_explicit` 同款）改走 sys_config 缓存。
+
+## 9. 展示层收口：管理端归属不再手写（2026-09-30）
+
+性质：**消灭第五处（也是最后一处）手写副本**。§8 把 ①②③ 四处收敛到注册表派生后，
+⑤ `frontend-admin` 的 `ROUTE_MODE_DOMAIN_META` 被按 §5/§6.1 记为「后端不加字段」。
+
+**该取舍被证伪**（这是本次动手的直接理由，不是洁癖）：那份前端映射写的是
+
+```
+travel_commerce: 'Travel Domain · commerce 子流'
+```
+
+而注册表里 travel 图的 `label` 是**「旅游规划图执行」**——`Travel Domain` 这个英文
+业务名**后端根本不存在**，是展示层自己发明的名字。**手写副本已经漂移过**：一个
+「为了不倒两份所以写在前端」的方案，倒出来的是一份和源头不一样的东西。
+
+### 9.1 口径修正
+
+§5 原先把 `/api/agents` 的「字段结构与值」与 `route_mode` 取值并列为「运行时契约冻结项」，
+这是**把两个层次混为一谈**：
+
+| 层次 | 冻结与否 | 说明 |
+|---|---|---|
+| `route_mode` **取值** | **冻结，永久不改名** | 内部调度标识：prefilter → route_selector → registry 查表键，改名 = 静默落 planner 兜底 |
+| `DomainGraph.name` / `node_name` | **冻结** | 同上（注册键 + builder 布线） |
+| `GET /agents` 响应**结构** | **不属运行时契约** | 只读管理端接口。**纯新增字段向后兼容**（旧消费方读不到新键毫无影响），不碰任何标识改名 |
+
+即：新增字段**没有违反** §5 任何一条冻结点。原则上「只读接口的纯新增字段」不需要
+按改名级评审——真正需要评审的是**删字段/改语义**。
+
+### 9.2 实施
+
+| 改动 | 文件 | 说明 |
+|---|---|---|
+| 新增归属派生方法 | `orchestration/domain_registry.py` | `route_mode_attribution(route_mode) → (顶级域, 顶级域展示标签, subflow)`；顶级域图与未注册模式一律 `(None, None, None)` |
+| 接口下发归属 | `app/api/routes/agents.py` | 域图节点纯新增 `domain` / `domain_label` / `subflow` 三字段；**`route_mode` 取值与既有字段零改动** |
+| 删除手写映射 | `frontend-admin/src/app/agents/page.tsx` | `ROUTE_MODE_DOMAIN_META` 整块删除，改由接口字段拼装 |
+| 新增拼装函数 + 单测 | `frontend-admin/src/lib/domain-attribution.ts` (+`.test.ts`) | `subflowAttribution()`：`父域标签 · 子流 子流`；数据半截/旧响应一律返回 null（**宁可不显示，不臆造归属**） |
+| 类型随契约 | `frontend-admin/src/api/registry.ts` | `AgentNode` 增三个可选字段 |
+
+**展示名口径**：`domain_label` 取**父图自身的 `label`**，不另造业务名——这样后缀与
+父图卡片标题**必然一致**，漂移在结构上不可能发生。代价是文案从「Travel Domain」
+变成「旅游规划图执行」，这是**把发明出来的名字换回真实名字**，属修正而非回退；
+若产品需要英文业务名，正确做法是在注册表里**声明**它（一个新字段 + 一处填写），
+而不是在展示层各写一遍。
+
+### 9.3 守护（两条，反向验证均咬住）
+
+| 守护 | 位置 | 咬住什么 |
+|---|---|---|
+| 接口归属 = 注册表派生 + 契约值字面量 | `tests/api/test_registry_overview_api.py`（+3 例，含探针新注册子流自动跟随） | 归属丢失、展示名自造、清单与注册表脱钩 |
+| 展示层源码禁出现子流域图 `route_mode` 字面量 | `tests/orchestration/test_domain_semantic_consistency.py`（+2 例） | 有人把前端手写映射**写回去**（名单由注册表给出，新增子流自动覆盖） |
+
+反向验证（不恒真）：① 归属派生改回全 `None` → 红；② `domain_label` 改成自造的
+`"Travel Domain"` → 红；③ 前端映射未删除时扫描用例先红（**修复前实测红**，
+报出 `page.tsx:25/28/29` 三行）。
+
+### 9.4 不变性（实测证据）
+
+| 项 | 结果 |
+|---|---|
+| `route_mode` 取值 / 注册键 / `node_name` | **零改动**（前端 `route_mode` 仍原样展示） |
+| 既有字段与值 | **零改动**；三字段为纯新增，旧响应消费方不受影响 |
+| `DomainGraph.subflow` 冻结元数据 | **零改动** |
+| 后端 | `tests/api` + `test_domain_registration` **505 passed**；域归属守护 **27 passed** |
+| 前端 | `tsc --noEmit` 零错；管理端单测 **346 passed / 32 files** |
+
+### 9.5 遗留
+
+1. 手写残留只剩 §8.4 第 2 条的 `general_chat`（无域图的伪模式，注册表装不下）——
+   **全链路已无第二份域归属表达**。
+2. 展示顺序：域图节点当前按注册表顺序平铺展示（子流不一定紧跟其父域）。若要使
+   归属关系在**版面**上也一眼可见，可加一个由 `domain` 字段派生的排序（父域在前、
+   其子流紧随）——纯前端、无契约影响，本次未做。
 

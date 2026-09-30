@@ -20,8 +20,17 @@ export interface AgentNode {
   kind: AgentKind
   /** 仅 skill 节点有值：该 Skill 注册的能力 */
   capabilities?: string[]
-  /** 仅 domain_graph 节点有值：路由模式标识 */
+  /** 仅 domain_graph 节点有值：路由模式标识（内部调度契约，永久不改名） */
   route_mode?: string
+  /**
+   * 仅 domain_graph 子流图有值：所属顶级域的 route_mode（顶级域图为 null）。
+   * 归属三元组由后端域图注册表派生，展示层不自行推断。
+   */
+  domain?: string | null
+  /** 仅 domain_graph 子流图有值：顶级域展示标签（父图 label） */
+  domain_label?: string | null
+  /** 仅 domain_graph 子流图有值：子流标识（commerce / booking） */
+  subflow?: string | null
 }
 
 export interface AgentsOverview {

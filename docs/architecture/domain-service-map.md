@@ -24,7 +24,9 @@
 | Tool | 34 | `backend/tools/`（map/ 7 件、travel/ 6 件 + 各域散件） |
 | 域图 | 5（本文 §2~§6） | `backend/domains/__init__.py` 自动发现 |
 
-对账入口：管理端 `/api/agents`、`/api/capabilities`、`/skills` 页。**五个域图共用「注册恒在、prefilter/开关把门」模式：域图代码不感知开关**，`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `TRAVEL_COMMERCE_ENABLED` / `TRAVEL_BOOKING_ENABLED` 代码默认全 false，由根 `.env` 决定放量。
+对账入口：管理端 `/api/agents`、`/api/capabilities`、`/skills` 页。其中 `/api/agents` 的域图节点带
+**域归属三字段** `domain` / `domain_label` / `subflow`（由域图注册表派生，顶级域图三者皆 null）——
+管理端据此展示「谁是谁的子流」，**不在前端另存一份归属映射**（STOP E §9）。**五个域图共用「注册恒在、prefilter/开关把门」模式：域图代码不感知开关**，`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `TRAVEL_COMMERCE_ENABLED` / `TRAVEL_BOOKING_ENABLED` 代码默认全 false，由根 `.env` 决定放量。
 
 ---
 

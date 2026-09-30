@@ -5,7 +5,9 @@
  *
  * 数据源：后端 GET /agents（backend/app/api/routes/agents.py）。
  * 展示主图三类节点：编排节点（router/planner/supervisor 等）、
- * Skill 节点（含能力归属）、域图节点。事实源在代码，本页只读不写。
+ * Skill 节点（含能力归属）、域图节点（含域归属）。
+ * 事实源在代码，本页只读不写：域归属（谁是谁的子流）由接口的
+ * domain/domain_label/subflow 字段下发，本页不复写归属关系。
  */
 import { useEffect, useState } from 'react'
 import { Bot, GitBranch, RefreshCw, Wrench } from 'lucide-react'
@@ -13,6 +15,7 @@ import { clsx } from 'clsx'
 import PageHeader from '@/components/layout/PageHeader'
 import ErrorState from '@/components/shared/ErrorState'
 import { getAgents, type AgentKind, type AgentNode } from '@/api/registry'
+import { subflowAttribution } from '@/lib/domain-attribution'
 
 const KIND_META: Record<AgentKind, { label: string; icon: typeof Bot; desc: string }> = {
   orchestration: { label: '编排节点', icon: Bot, desc: '主图内置：路由 / 规划 / 调度 / 汇总' },
@@ -22,14 +25,10 @@ const KIND_META: Record<AgentKind, { label: string; icon: typeof Bot; desc: stri
 
 const KIND_ORDER: AgentKind[] = ['orchestration', 'skill', 'domain_graph']
 
-// STOP E 语义展示：travel_commerce / travel_booking 是 Travel Domain 的子流（非独立业务域）。
-// 后端 route_mode 字段值原样透传（运行时契约，永久不改名），此处只加展示层归属说明。
-const ROUTE_MODE_DOMAIN_META: Record<string, string> = {
-  travel_commerce: 'Travel Domain · commerce 子流',
-  travel_booking: 'Travel Domain · booking 子流',
-}
-
 function AgentCard({ node }: { node: AgentNode }) {
+  // 归属后缀由后端字段拼装：route_mode 原样透传（内部调度契约，永久不改名），
+  // 谁属于谁由 GET /agents 的 domain/domain_label/subflow 下发，前端不在本地存一份。
+  const attribution = subflowAttribution(node)
   return (
     <div className="rounded-lg border border-black/5 bg-white p-3">
       <div className="flex items-center justify-between gap-2">
@@ -42,8 +41,8 @@ function AgentCard({ node }: { node: AgentNode }) {
       {node.route_mode && (
         <div className="mt-1 text-[11px] text-text-muted">
           route_mode: {node.route_mode}
-          {ROUTE_MODE_DOMAIN_META[node.route_mode] && (
-            <span className="ml-1 text-text-secondary">· {ROUTE_MODE_DOMAIN_META[node.route_mode]}</span>
+          {attribution && (
+            <span className="ml-1 text-text-secondary">· {attribution}</span>
           )}
         </div>
       )}

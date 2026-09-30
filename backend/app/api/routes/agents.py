@@ -34,6 +34,8 @@ async def list_agents():
     返回 {count, summary, agents: [{name, label, kind, capabilities}]}，
     kind ∈ orchestration / skill / domain_graph。
     Skill 节点的 capabilities 来自 skills 注册表，供管理端对照能力归属。
+    domain_graph 节点额外带 ``route_mode`` + 归属三元组 ``domain`` /
+    ``domain_label`` / ``subflow``（均由域图注册表派生，顶级域图三者皆 None）。
     """
     # 惰性导入：builder 会连带触发域图/Skill 包自注册，避免拖慢应用导入期
     from backend.orchestration.domain_registry import domain_graph_registry
@@ -62,12 +64,22 @@ async def list_agents():
             "capabilities": skill_caps.get(name, []),
         })
     for domain in domain_graph_registry.get_all().values():
+        parent_domain, parent_label, subflow = domain_graph_registry.route_mode_attribution(
+            domain.name
+        )
         agents.append({
             "name": domain.node_name,
             "label": domain.label,
             "kind": "domain_graph",
             "route_mode": domain.name,
             "capabilities": [],
+            # 域归属（2026-09-30 收口）：与注册表同源派生，管理端不再手写
+            # route_mode → 归属 映射（原 frontend-admin ROUTE_MODE_DOMAIN_META，
+            # 第五处手写副本）。**纯新增字段**，route_mode 取值与既有字段零改动，
+            # 旧消费方读不到新键也不受影响（向后兼容）。
+            "domain": parent_domain,
+            "domain_label": parent_label,
+            "subflow": subflow,
         })
 
     summary: dict[str, int] = {}
