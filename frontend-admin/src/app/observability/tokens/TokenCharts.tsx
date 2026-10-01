@@ -15,8 +15,9 @@ function formatNum(n: number | undefined | null): string {
 }
 
 function formatCost(n: number | undefined | null): string {
-  const usd = n ?? 0
-  return `$${usd.toFixed(2)}`
+  // 成本数值 2026-10-01 起为记账本位币 CNY
+  const usd = n ?? 0;
+  return `¥${usd.toFixed(2)}`;
 }
 
 function compact(n: number): string {

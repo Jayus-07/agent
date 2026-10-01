@@ -407,12 +407,13 @@ export function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + "..." : s;
 }
 
-export function formatCost(usd: number | undefined | null): string {
-  if (usd === undefined || usd === null) return "--";
-  if (usd === 0) return "$0.00";
-  if (usd < 0.0001) return `$${(usd * 1_000_000).toFixed(2)}µ`;
-  if (usd < 1) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(2)}`;
+// 成本数值 2026-10-01 起为记账本位币 CNY（pricing 出口统一折算）
+export function formatCost(cny: number | undefined | null): string {
+  if (cny === undefined || cny === null) return "--";
+  if (cny === 0) return "¥0.00";
+  if (cny < 0.0001) return `¥${(cny * 1_000_000).toFixed(2)}µ`;
+  if (cny < 1) return `¥${cny.toFixed(4)}`;
+  return `¥${cny.toFixed(2)}`;
 }
 
 export function filterByTimeRange<T extends { timestamp: string }>(

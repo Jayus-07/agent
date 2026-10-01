@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { budgetTone, describeBudgetExceeded, formatUsd } from "./budgets";
+import { budgetTone, describeBudgetExceeded, formatCny } from "./budgets";
 
 describe("预算展示口径", () => {
-  it("金额字符串固定显示两位 USD", () => {
-    expect(formatUsd("3.000000")).toBe("$3.00");
-    expect(formatUsd("0.000001")).toBe("$0.00");
+  it("金额字符串固定显示两位人民币（记账本位币 CNY）", () => {
+    expect(formatCny("3.000000")).toBe("¥3.00");
+    expect(formatCny("0.000001")).toBe("¥0.00");
   });
 
   it("hard 100% 阻断、80% 预警、soft/audit 不显示无限", () => {

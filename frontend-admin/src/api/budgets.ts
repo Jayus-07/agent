@@ -3,14 +3,16 @@ import { mutationRequest, request } from "@/api/client";
 export type BudgetEnforcement = "hard" | "soft" | "audit";
 export interface BudgetWindow { used: string; reserved: string; limit: string; ratio: number; reset_at: string }
 export interface BudgetStatus {
-  currency: "USD"; mode: string; enforcement: BudgetEnforcement; audit_exempt: boolean;
+  currency: "CNY"; fx_usd_cny: string; mode: string; enforcement: BudgetEnforcement; audit_exempt: boolean;
   blocked: boolean; tenant_blocked: boolean;
   policy_source: { scope_type: string; scope_id: string; label?: string };
   daily: BudgetWindow; monthly: BudgetWindow;
 }
 export interface BudgetSummary {
-  currency: "USD"; total_cost_usd: string; price_coverage_ratio: number;
-  near_limit_subjects: number; blocked_subjects: number; unsettled_reserved_usd: string;
+  currency: "CNY"; fx_usd_cny: string; total_cost: string;
+  cost_status_counts: { priced: number; unpriced: number; price_unknown: number; missing_status: number };
+  price_coverage_ratio: number;
+  near_limit_subjects: number; blocked_subjects: number; unsettled_reserved: string;
 }
 export interface BudgetSubject {
   scope: string; id: string; display_name?: string; daily: BudgetWindow; monthly: BudgetWindow;
@@ -19,20 +21,36 @@ export interface BudgetSubject {
   policy_source: { scope_type: string; scope_id: string; label?: string };
 }
 export interface BudgetPolicyView {
-  scope_type: string; scope_id: string; daily_limit_usd: string; monthly_limit_usd: string;
+  scope_type: string; scope_id: string; daily_limit_cny: string; monthly_limit_cny: string;
   enforcement: BudgetEnforcement; timezone: string; audit_exempt: boolean;
 }
 export interface BudgetPolicy {
-  scope_type: string; scope_id: string; daily_limit_usd: string; monthly_limit_usd: string;
+  scope_type: string; scope_id: string; daily_limit_cny: string; monthly_limit_cny: string;
   enforcement: BudgetEnforcement; timezone: string; audit_exempt: boolean;
   updated_by?: string; updated_at?: string;
 }
 export interface BudgetEvent { scope_type: string; scope_id: string; period_type: string; threshold: number; created_at: string }
 export interface BudgetPolicyAudit { scope_type: string; scope_id: string; before_value: Record<string, unknown> | null; after_value: Record<string, unknown>; reason: string; updated_by: string; created_at: string }
 
-export function formatUsd(value: string | number | null | undefined): string {
+// 待对账：用量未知（可能已对供应商计费）的预占，保留占额并等待人工核查
+export interface BudgetReconciliationItem {
+  reservation_id: string; request_id: string; user_id: string; tenant_id: string;
+  reserved_cny: string; status: string; review_reason: string; created_at: string;
+  periods: { period_type: string; period_start: string }[];
+}
+export interface BudgetReconciliation {
+  summary: {
+    pending_count: number; held_cny: string; oldest_age_hours: number;
+    by_reason: Record<string, number>; stale_unswept_count: number; stale_threshold_hours: number;
+  };
+  items: BudgetReconciliationItem[];
+  sweep: { reviewed: number; ledger_released: number };
+}
+
+// 金额为记账本位币 CNY（2026-10-01 起，后端定价出口统一折算）
+export function formatCny(value: string | number | null | undefined): string {
   const number = Number(value ?? 0);
-  return Number.isFinite(number) ? `$${number.toFixed(2)}` : "$0.00";
+  return Number.isFinite(number) ? `¥${number.toFixed(2)}` : "¥0.00";
 }
 
 export function budgetTone(input: { ratio: number; enforcement: BudgetEnforcement; blocked: boolean }): "blocked" | "warning" | "soft" | "audit" | "normal" {
@@ -53,6 +71,7 @@ export function describeBudgetExceeded(details: Record<string, unknown> = {}): s
 }
 
 export async function getBudgetSummary(): Promise<BudgetSummary> { return request<BudgetSummary>("/api/admin/budgets/summary"); }
+export async function getBudgetReconciliation(): Promise<BudgetReconciliation> { return request<BudgetReconciliation>("/api/admin/budgets/reconciliation"); }
 export async function listBudgetSubjects(params: { scope?: string; period?: string } = {}): Promise<{ items: BudgetSubject[] }> {
   const query = new URLSearchParams();
   if (params.scope) query.set("scope", params.scope);

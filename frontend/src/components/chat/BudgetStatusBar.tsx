@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, LockKeyhole, ShieldCheck } from "lucide-react";
-import { budgetTone, formatUsd, getBudgetMe, type BudgetStatus } from "@/api/budgets";
+import { budgetTone, formatCny, getBudgetMe, type BudgetStatus } from "@/api/budgets";
 
 export default function BudgetStatusBar({ onBlockedChange }: { onBlockedChange?: (blocked: boolean) => void }) {
   const [status, setStatus] = useState<BudgetStatus | null>(null);
@@ -58,7 +58,7 @@ export default function BudgetStatusBar({ onBlockedChange }: { onBlockedChange?:
       <div className="flex items-center gap-2">
         <Icon size={15} aria-hidden="true" />
         <span className="text-xs font-medium">{label}</span>
-        <span className="ml-auto text-xs tabular-nums">{period} {formatUsd(window?.used)} / {formatUsd(window?.limit)}</span>
+        <span className="ml-auto text-xs tabular-nums">{period} {formatCny(window?.used)} / {formatCny(window?.limit)}</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/10" aria-hidden="true">
         <div className={`h-full rounded-full ${tone === "blocked" ? "bg-red-500" : tone === "warning" ? "bg-amber-500" : "bg-indigo-500"}`} style={{ width: `${Math.min(100, Math.max(0, (window?.ratio ?? 0) * 100))}%` }} />

@@ -11,7 +11,8 @@ export interface BudgetWindow {
 }
 
 export interface BudgetStatus {
-  currency: "USD";
+  currency: "CNY";
+  fx_usd_cny: string;
   mode: "off" | "observe" | "enforce" | string;
   enforcement: BudgetEnforcement;
   audit_exempt: boolean;
@@ -25,12 +26,14 @@ export interface BudgetStatus {
 }
 
 export interface BudgetSummary {
-  currency: "USD";
-  total_cost_usd: string;
+  currency: "CNY";
+  fx_usd_cny: string;
+  total_cost: string;
+  cost_status_counts: { priced: number; unpriced: number; price_unknown: number; missing_status: number };
   price_coverage_ratio: number;
   near_limit_subjects: number;
   blocked_subjects: number;
-  unsettled_reserved_usd: string;
+  unsettled_reserved: string;
 }
 
 export interface BudgetSubject {
@@ -47,8 +50,8 @@ export interface BudgetSubject {
 export interface BudgetPolicy {
   scope_type: "user" | "tenant" | "tenant_default" | "platform" | string;
   scope_id: string;
-  daily_limit_usd: string;
-  monthly_limit_usd: string;
+  daily_limit_cny: string;
+  monthly_limit_cny: string;
   enforcement: BudgetEnforcement;
   timezone: string;
   audit_exempt: boolean;
@@ -64,9 +67,10 @@ export interface BudgetEvent {
   created_at: string;
 }
 
-export function formatUsd(value: string | number | null | undefined): string {
+// 金额为记账本位币 CNY（2026-10-01 起，后端定价出口统一折算）
+export function formatCny(value: string | number | null | undefined): string {
   const number = Number(value ?? 0);
-  return Number.isFinite(number) ? `$${number.toFixed(2)}` : "$0.00";
+  return Number.isFinite(number) ? `¥${number.toFixed(2)}` : "¥0.00";
 }
 
 export function budgetTone(input: { ratio: number; enforcement: BudgetEnforcement; blocked: boolean }): "blocked" | "warning" | "soft" | "audit" | "normal" {
@@ -125,7 +129,7 @@ export async function listBudgetEvents(): Promise<{ items: BudgetEvent[] }> {
 export async function saveBudgetPolicy(
   scope: string,
   id: string,
-  body: Pick<BudgetPolicy, "daily_limit_usd" | "monthly_limit_usd" | "enforcement" | "audit_exempt"> & { reason: string; expected_updated_at?: string },
+  body: Pick<BudgetPolicy, "daily_limit_cny" | "monthly_limit_cny" | "enforcement" | "audit_exempt"> & { reason: string; expected_updated_at?: string },
 ): Promise<BudgetPolicy> {
   const result = await mutationRequest<{ policy: BudgetPolicy }>(`/api/admin/budgets/policies/${encodeURIComponent(scope)}/${encodeURIComponent(id)}`, {
     operation: `budget-policy:${scope}:${id}`,

@@ -7,7 +7,8 @@ import RoleGate from '@/components/auth/RoleGate'
 import PageHeader from '@/components/layout/PageHeader'
 import { useToast } from '@/components/shared/Toast'
 import {
-  formatUsd,
+  formatCny,
+  getBudgetReconciliation,
   getBudgetSummary,
   listBudgetEvents,
   listBudgetPolicyAudit,
@@ -42,20 +43,21 @@ export default function BudgetGovernancePage() {
   const policies = useQuery({ queryKey: ['budget-policies'], queryFn: listBudgetPolicies, enabled: canAdmin })
   const events = useQuery({ queryKey: ['budget-events'], queryFn: listBudgetEvents, enabled: canAdmin })
   const audit = useQuery({ queryKey: ['budget-policy-audit'], queryFn: listBudgetPolicyAudit, enabled: canAdmin })
+  const reconciliation = useQuery({ queryKey: ['budget-reconciliation'], queryFn: getBudgetReconciliation, enabled: canAdmin, refetchInterval: 60_000 })
 
   function beginEdit(policy: BudgetPolicy) {
     setEditing(policy)
     setScopeId(policy.scope_id)
-    setDaily(policy.daily_limit_usd)
-    setMonthly(policy.monthly_limit_usd)
+    setDaily(policy.daily_limit_cny)
+    setMonthly(policy.monthly_limit_cny)
     setEnforcement(policy.enforcement)
     setReason('')
   }
 
   function beginUserOverride() {
     setEditing({
-      scope_type: 'user', scope_id: '', daily_limit_usd: '3.000000',
-      monthly_limit_usd: '50.000000', enforcement: 'hard', timezone: 'Asia/Shanghai',
+      scope_type: 'user', scope_id: '', daily_limit_cny: '3.000000',
+      monthly_limit_cny: '50.000000', enforcement: 'hard', timezone: 'Asia/Shanghai',
       audit_exempt: false,
     })
     setScopeId('')
@@ -76,8 +78,8 @@ export default function BudgetGovernancePage() {
     }
     try {
       await saveBudgetPolicy(editing.scope_type, scopeId.trim(), {
-        daily_limit_usd: daily,
-        monthly_limit_usd: monthly,
+        daily_limit_cny: daily,
+        monthly_limit_cny: monthly,
         enforcement,
         audit_exempt: editing.audit_exempt,
         reason: reason.trim(),
@@ -99,14 +101,14 @@ export default function BudgetGovernancePage() {
     <RoleGate minRole="viewer" pageName="预算治理">
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-7xl px-6 py-8">
-          <PageHeader title="预算治理" desc="预算状态由后端权威计算；此处只展示 USD 结果与受控策略变更。" />
+          <PageHeader title="预算治理" desc="预算状态由后端权威计算；金额为记账本位币人民币（CNY），美元报价按显式汇率折算。" />
 
           <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <SummaryCard label="总成本" value={formatUsd(summary.data?.total_cost_usd)} />
+            <SummaryCard label="总成本（CNY）" value={formatCny(summary.data?.total_cost)} hint={(() => { const c = summary.data?.cost_status_counts; if (!c) return undefined; return `计价 ${c.priced} · 未定价 ${c.unpriced} · 币种未知 ${c.price_unknown}` })()} />
             <SummaryCard label="价格覆盖率" value={`${Math.round((summary.data?.price_coverage_ratio ?? 0) * 100)}%`} alert={(summary.data?.price_coverage_ratio ?? 0) < 1} />
             <SummaryCard label="接近上限" value={String(summary.data?.near_limit_subjects ?? 0)} />
             <SummaryCard label="已阻断主体" value={String(summary.data?.blocked_subjects ?? 0)} alert={(summary.data?.blocked_subjects ?? 0) > 0} />
-            <SummaryCard label="未结算预留" value={formatUsd(summary.data?.unsettled_reserved_usd)} />
+            <SummaryCard label="未结算预留" value={formatCny(summary.data?.unsettled_reserved)} />
           </div>
 
           {!canAdmin && (
@@ -118,6 +120,32 @@ export default function BudgetGovernancePage() {
           {canAdmin && (
             <>
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
+                <SectionTitle title="待对账（用量未知，占额保留至周期结束）" action={<RefreshButton onClick={() => reconciliation.refetch()} loading={reconciliation.isFetching} />} />
+                <div className="px-4 py-3 text-xs text-text-secondary">
+                  队列 {reconciliation.data?.summary.pending_count ?? 0} 笔 · 占额 {formatCny(reconciliation.data?.summary.held_cny)} · 最老滞留 {reconciliation.data?.summary.oldest_age_hours ?? 0} 小时
+                  {reconciliation.data?.summary.stale_unswept_count ? ` · 超龄未回收 ${reconciliation.data.summary.stale_unswept_count} 笔` : ''}
+                  <span className="ml-2 text-[10px] text-text-muted">回收阈值 {reconciliation.data?.summary.stale_threshold_hours ?? 6} 小时；打开本页即触发幂等回收</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">预占 ID</th><th className="px-4 py-3">request / 用户 / 租户</th><th className="px-4 py-3 text-right">占额</th><th className="px-4 py-3">原因</th><th className="px-4 py-3">发生时间</th></tr></thead>
+                    <tbody>
+                      {(reconciliation.data?.items ?? []).map((item) => (
+                        <tr key={item.reservation_id} className="border-b border-slate-50">
+                          <td className="px-4 py-3 font-mono text-[10px] text-text-muted">{item.reservation_id.slice(0, 8)}</td>
+                          <td className="px-4 py-3 font-mono text-[10px] text-text-secondary">{item.request_id || '—'} / {item.user_id} / {item.tenant_id}</td>
+                          <td className="px-4 py-3 text-right font-mono text-amber-700">{formatCny(item.reserved_cny)}</td>
+                          <td className="px-4 py-3"><span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] text-amber-700">{item.review_reason || item.status}</span></td>
+                          <td className="px-4 py-3 text-text-muted">{new Date(item.created_at).toLocaleString('zh-CN')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!reconciliation.isLoading && (reconciliation.data?.items ?? []).length === 0 && <EmptyRow text="没有待对账预占——所有调用都已确定结算或释放" />}
+                </div>
+              </section>
+
+              <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
                 <SectionTitle title="预算主体" action={<RefreshButton onClick={() => subjects.refetch()} loading={subjects.isFetching} />} />
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
@@ -126,9 +154,9 @@ export default function BudgetGovernancePage() {
                       {(subjects.data?.items ?? []).map((item) => (
                         <tr key={`${item.scope}:${item.id}`} className="border-b border-slate-50">
                           <td className="px-4 py-3"><div className="font-medium text-text-primary">{item.display_name || item.id}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted">{item.scope}:{item.id}</div></td>
-                          <td className="px-4 py-3 text-text-secondary"><div>{item.explicit_policy ? '显式策略' : '未配置显式策略'}</div><div className="mt-0.5 text-[10px] text-text-muted">继承自 {item.policy_source?.label || `${item.policy_source?.scope_type}:${item.policy_source?.scope_id}`}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted">生效 {formatUsd(item.effective_policy?.daily_limit_usd)} / {formatUsd(item.effective_policy?.monthly_limit_usd)}</div></td>
-                          <td className={`px-4 py-3 text-right font-mono tabular-nums ${ratioClass(item.daily.ratio)}`}>{formatUsd(item.daily.used)} / {formatUsd(item.daily.limit)}<div className="text-[10px]">{ratioText(item.daily.ratio)}</div></td>
-                          <td className={`px-4 py-3 text-right font-mono tabular-nums ${ratioClass(item.monthly.ratio)}`}>{formatUsd(item.monthly.used)} / {formatUsd(item.monthly.limit)}<div className="text-[10px]">{ratioText(item.monthly.ratio)}</div></td>
+                          <td className="px-4 py-3 text-text-secondary"><div>{item.explicit_policy ? '显式策略' : '未配置显式策略'}</div><div className="mt-0.5 text-[10px] text-text-muted">继承自 {item.policy_source?.label || `${item.policy_source?.scope_type}:${item.policy_source?.scope_id}`}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted">生效 {formatCny(item.effective_policy?.daily_limit_cny)} / {formatCny(item.effective_policy?.monthly_limit_cny)}</div></td>
+                          <td className={`px-4 py-3 text-right font-mono tabular-nums ${ratioClass(item.daily.ratio)}`}>{formatCny(item.daily.used)} / {formatCny(item.daily.limit)}<div className="text-[10px]">{ratioText(item.daily.ratio)}</div></td>
+                          <td className={`px-4 py-3 text-right font-mono tabular-nums ${ratioClass(item.monthly.ratio)}`}>{formatCny(item.monthly.used)} / {formatCny(item.monthly.limit)}<div className="text-[10px]">{ratioText(item.monthly.ratio)}</div></td>
                           <td className="px-4 py-3"><ModeBadge value={item.enforcement} /></td>
                         </tr>
                       ))}
@@ -139,14 +167,14 @@ export default function BudgetGovernancePage() {
               </section>
 
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
-                <SectionTitle title="策略版本" action={<div className="flex items-center gap-3"><button onClick={beginUserOverride} className="text-[11px] text-accent hover:underline">新建用户覆盖（预填 3 / 50 USD）</button><RefreshButton onClick={() => policies.refetch()} loading={policies.isFetching} /></div>} />
+                <SectionTitle title="策略版本" action={<div className="flex items-center gap-3"><button onClick={beginUserOverride} className="text-[11px] text-accent hover:underline">新建用户覆盖（预填 ¥3 / ¥50）</button><RefreshButton onClick={() => policies.refetch()} loading={policies.isFetching} /></div>} />
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">作用域</th><th className="px-4 py-3 text-right">日上限</th><th className="px-4 py-3 text-right">月上限</th><th className="px-4 py-3">模式</th><th className="px-4 py-3">更新时间</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
                     <tbody>
                       {(policies.data?.items ?? []).map((policy) => (
                         <tr key={`${policy.scope_type}:${policy.scope_id}`} className="border-b border-slate-50">
-                          <td className="px-4 py-3 font-mono text-text-primary">{policy.scope_type}:{policy.scope_id}</td><td className="px-4 py-3 text-right font-mono">{formatUsd(policy.daily_limit_usd)}</td><td className="px-4 py-3 text-right font-mono">{formatUsd(policy.monthly_limit_usd)}</td><td className="px-4 py-3"><ModeBadge value={policy.enforcement} /></td><td className="px-4 py-3 text-text-muted">{policy.updated_at ? new Date(policy.updated_at).toLocaleString('zh-CN') : '—'}</td><td className="px-4 py-3 text-right"><button onClick={() => beginEdit(policy)} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5">编辑</button></td>
+                          <td className="px-4 py-3 font-mono text-text-primary">{policy.scope_type}:{policy.scope_id}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.daily_limit_cny)}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.monthly_limit_cny)}</td><td className="px-4 py-3"><ModeBadge value={policy.enforcement} /></td><td className="px-4 py-3 text-text-muted">{policy.updated_at ? new Date(policy.updated_at).toLocaleString('zh-CN') : '—'}</td><td className="px-4 py-3 text-right"><button onClick={() => beginEdit(policy)} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5">编辑</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -178,8 +206,8 @@ export default function BudgetGovernancePage() {
   )
 }
 
-function SummaryCard({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
-  return <div className="rounded-xl border border-black/5 bg-white p-4 shadow-card"><div className="text-[11px] text-text-muted">{label}</div><div className={`mt-2 font-mono text-xl font-semibold ${alert ? 'text-red-700' : 'text-text-primary'}`}>{value}</div></div>
+function SummaryCard({ label, value, alert = false, hint }: { label: string; value: string; alert?: boolean; hint?: string }) {
+  return <div className="rounded-xl border border-black/5 bg-white p-4 shadow-card"><div className="text-[11px] text-text-muted">{label}</div><div className={`mt-2 font-mono text-xl font-semibold ${alert ? 'text-red-700' : 'text-text-primary'}`}>{value}</div>{hint && <div className="mt-1 text-[10px] text-text-muted">{hint}</div>}</div>
 }
 
 function SectionTitle({ title, action }: { title: string; action?: React.ReactNode }) {
@@ -191,7 +219,8 @@ function RefreshButton({ onClick, loading }: { onClick: () => void; loading: boo
 }
 
 function ModeBadge({ value }: { value: string }) {
-  return <span className={`rounded-full px-2 py-1 text-[10px] ${value === 'hard' ? 'bg-red-50 text-red-700' : value === 'soft' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{value}</span>
+  const text = value === 'hard' ? 'hard：超限阻断' : value === 'soft' ? 'soft：仅记录，不阻断' : 'audit：仅审计留痕'
+  return <span className={`rounded-full px-2 py-1 text-[10px] ${value === 'hard' ? 'bg-red-50 text-red-700' : value === 'soft' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{text}</span>
 }
 
 function EmptyRow({ text }: { text: string }) {
@@ -202,5 +231,5 @@ function PolicyModal(props: {
   policy: BudgetPolicy; scopeId: string; daily: string; monthly: string; enforcement: 'hard' | 'soft' | 'audit'; reason: string;
   setScopeId: (value: string) => void; setDaily: (value: string) => void; setMonthly: (value: string) => void; setEnforcement: (value: 'hard' | 'soft' | 'audit') => void; setReason: (value: string) => void; onCancel: () => void; onSave: () => void;
 }) {
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"><div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h2 className="text-sm font-semibold text-text-primary">编辑 {props.policy.scope_type}:{props.scopeId || '新用户'}</h2><p className="mt-1 text-xs text-text-muted">变更立即生效，并保留旧值、新值、操作者、原因和时间。未保存用户覆盖时，用户继续继承租户策略。</p>{props.policy.scope_type === 'user' && <label className="mt-4 block text-xs text-text-secondary">用户 ID<input value={props.scopeId} onChange={(e) => props.setScopeId(e.target.value)} placeholder="仅填写目录返回的用户 ID" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label>}<div className="mt-4 grid grid-cols-2 gap-3"><label className="text-xs text-text-secondary">日上限 USD<input value={props.daily} onChange={(e) => props.setDaily(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label><label className="text-xs text-text-secondary">月上限 USD<input value={props.monthly} onChange={(e) => props.setMonthly(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label></div><label className="mt-3 block text-xs text-text-secondary">执行模式<select value={props.enforcement} onChange={(e) => props.setEnforcement(e.target.value as 'hard' | 'soft' | 'audit')} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm"><option value="hard">hard：超限阻断</option><option value="soft">soft：超限告警</option><option value="audit">audit：仅审计</option></select></label><label className="mt-3 block text-xs text-text-secondary">变更原因<textarea value={props.reason} onChange={(e) => props.setReason(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：本月营销活动预算调整" /></label><div className="mt-5 flex justify-end gap-2"><button onClick={props.onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button><button onClick={props.onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white"><Save size={13} />保存</button></div></div></div>
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"><div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h2 className="text-sm font-semibold text-text-primary">编辑 {props.policy.scope_type}:{props.scopeId || '新用户'}</h2><p className="mt-1 text-xs text-text-muted">变更立即生效，并保留旧值、新值、操作者、原因和时间。未保存用户覆盖时，用户继续继承租户策略。</p>{props.policy.scope_type === 'user' && <label className="mt-4 block text-xs text-text-secondary">用户 ID<input value={props.scopeId} onChange={(e) => props.setScopeId(e.target.value)} placeholder="仅填写目录返回的用户 ID" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label>}<div className="mt-4 grid grid-cols-2 gap-3"><label className="text-xs text-text-secondary">日上限 ¥（CNY）<input value={props.daily} onChange={(e) => props.setDaily(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label><label className="text-xs text-text-secondary">月上限 ¥（CNY）<input value={props.monthly} onChange={(e) => props.setMonthly(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label></div><label className="mt-3 block text-xs text-text-secondary">执行模式<select value={props.enforcement} onChange={(e) => props.setEnforcement(e.target.value as 'hard' | 'soft' | 'audit')} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm"><option value="hard">hard：超限阻断</option><option value="soft">soft：仅记录与阈值告警，不阻断</option><option value="audit">audit：仅审计留痕</option></select></label><label className="mt-3 block text-xs text-text-secondary">变更原因<textarea value={props.reason} onChange={(e) => props.setReason(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：本月营销活动预算调整" /></label><div className="mt-5 flex justify-end gap-2"><button onClick={props.onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button><button onClick={props.onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white"><Save size={13} />保存</button></div></div></div>
 }
