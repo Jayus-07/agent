@@ -199,21 +199,26 @@ async def _run_local_evaluation(release: PromptReleaseRecord) -> dict[str, Any]:
 def _run_local_evaluation_sync(release: PromptReleaseRecord) -> dict[str, Any]:
     import asyncio as _asyncio
 
-    from backend.evaluation.runner import run_all
+    from backend.evaluation.config import EvalConfig
+    from backend.evaluation.service import EvaluationService
     from backend.evaluation.storage import persist_report
     from backend.infra.llm.registry_store import refresh_registry
 
     with _evaluation_env(release.created_by):
         _asyncio.run(refresh_registry())
-        report = run_all(
-            module="rag",
-            live=True,
-            selection=release.eval_suite,
-            dataset_version=str(
-                release.dataset_provenance.get("version")
-                or release.dataset_provenance.get("dataset_version")
-                or ""
-            ),
+        report = EvaluationService().evaluate(
+            EvalConfig(
+                module="rag",
+                live=True,
+                selection=release.eval_suite,
+                dataset_version=str(
+                    release.dataset_provenance.get("version")
+                    or release.dataset_provenance.get("dataset_version")
+                    or ""
+                ),
+                prompt_versions=release.prompt_snapshot,
+                release_id=release.release_id,
+            )
         )
         run_dir = persist_report(report)
 

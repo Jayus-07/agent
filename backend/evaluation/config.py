@@ -29,3 +29,5 @@ class EvalConfig(BaseModel):
     resume: bool = True           # 断点续跑（按 run 目录 checkpoint 跳过已完成用例）
     multiquery: bool = False      # 评测检索链套生产 MultiQuery 层（口径对齐线上）
     full_trace: bool = False      # per_case 保留完整 page_content/span（默认瘦身）
+    prompt_versions: dict[str, int | str | None] = {}  # 候选 Prompt 版本快照
+    release_id: str | None = None  # 关联的 Prompt 发布记录

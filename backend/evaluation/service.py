@@ -236,7 +236,20 @@ class EvaluationService:
             pass
 
     def evaluate(self, config: EvalConfig) -> EvalReport:
-        """执行评估，返回 EvalReport。"""
+        """执行评估，并在整个运行期间固定候选 Prompt 快照。"""
+        from contextlib import nullcontext
+
+        if config.prompt_versions:
+            from backend.prompts.service import prompt_service
+
+            prompt_context = prompt_service.bind_prompt_versions(config.prompt_versions)
+        else:
+            prompt_context = nullcontext()
+        with prompt_context:
+            return self._evaluate(config)
+
+    def _evaluate(self, config: EvalConfig) -> EvalReport:
+        """执行评估主流程。"""
         import time as _time
         from backend.evaluation.storage import make_run_id
 
@@ -264,7 +277,7 @@ class EvaluationService:
             results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id)
             summaries = [_build_summary(results, "rag")]
             _inject_token_totals(summaries, run_started_ts)
-            return EvalReport(
+            report = EvalReport(
                 module="rag",
                 mode="live" if live else "offline",
                 smoke=config.smoke,
@@ -280,6 +293,7 @@ class EvaluationService:
                     "run_id": run_id,
                 },
             )
+            return _attach_provenance(config, report)
 
         # 模块清单派生自 models.ModuleKind（唯一事实源）；`all` 的取/舍口径见
         # models.ALL_RUN_MODULES（排除项逐个带理由），此处不再手写列表
@@ -324,7 +338,7 @@ class EvaluationService:
             total_score = round(score, 4)
 
         _inject_token_totals(summaries, run_started_ts)
-        return EvalReport(
+        report = EvalReport(
             module=config.module,
             mode="live" if live else "offline",
             smoke=config.smoke,
@@ -335,9 +349,37 @@ class EvaluationService:
             tier_summaries=evaluate_tiers(all_cases, all_results),
             metadata=report_metadata,
         )
+        return _attach_provenance(config, report)
 
 
 _default_service = EvaluationService()
+
+
+def _attach_provenance(config: EvalConfig, report: EvalReport) -> EvalReport:
+    """把 scope、候选 Prompt 和发布关联写入 report metadata。"""
+    from backend.evaluation.provenance import build_eval_provenance
+
+    if config.prompt_versions:
+        report.prompt_versions = {
+            key: _coerce_prompt_version(value)
+            for key, value in config.prompt_versions.items()
+        }
+    elif not report.prompt_versions:
+        try:
+            from backend.prompts.service import snapshot_prompt_versions
+
+            report.prompt_versions = snapshot_prompt_versions()
+        except Exception:
+            report.prompt_versions = {}
+    report.metadata["eval_provenance"] = build_eval_provenance(config, report)
+    return report
+
+
+def _coerce_prompt_version(value: int | str | None) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def evaluate(config: EvalConfig) -> EvalReport:

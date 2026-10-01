@@ -185,15 +185,24 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
         )
 
     # 3. meta.json — 追溯元数据
+    legacy_dataset_versions = {
+        m.module: get_dataset_version(m.module) for m in report.summaries
+    }
+    eval_provenance = report.metadata.get("eval_provenance") or {}
     meta = {
         "git_sha": get_git_sha(),
         "git_branch": get_git_branch(),
-        "dataset_version": {
-            m.module: get_dataset_version(m.module) for m in report.summaries
-        },
+        # 有 provenance 时把结构化 suite/scope 写入 dataset_version；无 provenance
+        # 的旧报告继续保留原来的 module → version 结构。
+        "dataset_version": eval_provenance or legacy_dataset_versions,
+        "dataset_version_legacy": legacy_dataset_versions,
+        "eval_provenance": eval_provenance,
         # M7 口径修正：PG 权威优先（prompts 表活跃版本），DB 不可达回退
         # 下方 yaml 文件扫描（旧口径保留在 meta.prompt_versions_yaml_source）
-        "prompt_versions": _collect_prompt_versions_authoritative(),
+        "prompt_versions": (
+            eval_provenance.get("prompt_snapshot")
+            or _collect_prompt_versions_authoritative()
+        ),
         "prompt_versions_yaml_source": collect_prompt_versions(),
         "env": collect_env_info(),
         "run_at": datetime.now().isoformat(),

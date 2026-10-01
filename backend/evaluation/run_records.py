@@ -47,8 +47,8 @@ def collect_model_binding_fingerprint() -> str:
         with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT role, model_id FROM llm_model_role_bindings "
-                "ORDER BY role, model_id"
+                "SELECT role, model_name FROM llm_model_role_bindings "
+                "ORDER BY role, model_name"
             )
             blob = "\n".join(f"{r}:{m}" for r, m in cur.fetchall())
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
