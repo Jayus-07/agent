@@ -1237,6 +1237,11 @@ class RAGPipeline:
                         "[RAG.search] 全量过滤 0 命中，放宽 QueryAnalyzer "
                         f"维度重试（保留 kb 范围）: {kb_scope}")
                     vec = _vec(kb_scope)
+                if not vec and mf:
+                    # 最终兜底：去 kb 维度检索。可见性由 _keep（授权 keep-set
+                    # + permission_scope）强制——去掉的只是路由猜测，不是授权
+                    vec = _vec({k: v for k, v in (mf or {}).items()
+                                if k not in ("kb_id", "$or")} or None)
                 for doc, dist in vec:
                     if not _keep(doc):
                         continue
@@ -1268,6 +1273,10 @@ class RAGPipeline:
                             f"（保留 kb 范围）: {kb_scope}")
                         kept = [d for d in self.bm25.invoke(question)
                                 if _bm25_keep(d, kb_scope)]
+                    if not kept and mf:
+                        # 最终兜底：去 kb 维度（授权由 _keep 强制，见向量腿注释）
+                        kept = [d for d in self.bm25.invoke(question)
+                                if _bm25_keep(d, None)]
                     for doc in kept:
                         if len(results) >= top_k:
                             break
