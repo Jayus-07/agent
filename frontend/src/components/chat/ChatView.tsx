@@ -11,7 +11,8 @@ import ChatInput from './ChatInput'
 import WelcomeState from './WelcomeState'
 import ContextPanel from './ContextPanel'
 import ErrorCard from '@/components/shared/ErrorCard'
-import BudgetStatusBar from './BudgetStatusBar'
+import { useBudgetStatus } from '@/hooks/useBudgetStatus'
+import type { BudgetStatus } from '@/api/budgets'
 import ContextNoticeBar from './ContextNoticeBar'
 import ClarificationCard from './ClarificationCard'
 import { lastUserQuestion } from './chatRetry'
@@ -37,6 +38,8 @@ export default function ChatView() {
   // #20：路由离开聊天页时终止在途流（流继续跑完会白烧 token）
   useAbortStreamOnUnmount()
   const [budgetBlocked, setBudgetBlocked] = useState(false)
+  // 预算轮询每页单一数据源；圆圈展示在输入框工具栏（ComposerToolbar）
+  const { status: budgetStatus }: { status: BudgetStatus | null } = useBudgetStatus(setBudgetBlocked)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -122,8 +125,6 @@ export default function ChatView() {
         </div>
       )}
 
-      <BudgetStatusBar onBlockedChange={setBudgetBlocked} />
-
       {/* 上下文预算提示条（2026-09-22）：节省 tokens + 上下文用量百分比 */}
       <ContextNoticeBar />
 
@@ -153,7 +154,7 @@ export default function ChatView() {
         <div className="flex-1 min-h-0 flex flex-col px-6 py-6">
           <div className="w-full my-auto">
             <WelcomeState onExampleClick={send} budgetBlocked={budgetBlocked} />
-            <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} embedded budgetBlocked={budgetBlocked} />
+            <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} embedded budgetBlocked={budgetBlocked} budgetStatus={budgetStatus} />
           </div>
         </div>
       ) : (
@@ -162,7 +163,7 @@ export default function ChatView() {
             <MessageList messages={messages} isLoading={isLoading} sessionId={currentId} budgetBlocked={budgetBlocked} />
             <div ref={bottomRef} />
           </div>
-          <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} budgetBlocked={budgetBlocked} />
+          <ChatInput onSend={send} isLoading={isLoading} onStop={stopStream} budgetBlocked={budgetBlocked} budgetStatus={budgetStatus} />
         </>
       )}
     </div>

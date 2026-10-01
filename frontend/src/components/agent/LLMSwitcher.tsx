@@ -129,7 +129,9 @@ export default function LLMSwitcher() {
         </span>
       )
     }
-    if (balance?.ok && balance.balance) {
+    // providers 在余额不可查时返回占位串 "—"（minimax/qwen/qwen_tp），
+    // 一并按无数据处理，避免渲染成「¥ —」这类无信息噪声
+    if (balance?.ok && balance.balance && balance.balance !== '—') {
       return (
         <span className="text-[13px] text-[#1f1f1f] font-medium tabular-nums tracking-tight">
           ¥ {balance.balance}
@@ -143,7 +145,8 @@ export default function LLMSwitcher() {
         </span>
       )
     }
-    return <span className="text-[13px] text-[#5f6368]">—</span>
+    // 余额未知（查询失败/无数据）：不渲染占位符，避免「¥ —」这类无信息噪声
+    return null
   }
 
   return (

@@ -14,6 +14,8 @@ import { ArrowUp, Building2, Paperclip, Square } from 'lucide-react'
 import { getCurrentDepartment } from '@/lib/department'
 import { useToast } from '@/components/shared/Toast'
 import LLMSwitcher from '@/components/agent/LLMSwitcher'
+import BudgetRing from '@/components/chat/BudgetRing'
+import type { BudgetStatus } from '@/api/budgets'
 
 interface Props {
   disabled?: boolean
@@ -21,10 +23,12 @@ interface Props {
   onSend: () => void
   /** 生成中时发送按钮变为停止按钮，点击中止本轮流式 */
   onStop?: () => void
+  /** 预算圆圈数据（ChatView 经 useBudgetStatus 轮询下发） */
+  budgetStatus?: BudgetStatus | null
 }
 
 export default function ComposerToolbar({
-  disabled = false, canSend, onSend, onStop,
+  disabled = false, canSend, onSend, onStop, budgetStatus = null,
 }: Props) {
   const toast = useToast()
   const department = getCurrentDepartment()
@@ -34,8 +38,9 @@ export default function ComposerToolbar({
     // 模型切换器整组换行而不是溢出；≥sm 视口仍单行。
     // 左簇（部门+附件）与右簇（模型+权限+发送）用 ml-auto 分开，行内垂直统一居中
     <div className="flex flex-wrap items-center gap-1.5 gap-y-1 pt-2">
-      {/* 左簇：当前部门（只读）+ 附件 */}
+      {/* 左簇：预算圆圈 + 当前部门（只读）+ 附件 */}
       <div className="flex items-center gap-0.5 shrink-0">
+        <BudgetRing status={budgetStatus} />
         <div
           className="min-w-0 flex items-center gap-1 rounded-lg px-2 py-1.5"
           title="部门由管理员在管理端维护，决定知识库检索授权范围"

@@ -8,6 +8,7 @@
  */
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import ComposerToolbar from '@/components/agent/ComposerToolbar'
+import type { BudgetStatus } from '@/api/budgets'
 import {
   CHAT_INPUT_MAX_CHARS,
   chatInputOverLimit,
@@ -22,9 +23,11 @@ interface Props {
   /** 嵌在空状态居中组内（而非钉在会话底部）：去掉向上渐隐、收紧上下边距 */
   embedded?: boolean
   budgetBlocked?: boolean
+  /** 预算圆圈数据（useBudgetStatus 轮询，ChatView 下发） */
+  budgetStatus?: BudgetStatus | null
 }
 
-export default function ChatInput({ onSend, isLoading, onStop, embedded = false, budgetBlocked = false }: Props) {
+export default function ChatInput({ onSend, isLoading, onStop, embedded = false, budgetBlocked = false, budgetStatus = null }: Props) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -73,13 +76,14 @@ export default function ChatInput({ onSend, isLoading, onStop, embedded = false,
             canSend={Boolean(input.trim()) && !chatInputOverLimit(input) && !isLoading && !budgetBlocked}
             onSend={handleSend}
             onStop={onStop}
+            budgetStatus={budgetStatus}
           />
           {/* 接近/超过上限时显示计数与引导（短消息不展示噪声计数器） */}
           {chatInputShowCounter(input) && (
             <div className="flex items-center justify-between px-1 pt-1 text-[11px]">
               <span className={chatInputOverLimit(input) ? 'text-red-600' : 'text-text-muted'}>
                 {chatInputOverLimit(input)
-                  ? '输入过长，请缩短内容或通过知识库文件上传处理'
+                  ? `输入超过 ${CHAT_INPUT_MAX_CHARS / 10000} 万字上限：请精简内容；大段材料建议上传到知识库（文档入库）后在对话中直接提问引用`
                   : '长文档建议通过知识库上传，可获得更好的检索与引用效果'}
               </span>
               <span className={chatInputOverLimit(input) ? 'text-red-600' : 'text-text-muted'}>
