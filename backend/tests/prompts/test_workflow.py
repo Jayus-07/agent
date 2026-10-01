@@ -1,6 +1,7 @@
 """Tests for prompt status workflow — state machine + API + publish tightening."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from backend.prompts.workflow import (
     StatusTransitionError,
     validate_transition,
 )
+from backend.prompts.release_models import PromptReleaseStatus
 
 # ── State machine unit tests ──────────────────────────────────
 
@@ -202,26 +204,47 @@ class TestTransitionAPI:
 
 
 class TestPublishTightening:
-    def test_publish_draft_status_rejected(self, client):
-        with patch("backend.app.api.routes.prompts.prompt_service") as mock_svc:
-            mock_svc.publish = AsyncMock(
-                side_effect=ValueError(
-                    "Version 1 has status 'draft'; only 'passed' or 'published' versions can be published"
-                )
+    def test_publish_without_approved_release_rejected(self, client):
+        with patch(
+            "backend.app.api.routes.prompt_releases.get_release_service"
+        ) as get_service:
+            get_service.return_value.get_approved_release = AsyncMock(
+                return_value=None
             )
             resp = client.post(
                 "/api/prompts/rag.qa/publish",
                 json={"version": 1},
                 headers=AUTH,
             )
-        assert resp.status_code == 422
+        assert resp.status_code == 409
+        assert resp.json()["code"] == "PROMPT_RELEASE_GATE_BLOCKED"
 
     def test_publish_passed_status_allowed(self, client):
-        with patch("backend.app.api.routes.prompts.prompt_service") as mock_svc:
-            mock_svc.publish = AsyncMock(return_value={"active_version": 1})
+        approved = SimpleNamespace(
+            release_id="rel-workflow-1",
+            version=1,
+            status=PromptReleaseStatus.APPROVED,
+        )
+        published = SimpleNamespace(
+            release_id="rel-workflow-1",
+            version=1,
+            status=PromptReleaseStatus.PUBLISHED,
+        )
+        with patch(
+            "backend.app.api.routes.prompt_releases.get_release_service"
+        ) as get_service:
+            get_service.return_value.get_approved_release = AsyncMock(
+                return_value=approved
+            )
+            get_service.return_value.publish = AsyncMock(return_value=published)
             resp = client.post(
                 "/api/prompts/rag.qa/publish",
                 json={"version": 1},
                 headers=AUTH,
             )
         assert resp.status_code == 200
+        assert resp.json() == {
+            "active_version": 1,
+            "release_id": "rel-workflow-1",
+            "status": "published",
+        }

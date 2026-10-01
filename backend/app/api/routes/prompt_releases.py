@@ -118,7 +118,10 @@ def _schedule_eval_dispatch(record: PromptReleaseRecord, service: PromptReleaseS
 
 async def _dispatch_release(record: PromptReleaseRecord, service: PromptReleaseService) -> None:
     dispatcher = PromptEvalDispatcher(
-        local=LocalPromptEvalDispatcher(release_service=service),
+        local=LocalPromptEvalDispatcher(
+            release_service=service,
+            evaluator=_load_local_evaluator(),
+        ),
         github=GitHubPromptEvalDispatcher(release_service=service),
     )
     result = await dispatcher.dispatch(record)
@@ -136,6 +139,13 @@ async def _dispatch_release(record: PromptReleaseRecord, service: PromptReleaseS
         )
     except Exception as exc:  # noqa: BLE001 — 评测失败不能反向打断请求进程
         logger.error("Prompt release dispatch failed to persist: %s", exc)
+
+
+def _load_local_evaluator():
+    """在应用层注入评测适配器，避免 prompts 层反向依赖 evaluation。"""
+    from backend.evaluation.prompt_release_runner import run_prompt_release_evaluation
+
+    return run_prompt_release_evaluation
 
 
 @router.post("/{key}/versions/{version}/release", status_code=202)

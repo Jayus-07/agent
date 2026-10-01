@@ -1,9 +1,7 @@
-"""Prompt 发布评测分发：本地 DB 模型执行或 GitHub Actions 执行。"""
+"""Prompt 发布评测分发：本地评测回调或 GitHub Actions 执行。"""
 from __future__ import annotations
 
-import asyncio
 import os
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
@@ -35,12 +33,21 @@ class LocalPromptEvalDispatcher:
         run_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._release_service = release_service
-        self._evaluator = evaluator or _run_local_evaluation
+        self._evaluator = evaluator
         self._run_id_factory = run_id_factory or (lambda: f"local-{uuid4().hex}")
 
     async def dispatch(self, release: PromptReleaseRecord) -> DispatchResult:
         service = self._release_service or _load_release_service()
         external_run_id = self._run_id_factory()
+        if self._evaluator is None:
+            return DispatchResult(
+                release_id=release.release_id,
+                executor="local",
+                accepted=False,
+                external_run_id=external_run_id,
+                error_code="LOCAL_EVALUATOR_NOT_CONFIGURED",
+                message="本地评测执行器未注入评测回调",
+            )
         try:
             await service.mark_running(release.release_id, external_run_id)
             result = dict(await self._evaluator(release))
@@ -189,74 +196,6 @@ def _github_config() -> dict[str, str]:
         "token": os.getenv("PROMPT_EVAL_GITHUB_TOKEN", "").strip(),
         "ref": os.getenv("PROMPT_EVAL_GITHUB_REF", "main").strip(),
     }
-
-
-async def _run_local_evaluation(release: PromptReleaseRecord) -> dict[str, Any]:
-    """用现有 EvaluationService 执行 suite，模型解析仍来自 DB 注册表。"""
-    return await asyncio.to_thread(_run_local_evaluation_sync, release)
-
-
-def _run_local_evaluation_sync(release: PromptReleaseRecord) -> dict[str, Any]:
-    import asyncio as _asyncio
-
-    from backend.evaluation.config import EvalConfig
-    from backend.evaluation.service import EvaluationService
-    from backend.evaluation.storage import persist_report
-    from backend.infra.llm.registry_store import refresh_registry
-
-    with _evaluation_env(release.created_by):
-        _asyncio.run(refresh_registry())
-        report = EvaluationService().evaluate(
-            EvalConfig(
-                module="rag",
-                live=True,
-                selection=release.eval_suite,
-                dataset_version=str(
-                    release.dataset_provenance.get("version")
-                    or release.dataset_provenance.get("dataset_version")
-                    or ""
-                ),
-                prompt_versions=release.prompt_snapshot,
-                release_id=release.release_id,
-            )
-        )
-        run_dir = persist_report(report)
-
-    summaries = [summary for summary in report.summaries if summary.module == "rag"]
-    summary = summaries[0] if summaries else None
-    tier_ok = all(item.passed_threshold for item in report.tier_summaries)
-    passed = bool(summary and tier_ok)
-    metrics = dict(summary.metrics if summary else {})
-    if summary is not None:
-        metrics["pass_rate"] = summary.pass_rate
-        metrics["total"] = summary.total
-        metrics["passed"] = summary.passed
-    return {
-        "status": "passed" if passed else "failed",
-        "run_id": run_dir.name,
-        "metrics": metrics,
-        "failure_reason": "评测层级未达到阈值" if not passed else "",
-    }
-
-
-@contextmanager
-def _evaluation_env(triggered_by: str):
-    old_trigger = os.environ.get("EVAL_TRIGGER")
-    old_triggered_by = os.environ.get("EVAL_TRIGGERED_BY")
-    os.environ["EVAL_TRIGGER"] = "prompt_publish"
-    os.environ["EVAL_TRIGGERED_BY"] = triggered_by or "prompt-publish"
-    try:
-        yield
-    finally:
-        _restore_env("EVAL_TRIGGER", old_trigger)
-        _restore_env("EVAL_TRIGGERED_BY", old_triggered_by)
-
-
-def _restore_env(name: str, value: str | None) -> None:
-    if value is None:
-        os.environ.pop(name, None)
-    else:
-        os.environ[name] = value
 
 
 def _load_release_service() -> Any:
