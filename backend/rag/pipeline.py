@@ -26,6 +26,7 @@ from backend.rag.preprocessing.loader import load_documents_from_directory
 from backend.rag.indexing.doc_id import derive_doc_id_from_path
 from backend.rag.base import CustomRetriever
 from backend.rag.retrieval.bm25_store import (
+    BM25_META_VERSION,
     BM25Store,
     compute_content_hash,
     compute_content_hash_unordered,
