@@ -133,6 +133,7 @@ jobs:
           RUN_ID: ${{ env.EXTERNAL_RUN_ID }}
         run: |
           python - <<'PY'
+          import json
           import os
           import sys
           from pathlib import Path
@@ -143,11 +144,21 @@ jobs:
           from backend.evaluation.storage import persist_report
 
           version = int(os.environ["PROMPT_VERSION"])
+          dataset_version_raw = os.environ.get("DATASET_VERSION") or ""
+          try:
+              dataset_provenance = json.loads(dataset_version_raw)
+          except json.JSONDecodeError:
+              dataset_provenance = {}
+          dataset_version = (
+              str(dataset_provenance.get("version"))
+              if isinstance(dataset_provenance, dict) and dataset_provenance.get("version")
+              else dataset_version_raw or None
+          )
           config = EvalConfig(
               module="rag",
               live=True,
               selection=os.environ["PROMPT_EVAL_SUITE"],
-              dataset_version=os.environ.get("DATASET_VERSION") or None,
+              dataset_version=dataset_version,
               run_id=os.environ["RUN_ID"],
               prompt_versions={os.environ["PROMPT_KEY"]: version},
               release_id=os.environ["RELEASE_ID"],
