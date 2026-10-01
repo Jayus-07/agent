@@ -54,3 +54,18 @@ def test_prompt_eval_routes_memory_backed_stores_to_isolated_database():
     assert env["DOC_REGISTRY_PGDATABASE"] == "agent_memory_test"
     assert env["OBS_DB_PGDATABASE"] == "agent_memory_test"
     assert env["WORKFLOW_DB_PGDATABASE"] == "agent_memory_test"
+
+
+def test_prompt_eval_imports_baseline_fixtures_before_evaluation():
+    workflow = _workflow()
+    steps = workflow["jobs"]["prompt-eval"]["steps"]
+    names = [step.get("name") for step in steps]
+    import_step = next(
+        step for step in steps if step.get("name") == "Import baseline evaluation fixtures"
+    )
+
+    assert "Import baseline evaluation fixtures" in names
+    assert import_step["run"] == "python -m backend.evaluation.import_fixture baseline"
+    assert names.index("Import baseline evaluation fixtures") < names.index(
+        "Run selected evaluation"
+    )

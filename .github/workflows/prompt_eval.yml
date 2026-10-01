@@ -135,6 +135,9 @@ jobs:
       - name: Seed test model binding
         run: python -m backend.scripts.seed_prompt_eval_db
 
+      - name: Import baseline evaluation fixtures
+        run: python -m backend.evaluation.import_fixture baseline
+
       - name: Run selected evaluation
         id: evaluation
         continue-on-error: true
