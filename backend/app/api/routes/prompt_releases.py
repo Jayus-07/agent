@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.config.settings import PROMPT_EVAL_EXECUTOR
 from backend.prompts.registry import PROMPT_REGISTRY
 from backend.prompts.eval_dispatch import (
     GitHubPromptEvalDispatcher,
@@ -27,7 +28,10 @@ _dispatch_tasks: set[asyncio.Task[None]] = set()
 class CreateReleaseRequest(BaseModel):
     suite: str = Field(min_length=1)
     dataset_version: dict[str, Any] = Field(default_factory=dict)
-    executor: Literal["local", "github"] = "local"
+    executor: Literal["local", "github"] = Field(
+        default="github" if PROMPT_EVAL_EXECUTOR not in {"local", "github"}
+        else PROMPT_EVAL_EXECUTOR
+    )
     target_env: str = "production"
 
 
@@ -116,6 +120,13 @@ def _schedule_eval_dispatch(record: PromptReleaseRecord, service: PromptReleaseS
     task.add_done_callback(_dispatch_tasks.discard)
 
 
+def _enqueue_github_poll(release_id: str):
+    """投递持久轮询任务；业务 payload 只携带 release_id。"""
+    from backend.tasks.prompt_eval_tasks import enqueue_github_prompt_eval_poll
+
+    return enqueue_github_prompt_eval_poll(release_id)
+
+
 async def _dispatch_release(record: PromptReleaseRecord, service: PromptReleaseService) -> None:
     dispatcher = PromptEvalDispatcher(
         local=LocalPromptEvalDispatcher(
@@ -126,6 +137,23 @@ async def _dispatch_release(record: PromptReleaseRecord, service: PromptReleaseS
     )
     result = await dispatcher.dispatch(record)
     if result.accepted:
+        if record.executor == "github":
+            try:
+                _enqueue_github_poll(record.release_id)
+            except Exception as exc:  # noqa: BLE001 — 入队失败必须终止门禁
+                logger.error("Prompt release poll enqueue failed: %s", exc)
+                try:
+                    await service.record_result(
+                        record.release_id,
+                        {
+                            "status": "failed",
+                            "run_id": result.external_run_id,
+                            "failure_reason": f"GitHub 评测轮询任务入队失败: {exc}",
+                        },
+                        actor="prompt-publish:poll-enqueue",
+                    )
+                except Exception as persist_exc:  # noqa: BLE001
+                    logger.error("Prompt release enqueue failure persist failed: %s", persist_exc)
         return
     try:
         await service.record_result(

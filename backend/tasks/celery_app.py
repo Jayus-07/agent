@@ -45,6 +45,7 @@ celery_app = Celery(
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
              "backend.tasks.memory_maintenance_tasks",  # STOP C：Memory 衰减生命周期（beat）
              "backend.tasks.travel_booking_tasks",  # STOP L：Booking 恢复扫描（beat）
+             "backend.tasks.prompt_eval_tasks",  # Prompt 发布评测 GitHub 轮询
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
              "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
 )
@@ -228,3 +229,9 @@ def _on_worker_process_init(**_kwargs) -> None:
     """prefork 子进程启动时建立自己的模型配置快照。"""
     refresh_worker_model_registry()
     refresh_worker_prompt_snapshot()
+    try:
+        from backend.prompts.hot_reload import start_prompt_reload_listener
+
+        start_prompt_reload_listener()
+    except Exception:
+        logger.warning("[Worker] PromptHotReload listener 启动失败", exc_info=True)

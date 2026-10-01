@@ -103,6 +103,7 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.side_effect_probe": ("maintenance", "beat_binding"),
     "model.health_scan": ("maintenance", "beat_binding"),
     "model.health_check_one": ("maintenance", "beat_binding"),
+    "prompts.poll_github_eval": ("maintenance", "prompt_eval_polling"),
 }
 
 # dispatch_type 合法词表（observability：每次路由决策必带）

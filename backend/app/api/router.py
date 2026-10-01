@@ -105,6 +105,7 @@ api_router.include_router(selection.router)  # 智能选品
 api_router.include_router(selection_decision.router)  # 选品决策
 api_router.include_router(selection_funnel.router)  # 智能选品漏斗（导入通道 2026-09-17）
 api_router.include_router(prompts.router)  # Prompt 管理
+api_router.include_router(prompts.admin_runtime_router)  # Prompt Runtime 状态
 api_router.include_router(cs_admin.router)  # 客服会话管理
 api_router.include_router(cs_admin.confirm_router)  # P3.1: 确认卡片端点
 api_router.include_router(cs_dispatch.router)  # P4: 用户直接请求人工入池

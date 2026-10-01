@@ -39,6 +39,7 @@ from backend.prompts.service import prompt_service
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/prompts", tags=["Prompt管理"])
+admin_runtime_router = APIRouter(prefix="/admin/prompts", tags=["Prompt管理"])
 
 
 # ── Request / Response models ─────────────────────────────────
@@ -246,6 +247,25 @@ async def get_registry(
         "specs": [_spec_to_dict(s) for s in PROMPT_REGISTRY.values()],
         "total": len(PROMPT_REGISTRY),
     }
+
+
+@router.get("/runtime-status")
+async def get_runtime_status(
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+):
+    """返回各进程 Prompt Runtime epoch 与心跳状态。"""
+    _check_permission("low", "read", operator.role)
+    from backend.prompts.hot_reload import runtime_status
+
+    return runtime_status()
+
+
+@admin_runtime_router.get("/runtime-status")
+async def get_admin_runtime_status(
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+):
+    """管理端兼容路径：/admin/prompts/runtime-status。"""
+    return await get_runtime_status(operator)
 
 
 # ── GET /prompts/{key} ────────────────────────────────────────
@@ -645,8 +665,10 @@ async def playground(
         raise HTTPException(422, str(e))
 
     try:
-        from backend.llm import get_llm
-        llm = get_llm(body.model) if body.model else get_llm()
+        # Playground 与线上运行时共用同一条 LLM 代理；旧路径 ``backend.llm``
+        # 已不存在，导致管理端只能渲染模板而无法看到模型输出。
+        from backend.infra.llm import get_llm
+        llm = get_llm()
 
         import time
         t0 = time.monotonic()

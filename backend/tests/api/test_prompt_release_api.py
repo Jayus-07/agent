@@ -141,3 +141,28 @@ def test_approved_release_can_publish_through_release_endpoint(client):
     assert response.status_code == 200
     assert response.json()["status"] == "published"
     assert fake_service.published is True
+
+
+def test_github_release_has_durable_backend_poller():
+    from backend.app.api.routes.prompt_releases import _enqueue_github_poll
+
+    calls: list[str] = []
+
+    def enqueue(release_id: str):
+        calls.append(release_id)
+        return "celery-task-1"
+
+    with patch(
+        "backend.tasks.prompt_eval_tasks.enqueue_github_prompt_eval_poll",
+        side_effect=enqueue,
+    ):
+        task_id = _enqueue_github_poll("rel-1")
+
+    assert task_id == "celery-task-1"
+    assert calls == ["rel-1"]
+
+
+def test_release_request_defaults_to_github_executor():
+    from backend.app.api.routes.prompt_releases import CreateReleaseRequest
+
+    assert CreateReleaseRequest(suite="pr_smoke").executor == "github"

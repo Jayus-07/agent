@@ -64,3 +64,13 @@ TOOL_CB_RECOVERY_SECONDS = float(os.getenv("TOOL_CB_RECOVERY_SECONDS", "30"))
 TOOL_BULKHEAD_WAIT_MS = float(os.getenv("TOOL_BULKHEAD_WAIT_MS", "300"))
 # 按工具覆盖策略：JSON dict，如 {"rag.search": {"timeout_ms": 15000}}（见 core/tool_runtime/policy.py）
 TOOL_POLICY_JSON = os.getenv("TOOL_POLICY_JSON", "")
+
+# ── GitHub Prompt 评测轮询（发布门禁）────────────────────────
+# GitHub Actions 不回调业务后端；Celery worker 按此间隔拉取 Run 和 Artifact。
+PROMPT_EVAL_EXECUTOR = os.getenv("PROMPT_EVAL_EXECUTOR", "github").strip().lower()
+PROMPT_EVAL_POLL_INTERVAL_SECONDS = int(
+    os.getenv("PROMPT_EVAL_POLL_INTERVAL_SECONDS", "15")
+)
+PROMPT_EVAL_POLL_MAX_ATTEMPTS = int(
+    os.getenv("PROMPT_EVAL_POLL_MAX_ATTEMPTS", "120")
+)

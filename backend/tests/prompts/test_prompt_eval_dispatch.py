@@ -11,6 +11,7 @@ from backend.prompts.release_models import PromptReleaseRecord, PromptReleaseSta
 from backend.prompts.eval_dispatch import (
     DispatchResult,
     GitHubPromptEvalDispatcher,
+    GitHubPromptEvalPoller,
     LocalPromptEvalDispatcher,
     PromptEvalDispatcher,
 )
@@ -116,3 +117,103 @@ async def test_dispatcher_selects_executor_without_frontend_credentials():
     assert result.external_run_id == "gh-1"
     local.assert_not_awaited()
     github.dispatch.assert_awaited_once()
+
+
+@dataclass
+class _FakeGitHubActionsClient:
+    run: dict[str, Any] | None
+    result: dict[str, Any] | None = None
+
+    async def find_run(self, release: PromptReleaseRecord) -> dict[str, Any] | None:
+        return self.run
+
+    async def read_result(
+        self, release: PromptReleaseRecord, run: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_github_poller_records_artifact_result_after_run_completes():
+    service = _FakeReleaseService(_release("github"), [], [])
+    await service.mark_running("rel-1", "github-run-1")
+    client = _FakeGitHubActionsClient(
+        run={"id": 42, "status": "completed", "conclusion": "success"},
+        result={
+            "release_id": "rel-1",
+            "external_run_id": "github-run-1",
+            "eval_run_id": "eval-gh-1",
+            "status": "passed",
+            "metrics": {"pass_rate": 1.0},
+        },
+    )
+
+    result = await GitHubPromptEvalPoller(
+        release_service=service, client=client
+    ).poll(service.release)
+
+    assert result.state == "passed"
+    assert service.results[0][1]["eval_run_id"] == "eval-gh-1"
+
+
+@pytest.mark.asyncio
+async def test_github_poller_keeps_release_running_until_run_is_terminal():
+    service = _FakeReleaseService(_release("github"), [], [])
+    await service.mark_running("rel-1", "github-run-1")
+    client = _FakeGitHubActionsClient(
+        run={"id": 42, "status": "in_progress", "conclusion": None}
+    )
+
+    result = await GitHubPromptEvalPoller(
+        release_service=service, client=client
+    ).poll(service.release)
+
+    assert result.state == "pending"
+    assert service.results == []
+
+
+@pytest.mark.asyncio
+async def test_github_poller_does_not_accept_passed_artifact_from_failed_run():
+    service = _FakeReleaseService(_release("github"), [], [])
+    await service.mark_running("rel-1", "github-run-1")
+    client = _FakeGitHubActionsClient(
+        run={"id": 42, "status": "completed", "conclusion": "failure"},
+        result={
+            "release_id": "rel-1",
+            "external_run_id": "github-run-1",
+            "eval_run_id": "eval-gh-1",
+            "status": "passed",
+        },
+    )
+
+    result = await GitHubPromptEvalPoller(
+        release_service=service, client=client
+    ).poll(service.release)
+
+    assert result.state == "failed"
+    assert service.results[0][1]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_github_dispatch_serializes_workflow_inputs_without_callback_url(
+    monkeypatch,
+):
+    monkeypatch.setenv("PROMPT_EVAL_GITHUB_REPOSITORY", "Jayus-07/agent")
+    monkeypatch.setenv("PROMPT_EVAL_GITHUB_TOKEN", "token")
+    captured: dict[str, Any] = {}
+
+    async def requester(url: str, headers: dict[str, str], payload: dict[str, Any]) -> int:
+        captured.update(payload)
+        return 204
+
+    service = _FakeReleaseService(_release("github"), [], [])
+    result = await GitHubPromptEvalDispatcher(
+        release_service=service,
+        requester=requester,
+        run_id_factory=lambda: "github-run-1",
+    ).dispatch(service.release)
+
+    assert result.accepted is True
+    assert captured["inputs"]["version"] == "2"
+    assert captured["inputs"]["dataset_version"] == '{"version":"5.0.0"}'
+    assert "callback_url" not in captured["inputs"]

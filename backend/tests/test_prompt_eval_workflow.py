@@ -35,7 +35,10 @@ def test_prompt_eval_workflow_accepts_release_contract_inputs():
     repository = workflow["on"]["repository_dispatch"]
 
     assert set(dispatch["inputs"]) >= {
-        "release_id", "prompt_key", "version", "suite", "callback_url",
+        "release_id", "prompt_key", "version", "suite", "external_run_id",
     }
+    assert "callback_url" not in dispatch["inputs"]
     assert repository["types"] == ["prompt-eval"]
-    assert "CALLBACK_URL" in workflow["jobs"]["prompt-eval"]["env"]
+    assert "CALLBACK_URL" not in workflow["jobs"]["prompt-eval"]["env"]
+    assert "run-name" in workflow
+    assert "external_run_id" in workflow["run-name"]

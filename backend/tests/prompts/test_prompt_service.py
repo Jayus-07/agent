@@ -113,7 +113,13 @@ class TestPublish:
             mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with patch("backend.prompts.service.PromptRepository", return_value=mock_repo):
-                result = await service.publish("test.low", 2, actor="admin", role="admin")
+                with patch(
+                    "backend.prompts.hot_reload.bump_prompt_epoch",
+                    new=AsyncMock(return_value=2),
+                ) as bump:
+                    result = await service.publish(
+                        "test.low", 2, actor="admin", role="admin"
+                    )
 
         assert result["active_version"] == 2
         assert hook_called == [True]
@@ -122,6 +128,7 @@ class TestPublish:
         assert entry is not None
         assert entry.version == 2
         assert entry.template == "New {name}"
+        bump.assert_awaited_once_with("test.low", actor="admin")
 
 
 class TestReloadHooks:

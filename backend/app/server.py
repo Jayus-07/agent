@@ -217,6 +217,17 @@ async def init_prompt_service():
         logger.warning(f"[Startup] Prompt defaults load/seed failed: {e}")
 
 
+@app.on_event("startup")
+def start_prompt_hot_reload_listener() -> None:
+    """启动主进程 Prompt Runtime 监听器。"""
+    try:
+        from backend.prompts.hot_reload import start_prompt_reload_listener
+
+        start_prompt_reload_listener()
+    except Exception as exc:  # noqa: BLE001 - 监听器是旁路能力
+        logger.warning(f"[Startup] PromptHotReload listener start failed: {exc}")
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台初始化 RAG Pipeline（避免首次上传等 13 秒）
 # ═══════════════════════════════════════════════════

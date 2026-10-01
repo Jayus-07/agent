@@ -26,6 +26,7 @@ from backend.shared.logger import logger
 _MEMORY_TABLES = [
     # Prompt CI/CD（018）
     "prompts", "prompt_versions", "prompt_audit_log",
+    "prompt_runtime_state", "prompt_reload_events",
     # RAG 存储（010/011/014/024/027）
     "doc_registry", "chunk_store", "rag_vectors", "doc_operation_log",
     "keyword_rules", "rag_processing_runs", "rag_processing_steps",

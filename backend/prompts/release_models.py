@@ -41,7 +41,7 @@ class PromptReleaseRecord:
     eval_suite: str
     dataset_provenance: dict[str, Any] = field(default_factory=dict)
     target_env: str = "production"
-    executor: str = "local"
+    executor: str = "github"
     prompt_snapshot: dict[str, Any] = field(default_factory=dict)
     tool_contract_fingerprint: str = ""
     model_binding_fingerprint: str = ""
@@ -76,7 +76,7 @@ class PromptReleaseRecord:
             eval_suite=str(row.get("eval_suite", "")),
             dataset_provenance=dict(provenance or {}),
             target_env=str(row.get("target_env", "production")),
-            executor=str(row.get("executor", "local")),
+            executor=str(row.get("executor", "github")),
             prompt_snapshot=dict(row.get("prompt_snapshot") or {}),
             tool_contract_fingerprint=str(row.get("tool_contract_fingerprint", "")),
             model_binding_fingerprint=str(row.get("model_binding_fingerprint", "")),

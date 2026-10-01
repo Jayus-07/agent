@@ -1,12 +1,15 @@
-"""Prompt 发布评测分发：本地评测回调或 GitHub Actions 执行。"""
+"""Prompt 发布评测分发：本地执行或 GitHub Actions 轮询。"""
 from __future__ import annotations
 
+import io
+import json
 import os
+import zipfile
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from backend.prompts.release_models import PromptReleaseRecord
+from backend.prompts.release_models import PromptReleaseRecord, PromptReleaseStatus
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,203 @@ class DispatchResult:
     status: str = ""
     error_code: str = ""
     message: str = ""
+
+
+@dataclass(frozen=True)
+class PollResult:
+    """一次 GitHub Actions 轮询的结果。"""
+
+    state: str
+    run_id: str = ""
+    reason: str = ""
+
+
+class GitHubActionsClient:
+    """GitHub Actions API 客户端，只负责外部 API 和 Artifact 读取。"""
+
+    def __init__(self, config: dict[str, str] | None = None) -> None:
+        self._config = config or _github_config()
+
+    async def find_run(self, release: PromptReleaseRecord) -> dict[str, Any] | None:
+        """按 release 的 external_run_id 找到 workflow_dispatch 对应的 Run。"""
+        data = await self._request_json(
+            "GET",
+            f"/actions/workflows/{self._config['workflow']}/runs",
+            params={
+                "branch": self._config["ref"],
+                "per_page": "50",
+            },
+        )
+        runs = data.get("workflow_runs") or []
+        token = release.external_run_id
+        for run in sorted(runs, key=lambda item: item.get("created_at", ""), reverse=True):
+            searchable = " ".join(
+                str(run.get(field) or "")
+                for field in ("display_title", "run_name", "name")
+            )
+            if token and token in searchable:
+                return run
+        return None
+
+    async def read_result(
+        self, release: PromptReleaseRecord, run: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """读取 GitHub Artifact 中的 prompt_eval_result.json。"""
+        artifacts = await self._request_json(
+            "GET", f"/actions/runs/{int(run['id'])}/artifacts"
+        )
+        expected_name = f"prompt-eval-{release.release_id}"
+        artifact = next(
+            (
+                item
+                for item in artifacts.get("artifacts", [])
+                if item.get("name") == expected_name and not item.get("expired")
+            ),
+            None,
+        )
+        if not artifact:
+            return None
+
+        archive_url = str(artifact.get("archive_download_url") or "")
+        if not archive_url:
+            return None
+        payload = await self._request_bytes("GET", archive_url, absolute=True)
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            member = next(
+                (
+                    name
+                    for name in archive.namelist()
+                    if name == "prompt_eval_result.json"
+                    or name.endswith("/prompt_eval_result.json")
+                ),
+                None,
+            )
+            if not member:
+                return None
+            result = json.loads(archive.read(member).decode("utf-8"))
+        if not isinstance(result, dict):
+            raise ValueError("prompt_eval_result.json 必须是 JSON object")
+        return result
+
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        response = await self._request(method, path, params=params)
+        if not response.content:
+            return {}
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("GitHub API 响应必须是 JSON object")
+        return payload
+
+    async def _request_bytes(
+        self, method: str, path: str, *, absolute: bool = False
+    ) -> bytes:
+        response = await self._request(method, path, absolute=absolute)
+        return response.content
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        absolute: bool = False,
+    ):
+        import httpx
+
+        url = path if absolute else f"https://api.github.com/repos/{self._config['repository']}{path}"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {self._config['token']}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            response = await client.request(method, url, headers=headers, params=params)
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(
+                f"GitHub API {method} {path} 返回 HTTP {response.status_code}"
+            )
+        return response
+
+
+class GitHubPromptEvalPoller:
+    """轮询 GitHub Run，并将 Artifact 结果幂等写回 Release。"""
+
+    def __init__(self, *, release_service: Any, client: Any | None = None) -> None:
+        self._release_service = release_service
+        self._client = client or GitHubActionsClient()
+
+    async def poll(self, release: PromptReleaseRecord) -> PollResult:
+        if release.status != PromptReleaseStatus.RUNNING:
+            return PollResult(state="ignored", reason="release 不在 running 状态")
+
+        run = await self._client.find_run(release)
+        if not run:
+            return PollResult(state="pending", reason="GitHub Run 尚未可见")
+
+        if str(run.get("status") or "") != "completed":
+            return PollResult(state="pending", run_id=str(run.get("id") or ""))
+
+        conclusion = str(run.get("conclusion") or "")
+        result = await self._client.read_result(release, run)
+        if result is None and conclusion == "success":
+            return PollResult(
+                state="pending",
+                run_id=str(run.get("id") or ""),
+                reason="GitHub Run 已完成但 Artifact 尚未可读",
+            )
+
+        if result is None:
+            result = {
+                "status": "failed",
+                "run_id": f"github-run-{run.get('id')}",
+                "failure_reason": f"GitHub Actions 结论为 {conclusion or 'unknown'}，未生成有效报告",
+            }
+        self._validate_result_identity(release, result)
+        if conclusion != "success" and result.get("status") == "passed":
+            result = {
+                **result,
+                "status": "failed",
+                "failure_reason": (
+                    f"GitHub Actions 结论为 {conclusion or 'unknown'}，"
+                    "不能接受 passed Artifact"
+                ),
+            }
+        provenance = dict(result.get("provenance") or {})
+        provenance.update(
+            {
+                "github_run_id": str(run.get("id") or ""),
+                "github_run_url": str(run.get("html_url") or ""),
+                "github_conclusion": conclusion,
+            }
+        )
+        result["provenance"] = provenance
+        status = str(result.get("status") or "failed")
+        await self._release_service.record_result(
+            release.release_id,
+            result,
+            actor="prompt-eval:github-poller",
+        )
+        return PollResult(
+            state=status,
+            run_id=str(run.get("id") or ""),
+            reason=str(result.get("failure_reason") or ""),
+        )
+
+    @staticmethod
+    def _validate_result_identity(
+        release: PromptReleaseRecord, result: dict[str, Any]
+    ) -> None:
+        if str(result.get("release_id") or release.release_id) != release.release_id:
+            raise ValueError("GitHub Artifact release_id 与当前 Release 不匹配")
+        external_run_id = str(result.get("external_run_id") or "")
+        if external_run_id and external_run_id != release.external_run_id:
+            raise ValueError("GitHub Artifact external_run_id 与当前 Release 不匹配")
 
 
 class LocalPromptEvalDispatcher:
@@ -110,9 +310,11 @@ class GitHubPromptEvalDispatcher:
             "release_id": release.release_id,
             "external_run_id": external_run_id,
             "prompt_key": release.prompt_key,
-            "version": release.version,
+            "version": str(release.version),
             "suite": release.eval_suite,
-            "dataset_version": release.dataset_provenance,
+            "dataset_version": json.dumps(
+                release.dataset_provenance, ensure_ascii=False, separators=(",", ":")
+            ),
         }
         url = (
             f"https://api.github.com/repos/{config['repository']}"
@@ -206,7 +408,10 @@ def _load_release_service() -> Any:
 
 __all__ = [
     "DispatchResult",
+    "GitHubActionsClient",
     "GitHubPromptEvalDispatcher",
+    "GitHubPromptEvalPoller",
     "LocalPromptEvalDispatcher",
+    "PollResult",
     "PromptEvalDispatcher",
 ]

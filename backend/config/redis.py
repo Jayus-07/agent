@@ -20,6 +20,21 @@ REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "20"))
 # Socket 超时（秒）
 REDIS_SOCKET_TIMEOUT = int(os.getenv("REDIS_SOCKET_TIMEOUT", "5"))
 
+# Prompt Runtime 热更新（Phase 2）。Redis 只做跨进程传播信号，DB epoch 是事实源。
+PROMPT_HOT_RELOAD_ENABLED = os.getenv(
+    "PROMPT_HOT_RELOAD_ENABLED", "true"
+).strip().lower() in ("1", "true", "yes", "on")
+PROMPT_EPOCH_CHECK_TTL = float(os.getenv("PROMPT_EPOCH_CHECK_TTL", "10"))
+PROMPT_PUBSUB_CHANNEL = os.getenv(
+    "PROMPT_PUBSUB_CHANNEL", f"{REDIS_KEY_PREFIX}prompt:changed"
+)
+PROMPT_RUNTIME_HEARTBEAT_TTL = int(
+    os.getenv("PROMPT_RUNTIME_HEARTBEAT_TTL", "30")
+)
+PROMPT_RUNTIME_HEARTBEAT_INTERVAL = float(
+    os.getenv("PROMPT_RUNTIME_HEARTBEAT_INTERVAL", "10")
+)
+
 # ── 熔断状态跨进程共享（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）──
 # 开 = fail 计数与 OPEN 广播走 Redis（多 worker/多副本下阈值不再放大 N 倍）；
 # Redis 不可用时自动退回进程内状态（方向安全：等于现状行为）。

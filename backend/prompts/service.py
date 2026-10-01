@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import contextvars
 import threading
+from datetime import datetime, timezone
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterator
 
 from backend.infra.cache import get_cache
 from backend.memory.database import AsyncSessionLocal
@@ -37,6 +39,11 @@ class _SnapshotEntry:
     variables: list
 
 
+_prompt_pin_var: contextvars.ContextVar[dict[str, _SnapshotEntry] | None] = (
+    contextvars.ContextVar("_prompt_pin_var", default=None)
+)
+
+
 ReloadHook = Callable[[], None]
 
 
@@ -45,10 +52,15 @@ class PromptService:
         self._renderer = PromptRenderer()
         self._cache = get_cache("prompts", ttl=300)
         self._snapshot: dict[str, _SnapshotEntry] = {}
+        # 进程内短期历史，供 LangGraph Send 线程按 state.prompt_versions
+        # 恢复请求开始时的模板。历史只用于 pin，不改变当前 active 读路径。
+        self._snapshot_history: dict[tuple[str, int], _SnapshotEntry] = {}
         self._snapshot_lock = threading.RLock()
         self._reload_hooks: dict[str, list[ReloadHook]] = {}
         self._defaults: dict[str, str] = {}
         self._epoch = 0
+        self._snapshot_time = ""
+        self._reload_source = "startup"
         try:
             from backend.prompts.loader import load_defaults
             self._defaults = load_defaults()
@@ -71,12 +83,16 @@ class PromptService:
                         if p.active_version is not None:
                             ver = await repo.get_version(p.id, p.active_version)
                             if ver:
-                                self._snapshot[p.key] = _SnapshotEntry(
+                                entry = _SnapshotEntry(
                                     template=ver.template,
                                     version=ver.version,
                                     variables=list(ver.variables) if ver.variables else [],
                                 )
+                                self._snapshot[p.key] = entry
+                                self._snapshot_history[(p.key, ver.version)] = entry
                     self._epoch += 1
+                    self._snapshot_time = datetime.now(timezone.utc).isoformat()
+                    self._reload_source = "refresh"
             logger.info(f"[PromptService] Snapshot refreshed: {len(self._snapshot)} prompts, epoch={self._epoch}")
             if not self._snapshot:
                 logger.info(
@@ -96,6 +112,19 @@ class PromptService:
             except Exception as exc:
                 logger.warning(f"[PromptService] Reload hook failed for {key}: {exc}")
 
+    def mark_snapshot_source(self, source: str) -> None:
+        """记录当前进程快照更新时间与刷新来源，供 Trace/运行态展示。"""
+        with self._snapshot_lock:
+            self._snapshot_time = datetime.now(timezone.utc).isoformat()
+            self._reload_source = source or "unknown"
+
+    def snapshot_metadata(self) -> dict[str, str]:
+        with self._snapshot_lock:
+            return {
+                "snapshot_time": self._snapshot_time,
+                "reload_source": self._reload_source,
+            }
+
     @staticmethod
     def _record_usage(key: str, version: int | None, source: str) -> None:
         usage = _prompt_usage_var.get()
@@ -105,6 +134,10 @@ class PromptService:
         usage.append({"key": key, "version": version, "source": source})
 
     async def get_active(self, key: str) -> tuple[str, int | None, str]:
+        pinned = self._pinned_entry(key)
+        if pinned:
+            return pinned.template, pinned.version, "pinned"
+
         with self._snapshot_lock:
             entry = self._snapshot.get(key)
             if entry:
@@ -155,15 +188,18 @@ class PromptService:
         return RenderResult(text=text, key=key, version=version, source=source)
 
     def render_sync(self, key: str, **variables: str) -> RenderResult:
-        with self._snapshot_lock:
-            entry = self._snapshot.get(key)
+        entry = self._pinned_entry(key)
+        if entry is None:
+            with self._snapshot_lock:
+                entry = self._snapshot.get(key)
 
         if entry:
             spec = PROMPT_REGISTRY.get(key)
             text = self._renderer.render(entry.template, variables, spec=spec)
-            self._record_usage(key, entry.version, "snapshot")
-            record_prompt_version(key, entry.version, "snapshot")
-            return RenderResult(text=text, key=key, version=entry.version, source="snapshot")
+            source = "pinned" if self._pinned_entry(key) is not None else "snapshot"
+            self._record_usage(key, entry.version, source)
+            record_prompt_version(key, entry.version, source)
+            return RenderResult(text=text, key=key, version=entry.version, source=source)
 
         default = self._defaults.get(key)
         if default is not None:
@@ -180,8 +216,10 @@ class PromptService:
 
         用于构建 LangChain ChatPromptTemplate 等需要保留 {variable} 占位符的场景。
         """
-        with self._snapshot_lock:
-            entry = self._snapshot.get(key)
+        entry = self._pinned_entry(key)
+        if entry is None:
+            with self._snapshot_lock:
+                entry = self._snapshot.get(key)
         if entry:
             return entry.template
         default = self._defaults.get(key)
@@ -190,9 +228,11 @@ class PromptService:
         raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
 
     def get_version_for_cache_key(self, key: str) -> int | None:
-        with self._snapshot_lock:
-            entry = self._snapshot.get(key)
-            return entry.version if entry else None
+        entry = self._pinned_entry(key)
+        if entry is None:
+            with self._snapshot_lock:
+                entry = self._snapshot.get(key)
+        return entry.version if entry else None
 
     def current_versions(self) -> dict[str, int]:
         """进程内快照的全量 prompt 版本（纯内存零 IO，请求入口 pin 用）。
@@ -201,8 +241,65 @@ class PromptService:
         AgentState.prompt_versions 与 trace.tags——保证 in-flight 流程
         的版本可追溯（快照语义：后续发布不影响已记录的值）。
         """
+        pinned = _prompt_pin_var.get()
+        if pinned is not None:
+            return {k: e.version for k, e in pinned.items()}
         with self._snapshot_lock:
             return {k: e.version for k, e in self._snapshot.items()}
+
+    @staticmethod
+    def _copy_entry(entry: _SnapshotEntry) -> _SnapshotEntry:
+        return _SnapshotEntry(
+            template=entry.template,
+            version=entry.version,
+            variables=list(entry.variables),
+        )
+
+    def _pinned_entry(self, key: str) -> _SnapshotEntry | None:
+        pinned = _prompt_pin_var.get()
+        if pinned is None:
+            return None
+        return pinned.get(key)
+
+    @contextmanager
+    def pin_snapshot(self) -> Iterator[dict[str, int]]:
+        """固定当前进程快照，覆盖整个请求/任务生命周期。"""
+        with self._snapshot_lock:
+            entries = {
+                key: self._copy_entry(entry)
+                for key, entry in self._snapshot.items()
+            }
+            for key, entry in entries.items():
+                self._snapshot_history[(key, entry.version)] = entry
+        token = _prompt_pin_var.set(entries)
+        try:
+            yield {key: entry.version for key, entry in entries.items()}
+        finally:
+            _prompt_pin_var.reset(token)
+
+    @contextmanager
+    def bind_prompt_versions(
+        self, versions: dict[str, int] | None,
+    ) -> Iterator[None]:
+        """按 AgentState.prompt_versions 在节点线程恢复固定模板。"""
+        entries: dict[str, _SnapshotEntry] = {}
+        with self._snapshot_lock:
+            for key, version in (versions or {}).items():
+                try:
+                    version_int = int(version)
+                except (TypeError, ValueError):
+                    continue
+                entry = self._snapshot_history.get((key, version_int))
+                current = self._snapshot.get(key)
+                if entry is None and current and current.version == version_int:
+                    entry = current
+                if entry is not None:
+                    entries[key] = self._copy_entry(entry)
+        token = _prompt_pin_var.set(entries)
+        try:
+            yield
+        finally:
+            _prompt_pin_var.reset(token)
 
     async def create_draft(
         self,
@@ -294,6 +391,8 @@ class PromptService:
                     variables=list(ver.variables) if ver.variables else [],
                 )
                 self._epoch += 1
+                self._snapshot_time = datetime.now(timezone.utc).isoformat()
+                self._reload_source = "publish"
 
             await repo.write_audit(
                 key, "publish",
@@ -303,6 +402,15 @@ class PromptService:
                 role=role,
             )
             await session.commit()
+
+        # 发布/回滚共用同一条运行时通知链路；Redis/epoch 旁路失败不能阻断
+        # 已提交的业务发布，hot_reload 内部会 fail-open。
+        try:
+            from backend.prompts.hot_reload import bump_prompt_epoch
+
+            await bump_prompt_epoch(key, actor=actor)
+        except Exception as exc:  # noqa: BLE001 - 通知旁路不得影响发布结果
+            logger.warning(f"[PromptService] Hot reload notification failed for {key}: {exc}")
 
         self._fire_hooks(key)
         return {"active_version": version, "previous_version": old_version}
