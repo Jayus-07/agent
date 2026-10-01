@@ -1,0 +1,18 @@
+{
+  "name": "pr_smoke",
+  "description": "Prompt 发布短门禁：8 条覆盖 FAQ、拒答、多文档和流程场景的 baseline 案例。",
+  "version": "5.0.0-unified",
+  "dataset_version": "5.0.0-unified",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline",
+  "case_ids": [
+    "RC-001",
+    "RC-012",
+    "RC-061",
+    "RC-005",
+    "RC-021",
+    "RC-056",
+    "RC-024",
+    "RC-031"
+  ]
+}
