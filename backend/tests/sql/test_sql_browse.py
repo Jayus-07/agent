@@ -88,6 +88,8 @@ class TestBrowsePermissionMatrix:
             assert body["qualified_name"] == "product.products"
             assert body["total"] == 42
             assert body["page"] == 2 and body["page_size"] == 10
+            # 中文注释与列名同源返回（前端表头中文主显的数据源）
+            assert body["column_comments"].get("sku") == "商品编码 (VARCHAR, 唯一)"
             assert calls["executor"] == 2  # count + rows
             count_sql, rows_sql = calls["sqls"]
             assert "COUNT(*)" in count_sql and "product.products" in count_sql
@@ -156,6 +158,17 @@ class TestBrowsePermissionMatrix:
 
 
 class TestBrowseKillSwitchAndValidation:
+    def test_nl2sql_result_column_comments_mapping(self):
+        """NL2SQL 结果列注释尽力匹配：白名单列命中 / 聚合别名列缺省。"""
+        import backend.app.api.routes.sql as sql_route
+
+        comments = sql_route._comments_for_result_columns(
+            ["sku", "product_name", "row_total"])
+        assert comments.get("sku") == "商品编码 (VARCHAR, 唯一)"
+        assert "product_name" in comments
+        assert "row_total" not in comments  # 聚合别名无注释可配
+        assert sql_route._comments_for_result_columns([]) == {}
+
     def test_kill_switch_off_503(self, client, monkeypatch):
         """SQL_AGENT_ENABLED=false → 503，目录与浏览一致。"""
         import backend.config as config_mod

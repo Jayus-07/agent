@@ -34,6 +34,8 @@ export interface TableBrowseResponse {
   page_size: number
   total: number
   columns: string[]
+  /** 列名 → 中文注释（schema_config 数据字典；无注释的列不在 map 中） */
+  column_comments: Record<string, string>
   rows: Record<string, unknown>[]
   elapsed_sec: number
   error: string | null
@@ -44,6 +46,8 @@ export interface SqlQueryResponse {
   status: string
   answer: string
   columns: string[]
+  /** 结果列名 → 中文注释（匹配业务列的才有；聚合/别名列缺省） */
+  column_comments: Record<string, string>
   rows: Record<string, unknown>[]
   row_count: number
   elapsed_sec: number

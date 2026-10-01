@@ -51,6 +51,9 @@ class SQLQueryResponse(BaseModel):
     error: Optional[str] = Field(None, description="失败原因")
     error_type: Optional[str] = Field(None, description="错误子分类")
     sql: Optional[str] = Field(None, description="实际执行的 SQL（管理端核对 NL2SQL 结果用）")
+    column_comments: dict = Field(
+        default_factory=dict,
+        description="结果列名 → 中文注释（能匹配业务表白名单列的才有；聚合/别名列为空）")
 
 
 # ── 管理端表浏览（GET /sql/tables*，2026-10-01）──
@@ -82,6 +85,9 @@ class TableBrowseResponse(BaseModel):
     page_size: int = Field(20, description="每页行数")
     total: int = Field(0, description="过滤后总行数")
     columns: list = Field(default_factory=list, description="可见列名（按声明序）")
+    column_comments: dict = Field(
+        default_factory=dict,
+        description="列名 → 中文注释（来自 schema_config 数据字典，敏感列不出口）")
     rows: list = Field(default_factory=list, description="结果行（已脱敏）")
     elapsed_sec: float = Field(0.0, description="执行耗时（秒）")
     error: Optional[str] = Field(None, description="失败原因")

@@ -149,6 +149,7 @@ async def sql_query(
         error=result.error,
         error_type=result.error_type,
         sql=result.sql_text,
+        column_comments=_comments_for_result_columns(result.columns or []),
     )
 
 
@@ -168,6 +169,28 @@ _DENY_DECISION = {
     "SQL_TABLE_NOT_ALLOWED": "DENY_TABLE",
     "SQL_SCOPE_UNAVAILABLE": "DENY_SCOPE",
 }
+
+# 结果列 → 中文注释的全局映射（惰性构建一次；不同表同名列取首见注释——
+# id/created_at 等公共列注释语义一致，重名业务列冲突可忽略）
+_RESULT_COMMENT_MAP: dict[str, str] | None = None
+
+
+def _comments_for_result_columns(columns: list) -> dict[str, str]:
+    """NL2SQL 结果列的中文注释尽力匹配。
+
+    LLM 生成 SQL 的输出列可能是聚合/别名（无注释可配），只对能匹配
+    白名单列名的补注释，匹配不到的列前端回退显示物理列名。
+    """
+    global _RESULT_COMMENT_MAP
+    if not columns:
+        return {}
+    if _RESULT_COMMENT_MAP is None:
+        mapping: dict[str, str] = {}
+        for qname in schema_loader.get_all_table_names():
+            for col, comment in schema_loader.get_browse_columns(qname).items():
+                mapping.setdefault(col, comment)
+        _RESULT_COMMENT_MAP = mapping
+    return {c: _RESULT_COMMENT_MAP[c] for c in columns if c in _RESULT_COMMENT_MAP}
 
 
 def _validated_browse_columns(qualified_name: str) -> list[str]:
@@ -202,6 +225,8 @@ def _browse_sync(policy: SQLPolicyContext, qualified_name: str,
         f"SELECT {', '.join(columns)} FROM {qualified_name} "
         f"ORDER BY {order_col} {order_dir} LIMIT {page_size} OFFSET {offset}"
     )
+    # 中文注释与列名同源（schema_config 数据字典），供前端表头主显
+    column_comments = schema_loader.get_browse_columns(qualified_name)
 
     guard = SQLPolicyGuard()
     t0 = time.monotonic()
@@ -234,7 +259,8 @@ def _browse_sync(policy: SQLPolicyContext, qualified_name: str,
             status=count_result.status, error_type=count_result.error_type or "",
         )
         return {"status": count_result.status, "total": 0, "columns": columns,
-                "rows": [], "elapsed_sec": time.monotonic() - t0,
+                "column_comments": column_comments, "rows": [],
+                "elapsed_sec": time.monotonic() - t0,
                 "error": count_result.error, "error_type": count_result.error_type}
 
     total = 0
@@ -258,7 +284,8 @@ def _browse_sync(policy: SQLPolicyContext, qualified_name: str,
     )
     return {
         "status": result.status, "total": total, "columns": columns,
-        "rows": result.rows or [], "elapsed_sec": elapsed,
+        "column_comments": column_comments, "rows": result.rows or [],
+        "elapsed_sec": elapsed,
         "error": result.error, "error_type": result.error_type,
     }
 

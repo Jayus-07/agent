@@ -44,17 +44,32 @@ const STATUS_LABEL: Record<string, string> = {
   validation_error: '未通过安全校验', no_table: '未匹配到数据表',
 }
 
+/** 列头显示名：中文注释主显、物理列名进 title 悬浮（核对 SQL 时两边对得上） */
+function columnHeaderLabel(col: string, comments?: Record<string, string>): { label: string; tip: string } {
+  const comment = comments?.[col]
+  return comment
+    ? { label: comment, tip: `${comment} (${col})` }
+    : { label: col, tip: col }
+}
+
 /** NL2SQL / 浏览通用的结果表渲染（rows 已由后端脱敏） */
-function ResultTable({ columns, rows }: { columns: string[]; rows: Record<string, unknown>[] }) {
+function ResultTable({ columns, rows, comments }: {
+  columns: string[]
+  rows: Record<string, unknown>[]
+  comments?: Record<string, string>
+}) {
   if (!columns.length) return null
   return (
     <div className="overflow-x-auto border border-border-subtle rounded-lg">
       <table className="w-full text-xs">
         <thead>
           <tr className="bg-surface-elevated border-b border-border-subtle">
-            {columns.map((c) => (
-              <th key={c} className="px-3 py-2 text-left font-medium text-text-muted whitespace-nowrap">{c}</th>
-            ))}
+            {columns.map((c) => {
+              const { label, tip } = columnHeaderLabel(c, comments)
+              return (
+                <th key={c} title={tip} className="px-3 py-2 text-left font-medium text-text-muted whitespace-nowrap">{label}</th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>
@@ -105,7 +120,9 @@ function AskResult({ result }: { result: SqlQueryResponse }) {
       {showSql && result.sql && (
         <pre className="text-xs bg-surface-elevated border border-border-subtle rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">{result.sql}</pre>
       )}
-      {result.columns.length > 0 && <ResultTable columns={result.columns} rows={result.rows} />}
+      {result.columns.length > 0 && (
+        <ResultTable columns={result.columns} rows={result.rows} comments={result.column_comments} />
+      )}
     </div>
   )
 }
@@ -133,16 +150,19 @@ function BrowseResult({
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-surface-elevated border-b border-border-subtle">
-              {result.columns.map((c) => (
-                <th key={c} className="px-3 py-2 text-left font-medium text-text-muted whitespace-nowrap">
-                  <button onClick={() => onSort(c)} className="flex items-center gap-1 hover:text-text-primary transition-colors">
-                    {c}
-                    {sort === c
-                      ? (order === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />)
-                      : <ChevronUp size={11} className="opacity-20" />}
-                  </button>
-                </th>
-              ))}
+              {result.columns.map((c) => {
+                const { label, tip } = columnHeaderLabel(c, result.column_comments)
+                return (
+                  <th key={c} className="px-3 py-2 text-left font-medium text-text-muted whitespace-nowrap">
+                    <button onClick={() => onSort(c)} title={tip} className="flex items-center gap-1 hover:text-text-primary transition-colors">
+                      {label}
+                      {sort === c
+                        ? (order === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />)
+                        : <ChevronUp size={11} className="opacity-20" />}
+                    </button>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
           <tbody>
