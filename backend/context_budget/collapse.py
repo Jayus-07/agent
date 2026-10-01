@@ -86,6 +86,7 @@ def fold_messages(
     messages: list,
     *,
     keep_recent_turns: int | None = None,
+    pin_indices: set[int] | None = None,
 ) -> tuple[list, ContextFold | None]:
     """把较旧的普通历史折叠为「固定 policy SystemMessage + 历史数据 AIMessage」。
 
@@ -93,6 +94,11 @@ def fold_messages(
     折叠对象：除 SystemMessage 外、最近 keep_recent_turns 轮之前的普通消息
     （一组 user+assistant 记一轮；尾部孤立的 user 消息算最后一轮的一部分，
     即当前问题，永不折叠）。
+
+    分段（2026-10-01 STOP C）：折叠窗口不得跨过中段 SystemMessage——头部
+    按「SystemMessage / 显式 pin」切出连续可折叠片段（工具组经
+    build_atomic_groups 天然不拆对），逐段从最旧到新找第一段「折叠有
+    收益」的执行折叠；其余段留给下次调用（L4 滞回循环会再次进入）。
 
     角色安全（P0-2）：被折叠的用户历史**不进入任何 SystemMessage**——
     数据块放在 AIMessage 的 <historical_context> 标签内（untrusted data），
@@ -103,64 +109,79 @@ def fold_messages(
     if keep_recent_turns is None:
         keep_recent_turns = int(_cfg("CONTEXT_L4_KEEP_RECENT_TURNS"))
 
-    # 定位可折叠窗口：[最后一条 SystemMessage 之后的普通消息] 里
-    # 留下最近 keep_recent_turns 轮，其余为折叠候选
+    # 定位折叠窗口右边界：留下最近 keep_recent_turns 轮（user 消息开轮）
     non_system_idx = [i for i, m in enumerate(messages) if not _is_system(m)]
     if len(non_system_idx) < 2:
         return messages, None
 
     # 从尾部往前数 user 消息确定轮边界（user 消息开启一轮）；
-    # 恰好保留最近 keep_recent_turns 轮，更早的进入折叠窗口
+    # 恰好保留最近 keep_recent_turns 轮，更早的进入折叠候选
     user_positions = [i for i in non_system_idx
                       if type(messages[i]).__name__ == "HumanMessage"]
     if len(user_positions) <= keep_recent_turns:
         return messages, None  # 轮数不足阈值，无可折叠
 
     boundary = user_positions[-keep_recent_turns]  # 最早保留轮的起点
-    fold_start = non_system_idx[0]
-    fold_end = boundary - 1
-    if fold_end < fold_start:
-        return messages, None
 
-    candidates = messages[fold_start:fold_end + 1]
-    original_tokens = sum(
-        _count_token_message(m) for m in candidates)
+    # 头部按原子组切连续可折叠片段：System / 显式 pin 终止当前片段；
+    # 工具组（assistant(tool_calls)+ToolMessage）整组进/出不拆对
+    from backend.context_budget.pin import build_atomic_groups
+    pins = set(pin_indices or ())
+    segments: list[list[int]] = []
+    current: list[int] = []
+    for group in build_atomic_groups(messages):
+        if group[0] >= boundary:
+            break
+        if any(_is_system(messages[i]) or i in pins for i in group):
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.extend(group)
+    if current:
+        segments.append(current)
 
-    fold = ContextFold(
-        fold_id=f"fold-{uuid.uuid4().hex[:12]}",
-        from_index=fold_start,
-        to_index=fold_end,
-        message_count=len(candidates),
-        original_tokens=original_tokens,
-        projected_tokens=0,  # 下面算
-        from_message_id=str(getattr(candidates[0], "id", "") or "") or None,
-        to_message_id=str(getattr(candidates[-1], "id", "") or "") or None,
-    )
     from backend.context_budget.role_safety import build_historical_context
-    projection_msgs = build_historical_context(
-        build_projection_text(fold),
-        meta={
-            "kind": "l4_fold",
-            "fold_id": fold.fold_id,
-            "source_range": [fold.from_index, fold.to_index],
-            "message_count": fold.message_count,
-            "from_message_id": fold.from_message_id,
-            "to_message_id": fold.to_message_id,
-            "created_at": fold.created_at.isoformat(),
-            "reversible": True,
-        })
-    fold.projected_tokens = sum(
-        _count_token_message(m) for m in projection_msgs)
-    if fold.projected_tokens >= original_tokens:
-        # 折叠无收益（候选太少太小），不折
-        return messages, None
+    for idxs in segments:
+        candidates = [messages[i] for i in idxs]
+        original_tokens = sum(
+            _count_token_message(m) for m in candidates)
 
-    folded = (
-        list(messages[:fold_start])
-        + projection_msgs
-        + list(messages[fold_end + 1:])
-    )
-    return folded, fold
+        fold = ContextFold(
+            fold_id=f"fold-{uuid.uuid4().hex[:12]}",
+            from_index=idxs[0],
+            to_index=idxs[-1],
+            message_count=len(candidates),
+            original_tokens=original_tokens,
+            projected_tokens=0,  # 下面算
+            from_message_id=str(getattr(candidates[0], "id", "") or "") or None,
+            to_message_id=str(getattr(candidates[-1], "id", "") or "") or None,
+        )
+        projection_msgs = build_historical_context(
+            build_projection_text(fold),
+            meta={
+                "kind": "l4_fold",
+                "fold_id": fold.fold_id,
+                "source_range": [fold.from_index, fold.to_index],
+                "message_count": fold.message_count,
+                "from_message_id": fold.from_message_id,
+                "to_message_id": fold.to_message_id,
+                "created_at": fold.created_at.isoformat(),
+                "reversible": True,
+            })
+        fold.projected_tokens = sum(
+            _count_token_message(m) for m in projection_msgs)
+        if fold.projected_tokens >= original_tokens:
+            # 该段折叠无收益（候选太少太小），试下一段
+            continue
+
+        folded = (
+            list(messages[:fold.from_index])
+            + projection_msgs
+            + list(messages[fold.to_index + 1:])
+        )
+        return folded, fold
+    return messages, None
 
 
 def _count_token_message(msg: Any) -> int:

@@ -46,11 +46,26 @@ def _is_tool(msg: Any) -> bool:
     return type(msg).__name__ == "ToolMessage"
 
 
+def _is_projection_pair_start(messages: list, i: int) -> bool:
+    """投影二元组起点：固定 policy System + 紧随的历史数据 AIMessage。"""
+    if i + 1 >= len(messages):
+        return False
+    from backend.context_budget.role_safety import (
+        is_historical_data_message,
+        is_policy_system_message,
+    )
+    return (is_policy_system_message(messages[i])
+            and is_historical_data_message(messages[i + 1]))
+
+
 def build_atomic_groups(messages: list) -> list[list[int]]:
     """把消息列表切成原子组（每组是一个不可拆分的保留/丢弃单元）。
 
     - SystemMessage：单条一组
     - assistant(tool_calls) + 其后**紧邻**的全部 ToolMessage：一组
+    - 投影二元组（2026-10-01 STOP C）：固定 policy SystemMessage + 紧随的
+      <historical_context> 数据 AIMessage 一组——L2 裁剪只按组保留/丢弃，
+      拆开会出现「只剩 policy 空壳」或「数据块失去 policy 声明」
     - 其余消息：单条一组
     组内保持原相对顺序；返回下标组的列表。
     """
@@ -67,6 +82,10 @@ def build_atomic_groups(messages: list) -> list[list[int]]:
                 j += 1
             groups.append(group)
             i = j
+            continue
+        if _is_projection_pair_start(messages, i):
+            groups.append([i, i + 1])
+            i += 2
             continue
         groups.append([i])
         i += 1

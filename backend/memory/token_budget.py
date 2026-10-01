@@ -59,6 +59,7 @@ def trim_messages_to_budget(
         (kept_messages, dropped_count)
     """
     from backend.context_budget.pin import build_atomic_groups
+    from backend.context_budget.role_safety import is_policy_system_message
 
     pins = pin_indices or set()
     groups = build_atomic_groups(messages)
@@ -70,8 +71,14 @@ def trim_messages_to_budget(
     used = 0
     for group in reversed(groups):
         head = messages[group[0]]
-        # System 组无条件保留；语义 pin 组不可丢弃
-        if not is_system(head) and not (set(group) & pins):
+        # 投影二元组（policy System + 数据 AIMessage）成组不豁免：预算内
+        # 整组保留，超预算整组丢弃（policy 是可再生的基础设施文本，脱离
+        # 数据无意义；数据块无 System 豁免是 memory 层预算不变量 E-I3）
+        is_projection_pair = (
+            len(group) == 2 and is_policy_system_message(head))
+        # System 组无条件保留；投影二元组与普通组走预算检查；语义 pin 组不可丢弃
+        if is_projection_pair or (
+                not is_system(head) and not (set(group) & pins)):
             t = sum(count_message_tokens(messages[i]) for i in group)
             if used + t > budget:
                 dropped += len(group)
@@ -85,10 +92,12 @@ def trim_messages_to_budget(
 
     kept.reverse()
     # 防御：pin/System 消息即使超预算也不能出现在 dropped 里（上面逻辑
-    # 已保证；此处断言语义，避免未来改动无声破坏红线）
+    # 已保证；此处断言语义，避免未来改动无声破坏红线）。投影二元组的
+    # policy System 随数据整组丢弃属预期（见上），不在断言范围。
     assert all(i in kept_idx for i in pins), "语义 pin 消息被裁剪丢弃"
     assert all(i in kept_idx for i, m in enumerate(messages)
-               if is_system(m)), "SystemMessage 被裁剪丢弃"
+               if is_system(m) and not is_policy_system_message(m)), \
+        "SystemMessage 被裁剪丢弃"
     return kept, dropped
 
 

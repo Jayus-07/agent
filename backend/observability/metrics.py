@@ -765,6 +765,22 @@ context_tokens_by_component = Gauge(
     labelnames=("component",),
     # component: system|history|previous_outputs|rag|tool_schema
 )
+# STOP C（2026-10-01）分项用量分布与总量：Gauge 只能表示进程内最近一次
+# 写入值，并发请求下各分项甚至来自不同请求——看板不得用 Gauge 做聚合。
+# 请求级分项看结构化日志/trace；分布看 Histogram，总量看 Counter。
+context_tokens_by_component_tokens = Histogram(
+    "context_tokens_by_component_tokens",
+    "单次 Prompt Preflight 分项 token 分布（低基数 component）",
+    labelnames=("component",),
+    buckets=(64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536),
+)
+context_tokens_by_component_total = Counter(
+    # 注意：prometheus_client 会剥掉 Counter 名尾的 _total —— 实际暴露的
+    # 指标名是 context_component_tokens（与上面的 Gauge 同族不同名）
+    "context_component_tokens_total",
+    "Prompt Preflight 分项 token 累计（看板总量口径）",
+    labelnames=("component",),
+)
 
 
 def publish_breaker_states() -> None:

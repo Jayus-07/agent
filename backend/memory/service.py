@@ -278,7 +278,8 @@ class MemoryService:
                                           after_tokens=_after)
                         emit_context_event(level="L2", action="history_trim",
                                            before_tokens=_before,
-                                           after_tokens=_after)
+                                           after_tokens=_after,
+                                           session_id=session_id)
                     except Exception:
                         logger.debug("L2 观测留痕失败", exc_info=True)
 

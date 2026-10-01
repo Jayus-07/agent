@@ -107,7 +107,8 @@ class TestPredictedUsageAndHysteresis:
         assert 0.3 < u.usage_ratio < 0.7  # 前提：当前未触发
         folds = []
 
-        def _fake_fold(messages, *, keep_recent_turns=None):
+        def _fake_fold(messages, *, keep_recent_turns=None,
+                       pin_indices=None):
             folds.append(keep_recent_turns)
             from backend.context_budget.collapse import ContextFold, build_projection_text
             from backend.context_budget.role_safety import build_historical_context
@@ -150,7 +151,8 @@ class TestPredictedUsageAndHysteresis:
 
         keeps = []
 
-        def _fake_fold(messages, *, keep_recent_turns=None):
+        def _fake_fold(messages, *, keep_recent_turns=None,
+                       pin_indices=None):
             keeps.append(keep_recent_turns)
             from backend.context_budget.collapse import ContextFold
             fold = ContextFold(

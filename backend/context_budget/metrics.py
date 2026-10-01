@@ -146,20 +146,61 @@ def record_protected_fact(*, fact_type: str, result: str) -> None:
 
 
 def record_usage_components(**components: int) -> None:
-    """P2-4：分项 token 占用 → Gauge + 结构化日志字段（无 ID 进 label）。
+    """分项 token 占用（STOP C 2026-10-01 口径）：
 
-    components: system / history / previous_outputs / rag / tool_schema。
+    - Gauge（context_tokens_by_component）：仅表示进程内最近一次写入值，
+      并发下各分项甚至来自不同请求——禁止看板用它做聚合/解读单请求；
+    - Histogram（context_tokens_by_component_tokens）：分项分布；
+    - Counter（context_tokens_by_component_total）：分项累计总量（看板）；
+    - 请求级分项 → 结构化日志（带 trace/request，本层无 ID 可用时缺省）。
     """
     try:
-        from backend.observability.metrics import context_tokens_by_component
-        if context_tokens_by_component is not None:
-            for name, value in components.items():
-                if name in ("system", "history", "previous_outputs",
-                            "rag", "tool_schema"):
-                    context_tokens_by_component.labels(component=name).set(
-                        max(0, int(value)))
+        from backend.observability.metrics import (
+            context_tokens_by_component,
+            context_tokens_by_component_tokens,
+            context_tokens_by_component_total,
+        )
+        allowed = ("system", "history", "previous_outputs", "rag",
+                   "tool_schema")
+        for name, value in components.items():
+            if name not in allowed:
+                continue
+            v = max(0, int(value))
+            if context_tokens_by_component is not None:
+                context_tokens_by_component.labels(component=name).set(v)
+            if context_tokens_by_component_tokens is not None:
+                context_tokens_by_component_tokens.labels(
+                    component=name).observe(v)
+            if context_tokens_by_component_total is not None:
+                context_tokens_by_component_total.labels(
+                    component=name).inc(v)
+        logger.info(
+            "context_usage_components "
+            + " ".join(f"{k}={max(0, int(v))}"
+                       for k, v in sorted(components.items())
+                       if k in allowed)
+            + " trace_id=%s request_id=%s",
+            _trace_id_or_empty(), _request_id_or_empty())
     except Exception:
         logger.debug("component gauge 记录失败", exc_info=True)
+
+
+def _trace_id_or_empty() -> str:
+    try:
+        from backend.infra.llm.proxy import get_current_resolved_model
+        ctx = get_current_resolved_model()
+        return (ctx.trace_id if ctx else "") or ""
+    except Exception:
+        return ""
+
+
+def _request_id_or_empty() -> str:
+    try:
+        from backend.infra.llm.proxy import get_current_resolved_model
+        ctx = get_current_resolved_model()
+        return (ctx.request_id if ctx else "") or ""
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +212,17 @@ ContextSink = Callable[[dict], None]
 _context_sink: ContextVar[ContextSink | None] = ContextVar(
     "context_event_sink", default=None
 )
-# sink 未挂载时的事件缓冲（进程级有界队列，加锁）：
+# sink 未挂载时的事件缓冲（2026-10-01 STOP C 请求隔离）：
 # L2 历史裁剪发生在 MemoryManager 的后台 event loop 线程（5s 超时放弃后
-# 协程仍会跑完），该线程没有 sink 也取不到 ContextVar —— 必须用进程级
-# 缓冲，由 runner 创建 merged_q 后统一 flush。超时晚到的 L2 事件会顺延
-# 到同一会话的下一条流，属可接受的最终一致。
-_pending_events: deque = deque(maxlen=64)
+# 协程仍会跑完），该线程没有 sink 也取不到请求 ContextVar —— 事件只能落
+# 进程级缓冲。旧实现是单一 deque，任意 runner 一进来就整队取走——晚到
+# 事件会冒充到别的用户连接上（事件归属缺陷）。现改为按会话分桶：
+# runner 只 drain 本会话桶；无消费方的晚到事件按容量淘汰降级为日志/trace，
+# 绝不流入下一位用户的连接。
+_pending_events: dict[str, deque] = {}
 _pending_lock = threading.Lock()
+_PENDING_MAX_SESSIONS = 32      # 最多缓存的会话桶数（最旧桶整体淘汰）
+_PENDING_PER_SESSION = 16       # 单会话桶容量（旧 deque maxlen=64 → 分桶后每桶 16）
 
 
 def set_context_sink(sink: ContextSink) -> object:
@@ -192,12 +237,20 @@ def reset_context_sink(token: object) -> None:
         _context_sink.set(None)
 
 
-def drain_pending_events() -> list[dict]:
-    """取走并清空缓冲的早期 context 事件（L2 等）。"""
+def drain_pending_events(session_id: str | None = None) -> list[dict]:
+    """取走并清空【指定会话】缓冲的早期 context 事件（L2 等）。
+
+    请求隔离（STOP C 2026-10-01）：只返回调用方会话自己的桶；不带
+    session_id 的调用一律返回空——禁止任何 runner 整队取走他人事件。
+    """
+    key = (session_id or "").strip()
+    if not key:
+        logger.debug(
+            "[ContextEvent] drain 未带会话 id，拒绝整队取走（请求隔离）")
+        return []
     with _pending_lock:
-        buf = list(_pending_events)
-        _pending_events.clear()
-    return buf
+        bucket = _pending_events.pop(key, None)
+    return list(bucket) if bucket else []
 
 
 def emit_context_event(
@@ -206,11 +259,13 @@ def emit_context_event(
     action: str,
     before_tokens: int,
     after_tokens: int,
+    session_id: str | None = None,
     **extra: Any,
 ) -> None:
     """发一条 context SSE 事件（绝不携带完整工具结果）。
 
-    sink 已挂载 → 直发；未挂载 → 进程级缓冲（runner drain 后补发）。
+    sink 已挂载 → 直发；未挂载 → 按会话分桶缓冲（runner 按本会话 drain）。
+    无 sink 且无会话归属的晚到事件只进日志——绝不冒充他人连接。
     格式（规格 §十一）：
       {"type": "context", "level": "L1", "action": "tool_compact",
        "before_tokens": 5200, "after_tokens": 250, "saved_tokens": 4950}
@@ -233,8 +288,22 @@ def emit_context_event(
             return
         except Exception:
             logger.debug("context SSE 事件发送失败", exc_info=True)
+    key = (session_id or "").strip()
+    if not key:
+        logger.info(f"[ContextEvent] 无 sink 且无会话归属，降级日志: {data}")
+        return
     try:
         with _pending_lock:
-            _pending_events.append(data)
+            if key not in _pending_events \
+                    and len(_pending_events) >= _PENDING_MAX_SESSIONS:
+                # FIFO 淘汰最旧的无消费方会话桶（晚到事件降级，不跨会话投递）
+                oldest = next(iter(_pending_events))
+                _pending_events.pop(oldest)
+                logger.debug(
+                    f"[ContextEvent] 会话事件桶超容量，淘汰最旧会话桶"
+                    f"（count={_PENDING_MAX_SESSIONS}）")
+            bucket = _pending_events.setdefault(key, deque(
+                maxlen=_PENDING_PER_SESSION))
+            bucket.append(data)
     except Exception:
         logger.debug("context 事件缓冲失败", exc_info=True)
