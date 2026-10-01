@@ -76,7 +76,14 @@ export const dataQueryService = {
       order: params.order ?? 'asc',
     })
     if (params.sort) q.set('sort', params.sort)
-    return api<TableBrowseResponse>(`${BASE}/tables/${qualifiedName}?${q}`)
+    // 后端路由是两段式 /tables/{schema}/{table}；qualified_name 必须拆开
+    const dot = qualifiedName.indexOf('.')
+    if (dot <= 0 || dot === qualifiedName.length - 1) {
+      return Promise.reject(new Error(`非法表标识: ${qualifiedName}`))
+    }
+    const schema = qualifiedName.slice(0, dot)
+    const table = qualifiedName.slice(dot + 1)
+    return api<TableBrowseResponse>(`${BASE}/tables/${schema}/${table}?${q}`)
   },
 
   /** 自然语言 → SQL 查询（NL2SQL） */
