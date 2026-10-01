@@ -402,7 +402,94 @@ git add -A -- frontend-admin/src/components/prompts/PromptReleasePanel.tsx front
 git commit -m "feat: add prompt release console" -- frontend-admin/src/components/prompts/PromptReleasePanel.tsx frontend-admin/src/components/prompts/PromptReleasePanel.test.tsx frontend-admin/src/api/prompts.ts frontend-admin/src/app/prompts/[key]/page.tsx frontend-admin/src/components/prompts/StatusPipeline.tsx
 ```
 
-### Task 7: Verify Trace Prompt/Tool versions and hot reload
+### Task 7: Build the evaluation dataset governance console
+
+**Files:**
+- Create: `backend/app/api/routes/evaluation_datasets.py`
+- Create: `backend/tests/api/test_evaluation_dataset_governance.py`
+- Create: `frontend-admin/src/app/evaluations/datasets/page.tsx`
+- Create: `frontend-admin/src/components/evaluations/DatasetCatalog.tsx`
+- Create: `frontend-admin/src/components/evaluations/DatasetReviewQueue.tsx`
+- Create: `frontend-admin/src/components/evaluations/DatasetVersionDetail.tsx`
+- Create: `frontend-admin/src/components/evaluations/EvaluationRunDetail.tsx`
+- Create: `frontend-admin/src/components/evaluations/DatasetGovernance.test.tsx`
+- Modify: `backend/app/api/router.py`
+- Modify: `frontend-admin/src/api/evaluation.ts`
+- Modify: `frontend-admin/src/components/layout/Sidebar.tsx` only if the existing navigation requires a new entry
+
+**Interfaces:**
+- `GET /api/evaluation/datasets` lists module, dataset version, owner, review status, case count, content hash, coverage and latest run;
+- `GET /api/evaluation/datasets/{dataset_id}/versions/{version}` returns immutable version metadata, case diff, suite membership and audit information;
+- `GET /api/evaluation/dataset-candidates` returns redacted Trace/feedback/synthetic candidates awaiting review;
+- `POST /api/evaluation/dataset-candidates/{candidate_id}/approve` creates or stages a new canonical dataset version;
+- `POST /api/evaluation/dataset-candidates/{candidate_id}/reject` records the reason and reviewer without changing the canonical dataset;
+- `GET /api/evaluation/suites` lists suite case ranges, trigger classes, thresholds and Prompt/Tool mappings;
+- `GET /api/evaluation/runs/{run_id}` returns metrics and the complete dataset/KB/fixture/Prompt/Tool/Model provenance.
+
+- [ ] **Step 1: Write failing API and component tests**
+
+```python
+def test_unredacted_candidate_cannot_enter_gate(client, unredacted_candidate):
+    response = client.post(
+        f"/api/evaluation/dataset-candidates/{unredacted_candidate.id}/approve",
+        headers=reviewer_headers(),
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "DATASET_REDACTION_REQUIRED"
+
+
+def test_approved_candidate_creates_new_immutable_version(client, approved_candidate):
+    response = client.post(
+        f"/api/evaluation/dataset-candidates/{approved_candidate.id}/approve",
+        headers=reviewer_headers(),
+    )
+    assert response.status_code == 201
+    assert response.json()["version"] != approved_candidate.dataset_version
+```
+
+```tsx
+it('does not expose an approve action for an unredacted candidate', () => {
+  render(<DatasetReviewQueue candidate={unredactedCandidate} />)
+  expect(screen.queryByRole('button', { name: '通过并生成版本' })).not.toBeInTheDocument()
+})
+
+it('shows suite scope and provenance in the dataset detail', () => {
+  render(<DatasetVersionDetail dataset={datasetVersion} />)
+  expect(screen.getByText('pr_baseline')).toBeInTheDocument()
+  expect(screen.getByText(/内容 hash/)).toBeInTheDocument()
+})
+```
+
+- [ ] **Step 2: Run API and component tests and verify RED**
+
+Run: `D:/Python/python.exe -m pytest backend/tests/api/test_evaluation_dataset_governance.py -q --no-cov`.
+
+Run from `frontend-admin`: `npm test -- --run src/components/evaluations/DatasetGovernance.test.tsx`.
+
+Expected: FAIL because the governance routes, API client and management components do not exist.
+
+- [ ] **Step 3: Implement read-only catalog and reviewed candidate flow**
+
+Use the existing `cases.jsonl`/manifest/suite files as the canonical source for the first implementation. The API may stage a candidate and write an audit record, but it must not mutate canonical data until the candidate has passed schema validation, PII/redaction checks and reviewer approval. Version generation must calculate a deterministic content hash and preserve the previous version. Do not expose raw production Trace content to ordinary editors.
+
+The UI should provide four information-dense areas: dataset catalog, candidate review queue, immutable version detail and evaluation run detail. It should show source type, owner, reviewer, coverage, suite membership, KB/fixture scope and latest release linkage. It must not provide a free-form editor for expected answers or Tool code.
+
+- [ ] **Step 4: Run focused tests and typecheck**
+
+Run: `D:/Python/python.exe -m pytest backend/tests/api/test_evaluation_dataset_governance.py -q --no-cov`.
+
+Run from `frontend-admin`: `npm test -- --run src/components/evaluations/DatasetGovernance.test.tsx` and `npx tsc --noEmit`.
+
+Expected: API and component tests pass; invalid/unredacted candidates cannot enter a gate suite; approved candidates create a new immutable version.
+
+- [ ] **Step 5: Commit only Task 7 paths**
+
+```powershell
+git add -A -- backend/app/api/routes/evaluation_datasets.py backend/tests/api/test_evaluation_dataset_governance.py frontend-admin/src/app/evaluations/datasets/page.tsx frontend-admin/src/components/evaluations/DatasetCatalog.tsx frontend-admin/src/components/evaluations/DatasetReviewQueue.tsx frontend-admin/src/components/evaluations/DatasetVersionDetail.tsx frontend-admin/src/components/evaluations/EvaluationRunDetail.tsx frontend-admin/src/components/evaluations/DatasetGovernance.test.tsx backend/app/api/router.py frontend-admin/src/api/evaluation.ts frontend-admin/src/components/layout/Sidebar.tsx
+git commit -m "feat: add evaluation dataset governance console" -- backend/app/api/routes/evaluation_datasets.py backend/tests/api/test_evaluation_dataset_governance.py frontend-admin/src/app/evaluations/datasets/page.tsx frontend-admin/src/components/evaluations/DatasetCatalog.tsx frontend-admin/src/components/evaluations/DatasetReviewQueue.tsx frontend-admin/src/components/evaluations/DatasetVersionDetail.tsx frontend-admin/src/components/evaluations/EvaluationRunDetail.tsx frontend-admin/src/components/evaluations/DatasetGovernance.test.tsx backend/app/api/router.py frontend-admin/src/api/evaluation.ts frontend-admin/src/components/layout/Sidebar.tsx
+```
+
+### Task 8: Verify Trace Prompt/Tool versions and hot reload
 
 **Files:**
 - Create: `backend/tests/observability/test_trace_version_provenance.py`
@@ -445,7 +532,7 @@ git add -A -- backend/tests/observability/test_trace_version_provenance.py backe
 git commit -m "test: verify prompt and tool trace provenance" -- backend/tests/observability/test_trace_version_provenance.py backend/skills/base.py backend/observability/tracer.py backend/orchestration/graph/runner.py
 ```
 
-### Task 8: Browser acceptance and full verification
+### Task 9: Browser acceptance and full verification
 
 **Files:**
 - Create: `/tmp/playwright-test-prompt-release.js` (temporary only; do not add to the repository)
@@ -465,7 +552,7 @@ Expected: use the detected `http://127.0.0.1:3200` admin server if available; ot
 
 - [ ] **Step 3: Run the visible browser flow**
 
-The script logs in with the local super-admin, opens a low-risk Prompt, creates a candidate version, submits a local/external-model evaluation, waits for the release status, asserts that publish is disabled before pass, publishes only after pass, then asserts the runtime status shows a higher epoch and the new Prompt version. It captures the release panel and runtime strip. It then sends a trace-producing request and asserts that the returned trace contains Prompt versions and Tool contract hash.
+    The script logs in with the local super-admin, opens the evaluation governance page, verifies the dataset catalog and an approved immutable version, then opens a low-risk Prompt, creates a candidate version, submits a local/external-model evaluation, waits for the release status, asserts that publish is disabled before pass, publishes only after pass, then asserts the runtime status shows a higher epoch and the new Prompt version. It captures the dataset detail, release panel and runtime strip. It then sends a trace-producing request and asserts that the returned trace contains Prompt versions and Tool contract hash.
 
 Run from the Playwright skill directory: `node run.js /tmp/playwright-test-prompt-release.js`.
 
@@ -473,7 +560,7 @@ Expected: visible browser completes without console errors; release status is `p
 
 - [ ] **Step 4: Run backend and frontend verification**
 
-Run: `D:/Python/python.exe -m pytest backend/tests/prompts backend/tests/api/test_prompt_release_api.py backend/tests/api/test_prompts_api.py backend/tests/evaluation/test_eval_provenance.py backend/tests/observability/test_trace_version_provenance.py -q --no-cov`
+Run: `D:/Python/python.exe -m pytest backend/tests/prompts backend/tests/api/test_prompt_release_api.py backend/tests/api/test_prompts_api.py backend/tests/api/test_evaluation_dataset_governance.py backend/tests/evaluation/test_eval_provenance.py backend/tests/observability/test_trace_version_provenance.py -q --no-cov`
 
 Expected: all focused backend tests pass.
 
