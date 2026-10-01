@@ -299,6 +299,11 @@ def _coerce_final_answer(step: dict) -> str:
     返回 str(None) 曾让用户看到字面量 "None" 且被记忆落库。
     """
     if step.get("status") != "success":
+        # 审批待办：提示文本保留在 output（base.py 语义校验 PERMISSION_DENIED
+        # 分支），作为 final_answer 透出——用户直接看到「需要人工审批」与
+        # 审批单号，而不是兜底的「未找到相关信息」追问文案
+        if step.get("error_type") == "permission" and step.get("output"):
+            return str(step["output"])
         return ""
     out = step.get("output")
     if out is None or out == "":

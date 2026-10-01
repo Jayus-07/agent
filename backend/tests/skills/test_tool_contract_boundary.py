@@ -232,3 +232,56 @@ def _make_async(return_value):
     async def _ainvoke(params):
         return return_value
     return _ainvoke
+
+
+class TestPendingApprovalReceiptKept:
+    """审批待办回执保留（2026-10-02）：工具返回「需要人工审批后执行」提示时，
+    此前被 validate_semantics 判死且 output=None，reporter 只能兜底「未找到
+    相关信息」——用户看不到等待审批与审批单号。现契约：PERMISSION_DENIED
+    语义失败保留提示文本进 step.output（error_type=permission），
+    direct 链路 _coerce_final_answer 把它透出为 final_answer。"""
+
+    def _run(self, tool_fn):
+        # email.send 的 params_schema 要求 to/subject/body 必填——
+        # 先过前置参数校验，才能到达语义校验的审批分支
+        state = _state()
+        state["plan"]["nodes"]["step_1"]["params"] = {
+            "to": "mint1614@qq.com", "subject": "s", "body": "b"}
+        return asyncio.run(
+            _TextCompat(tool_fn).execute(state, step_capability="email.send"))
+
+    def test_pending_approval_text_kept_in_output(self):
+        out = self._run(_PendingApprovalTool())
+        sr = out["step_results"]["step_1"]
+        assert sr["status"] == "failed"
+        assert sr["error_type"] == "permission"
+        assert "需要人工审批后执行" in sr["output"]
+        assert "审批单号" in sr["output"]
+
+    def test_other_validation_failure_still_drops_output(self):
+        """非审批类语义失败（如失败封套）维持原契约：output 置空。"""
+        out = self._run(_EnvelopeFailedTool())
+        sr = out["step_results"]["step_1"]
+        assert sr["status"] == "failed"
+        assert sr["output"] is None
+        assert sr["error_type"] == "invalid_param"
+
+    def test_coerce_final_answer_surfaces_approval_receipt(self):
+        from backend.orchestration.graph.direct_executor import _coerce_final_answer
+
+        receipt = "⏸ 该操作需要人工审批后执行（写操作安全策略）。审批单号: abc"
+        step = {"status": "failed", "error_type": "permission", "output": receipt}
+        assert _coerce_final_answer(step) == receipt
+        # 普通失败仍返回空串（不透出垃圾）
+        assert _coerce_final_answer({"status": "failed", "error_type": "invalid_param",
+                                     "output": None}) == ""
+
+
+class _PendingApprovalTool:
+    """返回 ensure_approved 待审批提示形态的文本（与 tool_approval.py 同文案）。"""
+
+    def invoke(self, params):
+        return ("⏸ 该操作需要人工审批后执行（写操作安全策略）。\n\n"
+                "- 操作: `send_email.send`\n"
+                "- 审批单号: `test-rid`\n\n"
+                "管理员在审批管理页批准后，重新发起相同操作即可执行。")

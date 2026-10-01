@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from backend.shared.logger import logger
-from backend.shared.error_protocol import error_envelope_from_exception
+from backend.shared.error_protocol import ErrorCode, error_envelope_from_exception
 from backend.skills.validation import (
     ValidationFailure,
     validate_invocation,
@@ -491,8 +491,16 @@ class BaseSkill(ABC):
             except ValidationFailure as e:
                 # 后置校验失败是确定性错误，不重试（与旧循环同语义）
                 _record_skill_failure(self.name, ToolStatus.INVALID_REQUEST)
-                sr.update(status="failed", output=None,
-                          error=f"输出校验失败: {e.layer}", error_type="invalid_param",
+                # 审批待办是「尚未执行」不是「执行失败」：保留审批提示文本进
+                # step 输出，direct 链路 _coerce_final_answer 把它作为
+                # final_answer 透出（此前 output=None 被 reporter 兜底追问
+                # 文案吞掉，用户看不到「等待审批」与审批单号，2026-10-02）
+                pending_approval = (
+                    e.envelope.code == ErrorCode.PERMISSION_DENIED)
+                sr.update(status="failed",
+                          output=output if pending_approval else None,
+                          error=f"输出校验失败: {e.layer}",
+                          error_type="permission" if pending_approval else "invalid_param",
                           finished_at=time.time())
                 step_results[sr["step_id"]] = dict(sr)
                 trace_collector.end_span(tool_span, status="error",
