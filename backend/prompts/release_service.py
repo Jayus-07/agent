@@ -1,0 +1,160 @@
+"""Prompt 发布门禁服务。"""
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+from backend.prompts.release_models import (
+    PromptReleaseRecord,
+    PromptReleaseStatus,
+    PublishGateError,
+    ReleaseStateError,
+)
+from backend.prompts.release_repository import PromptReleaseRepository
+
+
+class PromptReleaseService:
+    """编排发布记录状态机，不在此处复制 PromptService 的发布实现。"""
+
+    def __init__(self, *, repository=None, prompt_service=None) -> None:
+        self._repository = repository or PromptReleaseRepository()
+        self._prompt_service = prompt_service
+
+    async def create_release(
+        self,
+        key: str,
+        version: int,
+        suite: str,
+        dataset_version: dict[str, Any],
+        actor: str,
+        executor: str,
+        *,
+        target_env: str = "production",
+        prompt_snapshot: dict[str, Any] | None = None,
+        tool_contract_fingerprint: str = "",
+        model_binding_fingerprint: str = "",
+    ) -> PromptReleaseRecord:
+        if not key.strip():
+            raise ValueError("Prompt key 不能为空")
+        if version < 1:
+            raise ValueError("Prompt version 必须为正整数")
+        if not suite.strip():
+            raise ValueError("评测 suite 不能为空")
+        if executor not in {"local", "github"}:
+            raise ValueError("executor 只支持 local 或 github")
+        row = await self._repository.create_release(
+            release_id=f"rel-{uuid4().hex}",
+            prompt_key=key,
+            version=version,
+            target_env=target_env,
+            eval_suite=suite,
+            dataset_provenance=dataset_version,
+            prompt_snapshot=prompt_snapshot or {},
+            tool_contract_fingerprint=tool_contract_fingerprint,
+            model_binding_fingerprint=model_binding_fingerprint,
+            executor=executor,
+            created_by=actor,
+        )
+        return PromptReleaseRecord.from_row(row)
+
+    async def get(self, release_id: str) -> PromptReleaseRecord:
+        row = await self._repository.get_release(release_id)
+        if row is None:
+            raise KeyError(f"Prompt release 不存在: {release_id}")
+        return PromptReleaseRecord.from_row(row)
+
+    async def mark_running(self, release_id: str, external_run_id: str) -> PromptReleaseRecord:
+        current = await self.get(release_id)
+        if current.status == PromptReleaseStatus.RUNNING:
+            if current.external_run_id != external_run_id:
+                raise ReleaseStateError("同一 release 不允许绑定不同 external run")
+            return current
+        if current.status != PromptReleaseStatus.PENDING:
+            raise ReleaseStateError(
+                f"release 状态 {current.status.value} 不允许进入 running"
+            )
+        row = await self._repository.mark_running(release_id, external_run_id)
+        return PromptReleaseRecord.from_row(row)
+
+    async def record_result(
+        self,
+        release_id: str,
+        result: dict[str, Any],
+        actor: str,
+    ) -> PromptReleaseRecord:
+        status = str(result.get("status", ""))
+        if status not in {
+            PromptReleaseStatus.PASSED.value,
+            PromptReleaseStatus.FAILED.value,
+        }:
+            raise ValueError("评测终态只能是 passed 或 failed")
+
+        current = await self.get(release_id)
+        if current.status in {
+            PromptReleaseStatus.PASSED,
+            PromptReleaseStatus.FAILED,
+        }:
+            if current.status.value == status:
+                return current
+            raise ReleaseStateError("release 已有相反的终态评测结果")
+        if current.status not in {
+            PromptReleaseStatus.PENDING,
+            PromptReleaseStatus.RUNNING,
+        }:
+            raise ReleaseStateError(
+                f"release 状态 {current.status.value} 不允许写入评测结果"
+            )
+
+        row = await self._repository.record_result(
+            release_id,
+            status=status,
+            eval_run_id=result.get("run_id") or result.get("eval_run_id"),
+            metrics=result.get("metrics") or {},
+            provenance=result.get("provenance") or {},
+            failure_reason=str(result.get("failure_reason") or ""),
+            actor=actor,
+        )
+        return PromptReleaseRecord.from_row(row)
+
+    async def approve(self, release_id: str, actor: str) -> PromptReleaseRecord:
+        current = await self.get(release_id)
+        if current.status != PromptReleaseStatus.PASSED:
+            raise PublishGateError("只有 passed 的评测记录才能审批")
+        row = await self._repository.approve(release_id, actor)
+        return PromptReleaseRecord.from_row(row)
+
+    async def publish(self, release_id: str, actor: str) -> PromptReleaseRecord:
+        current = await self.get(release_id)
+        if current.status != PromptReleaseStatus.APPROVED:
+            raise PublishGateError(
+                f"Prompt release 尚未审批通过，当前状态为 {current.status.value}"
+            )
+        prompt_service = self._prompt_service or _load_prompt_service()
+        try:
+            await prompt_service.publish(
+                current.prompt_key,
+                current.version,
+                actor=actor,
+                role="release_gate",
+            )
+        except Exception as exc:
+            raise ReleaseStateError(f"Prompt production 发布失败: {exc}") from exc
+
+        row = await self._repository.mark_published(release_id, actor)
+        return PromptReleaseRecord.from_row(row)
+
+    async def rollback(self, release_id: str, actor: str) -> PromptReleaseRecord:
+        current = await self.get(release_id)
+        if current.status != PromptReleaseStatus.PUBLISHED:
+            raise ReleaseStateError("只有 published release 才能标记回滚")
+        row = await self._repository.mark_rolled_back(release_id, actor)
+        return PromptReleaseRecord.from_row(row)
+
+
+def _load_prompt_service() -> Any:
+    from backend.prompts.service import prompt_service
+
+    return prompt_service
+
+
+__all__ = ["PromptReleaseService"]
