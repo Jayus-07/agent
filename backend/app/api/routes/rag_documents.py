@@ -49,17 +49,46 @@ from backend.app.api.routes._rag_shared import (
     _get_op_logger,
     _get_registry,
     _safe_log_op,
+    sanitize_doc_row,
 )
 
 router = APIRouter(dependencies=[Depends(require_rag_user)])
 
 
-@router.get("/stats")
-async def get_stats():
-    """知识库统计"""
+def _require_authz(request: Request):
+    """路由级授权入口（2026-10-01 权限收口）：Principal → RagAuthorization。
+
+    授权服务异常 fail-closed（403），绝不退化为无过滤查询。
+    """
+    from backend.app.api.identity import require_principal
+    from backend.rag.authz import RagAuthorization, RagAuthorizationError
+
+    principal = require_principal(request)
     try:
+        return RagAuthorization.build(principal)
+    except RagAuthorizationError as e:
+        logger.error(f"[RAG] 授权失败: {e}")
+        raise HTTPException(status_code=403, detail="授权服务暂不可用，已拒绝操作")
+
+
+def _invisible_doc() -> dict:
+    """无权文档的统一不可见响应（与「不存在」同形，不泄露存在性）。"""
+    return {"ok": False, "error": "文档不存在"}
+
+
+def _deny_manage(reason: str):
+    """管理动作越权的显式拒绝（写操作必须让调用方知道被拒）。"""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=403, content={"ok": False, "error": reason})
+
+
+@router.get("/stats")
+async def get_stats(request: Request):
+    """知识库统计 — 只统计当前主体可见范围（授权下推，不泄露全局量）。"""
+    try:
+        authz = _require_authz(request)
         reg = _get_registry()
-        docs = reg.list_active()
+        docs = [d for d in reg.list_active() if authz.can_read_row(d)]
         total_chunks = sum(d.get("chunk_count", 0) for d in docs)
         return {
             "kb_count": len(set(d.get("kb_id", "default") for d in docs)),
@@ -71,6 +100,8 @@ async def get_stats():
             "vector_db": "pgvector",
             "vector_db_path": "pgvector:rag_vectors",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[RAG] stats 失败: {e}")
         return {"kb_count": 0, "doc_count": 0, "chunk_count": 0, "embedding_model": "", "vector_db": "pgvector", "error": str(e)}
@@ -78,6 +109,7 @@ async def get_stats():
 
 @router.get("/documents")
 async def list_documents(
+    request: Request,
     keyword: str = "",
     type: str = "",
     status: str = "",
@@ -91,9 +123,22 @@ async def list_documents(
     page: int = 1,
     page_size: int = 20,
 ):
-    """文档列表 — 支持搜索、分页、元数据过滤"""
+    """文档列表 — 支持搜索、分页、元数据过滤；行集与 total 同受授权范围约束"""
     try:
+        authz = _require_authz(request)
         reg = _get_registry()
+
+        # 授权范围下推（2026-10-01）：显式 kb/department 参数是查询条件，
+        # 不是授权依据——授权只来自主体属性，二者求交后进 SQL。
+        if kb_id and not authz.can_search_kb(kb_id):
+            return {"documents": [], "total": 0, "page": page,
+                    "page_size": page_size, "current_fingerprint": METADATA_SCHEMA_FINGERPRINT}
+        kb_scope = sorted(authz.kb_scope)
+        # 显式 department 参数对非 admin 只能是本部门（查询条件可收窄）
+        if department and not authz.is_admin and department != authz.principal.department:
+            return {"documents": [], "total": 0, "page": page,
+                    "page_size": page_size, "current_fingerprint": METADATA_SCHEMA_FINGERPRINT}
+        visible_scopes = authz.sql_visible_scopes(reg.distinct_permission_scopes())
 
         result = reg.search(
             keyword=keyword, type_filter=type, status_filter=status or "active",
@@ -101,6 +146,7 @@ async def list_documents(
             confidence_min=confidence_min,
             llm_used=llm_used, quality_min=quality_min, sort_by=sort_by,
             page=page, page_size=page_size,
+            kb_scope=kb_scope, visible_scopes=visible_scopes,
         )
         docs = result["items"]
         total = result["total"]
@@ -118,8 +164,8 @@ async def list_documents(
             return {
                 "id": d["doc_id"],
                 "name": file_name,
-                "path": d.get("file_path", ""),
-                "kb_id": d.get("kb_id", "default"),
+                # file_path 是服务器内部路径，不出 API 边界（2026-10-01 权限收口）
+                "kb_id": d.get("kb_id", "policy_general"),
                 "type": ext,
                 "size": d.get("file_size", 0),
                 "chunk_count": d.get("chunk_count", 0),
@@ -162,6 +208,8 @@ async def list_documents(
             "page_size": result["page_size"],
             "current_fingerprint": METADATA_SCHEMA_FINGERPRINT,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[RAG] documents 失败: {e}")
         return {"documents": [], "total": 0, "error": str(e)}
@@ -186,16 +234,30 @@ async def list_operations(
 
 
 @router.get("/pending")
-async def list_pending_docs(page: int = 1, page_size: int = 20):
-    """列出待审核文档（status=pending_review，2026-08-11 P0 审核 Dashboard）。"""
+async def list_pending_docs(request: Request, page: int = 1, page_size: int = 20):
+    """列出待审核文档（status=pending_review）— 按「可管理范围」过滤：
+    非 admin 编辑只看到本部门、可见库的待审文档（total 同口径）。"""
     try:
+        authz = _require_authz(request)
         reg = _get_registry()
-        result = reg.list_pending_review(page=page, page_size=page_size)
-        # 格式化（与 list_documents 一致）
+        dept_filter = "" if authz.is_admin else (authz.principal.department or "")
+        result = reg.list_pending_review(
+            page=page, page_size=page_size,
+            kb_scope=sorted(authz.kb_scope), department=dept_filter,
+        )
+        # 格式化（与 list_documents 一致）+ 行级归属校验双保险
+        items = []
         for d in result["items"]:
+            ok, _ = authz.can_manage_row(d)
+            if not ok:
+                continue
             d["id"] = d.get("doc_id")
             d["name"] = d.get("file_name")
+            items.append(sanitize_doc_row(d))
+        result["items"] = items
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[RAG] pending 列表失败: {e}")
         return {"items": [], "total": 0, "error": str(e)}
@@ -205,11 +267,16 @@ async def list_pending_docs(page: int = 1, page_size: int = 20):
 async def approve_pending_doc(doc_id: str, request: Request):
     """批准 pending 文档 → status='active'（2026-08-11）。"""
     source = _extract_source(request)
+    authz = _require_authz(request)
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
+        ok, reason = authz.can_manage_row(doc)
+        if not ok:
+            return _deny_manage(reason)
+
         if doc.get("status") != "pending_review":
             return {"ok": False, "error": f"文档状态为 {doc.get('status')}，不是 pending_review"}
 
@@ -241,19 +308,19 @@ async def approve_pending_doc(doc_id: str, request: Request):
 async def reject_pending_doc(doc_id: str, request: Request):
     """拒绝 pending 文档 → status='deleted'（2026-08-11）。"""
     source = _extract_source(request)
+    authz = _require_authz(request)
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
+        ok, reason = authz.can_manage_row(doc)
+        if not ok:
+            return _deny_manage(reason)
+
         if doc.get("status") != "pending_review":
             return {"ok": False, "error": f"文档状态为 {doc.get('status')}，不是 pending_review"}
 
-        updated = reg.update_status_by_doc_id(doc_id, "deleted")
-        if updated == 0:
-            return {"ok": False, "error": "状态更新失败（可能并发）"}
-
-        # 级联清理（与 delete 一致，避免 rejected 文档残留孤儿向量/索引）
         warnings: list[str] = []
         try:
             pipeline = await asyncio.to_thread(get_rag_pipeline)
@@ -281,15 +348,16 @@ async def reject_pending_doc(doc_id: str, request: Request):
 
 
 @router.get("/documents/{doc_id}")
-async def get_document(doc_id: str):
-    """文档详情 — 含 chunk 配置、embedding 模型等完整信息"""
+async def get_document(doc_id: str, request: Request):
+    """文档详情 — 含 chunk 配置、embedding 模型等完整信息（先授权后取数）"""
     from backend.config import CHUNK_SIZE, CHUNK_OVERLAP
 
     try:
+        authz = _require_authz(request)
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
-        if not doc:
-            return {"ok": False, "error": "文档不存在"}
+        if not doc or not authz.can_read_row(doc):
+            return _invisible_doc()
 
         file_name = doc.get("file_name", "")
         ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "unknown"
@@ -300,7 +368,7 @@ async def get_document(doc_id: str):
             "doc": {
                 "id": doc["doc_id"],
                 "name": file_name,
-                "path": doc.get("file_path", ""),
+                # file_path 不出 API 边界（2026-10-01 权限收口）
                 "kb_id": doc.get("kb_id", "default"),
                 "type": ext,
                 "size": doc.get("file_size", 0),
@@ -334,9 +402,13 @@ async def get_document(doc_id: str):
 
 
 @router.get("/documents/{doc_id}/processing-runs")
-async def list_processing_runs(doc_id: str, page: int = 1, page_size: int = 20):
-    """返回文档历次入库运行及其模型血缘摘要。"""
+async def list_processing_runs(doc_id: str, request: Request, page: int = 1, page_size: int = 20):
+    """返回文档历次入库运行及其模型血缘摘要（先授权后取数）。"""
     try:
+        authz = _require_authz(request)
+        doc = _get_registry().get_by_doc_id(doc_id)
+        if not doc or not authz.can_read_row(doc):
+            return {"doc_id": doc_id, "items": [], "total": 0, "error": "文档不存在"}
         result = await asyncio.to_thread(
             get_processing_lineage_repository().list_runs,
             doc_id,
@@ -350,9 +422,13 @@ async def list_processing_runs(doc_id: str, page: int = 1, page_size: int = 20):
 
 
 @router.get("/documents/{doc_id}/processing-runs/{run_id}")
-async def get_processing_run_detail(doc_id: str, run_id: str):
-    """返回一次入库运行的阶段、模型、版本和 token 明细。"""
+async def get_processing_run_detail(doc_id: str, run_id: str, request: Request):
+    """返回一次入库运行的阶段、模型、版本和 token 明细（先授权后取数）。"""
     try:
+        authz = _require_authz(request)
+        doc = _get_registry().get_by_doc_id(doc_id)
+        if not doc or not authz.can_read_row(doc):
+            return {"doc_id": doc_id, "run_id": run_id, "error": "文档不存在"}
         detail = await asyncio.to_thread(
             get_processing_lineage_repository().get_run_detail,
             doc_id,
@@ -383,6 +459,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
     source = _extract_source(request)
     batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
+    authz = _require_authz(request)
 
     try:
         _t0 = time.time()
@@ -391,6 +468,10 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         if not doc:
             return {"ok": False, "error": "文档不存在"}
         doc_name = doc.get("file_name", "")
+        # 归属校验（2026-10-01）：任何 editor 只能重索引自己部门的文档
+        ok, reason = authz.can_manage_row(doc)
+        if not ok:
+            return _deny_manage(reason)
 
         # F2 加固：doc_id 存在多条 active 行 = 历史重索引 bug 留下的重复数据
         # （同 doc_id 双路径、归属不一）。此时无法判断哪行是正确归属，直接拒绝，
@@ -526,12 +607,17 @@ async def delete_document(doc_id: str, request: Request):
     batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
     _delete_t0 = time.time()
+    authz = _require_authz(request)
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
         doc_name = doc.get("file_name", "")
+        # 归属校验（2026-10-01）：删除含 os.remove 副作用，必须先过归属裁决
+        ok, reason = authz.can_manage_row(doc)
+        if not ok:
+            return _deny_manage(reason)
         file_path = doc.get("file_path", "")
 
         # ① 软删 registry — 按 doc_id 删所有行（修复绝对/相对路径重复行漏删）
@@ -567,16 +653,19 @@ async def delete_document(doc_id: str, request: Request):
 
 
 @router.get("/documents/{doc_id}/chunks")
-async def get_chunks(doc_id: str):
-    """获取文档的 Chunk 列表（含内容和 metadata）"""
+async def get_chunks(doc_id: str, request: Request):
+    """获取文档的 Chunk 列表（含内容和 metadata）— 先授权，且只返回
+    registry 已发布 chunk_ids 集合内的向量行（候选/孤儿不可见）。"""
     try:
+        authz = _require_authz(request)
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
-        if not doc:
-            return {"doc_id": doc_id, "chunks": [], "error": "文档不存在"}
+        if not doc or not authz.can_read_row(doc):
+            return {"doc_id": doc_id, "chunks": [], "total": 0, "error": "文档不存在"}
         chunk_ids_str = doc.get("chunk_ids", "[]")
         import json as _json
         chunk_ids = _json.loads(chunk_ids_str) if isinstance(chunk_ids_str, str) else chunk_ids_str
+        published_ids = {str(x) for x in (chunk_ids or [])}
 
         # 从 pgvector 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
         chunks = []
@@ -586,12 +675,21 @@ async def get_chunks(doc_id: str):
             results = store.get(where={"doc_id": doc_id})
             if results and results.get("ids"):
                 for i, cid in enumerate(results["ids"]):
+                    # 只发布 registry 登记的 chunk（未发布/候选代次不可见）
+                    if published_ids and str(cid) not in published_ids:
+                        continue
                     content = (results.get("documents") or [""] * len(results["ids"]))[i]
-                    meta = (results.get("metadatas") or [{}] * len(results["ids"]))[i]
+                    meta = dict((results.get("metadatas") or [{}] * len(results["ids"]))[i] or {})
                     chunks.append({
                         "id": cid,
                         "content": content or "",
-                        "metadata": meta or {},
+                        "metadata": {
+                            k: meta[k] for k in (
+                                "doc_id", "chunk_id", "vector_id", "kb_id",
+                                "department", "doc_type", "source_file",
+                                "chunk_index", "chunk_type", "section_title",
+                            ) if k in meta
+                        },
                         "token_count": len((content or "").encode()),
                     })
         except Exception as e:
@@ -599,15 +697,21 @@ async def get_chunks(doc_id: str):
             chunks = [{"id": cid, "content": "", "metadata": {}, "token_count": 0} for cid in chunk_ids]
 
         return {"doc_id": doc_id, "chunks": chunks, "total": len(chunks)}
+    except HTTPException:
+        raise
     except Exception as e:
         return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
 
 
 @router.get("/chunks/{doc_id}/detail")
-async def get_chunk_detail(doc_id: str):
+async def get_chunk_detail(doc_id: str, request: Request):
     """获取文档的完整 Chunk 文本（从 chunk_store 取，非向量库）。
     供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。"""
     try:
+        authz = _require_authz(request)
+        doc = _get_registry().get_by_doc_id(doc_id)
+        if not doc or not authz.can_read_row(doc):
+            return {"doc_id": doc_id, "chunks": [], "total": 0, "error": "文档不存在"}
         from backend.rag.indexing.chunk_store import get_chunk_store
         cs = get_chunk_store()
         rows = cs.get_by_doc_id(doc_id)
@@ -631,6 +735,8 @@ async def get_chunk_detail(doc_id: str):
             ],
             "total": len(rows),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
 
