@@ -23,15 +23,24 @@ from dataclasses import dataclass
 
 from backend.security.principal import Principal
 
-# 角色 → 权限点（最小集合，与既有角色枚举 viewer/editor/admin 对齐；
-# RBAC 管理面已在 deps/rbac.py 按角色闸，此处给业务层统一 code 语义）
+# 角色 → 权限点（最小集合，与 RBAC 平台角色枚举 viewer/editor/admin/
+# super_admin 对齐；RBAC 管理面已在 routes/rbac.py 按角色闸，此处给业务层
+# 统一 code 语义）
 # sql.read（2026-09-23 SQL Agent 生产收口 STOP B，决策 D3）：
 #   editor/admin 可用 SQL 数据分析，viewer 不含 → SQL 层消费
 #   has_permission("sql.read") 拒绝。映射只在此处，SQL 层禁止自判角色。
+# super_admin（2026-10-01 管理端数据查询）：此前缺登记 → 未知角色落空
+#   权限集，管理端全业务权限码不可用；补齐为 admin 超集（管理端引导页
+#   与 bootstrap 都按"超集"语义使用该角色，见 routes/rbac.py 转移矩阵）。
 ROLE_PERMISSION_CODES: dict[str, frozenset[str]] = {
     "viewer": frozenset({"rag.read"}),
     "editor": frozenset({"rag.read", "rag.upload", "rag.review", "sql.read"}),
     "admin": frozenset({
+        "rag.read", "rag.upload", "rag.review", "rag.admin",
+        "admin.users.read", "admin.users.write",
+        "sql.read",
+    }),
+    "super_admin": frozenset({
         "rag.read", "rag.upload", "rag.review", "rag.admin",
         "admin.users.read", "admin.users.write",
         "sql.read",
@@ -44,6 +53,7 @@ ROLE_DATA_SCOPE: dict[str, str] = {
     "viewer": "self",
     "editor": "department",
     "admin": "all",
+    "super_admin": "all",
 }
 
 

@@ -50,6 +50,42 @@ class SQLQueryResponse(BaseModel):
     elapsed_sec: float = Field(0.0, description="执行耗时（秒）")
     error: Optional[str] = Field(None, description="失败原因")
     error_type: Optional[str] = Field(None, description="错误子分类")
+    sql: Optional[str] = Field(None, description="实际执行的 SQL（管理端核对 NL2SQL 结果用）")
+
+
+# ── 管理端表浏览（GET /sql/tables*，2026-10-01）──
+# 与 NL2SQL 同一安全栈（sql.read 预检 + SQLPolicyGuard + 只读连接池 +
+# 列级脱敏），SQL 由服务端按白名单元数据拼装（无 LLM），供核对问答结果。
+
+class BrowseColumn(BaseModel):
+    name: str = Field(..., description="列名（敏感列不出现在目录中）")
+    comment: str = Field("", description="列业务注释")
+
+
+class BrowseTable(BaseModel):
+    schema_name: str = Field(..., description="所属 schema（product/order/...）")
+    name: str = Field(..., description="表名（不含 schema 前缀）")
+    qualified_name: str = Field(..., description="全限定名，如 product.products")
+    description: str = Field("", description="表业务说明")
+    columns: list = Field(default_factory=list, description="可见列（BrowseColumn）")
+
+
+class TableCatalogResponse(BaseModel):
+    tables: list = Field(default_factory=list, description="白名单内全部业务表（BrowseTable）")
+
+
+class TableBrowseResponse(BaseModel):
+    """表分页浏览结果（GET /sql/tables/{schema}/{table}）"""
+    qualified_name: str = Field(..., description="全限定表名")
+    status: str = Field("success", description="success/no_data/failed/timeout/...")
+    page: int = Field(1, description="页码（1 起）")
+    page_size: int = Field(20, description="每页行数")
+    total: int = Field(0, description="过滤后总行数")
+    columns: list = Field(default_factory=list, description="可见列名（按声明序）")
+    rows: list = Field(default_factory=list, description="结果行（已脱敏）")
+    elapsed_sec: float = Field(0.0, description="执行耗时（秒）")
+    error: Optional[str] = Field(None, description="失败原因")
+    error_type: Optional[str] = Field(None, description="错误子分类")
 
 
 # ── RAG 检索 ─────────────────────────────────────

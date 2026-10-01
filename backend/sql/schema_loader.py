@@ -82,6 +82,25 @@ class SchemaLoader:
         t = self._config["tables"].get(qualified_name)
         return t.get("description", "") if t else ""
 
+    def get_browse_columns(self, qualified_name: str) -> Dict[str, str]:
+        """表浏览/程序化消费用可见列（声明序 dict：列名 → 注释）。
+
+        与 get_table_info 的 LLM 视图同一敏感列剔除语义（G2：剔除逻辑
+        只此一份）；未登记表返回空 dict，调用方 fail-fast。
+        """
+        t = self._config["tables"].get(qualified_name)
+        if not t:
+            return {}
+        table_sensitive = {
+            s.split(".")[-1] for s in self.sensitive_columns
+            if s.startswith(qualified_name + ".")
+        }
+        return {
+            c: desc for c, desc in t["columns"].items()
+            if qualified_name + "." + c not in self.sensitive_columns
+            and c not in table_sensitive
+        }
+
     def get_table_info(self, qualified_names: List[str] = None) -> str:
         """生成给 LLM 用的表结构描述文本。
 
@@ -106,16 +125,9 @@ class SchemaLoader:
                 resolved = bare_to_qualified[qname]
             else:
                 continue
+            cols = self.get_browse_columns(resolved)
+            col_lines = "\n".join(f"    {c}: {desc}" for c, desc in cols.items())
             t = self._config["tables"][resolved]
-            cols = t["columns"]
-            # 排除敏感列（不暴露给 LLM）
-            visible_cols = {
-                c: desc for c, desc in cols.items()
-                if resolved + "." + c not in self.sensitive_columns
-                and c not in {s.split(".")[-1] for s in self.sensitive_columns
-                              if s.startswith(resolved + ".")}
-            }
-            col_lines = "\n".join(f"    {c}: {desc}" for c, desc in visible_cols.items())
             parts.append(
                 f"表名: {resolved}\n"
                 f"描述: {t.get('description', '')}\n"

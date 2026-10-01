@@ -49,6 +49,7 @@ export const NAV: NavEntry[] = [
   {
     icon: <TrendingUp size={18} />, label: '业务分析',
     items: [
+      { label: '数据查询', path: '/data-explorer', minRole: 'editor' },
       { label: '竞品监控', path: '/competitors' },
       { label: '选品漏斗', path: '/selection-funnel' },
       { label: '选品决策', path: '/selection-decision' },
