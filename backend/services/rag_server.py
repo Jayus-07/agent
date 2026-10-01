@@ -95,6 +95,10 @@ class AskRequest(BaseModel):
     permissions: list[str] | None = Field(
         None, description="请求者持有的文档级权限集合"
     )
+    roles: list[str] = Field(
+        default_factory=list,
+        description="网关验签后的 JWT 角色（admin 跨部门口径唯一输入）",
+    )
 
 
 class RetrieveRequest(BaseModel):
@@ -104,6 +108,24 @@ class RetrieveRequest(BaseModel):
     subject_type: str = Field("", description="主体类型（customer/employee）")
     department: str = Field("", description="主体部门")
     permissions: list[str] | None = Field(None, description="文档级权限集合")
+    roles: list[str] = Field(default_factory=list, description="JWT 角色")
+
+
+class RetrieveDocsRequest(BaseModel):
+    """文档级授权检索（/rag/search remote 分支）。
+
+    与本地 RAGPipeline.retrieve_documents 同语义：KB keep-set +
+    permission_scope 后过滤，逐条返回（保留分数与受限 metadata 白名单外
+    的裁剪由调用方 app 侧统一执行）。
+    """
+
+    question: str = Field(..., min_length=1, description="检索问题")
+    kb_id: str = Field("default", description="知识库 ID")
+    top_k: int = Field(5, ge=1, le=20, description="返回 doc 数")
+    subject_type: str = Field("", description="主体类型（customer/employee）")
+    department: str = Field("", description="主体部门")
+    permissions: list[str] | None = Field(None, description="文档级权限集合")
+    roles: list[str] = Field(default_factory=list, description="JWT 角色")
 
 
 # ==================== 本地 pipeline 接入 ====================
@@ -176,7 +198,54 @@ async def _startup() -> None:
             "[rag-server] Prompt DB 快照加载失败，索引期提示词回退 defaults",
             exc_info=True,
         )
+    # C 阶段：BM25 发布通知监听（加速热刷新；漏掉消息由每请求版本检查兜底）
+    try:
+        _start_index_published_listener()
+    except Exception:
+        logger.warning("[rag-server] 索引发布监听启动失败（版本检查兜底）",
+                       exc_info=True)
     _kick_init()
+
+
+def _start_index_published_listener() -> None:
+    """订阅 rag:index:published —— 收到通知即触发本地 pipeline 热刷新。
+
+    通知只是加速项：本监听挂掉/消息丢失时，检索入口的
+    ensure_retrieval_index_fresh（读 PUBLISHED 指针）仍然兜底。
+    """
+
+    def _listen() -> None:
+        import time as _time
+
+        while True:
+            try:
+                import redis as _redis_lib
+
+                from backend.config.redis import REDIS_KEY_PREFIX, REDIS_URL
+                from backend.rag.pipeline import _get_local_pipeline_state
+
+                client = _redis_lib.Redis.from_url(
+                    REDIS_URL, decode_responses=True, socket_keepalive=True)
+                pubsub = client.pubsub(ignore_subscribe_messages=True)
+                pubsub.subscribe(f"{REDIS_KEY_PREFIX}rag:index:published")
+                logger.info("[rag-server] 索引发布监听已连接")
+                for message in pubsub.listen():
+                    state = _get_local_pipeline_state()
+                    if state.get("state") != "ready":
+                        continue  # 初始化未完成时不必刷新（启动即加载最新）
+                    try:
+                        pipeline = _get_pipeline()
+                        pipeline.ensure_retrieval_index_fresh()
+                    except Exception:  # noqa: BLE001
+                        logger.debug("[rag-server] 通知触发热刷新失败",
+                                     exc_info=True)
+            except Exception:  # noqa: BLE001 — Redis 断连退避重连
+                logger.debug("[rag-server] 索引发布监听断连，5s 后重连",
+                             exc_info=True)
+                _time.sleep(5.0)
+
+    threading.Thread(target=_listen, name="rag-index-published-listener",
+                     daemon=True).start()
 
 
 # ==================== 端点 ====================
@@ -197,13 +266,18 @@ def ask(req: AskRequest) -> dict[str, Any]:
         subject_type=req.subject_type,
         department=req.department,
         permissions=req.permissions,
+        roles=tuple(req.roles),
     )
     return {"answer": answer, "meta": getattr(pipeline, "last_answer_meta", {}) or {}}
 
 
 @app.post("/retrieve")
 def retrieve(req: RetrieveRequest) -> dict[str, Any]:
-    """轻量检索（不生成），供 BusinessAnalyzer 等下游分析用。"""
+    """轻量检索（不生成），供 BusinessAnalyzer 等下游分析用。
+
+    index_status（2026-10-01 热刷新收口）："stale" = 已发布索引代次加载失败，
+    正以旧快照服务；调用方必须显式呈现，不得静默当作最新。
+    """
     try:
         pipeline = _get_pipeline()
     except RuntimeError as e:
@@ -215,8 +289,57 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
         subject_type=req.subject_type,
         department=req.department,
         permissions=req.permissions,
+        roles=tuple(req.roles),
     )
-    return {"result": result}
+    stale = bool(getattr(pipeline, "is_index_stale", False))
+    return {"result": result, "index_status": "stale" if stale else "ok"}
+
+
+@app.post("/retrieve_docs")
+def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
+    """文档级授权检索（/rag/search remote 分支，2026-10-01 权限收口）。
+
+    与本地 /rag/search 共用 RAGPipeline.retrieve_documents（KB keep-set +
+    permission_scope 双过滤）；metadata 在服务侧先做白名单裁剪，
+    file_path 等内部字段不出服务边界。
+    """
+    try:
+        pipeline = _get_pipeline()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    docs = pipeline.retrieve_documents(
+        question=req.question,
+        kb_id=req.kb_id,
+        top_k=req.top_k,
+        subject_type=req.subject_type,
+        department=req.department,
+        permissions=req.permissions,
+        roles=tuple(req.roles),
+    )
+    stale = bool(getattr(pipeline, "is_index_stale", False))
+    return {
+        "docs": [
+            {
+                "content": d.page_content,
+                "metadata": _client_safe_metadata(d.metadata or {}),
+            }
+            for d in docs
+        ],
+        "index_status": "stale" if stale else "ok",
+    }
+
+
+# 对外暴露的 chunk/doc metadata 白名单：file_path / permission_scope /
+# person_names / minhash 等内部治理字段不出 rag-service 边界
+_CLIENT_META_KEYS = (
+    "doc_id", "chunk_id", "vector_id", "kb_id", "department",
+    "doc_type", "business_domain", "source_file", "chunk_index",
+    "chunk_type", "section_title", "score", "reporting_period",
+)
+
+
+def _client_safe_metadata(meta: dict) -> dict:
+    return {k: meta[k] for k in _CLIENT_META_KEYS if k in meta}
 
 
 @app.get("/healthz")
