@@ -239,7 +239,11 @@ class TestEvents:
         assert len(evts) == 1
         assert evts[0]["data"]["level"] == "info"
         assert evts[0]["data"]["node"] == "tool_selector"
-        assert "report.generate" in evts[0]["data"]["message"]
+        # 2026-10-01 用户面去内部键：message 下发业务标签，capability
+        # 本体只在 payload 保留（trace/审计口径不变）
+        assert "报告生成" in evts[0]["data"]["message"]
+        assert "report.generate" not in evts[0]["data"]["message"]
+        assert evts[0]["data"]["payload"]["capability"] == "报告生成"
 
     def test_no_match_emits_warn_event(self):
         evts = self._build({"source": "no_match", "candidates": ["report.generate"]})

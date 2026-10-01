@@ -7,16 +7,27 @@
 2. 埋点侧已按前缀隔离（core/tool_runtime/metrics.py
    _NON_PRODUCT_KEY_PREFIXES），本脚本清历史存量，防口径继续失真。
 
+脏成员判定（满足任一）：
+- 前缀 probe./test.（探针/测试键）；
+- tool 部分不以 ``_tool`` 结尾——34 个契约键全部以 _tool 结尾，
+  capability 名永远不带此后缀（旧口径残留的精确判据）。
+
 用法（幂等，可重复执行）::
     python -m backend.scripts.cleanup_tool_stats_keys            # dry-run 只报告
     python -m backend.scripts.cleanup_tool_stats_keys --apply    # 实际 HDEL
 
-只动 agent:tool_stats:* 日键内匹配 probe.*/test.* 前缀的 field，
-不碰任何业务键。
+只动 agent:tool_stats:* 日键内的脏 field，不碰任何业务键。
 """
 from __future__ import annotations
 
 import sys
+
+
+def _is_dirty(field_name: str) -> bool:
+    if field_name.startswith(("probe.", "test.")):
+        return True
+    tool = field_name.split(":", 1)[0]
+    return not tool.endswith("_tool")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     removed_total = 0
     for key in r.scan_iter(match=pattern, count=100):
         names = [f.decode() if isinstance(f, bytes) else f for f in r.hkeys(key)]
-        dirty = [f for f in names if f.startswith(("probe.", "test."))]
+        dirty = [f for f in names if _is_dirty(f)]
         if not dirty:
             continue
         print(f"[cleanup] {key.decode() if isinstance(key, bytes) else key}: {len(dirty)} 个脏成员")

@@ -186,9 +186,10 @@ def _build_tool_selector_events(output: dict) -> Generator[dict, None, None]:
         if sel.get("capability") else None
     )
     if source == "fc":
-        # FC 成功选择属于内部 trace 日志，保留原 capability 以兼容现有
-        # 可观测性；真正面向用户的 clarification 事件只下发业务标签。
-        message = (f"工具选择: {sel.get('capability', safe_capability)}（{len(safe_candidates)} 个候选，"
+        # 用户时间线下发业务标签（2026-10-01：旧版这里原样下发 capability
+        # 英文键如 email.send，是用户面对内部命名的唯一泄漏点）；capability
+        # 本体在事件 payload.capability 保留，trace/审计不受影响。
+        message = (f"工具选择: {safe_capability or '信息查询'}（{len(safe_candidates)} 个候选，"
                    f"第 {sel.get('attempts', 1)} 次尝试，{sel.get('elapsed_ms', 0)}ms）")
         level = "info"
     elif source == "no_match":
