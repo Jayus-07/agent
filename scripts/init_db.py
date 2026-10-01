@@ -206,7 +206,7 @@ MIGRATION_TARGETS: dict[str, str] = {
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
-ORDER_LAST = ["004_readonly_role.sql"]
+ORDER_LAST = ["004_readonly_role.sql", "043_readonly_public_revoke.sql"]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 
 # 运行时管理的迁移（Platform Readiness STOP B）：对象由应用启动时的
@@ -652,7 +652,7 @@ def main() -> int:
             for name, target in plan:
                 print(f"[init_db]   {target}/{name}: 跳过（--check）")
         else:
-            for db_key, dbname in (("memory", memory_db), ("business", business_db)):
+            for db_key, dbname in (("business", business_db), ("memory", memory_db)):
                 conn = connect(dbname, args)
                 with conn.cursor() as cur:
                     cur.execute(_TRACK_TABLE_SQL)
