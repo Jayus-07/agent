@@ -10,6 +10,8 @@
 数据源分级：
   P0 本地种子 + 直线估算  → 离线可跑、可单测，用于跑通全链路
   P1 腾讯位置服务         → 由 TRAVEL_USE_LIVE_MAP 开关启用，失败自动回落 P0
+  外部 MCP 数据源（12306）→ 由 TRAIN_MCP_ENABLED 开关启用（train.py），
+                            无种子数据可回落，关闭/失败时明确报错
 """
 from backend.tools.travel.cost import day_cost, estimate_cost, rooms_needed
 from backend.tools.travel.live_map import (
@@ -37,6 +39,7 @@ from backend.tools.travel.routing import (
     route_km,
     set_route_provider,
 )
+from backend.tools.travel.train import travel_train_search_tool
 
 __all__ = [
     "resolve_city",
@@ -44,6 +47,7 @@ __all__ = [
     "is_excluded",
     "search_poi",
     "travel_poi_search_tool",
+    "travel_train_search_tool",
     "haversine_km",
     "route_km",
     "leg_minutes",

@@ -42,7 +42,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 治理是**平面不是层**：不进请求执行路径（仅旁路埋点），不新增 Agent，载体复用 PG/Redis/Prometheus/自研 Trace。台账与设计方案见 `docs/2026-09-30-企业级治理技术债修复台账.md`。
 
-- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 35 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
+- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 36 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
 - **错误统一口径（M3）**：`observability/error_taxonomy.py::unify_*` 是三套既有词表（模型层 5 类/任务层 10 类/ToolStatus 8 值）→ 七分类（timeout/network_error/permission_denied/validation_error/business_error/contract_error/provider_error）的**唯一映射出口**；管理端失败分布与新指标 `agent_tool_error_class_total` 只用此口径，禁止再造第四套词表。
 - **成本归因（M5）**：`observability/llm_context.py`（ContextVar，叠加语义）+ `llm_usage.skill_id/tool_id/agent_domain` 三列；注入点三处（skill execute 装饰器/tool executor 装饰器/builder 域图布线 `with_domain_attribution`），新增调用链记得在入口包 scope。
 - **资产一致性（M6）**：`GET /api/consistency/report` 七段对账矩阵全部实时派生（禁手抄数字）；管理端/巡检消费此端点，不另建清单。
@@ -78,7 +78,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 ### 节点职责与口径
 
 - **Planner**：只做任务拆解 → Capability DAG，禁调 Tool/Skill/DB ｜ **Critique**：规则校验优先，仅 anomaly 调 LLM ｜ **Supervisor**：纯规则 DAG 调度，Send[] 并行 + 注入 previous_outputs ｜ **Skill**：业务封装不碰外部系统 ｜ **Tool**：无状态可测试 ｜ **Reporter**：step_results → Markdown
-- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 35 Tool（2026-10-02 +1 高德商家检索）/ 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
+- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 36 Tool（2026-10-02 +2：高德商家检索、12306 车票查询）/ 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
 - `routed: false` 只约束路由层，Planner/critique 仍遍历全量 17 个（`email.watch` 是 120s 阻塞长轮询，收紧属行为变更，台账 E9）。
 
 ### Capability DAG
@@ -104,7 +104,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 | 域图 / 业务 Agent | 5~7 / 2 | 手册 §6/§7；域图用技能 `agent-platform-add-domain-graph`（prefilter 必须插进 `router_node.py`，否则域永不触发） |
 
 **铁律**：**G1** 声明式注册、启动期派生、fail-fast｜**G2** 单一事实源，派生量禁止手写回去｜**G3** 谁定义谁注册，禁止集中代注册｜**G4** 例外必须登记规范 §4 台账。
-**方向**：`Planner → capability → Skill → Tool → Infrastructure`，上层调下层；MCP 不是第 5 层，是 Tool 的第二出口（Tool 不得 import Skill）。
+**方向**：`Planner → capability → Skill → Tool → Infrastructure`，上层调下层；MCP 不是第 5 层，是 Tool 的第二出口（Tool 不得 import Skill）。**第三方向（2026-10-02 拍板）**：外部 MCP server 可作为 Tool 的数据源——平台经 `infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费，首例=12306 车票查询（`tools/travel/train.py`，compose 服务 mcp-12306，`TRAIN_MCP_ENABLED` 默认关，非官方源仅供学习不商用，失败不阻塞主链）。
 
 **Skill 硬约束**：`name` = 目录名（节点名 `<name>_skill` 由其推导）；Skill 类只定义执行行为，`capabilities/description/examples/params_schema` 必须只写在 `capabilities.yaml`，由 `skills.metadata.bind_manifest_metadata()` 启动期绑定兼容字段并 fail-fast；capability 恰一个点 `<域>.<动作>` 全域唯一，workflow 纯蛇形不带点。❌ Skill 层定义 `@tool`、直接写 SQL/调 HTTP；多 Tool 覆写 `_select_tool()` 分发并把 params 裁到目标 Tool 签名内。
 **新 Tool 三规**：`@tool`｜底部注册｜返回 JSON 字符串（失败返 `{"error":…}`，「查不到」与「查不了」分开），统一走 `tools/map/_base.py` 的 `ok/fail/not_configured`（存量 18 个返 Markdown 是例外 E8，别参照）。副作用 Tool 必须过 `security/tool_approval.ensure_approved()`；user_id 取 `tools/session.get_tool_user_id()`，禁止硬编码。

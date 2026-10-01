@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generated_at": "2026-10-02T01:32:33+08:00",
-  "git_sha": "ca06033",
-  "tool_count": 35,
+  "generated_at": "2026-10-02T01:58:52+08:00",
+  "git_sha": "7462889",
+  "tool_count": 36,
   "tools": {
     "calculate_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/calculator.py",
@@ -1171,6 +1171,44 @@
         "travel.poi_search": "structured"
       },
       "content_hash": "dc6e1969551b83c4"
+    },
+    "travel_train_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/travel/train.py",
+      "display_name": "",
+      "description_hash": "af9621485e8ae40e",
+      "args_schema": {
+        "date": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "from_station": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "limit": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 20
+        },
+        "to_station": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "e95620bcff552c97"
     },
     "watch_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
