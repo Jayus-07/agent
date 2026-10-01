@@ -216,6 +216,12 @@ _review_block_cache: dict = {"ids": frozenset(), "ts": 0.0}
 _REVIEW_BLOCK_TTL = 60.0
 
 
+def invalidate_pending_review_cache() -> None:
+    """审核状态变化后立即清空本进程的 pending_review 缓存。"""
+    _review_block_cache["ids"] = frozenset()
+    _review_block_cache["ts"] = 0.0
+
+
 def _pending_review_doc_ids() -> frozenset:
     import time as _time
     now = _time.monotonic()

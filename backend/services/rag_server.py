@@ -16,7 +16,7 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
     python -m uvicorn backend.services.rag_server:app --host 0.0.0.0 --port 8090
 """
 import threading
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -126,6 +126,12 @@ class RetrieveDocsRequest(BaseModel):
     department: str = Field("", description="主体部门")
     permissions: list[str] | None = Field(None, description="文档级权限集合")
     roles: list[str] = Field(default_factory=list, description="JWT 角色")
+
+
+class PendingReviewDecision(BaseModel):
+    """管理端待复核决策；仅由 app 通过内部令牌调用。"""
+
+    action: Literal["approve", "reject"]
 
 
 # ==================== 本地 pipeline 接入 ====================
@@ -340,6 +346,63 @@ _CLIENT_META_KEYS = (
 
 def _client_safe_metadata(meta: dict) -> dict:
     return {k: meta[k] for k in _CLIENT_META_KEYS if k in meta}
+
+
+@app.post("/admin/pending/{doc_id}/decision")
+async def review_pending_doc(doc_id: str, req: PendingReviewDecision) -> dict[str, Any]:
+    """在持有本地 RAGPipeline 的进程执行待复核批准/拒绝。"""
+    import asyncio
+
+    try:
+        from backend.config import DOC_REGISTRY_PATH
+        from backend.rag.indexing.doc_registry import DocumentRegistry
+        from backend.rag.indexing.review_service import review_pending_doc as apply_review
+
+        pipeline = await asyncio.to_thread(_get_pipeline)
+        registry = DocumentRegistry(DOC_REGISTRY_PATH)
+        return await asyncio.to_thread(
+            apply_review,
+            doc_id,
+            req.action,
+            registry=registry,
+            pipeline=pipeline,
+        )
+    except RuntimeError as exc:
+        logger.warning("[rag-server] 待复核动作暂不可用 doc_id=%s: %s", doc_id, exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - 统一返回管理端可见错误
+        logger.error("[rag-server] 待复核动作失败 doc_id=%s", doc_id, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/admin/documents/{doc_id}/delete")
+async def delete_document_cascade(doc_id: str) -> dict[str, Any]:
+    """在持有本地 RAGPipeline 的进程执行文档删除级联。
+
+    remote 模式下 app 不得触碰 proxy.vectordb/doc_db/BM25——向量/chunk_store/
+    BM25/源文件清理与软删统一在 rag-service 侧执行（2026-10-01 删除收口）。
+    """
+    import asyncio
+
+    try:
+        from backend.config import DOC_REGISTRY_PATH
+        from backend.rag.indexing.doc_registry import DocumentRegistry
+        from backend.rag.indexing.review_service import delete_document_cascade as apply_delete
+
+        pipeline = await asyncio.to_thread(_get_pipeline)
+        registry = DocumentRegistry(DOC_REGISTRY_PATH)
+        return await asyncio.to_thread(
+            apply_delete,
+            doc_id,
+            registry=registry,
+            pipeline=pipeline,
+        )
+    except RuntimeError as exc:
+        logger.warning("[rag-server] 删除级联暂不可用 doc_id=%s: %s", doc_id, exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - 统一返回管理端可见错误
+        logger.error("[rag-server] 删除级联失败 doc_id=%s", doc_id, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/healthz")

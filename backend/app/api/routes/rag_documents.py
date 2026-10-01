@@ -269,6 +269,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
     source = _extract_source(request)
     authz = _require_authz(request)
     try:
+        # 归属校验先于任何模式分支：registry 是共享 PG，app 侧可直接裁决
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
@@ -277,18 +278,37 @@ async def approve_pending_doc(doc_id: str, request: Request):
         if not ok:
             return _deny_manage(reason)
 
+        from backend.config.rag import RAG_MODE
+        if RAG_MODE == "remote":
+            # remote 模式下 app 不持有向量库，审核动作必须由 rag-service 执行。
+            pipeline = await asyncio.to_thread(get_rag_pipeline)
+            result = await asyncio.to_thread(
+                pipeline.review_pending_doc, doc_id, "approve",
+            )
+            if result.get("ok"):
+                _safe_log_op(
+                    doc_id, "", "approve", source,
+                    trace_id=None, batch_id=None,
+                    result="success", duration_ms=0,
+                    detail={"to": result.get("new_status")},
+                )
+            return result
+
         if doc.get("status") != "pending_review":
             return {"ok": False, "error": f"文档状态为 {doc.get('status')}，不是 pending_review"}
 
-        updated = reg.update_status_by_doc_id(doc_id, "active")
-        if updated == 0:
-            return {"ok": False, "error": "状态更新失败（可能并发）"}
+        from backend.rag.indexing.review_service import review_pending_doc
+        result = review_pending_doc(
+            doc_id, "approve", registry=reg, pipeline=None,
+        )
+        if not result.get("ok"):
+            return result
 
         _safe_log_op(
             doc_id, doc.get("file_name", ""), "approve", source,
             trace_id=None, batch_id=None,
             result="success", duration_ms=0,
-            detail={"from": "pending_review", "to": "active"},
+            detail={"from": "pending_review", "to": result.get("new_status")},
         )
 
         # 触发 metadata_coverage 重算
@@ -298,7 +318,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
         except Exception:
             logger.debug("[P1-10] metadata_coverage 重算失败", exc_info=True)
 
-        return {"ok": True, "doc_id": doc_id, "new_status": "active"}
+        return result
     except Exception as e:
         logger.error(f"[RAG] approve 失败: {e}")
         return {"ok": False, "error": str(e)}
@@ -310,6 +330,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
     source = _extract_source(request)
     authz = _require_authz(request)
     try:
+        # 归属校验先于任何模式分支
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
@@ -318,30 +339,44 @@ async def reject_pending_doc(doc_id: str, request: Request):
         if not ok:
             return _deny_manage(reason)
 
+        from backend.config.rag import RAG_MODE
+        if RAG_MODE == "remote":
+            # remote 模式下 app 不得直接触碰 proxy.vectordb/doc_db/BM25。
+            pipeline = await asyncio.to_thread(get_rag_pipeline)
+            result = await asyncio.to_thread(
+                pipeline.review_pending_doc, doc_id, "reject",
+            )
+            if result.get("ok"):
+                _safe_log_op(
+                    doc_id, "", "reject", source,
+                    trace_id=None, batch_id=None,
+                    result="success", duration_ms=0,
+                    detail={"to": result.get("new_status")},
+                )
+            return result
+
         if doc.get("status") != "pending_review":
             return {"ok": False, "error": f"文档状态为 {doc.get('status')}，不是 pending_review"}
 
-        warnings: list[str] = []
-        try:
-            pipeline = await asyncio.to_thread(get_rag_pipeline)
-            _purge_doc_vectors(doc_id, doc.get("file_path", ""), pipeline, warnings)
-            residue = _verify_doc_purged(doc_id, doc.get("file_path", ""), pipeline)
-            degraded = bool(residue)
-            if degraded:
-                warnings.extend(residue)
-        except Exception as e:
-            logger.warning(f"[RAG] reject 级联清理异常: {e}")
-            warnings.append(f"级联清理异常: {e}")
-            degraded = False
+        pipeline = await asyncio.to_thread(get_rag_pipeline)
+        from backend.rag.indexing.review_service import review_pending_doc
+        result = await asyncio.to_thread(
+            review_pending_doc,
+            doc_id, "reject", registry=reg, pipeline=pipeline,
+        )
 
         _safe_log_op(
             doc_id, doc.get("file_name", ""), "reject", source,
             trace_id=None, batch_id=None,
-            result="partial" if degraded else "success", duration_ms=0,
-            detail={"from": "pending_review", "to": "deleted", "warnings": warnings or None},
+            result="success" if result.get("ok") else "failed", duration_ms=0,
+            detail={
+                "from": "pending_review",
+                "to": result.get("new_status"),
+                "warnings": result.get("warnings"),
+            },
         )
 
-        return {"ok": True, "doc_id": doc_id, "new_status": "deleted", "degraded": degraded, "warnings": warnings or None}
+        return result
     except Exception as e:
         logger.error(f"[RAG] reject 失败: {e}")
         return {"ok": False, "error": str(e)}
@@ -624,6 +659,20 @@ async def delete_document(doc_id: str, request: Request):
         if not ok:
             return _deny_manage(reason)
         file_path = doc.get("file_path", "")
+
+        # remote 模式：app 不持有向量库，级联清理（向量/chunk_store/BM25/源文件）
+        # 必须由持有本地索引的 rag-service 执行（2026-10-01 删除收口）
+        from backend.config.rag import RAG_MODE
+        if RAG_MODE == "remote":
+            pipeline = await asyncio.to_thread(get_rag_pipeline)
+            result = await asyncio.to_thread(pipeline.delete_document_cascade, doc_id)
+            _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
+                         result="success" if result.get("ok") else "failed",
+                         duration_ms=int((time.time() - _delete_t0) * 1000),
+                         detail={"mode": "remote", "deleted_rows": result.get("deleted_rows"),
+                                 "degraded": result.get("degraded"),
+                                 "warnings": result.get("warnings")})
+            return result
 
         # ① 软删 registry — 按 doc_id 删所有行（修复绝对/相对路径重复行漏删）
         deleted_rows = reg.mark_deleted_by_doc_id(doc_id)

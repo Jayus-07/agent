@@ -221,6 +221,31 @@ class RAGServiceProxy:
             ) from exc
         return resp.json()
 
+    def delete_document_cascade(self, doc_id: str) -> dict[str, Any]:
+        """把文档删除级联转发给持有本地索引的 rag-service。
+
+        remote 模式下 app 不得触碰 proxy.vectordb/doc_db/BM25——删除的
+        向量/chunk_store/BM25/源文件清理全部在 rag-service 侧执行
+        （review_service.delete_document_cascade，2026-10-01 收口）。
+        """
+        from backend.config.messaging import AI_INTERNAL_TOKEN
+
+        headers = {}
+        if AI_INTERNAL_TOKEN:
+            headers["X-Internal-Token"] = AI_INTERNAL_TOKEN
+        try:
+            resp = self._client.post(
+                f"/admin/documents/{doc_id}/delete",
+                headers=headers,
+                timeout=_REVIEW_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"RAG 删除级联失败: {exc} —— 检查 rag-service 是否就绪"
+            ) from exc
+        return resp.json()
+
     @property
     def is_index_stale(self) -> bool:
         """最近一次检索的索引状态（C 阶段热刷新语义，与本地 pipeline 同形）。
