@@ -155,7 +155,7 @@ function TraceRowInner({
             <span className="text-slate-300 text-[9px]"> tok</span>
           </div>
           <div className="font-mono tabular-nums text-[10px] text-emerald-600 mt-0.5">
-            {formatCost(t.cost_usd)}
+            {formatCost(t.cost_cny ?? t.cost_usd)}
           </div>
         </td>
       )}

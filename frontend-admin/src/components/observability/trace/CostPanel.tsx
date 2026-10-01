@@ -11,7 +11,8 @@ interface Props {
 }
 
 export default function CostPanel({ trace }: Props) {
-  const totalUsd = trace.cost_usd ?? 0;
+  // 成本人民币为主（2026-10-01）：优先精确 cost_cny，存量 trace 退回混算值
+  const totalUsd = trace.cost_cny ?? trace.cost_usd ?? 0;
   const spans = trace.spans || [];
   const totalTokens = trace.usage?.total_tokens ?? 0;
 

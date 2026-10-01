@@ -876,6 +876,11 @@ class TraceCollector:
         # ── 按组件聚合：usage 主口径只计 LLM 调用，embedding/rerank 进 by_component ──
         by_comp: dict[str, dict] = {}
         total_cost = 0.0
+        total_cost_cny = 0.0
+        # 本位币折算（2026-10-01 成本人民币为主）：llm_usage.cost_usd 列
+        # 实际存「行本币金额」（历史命名），按行 currency 折 CNY 汇总；
+        # 空币种行实测金额恒为 0，归 USD 侧不影响合计。
+        from backend.config.budget import BUDGET_FX_USD_CNY
         for r in rows:
             comp = r.get("component") or "llm"
             agg = by_comp.setdefault(comp, {
@@ -888,12 +893,18 @@ class TraceCollector:
             agg["cached_tokens"] += r.get("cached_tokens") or 0
             agg["reasoning_tokens"] += r.get("reasoning_tokens") or 0
             agg["calls"] += 1
-            total_cost += r.get("cost_usd") or 0.0
+            _row_cost = r.get("cost_usd") or 0.0
+            total_cost += _row_cost
+            if (r.get("currency") or "USD").strip().upper() == "CNY":
+                total_cost_cny += _row_cost
+            else:
+                total_cost_cny += _row_cost * float(BUDGET_FX_USD_CNY)
 
         llm_agg = by_comp.get("llm")
         if llm_agg and llm_agg["total_tokens"] > 0:
             record.usage = dict(llm_agg)
         record.usage["cost_usd"] = round(total_cost, 6)
+        record.usage["cost_cny"] = round(total_cost_cny, 6)
         record.usage["by_component"] = by_comp
         record.cost_usd = round(total_cost, 6)
 

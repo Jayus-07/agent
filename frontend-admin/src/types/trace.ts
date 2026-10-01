@@ -139,6 +139,8 @@ export interface TraceRecord {
   usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost_usd?: number };
   cost: Record<string, unknown>;
   cost_usd?: number;
+  /** 本位币（CNY）精确值：读时回填/新 trace 有；存量 stored trace 为 undefined */
+  cost_cny?: number;
   error: Record<string, unknown>;
   metadata: Record<string, unknown>;
   /** ✅ 新模型：通用 Span 树（替代旧的 steps 扁平数组） */

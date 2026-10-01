@@ -23,14 +23,20 @@ def backfill_usage_from_llm_store(data) -> None:
         if not trace_id:
             return
         usage = get("usage", {}) or {}
-        if usage.get("total_tokens"):
-            return  # 已有真值，不覆盖
+        if usage.get("total_tokens") and usage.get("cost_cny") is not None:
+            return  # 已有真值（含本位币折算），不覆盖
+        # total_tokens 有值但缺 cost_cny = 本位币口径上线前的存量 trace：
+        # 仍按 llm_usage 明细重算折算（明细行带 currency，历史数据可精确补齐）
         from backend.observability.llm_usage_store import get_llm_usage_store
         rows = get_llm_usage_store().by_trace(trace_id)
         if not rows:
             return
         by_comp: dict[str, dict] = {}
         total_cost = 0.0
+        # 本位币折算（2026-10-01 成本人民币为主）：cost_usd 列存行本币值，
+        # 按行 currency 折 CNY；空币种行实测金额恒为 0，归 USD 侧不影响。
+        from backend.config.budget import BUDGET_FX_USD_CNY
+        total_cost_cny = 0.0
         for r in rows:
             comp = r.get("component") or "llm"
             agg = by_comp.setdefault(comp, {
@@ -41,14 +47,21 @@ def backfill_usage_from_llm_store(data) -> None:
                       "cached_tokens", "reasoning_tokens"):
                 agg[k] += r.get(k) or 0
             agg["calls"] += 1
-            total_cost += r.get("cost_usd") or 0.0
+            _row_cost = r.get("cost_usd") or 0.0
+            total_cost += _row_cost
+            if (r.get("currency") or "USD").strip().upper() == "CNY":
+                total_cost_cny += _row_cost
+            else:
+                total_cost_cny += _row_cost * float(BUDGET_FX_USD_CNY)
         llm_agg = by_comp.get("llm")
         if llm_agg and llm_agg["total_tokens"] > 0:
             usage = dict(llm_agg)
         usage["cost_usd"] = round(total_cost, 6)
+        usage["cost_cny"] = round(total_cost_cny, 6)
         usage["by_component"] = by_comp
         setv("usage", usage)
         setv("cost_usd", round(total_cost, 6))
+        setv("cost_cny", round(total_cost_cny, 6))
         if not (get("model", "") or "").strip():
             llm_rows = [r for r in rows if (r.get("component") or "llm") == "llm"]
             if llm_rows:
@@ -191,6 +204,9 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
         ),
         "usage": get("usage", {}),
         "cost_usd": get("cost_usd", 0),
+        # 本位币口径：读时回填/新写入的 trace 有精确值；存量 stored trace
+        # 的混算值不出（None → 前端显示 —），避免误导
+        "cost_cny": (get("usage", {}) or {}).get("cost_cny"),
         "error": get("error", {}),
         "metadata": get("metadata", {}),
         "status": stored_status,
@@ -226,6 +242,9 @@ def stored_dict_to_dto(d: dict, detail_level: str | None = None) -> dict:
         "model": d.get("model", {}),
         "usage": d.get("usage", {}),
         "cost_usd": d.get("cost_usd", 0),
+        # 本位币口径（2026-10-01）：新写入 trace 的 usage 带精确 cost_cny；
+        # 存量 stored trace 无该值 → None，前端显示 —（混算 cost_usd 不再展示）
+        "cost_cny": (d.get("usage", {}) or {}).get("cost_cny"),
         "error": d.get("error", {}),
         "metadata": d.get("metadata", {}),
         "status": d.get("status", "success"),
