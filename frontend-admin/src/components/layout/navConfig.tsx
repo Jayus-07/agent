@@ -39,6 +39,7 @@ export const NAV: NavEntry[] = [
     items: [
       { label: '文档入库', path: '/knowledge/documents' },
       { label: '待复核', path: '/knowledge/pending' },
+      { label: '入库失败', path: '/knowledge/upload-failures' },
       { label: '词库', path: '/knowledge/keywords' },
       { label: '评测结果', path: '/evaluations' },
       { label: '评测集治理', path: '/evaluations/datasets' },

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   Activity, AlertTriangle, CheckCircle2, ChevronRight, Clock,
-  Database, ShieldCheck, Sparkles, TrendingUp, XCircle, WalletCards, MessageSquareText,
+  Database, FileWarning, ShieldCheck, Sparkles, TrendingUp, XCircle, WalletCards, MessageSquareText,
 } from 'lucide-react'
 import { getTokensSummary, getTraceStats, type TokensSummary } from '@/api/observability'
 import { evaluationService } from '@/api/evaluation'
@@ -185,6 +185,13 @@ export default function AdminDashboard() {
     return { failed: tasks.filter((t) => t.status === 'failed').length, total: tasks.length }
   })
 
+  const uploadFailures = useAsync(async () => {
+    // 待处理入库失败（异步索引终态失败；重传成功自动消数）
+    const r = await fetchRaw('/api/rag/upload-failures?limit=1')
+    if (!r.ok) throw new Error(String(r.status))
+    return ((await r.json()) as { total?: number }).total ?? 0
+  })
+
   const budget = useAsync(getBudgetSummary)
   const prices = useAsync(listPriceVersions)
   const feedback = useAsync(async () => {
@@ -326,6 +333,15 @@ export default function AdminDashboard() {
             loading={ragStats.state === 'loading'}
             error={ragStats.state === 'error'}
             href="/knowledge/pending"
+          />
+          <TodoRow
+            icon={<FileWarning size={16} />}
+            title="知识库入库失败"
+            count={uploadFailures.state === 'ok' ? uploadFailures.data : null}
+            loading={uploadFailures.state === 'loading'}
+            error={uploadFailures.state === 'error'}
+            href="/knowledge/upload-failures"
+            tone="danger"
           />
           <TodoRow
             icon={<XCircle size={16} />}

@@ -243,6 +243,10 @@ export const knowledgeService: any = {
   getReindexStatus: (id: string) =>
     fetchRaw(`${BASE}/documents/${id}/reindex/status`).then(r => r.json()).catch(() => ({ ok: false })),
 
+  // 待处理入库失败（异步索引终态失败；重传成功自动消数，无需人工关闭）
+  listUploadFailures: (limit = 100) =>
+    fetchRaw(`${BASE}/upload-failures?limit=${limit}`).then(r => r.json()).catch(() => ({ ok: false, items: [], total: 0 })),
+
   /**
    * 批量删除（并发）— 使用 X-Batch-Id 头关联同一批次，操作中心按批次折叠展示。
    */

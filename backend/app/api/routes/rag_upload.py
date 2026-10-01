@@ -1812,6 +1812,23 @@ def _ensure_progress_owner(request: Request, upload_id: str) -> bool:
         return False
 
 
+@router.get("/upload-failures", dependencies=[Depends(require_rag_editor)])
+async def list_upload_failures(limit: int = 50):
+    """待处理入库失败清单（质量门禁/解析 0 分块/向量化终态等异步失败）。
+
+    上传受理后索引在 worker 异步执行，失败发生在对话框关闭之后——此端点是
+    管理端「入库失败」信号（仪表盘待处理卡片 + 失败列表页）的唯一数据出口。
+    派生口径（不加状态列）：failed 且同 file_path 无更新的 published 运行，
+    重传成功自动消数；见 index_run_store_pg.list_pending_failures。
+    """
+    from backend.rag.indexing.index_run_store_pg import get_index_run_store
+
+    store = get_index_run_store()
+    items = await asyncio.to_thread(store.list_pending_failures, limit=limit)
+    total = await asyncio.to_thread(store.count_pending_failures)
+    return {"ok": True, "total": total, "items": items}
+
+
 @router.get("/upload/{upload_id}/stream")
 async def stream_upload_progress(upload_id: str, request: Request):
     """SSE 订阅：实时推送上传 + 索引进度（仅上传者本人/admin 可订阅）。

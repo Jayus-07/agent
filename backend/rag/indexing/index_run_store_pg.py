@@ -204,6 +204,54 @@ class IndexRunStore:
             rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    # ---- 待处理入库失败（管理端「入库失败」信号唯一出口，2026-10-02）----
+    #
+    # 派生口径（不加状态列，G2）：failed 且同 file_path 尚未出现更新的
+    # published 运行——重传成功即自动消数。created_at 为 UTC 字符串
+    # （'YYYY-MM-DD HH24:MI:SS'），字典序即时间序，可直接比较。
+
+    def list_pending_failures(self, *, limit: int = 50) -> list[dict]:
+        """待处理入库失败清单（每文件取最新一次失败，新失败在前）。"""
+        limit = max(1, min(int(limit), 200))
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                f"""SELECT * FROM (
+                        SELECT DISTINCT ON (file_path)
+                               upload_id, file_path, doc_id, kb_id, department,
+                               error, created_at, actor_id
+                        FROM {self._table}
+                        WHERE status = 'failed'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM {self._table} p
+                              WHERE p.file_path = {self._table}.file_path
+                                AND p.status = 'published'
+                                AND p.created_at > {self._table}.created_at)
+                        ORDER BY file_path, created_at DESC
+                    ) t ORDER BY created_at DESC LIMIT %s""",
+                (limit,))
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
+    def count_pending_failures(self) -> int:
+        """待处理入库失败计数（与 list_pending_failures 同一派生口径）。"""
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""SELECT COUNT(*) FROM (
+                        SELECT DISTINCT ON (file_path) file_path
+                        FROM {self._table}
+                        WHERE status = 'failed'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM {self._table} p
+                              WHERE p.file_path = {self._table}.file_path
+                                AND p.status = 'published'
+                                AND p.created_at > {self._table}.created_at)
+                        ORDER BY file_path, created_at DESC
+                    ) t""")
+            row = cur.fetchone()
+        return int(row[0]) if row else 0
+
 
 _run_stores: dict[str, IndexRunStore] = {}
 _run_store_lock = threading.Lock()
