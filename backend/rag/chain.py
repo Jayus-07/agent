@@ -232,6 +232,7 @@ class RAGChain:
         self.bm25 = bm25
         self.person_index = person_index or {}
         self._memory = memory_manager
+        self._runtime_prompt_keys: list[str] = []
         # ── PR-1.4: 策略对象（formatter 保留为实例字段；gate/corrector 迁移到 RequestContext）──
         self.formatter = CitationFormatter()
         # ── RAGChain 自有状态 ──
@@ -342,6 +343,7 @@ class RAGChain:
         from langchain_classic.chains.combine_documents import (
             create_stuff_documents_chain,
         )
+        self._runtime_prompt_keys = ["rag.qa", "rag.document"]
         # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
         def _index_docs(input_dict):
             docs = input_dict.get("context", [])
@@ -654,6 +656,7 @@ class RAGChain:
         # —— 新增任何"链上要流式"的 LCEL 集成点必须用 _llm_stream（见其注释）。
         self.chain_standalone = create_retrieval_chain(gate_retriever, stuff_chain)
         if ENABLE_HISTORY_AWARE_RETRIEVAL:
+            self._runtime_prompt_keys.append("rag.contextualize")
             retriever = create_history_aware_retriever(
                 llm, gate_retriever, _build_contextualize_prompt()
             )
@@ -732,7 +735,18 @@ class RAGChain:
                                        name="RAG 智能问答", type="agent",
                                        input={"question": question})
             logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
+        self._record_runtime_prompt_usage()
         return trace, _time.time()
+
+    def _record_runtime_prompt_usage(self) -> None:
+        """把本次 RAG 链实际依赖的 Prompt 版本写入当前 Trace。"""
+        try:
+            from backend.prompts.service import prompt_service
+
+            for key in self._runtime_prompt_keys:
+                prompt_service.record_template_usage_sync(key)
+        except Exception:  # noqa: BLE001 — 追踪失败不能阻断问答
+            logger.debug("[RAGChain] Prompt 运行版本记录失败", exc_info=True)
 
     def _respond(self, result, trace, question, session_id, t_total) -> str:
         """统一决策：Gate 1+2(注入) → verify+evaluate → Gate 3 LLM 自报 → Self-Correction。

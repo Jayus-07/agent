@@ -72,6 +72,35 @@ class TestGetTemplateSync:
             service.get_template_sync("nonexistent")
 
 
+class TestRecordTemplateUsageSync:
+    def test_records_snapshot_version(self, service, monkeypatch):
+        service._snapshot["test.low"] = _SnapshotEntry(
+            template="Raw {name} template", version=7, variables=["name"]
+        )
+        recorded = []
+        monkeypatch.setattr(
+            "backend.prompts.service.record_prompt_version",
+            lambda key, version, source: recorded.append((key, version, source)),
+        )
+
+        result = service.record_template_usage_sync("test.low")
+
+        assert result == (7, "snapshot")
+        assert recorded == [("test.low", 7, "snapshot")]
+
+    def test_records_default_usage(self, service, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "backend.prompts.service.record_prompt_version",
+            lambda key, version, source: recorded.append((key, version, source)),
+        )
+
+        result = service.record_template_usage_sync("test.low")
+
+        assert result == (None, "default")
+        assert recorded == [("test.low", None, "default")]
+
+
 class TestCreateDraft:
     @pytest.mark.asyncio
     async def test_code_controlled_rejected(self, service):

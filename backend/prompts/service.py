@@ -227,6 +227,31 @@ class PromptService:
             return default
         raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
 
+    def record_template_usage_sync(self, key: str) -> tuple[int | None, str]:
+        """记录同步链路实际使用的模板版本。
+
+        部分 LangChain Prompt 在进程启动时构建，构建阶段没有请求级 Trace，
+        仅在 ``get_template_sync`` 取模板不会留下调用证据。请求开始后由调用方
+        显式记录一次，保证 Trace 能回答本次链路实际使用了哪一版 Prompt。
+        """
+        entry = self._pinned_entry(key)
+        source = "pinned" if entry is not None else "snapshot"
+        if entry is None:
+            with self._snapshot_lock:
+                entry = self._snapshot.get(key)
+
+        if entry is not None:
+            version = entry.version
+        elif key in self._defaults:
+            version = None
+            source = "default"
+        else:
+            raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
+
+        self._record_usage(key, version, source)
+        record_prompt_version(key, version, source)
+        return version, source
+
     def get_version_for_cache_key(self, key: str) -> int | None:
         entry = self._pinned_entry(key)
         if entry is None:
