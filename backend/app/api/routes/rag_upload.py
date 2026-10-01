@@ -1,5 +1,5 @@
 """RAG 上传路由 — PR-2.x 从 rag.py 抽出。"""
-import asyncio, os, shutil, threading, time, uuid
+import asyncio, json, os, shutil, threading, time, uuid
 from asyncio import Queue
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import StreamingResponse
@@ -30,7 +30,38 @@ from backend.app.api.routes._rag_shared import (
     sanitize_doc_row,
 )
 from backend.rag.authz import RagAuthorization, RagAuthorizationError
+from backend.rag.indexing.publish import (
+    SupersededCandidate,
+    cleanup_candidate_by_generation,
+)
 from backend.shared.logger import logger
+
+
+def _cleanup_candidate_artifacts(upload_id: str, staging_path: str = "") -> None:
+    """按运行记录清理候选代次产物（候选 collection 行 + BM25 staging 目录）。
+
+    只在失败终态调用；全部动作幂等且不触碰主 collection / 正式 BM25。
+    """
+    try:
+        from backend.config.database import (
+            BM25_INDEX_DIR,
+            CHROMA_PATH,
+            DOC_DB_PATH,
+        )
+        from backend.rag.indexing.index_run_store_pg import get_index_run_store
+
+        run = get_index_run_store().get_run(upload_id)
+        generation = (run or {}).get("generation", "")
+        if not generation:
+            return
+        cleanup_candidate_by_generation(
+            generation,
+            chroma_path=str(CHROMA_PATH),
+            doc_db_path=str(DOC_DB_PATH),
+            bm25_index_dir=str(BM25_INDEX_DIR),
+        )
+    except Exception as e:  # noqa: BLE001 — 清理失败留痕，残留交由 Sweeper
+        logger.warning(f"[RAG] 候选产物清理失败 (upload={upload_id}): {e}")
 
 router = APIRouter(dependencies=[Depends(require_rag_user)])
 
@@ -45,6 +76,14 @@ router = APIRouter(dependencies=[Depends(require_rag_user)])
 # 阻塞等待会让前端 SSE 超时,而且浪费资源。
 class FileLockedByOtherError(Exception):
     """同文件正在被另一个请求处理,当前请求拒绝（避免双写向量库）。"""
+
+
+class UploadIdempotencyConflict(Exception):
+    """同幂等键不同内容的上传（或与在途任务冲突）——HTTP 层映射 409。"""
+
+    def __init__(self, message: str, *, upload_id: str = ""):
+        super().__init__(message)
+        self.upload_id = upload_id
 
 
 # Stale 锁 TTL:进程崩溃残留的 .lock 超过该时长后允许被新请求接管(自愈)。
@@ -112,6 +151,14 @@ def acquire_index_lock(filepath: str) -> int:
         两个请求同时抢 stale 锁时,后到者 O_EXCL 失败 → 保守报锁占用
     """
     lock_path = filepath + ".lock"
+    # B 阶段：正式目录在上传阶段不再预创建（正式文件发布时才落位），
+    # 锁文件要与正式文件同目录 → 这里负责确保父目录存在
+    parent = os.path.dirname(lock_path)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            pass
     fd = _try_create_lock(lock_path)
     if fd is not None:
         return fd
@@ -262,16 +309,25 @@ def cleanup_stale_upload_artifacts(docs_dir: str, tmp_dir: str,
                 logger.warning(f"[RAG] stale 锁清理失败 {p}: {e}")
 
     if os.path.isdir(tmp_dir):
-        for fname in os.listdir(tmp_dir):
-            p = os.path.join(tmp_dir, fname)
-            if not os.path.isfile(p):
-                continue
-            try:
-                if now - os.path.getmtime(p) > max_age_seconds:
-                    os.unlink(p)
-                    counts["tmp_removed"] += 1
-            except OSError as e:
-                logger.warning(f"[RAG] 孤儿 tmp 清理失败 {p}: {e}")
+        # 非终态运行持有的暂存文件豁免（恢复 sweeper 可能随时重投，
+        # 删了会让重跑任务断源）；其余孤儿按超龄清理
+        protected: set[str] = set()
+        try:
+            from backend.rag.indexing.index_run_store_pg import get_index_run_store
+            protected = get_index_run_store().list_non_terminal_staging_paths()
+        except Exception as e:
+            logger.warning(f"[RAG] 暂存豁免名单读取失败（按无豁免处理）: {e}")
+        for root, _dirs, files in os.walk(tmp_dir):
+            for fname in files:
+                p = os.path.join(root, fname)
+                if p in protected:
+                    continue
+                try:
+                    if now - os.path.getmtime(p) > max_age_seconds:
+                        os.unlink(p)
+                        counts["tmp_removed"] += 1
+                except OSError as e:
+                    logger.warning(f"[RAG] 孤儿 tmp 清理失败 {p}: {e}")
 
     if counts["locks_removed"] or counts["tmp_removed"]:
         logger.info(f"[RAG] 启动清理: {counts['locks_removed']} 个 stale 锁, "
@@ -456,15 +512,62 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     if not result.get("ok"):
         return result
 
+    # ── 可信请求在请求路径内派发（B 阶段）：幂等冲突/提交失败必须在 HTTP
+    # 响应前暴露（409/错误响应），不能等 background task 静默吞掉。
+    task_kwargs = {
+        "upload_id": result["upload_id"], "filepath": result["filepath"],
+        "staging_path": result.get("staging_path", ""),
+        "generation": result.get("generation", ""),
+        "file_hash": result.get("file_hash", ""),
+        "filename": result["filename"], "kb_id": kb_id,
+        "department": department, "source": result["source"],
+        "batch_id": result["batch_id"],
+        "upload_elapsed_ms": result.get("upload_elapsed_ms"),
+        # Phase1 Step8：仅作 tasks 行归属（_dispatch_index_to_celery
+        # 内 pop 掉，不进 Celery 消息）
+        "actor_id": identity.user_id, "tenant_id": identity.tenant_id,
+        "was_overwrite": result.get("was_overwrite", False),
+    }
+    pre_dispatched = None
+    if identity.tenant_id and identity.user_id:
+        try:
+            pre_dispatched = await asyncio.to_thread(
+                _dispatch_index_with_idempotency,
+                task_kwargs=task_kwargs,
+                file_hash=result.get("file_hash", ""),
+                tenant_id=identity.tenant_id,
+                actor_id=identity.user_id,
+                idempotency_key=result.get("idempotency_key", ""),
+            )
+        except UploadIdempotencyConflict as conflict:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "conflict": True,
+                         "error": str(conflict),
+                         "upload_id": conflict.upload_id},
+            )
+        except Exception as dispatch_err:
+            # 可信请求不能在幂等 Redis/PG 或任务提交失败时静默降级到
+            # 进程内执行（会绕过「只执行一次」保证）——显式失败，
+            # 暂存文件保留供重试（同键同内容重试会复用幂等语义）。
+            logger.error(f"[RAG] 索引任务提交失败: {dispatch_err}")
+            return {"ok": False,
+                    "error": f"索引任务提交失败: {type(dispatch_err).__name__}: {dispatch_err}"}
+
     task = asyncio.create_task(_run_index_background(
         result["upload_id"], result["filepath"], result["filename"],
         result["source"], result["batch_id"], kb_id=kb_id, department=department,
         upload_elapsed_ms=result.get("upload_elapsed_ms"),
-        was_overwrite=result.get("was_overwrite", False),  # P0-X
+        was_overwrite=result.get("was_overwrite", False),
         file_hash=result.get("file_hash", ""),
+        staging_path=result.get("staging_path", ""),
+        generation=result.get("generation", ""),
         tenant_id=result.get("tenant_id", ""),
         actor_id=result.get("actor_id", ""),
         idempotency_key=result.get("idempotency_key", ""),
+        pre_dispatched=pre_dispatched,
+        task_kwargs=None if pre_dispatched is not None else task_kwargs,
     ))
     # 持有引用：无引用的 fire-and-forget task 可能被 GC，异常也会被静默吞掉
     _background_index_tasks.add(task)
@@ -520,21 +623,26 @@ async def sync_upload_impl(
     # cleanup 策略）。贴近 replace 后窗口缩到备份+replace 两条语句。
 
     ext = safe_name.rsplit(".", 1)[-1].lower()
-    # 可信请求复用稳定 upload_id，保证显式键重试或同一文件指纹重试的 SSE
-    # 都指向同一个 Redis 进度镜像；无可信上下文仍使用随机 ID。
-    if tenant_id and actor_id:
+    # upload_id 语义（B 阶段收口）：任务标识，不再是可复用的写入路径。
+    #   - 显式幂等键 → 确定性 id（同键同内容重试 = 同一任务与进度）；
+    #   - 无键请求一律随机新任务（同名不同内容互不混写）。
+    if tenant_id and actor_id and idempotency_key:
         import hashlib
-        stable_upload_key = idempotency_key or f"{kb_id}:{department}:{safe_name}"
         upload_id = hashlib.sha256(
-            f"{tenant_id}:{actor_id}:{stable_upload_key}".encode("utf-8")
+            f"{tenant_id}:{actor_id}:{idempotency_key}".encode("utf-8")
         ).hexdigest()[:12]
     else:
         upload_id = uuid.uuid4().hex[:12]
-    os.makedirs(tmp_dir, exist_ok=True)
-    tmp_path = f"{tmp_dir}/{upload_id}.{ext}"
+    # generation：本次候选代次（向量候选 collection / BM25 staging 目录共用）
+    generation = uuid.uuid4().hex[:16]
+    # 暂存文件：独立随机命名、不可变——Worker 只读它，索引成功才由发布
+    # 协议 os.replace 到正式路径（旧实现在上传 API 进程、拿锁之前就覆盖
+    # 正式文件，是并发覆盖竞态的根源，已废除）。
+    staging_dir = os.path.join(tmp_dir, "staging")
+    os.makedirs(staging_dir, exist_ok=True)
+    staging_path = os.path.abspath(os.path.join(staging_dir, f"{upload_id}.{generation}.{ext}"))
 
-    # 真实 HTTP 上传耗时（POST body 接收 + 写临时文件 + atomic rename）
-    # 让前端"上传文件"阶段显示准确值，而非被减法逻辑吞掉为 0
+    # 真实 HTTP 上传耗时（POST body 接收 + 写暂存文件）
     _upload_t0_sync = time.time()
 
     # F11: 过期队列清理抽为独立函数（定时 GC 复用同一逻辑）
@@ -551,13 +659,15 @@ async def sync_upload_impl(
         queue.put_nowait(evt)
 
     try:
+        import hashlib as _hashlib
         total = 0
         last_emit_bytes = 0
         last_emit_time = time.time()
         cl_str = request.headers.get("content-length", "0")
         cl_int = int(cl_str) if cl_str.isdigit() else None
+        hasher = _hashlib.sha256()
 
-        with open(tmp_path, "wb") as f:
+        with open(staging_path, "wb") as f:
             while True:
                 chunk = await file.read(chunk_size)
                 if not chunk:
@@ -565,15 +675,16 @@ async def sync_upload_impl(
                 total += len(chunk)
                 if total > max_size:
                     # F1 修复:超限拒绝必须清理临时文件。
-                    # 旧实现在 with 块内直接 return,文件句柄关了但文件留在磁盘,
-                    # 反复上传大文件会持续泄漏 tmp_dir。
                     f.close()
                     try:
-                        os.unlink(tmp_path)
+                        os.unlink(staging_path)
                     except OSError as cleanup_error:
-                        logger.warning(f"[RAG] 超限上传临时文件清理失败: {cleanup_error}")
+                        logger.warning(f"[RAG] 超限上传暂存文件清理失败: {cleanup_error}")
                     return {"ok": False, "error": f"file too large (max {max_size//1024//1024}MB, uploaded {total} bytes)"}
                 f.write(chunk)
+                # 流式计算 SHA256（B 阶段）：哈希与字节同源，Worker 校验
+                # 「上传源哈希 = 处理哈希」不再依赖二次读盘
+                hasher.update(chunk)
 
                 now_emit = time.time()
                 if total - last_emit_bytes >= emit_bytes or (now_emit - last_emit_time) * 1000 >= emit_ms:
@@ -586,15 +697,15 @@ async def sync_upload_impl(
                     last_emit_bytes = total
                     last_emit_time = now_emit
 
-        os.makedirs(final_dir, exist_ok=True)
+        file_hash = hasher.hexdigest()
         # P1-8: 入口校验 — 空文件与损坏文件（魔数）直接拒绝，避免后台索引阶段才失败
         if total == 0:
             try:
-                os.unlink(tmp_path)
+                os.unlink(staging_path)
             except OSError:
                 pass
             return {"ok": False, "error": "file is empty"}
-        with open(tmp_path, "rb") as _f:
+        with open(staging_path, "rb") as _f:
             head = _f.read(8192)
         _magic_ok = True
         if ext == "pdf" and not head.startswith(b"%PDF-"):
@@ -611,7 +722,7 @@ async def sync_upload_impl(
             _magic_ok = False
         if not _magic_ok:
             try:
-                os.unlink(tmp_path)
+                os.unlink(staging_path)
             except OSError:
                 pass
             return {"ok": False, "error": f"file is corrupted or not a valid .{ext} file (magic check failed)"}
@@ -621,54 +732,43 @@ async def sync_upload_impl(
         if ext == "pdf":
             from backend.config.rag import RAG_PDF_PRECHECK_PAGES, RAG_OCR_PROVIDER
             if (RAG_PDF_PRECHECK_PAGES > 0 and RAG_OCR_PROVIDER == "off"
-                    and _pdf_has_text_layer(tmp_path, RAG_PDF_PRECHECK_PAGES) is False):
+                    and _pdf_has_text_layer(staging_path, RAG_PDF_PRECHECK_PAGES) is False):
                 try:
-                    os.unlink(tmp_path)
+                    os.unlink(staging_path)
                 except OSError:
                     pass
                 return {"ok": False, "error": (
                     "PDF 无文本层（可能为扫描件/纯图片），且 OCR 兜底未开启，无法解析；"
                     "请使用可复制文字的 PDF，或配置 RAG_OCR_PROVIDER 开启 OCR 支持"
                 )}
-        # F9: 覆盖检测紧贴 replace — P0-X: 覆盖场景下 _cleanup_failed_upload
-        # 必须保留源文件（atomic rename 已覆盖，删除会丢用户原文件）。
+        # B 阶段：源文件不再在此覆盖正式路径。was_overwrite 仅作响应语义
+        # （提示这是一次覆盖上传），真正覆盖发生在发布协议的 os.replace。
         was_overwrite = os.path.isfile(final_path)
-        # P2: 覆盖场景先把旧版本备份到 .bak — 索引成功由后台任务清理,
-        # 索引失败时旧内容仍可人工恢复(旧实现 os.replace 后旧版本不可逆丢失)。
-        if was_overwrite:
-            try:
-                shutil.copy2(final_path, final_path + ".bak")
-            except OSError as bak_err:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                return {"ok": False, "error": f"备份旧版本失败,中止覆盖: {bak_err}"}
-        os.replace(tmp_path, final_path)
         _safe_put({"stage": "uploading", "progress": 100, "bytes": total})
-        file_hash = sha256_of_file(final_path)
 
         return {
             "ok": True,
             "upload_id": upload_id,
-            "filepath": final_path,
+            "filepath": final_path,          # 逻辑正式路径（registry/幂等键）
+            "staging_path": staging_path,    # 不可变暂存文件（Worker 只读它）
+            "generation": generation,
             "filename": safe_name,
             "size": total,
             "source": _extract_source(request),
             "batch_id": request.headers.get("X-Batch-Id") or None,
             "upload_elapsed_ms": int((time.time() - _upload_t0_sync) * 1000),
-            "was_overwrite": was_overwrite,  # P0-X: 传给 _run_index_background 决定 cleanup 策略
+            "was_overwrite": was_overwrite,
             "file_hash": file_hash,
             "tenant_id": tenant_id,
             "actor_id": actor_id,
             "idempotency_key": idempotency_key,
         }
     except Exception as e:
-        if os.path.exists(tmp_path):
+        if os.path.exists(staging_path):
             try:
-                os.unlink(tmp_path)
+                os.unlink(staging_path)
             except OSError as cleanup_error:
-                logger.warning(f"[RAG] 临时文件清理失败: {cleanup_error}")
+                logger.warning(f"[RAG] 暂存文件清理失败: {cleanup_error}")
         return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
 
 
@@ -693,32 +793,21 @@ async def _finalize_upload_queue(upload_id: str) -> None:
 
 
 def _cleanup_failed_upload_sync(filepath: str, was_overwrite: bool = False) -> None:
-    """索引失败后删除已落盘文件（同步核心，Celery Worker 侧复用）。
+    """索引失败后的文件清理（同步核心，Celery Worker 侧复用）。
 
-    Args:
-        filepath: 上传后落盘的目标路径。
-        was_overwrite: True 表示这次上传是覆盖现有同名文件,P0-X:不删原文件
-            (因为原文件可能正是用户宝贵的生产数据,且已被 atomic rename 覆盖,
-            删除会让用户失去旧版本)。False(新上传副本)才安全删除。
-
-    P0-X 修复:
-      旧实现无条件 os.remove(filepath),当用户上传同名文件覆盖源文件时,
-      sync 失败会物理删除源文件,造成不可逆数据丢失。
+    B 阶段语义变更：filepath 现在传「暂存文件」——失败清理只删暂存，
+    正式路径（data/docs/...）在任何失败分支都不被触碰（旧版可读契约）；
+    「删除复活/覆盖丢源」两类历史缺陷在候选模型下结构性地不可能发生。
+    was_overwrite 参数保留兼容旧调用方（不再影响行为）。
     """
     if not filepath:
-        return
-    if was_overwrite:
-        logger.warning(
-            f"[RAG] 跳过清理: {filepath} 是覆盖场景,源文件不删 "
-            f"(索引失败但保留文件供排查/重试)"
-        )
         return
     try:
         if os.path.isfile(filepath):
             os.remove(filepath)
-            logger.info(f"[RAG] 已清理索引失败文件: {filepath}")
+            logger.info(f"[RAG] 已清理索引失败暂存文件: {filepath}")
     except OSError as exc:
-        logger.warning(f"[RAG] 索引失败文件清理失败 {filepath}: {exc}")
+        logger.warning(f"[RAG] 索引失败暂存文件清理失败 {filepath}: {exc}")
 
 
 async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> None:
@@ -793,27 +882,47 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                          batch_id: str | None, kb_id: str,
                          upload_elapsed_ms: int | None, was_overwrite: bool,
                          upload_t0: float, result: dict | None, emit_fn,
-                         exc: BaseException | None = None) -> None:
+                         exc: BaseException | None = None,
+                         staging_path: str = "") -> dict | None:
     """索引终态收口 —— API 进程内与 Celery Worker 两条路径的统一出口（阶段4）。
 
     emit_fn: 同步事件发射器 (stage, message, **extra)。
       - API 进程内模式 = 进程内 queue.put_nowait + Redis 镜像
       - Celery Worker 模式 = 仅 Redis 镜像（跨进程，SSE 轮询消费）
-    exc: 非 None 走失败分支（ChunkingEmptyError 保留源文件，其余清理）。
+    exc: 非 None 走失败分支（失败清理只删暂存文件，正式路径不动——
+    B 阶段候选模型的旧版可读契约）。
     队列 None 哨兵不在本函数处理 —— API 模式调用方负责 _finalize_upload_queue；
     Worker 模式无队列概念（SSE 由 Redis 轮询，见 stream_upload_progress）。
-
-    行为与拆分前 _run_index_background 的三个终态分支逐行等价
-    （duplicate / done / error），仅 emit 从 await queue.put 改为
-    put_nowait（asyncio.Queue 无界，语义一致）。
     """
     from backend.rag.progress_listener import ProgressListener
 
     # ---- 失败终态 ----
     if exc is not None:
-        logger.error(f"[RAG] 后台索引失败: {exc}")
-        # 任务状态收口：parsing 占位行 → failed（否则启动恢复会反复重试）
-        _mark_registry_failed(filepath)
+        logger.error(f"[RAG] 后台索引失败: {exc}", exc_info=exc)
+        # 运行记录终态（候选状态权威）。发布段失败（status=publishing，提交点
+        # 已过）不标 failed——保持 publishing 等待重试续跑，不清理任何候选
+        # 产物与暂存文件（续跑还要用）；仅候选期失败才走完整清理。
+        run_status_now = ""
+        try:
+            from backend.rag.indexing.index_run_store_pg import (
+                RunStateConflict, get_index_run_store,
+            )
+            _store = get_index_run_store()
+            run_status_now = str(
+                (_store.get_run(upload_id) or {}).get("status") or "")
+            if run_status_now != "publishing":
+                _store.mark_status(
+                    upload_id, "failed", stage="settle", error=str(exc)[:500])
+        except RunStateConflict:
+            pass  # 已终态（幂等重放），保持一次写语义
+        except Exception as run_err:
+            logger.warning(f"[RAG] 运行记录 failed 标记失败: {run_err}")
+        publishing_resume = run_status_now == "publishing"
+        if not publishing_resume:
+            # 候选期失败：暂存 + 候选产物整体清理（正式数据不在其中）
+            if staging_path:
+                _cleanup_failed_upload_sync(staging_path, was_overwrite=False)
+            _cleanup_candidate_artifacts(upload_id, staging_path)
         # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
         #      其它异常按孤儿文件处理逻辑清理
         from backend.rag.indexing.indexer import ChunkingEmptyError
@@ -858,15 +967,48 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          result="failed", duration_ms=duration_ms,
                          detail={"error": str(exc)[:200], "error_type": "file_locked"})
+        elif isinstance(exc, UploadIdempotencyConflict):
+            protocol_error = ProtocolError(
+                ErrorCode.IDEMPOTENCY_CONFLICT,
+                str(exc)[:300],
+                source="sse",
+            )
+            emit_fn(
+                "error",
+                protocol_error.envelope.message,
+                error_type="idempotency_conflict",
+                recoverable=False,
+                error_protocol=protocol_error.envelope.to_dict(),
+            )
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=duration_ms,
+                         detail={"error": str(exc)[:200], "error_type": "idempotency_conflict"})
+        elif isinstance(exc, SupersededCandidate):
+            # 单发布者裁决：另一个（更新的）候选已发布，本次候选被取代。
+            # 旧版本保持可读可检索——这是明确业务终态，不是系统故障。
+            protocol_error = ProtocolError(
+                ErrorCode.IDEMPOTENCY_CONFLICT,
+                str(exc)[:300] or "该文档已被更新的版本抢先发布，本次上传被取代。",
+                source="sse",
+            )
+            emit_fn(
+                "error",
+                protocol_error.envelope.message,
+                error_type="superseded",
+                recoverable=False,
+                error_protocol=protocol_error.envelope.to_dict(),
+            )
+            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                         result="failed", duration_ms=duration_ms,
+                         detail={"error": str(exc)[:200], "error_type": "superseded"})
         else:
             envelope = error_envelope_from_exception(exc, source="sse")
-            _cleanup_failed_upload_sync(filepath, was_overwrite=was_overwrite)
             emit_fn("error", envelope.message,
                     error_protocol=envelope.to_dict())
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          result="failed", duration_ms=duration_ms,
                          detail={"error": str(exc)[:200]})
-        return
+        return None
 
     result = result or {}
     terminal = result.get("terminal", "done")
@@ -885,7 +1027,6 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 doc=sanitize_doc_row(duplicate_doc), trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms,
                 processing_run_id=result.get("processing_run_id", ""),
                 model_summary=result.get("model_summary", []))
-        _remove_bak(filepath)  # 内容未变,旧版本备份无保留价值
         _safe_log_op(
             duplicate_doc.get("doc_id", ""), filename, "upload", source,
             trace_id="", batch_id=batch_id, result="duplicate",
@@ -920,7 +1061,6 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 model_summary=result.get("model_summary") or [],
                 stage_elapsed=stage_elapsed,
                 total_ms=total_ms)
-        _remove_bak(filepath)  # 新版本已确认入库,清理覆盖备份
         # Phase 4: 文档变更后失效该 KB 的答案缓存（避免返回过时答案）
         try:
             from backend.rag.answer_cache import get_answer_cache
@@ -961,6 +1101,10 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
 
     Phase2 Step3：queue 由 QueueRouter 按 workflow binding 决定（收口，
     不再直接读 CELERY_RAG_INDEX_QUEUE）。
+
+    B 阶段：broker 投递前先落 rag_index_runs 运行记录（候选状态权威，
+    记录 base_generation 发布基准与暂存文件位置）——崩溃恢复 sweeper 重投
+    时才有续跑依据。
     """
     from backend.services import task_service
     from backend.tasks.index_task_runtime import create_index_task_record
@@ -969,6 +1113,27 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
 
     actor_id = str(kwargs.pop("actor_id", "") or "")
     tenant_id = str(kwargs.pop("tenant_id", "") or "")
+    generation = str(kwargs.get("generation", "") or "")
+    staging_path = str(kwargs.get("staging_path", "") or "")
+    file_hash = str(kwargs.get("file_hash", "") or "")
+    logical_path = str(kwargs.get("filepath", "") or "")
+    if generation:
+        from backend.rag.indexing.index_run_store_pg import get_index_run_store
+        existing_row = _get_registry().get_by_path(logical_path)
+        get_index_run_store().create_run(
+            upload_id=str(kwargs.get("upload_id", "")),
+            generation=generation,
+            file_path=logical_path,
+            kb_id=str(kwargs.get("kb_id", "") or ""),
+            department=str(kwargs.get("department", "") or ""),
+            file_hash=file_hash,
+            staging_path=staging_path,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            base_generation=str(
+                (existing_row or {}).get("active_generation") or ""),
+        )
+
     db_task_id = create_index_task_record(
         kwargs.get("upload_id", ""), kwargs.get("filename", ""),
         kb_id=kwargs.get("kb_id", "") or "policy_general",
@@ -1000,11 +1165,23 @@ def _dispatch_index_with_idempotency(
     actor_id: str,
     idempotency_key: str,
 ) -> dict:
-    """提交 RAG 索引任务；可信请求拒绝绕过幂等边界。"""
+    """提交 RAG 索引任务；可信请求拒绝绕过幂等边界。
+
+    幂等语义（B 阶段收口）：
+      - 同键同内容重放 → 返回同一任务的派发结果（SSE 续看同一进度镜像）；
+      - 同键不同内容 → UploadIdempotencyConflict（HTTP 层 409），
+        已存在任务与正式版本均不受影响；
+      - 同键同内容但在途 → 附着到在途任务（不重复派发）。
+    幂等指纹只含逻辑身份（正式路径/文件名/内容哈希/KB/部门），不含
+    暂存文件 nonce——同内容重试必然命中同一条目。
+    """
     if not tenant_id or not actor_id:
         return _dispatch_index_to_celery(**task_kwargs)
 
-    from backend.shared.idempotency import run_idempotent_operation_for_identity
+    from backend.shared.idempotency import (
+        IdempotencyConflict,
+        run_idempotent_operation_for_identity,
+    )
 
     payload = {
         "filepath": task_kwargs["filepath"],
@@ -1013,32 +1190,45 @@ def _dispatch_index_with_idempotency(
         "kb_id": task_kwargs.get("kb_id", ""),
         "department": task_kwargs.get("department", ""),
     }
-    return run_idempotent_operation_for_identity(
-        "rag.index.submit",
-        payload,
-        lambda: _dispatch_index_to_celery(**task_kwargs),
-        tenant_id=tenant_id,
-        actor_id=actor_id,
-        client_key=idempotency_key,
-    )
+    upload_id = str(task_kwargs.get("upload_id", ""))
+    try:
+        return run_idempotent_operation_for_identity(
+            "rag.index.submit",
+            payload,
+            lambda: _dispatch_index_to_celery(**task_kwargs),
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            client_key=idempotency_key,
+        )
+    except IdempotencyConflict:
+        # 分辨「同内容在途（附着）」与「异内容（409 拒绝）」
+        from backend.rag.indexing.index_run_store_pg import get_index_run_store
+        run = get_index_run_store().get_run(upload_id)
+        if (run and run.get("file_hash") == file_hash
+                and run.get("kb_id") == task_kwargs.get("kb_id", "")
+                and run.get("department") == task_kwargs.get("department", "")):
+            return {"queued": False, "attached": True, "upload_id": upload_id,
+                    "db_task_id": run.get("celery_task_id", "")}
+        raise UploadIdempotencyConflict(
+            "同一幂等键已绑定不同内容（或在途任务内容不一致），"
+            "请更换 Idempotency-Key 或等待既有任务完成",
+            upload_id=upload_id,
+        )
 
 
-async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False, file_hash: str = "", tenant_id: str = "", actor_id: str = "", idempotency_key: str = ""):
+async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False, file_hash: str = "", tenant_id: str = "", actor_id: str = "", idempotency_key: str = "", staging_path: str = "", generation: str = "", pre_dispatched: dict | None = None, task_kwargs: dict | None = None):
     """后台执行索引，向 queue 推送阶段事件；完成后记录操作日志。
 
-    upload_elapsed_ms: sync_upload_impl 实测的 HTTP 上传耗时（POST + 写文件 + atomic rename）。
-    终态用此值填 stage_elapsed["uploading"]，避免被减法逻辑吞掉为 0。
-    total_ms 改为 upload_elapsed_ms + 后台索引耗时（端到端总耗时）。
+    B 阶段：可信请求的 Celery 派发已在 HTTP 请求路径内完成（pre_dispatched
+    非 None），本任务只负责「已入队」进度事件与 SSE 通道路由标记；不可信
+    请求（task_kwargs 非 None）沿用派发+回退逻辑。
 
-    was_overwrite: P0-X 上传是否覆盖了已有同名文件。True 时 cleanup 不能删源文件。
-
-    Celery 队列化（固定主路径）：索引任务投递 Celery（rag_index 队列）由
-    Worker 执行，终态经 _settle_index_result 写 Redis 镜像（SSE 由 Redis
-    轮询通道消费）；入队失败（broker 不可达）自动回退进程内执行。
+    was_overwrite: 本次上传是否将覆盖已有同名文件（仅响应语义；真正的
+    覆盖发生在发布协议的 os.replace，失败时正式文件不被触碰）。
     """
     queue = _progress_queues.get(upload_id)
     if queue is None:
-        await _cleanup_failed_upload(filepath, was_overwrite=was_overwrite)
+        await _cleanup_failed_upload(staging_path or filepath, was_overwrite=was_overwrite)
         return
 
     async def emit(stage: str, message: str = "", **extra):
@@ -1057,30 +1247,39 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
     _upload_t0 = time.time()
 
-    # ── Celery 队列化分流（固定主路径，无开关）──
-    try:
-        _dispatch_index_with_idempotency(
-            task_kwargs={
-                "upload_id": upload_id, "filepath": filepath,
-                "filename": filename, "kb_id": kb_id,
-                "department": department, "source": source,
-                "batch_id": batch_id, "upload_elapsed_ms": upload_elapsed_ms,
-                # Phase1 Step8：仅作 tasks 行归属（_dispatch_index_to_celery
-                # 内 pop 掉，不进 Celery 消息）
-                "actor_id": actor_id, "tenant_id": tenant_id,
-                "was_overwrite": was_overwrite,
-            },
-            file_hash=file_hash,
-            tenant_id=tenant_id,
-            actor_id=actor_id,
-            idempotency_key=idempotency_key,
-        )
+    # ── 可信请求：派发已在请求路径完成 ──
+    if pre_dispatched is not None:
         # 打标必须在发任何事件之前：SSE 队列模式每轮检查此标记，
         # 看到即切换 Redis 轮询通道消费 Worker 事件（跨进程队列收不到）
         _celery_routed.add(upload_id)
         await emit("uploading", f"文件 {filename} 已保存，索引任务已入队（Celery Worker 执行）")
         # 终态由 Worker 写 Redis 进度镜像；本进程队列不再有后续事件
-        # （SSE 订阅切换 Redis 轮询通道；队列残留由定时 GC 回收）
+        return
+
+    # ── 不可信请求：派发 + broker 不可达回退本进程索引 ──
+    if task_kwargs is None:
+        # 旧式直调（无请求路径派发）：从函数参数装配完整任务字段
+        task_kwargs = {
+            "upload_id": upload_id, "filepath": filepath,
+            "filename": filename, "kb_id": kb_id, "department": department,
+            "source": source, "batch_id": batch_id,
+            "upload_elapsed_ms": upload_elapsed_ms,
+            "actor_id": actor_id, "tenant_id": tenant_id,
+            "was_overwrite": was_overwrite,
+        }
+    task_kwargs.setdefault("staging_path", staging_path)
+    task_kwargs.setdefault("generation", generation)
+    task_kwargs.setdefault("file_hash", file_hash)
+    try:
+        _dispatch_index_with_idempotency(
+            task_kwargs=task_kwargs,
+            file_hash=file_hash,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            idempotency_key=idempotency_key,
+        )
+        _celery_routed.add(upload_id)
+        await emit("uploading", f"文件 {filename} 已保存，索引任务已入队（Celery Worker 执行）")
         return
     except Exception as enqueue_err:
         if tenant_id and actor_id:
@@ -1089,7 +1288,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
             _settle_index_result(
                 upload_id, filepath, filename, source, batch_id, kb_id,
                 upload_elapsed_ms, was_overwrite, _upload_t0,
-                result=None, emit_fn=emit_fn, exc=enqueue_err)
+                result=None, emit_fn=emit_fn, exc=enqueue_err,
+                staging_path=staging_path)
             await _finalize_upload_queue(upload_id)
             return
         # broker 不可达：可用性优先，回退本进程索引（与 task_manager 503 语义对齐）
@@ -1117,6 +1317,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
                     _do_index_sync,
                     upload_id, filepath, filename, loop, kb_id, department,
                     batch_id=batch_id,
+                    staging_path=staging_path, generation=generation,
+                    file_hash=file_hash,
                 ),
             )
     except FileLockedByOtherError:
@@ -1136,7 +1338,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
         _settle_index_result(
             upload_id, filepath, filename, source, batch_id, kb_id,
             upload_elapsed_ms, was_overwrite, _upload_t0,
-            result=None, emit_fn=emit_fn, exc=e)
+            result=None, emit_fn=emit_fn, exc=e,
+            staging_path=staging_path)
         await _finalize_upload_queue(upload_id)
         return
 
@@ -1160,116 +1363,242 @@ def _remove_bak(filepath: str) -> None:
 
 
 def _do_index_sync(upload_id: str, filepath: str, filename: str,
-                   main_loop: asyncio.AbstractEventLoop,
+                   main_loop: asyncio.AbstractEventLoop | None,
                    kb_id: str = "policy_general",
                    department: str = "general",
-                   batch_id: str | None = None):
-    """同步执行索引，通过 _progress_queues[upload_id] 推送阶段（从线程内调用）。
+                   batch_id: str | None = None,
+                   staging_path: str = "",
+                   generation: str = "",
+                   file_hash: str = ""):
+    """候选模式索引（B 阶段）：解析→向量→BM25 全部落在 generation 隔离层，
+    发布协议统一提交；任何阶段失败旧版保持可读可检索。
 
-    P1 改造：
-      - 不再调 indexer.sync()（全盘扫描，会把已软删但原文件还在的文档判为 ADDED 重新索引→删除复活）。
-        改用 reindex_file() 单文件索引。duplicate 检测保留（reindex_file 不做 hash 比对）。
-      - 复用 pipeline 已加载的 embedding/vectordb/doc_db，避免每次上传重新加载 bge 模型。
-      - doc_db 用 pipeline.doc_db（DOC_DB_PATH），修复原误用同一个 store 导致 doc 全文写进 chunk 库。
-      - P2: SHA256 只算一次,透传给 reindex_file（旧实现 duplicate 检测算一次、
-        _index_file 内部再算一次,50MB 文件多一次全盘读）。
+    关键语义：
+      - Worker 只读不可变暂存文件（staging_path），正式路径在发布前不被触碰；
+      - registry 在候选期只读（不再有 parsing 占位原地降级）；
+      - 发布拿索引锁串行化——锁只保护发布段，两个并发候选可并行解析/向量，
+        由发布 CAS 裁决唯一发布者，输者明确 superseded；
+      - 终态幂等：published 运行重入直接返回 done（不重复发布）。
+
+    main_loop 传 None：Worker 进程无 asyncio 主循环，sync_emit 只写 Redis。
     """
-    from backend.config import DOCS_DIRECTORY  # noqa: F401
+    from backend.config import DOCS_DIRECTORY
 
-    # P1 修复:队列消失(SSE 断连被 pop)不再静默跳过索引 —
-    # 旧实现这里直接 return None,调用方会把未索引的文件记为 success(chunk_count=0)。
-    # 进度队列只是可选项,emit 在无队列时退化为 no-op,索引本身必须继续。
     queue = _progress_queues.get(upload_id)
 
-    # 同步索引开始时刻：用于 SSE uploading 阶段真实耗时；duplicate 也带上
     _upload_t0_sync = time.time()
 
     def sync_emit(stage: str, message: str = "", **extra):
-        """从同步线程调用：run_coroutine_threadsafe 把事件投到主 async loop 的队列"""
+        """从同步线程调用：进程内队列事件投主 loop（仅 API 回退路径有）"""
         _write_progress_redis(upload_id, stage, message, **extra)
-        if queue is None:
-            return  # 无订阅者 → 只跳进度推送,不影响索引
+        if queue is None or main_loop is None:
+            return  # Worker / 无订阅者 → 只写 Redis 镜像
         evt = {"stage": stage, "message": message, **extra}
-        # 主 loop 在另一个线程，必须用 run_coroutine_threadsafe（不能 asyncio.get_event_loop()）
         asyncio.run_coroutine_threadsafe(queue.put(evt), main_loop)
 
-    # P1-2:同文件并发上传加文件锁,避免 race condition
-    # 两个并发请求可能都通过下面的 duplicate 检测,然后都走到 _index_file,
-    # 导致同 doc_id 写两次到向量库。这里在入口加非阻塞锁,
-    # 第二个请求立即抛 FileLockedByOtherError(不让它阻塞 SSE)。
-    index_lock_fd = acquire_index_lock(filepath)
-    # 锁心跳：持锁期间持续刷新时间戳，超长索引不再被 stale 判定误抢
+    reg = _get_registry()
+    from backend.rag.indexing.index_run_store_pg import (
+        RunStateConflict,
+        get_index_run_store,
+    )
+    run_store = get_index_run_store()
+    run = run_store.get_run(upload_id)
+    if run is None:
+        # 旧消息/回退路径现场登记（base 取当前 registry 指针）
+        generation = generation or uuid.uuid4().hex[:16]
+        existing0 = reg.get_by_path(filepath)
+        run = run_store.create_run(
+            upload_id=upload_id, generation=generation, file_path=filepath,
+            kb_id=kb_id, department=department,
+            file_hash=file_hash, staging_path=staging_path,
+            base_generation=str((existing0 or {}).get("active_generation") or ""),
+        )
+    generation = run["generation"]
+    staging = run.get("staging_path") or staging_path or filepath
+    source_hash = file_hash or run.get("file_hash") or ""
+
+    # ── 终态幂等短路（重试不得重复发布）──
+    if run["status"] == "published":
+        doc = reg.get_by_path(filepath) or {}
+        logger.info(f"[RAG] 运行已发布，幂等返回 done: {upload_id}")
+        return {
+            "trace_id": "", "terminal": "done",
+            "doc": {**doc, "duplicate": False},
+            "chunk_count": int(doc.get("chunk_count") or 0),
+            "file_hash": doc.get("file_hash", source_hash),
+            "stage_elapsed": {},
+        }
+    if run["status"] in ("failed", "superseded"):
+        # 失败终态被重投（sweeper 唤醒）：不复活失败任务；正在的新一轮
+        # 上传会经 create_run 重置状态走正常流程
+        raise RuntimeError(
+            f"索引运行已终态({run['status']})，拒绝重跑: {run.get('error', '')[:200]}")
+
+    if not os.path.isfile(staging):
+        raise RuntimeError(f"暂存源文件缺失（可能已被清理）: {os.path.basename(staging)}")
+
+    # 哈希校验：上传源哈希必须等于 Worker 处理的哈希（B 阶段验收项）
+    actual_hash = sha256_of_file(staging)
+    if source_hash and actual_hash != source_hash:
+        raise RuntimeError(
+            "暂存文件哈希与任务声明不一致（源文件被篡改或写坏），拒绝索引")
+
+    sync_emit("uploading", "正在校验文档版本...", file_hash=actual_hash[:12])
+
+    # ── duplicate 检测（与 active 版本同内容 → 无需发布）──
+    existing = reg.get_by_path(filepath)
+    if existing and existing.get("status") == "active" \
+            and existing.get("file_hash") == actual_hash:
+        logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
+        run_store.mark_status(upload_id, "published", stage="duplicate")
+        return {
+            "trace_id": "",
+            "terminal": "duplicate",
+            "doc": {**existing, "duplicate": True},
+            "file_hash": actual_hash,
+            "stage_elapsed": {"uploading": int((time.time() - _upload_t0_sync) * 1000)},
+        }
+
+    # ── 同逻辑文档互斥：已有其他运行在途 → 明确拒绝（排队语义交上层重试）──
+    others = [r for r in run_store.list_non_terminal_by_file(filepath)
+              if r.get("upload_id") != upload_id]
+    if others:
+        raise FileLockedByOtherError(
+            f"文档 {filename} 已有另一个上传任务在处理（{others[0].get('upload_id')}），请稍后重试")
+
+    sync_emit("uploading", "正在初始化索引管道（首次 ~15s）...")
+    _pipe_t0 = time.time()
+    pipeline = get_rag_pipeline()
+    _pipe_elapsed = int((time.time() - _pipe_t0) * 1000)
+    if _pipe_elapsed > 3000:
+        logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
+
+    # ── 候选期（无锁）：解析/向量/BM25 全在 generation 隔离层 ──
+    from backend.rag.indexing.publish import (
+        CandidatePublishError,
+        SupersededCandidate,
+        cleanup_candidate,
+        make_candidate_stores,
+    )
+    stores = make_candidate_stores(pipeline, generation)
+    base_generation = str(run.get("base_generation") or "")
+    run_store.mark_status(upload_id, "indexing", stage="index")
+    listener = ProgressListener(sync_emit)
+    from backend.rag.indexing.indexer import IncrementalIndexer
+    from backend.rag.indexing.processing_lineage_pg import (
+        get_processing_lineage_repository,
+    )
+    indexer = IncrementalIndexer(
+        docs_dir=DOCS_DIRECTORY,
+        vectordb=stores.vectordb,
+        doc_db=stores.doc_db,
+        embedding=pipeline.embedding,
+        registry=reg,
+        kb_id=kb_id,
+        department=department,
+        bm25_store=stores.bm25_store,
+        chunk_store=stores.chunk_store,
+        candidate_mode=True,
+        bm25_source_vectordb=stores.bm25_source,
+        processing_lineage_repository=get_processing_lineage_repository(),
+        processing_task_id=upload_id,
+        processing_batch_id=batch_id,
+    )
+    try:
+        index_result = indexer.index_candidate(
+            staging, filepath, file_hash=actual_hash)
+    except SupersededCandidate:
+        raise
+    except Exception:
+        # 候选期失败：候选层整体清理后原样上抛（终态收口统一发 error、
+        # 标 failed、删暂存；正式数据未被触碰）
+        cleanup_candidate(stores)
+        raise
+    finally:
+        listener.unsub()
+    index_result["staging_path"] = staging
+
+    # ── 发布段（索引锁串行化；锁只保护发布段，候选期不占锁）──
+    sync_emit("embedding", "候选索引完成，正在发布...")
+    lock_fd = acquire_index_lock(filepath)
     _heartbeat_stop = threading.Event()
     _start_lock_heartbeat(filepath + ".lock", _heartbeat_stop)
     try:
-        # === 原 _do_index_locked_body 内容内联到这里 ——
-        # 必须在本函数作用域内,否则 DOCS_DIRECTORY 找不到
-        reg = _get_registry()
-
-        existing = reg.get_by_path(filepath)
+        old_row = reg.get_by_path(filepath)
         try:
-            _file_size = os.path.getsize(filepath)
-        except OSError:
-            _file_size = 0
-        # P2: 哈希只算一次,duplicate 检测与 reindex_file 共用
-        file_hash = sha256_of_file(filepath)
-        if existing and existing.get("status") == "active":
-            if existing.get("file_hash") == file_hash:
-                logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
-                return {
-                    "trace_id": "",
-                    "duplicate": True,
-                    "terminal": "duplicate",
-                    "doc": {**existing, "duplicate": True},
-                    "stage_elapsed": {"uploading": int((time.time() - _upload_t0_sync) * 1000)},
-                }
-            else:
-                logger.info(f"[RAG] 文件已变化，重新索引: {filename} (old={existing.get('file_hash','')[:12]} new={file_hash[:12]})")
-        elif existing:
-            logger.info(f"[RAG] 文件状态非 active ({existing.get('status')})，重新索引: {filename}")
-        else:
-            logger.info(f"[RAG] 新文件，首次索引: {filename} (path={filepath})")
-
-        sync_emit("uploading", "正在初始化索引管道（首次 ~15s）...")
-        _pipe_t0 = time.time()
-        pipeline = get_rag_pipeline()
-        _pipe_elapsed = int((time.time() - _pipe_t0) * 1000)
-        if _pipe_elapsed > 3000:
-            logger.info(f"[RAG] 管道初始化耗时 {_pipe_elapsed}ms（可能预热未完成）")
-        listener = ProgressListener(sync_emit)
-        # F7: 惰性导入（模块顶层已移除该重依赖导入）
-        from backend.rag.indexing.indexer import IncrementalIndexer
-        from backend.rag.indexing.processing_lineage_pg import (
-            get_processing_lineage_repository,
-        )
-        indexer = IncrementalIndexer(
-            docs_dir=DOCS_DIRECTORY,
-            vectordb=pipeline.vectordb,
-            doc_db=pipeline.doc_db,
-            embedding=pipeline.embedding,
+            _raw_old = (old_row or {}).get("chunk_ids") or "[]"
+            _parsed_old = json.loads(_raw_old) if isinstance(_raw_old, str) else _raw_old
+            old_chunk_ids = [str(x) for x in (_parsed_old or [])]
+        except (ValueError, TypeError):
+            old_chunk_ids = []
+        from backend.rag.indexing.publish import publish_candidate
+        publish_candidate(
+            run_store=run_store,
+            upload_id=upload_id,
             registry=reg,
+            stores=stores,
+            final_path=filepath,
+            doc_id=index_result["doc_id"],
             kb_id=kb_id,
-            department=department,
-            # 生产 BM25Store 会从向量集合原子重建；不是旧索引的单文档追加。
-            bm25_store=pipeline.bm25_store,
-            processing_lineage_repository=get_processing_lineage_repository(),
-            processing_task_id=upload_id,
-            processing_batch_id=batch_id,
+            file_hash=actual_hash,
+            base_generation=base_generation,
+            index_result=index_result,
+            old_row=old_row,
+            old_chunk_ids=old_chunk_ids,
+            old_doc_db_id=str((old_row or {}).get("doc_db_id") or ""),
+            main_bm25_store=pipeline.bm25_store,
         )
+    except SupersededCandidate as s:
+        # 单发布者裁决：更新的候选已发布。清理本次候选 + 暂存，明确报
+        # superseded（旧版本保持可读可检索）
+        cleanup_candidate(stores)
         try:
-            result = indexer.reindex_file(filepath, file_hash=file_hash)
-        finally:
-            listener.unsub()  # 索引失败也必须退订，防 trace 订阅泄漏
-        # 上传后刷新 pipeline 内存 BM25（indexer 已发布同源快照）
-        try:
-            pipeline.refresh_bm25_from_store()
-        except Exception as e:
-            logger.warning(f"[RAG] BM25 刷新失败（不影响索引结果）: {e}")
-        logger.info(f"[RAG] 上传索引完成: {filename} → {result}")
-        return result
+            run_store.mark_status(upload_id, "superseded", error=str(s)[:500])
+        except RunStateConflict:
+            pass
+        if staging != filepath and os.path.isfile(staging):
+            try:
+                os.unlink(staging)
+            except OSError:
+                pass
+        logger.warning(f"[RAG] 候选被取代: {filename}: {s}")
+        raise
+    except CandidatePublishError as e:
+        # 提交点之后的失败：发布已提交（registry 已指向本代次），候选已晋级。
+        # 保持 publishing 状态等待重试续跑（publish_candidate 幂等），不清理
+        # 任何产物、不删暂存（续跑还要用它），不标记 failed。
+        logger.error(f"[RAG] 发布段失败（保持 publishing 待续跑）: {e}")
+        raise
     finally:
         _heartbeat_stop.set()
-        release_index_lock(index_lock_fd, filepath)
+        release_index_lock(lock_fd, filepath)
+
+    # 上传后刷新本进程内存检索对象（跨进程刷新由 C 阶段热刷新承担）
+    try:
+        pipeline.refresh_bm25_from_store()
+    except Exception as e:
+        logger.warning(f"[RAG] BM25 刷新失败（不影响索引结果）: {e}")
+    # 发布通知（C 阶段）：pub/sub 推给在线 API/rag-service 立即刷新；
+    # epoch 键留给错过消息的进程轮询兜底。通知失败不影响发布结果。
+    try:
+        from backend.infra.redis.client import get_redis
+        from backend.config.redis import REDIS_KEY_PREFIX
+        r = get_redis()
+        if r is not None:
+            r.publish(f"{REDIS_KEY_PREFIX}rag:index:published", generation)
+            r.set(f"{REDIS_KEY_PREFIX}rag:index:generation", generation, ex=86400)
+    except Exception as notify_err:  # noqa: BLE001 — 通知是加速项不是正确性依赖
+        logger.debug(f"[RAG] 索引发布通知失败（版本检查兜底）: {notify_err}")
+
+    logger.info(f"[RAG] 上传索引完成: {filename} → {index_result.get('doc_id')}")
+    return {
+        "trace_id": index_result.get("trace_id", ""),
+        "chunk_count": index_result.get("chunk_count", 0),
+        "file_hash": actual_hash,
+        "doc_id": index_result.get("doc_id", ""),
+        "processing_run_id": index_result.get("processing_run_id", ""),
+        "stage_elapsed": index_result.get("stage_elapsed", {}),
+    }
 
 
 

@@ -74,20 +74,73 @@ class FakeVectorDB:
 
     删除支持两种口径：where 条件删（_remove_document 内部清理）与 ids 精确删
     （reindex "先写后删"按 registry 旧 chunk_ids 清理，不碰同 doc_id 新向量）。
+    B 阶段：实现候选代次协议 clone_for_candidate/promote_collection/
+    drop_collection——候选实例写 pending_rows，promote 并入本实例。
     """
     _collection_name = "fake_chunks"
+    persist_directory = "/fake/chroma"
 
     def __init__(self):
         self.added: list = []   # [(docs_batch, ids_batch)]
         self.deleted_where: list[dict] = []
         self.deleted_ids: list[list[str]] = []
         self._n = 0
+        self.published_rows: dict = {}   # 已发布（promote 后）行：id → (content, meta)
+        self.pending_rows: dict = {}     # 候选期行
+
+    def clone_for_candidate(self, generation: str) -> "FakeVectorDB":
+        cand = FakeVectorDB()
+        cand._collection_name = f"{self._collection_name}::cand:{generation}"
+        cand._cand_collection = cand._collection_name
+        cand._main = self
+        self._candidates = getattr(self, "_candidates", [])
+        self._candidates.append(cand)
+        return cand
+
+    def promote_collection(self, source_collection: str) -> int:
+        # 生产语义在主 store 上调用：找到同名候选克隆并合并其行
+        moved = 0
+        for cand in getattr(self, "_candidates", []):
+            if getattr(cand, "_cand_collection", "") == source_collection:
+                for rid, (content, meta) in cand.pending_rows.items():
+                    self.published_rows[rid] = (content, meta)
+                    moved += 1
+                cand.pending_rows = {}
+        if not moved:
+            for rid, (content, meta) in self.pending_rows.items():
+                self.published_rows[rid] = (content, meta)
+                moved += 1
+            self.pending_rows = {}
+        return moved
+
+    def drop_collection(self, collection: str) -> int:
+        return 0
+
+    def update_metadata_where(self, where, metadata_update):
+        self.metadata_updates = getattr(self, "metadata_updates", [])
+        self.metadata_updates.append((dict(where), dict(metadata_update)))
+        return 0
+
+    def get(self, where=None):
+        # 本实例全量视图（legacy 语义：add 过即在库）；候选隔离由
+        # 「候选是独立克隆实例」体现，canonical 组合视图由 main∪cand 拼接
+        rows = dict(self.published_rows)
+        for rid, pair in self.pending_rows.items():
+            rows.setdefault(rid, pair)
+        ids = list(rows.keys())
+        return {
+            "ids": ids,
+            "documents": [rows[i][0] for i in ids],
+            "metadatas": [rows[i][1] for i in ids],
+        }
 
     def add_documents(self, docs, **kwargs):
         ids = []
         for d in docs:
             self._n += 1
-            ids.append(f"chunk-{self._n}-{hashlib.sha256(d.page_content.encode('utf-8')).hexdigest()[:8]}")
+            rid = f"chunk-{self._n}-{hashlib.sha256(d.page_content.encode('utf-8')).hexdigest()[:8]}"
+            ids.append(rid)
+            self.pending_rows[rid] = (d.page_content, dict(d.metadata or {}))
         self.added.append((list(docs), ids))
         return ids
 
@@ -99,19 +152,55 @@ class FakeVectorDB:
 
 
 class FakeDocDB:
+    persist_directory = "/fake/doc_db"
+
     def __init__(self):
         self.texts: list[str] = []
         self.metas: list[dict] = []
         self.deleted_where: list[dict] = []
         self.deleted_ids: list[list[str]] = []
         self._n = 0
+        self.pending_rows: dict = {}
+        self.published_rows: dict = {}
+
+    def clone_for_candidate(self, generation: str) -> "FakeDocDB":
+        cand = FakeDocDB()
+        cand._collection_name = f"doc_db::cand:{generation}"
+        cand._cand_collection = cand._collection_name
+        self._candidates = getattr(self, "_candidates", [])
+        self._candidates.append(cand)
+        return cand
+
+    def promote_collection(self, source_collection: str) -> int:
+        moved = 0
+        for cand in getattr(self, "_candidates", []):
+            if getattr(cand, "_cand_collection", "") == source_collection:
+                for rid, (text, meta) in cand.pending_rows.items():
+                    self.published_rows[rid] = (text, meta)
+                    self.texts.append(text)
+                    self.metas.append(meta)
+                    moved += 1
+                cand.pending_rows = {}
+        if not moved:
+            for rid, (text, meta) in self.pending_rows.items():
+                self.published_rows[rid] = (text, meta)
+                self.texts.append(text)
+                self.metas.append(meta)
+                moved += 1
+            self.pending_rows = {}
+        return moved
+
+    def drop_collection(self, collection: str) -> int:
+        return 0
 
     def add_texts(self, texts, metadatas=None, **kwargs):
         ids = []
         for i, t in enumerate(texts):
             self._n += 1
+            meta = (metadatas or [{}] * len(texts))[i]
+            self.pending_rows[f"doc-{self._n}"] = (t, meta)
             self.texts.append(t)
-            self.metas.append((metadatas or [{}] * len(texts))[i])
+            self.metas.append(meta)
             ids.append(f"doc-{self._n}")
         return ids
 
@@ -123,13 +212,15 @@ class FakeDocDB:
 
 
 class FakeBM25Store:
-    """对齐生产接口：索引主链路调 replace_documents（单次重建完成旧删新增）。
-    旧 fake 只实现 add_documents，与生产漂移导致 BM25 断言恒失败。"""
+    """对齐生产接口：canonical 全量重建（rebuild_from_vectorstore）+
+    发布切换（adopt_snapshot，publish.switch_bm25_snapshot 的非文件型协议臂）。"""
 
     def __init__(self):
         self.batches: list[list] = []
         self.replaced: list[dict] = []
         self.removed: list[list] = []
+        self.pending: list = []
+        self.adoptions: list = []
 
     def add_documents(self, docs, k=5, **kwargs):
         self.batches.append(list(docs))
@@ -142,6 +233,29 @@ class FakeBM25Store:
     def remove_documents(self, doc_ids, k=20, file_paths=None):
         self.removed.append(list(doc_ids))
         return None
+
+    # ── B 阶段候选协议 ──
+    def rebuild_from_vectorstore(self, vectorstore, *, exclude_ids=None, k=None):
+        payload = vectorstore.get()
+        excluded = {str(x) for x in (exclude_ids or set())}
+        from langchain_core.documents import Document
+        self.pending = [
+            Document(page_content=str(t), metadata={"vector_id": str(rid)})
+            for rid, t in zip(payload.get("ids") or [],
+                              payload.get("documents") or [])
+            if str(rid) not in excluded and str(t or "").strip()
+        ]
+        # 对齐生产语义：重建即发布内存快照（legacy 路径的消费视图）；
+        # 候选路径的发布切换经 adopt_snapshot 记账（不重复入 batches）
+        self.batches.append(list(self.pending))
+        return {"doc_count": len(self.pending), "excluded": len(excluded)}
+
+    def get_metadata(self):
+        return {"doc_count": len(self.pending) or (len(self.batches[-1]) if self.batches else 0),
+                "built_at": "fake"}
+
+    def adopt_snapshot(self, cand_store, generation: str):
+        self.adoptions.append(generation)
 
 
 class FakeUploadFile:
@@ -298,6 +412,9 @@ def _upload_and_index(route_env, filename: str, data: bytes) -> tuple[dict, list
                 department="general",
                 upload_elapsed_ms=res.get("upload_elapsed_ms"),
                 was_overwrite=bool(res.get("was_overwrite")),
+                staging_path=res.get("staging_path", ""),
+                generation=res.get("generation", ""),
+                file_hash=res.get("file_hash", ""),
             ),
             timeout=30,
         )
@@ -429,10 +546,11 @@ class TestUploadToIndexChain:
         assert row and row["status"] == "active"
         assert row["file_hash"] == done["doc"]["file_hash"]
 
-        # 各 store 都收到写入
-        assert len(route_env.vectordb.added) == 1
+        # 各 store 都收到写入（B 阶段候选语义：候选实例写入后经发布晋级
+        # 主实例；BM25 经 adopt_snapshot 完成快照切换）
+        assert len(route_env.vectordb.published_rows) == row["chunk_count"]
         assert len(route_env.doc_db.texts) == 1
-        assert len(route_env.bm25.batches) == 1
+        assert len(route_env.bm25.adoptions) == 1
 
         # 操作日志记录 success 的 upload,且首次索引 doc_id 不为空
         # (旧实现首次索引返回空 doc_id,操作日志丢失文档身份)
@@ -453,17 +571,17 @@ class TestUploadToIndexChain:
         """内容未变化的二次上传 → duplicate 短路,向量库不再写入。"""
         data = MD_CONTENT.encode("utf-8")
         _upload_and_index(route_env, "dup.md", data)
-        adds_after_first = len(route_env.vectordb.added)
+        rows_after_first = len(route_env.vectordb.published_rows)
 
         res2, events2 = _upload_and_index(route_env, "dup.md", data)
         stages2 = [e.get("stage") for e in events2 if e is not None]
 
         assert "duplicate" in stages2, f"应命中 duplicate 短路: {stages2}"
         assert "done" not in stages2  # duplicate 是终态,不再走 done
-        # 向量库/doc_db/BM25 均未新增写入
-        assert len(route_env.vectordb.added) == adds_after_first
+        # 向量库/doc_db/BM25 均未新增写入（duplicate 在候选构建前短路）
+        assert len(route_env.vectordb.published_rows) == rows_after_first
         assert len(route_env.doc_db.texts) == 1
-        assert len(route_env.bm25.batches) == 1
+        assert len(route_env.bm25.adoptions) == 1
         # 操作日志记录 duplicate
         assert any(op["result"] == "duplicate" for op in route_env.op_logs)
         # f2b 后语义:finalize 不主动 pop,duplicate 终态事件同样保留给晚到订阅者
@@ -484,9 +602,9 @@ class TestUploadToIndexChain:
         row = route_env.registry.get_by_path(res2["filepath"])
         assert row["file_hash"] == hashlib.sha256(
             new_content.encode("utf-8")).hexdigest()
-        # 向量库第二批写入,重索引成功后按旧 chunk_ids 清理旧向量(先写后删)
-        assert len(route_env.vectordb.added) == 2
+        # 新候选经发布晋级主实例；旧 chunk 按旧 id 精确清理（先写后删）
         assert route_env.vectordb.deleted_ids, "重索引成功后应按旧 chunk_ids 清理旧向量"
+        assert row["active_generation"], "发布必须推进 active_generation 指针"
 
     def test_queue_vanished_still_indexes(self, route_env):
         """P1 修复:SSE 断连导致队列被 pop 后,索引必须继续,绝不静默跳过。
@@ -506,17 +624,22 @@ class TestUploadToIndexChain:
 
         result = rag_upload._do_index_sync(
             res["upload_id"], res["filepath"], res["filename"],
-            None, "policy_general", "general")
+            None, "policy_general", "general",
+            staging_path=res.get("staging_path", ""),
+            generation=res.get("generation", ""),
+            file_hash=res.get("file_hash", ""))
 
         assert result is not None, "队列消失不得静默跳过索引"
         assert result.get("chunk_count", 0) > 0
         row = route_env.registry.get_by_path(res["filepath"])
         assert row and row["status"] == "active", "文件必须真实落库"
 
-    def test_overwrite_success_removes_bak(self, route_env):
-        """P2 改进:覆盖上传成功后 .bak 应被清理(索引已确认新版本可用)。"""
+    def test_overwrite_success_replaces_file_atomically(self, route_env):
+        """B 阶段：覆盖上传成功后正式文件在发布点被原子替换为新内容；
+        全程无 .bak（旧版不动契约由候选隔离结构性保证，无需人工备份）。"""
         _upload_and_index(route_env, "bak.md", MD_CONTENT.encode("utf-8"))
-        bak = Path(route_env.docs_dir) / "policy_general" / "general" / "bak.md.bak"
+        final = Path(route_env.docs_dir) / "policy_general" / "general" / "bak.md"
+        old_content = final.read_text(encoding="utf-8")
 
         new_content = MD_CONTENT + "\n## 修订\n\n时限调整。\n"
         res2, events2 = _upload_and_index(route_env, "bak.md",
@@ -524,4 +647,7 @@ class TestUploadToIndexChain:
 
         stages2 = [e.get("stage") for e in events2 if e is not None]
         assert stages2[-1] == "done"
-        assert not bak.exists(), "成功索引后 .bak 必须清理"
+        # 发布点替换：正式文件 = 新内容；旧内容不再存在；无 .bak 残留
+        assert final.read_text(encoding="utf-8") == new_content
+        assert final.read_text(encoding="utf-8") != old_content
+        assert not (final.parent / "bak.md.bak").exists()

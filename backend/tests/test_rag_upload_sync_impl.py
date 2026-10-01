@@ -112,7 +112,10 @@ class TestPathTraversal:
         # 关键:落盘路径必须在 docs_dir 内
         final = Path(result["filepath"])
         assert os.path.commonpath([str(docs_dir), str(final)]) == str(docs_dir)
-        assert final.exists() and final.read_bytes() == b"# escaped?"
+        # B 阶段：上传阶段正式路径不产生，净化后的内容落暂存文件
+        assert not final.exists()
+        staging = Path(result["staging_path"])
+        assert staging.read_bytes() == b"# escaped?"
         # docs 上级目录绝不能有 evil.md
         assert not (docs_dir.parent / "evil.md").exists()
 
@@ -157,7 +160,7 @@ class TestPathTraversal:
         f = FakeUploadFile(".secret.md", b"x", "text/markdown")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is False
-        assert files_in(tmp_dir) == [], f"tmp_dir 残留: {files_in(tmp_dir)}"
+        assert files_in(tmp_dir / "staging") == [], f"tmp_dir 残留: {files_in(tmp_dir)}"
 
 
 # ============ 2. 文件大小限制 ============
@@ -183,10 +186,9 @@ class TestSizeLimit:
         result = run_impl(docs_dir, tmp_dir, f, max_size=100, chunk_size=64)
 
         assert result["ok"] is False
-        leftovers = files_in(tmp_dir)
+        leftovers = files_in(tmp_dir / "staging")
         assert leftovers == [], (
-            f"BUG: 超限拒绝后临时文件未清理,残留 {leftovers} "
-            f"(sync_upload_impl 的 'too large' 分支缺 os.unlink)"
+            f"BUG: 超限拒绝后暂存文件未清理,残留 {leftovers}"
         )
 
     def test_undersize_passes(self, upload_env):
@@ -215,7 +217,7 @@ class TestEmptyFile:
         docs_dir, tmp_dir = upload_env
         f = FakeUploadFile("empty.md", b"", "text/markdown")
         run_impl(docs_dir, tmp_dir, f)
-        assert files_in(tmp_dir) == []
+        assert files_in(tmp_dir / "staging") == []
 
 
 # ============ 4. 魔数校验 ============
@@ -231,7 +233,7 @@ class TestMagicNumber:
 
         assert result["ok"] is False
         assert "magic" in result["error"] or "corrupted" in result["error"]
-        assert files_in(tmp_dir) == [], "魔数拒绝后临时文件必须清理"
+        assert files_in(tmp_dir / "staging") == [], "魔数拒绝后临时文件必须清理"
 
     def test_fake_docx_rejected(self, upload_env):
         """内容不是 PK\\x03\\x04(zip)开头 → 拒。"""
@@ -240,14 +242,16 @@ class TestMagicNumber:
                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is False
-        assert files_in(tmp_dir) == []
+        assert files_in(tmp_dir / "staging") == []
 
     def test_real_pdf_magic_accepted(self, upload_env):
         docs_dir, tmp_dir = upload_env
         f = FakeUploadFile("real.pdf", b"%PDF-1.4\n%fake body", "application/pdf")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is True
-        assert Path(result["filepath"]).read_bytes() == b"%PDF-1.4\n%fake body"
+        # B 阶段：内容落暂存文件，正式路径在发布前不产生
+        assert Path(result["staging_path"]).read_bytes() == b"%PDF-1.4\n%fake body"
+        assert not Path(result["filepath"]).exists()
 
     def test_real_docx_magic_accepted(self, upload_env):
         docs_dir, tmp_dir = upload_env
@@ -263,7 +267,7 @@ class TestMagicNumber:
         f = FakeUploadFile("bin.md", b"\x00\x01\x02\xff\xfe", "text/markdown")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is False, "含 NUL 字节的文本文件应被拒绝"
-        assert files_in(tmp_dir) == [], "拒绝后临时文件必须清理"
+        assert files_in(tmp_dir / "staging") == [], "拒绝后暂存文件必须清理"
         assert not (docs_dir / "kb1" / "general" / "bin.md").exists()
 
     def test_md_normal_utf8_content_passes(self, upload_env):
@@ -320,16 +324,21 @@ class TestSuccessFlow:
         assert result["was_overwrite"] is False
         assert "127.0.0.1" in result["source"]
 
-    def test_atomic_rename_leaves_no_tmp(self, upload_env):
-        """成功后 tmp_dir 必须为空(atomic rename 语义)。"""
+    def test_staging_file_created_final_untouched(self, upload_env):
+        """B 阶段契约：成功上传只产生不可变暂存文件，正式路径在发布前
+        不被触碰（旧实现「上传即覆盖正式文件」是并发竞态根源，已废除）。"""
         docs_dir, tmp_dir = upload_env
         f = FakeUploadFile("clean.md", b"content", "text/markdown")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is True
-        assert files_in(tmp_dir) == [], f"临时文件残留: {files_in(tmp_dir)}"
+        staging = Path(result["staging_path"])
+        assert staging.is_file() and staging.read_bytes() == b"content"
+        assert staging.parent.name == "staging", "暂存文件必须在独立 staging 目录"
+        assert not Path(result["filepath"]).exists(), "正式路径不该在上传阶段产生"
 
     def test_overwrite_detection(self, upload_env):
-        """同名文件已存在 → was_overwrite=True 且内容被覆盖。"""
+        """同名文件已存在 → was_overwrite=True，但旧文件内容不被覆盖
+        （覆盖发生在发布协议的 os.replace，索引成功才发生）。"""
         docs_dir, tmp_dir = upload_env
         target_dir = docs_dir / "kb1" / "general"
         target_dir.mkdir(parents=True)
@@ -340,10 +349,13 @@ class TestSuccessFlow:
 
         assert result["ok"] is True
         assert result["was_overwrite"] is True, "已存在同名文件必须标记 was_overwrite"
-        assert (target_dir / "dup.md").read_bytes() == b"new content"
+        assert (target_dir / "dup.md").read_bytes() == b"old content", (
+            "上传阶段绝不覆盖旧版文件（旧版可读契约）")
+        assert Path(result["staging_path"]).read_bytes() == b"new content"
 
-    def test_overwrite_keeps_old_version_as_bak(self, upload_env):
-        """P2 改进:覆盖前必须备份旧版本到 .bak(索引失败时旧内容可恢复)。"""
+    def test_overwrite_needs_no_bak(self, upload_env):
+        """B 阶段：.bak 机制废除——旧版文件在发布前根本不被触碰，
+        失败自动恢复由「候选不可见、旧版不动」结构性保证。"""
         docs_dir, tmp_dir = upload_env
         target_dir = docs_dir / "kb1" / "general"
         target_dir.mkdir(parents=True)
@@ -353,9 +365,8 @@ class TestSuccessFlow:
         result = run_impl(docs_dir, tmp_dir, f)
 
         assert result["ok"] is True
-        bak = target_dir / "bak.md.bak"
-        assert bak.exists(), "覆盖场景必须生成 .bak 备份"
-        assert bak.read_bytes() == b"precious old content"
+        assert not (target_dir / "bak.md.bak").exists()
+        assert (target_dir / "bak.md").read_bytes() == b"precious old content"
 
     def test_new_upload_creates_no_bak(self, upload_env):
         """首次上传(非覆盖)不应产生 .bak。"""
@@ -380,7 +391,10 @@ class TestSuccessFlow:
         f = FakeUploadFile("chunks.md", data, "text/markdown")
         result = run_impl(docs_dir, tmp_dir, f, chunk_size=16)
         assert result["ok"] is True
-        assert Path(result["filepath"]).read_bytes() == data
+        assert Path(result["staging_path"]).read_bytes() == data
+        # 流式 SHA256 与内容同源
+        import hashlib as _h
+        assert result["file_hash"] == _h.sha256(data).hexdigest()
 
 
 # ============ 8. 流式哈希 sha256_of_file(F4 修复) ============
@@ -545,8 +559,15 @@ def client(monkeypatch):
     async def fake_bg_index(*args, **kwargs):
         captured["bg_called"] = True
 
+    # B 阶段：可信请求在请求路径内派发（幂等 409 语义）——端点行为测试
+    # 用桩替代，避免测试依赖 Redis/PG 幂等基建与真实 broker
+    def fake_dispatch(*args, **kwargs):
+        captured["dispatch_called"] = True
+        return {"queued": True, "celery_task_id": "test-task", "db_task_id": None}
+
     monkeypatch.setattr(ru, "sync_upload_impl", fake_sync_impl)
     monkeypatch.setattr(ru, "_run_index_background", fake_bg_index)
+    monkeypatch.setattr(ru, "_dispatch_index_with_idempotency", fake_dispatch)
 
     app = FastAPI()
     app.include_router(ru.router)

@@ -279,6 +279,9 @@ class IncrementalIndexer:
         processing_lineage_repository: Any = None,
         processing_task_id: str | None = None,
         processing_batch_id: str | None = None,
+        candidate_mode: bool = False,
+        chunk_store: Any = None,
+        bm25_source_vectordb: Any = None,
     ):
         self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
@@ -297,6 +300,20 @@ class IncrementalIndexer:
         self.processing_lineage_repository = processing_lineage_repository
         self.processing_task_id = processing_task_id
         self.processing_batch_id = processing_batch_id
+        # ── 候选版本模式（2026-10-01 B 阶段）──
+        # candidate_mode=True：vectordb/doc_db/bm25_store 为候选代次隔离实例，
+        # registry 只读（parsing 占位与最终 register 都由发布协议承担）；
+        # chunk_store 为缓冲代理；bm25_source_vectordb 为主∪候选拼接视图。
+        self.candidate_mode = candidate_mode
+        self._chunk_store_override = chunk_store
+        self._bm25_source_vectordb = bm25_source_vectordb
+
+    def _cs(self):
+        """chunk_store 访问口：候选模式用注入的缓冲代理，否则进程单例。"""
+        if self._chunk_store_override is not None:
+            return self._chunk_store_override
+        from backend.rag.indexing.chunk_store import get_chunk_store
+        return get_chunk_store()
 
     # ---- 主入口 ----
 
@@ -599,7 +616,8 @@ class IncrementalIndexer:
             logger.debug(f"[Sync] 操作日志记录失败 ({os.path.basename(path)}): {e}")
 
     def _index_file(self, file_path: str, file_hash: str | None = None,
-                    reindex_ctx: dict | None = None):
+                    reindex_ctx: dict | None = None,
+                    identity_path: str | None = None):
         """索引单篇文档: 加载 → 解析 → 清洗 → 去重 → 分块 → 元数据 → embed → 写入。
 
         Args:
@@ -622,10 +640,12 @@ class IncrementalIndexer:
           ├── index_embed（成功静默，失败单独 child span）
           └── index_vector_db（chunks 带完整 metadata 写入）
         """
-        kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(file_path)
+        # identity_path（候选模式）：doc_id/KB/归属等派生与 registry 读取用
+        # 正式路径；真实文件读取（load/parse）仍用 file_path（暂存文件）。
+        path_id = identity_path or file_path
+        kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(path_id)
         file_hash = file_hash or self._sha256(file_path)
-        doc_id = self._derive_doc_id(file_path, file_hash, kb_id)
-
+        doc_id = self._derive_doc_id(path_id, file_hash, kb_id)
         # ── 启动 indexer trace ──
         trace = trace_collector.start(
             question=os.path.basename(file_path),
@@ -674,6 +694,7 @@ class IncrementalIndexer:
                 file_path, kb_id, doc_id, file_hash,
                 reindex_ctx=reindex_ctx,
                 lineage_recorder=lineage_recorder,
+                identity_path=path_id,
             )
             if lineage_recorder is not None:
                 lineage_recorder.finish(
@@ -705,7 +726,7 @@ class IncrementalIndexer:
                                    upload_span.duration_ms, "", "")
             # P2-2:返回 dict 含 trace_id + chunk_count + doc_db_id,
             # 让 reindex_file 直接消费,不再反查 registry
-            return {
+            result = {
                 "trace_id": trace.id,
                 "doc_id": doc_id,  # 本次派生的真实 doc_id(新文件也有值)
                 "chunk_count": inner_result.get("chunk_count", 0),
@@ -719,6 +740,16 @@ class IncrementalIndexer:
                     lineage_snapshot.model_summary if lineage_recorder is not None else []
                 ),
             }
+            if self.candidate_mode and not inner_result.get("skipped"):
+                # 候选模式：发布清单（chunk_ids/registry_metadata）必须透传，
+                # 落库由 publish_candidate 统一提交
+                result.update({
+                    "candidate": True,
+                    "chunk_ids": inner_result.get("chunk_ids") or [],
+                    "doc_type": inner_result.get("doc_type", "general"),
+                    "registry_metadata": inner_result.get("registry_metadata") or {},
+                })
+            return result
         except Exception as e:
             if lineage_recorder is not None:
                 try:
@@ -738,8 +769,12 @@ class IncrementalIndexer:
 
     def _index_file_inner(self, file_path: str, kb_id: str, doc_id: str,
                           file_hash: str, reindex_ctx: dict | None = None,
-                          lineage_recorder: ProcessingRunRecorder | None = None) -> dict:
+                          lineage_recorder: ProcessingRunRecorder | None = None,
+                          identity_path: str | None = None) -> dict:
         """_index_file 的实际工作，被 index_upload span 包裹。
+
+        identity_path（候选模式）：registry 读取/派生/chunk metadata 落值的
+        「正式路径」；load/parse 用 file_path（暂存文件）。缺省 = file_path。
 
         新流程: load → parse → clean → dedup → chunk → metadata → embed → vector_db
         （metadata 移到 embed 之前，标注注入 chunk 后再进向量库）
@@ -752,15 +787,16 @@ class IncrementalIndexer:
             ChunkingEmptyError: 解析或 chunking 产出 0 chunk（P1-4）
         """
         ext = os.path.splitext(file_path)[1].lower()
+        path_id = identity_path or file_path
         # department 必须按文件路径派生，不能用 self.department：批量 sync 时
         # indexer 是单实例跨多部门构建的，self.department 只是构造默认值。
-        department = self._derive_department(file_path)
+        department = self._derive_department(path_id)
         # §4 权限范围（2026-09-17）：文档访问所需权限从 registry 行读（上传/
         # 入库脚本在 register 时写入），缺省 general 开放。不用实例级值，
         # 理由同 department。
         # 兼容旧测试与轻量 mock：registry 正常返回 Mapping；非 Mapping
         # 返回值不能参与字段读取，否则 MagicMock 会被误识别成 fixture_set。
-        raw_doc_row = self.registry.get_by_path(file_path)
+        raw_doc_row = self.registry.get_by_path(path_id)
         doc_row = raw_doc_row if isinstance(raw_doc_row, Mapping) else {}
         fixture_set = str(doc_row.get("fixture_set") or self.fixture_set or "") or None
         if fixture_set not in (None, *_EVAL_FIXTURE_SETS):
@@ -995,14 +1031,17 @@ class IncrementalIndexer:
         # 否则"跳过重建 + 先写后删清理旧向量"叠加会凭空丢文档。
         # 已有行（重索引场景）只改状态、保留 chunk_ids 等历史元数据；
         # 成功后 register() 覆盖为 active。软失败不影响索引。
-        try:
-            self.registry.register_in_progress(
-                file_path, doc_id=doc_id, file_hash=file_hash,
-                kb_id=kb_id, department=department,
-            )
-        except Exception as e:
-            logger.debug(f"[Indexer] parsing 占位行写入失败（不影响索引）: {e}")
-        dup_check = self.registry.get_by_path(file_path)
+        # 候选模式跳过：registry 不在候选期被触碰（发布协议统一落库），
+        # 旧 active 行的原地降级正是 B 阶段要消灭的行为。
+        if not self.candidate_mode:
+            try:
+                self.registry.register_in_progress(
+                    path_id, doc_id=doc_id, file_hash=file_hash,
+                    kb_id=kb_id, department=department,
+                )
+            except Exception as e:
+                logger.debug(f"[Indexer] parsing 占位行写入失败（不影响索引）: {e}")
+        dup_check = self.registry.get_by_path(path_id)
         if dup_check and dup_check.get("file_hash") == file_hash and dup_check.get("status") == "active":
             trace_collector.end_span(dedup_span,
                 metrics={"cached": True, "existing_doc_id": dup_check.get("doc_id", "")})
@@ -1041,8 +1080,10 @@ class IncrementalIndexer:
             for i, ch in enumerate(chunks):
                 ch.metadata["doc_id"] = doc_id
                 ch.metadata["chunk_index"] = i
-                ch.metadata["source_file"] = os.path.basename(file_path)
-                ch.metadata["file_path"] = file_path
+                # 候选模式：source_file/file_path 落正式路径（检索引用与
+                # BM25 身份都以正式文档为准，绝不暴露暂存文件名）
+                ch.metadata["source_file"] = os.path.basename(path_id)
+                ch.metadata["file_path"] = path_id
 
             from backend.rag.preprocessing.filter import ChunkFilter
             chunk_filter = ChunkFilter()
@@ -1485,9 +1526,9 @@ class IncrementalIndexer:
             logger.info(f"[Chunk] Qwen 完成：{chunk_llm_count}/{len(chunks)} chunks 成功，模型={chunk_llm_model}")
 
         # ── 写入 chunk 文本到 SQLite（供 trace 详情页查看完整 chunk 内容）──
+        # 候选模式走缓冲代理（正式表在发布时翻新）
         try:
-            from backend.rag.indexing.chunk_store import get_chunk_store
-            cs = get_chunk_store()
+            cs = self._cs()
             cs.delete_by_doc_id(doc_id)  # reindex 时先清旧数据
             cs.insert_batch(doc_id, [
                 {"chunk_index": i, "content": ch.page_content,
@@ -1539,8 +1580,7 @@ class IncrementalIndexer:
         except Exception as e:
             logger.error(f"Doc 级写入失败: {e}")
             try:
-                from backend.rag.indexing.chunk_store import get_chunk_store
-                get_chunk_store().delete_by_doc_id(doc_id)
+                self._cs().delete_by_doc_id(doc_id)
             except Exception as cleanup_error:
                 logger.warning(f"Doc 级失败后清理 chunk_store 失败: {cleanup_error}")
             raise
@@ -1715,8 +1755,11 @@ class IncrementalIndexer:
                         str(item)
                         for item in (reindex_ctx or {}).get("old_chunk_ids", [])
                     )
+                    # 语料源：候选模式 = 主∪候选拼接视图（canonical 语义不变，
+                    # 且已按 exclude_ids 排除旧版 chunk）；常规 = 本 store。
+                    bm25_source = self._bm25_source_vectordb or self.vectordb
                     rebuild(
-                        self.vectordb,
+                        bm25_source,
                         exclude_ids=old_chunk_ids,
                         k=BM25_CANDIDATE_K,
                     )
@@ -1787,47 +1830,60 @@ class IncrementalIndexer:
                 "model_count": len(lineage_snapshot.model_summary),
                 "processing_status": "active",
             }
+        registry_meta = {
+            "doc_type": doc_meta.get("doc_type", "general"),
+            "confidence": doc_meta.get("confidence", 0),
+            "llm_used": doc_meta.get("llm_used", False),
+            "quality_score": doc_meta.get("quality_score", 0),
+            "quality_issues": doc_meta.get("quality_issues", ""),
+            "embedding_model": doc_meta.get("embedding_model", ""),
+            "minhash_sig": doc_meta.get("minhash_sig", ""),
+            "near_dup_id": doc_meta.get("near_dup_id", ""),
+            "summary": doc_meta.get("summary", ""),
+            "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
+            "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
+            "business_domain": doc_meta.get("business_domain", ""),
+            "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
+            "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
+            "doc_version": doc_meta.get("doc_version", 1),
+            "kb_version": doc_meta.get("kb_version", "v1"),
+            "department": doc_meta.get("department", "") or department,
+            # §4 权限范围：沿用 registry 行声明值（doc_meta 已带），
+            # 否则最终 upsert 会把入库脚本预注册的受限标记冲回 general
+            "permission_scope": doc_meta.get("permission_scope", "general"),
+            # §6 版本治理（R4）：沿用 registry 行声明值，防止最终
+            # upsert 把入库脚本预注册的版本窗口冲掉
+            "version_id": doc_meta.get("version_id", ""),
+            "effective_from": doc_meta.get("effective_from") or None,
+            "effective_to": doc_meta.get("effective_to") or None,
+            "supersedes_version_id": doc_meta.get("supersedes_version_id", ""),
+            "source_priority": doc_meta.get("source_priority", 0),
+            "quality_status": doc_meta.get("quality_status", "unknown"),
+            "fixture_set": fixture_set_val or "",
+            "dataset": doc_meta.get("dataset", ""),
+            **lineage_registry_meta,
+        }
+        if self.candidate_mode:
+            # 候选模式：registry 落库交给发布协议（CAS 提交点），这里只回传
+            # 发布所需的完整产物清单。
+            return {
+                "chunk_count": len(chunk_ids),
+                "doc_db_id": doc_db_id,
+                "file_hash": file_hash,
+                "candidate": True,
+                "chunk_ids": chunk_ids,
+                "doc_type": doc_meta.get("doc_type", "general"),
+                "registry_metadata": registry_meta,
+            }
         try:
             self.registry.register(
-                file_path=file_path,
+                file_path=path_id,
                 doc_id=doc_id,
                 file_hash=file_hash,
                 kb_id=kb_id,
                 chunk_ids=chunk_ids,
                 doc_db_id=doc_db_id,
-                metadata={
-                    "doc_type": doc_meta.get("doc_type", "general"),
-                    "confidence": doc_meta.get("confidence", 0),
-                    "llm_used": doc_meta.get("llm_used", False),
-                    "quality_score": doc_meta.get("quality_score", 0),
-                    "quality_issues": doc_meta.get("quality_issues", ""),
-                    "embedding_model": doc_meta.get("embedding_model", ""),
-                    "minhash_sig": doc_meta.get("minhash_sig", ""),
-                    "near_dup_id": doc_meta.get("near_dup_id", ""),
-                    "summary": doc_meta.get("summary", ""),
-                    "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
-                    "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
-                    "business_domain": doc_meta.get("business_domain", ""),
-                    "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
-                    "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
-                    "doc_version": doc_meta.get("doc_version", 1),
-                    "kb_version": doc_meta.get("kb_version", "v1"),
-                    "department": doc_meta.get("department", ""),
-                    # §4 权限范围：沿用 registry 行声明值（doc_meta 已带），
-                    # 否则最终 upsert 会把入库脚本预注册的受限标记冲回 general
-                    "permission_scope": doc_meta.get("permission_scope", "general"),
-                    # §6 版本治理（R4）：沿用 registry 行声明值，防止最终
-                    # upsert 把入库脚本预注册的版本窗口冲掉
-                    "version_id": doc_meta.get("version_id", ""),
-                    "effective_from": doc_meta.get("effective_from") or None,
-                    "effective_to": doc_meta.get("effective_to") or None,
-                    "supersedes_version_id": doc_meta.get("supersedes_version_id", ""),
-                    "source_priority": doc_meta.get("source_priority", 0),
-                    "quality_status": doc_meta.get("quality_status", "unknown"),
-                    "fixture_set": fixture_set_val or "",
-                    "dataset": doc_meta.get("dataset", ""),
-                    **lineage_registry_meta,
-                },
+                metadata=registry_meta,
             )
         except Exception:
             # F4: registry 阶段失败同样精确清理——此向量/BM25 新数据已写入，
@@ -1911,6 +1967,20 @@ class IncrementalIndexer:
             parent_span_id=parent_span_id, chunks_text=chunks_text)
 
     # ---- 公开重索引 ----
+
+    def index_candidate(self, source_path: str, identity_path: str,
+                        file_hash: str) -> dict:
+        """候选模式单文件索引（B 阶段发布协议的配套入口）。
+
+        source_path：不可变暂存文件（实际读取）；identity_path：正式路径
+        （doc_id/归属/registry 行/metadata 落值）。返回含 chunk_ids 与
+        registry_metadata 的完整发布清单；registry/正式向量/正式 BM25 均
+        不被触碰——落库由 publish_candidate 统一提交。
+        """
+        if not self.candidate_mode:
+            raise RuntimeError("index_candidate 只能在 candidate_mode=True 的实例上调用")
+        return self._index_file(source_path, file_hash=file_hash,
+                                identity_path=identity_path)
 
     def reindex_file(self, file_path: str, file_hash: str | None = None) -> dict:
         """公开的单文件重索引 — 删除旧向量后重新加载/分块/Embedding/写入。
@@ -2114,6 +2184,12 @@ class IncrementalIndexer:
         """
         if not doc_id:
             return
+        if self.candidate_mode:
+            # 候选模式的失败清理在候选层整体进行（drop 候选 collection +
+            # staging 目录，见 publish.cleanup_candidate），数据全部在隔离
+            # collection 里，无需逐 id 精确删。
+            logger.info("[Indexer] 候选模式失败：向量/BM25 属候选代次，由候选层统一清理")
+            return
         if not reindex_ctx:
             self._remove_document(doc_id, file_path=file_path)
             return
@@ -2169,8 +2245,7 @@ class IncrementalIndexer:
         except Exception as e:
             logger.warning(f"删除 doc 向量失败 (doc_id={doc_id}): {e}")
         try:
-            from backend.rag.indexing.chunk_store import get_chunk_store
-            get_chunk_store().delete_by_doc_id(doc_id)
+            self._cs().delete_by_doc_id(doc_id)
         except Exception as e:
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
         if self.bm25_store is not None:

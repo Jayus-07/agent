@@ -65,6 +65,9 @@ _SINGLETON_RESETS = (
     ("backend.observability.llm_usage_store", "_llm_usage_store"),
     ("backend.rag.indexing.chunk_store", "_store"),
     ("backend.rag.preprocessing.keyword_store", "_store"),
+    # RAG 候选发布运行记录仓储（2026-10-01 B 阶段）：表名随 pgtest 前缀切换，
+    # 缓存实例必须随测试重置（否则引用上一测试已被 DROP 的表）
+    ("backend.rag.indexing.index_run_store_pg", "_run_stores"),
 )
 
 

@@ -40,7 +40,8 @@ def _index_failure_exit(exc: BaseException, *, emit_fn, upload_id: str,
                         filepath: str, filename: str, kb_id: str,
                         department: str, source: str, batch_id: str | None,
                         upload_elapsed_ms: int | None, was_overwrite: bool,
-                        db_task_id: str | None, retries: int) -> None:
+                        db_task_id: str | None, retries: int,
+                        staging_path: str = "") -> None:
     """索引统一失败出口：分类 → 等待重试事件 或 registry 终态收口。
 
     - retryable 且 budget 未耗尽：只发 uploading 进度（不发终态），抛
@@ -66,11 +67,12 @@ def _index_failure_exit(exc: BaseException, *, emit_fn, upload_id: str,
             exc, error_type=decision.error_type, retryable=True,
             delay=delay, retry_count=retries, max_retries=CELERY_MAX_RETRIES)
 
-    # 终态：registry failed / 清理源文件 / 终态 error 事件
+    # 终态：运行记录 failed / 清理暂存 / 终态 error 事件（发布段失败除外，
+    # 正式数据不动——见 _settle_index_result 的 publishing 守卫）
     _settle_index_result(
         upload_id, filepath, filename, source, batch_id, kb_id,
         upload_elapsed_ms, was_overwrite, 0.0,
-        result=None, emit_fn=emit_fn, exc=exc)
+        result=None, emit_fn=emit_fn, exc=exc, staging_path=staging_path)
     if db_task_id:
         from backend.models.task import TaskStatus
         from backend.services import task_service
@@ -102,6 +104,9 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
                             upload_elapsed_ms: int | None = None,
                             was_overwrite: bool = False,
                             db_task_id: str | None = None,
+                            staging_path: str = "",
+                            generation: str = "",
+                            file_hash: str = "",
                             retries: int = 0) -> dict:
     """索引执行主体（Celery task 与 eager 测试共用的纯函数）。
 
@@ -129,14 +134,16 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     def run_index() -> dict:
         # main_loop 传 None：Worker 进程无 asyncio 主循环，
         # _do_index_sync 的 sync_emit 在队列不存在时只写 Redis，不碰 loop。
-        # 成功 settle 留在节点内：run_with_task_state 的节点边界
-        # pause/cancel 检查在 settle 之后，保证 registry 不悬"indexing"。
+        # B 阶段候选模式：Worker 只读不可变暂存文件，发布协议统一提交。
         result = _do_index_sync(upload_id, filepath, filename, None,
-                                kb_id, department, batch_id=batch_id) or {}
+                                kb_id, department, batch_id=batch_id,
+                                staging_path=staging_path,
+                                generation=generation,
+                                file_hash=file_hash) or {}
         _settle_index_result(
             upload_id, filepath, filename, source, batch_id, kb_id,
             upload_elapsed_ms, was_overwrite, t0,
-            result=result, emit_fn=emit_fn)
+            result=result, emit_fn=emit_fn, staging_path=staging_path)
         return result
 
     # Phase1 Step8：TaskState 包装（租约/状态落库/节点边界 pause-cancel，
@@ -161,7 +168,8 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
             filename=filename, kb_id=kb_id, department=department,
             source=source, batch_id=batch_id,
             upload_elapsed_ms=upload_elapsed_ms, was_overwrite=was_overwrite,
-            db_task_id=db_task_id, retries=retries)
+            db_task_id=db_task_id, retries=retries,
+            staging_path=staging_path)
         raise  # 仅终态路径可达：re-raise 原始异常
 
     if (result or {}).get("skipped"):
@@ -191,7 +199,10 @@ def _register_task():
                            batch_id: str | None = None,
                            upload_elapsed_ms: int | None = None,
                            was_overwrite: bool = False,
-                           db_task_id: str | None = None) -> dict:
+                           db_task_id: str | None = None,
+                           staging_path: str = "",
+                           generation: str = "",
+                           file_hash: str = "") -> dict:
         from backend.tasks.retry_policy import TaskRetryScheduled
 
         try:
@@ -201,6 +212,8 @@ def _register_task():
                 upload_elapsed_ms=upload_elapsed_ms,
                 was_overwrite=was_overwrite,
                 db_task_id=db_task_id,
+                staging_path=staging_path, generation=generation,
+                file_hash=file_hash,
                 retries=self.request.retries)
         except AdmissionDeferred as deferred:
             # Phase2 Step4：admission 满载延迟准入——apply_async 新消息
@@ -220,7 +233,9 @@ def _register_task():
                     filename=filename, kb_id=kb_id, department=department,
                     source=source, batch_id=batch_id,
                     upload_elapsed_ms=upload_elapsed_ms,
-                    was_overwrite=was_overwrite, db_task_id=db_task_id),
+                    was_overwrite=was_overwrite, db_task_id=db_task_id,
+                    staging_path=staging_path, generation=generation,
+                    file_hash=file_hash),
                 queue=route.physical_queue,
                 countdown=deferred.delay_seconds)
             return {"status": "ADMISSION_DEFERRED", "skipped": True}

@@ -701,8 +701,60 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             )
             return len(cur.fetchall())
 
+    def promote_collection(self, source_collection: str) -> int:
+        """候选 collection → 主 collection 的发布晋级（单语句原子）。
+
+        只改 collection 列，不改 id：id 内嵌 generation（见
+        candidate_collection_name），同文档多代次行互不冲突，旧行由发布
+        协议显式清理——「先写后删」窗口内新旧行共存于主 collection，
+        都属于已发布内容，无候选泄漏。
+        """
+        if source_collection == self._collection:
+            return 0
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE {self._table} SET collection = %s "
+                f"WHERE collection = %s RETURNING id",
+                (self._collection, source_collection),
+            )
+            return len(cur.fetchall())
+
+    def clone_for_candidate(self, generation: str) -> "PgVectorKnowledgeStore":
+        """候选代次实例（B 阶段）：同表、generation 专属 collection。
+
+        发布 = 主 store.promote_collection(候选名)。连接池/DDL 进程级共享，
+        构造成本可忽略。
+        """
+        return PgVectorKnowledgeStore(
+            persist_directory=f"{self.persist_directory}::cand:{generation}",
+            embedding_function=self.embedding_function,
+        )
+
+    def drop_collection(self, collection: str) -> int:
+        """整 collection 删除（候选失败清理用；主 collection 禁删自身）。"""
+        if collection == self._collection:
+            raise ValueError("拒绝用 drop_collection 删除主 collection")
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM {self._table} WHERE collection = %s RETURNING id",
+                (collection,),
+            )
+            return len(cur.fetchall())
+
 
 def _collection_name_from_path(persist_directory: str | Path) -> str:
     """路径 → collection 名（basename）。保持与既有 Chroma 实例目录一一对应。"""
     name = Path(str(persist_directory)).name
     return name or "default"
+
+
+def candidate_collection_name(base_persist_directory: str | Path, generation: str) -> str:
+    """候选代次 collection 名（唯一 id 前缀：{base}::cand:{generation}）。
+
+    候选向量写入独立 collection → 检索/人名索引/BM25 canonical 拉取都只看
+    主 collection，候选在发布前天然不可见；id 内嵌 generation 保证同文档
+    多代次向量行互不覆盖（发布 = UPDATE collection 列整体晋级，不改 id）。
+    """
+    return f"{_collection_name_from_path(base_persist_directory)}::cand:{generation}"

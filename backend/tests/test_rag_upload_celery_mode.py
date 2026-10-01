@@ -19,6 +19,8 @@ def _mk_queue_ctx(monkeypatch):
     upload_id = "u-test-1"
     q = asyncio.Queue()
     monkeypatch.setitem(ru._progress_queues, upload_id, q)
+    # SSE 归属绑定：上传者 = X-User-Id 7 / test-tenant（与 _FakeSSERequest 一致）
+    monkeypatch.setitem(ru._progress_owners, upload_id, ("test-tenant", "7"))
     # 路由标记集合按测试隔离（_run_index_background 入队成功会写入）
     monkeypatch.setattr(ru, "_celery_routed", set())
     events = []
@@ -30,6 +32,20 @@ def _mk_queue_ctx(monkeypatch):
 
     monkeypatch.setattr(ru, "_write_progress_redis", fake_redis_write)
     return upload_id, q, events, redis_writes
+
+
+class _FakeSSERequest:
+    """SSE 归属校验用的最小 Request 替身（网关注入头形态）。"""
+    def __init__(self, upload_id):
+        self.headers = {
+            "X-Auth-Type": "jwt", "X-User-Id": "7",
+            "X-Tenant-Id": "test-tenant",
+        }
+        self.client = None
+
+
+def _fake_request(upload_id):
+    return _FakeSSERequest(upload_id)
 
 
 # ═══════════════════════════════════════════════════
@@ -54,7 +70,8 @@ class TestSettleIndexResult:
 
         assert emitted[0][0] == "duplicate"
         assert emitted[0][2]["doc"]["doc_id"] == "d1"
-        assert bak_removed == ["/docs/f.docx"]
+        # B 阶段：.bak 机制废除（发布协议原子替换，失败不触碰正式文件）
+        assert bak_removed == []
         op_log.assert_called_once()
         assert op_log.call_args.kwargs["result"] == "duplicate"
 
@@ -112,13 +129,15 @@ class TestSettleIndexResult:
             upload_id, "/docs/x.pdf", "x.pdf", "web", None, "kb1",
             None, False, 1000.0, result=None,
             emit_fn=lambda s, m="", **ex: emitted.append((s, m, ex)),
-            exc=RuntimeError("boom"))
+            exc=RuntimeError("boom"),
+            staging_path="/tmp/staging/u1.g1.pdf")
 
         assert emitted[0][0] == "error"
         assert emitted[0][1] == "服务器内部错误，请稍后重试。"
         assert emitted[0][2]["error_protocol"]["code"] == "INTERNAL_ERROR"
         assert "boom" not in str(emitted[0])
-        assert cleaned == ["/docs/x.pdf"]
+        # B 阶段：失败清理只删暂存文件，正式路径（/docs/x.pdf）绝不被触碰
+        assert cleaned == ["/tmp/staging/u1.g1.pdf"]
 
     def test_done_terminal_invalidates_cache(self, monkeypatch):
         upload_id, _q, _ev, _rw = _mk_queue_ctx(monkeypatch)
@@ -273,6 +292,10 @@ class TestRunIndexBackgroundDispatch:
         fake_task = MagicMock()
         fake_task.apply_async = apply_async
         monkeypatch.setattr(it, "execute_index_task", fake_task)
+        # 不可信路径（无 tenant/actor 且 generation 空）派发前不落运行记录
+        monkeypatch.setattr(
+            "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+            MagicMock())
         # 若真的跑了进程内索引即为 bug
         monkeypatch.setattr(ru, "_do_index_sync",
                             lambda *a, **kw: (_ for _ in ()).throw(AssertionError("不应执行")))
@@ -354,11 +377,14 @@ class TestSSEChannelRouting:
         """已入队 Celery 的 upload → SSE 端点直接走 Redis 轮询通道。"""
         monkeypatch.setattr(ru, "_celery_routed", {"u-marked"})
         monkeypatch.setattr(ru, "_progress_queues", {})
+        monkeypatch.setattr(ru, "_progress_owners",
+                            {"u-marked": ("test-tenant", "7")})
         called = {}
         monkeypatch.setattr(ru, "_redis_poll_stream_response",
                             lambda uid, last_sig=None: called.setdefault("uid", uid))
 
-        resp = await ru.stream_upload_progress("u-marked")
+        resp = await ru.stream_upload_progress(
+            "u-marked", _fake_request("u-marked"))
 
         assert called["uid"] == "u-marked", "命中标记必须走 Redis 轮询通道"
 
@@ -370,6 +396,8 @@ class TestSSEChannelRouting:
         q = asyncio.Queue()
         monkeypatch.setattr(ru, "_celery_routed", set())
         monkeypatch.setattr(ru, "_progress_queues", {upload_id: q})
+        monkeypatch.setattr(ru, "_progress_owners",
+                            {upload_id: ("test-tenant", "7")})
 
         # 前置事件先入队（入队 Celery 前的本地事件）
         await q.put({"stage": "uploading", "message": "已保存"})
@@ -390,7 +418,8 @@ class TestSSEChannelRouting:
         monkeypatch.setattr(ru, "_redis_poll_events", fake_poll_events)
 
         chunks = []
-        resp = await ru.stream_upload_progress(upload_id)
+        resp = await ru.stream_upload_progress(
+            upload_id, _fake_request(upload_id))
         async for chunk in resp.body_iterator:
             chunks.append(chunk)
 

@@ -26,8 +26,10 @@ from backend.config import BM25_CANDIDATE_K
 from backend.config import BM25_INDEX_DIR
 from backend.shared.logger import logger
 
-# 索引格式版本：分词器等影响倒排统计的变更需递增，load 时版本不符自动重建
-BM25_META_VERSION = 2
+# 索引格式版本：分词器等影响倒排统计的变更需递增，load 时版本不符自动重建。
+# v3（2026-10-01 C 阶段）：条目身份收口为 doc_id+vector_id，废除 basename
+# 兜底匹配（跨 KB 同名文件互删的根源）——版本不符触发一次 canonical 重建。
+BM25_META_VERSION = 3
 
 # 同一进程内的读写互斥。跨进程读取使用单文件 bundle，避免看到
 # corpus.pkl 与 docs.pkl 来自不同一代索引的中间状态。
@@ -53,36 +55,44 @@ def _doc_matches(
     doc_id_set: set[str],
     file_basenames: set[str],
 ) -> bool:
-    """判断 Document 是否匹配给定的 doc_id 集合或文件名集合。
+    """判断 Document 是否属于给定文档集合（C 阶段收口）。
 
-    双键匹配（doc_id + source_file/file_path basename），用于 remove/replace 操作。
+    身份 = doc_id（vector_id 为补充精确键）。**basename 匹配已废除**：
+    source_file 只有 basename，不同 KB 的同名文件在 BM25 里完全同形，
+    按 basename 删旧条目会跨库误伤（A 库删 a.pdf 连带 B 库同名 a.pdf 的
+    chunks 从索引消失）。file_basenames 参数保留兼容旧签名，仅记录日志。
     """
     meta = doc.metadata or {}
     if meta.get("doc_id") in doc_id_set:
         return True
     if file_basenames:
-        src = meta.get("source_file", "")
-        fp = meta.get("file_path", "")
-        if os.path.basename(src) in file_basenames or os.path.basename(fp) in file_basenames:
-            return True
+        logger.warning(
+            "[BM25Store] basename 匹配已废除（跨 KB 同名误伤），本次调用忽略: %s",
+            sorted(file_basenames)[:3])
     return False
 
 
-def source_files_out_of_sync(indexed_docs: list, current_docs: list) -> bool:
-    """判断 BM25 索引文档集合与当前文档集合是否一致。
+def doc_id_counts(docs: list) -> dict[str, int]:
+    """文档列表 → {doc_id: chunk_count}（一致性对账的单一口径）。
 
-    比较 {source_file: chunk_count} 字典：文件集合不一致或同一文件的 chunk 数量
-    不一致都判为需重建（后者检测文档修改后旧 chunk 残留导致的计数漂移）。
+    取代旧 {basename: count}：跨 KB 同名文件的计数在 basename 口径下
+    被合并，既可能假报漂移也可能掩盖漂移。
     """
-    indexed: dict[str, int] = {}
-    for d in indexed_docs:
-        sf = d.metadata.get("source_file", "")
-        indexed[sf] = indexed.get(sf, 0) + 1
-    current: dict[str, int] = {}
-    for d in current_docs:
-        sf = d.metadata.get("source_file", "")
-        current[sf] = current.get(sf, 0) + 1
-    return indexed != current
+    counts: dict[str, int] = {}
+    for d in docs:
+        doc_id = str((d.metadata or {}).get("doc_id") or "")
+        counts[doc_id] = counts.get(doc_id, 0) + 1
+    return counts
+
+
+def source_files_out_of_sync(indexed_docs: list, current_docs: list) -> bool:
+    """判断 BM25 索引文档集合与当前文档集合是否一致（doc_id 计数口径）。
+
+    C 阶段收口：旧实现按 {basename: chunk_count} 对账——跨 KB 同名文件
+    计数被合并，假报/掩盖漂移皆有。现按 {doc_id: chunk_count}（见
+    doc_id_counts），身份与 BM25 条目本体一致。
+    """
+    return doc_id_counts(indexed_docs) != doc_id_counts(current_docs)
 
 
 def compute_content_hash(docs: list) -> str:
@@ -207,6 +217,8 @@ class BM25Store:
             self._write_atomic(self._docs_path, docs_data)
             self._write_atomic_checksum(self._docs_path, docs_data)
             self._write_meta_dict(meta)
+        # 指针最后写：读到新指针就能读到完整新快照（重建也是发布）
+        self.write_published_pointer(str((metadata or {}).get("generation") or ""), meta)
 
         if not docs:
             logger.info("[BM25Store] 空文档列表，已发布空索引")
@@ -523,6 +535,57 @@ class BM25Store:
             if isinstance(bundle, dict) and isinstance(bundle.get("meta"), dict):
                 return dict(bundle["meta"])
         return self._read_meta()
+
+    def write_published_pointer(self, generation: str, meta: dict | None = None) -> None:
+        """写发布指针（PUBLISHED.json，全部产物落定后最后写）。
+
+        读侧每请求热刷新检查的廉价入口（见 published_generation）。
+        build（重建发布）与发布切换（switch_bm25_snapshot）统一走本方法，
+        保证任何产物落定路径都同步推进代次指针。
+        """
+        import json as _json
+        import tempfile as _tempfile
+
+        meta = meta if meta is not None else self.get_metadata()
+        pointer = {
+            "generation": generation,
+            "built_at": meta.get("built_at", ""),
+            "doc_count": meta.get("doc_count", 0),
+            "content_hash": meta.get("content_hash", ""),
+            "vector_set_hash": meta.get("vector_set_hash", ""),
+        }
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = _tempfile.mkstemp(prefix=".PUBLISHED.", suffix=".tmp",
+                                    dir=str(self.index_dir))
+        os.close(fd)
+        tmp_path = Path(tmp)
+        try:
+            with open(tmp_path, "wb") as f:
+                f.write(_json.dumps(pointer, ensure_ascii=False, indent=2).encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.index_dir / "PUBLISHED.json")
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    def published_generation(self) -> str:
+        """已发布代次（读 PUBLISHED 指针，C 阶段每请求热刷新检查入口）。
+
+        廉价路径 = 读指针 JSON（几十字节）；无指针回退 meta.json 的
+        generation 字段；都没有返回 ""。**绝不在此加载 pickle**——
+        本方法在每次检索前调用，必须保持 O(1)。
+        """
+        try:
+            pointer = self.index_dir / "PUBLISHED.json"
+            if pointer.exists():
+                import json as _json
+                with open(pointer, "r", encoding="utf-8") as f:
+                    return str(_json.load(f).get("generation") or "")
+            meta = self._read_meta()
+            return str(meta.get("generation") or "")
+        except Exception:  # noqa: BLE001 — 指针读失败按「未知代次」处理
+            return ""
 
     # ── 内部方法 ──────────────────────────────────────
 

@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     model_count INTEGER DEFAULT 0,
     processing_status TEXT DEFAULT '',
     processing_finished_at TEXT,
+    active_generation TEXT DEFAULT '',
     expire_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_{table}_doc_id ON {table}(doc_id);
@@ -93,23 +94,9 @@ CREATE INDEX IF NOT EXISTS idx_{table}_kb_id ON {table}(kb_id);
 CREATE INDEX IF NOT EXISTS idx_{table}_status ON {table}(status);
 """
 
-# register() 的 upsert 列集合（与 SQLite 版 INSERT OR REPLACE 列一致；
-# last_indexed/updated_at 不走参数位，由 _NOW_SQL 生成）
-_REGISTER_VALUE_COLS = (
-    "file_path", "file_name", "kb_id", "doc_id", "file_hash", "file_size", "file_mtime",
-    "chunk_count", "chunk_ids", "doc_db_id", "doc_type", "confidence", "llm_used",
-    "quality_score", "quality_issues", "embedding_model", "minhash_sig", "near_dup_id",
-    "summary", "keywords", "time_refs", "business_domain", "complexity",
-    "metadata_fingerprint", "doc_version", "kb_version", "department",
-    "permission_scope",
-    "fixture_set",
-    "version_id", "effective_from", "effective_to", "supersedes_version_id",
-    "source_priority", "quality_status",
-    "last_processing_run_id", "pipeline_version", "metadata_route",
-    "ocr_used", "ocr_model", "metadata_model", "model_count", "processing_status",
-    "processing_finished_at",
-    "status",
-)
+# register() 的 upsert 列集合收敛为 _build_register_row() 的行 dict
+# （2026-10-01 B 阶段：register 与 register_published 共用行构造，防两套
+# 列清单漂移；last_indexed/updated_at 不走参数位，由 _NOW_SQL 生成）
 
 
 class PostgresDocumentRegistry(DocumentRegistry):
@@ -207,6 +194,11 @@ class PostgresDocumentRegistry(DocumentRegistry):
                     f"ALTER TABLE {self._table} ADD COLUMN {col} {coldef}"
                 )
                 logger.info(f"[doc_registry_pg] 迁移：补列 {col}（处理血缘）")
+        if "active_generation" not in existing:
+            conn.cursor().execute(
+                f"ALTER TABLE {self._table} ADD COLUMN active_generation TEXT DEFAULT ''"
+            )
+            logger.info("[doc_registry_pg] 迁移：补列 active_generation（候选版本发布指针，B 阶段）")
 
     # ---- 查询 ----
 
@@ -466,7 +458,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
 
     # ---- 写入 ----
 
-    def register(
+    def _build_register_row(
         self,
         file_path: str,
         doc_id: str,
@@ -475,7 +467,8 @@ class PostgresDocumentRegistry(DocumentRegistry):
         chunk_ids: list[str],
         doc_db_id: str,
         metadata: dict | None = None,
-    ):
+    ) -> dict[str, Any]:
+        """register/register_published 共用的行构造（列→值，含 status 判定）。"""
         file_name = os.path.basename(file_path)
         try:
             stat = os.stat(file_path)
@@ -484,6 +477,10 @@ class PostgresDocumentRegistry(DocumentRegistry):
             fsize, fmtime = 0, 0.0
 
         meta = metadata or {}
+        # 候选发布：注册时正式文件可能尚未就位（发布协议先 CAS 后 replace），
+        # 调用方经 metadata 透传暂存文件实测的 size/mtime（发布即真实值）
+        fsize = int(meta.get("_file_size") or fsize or 0)
+        fmtime = float(meta.get("_file_mtime") or fmtime or 0.0)
         doc_type = meta.get("doc_type", "general")
         confidence = meta.get("confidence", 0)
         llm_used = 1 if meta.get("llm_used") else 0
@@ -521,39 +518,99 @@ class PostgresDocumentRegistry(DocumentRegistry):
         processing_finished_at = meta.get("processing_finished_at") or None
 
         status = "pending_review" if near_dup_id else "active"
+        return {
+            "file_path": file_path, "file_name": file_name, "kb_id": kb_id,
+            "doc_id": doc_id, "file_hash": file_hash, "file_size": fsize,
+            "file_mtime": fmtime, "chunk_count": len(chunk_ids),
+            "chunk_ids": psycopg2.extras.Json(chunk_ids), "doc_db_id": doc_db_id,
+            "doc_type": doc_type, "confidence": confidence, "llm_used": llm_used,
+            "quality_score": quality_score, "quality_issues": quality_issues,
+            "embedding_model": embedding_model, "minhash_sig": minhash_sig,
+            "near_dup_id": near_dup_id, "summary": summary, "keywords": keywords,
+            "time_refs": time_refs, "business_domain": business_domain,
+            "complexity": complexity, "metadata_fingerprint": metadata_fingerprint,
+            "doc_version": doc_version, "kb_version": kb_version,
+            "department": department, "permission_scope": permission_scope,
+            "fixture_set": fixture_set, "version_id": version_id,
+            "effective_from": effective_from, "effective_to": effective_to,
+            "supersedes_version_id": supersedes_version_id,
+            "source_priority": source_priority, "quality_status": quality_status,
+            "last_processing_run_id": last_processing_run_id,
+            "pipeline_version": pipeline_version, "metadata_route": metadata_route,
+            "ocr_used": ocr_used, "ocr_model": ocr_model,
+            "metadata_model": metadata_model, "model_count": model_count,
+            "processing_status": processing_status,
+            "processing_finished_at": processing_finished_at,
+            "status": status,
+        }
 
-        values = (
-            file_path, file_name, kb_id, doc_id, file_hash,
-            fsize, fmtime,
-            len(chunk_ids), psycopg2.extras.Json(chunk_ids), doc_db_id,
-            doc_type, confidence, llm_used,
-            quality_score, quality_issues, embedding_model,
-            minhash_sig, near_dup_id,
-            summary, keywords, time_refs, business_domain, complexity,
-            metadata_fingerprint, doc_version, kb_version, department,
-            permission_scope,
-            fixture_set,
-            version_id, effective_from, effective_to, supersedes_version_id,
-            source_priority, quality_status,
-            last_processing_run_id, pipeline_version, metadata_route,
-            ocr_used, ocr_model, metadata_model, model_count, processing_status,
-            processing_finished_at,
-            status,
+    @staticmethod
+    def _upsert_sql(table: str, row: dict[str, Any], guard: str = "") -> tuple[str, tuple]:
+        """行 dict → 条件 upsert SQL。guard 非空时在 DO UPDATE 后追加 WHERE 守卫；
+        守卫的占位参数由调用方追加到 params 末尾（register_published）。"""
+        cols = list(row.keys())
+        all_cols = ", ".join(cols) + ", last_indexed, updated_at"
+        placeholders = ", ".join(["%s"] * len(cols)) + f", {_NOW_SQL}, {_NOW_SQL}"
+        updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c != "file_path")
+        updates += ", last_indexed = EXCLUDED.last_indexed, updated_at = EXCLUDED.updated_at"
+        sql = (
+            f"INSERT INTO {table} ({all_cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT (file_path) DO UPDATE SET {updates}"
         )
-        value_cols = ", ".join(_REGISTER_VALUE_COLS)
-        all_cols = value_cols + ", last_indexed, updated_at"
-        placeholders = ", ".join(["%s"] * len(_REGISTER_VALUE_COLS)) + f", {_NOW_SQL}, {_NOW_SQL}"
-        updates = ", ".join(
-            f"{c} = EXCLUDED.{c}" for c in _REGISTER_VALUE_COLS if c != "file_path"
-        ) + ", last_indexed = EXCLUDED.last_indexed, updated_at = EXCLUDED.updated_at"
+        if guard:
+            sql += f" WHERE {guard}"
+        return sql, tuple(row.values())
+
+    def register(
+        self,
+        file_path: str,
+        doc_id: str,
+        file_hash: str,
+        kb_id: str,
+        chunk_ids: list[str],
+        doc_db_id: str,
+        metadata: dict | None = None,
+    ):
+        row = self._build_register_row(
+            file_path, doc_id, file_hash, kb_id, chunk_ids, doc_db_id, metadata)
+        # 旧 register 不碰 active_generation（保留既有值）：直接 register 的
+        # 路径（重索引/入库脚本）语义是「原地覆盖当前版本」，发布指针不变
         with self._lock, self._conn() as conn:
-            self._exec(
-                conn,
-                f"""INSERT INTO {self._table} ({all_cols})
-                   VALUES ({placeholders})
-                   ON CONFLICT (file_path) DO UPDATE SET {updates}""",
-                values,
-            )
+            self._exec(conn, self._upsert_sql(self._table, row)[0], tuple(row.values()))
+
+    def register_published(
+        self,
+        file_path: str,
+        doc_id: str,
+        file_hash: str,
+        kb_id: str,
+        chunk_ids: list[str],
+        doc_db_id: str,
+        metadata: dict | None = None,
+        *,
+        active_generation: str = "",
+        expected_base_generation: str = "",
+    ) -> int:
+        """候选版本的条件发布（B 阶段提交点）。
+
+        与 register() 同一套行构造，额外：
+          - 写入 active_generation = 本次候选代次；
+          - ON CONFLICT DO UPDATE ... WHERE 基准守卫：仅当当前 active_generation
+            等于认领时观测的 expected_base_generation 才允许覆盖——两个并发
+            候选同时发布同一逻辑文档时，后到者 rowcount=0（输掉 CAS，必须
+            自行清理候选并报 superseded），先到者成为唯一发布者。
+        首次上传（无行）走 INSERT 分支，守卫不生效（无被覆盖对象）。
+        返回 1 = 发布成功；0 = CAS 失败（已有更新的发布者）。
+        """
+        row = self._build_register_row(
+            file_path, doc_id, file_hash, kb_id, chunk_ids, doc_db_id, metadata)
+        row["active_generation"] = active_generation
+        guard = f"{self._table}.active_generation IS NOT DISTINCT FROM %s"
+        sql, params = self._upsert_sql(self._table, row, guard=guard)
+        params = params + (expected_base_generation,)
+        with self._lock, self._conn() as conn:
+            cur = self._exec(conn, sql, params)
+            return cur.rowcount
 
     def update_after_reindex(
         self, file_path: str, file_hash: str, chunk_ids: list[str], doc_db_id: str,

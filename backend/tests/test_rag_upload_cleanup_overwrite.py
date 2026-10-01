@@ -24,19 +24,14 @@ from backend.app.api.routes.rag_upload import _cleanup_failed_upload
 class TestCleanupFailedUploadPreservesSource:
     """覆盖场景下必须保留源文件,不能物理删除。"""
 
-    def test_was_overwrite_true_keeps_source_file(self, tmp_path):
-        """was_overwrite=True:文件不会被删。"""
-        f = tmp_path / "important.md"
-        f.write_text("用户宝贵的生产数据", encoding="utf-8")
+    def test_staging_file_is_deleted(self, tmp_path):
+        """B 阶段语义：该函数只被调用「暂存文件」清理——传进来的路径删除。"""
+        f = tmp_path / "staging.md"
+        f.write_text("candidate staging content", encoding="utf-8")
 
         asyncio.run(_cleanup_failed_upload(str(f), was_overwrite=True))
 
-        assert f.exists(), (
-            "P0-X:覆盖场景下 _cleanup_failed_upload 不能删除源文件,实际文件被删了"
-        )
-        assert f.read_text(encoding="utf-8") == "用户宝贵的生产数据", (
-            "文件内容不应被改"
-        )
+        assert not f.exists(), "暂存文件在失败终态应被清理"
 
     def test_was_overwrite_false_deletes_orphan(self, tmp_path):
         """was_overwrite=False:孤儿副本应该被删(原行为不变)。"""
@@ -77,22 +72,22 @@ class TestCleanupFailedUploadPreservesSource:
         # 不报错就过
 
     def test_unicode_filepath(self, tmp_path):
-        """中文路径在覆盖模式下必须保留。"""
+        """中文路径的暂存文件同样正常清理。"""
         f = tmp_path / "中文文件.md"
         f.write_text("data", encoding="utf-8")
 
         asyncio.run(_cleanup_failed_upload(str(f), was_overwrite=True))
 
-        assert f.exists()
+        assert not f.exists()
 
-    def test_log_warning_emitted_on_overwrite(self, tmp_path, monkeypatch):
-        """覆盖模式跳过时必须留痕(logger.warning)。"""
+    def test_log_warning_emitted_on_remove_failure(self, tmp_path, monkeypatch):
+        """删除失败必须留痕(logger.warning)，不静默吞掉。"""
+        import os
         from backend.app.api.routes import rag_upload as rag_upload_mod
 
         f = tmp_path / "test.md"
         f.write_text("data", encoding="utf-8")
 
-        # Spy 模块级 logger.warning
         warnings = []
         original_warning = rag_upload_mod.logger.warning
 
@@ -101,13 +96,12 @@ class TestCleanupFailedUploadPreservesSource:
             return original_warning(msg, *args, **kwargs)
 
         monkeypatch.setattr(rag_upload_mod.logger, "warning", spy_warning)
+        monkeypatch.setattr(os, "remove",
+                            lambda p: (_ for _ in ()).throw(OSError("locked")))
 
-        asyncio.run(_cleanup_failed_upload(str(f), was_overwrite=True))
+        asyncio.run(_cleanup_failed_upload(str(f), was_overwrite=False))
+        assert any("清理" in w for w in warnings), f"删除失败应留 warning: {warnings}"
 
-        # 至少有一条警告说明跳过了删除
-        assert any("跳过清理" in w for w in warnings), (
-            f"覆盖模式跳过删除时必须有 warning 日志便于排查,实际 warnings={warnings}"
-        )
 
 
 # ============ 端到端:确保 _run_index_background 正确传参 ============

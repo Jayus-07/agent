@@ -13,13 +13,13 @@ class TestDocMatches:
         doc = Document(page_content="x", metadata={"doc_id": "abc"})
         assert _doc_matches(doc, {"abc"}, set())
 
-    def test_match_by_source_file_basename(self):
+    def test_basename_matching_abolished(self):
+        """C 阶段收口：basename 匹配废除——跨 KB 同名文件会互删，
+        身份只认 doc_id（传入 basenames 仅兼容旧签名，不再参与判定）。"""
         doc = Document(page_content="x", metadata={"source_file": "/path/to/file.txt"})
-        assert _doc_matches(doc, set(), {"file.txt"})
-
-    def test_match_by_file_path_basename(self):
-        doc = Document(page_content="x", metadata={"file_path": "/other/doc.pdf"})
-        assert _doc_matches(doc, set(), {"doc.pdf"})
+        assert not _doc_matches(doc, set(), {"file.txt"})
+        doc2 = Document(page_content="x", metadata={"file_path": "/other/doc.pdf"})
+        assert not _doc_matches(doc2, set(), {"doc.pdf"})
 
     def test_no_match(self):
         doc = Document(page_content="x", metadata={"doc_id": "abc", "source_file": "a.txt"})
@@ -49,9 +49,14 @@ class TestSourceFilesOutOfSync:
         assert source_files_out_of_sync(indexed, current)
 
     def test_different_files(self):
+        """C 阶段：对账口径 = doc_id 计数；无 doc_id 的行归并为同一空键。"""
         indexed = [Document("", metadata={"source_file": "a.txt"})]
         current = [Document("", metadata={"source_file": "b.txt"})]
-        assert source_files_out_of_sync(indexed, current)
+        # 两者都无 doc_id → doc_id 口径下相同（basename 差异不再参与对账）
+        assert not source_files_out_of_sync(indexed, current)
+        indexed_id = [Document("", metadata={"doc_id": "d1"})]
+        current_id = [Document("", metadata={"doc_id": "d2"})]
+        assert source_files_out_of_sync(indexed_id, current_id)
 
 
 class TestReplaceDocuments:

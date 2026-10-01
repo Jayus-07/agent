@@ -1,6 +1,7 @@
 """RAG 管道 — 主入口"""
 import os
 import json
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -518,6 +519,18 @@ class RAGPipeline:
 
         if read_only:
             if self.bm25 is None:
+                # C 阶段：版本不符（BM25_META_VERSION 提升/bundle 元数据陈旧）
+                # → 从 canonical 向量快照重建一次（与上传链路同一构建器）；
+                # 真缺失/损坏仍拒绝启动（下方重建后仍为 None 才 raise）
+                meta = bm25_store.get_metadata() if bm25_source else {}
+                if meta.get("version") and meta["version"] != BM25_META_VERSION:
+                    logger.warning(
+                        f"[RAG] BM25 bundle 版本 {meta.get('version')} != "
+                        f"{BM25_META_VERSION}，从 canonical 向量快照重建一次")
+                    self.bm25 = bm25_store.build(
+                        bm25_source, k=BM25_CANDIDATE_K,
+                        metadata=bm25_snapshot_metadata)
+            if self.bm25 is None:
                 raise RuntimeError(
                     f"{self.mode} 模式只读索引不可用：BM25 索引不存在，请先执行 index/import_fixture"
                 )
@@ -601,6 +614,14 @@ class RAGPipeline:
             person_index=self.person_index,
             memory_manager=_mem,
         )
+        # C 阶段（跨进程热刷新）：记录已加载代次 + 陈旧标记 + 刷新互斥。
+        # Worker 发布新快照后，API/rag-service 靠每请求版本检查（廉价读
+        # PUBLISHED 指针）发现代次变化，一次性整组替换检索对象引用。
+        self._loaded_bm25_generation = bm25_store.published_generation()
+        self._refresh_lock = threading.Lock()
+        self.is_index_stale = False
+        logger.info(
+            f"[RAG] 检索索引代次已记录: {self._loaded_bm25_generation[:12] or '∅'}")
 
     def remove_documents_from_bm25(self, doc_ids: list[str], file_paths: list[str] | None = None) -> None:
         """运行时删除文档后，从 BM25 索引移除对应 chunk 并全量重建。
@@ -661,21 +682,77 @@ class RAGPipeline:
             logger.warning(f"[RAG] BM25 语料读取失败，回退 loader docs: {e}")
             return []
 
+    def ensure_retrieval_index_fresh(self) -> None:
+        """已发布索引代次检查 + 整组检索对象热替换（C 阶段跨进程刷新收口）。
+
+        - 检查成本 O(1)（读 PUBLISHED 指针 JSON），在每个检索入口调用；
+        - 代次变化 → 加载新快照并**一次性替换整组引用**：pipeline.bm25 /
+          person_index / lc_chain.bm25 / lc_chain.person_index /
+          lc_chain.chunk_retriever_base.{bm25,person_index}——修复旧实现
+          「只换 pipeline.bm25，ask 链永远用构造期旧引用」的半更新；
+        - 加载失败 → 保留旧快照 + is_index_stale 显式标记（响应携带
+          index_status=stale），绝不静默声称新版本可检索；
+        - 通知（Redis pubsub）只加速发现，漏掉通知也必然被本检查兜住。
+        """
+        if getattr(self, "bm25_store", None) is None or getattr(self, "mode", "") != "runtime":
+            return  # 部分初始化的 pipeline（单测直构）不参与热刷新
+        try:
+            gen = self.bm25_store.published_generation()
+        except Exception:  # noqa: BLE001 — 指针读失败按无变化处理
+            return
+        if not gen or gen == getattr(self, "_loaded_bm25_generation", ""):
+            return
+        lock = getattr(self, "_refresh_lock", None)
+        if lock is None:
+            return
+        with lock:  # double-checked：并发请求只加载一次
+            gen = self.bm25_store.published_generation()
+            if not gen or gen == getattr(self, "_loaded_bm25_generation", ""):
+                return
+            reloaded = self.bm25_store.load(k=BM25_CANDIDATE_K)
+            if reloaded is None:
+                self.is_index_stale = True
+                logger.error(
+                    "[RAG] 已发布索引代次 %s 加载失败（校验/损坏），"
+                    "保留旧快照继续服务并显式标记 stale", gen[:12])
+                return
+            self.bm25 = reloaded
+            self._person_to_doc_cache = {}
+            self.person_index = self._build_person_index()
+            chain = getattr(self, "lc_chain", None)
+            if chain is not None:
+                chain.bm25 = self.bm25
+                chain.person_index = self.person_index
+                base = getattr(chain, "chunk_retriever_base", None)
+                if base is not None:
+                    base.bm25 = self.bm25
+                    base.person_index = self.person_index
+            self._loaded_bm25_generation = gen
+            self.is_index_stale = False
+            logger.info(
+                f"[RAG] 检索索引已热刷新 generation={gen[:12]} "
+                f"({self.bm25_store.doc_count()} 文档)，整组引用已替换")
+
     def refresh_bm25_from_store(self) -> None:
         """刷新 BM25 与人名索引（indexer 上传/重索引后调用）。
 
-        上传会新增/替换 doc_db 记录；如果只刷新 BM25 而不刷新人名索引，
-        新文档直到进程重启前都无法走 person_name 快速路径。
+        C 阶段起为 ensure_retrieval_index_fresh 的别名：发布方写完新快照
+        与指针后调用，本进程立即换用新代；其他进程靠每请求版本检查跟进。
         """
         if self.bm25_store is None:
             return
-        reloaded = self.bm25_store.load(k=BM25_CANDIDATE_K)
-        if reloaded is not None:
-            self.bm25 = reloaded
-            logger.info(f"[RAG] BM25 已从磁盘刷新 ({self.bm25_store.doc_count()} 文档)")
-        else:
-            logger.warning("[RAG] BM25 磁盘刷新失败，保持当前内存索引")
-        self.refresh_person_index()
+        before = getattr(self, "_loaded_bm25_generation", "")
+        self.ensure_retrieval_index_fresh()
+        if getattr(self, "_loaded_bm25_generation", "") == before and not self.is_index_stale:
+            # 发布方刚写盘但指针未含新代次（如重建同代次）→ 直接强载一次
+            reloaded = self.bm25_store.load(k=BM25_CANDIDATE_K)
+            if reloaded is not None:
+                self.bm25 = reloaded
+                self.refresh_person_index()
+                logger.info(
+                    f"[RAG] BM25 已从磁盘刷新 ({self.bm25_store.doc_count()} 文档)")
+            else:
+                logger.warning("[RAG] BM25 磁盘刷新失败，保持当前内存索引")
 
     def refresh_person_index(self) -> None:
         """清空并重建人名倒排索引，同时更新已创建的 RAGChain 引用。"""
@@ -837,6 +914,8 @@ class RAGPipeline:
     ) -> str:
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
+        # C 阶段：入口代次检查（ask 主链与 /rag/ask 共用）
+        self.ensure_retrieval_index_fresh()
         self._prepare_context(kb_id, question, kb_ids=kb_ids,
                               subject_type=subject_type, department=department,
                               permissions=permissions,
@@ -1107,6 +1186,8 @@ class RAGPipeline:
         import time as _time
         t0 = _time.monotonic()
 
+        # C 阶段：入口代次检查（O(1)，漏通知兜底）
+        self.ensure_retrieval_index_fresh()
         self._prepare_context(
             kb_id, question,
             subject_type=subject_type, department=department,
@@ -1222,6 +1303,8 @@ class RAGPipeline:
         import time as _time
         t0 = _time.monotonic()
 
+        # C 阶段：入口代次检查（O(1)，漏通知兜底）
+        self.ensure_retrieval_index_fresh()
         self._prepare_context(
             kb_id,
             question,
