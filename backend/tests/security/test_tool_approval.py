@@ -166,3 +166,30 @@ class TestIdentityBinding:
         r2 = ensure_approved("send_email", "send", "", {"to": "a@b.c"})
         assert r1 == r2
         assert len(memory_store.list(status=STATUS_PENDING, limit=10)) == 1
+
+
+@pytest.mark.usefixtures("required_mode")
+class TestListToolFilter:
+    """list_requests 的 tool 筛选（2026-10-02 邮件通道卡片配套：
+    /approvals?tool=email.send 只看邮件发送审批单）"""
+
+    def test_filter_by_tool_name(self, memory_store):
+        from backend.security.tool_approval import ensure_approved, list_requests
+
+        ensure_approved("email.send", "send", user_id="u1", detail={"to": "a@x.com"})
+        ensure_approved("execute_sql_tool", "update", user_id="u2", detail={"sql": "UPDATE x"})
+        ensure_approved("email.send", "send", user_id="u3", detail={"to": "b@x.com"})
+
+        only_email = list_requests(tool="email.send")
+        assert len(only_email) == 2
+        assert all(r["tool_name"] == "email.send" for r in only_email)
+        # 与 status 筛选叠加
+        assert list_requests(status="pending", tool="email.send") == only_email
+        # 不筛 = 全部
+        assert len(list_requests()) == 3
+
+    def test_filter_no_match_returns_empty(self, memory_store):
+        from backend.security.tool_approval import ensure_approved, list_requests
+
+        ensure_approved("execute_sql_tool", "update", user_id="u1", detail={"sql": "UPDATE x"})
+        assert list_requests(tool="email.send") == []

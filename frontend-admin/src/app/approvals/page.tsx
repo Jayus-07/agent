@@ -15,11 +15,17 @@
  * 布局对齐 /observability/traces（2026-09-18）：min-h 容器 +
  * 左标题右操作头部 + slate 白卡体系。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Mail, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useToast } from '@/components/shared/Toast'
-import { approvalService, type ApprovalRequest, type ApprovalStatus } from '@/api/approvals'
+import {
+  approvalService,
+  getEmailChannel,
+  type ApprovalRequest,
+  type ApprovalStatus,
+  type EmailChannelStatus,
+} from '@/api/approvals'
 
 const TABS: { key: ApprovalStatus | ''; label: string }[] = [
   { key: 'pending', label: '待审批' },
@@ -47,6 +53,61 @@ function summarize(req: ApprovalRequest): string {
   return parts.join('　·　')
 }
 
+/** 邮件通道健康卡片：发送（email.send）与定时报告推送共用这条通道 */
+function EmailChannelCard({ channel }: { channel: EmailChannelStatus }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className={clsx('rounded-xl border p-4 text-[13px]', channel.enabled ? 'border-emerald-200 bg-emerald-50/60' : 'border-amber-200 bg-amber-50/60')}>
+      <button className="flex w-full items-center gap-2 text-left" onClick={() => setOpen(!open)}>
+        <Mail size={16} className={channel.enabled ? 'text-emerald-600' : 'text-amber-600'} />
+        <span className="font-medium text-slate-800">邮件通道</span>
+        <span className={clsx('rounded-full px-2 py-0.5 text-[11px]',
+          channel.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
+          {channel.enabled ? '可用' : '未就绪'}
+        </span>
+        <span className="text-[12px] text-slate-500">
+          引擎 {channel.engine} · 审批门 {channel.approval_mode === 'required' ? '已开启（发送需人工批准）' : channel.approval_mode}
+        </span>
+        <span className="ml-auto text-slate-400">{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+      </button>
+      {!channel.enabled && channel.degraded_reason && (
+        <div className="mt-2 flex items-start gap-1.5 text-[12px] text-amber-700">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {channel.degraded_reason}
+        </div>
+      )}
+      {open && (
+        <div className="mt-3 space-y-2 border-t border-slate-200/70 pt-3 text-[12px] leading-relaxed text-slate-600">
+          <div>
+            SMTP：{channel.smtp.complete
+              ? `已配置（${channel.smtp.host}:${channel.smtp.port}，发件人 ${channel.smtp.from_addr || channel.smtp.user}）`
+              : '凭据未配置'}
+            {channel.engine !== 'smtp' && '（非当前引擎）'}
+          </div>
+          <div>
+            Agently 引擎：{channel.agently.cli_installed
+              ? `CLI 已安装（${channel.agently.bin}）`
+              : `CLI 未安装（${channel.agently.bin}）`}
+            {channel.engine !== 'agently' && '（非当前引擎）'}
+          </div>
+          <div className="text-slate-500">{channel.capabilities.note}</div>
+          <div>
+            <span className="font-medium text-slate-700">定时报告推送候选</span>（crontab 周期任务，均未接线邮件发送）：
+            <ul className="mt-1 space-y-0.5">
+              {channel.periodic_tasks.map((t) => (
+                <li key={t.task} className="font-mono text-[11px] text-slate-500">
+                  {t.task} <span className="text-slate-400">（{t.cron}）</span>
+                </li>
+              ))}
+              {channel.periodic_tasks.length === 0 && <li className="text-slate-400">（beat 未加载或无周期任务）</li>}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function fmtTime(iso: string | null): string {
   if (!iso) return '—'
   return iso.replace('T', ' ').slice(0, 19)
@@ -55,10 +116,13 @@ function fmtTime(iso: string | null): string {
 export default function ApprovalsPage() {
   const toast = useToast()
   const [tab, setTab] = useState<ApprovalStatus | ''>('pending')
+  /** 工具筛选：空=全部；email.send 只看邮件发送审批（定时报告推送排障入口） */
+  const [toolFilter, setToolFilter] = useState('')
   const [items, setItems] = useState<ApprovalRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [channel, setChannel] = useState<EmailChannelStatus | null>(null)
   /** 弹窗：待决策的审批单 + 方向 */
   const [deciding, setDeciding] = useState<{ req: ApprovalRequest; approve: boolean } | null>(null)
   const [reason, setReason] = useState('')
@@ -68,16 +132,28 @@ export default function ApprovalsPage() {
     if (!silent) setLoading(true)
     setError('')
     try {
-      const r = await approvalService.list(tab, 100)
+      const r = await approvalService.list(tab, 100, toolFilter)
       setItems(r.items ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载审批单失败')
     } finally {
       setLoading(false)
     }
-  }, [tab])
+  }, [tab, toolFilter])
 
   useEffect(() => { load() }, [load])
+
+  // 通道状态：页面加载拉一次（配置变更靠刷新按钮，不做轮询）
+  useEffect(() => {
+    getEmailChannel().then(setChannel).catch(() => setChannel(null))
+  }, [])
+
+  // 工具筛选选项：从已加载过的审批单动态提取（不手抄工具清单）
+  const toolOptions = useMemo(() => {
+    const s = new Set<string>(['email.send'])
+    items.forEach((r) => s.add(r.tool_name))
+    return [...s].sort()
+  }, [items])
 
   // 仅待审批 tab 轮询：新审批单自动出现
   useEffect(() => {
@@ -137,18 +213,33 @@ export default function ApprovalsPage() {
           </div>
         </div>
 
-        {/* 状态 tab */}
-        <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 text-xs" style={{ width: 'fit-content' }}>
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={clsx('rounded-md px-3 py-1.5 transition-colors',
-                tab === t.key ? 'bg-violet-50 font-medium text-violet-700' : 'text-slate-500 hover:text-slate-800')}
-            >
-              {t.label}
-            </button>
-          ))}
+        {/* 通道健康（邮件发送/定时报告推送共用通道）+ 状态 tab + 工具筛选 */}
+        {channel && <EmailChannelCard channel={channel} />}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 text-xs" style={{ width: 'fit-content' }}>
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={clsx('rounded-md px-3 py-1.5 transition-colors',
+                  tab === t.key ? 'bg-violet-50 font-medium text-violet-700' : 'text-slate-500 hover:text-slate-800')}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <select
+            value={toolFilter}
+            onChange={(e) => setToolFilter(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 outline-none transition-colors focus:border-violet-400"
+            title="按工具筛选审批单"
+          >
+            <option value="">全部工具</option>
+            {toolOptions.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
         </div>
 
         {tab === 'pending' && (

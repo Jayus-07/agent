@@ -48,12 +48,13 @@ def _require_admin(operator: OperatorIdentity) -> None:
 
 
 @router.get("")
-async def list_approvals(status: str = "", limit: int = 50):
-    """审批单列表。status=pending/approved/rejected/executed，空=全部。"""
+async def list_approvals(status: str = "", limit: int = 50, tool: str = ""):
+    """审批单列表。status=pending/approved/rejected/executed，空=全部；
+    tool=按工具名筛选（如 tool=email.send 只看邮件发送审批，空=全部）。"""
     limit = max(1, min(limit, 200))
     return {
         "degraded": is_degraded(),
-        "items": list_requests(status=status or None, limit=limit),
+        "items": list_requests(status=status or None, limit=limit, tool=tool or None),
     }
 
 

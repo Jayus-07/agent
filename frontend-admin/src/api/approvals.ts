@@ -43,10 +43,28 @@ export interface ApprovalDecisionPayload {
   reviewer?: string
 }
 
+/** 邮件通道状态（GET /api/admin/email/channel，凭据只回布尔不回明文） */
+export interface EmailChannelStatus {
+  engine: 'smtp' | 'agently' | string
+  enabled: boolean
+  degraded_reason: string
+  approval_mode: string
+  smtp: { engine_selected: boolean; host: string; port: number; from_addr: string; user: string; has_password: boolean; complete: boolean }
+  agently: { engine_selected: boolean; bin: string; cli_installed: boolean; cli_path: string; complete: boolean }
+  capabilities: { send: boolean; search_read_watch: boolean; note: string }
+  periodic_tasks: { task: string; name: string; cron: string }[]
+  periodic_note: string
+}
+
+export function getEmailChannel(): Promise<EmailChannelStatus> {
+  return request<EmailChannelStatus>('/api/admin/email/channel')
+}
+
 export const approvalService = {
-  list(status: ApprovalStatus | '', limit = 50): Promise<ApprovalListResponse> {
+  list(status: ApprovalStatus | '', limit = 50, tool = ''): Promise<ApprovalListResponse> {
     const qs = new URLSearchParams({ limit: String(limit) })
     if (status) qs.set('status', status)
+    if (tool) qs.set('tool', tool)
     return request<ApprovalListResponse>(`${BASE}?${qs.toString()}`)
   },
 

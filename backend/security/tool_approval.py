@@ -102,12 +102,15 @@ class _MemoryApprovalStore:
             rec["decided_at"] = _now_iso()
             return dict(rec)
 
-    def list(self, status: str | None = None, limit: int = 50) -> list[dict]:
+    def list(self, status: str | None = None, limit: int = 50,
+             tool: str | None = None) -> list[dict]:
         with self._lock:
             recs = [dict(r) for r in self._records.values()]
         recs.sort(key=lambda r: r["created_at"], reverse=True)
         if status:
             recs = [r for r in recs if r["status"] == status]
+        if tool:
+            recs = [r for r in recs if r.get("tool_name") == tool]
         return recs[:limit]
 
 
@@ -253,20 +256,23 @@ class _PgApprovalStore:
             cols = [d[0] for d in cur.description]
         return _row_to_record(dict(zip(cols, row)))
 
-    def list(self, status: str | None = None, limit: int = 50) -> list[dict]:
+    def list(self, status: str | None = None, limit: int = 50,
+             tool: str | None = None) -> list[dict]:
+        # 动态 WHERE：status/tool 都是可选筛选，条件顺序与参数顺序对齐
+        conds, params = [], []
+        if status:
+            conds.append("status = %s")
+            params.append(status)
+        if tool:
+            conds.append("tool_name = %s")
+            params.append(tool)
+        where = f"WHERE {' AND '.join(conds)}" if conds else ""
         with self._conn.cursor() as cur:
-            if status:
-                cur.execute(
-                    """SELECT * FROM ai.tool_approval_requests WHERE status = %s
-                       ORDER BY created_at DESC LIMIT %s""",
-                    (status, limit),
-                )
-            else:
-                cur.execute(
-                    """SELECT * FROM ai.tool_approval_requests
-                       ORDER BY created_at DESC LIMIT %s""",
-                    (limit,),
-                )
+            cur.execute(
+                f"""SELECT * FROM ai.tool_approval_requests {where}
+                    ORDER BY created_at DESC LIMIT %s""",
+                (*params, limit),
+            )
             rows = cur.fetchall()
             cols = [d[0] for d in cur.description]
         return [_row_to_record(dict(zip(cols, r))) for r in rows]
@@ -401,8 +407,9 @@ def ensure_approved(tool_name: str, action: str,
     )
 
 
-def list_requests(status: str | None = None, limit: int = 50) -> list[dict]:
-    return get_store().list(status, limit)
+def list_requests(status: str | None = None, limit: int = 50,
+                  tool: str | None = None) -> list[dict]:
+    return get_store().list(status, limit, tool=tool)
 
 
 def decide_request(request_id: str, approve: bool,
