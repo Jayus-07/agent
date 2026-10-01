@@ -28,6 +28,7 @@ import uuid
 from typing import Generator
 
 from backend.config import ENABLE_TOKEN_STREAMING, MAIN_GRAPH_RECURSION_LIMIT
+from backend.context_budget.errors import ContextBudgetExceededError
 from backend.infra.llm.proxy import reset_stream_sink
 from backend.orchestration.graph.builder import _parse_event
 from backend.orchestration.graph.events import (
@@ -497,10 +498,10 @@ class GraphRunner:
         # merged_q 元素: ("evt", event_dict) 或 ("done", None) 哨兵
         merged_q: queue.Queue = queue.Queue()
         # flush 早期 context 事件（L2 历史裁剪在 MemoryManager 后台线程发生，
-        # 无 sink → 进程级缓冲；此处统一补发。晚到的 L2 事件顺延到下一条流，
-        # 最终一致。2026-09-22 实机验证发现并修复）
+        # 无 sink → 会话分桶缓冲；此处只补发【本会话】的事件。2026-10-01
+        # STOP C 请求隔离：任意 runner 不再整队取走他人晚到事件）
         from backend.context_budget.metrics import drain_pending_events
-        for _early in drain_pending_events():
+        for _early in drain_pending_events(session_id=session_id):
             merged_q.put(("evt", {"event": "context", "data": _early}))
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
@@ -659,6 +660,12 @@ class GraphRunner:
 
                 # 用量 ContextVar 在 worker 上下文累计，必须就地汇总
                 ctx["usage"] = summarize_turn_usage()
+            except ContextBudgetExceededError as e:
+                # 超长输入硬门禁（2026-10-01 STOP A）：稳定错误码 + 用户可
+                # 操作提示，无堆栈、retryable=False；provider 调用次数为 0。
+                logger.warning(f"[GraphRunner] 输入超预算被硬门禁拒绝: {e}")
+                ctx["worker_error"] = True
+                merged_q.put(("evt", {"event": "error", "data": e.to_sse_data()}))
             except Exception as e:
                 logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
                 ctx["worker_error"] = True
