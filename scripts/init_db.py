@@ -192,6 +192,13 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 企业治理 M13 尾项（2026-09-30）：trace_summary.ttft_ms 落库列
     # （SSE API 层收尾旁路 UPDATE，偏差记台账 D13）。
     "064_trace_summary_ttft.sql": "memory",
+    # 预算治理 P0 修复（2026-10-01）：记账本位币统一 CNY（列改名 + 存量
+    # ×7.20 折算，含 llm_usage 历史成本行）+ 预占 needs_review 待对账状态
+    # + 滞留预占处置（legacy_stale_sweep，$6.00 带审计转队列）。
+    "066_budget_cny_identity_needs_review.sql": "memory",
+    # RAG 候选版本模型（2026-10-01 B 阶段）：doc_registry.active_generation
+    # 发布指针 + rag_index_runs 运行记录（候选状态权威，终态一次写）。
+    "067_rag_candidate_publish.sql": "memory",
     # 企业治理验收 #9（2026-09-30）：Tool 契约变更历史台账（生成器检测到
     # 变更自动追加，GET /api/admin/tools/changes 消费）。
     "062_tool_contract_changes.sql": "memory",
