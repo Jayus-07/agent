@@ -13,17 +13,17 @@
  * 底图同参数投影保证对齐；连线是「按到访顺序的示意」，不是实际道路——
  * 方案 v2 的不伪造原则）→ 按天 Tab + 单日时间轴 → 出行须知（折叠）→ 文本版。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import 'leaflet/dist/leaflet.css'
+import type { Map as LeafletMap } from 'leaflet'
 import {
   AlertTriangle, BedDouble, CalendarPlus, Coffee, ListChecks, Route, ThumbsDown, ThumbsUp,
   TrainFront, Ticket, UtensilsCrossed, Wallet,
 } from 'lucide-react'
-import { fetchRaw } from '@/api/client'
 import type { Itinerary, ItineraryDay, ItineraryItem } from '@/api/travel'
 import { formatDayDate, itineraryTotal, PACE_LABEL } from './planState'
 import {
-  costBreakdown, dayLoad, dayRouteColor, departureBadge, fitZoom, formatDuration,
-  latLngToPixel, pointsCentroid,
+  costBreakdown, dayLoad, dayRouteColor, departureBadge, formatDuration,
 } from './travelDisplay'
 import MarkdownContent from '@/components/chat/MarkdownContent'
 
@@ -36,10 +36,7 @@ const TP = {
   muted: '#5c7074',
 } as const
 
-const MAP_W = 640
-const MAP_H = 360
-
-// ── 路线图（底图服务端代理；连线/序号客户端投影绘制） ─────────
+// ── 路线图（Leaflet 交互地图：滚轮缩放 / 拖拽平移，fitBounds 按行程自适应） ──
 
 interface DayRoute {
   dayIndex: number
@@ -47,7 +44,11 @@ interface DayRoute {
 }
 
 function RouteMap({ itinerary }: { itinerary: Itinerary }) {
-  const [url, setUrl] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<LeafletMap | null>(null)
+  const leafletRef = useRef<typeof import('leaflet') | null>(null)
+  const layerRef = useRef<import('leaflet').LayerGroup | null>(null)
+  const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
 
   // 每天的到访点（kind=visit 且有坐标），按当日时间顺序
@@ -63,114 +64,100 @@ function RouteMap({ itinerary }: { itinerary: Itinerary }) {
     return routes
   }, [itinerary])
 
-  const allPoints = useMemo(() => dayRoutes.flatMap((d) => d.pts), [dayRoutes])
-  const center = useMemo(() => pointsCentroid(allPoints), [allPoints])
-  const zoom = useMemo(
-    () => fitZoom(allPoints, center, MAP_W, MAP_H),
-    [allPoints, center],
-  )
-
-  // 投影到 640*360 像素（跨天全局序号，连线按当天顺序）
-  const projected = useMemo(() => {
-    let seq = 0
-    return dayRoutes.map((d) => ({
-      ...d,
-      color: dayRouteColor(d.dayIndex),
-      pts: d.pts.map((p) => ({ ...p, seq: ++seq, ...latLngToPixel(p, center, zoom, MAP_W, MAP_H) })),
-    }))
-  }, [dayRoutes, center, zoom])
-
+  // 建图（一次）：瓦片走高德（GCJ-02，与种子/静态图坐标同口径），无 Key 前端直连
   useEffect(() => {
-    if (allPoints.length === 0) return
-    let revoked = ''
-    let alive = true
-    // 显式 center+zoom、不传 markers：取景由我们定死，客户端投影才与底图对齐
-    const qs = new URLSearchParams({
-      size: `${MAP_W}*${MAP_H}`, zoom: String(zoom),
-      center: `${center.lat.toFixed(6)},${center.lng.toFixed(6)}`,
-    })
-    fetchRaw(`/api/map/static-map?${qs.toString()}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`map ${res.status}`)
-        const objectUrl = URL.createObjectURL(await res.blob())
-        revoked = objectUrl
-        if (alive) setUrl(objectUrl)
-      })
-      .catch(() => {
-        if (alive) setFailed(true)
-      })
+    let cancelled = false
+    let map: LeafletMap | null = null
+    ;(async () => {
+      try {
+        const L = await import('leaflet')
+        if (cancelled || !containerRef.current) return
+        map = L.map(containerRef.current, {
+          zoomControl: true,
+          scrollWheelZoom: true, // 滚轮缩放（用户要求）；容器内滚动互不干扰见 CSS touch-action
+          attributionControl: true,
+        })
+        L.tileLayer(
+          'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+          { subdomains: '1234', maxZoom: 18, attribution: '© 高德地图' },
+        ).addTo(map)
+        map.attributionControl.setPrefix(false)
+        leafletRef.current = L
+        mapRef.current = map
+        setReady(true)
+      } catch {
+        if (!cancelled) setFailed(true)
+      }
+    })()
     return () => {
-      alive = false
-      if (revoked) URL.revokeObjectURL(revoked)
+      cancelled = true
+      map?.remove()
+      mapRef.current = null
+      layerRef.current = null
     }
-  }, [allPoints.length, center, zoom])
+  }, [])
 
-  if (allPoints.length === 0 || failed) return null
+  // 画层（行程变化即重画 + 自适应取景）
+  useEffect(() => {
+    const map = mapRef.current
+    const L = leafletRef.current
+    if (!ready || !map || !L) return
+    layerRef.current?.remove()
+    const group = L.layerGroup()
+    const bounds: [number, number][] = []
+    let seq = 0
+    for (const route of dayRoutes) {
+      const color = dayRouteColor(route.dayIndex)
+      if (route.pts.length >= 2) {
+        // 按到访顺序的示意连线（虚线），不是实际道路——诚实口径见 figcaption
+        L.polyline(
+          route.pts.map((p) => [p.lat, p.lng] as [number, number]),
+          { color, weight: 3, dashArray: '8 6', opacity: 0.85 },
+        ).addTo(group)
+      }
+      for (const p of route.pts) {
+        seq += 1
+        const icon = L.divIcon({
+          className: 'travel-seq-marker',
+          html: `<span style="display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:9999px;background:${color};color:#fff;font:700 11px/16px system-ui;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)">${seq}</span>`,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        })
+        L.marker([p.lat, p.lng], { icon, title: p.title }).addTo(group)
+        bounds.push([p.lat, p.lng])
+      }
+    }
+    group.addTo(map)
+    layerRef.current = group
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 })
+    }
+  }, [ready, dayRoutes])
+
+  if (dayRoutes.length === 0 || failed) return null
   return (
     <figure className="animate-fade-in overflow-hidden rounded-2xl border border-[#dae7e5] bg-white shadow-card">
       <figcaption className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-[#dae7e5] px-4 py-2 text-xs font-medium text-[#183037]">
         <Route size={13} style={{ color: TP.accent }} aria-hidden />
         路线示意
         <span className="font-normal text-[#5c7074]">
-          {allPoints.length} 个到访点 · 连线按当天到访顺序，非实际道路
+          滚轮缩放 · 拖拽平移 · 连线按当天到访顺序，非实际道路
         </span>
         {/* 按天图例：与连线同色 */}
         <span className="ml-auto flex flex-wrap items-center gap-1.5">
-          {projected.map((d) => (
+          {dayRoutes.map((d) => (
             <span
               key={d.dayIndex}
               className="inline-flex items-center gap-1 rounded-full border border-[#dae7e5] bg-[#f5faf9] px-2 py-0.5 text-[10px] text-[#183037]"
             >
-              <span className="h-2 w-2 rounded-full" style={{ background: d.color }} aria-hidden />
+              <span className="h-2 w-2 rounded-full" style={{ background: dayRouteColor(d.dayIndex) }} aria-hidden />
               第 {d.dayIndex} 天 · {d.pts.length} 站
             </span>
           ))}
         </span>
       </figcaption>
-      <div className="relative">
-        {url
-          // eslint-disable-next-line @next/next/no-img-element
-          ? <img src={url} alt="行程路线示意图" className="block w-full" width={MAP_W} height={MAP_H} />
-          : <div className="animate-pulse bg-[#f5faf9]" style={{ aspectRatio: `${MAP_W}/${MAP_H}` }} />}
-        {url && (
-          /* 覆盖层与底图同尺寸同比例（img 为自然尺寸渲染），像素一一对应 */
-          <svg
-            className="pointer-events-none absolute inset-0 h-full w-full"
-            viewBox={`0 0 ${MAP_W} ${MAP_H}`}
-            role="img"
-            aria-label="按天路线连线图"
-          >
-            {projected.map((day) =>
-              day.pts.length >= 2 && (
-                <polyline
-                  key={`line-${day.dayIndex}`}
-                  points={day.pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
-                  fill="none"
-                  stroke={day.color}
-                  strokeWidth={2.5}
-                  strokeDasharray="7 5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity={0.85}
-                />
-              ),
-            )}
-            {projected.map((day) =>
-              day.pts.map((p) => (
-                <g key={`pt-${day.dayIndex}-${p.seq}`}>
-                  <circle cx={p.x} cy={p.y} r={8.5} fill={day.color} stroke="#fff" strokeWidth={2} />
-                  <text
-                    x={p.x} y={p.y + 3} textAnchor="middle"
-                    fontSize={9.5} fontWeight={700} fill="#fff"
-                  >
-                    {p.seq}
-                  </text>
-                </g>
-              )),
-            )}
-          </svg>
-        )}
-      </div>
+      {/* 高度放大：一屏布局下中栏独立滚动，地图吃足空间（自适应取景由 fitBounds 保证） */}
+      <div ref={containerRef} className="h-[360px] w-full bg-[#f5faf9]" role="img" aria-label="行程路线交互地图" />
     </figure>
   )
 }

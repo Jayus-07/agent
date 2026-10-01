@@ -234,26 +234,48 @@ export default function TravelChatDrawer({
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {hasMessages ? (
           <ul className="space-y-3">
-            {messages.map((m, i) => (
-              <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                <div className={`max-w-[92%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
-                  m.role === 'user'
-                    ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
-                    : 'border border-[#dae7e5] bg-white text-[#183037]'
-                }`}>
-                  {m.role === 'user'
-                    ? <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                    : <div className="markdown-body text-sm"><MarkdownContent content={m.text} /></div>}
-                  {m.tag && (
-                    <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
-                      m.tone === 'warn' ? 'bg-amber-100 text-amber-800' : 'bg-[#087b73]/10 text-[#087b73]'
-                    }`}>
-                      {m.tag}
-                    </span>
-                  )}
-                </div>
-              </li>
-            ))}
+            {messages.map((m, i) => {
+              // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
+              //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
+              const isLong = m.role === 'assistant' && m.text.length > 600
+              return (
+                <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  <div className={`max-w-[94%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
+                    m.role === 'user'
+                      ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
+                      : 'border border-[#dae7e5] bg-white text-[#183037]'
+                  }`}>
+                    {m.role === 'user' ? (
+                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                    ) : isLong ? (
+                      <details>
+                        <summary className="cursor-pointer text-[11px] font-medium text-[#087b73] [&::-webkit-details-marker]:hidden">
+                          行程已按你说的重算，点开查看完整说明 ▾
+                        </summary>
+                        <div className="mt-1.5 markdown-body text-xs leading-relaxed
+                          [&_h1]:text-sm [&_h1]:my-1.5 [&_h2]:text-[13px] [&_h2]:my-1.5 [&_h3]:text-xs [&_h3]:my-1
+                          [&_p]:my-1 [&_li]:my-0.5 [&_hr]:my-2">
+                          <MarkdownContent content={m.text} />
+                        </div>
+                      </details>
+                    ) : (
+                      <div className="markdown-body text-xs leading-relaxed
+                        [&_h1]:text-sm [&_h1]:my-1.5 [&_h2]:text-[13px] [&_h2]:my-1.5 [&_h3]:text-xs [&_h3]:my-1
+                        [&_p]:my-1 [&_li]:my-0.5 [&_hr]:my-2">
+                        <MarkdownContent content={m.text} />
+                      </div>
+                    )}
+                    {m.tag && (
+                      <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
+                        m.tone === 'warn' ? 'bg-amber-100 text-amber-800' : 'bg-[#087b73]/10 text-[#087b73]'
+                      }`}>
+                        {m.tag}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         ) : (
           <div className="space-y-4">

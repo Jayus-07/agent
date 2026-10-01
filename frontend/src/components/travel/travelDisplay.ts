@@ -2,7 +2,7 @@
  * components/travel/travelDisplay.ts — 行程展示的派生规则（纯函数，直测）
  *
  * 为什么单独抽出来：重做展示后，页面上大量「智能感」元素（出发倒计时、
- * 费用占比条、逐日负载条、停留时长、灵感卡配色、地图路线投影）都是**从既有
+ * 费用占比条、逐日负载条、停留时长、灵感卡配色）都是**从既有
  * 契约字段派生**的展示规则，不是新数据。放这里与组件解耦，可像 planState.ts
  * 一样直测；也守住 G2 的精神——派生量只有这一处实现，页面与结果视图共用。
  */
@@ -122,75 +122,7 @@ export function stayLabel(item: Pick<ItineraryItem, 'minutes'>): string {
   return formatDuration(item.minutes ?? 0)
 }
 
-// ── 地图路线投影（静态图 + 按天连线） ────────────────────────
-
-export interface LatLng {
-  lat: number
-  lng: number
-}
-
-/** Web Mercator 基础瓦片尺寸（腾讯/高德/OSM 同源投影）。 */
-const TILE_SIZE = 256
-
-function mercatorX(lng: number, scale: number): number {
-  return ((lng + 180) / 360) * scale
-}
-
-function mercatorY(lat: number, scale: number): number {
-  const rad = (Math.max(-85.05112878, Math.min(85.05112878, lat)) * Math.PI) / 180
-  // tan(π/4 + φ/2) ≡ tanφ + secφ（slippy-map 标准纵轴）
-  const y = Math.log(Math.tan(Math.PI / 4 + rad / 2))
-  return (0.5 - y / (2 * Math.PI)) * scale
-}
-
-/**
- * 经纬度 → 静态图上的像素坐标。
- *
- * 前提：静态图请求必须带**显式 center + zoom + size**（不传 markers），
- * 服务端原样转发给地图服务商，投影结果才与底图严格对齐——markers 让
- * 服务端自动取景时视窗不确定，客户端算不出像素位置。
- */
-export function latLngToPixel(
-  point: LatLng,
-  center: LatLng,
-  zoom: number,
-  width: number,
-  height: number,
-): { x: number; y: number } {
-  const scale = TILE_SIZE * 2 ** zoom
-  return {
-    x: mercatorX(point.lng, scale) - mercatorX(center.lng, scale) + width / 2,
-    y: mercatorY(point.lat, scale) - mercatorY(center.lat, scale) + height / 2,
-  }
-}
-
-/** 多点几何中心（简单均值即可——静态图取景不是测绘用途）。 */
-export function pointsCentroid(points: LatLng[]): LatLng {
-  if (points.length === 0) return { lat: 0, lng: 0 }
-  const sum = points.reduce((acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }), { lat: 0, lng: 0 })
-  return { lat: sum.lat / points.length, lng: sum.lng / points.length }
-}
-
-/**
- * 让全部落点带边距地装进视窗的最大整数 zoom。
- * 找不到（点过散）时返回 minZoom——静态图仍会出图，连线允许贴边。
- */
-export function fitZoom(
-  points: LatLng[],
-  center: LatLng,
-  width: number,
-  height: number,
-  { padding = 44, minZoom = 8, maxZoom = 15 }: { padding?: number; minZoom?: number; maxZoom?: number } = {},
-): number {
-  for (let zoom = maxZoom; zoom > minZoom; zoom--) {
-    const fits = points.every((p) => {
-      const { x, y } = latLngToPixel(p, center, zoom, width, height)
-      return x >= padding && x <= width - padding && y >= padding && y <= height - padding
-    })
-    if (fits) return zoom
-  }
-  return minZoom
-}
+// ── 按天路线色板（地图连线与图例共用同一份） ─────────────────
 
 /**
  * 按天路线色板（图例与连线共用同一份）。

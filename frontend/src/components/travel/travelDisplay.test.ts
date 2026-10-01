@@ -14,10 +14,7 @@ import {
   dayRouteColor,
   daysUntil,
   departureBadge,
-  fitZoom,
   formatDuration,
-  latLngToPixel,
-  pointsCentroid,
   stayLabel,
 } from './travelDisplay'
 
@@ -114,45 +111,11 @@ describe('cityHue / stayLabel', () => {
   })
 })
 
-describe('latLngToPixel / fitZoom', () => {
-  it('中心点落在视窗正中（Web Mercator 标准）', () => {
-    const p = latLngToPixel({ lat: 24.48, lng: 118.08 }, { lat: 24.48, lng: 118.08 }, 12, 640, 360)
-    expect(p.x).toBeCloseTo(320, 5)
-    expect(p.y).toBeCloseTo(180, 5)
-  })
-  it('北边的点 y 更小、东边的点 x 更大', () => {
-    const center = { lat: 24.48, lng: 118.08 }
-    const north = latLngToPixel({ lat: 24.6, lng: 118.08 }, center, 12, 640, 360)
-    const east = latLngToPixel({ lat: 24.48, lng: 118.3 }, center, 12, 640, 360)
-    expect(north.y).toBeLessThan(180)
-    expect(east.x).toBeGreaterThan(320)
-  })
-  it('zoom 越大偏移像素越多（同一经差）', () => {
-    const center = { lat: 24.48, lng: 118.08 }
-    const z10 = latLngToPixel({ lat: 24.48, lng: 118.3 }, center, 10, 640, 360)
-    const z13 = latLngToPixel({ lat: 24.48, lng: 118.3 }, center, 13, 640, 360)
-    expect(Math.abs(z13.x - 320)).toBeGreaterThan(Math.abs(z10.x - 320))
-  })
-  it('fitZoom：聚集的点给高 zoom，散点降到低 zoom', () => {
-    const center = { lat: 24.48, lng: 118.1 }
-    const tight = [
-      { lat: 24.47, lng: 118.07 }, { lat: 24.49, lng: 118.12 },
-    ]
-    const wide = [
-      { lat: 24.2, lng: 117.6 }, { lat: 24.9, lng: 118.8 },
-    ]
-    expect(fitZoom(tight, center, 640, 360)).toBeGreaterThan(fitZoom(wide, center, 640, 360))
-  })
-  it('fitZoom：单点取 maxZoom', () => {
-    expect(fitZoom([{ lat: 24.48, lng: 118.08 }], { lat: 24.48, lng: 118.08 }, 640, 360)).toBe(15)
-  })
-  it('dayRouteColor 按天取色且循环', () => {
+
+describe('dayRouteColor', () => {
+  it('按天取色且循环（首位 = 页面主题青绿）', () => {
     expect(dayRouteColor(1)).toBe('#087b73')
     expect(dayRouteColor(2)).toBe('#d97706')
     expect(dayRouteColor(7)).toBe('#087b73')
-  })
-  it('pointsCentroid 均值中心', () => {
-    const c = pointsCentroid([{ lat: 10, lng: 100 }, { lat: 20, lng: 110 }])
-    expect(c).toEqual({ lat: 15, lng: 105 })
   })
 })

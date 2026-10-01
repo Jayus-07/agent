@@ -233,11 +233,13 @@ export default function TravelPage() {
 
   return (
     <div className={`flex min-h-0 flex-1 flex-col ${drawerOpen && !isWide ? 'lg:pr-[440px]' : ''}`}>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1560px] px-4 py-4 xl:px-6 xl:py-5">
-          <div className="grid items-start gap-4 lg:grid-cols-[264px_minmax(0,1fr)] xl:grid-cols-[264px_minmax(0,1fr)_336px]">
-            {/* ── 左栏：行程条件 ── */}
-            <aside className="min-w-0 lg:sticky lg:top-0">
+      {/* 一屏布局：lg+ 外层不滚，三栏各自内滚（用户反馈「不要整页滑到很下面」）；
+          窄屏退回整页文档流滚动 */}
+      <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
+        <div className="mx-auto max-w-[1560px] px-4 py-4 xl:px-6 xl:py-5 lg:h-full">
+          <div className="grid items-stretch gap-4 lg:grid-cols-[264px_minmax(0,1fr)] xl:grid-cols-[264px_minmax(0,1fr)_336px] lg:h-full">
+            {/* ── 左栏：行程条件（与右栏等高，内容多时栏内滚动） ── */}
+            <aside className="min-w-0 min-h-0 lg:overflow-y-auto lg:pr-0.5">
               <ConditionsPanel
                 open={conditionsOpen || !itinerary}
                 hasItinerary={!!itinerary}
@@ -270,8 +272,8 @@ export default function TravelPage() {
               </ConditionsPanel>
             </aside>
 
-            {/* ── 中栏：行程（唯一结果主视图） ── */}
-            <main className="min-w-0 space-y-4">
+            {/* ── 中栏：行程（唯一结果主视图，栏内滚动） ── */}
+            <main className="min-w-0 min-h-0 space-y-4 lg:overflow-y-auto lg:pr-0.5">
               {!itinerary && !loading && (
                 <header className="rounded-2xl border border-[#dae7e5] bg-white px-5 py-4 shadow-card">
                   <h1 className="text-base font-semibold text-[#183037]">旅游行程规划</h1>
@@ -365,9 +367,9 @@ export default function TravelPage() {
               )}
             </main>
 
-            {/* ── 右栏：旅行助手（宽屏常驻；中窄屏走抽屉，见下方 fixed 渲染） ── */}
+            {/* ── 右栏：旅行助手（宽屏常驻、与左栏等高；中窄屏走抽屉，见下方 fixed 渲染） ── */}
             {isWide && (
-              <aside className="min-w-0 xl:sticky xl:top-0 xl:h-[calc(100vh-2.5rem)] xl:min-h-[460px]">
+              <aside className="min-w-0 min-h-0">
                 <TravelChatDrawer mode="panel" planVersion={itinerary?.plan_version} {...assistantProps} />
               </aside>
             )}
@@ -401,7 +403,8 @@ function ConditionsPanel({
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="行程条件">
+    // h-full：与右栏等高（grid items-stretch 下吃满列高）；内容顶部对齐
+    <section className="flex h-full flex-col rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="行程条件">
       <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-[#183037]">行程条件</h2>
         {hasItinerary && !open && (
