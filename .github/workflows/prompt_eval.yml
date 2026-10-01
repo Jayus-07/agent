@@ -78,6 +78,10 @@ jobs:
       PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: prompt-eval-embedding
+      PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
+      PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
+      PROMPT_EVAL_TEST_EMBEDDING_MODEL: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_MODEL }}
       SECRETS_ENCRYPTION_KEY: ${{ secrets.SECRETS_ENCRYPTION_KEY }}
       PYTHONUTF8: "1"
       LANGFUSE_ENABLED: "false"
@@ -142,6 +146,7 @@ jobs:
           from backend.evaluation.report import write_markdown_report
           from backend.evaluation.service import EvaluationService
           from backend.evaluation.storage import persist_report
+          from backend.infra.llm.registry_store import refresh_registry
 
           version = int(os.environ["PROMPT_VERSION"])
           dataset_version_raw = os.environ.get("DATASET_VERSION") or ""
@@ -164,6 +169,9 @@ jobs:
               release_id=os.environ["RELEASE_ID"],
           )
           try:
+              import asyncio
+
+              asyncio.run(refresh_registry())
               report = EvaluationService().evaluate(config)
               run_dir = persist_report(report, run_id=os.environ["RUN_ID"])
               write_markdown_report(report, run_dir)
