@@ -410,7 +410,7 @@ class PostgresQuotaStore:
             else template.monthly_limit_cny
         )
         cur.execute(
-            f"""SELECT used_cny, reserved_cny, limit_cny
+            f"""SELECT used_cny, reserved_cny
                 FROM {ledger_table}
                 WHERE scope_type = %s AND scope_id = %s
                   AND period_type = %s AND period_start = %s""",
@@ -419,8 +419,9 @@ class PostgresQuotaStore:
         row = cur.fetchone()
         used = Decimal(str(row[0])) if row else Decimal("0")
         reserved = Decimal(str(row[1])) if row else Decimal("0")
-        if row and row[2] is not None:
-            limit = Decimal(str(row[2]))
+        # 显示口径恒用当前解析策略：执行侧（reserve 超限判定）本来就用
+        # fresh policy，账本行的 limit_cny 只是预占时的冻结快照——若显示
+        # 读快照，管理员改策略后横幅上限滞后到下次调用才刷新（2026-10-01）。
         from backend.app.api.routes.budget_dto import build_budget_window
 
         return build_budget_window(
@@ -1228,12 +1229,18 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    # 占额按预占单去重：同一 reservation 在 user/tenant ×
+                    # day/month 上有多条物理行（金额同值），行级 SUM 会把
+                    # 同一笔占额放大数倍，与 list_pending_review 的单据
+                    # 口径对不上（2026-10-01 口径修复）。
                     cur.execute(
                         f"""SELECT COUNT(DISTINCT id),
                                    COALESCE(SUM(reserved_cny), 0),
                                    MIN(created_at)
-                            FROM {self._reservations}
-                            WHERE status = 'needs_review'"""
+                            FROM (SELECT DISTINCT ON (id) id, reserved_cny, created_at
+                                  FROM {self._reservations}
+                                  WHERE status = 'needs_review'
+                                  ORDER BY id, created_at) d"""
                     )
                     pending, held, oldest = cur.fetchone()
                     cur.execute(

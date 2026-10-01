@@ -238,3 +238,56 @@ def test_pg_needs_review_lifecycle_and_sweep(_pg_cleanup):
     reasons = {item["review_reason"] for item in queue}
     assert "stream_usage_missing" in reasons
     assert any("stale_sweep" in item["review_reason"] for item in queue)
+
+
+def test_pg_held_cny_deduped_per_reservation(_pg_cleanup):
+    """占额总额必须按预占单去重：reserve 落 user+tenant × day/month 多条
+    物理行（金额同值），行级 SUM 会把同一笔占额放大数倍，导致管理端
+    「占额总额」与明细「单据金额 × 单数」对不上（2026-10-01 口径修复）。"""
+    token = _pg_cleanup
+    _insert_policy(token, "1.000000")
+    store = PostgresQuotaStore()
+    # 权威库共享：summary 是全局口径，用差值断言隔离存量数据
+    held_before = Decimal(store.reconciliation_summary()["held_cny"])
+    reservation = store.reserve(
+        user_id=f"{token}-u1", tenant_id=token, amount_cny=Decimal("0.40"),
+        request_id="recon-dedup",
+    )
+    assert store.mark_needs_review(reservation, "stream_usage_missing") is True
+    with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM budget_reservations
+                   WHERE id = %s AND status = 'needs_review'""",
+                (reservation.reservation_id,),
+            )
+            physical_rows = cur.fetchone()[0]
+    assert physical_rows >= 2, "前提：同一预占单存在多条物理行（扇出才可复现放大）"
+
+    summary = store.reconciliation_summary()
+    queue = [item for item in store.list_pending_review()
+             if item["reservation_id"] == reservation.reservation_id]
+    assert len(queue) == 1
+    per_reservation = Decimal(queue[0]["reserved_cny"])
+    # 去重后的占额增量必须等于「单据金额 × 预占单数」，而不是物理行求和
+    assert Decimal(summary["held_cny"]) - held_before == per_reservation
+
+
+def test_pg_budget_status_limit_reflects_fresh_policy(_pg_cleanup):
+    """/budgets/me 显示上限恒用当前策略：账本行的 limit_cny 只是预占时
+    的冻结快照，管理员改策略后显示必须即时跟上（执行侧本就即时）。"""
+    token = _pg_cleanup
+    _insert_policy(token, "1.000000")
+    store = PostgresQuotaStore()
+    store.reserve(
+        user_id=f"{token}-u1", tenant_id=token, amount_cny=Decimal("0.10"),
+        request_id="recon-fresh",
+    )
+    status_before = store.get_budget_status(
+        user_id=f"{token}-u1", tenant_id=token)
+    assert Decimal(status_before["daily"]["limit"]) == Decimal("1.000000")
+    # 管理员改租户策略 → 下一次读取立即反映新上限（旧实现读账本冻结快照）
+    _insert_policy(token, "2.500000")
+    status_after = store.get_budget_status(
+        user_id=f"{token}-u1", tenant_id=token)
+    assert Decimal(status_after["daily"]["limit"]) == Decimal("2.500000")
