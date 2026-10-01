@@ -41,6 +41,7 @@ export const NAV: NavEntry[] = [
       { label: '待复核', path: '/knowledge/pending' },
       { label: '词库', path: '/knowledge/keywords' },
       { label: '评测结果', path: '/evaluations' },
+      { label: '评测集治理', path: '/evaluations/datasets' },
       { label: '反馈候选', path: '/evaluations/feedback', minRole: 'admin' },
       { label: '文档操作日志', path: '/knowledge/operations' },
     ],
