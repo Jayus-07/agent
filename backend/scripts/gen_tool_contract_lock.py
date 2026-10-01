@@ -119,8 +119,13 @@ def derive_snapshot() -> dict[str, Any]:
         own = ownership.get(name, {"capabilities": [], "output_types": {}})
         sources = tool_registry._tool_sources.get(name) or ["unknown"]
         description = getattr(fn, "description", "") or ""
+        # display_name：中文名标签（backend/tools/labels.py 单一事实源），
+        # 只进 lock 供管理端展示，不参与 content_hash（不影响契约本体）；
+        # 未登记 = 空串，由守护测试 fail-fast 提醒补齐。
+        from backend.tools.labels import get_display_name
         entry = {
             "module": Path(sources[-1]).as_posix(),
+            "display_name": get_display_name(name),
             "description_hash": hashlib.sha256(description.encode("utf-8")).hexdigest()[:16],
             "args_schema": _canonical_args(fn),
             "capabilities": sorted(set(own["capabilities"])),

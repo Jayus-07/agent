@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { BellRing, Scale, Download, ShoppingBag } from "lucide-react";
+import { BellRing, Scale, Download, ShoppingBag, Wrench } from "lucide-react";
 import TraceFilterBar from "@/components/observability/trace/TraceFilter";
 import StatsBar from "@/components/observability/trace/StatsBar";
 import CSQualityCard from "@/components/observability/trace/CSQualityCard";
@@ -64,6 +64,9 @@ export default function TracesPage() {
   const [live, setLive] = useState(false);
   // 延迟桶过滤（洞察面板直方图点击触发）
   const [durationBucket, setDurationBucket] = useState<DurationBucket>("");
+  // URL 下钻过滤：/tools 失败行「Trace 下钻」带 ?has_tool=<tool 函数名>。
+  // 服务端过滤（span input.tool），条形提示可关闭（关闭同时清 URL 参数）。
+  const [hasToolFilter, setHasToolFilter] = useState("");
 
   useEffect(() => {
     try {
@@ -79,9 +82,12 @@ export default function TracesPage() {
         setColumns(valid.length > 0 ? valid : DEFAULT_COLUMNS);
       }
     } catch {}
+    // URL ?has_tool= 下钻（SSR-safe：只在 client mount 后读 location）
+    const urlTool = new URLSearchParams(window.location.search).get("has_tool") || "";
+    setHasToolFilter(urlTool);
     // 数据加载推迟到 mount 后：避免 SSR 阶段同步 IO（mock 时 import 22 JSON；
     // API 时 fetch 也必须在 client 端）
-    listAgentTraces().then((traces) => {
+    listAgentTraces(urlTool || undefined).then((traces) => {
       setTypedTraces(traces);
       setMounted(true);
     });
@@ -110,24 +116,36 @@ export default function TracesPage() {
     if (!live || !mounted) return;
     const timer = setInterval(async () => {
       const [traces] = await Promise.all([
-        listAgentTraces(),
+        listAgentTraces(hasToolFilter || undefined),
         getAgentTraceStats(RANGE_HOURS[filter.timeRange] ?? 24).then((s) => setServerStats(s)),
       ]);
       setTypedTraces(traces);
     }, LIVE_INTERVAL);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, mounted, filter.timeRange]);
+  }, [live, mounted, filter.timeRange, hasToolFilter]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
     // 触发真实数据拉取（mock 也走异步路径，保持一致 UX）
     try {
-      const traces = await listAgentTraces();
+      const traces = await listAgentTraces(hasToolFilter || undefined);
       setTypedTraces(traces);
     } finally {
       setIsRefreshing(false);
     }
+  };
+
+  // 关闭下钻过滤：清 URL 参数 + 重拉全量
+  const clearHasToolFilter = async () => {
+    setHasToolFilter("");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("has_tool");
+      window.history.replaceState(null, "", url.toString());
+    }
+    const traces = await listAgentTraces();
+    setTypedTraces(traces);
   };
 
   // 除延迟桶之外的筛选结果（直方图基于它计算，保证选桶后其他桶仍可见）
@@ -355,6 +373,20 @@ export default function TracesPage() {
             </button>
           </div>
         </div>
+
+        {/* URL 下钻过滤条（/tools 失败行跳入时显示）：服务端 has_tool 过滤 */}
+        {hasToolFilter && (
+          <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[13px] text-blue-800">
+            <Wrench size={14} />
+            <span>
+              只看调用过工具 <span className="font-mono font-semibold">{hasToolFilter}</span> 的请求
+              <span className="ml-1 text-blue-600/70">（{typedTraces.length} 条）</span>
+            </span>
+            <button onClick={clearHasToolFilter} className="ml-auto text-[12px] text-blue-700 hover:underline">
+              清除过滤
+            </button>
+          </div>
+        )}
 
         {/* Stats（KPI 卡可点击：错误卡 → 只看失败，总数卡 → 清除状态筛选） */}
         <StatsBar

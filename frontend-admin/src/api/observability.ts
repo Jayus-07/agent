@@ -43,11 +43,12 @@ export async function getCsQualityReport(hours = 24): Promise<CSQualityReport | 
 // ── Traces ────────────────────────────────────────────
 
 /** GET /observability/traces?limit=N&workflow_name=X — 最近 N 条 trace（服务端过滤） */
-export async function listTraces(limit = 50, workflowName?: string, hasTag?: string): Promise<TraceRecord[]> {
+export async function listTraces(limit = 50, workflowName?: string, hasTag?: string, hasTool?: string): Promise<TraceRecord[]> {
   try {
     const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
     const tag = hasTag ? `&has_tag=${encodeURIComponent(hasTag)}` : "";
-    const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?limit=${limit}${wf}${tag}`);
+    const tool = hasTool ? `&has_tool=${encodeURIComponent(hasTool)}` : "";
+    const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?limit=${limit}${wf}${tag}${tool}`);
     return data.traces || [];
   } catch (e) {
     throw new Error(`listTraces failed: ${(e as Error).message}`);

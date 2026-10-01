@@ -8,16 +8,18 @@
  * 本页只读不写。失败 Tool 行点击跳转 /observability/traces 下钻（预置过滤）。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, RefreshCw, ShieldCheck, Wrench } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, ShieldCheck, Wrench } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import ErrorState from '@/components/shared/ErrorState'
 import EmptyState from '@/components/shared/EmptyState'
 import {
   getToolContractChanges,
+  getToolErrors,
   getToolInventory,
   getToolStats,
   type ToolContractChange,
   type ToolContractEntry,
+  type ToolErrorRecord,
   type ToolInventory,
   type ToolStats,
 } from '@/api/governance'
@@ -53,66 +55,133 @@ const CLASS_META: Record<string, { label: string; cls: string }> = {
   INIT: { label: 'INIT', cls: 'bg-slate-100 text-slate-600' },
 }
 
-function StatCard({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'warn' }) {
+function StatCard({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'ok' | 'warn' }) {
   return (
     <div className="rounded-lg border border-black/5 bg-white p-4">
       <div className="text-[11px] text-text-muted">{label}</div>
       <div className={`mt-1 text-xl font-semibold ${tone === 'warn' ? 'text-amber-600' : 'text-text-primary'}`}>
         {value}
       </div>
+      {hint && <div className="mt-0.5 text-[11px] text-text-muted/70">{hint}</div>}
     </div>
   )
 }
 
+const fmtCount = (n?: number) => (n ?? 0).toLocaleString('zh-CN')
+
 function ToolRow({ tool }: { tool: ToolContractEntry }) {
   const rt = tool.runtime
   const failed = (rt?.failures ?? 0) > 0
+  const [expanded, setExpanded] = useState(false)
+  const [errors, setErrors] = useState<ToolErrorRecord[] | null>(null)
+  const [loadingErr, setLoadingErr] = useState(false)
+
+  // 失败行展开错误来源：懒加载（首次展开才请求），端点失败降级为空列表不阻塞
+  const toggle = () => {
+    if (!failed) return
+    const next = !expanded
+    setExpanded(next)
+    if (next && errors === null) {
+      setLoadingErr(true)
+      getToolErrors(tool.name, 10)
+        .then((r) => setErrors(r.errors))
+        .catch(() => setErrors([]))
+        .finally(() => setLoadingErr(false))
+    }
+  }
+
   return (
-    <tr className={failed ? 'bg-red-50/50' : undefined}>
-      <td className="px-3 py-2 font-mono text-[12px] text-text-primary">{tool.name}</td>
-      <td className="px-3 py-2 text-[12px] text-text-muted">{tool.module}</td>
-      <td className="px-3 py-2 text-[12px]">
-        {tool.capabilities.length > 0 ? (
-          <span className="font-mono text-[11px] text-text-secondary">
-            {tool.capabilities.join(', ')}
-          </span>
-        ) : (
-          <span className="text-[11px] text-text-muted/60">—（不可静态派生）</span>
-        )}
-      </td>
-      <td className="px-3 py-2 text-[12px]">
-        <span className="font-mono text-[11px] text-text-secondary">{tool.content_hash}</span>
-      </td>
-      <td className="px-3 py-2 text-right font-mono text-[12px]">{rt?.calls ?? 0}</td>
-      <td className="px-3 py-2 text-right font-mono text-[12px]">
-        {rt?.success_rate != null ? `${(rt.success_rate * 100).toFixed(1)}%` : '—'}
-      </td>
-      <td className="px-3 py-2 text-right font-mono text-[12px]">
-        {failed ? (
-          <span className="text-red-600">{rt?.failures}</span>
-        ) : (
-          <span className="text-emerald-600">0</span>
-        )}
-      </td>
-      <td className="px-3 py-2 text-[11px] text-text-muted">
-        {rt?.error_classes && Object.keys(rt.error_classes).length > 0
-          ? Object.entries(rt.error_classes)
-              .sort((a, b) => b[1] - a[1])
-              .map(([cls, n]) => `${ERROR_CLASS_LABEL[cls] ?? cls}:${n}`)
-              .join(' · ')
-          : '—'}
-      </td>
-      {failed && (
+    <>
+      <tr className={`${failed ? 'bg-red-50/50 cursor-pointer' : ''} hover:bg-slate-50/60`} onClick={failed ? toggle : undefined}>
         <td className="px-3 py-2">
-          <a
-            href={`/observability/traces?has_tool=${encodeURIComponent(tool.name)}`}
-            className="text-[11px] text-blue-600 hover:underline"
-          >
-            Trace 下钻 →
-          </a>
+          <div className="flex items-center gap-1">
+            {failed && (expanded ? <ChevronDown size={13} className="text-red-500" /> : <ChevronRight size={13} className="text-red-500" />)}
+            <span className="text-[13px] font-medium text-text-primary">
+              {tool.display_name || <span className="text-text-muted/60">（未登记中文名）</span>}
+            </span>
+          </div>
+          <div className="font-mono text-[11px] text-text-muted">{tool.name}</div>
         </td>
+        <td className="px-3 py-2 text-[12px] text-text-muted">{tool.module.replace(/^backend\//, '')}</td>
+        <td className="px-3 py-2 text-[12px]">
+          {tool.capabilities.length > 0 ? (
+            <span className="font-mono text-[11px] text-text-secondary">
+              {tool.capabilities.join(', ')}
+            </span>
+          ) : (
+            <span className="text-[11px] text-text-muted/60">—（不可静态派生）</span>
+          )}
+        </td>
+        <td className="px-3 py-2 text-[12px]">
+          <span className="font-mono text-[11px] text-text-secondary" title={tool.content_hash}>
+            {tool.content_hash.slice(0, 8)}
+          </span>
+        </td>
+        <td className="px-3 py-2 text-right font-mono text-[12px]">{fmtCount(rt?.calls)}</td>
+        <td className="px-3 py-2 text-right font-mono text-[12px]">
+          {rt?.success_rate != null ? `${(rt.success_rate * 100).toFixed(1)}%` : '—'}
+        </td>
+        <td className="px-3 py-2 text-right font-mono text-[12px]">
+          {failed ? (
+            <span className="text-red-600">{fmtCount(rt?.failures)}</span>
+          ) : (
+            <span className="text-emerald-600">0</span>
+          )}
+        </td>
+        <td className="px-3 py-2 text-[11px] text-text-muted">
+          {rt?.error_classes && Object.keys(rt.error_classes).length > 0
+            ? Object.entries(rt.error_classes)
+                .sort((a, b) => b[1] - a[1])
+                .map(([cls, n]) => `${ERROR_CLASS_LABEL[cls] ?? cls}:${fmtCount(n)}`)
+                .join(' · ')
+            : '—'}
+        </td>
+        {failed && (
+          <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+            <a
+              href={`/observability/traces?has_tool=${encodeURIComponent(tool.name)}`}
+              className="text-[11px] text-blue-600 hover:underline"
+            >
+              Trace 下钻 →
+            </a>
+          </td>
+        )}
+      </tr>
+      {expanded && failed && (
+        <tr className="bg-red-50/30">
+          <td colSpan={9} className="px-10 py-3">
+            <div className="text-[12px] font-medium text-text-secondary mb-2">
+              错误来源明细（最近 10 条，来自执行 Trace）
+            </div>
+            {loadingErr && <div className="text-[12px] text-text-muted">加载中…</div>}
+            {!loadingErr && errors && errors.length === 0 && (
+              <div className="text-[12px] text-text-muted">
+                最近 Trace 中没有该 Tool 的失败记录（可能发生在更早时间窗，或由探针/测试流量产生）
+              </div>
+            )}
+            {!loadingErr && errors && errors.length > 0 && (
+              <ul className="space-y-1.5">
+                {errors.map((e, i) => (
+                  <li key={`${e.trace_id}-${i}`} className="text-[12px] leading-relaxed">
+                    <span className="font-mono text-[11px] text-text-muted">{e.ts.replace('T', ' ').slice(0, 19)}</span>
+                    {'  '}
+                    {e.skill && <span className="text-text-secondary">经 {e.skill}</span>}
+                    {e.capability && <span className="font-mono text-[11px] text-text-muted">（{e.capability}）</span>}
+                    {'  '}
+                    <span className="text-red-700">{e.error_code || '失败'}</span>
+                    {e.error && <span className="text-text-secondary">：{e.error}</span>}
+                    {'  '}
+                    <a href={`/observability/traces/${e.trace_id}`} className="text-blue-600 hover:underline">
+                      查看完整 Trace
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </td>
+        </tr>
       )}
-    </tr>
+    </>
   )
 }
 
@@ -167,18 +236,24 @@ export default function ToolsPage() {
       {!error && (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            <StatCard label="Tool 总数（契约 lock）" value={String(inventory?.count ?? '—')} />
-            <StatCard label="运行时观测到的 Tool" value={String(stats?.totals.tools_seen ?? '—')} />
-            <StatCard label="调用总数" value={String(stats?.totals.calls ?? '—')} />
+            <StatCard label="Tool 总数（契约 lock）" value={String(inventory?.count ?? '—')} hint="与代码同步生成的契约快照" />
+            <StatCard
+              label="运行时观测到的 Tool"
+              value={String(stats?.totals.tools_seen ?? '—')}
+              hint="只计生产流量（探针/测试不计入）"
+            />
+            <StatCard label="调用总数" value={fmtCount(stats?.totals.calls)} hint="进程内 Prometheus 累计" />
             <StatCard
               label="成功率"
               value={stats?.totals.success_rate != null ? `${(stats.totals.success_rate * 100).toFixed(2)}%` : '—'}
               tone={stats?.totals.success_rate != null && stats.totals.success_rate < 0.99 ? 'warn' : 'ok'}
+              hint={stats?.totals.success_rate == null ? '暂无调用数据' : undefined}
             />
             <StatCard
               label="失败次数"
-              value={String(stats?.totals.failures ?? '—')}
+              value={fmtCount(stats?.totals.failures)}
               tone={(stats?.totals.failures ?? 0) > 0 ? 'warn' : 'ok'}
+              hint="点击下方失败行可看错误来源"
             />
           </div>
 
@@ -202,10 +277,10 @@ export default function ToolsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-black/5 bg-slate-50/60 text-left text-[11px] uppercase tracking-wide text-text-muted">
-                  <th className="px-3 py-2">Tool</th>
+                  <th className="px-3 py-2">工具</th>
                   <th className="px-3 py-2">模块</th>
                   <th className="px-3 py-2">Capability 归属</th>
-                  <th className="px-3 py-2">契约 Hash</th>
+                  <th className="px-3 py-2">契约指纹</th>
                   <th className="px-3 py-2 text-right">调用</th>
                   <th className="px-3 py-2 text-right">成功率</th>
                   <th className="px-3 py-2 text-right">失败</th>
@@ -225,7 +300,7 @@ export default function ToolsPage() {
 
           <p className="mt-3 flex items-center gap-1.5 text-[11px] text-text-muted">
             <CheckCircle2 size={12} />
-            契约与代码同源派生（G2 禁手抄）；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL/Competitor）
+            中文名在 backend/tools/labels.py 登记、随契约 lock 派生（G2 禁手抄）；红色失败行点击可展开错误来源明细；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL/Competitor）
           </p>
 
           {changes.length > 0 && (

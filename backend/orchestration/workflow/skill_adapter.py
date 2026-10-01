@@ -105,6 +105,7 @@ async def call_sql(params: dict) -> dict:
             tool_key="sql.query",
             call=lambda: execute_sql_tool.ainvoke({"query": params["query"]}),
             domain="sql",
+            tool_name="execute_sql_tool",
         )
         if executed.status is not ToolStatus.SUCCESS:
             raise ValueError(

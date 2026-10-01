@@ -381,6 +381,11 @@ class BaseSkill(ABC):
 
         # ── Tracing: 创建 tool_call span ──
         cap = sr["capability"]
+        # 先选 Tool 再开 span：span input 需要带真实 Tool 契约名（tool_fn.name
+        # = lock 键），错误下钻（/admin/tools/errors、traces has_tool 过滤）
+        # 按它定位——此前 span 只有 skill:capability，与 Tool 契约对不上。
+        tool_fn, invoke_params = self._select_tool(sr["capability"], params)
+        tool_name = getattr(tool_fn, "name", "")
         # P1-5: 真实嵌套 — 优先挂到已存在的执行方 span（中间件节点），
         # 旧实现固定指向上游尚未合成的 "skill-{step_id}"，被 tracer 回退到
         # root 导致整棵树扁平。
@@ -397,14 +402,12 @@ class BaseSkill(ABC):
             f"tool-{step_id}", parent_id=parent_id,
             name=f"{self.name}:{cap}" if self.name else cap,
             type="tool_call",
-            input={"params": params, "capability": cap},
+            input={"params": params, "capability": cap, "tool": tool_name},
         )
 
-        tool_fn, invoke_params = self._select_tool(sr["capability"], params)
         # Tool 契约版本随 span（治理 #5：Tool 版本可追溯；hash 来自
         # tool_contracts.lock.json 进程内缓存，未命中=空）
-        contract_md = {"contract_hash": _tool_contract_hash(
-            getattr(tool_fn, "name", ""))}
+        contract_md = {"contract_hash": _tool_contract_hash(tool_name)}
 
         # ── 执行：统一治理层（默认）或旧执行循环（紧急回滚开关）──
         if _tool_runtime_enabled():
@@ -466,6 +469,7 @@ class BaseSkill(ABC):
             policy=pol, deadline=deadline,
             domain=self.name or cap.split(".", 1)[0],
             on_event=_on_event,
+            tool_name=getattr(tool_fn, "name", ""),
         )
 
         # ── ToolResult → step_results 契约字段（下游零改动）+ 治理扩展字段 ──

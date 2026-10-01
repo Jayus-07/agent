@@ -94,14 +94,34 @@ from backend.app.api.routes._trace_dto import (  # noqa: E402
 async def list_traces(limit: int = Query(20, ge=1, le=200),
                       workflow_name: str | None = Query(None),
                       session_id: str | None = Query(None),
-                      has_tag: str | None = Query(None)):
+                      has_tag: str | None = Query(None),
+                      has_tool: str | None = Query(None)):
     """最近 N 条 trace 摘要（SQLite TraceStore）。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
     has_tag：按 tags 键存在性过滤（如 has_tag=funnel_run_id → 选品漏斗运行历史，
     漏斗跑在主图内、workflow_name 仍是主图，只能以标签为口径）。
+    has_tool：按 tool_call span 的契约名过滤（span input.tool，治理埋点落键；
+    旧 trace 无该键时回退 span name 后缀匹配）——/tools 页失败行「Trace 下钻」
+    用它，键与契约 lock/指标同口径。
     """
-    stored = trace_collector.list(limit)
+    if has_tool:
+        stored = trace_collector.list(limit, include_spans=True)
+        matched = []
+        for d in stored:
+            spans = getattr(d, "spans", None) or []
+            hit = any(
+                s.type == "tool_call" and (
+                    (s.input or {}).get("tool") == has_tool
+                    or s.name.endswith(has_tool)
+                )
+                for s in spans
+            )
+            if hit:
+                matched.append(d)
+        stored = matched
+    else:
+        stored = trace_collector.list(limit)
     if workflow_name:
         stored = [d for d in stored
                   if (d.get("workflow_name") if isinstance(d, dict)

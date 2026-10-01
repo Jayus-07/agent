@@ -16,6 +16,8 @@ import { request } from '@/lib/fetcher'
 
 export interface ToolContractEntry {
   name: string
+  /** 中文显示名（backend/tools/labels.py 单一事实源，经契约 lock 派生）；空 = 未登记 */
+  display_name: string
   module: string
   capabilities: string[]
   output_types: Record<string, string>
@@ -28,6 +30,20 @@ export interface ToolContractEntry {
     success_rate?: number | null
     error_classes?: Record<string, number>
   } | null
+}
+
+/** Tool 失败明细（GET /admin/tools/errors，来源 = 进程内 trace tool_call span） */
+export interface ToolErrorRecord {
+  trace_id: string
+  ts: string
+  session_id: string
+  question: string
+  tool: string
+  capability: string
+  skill: string
+  error_code: string
+  error: string
+  latency_ms: number
 }
 
 export interface ToolInventory {
@@ -93,6 +109,10 @@ export interface ToolStats {
 
 export function getToolStats(): Promise<ToolStats> {
   return request<ToolStats>('/api/admin/tools/stats')
+}
+
+export function getToolErrors(tool: string, limit = 10): Promise<{ count: number; errors: ToolErrorRecord[] }> {
+  return request(`/api/admin/tools/errors?tool=${encodeURIComponent(tool)}&limit=${limit}`)
 }
 
 // ── 资产一致性中心（M6） ───────────────────────────────

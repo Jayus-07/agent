@@ -30,10 +30,10 @@ export async function listAllTraces(): Promise<TraceRecord[]> {
  *  供 /observability/traces 页面使用，只展示 /agent 智能问答产生的 trace，
  *  排除文档上传/重索引等操作日志 trace。
  *  服务端过滤（workflow_name 参数），不再拉 200 条客户端 filter。 */
-export async function listAgentTraces(): Promise<TraceRecord[]> {
+export async function listAgentTraces(hasTool?: string): Promise<TraceRecord[]> {
   if (!isClient()) return [];
   try {
-    return await realApi.listTraces(200, "agent");
+    return await realApi.listTraces(200, "agent", undefined, hasTool);
   } catch (e) {
     console.warn("[observability] listAgentTraces failed:", (e as Error).message);
     return [];

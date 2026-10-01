@@ -1,11 +1,12 @@
 {
   "version": 1,
-  "generated_at": "2026-09-30T18:15:34+08:00",
-  "git_sha": "722747a",
+  "generated_at": "2026-10-01T18:45:21+08:00",
+  "git_sha": "22d44cb",
   "tool_count": 34,
   "tools": {
     "calculate_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/calculator.py",
+      "display_name": "数学计算",
       "description_hash": "0a4bad62450f5756",
       "args_schema": {
         "expression": {
@@ -22,6 +23,7 @@
     },
     "competitor_analyze_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "display_name": "竞品分析",
       "description_hash": "95a05d8b0a031daa",
       "args_schema": {
         "idempotency_key": {
@@ -67,6 +69,7 @@
     },
     "competitor_history_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "display_name": "竞品历史查询",
       "description_hash": "fd2592682b4e14b7",
       "args_schema": {
         "question": {
@@ -90,6 +93,7 @@
     },
     "competitor_watch_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "display_name": "竞品监控任务",
       "description_hash": "9b922fc4240d079f",
       "args_schema": {
         "idempotency_key": {
@@ -106,6 +110,7 @@
     },
     "competitor_watchlist_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "display_name": "竞品监控清单",
       "description_hash": "77c1b270cdb5969c",
       "args_schema": {
         "action": {
@@ -150,6 +155,7 @@
     },
     "data_collection_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/data_collection.py",
+      "display_name": "数据采集",
       "description_hash": "140f080a61b5b6b8",
       "args_schema": {
         "dedup_keys": {
@@ -219,6 +225,7 @@
     },
     "execute_sql_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
+      "display_name": "SQL 确定查询",
       "description_hash": "95c523fde60caf18",
       "args_schema": {
         "query": {
@@ -235,6 +242,7 @@
     },
     "export_csv_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/export.py",
+      "display_name": "CSV 导出",
       "description_hash": "1b9696b7617612ed",
       "args_schema": {
         "filename": {
@@ -269,6 +277,7 @@
     },
     "generate_report_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/report.py",
+      "display_name": "报告生成",
       "description_hash": "85c450991f3e72d7",
       "args_schema": {
         "filters": {
@@ -304,6 +313,7 @@
     },
     "map_coord_convert_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "display_name": "坐标转换",
       "description_hash": "b4a9e24dcb9a14eb",
       "args_schema": {
         "from_type": {
@@ -327,6 +337,7 @@
     },
     "map_distance_matrix_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "display_name": "距离矩阵",
       "description_hash": "baf8ac3cce07b5c5",
       "args_schema": {
         "from_locations": {
@@ -357,6 +368,7 @@
     },
     "map_district_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "display_name": "行政区划查询",
       "description_hash": "e304a41867c33678",
       "args_schema": {
         "district_id": {
@@ -380,6 +392,7 @@
     },
     "map_geocode_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "display_name": "地理编码",
       "description_hash": "b543af5d97ee877e",
       "args_schema": {
         "address": {
@@ -403,6 +416,7 @@
     },
     "map_ip_location_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "display_name": "IP 定位",
       "description_hash": "42fddc4e146d6bcb",
       "args_schema": {
         "ip": {
@@ -419,6 +433,7 @@
     },
     "map_lookup_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/lookup.py",
+      "display_name": "地图聚合查询",
       "description_hash": "fe93496e0e75f89b",
       "args_schema": {
         "action": {
@@ -551,6 +566,7 @@
     },
     "map_navigation_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "display_name": "导航路线",
       "description_hash": "c7e1265e71884784",
       "args_schema": {
         "from_location": {
@@ -602,6 +618,7 @@
     },
     "map_place_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
+      "display_name": "地点搜索",
       "description_hash": "613597c0e5f6e7c8",
       "args_schema": {
         "city": {
@@ -646,6 +663,7 @@
     },
     "map_place_suggest_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
+      "display_name": "地点输入联想",
       "description_hash": "d42225f7bbb5f9bb",
       "args_schema": {
         "city": {
@@ -669,6 +687,7 @@
     },
     "map_reverse_geocode_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "display_name": "逆地理编码",
       "description_hash": "96528ef829a9ee21",
       "args_schema": {
         "location": {
@@ -692,6 +711,7 @@
     },
     "map_route_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "display_name": "路线规划",
       "description_hash": "e364eadcee135612",
       "args_schema": {
         "from_location": {
@@ -729,6 +749,7 @@
     },
     "map_static_map_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/static_map.py",
+      "display_name": "静态地图",
       "description_hash": "cfcdf3a4f66ca538",
       "args_schema": {
         "center": {
@@ -773,6 +794,7 @@
     },
     "map_street_view_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/street_view.py",
+      "display_name": "街景",
       "description_hash": "9dc5f966a99d17d2",
       "args_schema": {
         "heading": {
@@ -810,6 +832,7 @@
     },
     "map_weather_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/weather.py",
+      "display_name": "天气查询",
       "description_hash": "8915d5a595eb251b",
       "args_schema": {
         "city": {
@@ -840,6 +863,7 @@
     },
     "memory_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "display_name": "记忆检索",
       "description_hash": "306fe94770e4d6f2",
       "args_schema": {
         "query": {
@@ -863,6 +887,7 @@
     },
     "memory_store_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "display_name": "记忆存储",
       "description_hash": "98066de659309c96",
       "args_schema": {
         "content": {
@@ -900,6 +925,7 @@
     },
     "read_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "display_name": "邮件读取",
       "description_hash": "9d169a15bb8f3e95",
       "args_schema": {
         "message_id": {
@@ -916,6 +942,7 @@
     },
     "search_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "display_name": "邮件搜索",
       "description_hash": "1778923c62ba18fb",
       "args_schema": {
         "cursor": {
@@ -953,6 +980,7 @@
     },
     "search_knowledge_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/rag.py",
+      "display_name": "知识库检索",
       "description_hash": "fa54572818b6b08a",
       "args_schema": {
         "kb_id": {
@@ -980,6 +1008,7 @@
     },
     "send_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "display_name": "邮件发送",
       "description_hash": "007021fbb3ea3706",
       "args_schema": {
         "body": {
@@ -1034,6 +1063,7 @@
     },
     "sql_query_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
+      "display_name": "自然语言查库",
       "description_hash": "43a60f429eab4d5a",
       "args_schema": {
         "question": {
@@ -1050,6 +1080,7 @@
     },
     "travel_poi_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/travel/poi.py",
+      "display_name": "景点搜索",
       "description_hash": "5cb02a4fe7702eba",
       "args_schema": {
         "avoid": {
@@ -1098,6 +1129,7 @@
     },
     "watch_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "display_name": "邮件监听",
       "description_hash": "d995c994529679ce",
       "args_schema": {
         "timeout_sec": {
@@ -1114,6 +1146,7 @@
     },
     "web_crawl_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
+      "display_name": "网页抓取",
       "description_hash": "572e3dbc71e62b5f",
       "args_schema": {
         "mode": {
@@ -1141,6 +1174,7 @@
     },
     "web_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
+      "display_name": "网页搜索",
       "description_hash": "8efa157629e8d0e3",
       "args_schema": {
         "num_results": {

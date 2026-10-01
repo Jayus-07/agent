@@ -226,6 +226,7 @@ async def tool_inventory(request: Request):
         run = stats.get(name, {})
         inventory.append({
             "name": name,
+            "display_name": entry.get("display_name", ""),
             "module": entry.get("module", ""),
             "capabilities": entry.get("capabilities", []),
             "output_types": entry.get("output_types", {}),
@@ -241,6 +242,63 @@ async def tool_inventory(request: Request):
         "lock_error": lock_error,
         "tools": inventory,
     }
+
+
+@router.get("/errors")
+async def tool_errors(request: Request, tool: str | None = None, limit: int = 20):
+    """Tool 错误来源明细：进程内 trace 直读，不另建存储。
+
+    按 tool_call span（input.tool = @tool 函数名，治理埋点 W3 落的键）扫
+    最近 trace，返回失败明细及其来源（skill 归属 / capability / session /
+    错误码与摘要），供 /tools 页失败行展开。旧 trace 无 input.tool 时回退
+    span name（skill:capability 口径，只能按前缀过滤到 skill 级）。
+    """
+    await require_admin_user(request)
+    limit = max(1, min(limit, 100))
+    from backend.observability.tracer import trace_collector
+
+    records = trace_collector.list(100, include_spans=True)
+    errors = []
+    for rec in records:
+        spans = {s.span_id: s for s in rec.spans}
+        for s in rec.spans:
+            if s.type != "tool_call" or s.status != "error":
+                continue
+            span_tool = (s.input or {}).get("tool") or ""
+            span_cap = (s.input or {}).get("capability") or ""
+            if tool:
+                # 精确匹配契约名；旧口径 span name 是 skill:capability，
+                # 只做后缀/前缀模糊兜底（历史 trace 的错误来源也有价值）
+                if span_tool != tool and not s.name.endswith(tool):
+                    continue
+            parent = spans.get(s.parent_id) if s.parent_id else None
+            error_code, error_msg = "", ""
+            for ev in reversed(s.events):
+                info = ev.get("attributes") or {}
+                if isinstance(info, dict) and (info.get("error") or info.get("error_code")):
+                    error_code = info.get("error_code", "")
+                    error_msg = info.get("error", "")
+                    break
+            if not error_msg and s.errors:
+                first = s.errors[0]
+                error_msg = first.get("message", "") if isinstance(first, dict) else str(first)
+            errors.append({
+                "trace_id": rec.id,
+                "ts": s.end_time or rec.timestamp,
+                "session_id": rec.session_id,
+                "question": rec.question[:80],
+                "tool": span_tool or s.name,
+                "capability": span_cap,
+                "skill": parent.name if parent else "",
+                "error_code": error_code,
+                "error": error_msg[:200],
+                "latency_ms": s.duration_ms,
+            })
+            if len(errors) >= limit:
+                break
+        if len(errors) >= limit:
+            break
+    return {"count": len(errors), "errors": errors}
 
 
 @router.get("/changes")

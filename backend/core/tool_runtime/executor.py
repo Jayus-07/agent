@@ -74,12 +74,15 @@ class SafeToolExecutor:
         domain: str = "",
         on_event: EventCallback | None = None,
         operation_type: OperationType | None = None,
+        tool_name: str = "",
     ) -> ToolResult:
         """执行一个 Tool 调用并完成全部治理。
 
         call: 同步或异步可调用（BaseSkill 传 `lambda: asyncio.to_thread(fn.invoke, params)`）。
         policy: None 时按 tool_key 查注册表。
         operation_type: 显式指定时覆盖策略判定（一般不传）。
+        tool_name: @tool 函数名（契约 lock 键），指标/Redis 日键用它记账；
+            空 = 沿用 tool_key（capability 名，历史口径，管理端按 lock 合并会对不上）。
         """
         pol = policy or get_policy(tool_key)
         op_type = operation_type or pol.operation_type
@@ -112,7 +115,7 @@ class SafeToolExecutor:
                     error_message="熔断器打开，快速失败",
                     fallback_used="circuit_breaker",
                 )
-                record_tool_result(result, domain)
+                record_tool_result(result, domain, tool_name)
                 _emit("circuit_open_fast_fail", {"state": cb.state().value})
                 return result
 
@@ -127,7 +130,7 @@ class SafeToolExecutor:
                 error_message=f"并发隔离舱已满（limit={pol.bulkhead_limit}）",
                 fallback_used="bulkhead",
             )
-            record_tool_result(result, domain)
+            record_tool_result(result, domain, tool_name)
             _emit("bulkhead_full", {"limit": pol.bulkhead_limit})
             return result
 
@@ -135,7 +138,7 @@ class SafeToolExecutor:
             return await self._run_with_retries(
                 tool_key=tool_key, call=call, pol=pol, deadline=deadline,
                 domain=domain, cb=cb, is_write=is_write, op_type=op_type,
-                started=started, _emit=_emit,
+                started=started, _emit=_emit, tool_name=tool_name,
             )
         finally:
             bulkhead.release()
@@ -145,6 +148,7 @@ class SafeToolExecutor:
         self, *, tool_key: str, call: Callable[[], Any], pol: ToolPolicy,
         deadline: RequestDeadline | None, domain: str, cb, is_write: bool,
         op_type: OperationType, started: float, _emit: EventCallback,
+        tool_name: str = "",
     ) -> ToolResult:
         last: ToolResult | None = None
 
@@ -176,7 +180,7 @@ class SafeToolExecutor:
                         error_message=f"预算判定拒绝（{reason}），跳过 Tool",
                         fallback_used="deadline_budget",
                     )
-                    record_tool_result(result, domain)
+                    record_tool_result(result, domain, tool_name)
                     _emit("deadline_budget_insufficient",
                           {"remaining_ms": round(deadline.remaining_workflow_ms()),
                            "required_ms": round(pol.timeout_ms),
@@ -204,7 +208,7 @@ class SafeToolExecutor:
                     latency_ms=int((time.monotonic() - started) * 1000),
                     data=output, retry_count=attempt,
                 )
-                record_tool_result(result, domain)
+                record_tool_result(result, domain, tool_name)
                 if deadline is not None:
                     logger.info(
                         "[Deadline] tool=%s success %s",

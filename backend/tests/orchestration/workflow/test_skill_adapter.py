@@ -108,8 +108,9 @@ class TestSkillCalls:
         asyncio.run(run())
 
     def test_call_sql_governed_records_tool_stats(self):
-        """query 模式经 safe_tool_executor：record_tool_result 以 sql.query
-        记账（P1-4 补盲区——workflow 侧工具调用进 /tools merged 统计）"""
+        """query 模式经 safe_tool_executor：record_tool_result 以契约键
+        execute_sql_tool 记账（2026-10-01 键口径修正：旧口径记 capability
+        名 sql.query，管理端按 lock 函数名合并永远匹配不上 → 行全 0）"""
         async def run():
             fake_tool = MagicMock()
             fake_tool.ainvoke = AsyncMock(
@@ -118,12 +119,13 @@ class TestSkillCalls:
             import backend.core.tool_runtime.executor as exec_mod
             with mp("backend.orchestration.tools.execute_sql_tool", fake_tool), \
                  mp.object(exec_mod, "record_tool_result",
-                           lambda r, d="": recorded.append((r.tool_name, r.status, d))):
+                           lambda r, d="", tool_name="": recorded.append(
+                               (tool_name or r.tool_name, r.status, d))):
                 result = await call_sql({"query": "SELECT 1"})
                 assert result == {"rows": [1], "total": 1}
             assert recorded, "治理路径必须落 record_tool_result"
             name, _status, domain = recorded[0]
-            assert name == "sql.query"
+            assert name == "execute_sql_tool", "指标键必须是 @tool 契约名（lock 键）"
             assert domain == "sql"
         asyncio.run(run())
 
