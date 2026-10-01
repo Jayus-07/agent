@@ -97,6 +97,10 @@ class TestStateReservedKey:
     def test_reset_clears_candidate_plans(self):
         assert planning_reset()["candidate_plans"] == []
 
+    def test_reset_clears_evidences(self):
+        """证据表随旧行程一起清：历史污染键不跨轮存活（2026-10-01 实测）。"""
+        assert planning_reset()["evidences"] == {}
+
     def test_graph_input_has_no_candidate_default(self):
         # 「只放本轮输入」纪律：new_travel_graph_input 不预置执行态
         state = new_travel_graph_input("福州1天行程")

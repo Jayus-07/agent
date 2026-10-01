@@ -360,18 +360,23 @@ class TestStateDiscipline:
         assert "evidences" not in new_travel_graph_input("福州2天行程")
 
     def test_weather_node_merges_without_clobbering(self, monkeypatch):
-        """合并写入：后写节点不得冲掉先写节点的证据（无 reducer 键教训）。"""
+        """合并写入：后写节点不得冲掉先写节点的证据（无 reducer 键教训）。
+
+        替身返回**扁平**单条 evidence（与 weather_service.fetch_forecast_evidence
+        真实形态一致）：曾假服务回 keyed 表，掩盖了「节点直接展开把字符串
+        字段污染进 evidences」的实测缺陷（2026-10-01 修复）。"""
         from backend.travel.experts import weather as W
 
         existing = {"poi_p1": _evidence_dict(fact_id="poi_p1")}
-        evidence = {"weather:测试城": _evidence_dict()}
+        flat = _evidence_dict()  # fact_id=weather:测试城
         monkeypatch.setattr(
             W, "fetch_forecast_evidence",
-            lambda city: ({"days": []}, "", evidence))
+            lambda city: ({"days": []}, "", flat))
         state = _state_with_itinerary(evidences=dict(existing))
         update = W.weather_expert_node(state)
         merged = update["evidences"]
         assert "poi_p1" in merged and "weather:测试城" in merged
+        assert all(isinstance(v, dict) for v in merged.values())
 
     def test_weather_node_skipped_paths_write_no_evidence(self, monkeypatch):
         from backend.travel.experts import weather as W

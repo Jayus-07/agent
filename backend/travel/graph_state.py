@@ -265,6 +265,10 @@ def planning_reset() -> dict:
         "must_go_unresolved": [],
         "itinerary": None,
         "validation": None,
+        # 证据表随旧行程一起失效：evidences 描述的是「上一份计划引用了什么数据」，
+        # 重规划后对新计划不再适用；不清会让历史污染键（如扁平 evidence 残留）
+        # 跨轮存活，validator 下一次 check_source_trust 仍会炸（2026-10-01 实测）
+        "evidences": {},
         "repair_rounds": 0,
         "repair_stalled": False,
         "repair_log": [],

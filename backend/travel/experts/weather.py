@@ -94,10 +94,16 @@ def weather_expert_node(state: dict) -> dict:
                 "本次未做天气检查；临近出发时可让我重新评估"
             ]}
         hit_dates = sorted(set(bad_dates) & trip_dates)
+        # state.evidences 的契约是 {fact_id: evidence_dict}（graph_state.Evidences，
+        # validator/risk/poi 都按此形态读写）；service 返回的是**单条扁平**
+        # evidence dict，直接展开合并会把 fact_id/source 等字符串字段污染进
+        # evidences，validator is_stale 遍历 `.get()` 即 AttributeError
+        # （实测 2026-10-01：带出发日期的规划 100% 复现）——按 fact_id 分键后再并入
+        evidence_map = {evidence["fact_id"]: evidence} if evidence else None
         if not hit_dates:
             # 预报已参与规划判定（无坏天气），证据照记：SOURCE_STALE 据此
             # 判「规划引用的天气数据是否已过期」
-            return {"status": "success", "data": {"evidences": evidence}, "notes": []}
+            return {"status": "success", "data": {"evidences": evidence_map}, "notes": []}
 
         new_itinerary, actions, extra_notes = plan_weather_swaps(
             itinerary, _state.get("candidates", []), hit_dates,
@@ -117,7 +123,7 @@ def weather_expert_node(state: dict) -> dict:
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(new_itinerary),
                          "weather_actions": actions,
-                         "evidences": evidence},
+                         "evidences": evidence_map},
                 "notes": notes}
 
     result = run_expert_safely("weather", _run, state)

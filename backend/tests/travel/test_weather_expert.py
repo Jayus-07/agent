@@ -139,3 +139,66 @@ def test_node_swaps_and_logs(monkeypatch):
                        if a.get("code") == "weather_swap"]
     assert len(weather_entries) == 1
     assert weather_entries[0]["weather_swaps"][0]["from"] == "鼓山"
+
+
+def test_node_keys_evidence_by_fact_id(monkeypatch):
+    """回归（2026-10-01 实测）：service 返回**单条扁平** evidence dict，
+    节点必须按 fact_id 分键后再并入 state —— 修前直接展开，evidences 被
+    字符串字段污染，validator check_source_trust 遍历 `.get()` 即
+    AttributeError，带出发日期的规划 100% 失败。"""
+    itinerary, candidates = _rainy_itinerary()
+    flat_evidence = {
+        "fact_id": "weather:测试城",
+        "value": {"city": "测试城", "days": 2, "served_by": "tencent:lbs"},
+        "source": "tencent:lbs",
+        "source_type": "live",
+        "confidence": 0.95,
+        "verified_at": "2026-10-01T08:00:00+08:00",
+        "expire_at": "2026-10-01T08:10:00+08:00",
+    }
+    monkeypatch.setattr(W, "fetch_forecast_evidence",
+                        lambda city: (FORECAST_RAIN, "", flat_evidence))
+    state = {
+        "brief": TravelBrief(destination="测试城", days=1,
+                             start_date=date(2026, 9, 15)).model_dump(),
+        "itinerary": itinerary.model_dump(),
+        "candidates": candidates,
+        # 预置 poi 节点证据：合并语义 = 既有证据不被冲掉
+        "evidences": {"poi:测试城:0": {"fact_id": "poi:测试城:0"}},
+    }
+    update = weather_expert_node(state)
+    merged = update["evidences"]
+    # 顶层键只能是 fact_id，值只能是 dict（validator is_stale 的消费前提）
+    assert set(merged) == {"poi:测试城:0", "weather:测试城"}
+    assert all(isinstance(v, dict) for v in merged.values())
+    assert merged["weather:测试城"]["fact_id"] == "weather:测试城"
+
+
+def test_node_keys_evidence_when_no_bad_weather(monkeypatch):
+    """无坏天气路径同样分键（该路径 evidence 照记供 SOURCE_STALE 判定）。"""
+    itinerary, _ = _rainy_itinerary()
+    flat_evidence = {
+        "fact_id": "weather:测试城",
+        "value": {"city": "测试城"},
+        "source": "tencent:lbs",
+        "source_type": "live",
+        "confidence": 0.95,
+        "verified_at": None,
+        "expire_at": None,
+    }
+    forecast_sunny = {
+        "kind": "future",
+        "days": [{"date": "2026-09-15", "day": {"weather": "晴"},
+                  "night": {"weather": "晴"}}],
+    }
+    monkeypatch.setattr(W, "fetch_forecast_evidence",
+                        lambda city: (forecast_sunny, "", flat_evidence))
+    state = {
+        "brief": TravelBrief(destination="测试城", days=1,
+                             start_date=date(2026, 9, 15)).model_dump(),
+        "itinerary": itinerary.model_dump(),
+        "candidates": [],
+    }
+    update = weather_expert_node(state)
+    assert set(update["evidences"]) == {"weather:测试城"}
+    assert isinstance(update["evidences"]["weather:测试城"], dict)
