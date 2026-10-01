@@ -351,6 +351,15 @@ def publish_candidate(
         raise CandidatePublishError("候选结果为空（0 chunk），拒绝发布")
     # version_id 沿用声明值；未声明时以 generation 兜底（版本可追溯）
     registry_metadata.setdefault("version_id", generation)
+    # file_size/mtime 透传（2026-10-01 修复 file_size 落库 0）：注册（CAS
+    # 提交点）先于 os.replace(staging→final)，正式文件尚未就位、registry
+    # 侧 stat(final_path) 必失败 → 0。按 _build_register_row 约定经
+    # metadata 下划线键透传暂存文件实测值。
+    _staging = index_result.get("staging_path") or ""
+    if _staging and os.path.isfile(_staging):
+        _st = os.stat(_staging)
+        registry_metadata.setdefault("_file_size", _st.st_size)
+        registry_metadata.setdefault("_file_mtime", _st.st_mtime)
 
     run_store.mark_status(upload_id, "publishing", stage="publish")
 

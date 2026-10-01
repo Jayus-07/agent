@@ -406,11 +406,17 @@ class PostgresLLMUsageStore(LLMUsageStore):
             period = "day"
         bucket_key = "month" if period == "month" else "day"
         bucket_expr = "substr(ts, 1, 7)" if period == "month" else "substr(ts, 1, 10)"
+        from backend.config.budget import BUDGET_FX_USD_CNY
+        cost_cny_expr = (
+            "COALESCE(SUM(CASE WHEN COALESCE(NULLIF(currency, ''), 'USD') = 'CNY' "
+            f"THEN total_cost ELSE total_cost * {float(BUDGET_FX_USD_CNY)} END), 0) AS cost_cny"
+        )
         empty = {
             "totals": {
                 "requests": 0, "calls": 0,
                 "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-                "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
+                "cached_tokens": 0, "reasoning_tokens": 0,
+                "cost_usd": 0.0, "cost_cny": 0.0,
             },
             "daily": [],
             "monthly": [],
@@ -428,7 +434,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
             daily: list[dict] = []
             monthly: list[dict] = []
             with self._lock, self._conn() as conn:
-                # ① 总量（requests = 去重轮次；calls = 调用次数）
+                # ① 总量（requests = 去重轮次；calls = 调用次数）。
+                # cost_cny（2026-10-01 本位币口径）：按行币种折 CNY 汇总，
+                # 供总览/管理端「成本人民币为主」展示——cost_usd 是历史
+                # 混算字段，保留兼容但不再作为展示主口径。
                 totals = dict(self._exec(conn, f"""
                     SELECT COUNT(DISTINCT CASE WHEN trace_id != '' THEN trace_id END) AS requests,
                            COUNT(*) AS calls,
@@ -437,7 +446,8 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
                            COALESCE(SUM(reasoning_tokens), 0)  AS reasoning_tokens,
-                           COALESCE(SUM(cost_usd), 0)          AS cost_usd
+                           COALESCE(SUM(cost_usd), 0)          AS cost_usd,
+                           {cost_cny_expr}
                     FROM {self._table} WHERE {where_sql}
                 """, tuple(params_base)).fetchone())
 
@@ -448,7 +458,8 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COALESCE(SUM(prompt_tokens), 0)     AS prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
-                           COALESCE(SUM(cost_usd), 0)          AS cost_usd
+                           COALESCE(SUM(cost_usd), 0)          AS cost_usd,
+                           {cost_cny_expr}
                     FROM {self._table} WHERE {where_sql}
                     GROUP BY {bucket_expr}
                     ORDER BY {bucket_key} ASC
@@ -489,10 +500,13 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 """, tuple(params_base)).fetchall()]
 
             totals["cost_usd"] = round(totals.get("cost_usd", 0) or 0, 6)
+            totals["cost_cny"] = round(float(totals.get("cost_cny") or 0), 6)
             for d in daily:
                 d["cost_usd"] = round(d.get("cost_usd", 0) or 0, 6)
+                d["cost_cny"] = round(float(d.get("cost_cny") or 0), 6)
             for m in monthly:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
+                m["cost_cny"] = round(float(m.get("cost_cny") or 0), 6)
             for m in models:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
             result = {"totals": totals, "daily": daily, "monthly": monthly,

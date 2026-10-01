@@ -376,6 +376,11 @@ async def get_document(doc_id: str, request: Request):
                 "chunks": doc.get("chunk_count", 0),
                 "hash": doc.get("file_hash", ""),
                 "status": doc.get("status", "active"),
+                # 归属与抽取元数据（2026-10-01 补齐：库内有值但详情映射漏了）
+                "department": doc.get("department", ""),
+                "doc_type": doc.get("doc_type", ""),
+                "confidence": doc.get("confidence", 0),
+                "business_domain": doc.get("business_domain", ""),
                 "embedding_model": embedding_model_name,
                 "chunk_size": CHUNK_SIZE,
                 "overlap": CHUNK_OVERLAP,

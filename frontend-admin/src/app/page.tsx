@@ -44,8 +44,10 @@ function useAsync<T>(fn: () => Promise<T>): Loadable<T> {
 
 const fmtInt = (n: number | null | undefined) =>
   n == null ? '—' : n.toLocaleString('zh-CN')
-const fmtUsd = (n: number | null | undefined) =>
-  n == null ? '—' : `$${n.toFixed(2)}`
+// 成本人民币为主（2026-10-01）：dashboard 出 cost_cny（按行币种折本位币），
+// $ 是历史混算口径仅兼容保留，页面不再展示
+const fmtCny = (n: number | null | undefined) =>
+  n == null ? '—' : `¥${n.toFixed(2)}`
 const fmtPct = (n: number | null | undefined) =>
   n == null ? '—' : `${(n * 100).toFixed(1)}%`
 
@@ -238,14 +240,14 @@ export default function AdminDashboard() {
           title="今日 Token"
           state={tokens.state}
           value={fmtInt(today?.total_tokens ?? 0)}
-          sub={today ? `${fmtInt(today.calls)} 次调用 · ${fmtUsd(today.cost_usd)}` : '近 7 天汇总'}
+          sub={today ? `${fmtInt(today.calls)} 次调用 · ${fmtCny(today.cost_cny)}` : '近 7 天汇总'}
           href="/observability/tokens"
         />
         <StatCard
           icon={<Sparkles size={14} />}
           title="7 天成本"
           state={tokens.state}
-          value={fmtUsd(tokens.data?.totals?.cost_usd)}
+          value={fmtCny(tokens.data?.totals?.cost_cny)}
           sub={`${fmtInt(tokens.data?.totals?.calls)} 次 LLM 调用`}
           href="/observability/tokens"
         />

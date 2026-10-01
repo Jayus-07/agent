@@ -112,6 +112,8 @@ export interface TokenUsageTotals {
   cached_tokens: number
   reasoning_tokens: number
   cost_usd: number
+  /** 本位币（CNY）合计：按行币种折算，展示主口径（2026-10-01） */
+  cost_cny: number
 }
 
 export interface TokenUsageDaily {
@@ -121,6 +123,7 @@ export interface TokenUsageDaily {
   completion_tokens: number
   total_tokens: number
   cost_usd: number
+  cost_cny: number
 }
 
 export interface TokenUsageByModel {
@@ -134,6 +137,8 @@ export interface TokenUsageByModel {
   cached_tokens: number
   reasoning_tokens: number
   cost_usd: number
+  /** 本位币（CNY）合计：按行币种折算，展示主口径（2026-10-01） */
+  cost_cny: number
 }
 
 export interface TokensSummary {
