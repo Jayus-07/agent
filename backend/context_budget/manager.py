@@ -214,11 +214,15 @@ class ContextBudgetManager:
             _count_message(m) for m in msgs
         )
 
-        # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag；语义 pin 永不丢）。
-        # history_cap == 0 = 历史没有空间（不是关闭裁剪）：仍执行裁剪，
-        # 只保留 System 与语义 pin（2026-10-01 STOP A 语义统一）。
+        # L2：动态历史预算裁剪（历史预算 = 总预算 - po - rag - schema；
+        # 语义 pin 永不丢）。history_cap == 0 = 历史没有空间（不是关闭
+        # 裁剪）：仍执行裁剪，只保留 System 与语义 pin（STOP A 语义统一）。
+        # STOP D：extra_reserved_tokens（tools schema / response_format）
+        # 必须在此一并扣除——否则 L2 会吃掉工具 schema 的预留空间，
+        # 硬裁阶段再收一遍（bind_tools 大 schema 场景差一轮裁剪）。
         history_cap = self.history_budget(
-            reserved_tokens=po_tokens + rag_tokens)
+            reserved_tokens=po_tokens + rag_tokens
+            + max(0, int(extra_reserved_tokens or 0)))
         if msgs:
             msgs, dropped = _trim_semantic(msgs, history_cap, pins=pins)
             if dropped:
@@ -243,7 +247,11 @@ class ContextBudgetManager:
             target = float(_cfg("CONTEXT_L4_TARGET_RATIO", 0.65))
             keep = int(_cfg("CONTEXT_L4_KEEP_RECENT_TURNS", 4))
             while keep >= 1:
-                folded, fold = fold_messages(msgs, keep_recent_turns=keep)
+                # 显式业务 pin 不参与折叠（STOP C：折叠窗口在 pin 处停段）
+                fold_pins = (
+                    set(pins.resolve(msgs)) if pins is not None else set())
+                folded, fold = fold_messages(
+                    msgs, keep_recent_turns=keep, pin_indices=fold_pins)
                 if fold is None:
                     break
                 used_before = used

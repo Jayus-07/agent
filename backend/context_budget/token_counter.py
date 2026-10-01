@@ -45,6 +45,12 @@ _CJK_RE = re.compile(
 # 不再出现低估；已有 deepseek/qwen 等条目不动（无新数据不改）。
 _CALIBRATION: dict[str, tuple[float, float]] = {
     # provider: (tokens_per_cjk_char, tokens_per_ascii_char)
+    # ⚠️ 标定范围（2026-10-01 STOP D 复核）：下表 deepseek/qwen/siliconflow
+    # 的 0.30 ASCII 系数**未做真实 usage 回测**（唯一回测样本是豆包，
+    # 见 _CALIBRATION_DEFAULT 注释）；DeepSeek/Qwen 官方 tokenizer 对
+    # ASCII/数字/JSON/工具 schema 的实际密度可能与 0.30 有显著偏差。
+    # 口径：按模型采样标定（真实 usage.prompt_tokens vs 估算）之后才允许
+    # 调整系数/安全余量/触发阈值；标定脚本产出落 data/ 与台账。
     "deepseek": (0.70, 0.30),
     "qwen": (0.70, 0.30),
     "siliconflow": (0.70, 0.30),
