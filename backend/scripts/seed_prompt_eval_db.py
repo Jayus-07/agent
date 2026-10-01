@@ -205,6 +205,9 @@ async def seed(*, dry_run: bool = False) -> None:
                 ),
             },
         )
+        # get_session 是 async generator；break 不会执行 yield 后的自动提交，
+        # 必须在关闭会话前显式提交，确保 CI 后续评测进程能读到绑定。
+        await session.commit()
         break
     else:
         raise RuntimeError("未能建立测试数据库会话")
