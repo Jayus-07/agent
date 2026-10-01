@@ -53,6 +53,15 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 - **请求级 Prompt 版本 pin（第三批 #5）**：`AgentState.prompt_versions`（**必须入 schema**——LangGraph updates 剥离 schema 外键）随 runner/task_executor 开始时快照 + `trace.tags["prompt_versions"]`；发布不影响已快照的值；checkpointer 开启时随 checkpoint 持久化，Celery 断点续跑在恢复时点重新快照。排障/审计按此 tag 回答「当时用的哪版」。
 - **安全事件（M9）**：`ai.security_events` 五类统一落库（`security/events.py` 旁路软失败），四埋点 = Input Guard BLOCK / deps+rbac 403 / JWT 失败四分类 / Evidence 拒答；查询 `GET /api/admin/security/events(/stats)`。新增拒绝类路径记得旁路补埋点。
 - **CI 契约门禁（第三批 #8）**：`tool_quality.yml` 已重启用——Tool lock `--check` + 一致性四件套测试 + 重复定义 + prompt lock 结构校验；PR 触发路径覆盖 backend/tools|skills/两个 lock/prompts yaml。
+
+### CI / 评测触发链路（2026-10-01）
+
+- **PR RAG 门禁**：`.github/workflows/rag_smoke.yml` 对所有 PR 启动轻量变更检测；只有 RAG、评测、Prompt、模型配置、评测语料、依赖或迁移相关文件变更时才执行 `pr_smoke` 的固定 **8 条**案例，使用 pgvector 临时库与缓存的离线 embedding/reranker，不调用 LLM Judge。无相关变更时评测 Job 跳过并报告成功，避免 Required check 永久 Pending。Job 名为 `RAG Smoke (8 cases)`；GitHub `main` 分支已配置 required check：`RAG PR Smoke / RAG Smoke (8 cases)`，相关 PR 未通过时不能合并。
+- **Prompt 发布门禁**：管理端发布 Prompt 后，后端通过 `workflow_dispatch`/`repository_dispatch` 触发 `.github/workflows/prompt_eval.yml`；GitHub 使用外部评测模型运行管理端选定的 suite（当前默认 `pr_smoke`），上传 `prompt-eval-<release_id>` artifact；后端 Celery 维护任务轮询 GitHub Actions 和 artifact 结果。评测通过才允许 Prompt 热更新，失败或超时保持原 production 版本。
+- **Tool 治理 CI**：`.github/workflows/tool_quality.yml` 在相关 Tool/Skill/lock/Prompt YAML 的 PR 上触发，也按 `0 1 * * *` 每天 UTC 01:00（北京时间 09:00）运行；它检查 Tool 契约、注册一致性、重复定义和 Prompt lock，不替代 RAG 评测。
+- **完整评测集**：不在每个 PR 中运行。`.github/workflows/rag_regression.yml` 默认每天北京时间 02:00 运行 `regression` 集，手动触发时可选择 `regression`/`ci_golden`/`expanded_100`/`scale_20k`；`pr_baseline`/`quick_26` 等仍保留给本地或专项回归。`pr_smoke` 是快速门禁，不删除完整集。
+- **项目内部定时任务不是 CI**：Celery beat 与 APScheduler 负责客服日报、任务恢复、模型健康检查、`weekly_eval` 等产品运行任务，不能因为 GitHub CI 精简而删除。
+- **旧工作流处理**：历史 `rag_eval.yml.disabled` 与 `unit-tests.yml.disabled` 已删除；不再恢复旧的全量 RAG/全量覆盖率门禁，后续如需全量单测应按当前 Python/数据库/模型治理重新设计。
 - **术语口径（2026-09-29 拍板）**：域内统一叫 Agent——域调度者=**域主 Agent**（代码 supervisor），域内执行节点=**子 Agent**（代码/旧文档中「专家/Expert」= 子 Agent 的代码名，代码名保留不改）；勿在新文档再用「专家」指称运行时组件。
 
 ### 节点职责与口径
