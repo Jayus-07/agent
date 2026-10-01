@@ -555,24 +555,32 @@ async def upload_document(request: Request, file: UploadFile = File(...),
             return {"ok": False,
                     "error": f"索引任务提交失败: {type(dispatch_err).__name__}: {dispatch_err}"}
 
-    task = asyncio.create_task(_run_index_background(
-        result["upload_id"], result["filepath"], result["filename"],
-        result["source"], result["batch_id"], kb_id=kb_id, department=department,
-        upload_elapsed_ms=result.get("upload_elapsed_ms"),
-        was_overwrite=result.get("was_overwrite", False),
-        file_hash=result.get("file_hash", ""),
-        staging_path=result.get("staging_path", ""),
-        generation=result.get("generation", ""),
-        tenant_id=result.get("tenant_id", ""),
-        actor_id=result.get("actor_id", ""),
-        idempotency_key=result.get("idempotency_key", ""),
-        pre_dispatched=pre_dispatched,
-        task_kwargs=None if pre_dispatched is not None else task_kwargs,
-    ))
-    # 持有引用：无引用的 fire-and-forget task 可能被 GC，异常也会被静默吞掉
-    _background_index_tasks.add(task)
-    task.add_done_callback(_background_index_tasks.discard)
-    return {"ok": True, "upload_id": result["upload_id"], "filename": result["filename"]}
+    # 附着语义：同内容更早的任务在途 → 客户端应订阅【那条】任务的 SSE
+    attached_id = ""
+    if isinstance(pre_dispatched, dict) and pre_dispatched.get("attached"):
+        attached_id = str(pre_dispatched.get("upload_id") or "")
+
+    if not attached_id:
+        task = asyncio.create_task(_run_index_background(
+            result["upload_id"], result["filepath"], result["filename"],
+            result["source"], result["batch_id"], kb_id=kb_id, department=department,
+            upload_elapsed_ms=result.get("upload_elapsed_ms"),
+            was_overwrite=result.get("was_overwrite", False),
+            file_hash=result.get("file_hash", ""),
+            staging_path=result.get("staging_path", ""),
+            generation=result.get("generation", ""),
+            tenant_id=result.get("tenant_id", ""),
+            actor_id=result.get("actor_id", ""),
+            idempotency_key=result.get("idempotency_key", ""),
+            pre_dispatched=pre_dispatched,
+            task_kwargs=None if pre_dispatched is not None else task_kwargs,
+        ))
+        # 持有引用：无引用的 fire-and-forget task 可能被 GC，异常也会被静默吞掉
+        _background_index_tasks.add(task)
+        task.add_done_callback(_background_index_tasks.discard)
+    return {"ok": True, "duplicate_of": attached_id or None,
+            "upload_id": attached_id or result["upload_id"],
+            "filename": result["filename"]}
 
 
 
@@ -1154,7 +1162,8 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
         log_route(route, dispatch_type="initial", task_id=db_task_id,
                   celery_task_name="tasks.execute_index")
     return {"queued": True, "celery_task_id": getattr(async_result, "id", ""),
-            "db_task_id": db_task_id}
+            "db_task_id": db_task_id,
+            "upload_id": str(kwargs.get("upload_id", ""))}
 
 
 def _dispatch_index_with_idempotency(
@@ -1192,7 +1201,7 @@ def _dispatch_index_with_idempotency(
     }
     upload_id = str(task_kwargs.get("upload_id", ""))
     try:
-        return run_idempotent_operation_for_identity(
+        result = run_idempotent_operation_for_identity(
             "rag.index.submit",
             payload,
             lambda: _dispatch_index_to_celery(**task_kwargs),
@@ -1214,6 +1223,44 @@ def _dispatch_index_with_idempotency(
             "请更换 Idempotency-Key 或等待既有任务完成",
             upload_id=upload_id,
         )
+    return _resolve_replayed_dispatch(result, task_kwargs, file_hash)
+
+
+def _resolve_replayed_dispatch(result: dict, task_kwargs: dict, file_hash: str) -> dict:
+    """幂等重放守卫（联合验收实测缺口）：重放结果可能是「死任务」。
+
+    场景：同指纹（同内容）重传 → 提交层 ledger 直接重放上次派发结果，
+    但上次任务可能已终态失败（worker 重试耗尽/解析失败）。此时必须
+    重新派发新一轮候选（create_run 重置状态 + 新 generation），否则
+    SSE 永远等不到终态。分三种情形：
+      - 重放任务的运行记录仍活着 → 原样返回（幂等语义）；
+      - 重放任务已终态失败 → 重新派发（新任务）；
+      - 重放结果属于【另一条】上传（同内容更早的请求）→ 附着到那条
+        任务（调用方以返回的 upload_id 订阅 SSE）；它已失败则重新派发。
+    """
+    from backend.rag.indexing.index_run_store_pg import get_index_run_store
+
+    result = dict(result or {})
+    replayed_id = str(result.get("upload_id", ""))
+    current_id = str(task_kwargs.get("upload_id", ""))
+    if not replayed_id:
+        return result  # 旧格式结果（无归属信息），保持旧行为
+    run_store = get_index_run_store()
+    run = run_store.get_run(replayed_id)
+    if run is None:
+        return result  # 运行记录缺失（历史数据）——保持旧行为
+    status = str(run.get("status") or "")
+    if status not in ("failed", "superseded"):
+        if replayed_id != current_id:
+            return {"queued": False, "attached": True,
+                    "upload_id": replayed_id,
+                    "db_task_id": result.get("db_task_id", "")}
+        return result
+    logger.warning(
+        "[RAG] 幂等重放命中已失败任务(%s)，重新派发新一轮候选: %s",
+        status, current_id or replayed_id)
+    fresh = _dispatch_index_to_celery(**task_kwargs)
+    return fresh
 
 
 async def _run_index_background(upload_id: str, filepath: str, filename: str, source: str = "", batch_id: str | None = None, kb_id: str = "policy_general", department: str = "general", upload_elapsed_ms: int | None = None, was_overwrite: bool = False, file_hash: str = "", tenant_id: str = "", actor_id: str = "", idempotency_key: str = "", staging_path: str = "", generation: str = "", pre_dispatched: dict | None = None, task_kwargs: dict | None = None):
