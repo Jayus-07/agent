@@ -1,0 +1,257 @@
+name: Prompt Release Evaluation
+
+# 只允许管理端显式触发或后端 repository_dispatch 触发。
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: "Prompt release id"
+        required: true
+        type: string
+      prompt_key:
+        description: "Prompt key"
+        required: true
+        type: string
+      version:
+        description: "Candidate Prompt version"
+        required: true
+        type: string
+      suite:
+        description: "Evaluation suite"
+        required: true
+        type: string
+      callback_url:
+        description: "Backend callback URL"
+        required: true
+        type: string
+      external_run_id:
+        description: "Backend correlation id"
+        required: false
+        type: string
+      dataset_version:
+        description: "Dataset version"
+        required: false
+        type: string
+  repository_dispatch:
+    types: [prompt-eval]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prompt-eval-${{ github.event.client_payload.release_id || inputs.release_id }}
+  cancel-in-progress: false
+
+jobs:
+  prompt-eval:
+    name: External model Prompt evaluation
+    runs-on: ubuntu-latest
+    environment: prompt-eval
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      RELEASE_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.release_id || github.event.client_payload.release_id }}
+      PROMPT_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.prompt_key || github.event.client_payload.prompt_key }}
+      PROMPT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.client_payload.version }}
+      PROMPT_EVAL_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || github.event.client_payload.suite }}
+      CALLBACK_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.callback_url || github.event.client_payload.callback_url }}
+      EXTERNAL_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.external_run_id || github.event.client_payload.external_run_id || format('github-{0}', github.run_id) }}
+      DATASET_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.dataset_version || github.event.client_payload.dataset_version || '' }}
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      PROMPT_EVAL_TEST_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PROVIDER_ID: prompt-eval-test
+      PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
+      PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
+      PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      SECRETS_ENCRYPTION_KEY: ${{ secrets.SECRETS_ENCRYPTION_KEY }}
+      PROMPT_EVAL_CALLBACK_SECRET: ${{ secrets.PROMPT_EVAL_CALLBACK_SECRET }}
+      PYTHONUTF8: "1"
+      LANGFUSE_ENABLED: "false"
+      OBS_ANALYTICS_ENABLED: "false"
+      EVAL_TRIGGER: prompt_publish
+      EVAL_TRIGGERED_BY: github-actions
+
+    steps:
+      - name: Checkout candidate commit
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install locked dependencies
+        run: python -m pip install -r requirements-lock.txt
+
+      - name: Initialize test database
+        run: python scripts/init_db.py --host localhost --port 5432 --user postgres
+
+      - name: Seed test model binding
+        run: python -m backend.scripts.seed_prompt_eval_db
+
+      - name: Run selected evaluation
+        id: evaluation
+        continue-on-error: true
+        env:
+          RUN_ID: ${{ env.EXTERNAL_RUN_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          from backend.evaluation.config import EvalConfig
+          from backend.evaluation.report import write_markdown_report
+          from backend.evaluation.service import EvaluationService
+          from backend.evaluation.storage import persist_report
+
+          version = int(os.environ["PROMPT_VERSION"])
+          config = EvalConfig(
+              module="rag",
+              live=True,
+              selection=os.environ["PROMPT_EVAL_SUITE"],
+              dataset_version=os.environ.get("DATASET_VERSION") or None,
+              run_id=os.environ["RUN_ID"],
+              prompt_versions={os.environ["PROMPT_KEY"]: version},
+              release_id=os.environ["RELEASE_ID"],
+          )
+          try:
+              report = EvaluationService().evaluate(config)
+              run_dir = persist_report(report, run_id=os.environ["RUN_ID"])
+              write_markdown_report(report, run_dir)
+              print(f"evaluation report: {run_dir}")
+              gate_ok = bool(report.summaries) and all(
+                  tier.passed_threshold for tier in report.tier_summaries
+              )
+              sys.exit(0 if gate_ok else 1)
+          except Exception as exc:
+              print(f"evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Build callback result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          run_id = os.environ["EXTERNAL_RUN_ID"]
+          report_path = Path("data/eval_runs") / run_id / "report.json"
+          status = "failed"
+          metrics = {}
+          provenance = {}
+          failure_reason = "评测未生成有效报告"
+          if report_path.exists():
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+              summary = next(
+                  (item for item in report.get("summaries", []) if item.get("module") == "rag"),
+                  None,
+              )
+              metrics = (summary or {}).get("metrics") or {}
+              provenance = (report.get("metadata") or {}).get("eval_provenance") or {}
+              gate_ok = bool(summary) and all(
+                  item.get("passed_threshold", False)
+                  for item in report.get("tier_summaries", [])
+              )
+              status = "passed" if gate_ok else "failed"
+              failure_reason = "" if gate_ok else "评测层级未达到阈值"
+          result = {
+              "release_id": os.environ["RELEASE_ID"],
+              "prompt_key": os.environ["PROMPT_KEY"],
+              "version": int(os.environ["PROMPT_VERSION"]),
+              "external_run_id": run_id,
+              "eval_run_id": run_id,
+              "status": status,
+              "metrics": metrics,
+              "provenance": provenance,
+              "failure_reason": failure_reason,
+          }
+          Path("prompt_eval_result.json").write_text(
+              json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prompt-eval-${{ env.RELEASE_ID }}
+          path: |
+            data/eval_runs/
+            prompt_eval_result.json
+          retention-days: 30
+
+      - name: Send signed evaluation callback
+        if: always()
+        env:
+          CALLBACK_SECRET: ${{ secrets.PROMPT_EVAL_CALLBACK_SECRET }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import hmac
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          callback_url = os.environ.get("CALLBACK_URL", "").strip()
+          secret = os.environ.get("CALLBACK_SECRET", "")
+          if not callback_url or not secret:
+              raise SystemExit("CALLBACK_URL 和 PROMPT_EVAL_CALLBACK_SECRET 必须配置")
+          body = Path("prompt_eval_result.json").read_bytes()
+          timestamp = str(int(time.time()))
+          signature = hmac.new(
+              secret.encode("utf-8"),
+              timestamp.encode("ascii") + b"." + body,
+              hashlib.sha256,
+          ).hexdigest()
+          request = urllib.request.Request(
+              callback_url,
+              data=body,
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Prompt-Eval-Timestamp": timestamp,
+                  "X-Prompt-Eval-Signature": f"sha256={signature}",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status < 200 or response.status >= 300:
+                  raise SystemExit(f"callback returned HTTP {response.status}")
+          PY
+
+      - name: Fail job when release gate fails
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          result = json.loads(Path("prompt_eval_result.json").read_text(encoding="utf-8"))
+          if result.get("status") != "passed":
+              print("Prompt release evaluation failed")
+              sys.exit(1)
+          PY
