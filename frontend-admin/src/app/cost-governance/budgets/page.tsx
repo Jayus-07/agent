@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, Save, RefreshCw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Info, Save, RefreshCw } from 'lucide-react'
 import RoleGate from '@/components/auth/RoleGate'
 import PageHeader from '@/components/layout/PageHeader'
 import { useToast } from '@/components/shared/Toast'
@@ -25,6 +25,27 @@ function ratioText(value: number) {
 
 function ratioClass(value: number) {
   return value >= 1 ? 'text-red-700' : value >= 0.8 ? 'text-amber-700' : 'text-emerald-700'
+}
+
+/** 作用域语义（继承链唯一权威：backend/infra/llm/quota.py::resolve_budget_policies） */
+const SCOPE_HINTS: Record<string, string> = {
+  user: '单个用户的专属覆盖：优先级最高，配置后覆盖其租户与平台策略',
+  tenant: '单个租户的覆盖：对该租户全部用户生效（用户自己无覆盖时）',
+  tenant_default: '全租户默认：所有「没有单独配置策略」的租户都继承这一条',
+  platform: '平台兜底：只有当「用户、租户、全租户默认」三层都不存在时才会生效——改它通常不影响已有租户的用户',
+}
+
+function scopeHint(scopeType: string) {
+  return SCOPE_HINTS[scopeType] ?? '自定义预算作用域'
+}
+
+/** 列头/术语的悬停解释（原生 title 提示，项目无 tooltip 依赖） */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="ml-1 inline-flex cursor-help align-middle text-text-muted/70 hover:text-accent" title={text}>
+      <Info size={12} aria-hidden />
+    </span>
+  )
 }
 
 export default function BudgetGovernancePage() {
@@ -103,6 +124,24 @@ export default function BudgetGovernancePage() {
         <div className="mx-auto max-w-7xl px-6 py-8">
           <PageHeader title="预算治理" desc="预算状态由后端权威计算；金额为记账本位币人民币（CNY），美元报价按显式汇率折算。" />
 
+          {/* 继承链说明（2026-10-01 UX 走查）：改策略前先看生效关系，避免
+              「改了平台兜底但用户额度没变」这类困惑——上层条目会遮蔽下层 */}
+          <div className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900">
+            <Info size={13} className="shrink-0 text-blue-500" aria-hidden />
+            <span className="font-medium">额度生效顺序：</span>
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              {(['user', 'tenant', 'tenant_default', 'platform'] as const).map((scope, index) => (
+                <span key={scope} className="flex items-center gap-2">
+                  {index > 0 && <span className="text-blue-300" aria-hidden>›</span>}
+                  <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium" title={scopeHint(scope)}>
+                    {scope === 'user' ? '用户覆盖' : scope === 'tenant' ? '租户覆盖' : scope === 'tenant_default' ? '全租户默认' : '平台兜底'}
+                  </span>
+                </span>
+              ))}
+            </span>
+            <span className="text-blue-700/80">左侧优先；下层条目只在上层都不存在时才生效</span>
+          </div>
+
           <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <SummaryCard label="总成本（CNY）" value={formatCny(summary.data?.total_cost)} hint={(() => { const c = summary.data?.cost_status_counts; if (!c) return undefined; return `计价 ${c.priced} · 未定价 ${c.unpriced} · 币种未知 ${c.price_unknown}` })()} />
             <SummaryCard label="价格覆盖率" value={`${Math.round((summary.data?.price_coverage_ratio ?? 0) * 100)}%`} alert={(summary.data?.price_coverage_ratio ?? 0) < 1} />
@@ -120,7 +159,11 @@ export default function BudgetGovernancePage() {
           {canAdmin && (
             <>
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
-                <SectionTitle title="待对账（用量未知，占额保留至周期结束）" action={<RefreshButton onClick={() => reconciliation.refetch()} loading={reconciliation.isFetching} />} />
+                <SectionTitle title="待对账" action={<RefreshButton onClick={() => reconciliation.refetch()} loading={reconciliation.isFetching} />} />
+                <div className="border-b border-slate-50 px-4 py-2.5 text-[11px] text-text-muted">
+                  「预占」是每次模型调用前冻结的请求级成本上限；调用失败但可能已计费、用量缺失或滞留过久的预占转入待对账，
+                  占额保留到周期结束，需人工核对。<InfoTip text="占额总额按「预占单」去重统计：一笔预占会同时在用户与租户、日与月维度落多条账本行，去重后才能与下方明细的单据金额对上。" />
+                </div>
                 <div className="px-4 py-3 text-xs text-text-secondary">
                   队列 {reconciliation.data?.summary.pending_count ?? 0} 笔 · 占额 {formatCny(reconciliation.data?.summary.held_cny)} · 最老滞留 {reconciliation.data?.summary.oldest_age_hours ?? 0} 小时
                   {reconciliation.data?.summary.stale_unswept_count ? ` · 超龄未回收 ${reconciliation.data.summary.stale_unswept_count} 笔` : ''}
@@ -128,7 +171,7 @@ export default function BudgetGovernancePage() {
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">预占 ID</th><th className="px-4 py-3">request / 用户 / 租户</th><th className="px-4 py-3 text-right">占额</th><th className="px-4 py-3">原因</th><th className="px-4 py-3">发生时间</th></tr></thead>
+                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">预占 ID<InfoTip text="一笔调用产生一个预占单；单内可能在用户/租户、日/月维度有多条账本行" /></th><th className="px-4 py-3">request / 用户 / 租户</th><th className="px-4 py-3 text-right">占额<InfoTip text="该预占单冻结的请求级成本上限（单据金额）" /></th><th className="px-4 py-3">原因<InfoTip text="stream_usage_missing：流式响应缺用量，可能已计费；call_failed_possibly_billed：调用失败但供应商可能已扣费；stale_sweep：滞留超龄自动回收" /></th><th className="px-4 py-3">发生时间</th></tr></thead>
                     <tbody>
                       {(reconciliation.data?.items ?? []).map((item) => (
                         <tr key={item.reservation_id} className="border-b border-slate-50">
@@ -149,12 +192,12 @@ export default function BudgetGovernancePage() {
                 <SectionTitle title="预算主体" action={<RefreshButton onClick={() => subjects.refetch()} loading={subjects.isFetching} />} />
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">主体</th><th className="px-4 py-3">显式值 / 继承来源 / 生效值</th><th className="px-4 py-3 text-right">日用量 / 上限</th><th className="px-4 py-3 text-right">月用量 / 上限</th><th className="px-4 py-3">执行模式</th></tr></thead>
+                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">主体<InfoTip text="用户或租户；每行显示它的用量与实际生效的额度上限" /></th><th className="px-4 py-3">显式值 / 继承来源 / 生效值<InfoTip text="显式值=该主体自己配置的策略；继承来源=没有显式策略时实际套用的上层条目；生效值=当前真正执行的日/月上限（按用户覆盖›租户覆盖›全租户默认›平台兜底取第一层）" /></th><th className="px-4 py-3 text-right">日用量 / 上限</th><th className="px-4 py-3 text-right">月用量 / 上限</th><th className="px-4 py-3">执行模式</th></tr></thead>
                     <tbody>
                       {(subjects.data?.items ?? []).map((item) => (
                         <tr key={`${item.scope}:${item.id}`} className="border-b border-slate-50">
-                          <td className="px-4 py-3"><div className="font-medium text-text-primary">{item.display_name || item.id}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted">{item.scope}:{item.id}</div></td>
-                          <td className="px-4 py-3 text-text-secondary"><div>{item.explicit_policy ? '显式策略' : '未配置显式策略'}</div><div className="mt-0.5 text-[10px] text-text-muted">继承自 {item.policy_source?.label || `${item.policy_source?.scope_type}:${item.policy_source?.scope_id}`}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted">生效 {formatCny(item.effective_policy?.daily_limit_cny)} / {formatCny(item.effective_policy?.monthly_limit_cny)}</div></td>
+                          <td className="px-4 py-3"><div className="font-medium text-text-primary">{item.display_name || item.id}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted" title={scopeHint(item.scope)}>{item.scope}:{item.id}</div></td>
+                          <td className="px-4 py-3 text-text-secondary"><div>{item.explicit_policy ? '显式策略' : '未配置显式策略'}</div><div className="mt-0.5 text-[10px] text-text-muted">继承自 {item.policy_source?.label || `${item.policy_source?.scope_type}:${item.policy_source?.scope_id}`}</div><div className="mt-0.5 font-mono text-[11px] font-semibold text-text-primary" title="当前真正执行的上限">生效 {formatCny(item.effective_policy?.daily_limit_cny)} / {formatCny(item.effective_policy?.monthly_limit_cny)}</div></td>
                           <td className={`px-4 py-3 text-right font-mono tabular-nums ${ratioClass(item.daily.ratio)}`}>{formatCny(item.daily.used)} / {formatCny(item.daily.limit)}<div className="text-[10px]">{ratioText(item.daily.ratio)}</div></td>
                           <td className={`px-4 py-3 text-right font-mono tabular-nums ${ratioClass(item.monthly.ratio)}`}>{formatCny(item.monthly.used)} / {formatCny(item.monthly.limit)}<div className="text-[10px]">{ratioText(item.monthly.ratio)}</div></td>
                           <td className="px-4 py-3"><ModeBadge value={item.enforcement} /></td>
@@ -168,13 +211,16 @@ export default function BudgetGovernancePage() {
 
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
                 <SectionTitle title="策略版本" action={<div className="flex items-center gap-3"><button onClick={beginUserOverride} className="text-[11px] text-accent hover:underline">新建用户覆盖（预填 ¥3 / ¥50）</button><RefreshButton onClick={() => policies.refetch()} loading={policies.isFetching} /></div>} />
+                <div className="border-b border-slate-50 px-4 py-2.5 text-[11px] text-text-muted">
+                  每行是一条已配置的额度策略；生效顺序见页首说明——改「平台兜底」前先确认目标主体没有更上层的条目。
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">作用域</th><th className="px-4 py-3 text-right">日上限</th><th className="px-4 py-3 text-right">月上限</th><th className="px-4 py-3">模式</th><th className="px-4 py-3">更新时间</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">作用域<InfoTip text="user=单用户覆盖；tenant=单租户；tenant_default=所有未配置租户的默认；platform=三层都不存在时的最后兜底。鼠标悬停各行可看对应说明" /></th><th className="px-4 py-3 text-right">日上限</th><th className="px-4 py-3 text-right">月上限</th><th className="px-4 py-3">模式</th><th className="px-4 py-3">更新时间</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
                     <tbody>
                       {(policies.data?.items ?? []).map((policy) => (
                         <tr key={`${policy.scope_type}:${policy.scope_id}`} className="border-b border-slate-50">
-                          <td className="px-4 py-3 font-mono text-text-primary">{policy.scope_type}:{policy.scope_id}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.daily_limit_cny)}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.monthly_limit_cny)}</td><td className="px-4 py-3"><ModeBadge value={policy.enforcement} /></td><td className="px-4 py-3 text-text-muted">{policy.updated_at ? new Date(policy.updated_at).toLocaleString('zh-CN') : '—'}</td><td className="px-4 py-3 text-right"><button onClick={() => beginEdit(policy)} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5">编辑</button></td>
+                          <td className="px-4 py-3 font-mono text-text-primary"><span title={scopeHint(policy.scope_type)} className="cursor-help underline decoration-dotted decoration-text-muted/40 underline-offset-4">{policy.scope_type}:{policy.scope_id}</span></td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.daily_limit_cny)}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.monthly_limit_cny)}</td><td className="px-4 py-3"><ModeBadge value={policy.enforcement} /></td><td className="px-4 py-3 text-text-muted">{policy.updated_at ? new Date(policy.updated_at).toLocaleString('zh-CN') : '—'}</td><td className="px-4 py-3 text-right"><button onClick={() => beginEdit(policy)} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5">编辑</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -231,5 +277,5 @@ function PolicyModal(props: {
   policy: BudgetPolicy; scopeId: string; daily: string; monthly: string; enforcement: 'hard' | 'soft' | 'audit'; reason: string;
   setScopeId: (value: string) => void; setDaily: (value: string) => void; setMonthly: (value: string) => void; setEnforcement: (value: 'hard' | 'soft' | 'audit') => void; setReason: (value: string) => void; onCancel: () => void; onSave: () => void;
 }) {
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"><div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h2 className="text-sm font-semibold text-text-primary">编辑 {props.policy.scope_type}:{props.scopeId || '新用户'}</h2><p className="mt-1 text-xs text-text-muted">变更立即生效，并保留旧值、新值、操作者、原因和时间。未保存用户覆盖时，用户继续继承租户策略。</p>{props.policy.scope_type === 'user' && <label className="mt-4 block text-xs text-text-secondary">用户 ID<input value={props.scopeId} onChange={(e) => props.setScopeId(e.target.value)} placeholder="仅填写目录返回的用户 ID" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label>}<div className="mt-4 grid grid-cols-2 gap-3"><label className="text-xs text-text-secondary">日上限 ¥（CNY）<input value={props.daily} onChange={(e) => props.setDaily(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label><label className="text-xs text-text-secondary">月上限 ¥（CNY）<input value={props.monthly} onChange={(e) => props.setMonthly(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label></div><label className="mt-3 block text-xs text-text-secondary">执行模式<select value={props.enforcement} onChange={(e) => props.setEnforcement(e.target.value as 'hard' | 'soft' | 'audit')} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm"><option value="hard">hard：超限阻断</option><option value="soft">soft：仅记录与阈值告警，不阻断</option><option value="audit">audit：仅审计留痕</option></select></label><label className="mt-3 block text-xs text-text-secondary">变更原因<textarea value={props.reason} onChange={(e) => props.setReason(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：本月营销活动预算调整" /></label><div className="mt-5 flex justify-end gap-2"><button onClick={props.onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button><button onClick={props.onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white"><Save size={13} />保存</button></div></div></div>
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"><div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"><h2 className="text-sm font-semibold text-text-primary">编辑 {props.policy.scope_type}:{props.scopeId || '新用户'}</h2><p className="mt-1 text-xs text-text-muted">变更立即生效，并保留旧值、新值、操作者、原因和时间。未保存用户覆盖时，用户继续继承租户策略。</p>{(props.policy.scope_type === 'platform' || props.policy.scope_type === 'tenant_default') && <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800"><AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden /><span>{props.policy.scope_type === 'platform' ? '平台兜底位于继承链最末端：只有当用户、租户、全租户默认三层策略都不存在时才会生效。若改它是为了让某个租户/用户生效，请改为配置对应租户或用户覆盖。' : '全租户默认会被每个「没有单独配置策略」的租户继承；已有显式租户策略的租户不受影响。'}</span></div>}{props.policy.scope_type === 'user' && <label className="mt-4 block text-xs text-text-secondary">用户 ID<input value={props.scopeId} onChange={(e) => props.setScopeId(e.target.value)} placeholder="仅填写目录返回的用户 ID" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label>}<div className="mt-4 grid grid-cols-2 gap-3"><label className="text-xs text-text-secondary">日上限 ¥（CNY）<input value={props.daily} onChange={(e) => props.setDaily(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label><label className="text-xs text-text-secondary">月上限 ¥（CNY）<input value={props.monthly} onChange={(e) => props.setMonthly(e.target.value)} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-sm" /></label></div><label className="mt-3 block text-xs text-text-secondary">执行模式<select value={props.enforcement} onChange={(e) => props.setEnforcement(e.target.value as 'hard' | 'soft' | 'audit')} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm"><option value="hard">hard：超限阻断</option><option value="soft">soft：仅记录与阈值告警，不阻断</option><option value="audit">audit：仅审计留痕</option></select></label><label className="mt-3 block text-xs text-text-secondary">变更原因<textarea value={props.reason} onChange={(e) => props.setReason(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm" placeholder="例如：本月营销活动预算调整" /></label><div className="mt-5 flex justify-end gap-2"><button onClick={props.onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button><button onClick={props.onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white"><Save size={13} />保存</button></div></div></div>
 }

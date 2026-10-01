@@ -119,26 +119,26 @@ describe("formatCost", () => {
     expect(formatCost(null)).toBe("--");
   });
 
-  it("0 → $0.00", () => {
-    expect(formatCost(0)).toBe("$0.00");
+  it("0 → ¥0.00", () => {
+    expect(formatCost(0)).toBe("¥0.00");
   });
 
-  it("< 0.0001 → 微单位 ($Xµ)", () => {
-    expect(formatCost(0.00005)).toBe("$50.00µ");
+  it("< 0.0001 → 微单位 (¥Xµ)", () => {
+    expect(formatCost(0.00005)).toBe("¥50.00µ");
   });
 
-  it("0.0001 → $0.0001", () => {
-    expect(formatCost(0.0001)).toBe("$0.0001");
+  it("0.0001 → ¥0.0001", () => {
+    expect(formatCost(0.0001)).toBe("¥0.0001");
   });
 
   it("< 1 → 4 位小数", () => {
-    expect(formatCost(0.0005)).toBe("$0.0005");
-    expect(formatCost(0.5)).toBe("$0.5000");
+    expect(formatCost(0.0005)).toBe("¥0.0005");
+    expect(formatCost(0.5)).toBe("¥0.5000");
   });
 
   it(">= 1 → 2 位小数", () => {
-    expect(formatCost(1)).toBe("$1.00");
-    expect(formatCost(123.456)).toBe("$123.46");
+    expect(formatCost(1)).toBe("¥1.00");
+    expect(formatCost(123.456)).toBe("¥123.46");
   });
 });
 
