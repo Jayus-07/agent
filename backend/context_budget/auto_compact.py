@@ -191,6 +191,9 @@ class SummaryOutcome:
     # Phase 5 分类型统计（patched 分布观测，§19）
     protected_by_type: dict = field(default_factory=dict)
     patched_by_type: dict = field(default_factory=dict)
+    # 本次摘要的右边界（summarizable_before_id，STOP B 2026-10-01）：
+    # 调用方在本轮采用摘要前做水位线/替换范围一致性核对用
+    boundary_id: int = 0
 
 
 class SyncMemorySummaryStore:
@@ -571,6 +574,7 @@ def _run_incremental_summary_locked(
             latency_ms=int((time.perf_counter() - started) * 1000),
             protected_by_type=_count_by_type(registry.facts),
             patched_by_type=_count_by_type(missing),
+            boundary_id=int(boundary_id),
         )
         _record_l5_metrics(outcome)
         logger.info(
@@ -762,7 +766,7 @@ async def run_auto_compact_async(
     session_id: str,
     extra_facts: Iterable[Any] | None = None,
 ) -> SummaryOutcome | None:
-    """异步入口（事件循环上下文的 fire-and-forget / 显式调用）。
+    """异步入口（显式调用/管理端触发；在线路径已改走 SummaryFlight）。
 
     核心是同步 DB + 同步 LLM，统一丢线程池，不阻塞事件循环。
     extra_facts（生产收口 B4）：调用方在创建本任务前读取的请求级业务
@@ -773,3 +777,100 @@ async def run_auto_compact_async(
     return await asyncio.to_thread(
         run_incremental_summary, session_id, SyncMemorySummaryStore(session_id),
         extra_facts)
+
+
+# ---------------------------------------------------------------------------
+# SummaryFlight：进程内单飞注册表（STOP B 2026-10-01）
+#
+# 设计要点（对应审查结论）：
+#   - 单飞键 = (租户, 会话)：不同租户互不抑制；
+#   - 槽位持有直到底层摘要线程真正结束——future.cancel()/调用方放弃等待
+#     都不能停止运行中的线程，绝不能以「等待方退出了」当作「摘要停了」；
+#   - 等待方超时只标记 wait_abandoned（观测），槽位仍被持有，后续同键
+#     请求直接走确定性结果，不会再起第二个摘要线程；
+#   - 跨进程单飞仍由 run_incremental_summary 内的 Redis 锁 + 水位线 CAS
+#     承担，本注册表只解决进程内（含 Redis 不可用降级态）的重复触发。
+# ---------------------------------------------------------------------------
+
+class SummaryFlight:
+    """一次增量摘要的在途持有者。"""
+
+    __slots__ = ("done", "outcome", "error", "wait_abandoned", "session_id")
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.done = threading.Event()
+        self.outcome: SummaryOutcome | None = None
+        self.error: BaseException | None = None
+        self.wait_abandoned = False
+
+
+_flights: dict[tuple[str, str], SummaryFlight] = {}
+_flights_lock = threading.Lock()
+
+
+def _flight_key(session_id: str) -> tuple[str, str]:
+    from backend.core.request_context import get_tool_tenant_id
+    return (get_tool_tenant_id() or "default", session_id)
+
+
+def start_summary_flight(
+    session_id: str, extra_facts: Iterable[Any] | None = None,
+) -> SummaryFlight | None:
+    """登记并启动一次进程内单飞摘要；None = 同键摘要已在底层线程中运行。"""
+    key = _flight_key(session_id)
+    with _flights_lock:
+        if key in _flights:
+            return None
+        flight = SummaryFlight(session_id)
+        _flights[key] = flight
+
+    def _run() -> None:
+        try:
+            flight.outcome = run_incremental_summary(
+                session_id, SyncMemorySummaryStore(session_id),
+                extra_facts=extra_facts)
+        except BaseException as e:  # run_incremental_summary 自身不抛；兜底观测
+            flight.error = e
+            logger.warning(
+                f"[AutoCompact:{session_id}] 摘要线程异常（槽位随 done 释放）",
+                exc_info=True)
+        finally:
+            with _flights_lock:
+                if _flights.get(key) is flight:
+                    _flights.pop(key, None)
+            # 先摘除注册再置位：等待者醒来时单飞槽位已可复用
+            flight.done.set()
+
+    _ctx = contextvars.copy_context()
+    _llm_executor.submit(_ctx.run, _run)
+    return flight
+
+
+def wait_flight_sync(flight: SummaryFlight, timeout: float,
+                     ) -> SummaryOutcome | None:
+    """同步等待摘要结果；超时返回 None（线程继续跑完落库，下一轮生效）。"""
+    if not flight.done.wait(timeout):
+        flight.wait_abandoned = True
+        logger.info(
+            f"[AutoCompact:{flight.session_id}] 同步等待摘要超时"
+            f"（{timeout}s），本轮走确定性结果，摘要线程继续")
+        return None
+    return flight.outcome
+
+
+async def wait_flight_async(flight: SummaryFlight, timeout: float,
+                            ) -> SummaryOutcome | None:
+    """异步等待摘要结果（不阻塞事件循环）；语义与 wait_flight_sync 对齐。"""
+    import asyncio
+    loop = asyncio.get_running_loop()
+    finished = await loop.run_in_executor(None, flight.done.wait, timeout)
+    if not finished:
+        flight.wait_abandoned = True
+        logger.info(
+            f"[AutoCompact:{flight.session_id}] 在线等待摘要超时"
+            f"（{timeout}s），本轮走确定性结果，摘要线程继续")
+        return None
+    if flight.error is not None:
+        return None
+    return flight.outcome

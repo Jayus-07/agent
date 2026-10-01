@@ -363,10 +363,7 @@ class MemoryService:
                         return  # 攒批：增量不足，等后续轮次凑批
                     l2 = await SessionMemory.create(session_id, srepo)
                     summary = await l2.summarize()
-                    if summary is not None:
-                        # 摘要必须落库，否则下次会话列表/历史读取时 summary 永远为空
-                        await srepo.update_summary(session_id, summary)
-                    else:
+                    if summary is None:
                         # 摘要失败：保留旧摘要并留痕（静默丢失上下文最难排查）
                         try:
                             from backend.observability.metrics import degradation_alerts_total
@@ -375,6 +372,12 @@ class MemoryService:
                             ).inc()
                         except Exception:
                             pass
+                    elif not getattr(l2, "summary_persisted", False):
+                        # 仅 fallback 全量路径需要二次落库（STOP B 2026-10-01）：
+                        # 增量路径已随水位线 CAS 原子落库，这里的非 CAS
+                        # update_summary 只写正文，并发下会让摘要正文与
+                        # 水位线错配——禁止对已持久化结果重复写
+                        await srepo.update_summary(session_id, summary)
                     await db_session.commit()
                 except Exception as e:
                     await db_session.rollback()

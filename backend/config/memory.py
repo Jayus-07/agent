@@ -117,6 +117,11 @@ CONTEXT_L5_TARGET_RATIO = float(os.getenv("CONTEXT_L5_TARGET_RATIO", "0.70"))
 # 校准依据（Phase 5）：摘要模型切 non-thinking 后 P95 实测 ~5s，timeout=P95×2
 # 取整 30s（§十二：正常摘要不误超时，provider 卡死又能及时 fallback）
 CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", "30"))
+# 在线等待同轮摘要的时限（秒，STOP B 2026-10-01）：异步在线路径 await 摘要
+# 的上限。校准依据：non-thinking 摘要 P95 ~5s（§十二）——在线等待取其量级，
+# 不是 30s 的 provider 死等上限；超时即放弃本轮采用（摘要线程继续跑完落库，
+# 下一轮生效），绝不把 30s 变成每次聊天的等待时间。
+CONTEXT_L5_ONLINE_WAIT_SECONDS = float(os.getenv("CONTEXT_L5_ONLINE_WAIT_SECONDS", "8"))
 # 摘要 LLM 模型：正式走模型角色控制面（context_compactor 角色，2026-09-22 Phase 5）。
 # 解析链 = DB role binding（管理端「模型角色绑定」）→ config fallback（本常量）→
 # provider adapter。此常量仅作 DB 未绑定时的代码默认值；运行时经

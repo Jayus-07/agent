@@ -52,6 +52,25 @@ def _session():
     set_session_id(_DEFAULT_SESSION)
 
 
+@pytest.fixture(autouse=True)
+def _clear_flights():
+    """摘要单飞注册表逐用例清空（测试间不串槽位）。"""
+    from backend.context_budget import auto_compact as ac
+    ac._flights.clear()
+    yield
+    ac._flights.clear()
+
+
+def _wait_flights_done(timeout: float = 10.0) -> None:
+    """等待在途摘要线程真正结束（断言槽位释放前必须等线程，不能只 sleep）。"""
+    import time as _t
+    from backend.context_budget import auto_compact as ac
+    deadline = _t.time() + timeout
+    while ac._flights and _t.time() < deadline:
+        _t.sleep(0.01)
+    assert not ac._flights, "摘要线程结束后单飞槽位必须释放"
+
+
 def _small_window(monkeypatch, window: int) -> None:
     monkeypatch.setattr("backend.config.llm.LLM_CONTEXT_LENGTH", window)
     from backend.context_budget import token_counter as tc
@@ -75,23 +94,26 @@ def _history(turns: int, msg_len: int = 200) -> list:
 
 
 class TestL5FaultBoundary:
-    def test_l5_task_registry_exists(self):
-        """回归锚：_L5_TASKS 必须有模块级定义（原事故 = NameError）。"""
-        from backend.context_budget import manager
-        assert isinstance(manager._L5_TASKS, set)
+    def test_flight_registry_exists(self):
+        """回归锚：进程内单飞注册表存在（原事故 = async 分支引用未定义
+        _L5_TASKS 的 NameError；STOP B 起由 auto_compact._flights 承担）。"""
+        from backend.context_budget import auto_compact as ac
+        assert isinstance(ac._flights, dict)
+        assert hasattr(ac, "start_summary_flight")
+        assert hasattr(ac, "wait_flight_async")
 
     async def test_async_nameerror_contained_proxy_sends_trimmed(
             self, monkeypatch, _session):
-        """事故复现回归：async 上下文 + L5 触发 + NameError →
-        proxy 发送的仍是已裁剪消息，异常不外溢。"""
+        """事故复现回归：async 在线调用 + L5 触发 + 摘要线程 NameError →
+        proxy 发送的仍是已裁剪消息，异常不外溢，槽位随线程结束释放。"""
         from backend.context_budget import auto_compact as ac
         from backend.infra.llm import proxy
 
-        async def _boom(*a, **k):
+        def _boom(*a, **k):
             raise NameError("name '_L5_TASKS' is not defined")
 
-        monkeypatch.setattr(ac, "run_auto_compact_async", _boom)
-        # 阈值降到地板：任何用量都触发 L5（确定性走 async 分支）
+        monkeypatch.setattr(ac, "run_incremental_summary", _boom)
+        # 阈值降到地板：任何用量都触发 L5（确定性走在线等待路径）
         monkeypatch.setattr(config, "CONTEXT_L5_TRIGGER_RATIO", 0.05)
 
         captured: list = []
@@ -114,33 +136,29 @@ class TestL5FaultBoundary:
         assert len(sent) < len(big), "模型收到的是未裁剪原始消息"
         assert sent[-1].content == "当前问题"
         assert getattr(result, "content", "") == "ok"
-        # 让后台任务跑完：NameError 被回调观测，强引用释放
-        for _ in range(3):
-            await asyncio.sleep(0)
-        from backend.context_budget import manager
-        assert manager._L5_TASKS == set(), "完成任务后强引用必须释放"
+        _wait_flights_done()
 
     async def test_async_generic_exception_contained(self, monkeypatch, _session):
-        """async 分支调度/执行任意异常 → 本轮返回确定性结果，不外溢。"""
+        """在线等待路径：摘要线程任意异常 → 本轮确定性结果，不外溢。"""
         from backend.context_budget import auto_compact as ac
 
-        async def _boom(*a, **k):
+        def _boom(*a, **k):
             raise RuntimeError("summary provider down")
 
-        monkeypatch.setattr(ac, "run_auto_compact_async", _boom)
+        monkeypatch.setattr(ac, "run_incremental_summary", _boom)
         monkeypatch.setattr(config, "CONTEXT_L5_TRIGGER_RATIO", 0.05)
         _small_window(monkeypatch, window=400)
 
         msgs = [SystemMessage(content="系统提示")] + _history(6) \
             + [HumanMessage(content="当前问题")]
-        prepared = ContextBudgetManager().prepare_llm_context(messages=msgs)
+        prepared = await ContextBudgetManager().prepare_llm_context_async(
+            messages=msgs)
         assert len(prepared.messages) < len(msgs)
         assert not prepared.overflow
-        for _ in range(3):
-            await asyncio.sleep(0)
+        _wait_flights_done()
 
     def test_sync_timeout_contained(self, monkeypatch, _session):
-        """同步路径：摘要超时（TimeoutError）→ 沿用确定性裁剪结果。"""
+        """worker 线程路径：摘要超时（TimeoutError）→ 沿用确定性裁剪结果。"""
         from backend.context_budget import auto_compact as ac
 
         def _timeout(*a, **k):
@@ -155,9 +173,10 @@ class TestL5FaultBoundary:
         prepared = ContextBudgetManager().prepare_llm_context(messages=msgs)
         assert len(prepared.messages) < len(msgs)
         assert not prepared.overflow
+        _wait_flights_done()
 
     def test_sync_generic_exception_contained(self, monkeypatch, _session):
-        """同步路径：projection 重建任意异常 → 不外溢（L2/L4/硬裁保留）。"""
+        """worker 线程路径：摘要线程任意异常 → 不外溢（L2/L4/硬裁保留）。"""
         from backend.context_budget import auto_compact as ac
 
         def _boom(*a, **k):
@@ -171,6 +190,108 @@ class TestL5FaultBoundary:
             + [HumanMessage(content="当前问题")]
         prepared = ContextBudgetManager().prepare_llm_context(messages=msgs)
         assert len(prepared.messages) < len(msgs)
+        _wait_flights_done()
+
+    async def test_online_wait_timeout_defers_to_next_turn(
+            self, monkeypatch, _session):
+        """在线等待超时 → 本轮确定性结果；线程继续跑完落库（下一轮生效）；
+        等待期间同键不再起第二个摘要（槽位仍被持有）。"""
+        import threading
+
+        from backend.context_budget import auto_compact as ac
+
+        release = threading.Event()
+        started_summary = threading.Event()
+
+        def _slow_summary(*a, **k):
+            started_summary.set()
+            release.wait(10)
+            return None  # 摘要最终「失败」（无增量），模拟慢 provider
+
+        monkeypatch.setattr(ac, "run_incremental_summary", _slow_summary)
+        monkeypatch.setattr(config, "CONTEXT_L5_TRIGGER_RATIO", 0.05)
+        monkeypatch.setattr(config, "CONTEXT_L5_ONLINE_WAIT_SECONDS", 0.2)
+        _small_window(monkeypatch, window=400)
+
+        msgs = [SystemMessage(content="系统提示")] + _history(6) \
+            + [HumanMessage(content="当前问题")]
+        prepared = await ContextBudgetManager().prepare_llm_context_async(
+            messages=msgs)
+        assert len(prepared.messages) < len(msgs)
+        started_summary.wait(5)
+        # 摘要线程仍在运行（放弃等待 ≠ 线程停止）：同键再触发必须被抑制
+        flight = ac.start_summary_flight("sess-stop-a-test")
+        assert flight is None, "等待超时后槽位必须仍被持有，不得重复起摘要"
+        release.set()
+        _wait_flights_done()
+
+    async def test_concurrent_same_session_single_flight(
+            self, monkeypatch, _session):
+        """同租户同会话并发 → 摘要在途时只发起一次（第二个触发复用确定性
+        结果）；水位线 CAS 保证摘要结束后紧随的再次触发也不会重复调 LLM。"""
+        import threading
+
+        from backend.context_budget import auto_compact as ac
+
+        calls: list = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def _summary(*a, **k):
+            calls.append(1)
+            started.set()
+            release.wait(10)
+            return None
+
+        monkeypatch.setattr(ac, "run_incremental_summary", _summary)
+        monkeypatch.setattr(config, "CONTEXT_L5_TRIGGER_RATIO", 0.05)
+        _small_window(monkeypatch, window=400)
+
+        msgs = [SystemMessage(content="系统提示")] + _history(6) \
+            + [HumanMessage(content="当前问题")]
+        mgr = ContextBudgetManager()
+        first = asyncio.create_task(
+            mgr.prepare_llm_context_async(messages=msgs))
+        # 等第一个请求的摘要线程真正在途，第二个请求才发起
+        await asyncio.to_thread(started.wait, 5)
+        second = await mgr.prepare_llm_context_async(messages=msgs)
+        assert second.messages[-1].content == "当前问题"
+        release.set()
+        await first
+        assert len(calls) == 1, f"摘要在线途时被触发了 {len(calls)} 次"
+        _wait_flights_done()
+
+    async def test_different_tenants_not_suppressed(self, monkeypatch):
+        """不同租户互不抑制：两个租户各起一次摘要。"""
+        from backend.context_budget import auto_compact as ac
+        from backend.core.request_context import set_session_id, set_tool_tenant_id
+
+        calls: list = []
+
+        def _summary(*a, **k):
+            calls.append(1)
+            return None
+
+        monkeypatch.setattr(ac, "run_incremental_summary", _summary)
+        monkeypatch.setattr(config, "CONTEXT_L5_TRIGGER_RATIO", 0.05)
+        _small_window(monkeypatch, window=400)
+
+        msgs = [SystemMessage(content="系统提示")] + _history(6) \
+            + [HumanMessage(content="当前问题")]
+
+        async def _one(tenant: str):
+            set_tool_tenant_id(tenant)
+            set_session_id("sess-tenant-test")
+            return await ContextBudgetManager().prepare_llm_context_async(
+                messages=msgs)
+
+        try:
+            await asyncio.gather(_one("tenant-a"), _one("tenant-b"))
+        finally:
+            set_tool_tenant_id("")
+            set_session_id(_DEFAULT_SESSION)
+        assert len(calls) == 2, "不同租户的摘要不得互相抑制"
+        _wait_flights_done()
 
 
 # ---------------------------------------------------------------------------

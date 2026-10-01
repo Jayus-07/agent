@@ -13,6 +13,10 @@ class SessionMemory:
         self._summary: str | None = None
         self._repo = None  # set during async init
         self._message_count: int = 0
+        # 增量摘要路径已随水位线 CAS 落库（STOP B 2026-10-01）——调用方
+        # 据此跳过二次 update_summary（非 CAS 只写正文，并发下会造成
+        # 摘要正文与水位线错配）
+        self.summary_persisted: bool = False
 
     @classmethod
     async def create(cls, session_id: str, repo, user_id: str = "default") -> "SessionMemory":
@@ -59,6 +63,8 @@ class SessionMemory:
                     self.session_id, SyncMemorySummaryStore(self.session_id))
                 if outcome is not None:
                     self._summary = outcome.summary
+                    # 摘要正文与水位线已由 CAS 原子落库，调用方勿再写
+                    self.summary_persisted = True
                 # outcome None（无增量内容/失败）：沿用现有摘要，不覆盖
                 return self._summary
             except Exception as e:

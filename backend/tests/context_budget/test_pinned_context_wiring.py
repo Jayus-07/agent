@@ -143,11 +143,13 @@ class TestManagerPinsParam:
 
 
 class TestL5ExtraFactsWiring:
-    def test_run_l5_passes_request_pins_as_extra_facts(self, monkeypatch):
-        """_run_l5 把请求级 pin 值转为 (kind, value) 传给增量摘要。
+    def test_summary_flight_passes_request_pins_as_extra_facts(
+            self, monkeypatch):
+        """摘要链路把请求级 pin 值转为 (kind, value) 传给增量摘要。
 
-        manager._run_l5 内部 `from backend.context_budget.auto_compact import
-        run_incremental_summary` 是调用期解析 → 必须打补丁在 ac_mod 上。
+        STOP B 2026-10-01：接线点 = _extra_facts() → start_summary_flight
+        （原 _run_l5 直调 run_incremental_summary 已移除）。底层实现是
+        调用期解析 → 必须打补丁在 ac_mod 上。
         """
         captured: dict = {}
 
@@ -157,13 +159,15 @@ class TestL5ExtraFactsWiring:
 
         monkeypatch.setattr(ac_mod, "run_incremental_summary", _fake_summary)
         register_request_pin("20260922001", PIN_CONFIRMATION)
-        m = ContextBudgetManager()
-        msgs = [HumanMessage(content="订单 20260922001" * 100),
-                HumanMessage(content="当前问题")]
-        m._run_l5(msgs, 9999, 1000, "s-extra")
+        # 与生产同路径：manager 先 _extra_facts() 再传入 flight
+        from backend.context_budget.manager import _extra_facts
+        flight = ac_mod.start_summary_flight(
+            "s-extra", extra_facts=_extra_facts())
+        assert flight is not None
+        ac_mod.wait_flight_sync(flight, 10)
         assert (PIN_CONFIRMATION, "20260922001") in captured["extra_facts"]
 
-    def test_run_l5_without_pins_passes_empty(self, monkeypatch):
+    def test_summary_flight_without_pins_passes_empty(self, monkeypatch):
         """无请求级 pin → extra_facts 为空列表（行为与接线前一致）。"""
         captured: dict = {}
 
@@ -172,10 +176,11 @@ class TestL5ExtraFactsWiring:
             return None
 
         monkeypatch.setattr(ac_mod, "run_incremental_summary", _fake_summary)
-        m = ContextBudgetManager()
-        msgs = [HumanMessage(content="普通对话" * 100),
-                HumanMessage(content="当前问题")]
-        m._run_l5(msgs, 9999, 1000, "s-no-extra")
+        from backend.context_budget.manager import _extra_facts
+        flight = ac_mod.start_summary_flight(
+            "s-no-extra", extra_facts=_extra_facts())
+        assert flight is not None
+        ac_mod.wait_flight_sync(flight, 10)
         assert captured["extra_facts"] == []
 
     def test_auto_compact_async_passthrough(self, monkeypatch):
