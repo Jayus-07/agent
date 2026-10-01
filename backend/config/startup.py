@@ -343,6 +343,15 @@ def validate_startup_settings() -> List[str]:
             "禁止静默使用内置开发口令（agent_readonly_dev），必须显式配置。"
         )
 
+    # 预算模式（2026-10-01 P0）：生产环境必须显式声明 LLM_BUDGET_MODE。
+    # 该键缺省 off——漏配等于"预算从未开启"，且历史上拼写错误会被静默回退。
+    # config/llm.py 已拦非法值；这里拦"生产 + 未显式声明"。
+    if _is_prod and not _env("LLM_BUDGET_MODE", "").strip():
+        _fatal.append(
+            "ENVIRONMENT=production + LLM_BUDGET_MODE 未显式声明：生产环境必须"
+            "显式设置 off / observe / enforce（预算缺省即关闭，漏配等于没有预算）。"
+        )
+
     # 检查点后端：开关开着但 Postgres 后端不可用 —— 生产环境拒绝启动（结构病审查
     # P2-10）。运行期会降级为 MemorySaver（跨轮状态只在进程内、重启即失、多副本
     # 各存一份），而日志里的 "enabled" 会让人以为已持久化。拦在第一次用到之前，

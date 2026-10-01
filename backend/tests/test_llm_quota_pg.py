@@ -16,7 +16,7 @@ def pg_quota_policy():
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO budget_policies
-                   (scope_type, scope_id, daily_limit_usd, monthly_limit_usd,
+                   (scope_type, scope_id, daily_limit_cny, monthly_limit_cny,
                     enforcement, timezone, updated_by)
                    VALUES ('tenant', %s, 0.100000, 0.100000,
                            'hard', 'Asia/Shanghai', 'test')""",
@@ -28,6 +28,11 @@ def pg_quota_policy():
             cur.execute(
                 "DELETE FROM budget_reservations WHERE tenant_id = %s",
                 (tenant_id,),
+            )
+            # 账本键拆分后用户层落在 ("user", "quota-user-<token>")，一并清理
+            cur.execute(
+                "DELETE FROM budget_ledger WHERE scope_type = 'user' "
+                "AND scope_id LIKE 'quota-user-%'",
             )
             cur.execute(
                 "DELETE FROM budget_events WHERE scope_type = 'tenant' AND scope_id = %s",
@@ -48,9 +53,9 @@ def test_pg_quota_hard_limit_is_atomic_and_settled(pg_quota_policy):
 
     store = PostgresQuotaStore()
     reservation = store.reserve(
-        user_id="quota-user",
+        user_id="quota-user-" + pg_quota_policy,
         tenant_id=pg_quota_policy,
-        amount_usd=Decimal("0"),
+        amount_cny=Decimal("0"),
         request_id="quota-pg-test",
     )
     store.settle(reservation, Decimal("0.100000"))
@@ -69,8 +74,8 @@ def test_pg_quota_hard_limit_is_atomic_and_settled(pg_quota_policy):
 
     with pytest.raises(QuotaExceeded):
         store.reserve(
-            user_id="quota-user",
+            user_id="quota-user-" + pg_quota_policy,
             tenant_id=pg_quota_policy,
-            amount_usd=Decimal("0.020000"),
+            amount_cny=Decimal("0.020000"),
             request_id="quota-pg-test-2",
         )

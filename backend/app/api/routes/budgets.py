@@ -23,8 +23,10 @@ router = APIRouter(tags=["预算"])
 
 
 class BudgetPolicyUpdate(BaseModel):
-    daily_limit_usd: str = Field(..., min_length=1)
-    monthly_limit_usd: str = Field(..., min_length=1)
+    """策略金额单位 = 记账本位币 CNY（2026-10-01 起）。"""
+
+    daily_limit_cny: str = Field(..., min_length=1)
+    monthly_limit_cny: str = Field(..., min_length=1)
     enforcement: Literal["hard", "soft", "audit"]
     audit_exempt: bool = False
     reason: str = Field(..., min_length=1, max_length=1000)
@@ -119,14 +121,14 @@ async def update_budget_policy(
 ) -> dict[str, Any]:
     if scope_type not in {"user", "tenant", "tenant_default", "platform"}:
         raise HTTPException(422, "预算作用域非法")
-    daily = _decimal(body.daily_limit_usd, "daily_limit_usd")
-    monthly = _decimal(body.monthly_limit_usd, "monthly_limit_usd")
+    daily = _decimal(body.daily_limit_cny, "daily_limit_cny")
+    monthly = _decimal(body.monthly_limit_cny, "monthly_limit_cny")
     def persist() -> dict[str, Any]:
         policy = _store().upsert_policy(
                 scope_type=scope_type,
                 scope_id=scope_id,
-                daily_limit_usd=daily,
-                monthly_limit_usd=monthly,
+                daily_limit_cny=daily,
+                monthly_limit_cny=monthly,
                 enforcement=body.enforcement,
                 audit_exempt=body.audit_exempt,
                 updated_by=operator.actor,
@@ -175,3 +177,27 @@ async def get_budget_policy_audit(
         return {"items": _json_value(_store().list_policy_audit(limit))}
     except QuotaConfigurationError as exc:
         raise HTTPException(503, "预算策略审计暂不可用") from exc
+
+
+@router.get("/admin/budgets/reconciliation")
+async def get_budget_reconciliation(
+    limit: int = Query(100, ge=1, le=500),
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict[str, Any]:
+    """待对账队列：用量未知（可能已计费）的预占 + 总览。
+
+    惰性触发滞留回收（sweep 幂等，只有 status='reserved' 且超龄的行会被
+    处理），保证页面打开时队列是新鲜的；回收本身只转状态/释放旧周期占额，
+    不伪造结算金额。
+    """
+    del operator
+    store = _store()
+    try:
+        sweep = store.sweep_stale_reservations()
+        return {
+            "summary": _json_value(store.reconciliation_summary()),
+            "items": _json_value(store.list_pending_review(limit)),
+            "sweep": sweep,
+        }
+    except QuotaConfigurationError as exc:
+        raise HTTPException(503, "待对账队列暂不可用") from exc

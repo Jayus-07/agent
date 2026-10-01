@@ -53,15 +53,15 @@ class RequestBudgetLimits:
 
     max_calls: int = 8
     max_total_tokens: int = 32000
-    max_cost_usd: Decimal = Decimal("0.50")
+    max_cost: Decimal = Decimal("0.50")
     max_retries: int = 2
     max_fallbacks: int = 1
 
     def __post_init__(self):
         object.__setattr__(
             self,
-            "max_cost_usd",
-            Decimal(str(self.max_cost_usd)).quantize(Decimal("0.000001")),
+            "max_cost",
+            Decimal(str(self.max_cost)).quantize(Decimal("0.000001")),
         )
 
 
@@ -73,7 +73,7 @@ class RequestBudgetSnapshot:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-    cost_usd: Decimal
+    cost: Decimal
     exceeded: tuple[str, ...] = ()
 
 
@@ -100,7 +100,7 @@ class RequestBudget:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
-    cost_usd: Decimal = Decimal("0")
+    cost: Decimal = Decimal("0")
     user_id: str = ""
     tenant_id: str = ""
     quota_store: Any = field(default=None, repr=False)
@@ -154,7 +154,7 @@ class RequestBudget:
                         tenant_id=self.tenant_id,
                         # 预占本次请求级成本上限；成功后按真实价格结算并
                         # 释放差额，避免并发请求在未知 completion token 时超卖。
-                        amount_usd=self.limits.max_cost_usd,
+                        amount_cny=self.limits.max_cost,
                         request_id=_current_request_id.get(),
                     )
                 except Exception:
@@ -174,7 +174,7 @@ class RequestBudget:
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
         total_tokens: int | None = None,
-        cost_usd: Decimal | float | str | None = None,
+        cost: Decimal | float | str | None = None,
     ) -> None:
         """记录一次调用返回的真实 token；未知用量不伪造。"""
         with self._lock:
@@ -184,7 +184,7 @@ class RequestBudget:
             self.prompt_tokens += prompt
             self.completion_tokens += completion
             self.total_tokens += total
-            self.cost_usd += Decimal(str(cost_usd or 0)).quantize(
+            self.cost += Decimal(str(cost or 0)).quantize(
                 Decimal("0.000001")
             )
 
@@ -202,7 +202,7 @@ class RequestBudget:
                 prompt_tokens=self.prompt_tokens,
                 completion_tokens=self.completion_tokens,
                 total_tokens=self.total_tokens,
-                cost_usd=self.cost_usd,
+                cost=self.cost,
                 exceeded=tuple(exceeded),
             )
 
@@ -215,8 +215,8 @@ class RequestBudget:
         ):
             return "request_tokens"
         if (
-            self.limits.max_cost_usd > 0
-            and self.cost_usd >= self.limits.max_cost_usd
+            self.limits.max_cost > 0
+            and self.cost >= self.limits.max_cost
         ):
             return "request_cost"
         if (
@@ -241,7 +241,7 @@ def _config_limits() -> RequestBudgetLimits:
     return RequestBudgetLimits(
         max_calls=int(config.LLM_REQUEST_MAX_CALLS),
         max_total_tokens=int(config.LLM_REQUEST_MAX_TOKENS),
-        max_cost_usd=Decimal(str(config.LLM_REQUEST_MAX_COST_USD)),
+        max_cost=Decimal(str(config.LLM_REQUEST_MAX_COST)),
         max_retries=int(config.LLM_REQUEST_MAX_RETRIES),
         max_fallbacks=int(config.LLM_REQUEST_MAX_FALLBACKS),
     )
@@ -331,7 +331,11 @@ def current_call_decision() -> str:
 
 
 def release_model_reservation() -> None:
-    """释放本次模型调用失败/重试路径的额度预占。"""
+    """释放本次模型调用失败/重试路径的额度预占。
+
+    仅用于"确定未发给供应商"的失败（熔断开路、鉴权/参数类错误）；
+    可能已计费的失败请用 :func:`review_model_reservation`。
+    """
     reservation = _current_quota_reservation.get()
     state = current_request_budget()
     if reservation is not None and state is not None and state.quota_store is not None:
@@ -339,12 +343,38 @@ def release_model_reservation() -> None:
     _current_quota_reservation.set(None)
 
 
+def review_model_reservation(reason: str) -> None:
+    """把当前预占转入待对账（needs_review），占额保守保留到周期结束。
+
+    用于"调用可能已对供应商计费但用量未知"的场景：流式缺 usage 尾帧、
+    超时/网络类失败（供应商可能已处理）、结算失败。不能按零成本放走，
+    也不能让本次预占永久滞留——由 PG 侧 sweep 在周期结束后释放占额并
+    留在待对账队列供核查。标记失败只降级为告警，不反噬模型主链路。
+    """
+    reservation = _current_quota_reservation.get()
+    state = current_request_budget()
+    if reservation is None or state is None or state.quota_store is None:
+        return
+    try:
+        marked = state.quota_store.mark_needs_review(reservation, reason)
+    except Exception as exc:  # noqa: BLE001 — 观测/对账链路不得反噬主链路
+        logger.warning(
+            "[Budget] 待对账标记失败 reservation=%s reason=%s（预占可能滞留，"
+            "由滞留回收兜底）: %s",
+            getattr(reservation, "reservation_id", "?"), reason, exc,
+        )
+    else:
+        if marked:
+            _record_budget_request(state.mode, "needs_review")
+        _current_quota_reservation.set(None)
+
+
 def record_model_usage(
     *,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
-    cost_usd: Decimal | float | str | None = None,
+    cost: Decimal | float | str | None = None,
 ) -> None:
     state = current_request_budget()
     if state is not None:
@@ -352,12 +382,30 @@ def record_model_usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            cost_usd=cost_usd,
+            cost=cost,
         )
         reservation = _current_quota_reservation.get()
         if reservation is not None and state.quota_store is not None:
-            state.quota_store.settle(reservation, Decimal(str(cost_usd or 0)))
-            _current_quota_reservation.set(None)
+            try:
+                state.quota_store.settle(reservation, Decimal(str(cost or 0)))
+            except Exception as exc:
+                # 2026-10-01 P0 修复：结算失败不再吞掉——原实现静默吞异常会让
+                # 预占永久滞留。转为待对账（占额保留到周期结束）并告警；
+                # 仍不向调用方抛错（成本统计失败不能破坏模型主链路）。
+                logger.warning(
+                    "[Budget] 预算结算失败，转入待对账 reservation=%s: %s",
+                    getattr(reservation, "reservation_id", "?"), exc,
+                )
+                try:
+                    state.quota_store.mark_needs_review(reservation, "settle_failed")
+                except Exception:
+                    logger.warning(
+                        "[Budget] 结算失败且待对账标记也失败 reservation=%s"
+                        "（由滞留回收兜底）",
+                        getattr(reservation, "reservation_id", "?"),
+                    )
+            finally:
+                _current_quota_reservation.set(None)
 
 
 __all__ = [
@@ -372,4 +420,5 @@ __all__ = [
     "record_model_usage",
     "release_model_reservation",
     "reserve_model_call",
+    "review_model_reservation",
 ]

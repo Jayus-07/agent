@@ -1,4 +1,16 @@
-"""Q4 用户/租户日月预算的策略解析、周期计算和本地契约实现。"""
+"""Q4 用户/租户日月预算的策略解析、周期计算和本地契约实现。
+
+2026-10-01 治理口径（P0）：
+- **记账主体 = 真实身份**。账本键一律为 ``("user", user_id)`` /
+  ``("tenant", tenant_id)``；``platform``/``tenant_default`` 策略只是
+  **模板**（提供上限/强制级别/时区），绝不再作为账本键——否则无显式
+  策略的租户/用户会共用同一本账，额度隔离失效。
+- **金额单位 = 记账本位币 CNY**（config/budget.py），列名以 ``_cny``
+  结尾；供应商报价的原生币种在定价出口折算。
+- 预占三态 reserved/settled/released 之外新增 **needs_review（待对账）**：
+  调用可能已计费但用量未知（流式缺 usage / 结算失败 / 滞留超龄）时转入
+  该态，占额保守保留到周期结束，不当作零成本放走。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,6 +28,8 @@ from backend.shared.logger import logger
 _SIX_PLACES = Decimal("0.000001")
 _VALID_SCOPES = frozenset({"user", "tenant", "tenant_default", "platform"})
 _VALID_ENFORCEMENT = frozenset({"hard", "soft", "audit"})
+# 账本/预占里允许出现的记账主体作用域（模板作用域禁止落账本）
+_IDENTITY_SCOPES = frozenset({"user", "tenant"})
 
 
 def _record_quota_metric(
@@ -102,8 +116,8 @@ class QuotaExceeded(RuntimeError):
 class BudgetPolicy:
     scope_type: str
     scope_id: str
-    daily_limit_usd: Decimal
-    monthly_limit_usd: Decimal
+    daily_limit_cny: Decimal
+    monthly_limit_cny: Decimal
     enforcement: str = "hard"
     timezone: str = "Asia/Shanghai"
     audit_exempt: bool = False
@@ -115,7 +129,7 @@ class BudgetPolicy:
             raise ValueError("预算作用域 ID 不能为空")
         if self.enforcement not in _VALID_ENFORCEMENT:
             raise ValueError(f"非法预算强制级别: {self.enforcement}")
-        if self.daily_limit_usd <= 0 or self.monthly_limit_usd <= 0:
+        if self.daily_limit_cny <= 0 or self.monthly_limit_cny <= 0:
             raise ValueError("日/月额度必须大于 0，不允许用 0 表示无限")
         if self.audit_exempt and not (
             self.scope_type == "tenant"
@@ -172,8 +186,8 @@ def budget_periods(now: datetime | None = None, timezone_name: str = "Asia/Shang
 class QuotaReservation:
     blocked: bool
     audit_exempt: bool = False
-    daily_remaining_usd: Decimal = Decimal("0")
-    monthly_remaining_usd: Decimal = Decimal("0")
+    daily_remaining_cny: Decimal = Decimal("0")
+    monthly_remaining_cny: Decimal = Decimal("0")
 
 
 class QuotaManager:
@@ -204,19 +218,31 @@ class QuotaManager:
             user=user,
         )
 
-    def record(self, tenant_id: str, user_id: str, amount_usd: Decimal) -> None:
+    @staticmethod
+    def _subjects(
+        tenant_id: str, user_id: str, policies: ResolvedBudgetPolicies,
+    ) -> list[tuple[str, str, BudgetPolicy]]:
+        """记账主体 = 真实身份；策略只作模板（提供上限/强制级别/时区）。"""
+        return [
+            ("user", user_id, policies.user),
+            ("tenant", tenant_id, policies.tenant),
+        ]
+
+    def record(self, tenant_id: str, user_id: str, amount_cny: Decimal) -> None:
         policies = self._resolve(tenant_id, user_id)
-        for policy in {policies.user, policies.tenant}:
-            self._used_for(policy, tenant_id, user_id, amount_usd)
+        for scope_type, scope_id, policy in self._subjects(
+            tenant_id, user_id, policies,
+        ):
+            self._used_for(scope_type, scope_id, policy, amount_cny)
 
     def reserve(
         self,
         tenant_id: str,
         user_id: str,
-        amount_usd: Decimal,
+        amount_cny: Decimal,
         now: datetime | None = None,
     ) -> QuotaReservation:
-        amount = Decimal(amount_usd).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
+        amount = Decimal(amount_cny).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         if amount < 0:
             raise ValueError("预算预占金额不能为负数")
         policies = self._resolve(tenant_id, user_id)
@@ -224,43 +250,62 @@ class QuotaManager:
         daily_remaining = Decimal("999999999")
         monthly_remaining = Decimal("999999999")
         periods = budget_periods(now, policies.tenant.timezone)
-        for policy in {policies.user, policies.tenant}:
+        for scope_type, scope_id, policy in self._subjects(
+            tenant_id, user_id, policies,
+        ):
+            # 键必须含 period_type：每月 1 日 day/month 的 period_start 相同，
+            # 只用时间戳做键会把当天用量双计进日窗口（2026-10-01 实测踩中）
             daily_used = self._used.get(
-                (policy.scope_type, policy.scope_id, periods.day_start_utc.isoformat()),
+                ("day", scope_type, scope_id,
+                 periods.day_start_utc.isoformat()),
                 Decimal("0"),
             )
             monthly_used = self._used.get(
-                (policy.scope_type, policy.scope_id, periods.month_start_utc.isoformat()),
+                ("month", scope_type, scope_id,
+                 periods.month_start_utc.isoformat()),
                 Decimal("0"),
             )
-            daily_remaining = min(daily_remaining, policy.daily_limit_usd - daily_used)
-            monthly_remaining = min(monthly_remaining, policy.monthly_limit_usd - monthly_used)
+            daily_remaining = min(daily_remaining, policy.daily_limit_cny - daily_used)
+            monthly_remaining = min(
+                monthly_remaining, policy.monthly_limit_cny - monthly_used,
+            )
             audit_exempt = audit_exempt or policy.audit_exempt
             if (
                 policy.enforcement == "hard"
                 and not policy.audit_exempt
-                and (daily_used + amount > policy.daily_limit_usd
-                     or monthly_used + amount > policy.monthly_limit_usd)
+                and (
+                    daily_used + amount > policy.daily_limit_cny
+                    or monthly_used + amount > policy.monthly_limit_cny
+                    # 零金额门禁（副作用检查）在账本打满时同样拒绝
+                    or (amount == 0 and (
+                        daily_used >= policy.daily_limit_cny
+                        or monthly_used >= policy.monthly_limit_cny
+                    ))
+                )
             ):
-                raise QuotaExceeded(policy.scope_id, "day_or_month")
+                raise QuotaExceeded(f"{scope_type}:{scope_id}", "day_or_month")
         return QuotaReservation(
             blocked=False,
             audit_exempt=audit_exempt,
-            daily_remaining_usd=max(daily_remaining, Decimal("0")),
-            monthly_remaining_usd=max(monthly_remaining, Decimal("0")),
+            daily_remaining_cny=max(daily_remaining, Decimal("0")),
+            monthly_remaining_cny=max(monthly_remaining, Decimal("0")),
         )
 
     def _used_for(
         self,
+        scope_type: str,
+        scope_id: str,
         policy: BudgetPolicy,
-        tenant_id: str,
-        user_id: str,
-        amount_usd: Decimal,
+        amount_cny: Decimal,
     ) -> None:
         periods = budget_periods(timezone_name=policy.timezone)
-        for period_start in (periods.day_start_utc, periods.month_start_utc):
-            key = (policy.scope_type, policy.scope_id, period_start.isoformat())
-            self._used[key] = self._used.get(key, Decimal("0")) + amount_usd
+        for period_type, period_start in (
+            ("day", periods.day_start_utc),
+            ("month", periods.month_start_utc),
+        ):
+            # 键含 period_type，避免每月 1 日 day/month 窗口塌缩双计
+            key = (period_type, scope_type, scope_id, period_start.isoformat())
+            self._used[key] = self._used.get(key, Decimal("0")) + amount_cny
 
 
 @dataclass(frozen=True)
@@ -268,7 +313,7 @@ class PostgresQuotaReservation:
     reservation_id: str
     user_id: str
     tenant_id: str
-    reserved_usd: Decimal
+    reserved_cny: Decimal
 
 
 class PostgresQuotaStore:
@@ -313,8 +358,8 @@ class PostgresQuotaStore:
         return BudgetPolicy(
             scope_type=row[0],
             scope_id=row[1],
-            daily_limit_usd=Decimal(str(row[2])),
-            monthly_limit_usd=Decimal(str(row[3])),
+            daily_limit_cny=Decimal(str(row[2])),
+            monthly_limit_cny=Decimal(str(row[3])),
             enforcement=row[4],
             timezone=row[5],
             audit_exempt=bool(row[6]),
@@ -325,8 +370,8 @@ class PostgresQuotaStore:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""SELECT scope_type, scope_id, daily_limit_usd,
-                                   monthly_limit_usd, enforcement, timezone,
+                        f"""SELECT scope_type, scope_id, daily_limit_cny,
+                                   monthly_limit_cny, enforcement, timezone,
                                    audit_exempt
                             FROM {self._policies}
                             WHERE scope_type = %s AND scope_id = %s""",
@@ -353,21 +398,23 @@ class PostgresQuotaStore:
     def _window(
         cur,
         ledger_table: str,
-        policy: BudgetPolicy,
+        scope_type: str,
+        scope_id: str,
+        template: BudgetPolicy,
         period_type: str,
         period_start: datetime,
     ) -> dict[str, Any]:
         limit = (
-            policy.daily_limit_usd
+            template.daily_limit_cny
             if period_type == "day"
-            else policy.monthly_limit_usd
+            else template.monthly_limit_cny
         )
         cur.execute(
-            f"""SELECT used_usd, reserved_usd, limit_usd
+            f"""SELECT used_cny, reserved_cny, limit_cny
                 FROM {ledger_table}
                 WHERE scope_type = %s AND scope_id = %s
                   AND period_type = %s AND period_start = %s""",
-            (policy.scope_type, policy.scope_id, period_type, period_start),
+            (scope_type, scope_id, period_type, period_start),
         )
         row = cur.fetchone()
         used = Decimal(str(row[0])) if row else Decimal("0")
@@ -381,7 +428,7 @@ class PostgresQuotaStore:
             reserved=reserved,
             limit=limit,
             reset_at=PostgresQuotaStore._reset_at(
-                period_type, period_start, policy.timezone,
+                period_type, period_start, template.timezone,
             ),
         )
 
@@ -408,17 +455,22 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    # 账本键 = 真实身份；模板策略只提供上限与重置时区
                     user_daily = self._window(
-                        cur, self._ledger, policies.user, "day", periods.day_start_utc,
+                        cur, self._ledger, "user", user_id,
+                        policies.user, "day", periods.day_start_utc,
                     )
                     user_monthly = self._window(
-                        cur, self._ledger, policies.user, "month", periods.month_start_utc,
+                        cur, self._ledger, "user", user_id,
+                        policies.user, "month", periods.month_start_utc,
                     )
                     tenant_daily = self._window(
-                        cur, self._ledger, policies.tenant, "day", periods.day_start_utc,
+                        cur, self._ledger, "tenant", tenant_id,
+                        policies.tenant, "day", periods.day_start_utc,
                     )
                     tenant_monthly = self._window(
-                        cur, self._ledger, policies.tenant, "month", periods.month_start_utc,
+                        cur, self._ledger, "tenant", tenant_id,
+                        policies.tenant, "month", periods.month_start_utc,
                     )
         except Exception as exc:
             raise QuotaConfigurationError("预算状态读取失败") from exc
@@ -433,9 +485,11 @@ class PostgresQuotaStore:
         tenant_blocked = blocked(policies.tenant, [tenant_daily, tenant_monthly])
         user_blocked = blocked(policies.user, [user_daily, user_monthly])
         from backend.config import llm as llm_config
+        from backend.config.budget import BUDGET_BASE_CURRENCY, BUDGET_FX_USD_CNY
 
         return {
-            "currency": "USD",
+            "currency": BUDGET_BASE_CURRENCY,
+            "fx_usd_cny": str(BUDGET_FX_USD_CNY),
             "mode": llm_config.LLM_BUDGET_MODE,
             "enforcement": policies.user.enforcement,
             "audit_exempt": policies.user.audit_exempt,
@@ -464,15 +518,15 @@ class PostgresQuotaStore:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""SELECT scope_type, scope_id, daily_limit_usd,
-                                   monthly_limit_usd, enforcement, timezone,
+                        f"""SELECT scope_type, scope_id, daily_limit_cny,
+                                   monthly_limit_cny, enforcement, timezone,
                                    audit_exempt, updated_by, updated_at
                             FROM {self._policies}
                             ORDER BY scope_type, scope_id"""
                     )
                     rows = cur.fetchall()
             keys = (
-                "scope_type", "scope_id", "daily_limit_usd", "monthly_limit_usd",
+                "scope_type", "scope_id", "daily_limit_cny", "monthly_limit_cny",
                 "enforcement", "timezone", "audit_exempt", "updated_by", "updated_at",
             )
             return [dict(zip(keys, row)) for row in rows]
@@ -518,57 +572,81 @@ class PostgresQuotaStore:
             raise QuotaConfigurationError("预算策略审计读取失败") from exc
 
     def list_subjects(self, limit: int = 200) -> list[dict[str, Any]]:
-        """读取有策略或有账本记录的主体，金额仍以字符串返回。"""
+        """读取真实主体（user/tenant 身份键）的预算窗口，金额以字符串返回。
+
+        主体集合 = 账本出现过的身份键 ∪ 有显式 user/tenant 策略的身份键。
+        模板作用域（platform/tenant_default）不再作为主体展示，只通过
+        policy_source/effective_policy 说明继承来源。
+        """
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""SELECT scope_type, scope_id, daily_limit_usd,
-                                   monthly_limit_usd, enforcement, timezone,
-                                   audit_exempt
-                            FROM {self._policies}
+                        f"""SELECT scope_type, scope_id FROM {self._ledger}
+                            WHERE scope_type IN ('user', 'tenant')
+                            GROUP BY scope_type, scope_id
                             ORDER BY scope_type, scope_id LIMIT %s""",
                         (limit,),
                     )
-                    policy_rows = cur.fetchall()
+                    subjects = [(row[0], row[1]) for row in cur.fetchall()]
                     cur.execute(
-                        f"""SELECT scope_type, scope_id, period_type,
-                                   used_usd, reserved_usd, limit_usd, period_start
-                            FROM {self._ledger}
-                            WHERE scope_type IN ('user', 'tenant')
-                            ORDER BY updated_at DESC"""
+                        f"""SELECT scope_type, scope_id, daily_limit_cny,
+                                   monthly_limit_cny, enforcement, timezone,
+                                   audit_exempt
+                            FROM {self._policies}"""
                     )
-                    ledger_rows = cur.fetchall()
-            policies = {
-                (row[0], row[1]): BudgetPolicy(
-                    scope_type=row[0], scope_id=row[1],
-                    daily_limit_usd=Decimal(str(row[2])),
-                    monthly_limit_usd=Decimal(str(row[3])), enforcement=row[4],
-                    timezone=row[5], audit_exempt=bool(row[6]),
-                )
-                for row in policy_rows
-            }
-            ledgers = {
-                (row[0], row[1], row[2]): row for row in ledger_rows
-            }
-            result = []
-            for policy in policies.values():
-                if policy.scope_type not in {"user", "tenant"}:
+                    policies = {
+                        (row[0], row[1]): BudgetPolicy(
+                            scope_type=row[0], scope_id=row[1],
+                            daily_limit_cny=Decimal(str(row[2])),
+                            monthly_limit_cny=Decimal(str(row[3])), enforcement=row[4],
+                            timezone=row[5], audit_exempt=bool(row[6]),
+                        )
+                        for row in cur.fetchall()
+                    }
+
+            tenant_default = policies.get(("tenant_default", "default"))
+            platform = policies.get(("platform", "default"))
+            seen: set[tuple[str, str]] = set()
+            result: list[dict[str, Any]] = []
+            for scope_type, scope_id in sorted(set(subjects) | {
+                key for key in policies if key[0] in _IDENTITY_SCOPES
+            }):
+                if (scope_type, scope_id) in seen or len(result) >= limit:
                     continue
-                if policy.scope_type == "user":
+                seen.add((scope_type, scope_id))
+                if scope_type == "user":
+                    explicit = policies.get(("user", scope_id))
+                    tenant_of_user = policies.get(("tenant", ""), None)
                     candidates = [
-                        policies.get(("user", policy.scope_id)),
-                        policies.get(("tenant", "")),
-                        policies.get(("tenant_default", "default")),
-                        policies.get(("platform", "default")),
+                        explicit,
+                        tenant_of_user,
+                        tenant_default,
+                        platform,
                     ]
+                    tenant_scope_id = scope_id
                 else:
-                    candidates = [
-                        policies.get(("tenant", policy.scope_id)),
-                        policies.get(("tenant_default", "default")),
-                        policies.get(("platform", "default")),
-                    ]
-                effective = next((item for item in candidates if item is not None), policy)
+                    explicit = policies.get(("tenant", scope_id))
+                    candidates = [explicit, tenant_default, platform]
+                    tenant_scope_id = scope_id
+                effective = next(
+                    (item for item in candidates if item is not None), None,
+                )
+                if effective is None:
+                    # 无任何可用模板：无法给出窗口口径，跳过并留待补策略
+                    logger.warning(
+                        "[Quota] 主体 %s:%s 无生效策略模板，跳过展示",
+                        scope_type, scope_id,
+                    )
+                    continue
+                # 无显式策略的租户，其用户层的租户模板回退链与解析一致
+                if scope_type == "user":
+                    tenant_template = policies.get(
+                        ("tenant", tenant_scope_id)
+                    ) or tenant_default or platform
+                else:
+                    tenant_template = effective
+                user_template = explicit or tenant_template or effective
 
                 def policy_view(item: BudgetPolicy | None) -> dict[str, Any] | None:
                     if item is None:
@@ -576,48 +654,37 @@ class PostgresQuotaStore:
                     return {
                         "scope_type": item.scope_type,
                         "scope_id": item.scope_id,
-                        "daily_limit_usd": item.daily_limit_usd,
-                        "monthly_limit_usd": item.monthly_limit_usd,
+                        "daily_limit_cny": item.daily_limit_cny,
+                        "monthly_limit_cny": item.monthly_limit_cny,
                         "enforcement": item.enforcement,
                         "timezone": item.timezone,
                         "audit_exempt": item.audit_exempt,
                     }
 
-                periods = budget_periods(timezone_name=policy.timezone)
+                periods = budget_periods(timezone_name=effective.timezone)
                 windows = {}
-                for period_type, start in (
-                    ("day", periods.day_start_utc),
-                    ("month", periods.month_start_utc),
-                ):
-                    ledger = ledgers.get((policy.scope_type, policy.scope_id, period_type))
-                    if ledger and ledger[6] == start:
-                        from backend.app.api.routes.budget_dto import build_budget_window
-
-                        windows[period_type] = build_budget_window(
-                            used=Decimal(str(ledger[3])),
-                            reserved=Decimal(str(ledger[4])),
-                            limit=Decimal(str(ledger[5])),
-                            reset_at=self._reset_at(period_type, start, policy.timezone),
-                        )
-                    else:
-                        from backend.app.api.routes.budget_dto import build_budget_window
-
-                        windows[period_type] = build_budget_window(
-                            used=Decimal("0"), reserved=Decimal("0"),
-                            limit=(policy.daily_limit_usd if period_type == "day"
-                                   else policy.monthly_limit_usd),
-                            reset_at=self._reset_at(period_type, start, policy.timezone),
-                        )
+                with self._connection_factory() as conn2:
+                    with conn2.cursor() as cur2:
+                        for period_type, start in (
+                            ("day", periods.day_start_utc),
+                            ("month", periods.month_start_utc),
+                        ):
+                            windows[period_type] = self._window(
+                                cur2, self._ledger, scope_type, scope_id,
+                                effective, period_type, start,
+                            )
                 ratio = max(windows["day"]["ratio"], windows["month"]["ratio"])
                 result.append({
-                    "scope": policy.scope_type,
-                    "id": policy.scope_id,
+                    "scope": scope_type,
+                    "id": scope_id,
                     "daily": windows["day"],
                     "monthly": windows["month"],
-                    "enforcement": policy.enforcement,
+                    "enforcement": effective.enforcement,
                     "ratio": ratio,
-                    "explicit_policy": policy_view(policy),
+                    "explicit_policy": policy_view(explicit),
                     "effective_policy": policy_view(effective),
+                    "user_template": policy_view(user_template),
+                    "tenant_template": policy_view(tenant_template),
                     "policy_source": {
                         "scope_type": effective.scope_type,
                         "scope_id": effective.scope_id,
@@ -628,17 +695,56 @@ class PostgresQuotaStore:
             raise QuotaConfigurationError("预算主体读取失败") from exc
 
     def summary(self) -> dict[str, Any]:
+        """管理端成本总览。
+
+        2026-10-01 口径修复（P0-5）：
+        - 总成本从 ``llm_usage`` 用量明细派生（每次调用恰好一行，一笔 $1
+          只算一次），不再对 budget_ledger 求和——账本按日/月双行记账，
+          直接 SUM 会把同一笔钱按周期数翻倍；
+        - 主体占用按 (scope_type, scope_id) 去重计数，且只统计真实身份
+          作用域（user/tenant），模板作用域行不算主体；
+        - 未结算预留只汇总真实身份账本行。
+        """
+        periods = budget_periods()
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""SELECT COALESCE(SUM(used_usd), 0),
-                                   COALESCE(SUM(reserved_usd), 0),
-                                   COUNT(*) FILTER (WHERE used_usd + reserved_usd >= limit_usd),
-                                   COUNT(*) FILTER (WHERE used_usd + reserved_usd >= limit_usd * 0.8)
-                            FROM {self._ledger}"""
+                        """SELECT COALESCE(SUM(total_cost), 0),
+                                  COUNT(*) FILTER (WHERE cost_status IN ('exact', 'estimated')),
+                                  COUNT(*) FILTER (WHERE cost_status = 'unpriced'),
+                                  COUNT(*) FILTER (WHERE cost_status = 'price_unknown'),
+                                  COUNT(*) FILTER (WHERE COALESCE(cost_status, '') = '')
+                            FROM llm_usage"""
                     )
-                    total_cost, reserved, blocked, near = cur.fetchone()
+                    total_cost, exact_rows, unpriced_rows, unknown_rows, missing_rows = (
+                        cur.fetchone()
+                    )
+                    cur.execute(
+                        f"""SELECT COALESCE(SUM(reserved_cny), 0),
+                                   COUNT(DISTINCT (scope_type, scope_id))
+                                       FILTER (WHERE enforcement = 'hard'
+                                               AND used_cny + reserved_cny >= limit_cny
+                                               AND ((period_type = 'day'
+                                                     AND period_start = %s)
+                                                    OR (period_type = 'month'
+                                                        AND period_start = %s))),
+                                   COUNT(DISTINCT (scope_type, scope_id))
+                                       FILTER (WHERE enforcement = 'hard'
+                                               AND used_cny + reserved_cny >= limit_cny * 0.8
+                                               AND used_cny + reserved_cny < limit_cny
+                                               AND ((period_type = 'day'
+                                                     AND period_start = %s)
+                                                    OR (period_type = 'month'
+                                                        AND period_start = %s)))
+                            FROM {self._ledger}
+                            WHERE scope_type IN ('user', 'tenant')""",
+                        (
+                            periods.day_start_utc, periods.month_start_utc,
+                            periods.day_start_utc, periods.month_start_utc,
+                        ),
+                    )
+                    reserved, blocked, near = cur.fetchone()
                     cur.execute(
                         f"""SELECT COALESCE(
                                    SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END)::numeric
@@ -646,13 +752,26 @@ class PostgresQuotaStore:
                             FROM {self._price_table}"""
                     )
                     coverage = cur.fetchone()[0]
+            from backend.config.budget import (
+                BUDGET_BASE_CURRENCY, BUDGET_FX_USD_CNY,
+            )
+
             return {
-                "currency": "USD",
-                "total_cost_usd": str(Decimal(str(total_cost)).quantize(_SIX_PLACES)),
+                "currency": BUDGET_BASE_CURRENCY,
+                "fx_usd_cny": str(BUDGET_FX_USD_CNY),
+                "total_cost": str(Decimal(str(total_cost)).quantize(_SIX_PLACES)),
+                "cost_status_counts": {
+                    "priced": int(exact_rows or 0),
+                    "unpriced": int(unpriced_rows or 0),
+                    "price_unknown": int(unknown_rows or 0),
+                    "missing_status": int(missing_rows or 0),
+                },
                 "price_coverage_ratio": float(coverage or 0),
                 "near_limit_subjects": int(near or 0),
                 "blocked_subjects": int(blocked or 0),
-                "unsettled_reserved_usd": str(Decimal(str(reserved)).quantize(_SIX_PLACES)),
+                "unsettled_reserved": str(
+                    Decimal(str(reserved)).quantize(_SIX_PLACES)
+                ),
             }
         except Exception as exc:
             raise QuotaConfigurationError("预算汇总读取失败") from exc
@@ -662,8 +781,8 @@ class PostgresQuotaStore:
         *,
         scope_type: str,
         scope_id: str,
-        daily_limit_usd: Decimal,
-        monthly_limit_usd: Decimal,
+        daily_limit_cny: Decimal,
+        monthly_limit_cny: Decimal,
         enforcement: str,
         audit_exempt: bool,
         updated_by: str,
@@ -671,13 +790,13 @@ class PostgresQuotaStore:
         expected_updated_at: datetime | None = None,
     ) -> dict[str, Any]:
         """立即生效地写入策略，并追加旧值/新值审计。"""
-        if daily_limit_usd > monthly_limit_usd:
+        if daily_limit_cny > monthly_limit_cny:
             raise ValueError("日额度不能高于月额度")
         policy = BudgetPolicy(
             scope_type=scope_type,
             scope_id=scope_id,
-            daily_limit_usd=daily_limit_usd,
-            monthly_limit_usd=monthly_limit_usd,
+            daily_limit_cny=daily_limit_cny,
+            monthly_limit_cny=monthly_limit_cny,
             enforcement=enforcement,
             audit_exempt=audit_exempt,
         )
@@ -689,8 +808,8 @@ class PostgresQuotaStore:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"""SELECT scope_type, scope_id, daily_limit_usd,
-                                   monthly_limit_usd, enforcement, timezone,
+                        f"""SELECT scope_type, scope_id, daily_limit_cny,
+                                   monthly_limit_cny, enforcement, timezone,
                                    audit_exempt, updated_by, updated_at
                             FROM {self._policies}
                             WHERE scope_type = %s AND scope_id = %s
@@ -705,37 +824,37 @@ class PostgresQuotaStore:
                     timezone_name = old_row[5] if old_row else "Asia/Shanghai"
                     cur.execute(
                         f"""INSERT INTO {self._policies} (
-                                  scope_type, scope_id, daily_limit_usd,
-                                  monthly_limit_usd, enforcement, timezone,
+                                  scope_type, scope_id, daily_limit_cny,
+                                  monthly_limit_cny, enforcement, timezone,
                                   audit_exempt, updated_by
                               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                               ON CONFLICT (scope_type, scope_id) DO UPDATE SET
-                                  daily_limit_usd = EXCLUDED.daily_limit_usd,
-                                  monthly_limit_usd = EXCLUDED.monthly_limit_usd,
+                                  daily_limit_cny = EXCLUDED.daily_limit_cny,
+                                  monthly_limit_cny = EXCLUDED.monthly_limit_cny,
                                   enforcement = EXCLUDED.enforcement,
                                   audit_exempt = EXCLUDED.audit_exempt,
                                   updated_by = EXCLUDED.updated_by,
                                   updated_at = now()
-                              RETURNING scope_type, scope_id, daily_limit_usd,
-                                        monthly_limit_usd, enforcement, timezone,
+                              RETURNING scope_type, scope_id, daily_limit_cny,
+                                        monthly_limit_cny, enforcement, timezone,
                                         audit_exempt, updated_by, updated_at""",
                         (
                             policy.scope_type, policy.scope_id,
-                            policy.daily_limit_usd, policy.monthly_limit_usd,
+                            policy.daily_limit_cny, policy.monthly_limit_cny,
                             policy.enforcement, timezone_name,
                             policy.audit_exempt, updated_by,
                         ),
                     )
                     row = cur.fetchone()
                     before = dict(zip(
-                        ("scope_type", "scope_id", "daily_limit_usd",
-                         "monthly_limit_usd", "enforcement", "timezone",
+                        ("scope_type", "scope_id", "daily_limit_cny",
+                         "monthly_limit_cny", "enforcement", "timezone",
                          "audit_exempt", "updated_by", "updated_at"),
                         old_row,
                     )) if old_row else None
                     after = dict(zip(
-                        ("scope_type", "scope_id", "daily_limit_usd",
-                         "monthly_limit_usd", "enforcement", "timezone",
+                        ("scope_type", "scope_id", "daily_limit_cny",
+                         "monthly_limit_cny", "enforcement", "timezone",
                          "audit_exempt", "updated_by", "updated_at"),
                         row,
                     ))
@@ -775,54 +894,63 @@ class PostgresQuotaStore:
         *,
         user_id: str,
         tenant_id: str,
-        amount_usd: Decimal,
+        amount_cny: Decimal,
         request_id: str = "",
         now: datetime | None = None,
     ) -> PostgresQuotaReservation:
+        """按真实身份预占（user/tenant 两层，模板策略只提供上限）。
+
+        2026-10-01 边界修复：金额为 0 的硬门禁（副作用零金额检查）在
+        used+reserved 已达上限时同样拒绝——原条件 ``+0 <= limit`` 会让
+        打满的账本继续放行零金额调用。
+        """
         if not user_id or not tenant_id:
             raise QuotaConfigurationError("硬预算需要可信 user_id 和 tenant_id")
-        amount = Decimal(amount_usd).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
+        amount = Decimal(amount_cny).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         if amount < 0:
             raise ValueError("预算预占金额不能为负数")
         policies = self.resolve(user_id, tenant_id)
         periods = budget_periods(now, policies.tenant.timezone)
-        unique_policies = {
-            (policy.scope_type, policy.scope_id): policy
-            for policy in (policies.user, policies.tenant)
-        }
         reservation_id = str(uuid.uuid4())
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
-                    for policy in unique_policies.values():
+                    for scope_type, scope_id, policy in (
+                        ("user", user_id, policies.user),
+                        ("tenant", tenant_id, policies.tenant),
+                    ):
                         for period_type, period_start, limit in (
-                            ("day", periods.day_start_utc, policy.daily_limit_usd),
-                            ("month", periods.month_start_utc, policy.monthly_limit_usd),
+                            ("day", periods.day_start_utc, policy.daily_limit_cny),
+                            ("month", periods.month_start_utc, policy.monthly_limit_cny),
                         ):
                             cur.execute(
                                 f"""
                                 INSERT INTO {self._ledger} (
                                     scope_type, scope_id, period_type, period_start,
-                                    limit_usd, enforcement, reserved_usd
+                                    limit_cny, enforcement, reserved_cny
                                 )
                                 SELECT %s, %s, %s, %s, %s, %s, %s
                                 WHERE %s <> 'hard' OR %s <= %s
                                 ON CONFLICT (scope_type, scope_id, period_type, period_start)
                                 DO UPDATE SET
-                                    limit_usd = EXCLUDED.limit_usd,
+                                    limit_cny = EXCLUDED.limit_cny,
                                     enforcement = EXCLUDED.enforcement,
-                                    reserved_usd = {self._ledger}.reserved_usd
-                                        + EXCLUDED.reserved_usd,
+                                    reserved_cny = {self._ledger}.reserved_cny
+                                        + EXCLUDED.reserved_cny,
                                     updated_at = now()
                                 WHERE EXCLUDED.enforcement <> 'hard'
-                                   OR ({self._ledger}.used_usd
-                                       + {self._ledger}.reserved_usd
-                                       + EXCLUDED.reserved_usd <= EXCLUDED.limit_usd)
-                                RETURNING scope_type, scope_id, used_usd,
-                                          reserved_usd, limit_usd
+                                   OR {self._ledger}.used_cny
+                                      + {self._ledger}.reserved_cny
+                                      + EXCLUDED.reserved_cny < EXCLUDED.limit_cny
+                                   OR (EXCLUDED.reserved_cny > 0
+                                       AND {self._ledger}.used_cny
+                                       + {self._ledger}.reserved_cny
+                                       + EXCLUDED.reserved_cny <= EXCLUDED.limit_cny)
+                                RETURNING scope_type, scope_id, used_cny,
+                                          reserved_cny, limit_cny
                                 """,
                                 (
-                                    policy.scope_type, policy.scope_id, period_type,
+                                    scope_type, scope_id, period_type,
                                     period_start, limit, policy.enforcement, amount,
                                     policy.enforcement, amount, limit,
                                 ),
@@ -831,14 +959,16 @@ class PostgresQuotaStore:
                             if ledger_row is None:
                                 _record_quota_metric(
                                     "budget_quota_total",
-                                    scope_type=policy.scope_type,
+                                    scope_type=scope_type,
                                     period_type=period_type,
                                     result="rejected",
                                 )
-                                raise QuotaExceeded(policy.scope_id, period_type)
+                                raise QuotaExceeded(
+                                    f"{scope_type}:{scope_id}", period_type,
+                                )
                             _record_quota_metric(
                                 "budget_quota_total",
-                                scope_type=policy.scope_type,
+                                scope_type=scope_type,
                                 period_type=period_type,
                                 result="reserved",
                             )
@@ -858,12 +988,12 @@ class PostgresQuotaStore:
                                 INSERT INTO {self._reservations} (
                                     id, request_id, user_id, tenant_id,
                                     scope_type, scope_id, period_type, period_start,
-                                    reserved_usd
+                                    reserved_cny
                                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                                 """,
                                 (
                                     reservation_id, request_id, user_id, tenant_id,
-                                    policy.scope_type, policy.scope_id, period_type,
+                                    scope_type, scope_id, period_type,
                                     period_start, amount,
                                 ),
                             )
@@ -871,15 +1001,15 @@ class PostgresQuotaStore:
                 reservation_id=reservation_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
-                reserved_usd=amount,
+                reserved_cny=amount,
             )
         except (QuotaExceeded, QuotaConfigurationError):
             raise
         except Exception as exc:
             raise QuotaConfigurationError("预算预占存储不可用") from exc
 
-    def settle(self, reservation: PostgresQuotaReservation, actual_usd: Decimal) -> None:
-        actual = Decimal(actual_usd).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
+    def settle(self, reservation: PostgresQuotaReservation, actual_cny: Decimal) -> None:
+        actual = Decimal(actual_cny).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         if actual < 0:
             raise ValueError("结算金额不能为负数")
         try:
@@ -887,7 +1017,7 @@ class PostgresQuotaStore:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
-                                   period_start, reserved_usd
+                                   period_start, reserved_cny
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'reserved'
                             FOR UPDATE""",
@@ -897,12 +1027,12 @@ class PostgresQuotaStore:
                     for scope_type, scope_id, period_type, period_start, reserved in rows:
                         cur.execute(
                             f"""UPDATE {self._ledger}
-                                SET reserved_usd = GREATEST(reserved_usd - %s, 0),
-                                    used_usd = used_usd + %s,
+                                SET reserved_cny = GREATEST(reserved_cny - %s, 0),
+                                    used_cny = used_cny + %s,
                                     updated_at = now()
                                 WHERE scope_type = %s AND scope_id = %s
                                   AND period_type = %s AND period_start = %s
-                                RETURNING used_usd, reserved_usd, limit_usd""",
+                                RETURNING used_cny, reserved_cny, limit_cny""",
                             (reserved, actual, scope_type, scope_id,
                              period_type, period_start),
                         )
@@ -927,7 +1057,7 @@ class PostgresQuotaStore:
                             )
                     cur.execute(
                         f"""UPDATE {self._reservations}
-                            SET settled_usd = %s, status = 'settled', settled_at = now()
+                            SET settled_cny = %s, status = 'settled', settled_at = now()
                             WHERE id = %s AND status = 'reserved'""",
                         (actual, reservation.reservation_id),
                     )
@@ -935,13 +1065,13 @@ class PostgresQuotaStore:
             raise QuotaConfigurationError("预算结算存储不可用") from exc
 
     def release(self, reservation: PostgresQuotaReservation) -> None:
-        """模型调用未产生用量时释放预占，不写入 used_usd。"""
+        """模型调用确定未发给供应商时释放预占，不写入 used_cny。"""
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
-                                   period_start, reserved_usd
+                                   period_start, reserved_cny
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'reserved'
                             FOR UPDATE""",
@@ -951,7 +1081,7 @@ class PostgresQuotaStore:
                     for scope_type, scope_id, period_type, period_start, reserved in rows:
                         cur.execute(
                             f"""UPDATE {self._ledger}
-                                SET reserved_usd = GREATEST(reserved_usd - %s, 0),
+                                SET reserved_cny = GREATEST(reserved_cny - %s, 0),
                                     updated_at = now()
                                 WHERE scope_type = %s AND scope_id = %s
                                   AND period_type = %s AND period_start = %s""",
@@ -972,6 +1102,216 @@ class PostgresQuotaStore:
         except Exception as exc:
             raise QuotaConfigurationError("预算预占释放失败") from exc
 
+    def mark_needs_review(
+        self,
+        reservation: PostgresQuotaReservation,
+        reason: str,
+    ) -> bool:
+        """把预占转入待对账（needs_review），账本占额保守保留。
+
+        用于"调用可能已对供应商计费但用量未知"的场景（流式缺 usage /
+        结算失败 / 滞留超龄）：不能按零成本放走，也不能永久卡死当前周期
+        额度——占额保留到周期结束，之后由 sweep 释放旧周期占额。
+        """
+        if not reason.strip():
+            raise ValueError("待对账原因不能为空")
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""UPDATE {self._reservations}
+                            SET status = 'needs_review', review_reason = %s,
+                                settled_at = now()
+                            WHERE id = %s AND status = 'reserved'""",
+                        (reason, reservation.reservation_id),
+                    )
+                    return cur.rowcount > 0
+        except Exception as exc:
+            raise QuotaConfigurationError("预算待对账标记失败") from exc
+
+    def sweep_stale_reservations(
+        self,
+        *,
+        now: datetime | None = None,
+        threshold_hours: float | None = None,
+    ) -> dict[str, int]:
+        """滞留预占回收：超过阈值仍 reserved 的预占转入 needs_review。
+
+        周期仍在当前的占额保守保留（调用可能已计费）；周期已结束的占额
+        释放——旧周期账本行已无约束意义，保留只会污染未结算汇总。
+        幂等：只有 status='reserved' 的行会被处理，重复执行零增量。
+        """
+        from backend.config.budget import BUDGET_STALE_RESERVATION_HOURS
+
+        hours = (
+            float(threshold_hours)
+            if threshold_hours is not None
+            else float(BUDGET_STALE_RESERVATION_HOURS)
+        )
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        cutoff = current - timedelta(hours=hours)
+        periods = budget_periods(current)
+        current_starts = {
+            ("day", periods.day_start_utc),
+            ("month", periods.month_start_utc),
+        }
+        reviewed = ledger_released = 0
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""SELECT DISTINCT id FROM {self._reservations}
+                            WHERE status = 'reserved' AND created_at < %s
+                            ORDER BY id LIMIT 500""",
+                        (cutoff,),
+                    )
+                    ids = [row[0] for row in cur.fetchall()]
+                    for reservation_pk in ids:
+                        cur.execute(
+                            f"""SELECT scope_type, scope_id, period_type,
+                                       period_start, reserved_cny
+                                FROM {self._reservations}
+                                WHERE id = %s AND status = 'reserved'
+                                FOR UPDATE""",
+                            (reservation_pk,),
+                        )
+                        rows = cur.fetchall()
+                        if not rows:
+                            continue
+                        period_open = any(
+                            (period_type, period_start) in current_starts
+                            for _, _, period_type, period_start, _ in rows
+                        )
+                        if not period_open:
+                            for scope_type, scope_id, period_type, period_start, reserved in rows:
+                                cur.execute(
+                                    f"""UPDATE {self._ledger}
+                                        SET reserved_cny = GREATEST(reserved_cny - %s, 0),
+                                            updated_at = now()
+                                        WHERE scope_type = %s AND scope_id = %s
+                                          AND period_type = %s AND period_start = %s""",
+                                    (reserved, scope_type, scope_id,
+                                     period_type, period_start),
+                                )
+                            ledger_released += 1
+                        cur.execute(
+                            f"""UPDATE {self._reservations}
+                                SET status = 'needs_review',
+                                    review_reason = %s, settled_at = now()
+                                WHERE id = %s AND status = 'reserved'""",
+                            (
+                                "stale_sweep_period_ended" if not period_open
+                                else "stale_sweep_period_open",
+                                reservation_pk,
+                            ),
+                        )
+                        reviewed += 1
+            if reviewed:
+                logger.warning(
+                    "[Quota] 滞留预占回收 %s 笔转入待对账（旧周期释放占额 %s 笔，"
+                    "阈值 %s 小时）——请到管理端待对账队列核查是否漏结算",
+                    reviewed, ledger_released, hours,
+                )
+            return {"reviewed": reviewed, "ledger_released": ledger_released}
+        except Exception as exc:
+            raise QuotaConfigurationError("滞留预占回收失败") from exc
+
+    def reconciliation_summary(self) -> dict[str, Any]:
+        """待对账总览：队列规模、最老滞留时长、占额与原因分布。"""
+        from backend.config.budget import BUDGET_STALE_RESERVATION_HOURS
+
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=float(BUDGET_STALE_RESERVATION_HOURS)
+        )
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""SELECT COUNT(DISTINCT id),
+                                   COALESCE(SUM(reserved_cny), 0),
+                                   MIN(created_at)
+                            FROM {self._reservations}
+                            WHERE status = 'needs_review'"""
+                    )
+                    pending, held, oldest = cur.fetchone()
+                    cur.execute(
+                        f"""SELECT review_reason, COUNT(DISTINCT id)
+                            FROM {self._reservations}
+                            WHERE status = 'needs_review'
+                            GROUP BY review_reason ORDER BY 2 DESC"""
+                    )
+                    by_reason = {row[0] or "unknown": int(row[1]) for row in cur.fetchall()}
+                    cur.execute(
+                        f"""SELECT COUNT(DISTINCT id)
+                            FROM {self._reservations}
+                            WHERE status = 'reserved' AND created_at < %s""",
+                        (cutoff,),
+                    )
+                    stale_unswept = cur.fetchone()[0]
+            oldest_age_hours = (
+                round(
+                    (datetime.now(timezone.utc) - oldest).total_seconds() / 3600, 1,
+                ) if oldest else 0.0
+            )
+            return {
+                "pending_count": int(pending or 0),
+                "held_cny": str(Decimal(str(held)).quantize(_SIX_PLACES)),
+                "oldest_age_hours": oldest_age_hours,
+                "by_reason": by_reason,
+                "stale_unswept_count": int(stale_unswept or 0),
+                "stale_threshold_hours": float(BUDGET_STALE_RESERVATION_HOURS),
+            }
+        except Exception as exc:
+            raise QuotaConfigurationError("待对账汇总读取失败") from exc
+
+    def list_pending_review(self, limit: int = 100) -> list[dict[str, Any]]:
+        """待对账明细（needs_review + 超龄未回收的 reserved），按最老优先。"""
+        from backend.config.budget import BUDGET_STALE_RESERVATION_HOURS
+
+        capped = max(1, min(limit, 500))
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=float(BUDGET_STALE_RESERVATION_HOURS)
+        )
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""SELECT DISTINCT ON (id) id, request_id, user_id, tenant_id,
+                                   scope_type, scope_id, period_type, period_start,
+                                   reserved_cny, status, review_reason, created_at
+                            FROM {self._reservations}
+                            WHERE status = 'needs_review'
+                               OR (status = 'reserved' AND created_at < %s)
+                            ORDER BY id, created_at""",
+                        (cutoff,),
+                    )
+                    rows = cur.fetchall()
+            items: dict[str, dict[str, Any]] = {}
+            for (rid, request_id, user_id, tenant_id, scope_type, scope_id,
+                 period_type, period_start, reserved, status, reason, created_at) in rows:
+                item = items.setdefault(rid, {
+                    "reservation_id": str(rid),
+                    "request_id": request_id,
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
+                    "reserved_cny": str(Decimal(str(reserved)).quantize(_SIX_PLACES)),
+                    "status": status,
+                    "review_reason": reason or "",
+                    "created_at": created_at.isoformat(),
+                    "periods": [],
+                })
+                item["periods"].append(
+                    {"period_type": period_type, "period_start": period_start.isoformat()}
+                )
+                # 同一预占里只要还有未决周期，队列状态以更严重者为准
+                if status == "reserved":
+                    item["status"] = "reserved"
+            return sorted(items.values(), key=lambda item: item["created_at"])[:capped]
+        except Exception as exc:
+            raise QuotaConfigurationError("待对账明细读取失败") from exc
+
 
 def enforce_side_effect_budget(*, user_id: str, tenant_id: str) -> None:
     """在写副作用真正发生前做零金额硬门禁。"""
@@ -984,7 +1324,7 @@ def enforce_side_effect_budget(*, user_id: str, tenant_id: str) -> None:
         reservation = store.reserve(
             user_id=user_id,
             tenant_id=tenant_id,
-            amount_usd=Decimal("0"),
+            amount_cny=Decimal("0"),
             request_id="side-effect",
         )
         store.settle(reservation, Decimal("0"))

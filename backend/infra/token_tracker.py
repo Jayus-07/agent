@@ -223,7 +223,7 @@ class TokenTracker:
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         total_tokens=total_tokens,
-                        cost_usd=cost_usd,
+                        cost=cost_usd,
                     )
                 except Exception as e:
                     # 预算统计失败不得覆盖原始模型结果/异常，但留痕便于排查。

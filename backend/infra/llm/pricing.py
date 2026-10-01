@@ -300,6 +300,15 @@ def clear_price_cache() -> None:
         _price_cache.clear()
 
 
+def _to_base(amount: Decimal, currency: str) -> Decimal:
+    """按记账本位币折算（config/budget.py 唯一汇率出口）。"""
+    from backend.config.budget import to_base_currency
+
+    return to_base_currency(amount, currency).quantize(
+        _SIX_PLACES, rounding=ROUND_HALF_UP,
+    )
+
+
 def calculate_current_cost(
     model_name: str,
     component: str,
@@ -307,7 +316,10 @@ def calculate_current_cost(
     *,
     enforce: bool,
 ) -> Decimal:
-    """按 PG 价格表计费；硬模式缺价直接抛出，关闭时兼容旧估算。"""
+    """按 PG 价格表计费；硬模式缺价直接抛出，关闭时兼容旧估算。
+
+    2026-10-01 起返回值恒为记账本位币 CNY（价格行原生币种在此折算）。
+    """
     if not enforce:
         try:
             table = get_current_price_table(model_name, component)
@@ -322,7 +334,7 @@ def calculate_current_cost(
             else:
                 result = table.calculate_cost(model_name, component, quantities)
                 _record_price_metric(component, "hit")
-                return result
+                return _to_base(result, table.currency_for(model_name, component))
         except PriceTableUnavailable:
             _record_price_metric(component, "unavailable")
             _logger.warning(
@@ -340,21 +352,26 @@ def calculate_current_cost(
                 component,
             )
         if component == "llm":
-            return calculate_fallback_cost(
-                model_name,
-                int(quantities.get("input", 0)),
-                int(quantities.get("output", 0)),
+            return _to_base(
+                calculate_fallback_cost(
+                    model_name,
+                    int(quantities.get("input", 0)),
+                    int(quantities.get("output", 0)),
+                ),
+                "USD",
             )
         from backend.infra.llm.models import compute_embedding_cost
 
-        return Decimal(str(compute_embedding_cost(
-            model_name, int(sum(quantities.values()))
-        ))).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
-    result = get_current_price_table(model_name, component).calculate_cost(
-        model_name, component, quantities,
-    )
+        return _to_base(
+            Decimal(str(compute_embedding_cost(
+                model_name, int(sum(quantities.values()))
+            ))),
+            "USD",
+        )
+    table = get_current_price_table(model_name, component)
+    result = table.calculate_cost(model_name, component, quantities)
     _record_price_metric(component, "hit")
-    return result
+    return _to_base(result, table.currency_for(model_name, component))
 
 
 def calculate_fallback_cost(
@@ -425,6 +442,44 @@ def _unit_price_snapshot(
     }
 
 
+_MONEY_KEYS = (
+    "input_cost", "cached_input_cost", "output_cost",
+    "input_unit_price", "output_unit_price", "cache_input_unit_price",
+)
+
+
+def _to_base_or_unpriced(
+    total: Decimal,
+    payload: dict[str, float],
+    currency: str,
+    status: str,
+) -> tuple[Decimal, str, str, dict[str, float]]:
+    """把原生币种金额折算为记账本位币（CNY）后返回；折算失败降级 unpriced。
+
+    本入口契约永不抛错：币种未登记汇率属于价格配置错误，降级为 unpriced
+    （只记 token 不计费）并告警，绝不把金额按错误汇率静默计入。
+    """
+    from backend.config.budget import BUDGET_BASE_CURRENCY, to_base_currency
+    from backend.shared.logger import logger
+
+    try:
+        total_base = to_base_currency(total, currency)
+        converted = dict(payload)
+        for key in _MONEY_KEYS:
+            converted[key] = float(
+                to_base_currency(payload.get(key) or 0.0, currency)
+            )
+        return total_base, status, BUDGET_BASE_CURRENCY, converted
+    except ValueError as exc:
+        logger.warning(
+            "[Pricing] 币种 %r 无折算汇率，本次按 unpriced 记账"
+            "（请在价格治理登记汇率或改报价币种）: %s", currency, exc,
+        )
+        return Decimal("0"), COST_STATUS_UNPRICED, BUDGET_BASE_CURRENCY, {
+            key: 0.0 for key in _MONEY_KEYS
+        }
+
+
 def calculate_llm_cost_with_status(
     model_name: str,
     quantities: dict[str, int | float | Decimal],
@@ -488,19 +543,19 @@ def calculate_llm_cost_with_status(
         # PG 无审核生效价格：退回注册表内置估价（语义 = estimated），无内置价则 unpriced。
         fallback = calculate_fallback_cost(model_name, billable + cached, output)
         status = COST_STATUS_ESTIMATED if fallback > 0 else COST_STATUS_UNPRICED
-        return fallback, status, "USD", zero
+        return _to_base_or_unpriced(fallback, zero, "USD", status)
 
     if cached > 0 and "cache_read" not in rows:
         # 缓存命中但无缓存价：缓存部分按普通 input 价保守估算。
         total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
         payload = {key: float(value) for key, value in breakdown.items()}
         payload.update(_unit_price_snapshot(rows))
-        return total, COST_STATUS_ESTIMATED, currency, payload
+        return _to_base_or_unpriced(total, payload, currency, COST_STATUS_ESTIMATED)
 
     total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
     payload = {key: float(value) for key, value in breakdown.items()}
     payload.update(_unit_price_snapshot(rows))
-    return total, COST_STATUS_EXACT, currency, payload
+    return _to_base_or_unpriced(total, payload, currency, COST_STATUS_EXACT)
 
 
 __all__ = [

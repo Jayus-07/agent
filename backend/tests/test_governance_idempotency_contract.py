@@ -48,8 +48,8 @@ async def test_governance_routes_reject_missing_key_before_side_effect(
             "tenant",
             "t1",
             BudgetPolicyUpdate(
-                daily_limit_usd="1.000000",
-                monthly_limit_usd="10.000000",
+                daily_limit_cny="1.000000",
+                monthly_limit_cny="10.000000",
                 enforcement="hard",
                 reason="test",
             ),

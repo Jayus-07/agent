@@ -126,7 +126,7 @@ def test_unpriced_model_records_zero_without_error(price_snapshot, monkeypatch):
     )
     assert status == COST_STATUS_UNPRICED
     assert total == Decimal("0")
-    assert currency == "USD"
+    assert currency == "CNY"
     # STOP C（C6）：breakdown 新增调用时单价快照键（unpriced=无价格 → 0）
     assert breakdown == {
         "input_cost": 0.0, "cached_input_cost": 0.0, "output_cost": 0.0,
@@ -160,5 +160,5 @@ def test_price_table_unavailable_falls_back_to_estimated(price_snapshot, monkeyp
         "m", {"input": 1000, "cache_read": 0, "output": 500},
     )
     assert status == COST_STATUS_ESTIMATED
-    assert total == Decimal("0.002000")
-    assert currency == "USD"
+    assert total == Decimal("0.014400")  # fallback 估价 USD 0.002 × 7.2
+    assert currency == "CNY"

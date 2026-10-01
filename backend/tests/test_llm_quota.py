@@ -12,8 +12,8 @@ def _policy(scope_type, scope_id, daily, monthly, enforcement="hard", **kwargs):
     return BudgetPolicy(
         scope_type=scope_type,
         scope_id=scope_id,
-        daily_limit_usd=Decimal(str(daily)),
-        monthly_limit_usd=Decimal(str(monthly)),
+        daily_limit_cny=Decimal(str(daily)),
+        monthly_limit_cny=Decimal(str(monthly)),
         enforcement=enforcement,
         **kwargs,
     )

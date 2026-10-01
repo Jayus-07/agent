@@ -11,7 +11,7 @@ def _limits(**overrides):
     values = {
         "max_calls": 8,
         "max_total_tokens": 32000,
-        "max_cost_usd": "0.50",
+        "max_cost": "0.50",
         "max_retries": 2,
         "max_fallbacks": 1,
     }
@@ -86,11 +86,11 @@ def test_budget_observe_does_not_apply_pg_hard_block():
 def test_budget_blocks_request_cost_after_usage_is_recorded():
     from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
 
-    budget = RequestBudget(_limits(max_cost_usd="0.50"), mode="enforce")
+    budget = RequestBudget(_limits(max_cost="0.50"), mode="enforce")
     budget.reserve("primary")
     budget.record_usage(
         prompt_tokens=1, completion_tokens=1, total_tokens=2,
-        cost_usd="0.50",
+        cost="0.50",
     )
     with pytest.raises(RequestBudgetExceeded) as exc_info:
         budget.reserve("primary")

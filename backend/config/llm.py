@@ -340,14 +340,26 @@ LLM_ALLOW_DEGRADED_ANSWER = os.getenv(
 ).strip().lower() in ("1", "true", "yes")
 
 # ── WP4：请求级预算（金额配额另行配置）────────────────────────────
-# off      = 不计数、不阻断（默认，兼容现有生产行为）
+# off      = 不计数、不阻断（默认；仅限开发/测试显式接受）
 # observe  = 计数并记录超限，不阻断（上线前校准）
 # enforce  = 每次模型调用前硬阻断
-LLM_BUDGET_MODE = os.getenv("LLM_BUDGET_MODE", "off").strip().lower()
+# 2026-10-01 P0 治理：非法值一律启动失败（原先静默回退 off 会让拼写错误
+# 变成"预算从未开启"）；生产环境必须显式声明，校验在 config/startup.py。
+_LLM_BUDGET_MODE_RAW = os.getenv("LLM_BUDGET_MODE", "").strip().lower()
+LLM_BUDGET_MODE_EXPLICIT = bool(os.getenv("LLM_BUDGET_MODE", "").strip())
+LLM_BUDGET_MODE = _LLM_BUDGET_MODE_RAW or "off"
 if LLM_BUDGET_MODE not in ("off", "observe", "enforce"):
-    LLM_BUDGET_MODE = "off"
+    raise ValueError(
+        f"LLM_BUDGET_MODE 非法: {os.getenv('LLM_BUDGET_MODE')!r}，"
+        "只允许 off / observe / enforce（禁止静默回退）"
+    )
 LLM_REQUEST_MAX_CALLS = int(os.getenv("LLM_REQUEST_MAX_CALLS", "8"))
 LLM_REQUEST_MAX_TOKENS = int(os.getenv("LLM_REQUEST_MAX_TOKENS", "32000"))
-LLM_REQUEST_MAX_COST_USD = float(os.getenv("LLM_REQUEST_MAX_COST_USD", "0.50"))
+# 请求级单次预占上限；2026-10-01 起单位 = 记账本位币（CNY，见 config/budget.py），
+# 旧环境变量名 LLM_REQUEST_MAX_COST_USD 继续兼容读取
+LLM_REQUEST_MAX_COST = float(
+    os.getenv("LLM_REQUEST_MAX_COST", os.getenv("LLM_REQUEST_MAX_COST_USD", "0.50"))
+)
+LLM_REQUEST_MAX_COST_USD = LLM_REQUEST_MAX_COST  # 旧名兼容别名
 LLM_REQUEST_MAX_RETRIES = int(os.getenv("LLM_REQUEST_MAX_RETRIES", "2"))
 LLM_REQUEST_MAX_FALLBACKS = int(os.getenv("LLM_REQUEST_MAX_FALLBACKS", "1"))
