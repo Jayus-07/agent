@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generated_at": "2026-10-01T18:45:21+08:00",
-  "git_sha": "22d44cb",
+  "generated_at": "2026-10-01T19:13:54+08:00",
+  "git_sha": "592c6a4",
   "tool_count": 34,
   "tools": {
     "calculate_tool": {
@@ -69,7 +69,7 @@
     },
     "competitor_history_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
-      "display_name": "竞品历史查询",
+      "display_name": "竞品价格历史",
       "description_hash": "fd2592682b4e14b7",
       "args_schema": {
         "question": {
@@ -93,7 +93,7 @@
     },
     "competitor_watch_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
-      "display_name": "竞品监控任务",
+      "display_name": "竞品巡检",
       "description_hash": "9b922fc4240d079f",
       "args_schema": {
         "idempotency_key": {
@@ -110,7 +110,7 @@
     },
     "competitor_watchlist_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
-      "display_name": "竞品监控清单",
+      "display_name": "竞品监控清单管理",
       "description_hash": "77c1b270cdb5969c",
       "args_schema": {
         "action": {
@@ -155,7 +155,7 @@
     },
     "data_collection_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/data_collection.py",
-      "display_name": "数据采集",
+      "display_name": "数据采集入库",
       "description_hash": "140f080a61b5b6b8",
       "args_schema": {
         "dedup_keys": {
@@ -225,7 +225,7 @@
     },
     "execute_sql_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
-      "display_name": "SQL 确定查询",
+      "display_name": "SQL 只读查询",
       "description_hash": "95c523fde60caf18",
       "args_schema": {
         "query": {
@@ -337,7 +337,7 @@
     },
     "map_distance_matrix_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
-      "display_name": "距离矩阵",
+      "display_name": "多点距离矩阵",
       "description_hash": "baf8ac3cce07b5c5",
       "args_schema": {
         "from_locations": {
@@ -566,7 +566,7 @@
     },
     "map_navigation_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
-      "display_name": "导航路线",
+      "display_name": "导航调起链接",
       "description_hash": "c7e1265e71884784",
       "args_schema": {
         "from_location": {
@@ -794,7 +794,7 @@
     },
     "map_street_view_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/street_view.py",
-      "display_name": "街景",
+      "display_name": "街景查询",
       "description_hash": "9dc5f966a99d17d2",
       "args_schema": {
         "heading": {
@@ -887,7 +887,7 @@
     },
     "memory_store_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
-      "display_name": "记忆存储",
+      "display_name": "记忆写入",
       "description_hash": "98066de659309c96",
       "args_schema": {
         "content": {

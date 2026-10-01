@@ -16,20 +16,20 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     # ── 通用 ──
     "calculate_tool": "数学计算",
     # ── SQL / 数据 ──
-    "execute_sql_tool": "SQL 确定查询",
+    "execute_sql_tool": "SQL 只读查询",
     "sql_query_tool": "自然语言查库",
     "export_csv_tool": "CSV 导出",
     "generate_report_tool": "报告生成",
-    "data_collection_tool": "数据采集",
+    "data_collection_tool": "数据采集入库",
     # ── RAG / 记忆 ──
     "search_knowledge_tool": "知识库检索",
     "memory_search_tool": "记忆检索",
-    "memory_store_tool": "记忆存储",
+    "memory_store_tool": "记忆写入",
     # ── 竞品 ──
     "competitor_analyze_tool": "竞品分析",
-    "competitor_history_tool": "竞品历史查询",
-    "competitor_watch_tool": "竞品监控任务",
-    "competitor_watchlist_tool": "竞品监控清单",
+    "competitor_history_tool": "竞品价格历史",
+    "competitor_watch_tool": "竞品巡检",
+    "competitor_watchlist_tool": "竞品监控清单管理",
     # ── 地图（腾讯 LBS）──
     "map_geocode_tool": "地理编码",
     "map_reverse_geocode_tool": "逆地理编码",
@@ -38,11 +38,11 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "map_place_search_tool": "地点搜索",
     "map_place_suggest_tool": "地点输入联想",
     "map_lookup_tool": "地图聚合查询",
-    "map_distance_matrix_tool": "距离矩阵",
+    "map_distance_matrix_tool": "多点距离矩阵",
     "map_route_tool": "路线规划",
-    "map_navigation_tool": "导航路线",
+    "map_navigation_tool": "导航调起链接",
     "map_static_map_tool": "静态地图",
-    "map_street_view_tool": "街景",
+    "map_street_view_tool": "街景查询",
     "map_coord_convert_tool": "坐标转换",
     "map_weather_tool": "天气查询",
     # ── 旅游 ──
