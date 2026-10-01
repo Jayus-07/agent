@@ -1208,6 +1208,12 @@ class RAGPipeline:
                 subject_type, department, roles=eff_roles)
             # 显式 kb 与授权集合求交：请求只能收窄，不能扩大（含 admin 全集）
             mf = self._constrain_filter_to_authorized(mf, authorized)
+            # 0 命中放宽重试的兜底范围（与 retrieve_knowledge 同策略：
+            # 只保留 kb 维度，且已收敛到授权集合——放宽不越权）
+            kb_scope = (
+                {k: v for k, v in (mf or {}).items() if k in ("kb_id", "$or")}
+                or None
+            )
 
             results: list = []
             seen_texts: set[str] = set()
@@ -1219,12 +1225,18 @@ class RAGPipeline:
                 from backend.rag.permissions import filter_documents_by_permission
                 return bool(filter_documents_by_permission([doc], user_permissions))
 
-            # 向量腿（带分数）
+            # 向量腿（带分数；0 命中时以授权 kb 范围放宽 QueryAnalyzer 维度重试）
+            def _vec(filt):
+                return self.chunk_retriever.vectordb.similarity_search_with_score(
+                    question, k=max(top_k * 2, top_k), filter=filt or None)
+
             try:
-                vec = self.chunk_retriever.vectordb.similarity_search_with_score(
-                    question, k=max(top_k * 2, top_k),
-                    filter=mf or None,
-                )
+                vec = _vec(mf)
+                if not vec and mf and kb_scope and kb_scope != mf:
+                    logger.info(
+                        "[RAG.search] 全量过滤 0 命中，放宽 QueryAnalyzer "
+                        f"维度重试（保留 kb 范围）: {kb_scope}")
+                    vec = _vec(kb_scope)
                 for doc, dist in vec:
                     if not _keep(doc):
                         continue
@@ -1240,17 +1252,25 @@ class RAGPipeline:
                     raise
                 logger.warning(f"[RAG.search] 向量检索失败: {e}", exc_info=True)
 
-            # BM25 腿补充（向量 0 命中或不足时；同授权后过滤）
+            # BM25 腿补充（向量 0 命中或不足时；同授权后过滤 + 同款放宽重试）
             if len(results) < top_k and self.bm25 is not None:
                 try:
-                    for doc in self.bm25.invoke(question):
+                    def _bm25_keep(doc, filt):
+                        if not _keep(doc):
+                            return False
+                        return self._doc_matches_filter(
+                            getattr(doc, "metadata", {}), filt)
+                    kept = [d for d in self.bm25.invoke(question)
+                            if _bm25_keep(d, mf or None)]
+                    if not kept and mf and kb_scope and kb_scope != mf:
+                        logger.info(
+                            "[RAG.search] BM25 全量过滤 0 命中，放宽重试"
+                            f"（保留 kb 范围）: {kb_scope}")
+                        kept = [d for d in self.bm25.invoke(question)
+                                if _bm25_keep(d, kb_scope)]
+                    for doc in kept:
                         if len(results) >= top_k:
                             break
-                        if not _keep(doc):
-                            continue
-                        if not self._doc_matches_filter(
-                                getattr(doc, "metadata", {}), mf or None):
-                            continue
                         if doc.page_content in seen_texts:
                             continue
                         seen_texts.add(doc.page_content)

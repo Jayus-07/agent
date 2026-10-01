@@ -99,7 +99,10 @@ async def search_knowledge(req: SearchRequest, request: Request):
                 "score": meta.get("score"),
                 "metadata": {k: meta[k] for k in _SEARCH_META_KEYS if k in meta},
             })
-        stale = bool(getattr(pipeline, "is_index_stale", False))
+        try:
+            stale = bool(getattr(pipeline, "is_index_stale", False))
+        except Exception:  # noqa: BLE001 — 状态探测失败不阻塞检索结果
+            stale = False
         return {"query": query, "results": results, "total": len(results),
                 "index_status": "stale" if stale else "ok"}
     except HTTPException:
