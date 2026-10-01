@@ -253,7 +253,7 @@ python-magic==0.4.27
 python-multipart==0.0.28
 python-oxmsg==0.0.2
 pytz==2026.2
-pywin32==312
+pywin32==312; sys_platform == "win32"
 pywin32-ctypes==0.2.3
 PyYAML==6.0.3
 rank-bm25==0.2.2
