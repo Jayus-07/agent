@@ -151,11 +151,16 @@ class PromptReleaseService:
             )
         prompt_service = self._prompt_service or _load_prompt_service()
         try:
+            # Release Gate 的审批已经绑定了通过的外部评测结果；它是生产发布
+            # 的最终门禁，不应再要求候选版本先手工走一遍独立的状态流水线。
+            # skip_workflow 只跳过 Prompt 版本状态校验，仍保留模板校验、
+            # active_version/production alias、审计与热更新通知。
             await prompt_service.publish(
                 current.prompt_key,
                 current.version,
                 actor=actor,
                 role="release_gate",
+                skip_workflow=True,
             )
         except Exception as exc:
             raise ReleaseStateError(f"Prompt production 发布失败: {exc}") from exc

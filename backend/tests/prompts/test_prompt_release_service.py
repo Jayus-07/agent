@@ -100,10 +100,18 @@ class _FakeReleaseRepository:
 class _FakePromptService:
     def __init__(self) -> None:
         self.prompts = {"test.prompt": _FakePrompt()}
-        self.publish_calls: list[tuple[str, int, str]] = []
+        self.publish_calls: list[tuple[str, int, str, bool]] = []
 
-    async def publish(self, key: str, version: int, *, actor: str, role: str = "") -> dict[str, Any]:
-        self.publish_calls.append((key, version, actor))
+    async def publish(
+        self,
+        key: str,
+        version: int,
+        *,
+        actor: str,
+        role: str = "",
+        skip_workflow: bool = False,
+    ) -> dict[str, Any]:
+        self.publish_calls.append((key, version, actor, skip_workflow))
         self.prompts[key].active_version = version
         return {"active_version": version, "previous_version": 1}
 
@@ -168,7 +176,7 @@ async def test_passing_release_can_be_approved_and_published(
 
     assert published.status == PromptReleaseStatus.PUBLISHED
     assert prompt_service.prompts["test.prompt"].active_version == 2
-    assert prompt_service.publish_calls == [("test.prompt", 2, "admin")]
+    assert prompt_service.publish_calls == [("test.prompt", 2, "admin", True)]
 
 
 @pytest.mark.asyncio
