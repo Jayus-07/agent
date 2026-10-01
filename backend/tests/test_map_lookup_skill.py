@@ -51,7 +51,8 @@ def test_missing_required_param_rejected(skill):
 
 def test_all_actions_have_documented_requirements():
     assert set(ACTIONS) == {
-        "weather", "geocode", "reverse_geocode", "place_search", "route",
+        "weather", "geocode", "reverse_geocode", "place_search",
+        "merchant_search", "route",
         "navigation", "static_map", "district", "street_view",
     }
 
@@ -62,6 +63,7 @@ def test_all_actions_have_documented_requirements():
     ("geocode", {"address": "三坊七巷", "city": "福州"}),
     ("reverse_geocode", {"location": "26.08,119.29"}),
     ("place_search", {"keyword": "咖啡", "city": "福州"}),
+    ("merchant_search", {"keyword": "海底捞", "city": "福州"}),
     ("route", {"from_location": "26.08,119.29", "to_location": "26.05,119.39"}),
     ("navigation", {"to_location": "26.05,119.39"}),
     ("static_map", {"location": "26.08,119.29"}),

@@ -1,4 +1,4 @@
-"""tools/map — 腾讯位置服务工具层
+"""tools/map — 位置服务工具层（腾讯 LBS + 高德开放平台）
 
 与 ``tools/travel``（本地种子数据 + 直线估算）的关系：
 
@@ -7,13 +7,14 @@
 
 两者互补而非替代。工具清单：
 
-  geo.py         地理编码 / 逆地理编码 / IP 定位 / 行政区划 / 坐标换算
-  place.py       地点检索 / 关键词联想
-  route.py       路线规划 / 距离矩阵 / 导航调起
-  weather.py     天气（实时 / 未来 / 逐小时）
+  geo.py         地理编码 / 逆地理编码 / IP 定位 / 行政区划 / 坐标换算（腾讯）
+  place.py       地点检索 / 关键词联想（腾讯）
+  merchant.py    商家级检索：评分 / 人均 / 营业状态（高德，腾讯不提供）
+  route.py       路线规划 / 距离矩阵 / 导航调起（腾讯）
+  weather.py     天气（实时 / 未来 / 逐小时，腾讯 + 和风备用）
   street_view.py 街景全景图（返回后端代理地址，不泄露密钥）
   static_map.py  静态地图图片（返回后端代理地址，不泄露密钥）
-  lookup.py      聚合入口（action 分发上面 13 个原子工具 → capability map.lookup）
+  lookup.py      聚合入口（action 分发上面 14 个原子工具 → capability map.lookup）
 
 统一约定：返回 JSON 字符串；失败时返回 ``{"error": ...}`` 而非静默空值，
 以便 LLM 区分「查不到」与「查不了」。
@@ -27,6 +28,7 @@ from backend.tools.map.geo import (
     map_reverse_geocode_tool,
 )
 from backend.tools.map.lookup import ACTIONS, map_lookup_tool
+from backend.tools.map.merchant import map_merchant_search_tool
 from backend.tools.map.place import map_place_search_tool, map_place_suggest_tool
 from backend.tools.map.route import (
     map_distance_matrix_tool,
@@ -49,6 +51,7 @@ __all__ = [
     "map_coord_convert_tool",
     "map_place_search_tool",
     "map_place_suggest_tool",
+    "map_merchant_search_tool",
     "map_route_tool",
     "map_distance_matrix_tool",
     "map_navigation_tool",

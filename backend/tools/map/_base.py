@@ -41,15 +41,16 @@ def fail(message: str, **extra: Any) -> str:
     return tool_error_result(message, **extra)
 
 
-def not_configured() -> str:
+def not_configured(provider: str = "腾讯位置服务",
+                   key_name: str = "TENCENT_LBS_KEY") -> str:
     """未配置 Key 的统一提示（key 名唯一出处是 config/map.py）。
 
-    全部地图工具共用且当前只有腾讯一家 provider，故收在本模块、
-    保持零参数；出现第二家 provider 时再下沉到各 provider 模块。
+    全部地图工具共用；默认值是腾讯口径（存量调用点零改动），
+    其他 provider（高德）调用时显式传 provider 与 key 名。
     """
     return fail(
-        "腾讯位置服务未配置，地图能力不可用",
-        hint="请在项目根目录 .env 中设置 TENCENT_LBS_KEY 后重启服务",
+        f"{provider}未配置，地图能力不可用",
+        hint=f"请在项目根目录 .env 中设置 {key_name} 后重启服务",
     )
 
 

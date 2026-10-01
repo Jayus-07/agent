@@ -15,8 +15,8 @@ Capability: map.lookup（由 skills/map 的 MapLookupSkill 持有）
   是四层里唯一「Tool 出界 + 漏注册」的案例。
 
 覆盖与不覆盖：
-  - 覆盖：天气、地理编码/逆地理编码、地点检索、路线规划、导航调起、
-    静态图、行政区划、街景
+  - 覆盖：天气、地理编码/逆地理编码、地点检索、商家详情检索、路线规划、
+    导航调起、静态图、行政区划、街景
   - 不覆盖：行程排期（那是旅游域图的事，见 travel_poi skill 的说明）、
     POI 候选池（travel.poi_search）
 """
@@ -31,6 +31,7 @@ from backend.tools.map.geo import (
     map_geocode_tool,
     map_reverse_geocode_tool,
 )
+from backend.tools.map.merchant import map_merchant_search_tool
 from backend.tools.map.place import map_place_search_tool
 from backend.tools.map.route import map_navigation_tool, map_route_tool
 from backend.tools.map.static_map import map_static_map_tool
@@ -43,6 +44,8 @@ ACTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "geocode": ("地址 → 坐标", ("address",)),
     "reverse_geocode": ("坐标 → 地址", ("location",)),
     "place_search": ("按关键词检索地点", ("keyword",)),
+    "merchant_search": ("检索真实商家详情（名称/品类/评分/人均/地址/营业状态，高德数据）",
+                        ("keyword",)),
     "route": ("两点路线规划（距离/时长/分段指令）", ("from_location", "to_location")),
     "navigation": ("生成调起腾讯地图 App 导航的链接", ("to_location",)),
     "static_map": ("生成带标注的静态地图图片地址", ("location 或 markers",)),
@@ -80,13 +83,15 @@ def map_lookup_tool(
     page_size: int = 10,
     district_id: str = "",
 ) -> str:
-    """按 action 查询地理位置类事实（天气/坐标/地点/路线/导航/静态图/行政区划/街景）。
+    """按 action 查询地理位置类事实（天气/坐标/地点/商家/路线/导航/静态图/行政区划/街景）。
 
-    action 取值：weather / geocode / reverse_geocode / place_search / route /
-                 navigation / static_map / district / street_view
+    action 取值：weather / geocode / reverse_geocode / place_search /
+                 merchant_search / route / navigation / static_map /
+                 district / street_view
     坐标统一为 "纬度,经度"，如 "26.0824,119.2968"（不是经度在前）。
     各 action 所需参数：weather→city 或 location；geocode→address；
     reverse_geocode→location；place_search→keyword（可选 city/near）；
+    merchant_search→keyword（可选 city/near，返回评分/人均/营业状态）；
     route→from_location + to_location；navigation→to_location；
     static_map→location 或 markers；district→keyword 或 district_id；
     street_view→location。
@@ -121,6 +126,11 @@ def map_lookup_tool(
             return map_reverse_geocode_tool.func(location=location)
         if act == "place_search":
             return map_place_search_tool.func(
+                keyword=keyword, city=city, near=near,
+                radius_m=radius_m or 3000, page_size=page_size,
+            )
+        if act == "merchant_search":
+            return map_merchant_search_tool.func(
                 keyword=keyword, city=city, near=near,
                 radius_m=radius_m or 3000, page_size=page_size,
             )

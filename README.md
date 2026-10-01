@@ -40,7 +40,7 @@ flowchart TB
     end
 
     subgraph CAPL["能力层 Capability / Skill"]
-        SK["12 Skill · 17 Capability · 34 Tool<br/>RAG · SQL · 报告 · 邮件 · 搜索 · 地图 …"]
+        SK["12 Skill · 17 Capability · 35 Tool<br/>RAG · SQL · 报告 · 邮件 · 搜索 · 地图 …"]
     end
 
     subgraph INFRA["数据与基础设施"]
@@ -159,7 +159,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带子 Agent 与 reporter；架构上 3 个顶级业务域（客服 / 旅游 / 选品漏斗），旅游含 planning / commerce / booking 三个子流，落地为 5 个物理域图（commerce / booking 保留独立生命周期与独立开关） |
 | Capability | 路由与规划的最小能力单元（17 个，唯一事实源 `capabilities.yaml`） |
 | Skill | Capability 的业务执行封装（12 个）；RAG / SQL 是 Skill，不是独立 Agent |
-| Tool | 无状态原子操作（34 个），Skill 之下、基础设施之上 |
+| Tool | 无状态原子操作（35 个），Skill 之下、基础设施之上 |
 | Workflow | 预定义多步编排（4 个），绕过 Planner |
 | Model Gateway（模型网关） | `infra/llm`：统一 LLM 出口 proxy + DB 治理注册表 + providers；具体模型绑定不进架构图 |
 | Shared Platform（公共平台能力） | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation |
@@ -167,14 +167,14 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ---
 
-## 系统规模（2026-09-30 实测口径）
+## 系统规模（2026-10-02 实测口径）
 
 | 资产 | 数量 | 事实源 |
 |------|------|--------|
 | 主图核心节点 | 9（含 `general_chat` 寒暄直答，2026-09-25 口径对齐） | `backend/orchestration/graph/builder.py` |
 | Skill | 12 | `backend/skills/registry.py::_instances` |
 | Capability | 17（其中 3 个 `routed: false` 内部能力） | `backend/orchestration/router/capabilities.yaml` |
-| Tool | 34 | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
+| Tool | 35 | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
@@ -510,7 +510,7 @@ agent/
 │   ├── app/                   # FastAPI（routes / middleware / server）
 │   ├── orchestration/         # LangGraph 运行时（graph / router / workflows / skill_executor）
 │   ├── skills/                # 12 个 Skill（业务能力封装）
-│   ├── tools/                 # 34 个 Tool（无状态可测试）
+│   ├── tools/                 # 35 个 Tool（无状态可测试）
 │   ├── domains/               # 域图注册入口（→ 下面三个垂直域）
 │   ├── customer_service/      # 客服域图
 │   ├── travel/                # 旅游域图（含 commerce / booking 两个子域，默认关）

@@ -42,7 +42,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 治理是**平面不是层**：不进请求执行路径（仅旁路埋点），不新增 Agent，载体复用 PG/Redis/Prometheus/自研 Trace。台账与设计方案见 `docs/2026-09-30-企业级治理技术债修复台账.md`。
 
-- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 34 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
+- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 35 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
 - **错误统一口径（M3）**：`observability/error_taxonomy.py::unify_*` 是三套既有词表（模型层 5 类/任务层 10 类/ToolStatus 8 值）→ 七分类（timeout/network_error/permission_denied/validation_error/business_error/contract_error/provider_error）的**唯一映射出口**；管理端失败分布与新指标 `agent_tool_error_class_total` 只用此口径，禁止再造第四套词表。
 - **成本归因（M5）**：`observability/llm_context.py`（ContextVar，叠加语义）+ `llm_usage.skill_id/tool_id/agent_domain` 三列；注入点三处（skill execute 装饰器/tool executor 装饰器/builder 域图布线 `with_domain_attribution`），新增调用链记得在入口包 scope。
 - **资产一致性（M6）**：`GET /api/consistency/report` 七段对账矩阵全部实时派生（禁手抄数字）；管理端/巡检消费此端点，不另建清单。
@@ -78,7 +78,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 ### 节点职责与口径
 
 - **Planner**：只做任务拆解 → Capability DAG，禁调 Tool/Skill/DB ｜ **Critique**：规则校验优先，仅 anomaly 调 LLM ｜ **Supervisor**：纯规则 DAG 调度，Send[] 并行 + 注入 previous_outputs ｜ **Skill**：业务封装不碰外部系统 ｜ **Tool**：无状态可测试 ｜ **Reporter**：step_results → Markdown
-- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 34 Tool / 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
+- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 35 Tool（2026-10-02 +1 高德商家检索）/ 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
 - `routed: false` 只约束路由层，Planner/critique 仍遍历全量 17 个（`email.watch` 是 120s 阻塞长轮询，收紧属行为变更，台账 E9）。
 
 ### Capability DAG

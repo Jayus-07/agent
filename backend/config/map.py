@@ -129,3 +129,51 @@ QWEATHER_API_HOST = (os.getenv("QWEATHER_API_HOST", "").strip()
 def is_qweather_configured() -> bool:
     """和风备用源是否参与 fallback（Key 非空即启用，开关随天气总闸）。"""
     return bool(QWEATHER_API_KEY)
+
+
+# =============================================
+# 高德开放平台（AMap Web服务 API，2026-10-02）—— 商家级 POI 检索
+# =============================================
+# 与腾讯并存的补充 provider：腾讯检索只给名称/类别/地址，商家维度字段
+# （评分 / 人均消费 / 营业时间）只有高德 v5 检索（show_fields=business）
+# 提供。Key 须在高德控制台绑定「Web服务」类型，类型不符会返回 10007。
+#
+# 同腾讯三条纪律：
+#   1. Key 只从环境变量读取，代码内不落默认值；缺失时整体降级，
+#      地图是增强能力，不是硬依赖。
+#   2. Key 只在服务端持有，前端不接触。
+#   3. 坐标系口径为 GCJ-02（高德与腾讯同系，互相换算无需转坐标，
+#      但坐标串顺序是「经度,纬度」，归一在 infra/lbs/amap.py 做）。
+AMAP_KEY = os.getenv("AMAP_KEY", "").strip()
+# 数字签名私钥：仅当控制台为该 Key 开启「数字签名」校验时才需要。
+# 留空即不签名（当前 Key 未开启，实测裸 Key 可用）。
+AMAP_SECRET = os.getenv("AMAP_SECRET", "").strip()
+# 总开关。默认 true，但实际生效条件为 enabled and key 非空，
+# 「没配 Key」等价于「未启用」，与腾讯同口径。
+AMAP_ENABLED = _bool("AMAP_ENABLED", True)
+
+AMAP_HOST = os.getenv("AMAP_HOST", "https://restapi.amap.com").rstrip("/")
+AMAP_CONNECT_TIMEOUT = float(os.getenv("AMAP_CONNECT_TIMEOUT", "3"))
+AMAP_READ_TIMEOUT = float(os.getenv("AMAP_READ_TIMEOUT", "8"))
+# 客户端节流：个人认证 Key 的搜索 QPS 上限低（超限返 10003），保底限速。
+AMAP_MIN_INTERVAL = float(os.getenv("AMAP_MIN_INTERVAL", "0.35"))
+AMAP_RETRIES = int(os.getenv("AMAP_RETRIES", "1"))
+AMAP_RETRY_BACKOFF = float(os.getenv("AMAP_RETRY_BACKOFF", "0.5"))
+# 熔断：连续失败 N 次开路 cooldown 秒（口径与腾讯一致），期间调用立即失败
+AMAP_BREAKER_THRESHOLD = int(os.getenv("AMAP_BREAKER_THRESHOLD", "3"))
+AMAP_BREAKER_COOLDOWN = float(os.getenv("AMAP_BREAKER_COOLDOWN", "60"))
+
+# 商家信息（评分/人均/营业时间）变化不快，TTL 缓存省配额
+AMAP_CACHE_ENABLED = _bool("AMAP_CACHE_ENABLED", True)
+AMAP_CACHE_MAXSIZE = int(os.getenv("AMAP_CACHE_MAXSIZE", "512"))
+AMAP_CACHE_TTL = float(os.getenv("AMAP_CACHE_TTL", "600"))
+# 单次检索返回条数上限（高德 v5 page_size 上限 25）
+AMAP_MAX_PAGE_SIZE = int(os.getenv("AMAP_MAX_PAGE_SIZE", "25"))
+# 默认检索城市（与 TENCENT_LBS_DEFAULT_REGION 同一策略：无地域限定
+# 会返回全国噪声结果）
+AMAP_DEFAULT_REGION = os.getenv("AMAP_DEFAULT_REGION", "福州")
+
+
+def is_amap_configured() -> bool:
+    """高德 Key 是否可用。调用方据此决定走真实数据还是降级。"""
+    return bool(AMAP_ENABLED and AMAP_KEY)

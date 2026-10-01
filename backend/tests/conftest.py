@@ -222,6 +222,8 @@ def _disable_tencent_lbs(monkeypatch):
     from backend.tools.travel import routing
 
     monkeypatch.setattr(map_cfg, "TENCENT_LBS_ENABLED", False)
+    # 高德同口径禁用：否则开发机 .env 配了 AMAP_KEY 时，单测会真打高德接口
+    monkeypatch.setattr(map_cfg, "AMAP_ENABLED", False)
     monkeypatch.setattr(map_cfg, "TRAVEL_USE_LIVE_MAP", False)
     routing.set_route_provider(None)
     yield
