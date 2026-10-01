@@ -25,6 +25,12 @@ from backend.config.model_roles import resolve_name as _literal_model
 RAG_MODE = os.getenv("RAG_MODE", "local").strip().lower()
 RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL", "http://rag-service:8090").strip().rstrip("/")
 
+# 重索引任务化（2026-10-02 remote 断层收口）：开启后 reindex 提交进
+# rag_index 队列由 rag-index-worker 执行（RAG_MODE=remote 下旧同步路径
+# 触碰 proxy.vectordb 必失败，本开关关闭的回滚语义 = 恢复「明确报错」，
+# 不是恢复「能用」）。默认关，compose 中 app 服务显式开启。
+RAG_REINDEX_ASYNC_ENABLED = os.getenv("RAG_REINDEX_ASYNC_ENABLED", "false").lower() == "true"
+
 # ── 业务领域数据（已迁至 preprocessing/domain_data.py，此处 re-export 保持兼容）──
 from backend.rag.preprocessing.domain_data import (  # noqa: F401
     KNOWN_PERSON_NAMES, TIME_PATTERNS, DEFAULT_KEYWORDS, SIGNAL_RULES,

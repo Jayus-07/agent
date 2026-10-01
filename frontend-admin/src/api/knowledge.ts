@@ -229,8 +229,19 @@ export const knowledgeService: any = {
   deleteDocument: (id: string) =>
     fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
 
+  // 重索引（2026-10-02 任务化）：响应即提交回执 {ok, async, joined, task_id}，
+  // 终态/进度走 getReindexStatus 轮询；async=false = 同步降级路径（响应即终态）
   reindexDocument: (id: string) =>
-    fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false })),
+    fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST' })
+      .then(async r => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok && !data.error) data.error = `重索引请求失败 (${r.status})`
+        return data
+      }).catch((e) => ({ ok: false, error: String(e) })),
+
+  // 重索引任务状态 + 进度镜像（task.status 终态或 progress.stage=done/error/duplicate 即停止轮询）
+  getReindexStatus: (id: string) =>
+    fetchRaw(`${BASE}/documents/${id}/reindex/status`).then(r => r.json()).catch(() => ({ ok: false })),
 
   /**
    * 批量删除（并发）— 使用 X-Batch-Id 头关联同一批次，操作中心按批次折叠展示。
@@ -267,7 +278,8 @@ export const knowledgeService: any = {
   },
 
   /**
-   * 批量重索引（串行）— 避免并发压垮本地 embedding 模型。
+   * 批量重索引（逐个提交）— 任务化后每次 POST 是入队提交（执行/同文档
+   * 互斥在 worker 侧），ok 计数=成功提交数，失败=提交失败。
    */
   batchReindex: async (ids: string[]) => {
     const batchId = ids.length > 1 ? crypto.randomUUID() : undefined
@@ -280,7 +292,7 @@ export const knowledgeService: any = {
         const res = await fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
         const r = await res.json()
         if (r.ok) ok++
-        else failed.push({ id, error: r.error || '重索引失败' })
+        else failed.push({ id, error: r.error || '重索引提交失败' })
       } catch (e) {
         failed.push({ id, error: (e as Error).message })
       }

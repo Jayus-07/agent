@@ -923,6 +923,24 @@ def get_task_for_user(task_id: str, user_id: str,
     return TaskRecord.from_row(dict(zip(cols, row)))
 
 
+def get_latest_biz_task(biz_type: str, biz_id: str) -> TaskRecord | None:
+    """按业务键取最近一条任务行（重索引活动任务 join 的唯一判重出口）。
+
+    内部/管理面用；调用方自行按 status 判定是否 active（PENDING/RUNNING）。
+    """
+    ensure_schema()
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM tasks WHERE biz_type = %s AND biz_id = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (biz_type, biz_id))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d.name for d in cur.description]
+    return TaskRecord.from_row(dict(zip(cols, row)))
+
+
 def list_tasks_for_user(user_id: str, *, tenant_id: str = "",
                         status: str = "", limit: int = 20) -> list[TaskRecord]:
     """用户任务历史（created_at 倒序）。"""

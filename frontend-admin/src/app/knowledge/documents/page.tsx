@@ -81,6 +81,8 @@ export default function DocumentsPage() {
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
   const [inputValue, setInputValue] = useState(keyword)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  // 轮询循环的卸载守卫（重索引任务化后页面离开即停止跟踪）
+  const mountedRef = useRef(true)
 
   // 防抖搜索：本地 input 立即更新，API 请求 300ms 后发出
   const handleSearch = (value: string) => {
@@ -97,7 +99,10 @@ export default function DocumentsPage() {
   }
 
   useEffect(() => {
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+    return () => {
+      mountedRef.current = false
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
   }, [])
 
   // G2：加载真实知识库清单（注册库 + 文档计数）
@@ -127,10 +132,52 @@ export default function DocumentsPage() {
     }
   }
 
-  const handleReindex = async (id: string) => {
+  // 重索引进度轮询：任务化后提交即返回，状态/进度走轮询通道（1.5s 间隔，
+  // 10 分钟上限兜底；终态判定 = task.status 或 progress.stage 任一到达）
+  const pollReindexStatus = async (id: string, name: string) => {
+    const started = Date.now()
+    while (mountedRef.current && Date.now() - started < 600_000) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (!mountedRef.current) return
+      let res: any
+      try {
+        res = await knowledgeService.getReindexStatus(id)
+      } catch {
+        continue // 瞬时网络错误不中断轮询
+      }
+      if (!res?.ok) continue
+      const status = res.task?.status as string | undefined
+      const stage = res.progress?.stage as string | undefined
+      if (status === 'SUCCESS' || stage === 'done' || stage === 'duplicate') {
+        const chunks = res.progress?.detail?.chunk_count
+        toast.success(`「${name}」重索引完成${chunks ? `（${chunks} 个分块）` : ''}`)
+        return
+      }
+      if (status === 'FAILED' || status === 'CANCELLED' || stage === 'error') {
+        toast.error(`「${name}」重索引失败：${res.task?.error || res.progress?.message || '未知错误'}`)
+        return
+      }
+    }
+    if (mountedRef.current) toast.info(`「${name}」重索引仍在后台执行，可稍后在操作记录中查看结果`)
+  }
+
+  const handleReindex = async (id: string, name: string) => {
+    if (reindexing.has(id)) return
     setReindexing(prev => new Set(prev).add(id))
     try {
-      await knowledgeService.reindexDocument(id)
+      const res = await knowledgeService.reindexDocument(id)
+      if (!res?.ok) {
+        toast.error(`「${name}」重索引提交失败：${res?.error || '未知错误'}`)
+        return
+      }
+      if (!res.async) {
+        // 同步降级路径（任务队列不可达时的本机回退）：响应即终态
+        toast.success(`「${name}」重索引完成`)
+        refresh()
+        return
+      }
+      toast.info(res.joined ? `「${name}」已有重索引进行中，正在跟踪进度` : `「${name}」重索引任务已提交`)
+      await pollReindexStatus(id, name)
       refresh()
     } finally {
       setReindexing(prev => {
@@ -218,7 +265,15 @@ export default function DocumentsPage() {
     const ids = Array.from(selectedIds)
     setBatchReindexing(true)
     try {
-      await knowledgeService.batchReindex(ids)
+      // 任务化后批量 = 逐个提交进队列（执行/互斥在 worker 侧），逐条进度
+      // 不在此跟踪，结果以操作记录与列表刷新为准
+      const res = await knowledgeService.batchReindex(ids)
+      const failedCount = res?.failed?.length ?? 0
+      if (failedCount > 0) {
+        toast.error(`${failedCount} 个文档提交重索引失败${res?.ok ? `，${res.ok} 个已提交` : ''}`)
+      } else {
+        toast.success(`已提交 ${res?.ok ?? ids.length} 个重索引任务，完成后可在操作记录查看`)
+      }
       clearSelection()
       refresh()
     } finally {
@@ -391,7 +446,7 @@ export default function DocumentsPage() {
                     <div className="flex items-center gap-1">
                       <button onClick={(e) => handleStopPropagation(e, () => openDocDetail(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看Chunks"><Grid3X3 size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => openLineage({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看模型血缘"><Cpu size={13} /></button>
-                      <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
+                      <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id, d.name))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                       </button>
                       <button onClick={(e) => handleStopPropagation(e, () => setDeleteTarget({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>

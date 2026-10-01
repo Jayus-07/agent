@@ -63,6 +63,31 @@ def create_index_task_record(upload_id: str, filename: str, *,
         return None
 
 
+def create_reindex_task_record(doc_id: str, file_name: str, *,
+                               tenant_id: str = "default",
+                               user_id: str = "system",
+                               reindex_kwargs: dict | None = None) -> str | None:
+    """为重索引任务创建 PENDING tasks 行，返回 task_id；失败降级返回 None。
+
+    biz_type="rag_reindex"、biz_id=doc_id——活动任务 join（同文档进行中
+    重索引搭车语义）按此业务键判重。graph_name 保持 "rag_index"：队列
+    亲和与 agent 图归属守卫（agent_tasks.py 跳过 rag_index 行）共用。
+    """
+    try:
+        from backend.services.task_state import TaskManager
+
+        record = TaskManager.create(
+            user_id, f"重索引文档: {file_name or doc_id}", tenant_id=tenant_id,
+            graph_name="rag_index", conversation_id="",
+            biz_type="rag_reindex", biz_id=doc_id,
+            extra_input={"reindex_kwargs": reindex_kwargs or {}})
+        return record.id
+    except Exception:
+        logger.warning("[IndexTaskRuntime] reindex tasks 行创建失败，降级无 "
+                       "TaskState 模式: doc_id=%s", doc_id, exc_info=True)
+        return None
+
+
 def redispatch_index_task(task_id: str, *,
                           dispatch_type: str = "resume") -> str | None:
     """按 tasks.input 里的原始 kwargs 重投 rag_index（resume/recovery 共用）。
@@ -70,26 +95,39 @@ def redispatch_index_task(task_id: str, *,
     queue 由 QueueRouter 按 workflow binding 决定（Step3 收口，不再直接
     读 CELERY_RAG_INDEX_QUEUE）；返回 celery async result id，task 行不
     存在或缺 index_kwargs 时 None（调用方回落通用入队或报错）。
+    重索引任务（reindex_kwargs）按同队列亲和重投对应任务。
     """
     from backend.services import task_service
-    from backend.tasks.index_tasks import execute_index_task
     from backend.tasks.queue_router import log_route, resolve_for_task
 
     record = task_service.get_task(task_id)
     if record is None:
         return None
-    index_kwargs = (record.input or {}).get("index_kwargs") or {}
-    if not index_kwargs:
-        logger.error("[IndexTaskRuntime] %s 缺 index_kwargs，无法重投", task_id)
-        return None
+    task_input = record.input or {}
+    if task_input.get("reindex_kwargs"):
+        from backend.tasks.index_tasks import reindex_document_task
+
+        kwargs = {**task_input["reindex_kwargs"], "db_task_id": task_id}
+        celery_task = reindex_document_task
+        task_name = "tasks.reindex_document"
+    else:
+        index_kwargs = task_input.get("index_kwargs") or {}
+        if not index_kwargs:
+            logger.error("[IndexTaskRuntime] %s 缺 index_kwargs，无法重投", task_id)
+            return None
+        from backend.tasks.index_tasks import execute_index_task
+
+        kwargs = {**index_kwargs, "db_task_id": task_id}
+        celery_task = execute_index_task
+        task_name = "tasks.execute_index"
     route = resolve_for_task(record)
-    async_result = execute_index_task.apply_async(
-        kwargs={**index_kwargs, "db_task_id": task_id},
+    async_result = celery_task.apply_async(
+        kwargs=kwargs,
         queue=route.physical_queue)
     task_service.mark_queued(task_id, getattr(async_result, "id", ""),
                              queue=route.physical_queue)
     log_route(route, dispatch_type=dispatch_type, task_id=task_id,
-              celery_task_name="tasks.execute_index",
+              celery_task_name=task_name,
               previous_queue=record.queue)
     logger.info("[IndexTaskRuntime] %s redispatched to %s (%s)",
                 task_id, route.physical_queue,

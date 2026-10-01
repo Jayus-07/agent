@@ -37,7 +37,6 @@ def _embedding_model_name() -> str:
         return EMBEDDING_MODEL
     return os.path.basename(EMBEDDING_MODEL_PATH)
 from backend.config.rag import METADATA_SCHEMA_FINGERPRINT
-from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.indexing.processing_lineage_pg import (
     get_processing_lineage_repository,
 )
@@ -491,19 +490,77 @@ async def get_processing_run_detail(doc_id: str, run_id: str, request: Request):
         return {"doc_id": doc_id, "run_id": run_id, "steps": [], "error": str(e)}
 
 
+def _submit_reindex_task(doc_id: str, doc_name: str, *, batch_id: str | None,
+                         source: str, user_id: str, tenant_id: str) -> dict | None:
+    """把重索引提交进 rag_index 队列（rag-index-worker 执行，remote 断层收口）。
+
+    返回提交/join 响应 dict；broker 不可达返回 None（调用方按模式降级或
+    诚实报错）。活动任务 join：同文档已有 PENDING/RUNNING 的重索引任务
+    → 返回既有 task_id，后来者搭车看进度（并发第一道闸；worker 侧
+    advisory lock 是第二道，覆盖提交窗口竞态）。
+    """
+    from backend.models.task import TaskStatus
+    from backend.services import task_service
+    from backend.tasks.index_task_runtime import create_reindex_task_record
+    from backend.tasks.queue_router import log_route, resolve_for_workflow
+
+    latest = task_service.get_latest_biz_task("rag_reindex", doc_id)
+    if latest and latest.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+        return {"ok": True, "doc_id": doc_id, "async": True, "joined": True,
+                "task_id": latest.id, "status": latest.status.value}
+
+    # PAUSED/WAITING_USER 的历史行不算活动（允许重新提交；旧行保持暂停）
+    task_id = create_reindex_task_record(
+        doc_id, doc_name, tenant_id=tenant_id or "default",
+        user_id=user_id or "system",
+        reindex_kwargs={"doc_id": doc_id, "batch_id": batch_id,
+                        "source": source})
+    route = resolve_for_workflow("rag_index")
+    log_route(route, dispatch_type="initial", task_id=task_id or "",
+              celery_task_name="tasks.reindex_document")
+    try:
+        from backend.tasks.index_tasks import reindex_document_task
+
+        async_result = reindex_document_task.apply_async(
+            kwargs=dict(doc_id=doc_id, batch_id=batch_id, source=source,
+                        db_task_id=task_id),
+            queue=route.physical_queue)
+    except Exception as e:
+        logger.error(f"[RAG] reindex 入队失败（broker 不可达？）: {e}")
+        if task_id:
+            try:
+                task_service.update_status(task_id, TaskStatus.FAILED,
+                                           progress="入队失败（任务队列不可达）")
+            except Exception:  # noqa: BLE001 — 状态补写失败不影响错误返回
+                logger.warning("[RAG] reindex 任务行终态补写失败", exc_info=True)
+        return None
+    if task_id:
+        task_service.mark_queued(task_id, getattr(async_result, "id", ""),
+                                 queue=route.physical_queue)
+    return {"ok": True, "doc_id": doc_id, "async": True, "joined": False,
+            "task_id": task_id or "", "status": "PENDING"}
+
+
 @router.post("/documents/{doc_id}/reindex", dependencies=[Depends(require_rag_editor)])
 async def reindex_document(doc_id: str, request: Request, force: bool = False):
-    """单文件重新索引 — 删除旧向量后重新加载/分块/Embedding/写入"""
+    """单文件重新索引 — 幂等提交（rag_index 队列）；降级时本机同步执行。
+
+    2026-10-02 remote 断层收口：remote 模式下 app 持有的是代理 pipeline，
+    直接构造 IncrementalIndexer 触碰 proxy.vectordb 必失败。现默认提交进
+    rag_index 队列由 rag-index-worker（RAG_MODE=local）执行，执行体
+    reindex_service.run_reindex 与本地同步路径共用；进度经 Redis 镜像供
+    GET /documents/{doc_id}/reindex/status 轮询。broker 不可达时 local
+    模式降级本机同步，remote 模式明确报错（不假装提交成功）。
+    """
     require_rag_ready()
-    from backend.config import DOCS_DIRECTORY
+    from backend.config.rag import RAG_MODE, RAG_REINDEX_ASYNC_ENABLED
     source = _extract_source(request)
     batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
     authz = _require_authz(request)
+    reg = _get_registry()
 
     try:
-        _t0 = time.time()
-        reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
             return {"ok": False, "error": "文档不存在"}
@@ -524,55 +581,90 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
         if not file_path or not os.path.isfile(file_path):
             return {"ok": False, "error": f"文件不存在: {file_path}"}
 
-        # 复用 pipeline 单例的 store/embedding（不再每次 new 加载模型；doc_db 路径与 upload 一致）
-        pipeline = await asyncio.to_thread(get_rag_pipeline)
-        from backend.rag.indexing.processing_lineage_pg import (
-            get_processing_lineage_repository,
-        )
-        # F2: 从 registry 回读归属传入 indexer，避免重索引把 kb_id/department
-        # 覆盖成默认值（与 upload 路径行为对齐）。kb_id 传 "default" 才能触发
-        # indexer._derive_kb_id() 的路径反推兜底；department 缺失时退 "general"。
-        reg_kb = doc.get("kb_id") or ""
-        reg_dept = doc.get("department") or ""
-        indexer = IncrementalIndexer(
-            DOCS_DIRECTORY, pipeline.vectordb, pipeline.doc_db, pipeline.embedding, reg,
-            kb_id=reg_kb or "default",
-            department=reg_dept or "general",
-            # 生产 BM25Store 会从向量集合原子重建，并排除旧 chunk。
-            bm25_store=pipeline.bm25_store,
-            processing_lineage_repository=get_processing_lineage_repository(),
-            processing_task_id=f"reindex:{doc_id}",
-            processing_batch_id=batch_id,
-        )
+        if RAG_REINDEX_ASYNC_ENABLED:
+            from backend.app.api.identity import resolve_identity
 
-        # 执行重索引
-        result = indexer.reindex_file(file_path)
-        elapsed_ms = int((time.time() - _t0) * 1000)
+            identity = resolve_identity(request)
+            submitted = _submit_reindex_task(
+                doc_id, doc_name, batch_id=batch_id, source=source,
+                user_id=identity.user_id, tenant_id=identity.tenant_id)
+            if submitted is not None:
+                return submitted
+            # broker 不可达：local 降级本机同步，remote 诚实报错
+            if RAG_MODE != "local":
+                return {"ok": False,
+                        "error": "任务队列暂不可用，请稍后重试（需检查 rag-index-worker/broker）"}
 
-        # 重索引后刷新 pipeline 内存 BM25（indexer 已发布同源快照）
-        try:
-            pipeline.refresh_bm25_from_store()
-        except Exception as e:
-            logger.warning(f"[RAG] BM25 刷新失败（不影响索引结果）: {e}")
-
-        # 获取更新后的文档信息（含 metadata 字段）
-        updated_doc = reg.get_by_doc_id(doc_id) or {}
-        _safe_log_op(doc_id, doc_name, "reindex", source,
-                     trace_id=result.get("trace_id") or None, batch_id=batch_id,
-                     result="success", duration_ms=elapsed_ms,
-                     detail={"chunk_count": result.get("chunk_count", 0),
-                             "file_hash": result.get("file_hash", ""),
-                             "doc_type": updated_doc.get("doc_type", "general"),
-                             "llm_used": bool(updated_doc.get("llm_used", False)),
-                             "confidence": updated_doc.get("confidence", 0)})
-
-        return {"ok": True, "doc_id": doc_id, "chunk_count": result.get("chunk_count", 0), "hash": result.get("file_hash", ""), "doc": updated_doc}
+        # 同步执行（开关关闭的历史路径 / local 降级），执行体与 worker 共用
+        from backend.rag.indexing import reindex_service
+        result = await asyncio.to_thread(
+            reindex_service.run_reindex, doc_id,
+            registry=reg, batch_id=batch_id, source=source,
+            executor="local_sync")
+        updated_doc = result.get("doc") or {}
+        return {"ok": True, "doc_id": doc_id,
+                "chunk_count": result.get("chunk_count", 0),
+                "hash": result.get("hash", ""), "doc": updated_doc}
     except Exception as e:
         logger.error(f"[RAG] reindex 失败: {e}")
-        _safe_log_op(doc_id, doc_name, "reindex", source, trace_id=None, batch_id=batch_id,
-                     result="failed", duration_ms=int((time.time() - _t0) * 1000) if '_t0' in dir() else 0,
-                     detail={"error": str(e)[:200]})
+        from backend.rag.indexing import reindex_service
+        reindex_service.log_reindex_failed(doc_id, source, batch_id=batch_id,
+                                           error=str(e), duration_ms=0)
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/documents/{doc_id}/reindex/status")
+async def reindex_status(doc_id: str, request: Request):
+    """重索引任务状态 + 进度（提交接口的配对轮询通道）。
+
+    task 为空 = 从未提交；status PENDING/RUNNING = 进行中；
+    SUCCESS/FAILED/CANCELLED = 终态（前端停止轮询）。
+    progress 为 Redis 镜像的最新阶段事件（stage=done/error/duplicate 即终态）。
+    """
+    authz = _require_authz(request)
+    doc = _get_registry().get_by_doc_id(doc_id)
+    if not doc or not authz.can_read_row(doc):
+        return {"ok": False, "error": "文档不存在"}
+
+    from backend.services import task_service
+
+    task_view = None
+    try:
+        task = task_service.get_latest_biz_task("rag_reindex", doc_id)
+        if task:
+            task_view = {"task_id": task.id,
+                         "status": task.status.value,
+                         "progress": task.progress or "",
+                         "error": task.error_message or "",
+                         "retry_count": task.retry_count}
+    except Exception as e:
+        logger.warning(f"[RAG] reindex 任务状态查询失败: {e}")
+
+    progress = None
+    try:
+        import json as _json
+
+        from backend.config.redis import REDIS_KEY_PREFIX
+        from backend.infra.redis.client import get_redis
+        from backend.rag.indexing.reindex_service import progress_key
+
+        r = get_redis()
+        if r is not None:
+            raw = r.hgetall(f"{REDIS_KEY_PREFIX}upload:{progress_key(doc_id)}")
+            if raw:
+                _dec = lambda v: v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+                data = {_dec(k): _dec(v) for k, v in raw.items()}
+                progress = {"stage": data.get("stage", ""),
+                            "message": data.get("message", ""),
+                            "updated_at": data.get("updated_at", "")}
+                try:
+                    progress["detail"] = _json.loads(data.get("detail") or "{}")
+                except ValueError:
+                    progress["detail"] = {}
+    except Exception as e:
+        logger.debug(f"[RAG] reindex 进度镜像读取失败: {e}")
+
+    return {"ok": True, "doc_id": doc_id, "task": task_view, "progress": progress}
 
 
 def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str]) -> None:

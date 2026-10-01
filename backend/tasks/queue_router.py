@@ -85,6 +85,7 @@ _WORKFLOW_ROUTES: dict[str, tuple[str, str]] = {
 _CELERY_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.execute_agent": ("interactive_agent", "workflow_binding"),
     "tasks.execute_index": ("rag_index", "workflow_binding"),
+    "tasks.reindex_document": ("rag_index", "workflow_binding"),
     "tasks.execute_metadata_shadow": ("metadata_shadow", "workflow_binding"),
 }
 
