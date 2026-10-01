@@ -559,6 +559,21 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     attached_id = ""
     if isinstance(pre_dispatched, dict) and pre_dispatched.get("attached"):
         attached_id = str(pre_dispatched.get("upload_id") or "")
+        if str(pre_dispatched.get("run_status")) == "published":
+            # 附着到「已发布」任务：内容完全一致 = duplicate 语义。进度镜像
+            # 可能已过期（TTL），这里重发一次终态，保证客户端 SSE 拿得到终态
+            # （与 Worker 重复投递时 hash-dedup 发 duplicate 同一口径）。
+            _write_progress_redis(
+                attached_id, "duplicate", "文件已存在，未重复索引",
+                owner=(identity.tenant_id, identity.user_id),
+                doc=sanitize_doc_row(_get_registry().get_by_path(
+                    result["filepath"]) or {}))
+            # 本进程重发终态 → 订阅必须走 Redis 轮询通道（本进程没有该任务
+            # 的进程内队列）；打路由标记让 SSE 无缝切到 Redis 通道
+            _celery_routed.add(attached_id)
+            _progress_owners[attached_id] = (identity.tenant_id, identity.user_id)
+            return {"ok": True, "duplicate_of": attached_id,
+                    "upload_id": attached_id, "filename": result["filename"]}
 
     if not attached_id:
         task = asyncio.create_task(_run_index_background(
@@ -1200,17 +1215,9 @@ def _dispatch_index_with_idempotency(
         "department": task_kwargs.get("department", ""),
     }
     upload_id = str(task_kwargs.get("upload_id", ""))
-    try:
-        result = run_idempotent_operation_for_identity(
-            "rag.index.submit",
-            payload,
-            lambda: _dispatch_index_to_celery(**task_kwargs),
-            tenant_id=tenant_id,
-            actor_id=actor_id,
-            client_key=idempotency_key,
-        )
-    except IdempotencyConflict:
-        # 分辨「同内容在途（附着）」与「异内容（409 拒绝）」
+
+    def _on_conflict() -> dict:
+        """同键冲突：分辨「同内容在途（附着）」与「异内容（409 拒绝）」。"""
         from backend.rag.indexing.index_run_store_pg import get_index_run_store
         run = get_index_run_store().get_run(upload_id)
         if (run and run.get("file_hash") == file_hash
@@ -1223,6 +1230,23 @@ def _dispatch_index_with_idempotency(
             "请更换 Idempotency-Key 或等待既有任务完成",
             upload_id=upload_id,
         )
+
+    try:
+        result = run_idempotent_operation_for_identity(
+            "rag.index.submit",
+            payload,
+            lambda: _dispatch_index_to_celery(**task_kwargs),
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            client_key=idempotency_key,
+        )
+    except ValueError as ve:
+        # PG 结果仓储以裸 ValueError("IDEMPOTENCY_CONFLICT") 表达同键不同内容
+        if "IDEMPOTENCY_CONFLICT" not in str(ve):
+            raise
+        result = _on_conflict()
+    except IdempotencyConflict:
+        result = _on_conflict()
     return _resolve_replayed_dispatch(result, task_kwargs, file_hash)
 
 
@@ -1254,6 +1278,7 @@ def _resolve_replayed_dispatch(result: dict, task_kwargs: dict, file_hash: str) 
         if replayed_id != current_id:
             return {"queued": False, "attached": True,
                     "upload_id": replayed_id,
+                    "run_status": status,
                     "db_task_id": result.get("db_task_id", "")}
         return result
     logger.warning(
