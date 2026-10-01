@@ -459,14 +459,25 @@ async def publish(
     _check_permission(spec.risk_level, "publish", operator.role)
 
     try:
-        result = await prompt_service.publish(
+        from backend.app.api.routes import prompt_releases
+        service = prompt_releases.get_release_service()
+        release = await service.get_approved_release(
             key, body.version,
-            actor=operator.actor,
-            role=operator.role,
         )
-        return result
+        if release is None:
+            return prompt_releases._gate_blocked(key, body.version)
+        published = await service.publish(
+            release.release_id, operator.actor,
+        )
+        return {
+            "active_version": published.version,
+            "release_id": published.release_id,
+            "status": published.status.value,
+        }
     except KeyError as e:
         raise HTTPException(404, str(e))
+    except prompt_releases.PromptReleaseError as e:
+        raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
 

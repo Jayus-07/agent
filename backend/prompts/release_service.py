@@ -42,13 +42,15 @@ class PromptReleaseService:
             raise ValueError("评测 suite 不能为空")
         if executor not in {"local", "github"}:
             raise ValueError("executor 只支持 local 或 github")
+        provenance = dict(dataset_version)
+        provenance.setdefault("suite", suite)
         row = await self._repository.create_release(
             release_id=f"rel-{uuid4().hex}",
             prompt_key=key,
             version=version,
             target_env=target_env,
             eval_suite=suite,
-            dataset_provenance=dataset_version,
+            dataset_provenance=provenance,
             prompt_snapshot=prompt_snapshot or {},
             tool_contract_fingerprint=tool_contract_fingerprint,
             model_binding_fingerprint=model_binding_fingerprint,
@@ -62,6 +64,24 @@ class PromptReleaseService:
         if row is None:
             raise KeyError(f"Prompt release 不存在: {release_id}")
         return PromptReleaseRecord.from_row(row)
+
+    async def list_releases(self, key: str) -> list[PromptReleaseRecord]:
+        rows = await self._repository.list_releases(key)
+        return [PromptReleaseRecord.from_row(row) for row in rows]
+
+    async def get_approved_release(
+        self, key: str, version: int, *, target_env: str = "production"
+    ) -> PromptReleaseRecord | None:
+        releases = await self.list_releases(key)
+        return next(
+            (
+                release for release in releases
+                if release.version == version
+                and release.target_env == target_env
+                and release.status == PromptReleaseStatus.APPROVED
+            ),
+            None,
+        )
 
     async def mark_running(self, release_id: str, external_run_id: str) -> PromptReleaseRecord:
         current = await self.get(release_id)

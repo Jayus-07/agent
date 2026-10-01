@@ -157,8 +157,35 @@ class TestPermissions:
         assert resp.status_code == 403
 
     def test_medium_publish_allowed_with_credential(self, client):
-        with patch("backend.app.api.routes.prompts.prompt_service") as mock_svc:
-            mock_svc.publish = AsyncMock(return_value={"active_version": 1})
+        approved_release = type(
+            "ApprovedRelease",
+            (),
+            {
+                "release_id": "rel-test",
+                "status": type("Status", (), {"value": "approved"})(),
+                "version": 1,
+            },
+        )()
+        release_service = type(
+            "ReleaseService",
+            (),
+            {
+                "get_approved_release": AsyncMock(return_value=approved_release),
+                "publish": AsyncMock(return_value=type(
+                    "PublishedRelease",
+                    (),
+                    {
+                        "release_id": "rel-test",
+                        "status": type("Status", (), {"value": "published"})(),
+                        "version": 1,
+                    },
+                )()),
+            },
+        )()
+        with patch(
+            "backend.app.api.routes.prompt_releases.get_release_service",
+            return_value=release_service,
+        ):
             body = {"version": 1}
             resp = client.post(
                 "/api/prompts/rag.qa/publish",

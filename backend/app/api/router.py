@@ -34,6 +34,7 @@ from backend.app.api.routes import (
     memory,
     observability,
     prompts,
+    prompt_releases,
     rag,
     rbac,
     report,
@@ -110,6 +111,7 @@ api_router.include_router(cs_ops.router)  # P8: 派单运营统计（admin）
 api_router.include_router(cs_tickets.router)  # 批次C: 统一工单（用户查询 + supervisor 流转）
 api_router.include_router(cs_agent_ws.router)  # 坐席 WS 实时推送（ticket 鉴权，不走 X-API-Key）
 api_router.include_router(evaluation.router)  # 评测集管理
+api_router.include_router(prompt_releases.router)  # Prompt 发布评测门禁
 api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）
 api_router.include_router(approvals.router)  # 写操作工具审批门（human-in-the-loop）
 api_router.include_router(budgets.router)  # 用户预算与管理员预算治理

@@ -64,6 +64,18 @@ class PromptReleaseRepository:
             row = result.mappings().first()
             return dict(row) if row else None
 
+    async def list_releases(self, prompt_key: str) -> list[dict[str, Any]]:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT * FROM ai.prompt_release_records "
+                    "WHERE prompt_key = :prompt_key "
+                    "ORDER BY created_at DESC"
+                ),
+                {"prompt_key": prompt_key},
+            )
+            return [dict(row) for row in result.mappings().all()]
+
     async def mark_running(self, release_id: str, external_run_id: str) -> dict[str, Any]:
         async with self._session_factory() as session:
             result = await session.execute(

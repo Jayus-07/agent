@@ -53,6 +53,9 @@ class PromptReleaseRecord:
     approved_by: str = ""
     published_by: str = ""
     rollback_by: str = ""
+    created_at: str | None = None
+    updated_at: str | None = None
+    published_at: str | None = None
 
     @property
     def id(self) -> str:
@@ -85,7 +88,14 @@ class PromptReleaseRecord:
             approved_by=str(row.get("approved_by") or ""),
             published_by=str(row.get("published_by") or ""),
             rollback_by=str(row.get("rollback_by") or ""),
+            created_at=_timestamp(row.get("created_at")),
+            updated_at=_timestamp(row.get("updated_at")),
+            published_at=_timestamp(row.get("published_at")),
         )
+
+
+def _timestamp(value: Any) -> str | None:
+    return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
 
 
 __all__ = [
