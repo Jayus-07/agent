@@ -715,7 +715,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
         供授权层把文档级裁决下推为 SQL ANY 过滤（visible_scopes），
         避免拉全表到应用侧过滤。"""
         with self._lock, self._conn() as conn:
-            rows = self._exec(
+            # 必须用普通游标：r[0] 是位置索引取列，_exec 的 RealDictCursor
+            # 返回按列名索引的字典行，r[0] 会 KeyError: 0（2026-10-01 修复）
+            rows = self._exec_scalar(
                 conn,
                 f"""SELECT DISTINCT COALESCE(NULLIF(permission_scope, ''), 'general')
                    FROM {self._table} WHERE status = 'active'""",

@@ -141,6 +141,25 @@ class TestInterface:
     def test_get_by_path_none_when_missing(self, pg_reg):
         assert pg_reg.get_by_path("test://missing.md") is None
 
+    def test_distinct_permission_scopes_returns_strings(self, pg_reg):
+        """回归（2026-10-01 P1）：distinct_permission_scopes 必须用普通游标。
+
+        原实现走 _exec（RealDictCursor 字典行）却按 r[0] 位置取列 →
+        KeyError: 0；该方法被 /rag/documents 授权下推调用后，路由兜底把
+        异常吞成空列表，管理端文档列表对全部角色恒为空。"""
+        pg_reg.register(
+            "test://scope/a.md", "scope_a", "hash_sa", "kb_scope", ["s0"], "db_a",
+            metadata={"doc_type": "general", "permission_scope": "general"},
+        )
+        pg_reg.register(
+            "test://scope/b.md", "scope_b", "hash_sb", "kb_scope", ["s0"], "db_b",
+            metadata={"doc_type": "general",
+                      "permission_scope": "dept_hr_confidential"},
+        )
+        scopes = pg_reg.distinct_permission_scopes()
+        assert isinstance(scopes, list) and scopes, "必须返回非空 scope 列表"
+        assert "general" in scopes and "dept_hr_confidential" in scopes
+
     def test_get_by_doc_id_active_priority(self, pg_reg):
         pg_reg.register("test://x1.md", "dup1", "h1", "kb1", [], "d")
         pg_reg.mark_deleted_by_doc_id("dup1")
