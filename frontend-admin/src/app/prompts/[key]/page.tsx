@@ -2,14 +2,15 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap } from 'lucide-react'
-import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus } from '@/api/prompts'
+import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap, Activity } from 'lucide-react'
+import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus, type PromptRuntimeStatus, type PromptReleaseRecord } from '@/api/prompts'
 import { evaluationService } from '@/api/evaluation'
 import { WHITELIST_KEYS } from '@/config/promptGroups'
 import { useToast } from '@/components/shared/Toast'
 import Skeleton from '@/components/shared/Skeleton'
 import StatusBadge from '@/components/prompts/StatusBadge'
 import StatusPipeline from '@/components/prompts/StatusPipeline'
+import PromptReleasePanel from '@/components/prompts/PromptReleasePanel'
 
 const INPUT_CLS = 'px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors'
 const BTN_PRIMARY = 'px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors flex items-center gap-1.5 disabled:opacity-50'
@@ -40,6 +41,24 @@ export default function PromptDetailPage() {
 
   // Audit state
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([])
+  const [runtimeStatus, setRuntimeStatus] = useState<PromptRuntimeStatus | null>(null)
+  const [releases, setReleases] = useState<PromptReleaseRecord[]>([])
+  const [releaseLoading, setReleaseLoading] = useState(false)
+
+  const refreshReleases = useCallback(async () => {
+    try {
+      const records = await promptsService.listReleases(decodedKey)
+      if (records.length > 0) {
+        const detail = await promptsService.getRelease(decodedKey, records[0].release_id).catch(() => records[0])
+        setReleases([detail, ...records.slice(1)])
+      } else {
+        setReleases([])
+      }
+    } catch {
+      // 旧环境尚未执行 release migration 时，Prompt 编辑页仍可正常使用。
+      setReleases([])
+    }
+  }, [decodedKey])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -53,12 +72,14 @@ export default function PromptDetailPage() {
       setEditTemplate(detail.template)
       setVersions(vers)
       setAuditLog(audit)
+      promptsService.runtimeStatus().then(setRuntimeStatus).catch(() => setRuntimeStatus(null))
+      refreshReleases()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [decodedKey, toast])
+  }, [decodedKey, refreshReleases, toast])
 
   useEffect(() => { load() }, [load])
 
@@ -124,9 +145,79 @@ export default function PromptDetailPage() {
     }
   }
 
+  const latestRelease = releases[0] ?? null
+
+  useEffect(() => {
+    if (!latestRelease || !['pending', 'running'].includes(latestRelease.status)) return
+    const timer = window.setInterval(() => { void refreshReleases() }, 4000)
+    return () => window.clearInterval(timer)
+  }, [latestRelease, refreshReleases])
+
+  const handleCreateRelease = async (version: number) => {
+    setReleaseLoading(true)
+    try {
+      const record = await promptsService.createRelease(decodedKey, version, {
+        suite: 'pr_baseline',
+        dataset_version: { version: '5.0.0-unified', source: 'admin-console' },
+        executor: 'local',
+      })
+      setReleases(previous => [record, ...previous.filter(item => item.release_id !== record.release_id)])
+      toast.info(`v${version} 已进入评测队列`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '提交评测失败')
+    } finally {
+      setReleaseLoading(false)
+    }
+  }
+
+  const handleApproveRelease = async () => {
+    if (!latestRelease) return
+    setReleaseLoading(true)
+    try {
+      const record = await promptsService.approveRelease(decodedKey, latestRelease.release_id)
+      setReleases(previous => [record, ...previous.filter(item => item.release_id !== record.release_id)])
+      toast.success('评测结果已审批，可以发布')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '审批失败')
+    } finally {
+      setReleaseLoading(false)
+    }
+  }
+
+  const handlePublishRelease = async () => {
+    if (!latestRelease) return
+    setReleaseLoading(true)
+    try {
+      const record = await promptsService.publishRelease(decodedKey, latestRelease.release_id)
+      setReleases(previous => [record, ...previous.filter(item => item.release_id !== record.release_id)])
+      toast.success(`v${record.version} 已发布，正在确认 Runtime 热更新`)
+      load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '发布失败')
+    } finally {
+      setReleaseLoading(false)
+    }
+  }
+
+  const handleRollbackRelease = async () => {
+    if (!latestRelease) return
+    try {
+      await promptsService.rollback(decodedKey, latestRelease.version)
+      toast.success(`已回滚到 v${latestRelease.version}`)
+      load()
+      refreshReleases()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '回滚失败')
+    }
+  }
+
   const [evalRunning, setEvalRunning] = useState(false)
 
   const handleRunEval = async () => {
+    if (latestVersion) {
+      await handleCreateRelease(latestVersion.version)
+      return
+    }
     if (evalRunning) return
     setEvalRunning(true)
     toast.info('评测运行中，完成后会通知你')
@@ -137,12 +228,6 @@ export default function PromptDetailPage() {
         const top1 = (result.top1_accuracy * 100).toFixed(1)
         if (result.pass_rate >= 0.85) {
           toast.success(`评测通过 — 通过率 ${pct}% · Top-1 ${top1}%`)
-          if (latestVersion) {
-            try {
-              await promptsService.transition(decodedKey, latestVersion.version, 'passed')
-              load()
-            } catch { /* ignore */ }
-          }
         } else {
           toast.warning(`评测未通过 — 通过率 ${pct}% · Top-1 ${top1}%`)
         }
@@ -242,6 +327,50 @@ export default function PromptDetailPage() {
               current={latestStatus}
               onTransition={isWhitelisted && !isReadOnly ? handleTransition : undefined}
               loading={transitioning}
+            />
+          </div>
+        )}
+
+        {/* Prompt Runtime 运行态：用紧凑条带呈现跨进程版本一致性。 */}
+        {runtimeStatus && (
+          <section className="mb-6 rounded-xl border border-slate-200 bg-slate-950 px-4 py-3 text-slate-100">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2 text-xs font-medium">
+                <Activity size={14} className="text-cyan-300" />
+                Prompt Runtime
+              </div>
+              <span className="font-mono text-[11px] text-slate-300">epoch {runtimeStatus.epoch}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {runtimeStatus.processes.map(process => {
+                const healthy = process.status === 'healthy'
+                const version = process.versions?.[decodedKey]
+                return (
+                  <div
+                    key={process.instance_id}
+                    className="flex min-w-[150px] flex-1 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-2"
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${healthy ? 'bg-emerald-400' : 'bg-amber-300'}`} />
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-slate-300">{process.name}</span>
+                    <span className="font-mono text-[11px] text-slate-100">v{version ?? '—'}</span>
+                    <span className={`text-[10px] ${healthy ? 'text-emerald-300' : 'text-amber-300'}`}>
+                      {healthy ? '正常' : process.status}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {latestRelease && (
+          <div className="mb-6">
+            <PromptReleasePanel
+              release={latestRelease}
+              onApprove={latestRelease.status === 'passed' ? handleApproveRelease : undefined}
+              onPublish={handlePublishRelease}
+              onRollback={handleRollbackRelease}
+              loading={releaseLoading}
             />
           </div>
         )}
@@ -431,6 +560,15 @@ export default function PromptDetailPage() {
                         </p>
                       </div>
                       <div className="flex gap-2">
+                        {decodedKey === 'rag.qa' && !isReadOnly && (
+                          <button
+                            onClick={() => handleCreateRelease(v.version)}
+                            disabled={releaseLoading}
+                            className="text-[11px] px-2.5 py-1 rounded-md border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors disabled:opacity-40"
+                          >
+                            发起发布评测
+                          </button>
+                        )}
                         {v.status === 'passed' && !isReadOnly && (
                           <button onClick={() => handlePublish(v.version)} className="text-[11px] px-2.5 py-1 rounded-md bg-accent text-white hover:bg-accent-hover transition-colors">
                             <Send size={11} className="inline mr-1" />

@@ -87,6 +87,56 @@ export interface PlaygroundResult {
   latency_ms: number
 }
 
+export interface PromptRuntimeProcess {
+  name: string
+  instance_id: string
+  epoch: number
+  versions?: Record<string, number>
+  snapshot_time?: string
+  reload_source?: string
+  status: 'healthy' | 'stale' | 'degraded' | 'unknown' | string
+  age_seconds?: number
+}
+
+export interface PromptRuntimeStatus {
+  epoch: number
+  processes: PromptRuntimeProcess[]
+}
+
+export type PromptReleaseStatus =
+  | 'pending'
+  | 'running'
+  | 'failed'
+  | 'passed'
+  | 'approved'
+  | 'published'
+  | 'rolled_back'
+
+export interface PromptReleaseRecord {
+  release_id: string
+  prompt_key: string
+  version: number
+  target_env: string
+  status: PromptReleaseStatus | string
+  eval_suite: string
+  executor: 'local' | 'github' | string
+  dataset_provenance: Record<string, unknown>
+  prompt_snapshot?: Record<string, unknown>
+  tool_contract_fingerprint: string
+  model_binding_fingerprint: string
+  eval_run_id?: string
+  external_run_id?: string
+  metrics: Record<string, unknown>
+  failure_reason: string
+  created_by?: string
+  approved_by: string
+  published_by: string
+  created_at?: string | null
+  updated_at?: string | null
+  published_at?: string | null
+  runtime_status?: PromptRuntimeStatus
+}
+
 const BASE = '/api/prompts'
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -117,6 +167,48 @@ export const promptsService = {
 
   registry(): Promise<PromptMeta[]> {
     return api(`${BASE}/meta/registry`).then(r => (r as any).specs ?? r)
+  },
+
+  runtimeStatus(): Promise<PromptRuntimeStatus> {
+    return api(`${BASE}/runtime-status`)
+  },
+
+  createRelease(
+    key: string,
+    version: number,
+    body: {
+      suite: string
+      dataset_version?: Record<string, unknown>
+      executor?: 'local' | 'github'
+      target_env?: string
+    },
+  ): Promise<PromptReleaseRecord> {
+    return api(`${BASE}/${encodeURIComponent(key)}/versions/${version}/release`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  listReleases(key: string): Promise<PromptReleaseRecord[]> {
+    return api<{ items: PromptReleaseRecord[] }>(
+      `${BASE}/${encodeURIComponent(key)}/releases`,
+    ).then(result => result.items)
+  },
+
+  getRelease(key: string, releaseId: string): Promise<PromptReleaseRecord> {
+    return api(`${BASE}/${encodeURIComponent(key)}/releases/${encodeURIComponent(releaseId)}`)
+  },
+
+  approveRelease(key: string, releaseId: string): Promise<PromptReleaseRecord> {
+    return api(`${BASE}/${encodeURIComponent(key)}/releases/${encodeURIComponent(releaseId)}/approve`, {
+      method: 'POST',
+    })
+  },
+
+  publishRelease(key: string, releaseId: string): Promise<PromptReleaseRecord> {
+    return api(`${BASE}/${encodeURIComponent(key)}/releases/${encodeURIComponent(releaseId)}/publish`, {
+      method: 'POST',
+    })
   },
 
   get(key: string): Promise<PromptDetail> {

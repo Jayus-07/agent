@@ -1,6 +1,8 @@
 """Prompt 候选发布与评测门禁 API。"""
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,10 +11,17 @@ from pydantic import BaseModel, Field
 
 from backend.app.api.deps import OperatorIdentity, resolve_operator_role
 from backend.prompts.registry import PROMPT_REGISTRY
+from backend.prompts.eval_dispatch import (
+    GitHubPromptEvalDispatcher,
+    LocalPromptEvalDispatcher,
+    PromptEvalDispatcher,
+)
 from backend.prompts.release_models import PromptReleaseRecord, PromptReleaseError
 from backend.prompts.release_service import PromptReleaseService
 
 router = APIRouter(prefix="/prompts", tags=["Prompt发布门禁"])
+logger = logging.getLogger(__name__)
+_dispatch_tasks: set[asyncio.Task[None]] = set()
 
 
 class CreateReleaseRequest(BaseModel):
@@ -46,6 +55,7 @@ def _to_dict(record: PromptReleaseRecord | Any) -> dict[str, Any]:
         "target_env": record.target_env,
         "status": record.status.value,
         "eval_suite": record.eval_suite,
+        "executor": record.executor,
         "dataset_provenance": record.dataset_provenance,
         "prompt_snapshot": record.prompt_snapshot,
         "tool_contract_fingerprint": record.tool_contract_fingerprint,
@@ -99,6 +109,35 @@ async def publish_approved_release(
     return await service.publish(release.release_id, actor)
 
 
+def _schedule_eval_dispatch(record: PromptReleaseRecord, service: PromptReleaseService) -> None:
+    """提交后异步分发评测，避免管理端请求等待模型完成。"""
+    task = asyncio.create_task(_dispatch_release(record, service))
+    _dispatch_tasks.add(task)
+    task.add_done_callback(_dispatch_tasks.discard)
+
+
+async def _dispatch_release(record: PromptReleaseRecord, service: PromptReleaseService) -> None:
+    dispatcher = PromptEvalDispatcher(
+        local=LocalPromptEvalDispatcher(release_service=service),
+        github=GitHubPromptEvalDispatcher(release_service=service),
+    )
+    result = await dispatcher.dispatch(record)
+    if result.accepted:
+        return
+    try:
+        await service.record_result(
+            record.release_id,
+            {
+                "status": "failed",
+                "run_id": result.external_run_id,
+                "failure_reason": result.message or result.error_code,
+            },
+            actor="prompt-publish:dispatcher",
+        )
+    except Exception as exc:  # noqa: BLE001 — 评测失败不能反向打断请求进程
+        logger.error("Prompt release dispatch failed to persist: %s", exc)
+
+
 @router.post("/{key}/versions/{version}/release", status_code=202)
 async def create_release(
     key: str,
@@ -108,7 +147,8 @@ async def create_release(
 ):
     _check_permission(key, "draft", operator.role)
     try:
-        record = await get_release_service().create_release(
+        service = get_release_service()
+        record = await service.create_release(
             key=key,
             version=version,
             suite=body.suite,
@@ -116,7 +156,9 @@ async def create_release(
             actor=operator.actor,
             executor=body.executor,
             target_env=body.target_env,
+            prompt_snapshot={key: version},
         )
+        _schedule_eval_dispatch(record, service)
         return _to_dict(record)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
