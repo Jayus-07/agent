@@ -15,6 +15,7 @@
 - Prompt 与 Tool 版本在 Trace 中的可审计性检查；
 - 发布后各运行进程的 Prompt epoch、版本和热更新状态校验；
 - GitHub Actions 的 Prompt 回归评测入口。
+- 评测集来源、版本、适用范围和发布结果的可追溯链路。
 
 本阶段不包含：
 
@@ -71,6 +72,60 @@ CI 完成后通过签名回调更新发布记录：
 - 回调失败：GitHub artifact 仍保留，发布记录不得误判为通过。
 
 当前本地浏览器验收允许使用本机后端的外部模型评测执行器，验证完整状态机；这不代表使用本地模型。自建模型上线后，CI 只需切换测试 DB 中的 provider/base_url/model_name。
+
+## 评测集治理与使用链路
+
+### 执行链路
+
+候选 Prompt 或 Tool 版本提交发布时，先根据资产的 `affected_domains`、`eval_suites` 和 `release_policy` 选择评测集，再固定本次运行的完整口径：
+
+```text
+候选版本 -> 选择 suite -> 固定 dataset version + KB/fixture version
+          -> 固定 Prompt/Tool/Model 指纹 -> 执行评测
+          -> 计算指标 -> 写入 release record -> 质量门禁
+```
+
+RAG 单用例执行顺序为：加载问题和 ground truth → Embedding 查询 → 向量/BM25 混合检索 → Adaptive 扩展 → Reranker 精排 → 可选答案生成 → 对比证据、事实、拒答和引用标注 → 聚合 Recall@K、MRR、NDCG、Top-1、事实覆盖、拒答准确率等指标。
+
+### 评测集来源
+
+评测集允许来自以下来源，但进入门禁前必须经过 schema 校验和人工审核：
+
+- 业务专家编写的核心 Golden Case；
+- 线上 Trace、用户差评、转人工和人工反馈形成的 Bad Case；
+- 从文档和 fixture 自动生成的覆盖性问题；
+- 权限、越权、敏感信息、拒答和对抗样本；
+- Tool 参数错误、超时、失败、重试和故障注入样本；
+- 定期从线上请求分层采样的真实分布样本。
+
+线上 Trace 生成用例时必须补齐 expected、required_facts、should_reject、权限范围和来源说明，并经人工确认后才能进入 Golden 或回归集合。原始用户数据进入仓库前必须脱敏。
+
+### 分层评测集
+
+项目沿用 JSONL case、suite 和 snapshot 的分层结构：
+
+- PR/smoke：少量高价值用例，快速发现明显回归；
+- Golden：业务专家维护的稳定核心集合；
+- Nightly/release：复杂、多跳、拒答、权限、引用和生成质量集合；
+- Bad Case：线上失败持续回流，用于回归和专项修复；
+- Tool/安全专项集：独立于 RAG 集，用于 Tool 契约、故障注入和安全门禁。
+
+评测集必须有不可变版本、owner、来源、覆盖域、适用 Prompt/Tool、schema 版本和变更说明。修改评测集本身需要生成新的 dataset version，不能覆盖历史运行口径。
+
+### 资产与评测集映射
+
+不同变更只运行相关集合：
+
+```text
+Embedding/Reranker       -> RAG 检索集
+QA/Reporter Prompt       -> 答案正确性、事实覆盖、引用集
+客服 Supervisor Prompt   -> 客服意图、转人工、投诉分类集
+Planner Prompt           -> 任务拆解、Capability DAG 集
+Tool 代码/契约           -> Tool 契约、参数、故障注入、E2E 集
+权限/安全代码            -> 越权、敏感信息、拒答集
+```
+
+发布记录必须保存 `dataset_version`、`suite`、`kb_id`、`fixture_set`、Prompt snapshot、Tool contract fingerprint、model binding fingerprint、Git SHA 和完整报告路径。这样可以回答“某个 Prompt 版本发布时使用了哪份数据、哪个模型、哪些 Tool，以及结果是否回退”。
 
 ## Trace 与版本审计
 
@@ -135,4 +190,7 @@ Tool 不提供在线代码编辑。管理端只展示代码注册的 Tool 清单
 4. 浏览器流程能够完成“创建候选版本 → 提交评测 → 通过 → 发布 → 查看热更新”；
 5. 发布前后 Trace 能看到 Prompt 版本和 Tool 契约版本；
 6. 回滚后的下一次请求使用旧 Prompt 版本，历史 Trace 保持不变；
-7. Prompt release callback 重复提交不会产生重复发布或重复审计记录。
+7. Prompt release callback 重复提交不会产生重复发布或重复审计记录；
+8. 发布评测记录包含 dataset version、suite、KB/fixture、Prompt snapshot、Tool contract fingerprint 和 model binding fingerprint；
+9. 从线上 Trace 创建的评测用例经过 schema 校验、脱敏和人工审核后才能进入门禁集合；
+10. 评测集变更生成新版本，历史评测仍能按原 dataset version 复现。
