@@ -73,6 +73,11 @@ jobs:
       PGPASSWORD: postgres
       MEMORY_PGDATABASE: agent_memory_test
       BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
+      WORKFLOW_DB_PGDATABASE: agent_memory_test
       PROMPT_EVAL_TEST_PGDATABASE: agent_memory_test
       PROMPT_EVAL_TEST_PROVIDER_ID: prompt-eval-test
       PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}

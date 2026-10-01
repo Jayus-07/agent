@@ -42,3 +42,15 @@ def test_prompt_eval_workflow_accepts_release_contract_inputs():
     assert "CALLBACK_URL" not in workflow["jobs"]["prompt-eval"]["env"]
     assert "run-name" in workflow
     assert "external_run_id" in workflow["run-name"]
+
+
+def test_prompt_eval_routes_memory_backed_stores_to_isolated_database():
+    workflow = _workflow()
+    env = workflow["jobs"]["prompt-eval"]["env"]
+
+    assert env["MEMORY_PGDATABASE"] == "agent_memory_test"
+    assert env["VECTOR_PGDATABASE"] == "agent_memory_test"
+    assert env["RAG_STORES_PGDATABASE"] == "agent_memory_test"
+    assert env["DOC_REGISTRY_PGDATABASE"] == "agent_memory_test"
+    assert env["OBS_DB_PGDATABASE"] == "agent_memory_test"
+    assert env["WORKFLOW_DB_PGDATABASE"] == "agent_memory_test"
