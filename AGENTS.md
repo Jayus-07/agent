@@ -58,6 +58,17 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 - **PR RAG 门禁**：`.github/workflows/rag_smoke.yml` 对所有 PR 启动轻量变更检测；只有 RAG、评测、Prompt、模型配置、评测语料、依赖或迁移相关文件变更时才执行 `pr_smoke` 的固定 **8 条**案例，使用 pgvector 临时库与缓存的离线 embedding/reranker，不调用 LLM Judge。无相关变更时评测 Job 跳过并报告成功，避免 Required check 永久 Pending。Job 名为 `RAG Smoke (8 cases)`；GitHub `main` 分支已配置 required check：`RAG PR Smoke / RAG Smoke (8 cases)`，相关 PR 未通过时不能合并。
 - **Prompt 发布门禁**：管理端发布 Prompt 后，后端通过 `workflow_dispatch`/`repository_dispatch` 触发 `.github/workflows/prompt_eval.yml`；GitHub 使用外部评测模型运行管理端选定的 suite（当前默认 `pr_smoke`），上传 `prompt-eval-<release_id>` artifact；后端 Celery 维护任务轮询 GitHub Actions 和 artifact 结果。评测通过才允许 Prompt 热更新，失败或超时保持原 production 版本。
+- **Prompt 完整发布流程（已在 2026-10-01 实测）**：
+  1. 管理端在 Prompt 详情页创建新版本（`draft`），填写模板、变更类型和变更说明；此时不改变运行中的 `active_version`。
+  2. 点击「发起发布评测」创建 Release Gate，后端记录 `release_id`、候选 `prompt_key/version`、评测集和 `external_run_id`，通过 `workflow_dispatch` 或 `repository_dispatch` 触发 GitHub `prompt_eval.yml`。
+  3. GitHub 使用评测模型运行候选版本，上传评测报告；维护 worker 通过 Celery 任务轮询 GitHub run 和 artifact，回写 `ai.eval_run_records`/Release Gate。管理端展示运行中、通过、失败或超时及指标。
+  4. 评测通过后，管理员在管理端点击「审批通过」，记录审批人和审批时间，Release Gate 进入 `待发布`。
+  5. 点击「发布到生产」走 Release Gate 发布接口：模板校验仍保留；已通过外部评测的 Release Gate 作为最终门禁，跳过候选版本必须先手工变成 `passed` 的重复状态校验；随后原子更新 `active_version` 与 `production` alias、写审计、清缓存并发布 `agent:prompt:changed` 热更新通知。
+  6. 各 app/worker/rag-service 通过热加载监听或轮询刷新 Prompt snapshot；运行 epoch 变化后，新请求使用新版本，正在执行的请求继续使用开始时 pin 的版本。失败、超时或未审批不得切换 production；同一候选版本的失败 Release 不重复复用，需创建新的候选版本。
+- **Prompt 发布与 Trace 验收**：请求入口快照写入 `AgentState.prompt_versions` 和 `trace.tags["prompt_versions"]`；RAG 链请求开始时额外记录实际使用的 `rag.qa`、`rag.document`、`rag.contextualize` 版本到 Trace metadata；Tool span 记录 `contract_hash`。管理端可按 Trace 追溯「当时用的 Prompt 版本、运行 epoch、Tool 契约版本」。
+- **本次验收结果**：`rag.qa v12` 完成 GitHub 评测、审批和生产发布；管理端显示所有进程 v12、runtime epoch 刷新；最终提交 `b894f92` 的 `RAG PR Smoke (8 cases)` 已通过，运行地址为 `https://github.com/Jayus-07/agent/actions/runs/36879912092`。本地相关测试 47 条通过。
+- **触发边界**：`rag_smoke.yml` 当前只响应 PR 和手动触发，PR 只跑变更相关的 8 条 Smoke；`prompt_eval.yml` 只接受后端显式触发或手动触发；`rag_regression.yml` 每日北京时间 02:00 跑完整回归集，也支持手动选择评测集。Push 到 `main` 不等于 Prompt 发布评测，发布评测必须由管理端 Release Gate 触发。
+- **GitHub 警告口径**：Actions 页面出现 Node.js 20 弃用和 `ubuntu-latest` 将迁移 Ubuntu 26 的提示时，属于非阻断告警；当前 Smoke 仍能通过。生产变更应走 PR，直接推 `main` 会绕过 PR 必需检查，不能作为企业发布流程。
 - **Tool 治理 CI**：`.github/workflows/tool_quality.yml` 在相关 Tool/Skill/lock/Prompt YAML 的 PR 上触发，也按 `0 1 * * *` 每天 UTC 01:00（北京时间 09:00）运行；它检查 Tool 契约、注册一致性、重复定义和 Prompt lock，不替代 RAG 评测。
 - **完整评测集**：不在每个 PR 中运行。`.github/workflows/rag_regression.yml` 默认每天北京时间 02:00 运行 `regression` 集，手动触发时可选择 `regression`/`ci_golden`/`expanded_100`/`scale_20k`；`pr_baseline`/`quick_26` 等仍保留给本地或专项回归。`pr_smoke` 是快速门禁，不删除完整集。
 - **项目内部定时任务不是 CI**：Celery beat 与 APScheduler 负责客服日报、任务恢复、模型健康检查、`weekly_eval` 等产品运行任务，不能因为 GitHub CI 精简而删除。
