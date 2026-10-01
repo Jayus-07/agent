@@ -1529,8 +1529,8 @@ class _BoundLLMProxy:
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
         self._bind_context()
-        args = _preflight_context(args, kwargs,
-                                  extra_reserved_tokens=self._schema_reserved())
+        args = await _apreflight_context(args, kwargs,
+                                         extra_reserved_tokens=self._schema_reserved())
         _t0 = time.monotonic()
         result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
         _record_tokens(
@@ -1629,7 +1629,6 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
 
     from backend.context_budget import context_budget
     from backend.context_budget.errors import ContextBudgetExceededError
-    from backend.context_budget.metrics import record_overflow
 
     # 非消息占用：bind_tools schema（构造期折算）+ kwargs 里的
     # tools/response_format（每次调用现算，量小）
@@ -1648,22 +1647,17 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
 
     budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
 
-    def _reject(used: int, stage: str) -> None:
-        record_overflow(stage)
-        logger.error(
-            f"[LLM:preflight] {stage}: 输入无法容纳于预算 "
-            f"used={used} budget={budget}，拒绝调用 provider")
-        raise ContextBudgetExceededError(
-            used_tokens=used, input_budget=budget, stage=stage)
-
     # ── 形态 1：list[BaseMessage]（生产主路径）─────────────────────
     if isinstance(payload, list) and payload \
             and all(isinstance(m, BaseMessage) for m in payload):
         from backend.memory.token_budget import count_message_tokens
         total = sum(count_message_tokens(m) for m in payload)
-        # 快路径：预算内原样返回，零改动（L5 的 90%~100% 触发入口
-        # 统一属 STOP D 口径收口）
-        if total <= budget:
+        # 快路径（STOP D 口径统一）：低于 L5 触发线（budget×
+        # CONTEXT_L5_TRIGGER_RATIO）才零改动返回——90%~100% 区间必须进入
+        # 统一预算链路（L2/L4 多为空转，L5 触发判定在同一份用量上执行），
+        # 不再出现「代理在 total<=budget 时短路、L5 永不触发」的入口分裂
+        l5_ratio = _l5_trigger_ratio()
+        if total <= budget * l5_ratio:
             return args
         try:
             prepared = context_budget.prepare_llm_context(
@@ -1672,19 +1666,15 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
             raise
         except Exception:
             # 预检自身故障 = 无法证明预算内：fail-closed，不再原样放行
-            try:
-                from backend.observability.metrics import degradation_alerts_total
-                degradation_alerts_total.labels(
-                    code="context_preflight_failed", level="warn").inc()
-            except Exception:
-                pass
+            _record_preflight_failure()
             logger.error(
                 "[LLM:preflight] 预检失败，无法证明预算内，拒绝发送"
                 "（fail-closed）", exc_info=True)
             raise
         if prepared.overflow:
-            _reject(prepared.usage.used_tokens if prepared.usage else total,
-                    "final_gate")
+            _reject_overbudget(
+                prepared.usage.used_tokens if prepared.usage else total,
+                budget, "final_gate")
         logger.info(
             f"[LLM:preflight] 上下文超预算已压缩: {total}→"
             f"{prepared.usage.used_tokens} tokens (budget={budget})")
@@ -1700,28 +1690,74 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
             prepared = context_budget.prepare_llm_context(
                 messages=item, extra_reserved_tokens=reserved)
             if prepared.overflow:
-                _reject(
+                _reject_overbudget(
                     prepared.usage.used_tokens if prepared.usage else 0,
-                    "final_gate_batch")
+                    budget, "final_gate_batch")
             gated.append(prepared.messages)
         return (gated, *args[1:])
 
-    # ── 形态 3~5：不可安全改写的输入 → 只做用量门禁 ────────────────
+    # ── 形态 3~5：不可安全改写的输入 → 只做用量门禁（同步/异步共用）──
+    if _gate_fixed_shape(payload, budget):
+        return args
+    return args  # 不可达（消息形态在上面两分支已返回）
+
+
+def _l5_trigger_ratio() -> float:
+    """L5 触发阈值（config 活读；proxy 快路径与 manager 共用同一常量）。"""
+    try:
+        import backend.config as _config
+        return max(0.0, min(1.0, float(getattr(
+            _config, "CONTEXT_L5_TRIGGER_RATIO", 0.90))))
+    except Exception:
+        return 0.90
+
+
+def _reject_overbudget(used: int, budget: int, stage: str) -> None:
+    """最终硬门禁：低基数计数 + error 日志 + 稳定错误码（provider 0 调用）。"""
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.context_budget.metrics import record_overflow
+    record_overflow(stage)
+    logger.error(
+        f"[LLM:preflight] {stage}: 输入无法容纳于预算 "
+        f"used={used} budget={budget}，拒绝调用 provider")
+    raise ContextBudgetExceededError(
+        used_tokens=used, input_budget=budget, stage=stage)
+
+
+def _record_preflight_failure() -> None:
+    """预检自身故障计数（低基数，无 payload 信息）。"""
+    try:
+        from backend.observability.metrics import degradation_alerts_total
+        degradation_alerts_total.labels(
+            code="context_preflight_failed", level="warn").inc()
+    except Exception:
+        pass
+
+
+def _gate_fixed_shape(payload: Any, budget: int) -> bool:
+    """不可安全改写形态的用量门禁（同步/异步入口共用，STOP B）。
+
+    返回 True = 该形态已处理（门禁通过放行 / 未知形态 debug 留痕放行）；
+    返回 False = payload 是消息形态，由调用方的预算链路分支处理。
+    超预算直接抛 ContextBudgetExceededError（当前问题属保护项，
+    放不下 = 明确报错，而不是静默超窗）。
+    """
+    from backend.context_budget.token_counter import count_tokens
+
     def _count_text(t: Any) -> int:
-        from backend.context_budget.token_counter import count_tokens
         return count_tokens(t)
 
     if isinstance(payload, str):
         used = _count_text(payload)
         if used > budget:
-            _reject(used, "str_input")
-        return args
+            _reject_overbudget(used, budget, "str_input")
+        return True
     if isinstance(payload, list) and payload \
             and all(isinstance(s, str) for s in payload):
         used = sum(_count_text(s) for s in payload)
         if used > budget:
-            _reject(used, "batch_str")
-        return args
+            _reject_overbudget(used, budget, "batch_str")
+        return True
     if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
         # OpenAI dict 形态：逐条累计 content（无法安全改写，只做门禁）
         used = 0
@@ -1730,18 +1766,102 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
             if isinstance(content, str):
                 used += _count_text(content)
         if used > budget:
-            _reject(used, "dict_messages")
-        return args
+            _reject_overbudget(used, budget, "dict_messages")
+        return True
     to_string = getattr(payload, "to_string", None)
     if callable(to_string):  # PromptValue 形态
         used = _count_text(str(to_string()))
         if used > budget:
-            _reject(used, "prompt_value")
-        return args
+            _reject_overbudget(used, budget, "prompt_value")
+        return True
 
     logger.debug(
         f"[LLM:preflight] 未知输入形态，跳过预算门禁: "
         f"{type(payload).__name__}")
+    return True
+
+
+async def _apreflight_context(args: tuple, kwargs: dict | None = None,
+                              extra_reserved_tokens: int = 0) -> tuple:
+    """_preflight_context 的异步在线版（STOP B 2026-10-01）。
+
+    与同步版共享同一预算口径与最终硬门禁；差异仅在消息形态走
+    prepare_llm_context_async——L5 阶段「有时限地等待同轮摘要」，
+    成功重建本轮 projection，失败/超时沿用确定性结果。
+    两个入口必须同步演进：非消息形态门禁在 _gate_fixed_shape 共用。
+    """
+    from langchain_core.messages import BaseMessage
+
+    from backend.config import CONTEXT_BUDGET_ENABLED
+    if not CONTEXT_BUDGET_ENABLED or not args:
+        return args
+    payload = args[0]
+
+    from backend.context_budget import context_budget
+    from backend.context_budget.errors import ContextBudgetExceededError
+
+    reserved = max(0, int(extra_reserved_tokens or 0))
+    if kwargs:
+        try:
+            from backend.context_budget.token_counter import (
+                count_response_format_tokens,
+                count_tool_schema_tokens,
+            )
+            reserved += count_tool_schema_tokens(kwargs.get("tools"))
+            reserved += count_response_format_tokens(
+                kwargs.get("response_format"))
+        except Exception:
+            pass
+
+    budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
+
+    # ── 形态 1：list[BaseMessage]（异步在线路径）───────────────────
+    if isinstance(payload, list) and payload \
+            and all(isinstance(m, BaseMessage) for m in payload):
+        from backend.memory.token_budget import count_message_tokens
+        total = sum(count_message_tokens(m) for m in payload)
+        # 快路径阈值与同步版一致（STOP D：低于 L5 触发线才零改动跳过）
+        if total <= budget * _l5_trigger_ratio():
+            return args
+        try:
+            prepared = await context_budget.prepare_llm_context_async(
+                messages=payload, extra_reserved_tokens=reserved)
+        except ContextBudgetExceededError:
+            raise
+        except Exception:
+            _record_preflight_failure()
+            logger.error(
+                "[LLM:preflight] 异步预检失败，无法证明预算内，拒绝发送"
+                "（fail-closed）", exc_info=True)
+            raise
+        if prepared.overflow:
+            _reject_overbudget(
+                prepared.usage.used_tokens if prepared.usage else total,
+                budget, "final_gate")
+        logger.info(
+            f"[LLM:preflight] 上下文超预算已压缩: {total}→"
+            f"{prepared.usage.used_tokens} tokens (budget={budget})")
+        return (prepared.messages, *args[1:])
+
+    # ── 形态 2：批量 list[list[BaseMessage]]───────────────────────
+    if isinstance(payload, list) and payload and all(
+            isinstance(item, list) and item
+            and all(isinstance(m, BaseMessage) for m in item)
+            for item in payload):
+        gated: list[list] = []
+        for item in payload:
+            prepared = await context_budget.prepare_llm_context_async(
+                messages=item, extra_reserved_tokens=reserved)
+            if prepared.overflow:
+                _reject_overbudget(
+                    prepared.usage.used_tokens if prepared.usage else 0,
+                    budget, "final_gate_batch")
+            gated.append(prepared.messages)
+        return (gated, *args[1:])
+
+    # ── 形态 3~5：与同步版共用同一门禁 ─────────────────────────────
+    if _gate_fixed_shape(payload, budget):
+        return args
     return args
 
 
@@ -1796,7 +1916,7 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
-                    args = _preflight_context(args, kwargs)
+                    args = await _apreflight_context(args, kwargs)
                     reserve_model_call(
                         "primary", model_name=get_active_model_name(),
                     )
@@ -1846,6 +1966,7 @@ class _LLMProxy:
                     from backend.infra.llm.budget import (
                         release_model_reservation,
                         reserve_model_call,
+                        review_model_reservation,
                     )
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
@@ -1874,7 +1995,15 @@ class _LLMProxy:
                                     yield wrapped
                                 break  # 正常结束
                             except Exception as e:
-                                release_model_reservation()
+                                # 2026-10-01 P0 修复：瞬时类失败供应商可能已计费；
+                                # 已产出内容后失败 = 必然已处理——都转待对账，
+                                # 只有"确定未发出"（非瞬时错误且未产出内容）才释放。
+                                if yielded_content or _is_transient(e):
+                                    review_model_reservation(
+                                        "stream_failed_possibly_billed",
+                                    )
+                                else:
+                                    release_model_reservation()
                                 if _is_context_length_provider_error(e):
                                     # 超长输入：首 chunk 前短路成稳定错误码，
                                     # 不参与首 chunk 重试（同一份输入必再超）
@@ -1897,7 +2026,9 @@ class _LLMProxy:
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                         else:
-                            release_model_reservation()
+                            # 缺 usage ≠ 没花钱（2026-10-01 P0 修复）：
+                            # 转待对账（占额保留到周期结束），不再按零成本释放
+                            review_model_reservation("stream_usage_missing")
                             _notify_stream_usage_missing("stream")
                 return stream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
@@ -1911,7 +2042,7 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
-                    args = _preflight_context(args, kwargs)
+                    args = await _apreflight_context(args, kwargs)
                     _t0 = time.monotonic()
                     result = await _acall_with_resilience(attr, *args, **kwargs)
                     _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
