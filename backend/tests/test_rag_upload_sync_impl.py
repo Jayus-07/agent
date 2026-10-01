@@ -562,7 +562,18 @@ def client(monkeypatch):
     )
     app.dependency_overrides[require_rag_user] = lambda: identity
     app.dependency_overrides[require_rag_editor] = lambda: identity
-    return TestClient(app), captured
+    tc = TestClient(app)
+    # 2026-10-01 权限收口：端点内 resolve_principal 直接读网关注入头
+    # （授权裁决不再信任依赖注入的替身），测试客户端统一带合法身份头
+    tc.headers.update({
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "7",
+        "X-User-Name": "pytest",
+        "X-Tenant-Id": "test-tenant",
+        "X-User-Dept": "general",
+        "X-User-Roles": "editor",
+    })
+    return tc, captured
 
 
 class TestUploadEndpoint:
@@ -684,6 +695,7 @@ class TestUploadStreamEndpoint:
         queue = asyncio.Queue()
         queue._created_at = time.time()
         monkeypatch.setattr(ru, "_progress_queues", {"uid_keepalive": queue})
+        monkeypatch.setattr(ru, "_progress_owners", {"uid_keepalive": ("test-tenant", "7")})
 
         tc, _ = client
         chunks: list = []
@@ -716,6 +728,8 @@ class TestUploadStreamEndpoint:
         queue.put_nowait({"stage": "uploading", "message": "ok"})
         queue.put_nowait(None)
         monkeypatch.setattr(ru, "_progress_queues", {"uid_ev": queue})
+        # 2026-10-01 SSE 归属绑定：订阅者身份须与上传者一致（fixture 身份=test-tenant/7）
+        monkeypatch.setattr(ru, "_progress_owners", {"uid_ev": ("test-tenant", "7")})
 
         tc, _ = client
         resp = tc.get("/upload/uid_ev/stream")
@@ -738,6 +752,7 @@ class TestUploadStreamEndpoint:
         queue.put_nowait({"stage": "done", "message": "完成"})
         queues = {"uid_late": queue}
         monkeypatch.setattr(ru, "_progress_queues", queues)
+        monkeypatch.setattr(ru, "_progress_owners", {uid: ("test-tenant", "7") for uid in queues})
 
         # 后台任务先结束：放 None 哨兵（不再主动 pop）
         asyncio.run(ru._finalize_upload_queue("uid_late"))

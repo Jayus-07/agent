@@ -335,9 +335,25 @@ class PostgresDocumentRegistry(DocumentRegistry):
         sort_by: str = "updated_at",
         page: int = 1,
         page_size: int = 20,
+        kb_scope: list[str] | None = None,
+        visible_scopes: list[str] | None = None,
     ) -> dict:
+        """kb_scope/visible_scopes（2026-10-01 权限收口）：授权范围下推到 SQL，
+        行集与 COUNT(total) 同条件——列表页不允许「总数全库、行集截断」的
+        口径分裂。None = 调用方未启用授权（仅内部直调），空列表 = 授权后
+        无可见范围（正确返回 0 行）。"""
         conditions: list[str] = []
         params: list = []
+
+        if kb_scope is not None:
+            conditions.append("kb_id = ANY(%s)")
+            params.append([str(k) for k in kb_scope])
+        if visible_scopes is not None:
+            # 存量行 permission_scope 为空串 → 视作 general（与建表默认一致）
+            conditions.append(
+                "COALESCE(NULLIF(permission_scope, ''), 'general') = ANY(%s)"
+            )
+            params.append([str(s) for s in visible_scopes])
 
         if keyword.strip():
             conditions.append("(file_name ILIKE %s OR doc_type ILIKE %s)")
@@ -603,22 +619,51 @@ class PostgresDocumentRegistry(DocumentRegistry):
             )
             return cur.rowcount
 
-    def list_pending_review(self, page: int = 1, page_size: int = 20) -> dict:
+    def list_pending_review(
+        self, page: int = 1, page_size: int = 20,
+        kb_scope: list[str] | None = None,
+        department: str = "",
+    ) -> dict:
+        """待审核列表。kb_scope/department（2026-10-01 权限收口）：
+        管理面按「可管理范围」过滤——非 admin 编辑只审本部门、可见库的文档；
+        total 同条件统计。"""
+        conditions: list[str] = ["status = 'pending_review'"]
+        params: list = []
+        if kb_scope is not None:
+            conditions.append("kb_id = ANY(%s)")
+            params.append([str(k) for k in kb_scope])
+        if department:
+            conditions.append("department = %s")
+            params.append(department)
+        where_clause = " WHERE " + " AND ".join(conditions)
         offset = (page - 1) * page_size
         with self._lock, self._conn() as conn:
             total = self._exec_scalar(
                 conn,
-                f"SELECT COUNT(*) FROM {self._table} WHERE status = 'pending_review'",
+                f"SELECT COUNT(*) FROM {self._table}{where_clause}",
+                tuple(params),
             ).fetchone()[0]
             rows = self._exec(
                 conn,
-                f"""SELECT * FROM {self._table}
-                   WHERE status = 'pending_review'
+                f"""SELECT * FROM {self._table}{where_clause}
                    ORDER BY confidence ASC, updated_at DESC
                    LIMIT %s OFFSET %s""",
-                (page_size, offset),
+                tuple(params) + (page_size, offset),
             ).fetchall()
         return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+
+    def distinct_permission_scopes(self) -> list[str]:
+        """registry 中实际存在的 permission_scope 值（空串归一为 general）。
+
+        供授权层把文档级裁决下推为 SQL ANY 过滤（visible_scopes），
+        避免拉全表到应用侧过滤。"""
+        with self._lock, self._conn() as conn:
+            rows = self._exec(
+                conn,
+                f"""SELECT DISTINCT COALESCE(NULLIF(permission_scope, ''), 'general')
+                   FROM {self._table} WHERE status = 'active'""",
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def clear(self):
         with self._lock, self._conn() as conn:

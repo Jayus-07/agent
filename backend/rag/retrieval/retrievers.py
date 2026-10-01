@@ -254,6 +254,8 @@ class _Staging:
     metadata_filter: dict = field(default_factory=dict)
     subject_type: str = ""
     department: str = ""
+    # 网关验签后的 JWT 角色（admin 跨部门口径的唯一输入）；空 = 未声明
+    roles: tuple = ()
     # 主体授权 keep-set；None=未声明主体（授权未启用，旧行为）
     authorized: set | None = None
     # 文档 permission_scope 所需权限；None=可信权限未声明，受限文档拒绝
@@ -457,6 +459,7 @@ class ChunkLevelRetriever(BaseRetriever):
             identity = getattr(ctx, "identity", None)
             st.subject_type = getattr(identity, "subject_type", "") or ""
             st.department = getattr(identity, "department", "") or ""
+            st.roles = tuple(getattr(identity, "roles", ()) or ())
             permissions = getattr(identity, "permissions", None)
             st.user_permissions = (
                 None if permissions is None else tuple(permissions)
@@ -469,8 +472,11 @@ class ChunkLevelRetriever(BaseRetriever):
         # st.authorized=None 表示未声明主体 → 授权未启用（旧行为）；已声明则
         # filter 中的 kb 范围先收敛到授权集合，后续召回再以 keep-set 兜底——
         # 显式 kb 选择（含 LLM 选库）同样受限，路由只提议、属性裁决。
-        from backend.config.knowledge_base import authorized_kbs
-        authorized = authorized_kbs(st.subject_type, st.department)
+        # admin 跨部门口径收口在 authz.retrieval_authorized_kbs（唯一计算点）。
+        from backend.rag.authz import retrieval_authorized_kbs
+        authorized = retrieval_authorized_kbs(
+            st.subject_type, st.department, roles=st.roles
+        )
         if authorized is not None:
             st.authorized = set(authorized)
             st.metadata_filter = _scope_kb_filter(st.metadata_filter, st.authorized)

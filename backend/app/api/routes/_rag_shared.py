@@ -18,6 +18,11 @@ from backend.shared.logger import logger
 # 内存 dict，30 分钟未活动自动清理
 _progress_queues: dict[str, Queue] = {}
 
+# upload_id → (tenant_id, actor_id)：SSE 订阅归属绑定（2026-10-01 权限收口）。
+# 只允许上传者本人（同租户同账号）或 admin 订阅进度；跨进程场景由 Redis
+# 镜像里的 owner 字段兜底。清理跟随 _progress_queues 同生命周期。
+_progress_owners: dict[str, tuple[str, str]] = {}
+
 def _sse_encode(event: str, data: dict) -> str:
     """SSE 编码：data 中已含 stage 字段，前端用单一 onmessage 解析。
 
@@ -82,6 +87,24 @@ from pydantic import BaseModel
 
 class SearchRequest(BaseModel):
     query: str = ""
+    # 显式知识库（可选）：授权裁决在路由层（只能收窄到主体可见集）
+    kb_id: str = ""
+
+
+def sanitize_doc_row(row: dict | None) -> dict:
+    """registry 行 → 客户端安全形态（2026-10-01 权限收口）。
+
+    file_path（服务器绝对路径）、chunk_ids、minhash_sig、doc_db_id 等
+    内部治理字段不出 API 边界；SSE 终态 / 列表 / 详情共用本函数，
+    禁止各处自行挑选字段。
+    """
+    if not row:
+        return {}
+    internal = {
+        "file_path", "chunk_ids", "minhash_sig", "doc_db_id",
+        "path", "near_dup_id",
+    }
+    return {k: v for k, v in row.items() if k not in internal}
 
 
 # 本模块的公开工具集合。注意：调用方必须用显式 from ... import xxx，
@@ -89,9 +112,9 @@ class SearchRequest(BaseModel):
 # 静默丢掉 os/time/logger 等，且 except 里的 logger 也一并丢失，
 # 导致异常兜底本身抛 NameError（历史故障：/rag/documents 500）
 __all__ = [
-    "_progress_queues", "_sse_encode",
+    "_progress_queues", "_progress_owners", "_sse_encode",
     "_get_registry", "_get_op_logger", "_extract_source", "_safe_log_op",
-    "SearchRequest",
+    "SearchRequest", "sanitize_doc_row",
 ]
 
 

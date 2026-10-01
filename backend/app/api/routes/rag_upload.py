@@ -9,7 +9,7 @@ from backend.app.api.deps import (
     require_rag_user,
     require_rag_editor,
 )
-from backend.app.api.identity import resolve_identity
+from backend.app.api.identity import require_principal, resolve_identity, resolve_principal
 from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS
 from backend.config.rag import (
     RAG_MAX_CONCURRENT_INDEX,
@@ -24,9 +24,12 @@ from backend.app.api.routes._rag_shared import (
     _extract_source,
     _get_registry,
     _progress_queues,
+    _progress_owners,
     _safe_log_op,
     _sse_encode,
+    sanitize_doc_row,
 )
+from backend.rag.authz import RagAuthorization, RagAuthorizationError
 from backend.shared.logger import logger
 
 router = APIRouter(dependencies=[Depends(require_rag_user)])
@@ -291,6 +294,7 @@ def cleanup_expired_progress_queues() -> int:
                if getattr(q, "_created_at", 0) < now - PROGRESS_QUEUE_TTL_SECONDS]
     for uid in expired:
         _progress_queues.pop(uid, None)
+        _progress_owners.pop(uid, None)
         _celery_routed.discard(uid)
     if expired:
         logger.info(f"[RAG] 清理过期进度队列 {len(expired)} 个")
@@ -406,10 +410,20 @@ async def upload_document(request: Request, file: UploadFile = File(...),
                           department: str = Form("general")):
     """P0-1 流式上传: 临时文件 + atomic rename + 双保险大小限制 + SSE 进度"""
     require_rag_ready()
+    # 归属裁决（2026-10-01 权限收口）：department 只认主体自身部门（admin 可
+    # 代传任意合法部门），KB 必须 ∈ 主体可见集；请求体自报部门不再单独放行。
+    principal = resolve_principal(request)
+    try:
+        authz = RagAuthorization.build(principal)
+    except RagAuthorizationError as e:
+        logger.warning(f"[RAG] 上传授权失败: {e}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"ok": False, "error": "授权服务暂不可用，已拒绝上传"})
+    up_ok, up_reason = authz.can_upload_to(kb_id, department)
+    if not up_ok:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"ok": False, "error": up_reason})
     identity = resolve_identity(request)
-    from backend.config.knowledge_base import validate_kb_dept
-    if not validate_kb_dept(kb_id, department):
-        return {"ok": False, "error": f"知识库 '{kb_id}' 不允许选择部门 '{department}'"}
     from backend.config.rag import (
         RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
         RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
@@ -529,6 +543,8 @@ async def sync_upload_impl(
     queue: Queue = Queue()
     queue._created_at = time.time()
     _progress_queues[upload_id] = queue
+    # SSE 订阅归属绑定（2026-10-01 权限收口）：只有上传者本人/admin 可订阅
+    _progress_owners[upload_id] = (tenant_id, actor_id)
 
     # 进度推送: 在 async context 直接 queue.put_nowait (因为是 asyncio.Queue, 跨 coroutine 同一 loop OK)
     def _safe_put(evt):
@@ -710,8 +726,14 @@ async def _cleanup_failed_upload(filepath: str, was_overwrite: bool = False) -> 
     _cleanup_failed_upload_sync(filepath, was_overwrite=was_overwrite)
 
 
-def _write_progress_redis(upload_id: str, stage: str, message: str = "", **extra) -> None:
-    """Phase 5: 将上传进度镜像写入 Redis Hash（跨实例可查）。失败不影响主流程。"""
+def _write_progress_redis(upload_id: str, stage: str, message: str = "",
+                          owner: tuple[str, str] | None = None, **extra) -> None:
+    """Phase 5: 将上传进度镜像写入 Redis Hash（跨实例可查）。失败不影响主流程。
+
+    终态一次写（2026-10-01 B 阶段契约）：镜像已落终态（done/error/duplicate）
+    后拒绝任何中间态回写——幂等重放/迟到的 uploading 事件不能把终态改回
+    uploading（SSE 订阅者据此保证终态不倒退）。
+    """
     try:
         from backend.infra.redis.client import get_redis
         r = get_redis()
@@ -720,12 +742,24 @@ def _write_progress_redis(upload_id: str, stage: str, message: str = "", **extra
         from backend.config.redis import REDIS_KEY_PREFIX
         key = f"{REDIS_KEY_PREFIX}upload:{upload_id}"
         import json as _json
-        r.hset(key, mapping={
+        if stage not in _SSE_TERMINAL_STAGES:
+            current = r.hget(key, "stage")
+            if isinstance(current, bytes):
+                current = current.decode("utf-8", "replace")
+            if current in _SSE_TERMINAL_STAGES:
+                logger.debug(
+                    f"[RAG] 进度镜像已终态({current})，拒绝中间态回写: {upload_id}::{stage}")
+                return
+        mapping = {
             "stage": stage,
             "message": message,
             "updated_at": str(time.time()),
             "detail": _json.dumps(extra, ensure_ascii=False, default=str) if extra else "{}",
-        })
+        }
+        if owner:
+            mapping["owner_tenant"] = owner[0]
+            mapping["owner_actor"] = owner[1]
+        r.hset(key, mapping=mapping)
         r.expire(key, 600)
     except Exception as e:
         # 至少留一条观测日志：Redis 故障静默吞掉会让进度镜像失效无从排查
@@ -848,7 +882,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             stage_elapsed["uploading"] = upload_elapsed_ms
         total_ms = (upload_elapsed_ms or 0) + int((time.time() - upload_t0) * 1000)
         emit_fn("duplicate", "文件已存在，未重复索引",
-                doc=duplicate_doc, trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms,
+                doc=sanitize_doc_row(duplicate_doc), trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms,
                 processing_run_id=result.get("processing_run_id", ""),
                 model_summary=result.get("model_summary", []))
         _remove_bak(filepath)  # 内容未变,旧版本备份无保留价值
@@ -880,7 +914,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
         elif "uploading" not in stage_elapsed:
             others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
             stage_elapsed["uploading"] = max(total_ms - others, 0)
-        emit_fn("done", "索引完成", doc=new_doc,
+        emit_fn("done", "索引完成", doc=sanitize_doc_row(new_doc),
                 trace_id=result.get("trace_id") or "",
                 processing_run_id=result.get("processing_run_id") or "",
                 model_summary=result.get("model_summary") or [],
@@ -1010,14 +1044,16 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
     async def emit(stage: str, message: str = "", **extra):
         await queue.put({"stage": stage, "message": message, **extra})
         # Redis 写盘是同步网络 IO，放线程池执行，避免 Redis 慢时阻塞事件循环
-        await asyncio.to_thread(_write_progress_redis, upload_id, stage, message, **extra)
+        await asyncio.to_thread(_write_progress_redis, upload_id, stage, message,
+                                owner=(tenant_id, actor_id), **extra)
 
     # 同步发射器：终态收口（_settle_index_result）与 Celery 分流共用。
     # queue.put_nowait 对无界 asyncio.Queue 与 await put 语义一致。
     def emit_fn(stage: str, message: str = "", **extra):
         if queue is not None:
             queue.put_nowait({"stage": stage, "message": message, **extra})
-        _write_progress_redis(upload_id, stage, message, **extra)
+        _write_progress_redis(upload_id, stage, message,
+                              owner=(tenant_id, actor_id), **extra)
 
     _upload_t0 = time.time()
 
@@ -1331,9 +1367,53 @@ def _redis_poll_stream_response(upload_id: str, last_sig: str | None = None):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def _progress_owner_of(upload_id: str) -> tuple[str, str]:
+    """upload_id → 上传者 (tenant_id, actor_id)：进程内注册表优先，
+    跨实例（本进程没登记）回退读 Redis 镜像里的 owner 字段。"""
+    owner = _progress_owners.get(upload_id)
+    if owner:
+        return owner
+    import json as _json
+    try:
+        from backend.infra.redis.client import get_redis
+        r = get_redis()
+        if r is None:
+            return ("", "")
+        from backend.config.redis import REDIS_KEY_PREFIX
+        data = r.hgetall(f"{REDIS_KEY_PREFIX}upload:{upload_id}") or {}
+        tenant = data.get("owner_tenant") or ""
+        actor = data.get("owner_actor") or ""
+        if isinstance(tenant, bytes):
+            tenant = tenant.decode("utf-8", "replace")
+        if isinstance(actor, bytes):
+            actor = actor.decode("utf-8", "replace")
+        return (tenant, actor)
+    except Exception:
+        return ("", "")
+
+
+def _ensure_progress_owner(request: Request, upload_id: str) -> bool:
+    """SSE 订阅归属校验（2026-10-01 权限收口）：只允许上传者本人或 admin。
+
+    upload_id 此前可被推断/猜测（确定性 sha256），无归属校验 = 任何已认证
+    用户可窃听他人上传进度与终态 doc 元数据。校验失败返回 False，调用方
+    以与「任务不存在」完全相同的响应拒绝（不泄露存在性）。
+    """
+    principal = require_principal(request)
+    tenant, actor = _progress_owner_of(upload_id)
+    if not tenant and not actor:
+        return False  # 无归属记录（过期/不可信请求）→ 一律拒绝
+    if tenant and principal.tenant_id == tenant and principal.user_id == actor:
+        return True
+    try:
+        return RagAuthorization.build(principal).is_admin
+    except RagAuthorizationError:
+        return False
+
+
 @router.get("/upload/{upload_id}/stream")
-async def stream_upload_progress(upload_id: str):
-    """SSE 订阅：实时推送上传 + 索引进度。
+async def stream_upload_progress(upload_id: str, request: Request):
+    """SSE 订阅：实时推送上传 + 索引进度（仅上传者本人/admin 可订阅）。
 
     事件类型：
       stage  → {stage: uploading|parsing|chunking|embedding|writing|done|error, message}
@@ -1346,6 +1426,12 @@ async def stream_upload_progress(upload_id: str):
       入队成功后无缝切换 Redis 轮询（携带 last_sig 去重）。
       入队失败回退本机索引时标记不会出现，全程队列模式。
     """
+    if not _ensure_progress_owner(request, upload_id):
+        # 统一「不存在或已过期」：不区分「无权」与「不存在」，不泄露存在性
+        async def forbidden():
+            yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
+        return StreamingResponse(forbidden(), media_type="text/event-stream")
+
     if upload_id in _celery_routed:
         return _redis_poll_stream_response(upload_id)
 

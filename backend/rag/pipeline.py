@@ -774,13 +774,14 @@ class RAGPipeline:
         permissions: Iterable[str] | None = None,
         user_id: str = "",
         tenant_id: str = "",
+        roles: tuple[str, ...] = (),
     ) -> str:
         """兼容出口：只取回答文本。需要 sources/meta 的调用方请用 ask_result。"""
         return self.ask_result(
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
             permissions=permissions,
-            user_id=user_id, tenant_id=tenant_id).answer
+            user_id=user_id, tenant_id=tenant_id, roles=roles).answer
 
     def ask_result(
         self,
@@ -793,6 +794,7 @@ class RAGPipeline:
         permissions: Iterable[str] | None = None,
         user_id: str = "",
         tenant_id: str = "",
+        roles: tuple[str, ...] = (),
     ) -> "AskOutcome":
         """提问入口（请求级返回，2026-09-23 D1-6）：3 段式 — 准备 → 执行 → 清理。
 
@@ -810,7 +812,7 @@ class RAGPipeline:
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
             permissions=permissions,
-            user_id=user_id, tenant_id=tenant_id)
+            user_id=user_id, tenant_id=tenant_id, roles=roles)
         from backend.rag.context import get_context
 
         try:
@@ -831,13 +833,14 @@ class RAGPipeline:
         permissions: Iterable[str] | None = None,
         user_id: str = "",
         tenant_id: str = "",
+        roles: tuple[str, ...] = (),
     ) -> str:
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
         self._prepare_context(kb_id, question, kb_ids=kb_ids,
                               subject_type=subject_type, department=department,
                               permissions=permissions,
-                              user_id=user_id, tenant_id=tenant_id)
+                              user_id=user_id, tenant_id=tenant_id, roles=roles)
         try:
             if not self._check_resources():
                 return "系统资源紧张，请稍后重试"
@@ -868,13 +871,16 @@ class RAGPipeline:
     def _prepare_context(self, kb_id: str, question: str, kb_ids: list[str] | None = None,
                          subject_type: str = "", department: str = "",
                          permissions: Iterable[str] | None = None,
-                         user_id: str = "", tenant_id: str = ""):
+                         user_id: str = "", tenant_id: str = "",
+                         roles: tuple[str, ...] = ()):
         """注入 kb_id + QueryAnalyzer metadata → contextvars metadata_filter。
 
         主体属性以本次调用声明为准回填到运行态借读的权威身份实例
         （组合非复制）：图路径该实例已由 RequestContext.bind() 注入；
         CS/eval/直连路径无图上下文，用默认实例。mf 为空时提前返回、
         不触碰上下文——与旧实现"未 set 即默认空身份"语义一致。
+        roles（2026-10-01 授权收口）：网关验签后的 JWT 角色，检索链
+        admin 跨部门口径的唯一输入；空 = 不覆盖（保留绑定实例自带值）。
         """
         from backend.rag.context import RagRequestState, get_context, set_context
         from backend.rag.retrieval.query_analyzer import QueryAnalyzer
@@ -889,6 +895,8 @@ class RAGPipeline:
             current_identity.user_id = user_id
         if tenant_id:
             current_identity.tenant_id = tenant_id
+        if roles:
+            current_identity.roles = tuple(roles)
         effective_subject_type = (
             subject_type or getattr(current_identity, "subject_type", "")
         )
@@ -1077,6 +1085,122 @@ class RAGPipeline:
             f"{permission_scope}"
         )
 
+    def retrieve_documents(
+        self,
+        question: str,
+        kb_id: str = "default",
+        top_k: int = 5,
+        subject_type: str = "",
+        department: str = "",
+        permissions: Iterable[str] | None = None,
+        roles: tuple[str, ...] = (),
+    ) -> list:
+        """授权检索的文档级出口（/rag/search 消费，2026-10-01 权限收口）。
+
+        与 retrieve_knowledge 同一授权语义（KB keep-set + permission_scope
+        后过滤），但保留 Document 结构与相似度分数——检索测试页需要逐条
+        展示。任何兜底/扩 K 都不放宽授权：kb 范围先与主体可见集求交。
+
+        Returns:
+            list[Document]（metadata.score 为向量距离，BM25 补充结果无 score）
+        """
+        import time as _time
+        t0 = _time.monotonic()
+
+        self._prepare_context(
+            kb_id, question,
+            subject_type=subject_type, department=department,
+            permissions=permissions, roles=roles,
+        )
+        try:
+            try:
+                from backend.rag.context import get_context
+                mf = dict(get_context().metadata_filter or {})
+                user_permissions = get_context().identity.permissions
+                eff_roles = tuple(getattr(get_context().identity, "roles", ()) or ())
+            except Exception:
+                mf, user_permissions, eff_roles = {}, None, ()
+
+            from backend.rag.authz import retrieval_authorized_kbs
+            authorized = retrieval_authorized_kbs(
+                subject_type, department, roles=eff_roles)
+            # 显式 kb 与授权集合求交：请求只能收窄，不能扩大（含 admin 全集）
+            mf = self._constrain_filter_to_authorized(mf, authorized)
+
+            results: list = []
+            seen_texts: set[str] = set()
+
+            def _keep(doc) -> bool:
+                meta = getattr(doc, "metadata", {}) or {}
+                if authorized is not None and meta.get("kb_id") not in authorized:
+                    return False
+                from backend.rag.permissions import filter_documents_by_permission
+                return bool(filter_documents_by_permission([doc], user_permissions))
+
+            # 向量腿（带分数）
+            try:
+                vec = self.chunk_retriever.vectordb.similarity_search_with_score(
+                    question, k=max(top_k * 2, top_k),
+                    filter=mf or None,
+                )
+                for doc, dist in vec:
+                    if not _keep(doc):
+                        continue
+                    doc.metadata["score"] = dist
+                    if doc.page_content not in seen_texts:
+                        seen_texts.add(doc.page_content)
+                        results.append(doc)
+            except Exception as e:
+                from backend.rag.vectorstore.pgvector_store import (
+                    IndexEmbeddingMismatchError,
+                )
+                if isinstance(e, IndexEmbeddingMismatchError):
+                    raise
+                logger.warning(f"[RAG.search] 向量检索失败: {e}", exc_info=True)
+
+            # BM25 腿补充（向量 0 命中或不足时；同授权后过滤）
+            if len(results) < top_k and self.bm25 is not None:
+                try:
+                    for doc in self.bm25.invoke(question):
+                        if len(results) >= top_k:
+                            break
+                        if not _keep(doc):
+                            continue
+                        if not self._doc_matches_filter(
+                                getattr(doc, "metadata", {}), mf or None):
+                            continue
+                        if doc.page_content in seen_texts:
+                            continue
+                        seen_texts.add(doc.page_content)
+                        results.append(doc)
+                except Exception as e:
+                    logger.warning(f"[RAG.search] BM25 检索失败: {e}", exc_info=True)
+
+            elapsed = _time.monotonic() - t0
+            logger.info(
+                f"[RAG.search] {len(results)} docs, {elapsed:.1f}s "
+                f"(authorized={'yes' if authorized is not None else 'off'})"
+            )
+            return results[:top_k]
+        finally:
+            self._cleanup()
+
+    @staticmethod
+    def _constrain_filter_to_authorized(
+        mf: dict | None, authorized: set[str] | list[str] | None
+    ) -> dict:
+        """把 metadata_filter 的 kb 范围与授权集合求交（只能收窄）。
+
+        复用 ChunkLevelRetriever 同一收敛器：无 kb 限定/完全在授权内 → 原样
+        （保留 pushdown）；越权部分 → 剥掉 kb 约束，交由 keep-set 后过滤收窄。
+        authorized=None（未声明主体）原样返回。
+        """
+        if authorized is None:
+            return dict(mf or {})
+        from backend.rag.retrieval.retrievers import _scope_kb_filter
+
+        return _scope_kb_filter(dict(mf or {}), set(authorized))
+
     def retrieve_knowledge(
         self,
         question: str,
@@ -1085,6 +1209,7 @@ class RAGPipeline:
         subject_type: str = "",
         department: str = "",
         permissions: Iterable[str] | None = None,
+        roles: tuple[str, ...] = (),
     ) -> str:
         """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。
 
@@ -1103,6 +1228,7 @@ class RAGPipeline:
             subject_type=subject_type,
             department=department,
             permissions=permissions,
+            roles=roles,
         )
         try:
             # 读取 _prepare_context 注入的 metadata_filter（KB 路由 + QueryAnalyzer）
@@ -1110,27 +1236,46 @@ class RAGPipeline:
                 from backend.rag.context import get_context
                 mf = get_context().metadata_filter
                 user_permissions = get_context().identity.permissions
+                eff_roles = tuple(getattr(get_context().identity, "roles", ()) or ())
             except Exception:
                 mf = None
                 user_permissions = None
+                eff_roles = ()
+
+            # ── 主体授权（2026-10-01 权限收口）：两条腿统一的 keep-set ──
+            # kb 范围先与主体可见集收敛（只能收窄）；召回结果再按授权集 +
+            # permission_scope 双重后过滤。任何兜底/放宽重试都不越过该集合。
+            from backend.rag.authz import retrieval_authorized_kbs
+            from backend.rag.permissions import filter_documents_by_permission
+            authorized = retrieval_authorized_kbs(
+                subject_type, department, roles=eff_roles)
+            if authorized is not None:
+                mf = self._constrain_filter_to_authorized(mf, authorized)
 
             chunks = []
             kb_scope = (
                 {k: v for k, v in (mf or {}).items() if k in ("kb_id", "$or")}
                 or None
             )
+
+            def _authorized(doc) -> bool:
+                """单条召回的授权后过滤（KB keep-set + 文档 permission_scope）。"""
+                meta = getattr(doc, "metadata", {}) or {}
+                if authorized is not None and meta.get("kb_id") not in authorized:
+                    return False
+                return bool(filter_documents_by_permission([doc], user_permissions))
+
             # BM25 检索 —— LangChain BM25Retriever 的公开接口是 .invoke(query)
             # （旧代码误用 .search，BM25 腿 100% 断，被软降级吞掉）；它不支持
             # metadata 过滤，结果按 Chroma where 语义手工后过滤。
             # 2026-09-22 收口：与向量腿同策略——QueryAnalyzer 维度 0 命中时
             # 以 kb 范围放宽重试（标识符/编号类精确查询主要靠 BM25 腿）。
             try:
-                from backend.rag.permissions import filter_documents_by_permission
                 bm25_results = self.bm25.invoke(question)
                 kept = [
                     d for d in bm25_results
                     if self._doc_matches_filter(getattr(d, "metadata", {}), mf)
-                    and filter_documents_by_permission([d], user_permissions)
+                    and _authorized(d)
                 ]
                 if not kept and mf and kb_scope and kb_scope != mf:
                     logger.info(
@@ -1139,7 +1284,7 @@ class RAGPipeline:
                     kept = [
                         d for d in bm25_results
                         if self._doc_matches_filter(getattr(d, "metadata", {}), kb_scope)
-                        and filter_documents_by_permission([d], user_permissions)
+                        and _authorized(d)
                     ]
                 for doc in kept:
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
@@ -1167,6 +1312,10 @@ class RAGPipeline:
                         f"维度重试（保留 kb 范围）: {kb_scope}")
                     vec_results = _vec_retrieve(kb_scope)
                 for doc in vec_results[:top_k]:
+                    # 向量腿授权后过滤（修复旁路：此前无 keep-set 也无
+                    # permission 过滤，/rag/search remote 路径经此直读全库）
+                    if not _authorized(doc):
+                        continue
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
                     if content not in chunks:
                         chunks.append(content)
