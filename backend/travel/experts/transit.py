@@ -13,6 +13,7 @@ Phase 8 清理；因读 state，按 Service 零 state 纪律不迁 service）。
 from __future__ import annotations
 
 from backend.shared.logger import logger
+from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import (
     data_snapshot_version,
@@ -27,6 +28,7 @@ from backend.travel.models.poi import Poi
 # repair.py:26、test_p0_mvp 等的历史符号；rebuild_days 真身在
 # services/transit_service.py（repair 经此 re-export 零改动）
 from backend.travel.agents.optimization_agent import OptimizationAgent
+from backend.travel.agents.planning_agent import PlanningAgent
 from backend.travel.services.transit_service import (  # noqa: F401
     order_pois,
     rebuild_days,
@@ -34,6 +36,17 @@ from backend.travel.services.transit_service import (  # noqa: F401
 )
 
 _optimization = OptimizationAgent()
+_planning = PlanningAgent()
+
+
+def _needs_train_search(message: str, brief) -> bool:
+    return bool(
+        brief.origin.strip()
+        and brief.start_date
+        and any(token in (message or "") for token in (
+            "查高铁", "查车票", "查火车", "查车次", "高铁票", "动车票",
+        ))
+    )
 
 
 def prefetch_day_legs(pois_by_day):
@@ -59,6 +72,37 @@ def transit_expert_node(state: dict) -> dict:
             return {"status": "failed", "data": {},
                     "notes": [], "error": "骨架为空，无法排程"}
 
+        live_search: dict[str, dict] = {}
+        if _needs_train_search(state.get("user_message", ""), brief):
+            def _search_trains_with_prices() -> dict:
+                """余票 + 前 2 车次票价并查，结果并入同一份车次数据。
+
+                票价必须在本事件内合并：SSE 的 train preview 在
+                result_summary 时点生成，之后追加价格前端看不到。
+                治理记账不受影响——每次票价 Tool 调用仍由
+                live_search_service._invoke 独立记入 record_tool_result，
+                管理端 /tools 统计按真实 Tool 粒度分列。
+                """
+                data = _planning.search_trains(
+                    from_station=brief.origin,
+                    to_station=brief.destination,
+                    travel_date=brief.start_date.isoformat(),
+                )
+                return _planning.attach_train_prices(
+                    data,
+                    from_station=brief.origin,
+                    to_station=brief.destination,
+                    travel_date=brief.start_date.isoformat(),
+                    limit=2,
+                )
+
+            live_search["train"] = run_travel_tool(
+                "travel_train_search_tool",
+                "planning",
+                _search_trains_with_prices,
+                result_summary=_planning.train_event_summary,
+            )
+
         extra_notes: list[str] = []
         pois_by_day = [
             [candidates[pid] for pid in day if pid in candidates]
@@ -75,14 +119,30 @@ def transit_expert_node(state: dict) -> dict:
             extra_notes.append(
                 f"行程骨架引用了 {len(unknown)} 个候选数据外的地点标识，已忽略")
 
-        prefetch_day_legs(pois_by_day)
-        itinerary, notes = build_itinerary(brief, pois_by_day)
+        run_travel_tool(
+            "travel.calculate_route",
+            "optimization",
+            lambda: prefetch_day_legs(pois_by_day),
+            result_summary=lambda _value: {
+                "data_status": "warmed_or_local_estimate",
+            },
+        )
+        itinerary, notes = run_travel_tool(
+            "route.optimizer",
+            "optimization",
+            lambda: build_itinerary(brief, pois_by_day),
+            result_summary=lambda value: {
+                "day_count": len(value[0].days),
+                "leg_count": sum(len(day.legs) for day in value[0].days),
+            },
+        )
         # 版本章（任务书 §4）：出生即回答「基于哪个需求、哪份数据、为什么产生」。
         # 重规划轮的 change_reason 由 slot_filler 写入 state；候选池签名按
         # state.candidates 全集计算（含未排入项 —— 数据版本不等同于行程内容）。
         itinerary.stamp_version(
             brief,
             reason=state.get("brief_change_reason") or CHANGE_INITIAL,
+            parent_version=state.get("plan_parent_version"),
             data_snapshot=data_snapshot_version(state.get("candidates", [])),
             changed_fields=list(state.get("brief_changed_fields") or []),
         )
@@ -102,7 +162,8 @@ def transit_expert_node(state: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
         return {"status": "success",
-                "data": {"itinerary": save_itinerary(itinerary)},
+                "data": {"itinerary": save_itinerary(itinerary),
+                         "live_search": live_search},
                 "notes": extra_notes + notes}
 
     result = run_expert_safely("transit", _run, state)
@@ -119,6 +180,11 @@ def transit_expert_node(state: dict) -> dict:
     }
     if data.get("itinerary"):
         update["itinerary"] = data["itinerary"]
+    if data.get("live_search"):
+        update["live_search"] = {
+            **(state.get("live_search") or {}),
+            **data["live_search"],
+        }
     return update
 
 

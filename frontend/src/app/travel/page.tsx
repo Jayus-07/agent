@@ -1432,16 +1432,29 @@ function MerchantPreview({ preview, category }: { preview: Array<Record<string, 
 }
 
 function TrainPreview({ preview }: { preview: Array<Record<string, unknown>> }) {
+  /** 席别价格统一成「¥83」形态：数值/数字串补 ¥，其余原样透传，缺失显示 -- */
+  const formatPrice = (value: unknown): string => {
+    if (value == null || value === '') return '--'
+    if (typeof value === 'number' && Number.isFinite(value)) return `¥${value}`
+    const raw = String(value).trim()
+    if (raw.startsWith('¥') || raw.startsWith('￥')) return raw
+    return /^\d+(\.\d+)?$/.test(raw) ? `¥${raw}` : raw
+  }
   return (
     <div className="mt-2 overflow-x-auto rounded-lg border border-[#f0dfc8]">
       <table className="min-w-full text-left text-[10px] text-[#6c5948]">
-        <thead className="bg-[#fff3e3] text-[#8c7258]"><tr><th className="px-2 py-1.5 font-medium">车次</th><th className="px-2 py-1.5 font-medium">出发</th><th className="px-2 py-1.5 font-medium">到达</th><th className="px-2 py-1.5 font-medium">历时</th><th className="px-2 py-1.5 font-medium">余票</th></tr></thead>
+        <thead className="bg-[#fff3e3] text-[#8c7258]"><tr><th className="px-2 py-1.5 font-medium">车次</th><th className="px-2 py-1.5 font-medium">出发</th><th className="px-2 py-1.5 font-medium">到达</th><th className="px-2 py-1.5 font-medium">历时</th><th className="px-2 py-1.5 font-medium">余票</th><th className="px-2 py-1.5 font-medium">票价</th></tr></thead>
         <tbody>
           {preview.slice(0, 6).map((item, index) => {
             const seats = item.seats
             const seatsText = seats && typeof seats === 'object' && !Array.isArray(seats)
               ? Object.entries(seats as Record<string, unknown>).slice(0, 3)
                   .map(([seat, left]) => `${seat} ${String(left)}`).join(' / ')
+              : ''
+            const prices = item.prices
+            const priceText = prices && typeof prices === 'object' && !Array.isArray(prices)
+              ? Object.entries(prices as Record<string, unknown>).slice(0, 2)
+                  .map(([seat, price]) => `${seat} ${formatPrice(price)}`).join(' / ')
               : ''
             return (
               <tr key={`${String(item.train_no ?? 'unknown')}-${String(item.start_time ?? index)}-${String(item.arrive_time ?? '')}-${index}`} className="border-t border-[#f4e6d3]">
@@ -1450,12 +1463,13 @@ function TrainPreview({ preview }: { preview: Array<Record<string, unknown>> }) 
                 <td className="px-2 py-1.5">{String(item.arrive_time ?? '--')}</td>
                 <td className="px-2 py-1.5">{String(item.duration ?? '--')}</td>
                 <td className="px-2 py-1.5">{seatsText || <span className="text-[#b3a48f]">--</span>}</td>
+                <td className="px-2 py-1.5">{priceText || <span className="text-[#b3a48f]">--</span>}</td>
               </tr>
             )
           })}
         </tbody>
       </table>
-      <p className="px-2 py-1.5 text-[10px] text-[#8c7258]">余票来自 12306 非官方聚合源，可能延迟；票价不在余票接口范围内，需按车次单独查询。</p>
+      <p className="px-2 py-1.5 text-[10px] text-[#8c7258]">余票与票价来自 12306 非官方聚合源，可能延迟；票价仅实时查询前 2 个车次，其余显示 --，出行前请以 12306 官方为准。</p>
     </div>
   )
 }
