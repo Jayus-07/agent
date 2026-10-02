@@ -1087,6 +1087,14 @@ class RAGPipeline:
                 sources = chain._last_sources or []
                 meta["source_count"] = len(sources)
                 meta["sources"] = sources[:8]
+            # 向量路降级可观测（TD-01）：降级时召回只来自 BM25 路，分数
+            # 尺度不可比——下游（客服置信度/评测/管理端）据此解读结果。
+            try:
+                from backend.rag.context import is_vector_degraded
+                if is_vector_degraded():
+                    meta["vector_degraded"] = True
+            except Exception:  # noqa: BLE001 — 观测字段不阻塞主链
+                pass
             self.last_answer_meta = meta
         except Exception:
             self.last_answer_meta = {}
