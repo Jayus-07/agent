@@ -22,6 +22,7 @@ flowchart TB
         APP["app · FastAPI :8000<br/>REST API + Chat Runtime（SSE）"]
         RAGS["rag-service :8090<br/>持有 embedding / reranker / 索引"]
         MCPS["mcp-service :8091<br/>MCP streamable HTTP"]
+        MCPT["mcp-12306 :18000（宿主映射）<br/>外部 12306 MCP 数据源"]
         CEL["Celery worker 池 + beat<br/>agent ｜ rag_index 双队列"]
         PG[("postgres :5432<br/>pgvector/pg16 · 宿主映射 5433")]
         RD[("redis :6379<br/>broker + result + 缓存")]
@@ -43,6 +44,7 @@ flowchart TB
     CEL --> PG
     CEL --> RD
     MCPS -.->|"RAG 工具转发"| RAGS
+    APP -.->|"TRAIN_MCP_ENABLED（默认关）"| MCPT
     OBS -.->|scrape /metrics| APP
     KF -.->|可选| APP
 ```
@@ -62,6 +64,7 @@ flowchart TB
 | 8000 | `app`（FastAPI） | 仅绑 `127.0.0.1`，外部流量一律走 9080 |
 | 8090 | `rag-service` | 独立 RAG 服务（embedding / rerank / 索引持有者） |
 | 8091 | `mcp-service` | MCP 服务（Tool 的第二出口） |
+| 18000 | `mcp-12306` | 外部 MCP 数据源容器（12306 车票查询，`TRAIN_MCP_ENABLED` 默认关；宿主 `127.0.0.1:18000` → 容器 8000） |
 | 3100 / 3200 / 3300 | 用户端 / 管理端 / 客服坐席工作台 | `next dev`（本地进程，非容器） |
 | 5433 → 5432 | `postgres` | 宿主 5433 映射容器 5432；`agent_business` + `agent_memory` |
 | 6379 | `redis` | Celery broker + result backend + 缓存 |

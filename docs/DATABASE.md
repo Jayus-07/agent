@@ -545,9 +545,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 6. Migration 治理
 
-### 6.1 migration 治理现状（2026-09-30）
+### 6.1 migration 治理现状（2026-10-02）
 
-`sql/migrations/` 顺序编号治理，最新编号 **062**（tool_contract_changes）；配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
+`sql/migrations/` 顺序编号治理，最新编号 **069**（prompt_release_records）；配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
@@ -575,6 +575,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 | 060 | `ai.task_operation_audits` | 任务操作审计双写（M10） |
 | 061 | `ai.release_records` | 发布记录 + 12 门结果（M8，并行批次） |
 | 062 | `ai.tool_contract_changes` | Tool 契约变更历史（生成器检测变更自动落库） |
+| 063 | `public.release_records` | 发布记录查询台账 |
+| 064 | `trace_summary.ttft_ms` | 流式首 token 时间补齐 |
+| 065 | `prompt_runtime_state` + `prompt_reload_events` | Prompt Runtime 全局 epoch 与 Redis 通知失败补偿事件 |
+| 066 | `budget_reservations` 预占状态/滞留处置 + `budget_*` 金额列 USD→CNY 更名 | 预算治理 P0：记账本位币统一 CNY + 预占待对账（needs_review） |
+| 067 | `doc_registry.active_generation` + `rag_index_runs` | RAG 候选版本/已发布代次指针 + 索引 run 台账（上传并发与失败回滚收口） |
+| 068 | `auth.sessions` 登录来源列 | 会话台账记录登录来源，用户端/管理端/客服端 refresh Cookie 隔离 |
+| 069 | `ai.prompt_release_records` | Prompt 候选发布门禁记录（带评测证据的环境切换留痕） |
 
 ### 6.2 P1 治理目标
 
@@ -608,4 +615,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 验证
 
-最后验证：2026-09-29 · 18 业务表结构复核仍准确；SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。
+最后验证：2026-10-02 · Prompt Runtime 迁移 065 已在 agent_memory 执行，epoch 初始值为 1；迁移编号实测至 069；18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。

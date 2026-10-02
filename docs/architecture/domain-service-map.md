@@ -112,7 +112,9 @@
 
 | 服务 | 用途 | 消费方 | 凭据/开关 | 降级与防护 |
 |---|---|---|---|---|
-| **腾讯位置服务 LBS** | 地理编码/POI/路线/天气/静态图/街景 | `tools/map/` 7 工具、`/api/map/*` 后端代理（前端永不接触 Key）、旅游 poi/transit/weather | `TENCENT_LBS_KEY`（服务端）+ `TENCENT_LBS_SK`（SN 签名，可选）+ `TENCENT_LBS_FRONTEND_KEY`（仅浏览器 URL 场景，配 Referer 白名单）；`TENCENT_LBS_ENABLED` 且 Key 非空才生效 | 定位「增强非硬依赖」：缺失/熔断整体降级（空结果/直线估算/`is_estimate=true`）；节流 0.2s（≈5 QPS 对齐个人 Key）、熔断 3 次/60s、缓存 600/120/300/1800s、stale-if-error |
+| **腾讯位置服务 LBS** | 地理编码/POI/路线/天气/静态图/街景 | `tools/map/` 14 工具（高德商家检索除外，见下行）、`/api/map/*` 后端代理（前端永不接触 Key）、旅游 poi/transit/weather | `TENCENT_LBS_KEY`（服务端）+ `TENCENT_LBS_SK`（SN 签名，可选）+ `TENCENT_LBS_FRONTEND_KEY`（仅浏览器 URL 场景，配 Referer 白名单）；`TENCENT_LBS_ENABLED` 且 Key 非空才生效 | 定位「增强非硬依赖」：缺失/熔断整体降级（空结果/直线估算/`is_estimate=true`）；节流 0.2s（≈5 QPS 对齐个人 Key）、熔断 3 次/60s、缓存 600/120/300/1800s、stale-if-error |
+| **高德开放平台（Web 服务 API v5）** | 商家维度详情检索：评分 / 人均消费 / 营业状态（`show_fields=business`）——「推荐哪家店、现在去行不行」的依据，腾讯源只有名称/类别/地址 | `tools/map/merchant.py::map_merchant_search_tool` 及 `map_lookup_tool` 的 `merchant_search` action、旅游域 Research Agent（美食/住宿实时增强检索） | `AMAP_KEY` + `AMAP_SECRET`（仅控制台开启数字签名时）+ `AMAP_ENABLED`（代码默认 true，Key 非空才生效）；类目码 `AMAP_FOOD_TYPES`/`AMAP_HOTEL_TYPES`、区域 `AMAP_DEFAULT_REGION` | 未配置时 merchant_search 降级返回「未配置」提示，不影响腾讯系地图能力；字段缺数据显式 null 不编造 |
+| **mcp-12306（外部 MCP server）** | 12306 火车票余票/时刻查询数据源——「外部 MCP server 作为 Tool 数据源」首例（2026-10-02）；上游 drfccv/mcp-server-12306，非官方聚合、无 SLA、仅供学习研究（不商用） | `tools/travel/train.py::travel_train_search_tool`（经 `infra/mcp_client.py` 同步薄客户端）、旅游 Planning Agent 交通耗时/车次 | 无凭据；`TRAIN_MCP_ENABLED`（默认关）+ `TRAIN_MCP_BASE_URL`；compose 服务 `mcp-12306`（宿主 `127.0.0.1:18000` → 容器 8000） | 关闭时明确报「未启用」；协议层失败归「查不了」，与「查不到」按键名结构区分不猜文本；只读查询无副作用、不进审批门；失败不阻塞行程主链（耗时估算回退本地直线） |
 | **和风天气 v7** | 天气备用源（2026-09-28 接入） | `get_weather_provider()` 主备组合器备位 | `QWEATHER_API_KEY` + `QWEATHER_API_HOST`；不配 Key 零参与 | 仅主源超时/限流/鉴权/城市未收录才降级；DISABLED 不触发降级；双源皆败保留主源结局 |
 | **SMTP 邮件** | 报告推送 / email.send | `tools/email.py`（agently 引擎时另有 search/read/watch） | `SMTP_HOST/PORT/USER/PASSWORD/FROM`；`EMAIL_ENGINE`=smtp\|agently；当前 .env 未配置 | 发送前双保险：审批门（§8 下方）+ 进程内指纹去重 600s + **PG 幂等账本**（crash-window 防重发） |
 | **DuckDuckGo / Bing** | web.search（**爬 HTML 非官方 API**，无凭据） | `tools/web.py` | 无 | DDG 失败兜底 Bing 结果页；两路皆败上抛重试 |
@@ -125,7 +127,7 @@
 **三层凭据存放**（2026-09-29 实测 `.env` 变量名）：
 
 1. **DB 治理（模型类唯一通道）**：§7 的 6 表；密钥 Fernet 加密落库、指纹+尾 4 位脱敏展示、15s 热刷新、无 env 回退
-2. **`.env`（基础设施 + 非模型 SaaS）**：`PGPASSWORD` / `PG_READONLY_PASSWORD` / `REDIS_PASSWORD` / `JWT_SECRET` / `SECRETS_ENCRYPTION_KEY`（密文库主密钥）/ `TENCENT_LBS_KEY` / `TENCENT_LBS_SK` / `TENCENT_LBS_FRONTEND_KEY` / `QWEATHER_API_KEY` / `ALERT_WEBHOOK_URL` / `API_KEY`（服务自身鉴权）/ `HF_TOKEN`（backend 内未发现消费点，待清理确认）。模型云 Key 与 SMTP 凭据**已不在 .env**
+2. **`.env`（基础设施 + 非模型 SaaS）**：`PGPASSWORD` / `PG_READONLY_PASSWORD` / `REDIS_PASSWORD` / `JWT_SECRET` / `SECRETS_ENCRYPTION_KEY`（密文库主密钥）/ `TENCENT_LBS_KEY` / `TENCENT_LBS_SK` / `TENCENT_LBS_FRONTEND_KEY` / `AMAP_KEY` / `AMAP_SECRET` / `QWEATHER_API_KEY` / `ALERT_WEBHOOK_URL` / `API_KEY`（服务自身鉴权）/ `HF_TOKEN`（backend 内未发现消费点，待清理确认）。模型云 Key 与 SMTP 凭据**已不在 .env**
 3. **审批门（副作用的人机确认，区别于 CS confirmation 链）**：`TOOL_APPROVAL_MODE`=required（默认，非法值也回落 required）| auto（仅本地调试）；指纹=sha256(tool|action|detail|user_id|tenant_id)（身份参与指纹防跨用户消耗）；单 TTL 600s；DB 不可用降级进程内存。**必须过门的写操作**：`email.send`、采集 `write_db`、竞品监控列表写、`export_csv`、管理端竞品写接口
 
 **预算/配额**：租户级闭环（PG `budget_*` 6 表 + `model_price`，hard/soft/audit 三档，金额策略只存 PG）+ 请求级（`LLM_BUDGET_MODE` off/observe/enforce，默认 8 次调用/32k tokens/$0.50）+ 旅游 provider 日预算软停（`TRAVEL_PROVIDER_*_DAILY_BUDGET`，达限抛 `BudgetExhausted` 走缓存/降级不硬撞上游）。

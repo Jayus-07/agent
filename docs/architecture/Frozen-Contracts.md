@@ -89,7 +89,7 @@
 
 | 项 | 契约 | 理由与守卫 |
 |---|---|---|
-| 定位 | 纯 Integration Adapter（Tool 第二出口）；平台自身不是 MCP client；内部主链路不经 MCP | STOP G 审计确证（零 tool_runtime/skills 依赖） |
+| 定位 | 纯 Integration Adapter（Tool 第二出口）；内部主链路不经 MCP；2026-10-02 起外部 MCP server 可经 `infra/mcp_client.py` 作为 Tool 数据源（Infrastructure 侧新方向，不改变本层「纯出口」定位） | STOP G 审计确证（零 tool_runtime/skills 依赖）；数据源方向首例 b42ab10（12306） |
 | 对外信封 | `manager.route` 统一 `{ok, tool, server, result|error}`；三出口（REST /api/mcp、:8091 标准协议、internal_ai）收敛于此 | 对外契约，禁与内部封套互相迁移 |
 | 参数派生 | `langchain_tool_to_mcp_meta` 从 `args_schema` 派生，**禁止手写** | 单一事实源 |
 

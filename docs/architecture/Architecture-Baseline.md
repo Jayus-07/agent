@@ -69,7 +69,7 @@ flowchart TB
 | **Expert Runtime** | 域内专家节点的公共执行生命周期（六段）+ THREAD_ISOLATED 唯一超时实现 | `core/node_runtime/`、`customer_service/experts/base.py`、`travel/experts/base.py` | STOP F |
 | **Tool Contract Boundary** | Tool 输出契约：两型（text 给 LLM 读 / structured 封套给程序）显式声明 + 边界归一解包 + 失败语义 | `shared/tool_envelope.py`、`skills/base.py::_normalize_output`、`skills/validation.py`、各 Skill 的 `output_type` 声明 | STOP G |
 | **Tool Runtime** | Tool 执行治理：超时/重试/熔断/隔离舱/错误映射/指标；`ToolResult.status` 是执行态，与业务态正交 | `core/tool_runtime/`（九件套） | 既有（Phase2 冻结） |
-| **Integration Adapter** | Tool 对外的第二出口（平台自身不是 MCP client；内部链路不经此层） | `mcp_servers/`（REST /api/mcp · 标准协议 :8091 · internal_ai 三出口） | STOP G 审计确证边界 |
+| **Integration Adapter** | Tool 对外的第二出口（内部链路不经此层；2026-10-02 起新增反向通路——外部 MCP server 经 `infra/mcp_client.py` 作 Tool 数据源） | `mcp_servers/`（REST /api/mcp · 标准协议 :8091 · internal_ai 三出口）＋ `infra/mcp_client.py`（外部数据源） | STOP G 审计确证边界；数据源方向首例 b42ab10（12306） |
 | **Shared Governance** | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation | `security/`、`memory/`、`context_budget/`、`infra/llm`、`observability/`、`evaluation/` | 既有 |
 
 分层关系三条：

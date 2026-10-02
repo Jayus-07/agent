@@ -121,7 +121,7 @@ flowchart TB
         ER["Expert Runtime — 域内专家节点的公共执行生命周期"]
         TCB["Tool Contract Boundary — 两型输出契约（text 给 LLM 读 / structured 给程序）+ 边界归一"]
         TR["Tool Runtime — 执行治理（超时 · 重试 · 熔断 · 隔离舱）"]
-        MCP["Integration Adapter — MCP 对外暴露（2 server / 5 tool，平台自身不是 MCP client）"]
+        MCP["Integration Adapter — MCP 对外暴露（2 server / 5 tool）＋ infra/mcp_client.py 消费外部 MCP server 作 Tool 数据源（首例 12306）"]
         GOV["Shared Governance — 认证 · 三层记忆 · 上下文预算 · 模型治理 · 幂等 · 可观测 · 评测"]
         RR --> DR
         RR --> CR
@@ -178,8 +178,8 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
-| 后端用例 | 7918（`pytest --collect-only`，2026-09-30） | `backend/tests/` |
-| 前端路由 | 用户端 5 / 管理端 41（含 /tools Tool 治理、/consistency 资产一致性，2026-09-30）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
+| 后端用例 | 8573（`pytest --collect-only`，2026-10-02） | `backend/tests/` |
+| 前端路由 | 用户端 5 / 管理端 44（含 /tools Tool 治理、/consistency 资产一致性、/data-explorer 数据查询、/knowledge/upload-failures 入库失败，2026-10-02）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
 > [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)。
@@ -199,15 +199,15 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ### 管理端 `frontend-admin`（:3200）
 
-面向管理员 / 运营的控制台（约 38 个页面）：
+面向管理员 / 运营的控制台（44 个页面）：
 
 - **运营总览**（首页）：待我处理、业务概览、网关安全
-- **知识库**：文档上传与管理、关键词、待审队列、运营指标与索引 trace
+- **知识库**：文档上传与管理、关键词、待审队列、入库失败待处理、运营指标与索引 trace
 - **平台资产**：Agent 清单、Skill / Capability 对账、Prompt 管理与 playground
 - **可观测**：分布式 Traces、告警、网关日志、Token 用量、选品漏斗指标
 - **成本治理**：预算管理、模型价格（双人审核）
 - **安全与设置**：RBAC 权限、模型配置、写操作审批门
-- **业务运营**：选品决策、选品漏斗、竞品监控、预警、报告、定时任务、评测与反馈
+- **业务运营**：数据查询（NL2SQL 问答 + 表分页浏览核对）、选品决策、选品漏斗、竞品监控、预警、报告、定时任务、评测与反馈
 - **任务中心**：异步任务状态查询与运维操作
 
 ### 客服坐席工作台 `frontend-cs`（:3300）
@@ -350,6 +350,8 @@ mcp_servers/
 
 参数定义一律 `langchain_tool_to_mcp_meta` 从 Tool 的 `args_schema` 派生，**禁止手写**。
 
+2026-10-02 起新增**反向通路**：外部 MCP server 也可作为 **Tool 的数据源**——平台经 `backend/infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费外部 server，首例为 12306 车票余票查询（`tools/travel/train.py`，compose 服务 `mcp-12306`，宿主 `127.0.0.1:18000`）。开关 `TRAIN_MCP_ENABLED` 默认关；上游为非官方聚合、无 SLA、仅供学习研究（不商用）；失败不阻塞主链。
+
 ---
 
 ## Observability
@@ -357,7 +359,7 @@ mcp_servers/
 - **Trace**：主图节点、Skill、Tool、检索与索引阶段均落 Span，类型由 `observability/tracer.py::SpanKind` 枚举强约束（**照 G2 不在此手抄阶段清单**）；每 Span 记录 latency / token_usage / retrieval_score / tool_args / execution_result
   - Evidence Gate 有 4 个专有 Span：`retrieval_gate` / `rerank_gate` / `faithfulness_gate` / `self_correction`
 - **Metrics**：Prometheus `/metrics`；黄金信号 = 首 token 延迟（TTFT P99 < 3s）/ 每 token 耗时（TPOT P99 < 200ms）/ 错误率 / 并发占用
-- **告警**：`docker/prometheus-alert-rules.yml`（16 条，warning/critical 两级）
+- **告警**：`docker/prometheus-alert-rules.yml`（52 条，warning/critical 两级）
 - **成本治理**：`GET /observability/tokens/calls` 逐次调用 token 与成本；budgets + prices 可在管理端配置
 
 SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
@@ -373,7 +375,7 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
 | 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
-| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 053） |
+| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 069） |
 | 异步 | Celery + Redis（双队列）+ Kafka（`java-loop` profile，默认不启） |
 | 可观测 | 自建 Tracer + Prometheus + Grafana |
 | MCP | stdio / HTTP SSE |
@@ -387,7 +389,7 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 
 | 依赖 | 版本 | 用途 |
 |------|------|------|
-| Docker Desktop | 近期版本 | 起 apisix / app / postgres / redis / rag-service / mcp-service / worker |
+| Docker Desktop | 近期版本 | 起 apisix / app / postgres / redis / rag-service / mcp-service / Celery worker 池与 beat / mcp-12306 等共 18 个默认服务 |
 | Python | **3.10** | 后端与评测；`.venv` 必须是 3.10 |
 | Node.js | **22** | 两个 Next.js 前端 |
 | Ollama | 可选 | 仅 `local-llm` profile 与本地推理场景 |
@@ -397,7 +399,7 @@ cp .env.example .env
 # 至少填 PGPASSWORD / PG_READONLY_PASSWORD —— compose 用 ${VAR:?} 强校验，缺失直接起不来
 ```
 
-- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是最小可启动集；86 项完整清单（逐项带注释）见 `backend/.env.example`。
+- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是逐项带注释的启动模板（90 项，2026-10-02 实测；高德 / 12306 等新开关在此维护）；`backend/.env.example` 是早期后端模板副本（69 项，已落后于根模板，仅作参考）。
 - 模型 provider / model / api_key **不在 env 里配** —— 走 `sys_config`，由管理端「模型配置」页维护（DB override + 环境变量 fallback）。
 
 ### 1. 一键启停（唯一入口 = `devctl.bat`）
@@ -413,14 +415,14 @@ devctl.bat rebuild /y              :: 一键重建后端（改代码 / 改 .env 
 `dev-start.bat` / `dev-stop.bat` / `dev-restart.bat` / `dev-rebuild.bat` 是上表的短路写法，实现只在 `dev-svc.bat` 一份。
 服务定义：`backend` = compose 的 `app` 服务（探活 `/health`）｜`admin` = `frontend-admin`（:3200）｜`cs` = `frontend-cs`（:3300）｜`web` = `frontend`（:3100）。
 
-> ⚠️ **改后端代码或改根 `.env` 后，用 `dev-rebuild.bat /y`**（build + up -d 全部 7 个后端代码服务，
+> ⚠️ **改后端代码或改根 `.env` 后，用 `dev-rebuild.bat /y`**（build + up -d 全部 10 个后端代码服务，
 > 迁移一次性容器自动重跑）。普通 restart 复用旧镜像且不重读 `.env`——只适合纯重启。
 > 旧的 `start_py.bat` / `start_frontend.bat` 系列**已删除**，请勿按旧文档执行。
 
 ### 容器栈
 
 ```bash
-docker compose up -d --build      # apisix + app + rag-service + mcp-service + worker + postgres + redis
+docker compose up -d --build      # apisix + app + rag-service + mcp-service + postgres + redis + Celery worker 池/beat + mcp-12306 等共 18 个默认服务
 docker compose --profile observability up -d prometheus grafana
 docker compose down               # ⚠️ 加 -v 会连数据卷一起删
 ```
@@ -523,7 +525,7 @@ agent/
 │   ├── observability/         # Tracer / Metrics / Alerts
 │   ├── security/              # 认证 / 审批门 / 守卫
 │   ├── infra/                 # LLM 代理 / 计价 / 预算 / 限流
-│   └── tests/                 # 7687 用例
+│   └── tests/                 # 8573 用例
 ├── mcp_servers/               # MCP 服务（2 server / 5 tool）
 ├── frontend/                  # 用户端 Next.js（:3100）
 ├── frontend-admin/            # 管理端 Next.js（:3200）
@@ -535,7 +537,7 @@ agent/
 ├── docs/                      # 架构文档 + ADR + 交接报告（含 HANDOFF.md、TRAVEL_ARCHITECTURE_AUDIT.md）
 ├── data/                      # 评测语料与运行产物（eval_runs/、docs/ 语料库）
 ├── tmp/                       # 临时工作区（语料加工中间产物）
-├── docker-compose.yml         # apisix + app + postgres + redis + rag-service + mcp-service + worker
+├── docker-compose.yml         # 全栈 18 个默认服务（apisix / app / rag-service / mcp-service / postgres / redis / Celery worker 池+beat / mcp-12306 / business-mock 等）
 ├── docker-compose.observability.yml
 ├── .env.example               # 根 env 最小可启动集（→ cp 成 .env）
 ├── devctl.bat                 # 统一启停入口（dev-start/dev-stop/dev-restart 为短路写法）
