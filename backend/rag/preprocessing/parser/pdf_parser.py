@@ -49,9 +49,18 @@ HEADING_SIZE_DELTA = 2.0
 # (?!\d) 排除小数编号条款（2.1 / 3.2 / 6.2）：旧模式 \d+(?:\.\d+)*[.、] 会回溯成
 # "2." 前缀而把条款误判为标题，导致每个条款各自成 section、真正的章节标题
 # （如「二、七天无理由退货」）被拆成孤立空 section，其正文 chunk 丢失标题上下文。
+# 阿拉伯编号（\d+[.、]）仅作同字号短标题的弱信号（见 _is_heading_line 的
+# 正文特征排除）：制度类 PDF 的 "1. xxx；" 条目行与标题同字号且极常见，
+# 2026-10-02 实测（多部门知识库验收 TD-02）无差别判标题会把整份文档的
+# 条目全部吞进 section → leaf 层清空、节标题丢失、质量门禁误杀。
 _HEADING_NUMBER_RE = re.compile(
     r"^(第[一二三四五六七八九十百\d]+[章节]|[一二三四五六七八九十]+、|\d+[.、](?!\d))"
 )
+
+# 阿拉伯编号行的正文特征：行尾句读或长行 → 条目而非标题。
+# 中文制度条款几乎必以 ；/。 收尾；标题（"1. 概述"/"10、附录"）短且无标点。
+_HEADING_MAX_PLAIN_LEN = 40
+_BODY_CLAUSE_TAILS = ("；", "。", "，", ";", ",", "！", "！", "?", "？", ":", "：")
 
 
 def _body_font_size(sizes: list[float]) -> float:
@@ -81,10 +90,22 @@ def _overlaps_table(bbox: tuple, table_bboxes: list[tuple]) -> bool:
 
 
 def _is_heading_line(text: str, size: float, body_size: float) -> bool:
-    """判断一行是否标题：字号明显大于正文，或匹配编号模式。"""
+    """判断一行是否标题：字号明显大于正文，或匹配编号模式。
+
+    编号模式中阿拉伯编号（1. / 10、）仅是弱信号：行尾带句读或超过
+    _HEADING_MAX_PLAIN_LEN 的长行是制度条款的强特征，判回正文——
+    同字号条款误判标题会让整节正文吞进 section（见 _HEADING_NUMBER_RE
+    注释的实测记录）。中文编号与"第N章"不受此排除影响。
+    """
     if size >= body_size + HEADING_SIZE_DELTA:
         return True
-    return bool(_HEADING_NUMBER_RE.match(text.strip()))
+    stripped = text.strip()
+    if not _HEADING_NUMBER_RE.match(stripped):
+        return False
+    if re.match(r"^\d+[.、]", stripped):
+        if len(stripped) > _HEADING_MAX_PLAIN_LEN or stripped.endswith(_BODY_CLAUSE_TAILS):
+            return False
+    return True
 
 
 class PdfParser(BaseDocumentParser):

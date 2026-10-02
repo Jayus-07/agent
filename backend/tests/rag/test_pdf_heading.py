@@ -53,3 +53,25 @@ def test_integer_numbered_heading_still_detected():
     assert _is_heading_line("10、附录", 10.0, 10.0) is True
     assert _is_heading_line("二、七天无理由退货", 10.0, 10.0) is True
     assert _is_heading_line("第三章 标准与限额", 10.0, 10.0) is True
+
+
+def test_arabic_numbered_body_clause_excluded():
+    """TD-02 回归（2026-10-02）：同字号阿拉伯编号条款行判回正文。
+
+    实测（多部门知识库验收）：制度类 PDF 的 "1. xxx；" 条目行与标题
+    同字号，无差别判标题会把整份文档条目吞进 section → leaf 层清空、
+    节标题丢失、质量门禁 cleaned_chars 误杀（14 < 20）。
+    行尾句读与长行是条款的强特征；短编号无标点（"1. 概述"）仍是标题。
+    """
+    # 行尾句读（中文制度条款强特征）→ 正文
+    assert _is_heading_line("1. 办公账号密码长度不少于 12 位，须包含大小写字母；", 11.0, 11.0) is False
+    assert _is_heading_line("2. 密码每 90 天强制更换，不得与历史密码重复。", 11.0, 11.0) is False
+    # 长行（> 40 字符）无尾标点也判正文
+    long_clause = "1. 办公账号密码长度不得少于 12 位且必须包含大小写字母数字与特殊符号共四类字符"
+    assert len(long_clause) > 40
+    assert _is_heading_line(long_clause, 11.0, 11.0) is False
+    # 大字号编号行不受排除影响（字号分支先行命中）
+    assert _is_heading_line("1. 办公账号密码长度不少于 12 位，须包含大小写字母；", 13.5, 11.0) is True
+    # 中文编号与"第N章"不受排除影响（同字号标题语义保留）
+    assert _is_heading_line("一、账号密码管理", 11.0, 11.0) is True
+    assert _is_heading_line("第一章 总则", 11.0, 11.0) is True
