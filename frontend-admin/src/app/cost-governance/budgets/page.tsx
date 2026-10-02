@@ -161,17 +161,26 @@ export default function BudgetGovernancePage() {
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
                 <SectionTitle title="待对账" action={<RefreshButton onClick={() => reconciliation.refetch()} loading={reconciliation.isFetching} />} />
                 <div className="border-b border-slate-50 px-4 py-2.5 text-[11px] text-text-muted">
-                  「预占」是每次模型调用前冻结的请求级成本上限；调用失败但可能已计费、用量缺失或滞留过久的预占转入待对账，
-                  占额保留到周期结束，需人工核对。<InfoTip text="占额总额按「预占单」去重统计：一笔预占会同时在用户与租户、日与月维度落多条账本行，去重后才能与下方明细的单据金额对上。" />
+                  「预占」是每次模型调用前冻结的请求级成本上限。流式用量缺失的调用已按本地估算直接结算（estimated，不入队列）；
+                  只有无法估算的调用（失败可能已计费、结算落库失败、滞留超龄）才转入待对账，占额保留到周期结束。
+                  对账看比率不看单笔：未决率超阈值时由对账日报任务出告警，下方明细仅作下钻核对。<InfoTip text="占额总额按「预占单」去重统计：一笔预占会同时在用户与租户、日与月维度落多条账本行，去重后才能与下方明细的单据金额对上。" />
                 </div>
                 <div className="px-4 py-3 text-xs text-text-secondary">
                   队列 {reconciliation.data?.summary.pending_count ?? 0} 笔 · 占额 {formatCny(reconciliation.data?.summary.held_cny)} · 最老滞留 {reconciliation.data?.summary.oldest_age_hours ?? 0} 小时
                   {reconciliation.data?.summary.stale_unswept_count ? ` · 超龄未回收 ${reconciliation.data.summary.stale_unswept_count} 笔` : ''}
                   <span className="ml-2 text-[10px] text-text-muted">回收阈值 {reconciliation.data?.summary.stale_threshold_hours ?? 6} 小时；打开本页即触发幂等回收</span>
                 </div>
+                <div className="border-t border-slate-50 px-4 py-3 text-xs text-text-secondary">
+                  <span className={((reconciliation.data?.summary.needs_review_ratio_window ?? 0) > 0.02) ? 'font-medium text-amber-700' : ''}>
+                    未决率（{reconciliation.data?.summary.window_hours ?? 24}h）{((reconciliation.data?.summary.needs_review_ratio_window ?? 0) * 100).toFixed(2)}%
+                  </span>
+                  {' '}（{reconciliation.data?.summary.needs_review_window ?? 0}/{reconciliation.data?.summary.reservations_total_window ?? 0} 笔预占）
+                  {' · '}估算结算 {reconciliation.data?.report?.usage?.estimated_calls ?? 0} 笔（占全部调用 {((reconciliation.data?.report?.derived?.estimated_share ?? 0) * 100).toFixed(2)}%）
+                  <span className="ml-2 text-[10px] text-text-muted">未决率持续偏高 = 结算链路或供应商链路疑似系统性异常，按下方原因分布排查</span>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">预占 ID<InfoTip text="一笔调用产生一个预占单；单内可能在用户/租户、日/月维度有多条账本行" /></th><th className="px-4 py-3">request / 用户 / 租户</th><th className="px-4 py-3 text-right">占额<InfoTip text="该预占单冻结的请求级成本上限（单据金额）" /></th><th className="px-4 py-3">原因<InfoTip text="stream_usage_missing：流式响应缺用量，可能已计费；call_failed_possibly_billed：调用失败但供应商可能已扣费；stale_sweep：滞留超龄自动回收" /></th><th className="px-4 py-3">发生时间</th></tr></thead>
+                    <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">预占 ID<InfoTip text="一笔调用产生一个预占单；单内可能在用户/租户、日/月维度有多条账本行" /></th><th className="px-4 py-3">request / 用户 / 租户</th><th className="px-4 py-3 text-right">占额<InfoTip text="该预占单冻结的请求级成本上限（单据金额）" /></th><th className="px-4 py-3">原因<InfoTip text="call_failed_possibly_billed / stream_failed_possibly_billed：调用失败但供应商可能已扣费（对照供应商账单核对）；settle_failed：结算落库失败（用量已在 trace/llm_usage，可按 request_id 下钻）；stale_sweep：滞留超龄自动回收。stream_usage_missing 已改为本地估算结算，正常不再入队" /></th><th className="px-4 py-3">发生时间</th></tr></thead>
                     <tbody>
                       {(reconciliation.data?.items ?? []).map((item) => (
                         <tr key={item.reservation_id} className="border-b border-slate-50">

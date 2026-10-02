@@ -1257,6 +1257,24 @@ class PostgresQuotaStore:
                         (cutoff,),
                     )
                     stale_unswept = cur.fetchone()[0]
+                    # 窗口未决率（2026-10-02 企业口径：监控比率不监控单笔）——
+                    # 窗口内预占单里 needs_review 的占比，突刺说明结算链路
+                    # 或供应商链路出系统性问题；明细队列只是下钻材料。
+                    from backend.config.budget import (
+                        BUDGET_RECONCILE_WINDOW_HOURS,
+                    )
+                    cur.execute(
+                        f"""SELECT COUNT(DISTINCT id),
+                                   COUNT(DISTINCT CASE WHEN status = 'needs_review'
+                                                       THEN id END)
+                            FROM (SELECT DISTINCT ON (id) id, status
+                                  FROM {self._reservations}
+                                  WHERE created_at >= %s
+                                  ORDER BY id, created_at) w""",
+                        (datetime.now(timezone.utc)
+                         - timedelta(hours=float(BUDGET_RECONCILE_WINDOW_HOURS)),),
+                    )
+                    window_total, window_reviewed = cur.fetchone()
             oldest_age_hours = (
                 round(
                     (datetime.now(timezone.utc) - oldest).total_seconds() / 3600, 1,
@@ -1269,6 +1287,14 @@ class PostgresQuotaStore:
                 "by_reason": by_reason,
                 "stale_unswept_count": int(stale_unswept or 0),
                 "stale_threshold_hours": float(BUDGET_STALE_RESERVATION_HOURS),
+                # 窗口未决率（needs_review / 全部预占单）
+                "window_hours": float(BUDGET_RECONCILE_WINDOW_HOURS),
+                "reservations_total_window": int(window_total or 0),
+                "needs_review_window": int(window_reviewed or 0),
+                "needs_review_ratio_window": (
+                    round(int(window_reviewed or 0) / int(window_total), 4)
+                    if window_total else 0.0
+                ),
             }
         except Exception as exc:
             raise QuotaConfigurationError("待对账汇总读取失败") from exc

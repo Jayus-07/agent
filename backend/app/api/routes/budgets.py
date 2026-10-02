@@ -189,15 +189,27 @@ async def get_budget_reconciliation(
     惰性触发滞留回收（sweep 幂等，只有 status='reserved' 且超龄的行会被
     处理），保证页面打开时队列是新鲜的；回收本身只转状态/释放旧周期占额，
     不伪造结算金额。
+    2026-10-02 企业口径：附对账日报段（usage 侧 cost_status 分布 + 派生
+    比率）——队列是下钻材料，人只看聚合比率。
     """
     del operator
     store = _store()
     try:
         sweep = store.sweep_stale_reservations()
+        summary = _json_value(store.reconciliation_summary())
+        from backend.infra.llm.reconciliation_report import (
+            build_reconciliation_report,
+        )
+
+        report = build_reconciliation_report(quota_summary=summary)
         return {
-            "summary": _json_value(store.reconciliation_summary()),
+            "summary": summary,
             "items": _json_value(store.list_pending_review(limit)),
             "sweep": sweep,
+            "report": {
+                "usage": report.get("usage") or {},
+                "derived": report.get("derived") or {},
+            },
         }
     except QuotaConfigurationError as exc:
         raise HTTPException(503, "待对账队列暂不可用") from exc

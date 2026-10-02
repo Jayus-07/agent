@@ -42,9 +42,17 @@ export interface BudgetReconciliation {
   summary: {
     pending_count: number; held_cny: string; oldest_age_hours: number;
     by_reason: Record<string, number>; stale_unswept_count: number; stale_threshold_hours: number;
+    // 窗口未决率（2026-10-02 企业口径：监控比率不监控单笔）
+    window_hours: number; reservations_total_window: number; needs_review_window: number;
+    needs_review_ratio_window: number;
   };
   items: BudgetReconciliationItem[];
   sweep: { reviewed: number; ledger_released: number };
+  // 对账日报段：usage 侧 cost_status 分布（estimated=估算结算）+ 派生比率
+  report: {
+    usage: { window_hours: number; total_calls: number; by_status: Record<string, number>; estimated_calls: number };
+    derived: { estimated_share: number };
+  };
 }
 
 // 金额为记账本位币 CNY（2026-10-01 起，后端定价出口统一折算）

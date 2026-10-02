@@ -291,3 +291,39 @@ def test_pg_budget_status_limit_reflects_fresh_policy(_pg_cleanup):
     status_after = store.get_budget_status(
         user_id=f"{token}-u1", tenant_id=token)
     assert Decimal(status_after["daily"]["limit"]) == Decimal("2.500000")
+
+
+def test_pg_summary_window_ratio_counts_new_reservations(_pg_cleanup):
+    """窗口未决率按预占单去重计数：新建 1 笔（含 4 条物理行扇出）必须
+    使 reservations_total_window 恰好 +1（2026-10-02 企业口径字段）。"""
+    token = _pg_cleanup
+    _insert_policy(token, "1.000000")
+    store = PostgresQuotaStore()
+    before = store.reconciliation_summary()
+    reservation = store.reserve(
+        user_id=f"{token}-u1", tenant_id=token, amount_cny=Decimal("0.10"),
+        request_id="recon-window",
+    )
+    store.settle(reservation, Decimal("0.05"))
+    after = store.reconciliation_summary()
+    assert after["window_hours"] == before["window_hours"] > 0
+    assert (after["reservations_total_window"]
+            - before["reservations_total_window"]) == 1
+    # 结算过的单不进未决数
+    assert (after["needs_review_window"]
+            - before["needs_review_window"]) == 0
+    assert 0.0 <= after["needs_review_ratio_window"] <= 1.0
+
+    # 同一笔转未决：窗口未决数 +1，比率随之抬升
+    reservation2 = store.reserve(
+        user_id=f"{token}-u1", tenant_id=token, amount_cny=Decimal("0.10"),
+        request_id="recon-window-2",
+    )
+    store.mark_needs_review(reservation2, "settle_failed")
+    reviewed = store.reconciliation_summary()
+    assert (reviewed["needs_review_window"]
+            - before["needs_review_window"]) == 1
+    expected = round(
+        reviewed["needs_review_window"] / reviewed["reservations_total_window"], 4,
+    )
+    assert reviewed["needs_review_ratio_window"] == expected

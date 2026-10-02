@@ -49,6 +49,8 @@ ALERT_CODES: dict[str, tuple[str, str]] = {
     "LLM_CIRCUIT_OPEN":       ("error", "LLM 熔断器开路，请求快速失败"),
     "LLM_FALLBACK_USED":      ("warn",  "LLM 故障，已切换备用模型"),
     "LLM_DEGRADED_ANSWER":    ("error", "LLM 主/备均失败，返回降级拒答话术"),
+    # 预算对账日报（2026-10-02 企业口径：监控比率不监控单笔）
+    "BUDGET_NEEDS_REVIEW_RATIO_HIGH": ("warn", "预算未决率超阈值：结算链路或供应商链路疑似系统性异常"),
 }
 
 _LEVEL_ORDER = {"info": 0, "warn": 1, "error": 2}

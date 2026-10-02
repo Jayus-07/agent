@@ -33,6 +33,22 @@ BUDGET_STALE_RESERVATION_HOURS = float(
     os.getenv("BUDGET_STALE_RESERVATION_HOURS", "6")
 )
 
+# 对账日报告警阈值（2026-10-02 企业口径：人只处理聚合异常，不逐笔核对）：
+# 窗口内 needs_review 预占占比超过 ALERT_RATIO 且样本量足时出告警
+#（样本下限防止小流量期 1/1=100% 的假突刺）
+BUDGET_RECONCILE_WINDOW_HOURS = float(
+    os.getenv("BUDGET_RECONCILE_WINDOW_HOURS", "24")
+)
+_raw_reconcile_ratio = os.getenv("BUDGET_RECONCILE_ALERT_RATIO", "0.02")
+BUDGET_RECONCILE_ALERT_RATIO = float(_raw_reconcile_ratio)
+if not 0 < BUDGET_RECONCILE_ALERT_RATIO <= 1:
+    raise ValueError(
+        f"BUDGET_RECONCILE_ALERT_RATIO 必须在 (0, 1] 内: {_raw_reconcile_ratio!r}"
+    )
+BUDGET_RECONCILE_ALERT_MIN_SAMPLES = int(
+    os.getenv("BUDGET_RECONCILE_ALERT_MIN_SAMPLES", "20")
+)
+
 
 def to_base_currency(amount: Decimal | int | float | str, currency: str) -> Decimal:
     """把任意币种金额折算为记账本位币；未登记汇率的币种快速失败。"""

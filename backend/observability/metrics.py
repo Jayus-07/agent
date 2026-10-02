@@ -650,6 +650,10 @@ llm_usage_missing_total = Counter(
     "llm_usage_missing_total",
     "LLM 调用后 token 用量采集失败的次数",
 )
+llm_usage_estimated_total = Counter(
+    "llm_usage_estimated_total",
+    "usage 缺失但已按本地估算结算的 LLM 调用次数（2026-10-02 估算兜底）",
+)
 
 # ── Tool 失败治理指标（core/tool_runtime，2026-09-22）──
 # Label 基数控制：只含 tool / domain / status（status=ToolStatus 值），
@@ -1566,6 +1570,7 @@ __all__ = [
     "trace_span_leak_total",
     "trace_uncovered_ratio",
     "llm_usage_missing_total",
+    "llm_usage_estimated_total",
     # Tool 失败治理指标（2026-09-22）
     "agent_tool_calls_total",
     "agent_tool_timeout_total",

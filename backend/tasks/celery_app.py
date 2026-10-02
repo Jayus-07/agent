@@ -43,6 +43,7 @@ celery_app = Celery(
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
              "backend.tasks.side_effect_probe_tasks",  # Step6：副作用幂等实机探针（env 门禁）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
+             "backend.tasks.budget_reconciliation_tasks",  # 治理：预算对账日报（beat）
              "backend.tasks.memory_maintenance_tasks",  # STOP C：Memory 衰减生命周期（beat）
              "backend.tasks.travel_booking_tasks",  # STOP L：Booking 恢复扫描（beat）
              "backend.tasks.prompt_eval_tasks",  # Prompt 发布评测 GitHub 轮询
@@ -180,6 +181,13 @@ celery_app.conf.update(
             "task": "model.health_scan",
             "schedule": float(os.getenv("MODEL_HEALTH_SCAN_INTERVAL", "300")),
             "options": {"queue": beat_queue("model.health_scan")},
+        },
+        # 对账日报（2026-10-02）：每日 UTC 21:15（北京 05:15）聚合窗口
+        # 未决率与估算结算占比，超阈值出告警。幂等只读聚合 + 告警冷却。
+        "budget-reconciliation-check": {
+            "task": "budget.reconciliation_check",
+            "schedule": crontab(hour=21, minute=15),
+            "options": {"queue": beat_queue("budget.reconciliation_check")},
         },
     },
 )

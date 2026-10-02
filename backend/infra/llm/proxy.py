@@ -1383,6 +1383,164 @@ def record_llm_result(
     """
     _record_tokens(result, duration_ms=duration_ms, model_name=model_name)
 
+
+def _settle_estimated_stream_usage(
+    meter, call_args, duration_ms: float, mode: str,
+) -> bool:
+    """流式 usage 缺失时按本地估算结算（2026-10-02 企业口径）。
+
+    能估算（有输出文本或可识别的 prompt 入参）→ 按 estimated 结算并落
+    llm_usage（binding_source='estimated'），预占正常结算，不进待对账；
+    无法估算（零输出且 prompt 不可识别）→ 返回 False，调用方维持原
+    needs_review 路径。全程软失败：任何异常都返回 False 不反噬主链路。
+    """
+    try:
+        from backend.config.llm import LLM_USAGE_ESTIMATION_ENABLED
+        if not LLM_USAGE_ESTIMATION_ENABLED:
+            return False
+        from backend.infra.llm.usage_estimator import (
+            StreamTextMeter, estimate_prompt_tokens,
+        )
+        if not isinstance(meter, StreamTextMeter):
+            return False
+        prompt_tokens = estimate_prompt_tokens(call_args[0] if call_args else None)
+        completion_tokens = meter.completion_tokens
+        if prompt_tokens <= 0 and completion_tokens <= 0:
+            return False
+        total_tokens = prompt_tokens + completion_tokens
+
+        # 模型归属与 _record_tokens 同口径：调用时解析的 ctx 最权威
+        ctx = get_current_resolved_model()
+        canonical = canonical_model_id(ctx.model_id) if ctx is not None else ""
+        model = canonical or LLM_MODEL
+        if ctx is not None and ctx.model_id == model:
+            provider_resolved = ctx.provider
+        else:
+            provider_resolved = _get_provider_for(model)
+
+        from backend.infra.llm.pricing import (
+            COST_STATUS_ESTIMATED, calculate_llm_cost_with_status,
+        )
+        cost_decimal, _pricing_status, _currency, cost_breakdown = (
+            calculate_llm_cost_with_status(model, {
+                "input": prompt_tokens, "output": completion_tokens,
+                "cache_read": 0, "cache_write": 0, "reasoning": 0,
+                "tool_call": 0,
+            })
+        )
+
+        # 预算结算：估算值视为本次调用的实际用量（保守性由 reserved 上限保证）
+        from backend.infra.llm.budget import (
+            current_call_decision, record_model_usage,
+        )
+        record_model_usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost=cost_decimal,
+        )
+
+        _last_tokens_var.set({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        })
+        cost = float(cost_decimal)
+        _last_call_meta_var.set({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "billable_input_tokens": prompt_tokens,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+            "finish_reason": "estimated_no_usage",
+            "cost_usd": cost,
+            "input_cost": cost_breakdown.get("input_cost", 0.0),
+            "cached_input_cost": 0.0,
+            "output_cost": cost_breakdown.get("output_cost", 0.0),
+            "input_unit_price": cost_breakdown.get("input_unit_price"),
+            "output_unit_price": cost_breakdown.get("output_unit_price"),
+            "cache_input_unit_price": None,
+            "cost_status": COST_STATUS_ESTIMATED,
+            "currency": _currency,
+            "model": model,
+            "canonical_model_id": model,
+            "upstream_model_id": ctx.model_id if ctx is not None else "",
+            "requested_model": "",
+            "provider": provider_resolved,
+            "configured_model_id": ctx.model_id if ctx is not None else "",
+            "model_role": ctx.role if ctx is not None else "",
+            "binding_source": "estimated",
+            "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
+        })
+
+        # llm_usage 明细落库（estimated 行：聚合口径与供应商 diff 的锚点）
+        try:
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution, get_llm_usage_store,
+            )
+            attribution = current_usage_attribution()
+            get_llm_usage_store().record({
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+                             + f".{int(time.time() % 1 * 1000):03d}Z",
+                "trace_id": attribution["trace_id"],
+                "request_id": attribution["request_id"],
+                "session_id": attribution["session_id"],
+                "user_id": attribution["user_id"],
+                "tenant_id": attribution["tenant_id"],
+                "component": _usage_component(),
+                "model": model,
+                "provider": provider_resolved,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "billable_input_tokens": prompt_tokens,
+                "cached_tokens": 0, "reasoning_tokens": 0,
+                "cost_usd": cost,
+                "input_cost": cost_breakdown.get("input_cost", 0.0),
+                "cached_input_cost": 0.0,
+                "output_cost": cost_breakdown.get("output_cost", 0.0),
+                "cost_status": COST_STATUS_ESTIMATED,
+                "currency": _currency,
+                "requested_model": "",
+                "upstream_model_id": ctx.model_id if ctx is not None else "",
+                "binding_source": "estimated",
+                "input_unit_price": cost_breakdown.get("input_unit_price"),
+                "output_unit_price": cost_breakdown.get("output_unit_price"),
+                "cache_input_unit_price": None,
+                "finish_reason": "estimated_no_usage",
+                "decision": current_call_decision(),
+                "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
+                "run_id": attribution["run_id"],
+                "step_id": attribution["step_id"],
+                "role": attribution["role"],
+                "stage": attribution["stage"],
+                "skill_id": attribution["skill_id"],
+                "tool_id": attribution["tool_id"],
+                "agent_domain": attribution["agent_domain"],
+            })
+        except Exception:
+            pass  # 用量明细软失败，预算结算已发生
+
+        try:
+            from backend.observability.metrics import (
+                llm_usage_estimated_total, llm_usage_missing_total,
+            )
+            llm_usage_missing_total.inc()
+            llm_usage_estimated_total.inc()
+        except Exception:
+            pass
+        logger.info(
+            "[LLM:proxy] %s 流式缺 usage，已按本地估算结算 "
+            "model=%s prompt~%s completion~%s tokens cost=%s",
+            mode, model, prompt_tokens, completion_tokens, cost,
+        )
+        return True
+    except Exception:
+        logger.debug("[LLM:proxy] 估算结算失败，回退待对账路径", exc_info=True)
+        return False
+
+
 def _wrap_result(result):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
     if isinstance(result, str):
@@ -1922,11 +2080,15 @@ class _LLMProxy:
                     )
                     _t0 = time.monotonic()
                     usage_chunk = None
+                    from backend.infra.llm.usage_estimator import StreamTextMeter
+                    meter = StreamTextMeter()
                     try:
                         async for chunk in attr(*args, **kwargs):
                             # 携带 usage_metadata 的 chunk（通常为最后一个）留作用量记录
                             if getattr(chunk, "usage_metadata", None):
                                 usage_chunk = chunk
+                            # 估算兜底计量：统计原始 chunk 文本（_wrap_result 会剥 think）
+                            meter.add(extract_chunk_text(chunk))
                             yield _wrap_result(chunk)
                     except Exception as e:
                         # 超长输入不重试不降级：稳定错误码透传（astream 无韧性链，
@@ -1946,13 +2108,16 @@ class _LLMProxy:
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                         else:
-                            # C13：provider 未回 usage chunk / 客户端提前中断 →
-                            # 显式打点，不再静默丢量（生产主路径是流式，
-                            # 漏记会系统性低估成本与预算结算）。
-                            # 2026-10-01 P0 修复：缺 usage ≠ 没花钱——转待对账
-                            # （占额保留到周期结束），不再按零成本释放。
-                            review_model_reservation("stream_usage_missing")
-                            _notify_stream_usage_missing("astream")
+                            # C13：provider 未回 usage chunk / 客户端提前中断。
+                            # 2026-10-01 P0 修复：缺 usage ≠ 没花钱。
+                            # 2026-10-02 估算兜底：能估算的按 estimated 结算
+                            # （不进待对账）；零输出且 prompt 不可识别才转待对账。
+                            if not _settle_estimated_stream_usage(
+                                meter, args, (time.monotonic() - _t0) * 1000,
+                                "astream",
+                            ):
+                                review_model_reservation("stream_usage_missing")
+                                _notify_stream_usage_missing("astream")
                 return astream_wrapper
             # sync generator（stream）：修好此前走通用 wrapper 的坏路径
             # （generator 未消费就被 _record_tokens，token 清空），
@@ -1979,6 +2144,8 @@ class _LLMProxy:
                     _t0 = time.monotonic()
                     usage_chunk = None
                     yielded_content = False
+                    from backend.infra.llm.usage_estimator import StreamTextMeter
+                    meter = StreamTextMeter()
                     try:
                         for attempt in range(LLM_MAX_RETRIES + 1):
                             reserve_model_call(
@@ -1992,6 +2159,7 @@ class _LLMProxy:
                                     wrapped = _wrap_result(chunk)
                                     if extract_chunk_text(wrapped):
                                         yielded_content = True
+                                    meter.add(extract_chunk_text(chunk))
                                     yield wrapped
                                 break  # 正常结束
                             except Exception as e:
@@ -2026,10 +2194,15 @@ class _LLMProxy:
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                         else:
-                            # 缺 usage ≠ 没花钱（2026-10-01 P0 修复）：
-                            # 转待对账（占额保留到周期结束），不再按零成本释放
-                            review_model_reservation("stream_usage_missing")
-                            _notify_stream_usage_missing("stream")
+                            # 缺 usage ≠ 没花钱（2026-10-01 P0 修复）。
+                            # 2026-10-02 估算兜底：能估算的按 estimated 结算，
+                            # 零输出且 prompt 不可识别才转待对账。
+                            if not _settle_estimated_stream_usage(
+                                meter, args, (time.monotonic() - _t0) * 1000,
+                                "stream",
+                            ):
+                                review_model_reservation("stream_usage_missing")
+                                _notify_stream_usage_missing("stream")
                 return stream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
             # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。

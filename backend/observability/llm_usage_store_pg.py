@@ -398,6 +398,39 @@ class PostgresLLMUsageStore(LLMUsageStore):
             logger.warning(f"[LLMUsageStore-PG] list_calls 失败: {e}")
             return {"calls": [], "total": 0}
 
+    def cost_status_summary(self, hours: float = 24) -> dict:
+        """按 cost_status 聚合窗口内的调用分布（对账看板：estimated 占比等）。
+
+        ts 为 ISO 字符串（字典序可比），窗口起点现算，支持小时级窗口；
+        软失败：查询异常返回空分布，不影响调用方。
+        """
+        try:
+            import time as _time
+
+            cutoff = _time.strftime(
+                "%Y-%m-%dT%H:%M:%S",
+                _time.gmtime(_time.time() - float(hours) * 3600),
+            )
+            with self._lock, self._conn() as conn:
+                rows = self._exec(
+                    conn,
+                    f"""SELECT COALESCE(cost_status, ''), COUNT(*)
+                        FROM {self._table} WHERE ts >= %s
+                        GROUP BY 1""",
+                    (cutoff,),
+                ).fetchall()
+            by_status = {r[0] or "missing_status": int(r[1]) for r in rows}
+            return {
+                "window_hours": float(hours),
+                "total_calls": sum(by_status.values()),
+                "by_status": by_status,
+                "estimated_calls": by_status.get("estimated", 0),
+            }
+        except Exception as e:
+            logger.warning(f"[LLMUsageStore-PG] cost_status_summary 失败: {e}")
+            return {"window_hours": float(hours), "total_calls": 0,
+                    "by_status": {}, "estimated_calls": 0}
+
     def dashboard(self, days: int = 7, component: str | None = None,
                   period: str = "day") -> dict:
         """period="month"（M11 尾项/D11）：趋势按自然月分桶（substr(ts,1,7)），
