@@ -1,5 +1,4 @@
 'use client'
-
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, RefreshCw, Rocket, X } from 'lucide-react'
@@ -76,10 +75,8 @@ export default function FeedbackCandidatesPanel() {
     </RoleGate>
   )
 }
-
 function CandidateCard({ item, busy, onReview, onPromote }: { item: FeedbackCandidate; busy: boolean; onReview: (item: FeedbackCandidate, decision: 'approve' | 'reject') => void; onPromote: (item: FeedbackCandidate) => void }) {
   const [expanded, setExpanded] = useState(false)
   const statusColor = item.status === 'promoted' ? 'bg-emerald-50 text-emerald-700' : item.status === 'approved' ? 'bg-blue-50 text-blue-700' : item.status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'
   return <article className="rounded-xl border border-black/5 bg-white shadow-card"><button onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left"><ChevronDown size={14} className={`text-text-muted transition-transform ${expanded ? 'rotate-180' : ''}`} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="font-mono text-xs font-medium text-text-primary">{item.candidate_id}</span><span className={`rounded-full px-2 py-1 text-[10px] ${statusColor}`}>{item.status}</span><span className="text-[10px] text-text-muted">{item.module}</span></div><div className="mt-1 truncate text-xs text-text-secondary">Trace: {item.trace_id}</div></div><time className="text-[10px] text-text-muted">{new Date(item.created_at).toLocaleString('zh-CN')}</time></button>{expanded && <div className="border-t border-slate-100 px-4 py-4"><div className="grid gap-3 text-xs md:grid-cols-2"><div><div className="mb-1 text-[10px] text-text-muted">纠错内容</div><div className="rounded-lg bg-slate-50 p-3 whitespace-pre-wrap text-text-secondary">{item.correction_text || '未填写'}</div></div><div><div className="mb-1 text-[10px] text-text-muted">期望答案</div><div className="rounded-lg bg-slate-50 p-3 whitespace-pre-wrap text-text-secondary">{item.expected_answer || '未填写'}</div></div></div><div className="mt-4 flex justify-end gap-2">{item.status === 'pending' && <><button disabled={busy} onClick={() => onReview(item, 'reject')} className="flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700 disabled:opacity-50"><X size={13} />拒绝</button><button disabled={busy} onClick={() => onReview(item, 'approve')} className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"><Check size={13} />批准</button></>}{canPromoteCandidate(item.status) && <button disabled={busy} onClick={() => onPromote(item)} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"><Rocket size={13} />提升到评测集</button>}</div></div>}</article>
 }
-
