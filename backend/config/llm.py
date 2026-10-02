@@ -228,6 +228,15 @@ FC_TOOL_SELECTION_ALLOWLIST = [
     s.strip() for s in os.getenv("FC_TOOL_SELECTION_ALLOWLIST", "").split(",")
     if s.strip()
 ]
+# TD-06（2026-10-02）：selector LLM 故障/超预算时的首候选兜底门限。
+# 实测多候选 + selector 12.4s 超预算 → clarify → 整问 25.8s 失败，而路由器
+# 自身分数分布是可决策的（top 0.425 vs 次选 0.30）。兜底仅在「分数既有
+# 高度又有区分度」时执行首候选：top ≥ floor 且 (top - second) ≥ margin，
+# 否则维持 clarify（模糊问题宁问不猜）。0 = 关闭兜底回旧行为。
+TOOL_SELECTOR_TOP_CANDIDATE_FLOOR = float(
+    os.getenv("TOOL_SELECTOR_TOP_CANDIDATE_FLOOR", "0.4"))
+TOOL_SELECTOR_TOP_CANDIDATE_MARGIN = float(
+    os.getenv("TOOL_SELECTOR_TOP_CANDIDATE_MARGIN", "0.1"))
 # 门控阈值（评测校准后可调）：fast set 高置信直通阈值 / FC 候选截断上限
 TOOL_SELECTOR_FAST_PATH_SCORE = float(
     os.getenv("TOOL_SELECTOR_FAST_PATH_SCORE", "0.85"))
@@ -366,3 +375,13 @@ LLM_REQUEST_MAX_COST = float(
 LLM_REQUEST_MAX_COST_USD = LLM_REQUEST_MAX_COST  # 旧名兼容别名
 LLM_REQUEST_MAX_RETRIES = int(os.getenv("LLM_REQUEST_MAX_RETRIES", "2"))
 LLM_REQUEST_MAX_FALLBACKS = int(os.getenv("LLM_REQUEST_MAX_FALLBACKS", "1"))
+
+# 流式 usage 缺失时的本地估算兜底（2026-10-02 企业口径：估算消除未知）：
+# 开启后缺 usage 尾帧的流式调用按字符统计估算 token 直接结算
+# （cost_status='estimated'，llm_usage 落 binding_source='estimated'），
+# 不再把预占推进待对账人工队列；关闭则维持原 needs_review 路径。
+# 估算是近似值（见 infra/llm/usage_estimator.py 的换算率说明），
+# 聚合精度靠对账日报与供应商报表 diff 监控系统性漂移。
+LLM_USAGE_ESTIMATION_ENABLED = os.getenv(
+    "LLM_USAGE_ESTIMATION_ENABLED", "1"
+).strip().lower() in ("1", "true", "yes")

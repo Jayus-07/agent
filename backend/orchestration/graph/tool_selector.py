@@ -127,6 +127,74 @@ def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
     }
 
 
+def _router_top_candidate_fallback(state: dict, reason: str) -> dict | None:
+    """selector 基础设施故障（LLM 超时/预算耗尽）时的首候选兜底（TD-06）。
+
+    路由器自身分数分布可决策时（top ≥ floor 且对次选领先 ≥ margin），
+    直接采纳路由首候选执行——selector 挂掉不应否决路由器的确定性证据，
+    也不应把整问打成澄清失败。分数模糊（不满足双阈值）返回 None，
+    调用方维持 clarify：模糊问题宁问不猜。
+
+    返回与 FC 成功同构的状态（source=router_top_candidate 可溯源）；
+    floor=0 时返回 None（配置关闭兜底，回旧行为）。
+    """
+    from backend.config import (
+        TOOL_SELECTOR_TOP_CANDIDATE_FLOOR,
+        TOOL_SELECTOR_TOP_CANDIDATE_MARGIN,
+    )
+    from backend.observability.metrics import record_tool_selection
+
+    floor = TOOL_SELECTOR_TOP_CANDIDATE_FLOOR
+    if floor <= 0:
+        return None
+    decision = state.get("route_decision") or {}
+    scored = [
+        (str(c.get("name") or ""), float(c.get("score") or 0))
+        for c in (decision.get("candidates") or [])
+        if isinstance(c, dict) and c.get("name")
+    ]
+    if not scored:
+        return None
+    top_cap, top_score = scored[0]
+    margin = (top_score - scored[1][1]) if len(scored) > 1 else top_score
+    if top_score < floor or margin < TOOL_SELECTOR_TOP_CANDIDATE_MARGIN:
+        return None
+    query = state.get("query") or state.get("question") or ""
+    params = {"question": query}
+    new_decision = {
+        **decision,
+        "candidates": [{"name": top_cap, "score": top_score}] + [
+            {"name": n, "score": s} for n, s in scored[1:]
+        ],
+    }
+    _record("router_top", reason, capability=top_cap)
+    try:
+        record_tool_selection("router_top_candidate", reason)
+    except Exception:
+        pass
+    logger.warning(
+        "[ToolSelector] %s → 首候选兜底生效: %s (score=%.2f, margin=%.2f) "
+        "——selector 基础设施故障不否决路由器确定性证据",
+        reason, top_cap, top_score, margin,
+    )
+    return {
+        **state,
+        "route_decision": new_decision,
+        "resolved_params": params,
+        "selected_tool": top_cap,
+        "tool_arguments": params,
+        "tool_route_mode": state.get("tool_route_mode") or "llm_selection",
+        "_tool_selection": {
+            "source": "router_top_candidate",
+            "reason": reason,
+            "capability": top_cap,
+            "params": params,
+            "top_score": round(top_score, 3),
+            "margin": round(margin, 3),
+        },
+    }
+
+
 def _build_user_prompt(query: str, valid_caps: list[str],
                        decision: dict, feedback: str = "") -> str:
     lines = [f"用户问题: {query}", "", "候选工具:"]
@@ -327,6 +395,9 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             ),
         )
         if len(valid_caps) > 1:
+            fallback = _router_top_candidate_fallback(state, "selector_budget_exhausted")
+            if fallback is not None:
+                return fallback
             return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
         return _selector_degrade(state, "selector_budget_exhausted")
 
@@ -350,6 +421,9 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                     ),
                 )
                 if len(valid_caps) > 1:
+                    fallback = _router_top_candidate_fallback(state, "selector_budget_exhausted")
+                    if fallback is not None:
+                        return fallback
                     return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
                 return _selector_degrade(state, "selector_budget_exhausted")
             # 单次尝试超时同时被角色策略与 selector 剩余预算封顶
@@ -371,10 +445,14 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             if raw is not None:
                 break
         if raw is None:
-            # 多候选时不能因 FC 故障盲执行首项；单候选保留兼容路径。
+            # 多候选时不能因 FC 故障盲执行首项；路由分数可决策时走首候选
+            # 兜底（TD-06），仍模糊才 clarify。单候选保留兼容路径。
             logger.warning("[ToolSelector] LLM 超时/异常")
             _selector_deadline_log(deadline, "selector_timeout", "llm_failed")
             if len(valid_caps) > 1:
+                fallback = _router_top_candidate_fallback(state, "llm_failed")
+                if fallback is not None:
+                    return fallback
                 return _clarify_selection(state, "llm_failed", valid_caps)
             return _passthrough(state, "llm_failed")
 
