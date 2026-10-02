@@ -419,8 +419,8 @@ def _build_invoke_config(conversation_id: str, tenant_id: str = "",
     from backend.config.travel import TRAVEL_GRAPH_RECURSION_LIMIT
 
     namespace = "travel"
-    if tenant_id:
-        namespace = f"travel:{tenant_id}:{user_id or '-'}"
+    if tenant_id or user_id:
+        namespace = f"travel:{tenant_id or '-'}:{user_id or '-'}"
     return {
         "recursion_limit": TRAVEL_GRAPH_RECURSION_LIMIT,
         "configurable": {

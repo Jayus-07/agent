@@ -22,6 +22,7 @@ call_sync 对 status<0 直接 raise（infra 层最小改动，所有消费方受
 from __future__ import annotations
 
 import threading
+import contextvars
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeout
@@ -36,6 +37,7 @@ T = TypeVar("T")
 # 足够；不借用 retrieval_pool（RAG 语义与池容量都不该被外部调用挤占）。
 _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
+_provider_slots = threading.BoundedSemaphore(4)
 
 
 def _provider_pool() -> ThreadPoolExecutor:
@@ -76,26 +78,37 @@ class _SingleFlight:
     """per-key 去重闸：同 key 并发调用只执行一个 loader，其余等结果。"""
 
     def __init__(self) -> None:
-        self._locks: dict[str, threading.Lock] = {}
+        self._locks: dict[str, tuple[threading.Lock, int]] = {}
         self._guard = threading.Lock()
 
     def _lock_for(self, key: str) -> threading.Lock:
         with self._guard:
-            lock = self._locks.get(key)
-            if lock is None:
-                lock = threading.Lock()
-                self._locks[key] = lock
+            lock, users = self._locks.get(key, (threading.Lock(), 0))
+            self._locks[key] = (lock, users + 1)
             return lock
 
     def run(self, key: str, loader: Callable[[], T]) -> tuple[T, bool]:
         """返回 (结果, 是否本调用执行了 loader)。同 key 并发时后来者等待并
         复用 leader 的执行时机（各自再查一次缓存——由调用方组织）。"""
         lock = self._lock_for(key)
-        elected = lock.acquire(blocking=True)
+        from backend.travel.request_runtime import check_run, remaining_budget
+
+        elected = False
         try:
+            elected = lock.acquire(timeout=remaining_budget(8.0))
+            if not elected:
+                raise TimeoutError("single-flight wait exceeded budget")
+            check_run()
             return loader(), elected
         finally:
-            lock.release()
+            if elected:
+                lock.release()
+            with self._guard:
+                _, users = self._locks[key]
+                if users == 1:
+                    del self._locks[key]
+                else:
+                    self._locks[key] = (lock, users - 1)
 
 
 _single_flight = _SingleFlight()
@@ -112,8 +125,22 @@ def call_with_budget(operation: str, fn: Callable[[], T]) -> T:
     超时抛 TimeoutError（由调用方映射为 ProviderStatus.TIMEOUT 并降级）。
     用专用小线程池执行（懒加载单例）。
     """
-    budget = resolve_budget(operation)
-    future = _provider_pool().submit(fn)
+    from backend.travel.request_runtime import child_execution, remaining_budget
+
+    budget = remaining_budget(resolve_budget(operation))
+    if not _provider_slots.acquire(blocking=False):
+        raise TimeoutError("provider execution capacity exhausted")
+    context = contextvars.copy_context()
+    def run():
+        with child_execution():
+            return fn()
+    try:
+        future = _provider_pool().submit(context.run, run)
+    except BaseException:
+        _provider_slots.release()
+        raise
+    # 不在超时出口释放：已运行的同步调用不可强杀。
+    future.add_done_callback(lambda _future: _provider_slots.release())
     try:
         return future.result(timeout=budget)
     except _FutureTimeout:

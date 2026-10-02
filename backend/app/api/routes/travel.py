@@ -7,7 +7,7 @@
   3. 反馈/偏好/推荐是轻量 REST 语义，不适合塞进对话流。
 
 高并发考量：
-  - /plan 同步 def，FastAPI 自动进线程池执行；域图 invoke 复用
+  - /plan 与 /plan/stream 共用有界执行器，不在事件循环执行同步图；域图复用
     get_travel_graph() 单例（进程内共享，图编译只发生一次）；
   - checkpointer thread_id 与 chat 链路同一来源（conversation_id）——
     同一会话无论走 SSE 还是 REST，跨轮状态一致；
@@ -146,34 +146,82 @@ async def travel_plan(request: Request):
 
     conversation_id = req.conversation_id or req.session_id
     run_id = f"travel-{uuid4().hex}"
-    from backend.observability.tracer import trace_collector
-    trace_started_at = time.monotonic()
-    trace = trace_collector.start(
-        req.message,
-        session_id=conversation_id or req.session_id,
-        workflow_name="agent",
-    )
-    graph_input = new_travel_graph_input(
-        user_message=req.message,
-        user_id=identity.user_id or "",
-        session_id=req.session_id,
-        conversation_id=conversation_id,
-    )
-    final_state: dict = {}
-    try:
-        final_state = get_travel_graph().invoke(
-            graph_input, config=_build_invoke_config(conversation_id))
-    except Exception:
-        logger.exception("[TravelAPI] 域图执行异常")
+    from backend.travel.request_runtime import RunStopped
+
+    def worker(control):
+        from backend.observability.tracer import trace_collector
+        trace_started_at = time.monotonic()
+        trace = trace_collector.start(
+            req.message, session_id=conversation_id or req.session_id,
+            workflow_name="agent",
+        )
+        graph_input = new_travel_graph_input(
+            user_message=req.message, user_id=identity.user_id or "",
+            session_id=req.session_id, conversation_id=conversation_id,
+        )
+        final_state: dict = {}
         out = _plan_error("抱歉，旅游规划服务暂时不可用，请稍后再试。")
-    else:
-        result = build_travel_graph_result(final_state)
-        out = dict(result)
-    # 版本账本（方案 v2 §7）：成功出单即落账并派生确定性变更记录；
-    # 账本故障在 service 内软降级，不影响本响应的行程主体。
-    out = _record_plan_version(out, conversation_id, identity.user_id or "")
-    _finish_travel_trace(trace, trace_started_at, out, final_state, run_id)
-    return out
+        try:
+            control.check()
+            final_state = get_travel_graph().invoke(
+                graph_input, config=_build_invoke_config(
+                    conversation_id, getattr(identity, "tenant_id", ""),
+                    identity.user_id or ""))
+            control.check()
+            out = dict(build_travel_graph_result(final_state))
+            out = _record_plan_version(out, conversation_id, identity.user_id or "")
+            return out
+        except RunStopped as exc:
+            out = _stopped_result(exc.reason)
+            return out
+        except Exception:
+            logger.exception("[TravelAPI] 域图执行异常")
+            return out
+        finally:
+            _finish_travel_trace(trace, trace_started_at, out, final_state, run_id)
+
+    handle = _submit_travel_request(identity, conversation_id, worker)
+    future = asyncio.wrap_future(handle.future)
+    try:
+        while True:
+            handle.control.check()
+            if hasattr(request, "is_disconnected") and await request.is_disconnected():
+                handle.control.cancel()
+                return _stopped_result("cancelled")
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=0.1)
+            except asyncio.TimeoutError:
+                continue
+    except RunStopped as exc:
+        return _stopped_result(exc.reason)
+    except asyncio.CancelledError:
+        handle.control.cancel()
+        raise
+
+
+def _stopped_result(reason: str) -> dict:
+    messages = {
+        "timeout": "规划超时，请缩小行程范围后重试。",
+        "cancelled": "本次规划已取消。",
+        "backpressure": "事件流消费过慢，本次规划已停止，请重试。",
+        "admission_unavailable": "规划执行资源暂时不可用，请稍后重试。",
+    }
+    return {**_plan_error(messages.get(reason, "本次规划已停止。")), "error_type": reason}
+
+
+def _submit_travel_request(identity, conversation_id, worker):
+    from backend.travel.request_runtime import get_request_executor, RequestRejected
+    try:
+        return get_request_executor().submit(
+            getattr(identity, "tenant_id", ""), identity.user_id or "",
+            conversation_id, worker,
+        )
+    except RequestRejected as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error_type": exc.reason, "message": "规划繁忙或当前会话仍在执行，请稍后重试。"},
+            headers={"Retry-After": "2"},
+        ) from exc
 
 
 def _travel_sse_frame(event: dict) -> str:
@@ -200,42 +248,65 @@ async def travel_plan_stream(request: Request):
     queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=512)
     cancelled = threading.Event()
     sequence = 0
+    sequence_lock = threading.Lock()
+    # 为终止标记保留一个队列槽；业务事件最多占 511 个槽，满载时仍能
+    # 投递错误终帧/结束标记，客户端不会只看到半截事件流。
+    pending_events = threading.BoundedSemaphore(511)
+    run_control = None
+    handle = None
+
+    def stop(reason: str) -> None:
+        cancelled.set()
+        if run_control is not None:
+            run_control.cancel(reason)
+        if handle is not None:
+            handle.control.cancel(reason)
 
     def queue_event(event: dict) -> None:
         nonlocal sequence
         if cancelled.is_set():
             return
-        sequence += 1
-        payload = {**event, "run_id": run_id, "seq": sequence}
+        if not pending_events.acquire(blocking=False):
+            stop("backpressure")
+            return
+        with sequence_lock:
+            sequence += 1
+            payload = {**event, "run_id": run_id, "seq": sequence}
 
         def put() -> None:
             if cancelled.is_set():
+                pending_events.release()
                 return
             try:
                 queue.put_nowait(payload)
             except asyncio.QueueFull:
                 # 队列满意味着客户端消费跟不上；worker 不能丢弃事件后
                 # 假装正常完成，直接让流以错误终止。
-                cancelled.set()
+                pending_events.release()
+                stop("backpressure")
 
         try:
             loop.call_soon_threadsafe(put)
         except RuntimeError:
-            cancelled.set()
+            pending_events.release()
+            stop("cancelled")
 
     def queue_terminal(event: dict | None) -> None:
         def put() -> None:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                cancelled.set()
+                stop("backpressure")
 
         try:
             loop.call_soon_threadsafe(put)
         except RuntimeError:
-            cancelled.set()
+            stop("cancelled")
 
-    def worker() -> None:
+    def worker(control) -> None:
+        nonlocal run_control
+        run_control = control
+        from backend.travel.request_runtime import RunStopped
         from backend.orchestration.graph.travel_graph_node import _build_invoke_config
         from backend.travel.core.events import emit_travel_event, travel_event_scope
         from backend.travel.graph_state import new_travel_graph_input
@@ -259,12 +330,16 @@ async def travel_plan_stream(request: Request):
         trace_state: dict = {}
         try:
             with travel_event_scope(queue_event):
+                control.check()
                 emit_travel_event(
                     "run.started", agent="supervisor", run_id=run_id,
                     conversation_id=conversation_id,
                 )
                 final_state = get_travel_graph().invoke(
-                    graph_input, config=_build_invoke_config(conversation_id))
+                    graph_input, config=_build_invoke_config(
+                        conversation_id, getattr(identity, "tenant_id", ""),
+                        identity.user_id or ""))
+                control.check()
                 result = dict(build_travel_graph_result(final_state))
                 trace_state = final_state if isinstance(final_state, dict) else {}
                 result = _record_plan_version(
@@ -281,6 +356,8 @@ async def travel_plan_stream(request: Request):
                     "status": result.get("status", "failed"),
                     "result": result,
                 })
+        except RunStopped as exc:
+            trace_result = _stopped_result(exc.reason)
         except Exception as exc:  # noqa: BLE001 — 真实失败向前端终止
             logger.exception("[TravelAPI] 旅游域 SSE 执行异常")
             with travel_event_scope(queue_event):
@@ -302,18 +379,31 @@ async def travel_plan_stream(request: Request):
             )
             queue_terminal(None)
 
+    handle = _submit_travel_request(identity, conversation_id, worker)
+
     async def event_stream():
-        thread = threading.Thread(
-            target=worker, name=f"{run_id}-worker", daemon=True,
-        )
-        thread.start()
+        from backend.travel.request_runtime import RunStopped
+        last_heartbeat = time.monotonic()
         try:
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    handle.control.check()
+                except RunStopped as exc:
+                    result = _stopped_result(exc.reason)
+                    yield _travel_sse_frame({
+                        "event": "error", "source": "travel", "run_id": run_id,
+                        "status": "failed", "error_type": exc.reason,
+                        "message": result["final_answer"],
+                    })
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
                 except asyncio.TimeoutError:
-                    if not thread.is_alive() and queue.empty():
+                    if handle.future.done() and queue.empty():
                         break
+                    if time.monotonic() - last_heartbeat < 15:
+                        continue
+                    last_heartbeat = time.monotonic()
                     yield _travel_sse_frame({
                         "event": "ping", "source": "travel",
                         "run_id": run_id, "seq": 0, "ts": time.time(),
@@ -321,13 +411,15 @@ async def travel_plan_stream(request: Request):
                     continue
                 if event is None:
                     break
+                pending_events.release()
                 yield _travel_sse_frame(event)
                 await asyncio.sleep(0)
         except (asyncio.CancelledError, GeneratorExit):
-            cancelled.set()
+            stop("cancelled")
             raise
         finally:
-            cancelled.set()
+            if not handle.future.done():
+                stop("cancelled")
 
     return StreamingResponse(
         event_stream(),

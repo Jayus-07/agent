@@ -70,10 +70,14 @@ def run_travel_tool(
     ``run_expert_safely`` 再按旅游域既有失败契约收口为 failed。返回空结果
     仍然是成功调用，是否为空由 result_summary 明确标记，不能混成失败。
     """
+    from backend.travel.request_runtime import check_run
+
+    check_run()
     started_at = time.monotonic()
     emit_travel_event("tool.started", agent=agent, tool=tool)
     try:
         result = fn()
+        check_run()
     except Exception as exc:  # noqa: BLE001 — 先发事件，再保持原失败语义
         emit_travel_event(
             "tool.result",

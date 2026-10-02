@@ -61,13 +61,16 @@ def _evented_node(node_name: str, node_fn):
     @functools.wraps(node_fn)
     def wrapped(state):
         from backend.travel.core.events import emit_travel_event
+        from backend.travel.request_runtime import check_run
 
+        check_run()
         started_at = time.monotonic()
         emit_travel_event(
             "stage.started", agent="travel_graph", stage=node_name,
         )
         try:
             update = node_fn(state)
+            check_run()
         except Exception as exc:  # noqa: BLE001 — 事件后保持节点原异常
             emit_travel_event(
                 "stage.finished", agent="travel_graph", stage=node_name,

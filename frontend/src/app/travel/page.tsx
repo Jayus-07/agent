@@ -83,15 +83,15 @@ const EXAMPLE_SCENARIOS = [
     eyebrow: '实时检索示例',
     title: '福州美食周末',
     description: '查真实美食、酒店，再给我一份 2 天游玩安排',
-    message: '去福州玩2天，2个人，预算2000元，请查美食和查酒店，偏好人文，节奏轻松点',
+    form: { origin: '', destination: '福州', days: '2', partySize: '2', budget: '2000', preferences: ['人文'], pace: 'relaxed', extra: '查美食、查酒店' },
     accent: 'from-[#0d5d55] to-[#087b73]',
   },
   {
     id: 'live-train-weekend',
     eyebrow: '车票查询示例',
     title: '福州 → 厦门',
-    description: '先查 2026-10-03 的真实高铁，再安排 2 天路线',
-    message: '从福州出发去厦门，2026-10-03玩2天，2个人，节奏适中，请查高铁票，喜欢美食',
+    description: '查询明天的高铁信息，再安排 2 天路线；数据不可用时明确提示',
+    form: { origin: '福州', destination: '厦门', days: '2', partySize: '2', budget: '', preferences: ['美食'], pace: 'moderate', extra: '查高铁票' },
     accent: 'from-[#243c62] to-[#315c7d]',
   },
   {
@@ -99,7 +99,7 @@ const EXAMPLE_SCENARIOS = [
     eyebrow: '轻松规划示例',
     title: '泉州慢游',
     description: '3 天逛古迹，不绕路，留出喝茶和休息时间',
-    message: '去泉州玩3天，2个人，想看古迹和人文，节奏轻松，不要排得太满',
+    form: { origin: '', destination: '泉州', days: '3', partySize: '2', budget: '', preferences: ['人文'], pace: 'relaxed', extra: '看古迹，不绕路，留出喝茶和休息时间' },
     accent: 'from-[#9a5d39] to-[#bd7b4c]',
   },
 ] as const
@@ -214,7 +214,7 @@ export default function TravelPage() {
 
   // ── 表单提交：开一份新行程 ──
   const submit = useCallback(async (messageOverride?: string) => {
-    if (loading || budgetBlocked) return
+    if (abortRef.current || budgetBlocked) return
     const message = messageOverride ?? composePlanMessage({
       origin, destination, days, startDate, partySize, budget, pace, preferences, extra,
     })
@@ -232,6 +232,7 @@ export default function TravelPage() {
     try {
       let data: PlanResponse | null = null
       for await (const event of streamTravelPlan(message, cid, { signal: controller.signal })) {
+        if (controller.signal.aborted || abortRef.current !== controller) return
         handleTravelEvent(event)
         if (event.event === 'error') {
           throw new Error(typeof event.data.message === 'string'
@@ -241,6 +242,7 @@ export default function TravelPage() {
           data = event.data.result as PlanResponse
         }
       }
+      if (controller.signal.aborted || abortRef.current !== controller) return
       if (!data) throw new Error('旅游规划流未返回结构化结果')
       if (data.status === 'failed') {
         throw new Error(data.final_answer || '旅游规划执行失败')
@@ -255,12 +257,14 @@ export default function TravelPage() {
         setPlansVersion((v) => v + 1)
       }
     } catch (e) {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && abortRef.current === controller) {
         setError(e instanceof Error ? e.message : '规划请求失败，请稍后再试')
       }
     } finally {
-      if (abortRef.current === controller) abortRef.current = null
-      setLoading(false)
+      if (abortRef.current === controller) {
+        abortRef.current = null
+        setLoading(false)
+      }
     }
   }, [
     budget, budgetBlocked, days, destination, extra, handleTravelEvent, loading,
@@ -276,39 +280,18 @@ export default function TravelPage() {
   }, [quickIdea, loading, budgetBlocked, submit])
 
   const runExample = useCallback((example: typeof EXAMPLE_SCENARIOS[number]) => {
-    if (loading || budgetBlocked) return
-    if (example.id === 'live-city-weekend') {
-      setOrigin('')
-      setDestination('福州')
-      setDays('2')
-      setPartySize('2')
-      setBudget('2000')
-      setPreferences(['人文'])
-      setPace('relaxed')
-      setExtra('查美食、查酒店')
-      setStartDate(tomorrowIso())
-    } else if (example.id === 'live-train-weekend') {
-      setOrigin('福州')
-      setDestination('厦门')
-      setDays('2')
-      setPartySize('2')
-      setBudget('')
-      setPreferences(['美食'])
-      setPace('moderate')
-      setExtra('查高铁票，节奏适中')
-      setStartDate('2026-10-03')
-    } else {
-      setOrigin('')
-      setDestination('泉州')
-      setDays('3')
-      setPartySize('2')
-      setBudget('')
-      setPreferences(['人文'])
-      setPace('relaxed')
-      setExtra('不绕路，留出喝茶和休息时间')
-      setStartDate(tomorrowIso())
-    }
-    void submit(example.message)
+    if (abortRef.current || budgetBlocked) return
+    const form = { ...example.form, preferences: [...example.form.preferences], startDate: tomorrowIso() }
+    setOrigin(form.origin)
+    setDestination(form.destination)
+    setDays(form.days)
+    setPartySize(form.partySize)
+    setBudget(form.budget)
+    setPreferences(form.preferences)
+    setPace(form.pace)
+    setExtra(form.extra)
+    setStartDate(form.startDate)
+    void submit(composePlanMessage(form))
   }, [budgetBlocked, loading, submit])
 
   const useCurrentLocation = useCallback(() => {
@@ -373,6 +356,8 @@ export default function TravelPage() {
 
   const startNewTrip = useCallback(() => {
     abortRef.current?.abort()
+    abortRef.current = null
+    setLoading(false)
     const cid = rotateConversationId()
     setConversationId(cid)
     setPlanState(EMPTY_PLAN_STATE)
@@ -411,6 +396,8 @@ export default function TravelPage() {
         change_record: null,
       }
       abortRef.current?.abort()
+      abortRef.current = null
+      setLoading(false)
       setConversationId(adoptConversationId(cid))
       setPlanState(applyPlanResponse(EMPTY_PLAN_STATE, data))
       applyBriefToForm(latest.itinerary.brief)

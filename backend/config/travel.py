@@ -15,6 +15,16 @@ load_dotenv()
 # =============================================
 TRAVEL_ENABLED = os.getenv("TRAVEL_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
+# 独立规划入口：本地模式仅适用于单进程；生产多副本必须显式使用 Redis。
+TRAVEL_ADMISSION_BACKEND = os.getenv("TRAVEL_ADMISSION_BACKEND", "local").strip().lower()
+if TRAVEL_ADMISSION_BACKEND not in ("local", "redis"):
+    raise ValueError("TRAVEL_ADMISSION_BACKEND 必须为 local 或 redis")
+TRAVEL_REQUEST_WORKERS = max(1, int(os.getenv("TRAVEL_REQUEST_WORKERS", "16")))
+TRAVEL_REQUEST_GLOBAL_LIMIT = max(1, int(os.getenv("TRAVEL_REQUEST_GLOBAL_LIMIT", "100")))
+TRAVEL_REQUEST_TENANT_LIMIT = max(1, int(os.getenv("TRAVEL_REQUEST_TENANT_LIMIT", "32")))
+TRAVEL_REQUEST_USER_LIMIT = max(1, int(os.getenv("TRAVEL_REQUEST_USER_LIMIT", "2")))
+TRAVEL_REQUEST_TIMEOUT_S = max(1.0, float(os.getenv("TRAVEL_REQUEST_TIMEOUT_S", "50")))
+
 # 专家调度循环上限（与 CS_EXPERT_MAX_LOOPS 同语义，兜底防御）
 # 2026-09-22 新增 weather 专家（transit→budget 之间多一步），默认 12→14
 TRAVEL_MAX_STEPS = int(os.getenv("TRAVEL_MAX_STEPS", "14"))
