@@ -5,8 +5,8 @@
  * - POST /api/auth/login  {username, password, deviceId?} → Result{data: LoginVO}
  *   LoginVO: { token, refreshToken(始终为 null，改走 HttpOnly Cookie),
  *              tokenType: "Bearer", expiresIn(ms), userInfo }
- * - POST /api/auth/refresh 凭 HttpOnly Cookie refresh_token 换新 token（令牌轮换）
- * - POST /api/auth/logout 吊销 refresh_token 并写入网关黑名单
+ * - POST /api/auth/refresh 凭 HttpOnly Cookie refresh_token_web 换新 token（令牌轮换）
+ * - POST /api/auth/logout 吊销 web refresh Cookie 并写入网关黑名单
  *
  * Access token 策略：模块内存为主 + sessionStorage 兜底（刷新页面不丢，
  * 关闭标签页即失效；refresh_token 本身就在 HttpOnly Cookie 里，可静默续期）。
@@ -18,10 +18,13 @@ const TOKEN_KEY = "agent.access_token";
 const USER_KEY = "agent.user_info";
 const DEVICE_KEY = "agent.device_id";
 const EXPIRED_KEY = "agent.session_expired";
+const CLIENT_APP = "web";
 
 export interface LoginResult {
   token: string;
   expiresIn?: number;
+  /** 临时密码首次登录标记（P6.3）：true → 前端必须先进改密流程（TD-04） */
+  mustChangePassword?: boolean;
   userInfo?: { userId?: string; username?: string; [k: string]: unknown } | null;
 }
 
@@ -102,9 +105,9 @@ function unwrapResult<T>(body: { code?: number; message?: string; data?: T } | n
 export async function login(username: string, password: string): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Client-App": CLIENT_APP },
     credentials: "include",
-    body: JSON.stringify({ username, password, deviceId: getDeviceId() }),
+    body: JSON.stringify({ username, password, deviceId: getDeviceId(), clientId: CLIENT_APP }),
   });
   const body = await res.json().catch(() => null);
   const data = unwrapResult<LoginResult & { refreshToken?: string | null }>(body);
@@ -121,6 +124,34 @@ export async function login(username: string, password: string): Promise<LoginRe
   return data;
 }
 
+/**
+ * 修改密码（临时密码首次登录强制流程的唯一出路，TD-04）。
+ * 后端契约（auth_local.py /auth/change-password）：
+ *   {oldPassword, newPassword} → Result{data:{token,...}}（全新正常 token，
+ *   旧会话全部撤销）；新 token 立即替换本地存储。
+ */
+export async function changePassword(
+  oldPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const token = getAccessToken();
+  if (!token) throw new Error("登录状态缺失，请重新登录");
+  const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Client-App": CLIENT_APP,
+      ...bearerHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify({ oldPassword, newPassword }),
+  });
+  const body = await res.json().catch(() => null);
+  const data = unwrapResult<{ token?: string }>(body);
+  if (!data?.token) throw new Error("改密响应缺少新 token");
+  setAccessToken(data.token);
+}
+
 /** 刷新（single-flight）：并发 401 只触发一次 refresh 请求 */
 let refreshInFlight: Promise<boolean> | null = null;
 
@@ -130,6 +161,7 @@ export function tryRefreshOnce(): Promise<boolean> {
       try {
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: "POST",
+          headers: { "X-Client-App": CLIENT_APP },
           credentials: "include",
         });
         if (!res.ok) return false;
@@ -158,7 +190,10 @@ export async function logout(): Promise<void> {
     await fetch(`${API_BASE}/api/auth/logout`, {
       method: "POST",
       credentials: "include",
-      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      headers: {
+        "X-Client-App": CLIENT_APP,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
   } catch {
     /* ignore */

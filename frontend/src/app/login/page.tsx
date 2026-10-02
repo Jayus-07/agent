@@ -72,9 +72,14 @@ function LoginForm() {
     }
     setLoading(true);
     try {
-      await login(account.trim(), password);
+      const result = await login(account.trim(), password);
       if (remember) saveUsername(account.trim());
       else clearSavedUsername();
+      // 临时密码首次登录（P6.3/TD-04）：先改密，改完由改密页进 /agent
+      if (result.mustChangePassword) {
+        router.replace("/change-password");
+        return;
+      }
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");

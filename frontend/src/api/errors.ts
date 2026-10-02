@@ -275,6 +275,24 @@ export function describeApiError(err: unknown): ResolvedError {
   const status = extractStatus(err);
   const code = extractCode(err);
 
+  // 临时密码首次登录门禁（P6.3/TD-04）：任何业务 API 撞到该 403，
+  // 统一引导进改密页而不是展示通用权限错误。防循环：改密页自身不再跳。
+  if (code === "must_change_password" && typeof window !== "undefined") {
+    if (!window.location.pathname.startsWith("/change-password")) {
+      window.location.replace("/change-password");
+    }
+    return {
+      message: "首次登录请先修改密码",
+      kind: "auth",
+      retriable: false,
+      code,
+      cause: err,
+      handoffAvailable: false,
+      // ResolvedError 协议字段：retryable 为规范名（retriable 是旧兼容名）
+      retryable: false,
+    };
+  }
+
   // ① 已登记的码优先（登记表刻意为空时直接落到后面）
   if (isDomainErrorCode(code)) {
     const hit = domainIndex[code];
