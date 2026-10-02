@@ -1351,10 +1351,13 @@ function LiveSearchBoard({ processState }: { processState: TravelProcessState })
   const toolLabels: Record<string, string> = {
     map_merchant_search_tool: '高德商户搜索',
     travel_train_search_tool: '12306 车票查询',
+    zhihu_search_tool: '知乎攻略检索',
   }
-  const categoryLabels: Record<string, string> = { food: '美食', hotel: '酒店', train: '车次' }
+  const categoryLabels: Record<string, string> = { food: '美食', hotel: '酒店', train: '车次', guide: '攻略' }
   const items = processState.tools.filter((tool) => (
-    tool.tool === 'map_merchant_search_tool' || tool.tool === 'travel_train_search_tool'
+    tool.tool === 'map_merchant_search_tool'
+    || tool.tool === 'travel_train_search_tool'
+    || tool.tool === 'zhihu_search_tool'
   ))
   if (!items.length) return null
 
@@ -1390,7 +1393,11 @@ function LiveSearchBoard({ processState }: { processState: TravelProcessState })
           return (
             <div key={`${tool.tool}-${index}`} className="rounded-xl border border-[#f0dfc8] bg-white p-3">
               <div className="flex items-center gap-2 text-xs font-medium text-[#183037]"><CheckCircle2 size={14} className="text-[#087b73]" aria-hidden />{label}已返回 {tool.resultCount ?? preview.length} 条</div>
-              {preview.length > 0 && (tool.category === 'train' ? <TrainPreview preview={preview} /> : <MerchantPreview preview={preview} category={tool.category} />)}
+              {preview.length > 0 && (tool.category === 'train'
+                ? <TrainPreview preview={preview} />
+                : tool.category === 'guide'
+                  ? <GuidePreview preview={preview} />
+                  : <MerchantPreview preview={preview} category={tool.category} />)}
               {preview.length === 0 && <p className="mt-2 text-[11px] text-[#8c7258]">真实查询成功，但当前没有匹配结果。</p>}
             </div>
           )
@@ -1428,14 +1435,71 @@ function TrainPreview({ preview }: { preview: Array<Record<string, unknown>> }) 
   return (
     <div className="mt-2 overflow-x-auto rounded-lg border border-[#f0dfc8]">
       <table className="min-w-full text-left text-[10px] text-[#6c5948]">
-        <thead className="bg-[#fff3e3] text-[#8c7258]"><tr><th className="px-2 py-1.5 font-medium">车次</th><th className="px-2 py-1.5 font-medium">出发</th><th className="px-2 py-1.5 font-medium">到达</th><th className="px-2 py-1.5 font-medium">历时</th></tr></thead>
+        <thead className="bg-[#fff3e3] text-[#8c7258]"><tr><th className="px-2 py-1.5 font-medium">车次</th><th className="px-2 py-1.5 font-medium">出发</th><th className="px-2 py-1.5 font-medium">到达</th><th className="px-2 py-1.5 font-medium">历时</th><th className="px-2 py-1.5 font-medium">余票</th></tr></thead>
         <tbody>
-          {preview.slice(0, 6).map((item, index) => (
-            <tr key={`${String(item.train_no ?? 'unknown')}-${String(item.start_time ?? index)}-${String(item.arrive_time ?? '')}-${index}`} className="border-t border-[#f4e6d3]"><td className="px-2 py-1.5 font-medium text-[#183037]">{String(item.train_no ?? '未知')}</td><td className="px-2 py-1.5">{String(item.start_time ?? '--')}</td><td className="px-2 py-1.5">{String(item.arrive_time ?? '--')}</td><td className="px-2 py-1.5">{String(item.duration ?? '--')}</td></tr>
-          ))}
+          {preview.slice(0, 6).map((item, index) => {
+            const seats = item.seats
+            const seatsText = seats && typeof seats === 'object' && !Array.isArray(seats)
+              ? Object.entries(seats as Record<string, unknown>).slice(0, 3)
+                  .map(([seat, left]) => `${seat} ${String(left)}`).join(' / ')
+              : ''
+            return (
+              <tr key={`${String(item.train_no ?? 'unknown')}-${String(item.start_time ?? index)}-${String(item.arrive_time ?? '')}-${index}`} className="border-t border-[#f4e6d3]">
+                <td className="px-2 py-1.5 font-medium text-[#183037]">{String(item.train_no ?? '未知')}</td>
+                <td className="px-2 py-1.5">{String(item.start_time ?? '--')}</td>
+                <td className="px-2 py-1.5">{String(item.arrive_time ?? '--')}</td>
+                <td className="px-2 py-1.5">{String(item.duration ?? '--')}</td>
+                <td className="px-2 py-1.5">{seatsText || <span className="text-[#b3a48f]">--</span>}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
+      <p className="px-2 py-1.5 text-[10px] text-[#8c7258]">余票来自 12306 非官方聚合源，可能延迟；票价不在余票接口范围内，需按车次单独查询。</p>
     </div>
+  )
+}
+
+/**
+ * GuidePreview — 知乎攻略卡（📝怎么吃/什么值得吃，软内容参考）。
+ * 与 MerchantPreview（📍去哪吃，结构化商户）并存分工；条目来自知乎官方
+ * MCP 归一化字段（title/url/summary/author_name/vote_up_count/comment_count），
+ * 缺失不补造。title 带原文链接（官方开放平台返回的站内/全网 URL）。
+ */
+function GuidePreview({ preview }: { preview: Array<Record<string, unknown>> }) {
+  return (
+    <ul className="mt-2 space-y-2">
+      {preview.slice(0, 4).map((item, index) => {
+        const title = String(item.title ?? '未命名内容')
+        const url = typeof item.url === 'string' && item.url.startsWith('http') ? item.url : ''
+        const summary = typeof item.summary === 'string' ? item.summary : ''
+        const votes = item.vote_up_count
+        const comments = item.comment_count
+        return (
+          <li key={`${title}-${index}`} className="rounded-lg border border-[#e3e9f5] bg-[#fbfcff] p-2.5">
+            {url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block truncate text-xs font-semibold text-[#2d5bd1] hover:underline"
+              >
+                {title}
+              </a>
+            ) : (
+              <p className="truncate text-xs font-semibold text-[#183037]">{title}</p>
+            )}
+            {summary && <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-[#5c7074]">{summary}</p>}
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-[#8c7258]">
+              <span className="rounded bg-[#e8f0fe] px-1.5 py-0.5 font-medium text-[#2d5bd1]">知乎</span>
+              {typeof item.author_name === 'string' && item.author_name && <span>{item.author_name}</span>}
+              {typeof votes === 'number' && votes > 0 && <span>{votes} 赞同</span>}
+              {typeof comments === 'number' && comments > 0 && <span>{comments} 评论</span>}
+            </div>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
