@@ -88,6 +88,7 @@ class CustomRetriever:
             from collections import defaultdict
             rrf_scores: dict[str, float] = defaultdict(float)
             all_docs: dict[str, tuple] = {}  # chunk_id -> (doc, score, query)
+            succeeded = 0  # 成功执行的 query 数（embedding 故障时为 0 → 向量路降级）
             for qi, q in enumerate(queries_to_search):
                 try:
                     if filter_dict:
@@ -98,6 +99,7 @@ class CustomRetriever:
                         batch = self.vectordb.similarity_search_with_score(
                             q, k=k,
                         )
+                    succeeded += 1
                 except Exception as e:
                     # 索引/运行时 embedding 不一致必须穿透 RRF 循环：
                     # 这是「禁止检索」的门禁信号，不能被当成单个变体失败跳过。
@@ -115,6 +117,18 @@ class CustomRetriever:
                     rrf_scores[cid] += rank_bonus * (1 / (rrf_k + rank))
                     if cid not in all_docs:
                         all_docs[cid] = (doc, score, q)
+            # 向量路整体降级：所有 query 的 embedding 均失败 → RRF 无任何
+            # 向量输入，下游融合分数只剩 BM25 路且尺度不可比。显式置位
+            # 降级信号（随请求级 RagRequestState 生命周期），AdaptiveRetriever
+            # 据此放行 parent 扩展，避免"低置信跳过"在残缺分数上误判。
+            if succeeded == 0:
+                from backend.rag.context import mark_vector_degraded
+                mark_vector_degraded()
+                logger.warning(
+                    "[Retriever] 向量路整体降级: 全部 "
+                    f"{len(queries_to_search)} 个 query 的 embedding 检索失败，"
+                    "已置 vector_degraded 信号（BM25 路独立承接召回）"
+                )
             # 按 RRF 排序取 top k*2
             sorted_cids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
             docs_with_scores = [

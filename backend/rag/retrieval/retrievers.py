@@ -1017,7 +1017,17 @@ class AdaptiveRetriever(BaseRetriever):
         cluster_set = set(clustered)
 
         # ── 置信度门控：cluster chunk 分数太低时跳过扩展 ──
-        # 低分说明 reranker 无法区分相关/噪声，扩展只会放大噪声
+        # 低分说明 reranker 无法区分相关/噪声，扩展只会放大噪声。
+        # 例外（TD-01）：向量路整体降级（全部 query embedding 失败）时，
+        # RRF/rerank 分数塌陷到不可比尺度，"低置信"不可信——此时 BM25
+        # 关键词命中本身就是召回证据，必须放行 parent 扩展补全上下文，
+        # 否则 leaf 碎片缺标题实体会触发实体覆盖校验假拒答。
+        vector_degraded = False
+        try:
+            from backend.rag.context import is_vector_degraded
+            vector_degraded = is_vector_degraded()
+        except Exception:  # noqa: BLE001 — 上下文缺失按未降级处理
+            vector_degraded = False
         cluster_scores = [
             s for s in (
                 c.metadata.get("rerank_score")
@@ -1031,7 +1041,7 @@ class AdaptiveRetriever(BaseRetriever):
         if cluster_scores:
             avg_score = sum(cluster_scores) / len(cluster_scores)
             top_score = max(cluster_scores)
-            if avg_score < 0.5 and top_score < 0.7:
+            if avg_score < 0.5 and top_score < 0.7 and not vector_degraded:
                 logger.info(
                     f"AdaptiveRetriever: Cluster 检测 (docs={clustered}) "
                     f"但置信度低 (avg={avg_score:.3f}, top={top_score:.3f}) → 跳过 Expansion"
@@ -1043,6 +1053,16 @@ class AdaptiveRetriever(BaseRetriever):
                     "top_score": round(top_score, 3),
                 })
                 return chunks
+            if vector_degraded and (avg_score < 0.5 or top_score < 0.7):
+                logger.warning(
+                    f"AdaptiveRetriever: 向量路降级，残缺分数 (avg={avg_score:.3f}, "
+                    f"top={top_score:.3f}) 不做低置信跳过 → 放行 Expansion"
+                )
+                _end({}, {
+                    "decision": "expansion_under_vector_degradation",
+                    "avg_score": round(avg_score, 3),
+                    "top_score": round(top_score, 3),
+                })
 
         logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
         try:

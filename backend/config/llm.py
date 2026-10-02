@@ -95,8 +95,11 @@ EMBEDDING_MODEL_PATH = os.getenv(
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
 # 云端 embedding 的单次 HTTP 请求上限。必须小于客服专家总超时，
 # 使底层 I/O 可自行结束，避免外层线程超时后留下孤儿请求。
+# 检索期每次向量检索都要现算 query embedding：超时过长会把 embedding
+# 故障放大成整条问答链路分钟级卡顿（实测 20s × openai 默认重试 2 次 ×
+# 2 条扩展 query ≈ 100s），8s + max_retries=1 把最坏路径压到 ~16s/query。
 EMBEDDING_REQUEST_TIMEOUT = float(
-    os.getenv("EMBEDDING_REQUEST_TIMEOUT", "20")
+    os.getenv("EMBEDDING_REQUEST_TIMEOUT", "8")
 )
 # =====================================================
 # Rerank Configuration (P0 - 动态配置)

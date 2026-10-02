@@ -55,6 +55,9 @@ class RagRequestState:
     meta: dict = field(default_factory=dict)   # LLM 输出 <!--META--> 解析结果
     faithfulness: Any = None                   # FaithfulnessResult（评估结果）
     mq_triggered: bool = False                 # MultiQuery 本次是否触发
+    # 向量路降级信号（TD-01）：全部 query embedding 检索失败时置位，
+    # AdaptiveRetriever 据此放行 parent 扩展（残缺分数不做低置信跳过）
+    vector_degraded: bool = False
     # 请求级输出（2026-09-23 D1-6）：sources 随 ask_result 返回值带回，
     # 不再落 RAGChain 单例实例属性（并发请求互相覆盖串扰）
     sources: list = field(default_factory=list)
@@ -92,6 +95,24 @@ def set_context(ctx: RagRequestState) -> None:
 def clear_context() -> None:
     """重置请求上下文（防止跨请求污染）"""
     _request_ctx.set(RagRequestState(metadata_filter={}, intent_label="", query=""))
+
+
+def mark_vector_degraded() -> None:
+    """标记本次请求的向量检索路已降级（TD-01，2026-10-02）。
+
+    向量 embedding 整体失败时由 CustomRetriever 调用；消费方为
+    AdaptiveRetriever 的置信度门控——embedding 缺席时 RRF/rerank 分数
+    塌陷到不可比尺度，原"低置信跳过 Expansion"会错误拦掉 parent 上下文
+    扩展，叠加 leaf 碎片导致实体覆盖校验假拒答（拒绝正确召回）。
+    信号挂在请求级 RagRequestState 上：pipeline._prepare_context 每次
+    ask 新建实例，线程池复用下天然无串染。
+    """
+    get_context().vector_degraded = True
+
+
+def is_vector_degraded() -> bool:
+    """读取当前请求的向量路降级状态（未标记 = False）。"""
+    return bool(getattr(get_context(), "vector_degraded", False))
 
 
 def get_context() -> RagRequestState:

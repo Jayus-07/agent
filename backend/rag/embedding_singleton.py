@@ -153,6 +153,10 @@ def _get_cloud_embedding() -> Embeddings:
         "chunk_size": EMBEDDING_BATCH_SIZE,
         # 让 HTTP 请求在专家总超时前自行结束，不能依赖外层线程中断。
         "timeout": EMBEDDING_REQUEST_TIMEOUT,
+        # openai SDK 默认失败重试 2 次：检索期 embedding 故障会被放大成
+        # 3 × timeout 的串行等待，显式压到 1 次（首次 + 1 重试），配合
+        # EMBEDDING_REQUEST_TIMEOUT 限制最坏单调用耗时。
+        "max_retries": 1,
     }
     if runtime_config["dimensions"] is not None:
         embedding_kwargs["dimensions"] = runtime_config["dimensions"]
