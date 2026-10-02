@@ -136,6 +136,32 @@ def transit_expert_node(state: dict) -> dict:
                 "leg_count": sum(len(day.legs) for day in value[0].days),
             },
         )
+        # 城际班次摘要写入行程契约（B 方案）：车票检索结果此前只活在
+        # SSE 过程里，done 后即弃——结果页的班次条吃不到数据。这里把
+        # 摘要挂到 itinerary.intercity（前 6 个车次；prices 仅并查过的
+        # 前 2 个有值）。未触发车票查询时 intercity 保持空列表。
+        train_data = live_search.get("train")
+        if isinstance(train_data, dict) and train_data.get("trains"):
+            from backend.travel.models.itinerary import IntercityTrain
+
+            itinerary.intercity = [
+                IntercityTrain(
+                    train_no=str(t.get("train_no") or ""),
+                    start_time=str(t.get("start_time") or ""),
+                    arrive_time=str(t.get("arrive_time") or ""),
+                    duration=str(t.get("duration") or ""),
+                    seats={str(k): v for k, v in (t.get("seats") or {}).items()},
+                    prices={str(k): v for k, v in (t.get("prices") or {}).items()},
+                    from_station=str(train_data.get("from_station") or brief.origin),
+                    to_station=str(train_data.get("to_station") or brief.destination),
+                    date=str(train_data.get("date") or ""),
+                    source=str(train_data.get("source") or "12306"),
+                    queried_at=str(train_data.get("queried_at") or ""),
+                )
+                for t in train_data["trains"][:6]
+                if isinstance(t, dict) and t.get("train_no")
+            ]
+
         # 版本章（任务书 §4）：出生即回答「基于哪个需求、哪份数据、为什么产生」。
         # 重规划轮的 change_reason 由 slot_filler 写入 state；候选池签名按
         # state.candidates 全集计算（含未排入项 —— 数据版本不等同于行程内容）。

@@ -12,6 +12,7 @@ Itinerary 是旅游域的**输出契约**，与 SQLResult / BusinessInsight 同�
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -38,6 +39,7 @@ PLAN_STATUS_NEEDS_USER_DECISION = "needs_user_decision"
 CHANGE_INITIAL = "initial"        # 全新首版
 CHANGE_BRIEF = "brief_changed"    # 需求变化触发的重规划首版
 CHANGE_REPAIR = "repair"          # 校验失败后的修复重排
+CHANGE_ROLLBACK = "rollback"      # 恢复历史版本（内容=目标旧版，版本号新增）
 
 
 class ItineraryItem(BaseModel):
@@ -125,6 +127,28 @@ class CostBreakdown(BaseModel):
         return round(self.tickets + self.meals + self.lodging + self.transit, 2)
 
 
+class IntercityTrain(BaseModel):
+    """城际班次摘要（12306 实时检索的展示快照）。
+
+    诚实口径：余票来自非官方聚合源可能延迟；prices 仅对实时并查过的
+    车次有值（当前前 2 个），其余车次为空 dict，展示端显示占位符。
+    """
+
+    train_no: str = Field(..., description="车次号，如 G1655")
+    start_time: str = Field(default="", description="出发时刻 HH:MM")
+    arrive_time: str = Field(default="", description="到达时刻 HH:MM")
+    duration: str = Field(default="", description="历时，如 1小时43分")
+    seats: dict[str, Any] = Field(
+        default_factory=dict, description="席别→余票（中文席别键，_localize_seats 口径）")
+    prices: dict[str, Any] = Field(
+        default_factory=dict, description="席别→票价（元）；仅实时并查过的车次有值")
+    from_station: str = Field(default="", description="出发站")
+    to_station: str = Field(default="", description="到达站")
+    date: str = Field(default="", description="乘车日期 YYYY-MM-DD")
+    source: str = Field(default="12306", description="数据来源标识")
+    queried_at: str = Field(default="", description="查询时刻（ISO 8601）；空=未记录")
+
+
 class Itinerary(BaseModel):
     """完整行程（输出契约）
 
@@ -141,6 +165,9 @@ class Itinerary(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     repair_rounds: int = Field(default=0, description="局部修复轮数，>0 表示首版未通过校验")
+    intercity: list[IntercityTrain] = Field(
+        default_factory=list,
+        description="城际班次摘要（12306 实时检索；空=未触发车票查询，非规划硬依赖）")
 
     # ============================================================
     # 版本链与状态机（任务书 §4）
@@ -172,6 +199,7 @@ class Itinerary(BaseModel):
         *,
         reason: str = CHANGE_INITIAL,
         parent: "Itinerary | None" = None,
+        parent_version: int | None = None,
         data_snapshot: str = "",
         changed_fields: list[str] | None = None,
     ) -> None:
@@ -183,8 +211,11 @@ class Itinerary(BaseModel):
         # tools.travel → cost.py → 本模块，形成循环初始化（实测 ImportError）
         from backend.providers.travel.facts import now_iso
 
-        self.plan_version = (parent.plan_version + 1) if parent is not None else 1
-        self.parent_plan_version = parent.plan_version if parent is not None else None
+        if parent is not None and parent_version is not None:
+            raise ValueError("parent 与 parent_version 不能同时传入")
+        lineage_version = parent.plan_version if parent is not None else parent_version
+        self.plan_version = lineage_version + 1 if lineage_version is not None else 1
+        self.parent_plan_version = lineage_version
         self.brief_version = brief.version
         # 快照继承：显式传入优先；否则继承 parent（修复重排时候选池未变）；
         # 无 parent 时保持自身（新构造行程为空串，由调用方显式传入）

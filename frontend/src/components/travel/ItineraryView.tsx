@@ -902,6 +902,57 @@ export default function ItineraryView({
         <p className="mt-2 text-[10px] text-[#7a8e8b]">只有返回可核验来源的字段才会显示具体数值；其余统一标记为暂无数据。</p>
       </details>
 
+      {/* 城际班次条（B 方案）：itinerary.intercity 有数据才渲染；诚实口径注记 */}
+      {itinerary.intercity && itinerary.intercity.length > 0 && (
+        <section
+          aria-label="城际交通"
+          className="animate-fade-in rounded-2xl border border-[#dae7e5] bg-[#f5faf9] px-4 py-3 shadow-card"
+        >
+          <header className="flex flex-wrap items-center gap-2">
+            <TrainFront size={14} style={{ color: TP.accent }} aria-hidden />
+            <h3 className="text-sm font-semibold text-[#183037]">
+              城际交通 · {itinerary.intercity[0]?.from_station || ''}
+              {itinerary.intercity[0]?.from_station ? ' → ' : ''}
+              {itinerary.intercity[0]?.to_station || ''}
+            </h3>
+            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-[#5c7074]">
+              {itinerary.intercity[0]?.date || ''} · 12306 实时检索
+            </span>
+          </header>
+          <ul className="mt-2 space-y-1.5">
+            {itinerary.intercity.map((train, index) => {
+              const seatsText = Object.entries(train.seats ?? {})
+                .slice(0, 2)
+                .map(([seat, left]) => `${seat} ${String(left)}`)
+                .join(' · ')
+              const priceText = Object.entries(train.prices ?? {})
+                .slice(0, 2)
+                .map(([seat, price]) => {
+                  const raw = String(price)
+                  return `${seat} ${/^\d+(\.\d+)?$/.test(raw) ? `¥${raw}` : raw}`
+                })
+                .join(' · ')
+              return (
+                <li key={`${train.train_no}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-lg bg-white px-3 py-1.5 text-xs text-[#183037]">
+                  <span className="font-semibold">{train.train_no}</span>
+                  <span className="font-mono tabular-nums text-[#5c7074]">
+                    {train.start_time || '--'} → {train.arrive_time || '--'}
+                  </span>
+                  {train.duration && <span className="text-[#5c7074]">{train.duration}</span>}
+                  <span className="ml-auto text-[11px] text-[#5c7074]">
+                    {seatsText || <span className="text-[#b3a48f]">余票 --</span>}
+                    {priceText && <span className="ml-2 font-medium text-[#087b73]">{priceText}</span>}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="mt-1.5 text-[10px] text-[#8c7258]">
+            余票与票价来自 12306 非官方聚合源，可能延迟；票价仅实时查询前 2 个车次，购票请以 12306 官方为准。
+          </p>
+        </section>
+      )}
+
       {/* 日卡片条（可切换）+ 当日重点详情：左列时间轴/地点/用餐，右列当天地图 */}
       <section aria-label="按天查看">
         {dayCount > 1 && (
