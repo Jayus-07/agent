@@ -38,6 +38,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "map_place_search_tool": "地点搜索",
     "map_place_suggest_tool": "地点输入联想",
     "map_lookup_tool": "地图聚合查询",
+    "map_merchant_search_tool": "商家搜索",
     "map_distance_matrix_tool": "多点距离矩阵",
     "map_route_tool": "路线规划",
     "map_navigation_tool": "导航调起链接",
@@ -47,6 +48,11 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "map_weather_tool": "天气查询",
     # ── 旅游 ──
     "travel_poi_search_tool": "景点搜索",
+    "travel_train_search_tool": "火车票余票查询",
+    "travel_train_price_tool": "火车票票价查询",
+    # ── 搜索（知乎官方 MCP）──
+    "zhihu_search_tool": "知乎搜索",
+    "global_search_tool": "全网搜索",
     # ── 邮件 ──
     "send_email_tool": "邮件发送",
     "read_email_tool": "邮件读取",
