@@ -181,6 +181,8 @@ describe('visibleNav — 按角色过滤（2026-09-16 角色硬闸的 UI 层）'
     expect(getActiveNavLabel('/settings/access')).toBe('系统设置')
     expect(getActiveNavLabel('/not-found')).toBeUndefined()
     expect(isNavPathActive('/observability/traces/trace-1', '/observability/monitoring', ['/observability/traces'])).toBe(true)
+    const monitoring = NAV.find((entry) => entry.label === '运行中心')?.items?.find((item) => item.path === '/observability/monitoring')
+    expect(isNavPathActive('/observability/alerts', monitoring?.path ?? '', monitoring?.activePaths)).toBe(false)
     expect(isNavPathActive('/observability/traces-other', '/observability/traces')).toBe(false)
   })
 })

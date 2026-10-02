@@ -71,7 +71,7 @@ export const NAV: NavEntry[] = [
       { label: '任务中心', path: '/tasks', section: '运行状态' },
       {
         label: '运行监控工作台', path: '/observability/monitoring', section: '运行状态',
-        activePaths: ['/observability', '/observability/traces', '/observability/gateway', '/observability/tokens'],
+        activePaths: ['/observability/traces', '/observability/gateway', '/observability/tokens'],
       },
       { label: '安全运营', path: '/security', section: '告警与安全' },
       { label: '告警中心', path: '/observability/alerts', section: '告警与安全' },
