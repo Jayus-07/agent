@@ -16,6 +16,7 @@ from typing import Any
 from backend.config import map as map_config
 from backend.shared.logger import logger
 from backend.tools.map.merchant import map_merchant_search_tool
+from backend.tools.map.place import map_place_search_tool
 from backend.tools.search.zhihu import global_search_tool, zhihu_search_tool
 from backend.tools.travel.train import (
     _localize_seats,
@@ -123,6 +124,20 @@ def search_trains(*, from_station: str, to_station: str,
         limit=limit,
     )
     return _decode_success(raw, "travel_train_search_tool")
+
+
+def search_places(*, keyword: str, city: str,
+                  page_size: int = 8) -> dict[str, Any]:
+    """调用腾讯位置服务地点检索 Tool（POI 候选池实时源）。
+
+    返回 data 封套：{keyword, city, count, pois:[{id,name,lat,lng,
+    category,address,...}]}；失败上抛 LiveSearchError 由调用方披露。
+    """
+    raw = _invoke(
+        map_place_search_tool, "map_place_search_tool",
+        keyword=keyword, city=city, page_size=page_size,
+    )
+    return _decode_success(raw, "map_place_search_tool")
 
 
 def search_train_price(*, from_station: str, to_station: str,

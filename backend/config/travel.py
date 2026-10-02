@@ -173,6 +173,28 @@ TRAVEL_RAG_TOP_K = int(os.getenv("TRAVEL_RAG_TOP_K", "3"))
 TRAVEL_PREFS_ENABLED = os.getenv("TRAVEL_PREFS_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
 # =============================================
+# 行程版本账本（方案 v2 §7：行程是带版本的服务端状态）
+# =============================================
+# 每次 /plan 成功产出新版本后落账本（/plan 软失败不影响规划主链）；
+# 支撑「确认整份行程 / 恢复历史版本 / 版本历史」三个生命周期动作。
+# 存储为 agent_memory 库运行时幂等建表的功能表（与 preferences/feedback 同款，
+# 不走 alembic）；保留条数即「版本历史承诺边界」（方案 §10.2）——页面只承诺
+# 保留期内可恢复，不做永久历史。
+TRAVEL_PLAN_VERSIONS_ENABLED = os.getenv("TRAVEL_PLAN_VERSIONS_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+TRAVEL_PLAN_VERSIONS_KEEP = int(os.getenv("TRAVEL_PLAN_VERSIONS_KEEP", "20"))
+
+# =============================================
+# POI 候选池数据源（2026-10-02 种子库下线决策）
+# =============================================
+# live = 腾讯位置服务实时关键词检索（任意城市可用、零维护；坐标可信，
+#        停留时长/门票为诚实占位：120 分钟 / 暂无数据，由 validator 披露）；
+# seed = 本地种子库（仅福州/厦门/杭州，已停止维护，仅供显式回退）。
+TRAVEL_POI_SOURCE = os.getenv("TRAVEL_POI_SOURCE", "live").strip().lower()
+# live 完全失败（网络/配额）时是否回退种子库：默认关（严格模式——失败
+# 如实披露，不用过期数据冒充实时结果）。开启仅影响种子城市。
+TRAVEL_POI_FALLBACK_SEED = os.getenv("TRAVEL_POI_FALLBACK_SEED", "false").strip().lower() in ("1", "true", "yes")
+
+# =============================================
 # 意图预过滤（Router 内，与 CS 预过滤同层）
 # =============================================
 # 命中 ≥ 该数量的旅游强信号词才判为旅游域，避免「周末」这类口语误命中

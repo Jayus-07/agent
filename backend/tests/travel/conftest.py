@@ -10,6 +10,20 @@ from datetime import date
 import pytest
 
 from backend.travel.models.brief import TravelBrief
+
+
+@pytest.fixture(autouse=True)
+def _pin_seed_poi_source(monkeypatch: pytest.MonkeyPatch):
+    """travel 域测试默认钉回种子候选源（确定性夹具）。
+
+    生产默认 TRAVEL_POI_SOURCE=live（腾讯 LBS 实时检索，结果非确定且
+    依赖外网）；本目录测试统一钉回 seed 保证断言可复现。需要测 live
+    行为的用例（test_live_poi_source.py）在用例内自行 monkeypatch 覆盖
+    ——monkeypatch 的 LIFO 顺序保证用例级设置生效。
+    """
+    from backend.config import travel as travel_config
+
+    monkeypatch.setattr(travel_config, "TRAVEL_POI_SOURCE", "seed")
 from backend.travel.models.itinerary import (
     Itinerary,
     ItineraryDay,

@@ -10,8 +10,11 @@ weather_service.fetch_forecast），Phase 4 ProviderRouter 的既定插入点。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from backend.config import travel as T
+from backend.shared.logger import logger
+from backend.tools.travel.live_map import map_category, stable_fallback_id
 from backend.tools.travel.poi import search_poi
 from backend.tools.travel.routing import day_radius_km
 from backend.travel.core.contracts import SourceType
@@ -19,9 +22,106 @@ from backend.travel.core.evidence_utils import evidence_to_dict, make_evidence, 
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.poi import Poi, is_seed_source
 from backend.travel.planning import resolve_must_go
+from backend.travel.services import live_search_service
 
 # 候选池上限：足够覆盖 7 天 × intense 档，同时不让状态字典膨胀
 _CANDIDATE_LIMIT = 60
+
+# ── 候选池实时源（TRAVEL_POI_SOURCE=live，2026-10-02 种子库下线）────
+# 腾讯位置服务关键词检索：任意城市可用、零维护。诚实口径（与
+# live_map.resolve_place 一致）：坐标可信（tencent:lbs + 观测时间），
+# 停留时长统一 120 分钟占位、门票无来源 → unverified，由 validator/
+# reporter 如实标注；评分无来源 → 0（排序退化为必去优先 + 地理聚类）。
+
+_LIVE_QUERIES_BY_PREF = {
+    "自然": "公园 风景名胜",
+    "人文": "博物馆 名胜古迹",
+    "美食": "美食",
+    "亲子": "游乐园 动植物园",
+    "购物": "购物中心 商业街",
+    "夜生活": "夜市",
+    "摄影": "风景区",
+}
+# 无偏好时的兜底检索词：两类覆盖面最宽的通用词
+_LIVE_DEFAULT_QUERIES = ("风景名胜", "博物馆")
+_LIVE_PAGE_SIZE = 10
+_LIVE_MAX_QUERIES = 3
+
+
+def _live_pref_queries(preferences: list[str]) -> list[str]:
+    """偏好标签 → LBS 检索词（最多 3 类，无偏好用兜底词）。"""
+    queries: list[str] = []
+    for pref in preferences:
+        q = _LIVE_QUERIES_BY_PREF.get(pref)
+        if q and q not in queries:
+            queries.append(q)
+    return queries[:_LIVE_MAX_QUERIES] or list(_LIVE_DEFAULT_QUERIES)
+
+
+def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
+    """实时候选检索：按偏好关键词调 LBS 地点搜索，构造诚实标注的 Poi。
+
+    单类检索失败不拖垮其他类（逐类降级、留痕 notes）；全部失败返回
+    空列表，由调用方决定披露或按配置回退种子。
+    """
+    notes: list[str] = []
+    queries = _live_pref_queries(brief.preferences)
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    pois: list[Poi] = []
+    seen: set[str] = set()
+    for q in queries:
+        try:
+            data = live_search_service.search_places(
+                keyword=q, city=brief.destination, page_size=_LIVE_PAGE_SIZE,
+            )
+        except live_search_service.LiveSearchError as exc:
+            logger.warning("[PoiService] 实时候选检索 %s 失败: %s", q, exc)
+            notes.append(f"「{q}」实时检索失败，该类候选缺失")
+            continue
+        for item in data.get("pois") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            lat, lng = item.get("lat"), item.get("lng")
+            if not name or not (isinstance(lat, (int, float)) and isinstance(lng, (int, float))):
+                continue
+            tx_id = str(item.get("id") or "").strip()
+            if tx_id:
+                pid = f"lbs:{tx_id}"
+                key = pid
+            else:
+                pid = f"lbs:{stable_fallback_id(name, brief.destination)}"
+                key = f"{name}|{round(float(lat), 4)}|{round(float(lng), 4)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            pois.append(Poi(
+                poi_id=pid,
+                name=name,
+                city=brief.destination,
+                category=map_category(str(item.get("category") or "")),
+                lat=float(lat),
+                lng=float(lng),
+                suggested_minutes=120,
+                ticket_cny=0.0,
+                tags=[],
+                rating=0.0,
+                source="tencent:lbs",
+                observed_at=observed_at,
+                verification_status="unverified",
+            ))
+    return pois, notes
+
+
+def _seed_candidates(brief: TravelBrief) -> list[Poi]:
+    """本地种子候选（legacy 通道：TRAVEL_POI_SOURCE=seed 或显式回退）。"""
+    return search_poi(
+        city=brief.destination,
+        preferences=brief.preferences,
+        avoid=brief.avoid,
+        must_go=brief.must_go,
+        limit=_CANDIDATE_LIMIT,
+    )
 
 
 @dataclass
@@ -38,24 +138,34 @@ class Skeleton:
 
 
 def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
-    """候选池检索（search_poi 纯函数）+ 必去项 Provider 补全。
+    """候选池检索（TRAVEL_POI_SOURCE: live | seed）+ 必去项 Provider 补全。
 
-    用户点名要去、但本地候选池没有的地点，经 Provider 层（STOP J4：
+    live（默认）：腾讯位置服务关键词实时检索，任意城市可用；坐标可信，
+    时长/门票为诚实占位（validator/reporter 披露）。完全失败且
+    TRAVEL_POI_FALLBACK_SEED=true 时才回退种子库（显式留痕）。
+
+    用户点名要去、但候选池没有的地点，经 Provider 层（STOP J4：
     共享缓存/3s 预算/坐标与 id 校验/quota 软预算）用腾讯位置服务补全。
-    补全需要网络，而 search_poi 是纯函数——两者分开保持检索可离线单测。
 
     Returns:
-        (候选 POI 列表, 补全产生的提示 notes)
+        (候选 POI 列表, 补全/降级产生的提示 notes)
     """
-    candidates = search_poi(
-        city=brief.destination,
-        preferences=brief.preferences,
-        avoid=brief.avoid,
-        must_go=brief.must_go,
-        limit=_CANDIDATE_LIMIT,
-    )
-
     extra_notes: list[str] = []
+    if T.TRAVEL_POI_SOURCE == "live":
+        candidates, live_notes = _build_live_candidates(brief)
+        extra_notes.extend(live_notes)
+        candidates = candidates[:_CANDIDATE_LIMIT]
+        if not candidates:
+            extra_notes.append(
+                "实时候选检索无结果（网络或配额原因），行程将偏空；稍后重试可恢复")
+            if T.TRAVEL_POI_FALLBACK_SEED:
+                candidates = _seed_candidates(brief)
+                if candidates:
+                    extra_notes.append(
+                        "已按配置回退本地种子数据（仅种子城市，非实时，票价/时长未核实）")
+    else:
+        candidates = _seed_candidates(brief)
+
     if brief.must_go:
         from backend.providers.travel.live import get_place_provider
 
@@ -65,11 +175,12 @@ def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 resolve_missing_places,
             )
 
-            added, extra_notes = resolve_missing_places(
+            added, must_go_notes = resolve_missing_places(
                 brief.destination, candidates, brief.must_go,
             )
             if added:
                 candidates = candidates + added
+            extra_notes.extend(must_go_notes)
     return candidates, extra_notes
 
 
