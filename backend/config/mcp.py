@@ -26,11 +26,12 @@ def _bool(name: str, default: bool) -> bool:
 # =============================================
 # 外部 MCP 数据源：12306 车票查询（drfccv/mcp-server-12306）
 # =============================================
-# 宿主机直连用 http://127.0.0.1:18000/mcp；app 容器内走 compose
-# 服务名 http://mcp-12306:8000/mcp（见 docker-compose.yml）。
+# Tool 的消费方是 app 容器，默认走 compose 服务名 http://mcp-12306:8000/mcp
+# （见 docker-compose.yml）；宿主机裸跑调试才需要显式覆盖为
+# http://127.0.0.1:18000/mcp——宿主机回环在容器内不可达，不做默认值。
 TRAIN_MCP_ENABLED = _bool("TRAIN_MCP_ENABLED", False)
 TRAIN_MCP_BASE_URL = os.getenv("TRAIN_MCP_BASE_URL",
-                               "http://127.0.0.1:18000/mcp").strip()
+                               "http://mcp-12306:8000/mcp").strip()
 # 单次调用总超时（秒）：覆盖 initialize 握手 + tools/call 全程
 TRAIN_MCP_TIMEOUT = float(os.getenv("TRAIN_MCP_TIMEOUT", "15"))
 # 结果缓存秒数：余票分钟级变化即可接受，缓存主要为省上游与防限流
