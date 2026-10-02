@@ -239,11 +239,13 @@ class TestKbIdFallback:
             docs = r._get_relevant_documents("员工出差报销需要提交哪些材料？")
             assert len(docs) == 1, "放宽 kb_id 后应召回到跨 KB 结果"
             assert docs[0].metadata["chunk_id"] == "d1c1"
-            # Stage 2 实际用的 filter 不得再含 kb_id/$or，但保留 doc_type 收窄
+            # Stage 2 实际用的 filter 不得再含 kb_id/$or；TD-13（2026-10-03）
+            # 起跨库放宽级同时丢弃 doc_type——0 匹配即证明 QueryAnalyzer 猜测
+            # 不可信，排序交回混合检索与 Rerank。
             assert seen_filters, "Stage 2 未执行"
             last = seen_filters[-1] or {}
             assert "kb_id" not in last and "$or" not in last
-            assert last.get("doc_type") == "financial"
+            assert "doc_type" not in last
         finally:
             clear_context()
 

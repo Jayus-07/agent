@@ -78,10 +78,13 @@ class TestRagServerAskPassthrough:
                 self.received_permissions = None
 
             # 签名对齐 rag_server.ask 的调用面（permissions 2026-09-16 安全加固加入，
-            # 曾因 mock 未同步导致 passthrough 测试假失败）
+            # 曾因 mock 未同步导致 passthrough 测试假失败；roles/user_id/tenant_id
+            # 分别随角色口径与 TD-14 预算归属加入）
             def ask(self, question, session_id="default", kb_id="default",
-                   kb_ids=None, subject_type="", department="", permissions=None):
+                   kb_ids=None, subject_type="", department="", permissions=None,
+                   roles=(), user_id="", tenant_id=""):
                 self.received_permissions = permissions
+                self.received_user_id = user_id
                 return "答案"
 
         fake = FakePipeline()

@@ -622,9 +622,16 @@ class ChunkLevelRetriever(BaseRetriever):
             st.stage1_fallback_count += 1
             # 探测放宽 domain 后 KB 是否仍有文档；空 KB → 继续放宽 kb_id
             if not self._filter_has_docs(fallback_filter):
+                # TD-13（2026-10-03）：kb_fallback 级同时丢弃 doc_type——
+                # 实测"发票认证时限"被 QueryAnalyzer 按"认证"词表误抽
+                # doc_type=security，policy 文档 0 命中后放宽到全库仍带着
+                # 这个错误猜测，召回空间恰只剩 security 文档 → Rerank
+                # 8/8 淘汰 → 假拒答。跨库放宽 = QueryAnalyzer 全部猜测
+                # 作废，授权范围内全量检索，排序交回 BM25/向量/Rerank
+                # （keep-set 主体授权在 Stage 2 后强制收口，安全边界不变）。
                 kb_relaxed = {
                     k: v for k, v in fallback_filter.items()
-                    if k not in ("kb_id", "$or")
+                    if k not in ("kb_id", "$or", "doc_type")
                 }
                 if kb_relaxed != fallback_filter:
                     logger.info(
@@ -644,11 +651,13 @@ class ChunkLevelRetriever(BaseRetriever):
             # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
             # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
             # 如"报销"→policy_finance，但文档实际在 rag_test_kb）。
-            # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答；
-            # 保留 doc_type 等语义收窄条件。
+            # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答。
+            # TD-13：doc_type 是问题字面的猜测值（词表歧义，如"发票认证"
+            # →security），0 匹配即证明猜测错误——跨库放宽时一并丢弃，
+            # 不保留任何 QueryAnalyzer 维度（排序交回混合检索与 Rerank）。
             fallback_filter = {
                 k: v for k, v in st.metadata_filter.items()
-                if k not in ("kb_id", "$or")
+                if k not in ("kb_id", "$or", "doc_type")
             }
             if fallback_filter != st.metadata_filter:
                 logger.info(

@@ -111,6 +111,10 @@ class AskRequest(BaseModel):
         default_factory=list,
         description="网关验签后的 JWT 角色（admin 跨部门口径唯一输入）",
     )
+    # TD-14（2026-10-03）：调用方用户/租户身份——预算预占与结算在
+    # rag-service 侧落库的归属主体；空 = 未声明（保持旧行为，不建预算）。
+    user_id: str = Field("", description="调用方用户 ID（预算归属）")
+    tenant_id: str = Field("", description="调用方租户 ID（预算归属）")
 
 
 class RetrieveRequest(BaseModel):
@@ -282,16 +286,39 @@ def ask(req: AskRequest) -> dict[str, Any]:
     except RuntimeError as e:
         # 初始化失败（重试中）：503 让调用方走兜底/重试
         raise HTTPException(status_code=503, detail=str(e)) from e
-    answer = pipeline.ask(
-        question=req.question,
-        session_id=req.session_id,
-        kb_id=req.kb_id,
-        kb_ids=req.kb_ids,
-        subject_type=req.subject_type,
-        department=req.department,
-        permissions=req.permissions,
-        roles=tuple(req.roles),
-    )
+    # TD-14：带身份的请求绑定请求级预算（reserve/settle 在本进程落库，
+    # 归属 user/tenant；此前旁路告警 [Budget] reserve 旁路 即缺此绑定）。
+    _budget_bound = False
+    if req.user_id and req.tenant_id:
+        try:
+            from backend.infra.llm.budget import bind_request_budget
+            bind_request_budget(
+                f"rag-ask:{req.session_id}",
+                user_id=req.user_id, tenant_id=req.tenant_id,
+            )
+            _budget_bound = True
+        except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞问答
+            logger.warning(f"[RAG /ask] 预算绑定失败（放行）: {e}")
+    try:
+        answer = pipeline.ask(
+            question=req.question,
+            session_id=req.session_id,
+            kb_id=req.kb_id,
+            kb_ids=req.kb_ids,
+            subject_type=req.subject_type,
+            department=req.department,
+            permissions=req.permissions,
+            roles=tuple(req.roles),
+            user_id=req.user_id,
+            tenant_id=req.tenant_id,
+        )
+    finally:
+        if _budget_bound:
+            try:
+                from backend.infra.llm.budget import clear_request_budget
+                clear_request_budget()
+            except Exception:  # noqa: BLE001
+                pass
     logger.info(f"[RAG /ask] 返回 answer_len={len(answer or '')} meta_keys={list((getattr(pipeline, 'last_answer_meta', {}) or {}).keys())}")
     return {"answer": answer, "meta": getattr(pipeline, "last_answer_meta", {}) or {}}
 
