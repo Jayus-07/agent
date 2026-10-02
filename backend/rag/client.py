@@ -87,6 +87,8 @@ class RAGServiceProxy:
             ) from e
         payload = resp.json()
         self.last_answer_meta = payload.get("meta") or {}
+        from backend.shared.logger import logger as _logger
+        _logger.info(f"[RAG client.ask] HTTP {resp.status_code} answer_len={len(payload.get('answer') or '')}")
         return payload["answer"]
 
     def retrieve_knowledge(

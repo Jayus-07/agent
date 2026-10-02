@@ -73,11 +73,23 @@ async def _check_internal_token(request, call_next):
         return await call_next(request)
     token = _internal_token()
     if not token:  # 本地开发模式（非 production 已在启动期拦截）
+        try:
+            from backend.prompts.hot_reload import ensure_prompt_snapshot_fresh_async
+
+            await ensure_prompt_snapshot_fresh_async()
+        except Exception:  # noqa: BLE001 - Prompt 热更新旁路不得阻断 RAG
+            logger.debug("[rag-server] Prompt Runtime freshness check skipped", exc_info=True)
         return await call_next(request)
     import hmac as _hmac
     provided = request.headers.get("X-Internal-Token", "")
     if not _hmac.compare_digest(token.encode("utf-8"), provided.encode("utf-8")):
         return JSONResponse(status_code=401, content={"detail": "invalid internal token"})
+    try:
+        from backend.prompts.hot_reload import ensure_prompt_snapshot_fresh_async
+
+        await ensure_prompt_snapshot_fresh_async()
+    except Exception:  # noqa: BLE001 - Prompt 热更新旁路不得阻断 RAG
+        logger.debug("[rag-server] Prompt Runtime freshness check skipped", exc_info=True)
     return await call_next(request)
 
 
@@ -204,6 +216,12 @@ async def _startup() -> None:
             "[rag-server] Prompt DB 快照加载失败，索引期提示词回退 defaults",
             exc_info=True,
         )
+    try:
+        from backend.prompts.hot_reload import start_prompt_reload_listener
+
+        start_prompt_reload_listener()
+    except Exception:
+        logger.warning("[rag-server] PromptHotReload listener 启动失败", exc_info=True)
     # C 阶段：BM25 发布通知监听（加速热刷新；漏掉消息由每请求版本检查兜底）
     try:
         _start_index_published_listener()
@@ -274,6 +292,7 @@ def ask(req: AskRequest) -> dict[str, Any]:
         permissions=req.permissions,
         roles=tuple(req.roles),
     )
+    logger.info(f"[RAG /ask] 返回 answer_len={len(answer or '')} meta_keys={list((getattr(pipeline, 'last_answer_meta', {}) or {}).keys())}")
     return {"answer": answer, "meta": getattr(pipeline, "last_answer_meta", {}) or {}}
 
 

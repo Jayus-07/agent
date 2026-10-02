@@ -42,10 +42,12 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
         permissions=get_tool_permissions(),
         tenant_id=get_tool_tenant_id(),
     )
-    return pipeline.ask(question, session_id=sid, kb_id=kb_id,
-                        subject_type=principal.subject_type,
-                        department=principal.department,
-                        permissions=principal.permissions)
+    result = pipeline.ask(question, session_id=sid, kb_id=kb_id,
+                          subject_type=principal.subject_type,
+                          department=principal.department,
+                          permissions=principal.permissions)
+    logger.info(f"[Tool:search_knowledge] 返回 len={len(result or '')} repr_head={repr((result or '')[:40])}")
+    return result
 
 
 # ==================== Tool Registry 自动注册 ====================
