@@ -32,6 +32,7 @@ from backend.tools.travel.train import travel_train_search_tool
 def enabled(monkeypatch):
     """临时开启外部数据源（config 默认关；本机 .env 开了也必须能测关闭态）。"""
     monkeypatch.setattr(MCP_CFG, "TRAIN_MCP_ENABLED", True)
+    monkeypatch.setattr(MCP_CFG, "TRAIN_MCP_BASE_URL", "http://test/mcp")
     monkeypatch.setattr(MCP_CFG, "TRAIN_MCP_MIN_INTERVAL", 0.0)
     monkeypatch.setattr(MCP_CFG, "TRAIN_MCP_CACHE_TTL", 0)
     yield
@@ -84,6 +85,21 @@ _REAL_BAD_STATION = {
     "hint": "可尝试拼音、简拼、三字码或用 search_stations 工具辅助查询",
 }
 _REAL_BAD_DATE = {"success": False, "errors": ["日期格式错误，请使用 YYYY-MM-DD 格式"]}
+_REAL_PRICE = {
+    "train_code": "D6409",
+    "prices": {"二等座": "80.0", "一等座": "128.0", "商务座": "240.0"},
+}
+_REAL_PRICE_DATA = {
+    "success": True,
+    "from_station": "九江",
+    "to_station": "永修",
+    "train_date": "2025-06-01",
+    "count": 1,
+    "data": [{
+        "train_code": "G1556",
+        "prices": {"二等座": "23.0", "一等座": "37.0"},
+    }],
+}
 
 
 # =============================================
@@ -185,6 +201,14 @@ class TestTrainTool:
             from_station=" ", to_station="厦门", date="2026-10-03"))
         assert "from_station" in out["error"]
 
+    @pytest.mark.parametrize("bad_limit", ["bad", None, 0])
+    def test_invalid_limit_is_a_failed_tool_result(self, enabled, upstream, bad_limit):
+        out = _fail(travel_train_search_tool.func(
+            from_station="福州", to_station="厦门", date="2026-10-03",
+            limit=bad_limit))
+        assert "limit" in out["error"]
+        assert upstream[0] == []
+
     def test_bad_date_rejected_locally(self, enabled, upstream):
         """日期在本地先校验，不打上游。"""
         out = _fail(travel_train_search_tool.func(
@@ -211,6 +235,38 @@ class TestTrainTool:
         assert data["total_matched"] == 236
         from datetime import datetime
         assert datetime.fromisoformat(data["trains"][0]["updated_at"]).tzinfo is not None
+
+    def test_price_tool_calls_query_ticket_price(self, enabled, upstream):
+        """票价查询必须调用独立 MCP 工具，并保留车次与来源。"""
+        calls, responses = upstream
+        responses.append(dict(_REAL_PRICE))
+        price_tool = getattr(TRAIN, "travel_train_price_tool", None)
+        assert price_tool is not None
+        data = _ok(price_tool.func(
+            from_station="福州", to_station="厦门北",
+            train_date="2026-10-03", train_code="D6409",
+        ))
+        assert calls[0][1] == "query-ticket-price"
+        assert calls[0][2] == {
+            "from_station": "福州", "to_station": "厦门北",
+            "train_date": "2026-10-03", "train_code": "D6409",
+        }
+        assert data["train_code"] == "D6409"
+        assert data["prices"]["二等座"] == "80.0"
+        assert data["source"] == "12306"
+
+    def test_price_tool_accepts_documented_data_list(self, enabled, upstream):
+        """兼容 12306 MCP 文档中的 data[] 返回形态。"""
+        calls, responses = upstream
+        responses.append(dict(_REAL_PRICE_DATA))
+        price_tool = getattr(TRAIN, "travel_train_price_tool")
+        data = _ok(price_tool.func(
+            from_station="九江", to_station="永修",
+            train_date="2025-06-01", train_code="G1556",
+        ))
+        assert calls[0][1] == "query-ticket-price"
+        assert data["train_code"] == "G1556"
+        assert data["prices"]["二等座"] == "23.0"
 
     def test_no_direct_is_success_with_note(self, enabled, upstream):
         """「查不到」：无直达是确定答案，成功封套 + 建议中转。"""

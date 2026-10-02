@@ -1117,6 +1117,35 @@ services:
           memory: 768m
           cpus: "1.0"
 
+  # ── 外部 MCP 数据源：12306 车票查询（drfccv/mcp-server-12306）──
+  # 2026-10-02 拍板「外部 MCP server 作为 Tool 数据源」的首个消费方。
+  # 上游为非官方聚合、无 SLA、仅供学习研究（不商用）；平台侧开关
+  # TRAIN_MCP_ENABLED 默认关，关掉本容器即整体降级，不影响主链路。
+  # app 容器内经服务名直连 http://mcp-12306:8000/mcp（容器名直连是首选，
+  # 不经宿主机回环）。
+  mcp-12306:
+    image: drfccv/mcp-server-12306:latest
+    container_name: mcp-12306
+    ports:
+      - "127.0.0.1:18000:8000"
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+
 volumes:
   app_data:
   app_cache:

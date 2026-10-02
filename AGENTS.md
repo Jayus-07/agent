@@ -108,6 +108,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 **Skill 硬约束**：`name` = 目录名（节点名 `<name>_skill` 由其推导）；Skill 类只定义执行行为，`capabilities/description/examples/params_schema` 必须只写在 `capabilities.yaml`，由 `skills.metadata.bind_manifest_metadata()` 启动期绑定兼容字段并 fail-fast；capability 恰一个点 `<域>.<动作>` 全域唯一，workflow 纯蛇形不带点。❌ Skill 层定义 `@tool`、直接写 SQL/调 HTTP；多 Tool 覆写 `_select_tool()` 分发并把 params 裁到目标 Tool 签名内。
 **新 Tool 三规**：`@tool`｜底部注册｜返回 JSON 字符串（失败返 `{"error":…}`，「查不到」与「查不了」分开），统一走 `tools/map/_base.py` 的 `ok/fail/not_configured`（存量 18 个返 Markdown 是例外 E8，别参照）。副作用 Tool 必须过 `security/tool_approval.ensure_approved()`；user_id 取 `tools/session.get_tool_user_id()`，禁止硬编码。
+**新 Tool 第四规（2026-10-02）**：`tools/labels.py` 登记中文名 `display_name`（单一事实源；生成器派生进契约 lock 不参与 content_hash，管理端/守护消费；漏登记被 `test_tool_stats_alignment::TestDisplayNames` fail-fast 拦截）。
 **易漏接线**：新 capability 加 `direct_executor.py::_USER_CAP_LABELS`。
 
 **验证（改完必跑）**：`cd backend && "$PY" -m pytest tests/test_registry_consistency.py tests/test_layer_consistency.py tests/test_adr0001_dual_registry_merge.py tests/test_tool_contract_lock.py -q --no-cov`（改 Tool 签名/args 后另跑 `"$PY" -m backend.scripts.gen_tool_contract_lock` 重新生成 lock 并随变更提交）

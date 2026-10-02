@@ -172,6 +172,10 @@ AMAP_MAX_PAGE_SIZE = int(os.getenv("AMAP_MAX_PAGE_SIZE", "25"))
 # 默认检索城市（与 TENCENT_LBS_DEFAULT_REGION 同一策略：无地域限定
 # 会返回全国噪声结果）
 AMAP_DEFAULT_REGION = os.getenv("AMAP_DEFAULT_REGION", "福州")
+# 高德分类码：餐饮服务 / 住宿服务。允许通过环境变量调整，避免把业务类目
+# 固化在前端；商户 Tool 仍会校验调用方传入的 types 格式。
+AMAP_FOOD_TYPES = os.getenv("AMAP_FOOD_TYPES", "050000").strip()
+AMAP_HOTEL_TYPES = os.getenv("AMAP_HOTEL_TYPES", "100000").strip()
 
 
 def is_amap_configured() -> bool:

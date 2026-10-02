@@ -76,6 +76,7 @@ def map_lookup_tool(
     mode: str = "",
     kind: str = "now",
     near: str = "",
+    types: str = "",
     zoom: int = 14,
     size: str = "600*400",
     markers: str = "",
@@ -91,7 +92,7 @@ def map_lookup_tool(
     坐标统一为 "纬度,经度"，如 "26.0824,119.2968"（不是经度在前）。
     各 action 所需参数：weather→city 或 location；geocode→address；
     reverse_geocode→location；place_search→keyword（可选 city/near）；
-    merchant_search→keyword（可选 city/near，返回评分/人均/营业状态）；
+    merchant_search→keyword（可选 city/near/types，返回评分/人均/营业状态）；
     route→from_location + to_location；navigation→to_location；
     static_map→location 或 markers；district→keyword 或 district_id；
     street_view→location。
@@ -132,6 +133,7 @@ def map_lookup_tool(
         if act == "merchant_search":
             return map_merchant_search_tool.func(
                 keyword=keyword, city=city, near=near,
+                types=types,
                 radius_m=radius_m or 3000, page_size=page_size,
             )
         if act == "route":

@@ -193,6 +193,11 @@ class TestPlaceTextFacade:
         assert params["region"] == MAP.AMAP_DEFAULT_REGION
         assert params["city_limit"] == "true"
 
+    def test_types_filter_is_forwarded_to_amap(self, configured, capture):
+        AMAP_LBS.place_text("酒店", region="福州", types="100000")
+        _, params = capture[-1]
+        assert params["types"] == "100000"
+
     def test_location_swapped_for_amap(self, configured, capture):
         """平台 (lat, lng) → 高德「经度,纬度」，写反点就飞到几百公里外。"""
         AMAP_LBS.place_text("咖啡", location=(26.086311, 119.298447), radius=1000)
@@ -249,6 +254,24 @@ class TestMerchantTool:
         out = _fail_envelope(M.map_merchant_search_tool.func(
             keyword="咖啡", near="不是坐标"))
         assert "near" in out["error"]
+
+    def test_types_filter_is_forwarded_by_tool(self, configured, monkeypatch):
+        captured = {}
+
+        def _fake(*args, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        monkeypatch.setattr(AMAP_LBS, "place_text", _fake)
+        data = _ok_envelope(M.map_merchant_search_tool.func(
+            keyword="酒店", city="福州", types="100000"))
+        assert captured["types"] == "100000"
+        assert data["types"] == "100000"
+
+    def test_invalid_types_filter_is_rejected(self, configured):
+        out = _fail_envelope(M.map_merchant_search_tool.func(
+            keyword="酒店", types="100000&bad"))
+        assert "types" in out["error"]
 
     def test_success_carries_all_contract_fields(self, configured, monkeypatch):
         monkeypatch.setattr(AMAP_LBS, "place_text",

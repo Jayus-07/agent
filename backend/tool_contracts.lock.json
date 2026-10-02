@@ -1,12 +1,15 @@
 {
   "version": 1,
-  "generated_at": "2026-10-02T01:58:52+08:00",
-  "git_sha": "7462889",
-  "tool_count": 36,
+  "generated_at": "2026-10-02T11:28:01+08:00",
+  "git_sha": "57698d5",
+  "tool_count": 39,
   "tools": {
     "calculate_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/calculator.py",
       "display_name": "数学计算",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "0a4bad62450f5756",
       "args_schema": {
         "expression": {
@@ -24,6 +27,9 @@
     "competitor_analyze_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
       "display_name": "竞品分析",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "95a05d8b0a031daa",
       "args_schema": {
         "idempotency_key": {
@@ -70,6 +76,9 @@
     "competitor_history_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
       "display_name": "竞品价格历史",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "fd2592682b4e14b7",
       "args_schema": {
         "question": {
@@ -94,6 +103,9 @@
     "competitor_watch_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
       "display_name": "竞品巡检",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "9b922fc4240d079f",
       "args_schema": {
         "idempotency_key": {
@@ -111,6 +123,9 @@
     "competitor_watchlist_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
       "display_name": "竞品监控清单管理",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "77c1b270cdb5969c",
       "args_schema": {
         "action": {
@@ -156,6 +171,9 @@
     "data_collection_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/data_collection.py",
       "display_name": "数据采集入库",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "140f080a61b5b6b8",
       "args_schema": {
         "dedup_keys": {
@@ -226,6 +244,9 @@
     "execute_sql_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
       "display_name": "SQL 只读查询",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "95c523fde60caf18",
       "args_schema": {
         "query": {
@@ -243,6 +264,9 @@
     "export_csv_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/export.py",
       "display_name": "CSV 导出",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "1b9696b7617612ed",
       "args_schema": {
         "filename": {
@@ -278,6 +302,9 @@
     "generate_report_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/report.py",
       "display_name": "报告生成",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "85c450991f3e72d7",
       "args_schema": {
         "filters": {
@@ -311,9 +338,55 @@
       },
       "content_hash": "ec17a7fc00e087be"
     },
+    "global_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/search/zhihu.py",
+      "display_name": "全网搜索",
+      "data_source": {
+        "type": "mcp",
+        "provider": "知乎",
+        "upstream_tool": "global_search",
+        "switch_env": "ZHIHU_MCP_ENABLED",
+        "quota": {
+          "period": "period",
+          "limit": 5000,
+          "usage_counter": "zhihu_mcp",
+          "note": "开放平台免费额度按期计（搜索类各 5000 次/期），超额需购买资源包；月键只计真实上游调用，缓存命中不计"
+        }
+      },
+      "description_hash": "d2e977664285a747",
+      "args_schema": {
+        "count": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 5
+        },
+        "query": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "93d1a21dbb92935b"
+    },
     "map_coord_convert_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
       "display_name": "坐标转换",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "b4a9e24dcb9a14eb",
       "args_schema": {
         "from_type": {
@@ -338,6 +411,16 @@
     "map_distance_matrix_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
       "display_name": "多点距离矩阵",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "baf8ac3cce07b5c5",
       "args_schema": {
         "from_locations": {
@@ -369,6 +452,16 @@
     "map_district_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
       "display_name": "行政区划查询",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "e304a41867c33678",
       "args_schema": {
         "district_id": {
@@ -393,6 +486,16 @@
     "map_geocode_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
       "display_name": "地理编码",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "b543af5d97ee877e",
       "args_schema": {
         "address": {
@@ -417,6 +520,16 @@
     "map_ip_location_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
       "display_name": "IP 定位",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "42fddc4e146d6bcb",
       "args_schema": {
         "ip": {
@@ -434,7 +547,17 @@
     "map_lookup_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/lookup.py",
       "display_name": "地图聚合查询",
-      "description_hash": "2e76cab14e331aee",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
+      "description_hash": "a3797b061967e163",
       "args_schema": {
         "action": {
           "schema": {
@@ -548,6 +671,13 @@
           "required": false,
           "default": ""
         },
+        "types": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
         "zoom": {
           "schema": {
             "type": "integer"
@@ -562,12 +692,20 @@
       "output_types": {
         "map.lookup": "structured"
       },
-      "content_hash": "8641d1253e64288d"
+      "content_hash": "72e0f9a761f198ba"
     },
     "map_merchant_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/merchant.py",
-      "display_name": "",
-      "description_hash": "eb72098eae6f4f54",
+      "display_name": "商家搜索",
+      "data_source": {
+        "type": "rest",
+        "provider": "高德",
+        "quota": {
+          "period": "day",
+          "note": "上游当日限量（额度按 Key 档位），超限返回错误码 10004/10009；平台不计数，触发即知"
+        }
+      },
+      "description_hash": "2a86b11d9bdc4c1a",
       "args_schema": {
         "city": {
           "schema": {
@@ -603,15 +741,32 @@
           },
           "required": false,
           "default": 3000
+        },
+        "types": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
         }
       },
       "capabilities": [],
       "output_types": {},
-      "content_hash": "a9153f228dd6983c"
+      "content_hash": "44621261c6a161ee"
     },
     "map_navigation_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
       "display_name": "导航调起链接",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "c7e1265e71884784",
       "args_schema": {
         "from_location": {
@@ -664,6 +819,16 @@
     "map_place_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
       "display_name": "地点搜索",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "613597c0e5f6e7c8",
       "args_schema": {
         "city": {
@@ -709,6 +874,16 @@
     "map_place_suggest_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
       "display_name": "地点输入联想",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "d42225f7bbb5f9bb",
       "args_schema": {
         "city": {
@@ -733,6 +908,16 @@
     "map_reverse_geocode_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
       "display_name": "逆地理编码",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "96528ef829a9ee21",
       "args_schema": {
         "location": {
@@ -757,6 +942,16 @@
     "map_route_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
       "display_name": "路线规划",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "e364eadcee135612",
       "args_schema": {
         "from_location": {
@@ -795,6 +990,16 @@
     "map_static_map_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/static_map.py",
       "display_name": "静态地图",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "cfcdf3a4f66ca538",
       "args_schema": {
         "center": {
@@ -840,6 +1045,16 @@
     "map_street_view_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/street_view.py",
       "display_name": "街景查询",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "9dc5f966a99d17d2",
       "args_schema": {
         "heading": {
@@ -878,6 +1093,16 @@
     "map_weather_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/map/weather.py",
       "display_name": "天气查询",
+      "data_source": {
+        "type": "rest",
+        "provider": "腾讯LBS+和风",
+        "quota": {
+          "period": "day",
+          "limit_env": "TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET",
+          "usage_provider": "tencent:lbs",
+          "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
+        }
+      },
       "description_hash": "8915d5a595eb251b",
       "args_schema": {
         "city": {
@@ -909,6 +1134,9 @@
     "memory_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
       "display_name": "记忆检索",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "306fe94770e4d6f2",
       "args_schema": {
         "query": {
@@ -933,6 +1161,9 @@
     "memory_store_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
       "display_name": "记忆写入",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "98066de659309c96",
       "args_schema": {
         "content": {
@@ -971,6 +1202,10 @@
     "read_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
       "display_name": "邮件读取",
+      "data_source": {
+        "type": "rest",
+        "provider": "IMAP/Agently"
+      },
       "description_hash": "9d169a15bb8f3e95",
       "args_schema": {
         "message_id": {
@@ -988,6 +1223,10 @@
     "search_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
       "display_name": "邮件搜索",
+      "data_source": {
+        "type": "rest",
+        "provider": "IMAP/Agently"
+      },
       "description_hash": "1778923c62ba18fb",
       "args_schema": {
         "cursor": {
@@ -1026,6 +1265,9 @@
     "search_knowledge_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/rag.py",
       "display_name": "知识库检索",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "fa54572818b6b08a",
       "args_schema": {
         "kb_id": {
@@ -1054,6 +1296,10 @@
     "send_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
       "display_name": "邮件发送",
+      "data_source": {
+        "type": "rest",
+        "provider": "SMTP/Agently"
+      },
       "description_hash": "007021fbb3ea3706",
       "args_schema": {
         "body": {
@@ -1109,6 +1355,9 @@
     "sql_query_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
       "display_name": "自然语言查库",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "43a60f429eab4d5a",
       "args_schema": {
         "question": {
@@ -1126,6 +1375,9 @@
     "travel_poi_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/travel/poi.py",
       "display_name": "景点搜索",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "5cb02a4fe7702eba",
       "args_schema": {
         "avoid": {
@@ -1172,9 +1424,59 @@
       },
       "content_hash": "dc6e1969551b83c4"
     },
+    "travel_train_price_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/travel/train.py",
+      "display_name": "火车票票价查询",
+      "data_source": {
+        "type": "mcp",
+        "provider": "12306",
+        "upstream_tool": "query-ticket-price",
+        "switch_env": "TRAIN_MCP_ENABLED"
+      },
+      "description_hash": "f1b370142bf6360e",
+      "args_schema": {
+        "from_station": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "to_station": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "train_code": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "train_date": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "b4da6929370ffe29"
+    },
     "travel_train_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/travel/train.py",
-      "display_name": "",
+      "display_name": "火车票余票查询",
+      "data_source": {
+        "type": "mcp",
+        "provider": "12306",
+        "upstream_tool": "query-tickets",
+        "switch_env": "TRAIN_MCP_ENABLED"
+      },
       "description_hash": "af9621485e8ae40e",
       "args_schema": {
         "date": {
@@ -1213,6 +1515,10 @@
     "watch_email_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
       "display_name": "邮件监听",
+      "data_source": {
+        "type": "rest",
+        "provider": "IMAP/Agently"
+      },
       "description_hash": "d995c994529679ce",
       "args_schema": {
         "timeout_sec": {
@@ -1230,6 +1536,10 @@
     "web_crawl_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
       "display_name": "网页抓取",
+      "data_source": {
+        "type": "rest",
+        "provider": "目标站点"
+      },
       "description_hash": "572e3dbc71e62b5f",
       "args_schema": {
         "mode": {
@@ -1258,6 +1568,10 @@
     "web_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
       "display_name": "网页搜索",
+      "data_source": {
+        "type": "rest",
+        "provider": "外部搜索"
+      },
       "description_hash": "8efa157629e8d0e3",
       "args_schema": {
         "num_results": {
@@ -1282,6 +1596,42 @@
         "web.search": "text"
       },
       "content_hash": "7a0bc6126da98991"
+    },
+    "zhihu_search_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/search/zhihu.py",
+      "display_name": "知乎搜索",
+      "data_source": {
+        "type": "mcp",
+        "provider": "知乎",
+        "upstream_tool": "zhihu_search",
+        "switch_env": "ZHIHU_MCP_ENABLED",
+        "quota": {
+          "period": "period",
+          "limit": 5000,
+          "usage_counter": "zhihu_mcp",
+          "note": "开放平台免费额度按期计（搜索类各 5000 次/期），超额需购买资源包；月键只计真实上游调用，缓存命中不计"
+        }
+      },
+      "description_hash": "2bbb332df2b9e664",
+      "args_schema": {
+        "count": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 5
+        },
+        "query": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "93d1a21dbb92935b"
     }
   }
 }

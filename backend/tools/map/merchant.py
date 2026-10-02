@@ -104,11 +104,25 @@ def _price_display(avg_cost_cny: float | None) -> str | None:
     return f"人均¥{avg_cost_cny:g}"
 
 
+_AMAP_TYPES_RE = re.compile(r"^\d{4,12}(?:\|\d{4,12})*$")
+
+
+def _normalize_types(types: str) -> str | None:
+    """校验高德分类码，防止把任意字符串透传到上游。"""
+    value = (types or "").strip()
+    if not value:
+        return None
+    if not _AMAP_TYPES_RE.fullmatch(value):
+        raise ValueError("types 应为数字分类码，多个分类码用 | 分隔")
+    return value
+
+
 @tool
 def map_merchant_search_tool(
     keyword: str,
     city: str = "",
     near: str = "",
+    types: str = "",
     radius_m: int = 3000,
     page_size: int = 10,
 ) -> str:
@@ -118,6 +132,7 @@ def map_merchant_search_tool(
     keyword: 商家名或品类词，如 "海底捞"、"咖啡"、"火锅"
     city: 限定城市，如 "福州"；未提供 near 时建议填写，否则可能返回全国结果
     near: 中心坐标 "纬度,经度"，填写后改为周边检索并按距离排序，结果带 distance_m
+    types: 高德分类码，如餐饮服务 "050000"、住宿服务 "100000"；多个用 "|" 分隔
     radius_m: 周边检索半径（米），默认 3000，上限 50000
     page_size: 返回条数，默认 10，上限 25
     适用场景：需要评分、人均价格、营业状态做「推荐哪家、现在去行不行」判断时；
@@ -134,14 +149,24 @@ def map_merchant_search_tool(
     near_coord = _base.normalize_coord(near) if near else None
     if near and near_coord is None:
         return _base.fail(f"near 坐标格式无法解析：{near!r}，应形如 26.0824,119.2968")
+    try:
+        type_filter = _normalize_types(types)
+    except ValueError as exc:
+        return _base.fail(str(exc), field="types")
+    try:
+        radius = int(radius_m or 3000)
+        page = int(page_size or 10)
+    except (TypeError, ValueError):
+        return _base.fail("radius_m 与 page_size 必须是整数")
 
     try:
         results = AMAP_LBS.place_text(
             keyword.strip(),
             region=(city or "").strip() or None,
             location=near_coord,
-            radius=max(1, min(int(radius_m or 3000), 50000)) if near_coord else None,
-            page_size=max(1, min(int(page_size or 10), MAP.AMAP_MAX_PAGE_SIZE)),
+            types=type_filter,
+            radius=max(1, min(radius, 50000)) if near_coord else None,
+            page_size=max(1, min(page, MAP.AMAP_MAX_PAGE_SIZE)),
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("[MapTool] merchant_search 失败: %s", e)
@@ -151,6 +176,7 @@ def map_merchant_search_tool(
         return _base.fail(f"商家检索失败：{keyword}（可能是配额、限流或网络问题）")
     if not results:
         return _base.ok({"keyword": keyword, "count": 0, "merchants": [],
+                         "types": type_filter,
                          "note": "检索成功但无匹配结果，建议放宽关键词或更换城市"})
 
     fetched_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -182,6 +208,7 @@ def map_merchant_search_tool(
     return _base.ok({
         "keyword": keyword,
         "city": (city or "").strip() or MAP.AMAP_DEFAULT_REGION,
+        "types": type_filter,
         "boundary": "nearby" if near_coord else "region",
         "count": len(merchants),
         "merchants": merchants,

@@ -2,13 +2,14 @@
 
 数据源形态（2026-10-02 拍板「外部 MCP server 作为 Tool 数据源」的首例）：
 上游是 drfccv/mcp-server-12306（Docker 部署，Streamable HTTP），平台经
-``infra/mcp_client.py`` 同步薄客户端消费其 ``query-tickets`` 工具。
+``infra/mcp_client.py`` 同步薄客户端消费其 ``query-tickets`` 与
+``query-ticket-price`` 工具。
 
 与既有数据源的关系：
   - 12306 **没有官方开放 API**，上游是非官方聚合、无 SLA、仅供学习研究
     （不商用）；开关 ``TRAIN_MCP_ENABLED`` 默认关，关闭时本工具明确报
     「未启用」，行程规划主链不受影响（交通耗时估算仍走本地直线估算）；
-  - 本工具只做**余票/时刻查询**（只读、无副作用，不需要审批门），
+  - 本模块只做**余票/时刻/指定车次票价查询**（只读、无副作用，不需要审批门），
     不做购票——购票属副作用操作，走独立的审批门链路。
 
 上游返回形态全部来自 2026-10-02 实测（解析规则勿凭文档改）：
@@ -37,6 +38,7 @@ from backend.shared.tool_envelope import tool_error_result, tool_success_result
 
 # 上游 query-tickets 的工具名（MCP server 侧定义，勿改）
 _UPSTREAM_TOOL = "query-tickets"
+_UPSTREAM_PRICE_TOOL = "query-ticket-price"
 
 # 席别键中文化（上游英文键 → 用户面中文）；未收录的键原样透传不丢信息
 _SEAT_LABELS = {
@@ -116,7 +118,8 @@ def travel_train_search_tool(
     if normalized_date is None:
         return tool_error_result(
             f"date 格式无法解析：{date!r}，应为 YYYY-MM-DD（如 2026-10-03）")
-    limit = max(1, min(int(limit or 20), 50))
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        return tool_error_result("limit 必须是 1 到 50 的整数")
 
     arguments = {
         "from_station": from_station,
@@ -147,17 +150,22 @@ def travel_train_search_tool(
         trains = list(payload.get("trains") or [])
         trains.sort(key=lambda t: str(t.get("start_time", "")))
         trains = trains[:limit]
-        for t in trains:
-            t["seats"] = _localize_seats(t.get("seats") or {})
-            t["source"] = "12306"
-            t["updated_at"] = queried_at
+        normalized_trains = []
+        for item in trains:
+            if not isinstance(item, dict):
+                return tool_error_result("12306 返回了无法识别的车次结构")
+            train = dict(item)
+            train["seats"] = _localize_seats(train.get("seats") or {})
+            train["source"] = "12306"
+            train["updated_at"] = queried_at
+            normalized_trains.append(train)
         return tool_success_result({
             "from_station": payload.get("from_station", from_station),
             "to_station": payload.get("to_station", to_station),
             "date": payload.get("train_date", normalized_date),
             "count": len(trains),
             "total_matched": payload.get("count"),
-            "trains": trains,
+            "trains": normalized_trains,
             "source": "12306",
             "queried_at": queried_at,
         })
@@ -184,7 +192,93 @@ def travel_train_search_tool(
     )
 
 
+@tool
+def travel_train_price_tool(
+    from_station: str,
+    to_station: str,
+    train_date: str,
+    train_code: str,
+) -> str:
+    """查询指定 12306 车次的席别票价。
+
+    票价是独立 MCP 工具 ``query-ticket-price`` 的实时返回，不从余票结果
+    推算，也不使用本地参考价。上游没有返回价格时按失败明确告知调用方。
+    """
+    if not MCP_CFG.is_train_mcp_enabled():
+        return tool_error_result(
+            "12306 票价查询未启用",
+            hint="请在 .env 设置 TRAIN_MCP_ENABLED=true 并确认 mcp-12306 容器已启动",
+        )
+    from_station = (from_station or "").strip()
+    to_station = (to_station or "").strip()
+    train_code = (train_code or "").strip()
+    if not from_station or not to_station or not train_code:
+        return tool_error_result(
+            "from_station、to_station 与 train_code 不能为空")
+    normalized_date = _validate_date(train_date)
+    if normalized_date is None:
+        return tool_error_result(
+            f"train_date 格式无法解析：{train_date!r}，应为 YYYY-MM-DD（如 2026-10-03）")
+
+    arguments = {
+        "from_station": from_station,
+        "to_station": to_station,
+        "train_date": normalized_date,
+        "train_code": train_code,
+    }
+    try:
+        payload = call_tool(
+            MCP_CFG.TRAIN_MCP_BASE_URL, _UPSTREAM_PRICE_TOOL, arguments,
+        )
+    except McpClientError as e:
+        logger.warning("[TrainPriceTool] 上游调用失败: %s", e)
+        return tool_error_result(
+            f"12306 票价查询失败（上游服务不可用）：{e}",
+            hint="可稍后重试；未返回票价时不展示参考金额",
+        )
+    except Exception as e:  # noqa: BLE001 — Tool 边界统一兜底
+        logger.warning("[TrainPriceTool] 未预期异常: %s", e)
+        return tool_error_result(f"12306 票价查询异常: {e}")
+
+    if not isinstance(payload, dict):
+        return tool_error_result("12306 票价返回了无法识别的结构",
+                                 payload=str(payload)[:300])
+    price_train_code = str(payload.get("train_code") or train_code)
+    prices = payload.get("prices")
+    # 上游文档形态是 data[]，本地适配层也兼容已观测到的单车次扁平形态。
+    # query-ticket-price 已传 train_code 时优先选择同车次，避免误展示别的车次。
+    if not isinstance(prices, dict):
+        records = payload.get("data")
+        if isinstance(records, list):
+            candidates = [item for item in records if isinstance(item, dict)]
+            record = next(
+                (item for item in candidates
+                 if str(item.get("train_code") or "") == train_code),
+                candidates[0] if len(candidates) == 1 else None,
+            )
+            if record is not None:
+                prices = record.get("prices")
+                price_train_code = str(record.get("train_code") or train_code)
+    if not isinstance(prices, dict) or not prices:
+        return tool_error_result(
+            f"12306 未返回车次 {train_code} 的票价，不展示参考金额",
+            payload=str(payload)[:300],
+        )
+
+    queried_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    return tool_success_result({
+        "from_station": from_station,
+        "to_station": to_station,
+        "date": normalized_date,
+        "train_code": price_train_code,
+        "prices": prices,
+        "source": "12306",
+        "queried_at": queried_at,
+    })
+
+
 # ==================== Tool Registry 自动注册 ====================
 from backend.tools.tool_registry import tool_registry  # noqa: E402
 
 tool_registry.register(travel_train_search_tool, __file__)
+tool_registry.register(travel_train_price_tool, __file__)

@@ -39,7 +39,7 @@ from backend.tools.travel.routing import (
     route_km,
     set_route_provider,
 )
-from backend.tools.travel.train import travel_train_search_tool
+from backend.tools.travel.train import travel_train_price_tool, travel_train_search_tool
 
 __all__ = [
     "resolve_city",
@@ -48,6 +48,7 @@ __all__ = [
     "search_poi",
     "travel_poi_search_tool",
     "travel_train_search_tool",
+    "travel_train_price_tool",
     "haversine_km",
     "route_km",
     "leg_minutes",

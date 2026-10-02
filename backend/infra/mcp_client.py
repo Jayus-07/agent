@@ -143,7 +143,8 @@ def call_tool(base_url: str, tool_name: str, arguments: dict, *,
               timeout: float | None = None,
               ttl: float | None = None,
               headers: dict | None = None,
-              min_interval: float | None = None) -> Any:
+              min_interval: float | None = None,
+              on_upstream_call=None) -> Any:
     """同步调用外部 MCP server 的 tool，返回归一后的 payload。
 
     Args:
@@ -156,6 +157,9 @@ def call_tool(base_url: str, tool_name: str, arguments: dict, *,
             ``{"Authorization": "Bearer <secret>"}``）；默认无
         min_interval: 该源的最小调用间隔秒数（按 base_url 分桶节流）；
             默认取 ``TRAIN_MCP_MIN_INTERVAL``
+        on_upstream_call: 仅在**真实上游调用**成功后回调（缓存命中不触发）。
+            配额计量用——上游按真实调用计费/计额，缓存命中不消耗额度。
+            回调异常静默吞掉，绝不影响业务结果。
 
     Raises:
         McpClientError: 连接失败 / 超时 / 握手失败 / 工具侧报错。
@@ -187,4 +191,9 @@ def call_tool(base_url: str, tool_name: str, arguments: dict, *,
     logger.info("[McpClient] %s.%s ok (%.0fms)",
                 base_url, tool_name, (time.perf_counter() - started) * 1000)
     _cache_put(ck, payload, effective_ttl)
+    if on_upstream_call is not None:
+        try:
+            on_upstream_call()
+        except Exception:  # noqa: BLE001 — 配额回调软失败，不影响业务结果
+            pass
     return payload

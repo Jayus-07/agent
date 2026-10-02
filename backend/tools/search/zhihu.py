@@ -66,6 +66,30 @@ def _normalize_items(items: list, limit: int) -> list[dict]:
     return normalized
 
 
+def _bump_period_usage(upstream_tool: str) -> None:
+    """配额月键计数（软失败）：field = 上游工具名，只计真实上游调用。
+
+    经 ``mcp_client.call_tool(on_upstream_call=...)`` 回调触发——缓存命中
+    不回调，与「上游按真实调用计额」对齐。「期」按自然月近似（开放平台
+    无权威周期查询接口）；TTL 45 天覆盖跨月边界。键形态供管理端
+    /admin/tools 的 quota_runtime 读数（labels.py usage_counter=zhihu_mcp）。
+    """
+    try:
+        from backend.config.redis import REDIS_KEY_PREFIX
+        from backend.infra.redis.client import get_redis
+
+        r = get_redis()
+        if r is None:
+            return
+        key = f"{REDIS_KEY_PREFIX or 'agent:'}tool_quota:zhihu_mcp:{datetime.now():%Y%m}"
+        pipe = r.pipeline()
+        pipe.hincrby(key, upstream_tool, 1)
+        pipe.expire(key, 45 * 86400)
+        pipe.execute()
+    except Exception:  # noqa: BLE001 — 配额统计软失败，不影响搜索结果
+        pass
+
+
 def _search(upstream_tool: str, query: str, count: int) -> str:
     """zhihu_search / global_search 共用执行体（形态同构，见模块头）。"""
     if not MCP_CFG.is_zhihu_mcp_enabled():
@@ -90,6 +114,7 @@ def _search(upstream_tool: str, query: str, count: int) -> str:
             ttl=MCP_CFG.ZHIHU_MCP_CACHE_TTL,
             headers={"Authorization": f"Bearer {MCP_CFG.ZHIHU_MCP_API_KEY}"},
             min_interval=MCP_CFG.ZHIHU_MCP_MIN_INTERVAL,
+            on_upstream_call=lambda: _bump_period_usage(upstream_tool),
         )
     except McpClientError as e:
         logger.warning("[ZhihuSearchTool] 上游调用失败: %s", e)
