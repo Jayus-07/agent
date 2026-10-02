@@ -21,8 +21,11 @@ EXPECTED_CORE_FILES = {
     "evidence_utils.py",
     "events.py",
     "intent_signals.py",
+    "intent.py",  # v3 P0-A：纯规则会话意图，不新增图节点。
     "plan_diff.py",
     "plan_lifecycle.py",
+    "plan_service.py",  # v2 已落库的版本链服务。
+    "plan_store.py",  # v2 已落库的版本账本。
 }
 
 

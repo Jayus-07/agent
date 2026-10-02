@@ -42,6 +42,7 @@ from backend.travel.agents.requirement_agent import (
     extract_unsupported_city,
     party_size_source,
 )
+from backend.travel.core.intent import TravelIntent, classify_intent
 from backend.travel.core.intent_signals import is_cancel_run_query, is_new_run_query
 from backend.travel.graph_state import load_brief
 from backend.travel.models.brief import TravelBrief
@@ -155,11 +156,14 @@ def slot_filler_node(state: dict) -> dict:
     require_fresh = (persistence_status == "degraded"
                      and T.TRAVEL_REQUIRE_PERSISTENCE)
 
-    brief = _requirement_service.merge(
-        previous,
-        _requirement_agent.extract_fresh_brief(
-            message, previous.destination if previous else ""),
+    fresh = _requirement_agent.extract_fresh_brief(
+        message, previous.destination if previous else "")
+    intent = classify_intent(
+        message,
+        has_itinerary=bool(state.get("itinerary")),
+        has_destination=bool(fresh.destination or (previous and previous.destination)),
     )
+    brief = _requirement_service.merge(previous, fresh)
 
     # P1-1 偏好持久化（软失败，读写失败都不影响规划主链）：
     #   预填 —— 跨轮首轮（无上一轮 brief）且开启了偏好功能时，把历史偏好
@@ -201,6 +205,9 @@ def slot_filler_node(state: dict) -> dict:
         except Exception:  # noqa: BLE001 — 回写失败不影响本轮
             logger.debug("[TravelSlotFiller] 偏好回写失败", exc_info=True)
 
+    # 会话意图（v3 §2.1，P0-A 裁决 #1）：先判意图，后查条件。没有意图层
+    # 时「丽江好玩吗」会因缺天数被误追问「玩几天」——supervisor 拿到
+    # intent 后转问答出口，不再按规划链走。
     missing = brief.missing_slots()
     clarification = _requirement_agent.build_clarification(brief, message)
     if clarification:  # M12：slot 追问计数（缺槽数分桶，软失败）
@@ -226,6 +233,23 @@ def slot_filler_node(state: dict) -> dict:
     brief_changed_fields: list[str] = detection["changed_fields"]
     if brief_changed and previous is not None:
         brief.version = detection["new_version"]
+
+    # MODIFY 意图退让（v3 §2.1）：抽取器已把改动理解成结构化字段（avoid/
+    # must_go/天数…指纹变化）时走既有「重排」链——那是有校验兜底的路径，
+    # 只有「第二天换成室内」这类抽取器理解不了的逐条改单才转问答出口。
+    if intent is TravelIntent.MODIFY and (brief_changed or missing):
+        intent = None
+
+    clarification_options: list[dict] = []
+    if intent is TravelIntent.PLAN and missing == ["days"]:
+        clarification_options = [
+            {"label": "按 3 天参考规划", "days": 3,
+             "message": f"规划{brief.destination}3天行程"},
+            {"label": "自己填天数", "days": None, "message": ""},
+        ]
+    if intent in {TravelIntent.QUERY_STATIC, TravelIntent.QUERY_DYNAMIC,
+                  TravelIntent.DISCOVER, TravelIntent.MODIFY}:
+        clarification = ""
 
     logger.info(
         "[TravelSlotFiller] destination=%r days=%s missing=%s changed=%s",
@@ -253,13 +277,33 @@ def slot_filler_node(state: dict) -> dict:
             "如不对，直接说「X个人」"
         )
 
+    # QUERY_STATIC：一轮一次定向灵感检索（v3 §3.1），产出三态灵感包供
+    # reporter 渲染；检索失败不阻塞（status=unavailable 如实呈现）。
+    inspiration: dict = {}
+    if intent is TravelIntent.QUERY_STATIC and brief.destination:
+        from backend.travel.services.inspiration_service import (
+            fetch_destination_inspiration,
+        )
+
+        inspiration = fetch_destination_inspiration(brief.destination)
+    elif intent is TravelIntent.DISCOVER:
+        from backend.travel.recommend import recommend_cities
+
+        inspiration = {"recommendations": [
+            {"city": rec.city, "highlights": rec.highlights}
+            for rec in recommend_cities(brief.preferences or [], top=3)
+        ]}
+
     update: dict = {
         "brief": brief.model_dump(),
         "brief_missing": missing,
         "clarifications": [clarification] if clarification else [],
+        "clarification_options": clarification_options,
         "brief_fingerprint": fingerprint,
         "persistence_status": persistence_status,
         "stage": "slot",
+        "intent": intent.value if intent else "",
+        "inspiration": inspiration,
     }
 
     previous_itinerary = state.get("itinerary") or {}
@@ -305,6 +349,8 @@ def slot_filler_node(state: dict) -> dict:
         notes.insert(0, "已按你的要求重新规划（新方案独立生成）")
         logger.info("[TravelSlotFiller] NEW_RUN 信号，规划产物已清空重排")
 
+    # reset 清理的是旧产物；本轮问答检索结果必须在 reset 之后写回。
+    update["inspiration"] = inspiration
     update["notes"] = notes
     from backend.travel.core.events import emit_travel_event
 
@@ -314,6 +360,8 @@ def slot_filler_node(state: dict) -> dict:
         brief=brief.model_dump(mode="json"),
         missing=missing,
         assumptions=notes,
+        intent=intent.value if intent else "",
+        clarification_options=clarification_options,
         confidence="rule_based",
     )
     return update

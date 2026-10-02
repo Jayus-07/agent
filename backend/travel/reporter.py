@@ -104,6 +104,91 @@ def _user_visible_items(values) -> list[str]:
     ]
 
 
+# ── 会话意图问答出口（v3 §2.1，P0-A）────────────────────────────
+# 渲染纪律不变：只把 state 里的事实（inspiration 包/推荐结果）组织成
+# 人话，不检索、不补造观点；检索类信息缺失时如实说「不可用/没有找到」。
+
+
+def _answer_static(state: dict) -> str:
+    """QUERY_STATIC：知乎攻略观点（inspiration 包）+ 轻规划引导。"""
+    brief = load_brief(state)
+    inspiration = state.get("inspiration") or {}
+    destination = (brief.destination or inspiration.get("destination")
+                   or "目的地").strip()
+    status = inspiration.get("status") or "unavailable"
+    guides = inspiration.get("guides") or []
+    lines: list[str] = [f"关于「{destination}」的玩法，给你有出处的参考：", ""]
+    if status == "available" and guides:
+        for guide in guides[:3]:
+            lines.append(f"- **{guide.get('title', '')}**")
+            if guide.get("summary"):
+                lines.append(f"  {guide['summary']}")
+            if guide.get("url"):
+                lines.append(f"  来源：{guide['url']}")
+        lines.append("")
+        lines.append(
+            "> 以上是攻略作者的主观体验，不代表普遍事实；营业时间、票价等"
+            "事实请以官方渠道为准。"
+        )
+    elif status == "empty":
+        lines.append(
+            f"没有找到与「{destination}」相关的攻略观点。"
+            "可以直接说「做一份 N 天行程」先排起来，或者换个目的地聊聊。"
+        )
+    else:
+        lines.append(
+            "攻略检索暂时不可用（来源超时或未启用），没法给你有出处的观点。"
+            f"不想等的话，直接说「做一份{destination} N 天行程」，我先排起来。"
+        )
+    lines.append("")
+    lines.append(
+        f"想直接做行程：说「做一份{destination} N 天行程」，"
+        "我会先确认天数再开工。"
+    )
+    return "\n".join(lines)
+
+
+def _answer_dynamic(state: dict) -> str:
+    """QUERY_DYNAMIC：实时状态无可靠来源 → 如实告知（v3 §2.1 优先级 2）。"""
+    brief = load_brief(state)
+    destination = (brief.destination or "").strip()
+    dest_label = destination or "目的地"
+    return (
+        "「是否开门 / 当前票价 / 实时余票」这类随时会变的事实，"
+        "我还没有可核验的实时来源，不能拿旧攻略冒充现状——"
+        "建议出行前通过景区或官方渠道核实。\n\n"
+        f"我能帮上的：规划一份{dest_label}的行程（说「做一份{dest_label} N 天行程」），"
+        "行程里的门票与开放时段会如实标注数据状态，不编数字。"
+    )
+
+
+def _answer_discover(state: dict) -> str:
+    """DISCOVER：还在选目的地 → 可解释候选 + 一次引导（不启动规划链）。"""
+    recs = (state.get("inspiration") or {}).get("recommendations") or []
+    if not recs:
+        return (
+            "告诉我一个想去的城市（或出发地 + 假期长度），"
+            "我来帮你定方向、直接排行程。"
+        )
+    lines = ["先给你几个排得出行程的方向：", ""]
+    for rec in recs:
+        highlights = "、".join(rec.get("highlights") or []) or "地点候选可供参考"
+        lines.append(f"- **{rec['city']}**：{highlights}")
+    lines.append("")
+    lines.append("回复城市名即可开始；也可以直接说「去 XX 玩 N 天」。")
+    return "\n".join(lines)
+
+
+def _answer_modify() -> str:
+    """MODIFY（抽取器未理解的逐条改单）：如实说明当前支持的改法。"""
+    return (
+        "逐条改单（换某天的安排、调整顺序）还在建设中。目前可以直接支持的改法：\n\n"
+        "- 「不去 / 避开 XX」——把该地点从行程里排除并重排\n"
+        "- 「重新规划」——按当前条件重新生成一份\n"
+        "- 直接补充「X 天 / 预算 XX / 必去 XX」——我会重排并保留其他要求"
+    )
+
+
 def travel_reporter_node(state: dict) -> dict:
     """行程单节点。"""
     answer = _assemble(state)
@@ -154,6 +239,19 @@ def _stamp_plan_run(state: dict) -> None:
 
 
 def _assemble(state: dict) -> str:
+    # 0) 会话意图问答出口（v3 §2.1，P0-A）：问答/探索/未接线的改单诉求
+    #    不走行程渲染。分支必须在 brief_missing 之前——「丽江好玩吗」
+    #    抽得到目的地、缺天数，落到追问分支就变成了「误规划」。
+    intent = state.get("intent") or ""
+    if intent == "query_static":
+        return _answer_static(state)
+    if intent == "query_dynamic":
+        return _answer_dynamic(state)
+    if intent == "discover":
+        return _answer_discover(state)
+    if intent == "modify":
+        return _answer_modify()
+
     brief = load_brief(state)
 
     # 1) 必填槽位缺失 → 追问（不猜、不硬排）

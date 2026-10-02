@@ -158,6 +158,7 @@ export function readPlanState(): PlanState {
 
 /** 助手回复的小标签文案（抽屉里给用户「到底改没改」的即时反馈）。 */
 export function describePlanReply(data: PlanResponse): { tag: string; tone: 'ok' | 'warn' } {
+  if (data.status === 'answered') return { tag: '旅行建议', tone: 'ok' }
   if (data.itinerary) {
     return { tag: `行程已更新 · v${data.itinerary.plan_version}`, tone: 'ok' }
   }

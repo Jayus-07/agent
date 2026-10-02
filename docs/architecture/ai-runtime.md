@@ -88,6 +88,14 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 只有第一个是「README 架构图里的 Router」；后两者是子系统内部组件，不出现在平台架构图中。
 
+## 旅游会话意图（v3 P0-A）
+
+`travel_slot_filler` 先做纯规则意图分类，再合并需求，最后检查缺槽。已有行程的逐条改单优先；明确规划动作压过疑问；动态与静态问答优先于「城市＋天数」简写。抽取器能理解的结构化修改继续走既有指纹变化重排。`travel_supervisor` 的意图门禁先于缺槽判断，问答与探索直接到 reporter，不调规划子 Agent。
+
+城市名录只用于识别与消歧，不能作为 live Provider 的支持范围闸门。目的地、出发地、路线和预过滤共用带负向词与后缀守卫的扫描入口；种子模式仍如实展示种子覆盖范围。静态问答的一次只读攻略检索在 slot_filler 侧完成，输出 available/empty/unavailable 三态；reporter 只渲染既有结果。问答对外不重复发布 checkpoint 中的旧行程，也不创建规划 pending。
+
+最后验证：2026-10-02 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)。
+
 ## 相关文档
 
 - [domain-service-map.md](domain-service-map.md) — 域图 × 专家 × 工具 × 第三方服务 × 凭据地图（依赖/降级/治理）

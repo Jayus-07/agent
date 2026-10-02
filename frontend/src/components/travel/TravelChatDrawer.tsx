@@ -30,6 +30,7 @@ import {
 import {
   confirmTravelPlan, type Itinerary, type ItineraryBrief, type PlanResponse,
   streamTravelPlan, type TravelStreamEvent,
+  type TravelClarificationOption,
 } from '@/api/travel'
 import BudgetRing from '@/components/chat/BudgetRing'
 import type { BudgetStatus } from '@/api/budgets'
@@ -102,6 +103,9 @@ export default function TravelChatDrawer({
   const [lastRequest, setLastRequest] = useState('')
   const [applying, setApplying] = useState(false)
   const [stopped, setStopped] = useState(false)
+  const [clarificationOptions, setClarificationOptions] = useState<TravelClarificationOption[]>([])
+  const [fillingDays, setFillingDays] = useState(false)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevConvRef = useRef(conversationId)
@@ -114,10 +118,13 @@ export default function TravelChatDrawer({
     if (prevConvRef.current === conversationId) return
     prevConvRef.current = conversationId
     abortRef.current?.abort()
+    currentRunRef.current = ''
     setMessages([])
     setError('')
     setLoading(false)
     setStopped(false)
+    setClarificationOptions([])
+    setFillingDays(false)
   }, [conversationId])
   // 自动滚到底（新消息 / 进行中提示出现时）
   useEffect(() => {
@@ -140,7 +147,7 @@ export default function TravelChatDrawer({
 
   const send = useCallback(async (raw: string) => {
     const message = raw.trim()
-    if (!message || loading || disabled || generating) return
+    if (!message || abortRef.current || loading || disabled || generating || pendingResponse) return
     // 记下发起时所属的线程：请求返回时若线程已换（用户点了「新行程」），
     // 这条回复属于旧行程，不能再往新对话里写。
     const sentConv = conversationId
@@ -150,6 +157,8 @@ export default function TravelChatDrawer({
     setLastRequest(message)
     setError('')
     setText('')
+    setClarificationOptions([])
+    setFillingDays(false)
     setMessages((prev) => [...prev, { role: 'user', text: message }])
     setLoading(true)
     const controller = new AbortController()
@@ -157,6 +166,7 @@ export default function TravelChatDrawer({
     try {
       let data: PlanResponse | null = null
       for await (const event of streamTravelPlan(message, conversationId, { signal: controller.signal })) {
+        if (controller.signal.aborted || currentRunRef.current !== clientRunId) break
         onProcessEvent(event)
         if (event.event === 'error') {
           throw new Error(typeof event.data.message === 'string'
@@ -171,6 +181,7 @@ export default function TravelChatDrawer({
       if (data.status === 'failed') {
         throw new Error(data.final_answer || '旅游规划执行失败')
       }
+      setClarificationOptions(data.clarification_options ?? [])
       const { tag, tone } = describePlanReply(data)
       setMessages((prev) => [
         ...prev,
@@ -202,13 +213,14 @@ export default function TravelChatDrawer({
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null
-      if (prevConvRef.current === sentConv) setLoading(false)
+      if (prevConvRef.current === sentConv && currentRunRef.current === clientRunId) setLoading(false)
     }
-  }, [conversationId, disabled, generating, hasItinerary, loading, onDraft, onProcessEvent, onResponse])
+  }, [conversationId, disabled, generating, hasItinerary, loading, onDraft, onProcessEvent, onResponse, pendingResponse])
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
     abortRef.current = null
+    currentRunRef.current = ''
     setStopped(true)
     setLoading(false)
   }, [])
@@ -432,6 +444,25 @@ export default function TravelChatDrawer({
           </p>
         )}
 
+        {clarificationOptions.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2" aria-label="选择规划天数">
+            {clarificationOptions.map((option) => (
+              <button key={option.label} type="button" disabled={inputDisabled}
+                className="rounded-full border border-[#a9d1c9] bg-[#f5faf9] px-3 py-1.5 text-xs text-[#087b73] disabled:opacity-50"
+                onClick={() => {
+                  if (option.days === null) {
+                    setFillingDays(true)
+                    inputRef.current?.focus()
+                  } else {
+                    void send(option.message)
+                  }
+                }}>
+                {option.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {pendingResponse?.itinerary && (
           <section className="mt-3 rounded-xl border border-[#a9d1c9] bg-[#f5faf9] p-3" aria-label="行程修改预览">
             <div className="flex items-start gap-2">
@@ -522,6 +553,7 @@ export default function TravelChatDrawer({
             <BudgetRing status={budgetStatus} />
           </div>
           <textarea
+            ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -530,7 +562,8 @@ export default function TravelChatDrawer({
             placeholder={
               generating ? '输入不可用（生成中）'
                 : pendingResponse ? '请先应用或保留当前预览，再继续修改…'
-                  : hasItinerary ? '比如：第二天别排太满…' : '比如：杭州 3 天，2 个人，喜欢自然…'
+                  : fillingDays ? '请输入想玩的天数，例如：4 天'
+                    : hasItinerary ? '比如：第二天别排太满…' : '比如：杭州 3 天，2 个人，喜欢自然…'
             }
             aria-label="改行程的对话输入"
             className="max-h-32 min-w-0 flex-1 resize-none rounded-xl border border-[#dae7e5]

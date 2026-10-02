@@ -23,6 +23,7 @@ import re
 from datetime import date
 
 from backend.tools.travel import poi_seed
+from backend.travel.data import cities as city_directory
 from backend.travel.models.brief import (
     DIET_KEYWORDS,
     PACE_KEYWORDS,
@@ -106,7 +107,7 @@ def extract_date_range_days(
 
 
 # 天数：阿拉伯数字或中文数字（含复合） + 天/日（原文已先经 _mask_dates 保护）
-_RE_DAYS = re.compile(rf"({_CN_COMPOUND})\s*[天日]")
+_RE_DAYS = re.compile(rf"(?<![第\d一二两三四五六七八九十])({_CN_COMPOUND})\s*[天日](?!气)")
 # 区间天数：「两三天」「三四天」「2-3天」「两到三天」。
 # 相邻中文数字形式必须排除「十」（否则「十二天」会被当成区间 1-2）；
 # 阿拉伯数字形式要求显式分隔符（否则「12天」会被劈成 1-2）。
@@ -195,11 +196,93 @@ def _first_int(message: str, *patterns: re.Pattern) -> int | None:
 # 判定其紧邻前缀是否为否定/放弃表达。
 _RE_CITY_NEGATION = re.compile(r"(?:不去|不想去|别去|不要去|避开|离开)$")
 
+# ── 城市扫描（v3 P0-A 名录扩容后的单一入口）─────────────────────────
+# 语义变更（2026-10-02 拍板）：匹配集从「种子 3 城」扩为「识别名录 ∪
+# 种子池」——名录是识别词表不是支持范围闸门（TRAVEL_POI_SOURCE=live 后
+# 支持 = Provider 能力边界，见 data/cities.py 模块头）。destination /
+# route_pair / origin 三处共用本入口，禁止各自再扫 poi_seed。
+#
+# 后缀守卫：「南京路 / 北海公园 / 香格里拉酒店 / 中山广场」这类含城市名
+# 的普通词不是目的地——命中城市名后紧跟这些后缀时作废该次命中。
+_POSTFIX_GUARD_RE = re.compile(
+    r"(?:路|街|巷|门|桥|站|道|公园|酒店|饭店|大厦|广场|机场|大学|中学)"
+)
+_CITY_SCAN_CACHE: tuple[list[str], dict[str, str]] | None = None
+
+
+def _city_scan_set() -> tuple[list[str], dict[str, str]]:
+    """识别名录∪种子城市与别名合集（进程级缓存；两份静态数据运行期不变）。"""
+    global _CITY_SCAN_CACHE
+    if _CITY_SCAN_CACHE is None:
+        names = sorted(
+            set(city_directory.all_directory_cities())
+            | set(poi_seed.all_cities()),
+            key=len, reverse=True,
+        )
+        aliases = {**poi_seed.CITY_ALIASES, **city_directory.directory_aliases()}
+        _CITY_SCAN_CACHE = (names, aliases)
+    return _CITY_SCAN_CACHE
+
+
+def _iter_city_hits(message: str) -> list[tuple[int, str]]:
+    """消息中出现的城市命中（纯函数）：返回 (位置, 标准名) 列表。
+
+    同名多次出现保留多个位置（多城消歧按消息顺序取最左需要）；别名与
+    正名同位置的重复命中在返回前去重。
+    """
+    text = message or ""
+    if not text:
+        return []
+    lowered = text.lower()
+    names, aliases = _city_scan_set()
+    hits: list[tuple[int, str]] = []
+
+    def _guarded(pos: int, length: int, frag: str) -> bool:
+        end = pos + length
+        # 拼音别名只匹配完整英文词，避免 dali 命中 dalian。
+        if frag.isascii() and (
+            (pos > 0 and text[pos - 1].isascii() and text[pos - 1].isalpha())
+            or (end < len(text) and text[end].isascii() and text[end].isalpha())
+        ):
+            return True
+        if _POSTFIX_GUARD_RE.match(text, end):
+            return True
+        # 词内误报（「三明治」含三明）：负向词的出现区间与本次命中重叠才作废
+        for phrase in city_directory._NEGATIVE_PHRASES:
+            if frag not in phrase:
+                continue
+            for m in re.finditer(re.escape(phrase), text):
+                if m.start() < end and m.end() > pos:
+                    return True
+        return False
+
+    for name in names:
+        start = 0
+        while True:
+            pos = text.find(name, start)
+            if pos < 0:
+                break
+            start = pos + len(name)
+            if not _guarded(pos, len(name), name):
+                hits.append((pos, name))
+    for alias, city in aliases.items():
+        start = 0
+        while True:
+            pos = lowered.find(alias, start)
+            if pos < 0:
+                break
+            start = pos + len(alias)
+            if not _guarded(pos, len(alias), alias):
+                hits.append((pos, city))
+    # 同位置同城市去重（正名/别名同时命中）；保留不同位置
+    return sorted(set(hits), key=lambda h: h[0])
+
 
 def extract_destination(message: str, previous_destination: str = "") -> str:
-    """从消息中识别目的地城市（用数据集真实城市名录匹配，不做盲抽）。
+    """从消息中识别目的地城市（识别名录匹配，不做盲抽）。
 
-    多城市同现时按确定性消歧（STOP I2）：
+    匹配集 = data/cities.py 识别名录 ∪ 种子池（v3 P0-A 扩容：名录是
+    识别词表不是支持范围闸门）。多城市同现时按确定性消歧（STOP I2）：
       1. 剔除紧邻否定/放弃表达的（「不去厦门了」的厦门）；
       2. 仍有多个且上一轮目的地在场 → 剔除上一轮目的地（变化目标优先，
          「换」语义）；单城市时直接取（含与上一轮相同的重申）；
@@ -218,16 +301,7 @@ def extract_destination(message: str, previous_destination: str = "") -> str:
     if _extract_explicit_unsupported_destination(message):
         return ""
 
-    hits: list[tuple[int, str]] = []
-    for city in poi_seed.all_cities():
-        pos = message.find(city)
-        if pos >= 0:
-            hits.append((pos, city))
-    # 别名（"榕城"、"鹭岛"、英文名等）
-    for alias, city in poi_seed.CITY_ALIASES.items():
-        pos = message.lower().find(alias)
-        if pos >= 0:
-            hits.append((pos, city))
+    hits = _iter_city_hits(message)
     if not hits:
         return ""
 
@@ -246,33 +320,50 @@ def extract_destination(message: str, previous_destination: str = "") -> str:
                 and previous_destination in candidates):
             candidates = [c for c in candidates if c != previous_destination]
         # 3) 消息出现顺序取最左
-        order = {c: pos for pos, c in hits}
+        order: dict[str, int] = {}
+        for pos, city in hits:
+            order.setdefault(city, pos)
         candidates.sort(key=lambda c: order[c])
     return candidates[0]
 
 
 def _extract_route_city_pair(message: str) -> tuple[str, str] | None:
-    """识别「从 A 出发去 B / A 到 B」中的城市对。"""
+    """识别「从 A 出发去 B / A 到 B」中的城市对（A、B 均须在消息中出现）。"""
     text = message or ""
-    cities = sorted(set(poi_seed.all_cities()), key=len, reverse=True)
-    for origin in cities:
-        for destination in cities:
+    hits = _iter_city_hits(text)
+    if len(hits) < 2:
+        return None
+    # 同城市取最早出现位置；长名优先保持原语义（「乌鲁木齐到吐鲁番」
+    # 不能被「鲁到」之类的短串干扰——名录里本就没有短串，这里只防别名）
+    first_pos: dict[str, int] = {}
+    for pos, city in hits:
+        first_pos.setdefault(city, pos)
+    ordered = sorted(first_pos, key=len, reverse=True)
+    for origin in ordered:
+        for destination in ordered:
             if origin == destination:
                 continue
-            origin_pattern = re.escape(origin)
-            destination_pattern = re.escape(destination)
+            origin_pattern = _city_name_pattern(origin)
+            destination_pattern = _city_name_pattern(destination)
             patterns = (
                 rf"(?:从|由)\s*{origin_pattern}\s*(?:出发\s*)?(?:去|到|前往)\s*{destination_pattern}",
                 rf"{origin_pattern}\s*(?:到|去|前往)\s*{destination_pattern}",
             )
-            if any(re.search(pattern, text) for pattern in patterns):
+            if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
                 return origin, destination
     return None
 
 
+def _city_name_pattern(city: str) -> str:
+    """标准城市与别名的原文匹配式；路线识别后才归一化输出。"""
+    variants = {city} | {alias for alias, target in _city_scan_set()[1].items()
+                        if target == city}
+    return "(?:" + "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True)) + ")"
+
+
 def _extract_explicit_unsupported_destination(message: str) -> str:
-    """识别带目的地语义的未覆盖城市，避免被已覆盖城市抢槽位。"""
-    supported = set(poi_seed.all_cities())
+    """识别带目的地语义的未覆盖城市（境外/名录外），避免被已覆盖城市抢槽位。"""
+    supported = set(_city_scan_set()[0])
     for city in sorted(KNOWN_MAJOR_CITIES, key=len, reverse=True):
         if city in supported:
             continue
@@ -301,9 +392,10 @@ def extract_origin(message: str) -> str:
     if route:
         return route[0]
     text = message or ""
-    cities = sorted(set(poi_seed.all_cities()), key=len, reverse=True)
-    for city in cities:
-        if re.search(rf"(?:从|由)\s*{re.escape(city)}\s*(?:出发|启程)", text):
+    names = _city_scan_set()[0]  # 已按长度降序
+    for city in names:
+        if re.search(rf"(?:从|由)\s*{_city_name_pattern(city)}\s*(?:出发|启程)",
+                     text, re.IGNORECASE):
             return city
     return ""
 
@@ -316,6 +408,9 @@ def extract_days(message: str) -> int | None:
         value = _to_int(match.group(1))
         if value and value > 0:
             return value
+    day_range = extract_days_range(message)
+    if day_range is not None:
+        return day_range[1]
     range_days = extract_date_range_days(message)
     if range_days is not None:
         return range_days[0]
@@ -325,8 +420,8 @@ def extract_days(message: str) -> int | None:
 def extract_days_range(message: str) -> tuple[int, int, str] | None:
     """识别区间天数说法（「两三天」「3-5天」），返回 (下限, 上限, 原文)。
 
-    上限会被 extract_days 优先命中（「两三天」的正则首个命中就是「三天」），
-    这里负责把「这是区间」这件事暴露出来，供 slot_filler 写提示 note ——
+    extract_days 对区间表达取上限；本函数同时保留区间原文，
+    供 slot_filler 写透明化提示 note ——
     取上限本身可辩护，但不该让用户毫无感知地被决定了天数。
     """
     masked = _mask_dates(message)
@@ -393,8 +488,13 @@ def extract_adults_children(message: str) -> tuple[int | None, int | None]:
 
 
 def extract_unsupported_city(message: str) -> str:
-    """识别「用户点名了但数据集不支持」的知名城市，追问时明示原因。"""
-    supported = set(poi_seed.all_cities())
+    """识别「用户点名了但不支持」的知名城市，追问时明示原因。
+
+    「不支持」的语义随 v3 P0-A 收紧：名录（识别词表）∪种子池之外、
+    且在 KNOWN_MAJOR_CITIES（境外等明确不支持名单）里的才算。名录内
+    城市（北京/西安/丽江…）live 模式下受支持，不再进入本判定。
+    """
+    supported = set(_city_scan_set()[0])
     for city in KNOWN_MAJOR_CITIES:
         if city in message and city not in supported:
             return city
@@ -663,9 +763,11 @@ def extract_fresh_brief(
 def build_clarification(brief: TravelBrief, user_message: str = "") -> str:
     """必填槽位缺失时的追问文案。
 
-    user_message 用于识别「用户点名了不支持的城市」——此时明确告知原因
-    （缺当地地点数据），而不是让用户对着城市列表猜自己哪里答错了。
+    user_message 用于识别「用户点名了不支持的城市」——此时明确告知原因，
+    而不是让用户对着城市列表猜自己哪里答错了。
     P1-3：destination 缺失时附偏好推荐，让用户有「可以直接选」的起点。
+    支持范围口径随数据源分叉（v3 P0-A）：live 模式 = 全国主要城市
+    （识别名录 + 实时地图检索），seed 模式仍如实只报种子 3 城。
     """
     missing = brief.missing_slots()
     if not missing:
@@ -673,15 +775,28 @@ def build_clarification(brief: TravelBrief, user_message: str = "") -> str:
     questions = [SLOT_QUESTIONS.get(s, s) for s in missing]
     lines = ["为了把行程排准，还需要确认："]
     lines += [f"{i}. {q}" for i, q in enumerate(questions, 1)]
-    cities_line = "、".join(poi_seed.all_cities())
+    from backend.config.travel import TRAVEL_POI_SOURCE
+
     unsupported = extract_unsupported_city(user_message) if user_message else ""
-    if unsupported and "destination" in missing:
-        lines.append(
-            f"\n你提到的「{unsupported}」暂时无法规划（还没有当地的地点数据），"
-            f"当前可规划的城市：{cities_line}"
-        )
+    if TRAVEL_POI_SOURCE == "seed":
+        cities_line = "、".join(poi_seed.all_cities())
+        if unsupported and "destination" in missing:
+            lines.append(
+                f"\n你提到的「{unsupported}」暂时无法规划（还没有当地的地点数据），"
+                f"当前可规划的城市：{cities_line}"
+            )
+        else:
+            lines.append(f"\n（当前可规划的城市：{cities_line}）")
     else:
-        lines.append(f"\n（当前可规划的城市：{cities_line}）")
+        if unsupported and "destination" in missing:
+            lines.append(
+                f"\n你提到的「{unsupported}」暂时无法规划（暂不支持境外及"
+                "该目的地），境内主要城市都可以试。"
+            )
+        else:
+            lines.append(
+                "\n（全国主要城市均可规划，地点信息来自实时地图检索）"
+            )
     if "destination" in missing:
         try:
             from backend.travel.recommend import (

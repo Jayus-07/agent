@@ -238,6 +238,9 @@ def _sync_travel_run(state: dict, final_state: dict, result: dict,
     Returns:
         本次同步后的 run_id（同步失败/不可同步时空串）。
     """
+    # 问答没有启动规划，不得按缺槽写 pending 或把旧 run 推到 planned。
+    if result.get("status") == "answered":
+        return ""
     try:
         from backend.orchestration.context.conversation_context import (
             mark_travel_run_completed,

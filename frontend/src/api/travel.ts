@@ -134,12 +134,20 @@ export interface Itinerary {
   intercity?: IntercityTrain[];
 }
 
+export interface TravelClarificationOption {
+  label: string;
+  days: number | null;
+  message: string;
+}
+
 export interface PlanResponse {
-  /** ready | needs_clarification | needs_user_decision | failed */
+  /** success | answered | needs_clarification | needs_user_decision | failed */
   status: string;
   final_answer: string;
   itinerary: Itinerary | null;
   clarification?: string;
+  clarification_options?: TravelClarificationOption[];
+  intent?: string;
   plan_status?: 'waiting_confirmation' | 'confirmed' | string;
   change_record?: Record<string, unknown> | null;
 }

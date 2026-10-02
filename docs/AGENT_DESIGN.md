@@ -590,6 +590,10 @@ def route(self, question: str) -> tuple[str, float]:
 
 ---
 
+## 旅游域入口意图与条件（v3 P0-A）
+
+旅游会话入口保持纯规则、零 LLM：分类后合并需求，再检查规划条件。问答、探索和未能结构化的逐条改单由 supervisor 直接转 reporter；明确规划且缺天数时提供用户可接受的完整指令，不把空天数送入逐日规划。城市名录用于识别和消歧，实时支持范围由 Provider 能力决定；具体实现与响应见 [AI Runtime](architecture/ai-runtime.md)、[API](API.md) 及 [P0-A 收尾验收](reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)。
+
 ## 验证
 
-最后验证：2026-09-29 · plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。
+最后验证：2026-10-02 · 旅游入口意图与条件增量复核； plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。

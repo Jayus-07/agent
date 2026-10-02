@@ -21,7 +21,7 @@ import re
 
 from backend.observability.log_privacy import query_preview
 from backend.shared.logger import logger
-from backend.tools.travel import poi_seed
+from backend.travel.agents.requirement_agent import _city_name_pattern, _iter_city_hits
 
 # 旅游规划强信号（正则，与 rule_router 的写法保持一致）
 _TRAVEL_PATTERNS: tuple[str, ...] = (
@@ -32,6 +32,9 @@ _TRAVEL_PATTERNS: tuple[str, ...] = (
     r"路线规划", r"规划.*(行程|路线)", r"安排.*(行程|路线)",
     r"住宿推荐", r"住哪", r"酒店推荐",
     r"必去", r"一日游", r"两日游", r"三日游",
+    # v3 P0-A 问答信号（丽江好玩吗/上海值得去吗）：域图 intent 层会判成
+    # 问答出口，不会误启动规划链——prefilter 只负责「别漏掉旅游话题」
+    r"好玩", r"值得去", r"值得玩",
 )
 
 # 「城市 + 天数」是旅游的强组合信号（"福州2天"）。
@@ -48,8 +51,13 @@ def travel_signal_hits(query: str) -> int:
 
 
 def travel_has_city(query: str) -> bool:
-    """query 是否提到种子城市（纯函数）。"""
-    return any(city in query for city in poi_seed.all_cities())
+    """query 是否提到已知城市（识别名录 ∪ 种子池；纯函数）。
+
+    v3 P0-A：从「种子 3 城」扩为识别名录——名录是识别词表不是支持范围
+    闸门（支持 = live Provider 能力边界），「丽江好玩吗/西安三日游」
+    这类非种子城市输入不再漏回主路由。
+    """
+    return bool(_iter_city_hits(query))
 
 
 def is_travel_request(query: str) -> bool:
@@ -70,6 +78,16 @@ def is_travel_request(query: str) -> bool:
         return True
 
     if travel_has_city(query):
+        # 无天数的完整城市规划请求也应进域补槽；城市后的业务宾语不命中。
+        for pos, city in _iter_city_hits(query):
+            match = re.compile(_city_name_pattern(city), re.IGNORECASE).match(query, pos)
+            tail = query[match.end():].strip() if match else query
+            if re.search(r"(?:规划|安排)(?:一下)?\s*$", query[:pos]):
+                if not tail or tail[0] in "，,。！!？?":
+                    return True
+            # 中文天数+显式动作也可直达，不能用裸“直接规划”抢业务请求。
+            if re.fullmatch(r"[一二两三四五六七八九十]{1,3}\s*天[，,\s]*直接规划[。！!？?]*", tail):
+                return True
         return hits >= 1 or bool(_RE_DAY_COUNT.search(query))
 
     # 无种子城市：旅游名词与天数同时在场才判旅游（防「近3天订单量」），

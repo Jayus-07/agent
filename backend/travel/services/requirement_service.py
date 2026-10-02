@@ -14,15 +14,12 @@ from backend.travel.graph_state import brief_fingerprint
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.itinerary import CHANGE_BRIEF
 
-# 知名城市名录：仅用于「用户点了名但暂不支持」的明示提醒与城市名过滤，
-# 不做目的地抽取（抽取只认数据集真实城市，不猜）。已支持的城市天然被跳过。
+# 「点名但明确不支持」名单（v3 P0-A 收缩，2026-10-02 拍板）：境内主要
+# 城市已全部移入 data/cities.py 识别名录（支持范围 = live Provider 能力
+# 边界，名录只是识别词表+消歧工具），本名单只剩境外与暂不开放的目的地
+# ——点名时明确告知不支持，而不是当成没说过（用户需要知道为什么城市
+# 没被接住）。
 KNOWN_MAJOR_CITIES: tuple[str, ...] = (
-    "北京", "上海", "广州", "深圳", "成都", "重庆", "武汉", "西安",
-    "南京", "天津", "苏州", "长沙", "郑州", "青岛", "大连", "昆明",
-    "贵阳", "哈尔滨", "沈阳", "济南", "合肥", "南昌", "宁波", "无锡",
-    "泉州", "宁德", "南平", "莆田", "漳州", "龙岩", "三明",
-    # 境外热门目的地（2026-09-22 场景 B1）：点名时明确告知不支持，
-    # 而不是当成没说过 —— 用户需要知道为什么城市没被接住
     "纽约", "伦敦", "巴黎", "东京", "大阪", "首尔", "曼谷",
     "新加坡", "吉隆坡", "香港", "澳门",
 )
@@ -38,7 +35,10 @@ def filter_city_names(names: list[str]) -> list[str]:
     city_names = set(KNOWN_MAJOR_CITIES)
     from backend.tools.travel import poi_seed
 
+    from backend.travel.data import cities as city_directory
+
     city_names |= set(poi_seed.all_cities())
+    city_names |= set(city_directory.all_directory_cities())
     return [n for n in names if n not in city_names]
 
 

@@ -69,6 +69,7 @@ class TravelGraphState(TypedDict, total=False):
     brief: dict
     brief_missing: list[str]
     clarifications: list[str]
+    clarification_options: list[dict]
     # 上一轮 brief 的指纹：跨轮（checkpointer 开启）时用来判断需求是否变化，
     # 变了就清空规划产物重排，避免拿新约束贴旧行程
     brief_fingerprint: str
@@ -114,6 +115,14 @@ class TravelGraphState(TypedDict, total=False):
     # 用户明确要求实时查美食/酒店/车票时的真实 Tool 结果摘要；只存可序列化
     # 的展示数据，不把上游响应对象塞进 checkpoint。
     live_search: dict[str, dict]
+    # 会话意图（v3 §2.1，P0-A）：slot_filler 每轮分类后写入（空串 = 未分类，
+    # 走既有规划链）；supervisor 意图先行门禁与 reporter 问答出口消费。
+    # 必须入 schema——LangGraph updates 会剥离 schema 外的键。
+    intent: str
+    # QUERY_STATIC 意图的灵感包（services/inspiration_service 产出）：
+    # {destination, guides: [{title,url,summary,author,source}], status}。
+    # 增强信息：检索失败不阻塞任何链路，reporter 按 status 三态渲染。
+    inspiration: dict
 
     # === 执行态 ===
     stage: str
@@ -202,6 +211,8 @@ def build_travel_context(state: dict) -> dict:
         "brief": state.get("brief", {}),
         "live_search": state.get("live_search", {}),
         "brief_missing": state.get("brief_missing", []),
+        "intent": state.get("intent", ""),
+        "clarification_options": state.get("clarification_options", []),
         "stage": state.get("stage", ""),
         "repair_rounds": state.get("repair_rounds", 0),
         "repair_log": state.get("repair_log", []),
@@ -270,6 +281,7 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
         "plan_parent_version": parent_plan_version,
         "candidates": [],
         "live_search": {},
+        "inspiration": {},
         "day_plan": [],
         "must_go_unresolved": [],
         "itinerary": None,

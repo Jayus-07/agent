@@ -111,6 +111,17 @@ class TravelDecision:
         return _STAGE_TO_ACTION[self.stage]
 
 
+# v3 P0-A 意图先行门禁（v3 裁决 #1）：问答/探索/未接线的逐条改单不进
+# 规划专家链，直接转 reporter 的问答出口。必须排在 brief_missing 之前
+# ——「丽江好玩吗」抽得到目的地、缺天数，按旧顺序会被误追问「玩几天」。
+_INTENT_REPORT_REASONS: dict[str, str] = {
+    "query_static": "静态问答意图：给有出处的观点，不启动规划链",
+    "query_dynamic": "实时状态问答：暂无可靠实时来源，如实告知",
+    "discover": "找目的地/灵感：给可解释候选，不启动规划链",
+    "modify": "逐条改单诉求：无结构化改动信号，如实说明当前支持范围",
+}
+
+
 def _experts_done(state: dict) -> set[str]:
     return {e.get("expert", "") for e in state.get("expert_history", [])}
 
@@ -130,6 +141,11 @@ def decide(state: dict) -> TravelDecision:
             TravelStage.REPORT,
             f"达到步数上限 {T.TRAVEL_MAX_STEPS}，强制收尾",
         )
+
+    # 意图先行（v3 §2.1）：问答/探索/改单出口优先于槽位缺失追问
+    intent = state.get("intent") or ""
+    if intent in _INTENT_REPORT_REASONS:
+        return TravelDecision(TravelStage.REPORT, _INTENT_REPORT_REASONS[intent])
 
     if state.get("brief_missing"):
         return TravelDecision(

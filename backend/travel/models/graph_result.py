@@ -17,6 +17,7 @@ STATUS_SUCCESS = "success"
 STATUS_NEEDS_CLARIFICATION = "needs_clarification"
 STATUS_NO_DATA = "no_data"
 STATUS_FAILED = "failed"
+STATUS_ANSWERED = "answered"
 
 
 class TravelGraphResult(TypedDict, total=False):
@@ -26,6 +27,8 @@ class TravelGraphResult(TypedDict, total=False):
     itinerary: dict | None
     validation: dict | None
     clarification: str
+    clarification_options: list[dict]
+    intent: str
     travel_context: dict
 
 
@@ -40,7 +43,14 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
         if item.get("status") == "failed"
     ]
 
-    if failed_experts:
+    answering = final_state.get("intent") in {
+        "query_static", "query_dynamic", "discover", "modify",
+    }
+
+    if answering:
+        status = STATUS_ANSWERED
+        itinerary = None
+    elif failed_experts:
         status = STATUS_FAILED
     elif missing:
         status = STATUS_NEEDS_CLARIFICATION
@@ -58,7 +68,9 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
         status=status,
         brief=brief,
         itinerary=itinerary,
-        validation=final_state.get("validation"),
-        clarification=clarifications[0] if clarifications else "",
+        validation=None if answering else final_state.get("validation"),
+        clarification=clarifications[0] if clarifications and not answering else "",
+        clarification_options=[] if answering else final_state.get("clarification_options", []),
+        intent=final_state.get("intent", ""),
         travel_context=final_state.get("travel_context") or {},
     )

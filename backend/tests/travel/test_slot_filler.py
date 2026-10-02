@@ -151,11 +151,11 @@ class TestScalarExtraction:
 
     def test_unsupported_destination_is_not_replaced_by_origin(self):
         """未覆盖目的地不能被同句的出发城市静默替换。"""
-        message = "从福州出发去泉州玩3天"
+        message = "从福州出发去纽约玩3天"
         assert extract_destination(message) == ""
         assert extract_origin(message) == "福州"
         text = build_clarification(TravelBrief(), message)
-        assert "泉州" in text and "暂时无法规划" in text
+        assert "纽约" in text and "暂时无法规划" in text
 
 
 class TestMustGoAndAvoid:
@@ -270,8 +270,10 @@ class TestAmbiguityTransparency:
 
 class TestUnsupportedCity:
     def test_known_unsupported_city_detected(self):
-        assert extract_unsupported_city("我想去北京玩") == "北京"
-        assert extract_unsupported_city("去泉州逛逛") == "泉州"
+        assert extract_unsupported_city("我想去北京玩") == ""
+        assert extract_unsupported_city("去泉州逛逛") == ""
+        assert extract_unsupported_city("去丽江玩") == ""
+        assert extract_unsupported_city("去纽约玩") == "纽约"
         # 已支持城市不报
         assert extract_unsupported_city("福州两天") == ""
         assert extract_unsupported_city("杭州两日游") == ""
@@ -279,8 +281,9 @@ class TestUnsupportedCity:
         assert extract_unsupported_city("去趟乐园") == ""
 
     def test_clarification_mentions_unsupported(self):
-        text = build_clarification(TravelBrief(), "我想去北京玩")
-        assert "北京" in text and "暂时无法规划" in text
+        text = build_clarification(TravelBrief(), "我想去纽约玩")
+        assert "纽约" in text and "暂时无法规划" in text
+        assert "当前可规划的城市" in text
         assert "福州" in text  # 仍给出可规划城市
 
     def test_clarification_generic_without_city(self):

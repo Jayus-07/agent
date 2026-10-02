@@ -502,6 +502,14 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 ---
 
+## 旅游规划问答与天数选择（v3 P0-A）
+
+`POST /api/travel/plan` 与 `/api/travel/plan/stream` 共用域图输出契约；流式 `done.data.result` 返回相同结构。静态问答、动态问答、目的地探索及尚不支持的逐条改单返回 `status=answered`、`itinerary=null`、`validation=null`，不写规划版本或规划 pending。
+
+明确规划且仅缺天数时，`clarification_options` 返回两项：`{label:"按 3 天参考规划", days:3, message:"规划<目的地>3天行程"}` 与 `{label:"自己填天数", days:null, message:""}`。`days` 在点击前仍为空；前端发送第一项完整消息后，后端重新抽取并校验。第二项只聚焦输入，不发送请求。`requirement.interpreted` 同步携带 `intent` 与 `clarification_options`，两者均声明在旅游状态 schema。
+
+最后验证：2026-10-02 · 见 [P0-A 收尾验收](reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)。
+
 ## 验证
 
-最后验证：2026-09-29 · 路由/端点数实测（54 文件 / ~291 端点）+ 鉴权切换状态复核；端点明细以 `backend/app/api/routes/` 目录为准，SSE 帧序与 8 种 SQLStatus 契约未变。
+最后验证：2026-10-02 · 旅游问答契约与天数选择复核；路由/端点数实测（54 文件 / ~291 端点）+ 鉴权切换状态复核；端点明细以 `backend/app/api/routes/` 目录为准，SSE 帧序与 8 种 SQLStatus 契约未变。
