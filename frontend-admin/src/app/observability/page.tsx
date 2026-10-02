@@ -1,10 +1,5 @@
-'use client'
-
-import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import LegacyWorkbenchRedirect from '@/components/workbench/LegacyWorkbenchRedirect'
 
 export default function ObservabilityPage() {
-  const router = useRouter()
-  useEffect(() => { router.replace('/observability/traces') }, [router])
-  return null
+  return <LegacyWorkbenchRedirect legacyPath="/observability" />
 }

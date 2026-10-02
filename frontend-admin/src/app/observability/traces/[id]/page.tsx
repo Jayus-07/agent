@@ -110,7 +110,7 @@ export default function TraceDetailPage() {
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
           <p className="text-slate-400 text-lg font-mono">Trace {id} 不存在</p>
-          <button onClick={() => router.push("/observability/traces")} className="mt-3 text-sm text-violet-600 hover:text-violet-500">← 返回列表</button>
+          <button onClick={() => router.push("/observability/monitoring?tab=traces")} className="mt-3 text-sm text-violet-600 hover:text-violet-500">← 返回列表</button>
         </div>
       </div>
     );
@@ -180,7 +180,7 @@ export default function TraceDetailPage() {
         throw new Error(body.detail || `HTTP ${resp.status}`);
       }
       toast.success("重放已启动，新链路稍后出现在追踪列表");
-      setTimeout(() => router.push("/observability/traces"), 800);
+      setTimeout(() => router.push("/observability/monitoring?tab=traces"), 800);
     } catch (e) {
       toast.error(`重放失败：${(e as Error).message}`);
     } finally {
@@ -225,8 +225,8 @@ export default function TraceDetailPage() {
         {/* ── Breadcrumb ── */}
         <TraceBreadcrumb
           crumbs={[
-            { label: "可观测中心", href: "/observability" },
-            { label: "链路追踪", href: "/observability/traces" },
+            { label: "运行监控工作台", href: "/observability/monitoring?tab=traces" },
+            { label: "问答追踪", href: "/observability/monitoring?tab=traces" },
             ...(parent ? [{ label: `父 · ${parent.id.slice(0, 8)}`, href: `/observability/traces/${parent.id}` }] : []),
             { label: trace.id.slice(0, 12) },
           ]}
@@ -235,7 +235,7 @@ export default function TraceDetailPage() {
         {/* ── Header ── */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <button onClick={() => router.push("/observability/traces")} className="text-slate-400 hover:text-slate-600 text-sm">← 返回</button>
+            <button onClick={() => router.push("/observability/monitoring?tab=traces")} className="text-slate-400 hover:text-slate-600 text-sm">← 返回</button>
             <span className="font-mono text-slate-700 font-semibold">{trace.id.slice(0, 12)}</span>
             <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span>
             {trace.workflow_name && (
