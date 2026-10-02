@@ -160,6 +160,20 @@ class RequestBudget:
                 except Exception:
                     _record_budget_request(self.mode, "rejected")
                     raise
+            elif (
+                self.mode == "enforce"
+                and self.quota_store is None
+                and self.user_id
+            ):
+                # TD-05 可诊断化：enforce + 有用户但 quota_store 为空 =
+                # bind 时 tenant_id 缺失（网关未注入租户头），本请求全部
+                # 调用都不会产生 PG 预占/结算——预算主体在管理端不可见。
+                logger.warning(
+                    "[Budget] quota_store 缺失: user=%s tenant=%r——"
+                    "bind 时租户身份缺失，本请求不产生 PG 预占/结算"
+                    "（排查: X-Tenant-Id 头注入链路）",
+                    self.user_id, self.tenant_id,
+                )
             self.calls += 1
             if kind == "retry":
                 self.retries += 1
@@ -317,11 +331,27 @@ def reserve_model_call(
 
         model_name = get_active_model_name()
     state = current_request_budget()
-    if state is not None:
-        reservation = state.reserve(
-            kind, model_name=model_name, component=component,
-        )
-        _current_quota_reservation.set(reservation)
+    if state is None:
+        # 静默旁路可诊断化（TD-05，2026-10-02）：mode=enforce 下 state 为
+        # None 意味着当前线程从未执行 bind_request_budget——预占/结算整体
+        # 旁路且无痕迹（实测聊天链路部分线程只绑 trace 没绑身份，预算侧
+        # 零预占、llm_usage user/tenant 为空）。mode=off 的 None 是设计内
+        # 旁路，不告警。
+        from backend.config import llm as _config
+
+        if _config.LLM_BUDGET_MODE != "off":
+            logger.warning(
+                "[Budget] reserve 旁路: mode=%s 但当前线程无请求预算状态"
+                "(request_id 未绑定)——本次调用不预占不结算 kind=%s "
+                "model=%s component=%s（排查: 该线程缺 RequestContext.bind）",
+                _config.LLM_BUDGET_MODE, kind, model_name, component,
+            )
+        _current_call_decision.set(kind)
+        return
+    reservation = state.reserve(
+        kind, model_name=model_name, component=component,
+    )
+    _current_quota_reservation.set(reservation)
     _current_call_decision.set(kind)
 
 
