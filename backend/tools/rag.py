@@ -1,4 +1,6 @@
 """RAG 工具 — 知识库检索。"""
+import json
+
 from langchain_core.tools import tool
 from backend.shared.logger import logger
 
@@ -7,6 +9,32 @@ def _get_rag_pipeline():
     """获取 RAG Pipeline 单例（统一入口，避免双重初始化）。"""
     from backend.rag.pipeline import get_rag_pipeline
     return get_rag_pipeline()
+
+
+def append_rag_answer_meta(answer: str, answer_meta: dict) -> str:
+    """把拒答状态/置信度以机器注释附在输出头部（聊天链路的文本协议）。
+
+    聊天路径工具出口是纯文本（output_type=text，给 LLM 阅读），且 remote
+    模式下 RAG 链跑在 rag-service 进程、ContextVar 跨不过 HTTP——answer_meta
+    只能随文本走。格式沿用两个既有先例：「### 参考文献」（reporter 解析/
+    剥离、前端视觉剥离）与 <!--META-->（MetaStreamFilter 剥离）；本标记由
+    reporter（用户可见文本）与 make_done_event（done 帧结构化字段）双侧
+    解析剥离，且 HTML 注释在 Markdown 渲染中天然不可见，漏剥不外显。
+    头部位置：L1 输出预算截断保头部，保证标记不被截掉。
+    """
+    if not answer:
+        return answer
+    meta = answer_meta or {}
+    payload: dict = {}
+    status = meta.get("answer_status")
+    if status:
+        payload["answer_status"] = str(status)
+    confidence = meta.get("confidence")
+    if isinstance(confidence, (int, float)):
+        payload["confidence"] = round(float(confidence), 2)
+    if not payload:
+        return answer
+    return f"<!--RAGMETA{json.dumps(payload, ensure_ascii=False)}-->\n{answer}"
 
 
 @tool
@@ -42,10 +70,13 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
         permissions=get_tool_permissions(),
         tenant_id=get_tool_tenant_id(),
     )
-    result = pipeline.ask(question, session_id=sid, kb_id=kb_id,
-                          subject_type=principal.subject_type,
-                          department=principal.department,
-                          permissions=principal.permissions)
+    # ask_result（非 ask）：拒答状态/置信度随返回值带回（D1-6 口径，
+    # 单例实例属性在并发下会串扰），随 RAGMETA 标记流出聊天链路
+    outcome = pipeline.ask_result(question, session_id=sid, kb_id=kb_id,
+                                  subject_type=principal.subject_type,
+                                  department=principal.department,
+                                  permissions=principal.permissions)
+    result = append_rag_answer_meta(outcome.answer, outcome.answer_meta)
     logger.info(f"[Tool:search_knowledge] 返回 len={len(result or '')} repr_head={repr((result or '')[:40])}")
     return result
 
