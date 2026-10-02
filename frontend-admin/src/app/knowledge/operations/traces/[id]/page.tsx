@@ -114,7 +114,7 @@ export default function DocTracePage() {
 
   return (
     <div className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
-      <button onClick={()=>router.push("/knowledge/operations")} className="text-xs text-slate-400 hover:text-slate-600">← 返回操作中心</button>
+      <button onClick={()=>router.push("/knowledge/workbench?tab=operations")} className="text-xs text-slate-400 hover:text-slate-600">← 返回操作日志</button>
 
       {/* Overview */}
       <div>
