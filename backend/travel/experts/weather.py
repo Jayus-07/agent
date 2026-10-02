@@ -15,6 +15,7 @@ from datetime import timedelta
 
 from backend.config import travel as T
 from backend.shared.logger import logger
+from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
@@ -66,7 +67,15 @@ def weather_expert_node(state: dict) -> dict:
                 "未提供出发日期，已跳过天气检查；提供日期后可重新规划以纳入天气因素"
             ]}
 
-        forecast, degrade_reason, evidence = fetch_forecast_evidence(brief.destination)
+        forecast, degrade_reason, evidence = run_travel_tool(
+            "travel.weather.query",
+            "research",
+            lambda: fetch_forecast_evidence(brief.destination),
+            result_summary=lambda value: {
+                "data_status": "available" if value[0] else "unavailable",
+                "reason": value[1] or "",
+            },
+        )
         if not forecast:
             # §44：Provider down 行程仍出单，只披露；降级原因来自
             # Provider 状态分类（timeout/配额/不可用），不再笼统一句话

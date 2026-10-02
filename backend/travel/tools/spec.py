@@ -66,6 +66,15 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         note="Phase 4 补位：腾讯 Place 补全（unverified 标注透传）",
     ),
     ToolSpec(
+        name="map.merchant.search",
+        capability=("merchant", "food", "hotel"),
+        side_effect=SideEffect.READ,
+        requires_confirmation=False,
+        allowed_agents=(AGENT_RESEARCH, AGENT_ASSISTANT),
+        note=("已由 map_merchant_search_tool 实现；高德真实商户数据，"
+              "types 由服务端配置/调用方筛选"),
+    ),
+    ToolSpec(
         name="travel.weather.query",
         capability=("weather",),
         side_effect=SideEffect.READ,
@@ -213,7 +222,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         side_effect=SideEffect.READ,
         requires_confirmation=False,
         allowed_agents=(AGENT_PLANNING,),
-        note="契约位：全新外部依赖，P2 登记不做",
+        note=("已由 travel_train_search_tool 实现；12306 MCP 只读查询，"
+              "Tool 失败不得映射为空车次"),
     ),
 )
 

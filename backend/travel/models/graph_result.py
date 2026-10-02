@@ -35,8 +35,14 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
     missing = final_state.get("brief_missing") or []
     itinerary = final_state.get("itinerary")
     candidates = final_state.get("candidates") or []
+    failed_experts = [
+        item for item in (final_state.get("expert_history") or [])
+        if item.get("status") == "failed"
+    ]
 
-    if missing:
+    if failed_experts:
+        status = STATUS_FAILED
+    elif missing:
         status = STATUS_NEEDS_CLARIFICATION
     elif not candidates:
         status = STATUS_NO_DATA

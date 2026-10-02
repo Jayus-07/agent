@@ -23,7 +23,9 @@ weather（2026-09-22）：排程后按出行日期核查天气，坏天气日做
 """
 from __future__ import annotations
 
+import functools
 import threading
+import time
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -53,6 +55,44 @@ from backend.travel.supervisor import travel_supervisor_node
 from backend.travel.validator import travel_validator_node
 from backend.shared.logger import logger
 
+
+def _evented_node(node_name: str, node_fn):
+    """给真实 LangGraph 节点加事件投影，不改变节点输入输出。"""
+    @functools.wraps(node_fn)
+    def wrapped(state):
+        from backend.travel.core.events import emit_travel_event
+
+        started_at = time.monotonic()
+        emit_travel_event(
+            "stage.started", agent="travel_graph", stage=node_name,
+        )
+        try:
+            update = node_fn(state)
+        except Exception as exc:  # noqa: BLE001 — 事件后保持节点原异常
+            emit_travel_event(
+                "stage.finished", agent="travel_graph", stage=node_name,
+                status="failed", error_type=type(exc).__name__,
+                duration_ms=round((time.monotonic() - started_at) * 1000),
+            )
+            raise
+
+        status = "success"
+        error_type = ""
+        if isinstance(update, dict):
+            expert_result = update.get("last_expert_result") or {}
+            if expert_result.get("status") == "failed":
+                status = "failed"
+                error_type = str(expert_result.get("error") or "ToolFailed")
+        emit_travel_event(
+            "stage.finished", agent="travel_graph", stage=node_name,
+            status=status,
+            error_type=error_type,
+            duration_ms=round((time.monotonic() - started_at) * 1000),
+        )
+        return update
+
+    return wrapped
+
 # 回到调度器的节点（supervisor 是唯一的汇聚点）
 _BACK_TO_SUPERVISOR = (
     TRAVEL_POI_EXPERT, TRAVEL_TRANSIT_EXPERT, TRAVEL_WEATHER_EXPERT,
@@ -64,16 +104,26 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
     """构建并编译旅游域图。"""
     wf = StateGraph(TravelGraphState)
 
-    wf.add_node(TRAVEL_SLOT_FILLER, slot_filler_node)
-    wf.add_node(TRAVEL_SUPERVISOR, travel_supervisor_node)
-    wf.add_node(TRAVEL_POI_EXPERT, poi_expert_node)
-    wf.add_node(TRAVEL_TRANSIT_EXPERT, transit_expert_node)
-    wf.add_node(TRAVEL_WEATHER_EXPERT, weather_expert_node)
-    wf.add_node(TRAVEL_BUDGET_EXPERT, budget_expert_node)
-    wf.add_node(TRAVEL_RISK_EXPERT, risk_expert_node)
-    wf.add_node(TRAVEL_VALIDATOR, travel_validator_node)
-    wf.add_node(TRAVEL_REPAIR, repair_node)
-    wf.add_node(TRAVEL_REPORTER, travel_reporter_node)
+    wf.add_node(TRAVEL_SLOT_FILLER, _evented_node(
+        TRAVEL_SLOT_FILLER, slot_filler_node))
+    wf.add_node(TRAVEL_SUPERVISOR, _evented_node(
+        TRAVEL_SUPERVISOR, travel_supervisor_node))
+    wf.add_node(TRAVEL_POI_EXPERT, _evented_node(
+        TRAVEL_POI_EXPERT, poi_expert_node))
+    wf.add_node(TRAVEL_TRANSIT_EXPERT, _evented_node(
+        TRAVEL_TRANSIT_EXPERT, transit_expert_node))
+    wf.add_node(TRAVEL_WEATHER_EXPERT, _evented_node(
+        TRAVEL_WEATHER_EXPERT, weather_expert_node))
+    wf.add_node(TRAVEL_BUDGET_EXPERT, _evented_node(
+        TRAVEL_BUDGET_EXPERT, budget_expert_node))
+    wf.add_node(TRAVEL_RISK_EXPERT, _evented_node(
+        TRAVEL_RISK_EXPERT, risk_expert_node))
+    wf.add_node(TRAVEL_VALIDATOR, _evented_node(
+        TRAVEL_VALIDATOR, travel_validator_node))
+    wf.add_node(TRAVEL_REPAIR, _evented_node(
+        TRAVEL_REPAIR, repair_node))
+    wf.add_node(TRAVEL_REPORTER, _evented_node(
+        TRAVEL_REPORTER, travel_reporter_node))
 
     wf.add_edge(START, TRAVEL_SLOT_FILLER)
     wf.add_edge(TRAVEL_SLOT_FILLER, TRAVEL_SUPERVISOR)

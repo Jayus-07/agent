@@ -109,6 +109,9 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 source="tencent:lbs",
                 observed_at=observed_at,
                 verification_status="unverified",
+                # 坐标级可信独立标注：详情（票价/时长）占位连坐标也不可信，是
+                # 两个语义——地图打点按 location_status 判定（字段级拆分）。
+                location_status="verified",
             ))
     return pois, notes
 

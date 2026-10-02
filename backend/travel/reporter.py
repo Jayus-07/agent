@@ -5,12 +5,11 @@
 
 渲染原则（与 risk 专家同一立场）：**缺口要说出来**。
   - 校验没通过的项，逐条列在「需要你确认」里，不藏进小字
-  - 数据来源单独成段，让人一眼看到「这是示例数据」
+  - 没有可核验来源的费用、门票、路线、坐标只写「暂无数据」
   - 自动修复过的行程，说明改了哪些地方 —— 用户有权知道行程被调整过
 """
 from __future__ import annotations
 
-from backend.config import travel as T
 from backend.shared.logger import logger
 from backend.travel.graph_state import (
     build_travel_context,
@@ -49,12 +48,60 @@ def describe_source(source: str) -> str:
     return "来源未登记（请在 reporter._SOURCE_LABELS 中补充说明）"
 
 
-# 通勤降级原因 → 面向用户的说明（Phase 1：降级要可解释，不能让用户对着来源标签猜）
-_FALLBACK_HINTS: dict[str, str] = {
-    "trip_date_beyond_horizon":
-        "出行日期距今天较远，实时路况对那天没有参考意义，"
-        "此段为经验估算 —— 建议临近出发时让我重新规划路线。",
-}
+# 这些内容可以留在内部 warnings/trace 中帮助排障，但不能原样进入助手回复。
+# 用户需要的是「哪里没数据」，不是 seed 标识、估算公式或内部评分。
+_HIDDEN_USER_DATA_MARKERS = (
+    "本地示例数据",
+    "seed:local",
+    "本地估算",
+    "费用预估",
+    "常见消费水平估算",
+    "置信度",
+)
+
+
+def _is_verified_poi(poi) -> bool:
+    """只有非种子来源且明确核验的 POI 才能进入用户数据状态。"""
+    return bool(
+        poi
+        and poi.verification_status == "verified"
+        and source_provider(poi.source) not in {"", "seed", "estimate"}
+    )
+
+
+def _is_verified_leg(leg) -> bool:
+    """路线必须来自实时/官方来源，且不能标记为估算。"""
+    return bool(
+        leg
+        and not leg.is_estimate
+        and source_provider(leg.source) in {"official", "tencent", "live"}
+    )
+
+
+def _append_data_status(lines: list[str], itinerary) -> None:
+    """渲染字段级数据状态，禁止把本地占位值包装成参考价。"""
+    pois = itinerary.all_pois()
+    legs = [leg for day in itinerary.days for leg in day.legs]
+    poi_verified = bool(pois) and all(_is_verified_poi(poi) for poi in pois)
+    route_verified = bool(legs) and all(_is_verified_leg(leg) for leg in legs)
+
+    lines.extend([
+        "## 数据说明",
+        "",
+        "- **费用：暂无数据**",
+        f"- **门票：{'已核验' if poi_verified else '暂无数据'}**",
+        f"- **路线：{'已核验' if route_verified else '暂无数据'}**",
+        f"- **坐标：{'已核验' if poi_verified else '暂无数据'}**",
+        "",
+    ])
+
+
+def _user_visible_items(values) -> list[str]:
+    """过滤内部来源/评分文案，保留可执行的用户提示。"""
+    return [
+        str(value) for value in values
+        if value and not any(marker in str(value) for marker in _HIDDEN_USER_DATA_MARKERS)
+    ]
 
 
 def travel_reporter_node(state: dict) -> dict:
@@ -146,8 +193,8 @@ def _render_itinerary(state: dict, itinerary) -> str:
         f"**人数** {brief.party_size} 人 ｜ "
         f"**节奏** {brief.pace_label()} ｜ "
         f"**出发** {date_label} ｜ "
-        f"**预估总花费** ¥{itinerary.cost.total:.0f}"
-        + (f"（预算 ¥{brief.budget_cny:.0f}）" if brief.budget_cny else "（未提供预算）")
+        "**费用数据** 暂无数据"
+        + (f"（预算上限 ¥{brief.budget_cny:.0f}）" if brief.budget_cny else "（未提供预算上限）")
     )
     if brief.preferences:
         lines.append(f"**偏好** {'、'.join(brief.preferences)}")
@@ -176,33 +223,31 @@ def _render_itinerary(state: dict, itinerary) -> str:
                 leg = legs[leg_cursor]
                 leg_cursor += 1
                 mode = "步行" if leg.mode == "walk" else "乘车"
-                lines.append(
-                    f"  - 前往下一站：{mode} {leg.minutes} 分钟"
-                    f"（约 {leg.distance_km}km"
-                    + (f"，约 ¥{leg.cost_cny:.0f}" if leg.cost_cny else "")
-                    + "）"
+                live_leg = leg.source.startswith(("official:", "tencent:", "live:"))
+                leg_detail = (
+                    f"{leg.minutes} 分钟（约 {leg.distance_km}km）"
+                    if live_leg else "时长与距离暂无数据"
                 )
-                # Phase 1：通勤降级要可解释 —— 为什么这一段不是实时数据
-                if leg.fallback_reason:
-                    hint = _FALLBACK_HINTS.get(leg.fallback_reason)
-                    if hint:
-                        lines.append(f"  - {hint}")
+                lines.append(
+                    f"  - 前往下一站：{mode} {leg_detail}；费用暂无数据"
+                )
         lines.append(
             f"\n*当日：活动 {day.active_minutes} 分钟、在途 {day.transit_minutes} 分钟、"
-            f"花费约 ¥{day.cost_cny:.0f}*"
+            "费用暂无数据*"
         )
         lines.append("")
 
     # ── 费用拆分 ──
-    cost = itinerary.cost
-    lines.append("## 费用预估")
+    lines.append("## 费用数据")
     lines.append("")
-    lines.append(f"- 门票 ¥{cost.tickets:.0f}")
-    lines.append(f"- 餐饮 ¥{cost.meals:.0f}")
-    lines.append(f"- 住宿 ¥{cost.lodging:.0f}")
-    lines.append(f"- 通勤 ¥{cost.transit:.0f}")
-    lines.append(f"- **合计 ¥{cost.total:.0f}**")
+    lines.append("- 门票：暂无数据")
+    lines.append("- 餐饮：暂无数据")
+    lines.append("- 住宿：暂无数据")
+    lines.append("- 通勤：暂无数据")
+    lines.append("- **合计：暂无数据**（未接入可核验费用来源，不展示本地估算值）")
     lines.append("")
+
+    _append_data_status(lines, itinerary)
 
     # ── 自动调整说明 ──
     repair_log = state.get("repair_log", [])
@@ -247,17 +292,8 @@ def _render_itinerary(state: dict, itinerary) -> str:
         # 单列并给出行动选项 —— 与「自动调整说明」混在一起会被当噪音略过
         for d in report.decision_required:
             items.append(f"需要你决定：{d.message}（可改日期/换时段，或保留此安排并接受风险）")
-    items += [f"{w}" for w in itinerary.warnings]
-    items += state.get("notes", [])
-    # Phase 1：占位事实字段级披露 —— unverified 的营业时间/票价不再只靠
-    # notes 文案一次性提及，凡出现在行程里的都逐一点名。
-    unverified = [p.name for p in itinerary.all_pois()
-                  if p.verification_status == "unverified"]
-    if unverified:
-        items.append(
-            "以下地点的营业时间与票价未经核实，请出行前自行确认："
-            + "、".join(dict.fromkeys(unverified))
-        )
+    items += _user_visible_items(itinerary.warnings)
+    items += _user_visible_items(state.get("notes", []))
     if items:
         lines += [f"- {i}" for i in dict.fromkeys(items)]
     else:
@@ -275,25 +311,13 @@ def _render_itinerary(state: dict, itinerary) -> str:
             lines.append(f"- {ref}")
         lines.append("")
 
-    if itinerary.sources:
-        lines.append("## 数据来源")
-        lines.append("")
-        for source in itinerary.sources:
-            lines.append(f"- {source} — {describe_source(source)}")
-        lines.append("")
-
-    confidence = itinerary.confidence
-    level = "高" if confidence >= 0.75 else ("中" if confidence >= 0.5 else "低")
     # 版本脚注（任务书 §4）：让「这版行程基于哪个需求、哪一版改来」可追溯。
     # 修复产生的版本明示 parent；重规划首版（无 parent）只报需求版本。
     lineage = (f"自 v{itinerary.parent_plan_version} 修复而来"
                if itinerary.parent_plan_version else "首版")
     lines.append(
         f"\n*行程 v{itinerary.plan_version}（{lineage}，需求 v{itinerary.brief_version}，"
-        f"状态 {itinerary.status}）—— 置信度 {confidence:.2f}（{level}），"
-        f"由约束通过度与数据完备度计算，非模型自评。"
-        f"修复轮数 {itinerary.repair_rounds}，硬约束上限 "
-        f"{T.TRAVEL_MAX_REPAIR_ROUNDS} 轮。*"
+        f"状态 {itinerary.status}）。*"
     )
 
     # 持久化降级披露（任务书 §10，Phase 4）：跨轮改单的可信度受损必须让

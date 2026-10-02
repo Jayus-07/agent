@@ -19,6 +19,7 @@ from backend.travel.slot_filler import (
     extract_days,
     extract_days_range,
     extract_destination,
+    extract_origin,
     extract_must_go,
     extract_pace,
     extract_party_size,
@@ -114,6 +115,31 @@ class TestScalarExtraction:
     def test_pace_relaxed(self):
         assert extract_pace("轻松一点，别太赶") == "relaxed"
 
+    def test_pace_moderate_is_explicitly_recognized(self):
+        """表单/示例写「节奏适中」时不能被历史轻松偏好覆盖。"""
+        assert extract_pace("先查高铁票，节奏适中") == "moderate"
+
+    def test_explicit_moderate_survives_saved_relaxed_preference(self, monkeypatch):
+        """首轮有历史偏好时，用户本轮明确写适中仍以本轮为准。"""
+        import backend.travel.slot_filler as module
+
+        monkeypatch.setattr(module.T, "TRAVEL_PREFS_ENABLED", True)
+        monkeypatch.setattr(
+            "backend.tools.travel.preferences.get_preferences",
+            lambda _user_id: {"pace": "relaxed"},
+        )
+        monkeypatch.setattr(
+            "backend.tools.travel.preferences.upsert_preferences",
+            lambda *_args, **_kwargs: None,
+        )
+
+        update = slot_filler_node({
+            "user_id": "qa-user",
+            "user_message": "从福州出发去厦门玩2天，节奏适中",
+        })
+
+        assert update["brief"]["pace"] == "moderate"
+
     def test_destination_from_catalog(self):
         assert extract_destination("想去厦门") == "厦门"
 
@@ -122,6 +148,14 @@ class TestScalarExtraction:
 
     def test_unknown_destination_returns_empty(self):
         assert extract_destination("想去火星") == ""
+
+    def test_unsupported_destination_is_not_replaced_by_origin(self):
+        """未覆盖目的地不能被同句的出发城市静默替换。"""
+        message = "从福州出发去泉州玩3天"
+        assert extract_destination(message) == ""
+        assert extract_origin(message) == "福州"
+        text = build_clarification(TravelBrief(), message)
+        assert "泉州" in text and "暂时无法规划" in text
 
 
 class TestMustGoAndAvoid:

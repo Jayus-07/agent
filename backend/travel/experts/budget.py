@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from backend.shared.logger import logger
+from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
@@ -32,9 +33,15 @@ def budget_expert_node(state: dict) -> dict:
                     "error": "行程尚未生成，无法核算预算"}
 
         # 城市档位（P0-3）：餐饮/住宿按目的地消费水平核算，未登记城市回落全局定额
-        itinerary.cost = estimate_cost(itinerary.days,
-                                       brief.party_size,
-                                       city=brief.destination)
+        itinerary.cost = run_travel_tool(
+            "travel.calculate_budget",
+            "optimization",
+            lambda: estimate_cost(
+                itinerary.days, brief.party_size, city=brief.destination),
+            result_summary=lambda value: {
+                "total_cny": round(float(value.total), 2),
+            },
+        )
 
         notes: list[str] = []
         if brief.budget_cny is None or brief.budget_cny <= 0:
@@ -43,7 +50,7 @@ def budget_expert_node(state: dict) -> dict:
             # fact」。权威数字只留费用预估段（reporter 从最终 itinerary 渲染）。
             notes.append(
                 "你未提供预算，本次未做预算校验；"
-                "行程费用按常见消费水平估算，详见下方「费用预估」"
+                "费用数据未接入可核验来源，页面不展示估算金额"
             )
 
         logger.info("[TravelBudget] total=%.0f breakdown=%s",

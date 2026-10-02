@@ -207,6 +207,17 @@ def extract_destination(message: str, previous_destination: str = "") -> str:
          优于目录序——目录序会让「不去厦门…杭州」错取厦门）。
     无法识别返回空串（由调用方走追问）。
     """
+    route = _extract_route_city_pair(message)
+    if route:
+        return route[1]
+
+    # 不能因为消息里同时出现了出发城市，就把未覆盖的目的地静默替换成
+    # 出发城市。例如「泉州，从福州出发」此前会被误抽成「福州」，页面
+    # 看起来像成功，实际行程却完全去了错误的城市。显式点名未支持目的地
+    # 时返回空槽位，让 build_clarification 如实提示支持范围。
+    if _extract_explicit_unsupported_destination(message):
+        return ""
+
     hits: list[tuple[int, str]] = []
     for city in poi_seed.all_cities():
         pos = message.find(city)
@@ -238,6 +249,63 @@ def extract_destination(message: str, previous_destination: str = "") -> str:
         order = {c: pos for pos, c in hits}
         candidates.sort(key=lambda c: order[c])
     return candidates[0]
+
+
+def _extract_route_city_pair(message: str) -> tuple[str, str] | None:
+    """识别「从 A 出发去 B / A 到 B」中的城市对。"""
+    text = message or ""
+    cities = sorted(set(poi_seed.all_cities()), key=len, reverse=True)
+    for origin in cities:
+        for destination in cities:
+            if origin == destination:
+                continue
+            origin_pattern = re.escape(origin)
+            destination_pattern = re.escape(destination)
+            patterns = (
+                rf"(?:从|由)\s*{origin_pattern}\s*(?:出发\s*)?(?:去|到|前往)\s*{destination_pattern}",
+                rf"{origin_pattern}\s*(?:到|去|前往)\s*{destination_pattern}",
+            )
+            if any(re.search(pattern, text) for pattern in patterns):
+                return origin, destination
+    return None
+
+
+def _extract_explicit_unsupported_destination(message: str) -> str:
+    """识别带目的地语义的未覆盖城市，避免被已覆盖城市抢槽位。"""
+    supported = set(poi_seed.all_cities())
+    for city in sorted(KNOWN_MAJOR_CITIES, key=len, reverse=True):
+        if city in supported:
+            continue
+        start = 0
+        while True:
+            position = message.find(city, start)
+            if position < 0:
+                break
+            prefix = message[max(0, position - 8):position]
+            # 「不去泉州，改去厦门」中的泉州是排除项，不应阻断后面的
+            # 已支持目的地；「泉州，从福州出发」则是开头直接点名。
+            if _RE_CITY_NEGATION.search(prefix):
+                start = position + len(city)
+                continue
+            if position == 0 or re.search(
+                    r"(?:去|到|前往|规划|安排|游玩|玩|目的地(?:是|为)?)\s*$",
+                    prefix):
+                return city
+            start = position + len(city)
+    return ""
+
+
+def extract_origin(message: str) -> str:
+    """抽取跨城交通语句中的出发城市；没有明确路线时保持为空。"""
+    route = _extract_route_city_pair(message)
+    if route:
+        return route[0]
+    text = message or ""
+    cities = sorted(set(poi_seed.all_cities()), key=len, reverse=True)
+    for city in cities:
+        if re.search(rf"(?:从|由)\s*{re.escape(city)}\s*(?:出发|启程)", text):
+            return city
+    return ""
 
 
 def extract_days(message: str) -> int | None:
@@ -569,6 +637,7 @@ def extract_fresh_brief(
     """
     fresh = TravelBrief(
         destination=extract_destination(message, previous_destination),
+        origin=extract_origin(message),
         days=extract_days(message),
         party_size=1,
         budget_cny=extract_budget(message),

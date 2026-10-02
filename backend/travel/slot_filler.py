@@ -34,6 +34,7 @@ from backend.travel.agents.requirement_agent import (
     extract_fresh_brief,
     extract_lodging,
     extract_must_go,
+    extract_origin,
     extract_party_size,
     extract_pace,
     extract_preferences,
@@ -67,6 +68,7 @@ __all__ = [
     "extract_diet",
     "extract_lodging",
     "extract_must_go",
+    "extract_origin",
     "extract_party_size",
     "extract_pace",
     "extract_preferences",
@@ -177,7 +179,8 @@ def slot_filler_node(state: dict) -> dict:
                     brief.origin = saved["origin"]
                 if not brief.diet and saved.get("diet"):
                     brief.diet = saved["diet"]
-                if (brief.pace == "moderate" and saved.get("pace")
+                if (brief.pace == "moderate" and extract_pace(message) is None
+                        and saved.get("pace")
                         in ("relaxed", "intense")):
                     brief.pace = saved["pace"]
                 logger.info("[TravelSlotFiller] 已预填历史偏好: tags=%s pace=%s",
@@ -259,11 +262,14 @@ def slot_filler_node(state: dict) -> dict:
         "stage": "slot",
     }
 
+    previous_itinerary = state.get("itinerary") or {}
+    previous_plan_version = int(previous_itinerary.get("plan_version") or 0) or None
+
     if require_fresh:
         # 强持久化策略下的降级处置（任务书 §10）：无条件清跨轮产物，
         # 即使指纹没变 —— 降级后端里留着的上一轮产物不可信（多 worker
         # 不共享、重启即失）。planning_reset 会清 notes，note 必须在其后写。
-        update.update(planning_reset())
+        update.update(planning_reset(previous_plan_version))
         notes.insert(
             0,
             "持久化已降级（当前为临时存储），本轮按全新规划处理；"
@@ -277,7 +283,7 @@ def slot_filler_node(state: dict) -> dict:
     if brief_changed:
         # 需求变了：旧行程作废，连同执行态一起清掉重新规划。
         # 注意 planning_reset() 会把 notes 置空，所以 notes 必须在它之后写。
-        update.update(planning_reset())
+        update.update(planning_reset(previous_plan_version))
         # 变化原因与差异字段不进 planning_reset 清单：变化当轮产生、当轮被
         # transit expert 消费（盖版本章），跨轮保留也无害（下次变化会覆盖）。
         update["brief_change_reason"] = brief_change_reason
@@ -295,9 +301,19 @@ def slot_filler_node(state: dict) -> dict:
         # brief_changed 分级：带新信息时上面指纹分支已重排（此处重复
         # reset 幂等）；不带新信息（「重新规划一下」指纹不变）时只有
         # 这里能保证出全新方案，而不是把上一版行程原样再输出一遍。
-        update.update(planning_reset())
+        update.update(planning_reset(previous_plan_version))
         notes.insert(0, "已按你的要求重新规划（新方案独立生成）")
         logger.info("[TravelSlotFiller] NEW_RUN 信号，规划产物已清空重排")
 
     update["notes"] = notes
+    from backend.travel.core.events import emit_travel_event
+
+    emit_travel_event(
+        "requirement.interpreted",
+        agent="requirement",
+        brief=brief.model_dump(mode="json"),
+        missing=missing,
+        assumptions=notes,
+        confidence="rule_based",
+    )
     return update

@@ -12,6 +12,7 @@ knowledge_refs；检索为空 / 失败 → 自动退回纯免责声明，不报�
 from __future__ import annotations
 
 from backend.shared.logger import logger
+from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 
@@ -48,24 +49,29 @@ def risk_expert_node(state: dict) -> dict:
         itinerary.warnings = warnings
         itinerary.sources = sources
 
-        # P0-1：知识库检索（软失败，封装在 risk_service）。摘录进
-        # state.knowledge_refs，由 reporter 渲染为独立「知识库参考」段；
-        # 来源标识补进 sources。
+        # P0-1：知识库检索。摘录进 state.knowledge_refs，由 reporter
+        # 渲染为独立「知识库参考」段；来源标识补进 sources。Tool 异常
+        # 必须交给 run_expert_safely 收口为 failed，不能继续伪装成成功。
         knowledge_refs: list[str] = []
         evidences: dict = {}
-        try:
-            brief = load_brief(_state)
-            chunks, source_tag = retrieve_knowledge(
-                brief.destination, brief.preferences)
-            if chunks:
-                knowledge_refs = chunks
-                if source_tag and source_tag not in itinerary.sources:
-                    itinerary.sources.append(source_tag)
-                # 摘录证据表（Phase 4，v4 §4）：RAG/0.7，检索时点即核实事件
-                evidences = build_knowledge_evidence(
-                    brief.destination, chunks, source_tag)
-        except Exception:  # noqa: BLE001 — 双保险：service 已兜底，这里防意外
-            logger.debug("[TravelRisk] 知识库检索意外失败（已跳过）", exc_info=True)
+        brief = load_brief(_state)
+        chunks, source_tag = run_travel_tool(
+            "travel.retrieve_knowledge",
+            "research",
+            lambda: retrieve_knowledge(
+                brief.destination, brief.preferences),
+            result_summary=lambda value: {
+                "result_count": len(value[0]),
+                "data_status": "available" if value[0] else "empty",
+            },
+        )
+        if chunks:
+            knowledge_refs = chunks
+            if source_tag and source_tag not in itinerary.sources:
+                itinerary.sources.append(source_tag)
+            # 摘录证据表（Phase 4，v4 §4）：RAG/0.7，检索时点即核实事件
+            evidences = build_knowledge_evidence(
+                brief.destination, chunks, source_tag)
 
         logger.info("[TravelRisk] sources=%s warnings=%d knowledge_refs=%d",
                     itinerary.sources, len(warnings), len(knowledge_refs))

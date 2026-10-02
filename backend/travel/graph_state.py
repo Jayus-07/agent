@@ -76,6 +76,9 @@ class TravelGraphState(TypedDict, total=False):
     # 构造行程时读取盖版本章；不进 planning_reset 清单——变化当轮产生当轮消费）
     brief_change_reason: str
     brief_changed_fields: list[str]
+    # 本轮重规划前的产物版本。planning_reset 会清掉 itinerary，但版本链
+    # 不能因此回到 v1；transit expert 用它为新产物盖 parent + 1。
+    plan_parent_version: int | None
 
     # === 规划产物 ===
     candidates: list[dict]
@@ -108,6 +111,9 @@ class TravelGraphState(TypedDict, total=False):
     # {**state.get("evidences", {}), **新证据} 合并（无 reducer 键是覆盖
     # 语义，直接写会冲掉前序节点证据）。纯 dict 可序列化。
     evidences: dict[str, dict]
+    # 用户明确要求实时查美食/酒店/车票时的真实 Tool 结果摘要；只存可序列化
+    # 的展示数据，不把上游响应对象塞进 checkpoint。
+    live_search: dict[str, dict]
 
     # === 执行态 ===
     stage: str
@@ -194,6 +200,7 @@ def build_travel_context(state: dict) -> dict:
     itinerary = load_itinerary(state)
     return {
         "brief": state.get("brief", {}),
+        "live_search": state.get("live_search", {}),
         "brief_missing": state.get("brief_missing", []),
         "stage": state.get("stage", ""),
         "repair_rounds": state.get("repair_rounds", 0),
@@ -247,7 +254,7 @@ def data_snapshot_version(candidates: list[dict]) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:8]
 
 
-def planning_reset() -> dict:
+def planning_reset(parent_plan_version: int | None = None) -> dict:
     """清空全部规划产物与执行态（保留 brief 与槽位结果）。
 
     **为什么必须有**：开启 checkpointer 后状态跨轮保留，第二轮若只在
@@ -260,7 +267,9 @@ def planning_reset() -> dict:
     用「宁可重算」换「绝不输出与需求不符的行程」，这个取舍不用犹豫。
     """
     return {
+        "plan_parent_version": parent_plan_version,
         "candidates": [],
+        "live_search": {},
         "day_plan": [],
         "must_go_unresolved": [],
         "itinerary": None,

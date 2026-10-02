@@ -78,16 +78,24 @@ def build_change_record(
 
 
 def rollback_record(
-    *, new_version: int, parent_version: int, change_reason: str = "user_rollback"
+    *,
+    new_version: int,
+    parent_version: int,
+    change_reason: str = "user_rollback",
+    restored_version: int | None = None,
 ) -> dict:
-    """回滚 = 以 parent 版本内容生成新版本（内容还原由调用方经 stamp_version
-    落实），change 标记 rollback 类型，历史版本永不删除。"""
+    """回滚 = 以旧版本内容生成新版本（内容还原由调用方经 stamp_version
+    落实），change 标记 rollback 类型，历史版本永不删除。
+
+    restored_version：实际内容来源版本。缺省等于 parent_version（紧邻上一版
+    撤销的原始语义）；「恢复到任意历史版」时 parent 是当前最新版、内容来自
+    更早的 restored_version，两者必须分开记录。"""
     return {
         "version": new_version,
         "parent_version": parent_version,
         "change": {
             "type": "rollback",
-            "restored_version": parent_version,
+            "restored_version": restored_version if restored_version is not None else parent_version,
             "added": [],
             "removed": [],
             "moved": [],

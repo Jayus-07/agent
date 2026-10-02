@@ -73,6 +73,15 @@ class Poi(BaseModel):
         default="verified",
         description="verified=已核实（种子数据）；unverified=占位/未核实（外部解析补全）",
     )
+    # —— 字段级状态（2026-10-02 拆分）：坐标与详情的核实语义分开 ——
+    # live 检索（腾讯 LBS）坐标本身可信（实时检索 + observed_at），但票价/
+    # 停留时长是占位 → verification_status=unverified 只描述详情；坐标可信
+    # 用 location_status 独立表达，消费方（地图打点）按此判定，不再被
+    # 详情占位连坐。空值=旧数据无此字段，回退按 source 前缀口径判定。
+    location_status: str = Field(
+        default="",
+        description="坐标级核实状态：verified=坐标来自实时检索源；空=未单独标注（回退 source 口径）",
+    )
 
     def is_open_on(self, weekday: int) -> bool:
         """给定星期是否开放（weekday: 0=周一）。"""

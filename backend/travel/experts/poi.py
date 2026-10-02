@@ -11,6 +11,7 @@ Phase 3 Commit B 起节点经 ResearchAgent/PlanningAgent 调用 service
 from __future__ import annotations
 
 from backend.shared.logger import logger
+from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief
 from backend.travel.planning import resolve_must_go
@@ -23,6 +24,29 @@ from backend.travel.services.poi_service import Skeleton  # noqa: F401
 
 _research = ResearchAgent()
 _planning = PlanningAgent()
+
+
+def _live_queries(message: str) -> tuple[bool, bool, bool]:
+    """只在用户明确要求实时检索时调用外部 Tool。
+
+    food/hotel = 高德商户（结构化）；guide = 知乎官方 MCP 攻略内容
+    （知乎经验帖 + 全网文章，2026-10-02 接入）。
+    """
+    text = message or ""
+    food = any(token in text for token in (
+        "查美食", "查餐厅", "搜美食", "搜餐厅", "附近美食", "实时美食",
+    ))
+    hotel = any(token in text for token in (
+        "查酒店", "搜酒店", "酒店搜索", "实时酒店",
+    ))
+    guide = any(token in text for token in (
+        "攻略", "必吃", "小吃", "特色美食", "美食推荐", "值得吃", "美食指南",
+    ))
+    return food, hotel, guide
+
+
+def _merchant_summary(category: str):
+    return lambda value: _research.merchant_event_summary(value, category)
 
 
 def retrieve_candidates(brief):
@@ -44,7 +68,15 @@ def poi_expert_node(state: dict) -> dict:
     """POI 专家节点：候选池检索（Research 面）+ 行程骨架（Planning 面）。"""
     def _run(_state: dict) -> dict:
         brief = load_brief(state)
-        candidates, extra_notes = retrieve_candidates(brief)
+        candidates, extra_notes = run_travel_tool(
+            "travel.search_poi",
+            "research",
+            lambda: retrieve_candidates(brief),
+            result_summary=lambda value: {
+                "result_count": len(value[0]),
+                "data_status": "available" if value[0] else "empty",
+            },
+        )
         # 候选池证据表（Phase 4，v4 §4）：种子=SEED/腾讯补全=LIVE，
         # 纯函数派生自 Poi 字段，随 candidates 一起进 state
         evidences = build_candidate_evidences(candidates)
@@ -61,6 +93,31 @@ def poi_expert_node(state: dict) -> dict:
         # must_go 三态契约（STOP I1）：resolved/unresolved 在此唯一产生，
         # 金标 Q2（must_go_coverage）与下游披露都消费这里的事实
         resolution = resolve_must_go(brief, candidates)
+
+        live_search: dict[str, dict] = {}
+        need_food, need_hotel, need_guide = _live_queries(state.get("user_message", ""))
+        if need_food:
+            live_search["food"] = run_travel_tool(
+                "map_merchant_search_tool",
+                "research",
+                lambda: _research.search_food(brief.destination),
+                result_summary=_merchant_summary("food"),
+            )
+        if need_hotel:
+            live_search["hotel"] = run_travel_tool(
+                "map_merchant_search_tool",
+                "research",
+                lambda: _research.search_hotels(brief.destination),
+                result_summary=_merchant_summary("hotel"),
+            )
+        if need_guide:
+            # 攻略检索（知乎官方 MCP）：Agent 层已做单路降级，此处不再上抛
+            live_search["guides"] = run_travel_tool(
+                "zhihu_search_tool",
+                "research",
+                lambda: _research.search_guides(brief.destination),
+                result_summary=lambda value: _research.guide_event_summary(value),
+            )
 
         # STOP I6 遥测 + 结构化事件（软失败）
         try:
@@ -85,6 +142,7 @@ def poi_expert_node(state: dict) -> dict:
                 "dropped": skeleton.dropped,
                 "must_go_unresolved": resolution.unresolved,
                 "evidences": evidences,
+                "live_search": live_search,
             },
             "notes": extra_notes + skeleton.notes,
         }
@@ -104,6 +162,11 @@ def poi_expert_node(state: dict) -> dict:
         "must_go_unresolved": data.get("must_go_unresolved", []),
         "notes": list(state.get("notes", [])) + list(result.get("notes", [])),
     }
+    if data.get("live_search"):
+        update["live_search"] = {
+            **(state.get("live_search") or {}),
+            **data["live_search"],
+        }
     evidences = data.get("evidences") or {}
     if evidences:
         # 合并写入（无 reducer 键是覆盖语义，直接写会冲掉既有证据）

@@ -86,6 +86,12 @@ class TestMultiturn:
         assert it.get("change_reason") == "brief_changed"
         assert "days" in (second.get("brief_changed_fields") or [])
         assert any("需求已变化" in n for n in second.get("notes", []))
+        assert it.get("plan_version", 0) > first["itinerary"].get("plan_version", 0)
+
+        third = _ask(memory_graph, "改成5天", tid)
+        third_itinerary = third.get("itinerary") or {}
+        assert len(third_itinerary.get("days", [])) == 5
+        assert third_itinerary.get("plan_version", 0) > it.get("plan_version", 0)
 
     def test_t4_vague_pace_feedback_replans(self, memory_graph):
         tid = _tid()

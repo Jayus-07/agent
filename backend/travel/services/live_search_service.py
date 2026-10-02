@@ -30,8 +30,8 @@ class LiveSearchError(RuntimeError):
 
 
 def _record_tool_metrics(raw: Any, tool_name: str, latency_ms: int,
-                         error: str = "") -> None:
-    """把一次直调记入治理指标（软失败：记账异常不影响业务结果）。"""
+                         error: str = "", error_code: str = ""):
+    """把一次直调转换成 ToolResult 并记入治理指标。"""
     try:
         from backend.core.tool_runtime.metrics import record_tool_result
         from backend.core.tool_runtime.models import ToolResult, ToolStatus
@@ -43,37 +43,84 @@ def _record_tool_metrics(raw: Any, tool_name: str, latency_ms: int,
             except (TypeError, json.JSONDecodeError):
                 payload = None
         failed = not (isinstance(payload, dict) and payload.get("status") == "success")
-        record_tool_result(
-            ToolResult(
-                status=ToolStatus.FAILED if failed else ToolStatus.SUCCESS,
-                tool_name=tool_name,
-                latency_ms=latency_ms,
-                data=payload,
-                error_message=error or str(payload.get("error") or "")
-                if failed and isinstance(payload, dict) else error,
+        result = ToolResult(
+            status=ToolStatus.FAILED if failed else ToolStatus.SUCCESS,
+            tool_name=tool_name,
+            latency_ms=latency_ms,
+            data=payload,
+            error_code=(
+                (
+                    error_code
+                    or (payload.get("error_code") or payload.get("code")
+                        if isinstance(payload, dict) else "")
+                    or "TOOL_FAILED"
+                )
+                if failed else None
             ),
-            domain="travel", tool_name=tool_name,
+            error_message=(
+                error or str(payload.get("error") or "")
+                if failed and isinstance(payload, dict) else error
+            ),
         )
+        record_tool_result(result, domain="travel", tool_name=tool_name)
+        return result
     except Exception:
         logger.debug("[LiveSearch] Tool 治理记账失败: %s", tool_name, exc_info=True)
+        from backend.core.tool_runtime.models import ToolResult, ToolStatus
+        return ToolResult(
+            status=ToolStatus.FAILED,
+            tool_name=tool_name,
+            latency_ms=latency_ms,
+            error_code="TRACE_METRICS_ERROR",
+            error_message=error or "Tool 治理记账失败",
+        )
 
 
-def _invoke(tool: Any, tool_name: str, **kwargs: Any) -> str:
+def _invoke(
+    tool: Any,
+    tool_name: str,
+    *,
+    capability: str = "",
+    agent: str = "travel_live_search",
+    **kwargs: Any,
+) -> str:
     """同步直调 Tool 并补延迟与治理记账，原样返回封套字符串。
 
     Tool 自身按「新 Tool 三规」把失败折叠进失败封套；这里只兜意外异常
     （记 FAILED 后原样上抛，失败语义仍由专家层收口）。
     """
+    from backend.core.tool_runtime.models import ToolResult, ToolStatus
+    from backend.core.tool_runtime.tracing import finish_tool_span, start_tool_span
+
     started = time.monotonic()
+    span = start_tool_span(
+        tool_name,
+        capability=capability or tool_name,
+        params=kwargs,
+        agent=agent,
+    )
     try:
         raw = tool.func(**kwargs)
     except Exception as exc:
-        _record_tool_metrics(None, tool_name,
-                             round((time.monotonic() - started) * 1000),
-                             error=f"{type(exc).__name__}: {exc}")
+        result = ToolResult(
+            status=ToolStatus.FAILED,
+            tool_name=tool_name,
+            latency_ms=round((time.monotonic() - started) * 1000),
+            error_code=type(exc).__name__,
+            error_message=str(exc),
+        )
+        _record_tool_metrics(
+            None,
+            tool_name,
+            result.latency_ms,
+            error=f"{type(exc).__name__}: {exc}",
+            error_code=type(exc).__name__,
+        )
+        finish_tool_span(span, result)
         raise
-    _record_tool_metrics(raw, tool_name,
-                         round((time.monotonic() - started) * 1000))
+    result = _record_tool_metrics(
+        raw, tool_name, round((time.monotonic() - started) * 1000))
+    finish_tool_span(span, result)
     return raw
 
 
@@ -96,6 +143,7 @@ def search_merchants(*, keyword: str, city: str, types: str = "",
     """调用高德商户 Tool，返回商户数据，不吞掉真实失败。"""
     raw = _invoke(
         map_merchant_search_tool, "map_merchant_search_tool",
+        capability="travel.search_poi", agent="research",
         keyword=keyword, city=city, types=types, page_size=page_size,
     )
     return _decode_success(raw, "map_merchant_search_tool")
@@ -118,6 +166,7 @@ def search_trains(*, from_station: str, to_station: str,
     """调用 12306 MCP Tool，返回车次数据，不把失败映射成空车次。"""
     raw = _invoke(
         travel_train_search_tool, "travel_train_search_tool",
+        capability="travel.train.search", agent="planning",
         from_station=from_station,
         to_station=to_station,
         date=travel_date,
@@ -135,6 +184,7 @@ def search_places(*, keyword: str, city: str,
     """
     raw = _invoke(
         map_place_search_tool, "map_place_search_tool",
+        capability="travel.poi_search", agent="research",
         keyword=keyword, city=city, page_size=page_size,
     )
     return _decode_success(raw, "map_place_search_tool")
@@ -146,6 +196,7 @@ def search_train_price(*, from_station: str, to_station: str,
     由调用方按行降级——票价缺行只影响展示，不影响车票数据本体。"""
     raw = _invoke(
         travel_train_price_tool, "travel_train_price_tool",
+        capability="travel.train.search", agent="planning",
         from_station=from_station,
         to_station=to_station,
         train_date=travel_date,
@@ -200,6 +251,7 @@ def search_zhihu_guides(*, destination: str, limit: int = 4) -> dict[str, Any]:
     """知乎站内旅游/美食攻略（经验帖，调用知乎官方 MCP）。"""
     raw = _invoke(
         zhihu_search_tool, "zhihu_search_tool",
+        capability="travel.guide.search", agent="research",
         query=_GUIDE_QUERY_TPL.format(destination=destination), count=limit,
     )
     return _decode_success(raw, "zhihu_search_tool")
@@ -209,6 +261,7 @@ def search_web_guides(*, destination: str, limit: int = 4) -> dict[str, Any]:
     """全网旅游攻略（媒体文章/官方线路消息，调用知乎官方 MCP）。"""
     raw = _invoke(
         global_search_tool, "global_search_tool",
+        capability="travel.guide.search", agent="research",
         query=_GUIDE_QUERY_TPL.format(destination=destination), count=limit,
     )
     return _decode_success(raw, "global_search_tool")

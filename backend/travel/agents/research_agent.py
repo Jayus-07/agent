@@ -10,9 +10,16 @@ ProviderRouter 在 service 内插入）；禁止 import experts/graph_builder；
 """
 from __future__ import annotations
 
+from backend.shared.logger import logger
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.poi import Poi
-from backend.travel.services import poi_service, risk_service, weather_service
+from backend.travel.services import (
+    live_search_service,
+    poi_service,
+    risk_service,
+    weather_service,
+)
+from backend.travel.services.live_search_service import LiveSearchError
 
 
 class ResearchAgent:
@@ -55,3 +62,51 @@ class ResearchAgent:
     ) -> tuple[list[str], str]:
         """知识库摘录（软失败，经 risk_service）。"""
         return risk_service.retrieve_knowledge(destination, preferences)
+
+    def search_food(self, city: str) -> dict:
+        return live_search_service.search_food(city)
+
+    def search_hotels(self, city: str) -> dict:
+        return live_search_service.search_hotels(city)
+
+    def search_guides(self, destination: str) -> dict:
+        """旅游/美食攻略检索（知乎官方 MCP 两路）。
+
+        攻略是增强信息非规划硬依赖：单路失败独立降级为 ``{"error": ...}``，
+        绝不让一路失败拖垮 poi 专家节点；全失败时返回两路 error，交付端
+        据此披露「攻略检索不可用」。
+        """
+        guides: dict = {}
+        for name, fetch in (
+            ("zhihu", live_search_service.search_zhihu_guides),
+            ("web", live_search_service.search_web_guides),
+        ):
+            try:
+                guides[name] = fetch(destination=destination)
+            except LiveSearchError as exc:
+                logger.warning("[ResearchAgent] 攻略检索 %s 路失败: %s", name, exc)
+                guides[name] = {"error": str(exc)}
+        return guides
+
+    @staticmethod
+    def guide_event_summary(data: dict) -> dict:
+        """两路攻略合并结果的 SSE 摘要（单路失败保留失败标记）。"""
+        merged: dict = {"category": "guide", "preview": [], "provider": "zhihu_mcp"}
+        counts = []
+        for name, payload in (data or {}).items():
+            if not isinstance(payload, dict) or payload.get("error"):
+                merged[f"{name}_status"] = "unavailable"
+                continue
+            results = payload.get("results") or []
+            counts.append(len(results))
+            merged["preview"].extend(
+                live_search_service.guides_preview(payload, name)["preview"][:4])
+            merged[f"{name}_status"] = "available" if results else "empty"
+        merged["result_count"] = sum(counts)
+        merged["data_status"] = "available" if any(counts) else (
+            "empty" if merged.get("zhihu_status") != "unavailable" else "unavailable")
+        return merged
+
+    @staticmethod
+    def merchant_event_summary(data: dict, category: str) -> dict:
+        return live_search_service.merchant_preview(data, category)
