@@ -44,3 +44,27 @@ TRAIN_MCP_MIN_INTERVAL = float(os.getenv("TRAIN_MCP_MIN_INTERVAL", "0.5"))
 def is_train_mcp_enabled() -> bool:
     """外部 12306 数据源是否参与（开关 + URL 非空）。"""
     return bool(TRAIN_MCP_ENABLED and TRAIN_MCP_BASE_URL)
+
+
+# =============================================
+# 外部 MCP 数据源：知乎搜索（developer.zhihu.com 官方 MCP，2026-10-02）
+# =============================================
+# 与 12306（非官方聚合、仅供学习）不同：这是官方开放平台，鉴权为
+# Authorization: Bearer <Access Secret>（个人中心生成），搜索类各有免费
+# 配额（按期重置）。配额宝贵 → 本地缓存 TTL 默认比 12306 长得多；
+# Access Secret 不落代码，只从 .env 读（ZHIHU_MCP_API_KEY）。
+ZHIHU_MCP_ENABLED = _bool("ZHIHU_MCP_ENABLED", False)
+ZHIHU_MCP_BASE_URL = os.getenv("ZHIHU_MCP_BASE_URL",
+                               "https://developer.zhihu.com/api/mcp/v1").strip()
+ZHIHU_MCP_API_KEY = os.getenv("ZHIHU_MCP_API_KEY", "").strip()
+# 单次调用总超时（秒）：覆盖 initialize 握手 + tools/call 全程
+ZHIHU_MCP_TIMEOUT = float(os.getenv("ZHIHU_MCP_TIMEOUT", "15"))
+# 结果缓存秒数：搜索结果时效要求低，缓存主要为省配额（配额按期计费）
+ZHIHU_MCP_CACHE_TTL = float(os.getenv("ZHIHU_MCP_CACHE_TTL", "300"))
+# 客户端节流：官方接口按配额计费，保底最小间隔（秒），按源独立生效
+ZHIHU_MCP_MIN_INTERVAL = float(os.getenv("ZHIHU_MCP_MIN_INTERVAL", "1.0"))
+
+
+def is_zhihu_mcp_enabled() -> bool:
+    """外部知乎数据源是否参与（开关 + URL 与 Access Secret 非空）。"""
+    return bool(ZHIHU_MCP_ENABLED and ZHIHU_MCP_BASE_URL and ZHIHU_MCP_API_KEY)

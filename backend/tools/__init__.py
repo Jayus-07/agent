@@ -15,6 +15,7 @@ Skill → Tool → Infrastructure (RAG / SQL / Report)
 - memory.py:           memory_search_tool, memory_store_tool
 - calculator.py:       calculate_tool
 - travel/:             travel_poi_search_tool + 距离/费用估算纯函数（旅游域）
+- search/:             zhihu_search_tool, global_search_tool（知乎官方 MCP）
 - session.py:          set_session_id / set_tool_user_id (contextvar 辅助工具)
 
 Tool Registry:
@@ -39,6 +40,9 @@ from backend.tools.competitor import (  # noqa: F401
 from backend.tools.memory import memory_search_tool, memory_store_tool  # noqa: F401
 from backend.tools.calculator import calculate_tool  # noqa: F401
 from backend.tools.travel import travel_poi_search_tool  # noqa: F401
+from backend.tools.search import (  # noqa: F401
+    zhihu_search_tool, global_search_tool,
+)
 
 from backend.tools.tool_registry import tool_registry as _tool_registry
 from backend.shared.logger import logger as _logger
@@ -77,5 +81,7 @@ __all__ = [
     'memory_store_tool',
     'calculate_tool',
     'travel_poi_search_tool',
+    'zhihu_search_tool',
+    'global_search_tool',
     'tool_registry',  # ✅ 供外部访问
 ]

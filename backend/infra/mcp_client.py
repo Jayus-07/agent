@@ -35,21 +35,21 @@ class McpClientError(Exception):
 
 
 # ── 节流 + TTL 缓存：外部源怕突发，同参短窗内直接复用 ──
+# 节流按 base_url 分桶（12306 与知乎官方接口的限流策略不同，互不拖累）
 _throttle_lock = threading.Lock()
-_last_call_at = 0.0
+_last_call_at: dict[str, float] = {}
 _cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
 _cache_lock = threading.Lock()
 
 
-def _throttle() -> None:
-    global _last_call_at
-    if MCP_CFG.TRAIN_MCP_MIN_INTERVAL <= 0:
+def _throttle(key: str, min_interval: float) -> None:
+    if min_interval <= 0:
         return
     with _throttle_lock:
-        wait = MCP_CFG.TRAIN_MCP_MIN_INTERVAL - (time.time() - _last_call_at)
+        wait = min_interval - (time.time() - _last_call_at.get(key, 0.0))
         if wait > 0:
             time.sleep(wait)
-        _last_call_at = time.time()
+        _last_call_at[key] = time.time()
 
 
 def _cache_key(base_url: str, tool_name: str, arguments: dict) -> str:
@@ -113,12 +113,14 @@ def _extract_payload(result) -> Any:
 
 
 async def _call_async(base_url: str, tool_name: str, arguments: dict,
-                      timeout_s: float) -> Any:
+                      timeout_s: float,
+                      headers: dict | None = None) -> Any:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
     timeout = timedelta(seconds=timeout_s)
-    async with streamablehttp_client(base_url, timeout=timeout) as (
+    async with streamablehttp_client(base_url, timeout=timeout,
+                                     headers=headers) as (
         read, write, _
     ):
         async with ClientSession(read, write, read_timeout_seconds=timeout) as session:
@@ -139,7 +141,9 @@ async def _call_async(base_url: str, tool_name: str, arguments: dict,
 
 def call_tool(base_url: str, tool_name: str, arguments: dict, *,
               timeout: float | None = None,
-              ttl: float | None = None) -> Any:
+              ttl: float | None = None,
+              headers: dict | None = None,
+              min_interval: float | None = None) -> Any:
     """同步调用外部 MCP server 的 tool，返回归一后的 payload。
 
     Args:
@@ -148,23 +152,29 @@ def call_tool(base_url: str, tool_name: str, arguments: dict, *,
         arguments: 工具参数（dict）
         timeout: 总超时秒数；默认取 ``TRAIN_MCP_TIMEOUT``
         ttl: 结果缓存秒数；默认取 ``TRAIN_MCP_CACHE_TTL``，0 不缓存
+        headers: 附加请求头（如知乎官方 MCP 的
+            ``{"Authorization": "Bearer <secret>"}``）；默认无
+        min_interval: 该源的最小调用间隔秒数（按 base_url 分桶节流）；
+            默认取 ``TRAIN_MCP_MIN_INTERVAL``
 
     Raises:
         McpClientError: 连接失败 / 超时 / 握手失败 / 工具侧报错。
     """
     timeout_s = float(MCP_CFG.TRAIN_MCP_TIMEOUT if timeout is None else timeout)
     effective_ttl = (MCP_CFG.TRAIN_MCP_CACHE_TTL if ttl is None else ttl)
+    interval_s = (MCP_CFG.TRAIN_MCP_MIN_INTERVAL if min_interval is None
+                  else min_interval)
 
     ck = _cache_key(base_url, tool_name, arguments)
     cached = _cache_get(ck)
     if cached is not None:
         return cached
 
-    _throttle()
+    _throttle(base_url, interval_s)
     started = time.perf_counter()
     try:
         payload = asyncio.run(_call_async(base_url, tool_name, dict(arguments),
-                                          timeout_s))
+                                          timeout_s, headers))
     except McpClientError:
         raise
     except asyncio.TimeoutError as e:
