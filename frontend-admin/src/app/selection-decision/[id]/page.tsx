@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
+import Link from 'next/link'
 import MarkdownContent from '@/components/chat/MarkdownContent'
 import DecisionCard from '@/components/selection/DecisionCard'
 import { selectionDecisionApi, SelectionTaskDetail } from '@/api/selectionDecision'
@@ -35,10 +36,16 @@ export default function SelectionDecisionReportPage() {
   if (error) return <div className="p-6 text-red-600">{error}</div>
   if (!task) return <div className="p-6 text-gray-500">加载中…</div>
   if (task.status === 'running') {
-    return <div className="p-6 text-gray-500">任务执行中，页面自动刷新…</div>
+    return (
+      <div className="p-6 text-gray-500">
+        <Link href="/selection-workbench?tab=decision" className="mb-4 block text-sm text-blue-600 hover:underline">← 返回选品决策</Link>
+        任务执行中，页面自动刷新…
+      </div>
+    )
   }
   return (
     <div className="p-6 max-w-3xl">
+      <Link href="/selection-workbench?tab=decision" className="mb-4 block text-sm text-blue-600 hover:underline">← 返回选品决策</Link>
       {task.status === 'failed' ? (
         <div className="text-red-600">任务失败：{task.error || '未知错误'}</div>
       ) : (
