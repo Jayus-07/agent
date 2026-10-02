@@ -447,7 +447,37 @@ export default function TravelPage() {
                 onToggle={() => setConditionsOpen((v) => !v)}
               >
                 {conditionsOpen || !itinerary ? (
-                  <TripForm
+                  loading ? (
+                    /* 生成中：左栏收起为「条件已锁定」摘要（设计稿②），把注意力让给过程看板 */
+                    <div
+                      className="rounded-2xl border border-[#dae7e5] bg-white p-5 shadow-card"
+                      aria-label="行程条件（生成中已锁定）"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Loader2 size={14} className="animate-spin text-[#087b73]" aria-hidden />
+                        <h2 className="text-sm font-semibold text-[#183037]">行程条件（已锁定）</h2>
+                      </div>
+                      <dl className="mt-3 space-y-2 text-xs">
+                        {[
+                          ['目的地', destination || '未填'],
+                          ['出发', startDate || '未定'],
+                          ['行程', days ? `${days} 天` : '未填'],
+                          ['同行', partySize ? `${partySize} 人` : '未填'],
+                          ['预算', budget ? `¥${budget}` : '不限'],
+                          ['节奏', pace || '适中'],
+                        ].map(([label, value]) => (
+                          <div key={label} className="flex items-center justify-between gap-3">
+                            <dt className="shrink-0 text-[#5c7074]">{label}</dt>
+                            <dd className="min-w-0 truncate text-right font-medium text-[#183037]">{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <p className="mt-3 border-t border-[#e8f1ef] pt-2 text-[10px] text-[#8fa5a3]">
+                        生成期间条件不可改；完成后可在右侧「旅行助手」用一句话调整
+                      </p>
+                    </div>
+                  ) : (
+                    <TripForm
                     origin={origin} onOrigin={setOrigin}
                     locationState={locationState} locationHint={locationHint} onUseCurrentLocation={useCurrentLocation}
                     destination={destination} onDestination={setDestination}
@@ -463,6 +493,7 @@ export default function TravelPage() {
                     hasItinerary={!!itinerary}
                     onSubmit={submit}
                   />
+                  )
                 ) : (
                   <TripSummary
                     origin={origin} destination={destination} days={days} partySize={partySize}
@@ -1072,6 +1103,10 @@ function GeneratingCard({
   processState: TravelProcessState | null
   expectedDays: number
 }) {
+  // 「规划过程」默认收起（设计稿②）：结果卡（商户/车票/攻略）始终可见，
+  // 想看可视化过程（需求理解 + 全量 Tool 时间线）再展开；失败时强制
+  // 展开——失败原因列在过程里，不展开就没人看得见。
+  const [processOpen, setProcessOpen] = useState(false)
   const failed = processState?.status === 'error'
   const stageMap = processState?.stages ?? {}
   // stepper = 固定流水线顺序 × 后端真实事件状态；未收到事件的阶段显示
@@ -1122,6 +1157,21 @@ function GeneratingCard({
               <p className="text-[10px] text-[#8fa5a3]">按真实事件计</p>
             </div>
           )}
+          {/* 规划过程展开按钮：默认收起，展开看需求理解 + 全量 Tool 时间线 */}
+          {(processState?.tools.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => setProcessOpen((v) => !v)}
+              aria-expanded={processOpen || failed}
+              className={`ml-auto shrink-0 cursor-pointer rounded-lg border px-2.5 py-1.5 text-xs transition-colors sm:ml-0 ${
+                processOpen || failed
+                  ? 'border-[#087b73]/40 bg-[#087b73]/[0.07] text-[#087b73]'
+                  : 'border-[#dae7e5] text-[#5c7074] hover:border-[#087b73]/40 hover:text-[#183037]'
+              }`}
+            >
+              规划过程 · {processState?.tools.length ?? 0} 次调用 {processOpen || failed ? '▴' : '▾'}
+            </button>
+          )}
         </div>
 
         {/* 阶段 stepper：真实事件驱动，进行中的步骤带 spinner */}
@@ -1160,42 +1210,48 @@ function GeneratingCard({
         </ol>
       </div>
 
-      {/* 需求理解（requirement.interpreted 事件到达即展示） */}
-      {processState?.requirement && <RequirementCard requirement={processState.requirement} />}
-
-      {/* 实时检索结果：高德商户 / 12306 车票的 tool.result preview 逐条点亮 */}
+      {/* 实时检索结果：高德商户 / 12306 车票 / 知乎攻略的 tool.result preview
+          逐条点亮——这是用户要「能看到结果」的部分，默认可见不收进展开区 */}
       {processState && <LiveSearchBoard processState={processState} />}
 
-      {/* Tool 调用时间线（检索类 preview 已在上面展示，这里列全量调用） */}
-      {(processState?.tools.length ?? 0) > 0 && (
-        <div className="rounded-2xl border border-[#dae7e5] bg-white px-4 py-3 shadow-card">
-          <p className="flex items-center gap-1.5 text-xs font-semibold text-[#183037]">
-            <Sparkles size={12} className="text-[#087b73]" aria-hidden />
-            Tool 调用时间线
-            <span className="font-normal text-[#8fa5a3]">共 {processState?.tools.length} 次真实调用</span>
-          </p>
-          <ol className="mt-2.5 space-y-1.5">
-            {processState?.tools.map((tool, index) => (
-              <li key={`${tool.tool}-${index}`} className="flex items-center gap-2 text-xs">
-                {tool.status === 'running' ? (
-                  <Loader2 size={12} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
-                ) : tool.status === 'success' ? (
-                  <CheckCircle2 size={12} className="shrink-0 text-[#087b73]" aria-label="成功" />
-                ) : (
-                  <AlertCircle size={12} className="shrink-0 text-red-500" aria-label="失败" />
-                )}
-                <span className="min-w-0 flex-1 truncate text-[#183037]">
-                  {TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool}
-                </span>
-                <span className={tool.status === 'failed' ? 'shrink-0 text-red-600' : 'shrink-0 text-[#8fa5a3]'}>
-                  {tool.status === 'running' ? '调用中…'
-                    : tool.status === 'failed' ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
-                    : [tool.resultCount != null ? `${tool.resultCount} 条` : '', tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '']
-                      .filter(Boolean).join(' · ') || '已返回'}
-                </span>
-              </li>
-            ))}
-          </ol>
+      {/* 规划过程（可展开）：需求理解 + 全量 Tool 时间线；失败时强制展开 */}
+      {(processOpen || failed) && processState && (
+        <div className="animate-fade-in space-y-4" aria-label="规划过程详情">
+          {/* 需求理解（requirement.interpreted 事件到达即展示） */}
+          {processState.requirement && <RequirementCard requirement={processState.requirement} />}
+
+          {/* Tool 调用时间线（检索类 preview 已在上面展示，这里列全量调用） */}
+          {processState.tools.length > 0 && (
+            <div className="rounded-2xl border border-[#dae7e5] bg-white px-4 py-3 shadow-card">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-[#183037]">
+                <Sparkles size={12} className="text-[#087b73]" aria-hidden />
+                Tool 调用时间线
+                <span className="font-normal text-[#8fa5a3]">共 {processState.tools.length} 次真实调用</span>
+              </p>
+              <ol className="mt-2.5 space-y-1.5">
+                {processState.tools.map((tool, index) => (
+                  <li key={`${tool.tool}-${index}`} className="flex items-center gap-2 text-xs">
+                    {tool.status === 'running' ? (
+                      <Loader2 size={12} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
+                    ) : tool.status === 'success' ? (
+                      <CheckCircle2 size={12} className="shrink-0 text-[#087b73]" aria-label="成功" />
+                    ) : (
+                      <AlertCircle size={12} className="shrink-0 text-red-500" aria-label="失败" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[#183037]">
+                      {TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool}
+                    </span>
+                    <span className={tool.status === 'failed' ? 'shrink-0 text-red-600' : 'shrink-0 text-[#8fa5a3]'}>
+                      {tool.status === 'running' ? '调用中…'
+                        : tool.status === 'failed' ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
+                        : [tool.resultCount != null ? `${tool.resultCount} 条` : '', tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '']
+                          .filter(Boolean).join(' · ') || '已返回'}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
         </div>
       )}
 
