@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generated_at": "2026-09-30T08:00:11+08:00",
-  "git_sha": "d4867d2",
+  "generated_at": "2026-10-02T09:32:05+08:00",
+  "git_sha": "7197b54",
   "source": "postgres://agent_memory.prompts",
-  "prompt_count": 39,
+  "prompt_count": 43,
   "prompts": {
     "business_report.polish": {
       "active_version": 1,
@@ -23,6 +23,26 @@
     "customer_service.answer": {
       "active_version": 1,
       "template_hash": "8de70af74dfcb1e8",
+      "change_kind": null
+    },
+    "customer_service.complaint_assess": {
+      "active_version": 1,
+      "template_hash": "006cd7b8cd1dfeb2",
+      "change_kind": null
+    },
+    "customer_service.query_intent": {
+      "active_version": 1,
+      "template_hash": "e7a10c8b9785e967",
+      "change_kind": null
+    },
+    "customer_service.redirect_main": {
+      "active_version": 1,
+      "template_hash": "627c8500fc33d7b8",
+      "change_kind": null
+    },
+    "customer_service.supervisor": {
+      "active_version": 2,
+      "template_hash": "b59e81a752469cea",
       "change_kind": null
     },
     "customer_service.system": {
@@ -146,9 +166,9 @@
       "change_kind": null
     },
     "rag.qa": {
-      "active_version": 1,
-      "template_hash": "a15d5e85cabbdfc3",
-      "change_kind": null
+      "active_version": 12,
+      "template_hash": "a527bd30adc3c0d4",
+      "change_kind": "patch"
     },
     "reporter.summary": {
       "active_version": 1,
