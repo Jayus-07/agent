@@ -74,8 +74,8 @@ describe('NAV — 导航配置完整性', () => {
     expect(operations?.items?.find((item) => item.path === '/observability/monitoring')?.section).toBe('运行状态')
 
     const platform = NAV.find((entry) => entry.label === '系统设置')
-    expect(platform?.items?.find((item) => item.path === '/prompts')?.section).toBe('AI 能力')
-    expect(platform?.items?.find((item) => item.path === '/settings/access')?.section).toBe('权限与模型')
+    expect(platform?.items?.find((item) => item.path === '/prompts')?.section).toBe('AI 资产')
+    expect(platform?.items?.find((item) => item.path === '/settings/access')?.section).toBe('安全与权限')
   })
 
   it('模型与供应商入口仅 admin 可见，旧模型价格入口不再出现在导航', () => {
@@ -84,6 +84,23 @@ describe('NAV — 导航配置完整性', () => {
       expect.objectContaining({ label: '模型与供应商', path: '/settings/models', minRole: 'admin' }),
     ]))
     expect(allPaths).not.toContain('/cost-governance/prices')
+  })
+
+  it('系统设置按 AI 资产、治理发布、安全权限三类组织，并保留一致性检查入口', () => {
+    const platform = NAV.find((entry) => entry.label === '系统设置') as unknown as {
+      items?: Array<{ label: string; path: string; section?: string }>
+      showSections?: boolean
+    }
+    const item = (label: string) => platform.items?.find((entry) => entry.label === label)
+
+    expect(platform.showSections).toBe(true)
+    expect(item('Prompt 管理')?.section).toBe('AI 资产')
+    expect(item('模型与供应商')?.section).toBe('AI 资产')
+    expect(item('资产一致性检查')?.section).toBe('治理与发布')
+    expect(item('发布记录')?.section).toBe('治理与发布')
+    expect(item('工具审批')?.section).toBe('安全与权限')
+    expect(item('访问控制')?.section).toBe('安全与权限')
+    expect(platform.items?.some((entry) => entry.label === '资产一致性')).toBe(false)
   })
 
   it('管理端导航不含用户端独有入口（拆分边界不回渗）', () => {

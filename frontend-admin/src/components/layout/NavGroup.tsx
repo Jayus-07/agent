@@ -12,13 +12,14 @@ interface NavItem { label: string; path: string; activePaths?: string[]; section
 interface Props {
   icon: React.ReactNode; label: string; path?: string
   items?: NavItem[]; collapsed: boolean
+  showSections?: boolean
   open?: boolean
   onToggle?: () => void
   /** 紧凑模式（TaskSidebar 用）：13px 字号 + 收紧行高；控制台侧栏不受影响 */
   compact?: boolean
 }
 
-export default function NavGroup({ icon, label, path, items, collapsed, compact, open, onToggle }: Props) {
+export default function NavGroup({ icon, label, path, items, collapsed, compact, showSections, open, onToggle }: Props) {
   const [internalOpen, setInternalOpen] = useState(false)
   const pathname = usePathname()
   const hasItems = items && items.length > 0
@@ -59,9 +60,18 @@ export default function NavGroup({ icon, label, path, items, collapsed, compact,
           'ml-4 mt-1 space-y-0.5 border-l border-black/[0.08] pl-2',
           compact ? 'space-y-0' : 'space-y-1',
         )}>
-          {items!.map((c) => {
+          {items!.map((c, index) => {
+            const previous = items![index - 1]
+            const sectionStarts = showSections && c.section && c.section !== previous?.section
             return (
               <div key={c.path}>
+                {sectionStarts && (
+                  <div role="heading" aria-level={3} className="flex items-center gap-2 px-3 pb-1 pt-3 text-[11px] font-semibold text-text-secondary first:pt-1">
+                    <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent/60" />
+                    <span className="shrink-0">{c.section}</span>
+                    <span aria-hidden="true" className="h-px flex-1 bg-black/[0.08]" />
+                  </div>
+                )}
                 <Link
                   href={c.path}
                   aria-current={isNavPathActive(pathname, c.path, c.activePaths) ? 'page' : undefined}

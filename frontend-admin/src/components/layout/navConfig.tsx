@@ -32,6 +32,8 @@ export interface NavEntry {
   path?: string
   /** 子页面组 */
   items?: NavItem[]
+  /** 是否在展开时显示二级分组标题；仅用于需要更强信息架构的菜单组 */
+  showSections?: boolean
   minRole?: RoleName
 }
 
@@ -81,17 +83,18 @@ export const NAV: NavEntry[] = [
   },
   {
     icon: <Settings size={18} />, label: '系统设置', minRole: 'editor',
+    showSections: true,
     items: [
-      { label: 'Prompt 管理', path: '/prompts', section: 'AI 能力' },
-      { label: 'Agent 节点', path: '/agents', section: 'AI 能力' },
-      { label: 'Skill 能力', path: '/skills', section: 'AI 能力' },
-      { label: 'Tool 治理', path: '/tools', minRole: 'admin', section: 'AI 能力' },
-      { label: '资产一致性', path: '/consistency', minRole: 'admin', section: '平台治理' },
-      { label: '发布记录', path: '/releases', minRole: 'admin', section: '平台治理' },
-      { label: '预算策略', path: '/cost-governance/budgets', section: '平台治理' },
-      { label: '模型与供应商', path: '/settings/models', minRole: 'admin', section: '权限与模型' },
-      { label: '工具审批', path: '/approvals', minRole: 'admin', section: '权限与模型' },
-      { label: '访问控制', path: '/settings/access', minRole: 'admin', section: '权限与模型' },
+      { label: 'Prompt 管理', path: '/prompts', section: 'AI 资产' },
+      { label: 'Agent 节点', path: '/agents', section: 'AI 资产' },
+      { label: 'Skill 能力', path: '/skills', section: 'AI 资产' },
+      { label: 'Tool 治理', path: '/tools', minRole: 'admin', section: 'AI 资产' },
+      { label: '模型与供应商', path: '/settings/models', minRole: 'admin', section: 'AI 资产' },
+      { label: '资产一致性检查', path: '/consistency', minRole: 'admin', section: '治理与发布' },
+      { label: '发布记录', path: '/releases', minRole: 'admin', section: '治理与发布' },
+      { label: '预算策略', path: '/cost-governance/budgets', section: '治理与发布' },
+      { label: '工具审批', path: '/approvals', minRole: 'admin', section: '安全与权限' },
+      { label: '访问控制', path: '/settings/access', minRole: 'admin', section: '安全与权限' },
     ],
   },
 ]

@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -20,24 +20,24 @@ beforeAll(() => {
 
 const mounted: { container: HTMLDivElement; root: Root }[] = []
 
-function mount() {
+function mount(showSections = false) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+  const props = {
+    icon: <span data-testid="group-icon">▦</span>,
+    label: '业务运营',
+    collapsed: false,
+    open: true,
+    showSections,
+    items: [
+      { label: '数据查询', path: '/data-explorer', section: '业务洞察' },
+      { label: '竞品监控', path: '/competitors', section: '业务洞察' },
+      { label: '选品工作台', path: '/selection-workbench', section: '选品运营' },
+    ],
+  } as unknown as ComponentProps<typeof NavGroup>
   act(() => {
-    root.render(
-      <NavGroup
-        icon={<span data-testid="group-icon">▦</span>}
-        label="业务运营"
-        collapsed={false}
-        open
-        items={[
-          { label: '数据查询', path: '/data-explorer', section: '业务洞察' },
-          { label: '竞品监控', path: '/competitors', section: '业务洞察' },
-          { label: '选品工作台', path: '/selection-workbench', section: '选品运营' },
-        ]}
-      />,
-    )
+    root.render(<NavGroup {...props} />)
   })
   mounted.push({ container, root })
   return container
@@ -69,5 +69,13 @@ describe('NavGroup', () => {
     expect(current?.className).toContain('bg-accent-soft')
     expect(current?.className).toContain('font-semibold')
     expect(inactive?.className).toContain('text-text-secondary')
+  })
+
+  it('只在启用时显示分类标题，分类标题不应成为可点击入口', () => {
+    const container = mount(true)
+
+    expect(container.textContent).toContain('业务洞察')
+    expect(container.textContent).toContain('选品运营')
+    expect(container.querySelectorAll('a')).toHaveLength(3)
   })
 })
