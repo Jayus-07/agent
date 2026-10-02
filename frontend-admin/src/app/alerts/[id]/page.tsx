@@ -201,7 +201,7 @@ export default function AlertDetailPage() {
                 Case ID: {c.id} · Product: {c.product_id}
               </p>
               <a
-                href="/observability/traces"
+                href="/observability/monitoring?tab=traces"
                 target="_blank"
                 className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
               >

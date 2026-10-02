@@ -248,7 +248,7 @@ export default function AdminDashboard() {
           state={tokens.state}
           value={fmtInt(today?.total_tokens ?? 0)}
           sub={today ? `${fmtInt(today.calls)} 次调用 · ${fmtCny(today.cost_cny)}` : '近 7 天汇总'}
-          href="/observability/tokens"
+          href="/observability/monitoring?tab=tokens"
         />
         <StatCard
           icon={<Sparkles size={14} />}
@@ -256,7 +256,7 @@ export default function AdminDashboard() {
           state={tokens.state}
           value={fmtCny(tokens.data?.totals?.cost_cny)}
           sub={`${fmtInt(tokens.data?.totals?.calls)} 次 LLM 调用`}
-          href="/observability/tokens"
+          href="/observability/monitoring?tab=tokens"
         />
         <StatCard
           icon={<CheckCircle2 size={14} />}
@@ -268,7 +268,7 @@ export default function AdminDashboard() {
               ? `${fmtInt(traces.data.total_24h)} 条 · ${fmtInt(traces.data.error_count)} 错误 · p95 ${(traces.data.p95_duration_ms / 1000).toFixed(1)}s`
               : undefined
           }
-          href="/observability/traces"
+          href="/observability/monitoring?tab=traces"
         />
         <StatCard
           icon={<WalletCards size={14} />}
@@ -284,7 +284,7 @@ export default function AdminDashboard() {
           state={feedback.state}
           value={fmtInt(feedback.data?.items.length)}
           sub={atLeast('admin') ? '待审核后才能进入评测集' : '管理员可查看'}
-          href="/evaluations/feedback"
+          href="/evaluations/center?tab=feedback"
         />
       </div>
 
@@ -324,7 +324,7 @@ export default function AdminDashboard() {
             count={feedback.state === 'ok' ? feedback.data?.items.length ?? 0 : null}
             loading={feedback.state === 'loading'}
             error={feedback.state === 'error'}
-            href="/evaluations/feedback"
+            href="/evaluations/center?tab=feedback"
           />
           <TodoRow
             icon={<Database size={16} />}
@@ -332,7 +332,7 @@ export default function AdminDashboard() {
             count={ragStats.state === 'ok' ? ragStats.data?.pending ?? 0 : null}
             loading={ragStats.state === 'loading'}
             error={ragStats.state === 'error'}
-            href="/knowledge/pending"
+            href="/knowledge/workbench?tab=pending"
           />
           <TodoRow
             icon={<FileWarning size={16} />}
@@ -340,7 +340,7 @@ export default function AdminDashboard() {
             count={uploadFailures.state === 'ok' ? uploadFailures.data : null}
             loading={uploadFailures.state === 'loading'}
             error={uploadFailures.state === 'error'}
-            href="/knowledge/upload-failures"
+            href="/knowledge/workbench?tab=failures"
             tone="danger"
           />
           <TodoRow
@@ -349,7 +349,7 @@ export default function AdminDashboard() {
             count={decisions.state === 'ok' ? decisions.data?.failed ?? 0 : null}
             loading={decisions.state === 'loading'}
             error={decisions.state === 'error'}
-            href="/selection-decision"
+            href="/selection-workbench?tab=decision"
             tone="danger"
           />
           <TodoRow
@@ -402,7 +402,7 @@ export default function AdminDashboard() {
           <div className="flex items-center gap-1.5 px-3 pb-2 pt-1 text-[11px] text-text-muted">
             <Clock size={12} />
             网关 401/429 趋势见
-            <Link href="/observability/gateway" className="text-accent hover:underline">网关安全</Link>
+            <Link href="/observability/monitoring?tab=gateway" className="text-accent hover:underline">网关安全</Link>
           </div>
         </section>
       </div>

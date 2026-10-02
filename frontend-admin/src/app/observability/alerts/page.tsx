@@ -124,7 +124,7 @@ export default function DegradationAlertsPage() {
       <div className="max-w-[1440px] mx-auto px-6 py-6 space-y-5">
         <TraceBreadcrumb
           crumbs={[
-            { label: '可观测中心', href: '/observability/traces' },
+            { label: '运行监控工作台', href: '/observability/monitoring?tab=traces' },
             { label: '系统告警 · 降级事件流' },
           ]}
         />
@@ -132,7 +132,7 @@ export default function DegradationAlertsPage() {
         {/* ── Header ── */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3 flex-wrap">
-            <Link href="/observability/traces" className="text-slate-400 hover:text-slate-600 text-sm">← 返回</Link>
+            <Link href="/observability/monitoring?tab=traces" className="text-slate-400 hover:text-slate-600 text-sm">← 返回</Link>
             <h1 className="text-lg font-semibold text-slate-800">系统告警 · 降级事件流</h1>
             {errorCount > 0 && (
               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">

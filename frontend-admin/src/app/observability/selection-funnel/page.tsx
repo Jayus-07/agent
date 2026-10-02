@@ -141,7 +141,7 @@ export default function SelectionFunnelHistoryPage() {
           </div>
           <div className="flex items-center gap-2">
             <Link
-              href="/observability/traces"
+              href="/observability/monitoring?tab=traces"
               className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
             >
               链路追踪
