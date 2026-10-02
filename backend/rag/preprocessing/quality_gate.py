@@ -86,6 +86,20 @@ def _value_loss_check(raw_text: str, cleaned_text: str) -> list[dict]:
     return anomalies
 
 
+def compute_quality_score(anomalies: list[dict]) -> int:
+    """§5.1 质量评分（TD-09，2026-10-02）：确定性公式，供 registry/前端展示。
+
+    score = 100 - 40×硬异常数 - 10×警告数，下限 0。
+    此前 quality_score 列恒为默认 0（从未计算）→ 每份文档都触发前端
+    「质量评分偏低 (0/100)」告警，纯噪音且掩盖真实质量差异。
+    口径：硬异常在本层已被门禁拦截（文档不会 active），评分主要刻画
+    警告密度——≤4 条警告仍 ≥60（前端阈值），持续劣化才跌破。
+    """
+    hard = sum(1 for a in anomalies if a.get("severity") == "hard")
+    warn = sum(1 for a in anomalies if a.get("severity") != "hard")
+    return max(0, 100 - 40 * hard - 10 * warn)
+
+
 def build_quality_record(
     *,
     file_path: str,

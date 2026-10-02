@@ -1268,6 +1268,7 @@ class IncrementalIndexer:
                 from backend.rag.preprocessing.quality_gate import (
                     anomaly_summary,
                     build_quality_record,
+                    compute_quality_score,
                     hard_anomalies,
                     persist_quality_record,
                     run_typed_validation,
@@ -1294,6 +1295,10 @@ class IncrementalIndexer:
                 _soft = anomaly_summary(_anomalies)
                 if _soft:
                     _append_quality_issue(doc_meta, _soft)
+                # TD-09：质量分落 doc_meta（→ registry quality_score 列），
+                # 替代此前恒 0 的默认值；评分同步写进质量记录便于审计
+                doc_meta["quality_score"] = compute_quality_score(_anomalies)
+                _record.setdefault("validation", {})["score"] = doc_meta["quality_score"]
                 _qpath = persist_quality_record(_record)
                 doc_meta["quality_record_path"] = _qpath
                 trace_collector.end_span(q_span,
