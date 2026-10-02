@@ -216,11 +216,11 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               </div>
             )}
           </div>
-          {/* 失败数（用户要求：只显示成功/失败统计，不展开失败详情） */}
+          {/* 失败数（TD-07：失败原因内联在文件行展示，聚合行只做汇总指引） */}
           {!uploading && failCount > 0 && (
             <div className="mt-2 text-xs text-red-500 flex items-center gap-2">
               <AlertCircle size={12} />
-              <span>{failCount} 个文件失败，未显示详情</span>
+              <span>{failCount} 个文件失败，原因见下方文件行</span>
             </div>
           )}
         </div>
@@ -312,7 +312,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                         <FileText size={13} className={`shrink-0 ${r.status === 'failed' ? 'text-red-400' : 'text-accent'}`} />
                         <span className={`truncate font-medium flex-1 ${r.status === 'failed' ? 'text-red-700' : r.status === 'duplicate' ? 'text-text-muted' : 'text-text-primary'}`}>{r.name}</span>
                         {r.status === 'duplicate' ? <span className="text-[10px] text-amber-500 shrink-0">已存在，跳过</span>
-                          : r.status === 'failed' ? <span className="text-[10px] text-red-400 shrink-0">失败</span>
+                          : r.status === 'failed' ? <span className="text-[10px] text-red-400 shrink-0" title={r.error || '上传失败'}>{r.error ? r.error.slice(0, 40) : '失败'}</span>
                           : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{r.currentStage}…</span>
                           : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
                       </div>

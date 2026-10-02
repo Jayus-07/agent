@@ -45,7 +45,11 @@ def parse_search_results(md_text: str) -> list[dict[str, Any]]:
     返回 [{title, url, snippet}]；无链接或非 http 的条目跳过。
     """
     out: list[dict[str, Any]] = []
-    if not md_text or md_text.startswith("[NO RESULTS]"):
+    if not md_text:
+        return out
+    from backend.tools.web import is_no_results
+
+    if is_no_results(md_text):
         return out
     for block in re.split(r"\n\s*\n", md_text):
         m = re.search(r"\*\*(.+?)\*\*", block)

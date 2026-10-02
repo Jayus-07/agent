@@ -37,7 +37,9 @@ def test_parse_search_results():
     assert out[0]["title"] == "报告0：蓝牙耳机市场分析"
     assert out[0]["url"] == "https://example.com/r0"
     assert "1200亿" in out[0]["snippet"]
-    assert parse_search_results("[NO RESULTS] 未找到 'x' 的相关结果") == []
+    from backend.tools.web import NO_RESULTS_TEXT
+
+    assert parse_search_results(NO_RESULTS_TEXT.format(query="x")) == []
 
 
 def test_extract_numbers_and_classify():
@@ -158,7 +160,7 @@ def test_full_run_happy_path(patched_env):
 def test_collect_abort_when_no_evidence(patched_env, monkeypatch):
     import backend.orchestration.workflows.market_research as wf_mod
     monkeypatch.setattr(wf_mod, "web_search_tool",
-                        _FakeTool(lambda query, num_results=4: "[NO RESULTS] 未找到"))
+                        _FakeTool(lambda query, num_results=4: "未在公开网络找到与「x」相关的结果"))
     reg = WorkflowRegistry()
     reg.register(MarketResearch)
     ctx = asyncio.run(WorkflowExecutor(registry=reg).run(

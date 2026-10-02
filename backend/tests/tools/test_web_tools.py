@@ -440,7 +440,7 @@ class TestWebToolsIntegration:
         resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=resp):
             result = web_search_tool.invoke({"query": "xyz_none_2099", "num_results": 1})
-        assert "[NO RESULTS]" in result
+        assert result.startswith("未在公开网络找到")
 
     def test_bing_fallback_when_ddg_empty(self):
         """DDG 返回空/bot-challenge 页时自动兜底 Bing（2026-09-15 实测 DDG 202 挑战）"""

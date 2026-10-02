@@ -56,9 +56,21 @@ def web_search_tool(query: str, num_results: int = 5) -> str:
                 raise
 
     if not results:
-        return f"[NO RESULTS] 未找到 '{query}' 的相关结果"
+        # TD-07（2026-10-02）：话术面向终端用户（该文本会被 reporter 作为
+        # 最终回答原样透出，此前 "[NO RESULTS] ..." 内部标记直抵聊天窗口）。
+        # 编程消费方统一用下方 is_no_results() 判定，禁止再匹配字符串前缀。
+        return NO_RESULTS_TEXT.format(query=query)
 
     return "\n\n".join(results)
+
+
+# 无结果的统一话术与判定（TD-07）：话术与判定同源，消费方禁止手抄前缀
+NO_RESULTS_TEXT = "未在公开网络找到与「{query}」相关的结果，请换个问法或稍后重试。"
+
+
+def is_no_results(text: str) -> bool:
+    """判定 web_search 输出是否为无结果话术（market_research 等消费方用）。"""
+    return bool(text) and text.strip().startswith(NO_RESULTS_TEXT.split("{")[0])
 
 
 def _strip_tags(html: str) -> str:
