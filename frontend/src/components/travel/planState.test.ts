@@ -15,8 +15,14 @@ import {
   formatDayDate,
   itineraryTotal,
   readConversationId,
+  readPlanState,
+  persistPlanState,
+  previewPlanResponse,
+  clearPendingPlan,
+  sanitizeTravelReply,
   rotateConversationId,
   type PlanFormInput,
+  type PlanState,
 } from './planState'
 import type { Itinerary, PlanResponse } from '@/api/travel'
 
@@ -58,17 +64,46 @@ describe('composePlanMessage — 表单转域图消息', () => {
     expect(composePlanMessage({ ...emptyForm, destination: '福州', days: '2' }))
       .toBe('福州，2天')
   })
+
+  it('出发地存在时放在目的地后，供域图优先抽取', () => {
+    expect(composePlanMessage({ ...emptyForm, destination: '厦门', origin: '福州', days: '2' }))
+      .toBe('厦门，从福州出发，2天')
+  })
 })
 
 describe('applyPlanResponse — 追问/失败不得清掉已展示的行程', () => {
-  const withPlan = { plan: { status: 'ready', final_answer: 'ok', itinerary: makeItinerary() } as PlanResponse, notice: '' }
+  const withPlan: PlanState = { plan: { status: 'ready', final_answer: 'ok', itinerary: makeItinerary() } as PlanResponse, pending: null, notice: '' }
 
   it('回复带行程 → 整体替换', () => {
     const next = applyPlanResponse(withPlan, {
       status: 'ready', final_answer: '第二版', itinerary: makeItinerary({ plan_version: 2 }),
     })
     expect(next.plan?.itinerary?.plan_version).toBe(2)
+    expect(next.pending).toBeNull()
     expect(next.notice).toBe('')
+  })
+
+  it('草案预览只更新 pending，不替换当前行程', () => {
+    const next = previewPlanResponse(withPlan, {
+      status: 'ready', final_answer: '第三版预览',
+      itinerary: makeItinerary({
+        plan_version: 3,
+        brief: { ...makeItinerary().brief, days: 5 },
+      }),
+      plan_status: 'waiting_confirmation',
+    })
+    expect(next.plan?.itinerary?.plan_version).toBe(1)
+    expect(next.pending?.itinerary?.plan_version).toBe(3)
+  })
+
+  it('应用或放弃草案后只保留一个明确状态', () => {
+    const preview = previewPlanResponse(withPlan, {
+      status: 'ready', final_answer: '预览', itinerary: makeItinerary({ plan_version: 2 }),
+    })
+    expect(clearPendingPlan(preview).pending).toBeNull()
+    expect(applyPlanResponse(preview, {
+      status: 'ready', final_answer: '已应用', itinerary: makeItinerary({ plan_version: 2 }),
+    }).pending).toBeNull()
   })
 
   it('回复不带行程（追问）→ 行程留在原地，只把追问落到 notice', () => {
@@ -118,6 +153,16 @@ describe('会话线程 — 刷新后仍接着改同一份行程', () => {
     expect(() => rotateConversationId()).not.toThrow()
     spy.mockRestore()
   })
+
+  it('刷新后恢复同一会话的当前行程与待应用草案', () => {
+    const state = {
+      plan: { status: 'ready', final_answer: 'ok', itinerary: makeItinerary({ plan_version: 2 }) },
+      pending: { status: 'ready', final_answer: 'preview', itinerary: makeItinerary({ plan_version: 3 }) },
+      notice: '',
+    } as PlanState
+    persistPlanState(state)
+    expect(readPlanState()).toEqual(state)
+  })
 })
 
 describe('展示小工具', () => {
@@ -130,5 +175,24 @@ describe('展示小工具', () => {
     expect(itineraryTotal(undefined)).toBe(0)
     expect(itineraryTotal({ tickets: 1, meals: 2, lodging: 3, transit: 4 })).toBe(10)
     expect(itineraryTotal({ tickets: 1, meals: 2, lodging: 3, transit: 4, total: 99 })).toBe(99)
+  })
+
+  it('助手回复不透传旧实例的 seed、费用预估和内部置信度', () => {
+    const sanitized = sanitizeTravelReply([
+      '# 厦门 3 天行程',
+      '',
+      '行程费用按常见消费水平估算，详见下方「费用预估」',
+      '',
+      '## 数据来源',
+      '',
+      'seed:local — 本地示例数据（未经实时校验）',
+      '',
+      '*行程 v1 —— 置信度 0.80（高）*',
+    ].join('\n'))
+    expect(sanitized).not.toContain('seed:local')
+    expect(sanitized).not.toContain('费用预估')
+    expect(sanitized).not.toContain('置信度')
+    expect(sanitized).toContain('费用：暂无数据')
+    expect(sanitized).toContain('坐标：暂无数据')
   })
 })

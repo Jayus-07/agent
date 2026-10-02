@@ -11,12 +11,43 @@ import {
   cityHue,
   costBreakdown,
   dayLoad,
+  dayMealItems,
   dayRouteColor,
+  dayVisitTitles,
   daysUntil,
   departureBadge,
   formatDuration,
   stayLabel,
+  TRAVEL_STAGE_LABELS,
+  TRAVEL_STAGE_ORDER,
+  TRAVEL_TOOL_LABELS,
 } from './travelDisplay'
+import type { ItineraryDay, ItineraryItem } from '@/api/travel'
+
+/** 最小行程条目 fixture（只填派生函数消费的字段） */
+function item(partial: Partial<ItineraryItem> & { kind: string }): ItineraryItem {
+  return {
+    title: partial.title ?? '',
+    kind: partial.kind,
+    start: partial.start ?? '09:00',
+    end: partial.end ?? '10:00',
+    minutes: partial.minutes ?? 60,
+    wait_minutes: partial.wait_minutes ?? 0,
+    note: partial.note ?? '',
+    poi: partial.poi ?? null,
+  }
+}
+
+function day(items: ItineraryItem[]): ItineraryDay {
+  return {
+    day_index: 1,
+    day_date: null,
+    items,
+    active_minutes: 0,
+    transit_minutes: 0,
+    cost_cny: 0,
+  }
+}
 
 describe('formatDuration', () => {
   it('不足 60 分钟保留分钟口径', () => {
@@ -117,5 +148,52 @@ describe('dayRouteColor', () => {
     expect(dayRouteColor(1)).toBe('#087b73')
     expect(dayRouteColor(2)).toBe('#d97706')
     expect(dayRouteColor(7)).toBe('#087b73')
+  })
+})
+
+describe('dayVisitTitles / dayMealItems（日卡片亮点与当日分区共用）', () => {
+  it('只取到访地点，按时间轴顺序', () => {
+    const d = day([
+      item({ kind: 'visit', title: '鼓浪屿' }),
+      item({ kind: 'meal', title: '午餐' }),
+      item({ kind: 'visit', title: '南普陀寺' }),
+    ])
+    expect(dayVisitTitles(d)).toEqual(['鼓浪屿', '南普陀寺'])
+    expect(dayVisitTitles(d)).toHaveLength(2)
+  })
+  it('空 title 的条目不进亮点（不渲染空文案）', () => {
+    const d = day([item({ kind: 'visit', title: '' }), item({ kind: 'visit', title: '三坊七巷' })])
+    expect(dayVisitTitles(d)).toEqual(['三坊七巷'])
+  })
+  it('用餐项单独取，与地点互不混入', () => {
+    const d = day([
+      item({ kind: 'visit', title: '鼓浪屿' }),
+      item({ kind: 'meal', title: '午餐' }),
+      item({ kind: 'rest', title: '休息' }),
+    ])
+    expect(dayMealItems(d).map((m) => m.title)).toEqual(['午餐'])
+  })
+  it('空日返回空数组（UI 隐藏分区而不是报错）', () => {
+    const d = day([])
+    expect(dayVisitTitles(d)).toEqual([])
+    expect(dayMealItems(d)).toEqual([])
+  })
+})
+
+describe('TRAVEL_STAGE_ORDER / TRAVEL_STAGE_LABELS / TRAVEL_TOOL_LABELS（过程面板单一源）', () => {
+  it('阶段流水线覆盖全部 10 个域图节点且各有中文名', () => {
+    expect(TRAVEL_STAGE_ORDER).toHaveLength(10)
+    for (const key of TRAVEL_STAGE_ORDER) {
+      expect(TRAVEL_STAGE_LABELS[key], `缺 ${key} 的中文名`).toBeTruthy()
+    }
+  })
+  it('slot_filler 在 reporter 之前（stepper 顺序 = 域图拓扑）', () => {
+    expect(TRAVEL_STAGE_ORDER[0]).toBe('travel_slot_filler')
+    expect(TRAVEL_STAGE_ORDER[TRAVEL_STAGE_ORDER.length - 1]).toBe('travel_reporter')
+  })
+  it('真实 Tool 键有业务名映射', () => {
+    expect(TRAVEL_TOOL_LABELS['travel.search_poi']).toBeTruthy()
+    expect(TRAVEL_TOOL_LABELS['map_merchant_search_tool']).toBeTruthy()
+    expect(TRAVEL_TOOL_LABELS['travel_train_search_tool']).toBeTruthy()
   })
 })

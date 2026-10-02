@@ -122,6 +122,70 @@ export function stayLabel(item: Pick<ItineraryItem, 'minutes'>): string {
   return formatDuration(item.minutes ?? 0)
 }
 
+// ── 过程面板命名（生成中进度与助手「本轮处理过程」共用单一源） ──
+
+/**
+ * 域图阶段 → 业务动作中文名。数组顺序 = 后端域图真实拓扑
+ * （travel/graph_builder：slot_filler → supervisor → 各子 Agent →
+ * validator → repair → reporter），生成中 stepper 按这个顺序展示
+ * 「等待/进行中/完成」，未收到事件的阶段只表示还没执行到，不伪造进度。
+ */
+export const TRAVEL_STAGE_ORDER = [
+  'travel_slot_filler',
+  'travel_supervisor',
+  'travel_poi_expert',
+  'travel_transit_expert',
+  'travel_weather_expert',
+  'travel_budget_expert',
+  'travel_risk_expert',
+  'travel_validator',
+  'travel_repair',
+  'travel_reporter',
+] as const
+
+export const TRAVEL_STAGE_LABELS: Record<string, string> = {
+  travel_slot_filler: '理解需求',
+  travel_supervisor: '域主 Agent 调度',
+  travel_poi_expert: '查景点资料',
+  travel_transit_expert: '规划路线',
+  travel_weather_expert: '查询天气',
+  travel_budget_expert: '核算预算',
+  travel_risk_expert: '核验来源与风险',
+  travel_validator: '校验结果',
+  travel_repair: '修复约束',
+  travel_reporter: '生成行程',
+}
+
+export const TRAVEL_TOOL_LABELS: Record<string, string> = {
+  'travel.search_poi': '景点资料检索',
+  'travel.calculate_route': '路线计算',
+  'route.optimizer': '路线优化',
+  'travel.weather.query': '天气查询',
+  'travel.calculate_budget': '预算计算',
+  'travel.retrieve_knowledge': '旅游知识检索',
+  map_merchant_search_tool: '高德美食/酒店搜索',
+  travel_train_search_tool: '12306 车票查询',
+  travel_train_price_tool: '12306 票价查询',
+}
+
+// ── 当日派生（日卡片亮点与当日详情分区共用） ─────────────────
+
+/**
+ * 当天到访地点名（kind=visit，按时间轴顺序）。日卡片亮点取前几条展示，
+ * 只用行程里真实出现的名称，不做标签推测。
+ */
+export function dayVisitTitles(day: Pick<ItineraryDay, 'items'>): string[] {
+  return (day.items ?? [])
+    .filter((item) => item.kind === 'visit')
+    .map((item) => item.title)
+    .filter(Boolean)
+}
+
+/** 当天用餐项（kind=meal，后端 transit_service 按时段插入）。 */
+export function dayMealItems(day: Pick<ItineraryDay, 'items'>): ItineraryItem[] {
+  return (day.items ?? []).filter((item) => item.kind === 'meal')
+}
+
 // ── 按天路线色板（地图连线与图例共用同一份） ─────────────────
 
 /**

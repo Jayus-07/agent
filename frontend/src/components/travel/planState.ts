@@ -13,14 +13,17 @@ import type { PlanResponse } from '@/api/travel'
 export interface PlanState {
   /** 当前展示的行程；null = 还没出过行程 */
   plan: PlanResponse | null
+  /** 已生成但尚未应用的草案；不能替换当前展示行程 */
+  pending: PlanResponse | null
   /** 非行程结果提示（需要补信息 / 规划失败）；**不顶掉**已展示的行程 */
   notice: string
 }
 
-export const EMPTY_PLAN_STATE: PlanState = { plan: null, notice: '' }
+export const EMPTY_PLAN_STATE: PlanState = { plan: null, pending: null, notice: '' }
 
 export interface PlanFormInput {
   destination: string
+  origin?: string
   days: string
   startDate: string
   partySize: string
@@ -44,6 +47,7 @@ const PACE_SENTENCE: Record<string, string> = {
 export function composePlanMessage(input: PlanFormInput): string {
   const parts: string[] = []
   parts.push(input.destination.trim() || '帮我推荐个地方规划行程')
+  if (input.origin?.trim()) parts.push(`从${input.origin.trim()}出发`)
   if (input.days) parts.push(`${input.days}天`)
   if (input.startDate) parts.push(`${input.startDate}出发`)
   if (input.partySize) parts.push(`${input.partySize}个人`)
@@ -60,9 +64,96 @@ export function composePlanMessage(input: PlanFormInput): string {
  * - 回复不带行程（追问 / 失败）→ **保留旧行程**，只把这句话放进 notice
  */
 export function applyPlanResponse(prev: PlanState, data: PlanResponse): PlanState {
-  if (data.itinerary) return { plan: data, notice: '' }
+  if (data.itinerary) return { plan: data, pending: null, notice: '' }
   const text = (data.final_answer || data.clarification || '').trim()
-  return { plan: prev.plan, notice: text || '这次没能生成行程，换个说法再试一次' }
+  return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次' }
+}
+
+/** 生成修改草案：主内容继续显示当前行程，直到用户明确点击应用。 */
+export function previewPlanResponse(prev: PlanState, data: PlanResponse): PlanState {
+  if (data.itinerary) return { plan: prev.plan, pending: data, notice: '' }
+  const text = (data.final_answer || data.clarification || '').trim()
+  return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次' }
+}
+
+export function clearPendingPlan(prev: PlanState): PlanState {
+  return { ...prev, pending: null }
+}
+
+/**
+ * 助手文本的最后一道数据安全兜底。
+ *
+ * 后端升级或容器滚动期间，旧实例可能仍返回「seed:local / 费用预估 /
+ * 置信度」等历史文案。结构化行程卡已经按字段拦截这些值，但聊天气泡也
+ * 必须遵守同一规则，不能让旧回复把占位数据重新展示给用户。
+ */
+export function sanitizeTravelReply(text: string): string {
+  if (!text) return text
+  const lines = text.split('\n')
+  const kept: string[] = []
+  let hiddenSection = false
+  let removedUnverifiedText = false
+
+  for (const line of lines) {
+    const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*$/)?.[1] ?? ''
+    if (heading) {
+      if (/费用预估|费用明细|数据来源/.test(heading)) {
+        hiddenSection = true
+        removedUnverifiedText = true
+        continue
+      }
+      hiddenSection = false
+    }
+    if (hiddenSection) continue
+
+    if (/本地示例数据|seed:local|本地估算|费用按常见消费水平估算|置信度/.test(line)) {
+      removedUnverifiedText = true
+      continue
+    }
+    kept.push(line)
+  }
+
+  if (!removedUnverifiedText) return text
+  while (kept.length > 0 && kept[kept.length - 1].trim() === '') kept.pop()
+  kept.push(
+    '',
+    '## 数据说明',
+    '',
+    '- **费用：暂无数据**',
+    '- **门票：暂无数据**',
+    '- **路线：暂无数据**',
+    '- **坐标：暂无数据**',
+  )
+  return kept.join('\n')
+}
+
+const PLAN_STATE_KEY = 'travel:plan-state'
+
+/** 刷新同一标签页时保留当前行程与未应用草案，存储失败则退化为空状态。 */
+export function persistPlanState(state: PlanState): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(PLAN_STATE_KEY, JSON.stringify(state))
+  } catch {
+    // 隐私模式或存储空间不足时不阻断规划主流程。
+  }
+}
+
+export function readPlanState(): PlanState {
+  if (typeof window === 'undefined') return EMPTY_PLAN_STATE
+  try {
+    const raw = window.sessionStorage.getItem(PLAN_STATE_KEY)
+    if (!raw) return EMPTY_PLAN_STATE
+    const parsed = JSON.parse(raw) as Partial<PlanState>
+    if (!parsed || typeof parsed !== 'object') return EMPTY_PLAN_STATE
+    return {
+      plan: parsed.plan ?? null,
+      pending: parsed.pending ?? null,
+      notice: typeof parsed.notice === 'string' ? parsed.notice : '',
+    }
+  } catch {
+    return EMPTY_PLAN_STATE
+  }
 }
 
 /** 助手回复的小标签文案（抽屉里给用户「到底改没改」的即时反馈）。 */
