@@ -41,7 +41,7 @@ export function departureBadge(dateStr: string | null | undefined): string | nul
   const d = daysUntil(dateStr)
   if (d === null) return null
   if (d <= 0) return '今天出发'
-  return `${d} 天后出发`
+  return `距出发 ${d} 天`
 }
 
 // ── 费用占比 ─────────────────────────────────────────────────

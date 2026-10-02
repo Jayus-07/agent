@@ -7,14 +7,17 @@
  * 搜索/历史等重内容仍需展开侧边栏使用。
  * 仅桌面端渲染（<md 视口下任务栏本就隐藏，见 TaskSidebar / ChatHeader 同款断点）。
  */
-import { Brain, PanelLeftOpen, Plus } from 'lucide-react'
+import { Brain, PanelLeftOpen, Plane, Plus } from 'lucide-react'
 
 interface Props {
   onExpand: () => void
   onNewTask: () => void
+  /** travel = 旅游规划页复用：品牌换 Plane、新建按钮语义换「新建规划」 */
+  newLabel?: string
 }
 
-export default function SidebarRail({ onExpand, onNewTask }: Props) {
+export default function SidebarRail({ onExpand, onNewTask, newLabel = '新建任务' }: Props) {
+  const isTravel = newLabel !== '新建任务'
   return (
     <aside
       className="hidden md:flex w-12 shrink-0 flex-col items-center gap-1 py-3
@@ -28,15 +31,17 @@ export default function SidebarRail({ onExpand, onNewTask }: Props) {
         aria-label="展开任务栏"
         title="展开任务栏"
       >
-        <Brain size={18} className="text-accent" />
+        {isTravel
+          ? <Plane size={18} className="text-accent" />
+          : <Brain size={18} className="text-accent" />}
       </button>
 
       {/* 新建任务 */}
       <button
         onClick={onNewTask}
         className="p-2 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
-        aria-label="新建任务"
-        title="新建任务"
+        aria-label={newLabel}
+        title={newLabel}
       >
         <Plus size={16} />
       </button>

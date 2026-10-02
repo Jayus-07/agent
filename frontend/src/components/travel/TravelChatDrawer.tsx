@@ -24,8 +24,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AlertCircle, Check, CheckCircle2, Clock3, Info, MapPin, MessageSquarePlus,
-  PlaneTakeoff, RefreshCw, RotateCcw, Send, Square, X,
+  AlertCircle, Check, CheckCircle2, Clock3, Info, MessageSquarePlus,
+  PlaneTakeoff, RefreshCw, Send, Square, X,
 } from 'lucide-react'
 import {
   confirmTravelPlan, type Itinerary, type ItineraryBrief, type PlanResponse,
@@ -77,6 +77,8 @@ interface Props {
   onProcessEvent: (event: TravelStreamEvent) => void
   /** 开一份新行程（页面轮换 conversation_id → 本组件检测到变化后清空对话） */
   onStartNewTrip: () => void
+  /** 页面级生成中（设计稿态2）：输入禁用 + 内容区占位，防止半成品行程被对话改乱 */
+  generating?: boolean
   /** 预算硬额度已满：禁止再发起规划（与 /agent 输入框同一口径） */
   disabled?: boolean
   disabledHint?: string
@@ -85,31 +87,13 @@ interface Props {
 }
 
 /**
- * 快捷话术：**逐条对着后端槽位抽取的真实关键词写**（travel/models/brief.py
- * 的 PREFERENCE_KEYWORDS / PACE_KEYWORDS / DIET_KEYWORDS 与 requirement_agent
- * 的天数、预算正则），不是拍脑袋的示例 —— 写歪了用户点一下没反应，
- * 比不给提示还糟。有行程且用户选中了某天时，第一条换成针对当天的说法
- * （与行程视图日卡片联动，话术仍走同一个「对话改行程」通道）。
+ * 快捷话术已随设计稿③精简移除（对话引导收进空态一行提示与输入框 placeholder）。
  */
-const BASE_QUICK_PROMPTS = [
-  '改成 3 天',
-  '节奏轻松点',
-  '预算 2000 元',
-  '喜欢自然、美食',
-  '不吃辣',
-] as const
-
-function quickPrompts(activeDay: number | null | undefined, hasItinerary: boolean): string[] {
-  if (hasItinerary && activeDay != null) {
-    return [`第 ${activeDay} 天别排太满`, ...BASE_QUICK_PROMPTS.slice(0, 4)]
-  }
-  return [...BASE_QUICK_PROMPTS]
-}
 
 export default function TravelChatDrawer({
   mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
-  onStartNewTrip, pendingResponse, onDraft, onDiscardPending, disabled, disabledHint, budgetStatus = null,
+  onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
 }: Props) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
@@ -156,7 +140,7 @@ export default function TravelChatDrawer({
 
   const send = useCallback(async (raw: string) => {
     const message = raw.trim()
-    if (!message || loading || disabled) return
+    if (!message || loading || disabled || generating) return
     // 记下发起时所属的线程：请求返回时若线程已换（用户点了「新行程」），
     // 这条回复属于旧行程，不能再往新对话里写。
     const sentConv = conversationId
@@ -220,7 +204,7 @@ export default function TravelChatDrawer({
       if (abortRef.current === controller) abortRef.current = null
       if (prevConvRef.current === sentConv) setLoading(false)
     }
-  }, [conversationId, disabled, hasItinerary, loading, onDraft, onProcessEvent, onResponse])
+  }, [conversationId, disabled, generating, hasItinerary, loading, onDraft, onProcessEvent, onResponse])
 
   const stop = useCallback(() => {
     abortRef.current?.abort()
@@ -273,82 +257,42 @@ export default function TravelChatDrawer({
   }
 
   const hasMessages = messages.length > 0
-  const inputDisabled = disabled || loading || Boolean(pendingResponse)
+  const inputDisabled = disabled || loading || generating || Boolean(pendingResponse)
   const pendingSummary = useMemo(
     () => pendingResponse?.itinerary && itinerary
       ? buildChangeSummary(itinerary, pendingResponse.itinerary)
       : null,
     [itinerary, pendingResponse],
   )
-  const briefItems = useMemo(() => {
-    if (!brief) return []
-    return [
-      brief.destination && `目的地 ${brief.destination}`,
-      brief.origin && `出发地 ${brief.origin}`,
-      brief.days ? `${brief.days} 天` : '',
-      brief.start_date ? `${brief.start_date} 出发` : '',
-      brief.party_size ? `${brief.party_size} 人` : '',
-      brief.budget_cny != null ? `预算 ¥${brief.budget_cny}` : '',
-      brief.pace ? `节奏 ${brief.pace === 'relaxed' ? '轻松' : brief.pace === 'intense' ? '紧凑' : '适中'}` : '',
-      ...((brief.preferences ?? []).map((item) => `偏好 ${item}`)),
-    ].filter(Boolean) as string[]
-  }, [brief])
+  const pendingChangeCount = pendingSummary
+    ? pendingSummary.briefFields.length + pendingSummary.moved.length
+    : 0
 
   const body = (
     <>
-      {/* Header */}
+      {/* Header（设计稿③）：标题 + 「正在看：第 N 天」胶囊 */}
       <div className="flex shrink-0 items-center gap-2.5 border-b border-[#dae7e5] px-4 py-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#087b73]/10">
           <PlaneTakeoff size={17} className="text-[#087b73]" />
         </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold text-[#183037]">
-            旅行助手
-            {planVersion != null && (
-              <span className="ml-1.5 rounded-full border border-[#dae7e5] bg-[#f5faf9] px-1.5 py-0.5 text-[10px] font-normal text-[#5c7074]">
-                正在查看 v{planVersion}
-              </span>
-            )}
-            {hasItinerary && activeDay != null && (
-              <span className="ml-1 rounded-full bg-[#087b73]/10 px-1.5 py-0.5 text-[10px] font-normal text-[#087b73]">
-                第 {activeDay} 天
-              </span>
-            )}
-          </h2>
-          <p className="truncate text-[10px] text-[#5c7074]">
-            {hasItinerary
-              ? activeDay != null
-                ? `修改会先出预览；提「第 ${activeDay} 天」会针对当天调整`
-                : '先预览，应用后更新当前行程'
-              : '直接说需求，我会出一份行程'}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-[#183037]">旅行助手</h2>
+        {hasItinerary && activeDay != null && (
+          <span className="shrink-0 rounded-full bg-[#087b73]/10 px-2.5 py-1 text-[11px] font-medium text-[#087b73]">
+            正在看：第 {activeDay} 天
+          </span>
+        )}
+        {isDrawer && (
           <button
             type="button"
-            onClick={onStartNewTrip}
-            title="开一份新行程（清空当前对话，不沿用旧约束）"
-            aria-label="开一份新行程"
-            className="flex h-7 items-center gap-1 rounded-lg border border-[#dae7e5] px-2
-              text-[11px] text-[#5c7074] transition-colors
-              hover:border-[#087b73]/40 hover:text-[#183037]"
+            onClick={onClose}
+            title="收起对话框"
+            aria-label="收起对话框"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#5c7074]
+              transition-colors hover:bg-[#f5faf9] hover:text-[#183037]"
           >
-            <RotateCcw size={12} />
-            新行程
+            <X size={16} />
           </button>
-          {isDrawer && (
-            <button
-              type="button"
-              onClick={onClose}
-              title="收起对话框"
-              aria-label="收起对话框"
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[#5c7074]
-                transition-colors hover:bg-[#f5faf9] hover:text-[#183037]"
-            >
-              <X size={16} />
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* 预算阻断提示（与 /agent 输入框同一口径） */}
@@ -356,22 +300,6 @@ export default function TravelChatDrawer({
         <div className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <Info size={13} className="shrink-0" />
           <span className="min-w-0 flex-1">{disabledHint ?? '当前额度已用尽，暂时不能发起新的规划'}</span>
-        </div>
-      )}
-
-      {briefItems.length > 0 && (
-        <div className="mx-3 mt-2 rounded-xl border border-[#dae7e5] bg-[#f5faf9] px-3 py-2.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#183037]">
-            <MapPin size={12} className="text-[#087b73]" aria-hidden />
-            已记住的行程条件
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {briefItems.map((item) => (
-              <span key={item} className="rounded-full bg-white px-2 py-1 text-[10px] text-[#5c7074]">
-                {item}
-              </span>
-            ))}
-          </div>
         </div>
       )}
 
@@ -443,8 +371,7 @@ export default function TravelChatDrawer({
       {/* 内容 */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {hasMessages ? (
-          <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">
-            {messages.map((m, i) => {
+          <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">            {messages.map((m, i) => {
               // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
               //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
               const isLong = m.role === 'assistant' && m.text.length > 600
@@ -487,36 +414,22 @@ export default function TravelChatDrawer({
               )
             })}
           </ul>
-        ) : (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-dashed border-[#c9dcd7] bg-[#f5faf9] px-4 py-5">
-              <p className="text-sm font-medium text-[#183037]">
-                {hasItinerary ? '想怎么改？直接说一句就行' : '先说说想去哪、几天、几个人'}
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-[#5c7074]">
-                改动会先生成预览，应用后才更新当前行程。说得越具体越准（比如「第二天别排太满」
-                「把预算压到 2000」）。同一标签页刷新后还能接着改。
-              </p>
-            </div>
-            <div>
-              <p className="mb-2 text-[11px] text-[#5c7074]">常用说法</p>
-              <div className="flex flex-wrap gap-2">
-                {quickPrompts(activeDay, hasItinerary).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    disabled={inputDisabled}
-                    onClick={() => void send(p)}
-                    className="rounded-full border border-[#dae7e5] bg-white px-3 py-1.5 text-xs
-                      text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#087b73]
-                      disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            </div>
+        ) : generating ? (
+          <div className="flex flex-col items-center gap-2 py-10 text-center" aria-live="polite">
+            <span className="flex gap-1" aria-hidden>
+              <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73]" />
+              <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73] [animation-delay:120ms]" />
+              <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73] [animation-delay:240ms]" />
+            </span>
+            <p className="text-sm font-medium text-[#183037]">行程生成中，稍等片刻…</p>
+            <p className="text-xs leading-relaxed text-[#5c7074]">
+              生成完成后可以在这里改行程、查车票
+            </p>
           </div>
+        ) : (
+          <p className="py-10 text-center text-xs leading-relaxed text-[#8fa5a3]">
+            问行程、改时间、查车票、问美食，直接说一句就行
+          </p>
         )}
 
         {pendingResponse?.itinerary && (
@@ -525,40 +438,44 @@ export default function TravelChatDrawer({
               <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-[#087b73]" aria-hidden />
               <div className="min-w-0 flex-1">
                 <h3 className="text-xs font-semibold text-[#183037]">
-                  调整预览 · v{pendingResponse.itinerary.plan_version}
+                  变更草案 v{pendingResponse.itinerary.plan_version}
+                  {pendingChangeCount > 0 && ` · ${pendingChangeCount} 处调整`}
                 </h3>
                 <p className="mt-1 text-[10px] leading-relaxed text-[#5c7074]">
-                  页面顶部已标记「预览中，尚未应用」；当前行程仍保持不变。
+                  确认后生效；当前行程仍保持不变。
                 </p>
                 {pendingSummary ? (
-                  <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-[#5c7074]">
-                    <div><dt className="inline text-[#8aa09c]">版本：</dt><dd className="inline">v{pendingSummary.fromVersion} → v{pendingSummary.toVersion}</dd></div>
-                    <div><dt className="inline text-[#8aa09c]">费用：</dt><dd className="inline text-red-600">暂无核验数据</dd></div>
-                    <div className="col-span-2"><dt className="inline text-[#8aa09c]">槽位：</dt><dd className="inline">{pendingSummary.briefFields.length ? pendingSummary.briefFields.join('、') : '未改变'}</dd></div>
+                  <dl className="mt-2 space-y-1 text-[10px] leading-relaxed text-[#5c7074]">
+                    {pendingSummary.briefFields.length > 0 && (
+                      <div><dt className="inline text-[#8aa09c]">需求：</dt><dd className="inline">{pendingSummary.briefFields.join('、')}</dd></div>
+                    )}
                     {pendingSummary.moved.length > 0 && (
-                      <div className="col-span-2"><dt className="inline text-[#8aa09c]">移动：</dt><dd className="inline">{pendingSummary.moved.map((item) => `${item.name} 第${item.fromDay}天→第${item.toDay}天`).join('、')}</dd></div>
+                      <div><dt className="inline text-[#8aa09c]">移动：</dt><dd className="inline">{pendingSummary.moved.map((item) => `${item.name} 第${item.fromDay}天→第${item.toDay}天`).join('、')}</dd></div>
+                    )}
+                    {pendingSummary.briefFields.length === 0 && pendingSummary.moved.length === 0 && (
+                      <div>行程内容有微调，应用后可在时间轴里对比。</div>
                     )}
                   </dl>
                 ) : (
-                  <p className="mt-2 text-[10px] text-[#5c7074]">这是当前会话的首份行程，确认后会作为当前版本。</p>
+                  <p className="mt-2 text-[10px] text-[#5c7074]">这是当前会话的首份行程，应用后会作为当前版本。</p>
                 )}
                 <div className="mt-3 flex gap-2">
                   <button
                     type="button"
                     onClick={() => void applyPending()}
                     disabled={applying}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#087b73] px-3 py-1.5 text-[11px] font-medium text-white hover:bg-[#06655f] disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#087b73] px-4 py-1.5 text-[11px] font-medium text-white hover:bg-[#06655f] disabled:opacity-50"
                   >
                     {applying ? <Clock3 size={12} className="animate-pulse" /> : <Check size={12} />}
-                    {applying ? '确认中…' : '应用新行程'}
+                    {applying ? '应用中…' : '应用'}
                   </button>
                   <button
                     type="button"
                     onClick={discardPending}
                     disabled={applying}
-                    className="rounded-lg border border-[#c9dcd7] bg-white px-3 py-1.5 text-[11px] text-[#5c7074] hover:text-[#183037] disabled:opacity-50"
+                    className="rounded-lg border border-[#c9dcd7] bg-white px-4 py-1.5 text-[11px] text-[#5c7074] hover:text-[#183037] disabled:opacity-50"
                   >
-                    保留原行程
+                    放弃
                   </button>
                 </div>
               </div>
@@ -610,7 +527,11 @@ export default function TravelChatDrawer({
             onKeyDown={handleKeyDown}
             disabled={inputDisabled}
             rows={1}
-            placeholder={pendingResponse ? '请先应用或保留当前预览，再继续修改…' : hasItinerary ? '比如：第二天别排太满…' : '比如：杭州 3 天，2 个人，喜欢自然…'}
+            placeholder={
+              generating ? '输入不可用（生成中）'
+                : pendingResponse ? '请先应用或保留当前预览，再继续修改…'
+                  : hasItinerary ? '比如：第二天别排太满…' : '比如：杭州 3 天，2 个人，喜欢自然…'
+            }
             aria-label="改行程的对话输入"
             className="max-h-32 min-w-0 flex-1 resize-none rounded-xl border border-[#dae7e5]
               bg-[#f5faf9] px-4 py-2.5 text-sm text-[#183037] placeholder:text-[#8fa5a3]

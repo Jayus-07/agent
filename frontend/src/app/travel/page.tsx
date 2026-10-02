@@ -27,15 +27,20 @@
  * 后端契约、不引依赖；后端没有分步进度 API，生成中只显示等待状态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, ArrowRight, CalendarDays, CheckCircle2, Hotel, LocateFixed, Loader2, MapPin, Minus, Plus, Sparkles, TrainFront, Utensils } from 'lucide-react'
+import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Utensils } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
 import TravelChatDrawer from '@/components/travel/TravelChatDrawer'
+import TravelPlanList from '@/components/travel/TravelPlanList'
+import TaskSidebar from '@/components/agent/TaskSidebar'
+import SidebarRail from '@/components/agent/SidebarRail'
 import {
   EMPTY_PLAN_STATE,
+  adoptConversationId,
   applyPlanResponse,
   clearPendingPlan,
   composePlanMessage,
+  itineraryTotal,
   readConversationId,
   readPlanState,
   rotateConversationId,
@@ -49,17 +54,20 @@ import {
   reduceTravelStreamEvent,
   type TravelProcessState,
 } from '@/components/travel/travelRuntime'
-import { cityHue, TRAVEL_STAGE_LABELS, TRAVEL_STAGE_ORDER, TRAVEL_TOOL_LABELS } from '@/components/travel/travelDisplay'
+import { TRAVEL_STAGE_LABELS, TRAVEL_STAGE_ORDER, TRAVEL_TOOL_LABELS } from '@/components/travel/travelDisplay'
 import {
   fetchItineraryIcs,
+  fetchTravelPlanLatest,
   fetchTravelRecommendations,
   reverseGeocodeTravelOrigin,
   sendTravelFeedback,
   streamTravelPlan,
+  type ItineraryBrief,
   type TravelStreamEvent,
   type PlanResponse,
   type Recommendation,
 } from '@/api/travel'
+import { getCachedUser } from '@/lib/auth'
 
 const PREFERENCE_OPTIONS = ['自然', '人文', '美食', '亲子', '购物', '夜生活', '摄影'] as const
 const PACE_OPTIONS = [
@@ -154,6 +162,14 @@ export default function TravelPage() {
   const [locationHint, setLocationHint] = useState('')
   const [budgetBlocked, setBudgetBlocked] = useState(false)
   const [travelProcess, setTravelProcess] = useState<TravelProcessState | null>(null)
+  // 左侧任务栏（与 /agent 同一套 TaskSidebar，travel 模式：历史区=历史规划列表）
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // 出单/恢复后自增，触发侧栏历史规划刷新
+  const [plansVersion, setPlansVersion] = useState(0)
+  // 恢复中的会话（侧栏列表行内转圈）
+  const [restoringCid, setRestoringCid] = useState('')
+  // 窄屏（<md 无侧栏）历史规划浮层
+  const [sheetOpen, setSheetOpen] = useState(false)
   // 预算轮询每页单一数据源；圆圈展示在助手输入区（TravelChatDrawer）
   const { status: budgetStatus } = useBudgetStatus(setBudgetBlocked)
   const abortRef = useRef<AbortController | null>(null)
@@ -235,6 +251,8 @@ export default function TravelPage() {
         setConditionsOpen(false)
         // 新行程默认聚焦第一天（日卡片条 + 当日重点详情）
         setActiveDay(1)
+        // 新版本落账 → 侧栏历史规划刷新
+        setPlansVersion((v) => v + 1)
       }
     } catch (e) {
       if (!controller.signal.aborted) {
@@ -328,20 +346,22 @@ export default function TravelPage() {
   }, [])
 
   // ── 助手回复：在当前行程上改 ──
+  /** brief → 表单回填（助手改单与恢复历史规划共用一份，避免两处口径漂移） */
+  const applyBriefToForm = useCallback((brief: ItineraryBrief) => {
+    setDestination(brief.destination || '')
+    setOrigin(brief.origin || '')
+    setDays(brief.days ? String(brief.days) : '')
+    setPartySize(brief.party_size ? String(brief.party_size) : '')
+    setBudget(brief.budget_cny != null ? String(brief.budget_cny) : '')
+    setStartDate(brief.start_date || '')
+    setPace(brief.pace || '')
+    setPreferences(brief.preferences ?? [])
+  }, [])
+
   const handleAssistantResponse = useCallback((data: PlanResponse) => {
     setPlanState((prev) => applyPlanResponse(prev, data))
-    const brief = data.itinerary?.brief
-    if (brief) {
-      setDestination(brief.destination || '')
-      setOrigin(brief.origin || '')
-      setDays(brief.days ? String(brief.days) : '')
-      setPartySize(brief.party_size ? String(brief.party_size) : '')
-      setBudget(brief.budget_cny != null ? String(brief.budget_cny) : '')
-      setStartDate(brief.start_date || '')
-      setPace(brief.pace || '')
-      setPreferences(brief.preferences ?? [])
-    }
-  }, [])
+    if (data.itinerary?.brief) applyBriefToForm(data.itinerary.brief)
+  }, [applyBriefToForm])
 
   const handleAssistantDraft = useCallback((data: PlanResponse) => {
     setPlanState((prev) => previewPlanResponse(prev, data))
@@ -373,6 +393,41 @@ export default function TravelPage() {
     setActiveDay(1)
     setConditionsOpen(true)
   }, [])
+
+  // ── 历史规划：点击侧栏/浮层条目恢复 ──
+  /** 恢复历史规划：切回该会话线程（收养，不轮换）+ 恢复最新版行程 + 回填表单。 */
+  const restorePlan = useCallback(async (cid: string) => {
+    if (loading || restoringCid) return
+    setRestoringCid(cid)
+    setError('')
+    try {
+      const latest = await fetchTravelPlanLatest(cid)
+      if (!latest.itinerary) throw new Error('这份规划没有可恢复的行程内容')
+      const data: PlanResponse = {
+        status: latest.itinerary.status || 'ready',
+        final_answer: '',
+        itinerary: latest.itinerary,
+        plan_status: latest.plan_status,
+        change_record: null,
+      }
+      abortRef.current?.abort()
+      setConversationId(adoptConversationId(cid))
+      setPlanState(applyPlanResponse(EMPTY_PLAN_STATE, data))
+      applyBriefToForm(latest.itinerary.brief)
+      setFeedbackSent('')
+      setError('')
+      setTravelProcess(null)
+      setActiveDay(1)
+      setConditionsOpen(false)
+      setSheetOpen(false)
+      // 恢复不产生新版本，但要刷新侧栏「当前」高亮所依赖的列表时间戳
+      setPlansVersion((v) => v + 1)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '恢复规划失败，请稍后再试')
+    } finally {
+      setRestoringCid('')
+    }
+  }, [applyBriefToForm, loading, restoringCid])
 
   const downloadIcs = useCallback(async () => {
     if (!itinerary) return
@@ -407,10 +462,6 @@ export default function TravelPage() {
     }
   }, [conversationId, feedbackSent, itinerary])
 
-  // 灵感卡取前 3 条；联想下拉用全量（含偏好加权后的顺序）
-  const inspiration = useMemo(() => recommendations.slice(0, 3), [recommendations])
-  const hasDestination = destination.trim().length > 0
-
   const assistantProps = {
     conversationId,
     hasItinerary: !!itinerary,
@@ -425,31 +476,93 @@ export default function TravelPage() {
     processState: travelProcess,
     onProcessEvent: handleTravelEvent,
     onStartNewTrip: startNewTrip,
+    /** 页面级生成中：助手输入禁用 + 占位（设计稿态 2 右栏口径） */
+    generating: loading,
     disabled: budgetBlocked,
     disabledHint: '本月额度已用尽，暂时不能发起新的规划；额度重置后自动恢复',
     budgetStatus,
   } as const
 
+  // 左栏三态口径（设计稿）：空态无左栏（合成输入卡是唯一入口）；
+  // 生成中=条件锁定；有行程=条件摘要
+  const hasLeftRail = loading || !!itinerary
+  // 右栏助手：设计稿态1 没有助手栏 —— 空态时连助手都不出现，输入卡是唯一焦点
+  const hasRightRail = loading || !!itinerary
+  const userName = getCachedUser()?.username || '本地用户'
+
   return (
-    <div className={`flex min-h-0 flex-1 flex-col ${drawerOpen && !isWide ? 'lg:pr-[440px]' : ''}`}>
-      {/* 一屏布局：lg+ 外层不滚，三栏各自内滚（用户反馈「不要整页滑到很下面」）；
-          窄屏退回整页文档流滚动 */}
-      <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-        <div className="mx-auto max-w-[1560px] px-4 py-4 xl:px-6 xl:py-5 lg:h-full">
-          <div className={`grid items-stretch gap-4 lg:h-full ${itinerary
-            ? 'lg:grid-cols-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_336px]'
-            : 'lg:grid-cols-[264px_minmax(0,1fr)] xl:grid-cols-[264px_minmax(0,1fr)_336px]'}`}>
-            {/* ── 左栏：行程条件（与右栏等高，内容多时栏内滚动） ── */}
-            {!itinerary && <aside className="min-w-0 min-h-0 lg:overflow-y-auto lg:pr-0.5">
-              <ConditionsPanel
-                open={conditionsOpen || !itinerary}
-                hasItinerary={!!itinerary}
-                onToggle={() => setConditionsOpen((v) => !v)}
-              >
-                {conditionsOpen || !itinerary ? (
-                  loading ? (
-                    /* 生成中：左栏收起为「条件已锁定」摘要（设计稿②），把注意力让给过程看板 */
-                    <div
+    <div className="flex min-h-0 flex-1">
+      {/* 左侧任务栏：与 /agent 同一套 TaskSidebar（travel 模式=历史规划列表 + 新建规划）；
+          <md 视口下组件自身隐藏，历史入口见顶栏「历史规划」浮层 */}
+      {sidebarOpen ? (
+        <TaskSidebar
+          mode="travel"
+          onCollapse={() => setSidebarOpen(false)}
+          onNewTask={startNewTrip}
+          newLabel="新建规划"
+          searchPlaceholder="搜索历史规划…"
+          renderHistory={({ keyword, refreshKey, onRefreshingChange }) => (
+            <TravelPlanList
+              keyword={keyword}
+              refreshKey={refreshKey + plansVersion}
+              onRefreshingChange={onRefreshingChange}
+              onEmptyAction={startNewTrip}
+              currentId={conversationId}
+              restoringCid={restoringCid}
+              onRestore={(cid) => void restorePlan(cid)}
+            />
+          )}
+        />
+      ) : (
+        <SidebarRail onExpand={() => setSidebarOpen(true)} onNewTask={startNewTrip} newLabel="新建规划" />
+      )}
+
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${drawerOpen && !isWide ? 'lg:pr-[440px]' : ''}`}>
+        {/* 顶栏（设计稿「TripKit · 行程规划」条）：侧栏收起后的展开入口 + 窄屏历史入口 */}
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-black/5 bg-white/70 px-4 backdrop-blur">
+          {!sidebarOpen && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="展开任务栏"
+              title="展开任务栏"
+              className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-black/5 hover:text-text-primary"
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          )}
+          <Plane size={16} className="text-[#087b73]" aria-hidden />
+          <span className="text-sm font-semibold text-[#183037]">行程规划</span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              className="inline-flex items-center gap-1 rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037] md:hidden"
+            >
+              <History size={12} aria-hidden />
+              历史规划
+            </button>
+            <span className="hidden items-center gap-1.5 text-xs text-[#5c7074] sm:inline-flex">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#087b73]/10 text-[10px] font-medium text-[#087b73]">
+                {userName.slice(0, 1).toUpperCase()}
+              </span>
+              {userName}
+            </span>
+          </div>
+        </header>
+
+        {/* 一屏布局：lg+ 外层不滚，三栏各自内滚（用户反馈「不要整页滑到很下面」）；
+            窄屏退回整页文档流滚动 */}
+        <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
+          <div className="mx-auto max-w-[1560px] px-4 py-4 xl:px-6 xl:py-5 lg:h-full">
+            <div className={`grid items-stretch gap-4 lg:h-full ${hasLeftRail
+              ? 'lg:grid-cols-[264px_minmax(0,1fr)] xl:grid-cols-[264px_minmax(0,1fr)_336px]'
+              : 'lg:grid-cols-[minmax(0,1fr)]'}`}>
+              {/* ── 左栏：生成中=条件锁定（态2）；有行程=条件摘要（态3）；空态无左栏 ── */}
+              {hasLeftRail && <aside className="min-w-0 min-h-0 space-y-3 lg:overflow-y-auto lg:pr-0.5">
+                {loading ? (
+                  <>
+                    <section
                       className="rounded-2xl border border-[#dae7e5] bg-white p-5 shadow-card"
                       aria-label="行程条件（生成中已锁定）"
                     >
@@ -475,56 +588,66 @@ export default function TravelPage() {
                       <p className="mt-3 border-t border-[#e8f1ef] pt-2 text-[10px] text-[#8fa5a3]">
                         生成期间条件不可改；完成后可在右侧「旅行助手」用一句话调整
                       </p>
-                    </div>
-                  ) : (
-                    <TripForm
-                    origin={origin} onOrigin={setOrigin}
-                    locationState={locationState} locationHint={locationHint} onUseCurrentLocation={useCurrentLocation}
-                    destination={destination} onDestination={setDestination}
-                    days={days} onDays={setDays}
-                    partySize={partySize} onPartySize={setPartySize}
-                    budget={budget} onBudget={setBudget}
-                    startDate={startDate} onStartDate={setStartDate}
-                    pace={pace} onPace={setPace}
-                    preferences={preferences} onPreferences={setPreferences}
-                    extra={extra} onExtra={setExtra}
-                    suggestions={recommendations}
-                    loading={loading} budgetBlocked={budgetBlocked}
-                    hasItinerary={!!itinerary}
-                    onSubmit={submit}
-                  />
-                  )
+                    </section>
+                    <section
+                      className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card opacity-60"
+                      aria-label="调整条件（生成中不可用）"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <h2 className="text-sm font-semibold text-[#183037]">调整条件</h2>
+                        <span
+                          className="cursor-not-allowed rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#9db4b1]"
+                          title="生成期间条件不可改"
+                        >
+                          调整条件
+                        </span>
+                      </div>
+                      <p className="mt-2 text-[11px] leading-relaxed text-[#5c7074]">
+                        生成完成后可调整条件重开一份，或直接在右侧「旅行助手」说一句。
+                      </p>
+                    </section>
+                  </>
                 ) : (
                   <TripSummary
-                    origin={origin} destination={destination} days={days} partySize={partySize}
-                    budget={budget} startDate={startDate} pace={pace}
-                    preferences={preferences} extra={extra}
-                    itineraryDays={null}
+                    /* 摘要跟当前行程走：表单被清空/改了一半时，仍显示行程真实目的地 */
+                    destination={itinerary?.brief.destination || destination}
+                    days={days} budget={budget}
+                    startDate={itinerary?.brief.start_date || startDate}
+                    pace={itinerary?.brief.pace || pace}
+                    itineraryDays={itinerary?.days.length ?? null}
+                    costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
                     onAdjust={() => setConditionsOpen(true)}
                   />
                 )}
-              </ConditionsPanel>
-            </aside>}
+              </aside>}
 
             {/* ── 中栏：行程（唯一结果主视图，栏内滚动） ── */}
             <main className="min-w-0 min-h-0 space-y-4 lg:overflow-y-auto lg:pr-0.5">
-              {itinerary && (
-                <TripSummary
-                  origin={origin} destination={destination} days={days} partySize={partySize}
-                  budget={budget} startDate={startDate} pace={pace}
-                  preferences={preferences} extra={extra}
-                  itineraryDays={itinerary.days.length}
-                  onAdjust={() => setConditionsOpen(true)}
-                  compact
-                />
-              )}
               {!itinerary && !loading && !planState.notice && (
-                <HeroGuide
+                <PlanIntakeCard
                   value={quickIdea}
                   onValueChange={setQuickIdea}
                   onSubmitIdea={runQuickIdea}
-                  onRun={runExample}
+                  onRunExample={runExample}
                   disabled={loading || budgetBlocked}
+                  form={
+                    <TripForm
+                      origin={origin} onOrigin={setOrigin}
+                      locationState={locationState} locationHint={locationHint} onUseCurrentLocation={useCurrentLocation}
+                      destination={destination} onDestination={setDestination}
+                      days={days} onDays={setDays}
+                      partySize={partySize} onPartySize={setPartySize}
+                      budget={budget} onBudget={setBudget}
+                      startDate={startDate} onStartDate={setStartDate}
+                      pace={pace} onPace={setPace}
+                      preferences={preferences} onPreferences={setPreferences}
+                      extra={extra} onExtra={setExtra}
+                      suggestions={recommendations}
+                      loading={loading} budgetBlocked={budgetBlocked}
+                      hasItinerary={!!itinerary}
+                      onSubmit={submit}
+                    />
+                  }
                 />
               )}
 
@@ -561,7 +684,6 @@ export default function TravelPage() {
                   <ItineraryView
                   itinerary={itinerary}
                   notice={planState.notice}
-                  finalAnswer={planState.plan?.final_answer}
                   exporting={exporting}
                   feedbackSent={feedbackSent}
                   conversationId={conversationId}
@@ -579,64 +701,11 @@ export default function TravelPage() {
                 <div className="whitespace-pre-wrap rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   {planState.notice}
                 </div>
-              ) : (
-                <>
-                  {/* 灵感卡：目的地为空时的零门槛起点（点卡片即填目的地） */}
-                  {!hasDestination && inspiration.length > 0 && (
-                    <section aria-label="热门目的地灵感">
-                      <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-[#183037]">
-                        <MapPin size={14} className="text-[#087b73]" aria-hidden />
-                        还没想好？从热门开始
-                      </h2>
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        {inspiration.map((r) => {
-                          const hue = cityHue(r.city)
-                          return (
-                            <button
-                              key={r.city}
-                              type="button"
-                              onClick={() => setDestination(r.city)}
-                              title={`用 ${r.city} 生成行程`}
-                              className="group relative h-36 cursor-pointer overflow-hidden rounded-xl text-left
-                                shadow-card transition-shadow hover:shadow-input focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#087b73]"
-                            >
-                              <span
-                                className="absolute inset-0 transition-transform duration-300 group-hover:scale-[1.03]"
-                                aria-hidden
-                                style={{
-                                  background:
-                                    `linear-gradient(to top, rgba(15,23,42,.62), rgba(15,23,42,0) 55%),` +
-                                    `linear-gradient(135deg, hsl(${hue} 60% 52%), hsl(${(hue + 42) % 360} 58% 40%))`,
-                                }}
-                              />
-                              <span className="relative flex h-full flex-col justify-between p-3">
-                                <span className="text-lg font-bold text-white drop-shadow">{r.city}</span>
-                                <span>
-                                  <span className="flex flex-wrap gap-1">
-                                    {r.highlights.slice(0, 3).map((h) => (
-                                      <span key={h} className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] text-white backdrop-blur-sm">
-                                        {h}
-                                      </span>
-                                    ))}
-                                  </span>
-                                  <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-white/95">
-                                    规划这站
-                                    <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" aria-hidden />
-                                  </span>
-                                </span>
-                              </span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </section>
-                  )}
-                </>
-              )}
+              ) : null}
             </main>
 
-            {/* ── 右栏：旅行助手（宽屏常驻、与左栏等高；中窄屏走抽屉，见下方 fixed 渲染） ── */}
-            {isWide && (
+            {/* ── 右栏：旅行助手（设计稿态1 无助手栏；生成中/有行程才出现） ── */}
+            {isWide && hasRightRail && (
               <aside className="min-w-0 min-h-0">
                 <TravelChatDrawer mode="panel" planVersion={itinerary?.plan_version} {...assistantProps} />
               </aside>
@@ -686,8 +755,19 @@ export default function TravelPage() {
         </div>
       )}
 
-      {/* 中窄屏：「对话改行程」边缘按钮 + 展开抽屉 */}
-      {!isWide && (
+      {/* 窄屏（<md 无侧栏）历史规划浮层：与侧栏列表同一数据组件 */}
+      <TravelHistorySheet
+        open={sheetOpen}
+        plansVersion={plansVersion}
+        currentId={conversationId}
+        restoringCid={restoringCid}
+        onClose={() => setSheetOpen(false)}
+        onRestore={restorePlan}
+        onNewPlan={startNewTrip}
+      />
+
+      {/* 中窄屏：「对话改行程」边缘按钮 + 展开抽屉（态1 无助手，不出入口） */}
+      {!isWide && hasRightRail && (
         <TravelChatDrawer
           mode="drawer"
           open={drawerOpen}
@@ -697,38 +777,59 @@ export default function TravelPage() {
           {...assistantProps}
         />
       )}
+        </div>
     </div>
   )
 }
 
-// ── 左栏：行程条件容器（表单 ⇄ 摘要） ────────────────────────
+// ── 左栏：行程条件摘要（设计稿态3：精简卡 + 调整条件卡） ─────
 
-function ConditionsPanel({
-  open, hasItinerary, onToggle, children,
-}: {
-  open: boolean
-  hasItinerary: boolean
-  onToggle: () => void
-  children: React.ReactNode
+function TripSummary(props: {
+  destination: string; days: string; budget: string
+  startDate: string; pace: string
+  /** 当前行程的实际天数（改单后会变，优先于表单值展示） */
+  itineraryDays: number | null
+  /** 出单后的实际预算合计（itinerary cost 求和；优先于表单预算展示） */
+  costTotal: number | null
+  onAdjust: () => void
 }) {
+  const dayText = props.itineraryDays != null ? String(props.itineraryDays) : (props.days || '?')
+  const budgetText = props.costTotal != null
+    ? `预算合计 ¥${props.costTotal.toLocaleString()}`
+    : props.budget ? `预算合计 ¥${Number(props.budget).toLocaleString()}` : '预算未设上限'
+  const metaParts = [
+    props.startDate ? `${props.startDate} 出发` : '',
+    props.pace ? `节奏${PACE_LABEL[props.pace] ?? '适中'}` : '',
+  ].filter(Boolean)
   return (
-    // h-full：与右栏等高（grid items-stretch 下吃满列高）；内容顶部对齐
-    <section className="flex h-full flex-col rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="行程条件">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-[#183037]">行程条件</h2>
-        {hasItinerary && !open && (
+    <>
+      <section className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="行程条件">
+        <h2 className="text-xs font-medium text-[#5c7074]">行程条件</h2>
+        <p className="mt-2 text-xl font-bold text-[#183037]">
+          {props.destination.trim() || '未定目的地'} · {dayText} 天
+        </p>
+        {metaParts.length > 0 && (
+          <p className="mt-1.5 text-xs text-[#5c7074]">{metaParts.join(' · ')}</p>
+        )}
+        <p className="mt-3 text-sm font-semibold text-[#087b73]">{budgetText}</p>
+      </section>
+      <section className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="调整条件">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-[#183037]">调整条件</h2>
           <button
             type="button"
-            onClick={onToggle}
+            onClick={props.onAdjust}
             className="cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs
               text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
           >
             调整条件
           </button>
-        )}
-      </div>
-      {children}
-    </section>
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-[#5c7074]">
+          小改动（改天数 / 换节奏）更推荐直接在右侧「旅行助手」说一句。
+        </p>
+      </section>
+    </>
   )
 }
 
@@ -881,59 +982,55 @@ function TripForm(p: TripFormProps) {
   )
 }
 
-// ── 左栏：生成后的条件摘要（方案 v2 §2.1「折叠为摘要」） ─────
+// ── 历史规划浮层（窄屏 <md：无侧栏时的入口，桌面走左侧任务栏） ──
 
-function TripSummary(props: {
-  origin: string; destination: string; days: string; partySize: string; budget: string
-  startDate: string; pace: string; preferences: string[]; extra: string
-  /** 当前行程的实际天数（改单后会变，优先于表单值展示，避免摘要与结果打架） */
-  itineraryDays: number | null
-  onAdjust: () => void
-  compact?: boolean
+function TravelHistorySheet({
+  open, plansVersion, currentId, restoringCid, onClose, onRestore, onNewPlan,
+}: {
+  open: boolean
+  plansVersion: number
+  currentId: string
+  restoringCid: string
+  onClose: () => void
+  onRestore: (cid: string) => void
+  onNewPlan: () => void
 }) {
-  const prefText = props.preferences.length ? props.preferences.join('、') : '未选'
-  const tripLabel = props.itineraryDays != null
-    ? `${props.itineraryDays} 天（当前行程）`
-    : `${props.days || '?'} 天`
-  const rows: Array<[string, string]> = [
-    ['出发城市', props.origin.trim() || '未填（可手填或使用定位）'],
-    ['目的地', props.destination.trim() || '未填'],
-    ['行程', tripLabel],
-    ['出发', props.startDate || '未定（相关事项按待核实处理）'],
-    ['同行', `${props.partySize || '?'} 人`],
-    ['预算', props.budget ? `总额 ¥${props.budget}` : '未设上限'],
-    ['节奏', `节奏${PACE_LABEL[props.pace] ?? '适中'}`],
-    ['偏好', prefText],
-  ]
-  if (props.extra.trim()) rows.push(['其他要求', props.extra.trim()])
+  if (!open) return null
   return (
-    <section className={props.compact
-      ? 'rounded-2xl border border-[#dae7e5] bg-white px-4 py-3 shadow-card'
-      : ''}>
-      <div className="flex items-start justify-between gap-3">
-        <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-1">
-        {rows.map(([k, v]) => (
-          <div key={k} className={props.compact ? 'min-w-[100px]' : 'border-b border-[#dae7e5] py-2 last:border-b-0'}>
-            <dt className="text-[11px] text-[#5c7074]">{k}</dt>
-            <dd className="mt-0.5 break-words text-[13px] font-medium text-[#183037]">{v}</dd>
-          </div>
-        ))}
-        </dl>
-        <button
-          type="button"
-          onClick={props.onAdjust}
-          className="shrink-0 cursor-pointer rounded-lg border border-[#dae7e5] px-3 py-1.5 text-xs
-            text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
-        >
-          修改条件
-        </button>
-      </div>
-      {!props.compact && (
-        <p className="mt-2 text-[11px] leading-relaxed text-[#5c7074]">
-          调整后点「重新生成」会开一份新行程；小改动（改天数 / 换节奏）更推荐直接在右侧「旅行助手」说一句。
-        </p>
-      )}
-    </section>
+    <div
+      className="fixed inset-0 z-40 bg-[#183037]/20 md:hidden"
+      role="presentation"
+      onClick={onClose}
+    >
+      <aside
+        className="flex h-full w-[320px] max-w-[88vw] flex-col border-r border-[#dae7e5] bg-white shadow-2xl"
+        aria-label="历史规划"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[#e8f1ef] px-4 py-3">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-[#183037]">
+            <History size={14} className="text-[#087b73]" aria-hidden />
+            历史规划
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-2 py-1 text-xs text-[#5c7074] hover:bg-[#f5faf9]"
+          >
+            关闭
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <TravelPlanList
+            refreshKey={plansVersion}
+            currentId={currentId}
+            restoringCid={restoringCid}
+            onRestore={onRestore}
+            onEmptyAction={onNewPlan}
+          />
+        </div>
+      </aside>
+    </div>
   )
 }
 
@@ -1092,10 +1189,17 @@ function StepperField({
   )
 }
 
-// ── 生成中流程卡（动态进度：阶段 stepper + Tool 时间线 + 实时检索 + 行程骨架） ──
+// ── 生成中进度卡（聊天流式竖版：事件逐条出现、完成折叠、展开看结果） ──
 
 type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
 
+/**
+ * GeneratingCard — 生成中进度（2026-10-02 聊天流式竖版）：
+ * 事件流像聊天消息一样逐条动态出现（需求分析 / 每次真实 Tool 调用一条）；
+ * 执行完自动折叠成一行（名称 + 结果摘要），进行中/失败默认展开，
+ * 用户点击可随时展开看 Tool 执行结果（商户/车次/攻略 preview 直接渲染）。
+ * 进度只来自真实 SSE 事件，不伪造百分比。
+ */
 function GeneratingCard({
   processState,
   expectedDays,
@@ -1103,27 +1207,30 @@ function GeneratingCard({
   processState: TravelProcessState | null
   expectedDays: number
 }) {
-  // 「规划过程」默认收起（设计稿②）：结果卡（商户/车票/攻略）始终可见，
-  // 想看可视化过程（需求理解 + 全量 Tool 时间线）再展开；失败时强制
-  // 展开——失败原因列在过程里，不展开就没人看得见。
-  const [processOpen, setProcessOpen] = useState(false)
   const failed = processState?.status === 'error'
-  const stageMap = processState?.stages ?? {}
-  // stepper = 固定流水线顺序 × 后端真实事件状态；未收到事件的阶段显示
-  // 「等待中」——表示还没执行到，不是已完成（不伪造进度）。
-  const stepRows: Array<{ key: string; label: string; status: StepStatus }> = TRAVEL_STAGE_ORDER.map((key) => ({
-    key,
-    label: TRAVEL_STAGE_LABELS[key] ?? key,
-    status: stageMap[key]?.status ?? 'pending',
-  }))
-  // 防御：后端出现了未知 stage key（版本差）时追加在尾部，不静默丢弃
-  for (const key of Object.keys(stageMap)) {
-    if (!TRAVEL_STAGE_ORDER.includes(key as typeof TRAVEL_STAGE_ORDER[number])) {
-      stepRows.push({ key, label: key, status: stageMap[key]?.status ?? 'pending' })
-    }
+  const tools = processState?.tools ?? []
+  const requirement = processState?.requirement
+  // 「执行完折叠」的手动反转集合：默认 进行中/失败 展开、完成折叠，点击切换
+  const [manualToggled, setManualToggled] = useState<Set<string>>(new Set())
+  const toggle = (key: string) => {
+    setManualToggled((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   }
-  const startedCount = stepRows.filter((s) => s.status !== 'pending').length
-  const doneCount = stepRows.filter((s) => s.status === 'completed').length
+  const isOpen = (key: string, defaultOpen: boolean) =>
+    manualToggled.has(key) ? !defaultOpen : defaultOpen
+
+  const reqBrief = (requirement?.brief ?? {}) as Record<string, unknown>
+  const reqSummary = [
+    typeof reqBrief.days === 'number' && reqBrief.days > 0 ? `${reqBrief.days} 天` : '',
+    ...(Array.isArray(reqBrief.preferences) ? reqBrief.preferences : []) as string[],
+    typeof reqBrief.budget_cny === 'number' && reqBrief.budget_cny > 0 ? `预算 ¥${reqBrief.budget_cny}` : '',
+  ].filter(Boolean).join(' · ')
+
+  const doneCount = tools.filter((t) => t.status !== 'running').length + (requirement ? 1 : 0)
 
   return (
     <section
@@ -1131,136 +1238,135 @@ function GeneratingCard({
       aria-live="polite"
       aria-label="正在生成行程"
     >
-      {/* 头部：状态 + 汇总 */}
       <div className="rounded-2xl border border-[#dae7e5] bg-white p-5 shadow-card">
+        {/* 轻头部 */}
         <div className="flex items-center gap-3">
-          <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#087b73]/10">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#087b73]/10">
             {failed
-              ? <AlertCircle size={18} className="text-red-500" aria-hidden />
-              : <Loader2 size={18} className="animate-spin text-[#087b73]" aria-hidden />}
+              ? <AlertCircle size={17} className="text-red-500" aria-hidden />
+              : <Loader2 size={17} className="animate-spin text-[#087b73]" aria-hidden />}
           </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-base font-semibold text-[#183037]">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#183037]">
               {failed ? '旅游规划失败' : '正在生成你的行程…'}
             </p>
             <p className="mt-0.5 text-xs text-[#5c7074]">
               {failed
-                ? '失败原因已在下方过程里列出，未用假数据补齐'
-                : `需求分析、Tool 调用、行程卡片都会在这里实时出现（已推进 ${doneCount}/${stepRows.length} 步）`}
+                ? '失败步骤已在下方展开，未用假数据补齐'
+                : `已推进 ${doneCount} 步 · 进度来自真实 SSE 事件流，不伪造百分比`}
             </p>
           </div>
-          {!failed && processState && (
-            <div className="hidden shrink-0 text-right sm:block" aria-hidden>
-              <p className="text-xl font-bold tabular-nums text-[#087b73]">
-                {stepRows.length > 0 ? Math.round((doneCount / stepRows.length) * 100) : 0}%
-              </p>
-              <p className="text-[10px] text-[#8fa5a3]">按真实事件计</p>
-            </div>
-          )}
-          {/* 规划过程展开按钮：默认收起，展开看需求理解 + 全量 Tool 时间线 */}
-          {(processState?.tools.length ?? 0) > 0 && (
-            <button
-              type="button"
-              onClick={() => setProcessOpen((v) => !v)}
-              aria-expanded={processOpen || failed}
-              className={`ml-auto shrink-0 cursor-pointer rounded-lg border px-2.5 py-1.5 text-xs transition-colors sm:ml-0 ${
-                processOpen || failed
-                  ? 'border-[#087b73]/40 bg-[#087b73]/[0.07] text-[#087b73]'
-                  : 'border-[#dae7e5] text-[#5c7074] hover:border-[#087b73]/40 hover:text-[#183037]'
-              }`}
-            >
-              规划过程 · {processState?.tools.length ?? 0} 次调用 {processOpen || failed ? '▴' : '▾'}
-            </button>
-          )}
         </div>
 
-        {/* 阶段 stepper：真实事件驱动，进行中的步骤带 spinner */}
-        <ol className="mt-4 grid gap-x-4 gap-y-2 sm:grid-cols-2">
-          {stepRows.map((step) => (
-            <li
-              key={step.key}
-              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
-                step.status === 'failed'
-                  ? 'border-red-200 bg-red-50 text-red-600'
-                  : step.status === 'running'
-                    ? 'border-[#087b73]/40 bg-[#087b73]/[0.07] font-medium text-[#087b73]'
-                    : step.status === 'completed'
-                      ? 'border-[#dae7e5] bg-[#f5faf9] text-[#5c7074]'
-                      : 'border-[#e8f1ef] bg-white text-[#a8bab7]'
-              }`}
-            >
-              {step.status === 'failed' ? (
-                <AlertCircle size={13} className="shrink-0" aria-hidden />
-              ) : step.status === 'running' ? (
-                <Loader2 size={13} className="shrink-0 animate-spin" aria-hidden />
-              ) : step.status === 'completed' ? (
-                <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
-              ) : (
-                <span className="h-[13px] w-[13px] shrink-0 rounded-full border border-current opacity-60" aria-hidden />
-              )}
-              <span className="min-w-0 flex-1 truncate">{step.label}</span>
-              <span className="shrink-0 text-[10px]">
-                {step.status === 'failed' ? '失败'
-                  : step.status === 'running' ? '进行中'
-                  : step.status === 'completed' ? '完成'
-                  : '等待中'}
-              </span>
-            </li>
-          ))}
+        {/* 聊天流式竖排：需求分析 + 每次真实 Tool 调用一条 */}
+        <ol className="mt-4 space-y-1.5">
+          {requirement && (() => {
+            const key = 'requirement'
+            const open = isOpen(key, false)
+            const missing = requirement.missing.length > 0
+            const assumptions = requirement.assumptions.length > 0
+            return (
+              <li key={key} className="overflow-hidden rounded-xl border border-[#e2f0ee] bg-white">
+                <button
+                  type="button"
+                  onClick={() => toggle(key)}
+                  aria-expanded={open}
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
+                >
+                  <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#183037]">需求分析</span>
+                  <span className="shrink-0 text-[10px] text-[#5c7074]">{reqSummary || '完成'}</span>
+                  <ChevronDown size={12} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+                </button>
+                {open && (
+                  <div className="border-t border-[#eef4f2] px-3 py-2.5 text-[11px] leading-relaxed text-[#5c7074]">
+                    {reqSummary && <p>识别到：{reqSummary || '（等待你说更多信息）'}</p>}
+                    {assumptions && <p className="mt-1">假设：{requirement.assumptions.join('；')}</p>}
+                    {missing && <p className="mt-1 text-amber-700">待补充：{requirement.missing.join('、')}</p>}
+                  </div>
+                )}
+              </li>
+            )
+          })()}
+          {tools.map((tool, index) => {
+            const key = `tool-${index}`
+            const running = tool.status === 'running'
+            const failedRow = tool.status === 'failed'
+            const open = isOpen(key, running || failedRow)
+            const label = TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool
+            const summary = running
+              ? '调用中…'
+              : failedRow
+                ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
+                : [
+                    tool.resultCount != null ? `${tool.resultCount} 条` : '',
+                    tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '',
+                  ].filter(Boolean).join(' · ') || '完成'
+            return (
+              <li
+                key={key}
+                className={`overflow-hidden rounded-xl border ${
+                  failedRow ? 'border-red-200 bg-red-50/50' : 'border-[#e2f0ee] bg-white'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => toggle(key)}
+                  aria-expanded={open}
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
+                >
+                  {running ? (
+                    <Loader2 size={13} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
+                  ) : failedRow ? (
+                    <AlertCircle size={13} className="shrink-0 text-red-500" aria-label="失败" />
+                  ) : (
+                    <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
+                  )}
+                  <span className={`min-w-0 flex-1 truncate text-xs ${failedRow ? 'font-medium text-red-700' : 'font-medium text-[#183037]'}`}>
+                    {label}
+                  </span>
+                  <span className={`shrink-0 text-[10px] ${failedRow ? 'text-red-600' : 'text-[#5c7074]'}`}>{summary}</span>
+                  <ChevronDown size={12} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+                </button>
+                {open && (
+                  <div className="border-t border-[#eef4f2] px-3 py-2.5">
+                    {failedRow ? (
+                      <p className="break-words text-[11px] leading-relaxed text-red-600">
+                        {tool.error || '该步骤执行失败，未用假数据补齐；其他步骤的结果仍然有效。'}
+                      </p>
+                    ) : (tool.preview?.length ?? 0) > 0 ? (
+                      tool.category === 'train'
+                        ? <TrainPreview preview={tool.preview!} />
+                        : tool.category === 'guide'
+                          ? <GuidePreview preview={tool.preview!} />
+                          : <MerchantPreview preview={tool.preview!} category={tool.category} />
+                    ) : running ? (
+                      <p className="text-[11px] text-[#7a8e8b]">正在调用真实数据源，结果返回后自动折叠…</p>
+                    ) : (
+                      <p className="text-[11px] text-[#7a8e8b]">
+                        {tool.dataStatus === 'empty'
+                          ? '查询成功，当前没有匹配结果。'
+                          : tool.dataStatus === 'unavailable'
+                            ? '数据源暂不可用，已按降级口径继续规划。'
+                            : '执行完成。'}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+          {tools.length === 0 && !requirement && (
+            <li className="py-4 text-center text-xs text-[#7a8e8b]">正在启动规划引擎…</li>
+          )}
         </ol>
       </div>
-
-      {/* 实时检索结果：高德商户 / 12306 车票 / 知乎攻略的 tool.result preview
-          逐条点亮——这是用户要「能看到结果」的部分，默认可见不收进展开区 */}
-      {processState && <LiveSearchBoard processState={processState} />}
-
-      {/* 规划过程（可展开）：需求理解 + 全量 Tool 时间线；失败时强制展开 */}
-      {(processOpen || failed) && processState && (
-        <div className="animate-fade-in space-y-4" aria-label="规划过程详情">
-          {/* 需求理解（requirement.interpreted 事件到达即展示） */}
-          {processState.requirement && <RequirementCard requirement={processState.requirement} />}
-
-          {/* Tool 调用时间线（检索类 preview 已在上面展示，这里列全量调用） */}
-          {processState.tools.length > 0 && (
-            <div className="rounded-2xl border border-[#dae7e5] bg-white px-4 py-3 shadow-card">
-              <p className="flex items-center gap-1.5 text-xs font-semibold text-[#183037]">
-                <Sparkles size={12} className="text-[#087b73]" aria-hidden />
-                Tool 调用时间线
-                <span className="font-normal text-[#8fa5a3]">共 {processState.tools.length} 次真实调用</span>
-              </p>
-              <ol className="mt-2.5 space-y-1.5">
-                {processState.tools.map((tool, index) => (
-                  <li key={`${tool.tool}-${index}`} className="flex items-center gap-2 text-xs">
-                    {tool.status === 'running' ? (
-                      <Loader2 size={12} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
-                    ) : tool.status === 'success' ? (
-                      <CheckCircle2 size={12} className="shrink-0 text-[#087b73]" aria-label="成功" />
-                    ) : (
-                      <AlertCircle size={12} className="shrink-0 text-red-500" aria-label="失败" />
-                    )}
-                    <span className="min-w-0 flex-1 truncate text-[#183037]">
-                      {TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool}
-                    </span>
-                    <span className={tool.status === 'failed' ? 'shrink-0 text-red-600' : 'shrink-0 text-[#8fa5a3]'}>
-                      {tool.status === 'running' ? '调用中…'
-                        : tool.status === 'failed' ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
-                        : [tool.resultCount != null ? `${tool.resultCount} 条` : '', tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '']
-                          .filter(Boolean).join(' · ') || '已返回'}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* 行程卡片骨架：按用户填的天数占位，生成完成后被真实日卡片替换 */}
       {!failed && expectedDays > 0 && (
         <div>
           <p className="mb-2 text-xs text-[#5c7074]">
-            正在排 {expectedDays} 天行程，每天一张卡片
-            {startedCount > 0 ? '（下面是等待生成的占位，出稿后自动替换）' : ''}
+            行程卡片 · 完成后逐张点亮（下面是等待生成的占位）
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
             {Array.from({ length: Math.min(expectedDays, 10) }, (_, i) => (
@@ -1283,78 +1389,54 @@ function GeneratingCard({
   )
 }
 
-function RequirementCard({
-  requirement,
-}: {
-  requirement: NonNullable<TravelProcessState['requirement']>
-}) {
-  const brief = requirement.brief
-  const rows: Array<[string, string]> = [
-    ['目的地', String(brief.destination ?? '')],
-    ['出发地', String(brief.origin ?? '未指定')],
-    ['天数', brief.days ? `${brief.days} 天` : '待确认'],
-    ['同行', brief.party_size ? `${brief.party_size} 人` : '待确认'],
-    ['偏好', Array.isArray(brief.preferences) && brief.preferences.length ? brief.preferences.join('、') : '未指定'],
-  ]
-  return (
-    <section className="mt-4 rounded-xl border border-[#b8d8d0] bg-[#f5faf9] px-3.5 py-3" aria-label="需求理解">
-      <div className="flex items-center gap-2">
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#087b73]/10">
-          <CheckCircle2 size={14} className="text-[#087b73]" aria-hidden />
-        </span>
-        <div>
-          <p className="text-xs font-semibold text-[#183037]">我先这样理解你的需求</p>
-          <p className="text-[10px] text-[#5c7074]">规则抽取结果，会在生成前展示给你核对</p>
-        </div>
-      </div>
-      <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-1.5">
-        {rows.map(([label, value]) => (
-          <div key={label}>
-            <dt className="text-[10px] text-[#7a8e8b]">{label}</dt>
-            <dd className="truncate text-[11px] font-medium text-[#183037]">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      {requirement.assumptions.length > 0 && (
-        <p className="mt-2 border-t border-[#dcebe7] pt-2 text-[10px] leading-relaxed text-[#5c7074]">
-          {requirement.assumptions.join('；')}
-        </p>
-      )}
-      {requirement.missing.length > 0 && (
-        <p className="mt-1 text-[10px] text-amber-700">还缺：{requirement.missing.join('、')}</p>
-      )}
-    </section>
-  )
-}
+const INTAKE_EMOJI = ['🌶️', '🚄', '🏯'] as const
+const HOT_SEARCHES = ['三坊七巷 Citywalk', '平潭蓝眼泪', '武夷山茶山'] as const
+const ADVANCED_CHIPS = ['目的地', '出发日期', '天数', '预算'] as const
 
-/**
- * HeroGuide — 首屏对话式引导（2026-10-02 三态设计稿①）：
- * 标题 + 一句话输入（走 submit 自由文本通道，后端 slot_filler 解析、缺什么追问什么）
- * + 示例 chips（点即 runExample，与原示例卡同一条真实链路）。
- * 宽屏的「高级选项」= 左栏完整表单（常驻可见），此处只给一句话通道与示例。
- */
-function HeroGuide({
-  value, onValueChange, onSubmitIdea, onRun, disabled,
+function PlanIntakeCard({
+  value, onValueChange, onSubmitIdea, onRunExample, disabled, form,
 }: {
   value: string
   onValueChange: (v: string) => void
   onSubmitIdea: () => void
-  onRun: (example: typeof EXAMPLE_SCENARIOS[number]) => void
+  onRunExample: (example: typeof EXAMPLE_SCENARIOS[number]) => void
   disabled: boolean
+  /** 高级选项展开区内容（完整 TripForm，由页面组装传入） */
+  form: React.ReactNode
 }) {
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   return (
     <section
       className="animate-fade-in rounded-2xl border border-[#c9dcd7] bg-white p-6 shadow-card sm:p-8"
       aria-label="开始规划行程"
     >
-      <div className="mx-auto max-w-[640px] text-center">
+      <div className="mx-auto max-w-[680px] text-center">
         <h1 className="text-xl font-semibold text-[#183037] sm:text-2xl">想去哪儿玩？说说你的想法</h1>
         <p className="mt-2 text-xs leading-relaxed text-[#5c7074]">
           一句话描述就行，缺的信息我会追问你。行程基于真实路况与天气排出，
-          只有有来源的数据才展示金额，其余明确标为暂无数据。
+          只要有来源的数据才展示金额，其余明确标为暂无数据。
         </p>
+
+        {/* 示例 chips：点一下直接生成 */}
+        <p className="mt-6 text-[11px] text-[#5c7074]">试试这些 · 点一下直接生成</p>
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+          {EXAMPLE_SCENARIOS.map((example, i) => (
+            <button
+              key={example.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onRunExample(example)}
+              title={example.description}
+              className="cursor-pointer rounded-full border border-[#087b73]/30 bg-[#e2f0ee] px-3.5 py-1.5 text-[13px] font-medium text-[#087b73] transition-colors hover:border-[#087b73]/60 hover:bg-[#d3e9e5] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {INTAKE_EMOJI[i] ?? '📍'} {example.title}
+            </button>
+          ))}
+        </div>
+
+        {/* 主输入行 */}
         <form
-          className="mt-5 flex items-center gap-2 rounded-xl border border-[#dae7e5] bg-[#f5faf9] p-1.5 transition-colors focus-within:border-[#087b73]/50"
+          className="mt-4 flex items-center gap-2 rounded-xl border border-[#dae7e5] bg-[#f5faf9] p-1.5 transition-colors focus-within:border-[#087b73]/50"
           onSubmit={(event) => {
             event.preventDefault()
             onSubmitIdea()
@@ -1376,88 +1458,56 @@ function HeroGuide({
             生成行程
           </button>
         </form>
-        <div className="mt-5 flex items-center gap-3">
-          <span className="h-px min-w-0 flex-1 bg-[#dae7e5]" aria-hidden />
-          <span className="shrink-0 text-[11px] text-[#5c7074]">不知道怎么说？点一个真实示例</span>
-          <span className="h-px min-w-0 flex-1 bg-[#dae7e5]" aria-hidden />
+
+        {/* 高级选项：字段 chips 点开展开完整表单 */}
+        <div className="mt-5 flex items-center gap-3" aria-hidden>
+          <span className="h-px min-w-0 flex-1 bg-[#dae7e5]" />
+          <span className="shrink-0 text-[11px] text-[#5c7074]">或用高级选项精确定制</span>
+          <span className="h-px min-w-0 flex-1 bg-[#dae7e5]" />
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-          {EXAMPLE_SCENARIOS.map((example) => (
+          {ADVANCED_CHIPS.map((chip) => (
             <button
-              key={example.id}
+              key={chip}
               type="button"
               disabled={disabled}
-              onClick={() => onRun(example)}
-              title={example.description}
-              className="cursor-pointer rounded-full border border-[#087b73]/30 bg-[#e2f0ee] px-3.5 py-1.5 text-[13px] font-medium text-[#087b73] transition-colors hover:border-[#087b73]/60 hover:bg-[#d3e9e5] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => setAdvancedOpen(true)}
+              className="cursor-pointer rounded-lg border border-[#dae7e5] bg-white px-3 py-1.5 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {example.title}
+              + {chip}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            className="cursor-pointer px-1 text-xs font-medium text-[#087b73] transition-colors hover:text-[#06655f] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {advancedOpen ? '收起高级选项 ▴' : '展开更多 ▾'}
+          </button>
+        </div>
+        {advancedOpen && (
+          <div className="mt-5 animate-fade-in text-left">
+            {form}
+          </div>
+        )}
+
+        {/* 大家最近在找：热词回填主输入框 */}
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2 text-[11px] text-[#8fa5a3]">
+          <span>大家最近在找：</span>
+          {HOT_SEARCHES.map((word) => (
+            <button
+              key={word}
+              type="button"
+              disabled={disabled}
+              onClick={() => onValueChange(word)}
+              className="cursor-pointer rounded-full bg-[#f5faf9] px-3 py-1 text-[11px] text-[#5c7074] transition-colors hover:bg-[#e2f0ee] hover:text-[#087b73] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {word}
             </button>
           ))}
         </div>
-        <p className="mt-5 text-[11px] text-[#8fa5a3]">
-          想精确控制出发地、日期、天数和预算？用左侧「行程条件」表单逐项填写。
-        </p>
-      </div>
-    </section>
-  )
-}
-
-function LiveSearchBoard({ processState }: { processState: TravelProcessState }) {
-  const toolLabels: Record<string, string> = {
-    map_merchant_search_tool: '高德商户搜索',
-    travel_train_search_tool: '12306 车票查询',
-    zhihu_search_tool: '知乎攻略检索',
-  }
-  const categoryLabels: Record<string, string> = { food: '美食', hotel: '酒店', train: '车次', guide: '攻略' }
-  const items = processState.tools.filter((tool) => (
-    tool.tool === 'map_merchant_search_tool'
-    || tool.tool === 'travel_train_search_tool'
-    || tool.tool === 'zhihu_search_tool'
-  ))
-  if (!items.length) return null
-
-  return (
-    <section className="animate-fade-in rounded-2xl border border-[#ead8bd] bg-[#fffaf2] p-4 shadow-card" aria-live="polite" aria-label="实时检索结果">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-medium tracking-[0.16em] text-[#b36a2d]">LIVE DATA</p>
-          <h2 className="mt-1 text-sm font-semibold text-[#183037]">正在把真实结果放进行程</h2>
-        </div>
-        <span className="text-[10px] text-[#8c7258]">不使用演示数据</span>
-      </div>
-      <div className="mt-3 space-y-3">
-        {items.map((tool, index) => {
-          const label = categoryLabels[tool.category ?? ''] ?? toolLabels[tool.tool] ?? tool.tool
-          if (tool.status === 'running') {
-            return (
-              <div key={`${tool.tool}-${index}`} className="flex items-center gap-2 rounded-xl border border-[#f0dfc8] bg-white px-3 py-2.5 text-xs text-[#6c5948]">
-                <Loader2 size={14} className="animate-spin text-[#b36a2d]" aria-hidden />
-                正在查询{label}…
-              </div>
-            )
-          }
-          if (tool.status === 'failed') {
-            return (
-              <div key={`${tool.tool}-${index}`} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
-                <div className="flex items-center gap-2 font-medium"><AlertCircle size={14} aria-hidden />{label}查询失败</div>
-                {tool.error && <p className="mt-1 break-words leading-relaxed text-[11px] text-red-600">{tool.error}</p>}
-              </div>
-            )
-          }
-          const preview = tool.preview ?? []
-          return (
-            <div key={`${tool.tool}-${index}`} className="rounded-xl border border-[#f0dfc8] bg-white p-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-[#183037]"><CheckCircle2 size={14} className="text-[#087b73]" aria-hidden />{label}已返回 {tool.resultCount ?? preview.length} 条</div>
-              {preview.length > 0 && (tool.category === 'train'
-                ? <TrainPreview preview={preview} />
-                : tool.category === 'guide'
-                  ? <GuidePreview preview={preview} />
-                  : <MerchantPreview preview={preview} category={tool.category} />)}
-              {preview.length === 0 && <p className="mt-2 text-[11px] text-[#8c7258]">真实查询成功，但当前没有匹配结果。</p>}
-            </div>
-          )
-        })}
       </div>
     </section>
   )

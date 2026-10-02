@@ -35,6 +35,8 @@ export interface ItineraryPoi {
   ticket_cny: number;
   source?: string;
   verification_status?: string;
+  /** 坐标级核实状态（字段级拆分）：verified=坐标来自实时检索源；缺省回退 source 口径 */
+  location_status?: string;
 }
 
 export interface ItineraryItem {
@@ -149,6 +151,26 @@ export interface TravelPlanVersion {
   destination: string;
   change: Record<string, unknown>;
   created_at: string;
+}
+
+/** 历史规划列表项：每会话最新版元数据（不含 itinerary 正文）。 */
+export interface TravelPlanSummary {
+  conversation_id: string;
+  plan_version: number;
+  plan_status: string;
+  destination: string;
+  created_at: string;
+  versions_count: number;
+}
+
+/** 历史规划最新版详情：点击列表项恢复时取的完整行程。 */
+export interface TravelPlanLatest {
+  conversation_id: string;
+  plan_version: number;
+  plan_status: string;
+  destination: string;
+  created_at: string;
+  itinerary: Itinerary | null;
 }
 
 export interface TravelPlanDiff {
@@ -295,6 +317,17 @@ export function fetchTravelPlanVersions(conversationId: string): Promise<{
   versions: TravelPlanVersion[];
 }> {
   return request(`/api/travel/plans/${encodeURIComponent(conversationId)}/versions`)
+}
+
+/** 历史规划列表：当前用户名下每个会话的最新版，按最近更新新→旧。 */
+export function fetchTravelPlanList(limit = 30): Promise<TravelPlanSummary[]> {
+  return request<{ plans: TravelPlanSummary[] }>(`/api/travel/plans?limit=${limit}`)
+    .then((r) => r.plans ?? [])
+}
+
+/** 某个历史规划的最新版（含完整 itinerary），供点击历史项恢复。 */
+export function fetchTravelPlanLatest(conversationId: string): Promise<TravelPlanLatest> {
+  return request(`/api/travel/plans/${encodeURIComponent(conversationId)}/latest`)
 }
 
 /** 两个版本之间的确定性差异。 */

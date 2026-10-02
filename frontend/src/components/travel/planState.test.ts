@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   EMPTY_PLAN_STATE,
+  adoptConversationId,
   applyPlanResponse,
   composePlanMessage,
   describePlanReply,
@@ -144,6 +145,13 @@ describe('会话线程 — 刷新后仍接着改同一份行程', () => {
     const id = rotateConversationId()
     expect(id).toBeTruthy()
     expect(readConversationId()).toBe(id)
+  })
+
+  it('adopt 收养历史线程：切到指定 id 且落盘（恢复历史规划不产生新线程）', () => {
+    rotateConversationId() // 先有一个「当前」线程
+    const restored = adoptConversationId('conv-restored')
+    expect(restored).toBe('conv-restored')
+    expect(readConversationId()).toBe('conv-restored')
   })
 
   it('storage 不可用（隐私模式）时退化为新 id，不抛异常', () => {

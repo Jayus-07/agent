@@ -17,8 +17,12 @@ const SRC_ROOT = path.resolve(process.cwd(), 'src')
 const API_DIR = path.join(SRC_ROOT, 'api')
 
 // P0-3 之后应存在的域模块（不含 client/errors 这类基础件）
+// 2026-10-01 补录：budgets / travel 早就有真实调用方（/agent 额度条、
+// /travel 行程页 + 对话改行程抽屉），却没进这份清单 —— 清单漏项等于
+// 「每域一个模块」这条约定对它们没有守护，故一并纳入。
 const DOMAINS = [
   'alerts',
+  'budgets',
   'chat',
   'cs',
   'competitor',
@@ -33,6 +37,7 @@ const DOMAINS = [
   'reports',
   'selection',
   'selectionDecision',
+  'travel',
 ] as const
 
 describe('surface contract: 每域一个模块 src/api/<domain>.ts', () => {

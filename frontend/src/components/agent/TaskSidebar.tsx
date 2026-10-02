@@ -10,7 +10,7 @@
  * （2026-09-30 修正过期注释：原文「12 个业务入口」是 09-21 收敛前口径。）
  */
 import { useState } from 'react'
-import { Brain, ChevronDown, PanelLeftClose, Plus, RefreshCw, Search, User } from 'lucide-react'
+import { Brain, ChevronDown, PanelLeftClose, Plane, Plus, RefreshCw, Search, User } from 'lucide-react'
 import NavGroup from '@/components/layout/NavGroup'
 import { NAV } from '@/components/layout/navConfig'
 import SessionList from './SessionList'
@@ -18,28 +18,44 @@ import SessionList from './SessionList'
 interface Props {
   onCollapse: () => void
   onNewTask: () => void
+  /**
+   * travel = 旅游规划页（/travel）复用本侧栏：历史区不再渲染聊天会话列表，
+   * 改由调用方经 renderHistory 注入（历史规划列表）；品牌/新建按钮文案随之切换。
+   * 缺省 chat = /agent 现状，对话页零改动。
+   */
+  mode?: 'chat' | 'travel'
+  /** mode=travel 的历史区渲染函数：拿到侧栏持有的搜索关键字与刷新信号 */
+  renderHistory?: (ctx: { keyword: string; refreshKey: number; onRefreshingChange: (v: boolean) => void }) => React.ReactNode
+  /** 新建按钮文案（travel 传「新建规划」） */
+  newLabel?: string
+  /** 搜索框占位文案（travel 传「搜索历史规划…」） */
+  searchPlaceholder?: string
 }
 
-export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
+export default function TaskSidebar({
+  onCollapse, onNewTask, mode = 'chat', renderHistory, newLabel = '新建任务',
+  searchPlaceholder = '搜索任务…',
+}: Props) {
   const [keyword, setKeyword] = useState('')
   // 12 个一级模块菜单默认展开（WorkBuddy 式布局：菜单在左上、历史在左下）；
   // 小屏可手动收起换空间。
   const [refreshKey, setRefreshKey] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const [navOpen, setNavOpen] = useState(true)
+  const isTravel = mode === 'travel'
 
   return (
     <aside className="hidden md:flex w-[252px] shrink-0 flex-col bg-sidebar border-r border-black/5">
       {/* 品牌 + 收起 */}
       <div className="flex items-center gap-2 px-4 h-12 shrink-0">
-        <Brain size={18} className="text-accent shrink-0" />
-        <span className="text-sm font-semibold text-text-primary truncate">Agent AI</span>
+        {isTravel ? <Plane size={18} className="text-accent shrink-0" /> : <Brain size={18} className="text-accent shrink-0" />}
+        <span className="text-sm font-semibold text-text-primary truncate">{isTravel ? '行程规划' : 'Agent AI'}</span>
         <div className="ml-auto flex items-center gap-0.5">
           <button
             onClick={() => setRefreshKey((v) => v + 1)}
             className="p-1.5 rounded hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors"
-            aria-label="刷新任务列表"
-            title="刷新任务列表"
+            aria-label={isTravel ? '刷新历史规划' : '刷新任务列表'}
+            title={isTravel ? '刷新历史规划' : '刷新任务列表'}
           >
             <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
           </button>
@@ -61,8 +77,8 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索任务…"
-            aria-label="搜索任务"
+            placeholder={searchPlaceholder}
+            aria-label={isTravel ? '搜索历史规划' : '搜索任务'}
             className="w-full bg-black/[0.04] border border-black/5 rounded-lg pl-7 pr-2 py-1.5 text-xs
               text-text-primary placeholder:text-text-muted outline-none focus:border-accent/40 transition-colors"
           />
@@ -80,7 +96,7 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
           <span className="w-4 h-4 rounded-full border border-current flex items-center justify-center shrink-0">
             <Plus size={10} strokeWidth={2.5} />
           </span>
-          新建任务
+          {newLabel}
         </button>
       </div>
 
@@ -107,14 +123,18 @@ export default function TaskSidebar({ onCollapse, onNewTask }: Props) {
         )}
       </div>
 
-      {/* 历史任务（左下，时间分组）——「任务 (N)」标题由 SessionList 渲染（持有数量） */}
+      {/* 历史（左下，时间分组）——chat=会话列表；travel=调用方注入的历史规划列表 */}
       <div className="flex-1 overflow-y-auto px-3 pb-3">
-        <SessionList
-          keyword={keyword}
-          refreshKey={refreshKey}
-          onRefreshingChange={setRefreshing}
-          onEmptyAction={onNewTask}
-        />
+        {isTravel && renderHistory ? (
+          renderHistory({ keyword, refreshKey, onRefreshingChange: setRefreshing })
+        ) : (
+          <SessionList
+            keyword={keyword}
+            refreshKey={refreshKey}
+            onRefreshingChange={setRefreshing}
+            onEmptyAction={onNewTask}
+          />
+        )}
       </div>
 
       {/* 底部用户区 */}

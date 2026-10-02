@@ -17,20 +17,18 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import 'leaflet/dist/leaflet.css'
 import type { Map as LeafletMap } from 'leaflet'
 import {
-  AlertTriangle, BedDouble, CalendarPlus, Check, Coffee, History, ListChecks, MapPin, Route,
-  ThumbsDown, ThumbsUp, TrainFront, Ticket, Undo2, UtensilsCrossed, Wallet,
+  AlertTriangle, CalendarPlus, Check, Coffee, ListChecks, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
 } from 'lucide-react'
 import {
-  confirmTravelPlan, fetchTravelPlanDiff, fetchTravelPlanVersions, restoreTravelPlan,
+  confirmTravelPlan,
   type Itinerary, type ItineraryDay, type ItineraryItem, type PlanResponse,
-  type TransitLeg, type TravelPlanDiff, type TravelPlanVersion,
+  type TransitLeg,
 } from '@/api/travel'
-import { formatDayDate, PACE_LABEL } from './planState'
+import { formatDayDate } from './planState'
 import {
-  costBreakdown, dayLoad, dayMealItems, dayRouteColor, dayVisitTitles, departureBadge, formatDuration,
+  dayLoad, dayMealItems, dayRouteColor, dayVisitTitles, departureBadge, formatDuration,
 } from './travelDisplay'
-import MarkdownContent from '@/components/chat/MarkdownContent'
-import { classifyFact, costAvailability } from './travelRuntime'
+import { classifyFact } from './travelRuntime'
 
 // ── 页面级主题（来源：参考 HTML #trip-concept 的 CSS 变量，勿当全局 token 用） ──
 const TP = {
@@ -57,6 +55,10 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
   const [failed, setFailed] = useState(false)
 
   // 每天的到访点（kind=visit 且有坐标），按当日时间顺序
+  // 每天的到访点（kind=visit 且坐标可信），按当日时间顺序。
+  // 坐标级判定（字段级拆分 2026-10-02）：location_status=verified（live 检索，
+  // 坐标可信）或旧数据回退 source 口径 verified——详情占位（票价/时长
+  // verification_status=unverified）只影响展示标注，不再连坐地图打点。
   const dayRoutes = useMemo<DayRoute[]>(() => {
     const routes: DayRoute[] = []
     for (const d of itinerary.days.filter((day) => day.day_index === selectedDay)) {
@@ -64,7 +66,10 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
         .filter((item): item is ItineraryItem & { poi: NonNullable<ItineraryItem['poi']> } =>
           item.kind === 'visit'
             && item.poi != null
-            && classifyFact({ source: item.poi.source, verification_status: item.poi.verification_status }) === 'verified')
+            && Number.isFinite(item.poi.lat)
+            && Number.isFinite(item.poi.lng)
+            && (item.poi.location_status === 'verified'
+              || classifyFact({ source: item.poi.source, verification_status: item.poi.verification_status }) === 'verified'))
         .map((item) => ({ lat: item.poi.lat, lng: item.poi.lng, title: item.title }))
       if (pts.length > 0) routes.push({ dayIndex: d.day_index, pts })
     }
@@ -76,7 +81,8 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
     !item.poi
       || !Number.isFinite(item.poi.lat)
       || !Number.isFinite(item.poi.lng)
-      || classifyFact({ source: item.poi.source, verification_status: item.poi.verification_status }) !== 'verified'
+      || (item.poi.location_status !== 'verified'
+        && classifyFact({ source: item.poi.source, verification_status: item.poi.verification_status }) !== 'verified')
   )))
 
   // 建图（一次）：瓦片走高德（GCJ-02，与种子/静态图坐标同口径），无 Key 前端直连
@@ -425,91 +431,6 @@ function DayTabCard({
   )
 }
 
-// ── 当日重点：地点卡与用餐（时间轴之外的分区重点展示） ────────
-
-/** 当天到访地点的重点卡：名称、时段、停留、门票、备注（全部来自真实字段）。 */
-function DaySpotCards({ day }: { day: ItineraryDay }) {
-  const visits = day.items.filter((item) => item.kind === 'visit')
-  if (visits.length === 0) return null
-  return (
-    <section aria-label={`第 ${day.day_index} 天地点`} className="space-y-2">
-      <h4 className="flex items-center gap-1.5 text-xs font-semibold text-[#183037]">
-        <MapPin size={12} className="text-[#087b73]" aria-hidden />
-        当天地点 · {visits.length} 处
-      </h4>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {visits.map((item, index) => {
-          const factStatus = item.poi
-            ? classifyFact({ source: item.poi.source, verification_status: item.poi.verification_status })
-            : 'unknown'
-          const ticket = item.poi?.ticket_cny ?? 0
-          return (
-            <article
-              key={`${item.title}-${index}`}
-              className="animate-fade-in rounded-xl border border-[#dae7e5] bg-white p-3 transition-colors hover:border-[#087b73]/40"
-            >
-              <div className="flex items-start gap-2">
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#087b73]/10 text-[10px] font-bold text-[#087b73]">
-                  {index + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <h5 className="truncate text-sm font-semibold text-[#183037]">{item.title}</h5>
-                  <p className="mt-0.5 font-mono text-[10px] tabular-nums text-[#5c7074]">{item.start}-{item.end}</p>
-                </div>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {item.minutes > 0 && (
-                  <span className="rounded bg-[#087b73]/10 px-1.5 py-0.5 text-[10px] text-[#087b73]">
-                    停留 {formatDuration(item.minutes)}
-                  </span>
-                )}
-                {ticket > 0 && factStatus === 'verified' && (
-                  <span className="rounded bg-[#f5faf9] px-1.5 py-0.5 text-[10px] text-[#5c7074]">
-                    门票 ¥{ticket.toFixed(0)} · 已核实
-                  </span>
-                )}
-                {item.poi && factStatus !== 'verified' && (
-                  <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-600">门票暂无数据</span>
-                )}
-              </div>
-              {item.note && <p className="mt-1.5 text-[11px] leading-relaxed text-[#5c7074]">{item.note}</p>}
-            </article>
-          )
-        })}
-      </div>
-    </section>
-  )
-}
-
-/** 当天用餐安排（kind=meal；后端按作息插入，无真实商户时不挂假店名）。 */
-function DayMealSection({ day }: { day: ItineraryDay }) {
-  const meals = day.items.filter((item) => item.kind === 'meal')
-  if (meals.length === 0) return null
-  return (
-    <section aria-label={`第 ${day.day_index} 天用餐`} className="space-y-2">
-      <h4 className="flex items-center gap-1.5 text-xs font-semibold text-[#183037]">
-        <UtensilsCrossed size={12} className="text-[#d97706]" aria-hidden />
-        当天用餐 · {meals.length} 次
-      </h4>
-      <ul className="space-y-1.5">
-        {meals.map((item, index) => (
-          <li
-            key={`${item.title}-${index}`}
-            className="flex items-center gap-2.5 rounded-xl border border-[#f0dfc8] bg-[#fffaf2] px-3 py-2"
-          >
-            <span className="w-[92px] shrink-0 font-mono text-[11px] tabular-nums text-[#b36a2d]">{item.start}-{item.end}</span>
-            <span className="min-w-0 flex-1 truncate text-xs text-[#183037]">{item.title}</span>
-            {item.note && <span className="hidden max-w-[45%] truncate text-[10px] text-[#8c7258] sm:block">{item.note}</span>}
-          </li>
-        ))}
-      </ul>
-      <p className="text-[10px] text-[#8c7258]">
-        想吃点具体的？在右侧「旅行助手」问一句，比如「第一天附近有什么必吃美食」，会调真实商户检索。
-      </p>
-    </section>
-  )
-}
-
 // ── 概览条 ───────────────────────────────────────────────────
 
 /**
@@ -524,165 +445,6 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 /** 费用分类的展示形态（条形颜色 + 图例图标）。顺序 = costBreakdown 的切片顺序。 */
-const COST_META: Record<string, { bar: string; icon: React.ReactNode }> = {
-  tickets: { bar: '#087b73', icon: <Ticket size={12} aria-hidden /> },
-  meals: { bar: '#d97706', icon: <UtensilsCrossed size={12} aria-hidden /> },
-  lodging: { bar: '#0d9488', icon: <BedDouble size={12} aria-hidden /> },
-  transit: { bar: '#94a3b8', icon: <TrainFront size={12} aria-hidden /> },
-}
-
-function OverviewBar({
-  itinerary, planStatus, exporting, feedbackSent, onExportIcs, onFeedback,
-}: {
-  itinerary: Itinerary
-  planStatus?: string
-  exporting: boolean
-  feedbackSent: '' | 'positive' | 'negative'
-  onExportIcs: () => void
-  onFeedback: (vote: 'positive' | 'negative') => void
-}) {
-  const { brief, cost } = itinerary
-  const { slices } = costBreakdown(cost)
-  const availability = costAvailability(itinerary)
-
-  // 需求摘要 chips：右侧「旅行助手」要改的就是这几项，看不见就没法改。
-  const meta: string[] = []
-  if (brief.party_size) meta.push(`${brief.party_size} 人`)
-  meta.push(`节奏${PACE_LABEL[brief.pace] ?? '适中'}`)
-  if (brief.preferences.length) meta.push(`偏好 ${brief.preferences.join('、')}`)
-  if (brief.must_go.length) meta.push(`必去 ${brief.must_go.join('、')}`)
-  if (brief.avoid?.length) meta.push(`避开 ${brief.avoid.join('、')}`)
-  // 忌口必须露出来：它是「不能出错」的约束，藏起来用户根本不知道系统记住了
-  if (brief.diet) meta.push(`忌口 ${brief.diet}`)
-
-  const badge = departureBadge(brief.start_date)
-
-  return (
-    <section
-      className="animate-fade-in rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card"
-      role="region"
-      aria-live="polite"
-      aria-label={`当前行程 · ${brief.destination || '未命名目的地'} · ${itinerary.days.length} 天 · v${itinerary.plan_version}`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold text-[#183037]">
-              {brief.destination || '未命名目的地'} · {itinerary.days.length} 天
-            </h2>
-            <span className="rounded-full border border-[#dae7e5] bg-[#f5faf9] px-2 py-0.5 text-[11px] text-[#183037]">
-              {planStatus === 'waiting_confirmation' ? '待确认' : '当前行程'} · v{itinerary.plan_version}
-            </span>
-            {/* 出发倒计时：真实派生；无日期不渲染（「未定日期」在逐日卡里已有） */}
-            {badge && (
-              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-white"
-                style={{ background: TP.accent }}>
-                <CalendarPlus size={11} aria-hidden />
-                {badge}
-              </span>
-            )}
-            {STATUS_LABEL[itinerary.status] && (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
-                {STATUS_LABEL[itinerary.status]}
-              </span>
-            )}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {brief.start_date && (
-              <span className="rounded-full border border-[#dae7e5] bg-[#f5faf9] px-2 py-0.5 text-[11px] text-[#5c7074]">
-                {brief.start_date} 出发
-              </span>
-            )}
-            {meta.map((m) => (
-              <span
-                key={m}
-                className="rounded-full border border-[#dae7e5] bg-[#f5faf9] px-2 py-0.5 text-[11px] text-[#5c7074]"
-              >
-                {m}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onExportIcs}
-            disabled={exporting}
-            className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#dae7e5] px-2.5 py-1.5
-              text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]
-              disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <CalendarPlus size={13} aria-hidden />
-            {exporting ? '导出中…' : '导出日历'}
-          </button>
-          <button
-            type="button"
-            onClick={() => onFeedback('positive')}
-            disabled={!!feedbackSent}
-            title="这份行程有用"
-            aria-label="这份行程有用"
-            className={`flex cursor-pointer items-center rounded-lg border px-2 py-1.5 text-xs transition-colors ${
-              feedbackSent === 'positive'
-                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                : 'border-[#dae7e5] text-[#5c7074] hover:border-[#087b73]/40 hover:text-[#183037]'
-            }`}
-          >
-            <ThumbsUp size={13} aria-hidden />
-          </button>
-          <button
-            type="button"
-            onClick={() => onFeedback('negative')}
-            disabled={!!feedbackSent}
-            title="需要改"
-            aria-label="需要改"
-            className={`flex cursor-pointer items-center rounded-lg border px-2 py-1.5 text-xs transition-colors ${
-              feedbackSent === 'negative'
-                ? 'border-red-300 bg-red-50 text-red-700'
-                : 'border-[#dae7e5] text-[#5c7074] hover:border-[#087b73]/40 hover:text-[#183037]'
-            }`}
-          >
-            <ThumbsDown size={13} aria-hidden />
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-3">
-        <div className="flex items-center gap-3 rounded-xl border border-[#dae7e5] bg-[#f5faf9] px-4 py-3">
-          <Wallet size={18} className="shrink-0" style={{ color: TP.accent }} aria-hidden />
-          <div className="min-w-0">
-            <p className="text-[10px] text-[#5c7074]">总花费</p>
-            <p className={`text-2xl font-bold leading-7 tabular-nums ${availability.total === 'verified' ? 'text-[#087b73]' : 'text-red-600'}`}>
-              {availability.total === 'verified' ? '费用已核实' : '暂无数据'}
-            </p>
-            {availability.total !== 'verified' && <p className="text-[10px] text-red-600">未接入可核验费用来源</p>}
-          </div>
-        </div>
-        <details className="mt-2 rounded-xl border border-[#dae7e5] bg-white px-4 py-2.5">
-          <summary className="cursor-pointer text-xs font-medium text-[#183037]">查看费用明细</summary>
-          <dl className="mt-2 grid gap-2 sm:grid-cols-2">
-            {slices.map((slice) => {
-              const status = availability[slice.key as keyof typeof availability]
-              return (
-                <div key={slice.key} className="flex items-center justify-between gap-2 text-[11px]">
-                  <dt className="flex items-center gap-1.5 text-[#5c7074]">
-                    <span className="h-2 w-2 rounded-full" style={{ background: COST_META[slice.key]?.bar ?? '#cbd5e1' }} aria-hidden />
-                    {COST_META[slice.key]?.icon}
-                    {slice.label}
-                  </dt>
-                  <dd className={status === 'verified' ? 'text-[#183037]' : 'text-red-600'}>
-                    {status === 'verified' ? `¥${slice.value.toFixed(0)} · 已核实` : '暂无数据'}
-                  </dd>
-                </div>
-              )
-            })}
-          </dl>
-        </details>
-      </div>
-    </section>
-  )
-}
-
 // ── 导出给页面用 ─────────────────────────────────────────────
 
 export interface ItineraryViewProps {
@@ -691,7 +453,6 @@ export interface ItineraryViewProps {
   planStatus?: string
   /** 追问 / 失败提示：有行程时也展示，不顶掉行程 */
   notice?: string
-  finalAnswer?: string
   exporting?: boolean
   feedbackSent: '' | 'positive' | 'negative'
   /** 当前选中天（受控）：页面传入后与右侧助手共享「正在看第几天」 */
@@ -701,9 +462,8 @@ export interface ItineraryViewProps {
   onFeedback: (vote: 'positive' | 'negative') => void
   onPlanResponse: (data: PlanResponse) => void
 }
-
 export default function ItineraryView({
-  itinerary, conversationId, planStatus = '', notice, finalAnswer, exporting = false,
+  itinerary, conversationId, planStatus = '', notice, exporting = false,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
@@ -729,54 +489,20 @@ export default function ItineraryView({
     }
     return chips
   }, [activeDayData])
-  const availability = costAvailability(itinerary)
-  const visitItems = (itinerary.days ?? []).flatMap((day) => (
-    (day.items ?? []).filter((item) => item.kind === 'visit')
-  ))
-  const coordinatesAvailable = visitItems.length > 0 && visitItems.every((item) => (
-    item.poi != null
-      && Number.isFinite(item.poi.lat)
-      && Number.isFinite(item.poi.lng)
-      && classifyFact({ source: item.poi.source, verification_status: item.poi.verification_status }) === 'verified'
-  ))
-  const legs = (itinerary.days ?? []).flatMap((day) => day.legs ?? [])
-  const routeAvailable = legs.length > 0 && legs.every((leg) => (
-    !leg.is_estimate && classifyFact({ source: leg.source }) === 'verified'
-  ))
+  // 当天出发：取第一趟城际班次 + 第一个有价的席别（真实字段，无则整段不显示）
+  const intercity = itinerary.intercity && itinerary.intercity.length > 0 ? itinerary.intercity[0] : null
+  const intercitySeat = intercity ? Object.entries(intercity.prices ?? {})[0] : null
+  const badge = departureBadge(itinerary.brief.start_date)
   useEffect(() => {
     if (itinerary.days.length > 0 && !itinerary.days.some((day) => day.day_index === selectedDay)) {
       setSelectedDay(itinerary.days[0].day_index)
     }
   }, [itinerary.days, selectedDay])
-  const [versionOpen, setVersionOpen] = useState(false)
-  const [versions, setVersions] = useState<TravelPlanVersion[]>([])
-  const [diff, setDiff] = useState<TravelPlanDiff | null>(null)
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyError, setHistoryError] = useState('')
   const [actionLoading, setActionLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
   const [localPlanStatus, setLocalPlanStatus] = useState(planStatus)
 
   useEffect(() => setLocalPlanStatus(planStatus), [planStatus])
-
-  const loadVersions = async () => {
-    if (historyLoading) return
-    setHistoryLoading(true)
-    setHistoryError('')
-    try {
-      const result = await fetchTravelPlanVersions(conversationId)
-      setVersions(result.versions ?? [])
-    } catch (e) {
-      setHistoryError(e instanceof Error ? e.message : '版本历史暂不可用')
-    } finally {
-      setHistoryLoading(false)
-    }
-  }
-
-  const toggleVersions = () => {
-    const next = !versionOpen
-    setVersionOpen(next)
-    if (next && versions.length === 0) void loadVersions()
-  }
 
   const confirmCurrent = async () => {
     setActionLoading(true)
@@ -794,34 +520,6 @@ export default function ItineraryView({
     }
   }
 
-  const inspectDiff = async (version: number) => {
-    setHistoryError('')
-    try {
-      setDiff(await fetchTravelPlanDiff(conversationId, version, itinerary.plan_version))
-    } catch (e) {
-      setHistoryError(e instanceof Error ? e.message : '版本差异暂不可用')
-    }
-  }
-
-  const restoreVersion = async (targetVersion: number) => {
-    setActionLoading(true)
-    setHistoryError('')
-    try {
-      const result = await restoreTravelPlan(conversationId, targetVersion, itinerary.plan_version)
-      onPlanResponse({
-        status: 'ready', final_answer: `已从 v${targetVersion} 恢复为新版本。`,
-        itinerary: result.itinerary, plan_status: result.plan_status,
-      })
-      setLocalPlanStatus(result.plan_status)
-      setVersions([])
-      setDiff(null)
-    } catch (e) {
-      setHistoryError(e instanceof Error ? e.message : '恢复失败，请刷新后重试')
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
   return (
     <div className="space-y-4">
       {notice && (
@@ -831,191 +529,159 @@ export default function ItineraryView({
         </div>
       )}
 
-      <OverviewBar
-        itinerary={itinerary}
-        planStatus={localPlanStatus}
-        exporting={exporting}
-        feedbackSent={feedbackSent}
-        onExportIcs={onExportIcs}
-        onFeedback={onFeedback}
-      />
-
-      <section className="rounded-2xl border border-[#dae7e5] bg-white shadow-card">
-        <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
-          {localPlanStatus === 'waiting_confirmation' && (
-            <button
-              type="button"
-              onClick={() => void confirmCurrent()}
-              disabled={actionLoading}
-              className="ml-auto inline-flex items-center gap-1 rounded-lg bg-[#087b73] px-2.5 py-1.5 text-[11px] text-white hover:bg-[#06655f] disabled:opacity-50"
-            >
-              <Check size={12} /> 确认当前行程
-            </button>
-          )}
+      {/* 标题行（设计稿③）：行程名 + 版本徽章 | 确认 / 导出 / 反馈 + 距出发 */}
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h2 className="text-2xl font-bold text-[#183037]">
+          {itinerary.brief.destination || '未命名目的地'} · {dayCount} 天
+        </h2>
+        <span className="rounded-full bg-[#e2f0ee] px-2.5 py-1 text-xs font-medium text-[#087b73]">
+          v{itinerary.plan_version} {localPlanStatus === 'waiting_confirmation' ? '草案' : '已确认'}
+        </span>
+        {STATUS_LABEL[itinerary.status] && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
+            {STATUS_LABEL[itinerary.status]}
+          </span>
+        )}
+        {localPlanStatus === 'waiting_confirmation' && (
           <button
             type="button"
-            onClick={toggleVersions}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#dae7e5] px-2.5 py-1.5 text-[11px] text-[#5c7074] hover:text-[#183037]"
+            onClick={() => void confirmCurrent()}
+            disabled={actionLoading}
+            className="inline-flex items-center gap-1 rounded-lg bg-[#087b73] px-2.5 py-1.5 text-[11px] text-white hover:bg-[#06655f] disabled:opacity-50"
           >
-            <History size={12} /> {versionOpen ? '收起版本' : '版本历史'}
+            <Check size={12} /> {actionLoading ? '确认中…' : '确认行程'}
           </button>
-        </div>
-        {versionOpen && (
-          <div className="border-t border-[#dae7e5] px-4 py-3">
-            {historyLoading && <p className="text-xs text-[#5c7074]">正在读取版本历史…</p>}
-            {!historyLoading && versions.length === 0 && !historyError && (
-              <p className="text-xs text-[#5c7074]">暂无可用版本历史。</p>
-            )}
-            {historyError && <p className="text-xs text-red-600">{historyError}</p>}
-            <ul className="space-y-2">
-              {versions.map((version) => (
-                <li key={version.plan_version} className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-medium text-[#183037]">v{version.plan_version}</span>
-                  <span className="text-[#7a8e8b]">{version.plan_status === 'confirmed' ? '已确认' : '待确认'}</span>
-                  <span className="min-w-0 flex-1 truncate text-[#7a8e8b]">{version.destination || '未命名行程'}</span>
-                  {version.plan_version !== itinerary.plan_version && (
-                    <>
-                      <button type="button" onClick={() => void inspectDiff(version.plan_version)} className="text-[#087b73] hover:underline">查看差异</button>
-                      <button type="button" onClick={() => void restoreVersion(version.plan_version)} disabled={actionLoading} className="inline-flex items-center gap-1 text-[#087b73] hover:underline disabled:opacity-50"><Undo2 size={11} />恢复</button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-            {diff && (
-              <div className="mt-3 rounded-lg bg-[#f5faf9] px-3 py-2 text-[10px] text-[#5c7074]">
-                v{diff.from_version} → v{diff.to_version}：新增 {diff.added.length} 项，移除 {diff.removed.length} 项，移动 {diff.moved.length} 项；需求字段变化 {diff.brief_fields.length} 项。
-              </div>
-            )}
-          </div>
         )}
-      </section>
-
-      <details className="rounded-2xl border border-[#dae7e5] bg-white px-4 py-3 shadow-card">
-        <summary className="cursor-pointer text-xs font-semibold text-[#183037]">数据说明 <span className="ml-2 font-normal text-red-600">缺失数据以红色标记</span></summary>
-        <div className="mt-2 grid gap-1 text-[11px] text-[#5c7074] sm:grid-cols-2">
-          <span className={availability.total === 'verified' ? '' : 'text-red-600'}>费用：{availability.total === 'verified' ? '已核验' : '暂无数据'}</span>
-          <span className={availability.tickets === 'verified' ? '' : 'text-red-600'}>门票：{availability.tickets === 'verified' ? '已核验' : '暂无数据'}</span>
-          <span className={routeAvailable ? '' : 'text-red-600'}>路线：{routeAvailable ? '已核验' : '暂无数据'}</span>
-          <span className={coordinatesAvailable ? '' : 'text-red-600'}>坐标：{coordinatesAvailable ? '已核验' : '暂无数据'}</span>
-        </div>
-        <p className="mt-2 text-[10px] text-[#7a8e8b]">只有返回可核验来源的字段才会显示具体数值；其余统一标记为暂无数据。</p>
-      </details>
-
-      {/* 城际班次条（B 方案）：itinerary.intercity 有数据才渲染；诚实口径注记 */}
-      {itinerary.intercity && itinerary.intercity.length > 0 && (
-        <section
-          aria-label="城际交通"
-          className="animate-fade-in rounded-2xl border border-[#dae7e5] bg-[#f5faf9] px-4 py-3 shadow-card"
-        >
-          <header className="flex flex-wrap items-center gap-2">
-            <TrainFront size={14} style={{ color: TP.accent }} aria-hidden />
-            <h3 className="text-sm font-semibold text-[#183037]">
-              城际交通 · {itinerary.intercity[0]?.from_station || ''}
-              {itinerary.intercity[0]?.from_station ? ' → ' : ''}
-              {itinerary.intercity[0]?.to_station || ''}
-            </h3>
-            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-[#5c7074]">
-              {itinerary.intercity[0]?.date || ''} · 12306 实时检索
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onExportIcs}
+              disabled={exporting}
+              title={exporting ? '导出中…' : '导出日历'}
+              aria-label="导出日历"
+              className="rounded-lg border border-[#dae7e5] p-1.5 text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037] disabled:opacity-50"
+            >
+              <CalendarPlus size={14} aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => onFeedback('positive')}
+              disabled={!!feedbackSent}
+              title="这份行程有用"
+              aria-label="这份行程有用"
+              className={`rounded-lg border p-1.5 transition-colors ${
+                feedbackSent === 'positive'
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                  : 'border-[#dae7e5] text-[#5c7074] hover:border-[#087b73]/40 hover:text-[#183037]'
+              }`}
+            >
+              <ThumbsUp size={14} aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => onFeedback('negative')}
+              disabled={!!feedbackSent}
+              title="需要改"
+              aria-label="需要改"
+              className={`rounded-lg border p-1.5 transition-colors ${
+                feedbackSent === 'negative'
+                  ? 'border-red-300 bg-red-50 text-red-700'
+                  : 'border-[#dae7e5] text-[#5c7074] hover:border-[#087b73]/40 hover:text-[#183037]'
+              }`}
+            >
+              <ThumbsDown size={14} aria-hidden />
+            </button>
+          </div>
+          {badge && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium text-white"
+              style={{ background: TP.accent }}
+            >
+              <CalendarPlus size={11} aria-hidden />
+              {badge}
             </span>
-          </header>
-          <ul className="mt-2 space-y-1.5">
-            {itinerary.intercity.map((train, index) => {
-              const seatsText = Object.entries(train.seats ?? {})
-                .slice(0, 2)
-                .map(([seat, left]) => `${seat} ${String(left)}`)
-                .join(' · ')
-              const priceText = Object.entries(train.prices ?? {})
-                .slice(0, 2)
-                .map(([seat, price]) => {
-                  const raw = String(price)
-                  return `${seat} ${/^\d+(\.\d+)?$/.test(raw) ? `¥${raw}` : raw}`
-                })
-                .join(' · ')
-              return (
-                <li key={`${train.train_no}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-lg bg-white px-3 py-1.5 text-xs text-[#183037]">
-                  <span className="font-semibold">{train.train_no}</span>
-                  <span className="font-mono tabular-nums text-[#5c7074]">
-                    {train.start_time || '--'} → {train.arrive_time || '--'}
+          )}
+        </div>
+      </header>
+      {historyError && <p className="text-xs text-red-600">{historyError}</p>}
+
+      {/* 设计稿③：日卡片条（横向滚动、选中描边）+ 一张大卡（当日亮点 / 当天出发 / 时间轴|地图双列） */}
+      {dayCount > 1 && (
+        <div
+          role="tablist"
+          aria-label="行程日期"
+          className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]"
+        >
+          {itinerary.days.map((d, index) => (
+            <DayTabCard
+              key={d.day_index}
+              day={d}
+              selected={d.day_index === activeDay}
+              onSelect={setSelectedDay}
+              index={index}
+            />
+          ))}
+        </div>
+      )}
+      {activeDayData && (
+        <section
+          className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card sm:p-5"
+          aria-label={`第 ${activeDay} 天行程`}
+        >
+          {/* 当日亮点：选中天的第一眼摘要（地点/美食/提示），随日卡片切换联动 */}
+          {dayHighlights.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5" aria-label={`第 ${activeDay} 天亮点`}>
+              <span className="text-xs font-medium text-[#5c7074]">当日亮点</span>
+              {dayHighlights.map((chip) => (
+                <span
+                  key={chip.text}
+                  className={`animate-fade-in rounded-full px-2 py-0.5 text-[11px] ${
+                    chip.tone === 'spot'
+                      ? 'bg-[#e2f0ee] text-[#087b73]'
+                      : chip.tone === 'meal'
+                        ? 'bg-[#fdf1e0] text-[#b4690e]'
+                        : 'bg-[#f5faf9] text-[#5c7074]'
+                  }`}
+                >
+                  {chip.text}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* 当天出发：城际班次（12306 实时检索，有数据才显示） */}
+          {intercity && (
+            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-[#f5faf9] px-3.5 py-2.5">
+              <TrainFront size={14} style={{ color: TP.accent }} aria-hidden />
+              <span className="text-xs font-semibold text-[#183037]">当天出发</span>
+              <span className="text-xs text-[#183037]">
+                <span className="font-semibold">{intercity.train_no}</span>
+                {' '}{intercity.from_station} {intercity.start_time || '--'} → {intercity.to_station} {intercity.arrive_time || '--'}
+                {intercitySeat && (
+                  <span className="ml-1">
+                    · {intercitySeat[0]} {/^\d+(\.\d+)?$/.test(String(intercitySeat[1])) ? `¥${intercitySeat[1]}` : intercitySeat[1]}
                   </span>
-                  {train.duration && <span className="text-[#5c7074]">{train.duration}</span>}
-                  <span className="ml-auto text-[11px] text-[#5c7074]">
-                    {seatsText || <span className="text-[#b3a48f]">余票 --</span>}
-                    {priceText && <span className="ml-2 font-medium text-[#087b73]">{priceText}</span>}
-                  </span>
-                </li>
-              )
-            })}
-          </ul>
-          <p className="mt-1.5 text-[10px] text-[#8c7258]">
-            余票与票价来自 12306 非官方聚合源，可能延迟；票价仅实时查询前 2 个车次，购票请以 12306 官方为准。
-          </p>
+                )}
+              </span>
+              <span className="rounded-full bg-[#e2f0ee] px-2 py-0.5 text-[10px] text-[#087b73]">12306 已核实</span>
+              <span className="w-full text-[10px] text-[#8c7258]">
+                余票与票价来自 12306 非官方聚合源，可能延迟；购票请以 12306 官方为准。
+              </span>
+            </div>
+          )}
+
+          {/* 双列：时间轴 | 路线地图 */}
+          <div className="grid items-start gap-3 xl:grid-cols-2">
+            <DayCard day={activeDayData} />
+            <RouteMap itinerary={itinerary} selectedDay={activeDay} />
+          </div>
         </section>
       )}
 
-      {/* 日卡片条（可切换）+ 当日重点详情：左列时间轴/地点/用餐，右列当天地图 */}
-      <section aria-label="按天查看">
-        {dayCount > 1 && (
-          <div
-            role="tablist"
-            aria-label="行程日期"
-            className="mb-3 flex gap-2 overflow-x-auto pb-1.5 [scrollbar-width:thin]"
-          >
-            {itinerary.days.map((d, index) => (
-              <DayTabCard
-                key={d.day_index}
-                day={d}
-                selected={d.day_index === activeDay}
-                onSelect={setSelectedDay}
-                index={index}
-              />
-            ))}
-          </div>
-        )}
-        {activeDayData && (
-          <header className="mb-2.5 flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-[#183037]">
-              第 {activeDayData.day_index} 天行程
-            </h3>
-            <span className="text-[11px] text-[#5c7074]">{formatDayDate(activeDayData.day_date)}</span>
-            <span className="rounded-full bg-[#f5faf9] px-2 py-0.5 text-[10px] text-[#5c7074]">
-              活动 {activeDayData.active_minutes}′ · 在途 {activeDayData.transit_minutes}′
-            </span>
-          </header>
-        )}
-        {/* 当日亮点：选中天的第一眼摘要（地点/美食/提示），随日卡片切换联动 */}
-        {activeDayData && dayHighlights.length > 0 && (
-          <div className="mb-2.5 flex flex-wrap items-center gap-1.5" aria-label={`第 ${activeDay} 天亮点`}>
-            <span className="text-[11px] font-medium text-[#5c7074]">当日亮点</span>
-            {dayHighlights.map((chip) => (
-              <span
-                key={chip.text}
-                className={`animate-fade-in rounded-full px-2 py-0.5 text-[11px] ${
-                  chip.tone === 'spot'
-                    ? 'bg-[#e2f0ee] text-[#087b73]'
-                    : chip.tone === 'meal'
-                      ? 'bg-[#fdf1e0] text-[#b4690e]'
-                      : 'bg-[#f5faf9] text-[#5c7074]'
-                }`}
-              >
-                {chip.text}
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1.02fr)_minmax(320px,.98fr)]">
-          <div className="space-y-3">
-            {activeDayData && <DayCard day={activeDayData} />}
-            {activeDayData && <DaySpotCards day={activeDayData} />}
-            {activeDayData && <DayMealSection day={activeDayData} />}
-          </div>
-          <RouteMap itinerary={itinerary} selectedDay={activeDay} />
-        </div>
-      </section>
-
       {itinerary.warnings.length > 0 && (
         // 出行须知默认折叠：内容全是「数据源未接入」的兜底说明，逐条平铺
-        // 会把逐日行程挤下屏；degraded 的行程级警示不在这里，已挂概览条角标。
+        // 会把逐日行程挤下屏；degraded 的行程级警示不在这里，已挂标题行角标。
         <details className="group animate-fade-in rounded-2xl border border-[#dae7e5] bg-white shadow-card">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-3 text-sm font-semibold text-[#5c7074] transition-colors hover:text-[#183037] [&::-webkit-details-marker]:hidden">
             <ListChecks size={14} className="text-amber-600" aria-hidden />
@@ -1031,17 +697,6 @@ export default function ItineraryView({
           <ul className="list-inside list-disc space-y-1 border-t border-[#dae7e5] px-4 py-3 text-sm text-[#5c7074]">
             {itinerary.warnings.map((w, i) => <li key={i}>{w}</li>)}
           </ul>
-        </details>
-      )}
-
-      {finalAnswer && (
-        <details className="rounded-2xl border border-[#dae7e5] bg-white px-4 py-3 shadow-card">
-          <summary className="cursor-pointer text-sm text-[#5c7074]">
-            查看完整行程单（文本版，可复制发同行人）
-          </summary>
-          <div className="mt-3 text-sm">
-            <MarkdownContent content={finalAnswer} />
-          </div>
         </details>
       )}
     </div>

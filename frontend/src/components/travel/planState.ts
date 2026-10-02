@@ -209,6 +209,16 @@ export function rotateConversationId(): string {
   return id
 }
 
+/**
+ * 收养已有线程（= 恢复一份历史规划）：当前会话切到既有 conversation，
+ * 只换持久化指向、不产生新 id。后续「助手改单」会继续在该线程上出新版本，
+ * 与后端版本账本/checkpointer 的会话归属保持一致。
+ */
+export function adoptConversationId(id: string): string {
+  persist(id)
+  return id
+}
+
 // ── 展示小工具 ────────────────────────────────────────────────
 
 export const PACE_LABEL: Record<string, string> = {

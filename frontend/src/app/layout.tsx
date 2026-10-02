@@ -12,12 +12,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const pathname = usePathname()
 
-  // /agent 走任务模式：全局控制台导航让位给页面自渲染的 TaskSidebar
-  // （业务入口常驻上半区「全部功能」折叠组，会话历史在下半区；
+  // /agent 与 /travel 走任务模式：全局控制台导航让位给页面自渲染的 TaskSidebar
+  // （业务入口常驻上半区「全部功能」折叠组，会话/规划历史在下半区；
   //   两处侧栏均从 navConfig 的 NAV 数组渲染，故 NAV 加项即两处同时生效）。
+  // /travel 2026-10-02 加入：旅游页复用同一套侧栏（历史区=历史规划列表）。
   // 用精确匹配而非 startsWith，避免子路径误判（2026-09-30 修正过期注释：
   // 原文提到的 /agent/tasks 页面目录已于 09-21 裁撤）。
-  const isTaskMode = pathname === '/agent'
+  const isTaskMode = pathname === '/agent' || pathname === '/travel'
   // 登录页 / 注册页 / 统一门户主页 独立呈现：不渲染全局侧边栏与移动端 tab
   // （AuthGate 同样对这些路径放行）。用精确匹配，避免误伤 /login-xxx 之类子路径。
   const isStandalone =

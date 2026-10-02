@@ -75,7 +75,7 @@ describe('daysUntil / departureBadge', () => {
     // toISOString 是 UTC——跨时区可能差一天，构造本地 ISO 更稳
     const localIso = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`
     expect(daysUntil(localIso)).toBe(3)
-    expect(departureBadge(localIso)).toBe('3 天后出发')
+    expect(departureBadge(localIso)).toBe('距出发 3 天')
     void iso
   })
   it('今天出发 → 0 天与「今天出发」', () => {
