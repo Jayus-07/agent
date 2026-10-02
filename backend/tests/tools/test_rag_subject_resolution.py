@@ -18,15 +18,17 @@ from backend.core import request_context as rc
 
 @pytest.fixture()
 def captured(monkeypatch):
-    """捕获 pipeline.ask 收到的主体参数；pipeline 本体不执行。"""
+    """捕获 pipeline.ask_result 收到的主体参数；pipeline 本体不执行。"""
     got: dict = {}
 
     class _FakePipeline:
-        def ask(self, question, session_id="default", kb_id="default",
-                subject_type="", department="", permissions=None, **kw):
+        def ask_result(self, question, session_id="default", kb_id="default",
+                       subject_type="", department="", permissions=None, **kw):
             got.update({"subject_type": subject_type, "department": department,
                         "kb_id": kb_id})
-            return "ok"
+            # 工具消费 outcome.answer/answer_meta（2026-10-03 RAGMETA 标记）
+            from backend.rag.pipeline import AskOutcome
+            return AskOutcome(answer="ok", sources=[], answer_meta={})
 
     monkeypatch.setattr(rag_tool_mod, "_get_rag_pipeline", lambda: _FakePipeline())
     return got

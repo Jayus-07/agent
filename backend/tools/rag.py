@@ -75,7 +75,9 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     outcome = pipeline.ask_result(question, session_id=sid, kb_id=kb_id,
                                   subject_type=principal.subject_type,
                                   department=principal.department,
-                                  permissions=principal.permissions)
+                                  permissions=principal.permissions,
+                                  user_id=get_tool_user_id(),
+                                  tenant_id=get_tool_tenant_id())
     result = append_rag_answer_meta(outcome.answer, outcome.answer_meta)
     logger.info(f"[Tool:search_knowledge] 返回 len={len(result or '')} repr_head={repr((result or '')[:40])}")
     return result
