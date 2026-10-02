@@ -4,10 +4,12 @@
 而是按本地估算直接结算（cost_status='estimated'）——能估算的不留疑，
 真正无法估算的（调用失败且无任何输出）才进待对账。
 
-估算口径（零依赖，字符统计启发式）：按 DeepSeek 官方文档的近似换算率——
-1 个中日韩字符 ≈ 0.6 token，1 个其他字符（英文/数字/半角标点）≈ 0.25 token。
-这是近似值（差在 reasoning/cache token 与 provider 分词差异），因此估算结果
-必须始终以 estimated 标记落库，聚合口径与供应商报表 diff 才能识别系统性漂移。
+估算口径（零依赖，中英混合字符统计启发式）：1 个中日韩字符 ≈ 0.6 token、
+1 个英文/半角字符 ≈ 0.25 token。这是各家 tokenizer 对中英文的通用近似量级
+——平台模型由 DB 注册表按角色配置（MiniMax/Qwen/豆包等多供应商并存），
+本地没有也不缓存各模型 tokenizer，字符近似是唯一跨供应商可行的兜底；
+换算误差不追求精确，由 estimated 标记显式暴露，系统性漂移由对账日报
+与用量聚合监控。
 
 只用字符构成计数、不缓存文本：流式增量 add() 零内存膨胀，长流安全。
 """
@@ -15,7 +17,9 @@ from __future__ import annotations
 
 import math
 
-# DeepSeek 官方近似换算率（token/字符）
+# 中英混合字符近似换算率（token/字符）：中日韩 ≈0.6、英文/半角 ≈0.25。
+# 跨供应商通用近似（模型清单来自 DB 注册表，不绑定任何一家）；
+# 估算精度由 estimated 标记暴露，不在此处伪装精确。
 _TOKENS_PER_CJK_CHAR = 0.6
 _TOKENS_PER_OTHER_CHAR = 0.25
 
