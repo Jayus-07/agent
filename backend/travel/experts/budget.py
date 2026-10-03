@@ -117,7 +117,8 @@ def budget_expert_node(state: dict) -> dict:
                     itinerary.cost.total, itinerary.cost.model_dump())
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(itinerary),
-                         "cost": itinerary.cost.model_dump()},
+                         "cost": itinerary.cost.model_dump(),
+                         "negotiation": negotiation},
                 "notes": notes}
 
     result = run_expert_safely("budget", _run, state)
@@ -134,7 +135,8 @@ def budget_expert_node(state: dict) -> dict:
     }
     if data.get("itinerary"):
         update["itinerary"] = data["itinerary"]
+    negotiation = data.get("negotiation")
     if negotiation:
         update["budget_negotiation"] = negotiation
-        update["notes"] = list(update.get("notes", [])) + [negotiation["note"]]
+        update["notes"] = list(update.get("notes", [])) + [negotiation.get("note", "")]
     return update
