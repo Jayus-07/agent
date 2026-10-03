@@ -40,6 +40,9 @@ KNOWLEDGE_BASES: Dict[str, dict] = {
     "cs_aftersales":  {"name": "售后知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
     "cs_complaint":   {"name": "投诉处理知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
     "cs_scripts":     {"name": "话术知识库", "domain": "customer_service", "owner_depts": ["customer"], "audience": "customer"},
+    # 旅游域独立知识库（2026-10-03）：旅游助手检索默认指 kb_id=travel，
+    # 内容对客输出（audience=customer）——介绍类语料无部门归属，owner 放开
+    "travel":         {"name": "旅游知识库", "domain": "travel",       "owner_depts": ["all"], "audience": "customer"},
 }
 
 

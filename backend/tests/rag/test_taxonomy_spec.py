@@ -16,7 +16,8 @@ from backend.rag.preprocessing.taxonomy_spec import (
 def test_taxonomy_has_existing_doc_types_and_domains():
     taxonomy = get_taxonomy()
 
-    assert len(taxonomy.doc_types) == 14
+    # 2026-10-03 枚举扩展：+travel_guide（旅游攻略，旅游域语料分类）
+    assert len(taxonomy.doc_types) == 15
     assert set(taxonomy.doc_types) == set(DOC_TYPES)
     assert set(taxonomy.domains) == set(DOMAINS)
 

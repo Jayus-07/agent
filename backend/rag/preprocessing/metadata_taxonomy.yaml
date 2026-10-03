@@ -1711,6 +1711,41 @@
         }
       ]
     },
+    "travel_guide": {
+      "description": "旅游攻略、景点美食介绍与行程指南",
+      "rules": [
+        {
+          "rule_id": "doc_type.travel_guide.001",
+          "pattern": "【[^】]{1,16}·(景点|美食|特色|城市)】",
+          "weight": 10
+        },
+        {
+          "rule_id": "doc_type.travel_guide.002",
+          "pattern": "旅游攻略|自由行|自驾游|一日游",
+          "weight": 8
+        },
+        {
+          "rule_id": "doc_type.travel_guide.003",
+          "pattern": "景区|景点",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.travel_guide.004",
+          "pattern": "特色美食|必吃|名小吃",
+          "weight": 5
+        },
+        {
+          "rule_id": "doc_type.travel_guide.005",
+          "pattern": "门票|建议游玩|游玩时长",
+          "weight": 4
+        },
+        {
+          "rule_id": "doc_type.travel_guide.006",
+          "pattern": "行程|出游",
+          "weight": 3
+        }
+      ]
+    },
     "general": {
       "description": "无法稳定归入其他类型的通用文档",
       "rules": []
@@ -1894,6 +1929,21 @@
         "公积金": 2,
         "培训": 2,
         "工牌": 2
+      }
+    },
+    "travel": {
+      "description": "旅游目的地、景点、美食与出行",
+      "rules": {
+        "旅游": 3,
+        "景点": 3,
+        "景区": 3,
+        "攻略": 2,
+        "美食": 2,
+        "门票": 2,
+        "游玩": 2,
+        "行程": 2,
+        "自驾游": 2,
+        "自由行": 2
       }
     },
     "general": {

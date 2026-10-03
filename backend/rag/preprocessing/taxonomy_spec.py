@@ -93,6 +93,7 @@ DOC_TYPE_LABELS: Mapping[str, str] = {
     "financial": "财务",
     "customer_data": "客户数据",
     "contract_template": "合同模板",
+    "travel_guide": "旅游攻略",
 }
 
 
