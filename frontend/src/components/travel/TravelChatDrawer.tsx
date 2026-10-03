@@ -113,6 +113,8 @@ interface Props {
   introMessage?: string
   /** 首轮规划的结构化说明（页面 planState.plan.rationale 传入） */
   introRationale?: RationaleData | null
+  /** M3-h 聊天 chip 唤起城市指南抽屉 */
+  onOpenCityGuide?: () => void
   /** M1 三态移交：空态规划卡发送的那句话，作为第一条用户气泡出现在聊天流 */
   handoverUserMessage?: string | null
 }
@@ -125,7 +127,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
-  introMessage = '', introRationale = null, handoverUserMessage = null,
+  introMessage = '', introRationale = null, handoverUserMessage = null, onOpenCityGuide,
 }: Props, ref) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
@@ -352,8 +354,8 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   // M2-h 快捷话术（2026-10-03 拍板四条；目的地/天数来自真实 brief/activeDay）
   const quickChips = useMemo(() => {
     const dest = (brief?.destination || '').trim()
-    const chips: Array<{ key: string; label: string; text: string }> = []
-    if (dest) chips.push({ key: 'guide', label: `介绍下${dest}特色`, text: `介绍下${dest}特色，适合玩几天、有什么必吃必逛` })
+    const chips: Array<{ key: string; label: string; text: string; cityGuide?: boolean }> = []
+    if (dest) chips.push({ key: 'guide', label: `介绍下${dest}特色`, cityGuide: true, text: `介绍下${dest}特色，适合玩几天、有什么必吃必逛` })
     if (hasItinerary && activeDay != null) chips.push({ key: 'crowded', label: `第 ${activeDay} 天太挤了`, text: `第 ${activeDay} 天太挤了，帮我排松一点` })
     chips.push({ key: 'hotel', label: '想住得离海近一点', text: '想住得离海近一点，帮我调整住宿' })
     chips.push({ key: 'budget', label: '预算调到 ¥2000', text: '预算调到 2000，帮我重排行程' })
@@ -674,7 +676,10 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                 key={chip.key}
                 type="button"
                 disabled={Boolean(pendingResponse)}
-                onClick={() => void send(chip.text)}
+                onClick={() => {
+                  if (chip.cityGuide) { onOpenCityGuide?.(); return }
+                  void send(chip.text)
+                }}
                 className="cursor-pointer rounded-full border border-[#dae7e5] bg-white px-2.5 py-1 text-[11px] text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#087b73] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {chip.label}

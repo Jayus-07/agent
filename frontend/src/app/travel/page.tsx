@@ -27,11 +27,12 @@
  * 后端契约、不引依赖；后端没有分步进度 API，生成中只显示等待状态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
+import { AlertCircle, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import TravelChatDrawer, { type TravelChatDrawerHandle } from '@/components/travel/TravelChatDrawer'
+import CityGuideDrawer from '@/components/travel/CityGuideDrawer'
 import TravelPlanList from '@/components/travel/TravelPlanList'
 import TaskSidebar from '@/components/agent/TaskSidebar'
 import SidebarRail from '@/components/agent/SidebarRail'
@@ -151,6 +152,8 @@ export default function TravelPage() {
   // M2-g 出域轮无 itinerary，若右栏按「有行程才挂载」会连对话带引导卡一起卸载——
   // 本线程发过消息即视为对话已激活，右栏常驻
   const [chatActivated, setChatActivated] = useState(false)
+  // M3-h 城市指南抽屉（顶栏书本图标 / 聊天 chip 唤起）
+  const [cityGuideOpen, setCityGuideOpen] = useState(false)
 
   // ── 结果与线程 ──
   const [conversationId, setConversationId] = useState(readConversationId)
@@ -556,6 +559,16 @@ export default function TravelPage() {
           )}
           <Plane size={16} className="text-[#087b73]" aria-hidden />
           <span className="text-sm font-semibold text-[#183037]">行程规划</span>
+          {/* M3-h 城市指南入口（常驻，空态可点；内容随 brief 目的地） */}
+          <button
+            type="button"
+            onClick={() => setCityGuideOpen(true)}
+            title="城市指南"
+            aria-label="城市指南"
+            className="cursor-pointer rounded-lg p-1.5 text-[#087b73] transition-colors hover:bg-[#e2f0ee]"
+          >
+            <BookOpen size={15} aria-hidden />
+          </button>
           {/* M2 布局反馈：条件 chips 并入顶栏（原独立条件条省掉一行高度） */}
           {hasLeftRail && (
             <TripConditionsChips
@@ -687,6 +700,13 @@ export default function TravelPage() {
                   replaceCandidates={replaceCandidates}
                   onRequestReplace={handleRequestReplace}
                   onAskNearby={(text) => chatRef.current?.send(text)}
+                  tier={itinerary.brief.tier || 'economy'}
+                  budgetNegotiation={planState.plan?.rationale?.budget_negotiation ?? null}
+                  onTierChange={(t) => chatRef.current?.send(
+                    t === 'comfortable'
+                      ? '方案切换成舒适均衡型，帮我重排（住宿餐饮升档，尽量不超预算）'
+                      : '方案切换成经济实用型，帮我重排（省钱优先）'
+                  )}
                   />
                 </>
               ) : loading ? (
@@ -701,7 +721,7 @@ export default function TravelPage() {
             {/* ── 右栏：旅行助手（设计稿态1 无助手栏；生成中/有行程才出现） ── */}
             {isWide && hasRightRail && (
               <aside className="min-w-0 min-h-0">
-                <TravelChatDrawer ref={chatRef} mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} introRationale={planState.plan?.rationale ?? null} {...assistantProps} />
+                <TravelChatDrawer ref={chatRef} mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} introRationale={planState.plan?.rationale ?? null} onOpenCityGuide={() => setCityGuideOpen(true)} {...assistantProps} />
               </aside>
             )}
           </div>
@@ -748,6 +768,14 @@ export default function TravelPage() {
           </aside>
         </div>
       )}
+
+      {/* M3-h 城市指南抽屉（顶栏/聊天 chip 唤起；onAsk 兜底出口走聊天管线） */}
+      <CityGuideDrawer
+        open={cityGuideOpen}
+        onClose={() => setCityGuideOpen(false)}
+        destination={itinerary?.brief.destination || destination}
+        onAsk={(text) => { setCityGuideOpen(false); chatRef.current?.send(text) }}
+      />
 
       {/* 窄屏（<md 无侧栏）历史规划浮层：与侧栏列表同一数据组件 */}
       <TravelHistorySheet

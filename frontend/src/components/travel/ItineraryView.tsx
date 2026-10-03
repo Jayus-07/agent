@@ -876,6 +876,18 @@ export interface ItineraryViewProps {
   onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
   /** M2.5 就近唤醒/联动代发：经聊天管线发话 */
   onAskNearby?: (text: string) => void
+  /** M3-e 当前档位（brief.tier 缺省 economy） */
+  tier?: string
+  /** M3-e 切换档位 → 代发重排（草案 diff 确认） */
+  onTierChange?: (tier: 'economy' | 'comfortable') => void
+  /** M3-f 预算协商（rationale.budget_negotiation） */
+  budgetNegotiation?: {
+    tier_downgraded?: boolean
+    economy_total_cny?: number
+    floor_total_cny?: number
+    gap_cny?: number
+    note?: string
+  } | null
   planStatus?: string
   /** 追问 / 失败提示：有行程时也展示，不顶掉行程 */
   notice?: string
@@ -891,7 +903,7 @@ export interface ItineraryViewProps {
 export default function ItineraryView({
   itinerary, conversationId, planStatus = '', notice, exporting = false,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
-  replaceCandidates, onRequestReplace, onAskNearby,
+  replaceCandidates, onRequestReplace, onAskNearby, tier, onTierChange, budgetNegotiation,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
   // 受控优先（页面要跟右侧助手共享选中天）；未传时退回内部自管。
@@ -971,6 +983,37 @@ export default function ItineraryView({
         </div>
       )}
 
+      {/* M3-f 预算协商：自动降档明示 / 缺口卡（勾选删减由聊天管线承接） */}
+      {budgetNegotiation && (
+        <section
+          className={budgetNegotiation.tier_downgraded
+            ? 'animate-fade-in rounded-2xl border border-[#e6d3ab] bg-[#fffaf0] p-4'
+            : 'animate-fade-in rounded-2xl border border-amber-200 bg-amber-50 p-4'}
+          aria-label="预算协商"
+        >
+          {budgetNegotiation.tier_downgraded ? (
+            <>
+              <p className="text-xs font-semibold text-[#8c5a10]">已自动切换为经济实用型</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-[#8c7258]">{budgetNegotiation.note}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-xs font-semibold text-amber-900">预算缺口：当前安排排不出来</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-900">{budgetNegotiation.note}</p>
+              {budgetNegotiation.floor_total_cny != null && (
+                <p className="mt-1 text-[11px] text-amber-900">
+                  最低可行预算约 <b>¥{budgetNegotiation.floor_total_cny.toLocaleString()}</b>
+                  {budgetNegotiation.gap_cny != null && budgetNegotiation.gap_cny > 0 && <>（缺口 ¥{budgetNegotiation.gap_cny.toLocaleString()}）</>}
+                </p>
+              )}
+              <p className="mt-1.5 text-[11px] leading-relaxed text-amber-800">
+                可以说「去掉第 X 天」「不去 XX」「改成 2 天」，或上调预算后重排。
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
       {/* 标题行（设计稿③）：行程名 + 版本徽章 | 确认 / 导出 / 反馈 + 距出发 */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 className="text-2xl font-bold text-[#183037]">
@@ -979,6 +1022,28 @@ export default function ItineraryView({
         <span className="rounded-full bg-[#e2f0ee] px-2.5 py-1 text-xs font-medium text-[#087b73]">
           v{itinerary.plan_version} {localPlanStatus === 'waiting_confirmation' ? '草案' : '已确认'}
         </span>
+        {/* M3-e 档位切换器：切换 → 代发重排 → 草案 diff 确认（apply 走聊天管线） */}
+        {onTierChange && (
+          <span className="inline-flex items-center overflow-hidden rounded-lg border border-[#dae7e5]" role="group" aria-label="方案档位">
+            {(['economy', 'comfortable'] as const).map((t) => {
+              const active = (tier || 'economy') === t
+              const label = t === 'economy' ? '经济实用型' : '舒适均衡型'
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => { if (!active) onTierChange(t) }}
+                  aria-pressed={active}
+                  className={`cursor-pointer px-2.5 py-1 text-[11px] transition-colors ${
+                    active ? 'bg-[#087b73] text-white' : 'bg-white text-[#5c7074] hover:bg-[#f5faf9]'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </span>
+        )}
         {STATUS_LABEL[itinerary.status] && (
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
             {STATUS_LABEL[itinerary.status]}

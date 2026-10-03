@@ -90,6 +90,8 @@ export interface ItineraryBrief {
   avoid: string[];
   /** 节奏档位 relaxed / moderate / intense */
   pace: string;
+  /** 方案档位（M3-e）：economy | comfortable */
+  tier?: string;
   /** 饮食忌口（如「不吃辣」） */
   diet: string;
   lodging: string;
@@ -156,6 +158,14 @@ export interface RationaleData {
   pace_rule?: string
   version_note?: string
   _has_decision_required?: boolean
+  /** M3-f 预算协商（自动降档 / 缺口卡数据） */
+  budget_negotiation?: {
+    tier_downgraded?: boolean
+    economy_total_cny?: number
+    floor_total_cny?: number
+    gap_cny?: number
+    note?: string
+  }
 }
 
 export interface PlanResponse {
@@ -170,6 +180,23 @@ export interface PlanResponse {
   intent?: string;
   plan_status?: 'waiting_confirmation' | 'confirmed' | string;
   change_record?: Record<string, unknown> | null;
+}
+
+export interface CityGuide {
+  destination: string;
+  source_level: 1 | 2 | 3 | 4;
+  status: 'ok' | 'empty';
+  note: string;
+  summary: { title: string; doc_id: string; summary: string } | null;
+  tips: string[];
+  guides: Array<Record<string, unknown>>;
+}
+
+/** 城市指南（M3-g）：缓存优先，四级内容链 */
+export async function fetchCityGuide(destination: string, opts?: { force?: boolean; signal?: AbortSignal }): Promise<CityGuide> {
+  const params = new URLSearchParams({ destination });
+  if (opts?.force) params.set('force', 'true');
+  return request(`/api/travel/city-guide?${params.toString()}`, { signal: opts?.signal }) as Promise<CityGuide>;
 }
 
 export interface TravelPlanVersion {
