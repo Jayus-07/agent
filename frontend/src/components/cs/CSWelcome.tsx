@@ -26,8 +26,21 @@ export default function CSWelcome({
           <Headphones size={28} className="text-accent" />
         </div>
         <h2 className="text-base font-semibold text-text-primary mb-1.5">智能客服中心</h2>
-        <p className="text-xs text-text-muted leading-relaxed mb-5">
+        {/* AI 身份告知（生成式 AI 管理办法）：开场显著标识 AI 属性，转人工入口见下方常驻横条 */}
+        <div className="mb-2.5">
+          <span
+            data-testid="cs-ai-badge"
+            className="inline-flex items-center px-2 py-0.5 rounded-full
+              bg-accent/10 text-accent text-[10px] font-medium"
+          >
+            AI 智能客服
+          </span>
+        </div>
+        <p className="text-xs text-text-muted leading-relaxed mb-1.5">
           您好，我是 AI 客服助手，可以帮您查询订单、追踪物流、处理退款等。请问有什么可以帮您？
+        </p>
+        <p className="text-[10px] text-text-muted/80 leading-relaxed mb-5">
+          回复内容由 AI 生成，仅供参考；重要操作请以人工客服确认为准。
         </p>
         {DEMO_MODE && (
           <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-4">

@@ -63,6 +63,14 @@ function CSMessageBubbleImpl({ message, currentNode, isLast }: Props) {
       </div>
       <div className="flex-1 min-w-0 max-w-[80%]">
         <div className="bg-surface-base border border-border-subtle rounded-2xl rounded-tl-md px-4 py-3 text-sm text-text-primary leading-relaxed">
+          {/* AI 身份告知（生成式 AI 管理办法）：每条 AI 回复显著标识，与人工客服标签对位 */}
+          <div
+            data-testid="cs-ai-label"
+            className="text-[10px] text-text-muted mb-1 font-medium"
+            title="本条回复由人工智能生成，仅供参考"
+          >
+            AI 客服 · 由人工智能生成
+          </div>
           {isCurrentStreaming ? (
             <StreamingContent useDeltaText={useCSDelta} />
           ) : message.content ? (
