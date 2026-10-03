@@ -142,6 +142,9 @@ class TravelGraphState(TypedDict, total=False):
     # === 输出 ===
     final_answer: str
     travel_context: dict
+    # M2：结构化「为什么这样排」（reporter 产出 → PlanResponse.rationale）。
+    # 必须入 schema——LangGraph 会剥离 schema 外的更新键（AGENTS.md 同款教训）。
+    rationale: dict
     finished: bool
 
 

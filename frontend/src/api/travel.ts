@@ -143,7 +143,24 @@ export interface TravelClarificationOption {
   message: string;
 }
 
+/** 结构化「为什么这样排」（后端 reporter._build_rationale，M2 验收反馈拍板形态） */
+export interface RationaleData {
+  headline?: { days?: number; spots?: number; must_go?: string[] }
+  tradeoffs?: {
+    dropped?: Array<{ name: string; reason: string }>
+    kept_required?: string[]
+    unscheduled?: string[]
+    unscheduled_extra?: number
+  }
+  verified?: string[]
+  pace_rule?: string
+  version_note?: string
+  _has_decision_required?: boolean
+}
+
 export interface PlanResponse {
+  /** 结构化规划说明；旧数据/降级无此字段 → 前端回退 Markdown */
+  rationale?: RationaleData;
   /** success | answered | needs_clarification | needs_user_decision | failed */
   status: string;
   final_answer: string;

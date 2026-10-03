@@ -37,6 +37,7 @@ import BudgetRing from '@/components/chat/BudgetRing'
 import type { BudgetStatus } from '@/api/budgets'
 import MarkdownContent from '@/components/chat/MarkdownContent'
 import ToolProcessRows from './ToolProcessRows'
+import RationaleCard, { type RationaleData } from './RationaleCard'
 import { useTypewriter } from './useTypewriter'
 import { describePlanReply, sanitizeTravelReply } from './planState'
 import {
@@ -48,6 +49,8 @@ interface ChatMsg {
   text: string
   tag?: string
   tone?: 'ok' | 'warn'
+  /** M2：结构化「为什么这样排」（后端 PlanResponse.rationale），有值时渲染 RationaleCard */
+  rationale?: RationaleData
 }
 
 /**
@@ -108,6 +111,8 @@ interface Props {
   /** 出单后的首条助手消息（2026-10-03）：reporter 的规划说明全文
    *（为什么这样排/美食推荐/需要你确认），表单直出路径此前完全不展示 */
   introMessage?: string
+  /** 首轮规划的结构化说明（页面 planState.plan.rationale 传入） */
+  introRationale?: RationaleData | null
   /** M1 三态移交：空态规划卡发送的那句话，作为第一条用户气泡出现在聊天流 */
   handoverUserMessage?: string | null
 }
@@ -120,7 +125,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
-  introMessage = '', handoverUserMessage = null,
+  introMessage = '', introRationale = null, handoverUserMessage = null,
 }: Props, ref) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
@@ -240,6 +245,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           ),
           tag: data.itinerary ? `预览中 · v${data.itinerary.plan_version}` : tag,
           tone: data.itinerary ? 'ok' : tone,
+          rationale: (data as { rationale?: RationaleData }).rationale || undefined,
         },
       ])
       if (data.itinerary) {
@@ -335,11 +341,14 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   // 用户先提问、后出说明；说明之后再来的对话按原顺序追加。
   const visibleMessages = useMemo<ChatMsg[]>(() => {
     if (!introMessage.trim()) return messages
-    const intro: ChatMsg = { role: 'assistant', text: introMessage.trim(), tag: '规划说明' }
+    const intro: ChatMsg = {
+      role: 'assistant', text: introMessage.trim(), tag: '规划说明',
+      rationale: introRationale ?? undefined,
+    }
     const firstAssistant = messages.findIndex((m) => m.role === 'assistant')
     const cut = firstAssistant === -1 ? messages.length : firstAssistant
     return [...messages.slice(0, cut), intro, ...messages.slice(cut)]
-  }, [introMessage, messages])
+  }, [introMessage, introRationale, messages])
   // M2-h 快捷话术（2026-10-03 拍板四条；目的地/天数来自真实 brief/activeDay）
   const quickChips = useMemo(() => {
     const dest = (brief?.destination || '').trim()
@@ -374,7 +383,15 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                       ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
                       : 'border border-[#dae7e5] bg-white text-[#183037]'
                   }`}>
-                    {m.role === 'user' ? (
+                    {m.role === 'assistant' && m.rationale && Object.keys(m.rationale).length > 0 ? (
+                      <RationaleCard
+                        rationale={m.rationale}
+                        processState={processState}
+                        itinerary={itinerary}
+                        pace={String((processState?.requirement?.brief as Record<string, unknown> | undefined)?.pace ?? '')}
+                        onAsk={(t) => void send(t)}
+                      />
+                    ) : m.role === 'user' ? (
                       <p className="whitespace-pre-wrap break-words">{m.text}</p>
                     ) : isLong ? (
                       <details>

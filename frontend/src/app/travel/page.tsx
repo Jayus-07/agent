@@ -188,7 +188,8 @@ export default function TravelPage() {
     chatRef.current?.send(`把第 ${dayIndex} 天的「${itemTitle}」换成「${candidateName}」，其他安排尽量保持不变`)
   }, [])
   // 左侧任务栏（与 /agent 同一套 TaskSidebar，travel 模式：历史区=历史规划列表）
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // M2 布局拍板：行程+聊天是主角，历史列表默认收成图标条（点开浮层/展开整栏）
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   // 出单/恢复后自增，触发侧栏历史规划刷新
   const [plansVersion, setPlansVersion] = useState(0)
   // 恢复中的会话（侧栏列表行内转圈）
@@ -536,7 +537,7 @@ export default function TravelPage() {
           )}
         />
       ) : (
-        <SidebarRail onExpand={() => setSidebarOpen(true)} onNewTask={startNewTrip} newLabel="新建规划" />
+        <SidebarRail onExpand={() => setSidebarOpen(true)} onNewTask={startNewTrip} newLabel="新建规划" onHistory={() => setSheetOpen(true)} />
       )}
 
       <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${drawerOpen && !isWide ? 'lg:pr-[440px]' : ''}`}>
@@ -579,7 +580,7 @@ export default function TravelPage() {
             开浮层表单），栅格收敛为 中栏+右栏 两列，右栏加宽 336→460px（聊天
             消息/工具卡片流的主展示面）。 */}
         <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-          <div className="mx-auto max-w-[1600px] px-4 py-4 xl:px-6 xl:py-5 lg:h-full lg:flex lg:flex-col">
+          <div className="mx-auto max-w-none px-4 py-4 xl:px-8 xl:py-5 lg:h-full lg:flex lg:flex-col">
             {/* ── 顶部条件条：目的地/日期/人数/预算/节奏 chips（原左栏摘要卡上移） ── */}
             {hasLeftRail && (
               <TripConditionsBar
@@ -596,7 +597,7 @@ export default function TravelPage() {
               />
             )}
             <div className={`grid min-h-0 flex-1 items-stretch gap-4 lg:h-auto ${hasRightRail
-              ? 'lg:grid-cols-[minmax(0,1fr)_460px]'
+              ? 'lg:grid-cols-[minmax(0,1fr)_480px] xl:grid-cols-[minmax(0,1fr)_560px]'
               : 'lg:grid-cols-[minmax(0,1fr)]'}`}>
               {/* ── 左栏已移除（M1）：条件摘要上移为顶部 TripConditionsBar，调整入口在其「调整」按钮 ── */}
 
@@ -690,7 +691,7 @@ export default function TravelPage() {
             {/* ── 右栏：旅行助手（设计稿态1 无助手栏；生成中/有行程才出现） ── */}
             {isWide && hasRightRail && (
               <aside className="min-w-0 min-h-0">
-                <TravelChatDrawer ref={chatRef} mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} {...assistantProps} />
+                <TravelChatDrawer ref={chatRef} mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} introRationale={planState.plan?.rationale ?? null} {...assistantProps} />
               </aside>
             )}
           </div>

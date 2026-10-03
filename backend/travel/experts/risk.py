@@ -68,6 +68,7 @@ def risk_expert_node(state: dict) -> dict:
                 "preview": [
                     {"text": chunk[:120], "source": value[1] or ""}
                     for chunk in value[0][:4]
+                    if len(chunk.strip()) > 4  # 滤掉空摘录/省略号占位
                 ],
             },
         )

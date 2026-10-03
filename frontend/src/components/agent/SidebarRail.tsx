@@ -7,16 +7,18 @@
  * 搜索/历史等重内容仍需展开侧边栏使用。
  * 仅桌面端渲染（<md 视口下任务栏本就隐藏，见 TaskSidebar / ChatHeader 同款断点）。
  */
-import { Brain, PanelLeftOpen, Plane, Plus } from 'lucide-react'
+import { Brain, History, PanelLeftOpen, Plane, Plus } from 'lucide-react'
 
 interface Props {
   onExpand: () => void
   onNewTask: () => void
   /** travel = 旅游规划页复用：品牌换 Plane、新建按钮语义换「新建规划」 */
   newLabel?: string
+  /** M2 布局反馈：收起态直达历史（不展开整栏，浮层展示） */
+  onHistory?: () => void
 }
 
-export default function SidebarRail({ onExpand, onNewTask, newLabel = '新建任务' }: Props) {
+export default function SidebarRail({ onExpand, onNewTask, newLabel = '新建任务', onHistory }: Props) {
   const isTravel = newLabel !== '新建任务'
   return (
     <aside
@@ -45,6 +47,18 @@ export default function SidebarRail({ onExpand, onNewTask, newLabel = '新建任
       >
         <Plus size={16} />
       </button>
+
+      {/* 历史直达（可选） */}
+      {onHistory && (
+        <button
+          onClick={onHistory}
+          className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-black/5 transition-colors"
+          aria-label="历史记录"
+          title="历史记录"
+        >
+          <History size={16} />
+        </button>
+      )}
 
       <div className="flex-1" />
 

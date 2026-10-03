@@ -30,6 +30,7 @@ class TravelGraphResult(TypedDict, total=False):
     clarification_options: list[dict]
     intent: str
     travel_context: dict
+    rationale: dict
 
 
 def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
@@ -73,4 +74,5 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
         clarification_options=[] if answering else final_state.get("clarification_options", []),
         intent=final_state.get("intent", ""),
         travel_context=final_state.get("travel_context") or {},
+        rationale=final_state.get("rationale") or {},
     )

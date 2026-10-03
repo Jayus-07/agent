@@ -211,6 +211,80 @@ def travel_reporter_node(state: dict) -> dict:
     return {
         "final_answer": answer,
         "travel_context": build_travel_context(state),
+        "rationale": _build_rationale(state),
+    }
+
+
+def _build_rationale(state: dict) -> dict:
+    """结构化「为什么这样排」（M2 验收反馈）：前端 RationaleCard 消费。
+
+    只搬运 state 里既存的事实（修复记录/取舍/核验状态/版本谱系），
+    不做新的推断；文本版 final_answer 仍是降级兜底，两者同源不矛盾。
+    """
+    itinerary = load_itinerary(state)
+    if itinerary is None:
+        return {}
+    report = load_validation(state)
+    must_go = [w.strip() for w in itinerary.brief.must_go if (w or "").strip()]
+
+    # 修复/取舍：来自 repair_log（自动调整的真实记录）
+    dropped = []
+    kept_required = []
+    for action in state.get("repair_log", []):
+        day_idx = action.get("day_index", "")
+        for s in action.get("weather_swaps") or []:
+            dropped.append({"name": f"{s.get('from', '')}", "reason": f"第 {day_idx} 天天气调整 → {s.get('to', '')}"})
+        for name in action.get("dropped") or []:
+            dropped.append({"name": name, "reason": action.get("reason", "")})
+        for name in action.get("kept_required") or []:
+            kept_required.append(name)
+
+    # 未排入候选：candidates 与行程 POI 的差集（按名称匹配，≤8 条）
+    scheduled_names = [poi.name for poi in itinerary.all_pois()]
+    from backend.travel.planning import names_match  # 复用既有匹配口径
+
+    scheduled_norm = scheduled_names
+    unscheduled = []
+    for c in state.get("candidates") or []:
+        name = str(c.get("name") or c.get("title") or "")
+        if not name:
+            continue
+        if not any(names_match(name, s) for s in scheduled_norm):
+            unscheduled.append(name)
+    unscheduled_extra = max(0, len(state.get("candidates") or []) - len(scheduled_names) - len(unscheduled))
+
+    verified = []
+    pois = itinerary.all_pois()
+    legs = [leg for day in itinerary.days for leg in day.legs]
+    poi_verified = bool(pois) and all(_is_verified_poi(poi) for poi in pois)
+    route_verified = bool(legs) and all(_is_verified_leg(leg) for leg in legs)
+    if poi_verified:
+        verified.append("坐标：已核验")
+    if route_verified:
+        verified.append("路线：已核验")
+
+    pace_rules = {"relaxed": "每天最多 4 个地点 / 240 分钟活动",
+                  "moderate": "每天最多 5 个地点 / 300 分钟活动",
+                  "intense": "每天最多 6 个地点 / 360 分钟活动"}
+
+    return {
+        "headline": {
+            "days": len(itinerary.days),
+            "spots": len([p for p in pois]),
+            "must_go": must_go,
+        },
+        "tradeoffs": {
+            "dropped": dropped[:6],
+            "kept_required": kept_required[:6],
+            "unscheduled": unscheduled[:8],
+            "unscheduled_extra": unscheduled_extra,
+        },
+        "verified": verified,
+        "pace_rule": pace_rules.get(itinerary.brief.pace, pace_rules["moderate"]),
+        "version_note": (
+            f"行程 v{itinerary.plan_version}（需求 v{itinerary.brief_version}）"
+        ),
+        "_has_decision_required": bool(report and report.decision_required),
     }
 
 
