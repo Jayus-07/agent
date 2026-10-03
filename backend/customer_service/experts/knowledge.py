@@ -33,20 +33,25 @@ def execute_knowledge(
         ExpertResult — status=success 时含 response_draft + evidence
     """
     from backend.observability.metrics import record_cs_rag_status
+    from backend.customer_service.pii import mask_pii, unmask_text
 
     kb_ids = cs_route.get("kb_ids", [])
     intent = cs_route.get("intent", "k_faq")
 
+    # C11 PII 最小化（个保法）：手机号/地址/自报姓名等在进入 RAG prompt
+    # 前掩码，回复回来按 vault 还原；日志也只落掩码文本
+    masked_message, pii_vault = mask_pii(user_message)
+
     logger.info(
         "[KnowledgeExpert] intent=%s kb_ids=%s question=%s...",
-        intent, kb_ids, user_message[:60],
+        intent, kb_ids, masked_message[:60],
     )
 
     from backend.customer_service.knowledge import get_knowledge_service
 
     service = get_knowledge_service()
     result = service.answer(
-        question=user_message,
+        question=masked_message,
         kb_ids=kb_ids if kb_ids else None,
         session_id=session_id,
         user_id=user_id,
@@ -66,6 +71,8 @@ def execute_knowledge(
     response_draft = result.answer
     if not response_draft:
         response_draft = "抱歉，暂时无法找到相关信息。建议您转接人工客服获取更详细的帮助。"
+    # C11：回复含占位符则还原为用户原文（只还原本 vault 签发的占位符）
+    response_draft = unmask_text(response_draft, pii_vault)
 
     logger.info(
         "[KnowledgeExpert] decision=%s conf=%.2f answer_len=%d",
