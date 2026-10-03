@@ -35,8 +35,8 @@ import {
 import BudgetRing from '@/components/chat/BudgetRing'
 import type { BudgetStatus } from '@/api/budgets'
 import MarkdownContent from '@/components/chat/MarkdownContent'
+import ToolProcessRows from './ToolProcessRows'
 import { describePlanReply, sanitizeTravelReply } from './planState'
-import { TRAVEL_STAGE_LABELS, TRAVEL_TOOL_LABELS } from './travelDisplay'
 import {
   buildChangeSummary, travelProcessStatusLabel, type TravelProcessState,
 } from './travelRuntime'
@@ -146,7 +146,7 @@ export default function TravelChatDrawer({
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, loading, open])
+  }, [messages, loading, open, processState])
 
   // Esc 收起（仅抽屉形态；面板是常驻栏没有「收起」语义）
   useEffect(() => {
@@ -306,6 +306,45 @@ export default function TravelChatDrawer({
     ? pendingSummary.briefFields.length + pendingSummary.moved.length
     : 0
 
+  // 消息渲染：提问段/回答段两段共用（工具执行块插在两段之间=提问→工具→回答）
+  const renderMsg = (m: ChatMsg, i: number) => {              // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
+              //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
+              const isLong = m.role === 'assistant' && m.text.length > 600
+              return (
+                <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  <div className={`max-w-[94%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
+                    m.role === 'user'
+                      ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
+                      : 'border border-[#dae7e5] bg-white text-[#183037]'
+                  }`}>
+                    {m.role === 'user' ? (
+                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                    ) : isLong ? (
+                      <details>
+                        <summary className="cursor-pointer text-[11px] font-medium text-[#087b73] [&::-webkit-details-marker]:hidden">
+                          {m.tag === '规划说明' ? '为什么这样排？点开查看规划说明 ▾' : '行程已按你说的重算，点开查看完整说明 ▾'}
+                        </summary>
+                        <div className="mt-1.5 markdown-body travel-md leading-relaxed">
+                          <MarkdownContent content={m.text} />
+                        </div>
+                      </details>
+                    ) : (
+                      <div className="markdown-body travel-md leading-relaxed">
+                        <MarkdownContent content={m.text} />
+                      </div>
+                    )}
+                    {m.tag && (
+                      <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
+                        m.tone === 'warn' ? 'bg-amber-100 text-amber-800' : 'bg-[#087b73]/10 text-[#087b73]'
+                      }`}>
+                        {m.tag}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )
+  }
+
   const body = (
     <>
       {/* Header（设计稿③）：标题 + 「正在看：第 N 天」胶囊 */}
@@ -341,141 +380,76 @@ export default function TravelChatDrawer({
         </div>
       )}
 
-      <details className="mx-3 mt-2 rounded-xl border border-[#dae7e5] bg-white" open={loading || stopped || processState?.status === 'error'}>
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[11px] font-semibold text-[#183037] [&::-webkit-details-marker]:hidden">
-          <span className={`h-2 w-2 rounded-full ${loading ? 'animate-pulse bg-[#087b73]' : processState?.status === 'error' ? 'bg-red-400' : stopped ? 'bg-amber-400' : processState ? 'bg-[#087b73]' : 'bg-[#9fc1ba]'}`} aria-hidden />
-          本轮处理过程
-          {(processState?.tools.length ?? 0) > 0 && (
-            <span className="rounded-full bg-[#f5faf9] px-1.5 py-0.5 text-[10px] font-normal text-[#087b73]">
-              已调用 {processState?.tools.length} 个 Tool
-            </span>
-          )}
-          <span className="ml-auto text-[10px] font-normal text-[#5c7074]">
-            {travelProcessStatusLabel({ loading, stopped, status: processState?.status })}
-          </span>
-        </summary>
-        <div className="border-t border-[#dae7e5] px-3 py-2">
-          <p className="mb-2 text-[10px] leading-relaxed text-[#5c7074]">
-            只展示旅游域实际发出的阶段和 Tool 事件；失败、空结果和降级不会被改写成成功。
-          </p>
-          {processState?.requirement && (
-            <div className="mb-3 rounded-lg border border-[#b8d8d0] bg-[#f5faf9] px-2.5 py-2">
-              <p className="text-[10px] font-semibold text-[#183037]">需求理解已完成</p>
-              <p className="mt-1 text-[10px] leading-relaxed text-[#5c7074]">
-                {String(processState.requirement.brief.destination || '目的地待确认')}
-                {processState.requirement.brief.days ? ` · ${String(processState.requirement.brief.days)} 天` : ''}
-                {processState.requirement.assumptions.length > 0 ? ` · ${processState.requirement.assumptions[0]}` : ''}
-              </p>
-            </div>
-          )}
-          {(processState?.stages && Object.keys(processState.stages).length > 0) && (
-            <ol className="space-y-2">
-              {Object.entries(processState.stages).map(([stageKey, stage]) => (
-                <li key={stageKey} className="flex items-start gap-2">
-                <span className="mt-0.5 shrink-0">
-                  {stage.status === 'completed' ? <CheckCircle2 size={13} className="text-[#087b73]" aria-label="已完成" />
-                    : stage.status === 'running' ? <Clock3 size={13} className="animate-pulse text-[#087b73]" aria-label="进行中" />
-                      : <AlertCircle size={13} className="text-red-500" aria-label="执行失败" />}
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[11px] text-[#183037]">{TRAVEL_STAGE_LABELS[stageKey] ?? stageKey}</span>
-                  <span className="block text-[10px] leading-relaxed text-[#7a8e8b]">{stage.status === 'running' ? '正在执行' : stage.status === 'completed' ? '已完成' : '执行失败'}</span>
-                </span>
-              </li>
-              ))}
-            </ol>
-          )}
-          {(processState?.tools.length ?? 0) > 0 && (
-            <div className="mt-3 border-t border-[#eef4f2] pt-2">
-              <p className="mb-1.5 text-[10px] font-semibold text-[#5c7074]">实际 Tool 调用</p>
-              <ul className="space-y-1.5">
-                {processState?.tools.map((tool, index) => (
-                  <li key={`${tool.tool}-${index}`} className="flex items-center gap-2 text-[10px]">
-                    {tool.status === 'running' ? <Clock3 size={12} className="animate-pulse text-[#087b73]" aria-label="进行中" />
-                      : tool.status === 'success' ? <CheckCircle2 size={12} className="text-[#087b73]" aria-label="成功" />
-                        : <AlertCircle size={12} className="text-red-500" aria-label="失败" />}
-                    <span className="min-w-0 flex-1 truncate text-[#183037]">{TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool}</span>
-                    {/* 2026-10-03：补结果摘要（条数/耗时）——此前只有状态词，
-                        「已返回」等于什么都没告诉用户 */}
-                    <span className="shrink-0 text-[#7a8e8b]">
-                      {tool.status === 'success' && (tool.resultCount != null || tool.durationMs != null)
-                        ? [tool.resultCount != null ? `${tool.resultCount} 条` : '', tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''].filter(Boolean).join(' · ')
-                        : null}
-                    </span>
-                    <span className={tool.status === 'failed' ? 'text-red-500' : 'text-[#7a8e8b]'}>
-                      {tool.status === 'running' ? '调用中' : tool.status === 'failed' ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}` : tool.dataStatus === 'empty' ? '空结果' : tool.dataStatus === 'unavailable' ? '不可用' : '已返回'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      </details>
 
       {/* 内容 */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {hasMessages ? (
-          <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">            {visibleMessages.map((m, i) => {
-              // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
-              //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
-              const isLong = m.role === 'assistant' && m.text.length > 600
-              return (
-                <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                  <div className={`max-w-[94%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
-                    m.role === 'user'
-                      ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
-                      : 'border border-[#dae7e5] bg-white text-[#183037]'
-                  }`}>
-                    {m.role === 'user' ? (
-                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                    ) : isLong ? (
-                      <details>
-                        <summary className="cursor-pointer text-[11px] font-medium text-[#087b73] [&::-webkit-details-marker]:hidden">
-                          {m.tag === '规划说明' ? '为什么这样排？点开查看规划说明 ▾' : '行程已按你说的重算，点开查看完整说明 ▾'}
-                        </summary>
-                        <div className="mt-1.5 markdown-body text-xs leading-relaxed
-                          [&_h1]:text-sm [&_h1]:my-1.5 [&_h2]:text-[13px] [&_h2]:my-1.5 [&_h3]:text-xs [&_h3]:my-1
-                          [&_p]:my-1 [&_li]:my-0.5 [&_hr]:my-2">
-                          <MarkdownContent content={m.text} />
-                        </div>
-                      </details>
-                    ) : (
-                      <div className="markdown-body text-xs leading-relaxed
-                        [&_h1]:text-sm [&_h1]:my-1.5 [&_h2]:text-[13px] [&_h2]:my-1.5 [&_h3]:text-xs [&_h3]:my-1
-                        [&_p]:my-1 [&_li]:my-0.5 [&_hr]:my-2">
-                        <MarkdownContent content={m.text} />
-                      </div>
-                    )}
-                    {m.tag && (
-                      <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
-                        m.tone === 'warn' ? 'bg-amber-100 text-amber-800' : 'bg-[#087b73]/10 text-[#087b73]'
-                      }`}>
-                        {m.tag}
-                      </span>
-                    )}
+        {(() => {
+          // 时序：提问（含移交首问）→ 本轮工具执行块 → 助手回答 → 后续对话
+          const lastUserIdx = visibleMessages.map((m) => m.role).lastIndexOf('user')
+          const before = visibleMessages.slice(0, lastUserIdx + 1)
+          const after = visibleMessages.slice(lastUserIdx + 1)
+          const showProcess = processState && (processState.tools.length > 0 || processState.requirement)
+          const processBlock = showProcess ? (
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-center gap-2 text-[10px] text-[#8fa5a3]">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${loading ? 'animate-pulse bg-[#087b73]' : processState.status === 'error' ? 'bg-red-400' : 'bg-[#087b73]'}`}
+                  aria-hidden
+                />
+                <span>{loading ? '工具执行中' : `本轮共 ${processState.tools.length} 个 Tool`}</span>
+                <span>· {travelProcessStatusLabel({ loading, stopped, status: processState.status })}</span>
+              </div>
+              {processState.requirement && (
+                <p className="mb-1.5 rounded-lg bg-[#f5faf9] px-2.5 py-1.5 text-[10px] leading-relaxed text-[#5c7074]">
+                  <span className="font-semibold text-[#183037]">需求理解</span>
+                  {' '}· {String(processState.requirement.brief.destination || '目的地待确认')}
+                  {processState.requirement.brief.days ? ` · ${String(processState.requirement.brief.days)} 天` : ''}
+                  {processState.requirement.assumptions.length > 0 ? ` · ${processState.requirement.assumptions[0]}` : ''}
+                </p>
+              )}
+              <ol className="space-y-1.5">
+                <ToolProcessRows tools={processState.tools} />
+              </ol>
+            </div>
+          ) : null
+          if (!hasMessages) {
+            return (
+              <>
+                {processBlock}
+                {generating ? (
+                  <div className="flex flex-col items-center gap-2 py-10 text-center" aria-live="polite">
+                    <span className="flex gap-1" aria-hidden>
+                      <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73]" />
+                      <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73] [animation-delay:120ms]" />
+                      <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73] [animation-delay:240ms]" />
+                    </span>
+                    <p className="text-sm font-medium text-[#183037]">行程生成中，稍等片刻…</p>
+                    <p className="text-xs leading-relaxed text-[#5c7074]">
+                      生成完成后可以在这里改行程、查车票
+                    </p>
                   </div>
-                </li>
-              )
-            })}
-          </ul>
-        ) : generating ? (
-          <div className="flex flex-col items-center gap-2 py-10 text-center" aria-live="polite">
-            <span className="flex gap-1" aria-hidden>
-              <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73]" />
-              <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73] [animation-delay:120ms]" />
-              <i className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#087b73] [animation-delay:240ms]" />
-            </span>
-            <p className="text-sm font-medium text-[#183037]">行程生成中，稍等片刻…</p>
-            <p className="text-xs leading-relaxed text-[#5c7074]">
-              生成完成后可以在这里改行程、查车票
-            </p>
-          </div>
-        ) : (
-          <p className="py-10 text-center text-xs leading-relaxed text-[#8fa5a3]">
-            问行程、改时间、查车票、问美食，直接说一句就行
-          </p>
-        )}
+                ) : !processBlock ? (
+                  <p className="py-10 text-center text-xs leading-relaxed text-[#8fa5a3]">
+                    问行程、改时间、查车票、问美食，直接说一句就行
+                  </p>
+                ) : null}
+              </>
+            )
+          }
+          return (
+            <>
+              <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">
+                {before.map(renderMsg)}
+              </ul>
+              {processBlock}
+              {after.length > 0 && (
+                <ul className="space-y-3" aria-label="旅行助手消息">
+                  {after.map(renderMsg)}
+                </ul>
+              )}
+            </>
+          )
+        })()}
 
         {clarificationOptions.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2" aria-label="选择规划天数">

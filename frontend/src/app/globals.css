@@ -162,3 +162,17 @@ html, body {
   100%    { background-color: transparent; box-shadow: none; }
 }
 .overview-flash { animation: overviewFlash 1.6s ease-out; }
+
+/* 旅行助手气泡内的紧凑 Markdown 排版（.travel-md 双类名提高优先级，
+   覆盖 .markdown-body 全局 15px 口径——2026-10-03 实测「规划说明展开后字很大」） */
+.markdown-body.travel-md { font-size: 12px; line-height: 1.65; }
+.markdown-body.travel-md h1 { font-size: 13.5px; margin: 0.9em 0 0.35em; }
+.markdown-body.travel-md h2 { font-size: 12.5px; margin: 0.9em 0 0.35em; }
+.markdown-body.travel-md h3, .markdown-body.travel-md h4 { font-size: 12px; margin: 0.8em 0 0.3em; }
+.markdown-body.travel-md p { margin: 0.4em 0; }
+.markdown-body.travel-md ul, .markdown-body.travel-md ol { padding-left: 1.3em; margin: 0.35em 0; }
+.markdown-body.travel-md li { margin: 0.2em 0; }
+.markdown-body.travel-md table { font-size: 11px; margin: 0.6em 0; }
+.markdown-body.travel-md th, .markdown-body.travel-md td { padding: 0.35em 0.6em; }
+.markdown-body.travel-md hr { margin: 0.8em 0; }
+.markdown-body.travel-md blockquote { margin: 0.5em 0; padding-left: 0.8em; border-left: 3px solid #dae7e5; color: #5c7074; }

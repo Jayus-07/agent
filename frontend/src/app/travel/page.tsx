@@ -30,7 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
-import { ToolPreviewBody, ToolFailedBody } from '@/components/travel/ToolPreviews'
+import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import TravelChatDrawer from '@/components/travel/TravelChatDrawer'
 import TravelPlanList from '@/components/travel/TravelPlanList'
 import TaskSidebar from '@/components/agent/TaskSidebar'
@@ -232,6 +232,8 @@ export default function TravelPage() {
     setTravelProcess(null)
     // M1 三态移交：这句话作为第一条用户气泡出现在右侧助手聊天流
     setHandoverMessage(message)
+    // M1 反馈：发送即进入「看结果」模式，自动折叠左侧历史栏腾出中栏空间
+    setSidebarOpen(false)
     setLoading(true)
     const controller = new AbortController()
     abortRef.current = controller
@@ -634,11 +636,8 @@ export default function TravelPage() {
                       </p>
                     </section>
                   )}
-                  {travelProcess?.tools?.length ? (
-                    <div className="mb-3">
-                      <ToolProcessRecap processState={travelProcess} />
-                    </div>
-                  ) : null}
+                  {/* M1 反馈：Tool 执行记录移入右栏聊天流（内联 Tool 行常驻本轮对话），
+                      中栏只保留行程本体 */}
                   <ItineraryView
                   itinerary={itinerary}
                   notice={planState.notice}
@@ -761,7 +760,7 @@ function TripConditionsBar(props: {
     ? `合计 ¥${props.costTotal.toLocaleString()}`
     : props.budget ? `预算 ¥${Number(props.budget).toLocaleString()}` : '预算不限'
   const chips: Array<{ key: string; icon: React.ReactNode; label: string }> = [
-    { key: 'dest', icon: <MapPin size={12} aria-hidden />, label: props.destination.trim() || '未定目的地' },
+    { key: 'dest', icon: <MapPin size={12} aria-hidden />, label: props.destination.trim() || (props.loading ? '解析中…' : '未定目的地') },
     { key: 'date', icon: <CalendarDays size={12} aria-hidden />, label: `${props.startDate || '日期待定'} · ${dayText}` },
     { key: 'party', icon: <Users size={12} aria-hidden />, label: `${props.partySize || '?'} 人` },
     { key: 'budget', icon: <Wallet size={12} aria-hidden />, label: budgetText },
@@ -1157,17 +1156,12 @@ function StepperField({
   )
 }
 
-// ── 生成中进度卡（聊天流式竖版：事件逐条出现、完成折叠、展开看结果） ──
-
-type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
+// ── 生成中占位卡（M1 反馈：事件流移入右栏聊天流，中栏只留头部 + 骨架） ──
 
 /**
- * GeneratingCard — 生成中进度（2026-10-02 聊天流式竖版）：
- * 事件流像聊天消息一样逐条动态出现（需求分析 / 每次真实 Tool 调用一条）；
- * 进行中/失败/有结果的行默认展开（2026-10-03：检索结果不再默认折叠），
- * 其余折叠成一行摘要，用户点击可切换；行程到达后本卡卸载，
- * 由 ToolProcessRecap 常驻接管结果展示。
- * 进度只来自真实 SSE 事件，不伪造百分比。
+ * GeneratingCard — 生成中占位（2026-10-03 M1 反馈改版）：
+ * Tool 事件流已移到右栏「旅行助手」聊天流内联展示（用户提问 → 工具动态出现 →
+ * 助手回答），中栏只保留轻头部 + 行程骨架卡。进度只来自真实 SSE 事件。
  */
 function GeneratingCard({
   processState,
@@ -1177,29 +1171,8 @@ function GeneratingCard({
   expectedDays: number
 }) {
   const failed = processState?.status === 'error'
-  const tools = processState?.tools ?? []
-  const requirement = processState?.requirement
-  // 「执行完折叠」的手动反转集合：默认 进行中/失败 展开、完成折叠，点击切换
-  const [manualToggled, setManualToggled] = useState<Set<string>>(new Set())
-  const toggle = (key: string) => {
-    setManualToggled((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-  const isOpen = (key: string, defaultOpen: boolean) =>
-    manualToggled.has(key) ? !defaultOpen : defaultOpen
-
-  const reqBrief = (requirement?.brief ?? {}) as Record<string, unknown>
-  const reqSummary = [
-    typeof reqBrief.days === 'number' && reqBrief.days > 0 ? `${reqBrief.days} 天` : '',
-    ...(Array.isArray(reqBrief.preferences) ? reqBrief.preferences : []) as string[],
-    typeof reqBrief.budget_cny === 'number' && reqBrief.budget_cny > 0 ? `预算 ¥${reqBrief.budget_cny}` : '',
-  ].filter(Boolean).join(' · ')
-
-  const doneCount = tools.filter((t) => t.status !== 'running').length + (requirement ? 1 : 0)
+  const doneCount = (processState?.tools ?? []).filter((t) => t.status !== 'running').length
+    + (processState?.requirement ? 1 : 0)
 
   return (
     <section
@@ -1221,47 +1194,13 @@ function GeneratingCard({
             </p>
             <p className="mt-0.5 text-xs text-[#5c7074]">
               {failed
-                ? '失败步骤已在下方展开，未用假数据补齐'
-                : `已推进 ${doneCount} 步 · 进度来自真实 SSE 事件流，不伪造百分比`}
+                ? '失败原因见右侧「旅行助手」，未用假数据补齐'
+                : doneCount > 0
+                  ? `已推进 ${doneCount} 步 · 工具执行过程见右侧「旅行助手」`
+                  : '正在启动规划引擎 · 工具执行过程将在右侧「旅行助手」实时展示'}
             </p>
           </div>
         </div>
-
-        {/* 聊天流式竖排：需求分析 + 每次真实 Tool 调用一条 */}
-        <ol className="mt-4 space-y-1.5">
-          {requirement && (() => {
-            const key = 'requirement'
-            const open = isOpen(key, false)
-            const missing = requirement.missing.length > 0
-            const assumptions = requirement.assumptions.length > 0
-            return (
-              <li key={key} className="overflow-hidden rounded-xl border border-[#e2f0ee] bg-white">
-                <button
-                  type="button"
-                  onClick={() => toggle(key)}
-                  aria-expanded={open}
-                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
-                >
-                  <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#183037]">需求分析</span>
-                  <span className="shrink-0 text-[10px] text-[#5c7074]">{reqSummary || '完成'}</span>
-                  <ChevronDown size={12} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-                </button>
-                {open && (
-                  <div className="border-t border-[#eef4f2] px-3 py-2.5 text-[11px] leading-relaxed text-[#5c7074]">
-                    {reqSummary && <p>识别到：{reqSummary || '（等待你说更多信息）'}</p>}
-                    {assumptions && <p className="mt-1">假设：{requirement.assumptions.join('；')}</p>}
-                    {missing && <p className="mt-1 text-amber-700">待补充：{requirement.missing.join('、')}</p>}
-                  </div>
-                )}
-              </li>
-            )
-          })()}
-          <ToolProcessRows tools={tools} />
-          {tools.length === 0 && !requirement && (
-            <li className="py-4 text-center text-xs text-[#7a8e8b]">正在启动规划引擎…</li>
-          )}
-        </ol>
       </div>
 
       {/* 行程卡片骨架：按用户填的天数占位，生成完成后被真实日卡片替换 */}
@@ -1415,132 +1354,3 @@ function PlanIntakeCard({
   )
 }
 
-/**
- * ToolProcessRows — tool 事件行渲染（2026-10-03 自 GeneratingCard 抽出）：
- * 生成中卡与完成后的 ToolProcessRecap 共用同一份实现。展开口径：
- * 进行中 / 失败 / 有结果 preview 的行默认展开，其余折叠成一行摘要。
- */
-function ToolProcessRows({ tools }: { tools: TravelProcessTool[] }) {
-  const [manualToggled, setManualToggled] = useState<Set<string>>(new Set())
-  const toggle = (key: string) => {
-    setManualToggled((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-  return (
-    <>
-      {tools.map((tool, index) => {
-        const key = `tool-${index}`
-        const running = tool.status === 'running'
-        const failedRow = tool.status === 'failed'
-        const hasPreview = (tool.preview?.length ?? 0) > 0
-        // 2026-10-03：有结果的行默认展开——用户就是要看检索结果，
-        // 折叠只能看到「N 条」数字，等于看不见
-        const open = manualToggled.has(key)
-          ? !manualDefaultOpen(running, failedRow, hasPreview)
-          : manualDefaultOpen(running, failedRow, hasPreview)
-        const label = TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool
-        const summary = running
-          ? '调用中…'
-          : failedRow
-            ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
-            : [
-                tool.resultCount != null ? `${tool.resultCount} 条` : '',
-                tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '',
-              ].filter(Boolean).join(' · ') || '完成'
-        return (
-          <li
-            key={key}
-            className={`overflow-hidden rounded-xl border ${
-              failedRow ? 'border-red-200 bg-red-50/50' : 'border-[#e2f0ee] bg-white'
-            }`}
-          >
-            <button
-              type="button"
-              onClick={() => toggle(key)}
-              aria-expanded={open}
-              className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
-            >
-              {running ? (
-                <Loader2 size={13} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
-              ) : failedRow ? (
-                <AlertCircle size={13} className="shrink-0 text-red-500" aria-label="失败" />
-              ) : (
-                <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
-              )}
-              <span className={`min-w-0 flex-1 truncate text-xs ${failedRow ? 'font-medium text-red-700' : 'font-medium text-[#183037]'}`}>
-                {label}
-              </span>
-              <span className={`shrink-0 text-[10px] ${failedRow ? 'text-red-600' : 'text-[#5c7074]'}`}>{summary}</span>
-              <ChevronDown size={12} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-            </button>
-            {open && (
-              <div className="border-t border-[#eef4f2] px-3 py-2.5">
-                {failedRow ? (
-                  <ToolFailedBody error={tool.error} />
-                ) : hasPreview ? (
-                  <ToolPreviewBody preview={tool.preview!} category={tool.category} />
-                ) : running ? (
-                  <p className="text-[11px] text-[#7a8e8b]">正在调用真实数据源，结果返回后自动展开…</p>
-                ) : (
-                  <p className="text-[11px] text-[#7a8e8b]">
-                    {tool.dataStatus === 'empty'
-                      ? '查询成功，当前没有匹配结果。'
-                      : tool.dataStatus === 'unavailable'
-                        ? '数据源暂不可用，已按降级口径继续规划。'
-                        : '执行完成。'}
-                  </p>
-                )}
-              </div>
-            )}
-          </li>
-        )
-      })}
-    </>
-  )
-}
-
-function manualDefaultOpen(running: boolean, failedRow: boolean, hasPreview: boolean): boolean {
-  return running || failedRow || hasPreview
-}
-
-/**
- * ToolProcessRecap — 行程到达后的「Tool 执行记录」常驻卡（2026-10-03）。
- * 此前生成中卡随 done 帧整体卸载，检索结果（商户/车次/知乎攻略 preview）
- * 用户一眼都没看到过就没了；本卡默认折叠成一行挂在行程上方，
- * 随时可展开回看全部真实 Tool 结果。
- */
-function ToolProcessRecap({ processState }: { processState: TravelProcessState | null }) {
-  const [open, setOpen] = useState(false)
-  const tools = processState?.tools ?? []
-  if (tools.length === 0) return null
-  const failedCount = tools.filter((t) => t.status === 'failed').length
-  const withPreview = tools.filter((t) => (t.preview?.length ?? 0) > 0).length
-  return (
-    <details
-      open={open}
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      className="rounded-2xl border border-[#dae7e5] bg-white shadow-card"
-      aria-label="Tool 执行记录"
-    >
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
-        <CheckCircle2 size={15} className="shrink-0 text-[#087b73]" aria-hidden />
-        <span className="text-sm font-semibold text-[#183037]">Tool 执行记录</span>
-        <span className="rounded-full bg-[#f5faf9] px-2 py-0.5 text-[10px] font-medium text-[#087b73]">
-          {tools.length} 个 Tool{withPreview > 0 ? ` · ${withPreview} 个有结果` : ''}
-          {failedCount > 0 ? ` · ${failedCount} 个失败` : ''}
-        </span>
-        <span className="ml-auto text-[10px] text-[#5c7074]">{open ? '收起' : '展开看检索结果'}</span>
-        <ChevronDown size={14} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-      </summary>
-      <div className="border-t border-[#eef4f2] px-4 py-3">
-        <ol className="space-y-1.5">
-          <ToolProcessRows tools={tools} />
-        </ol>
-      </div>
-    </details>
-  )
-}
