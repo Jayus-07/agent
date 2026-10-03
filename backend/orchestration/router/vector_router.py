@@ -181,10 +181,19 @@ class VectorRouter:
         # 归一化距离 → 相似度。pgvector cosine distance 已按 Chroma 量纲
         # （2−2·cos_sim）×2 对齐，分数公式与迁移前一致：1 / (1 + distance)
         candidates: list[CapabilityScore] = []
+        # TD-17：同名 capability 多条 examples 时取最优分（消重）——
+        # 下游 _fine_scores/score_map 等 dict 消费方按名字取分，重复行
+        # 会互相覆盖成"最后一条 example"的分（排序随机翻转根因）。
+        _best: dict[str, float] = {}
         for doc, distance in results:
             cap = doc.metadata.get("capability", "")
             score = 1.0 / (1.0 + distance)
-            candidates.append(CapabilityScore(name=cap, score=round(score, 3)))
+            if score > _best.get(cap, -1.0):
+                _best[cap] = score
+        candidates = [
+            CapabilityScore(name=name, score=round(score, 3))
+            for name, score in sorted(_best.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
 
         # 确定性排序（2026-09-15）：同分候选按名字稳定排序，不再依赖
         # 检索返回顺序——索引重建后顺序漂移是路由波动来源之一。

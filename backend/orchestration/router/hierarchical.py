@@ -122,9 +122,15 @@ class HierarchicalRouter:
         valid_names = {c.name for c in candidates}
         try:
             decision = get_router().vector.route(query, top_k=8)
-            scores = {
-                c.name: c.score for c in decision.candidates if c.name in valid_names
-            }
+            # TD-17（2026-10-03）：同一 capability 有多条 examples 时向量
+            # 检索返回多行——dict 推导会被后行覆盖，capability 实际得分
+            # 变成"最后一条 example"的分（实测"发票认证时限"0.640 的
+            # top1 分被第 7 条"商品定价调价"0.443 覆盖，fine_top1 翻转到
+            # web.search）。同名取最优分（与 route 的 top1 语义一致）。
+            scores: dict[str, float] = {}
+            for c in decision.candidates:
+                if c.name in valid_names and c.score > scores.get(c.name, 0.0):
+                    scores[c.name] = c.score
         except Exception:
             scores = {}
         # 未进 top-K 的候选给保底分（保持候选完整，交给 FC/灰区路径）
