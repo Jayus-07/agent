@@ -101,6 +101,32 @@ def _extract_gate_entities(query: str) -> list[str]:
     ]
 
 
+def _strip_stopword_prefix(ent: str) -> str:
+    """剥离实体开头的泛指停用词前缀（TD-15，2026-10-03）。
+
+    实测："公司员工日常办公守则"问题中 jieba 将"公司员工"切为整体词
+    （词典词，HMM=False 亦不开）绕过停用词过滤 → 强实体"公司员工"在
+    证据（"员工日常办公守则"）中无连写 → 实体覆盖校验误报拒答，挡住
+    通用库正确召回。
+
+    剥离规则：仅当实体以停用词（_QUERY_STOPWORDS ∪ _GATE_EXTRA_
+    STOPWORDS，长度≥2）开头时剥前缀，剩余长度≥2 且非停用才返回；
+    否则原样返回。真实 hard negative 实体（出口退税/预付款/增值税专用
+    发票）无停用词前缀，行为不变，门禁强度不降。
+    """
+    stopword_prefixes = sorted(
+        (w for w in (_QUERY_STOPWORDS | _GATE_EXTRA_STOPWORDS) if len(w) >= 2),
+        key=len, reverse=True,
+    )
+    for pref in stopword_prefixes:
+        if ent.startswith(pref):
+            rest = ent[len(pref):]
+            if len(rest) >= 2 and rest not in _QUERY_STOPWORDS                     and rest not in _GATE_EXTRA_STOPWORDS:
+                return rest
+            return ""
+    return ent
+
+
 def _entity_variants(term: str) -> set[str]:
     """实体的同义词闭包：自身 + SYNONYMS 正向/反向映射。
 
@@ -142,6 +168,9 @@ def find_missing_entities(query: str, docs: list, top_n: int = 3) -> list[str]:
         text = "".join(text.split())
         missing = []
         for ent in entities:
+            ent = _strip_stopword_prefix(ent)
+            if not ent:
+                continue
             variants = _entity_variants(ent)
             covered = any("".join(v.split()) in text for v in variants)
             if covered:
@@ -398,10 +427,14 @@ def build_rejection_response(
     layer: str,
     *,
     self_correction_attempted: bool = False,
+    permission_filtered: int = 0,
 ) -> tuple[str, RejectInfo]:
     """构造拒答文本 + RejectInfo，返回 (answer_str, reject_info)。
 
     answer_str 可直接作为 RAG 最终输出（同时 append 到 Trace）。
+    permission_filtered：本轮被权限过滤剔除的证据条数，仅随 RejectInfo
+    留证（诊断面）；是否据此升级拒答话术由 chain._reject 用
+    resolve_answer_status 统一裁决，本函数不重复判定。
     """
     msg = REJECT_MESSAGES.get(
         decision.reason,
@@ -419,6 +452,7 @@ def build_rejection_response(
                 if k in ("top1", "avg", "gap", "top_score", "doc_count", "faithfulness_score")},
         thresholds=decision.diagnostics.get("threshold", {}),
         self_correction_attempted=self_correction_attempted,
+        permission_filtered=permission_filtered,
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )
 
