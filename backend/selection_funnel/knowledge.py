@@ -100,7 +100,7 @@ def rag_enhance(category: str, platform: str, top_k: int = 3) -> tuple[list[str]
     query = f"{category} 平台合规规定 禁限售 选品案例".strip()
     try:
         from backend.rag.pipeline import get_rag_pipeline
-        text = get_rag_pipeline().retrieve_knowledge(query, top_k=top_k)
+        text = get_rag_pipeline().retrieve_knowledge(query, top_k=top_k, system_subject="selection_funnel")
     except Exception as e:
         logger.warning("[FunnelKnowledge] RAG 检索不可用，已降级: %s", e)
         return [], ""

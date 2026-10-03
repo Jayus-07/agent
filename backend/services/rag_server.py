@@ -125,6 +125,7 @@ class RetrieveRequest(BaseModel):
     department: str = Field("", description="主体部门")
     permissions: list[str] | None = Field(None, description="文档级权限集合")
     roles: list[str] = Field(default_factory=list, description="JWT 角色")
+    system_subject: str = Field("", description="内部系统调用方标识（M3 权限显式化）")
 
 
 class RetrieveDocsRequest(BaseModel):
@@ -342,6 +343,7 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
         department=req.department,
         permissions=req.permissions,
         roles=tuple(req.roles),
+        system_subject=req.system_subject,
     )
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {"result": result, "index_status": "stale" if stale else "ok"}
@@ -406,6 +408,20 @@ async def review_pending_doc(doc_id: str, req: PendingReviewDecision) -> dict[st
 
         pipeline = await asyncio.to_thread(_get_pipeline)
         registry = DocumentRegistry(DOC_REGISTRY_PATH)
+        row = registry.get_by_doc_id(doc_id)
+        from backend.config.rag import RAG_UPLOAD_PATH_GUARD
+        if RAG_UPLOAD_PATH_GUARD and row:
+            from backend.rag.indexing.upload_path_guard import test_artifact_path_reason
+
+            reason = test_artifact_path_reason(row.get("file_path"))
+            if reason:
+                from backend.security.events import record_security_event
+
+                record_security_event(
+                    "INPUT_GUARD_BLOCK", category="TEST_ARTIFACT_REJECTED",
+                    detail={"path_reason": reason},
+                )
+                raise HTTPException(status_code=422, detail="测试临时路径文件被拒绝")
         return await asyncio.to_thread(
             apply_review,
             doc_id,
@@ -413,6 +429,8 @@ async def review_pending_doc(doc_id: str, req: PendingReviewDecision) -> dict[st
             registry=registry,
             pipeline=pipeline,
         )
+    except HTTPException:
+        raise
     except RuntimeError as exc:
         logger.warning("[rag-server] 待复核动作暂不可用 doc_id=%s: %s", doc_id, exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -449,6 +467,61 @@ async def delete_document_cascade(doc_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - 统一返回管理端可见错误
         logger.error("[rag-server] 删除级联失败 doc_id=%s", doc_id, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/admin/documents/{doc_id}/file")
+def document_file(doc_id: str):
+    """原文快照（原文定位 P1）：授权后向 app 返回平台存储的源文件。
+
+    鉴权由中间件统一强制（X-Internal-Token，健康检查以外端点全拦）；
+    本侧负责存在性/状态/路径收容检查（registry 行的 file_path 必须落在
+    DOCS_DIRECTORY 内，防御历史脏数据的路径越界），无权与不存在同形 404。
+    """
+    import mimetypes
+    import os
+
+    from fastapi.responses import FileResponse
+
+    from backend.config import DOC_REGISTRY_PATH
+    from backend.config.database import DOCS_DIRECTORY
+    from backend.rag.indexing.doc_registry import DocumentRegistry
+
+    try:
+        row = DocumentRegistry(DOC_REGISTRY_PATH).get_by_doc_id(doc_id)
+    except Exception as exc:  # noqa: BLE001 - registry 不可达按不存在处理
+        logger.warning("[rag-server] 原文快照 registry 读取失败 doc_id=%s: %s", doc_id, exc)
+        raise HTTPException(status_code=404, detail="文档不存在") from exc
+    if not row or str(row.get("status") or "") != "active":
+        raise HTTPException(status_code=404, detail="文档不存在")
+    file_path = os.path.realpath(str(row.get("file_path") or ""))
+    root = os.path.realpath(DOCS_DIRECTORY)
+    if not file_path.startswith(root + os.sep) or not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="文档不存在")
+    media = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+    # 不传 filename：FileResponse 缺省 content-disposition 为 attachment，
+    # 预览语义需要 inline（前端走 fetch blob，disposition 仅影响直开行为）
+    return FileResponse(file_path, media_type=media)
+
+
+@app.get("/admin/index/reconcile-snapshot")
+def reconcile_index_snapshot() -> dict[str, Any]:
+    """受内部令牌保护的 BM25 文档快照；未就绪时不触发模型初始化。"""
+    from backend.rag.pipeline import _get_local_pipeline, _get_local_pipeline_state
+
+    if _get_local_pipeline_state()["state"] != "ready":
+        raise HTTPException(status_code=503, detail="索引尚未就绪")
+    pipeline = _get_local_pipeline()
+    if pipeline.bm25_store is None:
+        raise HTTPException(status_code=503, detail="BM25 存储不可用")
+    try:
+        docs = pipeline.bm25_store.load_docs_strict()
+    except RuntimeError as exc:
+        logger.warning("[RAGReconcile] BM25 快照不可读: %s", exc)
+        raise HTTPException(status_code=503, detail="BM25 快照不可读") from exc
+    return {"doc_ids": sorted({
+        str(doc.metadata["doc_id"]) for doc in docs
+        if doc.metadata.get("doc_id")
+    })}
 
 
 @app.get("/healthz")

@@ -4,12 +4,12 @@
     "plan": "docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md"
   },
   "DOC_TYPE_RULES": {
-    "sha256": "7126e83095cbb7d6",
-    "entries": 13
+    "sha256": "9f573f246e2f904c",
+    "entries": 14
   },
   "DOMAIN_RULES": {
-    "sha256": "8ab5417bac30521b",
-    "entries": 10
+    "sha256": "775cdc7628b8e5e2",
+    "entries": 12
   },
   "FILENAME_TYPE_HINTS": {
     "sha256": "c1f468669a183c9e",

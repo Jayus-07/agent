@@ -1334,6 +1334,8 @@ class RAGPipeline:
         department: str = "",
         permissions: Iterable[str] | None = None,
         roles: tuple[str, ...] = (),
+        *,
+        system_subject: str = "",
     ) -> str:
         """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。
 
@@ -1342,7 +1344,20 @@ class RAGPipeline:
           - retrieve_knowledge(): 只 BM25→向量→rerank，返回原始文本（~3-5s）
 
         用于需要用 RAG 内容做后续分析的场景（非直接回答用户）。
+
+        M3 权限显式化（fail-closed）：必须声明主体——用户链路传
+        subject_type/department/permissions/roles（走授权 keep-set）；
+        内部系统调用（旅游域/选品漏斗/经营分析等平台公共库消费方）传
+        system_subject=<模块名> 留痕。空主体一律拒绝，杜绝「忘传
+        department=静默绕过隔离」的旁路。
         """
+        if not (subject_type or department or roles or system_subject):
+            raise ValueError(
+                "retrieve_knowledge 拒绝空主体：用户链路请传 subject_type/department，"
+                "内部系统调用请传 system_subject=<模块名>"
+            )
+        if system_subject:
+            logger.info("[RAG] 内部系统检索 subject=%s kb=%s", system_subject, kb_id)
         import time as _time
         t0 = _time.monotonic()
 

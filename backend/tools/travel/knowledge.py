@@ -37,6 +37,7 @@ def retrieve_travel_knowledge(query: str) -> tuple[list[str], str]:
             query,
             kb_id=T.TRAVEL_RAG_KB_ID,
             top_k=T.TRAVEL_RAG_TOP_K,
+            system_subject="travel_domain",
         )
     except Exception as e:  # noqa: BLE001 — 检索失败不阻塞排程
         logger.warning("[TravelKnowledge] 知识库检索失败（降级跳过）: %s", e)

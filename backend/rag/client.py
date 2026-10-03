@@ -100,6 +100,8 @@ class RAGServiceProxy:
         department: str = "",
         permissions: Iterable[str] | None = None,
         roles: tuple[str, ...] = (),
+        *,
+        system_subject: str = "",
     ) -> str:
         try:
             resp = self._client.post(
@@ -112,6 +114,7 @@ class RAGServiceProxy:
                     "department": department,
                     "permissions": permissions,
                     "roles": list(roles),
+                    "system_subject": system_subject,
                 },
                 timeout=_RETRIEVE_TIMEOUT_S,
             )
@@ -199,6 +202,33 @@ class RAGServiceProxy:
         meta = dict(self.last_answer_meta or {})
         sources = list(meta.pop("sources", []) or [])
         return AskOutcome(answer=answer, sources=sources, answer_meta=meta)
+
+    def fetch_document_file(self, doc_id: str) -> tuple[int, bytes, str]:
+        """原文快照拉取（原文定位 P1，remote 模式转发面）。
+
+        文件在 rag-service 主机上（DOCS_DIRECTORY），app 侧不可直读；
+        返回 (status_code, content_bytes, media_type)，非 200 时 bytes 为空。
+        鉴权走内部令牌（中间件统一校验），最终的用户级授权在 app 路由裁决。
+        """
+        from backend.config.messaging import AI_INTERNAL_TOKEN
+
+        headers = {}
+        if AI_INTERNAL_TOKEN:
+            headers["X-Internal-Token"] = AI_INTERNAL_TOKEN
+        try:
+            resp = self._client.get(
+                f"/admin/documents/{doc_id}/file",
+                headers=headers,
+                timeout=_RETRIEVE_TIMEOUT_S,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"RAG 原文快照拉取失败: {exc} —— 检查 rag-service({self._base_url}) 是否就绪"
+            ) from exc
+        if resp.status_code != 200:
+            return resp.status_code, b"", ""
+        media = (resp.headers.get("content-type") or "application/octet-stream").split(";")[0]
+        return 200, resp.content, media
 
     def review_pending_doc(self, doc_id: str, action: str) -> dict[str, Any]:
         """把待复核审核动作转发给持有本地索引的 rag-service。"""

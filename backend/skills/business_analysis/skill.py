@@ -204,7 +204,7 @@ class BusinessAnalysisSkill(BaseSkill):
             table_names = ", ".join(sql_result.tables[:3]) if sql_result.tables else "电商业务"
             search_question = f"{table_names} 业务规则 风险预警 运营策略"
 
-            return pipeline.retrieve_knowledge(search_question)
+            return pipeline.retrieve_knowledge(search_question, system_subject="business_analysis")
         except Exception as e:
             logger.warning(f"[BusinessAnalysis] RAG 检索异常: {e}")
             return ""
