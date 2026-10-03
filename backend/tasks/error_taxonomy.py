@@ -67,6 +67,7 @@ _SOURCE_BY_TYPE = {
     "validation_error": "validation",
     "permission_denied": "security",
     "illegal_transition": "runtime",
+    "service_unavailable": "runtime",
     "internal_error": "runtime",
 }
 
@@ -110,6 +111,12 @@ def classify_task_error(exc: BaseException) -> TaskErrorClassification:
                 "permission_denied", False, _SOURCE_BY_TYPE["permission_denied"])
         # 0-chunk 文档是可诊断的业务输入终态：保留源文件供排查，
         # 不应按未知 RuntimeError 消耗 Celery 重试预算。
+        # TD-16：RAGPipeline 未就绪（初始化失败退避窗口）→ 可重试；
+        # 此前裸 RuntimeError 被消息特征误归 validation_error 终态。
+        if type(exc).__name__ == "PipelineNotReadyError":
+            return TaskErrorClassification(
+                "service_unavailable", True,
+                _SOURCE_BY_TYPE["service_unavailable"])
         if type(exc).__name__ == "ChunkingEmptyError":
             return TaskErrorClassification(
                 "validation_error", False,

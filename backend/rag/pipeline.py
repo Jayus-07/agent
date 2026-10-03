@@ -884,21 +884,20 @@ class RAGPipeline:
 
         返回 AskOutcome：answer + 本请求的 sources/answer_meta。此前调用方
         从 RAGChain 单例实例属性读 sources/meta，并发请求互相覆盖串扰；
-        现随返回值带回（contextvar 状态在本线程内读取后打包）。
+        现随返回值带回。sources/answer_meta 的读取点在 _ask_inner 清场
+        （_cleanup 重置 contextvar）之前完成并随返回元组带回——读取点若在
+        清场后，get_context() 已是新实例，sources 恒空（实测缺陷）；
+        单例实例属性 last_answer_meta 仅作 rag-server /ask 的兼容读出口。
         """
-        answer = self._ask_inner(
+        answer, answer_meta = self._ask_inner(
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
             permissions=permissions,
             user_id=user_id, tenant_id=tenant_id, roles=roles)
-        from backend.rag.context import get_context
-
-        try:
-            sources = list(get_context().sources)
-        except Exception:  # noqa: BLE001 — context 未初始化等极端情况不阻塞应答
-            sources = []
-        return AskOutcome(answer=answer, sources=sources,
-                          answer_meta=dict(self.last_answer_meta or {}))
+        meta = dict(answer_meta or {})
+        return AskOutcome(answer=answer,
+                          sources=list(meta.get("sources") or []),
+                          answer_meta=meta)
 
     def _ask_inner(
         self,
@@ -912,7 +911,12 @@ class RAGPipeline:
         user_id: str = "",
         tenant_id: str = "",
         roles: tuple[str, ...] = (),
-    ) -> str:
+    ) -> tuple[str, dict]:
+        """执行主链，返回 (answer, answer_meta)。
+
+        answer_meta 在清场前从实例属性打包为本地快照随返回值带回（并发请求
+        不再互读对方 meta）；实例属性本身保留——rag-server /ask 兼容读出口。
+        """
         self.last_answer_meta: dict = {}
         logger.info(f"收到问题: {question[:80]} (session={session_id}, kb={kb_id})")
         # C 阶段：入口代次检查（ask 主链与 /rag/ask 共用）
@@ -923,7 +927,7 @@ class RAGPipeline:
                               user_id=user_id, tenant_id=tenant_id, roles=roles)
         try:
             if not self._check_resources():
-                return "系统资源紧张，请稍后重试"
+                return "系统资源紧张，请稍后重试", {}
 
             is_first_turn = session_id not in self._seen_sessions
             if is_first_turn and self._session_has_history(session_id):
@@ -934,17 +938,18 @@ class RAGPipeline:
                 cached = self._check_answer_cache(question, kb_id)
                 if cached is not None:
                     self._mark_session_seen(session_id)
-                    return cached
+                    return cached, {}
 
             answer = self._execute_chain(question, session_id)
             self._mark_session_seen(session_id)
 
             self._snapshot_answer_meta()
+            answer_meta = dict(self.last_answer_meta or {})
 
             if is_first_turn and answer and not self._is_rejection(answer):
                 self._write_answer_cache(question, kb_id, answer)
 
-            return answer
+            return answer, answer_meta
         finally:
             self._cleanup()
 
@@ -1511,6 +1516,22 @@ _pipeline_lock = _threading.Lock()
 _pipeline_singleton: RAGPipeline | None = None
 _pipeline_init_error: str | None = None
 _pipeline_initializing: bool = False
+_pipeline_last_init_failure_at = 0.0
+
+
+class PipelineNotReadyError(RuntimeError):
+    """RAGPipeline 尚未就绪（初始化失败后的退避窗口内）。
+
+    TD-16（2026-10-03）：专用类型供任务错误分类器识别为可重试
+    （service_unavailable）——此前裸 RuntimeError 被消息特征误分类为
+    validation_error 终态，引擎重启竞态下索引任务一次失败即终败、
+    只能手动重启容器。
+    """
+
+
+# init 失败后的退避窗口（秒）：窗口内快速失败（不雪崩），窗口过期允许
+# 重新尝试初始化（请求/healthcheck 驱动自愈，无需重启容器）。
+_PIPELINE_INIT_RETRY_BACKOFF_SECONDS = 30
 
 
 def _get_local_pipeline() -> RAGPipeline:
@@ -1524,21 +1545,35 @@ def _get_local_pipeline() -> RAGPipeline:
     绕过 RAG_MODE 路由，防止服务端误配 remote 时自我代理。
     """
     global _pipeline_singleton, _pipeline_init_error, _pipeline_initializing
+    global _pipeline_last_init_failure_at
     if _pipeline_singleton is None:
         with _pipeline_lock:
             if _pipeline_singleton is None:
+                # TD-16：失败退避自愈——距上次失败超窗口则允许重试 init，
+                # 请求/healthcheck 驱动恢复，不再永久卡死到重启容器。
+                if _pipeline_init_error is not None:
+                    import time as _time
+                    if (_time.monotonic() - _pipeline_last_init_failure_at
+                            < _PIPELINE_INIT_RETRY_BACKOFF_SECONDS):
+                        raise PipelineNotReadyError(
+                            f"RAG 服务不可用（退避窗口内）: {_pipeline_init_error}")
+                    logger.warning(
+                        "[pipeline] 上次初始化失败已过退避窗口，重新尝试初始化")
+                    _pipeline_init_error = None
                 _pipeline_initializing = True
                 try:
                     _pipeline_singleton = RAGPipeline(mode="runtime")
                     _pipeline_init_error = None
                     logger.info("[pipeline] RAGPipeline 单例初始化成功")
                 except Exception as e:
+                    import time as _time
                     _pipeline_init_error = str(e)
+                    _pipeline_last_init_failure_at = _time.monotonic()
                     logger.error(f"[pipeline] RAGPipeline 初始化失败: {e}")
                 finally:
                     _pipeline_initializing = False
     if _pipeline_init_error is not None and _pipeline_singleton is None:
-        raise RuntimeError(f"RAG 服务不可用（重试中）: {_pipeline_init_error}")
+        raise PipelineNotReadyError(f"RAG 服务不可用（重试中）: {_pipeline_init_error}")
     return _pipeline_singleton
 
 
