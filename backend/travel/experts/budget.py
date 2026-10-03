@@ -18,9 +18,9 @@ from backend.travel.agents.optimization_agent import OptimizationAgent
 _optimization = OptimizationAgent()
 
 
-def estimate_cost(days, party_size, city=""):
-    """费用核算（Optimization 能力）：委托 OptimizationAgent。"""
-    return _optimization.estimate_cost(days, party_size, city=city)
+def estimate_cost(days, party_size, city="", tier="economy"):
+    """费用核算（Optimization 能力）：委托 OptimizationAgent。tier 见 M3-e。"""
+    return _optimization.estimate_cost(days, party_size, city=city, tier=tier)
 
 
 def budget_expert_node(state: dict) -> dict:
