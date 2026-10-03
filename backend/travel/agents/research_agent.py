@@ -10,6 +10,8 @@ ProviderRouter 在 service 内插入）；禁止 import experts/graph_builder；
 """
 from __future__ import annotations
 
+import re
+
 from backend.shared.logger import logger
 from backend.travel.models.brief import TravelBrief
 from backend.travel.models.poi import Poi
@@ -70,23 +72,92 @@ class ResearchAgent:
         return live_search_service.search_hotels(city)
 
     def search_guides(self, destination: str) -> dict:
-        """旅游/美食攻略检索（知乎官方 MCP 两路）。
+        """知乎攻略检索（2026-10-03 多主题）。
 
-        攻略是增强信息非规划硬依赖：单路失败独立降级为 ``{"error": ...}``，
-        绝不让一路失败拖垮 poi 专家节点；全失败时返回两路 error，交付端
-        据此披露「攻略检索不可用」。
+        规划主链自动触发（不再依赖用户消息含「攻略」触发词）：知乎站内按
+        景点/美食/城市特色三主题各查一次 + 全网城市攻略一路；结果供 SSE
+        攻略卡展示与候选 POI 提及理由匹配。
+
+        攻略是增强信息非规划硬依赖：单主题/单路失败独立降级为
+        ``{"error": ...}``，绝不让一路失败拖垮 poi 专家节点；全失败时
+        返回 error，交付端据此披露「攻略检索不可用」。
         """
-        guides: dict = {}
-        for name, fetch in (
-            ("zhihu", live_search_service.search_zhihu_guides),
-            ("web", live_search_service.search_web_guides),
-        ):
+        by_topic: dict[str, list] = {}
+        errors: list[str] = []
+        for topic in live_search_service.GUIDE_TOPIC_QUERIES:
             try:
-                guides[name] = fetch(destination=destination)
+                payload = live_search_service.search_zhihu_guides(
+                    destination=destination, topic=topic)
             except LiveSearchError as exc:
-                logger.warning("[ResearchAgent] 攻略检索 %s 路失败: %s", name, exc)
-                guides[name] = {"error": str(exc)}
+                logger.warning("[ResearchAgent] 攻略检索 %s/%s 失败: %s",
+                               destination, topic, exc)
+                errors.append(str(exc))
+                continue
+            for item in payload.get("results") or []:
+                if isinstance(item, dict):
+                    by_topic.setdefault(topic, []).append({**item, "topic": topic})
+        # 三主题轮转交错：preview 截断（[:6]）后仍三主题均衡可见
+        interleaved: list[dict] = []
+        cursors: dict[str, int] = {}
+        while True:
+            advanced = False
+            for topic, items in by_topic.items():
+                i = cursors.get(topic, 0)
+                if i < len(items):
+                    interleaved.append(items[i])
+                    cursors[topic] = i + 1
+                    advanced = True
+            if not advanced:
+                break
+
+        guides: dict = {}
+        guides["zhihu"] = (
+            {"results": interleaved} if interleaved else {"error": "；".join(dict.fromkeys(errors))}
+        )
+        try:
+            guides["web"] = live_search_service.search_web_guides(destination=destination)
+        except LiveSearchError as exc:
+            logger.warning("[ResearchAgent] 攻略检索 web 路失败: %s", exc)
+            guides["web"] = {"error": str(exc)}
         return guides
+
+    @staticmethod
+    def match_guide_mentions(candidates: list[Poi], guides: dict) -> dict[str, str]:
+        """知乎攻略提及匹配：POI 全名出现在攻略标题/摘要 → 入选理由。
+
+        纯文本包含匹配（保守口径：不做分词/近似匹配，宁缺勿错——
+        matched 是要展示给用户的推荐依据，错了就是编造）。两字以下
+        名称不参与（子串误命中率过高）。
+        """
+        texts: list[tuple[str, str]] = []
+        for payload in (guides or {}).values():
+            if not isinstance(payload, dict) or payload.get("error"):
+                continue
+            for item in payload.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "").strip()
+                if not title:
+                    continue
+                texts.append((title, f"{title}\n{item.get('summary') or ''}"))
+        if not texts:
+            return {}
+        mentions: dict[str, str] = {}
+        for poi in candidates:
+            name = ResearchAgent._normalize_name(poi.name)
+            if len(name) < 2:
+                continue
+            for title, haystack in texts:
+                if name in haystack:
+                    mentions[poi.poi_id] = f"知乎攻略《{title}》提及"
+                    break
+        return mentions
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """名称规范化：去空白与中英文括号内容（「西湖（杭州景区）」→「西湖」）。"""
+        text = re.sub(r"[（(].*?[)）]", "", name or "")
+        return re.sub(r"\s+", "", text)
 
     @staticmethod
     def guide_event_summary(data: dict) -> dict:

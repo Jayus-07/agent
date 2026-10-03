@@ -68,6 +68,23 @@ class TestServiceLayer:
         assert calls[0][1] == {"query": "泉州 旅游 美食 攻略", "count": 4}
         assert data["results"][0]["title"] == "攻略一"
 
+    def test_topic_query_templates(self, fake_tools):
+        """2026-10-03 多主题：topic → 专属检索词；空 topic 走旧模板。"""
+        calls, responses = fake_tools
+        responses["zhihu"].extend([
+            _success_envelope([_guide("景点帖")]),
+            _success_envelope([_guide("美食帖")]),
+        ])
+        LIVE.search_zhihu_guides(destination="泉州", topic="attraction")
+        LIVE.search_zhihu_guides(destination="泉州", topic="food")
+        assert calls[0][1]["query"] == "泉州 旅游 景点 攻略"
+        assert calls[1][1]["query"] == "泉州 美食 特色 必吃"
+
+    def test_preview_tags_topic(self):
+        preview = LIVE.guides_preview(
+            {"results": [_guide("a")]}, source="zhihu", topic="city")
+        assert preview["preview"][0]["topic"] == "city"
+
     def test_failure_envelope_raises_live_search_error(self, fake_tools):
         _, responses = fake_tools
         responses["zhihu"].append(json.dumps(
@@ -95,10 +112,10 @@ class TestAgentDegradation:
         """一路挂不能拖垮另一路：失败路降级为 error 键（增强信息语义）。"""
         monkeypatch.setattr(
             LIVE, "search_zhihu_guides",
-            lambda *, destination, limit=4: {"results": [_guide("知乎攻略")]})
+            lambda *, destination, limit=4, topic="": {"results": [_guide("知乎攻略")]})
         monkeypatch.setattr(
             LIVE, "search_web_guides",
-            lambda *, destination, limit=4: (_ for _ in ()).throw(
+            lambda *, destination, limit=4, topic="": (_ for _ in ()).throw(
                 LiveSearchError("全网搜索未启用")))
         data = ResearchAgent().search_guides("泉州")
         assert data["zhihu"]["results"][0]["title"] == "知乎攻略"
@@ -107,11 +124,11 @@ class TestAgentDegradation:
     def test_both_lanes_fail_still_returns_dict(self, monkeypatch):
         monkeypatch.setattr(
             LIVE, "search_zhihu_guides",
-            lambda *, destination, limit=4: (_ for _ in ()).throw(
+            lambda *, destination, limit=4, topic="": (_ for _ in ()).throw(
                 LiveSearchError("a")))
         monkeypatch.setattr(
             LIVE, "search_web_guides",
-            lambda *, destination, limit=4: (_ for _ in ()).throw(
+            lambda *, destination, limit=4, topic="": (_ for _ in ()).throw(
                 LiveSearchError("b")))
         data = ResearchAgent().search_guides("泉州")
         assert "a" in data["zhihu"]["error"] and "b" in data["web"]["error"]
@@ -128,21 +145,60 @@ class TestAgentDegradation:
         assert [p["title"] for p in ok["preview"]] == ["a", "b"]
         assert ok["data_status"] == "available"
 
+    def test_topics_all_queried_and_interleaved(self, monkeypatch):
+        """2026-10-03 规划自动检索：景点/美食/城市特色三主题各查一次，
+        结果轮转交错（preview 截断后三主题均衡可见），条目带 topic 标记。"""
+        seen_topics: list[str] = []
 
-class TestTriggerWords:
-    @pytest.mark.parametrize("text", [
-        "泉州有什么必吃的", "帮我做一份厦门美食攻略", "当地特色美食有哪些",
-        "推荐几家小吃", "泉州美食指南",
-    ])
-    def test_guide_triggered(self, text):
-        _, _, guide = _live_queries(text)
-        assert guide is True
+        def _fake_zhihu(*, destination, limit=4, topic=""):
+            seen_topics.append(topic)
+            return {"results": [_guide(f"{topic}-攻略")]}
 
-    @pytest.mark.parametrize("text", ["规划一个两天的行程", "查美食", "查酒店"])
-    def test_guide_not_triggered_without_intent(self, text):
-        _, _, guide = _live_queries(text)
-        assert guide is False
+        monkeypatch.setattr(LIVE, "search_zhihu_guides", _fake_zhihu)
+        monkeypatch.setattr(
+            LIVE, "search_web_guides",
+            lambda *, destination, limit=4, topic="": {"results": []})
+        data = ResearchAgent().search_guides("泉州")
+        assert sorted(seen_topics) == sorted(LIVE.GUIDE_TOPIC_QUERIES)
+        topics = [item["topic"] for item in data["zhihu"]["results"]]
+        assert topics[0] != topics[1]  # 交错：开头不是同一主题连排
+        assert set(topics) == set(LIVE.GUIDE_TOPIC_QUERIES)
 
-    def test_food_and_hotel_triggers_unchanged(self):
-        food, hotel, guide = _live_queries("查美食和查酒店，顺便看看攻略")
-        assert food and hotel and guide
+    def test_match_guide_mentions(self):
+        """知乎攻略提及匹配：POI 全名出现在标题/摘要 → 理由；未提及不编造。"""
+        from backend.travel.models.poi import Poi
+
+        def _poi(pid: str, name: str) -> Poi:
+            return Poi(poi_id=pid, name=name, city="泉州", lat=24.9, lng=118.6)
+
+        guides = {
+            "zhihu": {"results": [
+                {**_guide("开元寺深度游"), "topic": "attraction"},
+                {**_guide("西街小吃清单"), "topic": "food"},
+            ]},
+            "web": {"error": "未启用"},
+        }
+        hits = ResearchAgent.match_guide_mentions(
+            [_poi("a", "开元寺"), _poi("b", "清净寺"), _poi("c", "西街")], guides)
+        assert "知乎攻略《开元寺深度游》提及" == hits["a"]
+        assert "b" not in hits  # 攻略没提就是没提，不补造
+        # 括号后缀不影响匹配
+        hits2 = ResearchAgent.match_guide_mentions(
+            [_poi("d", "西街（泉州老城区）")], guides)
+        assert "d" in hits2
+
+
+class TestLiveQueries:
+    @pytest.mark.parametrize("text", ["查美食", "搜餐厅", "附近美食"])
+    def test_food_triggered(self, text):
+        food, hotel = _live_queries(text)
+        assert food and not hotel
+
+    def test_food_triggered_by_preference(self):
+        """2026-10-03：美食偏好自动触发商户检索（吃走推荐卡，不进行程）。"""
+        food, hotel = _live_queries("做个两天的行程", ["美食"])
+        assert food and not hotel
+
+    def test_hotel_triggered(self):
+        food, hotel = _live_queries("查酒店", [])
+        assert hotel and not food

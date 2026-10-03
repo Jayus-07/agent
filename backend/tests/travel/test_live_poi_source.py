@@ -89,3 +89,47 @@ def test_seed_channel_untouched(monkeypatch):
     candidates, notes = poi_service.retrieve_candidates(_brief(destination="福州"))
     assert [p.poi_id for p in candidates] == ["seed:fz-1"]
     assert notes == []
+
+
+# ── 2026-10-03：「行程全是吃的」根治 + 入选理由 ─────────────────────
+
+def test_food_preference_keeps_sightseeing_queries(monkeypatch):
+    """美食偏好不再把候选池检索词锁死为「美食」（此前 LBS 返回全是餐厅，
+    行程被挤成全是吃的）：无景点类偏好时回落兜底景点词。"""
+    seen: list[str] = []
+
+    def fake_search(**kw):
+        seen.append(kw["keyword"])
+        return {"pois": [_lbs_item("1", "西湖", category="景点:风景")]}
+
+    monkeypatch.setattr(live_search_service, "search_places", fake_search)
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    candidates, _ = poi_service.retrieve_candidates(_brief(preferences=["美食"]))
+    assert seen == list(poi_service._LIVE_DEFAULT_QUERIES)
+    assert all(p.category != "美食" for p in candidates)
+    # 候选带基础入选理由（「为什么选它」的检索事实层）
+    assert candidates[0].reason == "「风景名胜」实时检索"
+
+
+def test_meal_candidates_not_scheduled_but_disclosed(monkeypatch):
+    """骨架类别策略：餐饮候选不排入行程且如实披露；点名必去的餐厅保留。"""
+    monkeypatch.setattr(live_search_service, "search_places", lambda **kw: {"pois": [
+        _lbs_item("1", "老字号餐厅", category="餐饮:中餐厅"),
+        _lbs_item("2", "西湖", category="景点:风景"),
+        _lbs_item("3", "必去餐厅", category="餐饮:小吃"),
+        _lbs_item("4", "达明美食街", category="美食:美食街"),
+    ]})
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    brief = _brief(days=1, must_go=["必去餐厅"])
+    candidates, _ = poi_service.retrieve_candidates(brief)
+    skeleton = poi_service.build_skeleton(brief, candidates)
+
+    scheduled = [p.name for day in skeleton.days for p in day]
+    assert "老字号餐厅" not in scheduled
+    assert "西湖" in scheduled
+    assert "必去餐厅" in scheduled
+    # 游玩型餐饮区（美食街）不是「坐下吃饭的店」，保留排入
+    assert "达明美食街" in scheduled
+    assert any("餐饮类候选不排进行程" in n and "老字号餐厅" in n for n in skeleton.notes)

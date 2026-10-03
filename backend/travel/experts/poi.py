@@ -15,6 +15,7 @@ from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief
 from backend.travel.planning import resolve_must_go
+from backend.travel.services import live_search_service
 
 # 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：Agent 封装落地后，
 # 能力调用走 Node → Agent → Service；纯数据契约（Skeleton）直通 service
@@ -26,23 +27,22 @@ _research = ResearchAgent()
 _planning = PlanningAgent()
 
 
-def _live_queries(message: str) -> tuple[bool, bool, bool]:
-    """只在用户明确要求实时检索时调用外部 Tool。
+def _live_queries(message: str, preferences: list[str] | None = None) -> tuple[bool, bool]:
+    """商户类实时检索的触发判定。
 
-    food/hotel = 高德商户（结构化）；guide = 知乎官方 MCP 攻略内容
-    （知乎经验帖 + 全网文章，2026-10-02 接入）。
+    food/hotel = 高德商户（结构化）。2026-10-03 起攻略（知乎官方 MCP）
+    改为规划主链自动检索（景点/美食/城市特色三主题，见 ResearchAgent.
+    search_guides），不再依赖用户消息触发词；「美食」偏好同时自动触发
+    美食商户检索——吃的以推荐卡呈现，不进行程候选池。
     """
     text = message or ""
     food = any(token in text for token in (
         "查美食", "查餐厅", "搜美食", "搜餐厅", "附近美食", "实时美食",
-    ))
+    )) or "美食" in (preferences or [])
     hotel = any(token in text for token in (
         "查酒店", "搜酒店", "酒店搜索", "实时酒店",
     ))
-    guide = any(token in text for token in (
-        "攻略", "必吃", "小吃", "特色美食", "美食推荐", "值得吃", "美食指南",
-    ))
-    return food, hotel, guide
+    return food, hotel
 
 
 def _merchant_summary(category: str):
@@ -89,35 +89,57 @@ def poi_expert_node(state: dict) -> dict:
                 "notes": extra_notes + [f"暂时没有「{brief.destination}」的地点数据"],
             }
 
+        # 知乎攻略检索（2026-10-03 规划自动触发，不依赖触发词）：三主题站内
+        # + 全网各一路，Agent 层单路降级不会上抛；结果一进 SSE 攻略卡，
+        # 二做候选「知乎攻略提及」理由匹配——推荐依据要有出处。
+        live_search: dict[str, dict] = {}
+        guides = run_travel_tool(
+            "zhihu_search_tool",
+            "research",
+            lambda: _research.search_guides(brief.destination),
+            result_summary=lambda value: _research.guide_event_summary(value),
+        )
+        live_search["guides"] = guides
+        mentions = _research.match_guide_mentions(candidates, guides)
+        if mentions:
+            candidates = [
+                p.model_copy(update={
+                    "reason": f"{p.reason} · {mentions[p.poi_id]}" if p.reason
+                    else mentions[p.poi_id],
+                }) if p.poi_id in mentions else p
+                for p in candidates
+            ]
+
         skeleton = build_skeleton(brief, candidates)
         # must_go 三态契约（STOP I1）：resolved/unresolved 在此唯一产生，
         # 金标 Q2（must_go_coverage）与下游披露都消费这里的事实
         resolution = resolve_must_go(brief, candidates)
 
-        live_search: dict[str, dict] = {}
-        need_food, need_hotel, need_guide = _live_queries(state.get("user_message", ""))
+        need_food, need_hotel = _live_queries(
+            state.get("user_message", ""), brief.preferences)
         if need_food:
-            live_search["food"] = run_travel_tool(
-                "map_merchant_search_tool",
-                "research",
-                lambda: _research.search_food(brief.destination),
-                result_summary=_merchant_summary("food"),
-            )
+            # 商户检索与攻略同级（增强信息）：失败降级为披露，不拖垮规划
+            #（「美食」偏好自动触发后该检索在每次规划都会跑，炸节点等于
+            # 高德一抖行程就没了）。
+            try:
+                live_search["food"] = run_travel_tool(
+                    "map_merchant_search_tool",
+                    "research",
+                    lambda: _research.search_food(brief.destination),
+                    result_summary=_merchant_summary("food"),
+                )
+            except live_search_service.LiveSearchError as exc:
+                extra_notes.append(f"美食商户实时检索不可用（{exc}），本次只有攻略参考")
         if need_hotel:
-            live_search["hotel"] = run_travel_tool(
-                "map_merchant_search_tool",
-                "research",
-                lambda: _research.search_hotels(brief.destination),
-                result_summary=_merchant_summary("hotel"),
-            )
-        if need_guide:
-            # 攻略检索（知乎官方 MCP）：Agent 层已做单路降级，此处不再上抛
-            live_search["guides"] = run_travel_tool(
-                "zhihu_search_tool",
-                "research",
-                lambda: _research.search_guides(brief.destination),
-                result_summary=lambda value: _research.guide_event_summary(value),
-            )
+            try:
+                live_search["hotel"] = run_travel_tool(
+                    "map_merchant_search_tool",
+                    "research",
+                    lambda: _research.search_hotels(brief.destination),
+                    result_summary=_merchant_summary("hotel"),
+                )
+            except live_search_service.LiveSearchError as exc:
+                extra_notes.append(f"酒店商户实时检索不可用（{exc}）")
 
         # STOP I6 遥测 + 结构化事件（软失败）
         try:

@@ -37,6 +37,9 @@ export interface ItineraryPoi {
   verification_status?: string;
   /** 坐标级核实状态（字段级拆分）：verified=坐标来自实时检索源；缺省回退 source 口径 */
   location_status?: string;
+  /** 入选理由（2026-10-03）：「为什么选它」——检索来源/必去点名/知乎攻略提及 */
+  reason?: string;
+  required?: boolean;
 }
 
 export interface ItineraryItem {

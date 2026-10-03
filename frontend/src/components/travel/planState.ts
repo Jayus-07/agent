@@ -64,7 +64,14 @@ export function composePlanMessage(input: PlanFormInput): string {
  * - 回复不带行程（追问 / 失败）→ **保留旧行程**，只把这句话放进 notice
  */
 export function applyPlanResponse(prev: PlanState, data: PlanResponse): PlanState {
-  if (data.itinerary) return { plan: data, pending: null, notice: '' }
+  if (data.itinerary) {
+    // 确认/应用等后续响应不带规划说明（final_answer 空串）——空值不覆盖
+    // 上一份说明，否则「为什么这样排」的 intro 消息在确认后消失
+    const carried = data.final_answer?.trim()
+      ? data
+      : { ...data, final_answer: prev.plan?.final_answer ?? '' }
+    return { plan: carried, pending: null, notice: '' }
+  }
   const text = (data.final_answer || data.clarification || '').trim()
   return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次' }
 }

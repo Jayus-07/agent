@@ -18,7 +18,8 @@ from backend.travel.graph_state import (
     load_validation,
 )
 from backend.travel.models.itinerary import KIND_MEAL
-from backend.travel.models.poi import source_provider
+from backend.travel.models.poi import CATEGORY_MEAL, PLAYABLE_MEAL_MARKERS, source_provider
+from backend.travel.planning import names_match
 from backend.travel.slot_filler import build_clarification
 
 # 数据来源标识 → 面向用户的说明。
@@ -277,6 +278,75 @@ def _assemble(state: dict) -> str:
     return _render_itinerary(state, itinerary)
 
 
+def _render_rationale(state: dict, itinerary) -> list[str]:
+    """「为什么这样排」段（2026-10-03）：把规划依据讲给用户。
+
+    只陈述候选池/骨架层的既存事实（检索规模、类别取舍、排法规则、
+    攻略提及），不评价不补造——评价性语言留给攻略原文。
+    """
+    candidates = state.get("candidates") or []
+    if not candidates:
+        return []
+    meals = [c for c in candidates if c.get("category") == CATEGORY_MEAL
+             and not any(m in str(c.get("name") or "") for m in PLAYABLE_MEAL_MARKERS)]
+    mentioned = [c for c in candidates
+                 if "知乎攻略" in str(c.get("reason") or "")]
+    lines = ["## 为什么这样排", ""]
+    lines.append(
+        f"- 候选池：腾讯位置服务实时检索到 {len(candidates)} 个地点"
+        f"（游玩类 {len(candidates) - len(meals)}、餐饮类 {len(meals)}），"
+        "来自你填的目的地与偏好"
+    )
+    if itinerary.brief.must_go:
+        lines.append("- 你点名的必去地点优先排入，永不被静默丢弃")
+    lines.append(
+        "- 排法：先必去、再按地理就近把地点串成每天路线，"
+        f"受「{itinerary.brief.pace_label()}」节奏上限约束（每天地点数/活动时长）"
+    )
+    if meals:
+        lines.append(
+            f"- {len(meals)} 个餐饮类候选没有排进行程：白天时间留给游玩，"
+            "吃什么看下方美食推荐和右栏商户卡"
+        )
+    if mentioned:
+        names = "、".join(str(c.get("name") or "") for c in mentioned[:6])
+        more = f" 等 {len(mentioned)} 处" if len(mentioned) > 6 else ""
+        lines.append(f"- 知乎攻略提及其中 {len(mentioned)} 处（{names}{more}），逐条出处见各日「为什么选它」")
+    lines.append("")
+    return lines
+
+
+def _render_food_picks(state: dict) -> list[str]:
+    """「美食推荐」段（2026-10-03）：高德商户检索结果进行程单正文。
+
+    吃的不进行程条目（类别策略），但用户明确关心「选的美食店为什么是
+    这些」——理由=与偏好匹配 + 高德实时检索 + 评分，只列检索返回的
+    事实字段，缺的不补造。
+    """
+    food = (state.get("live_search") or {}).get("food") or {}
+    merchants = food.get("merchants") or []
+    if not merchants:
+        return []
+    lines = ["## 美食推荐", ""]
+    lines.append("> 高德实时检索、与你的美食偏好匹配；营业与价位以到店为准。")
+    lines.append("")
+    for m in merchants[:3]:
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or "").strip()
+        if not name:
+            continue
+        extras = []
+        if m.get("rating"):
+            extras.append(f"评分 {m['rating']}")
+        if m.get("address"):
+            extras.append(str(m["address"]))
+        tail = f"（{' · '.join(extras)}）" if extras else ""
+        lines.append(f"- **{name}**{tail}")
+    lines.append("")
+    return lines
+
+
 def _render_itinerary(state: dict, itinerary) -> str:
     brief = itinerary.brief
     report = load_validation(state)
@@ -311,9 +381,17 @@ def _render_itinerary(state: dict, itinerary) -> str:
 
         legs = list(day.legs)
         leg_cursor = 0
+        must_go = [w.strip() for w in itinerary.brief.must_go if (w or "").strip()]
         for item in day.items:
             tag = "" if item.kind != KIND_MEAL else "（用餐）"
             lines.append(f"- **{item.start}-{item.end}** {item.title}{tag}")
+            # 入选理由（2026-10-03）：「为什么选它」逐条讲清楚——必去点名、
+            # 检索来源、知乎攻略提及。只陈述 state 里的既存事实，不补造。
+            if item.poi:
+                named = any(names_match(item.poi.name, want) for want in must_go)
+                basis = f"你点名的必去 · {item.poi.reason}" if named else item.poi.reason
+                if basis:
+                    lines.append(f"  - 为什么选它：{basis}")
             if item.note:
                 lines.append(f"  - 提示：{item.note}")
             # 通勤段插在「到达项」之前展示会很乱，这里统一挂在离开上一项之后
@@ -334,6 +412,10 @@ def _render_itinerary(state: dict, itinerary) -> str:
             "费用暂无数据*"
         )
         lines.append("")
+
+    # ── 规划依据 + 美食推荐（2026-10-03）：「为什么这样排/为什么选这些」──
+    lines += _render_rationale(state, itinerary)
+    lines += _render_food_picks(state)
 
     # ── 费用拆分 ──
     lines.append("## 费用数据")

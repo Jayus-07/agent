@@ -22,6 +22,20 @@ CATEGORY_SHOPPING = "购物"
 CATEGORY_NIGHT = "夜生活"
 CATEGORY_PARK = "公园"
 
+# 游玩型餐饮区（逛+吃一体的目的地），不算「坐下吃饭的店」（2026-10-03）
+PLAYABLE_MEAL_MARKERS = ("美食街", "夜市", "小吃街", "美食城", "美食广场")
+
+
+def is_pure_meal(poi: "Poi") -> bool:
+    """是否纯餐饮——骨架排除进行程的判定口径（poi_service 与 reporter 共用）。
+
+    「美食街/夜市」类是游玩型餐饮区，不是坐下吃饭的店，返回 False；
+    金标 T-D03/T-G09 的预算超限源「达明美食街」即此类，必须保留排入。
+    """
+    if poi.category != CATEGORY_MEAL:
+        return False
+    return not any(marker in poi.name for marker in PLAYABLE_MEAL_MARKERS)
+
 # ── 来源标识的解析口径（唯一一份）──────────────────────────────
 # 约定：`provider[:variant]`，如 `seed:local`、`tencent:lbs`、`estimate:local`。
 # 判定「这份数据是不是本地种子数据」**必须比提供方段**，不要用 str.startswith：
@@ -81,6 +95,13 @@ class Poi(BaseModel):
     location_status: str = Field(
         default="",
         description="坐标级核实状态：verified=坐标来自实时检索源；空=未单独标注（回退 source 口径）",
+    )
+    # —— 入选理由（2026-10-03）：「为什么选它」要讲给用户 ——
+    # 基础事实由候选构造方填写（检索词/来源）；知乎攻略提及等增强理由由
+    # poi 专家节点追加（` · ` 拼接）。空=旧数据无此字段，展示方直接省略。
+    reason: str = Field(
+        default="",
+        description="入选理由：如「『风景名胜』实时检索 · 知乎攻略《…》提及」；随条目透传到行程单与前端",
     )
 
     def is_open_on(self, weekday: int) -> bool:

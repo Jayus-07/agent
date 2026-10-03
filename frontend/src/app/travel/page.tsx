@@ -30,6 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Utensils } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
+import { ToolPreviewBody, ToolFailedBody } from '@/components/travel/ToolPreviews'
 import TravelChatDrawer from '@/components/travel/TravelChatDrawer'
 import TravelPlanList from '@/components/travel/TravelPlanList'
 import TaskSidebar from '@/components/agent/TaskSidebar'
@@ -53,6 +54,7 @@ import {
   initialTravelProcess,
   reduceTravelStreamEvent,
   type TravelProcessState,
+  type TravelProcessTool,
 } from '@/components/travel/travelRuntime'
 import { TRAVEL_STAGE_LABELS, TRAVEL_STAGE_ORDER, TRAVEL_TOOL_LABELS } from '@/components/travel/travelDisplay'
 import {
@@ -668,6 +670,11 @@ export default function TravelPage() {
                       </p>
                     </section>
                   )}
+                  {travelProcess?.tools?.length ? (
+                    <div className="mb-3">
+                      <ToolProcessRecap processState={travelProcess} />
+                    </div>
+                  ) : null}
                   <ItineraryView
                   itinerary={itinerary}
                   notice={planState.notice}
@@ -694,7 +701,7 @@ export default function TravelPage() {
             {/* ── 右栏：旅行助手（设计稿态1 无助手栏；生成中/有行程才出现） ── */}
             {isWide && hasRightRail && (
               <aside className="min-w-0 min-h-0">
-                <TravelChatDrawer mode="panel" planVersion={itinerary?.plan_version} {...assistantProps} />
+                <TravelChatDrawer mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} {...assistantProps} />
               </aside>
             )}
           </div>
@@ -1183,8 +1190,9 @@ type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
 /**
  * GeneratingCard — 生成中进度（2026-10-02 聊天流式竖版）：
  * 事件流像聊天消息一样逐条动态出现（需求分析 / 每次真实 Tool 调用一条）；
- * 执行完自动折叠成一行（名称 + 结果摘要），进行中/失败默认展开，
- * 用户点击可随时展开看 Tool 执行结果（商户/车次/攻略 preview 直接渲染）。
+ * 进行中/失败/有结果的行默认展开（2026-10-03：检索结果不再默认折叠），
+ * 其余折叠成一行摘要，用户点击可切换；行程到达后本卡卸载，
+ * 由 ToolProcessRecap 常驻接管结果展示。
  * 进度只来自真实 SSE 事件，不伪造百分比。
  */
 function GeneratingCard({
@@ -1275,74 +1283,7 @@ function GeneratingCard({
               </li>
             )
           })()}
-          {tools.map((tool, index) => {
-            const key = `tool-${index}`
-            const running = tool.status === 'running'
-            const failedRow = tool.status === 'failed'
-            const open = isOpen(key, running || failedRow)
-            const label = TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool
-            const summary = running
-              ? '调用中…'
-              : failedRow
-                ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
-                : [
-                    tool.resultCount != null ? `${tool.resultCount} 条` : '',
-                    tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '',
-                  ].filter(Boolean).join(' · ') || '完成'
-            return (
-              <li
-                key={key}
-                className={`overflow-hidden rounded-xl border ${
-                  failedRow ? 'border-red-200 bg-red-50/50' : 'border-[#e2f0ee] bg-white'
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => toggle(key)}
-                  aria-expanded={open}
-                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
-                >
-                  {running ? (
-                    <Loader2 size={13} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
-                  ) : failedRow ? (
-                    <AlertCircle size={13} className="shrink-0 text-red-500" aria-label="失败" />
-                  ) : (
-                    <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
-                  )}
-                  <span className={`min-w-0 flex-1 truncate text-xs ${failedRow ? 'font-medium text-red-700' : 'font-medium text-[#183037]'}`}>
-                    {label}
-                  </span>
-                  <span className={`shrink-0 text-[10px] ${failedRow ? 'text-red-600' : 'text-[#5c7074]'}`}>{summary}</span>
-                  <ChevronDown size={12} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
-                </button>
-                {open && (
-                  <div className="border-t border-[#eef4f2] px-3 py-2.5">
-                    {failedRow ? (
-                      <p className="break-words text-[11px] leading-relaxed text-red-600">
-                        {tool.error || '该步骤执行失败，未用假数据补齐；其他步骤的结果仍然有效。'}
-                      </p>
-                    ) : (tool.preview?.length ?? 0) > 0 ? (
-                      tool.category === 'train'
-                        ? <TrainPreview preview={tool.preview!} />
-                        : tool.category === 'guide'
-                          ? <GuidePreview preview={tool.preview!} />
-                          : <MerchantPreview preview={tool.preview!} category={tool.category} />
-                    ) : running ? (
-                      <p className="text-[11px] text-[#7a8e8b]">正在调用真实数据源，结果返回后自动折叠…</p>
-                    ) : (
-                      <p className="text-[11px] text-[#7a8e8b]">
-                        {tool.dataStatus === 'empty'
-                          ? '查询成功，当前没有匹配结果。'
-                          : tool.dataStatus === 'unavailable'
-                            ? '数据源暂不可用，已按降级口径继续规划。'
-                            : '执行完成。'}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </li>
-            )
-          })}
+          <ToolProcessRows tools={tools} />
           {tools.length === 0 && !requirement && (
             <li className="py-4 text-center text-xs text-[#7a8e8b]">正在启动规划引擎…</li>
           )}
@@ -1500,113 +1441,132 @@ function PlanIntakeCard({
   )
 }
 
-function MerchantPreview({ preview, category }: { preview: Array<Record<string, unknown>>; category?: string }) {
-  return (
-    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-      {preview.slice(0, 4).map((item, index) => (
-        <article key={`${String(item.id ?? item.name ?? index)}`} className="rounded-lg border border-[#f0dfc8] bg-[#fffdf9] p-2.5">
-          <div className="flex items-start gap-2">
-            <span className="mt-0.5 rounded-md bg-[#f5e5d1] p-1.5 text-[#b36a2d]">{category === 'hotel' ? <Hotel size={13} aria-hidden /> : <Utensils size={13} aria-hidden />}</span>
-            <div className="min-w-0">
-              <h3 className="truncate text-xs font-semibold text-[#183037]">{String(item.name ?? '未命名商户')}</h3>
-              <p className="mt-0.5 truncate text-[10px] text-[#7a6b5d]">{String(item.category ?? item.address ?? '地址待核实')}</p>
-            </div>
-          </div>
-          <p className="mt-2 truncate text-[10px] text-[#6c5948]">{String(item.address ?? '地址待核实')}</p>
-          <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-[#8c7258]">
-            {item.rating != null && <span>评分 {String(item.rating)}</span>}
-            {item.price != null && <span>{String(item.price)}</span>}
-            {item.open_status != null && <span>{String(item.open_status)}</span>}
-          </div>
-        </article>
-      ))}
-    </div>
-  )
-}
-
-function TrainPreview({ preview }: { preview: Array<Record<string, unknown>> }) {
-  /** 席别价格统一成「¥83」形态：数值/数字串补 ¥，其余原样透传，缺失显示 -- */
-  const formatPrice = (value: unknown): string => {
-    if (value == null || value === '') return '--'
-    if (typeof value === 'number' && Number.isFinite(value)) return `¥${value}`
-    const raw = String(value).trim()
-    if (raw.startsWith('¥') || raw.startsWith('￥')) return raw
-    return /^\d+(\.\d+)?$/.test(raw) ? `¥${raw}` : raw
+/**
+ * ToolProcessRows — tool 事件行渲染（2026-10-03 自 GeneratingCard 抽出）：
+ * 生成中卡与完成后的 ToolProcessRecap 共用同一份实现。展开口径：
+ * 进行中 / 失败 / 有结果 preview 的行默认展开，其余折叠成一行摘要。
+ */
+function ToolProcessRows({ tools }: { tools: TravelProcessTool[] }) {
+  const [manualToggled, setManualToggled] = useState<Set<string>>(new Set())
+  const toggle = (key: string) => {
+    setManualToggled((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   }
   return (
-    <div className="mt-2 overflow-x-auto rounded-lg border border-[#f0dfc8]">
-      <table className="min-w-full text-left text-[10px] text-[#6c5948]">
-        <thead className="bg-[#fff3e3] text-[#8c7258]"><tr><th className="px-2 py-1.5 font-medium">车次</th><th className="px-2 py-1.5 font-medium">出发</th><th className="px-2 py-1.5 font-medium">到达</th><th className="px-2 py-1.5 font-medium">历时</th><th className="px-2 py-1.5 font-medium">余票</th><th className="px-2 py-1.5 font-medium">票价</th></tr></thead>
-        <tbody>
-          {preview.slice(0, 6).map((item, index) => {
-            const seats = item.seats
-            const seatsText = seats && typeof seats === 'object' && !Array.isArray(seats)
-              ? Object.entries(seats as Record<string, unknown>).slice(0, 3)
-                  .map(([seat, left]) => `${seat} ${String(left)}`).join(' / ')
-              : ''
-            const prices = item.prices
-            const priceText = prices && typeof prices === 'object' && !Array.isArray(prices)
-              ? Object.entries(prices as Record<string, unknown>).slice(0, 2)
-                  .map(([seat, price]) => `${seat} ${formatPrice(price)}`).join(' / ')
-              : ''
-            return (
-              <tr key={`${String(item.train_no ?? 'unknown')}-${String(item.start_time ?? index)}-${String(item.arrive_time ?? '')}-${index}`} className="border-t border-[#f4e6d3]">
-                <td className="px-2 py-1.5 font-medium text-[#183037]">{String(item.train_no ?? '未知')}</td>
-                <td className="px-2 py-1.5">{String(item.start_time ?? '--')}</td>
-                <td className="px-2 py-1.5">{String(item.arrive_time ?? '--')}</td>
-                <td className="px-2 py-1.5">{String(item.duration ?? '--')}</td>
-                <td className="px-2 py-1.5">{seatsText || <span className="text-[#b3a48f]">--</span>}</td>
-                <td className="px-2 py-1.5">{priceText || <span className="text-[#b3a48f]">--</span>}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-      <p className="px-2 py-1.5 text-[10px] text-[#8c7258]">余票与票价来自 12306 非官方聚合源，可能延迟；票价仅实时查询前 2 个车次，其余显示 --，出行前请以 12306 官方为准。</p>
-    </div>
-  )
-}
-
-/**
- * GuidePreview — 知乎攻略卡（📝怎么吃/什么值得吃，软内容参考）。
- * 与 MerchantPreview（📍去哪吃，结构化商户）并存分工；条目来自知乎官方
- * MCP 归一化字段（title/url/summary/author_name/vote_up_count/comment_count），
- * 缺失不补造。title 带原文链接（官方开放平台返回的站内/全网 URL）。
- */
-function GuidePreview({ preview }: { preview: Array<Record<string, unknown>> }) {
-  return (
-    <ul className="mt-2 space-y-2">
-      {preview.slice(0, 4).map((item, index) => {
-        const title = String(item.title ?? '未命名内容')
-        const url = typeof item.url === 'string' && item.url.startsWith('http') ? item.url : ''
-        const summary = typeof item.summary === 'string' ? item.summary : ''
-        const votes = item.vote_up_count
-        const comments = item.comment_count
+    <>
+      {tools.map((tool, index) => {
+        const key = `tool-${index}`
+        const running = tool.status === 'running'
+        const failedRow = tool.status === 'failed'
+        const hasPreview = (tool.preview?.length ?? 0) > 0
+        // 2026-10-03：有结果的行默认展开——用户就是要看检索结果，
+        // 折叠只能看到「N 条」数字，等于看不见
+        const open = manualToggled.has(key)
+          ? !manualDefaultOpen(running, failedRow, hasPreview)
+          : manualDefaultOpen(running, failedRow, hasPreview)
+        const label = TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool
+        const summary = running
+          ? '调用中…'
+          : failedRow
+            ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}`
+            : [
+                tool.resultCount != null ? `${tool.resultCount} 条` : '',
+                tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : '',
+              ].filter(Boolean).join(' · ') || '完成'
         return (
-          <li key={`${title}-${index}`} className="rounded-lg border border-[#e3e9f5] bg-[#fbfcff] p-2.5">
-            {url ? (
-              <a
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block truncate text-xs font-semibold text-[#2d5bd1] hover:underline"
-              >
-                {title}
-              </a>
-            ) : (
-              <p className="truncate text-xs font-semibold text-[#183037]">{title}</p>
+          <li
+            key={key}
+            className={`overflow-hidden rounded-xl border ${
+              failedRow ? 'border-red-200 bg-red-50/50' : 'border-[#e2f0ee] bg-white'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => toggle(key)}
+              aria-expanded={open}
+              className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
+            >
+              {running ? (
+                <Loader2 size={13} className="shrink-0 animate-spin text-[#087b73]" aria-label="调用中" />
+              ) : failedRow ? (
+                <AlertCircle size={13} className="shrink-0 text-red-500" aria-label="失败" />
+              ) : (
+                <CheckCircle2 size={13} className="shrink-0 text-[#087b73]" aria-hidden />
+              )}
+              <span className={`min-w-0 flex-1 truncate text-xs ${failedRow ? 'font-medium text-red-700' : 'font-medium text-[#183037]'}`}>
+                {label}
+              </span>
+              <span className={`shrink-0 text-[10px] ${failedRow ? 'text-red-600' : 'text-[#5c7074]'}`}>{summary}</span>
+              <ChevronDown size={12} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+            </button>
+            {open && (
+              <div className="border-t border-[#eef4f2] px-3 py-2.5">
+                {failedRow ? (
+                  <ToolFailedBody error={tool.error} />
+                ) : hasPreview ? (
+                  <ToolPreviewBody preview={tool.preview!} category={tool.category} />
+                ) : running ? (
+                  <p className="text-[11px] text-[#7a8e8b]">正在调用真实数据源，结果返回后自动展开…</p>
+                ) : (
+                  <p className="text-[11px] text-[#7a8e8b]">
+                    {tool.dataStatus === 'empty'
+                      ? '查询成功，当前没有匹配结果。'
+                      : tool.dataStatus === 'unavailable'
+                        ? '数据源暂不可用，已按降级口径继续规划。'
+                        : '执行完成。'}
+                  </p>
+                )}
+              </div>
             )}
-            {summary && <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-[#5c7074]">{summary}</p>}
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-[#8c7258]">
-              <span className="rounded bg-[#e8f0fe] px-1.5 py-0.5 font-medium text-[#2d5bd1]">知乎</span>
-              {typeof item.author_name === 'string' && item.author_name && <span>{item.author_name}</span>}
-              {typeof votes === 'number' && votes > 0 && <span>{votes} 赞同</span>}
-              {typeof comments === 'number' && comments > 0 && <span>{comments} 评论</span>}
-            </div>
           </li>
         )
       })}
-    </ul>
+    </>
   )
 }
 
+function manualDefaultOpen(running: boolean, failedRow: boolean, hasPreview: boolean): boolean {
+  return running || failedRow || hasPreview
+}
+
+/**
+ * ToolProcessRecap — 行程到达后的「Tool 执行记录」常驻卡（2026-10-03）。
+ * 此前生成中卡随 done 帧整体卸载，检索结果（商户/车次/知乎攻略 preview）
+ * 用户一眼都没看到过就没了；本卡默认折叠成一行挂在行程上方，
+ * 随时可展开回看全部真实 Tool 结果。
+ */
+function ToolProcessRecap({ processState }: { processState: TravelProcessState | null }) {
+  const [open, setOpen] = useState(false)
+  const tools = processState?.tools ?? []
+  if (tools.length === 0) return null
+  const failedCount = tools.filter((t) => t.status === 'failed').length
+  const withPreview = tools.filter((t) => (t.preview?.length ?? 0) > 0).length
+  return (
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      className="rounded-2xl border border-[#dae7e5] bg-white shadow-card"
+      aria-label="Tool 执行记录"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
+        <CheckCircle2 size={15} className="shrink-0 text-[#087b73]" aria-hidden />
+        <span className="text-sm font-semibold text-[#183037]">Tool 执行记录</span>
+        <span className="rounded-full bg-[#f5faf9] px-2 py-0.5 text-[10px] font-medium text-[#087b73]">
+          {tools.length} 个 Tool{withPreview > 0 ? ` · ${withPreview} 个有结果` : ''}
+          {failedCount > 0 ? ` · ${failedCount} 个失败` : ''}
+        </span>
+        <span className="ml-auto text-[10px] text-[#5c7074]">{open ? '收起' : '展开看检索结果'}</span>
+        <ChevronDown size={14} className={`shrink-0 text-[#9db4b1] transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+      </summary>
+      <div className="border-t border-[#eef4f2] px-4 py-3">
+        <ol className="space-y-1.5">
+          <ToolProcessRows tools={tools} />
+        </ol>
+      </div>
+    </details>
+  )
+}

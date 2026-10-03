@@ -24,6 +24,22 @@ def _pin_seed_poi_source(monkeypatch: pytest.MonkeyPatch):
     from backend.config import travel as travel_config
 
     monkeypatch.setattr(travel_config, "TRAVEL_POI_SOURCE", "seed")
+
+
+@pytest.fixture(autouse=True)
+def _disable_zhihu_mcp(monkeypatch: pytest.MonkeyPatch):
+    """测试期切断知乎官方 MCP（与根 conftest 的 _disable_tencent_lbs 同口径）。
+
+    背景：2026-10-03 起攻略检索改为规划主链自动触发（不再依赖用户消息
+    含「攻略」触发词），开发机 .env 开着 ZHIHU_MCP_ENABLED 时，本目录
+    每个端到端用例都会真打知乎接口（3 站内 + 1 全网），消耗配额且结果
+    随网络漂移。攻略是增强信息：开关关闭时单路降级为 error 披露，正是
+    测试要验证的路径。需要测知乎行为的用例自行替换 tool/service 层
+    （test_live_guides.py 的 fake_tools、test_intent.py 的 service patch）。
+    """
+    from backend.config import mcp as mcp_config
+
+    monkeypatch.setattr(mcp_config, "ZHIHU_MCP_ENABLED", False)
 from backend.travel.models.itinerary import (
     Itinerary,
     ItineraryDay,

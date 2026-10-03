@@ -191,6 +191,16 @@ const KIND_STYLE: Record<string, { dot: string; label: string; icon: React.React
   rest: { dot: '#059669', label: '休息', icon: <Coffee size={11} aria-hidden /> },
 }
 
+/** 入选理由行（2026-10-03）：必去点名 + poi.reason；两者都空则不展示。 */
+function reasonLine(item: ItineraryItem): string {
+  if (!item.poi) return ''
+  const parts = [
+    item.poi.required ? '你点名的必去' : '',
+    typeof item.poi.reason === 'string' ? item.poi.reason.trim() : '',
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
 function ItemTags({ item }: { item: ItineraryItem }) {
   const ticket = item.poi && item.kind === 'visit' ? item.poi.ticket_cny : 0
   const stay = formatDuration(item.minutes ?? 0)
@@ -327,6 +337,12 @@ function DayCard({ day }: { day: ItineraryDay }) {
                     <ItemTags item={item} />
                   </span>
                 </div>
+                {/* 入选理由（2026-10-03）：「为什么选它」——必去点名/检索来源/知乎攻略提及 */}
+                {reasonLine(item) && (
+                  <p className="mt-0.5 pl-[100px] text-[11px] leading-relaxed text-[#087b73]">
+                    为什么选它：{reasonLine(item)}
+                  </p>
+                )}
                 {item.note && <p className="mt-0.5 pl-[100px] text-[11px] text-[#5c7074]">{item.note}</p>}
               </li>
               {/* 交通段：紧贴在当前地点之后、下一个地点之前，回答「之间怎么走」 */}

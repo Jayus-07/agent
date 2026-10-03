@@ -20,8 +20,8 @@ from backend.tools.travel.routing import day_radius_km
 from backend.travel.core.contracts import SourceType
 from backend.travel.core.evidence_utils import evidence_to_dict, make_evidence, parse_iso
 from backend.travel.models.brief import TravelBrief
-from backend.travel.models.poi import Poi, is_seed_source
-from backend.travel.planning import resolve_must_go
+from backend.travel.models.poi import Poi, is_pure_meal, is_seed_source
+from backend.travel.planning import names_match, resolve_must_go
 from backend.travel.services import live_search_service
 
 # 候选池上限：足够覆盖 7 天 × intense 档，同时不让状态字典膨胀
@@ -33,23 +33,26 @@ _CANDIDATE_LIMIT = 60
 # 停留时长统一 120 分钟占位、门票无来源 → unverified，由 validator/
 # reporter 如实标注；评分无来源 → 0（排序退化为必去优先 + 地理聚类）。
 
+# 2026-10-03：「美食」不再映射地点检索词——此前偏好带「美食」（口语「想吃」
+# 极易命中）时候选池检索词只剩「美食」，LBS 返回的全是餐厅，行程被挤成
+# 「全是吃的」。行程地点=游玩景点；美食诉求改走高德商户卡 + 知乎美食攻略
+# （experts/poi 旁路），不进行程候选池。
 _LIVE_QUERIES_BY_PREF = {
     "自然": "公园 风景名胜",
     "人文": "博物馆 名胜古迹",
-    "美食": "美食",
     "亲子": "游乐园 动植物园",
     "购物": "购物中心 商业街",
     "夜生活": "夜市",
     "摄影": "风景区",
 }
-# 无偏好时的兜底检索词：两类覆盖面最宽的通用词
+# 无景点类偏好时的兜底检索词：两类覆盖面最宽的通用词（保证候选池永远有景点）
 _LIVE_DEFAULT_QUERIES = ("风景名胜", "博物馆")
 _LIVE_PAGE_SIZE = 10
 _LIVE_MAX_QUERIES = 3
 
 
 def _live_pref_queries(preferences: list[str]) -> list[str]:
-    """偏好标签 → LBS 检索词（最多 3 类，无偏好用兜底词）。"""
+    """偏好标签 → LBS 检索词（最多 3 类，无景点类偏好用兜底词）。"""
     queries: list[str] = []
     for pref in preferences:
         q = _LIVE_QUERIES_BY_PREF.get(pref)
@@ -109,6 +112,9 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 source="tencent:lbs",
                 observed_at=observed_at,
                 verification_status="unverified",
+                # 入选理由的基础事实（为什么选它）：来自哪一路检索词；
+                # 知乎攻略提及的理由由 poi 专家节点在骨架前追加。
+                reason=f"「{q}」实时检索",
                 # 坐标级可信独立标注：详情（票价/时长）占位连坐标也不可信，是
                 # 两个语义——地图打点按 location_status 判定（字段级拆分）。
                 location_status="verified",
@@ -232,6 +238,30 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
 
     # 必去优先，其次热度
     ordered = sorted(candidates, key=lambda p: (not p.required, -p.rating, p.poi_id))
+    # 类别策略（2026-10-03）：**纯餐饮**候选不排入行程——行程时间留给游玩点，
+    # 吃喝由美食推荐（高德商户/知乎攻略）承接；用户点名必去的餐厅除外
+    # （尊重点名）。两个豁免口径：
+    #   - 点名判定用 must_go 原话匹配而非 required 字段——池中已有的必去
+    #     地点不会被打 required 标（只有 Provider 补全路径会打）；
+    #   - 「美食街/夜市」类是游玩型餐饮区（金标 T-D03/T-G09 的预算超限源
+    #     「达明美食街」即此类），不是坐下吃饭的店，保留排入。
+    def _is_user_named(poi: Poi) -> bool:
+        return any(
+            (want or "").strip() and names_match(poi.name, want.strip())
+            for want in brief.must_go
+        )
+
+    meal_skipped = [
+        p for p in ordered
+        if is_pure_meal(p) and not (p.required or _is_user_named(p))
+    ]
+    if meal_skipped:
+        skipped_ids = {p.poi_id for p in meal_skipped}
+        ordered = [p for p in ordered if p.poi_id not in skipped_ids]
+        preview = "、".join(p.name for p in meal_skipped[:5])
+        more = f" 等 {len(meal_skipped)} 家" if len(meal_skipped) > 5 else ""
+        skeleton.notes.append(
+            f"{len(meal_skipped)} 个餐饮类候选不排进行程（吃饭看美食推荐）：{preview}{more}")
     day_minutes = [0] * total_days
 
     for poi in ordered:

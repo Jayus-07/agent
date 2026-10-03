@@ -85,6 +85,9 @@ interface Props {
   disabledHint?: string
   /** 预算圆圈数据（页面 useBudgetStatus 轮询下发，与 /agent 同一组件） */
   budgetStatus?: BudgetStatus | null
+  /** 出单后的首条助手消息（2026-10-03）：reporter 的规划说明全文
+   *（为什么这样排/美食推荐/需要你确认），表单直出路径此前完全不展示 */
+  introMessage?: string
 }
 
 /**
@@ -95,6 +98,7 @@ export default function TravelChatDrawer({
   mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
+  introMessage = '',
 }: Props) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
@@ -268,7 +272,12 @@ export default function TravelChatDrawer({
     }
   }
 
-  const hasMessages = messages.length > 0
+  // 出单规划说明（「为什么这样排/美食推荐」）作为首条助手消息常驻对话流
+  const visibleMessages = useMemo<ChatMsg[]>(
+    () => (introMessage.trim() ? [{ role: 'assistant' as const, text: introMessage.trim(), tag: '规划说明' }, ...messages] : messages),
+    [introMessage, messages],
+  )
+  const hasMessages = visibleMessages.length > 0
   const inputDisabled = disabled || loading || generating || Boolean(pendingResponse)
   const pendingSummary = useMemo(
     () => pendingResponse?.itinerary && itinerary
@@ -369,6 +378,13 @@ export default function TravelChatDrawer({
                       : tool.status === 'success' ? <CheckCircle2 size={12} className="text-[#087b73]" aria-label="成功" />
                         : <AlertCircle size={12} className="text-red-500" aria-label="失败" />}
                     <span className="min-w-0 flex-1 truncate text-[#183037]">{TRAVEL_TOOL_LABELS[tool.tool] ?? tool.tool}</span>
+                    {/* 2026-10-03：补结果摘要（条数/耗时）——此前只有状态词，
+                        「已返回」等于什么都没告诉用户 */}
+                    <span className="shrink-0 text-[#7a8e8b]">
+                      {tool.status === 'success' && (tool.resultCount != null || tool.durationMs != null)
+                        ? [tool.resultCount != null ? `${tool.resultCount} 条` : '', tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''].filter(Boolean).join(' · ')
+                        : null}
+                    </span>
                     <span className={tool.status === 'failed' ? 'text-red-500' : 'text-[#7a8e8b]'}>
                       {tool.status === 'running' ? '调用中' : tool.status === 'failed' ? `失败${tool.errorType ? ` · ${tool.errorType}` : ''}` : tool.dataStatus === 'empty' ? '空结果' : tool.dataStatus === 'unavailable' ? '不可用' : '已返回'}
                     </span>
@@ -383,7 +399,7 @@ export default function TravelChatDrawer({
       {/* 内容 */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {hasMessages ? (
-          <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">            {messages.map((m, i) => {
+          <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">            {visibleMessages.map((m, i) => {
               // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
               //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
               const isLong = m.role === 'assistant' && m.text.length > 600
@@ -399,7 +415,7 @@ export default function TravelChatDrawer({
                     ) : isLong ? (
                       <details>
                         <summary className="cursor-pointer text-[11px] font-medium text-[#087b73] [&::-webkit-details-marker]:hidden">
-                          行程已按你说的重算，点开查看完整说明 ▾
+                          {m.tag === '规划说明' ? '为什么这样排？点开查看规划说明 ▾' : '行程已按你说的重算，点开查看完整说明 ▾'}
                         </summary>
                         <div className="mt-1.5 markdown-body text-xs leading-relaxed
                           [&_h1]:text-sm [&_h1]:my-1.5 [&_h2]:text-[13px] [&_h2]:my-1.5 [&_h3]:text-xs [&_h3]:my-1

@@ -245,30 +245,52 @@ def train_preview(data: dict[str, Any]) -> dict[str, Any]:
 # 失败语义与商户/车次一致：本层不吞失败，上抛 LiveSearchError 由 Agent
 # 层做「单路独立降级」（攻略检索两路互不拖累，与商户/车次的硬失败不同）。
 _GUIDE_QUERY_TPL = "{destination} 旅游 美食 攻略"
+# 规划主链自动检索的主题词（2026-10-03）：景点/美食/城市特色三路站内检索，
+# 结果供 SSE 攻略卡展示 + 候选 POI「知乎攻略提及」理由匹配；空 topic 走
+# 旧模板（query_static 问答与存量调用方不受影响）。
+GUIDE_TOPIC_QUERIES: dict[str, str] = {
+    "attraction": "{destination} 旅游 景点 攻略",
+    "food": "{destination} 美食 特色 必吃",
+    "city": "{destination} 城市特色 值得去",
+}
+# 主题 → 前端展示标签（GuidePreview 徽章用；单一事实源）
+GUIDE_TOPIC_LABELS: dict[str, str] = {
+    "attraction": "景点",
+    "food": "美食",
+    "city": "城市特色",
+}
 
 
-def search_zhihu_guides(*, destination: str, limit: int = 4) -> dict[str, Any]:
-    """知乎站内旅游/美食攻略（经验帖，调用知乎官方 MCP）。"""
+def search_zhihu_guides(*, destination: str, limit: int = 4,
+                        topic: str = "") -> dict[str, Any]:
+    """知乎站内旅游攻略（经验帖，调用知乎官方 MCP）。topic 见 GUIDE_TOPIC_QUERIES。"""
+    query = GUIDE_TOPIC_QUERIES.get(topic, _GUIDE_QUERY_TPL)
     raw = _invoke(
         zhihu_search_tool, "zhihu_search_tool",
         capability="travel.guide.search", agent="research",
-        query=_GUIDE_QUERY_TPL.format(destination=destination), count=limit,
+        query=query.format(destination=destination), count=limit,
     )
     return _decode_success(raw, "zhihu_search_tool")
 
 
-def search_web_guides(*, destination: str, limit: int = 4) -> dict[str, Any]:
+def search_web_guides(*, destination: str, limit: int = 4,
+                      topic: str = "") -> dict[str, Any]:
     """全网旅游攻略（媒体文章/官方线路消息，调用知乎官方 MCP）。"""
+    query = GUIDE_TOPIC_QUERIES.get(topic, _GUIDE_QUERY_TPL)
     raw = _invoke(
         global_search_tool, "global_search_tool",
         capability="travel.guide.search", agent="research",
-        query=_GUIDE_QUERY_TPL.format(destination=destination), count=limit,
+        query=query.format(destination=destination), count=limit,
     )
     return _decode_success(raw, "global_search_tool")
 
 
-def guides_preview(data: dict[str, Any], source: str) -> dict[str, Any]:
-    results = data.get("results") or []
+def guides_preview(data: dict[str, Any], source: str,
+                   topic: str = "") -> dict[str, Any]:
+    results = [
+        {**item, "topic": topic} if isinstance(item, dict) and topic else item
+        for item in (data.get("results") or [])
+    ]
     return {
         "category": "guide",
         "source": source,
