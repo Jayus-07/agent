@@ -27,7 +27,7 @@
  * 后端契约、不引依赖；后端没有分步进度 API，生成中只显示等待状态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Utensils } from 'lucide-react'
+import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
 import { ToolPreviewBody, ToolFailedBody } from '@/components/travel/ToolPreviews'
@@ -146,6 +146,8 @@ export default function TravelPage() {
   const [extra, setExtra] = useState('')
   // 首屏引导的一句话输入：直接交给后端 slot_filler 解析（缺的信息由域内追问补齐）
   const [quickIdea, setQuickIdea] = useState('')
+  // M1 三态移交：空态规划卡/示例卡发送的那句话（→ 右侧助手第一条用户气泡）
+  const [handoverMessage, setHandoverMessage] = useState('')
 
   // ── 结果与线程 ──
   const [conversationId, setConversationId] = useState(readConversationId)
@@ -228,6 +230,8 @@ export default function TravelPage() {
     setFeedbackSent('')
     setError('')
     setTravelProcess(null)
+    // M1 三态移交：这句话作为第一条用户气泡出现在右侧助手聊天流
+    setHandoverMessage(message)
     setLoading(true)
     const controller = new AbortController()
     abortRef.current = controller
@@ -363,6 +367,7 @@ export default function TravelPage() {
     const cid = rotateConversationId()
     setConversationId(cid)
     setPlanState(EMPTY_PLAN_STATE)
+    setHandoverMessage('') // 新线程：上一条移交语作废，避免下轮同文案不触发移交
     setOrigin('')
     setDestination('')
     setDays('2')
@@ -465,6 +470,8 @@ export default function TravelPage() {
     processState: travelProcess,
     onProcessEvent: handleTravelEvent,
     onStartNewTrip: startNewTrip,
+    /** M1 三态移交：空态发送的那句话 → 聊天流第一条用户气泡 */
+    handoverUserMessage: handoverMessage,
     /** 页面级生成中：助手输入禁用 + 占位（设计稿态 2 右栏口径） */
     generating: loading,
     disabled: budgetBlocked,
@@ -540,75 +547,32 @@ export default function TravelPage() {
           </div>
         </header>
 
-        {/* 一屏布局：lg+ 外层不滚，三栏各自内滚（用户反馈「不要整页滑到很下面」）；
-            窄屏退回整页文档流滚动 */}
+        {/* 一屏布局：lg+ 外层不滚，各栏内滚（用户反馈「不要整页滑到很下面」）；
+            窄屏退回整页文档流滚动。
+            2026-10-03 M1 重排：行程条件从左栏卡上移为顶部 chips 条（点击「调整」
+            开浮层表单），栅格收敛为 中栏+右栏 两列，右栏加宽 336→460px（聊天
+            消息/工具卡片流的主展示面）。 */}
         <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-          <div className="mx-auto max-w-[1560px] px-4 py-4 xl:px-6 xl:py-5 lg:h-full">
-            <div className={`grid items-stretch gap-4 lg:h-full ${hasLeftRail
-              ? 'lg:grid-cols-[264px_minmax(0,1fr)] xl:grid-cols-[264px_minmax(0,1fr)_336px]'
+          <div className="mx-auto max-w-[1600px] px-4 py-4 xl:px-6 xl:py-5 lg:h-full lg:flex lg:flex-col">
+            {/* ── 顶部条件条：目的地/日期/人数/预算/节奏 chips（原左栏摘要卡上移） ── */}
+            {hasLeftRail && (
+              <TripConditionsBar
+                loading={loading}
+                destination={itinerary?.brief.destination || destination}
+                startDate={itinerary?.brief.start_date || startDate}
+                days={days}
+                partySize={partySize}
+                pace={itinerary?.brief.pace || pace}
+                itineraryDays={itinerary?.days.length ?? null}
+                costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
+                budget={budget}
+                onAdjust={() => setConditionsOpen(true)}
+              />
+            )}
+            <div className={`grid min-h-0 flex-1 items-stretch gap-4 lg:h-auto ${hasRightRail
+              ? 'lg:grid-cols-[minmax(0,1fr)_460px]'
               : 'lg:grid-cols-[minmax(0,1fr)]'}`}>
-              {/* ── 左栏：生成中=条件锁定（态2）；有行程=条件摘要（态3）；空态无左栏 ── */}
-              {hasLeftRail && <aside className="min-w-0 min-h-0 space-y-3 lg:overflow-y-auto lg:pr-0.5">
-                {loading ? (
-                  <>
-                    <section
-                      className="rounded-2xl border border-[#dae7e5] bg-white p-5 shadow-card"
-                      aria-label="行程条件（生成中已锁定）"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Loader2 size={14} className="animate-spin text-[#087b73]" aria-hidden />
-                        <h2 className="text-sm font-semibold text-[#183037]">行程条件（已锁定）</h2>
-                      </div>
-                      <dl className="mt-3 space-y-2 text-xs">
-                        {[
-                          ['目的地', destination || '未填'],
-                          ['出发', startDate || '未定'],
-                          ['行程', days ? `${days} 天` : '未填'],
-                          ['同行', partySize ? `${partySize} 人` : '未填'],
-                          ['预算', budget ? `¥${budget}` : '不限'],
-                          ['节奏', pace || '适中'],
-                        ].map(([label, value]) => (
-                          <div key={label} className="flex items-center justify-between gap-3">
-                            <dt className="shrink-0 text-[#5c7074]">{label}</dt>
-                            <dd className="min-w-0 truncate text-right font-medium text-[#183037]">{value}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                      <p className="mt-3 border-t border-[#e8f1ef] pt-2 text-[10px] text-[#8fa5a3]">
-                        生成期间条件不可改；完成后可在右侧「旅行助手」用一句话调整
-                      </p>
-                    </section>
-                    <section
-                      className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card opacity-60"
-                      aria-label="调整条件（生成中不可用）"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <h2 className="text-sm font-semibold text-[#183037]">调整条件</h2>
-                        <span
-                          className="cursor-not-allowed rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#9db4b1]"
-                          title="生成期间条件不可改"
-                        >
-                          调整条件
-                        </span>
-                      </div>
-                      <p className="mt-2 text-[11px] leading-relaxed text-[#5c7074]">
-                        生成完成后可调整条件重开一份，或直接在右侧「旅行助手」说一句。
-                      </p>
-                    </section>
-                  </>
-                ) : (
-                  <TripSummary
-                    /* 摘要跟当前行程走：表单被清空/改了一半时，仍显示行程真实目的地 */
-                    destination={itinerary?.brief.destination || destination}
-                    days={days} budget={budget}
-                    startDate={itinerary?.brief.start_date || startDate}
-                    pace={itinerary?.brief.pace || pace}
-                    itineraryDays={itinerary?.days.length ?? null}
-                    costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
-                    onAdjust={() => setConditionsOpen(true)}
-                  />
-                )}
-              </aside>}
+              {/* ── 左栏已移除（M1）：条件摘要上移为顶部 TripConditionsBar，调整入口在其「调整」按钮 ── */}
 
             {/* ── 中栏：行程（唯一结果主视图，栏内滚动） ── */}
             <main className="min-w-0 min-h-0 space-y-4 lg:overflow-y-auto lg:pr-0.5">
@@ -776,54 +740,64 @@ export default function TravelPage() {
   )
 }
 
-// ── 左栏：行程条件摘要（设计稿态3：精简卡 + 调整条件卡） ─────
+// ── 顶部：行程条件 chips 条（M1：原左栏摘要卡上移，一目了然 + 调整入口） ──
 
-function TripSummary(props: {
-  destination: string; days: string; budget: string
-  startDate: string; pace: string
+function TripConditionsBar(props: {
+  loading: boolean
+  destination: string
+  startDate: string
+  days: string
+  partySize: string
+  pace: string
   /** 当前行程的实际天数（改单后会变，优先于表单值展示） */
   itineraryDays: number | null
   /** 出单后的实际预算合计（itinerary cost 求和；优先于表单预算展示） */
   costTotal: number | null
+  budget: string
   onAdjust: () => void
 }) {
-  const dayText = props.itineraryDays != null ? String(props.itineraryDays) : (props.days || '?')
+  const dayText = props.itineraryDays != null ? `${props.itineraryDays} 天` : props.days ? `${props.days} 天` : '天数待定'
   const budgetText = props.costTotal != null
-    ? `预算合计 ¥${props.costTotal.toLocaleString()}`
-    : props.budget ? `预算合计 ¥${Number(props.budget).toLocaleString()}` : '预算未设上限'
-  const metaParts = [
-    props.startDate ? `${props.startDate} 出发` : '',
-    props.pace ? `节奏${PACE_LABEL[props.pace] ?? '适中'}` : '',
-  ].filter(Boolean)
+    ? `合计 ¥${props.costTotal.toLocaleString()}`
+    : props.budget ? `预算 ¥${Number(props.budget).toLocaleString()}` : '预算不限'
+  const chips: Array<{ key: string; icon: React.ReactNode; label: string }> = [
+    { key: 'dest', icon: <MapPin size={12} aria-hidden />, label: props.destination.trim() || '未定目的地' },
+    { key: 'date', icon: <CalendarDays size={12} aria-hidden />, label: `${props.startDate || '日期待定'} · ${dayText}` },
+    { key: 'party', icon: <Users size={12} aria-hidden />, label: `${props.partySize || '?'} 人` },
+    { key: 'budget', icon: <Wallet size={12} aria-hidden />, label: budgetText },
+    { key: 'pace', icon: <Gauge size={12} aria-hidden />, label: `节奏 ${PACE_LABEL[props.pace] ?? '适中'}` },
+  ]
   return (
-    <>
-      <section className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="行程条件">
-        <h2 className="text-xs font-medium text-[#5c7074]">行程条件</h2>
-        <p className="mt-2 text-xl font-bold text-[#183037]">
-          {props.destination.trim() || '未定目的地'} · {dayText} 天
-        </p>
-        {metaParts.length > 0 && (
-          <p className="mt-1.5 text-xs text-[#5c7074]">{metaParts.join(' · ')}</p>
-        )}
-        <p className="mt-3 text-sm font-semibold text-[#087b73]">{budgetText}</p>
-      </section>
-      <section className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card" aria-label="调整条件">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-[#183037]">调整条件</h2>
-          <button
-            type="button"
-            onClick={props.onAdjust}
-            className="cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs
-              text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
-          >
-            调整条件
-          </button>
-        </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-[#5c7074]">
-          小改动（改天数 / 换节奏）更推荐直接在右侧「旅行助手」说一句。
-        </p>
-      </section>
-    </>
+    <section
+      className="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[#dae7e5] bg-white px-3.5 py-2 shadow-card"
+      aria-label="行程条件"
+    >
+      <span className="mr-1 text-xs font-semibold text-[#5c7074]">行程条件</span>
+      {chips.map((chip) => (
+        <span
+          key={chip.key}
+          className="inline-flex items-center gap-1.5 rounded-full bg-[#f5faf9] px-3 py-1 text-xs text-[#183037]"
+        >
+          <span className="text-[#087b73]">{chip.icon}</span>
+          <span className="max-w-[220px] truncate font-medium">{chip.label}</span>
+        </span>
+      ))}
+      {props.loading ? (
+        <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-[#8fa5a3]">
+          <Loader2 size={12} className="animate-spin" aria-hidden />
+          生成中条件已锁定 · 完成后可调整或在右侧助手说一句
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={props.onAdjust}
+          className="ml-auto cursor-pointer rounded-lg border border-[#dae7e5] px-3 py-1.5 text-xs
+            text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
+        >
+          调整
+        </button>
+      )}
+    </section>
   )
 }
 

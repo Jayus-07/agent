@@ -13,11 +13,11 @@
  * 底图同参数投影保证对齐；连线是「按到访顺序的示意」，不是实际道路——
  * 方案 v2 的不伪造原则）→ 按天 Tab + 单日时间轴 → 出行须知（折叠）→ 文本版。
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import 'leaflet/dist/leaflet.css'
 import type { Map as LeafletMap } from 'leaflet'
 import {
-  AlertTriangle, CalendarPlus, Check, Coffee, ListChecks, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
+  AlertTriangle, CalendarPlus, Check, Coffee, Hotel, ListChecks, MapPin, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
 } from 'lucide-react'
 import {
   confirmTravelPlan,
@@ -30,14 +30,8 @@ import {
 } from './travelDisplay'
 import { classifyFact } from './travelRuntime'
 
-// ── 页面级主题（来源：参考 HTML #trip-concept 的 CSS 变量，勿当全局 token 用） ──
-const TP = {
-  accent: '#087b73',
-  soft: '#f5faf9',
-  line: '#dae7e5',
-  ink: '#183037',
-  muted: '#5c7074',
-} as const
+// ── 页面级主题（travelTheme.ts 收口；勿当全局 token 用） ──
+import { TP } from './travelTheme'
 
 // ── 路线图（Leaflet 交互地图：滚轮缩放 / 拖拽平移，fitBounds 按行程自适应） ──
 
@@ -259,16 +253,16 @@ function LegRow({ leg }: { leg: TransitLeg }) {
   }
   return (
     <div
-      className="my-0.5 ml-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg bg-[#f5faf9]/70 px-2 py-1 text-[10px] text-[#8aa0a4]"
+      className="my-1 ml-2 inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-full border border-dashed border-[#c3d6d2] bg-white/70 px-3 py-1 text-[10px] text-[#8aa0a4]"
       aria-label={`${leg.from_title}到${leg.to_title}的交通`}
     >
-      <span aria-hidden className="text-[#c3d6d2]">└─</span>
+      <Route size={11} aria-hidden className="text-[#087b73]" />
       <span className="font-medium text-[#5c7074]">{mode}</span>
       {verified
         ? <span>{parts.join(' · ')}</span>
         : <span className="text-red-600">路段数据暂无核实</span>}
-      {leg.traffic_aware && verified && <span>实时路况</span>}
-      {leg.is_estimate && verified && <span className="text-amber-600">估算值</span>}
+      {leg.traffic_aware && verified && <span className="rounded-full bg-[#e2f0ee] px-1.5 text-[#087b73]">实时路况</span>}
+      {leg.is_estimate && verified && <span className="rounded-full bg-amber-50 px-1.5 text-amber-600">估算值</span>}
     </div>
   )
 }
@@ -316,7 +310,10 @@ function DayCard({ day }: { day: ItineraryDay }) {
           const leg = legForItem.get(idx)
           return (
             <Fragment key={`${item.title}-${idx}`}>
-              <li className={`relative rounded-lg px-2 py-1 transition-colors [margin-left:-0.5rem] hover:bg-[#f5faf9] ${idx === day.items.length - 1 ? '' : 'pb-2.5'}`}>
+              <li
+                data-item-kind={item.kind}
+                className={`relative rounded-lg px-2 py-1 transition-colors [margin-left:-0.5rem] hover:bg-[#f5faf9] ${idx === day.items.length - 1 ? '' : 'pb-2.5'}`}
+              >
                 <span
                   className="absolute -left-[21px] top-2.5 h-2 w-2 rounded-full ring-2 ring-white"
                   style={{ background: style.dot }}
@@ -406,7 +403,7 @@ function DayTabCard({
       onClick={() => onSelect(day.day_index)}
       className={`group w-[172px] shrink-0 cursor-pointer overflow-hidden rounded-xl border p-3 text-left transition-all animate-fade-in ${
         selected
-          ? 'border-[#087b73] bg-[#087b73]/[0.06] shadow-card ring-1 ring-[#087b73]/30'
+          ? 'border-[#087b73] bg-[#087b73] text-white shadow-card'
           : 'border-[#dae7e5] bg-white hover:border-[#087b73]/40 hover:shadow-card'
       }`}
       style={{ animationDelay: `${Math.min(index, 8) * 70}ms`, animationFillMode: 'backwards' }}
@@ -414,36 +411,241 @@ function DayTabCard({
       <div className="flex items-center gap-2">
         <span
           className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold transition-colors ${
-            selected ? 'bg-[#087b73] text-white' : 'bg-[#087b73]/10 text-[#087b73]'
+            selected ? 'bg-white/20 text-white' : 'bg-[#087b73]/10 text-[#087b73]'
           }`}
         >
           D{day.day_index}
         </span>
-        <span className={`min-w-0 flex-1 truncate text-[11px] ${selected ? 'font-semibold text-[#087b73]' : 'text-[#5c7074]'}`}>
+        <span className={`min-w-0 flex-1 truncate text-[11px] ${selected ? 'font-semibold text-white/90' : 'text-[#5c7074]'}`}>
           {formatDayDate(day.day_date)}
         </span>
         {selected && (
-          <span className="shrink-0 rounded-full bg-[#087b73] px-1.5 py-0.5 text-[9px] font-medium text-white">
+          <span className="shrink-0 rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-medium text-white">
             查看中
           </span>
         )}
       </div>
-      <p className={`mt-2 min-h-[2em] text-xs leading-[1.4] ${selected ? 'font-medium text-[#183037]' : 'text-[#183037]/80'}`}>
+      <p className={`mt-2 min-h-[2em] text-xs leading-[1.4] ${selected ? 'font-medium text-white' : 'text-[#183037]/80'}`}>
         {highlights.length > 0
           ? highlights.join(' · ')
-          : <span className="text-[#8fa5a3]">当天暂无到访安排</span>}
+          : <span className={selected ? 'text-white/60' : 'text-[#8fa5a3]'}>当天暂无到访安排</span>}
       </p>
-      <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[#5c7074]">
+      <div className={`mt-2 flex items-center gap-1.5 text-[10px] ${selected ? 'text-white/75' : 'text-[#5c7074]'}`}>
         <span>{visitCount} 个地点</span>
-        {mealCount > 0 && <span className="text-[#d97706]">· {mealCount} 次用餐</span>}
+        {mealCount > 0 && <span className={selected ? 'text-amber-200' : 'text-[#d97706]'}>· {mealCount} 次用餐</span>}
       </div>
       {load.activeShare + load.transitShare > 0 && (
-        <div className="mt-1.5 flex h-[3px] w-full overflow-hidden rounded-full bg-[#f5faf9]" aria-hidden>
-          <span className="bg-[#087b73]/70" style={{ width: `${load.activeShare * 100}%` }} />
-          <span className="bg-[#f59e0b]/70" style={{ width: `${load.transitShare * 100}%` }} />
+        <div className={`mt-1.5 flex h-[3px] w-full overflow-hidden rounded-full ${selected ? 'bg-white/25' : 'bg-[#f5faf9]'}`} aria-hidden>
+          <span className="bg-white/90" style={{ width: `${load.activeShare * 100}%` }} />
+          <span className="bg-amber-300" style={{ width: `${load.transitShare * 100}%` }} />
         </div>
       )}
     </button>
+  )
+}
+
+// ── 当日概览条（M1：地点/用餐/交通耗时/门票四指标，全部真实派生） ──
+
+/**
+ * 数字滚动：切天/换行程时概览数字从旧值平滑滚到新值。
+ * prefers-reduced-motion 用户直接跳终值（无动画）。
+ */
+function useCountUp(target: number, duration = 500): number {
+  const [display, setDisplay] = useState(target)
+  const fromRef = useRef(target)
+  useEffect(() => {
+    if (display === target) return
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      fromRef.current = target
+      setDisplay(target)
+      return
+    }
+    const from = fromRef.current
+    const start = performance.now()
+    let raf = 0
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / duration)
+      const eased = 1 - (1 - p) * (1 - p) // easeOutQuad
+      const next = Math.round(from + (target - from) * eased)
+      setDisplay(next)
+      if (p < 1) raf = requestAnimationFrame(tick)
+      else fromRef.current = target
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+    // display 只作为「是否已到位」的判断，动画起点用 fromRef，避免每帧重挂 effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration])
+  return display
+}
+
+/** 概览统计口径（诚实原则）：
+ * - 地点/用餐 = dayVisitTitles/dayMealItems 真实条数；
+ * - 交通耗时 = day.transit_minutes（后端字段）；交通费用只累计**已核实**路段
+ *   （估算路段不计入金额，只提示条数）；
+ * - 门票 = visit 条目 poi.ticket_cny（POI 无票价字段时如实标「待核实」，
+ *   合计只含有价项）。
+ */
+function dayOverviewStats(day: ItineraryDay) {
+  const visits = dayVisitTitles(day).length
+  const meals = dayMealItems(day).length
+  const legs = day.legs ?? []
+  const verifiedLegs = legs.filter((l) => classifyFact({ source: l.source }) === 'verified')
+  const estimateCount = legs.length - verifiedLegs.length
+  const transitCost = verifiedLegs.reduce((s, l) => s + (l.cost_cny > 0 ? l.cost_cny : 0), 0)
+  const visited = day.items.filter((it) => it.kind === 'visit' && it.poi != null)
+  const ticketKnown = visited.filter((it) => it.poi!.ticket_cny > 0)
+  const ticketTotal = ticketKnown.reduce((s, it) => s + it.poi!.ticket_cny, 0)
+  return {
+    visits, meals, verifiedLegs, estimateCount, transitCost,
+    transitMinutes: day.transit_minutes,
+    ticketedCount: visited.length, ticketKnown, ticketTotal,
+  }
+}
+
+function DayOverviewBar({
+  day, onJump,
+}: {
+  day: ItineraryDay
+  onJump: (kind: 'visit' | 'meal') => void
+}) {
+  const [openStat, setOpenStat] = useState<'transit' | 'tickets' | null>(null)
+  const s = useMemo(() => dayOverviewStats(day), [day])
+  const visits = useCountUp(s.visits)
+  const meals = useCountUp(s.meals)
+  const transitMinutes = useCountUp(s.transitMinutes)
+  const statCls = 'inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs transition-colors'
+  return (
+    <div className="relative mb-3 flex flex-wrap items-center gap-2" aria-label="当日概览">
+      {/* 地点 → 滚动高亮第一个到访条目 */}
+      <button
+        type="button"
+        onClick={() => onJump('visit')}
+        disabled={s.visits === 0}
+        className={`${statCls} bg-[#e2f0ee] text-[#087b73] hover:bg-[#d3e8e4] disabled:cursor-default disabled:opacity-50`}
+        title="跳到第一个地点"
+      >
+        <MapPin size={12} aria-hidden />
+        <b className="font-bold">{visits}</b> 个地点
+      </button>
+      {/* 用餐 → 滚动高亮第一个用餐条目 */}
+      <button
+        type="button"
+        onClick={() => onJump('meal')}
+        disabled={s.meals === 0}
+        className={`${statCls} bg-[#fdf1e0] text-[#b4690e] hover:bg-[#fae5cc] disabled:cursor-default disabled:opacity-50`}
+        title="跳到第一家用餐"
+      >
+        <UtensilsCrossed size={12} aria-hidden />
+        <b className="font-bold">{meals}</b> 次用餐
+      </button>
+      {/* 交通耗时/费用 → 拆解 popover */}
+      <span className="relative">
+        <button
+          type="button"
+          onClick={() => setOpenStat(openStat === 'transit' ? null : 'transit')}
+          aria-expanded={openStat === 'transit'}
+          className={`${statCls} bg-[#f5faf9] text-[#5c7074] hover:bg-[#e8f1ef]`}
+        >
+          <Route size={12} aria-hidden className="text-[#087b73]" />
+          交通 <b className="font-bold text-[#183037]">{formatDuration(transitMinutes)}</b>
+          {s.transitCost > 0 && <span>· ¥{s.transitCost.toFixed(0)}</span>}
+        </button>
+        {openStat === 'transit' && (
+          <PopoverCard title="当日交通拆解" onClose={() => setOpenStat(null)}>
+            {s.verifiedLegs.length === 0 ? (
+              <p className="text-xs text-[#8fa5a3]">暂无已核实的路段数据</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {s.verifiedLegs.map((leg, i) => (
+                  <li key={i} className="flex items-center gap-2 text-xs text-[#183037]">
+                    <span className="min-w-0 flex-1 truncate">{leg.from_title} → {leg.to_title}</span>
+                    <span className="shrink-0 text-[#5c7074]">{LEG_MODE_LABEL[leg.mode] ?? leg.mode} {formatDuration(leg.minutes)}</span>
+                    <span className="w-12 shrink-0 text-right font-medium">
+                      {leg.cost_cny > 0 ? `¥${leg.cost_cny.toFixed(0)}` : '—'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {s.estimateCount > 0 && (
+              <p className="mt-2 border-t border-[#e8f1ef] pt-1.5 text-[10px] text-amber-600">
+                另有 {s.estimateCount} 段估算路段未计入金额（数据未核实）
+              </p>
+            )}
+          </PopoverCard>
+        )}
+      </span>
+      {/* 门票 → 拆解 popover */}
+      <span className="relative">
+        <button
+          type="button"
+          onClick={() => setOpenStat(openStat === 'tickets' ? null : 'tickets')}
+          aria-expanded={openStat === 'tickets'}
+          className={`${statCls} bg-[#f5faf9] text-[#5c7074] hover:bg-[#e8f1ef]`}
+        >
+          <Hotel size={12} aria-hidden className="text-[#087b73]" />
+          门票 {s.ticketTotal > 0 ? <b className="font-bold text-[#183037]">¥{s.ticketTotal.toFixed(0)}</b> : <b className="font-bold text-[#183037]">{s.ticketKnown.length}</b>}
+        </button>
+        {openStat === 'tickets' && (
+          <PopoverCard title="当日门票拆解" onClose={() => setOpenStat(null)}>
+            {s.ticketedCount === 0 ? (
+              <p className="text-xs text-[#8fa5a3]">当天没有收费景点安排</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {day.items.filter((it) => it.kind === 'visit' && it.poi != null).map((it, i) => (
+                  <li key={i} className="flex items-center gap-2 text-xs text-[#183037]">
+                    <span className="min-w-0 flex-1 truncate">{it.title}</span>
+                    <span className={`shrink-0 font-medium ${it.poi!.ticket_cny > 0 ? '' : 'text-[#8fa5a3]'}`}>
+                      {it.poi!.ticket_cny > 0 ? `¥${it.poi!.ticket_cny.toFixed(0)}` : '票价待核实'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-2 border-t border-[#e8f1ef] pt-1.5 text-[10px] text-[#8fa5a3]">
+              票价来自检索源，出行前请以景区官方为准
+            </p>
+          </PopoverCard>
+        )}
+      </span>
+      {openStat && (
+        <span
+          className="fixed inset-0 z-10 cursor-default"
+          role="presentation"
+          onClick={() => setOpenStat(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+/** 概览条点击弹出的小拆解卡（锚定在触发按钮下方） */
+function PopoverCard({ title, children, onClose }: {
+  title: string
+  children: React.ReactNode
+  onClose: () => void
+}) {
+  return (
+    <span
+      role="dialog"
+      aria-label={title}
+      className="absolute left-0 top-full z-20 mt-1.5 block w-[320px] rounded-xl border border-[#dae7e5] bg-white p-3 shadow-card"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold text-[#183037]">{title}</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="关闭"
+          className="cursor-pointer rounded px-1 text-[#8fa5a3] hover:text-[#183037]"
+        >
+          ✕
+        </button>
+      </span>
+      {children}
+    </span>
   )
 }
 
@@ -517,6 +719,19 @@ export default function ItineraryView({
   const [actionLoading, setActionLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [localPlanStatus, setLocalPlanStatus] = useState(planStatus)
+  // 概览条「地点/用餐」点击 → 滚动定位 + 高亮闪烁对应时间轴条目
+  const bigCardRef = useRef<HTMLElement>(null)
+  const handleOverviewJump = useCallback((kind: 'visit' | 'meal') => {
+    const root = bigCardRef.current
+    if (!root) return
+    const el = root.querySelector<HTMLElement>(`[data-item-kind="${kind}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.remove('overview-flash')
+    void el.offsetWidth // 强制 reflow，连续点击也能重启动画
+    el.classList.add('overview-flash')
+    window.setTimeout(() => el.classList.remove('overview-flash'), 1600)
+  }, [])
 
   useEffect(() => setLocalPlanStatus(planStatus), [planStatus])
 
@@ -642,9 +857,13 @@ export default function ItineraryView({
       )}
       {activeDayData && (
         <section
-          className="rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card sm:p-5"
+          ref={bigCardRef}
+          className="animate-fade-in rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card sm:p-5"
           aria-label={`第 ${activeDay} 天行程`}
         >
+          {/* 当日概览条：地点/用餐/交通/门票四指标（点击跳转或拆解） */}
+          <DayOverviewBar day={activeDayData} onJump={handleOverviewJump} />
+
           {/* 当日亮点：选中天的第一眼摘要（地点/美食/提示），随日卡片切换联动 */}
           {dayHighlights.length > 0 && (
             <div className="mb-3 flex flex-wrap items-center gap-1.5" aria-label={`第 ${activeDay} 天亮点`}>

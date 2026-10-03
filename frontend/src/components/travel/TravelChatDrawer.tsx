@@ -88,6 +88,8 @@ interface Props {
   /** 出单后的首条助手消息（2026-10-03）：reporter 的规划说明全文
    *（为什么这样排/美食推荐/需要你确认），表单直出路径此前完全不展示 */
   introMessage?: string
+  /** M1 三态移交：空态规划卡发送的那句话，作为第一条用户气泡出现在聊天流 */
+  handoverUserMessage?: string | null
 }
 
 /**
@@ -98,7 +100,7 @@ export default function TravelChatDrawer({
   mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
-  introMessage = '',
+  introMessage = '', handoverUserMessage = null,
 }: Props) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
@@ -130,6 +132,16 @@ export default function TravelChatDrawer({
     setClarificationOptions([])
     setFillingDays(false)
   }, [conversationId])
+  // M1 三态移交：空态规划卡/示例卡发出的话 → 聊天流第一条用户气泡。
+  // 只在「本线程还没有这条消息」时追加一次，避免面板/抽屉双挂载或重渲染重复。
+  useEffect(() => {
+    if (!handoverUserMessage) return
+    setMessages((prev) => {
+      if (prev.some((m) => m.role === 'user' && m.text === handoverUserMessage)) return prev
+      return [...prev, { role: 'user', text: handoverUserMessage }]
+    })
+  }, [handoverUserMessage])
+
   // 自动滚到底（新消息 / 进行中提示出现时）
   useEffect(() => {
     const el = scrollRef.current
@@ -272,11 +284,16 @@ export default function TravelChatDrawer({
     }
   }
 
-  // 出单规划说明（「为什么这样排/美食推荐」）作为首条助手消息常驻对话流
-  const visibleMessages = useMemo<ChatMsg[]>(
-    () => (introMessage.trim() ? [{ role: 'assistant' as const, text: introMessage.trim(), tag: '规划说明' }, ...messages] : messages),
-    [introMessage, messages],
-  )
+  // 出单规划说明（「为什么这样排/美食推荐」）作为首条助手消息常驻对话流。
+  // 时序：移交的用户气泡（空态发送的那句话）排在规划说明**之前**——
+  // 用户先提问、后出说明；说明之后再来的对话按原顺序追加。
+  const visibleMessages = useMemo<ChatMsg[]>(() => {
+    if (!introMessage.trim()) return messages
+    const intro: ChatMsg = { role: 'assistant', text: introMessage.trim(), tag: '规划说明' }
+    const firstAssistant = messages.findIndex((m) => m.role === 'assistant')
+    const cut = firstAssistant === -1 ? messages.length : firstAssistant
+    return [...messages.slice(0, cut), intro, ...messages.slice(cut)]
+  }, [introMessage, messages])
   const hasMessages = visibleMessages.length > 0
   const inputDisabled = disabled || loading || generating || Boolean(pendingResponse)
   const pendingSummary = useMemo(

@@ -155,3 +155,10 @@ html, body {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
+
+/* 旅游页概览条「地点/用餐」点击跳转的高亮闪烁（ItineraryView M1） */
+@keyframes overviewFlash {
+  0%, 55% { background-color: #e2f0ee; box-shadow: 0 0 0 2px #087b73 inset; }
+  100%    { background-color: transparent; box-shadow: none; }
+}
+.overview-flash { animation: overviewFlash 1.6s ease-out; }
