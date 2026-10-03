@@ -148,6 +148,9 @@ export default function TravelPage() {
   const [quickIdea, setQuickIdea] = useState('')
   // M1 三态移交：空态规划卡/示例卡发送的那句话（→ 右侧助手第一条用户气泡）
   const [handoverMessage, setHandoverMessage] = useState('')
+  // M2-g 出域轮无 itinerary，若右栏按「有行程才挂载」会连对话带引导卡一起卸载——
+  // 本线程发过消息即视为对话已激活，右栏常驻
+  const [chatActivated, setChatActivated] = useState(false)
 
   // ── 结果与线程 ──
   const [conversationId, setConversationId] = useState(readConversationId)
@@ -251,6 +254,7 @@ export default function TravelPage() {
     // M1 三态移交：这句话作为第一条用户气泡出现在右侧助手聊天流
     setHandoverMessage(message)
     setReplaceCandidates([]) // 新行程：上一份的商户候选作废
+    setChatActivated(true)
     // M1 反馈：发送即进入「看结果」模式，自动折叠左侧历史栏腾出中栏空间
     setSidebarOpen(false)
     setLoading(true)
@@ -389,6 +393,7 @@ export default function TravelPage() {
     setConversationId(cid)
     setPlanState(EMPTY_PLAN_STATE)
     setHandoverMessage('') // 新线程：上一条移交语作废，避免下轮同文案不触发移交
+    setChatActivated(false)
     setOrigin('')
     setDestination('')
     setDays('2')
@@ -504,7 +509,7 @@ export default function TravelPage() {
   // 生成中=条件锁定；有行程=条件摘要
   const hasLeftRail = loading || !!itinerary
   // 右栏助手：设计稿态1 没有助手栏 —— 空态时连助手都不出现，输入卡是唯一焦点
-  const hasRightRail = loading || !!itinerary
+  const hasRightRail = loading || !!itinerary || chatActivated
   const userName = getCachedUser()?.username || '本地用户'
 
   return (
