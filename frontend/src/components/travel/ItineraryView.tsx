@@ -40,11 +40,18 @@ interface DayRoute {
   pts: Array<{ lat: number; lng: number; title: string }>
 }
 
-function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDay: number }) {
+function RouteMap({ itinerary, selectedDay, focus }: {
+  itinerary: Itinerary
+  selectedDay: number
+  /** M2.5-④ hover 联动：时间轴条目 → 地图居中 + 交通耗时 popup */
+  focus?: { lat: number; lng: number; title: string; transit: string } | null
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<LeafletMap | null>(null)
   const leafletRef = useRef<typeof import('leaflet') | null>(null)
   const layerRef = useRef<import('leaflet').LayerGroup | null>(null)
+  // 标题 → marker（hover 联动定位用）
+  const markersRef = useRef<Map<string, import('leaflet').Marker>>(new Map())
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
 
@@ -118,6 +125,7 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
     const L = leafletRef.current
     if (!ready || !map || !L) return
     layerRef.current?.remove()
+    markersRef.current.clear()
     const group = L.layerGroup()
     const bounds: [number, number][] = []
     let seq = 0
@@ -138,7 +146,10 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
           iconSize: [20, 20],
           iconAnchor: [10, 10],
         })
-        L.marker([p.lat, p.lng], { icon, title: p.title }).addTo(group)
+        const marker = L.marker([p.lat, p.lng], { icon, title: p.title })
+          .bindPopup(`<b>${p.title}</b>`, { closeButton: false, offset: [0, -12] })
+          .addTo(group)
+        markersRef.current.set(p.title, marker)
         bounds.push([p.lat, p.lng])
       }
     }
@@ -148,6 +159,17 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
       map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 })
     }
   }, [ready, dayRoutes])
+
+  // M2.5-④：hover 条目 → 地图 flyTo 居中 + popup 显示交通耗时
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !focus) return
+    const marker = markersRef.current.get(focus.title)
+    if (!marker) return
+    marker.setPopupContent(`<b>${focus.title}</b><br/><span style="font-size:11px">${focus.transit}</span>`)
+    map.flyTo([focus.lat, focus.lng], Math.max(map.getZoom(), 14), { duration: 0.5 })
+    marker.openPopup()
+  }, [focus, ready, dayRoutes])
 
   if (failed || dayRoutes.length === 0) {
     return (
@@ -205,7 +227,7 @@ function ItemTags({ item }: { item: ItineraryItem }) {
     <span className="ml-1.5 inline-flex flex-wrap items-center gap-1 align-middle">
       {/* 停留时长：排在类型之后的第一个 chip，回答「在这待多久」 */}
       {stay && (
-        <span className="rounded bg-[#087b73]/10 px-1.5 py-0.5 text-[10px] text-[#087b73]">
+        <span className="rounded bg-[#f5faf9] px-1.5 py-0.5 text-[10px] text-[#5c7074]">
           停留 {stay}
         </span>
       )}
@@ -216,7 +238,7 @@ function ItemTags({ item }: { item: ItineraryItem }) {
       )}
       {ticket > 0 && factStatus === 'verified' && (
         <span className="rounded bg-[#f5faf9] px-1.5 py-0.5 text-[10px] text-[#5c7074]">
-          门票 ¥{ticket.toFixed(0)} · 已核实
+          门票 ¥{ticket.toFixed(0)}
         </span>
       )}
       {item.poi && factStatus !== 'verified' && (
@@ -267,15 +289,34 @@ function LegRow({ leg }: { leg: TransitLeg }) {
   )
 }
 
-function DayCard({ day, replaceCandidates, onRequestReplace }: {
+function DayCard({ day, replaceCandidates, onRequestReplace, onAskNearby, onHoverItem }: {
   day: ItineraryDay
   replaceCandidates?: Array<Record<string, unknown>>
   onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
+  onAskNearby?: (text: string) => void
+  onHoverItem?: (focus: { lat: number; lng: number; title: string; transit: string } | null) => void
 }) {
   // M2 画布直选：replaceFor=打开弹层的条目 idx；picked=点选待确认的候选名
   const [replaceFor, setReplaceFor] = useState<number | null>(null)
   const [picked, setPicked] = useState<string | null>(null)
   const canReplace = Boolean(onRequestReplace && (replaceCandidates?.length ?? 0) > 0)
+  // M2.5-④ hover→地图联动：坐标可信的条目才发聚焦；transit=到达该条目的路段文案
+  const emitHover = (idx: number, item: ItineraryItem) => {
+    if (!onHoverItem) return
+    const poi = item.poi
+    const trusted = poi != null && Number.isFinite(poi.lat) && Number.isFinite(poi.lng)
+      && (poi.location_status === 'verified'
+        || classifyFact({ source: poi.source, verification_status: poi.verification_status }) === 'verified')
+    if (!poi || !trusted) {
+      onHoverItem(null)
+      return
+    }
+    const arriveLeg = idx > 0 ? legForItem.get(idx - 1) : null
+    const transit = arriveLeg
+      ? `从上一站：${LEG_MODE_LABEL[arriveLeg.mode] ?? arriveLeg.mode} ${formatDuration(arriveLeg.minutes)}${arriveLeg.cost_cny > 0 ? ` · ¥${arriveLeg.cost_cny.toFixed(0)}` : ''}`
+      : '当日首站'
+    onHoverItem({ lat: poi.lat, lng: poi.lng, title: item.title, transit })
+  }
   const load = dayLoad(day)
   // legs[i] 若与 items[i].title 对上 → 交错渲染进时间轴；对不上的（异常/多余）留到底部块，不丢数据。
   const legForItem = new Map<number, TransitLeg>()
@@ -320,7 +361,9 @@ function DayCard({ day, replaceCandidates, onRequestReplace }: {
             <Fragment key={`${item.title}-${idx}`}>
               <li
                 data-item-kind={item.kind}
-                className={`relative rounded-lg px-2 py-1 transition-colors [margin-left:-0.5rem] hover:bg-[#f5faf9] ${idx === day.items.length - 1 ? '' : 'pb-2.5'}`}
+                onMouseEnter={() => emitHover(idx, item)}
+                onMouseLeave={() => onHoverItem?.(null)}
+                className={`group relative rounded-lg px-2 py-1 transition-colors [margin-left:-0.5rem] hover:bg-[#f5faf9] ${idx === day.items.length - 1 ? '' : 'pb-2.5'}`}
               >
                 <span
                   className="absolute -left-[21px] top-2.5 h-2 w-2 rounded-full ring-2 ring-white"
@@ -343,23 +386,36 @@ function DayCard({ day, replaceCandidates, onRequestReplace }: {
                   </span>
                 </div>
                 {/* 入选理由（2026-10-03）：「为什么选它」——必去点名/检索来源/知乎攻略提及 */}
+                {/* M2.5 降噪：辅助决策信息 hover 渐现，垂直浏览只留三要素 */}
                 {reasonLine(item) && (
-                  <p className="mt-0.5 pl-[100px] text-[11px] leading-relaxed text-[#087b73]">
-                    为什么选它：{reasonLine(item)}
+                  <p className="hidden pl-[100px] text-[11px] leading-relaxed text-[#5c7074] group-hover:block">
+                    <span className="text-[#087b73]">为什么选它：</span>{reasonLine(item)}
                   </p>
                 )}
                 {item.note && <p className="mt-0.5 pl-[100px] text-[11px] text-[#5c7074]">{item.note}</p>}
                 {/* M2 画布直选：用餐条目「换一家」→ 原地候选弹层 → 轻确认 → 代发重排 */}
                 {canReplace && item.kind === 'meal' && (
                   <span className="mt-1 ml-[100px] inline-flex flex-col items-start gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => { setReplaceFor(replaceFor === idx ? null : idx); setPicked(null) }}
-                      aria-expanded={replaceFor === idx}
-                      className="cursor-pointer rounded-full border border-dashed border-[#c3d6d2] px-2 py-0.5 text-[10px] text-[#087b73] transition-colors hover:border-[#087b73] hover:bg-[#f5faf9]"
-                    >
-                      换一家 ▾
-                    </button>
+                    <span className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => { setReplaceFor(replaceFor === idx ? null : idx); setPicked(null) }}
+                        aria-expanded={replaceFor === idx}
+                        className="cursor-pointer rounded-full border border-dashed border-[#c3d6d2] px-2 py-0.5 text-[10px] text-[#087b73] transition-colors hover:border-[#087b73] hover:bg-[#f5faf9]"
+                      >
+                        换一家 ▾
+                      </button>
+                      {/* M2.5-③ 就近唤醒：锚定该节点的场景化入口，代发走聊天管线 */}
+                      {onAskNearby && (
+                        <button
+                          type="button"
+                          onClick={() => onAskNearby(`在「${item.title}」附近找几家有特色的餐厅，帮我排到这个时间段附近`)}
+                          className="cursor-pointer rounded-full border border-dashed border-[#c3d6d2] px-2 py-0.5 text-[10px] text-[#087b73] transition-colors hover:border-[#087b73] hover:bg-[#f5faf9]"
+                        >
+                          + 找周边美食
+                        </button>
+                      )}
+                    </span>
                     {replaceFor === idx && (
                       <span
                         role="dialog"
@@ -481,7 +537,7 @@ function DayTabCard({
       className={`group w-[150px] shrink-0 cursor-pointer overflow-hidden rounded-xl border p-3 text-left transition-all animate-fade-in ${
         selected
           ? 'border-[#087b73] bg-[#087b73] text-white shadow-card'
-          : 'border-[#dae7e5] bg-white hover:border-[#087b73]/40 hover:shadow-card'
+          : 'border-transparent bg-[#f5faf9] hover:bg-[#e8f1ef]'
       }`}
       style={{ animationDelay: `${Math.min(index, 8) * 70}ms`, animationFillMode: 'backwards' }}
     >
@@ -818,6 +874,8 @@ export interface ItineraryViewProps {
   replaceCandidates?: Array<Record<string, unknown>>
   /** 确认替换 → 页面代发修改请求（聊天管线 → 后端重算 → 草案确认） */
   onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
+  /** M2.5 就近唤醒/联动代发：经聊天管线发话 */
+  onAskNearby?: (text: string) => void
   planStatus?: string
   /** 追问 / 失败提示：有行程时也展示，不顶掉行程 */
   notice?: string
@@ -833,7 +891,7 @@ export interface ItineraryViewProps {
 export default function ItineraryView({
   itinerary, conversationId, planStatus = '', notice, exporting = false,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
-  replaceCandidates, onRequestReplace,
+  replaceCandidates, onRequestReplace, onAskNearby,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
   // 受控优先（页面要跟右侧助手共享选中天）；未传时退回内部自管。
@@ -872,6 +930,8 @@ export default function ItineraryView({
   const [localPlanStatus, setLocalPlanStatus] = useState(planStatus)
   // 概览条「地点/用餐」点击 → 滚动定位 + 高亮闪烁对应时间轴条目
   const bigCardRef = useRef<HTMLElement>(null)
+  // M2.5-④ 联动：hover 时间轴条目 → 地图 flyTo 居中 + 交通耗时 popup
+  const [hoverFocus, setHoverFocus] = useState<{ lat: number; lng: number; title: string; transit: string } | null>(null)
   const handleOverviewJump = useCallback((kind: 'visit' | 'meal') => {
     const root = bigCardRef.current
     if (!root) return
@@ -1042,11 +1102,13 @@ export default function ItineraryView({
           {/* 双列等高：时间轴 | （日切换 + 路线地图）。M2 布局反馈：
               日切换与地图同列（先选天→看当天路线）；时间轴与聊天框等高，
               天数多时日切换条横向滚动+箭头。 */}
-          <div className="grid min-h-0 flex-1 items-stretch gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="grid min-h-0 flex-1 items-stretch gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <DayCard
               day={activeDayData}
               replaceCandidates={replaceCandidates}
               onRequestReplace={onRequestReplace}
+              onAskNearby={onAskNearby}
+              onHoverItem={setHoverFocus}
             />
             <div className="flex min-h-0 flex-col gap-3">
               {dayCount > 1 && (
@@ -1057,8 +1119,8 @@ export default function ItineraryView({
                   selectedDayData={activeDayData}
                 />
               )}
-              <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[#dae7e5]">
-                <RouteMap itinerary={itinerary} selectedDay={activeDay} />
+              <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
+                <RouteMap itinerary={itinerary} selectedDay={activeDay} focus={hoverFocus} />
               </div>
             </div>
           </div>

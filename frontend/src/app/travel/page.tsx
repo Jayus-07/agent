@@ -686,6 +686,7 @@ export default function TravelPage() {
                   onPlanResponse={handleAssistantResponse}
                   replaceCandidates={replaceCandidates}
                   onRequestReplace={handleRequestReplace}
+                  onAskNearby={(text) => chatRef.current?.send(text)}
                   />
                 </>
               ) : loading ? (
