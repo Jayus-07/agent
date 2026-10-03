@@ -136,7 +136,8 @@ def get_city_guide(destination: str, *, force: bool = False) -> dict:
                 "note": "未指定目的地", "summary": None, "tips": [], "guides": []}
 
     # 缓存（TTL 7 天，拍板口径；force 跳过读仍写）
-    cache_key = f"cityguide:{destination}"
+    # v2：level 聚合修复（初始 4 恒 4 的旧结构缓存用 key 版本位自然淘汰）
+    cache_key = f"cityguide:v2:{destination}"
     if not force:
         try:
             from backend.infra.cache.backend import get_cache
