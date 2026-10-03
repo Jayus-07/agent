@@ -173,6 +173,47 @@ TRAVEL_BAD_WEATHER_KEYWORDS: tuple[str, ...] = (
 # 知识库检索（2026-09-22 P0-1 RAG 接入）
 # =============================================
 TRAVEL_RAG_ENABLED = os.getenv("TRAVEL_RAG_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# M3-d 通用 Tool 缓存：同参数外部检索 24h 内复用（抗抖动+省配额），0 关闭
+TRAVEL_TOOL_CACHE_ENABLED = os.getenv("TRAVEL_TOOL_CACHE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+TRAVEL_TOOL_CACHE_TTL = int(os.getenv("TRAVEL_TOOL_CACHE_TTL", "86400"))
+# M3-g 城市指南：③级知乎检索开关（降级链：文档摘要→RAG→知乎→暂无）
+TRAVEL_GUIDE_ZHIHU_ENABLED = os.getenv("TRAVEL_GUIDE_ZHIHU_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+
+# ── M3-e 方案档位（「钱与档位」单一事实源，初稿可调不动代码） ──
+# profile 定「检索过滤与归类意图」；tool 搜到的实际价格定成本（无价字段
+# 由 cost 估算兜底）。第三档预留：加一段配置即可，不改逻辑。
+TIER_PROFILES: dict[str, dict] = {
+    "economy": {
+        "label": "经济实用型",
+        "meal_price_band": (0, 80),        # 餐饮人均带（元）
+        "lodging_grade_keywords": ["快捷", "连锁", "经济型", "三星"],
+        "max_spots_per_day": 4,            # 每日地点上限
+        "transport_priority": ["transit", "walk", "drive"],  # 公交优先
+        "paid_experience_budget_share": 0.10,  # 付费体验预算占比上限
+        "cost_multiplier": {"meals": 1.0, "lodging": 1.0},
+    },
+    "comfortable": {
+        "label": "舒适均衡型",
+        "meal_price_band": (80, 200),
+        "lodging_grade_keywords": ["四星", "海景", "高档", "精品"],
+        "max_spots_per_day": 3,
+        "transport_priority": ["drive", "transit", "walk"],  # 打车优先
+        "paid_experience_budget_share": 0.25,
+        "cost_multiplier": {"meals": 1.5, "lodging": 1.8},
+    },
+}
+DEFAULT_TIER = "economy"
+
+# ── M3-f 预算压缩策略：固定顺序（体验→餐饮→住宿→交通），交通最后动 ──
+# 压缩到头仍超支 → 前端预算缺口卡（删减协商）。
+BUDGET_POLICY = {
+    # 压缩顺序：step 名 → 说明（供应商实现按此顺序逐级收紧）
+    "compression_order": ["paid_experience", "meals", "lodging", "transit"],
+    "never_touch": ["must_go", "purchased_tickets", "days", "party_size"],
+    # 档位下限系数：该档最低可行预算 ≈ 硬成本基准 × 系数（粗估口径，
+    # 精确值由 cost 估算体系给出；低于硬成本 → 缺口卡协商）
+    "tier_floor_multiplier": {"economy": 1.0, "comfortable": 1.6},
+}
 # 旅游域知识库 id：语料未灌入时检索返回空，risk 专家自动降级为免责声明
 TRAVEL_RAG_KB_ID = os.getenv("TRAVEL_RAG_KB_ID", "travel")
 TRAVEL_RAG_TOP_K = int(os.getenv("TRAVEL_RAG_TOP_K", "3"))

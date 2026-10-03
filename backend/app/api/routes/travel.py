@@ -124,6 +124,18 @@ async def _load_travel_plan_request(request: Request) -> TravelPlanRequest:
     return _parse_travel_plan_request(request_body)
 
 
+@router.get("/city-guide", summary="城市指南（四级内容链：文档摘要→RAG→知乎→暂无）")
+async def travel_city_guide(request: Request, destination: str, force: bool = False):
+    """M3-g：城市指南轻端点，不进域图。
+
+    结果按目的地缓存 TTL 7 天（拍板口径）；知乎关闭/配额尽自动降级。
+    """
+    require_identity(request)
+    from backend.travel.services.city_guide_service import get_city_guide
+
+    return get_city_guide(destination, force=force)
+
+
 @router.post("/plan", summary="旅游规划（非流式，返回行程单与结构化行程）")
 async def travel_plan(request: Request):
     """手动 request.json() 解析 body —— 对齐 chat_stream 先例。

@@ -32,12 +32,14 @@ def budget_expert_node(state: dict) -> dict:
             return {"status": "failed", "data": {}, "notes": [],
                     "error": "行程尚未生成，无法核算预算"}
 
-        # 城市档位（P0-3）：餐饮/住宿按目的地消费水平核算，未登记城市回落全局定额
+        # 城市档位（P0-3）：餐饮/住宿按目的地消费水平核算，未登记城市回落全局定额；
+        # M3-e：按方案档位乘数（TIER_PROFILES.cost_multiplier）核算
         itinerary.cost = run_travel_tool(
             "travel.calculate_budget",
             "optimization",
             lambda: estimate_cost(
-                itinerary.days, brief.party_size, city=brief.destination),
+                itinerary.days, brief.party_size, city=brief.destination,
+                tier=brief.tier),
             result_summary=lambda value: {
                 "total_cny": round(float(value.total), 2),
                 # M2 验收反馈：费用四项拆解（与行程单 cost 同源）
@@ -50,6 +52,56 @@ def budget_expert_node(state: dict) -> dict:
                 ],
             },
         )
+
+        # ── M3-f 预算协商：预算硬约束（用户拍板口径） ──
+        # ① comfortable 且超预算 → 试经济档：排得下则自动降档并明示；
+        # ② 经济档也超 → 出缺口数据（最低可行预算+缺口），前端缺口卡协商。
+        # 「只算不判」纪律的边界：这里是**档位可行性**判定（决定按哪档出
+        # 账），超支判定仍归 validator 轴四。
+        negotiation: dict | None = None
+        budget = brief.budget_cny
+        if budget is not None and budget > 0 and float(itinerary.cost.total) > budget:
+            from backend.travel.services import budget_service as _bs
+
+            econ_total = round(float(_bs.estimate_cost(
+                itinerary.days, brief.party_size, city=brief.destination,
+                tier="economy").total), 2)
+            floor = _bs.estimate_budget_floor(
+                len(itinerary.days), brief.party_size, city=brief.destination)
+            if brief.tier == "comfortable" and econ_total <= budget:
+                itinerary.cost = run_travel_tool(
+                    "travel.calculate_budget",
+                    "optimization",
+                    lambda: _bs.estimate_cost(
+                        itinerary.days, brief.party_size, city=brief.destination,
+                        tier="economy"),
+                    result_summary=lambda value: {
+                        "total_cny": round(float(value.total), 2),
+                        "category": "budget",
+                        "tier_downgraded": True,
+                    },
+                )
+                brief.tier = "economy"  # 降档写回（行程与档位保持一致）
+                notes_auto = (
+                    f"预算 ¥{budget:.0f} 排不出舒适均衡型（约 ¥{econ_total + float(itinerary.cost.total) - econ_total:.0f}），"
+                    f"已按经济实用型重排；预算上调至约 ¥{econ_total:.0f} 以上可切回舒适档"
+                )
+                negotiation = {
+                    "tier_downgraded": True,
+                    "economy_total_cny": econ_total,
+                    "note": notes_auto,
+                }
+            else:
+                gap = round(econ_total if econ_total > budget else float(itinerary.cost.total) - budget, 2)
+                negotiation = {
+                    "tier_downgraded": False,
+                    "floor_total_cny": round(float(floor["total"]), 2),
+                    "gap_cny": round(max(0.0, float(floor["total"]) - budget), 2),
+                    "note": (
+                        f"按当前 {len(itinerary.days)} 天行程，最低需要约 ¥{floor['total']:.0f}"
+                        f"（住宿+餐饮硬成本），预算 ¥{budget:.0f} 排不出来"
+                    ),
+                }
 
         notes: list[str] = []
         if brief.budget_cny is None or brief.budget_cny <= 0:
@@ -82,4 +134,7 @@ def budget_expert_node(state: dict) -> dict:
     }
     if data.get("itinerary"):
         update["itinerary"] = data["itinerary"]
+    if negotiation:
+        update["budget_negotiation"] = negotiation
+        update["notes"] = list(update.get("notes", [])) + [negotiation["note"]]
     return update

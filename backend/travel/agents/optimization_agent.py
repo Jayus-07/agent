@@ -38,6 +38,6 @@ class OptimizationAgent:
         """坏天气日户外→室内替换并重排（必去永不换，经 weather_service）。"""
         return weather_service.plan_weather_swaps(itinerary, candidates, bad_dates)
 
-    def estimate_cost(self, days, party_size: int, city: str = ""):
-        """费用核算（只算不判，经 budget_service）。"""
-        return budget_service.estimate_cost(days, party_size, city=city)
+    def estimate_cost(self, days, party_size: int, city: str = "", tier: str = "economy"):
+        """费用核算（只算不判，经 budget_service）。tier 见 M3-e。"""
+        return budget_service.estimate_cost(days, party_size, city=city, tier=tier)

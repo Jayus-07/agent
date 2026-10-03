@@ -145,6 +145,8 @@ class TravelGraphState(TypedDict, total=False):
     # M2：结构化「为什么这样排」（reporter 产出 → PlanResponse.rationale）。
     # 必须入 schema——LangGraph 会剥离 schema 外的更新键（AGENTS.md 同款教训）。
     rationale: dict
+    # M3-f 预算协商（budget expert 产出 → rationale.budget_negotiation）
+    budget_negotiation: dict
     finished: bool
 
 
@@ -247,6 +249,7 @@ def brief_fingerprint(brief: TravelBrief) -> str:
         "must_go": sorted(brief.must_go),
         "avoid": sorted(brief.avoid),
         "pace": brief.normalized_pace(),
+        "tier": brief.tier,
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]

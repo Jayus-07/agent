@@ -91,6 +91,7 @@ def _invoke(
     """
     from backend.core.tool_runtime.models import ToolResult, ToolStatus
     from backend.core.tool_runtime.tracing import finish_tool_span, start_tool_span
+    from backend.travel.services.tool_cache import cached_envelope
 
     started = time.monotonic()
     span = start_tool_span(
@@ -100,7 +101,19 @@ def _invoke(
         agent=agent,
     )
     try:
-        raw = tool.func(**kwargs)
+        def _call() -> str:
+            return tool.func(**kwargs)
+
+        from backend.config.travel import TRAVEL_TOOL_CACHE_TTL
+        raw, _cache_hit = cached_envelope(
+            tool_name, dict(kwargs), _call, ttl=TRAVEL_TOOL_CACHE_TTL)
+        if _cache_hit:
+            try:
+                _envelope = json.loads(raw)
+                _envelope["cache_hit"] = True  # 观测注：命中标记，不改业务语义
+                raw = json.dumps(_envelope, ensure_ascii=False)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception as exc:
         result = ToolResult(
             status=ToolStatus.FAILED,

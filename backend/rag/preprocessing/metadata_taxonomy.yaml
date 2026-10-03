@@ -1962,6 +1962,9 @@
     }
   },
   "filename_hints": {
+    "旅游攻略": "travel_guide",
+    "旅游指南": "travel_guide",
+    "攻略": "travel_guide",
     "政策": "policy",
     "制度": "policy",
     "规范": "policy",

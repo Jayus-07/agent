@@ -164,6 +164,12 @@ def slot_filler_node(state: dict) -> dict:
         has_destination=bool(fresh.destination or (previous and previous.destination)),
     )
     brief = _requirement_service.merge(previous, fresh)
+    # M3-e 方案档位：fresh.tier 缺省恒为 economy，无法区分「说了经济型」
+    # 与「没提」；这里用原话显式判定并在 merge 后覆盖（含降档回 economy）。
+    from backend.travel.agents.requirement_agent import extract_tier
+    explicit_tier = extract_tier(message)
+    if explicit_tier:
+        brief.tier = explicit_tier
 
     # P1-1 偏好持久化（软失败，读写失败都不影响规划主链）：
     #   预填 —— 跨轮首轮（无上一轮 brief）且开启了偏好功能时，把历史偏好
@@ -352,6 +358,20 @@ def slot_filler_node(state: dict) -> dict:
     # reset 清理的是旧产物；本轮问答检索结果必须在 reset 之后写回。
     update["inspiration"] = inspiration
     update["notes"] = notes
+
+    # M3-g 城市指南预热：城市级知乎/RAG 检索 fire-and-forget（结果写
+    # 7 天缓存供速览卡/抽屉秒出）。不阻塞规划主链、失败静默。
+    _dest = (brief.destination or "").strip()
+    if _dest:
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+
+            from backend.travel.services import city_guide_service
+
+            ThreadPoolExecutor(max_workers=1).submit(
+                city_guide_service.prime_city_guide, _dest)
+        except Exception:  # noqa: BLE001 — 预热失败静默
+            pass
     from backend.travel.core.events import emit_travel_event
 
     emit_travel_event(

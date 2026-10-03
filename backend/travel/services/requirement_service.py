@@ -85,6 +85,9 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
     merged.must_go = filter_city_names(merged.must_go)
     if fresh.pace != "moderate":
         merged.pace = fresh.pace
+    # 方案档位（M3-e）：tier 的显式/缺省区分在 slot_filler 层做——
+    # fresh.tier 缺省恒为 economy，无法在此区分「用户说了经济型」与
+    # 「没提」；slot_filler 拿得到原话，显式表达时在 merge 后覆盖。
     # 饮食忌口：本轮有表述才覆盖（与 pace 同一合并语义）
     if fresh.diet:
         merged.diet = fresh.diet

@@ -28,6 +28,7 @@ from backend.travel.models.brief import (
     DIET_KEYWORDS,
     PACE_KEYWORDS,
     PREFERENCE_KEYWORDS,
+    TIER_KEYWORDS,
     SLOT_QUESTIONS,
     TravelBrief,
 )
@@ -603,6 +604,14 @@ def extract_diet(message: str) -> str:
     return max(hits, key=len)
 
 
+def extract_tier(message: str) -> str | None:
+    """方案档位抽取（M3-e）：命中即返回，未提返回 None（保持既有值/默认）。"""
+    for tier, keywords in TIER_KEYWORDS.items():
+        if any(k in message for k in keywords):
+            return tier
+    return None
+
+
 def extract_pace(message: str) -> str | None:
     for pace, keywords in PACE_KEYWORDS.items():
         if any(k in message for k in keywords):
@@ -744,6 +753,7 @@ def extract_fresh_brief(
         start_date=extract_start_date(message),
         preferences=extract_preferences(message),
         pace=extract_pace(message) or "moderate",
+        tier=extract_tier(message) or "economy",
         diet=extract_diet(message),
         lodging=extract_lodging(message),
     )
@@ -851,6 +861,7 @@ __all__ = [
     "extract_must_go",
     "extract_party_size",
     "extract_pace",
+    "extract_tier",
     "extract_preferences",
     "extract_start_date",
     "extract_unsupported_city",

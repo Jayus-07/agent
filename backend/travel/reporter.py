@@ -267,7 +267,7 @@ def _build_rationale(state: dict) -> dict:
                   "moderate": "每天最多 5 个地点 / 300 分钟活动",
                   "intense": "每天最多 6 个地点 / 360 分钟活动"}
 
-    return {
+    rationale = {
         "headline": {
             "days": len(itinerary.days),
             "spots": len([p for p in pois]),
@@ -286,6 +286,11 @@ def _build_rationale(state: dict) -> dict:
         ),
         "_has_decision_required": bool(report and report.decision_required),
     }
+    # M3-f 预算协商：自动降档说明 / 缺口卡数据（预算专家产出）
+    negotiation = state.get("budget_negotiation")
+    if negotiation:
+        rationale["budget_negotiation"] = negotiation
+    return rationale
 
 
 def _stamp_plan_run(state: dict) -> None:

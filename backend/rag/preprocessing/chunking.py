@@ -230,6 +230,48 @@ def _merge_small_texts(texts: list[str], budget: int) -> list[str]:
     return merged
 
 
+def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
+    """把叶子节点的页码（PDF 解析 §5.2 可追溯字段 page_number）映射进 chunk metadata。
+
+    原文定位（P0，2026-10-03）：chunk 是叶子文本的合并/二次切分产物，切分
+    策略只保留文本不保留节点引用，这里用双向文本包含做确定性回映射：
+      - 叶子前缀 ⊆ chunk 文本 → 叶子被并入此 chunk（合并型策略）
+      - chunk 核心 ⊆ 叶子全文 → chunk 是该叶子的切片（Fixed/Recursive 对
+        超长叶子二次切分，切片可能不含叶子开头）
+    两个方向都不含（策略改写了文本）→ 不标页码，宁缺勿错——错误的页码比
+    没有页码更伤引用可信度。存标量逗号串（向量库 metadata 标量化惯例，
+    同 ocr_triggered）；非 PDF 文档叶子无 page_number → 整体无页码可标。
+    单点收口在 parse_and_chunk_full，8 个切分策略零改动（G2）。
+    """
+    leaves: list[tuple[str, str, int]] = []
+    for n in walk(ast.root):
+        if n.type not in LEAF_TYPES:
+            continue
+        try:
+            page = int(getattr(n, "page_number", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if page <= 0:
+            continue
+        text = (n.text or "").strip()
+        if text:
+            leaves.append((text[:60], text, page))
+    if not leaves:
+        return
+    for c in chunks:
+        meta = getattr(c, "metadata", None)
+        body = (getattr(c, "page_content", "") or "").strip()
+        if not isinstance(meta, dict) or not body:
+            continue
+        core = body[:200]
+        pages: set = set()
+        for prefix, full, page in leaves:
+            if prefix in body or (len(core) >= 40 and core in full):
+                pages.add(page)
+        if pages:
+            meta["pages"] = ",".join(str(p) for p in sorted(pages))
+
+
 def _iter_leaves_with_section(ast: DocumentAST):
     """遍历叶子并携带其所属 section 标题（C3 上下文携带）。
 
@@ -1117,6 +1159,9 @@ STRUCTURE_STRATEGIES = {
     "contract_template": LegalChunkStrategy,
     "faq": QAChunkStrategy,
     "ad_policy": FixedSizeChunkStrategy,
+    # M3：旅游攻略——POI 小节「一店一 chunk」，标题感知切分（文档规范
+    # docs/travel-rag-doc-spec.md 的 ### 每 POI 一节 ≤500 token 与此配合）
+    "travel_guide": StructureChunkStrategy,
 }
 
 
