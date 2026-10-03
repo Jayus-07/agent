@@ -48,7 +48,9 @@ class TestRuleOnlyDetection:
             "backend.config.customer_service.CS_RULE_MIN_HITS", 2
         )
         det = DomainDetector()
-        result = det.detect("怎么办退款")
+        # 2026-10-03：词表去双票后进线 fixture 换为跨域双 pattern 短语
+        # （KNOWLEDGE 政策复合票 + AFTER_SALES 裸名词票，语义同旧例）
+        result = det.detect("退款规则是什么")
         assert result.is_cs is True
         assert len(result.rule_hits) == 2
         assert result.vector_score == 0.0

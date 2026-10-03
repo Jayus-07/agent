@@ -1,0 +1,2134 @@
+{
+ "version": "2026-10-03.1",
+ "purpose": "C7 意图分诊门禁回放集",
+ "cases": [
+  {
+   "id": "T-001",
+   "text": "请问退货政策是什么？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-002",
+   "text": "七天无理由退货的规定是什么",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-003",
+   "text": "我想了解一下退款规则",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-004",
+   "text": "请问发票开具有什么说明吗",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-005",
+   "text": "什么是价保？规则说明一下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-006",
+   "text": "告诉我下运费的计算规定",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-007",
+   "text": "平台的配送范围规定是什么",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-008",
+   "text": "请问账号注销政策是怎样的",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-009",
+   "text": "介绍一下这款空气炸锅的功能",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-010",
+   "text": "有没有这款羽绒服的尺码介绍",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-011",
+   "text": "这个电饭煲的容量参数说明一下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-012",
+   "text": "介绍一下保温杯的材质",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-013",
+   "text": "能不能介绍下耳机的续航",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-014",
+   "text": "这款洗衣机的保修说明是什么",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-015",
+   "text": "会员积分怎么用？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-016",
+   "text": "优惠券怎么领？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-017",
+   "text": "怎么修改收货地址信息",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-018",
+   "text": "如何绑定手机号",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-019",
+   "text": "有没有新人礼包？怎么拿",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-020",
+   "text": "什么是分期免息？能不能说明下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-021",
+   "text": "如何开通会员",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-022",
+   "text": "签到入口在哪？告诉我一下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-023",
+   "text": "618 有什么活动？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-024",
+   "text": "双十一的满减规则介绍下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-025",
+   "text": "有没有店铺优惠券可以领",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-026",
+   "text": "这个月会员日如何参加",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-027",
+   "text": "秒杀活动什么时候开始？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-028",
+   "text": "预售定金膨胀怎么解释",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-029",
+   "text": "电冰箱保修几年？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_warranty",
+   "kind": "positive"
+  },
+  {
+   "id": "T-030",
+   "text": "屏幕坏了保修吗",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-031",
+   "text": "保修期内维修要不要钱",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_warranty",
+   "kind": "positive"
+  },
+  {
+   "id": "T-032",
+   "text": "如何查询手机的保修状态",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_warranty",
+   "kind": "positive"
+  },
+  {
+   "id": "T-033",
+   "text": "全国联保是什么意思，说明下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_warranty",
+   "kind": "positive"
+  },
+  {
+   "id": "T-034",
+   "text": "延长保修怎么购买",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_warranty",
+   "kind": "positive"
+  },
+  {
+   "id": "T-035",
+   "text": "退货需要满足什么条件？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-036",
+   "text": "退款一般多久到账？",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-037",
+   "text": "换货的运费规定是怎么样的",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-038",
+   "text": "维修点地址有没有说明",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-039",
+   "text": "质量问题的赔付标准是什么",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-040",
+   "text": "登录不上是不是系统维护？有没有公告",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-041",
+   "text": "查一下我的订单",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-042",
+   "text": "我的订单到哪一步了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-043",
+   "text": "帮我看看订单状态",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-044",
+   "text": "我所有的订单都有哪些",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-045",
+   "text": "订单还没发货吗",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-046",
+   "text": "我的订单一直没发货",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-047",
+   "text": "下单半天了订单没有动静",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-048",
+   "text": "看看我上个月买的东西订单列表",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-049",
+   "text": "订单 DEMO-1001 付款了没有",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-050",
+   "text": "我买的订单什么时候发出",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-051",
+   "text": "订单为什么还没发出",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-052",
+   "text": "查订单，昨天买的那单",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-053",
+   "text": "物流到哪了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-054",
+   "text": "帮我查下快递单号 SF1234567890",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-055",
+   "text": "包裹到哪里了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-056",
+   "text": "快递一直没更新",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-057",
+   "text": "物流信息怎么不更新了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-058",
+   "text": "跟一下我的快递",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-059",
+   "text": "包裹显示运输中三天了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-060",
+   "text": "快递没到货啊",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-061",
+   "text": "查物流，顺丰的那单",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-062",
+   "text": "签收了但我没收到货",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-063",
+   "text": "我的投诉工单处理得怎么样了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-064",
+   "text": "查下工单进度",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-065",
+   "text": "工单状态是什么",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-066",
+   "text": "我报修单什么时候有人处理",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-067",
+   "text": "投诉单提交两天了还没动静",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-068",
+   "text": "我的工单列表看一下",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-069",
+   "text": "工单编号 GD123 进度如何",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-070",
+   "text": "转人工的工单到哪一步了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-071",
+   "text": "一般发货后几天到？",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-072",
+   "text": "今天下单什么时候能送到",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-073",
+   "text": "配送时效是多久",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-074",
+   "text": "快递几天能到？",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-075",
+   "text": "江浙沪配送运输要几天",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-076",
+   "text": "双十一发货会不会很慢，一般多久送到",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-077",
+   "text": "退款了但物流显示还在派送，怎么回事",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-078",
+   "text": "订单里的商品什么时候发货，介绍下预售规则",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-079",
+   "text": "快递显示签收但质量有问题，怎么处理",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-080",
+   "text": "发货了没有？顺便问下退换货规定",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-081",
+   "text": "我要申请退款",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-082",
+   "text": "退款怎么退",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-083",
+   "text": "如何操作退款",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-084",
+   "text": "这笔订单帮我退款",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-085",
+   "text": "不想要了，退钱",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-086",
+   "text": "申请退款，东西还没发货",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-087",
+   "text": "怎么退掉这个订单",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-088",
+   "text": "我要退款，尽快",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-089",
+   "text": "我要退货",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-090",
+   "text": "退货流程怎么走",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-091",
+   "text": "如何退货啊",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-092",
+   "text": "尺码不合适我要退一下",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-093",
+   "text": "帮我把这双鞋退了",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-094",
+   "text": "申请退货，包装没拆",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-095",
+   "text": "七天无理由我要退货",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-096",
+   "text": "怎么退这个商品",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_return",
+   "kind": "positive"
+  },
+  {
+   "id": "T-097",
+   "text": "换货怎么换",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-098",
+   "text": "我要换货，尺码换大一号",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-099",
+   "text": "申请换货",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-100",
+   "text": "如何换一件",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-101",
+   "text": "颜色发错了帮我换一下",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-102",
+   "text": "换货要运费吗，直接给我换",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-103",
+   "text": "手机屏幕坏了怎么修",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-104",
+   "text": "耳机一个不响，要维修",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-105",
+   "text": "怎么申请维修",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-106",
+   "text": "在保修期内维修收费吗",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-107",
+   "text": "产品坏了修一下",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-108",
+   "text": "帮我报修，热水器打不着火",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-109",
+   "text": "洗衣机维修点怎么送修",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-110",
+   "text": "电饭煲按键失灵了修修",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-111",
+   "text": "收到的东西是坏的",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-112",
+   "text": "质量问题怎么处理",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-113",
+   "text": "衣服有破损，这是质量问题吧",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-114",
+   "text": "商品质量有问题我要售后",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-115",
+   "text": "杯子有裂痕怎么办",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-116",
+   "text": "产品有明显瑕疵，不好用",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-117",
+   "text": "收到的牛奶过期了，质量问题",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-118",
+   "text": "桌角有破损，要求处理",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-119",
+   "text": "充电器用了两天就坏了",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-120",
+   "text": "密码忘了怎么办",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-121",
+   "text": "怎么修改密码",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-122",
+   "text": "如何更改登录密码",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-123",
+   "text": "密码输错了被锁了",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-124",
+   "text": "重置密码收不到验证码",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-125",
+   "text": "修改密码在哪操作",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-126",
+   "text": "支付密码怎么改",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-127",
+   "text": "账号密码被盗了怎么办",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-128",
+   "text": "帮我改下密码",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-129",
+   "text": "密码总是提示错误",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-130",
+   "text": "怎么修改收货地址",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-131",
+   "text": "改一下默认地址",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-132",
+   "text": "收货地址填错了怎么更改",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-133",
+   "text": "如何更换手机号",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-134",
+   "text": "修改绑定的邮箱",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-135",
+   "text": "地址怎么改？订单还没发货",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-136",
+   "text": "帮我换个个收货地址",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-137",
+   "text": "更改账号信息里的地址",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-138",
+   "text": "新地址怎么添加",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-139",
+   "text": "把地址从公司改成家里",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-140",
+   "text": "登录不上怎么办",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-141",
+   "text": "账号登录不了，一直转圈",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-142",
+   "text": "注册收不到验证码",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-143",
+   "text": "登录失败提示异常",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-144",
+   "text": "账号异常登不上",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-145",
+   "text": "app 登录有问题，闪退",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-146",
+   "text": "注册不了新账号",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-147",
+   "text": "验证码登录有问题",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-148",
+   "text": "登录一直失败怎么回事",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-149",
+   "text": "换手机后账号登录不上",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-150",
+   "text": "我要投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-151",
+   "text": "我要举报这家店",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-152",
+   "text": "对这次服务非常不满意",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-153",
+   "text": "给我一个说法，不然我就投诉到底",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-154",
+   "text": "你们这服务太差了",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-155",
+   "text": "我要给差评",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-156",
+   "text": "再不解决我就打 12315",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-157",
+   "text": "我要向消协举报你们",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-158",
+   "text": "找你们领导来，我要投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-159",
+   "text": "客服态度差，我要投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-160",
+   "text": "商家辱骂人，我要举报",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-161",
+   "text": "虚假发货，我要投诉商家",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-162",
+   "text": "发货延迟半个月，必须给我说法",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-163",
+   "text": "再拖延我就曝光你们",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-164",
+   "text": "快递员态度恶劣，投诉他",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-165",
+   "text": "售后电话永远占线，太差了",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-166",
+   "text": "退款拖了半个月没人管，我要维权",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-167",
+   "text": "货不对板，我要举报商家欺诈",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-168",
+   "text": "你们这是欺诈消费者，投诉！",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-169",
+   "text": "第三次来投诉了，还没结果",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-170",
+   "text": "客服敷衍了事，很不满意",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-171",
+   "text": "说好的三天到货七天了还没到，给个说法",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-172",
+   "text": "商家卖假货，我要求你们处理并投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-173",
+   "text": "送错三次了，我对你们的服务不满意",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-174",
+   "text": "包装破损还不认账，我要投诉到底",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-175",
+   "text": "这就是你们的态度？等着差评吧",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-176",
+   "text": "拖了一周没结果，找你们经理投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-177",
+   "text": "质量问题不给退，我要 12315",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-178",
+   "text": "承诺的赠品不给，虚假宣传我要举报",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-179",
+   "text": "流程走了一个月没消息，忍无可忍",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-180",
+   "text": "售后把我拉黑了，曝光你们",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-181",
+   "text": "退货地址是假的，明显刁难，投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-182",
+   "text": "价格欺诈，多收我钱，向消协举报",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-183",
+   "text": "订单被擅自取消，必须给说法",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-184",
+   "text": "投诉你们物流野蛮分拣",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-185",
+   "text": "商品是假货，要求假一赔十并投诉商家",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-186",
+   "text": "态度恶劣再也不买了，差评加投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-187",
+   "text": "不解决问题我就报警处理",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-188",
+   "text": "提个建议，希望增加站点到店自提",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-189",
+   "text": "反馈一个问题：搜索页偶尔卡顿",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-190",
+   "text": "提个建议：物流提示可以优化一下",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-191",
+   "text": "给个意见，希望晚上也能联系上客服",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-192",
+   "text": "反馈下 app 闪退的情况，麻烦转给开发",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-193",
+   "text": "有个小建议，详情页可以加个尺码表",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-194",
+   "text": "反馈：发票抬头开错了，希望改进确认步骤",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_feedback",
+   "kind": "positive"
+  },
+  {
+   "id": "T-195",
+   "text": "转人工",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-196",
+   "text": "我要转人工客服",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-197",
+   "text": "帮我转接人工",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-198",
+   "text": "人工服务",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-199",
+   "text": "找个真人跟我说",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-200",
+   "text": "不要机器人，转人工",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-201",
+   "text": "转人工，谢谢",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-202",
+   "text": "你到底是机器人吗？我要人工",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-203",
+   "text": "找人工客服处理",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-204",
+   "text": "麻烦转接一下人工客服",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-205",
+   "text": "我不跟机器人聊，转人工",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-206",
+   "text": "人工在吗",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-207",
+   "text": "转真人客服",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-208",
+   "text": "让你们的客服人员来",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-209",
+   "text": "怎么转人工？",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-210",
+   "text": "人工客服请回复",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-211",
+   "text": "找个经理来谈",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-212",
+   "text": "让你们主管出来",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-213",
+   "text": "我要找你们领导",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-214",
+   "text": "叫你们负责人接电话",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-215",
+   "text": "主管在哪？我要升级处理",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-216",
+   "text": "让店长跟我谈",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-217",
+   "text": "你们经理电话多少，我要投诉到经理那",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-218",
+   "text": "订单查不了，转人工吧",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-219",
+   "text": "退款太慢了，我要人工处理",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-220",
+   "text": "物流三天不动了，转人工客服",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-221",
+   "text": "密码改不了，找人工帮我",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-222",
+   "text": "售后电话打不通，还是转人工吧",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-223",
+   "text": "商品介绍看不懂，人工给我讲讲",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-224",
+   "text": "投诉了两次没结果，我要找主管",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-225",
+   "text": "退款被拒了不合理，让你们经理来",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-226",
+   "text": "帮我订一张去福州的机票",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-227",
+   "text": "三亚有哪些好玩的景点",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-228",
+   "text": "写一首关于春天的诗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-229",
+   "text": "杭州今天多少度",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-230",
+   "text": "1 加 1 等于几",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-231",
+   "text": "帮我规划一下西安三日游行程",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-232",
+   "text": "推荐几家福州好吃的鱼丸店",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-233",
+   "text": "高铁票好抢吗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-234",
+   "text": "帮我查下公司明天的会议安排",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-235",
+   "text": "这个季度销售额报表拉一下",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-236",
+   "text": "帮我写一段商品上架的文案",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-237",
+   "text": "竞品最近有什么新品",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-238",
+   "text": "出门旅游要带什么证件",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-239",
+   "text": "船票价格表发我一份",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-240",
+   "text": "给我讲个笑话",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-241",
+   "text": "今天是几号",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-242",
+   "text": "你觉得人工智能会取代人类吗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-243",
+   "text": "帮我看看仓库库存还有多少",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-244",
+   "text": "把这段话翻译成英文",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-245",
+   "text": "附近有什么加油站",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-246",
+   "text": "帮我算下房贷利率",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-247",
+   "text": "厦门到福州多少公里",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-248",
+   "text": "明天要降温吗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-249",
+   "text": "周末去哪爬山比较好",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-250",
+   "text": "帮我选品，哪个类目好做",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-251",
+   "text": "写个周报模板",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-252",
+   "text": "怎么腌制红烧肉",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-253",
+   "text": "股票大盘今天走势如何",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-254",
+   "text": "帮我订个会议室",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-255",
+   "text": "成都火锅哪家正宗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-256",
+   "text": "订单显示已发货但没物流信息",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-257",
+   "text": "快递到了驿站没取件码",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-258",
+   "text": "帮我看看上一单的物流",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_logistics",
+   "kind": "positive"
+  },
+  {
+   "id": "T-259",
+   "text": "订单发货了吗？三天了",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-260",
+   "text": "查下昨天那笔订单付没付款",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-261",
+   "text": "工单处理到哪一步了，急",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-262",
+   "text": "我的报修工单有人跟吗",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_ticket_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-263",
+   "text": "发什么快递啊，几天到货",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-264",
+   "text": "调货的话配送要多久",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_delivery_estimate",
+   "kind": "positive"
+  },
+  {
+   "id": "T-265",
+   "text": "订单迟迟不发货，能不能催下",
+   "expected_domain": "TRANSACTION",
+   "expected_intent": "t_order_status",
+   "kind": "positive"
+  },
+  {
+   "id": "T-266",
+   "text": "以旧换新怎么操作？规则介绍下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_policy",
+   "kind": "positive"
+  },
+  {
+   "id": "T-267",
+   "text": "会员日是几号？说明一下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_faq",
+   "kind": "positive"
+  },
+  {
+   "id": "T-268",
+   "text": "店铺促销什么时候有",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_promotion",
+   "kind": "positive"
+  },
+  {
+   "id": "T-269",
+   "text": "这个型号有没有香味介绍，对比下",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-270",
+   "text": "air 滤芯能不能通用，有没有说明",
+   "expected_domain": "KNOWLEDGE",
+   "expected_intent": "k_product",
+   "kind": "positive"
+  },
+  {
+   "id": "T-271",
+   "text": "退款退到哪了？帮我查下退款进度",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_refund",
+   "kind": "positive"
+  },
+  {
+   "id": "T-272",
+   "text": "大小码发错了，给我换货",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_exchange",
+   "kind": "positive"
+  },
+  {
+   "id": "T-273",
+   "text": "手机进水了能修吗",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-274",
+   "text": "收货时箱子就破了，质量问题",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_quality_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-275",
+   "text": "缝纫机踏板断裂，申请维修",
+   "expected_domain": "AFTER_SALES",
+   "expected_intent": "as_repair",
+   "kind": "positive"
+  },
+  {
+   "id": "T-276",
+   "text": "发货慢得离谱，我要给你们差评加投诉",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-277",
+   "text": "承诺次日达结果四天到，给个说法",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-278",
+   "text": "客服答应的补偿一直不兑现，不满意",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-279",
+   "text": "包装里少发一件，投诉商家",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-280",
+   "text": "页面标价与结算价不符，虚假宣传，举报",
+   "expected_domain": "COMPLAINT",
+   "expected_intent": "c_complaint",
+   "kind": "positive"
+  },
+  {
+   "id": "T-281",
+   "text": "手机号换绑收不到短信怎么办",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-282",
+   "text": "登录密码和支付密码有什么区别",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-283",
+   "text": "账号被顶下线，登录有问题",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-284",
+   "text": "旧手机号注销了，换绑手机号怎么弄",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-285",
+   "text": "两步验证开不了，登录设置有问题",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-286",
+   "text": "指纹解锁登录不了 app",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-287",
+   "text": "地址重复了，帮我删一个",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-288",
+   "text": "密码规则是什么，总是不通过",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_password",
+   "kind": "positive"
+  },
+  {
+   "id": "T-289",
+   "text": "收货地址能改省份吗",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_address",
+   "kind": "positive"
+  },
+  {
+   "id": "T-290",
+   "text": "账号异地登录提醒怎么关闭",
+   "expected_domain": "ACCOUNT",
+   "expected_intent": "a_login_issue",
+   "kind": "positive"
+  },
+  {
+   "id": "T-291",
+   "text": "人工呢？说话啊",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-292",
+   "text": "给我接个人，别让我跟机器耗着",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-293",
+   "text": "有活人吗？转人工",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-294",
+   "text": "叫个人工来处理退货",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-295",
+   "text": "我要真人客服，立刻",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-296",
+   "text": "让人工接手我的售后",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-297",
+   "text": "把人工客服给我接进来，这事机器人处理不了",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "positive"
+  },
+  {
+   "id": "T-298",
+   "text": "请主管给我回电",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-299",
+   "text": "主管电话多少",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-300",
+   "text": "工单拖三天了，把你们组长叫来",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "positive"
+  },
+  {
+   "id": "T-301",
+   "text": "投诉两次都没人理，直接给我转人工经理",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-302",
+   "text": "发票开错了，转人工重开",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-303",
+   "text": "会员扣费有争议，找人工对账",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_handoff",
+   "kind": "boundary"
+  },
+  {
+   "id": "T-304",
+   "text": "以旧换新估价不合理，让主管重新审",
+   "expected_domain": "HUMAN",
+   "expected_intent": "h_supervisor",
+   "kind": "boundary"
+  }
+ ]
+}

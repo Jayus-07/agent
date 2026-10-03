@@ -14,7 +14,8 @@ from backend.customer_service import vocab
 
 class TestSingleSource:
     def test_version_present(self):
-        assert vocab.VOCAB_VERSION == "2026-09-29.1"
+        # 2026-10-03：C7/C8/C10 门禁基线词表版本（变更须升版本，vocab_gate 守护）
+        assert vocab.VOCAB_VERSION == "2026-10-03.1"
 
     def test_domain_rules_six_domains(self):
         assert set(vocab.CS_DOMAIN_KEYWORDS) == {

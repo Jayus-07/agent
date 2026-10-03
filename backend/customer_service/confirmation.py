@@ -111,13 +111,25 @@ from backend.customer_service.vocab import (  # noqa: E402
 )
 
 
+def _is_question_form(text_lower: str) -> bool:
+    """疑问/假设句式守卫（词表 QUESTION_MARKERS + 句尾「么」锚定）。
+
+    2026-10-03（C10 门禁基线）：裸「么」子串守卫过宽（"确定，就这么办"
+    被误判疑问），收窄为词表枚举后改用句尾锚定补「需要确认么」类疑问。
+    """
+    from backend.customer_service.vocab import QUESTION_MARKERS
+    if any(marker in text_lower for marker in QUESTION_MARKERS):
+        return True
+    return text_lower.rstrip("。！!？?~～，,  、；;…").endswith("么")
+
+
 def detect_confirmation_intent(text: str) -> ConfirmationIntent:
     """Detect whether the user text confirms or cancels a pending action."""
     text_lower = text.strip().lower()
     if not text_lower:
         return ConfirmationIntent.NONE
 
-    if any(marker in text_lower for marker in _QUESTION_MARKERS):
+    if _is_question_form(text_lower):
         return ConfirmationIntent.NONE
 
     for kw in _get_cancel_keywords():

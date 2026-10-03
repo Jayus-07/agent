@@ -1,0 +1,216 @@
+{
+ "version": "2026-10-03.1",
+ "purpose": "C10 词表热更门回放集",
+ "cases": [
+  {
+   "id": "CC-001",
+   "text": "确认退款",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-002",
+   "text": "确定，就这么办",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-003",
+   "text": "好的，麻烦了",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-004",
+   "text": "同意这个方案",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-005",
+   "text": "可以",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-006",
+   "text": "没问题",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-007",
+   "text": "是的",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-008",
+   "text": "对的",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-009",
+   "text": "嗯",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-010",
+   "text": "ok",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-011",
+   "text": "好的可以",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-012",
+   "text": "确认",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-013",
+   "text": "yes 我同意",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-014",
+   "text": "没问题，确认吧",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-015",
+   "text": "可以，就这样",
+   "expected": "CONFIRM"
+  },
+  {
+   "id": "CC-016",
+   "text": "取消",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-017",
+   "text": "算了不要了",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-018",
+   "text": "取消退款申请",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-019",
+   "text": "不要了",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-020",
+   "text": "放弃吧",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-021",
+   "text": "取消，我不退了",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-022",
+   "text": "算了",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-023",
+   "text": "不要",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-024",
+   "text": "cancel",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-025",
+   "text": "不换了，取消吧",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-026",
+   "text": "算了，先不处理",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-027",
+   "text": "取消这个订单的售后",
+   "expected": "CANCEL"
+  },
+  {
+   "id": "CC-028",
+   "text": "可以取消吗",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-029",
+   "text": "能帮我取消吗？",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-030",
+   "text": "确认吗？",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-031",
+   "text": "要不要取消呢",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-032",
+   "text": "可不可以退款？",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-033",
+   "text": "行不行啊",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-034",
+   "text": "这个可以换货吗",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-035",
+   "text": "是否支持七天无理由",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-036",
+   "text": "我不确定要不要退",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-037",
+   "text": "取消的话钱多久到账",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-038",
+   "text": "帮我看下能不能改地址",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-039",
+   "text": "好的还是不好？",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-040",
+   "text": "你确定吗",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-041",
+   "text": "取消订单和取消退款有什么区别",
+   "expected": "NONE"
+  },
+  {
+   "id": "CC-042",
+   "text": "不好意思，我没听懂",
+   "expected": "NONE"
+  }
+ ]
+}

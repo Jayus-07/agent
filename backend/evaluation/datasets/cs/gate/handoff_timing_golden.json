@@ -1,0 +1,306 @@
+{
+ "version": "2026-10-03.1",
+ "purpose": "C8 转人工时机门禁回放集",
+ "cases": [
+  {
+   "id": "H-001",
+   "text": "转人工",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-002",
+   "text": "我要转人工客服",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-003",
+   "text": "帮我转接人工，谢谢",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-004",
+   "text": "人工服务请接通",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-005",
+   "text": "找个真人跟我说",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-006",
+   "text": "不要机器人，给我转人工",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-007",
+   "text": "人工在吗？在吗？",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-008",
+   "text": "麻烦让人工客服处理这个事",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-009",
+   "text": "怎么转人工？我要说订单的事",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-010",
+   "text": "你到底是机器人吗？叫人工来",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-011",
+   "text": "转真人，快点",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-012",
+   "text": "让你们客服人员直接联系我",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-013",
+   "text": "我不跟机器人聊了，转人工",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-014",
+   "text": "请人工回复我",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-015",
+   "text": "转人工客服，工单 GD88 加急",
+   "should_handoff": true,
+   "trigger": "explicit_request"
+  },
+  {
+   "id": "H-016",
+   "text": "找你们经理来谈",
+   "should_handoff": true,
+   "trigger": "supervisor_request"
+  },
+  {
+   "id": "H-017",
+   "text": "让你们主管出面解释",
+   "should_handoff": true,
+   "trigger": "supervisor_request"
+  },
+  {
+   "id": "H-018",
+   "text": "我要升级投诉，叫你们领导来",
+   "should_handoff": true,
+   "trigger": "supervisor_request"
+  },
+  {
+   "id": "H-019",
+   "text": "你们负责人呢？让店长来",
+   "should_handoff": true,
+   "trigger": "supervisor_request"
+  },
+  {
+   "id": "H-020",
+   "text": "再不退款我就打 12315 投诉",
+   "should_handoff": true,
+   "trigger": "p0_escalation"
+  },
+  {
+   "id": "H-021",
+   "text": "处理不好我就向消协举报，12315 见",
+   "should_handoff": true,
+   "trigger": "p0_escalation"
+  },
+  {
+   "id": "H-022",
+   "text": "我要曝光你们店，让大家都看看",
+   "should_handoff": true,
+   "trigger": "p0_escalation"
+  },
+  {
+   "id": "H-023",
+   "text": "你们再拖我就报警处理了",
+   "should_handoff": true,
+   "trigger": "p0_escalation"
+  },
+  {
+   "id": "H-024",
+   "text": "卖假货！我已经打 12315 了",
+   "should_handoff": true,
+   "trigger": "p0_escalation"
+  },
+  {
+   "id": "H-025",
+   "text": "你们就是骗子！还我血汗钱",
+   "should_handoff": true,
+   "trigger": "emotion_upgrade"
+  },
+  {
+   "id": "H-026",
+   "text": "这是欺诈！我气死了",
+   "should_handoff": true,
+   "trigger": "emotion_upgrade"
+  },
+  {
+   "id": "H-027",
+   "text": "什么垃圾平台，忍无可忍了",
+   "should_handoff": true,
+   "trigger": "emotion_upgrade"
+  },
+  {
+   "id": "H-028",
+   "text": "配送一直拖延，第四次了，受不了了，转人工",
+   "should_handoff": true,
+   "trigger": "emotion_upgrade"
+  },
+  {
+   "id": "H-029",
+   "text": "客服敷衍了三次了，没人管，气死我了",
+   "should_handoff": true,
+   "trigger": "emotion_upgrade"
+  },
+  {
+   "id": "H-030",
+   "text": "商家发的是假货，骗子！立刻给我转人工处理",
+   "should_handoff": true,
+   "trigger": "emotion_upgrade"
+  },
+  {
+   "id": "H-031",
+   "text": "之前客服说退款 3 天到账，怎么还没到",
+   "should_handoff": false,
+   "trigger": "business_query"
+  },
+  {
+   "id": "H-032",
+   "text": "客服回复太慢了，等我下订单到了再问",
+   "should_handoff": false,
+   "trigger": "business_query"
+  },
+  {
+   "id": "H-033",
+   "text": "退货需要先联系客服吗？",
+   "should_handoff": false,
+   "trigger": "business_query"
+  },
+  {
+   "id": "H-034",
+   "text": "你们客服电话多少？我想电话里说",
+   "should_handoff": false,
+   "trigger": "business_query"
+  },
+  {
+   "id": "H-035",
+   "text": "转接人工要排队多久？先了解下",
+   "should_handoff": false,
+   "trigger": "business_query"
+  },
+  {
+   "id": "H-036",
+   "text": "客服说可以价保，怎么申请？",
+   "should_handoff": false,
+   "trigger": "business_query"
+  },
+  {
+   "id": "H-037",
+   "text": "帮我查下订单到哪了",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-038",
+   "text": "物流三天没更新，帮我催一下",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-039",
+   "text": "我想修改收货地址",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-040",
+   "text": "密码忘了怎么找回",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-041",
+   "text": "这个电饭煲怎么用，说明书写下",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-042",
+   "text": "优惠券怎么领取",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-043",
+   "text": "我的投诉工单进度怎么样了",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-044",
+   "text": "退货运费谁出？",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-045",
+   "text": "商品什么时候发货",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  },
+  {
+   "id": "H-046",
+   "text": "发货有点慢啊，什么时候能到",
+   "should_handoff": false,
+   "trigger": "mild_dissatisfaction"
+  },
+  {
+   "id": "H-047",
+   "text": "包装有点压坏了，不过能用，就提醒下",
+   "should_handoff": false,
+   "trigger": "mild_dissatisfaction"
+  },
+  {
+   "id": "H-048",
+   "text": "这个回复好像不太对吧，你再看看",
+   "should_handoff": false,
+   "trigger": "mild_dissatisfaction"
+  },
+  {
+   "id": "H-049",
+   "text": "希望发货速度能改进一下",
+   "should_handoff": false,
+   "trigger": "mild_dissatisfaction"
+  },
+  {
+   "id": "H-050",
+   "text": "快递员说放前台了，但我没看到，帮我查下",
+   "should_handoff": false,
+   "trigger": "normal_business"
+  }
+ ]
+}
