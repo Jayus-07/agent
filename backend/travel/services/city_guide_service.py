@@ -148,9 +148,10 @@ def get_city_guide(destination: str, *, force: bool = False) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.warning("[CityGuide] 缓存读取失败: %s", e)
 
+    # source_level 聚合初始 0（未知）；各级命中取 max 升档，全空落 4
     guide: dict = {
         "destination": destination,
-        "source_level": 4,
+        "source_level": 0,
         "status": "empty",
         "note": "",
         "summary": None,
@@ -188,6 +189,7 @@ def get_city_guide(destination: str, *, force: bool = False) -> dict:
             logger.warning("[CityGuide] 知乎降级: %s", e)
 
     if guide["status"] == "empty":
+        guide["source_level"] = 4
         guide["note"] = "暂无该城市的指南内容；可以直接问右侧助手"
 
     # 写缓存（即便 empty 也缓存短周期内避免反复烧知乎——TTL 同 7 天，

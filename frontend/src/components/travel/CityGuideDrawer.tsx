@@ -15,7 +15,7 @@ import { fetchCityGuide, type CityGuide } from '@/api/travel'
 
 const SOURCE_LEVEL_LABEL: Record<number, string> = {
   1: '来自本地攻略文档',
-  2: '来自本地攻略文档 · 知识库检索',
+  2: '来自知识库语料',
   3: '来自知乎攻略（AI 汇总，仅供参考）',
   4: '暂无指南',
 }
