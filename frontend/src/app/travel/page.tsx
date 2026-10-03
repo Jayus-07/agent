@@ -556,7 +556,30 @@ export default function TravelPage() {
           )}
           <Plane size={16} className="text-[#087b73]" aria-hidden />
           <span className="text-sm font-semibold text-[#183037]">行程规划</span>
+          {/* M2 布局反馈：条件 chips 并入顶栏（原独立条件条省掉一行高度） */}
+          {hasLeftRail && (
+            <TripConditionsChips
+              loading={loading}
+              destination={itinerary?.brief.destination || destination}
+              startDate={itinerary?.brief.start_date || startDate}
+              days={days}
+              partySize={partySize}
+              pace={itinerary?.brief.pace || pace}
+              itineraryDays={itinerary?.days.length ?? null}
+              costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
+              budget={budget}
+            />
+          )}
           <div className="ml-auto flex items-center gap-1.5">
+            {hasLeftRail && !loading && (
+              <button
+                type="button"
+                onClick={() => setConditionsOpen(true)}
+                className="cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
+              >
+                调整
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setSheetOpen(true)}
@@ -581,23 +604,8 @@ export default function TravelPage() {
             消息/工具卡片流的主展示面）。 */}
         <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
           <div className="mx-auto max-w-none px-4 py-4 xl:px-8 xl:py-5 lg:h-full lg:flex lg:flex-col">
-            {/* ── 顶部条件条：目的地/日期/人数/预算/节奏 chips（原左栏摘要卡上移） ── */}
-            {hasLeftRail && (
-              <TripConditionsBar
-                loading={loading}
-                destination={itinerary?.brief.destination || destination}
-                startDate={itinerary?.brief.start_date || startDate}
-                days={days}
-                partySize={partySize}
-                pace={itinerary?.brief.pace || pace}
-                itineraryDays={itinerary?.days.length ?? null}
-                costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
-                budget={budget}
-                onAdjust={() => setConditionsOpen(true)}
-              />
-            )}
             <div className={`grid min-h-0 flex-1 items-stretch gap-4 lg:h-auto ${hasRightRail
-              ? 'lg:grid-cols-[minmax(0,1fr)_480px] xl:grid-cols-[minmax(0,1fr)_560px]'
+              ? 'lg:grid-cols-[minmax(0,1fr)_520px] xl:grid-cols-[minmax(0,1fr)_600px]'
               : 'lg:grid-cols-[minmax(0,1fr)]'}`}>
               {/* ── 左栏已移除（M1）：条件摘要上移为顶部 TripConditionsBar，调整入口在其「调整」按钮 ── */}
 
@@ -767,64 +775,46 @@ export default function TravelPage() {
   )
 }
 
-// ── 顶部：行程条件 chips 条（M1：原左栏摘要卡上移，一目了然 + 调整入口） ──
+// ── 顶栏：行程条件 chips（M2 布局反馈：并入 TripKit 头部行，省一行高度） ──
 
-function TripConditionsBar(props: {
+function TripConditionsChips(props: {
   loading: boolean
   destination: string
   startDate: string
   days: string
   partySize: string
   pace: string
-  /** 当前行程的实际天数（改单后会变，优先于表单值展示） */
   itineraryDays: number | null
-  /** 出单后的实际预算合计（itinerary cost 求和；优先于表单预算展示） */
   costTotal: number | null
   budget: string
-  onAdjust: () => void
 }) {
-  const dayText = props.itineraryDays != null ? `${props.itineraryDays} 天` : props.days ? `${props.days} 天` : '天数待定'
+  const dayText = props.itineraryDays != null ? `${props.itineraryDays} 天` : props.days ? `${props.days} 天` : ''
   const budgetText = props.costTotal != null
     ? `合计 ¥${props.costTotal.toLocaleString()}`
-    : props.budget ? `预算 ¥${Number(props.budget).toLocaleString()}` : '预算不限'
-  const chips: Array<{ key: string; icon: React.ReactNode; label: string }> = [
-    { key: 'dest', icon: <MapPin size={12} aria-hidden />, label: props.destination.trim() || (props.loading ? '解析中…' : '未定目的地') },
-    { key: 'date', icon: <CalendarDays size={12} aria-hidden />, label: `${props.startDate || '日期待定'} · ${dayText}` },
-    { key: 'party', icon: <Users size={12} aria-hidden />, label: `${props.partySize || '?'} 人` },
-    { key: 'budget', icon: <Wallet size={12} aria-hidden />, label: budgetText },
-    { key: 'pace', icon: <Gauge size={12} aria-hidden />, label: `节奏 ${PACE_LABEL[props.pace] ?? '适中'}` },
-  ]
+    : props.budget ? `预算 ¥${Number(props.budget).toLocaleString()}` : ''
+  const chips: string[] = []
+  if (props.destination.trim()) chips.push(props.destination.trim())
+  else if (props.loading) chips.push('解析中…')
+  if (props.startDate || dayText) chips.push([props.startDate, dayText].filter(Boolean).join(' · '))
+  if (props.partySize) chips.push(`${props.partySize} 人`)
+  if (budgetText) chips.push(budgetText)
+  chips.push(`节奏 ${PACE_LABEL[props.pace] ?? '适中'}`)
+  if (props.loading) chips.push('生成中条件已锁定')
   return (
-    <section
-      className="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[#dae7e5] bg-white px-3.5 py-2 shadow-card"
-      aria-label="行程条件"
-    >
-      <span className="mr-1 text-xs font-semibold text-[#5c7074]">行程条件</span>
-      {chips.map((chip) => (
+    <span className="ml-2 hidden min-w-0 items-center gap-1.5 lg:flex" aria-label="行程条件">
+      {chips.map((label, i) => (
         <span
-          key={chip.key}
-          className="inline-flex items-center gap-1.5 rounded-full bg-[#f5faf9] px-3 py-1 text-xs text-[#183037]"
+          key={i}
+          className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] ${
+            props.loading && i === chips.length - 1
+              ? 'bg-[#fdf1e0] text-[#b4690e]'
+              : 'bg-[#f5faf9] text-[#5c7074]'
+          }`}
         >
-          <span className="text-[#087b73]">{chip.icon}</span>
-          <span className="max-w-[220px] truncate font-medium">{chip.label}</span>
+          <span className="max-w-[180px] truncate">{label}</span>
         </span>
       ))}
-      {props.loading ? (
-        <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-[#8fa5a3]">
-          <Loader2 size={12} className="animate-spin" aria-hidden />
-          生成中条件已锁定 · 完成后可调整或在右侧助手说一句
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={props.onAdjust}
-          className="ml-auto cursor-pointer rounded-lg border border-[#dae7e5] px-3 py-1.5 text-xs
-            text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
-        >
-          调整
-        </button>
-      )}
-    </section>
+    </span>
   )
 }
 
