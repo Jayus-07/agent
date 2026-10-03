@@ -106,8 +106,13 @@ class TestWebSearchToolBasic:
             result = web_search_tool.invoke({"query": "", "num_results": 3})
         assert isinstance(result, str)
         req = mock_urlopen.call_args.args[0]
-        assert str(req.full_url).endswith("q="), \
+        # TD-18：URL 追加 kl/df 区域参数后，"空 query 原样透传"改为检查
+        # q= 参数值仍为空（参数顺序无关）；并钉死中文区域约束
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(str(req.full_url)).query, keep_blank_values=True)
+        assert qs.get("q") == [""], \
             f"空 query 应原样透传进 URL，实际: {req.full_url}"
+        assert qs.get("kl") == ["cn-zh"], "DDG 必须锁定中文区域（TD-18）"
 
 
 class TestWebSearchToolQueryHandling:
@@ -533,3 +538,15 @@ class TestWebToolsIntegration:
 # ==================== 测试套件入口 ====================
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_kana_filter_and_helpers():
+    """TD-18：日文条目过滤（假名占比）+ 中文/英文条目不受影响。"""
+    from backend.tools.web import _has_kana, NO_RESULTS_TEXT
+
+    assert _has_kana("お庭づくり・デザイン・管理ならWellne https://x.jp") is True
+    assert _has_kana("增值税专用发票认证时限 180 天 https://x.cn") is False
+    assert _has_kana("Invoice certification within 180 days") is False
+    assert _has_kana("") is False
+    # 话术契约未被破坏（TD-07 回归确认）
+    assert NO_RESULTS_TEXT.startswith("未在公开网络找到")

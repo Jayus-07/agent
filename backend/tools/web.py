@@ -55,6 +55,13 @@ def web_search_tool(query: str, num_results: int = 5) -> str:
                 # 两路搜索都网络失败 → 上抛保持 BaseSkill 重试语义
                 raise
 
+    # TD-18 输出语言契约：过滤日文等外文条目（假名占比 >20% 判外文）。
+    # 搜索引擎的区域参数只是请求侧约束，返回侧仍可能出现外文页；
+    # web.search 的消费者是中文终端用户，外文条目透出等同回答不可用。
+    results = [r for r in results if not _has_kana(r)]
+    if results and all(not r.strip() for r in results):
+        results = []
+
     if not results:
         # TD-07（2026-10-02）：话术面向终端用户（该文本会被 reporter 作为
         # 最终回答原样透出，此前 "[NO RESULTS] ..." 内部标记直抵聊天窗口）。
@@ -73,6 +80,14 @@ def is_no_results(text: str) -> bool:
     return bool(text) and text.strip().startswith(NO_RESULTS_TEXT.split("{")[0])
 
 
+def _has_kana(text: str) -> bool:
+    """判定文本是否日文（平/片假名占比 > 20%）——外文条目过滤器。"""
+    if not text:
+        return False
+    kana = sum(1 for ch in text if "぀" <= ch <= "ヿ")
+    return kana / max(len(text), 1) > 0.2
+
+
 def _strip_tags(html: str) -> str:
     import re
     return re.sub(r"<[^>]+>", "", html).strip()
@@ -84,8 +99,15 @@ def _search_duckduckgo(query: str, num_results: int) -> list[str]:
     import urllib.parse
     import urllib.request
 
-    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    # TD-18（2026-10-03）：锁定中文区域——无区域参数时 DDG 对中文 query
+    # 也会返回日文等外文网页（实测"增值税专用发票的认证时限"返回日本
+    # 园艺站原始结果直接透出聊天窗口）。kl=cn-zh + Accept-Language 双约束。
+    url = (f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+           f"&kl=cn-zh&df=y")
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    })
     with urllib.request.urlopen(req, timeout=10) as resp:
         html = resp.read().decode("utf-8", errors="replace")
 
