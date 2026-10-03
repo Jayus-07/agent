@@ -267,7 +267,15 @@ function LegRow({ leg }: { leg: TransitLeg }) {
   )
 }
 
-function DayCard({ day }: { day: ItineraryDay }) {
+function DayCard({ day, replaceCandidates, onRequestReplace }: {
+  day: ItineraryDay
+  replaceCandidates?: Array<Record<string, unknown>>
+  onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
+}) {
+  // M2 画布直选：replaceFor=打开弹层的条目 idx；picked=点选待确认的候选名
+  const [replaceFor, setReplaceFor] = useState<number | null>(null)
+  const [picked, setPicked] = useState<string | null>(null)
+  const canReplace = Boolean(onRequestReplace && (replaceCandidates?.length ?? 0) > 0)
   const load = dayLoad(day)
   // legs[i] 若与 items[i].title 对上 → 交错渲染进时间轴；对不上的（异常/多余）留到底部块，不丢数据。
   const legForItem = new Map<number, TransitLeg>()
@@ -341,6 +349,75 @@ function DayCard({ day }: { day: ItineraryDay }) {
                   </p>
                 )}
                 {item.note && <p className="mt-0.5 pl-[100px] text-[11px] text-[#5c7074]">{item.note}</p>}
+                {/* M2 画布直选：用餐条目「换一家」→ 原地候选弹层 → 轻确认 → 代发重排 */}
+                {canReplace && item.kind === 'meal' && (
+                  <span className="mt-1 ml-[100px] inline-flex flex-col items-start gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => { setReplaceFor(replaceFor === idx ? null : idx); setPicked(null) }}
+                      aria-expanded={replaceFor === idx}
+                      className="cursor-pointer rounded-full border border-dashed border-[#c3d6d2] px-2 py-0.5 text-[10px] text-[#087b73] transition-colors hover:border-[#087b73] hover:bg-[#f5faf9]"
+                    >
+                      换一家 ▾
+                    </button>
+                    {replaceFor === idx && (
+                      <span
+                        role="dialog"
+                        aria-label={`替换 ${item.title} 的候选`}
+                        className="z-20 block w-[300px] rounded-xl border border-[#dae7e5] bg-white p-2.5 shadow-card"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="mb-1.5 block text-[10px] font-semibold text-[#5c7074]">
+                          换一家 · 来自本轮检索（{replaceCandidates!.slice(0, 4).length} 个候选）
+                        </span>
+                        {replaceCandidates!.slice(0, 4).map((c, ci) => {
+                          const name = String(c.name ?? `候选${ci + 1}`)
+                          const active = picked === name
+                          return (
+                            <button
+                              key={`${name}-${ci}`}
+                              type="button"
+                              onClick={() => setPicked(name)}
+                              className={`flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors ${
+                                active ? 'bg-[#e2f0ee] text-[#087b73]' : 'text-[#183037] hover:bg-[#f5faf9]'
+                              }`}
+                            >
+                              <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+                              {c.rating != null && <span className="shrink-0 text-[#8c7258]">{String(c.rating)}分</span>}
+                              {c.price != null && <span className="shrink-0 text-[#8c7258]">{String(c.price)}</span>}
+                            </button>
+                          )
+                        })}
+                        {picked ? (
+                          <span className="mt-1.5 flex items-center gap-2 border-t border-[#eef4f2] pt-1.5 text-[10px] text-[#5c7074]">
+                            <span className="min-w-0 flex-1 truncate">替换为「{picked}」？将发送修改请求重新规划</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onRequestReplace!(day.day_index, item.title, picked)
+                                setReplaceFor(null); setPicked(null)
+                              }}
+                              className="shrink-0 cursor-pointer rounded-lg bg-[#087b73] px-2.5 py-1 text-[10px] font-medium text-white hover:bg-[#06655f]"
+                            >
+                              确认替换
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setReplaceFor(null); setPicked(null) }}
+                              className="shrink-0 cursor-pointer text-[#8fa5a3] hover:text-[#183037]"
+                            >
+                              取消
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="mt-1 block border-t border-[#eef4f2] pt-1 text-[9px] text-[#8fa5a3]">
+                            没有合适的？对右侧助手说「找几家{item.title}附近的餐厅」
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                )}
               </li>
               {/* 交通段：紧贴在当前地点之后、下一个地点之前，回答「之间怎么走」 */}
               {leg && <LegRow leg={leg} />}
@@ -668,6 +745,10 @@ const STATUS_LABEL: Record<string, string> = {
 export interface ItineraryViewProps {
   itinerary: Itinerary
   conversationId: string
+  /** M2 画布直选：本轮商户检索候选（「换一家」弹层，来自 tool.result preview） */
+  replaceCandidates?: Array<Record<string, unknown>>
+  /** 确认替换 → 页面代发修改请求（聊天管线 → 后端重算 → 草案确认） */
+  onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
   planStatus?: string
   /** 追问 / 失败提示：有行程时也展示，不顶掉行程 */
   notice?: string
@@ -683,6 +764,7 @@ export interface ItineraryViewProps {
 export default function ItineraryView({
   itinerary, conversationId, planStatus = '', notice, exporting = false,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
+  replaceCandidates, onRequestReplace,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
   // 受控优先（页面要跟右侧助手共享选中天）；未传时退回内部自管。
@@ -908,7 +990,11 @@ export default function ItineraryView({
 
           {/* 双列：时间轴 | 路线地图 */}
           <div className="grid items-start gap-3 xl:grid-cols-2">
-            <DayCard day={activeDayData} />
+            <DayCard
+              day={activeDayData}
+              replaceCandidates={replaceCandidates}
+              onRequestReplace={onRequestReplace}
+            />
             <RouteMap itinerary={itinerary} selectedDay={activeDay} />
           </div>
         </section>

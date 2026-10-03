@@ -15,7 +15,11 @@ function manualDefaultOpen(running: boolean, failedRow: boolean, hasPreview: boo
   return running || failedRow || hasPreview
 }
 
-export default function ToolProcessRows({ tools }: { tools: TravelProcessTool[] }) {
+export default function ToolProcessRows({ tools, onAsk }: {
+  tools: TravelProcessTool[]
+  /** M2 代发：透传给商户卡「帮我排进行程」按钮 */
+  onAsk?: (text: string) => void
+}) {
   const [manualToggled, setManualToggled] = useState<Set<string>>(new Set())
   const toggle = (key: string) => {
     setManualToggled((prev) => {
@@ -75,9 +79,9 @@ export default function ToolProcessRows({ tools }: { tools: TravelProcessTool[] 
             {open && (
               <div className="border-t border-[#eef4f2] px-3 py-2.5">
                 {failedRow ? (
-                  <ToolFailedBody error={tool.error} />
+                  <ToolFailedBody error={tool.error} errorType={tool.errorType} />
                 ) : hasPreview ? (
-                  <ToolPreviewBody preview={tool.preview!} category={tool.category} />
+                  <ToolPreviewBody preview={tool.preview!} category={tool.category} onAsk={onAsk} />
                 ) : running ? (
                   <p className="text-[11px] text-[#7a8e8b]">正在调用真实数据源，结果返回后自动展开…</p>
                 ) : (

@@ -22,7 +22,8 @@
  * 当前旅游域端点返回真实 stage/tool 事件与完整 itinerary JSON；过程面板只
  * 投影服务端事件，不把没有发生的阶段或 Tool 伪装成实时进度。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle, Check, CheckCircle2, Clock3, Info, MessageSquarePlus,
   PlaneTakeoff, RefreshCw, Send, Square, X,
@@ -36,6 +37,7 @@ import BudgetRing from '@/components/chat/BudgetRing'
 import type { BudgetStatus } from '@/api/budgets'
 import MarkdownContent from '@/components/chat/MarkdownContent'
 import ToolProcessRows from './ToolProcessRows'
+import { useTypewriter } from './useTypewriter'
 import { describePlanReply, sanitizeTravelReply } from './planState'
 import {
   buildChangeSummary, travelProcessStatusLabel, type TravelProcessState,
@@ -46,6 +48,24 @@ interface ChatMsg {
   text: string
   tag?: string
   tone?: 'ok' | 'warn'
+}
+
+/**
+ * 短助手气泡 + 打字机渐显（M2-e）：仅对最新一条短回复开动画，
+ * 历史/长文（details 折叠）直显；reduced-motion 由 hook 内部兜底。
+ */
+function TypedAssistantText({ text, animate }: { text: string; animate: boolean }) {
+  const shown = useTypewriter(text, animate)
+  return (
+    <div className="markdown-body travel-md leading-relaxed">
+      <MarkdownContent content={shown} />
+    </div>
+  )
+}
+
+export interface TravelChatDrawerHandle {
+  /** M2 代发：画布直选/结果卡按钮把修改请求送进同一聊天管线（忙时进排队槽） */
+  send: (text: string) => void
 }
 
 interface Props {
@@ -96,12 +116,12 @@ interface Props {
  * 快捷话术已随设计稿③精简移除（对话引导收进空态一行提示与输入框 placeholder）。
  */
 
-export default function TravelChatDrawer({
+const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function TravelChatDrawer({
   mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
   introMessage = '', handoverUserMessage = null,
-}: Props) {
+}: Props, ref) {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
@@ -111,6 +131,10 @@ export default function TravelChatDrawer({
   const [stopped, setStopped] = useState(false)
   const [clarificationOptions, setClarificationOptions] = useState<TravelClarificationOption[]>([])
   const [fillingDays, setFillingDays] = useState(false)
+  // M2-f 生成中排队的下一条消息（单条槽）
+  const [queuedText, setQueuedText] = useState('')
+  // M2-a 本轮完成后执行明细默认收敛，点开看全量
+  const [processExpanded, setProcessExpanded] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -131,6 +155,7 @@ export default function TravelChatDrawer({
     setStopped(false)
     setClarificationOptions([])
     setFillingDays(false)
+    setQueuedText('')
   }, [conversationId])
   // M1 三态移交：空态规划卡/示例卡发出的话 → 聊天流第一条用户气泡。
   // 只在「本线程还没有这条消息」时追加一次，避免面板/抽屉双挂载或重渲染重复。
@@ -163,7 +188,14 @@ export default function TravelChatDrawer({
 
   const send = useCallback(async (raw: string) => {
     const message = raw.trim()
-    if (!message || abortRef.current || loading || disabled || generating || pendingResponse) return
+    if (!message) return
+    // M2-f 排队槽：本轮忙时消息不丢，进单条排队槽（可编辑/可取消，空闲自动发）
+    if (abortRef.current || loading || generating || pendingResponse) {
+      setQueuedText(message)
+      setText('')
+      return
+    }
+    if (disabled) return
     // 记下发起时所属的线程：请求返回时若线程已换（用户点了「新行程」），
     // 这条回复属于旧行程，不能再往新对话里写。
     const sentConv = conversationId
@@ -233,6 +265,20 @@ export default function TravelChatDrawer({
     }
   }, [conversationId, disabled, generating, hasItinerary, loading, onDraft, onProcessEvent, onResponse, pendingResponse])
 
+  // M2-c 代发：画布直选/结果卡按钮经 ref 走同一 send 管线
+  useImperativeHandle(ref, () => ({
+    send: (text: string) => { void send(text) },
+  }), [send])
+
+  // M2-f 排队槽自动发送：本轮结束（且无草案待决、未禁用）即发出
+  useEffect(() => {
+    if (loading || generating || disabled || pendingResponse || !queuedText) return
+    if (abortRef.current) return
+    const t = queuedText
+    setQueuedText('')
+    void send(t)
+  }, [loading, generating, disabled, pendingResponse, queuedText, send])
+
   const stop = useCallback(() => {
     abortRef.current?.abort()
     abortRef.current = null
@@ -294,6 +340,17 @@ export default function TravelChatDrawer({
     const cut = firstAssistant === -1 ? messages.length : firstAssistant
     return [...messages.slice(0, cut), intro, ...messages.slice(cut)]
   }, [introMessage, messages])
+  // M2-h 快捷话术（2026-10-03 拍板四条；目的地/天数来自真实 brief/activeDay）
+  const quickChips = useMemo(() => {
+    const dest = (brief?.destination || '').trim()
+    const chips: Array<{ key: string; label: string; text: string }> = []
+    if (dest) chips.push({ key: 'guide', label: `介绍下${dest}特色`, text: `介绍下${dest}特色，适合玩几天、有什么必吃必逛` })
+    if (hasItinerary && activeDay != null) chips.push({ key: 'crowded', label: `第 ${activeDay} 天太挤了`, text: `第 ${activeDay} 天太挤了，帮我排松一点` })
+    chips.push({ key: 'hotel', label: '想住得离海近一点', text: '想住得离海近一点，帮我调整住宿' })
+    chips.push({ key: 'budget', label: '预算调到 ¥2000', text: '预算调到 2000，帮我重排行程' })
+    return chips
+  }, [brief?.destination, hasItinerary, activeDay])
+
   const hasMessages = visibleMessages.length > 0
   const inputDisabled = disabled || loading || generating || Boolean(pendingResponse)
   const pendingSummary = useMemo(
@@ -307,7 +364,7 @@ export default function TravelChatDrawer({
     : 0
 
   // 消息渲染：提问段/回答段两段共用（工具执行块插在两段之间=提问→工具→回答）
-  const renderMsg = (m: ChatMsg, i: number) => {              // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
+  const renderMsg = (m: ChatMsg, i: number, animate: boolean) => {              // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
               //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
               const isLong = m.role === 'assistant' && m.text.length > 600
               return (
@@ -329,9 +386,7 @@ export default function TravelChatDrawer({
                         </div>
                       </details>
                     ) : (
-                      <div className="markdown-body travel-md leading-relaxed">
-                        <MarkdownContent content={m.text} />
-                      </div>
+                      <TypedAssistantText text={m.text} animate={animate} />
                     )}
                     {m.tag && (
                       <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
@@ -389,6 +444,13 @@ export default function TravelChatDrawer({
           const before = visibleMessages.slice(0, lastUserIdx + 1)
           const after = visibleMessages.slice(lastUserIdx + 1)
           const showProcess = processState && (processState.tools.length > 0 || processState.requirement)
+          const doneTools = processState?.tools ?? []
+          const okCount = doneTools.filter((t) => t.status === 'success').length
+          const failCount = doneTools.filter((t) => t.status === 'failed').length
+          const withResult = doneTools.filter((t) => (t.preview?.length ?? 0) > 0).length
+          // M2-a 收敛口径：进行中逐条实时；完成后收敛成一行摘要（点开看明细）
+          const collapsed = !loading && processState?.status === 'completed' && !processExpanded
+          const outOfScope = processState?.requirement?.intent === 'out_of_scope'
           const processBlock = showProcess ? (
             <div className="mt-3">
               <div className="mb-1.5 flex items-center gap-2 text-[10px] text-[#8fa5a3]">
@@ -399,17 +461,50 @@ export default function TravelChatDrawer({
                 <span>{loading ? '工具执行中' : `本轮共 ${processState.tools.length} 个 Tool`}</span>
                 <span>· {travelProcessStatusLabel({ loading, stopped, status: processState.status })}</span>
               </div>
-              {processState.requirement && (
-                <p className="mb-1.5 rounded-lg bg-[#f5faf9] px-2.5 py-1.5 text-[10px] leading-relaxed text-[#5c7074]">
-                  <span className="font-semibold text-[#183037]">需求理解</span>
-                  {' '}· {String(processState.requirement.brief.destination || '目的地待确认')}
-                  {processState.requirement.brief.days ? ` · ${String(processState.requirement.brief.days)} 天` : ''}
-                  {processState.requirement.assumptions.length > 0 ? ` · ${processState.requirement.assumptions[0]}` : ''}
-                </p>
+              {collapsed ? (
+                <button
+                  type="button"
+                  onClick={() => setProcessExpanded(true)}
+                  aria-expanded={false}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-xl border border-[#e2f0ee] bg-white px-3 py-2 text-left transition-colors hover:bg-[#f5faf9]"
+                >
+                  <CheckCircle2 size={13} className={`shrink-0 ${failCount > 0 ? 'text-amber-500' : 'text-[#087b73]'}`} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#183037]">
+                    {doneTools.length === 0
+                      ? '本轮无工具调用 · 直接回答'
+                      : `本轮执行完成 · ${okCount} 成功${withResult > 0 ? ` · ${withResult} 个有结果` : ''}${failCount > 0 ? ` · ${failCount} 个失败` : ''}`}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-[#087b73]">展开明细 ▾</span>
+                </button>
+              ) : (
+                <>
+                  {processState.requirement && (
+                    <p className="mb-1.5 rounded-lg bg-[#f5faf9] px-2.5 py-1.5 text-[10px] leading-relaxed text-[#5c7074]">
+                      <span className="font-semibold text-[#183037]">需求理解</span>
+                      {' '}· {String(processState.requirement.brief.destination || '目的地待确认')}
+                      {processState.requirement.brief.days ? ` · ${String(processState.requirement.brief.days)} 天` : ''}
+                      {processState.requirement.assumptions.length > 0 ? ` · ${processState.requirement.assumptions[0]}` : ''}
+                    </p>
+                  )}
+                  <ol className="space-y-1.5">
+                    <ToolProcessRows tools={processState.tools} onAsk={(t) => void send(t)} />
+                  </ol>
+                </>
               )}
-              <ol className="space-y-1.5">
-                <ToolProcessRows tools={processState.tools} />
-              </ol>
+              {outOfScope && (
+                <div className="mt-2 rounded-xl border border-[#e6d3ab] bg-[#fffaf0] p-3" aria-label="出域引导">
+                  <p className="text-xs font-semibold text-[#8c5a10]">这个问题超出了行程规划范围</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-[#8c7258]">
+                    我只懂旅游：排行程、改行程、查车票、找美食景点。订单、查数据、写代码这类问题，请找主页的「AI 助手」。
+                  </p>
+                  <Link
+                    href="/agent"
+                    className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[#087b73] px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-[#06655f]"
+                  >
+                    去问 AI 助手
+                  </Link>
+                </div>
+              )}
             </div>
           ) : null
           if (!hasMessages) {
@@ -439,12 +534,12 @@ export default function TravelChatDrawer({
           return (
             <>
               <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">
-                {before.map(renderMsg)}
+                {before.map((m, i) => renderMsg(m, i, false))}
               </ul>
               {processBlock}
               {after.length > 0 && (
                 <ul className="space-y-3" aria-label="旅行助手消息">
-                  {after.map(renderMsg)}
+                  {after.map((m, i) => renderMsg(m, i, i === after.length - 1))}
                 </ul>
               )}
             </>
@@ -554,6 +649,44 @@ export default function TravelChatDrawer({
 
       {/* 输入 */}
       <div className="shrink-0 border-t border-[#dae7e5] px-4 py-3">
+        {/* M2-h 快捷话术 chips（点即发送；忙时进排队槽） */}
+        {!disabled && (
+          <div className="mb-2 flex flex-wrap gap-1.5" aria-label="快捷话术">
+            {quickChips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                disabled={Boolean(pendingResponse)}
+                onClick={() => void send(chip.text)}
+                className="cursor-pointer rounded-full border border-[#dae7e5] bg-white px-2.5 py-1 text-[11px] text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#087b73] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* M2-f 排队槽：忙时发出的消息落这里，可编辑可取消，本轮完成自动发 */}
+        {queuedText && (loading || generating) && (
+          <div className="mb-2 flex items-start gap-2 rounded-xl border border-dashed border-[#a9d1c9] bg-[#f5faf9] px-3 py-2">
+            <Clock3 size={12} className="mt-1 shrink-0 text-[#087b73]" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] text-[#5c7074]">本轮结束后自动发送（排队中，可编辑）</p>
+              <input
+                value={queuedText}
+                onChange={(e) => setQueuedText(e.target.value)}
+                aria-label="排队中的消息"
+                className="mt-0.5 w-full bg-transparent text-xs text-[#183037] outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setQueuedText('')}
+              className="shrink-0 cursor-pointer text-[10px] text-[#8fa5a3] transition-colors hover:text-red-500"
+            >
+              取消
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
           {/* 预算圆圈：与 /agent 输入框同组件同位置（左簇第一位） */}
           <div className="pb-2">
@@ -564,10 +697,10 @@ export default function TravelChatDrawer({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={inputDisabled}
+            disabled={disabled}
             rows={1}
             placeholder={
-              generating ? '输入不可用（生成中）'
+              loading || generating ? '本轮进行中，先说下一条？结束后自动发送'
                 : pendingResponse ? '请先应用或保留当前预览，再继续修改…'
                   : fillingDays ? '请输入想玩的天数，例如：4 天'
                     : hasItinerary ? '比如：第二天别排太满…' : '比如：杭州 3 天，2 个人，喜欢自然…'
@@ -593,7 +726,7 @@ export default function TravelChatDrawer({
               type="button"
               onClick={() => void send(text)}
               disabled={!text.trim() || disabled}
-              title="发送"
+              title={loading || generating ? '排队：本轮结束后自动发送' : '发送'}
               aria-label="发送"
               className="shrink-0 rounded-xl bg-[#087b73] p-2.5 text-white transition-colors
                 hover:bg-[#06655f] disabled:cursor-not-allowed disabled:opacity-40"
@@ -652,4 +785,6 @@ export default function TravelChatDrawer({
       {body}
     </section>
   )
-}
+})
+
+export default TravelChatDrawerImpl

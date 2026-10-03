@@ -31,7 +31,7 @@ import { AlertCircle, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, H
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
-import TravelChatDrawer from '@/components/travel/TravelChatDrawer'
+import TravelChatDrawer, { type TravelChatDrawerHandle } from '@/components/travel/TravelChatDrawer'
 import TravelPlanList from '@/components/travel/TravelPlanList'
 import TaskSidebar from '@/components/agent/TaskSidebar'
 import SidebarRail from '@/components/agent/SidebarRail'
@@ -166,6 +166,24 @@ export default function TravelPage() {
   const [locationHint, setLocationHint] = useState('')
   const [budgetBlocked, setBudgetBlocked] = useState(false)
   const [travelProcess, setTravelProcess] = useState<TravelProcessState | null>(null)
+  // M2-c/d 代发：画布直选与结果卡按钮经 ref 走助手同一条聊天管线
+  const chatRef = useRef<TravelChatDrawerHandle>(null)
+  // 「换一家」候选 = 最近一次**非空**商户检索的 preview（复用缓存，不重复调外部源）。
+  // 不能只看最新 run：后续问答轮（0 Tool）会把首轮商户候选冲掉——画布直选失效。
+  const [replaceCandidates, setReplaceCandidates] = useState<Array<Record<string, unknown>>>([])
+  useEffect(() => {
+    const tools = travelProcess?.tools ?? []
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const t = tools[i]
+      if ((t.category === 'food' || t.category === 'hotel' || t.category === 'merchant') && (t.preview?.length ?? 0) > 0) {
+        setReplaceCandidates(t.preview!)
+        return
+      }
+    }
+  }, [travelProcess])
+  const handleRequestReplace = useCallback((dayIndex: number, itemTitle: string, candidateName: string) => {
+    chatRef.current?.send(`把第 ${dayIndex} 天的「${itemTitle}」换成「${candidateName}」，其他安排尽量保持不变`)
+  }, [])
   // 左侧任务栏（与 /agent 同一套 TaskSidebar，travel 模式：历史区=历史规划列表）
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // 出单/恢复后自增，触发侧栏历史规划刷新
@@ -232,6 +250,7 @@ export default function TravelPage() {
     setTravelProcess(null)
     // M1 三态移交：这句话作为第一条用户气泡出现在右侧助手聊天流
     setHandoverMessage(message)
+    setReplaceCandidates([]) // 新行程：上一份的商户候选作废
     // M1 反馈：发送即进入「看结果」模式，自动折叠左侧历史栏腾出中栏空间
     setSidebarOpen(false)
     setLoading(true)
@@ -650,6 +669,8 @@ export default function TravelPage() {
                   onExportIcs={downloadIcs}
                   onFeedback={sendFeedback}
                   onPlanResponse={handleAssistantResponse}
+                  replaceCandidates={replaceCandidates}
+                  onRequestReplace={handleRequestReplace}
                   />
                 </>
               ) : loading ? (
@@ -664,7 +685,7 @@ export default function TravelPage() {
             {/* ── 右栏：旅行助手（设计稿态1 无助手栏；生成中/有行程才出现） ── */}
             {isWide && hasRightRail && (
               <aside className="min-w-0 min-h-0">
-                <TravelChatDrawer mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} {...assistantProps} />
+                <TravelChatDrawer ref={chatRef} mode="panel" planVersion={itinerary?.plan_version} introMessage={itinerary ? planState.plan?.final_answer ?? '' : ''} {...assistantProps} />
               </aside>
             )}
           </div>

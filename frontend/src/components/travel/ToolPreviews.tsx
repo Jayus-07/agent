@@ -1,12 +1,14 @@
 "use client";
 
-import { AlertCircle, Hotel, Utensils } from "lucide-react";
+import { AlertCircle, Hotel, MessageSquarePlus, Utensils } from "lucide-react";
 
 /**
  * Tool 三类可视化卡（2026-10-03 自 page.tsx 迁出为共享组件）：
- * 生成中进度卡与完成后的「Tool 执行记录」卡都要渲染同一批 preview，
+ * 生成中进度卡与旅行助手聊天流都要渲染同一批 preview，
  * 抽成单一实现避免两处漂移。条目来自后端 tool.result 帧 preview 字段
  * （后端已截断 ≤6 条），缺失字段不补造。
+ * M2：商户/攻略改横向卡片流（右缘渐隐）；商户卡带「帮我排」代发按钮
+ * （走聊天管线 → 后端重算 → 草案确认链）。
  */
 
 /** 知乎攻略主题 → 徽章文案（与后端 GUIDE_TOPIC_LABELS 对齐） */
@@ -16,27 +18,58 @@ const GUIDE_TOPIC_LABELS: Record<string, string> = {
   city: "城市特色",
 };
 
-export function MerchantPreview({ preview, category }: { preview: Array<Record<string, unknown>>; category?: string }) {
+/** 横向卡片流外壳：右缘渐隐提示可横滑（M2 原型对齐） */
+function HScroll({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-      {preview.slice(0, 4).map((item, index) => (
-        <article key={`${String(item.id ?? item.name ?? index)}`} className="rounded-lg border border-[#f0dfc8] bg-[#fffdf9] p-2.5">
-          <div className="flex items-start gap-2">
-            <span className="mt-0.5 rounded-md bg-[#f5e5d1] p-1.5 text-[#b36a2d]">{category === 'hotel' ? <Hotel size={13} aria-hidden /> : <Utensils size={13} aria-hidden />}</span>
-            <div className="min-w-0">
-              <h3 className="truncate text-xs font-semibold text-[#183037]">{String(item.name ?? '未命名商户')}</h3>
-              <p className="mt-0.5 truncate text-[10px] text-[#7a6b5d]">{String(item.category ?? item.address ?? '地址待核实')}</p>
-            </div>
-          </div>
-          <p className="mt-2 truncate text-[10px] text-[#6c5948]">{String(item.address ?? '地址待核实')}</p>
-          <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-[#8c7258]">
-            {item.rating != null && <span>评分 {String(item.rating)}</span>}
-            {item.price != null && <span>{String(item.price)}</span>}
-            {item.open_status != null && <span>{String(item.open_status)}</span>}
-          </div>
-        </article>
-      ))}
+    <div className="relative mt-2">
+      <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]">{children}</div>
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-white to-transparent"
+      />
     </div>
+  )
+}
+
+export function MerchantPreview({ preview, category, onAsk }: {
+  preview: Array<Record<string, unknown>>
+  category?: string
+  /** M2 代发：点击把该商户交给助手重排（走草案确认链） */
+  onAsk?: (text: string) => void
+}) {
+  return (
+    <HScroll>
+      {preview.slice(0, 4).map((item, index) => {
+        const name = String(item.name ?? '未命名商户')
+        return (
+          <article key={`${String(item.id ?? name ?? index)}`} className="w-[188px] shrink-0 rounded-lg border border-[#f0dfc8] bg-[#fffdf9] p-2.5">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 rounded-md bg-[#f5e5d1] p-1.5 text-[#b36a2d]">{category === 'hotel' ? <Hotel size={13} aria-hidden /> : <Utensils size={13} aria-hidden />}</span>
+              <div className="min-w-0">
+                <h3 className="truncate text-xs font-semibold text-[#183037]" title={name}>{name}</h3>
+                <p className="mt-0.5 truncate text-[10px] text-[#7a6b5d]">{String(item.category ?? '商户')}</p>
+              </div>
+            </div>
+            <p className="mt-1.5 truncate text-[10px] text-[#6c5948]" title={String(item.address ?? '')}>{String(item.address ?? '地址待核实')}</p>
+            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-[#8c7258]">
+              {item.rating != null && <span>评分 {String(item.rating)}</span>}
+              {item.price != null && <span>{String(item.price)}</span>}
+              {item.open_status != null && <span>{String(item.open_status)}</span>}
+            </div>
+            {onAsk && (
+              <button
+                type="button"
+                onClick={() => onAsk(`帮我把「${name}」排进行程里合适的位置，其他安排尽量保持不变`)}
+                className="mt-2 inline-flex w-full cursor-pointer items-center justify-center gap-1 rounded-md bg-[#087b73] px-2 py-1 text-[10px] font-medium text-white transition-colors hover:bg-[#06655f]"
+              >
+                <MessageSquarePlus size={11} aria-hidden />
+                帮我排进行程
+              </button>
+            )}
+          </article>
+        )
+      })}
+    </HScroll>
   )
 }
 
@@ -91,7 +124,7 @@ export function TrainPreview({ preview }: { preview: Array<Record<string, unknow
  */
 export function GuidePreview({ preview }: { preview: Array<Record<string, unknown>> }) {
   return (
-    <ul className="mt-2 space-y-2">
+    <HScroll>
       {preview.slice(0, 6).map((item, index) => {
         const title = String(item.title ?? '未命名内容')
         const url = typeof item.url === 'string' && item.url.startsWith('http') ? item.url : ''
@@ -100,20 +133,21 @@ export function GuidePreview({ preview }: { preview: Array<Record<string, unknow
         const votes = item.vote_up_count
         const comments = item.comment_count
         return (
-          <li key={`${title}-${index}`} className="rounded-lg border border-[#e3e9f5] bg-[#fbfcff] p-2.5">
+          <div key={`${title}-${index}`} className="w-[224px] shrink-0 rounded-lg border border-[#e3e9f5] bg-[#fbfcff] p-2.5">
             {url ? (
               <a
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block truncate text-xs font-semibold text-[#2d5bd1] hover:underline"
+                title={title}
               >
                 {title}
               </a>
             ) : (
-              <p className="truncate text-xs font-semibold text-[#183037]">{title}</p>
+              <p className="truncate text-xs font-semibold text-[#183037]" title={title}>{title}</p>
             )}
-            {summary && <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-[#5c7074]">{summary}</p>}
+            {summary && <p className="mt-1 line-clamp-3 text-[10px] leading-relaxed text-[#5c7074]">{summary}</p>}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-[#8c7258]">
               <span className="rounded bg-[#e8f0fe] px-1.5 py-0.5 font-medium text-[#2d5bd1]">知乎</span>
               {topic && <span className="rounded bg-[#e2f0ee] px-1.5 py-0.5 font-medium text-[#087b73]">{topic}</span>}
@@ -121,26 +155,45 @@ export function GuidePreview({ preview }: { preview: Array<Record<string, unknow
               {typeof votes === 'number' && votes > 0 && <span>{votes} 赞同</span>}
               {typeof comments === 'number' && comments > 0 && <span>{comments} 评论</span>}
             </div>
-          </li>
+          </div>
         )
       })}
-    </ul>
+    </HScroll>
   )
 }
 
 /** 按 category 分发 preview 卡（单一分发口径，两类调用方共用）。 */
-export function ToolPreviewBody({ preview, category }: { preview: Array<Record<string, unknown>>; category?: string }) {
+export function ToolPreviewBody({ preview, category, onAsk }: {
+  preview: Array<Record<string, unknown>>
+  category?: string
+  /** M2 代发：商户卡「帮我排进行程」按钮回调（聊天管线 → 草案确认） */
+  onAsk?: (text: string) => void
+}) {
   if (category === 'train') return <TrainPreview preview={preview} />
   if (category === 'guide') return <GuidePreview preview={preview} />
-  return <MerchantPreview preview={preview} category={category} />
+  return <MerchantPreview preview={preview} category={category} onAsk={onAsk} />
 }
 
-/** 失败行的固定文案（与「未用假数据补齐」口径一致，两处共用）。 */
-export function ToolFailedBody({ error }: { error?: string }) {
+/** 七分类错误 → 人话建议（M2 失败四级：失败不阻塞 + 给下一步动作）。 */
+const ERROR_HINTS: Record<string, string> = {
+  timeout: '数据源响应超时，可稍后重试或换个说法；其余步骤不受影响。',
+  network_error: '网络异常，稍后重试即可；其余步骤不受影响。',
+  provider_error: '外部数据源暂时不可用（可能配额用尽或服务波动），行程已按降级口径继续。',
+  permission_denied: '没有访问该数据源的权限，请联系管理员开通。',
+  validation_error: '请求参数有问题，换个说法再试一次。',
+  business_error: '服务返回业务异常，未用假数据补齐。',
+  contract_error: '服务契约异常（版本不匹配），请联系管理员排查。',
+}
+
+export function ToolFailedBody({ error, errorType }: { error?: string; errorType?: string }) {
+  const hint = errorType ? ERROR_HINTS[errorType] : undefined
   return (
-    <p className="break-words text-[11px] leading-relaxed text-red-600">
-      {error || '该步骤执行失败，未用假数据补齐；其他步骤的结果仍然有效。'}
-    </p>
+    <div className="space-y-1">
+      <p className="break-words text-[11px] leading-relaxed text-red-600">
+        {error || '该步骤执行失败，未用假数据补齐；其他步骤的结果仍然有效。'}
+      </p>
+      {hint && <p className="text-[10px] leading-relaxed text-[#8c7258]">建议：{hint}</p>}
+    </div>
   )
 }
 

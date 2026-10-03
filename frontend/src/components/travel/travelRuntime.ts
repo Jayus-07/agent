@@ -158,6 +158,8 @@ export interface TravelRequirementInterpretation {
   assumptions: string[]
   missing: string[]
   confidence?: string
+  /** 会话意图（后端 classify_intent）：out_of_scope 时聊天流给出域引导卡 */
+  intent?: string
 }
 
 export interface TravelProcessTool {
@@ -241,6 +243,7 @@ export function reduceTravelStreamEvent(
         ? data.missing.filter((item): item is string => typeof item === 'string')
         : [],
       confidence: stringField(data, 'confidence'),
+      intent: stringField(data, 'intent'),
     }
   } else if (event.event === 'stage.finished') {
     const stage = stringField(data, 'stage')
