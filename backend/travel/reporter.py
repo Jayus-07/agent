@@ -86,15 +86,15 @@ def _append_data_status(lines: list[str], itinerary) -> None:
     poi_verified = bool(pois) and all(_is_verified_poi(poi) for poi in pois)
     route_verified = bool(legs) and all(_is_verified_leg(leg) for leg in legs)
 
-    lines.extend([
-        "## 数据说明",
-        "",
-        "- **费用：暂无数据**",
-        f"- **门票：{'已核验' if poi_verified else '暂无数据'}**",
-        f"- **路线：{'已核验' if route_verified else '暂无数据'}**",
-        f"- **坐标：{'已核验' if poi_verified else '暂无数据'}**",
-        "",
-    ])
+    # M2 验收反馈：只报已核验项（「暂无数据」行是噪音）；全未核验则整节不渲染
+    verified_rows = [
+        "- **门票票价：已核验**" if poi_verified else None,
+        "- **路线：已核验**" if route_verified else None,
+        "- **坐标：已核验**" if poi_verified else None,
+    ]
+    verified_rows = [row for row in verified_rows if row]
+    if verified_rows:
+        lines.extend(["## 数据说明", ""] + verified_rows + [""])
 
 
 def _user_visible_items(values) -> list[str]:
@@ -372,12 +372,12 @@ def _render_itinerary(state: dict, itinerary) -> str:
                   if brief.start_date else "未指定出发日期")
     lines.append(f"# {brief.destination} {len(itinerary.days)} 天行程")
     lines.append("")
+    # M2 验收反馈：无费用数据不展示「费用数据 暂无数据」（零信息量）；预算上限保留
     lines.append(
         f"**人数** {brief.party_size} 人 ｜ "
         f"**节奏** {brief.pace_label()} ｜ "
-        f"**出发** {date_label} ｜ "
-        "**费用数据** 暂无数据"
-        + (f"（预算上限 ¥{brief.budget_cny:.0f}）" if brief.budget_cny else "（未提供预算上限）")
+        f"**出发** {date_label}"
+        + (f" ｜ **预算上限** ¥{brief.budget_cny:.0f}" if brief.budget_cny else "")
     )
     if brief.preferences:
         lines.append(f"**偏好** {'、'.join(brief.preferences)}")
@@ -385,62 +385,17 @@ def _render_itinerary(state: dict, itinerary) -> str:
         lines.append(f"**必去** {'、'.join(brief.must_go)}")
     lines.append("")
 
-    # ── 逐日 ──
-    for day in itinerary.days:
-        header = f"## 第 {day.day_index} 天"
-        if day.day_date:
-            weekday = "一二三四五六日"[day.day_date.weekday()]
-            header += f"（{day.day_date.isoformat()} 周{weekday}）"
-        lines.append(header)
-        lines.append("")
-
-        legs = list(day.legs)
-        leg_cursor = 0
-        must_go = [w.strip() for w in itinerary.brief.must_go if (w or "").strip()]
-        for item in day.items:
-            tag = "" if item.kind != KIND_MEAL else "（用餐）"
-            lines.append(f"- **{item.start}-{item.end}** {item.title}{tag}")
-            # 入选理由（2026-10-03）：「为什么选它」逐条讲清楚——必去点名、
-            # 检索来源、知乎攻略提及。只陈述 state 里的既存事实，不补造。
-            if item.poi:
-                named = any(names_match(item.poi.name, want) for want in must_go)
-                basis = f"你点名的必去 · {item.poi.reason}" if named else item.poi.reason
-                if basis:
-                    lines.append(f"  - 为什么选它：{basis}")
-            if item.note:
-                lines.append(f"  - 提示：{item.note}")
-            # 通勤段插在「到达项」之前展示会很乱，这里统一挂在离开上一项之后
-            if leg_cursor < len(legs) and legs[leg_cursor].to_title == item.title:
-                leg = legs[leg_cursor]
-                leg_cursor += 1
-                mode = "步行" if leg.mode == "walk" else "乘车"
-                live_leg = leg.source.startswith(("official:", "tencent:", "live:"))
-                leg_detail = (
-                    f"{leg.minutes} 分钟（约 {leg.distance_km}km）"
-                    if live_leg else "时长与距离暂无数据"
-                )
-                lines.append(
-                    f"  - 前往下一站：{mode} {leg_detail}；费用暂无数据"
-                )
-        lines.append(
-            f"\n*当日：活动 {day.active_minutes} 分钟、在途 {day.transit_minutes} 分钟、"
-            "费用暂无数据*"
-        )
-        lines.append("")
+    # ── 逐日逐时段（M2 验收反馈裁剪）：三栏 UI 下中栏时间轴就是逐日安排的
+    # 结构化展示，文本版逐时行程在这里纯重复——这是「规划说明又长又乱」的
+    # 主因。说明文本只讲「为什么」与「要注意」，逐时安排看行程卡。
+    # 「为什么选它」等逐条说明已由中栏行程卡展示（reason/note 字段）。
 
     # ── 规划依据 + 美食推荐（2026-10-03）：「为什么这样排/为什么选这些」──
     lines += _render_rationale(state, itinerary)
     lines += _render_food_picks(state)
 
-    # ── 费用拆分 ──
-    lines.append("## 费用数据")
-    lines.append("")
-    lines.append("- 门票：暂无数据")
-    lines.append("- 餐饮：暂无数据")
-    lines.append("- 住宿：暂无数据")
-    lines.append("- 通勤：暂无数据")
-    lines.append("- **合计：暂无数据**（未接入可核验费用来源，不展示本地估算值）")
-    lines.append("")
+    # ── 费用拆分（M2 验收反馈）：接通可核验费用来源前整节不渲染——
+    # 一节「暂无数据」对用户是噪音；预算协商（M3）接真实费用后恢复。
 
     _append_data_status(lines, itinerary)
 
