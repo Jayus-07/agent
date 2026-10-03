@@ -63,6 +63,12 @@ def risk_expert_node(state: dict) -> dict:
             result_summary=lambda value: {
                 "result_count": len(value[0]),
                 "data_status": "available" if value[0] else "empty",
+                # M2 验收反馈：知识库摘录原文（≤4 条，每条截断，出处 tag 随行）
+                "category": "knowledge",
+                "preview": [
+                    {"text": chunk[:120], "source": value[1] or ""}
+                    for chunk in value[0][:4]
+                ],
             },
         )
         if chunks:

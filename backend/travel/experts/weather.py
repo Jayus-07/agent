@@ -74,6 +74,16 @@ def weather_expert_node(state: dict) -> dict:
             result_summary=lambda value: {
                 "data_status": "available" if value[0] else "unavailable",
                 "reason": value[1] or "",
+                # M2 验收反馈：工具行展开可见内容（逐日预报，缺字段不补造）
+                "category": "weather",
+                "preview": [
+                    {
+                        "date": rec.get("date") or "",
+                        "weather": ((rec.get("day") or {}).get("weather") or "").strip(),
+                    }
+                    for rec in ((value[0] or {}).get("days") or [])[:5]
+                    if isinstance(rec, dict)
+                ],
             },
         )
         if not forecast:

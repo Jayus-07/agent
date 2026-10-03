@@ -134,6 +134,19 @@ def transit_expert_node(state: dict) -> dict:
             result_summary=lambda value: {
                 "day_count": len(value[0].days),
                 "leg_count": sum(len(day.legs) for day in value[0].days),
+                # M2 验收反馈：路段级明细（≤8 条，与行程单同源字段）
+                "category": "route",
+                "preview": [
+                    {
+                        "from": leg.from_title,
+                        "to": leg.to_title,
+                        "mode": leg.mode,
+                        "minutes": leg.minutes,
+                        "km": round(leg.distance_km, 1),
+                        "cost_cny": leg.cost_cny,
+                    }
+                    for day in value[0].days for leg in (day.legs or [])
+                ][:8],
             },
         )
         # 城际班次摘要写入行程契约（B 方案）：车票检索结果此前只活在

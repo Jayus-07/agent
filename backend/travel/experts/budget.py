@@ -40,6 +40,14 @@ def budget_expert_node(state: dict) -> dict:
                 itinerary.days, brief.party_size, city=brief.destination),
             result_summary=lambda value: {
                 "total_cny": round(float(value.total), 2),
+                # M2 验收反馈：费用四项拆解（与行程单 cost 同源）
+                "category": "budget",
+                "preview": [
+                    {"item": "门票", "cny": round(float(value.tickets), 2)},
+                    {"item": "餐饮", "cny": round(float(value.meals), 2)},
+                    {"item": "住宿", "cny": round(float(value.lodging), 2)},
+                    {"item": "市内交通", "cny": round(float(value.transit), 2)},
+                ],
             },
         )
 

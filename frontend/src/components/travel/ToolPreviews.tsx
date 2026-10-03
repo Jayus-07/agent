@@ -171,7 +171,74 @@ export function ToolPreviewBody({ preview, category, onAsk }: {
 }) {
   if (category === 'train') return <TrainPreview preview={preview} />
   if (category === 'guide') return <GuidePreview preview={preview} />
+  if (category === 'weather') return <WeatherPreview preview={preview} />
+  if (category === 'route') return <RoutePreview preview={preview} />
+  if (category === 'budget') return <BudgetPreview preview={preview} />
+  if (category === 'knowledge') return <KnowledgePreview preview={preview} />
   return <MerchantPreview preview={preview} category={category} onAsk={onAsk} />
+}
+
+/** 天气预报 chip 流（日期+白天天气；温度字段 provider 不保证，缺省不硬造） */
+export function WeatherPreview({ preview }: { preview: Array<Record<string, unknown>> }) {
+  if (preview.length === 0) return <p className="text-[11px] text-[#8fa5a3]">预报数据为空</p>
+  return (
+    <HScroll>
+      {preview.map((rec, i) => (
+        <span key={i} className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#eff6fb] px-3 py-1 text-[11px] text-[#3b5a74]">
+          <span className="font-medium">{String(rec.date || `第 ${i + 1} 天`)}</span>
+          <span>{String(rec.weather || '—')}</span>
+        </span>
+      ))}
+    </HScroll>
+  )
+}
+
+/** 路段明细列表（from→to · 模式 · 时长 · 距离 · 费用，与行程单同源） */
+export function RoutePreview({ preview }: { preview: Array<Record<string, unknown>> }) {
+  if (preview.length === 0) return <p className="text-[11px] text-[#8fa5a3]">没有可展示的路段</p>
+  return (
+    <ul className="space-y-1">
+      {preview.map((leg, i) => (
+        <li key={i} className="flex items-center gap-2 text-[11px] text-[#183037]">
+          <span className="min-w-0 flex-1 truncate">{String(leg.from)} → {String(leg.to)}</span>
+          <span className="shrink-0 text-[#5c7074]">{String(leg.mode || '—')} {String(leg.minutes ?? '—')}′</span>
+          <span className="w-14 shrink-0 text-right text-[#5c7074]">{Number(leg.km) > 0 ? `${leg.km}km` : '—'}</span>
+          <span className="w-12 shrink-0 text-right font-medium">{Number(leg.cost_cny) > 0 ? `¥${leg.cost_cny}` : '—'}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** 费用四项横排（门票/餐饮/住宿/市内交通） */
+export function BudgetPreview({ preview }: { preview: Array<Record<string, unknown>> }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {preview.map((rec, i) => (
+        <span key={i} className="inline-flex items-baseline gap-1 rounded-lg bg-[#f5faf9] px-2.5 py-1 text-[11px] text-[#183037]">
+          {String(rec.item)}
+          <b className="font-bold text-[#087b73]">¥{String(rec.cny ?? '--')}</b>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** 知识库摘录（原文截断 + 出处 tag；「摘录」语义，非生成） */
+export function KnowledgePreview({ preview }: { preview: Array<Record<string, unknown>> }) {
+  if (preview.length === 0) return <p className="text-[11px] text-[#8fa5a3]">知识库没有匹配内容</p>
+  return (
+    <ul className="space-y-1.5">
+      {preview.map((rec, i) => (
+        <li key={i} className="rounded-lg border-l-2 border-[#c3d6d2] bg-[#f5faf9] px-2.5 py-1.5">
+          <p className="break-words text-[11px] leading-relaxed text-[#183037]">{String(rec.text || '')}</p>
+          {typeof rec.source === 'string' && rec.source && (
+            <p className="mt-0.5 text-[9px] text-[#8fa5a3]">出处：{rec.source} · 时效未核实，以官方最新为准</p>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 /** 七分类错误 → 人话建议（M2 失败四级：失败不阻塞 + 给下一步动作）。 */
