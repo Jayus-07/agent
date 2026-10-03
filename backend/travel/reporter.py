@@ -110,6 +110,19 @@ def _user_visible_items(values) -> list[str]:
 # 人话，不检索、不补造观点；检索类信息缺失时如实说「不可用/没有找到」。
 
 
+def _answer_out_of_scope() -> str:
+    """OUT_OF_SCOPE（M2 出域引导）：明确非旅游域诉求，不硬解析不硬排。
+
+    口径：如实说清能力边界 + 给出去处（主页 AI 助手），不留死胡同。
+    """
+    return (
+        "这个问题超出了行程规划的范围——我只懂旅游：排行程、改行程、查车票、"
+        "找美食景点。\n\n"
+        "订单、退款、数据查询、写代码这类问题，请到主页的「AI 助手」提问，"
+        "那里能路由到对应的能力。"
+    )
+
+
 def _answer_static(state: dict) -> str:
     """QUERY_STATIC：知乎攻略观点（inspiration 包）+ 轻规划引导。"""
     brief = load_brief(state)
@@ -244,6 +257,8 @@ def _assemble(state: dict) -> str:
     #    不走行程渲染。分支必须在 brief_missing 之前——「丽江好玩吗」
     #    抽得到目的地、缺天数，落到追问分支就变成了「误规划」。
     intent = state.get("intent") or ""
+    if intent == "out_of_scope":
+        return _answer_out_of_scope()
     if intent == "query_static":
         return _answer_static(state)
     if intent == "query_dynamic":

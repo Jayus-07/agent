@@ -31,6 +31,10 @@ class TravelIntent(str, enum.Enum):
     QUERY_DYNAMIC = "query_dynamic"
     QUERY_STATIC = "query_static"
     DISCOVER = "discover"
+    # M2 出域引导（2026-10-03）：明确指向非旅游域的诉求（订单/退款/写代码…）。
+    # 优先级最高——这类词与行程改动几乎不会同句出现，先拦下避免 slot_filler
+    # 硬解析成莫名行程；reporter 有对应引导出口（去 /agent）。
+    OUT_OF_SCOPE = "out_of_scope"
 
 
 # supervisor/reporter 按意图转问答出口的家族（PLAN 不在其中）
@@ -39,6 +43,15 @@ QUERY_INTENTS: frozenset[str] = frozenset({
     TravelIntent.QUERY_STATIC.value,
     TravelIntent.DISCOVER.value,
 })
+
+# ── 0) OUT_OF_SCOPE：明确非旅游域诉求（M2 出域引导）──
+# 只收「强域信号」词，宁漏勿滥：漏了走既有链路只是答得普通，
+# 误判会把真行程诉求拦在门外。
+_RE_OUT_OF_SCOPE = re.compile(
+    r"订单|退款|退货|换货|发票|物流|快递|发货|库存|补货|上架"
+    r"|账号|密码|登录|注册|实名|绑卡|支付失败"
+    r"|写代码|编程|数据库|\bSQL\b|报表|考勤|工资|社保|报销"
+)
 
 # ── 1) MODIFY：指向已有行程的逐条改动 ──────────────────────────────
 # 「第X天 + 动词」是强信号；裸「换成/重排」要求 has_itinerary 才判。
@@ -95,6 +108,10 @@ def classify_intent(
     msg = (message or "").strip()
     if not msg:
         return None
+
+    # 0) OUT_OF_SCOPE：非旅游域强信号词首中即拦（M2 出域引导）
+    if _RE_OUT_OF_SCOPE.search(msg):
+        return TravelIntent.OUT_OF_SCOPE
 
     # 1) MODIFY：必须有已有行程可改；天数更新句（「改成3天」）不是逐条改单
     if has_itinerary and not _RE_HAS_DAYS_EXPR.search(msg):

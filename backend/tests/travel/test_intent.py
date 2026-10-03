@@ -30,7 +30,9 @@ from backend.travel.supervisor import decide
     ("丽江自由行怎么样", False, True, TravelIntent.QUERY_STATIC),
     ("丽江自驾游怎么样", True, True, TravelIntent.QUERY_STATIC),
     ("丽江路线怎么样", True, True, TravelIntent.QUERY_STATIC),
-    ("近3天订单量", False, False, None),
+    ("近3天订单量", False, False, TravelIntent.OUT_OF_SCOPE),
+    ("我的订单什么时候发货", False, False, TravelIntent.OUT_OF_SCOPE),
+    ("帮我写个SQL统计报表", False, False, TravelIntent.OUT_OF_SCOPE),
     ("你好", False, False, None),
     ("", False, False, None),
 ])
@@ -97,6 +99,7 @@ def test_static_renderer_sources_and_disclaimer():
 @pytest.mark.parametrize("intent,expected", [
     ("query_static", "暂时不可用"), ("query_dynamic", "可核验"),
     ("discover", "方向"), ("modify", "逐条改单"),
+    ("out_of_scope", "AI 助手"),
 ])
 def test_reporter_exits(intent, expected):
     answer = _assemble({"intent": intent, "brief_missing": ["days"],
