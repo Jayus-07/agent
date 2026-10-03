@@ -378,7 +378,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
               const isLong = m.role === 'assistant' && m.text.length > 600
               return (
                 <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                  <div className={`max-w-[94%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
+                  <div className={`max-w-[94%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
                     m.role === 'user'
                       ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
                       : 'border border-[#dae7e5] bg-white text-[#183037]'
@@ -550,12 +550,12 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           }
           return (
             <>
-              <ul className="space-y-3" aria-live="polite" aria-label="旅行助手消息">
+              <ul className="space-y-4" aria-live="polite" aria-label="旅行助手消息">
                 {before.map((m, i) => renderMsg(m, i, false))}
               </ul>
               {processBlock}
               {after.length > 0 && (
-                <ul className="space-y-3" aria-label="旅行助手消息">
+                <ul className="space-y-4" aria-label="旅行助手消息">
                   {after.map((m, i) => renderMsg(m, i, i === after.length - 1))}
                 </ul>
               )}

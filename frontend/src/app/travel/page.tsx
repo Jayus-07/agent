@@ -602,7 +602,8 @@ export default function TravelPage() {
               {/* ── 左栏已移除（M1）：条件摘要上移为顶部 TripConditionsBar，调整入口在其「调整」按钮 ── */}
 
             {/* ── 中栏：行程（唯一结果主视图，栏内滚动） ── */}
-            <main className="min-w-0 min-h-0 space-y-4 lg:overflow-y-auto lg:pr-0.5">
+            {/* M2 布局反馈：中栏改 flex 列，行程大卡 flex-1 与右栏聊天等高（时间轴/须知各自内滚） */}
+            <main className="flex min-w-0 min-h-0 flex-col gap-4 lg:overflow-hidden lg:pr-0.5">
               {!itinerary && !loading && !planState.notice && (
                 <PlanIntakeCard
                   value={quickIdea}
@@ -632,7 +633,7 @@ export default function TravelPage() {
               )}
 
               {error && (
-                <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                <div className="shrink-0 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
                   <span className="min-w-0 flex-1 break-words">{error}</span>
                   <button type="button" onClick={() => setError('')} className="shrink-0 text-red-400 hover:text-red-600">
                     关闭
@@ -682,7 +683,7 @@ export default function TravelPage() {
               ) : loading ? (
                 <GeneratingCard processState={travelProcess} expectedDays={parseInt(days, 10) || 0} />
               ) : planState.notice ? (
-                <div className="whitespace-pre-wrap rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <div className="shrink-0 whitespace-pre-wrap rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   {planState.notice}
                 </div>
               ) : null}

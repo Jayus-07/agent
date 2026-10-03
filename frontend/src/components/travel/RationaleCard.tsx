@@ -73,7 +73,7 @@ export default function RationaleCard({ rationale, processState, itinerary, pace
   const tradeCount = dropped.length + unscheduled.length + (trade.unscheduled_extra ?? 0)
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {/* 头部结论 */}
       <div className="flex items-center gap-2.5 rounded-xl border border-[#dae7e5] bg-white px-3 py-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#087b73] text-white">
@@ -128,7 +128,7 @@ export default function RationaleCard({ rationale, processState, itinerary, pace
 
       {/* ③ 我是这样排的 + 取舍 */}
       <Section no={3} title="我是这样排的">
-        <div className="space-y-2">
+        <div className="space-y-3">
           <Step title="必去优先">{(rationale.headline?.must_go ?? []).length > 0 ? `你点名的「${(rationale.headline?.must_go ?? []).join('、')}」优先排入，永不被静默丢弃` : '没有指定必去；按候选质量直接排入'}</Step>
           <Step title="地理就近串联">把地点按位置就近串成每天动线，减少回头路</Step>
           <Step title="节奏约束">{`「${PACE_LABEL[String(pace || reqBrief.pace)] ?? '适中'}」档 ≈ ${rationale.pace_rule ?? '每天 4~5 个地点'}`}</Step>
@@ -249,7 +249,7 @@ function Section({ no, title, right, children }: {
         {title}
         {right && <span className="ml-auto text-[9.5px] font-normal text-[#8fa5a3]">{right}</span>}
       </div>
-      <div className="px-3 py-2">{children}</div>
+      <div className="px-3 py-2.5">{children}</div>
     </div>
   )
 }

@@ -17,7 +17,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import 'leaflet/dist/leaflet.css'
 import type { Map as LeafletMap } from 'leaflet'
 import {
-  AlertTriangle, CalendarPlus, Check, Coffee, Hotel, ListChecks, MapPin, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
+  AlertTriangle, CalendarPlus, Check, ChevronLeft, ChevronRight, Coffee, Hotel, ListChecks, MapPin, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
 } from 'lucide-react'
 import {
   confirmTravelPlan,
@@ -172,7 +172,7 @@ function RouteMap({ itinerary, selectedDay }: { itinerary: Itinerary; selectedDa
         {missingLocation && <span className="ml-auto text-red-600">部分位置暂无核实数据</span>}
       </figcaption>
       {/* 高度放大：一屏布局下中栏独立滚动，地图吃足空间（自适应取景由 fitBounds 保证） */}
-      <div ref={containerRef} className="h-[360px] w-full bg-[#f5faf9]" role="img" aria-label="行程路线交互地图" />
+      <div ref={containerRef} className="h-full min-h-[320px] w-full bg-[#f5faf9]" role="img" aria-label="行程路线交互地图" />
     </figure>
   )
 }
@@ -288,7 +288,7 @@ function DayCard({ day, replaceCandidates, onRequestReplace }: {
     }
   })
   return (
-    <section className="animate-fade-in overflow-hidden rounded-2xl border border-[#dae7e5] bg-white shadow-card">
+    <section className="flex h-full min-h-0 animate-fade-in flex-col overflow-hidden rounded-2xl border border-[#dae7e5] bg-white shadow-card">
       <header className="flex items-center gap-3 border-b border-[#dae7e5] bg-[#f5faf9] px-4 py-2.5">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#087b73]/10 text-[11px] font-bold text-[#087b73]">
           D{day.day_index}
@@ -312,7 +312,7 @@ function DayCard({ day, replaceCandidates, onRequestReplace }: {
         </div>
       )}
 
-      <ol className="relative ml-6 border-l border-[#dae7e5] py-3 pl-4 pr-4">
+      <ol className="relative ml-6 min-h-0 flex-1 overflow-y-auto border-l border-[#dae7e5] py-3 pl-4 pr-4 [scrollbar-width:thin]">
         {day.items.map((item, idx) => {
           const style = KIND_STYLE[item.kind] ?? { dot: '#cbd5e1', label: '', icon: null }
           const leg = legForItem.get(idx)
@@ -427,7 +427,7 @@ function DayCard({ day, replaceCandidates, onRequestReplace }: {
       </ol>
 
       {leftoverLegs.length > 0 && (
-        <div className="border-t border-[#dae7e5] px-4 py-2.5">
+        <div className="shrink-0 border-t border-[#dae7e5] px-4 py-2.5">
           <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-[#5c7074]">
             <Route size={11} className="text-[#087b73]" aria-hidden />
             其他路段信息
@@ -478,7 +478,7 @@ function DayTabCard({
       role="tab"
       aria-selected={selected}
       onClick={() => onSelect(day.day_index)}
-      className={`group w-[172px] shrink-0 cursor-pointer overflow-hidden rounded-xl border p-3 text-left transition-all animate-fade-in ${
+      className={`group w-[150px] shrink-0 cursor-pointer overflow-hidden rounded-xl border p-3 text-left transition-all animate-fade-in ${
         selected
           ? 'border-[#087b73] bg-[#087b73] text-white shadow-card'
           : 'border-[#dae7e5] bg-white hover:border-[#087b73]/40 hover:shadow-card'
@@ -518,6 +518,75 @@ function DayTabCard({
         </div>
       )}
     </button>
+  )
+}
+
+
+// ── 日切换条（M2 布局反馈：与地图同列；多天横向滚动+箭头+边缘渐隐） ──
+
+function DayTabStrip({
+  days, activeDay, onSelect, selectedDayData,
+}: {
+  days: ItineraryDay[]
+  activeDay: number
+  onSelect: (dayIndex: number) => void
+  selectedDayData: ItineraryDay | null
+}) {
+  const stripRef = useRef<HTMLDivElement>(null)
+  const scroll = (dir: -1 | 1) => stripRef.current?.scrollBy({ left: dir * 320, behavior: 'smooth' })
+  const many = days.length > 4
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-1.5">
+        <h3 className="text-sm font-bold text-[#183037]">行程日程</h3>
+        <span className="rounded-full bg-[#f5faf9] px-2 py-0.5 text-[10px] text-[#5c7074]">
+          第 {activeDay} / {days.length} 天
+        </span>
+        {many && (
+          <span className="ml-auto flex gap-1">
+            <button
+              type="button"
+              onClick={() => scroll(-1)}
+              aria-label="前一天"
+              className="grid h-6 w-6 cursor-pointer place-items-center rounded-lg border border-[#dae7e5] bg-white text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#087b73]"
+            >
+              <ChevronLeft size={13} />
+            </button>
+            <button
+              type="button"
+              onClick={() => scroll(1)}
+              aria-label="后一天"
+              className="grid h-6 w-6 cursor-pointer place-items-center rounded-lg border border-[#dae7e5] bg-white text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#087b73]"
+            >
+              <ChevronRight size={13} />
+            </button>
+          </span>
+        )}
+      </div>
+      <div className="relative">
+        <div
+          ref={stripRef}
+          role="tablist"
+          aria-label="行程日期"
+          className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {days.map((d, index) => (
+            <DayTabCard
+              key={d.day_index}
+              day={d}
+              selected={d.day_index === activeDay}
+              onSelect={onSelect}
+              index={index}
+            />
+          ))}
+        </div>
+      </div>
+      {selectedDayData && (
+        <p className="truncate text-[10.5px] text-[#5c7074]" aria-label="当天概要">
+          {dayVisitTitles(selectedDayData).slice(0, 3).join(' · ') || '当天暂无到访安排'}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -919,28 +988,10 @@ export default function ItineraryView({
       </header>
       {historyError && <p className="text-xs text-red-600">{historyError}</p>}
 
-      {/* 设计稿③：日卡片条（横向滚动、选中描边）+ 一张大卡（当日亮点 / 当天出发 / 时间轴|地图双列） */}
-      {dayCount > 1 && (
-        <div
-          role="tablist"
-          aria-label="行程日期"
-          className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]"
-        >
-          {itinerary.days.map((d, index) => (
-            <DayTabCard
-              key={d.day_index}
-              day={d}
-              selected={d.day_index === activeDay}
-              onSelect={setSelectedDay}
-              index={index}
-            />
-          ))}
-        </div>
-      )}
       {activeDayData && (
         <section
           ref={bigCardRef}
-          className="animate-fade-in rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card sm:p-5"
+          className="flex min-h-0 animate-fade-in flex-1 flex-col rounded-2xl border border-[#dae7e5] bg-white p-4 shadow-card sm:p-5"
           aria-label={`第 ${activeDay} 天行程`}
         >
           {/* 当日概览条：地点/用餐/交通/门票四指标（点击跳转或拆解） */}
@@ -988,14 +1039,28 @@ export default function ItineraryView({
             </div>
           )}
 
-          {/* 双列：时间轴 | 路线地图 */}
-          <div className="grid items-start gap-3 xl:grid-cols-2">
+          {/* 双列等高：时间轴 | （日切换 + 路线地图）。M2 布局反馈：
+              日切换与地图同列（先选天→看当天路线）；时间轴与聊天框等高，
+              天数多时日切换条横向滚动+箭头。 */}
+          <div className="grid min-h-0 flex-1 items-stretch gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
             <DayCard
               day={activeDayData}
               replaceCandidates={replaceCandidates}
               onRequestReplace={onRequestReplace}
             />
-            <RouteMap itinerary={itinerary} selectedDay={activeDay} />
+            <div className="flex min-h-0 flex-col gap-3">
+              {dayCount > 1 && (
+                <DayTabStrip
+                  days={itinerary.days}
+                  activeDay={activeDay}
+                  onSelect={setSelectedDay}
+                  selectedDayData={activeDayData}
+                />
+              )}
+              <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[#dae7e5]">
+                <RouteMap itinerary={itinerary} selectedDay={activeDay} />
+              </div>
+            </div>
           </div>
         </section>
       )}
