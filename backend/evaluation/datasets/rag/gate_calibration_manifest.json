@@ -1,0 +1,15 @@
+{
+ "version": "2026-10-04.1",
+ "module": "rag-gate",
+ "counts": {
+  "answerable": 100,
+  "unanswerable": 100,
+  "total": 200
+ },
+ "targets": {
+  "false_reject_max": 0.1,
+  "miss_reject_max": 0.05
+ },
+ "sha256": "6a48772c61a5a5d90b6bcd49f65768b7f5323e849bb3e471b765461209f69cc6",
+ "notes": "应答题锚定 active 语料真实主题；录制后 answerable 且 top1<0.35 标 suspicious 需人工核对。阈值实验台不改生产阈值（决策门 T5.3）。"
+}

@@ -1,0 +1,4783 @@
+{
+ "version": "2026-10-04.1",
+ "cases": 200,
+ "suspicious_answerable": [
+  "GC-A006",
+  "GC-A007",
+  "GC-A008",
+  "GC-A009",
+  "GC-A010",
+  "GC-A011",
+  "GC-A012",
+  "GC-A013",
+  "GC-A015",
+  "GC-A016",
+  "GC-A017",
+  "GC-A018",
+  "GC-A019",
+  "GC-A020",
+  "GC-A021",
+  "GC-A023",
+  "GC-A024",
+  "GC-A025",
+  "GC-A027",
+  "GC-A028",
+  "GC-A029",
+  "GC-A032",
+  "GC-A036",
+  "GC-A038",
+  "GC-A039",
+  "GC-A040",
+  "GC-A041",
+  "GC-A042",
+  "GC-A043",
+  "GC-A044",
+  "GC-A045",
+  "GC-A046",
+  "GC-A047",
+  "GC-A048",
+  "GC-A049",
+  "GC-A050",
+  "GC-A051",
+  "GC-A052",
+  "GC-A055",
+  "GC-A056",
+  "GC-A058",
+  "GC-A060",
+  "GC-A061",
+  "GC-A062",
+  "GC-A063",
+  "GC-A064",
+  "GC-A065",
+  "GC-A066",
+  "GC-A067",
+  "GC-A068",
+  "GC-A069",
+  "GC-A070",
+  "GC-A071",
+  "GC-A072",
+  "GC-A073",
+  "GC-A075",
+  "GC-A077",
+  "GC-A079",
+  "GC-A080",
+  "GC-A081",
+  "GC-A082",
+  "GC-A083",
+  "GC-A084",
+  "GC-A085",
+  "GC-A086",
+  "GC-A087",
+  "GC-A089",
+  "GC-A090",
+  "GC-A091",
+  "GC-A092",
+  "GC-A093",
+  "GC-A094",
+  "GC-A096",
+  "GC-A097",
+  "GC-A098",
+  "GC-A099",
+  "GC-A100"
+ ],
+ "baseline_current": {
+  "thresholds": {
+   "vec_min_score": 0.2,
+   "min_top1": 0.35,
+   "min_avg": 0.25,
+   "min_gap": 0.05
+  },
+  "false_reject": {
+   "n": 86,
+   "total": 100,
+   "rate": 0.86
+  },
+  "miss_reject": {
+   "n": 1,
+   "total": 100,
+   "rate": 0.01
+  },
+  "pass_targets": false
+ },
+ "grid_size": 245,
+ "recommend": {
+  "feasible_n": 0,
+  "near_optimal": {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 31,
+    "total": 100,
+    "rate": 0.31
+   },
+   "miss_reject": {
+    "n": 10,
+    "total": 100,
+    "rate": 0.1
+   },
+   "pass_targets": false
+  },
+  "note": "当前定标集与网格下无同时达标组合：要么阈值面不覆盖（扩网格），要么存在定标集噪声（核对 suspicious 案例）"
+ },
+ "combos": [
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 31,
+    "total": 100,
+    "rate": 0.31
+   },
+   "miss_reject": {
+    "n": 10,
+    "total": 100,
+    "rate": 0.1
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 41,
+    "total": 100,
+    "rate": 0.41
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 31,
+    "total": 100,
+    "rate": 0.31
+   },
+   "miss_reject": {
+    "n": 10,
+    "total": 100,
+    "rate": 0.1
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 41,
+    "total": 100,
+    "rate": 0.41
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 36,
+    "total": 100,
+    "rate": 0.36
+   },
+   "miss_reject": {
+    "n": 9,
+    "total": 100,
+    "rate": 0.09
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 42,
+    "total": 100,
+    "rate": 0.42
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.1,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 31,
+    "total": 100,
+    "rate": 0.31
+   },
+   "miss_reject": {
+    "n": 10,
+    "total": 100,
+    "rate": 0.1
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 41,
+    "total": 100,
+    "rate": 0.41
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 31,
+    "total": 100,
+    "rate": 0.31
+   },
+   "miss_reject": {
+    "n": 10,
+    "total": 100,
+    "rate": 0.1
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 41,
+    "total": 100,
+    "rate": 0.41
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 36,
+    "total": 100,
+    "rate": 0.36
+   },
+   "miss_reject": {
+    "n": 9,
+    "total": 100,
+    "rate": 0.09
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 42,
+    "total": 100,
+    "rate": 0.42
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": -0.05,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 36,
+    "total": 100,
+    "rate": 0.36
+   },
+   "miss_reject": {
+    "n": 9,
+    "total": 100,
+    "rate": 0.09
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 42,
+    "total": 100,
+    "rate": 0.42
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 36,
+    "total": 100,
+    "rate": 0.36
+   },
+   "miss_reject": {
+    "n": 9,
+    "total": 100,
+    "rate": 0.09
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 42,
+    "total": 100,
+    "rate": 0.42
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 36,
+    "total": 100,
+    "rate": 0.36
+   },
+   "miss_reject": {
+    "n": 9,
+    "total": 100,
+    "rate": 0.09
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 42,
+    "total": 100,
+    "rate": 0.42
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 49,
+    "total": 100,
+    "rate": 0.49
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.0,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 8,
+    "total": 100,
+    "rate": 0.08
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 46,
+    "total": 100,
+    "rate": 0.46
+   },
+   "miss_reject": {
+    "n": 7,
+    "total": 100,
+    "rate": 0.07
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 5,
+    "total": 100,
+    "rate": 0.05
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.05,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 48,
+    "total": 100,
+    "rate": 0.48
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 51,
+    "total": 100,
+    "rate": 0.51
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 55,
+    "total": 100,
+    "rate": 0.55
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 60,
+    "total": 100,
+    "rate": 0.6
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.1,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 52,
+    "total": 100,
+    "rate": 0.52
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 53,
+    "total": 100,
+    "rate": 0.53
+   },
+   "miss_reject": {
+    "n": 4,
+    "total": 100,
+    "rate": 0.04
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 3,
+    "total": 100,
+    "rate": 0.03
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 62,
+    "total": 100,
+    "rate": 0.62
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.15,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": -0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.0,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.0,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.0,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.0,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.0,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.05,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.05,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.05,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.05,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.05,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.1,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.1,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.1,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.1,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.1,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.15,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.15,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.15,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.15,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.15,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.2,
+    "min_avg": -0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.2,
+    "min_avg": -0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 56,
+    "total": 100,
+    "rate": 0.56
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.2,
+    "min_avg": 0.0,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 57,
+    "total": 100,
+    "rate": 0.57
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.2,
+    "min_avg": 0.05,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 61,
+    "total": 100,
+    "rate": 0.61
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  },
+  {
+   "thresholds": {
+    "vec_min_score": 0.2,
+    "min_top1": 0.2,
+    "min_avg": 0.1,
+    "min_gap": 0.05
+   },
+   "false_reject": {
+    "n": 65,
+    "total": 100,
+    "rate": 0.65
+   },
+   "miss_reject": {
+    "n": 1,
+    "total": 100,
+    "rate": 0.01
+   },
+   "pass_targets": false
+  }
+ ]
+}
