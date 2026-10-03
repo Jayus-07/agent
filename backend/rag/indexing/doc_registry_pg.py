@@ -676,6 +676,27 @@ class PostgresDocumentRegistry(DocumentRegistry):
             )
             return cur.rowcount
 
+    def transition_status_by_doc_id(
+        self, doc_id: str, new_status: str, allowed_from: tuple[str, ...],
+    ) -> int:
+        """生命周期状态机专用 CAS 迁移（2026-10-03 lifecycle.py）：
+        仅当当前 status ∈ allowed_from 时写入，行数 0 = 源状态已变化。
+        与 update_status_by_doc_id 的固定白名单不同，源状态由调用方
+        （状态机裁决结果）显式给定。"""
+        if new_status not in DOC_STATUSES:
+            raise ValueError(f"无效状态: {new_status}，有效值: {DOC_STATUSES}")
+        if not allowed_from:
+            raise ValueError("allowed_from 不能为空")
+        placeholders = ", ".join(["%s"] * len(allowed_from))
+        with self._lock, self._conn() as conn:
+            cur = self._exec(
+                conn,
+                f"UPDATE {self._table} SET status = %s, updated_at = { _NOW_SQL } "
+                f"WHERE doc_id = %s AND status IN ({placeholders})",
+                (new_status, doc_id, *allowed_from),
+            )
+            return cur.rowcount
+
     def list_pending_review(
         self, page: int = 1, page_size: int = 20,
         kb_scope: list[str] | None = None,

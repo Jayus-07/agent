@@ -4,6 +4,7 @@
   - rag_search.py:    GET /health, /knowledge-bases, POST /search
   - rag_documents.py: GET /documents, /stats, /operations, /{id}, /chunks, DELETE, POST reindex
   - rag_upload.py:    POST /upload, GET /upload/{id}/stream
+  - rag_lifecycle.py: POST /knowledge/{id}/lifecycle, /expire-at, GET events（C1/C2 生命周期）
   - 根 POST /rag:     直接用 RAG pipeline 问答
 """
 from fastapi import APIRouter, Request
@@ -13,6 +14,7 @@ import asyncio
 from backend.app.api.routes.rag_search import router as search_router
 from backend.app.api.routes.rag_documents import router as documents_router
 from backend.app.api.routes.rag_upload import router as upload_router
+from backend.app.api.routes.rag_lifecycle import router as lifecycle_router
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready
 from backend.app.api.identity import require_principal
@@ -27,6 +29,9 @@ router.include_router(documents_router)
 
 # 上传 + 索引
 router.include_router(upload_router)
+
+# 知识生命周期（deprecate/restore/回审 + expire_at + 流转审计）
+router.include_router(lifecycle_router)
 
 
 # 根 POST — RAG 问答（需保持旧 API 兼容）

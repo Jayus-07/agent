@@ -11,8 +11,9 @@
 from __future__ import annotations
 
 
-# 文档状态枚举（完整生命周期，2026-08-11 加 pending_review）
-DOC_STATUSES = ("uploading", "parsing", "embedding", "pending_review", "active", "failed", "deleted")
+# 文档状态枚举（完整生命周期，2026-08-11 加 pending_review；
+# 2026-10-03 加 deprecated=下线/到期可恢复态，见 lifecycle.py 状态机）
+DOC_STATUSES = ("uploading", "parsing", "embedding", "pending_review", "active", "deprecated", "failed", "deleted")
 
 # 版本治理字段（双后端共用语义；PG 侧见 doc_registry_pg）。
 #   document_id → doc_id（已有）    version_id → version_id（新）

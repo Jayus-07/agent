@@ -30,15 +30,19 @@ def _reset_cache():
 class TestPendingReviewIds:
 
     def test_reads_registry(self, monkeypatch):
+        # 2026-10-03 C1/C2：排除集扩为 pending_review ∪ deprecated ∪ 过期 active
         class FakeRegistry:
             def list_by_statuses(self, statuses):
-                assert statuses == ("pending_review",)
+                assert set(statuses) == {"pending_review", "deprecated"}
                 return [{"doc_id": "d1"}, {"doc_id": "d2"}, {"doc_id": ""}]
+
+            def list_expired(self, now=None):
+                return [{"doc_id": "d3"}]
 
         from backend.rag.indexing import doc_registry as dr
         monkeypatch.setattr(dr, "DocumentRegistry", lambda path: FakeRegistry())
         ids = _pending_review_doc_ids()
-        assert ids == frozenset({"d1", "d2"})  # 空 doc_id 被剔除
+        assert ids == frozenset({"d1", "d2", "d3"})  # 空 doc_id 被剔除，过期并入
 
     def test_cache_prevents_repeat_query(self, monkeypatch):
         calls = {"n": 0}
@@ -48,11 +52,14 @@ class TestPendingReviewIds:
                 calls["n"] += 1
                 return [{"doc_id": "d1"}]
 
+            def list_expired(self, now=None):
+                return []
+
         from backend.rag.indexing import doc_registry as dr
         monkeypatch.setattr(dr, "DocumentRegistry", lambda path: FakeRegistry())
         _pending_review_doc_ids()
         _pending_review_doc_ids()
-        assert calls["n"] == 1, "60s 缓存内不重复查库"
+        assert calls["n"] == 1, "60s 缓存内不重复查库（一轮刷新=list_by_statuses 一次）"
 
 
 class TestFilterReviewBlocked:

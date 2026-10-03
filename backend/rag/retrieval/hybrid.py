@@ -210,14 +210,16 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     return _filter_review_blocked(docs)
 
 
-# pending_review doc_id 集合的进程内缓存（60s）——空集合同样缓存，
-# 无待审文档时零额外查询开销
+# 不可检索 doc_id 集合的进程内缓存（60s）——空集合同样缓存，
+# 无待审/下线/过期文档时零额外查询开销。
+# 2026-10-03 C1/C2：集合从 pending_review 扩为
+# pending_review ∪ deprecated（下线）∪ 已过期 active（expire_at<=今天）。
 _review_block_cache: dict = {"ids": frozenset(), "ts": 0.0}
 _REVIEW_BLOCK_TTL = 60.0
 
 
 def invalidate_pending_review_cache() -> None:
-    """审核状态变化后立即清空本进程的 pending_review 缓存。"""
+    """审核/生命周期状态或有效期变化后立即清空本进程的过滤缓存。"""
     _review_block_cache["ids"] = frozenset()
     _review_block_cache["ts"] = 0.0
 
@@ -231,18 +233,29 @@ def _pending_review_doc_ids() -> frozenset:
     try:
         from backend.config import DOC_REGISTRY_PATH
         from backend.rag.indexing.doc_registry import DocumentRegistry
-        rows = DocumentRegistry(DOC_REGISTRY_PATH).list_by_statuses(("pending_review",))
-        ids = frozenset(r.get("doc_id", "") for r in rows if r.get("doc_id"))
+        registry = DocumentRegistry(DOC_REGISTRY_PATH)
+        blocked: set[str] = set()
+        for row in registry.list_by_statuses(("pending_review", "deprecated")):
+            doc_id = row.get("doc_id", "")
+            if doc_id:
+                blocked.add(doc_id)
+        # 过期时效知识（list_expired 只查 active 行，按日粒度）
+        for row in registry.list_expired():
+            doc_id = row.get("doc_id", "")
+            if doc_id:
+                blocked.add(doc_id)
+        ids = frozenset(blocked)
     except Exception as e:
         # registry 不可用 → 跳过过滤（可用性优先于审核过滤）
-        logger.debug(f"[ReviewFilter] pending_review 集合获取失败（跳过过滤）: {e}")
+        logger.debug(f"[ReviewFilter] 审核态/过期集合获取失败（跳过过滤）: {e}")
     _review_block_cache["ids"] = ids
     _review_block_cache["ts"] = now
     return ids
 
 
 def _filter_review_blocked(docs: list) -> list:
-    """4.1b: 剔除 pending_review 文档的 chunk（near_dup 审核态不应被检索）。"""
+    """4.1b: 剔除不可检索文档的 chunk（pending_review 审核态 / deprecated 下线 /
+    expire_at 已过期的 active）。软过滤，不动向量库 where。"""
     if not docs:
         return docs
     blocked = _pending_review_doc_ids()
@@ -254,7 +267,7 @@ def _filter_review_blocked(docs: list) -> list:
     ]
     if len(filtered) < len(docs):
         logger.info(
-            f"[ReviewFilter] 过滤 pending_review 文档命中 {len(docs) - len(filtered)} 条"
+            f"[ReviewFilter] 过滤审核态/下线/过期文档命中 {len(docs) - len(filtered)} 条"
         )
     return filtered
 
