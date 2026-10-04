@@ -312,6 +312,19 @@ def slot_filler_node(state: dict) -> dict:
             f"人数按 {brief.party_size} 人估算（根据你提到的同伴）；"
             "如不对，直接说「X个人」"
         )
+    # 人群节奏派生回显（验收 #80）：按同行人群默认的档位让用户看得见可纠正
+    if (extract_pace(message) is None
+            and party_size_source(message) in ("guess", "explicit")):
+        from backend.travel.agents.requirement_agent import extract_group_pace
+
+        group_pace = extract_group_pace(message)
+        if group_pace and brief.pace == group_pace:
+            pace_label = {"relaxed": "轻松", "intense": "紧凑"}.get(
+                group_pace, group_pace)
+            notes.append(
+                f"按你的同行人群默认「{pace_label}」节奏排程"
+                "（每天地点数/时长相应收紧或放宽）；想调整直接说节奏")
+
     # 相对日期回显（验收 #63）：「下周五」这类说法已换算成具体日期，
     # 让用户看得见换算结果、可纠正（「周末」歧义取周六也在此回显）。
     rel_expr = extract_relative_date_expr(message)

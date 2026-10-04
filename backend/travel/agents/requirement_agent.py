@@ -826,6 +826,25 @@ def extract_pace(message: str) -> str | None:
     return None
 
 
+# 人群节奏派生（验收 #80）：显式 pace 词优先；未提 pace 时按同行人群派生
+# 默认档位——人群信息已在同伴抽取（带爸妈/带孩子）里存在，这里把「人群 →
+# 行进节奏」的常识映射补上，经既有 pace 容量约束传导到排程（每天点数/
+# 活动时长），不新增排程分支。
+_GROUP_PACE_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"老人|爸妈|父母|腿脚不便|孕妇|爷爷奶奶"), "relaxed"),
+    (re.compile(r"带娃|亲子|小孩|儿童|溜娃|孩子"), "relaxed"),
+    (re.compile(r"特种兵|暴走|学生党|年轻力壮"), "intense"),
+)
+
+
+def extract_group_pace(message: str) -> str | None:
+    """同行人群 → 默认节奏档位（显式 pace 优先，本函数只兜底）。"""
+    for pattern, pace in _GROUP_PACE_HINTS:
+        if pattern.search(message or ""):
+            return pace
+    return None
+
+
 # 触发词捕获串的清洗规则 —— 口语里触发词后面经常跟的不是地名，而是
 # 「福州玩」「地方很多」「人多拥挤的地方」这类半截话。不清洗就会作为
 # 脏条目进 must_go/avoid 并直出行程单（实测 bug）。
@@ -988,7 +1007,7 @@ def extract_fresh_brief(
         arrival_time=extract_arrival_time(message) or "",
         departure_time=extract_departure_time(message) or "",
         preferences=extract_preferences(message),
-        pace=extract_pace(message) or "moderate",
+        pace=extract_pace(message) or extract_group_pace(message) or "moderate",
         tier=extract_tier(message) or "economy",
         diet=extract_diet(message),
         lodging=extract_lodging(message),
@@ -1104,6 +1123,7 @@ __all__ = [
     "extract_lodging",
     "extract_must_go",
     "extract_optional_go",
+    "extract_group_pace",
     "extract_party_size",
     "extract_past_date",
     "extract_pace",

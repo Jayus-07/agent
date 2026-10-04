@@ -509,3 +509,32 @@ class TestRunDeadline:
             workers=1, timeout_s=travel_config.TRAVEL_REQUEST_TIMEOUT_S)
         assert executor.timeout_s == travel_config.TRAVEL_REQUEST_TIMEOUT_S
         assert executor.timeout_s >= 1.0  # 配置链活着（max(1.0, ...) 下限）
+
+
+class TestGroupPace:
+    """验收 #80：同行人群 → 默认节奏派生（显式 pace 优先）。"""
+
+    def test_elderly_party_derives_relaxed(self):
+        from backend.travel.agents.requirement_agent import (
+            extract_group_pace,
+            extract_pace,
+        )
+
+        message = "带爸妈去福州玩3天"
+        assert extract_pace(message) is None      # 无显式节奏词
+        assert extract_group_pace(message) == "relaxed"
+        brief = extract_fresh_brief(message)
+        assert brief.pace == "relaxed"
+
+    def test_kids_party_derives_relaxed(self):
+        brief = extract_fresh_brief("带娃去厦门玩2天")
+        assert brief.pace == "relaxed"
+
+    def test_explicit_pace_beats_group_hint(self):
+        """用户显式说「特种兵」时显式词优先（同为派生也取直接表达）。"""
+        brief = extract_fresh_brief("带爸妈去福州玩3天，节奏紧凑一点")
+        assert brief.pace == "intense"
+
+    def test_no_group_word_defaults_moderate(self):
+        brief = extract_fresh_brief("去福州玩3天")
+        assert brief.pace == "moderate"
