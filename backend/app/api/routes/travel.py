@@ -66,6 +66,19 @@ class TravelPlanRequest(BaseModel):
                         description="消息来源归因：card_action/canvas_action/tier_switch/budget_negotiate/manual")
 
 
+def _masked_trace_question(message: str) -> str:
+    """trace 落库前掩码（验收 #124）：trace_summary.question 是明文账
+    （输入手机号即可回读），复用客服 C11 的规则掩码（shared/pii_mask）。
+    只脱观测账，不改执行输入——规划链路拿到的仍是原文。掩码失败原样
+    落库（观测旁路不阻塞主链）。"""
+    try:
+        from backend.shared.pii_mask import mask_pii
+
+        return mask_pii(message or "")[0]
+    except Exception:  # noqa: BLE001 — 观测旁路软失败
+        return message or ""
+
+
 def _annotate_trace_source(trace, client_run_id: str, source: str) -> None:
     """把前端轮次与来源写进 trace.tags（仅非空时写，避免空 tag 噪音）。
 
@@ -188,7 +201,8 @@ async def travel_plan(request: Request):
         from backend.observability.tracer import trace_collector
         trace_started_at = time.monotonic()
         trace = trace_collector.start(
-            req.message, session_id=conversation_id or req.session_id,
+            _masked_trace_question(req.message),
+            session_id=conversation_id or req.session_id,
             workflow_name="agent",
         )
         _annotate_trace_source(trace, req.client_run_id, req.source)
@@ -359,7 +373,7 @@ async def travel_plan_stream(request: Request):
         started_at = time.monotonic()
         from backend.observability.tracer import trace_collector
         trace = trace_collector.start(
-            req.message,
+            _masked_trace_question(req.message),
             session_id=conversation_id or req.session_id,
             workflow_name="agent",
         )

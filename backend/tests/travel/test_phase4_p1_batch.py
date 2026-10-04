@@ -296,3 +296,43 @@ class TestSourceConflict:
         candidates, _ = m.retrieve_candidates(brief)
         target = next(p for p in candidates if p.poi_id.startswith("amap:"))
         assert "营业时间为占位" in (target.reason or "")
+
+
+class TestRagFreshness:
+    """验收 #94：知识摘录文内年份陈旧标注（#93 快照时间在 SOURCE_STALE）。"""
+
+    def test_old_year_annotated(self):
+        from backend.tools.travel.knowledge import annotate_stale_years
+
+        out = annotate_stale_years(
+            ["鼓山缆车自2019年运营"], today=date(2026, 10, 4))
+        assert out == ["鼓山缆车自2019年运营（文中提及 2019 年，可能较旧）"]
+
+    def test_recent_year_not_annotated(self):
+        from backend.tools.travel.knowledge import annotate_stale_years
+
+        chunks = ["2026年新开通的地铁2号线"]
+        assert annotate_stale_years(chunks, today=date(2026, 10, 4)) == chunks
+
+    def test_no_year_untouched(self):
+        from backend.tools.travel.knowledge import annotate_stale_years
+
+        chunks = ["三坊七巷全天开放"]
+        assert annotate_stale_years(chunks, today=date(2026, 10, 4)) == chunks
+
+
+class TestLogMasking:
+    """验收 #124：旅游 trace 落库 question 掩码（复用 C11 口径）。"""
+
+    def test_masked_trace_question(self):
+        from backend.app.api.routes.travel import _masked_trace_question
+
+        masked = _masked_trace_question("我是张三，13812345678，帮我规划福州")
+        assert "13812345678" not in masked
+        assert "张三" not in masked
+        assert "福州" in masked  # 非 PII 内容不动
+
+    def test_plain_message_untouched(self):
+        from backend.app.api.routes.travel import _masked_trace_question
+
+        assert _masked_trace_question("福州两天") == "福州两天"
