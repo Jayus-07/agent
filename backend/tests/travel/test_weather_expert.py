@@ -202,3 +202,54 @@ def test_node_keys_evidence_when_no_bad_weather(monkeypatch):
     update = weather_expert_node(state)
     assert set(update["evidences"]) == {"weather:测试城"}
     assert isinstance(update["evidences"]["weather:测试城"], dict)
+
+
+# ── 天气分级（2026-10-04）：小雨提示不替换，强天气仍替换 ──────
+
+def test_weather_severity_levels():
+    from backend.travel.services.weather_service import weather_severity
+
+    assert weather_severity("小雨") == "mild"
+    assert weather_severity("小雨转大雨") == "severe"  # 混强词防降级误放
+    assert weather_severity("小雨转雷阵雨") == "severe"
+    assert weather_severity("中雨") == "severe"
+    assert weather_severity("雷阵雨") == "severe"
+    assert weather_severity("小雪") == "severe"  # 雪对出行影响大，不降级
+    assert weather_severity("晴") == "none"
+    assert weather_severity("多云") == "none"
+    assert weather_severity("") == "none"
+    # is_bad_weather 旧语义保持（含 mild）——披露/证据口径不变
+    assert is_bad_weather("小雨")
+
+
+def test_bad_weather_dates_excludes_mild_only_days():
+    from backend.travel.services.weather_service import (
+        bad_weather_dates, mild_weather_dates)
+
+    forecast = {
+        "kind": "future",
+        "days": [
+            {"date": "2026-09-15", "day": {"weather": "小雨"}, "night": {"weather": "阴"}},
+            {"date": "2026-09-16", "day": {"weather": "中雨"}, "night": {"weather": "阴"}},
+            {"date": "2026-09-17", "day": {"weather": "晴"}, "night": {"weather": "小雨"}},
+        ],
+    }
+    assert bad_weather_dates(forecast) == ["2026-09-16"]
+    assert mild_weather_dates(forecast) == ["2026-09-15", "2026-09-17"]
+
+
+def test_mild_day_not_swapped_only_hinted():
+    """小雨日：户外景点保持原样，notes 出带伞提示。"""
+    from backend.travel.services import weather_service as ws
+
+    forecast = {
+        "kind": "future",
+        "days": [
+            {"date": "2026-09-15", "day": {"weather": "小雨"}, "night": {"weather": "阴"}},
+        ],
+    }
+    assert ws.bad_weather_dates(forecast) == []  # 不触发替换
+    itinerary, candidates = _rainy_itinerary()
+    new, actions, _ = ws.plan_weather_swaps(
+        itinerary, candidates, ws.bad_weather_dates(forecast))
+    assert new is None and actions == []

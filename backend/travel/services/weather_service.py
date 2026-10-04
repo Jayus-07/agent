@@ -57,9 +57,29 @@ def _is_indoor(poi) -> bool:
 
 
 def is_bad_weather(weather_text: str) -> bool:
-    """预报文本 → 是否坏天气（纯函数，可单测）。"""
+    """预报文本 → 是否坏天气（纯函数，可单测）。
+
+    含「小雨」（分级后的提示级）——「是否坏天气」与「是否触发替换」是
+    两个口径：披露/证据面用本函数，替换面用 :func:`weather_severity`。
+    """
     text = weather_text or ""
     return any(k in text for k in T.TRAVEL_BAD_WEATHER_KEYWORDS)
+
+
+def weather_severity(weather_text: str) -> str:
+    """预报文本 → 强度分级："none" | "mild" | "severe"（纯函数，可单测）。
+
+    - mild：仅「小雨」——提示带伞，不触发户外→室内替换（小雨出游体验
+      损失有限，替换的扰动反而更大）；
+    - severe：命中坏天气词表、或 mild 文本混有强天气词（"小雨转大雨"
+      必须按大雨处理，防降级误放）。
+    """
+    text = weather_text or ""
+    if any(k in text for k in T.TRAVEL_WEATHER_SEVERE_OVERRIDE_KEYWORDS):
+        return "severe"
+    if any(k in text for k in T.TRAVEL_WEATHER_MILD_KEYWORDS):
+        return "mild"
+    return "severe" if is_bad_weather(text) else "none"
 
 
 def fetch_forecast_evidence(destination: str) -> tuple[dict | None, str, dict | None]:
@@ -128,20 +148,36 @@ def fetch_forecast(destination: str) -> tuple[dict | None, str]:
 
 
 def bad_weather_dates(forecast: dict) -> list[str]:
-    """从预报结构提取坏天气日期列表（"YYYY-MM-DD"）。
+    """从预报结构提取**替换级（severe）**坏天气日期（"YYYY-MM-DD"）。
 
     future 结构：days=[{date, day:{weather,...}, night:{...}}]；
-    白天与夜间任一命中坏天气词即判坏天气日（夜间暴雨同样影响次日体验，
-    且用户多在白天活动，以白天为主、夜间兜底）。
+    白天与夜间任一达到 severe（含「小雨」混强天气词的情形）即判替换日；
+    仅「小雨」的 mild 日不在此列（由 :func:`mild_weather_dates` 承接，
+    分级口径 2026-10-04：小雨提示带伞不替换，替换的扰动比出游损失大）。
     """
     bad: list[str] = []
     for rec in (forecast or {}).get("days", []):
         day_weather = ((rec.get("day") or {}).get("weather") or "")
         night_weather = ((rec.get("night") or {}).get("weather") or "")
-        if is_bad_weather(day_weather) or is_bad_weather(night_weather):
+        if (weather_severity(day_weather) == "severe"
+                or weather_severity(night_weather) == "severe"):
             if rec.get("date"):
                 bad.append(rec["date"])
     return bad
+
+
+def mild_weather_dates(forecast: dict) -> list[str]:
+    """仅「小雨」的日期（提示带伞，不触发替换；白天为主夜间兜底）。"""
+    mild: list[str] = []
+    for rec in (forecast or {}).get("days", []):
+        day_weather = ((rec.get("day") or {}).get("weather") or "")
+        night_weather = ((rec.get("night") or {}).get("weather") or "")
+        day_level = weather_severity(day_weather)
+        night_level = weather_severity(night_weather)
+        if "severe" not in (day_level, night_level) and "mild" in (day_level, night_level):
+            if rec.get("date"):
+                mild.append(rec["date"])
+    return mild
 
 
 def plan_weather_swaps(

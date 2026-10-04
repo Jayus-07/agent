@@ -27,6 +27,7 @@ from backend.travel.agents.research_agent import ResearchAgent
 from backend.travel.services.weather_service import (  # noqa: F401
     bad_weather_dates,
     is_bad_weather,
+    mild_weather_dates,
 )
 
 _research = ResearchAgent()
@@ -113,16 +114,23 @@ def weather_expert_node(state: dict) -> dict:
                 "本次未做天气检查；临近出发时可让我重新评估"
             ]}
         hit_dates = sorted(set(bad_dates) & trip_dates)
+        # 天气分级（2026-10-04）：仅「小雨」的 mild 日提示带伞不替换——
+        # 替换的扰动比小雨对出游的实际损失大；强天气仍走户外→室内替换。
+        mild_hit = sorted(set(mild_weather_dates(forecast)) & trip_dates)
         # state.evidences 的契约是 {fact_id: evidence_dict}（graph_state.Evidences，
         # validator/risk/poi 都按此形态读写）；service 返回的是**单条扁平**
         # evidence dict，直接展开合并会把 fact_id/source 等字符串字段污染进
         # evidences，validator is_stale 遍历 `.get()` 即 AttributeError
         # （实测 2026-10-01：带出发日期的规划 100% 复现）——按 fact_id 分键后再并入
         evidence_map = {evidence["fact_id"]: evidence} if evidence else None
+        mild_note = (
+            f"出行期间预报有小雨（{'、'.join(mild_hit)}），建议携带雨具；行程无需调整"
+            if mild_hit else "")
         if not hit_dates:
             # 预报已参与规划判定（无坏天气），证据照记：SOURCE_STALE 据此
             # 判「规划引用的天气数据是否已过期」
-            return {"status": "success", "data": {"evidences": evidence_map}, "notes": []}
+            return {"status": "success", "data": {"evidences": evidence_map},
+                    "notes": [mild_note] if mild_note else []}
 
         new_itinerary, actions, extra_notes = plan_weather_swaps(
             itinerary, _state.get("candidates", []), hit_dates,
@@ -139,6 +147,8 @@ def weather_expert_node(state: dict) -> dict:
 
         logger.info("[TravelWeather] 坏天气日 %s，替换动作 %d 项",
                     hit_dates, len(actions))
+        if mild_note:
+            notes.append(mild_note)
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(new_itinerary),
                          "weather_actions": actions,

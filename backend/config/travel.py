@@ -168,6 +168,13 @@ TRAVEL_WEATHER_TIMEOUT_S = float(os.getenv("TRAVEL_WEATHER_TIMEOUT_S", "5"))
 TRAVEL_BAD_WEATHER_KEYWORDS: tuple[str, ...] = (
     "雨", "雪", "雷", "雹", "台风", "沙尘", "冻",
 )
+# 天气分级（2026-10-04，用户拍板「小雨暴雨一刀切」粗糙）：仅「小雨」降为
+# 提示级（带伞，不触发户外→室内替换）；文本混有强天气词（"小雨转大雨"）
+# 时仍按替换级，防降级误放。
+TRAVEL_WEATHER_MILD_KEYWORDS: tuple[str, ...] = ("小雨",)
+TRAVEL_WEATHER_SEVERE_OVERRIDE_KEYWORDS: tuple[str, ...] = (
+    "雷", "大雨", "暴雨", "冻",
+)
 
 # A4 美食「品类对味」加权表（2026-10-04）：category 含关键词 → 综合分加成。
 # 默认空 = 不启用（品类的「对味」映射是主观口径，机制先行、词表留给实机
