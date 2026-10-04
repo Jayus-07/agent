@@ -26,40 +26,47 @@ from backend.travel.models.poi import Poi, is_pure_meal, is_seed_source
 from backend.travel.planning import names_match, resolve_must_go
 from backend.travel.services import live_search_service
 
-# 候选池上限：足够覆盖 7 天 × intense 档，同时不让状态字典膨胀
-_CANDIDATE_LIMIT = 60
+# 候选池上限（A2 扩容，2026-10-04：60→120）：搜索面放宽是「用户有得选」
+# 的前提；120 条 Poi dict 约 36KB，checkpoint 体积可控
+_CANDIDATE_LIMIT = 120
 
 # ── 候选池实时源（TRAVEL_POI_SOURCE=live，2026-10-02 种子库下线）────
 # 腾讯位置服务关键词检索：任意城市可用、零维护。诚实口径（与
 # live_map.resolve_place 一致）：坐标可信（tencent:lbs + 观测时间），
 # 停留时长统一 120 分钟占位、门票无来源 → unverified，由 validator/
-# reporter 如实标注；评分无来源 → 0（排序退化为必去优先 + 地理聚类）。
+# reporter 如实标注；评分由 A1 高德源并入。
 
 # 2026-10-03：「美食」不再映射地点检索词——此前偏好带「美食」（口语「想吃」
 # 极易命中）时候选池检索词只剩「美食」，LBS 返回的全是餐厅，行程被挤成
 # 「全是吃的」。行程地点=游玩景点；美食诉求改走高德商户卡 + 知乎美食攻略
 # （experts/poi 旁路），不进行程候选池。
+#
+# A2（2026-10-04）：每标签单词 → 双词两组（各自独立检索，合并去重）——
+# 单个复合词一次检索只吃到一个切面（「公园 风景名胜」搜不到游乐园），
+# 两路互补扩大覆盖；词表外偏好（温泉/citywalk 等）由第四批理解层 LLM
+# 产出检索词承接，标签层不硬扩。
 _LIVE_QUERIES_BY_PREF = {
-    "自然": "公园 风景名胜",
-    "人文": "博物馆 名胜古迹",
-    "亲子": "游乐园 动植物园",
-    "购物": "购物中心 商业街",
-    "夜生活": "夜市",
-    "摄影": "风景区",
+    "自然": ("公园 风景名胜", "度假区 湖"),
+    "人文": ("博物馆 名胜古迹", "历史街区 寺庙"),
+    "亲子": ("游乐园 动植物园", "亲子乐园 科技馆"),
+    "购物": ("购物中心 商业街", "步行街 市集"),
+    "夜生活": ("夜市", "酒吧街 夜景"),
+    "摄影": ("风景区", "观景台 老街"),
 }
 # 无景点类偏好时的兜底检索词：两类覆盖面最宽的通用词（保证候选池永远有景点）
 _LIVE_DEFAULT_QUERIES = ("风景名胜", "博物馆")
-_LIVE_PAGE_SIZE = 10
-_LIVE_MAX_QUERIES = 3
+_LIVE_PAGE_SIZE = 20
+_LIVE_MAX_QUERIES = 4
 
 
 def _live_pref_queries(preferences: list[str]) -> list[str]:
-    """偏好标签 → LBS 检索词（最多 3 类，无景点类偏好用兜底词）。"""
+    """偏好标签 → LBS 检索词（每标签双词，去重后最多 _LIVE_MAX_QUERIES 路；
+    无景点类偏好用兜底词）。"""
     queries: list[str] = []
     for pref in preferences:
-        q = _LIVE_QUERIES_BY_PREF.get(pref)
-        if q and q not in queries:
-            queries.append(q)
+        for q in _LIVE_QUERIES_BY_PREF.get(pref, ()):
+            if q and q not in queries:
+                queries.append(q)
     return queries[:_LIVE_MAX_QUERIES] or list(_LIVE_DEFAULT_QUERIES)
 
 
