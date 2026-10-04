@@ -167,6 +167,23 @@ def slot_filler_node(state: dict) -> dict:
         has_itinerary=bool(state.get("itinerary")),
         has_destination=bool(fresh.destination or (previous and previous.destination)),
     )
+    if intent is None and T.TRAVEL_LLM_INTENT_ENABLED:
+        # D 批理解层（#97/#98/#103）：只在词表盲区补判（铁律：词表能接住的
+        # 永不过 LLM）。LLM 只产 intent 家族，字段抽取仍归词表正则——
+        # 结构上不可能改行程；失败回落 None 走既有链路。
+        from backend.travel.services.llm_intent_service import classify_intent_llm
+
+        llm_intent = classify_intent_llm(
+            message,
+            has_itinerary=bool(state.get("itinerary")),
+            has_destination=bool(fresh.destination or (previous and previous.destination)),
+        )
+        if llm_intent:
+            # TravelIntent 用顶部 import——函数内重复 import 会把它标记成
+            # 局部名，下游 `intent is TravelIntent.MODIFY` 即 UnboundLocalError
+            # （实机踩过：首轮规划直接 failed）
+            intent = TravelIntent(llm_intent)
+            logger.info("[TravelSlotFiller] 词表盲区由 LLM 补判 intent=%s", intent.value)
     brief = _requirement_service.merge(previous, fresh)
     # M3-e 方案档位：fresh.tier 缺省恒为 economy，无法区分「说了经济型」
     # 与「没提」；这里用原话显式判定并在 merge 后覆盖（含降档回 economy）。

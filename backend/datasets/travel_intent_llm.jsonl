@@ -1,0 +1,18 @@
+{"id": "TI-01", "message": "泉州有什么特产？", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "query", "note": "#97 问答不得重排"}
+{"id": "TI-02", "message": "三坊七巷有什么好玩的", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "query", "note": "景点提问不重排"}
+{"id": "TI-03", "message": "第二天是不是有点累？", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "query", "note": "#98 询问不是修改"}
+{"id": "TI-04", "message": "预算800够吗", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "query", "note": "拿现有费用对比，不重排"}
+{"id": "TI-05", "message": "厦门和泉州哪个适合周末", "context": {"has_itinerary": false, "has_destination": false}, "expect_intent_family": "query", "note": "对比问不触发规划"}
+{"id": "TI-06", "message": "去厦门玩3天", "context": {"has_itinerary": false, "has_destination": false}, "expect_intent_family": "plan", "note": "标准规划"}
+{"id": "TI-07", "message": "重新规划杭州2天亲子", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "plan", "note": "带新需求的重规划"}
+{"id": "TI-08", "message": "改成4天，节奏紧凑一点", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "modify", "note": "结构化改单"}
+{"id": "TI-09", "message": "不想去鼓浪屿了", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "modify", "note": "avoid 局部修改"}
+{"id": "TI-10", "message": "加一天去土楼", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "modify", "note": "增量修改"}
+{"id": "TI-11", "message": "订单什么时候发货", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "out_of_scope", "note": "出域引导"}
+{"id": "TI-12", "message": "帮我写个python爬虫", "context": {"has_itinerary": false, "has_destination": false}, "expect_intent_family": "out_of_scope", "note": "非旅游域"}
+{"id": "TI-13", "message": "想泡温泉有推荐吗", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "query", "note": "词表接不住的偏好问询，不重排"}
+{"id": "TI-14", "message": "第二天别太满", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "modify_or_query", "note": "无结构化信号的改单——D批后至少不得误重排（modify 解释或 query 先答）"}
+{"id": "TI-15", "message": "福州2天2人预算2000", "context": {"has_itinerary": false, "has_destination": false}, "expect_intent_family": "plan", "note": "一句话起步"}
+{"id": "TI-16", "message": "找个能看海的咖啡馆", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "query", "note": "理解层典型：先筛先答不重排"}
+{"id": "TI-17", "message": "换掉它", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "modify_or_query", "note": "#100 连续指代——歧义时先澄清，不硬排"}
+{"id": "TI-18", "message": "少一个景点，再找附近闽南菜", "context": {"has_itinerary": true, "has_destination": true}, "expect_intent_family": "modify_or_query", "note": "#99 多意图——拆动作或先答一半，不得整体重排"}

@@ -35,6 +35,11 @@ TRAVEL_MAX_REPAIR_ROUNDS = int(os.getenv("TRAVEL_MAX_REPAIR_ROUNDS", "2"))
 # 且「分段规划」尚未排期 —— 超限按上限裁剪并在 notes 明示（slot_filler 消费）。
 TRAVEL_MAX_DAYS = max(1, int(os.getenv("TRAVEL_MAX_DAYS", "15")))
 
+# 理解层 LLM（D 批，验收 #97/#98/#103）：词表分类器不认识的消息交 LLM
+# 补判 intent 家族。默认关（灰度开关）——开启后 golden 门禁双模式跑。
+TRAVEL_LLM_INTENT_ENABLED = os.getenv("TRAVEL_LLM_INTENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+TRAVEL_LLM_INTENT_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_INTENT_TIMEOUT_MS", "3000")))
+
 # 独立子图运行时。
 # **默认值由 TRAVEL_MAX_STEPS 派生，不能各自硬编码**：一个调度回合要花 2 个
 # 图步（supervisor 自己 + 它跳到的那个节点），所以 recursion_limit 必须显著
