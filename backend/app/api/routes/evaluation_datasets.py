@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.evaluation.dataset.loader import DATASET_DIR
 from backend.shared.logger import logger
 
@@ -387,7 +388,10 @@ async def list_dataset_candidates(status: str | None = Query(default=None)):
 
 
 @router.post("/dataset-candidates/from-trace", status_code=202)
-async def stage_trace_candidate(body: TraceCandidateRequest):
+async def stage_trace_candidate(
+    body: TraceCandidateRequest,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
     """把线上 Trace 转为已脱敏候选，必须再经过人工审核才能生成版本。"""
     trace = _find_trace(body.trace_id)
     if trace is None:
@@ -411,7 +415,11 @@ async def stage_trace_candidate(body: TraceCandidateRequest):
 
 
 @router.post("/dataset-candidates/{candidate_id}/approve", status_code=201)
-async def approve_dataset_candidate(candidate_id: str, body: ReviewCandidateRequest):
+async def approve_dataset_candidate(
+    candidate_id: str,
+    body: ReviewCandidateRequest,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
     candidate = _load_candidates().get(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="评测集候选不存在")
@@ -431,7 +439,11 @@ async def approve_dataset_candidate(candidate_id: str, body: ReviewCandidateRequ
 
 
 @router.post("/dataset-candidates/{candidate_id}/reject")
-async def reject_dataset_candidate(candidate_id: str, body: ReviewCandidateRequest):
+async def reject_dataset_candidate(
+    candidate_id: str,
+    body: ReviewCandidateRequest,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
     candidate = _load_candidates().get(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="评测集候选不存在")

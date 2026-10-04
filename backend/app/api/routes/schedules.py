@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
+from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.orchestration.workflow.scheduler import get_workflow_scheduler
 from backend.orchestration.workflow.registry import get_workflow_registry
 from backend.shared.logger import logger
@@ -80,8 +81,11 @@ async def update_schedule(
 
 
 @router.post("/{workflow_name}/run")
-async def run_schedule_now(workflow_name: str) -> dict:
-    """立即运行指定定时任务（2026-08-11）。
+async def run_schedule_now(
+    workflow_name: str,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict:
+    """立即运行指定定时任务（2026-08-11；评测触发属敏感写操作，仅限管理员）。
 
     - workflow 类型：调 scheduler.run_now
     - weekly_eval：直接调评测脚本

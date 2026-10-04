@@ -11,6 +11,7 @@ DATA_ROOT 路径即可。
 from __future__ import annotations
 
 import json
+import platform
 import re
 import os
 import secrets
@@ -24,6 +25,12 @@ from backend.evaluation.models import EvalReport, EvalResult, ModuleSummary
 # 数据根目录 — 绝对路径，相对于项目根目录
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_ROOT = _PROJECT_ROOT / "data" / "eval_runs"
+
+# run 级生命周期状态文件（RUN-01/07/08）：running 期间落 status.json，
+# 终态由 persist_report 收口；超过阈值仍处 running 的判为 stale
+# （worker 被杀/进程消失不会自动更新文件，靠时间兜底暴露「永远运行中」）。
+_STATUS_FILENAME = "status.json"
+STALE_RUN_AFTER_SECONDS = int(os.getenv("EVAL_RUN_STALE_AFTER_SECONDS", "21600"))  # 默认 6h
 
 
 def get_git_sha() -> str:
@@ -152,6 +159,77 @@ def validate_run_id(run_id: str) -> str:
     return run_id
 
 
+def mark_run_status(
+    run_id: str,
+    status: str,
+    *,
+    error: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """写入 run 生命周期状态文件（running / completed / failed）。
+
+    running 由 service 在 run 开始时写入（含 started_at/pid/hostname）；
+    终态由 persist_report（completed）或 evaluate 异常路径（failed）收口。
+    软失败：状态文件写不进去只打日志，不影响评测主流程。
+    """
+    if status not in {"running", "completed", "failed"}:
+        raise ValueError(f"非法 run 状态: {status!r}")
+    try:
+        run_dir = DATA_ROOT / validate_run_id(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        path = run_dir / _STATUS_FILENAME
+        now = datetime.now().isoformat()
+        data: dict[str, Any] = {}
+        if status == "running":
+            data = {
+                "status": status,
+                "started_at": now,
+                "pid": os.getpid(),
+                "hostname": platform.node(),
+            }
+        else:
+            started_at = ""
+            try:
+                started_at = json.loads(path.read_text(encoding="utf-8")).get("started_at", "")
+            except (OSError, json.JSONDecodeError):
+                pass
+            data = {"status": status, "started_at": started_at, "finished_at": now}
+            if error:
+                data["error"] = error[:2000]
+        if extra:
+            data.update(extra)
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    except OSError as e:
+        print(f"[storage] run 状态文件写入失败（不影响评测）: {e}")
+
+
+def read_run_status(run_id: str) -> dict[str, Any] | None:
+    """读取 run 状态文件；running 且超龄的补算 stale 标记（RUN-07/08）。
+
+    返回 None = 从未写过状态文件（历史 run / 状态文件丢失）。
+    """
+    path = DATA_ROOT / run_id / _STATUS_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("status") == "running":
+        try:
+            started = datetime.fromisoformat(str(data.get("started_at", "")))
+            age = (datetime.now() - started).total_seconds()
+        except (TypeError, ValueError):
+            age = -1.0
+        data["age_seconds"] = int(age) if age >= 0 else None
+        data["stale"] = bool(age >= 0 and age > STALE_RUN_AFTER_SECONDS)
+    return data
+
+
 def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
     """持久化 EvalReport 到文件系统。
 
@@ -205,6 +283,8 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
         ),
         "prompt_versions_yaml_source": collect_prompt_versions(),
         "env": collect_env_info(),
+        # RAGAS-01/02：本次运行的评估器模式（self / self+ragas），随快照落盘
+        "evaluator_mode": report.metadata.get("evaluator_mode", ""),
         "run_at": datetime.now().isoformat(),
     }
     (run_dir / "meta.json").write_text(
@@ -219,6 +299,9 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
         record_run(report, run_id, meta)
     except Exception as e:  # noqa: BLE001 — 台账软失败
         print(f"[storage] eval_run_records 台账写入失败（不影响文件）: {e}")
+
+    # 5. 生命周期终态收口（RUN-01/10）：报告与台账均已落盘，running → completed
+    mark_run_status(run_id, "completed")
 
     print(f"[storage] 报告已持久化到: {run_dir}")
     return run_dir

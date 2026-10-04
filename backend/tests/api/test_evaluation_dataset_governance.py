@@ -61,6 +61,13 @@ def governance(monkeypatch, tmp_path):
 
     app = FastAPI()
     app.include_router(module.router, prefix="/api")
+    # P0-01：候选审核端点已挂 require_admin_user；单测聚焦审核业务规则，
+    # 以固定管理员身份覆写鉴权依赖（鉴权本体由 deps 层自己的测试覆盖）
+    from backend.app.api.deps import OperatorIdentity, require_admin_user
+
+    app.dependency_overrides[require_admin_user] = lambda: OperatorIdentity(
+        role="admin", actor="user:test-admin",
+    )
     return module, TestClient(app)
 
 

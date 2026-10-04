@@ -514,7 +514,9 @@ def compute_performance_stats(results: list[Any]) -> dict[str, Any]:
     # 原按 DashScope qwen-plus 价格估算本地 token，方向性错误（本地高估、
     # 云端 RAGAS 调用反而没统计到）。云端成本看 token_summary（JSONL 按
     # run 时间窗过滤后的统计），此处仅保留本地推理量供参考。
-    estimated_cost = 0.0
+    # COST-09：无真实计价配置时置 None——展示层必须显示 unavailable，
+    # 禁止用 ¥0 伪装成「免费/已核算」。
+    estimated_cost = None
 
     return {
         "p50_ms": p50, "p95_ms": p95, "avg_ms": round(avg, 1),

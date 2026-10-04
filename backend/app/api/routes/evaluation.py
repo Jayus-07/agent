@@ -6,12 +6,13 @@ from typing import Any
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.evaluation.curator import append_case, list_cases
 from backend.evaluation.models import ModuleKind
-from backend.evaluation.storage import list_runs, load_report
+from backend.evaluation.storage import list_runs, load_report, read_run_status
 from backend.evaluation.trace_bridge import build_test_case_from_trace
 from backend.evaluation.weekly import run_weekly_rag_eval
 from backend.observability.tracer import trace_collector
@@ -43,8 +44,11 @@ class AppendResultDTO(BaseModel):
 
 
 @router.post("/cases/from-trace", response_model=AppendResultDTO)
-async def create_case_from_trace(req: FromTraceRequest):
-    """从线上 trace 创建评测用例。"""
+async def create_case_from_trace(
+    req: FromTraceRequest,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
+    """从线上 trace 创建评测用例（P0-01：写操作仅限管理员）。"""
     trace = _find_trace(req.trace_id)
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace not found: {req.trace_id}")
@@ -107,8 +111,11 @@ class RunEvalResponse(BaseModel):
 
 
 @router.post("/run", response_model=RunEvalResponse)
-async def run_evaluation(module: ModuleKind = Query("rag", description="评测模块")):
-    """运行评测（当前仅支持 rag 模块离线评测）。"""
+async def run_evaluation(
+    module: ModuleKind = Query("rag", description="评测模块"),
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
+    """运行评测（当前仅支持 rag 模块离线评测；P0-01：执行仅限管理员）。"""
     if module != "rag":
         raise HTTPException(status_code=400, detail="当前仅支持 rag 模块评测")
     try:
@@ -131,6 +138,33 @@ class RunSummary(BaseModel):
     mrr: float = 0.0
     ndcg_at_10: float = 0.0
     timestamp: str = ""
+    # UI-01/02/04：运行状态（running/completed/failed + stale）、评测集溯源、
+    # 触发来源与评估器模式（RAGAS 徽标数据源）
+    status: str = ""
+    stale: bool = False
+    suite: str = ""
+    dataset_version: str = ""
+    trigger: str = ""
+    triggered_by: str = ""
+    evaluator_mode: str = ""
+
+
+def _run_status_fields(run_id: str, meta: dict) -> dict:
+    """从状态文件与 meta 提取列表页扩展字段（软失败，缺省留空）。"""
+    provenance = meta.get("eval_provenance") or {}
+    dataset_version = meta.get("dataset_version")
+    if not isinstance(dataset_version, str):
+        dataset_version = str(provenance.get("dataset_version", "") or "")
+    status_info = read_run_status(run_id) or {}
+    return {
+        "status": str(status_info.get("status", "") or ""),
+        "stale": bool(status_info.get("stale", False)),
+        "suite": str(provenance.get("suite", "") or ""),
+        "dataset_version": dataset_version,
+        "trigger": str((meta.get("env") or {}).get("trigger", "") or ""),
+        "triggered_by": str((meta.get("env") or {}).get("triggered_by", "") or ""),
+        "evaluator_mode": str(meta.get("evaluator_mode", "") or ""),
+    }
 
 
 @router.get("/runs", response_model=list[RunSummary])
@@ -154,9 +188,10 @@ async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返�
                 mrr=rag.metrics.get("mrr", 0.0) if rag else 0.0,
                 ndcg_at_10=rag.metrics.get("ndcg@10", 0.0) if rag else 0.0,
                 timestamp=report.timestamp,
+                **_run_status_fields(run_id, _meta),
             ))
         except Exception:
-            summaries.append(RunSummary(run_id=run_id))
+            summaries.append(RunSummary(run_id=run_id, **_run_status_fields(run_id, {})))
     return summaries
 
 
@@ -209,6 +244,7 @@ async def get_eval_run(run_id: str):
             "run_id": run_id,
             "report": report.model_dump(mode="json"),
             "meta": meta,
+            "run_status": read_run_status(run_id),
         }
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")

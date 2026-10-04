@@ -373,10 +373,14 @@ def write_markdown_report(
             lines.append(f"| 总输出 Token | {perf['total_completion_tokens']:,} |")
             lines.append(f"| 总 Token | {perf['total_tokens']:,} |")
             lines.append(f"| 有 Token 数据的用例 | {perf['cases_with_tokens']}/{len(report.results)} |")
-            lines.append(f"| 估算成本 (API) | ¥{perf['estimated_cost_cny']:.4f} |")
-            lines.append("")
-            lines.append("_成本基于 DashScope qwen-plus 参考价：输入 ¥0.004/1K tokens，输出 ¥0.012/1K tokens。_")
-            lines.append("")
+            if perf.get("estimated_cost_cny") is None:
+                lines.append("| 估算成本 (API) | unavailable（本运行未配置计价，货币成本看 token_summary） |")
+                lines.append("")
+            else:
+                lines.append(f"| 估算成本 (API) | ¥{perf['estimated_cost_cny']:.4f} |")
+                lines.append("")
+                lines.append("_成本基于 DashScope qwen-plus 参考价：输入 ¥0.004/1K tokens，输出 ¥0.012/1K tokens。_")
+                lines.append("")
     else:
         lines.append("_无性能数据_")
         lines.append("")

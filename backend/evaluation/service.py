@@ -220,6 +220,76 @@ def _run_module(
         return _error_results(cases, module, str(e))
 
 
+def _evaluator_mode(config: EvalConfig) -> str:
+    """RAGAS-01/02：评估器模式标记，随 report/metadata 与 meta.json 落盘。
+
+    自研指标恒执行；RAGAS 批量默认开启（rag.py 按 no_ragas 关闭），
+    因此只有 self（显式 --no-ragas）与 self+ragas（默认/显式 --ragas）两态。
+    """
+    if config.no_ragas:
+        return "self"
+    return "self+ragas"
+
+
+def _build_buckets(
+    cases: list[TestCase], results: list[EvalResult],
+) -> dict[str, Any]:
+    """SELF-06：按 domain / difficulty / query_type 分桶统计通过情况。
+
+    元数据缺失的用例归入 unknown 桶——不臆造分组，也不虚构 100%。
+    """
+    meta_by_case = {c.id: (c.metadata or {}) for c in cases}
+    key_map = {
+        "by_domain": "domain",
+        "by_difficulty": "difficulty",
+        "by_query_type": "query_type",
+    }
+    buckets: dict[str, dict[str, dict[str, Any]]] = {name: {} for name in key_map}
+    for r in results:
+        meta = meta_by_case.get(r.case_id, {})
+        for bucket_name, meta_key in key_map.items():
+            value = str(meta.get(meta_key) or "unknown")
+            slot = buckets[bucket_name].setdefault(
+                value,
+                {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0, "pass_rate": 0.0},
+            )
+            slot["total"] += 1
+            if r.status == "pass":
+                slot["passed"] += 1
+            elif r.status == "fail":
+                slot["failed"] += 1
+            elif r.status == "error":
+                slot["errors"] += 1
+            else:
+                slot["skipped"] += 1
+    for bucket in buckets.values():
+        for slot in bucket.values():
+            if slot["total"]:
+                slot["pass_rate"] = round(slot["passed"] / slot["total"], 4)
+    return buckets
+
+
+def _ragas_sample_stats(results: list[EvalResult]) -> dict[str, int]:
+    """RAGAS-10：RAGAS 批量样本口径——valid=至少产出一项 ragas 分值。
+
+    进了批量但没拿到分值（Judge 失败/超时/字段缺失）计 invalid，不得把
+    invalid 混进 valid 凑通过率。
+    """
+    valid = invalid = 0
+    for r in results:
+        metrics = r.metrics or {}
+        has_value = any(
+            k.startswith("ragas_") and k != "ragas_reason" and isinstance(v, (int, float))
+            for k, v in metrics.items()
+        )
+        has_attempt = any(k.startswith("ragas_") for k in metrics)
+        if has_value:
+            valid += 1
+        elif has_attempt:
+            invalid += 1
+    return {"valid": valid, "invalid": invalid}
+
+
 class EvaluationService:
     """评估服务 — 单一核心入口。"""
 
@@ -251,7 +321,7 @@ class EvaluationService:
     def _evaluate(self, config: EvalConfig) -> EvalReport:
         """执行评估主流程。"""
         import time as _time
-        from backend.evaluation.storage import make_run_id
+        from backend.evaluation.storage import make_run_id, mark_run_status
 
         self._ensure_runners()
         reset_token_usage()
@@ -260,7 +330,22 @@ class EvaluationService:
         run_id = config.run_id or make_run_id()
         # token 统计时间窗起点（JSONL 过滤用，防止跨 run 累计污染）
         run_started_ts = _time.time()
+        # RUN-01：运行即登记 running（断点续跑同 run_id 刷新 started_at）；
+        # 进程被杀不会收口终态，由 read_run_status 的 stale 判定兜底（RUN-07/08）
+        mark_run_status(run_id, "running")
+        try:
+            return self._evaluate_cases(config, run_id, run_started_ts)
+        except Exception as exc:
+            mark_run_status(run_id, "failed", error=str(exc))
+            raise
 
+    def _evaluate_cases(
+        self,
+        config: EvalConfig,
+        run_id: str,
+        run_started_ts: float,
+    ) -> EvalReport:
+        """执行各模块评估并装配报告（生命周期状态由 _evaluate 管理）。"""
         from backend.evaluation.dataset import load_dataset, load_dataset_file
 
         live = config.live or config.judge
@@ -291,6 +376,9 @@ class EvaluationService:
                     "dataset_version": dataset_version,
                     "selection": config.selection,
                     "run_id": run_id,
+                    "evaluator_mode": _evaluator_mode(config),
+                    "buckets": _build_buckets(cases, results),
+                    "ragas_samples": _ragas_sample_stats(results),
                 },
             )
             return _attach_provenance(config, report)
@@ -338,6 +426,9 @@ class EvaluationService:
             total_score = round(score, 4)
 
         _inject_token_totals(summaries, run_started_ts)
+        report_metadata["evaluator_mode"] = _evaluator_mode(config)
+        report_metadata["buckets"] = _build_buckets(all_cases, all_results)
+        report_metadata["ragas_samples"] = _ragas_sample_stats(all_results)
         report = EvalReport(
             module=config.module,
             mode="live" if live else "offline",
