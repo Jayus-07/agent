@@ -228,6 +228,24 @@ def start_prompt_hot_reload_listener() -> None:
         logger.warning(f"[Startup] PromptHotReload listener start failed: {exc}")
 
 
+@app.on_event("startup")
+def start_faq_gauge_refresher() -> None:
+    """G2/G3 告警数据源修复（2026-10-04）：app 进程周期刷新日报 FAQ gauge。
+
+    此前 gauge 只随日报执行（beat/worker）写值，Prometheus 仅抓本进程
+    :8000 —— 承接占比/层故障两条告警数据源恒空。daemon 线程从
+    qa_daily_reports 拉最新 faq 段刷 gauge，旁路软失败。
+    """
+    try:
+        from backend.customer_service.qa_report import (
+            start_faq_gauge_refresher as _start,
+        )
+
+        _start()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Startup] FAQ gauge refresher start failed: {exc}")
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台初始化 RAG Pipeline（避免首次上传等 13 秒）
 # ═══════════════════════════════════════════════════

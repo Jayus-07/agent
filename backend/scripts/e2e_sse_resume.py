@@ -247,10 +247,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--password", required=True)
     ap.add_argument("--iterations", type=int, default=100)
-    ap.add_argument("--other-user", default="e2e_travel")
+    ap.add_argument("--other-user", default="e2e_cs_t6")
+    ap.add_argument("--user", default="e2e_cs_t7")
     args = ap.parse_args()
 
-    token = login("e2e_domain", args.password)
+    token = login(args.user, args.password)
     try:
         other_token = login(args.other_user, args.password)
     except Exception:

@@ -339,3 +339,61 @@ def run_daily_report(report_date: date | None = None) -> dict[str, Any]:
     from backend.customer_service._db_loop import run_sync
 
     return run_sync(generate_daily_report(report_date))
+
+
+# =============================================
+# G2/G3 告警数据源修复（2026-10-04 实机验收发现）：日报 gauge 的 app 进程
+# 周期刷新。此前 gauge 只随日报执行（Celery beat/worker 进程）写值，而
+# Prometheus 仅抓 app:8000 —— CsFaqHitRatioLow / CsFaqLayerFailureSpike
+# 两条告警的数据源在 app 进程恒为空，规则加载后永不触发。本刷新器由 app
+# startup 拉起（daemon 线程），从 customer_service.qa_daily_reports 拉最新
+# 日报的 metrics.faq 段刷 gauge；日报批处理进程照旧直写（multiproc=max
+# 聚合取两边最大值，语义一致）。
+# =============================================
+_GAUGE_REFRESH_INTERVAL_S = 600.0
+
+
+def refresh_faq_gauges_from_store() -> dict | None:
+    """从日报表拉最新 faq 段刷 gauge（app 进程告警数据源）。软失败。"""
+    try:
+        from backend.customer_service._db_loop import run_sync
+
+        async def _pull():
+            from sqlalchemy import text
+            from backend.memory.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as db:
+                row = await db.execute(text(
+                    "SELECT metrics->'faq' FROM customer_service.qa_daily_reports "
+                    "WHERE metrics ? 'faq' ORDER BY report_date DESC LIMIT 1"))
+                r = row.first()
+                return r[0] if r else None
+
+        faq = run_sync(_pull())
+        if not faq:
+            return None
+        ratio = faq.get("hit_ratio_7d")
+        published = faq.get("published")
+        if ratio is not None:
+            cs_qa_daily_faq_hit_ratio.set(float(ratio))
+        if published is not None:
+            cs_qa_daily_faq_published.set(float(published))
+        return {"hit_ratio": ratio, "published": published}
+    except Exception as exc:  # noqa: BLE001 - 旁路刷新失败不影响主链
+        logger.warning("[QAReport] faq gauge 刷新失败（忽略）: %s", exc)
+        return None
+
+
+def start_faq_gauge_refresher(interval_s: float = _GAUGE_REFRESH_INTERVAL_S) -> None:
+    """启动 app 进程内的 gauge 周期刷新 daemon 线程（幂等）。"""
+    import threading
+
+    def _loop():
+        import time as _time
+        while True:
+            refresh_faq_gauges_from_store()
+            _time.sleep(interval_s)
+
+    t = threading.Thread(target=_loop, name="faq-gauge-refresher", daemon=True)
+    t.start()
+    logger.info("[QAReport] faq gauge refresher started (interval=%ss)",
+                interval_s)
