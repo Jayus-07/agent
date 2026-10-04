@@ -214,7 +214,16 @@ class TestCsRedirectMain:
 
     无客服规则信号 + 旅游/选品强信号 → 不进 CS，放行 prefilter 自然路由；
     混合信号（客服规则命中）仍守 CS 优先。
+    T5 反转（2026-10-04 对话体验改造）后该通道仅在 CS_WINDOW_STANDALONE=false
+    （回滚态）生效——类级 fixture 显式关闭开关，锁定回滚行为不漂移；
+    独立窗口默认行为见 TestCsWindowStandalone。
     """
+
+    @pytest.fixture(autouse=True)
+    def _standalone_off(self, monkeypatch):
+        """回滚态前置：关闭独立窗口开关，恢复 redirect_main 旧转出行为。"""
+        import backend.config.customer_service as cs_config
+        monkeypatch.setattr(cs_config, "CS_WINDOW_STANDALONE", False)
 
     @pytest.fixture(autouse=True)
     def _no_cs_router_cache(self):
@@ -338,3 +347,95 @@ class TestCsRedirectMain:
         })
         assert out.get("route_mode") == "customer_service"
         assert called["n"] == 0  # 开关关闭时 LLM 零调用
+
+
+class TestCsWindowStandalone:
+    """T5 独立窗口反转（2026-10-04 对话体验改造，任务卡 T5）。
+
+    CS_WINDOW_STANDALONE=true（config 默认）时锁域消息不再转出主路由：
+    旅游/选品强信号问法放行进 CS 域图，由域内分诊直出出口接住
+    （supervisor 出域固定话术/寒暄）。全局入口（不锁域）语义不变。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _standalone_on(self, monkeypatch):
+        """显式置 true：config 默认即 true，此处防环境变量漂移影响判定。"""
+        import backend.config.customer_service as cs_config
+        monkeypatch.setattr(cs_config, "CS_WINDOW_STANDALONE", True)
+
+    @pytest.fixture(autouse=True)
+    def _no_cs_router_cache(self):
+        from backend.customer_service.router import cs_router as cs_router_mod
+        original_get = cs_router_mod._cs_cache.get_json
+        original_set = cs_router_mod._cs_cache.set_json
+        cs_router_mod._cs_cache.get_json = lambda key: None
+        cs_router_mod._cs_cache.set_json = lambda key, value: None
+        yield
+        cs_router_mod._cs_cache.get_json = original_get
+        cs_router_mod._cs_cache.set_json = original_set
+
+    def test_travel_query_stays_in_cs_window(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """独立窗口内问旅游（无客服词）：不转出，放行进 CS 域图。"""
+        out = rn.router_node({
+            "question": "下周去大阪旅游，帮我做一份攻略",
+            "session_id": "s-standalone-travel",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+
+    def test_funnel_query_stays_in_cs_window(
+        self, fake_detector, cs_on, monkeypatch,
+    ):
+        """独立窗口内问选品：不转出，放行进 CS 域图。"""
+        import backend.config.selection_funnel as sf
+        monkeypatch.setattr(sf, "SELECTION_FUNNEL_ENABLED", True)
+        out = rn.router_node({
+            "question": "给宠物零食做一次智能选品",
+            "session_id": "s-standalone-funnel",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+
+    def test_standalone_zero_llm_arbitration(
+        self, fake_detector, travel_on, cs_on, monkeypatch,
+    ):
+        """独立窗口下 redirect 链整体短路：LLM 仲裁零调用（V1 TTFT 口径）。"""
+        from backend.customer_service.analyzer import non_cs_detector as ncd
+        called = {"n": 0}
+
+        def _spy(q):
+            called["n"] += 1
+            return ncd.NonCSDetection(is_non_cs=True, confidence=0.9)
+        monkeypatch.setattr(ncd, "detect_non_cs", _spy)
+
+        out = rn.router_node({
+            "question": "下周去大阪旅游，帮我做一份攻略",
+            "session_id": "s-standalone-llm",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+        assert called["n"] == 0
+
+    def test_mixed_cs_signal_still_locked(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """混合信号守恒：独立窗口下客服规则命中的问法照旧走 CS prefilter。"""
+        fake_detector._rule_channel.return_value = (["AFTER_SALES"], 0.33)
+        out = rn.router_node({
+            "question": "订单里的行程单怎么退款",
+            "session_id": "s-standalone-mixed",
+            "domain_hint": "customer_service",
+        })
+        assert out.get("route_mode") == "customer_service"
+
+    def test_global_entry_travel_routing_unchanged(
+        self, fake_detector, travel_on, cs_on,
+    ):
+        """全局入口不受反转影响：不锁域流量照旧进旅游域。"""
+        out = rn.router_node({
+            "question": "下周去大阪旅游，帮我做一份攻略",
+            "session_id": "s-standalone-global",
+        })
+        assert out.get("route_mode") == "travel"

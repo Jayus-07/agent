@@ -31,7 +31,7 @@ import re
 import time
 from pathlib import Path
 
-VOCAB_VERSION = "2026-10-04.1"
+VOCAB_VERSION = "2026-10-04.3"
 
 # =============================================
 # 出域与寒暄词表（2026-10-04 对话体验改造 T4）
@@ -53,11 +53,27 @@ OUT_OF_SCOPE_PATTERNS = [
     ]
 ]
 
+# 出域/寒暄豁免信号（顺序铁律的精确口径，2026-10-04.2）：
+# 出域词表含"行程"等与业务交叉的话题词（"订单里的行程单丢了"），而
+# KNOWLEDGE 域通用疑问词（怎么/如何/什么）几乎出现在一切疑问句里——
+# 用全域规则命中数做豁免会让出域出口失效（"今天天气怎么样"含"怎么"）。
+# 故铁律判定收窄为**业务域词命中**：订单/售后/物流/账号/交易/客服六面
+# 任一命中即留守业务漏斗（宁可尝试不可错拒）；通用疑问词不构成豁免。
+CS_SIGNAL_EXEMPT_PATTERNS = [
+    re.compile(p) for p in [
+        r"订单|下单|购买记录|商品|宝贝|店铺|商家|卖家|买家|客服|投诉|举报|人工",
+        r"退款|退货|退换|换货|售后|维修|赔偿|补偿|退货地址",
+        r"物流|快递|发货|收货|签收|配送|运费|包裹|改地址|退",
+        r"账号|密码|登录|注册|实名|会员",
+        r"支付|付款|发票|优惠券|积分|余额|分期|货到付款",
+    ]
+]
+
 CHITCHAT_PATTERNS = [
     re.compile(p) for p in [
         r"^(你好|您好|hi|hello|嗨|哈喽)[~～!！。.？?]?$",
         r"^(在吗|在么|有人吗|在不在)[~～!！。.？?]?$",
-        r"^(谢谢|多谢|感谢|辛苦了|麻烦了|辛苦啦)[你们大家啦呀哦哈]?[~～!！。.]?$",
+        r"^(谢谢|多谢|感谢|辛苦了|麻烦了|辛苦啦)[你们大家啦呀哦哈]{0,2}[~～!！。.]?$",
         r"^(好的|好嘞|嗯+|哦+|噢|ok|OK|了解|收到|好的收到|好的呢|收到啦)[~～!！。.，,]?$",
         r"^(早上|中午|下午|晚上)好[~～!！。.]?$",
         r"你是(谁|什么)|(你|您)是(机器人|人工智能|真人|AI|ai)吗",
@@ -86,6 +102,14 @@ def match_out_of_scope(text: str) -> bool:
 def match_chitchat(text: str) -> bool:
     """寒暄命中判定：调用方必须先确认无客服域信号（顺序铁律见段注释）。"""
     return any(p.search(text or "") for p in CHITCHAT_PATTERNS)
+
+
+def match_cs_signal_exempt(text: str) -> bool:
+    """业务域词豁免判定（顺序铁律精确口径，见段注释）。
+
+    True = 消息带业务域词，出域/寒暄出口不得截胡，落业务漏斗。
+    """
+    return any(p.search(text or "") for p in CS_SIGNAL_EXEMPT_PATTERNS)
 
 # override 文件默认落位（相对 backend/；gitignored，不上库）
 _DEFAULT_OVERRIDE_FILE = Path(__file__).resolve().parent.parent / "config" / "cs_vocab_override.json"

@@ -21,10 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from backend.config.customer_service import (
-    CS_CHAT_FALLBACK_ENABLED,
-    CS_CHAT_LLM_TIMEOUT_MS,
-)
+from backend.config.customer_service import CS_CHAT_LLM_TIMEOUT_MS
 from backend.shared.logger import logger
 
 # 人设 system prompt：口语化、简短、先接情绪；红线=不编造/不承诺/不出域
@@ -50,6 +47,9 @@ class ChatFallbackResult:
 
 
 def chat_fallback_enabled() -> bool:
+    # 函数内 import：读 config 模块属性而非顶层值拷贝——monkeypatch 测试
+    # 与 env 热改重启进程生效两态都正确（与 CS_WINDOW_STANDALONE 同约定）
+    from backend.config.customer_service import CS_CHAT_FALLBACK_ENABLED
     return CS_CHAT_FALLBACK_ENABLED
 
 
@@ -58,6 +58,7 @@ def run_chat_fallback(
     history: list[tuple[str, str]] | None = None,
 ) -> ChatFallbackResult | None:
     """非业务对话生成。返回 None = 开关关闭（调用方落回旧漏斗路径）。"""
+    from backend.config.customer_service import CS_CHAT_FALLBACK_ENABLED
     if not CS_CHAT_FALLBACK_ENABLED:
         return None
     question = (question or "").strip()
@@ -76,7 +77,10 @@ def run_chat_fallback(
         )
 
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm import get_llm
+        # 必须经 llm 代理调用（G7/V3 记账口径）：get_llm() 返回裸实例，
+        # 绕过 proxy 的限流/韧性链/llm_usage 记账——实机验收抓到寒暄调用
+        # 零记账后改走代理（与全平台计量同一路径）。
+        from backend.infra.llm import llm as llm_proxy
 
         messages: list = [SystemMessage(content=PERSONA_SYSTEM_PROMPT)]
         for role, text in (history or [])[-4:]:  # 最多带最近 4 轮上下文
@@ -86,7 +90,7 @@ def run_chat_fallback(
 
         timeout_s = CS_CHAT_LLM_TIMEOUT_MS / 1000.0
         response = sync_call_with_timeout(
-            get_llm().invoke, timeout_s, messages,
+            llm_proxy.invoke, timeout_s, messages,
         )
         reply = str(response.content).strip()[:_MAX_REPLY_CHARS]
         if not reply:

@@ -16,7 +16,9 @@ class TestSingleSource:
     def test_version_present(self):
         # 2026-10-03：C7/C8/C10 门禁基线词表版本（变更须升版本，vocab_gate 守护）
         # 2026-10-04.1：对话体验改造（出域/寒暄词表段，T4）
-        assert vocab.VOCAB_VERSION == "2026-10-04.1"
+        # 2026-10-04.2：T6 出域豁免信号词表（业务域词精确口径，防通用疑问词误豁免）
+        # 2026-10-04.3：寒暄谢谢组后缀放宽 {0,2}（"谢谢你啦"实测漏判修正）
+        assert vocab.VOCAB_VERSION == "2026-10-04.3"
 
     def test_domain_rules_six_domains(self):
         assert set(vocab.CS_DOMAIN_KEYWORDS) == {

@@ -9,16 +9,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import backend.config.customer_service as cs_config
 from backend.customer_service import chat_fallback as cf
 
 
 class TestChatFallback:
     def test_disabled_returns_none(self, monkeypatch):
-        monkeypatch.setattr(cf, "CS_CHAT_FALLBACK_ENABLED", False)
+        monkeypatch.setattr(cs_config, "CS_CHAT_FALLBACK_ENABLED", False)
         assert cf.run_chat_fallback("你好") is None
 
     def test_empty_question_fixed_reply(self, monkeypatch):
-        monkeypatch.setattr(cf, "CS_CHAT_FALLBACK_ENABLED", True)
+        monkeypatch.setattr(cs_config, "CS_CHAT_FALLBACK_ENABLED", True)
         r = cf.run_chat_fallback("   ")
         assert r is not None and r.reply and r.error is None
 
@@ -33,9 +34,9 @@ class TestChatFallback:
         class _FakeLLM:
             invoke = staticmethod(_fake_invoke)
 
-        monkeypatch.setattr(cf, "CS_CHAT_FALLBACK_ENABLED", True)
-        # get_llm() 作为 sync_call_with_timeout 的第一个实参先求值，必须一起 mock
-        monkeypatch.setattr("backend.infra.llm.get_llm", lambda: _FakeLLM())
+        monkeypatch.setattr(cs_config, "CS_CHAT_FALLBACK_ENABLED", True)
+        # llm 代理对象作为 sync_call_with_timeout 的第一个实参先求值，必须一起 mock
+        monkeypatch.setattr("backend.infra.llm.llm", _FakeLLM())
 
         r = cf.run_chat_fallback("我手机号是13800001111，帮我看看")
         assert r.pii_masked is True
@@ -50,7 +51,7 @@ class TestChatFallback:
         def _boom(fn, timeout, msgs):
             raise RuntimeError("LLM 挂了")
 
-        monkeypatch.setattr(cf, "CS_CHAT_FALLBACK_ENABLED", True)
+        monkeypatch.setattr(cs_config, "CS_CHAT_FALLBACK_ENABLED", True)
         monkeypatch.setattr("backend.infra.async_utils.sync_call_with_timeout", _boom)
         r = cf.run_chat_fallback("在吗")
         assert r.reply == cf._FALLBACK_REPLY  # 固定友好话术，不报错给用户

@@ -44,6 +44,12 @@ def _assemble_answer(
     """按优先级组装最终回复"""
     next_action = decision.get("next_action", "")
 
+    # T6（2026-10-04 对话体验改造）：分诊直出话术（出域固定话术/寒暄人设
+    # 回复）——FINISH 终态且 supervisor_decision 带 direct_reply 时直出，
+    # 不与 handoff/pending 竞争（那两类 action 不携带 direct_reply）。
+    if next_action == "finish" and decision.get("direct_reply"):
+        return decision["direct_reply"]
+
     if next_action == "handoff" and handoff_state != "ai_active":
         return _handoff_intercept_reply(state)
 
