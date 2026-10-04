@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -25,6 +26,10 @@ class CSKnowledgeResult:
     kb_ids: list[str] = field(default_factory=list)
     suffix: str = ""
     error: Optional[str] = None
+    # C4 FAQ 双轨标记（2026-10-04）：True=FAQ 精准层直返，未进 RAG/LLM
+    faq_hit: bool = False
+    faq_id: Optional[int] = None
+    latency_ms: int = 0
 
 
 class CSKnowledgeService:
@@ -55,6 +60,32 @@ class CSKnowledgeService:
         # 显式 demo 命名空间按会话隔离
         if not user_id:
             user_id = f"cs-anon:{session_id}"
+
+        # C3/C4 FAQ 双轨（2026-10-04）：精准命中直返，不进 RAG/LLM——
+        # TTFT 从秒级降到百毫级、成本≈0；未命中原样落回既有 RAG 链。
+        faq_t0 = time.monotonic()
+        try:
+            from backend.customer_service.faq import get_faq_store
+            faq = get_faq_store().match(question)
+        except Exception as faq_err:
+            logger.warning(f"[CSKnowledge] FAQ 层故障（降级走 RAG 链）: {faq_err}")
+            faq = None
+        if faq is not None:
+            latency_ms = int((time.monotonic() - faq_t0) * 1000)
+            logger.info(
+                "[CSKnowledge] FAQ 命中: faq_id=%s score=%.2f by=%s latency=%dms question=%s...",
+                faq.faq_id, faq.score, faq.matched_by, latency_ms, question[:60],
+            )
+            return CSKnowledgeResult(
+                answer=faq.answer,
+                decision=Decision.ANSWER,
+                confidence=round(max(faq.score, 0.9), 2),
+                kb_ids=kb_ids,
+                suffix="",
+                faq_hit=True,
+                faq_id=faq.faq_id,
+                latency_ms=latency_ms,
+            )
 
         try:
             # 必须用单例：RAGPipeline.__init__ 会全量加载文档/重建 BM25/加载向量库，

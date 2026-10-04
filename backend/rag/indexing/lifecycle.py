@@ -142,7 +142,8 @@ def default_audit_conn():
     （防连接泄漏打满 max_connections，同 doc_registry_pg 纪律）。
     """
     from backend.config.database import DOC_REGISTRY_PG_CONFIG
-    conn = psycopg2.connect(**DOC_REGISTRY_PG_CONFIG)
+    # connect_timeout：vpnkit 回环偶发 connect 挂死兜底（同 faq_conn）
+    conn = psycopg2.connect(**DOC_REGISTRY_PG_CONFIG, connect_timeout=5)
     try:
         yield conn
         conn.commit()
