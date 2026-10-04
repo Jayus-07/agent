@@ -49,6 +49,17 @@ export interface RunSummary {
   mrr: number;
   ndcg_at_10: number;
   timestamp: string;
+  /** RUN-01：running/completed/failed（旧 run 可能缺状态文件 = 空） */
+  status?: string;
+  /** RUN-07/08：running 超过 stale 阈值（worker 丢失/卡死嫌疑） */
+  stale?: boolean;
+  /** UI-01/02：评测集溯源与触发来源（来自 meta.eval_provenance / meta.env） */
+  suite?: string;
+  dataset_version?: string;
+  trigger?: string;
+  triggered_by?: string;
+  /** UI-04：RAGAS 徽标数据源——self=未跑 RAGAS，self+ragas=双轨 */
+  evaluator_mode?: string;
 }
 
 export interface DatasetCatalogItem {
@@ -158,6 +169,15 @@ export interface EvalRunDetail {
     metadata?: Record<string, unknown>;
   };
   meta: Record<string, unknown>;
+  /** RUN-01/07/08：run 生命周期状态（旧 run 无状态文件时为 null） */
+  run_status?: {
+    status: string;
+    started_at?: string;
+    finished_at?: string;
+    error?: string;
+    stale?: boolean;
+    age_seconds?: number | null;
+  } | null;
 }
 
 export const evaluationService = {
