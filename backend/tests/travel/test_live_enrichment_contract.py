@@ -43,3 +43,22 @@ def test_route_sentence_extracts_origin_and_destination_for_train_search():
     assert extract_origin("从福州出发去厦门") == "福州"
     assert brief.origin == "福州"
     assert brief.destination == "厦门"
+
+
+def test_train_search_auto_triggered_by_origin_and_date():
+    """#7a：有出发地+出发日期即自动查车票，不再要求触发词。"""
+    from backend.travel.experts.transit import _needs_train_search
+    from backend.travel.models.brief import TravelBrief
+    from datetime import date
+
+    brief_with = TravelBrief(destination="厦门", days=2, party_size=2,
+                             origin="福州", start_date=date(2026, 10, 5))
+    assert _needs_train_search("", brief_with)  # 无触发词也查
+    assert _needs_train_search("随便聊聊", brief_with)
+
+    brief_local = TravelBrief(destination="福州", days=2, party_size=2,
+                              origin="", start_date=date(2026, 10, 5))
+    assert not _needs_train_search("查高铁票", brief_local)  # 单城市无出发地不查
+
+    brief_no_date = TravelBrief(destination="厦门", days=2, party_size=2, origin="福州")
+    assert not _needs_train_search("查高铁票", brief_no_date)  # 无日期不查

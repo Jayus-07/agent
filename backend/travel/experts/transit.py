@@ -40,13 +40,14 @@ _planning = PlanningAgent()
 
 
 def _needs_train_search(message: str, brief) -> bool:
-    return bool(
-        brief.origin.strip()
-        and brief.start_date
-        and any(token in (message or "") for token in (
-            "查高铁", "查车票", "查火车", "查车次", "高铁票", "动车票",
-        ))
-    )
+    """城际车票自动查询判定（#7a，2026-10-04）。
+
+    有出发地+出发日期即查——抵达交通是「从外地来」的刚需，此前要求
+    用户喊「查高铁」才查，等于把最常见的需求藏起来了。触发词不再门控；
+    重复查询由 provider 共享缓存与 tool_cache 兜底（二次规划零成本）。
+    message 参数保留（调用方签名兼容）。
+    """
+    return bool(brief.origin.strip() and brief.start_date)
 
 
 def prefetch_day_legs(pois_by_day):
