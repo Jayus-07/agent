@@ -145,4 +145,7 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         roles=principal.roles,
     )
     return {"answer": outcome.answer, "session_id": req.session_id,
-            "sources": outcome.sources}
+            "sources": outcome.sources,
+            # A5（2026-10-04）：answer_meta 随响应带回（拒答时含 answer_status
+            # 稳定码），前端按枚举处理而非解析自然语言；加法字段向后兼容
+            "answer_meta": outcome.answer_meta}

@@ -1,0 +1,141 @@
+"""RAG 路由回归（2026-10-04，验收清单 K3/K5）。
+
+- K3：根 POST /rag 的 body 字段是 question（RAGAskRequest schema），端点
+  此前读 req.query → AttributeError 恒 500。回归断言：question 透传到
+  pipeline.ask 且 200。
+- K5：GET /documents/{id} 详情补暴露 summary（上传链路已生成的 LLM 摘要）。
+
+只 mock 外部边界：pipeline（LLM/检索）、registry（PG）、authz 与身份依赖。
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from backend.app.api.deps import require_rag_user
+from backend.app.api.routes import rag as rag_route
+from backend.app.api.routes import rag_documents
+
+
+class StubPipeline:
+    def __init__(self):
+        self.ask_calls: list[tuple[str, dict]] = []
+
+    def ask(self, question, **kwargs):
+        self.ask_calls.append((question, kwargs))
+        return "知识库答案"
+
+
+def _client(app: FastAPI) -> TestClient:
+    app.dependency_overrides[require_rag_user] = lambda: SimpleNamespace(
+        user_id="1", authenticated=True)
+    return TestClient(app)
+
+
+def test_root_ask_reads_question_field(monkeypatch):
+    """K3 回归：body 用 question 字段必须可达 pipeline.ask（修复前恒 500）。"""
+    stub = StubPipeline()
+    monkeypatch.setattr(rag_route, "require_rag_ready", lambda: None)
+    monkeypatch.setattr(rag_route, "get_rag_pipeline", lambda: stub)
+    monkeypatch.setattr(
+        rag_route, "require_principal",
+        lambda request: SimpleNamespace(
+            subject_type="employee", department="", permissions=None),
+    )
+    app = FastAPI()
+    app.include_router(rag_route.router)
+
+    resp = _client(app).post(
+        "/rag", json={"question": "三坊七巷有什么特色？", "session_id": "t1"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["answer"] == "知识库答案"
+    assert body["query"] == "三坊七巷有什么特色？"
+    assert stub.ask_calls and stub.ask_calls[0][0] == "三坊七巷有什么特色？"
+
+
+def test_document_detail_exposes_summary(monkeypatch):
+    """K5 回归：详情 DTO 含 summary 字段（库内有值即回显）。"""
+    row = {
+        "doc_id": "d1", "file_name": "福州-景点-三坊七巷.md", "kb_id": "travel",
+        "status": "active", "summary": "三坊七巷是福州历史文化街区。",
+        "chunk_count": 3,
+    }
+
+    class StubReg:
+        def get_by_doc_id(self, doc_id):
+            return dict(row) if doc_id == "d1" else None
+
+    class StubAuthz:
+        def can_read_row(self, doc):
+            return (True, "")
+
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubReg())
+    monkeypatch.setattr(rag_documents, "_require_authz", lambda request: StubAuthz())
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+
+    resp = _client(app).get("/documents/d1")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["doc"]["summary"] == "三坊七巷是福州历史文化街区。"
+
+
+def test_ask_response_carries_answer_meta(monkeypatch):
+    """A5 回归：/ask 响应带 answer_meta（拒答时含 answer_status 稳定码）。"""
+    from backend.app.api.routes import rag_search
+    from backend.rag.pipeline import AskOutcome
+
+    stub = SimpleNamespace(
+        ask_result=lambda *a, **k: AskOutcome(
+            answer="知识库暂无相关资料。",
+            sources=[],
+            answer_meta={"answer_status": "rag_no_evidence", "source_count": 0},
+        ),
+    )
+    monkeypatch.setattr(rag_search, "get_rag_pipeline", lambda: stub)
+    monkeypatch.setattr(
+        rag_search, "require_principal",
+        lambda request: SimpleNamespace(
+            user_id="1", user_name="tester", tenant_id="default", department="",
+            roles=("super_admin",), permissions=None, subject_type="employee",
+            authenticated=True, auth_type="jwt", source="header"),
+    )
+    app = FastAPI()
+    app.include_router(rag_search.router)
+
+    resp = _client(app).post(
+        "/ask", json={"question": "于山的开放时间？", "kb_id": "travel"})
+
+    assert resp.status_code == 200, resp.text
+    meta = resp.json().get("answer_meta")
+    assert meta and meta.get("answer_status") == "rag_no_evidence"
+
+
+def test_snapshot_answer_meta_merges_ctx_answer_status(monkeypatch):
+    """A5 根因回归：_snapshot_answer_meta 必须并入 ctx.meta 的 answer_status
+    （修复前只拷 chain._last_meta，稳定码到不了 answer_meta）。"""
+    from backend.rag import context as rag_context
+    from backend.rag.pipeline import RAGPipeline
+
+    class FakeChain:
+        _last_meta = {"can_answer": False}
+        _last_sources: list = []
+
+    class FakeSelf:
+        lc_chain = FakeChain()
+        last_answer_meta = {}
+
+    monkeypatch.setattr(
+        rag_context, "get_context",
+        lambda: SimpleNamespace(meta={"answer_status": "rag_no_evidence"}),
+    )
+
+    fake = FakeSelf()
+    RAGPipeline._snapshot_answer_meta(fake)
+
+    assert fake.last_answer_meta.get("answer_status") == "rag_no_evidence"

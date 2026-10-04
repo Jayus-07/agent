@@ -44,10 +44,10 @@ async def rag_ask(req: RAGAskRequest, request: Request):
     pipeline = await asyncio.to_thread(get_rag_pipeline)
     answer = await asyncio.to_thread(
         pipeline.ask,
-        req.query,
+        req.question,
         session_id=req.session_id or "rag-api",
         subject_type=principal.subject_type,
         department=principal.department,
         permissions=principal.permissions,
     )
-    return {"query": req.query, "answer": answer, "session_id": req.session_id}
+    return {"query": req.question, "answer": answer, "session_id": req.session_id}

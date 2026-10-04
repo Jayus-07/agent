@@ -61,10 +61,10 @@ def _doc_summary(destination: str) -> dict | None:
     目的地名；实现走 registry 查询，失败返回 None（继续下一级）。
     """
     try:
-        from backend.rag.indexing.doc_registry_pg import DocRegistryPG
+        from backend.rag.indexing.doc_registry_pg import PostgresDocumentRegistry
         from backend.config.travel import TRAVEL_RAG_KB_ID
 
-        registry = DocRegistryPG()
+        registry = PostgresDocumentRegistry()
         docs = registry.list_by_kb(TRAVEL_RAG_KB_ID) or []
         # 双过滤 + 目的地匹配：doc_type=travel_guide（上传侧治理，文档规范 §一）
         # 且 文件名/元数据 destination 命中；summary 直接消费（上传链路已生成）

@@ -1100,6 +1100,18 @@ class RAGPipeline:
                     meta["vector_degraded"] = True
             except Exception:  # noqa: BLE001 — 观测字段不阻塞主链
                 pass
+            # A5（2026-10-04）：拒答稳定码（rag_no_evidence 等）由 chain 写入
+            # ctx.meta，但此前未并入 answer_meta——REST /ask 与 rag-server
+            # 拿不到稳定枚举（注释宣称的出口实际是断的）。此处补齐；快照点
+            # 在 _cleanup 之前，ctx 仍存活。正常回答无该键（缺省=sufficient，
+            # 与工具 RAGMETA 协议同口径）。
+            try:
+                from backend.rag.context import get_context
+                ctx_status = (get_context().meta or {}).get("answer_status")
+                if ctx_status:
+                    meta["answer_status"] = ctx_status
+            except Exception:  # noqa: BLE001 — 观测字段不阻塞主链
+                pass
             self.last_answer_meta = meta
         except Exception:
             self.last_answer_meta = {}
