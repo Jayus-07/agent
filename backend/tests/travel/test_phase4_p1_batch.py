@@ -223,3 +223,76 @@ class TestOpenStatus:
         assert "高德状态:已打烊" not in target.tags
         skeleton = m.build_skeleton(brief, candidates)
         assert not any("已打烊" in n for n in skeleton.notes)
+
+
+class TestSourceConflict:
+    """验收 #90：来源冲突检测（裁决语义先以单测固化，知识路径接入时消费）。"""
+
+    def test_provider_beats_rag_on_same_field(self):
+        from backend.travel.core.evidence_utils import detect_conflicts
+
+        evidences = {
+            "poi1#hours_provider": {
+                "value": {"open_time": "17:30"}, "source": "provider",
+                "source_type": "LIVE", "poi_id": "poi1",
+            },
+            "poi1#hours_rag": {
+                "value": {"open_time": "18:00"}, "source": "rag",
+                "source_type": "SEED", "poi_id": "poi1",
+            },
+        }
+        conflicts = detect_conflicts(evidences)
+        assert len(conflicts) == 1
+        c = conflicts[0]
+        assert c["field"] == "open_time"
+        assert c["winner"] == "17:30"
+        assert c["rule"] == "source_priority"
+        assert c["values"][0]["value"] == "17:30"
+
+    def test_same_value_no_conflict(self):
+        from backend.travel.core.evidence_utils import detect_conflicts
+
+        evidences = {
+            "poi1#a": {"value": {"open_time": "17:30"}, "source": "provider",
+                       "poi_id": "poi1"},
+            "poi1#b": {"value": {"open_time": "17:30"}, "source": "rag",
+                       "poi_id": "poi1"},
+        }
+        assert detect_conflicts(evidences) == []
+
+    def test_single_source_no_conflict(self):
+        from backend.travel.core.evidence_utils import detect_conflicts
+
+        evidences = {"poi1#a": {"value": {"open_time": "17:30"},
+                                "source": "provider", "poi_id": "poi1"}}
+        assert detect_conflicts(evidences) == []
+
+    def test_amap_placeholder_hours_disclosed(self, monkeypatch):
+        """高德替换但营业时段解析失败沿用占位 → reason 必须标注混搭。"""
+        import backend.travel.services.poi_service as m
+
+        monkeypatch.setattr(m.T, "TRAVEL_POI_SOURCE", "live")
+        monkeypatch.setattr(m.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", True)
+        monkeypatch.setattr(
+            m.live_search_service, "search_places",
+            lambda *, keyword, city, page_size=8: {"pois": [{
+                "id": "tx9", "name": "西湖公园", "category": "景点",
+                "lat": 26.08, "lng": 119.29,
+            }]})
+
+        class _FakeAmap:
+            def search_attractions(self, *, keyword, city, page_size=10):
+                # open_time_today 无法解析成时段 → hours=None → 占位混搭
+                return {"merchants": [{
+                    "id": "am9", "name": "西湖公园", "category": "景点",
+                    "lat": 26.08, "lng": 119.29, "rating": 4.6,
+                    "open_time_today": "全天（文案非时段格式）",
+                    "open_status": "营业中",
+                }]}
+
+        monkeypatch.setattr(m.live_search_service, "search_attractions",
+                            _FakeAmap().search_attractions)
+        brief = TravelBrief(destination="福州", days=2, preferences=["人文"])
+        candidates, _ = m.retrieve_candidates(brief)
+        target = next(p for p in candidates if p.poi_id.startswith("amap:"))
+        assert "营业时间为占位" in (target.reason or "")

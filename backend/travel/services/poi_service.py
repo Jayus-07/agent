@@ -236,6 +236,9 @@ def _merge_amap_candidates(
                         city=brief.destination,
                         category=map_category(str(rec.get("category") or "")),
                         lat=float(lat), lng=float(lng),
+                        # 来源混搭披露（验收 #90）：高德未返回营业时段时
+                        # 沿用腾讯占位——source 标 amap 但时间是占位值，
+                        # 必须在 reason 说明，不冒充高德核实事实。
                         open_time=hours[0] if hours else existing.open_time,
                         close_time=hours[1] if hours else existing.close_time,
                         suggested_minutes=existing.suggested_minutes,
@@ -246,8 +249,11 @@ def _merge_amap_candidates(
                         observed_at=observed_at,
                         verification_status="unverified",
                         reason=(f"「{q}」实时检索 · 高德评分 {rating:g}"
-                                + (" · 检索时已打烊" if closed_tags else ""))
-                        if rating else f"「{q}」实时检索",
+                                + (" · 检索时已打烊" if closed_tags else "")
+                                + (" · 营业时间为占位（高德未返回）" if not hours else ""))
+                        if rating else (
+                            f"「{q}」实时检索"
+                            + (" · 营业时间为占位（高德未返回）" if not hours else "")),
                         location_status="verified",
                     )
                     merged = True

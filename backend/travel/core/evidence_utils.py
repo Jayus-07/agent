@@ -87,3 +87,76 @@ def is_stale(evidence: dict, *, now: datetime | None = None) -> bool:
     if expire_at is None:
         return False
     return expire_at < (now or datetime.now().astimezone())
+
+
+# 来源优先级（验收 #90）：冲突裁决顺序 —— Provider 实时数据 > RAG 引文 >
+# 本地种子 > 估算。高值可信，同值不冲突。
+SOURCE_PRIORITY: dict[str, int] = {
+    "provider": 3,
+    "live": 3,
+    "rag": 2,
+    "knowledge": 2,
+    "seed": 1,
+    "estimate": 0,
+}
+
+
+def detect_conflicts(evidences: dict[str, dict]) -> list[dict]:
+    """跨来源事实冲突检测（纯函数，可单测）。
+
+    同一 POI（evidence key 归一到 poi_id）在多个来源下对同一字段给出
+    不同值时产出 conflict 记录：字段名、各来源值、按 SOURCE_PRIORITY
+    裁决的胜出方。当前候选池为单源单值（合并期已裁决），该框架供
+    知识路径（RAG 引文 vs Provider）接入时消费——接入前先以单测固化
+    裁决语义，防止接入时口径漂移。
+
+    evidence dict 形态见 make_evidence/evidence_to_dict：{value, source,
+    source_type, ...}，value 是字段→值的 dict 或标量。
+    """
+    by_poi: dict[str, list[tuple[str, dict]]] = {}
+    for key, ev in evidences.items():
+        if not isinstance(ev, dict):
+            continue
+        poi_id = str(ev.get("poi_id") or key).split("#")[0]
+        by_poi.setdefault(poi_id, []).append((key, ev))
+
+    conflicts: list[dict] = []
+    for poi_id, entries in by_poi.items():
+        if len(entries) < 2:
+            continue
+        field_values: dict[str, list[tuple[str, dict]]] = {}
+        for key, ev in entries:
+            source = str(ev.get("source") or ev.get("source_type") or "")
+            value = ev.get("value")
+            fields = value if isinstance(value, dict) else {"value": value}
+            for field, v in fields.items():
+                field_values.setdefault(field, []).append((source, ev))
+        for field, pairs in field_values.items():
+            distinct = {}
+            for source, ev in pairs:
+                v = (ev.get("value") or {}).get(field) if isinstance(
+                    ev.get("value"), dict) else ev.get("value")
+                distinct.setdefault(str(v), []).append(source)
+            if len(distinct) > 1:
+                ranked = sorted(
+                    ((v, srcs) for v, srcs in distinct.items()),
+                    key=lambda item: max(
+                        (SOURCE_PRIORITY.get(s.lower(), 0) for s in item[1]),
+                        default=0),
+                    reverse=True,
+                )
+                conflicts.append({
+                    "poi_id": poi_id,
+                    "field": field,
+                    "values": [
+                        {"value": _json_safe(v), "sources": srcs}
+                        for v, srcs in ranked
+                    ],
+                    "winner": _json_safe(ranked[0][0]),
+                    "rule": "source_priority",
+                })
+    return conflicts
+
+
+def _json_safe(v):
+    return v if isinstance(v, (str, int, float, bool, type(None))) else str(v)
