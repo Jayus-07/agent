@@ -156,8 +156,9 @@ CREATE TABLE IF NOT EXISTS ai.cs_faq (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 )"""
 
+# 权威=迁移 076_cs_faq_tables.sql
 _QUERY_LOG_DDL = """
-CREATE TABLE IF NOT EXISTS ai.cs_faq_query_log (  # 权威=迁移 076
+CREATE TABLE IF NOT EXISTS ai.cs_faq_query_log (
 
     id           BIGSERIAL PRIMARY KEY,
     question     TEXT NOT NULL,
