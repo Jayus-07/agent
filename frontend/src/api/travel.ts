@@ -145,6 +145,35 @@ export interface TravelClarificationOption {
   message: string;
 }
 
+/**
+ * 消息来源归因（M4/G3）：随消息体传 source，后端写进 trace.tags。
+ * manual=手打输入；card_action=结果卡按钮；canvas_action=画布换一家/就近唤醒；
+ * tier_switch=档位切换；budget_negotiate=缺口协商。
+ */
+export type TravelSource =
+  | 'manual'
+  | 'card_action'
+  | 'canvas_action'
+  | 'tier_switch'
+  | 'budget_negotiate';
+
+/** 用户决策留痕上报体（M4/G1）；user_id/时间戳由服务端从身份与数据库取 */
+export interface TravelDecisionInput {
+  decision:
+    | 'apply_draft'
+    | 'discard_draft'
+    | 'canvas_replace'
+    | 'tier_switch'
+    | 'budget_negotiate';
+  conversationId: string;
+  planVersion?: number;
+  tierFrom?: string;
+  tierTo?: string;
+  payload?: Record<string, unknown>;
+  source?: string;
+  clientRunId?: string;
+}
+
 /** 结构化「为什么这样排」（后端 reporter._build_rationale，M2 验收反馈拍板形态） */
 export interface RationaleData {
   headline?: { days?: number; spots?: number; must_go?: string[] }
@@ -277,7 +306,7 @@ export interface TravelStreamEvent {
 export function planTravel(
   message: string,
   conversationId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; clientRunId?: string; source?: TravelSource } = {},
 ): Promise<PlanResponse> {
   return request<PlanResponse>("/api/travel/plan", {
     method: "POST",
@@ -287,6 +316,9 @@ export function planTravel(
       message,
       session_id: conversationId,
       conversation_id: conversationId,
+      // M4/G2-G3：可选归因字段，后端写 trace.tags（旧后端忽略未知字段）
+      ...(options.clientRunId ? { client_run_id: options.clientRunId } : {}),
+      ...(options.source ? { source: options.source } : {}),
     },
     timeout: TRAVEL_PLAN_TIMEOUT_MS,
     signal: options.signal,
@@ -300,7 +332,7 @@ export function planTravel(
 export async function* streamTravelPlan(
   message: string,
   conversationId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; clientRunId?: string; source?: TravelSource } = {},
 ): AsyncGenerator<TravelStreamEvent> {
   const response = await fetchRaw("/api/travel/plan/stream", {
     method: "POST",
@@ -309,6 +341,9 @@ export async function* streamTravelPlan(
       message,
       session_id: conversationId,
       conversation_id: conversationId,
+      // M4/G2-G3：可选归因字段（向后兼容，旧后端忽略）
+      ...(options.clientRunId ? { client_run_id: options.clientRunId } : {}),
+      ...(options.source ? { source: options.source } : {}),
     }),
     signal: options.signal,
   })
@@ -364,6 +399,33 @@ export function sendTravelFeedback(input: {
       plan_version: input.planVersion ?? 0,
     },
   });
+}
+
+/**
+ * 用户决策留痕（M4/G1）：草案应用/放弃、画布确认替换、档位切换、
+ * 删减协商逐条上报。**软失败语义**——留痕是审计旁路不是业务门禁，
+ * 网络失败/后端不可用时静默吞掉（返回 null），调用方照常继续本地更新。
+ * 后端同样按软失败设计（写失败返回 recorded=false 而非 5xx）。
+ */
+export async function recordTravelDecision(input: TravelDecisionInput): Promise<unknown> {
+  try {
+    return await request("/api/travel/decisions", {
+      method: "POST",
+      body: {
+        decision: input.decision,
+        conversation_id: input.conversationId,
+        plan_version: input.planVersion ?? 0,
+        tier_from: input.tierFrom ?? "",
+        tier_to: input.tierTo ?? "",
+        payload: input.payload ?? {},
+        source: input.source ?? "",
+        client_run_id: input.clientRunId ?? "",
+      },
+    });
+  } catch {
+    // 留痕失败不挡 UI 动作（审计旁路口径，与后端软失败对称）
+    return null;
+  }
 }
 
 /** 版本历史：返回元数据，不拉取旧行程正文。 */

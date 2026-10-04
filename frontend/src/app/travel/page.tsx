@@ -62,6 +62,7 @@ import {
   fetchItineraryIcs,
   fetchTravelPlanLatest,
   fetchTravelRecommendations,
+  recordTravelDecision,
   reverseGeocodeTravelOrigin,
   sendTravelFeedback,
   streamTravelPlan,
@@ -187,9 +188,29 @@ export default function TravelPage() {
       }
     }
   }, [travelProcess])
+  /** M4/G1+G3 画布确认替换：先落 decision=canvas_replace 留痕（软失败不阻断）
+      再代发修改请求（source=canvas_action 归因进 trace）。 */
   const handleRequestReplace = useCallback((dayIndex: number, itemTitle: string, candidateName: string) => {
-    chatRef.current?.send(`把第 ${dayIndex} 天的「${itemTitle}」换成「${candidateName}」，其他安排尽量保持不变`)
-  }, [])
+    void recordTravelDecision({
+      decision: 'canvas_replace',
+      conversationId,
+      planVersion: planState.plan?.itinerary?.plan_version ?? 0,
+      payload: { day_index: dayIndex, item_title: itemTitle, candidate_name: candidateName },
+      source: 'canvas_action',
+    })
+    chatRef.current?.send(`把第 ${dayIndex} 天的「${itemTitle}」换成「${candidateName}」，其他安排尽量保持不变`, 'canvas_action')
+  }, [conversationId, planState.plan?.itinerary?.plan_version])
+  /** M4/G1+G3 缺口卡快捷协商：先落 decision=budget_negotiate 留痕再代发。 */
+  const handleNegotiateBudget = useCallback((text: string) => {
+    void recordTravelDecision({
+      decision: 'budget_negotiate',
+      conversationId,
+      planVersion: planState.plan?.itinerary?.plan_version ?? 0,
+      payload: { message: text },
+      source: 'budget_negotiate',
+    })
+    chatRef.current?.send(text, 'budget_negotiate')
+  }, [conversationId, planState.plan?.itinerary?.plan_version])
   // 左侧任务栏（与 /agent 同一套 TaskSidebar，travel 模式：历史区=历史规划列表）
   // M2 布局拍板：行程+聊天是主角，历史列表默认收成图标条（点开浮层/展开整栏）
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -264,9 +285,13 @@ export default function TravelPage() {
     setLoading(true)
     const controller = new AbortController()
     abortRef.current = controller
+    // M4/G2：表单通道同样生成前端轮次标识（消息↔trace 打通对两条通道一致）
+    const clientRunId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     try {
       let data: PlanResponse | null = null
-      for await (const event of streamTravelPlan(message, cid, { signal: controller.signal })) {
+      for await (const event of streamTravelPlan(message, cid, {
+        signal: controller.signal, clientRunId, source: 'manual',
+      })) {
         if (controller.signal.aborted || abortRef.current !== controller) return
         handleTravelEvent(event)
         if (event.event === 'error') {
@@ -699,14 +724,31 @@ export default function TravelPage() {
                   onPlanResponse={handleAssistantResponse}
                   replaceCandidates={replaceCandidates}
                   onRequestReplace={handleRequestReplace}
-                  onAskNearby={(text) => chatRef.current?.send(text)}
+                  onAskNearby={(text) => chatRef.current?.send(text, 'canvas_action')}
                   tier={itinerary.brief.tier || 'economy'}
                   budgetNegotiation={planState.plan?.rationale?.budget_negotiation ?? null}
-                  onTierChange={(t) => chatRef.current?.send(
-                    t === 'comfortable'
-                      ? '方案切换成舒适均衡型，帮我重排（住宿餐饮升档，尽量不超预算）'
-                      : '方案切换成经济实用型，帮我重排（省钱优先）'
-                  )}
+                  onNegotiateBudget={handleNegotiateBudget}
+                  onTierChange={(t) => {
+                    // M4/G1+G3 档位切换确认：先落 decision=tier_switch 留痕
+                    // （from→to）再代发重排（source=tier_switch 归因进 trace）
+                    void recordTravelDecision({
+                      decision: 'tier_switch',
+                      conversationId,
+                      planVersion: itinerary.plan_version,
+                      tierFrom: itinerary.brief.tier || 'economy',
+                      tierTo: t,
+                      payload: { message: t === 'comfortable'
+                        ? '方案切换成舒适均衡型，帮我重排（住宿餐饮升档，尽量不超预算）'
+                        : '方案切换成经济实用型，帮我重排（省钱优先）' },
+                      source: 'tier_switch',
+                    })
+                    chatRef.current?.send(
+                      t === 'comfortable'
+                        ? '方案切换成舒适均衡型，帮我重排（住宿餐饮升档，尽量不超预算）'
+                        : '方案切换成经济实用型，帮我重排（省钱优先）',
+                      'tier_switch',
+                    )
+                  }}
                   />
                 </>
               ) : loading ? (

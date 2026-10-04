@@ -888,6 +888,12 @@ export interface ItineraryViewProps {
     gap_cny?: number
     note?: string
   } | null
+  /**
+   * M4/G1+G3 缺口卡快捷协商：点击 → 页面落 decision=budget_negotiate 留痕
+   * 并经聊天管线代发（source=budget_negotiate）。v1 缺口引导是纯文案，
+   * 决策点挂不上——chips 把「去掉第 X 天」类引导变成一键动作（M2-h 同款交互）。
+   */
+  onNegotiateBudget?: (text: string) => void
   planStatus?: string
   /** 追问 / 失败提示：有行程时也展示，不顶掉行程 */
   notice?: string
@@ -903,7 +909,7 @@ export interface ItineraryViewProps {
 export default function ItineraryView({
   itinerary, conversationId, planStatus = '', notice, exporting = false,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
-  replaceCandidates, onRequestReplace, onAskNearby, tier, onTierChange, budgetNegotiation,
+  replaceCandidates, onRequestReplace, onAskNearby, tier, onTierChange, budgetNegotiation, onNegotiateBudget,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
   // 受控优先（页面要跟右侧助手共享选中天）；未传时退回内部自管。
@@ -1009,6 +1015,37 @@ export default function ItineraryView({
               <p className="mt-1.5 text-[11px] leading-relaxed text-amber-800">
                 可以说「去掉第 X 天」「不去 XX」「改成 2 天」，或上调预算后重排。
               </p>
+              {/* M4/G1+G3 快捷协商入口：一键代发删减话术（页面层落 decision
+                  =budget_negotiate 留痕 + source=budget_negotiate 归因） */}
+              {onNegotiateBudget && (
+                <div className="mt-2 flex flex-wrap gap-1.5" aria-label="快捷删减协商">
+                  <button
+                    type="button"
+                    onClick={() => onNegotiateBudget(`去掉第 ${dayCount} 天，帮我重排`)}
+                    className="cursor-pointer rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[11px] text-amber-900 transition-colors hover:border-amber-500 hover:bg-amber-50"
+                  >
+                    去掉第 {dayCount} 天
+                  </button>
+                  {dayCount > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => onNegotiateBudget(`改成 ${dayCount - 1} 天，帮我重排`)}
+                      className="cursor-pointer rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[11px] text-amber-900 transition-colors hover:border-amber-500 hover:bg-amber-50"
+                    >
+                      改成 {dayCount - 1} 天
+                    </button>
+                  )}
+                  {budgetNegotiation.floor_total_cny != null && budgetNegotiation.floor_total_cny > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onNegotiateBudget(`预算调到 ${Math.ceil(budgetNegotiation.floor_total_cny! / 100) * 100}，帮我重排`)}
+                      className="cursor-pointer rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[11px] text-amber-900 transition-colors hover:border-amber-500 hover:bg-amber-50"
+                    >
+                      预算调到 ¥{Math.ceil(budgetNegotiation.floor_total_cny / 100) * 100}
+                    </button>
+                  )}
+                </div>
+              )}
             </>
           )}
         </section>

@@ -203,6 +203,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 企业治理验收 #9（2026-09-30）：Tool 契约变更历史台账（生成器检测到
     # 变更自动追加，GET /api/admin/tools/changes 消费）。
     "062_tool_contract_changes.sql": "memory",
+    # 旅游页用户决策留痕（2026-10-04 M4/G1）：草案应用/放弃、画布确认替换、
+    # 档位切换、删减协商逐条落库；travel/core/decision_store.py 软失败写入，
+    # GET /api/travel/decisions 消费（v1 无管理端页）。
+    "072_travel_decision_audit.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

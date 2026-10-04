@@ -56,6 +56,30 @@ class TravelPlanRequest(BaseModel):
     session_id: str = Field("", max_length=128)
     conversation_id: str = Field("", max_length=128,
                                  description="跨轮会话标识；同一值可跨轮改单（依赖 checkpointer）")
+    # M4/G2-G3：前端轮次标识与来源归因，随消息体透传进 trace.tags
+    #（可选字段向后兼容旧前端；source 白名单 card_action/canvas_action/
+    # tier_switch/budget_negotiate/manual，原样记录不做枚举校验——
+    # 前端口径演进不破后端）
+    client_run_id: str = Field("", max_length=64,
+                               description="前端生成的轮次标识（client-<ts>-<rand>），trace.tags 关联用")
+    source: str = Field("", max_length=32,
+                        description="消息来源归因：card_action/canvas_action/tier_switch/budget_negotiate/manual")
+
+
+def _annotate_trace_source(trace, client_run_id: str, source: str) -> None:
+    """把前端轮次与来源写进 trace.tags（仅非空时写，避免空 tag 噪音）。
+
+    在 trace 创建后立即调用（而非收口时）——即便执行中途崩溃，
+    trace 里也已带上 client_run_id/source，审计口径「当时哪轮、从哪来」
+    对失败轮次同样成立。
+    """
+    try:
+        if client_run_id:
+            trace.tags["client_run_id"] = str(client_run_id)[:64]
+        if source:
+            trace.tags["travel_source"] = str(source)[:32]
+    except Exception:  # noqa: BLE001 — 观测旁路软失败
+        logger.debug("[TravelAPI] trace source 标注失败", exc_info=True)
 
 
 def _plan_error(message: str, status: str = "failed") -> dict:
@@ -167,6 +191,7 @@ async def travel_plan(request: Request):
             req.message, session_id=conversation_id or req.session_id,
             workflow_name="agent",
         )
+        _annotate_trace_source(trace, req.client_run_id, req.source)
         graph_input = new_travel_graph_input(
             user_message=req.message, user_id=identity.user_id or "",
             session_id=req.session_id, conversation_id=conversation_id,
@@ -338,6 +363,7 @@ async def travel_plan_stream(request: Request):
             session_id=conversation_id or req.session_id,
             workflow_name="agent",
         )
+        _annotate_trace_source(trace, req.client_run_id, req.source)
         trace_result: dict = _plan_error("旅游规划执行失败，请稍后再试。")
         trace_state: dict = {}
         try:
@@ -801,3 +827,63 @@ def travel_plan_diff(
             from_version=from_version, to_version=to_version)
     except Exception as e:
         raise _version_http_error(e)
+
+
+# ============================================================
+# POST/GET /travel/decisions — 用户决策留痕（M4/G1，2026-10-04）
+# ============================================================
+class TravelDecisionRequest(BaseModel):
+    """前端用户决策上报（草案应用/放弃、画布确认替换、档位切换、删减协商）。
+
+    user_id/tenant_id/created_at 由服务端从身份与数据库取，前端不传
+    ——留痕的身份口径以服务端认证为准，不信任请求体自报。
+    """
+    decision: str = Field(..., min_length=1, max_length=32,
+                          description="apply_draft | discard_draft | canvas_replace | tier_switch | budget_negotiate")
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    plan_version: int = Field(0, ge=0, le=100000)
+    tier_from: str = Field("", max_length=32)
+    tier_to: str = Field("", max_length=32)
+    payload: dict = Field(default_factory=dict,
+                          description="决策上下文（替换条目/协商话术/目标档位等自由 JSON）")
+    source: str = Field("", max_length=32)
+    client_run_id: str = Field("", max_length=64)
+
+
+@router.post("/decisions", summary="用户决策留痕（草案应用/放弃/画布替换/档位切换/删减协商）")
+async def travel_record_decision(request: Request):
+    """落一条决策留痕。**软失败语义**：留痕写失败不挡前端 UI 动作
+    （返回 200 + recorded=false，前端照常继续本地更新）——决策留痕是
+    审计旁路不是业务门禁。身份取 require_identity，未认证 401。
+    """
+    identity = require_identity(request)
+    try:
+        req = TravelDecisionRequest(**(await request.json()))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"解析失败: {e}")
+    from backend.travel.core.decision_store import record_decision
+
+    record_id = await asyncio.to_thread(
+        record_decision,
+        identity.user_id or "", req.conversation_id, req.decision,
+        tenant_id=getattr(identity, "tenant_id", "") or "",
+        plan_version=req.plan_version,
+        tier_from=req.tier_from, tier_to=req.tier_to,
+        payload=req.payload, source=req.source,
+        client_run_id=req.client_run_id,
+    )
+    return {"status": "recorded" if record_id else "skipped", "id": record_id}
+
+
+@router.get("/decisions", summary="某会话的用户决策留痕链（时间新→旧）")
+def travel_list_decisions(request: Request, conversation_id: str = Query(..., min_length=1),
+                          limit: int = Query(100, ge=1, le=500)):
+    """按 conversation_id 查决策链（强制 user_id scope：越权 = 空列表）。
+    v1 只落库+查询端点，管理端页不做（2026-10-03 拍板）。
+    """
+    identity = require_identity(request)
+    from backend.travel.core.decision_store import list_decisions
+
+    return {"decisions": list_decisions(
+        identity.user_id or "", conversation_id, limit=limit)}
+

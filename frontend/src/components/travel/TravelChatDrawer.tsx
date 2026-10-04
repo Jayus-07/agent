@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import {
   confirmTravelPlan, type Itinerary, type ItineraryBrief, type PlanResponse,
-  streamTravelPlan, type TravelStreamEvent,
+  recordTravelDecision, streamTravelPlan, type TravelSource, type TravelStreamEvent,
   type TravelClarificationOption,
 } from '@/api/travel'
 import BudgetRing from '@/components/chat/BudgetRing'
@@ -67,8 +67,12 @@ function TypedAssistantText({ text, animate }: { text: string; animate: boolean 
 }
 
 export interface TravelChatDrawerHandle {
-  /** M2 代发：画布直选/结果卡按钮把修改请求送进同一聊天管线（忙时进排队槽） */
-  send: (text: string) => void
+  /**
+   * M2 代发：画布直选/结果卡按钮把修改请求送进同一聊天管线（忙时进排队槽）。
+   * M4/G3：可选 source 归因（card_action/canvas_action/tier_switch/
+   * budget_negotiate），随请求体透传后端写 trace.tags；手打路径不传=manual。
+   */
+  send: (text: string, source?: TravelSource) => void
 }
 
 interface Props {
@@ -134,11 +138,13 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [lastRequest, setLastRequest] = useState('')
+  // M4/G3：重试保留原始来源归因（lastRequest 只存文本，source 走 ref）
+  const lastSourceRef = useRef<TravelSource>('manual')
   const [applying, setApplying] = useState(false)
   const [stopped, setStopped] = useState(false)
   const [clarificationOptions, setClarificationOptions] = useState<TravelClarificationOption[]>([])
   const [fillingDays, setFillingDays] = useState(false)
-  // M2-f 生成中排队的下一条消息（单条槽）
+  // M2-f 生成中排队的下一条消息（单条槽）；M4/G3 排队也保留来源归因
   const [queuedText, setQueuedText] = useState('')
   // M2-a 本轮完成后执行明细默认收敛，点开看全量
   const [processExpanded, setProcessExpanded] = useState(false)
@@ -147,6 +153,8 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevConvRef = useRef(conversationId)
   const currentRunRef = useRef('')
+  // M4/G3：排队消息的来源归因（state 只存文本，归因走 ref 不进 UI）
+  const queuedSourceRef = useRef<TravelSource>('manual')
 
   const isDrawer = mode === 'drawer'
 
@@ -193,11 +201,12 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   // 卸载时中断在途请求（避免对已卸载组件 setState）
   useEffect(() => () => abortRef.current?.abort(), [])
 
-  const send = useCallback(async (raw: string) => {
+  const send = useCallback(async (raw: string, source: TravelSource = 'manual') => {
     const message = raw.trim()
     if (!message) return
     // M2-f 排队槽：本轮忙时消息不丢，进单条排队槽（可编辑/可取消，空闲自动发）
     if (abortRef.current || loading || generating || pendingResponse) {
+      queuedSourceRef.current = source
       setQueuedText(message)
       setText('')
       return
@@ -206,8 +215,10 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     // 记下发起时所属的线程：请求返回时若线程已换（用户点了「新行程」），
     // 这条回复属于旧行程，不能再往新对话里写。
     const sentConv = conversationId
+    // M4/G2：前端轮次标识随请求体上行，后端写进 trace.tags（消息↔trace 打通）
     const clientRunId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     currentRunRef.current = clientRunId
+    lastSourceRef.current = source
     setStopped(false)
     setLastRequest(message)
     setError('')
@@ -220,7 +231,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     abortRef.current = controller
     try {
       let data: PlanResponse | null = null
-      for await (const event of streamTravelPlan(message, conversationId, { signal: controller.signal })) {
+      for await (const event of streamTravelPlan(message, conversationId, {
+        signal: controller.signal, clientRunId, source,
+      })) {
         if (controller.signal.aborted || currentRunRef.current !== clientRunId) break
         onProcessEvent(event)
         if (event.event === 'error') {
@@ -273,9 +286,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     }
   }, [conversationId, disabled, generating, hasItinerary, loading, onDraft, onProcessEvent, onResponse, pendingResponse])
 
-  // M2-c 代发：画布直选/结果卡按钮经 ref 走同一 send 管线
+  // M2-c 代发：画布直选/结果卡按钮经 ref 走同一 send 管线（M4/G3 透传 source）
   useImperativeHandle(ref, () => ({
-    send: (text: string) => { void send(text) },
+    send: (text: string, source?: TravelSource) => { void send(text, source) },
   }), [send])
 
   // M2-f 排队槽自动发送：本轮结束（且无草案待决、未禁用）即发出
@@ -283,8 +296,10 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     if (loading || generating || disabled || pendingResponse || !queuedText) return
     if (abortRef.current) return
     const t = queuedText
+    const src = queuedSourceRef.current
+    queuedSourceRef.current = 'manual'
     setQueuedText('')
-    void send(t)
+    void send(t, src)
   }, [loading, generating, disabled, pendingResponse, queuedText, send])
 
   const stop = useCallback(() => {
@@ -303,6 +318,15 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
       if (pendingResponse.plan_status === 'waiting_confirmation') {
         await confirmTravelPlan(conversationId, pendingResponse.itinerary.plan_version)
       }
+      // M4/G1 决策留痕：草案应用先上报后端再更新本地（软失败不阻断，
+      // recordTravelDecision 内部吞错）；带触发该草案的轮次标识便于审计关联
+      await recordTravelDecision({
+        decision: 'apply_draft',
+        conversationId,
+        planVersion: pendingResponse.itinerary.plan_version,
+        source: 'manual',
+        clientRunId: currentRunRef.current || undefined,
+      })
       onResponse(pendingResponse.plan_status === 'waiting_confirmation'
         ? { ...pendingResponse, plan_status: 'confirmed' }
         : pendingResponse)
@@ -319,16 +343,24 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     }
   }, [applying, conversationId, onResponse, pendingResponse])
 
-  const discardPending = useCallback(() => {
+  const discardPending = useCallback(async () => {
     if (!pendingResponse) return
+    // M4/G1 决策留痕：草案放弃先上报再清理本地（软失败不阻断）
+    await recordTravelDecision({
+      decision: 'discard_draft',
+      conversationId,
+      planVersion: pendingResponse.itinerary?.plan_version ?? 0,
+      source: 'manual',
+      clientRunId: currentRunRef.current || undefined,
+    })
     setMessages((prev) => [...prev, {
       role: 'assistant', text: '已保留原行程，这次修改没有应用到当前视图。', tag: '未应用', tone: 'warn',
     }])
     onDiscardPending()
-  }, [onDiscardPending, pendingResponse])
+  }, [conversationId, onDiscardPending, pendingResponse])
 
   const retry = useCallback(() => {
-    if (lastRequest && !loading) void send(lastRequest)
+    if (lastRequest && !loading) void send(lastRequest, lastSourceRef.current)
   }, [lastRequest, loading, send])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -391,7 +423,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                         processState={processState}
                         itinerary={itinerary}
                         pace={String((processState?.requirement?.brief as Record<string, unknown> | undefined)?.pace ?? '')}
-                        onAsk={(t) => void send(t)}
+                        onAsk={(t) => void send(t, 'card_action')}
                       />
                     ) : m.role === 'user' ? (
                       <p className="whitespace-pre-wrap break-words">{m.text}</p>
@@ -506,7 +538,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                     </p>
                   )}
                   <ol className="space-y-1.5">
-                    <ToolProcessRows tools={processState.tools} onAsk={(t) => void send(t)} />
+                    <ToolProcessRows tools={processState.tools} onAsk={(t) => void send(t, 'card_action')} />
                   </ol>
                 </>
               )}
@@ -623,7 +655,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   </button>
                   <button
                     type="button"
-                    onClick={discardPending}
+                    onClick={() => void discardPending()}
                     disabled={applying}
                     className="rounded-lg border border-[#c9dcd7] bg-white px-4 py-1.5 text-[11px] text-[#5c7074] hover:text-[#183037] disabled:opacity-50"
                   >
