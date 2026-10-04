@@ -39,6 +39,20 @@ class DocumentCleaner:
     _RE_URL = re.compile(r'https?://[^\s一-鿿]+')
     _RE_EMAIL = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
     _RE_REPEATED_LINE = re.compile(r'^(.+)$', re.MULTILINE)
+    # 维基类模板行（消歧义横幅/Unihan 声明/医学声明）——整行剔除，
+    # 2026-10-04 福州旅游攻略 chunk 审计发现三类行混入检索块
+    _RE_TEMPLATE_LINE = re.compile(
+        r'标题相近或相同的条目|本页有Unihan新版汉字|维基百科中的医学内容'
+    )
+    # 2026-10-04 第二批爬虫语料清洗增量（报告：docs/reports/2026-10-04-旅游语料清洗入库报告.md）
+    # 模板图例行：行首 *[📞]: 电话 / *[查]: 查看该模板（行内 🕘💰 图标是正文清单信息，不在此列）
+    _RE_WIKI_LEGEND_LINE = re.compile(r'^\*\[[^\]]{1,8}\]:')
+    # 维护横幅：| 此章节**尚无参考来源** ，内容或许**无法查证** 。
+    _RE_WIKI_BANNER_LINE = re.compile(r'^\|.*(尚无参考来源|无法查证)')
+    # 繁体/闽南罗马字对照行：全汉：沙茶麵 / 全罗：Sa-te-mī
+    _RE_POJ_ROSETTA_LINE = re.compile(r'^全[汉罗]：')
+    # Wikivoyage 双坐标粘连行：26.09119.17 / 24.49746118.13556
+    _RE_MERGED_COORD_LINE = re.compile(r'^\d{1,2}\.\d+\.\d+$')
 
     # 全角→半角映射（仅数字和字母）
     _FULLWIDTH_DIGITS = str.maketrans('０１２３４５６７８９', '0123456789')
@@ -85,6 +99,15 @@ class DocumentCleaner:
 
         if config.CLEAN_STRIP_HTML:
             result = self._strip_html(result)
+
+        # ── 模板行/维基噪音行剔除 ──
+        if config.CLEAN_DROP_TEMPLATE_LINES:
+            result = self._remove_template_lines(result)
+            result = self._remove_wiki_noise_lines(result)
+            if source_type == "text":
+                # 图注残留整段孤立，仅在 text（Markdown 抓取稿）上启用；
+                # PDF 抽取文本的孤立短行多为真实标题/小节名，不适用
+                result = self._remove_isolated_caption_lines(result)
 
         # ── URL/邮箱处理 ──
         if config.CLEAN_URL_ACTION != "keep":
@@ -149,6 +172,74 @@ class DocumentCleaner:
         if new_text != r.text:
             r.changes.append("merged_blank_lines")
         r.text = new_text
+        return r
+
+    def _remove_template_lines(self, r: CleanResult) -> CleanResult:
+        """维基类模板行整行剔除（消歧义横幅/Unihan 声明/医学声明）。
+
+        只删命中行、不动其余内容——这三类是页面级模板，整行即全部噪音，
+        不存在"行内混有正文"的形态（2026-10-04 chunk 审计确认）。
+        """
+        kept, dropped = [], 0
+        for line in r.text.split('\n'):
+            if self._RE_TEMPLATE_LINE.search(line):
+                dropped += 1
+                continue
+            kept.append(line)
+        if dropped:
+            r.text = '\n'.join(kept)
+            r.changes.append(f"dropped_template_lines({dropped})")
+        return r
+
+    def _remove_wiki_noise_lines(self, r: CleanResult) -> CleanResult:
+        """第二批维基抓取稿四类机械噪音行（整行形态稳定，逐类计数可观测）。"""
+        patterns = {
+            "legend": self._RE_WIKI_LEGEND_LINE,
+            "banner": self._RE_WIKI_BANNER_LINE,
+            "rosetta": self._RE_POJ_ROSETTA_LINE,
+            "coord": self._RE_MERGED_COORD_LINE,
+        }
+        kept, dropped = [], []
+        for line in r.text.split('\n'):
+            hit = next((name for name, pat in patterns.items() if pat.search(line)), None)
+            if hit:
+                dropped.append(hit)
+                continue
+            kept.append(line)
+        if dropped:
+            r.text = '\n'.join(kept)
+            for name in patterns:
+                n = dropped.count(name)
+                if n:
+                    r.changes.append(f"dropped_wiki_{name}_lines({n})")
+        return r
+
+    def _remove_isolated_caption_lines(self, r: CleanResult) -> CleanResult:
+        """图片 alt 残留/占位短行：前后皆空行的孤立段落，≤40 字、无句读。
+
+        2026-10-04 保留语料全量扫描（55 处命中全部为图注/[添加列表项]/面包屑，
+        零正文命中）后定形：含 CJK、非标题/列表/表格/引用前缀、不含 '|'、
+        无句末与键值标点（。！？：；…）。有句读的孤立短行是正常陈述，必保留。
+        """
+        lines = r.text.split('\n')
+        kept, dropped = [], 0
+        for i, line in enumerate(lines):
+            s = line.strip()
+            if (
+                6 <= len(s) <= 40
+                and (i == 0 or lines[i - 1].strip() == '')
+                and (i == len(lines) - 1 or lines[i + 1].strip() == '')
+                and not re.match(r'^[#\-*|>]', s)
+                and '|' not in s
+                and not any(t in s for t in '。！？：；…')
+                and re.search(r'[一-鿿]', s)
+            ):
+                dropped += 1
+                continue
+            kept.append(line)
+        if dropped:
+            r.text = '\n'.join(kept)
+            r.changes.append(f"dropped_isolated_captions({dropped})")
         return r
 
     def _unify_cn_punctuation(self, r: CleanResult) -> CleanResult:
