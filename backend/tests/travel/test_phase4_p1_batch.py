@@ -133,3 +133,93 @@ class TestOptionalScheduling:
         names = [i.title for d in repaired.days for i in d.items]
         assert "软点" not in names, "软必去应先于普通点被修复移除"
         assert "普通点" in names
+
+
+class TestOpenStatus:
+    """验收 #77：高德检索时刻营业状态——标注披露+必去警告，不冒充停业。"""
+
+    def _merged(self, monkeypatch, open_status: str):
+        import backend.travel.services.poi_service as m
+
+        normal = make_poi(poi_id="tx1", name="鼓山", source="tencent:lbs")
+        captured = {}
+
+        def fake_merge_amap(brief, queries, pois, observed_at):
+            captured["pois"] = pois
+            rec = {"id": "am1", "name": "鼓山", "category": "景点",
+                   "lat": 26.05, "lng": 119.39, "rating": 4.7,
+                   "open_time_today": "08:00-18:00",
+                   "open_status": open_status}
+            out = [normal, dict(rec)]
+            return out, []
+
+        monkeypatch.setattr(m, "_merge_amap_candidates", fake_merge_amap)
+        return m
+
+    def test_closed_status_tagged_and_warned_for_must_go(self, monkeypatch):
+        import backend.travel.services.poi_service as m
+
+        monkeypatch.setattr(m.T, "TRAVEL_POI_SOURCE", "live")
+        monkeypatch.setattr(m.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", True)
+        # 腾讯路 stub 底层检索（真实 _build_live_candidates 跑通合并链路）
+        monkeypatch.setattr(
+            m.live_search_service, "search_places",
+            lambda *, keyword, city, page_size=8: {"pois": [{
+                "id": "tx1", "name": "鼓山", "category": "景点",
+                "lat": 26.05, "lng": 119.39,
+            }]})
+        real_merge = m._merge_amap_candidates
+        # 直接走真实合并逻辑：stub 掉高德检索，喂 open_status=已打烊
+        from backend.travel.services import live_search_service
+
+        class _FakeEnv:
+            def search_attractions(self, *, keyword, city, page_size=10):
+                return {"merchants": [{
+                    "id": "am1", "name": "鼓山", "category": "景点",
+                    "lat": 26.05, "lng": 119.39, "rating": 4.7,
+                    "open_time_today": "08:00-18:00",
+                    "open_status": "已打烊",
+                }]}
+
+        monkeypatch.setattr(m.live_search_service, "search_attractions",
+                            _FakeEnv().search_attractions)
+        brief = TravelBrief(destination="福州", days=2, must_go=["鼓山"],
+                            preferences=["人文"])
+        candidates, _notes = m.retrieve_candidates(brief)
+        target = next(p for p in candidates if p.name == "鼓山")
+        assert "高德状态:已打烊" in target.tags
+        assert "检索时已打烊" in (target.reason or "")
+        skeleton = m.build_skeleton(brief, candidates)
+        assert any("已打烊" in n and "鼓山" in n for n in skeleton.notes)
+
+    def test_open_status_not_misread_as_closed(self, monkeypatch):
+        import backend.travel.services.poi_service as m
+
+        monkeypatch.setattr(m.T, "TRAVEL_POI_SOURCE", "live")
+        monkeypatch.setattr(m.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", True)
+        # 腾讯路 stub 底层检索（真实 _build_live_candidates 跑通合并链路）
+        monkeypatch.setattr(
+            m.live_search_service, "search_places",
+            lambda *, keyword, city, page_size=8: {"pois": [{
+                "id": "tx1", "name": "鼓山", "category": "景点",
+                "lat": 26.05, "lng": 119.39,
+            }]})
+
+        class _FakeEnv:
+            def search_attractions(self, *, keyword, city, page_size=10):
+                return {"merchants": [{
+                    "id": "am1", "name": "鼓山", "category": "景点",
+                    "lat": 26.05, "lng": 119.39, "rating": 4.7,
+                    "open_time_today": "08:00-18:00",
+                    "open_status": "营业中",
+                }]}
+
+        monkeypatch.setattr(m.live_search_service, "search_attractions",
+                            _FakeEnv().search_attractions)
+        brief = TravelBrief(destination="福州", days=2, must_go=["鼓山"],
+                            preferences=["人文"])
+        candidates, _ = m.retrieve_candidates(brief)
+        target = next(p for p in candidates if p.name == "鼓山")
+        assert "高德状态:已打烊" not in target.tags
+        skeleton = m.build_skeleton(brief, candidates)
+        assert not any("已打烊" in n for n in skeleton.notes)

@@ -218,6 +218,12 @@ def _merge_amap_candidates(
             rating = rec.get("rating")
             rating = float(rating) if isinstance(rating, (int, float)) else 0.0
             hours = _amap_open_hours(str(rec.get("open_time_today") or ""))
+            # 高德检索时刻的营业状态（验收 #77）：「已打烊」是检索时刻的
+            # 事实（出行日可能不同），不据此移除——带 tags 标注供必去警告
+            # 与行程单披露，不冒充「停业」结论（高德无可靠停业字段）。
+            open_status_today = str(rec.get("open_status") or "").strip()
+            closed_tags = (["高德状态:已打烊"]
+                           if open_status_today == "已打烊" else [])
             merged = False
             for i, existing in enumerate(pois):
                 if _same_place(existing.name, name,
@@ -234,13 +240,14 @@ def _merge_amap_candidates(
                         close_time=hours[1] if hours else existing.close_time,
                         suggested_minutes=existing.suggested_minutes,
                         ticket_cny=0.0,
-                        tags=[],
+                        tags=closed_tags,
                         rating=rating,
                         source="amap",
                         observed_at=observed_at,
                         verification_status="unverified",
-                        reason=f"「{q}」实时检索 · 高德评分 {rating:g}" if rating
-                        else f"「{q}」实时检索",
+                        reason=(f"「{q}」实时检索 · 高德评分 {rating:g}"
+                                + (" · 检索时已打烊" if closed_tags else ""))
+                        if rating else f"「{q}」实时检索",
                         location_status="verified",
                     )
                     merged = True
@@ -257,7 +264,7 @@ def _merge_amap_candidates(
                 close_time=hours[1] if hours else "17:00",
                 suggested_minutes=120,
                 ticket_cny=0.0,
-                tags=[],
+                tags=closed_tags,
                 rating=rating,
                 source="amap",
                 observed_at=observed_at,
@@ -502,6 +509,18 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
     #     地点不会被打 required 标（只有 Provider 补全路径会打）；
     #   - 「美食街/夜市」类是游玩型餐饮区（金标 T-D03/T-G09 的预算超限源
     #     「达明美食街」即此类），不是坐下吃饭的店，保留排入。
+    # 必去点名命中高德「检索时已打烊」标注（验收 #77）：点名保留
+    # （kept_required 纪律）但必须警告——出行日状态可能不同，不冒充停业。
+    if brief.must_go:
+        closed_named = [
+            p.name for p in candidates
+            if "高德状态:已打烊" in (p.tags or []) and _is_user_named(p)
+        ]
+        if closed_named:
+            skeleton.notes.append(
+                f"你点名的「{'、'.join(closed_named)}」在高德标注为检索时已打烊"
+                "（营业状态随日期变化），出行前请确认是否营业")
+
     meal_skipped = [
         p for p in ordered
         if is_pure_meal(p) and not (p.required or _is_user_named(p))
