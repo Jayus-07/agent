@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from backend.travel.models.brief import TravelBrief
+from backend.travel.models.poi import Poi
 from backend.travel.services import live_search_service, poi_service
 
 
@@ -262,3 +263,69 @@ def test_amap_rating_orders_skeleton(monkeypatch):
     skeleton = poi_service.build_skeleton(brief, candidates)
     scheduled = [p.name for day in skeleton.days for p in day]
     assert scheduled == ["高分景点", "普通景点", "低分景点"]
+
+
+# ── A4 美食三要素排序（2026-10-04）────────────────────────────
+
+def _merchant(name: str, rating: float | None, lat: float, lng: float,
+              category: str = "餐饮服务:中餐厅") -> dict:
+    return {"id": f"m-{name}", "name": name, "category": category,
+            "rating": rating, "price": None, "avg_cost_cny": None,
+            "address": "", "open_status": "未知", "open_time_today": "",
+            "open_time_week": "", "tel": "", "lat": lat, "lng": lng,
+            "distance_m": None, "source": "amap",
+            "updated_at": "2026-10-04T12:00:00+08:00"}
+
+
+def _poi(name: str, lat: float, lng: float) -> Poi:
+    return Poi(poi_id=f"lbs:{name}", name=name, city="福州",
+               lat=lat, lng=lng)
+
+
+def test_food_rank_near_and_high_rating_first():
+    """评分高+离骨架质心近的排最前；distance_m 注入每项。"""
+    food = {"keyword": "美食", "count": 3, "merchants": [
+        _merchant("远而平", 4.8, 26.10, 119.40),   # 评分高但 ~11km
+        _merchant("近而高", 4.6, 26.06, 119.30),   # 质心旁 ~1km
+        _merchant("近而无分", None, 26.05, 119.30),
+    ]}
+    ranked = poi_service.rank_food_merchants(
+        food, [_poi("景点A", 26.05, 119.30), _poi("景点B", 26.06, 119.31)])
+    names = [m["name"] for m in ranked["merchants"]]
+    assert names[0] == "近而高"  # 近+高分综合最优
+    assert all(m["distance_m"] is not None for m in ranked["merchants"])
+
+
+def test_food_rank_no_rating_neutral_not_zero():
+    """无评分按中性 2.5 计（不给 0 冤枉沉底），仍参与距离排序。"""
+    food = {"merchants": [
+        _merchant("无分但近", None, 26.05, 119.30),
+        _merchant("有分但远", 4.0, 26.15, 119.45),
+    ]}
+    ranked = poi_service.rank_food_merchants(
+        food, [_poi("景点", 26.05, 119.30)])
+    assert ranked["merchants"][0]["name"] == "无分但近"
+
+
+def test_food_rank_empty_skeleton_keeps_order():
+    """空骨架（无距离参照）保持原序，不硬排。"""
+    food = {"merchants": [_merchant("甲", 4.0, 26.0, 119.0),
+                          _merchant("乙", 4.5, 26.1, 119.1)]}
+    ranked = poi_service.rank_food_merchants(food, [])
+    assert [m["name"] for m in ranked["merchants"]] == ["甲", "乙"]
+
+
+def test_food_rank_category_boost_applied(monkeypatch):
+    """品类加权表启用时生效（配置驱动，默认空表不加分）。"""
+    from backend.travel.services import poi_service as ps
+
+    food = {"merchants": [
+        _merchant("普通店", 4.5, 26.05, 119.30, "餐饮服务:中餐厅:川菜"),
+        _merchant("闽菜馆", 4.5, 26.05, 119.30, "餐饮服务:中餐厅:福建菜"),
+    ]}
+    ranked = ps.rank_food_merchants(food, [_poi("景点", 26.05, 119.30)])
+    assert ranked["merchants"][0]["name"] in {"普通店", "闽菜馆"}  # 默认无加权，稳定序即可
+
+    monkeypatch.setattr(ps.T, "TRAVEL_FOOD_CATEGORY_BOOSTS", {"福建菜": 0.6})
+    ranked = ps.rank_food_merchants(food, [_poi("景点", 26.05, 119.30)])
+    assert ranked["merchants"][0]["name"] == "闽菜馆"

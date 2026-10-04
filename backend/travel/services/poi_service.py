@@ -477,3 +477,66 @@ def _build_notes(
             + "、".join(unresolved)
         )
     return notes
+
+
+# ── A4 美食三要素排序（2026-10-04）────────────────────────────
+# 拍板口径「就近 + 品类 + 评分综合」。距离/评分为可计算硬事实；
+# 「品类对味」是主观映射，机制上做成配置化加权表（TRAVEL_FOOD_
+# CATEGORY_BOOSTS，默认空=不启用），词表留给实机调参，不拍脑子写死。
+# 综合分 = 6.0 × 评分归一 + 4.0 × 距离衰减（3km 线性归零）：
+#   - rating 缺失（高德部分商家无评分）按中性 2.5 计——给 0 会把
+#     「没数据」冤枉成「差评」沉底；
+#   - 3km 外衰减归零但保留顺序（不是过滤——用户有选择权）。
+
+_FOOD_RATING_WEIGHT = 6.0
+_FOOD_DISTANCE_WEIGHT = 4.0
+_FOOD_DISTANCE_FALLOFF_M = 3000.0
+_FOOD_RATING_NEUTRAL = 2.5
+
+
+def _food_category_boost(category: str) -> float:
+    """品类加权（配置表：{"福建菜": 0.5, ...} 关键词→加分），默认不启用。"""
+    text = category or ""
+    boost = 0.0
+    for keyword, value in T.TRAVEL_FOOD_CATEGORY_BOOSTS.items():
+        if keyword in text:
+            boost = max(boost, float(value))
+    return boost
+
+
+def _food_score(rating: float | None, distance_m: float | None,
+                category: str) -> float:
+    """综合分：评分归一 + 距离衰减 + 品类加权（纯函数，可单测）。"""
+    base = float(rating) if rating is not None else _FOOD_RATING_NEUTRAL
+    score = _FOOD_RATING_WEIGHT * (max(0.0, min(5.0, base)) / 5.0)
+    if distance_m is not None:
+        falloff = max(0.0, 1.0 - distance_m / _FOOD_DISTANCE_FALLOFF_M)
+        score += _FOOD_DISTANCE_WEIGHT * falloff
+    return score + _food_category_boost(category)
+
+
+def rank_food_merchants(food: dict, pois: list[Poi]) -> dict:
+    """把美食商户按「就近+品类+评分」重排（纯函数；不改封套结构）。
+
+    pois = 已分配进骨架的景点（质心参照）；空骨架时保持原序（无距离
+    参照不硬排）。每个 merchant 附加 `distance_m`（到质心，米，本地
+    haversine——高德 v5 城市级检索不回距离）供前端展示「距景点 X m」。
+    """
+    merchants = (food or {}).get("merchants") or []
+    if not merchants or not pois:
+        return food
+    centroid_lat = sum(p.lat for p in pois) / len(pois)
+    centroid_lng = sum(p.lng for p in pois) / len(pois)
+
+    def _key(item: dict) -> float:
+        dist = None
+        lat, lng = item.get("lat"), item.get("lng")
+        if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+            dist = _haversine_m_approx(centroid_lat, centroid_lng,
+                                       float(lat), float(lng))
+            item["distance_m"] = int(dist)
+        return _food_score(
+            item.get("rating"), dist, str(item.get("category") or ""))
+
+    ranked = sorted(merchants, key=_key, reverse=True)
+    return {**food, "merchants": ranked}

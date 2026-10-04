@@ -169,6 +169,18 @@ TRAVEL_BAD_WEATHER_KEYWORDS: tuple[str, ...] = (
     "雨", "雪", "雷", "雹", "台风", "沙尘", "冻",
 )
 
+# A4 美食「品类对味」加权表（2026-10-04）：category 含关键词 → 综合分加成。
+# 默认空 = 不启用（品类的「对味」映射是主观口径，机制先行、词表留给实机
+# 调参；形如 {"福建菜": 0.5, "老字号": 0.3}，JSON 解析失败整体忽略）。
+import json as _json
+_raw_food_boosts = os.getenv("TRAVEL_FOOD_CATEGORY_BOOSTS", "{}").strip()
+try:
+    TRAVEL_FOOD_CATEGORY_BOOSTS: dict[str, float] = {
+        str(k): float(v) for k, v in (_json.loads(_raw_food_boosts) or {}).items()
+    }
+except (ValueError, TypeError):
+    TRAVEL_FOOD_CATEGORY_BOOSTS = {}
+
 # =============================================
 # 知识库检索（2026-09-22 P0-1 RAG 接入）
 # =============================================

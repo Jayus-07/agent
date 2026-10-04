@@ -122,12 +122,25 @@ def poi_expert_node(state: dict) -> dict:
             #（「美食」偏好自动触发后该检索在每次规划都会跑，炸节点等于
             # 高德一抖行程就没了）。
             try:
-                live_search["food"] = run_travel_tool(
+                food_data = run_travel_tool(
                     "map_merchant_search_tool",
                     "research",
                     lambda: _research.search_food(brief.destination),
                     result_summary=_merchant_summary("food"),
                 )
+                # A4（2026-10-04）：骨架已在手（本节点上文 build_skeleton），
+                # 按「就近+品类+评分」重排商户并注入到质心距离——高德 v5
+                # 城市级检索不回距离，本地 haversine 计算；纯函数软失败。
+                try:
+                    from backend.travel.services.poi_service import rank_food_merchants
+
+                    scheduled_pois = [
+                        p for day in skeleton.days for p in day]
+                    food_data = rank_food_merchants(food_data, scheduled_pois)
+                except Exception:  # noqa: BLE001 — 排序失败保持原序
+                    logger.debug("[TravelPOI] 美食排序失败（保持原序）",
+                                 exc_info=True)
+                live_search["food"] = food_data
             except live_search_service.LiveSearchError as exc:
                 extra_notes.append(f"美食商户实时检索不可用（{exc}），本次只有攻略参考")
         if need_hotel:
