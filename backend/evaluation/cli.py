@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from backend.evaluation.gate import flag_regressions
+from backend.evaluation.judge_golden import DEFAULT_GOLDEN_PATH as _DEFAULT_GOLDEN_PATH
 from backend.evaluation.models import MODULE_KINDS
 from backend.evaluation.report import (
     print_summary,
@@ -32,7 +33,6 @@ if sys.platform == "win32":
 RESULTS_DIR = DATA_ROOT
 
 _DEFAULT_RUNNER_CONFIG = "backend.evaluation.runners_config"
-_DEFAULT_GOLDEN_PATH = None  # cli.py 零项目依赖原则：延迟到 main() 里解析
 
 
 def _bootstrap_runners(config_module: str | None = None):

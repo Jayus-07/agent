@@ -583,52 +583,52 @@ class EvaluationService:
             scope, dataset_version = _resolve_rag_scope(cases, config)
             results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id)
             summaries = [_build_summary(results, "rag")]
-        _inject_token_totals(summaries, run_started_ts)
-        # C4-1/C4-2/C7-4：judge/RAGAS 调用参数快照（含 seed_support 显式口径）
-        from backend.evaluation.evaluator_config import (
-            collect_judge_config,
-            collect_ragas_config,
-        )
-
-        dataset_report_metadata = {
-            "evaluation_scope": scope.as_dict(),
-            "dataset_version": dataset_version,
-            "selection": config.selection,
-            "run_id": run_id,
-            "evaluator_mode": _evaluator_mode(config),
-            "buckets": _build_buckets(cases, results),
-            "ragas_samples": _ragas_sample_stats(results),
-            "suite_governance": suite_governance,
-        }
-        dataset_report_metadata["ragas_degraded"] = _ragas_degraded(
-            dataset_report_metadata["ragas_samples"],
-        )
-        # C9-4/CON-05：运行期 suite 文件改动告警（如有）
-        suite_mtime_note = _check_suite_mtime(suite_mtime_baseline)
-        if suite_mtime_note:
-            dataset_report_metadata["suite_mtime_warning"] = suite_mtime_note
-        if not config.no_ragas:
-            dataset_report_metadata["ragas_config"] = collect_ragas_config(
-                config.ragas_level,
+            _inject_token_totals(summaries, run_started_ts)
+            # C4-1/C4-2/C7-4：judge/RAGAS 调用参数快照（含 seed_support 显式口径）
+            from backend.evaluation.evaluator_config import (
+                collect_judge_config,
+                collect_ragas_config,
             )
-        if config.judge:
-            dataset_report_metadata["judge_config"] = collect_judge_config()
-        _attach_evaluator_cost(dataset_report_metadata, summaries)
-        report = EvalReport(
-            module="rag",
-            mode="live" if live else "offline",
-            smoke=config.smoke,
-            tier=config.tier,
-            summaries=summaries,
-            results=list(results),
-            total_score=None,
-            tier_summaries=evaluate_tiers(
-                cases, results,
-                min_samples=min_samples, min_valid_samples=min_valid_samples,
-            ),
-            metadata=dataset_report_metadata,
-        )
-        return _attach_provenance(config, report)
+
+            dataset_report_metadata = {
+                "evaluation_scope": scope.as_dict(),
+                "dataset_version": dataset_version,
+                "selection": config.selection,
+                "run_id": run_id,
+                "evaluator_mode": _evaluator_mode(config),
+                "buckets": _build_buckets(cases, results),
+                "ragas_samples": _ragas_sample_stats(results),
+                "suite_governance": suite_governance,
+            }
+            dataset_report_metadata["ragas_degraded"] = _ragas_degraded(
+                dataset_report_metadata["ragas_samples"],
+            )
+            # C9-4/CON-05：运行期 suite 文件改动告警（如有）
+            suite_mtime_note = _check_suite_mtime(suite_mtime_baseline)
+            if suite_mtime_note:
+                dataset_report_metadata["suite_mtime_warning"] = suite_mtime_note
+            if not config.no_ragas:
+                dataset_report_metadata["ragas_config"] = collect_ragas_config(
+                    config.ragas_level,
+                )
+            if config.judge:
+                dataset_report_metadata["judge_config"] = collect_judge_config()
+            _attach_evaluator_cost(dataset_report_metadata, summaries)
+            report = EvalReport(
+                module="rag",
+                mode="live" if live else "offline",
+                smoke=config.smoke,
+                tier=config.tier,
+                summaries=summaries,
+                results=list(results),
+                total_score=None,
+                tier_summaries=evaluate_tiers(
+                    cases, results,
+                    min_samples=min_samples, min_valid_samples=min_valid_samples,
+                ),
+                metadata=dataset_report_metadata,
+            )
+            return _attach_provenance(config, report)
 
         # 模块清单派生自 models.ModuleKind（唯一事实源）；`all` 的取/舍口径见
         # models.ALL_RUN_MODULES（排除项逐个带理由），此处不再手写列表
