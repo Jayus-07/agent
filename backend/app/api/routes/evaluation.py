@@ -7,7 +7,7 @@ from typing import Any
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.app.api.deps import OperatorIdentity, require_admin_user
@@ -38,7 +38,7 @@ SUPPORTED_EVAL_TENANTS = {"default"}
 
 
 async def _eval_tenant_scope(
-    x_tenant_id: str | None = Query(None, alias="X-Tenant-Id"),
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-Id"),
 ) -> str:
     """租户校验钩子：单租户架构下恒 default，其他值显式拒绝。"""
     tenant = (x_tenant_id or "default").strip() or "default"
@@ -331,7 +331,7 @@ async def cancel_eval_run(
     audit_ok = record_operation(
         "eval_run.cancel", run_id,
         actor=_operator.actor,
-        detail={"run_status_at_cancel": str(status.get("status", ""))},
+        detail=f"run_status_at_cancel={status.get('status', '')}",
     )
     return CancelRunResponse(
         run_id=run_id,
