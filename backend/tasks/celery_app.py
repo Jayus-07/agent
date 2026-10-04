@@ -147,6 +147,13 @@ celery_app.conf.update(
             "schedule": crontab(hour=6, minute=10),
             "options": {"queue": beat_queue("cs.qa_daily_report")},
         },
+        # A8a（2026-10-05）：FAQ 缺口周检。每周一 06:25 UTC（日报后）
+        # 只读清单 + JSON 归档（缺口闭环台账输入，C6/A8 验收）。
+        "cs-faq-gap-review": {
+            "task": "cs.faq.gap_review",
+            "schedule": crontab(day_of_week=1, hour=6, minute=25),
+            "options": {"queue": beat_queue("cs.faq.gap_review")},
+        },
         # STOP C（2026-09-24）：Memory 衰减生命周期。每日 04:30 UTC 衰减
         # 久未访问的 inferred/legacy 记忆并归档低重要性行；explicit 豁免
         # （用户显式记忆不因时间消失）。幂等条件 UPDATE，失败自动重试。

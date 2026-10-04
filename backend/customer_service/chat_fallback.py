@@ -24,7 +24,9 @@ from dataclasses import dataclass
 from backend.config.customer_service import CS_CHAT_LLM_TIMEOUT_MS
 from backend.shared.logger import logger
 
-# 人设 system prompt：口语化、简短、先接情绪；红线=不编造/不承诺/不出域
+# 人设 system prompt（E5 收尾，2026-10-05）：权威 = prompt 注册表
+# customer_service.chat_fallback（版本治理/热更随 Prompt 发布链路）；
+# 常量保留为注册表不可用时的降级兜底（内容逐字一致）。
 PERSONA_SYSTEM_PROMPT = """你是电商店铺的客服助手，用口语化中文和用户聊天。
 - 简短：一两句话回应完，不写小作文，不堆礼貌用语
 - 先接情绪再说话：用户道谢就自然回应，用户着急就先安抚
@@ -32,6 +34,16 @@ PERSONA_SYSTEM_PROMPT = """你是电商店铺的客服助手，用口语化中�
   · 不编造任何政策/订单/售后事实——业务问题引导用户直接问
   · 不做任何承诺（赔偿/时效/补偿）
   · 不回答购物客服以外的话题"""
+
+
+def _persona_system_prompt() -> str:
+    """人设 prompt：注册表优先，异常降级模块常量（软失败）。"""
+    try:
+        from backend.customer_service.prompting import render_prompt
+        rendered = render_prompt("customer_service.chat_fallback")
+        return rendered or PERSONA_SYSTEM_PROMPT
+    except Exception:
+        return PERSONA_SYSTEM_PROMPT
 
 # LLM 故障时的固定兜底话术（fail-open：寒暄路径不向用户暴露错误）
 _FALLBACK_REPLY = "我在的～有什么购物相关的问题（订单、退款、物流）随时问我。"
@@ -82,7 +94,7 @@ def run_chat_fallback(
         # 零记账后改走代理（与全平台计量同一路径）。
         from backend.infra.llm import llm as llm_proxy
 
-        messages: list = [SystemMessage(content=PERSONA_SYSTEM_PROMPT)]
+        messages: list = [SystemMessage(content=_persona_system_prompt())]
         for role, text in (history or [])[-4:]:  # 最多带最近 4 轮上下文
             messages.append(
                 AIMessage(content=text) if role == "ai" else HumanMessage(content=text))

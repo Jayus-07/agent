@@ -45,3 +45,49 @@ def cs_qa_daily_report(self) -> dict:
         "report_date": result.get("report_date"),
         "metrics_keys": sorted((result.get("metrics") or {}).keys()),
     }
+
+
+@celery_app.task(
+    bind=True,
+    name="cs.faq.gap_review",
+    acks_late=True,
+    autoretry_for=(RuntimeError,),
+    retry_backoff=CELERY_RETRY_BACKOFF,
+    retry_backoff_max=CELERY_RETRY_BACKOFF_MAX,
+    retry_jitter=True,
+    max_retries=3,
+)
+def cs_faq_gap_review(self) -> dict:
+    """FAQ 缺口周检（A8a/C6）：只读清单 + JSON 归档（缺口闭环台账输入）。
+
+    混线解锁后登记（原 scripts/cs_faq_gap_review.py 仅手动触发，
+    A8 验收「beat 登记等混线解锁」即本任务）。
+    """
+    import psycopg2
+
+    from backend.config.database import DOC_REGISTRY_PG_CONFIG
+    from scripts.cs_faq_gap_review import collect_report
+
+    conn = psycopg2.connect(**DOC_REGISTRY_PG_CONFIG)
+    try:
+        report = collect_report(conn, days=7, limit=50)
+    finally:
+        conn.rollback()
+        conn.close()
+
+    # 归档：data/cs_gap_reviews/ 周检 JSON（台账留痕）
+    from pathlib import Path as _P
+    import time as _time
+    out_dir = _P("data/cs_gap_reviews")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"gap_review_{_time.strftime('%Y%m%d_%H%M%S')}.json"
+    import json as _json
+    out.write_text(_json.dumps(report, ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    logger.info(
+        "[CSQATask] FAQ 缺口周检完成 open=%s closed_now=%s 归档=%s",
+        report.get("open_count"), report.get("closed_now_count"), out,
+    )
+    return {"open_count": report.get("open_count"),
+            "closed_now_count": report.get("closed_now_count"),
+            "archived": str(out)}
