@@ -293,6 +293,33 @@ class TestPrefetchTripDates:
             [pois], trip_dates=[date.today() + timedelta(days=2)])
         assert len(calls) == 1
 
+    def test_transit_prefetch_not_shadowed_by_main_cache(self, monkeypatch):
+        """主路线已预热同批段 → transit 预热仍执行（缓存键维度隔离）。
+
+        实机 bug（2026-10-04）：prefetch_legs 复用给 transit 时缓存检查
+        用 main 键——主路线预热已把同批坐标对的 main 键写满，transit 预热
+        误判「已有缓存」全部跳过，行程永远无候选（容器内复现：prefetch
+        0.46s 返回、cache keys 为空）。
+        """
+        import time
+
+        calls: list[tuple] = []
+
+        def _fake_transit(*a):
+            calls.append(a)
+            return None
+
+        # 主路线预热成果在位（main 键）
+        live_map._LEG_CACHE[live_map._leg_cache_key(
+            26.08, 119.29, 26.05, 119.33, mode="main")] = (
+                time.monotonic(),
+                {"distance_km": 5.2, "mode": "drive", "minutes": 11,
+                 "cost_cny": 15.0, "source": "tencent:lbs"})
+        monkeypatch.setattr(live_map, "live_leg_transit", _fake_transit)
+        pois = [_poi("A点", 26.08, 119.29), _poi("B点", 26.05, 119.33)]
+        transit_service.prefetch_day_legs([pois])
+        assert len(calls) == 1  # transit 键 miss → 必须真预热
+
     def test_no_trip_dates_still_prefetches_transit(self, monkeypatch):
         """不传 trip_dates（未提供出发日期）→ transit 段照常预热。
 
