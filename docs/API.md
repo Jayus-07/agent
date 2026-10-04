@@ -360,6 +360,10 @@ GET   /rag/operations                      操作日志
 POST  /rag/upload                          上传 + SSE 进度
 GET   /rag/upload/{id}/stream              SSE 进度流（帧结构见下）
 GET   /rag/knowledge-bases                 知识库列表
+GET   /rag/kb-authority                    知识库授权盘点（admin）：全量 KB 注册口径
+                                           （owner_depts/audience/文档计数/废弃状态），
+                                           只读派生自 config/knowledge_base.py；可见性
+                                           变更走注册表代码评审，不提供运行时改口径
 POST  /rag/search                          语义检索
 POST  /rag/ask                             RAG 问答（answer_meta 见 §4.3）
 ```

@@ -492,9 +492,10 @@ evidence_gate_rerank(
     context_docs,
     intent=self.gate.intent,
     risk_level=self.gate.risk_level,
-    min_top1=RERANK_MIN_TOP1,          # 0.35
-    min_avg=RERANK_MIN_AVG,            # 0.25
-    min_gap=RERANK_MIN_GAP,            # 0.05
+    min_top1=RERANK_MIN_TOP1,          # 0.40（2026-10-05 E1 拍板）
+    min_avg=RERANK_MIN_AVG,            # 0.10（拍板口径：漏拒=幻觉源头优先收缩，
+    min_gap=RERANK_MIN_GAP,            # 0.05   2:1 加权 cost 最优，假拒 10.1%/漏拒 16%；
+                                       #        生效值以 .env 覆盖为准）
     high_risk_min_top1=RERANK_HIGH_RISK_MIN_TOP1,  # 0.55
 )
 ```
