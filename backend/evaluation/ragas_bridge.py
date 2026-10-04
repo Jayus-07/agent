@@ -426,7 +426,16 @@ def compute_ragas_metrics(
         try:
             metric = _get_cached_metric(name, llm_wrapper, embeddings)
             val = float(metric.single_turn_score(sample))
-            results[key] = round(val, 4) if val == val else None
+            # C4-3/JUDGE-05：范围校验——NaN/inf → None（unavailable，不入聚合）；
+            # 出界值钳位到 [0,1] 并告警（RAGAS 指标定义域 0~1）
+            if val != val or val in (float("inf"), float("-inf")):
+                logger.warning(f"[RAGAS] {name} 非法分值（{val}），置 None")
+                results[key] = None
+                continue
+            if val < 0.0 or val > 1.0:
+                logger.warning(f"[RAGAS] {name} 出界分值 {val}，钳位到 [0,1]")
+                val = min(1.0, max(0.0, val))
+            results[key] = round(val, 4)
         except Exception as e:
             logger.warning(f"[RAGAS] {name} 计算失败: {e}")
             results[key] = None

@@ -133,16 +133,45 @@ def judge_answer(
 
         data = json.loads(content)
 
-        # 校验分数范围
-        for key in data.get("scores", {}):
-            score = data["scores"][key]
-            if not (1 <= score <= 5):
-                raise ValueError(f"Score out of range [1,5]: {key}={score}")
+        # 校验分数范围（C4-3/JUDGE-05）：出界钳位到 [1,5] 并在 reasoning
+        # 留痕；NaN/字符串等非法值按该维度缺失处理（钳到下界 1 并标注），
+        # 不再让单维异常把整次评分打成败（0 分冒充评估失败同样污染聚合）。
+        raw_scores = data.get("scores", {})
+        clean_scores: dict[str, int] = {}
+        clamped: list[str] = []
+        for key, score in raw_scores.items():
+            try:
+                value = float(score)
+            except (TypeError, ValueError):
+                clamped.append(f"{key}=invalid({score!r})")
+                clean_scores[key] = 1
+                continue
+            if value != value:  # NaN
+                clamped.append(f"{key}=nan")
+                clean_scores[key] = 1
+                continue
+            clamped_value = int(round(min(5.0, max(1.0, value))))
+            if clamped_value != score or value < 1 or value > 5:
+                clamped.append(f"{key}={score}→{clamped_value}")
+            clean_scores[key] = clamped_value
+
+        total_raw = data.get("total", 0)
+        try:
+            total_value = float(total_raw)
+            total_value = min(5.0, max(0.0, 0.0 if total_value != total_value else total_value))
+        except (TypeError, ValueError):
+            total_value = 0.0
+
+        reasoning = str(data.get("reasoning", ""))
+        if clamped:
+            reasoning = (
+                f"[score_clamped: {', '.join(clamped)}] " + reasoning
+            )
 
         return JudgeResult(
-            scores=data["scores"],
-            total=round(data["total"], 2),
-            reasoning=data.get("reasoning", ""),
+            scores=clean_scores,
+            total=round(total_value, 2),
+            reasoning=reasoning,
             confidence=data.get("confidence", "medium"),
         )
     except Exception as e:

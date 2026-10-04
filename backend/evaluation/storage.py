@@ -392,6 +392,13 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
         "env": collect_env_info(),
         # RAGAS-01/02：本次运行的评估器模式（self / self+ragas），随快照落盘
         "evaluator_mode": report.metadata.get("evaluator_mode", ""),
+        # C3-3/REPRO-09：统一快照哈希 + 模板哈希（REPRO-04）随 meta 落盘
+        "evaluation_snapshot_hash": report.metadata.get("evaluation_snapshot_hash", ""),
+        "prompt_template_hashes": (
+            (report.metadata.get("evaluation_snapshot_inputs") or {}).get(
+                "prompt_template_hashes", {},
+            )
+        ),
         "run_at": datetime.now().isoformat(),
     }
     (run_dir / "meta.json").write_text(
@@ -401,9 +408,14 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
 
     # 4. run 级摘要落 DB 台账（M7：ai.eval_run_records，软失败不影响文件主流程）
     try:
-        from backend.evaluation.run_records import record_run
+        from backend.evaluation.run_records import (
+            record_run,
+            record_run_samples,
+        )
 
         record_run(report, run_id, meta)
+        # C3-2：样本级 DB 镜像（开关默认关，见 run_records 口径）
+        record_run_samples(report, run_id)
     except Exception as e:  # noqa: BLE001 — 台账软失败
         print(f"[storage] eval_run_records 台账写入失败（不影响文件）: {e}")
 
@@ -422,6 +434,19 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
             )
         else:
             mark_run_status(run_id, "completed")
+
+    # C3-1：非 completed 终态同步回 DB 台账（record_run 默认写 completed）
+    try:
+        from backend.evaluation.run_records import update_run_terminal_status
+
+        final_status = (read_run_status(run_id) or {}).get("status")
+        if final_status and final_status != "completed":
+            update_run_terminal_status(
+                run_id, final_status,
+                error=str((read_run_status(run_id) or {}).get("error", "")),
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"[storage] run 终态同步失败（不影响文件）: {e}")
 
     print(f"[storage] 报告已持久化到: {run_dir}")
     return run_dir

@@ -619,7 +619,11 @@ _default_service = EvaluationService()
 
 def _attach_provenance(config: EvalConfig, report: EvalReport) -> EvalReport:
     """把 scope、候选 Prompt 和发布关联写入 report metadata。"""
-    from backend.evaluation.provenance import build_eval_provenance
+    from backend.evaluation.provenance import (
+        build_eval_provenance,
+        build_snapshot_hash,
+        collect_snapshot_inputs,
+    )
 
     if config.prompt_versions:
         report.prompt_versions = {
@@ -634,6 +638,15 @@ def _attach_provenance(config: EvalConfig, report: EvalReport) -> EvalReport:
         except Exception:
             report.prompt_versions = {}
     report.metadata["eval_provenance"] = build_eval_provenance(config, report)
+    # C3-3/REPRO-09：统一快照哈希——所有关键输入的确定性摘要，
+    # meta.json / DB 列 / trace 消费同一值（REPRO-10 守护见测试）
+    try:
+        snapshot_inputs = collect_snapshot_inputs(config, report)
+        report.metadata["evaluation_snapshot_inputs"] = snapshot_inputs
+        report.metadata["evaluation_snapshot_hash"] = build_snapshot_hash(snapshot_inputs)
+    except Exception as e:  # noqa: BLE001 — 哈希失败诚实留痕，不伪造
+        report.metadata["evaluation_snapshot_hash"] = ""
+        report.metadata["evaluation_snapshot_error"] = str(e)[:200]
     return report
 
 

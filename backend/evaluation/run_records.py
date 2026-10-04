@@ -15,10 +15,17 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from backend.evaluation.models import EvalReport
 from backend.shared.logger import logger
+
+# C3-2：样本级 DB 镜像开关（默认关——量大防拖慢评测主流程；
+# 需要样本级 SQL 对账/管理端样本查询时打开）
+SAMPLE_DB_SINK_ENABLED = os.getenv("EVAL_SAMPLE_DB_SINK_ENABLED", "false").strip().lower() in (
+    "1", "true", "yes",
+)
 
 
 def collect_prompt_snapshot() -> dict[str, str]:
@@ -92,6 +99,12 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
         "prompt_snapshot": meta.get("prompt_snapshot", collect_prompt_snapshot()),
         "model_binding_fingerprint": meta.get("model_binding_fingerprint",
                                               collect_model_binding_fingerprint()),
+        # C3-1/C3-3：生命周期状态与统一快照哈希随台账落库（074 迁移列）
+        "status": str((report.metadata or {}).get("lifecycle_status", "")) or "completed",
+        "attempt_no": int((report.metadata or {}).get("attempt_no", 1) or 1),
+        "evaluation_snapshot_hash": str(
+            (report.metadata or {}).get("evaluation_snapshot_hash", "")
+        ),
         "trigger": (meta.get("env") or {}).get("trigger", "manual"),
         "triggered_by": (meta.get("env") or {}).get("triggered_by", ""),
         **summary,
@@ -106,14 +119,18 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
                 INSERT INTO ai.eval_run_records (
                     run_id, module, mode, smoke, dataset_version, git_sha,
                     prompt_snapshot, model_binding_fingerprint,
+                    status, attempt_no, evaluation_snapshot_hash,
                     trigger, triggered_by, metrics,
                     case_count, pass_count, pass_rate
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (run_id) DO UPDATE SET
                     metrics = EXCLUDED.metrics,
                     case_count = EXCLUDED.case_count,
                     pass_count = EXCLUDED.pass_count,
                     pass_rate = EXCLUDED.pass_rate,
+                    status = EXCLUDED.status,
+                    attempt_no = EXCLUDED.attempt_no,
+                    evaluation_snapshot_hash = EXCLUDED.evaluation_snapshot_hash,
                     updated_at = now()
                 """,
                 (
@@ -122,6 +139,8 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
                     row["git_sha"],
                     json.dumps(row["prompt_snapshot"], ensure_ascii=False),
                     row["model_binding_fingerprint"],
+                    row["status"], row["attempt_no"],
+                    row["evaluation_snapshot_hash"],
                     row["trigger"], row["triggered_by"],
                     json.dumps(row["metrics"], ensure_ascii=False),
                     row["case_count"], row["pass_count"], row["pass_rate"],
@@ -134,4 +153,80 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
         return False
 
 
-__all__ = ["record_run", "collect_prompt_snapshot", "collect_model_binding_fingerprint"]
+def update_run_terminal_status(run_id: str, status: str, error: str = "") -> bool:
+    """C3-1：终态（cancelled/failed）同步进 DB 台账（074 status 列）。
+
+    persist_report 在 mark_run_status 终态收口后调用；软失败。
+    """
+    if status not in {"completed", "failed", "cancelled"}:
+        return False
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            conn.cursor().execute(
+                """
+                UPDATE ai.eval_run_records
+                SET status = %s, updated_at = now()
+                WHERE run_id = %s
+                """,
+                (status, run_id),
+            )
+            conn.commit()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[run_records] run 终态同步失败（run_id={run_id}）: {e}")
+        return False
+
+
+def record_run_samples(report: EvalReport, run_id: str) -> int:
+    """C3-2/DB-07：样本结果批量 upsert 进 ai.eval_run_samples（075 迁移）。
+
+    (run_id, case_id, evaluator) 唯一——重复消费同键覆盖写（CON-07 幂等）。
+    开关 EVAL_SAMPLE_DB_SINK_ENABLED 默认关。返回写入行数（软失败返 -1）。
+    """
+    if not SAMPLE_DB_SINK_ENABLED:
+        return 0
+    rows = []
+    for r in report.results:
+        rows.append((
+            run_id, r.case_id, "self", r.status,
+            json.dumps(r.metrics or {}, ensure_ascii=False),
+            (r.error_stage or "")[:40],
+        ))
+    if not rows:
+        return 0
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.executemany(
+                """
+                INSERT INTO ai.eval_run_samples
+                    (run_id, case_id, evaluator, status, metrics, error_stage)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_id, case_id, evaluator) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    metrics = EXCLUDED.metrics,
+                    error_stage = EXCLUDED.error_stage,
+                    updated_at = now()
+                """,
+                rows,
+            )
+            conn.commit()
+        return len(rows)
+    except Exception as e:  # noqa: BLE001 — 样本镜像是旁路，失败不影响主流程
+        logger.warning(f"[run_records] 样本级镜像写入失败: {e}")
+        return -1
+
+
+__all__ = [
+    "record_run",
+    "record_run_samples",
+    "update_run_terminal_status",
+    "collect_prompt_snapshot",
+    "collect_model_binding_fingerprint",
+]

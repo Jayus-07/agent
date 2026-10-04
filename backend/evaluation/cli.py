@@ -475,6 +475,26 @@ def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path |
     else:
         print("\n✅ 无指标显著下降")
 
+    # C4-8/RAGAS-13：复算波动超容差时显式标注随机性来源——
+    # provider 均不支持 seed（seed_support=false，见 evaluator_config），
+    # 同输入重跑的 RAGAS/Judge 分值本身有采样波动，超阈值 ≠ 必然回归
+    ragas_deltas = [
+        abs(cur_s.metrics.get(k) - prev_s.metrics.get(k))
+        for cur_s in current.summaries
+        for prev_s in [base_by_mod.get(cur_s.module)]
+        if prev_s and isinstance(cur_s.metrics.get(k), (int, float))
+        and isinstance(prev_s.metrics.get(k), (int, float))
+        for k in ("ragas_faithfulness", "ragas_answer_relevancy",
+                  "ragas_context_precision", "ragas_context_recall")
+    ]
+    if ragas_deltas and max(ragas_deltas) > 0.1:
+        print(
+            f"\nℹ️  RAGAS 最大波动 {max(ragas_deltas):.4f} 超过 0.1 容差。"
+            f"随机性来源：eval_gen/Judge 调用不支持 seed（seed_support=false，"
+            f"见 report.metadata.ragas_config），LLM 采样天然波动；"
+            f"请以 judge-golden 漂移检测与多次运行均值作为回归判据。"
+        )
+
 
 if __name__ == "__main__":
     main()

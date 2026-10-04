@@ -218,6 +218,41 @@ class PromptReleaseService:
         row = await self._repository.mark_rolled_back(release_id, actor)
         return PromptReleaseRecord.from_row(row)
 
+    async def ensure_version_deletable(self, key: str, version: int) -> None:
+        """C3-4/DB-06：发布版本删除保护（应用层守卫）。
+
+        当前无版本删除端点（发布版本删除=流程管控，DB 层 CASCADE 不触达）；
+        本守卫供未来任何删除路径调用：被 production alias 指中、或存在
+        approved/published 状态 release 的版本禁止物理删除——先回滚/归档。
+        """
+        prompt_service = self._prompt_service or _load_prompt_service()
+        try:
+            aliases = await prompt_service.get_aliases(key)
+            if aliases.get("production") == version:
+                raise ValueError(
+                    f"版本 v{version} 是 {key} 的 production 指针目标，"
+                    f"禁止删除；请先发布新版本或回滚（DB-06 删除保护）"
+                )
+        except ValueError:
+            raise
+        except Exception:
+            pass  # 别名读取失败不阻塞守卫的 release 检查（双保险取其一）
+        releases = await self.list_releases(key)
+        blocking = [
+            r for r in releases
+            if r.version == version
+            and r.status in {
+                PromptReleaseStatus.APPROVED,
+                PromptReleaseStatus.PUBLISHED,
+            }
+        ]
+        if blocking:
+            ids = ", ".join(r.release_id for r in blocking[:3])
+            raise ValueError(
+                f"版本 v{version} 存在审批通过/已发布的发布记录（{ids}），"
+                f"禁止删除；评测与审批证据必须随版本保留（GATE-09）"
+            )
+
     @staticmethod
     def _enforce_publish_gates(current: PromptReleaseRecord) -> None:
         """C1-1/C1-7：按灰度开关裁决回归门与 RAGAS 门（GATE-11/03）。"""
