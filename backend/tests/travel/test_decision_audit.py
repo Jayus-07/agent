@@ -153,3 +153,38 @@ class TestListDecisions:
     def test_read_failure_returns_empty(self, monkeypatch):
         _patch_store(monkeypatch, _FakeCursor(fail=True))
         assert decision_store.list_decisions("u1", "c1") == []
+
+
+class TestIdempotency:
+    """验收 #55（2026-10-04）：重复上报幂等——ON CONFLICT 命中回查既有 id。"""
+
+    def test_duplicate_insert_returns_existing_id(self, monkeypatch):
+        insert_called = {"n": 0}
+
+        class _IdemCursor(_FakeCursor):
+            def execute(self, sql, params=None):
+                self.executed.append((sql, params))
+                if "INSERT INTO" in sql:
+                    insert_called["n"] += 1
+                    if insert_called["n"] > 1:
+                        raise RuntimeError("duplicate insert should not happen twice")
+                    self._rows = []  # ON CONFLICT DO NOTHING → RETURNING 空
+                else:  # 回查 SELECT
+                    self._rows = [(77,)]
+
+        cursor = _IdemCursor()
+        _patch_store(monkeypatch, cursor)
+        rid = decision_store.record_decision(
+            "u1", "c1", "apply_draft", plan_version=2, client_run_id="client-9")
+        assert rid == 77  # 回查到既有行，视为幂等成功
+        assert len(cursor.executed) == 2  # INSERT + SELECT
+
+    def test_empty_client_run_id_not_deduped(self, monkeypatch):
+        """client_run_id 为空（服务端/脚本调用）不受幂等索引约束——部分唯一
+        索引 WHERE 子句排除，正常 INSERT 返回新 id。"""
+        cursor = _FakeCursor(rows=[(9,)])
+        _patch_store(monkeypatch, cursor)
+        rid = decision_store.record_decision(
+            "u1", "c1", "apply_draft", client_run_id="")
+        assert rid == 9
+        assert "ON CONFLICT" in cursor.executed[0][0]

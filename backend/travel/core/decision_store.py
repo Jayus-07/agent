@@ -125,6 +125,8 @@ def record_decision(
                     (tenant_id, user_id, conversation_id, decision, plan_version,
                      tier_from, tier_to, payload, source, client_run_id)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    ON CONFLICT (conversation_id, decision, plan_version, client_run_id)
+                        WHERE client_run_id <> '' DO NOTHING
                     RETURNING id""",
                 (
                     tenant_id[:128],
@@ -139,7 +141,20 @@ def record_decision(
                     str(client_run_id or "")[:64],
                 ),
             )
-            return int(cur.fetchone()[0])
+            row = cur.fetchone()
+            if row is not None:
+                return int(row[0])
+            # 命中幂等索引（同会话+同决策+同版本+同前端轮次已落库）：
+            # 重复上报视为成功，回查既有行 id——前端双击/重试不产生重复记录
+            cur.execute(
+                f"""SELECT id FROM {_TABLE}
+                    WHERE conversation_id = %s AND decision = %s
+                      AND plan_version = %s AND client_run_id = %s""",
+                (conversation_id[:128], decision, int(plan_version or 0),
+                 str(client_run_id or "")[:64]),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
     except Exception as e:  # noqa: BLE001 — 留痕写失败不挡 UI 动作
         logger.warning("[TravelDecisionStore] 决策留痕写入失败（跳过）: %s", e)
         return 0

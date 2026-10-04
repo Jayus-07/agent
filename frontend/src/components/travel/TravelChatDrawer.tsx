@@ -276,9 +276,16 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           role: 'assistant', text: '（已停止本次规划，已完成的结果仍保留）', tag: '已停止', tone: 'warn',
         }])
       } else {
-        setError(e instanceof Error ? e.message : '调整失败，请稍后再试')
+        const msg = e instanceof Error ? e.message : ''
+        // 验收 #57/56 降级版（2026-10-04）：网络层断开（fetch TypeError/空
+        // 消息）时如实告知——行程可能仍在后台生成并落账，用户可稍后在
+        // 历史规划中查看，或重新发起；不伪装成功也不吓唬用户。
+        const networkBroken = !msg || /fetch|network|Failed to fetch/i.test(msg)
+        setError(networkBroken
+          ? '连接中断。行程可能仍在后台生成，稍后可在左侧「历史规划」中查看最新结果；也可以重新发送一次。'
+          : msg || '调整失败，请稍后再试')
         // 输入框在请求期间是禁用的，用户不可能在改，原样还回去让他重发
-        setText(message)
+        if (!networkBroken) setText(message)
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -396,6 +403,14 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
 
   const hasMessages = visibleMessages.length > 0
   const inputDisabled = disabled || loading || generating || Boolean(pendingResponse)
+  // 验收 #54（2026-10-04）：草案版本落后于当前行程 → 过期态。保留草案卡
+  // 可查看，禁用「应用」只留「放弃」（拍板口径）；后端 confirm 亦有版本
+  // 校验兜底（plan_service:121 版本不一致 409）。
+  const pendingStale = Boolean(
+    itinerary?.plan_version &&
+    pendingResponse?.itinerary?.plan_version &&
+    pendingResponse.itinerary.plan_version < itinerary.plan_version,
+  )
   const pendingSummary = useMemo(
     () => pendingResponse?.itinerary && itinerary
       ? buildChangeSummary(itinerary, pendingResponse.itinerary)
@@ -625,9 +640,15 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   变更草案 v{pendingResponse.itinerary.plan_version}
                   {pendingChangeCount > 0 && ` · ${pendingChangeCount} 处调整`}
                 </h3>
-                <p className="mt-1 text-[10px] leading-relaxed text-[#5c7074]">
-                  确认后生效；当前行程仍保持不变。
-                </p>
+                {pendingStale ? (
+                  <p className="mt-1 text-[10px] leading-relaxed text-amber-700">
+                    行程已更新至 v{itinerary?.plan_version}，此草案已过期；请放弃后基于最新行程重新生成。
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[10px] leading-relaxed text-[#5c7074]">
+                    确认后生效；当前行程仍保持不变。
+                  </p>
+                )}
                 {pendingSummary ? (
                   <dl className="mt-2 space-y-1 text-[10px] leading-relaxed text-[#5c7074]">
                     {pendingSummary.briefFields.length > 0 && (
@@ -647,8 +668,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   <button
                     type="button"
                     onClick={() => void applyPending()}
-                    disabled={applying}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#087b73] px-4 py-1.5 text-[11px] font-medium text-white hover:bg-[#06655f] disabled:opacity-50"
+                    disabled={applying || pendingStale}
+                    title={pendingStale ? '行程已更新，此草案已过期' : '应用此草案'}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#087b73] px-4 py-1.5 text-[11px] font-medium text-white hover:bg-[#06655f] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {applying ? <Clock3 size={12} className="animate-pulse" /> : <Check size={12} />}
                     {applying ? '应用中…' : '应用'}

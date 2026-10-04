@@ -207,6 +207,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 档位切换、删减协商逐条落库；travel/core/decision_store.py 软失败写入，
     # GET /api/travel/decisions 消费（v1 无管理端页）。
     "072_travel_decision_audit.sql": "memory",
+    # 决策留痕幂等（2026-10-04）：部分唯一索引防双击/重试重复落库。
+    "073_travel_decision_idempotency.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
