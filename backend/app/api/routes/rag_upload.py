@@ -10,7 +10,10 @@ from backend.app.api.deps import (
     require_rag_editor,
 )
 from backend.app.api.identity import require_principal, resolve_identity, resolve_principal
-from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS
+from backend.config.rag import (
+    RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
+    RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS, RAG_UPLOAD_PATH_GUARD,
+)
 from backend.config.rag import (
     RAG_MAX_CONCURRENT_INDEX,
     RAG_SSE_REDIS_POLL_MAX_SECONDS,
@@ -510,6 +513,9 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     except Exception as e:
         return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
     if not result.get("ok"):
+        if result.get("status_code") == 422:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=422, content=result)
         return result
 
     # ── 可信请求在请求路径内派发（B 阶段）：幂等冲突/提交失败必须在 HTTP
@@ -613,7 +619,21 @@ async def sync_upload_impl(
     # _progress_queues / _extract_source 现为模块级显式导入，直接引用即可
     # （原先经 globals() 取值是为了绕开 import * 的名字丢失问题）
 
-    safe_name = os.path.basename(file.filename or "")
+    raw_filename = str(file.filename or "")
+    if RAG_UPLOAD_PATH_GUARD:
+        from backend.rag.indexing.upload_path_guard import test_artifact_path_reason
+
+        reason = test_artifact_path_reason(raw_filename)
+        if reason:
+            from backend.security.events import record_security_event
+
+            record_security_event(
+                "INPUT_GUARD_BLOCK", category="TEST_ARTIFACT_REJECTED",
+                detail={"path_reason": reason},
+            )
+            return {"ok": False, "status_code": 422,
+                    "error": "测试临时路径文件被拒绝"}
+    safe_name = os.path.basename(raw_filename)
     # 修复中文文件名乱码：尝试多种编码回编解码
     if safe_name:
         for enc in ('latin-1', 'cp1252', 'iso-8859-1'):
@@ -1078,10 +1098,14 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
         elif "uploading" not in stage_elapsed:
             others = sum(v for k, v in stage_elapsed.items() if k != "uploading")
             stage_elapsed["uploading"] = max(total_ms - others, 0)
+        # D-2 口径：形参 was_overwrite（os.replace 前一刻 isfile 判定，
+        # 由调用方从 _do_index_sync 的 result 对齐）为唯一事实源；
+        # result 内字段缺省时回退形参（两条路径都不断链）
         emit_fn("done", "索引完成", doc=sanitize_doc_row(new_doc),
                 trace_id=result.get("trace_id") or "",
                 processing_run_id=result.get("processing_run_id") or "",
                 model_summary=result.get("model_summary") or [],
+                was_overwrite=bool(result.get("was_overwrite", was_overwrite)),
                 stage_elapsed=stage_elapsed,
                 total_ms=total_ms)
         # Phase 4: 文档变更后失效该 KB 的答案缓存（避免返回过时答案）
@@ -1239,6 +1263,9 @@ def _dispatch_index_with_idempotency(
             tenant_id=tenant_id,
             actor_id=actor_id,
             client_key=idempotency_key,
+            # 缓存 Redis 停止时，上传仍通过 PG durable ledger 保证只提交
+            # 一次；不允许退化为进程内幂等，主链只损失缓存能力。
+            allow_postgres_fallback=True,
         )
     except ValueError as ve:
         # PG 结果仓储以裸 ValueError("IDEMPOTENCY_CONFLICT") 表达同键不同内容

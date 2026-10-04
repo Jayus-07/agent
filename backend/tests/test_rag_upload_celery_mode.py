@@ -167,6 +167,25 @@ class TestSettleIndexResult:
         cache.invalidate_kb.assert_called_once_with("kb1")
         assert op_log.call_args.kwargs["result"] == "success"
 
+    def test_done_terminal_includes_was_overwrite(self, monkeypatch):
+        """覆盖上传的 SSE done 帧必须暴露覆盖语义。"""
+        upload_id, _q, _ev, _rw = _mk_queue_ctx(monkeypatch)
+        emitted = []
+        reg = MagicMock()
+        reg.get_by_path.return_value = {"doc_id": "d-overwrite", "doc_type": "policy"}
+        monkeypatch.setattr(ru, "_get_registry", lambda: reg)
+        monkeypatch.setattr(ru, "_safe_log_op", MagicMock())
+
+        ru._settle_index_result(
+            upload_id, "/docs/y.pdf", "y.pdf", "web", None, "kb1",
+            100, True, 1000.0,
+            result={"terminal": "done", "trace_id": "t-overwrite"},
+            emit_fn=lambda s, m="", **ex: emitted.append((s, m, ex)),
+        )
+
+        assert emitted[0][0] == "done"
+        assert emitted[0][2]["was_overwrite"] is True
+
 
 # ═══════════════════════════════════════════════════
 # execute_index_task_impl
@@ -481,3 +500,37 @@ class TestRedisPollEvents:
 
         msgs = self._messages(chunks)
         assert any("不存在或已过期" in m.get("message", "") for m in msgs)
+
+    def test_done_frame_carries_was_overwrite(self, monkeypatch):
+        """D-2：done 帧必须透传 was_overwrite。
+
+        实测缺陷：emit 处引用未定义局部名 → NameError 被外层 except 吞掉，
+        done 帧降级为「索引完成（文档信息获取失败）」丢 doc/trace 字段。
+        """
+        upload_id, _q, _ev, _rw = _mk_queue_ctx(monkeypatch)
+        emitted = []
+        monkeypatch.setattr(ru, "_safe_log_op", MagicMock())
+        reg = MagicMock()
+        reg.get_by_path.return_value = {"doc_id": "d9", "chunk_count": 5}
+        monkeypatch.setattr(ru, "_get_registry", lambda: reg)
+        # 答案缓存失效旁路
+        import backend.rag.answer_cache as _ac
+
+        monkeypatch.setattr(
+            _ac, "get_answer_cache",
+            lambda: MagicMock(invalidate_kb=lambda _kb: None))
+
+        ru._settle_index_result(
+            upload_id, "/docs/f.docx", "f.docx", "web", None, "kb1",
+            120, False, 1000.0,
+            result={"terminal": "done", "trace_id": "t1",
+                    "was_overwrite": True,
+                    "doc": {"doc_id": "d9"}},
+            emit_fn=lambda s, m="", **ex: emitted.append((s, m, ex)))
+
+        done = [e for e in emitted if e[0] == "done"]
+        assert done, "必须有 done 帧"
+        extra = done[0][2]
+        assert extra.get("was_overwrite") is True, "was_overwrite 必须透传"
+        assert extra.get("doc", {}).get("doc_id") == "d9", "done 帧不得降级丢 doc"
+        assert extra.get("trace_id") == "t1"
