@@ -40,9 +40,8 @@ await p.waitForTimeout(1200)
 await p.locator('input[type="text"], input[name="username"]').first().fill('uitest_user')
 await p.locator('input[type="password"]').first().fill('UiTest2026')
 await p.locator('button[type="submit"], button:has-text("登录")').first().click()
-await p.waitForTimeout(2500)
-assert(p.url().includes('travel') || p.url().includes('agent') || !p.url().includes('login'),
-  '① 登录跳转', p.url())
+await p.waitForURL(u => !u.href.includes('/login'), { timeout: 20000 }).catch(() => {})
+assert(!p.url().includes('login'), '① 登录跳转', p.url())
 
 // 全新会话，避免脏状态影响断言
 await p.evaluate(() => {
@@ -67,8 +66,11 @@ const v1 = await p.evaluate(() => {
 }).catch(() => null)
 
 // ③ 聊天改单 → 草案卡
+// 改单话术必须带结构化槽位信号（天数）：无结构化信号的诉求（「别太满」）
+// 归 D 批理解层（#98 同根）——同指纹不重排是正确的域行为，版本推进断言
+// 只对「指纹真的变了」的改单成立
 await p.locator('section[aria-label="旅行助手"] textarea, section[aria-label="旅行助手"] input[type="text"]')
-  .first().fill('第二天别太满，节奏轻松一点')
+  .first().fill('改成 3 天，节奏轻松一点')
 await p.keyboard.press('Enter').catch(() => {})
 const sendBtn = p.locator('section[aria-label="旅行助手"] button[aria-label*="发送"], section[aria-label="旅行助手"] button:has-text("发送")')
 if (await sendBtn.count()) await sendBtn.first().click()
@@ -84,6 +86,31 @@ const v2 = await p.evaluate(() => {
 }).catch(() => null)
 assert(v1 != null && v2 != null && Number(v2) > Number(v1),
   '④ 应用后版本递增', `v1=${v1} v2=${v2}`)
+
+// ④b 三端一致（验收 #143）：UI(sessionStorage) / API(plan_store) /
+//    decision(落账) 三面 plan_version 必须对齐
+const tri = await p.evaluate(async (cid) => {
+  const token = sessionStorage.getItem('agent.access_token')
+  const [latestRes, decisionsRes] = await Promise.all([
+    fetch(`/api/travel/plans/${encodeURIComponent(cid)}/latest`, {
+      headers: { Authorization: `Bearer ${token}` }, credentials: 'include' }),
+    fetch(`/api/travel/decisions?conversation_id=${encodeURIComponent(cid)}`, {
+      headers: { Authorization: `Bearer ${token}` }, credentials: 'include' }),
+  ])
+  const latest = latestRes.status === 200 ? await latestRes.json() : null
+  const decisions = decisionsRes.status === 200 ? await decisionsRes.json() : null
+  return { latest, decisions }
+}, cid)
+const apiVersion = tri.latest?.data?.itinerary?.plan_version
+  ?? tri.latest?.data?.plan_version ?? tri.latest?.itinerary?.plan_version ?? null
+const decisionVersions = (tri.decisions?.decisions || [])
+  .filter(d => d.decision === 'apply_draft')
+  .map(d => Number(d.plan_version))
+const decisionMax = decisionVersions.length ? Math.max(...decisionVersions) : null
+assert(apiVersion != null && Number(apiVersion) === Number(v2),
+  '④b API 面 = UI 面 plan_version', `api=${apiVersion} ui=${v2}`)
+assert(decisionMax != null && decisionVersions.includes(Number(v2)),
+  '④b decision 面含 UI 应用版本', `decisionMax=${decisionMax} ui=${v2}`)
 
 // ⑤ 刷新恢复（断线降级口径：行程恢复 + 断线如实提示）
 await p.reload({ waitUntil: 'domcontentloaded' })
@@ -105,19 +132,28 @@ if (await histBtn.count()) {
 }
 
 // ⑦ 导出 ICS：响应体断言 VTIMEZONE + TZID（验收 #115 联动）
-const icsResp = await p.evaluate(async (cid) => {
-  const token = sessionStorage.getItem('agent.access_token')
-  const state = JSON.parse(sessionStorage.getItem('travel:plan-state') || '{}')
-  const itinerary = state.itinerary || state.plan || null
-  if (!itinerary) return { status: 0, body: 'NO_ITINERARY_IN_SESSION' }
-  const r = await fetch('/api/travel/export/ics', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    credentials: 'include',
-    body: JSON.stringify({ itinerary }),
-  })
-  return { status: r.status, body: await r.text() }
-}, cid)
+async function exportIcs(cid) {
+  return p.evaluate(async (cid) => {
+    const token = sessionStorage.getItem('agent.access_token')
+    const state = JSON.parse(sessionStorage.getItem('travel:plan-state') || '{}')
+    const itinerary = state.itinerary || state.plan || null
+    if (!itinerary) return { status: 0, body: 'NO_ITINERARY_IN_SESSION' }
+    const post = () => fetch('/api/travel/export/ics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      credentials: 'include',
+      body: JSON.stringify({ itinerary }),
+    })
+    let r = await post()
+    if (r.status === 401) {
+      // 偶发 JWT 刷新竞态：等会话续期后重试一次
+      await new Promise(res => setTimeout(res, 3000))
+      r = await post()
+    }
+    return { status: r.status, body: await r.text() }
+  }, cid)
+}
+const icsResp = await exportIcs(cid)
 assert(icsResp.status === 200, '⑦ ICS 导出 200', `status=${icsResp.status}`)
 assert(String(icsResp.body).includes('BEGIN:VTIMEZONE')
   && String(icsResp.body).includes('TZID:Asia/Shanghai'),

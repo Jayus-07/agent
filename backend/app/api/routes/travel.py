@@ -99,6 +99,42 @@ def _plan_error(message: str, status: str = "failed") -> dict:
     return {"status": status, "final_answer": message, "itinerary": None}
 
 
+def _seed_cross_turn_base(graph_input: dict, conversation_id: str,
+                          user_id: str) -> None:
+    """跨轮基底自愈（#53/#140 地基）：checkpointer 丢失（强杀/重启/降级
+    MemorySaver）后，改单轮拿不到上一轮的 brief 基底与版本 parent ——
+    slot_filler 变化检测恒 False（旧行程被当草案输出）、transit 版本号
+    回落 v1 与旧版同号。plan_store 账本是跨进程权威，有账即预置：
+
+      - reconstruct_brief：slot_filler 的兜底基底（state.brief 优先，
+        checkpoint 活着时值与账本一致，覆盖无害且自愈）；
+      - plan_parent_version：transit 盖版本章的 parent（vN+1 传导）。
+
+    无账（首次规划）不预置，维持「input 只放本轮输入」契约。
+    """
+    if not conversation_id or not user_id:
+        return
+    try:
+        from backend.travel.core.plan_service import plan_version_service
+
+        latest = plan_version_service.latest_version(conversation_id, user_id)
+        if latest and latest.get("itinerary"):
+            graph_input["reconstruct_brief"] = (
+                latest["itinerary"].get("brief") or {})
+            graph_input["plan_parent_version"] = latest.get("plan_version")
+            # 指纹基线同样可派生：对账本 brief 重算——没有它，
+            # detect_brief_change 的 `bool(last_fingerprint)` 恒 False，
+            # 改单轮永远判「需求没变」（实测：改单轮旧行程被当草案输出）
+            from backend.travel.graph_state import brief_fingerprint
+            from backend.travel.models.brief import TravelBrief
+
+            graph_input["brief_fingerprint"] = brief_fingerprint(
+                TravelBrief(**(latest["itinerary"].get("brief") or {})))
+    except Exception:  # noqa: BLE001 — 自愈是增强项，失败不挡规划主链
+        logger.debug("[TravelAPI] 跨轮基底预置失败（按无基底执行）",
+                     exc_info=True)
+
+
 def _record_plan_version(out: dict, conversation_id: str, user_id: str) -> dict:
     """把成功行程投影进版本账本；与非流式入口共用。"""
     itinerary = out.get("itinerary")
@@ -210,6 +246,8 @@ async def travel_plan(request: Request):
             user_message=req.message, user_id=identity.user_id or "",
             session_id=req.session_id, conversation_id=conversation_id,
         )
+        _seed_cross_turn_base(graph_input, conversation_id,
+                              identity.user_id or "")
         final_state: dict = {}
         out = _plan_error("抱歉，旅游规划服务暂时不可用，请稍后再试。")
         try:
@@ -370,6 +408,8 @@ async def travel_plan_stream(request: Request):
             session_id=req.session_id,
             conversation_id=conversation_id,
         )
+        _seed_cross_turn_base(graph_input, conversation_id,
+                              identity.user_id or "")
         started_at = time.monotonic()
         from backend.observability.tracer import trace_collector
         trace = trace_collector.start(

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from backend.travel.agents.requirement_agent import (
     extract_optional_go,
     extract_vague_time_expr,
@@ -336,3 +338,174 @@ class TestLogMasking:
         from backend.app.api.routes.travel import _masked_trace_question
 
         assert _masked_trace_question("福州两天") == "福州两天"
+
+
+class TestCrossTurnBaseSeed:
+    """#53/#140 地基自愈：checkpointer 丢失后改单轮从版本账本重建基底。
+
+    实测缺陷链（2026-10-04 发布 Smoke 暴露）：强杀 app（#135）清空
+    MemorySaver 后，改单轮 brief_fingerprint 无基线 → 变化检测恒 False
+    （旧行程被当草案输出）、transit 版本 parent 丢失（v1 回落与旧版同号）。
+    修法：API 层从 plan_store 账本预置 reconstruct_brief + parent 版本。
+    """
+
+    def test_seed_injects_latest_brief_and_parent(self, monkeypatch):
+        import backend.app.api.routes.travel as route_mod
+
+        class _FakeService:
+            def latest_version(self, cid, uid):
+                return {"plan_version": 7,
+                        "itinerary": {"brief": {"destination": "福州",
+                                                "days": 2}}}
+
+        monkeypatch.setattr(
+            "backend.travel.core.plan_service.plan_version_service",
+            _FakeService())
+        graph_input = {"user_message": "改成3天", "conversation_id": "c1",
+                       "user_id": "u1"}
+        route_mod._seed_cross_turn_base(graph_input, "c1", "u1")
+        assert graph_input["plan_parent_version"] == 7
+        assert graph_input["reconstruct_brief"]["destination"] == "福州"
+        # 指纹基线派生：与对账本 brief 直算一致（变化检测的判定输入）
+        from backend.travel.graph_state import brief_fingerprint
+        from backend.travel.models.brief import TravelBrief
+
+        assert graph_input["brief_fingerprint"] == brief_fingerprint(
+            TravelBrief(destination="福州", days=2))
+
+    def test_no_ledger_no_seed(self, monkeypatch):
+        import backend.app.api.routes.travel as route_mod
+
+        class _FakeService:
+            def latest_version(self, cid, uid):
+                return None
+
+        monkeypatch.setattr(
+            "backend.travel.core.plan_service.plan_version_service",
+            _FakeService())
+        graph_input = {"user_message": "福州2天", "conversation_id": "c2",
+                       "user_id": "u1"}
+        route_mod._seed_cross_turn_base(graph_input, "c2", "u1")
+        assert "reconstruct_brief" not in graph_input
+        assert "plan_parent_version" not in graph_input
+
+    def test_ledger_failure_is_soft(self, monkeypatch):
+        import backend.app.api.routes.travel as route_mod
+
+        class _Boom:
+            def latest_version(self, cid, uid):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(
+            "backend.travel.core.plan_service.plan_version_service", _Boom())
+        graph_input = {"user_message": "改成3天", "conversation_id": "c3",
+                       "user_id": "u1"}
+        route_mod._seed_cross_turn_base(graph_input, "c3", "u1")  # 不抛
+        assert "plan_parent_version" not in graph_input
+
+    def test_slot_filler_merges_reconstruct_base_and_bumps_version(self):
+        """端到端语义：无 checkpoint 基底时，reconstruct_brief 作为上一轮，
+        「改成3天」必须判变化并出 v(parent+1)。"""
+        import backend.travel.services.poi_service as _  # noqa: F401
+        from backend.travel.slot_filler import slot_filler_node
+
+        update = slot_filler_node({
+            "user_message": "改成3天",
+            "reconstruct_brief": {"destination": "福州", "days": 2,
+                                  "party_size": 2},
+            "brief_fingerprint": "",
+            "itinerary": {"plan_version": 7, "days": []},
+        })
+        brief = update["brief"]
+        assert brief["destination"] == "福州"  # 基底被合并
+        assert brief["days"] == 3             # 本轮输入覆盖
+        assert update["brief_fingerprint"]    # 有指纹可作下一轮基线
+
+
+class TestOldCheckpointCompat:
+    """验收 #140：旧 schema checkpoint 恢复复验——后期新增字段在旧数据里
+    缺失时，恢复/改单必须按缺省推进，不允许 KeyError/ValidationError 炸图。"""
+
+    def test_load_brief_with_legacy_brief_dict(self):
+        """旧 brief（无 arrival_time/optional_go/adults 等后加字段）可加载。"""
+        from backend.travel.graph_state import load_brief
+
+        legacy = {"destination": "福州", "days": 2, "party_size": 2,
+                  "start_date": "2026-10-20", "preferences": ["人文"],
+                  "must_go": ["三坊七巷"], "avoid": [], "pace": "moderate",
+                  "tier": "economy", "version": 1}
+        brief = load_brief({"brief": legacy})
+        assert brief.destination == "福州"
+        assert brief.arrival_time == ""      # 后加字段缺省
+        assert brief.optional_go == []
+        assert brief.adults is None
+
+    def test_slot_filler_on_legacy_state(self):
+        """旧 checkpoint 状态（无 fingerprint/无新字段）改单轮：按无基底推进
+        （自愈预置通道的 API 层职责，此处验证节点层不炸）。"""
+        from backend.travel.slot_filler import slot_filler_node
+
+        legacy_state = {
+            "user_message": "改成4天",
+            "brief": {"destination": "福州", "days": 2, "version": 1},
+            "itinerary": {"plan_version": 3, "days": []},
+            # 无 brief_fingerprint / 无 reconstruct_brief（旧 checkpoint）
+        }
+        update = slot_filler_node(legacy_state)
+        assert update["brief"]["days"] == 4
+        assert update["brief"]["destination"] == "福州"
+
+    def test_seed_rebuilds_base_for_legacy_checkpoint(self, monkeypatch):
+        """端到端口径：旧 checkpoint 的 state 无指纹基线时，API 层
+        _seed_cross_turn_base 从账本重建（#140 与 #53 的交汇点）。"""
+        import backend.app.api.routes.travel as route_mod
+
+        class _FakeService:
+            def latest_version(self, cid, uid):
+                return {"plan_version": 3,
+                        "itinerary": {"brief": {"destination": "福州",
+                                                "days": 2}}}
+
+        monkeypatch.setattr(
+            "backend.travel.core.plan_service.plan_version_service",
+            _FakeService())
+        graph_input = {"user_message": "改成4天", "conversation_id": "c9",
+                       "user_id": "u1"}
+        route_mod._seed_cross_turn_base(graph_input, "c9", "u1")
+        assert graph_input["plan_parent_version"] == 3
+        assert graph_input["brief_fingerprint"]
+
+
+class TestRunDeadline:
+    """验收 #129：总执行 deadline——RunControl 超时到期即 cancel("timeout")，
+    专家在下一个协作点收到 RunStopped（显式总 deadline 即
+    TRAVEL_REQUEST_TIMEOUT_S，经 RequestExecutor 注入每一轮）。"""
+
+    def test_expired_deadline_raises_run_stopped(self):
+        import time as _time
+
+        from backend.travel.request_runtime import RunControl, RunStopped
+
+        control = RunControl(timeout_s=0.05)
+        _time.sleep(0.06)
+        with pytest.raises(RunStopped) as excinfo:
+            control.check()
+        assert excinfo.value.reason == "timeout"
+
+    def test_live_deadline_does_not_stop(self):
+        from backend.travel.request_runtime import RunControl
+
+        control = RunControl(timeout_s=30)
+        control.check()  # 不抛
+        assert not control.stopped.is_set()
+
+    def test_executor_carries_configured_timeout(self, monkeypatch):
+        """executor 的 timeout_s 必须来自 TRAVEL_REQUEST_TIMEOUT_S（显式
+        总 deadline 的单一来源），不散落硬编码。"""
+        from backend.config import travel as travel_config
+        import backend.travel.request_runtime as rr
+
+        executor = rr.RequestExecutor(
+            workers=1, timeout_s=travel_config.TRAVEL_REQUEST_TIMEOUT_S)
+        assert executor.timeout_s == travel_config.TRAVEL_REQUEST_TIMEOUT_S
+        assert executor.timeout_s >= 1.0  # 配置链活着（max(1.0, ...) 下限）
