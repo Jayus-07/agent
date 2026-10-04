@@ -132,6 +132,7 @@ _HANDOFF_KEYWORDS = frozenset({
 _HANDOFF_PATTERNS = [
     re.compile(r"(转|找).*(人工|真人|客服|经理|主管)"),
     re.compile(r"人工服务"),
+    re.compile(r"人工客服"),
     re.compile(r"不要.*机器人"),
     re.compile(r"你是.*机器人.*吗"),
 ]

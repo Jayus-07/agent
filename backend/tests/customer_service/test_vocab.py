@@ -18,7 +18,8 @@ class TestSingleSource:
         # 2026-10-04.1：对话体验改造（出域/寒暄词表段，T4）
         # 2026-10-04.2：T6 出域豁免信号词表（业务域词精确口径，防通用疑问词误豁免）
         # 2026-10-04.3：寒暄谢谢组后缀放宽 {0,2}（"谢谢你啦"实测漏判修正）
-        assert vocab.VOCAB_VERSION == "2026-10-04.3"
+        # 2026-10-04.4：问候/谢谢组语气词后缀+知道了/明白了+外卖词面+人工客服句式（M1 黄金集回放驱动）
+        assert vocab.VOCAB_VERSION == "2026-10-04.4"
 
     def test_domain_rules_six_domains(self):
         assert set(vocab.CS_DOMAIN_KEYWORDS) == {
