@@ -5,5 +5,6 @@
   "kb_id": "rag_eval_kb",
   "schema_description": "Unified schema for dual-track evaluation (RAGAS + self-built). All cases carry expected_answer for RAGAS reference, required_facts for fact coverage, required_docs for multi-hop/citation metrics.",
   "created": "2026-09-08",
-  "migration_note": "RC baseline 与 RD expanded_100 统一进入 canonical cases.jsonl；旧顶层文件仅保留兼容读取。"
+  "migration_note": "RC baseline 与 RD expanded_100 统一进入 canonical cases.jsonl；旧顶层文件仅保留兼容读取。",
+  "content_hash": "b4c28d9e3288fc4b"
 }
