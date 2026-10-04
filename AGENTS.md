@@ -121,6 +121,18 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 6 层安全：①SELECT 校验 ②表名白名单 ③敏感列拒绝 ④函数黑名单 ⑤LIMIT 强制 ⑥agent_readonly 只读角色。数据协议 SQLResult / BusinessInsight，步骤间 Supervisor 注入 `previous_outputs`。
 库：7 schema × 18 表（product/order/inventory/customer/crawler/finance/ai）；连接池 min=2 max=10；Migration 走 `sql/migrations/`。
 
+### 智能客服域图（`backend/customer_service/`，2026-10-05 全量验收收官）
+
+**对话体验改造（T5/T6，2026-10-04 收官）**：锁域反转 `CS_WINDOW_STANDALONE`（true=独立窗口不出域，出域话题由域内分诊直出接住）；分诊直出出口 `_triage_direct_reply`（supervisor v2 L4.5 层：**寒暄→chat_fallback 一次 LLM 人设（CS_CHAT_FALLBACK_ENABLED）**、**出域→固定话术零 LLM（CS_WINDOW_STANDALONE）**），reporter 按 `supervisor_decision.direct_reply` 直出。**顺序铁律精确口径**：出域/寒暄豁免用业务域词表 `CS_SIGNAL_EXEMPT_PATTERNS`（vocab v2026-10-04.4），不用全域规则命中数（「怎么」类通用疑问词会误豁免）。
+
+**LLM 调用纪律（G7）**：客服域一切 LLM 调用必须走 `from backend.infra.llm import llm` **代理**（限流/韧性/llm_usage 记账）；`get_llm()` 返回裸实例绕过全部包装——chat_fallback/query/complaint/supervisor 四路径已收编。**记账口径**：客服域轮次 component=`customer_service`（`_usage_component()` 按 cs_target tag），主图=`llm`，对账须合并。
+
+**词表与守卫**：词表单一源 `vocab.py`（VOCAB_VERSION 2026-10-04.4，变更升版+过 `vocab_gate` 三套回放：triage 95.06%/handoff 漏转=0/confirm_cancel 100%）；确认守卫 `uq_cs_confirmations_active_biz_op` 按 (tenant,action,target_type,target_id,semantic_fingerprint) 全局判重——**补槽升级/reask 更新自身必须 exclude 自身 confirmation_id**（08ca970 缺陷修复：否则「更新自己」被误判重复提交，追问保存全挂）。
+
+**迁移与台账**：076_cs_faq_tables（ai.cs_faq/cs_faq_query_log 迁移化，E5；faq.py 惰性建表仅为存量兜底）；缺口周检 beat=cs.faq.gap_review 每周一 06:25 UTC（A8 台账，closed_now≥10 达标）；日报 gauge 刷新器 `start_faq_gauge_refresher`（app 进程 600s 拉 qa_daily_reports，修复 G2/G3 告警数据源断链）。寒暄人设 prompt=注册表 `customer_service.chat_fallback`（常量仅为降级兜底）。
+
+**验收资产（2026-10-05）**：M1 E2E 黄金集 **308 条九类**（`evaluation/datasets/cs/e2e_golden_v1.jsonl` + `scripts/gen_cs_e2e_golden.py` 生成 / `scripts/replay_cs_e2e_golden.py` 分层回放：Layer1 意图层组件级全量+Layer2 端到端抽样，本轮 226/226=100%）；验收清单本体在用户桌面《客服验收清单.md》，终态 ✅127/⬜16（A6 质量门=另一会话在改值；O2/O6/坐席端与前端走查=待窗口）；报告 `docs/reports/2026-10-05-客服验收清单自动模式全量收官报告.md`。
+
 ### 旅游规划域图（`backend/travel/`，P0）
 
 接入与客服域一致：`travel/register.py` 自注册 → `domains/__init__.py` 触发 → builder 自动布线，**不改 builder.py**。契约（Pydantic）：`TravelBrief → Poi → Itinerary`；状态只存 dict（`load_*/save_*`），保证 checkpointer 可序列化。
