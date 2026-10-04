@@ -178,16 +178,21 @@ export default function TravelPage() {
   // 「换一家」候选 = 最近一次**非空**商户检索的 preview（复用缓存，不重复调外部源）。
   // 不能只看最新 run：后续问答轮（0 Tool）会把首轮商户候选冲掉——画布直选失效。
   const [replaceCandidates, setReplaceCandidates] = useState<Array<Record<string, unknown>>>([])
+  // 验收 #102：候选捕获时的行程版本——旧版本候选在换一家弹层打「来自旧版
+  // 行程」标记（M2 已知取舍：候选跨轮缓存不失效，代发走草案管线兜底；
+  // 标记让用户看得到陈旧，不静默）。
+  const [replaceCandidatesVersion, setReplaceCandidatesVersion] = useState(0)
   useEffect(() => {
     const tools = travelProcess?.tools ?? []
     for (let i = tools.length - 1; i >= 0; i--) {
       const t = tools[i]
       if ((t.category === 'food' || t.category === 'hotel' || t.category === 'merchant') && (t.preview?.length ?? 0) > 0) {
         setReplaceCandidates(t.preview!)
+        setReplaceCandidatesVersion(planState.plan?.itinerary?.plan_version ?? 0)
         return
       }
     }
-  }, [travelProcess])
+  }, [travelProcess, planState.plan?.itinerary?.plan_version])
   /** M4/G1+G3 画布确认替换：先落 decision=canvas_replace 留痕（软失败不阻断）
       再代发修改请求（source=canvas_action 归因进 trace）。 */
   const handleRequestReplace = useCallback((dayIndex: number, itemTitle: string, candidateName: string) => {
@@ -723,6 +728,7 @@ export default function TravelPage() {
                   onFeedback={sendFeedback}
                   onPlanResponse={handleAssistantResponse}
                   replaceCandidates={replaceCandidates}
+                  replaceCandidatesVersion={replaceCandidatesVersion}
                   onRequestReplace={handleRequestReplace}
                   onAskNearby={(text) => chatRef.current?.send(text, 'canvas_action')}
                   tier={itinerary.brief.tier || 'economy'}

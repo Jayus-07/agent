@@ -289,9 +289,13 @@ function LegRow({ leg }: { leg: TransitLeg }) {
   )
 }
 
-function DayCard({ day, replaceCandidates, onRequestReplace, onAskNearby, onHoverItem }: {
+function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVersion = 0, onRequestReplace, onAskNearby, onHoverItem }: {
   day: ItineraryDay
+  /** 当前行程版本（与候选捕获版本比对打「旧版」标记，#102） */
+  planVersion?: number
   replaceCandidates?: Array<Record<string, unknown>>
+  /** 验收 #102：候选捕获时的行程版本（0=未标记） */
+  replaceCandidatesVersion?: number
   onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
   onAskNearby?: (text: string) => void
   onHoverItem?: (focus: { lat: number; lng: number; title: string; transit: string } | null) => void
@@ -425,6 +429,11 @@ function DayCard({ day, replaceCandidates, onRequestReplace, onAskNearby, onHove
                       >
                         <span className="mb-1.5 block text-[10px] font-semibold text-[#5c7074]">
                           换一家 · 来自本轮检索（{replaceCandidates!.slice(0, 4).length} 个候选）
+                          {replaceCandidatesVersion > 0 && planVersion > replaceCandidatesVersion && (
+                            <span className="ml-1 rounded bg-amber-100 px-1 text-amber-800">
+                              来自旧版 v{replaceCandidatesVersion}（当前 v{planVersion}）
+                            </span>
+                          )}
                         </span>
                         {replaceCandidates!.slice(0, 4).map((c, ci) => {
                           const name = String(c.name ?? `候选${ci + 1}`)
@@ -872,6 +881,8 @@ export interface ItineraryViewProps {
   conversationId: string
   /** M2 画布直选：本轮商户检索候选（「换一家」弹层，来自 tool.result preview） */
   replaceCandidates?: Array<Record<string, unknown>>
+  /** 验收 #102：候选捕获时的行程版本（与当前版本不同 = 旧版候选，弹层打标记） */
+  replaceCandidatesVersion?: number
   /** 确认替换 → 页面代发修改请求（聊天管线 → 后端重算 → 草案确认） */
   onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
   /** M2.5 就近唤醒/联动代发：经聊天管线发话 */
@@ -909,7 +920,7 @@ export interface ItineraryViewProps {
 export default function ItineraryView({
   itinerary, conversationId, planStatus = '', notice, exporting = false,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
-  replaceCandidates, onRequestReplace, onAskNearby, tier, onTierChange, budgetNegotiation, onNegotiateBudget,
+  replaceCandidates, replaceCandidatesVersion = 0, onRequestReplace, onAskNearby, tier, onTierChange, budgetNegotiation, onNegotiateBudget,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
   // 受控优先（页面要跟右侧助手共享选中天）；未传时退回内部自管。
@@ -1207,7 +1218,9 @@ export default function ItineraryView({
           <div className="grid min-h-0 flex-1 items-stretch gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
             <DayCard
               day={activeDayData}
+              planVersion={itinerary.plan_version}
               replaceCandidates={replaceCandidates}
+              replaceCandidatesVersion={replaceCandidatesVersion}
               onRequestReplace={onRequestReplace}
               onAskNearby={onAskNearby}
               onHoverItem={setHoverFocus}
