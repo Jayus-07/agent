@@ -1,15 +1,15 @@
 {
- "version": "2026-10-04.1",
+ "version": "2026-10-04.2",
  "module": "rag-gate",
  "counts": {
-  "answerable": 100,
+  "answerable": 89,
   "unanswerable": 100,
-  "total": 200
+  "total": 189
  },
  "targets": {
   "false_reject_max": 0.1,
   "miss_reject_max": 0.05
  },
- "sha256": "6a48772c61a5a5d90b6bcd49f65768b7f5323e849bb3e471b765461209f69cc6",
- "notes": "应答题锚定 active 语料真实主题；录制后 answerable 且 top1<0.35 标 suspicious 需人工核对。阈值实验台不改生产阈值（决策门 T5.3）。"
+ "sha256": "1ef15a8d77f81c558fd24346a7b95627dd2582fd531e94201f340b8a81731659",
+ "notes": "应答题锚定 active 语料真实主题；录制后 answerable 且 top1<0.35 标 suspicious 需人工核对。2026-10-04.2 = 三轮前置①18 条可疑应答复核收官（5 成立/2 改写/11 剔除，明细见 review_log）。阈值实验台不改生产阈值（决策门 T5.3）。"
 }

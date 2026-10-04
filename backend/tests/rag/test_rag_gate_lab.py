@@ -93,14 +93,28 @@ class TestDatasetIntegrity:
     def test_calibration_set_shape(self):
         data = json.loads(_DATASET.read_text(encoding="utf-8"))
         cases = data["cases"]
-        assert len(cases) == 200
         n_a = sum(1 for c in cases if c["klass"] == "answerable")
         n_r = sum(1 for c in cases if c["klass"] == "unanswerable")
-        assert n_a == 100 and n_r == 100
+        assert n_a + n_r == len(cases), "类别只有 answerable/unanswerable 两种"
+        # 2026-10-04.2 三轮前置①复核：应答面 18 条可疑复核后 89/100（11 条
+        # 剔除是语料缺口与出题伪影的真实反映，不再硬编码 100/100 平衡）
+        assert n_a >= 85 and n_r == 100
         ids = [c["id"] for c in cases]
         assert len(ids) == len(set(ids)), "案例 id 必须唯一"
+        # 复核已剔除的条目不得回流（review_log 为准）
+        removed = {j["id"] for j in data["review_log"]["judgments"]
+                   if j["verdict"] == "removed"}
+        assert removed and not (removed & set(ids)), "剔除条目必须离开 cases"
 
     def test_manifest_targets_anchored(self):
         manifest = json.loads(_MANIFEST.read_text(encoding="utf-8"))
-        assert manifest["counts"]["total"] == 200
+        data = json.loads(_DATASET.read_text(encoding="utf-8"))
+        # counts 必须与数据集实况一致（禁手抄，G2）
+        n_a = sum(1 for c in data["cases"] if c["klass"] == "answerable")
+        n_r = len(data["cases"]) - n_a
+        assert manifest["counts"] == {"answerable": n_a, "unanswerable": n_r,
+                                      "total": n_a + n_r}
         assert manifest["targets"] == {"false_reject_max": 0.10, "miss_reject_max": 0.05}
+        # manifest sha256 必须与当前数据集文件一致（锁版）
+        import hashlib
+        assert manifest["sha256"] == hashlib.sha256(_DATASET.read_bytes()).hexdigest()
