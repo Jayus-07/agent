@@ -58,6 +58,28 @@ def test_root_ask_reads_question_field(monkeypatch):
     assert stub.ask_calls and stub.ask_calls[0][0] == "三坊七巷有什么特色？"
 
 
+def test_root_ask_passes_kb_id_through(monkeypatch):
+    """D-10 回归：契约字段 kb_id 必须透传 pipeline.ask（修复前被丢弃恒查 default）。"""
+    stub = StubPipeline()
+    monkeypatch.setattr(rag_route, "require_rag_ready", lambda: None)
+    monkeypatch.setattr(rag_route, "get_rag_pipeline", lambda: stub)
+    monkeypatch.setattr(
+        rag_route, "require_principal",
+        lambda request: SimpleNamespace(
+            subject_type="employee", department="", permissions=None),
+    )
+    app = FastAPI()
+    app.include_router(rag_route.router)
+
+    resp = _client(app).post(
+        "/rag", json={"question": "三坊七巷有什么特色？", "kb_id": "travel"})
+
+    assert resp.status_code == 200, resp.text
+    kwargs = stub.ask_calls[0][1]
+    assert kwargs.get("kb_id") == "travel"
+    assert resp.json()["kb_id"] == "travel"
+
+
 def test_document_detail_exposes_summary(monkeypatch):
     """K5 回归：详情 DTO 含 summary 字段（库内有值即回显）。"""
     row = {

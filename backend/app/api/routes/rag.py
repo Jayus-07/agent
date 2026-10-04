@@ -46,8 +46,12 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         pipeline.ask,
         req.question,
         session_id=req.session_id or "rag-api",
+        # kb_id 契约字段必须透传（D-10 修复）：此前被丢弃导致 REST ask
+        # 恒查 default 库，声明了 kb_id 的调用方拿到的是另一个库的答案
+        kb_id=req.kb_id or "default",
         subject_type=principal.subject_type,
         department=principal.department,
         permissions=principal.permissions,
     )
-    return {"query": req.question, "answer": answer, "session_id": req.session_id}
+    return {"query": req.question, "answer": answer,
+            "session_id": req.session_id, "kb_id": req.kb_id or "default"}
