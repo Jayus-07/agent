@@ -265,7 +265,168 @@ async def publish_release(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PromptReleaseError as exc:
+        # GATE-16：门禁拒绝携带结构化 blocked_rules（其余业务拒绝保持原样）
+        rules = getattr(exc, "blocked_rules", None)
+        if rules:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "PROMPT_RELEASE_GATE_BLOCKED",
+                    "message": str(exc),
+                    "prompt_key": key,
+                    "blocked_rules": rules,
+                },
+            )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{key}/releases/{release_id}/comparison")
+async def get_release_comparison(
+    key: str,
+    release_id: str,
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+):
+    """REG-08：审批页 candidate vs production 对比数据。
+
+    聚合三路信息：候选 release 的评测指标（含 gate 判定）、production
+    当前版本的最近评测 run、基线文件（可能 baseline_unavailable）。
+    前端渲染 current / baseline / delta 三列表格；无对比维度时显式
+    标注不可用，不伪造 delta=0。
+    """
+    _check_permission(key, "read", operator.role)
+    service = get_release_service()
+    try:
+        record = await service.get(release_id)
+        if record.prompt_key != key:
+            raise KeyError(release_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    candidate = _comparison_view(record.metrics or {}, record.eval_run_id)
+    gate = (record.metrics or {}).get("gate") or {}
+    regression = gate.get("regression") or {}
+    dataset_version = str(
+        regression.get("baseline_dataset_version")
+        or record.dataset_provenance.get("version")
+        or record.dataset_provenance.get("dataset_version")
+        or ""
+    )
+
+    # production 当前版本与其最近评测 run（REG-08 的对照面）
+    production_version: int | None = None
+    production_runs: list[dict[str, Any]] = []
+    try:
+        from backend.prompts.service import prompt_service
+
+        aliases = await prompt_service.get_aliases(key)
+        production_version = aliases.get("production")
+    except Exception:  # noqa: BLE001 — 对比面板容错：别名读取失败不阻塞
+        production_version = None
+    if production_version is not None:
+        production_runs = _prompt_version_runs(key, production_version)
+
+    baseline_available = bool(regression.get("baseline_available"))
+    baseline_view: dict[str, Any] = (
+        {
+            "available": True,
+            "run_id": regression.get("baseline_run_id", ""),
+            "dataset_version": dataset_version,
+        }
+        if baseline_available
+        else {
+            "available": False,
+            "note": "baseline unavailable（无基线，回归门已跳过并留痕）",
+        }
+    )
+
+    return {
+        "release_id": release_id,
+        "prompt_key": key,
+        "candidate_version": record.version,
+        "production_version": production_version,
+        "candidate": candidate,
+        "production_runs": production_runs,
+        "baseline": baseline_view,
+        "deltas": _candidate_deltas(candidate, regression),
+    }
+
+
+def _comparison_view(metrics: dict[str, Any], eval_run_id: str) -> dict[str, Any]:
+    """候选指标视图：自研核心指标 + gate 判定 + RAGAS（独立键，不混用）。"""
+    core_keys = (
+        "pass_rate", "recall@5", "recall@10", "mrr", "ndcg@10",
+        "top1_accuracy", "reject_accuracy", "sem_faithfulness",
+        "sem_answer_correctness",
+    )
+    candidate: dict[str, Any] = {
+        "eval_run_id": eval_run_id,
+        "metrics": {k: metrics.get(k) for k in core_keys if metrics.get(k) is not None},
+        "ragas": {
+            k: v for k, v in metrics.items()
+            if k.startswith("ragas_") and k != "ragas_reason" and v is not None
+        },
+    }
+    gate = metrics.get("gate")
+    if gate:
+        candidate["gate"] = {
+            "tier_pass": gate.get("tier_pass"),
+            "sample_pass": gate.get("sample_pass"),
+            "regression_pass": (gate.get("regression") or {}).get("regression_pass"),
+            "ragas_pass": (gate.get("ragas") or {}).get("ragas_pass"),
+            "blocked_rules": gate.get("blocked_rules", []),
+        }
+    return candidate
+
+
+def _prompt_version_runs(key: str, version: int, limit: int = 5) -> list[dict[str, Any]]:
+    """production 版本最近评测 run（复用台账 JSONB 反查，软失败）。"""
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT run_id, pass_rate, case_count, pass_count, metrics, created_at
+                FROM ai.eval_run_records
+                WHERE prompt_snapshot @> %s::jsonb
+                ORDER BY created_at DESC LIMIT %s
+                """,
+                (__import__("json").dumps({key: str(version)}), limit),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "run_id": r[0],
+                "pass_rate": r[1],
+                "case_count": r[2],
+                "pass_count": r[3],
+                "metrics": (r[4] or {}).get("rag", {}).get("metrics", {})
+                if isinstance(r[4], dict) else {},
+                "created_at": str(r[5]),
+            }
+            for r in rows
+        ]
+    except Exception:  # noqa: BLE001 — 台账不可达时对比面板降级为空列表
+        return []
+
+
+def _candidate_deltas(
+    candidate: dict[str, Any], regression: dict[str, Any],
+) -> dict[str, Any]:
+    """candidate vs baseline 的指标 delta（来自回归门结构化结果）。"""
+    if not regression.get("baseline_available"):
+        return {"available": False, "note": regression.get("messages", ["baseline unavailable"])[0]}
+    deltas = {
+        entry["metric"]: {
+            "baseline": entry["baseline"],
+            "current": entry["current"],
+            "delta": entry["delta"],
+        }
+        for entry in regression.get("errors", []) + regression.get("warnings", [])
+    }
+    return {"available": True, "regressions": deltas}
 
 
 __all__ = ["get_release_service", "publish_approved_release", "router"]

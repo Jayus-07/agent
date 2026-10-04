@@ -172,6 +172,12 @@ class PromptReleaseService:
             raise PublishGateError(
                 f"Prompt release 尚未审批通过，当前状态为 {current.status.value}"
             )
+        # C1-1/C1-7（GATE-03/11）：发布门禁 = tier + 样本量（记录侧已判，
+        # failed 不可能走到 approved）之后，再按灰度开关裁决回归门与 RAGAS 门。
+        # audit 模式只计算落痕不拦截；enforce 模式 fail-closed 409；
+        # baseline_unavailable / RAGAS 未执行在 audit 下降级放行并留痕，
+        # enforce 下 RAGAS 未执行视为 blocked（回归门无基线仍放行，REG-10）。
+        self._enforce_publish_gates(current)
         prompt_service = self._prompt_service or _load_prompt_service()
         # GATE-14：审批后篡改防线——发布点重验模板指纹必须等于审批时留痕。
         # release_candidate_hash == approved_snapshot_hash == published_snapshot_hash
@@ -211,6 +217,52 @@ class PromptReleaseService:
             raise ReleaseStateError("只有 published release 才能标记回滚")
         row = await self._repository.mark_rolled_back(release_id, actor)
         return PromptReleaseRecord.from_row(row)
+
+    @staticmethod
+    def _enforce_publish_gates(current: PromptReleaseRecord) -> None:
+        """C1-1/C1-7：按灰度开关裁决回归门与 RAGAS 门（GATE-11/03）。"""
+        from backend.config.settings import (
+            PROMPT_RELEASE_RAGAS_GATE_ENABLED,
+            PROMPT_RELEASE_REGRESSION_GATE_ENABLED,
+        )
+
+        gate = (current.metrics or {}).get("gate") or {}
+        blocked: list[dict] = []
+
+        regression = gate.get("regression") or {}
+        regression_pass = regression.get("regression_pass")
+        if (
+            PROMPT_RELEASE_REGRESSION_GATE_ENABLED == "enforce"
+            and regression_pass is False
+        ):
+            details = [
+                entry.get("metric", "?") for entry in regression.get("errors", [])
+            ]
+            blocked.append({
+                "rule": "baseline_regression",
+                "expected": "候选版本指标不低于基线允许阈值",
+                "actual": f"回归指标：{', '.join(details) or '见 metrics.gate.regression'}",
+                "severity": "error",
+            })
+
+        ragas = gate.get("ragas") or {}
+        if (
+            PROMPT_RELEASE_RAGAS_GATE_ENABLED == "enforce"
+            and not ragas.get("ragas_pass", False)
+        ):
+            blocked.append({
+                "rule": str(ragas.get("rule", "ragas_gate")),
+                "expected": str(ragas.get("expected", "RAGAS 达标（双门禁）")),
+                "actual": str(ragas.get("actual", "RAGAS 未执行或未达标")),
+                "severity": "error",
+            })
+
+        if blocked:
+            raise PublishGateError(
+                "发布门禁未通过（" + "；".join(b["rule"] for b in blocked) + "）——"
+                "详见响应 blocked_rules 与 release metrics.gate",
+                blocked_rules=blocked,
+            )
 
 
 def _load_prompt_service() -> Any:

@@ -86,11 +86,16 @@ def promote(report: EvalReport, *, git_tag: bool = True) -> list[Path]:
             "module": summary.module,
             "dataset_version": version,
             "promoted_at": timestamp,
+            # 源 run 记录（2026-10-04 起）：逐样本回归（C1-3）与分桶回归
+            # （C1-5）需要基线报告本体，经 run_id 从 data/eval_runs 加载；
+            # 存量无此字段的 baseline 走「仅摘要级对比」降级，不伪造样本清单。
+            "run_id": str(report.metadata.get("run_id") or ""),
             "pass_rate": summary.pass_rate,
             "metrics": summary.metrics,
             "total": summary.total,
             "passed": summary.passed,
             "failed": summary.failed,
+            "buckets": report.metadata.get("buckets") or {},
             "prompt_versions": report.prompt_versions or prompt_versions,
         }
         path.write_text(
@@ -124,6 +129,218 @@ def load_baseline(module: str, dataset_version: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _num(value: Any) -> float | None:
+    """数值提取：bool/非数值一律视为不可比（None）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def evaluate_regression_gate(
+    module: str,
+    dataset_version: str,
+    current_metrics: dict[str, Any],
+    current_pass_rate: float,
+    *,
+    threshold: float = 0.05,
+    critical_metrics: dict[str, dict[str, float]] | None = None,
+    current_buckets: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """结构化回归门结果（C1-1/GATE-11）— 供 Release Gate 与 CLI 消费。
+
+    与 ``diff_baseline``（面向 CLI 打印）不同，本函数输出 JSON 可序列化的
+    结构化判定，且对「无 baseline」给出显式 ``baseline_unavailable`` 口径
+    （REG-10：不伪造 delta=0，也不误判为失败）。
+
+    Returns:
+        {
+          "baseline_available": bool,
+          "baseline_run_id": str,            # 基线 JSON 记录的源 run（新版才有）
+          "baseline_dataset_version": str,
+          "regression_pass": bool | None,    # None=无 baseline 不可判
+          "errors":  [{metric, baseline, current, delta, threshold, severity}],
+          "warnings": [同上],
+          "bucket_regressions": [...],       # C1-5 分桶回归
+          "messages": [中文人类可读明细],
+        }
+    """
+    base = load_baseline(module, dataset_version)
+    if base is None:
+        return {
+            "baseline_available": False,
+            "baseline_run_id": "",
+            "baseline_dataset_version": dataset_version,
+            "regression_pass": None,
+            "errors": [],
+            "warnings": [],
+            "bucket_regressions": [],
+            "messages": [
+                f"baseline_unavailable: 无 baseline（module={module}, "
+                f"dataset_version={dataset_version}），回归门跳过并留痕"
+            ],
+        }
+
+    crit = (critical_metrics or {}).get(module) or (critical_metrics or {}).get("*", {})
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    messages: list[str] = []
+
+    def _record(kind: list, metric: str, base_val: float, cur_val: float,
+                allowed: float, severity: str) -> None:
+        delta = cur_val - base_val
+        entry = {
+            "metric": metric,
+            "baseline": round(base_val, 4),
+            "current": round(cur_val, 4),
+            "delta": round(delta, 4),
+            "threshold": allowed,
+            "severity": severity,
+        }
+        kind.append(entry)
+        messages.append(
+            f"{metric}: {base_val:.4f} → {cur_val:.4f} (↓{abs(delta):.4f})"
+        )
+
+    base_pass = _num(base.get("pass_rate"))
+    cur_pass = _num(current_pass_rate)
+    if base_pass is not None and cur_pass is not None:
+        delta = cur_pass - base_pass
+        if delta < -threshold:
+            _record(errors, "pass_rate", base_pass, cur_pass, threshold, "error")
+
+    base_metrics = base.get("metrics") or {}
+    for key, cur_raw in (current_metrics or {}).items():
+        cur_val = _num(cur_raw)
+        if cur_val is None:
+            continue
+        base_val = _num(base_metrics.get(key))
+        if base_val is None:
+            continue
+        delta = cur_val - base_val
+        allowed = crit.get(key, threshold)
+        if delta < -allowed:
+            severity = "error" if delta < -2 * allowed else "warning"
+            _record(errors if severity == "error" else warnings,
+                    key, base_val, cur_val, allowed, severity)
+
+    bucket_regressions = compare_buckets(
+        current_buckets or {}, base.get("buckets") or {},
+    )
+
+    regression_pass = not errors and not bucket_regressions
+    return {
+        "baseline_available": True,
+        "baseline_run_id": str(base.get("run_id", "") or ""),
+        "baseline_dataset_version": str(base.get("dataset_version", "")),
+        "regression_pass": regression_pass,
+        "errors": errors,
+        "warnings": warnings,
+        "bucket_regressions": bucket_regressions,
+        "messages": messages,
+    }
+
+
+def compare_buckets(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+    *,
+    threshold: float = 0.10,
+    min_bucket_samples: int = 3,
+) -> list[dict[str, Any]]:
+    """C1-5/REG-06：分桶回归检测（by_domain/by_difficulty/by_query_type）。
+
+    overall 达标但单桶大幅下降是典型回归盲区。任一桶 pass_rate 下降超过
+    ``threshold`` 且样本数足够（小桶噪声大，不误报）→ 记一条回归。
+    """
+    regressions: list[dict[str, Any]] = []
+    for dim, base_slots in (baseline or {}).items():
+        cur_slots = (current or {}).get(dim) or {}
+        for bucket, base_slot in (base_slots or {}).items():
+            cur_slot = cur_slots.get(bucket)
+            if not cur_slot:
+                continue
+            base_n = int(base_slot.get("total", 0))
+            cur_n = int(cur_slot.get("total", 0))
+            if base_n < min_bucket_samples or cur_n < min_bucket_samples:
+                continue
+            base_rate = _num(base_slot.get("pass_rate"))
+            cur_rate = _num(cur_slot.get("pass_rate"))
+            if base_rate is None or cur_rate is None:
+                continue
+            delta = cur_rate - base_rate
+            if delta < -threshold:
+                regressions.append({
+                    "dimension": dim,
+                    "bucket": bucket,
+                    "baseline_pass_rate": round(base_rate, 4),
+                    "current_pass_rate": round(cur_rate, 4),
+                    "delta": round(delta, 4),
+                    "threshold": threshold,
+                    "severity": "error",
+                    "sample_counts": {"baseline": base_n, "current": cur_n},
+                })
+    return regressions
+
+
+def diff_samples(
+    current_report: EvalReport,
+    baseline_report: EvalReport,
+) -> dict[str, Any]:
+    """C1-3/REG-03/04：逐样本回归/提升清单（按 case_id 对比 status）。
+
+    Returns:
+        {
+          "regression_samples":  [{case_id, baseline_status, current_status}],  # pass→fail
+          "improvement_samples": [{case_id, baseline_status, current_status}],  # fail/error→pass
+          "compared": int,                   # 两边都出现的 case 数
+          "note": str,                       # 不可比时的显式说明
+        }
+    """
+    baseline_status = {r.case_id: r.status for r in baseline_report.results}
+    current_status = {r.case_id: r.status for r in current_report.results}
+    compared_ids = set(baseline_status) & set(current_status)
+
+    regression_samples = [
+        {"case_id": cid, "baseline_status": baseline_status[cid],
+         "current_status": current_status[cid]}
+        for cid in sorted(compared_ids)
+        if baseline_status[cid] == "pass" and current_status[cid] != "pass"
+    ]
+    improvement_samples = [
+        {"case_id": cid, "baseline_status": baseline_status[cid],
+         "current_status": current_status[cid]}
+        for cid in sorted(compared_ids)
+        if baseline_status[cid] != "pass" and current_status[cid] == "pass"
+    ]
+    note = ""
+    if not compared_ids:
+        note = "baseline_unavailable: 两份报告无共同 case_id，逐样本对比不可判"
+    return {
+        "regression_samples": regression_samples,
+        "improvement_samples": improvement_samples,
+        "compared": len(compared_ids),
+        "note": note,
+    }
+
+
+def load_baseline_report(module: str, dataset_version: str) -> EvalReport | None:
+    """按 baseline JSON 记录的 run_id 加载基线报告（逐样本/分桶对比用）。
+
+    存量 baseline JSON 无 run_id 字段 → 返回 None（调用方显式降级，
+    不得伪造空清单冒充「无回归」）。
+    """
+    base = load_baseline(module, dataset_version)
+    if not base or not base.get("run_id"):
+        return None
+    try:
+        from backend.evaluation.storage import load_report
+
+        report, _meta = load_report(str(base["run_id"]))
+        return report
+    except (FileNotFoundError, ValueError, OSError):
+        return None
 
 
 def diff_baseline(

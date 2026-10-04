@@ -23,7 +23,16 @@ class PromptReleaseError(ValueError):
 
 
 class PublishGateError(PromptReleaseError):
-    """发布未满足评测门禁。"""
+    """发布未满足评测门禁。
+
+    blocked_rules（GATE-16）：门禁拒绝时携带结构化规则清单
+    ``[{rule, expected, actual, severity, message}]``，API 409 响应体
+    原样返回、管理端渲染规则列表；普通业务拒绝（状态机类）为空。
+    """
+
+    def __init__(self, message: str = "", *, blocked_rules: list[dict] | None = None) -> None:
+        super().__init__(message)
+        self.blocked_rules = list(blocked_rules or [])
 
 
 class ReleaseStateError(PromptReleaseError):

@@ -32,5 +32,7 @@
     "RC-084",
     "RC-092",
     "RC-096"
-  ]
+  ],
+  "cases_hash": "b4c28d9e3288fc4b",
+  "min_samples": 20
 }

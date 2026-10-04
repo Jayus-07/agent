@@ -25,5 +25,6 @@
   ],
   "dataset_version": "5.0.0-unified",
   "kb_id": "rag_eval_kb",
-  "fixture_set": "baseline"
+  "fixture_set": "baseline",
+  "cases_hash": "b4c28d9e3288fc4b"
 }

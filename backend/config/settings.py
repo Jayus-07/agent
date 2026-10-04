@@ -74,3 +74,15 @@ PROMPT_EVAL_POLL_INTERVAL_SECONDS = int(
 PROMPT_EVAL_POLL_MAX_ATTEMPTS = int(
     os.getenv("PROMPT_EVAL_POLL_MAX_ATTEMPTS", "120")
 )
+
+# ── Prompt 发布双门禁灰度开关（GATE-03/11，2026-10-04）────────
+# 取值 off / audit / enforce：audit=计算并落痕不拦截（上线初期跑两周），
+# enforce=门禁失败拒绝发布（fail-closed 409），off=完全跳过。
+# baseline_unavailable（无基线）在两种模式下都只记原因不拦截（REG-10：
+# 显式口径，不伪造 delta=0，也不把首版发布堵死）。
+PROMPT_RELEASE_REGRESSION_GATE_ENABLED = (
+    os.getenv("PROMPT_RELEASE_REGRESSION_GATE_ENABLED", "audit").strip().lower()
+)
+PROMPT_RELEASE_RAGAS_GATE_ENABLED = (
+    os.getenv("PROMPT_RELEASE_RAGAS_GATE_ENABLED", "audit").strip().lower()
+)

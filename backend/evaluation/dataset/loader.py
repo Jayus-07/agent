@@ -6,6 +6,7 @@ P0: 支持 EVAL_DATASET_PATH 环境变量动态配置数据集路径
 """
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -52,6 +53,8 @@ def load_dataset(
 
     canonical = split_dir / "cases.jsonl"
     if canonical.exists():
+        # C6-1：manifest 声明 content_hash 时强制校验（原地改即 fail-fast）
+        verify_dataset_integrity(module, split_dir)
         cases = _load_jsonl(canonical, default_module=module)
         return cases[:limit] if limit else cases
 
@@ -99,6 +102,63 @@ def _load_selection(
     )
 
 
+def file_content_hash(path: Path) -> str:
+    """文件内容 sha256 前 16 位（suite/数据集内容身份，P0-02/C6-1）。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def load_suite_config(module: str, selection: str) -> dict:
+    """读取 suite 治理配置（GATE-12 最低样本量 / P0-02 内容 hash）。
+
+    只提取治理字段，不加载用例本体；suite 不存在时返回空 dict（调用方
+    走全局缺省），保持「无 suite 配置 = 原行为」的向后兼容。
+    """
+    suite_path = DATASET_DIR / module / "suites" / f"{selection}.json"
+    if not suite_path.exists():
+        return {}
+    try:
+        data = json.loads(suite_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "name": str(data.get("name", selection)),
+        "min_samples": data.get("min_samples"),
+        "min_valid_samples": data.get("min_valid_samples"),
+        "content_hash": file_content_hash(suite_path),
+    }
+
+
+def verify_dataset_integrity(module: str, split_dir: Path | None = None) -> None:
+    """C6-1/DATA-01/05：canonical 数据集不可变锁。
+
+    manifest.json 声明了 content_hash 时，cases.jsonl 的实际内容 hash
+    必须一致；不一致 = 已被 run 引用的数据在原地被改，fail-fast 并提示
+    修改必须走新版本目录/候选流程。无 content_hash 的存量 manifest 跳过
+    （由 gen_dataset_manifest 补齐后自动生效）。
+    """
+    split_dir = split_dir or (DATASET_DIR / module)
+    manifest_path = split_dir / "manifest.json"
+    cases_path = split_dir / "cases.jsonl"
+    if not manifest_path.exists() or not cases_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    expected = manifest.get("content_hash")
+    if not expected:
+        return
+    actual = file_content_hash(cases_path)
+    if actual != expected:
+        raise ValueError(
+            f"数据集 '{module}' 内容校验失败：cases.jsonl hash {actual} "
+            f"≠ manifest 声明 {expected}。已被评测引用的数据集禁止原地修改——"
+            f"请将改动放入新版本目录或走候选审核流程（DATA-01/DATA-05）。"
+        )
+
+
 def _load_suite(
     split_dir: Path,
     suite_path: Path,
@@ -130,6 +190,21 @@ def _load_suite(
         raise FileNotFoundError(
             f"Suite 引用了 cases.jsonl 但 canonical 文件不存在: {canonical_path}"
         )
+
+    # C9-1/P0-02：suite 可声明 cases_hash（构建时 canonical 内容指纹）。
+    # canonical 被原地修改后 hash 漂移 → suite 引用失真，fail-fast 而非
+    # 静默用新内容跑旧 suite；修改必须走新版本目录。
+    declared_cases_hash = str(suite_data.get("cases_hash", ""))
+    if declared_cases_hash:
+        actual_hash = file_content_hash(canonical_path)
+        if actual_hash != declared_cases_hash:
+            raise ValueError(
+                f"Suite '{suite_path.name}' 声明的 cases_hash {declared_cases_hash} "
+                f"与当前 canonical 内容 hash {actual_hash} 不一致——"
+                f"canonical 已被修改，请为新内容创建新版本 suite。"
+            )
+
+    verify_dataset_integrity(module, split_dir)
 
     all_cases = _load_jsonl(canonical_path, default_module=module)
     case_map = {c.id: c for c in all_cases}
@@ -168,6 +243,8 @@ def _load_suite(
                 "fixture_set": fixture_set,
                 "dataset_version": dataset_version,
                 "suite": suite_name,
+                # P0-02：suite 内容身份随用例进 metadata → report → provenance
+                "suite_content_hash": file_content_hash(suite_path),
             }
         )
         cases.append(case.model_copy(update={"metadata": metadata}))
