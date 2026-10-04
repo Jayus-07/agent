@@ -17,7 +17,8 @@ sql_agent.py — SQL Agent 主编排器
   - policy=None（评测/脚本/未接上下文调用）— 旧行为：仅 6 层校验 +
     旧 row_security 注入（受 SQL_ROW_SECURITY_ENABLED 控制）。
 """
-from typing import Optional
+import inspect
+from typing import Callable, Optional
 
 from backend.config import SQL_AGENT_ENABLED
 from backend.sql.policy import SQLPolicyContext
@@ -28,9 +29,65 @@ from backend.sql.row_security import inject_row_filter, RowSecurityError
 from backend.sql.executor import execute_sql_struct
 from backend.sql.sql_result import SQLResult
 from backend.shared.logger import logger
+from backend.sql.query_context import (
+    SQLQueryContext,
+    is_sql_context_compatible,
+    permission_fingerprint,
+    resolve_sql_followup,
+)
+from backend.sql.stream_events import emit_sql_stage
 
 # ── 服务不可用语义（kill switch 关闭时；区别于权限拒绝，避免误导诊断）──
 _UNAVAILABLE_ERROR = "SQL 查询服务暂不可用，请稍后重试。"
+
+# 数据库发现的对象/列不存在属于生成错误，允许一次受控反馈修复；
+# 真实安全拒绝、SQL 语法错误和权限错误仍然是终态。
+_REPAIRABLE_SCHEMA_ERROR_TYPES = frozenset({
+    "schema_mismatch", "column_not_found", "relation_not_found",
+})
+
+
+def _is_repairable_schema_result(result: SQLResult) -> bool:
+    return (
+        result.status == "syntax_error"
+        and (result.error_type or "") in _REPAIRABLE_SCHEMA_ERROR_TYPES
+    )
+
+
+def _select_authorized_tables(
+    question: str, allowed_tables: list[str],
+) -> list[str]:
+    """把授权表范围传给 Router，且兼容旧版单参数测试替身。"""
+    try:
+        parameters = inspect.signature(select_tables).parameters
+        supports_scope = (
+            "allowed_tables" in parameters
+            or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+        )
+    except (TypeError, ValueError):
+        supports_scope = True
+    if supports_scope:
+        return select_tables(question, allowed_tables=allowed_tables)
+    return select_tables(question)
+
+
+def _prepare_sql_question(
+    question: str,
+    *,
+    query_context: dict | None,
+    policy: Optional[SQLPolicyContext],
+) -> str:
+    """按当前授权指纹解析 SQL 追问，返回供 Router/Generator 使用的独立问题。"""
+    previous = SQLQueryContext.from_dict(query_context)
+    if policy is not None:
+        fingerprint = permission_fingerprint(policy)
+        if not is_sql_context_compatible(previous, fingerprint):
+            previous = None
+    resolution = resolve_sql_followup(question, previous)
+    return str(resolution.get("standalone_question") or question).strip()
 
 
 def _unavailable_result() -> SQLResult:
@@ -176,6 +233,8 @@ class SQLAgent:
         question: str,
         current_user_id: Optional[int] = None,
         policy: Optional["SQLPolicyContext"] = None,
+        query_context: dict | None = None,
+        event_sink: Callable[[dict], None] | None = None,
     ) -> SQLResult:
         """处理自然语言问题并返回 SQLResult。
 
@@ -195,18 +254,34 @@ class SQLAgent:
             # 不区分权限——避免误导权限诊断
             return _unavailable_result()
         if policy is not None:
-            return self._ask_struct_with_policy(question, policy)
+            effective_question = _prepare_sql_question(
+                question, query_context=query_context, policy=policy)
+            return self._ask_struct_with_policy(
+                effective_question, policy, event_sink=event_sink)
 
-        logger.info(f"[SQLAgent] 收到问题: {question[:80]}... (user={current_user_id})")
+        effective_question = _prepare_sql_question(
+            question, query_context=query_context, policy=None)
+
+        logger.info(
+            f"[SQLAgent] 收到问题: {effective_question[:80]}... "
+            f"(user={current_user_id})")
 
         user_context = {}
         if current_user_id is not None:
             user_context["current_user_id"] = current_user_id
 
+        emit_sql_stage(
+            event_sink, node="query_understanding", phase="understanding",
+            message="已理解查询需求")
+
         # — Step 1: 路由选表 —
         try:
-            table_names = select_tables(question)
+            table_names = select_tables(effective_question)
             logger.info(f"[SQLAgent] 选中表: {table_names}")
+            emit_sql_stage(
+                event_sink, node="table_router", phase="table_routing",
+                message=f"已匹配 {len(table_names)} 张数据表",
+                tables=table_names[:20], status="success")
         except Exception as e:
             logger.error(f"[SQLAgent] 表路由失败: {e}")
             _observe(decision="EXECUTION_FAILED", policy=None,
@@ -233,17 +308,35 @@ class SQLAgent:
         for attempt in range(self.max_retries + 1):
             sql: str | None = None
             try:
-                sql = generate_sql(question, table_names, feedback=feedback)
+                emit_sql_stage(
+                    event_sink, node="sql_generator", phase="sql_generation",
+                    message="正在生成查询语句")
+                sql = generate_sql(effective_question, table_names, feedback=feedback)
                 last_sql = sql
 
+                emit_sql_stage(
+                    event_sink, node="sql_validator", phase="sql_validation",
+                    message="正在校验查询安全性")
                 safe_sql, _, _ = sql_validator.validate(sql)
 
                 # 行级安全：返回 (sql_with_placeholders, params_dict)
                 safe_sql, rs_params = inject_row_filter(safe_sql, user_context)
 
                 # 结构化执行
+                emit_sql_stage(
+                    event_sink, node="sql_executor", phase="tool_start",
+                    message="正在调用数据查询工具", status="running")
                 result = execute_sql_struct(safe_sql, self.db_config, params=rs_params)
                 last_result = result
+                emit_sql_stage(
+                    event_sink, node="sql_executor", phase="tool_result",
+                    message=("查询完成" if result.status in ("success", "no_data")
+                             else "查询未完成"),
+                    status=("success" if result.status in ("success", "no_data")
+                            else "failed"),
+                    row_count=result.row_count,
+                    error_type=result.error_type or "",
+                )
 
                 # 成功路径 → 直接返回
                 if result.status in ("success", "no_data"):
@@ -254,11 +347,26 @@ class SQLAgent:
                     )
                     return result
 
-                # 失败判断：
-                # 1. status ∈ {validation_error, permission_denied} → 不可重试
-                # 2. status ∈ {syntax_error} → 不可重试（同一 LLM 再来通常还是同样错）
-                # 3. status ∈ {timeout, failed, no_table} → 可重试
-                if result.status in ("validation_error", "permission_denied", "syntax_error"):
+                # 表/列不存在是模型生成错误，带真实错误类型反馈重试；
+                # 其它 syntax_error 仍终态，避免把安全/语法错误反复送模型。
+                if result.status in ("validation_error", "permission_denied") \
+                        or (result.status == "syntax_error"
+                            and not _is_repairable_schema_result(result)):
+                    _observe(
+                        decision=sql_audit_decision(result.status), policy=None,
+                        sql=sql, status=result.status,
+                        error_type=result.error_type or "",
+                    )
+                    return result
+
+                if _is_repairable_schema_result(result):
+                    if attempt < self.max_retries:
+                        feedback = (
+                            f"上次生成的 SQL:\n{sql}\n"
+                            f"执行发现数据字典不匹配：{result.error}\n"
+                            "请只使用已提供表结构中的真实列名，重新生成。"
+                        )
+                        continue
                     _observe(
                         decision=sql_audit_decision(result.status), policy=None,
                         sql=sql, status=result.status,
@@ -341,6 +449,8 @@ class SQLAgent:
         self,
         question: str,
         policy: "SQLPolicyContext",
+        *,
+        event_sink: Callable[[dict], None] | None = None,
     ) -> SQLResult:
         """生产策略链路。与旧行为的差异：
 
@@ -375,9 +485,24 @@ class SQLAgent:
                 error_type="row_security",
             )
 
+        emit_sql_stage(
+            event_sink, node="query_understanding", phase="understanding",
+            message="已理解查询需求")
+
         # — Step 1: 路由选表（与旧链路一致）—
         try:
-            table_names = select_tables(question)
+            allowed_tables = guard.get_allowed_tables(policy)
+            # 兼容现有 Router/测试替身的单参数调用，同时把最终交给
+            # Generator 的表集合收口到当前主体授权范围。
+            table_names = [
+                table for table in _select_authorized_tables(
+                    question, allowed_tables)
+                if table in allowed_tables
+            ]
+            emit_sql_stage(
+                event_sink, node="table_router", phase="table_routing",
+                message=f"已匹配 {len(table_names)} 张授权数据表",
+                tables=table_names[:20], status="success")
         except Exception as e:
             logger.error(f"[SQLAgent:policy] 表路由失败: {e}")
             _observe(decision="EXECUTION_FAILED", policy=policy,
@@ -389,11 +514,11 @@ class SQLAgent:
             )
         if not table_names:
             _observe(decision="EXECUTION_FAILED", policy=policy,
-                     status="no_table", error_type="no_table")
+                     status="permission_denied", error_type="table_scope")
             return SQLResult.failed(
-                status="no_table",
-                error="未找到相关数据表，请调整问题后重试。",
-                error_type="no_table",
+                status="permission_denied",
+                error="该数据不在当前可访问范围内。",
+                error_type="row_security",
             )
 
         # — Step 2-5: 生成 + Guard 循环 —
@@ -402,14 +527,32 @@ class SQLAgent:
         last_result: SQLResult | None = None
         for attempt in range(self.max_retries + 1):
             try:
+                emit_sql_stage(
+                    event_sink, node="sql_generator", phase="sql_generation",
+                    message="正在生成查询语句")
                 sql = generate_sql(question, table_names, feedback=feedback)
 
+                emit_sql_stage(
+                    event_sink, node="sql_validator", phase="sql_validation",
+                    message="正在校验查询安全性")
                 guarded = guard.validate_and_rewrite(sql, policy)
+                emit_sql_stage(
+                    event_sink, node="sql_executor", phase="tool_start",
+                    message="正在调用数据查询工具", status="running")
                 result = execute_sql_struct(
                     guarded.executable_sql, self.db_config,
                     params=guarded.params,
                 )
                 last_result = result
+                emit_sql_stage(
+                    event_sink, node="sql_executor", phase="tool_result",
+                    message=("查询完成" if result.status in ("success", "no_data")
+                             else "查询未完成"),
+                    status=("success" if result.status in ("success", "no_data")
+                            else "failed"),
+                    row_count=result.row_count,
+                    error_type=result.error_type or "",
+                )
 
                 if result.status in ("success", "no_data"):
                     _observe(
@@ -421,12 +564,31 @@ class SQLAgent:
                         status=result.status,
                     )
                     return result
-                # 语法/schema/权限类不可重试；timeout/failed 可重试
-                if result.status in ("validation_error", "permission_denied", "syntax_error"):
+                # 表/列不存在属于可修复的模型生成错误；其它语法/权限类终态。
+                if result.status in ("validation_error", "permission_denied") \
+                        or (result.status == "syntax_error"
+                            and not _is_repairable_schema_result(result)):
                     _observe(
                         decision=sql_audit_decision(result.status),
                         policy=policy, sql=sql,
                         tables=guarded.referenced_tables,
+                        duration_ms=int((result.elapsed_sec or 0) * 1000),
+                        status=result.status,
+                        error_type=result.error_type or "",
+                    )
+                    return result
+
+                if _is_repairable_schema_result(result):
+                    if attempt < self.max_retries:
+                        feedback = (
+                            f"上次生成的 SQL:\n{sql}\n"
+                            f"执行发现数据字典不匹配：{result.error}\n"
+                            "请只使用已提供表结构中的真实列名，重新生成。"
+                        )
+                        continue
+                    _observe(
+                        decision=sql_audit_decision(result.status), policy=policy,
+                        sql=sql, tables=guarded.referenced_tables,
                         duration_ms=int((result.elapsed_sec or 0) * 1000),
                         status=result.status,
                         error_type=result.error_type or "",

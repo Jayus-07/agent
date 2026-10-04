@@ -1,0 +1,18 @@
+{
+  "version": "travel-golden-v1",
+  "case_count": 50,
+  "module": "travel",
+  "kb_id": "travel",
+  "source_doc_count": 38,
+  "content_sha256": "f9d4252c0e757c083a6f7044ae936094d02844e99df0eca87cd5d22fae650495",
+  "categories": {
+    "poi": 20,
+    "food": 10,
+    "route": 5,
+    "transit": 3,
+    "no_answer": 8,
+    "permission_negative": 4
+  },
+  "schema": ["id", "question", "expected_doc", "expected_answer", "type"],
+  "notes": "固定验收集；expected_doc 取当前 travel active registry 文件名，no_answer/permission_negative 的 expected_doc 为空。"
+}

@@ -730,6 +730,7 @@ class IncrementalIndexer:
                 "trace_id": trace.id,
                 "doc_id": doc_id,  # 本次派生的真实 doc_id(新文件也有值)
                 "chunk_count": inner_result.get("chunk_count", 0),
+                "chunk_ids": inner_result.get("chunk_ids") or [],
                 "doc_db_id": inner_result.get("doc_db_id", ""),
                 "file_hash": inner_result.get("file_hash", file_hash),
                 "status": "active",
@@ -1760,6 +1761,11 @@ class IncrementalIndexer:
                         str(item)
                         for item in (reindex_ctx or {}).get("old_chunk_ids", [])
                     )
+                    # 向量 ID 可能由内容派生，未变化的 chunk 在重索引时会
+                    # 被 add_documents 复用。此类 ID 同时属于旧快照和本次
+                    # 新结果，不能排除，否则 BM25 会漏掉整份文档；只排除
+                    # 仍停留在向量集合中的旧而非新 chunk。
+                    old_chunk_ids.difference_update(str(item) for item in chunk_ids)
                     # 语料源：候选模式 = 主∪候选拼接视图（canonical 语义不变，
                     # 且已按 exclude_ids 排除旧版 chunk）；常规 = 本 store。
                     bm25_source = self._bm25_source_vectordb or self.vectordb
@@ -1901,6 +1907,7 @@ class IncrementalIndexer:
         # P2-2:返回 dict 给 _index_file wrapper,消除 reindex_file 反查 registry 的需要
         return {
             "chunk_count": len(chunk_ids),
+            "chunk_ids": chunk_ids,
             "doc_db_id": doc_db_id,
             "file_hash": file_hash,
         }
@@ -2070,6 +2077,7 @@ class IncrementalIndexer:
             self._cleanup_superseded(
                 old_doc_id, old_chunk_ids, old_doc_db_id,
                 new_doc_db_id=index_result.get("doc_db_id", ""),
+                new_chunk_ids=index_result.get("chunk_ids"),
                 file_path=file_path,
             )
         trace_id = index_result.get("trace_id", "")
@@ -2113,6 +2121,7 @@ class IncrementalIndexer:
         old_chunk_ids: list[str],
         old_doc_db_id: str,
         new_doc_db_id: str = "",
+        new_chunk_ids: list[str] | None = None,
         file_path: str = "",
     ):
         """重索引成功后清理被取代的旧向量（"先写后删"的删半边）。
@@ -2123,11 +2132,17 @@ class IncrementalIndexer:
         """
         if not old_doc_id:
             return
-        if old_chunk_ids:
+        obsolete_chunk_ids = old_chunk_ids
+        if new_chunk_ids is not None:
+            new_id_set = set(new_chunk_ids)
+            obsolete_chunk_ids = [
+                chunk_id for chunk_id in old_chunk_ids if chunk_id not in new_id_set
+            ]
+        if obsolete_chunk_ids:
             try:
-                self.vectordb.delete(ids=old_chunk_ids)
+                self.vectordb.delete(ids=obsolete_chunk_ids)
                 logger.info(
-                    f"[REINDEX] 已清理旧 chunk 向量 {len(old_chunk_ids)} 条 "
+                    f"[REINDEX] 已清理旧 chunk 向量 {len(obsolete_chunk_ids)} 条 "
                     f"(doc_id={old_doc_id})"
                 )
             except Exception as e:
@@ -2135,6 +2150,11 @@ class IncrementalIndexer:
                     f"[REINDEX] 旧 chunk 向量清理失败（残留孤儿向量，"
                     f"doc_id={old_doc_id}）: {e}"
                 )
+        elif old_chunk_ids:
+            logger.info(
+                f"[REINDEX] 旧 chunk ID 均被新索引复用，跳过清理 "
+                f"(doc_id={old_doc_id})"
+            )
         else:
             logger.warning(
                 f"[REINDEX] 旧记录无 chunk_ids，跳过旧向量清理 "

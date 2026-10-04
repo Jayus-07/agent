@@ -15,9 +15,9 @@ from backend.prompts.loader import load_defaults
 
 class TestRegistryShape:
     def test_total_count(self):
-        # 2026-09-22 Phase 3 +1：memory.session.auto_compact（L5 增量摘要），
-        # baseline 已 40（并发会话 +1），现 41
-        assert len(PROMPT_REGISTRY) == 41
+        # 客服域硬编码 Prompt 独立 Key：query_intent、complaint_assess、
+        # supervisor、redirect_main，基线 41 增至 45。
+        assert len(PROMPT_REGISTRY) == 45
 
     def test_exactly_one_code_controlled(self):
         code_controlled = [s for s in PROMPT_REGISTRY.values() if s.code_controlled]

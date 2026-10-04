@@ -19,6 +19,11 @@
  *   但从未挂进导航）。**不违反 09-21 收敛本意** —— 收敛针对的是运营/管理后台
  *   （知识库/竞品/选品/告警），旅游规划属于消费者业务功能，且建于收敛次日。
  *   故本文件「单组」断言相应放宽为「AI 对话 + 旅游规划」，管理端黑名单不变。
+ * - 2026-10-01 五次收敛：「AI 对话」组（子项 智能问答 / 智能客服）压平为顶层
+ *   直达「AI 助手」→ /agent。**子项数从 2 变 0 属有意为之**：智能客服那条是
+ *   /agent?cs=1 的同页带参变体（不是独立路由），且 /agent 顶栏已有常驻客服
+ *   胶囊入口；一个组只挂一个真实页面等于白白多一层展开。本文件相应新增
+ *   「侧栏不得再出现同义重复入口」断言，锁住这次收敛不被回退。
  */
 import { describe, it, expect } from 'vitest'
 import { NAV } from './navConfig'
@@ -42,9 +47,9 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('用户端导航 = AI 对话 + 旅游规划（2026-09-30 四次追加）', () => {
+  it('用户端导航 = AI 助手 + 旅游规划（2026-10-01 五次收敛）', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['AI 对话', '旅游规划'])
+    expect(labels).toEqual(['AI 助手', '旅游规划'])
     for (const p of ['/agent', '/travel']) {
       expect(allPaths, `用户端核心路由 ${p} 丢失`).toContain(p)
     }
@@ -52,6 +57,25 @@ describe('NAV — 导航配置完整性', () => {
     for (const p of ['/agent/tasks', '/reports', '/alerts']) {
       expect(allPaths, `已裁撤路由 ${p} 不应出现在用户端`).not.toContain(p)
     }
+  })
+
+  it('「AI 助手」为顶层直达入口 → /agent，不再有子项（2026-10-01 五次收敛）', () => {
+    const entry = NAV.find((e) => e.label === 'AI 助手')
+    expect(entry, '「AI 助手」顶层入口丢失').toBeTruthy()
+    expect(entry?.path).toBe('/agent')
+    expect(entry?.items ?? []).toHaveLength(0)
+  })
+
+  it('侧栏不得回退成同义重复入口（智能问答/智能客服/对话 组，2026-10-01 新增边界）', () => {
+    // 三个词指同一件事：/agent 的对话主入口。重复入口会让用户以为它们是
+    // 不同功能；智能客服的常驻入口在 /agent 顶栏胶囊（ChatHeader onOpenCS），
+    // 不靠侧栏承载。此断言防的就是「有人又把子项加回去」。
+    const labels = NAV.map((e) => e.label)
+    for (const dup of ['AI 对话', '智能问答', '智能客服']) {
+      expect(labels, `同义重复入口「${dup}」不应出现在用户端侧栏`).not.toContain(dup)
+    }
+    const childLabels = NAV.flatMap((e) => (e.items ?? []).map((i) => i.label))
+    expect(childLabels).toEqual([])
   })
 
   it('「旅游规划」为顶层直达入口 → /travel（2026-09-30 四次追加）', () => {
@@ -62,16 +86,9 @@ describe('NAV — 导航配置完整性', () => {
     expect(entry?.items ?? []).toHaveLength(0)
   })
 
-  it('AI 对话组含「智能客服」直达子项 → /agent?cs=1（UX P1-⑤）', () => {
-    const chat = NAV.find((e) => e.label === 'AI 对话')
-    const cs = chat?.items?.find((i) => i.label === '智能客服')
-    expect(cs, '「智能客服」直达子项丢失').toBeTruthy()
-    expect(cs?.path).toBe('/agent?cs=1')
-  })
-
   it('管理端专属入口不回渗（运维/运营/业务配置页面 2026-09-16 起全部在 frontend-admin）', () => {
-    // 黑名单只锁顶层入口：用户端子项「智能客服」是 CSDrawer 消费者直达
-    // （/agent?cs=1），与管理端「智能客服」（坐席工作台）语义不同。
+    // 黑名单只锁顶层入口；用户端 /agent 顶栏的「智能客服」胶囊是 CSDrawer
+    // 消费者入口（不经过 navConfig），与管理端「智能客服」（坐席工作台）语义不同。
     const labels = NAV.map((e) => e.label)
     for (const adminOnly of [
       '数据驾驶舱', 'RAG 知识库', '告警中心',

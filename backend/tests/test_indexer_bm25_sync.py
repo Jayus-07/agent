@@ -38,7 +38,7 @@ def _make_indexer(tmp_path, bm25_store) -> IncrementalIndexer:
     return indexer
 
 
-def _run_inner(indexer: IncrementalIndexer, tmp_path) -> dict:
+def _run_inner(indexer: IncrementalIndexer, tmp_path, reindex_ctx=None) -> dict:
     """真实执行 _index_file_inner；仅对外部边界打桩（解析/LLM/embedding/chunk_store）。"""
     target = tmp_path / "doc.md"
     target.write_text(f"# 标题\n{_BODY}", encoding="utf-8")
@@ -53,7 +53,8 @@ def _run_inner(indexer: IncrementalIndexer, tmp_path) -> dict:
          patch.object(IncrementalIndexer, "_embed_with_retry",
                       return_value=[[0.0, 0.0, 0.0]]):
         return indexer._index_file_inner(
-            str(target), kb_id="policy_general", doc_id="doc1", file_hash="h1")
+            str(target), kb_id="policy_general", doc_id="doc1", file_hash="h1",
+            reindex_ctx=reindex_ctx)
 
 
 class TestBM25IncrementalSync:
@@ -86,6 +87,23 @@ class TestBM25IncrementalSync:
 
         indexer.registry.register.assert_not_called()
         indexer.vectordb.delete.assert_called()
+
+    def test_reused_chunk_id_is_not_excluded_from_new_bm25_snapshot(self, tmp_path):
+        """重索引复用 chunk ID 时，新版本仍必须进入 BM25。"""
+        bm25_store = MagicMock()
+        indexer = _make_indexer(tmp_path, bm25_store)
+
+        _run_inner(
+            indexer,
+            tmp_path,
+            reindex_ctx={
+                "old_chunk_ids": ["chunk_0", "old_chunk"],
+                "old_doc_db_id": "old-docdb",
+            },
+        )
+
+        _, kwargs = bm25_store.rebuild_from_vectorstore.call_args
+        assert kwargs["exclude_ids"] == {"old_chunk"}
 
     def test_bm25_skipped_when_store_none(self, tmp_path):
         """bm25_store=None（启动期 sync）时跳过 BM25 阶段，索引正常完成。"""

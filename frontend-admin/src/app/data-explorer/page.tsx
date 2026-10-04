@@ -15,14 +15,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database,
-  MessageSquareText, RefreshCw, Search, Table2,
+  MessageSquareText, RefreshCw, RotateCcw, Search, Table2,
 } from 'lucide-react'
+import { nanoid } from 'nanoid'
 import {
   dataQueryService,
   type BrowseTable,
   type SqlQueryResponse,
   type TableBrowseResponse,
 } from '@/api/dataQuery'
+import type { SSEStreamEvent } from '@/lib/types'
+import QueryProcessPanel from '@/components/data-query/QueryProcessPanel'
 
 type Tab = 'ask' | 'browse'
 
@@ -106,6 +109,12 @@ function AskResult({ result }: { result: SqlQueryResponse }) {
         <StatusBadge status={result.status} />
         <span>耗时 {(result.elapsed_sec * 1000).toFixed(0)} ms</span>
         <span>{result.row_count} 行</span>
+        {result.memory?.follow_up_detected === true && (
+          <span className="px-2 py-0.5 rounded-full bg-accent/10 text-accent">已结合上一轮追问</span>
+        )}
+        {result.memory?.memory_saved === true && (
+          <span className="text-text-muted">本轮结果已记忆，可继续追问</span>
+        )}
         {result.sql && (
           <button onClick={() => setShowSql((v) => !v)} className="flex items-center gap-1 hover:text-text-primary transition-colors">
             {showSql ? <ChevronUp size={12} /> : <ChevronDown size={12} />} 生成的 SQL
@@ -195,6 +204,13 @@ export default function DataExplorerPage() {
   const [asking, setAsking] = useState(false)
   const [askResult, setAskResult] = useState<SqlQueryResponse | null>(null)
   const [askError, setAskError] = useState<string | null>(null)
+  const [streamEvents, setStreamEvents] = useState<SSEStreamEvent[]>([])
+  const [sessionId, setSessionId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.sessionStorage.getItem('admin-sql-session-id') ?? `admin-sql-${nanoid()}`
+    }
+    return `admin-sql-${nanoid()}`
+  })
 
   // ── 浏览表 ──
   const [selected, setSelected] = useState<string | null>(null)
@@ -220,6 +236,9 @@ export default function DataExplorerPage() {
   }, [])
 
   useEffect(() => { loadCatalog() }, [loadCatalog])
+  useEffect(() => {
+    window.sessionStorage.setItem('admin-sql-session-id', sessionId)
+  }, [sessionId])
 
   // 按 schema 分组（目录顺序即 schema_loader 排序）
   const grouped = useMemo(() => {
@@ -278,13 +297,29 @@ export default function DataExplorerPage() {
     setAsking(true)
     setAskError(null)
     setAskResult(null)
+    setStreamEvents([])
     try {
-      setAskResult(await dataQueryService.runQuery(trimmed))
+      for await (const event of dataQueryService.streamQuery(trimmed, sessionId)) {
+        setStreamEvents(previous => [...previous, event])
+        if (event.event === 'done' && event.data.result) {
+          setAskResult(event.data.result as unknown as SqlQueryResponse)
+        }
+        if (event.event === 'error') {
+          setAskError(event.data.message || '查询失败')
+        }
+      }
     } catch (e) {
       setAskError(e instanceof Error ? e.message : '查询失败')
     } finally {
       setAsking(false)
     }
+  }
+
+  function startNewSqlSession() {
+    setSessionId(`admin-sql-${nanoid()}`)
+    setStreamEvents([])
+    setAskResult(null)
+    setAskError(null)
   }
 
   const selectedTable = catalog.find((t) => t.qualified_name === selected)
@@ -345,7 +380,12 @@ export default function DataExplorerPage() {
                   {ex}
                 </button>
               ))}
+              <button onClick={startNewSqlSession}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs text-text-muted border border-border-subtle rounded-full hover:text-text-primary hover:border-text-muted transition-colors">
+                <RotateCcw size={11} /> 清除追问记忆
+              </button>
             </div>
+            <QueryProcessPanel events={streamEvents} />
             {askError && (
               <div className="mt-4 text-xs text-red-600 border border-red-200 bg-red-50 rounded-lg px-3 py-2">{askError}</div>
             )}

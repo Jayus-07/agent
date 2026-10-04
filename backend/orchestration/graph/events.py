@@ -102,7 +102,9 @@ def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
     # 注意 _clarify 已入 OrchestratorState schema——LangGraph updates 流会剥离
     # schema 外的键，不声明就永远到不了这里（实测 2026-09-19）。
     if isinstance(node_output, dict) and node_output.get("_clarify"):
-        yield from _build_clarify_events(node_output["_clarify"])
+        yield from _build_clarify_events(
+            node_output["_clarify"],
+            session_id=str(node_output.get("session_id") or ""))
     if node_name == "planner":
         yield from _build_planner_events(node_output)
     elif node_name == "critique":
@@ -111,19 +113,68 @@ def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
         yield from _build_supervisor_events(node_output, make_step_log_event)
     elif node_name == "tool_selector":
         yield from _build_tool_selector_events(node_output)
+    elif node_name == "router":
+        yield from _build_understanding_events(node_output)
     elif node_name == "reporter":
         yield from _build_reporter_events(node_output)
     elif node_name in skill_nodes:
         yield from _build_skill_events(node_name, node_output, make_step_payload)
 
 
-def _build_clarify_events(marker: dict) -> Generator[dict, None, None]:
+def _build_understanding_events(output: dict) -> Generator[dict, None, None]:
+    """透出已有 QueryRouter 结果，展示需求理解而不泄露内部推理文本。"""
+    understanding = output.get("query_understanding") or {}
+    if not understanding:
+        return
+    intent = str(understanding.get("intent") or "general_chat")
+    labels = {
+        "sql_analysis": "数据查询分析",
+        "business_analysis": "业务分析",
+        "knowledge_query": "知识问答",
+        "tool_operation": "业务工具操作",
+        "report_generation": "报告生成",
+        "general_chat": "普通对话",
+    }
+    yield {
+        "event": "log",
+        "data": {
+            "level": "info",
+            "node": "router",
+            "step_id": "understanding",
+            "message": f"已理解需求：{labels.get(intent, '信息处理')}",
+            "payload": {
+                "phase": "understanding",
+                "intent": intent,
+                "domain": str(understanding.get("domain") or "general"),
+                "query_type": str(understanding.get("query_type") or ""),
+                "complexity": str(understanding.get("complexity") or ""),
+                "need_sql": bool(understanding.get("need_sql")),
+                "need_tool": bool(understanding.get("need_tool")),
+                "confidence": float(understanding.get("confidence") or 0),
+            },
+            "ts": time.time(),
+        },
+    }
+
+
+def _build_clarify_events(marker: dict,
+                          session_id: str = "") -> Generator[dict, None, None]:
     """拒答转追问的 clarification 事件（与 tool_selector 的 clarify 同结构）。
 
     marker 来自 clarify_content.py：{source, question, options, handoff_available}。
     options 是用户话术（前端点击后原样重发），不做 capability 脱敏转换。
+    session_id 从节点输出透传（hierarchical 输出含 **state；reporter L2
+    输出没有则由 writer 的 ContextVar 兜底）。
     """
     options = [str(o) for o in (marker.get("options") or []) if o]
+    try:
+        from backend.observability.clarify_funnel import record_funnel_event
+
+        # 漏斗 shown：指标 + PG 双写（重启归零的精确累计从 PG 取）
+        record_funnel_event("shown", source=str(marker.get("source", "")),
+                            session_id=session_id or None)
+    except Exception:  # noqa: BLE001 — 漏斗旁路不阻断事件流
+        pass
     yield {
         "event": "clarification",
         "data": {
@@ -284,6 +335,8 @@ def _build_skill_events(node_name: str, output: dict, make_step_payload) -> Gene
         desc = sr.get("description", sid)
         output_val = sr.get("output", "")
         payload = make_step_payload(sr, include_output=True)
+        payload["phase"] = "tool_result"
+        payload["tool"] = cap or node_name
         if isinstance(output_val, dict):
             for k in ("sql", "query", "params", "row_count", "result_count", "top_k"):
                 if k in output_val:
@@ -342,18 +395,48 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
     流式上线后，本函数仅剩两类调用方：Guard 短路话术、未发生 LLM 生成的
     兜底路径（如答案缓存命中/纯模板/降级回答）。这些场景没有"边生成边
     出字"可言，一次性发送整段即可，不再人为延迟。
-    内容剥离 <!--META...--> 机读尾部（真流式路径由 MetaStreamFilter 处理）。
+    内容剥离 <!--META...--> 与 <!--RAGMETA...--> 机读注释（正常已在
+    reporter 剥离，此处兜底防未走 reporter 的路径外显）。
     """
-    import re
     if not final_answer:
         return
-    text = re.sub(r"<!--META.*?-->\s*", "", final_answer, flags=re.DOTALL).strip()
+    text = re.sub(r"<!--META.*?-->\s*", "", final_answer, flags=re.DOTALL)
+    text = re.sub(r"<!--RAGMETA.*?-->\s*", "", text, flags=re.DOTALL).strip()
     if not text:
         return
     if stop_event is not None and stop_event.is_set():
         yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
         return
     yield {"event": "delta", "data": {"content": text, "ts": time.time()}}
+
+
+# 工具输出头部的机器标记（tools/rag.py 附带，与「### 参考文献」同属文本协议）
+_RAGMETA_RE = re.compile(r"<!--\s*RAGMETA\s*(\{.*?\})\s*-->", re.DOTALL)
+
+
+def _extract_rag_answer_meta(final_answer: str, all_step_results: dict) -> dict:
+    """从最终回答或 rag 步骤输出解析 <!--RAGMETA{...}--> 机器标记。
+
+    优先 final_answer（reporter 快速路径透传的工具原文），兜底扫
+    rag.search 步骤输出（多步/LLM 重写路径 final_answer 可能已无标记）。
+    只读不剥——用户可见文本的剥离职责在 reporter（generate_final_answer）
+    与 emit_delta_events（delta 兜底），本函数只负责给 done 帧出结构化字段。
+    """
+    import json
+    candidates = [final_answer or ""]
+    for sr in (all_step_results or {}).values():
+        if isinstance(sr, dict) and sr.get("capability") == "rag.search":
+            candidates.append(str(sr.get("output", "") or ""))
+    for text in candidates:
+        m = _RAGMETA_RE.search(text)
+        if not m:
+            continue
+        try:
+            meta = json.loads(m.group(1))
+            return meta if isinstance(meta, dict) else {}
+        except Exception:  # noqa: BLE001 — 标记损坏按无元数据处理
+            return {}
+    return {}
 
 
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
@@ -366,6 +449,8 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
     前端据此渲染 CSConfirmCard；其余场景恒为 None，前端无感。
     context_usage（2026-09-22）：上下文用量快照，前端显示「上下文 xx%」。
+    answer_status/confidence（2026-10-03）：RAG 拒答语义码与 META 自报
+    置信度，来源是工具输出的 RAGMETA 标记；缺省 = 正常回答，前端无感。
     """
     from backend.agents.reporter.reporter import _extract_sources_from_steps
     from backend.agents.reporter.context_filter import parse_sources_from_text
@@ -374,6 +459,11 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     if not sources and final_answer:
         sources = parse_sources_from_text(final_answer)
     data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
+    rag_meta = _extract_rag_answer_meta(final_answer, all_step_results)
+    if rag_meta.get("answer_status"):
+        data["answer_status"] = str(rag_meta["answer_status"])
+    if isinstance(rag_meta.get("confidence"), (int, float)):
+        data["confidence"] = round(float(rag_meta["confidence"]), 2)
     if usage:
         data["usage"] = usage
     if trace_id:

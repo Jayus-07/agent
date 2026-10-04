@@ -32,7 +32,7 @@ export default function ContextPanel({ sessionId }: { sessionId: string }) {
   if (!ctx) return null
 
   return (
-    <div className="shrink-0 border-b border-border-subtle bg-accent/3 px-4 py-2">
+    <div className="shrink-0 border-b border-border-subtle bg-accent/[0.03] px-4 py-2">
       <div className="max-w-4xl mx-auto flex items-center gap-3 text-xs">
         <Brain size={13} className="text-accent" />
         <span className="text-text-muted">上下文:</span>

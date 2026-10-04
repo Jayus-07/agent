@@ -40,7 +40,7 @@ flowchart TB
     end
 
     subgraph CAPL["能力层 Capability / Skill"]
-        SK["12 Skill · 17 Capability · 37 Tool<br/>RAG · SQL · 报告 · 邮件 · 搜索 · 地图 …"]
+        SK["12 Skill · 17 Capability · 39 Tool<br/>RAG · SQL · 报告 · 邮件 · 搜索 · 地图 …"]
     end
 
     subgraph INFRA["数据与基础设施"]
@@ -121,7 +121,7 @@ flowchart TB
         ER["Expert Runtime — 域内专家节点的公共执行生命周期"]
         TCB["Tool Contract Boundary — 两型输出契约（text 给 LLM 读 / structured 给程序）+ 边界归一"]
         TR["Tool Runtime — 执行治理（超时 · 重试 · 熔断 · 隔离舱）"]
-        MCP["Integration Adapter — MCP 对外暴露（2 server / 5 tool）＋ infra/mcp_client.py 消费外部 MCP server 作 Tool 数据源（首例 12306）"]
+        MCP["Integration Adapter — MCP 对外暴露（2 server / 5 tool）＋ infra/mcp_client.py 消费外部 MCP server 作 Tool 数据源（12306、知乎官方）"]
         GOV["Shared Governance — 认证 · 三层记忆 · 上下文预算 · 模型治理 · 幂等 · 可观测 · 评测"]
         RR --> DR
         RR --> CR
@@ -159,7 +159,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Domain / Domain Graph（域图） | 垂直业务域的独立子图，自带子 Agent 与 reporter；架构上 3 个顶级业务域（客服 / 旅游 / 选品漏斗），旅游含 planning / commerce / booking 三个子流，落地为 5 个物理域图（commerce / booking 保留独立生命周期与独立开关） |
 | Capability | 路由与规划的最小能力单元（17 个，唯一事实源 `capabilities.yaml`） |
 | Skill | Capability 的业务执行封装（12 个）；RAG / SQL 是 Skill，不是独立 Agent |
-| Tool | 无状态原子操作（37 个），Skill 之下、基础设施之上 |
+| Tool | 无状态原子操作（39 个），Skill 之下、基础设施之上 |
 | Workflow | 预定义多步编排（4 个），绕过 Planner |
 | Model Gateway（模型网关） | `infra/llm`：统一 LLM 出口 proxy + DB 治理注册表 + providers；具体模型绑定不进架构图 |
 | Shared Platform（公共平台能力） | 横切支撑：Authorization / Memory / Context Budget / Model Governance / Idempotency / Observability / Evaluation |
@@ -167,19 +167,19 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ---
 
-## 系统规模（2026-10-02 实测口径）
+## 系统规模（2026-10-05 实测口径）
 
 | 资产 | 数量 | 事实源 |
 |------|------|--------|
 | 主图核心节点 | 9（含 `general_chat` 寒暄直答，2026-09-25 口径对齐） | `backend/orchestration/graph/builder.py` |
 | Skill | 12 | `backend/skills/registry.py::_instances` |
 | Capability | 17（其中 3 个 `routed: false` 内部能力） | `backend/orchestration/router/capabilities.yaml` |
-| Tool | 37 | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
+| Tool | 39（2026-10-03 对齐 `tool_contracts.lock.json`；10-02 +5：高德商家检索、12306 车票/票价查询、知乎站内/知乎全网搜索） | `backend/tools/`（`@tool` + 文件底部 `tool_registry.register`） |
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
-| MCP Server / Tool | 2 / 5 | `mcp_servers/servers/` |
-| 后端用例 | 8573（`pytest --collect-only`，2026-10-02） | `backend/tests/` |
-| 前端路由 | 用户端 5 / 管理端 44（含 /tools Tool 治理、/consistency 资产一致性、/data-explorer 数据查询、/knowledge/upload-failures 入库失败，2026-10-02）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
+| MCP Server / Tool | 2 / 5（自托管；另经 `infra/mcp_client.py` 接外部 MCP 数据源 2 例：mcp-12306、知乎官方 MCP） | `mcp_servers/servers/` |
+| 后端用例 | 9289（`pytest --collect-only`，2026-10-05；含工作区在途测试文件） | `backend/tests/` |
+| 前端路由 | 用户端 6（含 /change-password 临时密码改密）/ 管理端 48（含 /tools Tool 治理、/consistency 资产一致性、/data-explorer 数据查询、/knowledge/upload-failures 入库失败、selection-workbench / knowledge/workbench / evaluations/center / observability/monitoring 四个工作台页；侧栏入口已工作台合并，page.tsx 数 ≠ 侧栏条目数，2026-10-03）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
 > [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)。
@@ -193,13 +193,13 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 以一个聊天主界面为核心（登录后进入 `/agent`）：
 
 - **AI 问答**（`/agent`）：主界面即一个对话框——流式回答、实时展示路由与工具调用过程；知识问答、客服咨询（右上角客服抽屉，走客服锁域链路）、旅游咨询都在这一个框里按问题自动分流
-- **旅游行程页**（`/travel`）：不走对话的独立表单入口——表单提交需求，返回结构化行程（逐日时间轴 + 静态地图打点 + ICS 日历导出）；主对话框聊旅游走的是域图对话链路，两者共用同一旅游域
+- **旅游行程页**（`/travel`）：「表单首发 + 页内对话改单」混合形态——左栏表单提交需求生成结构化行程（逐日时间轴 + 静态地图打点 + ICS 日历导出），右栏「旅行助手」在当前行程上对话式改单（复用同一会话，域图跨轮合并需求）；另含历史规划抽屉、城市指南抽屉、方案档位切换与预算协商卡；主对话框聊旅游走的是域图对话链路，两者共用同一旅游域
 - **统一门户**（`/`）：未登录兜底页，三端入口导航（用户端 / 客服端 / 管理端）
-- **登录 / 注册**
+- **登录 / 注册**（首次登录持临时密码时经 `/change-password` 完成改密）
 
 ### 管理端 `frontend-admin`（:3200）
 
-面向管理员 / 运营的控制台（44 个页面）：
+面向管理员 / 运营的控制台（48 个页面，高关联页已按工作台合并进侧栏）：
 
 - **运营总览**（首页）：待我处理、业务概览、网关安全
 - **知识库**：文档上传与管理、关键词、待审队列、入库失败待处理、运营指标与索引 trace
@@ -350,7 +350,7 @@ mcp_servers/
 
 参数定义一律 `langchain_tool_to_mcp_meta` 从 Tool 的 `args_schema` 派生，**禁止手写**。
 
-2026-10-02 起新增**反向通路**：外部 MCP server 也可作为 **Tool 的数据源**——平台经 `backend/infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费外部 server，首例为 12306 车票余票查询（`tools/travel/train.py`，compose 服务 `mcp-12306`，宿主 `127.0.0.1:18000`）。开关 `TRAIN_MCP_ENABLED` 默认关；上游为非官方聚合、无 SLA、仅供学习研究（不商用）；失败不阻塞主链。
+2026-10-02 起新增**反向通路**：外部 MCP server 也可作为 **Tool 的数据源**——平台经 `backend/infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费外部 server，首例为 12306 车票余票查询（`tools/travel/train.py`，compose 服务 `mcp-12306`，宿主 `127.0.0.1:18000`）。开关 `TRAIN_MCP_ENABLED` 默认关；上游为非官方聚合、无 SLA、仅供学习研究（不商用）；失败不阻塞主链。第二例为知乎官方 MCP（`tools/search/zhihu.py`，`zhihu_search` 站内 + `global_search` 全网，Streamable HTTP + Bearer，`ZHIHU_MCP_ENABLED` 默认关、凭据 `ZHIHU_MCP_API_KEY` 仅从 .env 读取），带月度配额计量，双路检索单路可用即降级继续。
 
 ---
 
@@ -399,7 +399,7 @@ cp .env.example .env
 # 至少填 PGPASSWORD / PG_READONLY_PASSWORD —— compose 用 ${VAR:?} 强校验，缺失直接起不来
 ```
 
-- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是逐项带注释的启动模板（90 项，2026-10-02 实测；高德 / 12306 等新开关在此维护）；`backend/.env.example` 是早期后端模板副本（69 项，已落后于根模板，仅作参考）。
+- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是逐项带注释的启动模板（98 项，2026-10-04 实测；高德 / 12306 / 知乎 MCP 等新开关在此维护）；`backend/.env.example` 是早期后端模板副本（69 项，已落后于根模板，仅作参考）。
 - 模型 provider / model / api_key **不在 env 里配** —— 走 `sys_config`，由管理端「模型配置」页维护（DB override + 环境变量 fallback）。
 
 ### 1. 一键启停（唯一入口 = `devctl.bat`）
@@ -512,7 +512,7 @@ agent/
 │   ├── app/                   # FastAPI（routes / middleware / server）
 │   ├── orchestration/         # LangGraph 运行时（graph / router / workflows / skill_executor）
 │   ├── skills/                # 12 个 Skill（业务能力封装）
-│   ├── tools/                 # 37 个 Tool（无状态可测试）
+│   ├── tools/                 # 39 个 Tool（无状态可测试）
 │   ├── domains/               # 域图注册入口（→ 下面三个垂直域）
 │   ├── customer_service/      # 客服域图
 │   ├── travel/                # 旅游域图（含 commerce / booking 两个子域，默认关）

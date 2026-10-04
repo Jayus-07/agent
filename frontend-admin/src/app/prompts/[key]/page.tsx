@@ -6,6 +6,7 @@ import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap, A
 import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus, type PromptRuntimeStatus, type PromptReleaseRecord } from '@/api/prompts'
 import { evaluationService } from '@/api/evaluation'
 import { WHITELIST_KEYS } from '@/config/promptGroups'
+import { PROMPT_RELEASE_EXECUTOR, PROMPT_RELEASE_SUITE } from '@/config/promptRelease'
 import { useToast } from '@/components/shared/Toast'
 import Skeleton from '@/components/shared/Skeleton'
 import StatusBadge from '@/components/prompts/StatusBadge'
@@ -157,9 +158,9 @@ export default function PromptDetailPage() {
     setReleaseLoading(true)
     try {
       const record = await promptsService.createRelease(decodedKey, version, {
-        suite: 'pr_baseline',
+        suite: PROMPT_RELEASE_SUITE,
         dataset_version: { version: '5.0.0-unified', source: 'admin-console' },
-        executor: 'local',
+        executor: PROMPT_RELEASE_EXECUTOR,
       })
       setReleases(previous => [record, ...previous.filter(item => item.release_id !== record.release_id)])
       toast.info(`v${version} 已进入评测队列`)

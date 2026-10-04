@@ -232,7 +232,7 @@ local function build_conf()
         alg_expected = expected_alg(jwt_secret),
         secret_ready = #jwt_secret >= 32,
         redis = {
-            host = env("AUTH_REDIS_HOST", "host.docker.internal"),
+            host = env("AUTH_REDIS_HOST", "auth-redis"),
             port = tonumber(env("AUTH_REDIS_PORT", "16379")),
             password = env("AUTH_REDIS_PASSWORD", ""),
             blacklist_prefix = env("GATEWAY_AUTH_BLACKLIST_PREFIX", "auth:blacklist:"),

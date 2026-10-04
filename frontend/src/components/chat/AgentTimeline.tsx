@@ -30,6 +30,64 @@ interface TimelineNode {
   hasError: boolean              // 是否有 level=error 的 log
 }
 
+const STREAM_PHASE_LABELS: Record<string, string> = {
+  understanding: '需求理解',
+  table_routing: '选择数据表',
+  sql_generation: '生成 SQL',
+  sql_validation: '安全校验',
+  tool_start: 'Tool 调用',
+  tool_result: 'Tool 返回',
+}
+
+/** 把后端结构化阶段翻译成用户可读标签，管理端与用户端保持同一口径。 */
+export function streamPhaseLabel(phase: unknown): string {
+  return typeof phase === 'string' ? (STREAM_PHASE_LABELS[phase] ?? '执行进度') : '执行进度'
+}
+
+function TimelineLogLine({ log }: { log: LogEvent }) {
+  const phase = log.payload?.phase
+  const tool = log.payload?.tool
+  return (
+    <div className="flex items-start gap-1.5 ml-2 py-0.5">
+      <span className={`shrink-0 ${log.level === 'error' ? 'text-red-500' : log.level === 'warn' ? 'text-amber-500' : 'text-text-muted'}`}>
+        {log.level === 'error' ? '✕' : log.level === 'warn' ? '⚠' : '•'}
+      </span>
+      {typeof phase === 'string' && (
+        <span className="shrink-0 rounded bg-accent/10 px-1 text-[10px] text-accent">
+          {streamPhaseLabel(phase)}
+        </span>
+      )}
+      <span className="text-text-secondary flex-1">{log.message}</span>
+      {typeof tool === 'string' && (
+        <span className="shrink-0 font-mono text-[10px] text-text-muted">{tool}</span>
+      )}
+    </div>
+  )
+}
+
+function PhaseStrip({ events }: { events: SSEStreamEvent[] }) {
+  const phases = events
+    .filter((event): event is Extract<SSEStreamEvent, { event: 'log' }> => event.event === 'log')
+    .map(event => ({
+      phase: event.data.payload?.phase,
+      tool: event.data.payload?.tool,
+    }))
+    .filter(item => typeof item.phase === 'string')
+    .slice(-6)
+  if (phases.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-border-subtle bg-surface-base/50">
+      {phases.map((item, index) => (
+        <span key={`${item.phase}-${index}`} className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] text-accent">
+          {streamPhaseLabel(item.phase)}
+          {typeof item.tool === 'string' && <span className="font-mono text-accent/70">· {item.tool}</span>}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 /** 从 SSE 事件流派生 TimelineNode[]
  *  totalElapsedHint：完成态回看时由 trace.elapsed 传入的总耗时（秒）。
  *  末节点没有"下一个节点开始时间"可作终点，此前用当前时钟补 → 回看模式下
@@ -181,19 +239,13 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
             Logs {totalLogs > 0 && `(${totalLogs})`}
           </button>
         </div>
+        <PhaseStrip events={events} />
         {showLogs && (
           <div className="pl-1 pb-2 space-y-2 max-h-48 overflow-y-auto">
             {nodes.map((n) => n.logs.length === 0 ? null : (
               <div key={`logs-${n.name}`} className="text-[11px]">
                 <div className="text-text-muted font-medium mb-0.5">{n.label}</div>
-                {n.logs.map((l, i) => (
-                  <div key={i} className="flex items-start gap-1.5 ml-2 py-0.5">
-                    <span className={`shrink-0 ${l.level === 'error' ? 'text-red-500' : l.level === 'warn' ? 'text-amber-500' : 'text-text-muted'}`}>
-                      {l.level === 'error' ? '✕' : l.level === 'warn' ? '⚠' : '•'}
-                    </span>
-                    <span className="text-text-secondary flex-1">{l.message}</span>
-                  </div>
-                ))}
+                {n.logs.map((l, i) => <TimelineLogLine key={i} log={l} />)}
               </div>
             ))}
           </div>
@@ -229,20 +281,15 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
         </div>
       </div>
 
+      <PhaseStrip events={events} />
+
       {/* Logs panel（按节点分组的所有 log 事件） */}
       {showLogs && (
         <div className="border-b border-border-subtle px-4 py-2 space-y-2 max-h-48 overflow-y-auto">
           {nodes.map((n) => n.logs.length === 0 ? null : (
             <div key={`logs-${n.name}`} className="text-[11px]">
               <div className="text-text-muted font-medium mb-0.5">{n.label}</div>
-              {n.logs.map((l, i) => (
-                <div key={i} className="flex items-start gap-1.5 ml-2 py-0.5">
-                  <span className={`shrink-0 ${l.level === 'error' ? 'text-red-500' : l.level === 'warn' ? 'text-amber-500' : 'text-text-muted'}`}>
-                    {l.level === 'error' ? '✕' : l.level === 'warn' ? '⚠' : '•'}
-                  </span>
-                  <span className="text-text-secondary flex-1">{l.message}</span>
-                </div>
-              ))}
+              {n.logs.map((l, i) => <TimelineLogLine key={i} log={l} />)}
             </div>
           ))}
         </div>

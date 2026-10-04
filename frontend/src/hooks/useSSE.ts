@@ -107,6 +107,10 @@ export function useSSE() {
             finalState.thinkingText,
             finalState.thinkingSeconds ?? undefined,
             evt.data.trace_id,
+            // RAG 拒答语义码/置信度（缺省 undefined，不写入消息）
+            (evt.data.answer_status || evt.data.confidence != null)
+              ? { answerStatus: evt.data.answer_status, confidence: evt.data.confidence }
+              : undefined,
           )
           // 持久化由后端 end_turn 统一完成（finally 中 save_turn），
           // 前端不再调 /chat/messages 二次写入 —— 双写会让历史恢复时消息重复、

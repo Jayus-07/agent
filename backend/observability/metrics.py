@@ -125,6 +125,31 @@ skill_failure_total = Counter(
     labelnames=("skill", "error_type"),
 )
 
+# ── 拒答转追问漏斗（2026-10-03 企业口径）：没有漏斗指标的追问机制等于盲调 ──
+# 漏斗口径：shown（卡曝光）→ clicked（选项点击=原文重发命中）→
+# resolved（点击轮以非拒答回答收尾）；unanswered 为业务拒答旁路登记量。
+# source 取 clarify_content 各卡 source，禁止携带用户/租户/会话/问题原文。
+agent_clarify_shown_total = Counter(
+    "agent_clarify_shown_total",
+    "追问卡曝光次数（按卡片来源）",
+    labelnames=("source",),
+)
+agent_clarify_clicked_total = Counter(
+    "agent_clarify_clicked_total",
+    "追问卡选项点击次数（按卡片来源）",
+    labelnames=("source",),
+)
+agent_clarify_resolved_total = Counter(
+    "agent_clarify_resolved_total",
+    "点击追问卡后本轮得到非拒答回答的次数（按卡片来源）",
+    labelnames=("source",),
+)
+agent_unanswered_total = Counter(
+    "agent_unanswered_total",
+    "业务拒答（RAG 未命中/SQL 空结果）次数，与 ai.unanswered_questions 旁路登记同源",
+    labelnames=("source",),
+)
+
 # ── 安全 / 幂等 / 预算闭环指标（WP6；标签禁止携带用户、租户、Trace、请求或幂等键）──
 idempotency_claim_total = Counter(
     "idempotency_claim_total",
@@ -292,6 +317,21 @@ metadata_rule_snapshot_total = Counter(
     "metadata_rule_snapshot_total",
     "元数据规则快照治理结果次数",
     labelnames=("result",),
+)
+
+agent_rag_reconcile_inconsistent = Gauge(
+    "agent_rag_reconcile_inconsistent",
+    "最近一次索引对账不一致项数，包含 BM25 缺失与孤儿",
+    multiprocess_mode="livemostrecent",
+)
+agent_rag_reconcile_source_available = Gauge(
+    "agent_rag_reconcile_source_available",
+    "最近一次索引对账数据源是否齐备",
+    multiprocess_mode="livemostrecent",
+)
+agent_rag_parsing_timeout_total = Counter(
+    "agent_rag_parsing_timeout_total",
+    "被解析超时看门狗转为 failed 的登记行数",
 )
 
 rag_consistency_issues_total = Counter(

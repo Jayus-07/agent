@@ -106,6 +106,9 @@ async def call_sql(params: dict) -> dict:
             call=lambda: execute_sql_tool.ainvoke({"query": params["query"]}),
             domain="sql",
             tool_name="execute_sql_tool",
+            trace_capability="sql.query",
+            trace_agent="workflow_sql",
+            trace_params={"query": params["query"]},
         )
         if executed.status is not ToolStatus.SUCCESS:
             raise ValueError(

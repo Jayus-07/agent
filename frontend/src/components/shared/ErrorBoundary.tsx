@@ -28,7 +28,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
       return (
         <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
           <div className="text-4xl">⚠</div>
-          <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>
+          <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
             页面渲染出错
           </h2>
           <p className="text-sm text-center max-w-md" style={{ color: 'var(--text-muted)' }}>
@@ -38,9 +38,9 @@ export default class ErrorBoundary extends React.Component<Props, State> {
             onClick={() => this.setState({ hasError: false, error: null })}
             className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             style={{
-              backgroundColor: 'var(--surface-2)',
-              color: 'var(--text)',
-              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-subtle)',
             }}
           >
             重试

@@ -15,7 +15,7 @@ export default function PromptCard({ prompt, group }: PromptCardProps) {
   return (
     <div
       onClick={() => router.push(`/prompts/${encodeURIComponent(prompt.key)}`)}
-      className="bg-surface-elevated rounded-xl border border-border-subtle p-4 hover:shadow-card hover:border-accent/30 cursor-pointer transition-all group"
+      className="bg-surface-base rounded-xl border border-border-subtle p-4 hover:shadow-card hover:border-accent/30 cursor-pointer transition-all group"
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">

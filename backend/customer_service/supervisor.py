@@ -21,6 +21,7 @@ from typing import Any, TypedDict
 
 from langgraph.types import Command
 
+from backend.customer_service.prompting import render_prompt
 from backend.shared.logger import logger
 
 
@@ -51,6 +52,10 @@ class CSSupervisorDecision(TypedDict, total=False):
     requires_handoff: bool
     is_finished: bool
     context_updates: dict
+    # T6（2026-10-04 对话体验改造）：分诊直出话术——出域固定话术/寒暄人设
+    # 回复。仅 FINISH 终态决策携带，cs_reporter._assemble_answer 直出，
+    # 不进任何 expert（reporter 消费后即弃，不落 expert_history）。
+    direct_reply: str
 
 
 # P2.2：route_path / domain → expert 映射统一到 graph_state 单一事实源
@@ -413,6 +418,16 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
         _record_decision(decision)
         return decision
 
+    # ── 第 4.5 层：分诊直出出口（T6，2026-10-04 对话体验改造）────────
+    # 位置语义：守卫兜底（handoff/pending/风险/循环）优先级高于对话体验
+    # 出口；出口先于 L5 意图路由——寒暄/出域消息 confidence 低，若落到
+    # L6/L7 会被知识检索白烧一遍。v1 回退路径（CS_DECISION_V2=false）不接
+    # 出口，保持存量语义纯净（回滚=v2 关闭时行为与改造前逐字节一致）。
+    direct = _triage_direct_reply(state)
+    if direct is not None:
+        _record_decision(direct)
+        return direct
+
     # ── 第 5 层：意图路由（route_path 强先验，绝大多数流量到此为止）──
     if confidence >= CS_CONFIDENCE_CAUTIOUS:
         expert = _resolve_expert(cs_route)
@@ -489,6 +504,121 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
     return decision
 
 
+def _triage_direct_reply(state: dict[str, Any]) -> CSSupervisorDecision | None:
+    """分诊直出出口（T6，2026-10-04 对话体验改造任务卡）。
+
+    两个出口（词表口径见 vocab.py「出域与寒暄词表」段）：
+      - 寒暄（CHITCHAT_PATTERNS）→ chat_fallback 一次 LLM 人设生成
+        （CS_CHAT_FALLBACK_ENABLED 控制，关闭时 run_chat_fallback 返 None
+        落回旧漏斗路径）；
+      - 出域（OUT_OF_SCOPE_PATTERNS）→ 固定话术，零 LLM 零检索
+        （CS_WINDOW_STANDALONE 控制——与 router T5 反转同一开关：
+        standalone=false 时出域话题已在 router 层转出主路由，域内出口
+        自然不触发，同开关避免两处语义漂移）。
+
+    顺序铁律（T4）：先客服信号后出域/寒暄——消息带客服域规则信号
+    （如"订单里的行程单丢了"）不得被出域词表截胡，落业务漏斗；与
+    router redirect 阶段一同源口径（cs_rule_hit_count 非空即留守）。
+    吃不准（信号判定失败）保守落业务漏斗：宁可尝试不可错拒。
+
+    返回 None = 出口未命中 / 对应开关关闭 / 信号判定失败，调用方继续
+    原决策链。词表判定纯规则零 LLM；寒暄出口的 LLM 调用在
+    chat_fallback 内部（带线程级限时 + PII 脱敏 + fail-open 固定话术）。
+    """
+    from backend.config.customer_service import CS_WINDOW_STANDALONE
+    from backend.customer_service.chat_fallback import (
+        chat_fallback_enabled,
+        run_chat_fallback,
+    )
+    from backend.customer_service.vocab import (
+        format_out_of_scope,
+        match_chitchat,
+        match_out_of_scope,
+    )
+
+    # CS 图键 = user_message（graph_state 权威）；question/query 为主图
+    # 键，兼容直测与跨图复用场景。
+    query_text = (
+        state.get("user_message")
+        or state.get("question")
+        or state.get("query")
+        or ""
+    ).strip()
+    if not query_text:
+        return None
+
+    # 顺序铁律（精确口径 2026-10-04.2）：业务域词命中 → 不判出域/寒暄
+    # （纯正则 ~µs 级）。不用全域规则命中数——KNOWLEDGE 通用疑问词
+    # （怎么/如何）出现在几乎一切疑问句里，会让出域出口失效；业务词
+    # （订单/退款/物流…）才构成真实客服诉求的豁免信号。
+    try:
+        from backend.customer_service.vocab import match_cs_signal_exempt
+        if match_cs_signal_exempt(query_text):
+            return None
+    except Exception:
+        return None
+
+    # 出口一：寒暄 → 一次 LLM 人设生成（词表段口径：先寒暄后出域——
+    # 纯"你好"不该收到出域话术）
+    if chat_fallback_enabled() and match_chitchat(query_text):
+        result = run_chat_fallback(query_text)
+        if result is not None:
+            decision = _make_decision(
+                ExpertAction.FINISH, None, layer=1,
+                reason=(
+                    "[v2·L4.5] 寒暄分诊直出: chat_fallback 一次 LLM "
+                    f"(pii_masked={result.pii_masked}"
+                    + (", llm_error_fallback" if result.error else "") + ")"
+                ),
+                is_finished=True,
+            )
+            decision["direct_reply"] = result.reply
+            _tag_triage_direct("chitchat", bool(result.error))
+            return decision
+
+    # 出口二：出域 → 固定话术（V1 验收口径：零 LLM，TTFT≤500ms）
+    if CS_WINDOW_STANDALONE and match_out_of_scope(query_text):
+        topic = _out_of_scope_topic(query_text)
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=1,
+            reason=f"[v2·L4.5] 出域固定话术: {topic}（零 LLM 零检索）",
+            is_finished=True,
+        )
+        decision["direct_reply"] = format_out_of_scope(topic)
+        _tag_triage_direct("out_of_scope", False)
+        try:  # M12 口径：出域属拒答类（不服务该话题），计数软失败
+            from backend.observability.metrics import cs_rejection_total
+            cs_rejection_total.labels(layer="out_of_scope").inc()
+        except Exception:
+            pass
+        return decision
+
+    return None
+
+
+def _out_of_scope_topic(query_text: str) -> str:
+    """出域话术 topic：取第一个命中词表模式的片段（旅游/选品/平台外）。"""
+    from backend.customer_service.vocab import OUT_OF_SCOPE_PATTERNS
+    for pattern in OUT_OF_SCOPE_PATTERNS:
+        matched = pattern.search(query_text)
+        if matched:
+            return matched.group(0)
+    return "该问题"
+
+
+def _tag_triage_direct(kind: str, degraded: bool) -> None:
+    """出口 trace 打点（任务卡 T6：出域/寒暄出口可归因），软失败。"""
+    try:
+        from backend.observability.tracer import trace_collector
+        tracer = trace_collector.current()
+        if tracer is not None:
+            tracer.tags["cs_triage_direct"] = kind
+            if degraded:
+                tracer.tags["cs_triage_direct_degraded"] = "llm_fallback"
+    except Exception:
+        pass
+
+
 def _is_expert_repeating(expert_history: list[dict]) -> bool:
     """检测同一 expert 是否连续执行 2 次。"""
     if len(expert_history) < 2:
@@ -517,14 +647,11 @@ def _llm_decision(state: dict[str, Any]) -> CSSupervisorDecision | None:
     expert_history = state.get("expert_history", [])
 
     prev_experts = [e.get("expert", "") for e in expert_history]
-    prompt = (
-        "你是客服系统 Supervisor。根据用户问题和已执行的 Expert 历史，"
-        "选择下一个最合适的 Expert。\n\n"
-        f"用户问题: {user_message[:200]}\n"
-        f"路由意图: {cs_route.get('intent', 'unknown')}\n"
-        f"已执行 Expert: {prev_experts}\n\n"
-        "可选 Expert: knowledge, query, action, complaint, handoff\n"
-        "只回复一个词（expert 名称），不要解释。"
+    prompt = render_prompt(
+        "customer_service.supervisor",
+        user_message=user_message[:200],
+        intent=cs_route.get("intent", "unknown"),
+        expert_history=str(prev_experts),
     )
 
     try:

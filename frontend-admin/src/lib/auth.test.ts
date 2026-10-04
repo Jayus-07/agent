@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCachedUser,
   getAccessToken,
+  login,
   logout,
   tryRefreshOnce,
 } from "./auth";
@@ -46,12 +47,25 @@ describe("auth RBAC session contract", () => {
 
     await expect(tryRefreshOnce()).resolves.toBe(true);
     expect(getAccessToken()).toBe("new-token");
+    const request = vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("X-Client-App")).toBe("admin");
     expect(getCachedUser()).toMatchObject({
       roles: ["editor"],
       platformRole: "editor",
       tenantId: "tenant-a",
       csRole: "supervisor",
     });
+  });
+
+  it("登录请求声明 admin 客户端，服务端才能选择隔离 Cookie", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      result({ token: "admin-token", userInfo: { userId: 7 } }),
+    );
+
+    await login("alice", "password");
+
+    const request = vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({ clientId: "admin" });
   });
 
   it("logout 无论请求失败都清 access token、user、过期标记并广播 WS 关闭", async () => {

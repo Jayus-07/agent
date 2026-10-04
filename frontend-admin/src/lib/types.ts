@@ -31,6 +31,8 @@ export interface MetaEvent {
 export interface StatusEvent {
   node: string    // LangGraph 节点名（前端自行映射为 emoji 标签）
   ts: number
+  status?: string
+  message?: string
 }
 
 export interface LogEvent {
@@ -75,6 +77,8 @@ export interface DoneEvent {
   trace_id?: string
   sources?: Source[]
   usage?: TokenUsage
+  /** SQL 查询流的结构化结果；普通聊天 done 不携带。 */
+  result?: Record<string, unknown>
 }
 
 export interface ErrorEvent {

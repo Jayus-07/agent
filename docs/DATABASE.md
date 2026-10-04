@@ -547,7 +547,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ### 6.1 migration 治理现状（2026-10-02）
 
-`sql/migrations/` 顺序编号治理，最新编号 **069**（prompt_release_records）；配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
+`sql/migrations/` 顺序编号治理，最新编号 **075**（⚠️ **071 编号重复仍未裁决**：`071_clarify_funnel_events.sql` 与 `071_rag_reconcile_reports.sql` 两文件并存且均未提交，`init_db.py::MIGRATION_TARGETS` 两者都已登记——原「其中一线改号 072」的建议已失效，072 号已被旅游决策留痕占用，合入前须在 076+ 中择号改线，否则按号排序的执行器会撞号）；061 编号空缺（让位历史并行批次）。配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
@@ -573,15 +573,21 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 | 058 | cs_case 等 | 客服统一案件（CS B12，并行批次） |
 | 059 | `ai.security_events` | 安全事件五类统一落库（M9；旁路软失败） |
 | 060 | `ai.task_operation_audits` | 任务操作审计双写（M10） |
-| 061 | `ai.release_records` | 发布记录 + 12 门结果（M8，并行批次） |
 | 062 | `ai.tool_contract_changes` | Tool 契约变更历史（生成器检测变更自动落库） |
-| 063 | `public.release_records` | 发布记录查询台账 |
+| 063 | `ai.release_records` | 发布记录 + 12 门结果（M8 / 台账 D8；verify_release_gate.py 落库；**无 061 编号**——并行批次让位空缺，发布记录实际落在本迁移） |
 | 064 | `trace_summary.ttft_ms` | 流式首 token 时间补齐 |
-| 065 | `prompt_runtime_state` + `prompt_reload_events` | Prompt Runtime 全局 epoch 与 Redis 通知失败补偿事件 |
+| 065 | `prompt_runtime_state` + `prompt_reload_events` | Prompt Runtime 全局 epoch 与 Redis 通知失败补偿事件（⚠️ 文件在途未提交） |
 | 066 | `budget_reservations` 预占状态/滞留处置 + `budget_*` 金额列 USD→CNY 更名 | 预算治理 P0：记账本位币统一 CNY + 预占待对账（needs_review） |
 | 067 | `doc_registry.active_generation` + `rag_index_runs` | RAG 候选版本/已发布代次指针 + 索引 run 台账（上传并发与失败回滚收口） |
-| 068 | `auth.sessions` 登录来源列 | 会话台账记录登录来源，用户端/管理端/客服端 refresh Cookie 隔离 |
+| 068 | `auth.sessions` 登录来源列 | 会话台账记录登录来源，用户端/管理端/客服端 refresh Cookie 隔离（⚠️ 文件在途未提交） |
 | 069 | `ai.prompt_release_records` | Prompt 候选发布门禁记录（带评测证据的环境切换留痕） |
+| 070 | `ai.unanswered_questions` | 业务拒答未答问题登记（RAG 未命中/SQL 空结果；observability/unanswered.py 旁路软失败写入，知识运营聚类输入；⚠️ 文件在途未提交） |
+| 071 | `ai.clarify_funnel_events` | 追问漏斗事件持久化（shown/clicked/resolved；observability/clarify_funnel.py 指标+PG 双写，重启归零的精确累计从本表取，GET /api/admin/clarify/stats 消费；⚠️ 文件在途未提交，**071 编号与下行重复**） |
+| 071（重号） | `ai.rag_reconcile_reports` | RAG 对账报告（BM25 状态 CHECK + detail JSONB；⚠️ 文件在途未提交，与上行同为 071 号——072 已被占用，合入前须在 076+ 择号改线） |
+| 072 | `ai.travel_decision_audit` | 旅游页用户决策留痕（草案应用/放弃/画布替换/档位切换/删减协商，decision_type + source 归因；POST/GET /api/travel/decisions 消费） |
+| 073 | 决策留痕幂等部分唯一索引 | 同会话内「同决策+同版本+同前端轮次」防重（双击/重试不落重复记录） |
+| 074 | 评测 run 生命周期列 + 指标范围 CHECK + 审批一致约束 + 快照哈希列 | 评测运行生命周期落库（验收收敛三期 C3-1；状态终态拒绝隐式重跑等消费） |
+| 075 | `ai.eval_run_samples` 样本级 DB 层 + 引用删除保护 | 评测逐样本落库（UNIQUE + RESTRICT；数据集版本删除保护守卫消费，C3-2） |
 
 ### 6.2 P1 治理目标
 
@@ -615,4 +621,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 验证
 
-最后验证：2026-10-02 · Prompt Runtime 迁移 065 已在 agent_memory 执行，epoch 初始值为 1；迁移编号实测至 069；18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。
+最后验证：2026-10-05 · 迁移编号实测至 075（061 编号空缺、发布记录实为 063 `ai.release_records`）；**071 编号重复仍未裁决**（clarify_funnel_events 与 rag_reconcile_reports 两文件并存，且原「改号 072」建议已失效——072/073 已被旅游决策留痕占用）；072/073/074/075 已提交并跟踪，065/068/070/071×2 迁移文件在工作区未提交（未跟踪），合入时随代码一并提交；074/075 的 `MIGRATION_TARGETS` 登记行在工作区未提交 diff 中（随评测线合入）。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。

@@ -9,6 +9,8 @@
  */
 
 import { fetchRaw } from '@/api/client'
+import { parseSSEStream } from '@/lib/sse-parser'
+import type { SSEStreamEvent } from '@/lib/types'
 
 export interface BrowseColumn {
   name: string
@@ -55,6 +57,9 @@ export interface SqlQueryResponse {
   error_type: string | null
   /** 实际执行的 SQL（核对 NL2SQL 结果用） */
   sql: string | null
+  /** SQL 会话记忆元数据，不包含上一轮结果明细 */
+  memory: Record<string, unknown>
+  understanding: Record<string, unknown>
 }
 
 const BASE = '/api/sql'
@@ -97,4 +102,27 @@ export const dataQueryService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
     }),
+
+  /** 流式自然语言查询：复用聊天 SSE 的 meta/status/log/done/error 事件。 */
+  streamQuery: async function* (
+    question: string,
+    sessionId: string,
+    options: { resetContext?: boolean; signal?: AbortSignal } = {},
+  ): AsyncGenerator<SSEStreamEvent> {
+    const res = await fetchRaw(`${BASE}/query/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        session_id: sessionId,
+        reset_context: options.resetContext ?? false,
+      }),
+      signal: options.signal,
+    })
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`POST ${BASE}/query/stream 失败 (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`)
+    }
+    yield* parseSSEStream(res.body, options.signal) as AsyncGenerator<SSEStreamEvent>
+  },
 }

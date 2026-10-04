@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generated_at": "2026-10-02T09:32:05+08:00",
-  "git_sha": "7197b54",
+  "generated_at": "2026-10-03T12:47:24+08:00",
+  "git_sha": "8cfc1fa",
   "source": "postgres://agent_memory.prompts",
   "prompt_count": 43,
   "prompts": {
@@ -166,9 +166,9 @@
       "change_kind": null
     },
     "rag.qa": {
-      "active_version": 12,
-      "template_hash": "a527bd30adc3c0d4",
-      "change_kind": "patch"
+      "active_version": 14,
+      "template_hash": "cf9c0cd846cc447d",
+      "change_kind": null
     },
     "reporter.summary": {
       "active_version": 1,

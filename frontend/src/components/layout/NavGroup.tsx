@@ -26,7 +26,7 @@ export default function NavGroup({ icon, label, path, items, collapsed, compact 
     return (
       <Link href={path || items?.[0]?.path || '/'}
         className={clsx('w-full flex justify-center p-2 rounded-lg transition-colors',
-          isActive ? 'text-accent bg-accent/8' : 'text-text-secondary hover:text-text-primary hover:bg-black/5')}
+          isActive ? 'text-accent bg-accent-soft' : 'text-text-secondary hover:text-text-primary hover:bg-black/5')}
         title={label}>{icon}</Link>
     )
   }
@@ -35,7 +35,7 @@ export default function NavGroup({ icon, label, path, items, collapsed, compact 
     return (
       <Link href={path}
         className={clsx('w-full flex items-center gap-2.5 rounded-lg transition-colors', rowCls,
-          isActive ? 'text-accent bg-accent/8 font-medium' : 'text-text-secondary hover:text-text-primary hover:bg-black/5')}>
+          isActive ? 'text-accent bg-accent-soft font-medium' : 'text-text-secondary hover:text-text-primary hover:bg-black/5')}>
         {icon}<span className="truncate">{label}</span>
       </Link>
     )
@@ -45,7 +45,7 @@ export default function NavGroup({ icon, label, path, items, collapsed, compact 
     <div>
       <button onClick={() => setOpen(!open)}
         className={clsx('w-full flex items-center gap-2.5 rounded-lg transition-colors', rowCls,
-          isActive ? 'text-accent bg-accent/8' : 'text-text-secondary hover:text-text-primary hover:bg-black/5')}>
+          isActive ? 'text-accent bg-accent-soft' : 'text-text-secondary hover:text-text-primary hover:bg-black/5')}>
         {icon}<span className="flex-1 truncate text-left">{label}</span>
         <ChevronDown size={14} className={clsx('shrink-0 transition-transform duration-200', open && 'rotate-180')} />
       </button>

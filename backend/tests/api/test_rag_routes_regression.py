@@ -63,7 +63,7 @@ def test_document_detail_exposes_summary(monkeypatch):
     row = {
         "doc_id": "d1", "file_name": "福州-景点-三坊七巷.md", "kb_id": "travel",
         "status": "active", "summary": "三坊七巷是福州历史文化街区。",
-        "chunk_count": 3,
+        "chunk_count": 3, "version_id": "travel-v2", "doc_version": 2,
     }
 
     class StubReg:
@@ -83,6 +83,29 @@ def test_document_detail_exposes_summary(monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["doc"]["summary"] == "三坊七巷是福州历史文化街区。"
+    assert resp.json()["doc"]["version_id"] == "travel-v2"
+    assert resp.json()["doc"]["doc_version"] == 2
+
+
+def test_document_detail_hides_unauthorized_doc_with_404(monkeypatch):
+    """S6/API4：越权详情与不存在文档同形返回 404。"""
+    class StubReg:
+        def get_by_doc_id(self, doc_id):
+            return {"doc_id": doc_id, "status": "active", "kb_id": "policy_finance"}
+
+    class StubAuthz:
+        def can_read_row(self, doc):
+            return False
+
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubReg())
+    monkeypatch.setattr(rag_documents, "_require_authz", lambda request: StubAuthz())
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+
+    resp = _client(app).get("/documents/foreign-doc")
+
+    assert resp.status_code == 404
+    assert resp.json() == {"ok": False, "error": "文档不存在"}
 
 
 def test_ask_response_carries_answer_meta(monkeypatch):
@@ -139,3 +162,17 @@ def test_snapshot_answer_meta_merges_ctx_answer_status(monkeypatch):
     RAGPipeline._snapshot_answer_meta(fake)
 
     assert fake.last_answer_meta.get("answer_status") == "rag_no_evidence"
+
+
+def test_search_rejects_unsupported_top_k_and_filter():
+    """API3：未纳入契约的 top_k/filter 不得被 Pydantic 静默忽略。"""
+    from pydantic import ValidationError
+    from backend.app.api.routes._rag_shared import SearchRequest
+
+    for payload in ({"query": "x", "top_k": 0},
+                    {"query": "x", "filter": {"department": "finance"}}):
+        try:
+            SearchRequest.model_validate(payload)
+        except ValidationError:
+            continue
+        raise AssertionError("非法搜索参数必须被 schema 层拒绝")

@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterable
 
 from sqlalchemy import text
 
-from backend.infra.redis.client import get_redis
+from backend.infra.redis.client import get_auth_redis
 from backend.shared.logger import logger
 
 
@@ -38,7 +38,7 @@ class SessionService:
     """封装按用户或按会话撤销的数据库/Redis操作。"""
 
     def __init__(self, redis_getter: Callable[[], Any] | None = None):
-        self._redis_getter = redis_getter or get_redis
+        self._redis_getter = redis_getter or get_auth_redis
 
     @staticmethod
     def session_ref(session_id: str, user_id: int | str) -> SessionRef:

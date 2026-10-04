@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Database } from 'lucide-react'
+import { Database, RefreshCw } from 'lucide-react'
 import { promptsService, type PromptListItem } from '@/api/prompts'
 import { PROMPT_GROUPS, WHITELIST_KEYS } from '@/config/promptGroups'
 import PromptCard from '@/components/prompts/PromptCard'
-import PageHeader from '@/components/layout/PageHeader'
+import { AssetActionButton, AssetPageShell, AssetSection, AssetState } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
 import Skeleton from '@/components/shared/Skeleton'
 import { useToast } from '@/components/shared/Toast'
@@ -44,51 +44,50 @@ export default function PromptsPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-8">
-        <div className="flex items-end justify-between mb-8">
-          <PageHeader
-            title="Prompt CI/CD"
-            desc="管理业务 Prompt 的版本流水线：草稿 → 测试 → 评估 → 发布"
-          />
-          <button
-            onClick={handleSeed}
-            className="px-3 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors flex items-center gap-1.5"
-          >
-            <Database size={14} />
+    <AssetPageShell
+      title="Prompt CI/CD"
+      desc="管理业务 Prompt 的版本流水线：草稿 → 测试 → 评估 → 发布"
+      actions={
+        <>
+          <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => void load()}>
+            刷新
+          </AssetActionButton>
+          <AssetActionButton icon={<Database size={13} />} onClick={() => void handleSeed()}>
             种子默认值
-          </button>
-        </div>
+          </AssetActionButton>
+        </>
+      }
+    >
 
         {loading ? (
-          <Skeleton rows={6} />
+          <AssetState className="p-6 text-left">
+            <Skeleton rows={6} />
+          </AssetState>
         ) : error ? (
-          <ErrorState title="Prompt 加载失败" message={error} onRetry={load} />
+          <ErrorState title="Prompt 加载失败" message={error} onRetry={load} className="rounded-xl border border-border-subtle bg-surface-base shadow-card" />
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-4">
             {PROMPT_GROUPS.map(group => {
               const Icon = group.icon
               const prompts = group.keys.map(k => map[k]).filter(Boolean)
               return (
-                <section key={group.id}>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 rounded-lg bg-accent/10 text-accent">
-                      <Icon size={16} />
-                    </div>
-                    <h2 className="text-sm font-semibold text-text-primary">{group.label}</h2>
-                    <span className="text-[10px] text-text-muted">{prompts.length} prompts</span>
-                  </div>
+                <AssetSection
+                  key={group.id}
+                  title={group.label}
+                  meta={`${prompts.length} prompts`}
+                  icon={<Icon size={15} className="text-accent" />}
+                  bodyClassName="pt-3"
+                >
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {prompts.map(p => (
                       <PromptCard key={p.key} prompt={p} group={group} />
                     ))}
                   </div>
-                </section>
+                </AssetSection>
               )
             })}
           </div>
         )}
-      </div>
-    </div>
+    </AssetPageShell>
   )
 }

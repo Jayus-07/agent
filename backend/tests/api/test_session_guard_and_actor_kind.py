@@ -69,6 +69,7 @@ def fake_redis(monkeypatch):
     # auth_local 是模块级 from-import（绑定在自身命名空间），middleware 是
     # 函数内惰性 import（每次读源模块）——两处都要 patch
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: fr)
+    monkeypatch.setattr("backend.infra.redis.client.get_auth_redis", lambda: fr)
     monkeypatch.setattr("backend.app.api.routes.auth_local.get_redis", lambda: fr)
     return fr
 
@@ -187,6 +188,7 @@ def test_mw_session_no_redis_allows(monkeypatch, mw_client):
     monkeypatch.setenv("JWT_SECRET", "k" * 32)
     monkeypatch.setenv("JWT_SESSION_GUARD_MODE", "enforce")
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: None)
+    monkeypatch.setattr("backend.infra.redis.client.get_auth_redis", lambda: None)
     issued = issue_access_token(user_id=7, username="alice")
     r = mw_client.get("/ping", headers={"X-API-Key": "test-key",
                                         "Authorization": f"Bearer {issued['token']}"})

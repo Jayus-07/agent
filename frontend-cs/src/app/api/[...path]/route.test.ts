@@ -54,6 +54,7 @@ describe("BFF 代理转发契约", () => {
     expect(upstreamHeaders.get("user-agent")).toBe("Mozilla/5.0 TestBrowser/1.0");
     expect(upstreamHeaders.get("cookie")).toBe("refresh_token=old; Path=/api/auth");
     expect(upstreamHeaders.get("x-client-ip")).toBe("203.0.113.9");
+    expect(upstreamHeaders.get("x-client-app")).toBe("cs");
   });
 
   it("透传 Idempotency-Key，治理写接口才能通过后端幂等门", async () => {

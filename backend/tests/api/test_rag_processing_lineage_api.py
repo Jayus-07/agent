@@ -22,10 +22,24 @@ class _Repository:
         return {"run_id": run_id, "doc_id": doc_id, "steps": []}
 
 
+class _Authz:
+    def can_read_row(self, _doc):
+        return True
+
+
+class _Registry:
+    def get_by_doc_id(self, doc_id):
+        return {"doc_id": doc_id, "status": "active"}
+
+
 def test_processing_lineage_routes_return_runs_and_detail(monkeypatch):
     app = FastAPI()
     app.include_router(rag_documents.router)
     app.dependency_overrides[require_rag_user] = lambda: _Identity()
+    # 路由已收口到请求级 Principal/RagAuthorization；测试同时隔离
+    # 授权与 registry 外部边界，避免依赖本机登录头和真实 PG 数据。
+    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: _Authz())
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: _Registry())
     monkeypatch.setattr(
         rag_documents,
         "get_processing_lineage_repository",

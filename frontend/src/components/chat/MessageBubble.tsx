@@ -14,6 +14,8 @@ import { memo } from 'react'
 import type { Message } from '@/lib/types'
 import { useChatStore } from '@/store/chat'
 import { useSSE } from '@/hooks/useSSE'
+import { isLowConfidence, toRejectionActionKey } from '@/lib/ragAnswer'
+import { RAG_REJECTION_ACTIONS } from '@/components/shared/ErrorCard'
 import SourceCard from './SourceCard'
 import MarkdownContent from './MarkdownContent'
 import MessageActions from './MessageActions'
@@ -24,13 +26,15 @@ import ThinkingPanel from './ThinkingPanel'
 import CompletionLine from './CompletionLine'
 
 function stripReferences(content: string): string {
+  // 机器标记兜底剥离（后端 reporter/delta 已剥；此处防历史持久化消息残留）
+  const cleaned = content.replace(/<!--\s*RAGMETA\s*\{[\s\S]*?\}\s*-->\s*/, '')
   const markers = ['\n\n---\n\n### 参考文献', '\n\n---\n\n### 参考来源',
                    '\n\n### 参考文献', '\n\n### 参考来源']
   for (const marker of markers) {
-    const idx = content.indexOf(marker)
-    if (idx !== -1) return content.slice(0, idx)
+    const idx = cleaned.indexOf(marker)
+    if (idx !== -1) return cleaned.slice(0, idx)
   }
-  return content
+  return cleaned
 }
 
 /** 绑定主 chat store 的流式文本订阅（StreamingContent 经 props 接收 hook） */
@@ -110,6 +114,13 @@ function MessageBubbleImpl({ message, isLast, sessionId, question, budgetBlocked
                     }
                   />
                 </div>
+                {/* RAG 拒答指引 / 低置信提示（done.answer_status / confidence） */}
+                {!isCurrentStreaming && message.content && (
+                  <RagAnswerHint
+                    answerStatus={message.answerStatus}
+                    confidence={message.confidence}
+                  />
+                )}
                 {/* 参考来源置于正文之下（浅色卡片） */}
                 {message.sources && message.sources.length > 0 && (
                   <SourceCard sources={message.sources} />
@@ -147,6 +158,24 @@ function StreamingThinking() {
   const { text, seconds } = useChatThinking()
   const answering = useChatStore((s) => s.deltaText !== '')
   return <ThinkingPanel text={text} seconds={seconds} live answering={answering} />
+}
+
+/**
+ * RAG 答案语义提示行（2026-10-03 企业 RAG 前端语义透传）：
+ * - answerStatus 有值 = 拒答 → 展示行动指引（文案复用 ErrorCard 预登记契约）；
+ * - 否则低置信（<0.6）→ 建议核实来源。
+ * 轻量行内样式，不做大卡片（消息流内保持纯文字偏好的延伸）。
+ */
+function RagAnswerHint({ answerStatus, confidence }: { answerStatus?: string; confidence?: number }) {
+  const action = answerStatus ? RAG_REJECTION_ACTIONS[toRejectionActionKey(answerStatus)] : undefined
+  const low = !answerStatus && isLowConfidence(confidence)
+  if (!action && !low) return null
+  return (
+    <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2
+      text-xs leading-relaxed text-amber-800">
+      {action ?? `回答置信度 ${Math.round((confidence ?? 0) * 100)}%，建议点击下方来源核实原文`}
+    </div>
+  )
 }
 
 // memo：message / isLast prop 不变则跳过 re-render ——

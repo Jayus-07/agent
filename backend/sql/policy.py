@@ -189,6 +189,24 @@ class SQLPolicyGuard:
                 f"data_scope={scope!r} 非法（合法值: {_VALID_SCOPES}）",
             )
 
+    def get_allowed_tables(self, policy: SQLPolicyContext) -> list[str]:
+        """返回当前主体可表达访问范围内的表集合。
+
+        该列表同时作为 Router/Generator 的输入边界和管理端目录的可见
+        边界。策略判断只复用本 Guard 的既有表域规则，不在 SQL 层另造
+        角色字符串判断；单表缺少当前 scope 所需归属列时直接隐藏。
+        """
+        self.precheck(policy)
+        visible: list[str] = []
+        for qualified_name in schema_loader.get_all_table_names():
+            try:
+                self._check_tableallowed(
+                    qualified_name, policy.data_scope or "", policy)
+            except SQLPolicyError:
+                continue
+            visible.append(qualified_name)
+        return visible
+
     def validate_and_rewrite(self, sql: str, policy: SQLPolicyContext) -> GuardedSQL:
         # sql.guard span（STOP C §十二）：低基数 attributes，deny 也收口；
         # best-effort——无 active trace 时 start_span 返回 noop，不阻塞查询

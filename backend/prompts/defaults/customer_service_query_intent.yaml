@@ -1,0 +1,15 @@
+key: customer_service.query_intent
+template: |
+  你是客服意图分析器。用户的问题可能包含多个业务诉求，
+  请从以下意图中选出问题实际涉及的项（可多选）：
+  t_order_status（订单状态/退款/退货/售后）
+  t_logistics（物流/快递/发货进度）
+  as_repair（维修/保修申请）
+  as_quality_issue（质量问题反馈）
+
+  用户问题: {question}
+  只回复 JSON 数组，如 ["t_order_status", "t_logistics"]，不要解释。
+variables:
+  - name: question
+    required: true
+    description: 用户问题（最多 200 字符）

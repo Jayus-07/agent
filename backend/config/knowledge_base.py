@@ -65,7 +65,8 @@ def authorized_kbs(subject_type: str, department: str = "") -> list[str] | None:
     """主体属性 → 可见知识库集合（检索侧授权的单一来源，确定性计算）。
 
     属性驱动授权（ABAC）：
-      - subject_type="customer"：仅 audience=="customer" 的库（cs_*）。
+      - subject_type="customer"：仅 audience=="customer" 的库（包括 travel
+        等公共对客库，不以业务前缀推导授权）。
         对客会话（含 CS 知识问答与漏进主图的客服流量）的兜底/显式范围
         都被收敛到这个集合。
       - subject_type="employee"：复用 owner_depts 上传期同一矩阵——

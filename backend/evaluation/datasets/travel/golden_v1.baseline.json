@@ -1,0 +1,27 @@
+{
+  "version": "travel-golden-v1",
+  "generated_at": "2026-10-04",
+  "kb_id": "travel",
+  "fixture_set": "active_registry",
+  "case_count": 38,
+  "scope": {
+    "types": ["poi", "food", "route", "transit"],
+    "retrieval_endpoint": "/rag/search",
+    "top_k": 10,
+    "llm_judge": false,
+    "matching": "expected_doc basename suffix match"
+  },
+  "metrics": {
+    "recall_at_5": 0.7368,
+    "mrr": 0.4515,
+    "ndcg_at_10": 0.3842,
+    "top1_accuracy": 0.2895
+  },
+  "negative_sets": {
+    "no_answer_cases": 8,
+    "no_answer_reject_rate": 1.0,
+    "permission_negative_cases": 4,
+    "permission_forbidden_rate": 1.0
+  },
+  "notes": "首次真实检索结果冻结为 v1 基线；该基线用于后续回归比较，不代表质量门槛已达标。"
+}

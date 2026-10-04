@@ -1965,6 +1965,12 @@
     "旅游攻略": "travel_guide",
     "旅游指南": "travel_guide",
     "攻略": "travel_guide",
+    "福州-景点-": "travel_guide",
+    "福州-美食-": "travel_guide",
+    "福州-城市-": "travel_guide",
+    "厦门-景点-": "travel_guide",
+    "厦门-美食-": "travel_guide",
+    "厦门-城市-": "travel_guide",
     "政策": "policy",
     "制度": "policy",
     "规范": "policy",
@@ -2047,6 +2053,7 @@
     "doc_type.security.020",
     "doc_type.financial.034",
     "doc_type.customer_data.016",
-    "doc_type.contract_template.013"
+    "doc_type.contract_template.013",
+    "doc_type.travel_guide.001"
   ]
 }

@@ -523,7 +523,8 @@ class RAGPipeline:
                 # C 阶段：版本不符（BM25_META_VERSION 提升/bundle 元数据陈旧）
                 # → 从 canonical 向量快照重建一次（与上传链路同一构建器）；
                 # 真缺失/损坏仍拒绝启动（下方重建后仍为 None 才 raise）
-                meta = bm25_store.get_metadata() if bm25_source else {}
+                get_metadata = getattr(bm25_store, "get_metadata", None)
+                meta = get_metadata() if bm25_source and callable(get_metadata) else {}
                 if meta.get("version") and meta["version"] != BM25_META_VERSION:
                     logger.warning(
                         f"[RAG] BM25 bundle 版本 {meta.get('version')} != "
@@ -618,7 +619,10 @@ class RAGPipeline:
         # C 阶段（跨进程热刷新）：记录已加载代次 + 陈旧标记 + 刷新互斥。
         # Worker 发布新快照后，API/rag-service 靠每请求版本检查（廉价读
         # PUBLISHED 指针）发现代次变化，一次性整组替换检索对象引用。
-        self._loaded_bm25_generation = bm25_store.published_generation()
+        published_generation = getattr(bm25_store, "published_generation", None)
+        self._loaded_bm25_generation = (
+            published_generation() if callable(published_generation) else ""
+        )
         self._refresh_lock = threading.Lock()
         self.is_index_stale = False
         logger.info(

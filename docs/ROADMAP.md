@@ -33,7 +33,7 @@
 
 | 维度 | 原现状（2026-08） | 落地结果 |
 |---|---|---|
-| **Migration 治理** | 裸 SQL + 编号重复，无回滚 | ✅ `sql/migrations/` 编号治理（至 054）+ db-migrate 工具 + 迁移三层校验；Alembic 引入仍未做 |
+| **Migration 治理** | 裸 SQL + 编号重复，无回滚 | ✅ `sql/migrations/` 编号治理（至 069，061 编号空缺）+ db-migrate 工具 + 迁移三层校验；Alembic 引入仍未做 |
 | **数据模型文档** | database.md 41 行 | ✅ 已迁 [DATABASE.md](DATABASE.md) 595 行 |
 | **密钥管理** | `.env` 明文；硬编码默认值 | 🔴 未做（硬编码 key 已清除，KMS 接入未启动） |
 | **前端数据层** | react-query 装而未用；两套 API 客户端 | ✅ react-query v5 为三端标准（轮询/缓存收口），BFF 代理统一 |
@@ -213,4 +213,4 @@ Phase 3 平台化 P0 与垂直域生产收口（5 域图 / 坐席工作台 / 幂
 
 ## 验证
 
-最后验证：2026-09-29 · P0/Phase3 状态逐项对照代码与迁移目录核实（celery beat、scheduler、routes 计数实测）；规模口径以根 [README.md](../README.md)「系统规模」为唯一权威。
+最后验证：2026-10-03 · P0/Phase3 状态逐项对照代码与迁移目录核实（celery beat、scheduler、routes 计数实测；迁移编号订正至 069）；规模口径以根 [README.md](../README.md)「系统规模」为唯一权威。

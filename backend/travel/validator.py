@@ -475,13 +475,19 @@ def check_source_trust(
             ))
     for fact_id, ev in (evidences or {}).items():
         if is_stale(ev):
+            # 快照时间明示（验收 #93）：用户看得见「这份数据是几点查的、
+            # 何时过期」，而不是只有一句「超过时效边界」
+            observed = str((ev or {}).get("observed_at") or "").strip()
+            expire_at = str((ev or {}).get("expire_at") or "").strip()
+            snapshot = f"快照于 {observed[:16].replace('T', ' ')}" if observed else "快照时间未知"
             violations.append(Violation(
                 code=CODE_SOURCE_STALE, level=LEVEL_WARNING,
                 day_index=0,
-                message=(f"规划引用的数据（{fact_id}）生成时已接近或超过"
-                         "时效边界，出发前请复核最新情况"),
+                message=(f"规划引用的数据（{fact_id}）{snapshot}，已接近或"
+                         "超过时效边界，出发前请复核最新情况"),
                 detail={"fact_id": fact_id,
-                        "expire_at": (ev or {}).get("expire_at")},
+                        "observed_at": observed,
+                        "expire_at": expire_at},
             ))
     return violations
 

@@ -42,7 +42,7 @@ def _clean(monkeypatch):
 
 
 def test_db_main_role_bypasses_stale_factory(monkeypatch):
-    target = "deepseek-v4-flash"
+    target = "acceptance-main-test"
     model_roles.inject_overrides({"main": target})
     built: list[str] = []
 
@@ -136,9 +136,9 @@ def test_registered_model_kind_cannot_be_bound_to_wrong_specialized_role():
 def test_registry_refresh_invalidates_cached_instances_after_config_change(monkeypatch):
     """供应商/密钥变更后，旧 LLM 实例不能继续留在任何代理缓存里。"""
     proxy._default_llm = object()
-    proxy._default_llm_model = "deepseek-v4-flash"
+    proxy._default_llm_model = "acceptance-main-test"
     proxy._fallback_llm = object()
-    proxy._override_llm_cache["deepseek-v4-flash"] = object()
+    proxy._override_llm_cache["acceptance-main-test"] = object()
 
     monkeypatch.setattr(
         registry_store,

@@ -37,6 +37,7 @@ from backend.core.tool_runtime.models import (
 )
 from backend.core.tool_runtime.policy import DEFAULT_POLICY, get_policy
 from backend.core.tool_runtime.retry import should_retry, sleep_before_retry
+from backend.core.tool_runtime.tracing import finish_tool_span, start_tool_span
 
 # 每次真实调用前要求的最低余量：有效超时本身 + 这么多毫秒收尾
 _BUDGET_MARGIN_MS = 250.0
@@ -75,6 +76,10 @@ class SafeToolExecutor:
         on_event: EventCallback | None = None,
         operation_type: OperationType | None = None,
         tool_name: str = "",
+        trace_span: Any | None = None,
+        trace_capability: str = "",
+        trace_agent: str = "",
+        trace_params: dict[str, Any] | None = None,
     ) -> ToolResult:
         """执行一个 Tool 调用并完成全部治理。
 
@@ -85,6 +90,19 @@ class SafeToolExecutor:
             空 = 沿用 tool_key（capability 名，历史口径，管理端按 lock 合并会对不上）。
         """
         pol = policy or get_policy(tool_key)
+        owns_trace_span = trace_span is None
+        active_trace_span = trace_span or start_tool_span(
+            tool_name or tool_key,
+            capability=trace_capability or tool_key,
+            params=trace_params,
+            agent=trace_agent,
+        )
+
+        def _finish(result: ToolResult) -> ToolResult:
+            if owns_trace_span:
+                finish_tool_span(active_trace_span, result)
+            return result
+
         op_type = operation_type or pol.operation_type
         # 写操作强制零重试（双保险：策略层 for_write 已清零，这里兜底）
         is_write = op_type is OperationType.WRITE
@@ -117,7 +135,7 @@ class SafeToolExecutor:
                 )
                 record_tool_result(result, domain, tool_name)
                 _emit("circuit_open_fast_fail", {"state": cb.state().value})
-                return result
+                return _finish(result)
 
         # ── 2. Bulkhead：极短等待，拿不到槽位快速失败 ──
         bulkhead = bulkhead_registry.get(tool_key, pol.bulkhead_limit)
@@ -132,13 +150,14 @@ class SafeToolExecutor:
             )
             record_tool_result(result, domain, tool_name)
             _emit("bulkhead_full", {"limit": pol.bulkhead_limit})
-            return result
+            return _finish(result)
 
         try:
             return await self._run_with_retries(
                 tool_key=tool_key, call=call, pol=pol, deadline=deadline,
                 domain=domain, cb=cb, is_write=is_write, op_type=op_type,
                 started=started, _emit=_emit, tool_name=tool_name,
+                finish_trace=_finish,
             )
         finally:
             bulkhead.release()
@@ -149,6 +168,7 @@ class SafeToolExecutor:
         deadline: RequestDeadline | None, domain: str, cb, is_write: bool,
         op_type: OperationType, started: float, _emit: EventCallback,
         tool_name: str = "",
+        finish_trace: Callable[[ToolResult], ToolResult] | None = None,
     ) -> ToolResult:
         last: ToolResult | None = None
 
@@ -185,7 +205,7 @@ class SafeToolExecutor:
                           {"remaining_ms": round(deadline.remaining_workflow_ms()),
                            "required_ms": round(pol.timeout_ms),
                            "decision": decision, "reason": reason})
-                    return result
+                    return finish_trace(result) if finish_trace else result
                 effective_timeout_s = tool_budget_ms / 1000
             else:
                 effective_timeout_s = pol.timeout_ms / 1000
@@ -220,7 +240,7 @@ class SafeToolExecutor:
                         ),
                     )
                 _emit("attempt_success", {"attempt": attempt + 1, "latency_ms": latency})
-                return result
+                return finish_trace(result) if finish_trace else result
 
             except asyncio.CancelledError:
                 # 调用方主动取消：原样传播，不吞（也不算熔断失败）
@@ -272,8 +292,10 @@ class SafeToolExecutor:
         if is_write and last.status is ToolStatus.TIMEOUT:
             last.fallback_used = "check_operation_status"
             last.error_message = (last.error_message or "") + "；写操作结果未知，请查询操作状态而非重复提交"
-        record_tool_result(last, domain)
-        return last
+        # 失败穷尽也要带契约名：漏传会回退 capability 名，管理端按 lock 合并时
+        # 失败永远映射不回清单行（成功记契约名/失败记 capability 名的口径分裂）
+        record_tool_result(last, domain, tool_name)
+        return finish_trace(last) if finish_trace else last
 
     @staticmethod
     async def _invoke(call: Callable[[], Any]) -> Any:

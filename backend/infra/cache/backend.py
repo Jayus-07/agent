@@ -36,6 +36,18 @@ class CacheBackend(ABC):
     def incr_version(self, key: str) -> int:
         """原子递增版本号（用于批量失效）。返回新版本号。"""
 
+    def incr(self, key: str, ttl: int | None = None) -> int:
+        """原子自增计数器（不存在从 0 开始），返回自增后的值。
+
+        ttl 仅在 key 首次创建（或已过期重建）时设置，续增不重置窗口——
+        计数型守卫（如追问防循环）依赖该语义得到「自首次计数起的固定窗口」。
+        抽象层给默认实现以兼容既有测试假缓存；两个内置后端各自原子实现。
+        """
+        current = self.get_json(key)
+        new_val = (current if isinstance(current, int) else 0) + 1
+        self.set_json(key, new_val, ttl=ttl)
+        return new_val
+
 
 class InMemoryCache(CacheBackend):
     """线程安全的内存缓存（dict + TTL）。"""
@@ -74,6 +86,24 @@ class InMemoryCache(CacheBackend):
             new_ver = current + 1
             self._store[ver_key] = (new_ver, 0)
             return new_ver
+
+    def incr(self, key: str, ttl: int | None = None) -> int:
+        with self._lock:
+            entry = self._store.get(key)
+            current = 0
+            expires_at = 0
+            if entry is not None:
+                value, expires_at = entry
+                # 已过期的 key 视同不存在：从 0 重建并重设窗口
+                if expires_at <= 0 or time.monotonic() <= expires_at:
+                    current = value if isinstance(value, int) else 0
+                else:
+                    expires_at = 0
+            new_val = current + 1
+            if ttl is not None and expires_at <= 0:
+                expires_at = time.monotonic() + ttl
+            self._store[key] = (new_val, expires_at)
+            return new_val
 
 
 class TwoTierCache(CacheBackend):
@@ -124,6 +154,18 @@ class TwoTierCache(CacheBackend):
         except Exception as e:
             logger.debug(f"[TwoTierCache] redis incr failed: {e}")
             return self._l1.incr_version(key)
+
+    def incr(self, key: str, ttl: int | None = None) -> int:
+        full_key = self._full_key(key)
+        try:
+            new_val = self._redis.incr(full_key)
+            if ttl is not None and self._redis.ttl(full_key) < 0:
+                # 仅首建时设窗口，续增不重置（与 InMemoryCache.incr 同语义）
+                self._redis.expire(full_key, ttl)
+            return new_val
+        except Exception as e:
+            logger.debug(f"[TwoTierCache] redis incr failed: {e}")
+            return self._l1.incr(key, ttl=ttl)
 
 
 _caches: dict[str, CacheBackend] = {}

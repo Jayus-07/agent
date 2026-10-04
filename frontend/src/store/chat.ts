@@ -66,7 +66,8 @@ interface ChatState {
   addStreamEvent: (evt: SSEStreamEvent, sessionId?: string) => void
   removeLastAssistant: (sessionId?: string) => void
   replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
-    thinking?: string, thinkingSeconds?: number, traceId?: string) => void
+    thinking?: string, thinkingSeconds?: number, traceId?: string,
+    ragMeta?: { answerStatus?: string; confidence?: number }) => void
 
   /** done 时固化执行过程快照到尾部 assistant 消息（CompletionLine 回看用） */
   attachTrace: (sessionId: string, trace: import('@/lib/types').AgentTrace) => void
@@ -324,7 +325,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       })
     },
 
-    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId) => {
+    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId, ragMeta) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -336,6 +337,10 @@ export const useChatStore = create<ChatState>((set, get) => {
               ...msgs[lastIdx],
               content,
               sources: sources || msgs[lastIdx].sources,
+              // RAG 拒答语义码/置信度（done.answer_status/confidence）：
+              // ?? 保留历史恢复消息已有值，undefined 不覆盖
+              answerStatus: ragMeta?.answerStatus ?? msgs[lastIdx].answerStatus,
+              confidence: ragMeta?.confidence ?? msgs[lastIdx].confidence,
               usage: usage || msgs[lastIdx].usage,
               thinking: thinking ?? msgs[lastIdx].thinking,
               thinkingSeconds: thinkingSeconds ?? msgs[lastIdx].thinkingSeconds,

@@ -127,7 +127,7 @@ class TraceMiddleware:
         """包装同步节点函数（LangGraph 标准）"""
 
         @functools.wraps(node_fn)
-        def wrapper(state: dict) -> dict:
+        def traced_wrapper(state: dict) -> dict:
             # ── 请求上下文显式绑定（P1 重构）：节点可能跑在 LangGraph Send
             # 内部线程池，ContextVar 不跨线程继承，须从 state 重新绑定。
             # 必须在 current() 读取之前——绑定后 Send 分支的 span 才能挂上。
@@ -181,13 +181,20 @@ class TraceMiddleware:
                 )
                 raise
 
+        @functools.wraps(node_fn)
+        def wrapper(state: dict) -> dict:
+            from backend.prompts.service import prompt_service
+
+            with prompt_service.bind_prompt_versions(state.get("prompt_versions")):
+                return traced_wrapper(state)
+
         return wrapper
 
     def wrap_async_node(self, node_name: str, node_fn):
         """包装异步节点函数"""
 
         @functools.wraps(node_fn)
-        async def wrapper(state: dict) -> dict:
+        async def traced_wrapper(state: dict) -> dict:
             trace = trace_collector.current()
             if trace is None:
                 result = await node_fn(state)
@@ -232,6 +239,13 @@ class TraceMiddleware:
                     },
                 )
                 raise
+
+        @functools.wraps(node_fn)
+        async def wrapper(state: dict) -> dict:
+            from backend.prompts.service import prompt_service
+
+            with prompt_service.bind_prompt_versions(state.get("prompt_versions")):
+                return await traced_wrapper(state)
 
         return wrapper
 

@@ -395,6 +395,46 @@ _register(PromptSpec(
     agent="customer_service",
 ))
 
+_register(PromptSpec(
+    key="customer_service.query_intent",
+    name="客服多意图分解 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("question"),),
+    default_file="customer_service_query_intent.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.complaint_assess",
+    name="客服投诉识别与严重度评估 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("query"),),
+    default_file="customer_service_complaint_assess.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.supervisor",
+    name="客服域主 Agent 决策 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("user_message"), R("intent"), R("expert_history")),
+    default_file="customer_service_supervisor.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.redirect_main",
+    name="客服窗口跨域仲裁 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("query"),),
+    default_file="customer_service_redirect_main.yaml",
+    agent="customer_service",
+))
+
 # ── Agent Capability ───────────────────────────────────────────
 
 _register(PromptSpec(

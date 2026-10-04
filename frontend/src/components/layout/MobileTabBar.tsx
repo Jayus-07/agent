@@ -13,7 +13,9 @@
  *   2026-09-21 三次收敛时删除（见 navConfig.tsx 演进记录），**移动端点进去
  *   直接 404**；而 MobileTabBar.test.ts 当时仍在断言这三个 tab 存在，即
  *   测试在保护一段失效代码。现收敛为「对话 + 旅游规划」两个**真实可达**的 tab，
- *   与 navConfig.tsx 的用户端边界（AI 对话 + 旅游规划）保持一致。
+ *   与 navConfig.tsx 的用户端边界（AI 助手 + 旅游规划）保持一致。
+ * - 2026-10-01 文案跟随 navConfig 五次收敛：tab「对话」→「AI 助手」
+ *   （侧栏已无「AI 对话/智能问答/智能客服」三词并存，移动端也不能留旧称）。
  */
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -35,7 +37,7 @@ export function isTabActive(pathname: string, tab: Pick<TabItem, 'path' | 'match
 }
 
 export const MOBILE_TABS: TabItem[] = [
-  { label: '对话', path: '/agent', match: 'exact', icon: <MessageCircle size={20} /> },
+  { label: 'AI 助手', path: '/agent', match: 'exact', icon: <MessageCircle size={20} /> },
   // 2026-09-30：旅游规划（/travel 页面 2026-09-22 建成，此前移动端无法触达）
   { label: '旅游规划', path: '/travel', match: 'prefix', icon: <Plane size={20} /> },
 ]

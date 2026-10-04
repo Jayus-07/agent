@@ -47,7 +47,9 @@ def test_cloud_embedding_sets_bounded_request_timeout():
             with patch.dict(sys.modules, {"langchain_openai": fake_module}):
                 embedding_singleton._get_cloud_embedding()
 
-    assert captured["timeout"] == 20
+    # 运行时默认值为 8 秒（加 max_retries=1），这里只验证供应商请求
+    # 被限制在客服总超时以内，避免把配置默认值硬编码进单元测试。
+    assert 0 < captured["timeout"] <= 20
     assert captured["api_key"] == "sk-test"
 
 

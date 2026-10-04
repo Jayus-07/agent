@@ -17,6 +17,9 @@
 """
 from __future__ import annotations
 
+import re
+from datetime import date
+
 from backend.config import travel as T
 from backend.shared.logger import logger
 
@@ -46,7 +49,31 @@ def retrieve_travel_knowledge(query: str) -> tuple[list[str], str]:
     chunks = [c.strip() for c in (text or "").split("\n") if c.strip()]
     if not chunks:
         return [], ""
-    return chunks[:T.TRAVEL_RAG_TOP_K], f"rag:{T.TRAVEL_RAG_KB_ID}"
+    return (annotate_stale_years(chunks[:T.TRAVEL_RAG_TOP_K]),
+            f"rag:{T.TRAVEL_RAG_KB_ID}")
+
+
+# 文内年份探测（验收 #94 文内证据口径）：RAG pipeline 只回纯文本（文档
+# 发布/爬取时间断在 RAG 元数据层，未透传到本线），但攻略正文常自带年份——
+# 摘录含「去年及更早」的年份时如实标注「可能较旧」。只声明文内证据，
+# 不冒充对整份攻略新鲜度的判定；未来 RAG 线把 published_at 透传后，
+# 本函数应替换为元数据口径（替换点唯一在此）。
+_STALE_YEAR_RE = re.compile(r"(20\d{2})\s*年")
+
+
+def annotate_stale_years(chunks: list[str], today: date | None = None) -> list[str]:
+    """摘录文内年份早于去年 → 追加「（文中提及 YYYY 年，可能较旧）」。"""
+    today = today or date.today()
+    stale_before = today.year - 1
+    out: list[str] = []
+    for chunk in chunks:
+        years = [int(y) for y in _STALE_YEAR_RE.findall(chunk or "")]
+        oldest = min(years) if years else None
+        if oldest is not None and oldest <= stale_before:
+            out.append(f"{chunk}（文中提及 {oldest} 年，可能较旧）")
+        else:
+            out.append(chunk)
+    return out
 
 
 def build_knowledge_query(destination: str, preferences: list[str]) -> str:

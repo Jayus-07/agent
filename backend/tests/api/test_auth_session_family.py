@@ -102,6 +102,7 @@ def env(monkeypatch):
     monkeypatch.setattr(auth_middleware, "ALLOW_UNAUTHENTICATED", False)
     fr = FakeRedis()
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: fr)
+    monkeypatch.setattr("backend.infra.redis.client.get_auth_redis", lambda: fr)
     monkeypatch.setattr("backend.app.api.routes.auth_local.get_redis", lambda: fr)
     monkeypatch.setattr(
         rbac,
@@ -172,12 +173,12 @@ def _active_sessions(uid):
 
 
 def _cookie_of(client):
-    return client.cookies.get("refresh_token")
+    return client.cookies.get("refresh_token_web")
 
 
 def _use_cookie(client, raw):
     """用指定 refresh cookie 发起刷新（模拟另一标签页的独立 cookie 状态）。"""
-    client.cookies.set("refresh_token", raw)
+    client.cookies.set("refresh_token_web", raw)
     return client.post("/api/auth/refresh")
 
 
@@ -586,3 +587,78 @@ def test_client_ip_fallback_to_real_ip(env, user):
     ip, = _pg("SELECT ip FROM auth.sessions "
               "WHERE user_id = %s AND device_id = 'dev-ip2'", (user["id"],))[0]
     assert ip == "172.21.0.1"
+
+
+def test_login_binds_client_app_and_uses_isolated_refresh_cookie(env, user):
+    """客服端登录必须写入来源标识，并使用独立 refresh Cookie。"""
+    client, _ = env
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "username": user["username"],
+            "password": user["password"],
+            "deviceId": "dev-cs",
+            "clientId": "cs",
+        },
+        headers={"X-Tenant-Id": "default"},
+    )
+    assert response.status_code == 200, response.text
+    payload = verify_access_token(response.json()["data"]["token"])
+    assert payload["clientId"] == "cs"
+    assert "refresh_token_cs=" in response.headers["set-cookie"]
+    active = client.get("/api/sys/security/sessions", headers=ADMIN_HEADERS)
+    mine = [s for s in active.json()["data"]["sessions"] if s["userId"] == user["id"]]
+    assert mine[0]["clientId"] == "cs"
+
+
+def test_security_session_history_includes_revoked_source_and_status(env, user):
+    """会话历史必须保留已撤销记录，并明确状态与登录来源。"""
+    client, _ = env
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "username": user["username"],
+            "password": user["password"],
+            "deviceId": "dev-history",
+            "clientId": "cs",
+        },
+        headers={"X-Tenant-Id": "default", "X-Client-App": "cs"},
+    )
+    assert response.status_code == 200, response.text
+    token = response.json()["data"]["token"]
+    logout = client.post(
+        "/api/auth/logout",
+        headers={"Authorization": f"Bearer {token}", "X-Client-App": "cs"},
+    )
+    assert logout.status_code == 200, logout.text
+
+    history = client.get("/api/sys/security/sessions/history", headers=ADMIN_HEADERS)
+    assert history.status_code == 200, history.text
+    mine = [s for s in history.json()["data"]["sessions"] if s["userId"] == user["id"]]
+    assert mine[0]["clientId"] == "cs"
+    assert mine[0]["status"] == "revoked"
+    assert mine[0]["revokeReason"] == "logout"
+
+
+def test_refresh_rejects_cookie_from_another_client_app(env, user):
+    """管理端不能拿客服端 refresh Cookie 换取管理端 access token。"""
+    client, _ = env
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "username": user["username"],
+            "password": user["password"],
+            "deviceId": "dev-isolation",
+            "clientId": "cs",
+        },
+        headers={"X-Tenant-Id": "default", "X-Client-App": "cs"},
+    )
+    assert response.status_code == 200, response.text
+    cs_cookie = client.cookies.get("refresh_token_cs")
+    client.cookies.set("refresh_token_admin", cs_cookie)
+
+    refresh = client.post(
+        "/api/auth/refresh",
+        headers={"X-Tenant-Id": "default", "X-Client-App": "admin"},
+    )
+    assert refresh.status_code == 401

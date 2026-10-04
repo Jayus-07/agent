@@ -160,3 +160,44 @@ def test_global_idempotency_rejects_redis_unavailable_before_callback(monkeypatc
         session._current_user_id.reset(user_token)
         session._current_tenant_id.reset(tenant_token)
     assert calls == []
+
+
+def test_rag_upload_idempotency_can_use_pg_ledger_when_redis_is_down(monkeypatch):
+    """RAG 上传缓存旁路时仍用 PG claim，不退化到进程内去重。"""
+    import backend.infra.redis.client as redis_client
+    import backend.shared.idempotency as idem
+
+    class _FakeLedger:
+        def __init__(self):
+            self.claimed = False
+            self.completed = None
+
+        def claim(self, _key, _payload):
+            from backend.shared.idempotency import ClaimResult, ClaimStatus
+
+            self.claimed = True
+            return ClaimResult(status=ClaimStatus.NEW, lease_id="pg-lease")
+
+        def complete(self, _lease_id, result, *, key=None):
+            self.completed = (dict(result), key)
+
+        def fail(self, _lease_id, _error_code="INTERNAL_ERROR", *, key=None):
+            raise AssertionError("测试不应进入失败收口")
+
+    ledger = _FakeLedger()
+    monkeypatch.setattr(redis_client, "get_redis", lambda: None)
+    monkeypatch.setattr(idem, "PostgresIdempotencyLedgerStore", lambda: ledger)
+
+    result = idem.run_idempotent_operation_for_identity(
+        "rag.index.submit",
+        {"upload_id": "u-1"},
+        lambda: {"queued": True},
+        tenant_id="tenant-a",
+        actor_id="user-a",
+        client_key="upload-1",
+        allow_postgres_fallback=True,
+    )
+
+    assert result == {"queued": True}
+    assert ledger.claimed is True
+    assert ledger.completed[0] == {"queued": True}

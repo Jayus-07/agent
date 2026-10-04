@@ -48,7 +48,8 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     "deepseek": {
         "label": "DeepSeek",
         "class": None,  # 懒加载（兼容 OpenAI 协议的 ChatOpenAI）
-        "default_model": "deepseek-v4-flash",
+        # 模型清单由 DB 唯一事实源提供；当前没有可用的 DeepSeek 默认模型。
+        "default_model": None,
         "needs_api_key": True,
         "driver": "openai",
         "billing": "metered",

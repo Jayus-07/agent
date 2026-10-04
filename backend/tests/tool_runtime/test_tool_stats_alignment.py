@@ -13,6 +13,7 @@
 import json
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 
@@ -97,6 +98,8 @@ class TestCrossSourceMerge:
             f"lock 键 {target!r} 在 stats 键域中查不到 → 行全 0 缺陷复发"
         )
         assert row["display_name"], "inventory 行必须带中文名（display_name）"
+        assert isinstance(row.get("args_schema"), dict), "inventory 行须带契约参数（详情视图消费）"
+        assert "quota_runtime" in row, "inventory 行须带额度运行时读数键（详情视图消费）"
 
     async def test_recorded_tool_name_is_lock_key(self):
         """端到端键口径：治理层记账的键 = lock 键域成员。
@@ -116,6 +119,32 @@ class TestCrossSourceMerge:
         samples = _tool_samples()
         assert samples.get("calculate_tool", 0) >= 1
         assert "calc.cap" not in samples, "capability 键出现在指标中 = 键域不相交缺陷复发"
+
+    async def test_exhausted_failure_records_lock_key(self):
+        """失败穷尽（executor 末次记账）也必须记契约名。
+
+        2026-10-02 实测缺陷：重试穷尽后的 record_tool_result 漏传
+        tool_name，回退 capability 名——成功记契约名/失败记 capability 名
+        的口径分裂，管理端 /tools 失败永远映射不回清单行（顶部失败总数
+        >0 但无失败行）。
+        """
+        from backend.core.tool_runtime.executor import safe_tool_executor
+        from backend.core.tool_runtime.policy import ToolPolicy
+
+        def _boom() -> None:
+            raise RuntimeError("模拟工具执行失败")
+
+        result = await safe_tool_executor.run(
+            tool_key=f"fail.exhaust.{uuid4().hex[:8]}.cap",
+            call=_boom,
+            policy=ToolPolicy(retries=0),
+            tool_name="calculate_tool",
+        )
+        assert result.status is not ToolStatus.SUCCESS
+        samples = _tool_samples()
+        assert samples.get("calculate_tool", 0) >= 1, (
+            "失败穷尽记账落到 capability 名下 = 键口径分裂缺陷复发"
+        )
 
 
 class TestDisplayNames:
@@ -148,3 +177,56 @@ class TestDisplayNames:
         tools = json.loads(lock_path.read_text(encoding="utf-8"))["tools"]
         missing = [n for n, e in tools.items() if not e.get("display_name")]
         assert missing == [], f"lock 缺中文名: {missing}"
+
+    def test_data_sources_keys_match_registry(self):
+        """数据源登记键集与 tool_registry 完全一致（多键/少键都 fail-fast）。
+
+        治理页按 lock 的 data_source 渲染徽章：少键 = 新 Tool 漏登记
+        （lock 生成出 null，页面无来源标注）；多键 = Tool 已删未清登记。
+        """
+        import backend.skills  # noqa: F401 触发 Skill 自注册 → 连带加载全部 Tool 模块
+        import backend.tools  # noqa: F401
+        from backend.tools.labels import TOOL_DATA_SOURCES
+        from backend.tools.tool_registry import tool_registry
+
+        registered = set(tool_registry.tool_names)
+        sourced = set(TOOL_DATA_SOURCES)
+        assert sourced - registered == set(), f"数据源登记多出未注册 Tool: {sourced - registered}"
+        assert registered - sourced == set(), f"新 Tool 未登记数据源: {registered - sourced}"
+
+    def test_data_source_shape_by_type(self):
+        """type 语义约束：mcp 必带 upstream_tool+switch_env，rest 必带 provider，
+        internal 只允许 type（provider 对内部数据源无意义，防乱填）。"""
+        from backend.tools.labels import TOOL_DATA_SOURCES
+
+        for name, ds in TOOL_DATA_SOURCES.items():
+            t = ds.get("type")
+            assert t in ("mcp", "rest", "internal"), f"{name}: 非法 type {t!r}"
+            if t == "mcp":
+                assert ds.get("upstream_tool") and ds.get("switch_env") and ds.get("provider"), (
+                    f"{name}: mcp 须带 provider+upstream_tool+switch_env"
+                )
+            elif t == "rest":
+                assert ds.get("provider"), f"{name}: rest 须带 provider"
+            else:
+                extra = set(ds) - {"type"}
+                assert not extra, f"{name}: internal 不应有额外字段 {extra}"
+
+    def test_quota_shape_declarations(self):
+        """quota 声明形态约束：period 三值；usage_counter 月键按 upstream_tool
+        分 field 须声明上游工具名；usage_provider 须带 limit_env（软预算）。"""
+        from backend.tools.labels import TOOL_DATA_SOURCES
+
+        for name, ds in TOOL_DATA_SOURCES.items():
+            q = ds.get("quota")
+            if not q:
+                continue
+            assert q.get("period") in ("day", "period", "qps"), (
+                f"{name}: quota.period 非法 {q.get('period')!r}"
+            )
+            if q.get("usage_counter"):
+                assert ds.get("upstream_tool"), (
+                    f"{name}: usage_counter 月键按 upstream_tool 分 field，须声明上游工具名"
+                )
+            if q.get("usage_provider"):
+                assert q.get("limit_env"), f"{name}: usage_provider 须带 limit_env（软预算 env）"

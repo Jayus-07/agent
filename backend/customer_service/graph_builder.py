@@ -35,6 +35,7 @@ from backend.customer_service.pending_handler import cs_pending_handler_node
 from backend.customer_service.reporter import cs_reporter_node
 from backend.customer_service.state_transition import get_state_transition_service
 from backend.customer_service.supervisor import cs_supervisor_node
+from backend.customer_service.trace import wrap_cs_node
 from backend.shared.logger import logger
 
 
@@ -133,10 +134,18 @@ def build_cs_graph(checkpointer: Any = None) -> StateGraph:
     """
     wf = StateGraph(CSGraphState)
 
-    wf.add_node(CS_STATE_LOADER, cs_state_loader_node)
-    wf.add_node(CS_PENDING_HANDLER, cs_pending_handler_node)
-    wf.add_node(CS_SUPERVISOR, cs_supervisor_node)
-    wf.add_node(CS_REPORTER, cs_reporter_node)
+    # 四个编排节点统一产出客服 Span。专家节点不在此包装，避免与
+    # CsExpertHooks 的专家 Span 重复。
+    wf.add_node(
+        CS_STATE_LOADER,
+        wrap_cs_node(CS_STATE_LOADER, cs_state_loader_node),
+    )
+    wf.add_node(
+        CS_PENDING_HANDLER,
+        wrap_cs_node(CS_PENDING_HANDLER, cs_pending_handler_node),
+    )
+    wf.add_node(CS_SUPERVISOR, wrap_cs_node(CS_SUPERVISOR, cs_supervisor_node))
+    wf.add_node(CS_REPORTER, wrap_cs_node(CS_REPORTER, cs_reporter_node))
 
     wf.add_node(CS_KNOWLEDGE_EXPERT, knowledge_expert_node)
     wf.add_node(CS_QUERY_EXPERT, query_expert_node)

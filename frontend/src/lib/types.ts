@@ -18,6 +18,14 @@ export interface Source {
   doc_type: string
   type_label: string
   score: number | null
+  /** 来源部门代码（多部门隔离；general 缺省不下发） */
+  department?: string
+  /** 原文页码（PDF 来源，升序；非分页格式缺省不下发） */
+  pages?: number[]
+  /** 所属章节标题（切分层 section_title） */
+  section?: string
+  /** 原文预览钥匙（doc_id → /api/rag/documents/{doc_id}/file） */
+  doc_id?: string
 }
 
 // ========================================
@@ -75,6 +83,10 @@ export interface DoneEvent {
   trace_id?: string
   sources?: Source[]
   usage?: TokenUsage
+  /** RAG 拒答语义码（缺省=正常回答）：rag_no_evidence / rag_permission_denied / rag_hallucination */
+  answer_status?: string
+  /** META 自报置信度 0~1（低于 0.6 前端提示「建议核实」，与 CS 门禁 CAUTIOUS 下界同口径） */
+  confidence?: number
   /** P3.1：CS 确认流等待用户点击确认卡片（非空时前端渲染 CSConfirmCard） */
   pending_action?: PendingActionInfo
   /** 上下文用量快照（2026-09-22 Context Budget）：前端显示「上下文 xx%」 */
@@ -214,6 +226,10 @@ export interface Message {
   streamEvents?: SSEStreamEvent[]
   /** 来源文档（仅 RAG 类问题有值） */
   sources?: Source[]
+  /** RAG 拒答语义码（done.answer_status；历史恢复的消息无此字段则无提示） */
+  answerStatus?: string
+  /** RAG 置信度（done.confidence，0~1） */
+  confidence?: number
   /** 本轮请求 token 用量（done 事件写入；streamEvents 终态会被清空，用量需单独持久化） */
   usage?: TokenUsage
   /** 思考链全文（done 事件时从 store.thinkingText 固化；后端未下发思考链则无值） */

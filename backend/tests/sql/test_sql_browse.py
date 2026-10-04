@@ -193,8 +193,8 @@ class TestBrowseKillSwitchAndValidation:
         finally:
             client.app.dependency_overrides.clear()
 
-    def test_catalog_lists_all_whitelisted_tables(self, client, monkeypatch):
-        """表目录 = schema_loader 白名单全量 18 表；敏感列剔除语义与
+    def test_catalog_lists_role_visible_tables(self, client, monkeypatch):
+        """表目录只返回当前角色可见表；敏感列剔除语义仍与
         get_table_info 一致（get_browse_columns 单一实现）。"""
         _override(client, ("editor",))
         try:
@@ -203,7 +203,16 @@ class TestBrowseKillSwitchAndValidation:
             body = resp.json()
             from backend.sql.schema_loader import schema_loader
             qualified = {t["qualified_name"] for t in body["tables"]}
-            assert qualified == set(schema_loader.get_all_table_names())
+            from backend.app.api.routes.sql import _build_policy
+            from backend.sql.policy import SQLPolicyGuard
+            from backend.security.principal import Principal
+            principal = Principal(
+                user_id="3", tenant_id="", department="hr",
+                roles=("editor",), authenticated=True,
+                subject_type="employee",
+            )
+            policy = _build_policy(principal, source_channel="admin")
+            assert qualified == set(SQLPolicyGuard().get_allowed_tables(policy))
             # 描述元数据出口（供核对答案用）
             products = next(t for t in body["tables"]
                             if t["qualified_name"] == "product.products")

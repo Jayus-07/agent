@@ -51,15 +51,16 @@ def test_write_side_disabled_zero_redis(monkeypatch):
     boom = RuntimeError("must not submit")
     monkeypatch.setattr(tr_metrics, "_STATS_POOL", type("P", (), {
         "submit": staticmethod(lambda *a: (_ for _ in ()).throw(boom))})())
-    _dispatch_tool_stats_redis(_result())  # 不抛即通过
+    _dispatch_tool_stats_redis(_result(), "t1")  # 不抛即通过
 
 
 def test_write_side_fields_success(monkeypatch):
     r = _Recorder()
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: r)
-    _write_tool_stats_redis(_result(ToolStatus.SUCCESS))
+    # field 键必须用 metric_tool（契约名），不是 result.tool_name（capability）
+    _write_tool_stats_redis(_result(ToolStatus.SUCCESS), "t1_tool")
     kinds = [c[2] for c in r.commands if c[0] == "hincrby"]
-    assert kinds == ["t1:total", "t1:ok"]
+    assert kinds == ["t1_tool:total", "t1_tool:ok"]
     expires = [c for c in r.commands if c[0] == "expire"]
     assert expires and expires[0][2] == 8 * 86400
 
@@ -67,15 +68,15 @@ def test_write_side_fields_success(monkeypatch):
 def test_write_side_fields_error_class(monkeypatch):
     r = _Recorder()
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: r)
-    _write_tool_stats_redis(_result(ToolStatus.TIMEOUT))
+    _write_tool_stats_redis(_result(ToolStatus.TIMEOUT), "t1_tool")
     kinds = [c[2] for c in r.commands if c[0] == "hincrby"]
     # TIMEOUT → 七分类 timeout
-    assert kinds == ["t1:total", "t1:timeout"]
+    assert kinds == ["t1_tool:total", "t1_tool:timeout"]
 
 
 def test_write_side_redis_unavailable_silent(monkeypatch):
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: None)
-    _write_tool_stats_redis(_result())  # 不抛即通过
+    _write_tool_stats_redis(_result(), "t1")  # 不抛即通过
 
 
 def test_write_side_exception_swallowed(monkeypatch):
@@ -83,7 +84,7 @@ def test_write_side_exception_swallowed(monkeypatch):
         raise ConnectionError("redis down")
 
     monkeypatch.setattr("backend.infra.redis.client.get_redis", _boom)
-    _write_tool_stats_redis(_result())  # 不抛即通过（旁路软失败）
+    _write_tool_stats_redis(_result(), "t1")  # 不抛即通过（旁路软失败）
 
 
 # ── 读侧 ──────────────────────────────────────────
@@ -221,8 +222,8 @@ def test_two_replica_writes_aggregate(redis_client, monkeypatch, no_admin_auth):
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: redis_client)
 
     # 副本 A：1 成功；副本 B：1 超时
-    _write_tool_stats_redis(_result(ToolStatus.SUCCESS, tool="rt1"))
-    _write_tool_stats_redis(_result(ToolStatus.TIMEOUT, tool="rt1"))
+    _write_tool_stats_redis(_result(ToolStatus.SUCCESS, tool="rt1"), "rt1")
+    _write_tool_stats_redis(_result(ToolStatus.TIMEOUT, tool="rt1"), "rt1")
 
     monkeypatch.setattr(mod, "_collect_samples", lambda *a: {})
     out = mod._aggregate_tool_stats("redis")

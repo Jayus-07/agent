@@ -1417,6 +1417,7 @@ def run_idempotent_operation_for_identity(
     tenant_id: str,
     actor_id: str,
     client_key: str = "",
+    allow_postgres_fallback: bool = False,
 ) -> dict[str, Any]:
     """使用显式可信身份执行一次全局幂等副作用。
 
@@ -1428,22 +1429,54 @@ def run_idempotent_operation_for_identity(
 
     if not tenant_id or not actor_id:
         raise IdempotencyContextMissing("缺少可信租户或操作者上下文，拒绝执行副作用")
-    redis_client = get_redis()
-    if redis_client is None:
-        raise IdempotencyUnavailable("幂等 Redis 不可用，拒绝执行副作用")
     key = IdempotencyKey(
         tenant_id=tenant_id,
         actor_id=actor_id,
         operation=operation,
         client_key=client_key or canonical_fingerprint(payload),
     )
+    pre_execute = lambda: _enforce_side_effect_budget(
+        user_id=actor_id,
+        tenant_id=tenant_id,
+    )
+    redis_client = get_redis()
+    if redis_client is None:
+        if not allow_postgres_fallback:
+            raise IdempotencyUnavailable("幂等 Redis 不可用，拒绝执行副作用")
+        logger.warning(
+            "[Idempotency] Redis 不可用，使用 PostgreSQL durable ledger 完成"
+            "操作 %s 的幂等 claim",
+            operation,
+        )
+        executor = IdempotencyExecutor(
+            PostgresIdempotencyLedgerStore(),
+            pre_execute=pre_execute,
+        )
+        return executor.execute(key, payload, callback)
+
+    # get_redis() 返回单例时不主动探活；上传幂等必须识别缓存实例已经
+    # 停止的窗口，才能安全切换到 PG claim。这里只在执行副作用前探活，
+    # claim 后的 Redis 故障仍由 executor 按“不确定”语义阻断重试。
+    try:
+        redis_client.ping()
+    except Exception as exc:
+        if not allow_postgres_fallback:
+            raise IdempotencyUnavailable("幂等 Redis 不可用，拒绝执行副作用") from exc
+        logger.warning(
+            "[Idempotency] Redis 探活失败，使用 PostgreSQL durable ledger 完成"
+            "操作 %s 的幂等 claim",
+            operation,
+        )
+        executor = IdempotencyExecutor(
+            PostgresIdempotencyLedgerStore(),
+            pre_execute=pre_execute,
+        )
+        return executor.execute(key, payload, callback)
+
     executor = IdempotencyExecutor(
         RedisIdempotencyStore(redis_client),
         PostgresIdempotencyResultStore(),
-        pre_execute=lambda: _enforce_side_effect_budget(
-            user_id=actor_id,
-            tenant_id=tenant_id,
-        ),
+        pre_execute=pre_execute,
     )
     return executor.execute(key, payload, callback)
 

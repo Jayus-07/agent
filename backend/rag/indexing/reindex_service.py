@@ -64,6 +64,22 @@ def load_reindex_target(registry, doc_id: str) -> dict:
     file_path = doc.get("file_path", "")
     import os
 
+    from backend.config.rag import RAG_UPLOAD_PATH_GUARD
+    if RAG_UPLOAD_PATH_GUARD:
+        from backend.rag.indexing.upload_path_guard import test_artifact_path_reason
+        from backend.config.database import DOCS_DIRECTORY
+
+        # 测试夹具可以位于仓库外的临时目录；只有平台文档根目录内的
+        # 路径才套用测试产物拒绝规则，避免把合法的外部存储误判为测试文件。
+        file_real = os.path.realpath(str(file_path or ""))
+        docs_root = os.path.realpath(str(DOCS_DIRECTORY))
+        try:
+            under_docs_root = os.path.commonpath([file_real, docs_root]) == docs_root
+        except ValueError:
+            under_docs_root = False
+        if under_docs_root and test_artifact_path_reason(file_path):
+            raise ValueError("测试临时路径文件被拒绝")
+
     if not file_path or not os.path.isfile(file_path):
         raise ValueError(f"文件不存在: {file_path}")
     return doc

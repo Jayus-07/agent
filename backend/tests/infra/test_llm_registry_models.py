@@ -21,7 +21,7 @@ SEED_MODELS = [
      "input_price_per_1m": 0.0, "output_price_per_1m": 0.0, "source": "db"},
     {"name": "qwen2.5:3b", "provider": "ollama", "display": "Qwen 2.5 (3B) - 本地",
      "input_price_per_1m": 0.0, "output_price_per_1m": 0.0, "source": "db"},
-    {"name": "deepseek-v4-flash", "provider": "deepseek", "display": "DeepSeek V4-Flash - 云端",
+    {"name": "deepseek-compat-test", "provider": "deepseek", "display": "DeepSeek 兼容协议测试模型",
      "input_price_per_1m": 0.14, "output_price_per_1m": 0.28, "source": "db"},
     {"name": "MiniMax-M3", "provider": "minimax", "display": "MiniMax M3 - 云端",
      "input_price_per_1m": 3.0, "output_price_per_1m": 15.0, "source": "db"},
@@ -82,7 +82,7 @@ def test_get_model_entry_dynamic_only():
     ("qwen3.7-plus", "qwen"),
     ("qwen3.7-plus@tp", "qwen_tp"),
     ("qwen2.5:3b", "ollama"),          # 带冒号 = 本地 Ollama
-    ("deepseek-v4-flash", "deepseek"),
+    ("deepseek-compat-test", "deepseek"),
     ("MiniMax-M3", "minimax"),
     ("Qwen/Qwen3-32B-AWQ", "vllm"),    # 注册表命中，不得被 qwen 启发式抢走
     ("Qwen/Qwen3-32B", "siliconflow"),
@@ -93,7 +93,7 @@ def test_resolve_provider_registry_hits(name, want):
 
 
 @pytest.mark.parametrize("name,want", [
-    ("deepseek-chat", "deepseek"),     # 名称启发式（不依赖注册表）
+    ("deepseek-compat-test-unregistered", "deepseek"),  # 名称启发式（不依赖注册表）
     ("qwen3-max", "qwen"),
     ("llama3", "ollama"),              # 未注册 + 判不出 -> 本地兜底（历史行为）
 ])

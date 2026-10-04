@@ -9,7 +9,19 @@ export interface PromptGroup {
 }
 
 export const PROMPT_GROUPS: PromptGroup[] = [
-  { id: 'customer_service', label: '客服 Agent', icon: Headset, keys: ['customer_service.system', 'customer_service.answer'] },
+  {
+    id: 'customer_service',
+    label: '客服 Agent',
+    icon: Headset,
+    keys: [
+      'customer_service.system',
+      'customer_service.answer',
+      'customer_service.query_intent',
+      'customer_service.complaint_assess',
+      'customer_service.supervisor',
+      'customer_service.redirect_main',
+    ],
+  },
   { id: 'rag', label: 'RAG', icon: Database, keys: ['rag.qa'] },
   { id: 'sql', label: 'SQL Agent', icon: Table, keys: ['sql.generator'] },
   { id: 'report', label: 'Report Agent', icon: FileText, keys: ['business_report.polish'] },

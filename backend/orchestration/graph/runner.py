@@ -25,6 +25,7 @@ import queue
 import threading
 import time
 import uuid
+from functools import wraps
 from typing import Generator
 
 from backend.config import ENABLE_TOKEN_STREAMING, MAIN_GRAPH_RECURSION_LIMIT
@@ -54,6 +55,23 @@ from backend.shared.logger import logger
 # _answer 是 runner → 调用方的内部事件（携带最终回答文本），
 # 不属于 SSE 协议，stream_events 转发层必须过滤
 _ANSWER_EVENT = "_answer"
+
+
+def _pin_prompt_snapshot(iter_fn):
+    """在图生成器整个生命周期内固定 Prompt 模板。"""
+    @wraps(iter_fn)
+    def wrapper(self, *args, **kwargs):
+        from backend.prompts.hot_reload import ensure_prompt_snapshot_fresh
+        from backend.prompts.service import prompt_service
+
+        try:
+            ensure_prompt_snapshot_fresh()
+        except Exception:  # noqa: BLE001 - 热更新旁路不得阻断请求
+            logger.debug("[GraphRunner] Prompt Runtime freshness check skipped", exc_info=True)
+        with prompt_service.pin_snapshot():
+            yield from iter_fn(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _resolve_followup_for_request(
@@ -228,6 +246,45 @@ def _domain_node_names() -> set[str]:
         return set()
 
 
+def _looks_like_refusal_text(message: str) -> bool:
+    """回答是否为拒答/短路类文案（追问漏斗 resolved 的近似口径）。
+
+    只用于漏斗计数，不是门禁：宁可漏计 resolved 也不误计。覆盖 reporter
+    拒答模板、追问短文案、guard/域门禁的「无法处理」类话术。
+    """
+    from backend.orchestration.graph.clarify_content import CLARIFY_STANDALONE_TEXT
+
+    text = (message or "").lstrip()
+    if not text:
+        return True
+    return (
+        text.startswith("## 抱歉")
+        or text == CLARIFY_STANDALONE_TEXT
+        or text.startswith("未能找到")
+        or "暂时无法直接处理" in text[:60]
+        or "无法处理" in text[:60]
+    )
+
+
+def _funnel_note_resolved(clarify_click: dict | None, message: str,
+                          session_id: str = "", trace_id: str = "") -> None:
+    """点击追问卡的本轮以非拒答回答收尾 → resolved 双写（软失败）。
+
+    身份显式传参：调用点在流收尾，ContextVar 双轨在 SSE 消费线程不可靠
+    （实测 2026-10-03 落空 session 行）。
+    """
+    if not clarify_click or _looks_like_refusal_text(message):
+        return
+    try:
+        from backend.observability.clarify_funnel import record_funnel_event
+
+        record_funnel_event(
+            "resolved", source=clarify_click.get("source", ""),
+            session_id=session_id, trace_id=trace_id)
+    except Exception:  # noqa: BLE001 — 漏斗旁路
+        logger.debug("[Runner] resolved 记录失败", exc_info=True)
+
+
 class GraphRunner:
     """统一图执行核心。"""
 
@@ -236,6 +293,7 @@ class GraphRunner:
         self._memory = memory
         self._skill_nodes = skill_nodes
 
+    @_pin_prompt_snapshot
     def iter_events(
         self,
         question: str,
@@ -265,6 +323,40 @@ class GraphRunner:
         from backend.observability.tracer import SpanKind, trace_collector
 
         start_time = time.time()
+
+        # ── 追问漏斗：选项点击检测（2026-10-03 企业口径）──────────────
+        # 前端点选项 = 原文重发；命中上一张卡的选项暂存即计 clicked。
+        # 热路径代价 = 1 次缓存 GET（TwoTier 有 30s L1），软失败恒 None。
+        clarify_click = None
+        try:
+            from backend.orchestration.graph.clarify_content import (
+                consume_clarify_click,
+            )
+
+            clarify_click = consume_clarify_click(session_id, question or "")
+            if clarify_click is not None:
+                from backend.observability.clarify_funnel import (
+                    record_funnel_event,
+                )
+
+                # trace 尚未建立（点击检测在 Guard 之前），身份必须显式传
+                record_funnel_event(
+                    "clicked", source=clarify_click.get("source", ""),
+                    session_id=session_id)
+                logger.info(
+                    "[Runner] 追问卡选项点击: source=%s q=%.40s",
+                    clarify_click.get("source", ""), question or "")
+        except Exception:  # noqa: BLE001 — 漏斗旁路绝不阻断主链
+            clarify_click = None
+
+        # 请求开始先追平 Prompt Runtime epoch，再固定本次请求版本；Redis
+        # 不可用时该检查 fail-open，继续使用当前快照。
+        try:
+            from backend.prompts.hot_reload import ensure_prompt_snapshot_fresh
+
+            ensure_prompt_snapshot_fresh()
+        except Exception:  # noqa: BLE001 - 热更新旁路不得阻断主链路
+            logger.debug("[Runner] Prompt Runtime freshness check skipped", exc_info=True)
 
         # ── Input Guard：输入侧门禁（Router/Planner 之前；拦截即短路不进图）──
         guard_result = get_input_guard().guard(question or "", session_id=session_id)
@@ -312,10 +404,14 @@ class GraphRunner:
                         mark_clarified,
                     )
 
-                    if clarify_allowed(session_id):
+                    if clarify_allowed(session_id, question or ""):
                         clarify = build_entry_clarify(question or "", domain_hint)
                         if clarify is not None:
-                            mark_clarified(session_id)
+                            mark_clarified(
+                                session_id, question or "",
+                                options=clarify.get("options"),
+                                source=clarify.get("source", ""),
+                            )
                 except Exception as e:
                     logger.warning(f"[Runner] 入口追问判定失败，保持 guard 原话术: {e}")
                     clarify = None
@@ -346,12 +442,23 @@ class GraphRunner:
                         "source": clarify.get("source", ""),
                         "ts": time.time(),
                     }}
+                    try:
+                        from backend.observability.clarify_funnel import (
+                            record_funnel_event,
+                        )
+
+                        record_funnel_event(
+                            "shown", source=str(clarify.get("source", "")),
+                            session_id=session_id)
+                    except Exception:  # noqa: BLE001 — 漏斗旁路
+                        pass
                     message = CLARIFY_STANDALONE_TEXT
                 else:
                     message = guard_result.message or "## 提示\n\n无法处理该问题。"
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
+                _funnel_note_resolved(clarify_click, message, session_id=session_id)
                 yield make_done_event(message, {}, start_time)
                 return
 
@@ -381,6 +488,7 @@ class GraphRunner:
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
+                _funnel_note_resolved(clarify_click, message, session_id=session_id)
                 yield make_done_event(message, {}, start_time)
                 return
 
@@ -389,11 +497,17 @@ class GraphRunner:
         # 请求级 Prompt 版本 pin（治理 #5）：本次执行所用版本在开始时定格，
         # 发布中途换版不影响已快照的值；trace 按此 tag 回答「当时用的哪版」。
         try:
+            from backend.prompts.hot_reload import prompt_runtime_metadata
             from backend.prompts.service import prompt_service
 
             _pv = prompt_service.current_versions()
             trace.tags["prompt_versions"] = ",".join(
                 f"{k}={v}" for k, v in sorted(_pv.items())[:12]) or "none"
+            runtime = prompt_runtime_metadata(_pv)
+            trace.tags["prompt_runtime"] = runtime
+            trace.tags["prompt_epoch"] = runtime["epoch"]
+            trace.tags["snapshot_time"] = runtime["snapshot_time"]
+            trace.tags["reload_source"] = runtime["reload_source"]
         except Exception:
             _pv = {}
         trace_collector.start_span("root", parent_id=None,
@@ -465,6 +579,7 @@ class GraphRunner:
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
+                _funnel_note_resolved(clarify_click, message, session_id=session_id)
                 yield make_done_event(message, {}, start_time)
                 _end_root(trace, status="success",
                           metrics={"follow_up": "clarified"})
@@ -598,6 +713,20 @@ class GraphRunner:
 
                     merged_q.put(("evt", {"event": "status",
                                           "data": {"node": node_name, "ts": time.time()}}))
+                    if node_name in self._skill_nodes or node_name in (
+                            "skill_executor", "workflow_executor"):
+                        merged_q.put(("evt", {"event": "log", "data": {
+                            "level": "info",
+                            "node": node_name,
+                            "step_id": "tool_start",
+                            "message": "正在调用数据工具" if node_name in self._skill_nodes
+                            else "正在执行任务步骤",
+                            "payload": {
+                                "phase": "tool_start",
+                                "tool": node_name,
+                            },
+                            "ts": time.time(),
+                        }}))
                     for evt in stream_node_events(
                             node_name, node_output, self._skill_nodes,
                             make_step_payload, make_step_log_event):
@@ -753,6 +882,8 @@ class GraphRunner:
 
             # 内部事件：ask() 从这里取最终回答（SSE 层过滤）
             yield {"event": _ANSWER_EVENT, "data": {"answer": answer}}
+            _funnel_note_resolved(clarify_click, answer,
+                          session_id=session_id, trace_id=str(getattr(trace, "id", "") or ""))
 
             # 上下文用量快照（2026-09-22）：done 携带 context_usage 供前端
             # 显示「上下文 xx%」。近似口径 = 本轮输入历史 + 步骤产出；

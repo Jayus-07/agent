@@ -1,7 +1,7 @@
 # Domain Service Map — 域图 × 专家 × 工具 × 第三方服务 × 凭据
 
 > 回答一个问题：**每个域图里的每个专家，用什么工具、调什么外部服务、凭据怎么管、挂了怎么办。**
-> 最后验证：2026-09-29 · 基于三路并行代码 survey（专家文件 import 与延迟 import 逐个核对、config 变量逐个 grep、`.env` 变量名实测）。
+> 最后验证：2026-10-05 · 基于三路并行代码 survey（专家文件 import 与延迟 import 逐个核对、config 变量逐个 grep、`.env` 变量名实测）；2026-10-03 增量对齐 POI live 化 / intercity / 知乎 MCP / Tool 计数；2026-10-05 增量对齐 POI 三源候选池 / 车票自动触发 / 天气分级与区县级 / 客服拒答自救 / 天气超时 5s。
 > 编排层（图结构 / 进入通路 / 跨轮契约）见 [ai-runtime.md](ai-runtime.md)；本文只写**依赖与治理**。
 
 ---
@@ -21,7 +21,7 @@
 | capability | 17（14 路由可见 + 3 内部 `routed:false`：`email.watch` / `competitor.watch` / `competitor.history`） | `backend/orchestration/router/capabilities.yaml` |
 | Skill | 12 | `backend/skills/registry.py::_instances` |
 | Workflow | 4（daily_report / inventory_alert / market_research / selection_decision） | 同上 capabilities.yaml `workflows:` 段 |
-| Tool | 34 | `backend/tools/`（map/ 7 件、travel/ 6 件 + 各域散件） |
+| Tool | 39（2026-10-03 对齐契约 lock） | `backend/tool_contracts.lock.json`（派生快照，禁手抄） |
 | 域图 | 5（本文 §2~§6） | `backend/domains/__init__.py` 自动发现 |
 
 对账入口：管理端 `/api/agents`、`/api/capabilities`、`/skills` 页。其中 `/api/agents` 的域图节点带
@@ -36,7 +36,7 @@
 
 | 专家 | 职责 | 依赖（事实源=文件 import） | 外部服务/凭据 | 降级行为 |
 |---|---|---|---|---|
-| knowledge | 知识问答 RAG | `customer_service/knowledge/service.py` → `rag/pipeline.ask_result`（默认 kb=`cs_faq`，audience=customer 的 cs_* 库）；置信度门控 `knowledge/answer_decision.py` | LLM 主栈（§7） | RAG 异常→固定话术引导转人工；无答案→拒答后缀 |
+| knowledge | 知识问答 RAG | `customer_service/knowledge/service.py` → `rag/pipeline.ask_result`（默认 kb=`cs_faq`，audience=customer 的 cs_* 库）；置信度门控 `knowledge/answer_decision.py` | LLM 主栈（§7） | RAG 异常→固定话术引导转人工；无答案→拒答自救阶梯：换问法引导或 top-2 相似 FAQ 候选（阈值 0.30，零 LLM），不主动推人工 |
 | query | 只读业务查询 | `service/order_service.py`（订单）/ `logistics_service.py`（物流，演示口径=orders 表推算 ETA，**未接外部物流 API**）/ `ticket_store` | `CS_BUSINESS_GATEWAY_MODE`：`http`→business-service（`X-Internal-Token`=`INTERNAL_API_TOKEN`）；`sandbox`→直查演示库 | **网关失败不降级回 sandbox**（红线）；复合问题 LLM 分解（`CS_QUERY_LLM_DECOMPOSE_ENABLED`）失败回退单意图 |
 | action | 写操作 + 确认状态机 | `confirmation_flow.process_confirmation`（唯一执行流）+ `service/refund|after_sales|account_action`（当前 `simulate_execute` 模拟执行）+ `business_guard` 唯一性守卫 + `risk.py` 分级 | PG：`cs_pending_actions` / `ai.idempotency_records` / `agent_actions` | DB 不可用→「转人工」，**绝不 fallback 演示库**；缺订单槽位→结构化追问（禁猜 latest）；执行包裹幂等账本（`client_key=cs_action:{confirmation_id}`），IN_DOUBT 阻断 |
 | complaint | 投诉→工单→安抚→转人工 | `complaint_service.detect_with_llm_fallback`（规则优先，LLM 只评 severity）+ `ticket_store` + `realtime.get_agent_hub().publish("conversation.waiting")` | LLM（`CS_COMPLAINT_LLM_ENABLED`，3s 超时） | LLM 异常→确定性回退规则判定；工单落库失败不阻断安抚 |
@@ -54,15 +54,15 @@
 
 | 专家 | 依赖（事实源=import） | 外部服务/凭据 | 降级行为 |
 |---|---|---|---|
-| poi | `tools/travel/poi.py::search_poi`（本地种子 36 条：福州/厦门/杭州）+ `routing.day_radius_km`；动态 import `providers/travel/live/tencent.py::resolve_missing_places`（必去项补全） | 腾讯 LBS（`TENCENT_LBS_KEY/SK`）；`TRAVEL_USE_LIVE_MAP` 默认 false | 种子池优先；腾讯补全失败→留「未匹配」notes；**无候选如实说明不造数据** |
-| transit | `routing.estimate_leg/route_km` + `cost.day_cost`；动态 import `live_map.prefetch_legs`（路段预热） | 腾讯 LBS 路线 | provider 返回 None→**本地直线估算回落（source=`estimate:local`）**，契约不变；远期行程（>14 天）强制本地估算 |
-| weather | `providers/travel/live/__init__.get_weather_provider()`：**主源腾讯 LBS 天气 + 备源和风天气**（`qweather.py`，配 Key 才参与） | `TENCENT_LBS_KEY` / `QWEATHER_API_KEY`；`TRAVEL_WEATHER_ENABLED` 默认 true、超时 6s | 七态软降级：disabled 静默跳过 / 超时·限流写明原因 / 预报窗无交集如实披露；**绝不阻塞排程主链**。⚠️ 仓库无 `WEATHER_API_KEY` 变量（常见误传） |
-| budget | `cost.estimate_cost`（纯函数：门票×人数+城市档位餐交） | 无外部调用 | 无预算→写「本次未做预算校验」，金额不进 notes 防陈旧 |
+| poi | `travel/services/poi_service.py::retrieve_candidates`（live=腾讯 LBS 关键词检索，source=`tencent:lbs`；**候选池三源**：LBS 为主源 + 高德景点类目并入（rating/营业时间/检索时刻 open_status 标注与必去警告）+ travel RAG 库本地攻略文档名解析补池（≤5 条）；每次关键词检索 20 条、池上限 120；种子 `_seed_candidates` 为 legacy 通道）+ `routing.day_radius_km`；动态 import `providers/travel/live/tencent.py::resolve_missing_places`（必去项补全）；专家侧 candidates/guides/hotel 三路 ThreadPool 并行检索（单路失败独立降级留痕），美食商户按「就近+品类+评分」综合排序（品类加权表默认空不启用） | 腾讯 LBS（`TENCENT_LBS_KEY/SK`）+ 高德 Web 服务（`AMAP_KEY`，见 §8 行）；高德源 `TRAVEL_POI_AMAP_SOURCE_ENABLED` 默认 true（关掉回退纯腾讯行为）、本地攻略源 `TRAVEL_POI_LOCAL_DOC_ENABLED` 默认 true；**`TRAVEL_POI_SOURCE` 默认 live**（2026-10-02 `599f4c7` 种子库下线）；`TRAVEL_POI_FALLBACK_SEED` 默认 false、`TRAVEL_USE_LIVE_MAP` 默认 false（已不是 POI 候选池闸门） | live 失败**如实披露不静默回退种子**（显式回退才走 seed）；腾讯补全失败→留「未匹配」notes；高德单源失败只损失评分（notes 留痕，不损失腾讯候选）；**无候选如实说明不造数据** |
+| transit | `routing.estimate_leg/route_km` + `cost.day_cost`；动态 import `live_map.prefetch_legs`（路段预热）；城际出行**有出发地+出发日期即自动查询**（无需「查高铁」类触发词，重复查询靠共享缓存与 tool_cache 兜底），经 `run_travel_tool("travel_train_search_tool")` 并查票价，摘要写入 `itinerary.intercity`（前 6 车次，空=未触发） | 腾讯 LBS 路线 + 12306 MCP（`TRAIN_MCP_ENABLED` 默认关，见 §8 mcp-12306 行） | provider 返回 None→**本地直线估算回落（source=`estimate:local`）**，契约不变；远期行程（>14 天）强制本地估算；车票查询失败不阻塞排程 |
+| weather | `providers/travel/live/__init__.get_weather_provider()`：**主源腾讯 LBS 天气 + 备源和风天气**（`qweather.py`，配 Key 才参与） | `TENCENT_LBS_KEY` / `QWEATHER_API_KEY`；`TRAVEL_WEATHER_ENABLED` 默认 true、超时 5s（`TRAVEL_WEATHER_TIMEOUT_S`） | 七态软降级：disabled 静默跳过 / 超时·限流写明原因 / 预报窗无交集如实披露；**绝不阻塞排程主链**；天气分级：仅「小雨」降为提示级（带伞建议，不触发户外→室内替换；文本混入强天气词按强处理）；区县级预报（`TRAVEL_WEATHER_DISTRICT_ENABLED` 默认 true）：行程质心逆地理反查区县查预报，区县解析失败/未收录回退城市级。⚠️ 仓库无 `WEATHER_API_KEY` 变量（常见误传） |
+| budget | `cost.estimate_cost`（纯函数：门票×人数+城市档位餐交）+ 档位画像 `config/travel.py::TIER_PROFILES`/`BUDGET_POLICY`（M3，2026-10-03）：按 `brief.tier` 校验预算，超限按压缩顺序**自动降档**（comfortable→economy），经济档仍超输出缺口（`floor_total_cny`/`gap_cny`），协商过程写 `rationale.budget_negotiation` | 无外部调用 | 无预算→写「本次未做预算校验」，金额不进 notes 防陈旧；降档是纯计算策略，不额外调服务 |
 | risk | 动态 import `tools/travel/knowledge.py`（RAG 检索，kb=`travel`，只取原文不生成） | pgvector（`TRAVEL_RAG_ENABLED`） | 检索空/失败→退回纯免责声明；source=seed→追加「本地示例数据」warning |
 
 **validator**：纯规则零 LLM 零 IO（`backend/travel/validator.py` 头三条纪律），四轴（time/geo/pace/budget）+ coverage，数据=行程字段 + config 阈值；**repair** 只拿不添、必去项永不静默丢弃（`kept_required`）。
 
-**演进承诺（代码锚点）**：`tools/travel/poi_seed.py` 头部声明——接入地图/票务 MCP 后替换数据供给、source 改 provider 标识、**Poi 契约不变**；`experts/risk.py` docstring——P1 接 MCP 后本节点扩为真实外部风险核查。
+**演进承诺（代码锚点）**：`tools/travel/poi_seed.py` 头部声明——接入地图/票务 MCP 后替换数据供给、source 改 provider 标识、**Poi 契约不变**；`experts/risk.py` docstring——P1 接 MCP 后本节点扩为真实外部风险核查。**2026-10-02 起地图/票务查询侧已接**（POI=腾讯 LBS 实时检索、车票=12306 MCP Tool），Poi/Itinerary 契约未变；剩余未接=预订/真实供应商结算（§5）。
 
 ## 4. 旅游商务域图（TRAVEL_COMMERCE_ENABLED，STOP K）
 
@@ -112,9 +112,10 @@
 
 | 服务 | 用途 | 消费方 | 凭据/开关 | 降级与防护 |
 |---|---|---|---|---|
-| **腾讯位置服务 LBS** | 地理编码/POI/路线/天气/静态图/街景 | `tools/map/` 14 工具（高德商家检索除外，见下行）、`/api/map/*` 后端代理（前端永不接触 Key）、旅游 poi/transit/weather | `TENCENT_LBS_KEY`（服务端）+ `TENCENT_LBS_SK`（SN 签名，可选）+ `TENCENT_LBS_FRONTEND_KEY`（仅浏览器 URL 场景，配 Referer 白名单）；`TENCENT_LBS_ENABLED` 且 Key 非空才生效 | 定位「增强非硬依赖」：缺失/熔断整体降级（空结果/直线估算/`is_estimate=true`）；节流 0.2s（≈5 QPS 对齐个人 Key）、熔断 3 次/60s、缓存 600/120/300/1800s、stale-if-error |
-| **高德开放平台（Web 服务 API v5）** | 商家维度详情检索：评分 / 人均消费 / 营业状态（`show_fields=business`）——「推荐哪家店、现在去行不行」的依据，腾讯源只有名称/类别/地址 | `tools/map/merchant.py::map_merchant_search_tool` 及 `map_lookup_tool` 的 `merchant_search` action、旅游域 Research Agent（美食/住宿实时增强检索） | `AMAP_KEY` + `AMAP_SECRET`（仅控制台开启数字签名时）+ `AMAP_ENABLED`（代码默认 true，Key 非空才生效）；类目码 `AMAP_FOOD_TYPES`/`AMAP_HOTEL_TYPES`、区域 `AMAP_DEFAULT_REGION` | 未配置时 merchant_search 降级返回「未配置」提示，不影响腾讯系地图能力；字段缺数据显式 null 不编造 |
+| **腾讯位置服务 LBS** | 地理编码/POI/路线/天气/静态图/街景 | `tools/map/` 14 工具（高德商家检索除外，见下行）、`/api/map/*` 后端代理（前端永不接触 Key）、旅游 poi/transit/weather——其中**旅游 POI 候选池自 2026-10-02 起默认走 LBS 实时检索**（`TRAVEL_POI_SOURCE=live`） | `TENCENT_LBS_KEY`（服务端）+ `TENCENT_LBS_SK`（SN 签名，可选）+ `TENCENT_LBS_FRONTEND_KEY`（仅浏览器 URL 场景，配 Referer 白名单）；`TENCENT_LBS_ENABLED` 且 Key 非空才生效 | 定位「增强非硬依赖」：缺失/熔断整体降级（空结果/直线估算/`is_estimate=true`）；节流 0.2s（≈5 QPS 对齐个人 Key）、熔断 3 次/60s、缓存 600/120/300/1800s、stale-if-error |
+| **高德开放平台（Web 服务 API v5）** | 商家维度详情检索：评分 / 人均消费 / 营业状态（`show_fields=business`）——「推荐哪家店、现在去行不行」的依据，腾讯源只有名称/类别/地址 | `tools/map/merchant.py::map_merchant_search_tool` 及 `map_lookup_tool` 的 `merchant_search` action、旅游域 Research Agent（美食/住宿实时增强检索）、旅游 poi 候选池（评分/营业时间/open_status） | `AMAP_KEY` + `AMAP_SECRET`（仅控制台开启数字签名时）+ `AMAP_ENABLED`（代码默认 true，Key 非空才生效）；类目码 `AMAP_FOOD_TYPES`/`AMAP_HOTEL_TYPES`、区域 `AMAP_DEFAULT_REGION` | 未配置时 merchant_search 降级返回「未配置」提示，不影响腾讯系地图能力；字段缺数据显式 null 不编造 |
 | **mcp-12306（外部 MCP server）** | 12306 火车票余票/时刻查询数据源——「外部 MCP server 作为 Tool 数据源」首例（2026-10-02）；上游 drfccv/mcp-server-12306，非官方聚合、无 SLA、仅供学习研究（不商用） | `tools/travel/train.py::travel_train_search_tool`（经 `infra/mcp_client.py` 同步薄客户端）、旅游 Planning Agent 交通耗时/车次 | 无凭据；`TRAIN_MCP_ENABLED`（默认关）+ `TRAIN_MCP_BASE_URL`；compose 服务 `mcp-12306`（宿主 `127.0.0.1:18000` → 容器 8000） | 关闭时明确报「未启用」；协议层失败归「查不了」，与「查不到」按键名结构区分不猜文本；只读查询无副作用、不进审批门；失败不阻塞行程主链（耗时估算回退本地直线） |
+| **知乎官方 MCP（外部 MCP server）** | 知乎站内 + 全网内容检索——「外部 MCP server 作为 Tool 数据源」第二例（2026-10-02）；官方 developer.zhihu.com，Streamable HTTP + Bearer | `tools/search/zhihu.py::zhihu_search_tool` / `global_search_tool`、旅游 Research Agent 攻略检索（知乎+全网双路） | `ZHIHU_MCP_API_KEY`（只从 `.env` 读）+ `ZHIHU_MCP_BASE_URL`/`TIMEOUT`/`CACHE_TTL`/`MIN_INTERVAL`；`ZHIHU_MCP_ENABLED`（默认关） | 关闭/缺凭据明确报「未启用」；双路检索单路可用即降级继续；月度配额计量（Redis `agent:tool_quota:zhihu_mcp:{YYYYMM}`） |
 | **和风天气 v7** | 天气备用源（2026-09-28 接入） | `get_weather_provider()` 主备组合器备位 | `QWEATHER_API_KEY` + `QWEATHER_API_HOST`；不配 Key 零参与 | 仅主源超时/限流/鉴权/城市未收录才降级；DISABLED 不触发降级；双源皆败保留主源结局 |
 | **SMTP 邮件** | 报告推送 / email.send | `tools/email.py`（agently 引擎时另有 search/read/watch） | `SMTP_HOST/PORT/USER/PASSWORD/FROM`；`EMAIL_ENGINE`=smtp\|agently；当前 .env 未配置 | 发送前双保险：审批门（§8 下方）+ 进程内指纹去重 600s + **PG 幂等账本**（crash-window 防重发） |
 | **DuckDuckGo / Bing** | web.search（**爬 HTML 非官方 API**，无凭据） | `tools/web.py` | 无 | DDG 失败兜底 Bing 结果页；两路皆败上抛重试 |
@@ -127,7 +128,7 @@
 **三层凭据存放**（2026-09-29 实测 `.env` 变量名）：
 
 1. **DB 治理（模型类唯一通道）**：§7 的 6 表；密钥 Fernet 加密落库、指纹+尾 4 位脱敏展示、15s 热刷新、无 env 回退
-2. **`.env`（基础设施 + 非模型 SaaS）**：`PGPASSWORD` / `PG_READONLY_PASSWORD` / `REDIS_PASSWORD` / `JWT_SECRET` / `SECRETS_ENCRYPTION_KEY`（密文库主密钥）/ `TENCENT_LBS_KEY` / `TENCENT_LBS_SK` / `TENCENT_LBS_FRONTEND_KEY` / `AMAP_KEY` / `AMAP_SECRET` / `QWEATHER_API_KEY` / `ALERT_WEBHOOK_URL` / `API_KEY`（服务自身鉴权）/ `HF_TOKEN`（backend 内未发现消费点，待清理确认）。模型云 Key 与 SMTP 凭据**已不在 .env**
+2. **`.env`（基础设施 + 非模型 SaaS）**：`PGPASSWORD` / `PG_READONLY_PASSWORD` / `REDIS_PASSWORD` / `JWT_SECRET` / `SECRETS_ENCRYPTION_KEY`（密文库主密钥）/ `TENCENT_LBS_KEY` / `TENCENT_LBS_SK` / `TENCENT_LBS_FRONTEND_KEY` / `AMAP_KEY` / `AMAP_SECRET` / `QWEATHER_API_KEY` / `ZHIHU_MCP_API_KEY` / `ALERT_WEBHOOK_URL` / `API_KEY`（服务自身鉴权）/ `HF_TOKEN`（backend 内未发现消费点，待清理确认）。模型云 Key 与 SMTP 凭据**已不在 .env**
 3. **审批门（副作用的人机确认，区别于 CS confirmation 链）**：`TOOL_APPROVAL_MODE`=required（默认，非法值也回落 required）| auto（仅本地调试）；指纹=sha256(tool|action|detail|user_id|tenant_id)（身份参与指纹防跨用户消耗）；单 TTL 600s；DB 不可用降级进程内存。**必须过门的写操作**：`email.send`、采集 `write_db`、竞品监控列表写、`export_csv`、管理端竞品写接口
 
 **预算/配额**：租户级闭环（PG `budget_*` 6 表 + `model_price`，hard/soft/audit 三档，金额策略只存 PG）+ 请求级（`LLM_BUDGET_MODE` off/observe/enforce，默认 8 次调用/32k tokens/$0.50）+ 旅游 provider 日预算软停（`TRAVEL_PROVIDER_*_DAILY_BUDGET`，达限抛 `BudgetExhausted` 走缓存/降级不硬撞上游）。

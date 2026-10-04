@@ -52,7 +52,7 @@ def _cred(**kw) -> ProviderCredentials:
 
 
 def test_deepseek_defaults_are_config_constants(_providers):
-    k = _providers.deepseek.build_deepseek("deepseek-v4-flash").kw
+    k = _providers.deepseek.build_deepseek("provider-compat-test").kw
     assert k["api_key"] == cfg.DEEPSEEK_API_KEY
     assert k["base_url"] == cfg.DEEPSEEK_API_BASE
 

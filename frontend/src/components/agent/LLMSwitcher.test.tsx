@@ -26,7 +26,7 @@ vi.mock('@/lib/api', () => ({
   switchLLM: vi.fn(async () => ({ ok: true, model: 'model-b', provider: 'pb' })),
 }))
 
-import { switchLLM } from '@/lib/api'
+import { getLLMBalance, switchLLM } from '@/lib/api'
 import LLMSwitcher from './LLMSwitcher'
 
 beforeAll(() => { (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true })
@@ -106,5 +106,18 @@ describe('LLMSwitcher 会话级模型切换', () => {
 
     expect(useChatStore.getState().sessionModel).toBeNull()
     expect(switchLLM).not.toHaveBeenCalled()
+  })
+
+  it('余额接口不可查询时不冒充模型未配置', async () => {
+    vi.mocked(getLLMBalance).mockResolvedValueOnce({
+      ok: false,
+      provider: 'pa',
+      error: '该供应商不提供余额查询',
+    })
+    const container = mount()
+    await flush()
+
+    expect(container.textContent).toContain('余额不可查')
+    expect(container.textContent).not.toContain('未配置')
   })
 })

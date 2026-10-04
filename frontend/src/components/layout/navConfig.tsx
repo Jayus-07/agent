@@ -28,6 +28,15 @@
  *   生效范围：NAV 是用户端导航唯一数据源 —— 全局侧栏（Sidebar）与 /agent
  *   任务模式侧栏（TaskSidebar 的「全部功能」折叠组）均直接 map 本数组，
  *   故加一项即两处同时生效。
+ * - 2026-10-01 五次收敛（本文件）：原「AI 对话」**组**（唯一子项「智能问答」，
+ *   外加 09-17 加的「智能客服」直达子项）压平为顶层直达「AI 助手」→ /agent。
+ *   理由：一个组只挂一个真实页面（智能客服那条是 /agent?cs=1 的**同页带参**
+ *   变体，不是独立路由），展开/收起两个层级换来的信息量为零；且「智能客服」
+ *   在 /agent 顶栏本来就有一个常驻胶囊入口（components/chat/ChatHeader.tsx
+ *   onOpenCS），侧栏再放一条同词入口反而让「AI 对话 / 智能问答 / 智能客服」
+ *   三个词指同一件事。收敛后语义唯一：侧栏「AI 助手」= 对话主入口。
+ *   移除的只是**侧栏这一条入口**，/agent?cs=1 直达参数与 CSDrawer 行为不变
+ *   （navConfig.test.ts 已同步断言）。
  */
 import { Brain, Plane } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -48,12 +57,10 @@ export interface NavEntry {
 
 export const NAV: NavEntry[] = [
   {
-    icon: <Brain size={18} />, label: 'AI 对话',
-    items: [
-      { label: '智能问答', path: '/agent' },
-      // UX P1-⑤：客服直达（/agent 检测 cs=1 自动开抽屉，见 app/agent/page.tsx）
-      { label: '智能客服', path: '/agent?cs=1' },
-    ],
+    // 2026-10-01 五次收敛：原「AI 对话」组 + 子项（智能问答 / 智能客服）
+    // 压平为顶层直达。智能客服入口仍在 /agent 顶栏胶囊（ChatHeader）。
+    icon: <Brain size={18} />, label: 'AI 助手',
+    path: '/agent',
   },
   {
     // 2026-09-30 新增：旅游规划独立整页（非对话子项 —— 该页输出结构化行程，

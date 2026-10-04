@@ -133,6 +133,29 @@ class TestReindexWriteThenDelete:
         for c in idx.vectordb.delete.call_args_list:
             assert "where" not in (c.kwargs or {})
 
+    def test_deterministic_chunk_ids_are_not_deleted_after_upsert(
+        self, tmp_path, registry
+    ):
+        """PG 确定性 chunk ID 重用时，清理只能删除真正过时的旧 ID。"""
+        target = tmp_path / "doc.md"
+        target.write_text("body", encoding="utf-8")
+        registry.register(
+            file_path=str(target), doc_id="did1", file_hash="old_hash",
+            kb_id="kb1", chunk_ids=["chroma:did1:0", "chroma:did1:1"],
+            doc_db_id="ddb-old", metadata={"doc_version": 1},
+        )
+
+        idx = _mk_indexer(tmp_path, registry)
+        idx._index_file = MagicMock(return_value={
+            "trace_id": "t", "doc_id": "did1", "chunk_count": 1,
+            "chunk_ids": ["chroma:did1:0"], "doc_db_id": "ddb-new",
+            "file_hash": "new_hash", "status": "active",
+        })
+
+        idx.reindex_file(str(target))
+
+        idx.vectordb.delete.assert_called_once_with(ids=["chroma:did1:1"])
+
     def test_success_without_old_row_skips_cleanup(self, tmp_path, registry):
         """首次索引（无旧记录）不应触发任何删除。"""
         target = tmp_path / "fresh.md"

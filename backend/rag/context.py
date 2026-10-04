@@ -55,6 +55,10 @@ class RagRequestState:
     meta: dict = field(default_factory=dict)   # LLM 输出 <!--META--> 解析结果
     faithfulness: Any = None                   # FaithfulnessResult（评估结果）
     mq_triggered: bool = False                 # MultiQuery 本次是否触发
+    # 本轮被文档级权限过滤剔除的证据条数（chain._index_docs 写入）。
+    # 拒答升级依据：短缺类拒答 + 剔除>0 → answer_status=permission_denied，
+    # 让用户知道「存在相关资料但无权限」而非误读成知识库没有
+    permission_filtered: int = 0
     # 向量路降级信号（TD-01）：全部 query embedding 检索失败时置位，
     # AdaptiveRetriever 据此放行 parent 扩展（残缺分数不做低置信跳过）
     vector_degraded: bool = False

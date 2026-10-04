@@ -21,6 +21,7 @@ from backend.app.api.deps import (
 from backend.app.api.identity import resolve_identity
 from backend.memory.database import get_session
 from backend.security.local_jwt import hash_password
+from backend.infra.redis.client import get_auth_redis
 from backend.security.session_service import SessionRef, SessionService
 from backend.shared.logger import logger
 
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/sys/rbac", tags=["管理端-RBAC"])
 _ALLOWED_PLATFORM_ROLES = {"viewer", "editor", "admin", "super_admin"}
 _ALLOWED_CS_ROLES = {"agent", "supervisor"}
 _MISSING = object()
-_session_service = SessionService()
+_session_service = SessionService(redis_getter=get_auth_redis)
 
 
 @asynccontextmanager

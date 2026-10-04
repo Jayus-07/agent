@@ -140,8 +140,8 @@ export default function LLMSwitcher() {
     }
     if (balance?.error && balance.provider !== 'ollama') {
       return (
-        <span className="text-[13px] text-[#d93025] font-medium" title={balance.error}>
-          未配置
+        <span className="text-[13px] text-[#5f6368] font-medium" title={balance.error}>
+          余额不可查
         </span>
       )
     }

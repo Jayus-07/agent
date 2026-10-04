@@ -44,7 +44,7 @@ local CONF = nil
 
 local function build_conf()
     return {
-        host = env("AUTH_REDIS_HOST", "host.docker.internal"),
+        host = env("AUTH_REDIS_HOST", "auth-redis"),
         port = tonumber(env("AUTH_REDIS_PORT", "16379")) or 6379,
         password = env("AUTH_REDIS_PASSWORD", ""),
         stream = env("GATEWAY_ACCESS_LOG_STREAM", "agent:gw:access-log"),

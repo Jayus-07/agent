@@ -437,6 +437,20 @@ def direction(mode: str, from_lat: float, from_lng: float,
             "distance_m": _to_int(s.get("distance")),
             "duration_min": _to_float(s.get("duration")),
             "direction": s.get("dir_desc", ""),
+            # transit 模式（#41 公交候选）独有结构：段级 mode（WALKING/TRANSIT）
+            # 与乘坐线路（vehicle/title/上下车站/站数）。driving/walking 的
+            # steps 无这些键，归一为空值 —— 新增键向后兼容，存量消费方不受影响。
+            "mode": str(s.get("mode") or ""),
+            "lines": [
+                {
+                    "vehicle": str((ln or {}).get("vehicle") or "").lower(),
+                    "title": str((ln or {}).get("title") or ""),
+                    "geton": str(((ln or {}).get("geton") or {}).get("title") or ""),
+                    "getoff": str(((ln or {}).get("getoff") or {}).get("title") or ""),
+                    "station_count": _to_int((ln or {}).get("station_count")),
+                }
+                for ln in (s.get("lines") or [])
+            ],
         })
 
     distance_m = _to_int(route.get("distance"))

@@ -53,6 +53,17 @@ export interface ItineraryItem {
   poi: ItineraryPoi | null;
 }
 
+/** 公交/地铁候选（验收 #41）：候选参考，与主路线口径不同源，不作时间轴计算 */
+export interface TransitOption {
+  /** 公交全程分钟数（含候车） */
+  duration_min: number;
+  /** 公交路程（米） */
+  distance_m: number;
+  /** 乘坐摘要，如「步行至东街口 → 乘坐地铁1号线」 */
+  summary: string;
+  is_estimate: boolean;
+}
+
 export interface TransitLeg {
   from_title: string;
   to_title: string;
@@ -65,6 +76,8 @@ export interface TransitLeg {
   traffic_aware?: boolean;
   is_estimate?: boolean;
   fallback_reason?: string | null;
+  /** 公交/地铁候选（#41）；缺省=无候选（接口失败/远期日期），不显示 */
+  transit_option?: TransitOption | null;
 }
 
 export interface ItineraryDay {

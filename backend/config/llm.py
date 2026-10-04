@@ -216,7 +216,7 @@ ENABLE_FC_TOOL_SELECTION = os.getenv(
 # 截断会吞掉 tool_calls（评测实测 256 时 no_match 率飙升）
 TOOL_SELECTOR_LLM_TIMEOUT = int(os.getenv("TOOL_SELECTOR_LLM_TIMEOUT", "8"))
 TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "512"))
-# 选择+填参是小任务，可指定低延迟模型（推荐已注册的 deepseek-v4-flash）；
+# 选择+填参是小任务，可指定低延迟模型（推荐填写当前 DB 已注册模型）；
 # 空 = 跟随全局默认模型。未注册/构建失败自动回退全局模型
 # 模型名走角色注册表（role=tool_selector，空值 = 跟随 main，空值有语义）
 TOOL_SELECTOR_MODEL = _literal_model("tool_selector")

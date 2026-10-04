@@ -109,9 +109,13 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                 clarify_allowed,
                 mark_clarified,
             )
-            if clarify_allowed(state.get("session_id", "")):
+            if clarify_allowed(state.get("session_id", ""), query):
                 clarify = build_refusal_clarify(query, state.get("domain_hint") or "")
-                mark_clarified(state.get("session_id", ""))
+                mark_clarified(
+                    state.get("session_id", ""), query,
+                    options=clarify.get("options"),
+                    source=clarify.get("source", ""),
+                )
                 logger.info(
                     f"[RouterNode] 分层路由澄清: reason={fields['clarification_reason']}"
                 )
