@@ -133,3 +133,132 @@ def test_meal_candidates_not_scheduled_but_disclosed(monkeypatch):
     # 游玩型餐饮区（美食街）不是「坐下吃饭的店」，保留排入
     assert "达明美食街" in scheduled
     assert any("餐饮类候选不排进行程" in n and "老字号餐厅" in n for n in skeleton.notes)
+
+
+# ── A1 评分源：高德景点类目并入候选池（2026-10-04）──────────────
+
+def _amap_merchant(name: str, rating: float = 4.7, lat: float = 30.25,
+                   lng: float = 120.15,
+                   open_time: str = "08:00-17:30") -> dict:
+    return {"id": f"am-{name}", "name": name, "category": "景点:风景名胜",
+            "rating": rating, "avg_cost_cny": None,
+            "open_time_today": open_time, "open_time_week": "",
+            "tel": "", "lat": lat, "lng": lng, "distance_m": None,
+            "source": "amap", "updated_at": "2026-10-04T12:00:00+08:00"}
+
+
+def _enable_amap(monkeypatch, merchants_by_query: dict[str, list[dict]]):
+    """开启 A1 源并 stub 高德检索：query → merchants。"""
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", True)
+    monkeypatch.setattr(
+        live_search_service, "search_attractions",
+        lambda *, keyword, city, page_size=10: {
+            "keyword": keyword, "count": len(merchants_by_query.get(keyword, [])),
+            "merchants": merchants_by_query.get(keyword, [])})
+
+
+def test_amap_rating_merged_and_dedup(monkeypatch):
+    """同名处用高德版替换（rating/营业时间进 Poi）+ 独有地点追加。"""
+    monkeypatch.setattr(live_search_service, "search_places", lambda **kw: {"pois": [
+        _lbs_item("1", "西湖风景区"),  # 与高德「西湖」包含+坐标近 → 合并
+        _lbs_item("2", "断桥", lat=30.26, lng=120.16),
+    ]})
+    _enable_amap(monkeypatch, {"公园 风景名胜": [
+        _amap_merchant("西湖", rating=4.7),  # 近坐标（30.25,120.15）
+        _amap_merchant("灵隐寺", rating=4.8, lat=30.24, lng=120.10),
+    ]})
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    candidates, notes = poi_service.retrieve_candidates(_brief(preferences=["自然"]))
+    assert notes == []
+    by_name = {p.name: p for p in candidates}
+    # 合并：高德版替换腾讯版（评分/营业时间/来源全带）
+    assert by_name["西湖"].rating == 4.7
+    assert by_name["西湖"].source == "amap"
+    assert by_name["西湖"].open_time == "08:00"
+    assert by_name["西湖"].close_time == "17:30"
+    assert by_name["西湖"].poi_id.startswith("amap:")
+    # 高德独有地点追加，同样带评分
+    assert by_name["灵隐寺"].rating == 4.8
+    # 未合并的腾讯条目保持原样
+    assert by_name["断桥"].source == "tencent:lbs"
+    assert by_name["断桥"].rating == 0.0
+
+
+def test_amap_no_false_merge_distant_same_prefix(monkeypatch):
+    """名字包含但相距远（「西湖」vs「西湖博物馆」）不误合并，两条并存。"""
+    monkeypatch.setattr(live_search_service, "search_places", lambda **kw: {"pois": [
+        _lbs_item("1", "西湖博物馆", lat=30.26, lng=120.20),
+    ]})
+    _enable_amap(monkeypatch, {"公园 风景名胜": [
+        _amap_merchant("西湖", lat=30.13, lng=120.13),  # 相距数公里
+    ]})
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    candidates, _ = poi_service.retrieve_candidates(_brief(preferences=["自然"]))
+    names = {p.name for p in candidates}
+    assert names == {"西湖博物馆", "西湖"}
+    museum = next(p for p in candidates if p.name == "西湖博物馆")
+    assert museum.source == "tencent:lbs"  # 保留腾讯版，不被误替换
+
+
+def test_amap_failure_disclosed_tencent_intact(monkeypatch):
+    """高德单源失败：腾讯候选照常（评分缺失留痕披露，不空、不炸）。"""
+    monkeypatch.setattr(live_search_service, "search_places", lambda **kw: {"pois": [
+        _lbs_item("1", "断桥"),
+    ]})
+
+    def boom(*, keyword, city, page_size=10):
+        raise live_search_service.LiveSearchError("配额尽")
+
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", True)
+    monkeypatch.setattr(live_search_service, "search_attractions", boom)
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    candidates, notes = poi_service.retrieve_candidates(_brief(preferences=["自然"]))
+    assert [p.name for p in candidates] == ["断桥"]
+    assert any("高德评分源检索失败" in n for n in notes)
+
+
+def test_amap_disabled_keeps_legacy_behavior(monkeypatch):
+    """开关关闭：行为与旧版完全一致（不发高德请求、无评分）。"""
+    calls: list[str] = []
+    monkeypatch.setattr(live_search_service, "search_places", lambda **kw: {"pois": [
+        _lbs_item("1", "断桥"),
+    ]})
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", False)
+    monkeypatch.setattr(
+        live_search_service, "search_attractions",
+        lambda *, keyword, city, page_size=10: calls.append(keyword) or {})
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    candidates, notes = poi_service.retrieve_candidates(_brief(preferences=["自然"]))
+    assert calls == []
+    assert notes == []
+    assert candidates[0].source == "tencent:lbs"
+
+
+def test_amap_open_hours_parse():
+    """营业时段串解析：标准段取第一段；杂串/空返回 None（占位默认）。"""
+    assert poi_service._amap_open_hours("08:00-17:30") == ("08:00", "17:30")
+    assert poi_service._amap_open_hours("09:00-14:00,17:00-22:00") == ("09:00", "14:00")
+    assert poi_service._amap_open_hours("营业时间：9:00-17:00") == ("09:00", "17:00")
+    assert poi_service._amap_open_hours("") is None
+    assert poi_service._amap_open_hours("全天开放") is None
+
+
+def test_amap_rating_orders_skeleton(monkeypatch):
+    """评分进 Poi 后骨架排序生效：rating 降序（此前全 0 退化为 id 序）。"""
+    monkeypatch.setattr(live_search_service, "search_places", lambda **kw: {"pois": []})
+    _enable_amap(monkeypatch, {"公园 风景名胜": [
+        _amap_merchant("普通景点", rating=3.9, lat=30.25, lng=120.15),
+        _amap_merchant("高分景点", rating=4.9, lat=30.26, lng=120.16),
+        _amap_merchant("低分景点", rating=3.2, lat=30.27, lng=120.17),
+    ]})
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+
+    brief = _brief(days=1, preferences=["自然"])
+    candidates, _ = poi_service.retrieve_candidates(brief)
+    skeleton = poi_service.build_skeleton(brief, candidates)
+    scheduled = [p.name for day in skeleton.days for p in day]
+    assert scheduled == ["高分景点", "普通景点", "低分景点"]

@@ -10,6 +10,7 @@ from datetime import date
 import pytest
 
 from backend.travel.models.brief import TravelBrief
+from backend.travel.services import poi_service as poi_service_module
 
 
 @pytest.fixture(autouse=True)
@@ -181,3 +182,17 @@ def _isolated_provider_cache(monkeypatch):
     store = InMemoryCache(default_ttl=600)  # 单实例：写读同源
     monkeypatch.setattr(pcache, "_backend", lambda: store)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_amap_attraction_source(monkeypatch: pytest.MonkeyPatch):
+    """travel 域测试默认关掉高德景点评分源（A1，2026-10-04）。
+
+    生产默认 TRAVEL_POI_AMAP_SOURCE_ENABLED=true；开启时候选检索会真打
+    高德商户 API（结果非确定且依赖外网），本目录测试统一关闭保证断言
+    可复现——需要测评分合并行为的用例（test_live_poi_source.py 的 A1
+    用例）在用例内自行 monkeypatch 覆盖。
+    """
+    monkeypatch.setattr(poi_service_module.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", False)
+
+

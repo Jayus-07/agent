@@ -168,6 +168,20 @@ def search_food(city: str) -> dict[str, Any]:
     )
 
 
+def search_attractions(*, keyword: str, city: str,
+                       page_size: int = 10) -> dict[str, Any]:
+    """调用高德商户 Tool 检索景点类目（A1 评分源，2026-10-04）。
+
+    高德 v5 business 块是唯一带 rating/营业时间的源（腾讯 place 不回）；
+    返回封套与 search_food 同形（merchants 列表），失败上抛 LiveSearchError
+    由调用方逐词降级——评分源失败只损失评分，不损失候选（腾讯路还在）。
+    """
+    return search_merchants(
+        keyword=keyword, city=city,
+        types=map_config.AMAP_ATTRACTION_TYPES, page_size=page_size,
+    )
+
+
 def search_hotels(city: str) -> dict[str, Any]:
     return search_merchants(
         keyword="酒店", city=city, types=map_config.AMAP_HOTEL_TYPES,

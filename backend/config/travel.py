@@ -244,6 +244,9 @@ TRAVEL_POI_SOURCE = os.getenv("TRAVEL_POI_SOURCE", "live").strip().lower()
 # live 完全失败（网络/配额）时是否回退种子库：默认关（严格模式——失败
 # 如实披露，不用过期数据冒充实时结果）。开启仅影响种子城市。
 TRAVEL_POI_FALLBACK_SEED = os.getenv("TRAVEL_POI_FALLBACK_SEED", "false").strip().lower() in ("1", "true", "yes")
+# A1 评分源（2026-10-04）：高德景点类目与腾讯 LBS 并集——rating/营业时间
+# 只有高德回，腾讯坐标兜底；关掉即回退纯腾讯行为（同参结果一致）。
+TRAVEL_POI_AMAP_SOURCE_ENABLED = os.getenv("TRAVEL_POI_AMAP_SOURCE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 
 # =============================================
 # 意图预过滤（Router 内，与 CS 预过滤同层）

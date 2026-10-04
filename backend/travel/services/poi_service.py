@@ -9,6 +9,8 @@ weather_service.fetch_forecast），Phase 4 ProviderRouter 的既定插入点。
 """
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -66,6 +68,11 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
 
     单类检索失败不拖垮其他类（逐类降级、留痕 notes）；全部失败返回
     空列表，由调用方决定披露或按配置回退种子。
+
+    A1（2026-10-04）：腾讯结果之上并入高德景点类目源——rating/营业时间
+    只有高德回（骨架评分排序此前因 rating=0 退化）。合并口径：名字相同
+    或「包含关系+坐标 300m 内」视为同一处，用高德版本替换（信息更全）；
+    高德单源失败只损失评分（notes 留痕），不损失腾讯候选。
     """
     notes: list[str] = []
     queries = _live_pref_queries(brief.preferences)
@@ -117,6 +124,137 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 reason=f"「{q}」实时检索",
                 # 坐标级可信独立标注：详情（票价/时长）占位连坐标也不可信，是
                 # 两个语义——地图打点按 location_status 判定（字段级拆分）。
+                location_status="verified",
+            ))
+    pois, amap_notes = _merge_amap_candidates(
+        brief, queries, pois, observed_at)
+    notes.extend(amap_notes)
+    return pois, notes
+
+
+_AMAP_OPEN_HOURS_RE = re.compile(
+    r"(\d{1,2}):(\d{2})\s*[-–~至]\s*(\d{1,2}):(\d{2})")
+# 「同一处」的坐标容差：同名含包含关系时，300m 内才认合并——防「西湖」
+# 吞掉「西湖博物馆」（名字包含但相距数公里的两个地方）。
+_SAME_PLACE_METERS = 300
+
+
+def _amap_open_hours(text: str) -> tuple[str, str] | None:
+    """高德今日营业时段串 → (open, close)；解析失败返回 None（占位默认）。
+
+    只取第一段（"09:00-14:00,17:00-22:00" 的午市段）——排程关心的是
+    「几点开门」，第一段的开始时刻即开门时刻。
+    """
+    m = _AMAP_OPEN_HOURS_RE.search(text or "")
+    if not m:
+        return None
+    h1, m1, h2, m2 = m.groups()
+    return (f"{int(h1):02d}:{m1}", f"{int(h2):02d}:{m2}")
+
+
+def _haversine_m_approx(lat1: float, lng1: float,
+                        lat2: float, lng2: float) -> float:
+    """两点球面距离（米），合并判重用（精度要求低，够区分 300m 量级）。"""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dlng / 2) ** 2)
+    return 2 * 6371008.8 * math.asin(math.sqrt(a))
+
+
+def _same_place(a: str, b: str, lat1: float, lng1: float,
+                lat2: float, lng2: float) -> bool:
+    """腾讯名 vs 高德名是否同一处：精确同名，或包含关系+坐标 300m 内。"""
+    a, b = (a or "").strip(), (b or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if (a in b or b in a) and _haversine_m_approx(lat1, lng1, lat2, lng2) <= _SAME_PLACE_METERS:
+        return True
+    return False
+
+
+def _merge_amap_candidates(
+    brief: TravelBrief, queries: list[str], pois: list[Poi],
+    observed_at: str,
+) -> tuple[list[Poi], list[str]]:
+    """A1：高德景点类目并入候选池（评分/营业时间源）。
+
+    逐检索词调高德商户 Tool；单源失败降级留痕（腾讯候选不受损）。
+    与既有条目「同一处」→ 用高德版本替换（rating/营业时间更全）；
+    新地点直接追加。返回 (合并后候选, 披露 notes)。
+    """
+    if not T.TRAVEL_POI_AMAP_SOURCE_ENABLED:
+        return pois, []
+    notes: list[str] = []
+    for q in queries:
+        try:
+            data = live_search_service.search_attractions(
+                keyword=q, city=brief.destination, page_size=_LIVE_PAGE_SIZE)
+        except live_search_service.LiveSearchError as exc:
+            logger.warning("[PoiService] 高德评分源 %s 失败: %s", q, exc)
+            notes.append(f"「{q}」高德评分源检索失败，该类候选暂无评分")
+            continue
+        for rec in data.get("merchants") or []:
+            if not isinstance(rec, dict):
+                continue
+            name = str(rec.get("name") or "").strip()
+            lat, lng = rec.get("lat"), rec.get("lng")
+            if not name or not (isinstance(lat, (int, float))
+                                and isinstance(lng, (int, float))
+                                and (lat, lng) != (0.0, 0.0)):
+                continue
+            rating = rec.get("rating")
+            rating = float(rating) if isinstance(rating, (int, float)) else 0.0
+            hours = _amap_open_hours(str(rec.get("open_time_today") or ""))
+            merged = False
+            for i, existing in enumerate(pois):
+                if _same_place(existing.name, name,
+                               existing.lat, existing.lng, float(lat), float(lng)):
+                    # 同一处：高德版替换（评分/营业时间更全）；坐标用高德
+                    # 自己的（两家官方数据都可信，避免混搭两套坐标）。
+                    pois[i] = Poi(
+                        poi_id=f"amap:{rec.get('id') or name}",
+                        name=name,
+                        city=brief.destination,
+                        category=map_category(str(rec.get("category") or "")),
+                        lat=float(lat), lng=float(lng),
+                        open_time=hours[0] if hours else existing.open_time,
+                        close_time=hours[1] if hours else existing.close_time,
+                        suggested_minutes=existing.suggested_minutes,
+                        ticket_cny=0.0,
+                        tags=[],
+                        rating=rating,
+                        source="amap",
+                        observed_at=observed_at,
+                        verification_status="unverified",
+                        reason=f"「{q}」实时检索 · 高德评分 {rating:g}" if rating
+                        else f"「{q}」实时检索",
+                        location_status="verified",
+                    )
+                    merged = True
+                    break
+            if merged:
+                continue
+            pois.append(Poi(
+                poi_id=f"amap:{rec.get('id') or stable_fallback_id(name, brief.destination)}",
+                name=name,
+                city=brief.destination,
+                category=map_category(str(rec.get("category") or "")),
+                lat=float(lat), lng=float(lng),
+                open_time=hours[0] if hours else "09:00",
+                close_time=hours[1] if hours else "17:00",
+                suggested_minutes=120,
+                ticket_cny=0.0,
+                tags=[],
+                rating=rating,
+                source="amap",
+                observed_at=observed_at,
+                verification_status="unverified",
+                reason=f"「{q}」高德检索 · 评分 {rating:g}" if rating
+                else f"「{q}」高德检索",
                 location_status="verified",
             ))
     return pois, notes
