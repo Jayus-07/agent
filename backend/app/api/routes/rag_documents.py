@@ -8,6 +8,7 @@ from backend.app.api.deps import (
     get_rag_status,
     require_rag_user,
     require_rag_editor,
+    require_admin_user,
 )
 import asyncio
 import os
@@ -956,3 +957,37 @@ async def get_chunk_detail(doc_id: str, request: Request):
     except Exception as e:
         return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
 
+# ── S2 知识库授权盘点（2026-10-05，管理端「知识库授权」面板数据源）──
+@router.get("/kb-authority", dependencies=[Depends(require_admin_user)])
+async def kb_authority_overview():
+    """全量 KB 注册口径盘点（admin）：owner_depts/audience/文档计数/状态。
+
+    注册表以 backend/config/knowledge_base.py 为单一事实源（G2，禁止手抄
+    第二份）；此端点只读派生，不做授权变更——可见性变更走代码评审（注册表
+    变更随仓库发布），避免运行时改口径造成审计断链。
+    """
+    from backend.config.knowledge_base import KNOWLEDGE_BASES
+    items = []
+    counts: dict = {}
+    try:
+        reg = _get_registry()
+        for kid in KNOWLEDGE_BASES:
+            try:
+                counts[kid] = reg.count_by_kb_id(kid)
+            except Exception:
+                counts[kid] = 0
+    except Exception:
+        logger.warning("KB 授权盘点：registry 计数失败，回退 0", exc_info=True)
+    for kid, meta in sorted(KNOWLEDGE_BASES.items()):
+        items.append({
+            "kb_id": kid,
+            "name": meta.get("name", kid),
+            "domain": meta.get("domain", ""),
+            "owner_depts": meta.get("owner_depts", []),
+            "audience": meta.get("audience", "internal"),
+            "deprecated": bool(meta.get("deprecated", False)),
+            "read_only": bool(meta.get("read_only", False)),
+            "alias_for": meta.get("alias_for"),
+            "doc_count": counts.get(kid, 0),
+        })
+    return {"knowledge_bases": items, "total": len(items)}

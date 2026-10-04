@@ -6,6 +6,7 @@ import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
 import DocumentsPanel from './DocumentsPanel'
 import KeywordsPanel from './KeywordsPanel'
 import OperationsPanel from './OperationsPanel'
+import KbAuthorityPanel from './KbAuthorityPanel'
 import PendingReviewPanel from './PendingReviewPanel'
 import UploadFailuresPanel from './UploadFailuresPanel'
 
@@ -15,9 +16,10 @@ const TABS = [
   { id: 'failures', label: '入库失败' },
   { id: 'keywords', label: '词库' },
   { id: 'operations', label: '操作日志' },
-] as const satisfies readonly WorkbenchTab<'documents' | 'pending' | 'failures' | 'keywords' | 'operations'>[]
+  { id: 'authority', label: '授权盘点' },
+] as const satisfies readonly WorkbenchTab<'documents' | 'pending' | 'failures' | 'keywords' | 'operations' | 'authority'>[]
 
-const TAB_IDS = TABS.map((tab) => tab.id) as readonly ('documents' | 'pending' | 'failures' | 'keywords' | 'operations')[]
+const TAB_IDS = TABS.map((tab) => tab.id) as readonly ('documents' | 'pending' | 'failures' | 'keywords' | 'operations' | 'authority')[]
 
 export default function KnowledgeWorkbench() {
   const { tab, selectTab } = useWorkbenchTab(TAB_IDS, 'documents')
@@ -36,6 +38,7 @@ export default function KnowledgeWorkbench() {
         {tab === 'failures' && <UploadFailuresPanel />}
         {tab === 'keywords' && <KeywordsPanel />}
         {tab === 'operations' && <OperationsPanel />}
+        {tab === 'authority' && <KbAuthorityPanel />}
       </WorkbenchShell>
     </RoleGate>
   )

@@ -318,3 +318,9 @@ export const knowledgeService: any = {
   getChunkDetail: (chunkId: string) =>
     fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
 }
+export interface KbAuthorityItem { kb_id: string; name: string; domain: string; owner_depts: string[]; audience: string; deprecated: boolean; read_only: boolean; alias_for?: string | null; doc_count: number }
+export interface KbAuthorityOverview { knowledge_bases: KbAuthorityItem[]; total: number }
+
+/** S2 知识库授权盘点（admin）——全量 KB 注册口径 + 文档计数 */
+export const listKbAuthority = (): Promise<KbAuthorityOverview> =>
+  fetchRaw(`${BASE}/kb-authority`).then(r => r.json())

@@ -457,8 +457,11 @@ DOC_TYPE_COVERAGE_REQUIRED = os.getenv("DOC_TYPE_COVERAGE_REQUIRED", "true").low
 GATE_ENTITY_CHECK_ENABLED = os.getenv("GATE_ENTITY_CHECK_ENABLED", "true").lower() == "true"
 
 # --- Rerank Gate（多维，与 RAGFlow 单阈值不同，更严格但有上限控制） ---
-RERANK_MIN_TOP1 = float(os.getenv("RERANK_MIN_TOP1", "0.35"))
-RERANK_MIN_AVG = float(os.getenv("RERANK_MIN_AVG", "0.25"))
+# 2026-10-05 E1 拍板（189 条定标网格 cost 最优，2*假拒+漏拒加权）：
+# 假拒 10.1%/漏拒 16%——漏拒（不相关放行）是幻觉源头优先收缩，假拒仍优于
+# 标定基线 14.6%。生效值以 .env 覆盖为准，此处默认对齐拍板口径。
+RERANK_MIN_TOP1 = float(os.getenv("RERANK_MIN_TOP1", "0.40"))
+RERANK_MIN_AVG = float(os.getenv("RERANK_MIN_AVG", "0.10"))
 RERANK_MIN_GAP = float(os.getenv("RERANK_MIN_GAP", "0.05"))
 # 高风险问题额外要求 top1 提高到 0.55
 RERANK_HIGH_RISK_MIN_TOP1 = float(os.getenv("RERANK_HIGH_RISK_MIN_TOP1", "0.55"))

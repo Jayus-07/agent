@@ -14,10 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # 生产默认（与 operations.py 签名默认 / config 注入值对齐，作基线行）
+# 2026-10-05 E1 拍板对齐（min_top1 0.40 / min_avg 0.10 / min_gap 0.05）
 CURRENT_THRESHOLDS = {
     "vec_min_score": 0.2,
-    "min_top1": 0.35,
-    "min_avg": 0.25,
+    "min_top1": 0.40,
+    "min_avg": 0.10,
     "min_gap": 0.05,
 }
 # 验收目标（演进分析 C9 / K7）
