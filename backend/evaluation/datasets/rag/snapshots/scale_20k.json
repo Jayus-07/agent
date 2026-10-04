@@ -1,0 +1,10 @@
+{
+  "name": "scale_20k",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "scale_20k",
+  "version_id": "rag_eval_kb-scale_20k-2026-10-04",
+  "dataset_version": "5.0.0-unified",
+  "cases_path": "backend/evaluation/datasets/rag/suites/scale_20k.json",
+  "enforce_filter": false,
+  "note": "C6-3/REPRO-06：语料快照登记（scale_20k 复用 expanded_100 问题与标注，运行时检索 staging 语料）。version_id 仅作复现登记与快照哈希输入；语义同 expanded_100.json。"
+}

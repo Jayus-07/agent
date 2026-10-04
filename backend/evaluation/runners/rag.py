@@ -104,6 +104,15 @@ class EvalScope:
     fixture_set: str
     multiquery: bool
     version_id: str | None = None
+    # C6-3：version_id 是否参与检索过滤。baseline 语料按 version 索引
+    # （true）；expanded_100/scale_20k 随 KB 现态索引，version_id 仅作
+    # 复现登记与快照哈希输入（false），置 true 需语料重建回填元数据
+    enforce_filter: bool = False
+
+    @property
+    def filter_version_id(self) -> str | None:
+        """参与 metadata filter 的语料版本（未启用过滤时恒 None）。"""
+        return self.version_id if self.enforce_filter else None
 
     def as_dict(self) -> dict[str, object]:
         payload = {
@@ -113,6 +122,7 @@ class EvalScope:
         }
         if self.version_id:
             payload["version_id"] = self.version_id
+            payload["version_filter_enforced"] = self.enforce_filter
         return payload
 
 
@@ -128,6 +138,7 @@ def build_eval_scope(
         raise ValueError(f"评测必须使用统一 KB rag_eval_kb，实际为: {kb_id}")
     if fixture_set not in {"baseline", "expanded_100", "scale_20k"}:
         raise ValueError(f"未知 fixture_set: {fixture_set}")
+    enforce_filter = False
     if fixture_set == "baseline" and not version_id:
         from backend.evaluation.datasets.rag.snapshots import load_rag_snapshot
 
@@ -135,11 +146,26 @@ def build_eval_scope(
         if snapshot["kb_id"] != kb_id or snapshot["fixture_set"] != fixture_set:
             raise ValueError("baseline snapshot 与评测 KB/fixture_set 不一致")
         version_id = str(snapshot["version_id"])
+        enforce_filter = True
+    elif not version_id:
+        # C6-3/REPRO-06：全 fixture 语料快照覆盖——version_id 登记进
+        # evaluation_scope（快照哈希输入），非 baseline 语料随 KB 现态
+        # 索引，默认不做检索过滤（enforce_filter=false，快照文件注明）
+        try:
+            from backend.evaluation.datasets.rag.snapshots import load_rag_snapshot
+
+            snapshot = load_rag_snapshot(fixture_set)
+            if snapshot.get("kb_id") == kb_id:
+                version_id = str(snapshot.get("version_id", ""))
+                enforce_filter = bool(snapshot.get("enforce_filter", False))
+        except (FileNotFoundError, ValueError, OSError):
+            version_id = version_id or ""
     return EvalScope(
         kb_id=kb_id,
         fixture_set=fixture_set,
         multiquery=bool(multiquery),
-        version_id=version_id,
+        version_id=version_id or None,
+        enforce_filter=enforce_filter,
     )
 
 
@@ -375,7 +401,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 if ablation_mode != "full":
                     retriever = build_ablation_retriever(
                         pipeline, ablation_mode, kb_id, department,
-                        scope.fixture_set, scope.version_id,
+                        scope.fixture_set, scope.filter_version_id,
                     )
                 else:
                     # --multiquery：评测链套上生产链的 MultiQuery 层（口径对齐）
@@ -395,7 +421,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 if kb_id and kb_id != "*" and kb_id != "default":
                     from backend.rag.context import RagRequestState, set_context
                     mf = build_scope_metadata_filter(
-                        kb_id, department, scope.fixture_set, scope.version_id,
+                        kb_id, department, scope.fixture_set, scope.filter_version_id,
                     )
                     ctx = RagRequestState(
                         metadata_filter=mf,
@@ -410,7 +436,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
 
                 # === Stage 1: Doc 级检索 ===
                 doc_filter = build_scope_metadata_filter(
-                    kb_id, department, scope.fixture_set, scope.version_id,
+                    kb_id, department, scope.fixture_set, scope.filter_version_id,
                 )
                 doc_results = (
                     pipeline.doc_db.similarity_search(question, k=stage1_probe_k, filter=doc_filter)

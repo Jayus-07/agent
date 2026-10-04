@@ -1,0 +1,10 @@
+{
+  "name": "expanded_100",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "expanded_100",
+  "version_id": "rag_eval_kb-expanded_100-2026-10-04",
+  "dataset_version": "5.0.0-unified",
+  "cases_path": "backend/evaluation/datasets/rag/suites/expanded_100.json",
+  "enforce_filter": false,
+  "note": "C6-3/REPRO-06：语料快照登记。expanded_100 语料随 staging KB 现态索引，version_id 仅作复现登记与快照哈希输入（enforce_filter=false，不过滤检索）；语料重建并回填 chunk 级 version_id 元数据后置 true 启用过滤。"
+}

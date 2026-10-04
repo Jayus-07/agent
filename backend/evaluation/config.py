@@ -23,6 +23,9 @@ class EvalConfig(BaseModel):
     run_id: str | None = None            # 断点续跑标识；启动时生成或由 CLI 指定
     # RUN-02：对已有终态的 run_id 再次启动时的显式覆盖（全量重跑，忽略 checkpoint）
     force_rerun: bool = False
+    # C9-2/P0-03：严格字段校验（缺 question/expected_answer/ground_truth 阻止
+    # 启动并列出缺失清单）。默认关保持现降级语义；发布评测强制 True。
+    strict_fields: bool = False
     semantic_thresholds: dict[str, float] | None = None
     regression: bool = False
     promote_baseline: bool = False

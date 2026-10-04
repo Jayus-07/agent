@@ -56,6 +56,8 @@ def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
                 ),
                 prompt_versions=release.prompt_snapshot,
                 release_id=release.release_id,
+                # C9-2：发布评测强制严格字段校验——不接受静默降级样本
+                strict_fields=True,
             )
         )
         run_dir = persist_report(report)

@@ -18,10 +18,14 @@ def test_runner_records_scope_and_multiquery():
         kb_id="rag_eval_kb", fixture_set="expanded_100", multiquery=True,
     )
 
+    # C6-3/REPRO-06（2026-10-04）：非 baseline fixture 也登记语料快照
+    # version_id（进 evaluation_scope → 快照哈希），但不过滤检索
     assert scope.as_dict() == {
         "kb_id": "rag_eval_kb",
         "fixture_set": "expanded_100",
         "multiquery": True,
+        "version_id": "rag_eval_kb-expanded_100-2026-10-04",
+        "version_filter_enforced": False,
     }
 
 

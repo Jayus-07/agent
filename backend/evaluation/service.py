@@ -335,6 +335,92 @@ def _attach_evaluator_cost(
         metadata["evaluator_cost"] = estimate
 
 
+def _strict_fields_enabled() -> bool:
+    import os as _os
+
+    return _os.getenv("EVAL_STRICT_FIELDS", "").strip().lower() in ("1", "true", "yes")
+
+
+def _strict_fields_check(cases: list[TestCase]) -> None:
+    """C9-2/P0-03：严格字段校验（EVAL_STRICT_FIELDS=1 或 config.strict_fields）。
+
+    缺 question/expected_answer/ground_truth 的样本阻止启动并逐条列出
+    缺失字段；缺 answer/contexts 的 RAGAS 依赖在样本级降级（历史语义），
+    但发布评测必须全量可用——strict 下不接受静默降级。
+    """
+    import os as _os
+
+    problems: list[str] = []
+    for case in cases:
+        missing: list[str] = []
+        if not str(case.question or "").strip():
+            missing.append("question")
+        expected = case.expected or {}
+        if not str(expected.get("expected_answer", "") or "").strip():
+            missing.append("expected_answer")
+        if not str(expected.get("ground_truth", "") or "").strip():
+            missing.append("ground_truth")
+        if missing:
+            problems.append(f"{case.id}: 缺 {', '.join(missing)}")
+    if problems:
+        preview = "；".join(problems[:10])
+        more = f"（共 {len(problems)} 条）" if len(problems) > 10 else ""
+        raise StrictFieldValidationError(
+            f"严格字段校验失败，拒绝启动：{preview}{more}。"
+            f"发布评测要求 question/expected_answer/ground_truth 全量可用；"
+            f"请修正样本或改用非 strict 模式（仅限本地调试）"
+        )
+
+
+class StrictFieldValidationError(ValueError):
+    """C9-2：严格字段校验未通过（阻止启动）。"""
+
+
+def _snapshot_suite_mtimes(config: EvalConfig) -> dict[str, float]:
+    """C9-4/CON-05：运行开始时记录 suite 相关文件的 mtime。"""
+    from backend.evaluation.dataset.loader import DATASET_DIR
+
+    paths: list = []
+    if config.selection:
+        paths.append(DATASET_DIR / "rag" / "suites" / f"{config.selection}.json")
+    paths.append(DATASET_DIR / "rag" / "cases.jsonl")
+    mtimes: dict[str, float] = {}
+    for path in paths:
+        try:
+            if path.exists():
+                mtimes[str(path.name)] = path.stat().st_mtime
+        except OSError:
+            continue
+    return mtimes
+
+
+def _check_suite_mtime(baseline: dict[str, float]) -> str:
+    """运行结束时比对；变化即告警（run 内一致性不受影响——内存态已固定）。"""
+    if not baseline:
+        return ""
+    from backend.evaluation.dataset.loader import DATASET_DIR
+
+    changed: list[str] = []
+    for name, mtime in baseline.items():
+        path = DATASET_DIR / "rag" / "suites" / name
+        if not path.exists():
+            path = DATASET_DIR / "rag" / name
+        try:
+            if not path.exists() or path.stat().st_mtime != mtime:
+                changed.append(name)
+        except OSError:
+            continue
+    if changed:
+        message = (
+            f"评测运行期间 suite 文件被修改：{', '.join(changed)}——"
+            f"本次 run 结果基于启动时加载的内存态（一致性不受影响），"
+            f"但下次运行将使用新内容；请为修改后的数据创建新版本（DATA-01）"
+        )
+        logger.warning("[service] %s", message)
+        return message
+    return ""
+
+
 class EvaluationService:
     """评估服务 — 单一核心入口。"""
 
@@ -481,6 +567,8 @@ class EvaluationService:
         )
         min_samples = suite_governance.get("min_samples")
         min_valid_samples = suite_governance.get("min_valid_samples")
+        # C9-4/CON-05：运行期 suite 文件 mtime 基线（结束时比对告警）
+        suite_mtime_baseline = _snapshot_suite_mtimes(config)
 
         if config.dataset:
             if config.selection:
@@ -490,6 +578,8 @@ class EvaluationService:
             if config.smoke:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
+            if config.strict_fields or _strict_fields_enabled():
+                _strict_fields_check(cases)
             scope, dataset_version = _resolve_rag_scope(cases, config)
             results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id)
             summaries = [_build_summary(results, "rag")]
@@ -513,6 +603,10 @@ class EvaluationService:
         dataset_report_metadata["ragas_degraded"] = _ragas_degraded(
             dataset_report_metadata["ragas_samples"],
         )
+        # C9-4/CON-05：运行期 suite 文件改动告警（如有）
+        suite_mtime_note = _check_suite_mtime(suite_mtime_baseline)
+        if suite_mtime_note:
+            dataset_report_metadata["suite_mtime_warning"] = suite_mtime_note
         if not config.no_ragas:
             dataset_report_metadata["ragas_config"] = collect_ragas_config(
                 config.ragas_level,
@@ -552,6 +646,8 @@ class EvaluationService:
             if config.smoke:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
+            if config.strict_fields or _strict_fields_enabled():
+                _strict_fields_check(cases)
 
             runner_kwargs = dict(
                 live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas,
@@ -584,6 +680,9 @@ class EvaluationService:
         ragas_stats = _ragas_sample_stats(all_results)
         report_metadata["ragas_samples"] = ragas_stats
         report_metadata["ragas_degraded"] = _ragas_degraded(ragas_stats)
+        suite_mtime_note = _check_suite_mtime(suite_mtime_baseline)
+        if suite_mtime_note:
+            report_metadata["suite_mtime_warning"] = suite_mtime_note
         # C4-1/C4-2/C7-4：judge/RAGAS 调用参数快照（含 seed_support 显式口径）
         from backend.evaluation.evaluator_config import (
             collect_judge_config,
