@@ -130,7 +130,18 @@ CURATED: list[tuple[str, str, str]] = [
     ("回滚决策由谁做", "回滚决策由值班经理作出，无需等待全部技术论证。", "2441cddc47"),
     ("告警出现几次要建跟踪单", "任何告警连续出现三次以上须生成《反复告警跟踪单》。", "2441cddc47"),
     ("生产数据写操作要什么确认", "涉及生产数据的写操作须提交 SQL 评审并有数据 owner 书面确认。", "2441cddc47"),
+    # 账号密码（e94c3fb04d，2026-10-04 C6 缺口闭环新增）
+    ("密码忘了怎么办", "登录页点「忘记密码」，通过注册手机号验证码重置；连续输错 5 次账号锁定 30 分钟，稍等后自动解锁，无需联系客服。", "e94c3fb04d"),
 ]
+
+# 真实 miss 沉淀变体（C6 缺口闭环，2026-10-04）：不在 variants_for 规则覆盖内、
+# 来自 ai.cs_faq_query_log 真实未命中的问法。种子重跑以「规则变体 + 本表」
+# 合并后整体覆盖 variants——在此登记是唯一不被重跑冲掉的途径。
+EXTRA_VARIANTS: dict[str, list[str]] = {
+    "退款能换其他渠道吗": ["退款可以换微信收吗", "退款能换微信收吗"],
+    "英国站订单多久内可以退货": ["英国站退货是多少天"],
+    "密码忘了怎么办": ["密码忘记了怎么找回", "登录密码忘了怎么办"],
+}
 _VARIANT_RULES = [
     ("怎么办", "如何处理"), ("怎么退", "如何退"), ("怎么查", "如何查"),
     ("什么时候", "多久"), ("多少天", "几天"), ("多久", "几天"),
@@ -177,8 +188,10 @@ def main() -> int:
         if key in seen:
             continue
         seen.add(key)
+        # 真实 miss 变体与规则变体合并（去重）后写入，种子重跑不丢闭环成果
+        merged = list(dict.fromkeys(variants_for(q) + EXTRA_VARIANTS.get(q, [])))
         store.upsert_faq(
-            q, a, variants=variants_for(q), status="published",
+            q, a, variants=merged, status="published",
             kb_refs=doc_id,
         )
         inserted += 1
