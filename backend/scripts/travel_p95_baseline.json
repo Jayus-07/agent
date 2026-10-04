@@ -1,0 +1,14 @@
+{
+  "duration_ms": {
+    "p50": 1061,
+    "p95": 6589,
+    "p95_limit": 7906,
+    "samples": 18
+  },
+  "ttft_ms": {
+    "p95": 0,
+    "p95_limit": 0,
+    "samples": 0
+  },
+  "frozen_at": "2026-10-04T17:06:55"
+}
