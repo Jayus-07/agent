@@ -428,8 +428,20 @@ class ConfirmationStore:
                 # STOP D（D19/D20）：身份列同事务原子刷新；升级后身份撞上
                 # 另一 active 操作时 051 唯一索引拒绝 → 转译为业务冲突。
                 if identity is not None:
+                    # 排除条件收窄（2026-10-05 缺陷修复）：仅当待写行的
+                    # action_id 与库内行 confirmation_id 一致（同一
+                    # confirmation 的 reask 更新/重放）才排除自身——此前
+                    # 无条件 exclude="" 让 reask 把「更新自己」误判为重复
+                    # 提交（I1/I5 复现）；也不能无条件排除（会弱化 D1/D2/D4
+                    # 同会话同语义不同 action_id 的重复提交拦截）。
+                    exclude_self = (
+                        str(pending_action.get("action_id") or "")
+                        == existing.confirmation_id
+                    )
                     await _raise_on_active_conflict(
-                        repo, identity, exclude_confirmation_id="",
+                        repo, identity,
+                        exclude_confirmation_id=(
+                            existing.confirmation_id if exclude_self else ""),
                         completed_message="该业务操作已提交成功，不允许重复发起。",
                     )
                 await _update_with_guard(
