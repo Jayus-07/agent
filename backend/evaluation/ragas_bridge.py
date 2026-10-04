@@ -272,7 +272,12 @@ def _init_configured_llm() -> Any:
     except (AttributeError, TypeError, ValueError) as exc:
         logger.warning("[RAGAS] evaluator token callback 绑定失败：%s", exc)
     logger.info("[RAGAS] 使用 eval_gen=%s（provider=%s）", model_name, provider)
-    return LangchainLLMWrapper(chat)
+    # bypass_temperature/bypass_n：统一代理经 with_config 后是 RunnableBinding
+    # （langchain_core._ChatModelBinding），ragas wrapper 会尝试对其实例属性
+    # 注入 temperature/n，触发 pydantic「object has no field」——温度已在
+    # 构建时固定为 0（与 ragas_config 快照口径一致），禁用 wrapper 的运行期
+    # 注入（2026-10-04 实机定位）。
+    return LangchainLLMWrapper(chat, bypass_temperature=True, bypass_n=True)
 
 
 def _init_cloud_llm() -> Any:
