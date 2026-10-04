@@ -30,6 +30,10 @@ class RunAlreadyFinalizedError(ValueError):
     """C2-2/RUN-02：对已终态 run 的隐式重跑被拒绝（CLI/API 转 409）。"""
 
 
+class BudgetBlockedError(RuntimeError):
+    """C5-6/COST-10：租户预算超限，评测 run 拒绝启动。"""
+
+
 def _current_actor() -> str:
     import os as _os
 
@@ -300,6 +304,37 @@ def _ragas_sample_stats(results: list[EvalResult]) -> dict[str, int]:
     return {"valid": valid, "invalid": invalid}
 
 
+# C4-7：RAGAS 有效样本率低于该值 → 报告标 ragas_degraded（C1-7 门据此 block）
+RAGAS_VALID_RATIO_MIN = 0.90
+
+
+def _ragas_degraded(ragas_samples: dict[str, int]) -> bool:
+    attempted = int(ragas_samples.get("valid", 0)) + int(ragas_samples.get("invalid", 0))
+    if attempted <= 0:
+        return False  # 未执行不算 degraded（由 ragas_not_executed 口径负责）
+    ratio = int(ragas_samples.get("valid", 0)) / attempted
+    return ratio < RAGAS_VALID_RATIO_MIN
+
+
+def _attach_evaluator_cost(
+    metadata: dict[str, Any], summaries: list[ModuleSummary],
+) -> None:
+    """C4-9/RAGAS-14：evaluator token × 价格 → 估算成本（CNY）。
+
+    价格不可得时记 ``{"cost_cny": None, "basis": "unavailable_price"}``，
+    前端据此渲染 unavailable 而非 ¥0（COST-09 口径延续）。
+    """
+    from backend.evaluation.evaluator_cost import estimate_evaluator_cost_cny
+
+    rag_summary = next((s for s in summaries if s.module == "rag"), None)
+    if rag_summary is None:
+        return
+    token_summary = (rag_summary.metrics or {}).get("token_summary")
+    estimate = estimate_evaluator_cost_cny(token_summary)
+    if estimate is not None:
+        metadata["evaluator_cost"] = estimate
+
+
 class EvaluationService:
     """评估服务 — 单一核心入口。"""
 
@@ -343,6 +378,19 @@ class EvaluationService:
 
         self._ensure_runners()
         reset_token_usage()
+        # C5-6/COST-10：预算阻断（灰度开关默认关）。开启后 run 启动前查
+        # 租户预算窗口，超限拒绝启动（fail-closed）——预算不允许「先跑后算」。
+        from backend.evaluation import run_guards as _rg
+
+        if _rg.BUDGET_BLOCK_ENABLED:
+            budget_reason = _rg.RunGuard(
+                run_id or "pre-start", actor=_current_actor(),
+            ).check_budget()
+            if budget_reason:
+                raise BudgetBlockedError(
+                    f"租户 {_rg.BUDGET_TENANT_ID} 预算超限，评测 run 拒绝启动"
+                    f"（reason={budget_reason}，COST-10 fail-closed）"
+                )
         # 运行一开始就固定 run_id：checkpoint 与最终报告使用同一目录；
         # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
         run_id = config.run_id or make_run_id()
@@ -445,31 +493,48 @@ class EvaluationService:
             scope, dataset_version = _resolve_rag_scope(cases, config)
             results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id)
             summaries = [_build_summary(results, "rag")]
-            _inject_token_totals(summaries, run_started_ts)
-            report = EvalReport(
-                module="rag",
-                mode="live" if live else "offline",
-                smoke=config.smoke,
-                tier=config.tier,
-                summaries=summaries,
-                results=list(results),
-                total_score=None,
-                tier_summaries=evaluate_tiers(
-                    cases, results,
-                    min_samples=min_samples, min_valid_samples=min_valid_samples,
-                ),
-                metadata={
-                    "evaluation_scope": scope.as_dict(),
-                    "dataset_version": dataset_version,
-                    "selection": config.selection,
-                    "run_id": run_id,
-                    "evaluator_mode": _evaluator_mode(config),
-                    "buckets": _build_buckets(cases, results),
-                    "ragas_samples": _ragas_sample_stats(results),
-                    "suite_governance": suite_governance,
-                },
+        _inject_token_totals(summaries, run_started_ts)
+        # C4-1/C4-2/C7-4：judge/RAGAS 调用参数快照（含 seed_support 显式口径）
+        from backend.evaluation.evaluator_config import (
+            collect_judge_config,
+            collect_ragas_config,
+        )
+
+        dataset_report_metadata = {
+            "evaluation_scope": scope.as_dict(),
+            "dataset_version": dataset_version,
+            "selection": config.selection,
+            "run_id": run_id,
+            "evaluator_mode": _evaluator_mode(config),
+            "buckets": _build_buckets(cases, results),
+            "ragas_samples": _ragas_sample_stats(results),
+            "suite_governance": suite_governance,
+        }
+        dataset_report_metadata["ragas_degraded"] = _ragas_degraded(
+            dataset_report_metadata["ragas_samples"],
+        )
+        if not config.no_ragas:
+            dataset_report_metadata["ragas_config"] = collect_ragas_config(
+                config.ragas_level,
             )
-            return _attach_provenance(config, report)
+        if config.judge:
+            dataset_report_metadata["judge_config"] = collect_judge_config()
+        _attach_evaluator_cost(dataset_report_metadata, summaries)
+        report = EvalReport(
+            module="rag",
+            mode="live" if live else "offline",
+            smoke=config.smoke,
+            tier=config.tier,
+            summaries=summaries,
+            results=list(results),
+            total_score=None,
+            tier_summaries=evaluate_tiers(
+                cases, results,
+                min_samples=min_samples, min_valid_samples=min_valid_samples,
+            ),
+            metadata=dataset_report_metadata,
+        )
+        return _attach_provenance(config, report)
 
         # 模块清单派生自 models.ModuleKind（唯一事实源）；`all` 的取/舍口径见
         # models.ALL_RUN_MODULES（排除项逐个带理由），此处不再手写列表
@@ -516,7 +581,20 @@ class EvaluationService:
         _inject_token_totals(summaries, run_started_ts)
         report_metadata["evaluator_mode"] = _evaluator_mode(config)
         report_metadata["buckets"] = _build_buckets(all_cases, all_results)
-        report_metadata["ragas_samples"] = _ragas_sample_stats(all_results)
+        ragas_stats = _ragas_sample_stats(all_results)
+        report_metadata["ragas_samples"] = ragas_stats
+        report_metadata["ragas_degraded"] = _ragas_degraded(ragas_stats)
+        # C4-1/C4-2/C7-4：judge/RAGAS 调用参数快照（含 seed_support 显式口径）
+        from backend.evaluation.evaluator_config import (
+            collect_judge_config,
+            collect_ragas_config,
+        )
+
+        if not config.no_ragas:
+            report_metadata["ragas_config"] = collect_ragas_config(config.ragas_level)
+        if config.judge:
+            report_metadata["judge_config"] = collect_judge_config()
+        _attach_evaluator_cost(report_metadata, summaries)
         if suite_governance:
             report_metadata["suite_governance"] = suite_governance
         report = EvalReport(

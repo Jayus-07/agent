@@ -11,6 +11,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import math
+import os
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -1178,7 +1179,10 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # 五期守卫（C5-1~C5-5）：取消轮询 / 整批 deadline / token 熔断 /
     # 单条超时，全部默认关或宽松，见 run_guards 模块口径
     from backend.evaluation import run_guards
-    guard = run_guards.RunGuard(str(kwargs.get("run_id") or ""))
+    guard = run_guards.RunGuard(
+        str(kwargs.get("run_id") or ""),
+        actor=str(os.getenv("EVAL_TRIGGERED_BY", "") or ""),
+    )
     case_timeout_s = run_guards.CASE_TIMEOUT_SECONDS
 
     def _guarded_case(case: TestCase) -> EvalResult:
@@ -1302,54 +1306,74 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         results[result_idx].error_stage = _guard_stop
             else:
                 from backend.evaluation.evaluators.ragas_provider import RagasEvaluator
-                from backend.evaluation.ragas_bridge import _get_llm, _get_embeddings
-                _get_llm()
-                _get_embeddings()
-                breaker = guard.provider_breaker
+                from backend.evaluation.ragas_bridge import (
+                    _get_embeddings,
+                    _get_llm,
+                    probe_eval_llm,
+                )
+                # C4-7：批量启动前连通性探针——不通整段 skip 并留原因，
+                # 失败→unavailable 是设计语义，不伪造分数不硬等待
+                probe_ok, probe_err = probe_eval_llm()
+                if not probe_ok:
+                    logger.error(
+                        "[RAGAS] eval_gen 不可用，%d 个样本记 judge_unavailable",
+                        len(_deferred_ragas),
+                    )
+                    for result_idx, _case, _ctx, _d in _deferred_ragas:
+                        if result_idx < len(results):
+                            results[result_idx].metrics["ragas_reason"] = "judge_unavailable"
+                            results[result_idx].error_stage = "ragas"
+                    _deferred_ragas.clear()
+                else:
+                    _get_llm()
+                    _get_embeddings()
+                    breaker = guard.provider_breaker
 
-                def _run_ragas(job):
-                    result_idx, case, eval_ctx, ragas_metrics_dict = job
-                    # C5-5：熔断冷却期直接跳过（不轰炸 provider），留 reason 可辨
-                    if not breaker.allow():
-                        ragas_metrics_dict["ragas_reason"] = "provider_breaker_open"
-                        return
-                    ragas_eval = RagasEvaluator()
-                    if ragas_eval.should_run(case, eval_ctx):
-                        m = ragas_eval.evaluate(case, eval_ctx)
-                        ragas_metrics_dict.update(m)
-                        got_value = any(
-                            k.startswith("ragas_") and k != "ragas_reason"
-                            and isinstance(v, (int, float))
-                            for k, v in m.items()
-                        )
-                        if got_value:
-                            breaker.record_success()
-                        else:
-                            breaker.record_failure(
-                                run_id=str(kwargs.get("run_id") or ""),
+                    def _run_ragas(job):
+                        result_idx, case, eval_ctx, ragas_metrics_dict = job
+                        # C5-5：熔断冷却期直接跳过（不轰炸 provider），留 reason 可辨
+                        if not breaker.allow():
+                            ragas_metrics_dict["ragas_reason"] = "provider_breaker_open"
+                            return
+                        ragas_eval = RagasEvaluator()
+                        if ragas_eval.should_run(case, eval_ctx):
+                            m = ragas_eval.evaluate(case, eval_ctx)
+                            ragas_metrics_dict.update(m)
+                            got_value = any(
+                                k.startswith("ragas_") and k != "ragas_reason"
+                                and isinstance(v, (int, float))
+                                for k, v in m.items()
                             )
+                            if got_value:
+                                breaker.record_success()
+                            else:
+                                breaker.record_failure(
+                                    run_id=str(kwargs.get("run_id") or ""),
+                                )
 
-                _ragas_pool = concurrent.futures.ThreadPoolExecutor(max_workers=_ragas_workers)
-                try:
-                    _ragas_futures = [_ragas_pool.submit(_run_ragas, j) for j in _deferred_ragas]
-                    for i, fut in enumerate(concurrent.futures.as_completed(_ragas_futures)):
-                        try:
-                            fut.result()
-                        except Exception as e:
-                            logger.warning(f"[RAGAS] 并行评估失败 ({i}): {e}")
-                finally:
-                    _ragas_pool.shutdown(wait=False, cancel_futures=True)
+                    _ragas_pool = concurrent.futures.ThreadPoolExecutor(max_workers=_ragas_workers)
+                    try:
+                        _ragas_futures = [
+                            _ragas_pool.submit(_run_ragas, j) for j in _deferred_ragas
+                        ]
+                        for i, fut in enumerate(concurrent.futures.as_completed(_ragas_futures)):
+                            try:
+                                fut.result()
+                            except Exception as e:
+                                logger.warning(f"[RAGAS] 并行评估失败 ({i}): {e}")
+                    finally:
+                        _ragas_pool.shutdown(wait=False, cancel_futures=True)
 
-                # 更新 results 中的 RAGAS 指标
-                for result_idx, case, eval_ctx, ragas_metrics_dict in _deferred_ragas:
-                    if ragas_metrics_dict and result_idx < len(results):
-                        r = results[result_idx]
-                        r.metrics.update(
-                            {k: (v if k == "ragas_reason" else (round(v, 4) if v is not None else None))
-                             for k, v in ragas_metrics_dict.items()}
-                        )
-                        # checkpoint 重新追加（读取时同 case_id 后行覆盖前行）
-                        _append_result_checkpoint(checkpoint_file, r)
+                    # 更新 results 中的 RAGAS 指标
+                    for result_idx, case, eval_ctx, ragas_metrics_dict in _deferred_ragas:
+                        if ragas_metrics_dict and result_idx < len(results):
+                            r = results[result_idx]
+                            r.metrics.update(
+                                {k: (v if k == "ragas_reason" else (round(v, 4) if v is not None else None))
+                                 for k, v in ragas_metrics_dict.items()}
+                            )
+                            # checkpoint 重新追加（读取时同 case_id 后行覆盖前行）
+                            _append_result_checkpoint(checkpoint_file, r)
         except Exception as e:
             logger.error(f"[RAGAS] 批量评估阶段失败（保留已完成用例结果）: {e}", exc_info=True)
 

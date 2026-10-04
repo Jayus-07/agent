@@ -32,6 +32,7 @@ if sys.platform == "win32":
 RESULTS_DIR = DATA_ROOT
 
 _DEFAULT_RUNNER_CONFIG = "backend.evaluation.runners_config"
+_DEFAULT_GOLDEN_PATH = None  # cli.py 零项目依赖原则：延迟到 main() 里解析
 
 
 def _bootstrap_runners(config_module: str | None = None):
@@ -188,6 +189,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="触发者身份（M7：落 eval_run_records.triggered_by；"
              "admin 发起时传操作者，CI 传 pipeline 名）",
     )
+    parser.add_argument(
+        "--judge-golden", type=str, default=None, metavar="PATH", nargs="?",
+        const=str(_DEFAULT_GOLDEN_PATH),
+        help="C4-4：运行 Judge golden 样本集跑分（换 Judge 模型/prompt 前必跑）；"
+             "不带值时使用内置数据集 datasets/judge/golden.jsonl",
+    )
+    parser.add_argument(
+        "--judge-golden-baseline", type=str, default=None, metavar="PATH",
+        help="C4-5：与指定 golden 历史报告对比，档位翻转/分值漂移超阈值 → exit 2",
+    )
+    parser.add_argument(
+        "--judge-golden-repeat", type=int, default=1, metavar="N",
+        help="C4-6：同集重复运行 N 次输出波动报告（默认 1）",
+    )
+    parser.add_argument(
+        "--judge-golden-threshold", type=float, default=0.1, metavar="D",
+        help="C4-5：分值漂移容差（默认 0.1）",
+    )
     return parser
 
 
@@ -203,6 +222,11 @@ def main():
 
     # 注册 runner（在 run_all 之前）
     _bootstrap_runners(args.runner_config)
+
+    # ── C4-4/5/6：Judge golden 三件套（跑分 / 基线对比 / 波动）──
+    if args.judge_golden:
+        _run_judge_golden_flow(args)
+        return  # golden 流程独立成支，不落 run_all
 
     live = args.live or args.judge
 
@@ -306,6 +330,56 @@ def main():
             )
         sys.exit(1)
     sys.exit(0)
+
+
+def _run_judge_golden_flow(args) -> None:
+    """judge-golden 跑分 + 可选基线对比 + 波动报告（exit 2=漂移阻断）。"""
+    from pathlib import Path as _Path
+
+    from backend.evaluation.judge_golden import (
+        compare_golden_reports,
+        persist_golden_report,
+        run_golden,
+    )
+
+    golden_path = _Path(args.judge_golden) if args.judge_golden else None
+    print(f"=== Judge Golden 跑分（repeat={args.judge_golden_repeat}）===")
+    report = run_golden(golden_path=golden_path, repeat=args.judge_golden_repeat)
+
+    for cid, c in report["cases"].items():
+        flipped = any(v != c["expected_verdict"] for v in c["verdicts"])
+        flag = "✅" if not flipped else "❌"
+        print(
+            f"  {flag} {cid}: mean={c['mean']} std={c['std']} "
+            f"期望档位={c['expected_verdict']} 实际档位={sorted(set(c['verdicts']))}"
+        )
+    print(
+        f"\n汇总：{report['total']} 条 | 档位翻转 {report['tier_flip_count']} | "
+        f"judge 失败 {report['judge_error_count']} | 稳定性 std 均值 "
+        f"{report['stability']['mean_of_std']}"
+    )
+    out = persist_golden_report(report)
+    print(f"golden 报告已保存: {out}")
+
+    if args.judge_golden_baseline:
+        from backend.evaluation.judge_golden import load_golden_report
+
+        baseline = load_golden_report(_Path(args.judge_golden_baseline))
+        comparison = compare_golden_reports(
+            report, baseline, deviation_threshold=args.judge_golden_threshold,
+        )
+        print(f"\n=== 基线对比（{args.judge_golden_baseline}）===")
+        for d in comparison["score_drifts"]:
+            print(
+                f"  ⚠️ {d['case_id']}: {d['baseline_mean']} → {d['current_mean']} "
+                f"(Δ{d['delta']})"
+            )
+        for cid in comparison["new_tier_flips"]:
+            print(f"  ❌ {cid}: 期望档位翻转")
+        print(comparison["summary"])
+        if not comparison["passed"]:
+            print("\n❌ Judge 漂移超过容差，阻断（exit 2）——升级前必须排查")
+            sys.exit(2)
 
 
 def _print_verbose(report) -> None:

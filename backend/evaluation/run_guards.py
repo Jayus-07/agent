@@ -41,6 +41,13 @@ BREAKER_WINDOW_SECONDS = _env_int("EVAL_PROVIDER_BREAKER_WINDOW_S", 60)
 BREAKER_COOLDOWN_SECONDS = _env_int("EVAL_PROVIDER_BREAKER_COOLDOWN_S", 300)
 # C5-3：judge 显式并发池（与 ragas_workers 同构；默认 2）
 JUDGE_WORKERS = _env_int("EVAL_JUDGE_WORKERS", 2)
+# C5-6/COST-10：预算阻断（默认关——灰度开关，实机验收时打开）。
+# 开启后 run 启动前与运行期检查租户预算窗口，超限拒绝启动/熔断停止，
+# run 不得以 completed/pass 收口。
+BUDGET_BLOCK_ENABLED = os.getenv("EVAL_BUDGET_BLOCK_ENABLED", "false").strip().lower() in (
+    "1", "true", "yes",
+)
+BUDGET_TENANT_ID = os.getenv("EVAL_BUDGET_TENANT_ID", "default")
 
 
 def _in_memory_token_usage() -> dict[str, int]:
@@ -74,6 +81,8 @@ def guard_config_snapshot() -> dict[str, Any]:
         "run_token_hard_limit": RUN_TOKEN_HARD_LIMIT,
         "evaluator_token_limit": EVALUATOR_TOKEN_HARD_LIMIT,
         "token_accounting": "in_process_counters_only",
+        "budget_block_enabled": BUDGET_BLOCK_ENABLED,
+        "budget_tenant_id": BUDGET_TENANT_ID,
         "provider_breaker": {
             "threshold": BREAKER_FAILURE_THRESHOLD,
             "window_s": BREAKER_WINDOW_SECONDS,
@@ -86,20 +95,64 @@ def guard_config_snapshot() -> dict[str, Any]:
 class RunGuard:
     """运行期守卫：case 循环在每个检查点轮询一次 ``blocking_reason()``。"""
 
-    def __init__(self, run_id: str) -> None:
+    def __init__(self, run_id: str, *, actor: str = "") -> None:
         self.run_id = run_id
+        self.actor = actor
         self.started_ts = time.time()
         self.deadline_ts = (
             self.started_ts + BATCH_DEADLINE_SECONDS
             if BATCH_DEADLINE_SECONDS > 0 else None
         )
         self._soft_warned = False
+        self._budget_checked = 0
+        self._budget_blocked_reason = ""
         self.stop_reason: str = ""
         self.provider_breaker = ProviderBreaker()
+
+    def check_budget(self) -> str:
+        """C5-6：租户预算窗口检查（每 10 个 case 至多查一次 DB，控制开销）。
+
+        返回非空 = 预算超限原因；查询失败不阻塞评测（预算是保护不是障碍，
+        与平台 P0「价格未知放行」口径一致）。
+        """
+        if not BUDGET_BLOCK_ENABLED:
+            return ""
+        if self._budget_blocked_reason:
+            return self._budget_blocked_reason
+        self._budget_checked += 1
+        if self._budget_checked % 10 != 1:  # 首查 + 之后每 10 次查一次
+            return ""
+        try:
+            from backend.infra.llm.quota import PostgresQuotaStore
+
+            status = PostgresQuotaStore().get_budget_status(
+                user_id=self.actor or "eval-runner",
+                tenant_id=BUDGET_TENANT_ID,
+            )
+            if status.get("blocked"):
+                self._budget_blocked_reason = "budget_exceeded"
+                windows = status.get("windows") or []
+                detail = "; ".join(
+                    f"{w.get('scope')}:{w.get('period')} "
+                    f"{w.get('used')}>= {w.get('limit')}"
+                    for w in windows if w.get("blocked")
+                )[:300]
+                logger.warning(
+                    "[RunGuard] 租户预算超限，评测熔断: %s", detail or status,
+                )
+                return self._budget_blocked_reason
+        except Exception as e:  # noqa: BLE001 — 预算查询失败不阻塞评测
+            logger.warning("[RunGuard] 预算状态查询失败（放行）: %s", e)
+        return ""
 
     def blocking_reason(self) -> str:
         """返回非空字符串 = 应停止后续 case（值即原因码）。"""
         if self.stop_reason:
+            return self.stop_reason
+        budget_reason = self.check_budget()
+        if budget_reason:
+            self.stop_reason = budget_reason
+            self._finalize_fail(budget_reason)
             return self.stop_reason
         try:
             from backend.evaluation.storage import is_cancel_requested
@@ -160,6 +213,8 @@ class RunGuard:
             "run_token_hard_limit": RUN_TOKEN_HARD_LIMIT,
             "evaluator_token_limit": EVALUATOR_TOKEN_HARD_LIMIT,
             "token_accounting": "in_process_counters_only",
+            "budget_block_enabled": BUDGET_BLOCK_ENABLED,
+            "budget_tenant_id": BUDGET_TENANT_ID,
             "provider_breaker": {
                 "threshold": BREAKER_FAILURE_THRESHOLD,
                 "window_s": BREAKER_WINDOW_SECONDS,

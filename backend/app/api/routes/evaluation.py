@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 import json
@@ -25,6 +26,31 @@ from backend.observability.tracer import trace_collector
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/evaluation", tags=["评测"])
+
+# C7-2/REL-08（2026-10-04 企业评审拍板）：当前为**单租户 default 架构**，
+# 评测端点挂租户校验钩子作为扩租户时的启用点——非 default 租户显式 403
+# （诚实拒绝，不静默按 default 放行）；扩租户时在此钩子上替换为真实
+# 归属校验（run 元数据带 tenant + 查看者租户比对）。
+EVAL_TENANT_SCOPE_ENABLED = os.getenv(
+    "EVAL_TENANT_SCOPE_ENFORCED", "true",
+).strip().lower() not in ("0", "false", "no")
+SUPPORTED_EVAL_TENANTS = {"default"}
+
+
+async def _eval_tenant_scope(
+    x_tenant_id: str | None = Query(None, alias="X-Tenant-Id"),
+) -> str:
+    """租户校验钩子：单租户架构下恒 default，其他值显式拒绝。"""
+    tenant = (x_tenant_id or "default").strip() or "default"
+    if EVAL_TENANT_SCOPE_ENABLED and tenant not in SUPPORTED_EVAL_TENANTS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"评测功能当前仅支持单租户 default（收到 {tenant!r}）；"
+                f"跨租户访问在扩租户架构落地前不可用"
+            ),
+        )
+    return tenant
 
 
 class FromTraceRequest(BaseModel):
@@ -232,7 +258,9 @@ async def eval_runs_for_prompt_version(
                 (json.dumps({key: str(version)}), limit))
             rows = cur.fetchall()
     except Exception as e:  # noqa: BLE001 — 查询软失败
-        raise HTTPException(503, f"评测台账查询失败: {e}")
+        # C7-3/UI-07：内部错误细节只进日志，响应不回 str(e)
+        logger.error(f"评测台账查询失败: {e}", exc_info=True)
+        raise HTTPException(503, "评测台账暂不可用，请稍后重试（详情见服务端日志）") from e
     return {"key": key, "version": version, "runs": [
         {"run_id": r[0], "module": r[1], "pass_rate": r[2],
          "case_count": r[3], "pass_count": r[4], "trigger": r[5],
@@ -242,21 +270,31 @@ async def eval_runs_for_prompt_version(
 
 
 @router.get("/runs/{run_id}")
-async def get_eval_run(run_id: str):
-    """获取单次评测的完整报告。"""
+async def get_eval_run(
+    run_id: str,
+    _tenant: str = Depends(_eval_tenant_scope),
+):
+    """获取单次评测的完整报告（C7-1：展示/导出层 PII 脱敏，原始文件不动）。"""
     try:
         report, meta = load_report(run_id)
+        from backend.evaluation.export_masking import mask_report_for_viewer
+
         return {
             "run_id": run_id,
-            "report": report.model_dump(mode="json"),
+            "report": mask_report_for_viewer(report.model_dump(mode="json")),
             "meta": meta,
             "run_status": read_run_status(run_id),
         }
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     except Exception as e:
-        logger.error(f"加载评测报告失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # C7-3/UI-07：内部异常细节只进日志，响应回统一错误码+可读原因，
+        # 不把 str(e)（可能含堆栈/路径/SQL）暴露给客户端
+        logger.error(f"加载评测报告失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="评测报告加载失败，请稍后重试或联系管理员（详情见服务端日志）",
+        ) from e
 
 
 class CancelRunResponse(BaseModel):

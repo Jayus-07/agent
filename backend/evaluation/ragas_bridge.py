@@ -342,6 +342,37 @@ def _get_embeddings() -> Any:
     return _embeddings
 
 
+def probe_eval_llm(timeout_s: float = 20.0) -> tuple[bool, str]:
+    """C4-7：eval_gen 连通性探测（1-token 探针，批量启动前调用）。
+
+    RAGAS 逐样本 180s 超时意味着「模型不通」要等满批量才暴露；探针把
+    失败前移到批量开始——不通就整段 skip 并记 judge_unavailable 原因
+    （fail-safe 语义：失败→unavailable 是设计行为，禁止伪造分数）。
+    """
+    try:
+        from backend.evaluation.generation import (
+            get_eval_chat_model,
+            resolve_eval_model,
+        )
+
+        model_name, provider = resolve_eval_model()
+        chat = get_eval_chat_model(temperature=0)
+        import concurrent.futures
+
+        def _invoke() -> str:
+            resp = chat.invoke("回复数字1")
+            content = resp.content if hasattr(resp, "content") else str(resp)
+            return str(content)[:10]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_invoke).result(timeout=timeout_s)
+        logger.info("[RAGAS] 连通性探针通过（eval_gen=%s/%s）", model_name, provider)
+        return True, ""
+    except Exception as e:  # noqa: BLE001 — 探针失败即不可用
+        logger.warning("[RAGAS] 连通性探针失败，RAGAS 批量将跳过: %s", e)
+        return False, str(e)[:300]
+
+
 def compute_ragas_metrics(
     *,
     question: str,
