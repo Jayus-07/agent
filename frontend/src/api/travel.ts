@@ -455,6 +455,36 @@ export function fetchTravelPlanList(limit = 30): Promise<TravelPlanSummary[]> {
     .then((r) => r.plans ?? [])
 }
 
+/** ── 分类候选表（验收 #10）────────────────────────────────── */
+
+export interface TravelCandidate {
+  poi_id: string;
+  name: string;
+  category: string;
+  rating: number;
+  /** 入选理由（检索来源/知乎提及等），可空 */
+  reason: string;
+  source: string;
+}
+
+export interface TravelCandidatesResponse {
+  conversation_id: string;
+  /** 候选池所属的行程版本（候选随重排失效，旧版本要可见地标注，#102 口径） */
+  plan_version: number;
+  destination: string | null;
+  /** 按大类分组：景点/美食/酒店；空组=无候选数据（前端隐藏 tab，如交通/酒店） */
+  groups: Record<string, TravelCandidate[]>;
+  /** false=候选池不可达（checkpoint 过期/降级），列表为空且 hint 说明原因 */
+  available: boolean;
+  hint: string;
+}
+
+export function fetchTravelCandidates(conversationId: string): Promise<TravelCandidatesResponse> {
+  return request(
+    `/api/travel/candidates?conversation_id=${encodeURIComponent(conversationId)}`,
+  )
+}
+
 /** 某个历史规划的最新版（含完整 itinerary），供点击历史项恢复。 */
 export function fetchTravelPlanLatest(conversationId: string): Promise<TravelPlanLatest> {
   return request(`/api/travel/plans/${encodeURIComponent(conversationId)}/latest`)

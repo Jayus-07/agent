@@ -30,6 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
+import CandidatesPanel from '@/components/travel/CandidatesPanel'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import TravelChatDrawer, { type TravelChatDrawerHandle } from '@/components/travel/TravelChatDrawer'
 import CityGuideDrawer from '@/components/travel/CityGuideDrawer'
@@ -755,6 +756,34 @@ export default function TravelPage() {
                       'tier_switch',
                     )
                   }}
+                  />
+                  {/* 分类候选表（验收 #10）：换入走既有代发草案管线
+                      （decision=canvas_replace 留痕 + canvas_action 代发），
+                      与画布换一家同一条链；生成中置灰防双发。 */}
+                  <CandidatesPanel
+                    conversationId={conversationId}
+                    planVersion={itinerary.plan_version}
+                    generating={loading}
+                    activeDay={activeDay}
+                    onAskReplace={(candidate, targetDay) => {
+                      void recordTravelDecision({
+                        decision: 'canvas_replace',
+                        conversationId,
+                        planVersion: itinerary.plan_version,
+                        payload: {
+                          candidate_name: candidate.name,
+                          candidate_poi_id: candidate.poi_id,
+                          target_day: targetDay,
+                          candidate_reason: candidate.reason,
+                          entry: 'candidates_panel',
+                        },
+                        source: 'canvas_action',
+                      })
+                      chatRef.current?.send(
+                        `把「${candidate.name}」加进第 ${targetDay} 天的行程，替换其中最顺路的一个点，其他安排尽量保持不变`,
+                        'canvas_action',
+                      )
+                    }}
                   />
                 </>
               ) : loading ? (

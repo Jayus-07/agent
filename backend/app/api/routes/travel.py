@@ -802,6 +802,88 @@ def travel_plan_latest(conversation_id: str, request: Request):
     }
 
 
+# 候选池分组顺序（验收 #10）：前端 tab 按此顺序渲染，空组不显示。
+# 酒店/交通当前在 candidates 池无生产者（酒店走 live_search 通道、
+# 交通无候选数据）——分组保留键位，取不到即空组，前端如实隐藏。
+_CANDIDATE_GROUP_ORDER = ("景点", "美食", "酒店")
+
+
+def _group_candidates(raw: list[dict]) -> dict[str, list[dict]]:
+    """把 graph state 的候选池按大类分组（验收 #10 分类候选表）。
+
+    细分类（公园/购物/夜生活）并入「景点」大组；组内 rating 降序、
+    每组截前 12 条（池上限 120，全量下发 payload 过大且列表页用不到）。
+    """
+    buckets: dict[str, list[dict]] = {g: [] for g in _CANDIDATE_GROUP_ORDER}
+    for c in raw or []:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        category = str(c.get("category") or "")
+        group = category if category in buckets else "景点"
+        buckets[group].append({
+            "poi_id": str(c.get("poi_id") or ""),
+            "name": str(c.get("name") or ""),
+            "category": category,
+            "rating": float(c.get("rating") or 0.0),
+            "reason": str(c.get("reason") or ""),
+            "source": str(c.get("source") or ""),
+        })
+    for group in buckets:
+        buckets[group].sort(key=lambda x: (-x["rating"], x["poi_id"]))
+        buckets[group] = buckets[group][:12]
+    return buckets
+
+
+@router.get("/candidates",
+            summary="会话候选池（分类候选表，验收 #10）")
+def travel_candidates(conversation_id: str, request: Request):
+    """左栏分类候选表数据源：最新行程版本关联的候选池，按类别分组。
+
+    数据通路：候选池不在 plan_store 版本账本里，活在域图 checkpoint 的
+    state.candidates —— 经域图单例 get_state 读（thread_id 与规划链路同源：
+    travel:{tenant}:{user}:{conv} 复合 namespace）。checkpoint 不可达
+    （降级 MemorySaver 后重启 / TTL 过期 / disabled）→ ``available=false``
+    + 空分组 + 提示，**不伪造**候选。权限对齐 plans 端点：账本查无此人
+    （不存在/越权）一律 404。
+    """
+    from backend.travel.graph_builder import get_travel_graph
+    from backend.travel.core.plan_service import plan_version_service
+
+    identity = require_identity(request)
+    latest = plan_version_service.latest_version(
+        conversation_id, identity.user_id or "")
+    if not latest:
+        raise HTTPException(status_code=404, detail="无可用行程版本")
+
+    groups: dict[str, list[dict]] = {g: [] for g in _CANDIDATE_GROUP_ORDER}
+    available = False
+    try:
+        # thread_id 与规划链路同源（单一事实源 _build_invoke_config）：
+        # 实测 checkpoint 键是 travel:{tenant}:{user}:{conv} 复合 namespace
+        # （STOP C 跨租户隔离），裸 conversation_id 永远读不到。
+        from backend.orchestration.graph.travel_graph_node import _build_invoke_config
+
+        snap = get_travel_graph().get_state(_build_invoke_config(
+            conversation_id,
+            getattr(identity, "tenant_id", "") or "default",
+            identity.user_id or ""))
+        raw = (getattr(snap, "values", None) or {}).get("candidates") or []
+        if raw:
+            available = True
+            groups = _group_candidates(raw)
+    except Exception:  # noqa: BLE001 — 候选表是增强展示，读不到不阻塞页面
+        logger.debug("[TravelAPI] 候选池读取失败（checkpoint 不可达）",
+                     exc_info=True)
+    return {
+        "conversation_id": conversation_id,
+        "plan_version": latest["plan_version"],
+        "destination": latest.get("destination"),
+        "groups": groups,
+        "available": available,
+        "hint": "" if available else "候选池暂不可用（会话状态已过期或未持久化）",
+    }
+
+
 def _version_http_error(e: Exception) -> HTTPException:
     """service 层异常 → HTTP 语义（404 不泄露 / 409 带当前版本号 / 422 语义非法）。"""
     from backend.travel.core.plan_service import (
