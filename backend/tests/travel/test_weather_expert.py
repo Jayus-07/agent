@@ -253,3 +253,22 @@ def test_mild_day_not_swapped_only_hinted():
     new, actions, _ = ws.plan_weather_swaps(
         itinerary, candidates, ws.bad_weather_dates(forecast))
     assert new is None and actions == []
+
+
+def test_itinerary_centroid_and_district_helpers():
+    """#9b 质心纯函数 + 区县反查软失败口径。"""
+    from backend.travel.services.weather_service import (
+        district_for_point, itinerary_centroid)
+
+    itinerary, _ = _rainy_itinerary()
+    centroid = itinerary_centroid(itinerary)
+    assert centroid is not None  # 单点质心=该点坐标
+    assert district_for_point(-1.0, -1.0) == ""  # 无效坐标→软失败空串（不抛）
+
+
+def test_itinerary_centroid_empty_itinerary():
+    from backend.travel.services.weather_service import itinerary_centroid
+
+    itinerary, _ = _rainy_itinerary()
+    empty = itinerary.model_copy(update={"days": []})
+    assert itinerary_centroid(empty) is None

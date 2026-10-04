@@ -161,6 +161,10 @@ def city_cost_tier(city: str) -> dict[str, float]:
 # 天气专家（2026-09-22 P0-2 接入域图）
 # =============================================
 TRAVEL_WEATHER_ENABLED = os.getenv("TRAVEL_WEATHER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# #9b 区县级天气（2026-10-04，用户拍板「城市太广」）：行程景点质心 → 腾讯
+# 逆地理反查区县 → 和风按区县名查预报；区县解析失败/预报未收录 → 回退
+# 城市级（现行为）。
+TRAVEL_WEATHER_DISTRICT_ENABLED = os.getenv("TRAVEL_WEATHER_DISTRICT_ENABLED", "true").strip().lower() in ("1", "true", "yes")
 # 天气 API 失败/超时的整体预算（秒）：天气检查是增强项，不能拖垮排程主链
 # （Phase 4 按 v4 §9.3 时延预算 6→5s；fallback 链与 stale 兜底已存在）
 TRAVEL_WEATHER_TIMEOUT_S = float(os.getenv("TRAVEL_WEATHER_TIMEOUT_S", "5"))

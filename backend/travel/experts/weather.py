@@ -68,10 +68,24 @@ def weather_expert_node(state: dict) -> dict:
                 "未提供出发日期，已跳过天气检查；提供日期后可重新规划以纳入天气因素"
             ]}
 
+        # #9b 区县级（2026-10-04）：行程质心 → 逆地理区县 → 按区县查预报；
+        # 区县解析失败/预报未收录 → 回退城市级（现行为）。软失败全程。
+        district = ""
+        if T.TRAVEL_WEATHER_DISTRICT_ENABLED:
+            try:
+                from backend.travel.services.weather_service import (
+                    district_for_point, itinerary_centroid)
+
+                centroid = itinerary_centroid(itinerary)
+                if centroid is not None:
+                    district = district_for_point(*centroid)
+            except Exception:  # noqa: BLE001 — 区县锚点失败即城市级
+                district = ""
+        query_dest = district or brief.destination
         forecast, degrade_reason, evidence = run_travel_tool(
             "travel.weather.query",
             "research",
-            lambda: fetch_forecast_evidence(brief.destination),
+            lambda: fetch_forecast_evidence(query_dest),
             result_summary=lambda value: {
                 "data_status": "available" if value[0] else "unavailable",
                 "reason": value[1] or "",
@@ -87,6 +101,27 @@ def weather_expert_node(state: dict) -> dict:
                 ],
             },
         )
+        if not forecast and district:
+            # 区县预报未收录/不可用 → 回退城市级再试一次（如实降级）
+            district = ""
+            forecast, degrade_reason, evidence = run_travel_tool(
+                "travel.weather.query",
+                "research",
+                lambda: fetch_forecast_evidence(brief.destination),
+                result_summary=lambda value: {
+                    "data_status": "available" if value[0] else "unavailable",
+                    "reason": value[1] or "",
+                    "category": "weather",
+                    "preview": [
+                        {
+                            "date": rec.get("date") or "",
+                            "weather": ((rec.get("day") or {}).get("weather") or "").strip(),
+                        }
+                        for rec in ((value[0] or {}).get("days") or [])[:5]
+                        if isinstance(rec, dict)
+                    ],
+                },
+            )
         if not forecast:
             # §44：Provider down 行程仍出单，只披露；降级原因来自
             # Provider 状态分类（timeout/配额/不可用），不再笼统一句话
@@ -126,6 +161,10 @@ def weather_expert_node(state: dict) -> dict:
         mild_note = (
             f"出行期间预报有小雨（{'、'.join(mild_hit)}），建议携带雨具；行程无需调整"
             if mild_hit else "")
+        if district and (mild_note or hit_dates):
+            # 区县级查询如实在提示里留痕（用户知道天气是按哪片查的）
+            scope = f" 天气按景点集中区域 {district} 查询。"
+            mild_note = f"{mild_note}{scope}" if mild_note else scope.strip()
         if not hit_dates:
             # 预报已参与规划判定（无坏天气），证据照记：SOURCE_STALE 据此
             # 判「规划引用的天气数据是否已过期」

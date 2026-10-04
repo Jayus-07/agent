@@ -139,6 +139,36 @@ def fetch_forecast_evidence(destination: str) -> tuple[dict | None, str, dict | 
         return None, "天气服务暂时不可用", None
 
 
+def itinerary_centroid(itinerary) -> tuple[float, float] | None:
+    """行程全部到访景点的质心（#9b 区县级天气的查询锚点；纯函数）。
+
+    单区县口径：多天行程取整体质心——一天一个区县会放大成 N 次逆地理+
+    N 次预报调用，而天气检查是增强项，精度够用即可。
+    """
+    pts = [
+        (i.poi.lat, i.poi.lng)
+        for d in (itinerary.days if itinerary is not None else [])
+        for i in d.items
+        if i.kind == "visit" and i.poi is not None
+    ]
+    if not pts:
+        return None
+    return (sum(lat for lat, _ in pts) / len(pts),
+            sum(lng for _, lng in pts) / len(pts))
+
+
+def district_for_point(lat: float, lng: float) -> str:
+    """坐标 → 区县名（腾讯逆地理，软失败→空串；#9b 区县级天气锚点）。"""
+    try:
+        from backend.infra.lbs import api as lbs_api
+
+        rev = lbs_api.reverse_geocode(lat, lng)
+        return ((rev or {}).get("district") or "").strip()
+    except Exception:  # noqa: BLE001 — 区县解析失败回退城市级
+        logger.debug("[WeatherService] 区县反查失败（回退城市级）", exc_info=True)
+        return ""
+
+
 def fetch_forecast(destination: str) -> tuple[dict | None, str]:
     """查未来几天预报（兼容入口：签名/语义不变——补丁缝与存量消费面）。
 
