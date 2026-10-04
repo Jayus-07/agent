@@ -24,6 +24,17 @@ from datetime import date
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
+from prometheus_client import Counter
+
+# FAQ 层故障计数（G 告警数据源，2026-10-04）：匹配失败仅被
+# knowledge/service.py 捕获后降级 RAG 链（fail-open），此前只有日志——
+# 无指标则监控栈无法表达「FAQ 层错误率激增」。定义在本模块（生产者与
+# 消费方都在 FAQ/客服知识面），app 进程 /metrics 与 worker multiproc
+# 聚合端点均可采集。
+cs_faq_layer_failures_total = Counter(
+    "cs_faq_layer_failures_total",
+    "FAQ 精准匹配层故障降级 RAG 链次数",
+)
 
 # 匹配阈值：score = max(bigram Jaccard, 包含度|A∩B|/|FAQ|)。
 # 中文改写（加"的/呢"、语序调整）会把 Jaccard 压到 0.3 左右，包含度对

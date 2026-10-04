@@ -240,3 +240,29 @@ class TestNoLLMOnFaqHit:
         svc = ks.CSKnowledgeService()
         result = svc.answer("随便什么问题", kb_ids=["cs_faq"], session_id="s1")
         assert result.faq_hit is False and result.answer == "降级答案"
+
+    def test_faq_layer_failure_counts_metric(self, monkeypatch):
+        """G 告警数据源：FAQ 层故障必须落 cs_faq_layer_failures_total（告警规则消费）。"""
+        from backend.customer_service.faq import cs_faq_layer_failures_total
+        from backend.customer_service.knowledge import service as ks
+
+        class FakeStore:
+            def match(self, q):
+                raise RuntimeError("PG 不可用（测试桩）")
+
+        class FakeOutcome:
+            answer = "降级答案"
+            answer_meta = {"confidence": 0.9, "can_answer": True}
+
+        class FakePipeline:
+            def ask_result(self, **kwargs):
+                return FakeOutcome()
+
+        import backend.customer_service.faq as faq_pkg
+        monkeypatch.setattr(faq_pkg, "get_faq_store", lambda: FakeStore())
+        monkeypatch.setattr("backend.rag.pipeline.get_rag_pipeline", lambda: FakePipeline())
+
+        before = cs_faq_layer_failures_total._value.get()
+        svc = ks.CSKnowledgeService()
+        svc.answer("随便什么问题", kb_ids=["cs_faq"], session_id="s1")
+        assert cs_faq_layer_failures_total._value.get() == before + 1

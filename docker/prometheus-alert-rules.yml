@@ -555,3 +555,28 @@ groups:
         annotations:
           summary: "Token 计数退化为 2 字符/token 粗估"
           description: "fallback 策略说明模型名解析失败——检查 llm_models 注册表刷新与 get_request_model_name 链路；粗估会导致预算失真"
+
+  # ── FAQ 双轨承接面（C5/C6，2026-10-04）──────────────────────
+  # 数据源：cs_qa_daily_faq_* 由客服质检日报任务（cs.qa_daily_report，
+  # 每日 06:10 UTC）刷新，滚动 7 天口径；cs_faq_layer_failures_total 为
+  # FAQ 层故障降级 RAG 的实时计数（fail-open，不阻断问答，TTFT 劣化）。
+  - name: agent-platform-cs-faq
+    interval: 30s
+    rules:
+      - alert: CsFaqHitRatioLow
+        expr: max(cs_qa_daily_faq_hit_ratio) < 0.5
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "FAQ 近 7 天承接占比低于 50%"
+          description: "承接占比={{ $value }}。缺口语料需补条目/变体（C6 周检闭环：backend/scripts/cs_faq_gap_review.py）；miss 明细看质检日报 metrics.faq.top_miss 或 ai.cs_faq_query_log"
+
+      - alert: CsFaqLayerFailureSpike
+        expr: increase(cs_faq_layer_failures_total[10m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FAQ 层故障 10 分钟内超过 5 次（自动降级 RAG 链）"
+          description: "FAQ 依赖 agent_memory PG（ai.cs_faq）；故障不阻断问答但承接占比与 TTFT 劣化。排查 PG 连通性与 ai.cs_faq 可用性；app 冷启动后约 1 分钟内依赖未热的偶发降级属已知现象（见客服上线 Runbook）"

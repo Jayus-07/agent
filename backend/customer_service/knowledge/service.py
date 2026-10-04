@@ -69,6 +69,11 @@ class CSKnowledgeService:
             faq = get_faq_store().match(question)
         except Exception as faq_err:
             logger.warning(f"[CSKnowledge] FAQ 层故障（降级走 RAG 链）: {faq_err}")
+            try:
+                from backend.customer_service.faq import cs_faq_layer_failures_total
+                cs_faq_layer_failures_total.inc()
+            except Exception:
+                pass  # 观测旁路失败不影响降级主链
             faq = None
         if faq is not None:
             latency_ms = int((time.monotonic() - faq_t0) * 1000)

@@ -82,3 +82,16 @@ def test_prometheus_recorder_tolerant():
     """指标记录失败不影响报表（容错）。"""
     qr._record_prometheus_safe({"conversations": {}, "satisfaction": {}})
     qr._record_prometheus_safe({})  # 空指标也不炸
+
+
+def test_prometheus_faq_gauges_recorded():
+    """G 告警数据源：FAQ 周聚合必须落 gauge（CsFaqHitRatioLow 消费）。"""
+    qr._record_prometheus_safe({"faq": {"hit_ratio_7d": 0.744, "published": 103}})
+    assert qr.cs_qa_daily_faq_hit_ratio._value.get() == pytest.approx(0.744)
+    assert qr.cs_qa_daily_faq_published._value.get() == 103
+
+
+def test_faq_metrics_block_shape():
+    """metrics['faq'] 缺席/为空时 recorder 不炸（日报早期数据为空属正常）。"""
+    qr._record_prometheus_safe({"faq": {}})
+    qr._record_prometheus_safe({"faq": {"queries_7d": 0, "hit_ratio_7d": None}})

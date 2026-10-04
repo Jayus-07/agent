@@ -21,9 +21,25 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+from prometheus_client import Gauge
 from sqlalchemy import text
 
 from backend.shared.logger import logger
+
+# FAQ 周聚合 gauge（G 告警数据源，2026-10-04）：随日报产出、随 _record_prometheus_safe
+# 刷新，滚动 7 天口径。定义在本模块而非中心 metrics.py——这两个序列的唯一
+# 生产者是质检日报，就地定义避免中心注册表为单一消费方扇出；multiproc 聚合
+# 端点（worker_metrics :9809）读默认 registry，本模块注册同样被采集。
+cs_qa_daily_faq_hit_ratio = Gauge(
+    "cs_qa_daily_faq_hit_ratio",
+    "客服质检日报：FAQ 近 7 天承接占比（命中/总查询）",
+    multiprocess_mode="max",
+)
+cs_qa_daily_faq_published = Gauge(
+    "cs_qa_daily_faq_published",
+    "客服质检日报：FAQ published 条目数",
+    multiprocess_mode="max",
+)
 
 
 def _day_range(report_date: date) -> tuple[datetime, datetime]:
@@ -182,6 +198,46 @@ async def _collect_metrics(report_date: date, tenant_id: str) -> dict[str, Any]:
             "by_type": {r[0]: int(r[1]) for r in rows},
         }
 
+        # ── FAQ 双轨周聚合（C5/G，2026-10-04）──
+        # 滚动 7 天口径与 faq.stats() 一致；top_miss 是缺口闭环（C6）的
+        # 周检输入，随日报产出后无需再手拉 ai.cs_faq_query_log
+        row = (
+            await db.execute(text("""
+                SELECT count(*)                                              AS queries_7d,
+                       count(*) FILTER (WHERE matched)                       AS hits_7d,
+                       coalesce(round(avg(latency_ms) FILTER (WHERE matched)), 0)
+                                                                             AS avg_hit_latency
+                FROM ai.cs_faq_query_log
+                WHERE created_at >= now() - interval '7 days'
+            """))
+        ).mappings().one()
+        miss_rows = (
+            await db.execute(text("""
+                SELECT question, count(*) AS cnt
+                FROM ai.cs_faq_query_log
+                WHERE matched = false
+                  AND created_at >= now() - interval '7 days'
+                GROUP BY question
+                ORDER BY cnt DESC, question
+                LIMIT 10
+            """))
+        ).all()
+        published = (
+            await db.execute(text(
+                "SELECT count(*) FROM ai.cs_faq WHERE status = 'published'"
+            ))
+        ).scalar()
+        queries_7d = int(row["queries_7d"] or 0)
+        hits_7d = int(row["hits_7d"] or 0)
+        metrics["faq"] = {
+            "published": int(published or 0),
+            "queries_7d": queries_7d,
+            "hits_7d": hits_7d,
+            "hit_ratio_7d": round(hits_7d / queries_7d, 4) if queries_7d else None,
+            "avg_hit_latency_ms": int(row["avg_hit_latency"] or 0),
+            "top_miss": [{"question": r[0], "count": int(r[1])} for r in miss_rows],
+        }
+
     return metrics
 
 
@@ -269,6 +325,11 @@ def _record_prometheus_safe(metrics: dict[str, Any]) -> None:
                                    conversations.get("handoff_rate", 0.0))
         satisfaction = metrics.get("satisfaction") or {}
         record_cs_qa_satisfaction(satisfaction.get("avg_rating"))
+        faq = metrics.get("faq") or {}
+        if faq.get("hit_ratio_7d") is not None:
+            cs_qa_daily_faq_hit_ratio.set(float(faq["hit_ratio_7d"]))
+        if faq.get("published") is not None:
+            cs_qa_daily_faq_published.set(max(0, int(faq["published"])))
     except Exception:
         logger.warning("[QAReport] prometheus 记录失败", exc_info=True)
 
