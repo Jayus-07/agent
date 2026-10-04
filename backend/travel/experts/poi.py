@@ -10,6 +10,10 @@ Phase 3 Commit B 起节点经 ResearchAgent/PlanningAgent 调用 service
 """
 from __future__ import annotations
 
+import concurrent.futures
+import contextvars
+from typing import Any, Callable
+
 from backend.shared.logger import logger
 from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
@@ -68,15 +72,60 @@ def poi_expert_node(state: dict) -> dict:
     """POI 专家节点：候选池检索（Research 面）+ 行程骨架（Planning 面）。"""
     def _run(_state: dict) -> dict:
         brief = load_brief(state)
-        candidates, extra_notes = run_travel_tool(
-            "travel.search_poi",
-            "research",
-            lambda: retrieve_candidates(brief),
-            result_summary=lambda value: {
-                "result_count": len(value[0]),
-                "data_status": "available" if value[0] else "empty",
-            },
-        )
+        need_food, need_hotel = _live_queries(
+            state.get("user_message", ""), brief.preferences)
+
+        # ── 第一波检索并发（#8，2026-10-04）─────────────────────
+        # candidates / guides / hotel 三路互不依赖（food 需要候选池质心
+        # 做就近排序，留在 candidates 完成后的第二波单独跑，保住 preview
+        # 排序时序）。ContextVar（SSE sink）经 copy_context 快照传播到
+        # 工作线程——直接 submit 会丢 tool.started/result 事件；
+        # 每路独立降级语义与串行版逐字等价。
+        ctx = contextvars.copy_context()
+        wave1_jobs: dict[str, Callable[[], Any]] = {
+            "candidates": lambda: run_travel_tool(
+                "travel.search_poi",
+                "research",
+                lambda: retrieve_candidates(brief),
+                result_summary=lambda value: {
+                    "result_count": len(value[0]),
+                    "data_status": "available" if value[0] else "empty",
+                },
+            ),
+            "guides": lambda: run_travel_tool(
+                "zhihu_search_tool",
+                "research",
+                lambda: _research.search_guides(brief.destination),
+                result_summary=lambda value: _research.guide_event_summary(value),
+            ),
+        }
+        if need_hotel:
+            wave1_jobs["hotel"] = lambda: run_travel_tool(
+                "map_merchant_search_tool",
+                "research",
+                lambda: _research.search_hotels(brief.destination),
+                result_summary=_merchant_summary("hotel"),
+            )
+        wave1: dict[str, Any] = {}
+        wave1_notes: list[str] = []
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(4, len(wave1_jobs))) as pool:
+            # 每个 job 独立 copy：同一 Context 对象并发 enter 会报
+            # "already entered"（quality_metrics 遥测用例实抓）
+            futs = {name: pool.submit(ctx.copy().run, fn)
+                    for name, fn in wave1_jobs.items()}
+            for name, fut in futs.items():
+                try:
+                    wave1[name] = fut.result()
+                except live_search_service.LiveSearchError as exc:
+                    # 单路失败降级留痕（与串行版同语义：不拖垮其他路）
+                    logger.warning("[TravelPOI] 并发检索 %s 失败: %s", name, exc)
+                    wave1[name] = None
+                    wave1_notes.append(
+                        f"{'酒店' if name == 'hotel' else name}实时检索不可用（{exc}）")
+
+        candidates, extra_notes_c = wave1["candidates"] or ([], [])
+        extra_notes = extra_notes_c + wave1_notes
         # 候选池证据表（Phase 4，v4 §4）：种子=SEED/腾讯补全=LIVE，
         # 纯函数派生自 Poi 字段，随 candidates 一起进 state
         evidences = build_candidate_evidences(candidates)
@@ -89,42 +138,34 @@ def poi_expert_node(state: dict) -> dict:
                 "notes": extra_notes + [f"暂时没有「{brief.destination}」的地点数据"],
             }
 
-        # 知乎攻略检索（2026-10-03 规划自动触发，不依赖触发词）：三主题站内
-        # + 全网各一路，Agent 层单路降级不会上抛；结果一进 SSE 攻略卡，
-        # 二做候选「知乎攻略提及」理由匹配——推荐依据要有出处。
+        # 知乎攻略：结果一进 SSE 攻略卡，二做候选「知乎攻略提及」理由
+        # 匹配——推荐依据要有出处（检索已在上面的波 1 完成）。
         live_search: dict[str, dict] = {}
-        guides = run_travel_tool(
-            "zhihu_search_tool",
-            "research",
-            lambda: _research.search_guides(brief.destination),
-            result_summary=lambda value: _research.guide_event_summary(value),
-        )
-        live_search["guides"] = guides
-        mentions = _research.match_guide_mentions(candidates, guides)
-        if mentions:
-            candidates = [
-                p.model_copy(update={
-                    "reason": f"{p.reason} · {mentions[p.poi_id]}" if p.reason
-                    else mentions[p.poi_id],
-                }) if p.poi_id in mentions else p
-                for p in candidates
-            ]
+        if wave1.get("guides"):
+            live_search["guides"] = wave1["guides"]
+            mentions = _research.match_guide_mentions(candidates, wave1["guides"])
+            if mentions:
+                candidates = [
+                    p.model_copy(update={
+                        "reason": f"{p.reason} · {mentions[p.poi_id]}" if p.reason
+                        else mentions[p.poi_id],
+                    }) if p.poi_id in mentions else p
+                    for p in candidates
+                ]
+        if wave1.get("hotel"):
+            live_search["hotel"] = wave1["hotel"]
 
         skeleton = build_skeleton(brief, candidates)
         # must_go 三态契约（STOP I1）：resolved/unresolved 在此唯一产生，
         # 金标 Q2（must_go_coverage）与下游披露都消费这里的事实
         resolution = resolve_must_go(brief, candidates)
 
-        need_food, need_hotel = _live_queries(
-            state.get("user_message", ""), brief.preferences)
         if need_food:
-            # 商户检索与攻略同级（增强信息）：失败降级为披露，不拖垮规划
-            #（「美食」偏好自动触发后该检索在每次规划都会跑，炸节点等于
-            # 高德一抖行程就没了）。
+            # 第二波：美食检索+就近排序——排序需要骨架质心（波 1 产物），
+            # 故在 candidates 完成后跑。A4 排序在 run_travel_tool **内部**
+            # （lambda 内）——result_summary 的 preview 在工具完成时生成，
+            # 排序放外面会让工具行展示原序（实机 2026-10-04 时序 bug）。
             try:
-                # A4 排序在 run_travel_tool **内部**（lambda 内）——result_summary
-                # 的 preview 在工具完成时生成，排序放外面会让工具行展示原序、
-                # 只有 state 里的候选有序（实机 2026-10-04 抓到的时序 bug）。
                 from backend.travel.services.poi_service import rank_food_merchants
 
                 scheduled_pois = [p for day in skeleton.days for p in day]
