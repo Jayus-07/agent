@@ -7,8 +7,11 @@
     → 回填 backend/evaluation/datasets/rag/gate_calibration.json 的 scores 字段
       （answerable 且 top1<0.35 标 suspicious，需人工核对后再出基线）
   报告：
-    D:/Python/python.exe -m backend.scripts.rag_gate_lab report
+    D:/Python/python.exe -m backend.scripts.rag_gate_lab report [--face vector|rerank]
     → 生产默认阈值基线 + 阈值网格 假拒/漏拒 二维表 + 推荐工作点（只出报告不改阈值）
+  rerank 面录制（本地直调生产 DashScopeReranker，免容器重建；凭据走模型治理 DB）：
+    PGPORT=5433 D:/Python/python.exe -m backend.scripts.rag_gate_lab record-rerank
+    → 回填 cases[].rerank_scores（DashScope relevance_score，0-1 归一）
 """
 
 from __future__ import annotations
@@ -87,22 +90,75 @@ def cmd_record(top_k: int, workers: int) -> int:
     return 0
 
 
-def cmd_report() -> int:
+def cmd_record_rerank(top_k: int, workers: int) -> int:
+    """rerank 面：对向量腿候选本地直调生产 reranker，录 0-1 相关分。
+
+    候选集口径注：/retrieve_docs 为向量腿 top_k（混合检索并集差一截，
+    生产链在 vector+BM25 合并后重排——本面录制为近似，报告须注明）。
+    """
+    from backend.rag.reranker import get_reranker_backend
+
+    ranker = get_reranker_backend()
+    data = json.loads(_DATASET.read_text(encoding="utf-8"))
+    cases = data["cases"]
+    print(f"rerank 面录制 {len(cases)} 条（backend={type(ranker).__name__}, workers={workers}）")
+
+    def work(case: dict) -> None:
+        docs = _retrieve(case["question"], top_k)
+        texts = [d.get("content", "") for d in docs if d.get("content")]
+        if not texts:
+            case["rerank_scores"] = []
+            return
+        ranked = ranker.rank(case["question"], texts, top_k=top_k)
+        case["rerank_scores"] = sorted(
+            (round(float(s), 4) for _, s in ranked), reverse=True)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(work, cases))
+
+    suspicious = [
+        c["id"] for c in cases
+        if c["klass"] == "answerable" and (not c.get("rerank_scores") or c["rerank_scores"][0] < 0.35)
+    ]
+    data["rerank_recorded_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    data["rerank_backend"] = type(ranker).__name__
+    data["suspicious_answerable_rerank"] = suspicious
+    _DATASET.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(json.dumps({
+        "recorded": len(cases),
+        "suspicious_answerable_n": len(suspicious),
+        "suspicious_ids": suspicious[:20],
+    }, ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_report(face: str = "rerank") -> int:
     from backend.rag.evidence_gate import lab
 
     data = json.loads(_DATASET.read_text(encoding="utf-8"))
-    cases = [c for c in data["cases"] if c.get("scores") is not None]
+    score_field = "scores" if face == "vector" else "rerank_scores"
+    cases = [c for c in data["cases"] if c.get(score_field) is not None]
+    for c in cases:
+        c["scores"] = c[score_field]
     if not cases:
-        print("定标集未录制（先跑 record）", file=sys.stderr)
+        print(f"定标集未录制 {face} 面（先跑对应 record）", file=sys.stderr)
         return 2
 
     baseline = lab.current_baseline(cases)
-    # 相似度面网格（录制面=向量相似度；rerank 面待 rag-service 计分端点，挂跟进卡）
-    grid = {
-        "vec_min_score": [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2],
-        "min_top1": [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2],
-        "min_avg": [-0.1, -0.05, 0.0, 0.05, 0.1],
-    }
+    if face == "rerank":
+        # rerank 面（DashScope relevance_score 0-1；生产两道 gate 都消费它）
+        grid = {
+            "vec_min_score": [0.0, 0.05, 0.1, 0.15, 0.2, 0.25],
+            "min_top1": [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5],
+            "min_avg": [0.05, 0.1, 0.15, 0.2, 0.25, 0.3],
+        }
+    else:
+        # 向量相似度面（sim=1-距离）
+        grid = {
+            "vec_min_score": [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2],
+            "min_top1": [-0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2],
+            "min_avg": [-0.1, -0.05, 0.0, 0.05, 0.1],
+        }
     report = lab.run_grid(cases, grid)
     rec = lab.recommend(report)
 
@@ -115,7 +171,7 @@ def cmd_report() -> int:
         "recommend": rec,
         "combos": [c.to_dict() for c in report["combos"]],
     }
-    out_path = _DATASET.parent / "gate_calibration_report.json"
+    out_path = _DATASET.parent / f"gate_calibration_report_{face}.json"
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
 
     summary = {
@@ -137,11 +193,17 @@ def main() -> int:
     p_rec = sub.add_parser("record", help="录制真实检索分数向量")
     p_rec.add_argument("--top-k", type=int, default=8)
     p_rec.add_argument("--workers", type=int, default=6)
-    sub.add_parser("report", help="阈值网格基线报告")
+    p_rr = sub.add_parser("record-rerank", help="rerank 面录制（本地直调生产 reranker）")
+    p_rr.add_argument("--top-k", type=int, default=8)
+    p_rr.add_argument("--workers", type=int, default=6)
+    p_rep = sub.add_parser("report", help="阈值网格基线报告")
+    p_rep.add_argument("--face", choices=["vector", "rerank"], default="rerank")
     args = parser.parse_args()
     if args.cmd == "record":
         return cmd_record(args.top_k, args.workers)
-    return cmd_report()
+    if args.cmd == "record-rerank":
+        return cmd_record_rerank(args.top_k, args.workers)
+    return cmd_report(args.face)
 
 
 if __name__ == "__main__":
