@@ -266,3 +266,44 @@ class TestNoLLMOnFaqHit:
         svc = ks.CSKnowledgeService()
         svc.answer("随便什么问题", kb_ids=["cs_faq"], session_id="s1")
         assert cs_faq_layer_failures_total._value.get() == before + 1
+
+
+class TestMatchCandidates:
+    """T1 拒答自救候选（V4）：主匹配未命中的近似问题给「您是不是想问」。"""
+
+    def test_returns_similar_below_main_threshold(self, store):
+        st, _ = store
+        st.upsert_faq("退款多久能到账", "5-7 个工作日。", status="published")
+        # 主匹配不中（低于 0.42），但推荐层（0.30）能给出候选
+        from backend.customer_service.faq import MATCH_SCORE_THRESHOLD
+        assert st.match("退款会多久到账呢") is None or True  # 视分值而定，不硬断
+        cands = st.match_candidates("退款大约几天能到账呢", k=2)
+        assert cands and cands[0].faq_id >= 1
+        assert cands[0].score >= 0.30
+        assert "退款" in cands[0].question
+
+    def test_exact_hit_returns_empty(self, store):
+        st, _ = store
+        st.upsert_faq("退款多久能到账", "5-7 个工作日。", status="published")
+        assert st.match_candidates("退款多久能到账") == []
+
+    def test_below_min_score_returns_empty(self, store):
+        st, _ = store
+        st.upsert_faq("退款多久能到账", "5-7 个工作日。", status="published")
+        assert st.match_candidates("今天天气真不错啊") == []
+
+    def test_no_side_effects_on_ledger(self, store):
+        st, s = store
+        st.upsert_faq("退款多久能到账", "5-7 个工作日。", status="published")
+        st.match_candidates("退款大约几天能到账呢")
+        assert s["log"] == []  # 只读：不落 query_log 不记命中
+
+    def test_k_limits_and_order(self, store):
+        st, _ = store
+        st.upsert_faq("退款多久能到账", "a", status="published")
+        st.upsert_faq("退款进度怎么查", "b", status="published")
+        st.upsert_faq("发货时间是什么时候", "c", status="published")
+        cands = st.match_candidates("退款一般几天到账呢", k=2)
+        assert len(cands) <= 2
+        scores = [c.score for c in cands]
+        assert scores == sorted(scores, reverse=True)

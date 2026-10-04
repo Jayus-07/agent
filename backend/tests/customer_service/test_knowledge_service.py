@@ -100,7 +100,9 @@ class TestCSKnowledgeService:
         result = svc.answer("未知问题", kb_ids=["cs_faq"])
 
         assert result.decision == Decision.REFUSE
-        assert result.answer == REFUSAL_MESSAGES["no_evidence"]
+        assert result.answer.startswith(REFUSAL_MESSAGES["no_evidence"])
+        assert "换个说法" in result.answer  # 自救阶梯：无候选给换问法引导
+        assert "人工" not in result.answer  # V5：拒答不推人工
 
     @patch("backend.rag.pipeline._get_local_pipeline")
     def test_low_confidence_returns_refuse(self, mock_get):
@@ -113,7 +115,8 @@ class TestCSKnowledgeService:
         result = svc.answer("问题", kb_ids=["cs_faq"])
 
         assert result.decision == Decision.REFUSE
-        assert result.answer == REFUSAL_MESSAGES["low_confidence"]
+        assert result.answer.startswith(REFUSAL_MESSAGES["low_confidence"])
+        assert "换个说法" in result.answer
 
     @patch("backend.rag.pipeline._get_local_pipeline")
     def test_default_kb_ids_when_empty(self, mock_get):
@@ -144,8 +147,15 @@ class TestCSKnowledgeService:
         assert "pipeline down" in result.error
         assert "人工客服" in result.answer
 
+    @patch("backend.customer_service.faq.get_faq_store")
     @patch("backend.rag.pipeline._get_local_pipeline")
-    def test_multiple_kb_ids_propagated(self, mock_get):
+    def test_multiple_kb_ids_propagated(self, mock_get, mock_faq):
+        # C4 FAQ 双轨后本测试必须 mock FAQ 边界：真实库中「退货流程」会被
+        # 「换货流程」(0.5) 近似命中直返，pipeline 断言永远走不到
+        class _NoFaq:
+            def match(self, q):
+                return None
+        mock_faq.return_value = _NoFaq()
         svc, mock_pipeline = self._make_service_with_mock_pipeline(
             "综合回答",
             {"confidence": 0.88, "can_answer": True},
@@ -187,7 +197,7 @@ class TestMetaFallbackB9:
 
         assert result.decision == Decision.REFUSE
         assert result.confidence == 0.0
-        assert "人工" in result.answer
+        assert "人工" not in result.answer  # V5：META 缺失拒答走自救阶梯，不推人工
 
     @patch("backend.rag.pipeline._get_local_pipeline")
     def test_meta_none_entirely_refuses(self, mock_get):
@@ -218,7 +228,9 @@ class TestMetaFallbackB9:
         result = svc.answer("问题", kb_ids=["cs_faq"])
 
         assert result.decision == Decision.REFUSE
-        assert result.answer == REFUSAL_MESSAGES["no_evidence"]
+        assert result.answer.startswith(REFUSAL_MESSAGES["no_evidence"])
+        assert "换个说法" in result.answer  # 自救阶梯：无候选给换问法引导
+        assert "人工" not in result.answer  # V5：拒答不推人工
 
     @patch("backend.rag.pipeline._get_local_pipeline")
     def test_meta_missing_increments_fallback_metric(self, mock_get):
@@ -233,3 +245,39 @@ class TestMetaFallbackB9:
         after = obs_metrics.cs_knowledge_meta_fallback_total._value.get()
 
         assert after == before + 1
+
+
+class TestRefusalLadder:
+    """T2 拒答自救阶梯（V4/V5）：候选/无候选/FAQ 故障三分支。"""
+
+    def _refuse_service(self, mock_get):
+        mock_pipeline = MagicMock()
+        mock_pipeline.ask_result.return_value = MagicMock(
+            answer="", answer_meta={"confidence": 0.3, "can_answer": False})
+        mock_get.return_value = mock_pipeline
+        return CSKnowledgeService()
+
+    @patch("backend.customer_service.faq.get_faq_store")
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_refuse_with_candidates_recommends(self, mock_get, mock_faq):
+        from backend.customer_service.faq import FAQMatch
+
+        class FakeStore:
+            def match_candidates(self, q, k=2, min_score=0.30):
+                return [FAQMatch(87, "退款多久能到账", "5-7 工作日", 0.38, "jaccard")]
+
+        mock_faq.return_value = FakeStore()
+        result = self._refuse_service(mock_get).answer("退款拖了好久都没到", kb_ids=["cs_faq"])
+        assert result.decision == Decision.REFUSE
+        assert "您是不是想问" in result.answer
+        assert "退款多久能到账" in result.answer
+        assert "人工" not in result.answer  # V5：不主动推人工
+
+    @patch("backend.customer_service.faq.get_faq_store")
+    @patch("backend.rag.pipeline._get_local_pipeline")
+    def test_refuse_faq_failure_falls_back_to_guide(self, mock_get, mock_faq):
+        mock_faq.side_effect = RuntimeError("FAQ 层挂了")
+        result = self._refuse_service(mock_get).answer("奇怪的问题xyz", kb_ids=["cs_faq"])
+        assert result.decision == Decision.REFUSE
+        assert "换个说法" in result.answer  # 阶梯旁路降级为引导话术，不炸
+        assert "人工" not in result.answer

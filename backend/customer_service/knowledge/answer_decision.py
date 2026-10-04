@@ -50,9 +50,12 @@ class CSAnswerDecision:
         )
 
 
+# 拒答话术（2026-10-04 对话体验改造 T2）：与寒暄同一人设口吻，不出现
+# 主动转人工引导——人工仅在用户主动或 C8 必转时机（V5）；"已记录"是真实
+# 动作（拒答已落 ai.cs_faq_query_log matched=false，缺口周检闭环消费）。
 REFUSAL_MESSAGES: dict[str, str] = {
-    "no_evidence": "抱歉，我暂时无法找到相关信息。建议联系人工客服获取帮助。",
-    "low_confidence": "抱歉，我不太确定这个问题的答案。建议联系人工客服获取更准确的信息。",
+    "no_evidence": "这个问题我这边暂时没查到确切答案，已经记录下来了。",
+    "low_confidence": "这个问题我没查到足够确切的依据，先不给您不确定的回复，已经记录下来了。",
 }
 
 CAUTIOUS_SUFFIX = "\n\n（以上信息仅供参考，如有疑问建议联系人工客服确认。）"

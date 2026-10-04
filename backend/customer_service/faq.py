@@ -356,6 +356,31 @@ class FAQStore:
             pass  # 台账旁路失败不阻断问答
         return matched
 
+    def match_candidates(self, question: str, k: int = 2,
+                         min_score: float = 0.30) -> list[FAQMatch]:
+        """拒答自救候选（任务卡 V4）：返回 top-k 相似条目，供「您是不是想问」。
+
+        与 match() 同索引同打分、只放低阈值（主匹配 0.42 / 推荐 0.30）；
+        只读——不记台账不记命中（该问题的 miss 已由 match() 落账，推荐
+        本身不算承接）。精确命中时返回空（主匹配就该接住，不走推荐）。
+        """
+        if not question or not question.strip():
+            return []
+        index, entries = self._get_index()
+        if normalize_question(question) in index:
+            return []
+        q_bigrams = _bigrams(question)
+        scored: list[tuple[FAQEntry, float]] = []
+        for entry, e_bigrams in entries:
+            s = match_score(q_bigrams, e_bigrams)
+            if s >= min_score:
+                scored.append((entry, s))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [
+            FAQMatch(e.faq_id, e.question, e.answer, round(s, 4), "jaccard")
+            for e, s in scored[:k]
+        ]
+
 
 _store: FAQStore | None = None
 

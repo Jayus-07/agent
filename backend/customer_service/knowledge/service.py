@@ -148,7 +148,11 @@ class CSKnowledgeService:
             if cs_decision.decision == Decision.CAUTIOUS:
                 final_answer = answer + cs_decision.suffix
             elif cs_decision.decision == Decision.REFUSE:
-                final_answer = cs_decision.suffix
+                # 拒答自救阶梯（V4/V5，2026-10-04 对话体验改造）：不直接推
+                # 人工——先给换问法引导/相似 FAQ 候选，人工仅用户主动或
+                # C8 必转时机（handoff 时机集另有规则面承接）
+                final_answer = _build_refusal_reply(
+                    question, cs_decision.suffix)
 
             return CSKnowledgeResult(
                 answer=final_answer,
@@ -169,6 +173,27 @@ class CSKnowledgeService:
 
 
 _service_instance: CSKnowledgeService | None = None
+
+
+def _build_refusal_reply(question: str, base_text: str) -> str:
+    """拒答自救阶梯（V4，任务卡 T2）：基础话术 + 相似 FAQ 候选或换问法引导。
+
+    零 LLM 零额外 IO（复用 FAQ 进程内索引）；FAQ 层故障不阻断拒答
+    （旁路降级为基础话术）。"已记录"来自 base_text——拒答已由 FAQ 层
+    落 ai.cs_faq_query_log，缺口周检闭环消费。
+    """
+    try:
+        from backend.customer_service.faq import get_faq_store
+        candidates = get_faq_store().match_candidates(question, k=2)
+    except Exception:
+        candidates = []
+    if candidates:
+        listed = "、".join(f"「{c.question}」" for c in candidates)
+        return f"{base_text}您是不是想问：{listed}？换个问法我可能就能帮到您。"
+    return (
+        f"{base_text}您可以换个说法，或补充关键信息（如商品名、订单号）"
+        f"再问我一次。"
+    )
 
 
 def get_knowledge_service() -> CSKnowledgeService:
