@@ -171,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="忽略 checkpoint 断点续跑，强制全量重跑",
     )
     parser.add_argument(
+        "--force", action="store_true",
+        help="C2-2/RUN-02：对已终态 run_id 强制全量重跑（覆盖终态拒绝保护，"
+             "操作落审计）；不带 --resume/--force 对终态 run 重跑会被拒绝（409 语义）",
+    )
+    parser.add_argument(
         "--multiquery", action="store_true",
         help="评测检索链套生产 MultiQuery 层（对齐线上真实链路口径）",
     )
@@ -214,30 +219,40 @@ def main():
     if not live:
         print("⚠️  离线模式（未启用 --live），Planner 将跳过。使用 --live 获取真实评估。")
 
-    report = run_all(
-        module=args.module,
-        live=live,
-        smoke=args.smoke,
-        judge=args.judge,
-        dataset_file=args.dataset,
-        tier=args.tier,
-        ragas=args.ragas,
-        no_ragas=args.no_ragas,
-        ragas_level=args.ragas_level,
-        selection=args.selection,
-        kb_id=args.kb_id,
-        fixture_set=args.fixture_set,
-        dataset_version=args.dataset_version,
-        run_id=args.run_id,
-        semantic_thresholds=semantic_thresholds,
-        regression=args.regression,
-        promote_baseline=args.promote_baseline,
-        workers=args.workers,
-        ragas_workers=args.ragas_workers,
-        resume=not args.no_resume,
-        multiquery=args.multiquery,
-        full_trace=args.full_trace,
-    )
+    try:
+        report = run_all(
+            module=args.module,
+            live=live,
+            smoke=args.smoke,
+            judge=args.judge,
+            dataset_file=args.dataset,
+            tier=args.tier,
+            ragas=args.ragas,
+            no_ragas=args.no_ragas,
+            ragas_level=args.ragas_level,
+            selection=args.selection,
+            kb_id=args.kb_id,
+            fixture_set=args.fixture_set,
+            dataset_version=args.dataset_version,
+            run_id=args.run_id,
+            semantic_thresholds=semantic_thresholds,
+            regression=args.regression,
+            promote_baseline=args.promote_baseline,
+            workers=args.workers,
+            ragas_workers=args.ragas_workers,
+            resume=not args.no_resume,
+            multiquery=args.multiquery,
+            full_trace=args.full_trace,
+            force_rerun=args.force,
+        )
+    except Exception as e:
+        # C2-2：终态 run 隐式重跑 → 409 语义（shell exit 12 供 CI 判别）
+        from backend.evaluation.service import RunAlreadyFinalizedError
+
+        if isinstance(e, RunAlreadyFinalizedError):
+            print(f"❌ {e}")
+            sys.exit(12)
+        raise
 
     print_summary(report)
 

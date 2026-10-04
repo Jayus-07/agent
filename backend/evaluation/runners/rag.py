@@ -51,6 +51,50 @@ _ANSWERS_FILE: Path | None = None
 _DEFAULT_STAGE1_PROBE_K = 5
 
 
+def _collect_ragas_backfill(run_dir: Path, done_results: dict[str, "EvalResult"]) -> dict[str, dict]:
+    """C2-4/RUN-06：从 answers.jsonl 还原「自研完成但 RAGAS 缺失」的样本输入。
+
+    checkpoint 结果无任何 ragas_* 数值键（RAGAS 阶段被杀/未跑到）且
+    answers.jsonl 有对应记录（question/answer/contexts 齐全）时才补跑；
+    已有分值或原始输入缺失（离线无生成答案）的样本不重复计算。
+    """
+    answers_path = run_dir / "answers.jsonl"
+    if not answers_path.exists():
+        return {}
+    try:
+        by_case = {
+            str(item.get("case_id", "")): item
+            for item in read_answers_jsonl(answers_path)
+        }
+    except Exception as e:  # noqa: BLE001 — 补跑是增强，坏文件不阻塞续跑
+        logger.warning("[RAG eval] answers.jsonl 读取失败，跳过 RAGAS 补跑: %s", e)
+        return {}
+
+    backfill: dict[str, dict] = {}
+    for case_id, result in done_results.items():
+        has_ragas_value = any(
+            k.startswith("ragas_") and k != "ragas_reason" and isinstance(v, (int, float))
+            for k, v in (result.metrics or {}).items()
+        )
+        if has_ragas_value:
+            continue
+        entry = by_case.get(case_id)
+        if not entry:
+            continue
+        ragas_input = {
+            "question": entry.get("question", ""),
+            "answer": entry.get("answer", ""),
+            "contexts": entry.get("contexts", []),
+            "ground_truth": entry.get("ground_truth"),
+            "reference_contexts": entry.get("reference_contexts"),
+        }
+        if ragas_input["contexts"] and ragas_input["answer"]:
+            backfill[case_id] = ragas_input
+    if backfill:
+        logger.info("[RAG eval] RAGAS 断点补跑：%d 条样本缺 RAGAS 分值，将补算", len(backfill))
+    return backfill
+
+
 @dataclass(frozen=True)
 class EvalScope:
     """一次 RAG 评测实际使用的 KB、语料范围和检索链开关。"""
@@ -274,14 +318,18 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # 原实现每轮清空 answers.jsonl 且结果只在内存累积，进程挂掉后
     # 100 条全量作废（一轮 30-90 分钟）。现在逐用例追加 checkpoint，
     # 同一 run 目录重跑时跳过已完成用例；--no-resume 强制全量重跑。
-    # 已知限制：挂发生在 RAGAS 批量阶段之前时，续跑的用例不会补跑 RAGAS。
+    # C2-4：RAGAS 阶段被杀的样本由 _collect_ragas_backfill 补跑（下方批量段）。
     checkpoint_file = _ANSWERS_FILE.parent / "results_checkpoint.jsonl"
     resume_enabled = kwargs.get("resume", True)
     done_results: dict[str, EvalResult] = {}
+    ragas_backfill: dict[str, dict] = {}
     if resume_enabled:
         done_results = _load_result_checkpoint(checkpoint_file)
         if done_results:
             logger.info(f"[RAG eval] 断点续跑：checkpoint 命中 {len(done_results)} 条已完成用例，将跳过")
+            ragas_backfill = _collect_ragas_backfill(
+                checkpoint_file.parent, done_results,
+            )
     else:
         _reset_jsonl(checkpoint_file)
         _reset_jsonl(_ANSWERS_FILE)
@@ -711,6 +759,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 if kwargs.get("judge") and _generated_answer and expected_answer:
                     try:
                         from backend.evaluation.judge import judge_answer
+                        from backend.evaluation.run_guards import run_judge
                         _rubric = {
                             "completeness": f"参考答案: {expected_answer}",
                             "faithfulness": "所有数字/事实必须能追溯到检索证据，不得编造",
@@ -719,7 +768,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         }
                         if required_facts:
                             _rubric["completeness"] += f"；必须覆盖的事实: {', '.join(required_facts)}"
-                        _jr = judge_answer(question, _rubric, _generated_answer)
+                        # C5-3/REL-03：judge 调用收敛到显式并发池（默认 2），
+                        # 不随 case workers 无上限放大
+                        _jr = run_judge(
+                            judge_answer, question, _rubric, _generated_answer,
+                        )
                         if _jr.total > 0:  # total=0.0 表示评估失败，不写入（避免污染均值）
                             generation_metrics["judge_total"] = round(_jr.total / 5, 4)
                             for _k, _v in _jr.scores.items():
@@ -1053,6 +1106,12 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                             "version_candidates": _v_candidates,
                             "version_conflicts": _v_conflicts,
                         },
+                        # EVD-02：router 决策证据——RAG 评测直连检索链（不经
+                        # router），诚实标注未捕获及原因，不伪造 tier/domain
+                        "router": {
+                            "captured": False,
+                            "reason": "rag_eval_direct_no_router",
+                        },
                         "trace": {
                             "trace_id": trace.id,
                             "total_spans": len(trace_spans),
@@ -1088,6 +1147,16 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 if results[-1].status != "error":
                     _append_result_checkpoint(checkpoint_file, results[-1])
             except Exception as e:
+                # EVD-08：异常多发生在检索/生成段；judge/ragas 段各自有
+                # try 包裹不会到这里。error_stage 供前端徽标与排查定位。
+                _err_text = str(e)
+                _stage = "retrieval"
+                if "RAGAS" in _err_text or "ragas" in _err_text:
+                    _stage = "ragas"
+                elif "Judge" in _err_text or "judge" in _err_text:
+                    _stage = "judge"
+                elif "ollama" in _err_text.lower() or "generate" in _err_text.lower():
+                    _stage = "generation"
                 result_holder.append(EvalResult(
                     case_id=case.id, module="rag", status="error",
                     expected=case.expected,
@@ -1097,7 +1166,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "fixture_set": scope.fixture_set,
                         "evaluation_scope": scope.as_dict(),
                     },
-                    error_msg=str(e), duration_ms=int((time.time() - t0) * 1000),
+                    error_msg=_err_text, error_stage=_stage,
+                    duration_ms=int((time.time() - t0) * 1000),
                 ))
         return result_holder[0], (deferred_holder[0] if deferred_holder else None)
 
@@ -1105,21 +1175,107 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # 检索器/模型为可复用单例，case 间无共享可变状态；本地 Ollama 生成
     # 仍会在服务端排队，并发收益主要来自检索/打分/云端调用场景
     workers = max(1, int(kwargs.get("workers") or 1))
+    # 五期守卫（C5-1~C5-5）：取消轮询 / 整批 deadline / token 熔断 /
+    # 单条超时，全部默认关或宽松，见 run_guards 模块口径
+    from backend.evaluation import run_guards
+    guard = run_guards.RunGuard(str(kwargs.get("run_id") or ""))
+    case_timeout_s = run_guards.CASE_TIMEOUT_SECONDS
+
+    def _guarded_case(case: TestCase) -> EvalResult:
+        """C5-1：单条 case 超时包装（EVAL_CASE_TIMEOUT_S，0=关）。"""
+        if case_timeout_s <= 0:
+            return _eval_case(case)[0]
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            return executor.submit(lambda: _eval_case(case)[0]).result(
+                timeout=case_timeout_s
+            )
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                "[RAG eval] %s 单条超时（>%ss），记 error（checkpoint 不写，续跑重试）",
+                case.id, case_timeout_s,
+            )
+            return EvalResult(
+                case_id=case.id, module="rag", status="error",
+                expected=case.expected, actual={"question": case.question},
+                error_msg=f"case timeout after {case_timeout_s}s",
+                error_stage="timeout",
+                duration_ms=case_timeout_s * 1000,
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _skip_remaining(pending_cases: list[TestCase], reason: str) -> list[EvalResult]:
+        """守卫触发后剩余样本记 skip（已完结果保留，不覆盖不重跑）。"""
+        return [
+            EvalResult(
+                case_id=c.id, module="rag", status="skip",
+                expected=c.expected, actual={"question": c.question},
+                error_msg=reason, error_stage=reason,
+            )
+            for c in pending_cases
+        ]
+
     pending = [c for c in cases if c.id not in done_results]
     evaluated: dict[str, tuple[EvalResult, dict | None]] = {}
+    stop_reason = ""
     if workers > 1 and pending:
         logger.info(f"[RAG eval] 并发执行 {len(pending)} 条用例 (workers={workers})")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as _pool:
-            _futures = {_pool.submit(_eval_case, c): c for c in pending}
+        _pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        try:
+            _futures: dict[concurrent.futures.Future, TestCase] = {}
+            for c in pending:
+                if stop_reason:
+                    break
+                _futures[_pool.submit(_guarded_case, c)] = c
+            remaining = [c for c in pending if c.id not in _futures and c.id not in evaluated]
             for _fut in concurrent.futures.as_completed(_futures):
                 _c = _futures[_fut]
-                evaluated[_c.id] = _fut.result()
+                try:
+                    evaluated[_c.id] = (_fut.result(), None)
+                except Exception as e:  # noqa: BLE001 — 单条异常不丢批
+                    evaluated[_c.id] = (EvalResult(
+                        case_id=_c.id, module="rag", status="error",
+                        expected=_c.expected, actual={"question": _c.question},
+                        error_msg=str(e), error_stage="aggregate",
+                    ), None)
+                if not stop_reason:
+                    stop_reason = guard.blocking_reason()
+                    if stop_reason:
+                        for f2 in _futures:
+                            f2.cancel()
+                        remaining = [
+                            c for c in pending if c.id not in evaluated
+                        ]
+                        break
+            if stop_reason and remaining:
+                for r in _skip_remaining(remaining, stop_reason):
+                    evaluated[r.case_id] = (r, None)
+        finally:
+            _pool.shutdown(wait=False, cancel_futures=True)
     else:
         for c in pending:
-            evaluated[c.id] = _eval_case(c)
+            if not stop_reason:
+                stop_reason = guard.blocking_reason()
+            if stop_reason:
+                break
+            evaluated[c.id] = (_guarded_case(c), None)
+        if stop_reason:
+            remaining = [c for c in pending if c.id not in evaluated]
+            for r in _skip_remaining(remaining, stop_reason):
+                evaluated[r.case_id] = (r, None)
     for c in cases:
         if c.id in done_results:
             results.append(done_results[c.id])
+            # C2-4/RUN-06：断点补跑——checkpoint 有自研结果但缺 RAGAS 分值
+            # 的样本，从 answers.jsonl 还原输入重新入批量队列（成功样本不重跑）
+            bf_input = ragas_backfill.get(c.id)
+            if bf_input is not None and not kwargs.get("no_ragas", False):
+                _deferred_ragas.append((len(results) - 1, c, {
+                    "no_ragas": False,
+                    "ragas_level": kwargs.get("ragas_level", "standard"),
+                    "ragas_input": bf_input,
+                }, {}))
             continue
         _result, _deferred = evaluated[c.id]
         results.append(_result)
@@ -1135,39 +1291,65 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         _ragas_workers = int(kwargs.get("ragas_workers", 2))
         logger.info(f"[RAGAS] 并行评估 {len(_deferred_ragas)} 个 case（workers={_ragas_workers}）")
         try:
-            from backend.evaluation.evaluators.ragas_provider import RagasEvaluator
-            from backend.evaluation.ragas_bridge import _get_llm, _get_embeddings
-            _get_llm()
-            _get_embeddings()
+            # 守卫（取消/deadline/token 熔断）已触发 → 不再启动 RAGAS 批量，
+            # 避免熔断后继续向 provider 轰炸（COST-10/C5-4）
+            _guard_stop = guard.blocking_reason()
+            if _guard_stop:
+                logger.warning("[RAGAS] 守卫已触发（%s），跳过 RAGAS 批量阶段", _guard_stop)
+                for result_idx, case, _ctx, _d in _deferred_ragas:
+                    if result_idx < len(results):
+                        results[result_idx].metrics["ragas_reason"] = _guard_stop
+                        results[result_idx].error_stage = _guard_stop
+            else:
+                from backend.evaluation.evaluators.ragas_provider import RagasEvaluator
+                from backend.evaluation.ragas_bridge import _get_llm, _get_embeddings
+                _get_llm()
+                _get_embeddings()
+                breaker = guard.provider_breaker
 
-            def _run_ragas(job):
-                result_idx, case, eval_ctx, ragas_metrics_dict = job
-                ragas_eval = RagasEvaluator()
-                if ragas_eval.should_run(case, eval_ctx):
-                    m = ragas_eval.evaluate(case, eval_ctx)
-                    ragas_metrics_dict.update(m)
+                def _run_ragas(job):
+                    result_idx, case, eval_ctx, ragas_metrics_dict = job
+                    # C5-5：熔断冷却期直接跳过（不轰炸 provider），留 reason 可辨
+                    if not breaker.allow():
+                        ragas_metrics_dict["ragas_reason"] = "provider_breaker_open"
+                        return
+                    ragas_eval = RagasEvaluator()
+                    if ragas_eval.should_run(case, eval_ctx):
+                        m = ragas_eval.evaluate(case, eval_ctx)
+                        ragas_metrics_dict.update(m)
+                        got_value = any(
+                            k.startswith("ragas_") and k != "ragas_reason"
+                            and isinstance(v, (int, float))
+                            for k, v in m.items()
+                        )
+                        if got_value:
+                            breaker.record_success()
+                        else:
+                            breaker.record_failure(
+                                run_id=str(kwargs.get("run_id") or ""),
+                            )
 
-            _ragas_pool = concurrent.futures.ThreadPoolExecutor(max_workers=_ragas_workers)
-            try:
-                _ragas_futures = [_ragas_pool.submit(_run_ragas, j) for j in _deferred_ragas]
-                for i, fut in enumerate(concurrent.futures.as_completed(_ragas_futures)):
-                    try:
-                        fut.result()
-                    except Exception as e:
-                        logger.warning(f"[RAGAS] 并行评估失败 ({i}): {e}")
-            finally:
-                _ragas_pool.shutdown(wait=False, cancel_futures=True)
+                _ragas_pool = concurrent.futures.ThreadPoolExecutor(max_workers=_ragas_workers)
+                try:
+                    _ragas_futures = [_ragas_pool.submit(_run_ragas, j) for j in _deferred_ragas]
+                    for i, fut in enumerate(concurrent.futures.as_completed(_ragas_futures)):
+                        try:
+                            fut.result()
+                        except Exception as e:
+                            logger.warning(f"[RAGAS] 并行评估失败 ({i}): {e}")
+                finally:
+                    _ragas_pool.shutdown(wait=False, cancel_futures=True)
 
-            # 更新 results 中的 RAGAS 指标
-            for result_idx, case, eval_ctx, ragas_metrics_dict in _deferred_ragas:
-                if ragas_metrics_dict and result_idx < len(results):
-                    r = results[result_idx]
-                    r.metrics.update(
-                        {k: (v if k == "ragas_reason" else (round(v, 4) if v is not None else None))
-                         for k, v in ragas_metrics_dict.items()}
-                    )
-                    # checkpoint 重新追加（读取时同 case_id 后行覆盖前行）
-                    _append_result_checkpoint(checkpoint_file, r)
+                # 更新 results 中的 RAGAS 指标
+                for result_idx, case, eval_ctx, ragas_metrics_dict in _deferred_ragas:
+                    if ragas_metrics_dict and result_idx < len(results):
+                        r = results[result_idx]
+                        r.metrics.update(
+                            {k: (v if k == "ragas_reason" else (round(v, 4) if v is not None else None))
+                             for k, v in ragas_metrics_dict.items()}
+                        )
+                        # checkpoint 重新追加（读取时同 case_id 后行覆盖前行）
+                        _append_result_checkpoint(checkpoint_file, r)
         except Exception as e:
             logger.error(f"[RAGAS] 批量评估阶段失败（保留已完成用例结果）: {e}", exc_info=True)
 

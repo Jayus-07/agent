@@ -26,6 +26,16 @@ from backend.evaluation.models import (
 from backend.evaluation.registry import get_runner
 
 
+class RunAlreadyFinalizedError(ValueError):
+    """C2-2/RUN-02：对已终态 run 的隐式重跑被拒绝（CLI/API 转 409）。"""
+
+
+def _current_actor() -> str:
+    import os as _os
+
+    return _os.getenv("EVAL_TRIGGERED_BY", "") or "unknown"
+
+
 def _filter_cases_by_tier(
     cases: list[TestCase], tier: str,
 ) -> list[TestCase]:
@@ -320,24 +330,90 @@ class EvaluationService:
 
     def _evaluate(self, config: EvalConfig) -> EvalReport:
         """执行评估主流程。"""
+        import threading
         import time as _time
-        from backend.evaluation.storage import make_run_id, mark_run_status
+        from backend.evaluation.storage import (
+            HEARTBEAT_INTERVAL_SECONDS,
+            is_cancel_requested,
+            make_run_id,
+            mark_run_status,
+            read_run_status,
+            touch_run_heartbeat,
+        )
 
         self._ensure_runners()
         reset_token_usage()
         # 运行一开始就固定 run_id：checkpoint 与最终报告使用同一目录；
         # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
         run_id = config.run_id or make_run_id()
+
+        # C2-2/RUN-02：终态 run 拒绝隐式重跑。显式 resume（同 run_id 断点
+        # 续跑）或 force_rerun（全量重跑）才放行；默认参数撞上终态 run 视为
+        # 调用方失误，抛错由 CLI/API 转 409——防止 completed 结果被静默改写。
+        if config.run_id:
+            existing = read_run_status(config.run_id) or {}
+            if existing.get("status") in ("completed", "failed", "cancelled"):
+                resume_explicit = "resume" in config.model_fields_set and config.resume
+                if config.force_rerun:
+                    from backend.evaluation.audit import record_operation
+
+                    record_operation(
+                        "eval_run.force_rerun", config.run_id,
+                        actor=_current_actor(),
+                        detail=f"previous_status={existing['status']}",
+                    )
+                elif not resume_explicit:
+                    raise RunAlreadyFinalizedError(
+                        f"run {config.run_id} 已终态（{existing['status']}），"
+                        f"拒绝隐式重跑；续跑请显式 --resume，全量重跑请 --force"
+                    )
+
         # token 统计时间窗起点（JSONL 过滤用，防止跨 run 累计污染）
         run_started_ts = _time.time()
-        # RUN-01：运行即登记 running（断点续跑同 run_id 刷新 started_at）；
-        # 进程被杀不会收口终态，由 read_run_status 的 stale 判定兜底（RUN-07/08）
+        # RUN-01：运行即登记 running（断点续跑同 run_id 刷新 started_at，
+        # attempt_no +1——C2-3 失败重试语义显式化）；进程被杀不会收口终态，
+        # 由 read_run_status 的 stale 判定兜底（RUN-07/08）
         mark_run_status(run_id, "running")
+        # C2-5/RUN-08：心跳线程——长跑期间周期性 touch heartbeat_at，
+        # stale 判定从「6h 无进展」细化到「10min 无心跳」；主流程结束
+        # （含异常）先停线程再收口终态，避免心跳复活终态。
+        heartbeat_stop = threading.Event()
+
+        def _heartbeat() -> None:
+            while not heartbeat_stop.wait(HEARTBEAT_INTERVAL_SECONDS):
+                touch_run_heartbeat(run_id)
+
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat, name=f"eval-heartbeat-{run_id}", daemon=True,
+        )
+        heartbeat_thread.start()
         try:
-            return self._evaluate_cases(config, run_id, run_started_ts)
+            report = self._evaluate_cases(config, run_id, run_started_ts)
+            # C2-3：attempt 计数随报告落盘（跨次续跑可审计「跑了几次」）
+            status = read_run_status(run_id) or {}
+            report.metadata["attempt_no"] = int(status.get("attempt_no", 1) or 1)
+            # 五期：守卫配置与实际触发原因随报告落盘（审计与排查依据）
+            from backend.evaluation import run_guards as _guards
+
+            guard_meta = _guards.guard_config_snapshot()
+            guard_meta["stop_reason"] = str(
+                status.get("error", "")
+                or ("cancelled" if is_cancel_requested(run_id) else "")
+            )
+            report.metadata["run_guards"] = guard_meta
+            return report
         except Exception as exc:
             mark_run_status(run_id, "failed", error=str(exc))
             raise
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=2.0)
+            # 等待期间命中取消请求 → 终态补收口为 cancelled（RUN-03）
+            if is_cancel_requested(run_id):
+                from backend.evaluation.storage import read_run_status as _rrs
+
+                if (_rrs(run_id) or {}).get("status") == "running":
+                    mark_run_status(run_id, "cancelled")
 
     def _evaluate_cases(
         self,
@@ -347,8 +423,16 @@ class EvaluationService:
     ) -> EvalReport:
         """执行各模块评估并装配报告（生命周期状态由 _evaluate 管理）。"""
         from backend.evaluation.dataset import load_dataset, load_dataset_file
+        from backend.evaluation.dataset.loader import load_suite_config
 
         live = config.live or config.judge
+
+        # GATE-12：suite 级最低样本量配置（suite JSON 声明优先，缺省全局口径）
+        suite_governance = (
+            load_suite_config("rag", config.selection) if config.selection else {}
+        )
+        min_samples = suite_governance.get("min_samples")
+        min_valid_samples = suite_governance.get("min_valid_samples")
 
         if config.dataset:
             if config.selection:
@@ -370,7 +454,10 @@ class EvaluationService:
                 summaries=summaries,
                 results=list(results),
                 total_score=None,
-                tier_summaries=evaluate_tiers(cases, results),
+                tier_summaries=evaluate_tiers(
+                    cases, results,
+                    min_samples=min_samples, min_valid_samples=min_valid_samples,
+                ),
                 metadata={
                     "evaluation_scope": scope.as_dict(),
                     "dataset_version": dataset_version,
@@ -379,6 +466,7 @@ class EvaluationService:
                     "evaluator_mode": _evaluator_mode(config),
                     "buckets": _build_buckets(cases, results),
                     "ragas_samples": _ragas_sample_stats(results),
+                    "suite_governance": suite_governance,
                 },
             )
             return _attach_provenance(config, report)
@@ -429,6 +517,8 @@ class EvaluationService:
         report_metadata["evaluator_mode"] = _evaluator_mode(config)
         report_metadata["buckets"] = _build_buckets(all_cases, all_results)
         report_metadata["ragas_samples"] = _ragas_sample_stats(all_results)
+        if suite_governance:
+            report_metadata["suite_governance"] = suite_governance
         report = EvalReport(
             module=config.module,
             mode="live" if live else "offline",
@@ -437,7 +527,10 @@ class EvaluationService:
             summaries=summaries,
             results=all_results,
             total_score=total_score,
-            tier_summaries=evaluate_tiers(all_cases, all_results),
+            tier_summaries=evaluate_tiers(
+                all_cases, all_results,
+                min_samples=min_samples, min_valid_samples=min_valid_samples,
+            ),
             metadata=report_metadata,
         )
         return _attach_provenance(config, report)

@@ -81,6 +81,10 @@ class EvalResult(BaseModel):
     metrics: dict[str, float | None] = Field(default_factory=dict)
     duration_ms: int = 0
     error_msg: str | None = None
+    # EVD-08（2026-10-04）：失败阶段结构化枚举，取值
+    # retrieval / generation / judge / ragas / aggregate / timeout / cancelled /
+    # deadline_exceeded / token_limit / provider_breaker；正常完成为 None
+    error_stage: str | None = None
 
 
 class ModuleSummary(BaseModel):
@@ -105,6 +109,15 @@ class TierSummary(BaseModel):
     pass_rate: float = 0.0
     threshold: float = 0.85
     passed_threshold: bool = True
+    # GATE-12/DATA-09（2026-10-04）：最低有效样本量门。
+    # valid = total - errors - skipped；不足时 passed_min_samples=False，
+    # 阈值随 tier_summaries 快照落盘（CON-06 快照语义）。
+    errors: int = 0
+    skipped: int = 0
+    valid_samples: int = 0
+    min_samples: int | None = None
+    passed_min_samples: bool = True
+    gate_reasons: list[str] = Field(default_factory=list)
 
 
 class EvalReport(BaseModel):

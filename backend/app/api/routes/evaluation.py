@@ -12,7 +12,13 @@ from pydantic import BaseModel, Field
 from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.evaluation.curator import append_case, list_cases
 from backend.evaluation.models import ModuleKind
-from backend.evaluation.storage import list_runs, load_report, read_run_status
+from backend.evaluation.storage import (
+    list_runs,
+    load_report,
+    read_run_status,
+    request_cancel,
+    validate_run_id,
+)
 from backend.evaluation.trace_bridge import build_test_case_from_trace
 from backend.evaluation.weekly import run_weekly_rag_eval
 from backend.observability.tracer import trace_collector
@@ -251,3 +257,59 @@ async def get_eval_run(run_id: str):
     except Exception as e:
         logger.error(f"加载评测报告失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class CancelRunResponse(BaseModel):
+    run_id: str
+    cancel_requested: bool
+    run_status: str = ""
+    already_cancelled: bool = False
+    audit_recorded: bool = False
+
+
+@router.post("/runs/{run_id}/cancel", response_model=CancelRunResponse)
+async def cancel_eval_run(
+    run_id: str,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
+    """C2-1/RUN-03：协作式取消评测运行（P0-01：仅管理员）。
+
+    幂等（RUN-04）：重复取消返回相同状态、不产生重复副作用。取消请求
+    落盘后由运行中的 case 循环在检查点轮询生效——已完成的样本保留，
+    剩余样本记 skip(reason=cancelled)，终态 cancelled。
+    """
+    try:
+        validate_run_id(run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    try:
+        request_cancel(run_id, requested_by=_operator.actor)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"取消请求写入失败: {e}") from e
+    status = read_run_status(run_id) or {}
+    # C2-6/REL-09：取消动作落审计；审计失败时显式暴露（验收口径「取消必有痕」）
+    from backend.evaluation.audit import record_operation
+
+    audit_ok = record_operation(
+        "eval_run.cancel", run_id,
+        actor=_operator.actor,
+        detail={"run_status_at_cancel": str(status.get("status", ""))},
+    )
+    return CancelRunResponse(
+        run_id=run_id,
+        cancel_requested=True,
+        run_status=str(status.get("status", "")),
+        already_cancelled=status.get("status") == "cancelled",
+        audit_recorded=audit_ok,
+    )
+
+
+@router.get("/runs/{run_id}/operations")
+async def list_run_operations(
+    run_id: str,
+    _operator: OperatorIdentity = Depends(require_admin_user),
+):
+    """C2-6/REL-09：查看某 run 的操作审计（取消/重跑/熔断）。"""
+    from backend.evaluation.audit import list_operations
+
+    return {"run_id": run_id, "operations": list_operations(run_id)}

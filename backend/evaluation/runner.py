@@ -125,6 +125,7 @@ def run_all(
     resume: bool = True,
     multiquery: bool = False,
     full_trace: bool = False,
+    force_rerun: bool = False,
 ) -> Any:
     """主入口 — 薄包装器，委托给 EvaluationService.evaluate()。
 
@@ -156,5 +157,6 @@ def run_all(
         resume=resume,
         multiquery=multiquery,
         full_trace=full_trace,
+        force_rerun=force_rerun,
     )
     return EvaluationService().evaluate(config)

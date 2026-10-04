@@ -31,6 +31,14 @@ DATA_ROOT = _PROJECT_ROOT / "data" / "eval_runs"
 # （worker 被杀/进程消失不会自动更新文件，靠时间兜底暴露「永远运行中」）。
 _STATUS_FILENAME = "status.json"
 STALE_RUN_AFTER_SECONDS = int(os.getenv("EVAL_RUN_STALE_AFTER_SECONDS", "21600"))  # 默认 6h
+# RUN-08：心跳粒度 stale 判定（runner 心跳线程每 30s touch）。
+# 有 heartbeat_at 的 running run：心跳停止超 N 秒 → stale；无 heartbeat_at
+# 的存量 run 回退 started_at + STALE_RUN_AFTER_SECONDS 兜底（向后兼容）。
+HEARTBEAT_STALE_SECONDS = int(os.getenv("EVAL_RUN_HEARTBEAT_STALE_SECONDS", "600"))
+HEARTBEAT_INTERVAL_SECONDS = float(os.getenv("EVAL_RUN_HEARTBEAT_SECONDS", "30"))
+# C2-1：协作式取消——取消请求是独立文件，不打断正在执行的样本；
+# case 循环在检查点轮询，命中后剩余样本记 skip（reason=cancelled）。
+_CANCEL_FILENAME = "cancel.json"
 
 
 def get_git_sha() -> str:
@@ -166,34 +174,43 @@ def mark_run_status(
     error: str = "",
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """写入 run 生命周期状态文件（running / completed / failed）。
+    """写入 run 生命周期状态文件（running / completed / failed / cancelled）。
 
     running 由 service 在 run 开始时写入（含 started_at/pid/hostname）；
-    终态由 persist_report（completed）或 evaluate 异常路径（failed）收口。
+    终态由 persist_report（completed/cancelled）或 evaluate 异常路径（failed）收口。
     软失败：状态文件写不进去只打日志，不影响评测主流程。
     """
-    if status not in {"running", "completed", "failed"}:
+    if status not in {"running", "completed", "failed", "cancelled"}:
         raise ValueError(f"非法 run 状态: {status!r}")
     try:
         run_dir = DATA_ROOT / validate_run_id(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         path = run_dir / _STATUS_FILENAME
         now = datetime.now().isoformat()
-        data: dict[str, Any] = {}
+        existing: dict[str, Any] = {}
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+        # C2-3：attempt 计数——每次同 run_id 进入 running +1，终态保留，
+        # 失败重试语义显式化（report.metadata.attempt_no 随报告落盘）
         if status == "running":
             data = {
                 "status": status,
                 "started_at": now,
                 "pid": os.getpid(),
                 "hostname": platform.node(),
+                "attempt_no": int(existing.get("attempt_no", 0)) + 1,
             }
         else:
-            started_at = ""
-            try:
-                started_at = json.loads(path.read_text(encoding="utf-8")).get("started_at", "")
-            except (OSError, json.JSONDecodeError):
-                pass
-            data = {"status": status, "started_at": started_at, "finished_at": now}
+            # 终态收口：保留 started_at / attempt_no（跨次续跑累计），
+            # heartbeat_at 是运行期信号，终态不再有意义
+            data = {
+                "status": status,
+                "started_at": existing.get("started_at", ""),
+                "attempt_no": int(existing.get("attempt_no", 1) or 1),
+                "finished_at": now,
+            }
             if error:
                 data["error"] = error[:2000]
         if extra:
@@ -207,9 +224,84 @@ def mark_run_status(
         print(f"[storage] run 状态文件写入失败（不影响评测）: {e}")
 
 
-def read_run_status(run_id: str) -> dict[str, Any] | None:
-    """读取 run 状态文件；running 且超龄的补算 stale 标记（RUN-07/08）。
+def touch_run_heartbeat(run_id: str) -> bool:
+    """C2-5/RUN-08：运行期心跳——只更新 heartbeat_at，不触碰其他字段。
 
+    仅在状态仍为 running 时写入（读到终态即放弃，避免心跳把已收口的
+    终态覆盖回 running）；软失败返回 False。
+    """
+    try:
+        path = DATA_ROOT / validate_run_id(run_id) / _STATUS_FILENAME
+        if not path.exists():
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("status") != "running":
+            return False
+        data["heartbeat_at"] = datetime.now().isoformat()
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+        return True
+    except (OSError, json.JSONDecodeError) as e:
+        logger_debug(f"[storage] 心跳写入失败（不影响评测）: {e}")
+        return False
+
+
+def logger_debug(message: str) -> None:
+    try:
+        from backend.shared.logger import logger
+
+        logger.debug(message)
+    except Exception:
+        pass
+
+
+def request_cancel(run_id: str, requested_by: str = "") -> dict[str, Any]:
+    """C2-1/RUN-03：登记协作式取消请求（写 cancel.json，幂等）。
+
+    重复取消返回相同请求内容、不产生重复副作用（RUN-04）；
+    run 不存在或目录不可写时抛 OSError 由调用方转 4xx。
+    """
+    run_dir = DATA_ROOT / validate_run_id(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / _CANCEL_FILENAME
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass  # 坏文件视为未请求，重写覆盖
+    data = {
+        "requested": True,
+        "requested_at": datetime.now().isoformat(),
+        "requested_by": requested_by,
+    }
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    os.replace(tmp_path, path)
+    return data
+
+
+def is_cancel_requested(run_id: str) -> bool:
+    """轮询取消请求；文件不存在/坏行一律按未取消（评测主流程不被卡死）。"""
+    path = DATA_ROOT / run_id / _CANCEL_FILENAME
+    if not path.exists():
+        return False
+    try:
+        return bool(json.loads(path.read_text(encoding="utf-8")).get("requested"))
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def read_run_status(run_id: str) -> dict[str, Any] | None:
+    """读取 run 状态文件；running 且失联的补算 stale 标记（RUN-07/08）。
+
+    stale 判定两级：有心跳的 run 按 heartbeat_at + HEARTBEAT_STALE_SECONDS
+    （默认 10min）；无心跳字段（存量 run / 心跳线程未运行）回退
+    started_at + STALE_RUN_AFTER_SECONDS（默认 6h）。
     返回 None = 从未写过状态文件（历史 run / 状态文件丢失）。
     """
     path = DATA_ROOT / run_id / _STATUS_FILENAME
@@ -220,13 +312,28 @@ def read_run_status(run_id: str) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     if data.get("status") == "running":
-        try:
-            started = datetime.fromisoformat(str(data.get("started_at", "")))
-            age = (datetime.now() - started).total_seconds()
-        except (TypeError, ValueError):
-            age = -1.0
+        now = datetime.now()
+        heartbeat_at = str(data.get("heartbeat_at") or "")
+        started_at = str(data.get("started_at") or "")
+        age = -1.0
+        if heartbeat_at:
+            try:
+                age = (now - datetime.fromisoformat(heartbeat_at)).total_seconds()
+            except (TypeError, ValueError):
+                age = -1.0
+        stale = bool(age >= 0 and age > HEARTBEAT_STALE_SECONDS)
+        if age < 0:
+            # 心跳缺失/不可解析 → 启动时间兜底（原有口径）
+            try:
+                age = (now - datetime.fromisoformat(started_at)).total_seconds()
+            except (TypeError, ValueError):
+                age = -1.0
+            stale = bool(age >= 0 and age > STALE_RUN_AFTER_SECONDS)
+            data["stale_basis"] = "started_at_fallback" if age >= 0 else "unknown"
+        else:
+            data["stale_basis"] = "heartbeat"
         data["age_seconds"] = int(age) if age >= 0 else None
-        data["stale"] = bool(age >= 0 and age > STALE_RUN_AFTER_SECONDS)
+        data["stale"] = stale
     return data
 
 
@@ -300,8 +407,21 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
     except Exception as e:  # noqa: BLE001 — 台账软失败
         print(f"[storage] eval_run_records 台账写入失败（不影响文件）: {e}")
 
-    # 5. 生命周期终态收口（RUN-01/10）：报告与台账均已落盘，running → completed
-    mark_run_status(run_id, "completed")
+    # 5. 生命周期终态收口（RUN-01/10）：报告与台账均已落盘。
+    #    终态裁决次序（C2-1/C5-2/C5-4）：取消请求命中 → cancelled；
+    #    运行期守卫已标 failed（deadline/token 熔断）→ 保持 failed 不降级；
+    #    否则 completed。
+    if is_cancel_requested(run_id):
+        mark_run_status(run_id, "cancelled")
+    else:
+        current_status = (read_run_status(run_id) or {}).get("status")
+        if current_status == "failed":
+            mark_run_status(
+                run_id, "failed",
+                extra={"error": (read_run_status(run_id) or {}).get("error", "")},
+            )
+        else:
+            mark_run_status(run_id, "completed")
 
     print(f"[storage] 报告已持久化到: {run_dir}")
     return run_dir
