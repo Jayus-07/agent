@@ -1,5 +1,6 @@
 """PromptRepository — async CRUD for prompts / prompt_versions / prompt_audit_log"""
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,13 +134,29 @@ class PromptRepository:
         )
         return list(result.scalars().all())
 
-    async def set_active_version(self, prompt_id: int, version: int) -> None:
-        await self._s.execute(
-            update(Prompt)
-            .where(Prompt.id == prompt_id)
-            .values(active_version=version, updated_at=datetime.now(timezone.utc))
+    # CAS 的「未提供」哨兵：与 expected_current_version=None（期望从未发布）区分
+    _CAS_UNSET = object()
+
+    async def set_active_version(
+        self, prompt_id: int, version: int,
+        *, expected_current_version: Any = _CAS_UNSET,
+    ) -> bool:
+        """更新 active_version；提供 expected_current_version 时按 CAS 语义执行。
+
+        CON-09：WHERE 带上期望的当前版本（IS NOT DISTINCT FROM 同时覆盖
+        NULL=从未发布），并发发布/回滚竞争时后提交方匹配 0 行返回 False，
+        由调用方显式报冲突，杜绝「后写覆盖先写」的丢更新。
+        """
+        stmt = update(Prompt).where(Prompt.id == prompt_id)
+        if expected_current_version is not self._CAS_UNSET:
+            stmt = stmt.where(
+                Prompt.active_version.is_not_distinct_from(expected_current_version)
+            )
+        result = await self._s.execute(
+            stmt.values(active_version=version, updated_at=datetime.now(timezone.utc))
         )
         await self._s.flush()
+        return bool(result.rowcount)
 
     async def upsert_alias(
         self, prompt_id: int, alias: str, version: int, updated_by: str = "system"

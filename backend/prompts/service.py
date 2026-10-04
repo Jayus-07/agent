@@ -47,6 +47,13 @@ _prompt_pin_var: contextvars.ContextVar[dict[str, _SnapshotEntry] | None] = (
 ReloadHook = Callable[[], None]
 
 
+def template_hash(template: str) -> str:
+    """模板内容指纹（sha256 前 16 位，与 gen_prompt_contract_lock 同口径）。"""
+    import hashlib
+
+    return hashlib.sha256((template or "").encode("utf-8")).hexdigest()[:16]
+
+
 class PromptService:
     def __init__(self):
         self._renderer = PromptRenderer()
@@ -402,7 +409,16 @@ class PromptService:
                 raise ValueError(f"Validation failed: {'; '.join(errors)}")
 
             old_version = prompt.active_version
-            await repo.set_active_version(prompt.id, version)
+            # CON-09：CAS 更新——期望值=同事务内刚读到的当前版本；并发发布/
+            # 回滚竞争时后提交方匹配 0 行，显式报冲突而不是静默覆盖
+            updated = await repo.set_active_version(
+                prompt.id, version, expected_current_version=old_version,
+            )
+            if not updated:
+                raise ValueError(
+                    f"发布冲突：{key} 的 active_version 已被并发操作变更为 "
+                    f"{prompt.active_version}（期望 {old_version}），请刷新后重试"
+                )
             # M4：production 指针与 active_version 保持同步（单一事实=active_version，
             # alias 是它的命名视图；切 production=set_alias 的发布路径落到这里）
             await repo.upsert_alias(prompt.id, "production", version, updated_by=actor)
@@ -439,6 +455,21 @@ class PromptService:
 
         self._fire_hooks(key)
         return {"active_version": version, "previous_version": old_version}
+
+    async def get_template_hash(self, key: str, version: int) -> str:
+        """指定版本的模板内容指纹（sha256 前 16 位，与 gen_prompt_contract_lock 同口径）。
+
+        GATE-13/14：Release Gate 在创建/审批/发布三点校验候选模板未被篡改。
+        """
+        async with AsyncSessionLocal() as session:
+            repo = PromptRepository(session)
+            prompt = await repo.get_by_key(key)
+            if not prompt:
+                raise KeyError(f"Prompt not found: {key}")
+            ver = await repo.get_version(prompt.id, version)
+            if not ver:
+                raise KeyError(f"Version {version} not found for {key}")
+            return template_hash(ver.template)
 
     async def rollback(
         self,

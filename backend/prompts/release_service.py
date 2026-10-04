@@ -44,6 +44,12 @@ class PromptReleaseService:
             raise ValueError("executor 只支持 local 或 github")
         provenance = dict(dataset_version)
         provenance.setdefault("suite", suite)
+        # GATE-13/14：创建时记录候选模板内容指纹。release_candidate_hash 的
+        # 起点——审批/发布两点据此校验「审批的内容 == 评测的内容 == 发布的内容」。
+        prompt_service = self._prompt_service or _load_prompt_service()
+        provenance["candidate_template_hash"] = {
+            key: await prompt_service.get_template_hash(key, version),
+        }
         row = await self._repository.create_release(
             release_id=f"rel-{uuid4().hex}",
             prompt_key=key,
@@ -140,7 +146,24 @@ class PromptReleaseService:
         current = await self.get(release_id)
         if current.status != PromptReleaseStatus.PASSED:
             raise PublishGateError("只有 passed 的评测记录才能审批")
-        row = await self._repository.approve(release_id, actor)
+        # GATE-13：审批时重验候选快照——评测通过后模板若被改动，审批必须拒绝，
+        # 杜绝「评的是 A、批的是 B」。存量无指纹的 release 跳过比对（向后兼容），
+        # 但审批哈希照常落库，供发布点校验。
+        provenance = dict(current.dataset_provenance or {})
+        candidate_hashes = provenance.get("candidate_template_hash") or {}
+        recorded = candidate_hashes.get(current.prompt_key, "")
+        current_hash = await (self._prompt_service or _load_prompt_service()) \
+            .get_template_hash(current.prompt_key, current.version)
+        if recorded and recorded != current_hash:
+            raise PublishGateError(
+                "候选版本模板在评测通过后发生了变更（candidate_template_hash 不一致），"
+                "本审批被拒绝；请重新创建发布评测"
+            )
+        row = await self._repository.approve(
+            release_id,
+            actor,
+            provenance_merge={"approved_template_hash": {current.prompt_key: current_hash}},
+        )
         return PromptReleaseRecord.from_row(row)
 
     async def publish(self, release_id: str, actor: str) -> PromptReleaseRecord:
@@ -150,6 +173,20 @@ class PromptReleaseService:
                 f"Prompt release 尚未审批通过，当前状态为 {current.status.value}"
             )
         prompt_service = self._prompt_service or _load_prompt_service()
+        # GATE-14：审批后篡改防线——发布点重验模板指纹必须等于审批时留痕。
+        # release_candidate_hash == approved_snapshot_hash == published_snapshot_hash
+        # 三点一致才允许发布；不一致 = approval 失效，须重新评测审批。
+        approved_hashes = (current.dataset_provenance or {}).get("approved_template_hash") or {}
+        recorded = approved_hashes.get(current.prompt_key, "")
+        if recorded:
+            current_hash = await prompt_service.get_template_hash(
+                current.prompt_key, current.version,
+            )
+            if recorded != current_hash:
+                raise PublishGateError(
+                    "候选版本模板在审批后被修改（approved_template_hash 不一致），"
+                    "原审批已失效；请重新评测并审批后再发布"
+                )
         try:
             # Release Gate 的审批已经绑定了通过的外部评测结果；它是生产发布
             # 的最终门禁，不应再要求候选版本先手工走一遍独立的状态流水线。

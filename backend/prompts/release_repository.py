@@ -132,13 +132,18 @@ class PromptReleaseRepository:
             await session.commit()
             return row
 
-    async def approve(self, release_id: str, actor: str) -> dict[str, Any]:
+    async def approve(
+        self, release_id: str, actor: str,
+        *, provenance_merge: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """审批通过；provenance_merge 并入 dataset_provenance（审批时模板哈希留痕）。"""
         return await self._transition(
             release_id,
             from_status="passed",
             to_status="approved",
             actor_column="approved_by",
             actor=actor,
+            provenance_merge=provenance_merge,
         )
 
     async def mark_published(self, release_id: str, actor: str) -> dict[str, Any]:
@@ -167,26 +172,33 @@ class PromptReleaseRepository:
         to_status: str,
         actor_column: str,
         actor: str,
+        provenance_merge: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if actor_column not in {"approved_by", "published_by", "rollback_by"}:
             raise ValueError(f"非法发布人字段: {actor_column}")
+        merge_sql = ""
+        params = {
+            "release_id": release_id,
+            "from_status": from_status,
+            "to_status": to_status,
+            "actor": actor,
+        }
+        if provenance_merge:
+            # GATE-13/14：审批哈希随状态迁移原子落库（jsonb 合并，保留既有键）
+            merge_sql = ", dataset_provenance = dataset_provenance || CAST(:provenance_merge AS jsonb)"
+            params["provenance_merge"] = _json(provenance_merge)
         async with self._session_factory() as session:
             result = await session.execute(
                 text(
                     f"""
                     UPDATE ai.prompt_release_records
                     SET status = :to_status, {actor_column} = :actor,
-                        updated_at = now()
+                        updated_at = now(){merge_sql}
                     WHERE release_id = :release_id AND status = :from_status
                     RETURNING *
                     """
                 ),
-                {
-                    "release_id": release_id,
-                    "from_status": from_status,
-                    "to_status": to_status,
-                    "actor": actor,
-                },
+                params,
             )
             row = self._row(result)
             await session.commit()

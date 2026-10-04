@@ -77,10 +77,17 @@ class _FakeReleaseRepository:
         )
         return row
 
-    async def approve(self, release_id: str, actor: str) -> dict[str, Any]:
+    async def approve(
+        self, release_id: str, actor: str,
+        *, provenance_merge: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         row = self.records[release_id]
         if row["status"] != PromptReleaseStatus.PASSED.value:
             raise ValueError("release must be passed before approval")
+        if provenance_merge:
+            merged = dict(row.get("dataset_provenance") or {})
+            merged.update(provenance_merge)
+            row["dataset_provenance"] = merged
         row.update(status=PromptReleaseStatus.APPROVED.value, approved_by=actor)
         return row
 
@@ -101,6 +108,13 @@ class _FakePromptService:
     def __init__(self) -> None:
         self.prompts = {"test.prompt": _FakePrompt()}
         self.publish_calls: list[tuple[str, int, str, bool]] = []
+        # GATE-13/14：版本 → 模板哈希（测试通过改写这里的值模拟「审批后篡改」）
+        self.template_hashes: dict[str, dict[int, str]] = {
+            "test.prompt": {1: "hash-v1", 2: "hash-v2"},
+        }
+
+    async def get_template_hash(self, key: str, version: int) -> str:
+        return self.template_hashes[key][version]
 
     async def publish(
         self,
@@ -220,3 +234,51 @@ async def test_rollback_preserves_release_history(
 
     assert rolled_back.status == PromptReleaseStatus.ROLLED_BACK
     assert repo.records[release.release_id]["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_create_release_records_candidate_template_hash(
+    repo: _FakeReleaseRepository,
+    prompt_service: _FakePromptService,
+    release_service: PromptReleaseService,
+) -> None:
+    """GATE-13 前置：创建 release 时必须记录候选模板指纹。"""
+    release = await _create_release(release_service)
+
+    stored = repo.records[release.release_id]["dataset_provenance"]
+    assert stored["candidate_template_hash"] == {"test.prompt": "hash-v2"}
+    assert stored["suite"] == "pr_baseline"
+
+
+@pytest.mark.asyncio
+async def test_approve_rejects_tampered_candidate(
+    prompt_service: _FakePromptService,
+    release_service: PromptReleaseService,
+) -> None:
+    """GATE-13：评测通过后模板被改 → 审批拒绝。"""
+    release = await _create_release(release_service)
+    await release_service.record_result(release.release_id, {"status": "passed"}, "eval")
+    prompt_service.template_hashes["test.prompt"][2] = "hash-tampered"
+
+    with pytest.raises(PublishGateError, match="candidate_template_hash"):
+        await release_service.approve(release.release_id, "admin")
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_tamper_after_approval(
+    repo: _FakeReleaseRepository,
+    prompt_service: _FakePromptService,
+    release_service: PromptReleaseService,
+) -> None:
+    """GATE-14：审批后模板再被改 → 发布拒绝，approval 失效。"""
+    release = await _create_release(release_service)
+    await release_service.record_result(release.release_id, {"status": "passed"}, "eval")
+    await release_service.approve(release.release_id, "admin")
+    assert repo.records[release.release_id]["dataset_provenance"][
+        "approved_template_hash"
+    ] == {"test.prompt": "hash-v2"}
+
+    prompt_service.template_hashes["test.prompt"][2] = "hash-tampered"
+    with pytest.raises(PublishGateError, match="审批"):
+        await release_service.publish(release.release_id, "admin")
+    assert prompt_service.publish_calls == []
