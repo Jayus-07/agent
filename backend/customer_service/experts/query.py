@@ -115,18 +115,21 @@ def _llm_decompose_intents(question: str) -> list[str] | None:
             CS_QUERY_LLM_TIMEOUT_MS,
         )
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm import get_llm
+        from backend.infra.llm import llm  # 代理：限流/韧性/llm_usage 记账
 
         if not CS_QUERY_LLM_DECOMPOSE_ENABLED:
             return None
 
+        # E4b：分解只需意图语义，payload 掩码后不还原
+        from backend.customer_service.pii import mask_pii
+        masked_question, _vault = mask_pii(question)
         prompt = render_prompt(
             "customer_service.query_intent",
-            question=question[:200],
+            question=masked_question[:200],
         )
         # config={"timeout"} 实测不生效（2026-09），须线程级限时
         response = sync_call_with_timeout(
-            get_llm().invoke,
+            llm.invoke,
             CS_QUERY_LLM_TIMEOUT_MS / 1000.0,
             [HumanMessage(content=prompt)],
         )

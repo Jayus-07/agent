@@ -139,6 +139,8 @@ def faq_conn():
         pool.putconn(conn)
 
 
+# E5（2026-10-05）：建表权威 = backend/sql/migrations/076_cs_faq_tables.sql
+# （惰性建表迁移化）；本 DDL 保留为存量环境兜底，语句与迁移逐字一致防漂移。
 _FAQ_DDL = """
 CREATE TABLE IF NOT EXISTS ai.cs_faq (
     id          BIGSERIAL PRIMARY KEY,
@@ -155,7 +157,8 @@ CREATE TABLE IF NOT EXISTS ai.cs_faq (
 )"""
 
 _QUERY_LOG_DDL = """
-CREATE TABLE IF NOT EXISTS ai.cs_faq_query_log (
+CREATE TABLE IF NOT EXISTS ai.cs_faq_query_log (  # 权威=迁移 076
+
     id           BIGSERIAL PRIMARY KEY,
     question     TEXT NOT NULL,
     matched      BOOLEAN NOT NULL,

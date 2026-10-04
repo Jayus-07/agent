@@ -225,6 +225,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 评测中心（2026-10-04）：074=生命周期列/CHECK/审批一致，075=样本表 UNIQUE+RESTRICT。
     "074_eval_run_lifecycle.sql": "memory",
     "075_eval_run_samples.sql": "memory",
+    "076_cs_faq_tables.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

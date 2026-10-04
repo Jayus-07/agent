@@ -118,18 +118,21 @@ class ComplaintService:
 
             from backend.config.customer_service import CS_COMPLAINT_LLM_TIMEOUT_MS
             from backend.infra.async_utils import sync_call_with_timeout
-            from backend.infra.llm import get_llm
+            from backend.infra.llm import llm  # 代理：限流/韧性/llm_usage 记账
 
+            # E4b：评估只需语义与严重度，payload 掩码后不还原
+            from backend.customer_service.pii import mask_pii
+            masked_query, _vault = mask_pii(query)
             prompt = render_prompt(
                 "customer_service.complaint_assess",
-                query=query[:300],
+                query=masked_query[:300],
             )
             # config={"timeout"} 在当前 ChatOpenAI 版本实测不生效（见
             # infra/async_utils docstring，supervisor L3 同款结论），必须线程级
             # 限时——否则规则 0 命中走 LLM 兜底时投诉路径存在无界挂起窗口
             timeout_s = CS_COMPLAINT_LLM_TIMEOUT_MS / 1000.0
             response = sync_call_with_timeout(
-                get_llm().invoke, timeout_s, [HumanMessage(content=prompt)],
+                llm.invoke, timeout_s, [HumanMessage(content=prompt)],
             )
             content = response.content.strip()
             if content.startswith("```"):

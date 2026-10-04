@@ -647,9 +647,13 @@ def _llm_decision(state: dict[str, Any]) -> CSSupervisorDecision | None:
     expert_history = state.get("expert_history", [])
 
     prev_experts = [e.get("expert", "") for e in expert_history]
+    # E4b（2026-10-05）：LLM payload 零明文 PII——决策只需意图语义，
+    # 掩码后不还原（还原会回注明文进回复链）。
+    from backend.customer_service.pii import mask_pii
+    masked_message, _vault = mask_pii(user_message)
     prompt = render_prompt(
         "customer_service.supervisor",
-        user_message=user_message[:200],
+        user_message=masked_message[:200],
         intent=cs_route.get("intent", "unknown"),
         expert_history=str(prev_experts),
     )
@@ -658,9 +662,8 @@ def _llm_decision(state: dict[str, Any]) -> CSSupervisorDecision | None:
         from langchain_core.messages import HumanMessage
 
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm import get_llm
+        from backend.infra.llm import llm  # 代理：限流/韧性/llm_usage 记账
 
-        llm = get_llm()
         t0 = time.monotonic()
         timeout_s = CS_SUPERVISOR_LLM_TIMEOUT_MS / 1000.0
 
