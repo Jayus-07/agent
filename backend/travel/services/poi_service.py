@@ -136,6 +136,8 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
     pois, amap_notes = _merge_amap_candidates(
         brief, queries, pois, observed_at)
     notes.extend(amap_notes)
+    pois, local_notes = _merge_local_doc_candidates(brief, pois)
+    notes.extend(local_notes)
     return pois, notes
 
 
@@ -265,6 +267,66 @@ def _merge_amap_candidates(
                 location_status="verified",
             ))
     return pois, notes
+
+
+def _local_doc_attraction_names(destination: str) -> list[str]:
+    """travel 知识库 active 文档名 → 本地攻略收录的景点名（软失败→空）。
+
+    爬虫文档命名规范「{城市}-{类目}-{名}.md」天然带结构；只取类目=景点
+    且城市与目的地匹配的（城市档/美食档不进候选池）。
+    """
+    try:
+        from backend.rag.indexing.doc_registry_pg import PostgresDocumentRegistry
+
+        docs = PostgresDocumentRegistry().list_by_kb(T.TRAVEL_RAG_KB_ID)
+    except Exception:  # noqa: BLE001 — registry 不可用跳过本地源，不挡检索
+        logger.debug("[PoiService] 本地攻略文档列表读取失败（跳过本地源）",
+                     exc_info=True)
+        return []
+    prefix = f"{(destination or '').strip()}-景点-"
+    names: list[str] = []
+    for d in docs:
+        file_name = str(d.get("file_name") or "")
+        if not file_name.startswith(prefix):
+            continue
+        stem = file_name[len(prefix):]
+        name = re.sub(r"\.md$", "", stem).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _merge_local_doc_candidates(
+    brief: TravelBrief, pois: list[Poi],
+) -> tuple[list[Poi], list[str]]:
+    """A3：本地攻略收录的景点补入候选池（候选池偏少时才启用）。
+
+    为什么设池子阈值：本地源要走腾讯逐名补坐标（每个 ≤3s 预算），池子
+    够大时是纯开销；它真正的价值场景是「词表搜不到的冷门景点」。
+    复用 must_go 的 resolve_missing_places 通道（共享缓存/坐标校验/
+    quota 软预算），补入的 Poi 统一标注「本地攻略收录」。
+    """
+    if not T.TRAVEL_POI_LOCAL_DOC_ENABLED or len(pois) >= T.TRAVEL_POI_LOCAL_DOC_MIN_POOL:
+        return pois, []
+    all_names = _local_doc_attraction_names(brief.destination)
+    if not all_names:
+        return pois, []
+    known = [p.name for p in pois]
+    wanted = [n for n in all_names
+              if not any(names_match(k, n) for k in known)][:T.TRAVEL_POI_LOCAL_DOC_MAX]
+    if not wanted:
+        return pois, []
+
+    from backend.providers.travel.live.tencent import resolve_missing_places
+
+    added, _provider_notes = resolve_missing_places(
+        brief.destination, pois, wanted)
+    if not added:
+        return pois, []
+    tagged = [p.model_copy(update={"reason": "本地攻略收录"}) for p in added]
+    return pois + tagged, [
+        f"本地攻略补入 {len(tagged)} 个地点：{'、'.join(p.name for p in tagged)}"
+    ]
 
 
 def _seed_candidates(brief: TravelBrief) -> list[Poi]:

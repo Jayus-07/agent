@@ -329,3 +329,79 @@ def test_food_rank_category_boost_applied(monkeypatch):
     monkeypatch.setattr(ps.T, "TRAVEL_FOOD_CATEGORY_BOOSTS", {"福建菜": 0.6})
     ranked = ps.rank_food_merchants(food, [_poi("景点", 26.05, 119.30)])
     assert ranked["merchants"][0]["name"] == "闽菜馆"
+
+
+# ── A3 本地攻略源：文档名解析景点 → 补坐标入池（2026-10-04）──────
+
+def test_local_doc_names_parse(monkeypatch):
+    """文档名解析：只取「{目的地}-景点-{名}.md」，城市档/美食档/他城排除。"""
+    class _FakeRegistry:
+        def list_by_kb(self, kb_id):
+            assert kb_id == "travel"
+            return [
+                {"file_name": "福州-景点-于山.md"},
+                {"file_name": "福州-景点-鼓山.md"},
+                {"file_name": "福州-城市-福州市.md"},   # 城市档排除
+                {"file_name": "福州-美食-佛跳墙.md"},   # 美食档排除
+                {"file_name": "厦门-景点-鼓浪屿.md"},   # 他城排除
+                {"file_name": "福州旅游攻略.md"},        # 非规范名排除
+            ]
+
+    import backend.travel.services.poi_service as ps
+    monkeypatch.setattr(
+        "backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry",
+        lambda: _FakeRegistry())
+    names = ps._local_doc_attraction_names("福州")
+    assert names == ["于山", "鼓山"]
+
+
+def test_local_doc_names_registry_failure_soft(monkeypatch):
+    """registry 不可用 → 空列表软失败，不炸检索。"""
+    def boom():
+        raise RuntimeError("pg down")
+    import backend.travel.services.poi_service as ps
+    monkeypatch.setattr(
+        "backend.rag.indexing.doc_registry_pg.PostgresDocumentRegistry", boom)
+    assert ps._local_doc_attraction_names("福州") == []
+
+
+def test_local_doc_merge_enriches_small_pool(monkeypatch):
+    """池子<阈值时本地景点经腾讯补坐标入池，reason=本地攻略收录。"""
+    import backend.travel.services.poi_service as ps
+
+    monkeypatch.setattr(ps.T, "TRAVEL_POI_LOCAL_DOC_ENABLED", True)
+    monkeypatch.setattr(ps.T, "TRAVEL_POI_LOCAL_DOC_MIN_POOL", 15)
+    monkeypatch.setattr(ps, "_local_doc_attraction_names", lambda dest: ["于山", "鼓山"])
+    added = [_poi("于山", 26.08, 119.30)]
+    monkeypatch.setattr(
+        "backend.providers.travel.live.tencent.resolve_missing_places",
+        lambda city, candidates, wanted: (added, ["provider notes"]))
+
+    pois = [_lbs_poi := Poi(poi_id="lbs:1", name="西湖", city="福州",
+                            lat=26.05, lng=119.30)]
+    merged, notes = ps._merge_local_doc_candidates(_brief_local(), pois)
+    assert any(p.name == "于山" and p.reason == "本地攻略收录" for p in merged)
+    assert any("本地攻略补入 1 个地点" in n for n in notes)
+
+
+def test_local_doc_skipped_when_pool_large(monkeypatch):
+    """池子≥阈值：本地源不启用（省逐名补坐标的开销）。"""
+    import backend.travel.services.poi_service as ps
+
+    monkeypatch.setattr(ps.T, "TRAVEL_POI_LOCAL_DOC_ENABLED", True)
+    monkeypatch.setattr(ps.T, "TRAVEL_POI_LOCAL_DOC_MIN_POOL", 3)
+    called = []
+    monkeypatch.setattr(ps, "_local_doc_attraction_names",
+                        lambda dest: called.append(dest) or ["于山"])
+    big_pool = [Poi(poi_id=f"lbs:{i}", name=f"景点{i}", city="福州",
+                    lat=26.0 + i * 0.01, lng=119.0) for i in range(3)]
+    merged, notes = ps._merge_local_doc_candidates(_brief_local(), big_pool)
+    assert called == []
+    assert merged == big_pool and notes == []
+
+
+def _brief_local(**kw):
+    params = {"destination": "福州", "days": 2, "party_size": 2}
+    params.update(kw)
+    from backend.travel.models.brief import TravelBrief
+    return TravelBrief(**params)

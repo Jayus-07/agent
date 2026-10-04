@@ -259,6 +259,12 @@ TRAVEL_POI_FALLBACK_SEED = os.getenv("TRAVEL_POI_FALLBACK_SEED", "false").strip(
 # A1 评分源（2026-10-04）：高德景点类目与腾讯 LBS 并集——rating/营业时间
 # 只有高德回，腾讯坐标兜底；关掉即回退纯腾讯行为（同参结果一致）。
 TRAVEL_POI_AMAP_SOURCE_ENABLED = os.getenv("TRAVEL_POI_AMAP_SOURCE_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# A3 本地攻略源（2026-10-04）：travel 知识库 active 文档名（爬虫命名规范
+# 「城市-景点-名.md」）解析景点名，候选池偏少时经腾讯补坐标入池（标注
+# 「本地攻略收录」）。三个参数：开关 / 单次补全上限 / 启用的池子阈值。
+TRAVEL_POI_LOCAL_DOC_ENABLED = os.getenv("TRAVEL_POI_LOCAL_DOC_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+TRAVEL_POI_LOCAL_DOC_MAX = int(os.getenv("TRAVEL_POI_LOCAL_DOC_MAX", "5"))
+TRAVEL_POI_LOCAL_DOC_MIN_POOL = int(os.getenv("TRAVEL_POI_LOCAL_DOC_MIN_POOL", "15"))
 
 # =============================================
 # 意图预过滤（Router 内，与 CS 预过滤同层）
