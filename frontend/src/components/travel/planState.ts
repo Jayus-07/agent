@@ -17,9 +17,51 @@ export interface PlanState {
   pending: PlanResponse | null
   /** 非行程结果提示（需要补信息 / 规划失败）；**不顶掉**已展示的行程 */
   notice: string
+  /**
+   * 被放弃草案的 plan_version 墓碑（验收 #62）：放弃只清本标签页的
+   * pending，另一标签页仍持旧 state 会把已放弃草案写回（实测复活路径）；
+   * 恢复与预览入口按墓碑过滤，保证 abandoned 不复活。plan_version 随重排
+   * 单调递增不复用，墓碑恒安全。上限 20 防无限增长。
+   */
+  discarded: number[]
 }
 
-export const EMPTY_PLAN_STATE: PlanState = { plan: null, pending: null, notice: '' }
+export const EMPTY_PLAN_STATE: PlanState = { plan: null, pending: null, notice: '', discarded: [] }
+
+const DISCARDED_CAP = 20
+// 墓碑独立键：与 plan-state 分离——多标签页旧 state 写回时会把 state 内的
+// 墓碑一并覆盖（实测），独立键不被旧 state 坍塌，放弃事实跨标签页存续。
+const DISCARDED_KEY = 'travel:discarded-drafts'
+
+function _loadDiscarded(): number[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.sessionStorage.getItem(DISCARDED_KEY)
+    const parsed = raw ? (JSON.parse(raw) as unknown) : []
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is number => typeof v === 'number').slice(-DISCARDED_CAP)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function _recordDiscarded(version: number | undefined): void {
+  if (typeof window === 'undefined' || typeof version !== 'number') return
+  const next = [..._loadDiscarded().filter(v => v !== version), version].slice(-DISCARDED_CAP)
+  try {
+    window.sessionStorage.setItem(DISCARDED_KEY, JSON.stringify(next))
+  } catch {
+    /* 存储失败退化为仅内存墓碑 */
+  }
+}
+
+/** 该草案版本已被用户放弃（墓碑命中）→ 不得再进入预览。 */
+function _isDiscarded(state: PlanState, data: PlanResponse): boolean {
+  const version = data.itinerary?.plan_version
+  return typeof version === 'number'
+    && (state.discarded.includes(version) || _loadDiscarded().includes(version))
+}
 
 export interface PlanFormInput {
   destination: string
@@ -70,21 +112,33 @@ export function applyPlanResponse(prev: PlanState, data: PlanResponse): PlanStat
     const carried = data.final_answer?.trim()
       ? data
       : { ...data, final_answer: prev.plan?.final_answer ?? '' }
-    return { plan: carried, pending: null, notice: '' }
+    return { plan: carried, pending: null, notice: '', discarded: prev.discarded }
   }
   const text = (data.final_answer || data.clarification || '').trim()
-  return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次' }
+  return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次', discarded: prev.discarded }
 }
 
 /** 生成修改草案：主内容继续显示当前行程，直到用户明确点击应用。 */
 export function previewPlanResponse(prev: PlanState, data: PlanResponse): PlanState {
-  if (data.itinerary) return { plan: prev.plan, pending: data, notice: '' }
+  if (data.itinerary) {
+    // 墓碑命中（#62）：被放弃的草案经 SSE 重放/多标签页旧 state 写回时
+    // 不再进入预览——abandoned 不复活
+    if (_isDiscarded(prev, data)) return { ...prev, notice: '' }
+    return { plan: prev.plan, pending: data, notice: '', discarded: prev.discarded }
+  }
   const text = (data.final_answer || data.clarification || '').trim()
-  return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次' }
+  return { plan: prev.plan, pending: prev.pending, notice: text || '这次没能生成行程，换个说法再试一次', discarded: prev.discarded }
 }
 
 export function clearPendingPlan(prev: PlanState): PlanState {
-  return { ...prev, pending: null }
+  const version = prev.pending?.itinerary?.plan_version
+  // 墓碑写独立键（跨标签页存续），state 内副本供同标签页同步判定
+  _recordDiscarded(typeof version === 'number' ? version : undefined)
+  const state: PlanState = { ...prev, pending: null }
+  if (typeof version === 'number' && !state.discarded.includes(version)) {
+    state.discarded = [...state.discarded, version].slice(-DISCARDED_CAP)
+  }
+  return state
 }
 
 /**
@@ -153,10 +207,17 @@ export function readPlanState(): PlanState {
     if (!raw) return EMPTY_PLAN_STATE
     const parsed = JSON.parse(raw) as Partial<PlanState>
     if (!parsed || typeof parsed !== 'object') return EMPTY_PLAN_STATE
+    // 墓碑以独立键为准（state 内副本可能被旧 state 覆盖）
+    const discarded = _loadDiscarded()
+    const pendingVersion = parsed.pending?.itinerary?.plan_version
     return {
       plan: parsed.plan ?? null,
-      pending: parsed.pending ?? null,
+      // 墓碑命中（#62）：另一标签页写回的已放弃草案在恢复时剔除
+      pending: pendingVersion != null && discarded.includes(pendingVersion)
+        ? null
+        : parsed.pending ?? null,
       notice: typeof parsed.notice === 'string' ? parsed.notice : '',
+      discarded,
     }
   } catch {
     return EMPTY_PLAN_STATE

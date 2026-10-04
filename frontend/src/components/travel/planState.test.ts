@@ -73,7 +73,7 @@ describe('composePlanMessage — 表单转域图消息', () => {
 })
 
 describe('applyPlanResponse — 追问/失败不得清掉已展示的行程', () => {
-  const withPlan: PlanState = { plan: { status: 'ready', final_answer: 'ok', itinerary: makeItinerary() } as PlanResponse, pending: null, notice: '' }
+  const withPlan: PlanState = { plan: { status: 'ready', final_answer: 'ok', itinerary: makeItinerary() } as PlanResponse, pending: null, notice: '', discarded: [] }
 
   it('回复带行程 → 整体替换', () => {
     const next = applyPlanResponse(withPlan, {
@@ -167,6 +167,7 @@ describe('会话线程 — 刷新后仍接着改同一份行程', () => {
       plan: { status: 'ready', final_answer: 'ok', itinerary: makeItinerary({ plan_version: 2 }) },
       pending: { status: 'ready', final_answer: 'preview', itinerary: makeItinerary({ plan_version: 3 }) },
       notice: '',
+      discarded: [],
     } as PlanState
     persistPlanState(state)
     expect(readPlanState()).toEqual(state)
@@ -202,5 +203,56 @@ describe('展示小工具', () => {
     expect(sanitized).not.toContain('置信度')
     expect(sanitized).toContain('费用：暂无数据')
     expect(sanitized).toContain('坐标：暂无数据')
+  })
+})
+
+// ── 验收 #62：草案 abandoned 不复活（墓碑） ──────────────────────
+
+function draftResponse(version: number): PlanResponse {
+  return { status: 'ready', final_answer: '草案', itinerary: makeItinerary({ plan_version: version }) } as PlanResponse
+}
+
+describe('clearPendingPlan — 放弃记墓碑（#62）', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('放弃后 pending 清空且版本进墓碑', () => {
+    const withDraft = previewPlanResponse(EMPTY_PLAN_STATE, draftResponse(3))
+    expect(withDraft.pending).not.toBeNull()
+    const discarded = clearPendingPlan(withDraft)
+    expect(discarded.pending).toBeNull()
+    expect(discarded.discarded).toContain(3)
+  })
+
+  it('墓碑命中的草案经预览通道再次推送时不复活（SSE 重放/多标签写回）', () => {
+    const discarded = clearPendingPlan(previewPlanResponse(EMPTY_PLAN_STATE, draftResponse(3)))
+    const revived = previewPlanResponse(discarded, draftResponse(3))
+    expect(revived.pending).toBeNull()
+    // 新版本草案不受墓碑影响
+    const fresh = previewPlanResponse(discarded, draftResponse(4))
+    expect(fresh.pending?.itinerary?.plan_version).toBe(4)
+  })
+
+  it('持久化恢复时墓碑命中的 pending 被剔除（多标签页旧 state 写回场景）', () => {
+    const withDraft = previewPlanResponse(EMPTY_PLAN_STATE, draftResponse(3))
+    persistPlanState(withDraft)
+    // 另一标签页尚不知放弃：旧 state（pending 在、无墓碑）依然可恢复
+    expect(readPlanState().pending).not.toBeNull()
+    // 本标签页放弃（墓碑写独立键）后，旧 state 再怎么写回都过滤
+    const discarded = clearPendingPlan(withDraft)
+    persistPlanState(discarded)
+    sessionStorage.setItem('travel:plan-state', JSON.stringify(withDraft))
+    expect(readPlanState().pending).toBeNull()
+  })
+
+  it('墓碑上限 20，防止无限增长', () => {
+    let state = EMPTY_PLAN_STATE
+    for (let v = 1; v <= 25; v++) {
+      state = clearPendingPlan(previewPlanResponse(state, draftResponse(v)))
+    }
+    expect(state.discarded.length).toBe(20)
+    expect(state.discarded).not.toContain(1)
+    expect(state.discarded).toContain(25)
   })
 })
