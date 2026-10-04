@@ -53,9 +53,10 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
         value = getattr(fresh, field)
         if value:
             setattr(merged, field, value)
-    for field in ("start_date", "days", "budget_cny"):
+    for field in ("start_date", "days", "budget_cny",
+                  "arrival_time", "departure_time"):
         value = getattr(fresh, field)
-        if value is not None:
+        if value is not None and value != "":
             setattr(merged, field, value)
     if fresh.party_size != 1 or previous.party_size == 1:
         if fresh.party_size >= 1:

@@ -397,6 +397,27 @@ def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
             if added:
                 candidates = candidates + added
             extra_notes.extend(must_go_notes)
+
+    # avoid 贯穿收口（验收 #66）：live 关键词检索与本地攻略补入两路此前
+    # 不消费 avoid（种子通道在 search_poi 内过滤），避雷点可能经检索词噪声
+    # 或攻略语料入池 → 骨架排入 → 只能靠 validator warning 事后披露。在
+    # 候选池唯一出口统一过滤（is_excluded 单一语义源，与种子通道同规）；
+    # required 点名保留（kept_required 纪律：点名永不被静默丢弃，冲突由
+    # validator check_preference 披露）。repair 只删不加、重排不引入新点，
+    # 候选池干净即全程贯穿。
+    if brief.avoid:
+        from backend.tools.travel.poi import is_excluded
+
+        before = len(candidates)
+        candidates = [
+            p for p in candidates
+            if p.required or not is_excluded(p, brief.avoid)
+        ]
+        if len(candidates) < before:
+            extra_notes.append(
+                f"已按你的避雷要求（{'、'.join(brief.avoid)}）过滤 "
+                f"{before - len(candidates)} 个候选地点"
+            )
     return candidates, extra_notes
 
 

@@ -31,6 +31,10 @@ TRAVEL_MAX_STEPS = int(os.getenv("TRAVEL_MAX_STEPS", "14"))
 # 校验失败后的局部修复轮数上限（防止 repair ↔ validate 死循环）
 TRAVEL_MAX_REPAIR_ROUNDS = int(os.getenv("TRAVEL_MAX_REPAIR_ROUNDS", "2"))
 
+# 行程天数上限（验收 #72）：30/60 天的超长需求会撑爆候选检索与排程，
+# 且「分段规划」尚未排期 —— 超限按上限裁剪并在 notes 明示（slot_filler 消费）。
+TRAVEL_MAX_DAYS = max(1, int(os.getenv("TRAVEL_MAX_DAYS", "15")))
+
 # 独立子图运行时。
 # **默认值由 TRAVEL_MAX_STEPS 派生，不能各自硬编码**：一个调度回合要花 2 个
 # 图步（supervisor 自己 + 它跳到的那个节点），所以 recursion_limit 必须显著

@@ -248,6 +248,27 @@ def _straight_km(a: tuple[float, float], b: tuple[float, float]) -> float:
     return routing.haversine_km(a[0], a[1], b[0], b[1])
 
 
+def _same_city(hit_city: str, target_city: str) -> bool | None:
+    """POI 真实归属城市与目标城市是否同城（验收 #83）。
+
+    口径：剥「市辖区/城区/市/地区/自治州」等行政后缀后双向包含（「福州市」
+    与「福州」同城）。返回 None = hit 未带归属信息（数据缺失不误杀，放行）；
+    True = 同城；False = 异地。
+    """
+    a = (hit_city or "").strip()
+    b = (target_city or "").strip()
+    if not a or not b:
+        return None
+    for suffix in ("市辖区", "城区", "自治州", "地区", "市"):
+        if a.endswith(suffix) and len(a) > len(suffix):
+            a = a[: -len(suffix)]
+        if b.endswith(suffix) and len(b) > len(suffix):
+            b = b[: -len(suffix)]
+        if not a or not b:
+            return None
+    return a in b or b in a
+
+
 def resolve_place(name: str, city: str, *, required: bool = False) -> Poi | None:
     """把一个地点名解析为 Poi（腾讯 POI 库）。
 
@@ -280,6 +301,16 @@ def resolve_place(name: str, city: str, *, required: bool = False) -> Poi | None
     for hit in hits:
         lat, lng = hit.get("lat"), hit.get("lng")
         if not lat or not lng:
+            continue
+        # 同城校验（验收 #83）：region 检索是偏好限定不是硬过滤，同名异地
+        # POI（「中山公园」全国几十个）可能穿透。hit 自带真实归属（ad_info），
+        # 与目标城市对不上直接丢弃——异地候选不入池（安全半径只挡距离，
+        # 挡不住省界附近的异地同名）。
+        if _same_city(hit.get("city", ""), city) is False:
+            logger.info(
+                "[TravelLiveMap] 解析结果「%s」归属 %s，与目标城市 %s 不符，丢弃",
+                hit["name"], hit.get("city"), city,
+            )
             continue
         if center is not None:
             gap = _straight_km(center, (lat, lng))

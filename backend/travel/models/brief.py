@@ -100,6 +100,11 @@ class TravelBrief(BaseModel):
     origin: str = ""
     start_date: date | None = None
     days: int | None = None
+    # 首末日时间（验收 #82）：「16点到」「10点走」→ HH:MM 字符串，空=未表达。
+    # 排程承接：首日光标起点=到达时间、末日截止=离开时间
+    # （transit_service.schedule_day 消费）；参与指纹（可排时间窗变化=排程变化）。
+    arrival_time: str = ""
+    departure_time: str = ""
     party_size: int = 1
     # 成人/儿童显式拆分（Phase 2，D4 修复）：仅存用户显式表达（「2个大人」
     # 「1个小孩」）；party_size 为派生语义——adults 显式时 = adults +

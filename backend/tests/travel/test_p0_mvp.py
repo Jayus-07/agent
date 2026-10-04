@@ -148,7 +148,8 @@ def test_itinerary_to_ics_basic():
     assert ics.startswith("BEGIN:VCALENDAR")
     assert ics.rstrip().endswith("END:VCALENDAR")
     assert "SUMMARY:三坊七巷" in ics
-    assert "DTSTART:20260922T" in ics
+    # 行为变更（#115）：DTSTART/DTEND 带 TZID 引用，不再是无时区 floating
+    assert "DTSTART;TZID=Asia/Shanghai:20260922T" in ics
     assert "\r\n" in ics  # RFC 5545 行分隔
 
 

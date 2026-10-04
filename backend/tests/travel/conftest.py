@@ -41,6 +41,22 @@ def _disable_zhihu_mcp(monkeypatch: pytest.MonkeyPatch):
     from backend.config import mcp as mcp_config
 
     monkeypatch.setattr(mcp_config, "ZHIHU_MCP_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def _disable_travel_tool_cache(monkeypatch: pytest.MonkeyPatch):
+    """测试期关闭 tool 封套缓存（Redis 是外部边界，与上面两个夹具同口径）。
+
+    背景：cached_envelope 读的是容器共享 Redis（travel_tool_cache），实机
+    验证写入的缓存（TTL 24h）会让单测假红——mock 掉 Tool 之后 _invoke
+    仍先查缓存命中旧封套，实测 2026-10-04 test_live_guides 4 例 DID NOT
+    RAISE / calls[0] IndexError。真实缓存链路由实机验收覆盖，单测一律直调。
+    """
+    from backend.config import travel as travel_config
+
+    monkeypatch.setattr(travel_config, "TRAVEL_TOOL_CACHE_ENABLED", False)
+
+
 from backend.travel.models.itinerary import (
     Itinerary,
     ItineraryDay,

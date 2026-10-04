@@ -243,6 +243,9 @@ def brief_fingerprint(brief: TravelBrief) -> str:
         "destination": brief.destination,
         "days": brief.days,
         "start_date": brief.start_date.isoformat() if brief.start_date else None,
+        # 首末日用时（#82）：空串归一为 None，避免 ""/缺省抖动触发假重排
+        "arrival_time": brief.arrival_time or None,
+        "departure_time": brief.departure_time or None,
         "party_size": brief.party_size,
         "budget_cny": brief.budget_cny,
         "preferences": sorted(brief.preferences),

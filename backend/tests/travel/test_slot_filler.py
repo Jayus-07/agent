@@ -103,7 +103,11 @@ class TestScalarExtraction:
         assert got == date(2027, 3, 1)
 
     def test_start_date_iso(self):
-        assert extract_start_date("2026-10-01 出发") == date(2026, 10, 1)
+        # 行为变更（#71）：ISO 完整过去日期不再返回（拦截），未来日期照常
+        assert extract_start_date(
+            "2026-10-01 出发", today=date(2026, 9, 14)) == date(2026, 10, 1)
+        assert extract_start_date(
+            "2026-10-01 出发", today=date(2026, 10, 2)) is None
 
     def test_no_date_returns_none(self):
         assert extract_start_date("福州玩3天", today=date(2026, 9, 14)) is None

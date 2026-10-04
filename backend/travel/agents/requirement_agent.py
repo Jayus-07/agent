@@ -20,7 +20,7 @@ LLM 结构化补全的扩展位只在本文档说明，**不设代码接口、�
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from backend.tools.travel import poi_seed
 from backend.travel.data import cities as city_directory
@@ -152,6 +152,36 @@ _LODGING_TAIL_STRIP = ("的酒店", "的民宿", "的宾馆", "附近", "一带"
 # 日期：ISO 或「X月X日」
 _RE_DATE_ISO = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
 _RE_DATE_CN = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?")
+# 相对日期（验收 #63）：「明天/后天/大后天」「下周五」「这周末」。
+# 「(周|星期|礼拜)X」允许无前缀（「周五」=最近的未来周五）；「周末」指周六+周日
+# 两天，歧义取周六并回显（slot_filler 消费）。匹配顺序：大后天必须先于后天。
+_RE_REL_DAYS = re.compile(r"(大后天|后天|明天)")
+_RE_REL_WEEKDAY = re.compile(r"(这|本|下)?(?:周|星期|礼拜)([一二三四五六日天])")
+_RE_REL_WEEKEND = re.compile(r"(这|本|下)?周末")
+_WEEKDAY_CN_TO_MON1 = {"一": 1, "二": 2, "三": 3, "四": 4,
+                       "五": 5, "六": 6, "日": 7, "天": 7}
+_REL_DAYS_OFFSET = {"明天": 1, "后天": 2, "大后天": 3}
+
+# 首末日时间（验收 #82）：「16点到」「晚上8点到」「上午走」「10点出发」。
+# 显式时刻优先；「晚上到」「上午走」这类无数字的模糊时段按约定钟点承接
+# （slot_filler 回显，用户可纠正）。模糊时段 → 默认钟点（24h）：
+_PERIOD_DEFAULT = {"早上": "09:00", "上午": "09:00", "中午": "12:00",
+                   "下午": "15:00", "傍晚": "18:00", "晚上": "20:00",
+                   "夜里": "22:00", "半夜": "23:00"}
+_PERIOD_PREFIX = r"(?:早上|上午|中午|下午|傍晚|晚上|夜里|半夜)?"
+# 「点」后允许「半」或两位分钟；「左右/前后」是口语尾缀。
+# 分组契约（消费方 extract_arrival_time/extract_departure_time 依赖顺序）：
+# 1=时段前缀 2=钟点 3=「半」 4=分钟数字 —— 前缀必须是捕获组。
+_TIME_POINT = (r"(早上|上午|中午|下午|傍晚|晚上|夜里|半夜)?\s*"
+               rf"({_CN_COMPOUND})\s*[点时:：]\s*"
+               r"(?:(半)|(\d{1,2})\s*分?)?\s*(?:左右|前后|上下)?")
+_RE_ARRIVAL_EXPLICIT = re.compile(
+    _TIME_POINT + r"\s*(?:才|就)?(?:到|抵达|到达)(?!\s*\d{1,2}\s*[点时:：])")
+_RE_DEPART_EXPLICIT = re.compile(_TIME_POINT + r"\s*(?:就)?(?:走|出发|离开|返程|回程)")
+_RE_ARRIVAL_VAGUE = re.compile(r"(早上|上午|中午|下午|傍晚|晚上|夜里|半夜)\s*(?:才|就)?(?:到|抵达|到达)")
+_RE_DEPART_VAGUE = re.compile(r"(早上|上午|中午|下午|傍晚|晚上|夜里|半夜)\s*(?:就)?(?:走|出发|离开|返程|回程)")
+# 下午/晚上类前缀把 1-11 点修正为 13-23 点（「下午4点」=16:00）；12 点不进位
+_PM_PREFIXES = ("下午", "傍晚", "晚上")
 # 必去 / 避雷 触发词后面的地名（不含标点与空白）。
 # 触发词与地名之间常带「的/是/：」等连接词（"必去的：烟台山"），跳过它们，
 # 否则连接词会被吞进地名（实测产出 "的：烟台山" 这种脏条目直出行程单）。
@@ -564,16 +594,57 @@ def _lodging_city_names() -> set[str]:
             | set(KNOWN_MAJOR_CITIES))
 
 
+def _resolve_relative_date(message: str, today: date) -> date | None:
+    """相对日期词 → 具体日期（验收 #63）。命中不了返回 None。
+
+    「周末」歧义（周六+周日两天）取周六并回显；今天周日时「这周末」的
+    周六已过，取今天（周末的剩余部分）。无前缀或「这/本」前缀的周 X 若
+    已过去则顺延到下周（用户不会指过去的周五）；「下」前缀恒为下周。
+    """
+    match = _RE_REL_DAYS.search(message)
+    if match:
+        return today + timedelta(days=_REL_DAYS_OFFSET[match.group(1)])
+
+    match = _RE_REL_WEEKEND.search(message)
+    if match:
+        this_monday = today - timedelta(days=today.weekday())
+        saturday = this_monday + timedelta(days=5)
+        if match.group(1) == "下":
+            return saturday + timedelta(days=7)
+        return max(saturday, today)
+
+    match = _RE_REL_WEEKDAY.search(message)
+    if match:
+        target = _WEEKDAY_CN_TO_MON1.get(match.group(2))
+        if target is None:
+            return None
+        this_monday = today - timedelta(days=today.weekday())
+        candidate = this_monday + timedelta(days=target - 1)
+        if match.group(1) == "下":
+            candidate += timedelta(days=7)
+        elif candidate < today:
+            candidate += timedelta(days=7)
+        return candidate
+    return None
+
+
 def extract_start_date(message: str, today: date | None = None) -> date | None:
-    """出发日期。只给月日时按「不早于今天」补年份，避免抽到过去的日期。"""
+    """出发日期。
+
+    优先级：明确日期（ISO / 中文月日）> 相对日期词。只给月日时按
+    「不早于今天」补年份；ISO 给全年月日时若早于今天则**不采用**（验收
+    #71：过去日期直接当没说，由 extract_past_date 负责出拦截提示）。
+    """
     today = today or date.today()
 
     match = _RE_DATE_ISO.search(message)
     if match:
         try:
-            return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            candidate = date(int(match.group(1)), int(match.group(2)),
+                             int(match.group(3)))
         except ValueError:
             return None
+        return candidate if candidate >= today else None
 
     match = _RE_DATE_CN.search(message)
     if match:
@@ -585,7 +656,114 @@ def extract_start_date(message: str, today: date | None = None) -> date | None:
                 return None
             if candidate >= today:
                 return candidate
+        return None
+
+    return _resolve_relative_date(message, today)
+
+
+def extract_relative_date_expr(message: str) -> str:
+    """命中的相对日期词原文（供 slot_filler 回显）。
+
+    明确日期（ISO/中文月日）优先级高于相对词——「9月21日周五」按 9月21日
+    解析；此时回显「周五」会误导用户以为按相对词解析，故在源头返回空串。
+    """
+    if _RE_DATE_ISO.search(message) or _RE_DATE_CN.search(message):
+        return ""
+    for pattern in (_RE_REL_DAYS, _RE_REL_WEEKEND, _RE_REL_WEEKDAY):
+        match = pattern.search(message)
+        if match:
+            return match.group(0)
+    return ""
+
+
+def extract_past_date(message: str, today: date | None = None) -> date | None:
+    """消息里的 ISO 完整日期若早于今天则原样返回（验收 #71 的提示依据）。
+
+    extract_start_date 对过去日期返回 None（与「没说」不可区分）；本函数
+    让 slot_filler 能区分「没给日期」与「给了但已过去」，后者必须明示
+    拦截原因。中文月日自动进位明年，不产生过去日期，不进本判定。
+    """
+    today = today or date.today()
+    match = _RE_DATE_ISO.search(message)
+    if not match:
+        return None
+    try:
+        candidate = date(int(match.group(1)), int(match.group(2)),
+                         int(match.group(3)))
+    except ValueError:
+        return None
+    return candidate if candidate < today else None
+
+
+def _normalize_time_point(period: str, hour_token: str, half: str,
+                          minute: str) -> str | None:
+    """时段前缀 + 钟点 + 分 → 归一 "HH:MM"；非法钟点返回 None（不猜）。"""
+    hour = _to_int(hour_token)
+    if hour is None or not 0 <= hour <= 23:
+        return None
+    if period in _PM_PREFIXES and hour < 12:
+        hour += 12
+    minute_value = 30 if half else int(minute or 0)
+    if minute_value > 59:
+        return None
+    return f"{hour:02d}:{minute_value:02d}"
+
+
+def extract_arrival_time(message: str) -> str | None:
+    """到达时刻（验收 #82）：「16点到」「晚上8点到」「晚上到」→ "HH:MM"。
+
+    显式钟点优先（含时段进位）；无数字的模糊时段按 _PERIOD_DEFAULT 约定
+    钟点承接。都不命中返回 None（用户没说 ≠ 任何默认值）。
+    """
+    match = _RE_ARRIVAL_EXPLICIT.search(message)
+    if match:
+        return _normalize_time_point(match.group(1) or "", match.group(2),
+                                     match.group(3), match.group(4))
+    match = _RE_ARRIVAL_VAGUE.search(message)
+    if match:
+        return _PERIOD_DEFAULT[match.group(1)]
     return None
+
+
+def extract_departure_time(message: str) -> str | None:
+    """离开时刻（验收 #82）：「10点走」「上午走」→ "HH:MM"。语义同到达。"""
+    match = _RE_DEPART_EXPLICIT.search(message)
+    if match:
+        return _normalize_time_point(match.group(1) or "", match.group(2),
+                                     match.group(3), match.group(4))
+    match = _RE_DEPART_VAGUE.search(message)
+    if match:
+        return _PERIOD_DEFAULT[match.group(1)]
+    return None
+
+
+def detect_multi_city(message: str) -> list[str]:
+    """多目的地检测（验收 #73）：返回主目的地之外的城市（消息出现序）。
+
+    出局规则与 extract_destination 的消歧一致：否定/放弃语境的城市、
+    「从A出发去B / A到B」路线对的出发地、「从A出发」无目的地的出发地。
+    剩余 ≥2 个不同城市 = 多目的地诉求，第一个是主目的地，其余进返回值
+    供 slot_filler 明示「当前支持单城市规划」。
+    """
+    text = message or ""
+    if not text:
+        return []
+    route = _extract_route_city_pair(text)
+    route_origin = route[0] if route else ""
+    kept: list[str] = []
+    for pos, city in _iter_city_hits(text):
+        if city in kept:
+            continue
+        if city == route_origin:
+            continue
+        prefix = text[max(0, pos - 4):pos]
+        if _RE_CITY_NEGATION.search(prefix):
+            continue
+        if re.search(rf"(?:从|由)\s*{_city_name_pattern(city)}\s*(?:出发|启程)",
+                     text, re.IGNORECASE):
+            continue
+        kept.append(city)
+    return kept[1:]
 
 
 def extract_preferences(message: str) -> list[str]:
@@ -751,6 +929,8 @@ def extract_fresh_brief(
         party_size=1,
         budget_cny=extract_budget(message),
         start_date=extract_start_date(message),
+        arrival_time=extract_arrival_time(message) or "",
+        departure_time=extract_departure_time(message) or "",
         preferences=extract_preferences(message),
         pace=extract_pace(message) or "moderate",
         tier=extract_tier(message) or "economy",
@@ -848,22 +1028,27 @@ class RequirementAgent:
 __all__ = [
     "RequirementAgent",
     "build_clarification",
+    "detect_multi_city",
     "extract_adults_children",
+    "extract_arrival_time",
     "extract_avoid",
     "extract_budget",
     "extract_date_range_days",
     "extract_days",
     "extract_days_range",
+    "extract_departure_time",
     "extract_destination",
     "extract_diet",
     "extract_fresh_brief",
     "extract_lodging",
     "extract_must_go",
     "extract_party_size",
+    "extract_past_date",
     "extract_pace",
     "extract_tier",
     "extract_preferences",
     "extract_start_date",
     "extract_unsupported_city",
+    "extract_relative_date_expr",
     "party_size_source",
 ]

@@ -91,13 +91,30 @@ def schedule_day(
         day_index: 第几天（1-based）
         day_date: 具体日期（可为 None —— 此时无法校验闭馆日，只做提示）
         brief: 需求契约（取人数用于费用）
+
+    首末日时间承接（验收 #82）：brief.arrival_time（「16点到」）把**首日**
+    光标起点推迟到到达时刻；brief.departure_time（「10点走」）把**末日**
+    截止提前到离开时刻。均为空时维持 08:30 起步 / 23:59 截止的默认窗口。
     """
     day = ItineraryDay(day_index=day_index, day_date=day_date)
-    ordered = order_pois(pois)
+    day_start_min = to_min(T.TRAVEL_DAY_START, 8 * 60 + 30)
+    cursor = day_start_min
+    if day_index == 1 and brief.arrival_time:
+        arrival_min = to_min(brief.arrival_time, day_start_min)
+        # 早于默认起点不提前（刚到达还有安顿开销），只推迟
+        cursor = max(cursor, arrival_min)
+    day_end_min = MINUTES_PER_DAY - 1
+    is_last_day = day_index >= max(1, brief.resolved_days())
+    if is_last_day and brief.departure_time:
+        departure_min = to_min(brief.departure_time, day_end_min)
+        day_end_min = min(day_end_min, departure_min)
+    ordered = order_pois(pois, day_start_min=cursor)
 
-    cursor = to_min(T.TRAVEL_DAY_START, 8 * 60 + 30)
     lunch_start = to_min(T.TRAVEL_LUNCH_WINDOW[0], 12 * 60)
     lunch_minutes = max(30, to_min(T.TRAVEL_LUNCH_WINDOW[1], 13 * 60) - lunch_start)
+    # 午餐补插截止（#82）：到达晚于午后（15:00 后）不再补插「午餐」——
+    # 16:00 到达补一顿午餐是假排程；晚间用餐由美食推荐卡承接，不进时间轴。
+    lunch_latest = 15 * 60
     lunch_done = False
 
     prev_item: ItineraryItem | None = None
@@ -112,7 +129,7 @@ def schedule_day(
         prev_item = item  # 用餐不改变所在位置，prev_coord 保持
 
     for poi in ordered:
-        if not lunch_done and cursor >= lunch_start:
+        if not lunch_done and lunch_start <= cursor < lunch_latest:
             _place_lunch()
 
         open_min = to_min(poi.open_time, 0)
@@ -128,9 +145,13 @@ def schedule_day(
                 "该点固定闭馆日：" + "、".join(poi.closed_weekday_names())
                 + "（未提供出发日期，请按实际日期核对）"
             )
-        if end > MINUTES_PER_DAY - 1:
-            end = MINUTES_PER_DAY - 1
-            notes.append("当日可用时间不足，需另作安排")
+        if end > day_end_min:
+            end = day_end_min
+            if is_last_day and brief.departure_time and day_end_min < MINUTES_PER_DAY - 1:
+                notes.append(
+                    f"你 {brief.departure_time} 离开，时间不足，需另作安排")
+            else:
+                notes.append("当日可用时间不足，需另作安排")
 
         if prev_coord is not None:
             # 透传出行日期：providers/travel 据此执行「远期出行日期强制本地
@@ -153,7 +174,8 @@ def schedule_day(
         prev_item = item
         prev_coord = (poi.lat, poi.lng)
 
-    if not lunch_done and day.items and cursor >= lunch_start:
+    if (not lunch_done and day.items
+            and lunch_start <= cursor < lunch_latest):
         _place_lunch()
 
     # 有效活动时长只计到访项：用餐是必需开销不是游玩强度，通勤由地理轴

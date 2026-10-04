@@ -24,6 +24,7 @@ from backend.travel.agents.requirement_agent import (
     RequirementAgent,
     _RE_DATE_ISO,
     build_clarification,
+    detect_multi_city,
     extract_avoid,
     extract_budget,
     extract_date_range_days,
@@ -36,8 +37,10 @@ from backend.travel.agents.requirement_agent import (
     extract_must_go,
     extract_origin,
     extract_party_size,
+    extract_past_date,
     extract_pace,
     extract_preferences,
+    extract_relative_date_expr,
     extract_start_date,
     extract_unsupported_city,
     party_size_source,
@@ -171,6 +174,15 @@ def slot_filler_node(state: dict) -> dict:
     if explicit_tier:
         brief.tier = explicit_tier
 
+    # 天数上限（验收 #72）：超长需求（30/60 天）按上限裁剪，明示不静默。
+    # 放 merge 之后统一判——上一轮遗留的超限天数同样被兜住。
+    days_clamped = False
+    if brief.days and brief.days > T.TRAVEL_MAX_DAYS:
+        logger.info("[TravelSlotFiller] 天数 %s 超上限，裁剪为 %s",
+                    brief.days, T.TRAVEL_MAX_DAYS)
+        brief.days = T.TRAVEL_MAX_DAYS
+        days_clamped = True
+
     # P1-1 偏好持久化（软失败，读写失败都不影响规划主链）：
     #   预填 —— 跨轮首轮（无上一轮 brief）且开启了偏好功能时，把历史偏好
     #   填进本轮没表达的槽位；发生在指纹计算之前，同轮内一次性完成。
@@ -281,6 +293,49 @@ def slot_filler_node(state: dict) -> dict:
         notes.append(
             f"人数按 {brief.party_size} 人估算（根据你提到的同伴）；"
             "如不对，直接说「X个人」"
+        )
+    # 相对日期回显（验收 #63）：「下周五」这类说法已换算成具体日期，
+    # 让用户看得见换算结果、可纠正（「周末」歧义取周六也在此回显）。
+    rel_expr = extract_relative_date_expr(message)
+    if rel_expr and brief.start_date:
+        weekday_cn = "一二三四五六日"[brief.start_date.weekday()]
+        notes.append(
+            f"出发日期按你说的「{rel_expr}」解析为 "
+            f"{brief.start_date.strftime('%m月%d日')}（周{weekday_cn}）；"
+            "想改直接说具体日期（如「10月20日出发」）"
+        )
+    # 过去日期拦截（验收 #71）：完整日期早于今天时不采用，明示原因
+    past_date = extract_past_date(message)
+    if past_date is not None and not brief.start_date:
+        notes.append(
+            f"你说的出发日期「{past_date.isoformat()}」已过去，本次未采用；"
+            "请说一个未来的日期（如「10月20日出发」）"
+        )
+    # 首末日时间回显（验收 #82）：到达/离开时刻已纳入排程窗口
+    if brief.arrival_time:
+        notes.append(
+            f"已按你 {brief.arrival_time} 到达安排首日（从到达后开始排）；"
+            "如不对，直接说「改为 X 点到」"
+        )
+    if brief.departure_time:
+        notes.append(
+            f"已按你 {brief.departure_time} 离开安排末日（此前收尾）；"
+            "如不对，直接说「改为 X 点走」"
+        )
+    # 多城市检测（验收 #73）：仍按主目的地（最左）出单，但必须明示
+    # 其余城市未纳入，而不是错误地按单城市默默处理。
+    extra_cities = detect_multi_city(message)
+    if intent is TravelIntent.PLAN and extra_cities and brief.destination:
+        notes.append(
+            f"当前支持单城市规划：已按「{brief.destination}」规划，你提到的"
+            f"「{'、'.join(extra_cities)}」暂未纳入本次行程；"
+            "可分开逐城规划"
+        )
+    # 天数上限回显（验收 #72）
+    if days_clamped:
+        notes.append(
+            f"行程天数最多支持 {T.TRAVEL_MAX_DAYS} 天，已按 {T.TRAVEL_MAX_DAYS} 天规划；"
+            "如需更长行程请分段规划"
         )
 
     # QUERY_STATIC：一轮一次定向灵感检索（v3 §3.1），产出三态灵感包供

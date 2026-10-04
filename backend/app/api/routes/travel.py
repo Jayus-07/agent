@@ -479,6 +479,21 @@ class IcsExportRequest(BaseModel):
 
 
 _ICS_TIME_FMT = "%Y%m%dT%H%M%S"
+# 行程时刻按东八区声明（验收 #115）：此前是 floating time（无 TZID），
+# 国内日历碰巧正确，但跨时区导入会按日历软件本地时区漂移。VTIMEZONE 块
+# 声明 Asia/Shanghai 固定 +08:00（无夏令时），DTSTART/DTEND 带 TZID 引用。
+_ICS_TZID = "Asia/Shanghai"
+_ICS_VTIMEZONE_LINES = (
+    "BEGIN:VTIMEZONE",
+    f"TZID:{_ICS_TZID}",
+    "BEGIN:STANDARD",
+    "DTSTART:19700101T000000",
+    "TZOFFSETFROM:+0800",
+    "TZOFFSETTO:+0800",
+    "TZNAME:CST",
+    "END:STANDARD",
+    "END:VTIMEZONE",
+)
 
 
 def _ics_escape(text: str) -> str:
@@ -520,6 +535,7 @@ def itinerary_to_ics(itinerary: dict) -> str:
         "VERSION:2.0",
         "PRODID:-//agent//travel-plan//CN",
         "CALSCALE:GREGORIAN",
+        *_ICS_VTIMEZONE_LINES,
     ]
     for day in itinerary.get("days", []):
         day_idx_raw = day.get("day_index", 1)
@@ -550,8 +566,8 @@ def itinerary_to_ics(itinerary: dict) -> str:
                 f"UID:travel-{day.get('day_index', 1)}-{_ics_escape(title)}-"
                 f"{start}@agent.local",
                 f"DTSTAMP:{start}",
-                f"DTSTART:{start}",
-                f"DTEND:{end}",
+                f"DTSTART;TZID={_ICS_TZID}:{start}",
+                f"DTEND;TZID={_ICS_TZID}:{end}",
                 f"SUMMARY:{_ics_escape(title)}",
                 f"DESCRIPTION:{_ics_escape('；'.join(desc_parts))}",
                 "END:VEVENT",
