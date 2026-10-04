@@ -466,6 +466,24 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
 
     # 必去优先，其次热度
     ordered = sorted(candidates, key=lambda p: (not p.required, -p.rating, p.poi_id))
+
+    def _is_user_named(poi: Poi) -> bool:
+        return any(
+            (want or "").strip() and names_match(poi.name, want.strip())
+            for want in brief.must_go
+        )
+
+    # 必去点名统一标注（2026-10-04 实机验收暴露的口径缺口）：池中已有的
+    # 必去地点此前不带 required 标（只有 Provider 补全路径打标），而
+    # validator TIME_CLOSED 与 repair kept_required 只认 required 字段——
+    # 到达晚/闭馆日冲突时点名会被当成普通点自动移除，违反「点名永不被
+    # 静默丢弃」。进骨架时按 must_go 原话匹配统一打标，validator/repair
+    # 的字段判定随之对齐（与下方餐饮豁免的「原话匹配」同一语义源）。
+    ordered = [
+        p if p.required or not _is_user_named(p)
+        else p.model_copy(update={"required": True})
+        for p in ordered
+    ]
     # 类别策略（2026-10-03）：**纯餐饮**候选不排入行程——行程时间留给游玩点，
     # 吃喝由美食推荐（高德商户/知乎攻略）承接；用户点名必去的餐厅除外
     # （尊重点名）。两个豁免口径：
@@ -473,12 +491,6 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
     #     地点不会被打 required 标（只有 Provider 补全路径会打）；
     #   - 「美食街/夜市」类是游玩型餐饮区（金标 T-D03/T-G09 的预算超限源
     #     「达明美食街」即此类），不是坐下吃饭的店，保留排入。
-    def _is_user_named(poi: Poi) -> bool:
-        return any(
-            (want or "").strip() and names_match(poi.name, want.strip())
-            for want in brief.must_go
-        )
-
     meal_skipped = [
         p for p in ordered
         if is_pure_meal(p) and not (p.required or _is_user_named(p))
