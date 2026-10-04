@@ -1,5 +1,5 @@
 {
- "version": "2026-10-03.1",
+ "version": "2026-10-04.1",
  "purpose": "C7 意图分诊门禁回放集",
  "cases": [
   {
@@ -2129,6 +2129,146 @@
    "expected_domain": "HUMAN",
    "expected_intent": "h_supervisor",
    "kind": "boundary"
+  },
+  {
+   "id": "T-305",
+   "text": "帮我规划一个福州三日游的行程",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-306",
+   "text": "周末去厦门有什么好玩的景点",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-307",
+   "text": "推荐一家鼓浪屿的民宿",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-308",
+   "text": "帮我订两张去北京的高铁票",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-309",
+   "text": "十一去哪玩比较好",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-310",
+   "text": "办日本签证需要什么材料",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-311",
+   "text": "这个月什么类目适合做爆款选品",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-312",
+   "text": "帮我做一下竞品分析",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-313",
+   "text": "秋季上新怎么选款铺货",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-314",
+   "text": "今天外面下雨了吗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-315",
+   "text": "最近股市行情如何",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-316",
+   "text": "帮我点一份外卖",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-317",
+   "text": "你好",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-318",
+   "text": "在吗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-319",
+   "text": "谢谢啦",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-320",
+   "text": "你是机器人吗",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-321",
+   "text": "早上好",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-322",
+   "text": "你会什么",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-323",
+   "text": "拜拜",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
+  },
+  {
+   "id": "T-324",
+   "text": "好的收到",
+   "expected_domain": "UNKNOWN",
+   "expected_intent": "",
+   "kind": "out_of_domain"
   }
  ]
 }

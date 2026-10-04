@@ -1,9 +1,9 @@
 {
- "version": "2026-10-03.1",
+ "version": "2026-10-04.1",
  "module": "cs-gate",
  "purpose": "词表/规则层变更评测门（C7/C8/C10）回放集，消费方 backend/customer_service/vocab_gate.py",
  "counts": {
-  "intent_triage": 304,
+  "intent_triage": 324,
   "handoff_timing": 50,
   "confirm_cancel": 42
  },
@@ -14,7 +14,7 @@
   "confirm_cancel_accuracy_min": 0.95
  },
  "sha256": {
-  "intent_triage_golden.json": "4a40143f782dbe8955080e02eac53ad3b5d0df68c76941cccf563cd959b2f56b",
+  "intent_triage_golden.json": "f7307d0b91dff5c77a4bebb6c6d3e98b0c93fd8008cf7635b0b1476dc0308a40",
   "handoff_timing_golden.json": "0f46173fb1d2d0a221207be977c8dc71fa596fbc86b07718783363ac3166dd40",
   "confirm_cancel_golden.json": "698962aae122059364e347c9e090e8d28ce0719bc6c381a7937bfa21963ac911"
  },

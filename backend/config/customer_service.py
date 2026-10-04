@@ -176,6 +176,15 @@ CS_ROLLOUT_WHITELIST = {
     s.strip() for s in os.getenv("CS_ROLLOUT_WHITELIST", "").split(",") if s.strip()
 }
 
+# ── 对话体验改造（2026-10-04 任务卡 T3/T5）────────────────────
+# 寒暄分支：非业务对话走一次 LLM 人设生成（false=回旧漏斗路径）
+CS_CHAT_FALLBACK_ENABLED = os.getenv("CS_CHAT_FALLBACK_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+# 寒暄 LLM 单次限时（线程级，sync_call_with_timeout 同款口径）
+CS_CHAT_LLM_TIMEOUT_MS = int(os.getenv("CS_CHAT_LLM_TIMEOUT_MS", "8000"))
+# 独立客服窗口：true=非客服域消息不出域，走出域固定话术（false=旧 redirect_main）
+# 消费方 router_node（任务卡 T5，混线解锁后接线；先落配置保持口径单一源）
+CS_WINDOW_STANDALONE = os.getenv("CS_WINDOW_STANDALONE", "true").strip().lower() in ("1", "true", "yes")
+
 # ── 坐席辅助（agent assist，AI 给人工坐席实时推荐回复）────────
 # 总开关：关闭后 hub 不再调度生成任务，前端无推荐事件（默认开启，失败静默）
 CS_AGENT_ASSIST_ENABLED = os.getenv("CS_AGENT_ASSIST_ENABLED", "true").strip().lower() in ("1", "true", "yes")

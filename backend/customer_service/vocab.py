@@ -31,7 +31,61 @@ import re
 import time
 from pathlib import Path
 
-VOCAB_VERSION = "2026-10-03.1"
+VOCAB_VERSION = "2026-10-04.1"
+
+# =============================================
+# 出域与寒暄词表（2026-10-04 对话体验改造 T4）
+# =============================================
+# 独立客服窗口口径：UNKNOWN 域消息先过寒暄词表（→chat_fallback 一次 LLM），
+# 再过出域词表（→固定话术，零 LLM）。判定顺序铁律：先客服信号后出域——
+# 含客服域信号的句子不得被出域词表截胡（"订单里的行程单丢了"属客服诉求）。
+# 两段变更均过 vocab_gate（fail-closed）。
+OUT_OF_SCOPE_PATTERNS = [
+    re.compile(p) for p in [
+        # 旅游话题（话题词参考 router_node 旅游 prefilter 强信号集；
+        # 机票/酒店等出行事务是客服窗口场景的出域扩展——prefilter 不管它们）
+        r"旅游|旅游攻略|景点|行程(规划)?|自由行|跟团|自驾游|一日游",
+        r"机票|火车票|高铁票|酒店|民宿|门票|签证",
+        # 选品漏斗域话题
+        r"选品|选款|爆款|铺货|竞品分析|类目分析",
+        # 明显平台外话题（客服窗口只答购物客服）
+        r"天气|股市|股票|彩票|外卖点餐|打车|导航",
+    ]
+]
+
+CHITCHAT_PATTERNS = [
+    re.compile(p) for p in [
+        r"^(你好|您好|hi|hello|嗨|哈喽)[~～!！。.？?]?$",
+        r"^(在吗|在么|有人吗|在不在)[~～!！。.？?]?$",
+        r"^(谢谢|多谢|感谢|辛苦了|麻烦了|辛苦啦)[你们大家啦呀哦哈]?[~～!！。.]?$",
+        r"^(好的|好嘞|嗯+|哦+|噢|ok|OK|了解|收到|好的收到|好的呢|收到啦)[~～!！。.，,]?$",
+        r"^(早上|中午|下午|晚上)好[~～!！。.]?$",
+        r"你是(谁|什么)|(你|您)是(机器人|人工智能|真人|AI|ai)吗",
+        r"(你|您)会什么|你能(做|干)什么",
+        r"^(拜拜|再见|晚安|早安)[~～!！。.]?$",
+    ]
+]
+
+# 出域固定话术（V1：零 LLM 零检索，毫秒级）；topic 由分诊识别到的域填充
+OUT_OF_SCOPE_TEMPLATE = (
+    "您好，这里是独立的客服窗口，我可以帮您处理订单、退款、物流、账号"
+    "这类购物相关问题。您说的「{topic}」不在本窗口的服务范围内，"
+    "有购物方面的问题随时找我。"
+)
+
+
+def format_out_of_scope(topic: str = "该问题") -> str:
+    return OUT_OF_SCOPE_TEMPLATE.format(topic=topic)
+
+
+def match_out_of_scope(text: str) -> bool:
+    """出域命中判定：调用方必须先确认无客服域信号（顺序铁律见段注释）。"""
+    return any(p.search(text or "") for p in OUT_OF_SCOPE_PATTERNS)
+
+
+def match_chitchat(text: str) -> bool:
+    """寒暄命中判定：调用方必须先确认无客服域信号（顺序铁律见段注释）。"""
+    return any(p.search(text or "") for p in CHITCHAT_PATTERNS)
 
 # override 文件默认落位（相对 backend/；gitignored，不上库）
 _DEFAULT_OVERRIDE_FILE = Path(__file__).resolve().parent.parent / "config" / "cs_vocab_override.json"
