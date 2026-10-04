@@ -28,6 +28,7 @@ export const RAG_REJECTION_ACTIONS: Record<string, string> = {
   RAG_NO_EVIDENCE: "知识库中未找到依据：换个问法重试，或补充更多背景信息",
   RAG_PERMISSION_DENIED: "该知识对当前角色受限：申请访问权限或联系管理员",
   RAG_VERSION_CONFLICT: "命中多版本/过期版本制度：请确认制度版本或查看历史版本",
+  RAG_HALLUCINATION: "答案未通过事实一致性校验已被拦截：请换个问法或补充背景信息",
 };
 
 /** 按 ErrorKind 给行动指引（401/403/429/超时/网络等，errors.ts 既有机制的呈现层） */

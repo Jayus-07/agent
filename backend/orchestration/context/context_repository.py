@@ -78,6 +78,8 @@ class MutationType:
     SET_FUNNEL_CANDIDATES = "set_funnel_candidates"
     CLEAR_FUNNEL_CANDIDATES = "clear_funnel_candidates"
     APPLY_FOLLOWUP_RESOLUTION = "apply_followup_resolution"
+    SET_SQL_QUERY_CONTEXT = "set_sql_query_context"
+    CLEAR_SQL_QUERY_CONTEXT = "clear_sql_query_context"
 
 
 # 允许在 context 不存在时惰性创建的 mutation（对齐原 get() 惰性创建语义；
@@ -95,6 +97,8 @@ _CREATING_MUTATIONS = frozenset({
     MutationType.CLEAR_FUNNEL_CANDIDATES,
     MutationType.APPLY_FOLLOWUP_RESOLUTION,
     MutationType.CLEAR_EVIDENCE,
+    MutationType.SET_SQL_QUERY_CONTEXT,
+    MutationType.CLEAR_SQL_QUERY_CONTEXT,
 })
 
 
@@ -205,6 +209,19 @@ def apply_mutation(
             return MutationResult(status="noop", context=ctx.copy(),
                                   version=ctx.version, detail="empty slots")
         ctx.merge_slots(slots)
+
+    elif mtype == MutationType.SET_SQL_QUERY_CONTEXT:
+        context = payload.get("context")
+        if not isinstance(context, dict) or not context.get("question"):
+            return MutationResult(status="noop", context=ctx.copy(),
+                                  version=ctx.version, detail="empty sql context")
+        ctx.set_sql_query_context(context)
+
+    elif mtype == MutationType.CLEAR_SQL_QUERY_CONTEXT:
+        if ctx.sql_query_context is None:
+            return MutationResult(status="noop", context=ctx.copy(),
+                                  version=ctx.version, detail="sql context empty")
+        ctx.set_sql_query_context(None)
 
     elif mtype == MutationType.START_TRAVEL_RUN:
         conv_hash8 = payload.get("conv_hash8") or ""

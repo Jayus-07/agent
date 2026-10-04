@@ -1,9 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react'
 import NavGroup from './NavGroup'
-import { visibleNav } from './navConfig'
+import { getActiveNavLabel, visibleNav } from './navConfig'
 import SidebarUserMenu from './SidebarUserMenu'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -14,8 +15,18 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
   // 首帧逐字节一致；mount 后再切真实角色（admin 多出的菜单延后一帧）。
   // 否则角色差异图标（如 Database 的 <ellipse>）触发整树 hydration 失败。
   const [mounted, setMounted] = useState(false)
+  const pathname = usePathname()
   useEffect(() => setMounted(true), [])
   const groups = mounted ? visibleNav() : visibleNav(true)
+  const [openGroup, setOpenGroup] = useState<string | null>(() => getActiveNavLabel(pathname) ?? null)
+
+  useEffect(() => {
+    setOpenGroup(getActiveNavLabel(pathname) ?? null)
+  }, [pathname])
+
+  const toggleGroup = (label: string) => {
+    setOpenGroup((current) => current === label ? null : label)
+  }
 
   if (collapsed) {
     return (
@@ -49,7 +60,13 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
       {/* 导航 */}
       <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
         {groups.map(g => (
-          <NavGroup key={g.path || g.label} {...g} collapsed={false} />
+          <NavGroup
+            key={g.path || g.label}
+            {...g}
+            collapsed={false}
+            open={openGroup === g.label}
+            onToggle={() => toggleGroup(g.label)}
+          />
         ))}
       </nav>
 

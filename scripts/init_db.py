@@ -192,6 +192,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 企业治理 M13 尾项（2026-09-30）：trace_summary.ttft_ms 落库列
     # （SSE API 层收尾旁路 UPDATE，偏差记台账 D13）。
     "064_trace_summary_ttft.sql": "memory",
+    # Prompt Runtime 热更新（Phase 1）：DB epoch 持久化 + Redis 失败补偿事件。
+    "065_prompt_runtime_hot_reload.sql": "memory",
     # 预算治理 P0 修复（2026-10-01）：记账本位币统一 CNY（列改名 + 存量
     # ×7.20 折算，含 llm_usage 历史成本行）+ 预占 needs_review 待对账状态
     # + 滞留预占处置（legacy_stale_sweep，$6.00 带审计转队列）。
@@ -199,10 +201,21 @@ MIGRATION_TARGETS: dict[str, str] = {
     # RAG 候选版本模型（2026-10-01 B 阶段）：doc_registry.active_generation
     # 发布指针 + rag_index_runs 运行记录（候选状态权威，终态一次写）。
     "067_rag_candidate_publish.sql": "memory",
+    # 三端认证会话隔离（2026-10-01）：记录登录来源并按来源隔离 refresh Cookie。
+    "068_auth_session_client_app.sql": "memory",
+    # Prompt 发布评测门禁：记录候选发布及其评测证据。
     "069_prompt_release_records.sql": "memory",
+    "071_rag_reconcile_reports.sql": "memory",
     # 企业治理验收 #9（2026-09-30）：Tool 契约变更历史台账（生成器检测到
     # 变更自动追加，GET /api/admin/tools/changes 消费）。
     "062_tool_contract_changes.sql": "memory",
+    # 业务拒答未答问题登记（2026-10-03）：RAG 未命中/SQL 空结果知识缺口台账，
+    # observability/unanswered.py 旁路写入，GET /api/admin/unanswered/* 消费。
+    "070_unanswered_questions.sql": "memory",
+    # 追问漏斗事件持久化（2026-10-03）：shown/clicked/resolved 精确累计，
+    # observability/clarify_funnel.py 双写（指标=实时 rate，本表=月报真相），
+    # GET /api/admin/clarify/stats 消费。
+    "071_clarify_funnel_events.sql": "memory",
     # 旅游页用户决策留痕（2026-10-04 M4/G1）：草案应用/放弃、画布确认替换、
     # 档位切换、删减协商逐条落库；travel/core/decision_store.py 软失败写入，
     # GET /api/travel/decisions 消费（v1 无管理端页）。

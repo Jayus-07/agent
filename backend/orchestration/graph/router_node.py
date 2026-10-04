@@ -119,9 +119,17 @@ def router_node(state: dict) -> dict:
 
     # ── redirect_main（2026-09-18）：两阶段判定见 routing/lock_domain.py
     # （正则 → LLM 语义仲裁，默认 OFF）；命中则转出主路由。
+    # T5 反转（2026-10-04 对话体验改造）：CS_WINDOW_STANDALONE=true（独立
+    # 窗口模式，默认开）时锁域消息不再转出——强信号问法放行进 CS 域图，
+    # 由域内分诊直出出口（supervisor 出域固定话术/寒暄）接住；关闭开关
+    # 免重建恢复旧行为。函数内 import：monkeypatch 测试与 env 热改重启生效。
     cs_redirect = None
     if cs_forced and not cs_rule_hits:
-        cs_redirect = detect_cs_redirect(query)
+        from backend.config.customer_service import CS_WINDOW_STANDALONE
+        if CS_WINDOW_STANDALONE:
+            cs_redirect = None
+        else:
+            cs_redirect = detect_cs_redirect(query)
 
     if cs_forced and not cs_redirect:
         cs_update = _try_cs_prefilter(query, state, forced=True)
@@ -165,8 +173,8 @@ def router_node(state: dict) -> dict:
     # 短路不进主 Router，避免这类输入跑完链路后只换来一句拒答。
     # _clarify 只活在节点原始输出里（stream_node_events 从这里发
     # clarification 事件），不依赖 graph state 传递。
-    # 防循环：会话 10 分钟内已被追问过一次则放行原链路（后续拒答
-    # 也不会再追问，同一守卫）。
+    # 防循环（2026-10-03 企业口径）：同一问题窗口内不重复追问、会话封顶
+    # N 次（clarify_content 守卫）；守卫拦截则放行原链路，拒答后由 L2 兜底。
     try:
         from backend.orchestration.graph.clarify_content import (
             build_entry_clarify,
@@ -175,10 +183,14 @@ def router_node(state: dict) -> dict:
         )
         clarify = build_entry_clarify(query, domain_hint)
         if clarify is not None and not clarify_allowed(
-                state.get("session_id", "")):
+                state.get("session_id", ""), query):
             clarify = None
         elif clarify is not None:
-            mark_clarified(state.get("session_id", ""))
+            mark_clarified(
+                state.get("session_id", ""), query,
+                options=clarify.get("options"),
+                source=clarify.get("source", ""),
+            )
     except Exception as e:
         logger.warning(f"[RouterNode] 入口追问判定失败，走原链路: {e}")
         clarify = None

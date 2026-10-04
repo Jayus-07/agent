@@ -12,11 +12,25 @@ reporter.py — 最终 Markdown 回答生成 + LangGraph 节点适配
   - 数据库 / 向量库
 """
 
+import re
+
 from backend.infra.llm import llm
 from langchain_core.messages import AIMessage
 from backend.shared.logger import logger
 from backend.agents.reporter.context_filter import filter_step_results
 from backend.prompts.service import prompt_service
+
+# 工具输出头部的机器标记（tools/rag.py 附带），与「### 参考文献」同属文本
+# 协议：本模块负责在透传给用户 / 喂给汇总 LLM 前剥离；done 帧侧解析在
+# events.make_done_event（读原始 step_results，不受此处剥离影响）
+_RAG_META_RE = re.compile(r"<!--\s*RAGMETA\s*(\{.*?\})\s*-->\s*", re.DOTALL)
+
+
+def strip_rag_meta(text: str) -> str:
+    """剥离输出中的 <!--RAGMETA{...}--> 机器标记（无标记原样返回）。"""
+    if text and "<!--RAGMETA" in text:
+        return _RAG_META_RE.sub("", text).lstrip()
+    return text
 
 
 # =====================================================
@@ -48,6 +62,10 @@ def reporter_node(state: dict) -> dict:
         context_filter=True,
     )
 
+    # ── 未答问题旁路登记（2026-10-03 知识运营闭环第一环）────────────
+    # 与追问守卫解耦：即使防循环拦截了追问卡，知识缺口照样要留痕。
+    _log_unanswered(answer, state)
+
     # ── L2 拒答兜底追问：所有步骤都无有效产出（RAG 拒答话术/空结果）且
     # 无技术性错误时，在节点原始输出附带 _clarify（events.py 据此发
     # clarification 事件）。拒答正文照常返回，不做静默替换。
@@ -55,6 +73,46 @@ def reporter_node(state: dict) -> dict:
     if clarify is not None:
         return {"final_answer": answer, "_clarify": clarify}
     return {"final_answer": answer}
+
+
+def _sql_empty_hit(state: dict) -> bool:
+    """是否存在业务性空结果的 sql.query 步骤（查不到，非技术故障）。
+
+    口径与 reporter 主流程一致：_is_step_successful 判伪 + 技术性错误
+    （服务不可用）排除——那不是知识缺口，登记了会污染运营聚类。
+    """
+    for sr in (state.get("step_results") or {}).values():
+        if sr.get("capability") != "sql.query":
+            continue
+        if _is_step_successful(sr):
+            continue
+        err = str(sr.get("error") or "")
+        if err and _is_technical_error(err):
+            continue
+        return True
+    return False
+
+
+def _log_unanswered(answer: str, state: dict) -> None:
+    """拒答 → 未答问题登记（旁路软失败；指标在 writer 入口即增）。
+
+    只登记业务性拒答（「## 抱歉」模板且非技术故障）——服务不可用是
+    故障不是知识缺口，归 trace/metrics，不进知识运营清单。
+    """
+    if not answer.startswith("## 抱歉") or "服务暂时不可用" in answer:
+        return
+    try:
+        from backend.observability.unanswered import record_unanswered_question
+
+        record_unanswered_question(
+            state.get("question", ""),
+            source="sql_empty" if _sql_empty_hit(state) else "rag_miss",
+            department=str(state.get("department") or ""),
+            kb_id=str(state.get("kb_id") or ""),
+            detail={"route_mode": str(state.get("route_mode") or "")},
+        )
+    except Exception as e:  # noqa: BLE001 — 登记永不影响主流程
+        logger.debug(f"[Reporter] 未答登记失败（软降级）: {e}")
 
 
 def _refusal_clarify_marker(answer: str, state: dict) -> dict | None:
@@ -72,6 +130,7 @@ def _refusal_clarify_marker(answer: str, state: dict) -> dict | None:
         from backend.config import REFUSAL_CLARIFY_ENABLED
         from backend.orchestration.graph.clarify_content import (
             build_refusal_clarify,
+            build_sql_empty_clarify,
             clarify_allowed,
             mark_clarified,
         )
@@ -79,11 +138,22 @@ def _refusal_clarify_marker(answer: str, state: dict) -> dict | None:
         if not REFUSAL_CLARIFY_ENABLED:
             return None
         session_id = state.get("session_id", "")
-        if not clarify_allowed(session_id):
+        question = state.get("question", "")
+        if not clarify_allowed(session_id, question):
             return None
-        mark_clarified(session_id)
-        return build_refusal_clarify(
-            state.get("question", ""), state.get("domain_hint", ""))
+        # SQL 空结果优先给定向槽位追问（时间范围/常用指标），其余按
+        # 业务倾向给定向卡或通用导航
+        if _sql_empty_hit(state):
+            marker = build_sql_empty_clarify(question, executed=True)
+        else:
+            marker = build_refusal_clarify(
+                question, state.get("domain_hint", ""))
+        mark_clarified(
+            session_id, question,
+            options=marker.get("options"),
+            source=marker.get("source", ""),
+        )
+        return marker
     except Exception as e:
         logger.warning(f"[Reporter] 拒答追问判定失败，输出原拒答: {e}")
         return None
@@ -176,7 +246,7 @@ def generate_final_answer(
         rag_output = list(rag_steps.values())[0].get("output", "")
         if rag_output:
             logger.info("[Reporter] RAG 有实质输出且其他步骤无，直接透传")
-            return rag_output
+            return strip_rag_meta(rag_output)
 
     # —— 快速路径：单步骤有实质输出时直接透传（省掉 LLM 总结 ~2s）——
     # 仅限字符串输出（RAG/报告类）；SQL/BusinessInsight 是结构化 dict，
@@ -186,7 +256,7 @@ def generate_final_answer(
         sole_output = sole_sr.get("output", "")
         if isinstance(sole_output, str) and len(sole_output.strip()) > 5:
             logger.info("[Reporter] 单步骤有实质输出，直接透传（跳过 LLM 总结）")
-            return sole_output
+            return strip_rag_meta(sole_output)
 
     # 提取参考文献
     rag_references = _extract_rag_references(step_results)
@@ -409,6 +479,8 @@ def _format_step_outputs(step_results: dict[str, dict], strip_references: bool =
         header = f"### 步骤 {step_id}: {description}"
         if status == "success":
             output = str(sr.get("output", ""))
+            # 机器标记不进汇总 LLM 视野（与 strip_references 同层，先剥标记）
+            output = strip_rag_meta(output)
             if strip_references and capability == "rag.search":
                 for marker in ["\n\n---\n\n### 参考文献", "\n\n---\n\n### 参考来源"]:
                     idx = output.find(marker)

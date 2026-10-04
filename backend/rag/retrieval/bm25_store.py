@@ -488,6 +488,27 @@ class BM25Store:
             "excluded_vector_count": len(excluded),
         }
 
+    def load_docs_strict(self) -> List[Document]:
+        """审计用严格快照：缺失、损坏或校验失败必须显式报错。"""
+        with _BUILD_LOCK:
+            try:
+                if self._bundle_path.exists():
+                    bundle = self._safe_load_pickle(self._bundle_path)
+                    if not isinstance(bundle, dict) or "docs" not in bundle:
+                        raise RuntimeError("BM25 bundle 缺失有效文档列表")
+                    docs = bundle["docs"]
+                elif self._docs_path.exists():
+                    docs = self._safe_load_pickle(self._docs_path)
+                else:
+                    raise RuntimeError("BM25 文档快照不存在")
+            except (OSError, pickle.UnpicklingError, EOFError, ImportError) as exc:
+                raise RuntimeError("BM25 文档快照读取失败") from exc
+            if not isinstance(docs, list) or not all(
+                isinstance(doc, Document) for doc in docs
+            ):
+                raise RuntimeError("BM25 文档快照结构无效或校验失败")
+            return docs
+
     def load_docs(self) -> List[Document]:
         """从磁盘加载持久化的 Document 列表（供一致性检查等外部消费者使用）。
 

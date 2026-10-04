@@ -165,6 +165,69 @@ class SQLValidator:
                     layer=2, reason="alias_undefined",
                 )
 
+    def _check_column_allowlist(self, parsed: list, table_names: Set[str]) -> None:
+        """校验列确实存在于数据字典，阻断常见列名幻觉。
+
+        表名白名单只能证明「能访问哪张表」，不能证明 LLM 写出的列名
+        存在。这里使用同一份 schema_loader 数据字典做确定性校验，避免
+        把 `order_items.price` 猜成常见但不存在的 `unit_price`。
+        CTE 输出列和 SELECT 别名由 SQL 引擎解析，保留给数据库/重试链处理。
+        """
+        stmt = parsed[0]
+        cte_names = {cte.alias.lower() for cte in stmt.find_all(exp.CTE)}
+        alias_to_table: dict[str, str] = {}
+        for table in stmt.find_all(exp.Table):
+            real = table.name.lower()
+            db = (table.db or "").lower()
+            qualified = f"{db}.{real}" if db else real
+            alias_to_table[table.alias_or_name.lower()] = qualified
+            alias_to_table[real] = qualified
+
+        select_aliases = {
+            expression.alias.lower()
+            for select in stmt.find_all(exp.Select)
+            for expression in select.expressions
+            if getattr(expression, "alias", "")
+        }
+
+        visible_columns = {
+            table: set(schema_loader.get_browse_columns(table))
+            for table in table_names
+        }
+        for column in stmt.find_all(exp.Column):
+            name = column.name.lower()
+            qualifier = column.table.lower() if column.table else ""
+            if not name or name == "*":
+                continue
+            if not qualifier and name in select_aliases:
+                continue
+            if qualifier in cte_names:
+                continue
+
+            if qualifier:
+                table_name = alias_to_table.get(qualifier)
+                if table_name is None:
+                    # _check_alias_defined 已给出更准确的错误。
+                    continue
+                if name not in visible_columns.get(table_name, set()):
+                    available = sorted(visible_columns.get(table_name, set()))
+                    raise ValidationError(
+                        f"列 '{qualifier}.{name}' 不存在于数据字典中的表 '{table_name}'；"
+                        f"可用列: {', '.join(available)}",
+                        layer=3, reason="column_undefined",
+                    )
+                continue
+
+            matches = [
+                table for table, columns in visible_columns.items()
+                if name in columns
+            ]
+            if not matches and name not in select_aliases:
+                raise ValidationError(
+                    f"未找到列 '{name}'（已选表: {sorted(table_names)}）",
+                    layer=3, reason="column_undefined",
+                )
+
     def _extract_table_names(self, parsed: list) -> Set[str]:
         """从 AST 中提取所有被引用的表名（schema-qualified）。
 
@@ -400,6 +463,9 @@ class SQLValidator:
 
         # — fix f21: 列别名引用必须有 FROM/JOIN 定义 —
         self._check_alias_defined(parsed)
+
+        # — 列名数据字典校验：拒绝 LLM 猜出的不存在列 —
+        self._check_column_allowlist(parsed, table_names)
 
         # — Layer 3: 敏感列拒绝 —
         self._check_sensitive_columns(parsed, table_names)

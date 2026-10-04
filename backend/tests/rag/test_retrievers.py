@@ -356,10 +356,12 @@ class TestKbIdFallback:
         assert "policy_hr" not in admin_view
 
     def test_employee_without_department_failsafe(self):
-        """员工未带部门 → 仅见 owner_depts=["all"] 的库（fail-safe）。"""
+        """员工未带部门 → 仅见 owner_depts=["all"] 的非测试库（fail-safe）。"""
         from backend.config.knowledge_base import authorized_kbs
         allowed = authorized_kbs("employee", "")
-        assert allowed == ["policy_general"]
+        # travel 是新增的 customer-facing 全员库；与 policy_general 一样
+        # owner_depts=["all"]，不应因员工缺失部门而被错误排除。
+        assert allowed == ["policy_general", "travel"]
 
     def test_undeclared_subject_returns_none(self):
         """未声明主体 → None（授权未启用，调用方保持旧行为）。"""

@@ -17,14 +17,50 @@ GET /admin/tools/stats  — 运行统计聚合（总数/成功/失败/成功率/
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException as _HTTP, Request
+from pydantic import BaseModel, Field
 
 from backend.app.api.deps import require_admin_user
+from backend.config import ENVIRONMENT
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/admin/tools", tags=["Admin-Tools"])
+
+_PROBE_ERROR_CLASSES = frozenset({
+    "timeout", "network_error", "permission_denied", "validation_error",
+    "business_error", "contract_error", "provider_error",
+})
+_PROBE_STATUS = {
+    "timeout": "timeout",
+    "network_error": "unavailable",
+    "permission_denied": "unauthorized",
+    "validation_error": "invalid_request",
+    "business_error": "failed",
+    "contract_error": "degraded",
+    "provider_error": "rate_limited",
+}
+_PROBE_MESSAGE = {
+    "timeout": "模拟上游响应超时",
+    "network_error": "模拟上游网络不可用",
+    "permission_denied": "模拟上游拒绝访问",
+    "validation_error": "模拟 Tool 参数校验失败",
+    "business_error": "模拟 Tool 业务失败",
+    "contract_error": "模拟 Tool 契约降级",
+    "provider_error": "模拟供应商限流",
+}
+
+
+class ToolFailureProbeRequest(BaseModel):
+    """管理端只生成观测数据的 Tool 失败探针请求。"""
+
+    tool: str = Field(..., min_length=1, max_length=200)
+    error_class: str = Field(..., min_length=1, max_length=64)
+    domain: str = Field("", max_length=64)
 
 
 def _collect_samples(*metric_names: str) -> dict[str, list[dict]]:
@@ -197,11 +233,132 @@ def _aggregate_tool_stats(source: str | None = None) -> dict[str, Any]:
     }
 
 
+def _quota_runtime(ds: dict | None) -> dict | None:
+    """额度运行时读数（软失败）：声明来自 labels.py data_source.quota。
+
+    usage_provider → travel live 软预算（current_usage/daily_budget）；
+    usage_counter → 月键 tool_quota:{counter}:{YYYYMM}（field=upstream_tool）。
+    status 三态诚实口径：unlimited=未设预算（不限）/ ok / exhausted（软停）；
+    计数源不可用 → untracked（Redis 不可达等），绝不把 0 伪装成已用 0。
+    """
+    if not ds or not ds.get("quota"):
+        return None
+    quota = ds["quota"]
+    out: dict[str, Any] = {
+        "period": quota.get("period"),
+        "limit": quota.get("limit"),
+        "limit_env": quota.get("limit_env"),
+        "note": quota.get("note"),
+        "usage": None,
+        "status": "untracked",
+    }
+    try:
+        if quota.get("usage_provider"):
+            from backend.providers.travel.live.quota import current_usage, daily_budget
+
+            provider = quota["usage_provider"]
+            budget = daily_budget(provider)
+            usage = current_usage(provider)
+            out.update({
+                "usage": usage,
+                "budget": budget,
+                "status": ("unlimited" if budget <= 0
+                           else "exhausted" if usage >= budget else "ok"),
+            })
+        elif quota.get("usage_counter"):
+            from datetime import date
+
+            from backend.config.redis import REDIS_KEY_PREFIX
+            from backend.infra.redis.client import get_redis
+
+            r = get_redis()
+            if r is not None:
+                key = (f"{REDIS_KEY_PREFIX or 'agent:'}"
+                       f"tool_quota:{quota['usage_counter']}:{date.today():%Y%m}")
+                raw = r.hget(key, ds.get("upstream_tool") or "")
+                out.update({"usage": int(raw) if raw else 0, "status": "tracked"})
+    except Exception as e:  # noqa: BLE001 — 读数软失败，声明信息照常返回
+        logger.debug(f"[AdminTools] 额度读数失败（按 untracked 处理）: {e}")
+    return out
+
+
 @router.get("/stats")
 async def tool_stats(request: Request):
     """Tool 运行统计聚合（TOOL_STATS_SOURCE 三源，M3 七分类口径）。"""
     await require_admin_user(request)
     return _aggregate_tool_stats()
+
+
+@router.post("/failure-probe")
+async def tool_failure_probe(request: Request, body: ToolFailureProbeRequest):
+    """生成一条模拟 Tool 失败 Trace，用于管理端稳定验收错误展示。
+
+    探针不调用 Tool、不访问外部服务，只复用生产的 ToolResult、指标、Trace
+    和统一错误分类出口；生产环境明确拒绝，避免把模拟数据写入生产观测面。
+    """
+    await require_admin_user(request)
+    if ENVIRONMENT == "production":
+        raise _HTTP(403, "生产环境禁止执行 Tool 强制失败测试")
+    if body.error_class not in _PROBE_ERROR_CLASSES:
+        raise _HTTP(422, f"不支持的统一错误分类: {body.error_class}")
+
+    lock_path = Path(__file__).resolve().parents[4] / "backend" / "tool_contracts.lock.json"
+    try:
+        lock_tools = json.loads(lock_path.read_text(encoding="utf-8")).get("tools", {})
+    except (OSError, ValueError) as exc:
+        raise _HTTP(503, f"Tool 契约 lock 读取失败: {exc}") from exc
+    contract = lock_tools.get(body.tool)
+    if not contract:
+        raise _HTTP(404, f"Tool 不在契约 lock 中: {body.tool}")
+
+    from backend.core.tool_runtime.metrics import record_tool_result
+    from backend.core.tool_runtime.models import ToolResult, ToolStatus
+    from backend.core.tool_runtime.tracing import finish_tool_span, start_tool_span
+    from backend.observability.tracer import trace_collector
+
+    status = ToolStatus(_PROBE_STATUS[body.error_class])
+    domain = body.domain or body.tool.split("_", 1)[0]
+    trace = trace_collector.start(
+        f"Tool 强制失败测试：{body.tool} / {body.error_class}",
+        session_id=f"admin-probe-{uuid4().hex[:12]}",
+        workflow_name="agent",
+    )
+    trace.tags.update({
+        "synthetic": True,
+        "tool_failure_probe": True,
+        "tool": body.tool,
+        "error_class": body.error_class,
+    })
+    span = start_tool_span(
+        body.tool,
+        capability=(contract.get("capabilities") or [""])[0],
+        params={"failure_probe": True, "error_class": body.error_class},
+        agent="admin_tool_failure_probe",
+    )
+    result = ToolResult(
+        status=status,
+        tool_name=body.tool,
+        latency_ms=0,
+        error_code=f"SIMULATED_{body.error_class.upper()}",
+        error_message=_PROBE_MESSAGE[body.error_class],
+    )
+    record_tool_result(result, domain=domain, tool_name=body.tool)
+    finish_tool_span(span, result)
+    trace.tags["probe_status"] = "simulated"
+    trace_collector.finish(
+        trace,
+        result.error_message or "",
+        0,
+        model="admin-probe",
+        provider="synthetic",
+    )
+    return {
+        "trace_id": trace.id,
+        "tool": body.tool,
+        "error_class": body.error_class,
+        "status": result.status.value,
+        "simulated": True,
+    }
 
 
 @router.get("")
@@ -227,6 +384,9 @@ async def tool_inventory(request: Request):
         inventory.append({
             "name": name,
             "display_name": entry.get("display_name", ""),
+            "data_source": entry.get("data_source"),
+            "quota_runtime": _quota_runtime(entry.get("data_source")),
+            "args_schema": entry.get("args_schema", {}),
             "module": entry.get("module", ""),
             "capabilities": entry.get("capabilities", []),
             "output_types": entry.get("output_types", {}),
@@ -262,7 +422,7 @@ async def tool_errors(request: Request, tool: str | None = None, limit: int = 20
     for rec in records:
         spans = {s.span_id: s for s in rec.spans}
         for s in rec.spans:
-            if s.type != "tool_call" or s.status != "error":
+            if s.type != "tool_call" or s.status not in ("error", "skipped"):
                 continue
             span_tool = (s.input or {}).get("tool") or ""
             span_cap = (s.input or {}).get("capability") or ""
@@ -272,16 +432,24 @@ async def tool_errors(request: Request, tool: str | None = None, limit: int = 20
                 if span_tool != tool and not s.name.endswith(tool):
                     continue
             parent = spans.get(s.parent_id) if s.parent_id else None
-            error_code, error_msg = "", ""
+            source_error_code, error_class, error_msg = "", "", ""
             for ev in reversed(s.events):
                 info = ev.get("attributes") or {}
                 if isinstance(info, dict) and (info.get("error") or info.get("error_code")):
-                    error_code = info.get("error_code", "")
+                    source_error_code = info.get("error_code", "")
+                    error_class = info.get("error_class", "")
                     error_msg = info.get("error", "")
                     break
             if not error_msg and s.errors:
                 first = s.errors[0]
                 error_msg = first.get("message", "") if isinstance(first, dict) else str(first)
+            # BaseSkill 的失败文字历史上写在 metrics，不一定发过 event；
+            # 统一按 event/errors/metrics 的优先级读取，兼容新旧 Trace。
+            metrics = s.metrics or {}
+            source_error_code = source_error_code or metrics.get("error_code", "")
+            error_class = error_class or metrics.get("error_class", "")
+            error_msg = error_msg or metrics.get("error", "")
+            error_code = error_class or source_error_code
             errors.append({
                 "trace_id": rec.id,
                 "ts": s.end_time or rec.timestamp,
@@ -291,6 +459,8 @@ async def tool_errors(request: Request, tool: str | None = None, limit: int = 20
                 "capability": span_cap,
                 "skill": parent.name if parent else "",
                 "error_code": error_code,
+                "error_class": error_class or error_code,
+                "source_error_code": source_error_code,
                 "error": error_msg[:200],
                 "latency_ms": s.duration_ms,
             })

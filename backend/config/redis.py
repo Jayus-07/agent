@@ -11,6 +11,14 @@ REDIS_ENABLED = os.getenv("REDIS_ENABLED", "false").strip().lower() in ("1", "tr
 # Redis 连接 URL
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+# 认证控制面 Redis（JWT 黑名单与会话闸）。默认回退到业务 Redis，兼容未
+# 配置独立实例的开发环境；生产 compose 显式注入 auth-redis，避免缓存实例
+# 故障导致网关鉴权链路整体不可用。
+AUTH_REDIS_ENABLED = os.getenv(
+    "AUTH_REDIS_ENABLED", "true" if REDIS_ENABLED else "false"
+).strip().lower() in ("1", "true", "yes", "on")
+AUTH_REDIS_URL = os.getenv("AUTH_REDIS_URL", REDIS_URL)
+
 # Key 前缀（多实例/多项目共用同一 Redis 时隔离）
 REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "agent:")
 

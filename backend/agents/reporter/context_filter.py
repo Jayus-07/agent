@@ -172,10 +172,43 @@ def filter_by_bm25(step_results: dict, question: str) -> dict:
     return filtered
 
 
+# 参考文献行解析（2026-10-03 原文定位 P0 扩展）：
+#   旧格式: "N. **filename** (type_label) — 相关度: 0.94"
+#   新格式: "N. **filename** (type_label) — 第 3-4 页 · 章节 — 相关度: 0.94"
+# 定位段可整体缺省；tempered dot「每个字符都不得落在相关度内」防回溯
+# 把「— 相关度」吞进定位段（普通负向先行在可选组回退下会失效，实测踩坑）。
+_RE_REF_LINE = re.compile(
+    r'\d+\.\s*\*\*(?P<fname>.+?)\*\*'
+    r'(?:\s*\((?P<label>[^)]*)\))?'
+    r'(?:\s*—\s*(?P<locality>(?:(?!相关度).)+?))?'
+    r'(?:\s*—\s*相关度:\s*(?P<score>[\d.]+))?'
+    r'(?:\s*<!--doc:(?P<doc_id>[0-9A-Za-z_\-]+)-->)?'
+    r'\s*$'
+)
+
+
+def _parse_locality_pages(raw: str) -> list[int]:
+    """"第 3-4 页" / "第 2、5 页" → 页码列表；非页码文本返回空列表。"""
+    body = re.sub(r"^第\s*|\s*页\s*$", "", raw.strip())
+    if not body:
+        return []
+    pages: set = set()
+    for token in re.split(r"[、,\s]+", body):
+        token = token.strip()
+        if re.fullmatch(r"\d+-\d+", token):
+            a, b = token.split("-")
+            if int(a) <= int(b):
+                pages.update(range(int(a), int(b) + 1))
+        elif token.isdigit():
+            pages.add(int(token))
+    return sorted(pages)
+
+
 def parse_sources_from_text(text: str) -> list[dict]:
     """
     从包含参考文献的文本中提取结构化来源。
-    解析格式: "N. **filename** (type_label) — 相关度: 0.94"
+    解析格式: "N. **filename** (type_label) — 第 X 页 · 章节 — 相关度: 0.94"
+    （定位段「第 X 页 · 章节」可缺省，向后兼容旧格式，见 _RE_REF_LINE 注释）
 
     纯函数，无副作用。
     """
@@ -186,19 +219,40 @@ def parse_sources_from_text(text: str) -> list[dict]:
             continue
         ref_section = text[idx:]
         for line in ref_section.split("\n"):
-            m = re.match(r'\d+\.\s*\*\*(.+?)\*\*\s*(?:\((.+?)\))?\s*(?:.*?相关度:\s*([\d.]+))?', line)
+            m = _RE_REF_LINE.match(line.strip())
             if m:
-                fname = m.group(1).strip()
-                label = (m.group(2) or "").strip()
-                score = float(m.group(3)) if m.group(3) else None
+                fname = m.group("fname").strip()
+                label = (m.group("label") or "").strip()
+                score = float(m.group("score")) if m.group("score") else None
+                # 定位段拆解：页码段在前、章节段在后，以「·」分隔；
+                # 无「·」且非页码文本 → 整段为章节（section-only 行）
+                locality = (m.group("locality") or "").strip()
+                pages: list[int] = []
+                section = ""
+                if locality:
+                    head, sep, tail = locality.partition("·")
+                    pages = _parse_locality_pages(head)
+                    if sep:
+                        section = tail.strip()
+                    elif not pages:
+                        section = head.strip()
                 if fname and fname not in seen:
                     doc_type = _TYPE_LABEL_TO_DOC_TYPE.get(label, "general")
-                    seen[fname] = {
+                    source = {
                         "filename": fname,
                         "doc_type": doc_type,
                         "type_label": label or doc_type,
                         "score": round(score, 2) if score is not None else None,
                     }
+                    if pages:
+                        source["pages"] = pages
+                    if section:
+                        source["section"] = section
+                    # 原文预览钥匙（P1）：行尾 <!--doc:...--> 注释取回
+                    doc_id = (m.group("doc_id") or "").strip()
+                    if doc_id:
+                        source["doc_id"] = doc_id
+                    seen[fname] = source
         break
 
     return sorted(seen.values(), key=lambda s: s["filename"])

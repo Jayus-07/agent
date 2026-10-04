@@ -38,6 +38,35 @@ CITATION_SUPPORT_THRESHOLD = 0.0  # 默认不做事后过滤，依靠 Rerank 分
 # report / manual 两个过期项，导致其余类型在引用标注里回落英文原始码。
 
 
+def _parse_pages_raw(pages_raw: str) -> list[int]:
+    """切分层页码标量串（"3,4"）→ 升序 int 列表；坏数据跳过（宁缺勿错）。"""
+    return sorted(int(p) for p in pages_raw.split(",") if p.strip().isdigit())
+
+
+def _pages_label(pages: list[int]) -> str:
+    """页码列表 → 中文文案：连续合并区间（第 3-4 页）、单页、离散列举（超过 3 页截断加「等」）。"""
+    if len(pages) == 1:
+        return f"第 {pages[0]} 页"
+    consecutive = all(b - a == 1 for a, b in zip(pages, pages[1:]))
+    if consecutive:
+        return f"第 {pages[0]}-{pages[-1]} 页"
+    shown = pages[:3]
+    suffix = " 等" if len(pages) > 3 else ""
+    return "第 " + "、".join(str(p) for p in shown) + f" 页{suffix}"
+
+
+def _format_locality(meta: dict) -> str:
+    """来源定位段（原文定位 P0）：「第 X 页 · 章节」；两者皆空返回空串（旧行格式）。"""
+    pages = _parse_pages_raw(str(meta.get("pages", "") or ""))
+    section = str(meta.get("section_title", "") or "").strip()
+    segs = []
+    if pages:
+        segs.append(_pages_label(pages))
+    if section:
+        segs.append(section)
+    return " · ".join(segs)
+
+
 class CitationFormatter:
     """Citation 处理：think 剥离 + 校验 + 格式化 + 结构化提取。
 
@@ -104,6 +133,9 @@ class CitationFormatter:
 
         - 优先显示文中 [1][2] 实际引用到的来源
         - 兜底：如果 LLM 未生成引用标注，展示所有通过验证的文档
+        行格式（2026-10-03 原文定位 P0）：
+          `N. **文件** (类型) — 第 3-4 页 · 章节 — 相关度: 0.83`
+        定位段可整体缺省（无页码无章节 = 旧格式），解析侧向后兼容。
         """
         if not docs:
             return ""
@@ -138,8 +170,16 @@ class CitationFormatter:
             parts = [f"{idx}. **{fname}**"]
             if type_label:
                 parts.append(f" ({type_label})")
+            locality = _format_locality(meta)
+            if locality:
+                parts.append(f" — {locality}")
             if score is not None:
                 parts.append(f" — 相关度: {score:.2f}")
+            # 原文预览钥匙（P1）：行尾机器注释，Markdown 渲染不可见、
+            # 前端 stripReferences 整段剪除、解析侧可选组取回（三重安全）
+            doc_id = str(meta.get("doc_id", "") or "").strip()
+            if doc_id:
+                parts.append(f" <!--doc:{doc_id}-->")
             lines.append("".join(parts))
 
         return "\n".join(lines)
@@ -169,13 +209,31 @@ class CitationFormatter:
                 score = doc.metadata.get("score",
                                          doc.metadata.get("rerank_score",
                                                           doc.metadata.get("support_score")))
-                seen[fname] = {
+                source = {
                     "index": idx,
                     "filename": fname,
                     "doc_type": doc_type,
                     "type_label": doc_type_label(doc_type),
                     "score": round(float(score), 2) if score is not None else None,
                 }
+                # 来源部门（多部门隔离）：前端来源卡部门标签；general 缺省
+                # 不下发，保持无部门归属文档的展示不变
+                department = str(doc.metadata.get("department", "") or "")
+                if department and department != "general":
+                    source["department"] = department
+                # 原文定位（P0）：页码（切分层回映射的标量逗号串）+ 章节标题；
+                # 坏数据（非数字段）跳过该页，宁缺勿错
+                pages = _parse_pages_raw(str(doc.metadata.get("pages", "") or ""))
+                if pages:
+                    source["pages"] = pages
+                section = str(doc.metadata.get("section_title", "") or "").strip()
+                if section:
+                    source["section"] = section
+                # 原文预览钥匙（P1）：doc_id → /rag/documents/{doc_id}/file
+                doc_id = str(doc.metadata.get("doc_id", "") or "").strip()
+                if doc_id:
+                    source["doc_id"] = doc_id
+                seen[fname] = source
 
         return sorted(seen.values(), key=lambda s: s.get("index", 0))
 

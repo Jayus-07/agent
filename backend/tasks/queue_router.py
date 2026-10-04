@@ -91,6 +91,8 @@ _CELERY_TASK_ROUTES: dict[str, tuple[str, str]] = {
 
 # beat / 手动维护任务 → workload_class（全部显式登记，禁止依赖 default queue）。
 _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
+    "rag.index_reconcile": ("maintenance", "beat_binding"),
+    "rag.parsing_timeout_watchdog": ("maintenance", "beat_binding"),
     "cs.handoff_timeout_scan": ("maintenance", "beat_binding"),
     "cs.confirmation_expiry_scan": ("maintenance", "beat_binding"),
     "cs.event_outbox_compensation": ("maintenance", "beat_binding"),

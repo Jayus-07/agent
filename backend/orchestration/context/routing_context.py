@@ -49,7 +49,7 @@ def assemble_routing_context(
     """
     empty = {
         "active_domain": "", "last_intent": "", "last_action": "",
-        "brief_summary": {}, "pending_question": "",
+        "brief_summary": {}, "pending_question": "", "sql_query_context": None,
     }
     if not session_id:
         return empty
@@ -73,9 +73,10 @@ def assemble_routing_context(
             "brief_summary": {
                 k: v for k, v in snap.items()
                 if k not in ("active_domain", "last_intent", "last_action",
-                             "pending_question")
+                             "pending_question", "sql_query_context")
             },
             "pending_question": snap.get("pending_question", ""),
+            "sql_query_context": snap.get("sql_query_context"),
         }
     except Exception as exc:  # noqa: BLE001 — 上下文不可用不阻断主链
         logger.debug("[RoutingContext] 组装失败，返回空上下文: %s", exc)

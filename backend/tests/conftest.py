@@ -18,6 +18,11 @@ if str(_ROOT) not in sys.path:
 os.environ["PYTHONUTF8"] = "1"
 # 测试环境禁用 P0 结构化分析层双写，防止污染真实生产表
 os.environ["OBS_ANALYTICS_ENABLED"] = "false"
+# 测试流量不写工具统计 Redis 日键：测试与生产 app 共享同一 Redis，测试注入
+# 的失败样本会混进管理端 /tools 统计（2026-10-02 实测 dummy.cap 假失败渲染
+# 成页面顶部「失败次数」）。需真测 Redis 写侧的用例自行 monkeypatch 开启
+# （参照 tests/test_tool_stats_aggregation.py 的显式 setattr 写法）。
+os.environ["TOOL_STATS_REDIS_ENABLED"] = "false"
 
 
 def pytest_addoption(parser):
@@ -307,3 +312,30 @@ def _hermetic_request_context():
     _reset_request_scoped_state()
     yield
     _reset_request_scoped_state()
+
+
+@pytest.fixture(autouse=True)
+def _unanswered_hermetic(monkeypatch):
+    """测试会话未答问题登记不写真实 PG（hermetic，同 _cb_shared_disabled 理由）。
+
+    背景：reporter 拒答路径的旁路登记（observability/unanswered.py）若在
+    单测里落库，会向 ai.unanswered_questions 写测试垃圾行，污染知识运营
+    台账（运营侧聚类拿到的全是测试问法）。写入契约由
+    tests/observability/test_unanswered.py 专项覆盖（显式控制 _insert_row）。
+    """
+    import backend.observability.unanswered as unanswered_mod
+
+    monkeypatch.setattr(unanswered_mod, "_insert_row", lambda row: True)
+
+
+@pytest.fixture(autouse=True)
+def _clarify_funnel_hermetic(monkeypatch):
+    """测试会话追问漏斗事件不写真实 PG（同 _unanswered_hermetic 理由）。
+
+    每张追问卡/点击/转化都写 ai.clarify_funnel_events 一行——单测里的
+    clarify 回归套件会产生大量假漏斗事件，污染月报口径。写入契约由
+    tests/observability/test_clarify_funnel.py 专项覆盖。
+    """
+    import backend.observability.clarify_funnel as funnel_mod
+
+    monkeypatch.setattr(funnel_mod, "_insert_event", lambda row: True)

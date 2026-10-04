@@ -100,11 +100,21 @@ class TestAuthorizationContext:
         assert "policy_finance" in ctx.allowed_kb_ids
         assert "policy_hr" not in ctx.allowed_kb_ids
 
-    def test_customer_failsafe_only_cs_kbs(self):
-        """customer fail-safe：仅 audience=customer 库，内部库全不可见。"""
+    def test_customer_failsafe_only_customer_audience_kbs(self):
+        """customer fail-safe：仅 audience=customer 库，内部库全不可见。
+
+        旅游公共知识库也是 customer audience，但不以 cs_ 前缀命名；
+        这里验证受众标签这一单一事实源，而不是把业务前缀当授权规则。
+        """
         ctx = _ctx(user_id="", subject_type="customer", authenticated=False)
         assert ctx.allowed_kb_ids is not None and ctx.allowed_kb_ids
-        assert all(kb.startswith("cs_") for kb in ctx.allowed_kb_ids)
+        from backend.config.knowledge_base import KNOWLEDGE_BASES
+
+        assert all(
+            KNOWLEDGE_BASES[kb].get("audience") == "customer"
+            for kb in ctx.allowed_kb_ids
+        )
+        assert "travel" in ctx.allowed_kb_ids
         assert "policy_hr" not in ctx.allowed_kb_ids
 
     def test_undeclared_subject_allows_none(self):

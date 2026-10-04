@@ -659,7 +659,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
             cur = self._exec(
                 conn,
                 f"UPDATE {self._table} SET status = 'deleted', updated_at = { _NOW_SQL } "
-                "WHERE doc_id = %s AND status = 'active'",
+                # pending_review / failed 都必须进入终态，否则删除后审批
+                # 或失败存量仍会留下幽灵行；active 保持原有删除语义。
+                "WHERE doc_id = %s AND status IN ('pending_review', 'failed', 'active')",
                 (doc_id,),
             )
             return cur.rowcount

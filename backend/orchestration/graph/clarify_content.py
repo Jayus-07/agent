@@ -14,8 +14,11 @@
     选品类目暗示），不新增抽取逻辑——预过滤"不越权抽取"的契约不破。
   - 客服域锁（domain_hint=customer_service）下不做 L1 追问（客服窗口不被
     业务追问打断）；L2 客服语境给 CS 定向选项 + 转人工（handoff_available）。
-  - 防循环：同一会话连续追问上限 1 次（clarify_allowed / mark_clarified），
-    守卫故障时放行（fail-open，宁可多问不吞功能）。
+  - 防循环（2026-10-03 企业口径重设计）：①同一问题原文去重——同问在窗口内
+    不重复追问，换个问法允许再问；②会话封顶——滑动窗口内最多 N 次，超过
+    后降级为裸拒答。计数走缓存原子自增（跨进程一致，故障 fail-open），
+    替代旧版「会话 10 分钟一次性」（旧语义把防循环做成了会话级一次性，
+    同句重问行为翻转：第一次给卡、重问裸拒——实测 2026-10-03 会话复现）。
 """
 from __future__ import annotations
 
@@ -49,6 +52,16 @@ _CS_OPTIONS = (
     "查询订单状态",
     "怎么申请退货退款",
     "我要投诉",
+)
+
+# SQL 空结果定向选项：用户话术，点击即重发。每条都必须被 RuleRouter 以
+# 强信号（confidence≥0.85）直拍 sql.query——由 test_clarify_flow 逐条断言，
+# 文案改动先跑测试。话术构词刻意覆盖 sql.query 的 rule_keywords
+# （统计/本月/上月/数量/金额/多少），不依赖向量层兜底。
+_SQL_EMPTY_OPTIONS = (
+    "统计一下本月的销售金额",
+    "统计一下上月的订单数量",
+    "统计一下当前库存数量有多少",
 )
 
 
@@ -124,6 +137,7 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
         travel_has_city,
         travel_signal_hits,
     )
+    from backend.orchestration.router.rule_router import sql_lean_hits
 
     if travel_signal_hits(query) or travel_has_city(query):
         return {
@@ -141,6 +155,13 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
             "handoff_available": False,
         }
 
+    # SQL 倾向（2026-10-03 实机缺口修复）：有数据诉求词但缺指标/时间槽位，
+    # 与旅游/选品同层的定向追问——实机验证发现这类查询全新会话会被向量
+    # 路由拦成低置信 clarify，SQL 不执行，槽位卡必须挂在拒答兜底才触达。
+    # 用宽词表（sql_lean_hits）不用路由窄词表：「查一下经营数据」窄表命中 0。
+    if sql_lean_hits(query) >= 1:
+        return build_sql_empty_clarify(query, executed=False)
+
     return {
         "source": "refusal_generic",
         "question": "目前知识库暂无相关资料。您可以试试这些业务，或换个问法描述您的需求：",
@@ -149,38 +170,146 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
     }
 
 
+def build_sql_empty_clarify(query: str, *, executed: bool = False) -> dict:
+    """SQL 倾向的定向追问卡（时间范围/常用指标槽位）。
+
+    两个阶段同一选项集、不同引导语：
+      - executed=True：SQL 真执行后空结果（查不到）——「没有查到相关数据」；
+      - executed=False：路由层拒答兜底识别到 SQL 倾向（还没执行）——
+        「您想查哪方面的数据」。实机验证（2026-10-03）发现「查一下经营数据」
+        在全新会话会被向量路由以低置信拦成 clarify，SQL 根本不执行——
+        槽位卡必须也挂在路由层拒答兜底上才能真正触达。
+
+    指标话术是策展短列表（与本模块其他选项卡同一纪律：文案即话术、
+    路由可达由单测强制），不做 schema 注释派生（列注释是 DB 元数据
+    风格，词料不足以生成用户话术）。
+    """
+    question = (
+        "没有查到相关数据。您可以补充时间范围或换个说法，也可以先从这些常用指标查起："
+        if executed
+        else "您想查哪方面的数据？可以补充时间范围（如本月/上月），或先从这些常用指标查起："
+    )
+    return {
+        "source": "refusal_sql_empty",
+        "question": question,
+        "options": list(_SQL_EMPTY_OPTIONS),
+        "handoff_available": False,
+    }
+
+
 # =====================================================
-# 防循环守卫（会话级连续追问上限 1 次）
+# 防循环守卫（问题级去重 + 会话封顶，原子计数）
 # =====================================================
 
 _GUARD_CACHE_NAME = "clarify_guard"
-_GUARD_TTL_SECONDS = 600  # 10 分钟内的连续追问才算"同一轮对话反复拒答"
+
+# 会话封顶计数窗口：自本会话首次追问起 10 分钟内最多 _SESSION_CLARIFY_LIMIT 次
+_SESSION_WINDOW_SECONDS = 600
+_SESSION_CLARIFY_LIMIT = 2
+# 同一问题去重窗口：同问 30 分钟内不再追问（换问法不受影响）
+_QUESTION_DEDUP_TTL_SECONDS = 1800
+# 追问卡选项暂存窗口：供下一轮「点击检测」比对新到消息是否为选项原文
+_OFFERED_TTL_SECONDS = _SESSION_WINDOW_SECONDS
 
 
 def _get_guard_cache():
     """守卫缓存（模块级函数便于测试替换；Redis 不可用降级进程内缓存）。"""
     from backend.infra.cache import get_cache
 
-    return get_cache(_GUARD_CACHE_NAME, ttl=_GUARD_TTL_SECONDS)
+    return get_cache(_GUARD_CACHE_NAME, ttl=_SESSION_WINDOW_SECONDS)
 
 
-def clarify_allowed(session_id: str) -> bool:
-    """该会话当前是否还允许追问（连续追问上限 1 次）。"""
+def _normalize_question(question: str) -> str:
+    """问题归一化：去全部空白 + 小写（同一句话的空白/大小写差异不算新问法）。"""
+    return "".join((question or "").split()).lower()
+
+
+def _qdup_key(session_id: str, question: str) -> str:
+    """问题去重键：必须带会话维度——不同用户/会话问同一常见问题，
+    各自都该拿到追问卡（测试 2026-10-03 抓过跨会话误伤缺陷）。"""
+    import hashlib
+
+    digest = hashlib.sha1(_normalize_question(question).encode("utf-8")).hexdigest()[:16]
+    return f"qdup:{session_id}:{digest}"
+
+
+def _session_count_key(session_id: str) -> str:
+    return f"count:{session_id}"
+
+
+def _offered_key(session_id: str) -> str:
+    return f"offered:{session_id}"
+
+
+def clarify_allowed(session_id: str, question: str = "") -> bool:
+    """该会话对这个问题当前是否还允许追问。
+
+    ① 同一问题（归一化后）在去重窗口内已追问过 → 不再追问；
+    ② 会话窗口内追问次数达封顶 → 不再追问（降级为裸拒答）；
+    ③ 缓存故障 fail-open（宁可多问一次，不吞掉拒答转追问）。
+    """
     if not session_id:
         return True
     try:
-        return not _get_guard_cache().get_json(f"clarified:{session_id}")
+        cache = _get_guard_cache()
+        if question and cache.get_json(_qdup_key(session_id, question)):
+            return False
+        count = cache.get_json(_session_count_key(session_id)) or 0
+        return int(count) < _SESSION_CLARIFY_LIMIT
     except Exception as e:
         logger.warning(f"[ClarifyGuard] 读取守卫状态失败，放行追问: {e}")
         return True
 
 
-def mark_clarified(session_id: str) -> None:
-    """记录本会话已追问过一次（TTL 内不再追问，超时自动复位）。"""
+def mark_clarified(
+    session_id: str,
+    question: str = "",
+    *,
+    options: list[str] | tuple[str, ...] | None = None,
+    source: str = "",
+) -> None:
+    """记录一次追问已发出（原子计数 + 问题去重 + 选项暂存供点击检测）。
+
+    计数窗口自首次追问起算（incr 仅首建设 TTL），到点自动复位。
+    全程软失败：守卫写坏不影响已发出的追问卡。
+    """
     if not session_id:
         return
     try:
-        _get_guard_cache().set_json(f"clarified:{session_id}", True,
-                                    ttl=_GUARD_TTL_SECONDS)
+        cache = _get_guard_cache()
+        cache.incr(_session_count_key(session_id), ttl=_SESSION_WINDOW_SECONDS)
+        if question:
+            cache.set_json(_qdup_key(session_id, question), True,
+                           ttl=_QUESTION_DEDUP_TTL_SECONDS)
+        if options:
+            cache.set_json(
+                _offered_key(session_id),
+                {"source": source,
+                 "options": [_normalize_question(o) for o in options if o]},
+                ttl=_OFFERED_TTL_SECONDS,
+            )
     except Exception as e:
         logger.warning(f"[ClarifyGuard] 写入守卫状态失败: {e}")
+
+
+def consume_clarify_click(session_id: str, question: str) -> dict | None:
+    """检测本轮消息是否为上一张追问卡的选项原文（点击即重发话术）。
+
+    命中则消费掉暂存（一次点击只计一次）并返回 {"source": 卡片来源}；
+    未命中返回 None（暂存保留，用户可能先自由发言再点选项）。
+    每请求一次缓存读（热路径 +1 次 GET，TwoTier 有 30s L1），软失败返 None。
+    """
+    if not session_id or not question:
+        return None
+    try:
+        cache = _get_guard_cache()
+        offered = cache.get_json(_offered_key(session_id))
+        if not offered:
+            return None
+        if _normalize_question(question) in (offered.get("options") or []):
+            cache.delete(_offered_key(session_id))
+            return {"source": offered.get("source", "")}
+        return None
+    except Exception as e:
+        logger.debug(f"[ClarifyGuard] 点击检测失败（软降级）: {e}")
+        return None

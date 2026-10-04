@@ -63,6 +63,7 @@ def client(monkeypatch, fake_redis):
 def fake_redis(monkeypatch):
     fr = FakeRedis()
     monkeypatch.setattr("backend.infra.redis.client.get_redis", lambda: fr)
+    monkeypatch.setattr("backend.infra.redis.client.get_auth_redis", lambda: fr)
     monkeypatch.setattr("backend.app.api.routes.auth_local.get_redis", lambda: fr)
     return fr
 

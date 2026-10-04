@@ -32,6 +32,7 @@ from backend.travel.models.itinerary import (
     KIND_MEAL,
     KIND_VISIT,
     TransitLeg,
+    TransitOption,
 )
 from backend.travel.models.poi import Poi
 from backend.travel.timeutil import MINUTES_PER_DAY, from_min, to_min
@@ -158,10 +159,16 @@ def schedule_day(
             # 估算」策略（实时路况对远期日期是伪事实）。编排逻辑不变。
             est = estimate_leg(prev_coord[0], prev_coord[1], poi.lat, poi.lng,
                                trip_date=day_date)
-            day.legs.append(TransitLeg(
+            leg = TransitLeg(
                 from_title=prev_item.title if prev_item else "起点",
                 to_title=poi.name, **est,
-            ))
+            )
+            # 公交候选旁路附加（验收 #41）：只消费预热缓存，miss/远期/异常
+            # 一律无候选 —— 主路线口径与时间轴计算零改动（best-effort）。
+            option = _transit_option_for(prev_coord, (poi.lat, poi.lng), day_date)
+            if option is not None:
+                leg.transit_option = TransitOption(**option)
+            day.legs.append(leg)
 
         item = ItineraryItem(
             title=poi.name, kind=KIND_VISIT,
@@ -225,13 +232,39 @@ def build_itinerary(
     return itinerary, notes
 
 
-def prefetch_day_legs(pois_by_day: list[list[Poi]]) -> None:
+def _transit_option_for(from_coord: tuple[float, float],
+                        to_coord: tuple[float, float],
+                        day_date) -> dict | None:
+    """取本段公交候选（best-effort，验收 #41）。
+
+    远期出行日期不提供公交候选（当日实时公交口径对远期是伪事实，与
+    主路线「远期强制本地估算」同哲学）；预热缓存 miss（接口失败/预算
+    超时/未预热）同样静默跳过 —— 候选是参考增强，绝不阻塞或拖慢排程。
+    """
+    try:
+        from backend.providers.travel.facts import is_far_trip
+        from backend.tools.travel.live_map import peek_leg_transit
+
+        if is_far_trip(day_date):
+            return None
+        return peek_leg_transit(from_coord[0], from_coord[1],
+                                to_coord[0], to_coord[1])
+    except Exception:  # noqa: BLE001 — 候选失败不影响排程
+        return None
+
+
+def prefetch_day_legs(pois_by_day: list[list[Poi]],
+                      trip_dates: list | None = None) -> None:
     """并行预热「同日相邻 POI」的路线（best-effort）。
 
     2026-09-15 性能优化：排程循环逐段串行调用腾讯路线 API（实测 5 段 ≈5s）。
     先把相邻段并发取回进缓存，串行循环随后直接命中。
     预热顺序取 order_pois 的结果，与 schedule_day 的实际遍历一致；
     午餐点位的插入会产生少量未覆盖段（数量小，可接受）。
+
+    trip_dates（#41）：与 pois_by_day 同长的出行日期列表，供公交候选预热
+    逐天判远期；缺省（未提供出发日期）按 is_far_trip(None)=False 处理，
+    transit 段照常预热。组装处经 peek_leg_transit 只读消费。
     """
     try:
         from backend.tools.travel.live_map import prefetch_legs
@@ -243,5 +276,26 @@ def prefetch_day_legs(pois_by_day: list[list[Poi]]) -> None:
                 pairs.append((a.lat, a.lng, b.lat, b.lng))
         if pairs:
             prefetch_legs(pairs)
+        # 公交候选预热（验收 #41）：与主路线同款并发+预算纪律。日期逐天判
+        # 远期（trip_dates 缺省视为 None=未提供日期，与 is_far_trip 的既有
+        # 语义一致：不判远期，实时数据照常可用）；远期日期不预热，
+        # 组装处同样拦截（双保险）。
+        if pairs:
+            from backend.providers.travel.facts import is_far_trip
+
+            transit_pairs = []
+            for i, pois in enumerate(pois_by_day):
+                day_date = (trip_dates[i]
+                            if trip_dates and i < len(trip_dates) else None)
+                if is_far_trip(day_date):
+                    continue
+                ordered = order_pois(list(pois))
+                for a, b in zip(ordered, ordered[1:]):
+                    transit_pairs.append((a.lat, a.lng, b.lat, b.lng))
+            if transit_pairs:
+                from backend.tools.travel import live_map
+
+                prefetch_legs(transit_pairs, loader=live_map.live_leg_transit,
+                              mode="transit")
     except Exception as e:  # noqa: BLE001 — 预热失败不阻塞排程
         logger.debug("[TravelTransit] 路段预热跳过: %s", e)

@@ -44,9 +44,9 @@ class LLMFactory:
 
     用法:
         factory = LLMFactory()
-        factory.set_current("deepseek-chat")   # 切换全局模型
+        factory.set_current("doubao-seed-2.0-mini")   # 切换全局模型
         model = factory.get_current()          # 获取当前实例
-        balance = factory.get_balance("deepseek")  # 查余额
+        balance = factory.get_balance("qwen")  # 查余额
     """
 
     def __init__(self, module_default=None):

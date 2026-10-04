@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import nullcontext
 from typing import Any, Generator
 
 from backend.models.task import TaskLeaseLost, TaskRecord, TaskStatus
@@ -213,15 +214,27 @@ class TaskGraphExecutor:
         self._execution_id = execution_id
         self._heartbeat = heartbeat
 
-        trace_record = self._start_task_trace(record) if execution_id else None
         try:
-            result = self._execute_inner(record, execution_id=execution_id,
-                                         heartbeat=heartbeat)
-        except BaseException as exc:  # noqa: BLE001 — 只读不吞，转给 finally 收口
-            self._finish_task_trace(trace_record, record, result=None, exc=exc)
-            raise
-        self._finish_task_trace(trace_record, record, result=result, exc=None)
-        return result
+            from backend.prompts.hot_reload import ensure_prompt_snapshot_fresh
+            from backend.prompts.service import prompt_service
+
+            ensure_prompt_snapshot_fresh()
+            prompt_pin = prompt_service.pin_snapshot()
+        except Exception:  # noqa: BLE001 - 热更新旁路不得阻断任务
+            logger.debug("[TaskExecutor] Prompt Runtime freshness check skipped", exc_info=True)
+            prompt_pin = None
+
+        context = prompt_pin if prompt_pin is not None else nullcontext()
+        with context:
+            trace_record = self._start_task_trace(record) if execution_id else None
+            try:
+                result = self._execute_inner(record, execution_id=execution_id,
+                                             heartbeat=heartbeat)
+            except BaseException as exc:  # noqa: BLE001 — 只读不吞，转给 finally 收口
+                self._finish_task_trace(trace_record, record, result=None, exc=exc)
+                raise
+            self._finish_task_trace(trace_record, record, result=result, exc=None)
+            return result
 
     def _start_task_trace(self, record: TaskRecord):
         """任务级 trace 绑定（Phase2-F，best-effort）：None = 观测不可用。
@@ -257,11 +270,17 @@ class TaskGraphExecutor:
             # 断点续跑的新 execution 重新快照（恢复时用的是恢复时点的版本，
             # 与 checkpoint 内 state.prompt_versions 对照可发现中途换版）。
             try:
+                from backend.prompts.hot_reload import prompt_runtime_metadata
                 from backend.prompts.service import prompt_service
 
                 _pv = prompt_service.current_versions()
                 trace.tags["prompt_versions"] = ",".join(
                     f"{k}={v}" for k, v in sorted(_pv.items())[:12]) or "none"
+                runtime = prompt_runtime_metadata(_pv)
+                trace.tags["prompt_runtime"] = runtime
+                trace.tags["prompt_epoch"] = runtime["epoch"]
+                trace.tags["snapshot_time"] = runtime["snapshot_time"]
+                trace.tags["reload_source"] = runtime["reload_source"]
             except Exception:
                 pass
             trace_collector.start_span(

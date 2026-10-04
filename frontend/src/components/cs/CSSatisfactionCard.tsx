@@ -54,7 +54,7 @@ export default function CSSatisfactionCard({ conversationId, onDismissed }: CSSa
   return (
     <div
       data-testid="cs-satisfaction-card"
-      className="mx-3 mb-2 px-3.5 py-3 rounded-xl bg-surface-raised border border-border-subtle space-y-2"
+      className="mx-3 mb-2 px-3.5 py-3 rounded-xl bg-surface-elevated border border-border-subtle space-y-2"
     >
       {/* 标题行 */}
       <div className="flex items-center gap-2">

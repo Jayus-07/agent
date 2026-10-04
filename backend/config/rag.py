@@ -59,6 +59,9 @@ RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
 # 用 RAG_DATA_DIR 派生绝对路径，消除相对路径的 CWD 依赖
 from backend.config.database import RAG_DATA_DIR
 RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", os.path.join(RAG_DATA_DIR, "rag", "tmp"))
+RAG_UPLOAD_PATH_GUARD = os.getenv("RAG_UPLOAD_PATH_GUARD", "true").strip().lower() in (
+    "1", "true", "yes"
+)
 # 流式读块大小 (1MB 平衡内存和 syscall 次数)
 RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次
@@ -98,7 +101,7 @@ RAG_OCR_MIN_INTERVAL_MS = int(os.getenv("RAG_OCR_MIN_INTERVAL_MS", "300"))
 RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN = int(os.getenv("RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN", "10"))
 RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS = int(os.getenv("RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS", "6"))
 
-# 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DeepSeek）
+# 文档级关键词 LLM 模型 — 设了用本地 Ollama（免费），不设走 _LLMProxy（当前 DB 主模型）
 # 模型名走角色注册表（role=doc，空值 = 跟随 main，且空值本身有语义：
 # 消费方用 `if DOC_LLM_MODEL:` 判断是否启用本地 Ollama，故此处保留空串）
 DOC_LLM_MODEL = _literal_model("doc")
@@ -387,7 +390,7 @@ ADAPTIVE_K_STEPS = [int(x) for x in os.getenv("ADAPTIVE_K_STEPS", "8,12,16").spl
 EVIDENCE_TOKEN_BUDGET = int(os.getenv("EVIDENCE_TOKEN_BUDGET", "3000"))
 
 # 摘要长度限制
-SUMMARY_MAX_LENGTH = 250
+SUMMARY_MAX_LENGTH = 300  # M3：旅游速览卡消费文档摘要，250→300（docs/travel-rag-doc-spec.md）
 
 # 以下业务数据已在 domain_data.py 定义，通过顶部 re-export 保持兼容
 # ====================================
@@ -409,6 +412,10 @@ CLEAN_REMOVE_PDF_HEADERS = os.getenv("CLEAN_REMOVE_PDF_HEADERS", "false").lower(
 CLEAN_REMOVE_PDF_FOOTERS = os.getenv("CLEAN_REMOVE_PDF_FOOTERS", "false").lower() == "true"
 CLEAN_URL_ACTION = os.getenv("CLEAN_URL_ACTION", "keep")
 CLEAN_EMAIL_ACTION = os.getenv("CLEAN_EMAIL_ACTION", "keep")
+# 维基类模板行整行剔除（消歧义横幅/Unihan 声明/医学声明——对 RAG 是纯噪音）。
+# 默认开：三类模式无歧义，且 2026-10-04 福州旅游攻略 chunk 审计发现其混入检索块；
+# env 置 false 可关闭（与同组开关的差异=这类行不存在任何"保留有价值"的场景）。
+CLEAN_DROP_TEMPLATE_LINES = os.getenv("CLEAN_DROP_TEMPLATE_LINES", "true").lower() == "true"
 
 # ====================================
 # 脏数据过滤配置

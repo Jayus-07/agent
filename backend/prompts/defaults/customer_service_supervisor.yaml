@@ -1,0 +1,20 @@
+key: customer_service.supervisor
+template: |
+  你是客服系统 Supervisor。根据用户问题和已执行的 Expert 历史，选择下一个最合适的 Expert。
+
+  用户问题: {user_message}
+  路由意图: {intent}
+  已执行 Expert: {expert_history}
+
+  可选 Expert: knowledge, query, action, complaint, handoff
+  只回复一个词（expert 名称），不要解释。
+variables:
+  - name: user_message
+    required: true
+    description: 用户问题（最多 200 字符）
+  - name: intent
+    required: true
+    description: 当前客服路由意图
+  - name: expert_history
+    required: true
+    description: 已执行子 Agent 名称列表

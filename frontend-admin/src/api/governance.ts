@@ -18,6 +18,38 @@ export interface ToolContractEntry {
   name: string
   /** 中文显示名（backend/tools/labels.py 单一事实源，经契约 lock 派生）；空 = 未登记 */
   display_name: string
+  /** 数据源归属（同 labels.py 派生）：mcp=外部 MCP server / rest=外部 API / internal=平台内部 */
+  data_source?: {
+    type: 'mcp' | 'rest' | 'internal'
+    provider?: string
+    upstream_tool?: string
+    switch_env?: string
+    /** 额度声明（labels.py 派生，三种成熟度对应三种口径：真软预算/声明+月键计数/纯被动） */
+    quota?: {
+      period?: 'day' | 'period' | 'qps'
+      limit?: number
+      limit_env?: string
+      usage_provider?: string
+      usage_counter?: string
+      note?: string
+    }
+  } | null
+  /** 额度运行时读数（/admin/tools 派生，软失败退化为 untracked） */
+  quota_runtime?: {
+    period?: string
+    limit?: number | null
+    limit_env?: string | null
+    note?: string
+    usage?: number | null
+    budget?: number | null
+    status?: 'unlimited' | 'ok' | 'exhausted' | 'tracked' | 'untracked'
+  } | null
+  /** 参数契约（lock 派生）：参数名 → {schema, required, default（__unset__=无默认）} */
+  args_schema?: Record<string, {
+    schema: Record<string, unknown>
+    required: boolean
+    default: unknown
+  }>
   module: string
   capabilities: string[]
   output_types: Record<string, string>
@@ -42,6 +74,8 @@ export interface ToolErrorRecord {
   capability: string
   skill: string
   error_code: string
+  error_class?: string
+  source_error_code?: string
   error: string
   latency_ms: number
 }
@@ -55,6 +89,32 @@ export interface ToolInventory {
 
 export function getToolInventory(): Promise<ToolInventory> {
   return request<ToolInventory>('/api/admin/tools')
+}
+
+export type ToolFailureClass =
+  | 'timeout'
+  | 'network_error'
+  | 'permission_denied'
+  | 'validation_error'
+  | 'business_error'
+  | 'contract_error'
+  | 'provider_error'
+
+export interface ToolFailureProbeResponse {
+  trace_id: string
+  tool: string
+  error_class: ToolFailureClass
+  status: string
+  simulated: true
+}
+
+export function runToolFailureProbe(
+  tool: string, error_class: ToolFailureClass, domain = '',
+): Promise<ToolFailureProbeResponse> {
+  return request<ToolFailureProbeResponse>('/api/admin/tools/failure-probe', {
+    method: 'POST',
+    body: { tool, error_class, domain },
+  })
 }
 
 // ── Tool 契约变更历史（治理验收 #9） ──────────────────

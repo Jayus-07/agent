@@ -1,7 +1,7 @@
 # DESIGN — 前端三端设计规范
 
 > 用户端 `frontend`（:3100）· 管理端 `frontend-admin`（:3200）· 客服坐席端 `frontend-cs`（:3300）的统一设计规范。
-> 最后验证：2026-09-29 · 基于三端代码逐目录 survey（token 色值 / 组件路径 / 状态表现均实测）。
+> 最后验证：2026-10-04 · 基于三端代码逐目录 survey（token 色值 / 组件路径 / 状态表现均实测）；本次同步 /travel 三栏形态、管理端侧栏二级标题、AI 身份告知。
 > 历史依据：[2026-09-17-UX体验架构设计.md](2026-09-17-UX体验架构设计.md)（三段式错误反馈 / 等待体验 / 空态体系的原始规范）、[2026-09-16-前端拆分计划.md](2026-09-16-前端拆分计划.md)（三端拆分背景）。
 
 ---
@@ -57,11 +57,11 @@
 
 **权限模型**（三端一致）：`viewer(0) < editor(1) < admin(2) < super_admin(3)`；菜单显隐（minRole）+ 页面 RoleGate + 后端 403 兜底——**UI 呈现不是真闸**。坐席端另有 `csRole` 坐席名单制。
 
-## 4. 页面清单（2026-09-29 实测）
+## 4. 页面清单（2026-10-02 实测）
 
-**用户端**（5 页）：`/` 统一门户（三端入口卡）· `/login` / `/register`（注册成功自动登录）· `/agent` 聊天主界面（`?cs=1` 客服抽屉、`?session=` 深链恢复）· `/travel` 独立旅游表单页（逐日时间轴 + 地图打点 + ICS 导出）
+**用户端**（6 页）：`/` 统一门户（三端入口卡）· `/login` / `/register`（注册成功自动登录）· `/agent` 聊天主界面（`?cs=1` 客服抽屉、`?session=` 深链恢复）· `/travel` 三栏旅游控制台——左栏行程条件（TaskSidebar travel 模式：历史规划列表 + 需求摘要锁定），中栏行程画布（逐日时间轴 + 地图打点 + ICS 导出；生成中以 GeneratingCard 占位、真实美食/酒店/车次 Tool 结果按 SSE 动态进聊天流），右栏「旅行助手」页内对话式改单（复用同一会话，工具条收敛摘要 + 结果卡横向流 + 排队槽）；全局 Sidebar 控制台形态，另有 CityGuideDrawer 城市指南抽屉、方案档位切换器与预算协商卡；失败不以演示数据替代。
 
-**管理端**（38 页，五组菜单）：运营总览 `/` · 知识库（documents / pending / keywords / evaluations / operations）· 业务分析（competitors / selection-funnel / selection-decision / reports）· 运维监控（tasks / observability/traces|gateway|tokens|alerts / security / schedules / alerts）· 平台管理（prompts / agents / skills / cost-governance/budgets / settings/models / approvals / settings/access 访问控制）
+**管理端**（五组菜单，工作台承载高关联页面）：运营总览 `/` · 业务运营（`/data-explorer` / `/competitors` / `/selection-workbench`〔选品漏斗、选品决策 Tab〕/ `/reports`）· 内容与质量（`/knowledge/workbench`〔文档、待复核、入库失败、词库、操作日志 Tab〕/ `/evaluations/center`〔评测结果、评测集治理、反馈候选 Tab〕）· 运行中心（`/tasks` / `/observability/monitoring`〔问答追踪、网关安全、Token 用量 Tab〕/ `/security` / `/observability/alerts` / `/alerts` / `/schedules`）· 系统设置（`/prompts` / `/agents` / `/skills` / `/tools` / `/consistency` / `/releases` / `/cost-governance/budgets` / `/settings/models` / `/approvals` / `/settings/access`）。旧列表 URL 保留兼容重定向并参与当前菜单高亮，不再作为侧栏入口；侧栏同组页面通过“业务洞察 / 选品运营 / 业务产出 / 知识内容 / 评测治理 / 运行状态 / 告警与安全 / 自动化 / AI 资产 / 治理与发布 / 安全与权限”等二级标题区分。
 
 **坐席端**（7 页）：`/cs` 工作台首页 · `/cs/handoff` 人工接入（队列 + offer + 聊天接管）· `/cs/conversations`（+`/[id]` 详情含逐消息 trace 双栏）· `/cs/tickets` 工单 · `/cs/stats` 满意度统计与质检日报 · `/login`
 
@@ -104,10 +104,11 @@
 4. **时间双轨**：会话列表相对时间分组（刚刚/N 分钟前/今天/昨天/最近 7 天/更早，`lib/session-groups.ts`）；精确时刻 `toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })`；token 数 `toLocaleString()` + `tabular-nums`
 5. **输入上限静默引导**：字数计数器接近上限才出现，超限红字引导走知识库上传而非硬报错（`lib/chatInputLimit.ts`）
 6. **免责声明常驻**：输入框下方固定 10px 灰字「答案由 AI 生成，请核实关键信息」
-7. **反馈静默化**：赞/踩 hover 才出现，点踩展开原因表单；提交类按钮变底色即确认、不可重复提交
-8. **代码块悬浮复制**：hover 显形「复制/已复制」2s 回弹
-9. **性能即设计**：普通气泡 memo 不订阅流式字段、组件级 store 订阅、rAF 节流、`compress: false` 保 SSE 打字机逐 chunk
-10. **坐席辅助面板**：AI 推荐回复只填入输入框，**绝不自动发送**（frontend-cs `agent/AgentAssistPanel.tsx`）
+7. **AI 身份告知（C12，2026-10-03）**：客服抽屉内 assistant 气泡自带「AI 客服 · 由人工智能生成」小字标识（hover 提示「本条回复由人工智能生成，仅供参考」，`cs/CSMessageBubble.tsx`）；客服欢迎页「AI 智能客服」徽标 + 免责说明（`cs/CSWelcome.tsx`）；转人工入口与会话头部常驻标识此前已有
+8. **反馈静默化**：赞/踩 hover 才出现，点踩展开原因表单；提交类按钮变底色即确认、不可重复提交
+9. **代码块悬浮复制**：hover 显形「复制/已复制」2s 回弹
+10. **性能即设计**：普通气泡 memo 不订阅流式字段、组件级 store 订阅、rAF 节流、`compress: false` 保 SSE 打字机逐 chunk
+11. **坐席辅助面板**：AI 推荐回复只填入输入框，**绝不自动发送**（frontend-cs `agent/AgentAssistPanel.tsx`）
 
 ## 8. 反模式清单（「不要做」）
 

@@ -1,0 +1,50 @@
+{"id":"TRV-G001","question":"福州的三坊七巷和朱紫坊建筑群有什么看点？","expected_doc":"福州-景点-三坊七巷和朱紫坊建筑群.md","expected_answer":"介绍三坊七巷和朱紫坊建筑群的历史与游览看点。","type":"poi"}
+{"id":"TRV-G002","question":"福州崇妙保圣坚牢塔是什么地方？","expected_doc":"福州-景点-崇妙保圣坚牢塔.md","expected_answer":"说明崇妙保圣坚牢塔的基本背景与参观信息。","type":"poi"}
+{"id":"TRV-G003","question":"船政学堂适合怎么参观？","expected_doc":"福州-景点-船政学堂.md","expected_answer":"回答船政学堂的历史背景和参观要点。","type":"poi"}
+{"id":"TRV-G004","question":"福州烟台山有什么值得看的？","expected_doc":"福州-景点-烟台山-(福州).md","expected_answer":"介绍烟台山的历史建筑和游览重点。","type":"poi"}
+{"id":"TRV-G005","question":"华林寺的特色是什么？","expected_doc":"福州-景点-华林寺-(福州).md","expected_answer":"回答华林寺的历史与建筑特色。","type":"poi"}
+{"id":"TRV-G006","question":"福州文庙有哪些看点？","expected_doc":"福州-景点-福州文庙.md","expected_answer":"介绍福州文庙的历史和主要看点。","type":"poi"}
+{"id":"TRV-G007","question":"圣寿宝塔在哪里，有什么来历？","expected_doc":"福州-景点-圣寿宝塔.md","expected_answer":"回答圣寿宝塔的地点和历史来历。","type":"poi"}
+{"id":"TRV-G008","question":"昙石山遗址值得去吗？","expected_doc":"福州-景点-昙石山遗址.md","expected_answer":"介绍昙石山遗址的文化价值与游览建议。","type":"poi"}
+{"id":"TRV-G009","question":"九头马民居有什么建筑特色？","expected_doc":"福州-景点-九头马民居.md","expected_answer":"回答九头马民居的建筑与历史特色。","type":"poi"}
+{"id":"TRV-G010","question":"泛船浦圣多明我主教座堂的看点是什么？","expected_doc":"福州-景点-泛船浦圣多明我主教座堂.md","expected_answer":"介绍教堂的历史背景和建筑看点。","type":"poi"}
+{"id":"TRV-G011","question":"名山室有什么历史信息？","expected_doc":"福州-景点-名山室.md","expected_answer":"回答名山室的历史与参观要点。","type":"poi"}
+{"id":"TRV-G012","question":"陈太尉宫适合安排在福州哪条线路？","expected_doc":"福州-景点-陈太尉宫.md","expected_answer":"介绍陈太尉宫并给出基于资料的游览建议。","type":"poi"}
+{"id":"TRV-G013","question":"栖云洞造像有什么特色？","expected_doc":"福州-景点-栖云洞造像.md","expected_answer":"回答栖云洞造像的历史和艺术特色。","type":"poi"}
+{"id":"TRV-G014","question":"昭忠祠的主要纪念内容是什么？","expected_doc":"福州-景点-昭忠祠-(福州).md","expected_answer":"介绍昭忠祠的纪念对象和历史背景。","type":"poi"}
+{"id":"TRV-G015","question":"南普陀寺有哪些游览看点？","expected_doc":"厦门-景点-南普陀寺.md","expected_answer":"介绍南普陀寺的历史与游览看点。","type":"poi"}
+{"id":"TRV-G016","question":"胡里山炮台有什么历史？","expected_doc":"厦门-景点-胡里山炮台.md","expected_answer":"回答胡里山炮台的历史和参观重点。","type":"poi"}
+{"id":"TRV-G017","question":"鼓浪屿近代建筑群值得看什么？","expected_doc":"厦门-景点-鼓浪屿近代建筑群.md","expected_answer":"介绍鼓浪屿近代建筑群的建筑与历史价值。","type":"poi"}
+{"id":"TRV-G018","question":"集美学村和厦门大学早期建筑有什么特色？","expected_doc":"厦门-景点-集美学村和厦门大学早期建筑.md","expected_answer":"回答相关建筑群的历史与建筑特色。","type":"poi"}
+{"id":"TRV-G019","question":"中山路适合看哪些城市景观？","expected_doc":"厦门-景点-中山路-(厦门).md","expected_answer":"介绍厦门中山路的城市风貌与游览看点。","type":"poi"}
+{"id":"TRV-G020","question":"青礁慈济宫有哪些文化信息？","expected_doc":"厦门-景点-青礁慈济宫.md","expected_answer":"回答青礁慈济宫的文化背景和参观信息。","type":"poi"}
+{"id":"TRV-G021","question":"福州的佛跳墙有什么特点？","expected_doc":"福州-美食-佛跳墙.md","expected_answer":"介绍佛跳墙的特色与相关饮食信息。","type":"food"}
+{"id":"TRV-G022","question":"福州鱼丸有什么特色？","expected_doc":"福州-美食-鱼丸.md","expected_answer":"回答福州鱼丸的特色与饮食信息。","type":"food"}
+{"id":"TRV-G023","question":"鼎边糊是什么美食？","expected_doc":"福州-美食-鼎边糊.md","expected_answer":"介绍鼎边糊的食材、口感或地方特色。","type":"food"}
+{"id":"TRV-G024","question":"福州线面适合怎么吃？","expected_doc":"福州-美食-线面.md","expected_answer":"回答福州线面的特色与食用信息。","type":"food"}
+{"id":"TRV-G025","question":"福州光饼有什么来历或特点？","expected_doc":"福州-美食-光饼.md","expected_answer":"介绍光饼的地方特色与相关背景。","type":"food"}
+{"id":"TRV-G026","question":"扁肉燕和普通馄饨有什么不同？","expected_doc":"福州-美食-扁肉燕.md","expected_answer":"回答扁肉燕的特色及其与常见做法的区别。","type":"food"}
+{"id":"TRV-G027","question":"福州鱼露有什么用途？","expected_doc":"福州-美食-鱼露.md","expected_answer":"介绍福州鱼露的特色和常见用途。","type":"food"}
+{"id":"TRV-G028","question":"厦门土笋冻是什么？","expected_doc":"厦门-美食-土笋冻.md","expected_answer":"介绍土笋冻的地方特色和饮食信息。","type":"food"}
+{"id":"TRV-G029","question":"姜母鸭有什么特点？","expected_doc":"厦门-美食-姜母鸭.md","expected_answer":"回答姜母鸭的特色与饮食信息。","type":"food"}
+{"id":"TRV-G030","question":"厦门蚵仔煎怎么介绍？","expected_doc":"厦门-美食-蚵仔煎.md","expected_answer":"介绍蚵仔煎的地方特色和主要食材。","type":"food"}
+{"id":"TRV-G031","question":"从福州机场到市区有哪些交通方式？","expected_doc":"福州旅游攻略.md","expected_answer":"根据福州旅游攻略回答机场到市区的交通方式。","type":"transit"}
+{"id":"TRV-G032","question":"福州地铁出行有哪些实用信息？","expected_doc":"福州旅游攻略.md","expected_answer":"根据旅游攻略回答福州地铁出行信息。","type":"transit"}
+{"id":"TRV-G033","question":"厦门机场到市区怎么走？","expected_doc":"厦门旅游攻略.md","expected_answer":"根据厦门旅游攻略回答机场到市区的路线建议。","type":"transit"}
+{"id":"TRV-G034","question":"福州两天行程怎样安排景点顺序？","expected_doc":"福州旅游攻略.md","expected_answer":"依据福州旅游攻略给出两天行程顺序建议。","type":"route"}
+{"id":"TRV-G035","question":"厦门两天行程怎样安排鼓浪屿和市区？","expected_doc":"厦门旅游攻略.md","expected_answer":"依据厦门旅游攻略给出鼓浪屿与市区的行程建议。","type":"route"}
+{"id":"TRV-G036","question":"福州旅游有哪些总体建议？","expected_doc":"福州特色指南.md","expected_answer":"概括福州特色指南中的旅行建议。","type":"route"}
+{"id":"TRV-G037","question":"厦门旅游有哪些总体建议？","expected_doc":"厦门特色指南.md","expected_answer":"概括厦门特色指南中的旅行建议。","type":"route"}
+{"id":"TRV-G038","question":"福州城市旅行需要注意哪些基本信息？","expected_doc":"福州-城市-福州.md","expected_answer":"根据城市资料回答福州旅行的基本信息。","type":"route"}
+{"id":"TRV-G039","question":"福州有没有一座会在2027年开放的海底宫殿？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G040","question":"厦门鼓浪屿今天是否一定能看到极光？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G041","question":"福州三坊七巷是否由郑成功亲自设计？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G042","question":"厦门有没有票价一元且永远不排队的地铁？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G043","question":"福州哪家不存在的餐厅获得了米其林三星？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G044","question":"厦门有没有能保证百分之百看到海豚的景点？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G045","question":"福州的某虚构景点是否允许携带无人机进入？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G046","question":"厦门是否有资料证明所有景点都免费？","expected_doc":"","expected_answer":"资料中没有足够证据，应该明确拒答。","type":"no_answer"}
+{"id":"TRV-G047","question":"hr viewer 是否可以读取 policy_finance 中的财务制度？","expected_doc":"","expected_answer":"无权限时必须拒绝访问，不应返回受限文档证据。","type":"permission_negative"}
+{"id":"TRV-G048","question":"finance viewer 是否可以读取 policy_hr 中的人事制度？","expected_doc":"","expected_answer":"无权限时必须拒绝访问，不应返回受限文档证据。","type":"permission_negative"}
+{"id":"TRV-G049","question":"general viewer 是否可以读取 policy_hr 中的人事制度？","expected_doc":"","expected_answer":"无权限时必须拒绝访问，不应返回受限文档证据。","type":"permission_negative"}
+{"id":"TRV-G050","question":"hr viewer 是否可以读取 policy_finance 中的财务制度原文？","expected_doc":"","expected_answer":"无权限时必须拒绝访问，不应返回受限文档证据。","type":"permission_negative"}

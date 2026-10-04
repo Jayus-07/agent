@@ -98,12 +98,15 @@ services:
       - JWT_SECRET=${JWT_SECRET:-}
       - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}
       - JWT_ISSUER=${JWT_ISSUER:-agent-platform}
-      # Redis 黑名单（只读 oa-auth-redis，写侧归 auth-service）
+      # Redis 黑名单（只读独立 auth-redis，写侧归本地 auth 路由）
       # B1：实例启用 requirepass 后，未显式配 AUTH_REDIS_PASSWORD 时
       # 回退 REDIS_PASSWORD（Java 写侧需同步同密码，见 .env 注释）
-      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-redis}
+      - AUTH_REDIS_HOST=${AUTH_REDIS_HOST:-auth-redis}
       - AUTH_REDIS_PORT=${AUTH_REDIS_PORT:-6379}
       - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}
+    depends_on:
+      auth-redis:
+        condition: service_healthy
     # 注意：不要加 extra_hosts host-gateway —— Docker Desktop (Windows) 自带的
     # host.docker.internal 才能到达宿主机 loopback 服务（8000/8006）；
     # host-gateway 指向 VM 网关，loopback 服务不可达（B1 实测 502）。
@@ -168,6 +171,9 @@ services:
       # 不鉴权，行为与旧版一致。缓存/限流/控制面 db0 走 redis 实例）
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      # 认证控制面独立于缓存：JWT 黑名单/会话闸不受缓存 Redis 停机影响。
+      - AUTH_REDIS_ENABLED=${AUTH_REDIS_ENABLED:-true}
+      - AUTH_REDIS_URL=redis://:${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}@${AUTH_REDIS_HOST:-auth-redis}:${AUTH_REDIS_PORT:-6379}/0
       # Celery（B1：broker/result 拆到独立 redis-broker 实例——noeviction+AOF，
       # 未 ack 任务消息与结果永不被逐出，修复内存压力下任务丢失）
       # 显式注入容器内地址，优先级高于 .env 的宿主值（与 REDIS_URL 同策略）
@@ -1084,6 +1090,42 @@ services:
           memory: 768m
           cpus: "1.0"
 
+  # ── Redis 实例 1a：认证控制面（黑名单/会话闸，noeviction）──
+  # 与可逐出的业务缓存分离：缓存实例故障时 APISIX 仍可验签、查黑名单
+  # 和会话键；认证状态不与 RAG 缓存共用故障域。
+  auth-redis:
+    image: redis:7-alpine
+    container_name: agent-auth-redis
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - auth_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$AUTH_REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+
   # ── Redis 实例 2：Celery broker/result 专用（db1/db2）──
   # B1 核心修复：broker 与缓存拆实例。noeviction——内存满时写入报错
   # （入队 fail-fast 可见）而不是静默逐出未 ack 任务消息；AOF everysec
@@ -1160,6 +1202,7 @@ volumes:
   pg_data:
   ollama_data:
   redis_data:
+  auth_redis_data:
   redis_broker_data:
   kafka_data:
   prometheus_data:

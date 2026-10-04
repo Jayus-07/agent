@@ -1,6 +1,6 @@
 """RAG 文档管理路由 — PR-2.x 从 rag.py 抽出。"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import (
     get_rag_pipeline,
@@ -70,9 +70,13 @@ def _require_authz(request: Request):
         raise HTTPException(status_code=403, detail="授权服务暂不可用，已拒绝操作")
 
 
-def _invisible_doc() -> dict:
+def _invisible_doc() -> Response:
     """无权文档的统一不可见响应（与「不存在」同形，不泄露存在性）。"""
-    return {"ok": False, "error": "文档不存在"}
+    return Response(
+        content='{"ok":false,"error":"文档不存在"}',
+        status_code=404,
+        media_type="application/json",
+    )
 
 
 def _deny_manage(reason: str):
@@ -410,6 +414,16 @@ async def get_document(doc_id: str, request: Request):
                 "chunks": doc.get("chunk_count", 0),
                 "hash": doc.get("file_hash", ""),
                 "status": doc.get("status", "active"),
+                # 版本链字段必须与列表/检索溯源口径一致，避免详情页丢失
+                # 「回答实际使用哪一版」所需的身份信息。
+                "version_id": doc.get("version_id", ""),
+                "doc_version": doc.get("doc_version", 1),
+                "kb_version": doc.get("kb_version", ""),
+                "effective_from": doc.get("effective_from", ""),
+                "effective_to": doc.get("effective_to", ""),
+                "supersedes_version_id": doc.get("supersedes_version_id", ""),
+                # K5（2026-10-04）：上传链路已生成 LLM 摘要，详情补暴露供前端直读
+                "summary": doc.get("summary", ""),
                 # 归属与抽取元数据（2026-10-01 补齐：库内有值但详情映射漏了）
                 "department": doc.get("department", ""),
                 "doc_type": doc.get("doc_type", ""),
@@ -438,6 +452,60 @@ async def get_document(doc_id: str, request: Request):
     except Exception as e:
         logger.error(f"[RAG] 文档详情失败: {e}")
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/documents/{doc_id}/file")
+async def preview_document_file(doc_id: str, request: Request):
+    """原文快照预览（原文定位 P1）：双重鉴权后返回平台存储的源文件。
+
+    - 用户级裁决先于任何模式分支（对齐 review/delete 军规）：KB ABAC +
+      文档 permission_scope（can_read_row 合并裁决），无权与不存在同形
+      404（不泄露存在性）。⚠️ remote 分支此前只校验内部令牌直接转发——
+      rag-service 侧无用户上下文，跳过本裁决 = 任何登录用户可读任意
+      permission_scope 受限文档（2026-10-03 实机验收抓出并修复）；
+    - 文件在谁家谁出货：local 模式直接读 DOCS_DIRECTORY；remote 模式经
+      内部令牌转发 rag-service（文件在服务侧主机，app 不可直读）；
+    - file_path 仅服务器侧使用，不回显、不出 API 边界。
+    """
+    authz = _require_authz(request)
+    try:
+        reg = _get_registry()
+        doc = await asyncio.to_thread(reg.get_by_doc_id, doc_id)
+        if (
+            not doc
+            or str(doc.get("status") or "") != "active"
+            or not authz.can_read_row(doc)
+        ):
+            raise HTTPException(status_code=404, detail="文档不存在")
+
+        from backend.config.rag import RAG_MODE
+
+        if RAG_MODE == "remote":
+            pipeline = await asyncio.to_thread(get_rag_pipeline)
+            status, content, media = await asyncio.to_thread(
+                pipeline.fetch_document_file, doc_id)
+            if status != 200:
+                # 用户可见性已由上方裁决；此处非 200 = 快照缺失/服务异常
+                raise HTTPException(status_code=404, detail="文档不存在")
+            return Response(content=content, media_type=media)
+
+        import mimetypes
+        import os
+
+        from backend.config.database import DOCS_DIRECTORY
+
+        file_path = os.path.realpath(str(doc.get("file_path") or ""))
+        root = os.path.realpath(DOCS_DIRECTORY)
+        if not file_path.startswith(root + os.sep) or not os.path.isfile(file_path):
+            raise HTTPException(status_code=404, detail="文档不存在")
+        media = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        # 不传 filename：缺省 disposition 为 attachment，预览需要 inline 语义
+        return FileResponse(file_path, media_type=media)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[RAG] 原文快照失败 doc_id={doc_id}: {e}")
+        raise HTTPException(status_code=503, detail="原文服务暂不可用") from e
 
 
 @router.get("/documents/{doc_id}/processing-runs")
@@ -800,8 +868,9 @@ async def delete_document(doc_id: str, request: Request):
 
 @router.get("/documents/{doc_id}/chunks")
 async def get_chunks(doc_id: str, request: Request):
-    """获取文档的 Chunk 列表（含内容和 metadata）— 先授权，且只返回
-    registry 已发布 chunk_ids 集合内的向量行（候选/孤儿不可见）。"""
+    """获取文档的 Chunk 列表（含内容和 metadata）— 先授权，且仅对
+    active（已发布）文档暴露正文；候选/失败文档不可见。数据源 =
+    chunk_store（agent_memory.chunk_store，与 rag-service 同库）。"""
     try:
         authz = _require_authz(request)
         reg = _get_registry()
@@ -811,33 +880,34 @@ async def get_chunks(doc_id: str, request: Request):
         chunk_ids_str = doc.get("chunk_ids", "[]")
         import json as _json
         chunk_ids = _json.loads(chunk_ids_str) if isinstance(chunk_ids_str, str) else chunk_ids_str
-        published_ids = {str(x) for x in (chunk_ids or [])}
 
-        # 从 pgvector 查询 chunk 实际内容（复用 pipeline store，不再 new embeddings）
+        # 2026-10-04 修复：remote 模式下 app 本地 pipeline 无向量库，原路径
+        # 恒走异常回退返回空壳（trace 页 chunk 视图为空的根因）。chunk 正文
+        # 权威在 chunk_store（agent_memory.chunk_store，indexer 写入、app 与
+        # rag-service 同库可读），直接按 doc_id 读取；registry 只做授权与
+        # 发布状态门（active 才暴露正文，候选/失败不可见）。
         chunks = []
         try:
-            store = (await asyncio.to_thread(get_rag_pipeline)).vectordb
-            # 用公开 API get(where=...) 按 doc_id 获取所有 chunks
-            results = store.get(where={"doc_id": doc_id})
-            if results and results.get("ids"):
-                for i, cid in enumerate(results["ids"]):
-                    # 只发布 registry 登记的 chunk（未发布/候选代次不可见）
-                    if published_ids and str(cid) not in published_ids:
-                        continue
-                    content = (results.get("documents") or [""] * len(results["ids"]))[i]
-                    meta = dict((results.get("metadatas") or [{}] * len(results["ids"]))[i] or {})
+            from backend.rag.indexing.chunk_store import get_chunk_store
+            status = str(doc.get("status") or "")
+            if status == "active":
+                rows = await asyncio.to_thread(
+                    get_chunk_store().get_by_doc_id, doc_id)
+                for r in rows:
+                    content = r.get("content") or ""
                     chunks.append({
-                        "id": cid,
-                        "content": content or "",
+                        "id": f"{doc_id}:{r.get('chunk_index')}",
+                        "content": content,
                         "metadata": {
-                            k: meta[k] for k in (
-                                "doc_id", "chunk_id", "vector_id", "kb_id",
-                                "department", "doc_type", "source_file",
-                                "chunk_index", "chunk_type", "section_title",
-                            ) if k in meta
+                            k: r[k] for k in (
+                                "doc_id", "chunk_index", "section_title",
+                                "doc_type", "kb_id", "department", "char_count",
+                            ) if k in r
                         },
-                        "token_count": len((content or "").encode()),
+                        "token_count": len(content.encode()),
                     })
+            else:
+                logger.info(f"[RAG] Chunk 查询跳过非 active 文档: status={status}")
         except Exception as e:
             logger.warning(f"[RAG] Chunk 查询失败: {e}")
             chunks = [{"id": cid, "content": "", "metadata": {}, "token_count": 0} for cid in chunk_ids]

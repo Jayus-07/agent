@@ -1,7 +1,22 @@
+import json
+import threading
+
 from backend.shared.logger import logger
 
-import threading
-import json
+def _record_request_retrieval_counts(
+    *, vector_count: int, bm25_count: int, fused_count: int,
+) -> None:
+    """把原始召回计数放入当前请求，供 chain retrieval span 收口。"""
+    try:
+        from backend.rag.context import get_context
+
+        get_context().meta["_retrieval_counts"] = {
+            "vector_count": vector_count,
+            "bm25_count": bm25_count,
+            "fused_count": fused_count,
+        }
+    except Exception:  # noqa: BLE001 — 观测旁路失败不阻断检索
+        logger.debug("写入检索计数失败", exc_info=True)
 
 # 增强检索递归护栏：enhanced 路径内部空召回时会回调原始 hybrid_retrieve，
 # 若此时再次进入增强分支会无限递归。按线程隔离，防止并发串扰。
@@ -396,6 +411,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             "vector_hits": len(vector_docs),
             "bm25_hits": len(bm25_docs),
             "merged_hits": len(merged),
+            # D-4：统一四路召回计数键，供 Trace/验收消费；旧键保留兼容。
+            "vector_count": len(vector_docs),
+            "bm25_count": len(bm25_docs),
+            "fused_count": len(merged),
+            "rerank_count": len(merged),
         }
         if failures:
             # 单侧降级可观测：span metrics 标记 fallback 侧与原因
@@ -403,6 +423,10 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             metrics["fallback_reason"] = "; ".join(
                 f"{side}: {str(err)[:100]}" for side, err in failures.items()
             )
+        _record_request_retrieval_counts(
+            vector_count=len(vector_docs), bm25_count=len(bm25_docs),
+            fused_count=len(merged),
+        )
         trace_collector.end_span(span, metrics=metrics)
 
         if merged:
@@ -538,6 +562,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     metrics = {"vector_hits": len(vector_docs),
                "bm25_hits": len(bm25_docs),
                "merged_hits": len(merged),
+               # D-4：统一四路召回计数键，供 Trace/验收消费；旧键保留兼容。
+               "vector_count": len(vector_docs),
+               "bm25_count": len(bm25_docs),
+               "fused_count": len(merged),
+               "rerank_count": len(merged),
                "query_tier": query_tier,
                "query_type": qroute["query_type"]}
     if sql_bypass_used:
@@ -548,6 +577,10 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         metrics["fallback_reason"] = "; ".join(
             f"{k}: {str(v)[:100]}" for k, v in failures.items()
         )
+    _record_request_retrieval_counts(
+        vector_count=len(vector_docs), bm25_count=len(bm25_docs),
+        fused_count=len(merged),
+    )
     trace_collector.end_span(span, metrics=metrics)
 
     # ── Evidence Gate: Retrieval 阶段拒答判定 ────────────────

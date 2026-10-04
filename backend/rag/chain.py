@@ -46,6 +46,29 @@ from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetrie
 from backend.shared.logger import logger
 
 
+def _build_retrieval_span_metrics(context_docs: list) -> dict[str, int]:
+    """构造统一的检索阶段计数，供 Trace 与验收直接消费。"""
+    counts = {}
+    try:
+        counts = (get_context().meta or {}).get("_retrieval_counts") or {}
+    except Exception:  # noqa: BLE001 — 观测字段失败不阻断主链
+        logger.debug("读取检索计数失败", exc_info=True)
+
+    def _int_count(key: str) -> int:
+        try:
+            return max(int(counts.get(key, 0) or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "total_docs": len(context_docs),
+        "vector_count": _int_count("vector_count"),
+        "bm25_count": _int_count("bm25_count"),
+        "fused_count": _int_count("fused_count"),
+        "rerank_count": len(context_docs),
+    }
+
+
 def _llm_stream(msgs):
     """generator function 包装：LCEL coerce 时走 RunnableGenerator，链上
     .stream() 真正逐 chunk 拉取。直接传 llm（可调用代理，非 Runnable）会被
@@ -372,6 +395,9 @@ class RAGChain:
                         f"(user_permissions={sorted(_user_perms) if _user_perms is not None else None})"
                     )
                     rag_permission_filtered_total.inc(_denied)
+                    # 供拒答升级裁决（_reject）：短缺类拒答 + 剔除>0 →
+                    # answer_status=permission_denied，用户可见「有资料但无权限」
+                    get_context().permission_filtered = _denied
                     docs = _allowed
                     input_dict["context"] = docs
             except Exception:  # noqa: BLE001 — 权限过滤故障必须安全拒绝
@@ -505,10 +531,11 @@ class RAGChain:
             # 检索耗时。旧实现在外层 invoke 返回后才收口，把 LLM 生成的
             # 十几秒全部计入了"检索"。
             try:
+                retrieval_metrics = _build_retrieval_span_metrics(context_docs)
                 trace_collector.end_open_span(
                     "retrieval",
                     metrics={"retrieved_chunks": len(context_docs),
-                             "total_docs": len(context_docs)})
+                             **retrieval_metrics})
             except Exception:
                 logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
             if not context_docs:
@@ -887,8 +914,32 @@ class RAGChain:
         trace 埋点、指标）保持一致，而不是散落在各 Gate 分支。
         """
         from backend.rag.evidence_gate import build_rejection_response
+        from backend.rag.evidence_gate.models import (
+            ANSWER_STATUS_PERMISSION_DENIED,
+            PERMISSION_FILTERED_MESSAGE,
+            resolve_answer_status,
+        )
+        # 权限区分裁决：短缺类拒答 + 本轮确有越权剔除 → 升级为
+        # 「存在相关资料但无权限」，避免用户把无权限误读成知识库没有
+        try:
+            permission_filtered = int(get_context().permission_filtered or 0)
+        except Exception:  # noqa: BLE001 — 上下文缺失按无剔除处理
+            permission_filtered = 0
+        answer_status = resolve_answer_status(
+            getattr(decision, "reason", None), permission_filtered)
         msg, info = build_rejection_response(decision, layer,
-                                             self_correction_attempted=self_correction_attempted)
+                                             self_correction_attempted=self_correction_attempted,
+                                             permission_filtered=permission_filtered)
+        if answer_status == ANSWER_STATUS_PERMISSION_DENIED:
+            msg = PERMISSION_FILTERED_MESSAGE
+            if self_correction_attempted:
+                msg += "\n（已尝试改写提问重新检索，仍未找到可靠答案）"
+        # 结构化拒答状态随 ctx.meta 流出：pipeline._snapshot_answer_meta →
+        # /ask meta / 工具 RAGMETA 标记 → done 帧 answer_status（前端指引）
+        try:
+            get_context().meta["answer_status"] = answer_status
+        except Exception:  # noqa: BLE001 — 状态标记失败不影响拒答话术本身
+            logger.debug("answer_status 写入请求上下文失败", exc_info=True)
         # M9：拒答旁路落 security_events（category=RejectReason 枚举，可统计；软失败）
         try:
             from backend.security.events import record_security_event
@@ -1398,7 +1449,10 @@ class RAGChain:
             verified_docs = []
         trace_collector.end_span(citation_span,
                              metrics={"verified_citations": len(verified_docs),
-                                      "total_citations": len(context_docs)})
+                                      "total_citations": len(context_docs),
+                                      # O4：最终真正进入引用/回答闭环的证据数，
+                                      # 与检索候选数区分，便于定位 Gate/引用过滤损耗。
+                                      "final_evidence_count": len(verified_docs)})
         references = self.formatter.format_references(verified_docs, answer)
         if references:
             answer = answer + references

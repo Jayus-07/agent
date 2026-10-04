@@ -14,6 +14,7 @@ Tests the REST endpoints with mocked DB layer.
 """
 import pytest
 from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -141,6 +142,26 @@ class TestRender:
         }
         resp = client.post("/api/prompts/memory.trigger/render", json=body, headers=AUTH)
         assert resp.status_code == 422
+
+
+class TestPlayground:
+    def test_playground_invokes_runtime_llm_proxy(self, client, monkeypatch):
+        class FakeLLM:
+            async def ainvoke(self, prompt):
+                assert "Hello World!" in prompt
+                return SimpleNamespace(content="handoff")
+
+        monkeypatch.setattr("backend.infra.llm.get_llm", lambda: FakeLLM())
+        resp = client.post(
+            "/api/prompts/memory.trigger/playground",
+            json={"variables": {"name": "World"}, "template": "Hello {name}!"},
+            headers=AUTH,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["llm_output"] == "handoff"
+        assert "llm_error" not in data
 
 
 class TestPermissions:

@@ -32,6 +32,46 @@ REJECT_MESSAGES: dict[RejectReason, str] = {
     RejectReason.HALLUCINATION: "已生成的答案中包含未经资料支撑的事实，已自动拒答以避免错误信息。",
 }
 
+# 权限剔除话术（与五类 REJECT_MESSAGES 分列）：它描述的是「有资料但你看不了」，
+# 措辞误导风险最高——统一走 REJECT_MESSAGES 会让用户把无权限误读成知识库没有，
+# 这是企业 RAG 拒答语义里代价最大的混淆（2026-10-03 前端语义透传改造）。
+PERMISSION_FILTERED_MESSAGE = (
+    "知识库中存在相关资料，但当前账号没有查看权限。可申请访问权限或联系管理员。"
+)
+
+
+# =====================================================
+# 拒答 → 前端稳定语义码（done.answer_status / 工具 RAGMETA 标记）
+# 与前端 ErrorCard.RAG_REJECTION_ACTIONS 预登记契约对齐（大小写归一后）
+# =====================================================
+
+ANSWER_STATUS_NO_EVIDENCE = "rag_no_evidence"
+ANSWER_STATUS_PERMISSION_DENIED = "rag_permission_denied"
+ANSWER_STATUS_HALLUCINATION = "rag_hallucination"
+
+ANSWER_STATUS_BY_REASON: dict[RejectReason, str] = {
+    RejectReason.NO_EVIDENCE: ANSWER_STATUS_NO_EVIDENCE,
+    RejectReason.LOW_RELEVANCE: ANSWER_STATUS_NO_EVIDENCE,
+    RejectReason.DOC_TYPE_MISMATCH: ANSWER_STATUS_NO_EVIDENCE,
+    RejectReason.INSUFFICIENT: ANSWER_STATUS_NO_EVIDENCE,
+    RejectReason.HALLUCINATION: ANSWER_STATUS_HALLUCINATION,
+}
+
+
+def resolve_answer_status(
+    reason: Optional[RejectReason], permission_filtered: int = 0
+) -> str:
+    """拒答原因 → 前端稳定语义码（纯函数，_reject 与测试共用）。
+
+    证据短缺类拒答若本轮发生过越权证据剔除（permission_filtered>0），升级为
+    permission_denied——用户有理由知道「不是没有，是看不了」；幻觉拦截不升级
+    （检索本身已通过 Gate，剔除与拦截无因果关系）。reason 为 None 按缺省
+    拒答文案的语义兜底为 no_evidence。
+    """
+    if reason is not RejectReason.HALLUCINATION and permission_filtered > 0:
+        return ANSWER_STATUS_PERMISSION_DENIED
+    return ANSWER_STATUS_BY_REASON.get(reason, ANSWER_STATUS_NO_EVIDENCE)
+
 
 # =====================================================
 # 决策结构
@@ -72,6 +112,7 @@ class RejectInfo:
     thresholds: dict = field(default_factory=dict)
     suggested_queries: list = field(default_factory=list)
     self_correction_attempted: bool = False
+    permission_filtered: int = 0
     timestamp: str = ""
 
     def to_dict(self) -> dict:
@@ -83,6 +124,7 @@ class RejectInfo:
             "thresholds": self.thresholds,
             "suggested_queries": self.suggested_queries,
             "self_correction_attempted": self.self_correction_attempted,
+            "permission_filtered": self.permission_filtered,
             "timestamp": self.timestamp,
         }
 
@@ -109,6 +151,12 @@ INTENT_RISK_LEVEL: dict[str, str] = {
 __all__ = [
     "RejectReason",
     "REJECT_MESSAGES",
+    "PERMISSION_FILTERED_MESSAGE",
+    "ANSWER_STATUS_NO_EVIDENCE",
+    "ANSWER_STATUS_PERMISSION_DENIED",
+    "ANSWER_STATUS_HALLUCINATION",
+    "ANSWER_STATUS_BY_REASON",
+    "resolve_answer_status",
     "GateDecision",
     "RejectInfo",
     "HIGH_RISK_DOC_TYPES",

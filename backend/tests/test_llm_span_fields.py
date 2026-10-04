@@ -16,6 +16,9 @@ from backend.observability import tracer as tracer_mod
 from backend.tests.fixtures.sqlite_tracer import fresh_collector  # noqa: F401
 
 
+_PRICING_TEST_MODEL = "acceptance-test-chat"
+
+
 # ==========================================================
 # Fixtures
 # ==========================================================
@@ -30,7 +33,7 @@ def _seed_registry_pricing():
     llm_models.set_dynamic_models([
         {"name": "qwen2.5:3b", "provider": "ollama",
          "input_price_per_1m": 0.0, "output_price_per_1m": 0.0, "source": "db"},
-        {"name": "deepseek-v4-flash", "provider": "deepseek",
+        {"name": _PRICING_TEST_MODEL, "provider": "test-provider",
          "input_price_per_1m": 0.14, "output_price_per_1m": 0.28, "source": "db"},
         {"name": "MiniMax-M3", "provider": "minimax",
          "input_price_per_1m": 3.0, "output_price_per_1m": 15.0, "source": "db"},
@@ -67,8 +70,8 @@ class TestModelPricing:
         assert in_p == 0.0
         assert out_p == 0.0
 
-    def test_deepseek_pricing(self):
-        in_p, out_p = get_model_pricing("deepseek-v4-flash")
+    def test_registered_model_pricing(self):
+        in_p, out_p = get_model_pricing(_PRICING_TEST_MODEL)
         assert in_p == 0.14
         assert out_p == 0.28
 
@@ -85,9 +88,9 @@ class TestModelPricing:
     def test_compute_cost_ollama_is_zero(self):
         assert compute_cost_usd("qwen2.5:3b", 1000, 500) == 0.0
 
-    def test_compute_cost_deepseek_1m_tokens(self):
+    def test_compute_cost_registered_model_1m_tokens(self):
         # 1M input + 1M output = 0.14 + 0.28 = 0.42 USD
-        assert compute_cost_usd("deepseek-v4-flash", 1_000_000, 1_000_000) == 0.42
+        assert compute_cost_usd(_PRICING_TEST_MODEL, 1_000_000, 1_000_000) == 0.42
 
     def test_compute_cost_minimax_small(self):
         # 1000 input + 500 output = 0.003 + 0.0075 = 0.0105
@@ -139,17 +142,20 @@ class TestRecordTokensMeta:
         proxy_mod._record_tokens(r)
         assert proxy_mod._last_call_meta_var.get()["finish_reason"] == "length"
 
-    def test_records_cost_usd_deepseek(self):
+    def test_records_cost_base_currency_registered_model(self):
         r = self._fake_result(
             token_usage={"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500},
             finish_reason="stop",
         )
-        # mock LLM_MODEL = deepseek-v4-flash
-        # 1000/1e6 * 0.14 + 500/1e6 * 0.28 = 0.00014 + 0.00014 = 0.00028
+        # 使用仅存在于测试注册表的合成模型名，不把已下线的生产模型写进测试。
+        # 价格表注册价为 USD；成本计量出口已统一折算为 CNY：
+        # 0.00028 USD × 7.20 = 0.002016 CNY。
         import unittest.mock as mock
-        with mock.patch.object(proxy_mod, "LLM_MODEL", "deepseek-v4-flash"):
+        with mock.patch.object(proxy_mod, "LLM_MODEL", _PRICING_TEST_MODEL):
             proxy_mod._record_tokens(r)
-        assert proxy_mod._last_call_meta_var.get()["cost_usd"] == pytest.approx(0.00028, abs=1e-6)
+        meta = proxy_mod._last_call_meta_var.get()
+        assert meta["cost_usd"] == pytest.approx(0.002016, abs=1e-6)
+        assert meta["currency"] == "CNY"
 
     def test_finish_reason_defaults_unknown_when_missing(self):
         r = self._fake_result(

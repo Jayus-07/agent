@@ -167,6 +167,40 @@ class TestInterface:
         row = pg_reg.get_by_doc_id("dup1")
         assert row["status"] == "active" and row["file_path"] == "test://x2.md"
 
+    def test_mark_deleted_by_doc_id_clears_pending_review(self, pg_reg):
+        """删除待审核文档时，registry 不得留下审批队列幽灵行。"""
+        pg_reg.register(
+            "test://pending-delete.md",
+            "pending-delete",
+            "hash-pending",
+            "kb1",
+            [],
+            "db-pending",
+        )
+        assert pg_reg.update_status_by_doc_id(
+            "pending-delete", "pending_review"
+        ) == 1
+
+        assert pg_reg.mark_deleted_by_doc_id("pending-delete") == 1
+        row = pg_reg.get_by_doc_id("pending-delete")
+        assert row["status"] == "deleted"
+
+    def test_mark_deleted_by_doc_id_clears_failed_terminal_rows(self, pg_reg):
+        """删除已失败文档时，不得把 failed 行留作存量脏数据。"""
+        pg_reg.register(
+            "test://failed-delete.md",
+            "failed-delete",
+            "hash-failed",
+            "kb1",
+            [],
+            "db-failed",
+        )
+        assert pg_reg.update_status_by_doc_id("failed-delete", "failed") == 1
+
+        assert pg_reg.mark_deleted_by_doc_id("failed-delete") == 1
+        row = pg_reg.get_by_doc_id("failed-delete")
+        assert row["status"] == "deleted"
+
     def test_register_in_progress_creates_parsing_row(self, pg_reg):
         pg_reg.register_in_progress("test://prog.md", "prog1", "hp", "kb1")
         row = pg_reg.get_by_path("test://prog.md")

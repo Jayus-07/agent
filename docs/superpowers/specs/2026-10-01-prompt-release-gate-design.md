@@ -62,14 +62,15 @@ POST /internal/prompt-evals/callback
 
 ## 评测与 GitHub CI
 
-管理端提交 release 后，后端创建发布记录并触发 GitHub `workflow_dispatch` 或 `repository_dispatch`，参数包含 `prompt_key`、`version`、`release_id` 和评测套件。GitHub 使用测试环境 DB 和 GitHub Environment Secrets 中的外部模型凭据，不访问生产 DB。
+管理端提交 release 后，后端创建发布记录并触发 GitHub `workflow_dispatch` 或 `repository_dispatch`，参数包含 `prompt_key`、`version`、`release_id`、`external_run_id` 和评测套件。GitHub 使用测试环境 DB 和 GitHub Environment Secrets 中的外部模型凭据，不访问生产 DB。
 
-CI 完成后通过签名回调更新发布记录：
+GitHub 不回调本地业务后端。后端把 `release_id` 作为持久 Celery 轮询任务的唯一 payload，按间隔查询 Actions Run；Run 完成后读取 `prompt-eval-{release_id}` Artifact 中的 `prompt_eval_result.json`，校验 `release_id`、`external_run_id` 和 Run 结论，再幂等更新发布记录：
 
 - `passed`：保留 report.json、指标、模型绑定指纹和 Prompt 版本快照；
 - `failed`：记录失败指标和原因；
-- 重复回调：以 `release_id` 和 CI run id 幂等处理；
-- 回调失败：GitHub artifact 仍保留，发布记录不得误判为通过。
+- Run 尚未出现、仍在执行或 Artifact 尚未可读：延迟重投同一个 release_id；
+- GitHub API/Worker 重启：任务可从队列恢复，超过最大轮询窗口后标记 failed；
+- 旧版签名回调接口保留兼容，但正式工作流不依赖回调地址，因此本机 `127.0.0.1` 不需要暴露给 GitHub。
 
 当前本地浏览器验收允许使用本机后端的外部模型评测执行器，验证完整状态机；这不代表使用本地模型。自建模型上线后，CI 只需切换测试 DB 中的 provider/base_url/model_name。
 

@@ -124,9 +124,33 @@ class TestRefusalClarify:
         assert any(is_travel_request(label) for label in labels)
         assert any(is_selection_funnel_request(label) for label in labels)
 
+    def test_sql_lean_gets_sql_slot_card(self):
+        """实机缺口回归（2026-10-03）：「查一下经营数据」被向量路由拦成
+        clarify 后，拒答兜底必须给 SQL 槽位卡（宽词表识别数据诉求），
+        不能落通用导航——SQL 根本没执行，reporter 的 executed 卡触达不了。"""
+        from backend.orchestration.graph import clarify_content
+
+        result = clarify_content.build_refusal_clarify(
+            "查一下经营数据", domain_hint="")
+        assert result["source"] == "refusal_sql_empty"
+        # 路由层语义（还没执行查询）：引导语不含「没有查到」
+        assert "没有查到" not in result["question"]
+        from backend.orchestration.router.rule_router import RuleRouter
+        for label in result["options"]:
+            decision = RuleRouter().route(label)
+            assert decision is not None and decision.confidence >= 0.85, label
+
+    def test_travel_lean_outranks_sql_lean(self):
+        """既有优先级不破坏：旅游倾向优先于 SQL 倾向。"""
+        from backend.orchestration.graph import clarify_content
+
+        result = clarify_content.build_refusal_clarify(
+            "查一下福州的旅游攻略数据", domain_hint="")
+        assert result["source"] == "refusal_travel_lean"
+
 
 # =====================================================
-# 防循环守卫
+# 防循环守卫（2026-10-03 企业口径：问题级去重 + 会话封顶）
 # =====================================================
 
 class TestClarifyGuard:
@@ -143,15 +167,51 @@ class TestClarifyGuard:
             def set_json(self, key, value, ttl=None):
                 self._store[key] = value
 
+            def delete(self, key):
+                self._store.pop(key, None)
+
+            def incr(self, key, ttl=None):
+                """与 InMemoryCache.incr 同语义：首建设窗，续增不重置。"""
+                self._store[key] = (self._store.get(key) or 0) + 1
+                return self._store[key]
+
         fake = _FakeCache()
         monkeypatch.setattr(clarify_content, "_get_guard_cache", lambda: fake)
-        return clarify_content
+        return clarify_content, fake
 
-    def test_first_clarify_allowed_then_blocked(self, monkeypatch):
-        cc = self._fresh_guard(monkeypatch)
-        assert cc.clarify_allowed("sess-1") is True
-        cc.mark_clarified("sess-1")
-        assert cc.clarify_allowed("sess-1") is False
+    def test_same_question_dedup_different_question_allowed(self, monkeypatch):
+        """企业口径核心：同一问题不重复追问；换个问法允许再问。
+
+        旧「会话 10 分钟一次性」语义把同句重问变成裸拒答（行为翻转，
+        实测 2026-10-03 会话），本用例即该缺陷的回归门。
+        """
+        cc, _ = self._fresh_guard(monkeypatch)
+        assert cc.clarify_allowed("sess-1", "什么时候放假") is True
+        cc.mark_clarified("sess-1", "什么时候放假",
+                          options=["查一下经营数据"], source="refusal_generic")
+        assert cc.clarify_allowed("sess-1", "什么时候放假") is False
+        # 换个问法（或空白/大小写差异之外的新问法）不被去重拦截
+        assert cc.clarify_allowed("sess-1", "查一下经营数据") is True
+
+    def test_question_normalization_ignores_whitespace_case(self, monkeypatch):
+        cc, _ = self._fresh_guard(monkeypatch)
+        cc.mark_clarified("sess-1", "什么时候 放假")
+        assert cc.clarify_allowed("sess-1", "  什么时候放假 ") is False
+
+    def test_session_cap_blocks_after_limit(self, monkeypatch):
+        """会话封顶：窗口内第 3 次起一律不再追问（降级裸拒答）。"""
+        cc, fake = self._fresh_guard(monkeypatch)
+        cc.mark_clarified("sess-1", "问题一")
+        cc.mark_clarified("sess-1", "问题二")
+        assert cc.clarify_allowed("sess-1", "问题一") is False  # 去重
+        assert cc.clarify_allowed("sess-1", "问题三") is False  # 封顶
+        # 计数原子递增且达到上限值
+        assert fake._store["count:sess-1"] == 2
+
+    def test_other_session_unaffected(self, monkeypatch):
+        cc, _ = self._fresh_guard(monkeypatch)
+        cc.mark_clarified("sess-1", "问题一")
+        assert cc.clarify_allowed("sess-2", "问题一") is True
 
     def test_guard_error_fails_open(self, monkeypatch):
         """守卫故障时放行追问（宁可多问一次，不吞掉正常拒答转追问）。"""
@@ -165,7 +225,52 @@ class TestClarifyGuard:
                 raise RuntimeError("cache down")
 
         monkeypatch.setattr(clarify_content, "_get_guard_cache", lambda: _BoomCache())
-        assert clarify_content.clarify_allowed("sess-1") is True  # 不抛异常即放行
+        assert clarify_content.clarify_allowed("sess-1", "任意问题") is True  # 不抛异常即放行
+
+    def test_click_detection_consumes_once(self, monkeypatch):
+        """选项点击检测：命中（含归一化）消费一次；未命中不消费。"""
+        cc, _ = self._fresh_guard(monkeypatch)
+        cc.mark_clarified("sess-1", "想出去玩",
+                          options=["查一下经营数据", "帮我规划一份旅游行程"],
+                          source="refusal_generic")
+        # 命中：空白差异归一化后仍匹配
+        hit = cc.consume_clarify_click("sess-1", "查一下 经营数据 ")
+        assert hit == {"source": "refusal_generic"}
+        # 消费后同一选项不再命中
+        assert cc.consume_clarify_click("sess-1", "查一下经营数据") is None
+        # 未命中不消费暂存
+        cc.mark_clarified("sess-1", "x", options=["选项A"], source="s")
+        assert cc.consume_clarify_click("sess-1", "自由发言") is None
+        assert cc.consume_clarify_click("sess-1", "选项A") == {"source": "s"}
+
+
+class TestSqlEmptyClarify:
+    def test_sql_empty_card_content(self):
+        from backend.orchestration.graph import clarify_content
+
+        marker = clarify_content.build_sql_empty_clarify("查一下经营数据")
+        assert marker["source"] == "refusal_sql_empty"
+        assert marker["handoff_available"] is False
+        assert marker["options"]
+
+    def test_sql_options_route_strong_to_sql(self):
+        """契约：SQL 追问选项必须被 RuleRouter 以强信号直拍 sql.query。
+
+        选项文案=用户话术（点击即重发），路由不可达的选项是死胡同卡片。
+        强信号门槛 = confidence≥0.85（3 个以上 rule_keywords 命中），
+        不允许依赖向量层兜底。
+        """
+        from backend.orchestration.graph.clarify_content import _SQL_EMPTY_OPTIONS
+        from backend.orchestration.router.rule_router import RuleRouter
+
+        router = RuleRouter()
+        for label in _SQL_EMPTY_OPTIONS:
+            decision = router.route(label)
+            assert decision is not None, f"选项未被规则路由命中: {label}"
+            assert decision.execution_mode.value == "direct", label
+            top = decision.candidates[0]
+            assert top.name == "sql.query", f"选项被拍给 {top.name}: {label}"
+            assert decision.confidence >= 0.85, f"非强信号({decision.confidence}): {label}"
 
 
 # =====================================================
@@ -194,6 +299,12 @@ def test_router_weak_hit_short_circuits_to_clarify(monkeypatch):
 
         def set_json(self, key, value, ttl=None):
             pass
+
+        def delete(self, key):
+            pass
+
+        def incr(self, key, ttl=None):
+            return 1
 
     monkeypatch.setattr(clarify_content, "_get_guard_cache", lambda: _FreshCache())
     # CS 兜底在 L1 之前执行（检测器已无向量通道），测试中必须屏蔽
@@ -244,8 +355,10 @@ class TestReporterClarify:
     def _patch_guard(self, monkeypatch, allowed: bool):
         from backend.orchestration.graph import clarify_content
 
-        monkeypatch.setattr(clarify_content, "clarify_allowed", lambda sid: allowed)
-        monkeypatch.setattr(clarify_content, "mark_clarified", lambda sid: None)
+        monkeypatch.setattr(clarify_content, "clarify_allowed",
+                            lambda sid, q="": allowed)
+        monkeypatch.setattr(clarify_content, "mark_clarified",
+                            lambda sid, q="", **k: None)
         monkeypatch.setattr(clarify_content, "REFUSAL_CLARIFY_ENABLED", True)
 
     def test_l1_short_text_no_llm(self, monkeypatch):
@@ -309,6 +422,114 @@ class TestReporterClarify:
         assert "_clarify" not in out
 
 
+def _sql_empty_step() -> dict:
+    """SQL 业务性空结果（查不到）：status=success 但输出是标准空话术。"""
+    return {"step_id": "1", "capability": "sql.query", "status": "success",
+            "output": "未找到相关信息", "error": ""}
+
+
+class TestReporterSqlEmptyClarify:
+    def _patch_guard(self, monkeypatch, allowed: bool = True):
+        from backend.orchestration.graph import clarify_content
+
+        monkeypatch.setattr(clarify_content, "clarify_allowed",
+                            lambda sid, q="": allowed)
+        monkeypatch.setattr(clarify_content, "mark_clarified",
+                            lambda sid, q="", **k: None)
+        monkeypatch.setattr(clarify_content, "REFUSAL_CLARIFY_ENABLED", True)
+
+    def test_sql_empty_attaches_sql_slot_clarify(self, monkeypatch):
+        """SQL 查不到 → 定向槽位追问卡（时间范围/常用指标），非通用导航。"""
+        from backend.agents.reporter import reporter as reporter_mod
+
+        self._patch_guard(monkeypatch)
+        out = reporter_mod.reporter_node({
+            "question": "查一下经营数据", "route_mode": "direct",
+            "domain_hint": "", "session_id": "s1",
+            "step_results": {"1": _sql_empty_step()},
+        })
+        assert "抱歉" in out["final_answer"]
+        assert out["_clarify"]["source"] == "refusal_sql_empty"
+        assert out["_clarify"]["options"]
+
+    def test_rag_miss_keeps_generic_clarify(self, monkeypatch):
+        """纯 RAG 拒答不走 SQL 卡（无 sql.query 步骤）。"""
+        from backend.agents.reporter import reporter as reporter_mod
+
+        self._patch_guard(monkeypatch)
+        out = reporter_mod.reporter_node({
+            "question": "出口退税税率是多少", "route_mode": "plan",
+            "domain_hint": "", "session_id": "s1",
+            "step_results": {"1": _refusal_step()},
+        })
+        assert out["_clarify"]["source"] != "refusal_sql_empty"
+
+
+class TestReporterUnansweredLog:
+    """未答问题旁路登记：拒答必留痕（与追问守卫解耦），技术故障不留。"""
+
+    def _patch_recorder(self, monkeypatch) -> list[dict]:
+        calls: list[dict] = []
+
+        def _rec(question, *, source, **kwargs):
+            calls.append({"question": question, "source": source, **kwargs})
+            return True
+
+        import backend.observability.unanswered as unanswered_mod
+        monkeypatch.setattr(unanswered_mod, "record_unanswered_question", _rec)
+        return calls
+
+    def test_rag_miss_logged(self, monkeypatch):
+        from backend.agents.reporter import reporter as reporter_mod
+
+        calls = self._patch_recorder(monkeypatch)
+        reporter_mod.reporter_node({
+            "question": "出口退税税率是多少", "route_mode": "plan",
+            "domain_hint": "", "session_id": "s1",
+            "step_results": {"1": _refusal_step()},
+        })
+        assert len(calls) == 1
+        assert calls[0]["source"] == "rag_miss"
+        assert calls[0]["question"] == "出口退税税率是多少"
+
+    def test_sql_empty_logged_as_sql_empty(self, monkeypatch):
+        from backend.agents.reporter import reporter as reporter_mod
+
+        calls = self._patch_recorder(monkeypatch)
+        reporter_mod.reporter_node({
+            "question": "查一下经营数据", "route_mode": "direct",
+            "domain_hint": "", "session_id": "s1",
+            "step_results": {"1": _sql_empty_step()},
+        })
+        assert calls[0]["source"] == "sql_empty"
+
+    def test_technical_error_not_logged(self, monkeypatch):
+        """服务不可用是故障不是知识缺口，不进运营清单。"""
+        from backend.agents.reporter import reporter as reporter_mod
+
+        calls = self._patch_recorder(monkeypatch)
+        reporter_mod.reporter_node({
+            "question": "上月销量", "route_mode": "plan",
+            "domain_hint": "", "session_id": "s1",
+            "step_results": {"1": _tech_error_step()},
+        })
+        assert calls == []
+
+    def test_normal_answer_not_logged(self, monkeypatch):
+        from backend.agents.reporter import reporter as reporter_mod
+
+        calls = self._patch_recorder(monkeypatch)
+        reporter_mod.reporter_node({
+            "question": "正常问题", "route_mode": "direct",
+            "domain_hint": "", "session_id": "s1",
+            "step_results": {"1": {"step_id": "1", "capability": "rag.search",
+                                   "status": "success",
+                                   "output": "这是一段足够长的正常回答内容。",
+                                   "error": ""}},
+        })
+        assert calls == []
+
+
 # =====================================================
 # events：_clarify 标记 → clarification 事件
 # =====================================================
@@ -359,8 +580,10 @@ class TestCsRefusalClarify:
     def _patch_guard(self, monkeypatch, allowed: bool = True):
         from backend.orchestration.graph import clarify_content
 
-        monkeypatch.setattr(clarify_content, "clarify_allowed", lambda sid: allowed)
-        monkeypatch.setattr(clarify_content, "mark_clarified", lambda sid: None)
+        monkeypatch.setattr(clarify_content, "clarify_allowed",
+                            lambda sid, q="": allowed)
+        monkeypatch.setattr(clarify_content, "mark_clarified",
+                            lambda sid, q="", **k: None)
         monkeypatch.setattr(clarify_content, "REFUSAL_CLARIFY_ENABLED", True)
 
     def _final_state(self, **overrides) -> dict:

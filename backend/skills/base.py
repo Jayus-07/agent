@@ -470,6 +470,10 @@ class BaseSkill(ABC):
             domain=self.name or cap.split(".", 1)[0],
             on_event=_on_event,
             tool_name=getattr(tool_fn, "name", ""),
+            trace_span=tool_span,
+            trace_capability=cap,
+            trace_agent=self.name,
+            trace_params=params,
         )
 
         # ── ToolResult → step_results 契约字段（下游零改动）+ 治理扩展字段 ──

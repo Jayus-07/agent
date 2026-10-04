@@ -26,14 +26,15 @@ export async function listAllTraces(): Promise<TraceRecord[]> {
   }
 }
 
-/** 列出 Agent 问答链路追踪（workflow_name === "agent"）
- *  供 /observability/traces 页面使用，只展示 /agent 智能问答产生的 trace，
- *  排除文档上传/重索引等操作日志 trace。
- *  服务端过滤（workflow_name 参数），不再拉 200 条客户端 filter。 */
+/** 列出问答链路追踪；普通列表限定 agent，Tool 下钻跨所有入口。
+ *  供 /observability/traces 页面使用：普通列表排除文档上传/重索引等操作日志；
+ *  传入 hasTool 时改为全工作流检索，覆盖 travel/workflow 等直调链路。 */
 export async function listAgentTraces(hasTool?: string): Promise<TraceRecord[]> {
   if (!isClient()) return [];
   try {
-    return await realApi.listTraces(200, "agent", undefined, hasTool);
+    // 普通 Trace 页仍只展示问答链路；Tool 下钻必须跨 agent/travel/workflow
+    // 等所有入口，否则管理端会出现“统计有失败、Trace 下钻为空”。
+    return await realApi.listTraces(200, hasTool ? undefined : "agent", undefined, hasTool);
   } catch (e) {
     console.warn("[observability] listAgentTraces failed:", (e as Error).message);
     return [];

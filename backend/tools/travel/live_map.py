@@ -115,29 +115,30 @@ _LEG_CACHE: dict[tuple, tuple[float, dict]] = {}
 _LEG_CACHE_TTL = 900.0  # 15 分钟
 
 
-def _leg_cache_key(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> tuple:
-    return (round(from_lat, 4), round(from_lng, 4), round(to_lat, 4), round(to_lng, 4))
+def _leg_cache_key(from_lat: float, from_lng: float, to_lat: float, to_lng: float,
+                   mode: str = "main") -> tuple:
+    # mode 维度（#41）：主路线（driving/walking 归并为 "main"）与公交候选
+    # （"transit"）同坐标共存，混键会让候选顶掉主路线的缓存
+    return (round(from_lat, 4), round(from_lng, 4), round(to_lat, 4), round(to_lng, 4), mode)
 
 
 _PREFETCH_BUDGET_S = 4.0  # 预热硬性时间预算：超时未回的段直接放弃（串行路径自会兜底）
 
 
-def prefetch_legs(pairs, max_workers: int = 6) -> None:
+def prefetch_legs(pairs, max_workers: int = 6, loader=None, mode: str = "main") -> None:
     """并行预热路段缓存（best-effort，**有硬性时间预算**）。
 
     pairs: 可迭代的 (from_lat, from_lng, to_lat, to_lng) 四元组。
-    排程循环是串行的，逐段等待 API 会让多天行程多花数秒；这里先把
-    「同一天内相邻 POI」的路线并发取回，串行循环随后直接命中缓存。
-
-    2026-09-15：早期版本用 pool.map（等最慢的一个）——网络抖动时会
-    把整个请求拖到分钟级。现改为 wait(timeout=预算)：到点即放弃未回
-    的段，绝不阻塞主流程（LBS 熔断开路时这些调用也会立即失败）。
+    loader: 取数函数，默认 live_leg（主路线）；公交候选预热（#41）
+    传 live_leg_transit 并配 mode="transit" —— 缓存命中检查必须与
+    loader 的键维度一致，否则会拿主路线的 main 键误判「已有缓存」。
     """
+    loader = loader or live_leg
     unique = []
     seen = set()
     import time as _t
     for p in pairs:
-        key = _leg_cache_key(*p)
+        key = _leg_cache_key(*p, mode=mode)
         if key in seen:
             continue
         seen.add(key)
@@ -151,7 +152,7 @@ def prefetch_legs(pairs, max_workers: int = 6) -> None:
         from concurrent.futures import ThreadPoolExecutor, wait
         pool = ThreadPoolExecutor(max_workers=min(max_workers, len(unique)))
         try:
-            futures = [pool.submit(live_leg, *p) for p in unique]
+            futures = [pool.submit(loader, *p) for p in unique]
             _, not_done = wait(futures, timeout=_PREFETCH_BUDGET_S)
             for f in not_done:
                 f.cancel()
@@ -215,6 +216,98 @@ def live_leg(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> 
                   distance_km=round(distance_km, 2), minutes=minutes)
     _LEG_CACHE[ck] = (_t.monotonic(), result)
     return result
+
+
+# =============================================
+# 1.5 公交/地铁候选（验收 #41）—— 候选参考，不作主路线口径
+# =============================================
+# 腾讯 transit 结果是「步行 + 地铁 + 公交」多段拼接，duration 含候车时间，
+# 与打车/自驾口径混用会让行程单前后不一致（设计边界，非缺陷）。因此公交
+# 只作为 TransitLeg.transit_option 候选展示：不进时间轴计算、不重排、
+# 不动主路线的 is_estimate 语义。
+def _transit_summary(steps: list) -> str:
+    """把腾讯 transit 多段 steps 提炼成一句乘坐摘要（#41）。
+
+    实测结构（api.direction 归一化后）：WALKING 段带 distance_m 与嵌套
+    instruction，TRANSIT 段带 lines[]（vehicle=SUBWAY/BUS、title=线路名、
+    geton/getoff=上下车站、station_count）。拼出「步行 1116m → 地铁2号线
+    （南门兜 → 鼓山）」形态；解析不出内容返回空串（前端按无摘要展示，
+    不影响时长/距离）。总长 100 字封顶。
+    """
+    _VEHICLE_LABEL = {"subway": "地铁", "bus": "公交", "rail": "城铁", "tram": "有轨"}
+    texts: list[str] = []
+    for s in steps:
+        s = s or {}
+        lines = s.get("lines") or []
+        if lines:
+            for ln in lines[:2]:  # 同段换乘一般 ≤2 条线
+                label = _VEHICLE_LABEL.get(ln.get("vehicle", ""), "乘坐")
+                title = ln.get("title", "")
+                # 线路名常自带模式前缀（「地铁2号线」），避免拼出「地铁地铁2号线」
+                seg = title if label in title else f"{label}{title}".strip()
+                if ln.get("geton") and ln.get("getoff"):
+                    seg += f"（{ln['geton']} → {ln['getoff']}）"
+                if seg:
+                    texts.append(seg)
+        elif s.get("instruction"):
+            texts.append(s["instruction"][:24])
+        elif s.get("distance_m"):
+            texts.append(f"步行 {s['distance_m']}m")
+        if len(texts) >= 4:
+            break
+    return " → ".join(texts[:4])[:100]
+
+
+def live_leg_transit(from_lat: float, from_lng: float,
+                     to_lat: float, to_lng: float) -> dict | None:
+    """公交/地铁候选路线，返回 ``TransitLeg.transit_option`` 同构的 dict。
+
+    返回 None 表示本段无候选（接口失败/未启用），调用方按「无候选」
+    处理 —— 与 live_leg 的 None 语义同款，绝不抛异常打断排程。
+    """
+    if not is_enabled():
+        return None
+
+    import time as _t
+    ck = _leg_cache_key(from_lat, from_lng, to_lat, to_lng, mode="transit")
+    cached = _LEG_CACHE.get(ck)
+    if cached and _t.monotonic() - cached[0] < _LEG_CACHE_TTL:
+        return cached[1]
+
+    span = _lbs_span("travel_lbs_direction_transit", "LBS公交候选", mode="transit")
+    route = api.direction("transit", from_lat, from_lng, to_lat, to_lng)
+    if route is None or not route.get("distance_km"):
+        _end_lbs_span(span, status="error", mode="transit", reason="no_route")
+        return None
+
+    result = {
+        "duration_min": max(1, int(round(float(route.get("duration_min") or 0)))),
+        "distance_m": int(route.get("distance_m") or 0),
+        "summary": _transit_summary(route.get("steps") or []),
+        "is_estimate": False,
+    }
+    _end_lbs_span(span, status="success",
+                  minutes=result["duration_min"], distance_m=result["distance_m"])
+    _LEG_CACHE[ck] = (_t.monotonic(), result)
+    return result
+
+
+def peek_leg_transit(from_lat: float, from_lng: float,
+                     to_lat: float, to_lng: float) -> dict | None:
+    """只读缓存版 ``live_leg_transit``（排程组装处专用，#41）。
+
+    排程主链路对延迟零容忍（P95 基线冻结），公交候选只允许消费
+    :func:`prefetch_day_legs` 的预热成果，缓存 miss 即无候选 ——
+    绝不在组装循环里现场等待网络。
+    """
+    if not is_enabled():
+        return None
+    import time as _t
+    ck = _leg_cache_key(from_lat, from_lng, to_lat, to_lng, mode="transit")
+    cached = _LEG_CACHE.get(ck)
+    if cached and _t.monotonic() - cached[0] < _LEG_CACHE_TTL:
+        return cached[1]
+    return None
 
 
 def install_live_map() -> bool:

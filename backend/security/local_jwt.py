@@ -55,6 +55,7 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
                        device_id: str = "", roles: list[str] | None = None,
                        tenant_id: str = "default",
                        session_id: str = "",
+                       client_id: str = "",
                        must_change_password: bool = False,
                        ttl_seconds: int = _ACCESS_TTL_SECONDS) -> dict:
     """签发 access token。返回 {token, expiresIn(ms), exp, jti}。
@@ -75,6 +76,9 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
     登录 = refresh token family）。jti 仍是令牌级标识，sid 是会话级标识；
     refresh 轮换后 jti 变、sid 不变。网关/业务鉴权不读取该 claim，
     仅 py 侧会话管理（强制下线/按 session 聚合）消费。
+
+    client_id（2026-10-01）：标识令牌来自 web/admin/cs 哪个前端，供登出与
+    会话运营台账选择对应的 refresh Cookie，避免同域三端互相覆盖。
     """
     now = int(time.time())
     exp = now + ttl_seconds
@@ -82,6 +86,7 @@ def issue_access_token(*, user_id: int, username: str, dept: str = "",
     payload = {"userId": user_id, "username": username, "dept": dept,
                "roles": roles or ["viewer"],
                "type": "access", "deviceId": device_id,
+               "clientId": client_id,
                "tenant_id": tenant_id or "default",
                "sid": session_id,
                # P6.3（2026-09-21）：临时密码首次登录标记，仅新增 claim，

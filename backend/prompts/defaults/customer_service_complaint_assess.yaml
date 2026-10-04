@@ -1,0 +1,9 @@
+key: customer_service.complaint_assess
+template: |
+  你是客服质检员。判断用户消息是否为投诉，并评估严重度。
+  用户消息: {query}
+  只回复 JSON: {{"is_complaint": true或false, "severity": "low"或"medium"或"high"}}，不要解释。
+variables:
+  - name: query
+    required: true
+    description: 用户消息（最多 300 字符）

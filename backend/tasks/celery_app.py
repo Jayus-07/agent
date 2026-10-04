@@ -37,6 +37,7 @@ celery_app = Celery(
     backend=CELERY_RESULT_BACKEND,
     include=["backend.tasks.agent_tasks",     # Worker 启动自动注册任务模块
              "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
+             "backend.tasks.rag_maintenance_tasks",  # 索引只读对账
              "backend.tasks.metadata_shadow_tasks",  # 元数据影子隔离队列
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
              "backend.tasks.cs_qa_tasks",  # 批次D：客服质检每日报表（beat）
@@ -107,6 +108,16 @@ celery_app.conf.update(
     # 不再依赖 task_default_queue 隐式决定；maintenance/report 当前
     # 物理共享 agent worker（Step5 待拆，logical 口径见 queue_router）。
     beat_schedule={
+        "rag-index-reconcile": {
+            "task": "rag.index_reconcile",
+            "schedule": crontab(hour=2, minute=0),  # 应用 timezone=Asia/Shanghai
+            "options": {"queue": beat_queue("rag.index_reconcile")},
+        },
+        "rag-parsing-timeout-watchdog": {
+            "task": "rag.parsing_timeout_watchdog",
+            "schedule": 900.0,
+            "options": {"queue": beat_queue("rag.parsing_timeout_watchdog")},
+        },
         "cs-handoff-timeout-scan": {
             "task": "cs.handoff_timeout_scan",
             "schedule": 60.0,

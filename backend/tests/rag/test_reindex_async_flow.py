@@ -181,6 +181,30 @@ def test_run_reindex_missing_file(doc_env, monkeypatch):
             "doc-it-1", registry=doc_env.registry, pipeline=doc_env.pipeline)
 
 
+def test_load_reindex_target_allows_external_temp_fixture(doc_env):
+    """仓库外的合法挂载/临时夹具不应被测试产物规则误拒。"""
+    result = reindex_service.load_reindex_target(
+        doc_env.registry, "doc-it-1")
+    assert result["doc_id"] == "doc-it-1"
+
+
+def test_load_reindex_target_rejects_test_artifact_under_docs_root(
+    doc_env, tmp_path, monkeypatch
+):
+    from backend.config import database as database_config
+
+    docs_root = tmp_path / "docs"
+    artifact = docs_root / "pytest" / "fixture.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("test artifact", encoding="utf-8")
+    monkeypatch.setattr(database_config, "DOCS_DIRECTORY", str(docs_root))
+    doc_env.registry.doc["file_path"] = str(artifact)
+
+    with pytest.raises(ValueError, match="测试临时路径文件被拒绝"):
+        reindex_service.load_reindex_target(
+            doc_env.registry, "doc-it-1")
+
+
 # ═══════════════════════════════════════════════════
 # Celery 任务执行体（无 TaskState 行模式，db_task_id=None）
 # ═══════════════════════════════════════════════════

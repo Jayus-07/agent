@@ -5,8 +5,8 @@
  * - POST /api/auth/login  {username, password, deviceId?} → Result{data: LoginVO}
  *   LoginVO: { token, refreshToken(始终为 null，改走 HttpOnly Cookie),
  *              tokenType: "Bearer", expiresIn(ms), userInfo }
- * - POST /api/auth/refresh 凭 HttpOnly Cookie refresh_token 换新 token（令牌轮换）
- * - POST /api/auth/logout 吊销 refresh_token 并写入网关黑名单
+ * - POST /api/auth/refresh 凭 HttpOnly Cookie refresh_token_cs 换新 token（令牌轮换）
+ * - POST /api/auth/logout 吊销客服端 refresh Cookie 并写入网关黑名单
  *
  * Access token 策略：模块内存为主 + sessionStorage 兜底（刷新页面不丢，
  * 关闭标签页即失效；refresh_token 本身就在 HttpOnly Cookie 里，可静默续期）。
@@ -18,6 +18,7 @@ const TOKEN_KEY = "agent.access_token";
 const USER_KEY = "agent.user_info";
 const DEVICE_KEY = "agent.device_id";
 const EXPIRED_KEY = "agent.session_expired";
+const CLIENT_APP = "cs";
 
 /** 登录/刷新回写的权限摘要；不包含 token、密码或 refresh 凭据。 */
 export interface UserInfo {
@@ -140,9 +141,9 @@ function unwrapResult<T>(body: { code?: number; message?: string; data?: T } | n
 export async function login(username: string, password: string): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Client-App": CLIENT_APP },
     credentials: "include",
-    body: JSON.stringify({ username, password, deviceId: getDeviceId() }),
+    body: JSON.stringify({ username, password, deviceId: getDeviceId(), clientId: CLIENT_APP }),
   });
   const body = await res.json().catch(() => null);
   const data = unwrapResult<LoginResult & { refreshToken?: string | null }>(body);
@@ -168,6 +169,7 @@ export function tryRefreshOnce(): Promise<boolean> {
       try {
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: "POST",
+          headers: { "X-Client-App": CLIENT_APP },
           credentials: "include",
         });
         if (!res.ok) return false;
@@ -201,7 +203,10 @@ export async function logout(queryClient?: QueryClientLike): Promise<void> {
     await fetch(`${API_BASE}/api/auth/logout`, {
       method: "POST",
       credentials: "include",
-      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+      headers: {
+        "X-Client-App": CLIENT_APP,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
   } catch {
     /* ignore */

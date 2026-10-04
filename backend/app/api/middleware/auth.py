@@ -150,8 +150,8 @@ async def _session_guard(request: Request):
                        payload.get("userId"))
         return None
 
-    from backend.infra.redis.client import get_redis
-    client = get_redis()
+    from backend.infra.redis.client import get_auth_redis
+    client = get_auth_redis()
     if client is None:
         logger.warning("[SessionGuard] Redis 不可用，会话校验跳过（网关层兜底）")
         return None

@@ -791,10 +791,19 @@ class ChunkLevelRetriever(BaseRetriever):
         before_permission = len(st.docs)
         st.docs = filter_documents_by_permission(st.docs, st.user_permissions)
         if len(st.docs) != before_permission:
+            denied = before_permission - len(st.docs)
             logger.info(
                 "ChunkLevelRetriever: 最终权限过滤 "
-                f"{before_permission - len(st.docs)} chunks"
+                f"{denied} chunks"
             )
+            # 拒答升级依据（原文定位/拒答语义 2026-10-03）：检索器层是权限
+            # 剔除的实际发生点（先于 chain._index_docs），计数必须在此累加，
+            # 否则 _reject 拿到的 filtered 恒 0、「有资料但无权限」话术永不触发
+            try:
+                from backend.rag.context import get_context
+                get_context().permission_filtered += denied
+            except Exception:  # noqa: BLE001 — 计数失败不影响检索本身
+                logger.debug("permission_filtered 计数失败", exc_info=True)
 
     def _filter_has_docs(self, metadata_filter: dict) -> bool:
         """探测给定 metadata_filter 在 doc 库中是否还能匹配到文档（不做向量检索，零 embedding 成本）。

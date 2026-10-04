@@ -39,10 +39,10 @@ export default function StatusPipeline({ current, onTransition, loading }: Statu
               onClick={() => canNext && onTransition?.(s)}
               className={`
                 relative flex items-center gap-1 text-[10px] px-2 py-1 rounded-full transition-all
-                ${active ? `${meta.bg} ${meta.color} font-semibold ring-1 ring-current/20` : ''}
+                ${active ? `${meta.bg} ${meta.color} font-semibold ring-1 ring-[color:color-mix(in_srgb,currentColor_20%,transparent)]` : ''}
                 ${done ? 'bg-green-50 text-green-600' : ''}
                 ${!active && !done ? 'bg-gray-50 text-gray-400' : ''}
-                ${canNext ? 'cursor-pointer hover:ring-1 hover:ring-current/30' : 'cursor-default'}
+                ${canNext ? 'cursor-pointer hover:ring-1 hover:ring-[color:color-mix(in_srgb,currentColor_30%,transparent)]' : 'cursor-default'}
                 ${loading ? 'opacity-50' : ''}
               `}
             >

@@ -7,7 +7,7 @@
 转出主路由。
 
 设计约束（对齐既有先例）：
-- prompt 模块内硬编码（同 supervisor._llm_decision 先例，不注册 PromptSpec）
+- Prompt 通过 PromptService 管理，Key 为 customer_service.redirect_main
 - 配置 env 名收口 config/customer_service.py 的 getter（调用时求值，
   测试直接 patch env 即生效；2026-09-21 审查遗留项 3.3 收敛）
 - 软失败：LLM 超时/解析失败/开关关闭/短句 → 返回 None，调用方留守 CS
@@ -24,6 +24,7 @@ from backend.config.customer_service import (
     cs_non_cs_redirect_threshold,
     cs_redirect_main_llm_enabled,
 )
+from backend.customer_service.prompting import render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -69,22 +70,6 @@ def _get_llm():
     return get_llm()
 
 
-_PROMPT_TEMPLATE = (
-    "你是电商平台的智能路由仲裁器。用户当前在客服窗口，系统怀疑这条消息"
-    "可能不是客服咨询。请判断该消息是否\u201c明显不属于客服域\u201d。\n\n"
-    "判为非客服（is_non_cs=true）：消息明显是其他业务域的请求，如旅游规划"
-    "（行程/景点/攻略）、商品选品对比、纯闲聊寒暄、技术编程问答等，且不含"
-    "任何客服要素。\n"
-    "判为客服（is_non_cs=false）：涉及订单/退款/发票/物流/售后/账户/商品"
-    "咨询，或语义模糊、拿不准、混合信号。宁可误留守，不可误转出。\n\n"
-    "用户消息: {query}\n\n"
-    "只回复 JSON，不要解释："
-    '{{"is_non_cs": true或false, "confidence": 0.0到1.0的小数, '
-    '"target_domain": "travel或selection或chitchat或tech或other或空字符串", '
-    '"reason": "一句话理由"}}'
-)
-
-
 def _parse_response(response: Any) -> Optional[NonCSDetection]:
     """解析 LLM 回复为 NonCSDetection；任何解析失败返回 None（软失败）。"""
     try:
@@ -126,7 +111,10 @@ def detect_non_cs(query: str) -> Optional[NonCSDetection]:
         from backend.infra.async_utils import sync_call_with_timeout
 
         llm = _get_llm()
-        prompt = _PROMPT_TEMPLATE.format(query=q[:300])
+        prompt = render_prompt(
+            "customer_service.redirect_main",
+            query=q[:300],
+        )
         response = sync_call_with_timeout(
             llm.invoke, _TIMEOUT_S, [HumanMessage(content=prompt)],
         )

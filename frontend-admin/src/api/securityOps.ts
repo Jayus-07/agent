@@ -3,7 +3,8 @@
  *
  * 数据源：FastAPI `/api/sys/security/*`（见 backend/app/api/routes/auth_local.py）
  * - overview：灰度开关状态 + 敏感端点清单（只读）
- * - sessions：在线会话列表（2026-09-19 会话实体改造：DB 口径，一行 = 一次设备登录）
+ * - sessions：有效登录会话列表（2026-09-19 会话实体改造：DB 口径，一行 = 一次设备登录）
+ * - sessions/history：最近会话历史（含已撤销、已过期记录）
  * - DELETE sessions/{sessionId}：强制下线（撤会话实体 + 家族 refresh + Redis 闸键）
  */
 import { request } from "@/lib/fetcher";
@@ -40,13 +41,15 @@ export interface SecurityOverview {
   actor: string;
 }
 
-/** 在线会话（一次设备登录 = refresh token family，轮换/多标签不新增行） */
+/** 有效登录会话（一次设备登录 = refresh token family，轮换/多标签不新增行） */
 export interface SessionRow {
   sessionId: string;
   userId: number;
   username: string | null;
   realName: string | null;
   role: string | null;
+  /** 登录来源：web 用户端、admin 管理端、cs 客服端；unknown = 存量会话无法回溯 */
+  clientId: string | null;
   /** 登录时前端上报的 deviceId（localStorage UUID），空 = 未上报 */
   device: string;
   /** 登录时 User-Agent 原文（截断 256） */
@@ -60,6 +63,14 @@ export interface SessionRow {
 
 export interface SessionList {
   sessions: SessionRow[];
+}
+
+export type SessionHistoryStatus = "active" | "revoked" | "expired";
+
+export interface SessionHistoryRow extends SessionRow {
+  status: SessionHistoryStatus;
+  revokedAt: string | null;
+  revokeReason: string | null;
 }
 
 /**
@@ -94,9 +105,17 @@ export async function getSecurityOverview(): Promise<SecurityOverview> {
   return res.data;
 }
 
-/** GET /sys/security/sessions — 在线会话列表 */
+/** GET /sys/security/sessions — 有效登录会话列表 */
 export async function getSessions(): Promise<SessionList> {
   const res = await request<Result<SessionList>>("/api/sys/security/sessions");
+  return res.data;
+}
+
+/** GET /sys/security/sessions/history — 最近 200 条会话历史 */
+export async function getSessionHistory(): Promise<{ sessions: SessionHistoryRow[] }> {
+  const res = await request<Result<{ sessions: SessionHistoryRow[] }>>(
+    "/api/sys/security/sessions/history",
+  );
   return res.data;
 }
 

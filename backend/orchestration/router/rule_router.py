@@ -93,6 +93,38 @@ def _load_rule_keyword_groups() -> dict[str, list[str]]:
 
 _RULE_KEYWORD_GROUPS = _load_rule_keyword_groups()
 
+
+def sql_signal_hits(query: str) -> int:
+    """查询里 sql.query 规则关键词的命中数（复用单一词表源，G2）。
+
+    供 clarify_content 的 SQL 倾向追问判定复用——拒答兜底需要识别
+    「这像是数据查询诉求」，词表只此一份，不允许第四处手抄。
+    """
+    if not query:
+        return 0
+    q = query.lower()
+    return sum(1 for k in _RULE_KEYWORD_GROUPS.get("sql.query", ())
+               if re.search(k, q))
+
+
+def sql_lean_hits(query: str) -> int:
+    """查询里「数据诉求宽词表」的命中数（复用复合意图专用词表，G2）。
+
+    与 sql_signal_hits 的区别：rule_keywords 是路由强/弱信号词（窄，
+    yaml 可覆盖）；复合意图词表是「这个问题涉不涉及数据」的宽词表
+    （查询/数据/商品/订单/成本…）。拒答兜底的 SQL 倾向识别要宽不要窄
+    ——实机验证（2026-10-03）：「查一下经营数据」在 rule_keywords 命中 0
+    （yaml 列表无「数据」），宽词表才接得住。
+
+    排除「多少」：纯疑问词，知识型问句（「税率是多少」）也会带；
+    真实数据查询必携带数据名词（订单/销售额/库存…），不因它误判。
+    """
+    if not query:
+        return 0
+    q = query.lower()
+    return sum(1 for k in _COMPOSITE_GROUP_KEYWORDS.get("sql.query", ())
+               if k != "多少" and re.search(k, q))
+
 # ── 复合意图强信号（2026-09-15，企业路由器主流做法）──────────
 # 单一能力的问题由 direct 秒答；带"同时/并"等连接词、横跨 ≥2 个能力组
 # 的复合问题需要多步编排，必须稳定走 plan（DAG 并行 + Reporter 汇总），

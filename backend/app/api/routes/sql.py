@@ -16,11 +16,15 @@ STOP C 接线（2026-09-23）：身份链完全复用统一授权体系——
 SQL 文本），走同一 Guard/executor/脱敏栈，供核对 NL2SQL 回答是否正确。
 """
 import asyncio
+import inspect
+import json
 import re
 import time
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from backend.app.api.deps import get_sql_agent, get_principal
 from backend.app.api.schemas import (
@@ -36,6 +40,11 @@ from backend.shared.logger import logger
 from backend.security.principal import Principal
 from backend.sql.policy import SQLPolicyContext, SQLPolicyError
 from backend.sql.schema_loader import schema_loader
+from backend.sql.query_context import (
+    clear_sql_query_context,
+    load_sql_query_context,
+    persist_sql_query_result,
+)
 
 router = APIRouter(prefix="/sql", tags=["SQL查询"])
 
@@ -96,6 +105,36 @@ def _require_sql_read(policy: SQLPolicyContext) -> None:
         raise HTTPException(status_code=403, detail="当前查询超出你的数据访问范围。")
 
 
+def _ask_sql_agent(
+    agent,
+    question: str,
+    *,
+    policy: SQLPolicyContext,
+    query_context: dict | None = None,
+    event_sink=None,
+):
+    """调用 SQLAgent，并兼容外部旧版测试替身/集成适配器的旧签名。"""
+    kwargs = {"policy": policy}
+    try:
+        parameters = inspect.signature(agent.ask_struct).parameters
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+    except (TypeError, ValueError):
+        accepts_kwargs = True
+        parameters = {}
+    if query_context is not None and (
+        accepts_kwargs or "query_context" in parameters
+    ):
+        kwargs["query_context"] = query_context
+    if event_sink is not None and (
+        accepts_kwargs or "event_sink" in parameters
+    ):
+        kwargs["event_sink"] = event_sink
+    return agent.ask_struct(question, **kwargs)
+
+
 @router.post("", responses={500: {"model": ErrorResponse}})
 async def sql_ask(
     req: SQLAskRequest,
@@ -138,7 +177,30 @@ async def sql_query(
     _require_sql_read(policy)
 
     agent = get_sql_agent()
-    result = await asyncio.to_thread(agent.ask_struct, req.question, policy=policy)
+    query_context = None
+    if req.reset_context:
+        clear_sql_query_context(policy.tenant_id, policy.user_id, req.session_id)
+    else:
+        query_context = load_sql_query_context(
+            policy.tenant_id, policy.user_id, req.session_id)
+    if query_context is None:
+        # 首轮保持旧调用签名，兼容外部 Tool/测试替身；有上下文时才
+        # 显式传入追问摘要。
+        result = await asyncio.to_thread(
+            _ask_sql_agent, agent, req.question, policy=policy)
+    else:
+        result = await asyncio.to_thread(
+            _ask_sql_agent, agent, req.question, policy=policy,
+            query_context=query_context)
+    memory = persist_sql_query_result(
+        tenant_id=policy.tenant_id,
+        user_id=policy.user_id,
+        session_id=req.session_id,
+        raw_question=req.question,
+        query_context=query_context,
+        policy=policy,
+        result=result,
+    )
     return SQLQueryResponse(
         status=result.status,
         answer=result.to_markdown(),
@@ -150,6 +212,163 @@ async def sql_query(
         error_type=result.error_type,
         sql=result.sql_text,
         column_comments=_comments_for_result_columns(result.columns or []),
+        memory=memory,
+    )
+
+
+def _sql_sse_encode(event: dict) -> str:
+    """编码 SQL 查询流事件，复用聊天流已有的 meta/status/log/done/error 契约。"""
+    event_name = event.get("event", "log")
+    data = event.get("data", {})
+    return (
+        f"event: {event_name}\n"
+        f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
+
+
+@router.post("/query/stream")
+async def sql_query_stream(
+    req: SQLAskRequest,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+):
+    """流式执行 SQL 查询，持续返回需求理解、Tool 阶段和最终结果。
+
+    事件类型沿用聊天 SSE：不新增前端协议，只在既有 status/log 的 payload
+    中补充 phase、tool 和用户可读 message。SQL 执行在线程池中运行，避免
+    同步的模型/数据库调用阻塞事件循环。
+    """
+    _require_sql_enabled()
+    policy = _build_policy(principal)
+    _require_sql_read(policy)
+
+    if req.current_user_id is not None:
+        logger.warning(
+            "[SQL] 流式请求携带已废弃的 current_user_id=%s，已忽略",
+            req.current_user_id,
+        )
+
+    if req.reset_context:
+        clear_sql_query_context(policy.tenant_id, policy.user_id, req.session_id)
+        query_context = None
+    else:
+        query_context = load_sql_query_context(
+            policy.tenant_id, policy.user_id, req.session_id)
+
+    agent = get_sql_agent()
+    loop = asyncio.get_running_loop()
+    events: asyncio.Queue = asyncio.Queue(maxsize=128)
+    request_id = uuid.uuid4().hex
+    started_at = time.monotonic()
+
+    def enqueue(event: dict | None) -> None:
+        """从 SQL 工作线程安全地投递事件到当前事件循环。"""
+        try:
+            events.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning("[SQL] 流式事件队列已满，丢弃中间进度事件")
+
+    def emit_from_worker(event: dict) -> None:
+        try:
+            loop.call_soon_threadsafe(enqueue, event)
+        except RuntimeError:
+            logger.debug("[SQL] 流式事件循环已关闭", exc_info=True)
+
+    def worker() -> None:
+        try:
+            result = _ask_sql_agent(
+                agent, req.question, policy=policy,
+                query_context=query_context, event_sink=emit_from_worker,
+            )
+            memory = persist_sql_query_result(
+                tenant_id=policy.tenant_id,
+                user_id=policy.user_id,
+                session_id=req.session_id,
+                raw_question=req.question,
+                query_context=query_context,
+                policy=policy,
+                result=result,
+            )
+            response = SQLQueryResponse(
+                status=result.status,
+                answer=result.to_markdown(),
+                columns=result.columns or [],
+                rows=result.rows or [],
+                row_count=result.row_count,
+                elapsed_sec=result.elapsed_sec,
+                error=result.error,
+                error_type=result.error_type,
+                sql=result.sql_text,
+                column_comments=_comments_for_result_columns(result.columns or []),
+                memory=memory,
+            )
+            emit_from_worker({
+                "event": "done",
+                "data": {
+                    "elapsed": time.monotonic() - started_at,
+                    "sources": [],
+                    "result": response.model_dump(),
+                },
+            })
+        except Exception:  # noqa: BLE001 — 流式终帧需统一返回错误
+            logger.exception("[SQL] 流式查询失败")
+            emit_from_worker({
+                "event": "error",
+                "data": {
+                    "message": "查询执行失败，请稍后重试。",
+                    "ts": time.time(),
+                },
+            })
+        finally:
+            emit_from_worker(None)
+
+    async def event_stream():
+        yield _sql_sse_encode({
+            "event": "meta",
+            "data": {
+                "request_id": request_id,
+                "stream_id": request_id,
+                "node_labels": {
+                    "query_understanding": "需求理解",
+                    "table_router": "数据表选择",
+                    "sql_generator": "SQL生成",
+                    "sql_validator": "安全校验",
+                    "sql_executor": "数据查询工具",
+                },
+            },
+        })
+        # 让页面在模型/数据库调用开始前就能反馈已接收请求。
+        yield _sql_sse_encode({
+            "event": "status",
+            "data": {
+                "node": "query_understanding",
+                "step_id": "query_understanding",
+                "status": "running",
+                "message": "正在理解查询需求…",
+                "ts": time.time(),
+            },
+        })
+        task = asyncio.create_task(asyncio.to_thread(worker))
+        try:
+            while True:
+                event = await events.get()
+                if event is None:
+                    break
+                yield _sql_sse_encode(event)
+                await asyncio.sleep(0)
+        finally:
+            if not task.done():
+                await task
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Request-Id": request_id,
+        },
     )
 
 
@@ -303,8 +522,13 @@ async def list_tables(
     policy = _build_policy(principal, source_channel="admin")
     _require_sql_read(policy)
 
+    from backend.sql.policy import SQLPolicyGuard
+
+    visible_tables = set(SQLPolicyGuard().get_allowed_tables(policy))
     tables = []
     for qualified in schema_loader.get_all_table_names():
+        if qualified not in visible_tables:
+            continue
         schema_name, table_name = schema_loader.split_qualified(qualified)
         tables.append(BrowseTable(
             schema_name=schema_name,
@@ -344,6 +568,9 @@ async def browse_table(
     qualified = f"{schema_name}.{table_name}".lower()
     if qualified not in schema_loader.allowed_tables:
         raise HTTPException(status_code=404, detail="数据表不存在或不在可浏览范围内。")
+    from backend.sql.policy import SQLPolicyGuard
+    if qualified not in set(SQLPolicyGuard().get_allowed_tables(policy)):
+        raise HTTPException(status_code=403, detail="该数据不在当前可访问范围内。")
     columns = _validated_browse_columns(qualified)
 
     order_col = sort if sort else ("id" if "id" in columns else columns[0])

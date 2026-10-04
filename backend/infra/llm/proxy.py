@@ -4,7 +4,7 @@ proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
 核心设计:
   - 懒加载：首次调用时才初始化 LLM，根据 LLM_MODEL 自动选择 Provider
   - `llm` 是 _LLMProxy 代理；每次 .invoke()/.stream() 都委派给当前活跃模型
-  - LLMFactory.set_current("deepseek-chat") 后，所有 `llm.invoke(...)` 自动走新模型
+  - LLMFactory.set_current("doubao-seed-2.0-mini") 后，所有 `llm.invoke(...)` 自动走新模型
   - 所有调用方 `from backend.infra.llm import llm` 无需修改
   - 每次调用记录 token + finish_reason + cost_usd 到模块级 _last_call_meta（供 tracer 读取）
   - P1-7: 韧性链 — 瞬时错误显式重试（指数退避）→ 熔断开路/重试耗尽时

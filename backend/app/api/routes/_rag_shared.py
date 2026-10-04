@@ -86,6 +86,11 @@ from pydantic import BaseModel
 
 
 class SearchRequest(BaseModel):
+    # 搜索端点只接受当前契约字段；拒绝未知 top_k/filter，避免客户端以为
+    # 参数已生效而实际被静默丢弃，造成检索范围与验收结果不一致。
+    class Config:
+        extra = "forbid"
+
     query: str = ""
     # 显式知识库（可选）：授权裁决在路由层（只能收窄到主体可见集）
     kb_id: str = ""

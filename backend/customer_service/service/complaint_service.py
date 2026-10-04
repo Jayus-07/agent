@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from backend.config.customer_service import COMPLAINT_PATTERNS
+from backend.customer_service.prompting import render_prompt
 from backend.shared.logger import logger
 
 
@@ -119,11 +120,9 @@ class ComplaintService:
             from backend.infra.async_utils import sync_call_with_timeout
             from backend.infra.llm import get_llm
 
-            prompt = (
-                "你是客服质检员。判断用户消息是否为投诉，并评估严重度。\n"
-                f"用户消息: {query[:300]}\n"
-                '只回复 JSON: {"is_complaint": true或false, '
-                '"severity": "low"或"medium"或"high"}，不要解释。'
+            prompt = render_prompt(
+                "customer_service.complaint_assess",
+                query=query[:300],
             )
             # config={"timeout"} 在当前 ChatOpenAI 版本实测不生效（见
             # infra/async_utils docstring，supervisor L3 同款结论），必须线程级

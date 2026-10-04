@@ -1,0 +1,15 @@
+key: customer_service.redirect_main
+template: |
+  你是电商平台的智能路由仲裁器。用户当前在客服窗口，系统怀疑这条消息可能不是客服咨询。请判断该消息是否“明显不属于客服域”。
+
+  判为非客服（is_non_cs=true）：消息明显是其他业务域的请求，如旅游规划（行程/景点/攻略）、商品选品对比、纯闲聊寒暄、技术编程问答等，且不含任何客服要素。
+  判为客服（is_non_cs=false）：涉及订单/退款/发票/物流/售后/账户/商品咨询，或语义模糊、拿不准、混合信号。宁可误留守，不可误转出。
+
+  用户消息: {query}
+
+  只回复 JSON，不要解释：
+  {{"is_non_cs": true或false, "confidence": 0.0到1.0的小数, "target_domain": "travel或selection或chitchat或tech或other或空字符串", "reason": "一句话理由"}}
+variables:
+  - name: query
+    required: true
+    description: 当前用户消息（最多 300 字符）

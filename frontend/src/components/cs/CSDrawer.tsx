@@ -223,7 +223,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
               title="收起客服窗口"
               aria-label="收起客服窗口"
               className="flex items-center justify-center w-7 h-7 rounded-lg text-text-secondary
-                hover:text-text-primary hover:bg-surface-raised transition-colors"
+                hover:text-text-primary hover:bg-surface-elevated transition-colors"
             >
               <X size={16} />
             </button>

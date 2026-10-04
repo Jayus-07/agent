@@ -12,6 +12,8 @@ Phase 8 清理；因读 state，按 Service 零 state 纪律不迁 service）。
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from backend.shared.logger import logger
 from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
@@ -50,9 +52,12 @@ def _needs_train_search(message: str, brief) -> bool:
     return bool(brief.origin.strip() and brief.start_date)
 
 
-def prefetch_day_legs(pois_by_day):
-    """路段预热（Optimization 能力）：委托 OptimizationAgent。"""
-    _optimization.prefetch_day_legs(pois_by_day)
+def prefetch_day_legs(pois_by_day, trip_dates=None):
+    """路段预热（Optimization 能力）：委托 OptimizationAgent。
+
+    trip_dates 透传公交候选预热（验收 #41）；None 表示不预热候选。
+    """
+    _optimization.prefetch_day_legs(pois_by_day, trip_dates=trip_dates)
 
 
 def build_itinerary(brief, pois_by_day):
@@ -120,10 +125,16 @@ def transit_expert_node(state: dict) -> dict:
             extra_notes.append(
                 f"行程骨架引用了 {len(unknown)} 个候选数据外的地点标识，已忽略")
 
+        # 公交候选预热需要逐天出行日期（远期不发请求，#41）：与
+        # build_itinerary 的 day_date 推导同口径（start_date + 天序偏移）
+        day_dates = (
+            [brief.start_date + timedelta(days=i) for i in range(len(pois_by_day))]
+            if brief.start_date else None
+        )
         run_travel_tool(
             "travel.calculate_route",
             "optimization",
-            lambda: prefetch_day_legs(pois_by_day),
+            lambda: prefetch_day_legs(pois_by_day, trip_dates=day_dates),
             result_summary=lambda _value: {
                 "data_status": "warmed_or_local_estimate",
             },

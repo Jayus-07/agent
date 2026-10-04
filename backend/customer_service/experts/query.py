@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
+from backend.customer_service.prompting import render_prompt
 from backend.shared.logger import logger
 
 _INTENT_SERVICE_MAP = {
@@ -119,15 +120,9 @@ def _llm_decompose_intents(question: str) -> list[str] | None:
         if not CS_QUERY_LLM_DECOMPOSE_ENABLED:
             return None
 
-        prompt = (
-            "你是客服意图分析器。用户的问题可能包含多个业务诉求，"
-            "请从以下意图中选出问题实际涉及的项（可多选）：\n"
-            "t_order_status（订单状态/退款/退货/售后）\n"
-            "t_logistics（物流/快递/发货进度）\n"
-            "as_repair（维修/保修申请）\n"
-            "as_quality_issue（质量问题反馈）\n\n"
-            f"用户问题: {question[:200]}\n"
-            '只回复 JSON 数组，如 ["t_order_status", "t_logistics"]，不要解释。'
+        prompt = render_prompt(
+            "customer_service.query_intent",
+            question=question[:200],
         )
         # config={"timeout"} 实测不生效（2026-09），须线程级限时
         response = sync_call_with_timeout(

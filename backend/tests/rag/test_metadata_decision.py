@@ -43,6 +43,28 @@ async def test_r0_skips_cache_io(monkeypatch):
     assert result.llm_call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_travel_filename_anchor_is_r0_and_cannot_be_overwritten_by_llm(monkeypatch):
+    """旅游现场文件名锚点必须在级联路由中直接确定 doc_type。"""
+    async def _llm_must_not_run(*args, **kwargs):
+        raise AssertionError("旅游文件名强证据不应进入 LLM 路由")
+
+    monkeypatch.setattr(
+        "backend.rag.preprocessing.metadata_decision.extract_metadata_llm_async",
+        _llm_must_not_run,
+    )
+
+    result = await decide_metadata(
+        "普通旅游正文，无额外强类型信号。",
+        "福州-美食-佛跳墙.md",
+        "/app/data/docs/travel/general/福州-美食-佛跳墙.md",
+    )
+
+    assert result.source == "r0"
+    assert result.doc_type == "travel_guide"
+    assert result.llm_call_count == 0
+
+
 async def _fake_llm_result(*args, **kwargs):
     return {
         "doc_type": "legal",

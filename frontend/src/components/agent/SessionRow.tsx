@@ -52,7 +52,7 @@ export default function SessionRow({
   return (
     <div
       className={`group relative rounded-lg transition-colors ${
-        isActive ? 'bg-accent/8' : 'hover:bg-black/5'
+        isActive ? 'bg-accent-soft' : 'hover:bg-black/5'
       }`}
     >
       {editing ? (

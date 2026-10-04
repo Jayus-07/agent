@@ -42,7 +42,7 @@ export default function ProbeResultDetails({
           {result.steps.map((step) => {
             const hints = step.status === 'fail' ? fixHints?.[step.grade] ?? [] : []
             return (
-              <li key={step.grade} className="border-l border-current/20 pl-2">
+              <li key={step.grade} className="border-l border-[color:color-mix(in_srgb,currentColor_20%,transparent)] pl-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium">{step.grade} · {gradeLabel(step.grade)} · {probeStatusLabel(step.status)}</span>
                   {step.elapsedMs != null && <span className="opacity-70">{step.elapsedMs}ms</span>}
@@ -70,7 +70,7 @@ export default function ProbeResultDetails({
             )
           })}
         </ol>
-        {result.suggestion && <div className="mt-1.5 break-words border-t border-current/10 pt-1.5">建议：{result.suggestion}</div>}
+        {result.suggestion && <div className="mt-1.5 break-words border-t border-[color:color-mix(in_srgb,currentColor_10%,transparent)] pt-1.5">建议：{result.suggestion}</div>}
       </details>
     </div>
   )

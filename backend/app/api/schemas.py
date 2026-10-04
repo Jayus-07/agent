@@ -33,6 +33,8 @@ class AbortRequest(BaseModel):
 
 class SQLAskRequest(BaseModel):
     question: str = Field(..., description="自然语言数据查询", min_length=1, max_length=2000)
+    session_id: str = Field("default", description="SQL 查询会话ID，同一会话支持追问")
+    reset_context: bool = Field(False, description="是否清除本会话上一轮 SQL 上下文")
     # P1-11: 已废弃 — 该字段可被客户端伪造，服务端不再采用。
     # 行级安全的用户上下文改由可信网关头（X-User-Id，需 TRUST_USER_HEADER=true）推导。
     current_user_id: Optional[int] = Field(
@@ -54,6 +56,12 @@ class SQLQueryResponse(BaseModel):
     column_comments: dict = Field(
         default_factory=dict,
         description="结果列名 → 中文注释（能匹配业务表白名单列的才有；聚合/别名列为空）")
+    memory: dict = Field(
+        default_factory=dict,
+        description="SQL 会话记忆元数据（不含结果明细）")
+    understanding: dict = Field(
+        default_factory=dict,
+        description="查询需求理解摘要")
 
 
 # ── 管理端表浏览（GET /sql/tables*，2026-10-01）──

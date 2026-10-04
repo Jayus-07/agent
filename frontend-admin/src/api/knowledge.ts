@@ -50,11 +50,19 @@ export const knowledgeService: any = {
 
   approvePendingDoc: (doc_id: string) =>
     fetchRaw(`${BASE}/pending/${doc_id}/approve`, { method: 'POST' })
-      .then(r => r.json()).catch(() => ({ ok: false })),
+      .then(async r => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok && !data.error) data.error = `审核请求失败 (${r.status})`
+        return data
+      }).catch((e) => ({ ok: false, error: String(e) })),
 
   rejectPendingDoc: (doc_id: string) =>
     fetchRaw(`${BASE}/pending/${doc_id}/reject`, { method: 'POST' })
-      .then(r => r.json()).catch(() => ({ ok: false })),
+      .then(async r => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok && !data.error) data.error = `审核请求失败 (${r.status})`
+        return data
+      }).catch((e) => ({ ok: false, error: String(e) })),
 
   /**
    * 上传文档（两阶段）：

@@ -29,6 +29,7 @@ const GATEWAY = (process.env.API_URL || "http://127.0.0.1:9080").replace(
   /\/+$/,
   "",
 );
+const CLIENT_APP = "web";
 
 const FORWARD_REQ_HEADERS = [
   "authorization",
@@ -61,6 +62,7 @@ async function proxy(
     const v = req.headers.get(h);
     if (v) headers.set(h, v);
   }
+  headers.set("X-Client-App", CLIENT_APP);
   const apiKey = process.env.API_KEY;
   if (apiKey) headers.set("X-API-Key", apiKey);
 

@@ -17,6 +17,17 @@ def test_pr_suite_has_canonical_cases_and_baseline_scope():
     assert {case.metadata["source_fixture_set"] for case in cases} == {"baseline"}
 
 
+def test_prompt_release_smoke_suite_has_eight_representative_cases():
+    """Prompt 发布短门禁固定为 8 条，完整 baseline 仍用于更慢的回归。"""
+    cases = load_dataset("rag", selection="pr_smoke")
+
+    assert len(cases) == 8
+    assert {case.metadata["kb_id"] for case in cases} == {"rag_eval_kb"}
+    assert {case.metadata["fixture_set"] for case in cases} == {"baseline"}
+    assert {case.metadata["source_fixture_set"] for case in cases} == {"baseline"}
+    assert {case.metadata["tier"] for case in cases} == {"smoke", "core", "hard"}
+
+
 def test_expanded_suite_is_separate_from_pr_suite():
     """100 文档专项案例不能与 PR baseline 复用同一批 ID。"""
     baseline = {case.id for case in load_dataset("rag", selection="pr_baseline")}
@@ -51,7 +62,7 @@ def test_suites_declare_required_scope_fields():
     """套件文件必须显式声明范围，禁止再次依赖默认路径猜测。"""
     from backend.evaluation.dataset.loader import DATASET_DIR
 
-    for suite_name in ("pr_baseline", "expanded_100", "scale_20k"):
+    for suite_name in ("pr_baseline", "pr_smoke", "expanded_100", "scale_20k"):
         data = json.loads(
             (DATASET_DIR / "rag" / "suites" / f"{suite_name}.json").read_text(encoding="utf-8")
         )

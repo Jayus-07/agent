@@ -121,6 +121,8 @@ class ConversationContext:
     last_intent: str = ""        # 上一轮路由意图（route_mode / domain_action）
     last_action: str = ""        # 上一轮动作（selected_tool / 域图名 / clarify）
     pending_question: str = ""   # 上一轮留给用户的待答问题（追问卡/澄清/待决项）
+    # SQL 查询摘要：只存结构化元数据，不存结果行；由 SQL Agent 负责写入。
+    sql_query_context: dict | None = None
 
     # ── Travel Run（STOP F1，2026-09-23）──
     # 一次旅游规划任务的身份与结构化 pending。只存结构化事实与摘要，
@@ -192,6 +194,11 @@ class ConversationContext:
             self.last_action = action
         if pending_question is not None:
             self.pending_question = pending_question
+        self.updated_at = time.time()
+
+    def set_sql_query_context(self, context: dict | None) -> None:
+        """更新/清除当前会话的 SQL 查询摘要。"""
+        self.sql_query_context = dict(context) if context else None
         self.updated_at = time.time()
 
     # ── Travel Run 维护（STOP F1）──
@@ -348,6 +355,9 @@ class ConversationContext:
             "last_intent": self.last_intent,
             "last_action": self.last_action,
             "pending_question": self.pending_question,
+            "sql_query_context": (
+                dict(self.sql_query_context) if self.sql_query_context else None
+            ),
             # Travel Run 摘要（STOP F1）：pending 结构化快照供路由层
             # TravelPendingResolver 与 trace 消费
             "travel_run_id": self.travel_run_id,

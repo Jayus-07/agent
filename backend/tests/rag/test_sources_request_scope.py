@@ -72,8 +72,12 @@ def _make_stub_pipeline(answer: str, sources: list):
         return answer
 
     pipe._execute_chain = _execute_chain
+    # 真实 _snapshot_answer_meta 把 ctx.sources 打包进 last_answer_meta
+    # （截 8 条）；ask_result 的读取点已收进 _ask_inner 返回值（清场前打包，
+    # 修复清场后 get_context() 恒新实例导致 sources 恒空的缺陷）
     pipe._snapshot_answer_meta = lambda: setattr(
-        pipe, "last_answer_meta", {"can_answer": True, "confidence": 0.9})
+        pipe, "last_answer_meta", {"can_answer": True, "confidence": 0.9,
+                                   "sources": list(sources)})
     pipe._is_rejection = lambda answer: False
     pipe._write_answer_cache = lambda question, kb_id, answer: None
     pipe._cleanup = lambda: None
@@ -88,7 +92,8 @@ def test_ask_result_returns_request_scoped_sources():
 
     assert outcome.answer == "答案A"
     assert outcome.sources == [{"title": "来源A", "snippet": "s"}]
-    assert outcome.answer_meta == {"can_answer": True, "confidence": 0.9}
+    assert outcome.answer_meta == {"can_answer": True, "confidence": 0.9,
+                                   "sources": [{"title": "来源A", "snippet": "s"}]}
 
 
 def test_ask_compat_returns_answer_string():

@@ -7,14 +7,14 @@
  *   1. 灰度开关状态（JWT 会话闸 / 敏感守卫 / 网关会话闸）；
  *      后端两枚经 PUT /sys/config/{key} 免重启切换（DB 覆盖 + env 兜底），
  *      网关值属部署层 env，后端返回 null，展示切换指引而非猜测运行值
- *   2. 在线会话（Redis auth:session:*）+ 强制下线（删键，
+ *   2. 有效登录会话 + 最近活跃状态 + 强制下线（撤销会话，
  *      enforce 下即刻生效；audit 灰度期仅保证凭据链收紧，页面已提示）
  *   3. 敏感端点清单（后端动态扫描 require_*_user Depends + 人工清单合并）
  *
  * 数据源：/api/sys/security/*，后端统一挂 require_admin_user（403 显式降级）。
  * 布局对齐 /observability/traces（2026-09-18）：min-h 容器 + 面包屑 +
  * 左标题右操作头部 + slate 白卡体系。
- * 2026-09-19：30s 静默轮询（在线会话是实时状态）+ 顶部态势摘要条 +
+ * 2026-09-19：30s 静默轮询（有效会话与活跃状态）+ 顶部态势摘要条 +
  * 模式切换取消后强制回拉，防受控 select 显示与后端实际值脱节。
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
@@ -23,17 +23,39 @@ import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 import {
   forceLogout,
   getSecurityOverview,
+  getSessionHistory,
   getSessions,
   updateGuardMode,
   type GuardModeInfo,
   type SecurityOverview,
+  type SessionHistoryRow,
   type SessionRow,
 } from '@/api/securityOps'
+import { countRecentlyActiveSessions, RECENT_ACTIVITY_WINDOW_MINUTES } from './sessionMetrics'
 
 const MODE_STYLES: Record<string, string> = {
   enforce: 'bg-red-50 text-red-700 border-red-200',
   audit: 'bg-amber-50 text-amber-700 border-amber-200',
   off: 'bg-slate-50 text-slate-500 border-slate-200',
+}
+
+const CLIENT_APP_LABELS: Record<string, string> = {
+  web: '用户端',
+  admin: '管理端',
+  cs: '客服端',
+  unknown: '未知（存量）',
+}
+
+const HISTORY_STATUS_LABELS: Record<SessionHistoryRow['status'], string> = {
+  active: '有效',
+  revoked: '已撤销',
+  expired: '已过期',
+}
+
+const HISTORY_STATUS_STYLES: Record<SessionHistoryRow['status'], string> = {
+  active: 'bg-emerald-50 text-emerald-700',
+  revoked: 'bg-red-50 text-red-700',
+  expired: 'bg-slate-100 text-slate-500',
 }
 
 function ModeBadge({ mode, fallback = '未知' }: { mode: string | null; fallback?: string }) {
@@ -132,6 +154,9 @@ function SummaryChip({ label, warn = false, children }: { label: string; warn?: 
 export default function SecurityPage() {
   const [overview, setOverview] = useState<SecurityOverview | null>(null)
   const [sessions, setSessions] = useState<SessionRow[]>([])
+  const [historySessions, setHistorySessions] = useState<SessionHistoryRow[]>([])
+  const [historyVisible, setHistoryVisible] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [kicking, setKicking] = useState<string | null>(null)
@@ -158,6 +183,26 @@ export default function SecurityPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const recentlyActiveCount = countRecentlyActiveSessions(sessions)
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const result = await getSessionHistory()
+      setHistorySessions(result.sessions)
+    } catch (e) {
+      setError(`加载会话历史失败: ${(e as Error).message}`)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
+
+  function toggleHistory() {
+    const nextVisible = !historyVisible
+    setHistoryVisible(nextVisible)
+    if (nextVisible && historySessions.length === 0) void loadHistory()
+  }
 
   // 30s 静默轮询；页面隐藏时跳过，避免后台标签页空耗请求
   useEffect(() => {
@@ -218,7 +263,7 @@ export default function SecurityPage() {
           <div>
             <h1 className="text-lg font-semibold text-slate-800">安全运营</h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              JWT 单通道鉴权的运营面：灰度开关（免重启切换）、在线会话、敏感端点清单
+              JWT 单通道鉴权的运营面：灰度开关（免重启切换）、有效登录会话、敏感端点清单
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -252,7 +297,7 @@ export default function SecurityPage() {
           <div className="bg-white border border-slate-200 rounded-xl py-12 text-center text-sm text-slate-400">无数据</div>
         ) : (
           <div className="space-y-4">
-            {/* 态势摘要条：进页面一眼读全局；audit/off 与 Redis 降级视为异常态高亮 */}
+            {/* 态势摘要条：进页面一眼读全局；audit/off 视为异常态高亮 */}
             <div className="flex flex-wrap items-center gap-2">
               <SummaryChip label="会话闸（后端）" warn={overview.modes.jwtSessionGuard.mode !== 'enforce'}>
                 <ModeBadge mode={overview.modes.jwtSessionGuard.mode} />
@@ -263,8 +308,11 @@ export default function SecurityPage() {
               <SummaryChip label="会话闸（网关）">
                 <ModeBadge mode={overview.modes.gatewaySessionCheck.mode} fallback="部署层" />
               </SummaryChip>
-              <SummaryChip label="在线会话">
+              <SummaryChip label="有效登录会话">
                 <span className="tabular-nums">{sessions.length}</span>
+              </SummaryChip>
+              <SummaryChip label={`近 ${RECENT_ACTIVITY_WINDOW_MINUTES} 分钟活跃`}>
+                <span className="tabular-nums">{recentlyActiveCount}</span>
               </SummaryChip>
             </div>
 
@@ -291,14 +339,25 @@ export default function SecurityPage() {
               </div>
             </section>
 
-            {/* ② 在线会话 */}
+            {/* ② 有效登录会话 */}
             <section className="bg-white border border-slate-200 rounded-xl p-4">
-              <h2 className="mb-3 text-[13px] font-medium text-slate-800">
-                在线会话
-                <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] tabular-nums text-slate-500">
-                  {sessions.length}
-                </span>
-              </h2>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-[13px] font-medium text-slate-800">
+                  有效登录会话
+                  <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] tabular-nums text-slate-500">
+                    {sessions.length}
+                  </span>
+                </h2>
+                <button
+                  onClick={toggleHistory}
+                  className="rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+                >
+                  {historyVisible ? '收起会话历史' : '查看会话历史'}
+                </button>
+              </div>
+              <p className="mb-2 text-[11px] text-slate-500">
+                有效会话 = 未撤销且 Refresh Token 未过期；“近 {RECENT_ACTIVITY_WINDOW_MINUTES} 分钟活跃”按最近活跃时间统计。
+              </p>
               {overview.modes.jwtSessionGuard.mode === 'audit' && (
                 <p className="mb-2 text-[11px] text-amber-600">
                   会话闸处于 audit 灰度期：强制下线撤销会话后，闸只记日志不拦截（黑名单通道兜底 logout）；切 enforce 后即刻生效。
@@ -306,7 +365,7 @@ export default function SecurityPage() {
               )}
               {sessions.length === 0 ? (
                 <div className="py-8 text-center text-[12px] text-slate-400">
-                  暂无在线会话
+                  暂无有效登录会话
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -315,6 +374,7 @@ export default function SecurityPage() {
                       <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
                         <th className="px-3 py-2.5 font-medium">用户</th>
                         <th className="px-3 py-2.5 font-medium">角色</th>
+                        <th className="px-3 py-2.5 font-medium">来源</th>
                         <th className="px-3 py-2.5 font-medium">设备 / 浏览器</th>
                         <th className="px-3 py-2.5 font-medium">IP</th>
                         <th className="px-3 py-2.5 font-medium">登录时间</th>
@@ -331,6 +391,9 @@ export default function SecurityPage() {
                             <span className="ml-2 text-[11px] text-slate-400">#{s.userId}</span>
                           </td>
                           <td className="px-3 py-2 text-slate-500">{s.role ?? '—'}</td>
+                          <td className="px-3 py-2 text-slate-500">
+                            {CLIENT_APP_LABELS[s.clientId ?? 'unknown'] ?? s.clientId ?? '—'}
+                          </td>
                           <td className="px-3 py-2 text-slate-500">
                             <span title={s.userAgent || undefined}>{fmtUserAgent(s.userAgent)}</span>
                             {s.device && (
@@ -359,6 +422,77 @@ export default function SecurityPage() {
                 </div>
               )}
             </section>
+
+            {historyVisible && (
+              <section className="bg-white border border-slate-200 rounded-xl p-4">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-[13px] font-medium text-slate-800">
+                    会话历史
+                    <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] tabular-nums text-slate-500">
+                      {historySessions.length}
+                    </span>
+                  </h2>
+                  <button
+                    onClick={() => void loadHistory()}
+                    disabled={historyLoading}
+                    className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
+                    {historyLoading ? '加载中…' : '刷新历史'}
+                  </button>
+                </div>
+                <p className="mb-2 text-[11px] text-slate-500">
+                  历史口径为最近 200 条登录会话，包含已撤销、已过期和当前有效记录；不会被上方“有效登录会话”数量混入。
+                </p>
+                {historyLoading && historySessions.length === 0 ? (
+                  <div className="py-8 text-center text-[12px] text-slate-400">加载中…</div>
+                ) : historySessions.length === 0 ? (
+                  <div className="py-8 text-center text-[12px] text-slate-400">暂无会话历史</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[12px]">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
+                          <th className="px-3 py-2.5 font-medium">用户</th>
+                          <th className="px-3 py-2.5 font-medium">来源</th>
+                          <th className="px-3 py-2.5 font-medium">状态</th>
+                          <th className="px-3 py-2.5 font-medium">设备 / 浏览器</th>
+                          <th className="px-3 py-2.5 font-medium">IP</th>
+                          <th className="px-3 py-2.5 font-medium">登录时间</th>
+                          <th className="px-3 py-2.5 font-medium">最近活跃</th>
+                          <th className="px-3 py-2.5 font-medium">撤销原因</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {historySessions.map((s) => (
+                          <tr key={s.sessionId} className="hover:bg-slate-50/60">
+                            <td className="px-3 py-2">
+                              <span className="text-slate-800">{s.realName || s.username || `用户 ${s.userId}`}</span>
+                              <span className="ml-2 text-[11px] text-slate-400">#{s.userId}</span>
+                            </td>
+                            <td className="px-3 py-2 text-slate-500">
+                              {CLIENT_APP_LABELS[s.clientId ?? 'unknown'] ?? s.clientId ?? '—'}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={`rounded px-1.5 py-0.5 text-[10px] ${HISTORY_STATUS_STYLES[s.status]}`}>
+                                {HISTORY_STATUS_LABELS[s.status]}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-slate-500" title={s.userAgent || undefined}>
+                              {fmtUserAgent(s.userAgent)}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{s.ip || '—'}</td>
+                            <td className="px-3 py-2 tabular-nums text-slate-500">{fmtDateTime(s.createdAt)}</td>
+                            <td className="px-3 py-2 tabular-nums text-slate-500">{fmtDateTime(s.lastActiveAt)}</td>
+                            <td className="px-3 py-2 text-slate-500">{s.revokeReason || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            )}
 
             {/* ③ 敏感端点清单 */}
             <section className="bg-white border border-slate-200 rounded-xl p-4">

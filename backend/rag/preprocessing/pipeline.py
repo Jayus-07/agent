@@ -10,7 +10,7 @@ from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
-from backend.rag.preprocessing.chunking import ChunkStrategyRouter
+from backend.rag.preprocessing.chunking import ChunkStrategyRouter, stamp_chunk_pages
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
 
@@ -92,6 +92,9 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         f"completeness={report.completeness} → {strategy.__class__.__name__}"
     )
     chunks = strategy.split(normalized_ast, file_path)
+    # 原文定位（P0）：叶子页码（PDF §5.2）回映射进 chunk metadata["pages"]，
+    # 供来源卡「第 X 页」展示与后续原文预览定位；单点收口，策略零改动
+    stamp_chunk_pages(chunks, normalized_ast)
     # §5.1 质量记录：扫描件 OCR 触发 → 打进 chunk metadata（Chroma 只收标量，
     # 沿用 chunks_truncated 的字符串标记惯例），indexer 汇总进 quality_issues
     if getattr(raw_ast, "ocr_triggered", False):

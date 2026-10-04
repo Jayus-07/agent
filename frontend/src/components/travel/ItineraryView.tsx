@@ -17,7 +17,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import 'leaflet/dist/leaflet.css'
 import type { Map as LeafletMap } from 'leaflet'
 import {
-  AlertTriangle, CalendarPlus, Check, ChevronLeft, ChevronRight, Coffee, Hotel, ListChecks, MapPin, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
+  AlertTriangle, Bus, CalendarPlus, Check, ChevronLeft, ChevronRight, Coffee, Hotel, ListChecks, MapPin, Route, ThumbsDown, ThumbsUp, TrainFront, UtensilsCrossed,
 } from 'lucide-react'
 import {
   confirmTravelPlan,
@@ -262,11 +262,15 @@ const LEG_MODE_LABEL: Record<string, string> = {
  * 时间轴上的交通段行：mode/时长/距离/费用全部来自 day.legs 真实字段。
  * 诚实口径：未核实的路段不显示具体时长与金额（只给 mode + 提示），
  * is_estimate 标「估算」，traffic_aware 标「实时路况」。
+ * 公交候选（#41）：transit_option 存在时给「公交」展开钮，展开后显示
+ * 乘坐摘要——候选仅供参考（含候车时间），不改变主路线口径与时间轴。
  */
 function LegRow({ leg }: { leg: TransitLeg }) {
   const fact = classifyFact({ source: leg.source })
   const verified = fact === 'verified'
   const mode = LEG_MODE_LABEL[leg.mode] ?? leg.mode
+  const [showTransit, setShowTransit] = useState(false)
+  const transit = leg.transit_option
   const parts: string[] = []
   if (verified) {
     parts.push(formatDuration(leg.minutes))
@@ -285,6 +289,28 @@ function LegRow({ leg }: { leg: TransitLeg }) {
         : <span className="text-red-600">路段数据暂无核实</span>}
       {leg.traffic_aware && verified && <span className="rounded-full bg-[#e2f0ee] px-1.5 text-[#087b73]">实时路况</span>}
       {leg.is_estimate && verified && <span className="rounded-full bg-amber-50 px-1.5 text-amber-600">估算值</span>}
+      {transit && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowTransit((v) => !v)}
+            aria-expanded={showTransit}
+            className="rounded-full bg-[#e2f0ee] px-1.5 py-px font-medium text-[#087b73] transition-colors hover:bg-[#cfe5e2]"
+          >
+            公交 {showTransit ? '▴' : '▾'}
+          </button>
+          {showTransit && (
+            <span className="w-full rounded-lg bg-[#f5faf9] px-2 py-1 leading-4 text-[#5c7074]">
+              <Bus size={10} aria-hidden className="mr-1 inline text-[#087b73]" />
+              {transit.summary || '公交/地铁方案'}
+              {' · 约 '}
+              {transit.duration_min}
+              分钟（含候车，供参考）
+              {transit.distance_m > 0 && ` · ${(transit.distance_m / 1000).toFixed(1)}km`}
+            </span>
+          )}
+        </>
+      )}
     </div>
   )
 }

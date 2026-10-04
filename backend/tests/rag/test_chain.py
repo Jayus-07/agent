@@ -96,6 +96,29 @@ def _qa_answer(text: str, can_answer: bool = True, reason: str = "no_evidence") 
     return f"{text}<!--META{meta}-->"
 
 
+def test_retrieval_span_metrics_include_all_recall_stages():
+    """RAG 链 retrieval span 应暴露 vector/BM25/fused/rerank 四路计数。"""
+    from backend.rag.chain import _build_retrieval_span_metrics
+    from backend.rag.context import clear_context, get_context
+
+    clear_context()
+    get_context().meta["_retrieval_counts"] = {
+        "vector_count": 6,
+        "bm25_count": 4,
+        "fused_count": 7,
+    }
+
+    metrics = _build_retrieval_span_metrics(_make_docs(3))
+
+    assert metrics == {
+        "total_docs": 3,
+        "vector_count": 6,
+        "bm25_count": 4,
+        "fused_count": 7,
+        "rerank_count": 3,
+    }
+
+
 # =====================================================
 # 1. 正常问答链路
 # =====================================================
@@ -303,6 +326,9 @@ class TestTraceSpans:
         for name in expected:
             assert name in names, f"缺少标准 trace span: {name}"
         assert len(names & set(expected)) == len(expected)  # 无中英文双名
+        citation_span = next(sp for sp in trace.spans if sp.name == SpanName.CITATION)
+        assert "final_evidence_count" in citation_span.metrics
+        assert citation_span.metrics["final_evidence_count"] >= 0
 
 
 # =====================================================

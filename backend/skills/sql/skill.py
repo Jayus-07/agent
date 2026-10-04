@@ -248,15 +248,40 @@ class SQLSkill(BaseSkill):
                         f"[SQL Skill] step={step_id} 缺 request_context，"
                         "fail-closed 拒绝（上下文传播断裂）")
                     return {"step_results": {step_id: sr}}
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        agent.ask_struct, question, policy=policy_ctx),
-                    timeout=timeout,
-                )
+                query_context = (state.get("routing_context") or {}).get(
+                    "sql_query_context")
+                if query_context:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            agent.ask_struct, question, policy=policy_ctx,
+                            query_context=query_context),
+                        timeout=timeout,
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            agent.ask_struct, question, policy=policy_ctx),
+                        timeout=timeout,
+                    )
                 last_result = result
 
                 # 成功 / 无数据 → 转换为 Pydantic SQLResult
                 if result.status in ("success", "no_data"):
+                    from backend.sql.query_context import persist_sql_query_result
+                    from backend.orchestration.request_context import (
+                        get_context_from_state,
+                    )
+                    request_ctx = get_context_from_state(state)
+                    if request_ctx is not None:
+                        persist_sql_query_result(
+                            tenant_id=request_ctx.tenant_id or "",
+                            user_id=request_ctx.user_id or "",
+                            session_id=request_ctx.session_id or "",
+                            raw_question=state.get("raw_query") or question,
+                            query_context=query_context,
+                            policy=policy_ctx,
+                            result=result,
+                        )
                     output = _agent_result_to_pydantic(result).model_dump()
                     validate_output(
                         step_capability or "sql.query", output, "structured"

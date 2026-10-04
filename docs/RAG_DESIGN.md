@@ -59,7 +59,7 @@
 
 | 能力 | 实现 |
 |---|---|
-| 多知识库 | `kb_id` 隔离（policy / tech / finance / hr / default） |
+| 多知识库 | `kb_id` 隔离（policy / tech / finance / hr / travel / default；`travel` 为旅游域独立知识库，2026-10-03 起，旅游助手检索默认指向，文档规范见 [travel-rag-doc-spec.md](travel-rag-doc-spec.md)） |
 | 文件类型 | PDF / DOCX / Markdown / TXT / XLSX / CSV |
 | 元数据 | doc_type / business_domain / summary / chunk_keywords |
 | 引用 | `[1][2]` 内联标注 + 末尾参考文献 |
@@ -76,7 +76,7 @@
 | 路径 | 触发 | 入口 |
 |---|---|---|
 | **A. 全量重建** | `RAGPipeline._init()` | `pipeline.py:_prepare_vector_store()` |
-| **B. 增量索引** | 启动 sync / API upload | `indexer.py:IncrementalIndexer.sync()` / `reindex_file()` |
+| **B. 增量索引** | 启动 sync / API upload | `indexer.py:IncrementalIndexer.sync()`；重索引已任务化进 `rag_index` 队列（`reindex_service.py` 提交幂等任务，remote 由 rag-index-worker 执行、local broker 不可达时降级本机同步），API 侧以 `reindex/status` 轮询，2026-10-02 起 |
 
 ### 2.2 `_index_file()` 9 阶段埋点
 
@@ -84,7 +84,7 @@
 _index_file()  ← 每个文件一棵 trace 树
   ├─ ① index_load        → 加载，获取文件大小
   ├─ ② index_parse       → PyPDFLoader / Docx2txtLoader / TextLoader
-  ├─ ③ index_clean       → DocumentCleaner (11 种清洗)
+  ├─ ③ index_clean       → DocumentCleaner (12 种清洗)
   ├─ ④ index_dedup       → SHA256 比对，重复则 skip
   ├─ ⑤ index_chunk       → ChunkStrategyRouter + ChunkFilter
   ├─ ⑥ index_metadata    → LLM+规则: 分类/摘要/关键词/实体
@@ -93,9 +93,9 @@ _index_file()  ← 每个文件一棵 trace 树
   └─ ⑨ registry          → DocumentRegistry.register() 持久化文档索引状态
 ```
 
-### 2.3 11 种清洗（③）
+### 2.3 12 种清洗（③）
 
-`DocumentCleaner` 控制字符 / 全角半角 / HTML / PDF 页眉页脚 / 控制符 / Surrogates / 空白合并 / 中文标点统一 / URL / Email / OCR / 独立页码。
+`DocumentCleaner` 控制字符 / 全角半角 / HTML / PDF 页眉页脚 / 控制符 / Surrogates / 空白合并 / 中文标点统一 / URL / Email / OCR / 独立页码 / **维基抓取稿噪音行整行剔除**（第 12 类，2026-10-04 旅游语料清洗增量，`preprocessing/cleaner.py`）：模板行（消歧义横幅/Unihan 声明/医学声明）/ 图例行 / 维护横幅 / 罗马对照行 / 坐标粘连行 / 孤立图注——只删命中行不动其余内容，逐类计数可观测；孤立图注仅 Markdown 抓取稿（text 源）启用，PDF 抽取文本的孤立短行多为真实标题不适用。
 
 ### 2.4 分块策略（⑤）
 
@@ -103,6 +103,7 @@ _index_file()  ← 每个文件一棵 trace 树
 |---|---|---|
 | policy / 合规 / 法律 | ManualPolicy（按章节） | 2000 字 |
 | project / 项目报告 | ProjectReport（按章节） | 1500 字 |
+| travel_guide / 旅游攻略 | StructureChunk（按 `###` POI 边界，一城一档） | 3000 字（一城一档规范见 [travel-rag-doc-spec.md](travel-rag-doc-spec.md)，2026-10-03 起） |
 | general / 通用 | General（滑动窗口） | 1000 字 (overlap 100) |
 
 默认（无规则命中）：500 字 + 50 overlap。
@@ -292,6 +293,8 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
 - **RRF 60** —— 平滑参数，避免单一检索器的极端排名影响
 - **Evidence Gate 注入** —— 在 `merged[0].metadata` 写入 Gate 1 决策
 
+**向量降级与放宽链（2026-10-02 起）**：embedding 故障时检索链打 `mark_vector_degraded`（`rag/base.py`），BM25 单路结果放行并按 Adaptive 截断，`answer_meta.vector_degraded=true` 贯穿到响应（`rag/context.py`）——向量故障不再引发假拒答。多知识库放宽级（kb_fallback，TD-13）同时丢弃 `doc_type`/`$or` 约束（`retrievers.py`），跨库兜底不做类型过滤。检索候选恒排除 `pending_review` / `deprecated` / 已过期文档（生命周期已落地：deprecated 状态机 + fail-closed 写入侧 + `expire_at` 实时检索过滤 + 流转审计——`indexing/doc_registry.py`/`doc_registry_pg.py`/`lifecycle.py` 状态与审计，`retrieval/hybrid.py` 检索侧过滤，API 侧 `rag_lifecycle.py` 3 端点 `POST /knowledge/{id}/lifecycle`、`POST /expire-at`、`GET events`）。
+
 ### 3.5 ④ Adaptive Expansion
 
 ```python
@@ -342,6 +345,22 @@ def rerank(query, docs, top_k=3, threshold=0.3):
 - **阈值 0.3**（sigmoid 后）—— 经验值 0.2（宽松）~ 0.5（严格）
 
 ### 3.7 ⑥ LLM Generate（带引用）
+
+> **原文定位（P0，2026-10-03）**：引用可核验的定位链路 = PDF 解析叶子节点
+> `page_number`/`bbox` → 切分后 `chunking.stamp_chunk_pages`
+> 双向文本包含回映射 `chunk.metadata["pages"]`（标量逗号串，改写文本宁缺勿错）
+> → 两个等价出口：`citation.extract_sources`（结构化）与 `format_references`
+> 文本协议行 `N. **文件** (类型) — 第 3-4 页 · 章节 — 相关度: 0.83`
+> （`context_filter.parse_sources_from_text` 反解析，向后兼容无定位段旧格式）
+> → SSE done 帧 `sources[].pages/section` → 前端来源卡「第 X-Y 页」标签 +
+> 章节/部门悬浮提示。**P1 已落地（2026-10-03）**：参考文献行尾
+> `<!--doc:{doc_id}-->` 机器注释（渲染不可见/stripReferences 剪除/解析
+> 可选组三重安全）→ `GET /rag/documents/{doc_id}/file` 原文快照端点
+> （KB ABAC + permission_scope 双重鉴权，无权与不存在同形 404；local 直读
+> DOCS_DIRECTORY，remote 经内部令牌转发 rag-service）→ 前端
+> SourcePreviewDrawer（fetch blob 喂 pdfjs——二进制端点需 Authorization，
+> iframe 无法带头；初始页=引用页，bbox 页内高亮属 P2）。预览走平台快照
+> 而非活链，防文档漂移。
 
 ```python
 QA_PROMPT = ChatPromptTemplate.from_messages([
@@ -413,6 +432,14 @@ Stage 1 文档候选数由 `RAG_DOC_CANDIDATE_K` 控制，默认 50；BM25 使�
 
 业务层只依赖 `KnowledgeStore` 抽象；当前唯一向量实现为 `PgVectorKnowledgeStore`。
 旧 Chroma 说明仅保留在迁移历史文档中，不能作为线上部署依据。
+
+### 4.4 BM25 跨进程热刷新与候选版本发布
+
+§7.2 的「BM25 持久化 + 增量」解决单进程内索引存活；跨进程（app 多副本 / rag-server / worker）的**发布可见性**由候选版本模型承担（迁移 `067_rag_candidate_publish.sql`）：
+
+- **上传侧候选隔离**：重索引/上传先写 generation 专属候选产物——pgvector 候选 collection `{main}::cand:{gen}`、BM25 `staging-{gen}` 目录（`indexing/publish.py`），检索只看主 collection，候选天然不可见；`doc_registry_pg.active_generation` 为发布指针权威，`rag_index_runs` 台账（`index_run_store_pg.py`）记录每次候选运行及其 `base_generation` CAS 依据。
+- **发布**：全部产物落定后**最后**写 `PUBLISHED.json` 指针（`retrieval/bm25_store.py::write_published_pointer`，临时文件 + `os.replace` 原子换名）——指针出现即整代产物已完整。
+- **读侧每请求廉价版本检查**：`published_generation()` 只读指针 JSON、**绝不加载 pickle**；代次变化时持刷新互斥（double-checked，并发请求只加载一次）重建 BM25 并**整组替换**检索对象引用（pipeline.bm25 + person_index + lc_chain 内部引用，`pipeline.py` C 阶段）；新代次加载失败则保留旧快照继续服务并显式标记 `index_status=stale`，不静默声称新版本可检索。
 
 ---
 
@@ -515,10 +542,26 @@ def _try_self_correct(original_decision, question, ...):
 
 ```python
 def _reject(self, decision, layer, trace, t_total, self_correction_attempted=False):
-    msg, info = build_rejection_response(decision, layer, self_correction_attempted)
+    # 权限升级裁决：短缺类拒答 + 本轮越权剔除>0 → answer_status=permission_denied
+    answer_status = resolve_answer_status(decision.reason, permission_filtered)
+    msg, info = build_rejection_response(decision, layer,
+                                         self_correction_attempted=...,
+                                         permission_filtered=permission_filtered)
+    if answer_status == ANSWER_STATUS_PERMISSION_DENIED:
+        msg = PERMISSION_FILTERED_MESSAGE  # 「存在相关资料，但当前账号没有查看权限」
+    get_context().meta["answer_status"] = answer_status   # → /ask meta / RAGMETA 标记
     trace.metadata["rejection"] = info.to_dict()
     return msg
 ```
+
+> **2026-10-03 前端语义透传**：拒答原因映射为稳定语义码
+> `rag_no_evidence` / `rag_permission_denied` / `rag_hallucination`
+> （`models.ANSWER_STATUS_BY_REASON`），随 pipeline answer_meta → 工具
+> `<!--RAGMETA{...}-->` 文本标记（reporter/make_done_event 双侧解析剥离）
+> → SSE done 帧 `answer_status`/`confidence` 字段；前端 MessageBubble
+> 按码展示行动指引（ErrorCard.RAG_REJECTION_ACTIONS 契约），无权限与
+> 无结果话术分离。META 自报 `confidence` 同路透传，<0.6 前端提示「建议
+> 核实」（与 CS 知识门禁 CAUTIOUS 下界同口径）。
 
 ---
 
@@ -666,7 +709,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 | `backend/rag/indexing/operation_log.py` | 操作审计日志 |
 | `backend/rag/indexing/chunk_store.py` | Chunk 持久化 |
 | `backend/rag/preprocessing/loader.py` | 批量加载 |
-| `backend/rag/preprocessing/cleaner.py` | 11 种清洗 |
+| `backend/rag/preprocessing/cleaner.py` | 12 种清洗 |
 | `backend/rag/preprocessing/chunking.py` | 3 种分块策略 |
 | `backend/rag/preprocessing/metadata.py` | 文档分类 + 复杂度 |
 | `backend/rag/preprocessing/keyword.py` | 关键词 + LLM Router |
@@ -685,7 +728,7 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 | `backend/rag/chain.py` | 6 段检索链（RAGChain） |
 | `backend/rag/retrieval/retrievers.py` | ChunkLevelRetriever + AdaptiveRetriever |
 | `backend/rag/retrieval/hybrid.py` | Vector + BM25 + RRF |
-| `backend/rag/retrieval/bm25_store.py` | BM25 持久化 + 增量 |
+| `backend/rag/retrieval/bm25_store.py` | BM25 持久化 + 增量 + 发布指针跨进程热刷新（§4.4） |
 | `backend/rag/retrieval/base.py` | CustomRetriever（PGVector filter） |
 | `backend/rag/retrieval/query_analyzer.py` | QueryAnalyzer（entities / time / intent） |
 | `backend/rag/retrieval/multi_query.py` | MultiQueryRetriever |
@@ -713,11 +756,15 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 
 | 文件 | 职责 |
 |---|---|
-| `backend/tools/rag.py` | `@tool search_knowledge_tool(question, kb_id)`（被 Multi-Agent 调用） |
+| `backend/tools/rag.py` | `@tool search_knowledge_tool(question, kb_id)`（被 Multi-Agent 调用）；2026-10-03 起权限显式化——主体（user_id/tenant_id）为空的调用 **fail-closed 拒绝**，平台内部调用方显式传 `system_subject` 标识留痕（如旅游域 `travel_domain`），不冒充用户主体 |
 | `backend/rag/routing/kb_router.py` | 多知识库路由 |
+
+### 7.5 索引运维与对账
+
+**生产索引只读对账**：`backend/rag/indexing/reconcile.py` 纯快照判断 + PostgreSQL 只读采样，比对 PG registry / 向量库 / chunk 库 / BM25 产物（含 in-flight 候选延后判定），不一致计数进 Prometheus（`agent_rag_reconcile_inconsistent` / `agent_rag_reconcile_source_available`）；rag-server 内部端点 `GET /admin/index/reconcile-snapshot`（`backend/services/rag_server.py`）供对账快照拉取；Celery beat 定时任务 `rag.index_reconcile`（每日北京时间 02:00，`backend/tasks/rag_maintenance_tasks.py`），报告落 `ai.rag_reconcile_reports`（迁移 `backend/sql/migrations/071_rag_reconcile_reports.sql`，迁移文件在途；reconcile 模块与定时任务文件当前亦为工作区在途）。
 
 ---
 
 ## 验证
 
-最后验证：2026-09-29 · 检索器类 / Evidence Gate / Faithfulness 结构对照代码复核仍准确；流水线阶段命名与存储口径见文首口径注，以根 [README.md](../README.md)「核心能力」为准。
+最后验证：2026-10-05 · 本次增量：清洗清单补第 12 类（维基抓取稿噪音行整行剔除）、新增 §4.4 BM25 跨进程热刷新与候选版本发布、§3.4 生命周期/deprecated 改已落地口径、新增 §7.5 生产索引只读对账；检索器类 / Evidence Gate / Faithfulness 结构对照代码复核仍准确，其余口径沿用 2026-10-04 记录，流水线阶段命名与存储口径见文首口径注，以根 [README.md](../README.md)「核心能力」为准。

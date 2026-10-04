@@ -22,9 +22,13 @@ from backend.travel.services import (
 class OptimizationAgent:
     """Optimization Agent：骨架 → 定稿行程。无状态，可复用。"""
 
-    def prefetch_day_legs(self, pois_by_day: list[list[Poi]]) -> None:
-        """并行预热同日相邻路线（best-effort，经 transit_service）。"""
-        transit_service.prefetch_day_legs(pois_by_day)
+    def prefetch_day_legs(self, pois_by_day: list[list[Poi]],
+                          trip_dates: list | None = None) -> None:
+        """并行预热同日相邻路线（best-effort，经 transit_service）。
+
+        trip_dates 透传给公交候选预热（验收 #41）；None 表示不预热候选。
+        """
+        transit_service.prefetch_day_legs(pois_by_day, trip_dates=trip_dates)
 
     def build_itinerary(
         self, brief: TravelBrief, pois_by_day: list[list[Poi]],

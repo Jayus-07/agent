@@ -61,6 +61,22 @@ class ItineraryItem(BaseModel):
     note: str = Field(default="", description="备注（如闭馆提示、预约提醒）")
 
 
+class TransitOption(BaseModel):
+    """公交/地铁候选参考（验收 #41；非主路线口径）
+
+    只作展示参考：腾讯 transit 结果是「步行+地铁+公交」多段拼接，
+    duration 含候车时间，与主路线的打车/自驾口径不同源不同义，
+    不得用于时间轴计算或校验（不重排、不改 is_estimate 主语义）。
+    """
+
+    duration_min: int = Field(..., description="公交全程分钟数（含候车）")
+    distance_m: int = Field(default=0, description="公交路程（米）")
+    summary: str = Field(
+        default="", description="乘坐摘要，如「步行至东街口 → 乘坐地铁1号线」")
+    is_estimate: bool = Field(
+        default=False, description="数值是否为估算；来自实时路线 API 为 False")
+
+
 class TransitLeg(BaseModel):
     """相邻两项之间的通勤段"""
 
@@ -88,6 +104,10 @@ class TransitLeg(BaseModel):
     fallback_reason: str | None = Field(
         default=None,
         description="降级原因（如 trip_date_beyond_horizon=出行日期超出实时数据可信窗口）；无降级为 None",
+    )
+    transit_option: TransitOption | None = Field(
+        default=None,
+        description="公交/地铁候选（验收 #41）；None=无候选（接口失败/远期日期），前端不显示",
     )
 
 

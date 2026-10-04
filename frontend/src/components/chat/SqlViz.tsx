@@ -145,7 +145,7 @@ export default function SqlViz({ streamEvents }: Props) {
 
       {/* AI Summary */}
       {d.summary && (
-        <div className="px-3 py-2 bg-accent/3 border-t border-border-subtle text-[10px] text-text-secondary leading-relaxed">
+        <div className="px-3 py-2 bg-accent/[0.03] border-t border-border-subtle text-[10px] text-text-secondary leading-relaxed">
           🤖 {d.summary}
         </div>
       )}

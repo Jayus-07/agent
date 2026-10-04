@@ -50,7 +50,15 @@
     ".next-dev-176024513/types/**/*.ts",
     ".next-dev-126627241/types/**/*.ts",
     ".next-dev-267517170/types/**/*.ts",
-    ".next-dev-rot8731/types/**/*.ts"
+    ".next-dev-rot8731/types/**/*.ts",
+    ".next-dev-14658646/types/**/*.ts",
+    ".next-dev-417064/types/**/*.ts",
+    ".next-dev-145729506/types/**/*.ts",
+    ".next-dev-276809644/types/**/*.ts",
+    ".next-dev-702721690/types/**/*.ts",
+    ".next-dev-671313111/types/**/*.ts",
+    ".next-dev-gui1004/types/**/*.ts",
+    ".next-dev-3102523586/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

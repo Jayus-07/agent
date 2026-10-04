@@ -6,7 +6,7 @@
 ## Project
 
 电商 RAG + Multi-Agent 平台｜Backend: FastAPI + LangGraph｜Frontend: Next.js 14 + React
-AI: DeepSeek（langchain-openai 兼容接口）
+AI: 模型角色化治理、DB 唯一来源（`config/model_roles.py` 12 角色，解析链 DB 覆盖→inherit→代码默认，env 不参与取值；当前 main/context_compactor/eval_gen=doubao-seed-2.0-mini，fallback=qwen3.8-flash，embedding/rerank=qwen3.7-text-*，备选池 17 模型 8 provider，管理端「供应商」页维护、15s 热刷新）
 DB: PostgreSQL `agent_business`（业务仓库）+ `agent_memory`（元数据库）
 
 ## Architecture
@@ -26,12 +26,12 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 - **域图两条入口，勿混为一谈**：①**客服窗口锁域** —— 前端客服抽屉 `CSDrawer`（`useCSChat.ts`）每条消息带 `domain_hint=customer_service`，`router_node` 置 `cs_forced` 后**跳过域检测门/灰度/旅游与选品 prefilter** 直进 CS 管线（仍受 `CS_ENABLED` 总闸，关闭则降级主路由）；②**全局入口**（`domain_hint` 空）—— 走 CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测，CS 命中后再过 `CS_ROLLOUT_PERCENT` 灰度。锁域**非绝对**：无客服规则信号且命中旅游/选品强信号时仍走 `redirect_main` 转出（LLM 仲裁阶段默认 OFF = `CS_REDIRECT_MAIN_LLM_ENABLED`）。守护用例 `tests/orchestration/graph/test_router_prefilter_order.py`。
 - 域开关代码默认**全关**（`CS_ENABLED`/`TRAVEL_ENABLED`/`SELECTION_FUNNEL_ENABLED` 均 `false`），由根 `.env` 决定实际取值；三个 prefilter 均已接线（选品漏斗 2026-09-17 与旅游同层），无「待接线」项。
 
-- 主图核心节点固定 9 个（含 general_chat，2026-09-25 口径对齐 builder.py:142），顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
+- 主图核心节点固定 9 个（含 general_chat，2026-09-25 口径对齐 builder.py:140-151），顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
 - planner→critique→supervisor 是 plan 支线专属；direct/workflow/三个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
 - 客服子图：state_loader → pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 子 Agent（代码名 Expert）→ 回 supervisor → cs_reporter
 - 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk/weather 五子 Agent → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
 - RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定
-- 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error
+- 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error（AUX 辅助帧 todo/usage/file/clarification/context/thinking 可在中段任意位置任意次出现，ping 不计帧序——权威口径与回归门见 `orchestration/graph/event_schema.py` 与 `tests/test_sse_event_schema.py`）
 
 ### 网关与异步层
 
@@ -42,12 +42,13 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 治理是**平面不是层**：不进请求执行路径（仅旁路埋点），不新增 Agent，载体复用 PG/Redis/Prometheus/自研 Trace。台账与设计方案见 `docs/2026-09-30-企业级治理技术债修复台账.md`。
 
-- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 36 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
+- **契约 lock（M1）**：`backend/tool_contracts.lock.json` = 39 Tool 契约派生快照（args/必填性/output_type/hash），**禁手编**；改任何 Tool 签名必须重新生成（`python -m backend.scripts.gen_tool_contract_lock`）并随变更提交——lock 与代码漂移会被 `test_tool_contract_lock` 与 `--check` 拦截，diff 自动分类 BREAKING/DEGRADED/COMPATIBLE。
 - **错误统一口径（M3）**：`observability/error_taxonomy.py::unify_*` 是三套既有词表（模型层 5 类/任务层 10 类/ToolStatus 8 值）→ 七分类（timeout/network_error/permission_denied/validation_error/business_error/contract_error/provider_error）的**唯一映射出口**；管理端失败分布与新指标 `agent_tool_error_class_total` 只用此口径，禁止再造第四套词表。
 - **成本归因（M5）**：`observability/llm_context.py`（ContextVar，叠加语义）+ `llm_usage.skill_id/tool_id/agent_domain` 三列；注入点三处（skill execute 装饰器/tool executor 装饰器/builder 域图布线 `with_domain_attribution`），新增调用链记得在入口包 scope。
 - **资产一致性（M6）**：`GET /api/consistency/report` 七段对账矩阵全部实时派生（禁手抄数字）；管理端/巡检消费此端点，不另建清单。
 - **Tool 统计（M2）**：`GET /api/admin/tools(/stats|/changes)` 进程内 Prometheus 直读 + 契约变更历史（`ai.tool_contract_changes`，生成器检测到变更自动落库）；`skill_failure_total` 已埋点（skill 失败出口，error_type=七分类）。
 - **评测台账（M7）**：`ai.eval_run_records` 是**索引非替代**（明细仍在 `data/eval_runs/`）；评测跑完自动 upsert；`prompt_versions` 口径 = PG 权威（`snapshot_prompt_versions()`）优先、yaml 扫描兜底；CLI `--triggered-by` 记录触发者；`GET /api/evaluation/prompt-version-runs?key&version` 反查某 prompt 版本关联的评测（JSONB 包含，值口径 str）。
+- **评测运行生命周期与门禁（2026-10-04 验收收敛）**：run 带生命周期状态文件 + stale 心跳判定（`EVAL_RUN_HEARTBEAT_STALE_SECONDS` 默认 600s）；终态拒绝隐式重跑（`--force` 走审计）、协作式取消端点（`POST /evaluation/runs/{id}/cancel` + `/operations` 审计，admin）；发布链 GATE 门禁族（GATE-11 基线回归门 / GATE-12 最低样本量门 / GATE-03 RAGAS 双门禁，`PROMPT_RELEASE_REGRESSION_GATE_ENABLED`/`PROMPT_RELEASE_RAGAS_GATE_ENABLED` 三态 off/audit/enforce 默认 audit，enforce 后门禁失败拒绝发布）+ 审批对比端点（`GET /prompts/{key}/releases/{id}/comparison`）；数据集不可变指纹（manifest/cases hash，原地修改 fail-fast，变更必须走新版本目录）+ 版本删除保护守卫；发布评测强制严格字段校验（`EVAL_STRICT_FIELDS`）；评测/定时任务写端点已收管理员门禁；`/evaluation` 读端点挂 `X-Tenant-Id` 租户钩子（单租户 default，其他值显式 403）、报告响应展示层 PII 脱敏；评测表 074（生命周期列+范围 CHECK）/075（样本表 UNIQUE+RESTRICT）。端点明细以 `backend/app/api/routes/evaluation*.py` 为准。
 - **Prompt 版本语义与指针（M4）**：`prompt_versions.change_kind ∈ major/minor/patch`（存量 NULL）；`prompt_aliases` 中 **production 与 active_version 恒同步**（切 production=完整发布语义，走 publish），staging 只动指针不影响运行时读路径（staging 运行时消费属 Phase 2 灰度）。
 - **Prompt 发布镜像 lock（第三批）**：`backend/prompts.lock.json` = DB 发布状态的仓库对照物（active_version+模板哈希+change_kind），**发布/回滚后必须 `python -m backend.scripts.gen_prompt_contract_lock` 重新生成并随变更提交**——lock 与 DB 漂移 = 有发布没留痕，被 `test_prompt_contract_lock` 与 `--check` 拦截；同版本 template_hash 变化 = prompt_versions 被手工 DML 的信号。
 - **请求级 Prompt 版本 pin（第三批 #5）**：`AgentState.prompt_versions`（**必须入 schema**——LangGraph updates 剥离 schema 外键）随 runner/task_executor 开始时快照 + `trace.tags["prompt_versions"]`；发布不影响已快照的值；checkpointer 开启时随 checkpoint 持久化，Celery 断点续跑在恢复时点重新快照。排障/审计按此 tag 回答「当时用的哪版」。
@@ -66,7 +67,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
   5. 点击「发布到生产」走 Release Gate 发布接口：模板校验仍保留；已通过外部评测的 Release Gate 作为最终门禁，跳过候选版本必须先手工变成 `passed` 的重复状态校验；随后原子更新 `active_version` 与 `production` alias、写审计、清缓存并发布 `agent:prompt:changed` 热更新通知。
   6. 各 app/worker/rag-service 通过热加载监听或轮询刷新 Prompt snapshot；运行 epoch 变化后，新请求使用新版本，正在执行的请求继续使用开始时 pin 的版本。失败、超时或未审批不得切换 production；同一候选版本的失败 Release 不重复复用，需创建新的候选版本。
 - **Prompt 发布与 Trace 验收**：请求入口快照写入 `AgentState.prompt_versions` 和 `trace.tags["prompt_versions"]`；RAG 链请求开始时额外记录实际使用的 `rag.qa`、`rag.document`、`rag.contextualize` 版本到 Trace metadata；Tool span 记录 `contract_hash`。管理端可按 Trace 追溯「当时用的 Prompt 版本、运行 epoch、Tool 契约版本」。
-- **本次验收结果**：`rag.qa v12` 完成 GitHub 评测、审批和生产发布；管理端显示所有进程 v12、runtime epoch 刷新；最终提交 `b894f92` 的 `RAG PR Smoke (8 cases)` 已通过，运行地址为 `https://github.com/Jayus-07/agent/actions/runs/36879912092`。本地相关测试 47 条通过。
+- **本次验收结果**：`rag.qa v12` 完成 GitHub 评测、审批和生产发布；管理端显示所有进程 v12、runtime epoch 刷新；最终提交 `b894f92` 的 `RAG PR Smoke (8 cases)` 已通过，运行地址为 `https://github.com/Jayus-07/agent/actions/runs/36879912092`。本地相关测试 47 条通过。（现状口径 2026-10-05：此后又经发布与回切，**当前 production=v13**，以 DB `prompts.active_version`/`prompt_aliases` 为权威；`prompts.lock.json` 与 DB 漂移时按 M4 规则重新生成，勿手工编辑。）
 - **触发边界**：`rag_smoke.yml` 当前只响应 PR 和手动触发，PR 只跑变更相关的 8 条 Smoke；`prompt_eval.yml` 只接受后端显式触发或手动触发；`rag_regression.yml` 每日北京时间 02:00 跑完整回归集，也支持手动选择评测集。Push 到 `main` 不等于 Prompt 发布评测，发布评测必须由管理端 Release Gate 触发。
 - **GitHub 警告口径**：Actions 页面出现 Node.js 20 弃用和 `ubuntu-latest` 将迁移 Ubuntu 26 的提示时，属于非阻断告警；当前 Smoke 仍能通过。生产变更应走 PR，直接推 `main` 会绕过 PR 必需检查，不能作为企业发布流程。
 - **Tool 治理 CI**：`.github/workflows/tool_quality.yml` 在相关 Tool/Skill/lock/Prompt YAML 的 PR 上触发，也按 `0 1 * * *` 每天 UTC 01:00（北京时间 09:00）运行；它检查 Tool 契约、注册一致性、重复定义和 Prompt lock，不替代 RAG 评测。
@@ -78,7 +79,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 ### 节点职责与口径
 
 - **Planner**：只做任务拆解 → Capability DAG，禁调 Tool/Skill/DB ｜ **Critique**：规则校验优先，仅 anomaly 调 LLM ｜ **Supervisor**：纯规则 DAG 调度，Send[] 并行 + 注入 previous_outputs ｜ **Skill**：业务封装不碰外部系统 ｜ **Tool**：无状态可测试 ｜ **Reporter**：step_results → Markdown
-- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 36 Tool（2026-10-02 +2：高德商家检索、12306 车票查询）/ 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
+- 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 39 Tool（2026-10-03 对齐契约 lock；10-02 +5：高德商家检索、12306 车票/票价查询、知乎站内/知乎全网搜索）/ 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool（另经 `infra/mcp_client.py` 接外部 MCP 数据源：12306、知乎官方 MCP）。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
 - `routed: false` 只约束路由层，Planner/critique 仍遍历全量 17 个（`email.watch` 是 120s 阻塞长轮询，收紧属行为变更，台账 E9）。
 
 ### Capability DAG
@@ -104,7 +105,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 | 域图 / 业务 Agent | 5~7 / 2 | 手册 §6/§7；域图用技能 `agent-platform-add-domain-graph`（prefilter 必须插进 `router_node.py`，否则域永不触发） |
 
 **铁律**：**G1** 声明式注册、启动期派生、fail-fast｜**G2** 单一事实源，派生量禁止手写回去｜**G3** 谁定义谁注册，禁止集中代注册｜**G4** 例外必须登记规范 §4 台账。
-**方向**：`Planner → capability → Skill → Tool → Infrastructure`，上层调下层；MCP 不是第 5 层，是 Tool 的第二出口（Tool 不得 import Skill）。**第三方向（2026-10-02 拍板）**：外部 MCP server 可作为 Tool 的数据源——平台经 `infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费，首例=12306 车票查询（`tools/travel/train.py`，compose 服务 mcp-12306，`TRAIN_MCP_ENABLED` 默认关，非官方源仅供学习不商用，失败不阻塞主链）。
+**方向**：`Planner → capability → Skill → Tool → Infrastructure`，上层调下层；MCP 不是第 5 层，是 Tool 的第二出口（Tool 不得 import Skill）。**第三方向（2026-10-02 拍板）**：外部 MCP server 可作为 Tool 的数据源——平台经 `infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费，首例=12306 车票查询（`tools/travel/train.py`，compose 服务 mcp-12306，`TRAIN_MCP_ENABLED` 默认关，非官方源仅供学习不商用，失败不阻塞主链）；第二例=知乎官方 MCP（`tools/search/zhihu.py`，`zhihu_search`/`global_search` 双 Tool，Streamable HTTP + Bearer，`ZHIHU_MCP_ENABLED` 默认关、凭据 `ZHIHU_MCP_API_KEY` 只从 .env 读，月度配额计量，双路单路降级）。
 
 **Skill 硬约束**：`name` = 目录名（节点名 `<name>_skill` 由其推导）；Skill 类只定义执行行为，`capabilities/description/examples/params_schema` 必须只写在 `capabilities.yaml`，由 `skills.metadata.bind_manifest_metadata()` 启动期绑定兼容字段并 fail-fast；capability 恰一个点 `<域>.<动作>` 全域唯一，workflow 纯蛇形不带点。❌ Skill 层定义 `@tool`、直接写 SQL/调 HTTP；多 Tool 覆写 `_select_tool()` 分发并把 params 裁到目标 Tool 签名内。
 **新 Tool 三规**：`@tool`｜底部注册｜返回 JSON 字符串（失败返 `{"error":…}`，「查不到」与「查不了」分开），统一走 `tools/map/_base.py` 的 `ok/fail/not_configured`（存量 18 个返 Markdown 是例外 E8，别参照）。副作用 Tool 必须过 `security/tool_approval.ensure_approved()`；user_id 取 `tools/session.get_tool_user_id()`，禁止硬编码。
@@ -124,14 +125,14 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 接入与客服域一致：`travel/register.py` 自注册 → `domains/__init__.py` 触发 → builder 自动布线，**不改 builder.py**。契约（Pydantic）：`TravelBrief → Poi → Itinerary`；状态只存 dict（`load_*/save_*`），保证 checkpointer 可序列化。
 **validator = 旅游域的 Evidence Gate**：纯规则零 LLM 零 IO；只判定不修改（修复在 `repair.py`）；error 阻塞交付并触发修复；四轴 = 时间/地理/体力/预算。**局部修复**只动被点名的天与条目，用户点名必去条目**永不被静默丢弃**（kept_required）。
-`travel.plan` 不注册主图 Skill（有状态多步流程已由域图承担）；只注册无状态的 `travel.poi_search`。数据源 P0 本地种子（坐标为示例值），P1 换地图/票务 MCP 契约不变。开关 `TRAVEL_ENABLED`，阈值集中 `config/travel.py`。
+`travel.plan` 不注册主图 Skill（有状态多步流程已由域图承担）；只注册无状态的 `travel.poi_search`。数据源已切实时检索（2026-10-02 `599f4c7`：`TRAVEL_POI_SOURCE` 默认 **live**＝腾讯 LBS 实时检索，种子库下线、仅显式回退且 `TRAVEL_POI_FALLBACK_SEED` 默认关；票务查询侧=12306 MCP Tool）。规划产物走**版本链**（`plan_version` 修复重排 +1、`parent_plan_version` 指针，`TRAVEL_PLAN_VERSIONS_ENABLED` 默认开、保留 20 版，存 agent_memory 库）。开关 `TRAVEL_ENABLED`，阈值集中 `config/travel.py`。
 
 **跨轮契约（checkpointer 关闭时也须遵守）**
 1. `new_travel_graph_input()` **只放本轮输入**，不预置产物/执行态默认值——checkpointer 把 input 当对上轮状态的**更新**合并，预置 `brief: {}` 等于每轮清空成果
 2. 读状态一律 `.get()`——本轮没写过的键不在最终状态里
 3. `brief_fingerprint` 变 → 只在 slot_filler 里 `planning_reset()`；不清则 supervisor 会把**上一轮行程**当新需求输出
 
-**checkpointer**：三处 `_build_checkpointer`（主图/客服/旅游）均 postgres 优先、失败降级 MemorySaver；需 psycopg **v3** + `langgraph-checkpoint-postgres`（依赖已在 pyproject.toml 与 requirements-lock.txt 声明，本地 venv 已补齐）；`config/startup.py` 只探测 import 不探测连通性，缺驱动时 warning 点名。
+**checkpointer**：三处 `_build_checkpointer`（主图/客服/旅游）均 postgres 优先；开发环境失败降级 MemorySaver，**production 环境默认 fail-loud**——PG 不可用直接抛 `CheckpointerUnavailable` 拒绝启动，仅显式 `CHECKPOINTER_ALLOW_DEGRADE=true`（`config/checkpointer.py::degrade_or_raise`，默认 false）才允许降级内存检查点；需 psycopg **v3** + `langgraph-checkpoint-postgres`（依赖已在 pyproject.toml 与 requirements-lock.txt 声明，本地 venv 已补齐）；`config/startup.py` 只探测 import 不探测连通性，缺驱动时 warning 点名。
 两个锁文件坑（**照旧装会失败**）：① `langgraph-checkpoint` 原钉 4.0.3 与 `-postgres==3.1.0` 要求的 >=4.1.0 冲突 → 已升 **4.2.0**；② Windows/无 libpq 必须装 `psycopg[binary]`，否则 `no pq wrapper available`。
 TTL 清理收敛 `orchestration/graph/checkpointer_cleanup.py`（全进程单例，改 TTL 三处一起改）。
 

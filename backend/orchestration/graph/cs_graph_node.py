@@ -31,6 +31,10 @@ def cs_graph_node(state: dict) -> dict:
     cs_context = state.get("cs_context", {})
     conversation_id = cs_context.get("conversation_id", "")
 
+    # 根 Trace 已由 runner 创建；这里补齐客服域公共标签，使客服图、客服
+    # 节点 Span 与 Token usage 都能在同一条根 Trace 下按域检索。
+    _stamp_cs_trace_context(cs_context)
+
     cs_input = new_cs_graph_input(
         user_message=state.get("question", ""),
         user_id=cs_context.get("authenticated_user_id", ""),
@@ -63,6 +67,63 @@ def cs_graph_node(state: dict) -> dict:
     return update
 
 
+def _enum_value(value: object) -> str:
+    """将 Pydantic/Enum 路由值归一为稳定字符串。"""
+    if value is None:
+        return ""
+    return str(getattr(value, "value", value) or "")
+
+
+def _stamp_cs_trace_context(cs_context: dict) -> None:
+    """把客服路由上下文写入现有根 Trace，不创建第二条 Trace。
+
+    只写域、意图、路由路径、目标和置信度等低基数结构化字段，避免将用户
+    原文、订单号等业务载荷复制到 Trace metadata。
+    """
+    try:
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is None:
+            return
+
+        route = cs_context.get("cs_route") or {}
+        if not isinstance(route, dict):
+            route = {}
+        target = str(
+            cs_context.get("cs_target") or trace.tags.get("cs_target") or ""
+        )
+        domain = _enum_value(route.get("domain"))
+        intent = _enum_value(route.get("intent"))
+        route_path = _enum_value(route.get("route_path"))
+        confidence = route.get("confidence")
+
+        trace.tags["domain"] = "customer_service"
+        if domain:
+            trace.tags["cs_domain"] = domain
+        if intent:
+            trace.tags["cs_intent"] = intent
+        if route_path:
+            trace.tags["cs_route_path"] = route_path
+        if target:
+            trace.tags["cs_target"] = target
+
+        previous = trace.metadata.get("cs_route")
+        previous = previous if isinstance(previous, dict) else {}
+        trace.metadata["cs_route"] = {
+            "domain": domain or previous.get("domain", ""),
+            "intent": intent or previous.get("intent", ""),
+            "confidence": (
+                confidence if confidence is not None
+                else previous.get("confidence")
+            ),
+            "route_path": route_path or previous.get("route_path", ""),
+            "target": target or previous.get("target", ""),
+        }
+    except Exception:
+        logger.debug("[cs_graph_node] 客服 Trace 上下文写入失败", exc_info=True)
+
+
 def _refusal_clarify(final_state: dict, main_state: dict) -> dict | None:
     """CS 知识域拒答判定（结构化条件，不做文本匹配）。
 
@@ -92,11 +153,16 @@ def _refusal_clarify(final_state: dict, main_state: dict) -> dict | None:
                 or expert.get("status") == "failed" or expert.get("error")):
             return None
         session_id = main_state.get("session_id", "")
-        if not clarify_allowed(session_id):
+        question = main_state.get("question", "")
+        if not clarify_allowed(session_id, question):
             return None
-        mark_clarified(session_id)
-        return build_refusal_clarify(
-            main_state.get("question", ""), "customer_service")
+        marker = build_refusal_clarify(question, "customer_service")
+        mark_clarified(
+            session_id, question,
+            options=marker.get("options"),
+            source=marker.get("source", ""),
+        )
+        return marker
     except Exception as e:
         logger.warning(f"[cs_graph_node] 拒答追问判定失败，输出原回复: {e}")
         return None
