@@ -1,6 +1,7 @@
 'use client'
 
 import { AlertTriangle, CheckCircle2, ExternalLink, GitBranch, RotateCcw, Send, ShieldCheck } from 'lucide-react'
+import ReleaseComparisonPanel from '@/components/prompts/ReleaseComparisonPanel'
 import type { PromptReleaseRecord, PromptRuntimeStatus } from '@/api/prompts'
 
 export type PromptReleaseView = PromptReleaseRecord
@@ -113,6 +114,13 @@ export default function PromptReleasePanel({
           查看 Tool 治理 <ExternalLink size={11} />
         </a>
       </div>
+
+      {/* C1-4/REG-08：审批/发布操作前展示 candidate vs production 对比 */}
+      {['passed', 'approved'].includes(release.status) && (
+        <div className="mt-3">
+          <ReleaseComparisonPanel promptKey={release.prompt_key} releaseId={release.release_id} />
+        </div>
+      )}
 
       {Object.keys(release.metrics || {}).length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">

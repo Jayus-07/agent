@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward, PlayCircle, Download } from 'lucide-react'
+import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward, PlayCircle, Download, Ban } from 'lucide-react'
 import { evaluationService, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
+import CaseSampleDetail from '@/components/evaluations/CaseSampleDetail'
 import { useToast } from '@/components/shared/Toast'
 import EmptyState from '@/components/shared/EmptyState'
 import dynamic from 'next/dynamic'
@@ -143,6 +144,24 @@ export default function EvaluationResultsPanel() {
       toast.error(e instanceof Error ? e.message : '加载评测详情失败')
     } finally {
       setDetailLoading(false)
+    }
+  }
+
+  /** C2-1/RUN-03：取消运行中评测（幂等；完成后刷新状态） */
+  const handleCancelRun = async (runId: string) => {
+    if (!confirm(`确认取消评测 ${runId}？已完成样本保留，剩余样本记 skip。`)) return
+    try {
+      const result = await evaluationService.cancelRun(runId)
+      if (result.audit_recorded === false) {
+        toast.error('取消请求已登记，但审计写入失败——请联系管理员核查')
+        return
+      }
+      toast.success(result.already_cancelled ? '该运行已在取消流程中' : '取消请求已登记，剩余样本将停止执行')
+      await loadRuns()
+      const detail = await evaluationService.getRun(runId)
+      setRunDetail(detail)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '取消失败')
     }
   }
 
@@ -363,7 +382,7 @@ export default function EvaluationResultsPanel() {
                         </div>
                       ) : runDetail ? (
                         <div className="space-y-2">
-                          {/* RUN-01/07/08 + UI-08：运行状态与单次报告导出 */}
+                          {/* RUN-01/07/08 + UI-08 + RUN-03：状态、导出、取消 */}
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-[10px] text-text-muted">
                               <RunStatusBadge status={runDetail.run_status?.status} stale={runDetail.run_status?.stale} />
@@ -377,21 +396,32 @@ export default function EvaluationResultsPanel() {
                                 <span className="text-red-500">{runDetail.run_status.error}</span>
                               )}
                             </div>
-                            <button
-                              onClick={() => {
-                                const blob = new Blob([JSON.stringify(runDetail, null, 2)], { type: 'application/json' })
-                                const url = URL.createObjectURL(blob)
-                                const a = document.createElement('a')
-                                a.href = url
-                                a.download = `eval-report-${runDetail.run_id}.json`
-                                a.click()
-                                URL.revokeObjectURL(url)
-                              }}
-                              className="flex items-center gap-1 px-2 py-1 rounded border border-border-subtle text-[10px] text-text-secondary hover:text-text-primary transition-colors"
-                            >
-                              <Download size={10} />
-                              导出报告 JSON
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              {runDetail.run_status?.status === 'running' && (
+                                <button
+                                  onClick={() => handleCancelRun(runDetail.run_id)}
+                                  className="flex items-center gap-1 px-2 py-1 rounded border border-red-200 text-[10px] text-red-600 hover:bg-red-50 transition-colors"
+                                >
+                                  <Ban size={10} />
+                                  取消运行
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  const blob = new Blob([JSON.stringify(runDetail, null, 2)], { type: 'application/json' })
+                                  const url = URL.createObjectURL(blob)
+                                  const a = document.createElement('a')
+                                  a.href = url
+                                  a.download = `eval-report-${runDetail.run_id}.json`
+                                  a.click()
+                                  URL.revokeObjectURL(url)
+                                }}
+                                className="flex items-center gap-1 px-2 py-1 rounded border border-border-subtle text-[10px] text-text-secondary hover:text-text-primary transition-colors"
+                              >
+                                <Download size={10} />
+                                导出报告 JSON
+                              </button>
+                            </div>
                           </div>
                           <CaseDetailList
                             detail={runDetail}
@@ -450,24 +480,26 @@ function CaseDetailList({ detail, expandedCase, onToggleCase }: {
 
   return (
     <div className="space-y-3">
-      {/* Tier 汇总 */}
+      {/* Tier 汇总（含 GATE-12 样本量门原因） */}
       {tier_summaries.length > 0 && (
-        <div className="flex gap-3 mb-3">
+        <div className="flex flex-wrap gap-3 mb-3">
           {tier_summaries.map(ts => (
             <div
               key={ts.tier}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] ${
                 ts.passed_threshold ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
               }`}
+              title={(ts.gate_reasons || []).join('；')}
             >
               {ts.passed_threshold ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
               {ts.tier}: {(ts.pass_rate * 100).toFixed(0)}% (阈值 {(ts.threshold * 100).toFixed(0)}%)
+              {ts.passed_min_samples === false && ' · 样本不足'}
             </div>
           ))}
         </div>
       )}
 
-      {/* Case 列表 */}
+      {/* Case 列表（C8：行=状态+用例+耗时；展开=结构化证据链） */}
       <div className="space-y-1">
         {results.map(r => (
           <div key={r.case_id} className="border border-border-subtle rounded-lg overflow-hidden">
@@ -477,39 +509,24 @@ function CaseDetailList({ detail, expandedCase, onToggleCase }: {
             >
               {STATUS_ICON[r.status]}
               <span className="text-xs font-mono text-text-primary flex-1">{r.case_id}</span>
+              {/* C8-4：失败阶段徽标 */}
+              {r.error_stage && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-50 text-orange-700">{r.error_stage}</span>
+              )}
+              {/* C8-3：RAGAS 分值 chips（列表行摘要） */}
+              {(() => {
+                const ragasKeys = Object.entries(r.metrics || {}).filter(([k, v]) => k.startsWith('ragas_') && k !== 'ragas_reason' && typeof v === 'number')
+                return ragasKeys.length > 0 ? (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700">
+                    RAGAS {ragasKeys.length}/4
+                  </span>
+                ) : null
+              })()}
               <span className="text-[10px] text-text-muted">{r.duration_ms}ms</span>
             </button>
             {expandedCase === r.case_id && (
-              <div className="px-3 py-2 bg-black/[0.01] border-t border-border-subtle space-y-2">
-                <div className="grid grid-cols-2 gap-2 text-[10px]">
-                  <div>
-                    <p className="text-text-muted">Expected</p>
-                    <pre className="font-mono text-text-primary bg-white rounded p-1.5 mt-0.5 overflow-x-auto max-h-32">
-                      {JSON.stringify(r.expected, null, 2)}
-                    </pre>
-                  </div>
-                  <div>
-                    <p className="text-text-muted">Actual</p>
-                    <pre className="font-mono text-text-primary bg-white rounded p-1.5 mt-0.5 overflow-x-auto max-h-32">
-                      {JSON.stringify(r.actual, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-                {Object.keys(r.metrics).length > 0 && (
-                  <div>
-                    <p className="text-[10px] text-text-muted">Metrics</p>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {Object.entries(r.metrics).map(([k, v]) => (
-                        <span key={k} className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[10px] font-mono">
-                          {k}: {typeof v === 'number' ? v.toFixed(3) : v}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {r.error_msg && (
-                  <p className="text-[10px] text-red-500">{r.error_msg}</p>
-                )}
+              <div className="px-3 py-2 bg-black/[0.01] border-t border-border-subtle">
+                <CaseSampleDetail result={r} />
               </div>
             )}
           </div>

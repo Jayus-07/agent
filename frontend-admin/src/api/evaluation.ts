@@ -129,6 +129,8 @@ export interface EvaluationSuite {
   tool_mapping: Record<string, unknown>;
 }
 
+export type EvalResultDetail = EvalRunDetail["report"]["results"][number]
+
 export interface EvalRunDetail {
   run_id: string;
   report: {
@@ -156,6 +158,8 @@ export interface EvalRunDetail {
       metrics: Record<string, number>;
       duration_ms: number;
       error_msg: string | null;
+      /** C8-4/EVD-08：失败阶段（retrieval/generation/judge/ragas/timeout/…） */
+      error_stage?: string | null;
     }>;
     tier_summaries: Array<{
       tier: string;
@@ -165,6 +169,11 @@ export interface EvalRunDetail {
       pass_rate: number;
       threshold: number;
       passed_threshold: boolean;
+      /** GATE-12：最低有效样本量门（2026-10-04 一期新增） */
+      valid_samples?: number;
+      min_samples?: number | null;
+      passed_min_samples?: boolean;
+      gate_reasons?: string[];
     }>;
     metadata?: Record<string, unknown>;
   };
@@ -239,5 +248,20 @@ export const evaluationService = {
 
   getRun(runId: string): Promise<EvalRunDetail> {
     return request<EvalRunDetail>(`${BASE}/runs/${encodeURIComponent(runId)}`);
+  },
+
+  /** C2-1/RUN-03：协作式取消（幂等；已完成样本保留，剩余记 skip） */
+  cancelRun(runId: string): Promise<{ run_id: string; cancel_requested: boolean; run_status: string; already_cancelled?: boolean; audit_recorded?: boolean }> {
+    return request<{ run_id: string; cancel_requested: boolean; run_status: string; already_cancelled?: boolean; audit_recorded?: boolean }>(
+      `${BASE}/runs/${encodeURIComponent(runId)}/cancel`,
+      { method: 'POST' },
+    );
+  },
+
+  /** C2-6/REL-09：run 操作审计（取消/重跑/熔断留痕） */
+  listRunOperations(runId: string): Promise<{ run_id: string; operations: Array<{ operation: string; actor: string; detail: string; created_at: string }> }> {
+    return request<{ run_id: string; operations: Array<{ operation: string; actor: string; detail: string; created_at: string }> }>(
+      `${BASE}/runs/${encodeURIComponent(runId)}/operations`,
+    );
   },
 };
