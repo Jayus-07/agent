@@ -250,6 +250,7 @@ def brief_fingerprint(brief: TravelBrief) -> str:
         "budget_cny": brief.budget_cny,
         "preferences": sorted(brief.preferences),
         "must_go": sorted(brief.must_go),
+        "optional_go": sorted(brief.optional_go),
         "avoid": sorted(brief.avoid),
         "pace": brief.normalized_pace(),
         "tier": brief.tier,

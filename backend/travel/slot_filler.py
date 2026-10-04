@@ -43,6 +43,7 @@ from backend.travel.agents.requirement_agent import (
     extract_relative_date_expr,
     extract_start_date,
     extract_unsupported_city,
+    extract_vague_time_expr,
     party_size_source,
 )
 from backend.travel.core.intent import TravelIntent, classify_intent
@@ -310,6 +311,13 @@ def slot_filler_node(state: dict) -> dict:
         notes.append(
             f"你说的出发日期「{past_date.isoformat()}」已过去，本次未采用；"
             "请说一个未来的日期（如「10月20日出发」）"
+        )
+    # 模糊时间词（验收 #64）：「月底」无法唯一定日，不猜，明示当前口径
+    vague_time = extract_vague_time_expr(message)
+    if vague_time and not brief.start_date:
+        notes.append(
+            f"你说的「{vague_time}」我无法确定具体日期，先按「第 1 天」排；"
+            "确定后告诉我具体日期（如「10月20日出发」），我会重排"
         )
     # 首末日时间回显（验收 #82）：到达/离开时刻已纳入排程窗口
     if brief.arrival_time:

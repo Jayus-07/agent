@@ -71,15 +71,23 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
         merged.party_size = merged.adults + (merged.children or 0)
     if fresh.preferences:
         merged.preferences = list(dict.fromkeys(previous.preferences + fresh.preferences))
-    for field in ("must_go", "avoid"):
+    for field in ("must_go", "avoid", "optional_go"):
         combined = list(dict.fromkeys(getattr(previous, field) + getattr(fresh, field)))
         setattr(merged, field, combined)
-    # avoid 的语义优先级高于 must_go：上一轮的必去被这一轮拉黑后必须移出
-    # 必去清单，否则「不想去三坊七巷了」之后行程仍会把它当必去排入。
+    # avoid 的语义优先级高于 must_go/optional_go：上一轮的必去被这一轮拉黑
+    # 后必须移出（含软清单），否则行程仍会把它排入。
     if merged.avoid:
-        merged.must_go = [
-            n for n in merged.must_go
-            if not any(n in a or a in n for a in merged.avoid if a)
+        for field in ("must_go", "optional_go"):
+            names = [
+                n for n in getattr(merged, field)
+                if not any(n in a or a in n for a in merged.avoid if a)
+            ]
+            setattr(merged, field, names)
+    # must_go 与 optional_go 互斥：必去升级后不留在软清单（分级唯一）
+    if merged.must_go:
+        merged.optional_go = [
+            n for n in merged.optional_go
+            if not any(n in m or m in n for m in merged.must_go if m)
         ]
     # 城市名不进必去清单：对「历史脏状态」（旧版本代码写入的 brief）同样
     # 成立，不能只信本轮 fresh 抽取干净。

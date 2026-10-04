@@ -116,6 +116,10 @@ class TravelBrief(BaseModel):
     budget_cny: float | None = None
     preferences: list[str] = Field(default_factory=list)
     must_go: list[str] = Field(default_factory=list)
+    # 软必去（验收 #67）：「有空再去/顺便去/如果来得及」——能排就排，
+    # 容量不足与修复时**先于普通候选被移除**（与 must_go 的永不静默删除
+    # 相对）。参与指纹（排入/移除会改变行程）。
+    optional_go: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
     pace: str = "moderate"
     # 方案档位（M3-e）：economy | comfortable。预算硬约束下的分配偏好；

@@ -464,8 +464,19 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
     if not candidates:
         return skeleton
 
-    # 必去优先，其次热度
-    ordered = sorted(candidates, key=lambda p: (not p.required, -p.rating, p.poi_id))
+    # 必去优先，其次热度；软必去（#67）在非必去段排最后——「能排就排、
+    # 容量不足最先被挤掉并进 dropped 披露」，与 repair 的优先删同序。
+    optional_names = list(brief.optional_go or [])
+
+    def _is_optional(poi: Poi) -> bool:
+        return any(
+            (w or "").strip() and names_match(poi.name, w.strip())
+            for w in optional_names
+        )
+
+    ordered = sorted(candidates, key=lambda p: (not p.required,
+                                                _is_optional(p),
+                                                -p.rating, p.poi_id))
 
     def _is_user_named(poi: Poi) -> bool:
         return any(

@@ -158,6 +158,11 @@ _RE_DATE_CN = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?")
 _RE_REL_DAYS = re.compile(r"(大后天|后天|明天)")
 _RE_REL_WEEKDAY = re.compile(r"(这|本|下)?(?:周|星期|礼拜)([一二三四五六日天])")
 _RE_REL_WEEKEND = re.compile(r"(这|本|下)?周末")
+# 模糊时间词（验收 #64）：「月底去上海」无法唯一定日 —— 一律不猜具体日期，
+# 命中后由 slot_filler 明示（先按「第 1 天」排，确定后补具体日期）。
+_RE_VAGUE_TIME = re.compile(
+    r"(月初|月中|月底|月末|年初|年底|上半年|下半年|上旬|中旬|下旬|"
+    r"节假日|寒假|暑假|周末前后|月底前后|月初前后)")
 _WEEKDAY_CN_TO_MON1 = {"一": 1, "二": 2, "三": 3, "四": 4,
                        "五": 5, "六": 6, "日": 7, "天": 7}
 _REL_DAYS_OFFSET = {"明天": 1, "后天": 2, "大后天": 3}
@@ -193,6 +198,15 @@ _RE_MUST_GO = re.compile(
 )
 _RE_AVOID = re.compile(
     r"(?:不要去|不想去|避开|别去|不去)" + _RE_TRIGGER_SKIP +
+    r"([^。，,；;！!？?\s]{2,12}"
+    r"(?:[、和及][^。，,；;！!？?\s]{2,12})*)"
+)
+# 软必去触发词（验收 #67）：「有空再去/顺便去」——意愿真实但让位优先级低，
+# 与 must_go 的「永不被静默删除」分级；捕获清洗与 must_go 同一套。
+_RE_OPTIONAL_GO = re.compile(
+    r"(?:有空(?:的话)?(?:再|就)去|有时间(?:的话)?(?:再|就)去|顺便(?:去|逛)|"
+    r"如果来得及(?:就|再)?去|可以的话(?:再|就)?去|想去的话(?:再|就)去)" +
+    _RE_TRIGGER_SKIP +
     r"([^。，,；;！!？?\s]{2,12}"
     r"(?:[、和及][^。，,；;！!？?\s]{2,12})*)"
 )
@@ -676,6 +690,21 @@ def extract_relative_date_expr(message: str) -> str:
     return ""
 
 
+def extract_vague_time_expr(message: str) -> str:
+    """命中的模糊时间词原文（验收 #64），未命中返回空串。
+
+    「月底/十一前后」这类表达无法唯一定日，抽取层不猜；调用方据此明示
+    「按第 1 天排、确定后补具体日期」。与相对词互斥：能解析相对词的消息
+    不再报模糊（「下周五」有确定日）。
+    """
+    if extract_relative_date_expr(message):
+        return ""
+    if _RE_DATE_ISO.search(message) or _RE_DATE_CN.search(message):
+        return ""
+    match = _RE_VAGUE_TIME.search(message)
+    return match.group(0) if match else ""
+
+
 def extract_past_date(message: str, today: date | None = None) -> date | None:
     """消息里的 ISO 完整日期若早于今天则原样返回（验收 #71 的提示依据）。
 
@@ -875,6 +904,29 @@ def extract_avoid(message: str) -> list[str]:
     return filter_city_names(names)
 
 
+def extract_optional_go(
+    message: str, destination: str = "", must_go: list[str] | None = None,
+) -> list[str]:
+    """软必去清单（验收 #67）：「有空再去/顺便去」触发词捕获 ∪ 名录命中。
+
+    与 must_go 同一套捕获清洗与名录匹配；名录命中排除 must_go 已吸收的
+    （「必去三坊七巷，有空再去鼓山」的三坊七巷不进软清单）；avoid 命中
+    优先（「有空再去但别去鼓山」以 avoid 为准）。软必去能排就排，容量
+    不足/修复时先于普通候选移除。
+    """
+    must_names = set(must_go or [])
+    names = [p for p in poi_seed.all_poi_names()
+             if p in message and p not in must_names]
+    for name in _extract_names(_RE_OPTIONAL_GO, message, destination):
+        if name and name not in names and name not in must_names:
+            names.append(name)
+    avoid = extract_avoid(message)
+    if avoid:
+        names = [n for n in names
+                 if not any(n in a or a in n for a in avoid if a)]
+    return filter_city_names(names)
+
+
 def _explicit_total_party(message: str) -> int | None:
     """显式总人数（排除已被成人/儿童表达吸收的数字）。
 
@@ -922,6 +974,10 @@ def extract_fresh_brief(
     显式时不动 party_size（回落默认，避免与同伴 guess 口径冲突）。
     adults/children 始终如实记录（即使显式总数优先）。
     """
+    # 软必去触发词捕获先行（验收 #67）：「必去A，有空再去B」的 B 不得被
+    # must_go 的名录命中吸收成硬必去——名录匹配是「名字在句子里就算」，
+    # 不剔除就会把软承诺升级成硬必去。
+    soft_trigger_names = _extract_names(_RE_OPTIONAL_GO, message)
     fresh = TravelBrief(
         destination=extract_destination(message, previous_destination),
         origin=extract_origin(message),
@@ -938,7 +994,12 @@ def extract_fresh_brief(
         lodging=extract_lodging(message),
     )
     fresh.avoid = extract_avoid(message)
-    fresh.must_go = extract_must_go(message, fresh.destination, fresh.avoid)
+    fresh.must_go = [
+        n for n in extract_must_go(message, fresh.destination, fresh.avoid)
+        if not any(n in s or s in n for s in soft_trigger_names)
+    ]
+    fresh.optional_go = extract_optional_go(
+        message, fresh.destination, must_go=fresh.must_go)
     adults, children = extract_adults_children(message)
     fresh.adults = adults
     fresh.children = children
@@ -1042,6 +1103,7 @@ __all__ = [
     "extract_fresh_brief",
     "extract_lodging",
     "extract_must_go",
+    "extract_optional_go",
     "extract_party_size",
     "extract_past_date",
     "extract_pace",
@@ -1050,5 +1112,6 @@ __all__ = [
     "extract_start_date",
     "extract_unsupported_city",
     "extract_relative_date_expr",
+    "extract_vague_time_expr",
     "party_size_source",
 ]

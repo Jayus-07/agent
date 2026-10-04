@@ -151,7 +151,9 @@ def _plan_global_action(
 ) -> RepairAction | None:
     """处理 day_index=0 的全局约束（目前只有预算）。"""
     if violation.code == CODE_BUDGET_OVER:
-        return _drop_most_expensive(itinerary, drop, violation)
+        return _drop_most_expensive(
+            itinerary, drop, violation,
+            optional_go=list(getattr(itinerary.brief, "optional_go", []) or []))
     return None
 
 
@@ -212,7 +214,9 @@ def _plan_action(
                            "与当日其他地点距离过远，通勤代价过高")
 
     if code == CODE_GEO_SCATTER:
-        item = _farthest_from_center(day)
+        item = _farthest_from_center(
+            day,
+            optional_go=list(getattr(itinerary.brief, "optional_go", []) or []))
         if item is None or item.poi is None:
             return None
         return _drop_by_id(violation, day, item.poi.poi_id, drop,
@@ -220,13 +224,15 @@ def _plan_action(
 
     if code == CODE_PACE_TOO_MANY_POIS:
         over = int(violation.detail.get("count", 0)) - int(violation.detail.get("limit", 0))
-        return _drop_lowest_priority(day, max(1, over), drop, violation,
-                                     "超过当日地点数上限")
+        return _drop_lowest_priority(
+            day, max(1, over), drop, violation, "超过当日地点数上限",
+            optional_go=list(getattr(itinerary.brief, "optional_go", []) or []))
 
     if code == CODE_PACE_TOO_INTENSE:
         limit = int(violation.detail.get("limit", 0))
-        return _drop_until_minutes(day, limit, drop, violation,
-                                   "超过当日活动时长上限")
+        return _drop_until_minutes(
+            day, limit, drop, violation, "超过当日活动时长上限",
+            optional_go=list(getattr(itinerary.brief, "optional_go", []) or []))
 
     return None
 
@@ -258,10 +264,10 @@ def _drop_by_id(
 
 def _drop_lowest_priority(
     day: ItineraryDay, count: int, drop: dict[int, set[str]],
-    violation, reason: str,
+    violation, reason: str, optional_go: list[str] | None = None,
 ) -> RepairAction | None:
-    """按「非必去 → 热度低 → poi_id」顺序移除 count 个条目。"""
-    candidates = _droppable(day)
+    """按「软必去 → 非必去 → 热度低 → poi_id」顺序移除 count 个条目。"""
+    candidates = _droppable(day, optional_go=optional_go)
     if not candidates:
         return None
     taken = candidates[:count]
@@ -274,11 +280,14 @@ def _drop_lowest_priority(
 
 def _drop_until_minutes(
     day: ItineraryDay, limit: int, drop: dict[int, set[str]],
-    violation, reason: str,
+    violation, reason: str, optional_go: list[str] | None = None,
 ) -> RepairAction | None:
-    """优先移除耗时最长的非必去条目，直到活动时长回落到上限内。"""
-    candidates = sorted(_droppable(day),
-                        key=lambda i: (-i.minutes, -i.poi.rating, i.poi.poi_id))
+    """优先移除软必去、再耗时最长的非必去条目，直到时长回落到上限内。"""
+    optional = optional_go or []
+    candidates = sorted(
+        _droppable(day, optional_go=optional),
+        key=lambda i: (0 if _is_optional_poi(i.poi, optional) else 1,
+                       -i.minutes, -i.poi.rating, i.poi.poi_id))
     names: list[str] = []
     remaining = day.active_minutes
     for item in candidates:
@@ -295,22 +304,26 @@ def _drop_until_minutes(
 
 def _drop_most_expensive(
     itinerary: Itinerary, drop: dict[int, set[str]], violation,
+    optional_go: list[str] | None = None,
 ) -> RepairAction | None:
-    """超预算：移除单价最高的非必去收费项目（一次一个，让修复逐轮逼近）。"""
-    best: tuple[float, int, ItineraryItem] | None = None
+    """超预算：移除单价最高的收费项目（软必去优先，一次一个逐轮逼近）。"""
+    optional = optional_go or []
+    best: tuple[int, float, ItineraryItem, int] | None = None
     for day in itinerary.days:
-        for item in _droppable(day):
+        for item in _droppable(day, optional_go=optional):
             if item.poi.ticket_cny <= 0:
                 continue
-            if best is None or item.poi.ticket_cny > best[0]:
-                best = (item.poi.ticket_cny, day.day_index, item)
+            key = (0 if _is_optional_poi(item.poi, optional) else 1,
+                   item.poi.ticket_cny)
+            if best is None or key > (best[0], best[1]):
+                best = (key[0], key[1], item, day.day_index)
     if best is None:
         return None
-    ticket, day_index, item = best
-    drop[day_index].add(item.poi.poi_id)
+    item = best[2]
+    drop[best[3]].add(item.poi.poi_id)
     return RepairAction(
-        code=violation.code, day_index=day_index, dropped=[item.poi.name],
-        reason=f"超出预算，移除票价最高的非必去项目（¥{ticket:.0f}）",
+        code=violation.code, day_index=best[3], dropped=[item.poi.name],
+        reason=f"超出预算，移除票价最高的非必去项目（¥{best[1]:.0f}）",
     )
 
 
@@ -346,16 +359,33 @@ def _previous_visit(day: ItineraryDay, item: ItineraryItem) -> ItineraryItem | N
     return None
 
 
-def _droppable(day: ItineraryDay) -> list[ItineraryItem]:
-    """可被移除的条目，按优先级从低到高（必去项不在其中）。"""
+def _is_optional_poi(poi, optional_go: list[str]) -> bool:
+    """软必去命中判定（与骨架层 names_match 同一语义源）。"""
+    from backend.travel.planning import names_match
+
+    return any((w or "").strip() and names_match(poi.name, w.strip())
+               for w in optional_go if w)
+
+
+def _droppable(day: ItineraryDay, optional_go: list[str] | None = None) -> list[ItineraryItem]:
+    """可被移除的条目，按优先级从低到高（必去项不在其中）。
+
+    #67 软必去最先：需要「选择删谁」时 optional 先于普通候选被移除
+    （「有空再去」让位于「没被点名但排进来的」之外的取舍顺序——软承诺
+    的让位优先级最低）。
+    """
+    optional = optional_go or []
     items = [i for i in day.items
              if i.kind == KIND_VISIT and i.poi is not None and not i.poi.required]
-    items.sort(key=lambda i: (i.poi.rating, i.poi.poi_id))
+    items.sort(key=lambda i: (0 if _is_optional_poi(i.poi, optional) else 1,
+                              i.poi.rating, i.poi.poi_id))
     return items
 
 
-def _farthest_from_center(day: ItineraryDay) -> ItineraryItem | None:
-    """当日离几何中心最远的到访项（用于缓解折返）。"""
+def _farthest_from_center(day: ItineraryDay,
+                          optional_go: list[str] | None = None) -> ItineraryItem | None:
+    """当日离几何中心最远的到访项（软必去优先，用于缓解折返）。"""
+    optional = optional_go or []
     visits = [i for i in day.items if i.kind == KIND_VISIT and i.poi is not None]
     if len(visits) < 2:
         return None
@@ -364,8 +394,9 @@ def _farthest_from_center(day: ItineraryDay) -> ItineraryItem | None:
     droppable = [i for i in visits if not i.poi.required]
     if not droppable:
         return None
-    return max(droppable, key=lambda i: route_km(
-        center_lat, center_lng, i.poi.lat, i.poi.lng))
+    return max(droppable, key=lambda i: (
+        0 if _is_optional_poi(i.poi, optional) else 1,
+        route_km(center_lat, center_lng, i.poi.lat, i.poi.lng)))
 
 
 @traced_node(
