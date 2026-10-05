@@ -21,4 +21,6 @@ receivers:
   - name: webhook-alert
     webhook_configs:
       - url: "__ALERT_WEBHOOK_URL__"
-        send_resolved: false
+        # 2026-10-06 企业化：恢复通知必须外发（firing→resolved 双向可达）；
+        # 接收端=compose 内 alert-bridge 桥（转企微/飞书/钉钉，见服务注释）
+        send_resolved: true

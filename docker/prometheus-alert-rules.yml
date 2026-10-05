@@ -195,7 +195,7 @@ groups:
           severity: critical
         annotations:
           summary: "LLM 降级拒答 10 分钟内超过 3 次"
-          description: "主模型与备用模型均不可用，用户收到的是固定拒答话术"
+          description: "主模型与备用模型均不可用，用户收到的是固定拒答话术。按优先级检查 provider 余额/密钥/上游状态（管理端「供应商」页），恢复前告警会持续"
 
       # ── 降级链 / 技能失败 ─────────────────────
       - alert: WorkerRetryExhausted
@@ -271,6 +271,15 @@ groups:
           description: "上游 app/Java 服务异常；结合 backend/app 指标与日志定位（网关 retries=0，5xx 即上游真实失败）"
 
       # ── 任务体系（2026-09-16 接入 redis/postgres/celery exporters）──────
+      - alert: AppMetricsDown
+        expr: up{job="agent-platform-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "app 主服务指标端点失联（:8000 /metrics 抓不到）"
+          description: "连续 1 分钟抓不到 host.docker.internal:8000/metrics——app 容器可能宕机或端口失联，业务面板将全面 No data。先查 docker ps | grep agent-app 与 curl 127.0.0.1:8000/health；业务 5xx 另看 GatewayUpstream5xxHigh，不要混淆"
+
       - alert: RedisDown
         expr: up{job="redis"} == 0
         for: 1m
@@ -278,7 +287,7 @@ groups:
           severity: critical
         annotations:
           summary: "Redis exporter 失联"
-          description: "缓存/限流/取消标志/事件通道/SSE 全依赖 Redis；连续 1 分钟抓不到 redis-exporter:9121 即判不可用"
+          description: "缓存/限流/取消标志/事件通道/SSE 全依赖 Redis；连续 1 分钟抓不到 redis-exporter:9121 即判不可用。先查 docker ps | grep redis-exporter 与 redis 容器状态"
 
       - alert: PostgresDown
         expr: up{job="postgres"} == 0
@@ -287,7 +296,7 @@ groups:
           severity: critical
         annotations:
           summary: "PostgreSQL exporter 失联"
-          description: "记忆库/任务状态权威/checkpoint 全在 PG；连续 1 分钟抓不到 postgres-exporter:9187 即判不可用"
+          description: "记忆库/任务状态权威/checkpoint 全在 PG；连续 1 分钟抓不到 postgres-exporter:9187 即判不可用。先查 docker ps | grep postgres-exporter 与 agent-postgres-1 状态"
 
       # ── B4（2026-09-21 审查）：PG 连接饱和——up==0 只能发现宕机，
       # 池打满（连接耗尽）时 up 仍为 1，必须用连接数口径单独告警
@@ -535,7 +544,7 @@ groups:
           severity: warning
         annotations:
           summary: "15 分钟内 L5 单飞锁冲突超过 30 次"
-          description: "偶发为正常单飞语义；持续突增说明热点会话高并发或锁 TTL 过短被频繁重试"
+          description: "偶发为正常单飞语义；持续突增说明热点会话高并发或锁 TTL 过短被频繁重试——检查同 session 并发写入源与 L5 锁 TTL 配置"
 
       - alert: ContextCompactionLatencyHigh
         expr: |

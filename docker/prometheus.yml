@@ -62,3 +62,9 @@ scrape_configs:
           - "maintenance-worker:9809"
           - "report-worker:9809"
           - "metadata-shadow-worker:9809"
+
+  # ── 自监控（2026-10-06 验收 I1/I6/M3 补缺：PM 自身指标此前无自抓取，
+  # prometheus_build_info / tsdb / rule_evaluation_failures 全部不可查）──
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

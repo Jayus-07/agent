@@ -912,6 +912,11 @@ services:
   prometheus:
     image: prom/prometheus:latest
     profiles: ["observability"]
+    # M4（2026-10-06 验收补充）：显式声明保留策略，不依赖镜像隐式默认值
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
@@ -940,6 +945,8 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      # UI 默认简体中文（用户可在 个人资料→偏好 各自覆盖）
+      - GF_USERS_DEFAULT_LANGUAGE=zh-Hans
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
@@ -971,7 +978,9 @@ services:
     ports:
       - "127.0.0.1:9093:9093"
     environment:
-      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL:-}
+      # 默认指向本 compose 的 alert-bridge 桥（同 profile 一起启动）；
+      # 桥按 ALERT_BRIDGE_* 环境变量外推企微/飞书/钉钉，未配置时落桥日志。
+      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL:-http://alert-bridge:9094/alert}
     # alertmanager 镜像基于 busybox：sh + sed 可用。config 不能读 env →
     # 启动前用 sed 把占位符替换成真实 webhook URL 再 exec 主进程
     entrypoint: ["/bin/sh", "-c"]
@@ -991,6 +1000,32 @@ services:
           cpus: "0.25"
 
   # ── Redis exporter（observability profile；redis:6379 → :9121/metrics）──
+  # ── 告警外投桥（2026-10-06 验收补链：AM webhook → 企微/飞书/钉钉）──────
+  # 零第三方依赖（stdlib）；ALERT_BRIDGE_* 全部可选，未配置时告警落桥日志
+  # （docker logs agent-alert-bridge-1），通道在 .env 按需填入。
+  alert-bridge:
+    build:
+      context: ./docker/alert-bridge
+    image: agent-alert-bridge:latest
+    profiles: ["observability"]
+    ports:
+      # 宿主 9095：9094 已被 kafka(java-loop) 占用，双 profile 同开时避免冲突；
+      # 容器内仍 9094，AM 经服务名 http://alert-bridge:9094 访问不受影响
+      - "127.0.0.1:9095:9094"
+    environment:
+      - ALERT_BRIDGE_WECOM_WEBHOOK=${ALERT_BRIDGE_WECOM_WEBHOOK:-}
+      - ALERT_BRIDGE_FEISHU_WEBHOOK=${ALERT_BRIDGE_FEISHU_WEBHOOK:-}
+      - ALERT_BRIDGE_DINGTALK_WEBHOOK=${ALERT_BRIDGE_DINGTALK_WEBHOOK:-}
+      - ALERT_BRIDGE_DINGTALK_SECRET=${ALERT_BRIDGE_DINGTALK_SECRET:-}
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+
   redis-exporter:
     image: oliver006/redis_exporter:latest
     profiles: ["observability"]
