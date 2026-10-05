@@ -57,6 +57,22 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const handoffRequestRef = useRef(false)
   const handoffKeyRef = useRef<{ conversationId: string; key: string } | null>(null)
 
+  // 多域隔离 M3：主图引导卡带来的预填问题（HandoffCard 写 sessionStorage +
+  // 派发 cs-drawer:open 事件）。抽屉打开时读取并清除，nonce 触发 CSInput 覆盖。
+  const [prefillDraft, setPrefillDraft] = useState<{ text: string; nonce: number } | null>(null)
+  useEffect(() => {
+    if (!open) return
+    try {
+      const prefill = sessionStorage.getItem('cs_handoff_prefill')
+      if (prefill) {
+        sessionStorage.removeItem('cs_handoff_prefill')
+        setPrefillDraft((prev) => ({ text: prefill, nonce: (prev?.nonce ?? 0) + 1 }))
+      }
+    } catch {
+      /* sessionStorage 不可用时跳过预填 */
+    }
+  }, [open])
+
   // P3.1 确认卡片：POST /cs/confirm 幂等端点（后端原子认领闸门兜底并发）。
   // 409 = 该待办已被处理（重复提交/另一端先确认）→ 静默清卡片；
   // 其余失败保留卡片供重试，并把错误落进消息流。
@@ -299,7 +315,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
         />
 
         {/* Input */}
-        <CSInput onSend={handleSend} onStop={stopStream} isLoading={isLoading} onTyping={handleUserTyping} />
+        <CSInput onSend={handleSend} onStop={stopStream} isLoading={isLoading} onTyping={handleUserTyping} draft={prefillDraft} />
       </div>
     </>
   )

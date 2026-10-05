@@ -11,6 +11,7 @@ import hashlib
 import threading
 
 from fastapi import APIRouter, Query, HTTPException, Request
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse, Response
 
 from backend.shared.logger import logger
@@ -996,3 +997,26 @@ async def get_gateway_access_logs(
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
     return JSONResponse(payload, headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
+# ═══════════════════════════════════════════════════
+# 域引导（handoff）点击埋点（多域隔离收官 M3，2026-10-06）
+# ═══════════════════════════════════════════════════
+# §七退役指标的数据源：引导卡 曝光（handoff 帧下发时后端自计）→ 点击
+# （前端跳转前 fire-and-forget 上报）。只递增 Prometheus 计数器，不落
+# 明细、不收问题原文——target_domain 只认契约枚举，其余值 422。
+
+
+class HandoffClickRequest(BaseModel):
+    target_domain: str
+
+
+@router.post("/handoff/click", summary="域引导卡点击埋点（只计数，不落明细）")
+async def report_handoff_click(req: HandoffClickRequest) -> dict:
+    from backend.observability.metrics import agent_handoff_total
+
+    domain = (req.target_domain or "").strip()
+    if domain not in ("travel", "customer_service", "selection_funnel"):
+        raise HTTPException(status_code=422, detail=f"未知 target_domain: {domain!r}")
+    agent_handoff_total.labels(target_domain=domain, phase="clicked").inc()
+    return {"ok": True}

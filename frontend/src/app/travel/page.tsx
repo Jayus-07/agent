@@ -157,6 +157,27 @@ export default function TravelPage() {
   // M3-h 城市指南抽屉（顶栏书本图标 / 聊天 chip 唤起）
   const [cityGuideOpen, setCityGuideOpen] = useState(false)
 
+  // 多域隔离 M3（2026-10-06）：主图引导卡带参跳转预填（?destination=…&days=…）。
+  // 只在挂载时读一次；参数只做表单预填，权威解析仍在本域 slot_filler。
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const dest = params.get('destination') || ''
+    const daysParam = params.get('days') || ''
+    const partyParam = params.get('party_size') || ''
+    const budgetParam = params.get('budget_cny') || ''
+    const mustGo = (params.get('must_go') || '').split(',').map((s) => s.trim()).filter(Boolean)
+    if (dest) setDestination(dest)
+    if (daysParam && /^\d{1,2}$/.test(daysParam)) setDays(daysParam)
+    if (partyParam && /^\d{1,2}$/.test(partyParam)) setPartySize(partyParam)
+    if (budgetParam && /^\d+(\.\d+)?$/.test(budgetParam)) setBudget(budgetParam)
+    if (mustGo.length > 0) {
+      setExtra((prev) => {
+        const line = `必去：${mustGo.join('、')}`
+        return prev ? `${prev}\n${line}` : line
+      })
+    }
+  }, [])
+
   // ── 结果与线程 ──
   const [conversationId, setConversationId] = useState(readConversationId)
   const [planState, setPlanState] = useState<PlanState>(readPlanState)

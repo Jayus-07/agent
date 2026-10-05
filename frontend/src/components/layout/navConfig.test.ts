@@ -47,10 +47,10 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('用户端导航 = AI 助手 + 旅游规划（2026-10-01 五次收敛）', () => {
+  it('用户端导航 = AI 助手 + 旅游规划 + 选品漏斗（2026-10-06 六次追加：多域隔离 M4 第四扇门）', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['AI 助手', '旅游规划'])
-    for (const p of ['/agent', '/travel']) {
+    expect(labels).toEqual(['AI 助手', '旅游规划', '选品漏斗'])
+    for (const p of ['/agent', '/travel', '/selection-funnel']) {
       expect(allPaths, `用户端核心路由 ${p} 丢失`).toContain(p)
     }
     // 已裁撤页面不得回渗（页面目录已删，导航也不得再挂）
@@ -97,6 +97,10 @@ describe('NAV — 导航配置完整性', () => {
       expect(labels, `管理端入口「${adminOnly}」不应出现在用户端`).not.toContain(adminOnly)
     }
     for (const p of allPaths) {
+      // /selection-funnel 是 2026-10-06 多域隔离 M4 拍板的用户端专属页例外
+      // （漏斗报告落地页，主图引导卡带参跳转目标）；其余 /selection 管理端
+      // 路由照旧禁止回渗。
+      if (p === '/selection-funnel') continue
       expect(
         p.startsWith('/knowledge') || p.startsWith('/cs') ||
         p.startsWith('/competitors') || p.startsWith('/selection'),

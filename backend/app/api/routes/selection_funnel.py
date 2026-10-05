@@ -13,7 +13,9 @@ kind 三类（2026-09-17 第三轮扩展）：
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+import uuid
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.app.api.deps import resolve_operator_role
@@ -44,6 +46,61 @@ class ImportResult(BaseModel):
     batch_id: str = ""
     count: int = 0
     notes: list[str] = []
+
+
+class FunnelRunRequest(BaseModel):
+    """选品专属页直达漏斗请求（多域隔离收官 M4）。
+
+    message 可空：页面表单的 category/platform 已足够 brief_node 建槽；
+    传了则作为 user_message 参与槽位解析（与主图进域的口径一致）。
+    conversation_id 传同一值即跨轮续跑（need_info 后补参重跑候选不丢）。
+    """
+
+    message: str = Field("", max_length=2000, description="补充诉求（可空）")
+    category: str = Field("", max_length=100, description="类目")
+    platform: str = Field("", max_length=50, description="平台（仅 products 池用）")
+    conversation_id: str = Field("", max_length=100, description="会话锚点（空=新建）")
+
+
+@router.post("/run", summary="执行选品漏斗（专属页直达，不经主图）")
+def run_funnel(req: FunnelRunRequest, request: Request) -> dict:
+    """复用主图域适配器 selection_funnel_graph_node（同一条执行链）：
+    淘空/缺槽如实收尾、E1 候选同步 ConversationContext、执行标签埋点全同。
+    同步 def → FastAPI 线程池执行，不阻塞事件循环（漏斗为秒级线性管线，
+    一期不做 SSE 流，报告整包返回）。"""
+    from backend.orchestration.graph.selection_funnel_graph_node import (
+        selection_funnel_graph_node,
+    )
+
+    from backend.app.api.identity import resolve_identity
+
+    identity = resolve_identity(request)
+    user_id = str(getattr(identity, "user_id", "") or "anonymous")
+    tenant_id = str(getattr(identity, "tenant_id", "") or "default")
+    conversation_id = req.conversation_id.strip() or f"sf-{uuid.uuid4().hex[:12]}"
+
+    message = req.message.strip()
+    if not message:
+        slots = "、".join(x for x in (req.category, req.platform) if x)
+        message = f"帮我做一次智能选品" + (f"（{slots}）" if slots else "")
+
+    result = selection_funnel_graph_node({
+        "question": message,
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "session_id": conversation_id,
+        "funnel_context": {
+            "conversation_id": conversation_id,
+            "category": req.category.strip(),
+            "platform": req.platform.strip(),
+            "source": "selection_page",
+        },
+    })
+    return {
+        "conversation_id": conversation_id,
+        "final_answer": result.get("final_answer", ""),
+        "funnel_context": result.get("funnel_context") or {},
+    }
 
 
 def _dispatch_import(data: bytes | str, kind: str, category: str,

@@ -9,11 +9,18 @@ interface Props {
   isLoading: boolean
   /** 输入内容变化回调（双向「输入中」指示上行，节流由调用方负责） */
   onTyping?: () => void
+  /** 外部预填（多域隔离 M3：主图引导卡带来的 prefill_question）。
+   *  nonce 变化即覆盖输入框内容，用户仍可修改后再发送。 */
+  draft?: { text: string; nonce: number } | null
 }
 
-export default function CSInput({ onSend, onStop, isLoading, onTyping }: Props) {
+export default function CSInput({ onSend, onStop, isLoading, onTyping, draft }: Props) {
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    if (draft?.text) setText(draft.text)
+  }, [draft?.nonce])
 
   useEffect(() => {
     if (textareaRef.current) {

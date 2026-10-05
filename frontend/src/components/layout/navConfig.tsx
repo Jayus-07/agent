@@ -38,7 +38,7 @@
  *   移除的只是**侧栏这一条入口**，/agent?cs=1 直达参数与 CSDrawer 行为不变
  *   （navConfig.test.ts 已同步断言）。
  */
-import { Brain, Plane } from 'lucide-react'
+import { Brain, Plane, ShoppingBag } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 export interface NavItem {
@@ -67,5 +67,13 @@ export const NAV: NavEntry[] = [
     // 需要逐日时间轴 / 地图 / 导出，塞进对话流会丢结构）。
     icon: <Plane size={18} />, label: '旅游规划',
     path: '/travel',
+  },
+  {
+    // 2026-10-06 多域隔离收官 M4：选品漏斗专属页（第四扇门）。此前选品
+    // 只能靠主图对话 prefilter 截流；隔离拍板后「产出作品送专属页」，
+    // 漏斗报告的落地页就是这里（主图选品话术 → 引导卡跳本页带参）。
+    // 叫「选品漏斗」不叫「智能选品」：后者是管理端评分控制台的既有语义。
+    icon: <ShoppingBag size={18} />, label: '选品漏斗',
+    path: '/selection-funnel',
   },
 ]

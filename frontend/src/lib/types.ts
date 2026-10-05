@@ -192,6 +192,8 @@ export type SSEStreamEvent =
   | { event: 'file';     data: FileEvent }
   | { event: 'context';  data: ContextEvent }
   | { event: 'clarification'; data: ClarificationEvent }
+  /** 域引导交接卡（多域隔离 M1：契约见 @/types/handoff，与后端同构） */
+  | { event: 'handoff';  data: import('@/types/handoff').HandoffEvent }
   /** SSE 保活心跳（后端空闲 >间隔 发 ping 防断流，消费方零语义、不入渲染流） */
   | { event: 'ping';     data: PingEvent }
   | { event: 'done';     data: DoneEvent }

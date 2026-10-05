@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import type { Session, Message, ChatMode, SSEStreamEvent, TodoItem, TokenUsage, ClarificationEvent } from '@/lib/types'
+import type { HandoffEvent } from '@/types/handoff'
+import { parseHandoffEvent } from '@/types/handoff'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 
 interface ChatState {
@@ -44,6 +46,10 @@ interface ChatState {
   fileOps: { path: string; node: string; step_id: string; ts: number }[]
   /** 工具选择未收敛时的结构化澄清卡片 */
   clarification: ClarificationEvent | null
+  /** 域引导交接卡（多域隔离 M1：handoff 帧，ChatView 渲染 HandoffCard）。
+   *  与 clarification 同生命周期：done 后保留（答完再点跳转是正常动线），
+   *  下一轮流开始 resetStream 清空。 */
+  handoff: HandoffEvent | null
   /** 本轮累计上下文压缩节省（context 事件累加；resetStream 清零）。
    *  仅 UI runtime 提示条用，不入聊天历史。 */
   contextSavedTokens: number
@@ -80,6 +86,7 @@ interface ChatState {
   /** 设置/清除会话级模型覆盖（B.9）；null = 回到全局默认 */
   setSessionModel: (model: string | null) => void
   setClarification: (value: ClarificationEvent | null) => void
+  setHandoff: (value: HandoffEvent | null) => void
   bumpSessionsVersion: () => void
   resetStream: () => void
 }
@@ -124,6 +131,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     streamUsage: null,
     fileOps: [],
     clarification: null,
+    handoff: null,
     contextSavedTokens: 0,
     contextUsage: null,
 
@@ -229,6 +237,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         let streamUsage = state.streamUsage
         let fileOps = state.fileOps
         let clarification = state.clarification
+        let handoff = state.handoff
         let contextSavedTokens = state.contextSavedTokens
         let contextUsage = state.contextUsage
         if (isCurrentSession) {
@@ -250,6 +259,9 @@ export const useChatStore = create<ChatState>((set, get) => {
             fileOps = [...fileOps.filter((f) => !incoming.some((i) => i.path === f.path)), ...incoming]
           } else if (evt.event === 'clarification') {
             clarification = evt.data
+          } else if (evt.event === 'handoff') {
+            // 域引导交接卡：形状不合法的帧丢弃（后端已过契约门，此处双保险）
+            handoff = parseHandoffEvent(evt.data)
           }
         }
 
@@ -294,19 +306,21 @@ export const useChatStore = create<ChatState>((set, get) => {
           return { ...s, messages: msgs, updatedAt: Date.now() }
         })
 
-        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, todoItems, streamUsage, fileOps, clarification, ...core }
+        return { sessions, streamEvents: storeEvents, thinkingText, thinkingSeconds, thinkingStartAt, todoItems, streamUsage, fileOps, clarification, handoff, ...core }
       })
     },
 
     setCurrentRequestId: (id) => set({ currentRequestId: id }),
     setSessionModel: (model) => set({ sessionModel: model }),
     setClarification: (value) => set({ clarification: value }),
+    setHandoff: (value) => set({ handoff: value }),
 
     resetStream: () => set({
       streamEvents: [], currentStatus: '', deltaText: '',
       thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
       currentRequestId: null,
       todoItems: [], streamUsage: null, fileOps: [], clarification: null,
+      handoff: null,
       contextSavedTokens: 0, contextUsage: null,
     }),
 

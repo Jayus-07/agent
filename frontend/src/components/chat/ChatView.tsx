@@ -15,6 +15,7 @@ import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import type { BudgetStatus } from '@/api/budgets'
 import ContextNoticeBar from './ContextNoticeBar'
 import ClarificationCard from './ClarificationCard'
+import HandoffCard from './HandoffCard'
 import { lastUserQuestion } from './chatRetry'
 
 // 模块级稳定空数组，避免 messages 为空时 useMemo 每次返回新 []
@@ -33,6 +34,7 @@ export default function ChatView() {
   const isLoading = useChatStore((s) => s.isLoading)
   const error = useChatStore((s) => s.error)
   const clarification = useChatStore((s) => s.clarification)
+  const handoff = useChatStore((s) => s.handoff)
   const retryQuestion = useMemo(() => lastUserQuestion(messages), [messages])
   const { send, stopStream } = useSendMessage()
   // #20：路由离开聊天页时终止在途流（流继续跑完会白烧 token）
@@ -140,6 +142,9 @@ export default function ChatView() {
           }}
         />
       )}
+
+      {/* 域引导交接卡（多域隔离 M3）：guide 模式下 handoff 帧的渲染位 */}
+      {handoff && <HandoffCard event={handoff} />}
 
       {/* Memory context panel */}
       <ContextPanel sessionId={currentId} />

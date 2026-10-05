@@ -23,6 +23,14 @@ export default function AgentChatPage() {
     }
   }, [])
 
+  // 多域隔离 M3（2026-10-06）：主图引导卡（HandoffCard）客服跳转入口 ——
+  // 同页事件滑出抽屉（?cs=1 的 useEffect 只在挂载时跑一次，同页 push 不触发）
+  useEffect(() => {
+    const open = () => setCsOpen(true)
+    window.addEventListener('cs-drawer:open', open)
+    return () => window.removeEventListener('cs-drawer:open', open)
+  }, [])
+
   const handleCsClose = () => {
     setCsOpen(false)
     if (new URLSearchParams(window.location.search).has('cs')) {
