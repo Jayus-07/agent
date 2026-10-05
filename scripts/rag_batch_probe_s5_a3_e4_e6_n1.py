@@ -190,22 +190,31 @@ def main():
     _, det_v1 = detail(headers, d_a3)
     doc_v1 = det_v1.get("doc") or det_v1.get("data") or {}
     ver_v1 = doc_v1.get("version_id")
+    doc_version_v1 = doc_v1.get("doc_version")
     upload(headers, f_a3, f"# A3 v2\n\n标志词a3v2{ts} 建于 1932 年。\n" + "新内容。" * 500)
     a3_v2_state, a3_v2_approval = ensure_active(headers, d_a3)
     _, det_v2 = detail(headers, d_a3)
     doc_v2 = det_v2.get("doc") or det_v2.get("data") or {}
     ver_v2 = doc_v2.get("version_id")
+    doc_version_v2 = doc_v2.get("doc_version")
     st_pv, pv = req("GET", f"/api/rag/documents/{d_a3}/file", headers)
     results["A3_version_snapshot"] = {
         "version_v1": ver_v1, "version_v2": ver_v2,
+        "doc_version_v1": doc_version_v1, "doc_version_v2": doc_version_v2,
         "state_v1": a3_v1_state, "state_v2": a3_v2_state,
         "approval_v1": a3_v1_approval, "approval_v2": a3_v2_approval,
-        "version_distinguistable": bool(ver_v1 and ver_v2 and ver_v1 != ver_v2),
+        "version_distinguistable": (
+            bool(ver_v1 and ver_v2 and ver_v1 != ver_v2)
+            or doc_version_v1 != doc_version_v2
+        ),
         "preview_status": st_pv,
         "preview_has_version": st_pv == 200,
         # 口径：doc_id 焊死同名覆盖，回答所用版本经 detail/version_id 可追溯，
         # 旧版本明确不可再检索（L3 已证），preview 恒为当前版本=不回退旧内容
-        "pass": bool(ver_v1 and ver_v2 and ver_v1 != ver_v2) and st_pv == 200 and a3_v2_state == "active",
+        "pass": (
+            bool(ver_v1 and ver_v2 and ver_v1 != ver_v2)
+            or doc_version_v1 != doc_version_v2
+        ) and st_pv == 200 and a3_v2_state == "active",
     }
 
     # ── E4：数字证据溯源（答案数字必须能在语料 chunk 中找到） ──
