@@ -43,13 +43,14 @@ def _feishu_sign() -> dict:
     return {"timestamp": ts, "sign": sign}
 
 
-def _post_json(url: str, payload: dict) -> None:
+def _post_json(url: str, payload: dict) -> str:
+    """POST 并返回响应体（飞书/钉钉业务错误也是 HTTP 200，必须看 body 才知道成败）"""
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST",
     )
     with urllib.request.urlopen(req, timeout=8) as resp:
-        resp.read()
+        return resp.read().decode("utf-8", errors="replace")[:200]
 
 
 def _dingtalk_url() -> str:
@@ -74,28 +75,51 @@ def _send(text: str) -> dict:
         payload = {"msg_type": "text", "content": {"text": text}}
         if FEISHU_SECRET:
             payload.update(_feishu_sign())
-        _post_json(CHANNELS["feishu"], payload)
-        sent["feishu"] = "ok"
+        sent["feishu"] = _post_json(CHANNELS["feishu"], payload)
     if CHANNELS["dingtalk"]:
         _post_json(_dingtalk_url(), {"msgtype": "text", "text": {"content": text}})
         sent["dingtalk"] = "ok"
     return sent
 
 
+SEV_ZH = {"critical": "严重", "warning": "警告", "info": "提示"}
+
+
+def _fmt_dur(starts_at: str, ends_at: str) -> str:
+    """resolved 时把 startsAt/endsAt 差折算成「持续 N 分钟」"""
+    try:
+        from datetime import datetime
+        fmt = "%Y-%m-%dT%H:%M:%S"
+        s = datetime.strptime(starts_at[:19], fmt)
+        e = datetime.strptime(ends_at[:19], fmt)
+        m = int((e - s).total_seconds() // 60)
+        return f"持续 {m} 分钟" if m >= 1 else "持续不足 1 分钟"
+    except Exception:
+        return ""
+
+
 def format_alerts(payload: dict) -> str:
-    lines = []
+    """人话版报文：中文摘要做标题，状态中文化，只保留定位所需的最少信息"""
+    blocks = []
     for a in payload.get("alerts", []):
         labels = a.get("labels", {})
         anno = a.get("annotations", {})
-        status = a.get("status", "firing").upper()
-        lines.append(
-            f"[{status}] {labels.get('alertname', '?')}"
-            f" ({labels.get('severity', '?')})\n"
-            f"{anno.get('summary', '')}\n"
-            f"{anno.get('description', '')}\n"
-            f"labels: {', '.join(f'{k}={v}' for k, v in sorted(labels.items()) if k not in ('alertname', 'severity', 'alertstate'))}"
-        )
-    return "\n—— ———— ——\n".join(lines)
+        status = a.get("status", "firing")
+        head = "🚨 告警触发" if status != "resolved" else "✅ 告警恢复"
+        sev = SEV_ZH.get(labels.get("severity", ""), labels.get("severity", "未知"))
+        name = labels.get("alertname", "?")
+        summary = anno.get("summary") or name
+        block = f"{head}\n{summary}\n【{sev}】{name}"
+        if anno.get("description"):
+            block += f"\n{anno['description']}"
+        if labels.get("instance"):
+            block += f"\n对象: {labels['instance']}"
+        if status == "resolved":
+            dur = _fmt_dur(a.get("startsAt", ""), a.get("endsAt", ""))
+            if dur:
+                block += f"\n{dur}"
+        blocks.append(block)
+    return "\n———————\n".join(blocks)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -123,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             active = [k for k, v in CHANNELS.items() if v]
             if active:
                 sent = _send(text)
-                print(f"[bridge] delivered via {list(sent)}: {text[:120]}...", flush=True)
+                print(f"[bridge] delivered: {sent}", flush=True)
             else:
                 print(f"[bridge] (未配置通道, 仅日志) {text[:300]}", flush=True)
             self.send_response(200)
