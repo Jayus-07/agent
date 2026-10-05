@@ -157,19 +157,44 @@ def _run_pipeline(text: str) -> Optional[dict]:
 # 对外 API
 # =====================================================
 
-def extract_json(text: str) -> Optional[dict]:
-    """宽松语义：提取失败返回 None（调用方自行降级/记日志）。"""
-    return _run_pipeline(text)
+def _record_parse_fail(source: str) -> None:
+    """解析失败计数（软失败；函数内 import 防止 shared→observability
+    顶层方向依赖与潜在导入环）。source 空 = 调用方未声明来源，不计数。"""
+    if not source:
+        return
+    try:
+        from backend.observability.llm_output_metrics import record_json_parse_fail
+
+        record_json_parse_fail(source)
+    except Exception:  # noqa: BLE001 — 指标旁路绝不影响解析语义
+        pass
 
 
-def extract_json_or_empty(text: str) -> dict:
+def extract_json(text: str, source: str = "") -> Optional[dict]:
+    """宽松语义：提取失败返回 None（调用方自行降级/记日志）。
+
+    source：调用方身份（prompt key 或模块名），全策略失败时记入
+    llm_json_parse_fail_total{source}——提示词/模型劣化的最早信号。
+    """
+    result = _run_pipeline(text)
+    if result is None:
+        _record_parse_fail(source)
+    return result
+
+
+def extract_json_or_empty(text: str, source: str = "") -> dict:
     """宽松语义（空 dict 默认值）：提取失败返回 {}。"""
-    return _run_pipeline(text) or {}
+    result = _run_pipeline(text)
+    if not result:
+        _record_parse_fail(source)
+        return {}
+    return result
 
 
-def extract_json_strict(text: str) -> dict:
+def extract_json_strict(text: str, source: str = "") -> dict:
     """严格语义：提取失败抛 JsonExtractionError（ValueError 子类）。"""
     result = _run_pipeline(text)
     if result is None:
+        _record_parse_fail(source)
         raise JsonExtractionError(text[:200])
     return result

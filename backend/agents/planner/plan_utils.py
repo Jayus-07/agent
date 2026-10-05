@@ -63,14 +63,15 @@ def plan_depth(plan: dict) -> int:
     return max(depth_cache.values()) if depth_cache else 0
 
 
-def extract_json(text: str) -> dict:
+def extract_json(text: str, source: str = "planner.system") -> dict:
     """4 层修复管道（实现见 shared/json_extractor.py）。
 
-    全失败返回空 dict（触发 _fallback_plan），并记录降级告警。
+    全失败返回空 dict（触发 _fallback_plan），并记录降级告警 +
+    llm_json_parse_fail_total{source}（提示词/模型劣化最早信号）。
     """
     from backend.shared.json_extractor import extract_json_or_empty
 
-    result = extract_json_or_empty(text)
+    result = extract_json_or_empty(text, source=source)
     if not result:
         logger.warning("[Planner] JSON 修复管道全部失败，触发兜底")
         alert = make_alert("PLAN_JSON_INVALID", {"text_preview": text[:200]})
