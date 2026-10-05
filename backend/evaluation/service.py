@@ -481,6 +481,22 @@ class EvaluationService:
         # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
         run_id = config.run_id or make_run_id()
 
+        # N-02（2026-10-06）：评测线程绑定预算状态——此前线程无
+        # RequestContext.bind，budget enforce 下 LLM 调用不预占不结算
+        # （budget.py reserve 旁路告警路径），live 回放/评测的 token
+        # 归因与预算闸整体旁路。绑定失败不阻塞评测（放行模式，
+        # 参照 services/rag_server.py 同款）。
+        try:
+            from backend.infra.llm.budget import bind_request_budget
+
+            bind_request_budget(
+                f"eval:{run_id}",
+                user_id=_current_actor() or "eval-runner",
+                tenant_id="default",
+            )
+        except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞评测
+            logger.warning(f"[Eval] 预算绑定失败（放行）: {e}")
+
         # C2-2/RUN-02：终态 run 拒绝隐式重跑。显式 resume（同 run_id 断点
         # 续跑）或 force_rerun（全量重跑）才放行；默认参数撞上终态 run 视为
         # 调用方失误，抛错由 CLI/API 转 409——防止 completed 结果被静默改写。

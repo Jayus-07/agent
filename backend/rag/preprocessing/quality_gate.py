@@ -279,12 +279,22 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
     return anomalies
 
 
-def persist_quality_record(record: dict, quality_dir: str = "data/quality_records") -> str:
-    """质量报告 JSON 落盘：data/quality_records/{kb_id}/{doc_id}.json。"""
-    kb = record.get("kb_id") or "default"
-    doc = record.get("doc_id") or hashlib.sha256(
+def persist_quality_record(record: dict, quality_dir: str | None = None) -> str:
+    """质量报告 JSON 落盘：{RAG_DATA_DIR}/quality_records/{kb_id}/{doc_id}.json。
+
+    默认目录从 RAG_DATA_DIR 派生（容器 volume 与测试 conftest 的 tmp 隔离
+    统一生效）——原硬编码相对路径 "data/quality_records" 随 CWD 漂移，
+    宿主从仓库根跑测试会写穿工作区（N-01，2026-10-06）。kb_id/doc_id 做
+    路径段卫生化：kb_id 为 ".." 时曾把落盘目录上跳到 data 根（路径逃逸）。
+    """
+    if quality_dir is None:
+        from backend.config.database import RAG_DATA_DIR
+
+        quality_dir = os.path.join(RAG_DATA_DIR, "quality_records")
+    kb = _sanitize_path_segment(record.get("kb_id") or "default")
+    doc = _sanitize_path_segment(record.get("doc_id") or hashlib.sha256(
         (record.get("file_path") or "x").encode("utf-8")
-    ).hexdigest()[:16]
+    ).hexdigest()[:16])
     out_dir = os.path.join(quality_dir, kb)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{doc}.json")
@@ -293,6 +303,13 @@ def persist_quality_record(record: dict, quality_dir: str = "data/quality_record
         json.dump(record, f, ensure_ascii=False, indent=1)
     os.replace(tmp, path)  # 原子落盘
     return path
+
+
+def _sanitize_path_segment(value: str) -> str:
+    """路径段卫生化：禁目录上跳/分隔符，空值兜底。"""
+    cleaned = str(value or "").strip().replace("\\", "_").replace("/", "_")
+    cleaned = cleaned.replace("..", "_")
+    return cleaned or "default"
 
 
 def hard_anomalies(anomalies: list[dict]) -> list[dict]:
