@@ -501,7 +501,7 @@ class TestGraphIntegration:
             },
         }
 
-    def test_deny_policy_not_none_guard_once_executor_zero(self, monkeypatch):
+    def test_deny_skill_path_pre_generation_executor_zero(self, monkeypatch):
         from backend.skills.sql.skill import SQLSkill
 
         import backend.sql.sql_agent as agent_mod

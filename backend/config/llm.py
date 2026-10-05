@@ -158,7 +158,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # 模型参数
-# 主问答模型走角色注册表（role=main，代码默认 MiniMax-M3）
+# 主问答模型走角色注册表（role=main，代码默认 doubao-seed-2.0-mini，2026-10-06 拍板）
 LLM_MODEL = _literal_model("main")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))

@@ -50,8 +50,11 @@ POSITIVE_FUNCTION_ALLOWLIST: frozenset = frozenset({
     # 时间
     "CURRENT_DATE", "CURRENTDATE", "CURRENT_TIMESTAMP", "CURRENTTIMESTAMP",
     "NOW", "DATE", "DATE_PART", "DATE_TRUNC", "TIMESTAMP_TRUNC",
-    "EXTRACT", "TO_CHAR", "AGE", "TIMESTOSTR", "TIME_TO_STR",
-    # 存在性（exp.Exists 不在 Func 遍历面，防御性列入）
+    "TIMESTAMPTRUNC", "EXTRACT", "TO_CHAR", "AGE",
+    "TIMESTOSTR", "TIMETOSTR", "TIME_TO_STR",
+    # 聚合/数组的 sqlglot 类名变体（string_agg→GROUPCONCAT 等）
+    "GROUPCONCAT", "ARRAYAGG", "SPLITPART", "STRPOSITION",
+    # 存在性（exp.Exists 是 Func 子类会被遍历，类名口径需键）
     "EXISTS",
 })
 
@@ -406,12 +409,21 @@ class SQLValidator:
     # =================================================
 
     def _check_banned_functions(self, parsed: list) -> None:
-        """检查 SQL 中是否包含禁止/未批准的函数（G-17 fail-closed）。"""
+        """检查 SQL 中是否包含禁止/未批准的函数（G-17 fail-closed）。
+
+        第二循环只判「真函数调用」节点：exp.Anonymous 已被第一循环按
+        SQL 文本名覆盖（类名口径重复判 ANONYMOUS 会让运维追加通道永远
+        失效）；exp.Connector（AND/OR）与 exp.Case 是条件构造不是函数
+        调用，但 MRO 含 Func 会被 find_all(exp.Func) 带入——排除之
+        （N-06：否则多条件查询全灭，黄金集 12/42 误拒）。
+        """
         stmt = parsed[0]
         for func in stmt.find_all(exp.Anonymous):
             func_name = func.name.upper() if func.name else ""
             self._deny_dangerous_function(func_name, func)
         for func in stmt.find_all(exp.Func):
+            if isinstance(func, (exp.Anonymous, exp.Connector, exp.Case)):
+                continue
             func_name = type(func).__name__.upper()
             self._deny_dangerous_function(func_name, func)
             if hasattr(func, "sql_name"):

@@ -65,9 +65,13 @@ def should_redirect(det: NonCSDetection) -> bool:
 
 
 def _get_llm():
-    """间接层：测试 monkeypatch 此函数注入 fake LLM。"""
-    from backend.infra.llm import get_llm
-    return get_llm()
+    """间接层：测试 monkeypatch 此函数注入 fake LLM。
+
+    G7（2026-10-06 收编）：返回 llm 代理（限流/韧性/llm_usage 记账），
+    不再走 get_llm() 裸实例——裸实例绕过全部包装。
+    """
+    from backend.infra.llm import llm
+    return llm
 
 
 def _parse_response(response: Any) -> Optional[NonCSDetection]:

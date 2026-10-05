@@ -514,8 +514,10 @@ class SQLAgent:
             )
         if not table_names:
             # scope 过滤后与授权表无交集 = 权限拒绝而非执行失败——
-            # 审计必须落 DENY_*（拒绝面归因契约），否则 deny 矩阵失真
-            _observe(decision="DENY_SCOPE", policy=policy,
+            # 审计必须落 DENY_*（拒绝面归因契约）；decision 与 _DENY_DECISION
+            # 对 SQL_TABLE_NOT_ALLOWED 的映射（DENY_TABLE）保持同一口径，
+            # 否则按 decision 与按 deny_code 两个聚合面的 deny 矩阵互相矛盾
+            _observe(decision="DENY_TABLE", policy=policy,
                      status="permission_denied", error_type="table_scope",
                      deny_code="SQL_TABLE_NOT_ALLOWED")
             return SQLResult.failed(
