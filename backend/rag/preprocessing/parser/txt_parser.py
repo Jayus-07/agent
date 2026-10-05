@@ -17,9 +17,27 @@ _NUM_HEADING_RE = re.compile(r"^(?:第[一二三四五六七八九十百千\d]+[
 
 
 class TxtParser(BaseDocumentParser):
+    @staticmethod
+    def _read_text(file_path: str) -> str:
+        """读取文本文件，utf-8 失败回退 gb18030（P4 修复 2026-10-05）。
+
+        国内历史语料常见 GBK/GB18030 编码；此前硬解 utf-8 直接
+        UnicodeDecodeError → parse failed。回退顺序：utf-8（严格）→
+        gb18030（中文超集，严格）→ utf-8 errors=replace 兜底。
+        """
+        raw_bytes = open(file_path, "rb").read()
+        for enc in ("utf-8", "gb18030"):
+            try:
+                return raw_bytes.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        logger.warning(
+            f"[TxtParser] {file_path} 编码识别失败（非 utf-8/gb18030），"
+            f"以 utf-8 replace 兜底读取")
+        return raw_bytes.decode("utf-8", errors="replace")
+
     def parse(self, file_path: str) -> DocumentAST:
-        with open(file_path, encoding="utf-8") as f:
-            raw = f.read()
+        raw = self._read_text(file_path)
 
         root = DocumentNode(type="section", text="", level=0)
 
