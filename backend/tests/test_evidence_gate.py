@@ -172,6 +172,18 @@ class TestEvidenceGateRerank:
         assert d.score == 0.8
         assert d.diagnostics["doc_count"] == 3
 
+    def test_consensus_cluster_does_not_fail_gap_gate(self):
+        """多份高相关证据形成共识时，top1 与尾部的小差距不是歧义。"""
+        docs = [_doc(f"c{i}", score=score) for i, score in enumerate(
+            [0.95, 0.94, 0.94, 0.93]
+        )]
+        d = evidence_gate_rerank(
+            docs, min_top1=0.4, min_avg=0.1, min_gap=0.05
+        )
+
+        assert d.passed is True
+        assert d.diagnostics["gap"] < 0.05
+
 
 # =====================================================
 # 4. parse_meta_comment

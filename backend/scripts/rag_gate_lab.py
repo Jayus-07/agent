@@ -22,6 +22,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import urllib.request
 
@@ -102,6 +103,7 @@ def cmd_record(top_k: int, workers: int) -> int:
 def cmd_record_rerank(top_k: int, candidate_k: int, workers: int) -> int:
     """rerank 面：对生产混合召回候选池本地直调生产 reranker。"""
     from backend.rag.reranker import get_reranker_backend
+    from backend.rag.evidence_gate import find_missing_entities
 
     ranker = get_reranker_backend()
     data = json.loads(_DATASET.read_text(encoding="utf-8"))
@@ -120,6 +122,15 @@ def cmd_record_rerank(top_k: int, candidate_k: int, workers: int) -> int:
         ranked = ranker.rank(case["question"], texts, top_k=top_k)
         case["rerank_scores"] = sorted(
             (round(float(s), 4) for _, s in ranked), reverse=True)
+        ranked_docs = [
+            SimpleNamespace(page_content=docs[idx].get("content", ""))
+            for idx, _ in ranked
+            if 0 <= idx < len(docs)
+        ]
+        # 与生产 RAGChain 同口径：重排后窗口强实体覆盖校验。
+        case["entity_missing"] = find_missing_entities(
+            case["question"], ranked_docs[:8]
+        )
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(work, cases))
@@ -131,6 +142,7 @@ def cmd_record_rerank(top_k: int, candidate_k: int, workers: int) -> int:
     data["rerank_recorded_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     data["rerank_backend"] = type(ranker).__name__
     data["rerank_candidate_k"] = candidate_k
+    data["rerank_entity_check"] = "production_rerank_window_strong_entity_coverage"
     data["suspicious_answerable_rerank"] = suspicious
     _DATASET.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps({

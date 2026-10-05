@@ -46,6 +46,10 @@ from backend.rag.evidence_gate.operations import (  # noqa: F401
     is_evidence_gate_enabled,
     gate_retrieval_passthrough,
 )
+from backend.rag.evidence_gate.query_scope import (  # noqa: F401
+    QueryScopeDecision,
+    assess_query_scope,
+)
 from backend.rag.evidence_gate.controller import EvidenceGateController  # noqa: F401
 from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy  # noqa: F401
 
@@ -73,6 +77,8 @@ __all__ = [
     "build_rejection_response",
     "is_evidence_gate_enabled",
     "gate_retrieval_passthrough",
+    "QueryScopeDecision",
+    "assess_query_scope",
     # strategy objects
     "EvidenceGateController",
     "SelfCorrectionStrategy",

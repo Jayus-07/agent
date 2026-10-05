@@ -51,6 +51,18 @@ class TestRuleClassify:
         assert domain == CSDomain.AFTER_SALES
         assert conf >= 2 / 3
 
+    def test_after_sales_policy_question_prefers_knowledge_domain(self):
+        cr = CSCoarseRouter()
+        domain, _, _ = cr.classify("七天无理由退货的范围包括哪些商品")
+
+        assert domain == CSDomain.KNOWLEDGE
+
+    def test_explicit_after_sales_action_keeps_action_domain(self):
+        cr = CSCoarseRouter()
+        domain, _, _ = cr.classify("帮我申请退款")
+
+        assert domain == CSDomain.AFTER_SALES
+
 
 class TestCascadeLogic:
     def test_rule_decides_first(self, monkeypatch):

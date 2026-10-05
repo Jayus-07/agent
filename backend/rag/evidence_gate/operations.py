@@ -88,6 +88,7 @@ _QUERY_STOPWORDS = {
 _GATE_EXTRA_STOPWORDS = {
     "问题", "情况", "东西", "事情", "内容", "方式", "时间", "日期",
     "金额", "费用标准", "流程制度", "策略", "办法", "细则", "说明",
+    "流程", "操作", "售后", "发货", "收货", "查不到", "维修",
 }
 
 
@@ -148,8 +149,8 @@ def _SYNONYMS_VIEW() -> dict:
     return SYNONYMS
 
 
-def find_missing_entities(query: str, docs: list, top_n: int = 3) -> list[str]:
-    """返回未见于 top_n 召回文本的“强实体”列表（空列表 = 不触发拒答）。
+def find_missing_entities(query: str, docs: list, top_n: int = 8) -> list[str]:
+    """返回未见于 top_n 重排窗口文本的“强实体”列表（空列表 = 不触发拒答）。
 
     存在判定用同义词闭包 + 去空白归一化（与离线 runner 口径一致）。
     拒答仅在存在“强实体”缺失时触发：强实体 = 含 CJK 且（长度≥3 或
@@ -342,7 +343,10 @@ def evidence_gate_rerank(
                          "threshold": {"min_avg": min_avg}},
         )
 
-    if len(scores) > 1 and gap < min_gap:
+    # 多份证据都处于高相关区间时，top1 与尾部的差距反映的是
+    # 同一答案的多 chunk 共识，不是证据歧义。只有平均分仍低于
+    # top1 门槛时才启用 gap 拒答，避免把强证据簇误判为不充分。
+    if len(scores) > 1 and gap < min_gap and avg < effective_min_top1:
         return GateDecision(
             passed=False, reason=RejectReason.INSUFFICIENT, layer=layer,
             score=gap,

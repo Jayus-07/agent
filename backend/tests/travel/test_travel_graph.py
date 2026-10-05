@@ -335,8 +335,8 @@ class TestEndToEnd:
         assert "seed:local" not in answer
         assert "费用预估" not in answer
         assert "置信度" not in answer
-        assert "费用：暂无数据" in answer
-        assert "坐标：暂无数据" in answer
+        assert "费用数据未接入可核验来源" in answer
+        assert "坐标：暂无数据" not in answer
 
     def test_clarification_when_destination_missing(self):
         final = self._invoke("我想出去旅游")

@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from backend.customer_service.router.types import CSDomain
 
 
@@ -24,6 +26,14 @@ class CSCoarseRouter:
             CS_CONFIDENCE_CAUTIOUS,
             CS_DOMAIN_KEYWORDS,
         )
+
+        # 售后词本身不等于办理动作：政策、范围、条件、费用等知识问句
+        # 必须进入知识域，避免客服知识金标被 ActionExpert 误拦成补订单号。
+        # 仅在完整默认双域词表存在时启用，保持单域/测试定制词表的既有语义。
+        if {
+            "KNOWLEDGE", "AFTER_SALES"
+        }.issubset(CS_DOMAIN_KEYWORDS) and self._is_after_sales_policy_question(query):
+            return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "policy_question: KNOWLEDGE"
 
         domain, conf, reason = self._rule_classify(query, CS_DOMAIN_KEYWORDS)
         # P2.1（audit #157）：规则决定线 0.8 → CS_CONFIDENCE_CAUTIOUS（0.6）。
@@ -61,3 +71,20 @@ class CSCoarseRouter:
             conf = min(best_count / 3.0, 1.0)
             return best_domain, conf, f"{best_domain.value}({best_count}hits)"
         return CSDomain.UNKNOWN, 0.0, ""
+
+    @staticmethod
+    def _is_after_sales_policy_question(query: str) -> bool:
+        """识别售后词驱动的知识问句，排除显式副作用动作。"""
+        if not any(token in query for token in ("退款", "退货", "换货", "售后", "维修", "保修")):
+            return False
+        if re.search(
+            r"(申请|提交|办理|我要|帮我|给我|退这个|换一个|怎么(退|换|修)|"
+            r"送修|返修|报修)",
+            query,
+        ):
+            return False
+        return bool(re.search(
+            r"(政策|规则|范围|条件|标准|时效|多久|几天|什么时候|包括|"
+            r"流程|费用|承担|赔付|是什么|怎样|怎么填|能不能|可以吗)",
+            query,
+        ))

@@ -36,8 +36,11 @@ _REFERENCE_PRONOUN = re.compile(
 # 业务谓词：回指必须落在订单业务语境里（物流/状态/进度/售后处置）
 _REFERENCE_PREDICATE = re.compile(
     r"(到哪|物流|发货|寄出|运输|配送|到货|签收|收货|什么时候到|多久到|多久发货"
-    r"|状态|进度|怎么样|咋样|处理得|查一下|查询|查查|退了吗|到账|发货了吗)"
+    r"|状态|进度|怎么样|咋样|处理得|查一下|查询|查查|退了吗|到账|发货了吗"
+    r"|申请退款|申请退货|申请换货|办理退款|办理退货|办理换货)"
 )
+
+_ACTION_REFERENCE = re.compile(r"(申请退款|申请退货|申请换货|办理退款|办理退货|办理换货)")
 
 # 负向信号：命中即放弃继承（知识/投诉/账号/非客服语境，不得被旧订单吞掉）
 _REFERENCE_NEGATIVE = re.compile(
@@ -237,6 +240,10 @@ def resolve_turn_reference(
 
     if _LOGISTICS_HINT.search(query):
         resolved_query = f"查询订单 {order_id} 的物流状态"
+    elif _ACTION_REFERENCE.search(query):
+        # 保留当前轮办理意图，只把明确指代的订单号补进路由文本；
+        # 这样 Router 仍会落 AFTER_SALES，ActionExpert 读取 metadata.order_id。
+        resolved_query = f"{query}（订单 {order_id}）"
     else:
         resolved_query = f"查询订单 {order_id} 的最新状态"
 

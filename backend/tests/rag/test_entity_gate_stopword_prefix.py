@@ -64,3 +64,22 @@ def test_hard_negative_still_rejected():
     missing = find_missing_entities("出口退税的办理流程和预付款要求是什么？", docs)
     assert missing, "hard negative 必须保持实体缺失判定（拒答路径）"
     assert "预付款" in missing
+
+
+def test_entity_coverage_uses_the_full_rerank_window():
+    """支持性证据落在重排窗口后段时，不因只看前三条误拒。"""
+    docs = [_Doc("通用办公制度说明") for _ in range(4)]
+    docs.append(_Doc("笔记本电脑保修期为一年，故障可提交维修申请。"))
+    assert find_missing_entities("笔记本电脑的保修期是多久？", docs) == []
+
+
+def test_generic_workflow_terms_do_not_trigger_false_missing_entities():
+    """业务泛词由领域实体承载，不应单独造成实体门误拒。"""
+    docs = [_Doc("换货申请：商品签收后可提交售后申请，处理时效为三个工作日。")]
+    assert find_missing_entities("换货流程是怎么走的？", docs) == []
+
+
+def test_business_phrase_synonyms_prevent_false_missing_entities():
+    """书面政策词与用户口语短语等价时，不误判为缺少实体。"""
+    docs = [_Doc("差旅住宿报销标准：福州每晚 500 元；市内交通费用按票据报销。")]
+    assert find_missing_entities("出差住宿费和市内交通费报销标准", docs) == []

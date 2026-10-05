@@ -1223,6 +1223,9 @@ class RAGChain:
         """
         from backend.observability.tracer import SpanKind, trace_collector
         from backend.rag.evidence_gate import (
+            GateDecision,
+            RejectReason,
+            assess_query_scope,
             evidence_gate_rerank,
             evidence_gate_retrieval,
             gate_retrieval_passthrough,
@@ -1237,6 +1240,28 @@ class RAGChain:
             "evidence_gate_retrieval", name="Evidence Gate - Retrieval",
             kind=SpanKind.RETRIEVAL_GATE.value,
         )
+
+        # Gate 0: 当前 RAG 不具备实时外部数据、凭据披露或越权操作能力时，
+        # 先按查询范围拒答，避免相似文档把不应回答的请求误判为有证据。
+        scope = assess_query_scope(question)
+        if scope.blocked:
+            scope_decision = GateDecision(
+                passed=False,
+                reason=RejectReason.NO_EVIDENCE,
+                layer="retrieval",
+                score=0.0,
+                diagnostics={
+                    "query_scope": "blocked",
+                    "query_scope_category": scope.category,
+                    "query_scope_reason": scope.reason,
+                },
+            )
+            trace_collector.end_span(
+                gate_span,
+                metrics=scope_decision.to_metrics(),
+                status="rejected",
+            )
+            return scope_decision
 
         # 优先复用 hybrid.py 注入的 decision
         injected = (context_docs[0].metadata.get("__evidence_gate_decision__")
@@ -1290,7 +1315,7 @@ class RAGChain:
             return ret_decision
 
         # ── Gate 1.5: 查询实体覆盖校验（P2，2026-08-21）──
-        # 主题相近但无答案：问题核心实体（含同义词闭包）不在 rerank 后 top-3
+        # 主题相近但无答案：问题核心实体（含同义词闭包）不在 rerank 后窗口
         # 召回文本中 → 改判拒答。在 chain 层用原始 question 判定（hybrid 层
         # 拿到的是同义词变体 query，不适用）；异常不干预原判（软降级）。
         if context_docs:

@@ -53,16 +53,26 @@ def gate_pass(
     min_avg: float,
     min_gap: float,
     high_risk_min_top1: float = 0.55,
+    missing_entities: list[str] | None = None,
+    question: str | None = None,
 ) -> bool:
     """对一段分数向量执行生产检索门+重排门，返回是否放行。"""
     from backend.rag.evidence_gate.operations import (
         evidence_gate_retrieval,
         evidence_gate_rerank,
     )
+    from backend.rag.evidence_gate.query_scope import assess_query_scope
+
+    if question is not None and assess_query_scope(question).blocked:
+        return False
 
     docs = [ScoredDoc(s) for s in scores]
     retrieval = evidence_gate_retrieval(docs, vec_min_score=vec_min_score)
     if not retrieval.passed:
+        return False
+    # 与 RAGChain._run_evidence_gates 的生产顺序一致：重排后 Top-3
+    # 强实体缺失时先拒答，不能被宽松的分数阈值放行。
+    if missing_entities:
         return False
     rerank = evidence_gate_rerank(
         docs,
@@ -128,6 +138,8 @@ def run_grid(cases: list[dict], grid: dict[str, list[float]]) -> dict:
                         min_top1=min_top1,
                         min_avg=min_avg,
                         min_gap=CURRENT_THRESHOLDS["min_gap"],
+                        missing_entities=case.get("entity_missing"),
+                        question=case.get("question"),
                     )
                     if case["klass"] == "answerable":
                         cr.false_reject_total += 1
@@ -159,6 +171,8 @@ def current_baseline(cases: list[dict]) -> ComboResult:
             min_top1=t["min_top1"],
             min_avg=t["min_avg"],
             min_gap=t["min_gap"],
+            missing_entities=case.get("entity_missing"),
+            question=case.get("question"),
         )
         if case["klass"] == "answerable":
             cr.false_reject_total += 1

@@ -37,6 +37,43 @@ class TestGatePass:
                               min_top1=0.45, min_avg=0.25, min_gap=0.05)
         assert loose is True and tight is False
 
+    def test_missing_entity_is_rejected_before_rerank_thresholds(self):
+        scores = [0.8, 0.75, 0.7]
+        assert lab.gate_pass(
+            scores,
+            vec_min_score=0.2,
+            min_top1=0.35,
+            min_avg=0.25,
+            min_gap=0.05,
+            missing_entities=["出口退税"],
+        ) is False
+        assert lab.gate_pass(
+            scores,
+            vec_min_score=0.2,
+            min_top1=0.35,
+            min_avg=0.25,
+            min_gap=0.05,
+            missing_entities=[],
+        ) is True
+
+    def test_query_scope_is_rejected_before_rerank_thresholds(self):
+        assert lab.gate_pass(
+            [0.9, 0.8, 0.7],
+            vec_min_score=0.2,
+            min_top1=0.35,
+            min_avg=0.25,
+            min_gap=0.05,
+            question="怎么查别人的工资",
+        ) is False
+        assert lab.gate_pass(
+            [0.9, 0.8, 0.7],
+            vec_min_score=0.2,
+            min_top1=0.35,
+            min_avg=0.25,
+            min_gap=0.05,
+            question="客户申请退款的处理流程是什么",
+        ) is True
+
 
 class TestGridAndRecommend:
     def _dataset(self) -> list[dict]:

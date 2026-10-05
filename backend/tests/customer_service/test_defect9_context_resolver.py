@@ -71,6 +71,15 @@ def test_t1_status_variant_resolves_without_logistics_word():
     assert "最新状态" in r.resolved_query
 
 
+def test_action_reference_inherits_last_order_without_guessing():
+    """用户明确说“这个订单”时可承接订单，普通无指代动作仍需补槽。"""
+    _seed("MO-1001")
+    r = _resolve("帮我对这个订单申请退款")
+
+    assert r is not None and r.order_id == "MO-1001"
+    assert "申请退款" in r.resolved_query
+
+
 # ── Test 2：当前轮显式实体永远优先 ─────────────────────────────
 
 
