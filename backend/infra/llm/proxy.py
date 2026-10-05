@@ -1895,7 +1895,15 @@ def _truncate_messages_to_budget(payload: list, budget: int) -> list:
         # 字符比例截断（tokens→chars 用 allowance/tail_tokens 比例，再留 5% 余量）
         keep_chars = max(int(len(content) * allowance / max(tail_tokens, 1) * 0.95), 256)
         truncated = content[:keep_chars] + chr(10) + "…（上下文过长，已截断尾部）"
-        tail = tail.__class__(content=truncated, additional_kwargs=tail.additional_kwargs)
+        try:
+            tail = tail.__class__(content=truncated,
+                                  additional_kwargs=tail.additional_kwargs)
+        except TypeError:
+            # 测试桩/非标消息类：退化为同型浅拷贝（content 替换）
+            import copy as _copy
+
+            tail = _copy.copy(tail)
+            tail.content = truncated
     return [head, tail] if len(messages) > 1 else [tail]
 
 
