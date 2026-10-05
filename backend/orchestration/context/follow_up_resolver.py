@@ -143,6 +143,35 @@ def _rule_rewrite(query: str, entity: str, used: list[str]) -> str | None:
     return None
 
 
+def _render_rewrite_prompt(
+    last_user_turn: str, structured_context: str, raw_query: str,
+) -> str:
+    """追问改写 prompt：注册表优先（key=context.followup_rewrite，2026-10-06
+    收编，版本治理/trace 记账/请求级 pin），异常降级内联构造（内容逐字节一致，
+    守卫见 tests/prompts/test_bare_prompt_collection.py）。"""
+    try:
+        from backend.prompts.service import prompt_service
+
+        return prompt_service.render_sync(
+            "context.followup_rewrite",
+            last_user_turn=last_user_turn,
+            structured_context=structured_context,
+            raw_query=raw_query,
+        ).text
+    except Exception as exc:  # noqa: BLE001 — prompt 读取失败不得阻断追问解析
+        logger.warning(f"[FollowUpResolver] 注册表渲染失败，降级内置拼接: {exc}")
+        return (
+            "你是 query 改写器。把依赖上下文的用户问题改写成独立完整的问题。\n"
+            f"上一轮用户发言：{last_user_turn}\n"
+            f"结构化上下文：{structured_context}\n"
+            f"当前问题：{raw_query}\n"
+            "只输出 JSON，不要输出其他内容：\n"
+            '{"standalone_query": "", "resolved": true, "used_context": [],'
+            ' "need_clarification": false, "clarification_question": null}\n'
+            "上下文不足以改写时 resolved=false 且 need_clarification=true。"
+        )
+
+
 def _llm_rewrite(
     raw_query: str,
     ctx: ConversationContext,
@@ -156,15 +185,8 @@ def _llm_rewrite(
     try:
         from backend.infra.llm import llm
 
-        prompt = (
-            "你是 query 改写器。把依赖上下文的用户问题改写成独立完整的问题。\n"
-            f"上一轮用户发言：{last_user_turn or '（无）'}\n"
-            f"结构化上下文：{ctx.snapshot()}\n"
-            f"当前问题：{raw_query}\n"
-            "只输出 JSON，不要输出其他内容：\n"
-            '{"standalone_query": "", "resolved": true, "used_context": [],'
-            ' "need_clarification": false, "clarification_question": null}\n'
-            "上下文不足以改写时 resolved=false 且 need_clarification=true。"
+        prompt = _render_rewrite_prompt(
+            last_user_turn or "（无）", ctx.snapshot(), raw_query,
         )
         start = time.perf_counter()
         resp = llm.invoke(
@@ -177,12 +199,13 @@ def _llm_rewrite(
             "[FollowUpResolver] LLM rewrite 耗时 %.0fms",
             (time.perf_counter() - start) * 1000,
         )
-        import json as _json
+        # 统一策略链（2026-10-06 批次 C）：此前裸 re+json.loads，修复能力
+        # 只增不减；全失败记 llm_json_parse_fail_total{source} 后回落澄清
+        from backend.shared.json_extractor import extract_json
 
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
+        data = extract_json(text, source="context.followup_rewrite")
+        if not isinstance(data, dict):
             return None
-        data = _json.loads(match.group(0))
         return {
             "standalone_query": str(data.get("standalone_query") or "").strip(),
             "resolved": bool(data.get("resolved")),

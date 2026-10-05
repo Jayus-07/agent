@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generated_at": "2026-10-06T00:51:22+08:00",
-  "git_sha": "12d5f49",
+  "generated_at": "2026-10-06T02:47:24+08:00",
+  "git_sha": "083006d",
   "source": "postgres://agent_memory.prompts",
-  "prompt_count": 43,
+  "prompt_count": 48,
   "prompts": {
     "business_report.polish": {
       "active_version": 1,
@@ -20,9 +20,19 @@
       "template_hash": "56c4d713982fab11",
       "change_kind": null
     },
+    "context.followup_rewrite": {
+      "active_version": 1,
+      "template_hash": "80e694bf4a84ecaa",
+      "change_kind": null
+    },
     "customer_service.answer": {
       "active_version": 1,
       "template_hash": "8de70af74dfcb1e8",
+      "change_kind": null
+    },
+    "customer_service.chat_fallback": {
+      "active_version": 1,
+      "template_hash": "ad49a7c00ef4c6fa",
       "change_kind": null
     },
     "customer_service.complaint_assess": {
@@ -53,6 +63,11 @@
     "evaluation.judge.user": {
       "active_version": 1,
       "template_hash": "17cfb667fbb531e2",
+      "change_kind": null
+    },
+    "general_chat.system": {
+      "active_version": 1,
+      "template_hash": "5e0dc5c566b2f66a",
       "change_kind": null
     },
     "market_research.analyzer": {
@@ -185,6 +200,11 @@
       "template_hash": "79f253e911132d45",
       "change_kind": null
     },
+    "router.tool_selector": {
+      "active_version": 1,
+      "template_hash": "ec3f39db2afb05bf",
+      "change_kind": null
+    },
     "selection_decision.differentiation": {
       "active_version": 1,
       "template_hash": "5edef806aa3c369d",
@@ -218,6 +238,11 @@
     "sql.router": {
       "active_version": 1,
       "template_hash": "88c93d6fb4c27426",
+      "change_kind": null
+    },
+    "travel.llm_intent": {
+      "active_version": 1,
+      "template_hash": "b81fa5bd345922fa",
       "change_kind": null
     }
   }

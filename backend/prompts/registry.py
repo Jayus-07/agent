@@ -1,7 +1,8 @@
-"""Prompt Registry — static metadata for all 38 prompts.
+"""Prompt Registry — static metadata for all registered prompts.
 
 PromptSpec is a frozen dataclass; PROMPT_REGISTRY is the single source of truth.
 security.input_guard is flagged code_controlled=True (never DB-editable).
+总数断言在 tests/prompts/test_registry_defaults.py（改键数先改它）。
 """
 from dataclasses import dataclass, field
 
@@ -43,7 +44,13 @@ _register(PromptSpec(
     name="任务规划系统 Prompt",
     category="planner",
     risk_level="high",
-    variables=(R("capabilities_schema"), R("cap_example")),
+    # v2 变量集（2026-10-06 事实变量化）；渲染调用方额外传 cap_example 兼容
+    # DB 现网 v1 模板（renderer 按模板实际所需取变量，多余不报错）。
+    variables=(
+        R("schema_overview"),
+        R("capabilities_schema"),
+        R("output_example"),
+    ),
     default_file="planner_system.yaml",
 ))
 
@@ -236,6 +243,14 @@ _register(PromptSpec(
 ))
 
 _register(PromptSpec(
+    key="router.tool_selector",
+    name="FC 工具选择器 Prompt",
+    category="router",
+    risk_level="high",
+    default_file="router_tool_selector.yaml",
+))
+
+_register(PromptSpec(
     key="selection_decision.review_pain",
     name="用户痛点分析",
     category="selection",
@@ -374,6 +389,25 @@ _register(PromptSpec(
     agent="report",
 ))
 
+# ── General Chat / Context（原裸字符串收编，2026-10-06）─────────
+
+_register(PromptSpec(
+    key="general_chat.system",
+    name="寒暄直答系统 Prompt",
+    category="general_chat",
+    risk_level="medium",
+    default_file="general_chat_system.yaml",
+))
+
+_register(PromptSpec(
+    key="context.followup_rewrite",
+    name="会话追问改写 Prompt",
+    category="context",
+    risk_level="medium",
+    variables=(R("last_user_turn"), R("structured_context"), R("raw_query")),
+    default_file="context_followup_rewrite.yaml",
+))
+
 # ── Customer Service Agent ─────────────────────────────────────
 
 _register(PromptSpec(
@@ -433,6 +467,25 @@ _register(PromptSpec(
     variables=(R("query"),),
     default_file="customer_service_redirect_main.yaml",
     agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.chat_fallback",
+    name="客服寒暄人设 Prompt",
+    category="customer_service",
+    risk_level="medium",
+    default_file="customer_service_chat_fallback.yaml",
+    agent="customer_service",
+))
+
+# ── Travel（原裸字符串收编，2026-10-06）────────────────────────
+
+_register(PromptSpec(
+    key="travel.llm_intent",
+    name="旅游意图 LLM 补判 Prompt",
+    category="travel",
+    risk_level="medium",
+    default_file="travel_llm_intent.yaml",
 ))
 
 # ── Agent Capability ───────────────────────────────────────────

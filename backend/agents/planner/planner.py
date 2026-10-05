@@ -23,7 +23,7 @@ from backend.infra.cache import get_cache
 from backend.infra.llm import llm
 from backend.observability.alerts import log_degradation, make_alert
 from backend.orchestration.capability_registry import format_params_schema, tool_registry
-from backend.prompts.planner import is_knowledge_question
+from backend.prompts.planner import build_output_example, is_knowledge_question
 from backend.shared.logger import logger
 
 
@@ -57,6 +57,9 @@ def _format_capabilities_schema() -> str:
 
     注：依赖 tool_registry 保留在 planner.py 而非 prompts/planner.py
     是为了避免循环导入（prompts 不能反向依赖 backend.agent）。
+    清单来源是 manifest 派生（多域隔离 M5/E9）：routed:false 内部能力
+    不再渲染进 prompt——此前取 tool_registry 全量 17 个，Planner 能选到
+    email.watch 这类内部长轮询能力。
     """
     lines = []
     for cap_name in _planner_visible_capabilities():
@@ -70,6 +73,30 @@ def _format_capabilities_schema() -> str:
         if "示例" in schema:
             lines.append(f"示例: {json.dumps(schema['示例'], ensure_ascii=False)}")
         lines.append("")
+    return "\n".join(lines)
+
+
+def _format_schema_overview() -> str:
+    """库表概览：从 schema_config（静态配置单一事实源，G2）派生。
+
+    替代 v1 模板硬编码「15 张表」——schema 演进后 prompt 自动跟（此前
+    硬编码与实际 18 表漂移，planner 天天在被喂过期事实）。读的是静态
+    dict 不是运行时 DB 连接，不违反「Planner 禁调 DB」（禁的是查询）。
+    """
+    from backend.sql.data.schema_config import SCHEMA_CONFIG
+
+    tables: dict = SCHEMA_CONFIG.get("tables", {})
+    by_schema: dict[str, list[str]] = {}
+    for full_name, meta in tables.items():
+        schema, _, table = str(full_name).partition(".")
+        desc = str((meta or {}).get("description", "")).strip().rstrip("。")
+        by_schema.setdefault(schema, []).append(f"{table}({desc})" if desc else table)
+    lines = [
+        f"业务库共 {len(tables)} 张表、{len(by_schema)} 个 schema，"
+        "表名均为 schema.table 形式："
+    ]
+    for schema in sorted(by_schema):
+        lines.append(f"  {schema}: " + "、".join(by_schema[schema]))
     return "\n".join(lines)
 
 
@@ -113,18 +140,26 @@ def planner_node(state: dict) -> dict:
 
     capabilities_schema = _format_capabilities_schema()
     cap_example = _planner_visible_capabilities()[0]
+    schema_overview = _format_schema_overview()
+    output_example = build_output_example(cap_example)
 
     try:
         r = prompt_service.render_sync(
             "planner.system",
+            schema_overview=schema_overview,
             capabilities_schema=capabilities_schema,
+            output_example=output_example,
+            # v1 DB 模板仍引用 cap_example；v2 已由 output_example 内嵌。
+            # renderer 按模板实际所需取变量，v1/v2 同一调用并存。
             cap_example=cap_example,
         )
         prompt = r.text
     except Exception:
         from backend.prompts.planner import PLANNER_SYSTEM
         prompt = PLANNER_SYSTEM.format(
+            schema_overview=schema_overview,
             capabilities_schema=capabilities_schema,
+            output_example=output_example,
             cap_example=cap_example,
         )
     user_msg = f"用户问题: {question}{router_hint_text}\n\n请输出 JSON:"

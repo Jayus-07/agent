@@ -15,12 +15,27 @@ from __future__ import annotations
 
 from backend.shared.logger import logger
 
+# 系统提示词已收编进 prompt 注册表（key=general_chat.system，2026-10-06）：
+# 运行时经 PromptService 渲染（版本治理/trace 记账/请求级 pin）；
+# 常量保留为注册表不可用时的降级兜底（与 YAML default 逐字一致，
+# 漂移守卫见 tests/prompts/test_bare_prompt_collection.py）。
 _SYSTEM_PROMPT = (
     "你是企业智能运营助手。用户在打招呼、问候或询问你的能力。"
     "自然、简洁地回应（不超过 150 字），并简要介绍你能帮忙的事情："
     "旅游行程规划、订单与售后客服、商品智能选品、经营数据查询与分析、"
     "知识库问答。不要编造数据，不要调用任何工具。"
 )
+
+
+def _chat_system_prompt() -> str:
+    """系统提示词：注册表优先，异常降级模块常量（软失败）。"""
+    try:
+        from backend.prompts.service import prompt_service
+
+        return prompt_service.render_sync("general_chat.system").text
+    except Exception as exc:  # noqa: BLE001 — 寒暄路径不因 prompt 读取失败报错
+        logger.warning(f"[GeneralChat] 注册表渲染失败，降级内置常量: {exc}")
+        return _SYSTEM_PROMPT
 
 _FALLBACK_ANSWER = (
     "你好！我是企业智能运营助手，可以帮你规划旅游行程、处理订单售后、"
@@ -47,7 +62,7 @@ def general_chat_node(state: dict) -> dict:
             m for m in (state.get("messages") or [])
             if getattr(m, "content", None)
         ][-6:]
-        msgs = [("system", _SYSTEM_PROMPT), *history]
+        msgs = [("system", _chat_system_prompt()), *history]
         if question:
             msgs.append(("human", question))
 

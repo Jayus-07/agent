@@ -1,0 +1,16 @@
+key: travel.llm_intent
+name: 旅游意图 LLM 补判 Prompt
+category: travel
+risk_level: medium
+template_engine: str_format
+variables: []
+# 收编自 travel/services/llm_intent_service.py::_SYSTEM_PROMPT（2026-10-06）
+# 逐字一致守卫：tests/prompts/test_bare_prompt_collection.py
+template: |-
+  你是旅游助手的意图分类器。把用户消息分成四类之一，只输出 JSON：
+  {{"family": "..."}}，family 取值：
+  - "query"：提问/询问/对比/求推荐（想了解信息，不是要改行程）
+  - "modify"：对当前行程的修改诉求（改天数/节奏/加减地点/换掉某处）
+  - "out_of_scope"：与旅游规划无关（订单、退款、写代码、闲聊其他业务）
+  - "unknown"：无法判断
+  只输出 JSON，不要解释。

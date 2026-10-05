@@ -81,6 +81,10 @@ def _selector_llm_retries() -> int:
         pass
     return 0
 
+# 系统提示词已收编进 prompt 注册表（key=router.tool_selector，2026-10-06）：
+# 运行时经 PromptService 渲染（版本治理/trace 记账/请求级 pin）；
+# 常量保留为注册表不可用时的降级兜底（与 YAML default 逐字一致，
+# 漂移守卫见 tests/prompts/test_bare_prompt_collection.py）。
 _SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问题，从候选工具中选出最合适的一个，并从问题中抽取该工具需要的全部参数。
 
 规则：
@@ -90,6 +94,17 @@ _SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问
 - 仅当问题与所有候选明显无关时，才不调用任何工具，直接回复：无匹配工具
 - 直接发起工具调用，回复中不要写分析推理过程
 - 路由建议的分值仅供参考，以问题实际意图为准"""
+
+
+def _selector_system_prompt() -> str:
+    """系统提示词：注册表优先，异常降级模块常量（软失败）。"""
+    try:
+        from backend.prompts.service import prompt_service
+
+        return prompt_service.render_sync("router.tool_selector").text
+    except Exception as exc:  # noqa: BLE001 — prompt 读取失败不得阻断选择
+        logger.warning(f"[ToolSelector] 注册表渲染失败，降级内置常量: {exc}")
+        return _SYSTEM_PROMPT
 
 
 def _record(source: str, reason: str = "", capability: str = "",
@@ -285,7 +300,7 @@ def _parse_text_tool_call(content: str, fn2cap: dict[str, str]) -> tuple[str, di
 
     if not content or ("{" not in content):
         return None
-    parsed = extract_json(content)
+    parsed = extract_json(content, source="router.tool_selector")
     if not isinstance(parsed, dict):
         return None
     name = parsed.get("tool") or parsed.get("name") or parsed.get("function")
@@ -438,7 +453,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                 timeout=timeout_s,
                 default_value=None,
                 error_message=f"[ToolSelector] LLM 超时 ({timeout_s}s)",
-                input=[("system", _SYSTEM_PROMPT),
+                input=[("system", _selector_system_prompt()),
                        ("human", _build_user_prompt(query, valid_caps, decision, feedback))],
                 max_tokens=TOOL_SELECTOR_LLM_MAX_TOKENS,
             )

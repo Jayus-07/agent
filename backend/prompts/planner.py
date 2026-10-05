@@ -1,14 +1,115 @@
-"""planner.py — Planner 系统提示词 + 知识库关键词 + is_knowledge_question
+"""planner.py — Planner 输出契约块 + 知识库关键词 + is_knowledge_question
 
-PLANNER_SYSTEM 是 Prompt 模板，{capabilities_schema} 由调用方在运行时填充。
-辅助函数 is_knowledge_question 是纯字符串匹配，零外部依赖。
+PLANNER_SYSTEM 不再在此维护第二份模板文本：模块加载时从 prompts/defaults/
+planner_system.yaml 派生（单一事实源，G2）；YAML/registry 均不可用时才回落
+_LEGACY_PLANNER_SYSTEM（v1 原文，仅供灾备）。
+模板变量（v2）：{schema_overview}（schema_config 派生）+ {capabilities_schema}
+（调用方运行时填充）+ {output_example}（本模块 build_output_example 生成）。
 
-注：_format_capabilities_schema() 因依赖 tool_registry（避免循环导入），
-   仍保留在 backend/agent/planner/planner.py 中。
+注：_format_capabilities_schema() / _format_schema_overview() 因依赖
+   tool_registry / schema_config（避免循环导入），仍保留在
+   backend/agents/planner/planner.py 中。
 """
 
 
-PLANNER_SYSTEM = """你是任务规划专家。分析用户问题，将其拆解为可并行或串行的子任务。
+def build_output_example(cap_example: str) -> str:
+    """输出契约块（输出格式 + 完整示例 + edges 含义）。
+
+    从 prompt 模板外置到代码侧（2026-10-06）：与 plan_utils._normalize_plan
+    的 DAG 契约同文件层演进，且免去 YAML 侧 str.format 的 {{ 转义维护
+    （v1 模板 29 处）。__CAP_EXAMPLE__ 占位符替换为首个可见能力名，语义与
+    v1 模板内 {cap_example} 一致。
+    """
+    return _OUTPUT_EXAMPLE_RAW.replace("__CAP_EXAMPLE__", cap_example)
+
+
+_OUTPUT_EXAMPLE_RAW = """## 输出格式（严格的 JSON，不要解释）
+{
+    "nodes": [
+        {"step_id": "1",
+          "capability": "__CAP_EXAMPLE__",
+          "description": "步骤描述",
+          "params": {"question": "具体的查询问题"}
+        }
+    ],
+    "edges": {}
+}
+
+## 完整示例
+
+示例 1 — 纯数据库查询：
+  用户: "最近7天Amazon US的销售额"
+  → nodes: [{"step_id": "1", "capability": "sql.query",
+              "description": "查询Amazon US近7天销售额",
+              "params": {"question": "查询Amazon US渠道最近7天的销售额和订单数"}}]
+  → edges: {}
+
+示例 2 — 纯知识检索：
+  用户: "Amazon FBA发货的SOP是什么"
+  → nodes: [{"step_id": "1", "capability": "rag.search",
+              "description": "检索FBA发货SOP",
+              "params": {"question": "Amazon FBA发货的标准操作流程SOP"}}]
+  → edges: {}
+
+示例 3 — 数据分析 + 报告（不需要 RAG）：
+  用户: "分析本月广告投放效果，生成报告"
+  → nodes: [
+      {"step_id": "1", "capability": "sql.query",
+        "description": "查询广告投放数据",
+        "params": {"question": "查询本月各广告活动的花费、展示、点击、转化、ACoS、ROAS"}},
+      {"step_id": "2", "capability": "report.generate",
+        "description": "生成广告效果分析报告",
+        "params": {"report_type": "ad_performance", "filters": {}}}
+    ]
+  → edges: {"2": ["1"]}
+  **注意：这是纯数据分析问题，不需要 rag.search。**
+
+示例 4 — 数据库 + RAG 并行（只有问题明确需要经验/规范时才用）：
+  用户: "查询库存预警数据，同时查找FBA补货规范"
+  → nodes: [
+      {"step_id": "1", "capability": "sql.query",
+        "description": "查询库存健康数据", "params": {"question": "查询各仓库的低库存和缺货SKU"}},
+      {"step_id": "2", "capability": "rag.search",
+        "description": "检索FBA补货规范", "params": {"question": "FBA补货标准和流程规范"}}
+    ]
+  → edges: {}
+
+示例 5 — 完整 DAG（SQL+RAG+报告）：
+  用户: "分析本月销售数据，查找Listing优化规范，生成综合分析报告"
+  → nodes: [
+      {"step_id": "1", "capability": "sql.query",
+        "description": "查询本月销售数据",
+        "params": {"question": "查询本月各渠道各产品的销售额和订单数"}},
+      {"step_id": "2", "capability": "rag.search",
+        "description": "检索Listing优化规范",
+        "params": {"question": "Amazon Listing标题和五点描述优化规范"}},
+      {"step_id": "3", "capability": "report.generate",
+        "description": "生成综合分析报告",
+        "params": {"report_type": "product_performance", "filters": {}}}
+    ]
+  → edges: {"3": ["1", "2"]}
+
+## edges 含义（重要！）
+edges 的 key 是"需要等待的步骤"，value 是"必须先完成的步骤列表"。
+- step 3 需要 step 1 和 step 2 的数据 → edges: {"3": ["1", "2"]}
+- 无依赖的步骤不出现在 edges 中，它们会自动并行执行"""
+
+
+def _load_default_planner_system() -> str:
+    """从 YAML defaults 派生 planner.system 模板；派生失败回落 v1 原文。"""
+    try:
+        from backend.prompts.loader import load_defaults
+
+        template = load_defaults().get("planner.system")
+        if template:
+            return template
+    except Exception:  # noqa: BLE001 — 灾备路径，YAML 不可用时保底
+        pass
+    return _LEGACY_PLANNER_SYSTEM
+
+
+# v1 原文灾备（仅 _load_default_planner_system 失败时使用；不再参与日常路径）
+_LEGACY_PLANNER_SYSTEM = """你是任务规划专家。分析用户问题，将其拆解为可并行或串行的子任务。
 
 ## 数据库包含的数据
 
@@ -129,6 +230,9 @@ edges 的 key 是"需要等待的步骤"，value 是"必须先完成的步骤列
 7. 无法匹配任何能力时返回 {{"nodes": [], "edges": {{}}}}
 8. 计划的依赖深度（edges 连成的最长路径）不得超过 8 步；复杂任务优先拆成并行分支，而非更深的串行链
 9. 只输出 JSON，不要解释"""
+
+
+PLANNER_SYSTEM = _load_default_planner_system()
 
 
 # 知识库关键词：问题包含这些词时才可能需要 rag.search

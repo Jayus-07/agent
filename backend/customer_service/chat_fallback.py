@@ -14,8 +14,10 @@
 接线：cs_supervisor 分诊「非业务对话」出口（任务卡 T6，混线解锁后）；
 本模块当前可独立测试与手动调用。
 
-Prompt 治理说明：人设 prompt 以模块常量维护——prompts.lock.json 当前
-混线冻结，迁移进 prompt 注册表（yaml + 版本治理）待混线解锁后做。
+Prompt 治理说明：人设 prompt 已注册进 prompt 注册表（key=
+customer_service.chat_fallback，2026-10-06 补齐断线——此前 YAML 存在但
+registry 无注册项，loader 启动告警跳过，运行时恒走常量降级）；常量保留
+为注册表不可用时的降级兜底（内容逐字一致，守卫测试锁定）。
 """
 from __future__ import annotations
 

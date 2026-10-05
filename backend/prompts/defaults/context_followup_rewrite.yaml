@@ -1,0 +1,19 @@
+key: context.followup_rewrite
+name: 会话追问改写 Prompt
+category: context
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: last_user_turn, required: true, description: 上一轮用户发言（空传「（无）」）}
+  - {name: structured_context, required: true, description: 会话结构化上下文快照}
+  - {name: raw_query, required: true, description: 当前原始问题}
+# 收编自 orchestration/context/follow_up_resolver.py::_llm_rewrite 内联拼接（2026-10-06）
+# 渲染结果与旧 f-string 构造逐字节一致，守卫：tests/prompts/test_bare_prompt_collection.py
+template: |-
+  你是 query 改写器。把依赖上下文的用户问题改写成独立完整的问题。
+  上一轮用户发言：{last_user_turn}
+  结构化上下文：{structured_context}
+  当前问题：{raw_query}
+  只输出 JSON，不要输出其他内容：
+  {{"standalone_query": "", "resolved": true, "used_context": [], "need_clarification": false, "clarification_question": null}}
+  上下文不足以改写时 resolved=false 且 need_clarification=true。

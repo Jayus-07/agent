@@ -19,9 +19,6 @@ slot_filler 词表分类器（classify_intent）不认识的消息，交 LLM 补
 """
 from __future__ import annotations
 
-import json
-import re
-
 from backend.shared.logger import logger
 
 # 允许 LLM 判出的 intent 家族 → TravelIntent 值映射。
@@ -34,6 +31,10 @@ _FAMILY_TO_INTENT: dict[str, str] = {
     "out_of_scope": "out_of_scope", # 出域引导
 }
 
+# 系统提示词已收编进 prompt 注册表（key=travel.llm_intent，2026-10-06）：
+# 运行时经 PromptService 渲染（版本治理/trace 记账/请求级 pin）；
+# 常量保留为注册表不可用时的降级兜底（与 YAML default 逐字一致，
+# 漂移守卫见 tests/prompts/test_bare_prompt_collection.py）。
 _SYSTEM_PROMPT = """你是旅游助手的意图分类器。把用户消息分成四类之一，只输出 JSON：
 {"family": "..."}，family 取值：
 - "query"：提问/询问/对比/求推荐（想了解信息，不是要改行程）
@@ -42,7 +43,16 @@ _SYSTEM_PROMPT = """你是旅游助手的意图分类器。把用户消息分成
 - "unknown"：无法判断
 只输出 JSON，不要解释。"""
 
-_JSON_RE = re.compile(r"\{[^{}]*\}", re.S)
+
+def _intent_system_prompt() -> str:
+    """系统提示词：注册表优先，异常降级模块常量（软失败）。"""
+    try:
+        from backend.prompts.service import prompt_service
+
+        return prompt_service.render_sync("travel.llm_intent").text
+    except Exception as exc:  # noqa: BLE001 — prompt 读取失败回落词表链路
+        logger.warning(f"[TravelLLMIntent] 注册表渲染失败，降级内置常量: {exc}")
+        return _SYSTEM_PROMPT
 
 
 def classify_intent_llm(
@@ -88,20 +98,16 @@ def classify_intent_llm(
             f"[当前有行程: {has_itinerary}; 已知目的地: {has_destination}]")
         response = sync_call_with_timeout(
             intent_llm.invoke, timeout,
-            [SystemMessage(content=_SYSTEM_PROMPT),
+            [SystemMessage(content=_intent_system_prompt()),
              HumanMessage(content=f"{context_hint}\n用户消息：{message}")],
         )
         raw = str(getattr(response, "content", "") or "")
-        payload = None
-        try:  # 整体即 JSON（含嵌套对象）优先
-            payload = json.loads(raw)
-        except (ValueError, TypeError):
-            match = _JSON_RE.search(raw)  # 前后带说明文字时抽首个平衡块
-            if match:
-                try:
-                    payload = json.loads(match.group(0))
-                except ValueError:
-                    payload = None
+        # 统一策略链（2026-10-06 批次 C）：此前「整体解析 + 首个无嵌套平衡块」
+        # 两段裸解析，extract_json 五层管线是其严格超集（含嵌套提取与常见
+        # 错误修复）；全失败记 llm_json_parse_fail_total{source} 后回落词表
+        from backend.shared.json_extractor import extract_json
+
+        payload = extract_json(raw, source="travel.llm_intent")
         if not isinstance(payload, dict):
             logger.info("[TravelLLMIntent] 输出无 JSON，回落词表: %r", raw[:80])
             return None
