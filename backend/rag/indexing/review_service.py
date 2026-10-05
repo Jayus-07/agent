@@ -117,7 +117,14 @@ def review_pending_doc(
         try:
             if store is None:
                 raise RuntimeError("存储实例未初始化")
-            store.delete(where={"doc_id": doc_id})
+            supports_all_collections = any(
+                "delete_all_collections_by_doc_id" in cls.__dict__
+                for cls in type(store).__mro__
+            )
+            if supports_all_collections:
+                store.delete_all_collections_by_doc_id(doc_id)
+            else:
+                store.delete(where={"doc_id": doc_id})
         except Exception as exc:  # noqa: BLE001 - 汇总后统一失败
             warnings.append(f"{store_name}清理失败: {exc}")
     try:

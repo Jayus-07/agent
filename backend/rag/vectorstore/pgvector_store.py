@@ -675,6 +675,25 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 return len(cur.fetchall())
         return 0
 
+    def delete_all_collections_by_doc_id(self, doc_id: str) -> int:
+        """删除文档在主 collection 与所有候选代次中的向量。
+
+        普通 ``delete(where=...)`` 只作用于当前 collection。上传采用候选
+        collection 先写后发布协议，因此删除已软删文档时还必须清理
+        ``<collection>::cand:<generation>``，否则候选行会在后续对账/恢复时
+        被重新发布，形成已删除内容复活风险。
+        """
+        if not doc_id:
+            return 0
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM {self._table} "
+                "WHERE doc_id = %s OR metadata->>'doc_id' = %s RETURNING id",
+                (doc_id, doc_id),
+            )
+            return len(cur.fetchall())
+
     def clear(self) -> int:
         """清空当前 collection 全部向量行，返回删除数（对齐 Chroma `_collection.reset`，
         供 pipeline 全量重建路径替代原 rmtree 磁盘目录语义）。"""

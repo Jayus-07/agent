@@ -57,3 +57,33 @@ def test_purge_doc_vectors_calls_all_cleanup(tmp_path):
     p.remove_documents_from_bm25.assert_called_once_with(["doc1"], file_paths=[str(f)])
     assert not f.exists()  # 原文件已删
     assert warnings == []
+
+
+def test_purge_doc_vectors_clears_candidate_collections(tmp_path):
+    """候选代次也必须清理，删除不能遗留可复活向量。"""
+    class CandidateAwareStore:
+        def __init__(self):
+            self.calls = []
+
+        def delete_all_collections_by_doc_id(self, doc_id):
+            self.calls.append(doc_id)
+            return 2
+
+        def delete(self, **kwargs):  # pragma: no cover - 防止回退到主 collection-only API
+            raise AssertionError("should purge candidate-aware store")
+
+    p = _bare_pipeline()
+    p.vectordb = CandidateAwareStore()
+    p.doc_db = CandidateAwareStore()
+    p.remove_documents_from_bm25 = Mock()
+    f = tmp_path / "candidate.md"
+    f.write_text("# 候选代次", encoding="utf-8")
+
+    with patch("backend.rag.indexing.chunk_store.get_chunk_store") as mock_cs:
+        mock_cs.return_value = Mock()
+        warnings: list[str] = []
+        _purge_doc_vectors("doc-candidate", str(f), p, warnings)
+
+    assert p.vectordb.calls == ["doc-candidate"]
+    assert p.doc_db.calls == ["doc-candidate"]
+    assert warnings == []

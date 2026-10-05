@@ -745,12 +745,24 @@ def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str
 
     不负责 registry 状态变更——由调用方决定 mark_deleted 还是 update_status。
     """
+    def _delete_store(store) -> None:
+        # PGVector 的普通 delete 只删当前 collection；候选发布协议还会
+        # 留下 <collection>::cand:<generation>，删除必须跨代次清理。
+        supports_all_collections = any(
+            "delete_all_collections_by_doc_id" in cls.__dict__
+            for cls in type(store).__mro__
+        )
+        if supports_all_collections:
+            store.delete_all_collections_by_doc_id(doc_id)
+        else:
+            store.delete(where={"doc_id": doc_id})
+
     try:
-        pipeline.vectordb.delete(where={"doc_id": doc_id})
+        _delete_store(pipeline.vectordb)
     except Exception as e:
         warnings.append(f"向量库(chunks)清理失败: {e}")
     try:
-        pipeline.doc_db.delete(where={"doc_id": doc_id})
+        _delete_store(pipeline.doc_db)
     except Exception as e:
         warnings.append(f"向量库(doc)清理失败: {e}")
     try:
