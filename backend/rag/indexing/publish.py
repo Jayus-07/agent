@@ -349,6 +349,24 @@ def publish_candidate(
     registry_metadata = dict(index_result.get("registry_metadata") or {})
     if not chunk_ids:
         raise CandidatePublishError("候选结果为空（0 chunk），拒绝发布")
+    old_doc_id = str((old_row or {}).get("doc_id") or "")
+    try:
+        old_doc_version = int((old_row or {}).get("doc_version") or 1)
+    except (TypeError, ValueError):
+        old_doc_version = 1
+    same_generation = bool(
+        old_row and old_row.get("active_generation") == generation
+    )
+    if old_doc_id:
+        # 注册时新候选可能先进入 pending_review。版本号必须在 CAS 注册前
+        # 固化，不能依赖注册后按 status=active 的 bump（审核态会被跳过）。
+        registry_metadata["doc_version"] = (
+            old_doc_version
+            if same_generation or index_result.get("skipped")
+            else old_doc_version + 1
+        )
+    else:
+        registry_metadata.setdefault("doc_version", 1)
     # version_id 沿用声明值；未声明时以 generation 兜底（版本可追溯）
     registry_metadata.setdefault("version_id", generation)
     # file_size/mtime 透传（2026-10-01 修复 file_size 落库 0）：注册（CAS
@@ -415,7 +433,6 @@ def publish_candidate(
         raise CandidatePublishError(f"chunk_store 翻新失败（待续跑）: {e}") from e
 
     # ── g. 财务版本快照：旧 chunk 批量翻 is_latest=False ──
-    old_doc_id = (old_row or {}).get("doc_id", "")
     use_snapshot = False
     if old_doc_id:
         from backend.rag.indexing.indexer import IncrementalIndexer
@@ -450,12 +467,7 @@ def publish_candidate(
             except Exception as e:
                 logger.warning(f"[Publish] 旧 doc 级向量清理失败: {e}")
 
-    # ── i. 计数与收口 ──
-    if old_doc_id and not (index_result.get("skipped")):
-        try:
-            registry.bump_doc_version(doc_id, delta=1)
-        except Exception as e:  # noqa: BLE001 — 计数失败不回滚发布
-            logger.warning(f"[Publish] doc_version 自增失败: {e}")
+    # ── i. 收口 ──
     run_store.mark_status(upload_id, "published", stage="publish")
     logger.info(
         f"[Publish] 发布完成: {os.path.basename(final_path)} "

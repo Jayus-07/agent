@@ -190,6 +190,37 @@ def test_publish_happy_path_commits_and_cleans_old(tmp_path, monkeypatch):
     assert registry.register_calls == 1
 
 
+def test_publish_overwrite_carries_next_doc_version_before_pending_review(
+    tmp_path, monkeypatch
+):
+    """覆盖候选若先进入待审核，版本号也必须在注册时递增。"""
+    _patch_switch(monkeypatch)
+    stores, _main_v, _main_d, _, idx = _stores(tmp_path=tmp_path)
+    registry, run_store = FakeRegistry(), FakeRunStore()
+    chunk_real = FakeChunkStoreReal()
+    monkeypatch.setattr(
+        "backend.rag.indexing.chunk_store.get_chunk_store", lambda: chunk_real)
+
+    old_row = {
+        "doc_id": "doc-1",
+        "doc_version": 1,
+        "chunk_ids": "[\"old1\"]",
+        "doc_db_id": "doc::old",
+        "doc_type": "general",
+        "status": "active",
+    }
+    idx["registry_metadata"]["near_dup_id"] = "doc-near-duplicate"
+
+    result = _publish(
+        tmp_path, stores, idx, registry, run_store,
+        old_row=old_row, old_chunk_ids=["old1"],
+    )
+
+    assert result == "published"
+    row = registry.get_by_path(str(tmp_path / "docs" / "kb" / "dept" / "a.md"))
+    assert row["metadata"]["doc_version"] == 2
+
+
 def test_publish_cas_loser_is_superseded_and_nothing_promoted(tmp_path, monkeypatch):
     """并发发布：后到者 CAS 失败 → superseded，主 collection 零改动。"""
     _patch_switch(monkeypatch)
