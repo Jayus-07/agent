@@ -465,8 +465,8 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
 
 @router.post("/upload", dependencies=[Depends(require_rag_editor)])
 async def upload_document(request: Request, file: UploadFile = File(...),
-                          kb_id: str = Form("policy_general"),
-                          department: str = Form("general")):
+                          kb_id: str = Form(...),
+                          department: str = Form(...)):
     """P0-1 流式上传: 临时文件 + atomic rename + 双保险大小限制 + SSE 进度"""
     require_rag_ready()
     # 归属裁决（2026-10-01 权限收口）：department 只认主体自身部门（admin 可
