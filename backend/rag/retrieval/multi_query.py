@@ -168,6 +168,17 @@ def _rewrite(question: str) -> list[str]:
         # Step 3: Deduplicate (含完全重复 + Jaccard)
         lines = _dedup(lines, question)
 
+        # Step 3.5: 合法性过滤（D-11 修复 2026-10-05）
+        before = len(lines)
+        lines = [l for l in lines if _plausible_variant(l, question)]
+        if before and len(lines) < before:
+            logger.info(
+                f"[MultiQuery] 合法性过滤剔除 {before - len(lines)} 个异常变体"
+                f"（chunk 原文/超长句）")
+        if not lines:
+            logger.warning("[MultiQuery] 改写变体全部不合法，回退原始 query")
+            return [question]
+
         # Step 4: Limit
         lines = _limit(lines)
 
@@ -187,6 +198,20 @@ def _rewrite(question: str) -> list[str]:
         trace_collector.end_span(span, metrics={"variants": 0}, status="error")
         logger.warning(f"[MultiQuery] Rewrite 失败：{e}，回退到原始 query")
         return [question]
+
+
+# ── 变体合法性（D-11）────────────────────────────────
+# 实测缺陷：doubao 思考型模型偶发把检索内容/上下文原文当作改写查询输出
+# （数百字陈述句）→ 用 chunk 原文再检索 → 自匹配 → EvidenceGate 拒答。
+# 双门过滤：长度不超过 max(原问题 2 倍, 40 字) 且非空。
+_PLAUSIBLE_MIN_LEN = 4
+
+
+def _plausible_variant(variant: str, question: str) -> bool:
+    v = (variant or "").strip()
+    if len(v) < _PLAUSIBLE_MIN_LEN:
+        return False
+    return len(v) <= max(len(question) * 2, 40)
 
 
 # ── Parse ──────────────────────────────────────────
