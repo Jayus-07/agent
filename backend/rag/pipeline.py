@@ -1203,6 +1203,8 @@ class RAGPipeline:
         department: str = "",
         permissions: Iterable[str] | None = None,
         roles: tuple[str, ...] = (),
+        *,
+        candidate_k: int | None = None,
     ) -> list:
         """授权检索的文档级出口（/rag/search 消费，2026-10-01 权限收口）。
 
@@ -1212,6 +1214,9 @@ class RAGPipeline:
 
         Returns:
             list[Document]（metadata.score 为向量距离，BM25 补充结果无 score）
+
+        ``candidate_k`` 仅供验收/检索实验指定 rerank 前候选池大小。显式指定时
+        两路召回各自进入候选池并交错去重；未指定时保持历史 top_k 行为。
         """
         import time as _time
         t0 = _time.monotonic()
@@ -1244,8 +1249,11 @@ class RAGPipeline:
                 or None
             )
 
-            results: list = []
-            seen_texts: set[str] = set()
+            candidate_mode = candidate_k is not None
+            result_limit = max(top_k, int(candidate_k or top_k))
+            vector_limit = result_limit if candidate_mode else max(top_k * 2, top_k)
+            vector_docs: list = []
+            sparse_docs: list = []
 
             def _keep(doc) -> bool:
                 meta = getattr(doc, "metadata", {}) or {}
@@ -1257,7 +1265,7 @@ class RAGPipeline:
             # 向量腿（带分数；0 命中时以授权 kb 范围放宽 QueryAnalyzer 维度重试）
             def _vec(filt):
                 return self.chunk_retriever.vectordb.similarity_search_with_score(
-                    question, k=max(top_k * 2, top_k), filter=filt or None)
+                    question, k=vector_limit, filter=filt or None)
 
             try:
                 vec = _vec(mf)
@@ -1275,9 +1283,7 @@ class RAGPipeline:
                     if not _keep(doc):
                         continue
                     doc.metadata["score"] = dist
-                    if doc.page_content not in seen_texts:
-                        seen_texts.add(doc.page_content)
-                        results.append(doc)
+                    vector_docs.append(doc)
             except Exception as e:
                 from backend.rag.vectorstore.pgvector_store import (
                     IndexEmbeddingMismatchError,
@@ -1287,7 +1293,7 @@ class RAGPipeline:
                 logger.warning(f"[RAG.search] 向量检索失败: {e}", exc_info=True)
 
             # BM25 腿补充（向量 0 命中或不足时；同授权后过滤 + 同款放宽重试）
-            if len(results) < top_k and self.bm25 is not None:
+            if self.bm25 is not None:
                 try:
                     def _bm25_keep(doc, filt):
                         if not _keep(doc):
@@ -1306,22 +1312,25 @@ class RAGPipeline:
                         # 最终兜底：去 kb 维度（授权由 _keep 强制，见向量腿注释）
                         kept = [d for d in self.bm25.invoke(question)
                                 if _bm25_keep(d, None)]
-                    for doc in kept:
-                        if len(results) >= top_k:
-                            break
-                        if doc.page_content in seen_texts:
-                            continue
-                        seen_texts.add(doc.page_content)
-                        results.append(doc)
+                    sparse_docs.extend(kept)
                 except Exception as e:
                     logger.warning(f"[RAG.search] BM25 检索失败: {e}", exc_info=True)
 
+            from backend.rag.retrieval.candidate_pool import merge_candidate_docs
+            results = merge_candidate_docs(
+                vector_docs,
+                sparse_docs,
+                limit=result_limit if candidate_mode else top_k,
+                interleave=candidate_mode,
+            )
             elapsed = _time.monotonic() - t0
             logger.info(
                 f"[RAG.search] {len(results)} docs, {elapsed:.1f}s "
-                f"(authorized={'yes' if authorized is not None else 'off'})"
+                f"(vector={len(vector_docs)}, bm25={len(sparse_docs)}, "
+                f"candidate_mode={candidate_mode}, "
+                f"authorized={'yes' if authorized is not None else 'off'})"
             )
-            return results[:top_k]
+            return results[:result_limit if candidate_mode else top_k]
         finally:
             self._cleanup()
 

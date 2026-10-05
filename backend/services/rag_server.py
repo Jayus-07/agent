@@ -139,6 +139,10 @@ class RetrieveDocsRequest(BaseModel):
     question: str = Field(..., min_length=1, description="检索问题")
     kb_id: str = Field("default", description="知识库 ID")
     top_k: int = Field(5, ge=1, le=20, description="返回 doc 数")
+    candidate_k: int | None = Field(
+        None, ge=1, le=80,
+        description="可选 rerank 前候选池大小；仅验收/检索实验显式使用",
+    )
     subject_type: str = Field("", description="主体类型（customer/employee）")
     department: str = Field("", description="主体部门")
     permissions: list[str] | None = Field(None, description="文档级权限集合")
@@ -365,6 +369,7 @@ def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
         question=req.question,
         kb_id=req.kb_id,
         top_k=req.top_k,
+        candidate_k=req.candidate_k,
         subject_type=req.subject_type,
         department=req.department,
         permissions=req.permissions,

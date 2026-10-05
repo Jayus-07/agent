@@ -32,16 +32,25 @@ _RAG_SERVICE = "http://127.0.0.1:8090"
 _SUSPICIOUS_TOP1 = 0.35
 
 
-def _retrieve(question: str, top_k: int, max_retry: int = 2) -> list[dict]:
-    body = json.dumps({
+def _retrieve(
+    question: str,
+    top_k: int,
+    *,
+    candidate_k: int | None = None,
+    max_retry: int = 2,
+) -> list[dict]:
+    body = {
         "question": question, "kb_id": "", "top_k": top_k,
         "system_subject": "gate_calibration",
-    }).encode("utf-8")
+    }
+    if candidate_k is not None:
+        body["candidate_k"] = candidate_k
+    payload = json.dumps(body).encode("utf-8")
     last_err = None
     for _ in range(max_retry + 1):
         try:
             req = urllib.request.Request(
-                f"{_RAG_SERVICE}/retrieve_docs", data=body,
+                f"{_RAG_SERVICE}/retrieve_docs", data=payload,
                 headers={"Content-Type": "application/json"})
             resp = json.load(urllib.request.urlopen(req, timeout=90))
             if resp.get("index_status") != "ok":
@@ -90,21 +99,20 @@ def cmd_record(top_k: int, workers: int) -> int:
     return 0
 
 
-def cmd_record_rerank(top_k: int, workers: int) -> int:
-    """rerank 面：对向量腿候选本地直调生产 reranker，录 0-1 相关分。
-
-    候选集口径注：/retrieve_docs 为向量腿 top_k（混合检索并集差一截，
-    生产链在 vector+BM25 合并后重排——本面录制为近似，报告须注明）。
-    """
+def cmd_record_rerank(top_k: int, candidate_k: int, workers: int) -> int:
+    """rerank 面：对生产混合召回候选池本地直调生产 reranker。"""
     from backend.rag.reranker import get_reranker_backend
 
     ranker = get_reranker_backend()
     data = json.loads(_DATASET.read_text(encoding="utf-8"))
     cases = data["cases"]
-    print(f"rerank 面录制 {len(cases)} 条（backend={type(ranker).__name__}, workers={workers}）")
+    print(
+        f"rerank 面录制 {len(cases)} 条（backend={type(ranker).__name__}, "
+        f"workers={workers}, candidate_k={candidate_k}, top_k={top_k}）"
+    )
 
     def work(case: dict) -> None:
-        docs = _retrieve(case["question"], top_k)
+        docs = _retrieve(case["question"], top_k, candidate_k=candidate_k)
         texts = [d.get("content", "") for d in docs if d.get("content")]
         if not texts:
             case["rerank_scores"] = []
@@ -122,6 +130,7 @@ def cmd_record_rerank(top_k: int, workers: int) -> int:
     ]
     data["rerank_recorded_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     data["rerank_backend"] = type(ranker).__name__
+    data["rerank_candidate_k"] = candidate_k
     data["suspicious_answerable_rerank"] = suspicious
     _DATASET.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps({
@@ -195,6 +204,7 @@ def main() -> int:
     p_rec.add_argument("--workers", type=int, default=6)
     p_rr = sub.add_parser("record-rerank", help="rerank 面录制（本地直调生产 reranker）")
     p_rr.add_argument("--top-k", type=int, default=8)
+    p_rr.add_argument("--candidate-k", type=int, default=20)
     p_rr.add_argument("--workers", type=int, default=6)
     p_rep = sub.add_parser("report", help="阈值网格基线报告")
     p_rep.add_argument("--face", choices=["vector", "rerank"], default="rerank")
@@ -202,7 +212,7 @@ def main() -> int:
     if args.cmd == "record":
         return cmd_record(args.top_k, args.workers)
     if args.cmd == "record-rerank":
-        return cmd_record_rerank(args.top_k, args.workers)
+        return cmd_record_rerank(args.top_k, args.candidate_k, args.workers)
     return cmd_report(args.face)
 
 
