@@ -80,6 +80,16 @@ export default function MarkdownContent({ content }: Props) {
           pre: ({ children, ...props }) => (
             <CodeBlock {...props}>{children}</CodeBlock>
           ),
+          // 表格排版契约（2026-10-05）：LLM 宽表不得撑破消息气泡——
+          // 包横向滚动容器，列多时滚动查看；窄表视觉不变
+          table: ({ children, ...props }) => (
+            <div className="table-scroll">
+              <table {...props}>{children}</table>
+            </div>
+          ),
+          // 标题层级契约：消息流内正文从 H2 起排，LLM 偶发的 `# 大标题`
+          // 降级为 H2 渲染，避免破坏消息层级（样式与 h2 一致）
+          h1: ({ children, ...props }) => <h2 {...props}>{children}</h2>,
           img: ({ src, alt }) => (
             <img src={src} alt={alt ?? ''} className="max-w-full rounded-lg my-3" loading="lazy" />
           ),

@@ -439,11 +439,59 @@ def _extract_rag_answer_meta(final_answer: str, all_step_results: dict) -> dict:
     return {}
 
 
+# ── reply_source 回复归因（2026-10-05 回复呈现规范）──────────────
+# 稳定码 → 前端中文徽章映射的**判定端**。用户面只放「答案怎么来的」语义，
+# 架构分层（agent/skill/tool）归 trace/管理面，不得上用户 UI。
+# 白名单只认主图 capability（x.y 形态）；客服/旅游域图步骤不写 capability
+# 字段 → 天然落 None 不标注（域图已有人设话术，叠加徽章反而误导）。
+_REPLY_SOURCE_BY_CAPABILITY: dict[str, str] = {
+    # 有引用来源、可核实 → 知识库
+    "rag.search": "knowledge_base",
+    # 数据库查询 / 业务与竞品分析 / 报告与统计产物
+    "sql.query": "data_analysis",
+    "business.analyze": "data_analysis",
+    "competitor.analyze": "data_analysis",
+    "competitor.watch": "data_analysis",
+    "competitor.history": "data_analysis",
+    "report.generate": "data_analysis",
+    "daily_report": "data_analysis",
+    "data.collect": "data_analysis",
+    "data.export": "data_analysis",
+    # 实时外部数据（LBS / 公网检索 / POI）
+    "map.lookup": "realtime_query",
+    "web.search": "realtime_query",
+    "web.crawl": "realtime_query",
+    "travel.poi_search": "realtime_query",
+}
+# 多能力并存时的判定优先级：引用可核实 > 数据分析 > 实时查询
+_REPLY_SOURCE_PRIORITY = ("knowledge_base", "data_analysis", "realtime_query")
+
+
+def infer_reply_source(step_results: dict) -> Optional[str]:
+    """从 step_results 推断回复归因稳定码；无可信依据返回 None（前端不标）。
+
+    只看 status=success 的步骤 capability；email.* 属内容复述、workflow
+    蛇形名属选品漏斗域、域图步骤无 capability —— 均不在白名单，不标注。
+    """
+    sources: set[str] = set()
+    for sr in step_results.values():
+        if not isinstance(sr, dict) or sr.get("status") != "success":
+            continue
+        code = _REPLY_SOURCE_BY_CAPABILITY.get(str(sr.get("capability", "")))
+        if code:
+            sources.add(code)
+    for code in _REPLY_SOURCE_PRIORITY:
+        if code in sources:
+            return code
+    return None
+
+
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
                     usage: dict | None = None,
                     pending_action: dict | None = None,
                     trace_id: str = "",
-                    context_usage: dict | None = None) -> dict:
+                    context_usage: dict | None = None,
+                    reply_source: Optional[str] = None) -> dict:
     """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。
 
     P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
@@ -451,6 +499,9 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     context_usage（2026-09-22）：上下文用量快照，前端显示「上下文 xx%」。
     answer_status/confidence（2026-10-03）：RAG 拒答语义码与 META 自报
     置信度，来源是工具输出的 RAGMETA 标记；缺省 = 正常回答，前端无感。
+    reply_source（2026-10-05）：回复归因稳定码。缺省按 step_results 白名单
+    推断（infer_reply_source）；拦截/澄清等系统出口由调用方显式传
+    "system_notice"。None = 不标注（域图/闲聊/邮件），前端无徽章。
     """
     from backend.agents.reporter.reporter import _extract_sources_from_steps
     from backend.agents.reporter.context_filter import parse_sources_from_text
@@ -459,6 +510,9 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     if not sources and final_answer:
         sources = parse_sources_from_text(final_answer)
     data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
+    effective_reply_source = reply_source or infer_reply_source(all_step_results)
+    if effective_reply_source:
+        data["reply_source"] = effective_reply_source
     rag_meta = _extract_rag_answer_meta(final_answer, all_step_results)
     if rag_meta.get("answer_status"):
         data["answer_status"] = str(rag_meta["answer_status"])

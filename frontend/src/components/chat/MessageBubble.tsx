@@ -17,6 +17,7 @@ import { useSSE } from '@/hooks/useSSE'
 import { isLowConfidence, toRejectionActionKey } from '@/lib/ragAnswer'
 import { RAG_REJECTION_ACTIONS } from '@/components/shared/ErrorCard'
 import SourceCard from './SourceCard'
+import ReplyBadge from './ReplyBadge'
 import MarkdownContent from './MarkdownContent'
 import MessageActions from './MessageActions'
 import SqlViz from './SqlViz'
@@ -114,6 +115,11 @@ function MessageBubbleImpl({ message, isLast, sessionId, question, budgetBlocked
                     }
                   />
                 </div>
+                {/* 回复归因徽章（done.reply_source）：只标「答案怎么来的」语义，
+                    架构分层（agent/skill/tool）归 trace/管理面，不上用户面 */}
+                {!isCurrentStreaming && message.replySource && (
+                  <ReplyBadge source={message.replySource} />
+                )}
                 {/* RAG 拒答指引 / 低置信提示（done.answer_status / confidence） */}
                 {!isCurrentStreaming && message.content && (
                   <RagAnswerHint

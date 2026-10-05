@@ -87,6 +87,8 @@ export interface DoneEvent {
   answer_status?: string
   /** META 自报置信度 0~1（低于 0.6 前端提示「建议核实」，与 CS 门禁 CAUTIOUS 下界同口径） */
   confidence?: number
+  /** 回复归因稳定码（2026-10-05）：knowledge_base / data_analysis / realtime_query / system_notice；缺省不标注 */
+  reply_source?: string
   /** P3.1：CS 确认流等待用户点击确认卡片（非空时前端渲染 CSConfirmCard） */
   pending_action?: PendingActionInfo
   /** 上下文用量快照（2026-09-22 Context Budget）：前端显示「上下文 xx%」 */
@@ -230,6 +232,8 @@ export interface Message {
   answerStatus?: string
   /** RAG 置信度（done.confidence，0~1） */
   confidence?: number
+  /** 回复归因稳定码（done.reply_source；缺省不显示徽章） */
+  replySource?: string
   /** 本轮请求 token 用量（done 事件写入；streamEvents 终态会被清空，用量需单独持久化） */
   usage?: TokenUsage
   /** 思考链全文（done 事件时从 store.thinkingText 固化；后端未下发思考链则无值） */
