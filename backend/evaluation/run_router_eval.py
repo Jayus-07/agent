@@ -83,8 +83,12 @@ def main() -> int:
         coarse_ms = (time.perf_counter() - t0) * 1000
         meta = decision.routing_meta or {}
 
-        fine_top1 = str(meta.get("fine_top1") or "")
-        route_mode = str(meta.get("tool_route_mode") or "")
+        # RoutingEngine 契约：灰区细路由结果在 selected_tool；规则强信号
+        # 直通（decision_source=rule_override）时 selected_tool 为空、命中
+        # 能力记在 intent。旧 hierarchical 的 fine_top1/tool_route_mode
+        # 已不在 routing_meta（worktree 验收遗留的取数口径，实跑修正）。
+        fine_top1 = str(meta.get("selected_tool") or meta.get("intent") or "")
+        route_mode = str(meta.get("route_mode") or "")
         latencies.append((time.perf_counter() - t0) * 1000)
 
         rows.append({
