@@ -295,6 +295,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
                     trace_id=None, batch_id=None,
                     result="success", duration_ms=0,
                     detail={"to": result.get("new_status")},
+                    user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
                 )
             return result
 
@@ -313,6 +314,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
             trace_id=None, batch_id=None,
             result="success", duration_ms=0,
             detail={"from": "pending_review", "to": result.get("new_status")},
+            user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
         )
 
         # 触发 metadata_coverage 重算
@@ -356,6 +358,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
                     trace_id=None, batch_id=None,
                     result="success", duration_ms=0,
                     detail={"to": result.get("new_status")},
+                    user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
                 )
             return result
 
@@ -378,6 +381,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
                 "to": result.get("new_status"),
                 "warnings": result.get("warnings"),
             },
+            user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
         )
 
         return result
@@ -857,13 +861,15 @@ async def delete_document(doc_id: str, request: Request):
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
                      result="partial" if degraded else "success",
                      duration_ms=int((time.time() - _delete_t0) * 1000),
-                     detail={"file_path": file_path, "deleted_rows": deleted_rows, "warnings": warnings or None})
+                     detail={"file_path": file_path, "deleted_rows": deleted_rows, "warnings": warnings or None},
+                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
         return {"ok": True, "doc_id": doc_id, "degraded": degraded, "warnings": warnings or None}
     except Exception as e:
         logger.error(f"[RAG] 删除文档失败: {e}")
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
                      result="failed", duration_ms=int((time.time() - _delete_t0) * 1000),
-                     detail={"error": str(e)[:200]})
+                     detail={"error": str(e)[:200]},
+                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
         return {"ok": False, "error": str(e)}
 
 

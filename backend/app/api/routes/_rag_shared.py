@@ -69,14 +69,18 @@ def _safe_log_op(
     doc_id: str, doc_name: str, operation: str, source: str,
     trace_id: str | None = None, batch_id: str | None = None,
     result: str = "success", detail: dict | None = None,
-    duration_ms: int = 0,
+    duration_ms: int = 0, user_id: str = "",
 ) -> None:
-    """记录操作日志，失败不影响主流程（审计日志写挂不能阻断业务）。"""
+    """记录操作日志，失败不影响主流程（审计日志写挂不能阻断业务）。
+
+    user_id（S4/S10 审计身份收口 2026-10-05）：操作者身份由调用方从
+    鉴权上下文传入；空值落库为 anonymous（旧行为），有值即审计可归因。
+    """
     try:
         _get_op_logger().log(
             doc_id=doc_id, doc_name=doc_name, operation=operation, source=source,
             trace_id=trace_id, batch_id=batch_id, result=result, detail=detail,
-            duration_ms=duration_ms,
+            duration_ms=duration_ms, user_id=user_id or "anonymous",
         )
     except Exception as e:
         logger.warning(f"[RAG] 记录操作日志失败 ({operation}): {e}")
