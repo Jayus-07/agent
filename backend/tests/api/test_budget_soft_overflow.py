@@ -22,8 +22,9 @@ class _Msg:
 class _FakeMessage:
     """足够像 BaseMessage 的对象（count_message_tokens mock 不依赖类型）。"""
 
-    def __init__(self, content):
+    def __init__(self, content, role="human"):
         self.content = content
+        self.role = role
         self.additional_kwargs = {}
 
 
