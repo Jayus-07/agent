@@ -349,7 +349,11 @@ class IncrementalIndexer:
             norm_path = os.path.abspath(p)
             if r.get("status") == "active":
                 active_registry[norm_path] = r
-            elif r.get("status") in ("pending_review", "failed"):
+            elif r.get("status") in ("pending_review", "failed", "deleted"):
+                # deleted（D-7，2026-10-05）：删除级联只软删 + 清向量，磁盘源
+                # 文件仍在——若不进防线，sync 会按 ADDED 重索引（已删文档复活
+                # + 新 cand 代次向量）。hash 未变 → 跳过；hash 变了（同名新
+                # 内容）→ 仍按 ADDED 重新入库（合法新文档，非复活）。
                 nonactive_registry[norm_path] = r
 
         if os.getenv("RAG_FORCE_REINDEX", "false").lower() == "true":
@@ -366,8 +370,8 @@ class IncrementalIndexer:
             if skipped_paths:
                 delta.unchanged = sorted(set(delta.unchanged) | skipped_paths)
                 logger.info(
-                    f"[Sync] 跳过 {len(skipped_paths)} 个 pending_review/failed "
-                    "已知文件（hash 未变，不重试；审核激活或 RAG_FORCE_REINDEX 才会重扫）"
+                    f"[Sync] 跳过 {len(skipped_paths)} 个 pending_review/failed/deleted "
+                    "已知文件（hash 未变，不重试；deleted 不复活，D-7 防线）"
                 )
             delta.added = retry_added
         failed_files = self._apply_delta(delta, disk_files, active_registry)
@@ -657,6 +661,11 @@ class IncrementalIndexer:
                           os.path.splitext(file_path)[1].lower(),
                           "embedding_model": os.path.basename(getattr(self.embedding, "model_name", "")) or
                                              os.path.basename(str(getattr(self.embedding, "model", ""))) or "—"})
+        # API7/N-7：upload_id（=processing_task_id，tasks.biz_id 同源）进 tags
+        # —— REST 受理 → worker 执行 → trace 三元串接；空值（磁盘 sync 路径
+        # 无任务上下文）不写。
+        if self.processing_task_id:
+            trace.tags["upload_id"] = self.processing_task_id
         if self.fixture_set:
             trace.tags["fixture_set"] = self.fixture_set
 

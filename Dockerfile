@@ -12,14 +12,28 @@
 # ════════════════════════════════════════════════
 FROM python:3.10-slim AS builder
 
+# PyPI 镜像源（可选，口径同 DEBIAN_MIRROR）：构建容器对国外域名（pypi.org/
+# download.pytorch.org）不可路由；传 PIP_INDEX_URL 切国内镜像（torch 在 pypi
+# 有包，主索引镜像即可覆盖）；默认空 = 官方源，海外克隆不受影响。
+ARG PIP_INDEX_URL=
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=120 \
-    PIP_RETRIES=10
+    PIP_RETRIES=10 \
+    PIP_INDEX_URL=${PIP_INDEX_URL}
 
-# 编译期依赖（仅存在于 builder 层，不进最终镜像）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 编译期依赖（仅存在于 builder 层，不进最终镜像）。
+# Debian 源镜像（可选）：构建容器网络不经过宿主代理——fake-ip 域名在容器内
+# 不可路由（2026-10-05 实测 apt 层 exit 100、容器内 deb.debian.org 全 000，
+# 国内分流 DIRECT 可达）。传 DEBIAN_MIRROR=mirrors.aliyun.com 切国内源；
+# 默认空 = 官方源，海外克隆不受影响。
+ARG DEBIAN_MIRROR=
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+        sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+        || sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -55,7 +69,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface
 
 # 运行时依赖：curl（compose healthcheck 用）、libpq5（psycopg2）、中文字体（报告/图表渲染）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 源镜像口径同 builder 段 DEBIAN_MIRROR（ARG 在每个 stage 独立声明）
+ARG DEBIAN_MIRROR=
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+        sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+        || sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     curl libpq5 fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 

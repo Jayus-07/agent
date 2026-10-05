@@ -536,35 +536,46 @@ class RAGPipeline:
                 raise RuntimeError(
                     f"{self.mode} 模式只读索引不可用：BM25 索引不存在，请先执行 index/import_fixture"
                 )
-            if bm25_store.is_stale:
+            # N-1（2026-10-05 全量 503 事故）：删除级联只改内存 BM25，磁盘快照
+            # 滞后 → 重启时快照校验失败直接拒绝启动，服务全量 503 直至人工重建。
+            # 改为：校验失败先从 canonical 向量源重建一次（与上传链路同一构建
+            # 器，等价于事故当日的人工恢复动作），复检仍不一致才拒绝启动，且
+            # 错误信息带可执行的恢复命令。
+            def _snapshot_mismatch_reason() -> str:
+                if bm25_store.is_stale:
+                    return "BM25 索引已过期（文档数为 0）"
+                if source_files_out_of_sync(self.bm25.docs, bm25_source):
+                    return "BM25 与向量库文档集合不一致"
+                get_md = getattr(bm25_store, "get_metadata", None)
+                snap_meta = get_md() if callable(get_md) else {}
+                expected = snap_meta.get("vector_set_hash")
+                if expected and compute_vector_manifest_hash(bm25_source) != expected:
+                    return "BM25 向量集合 hash 不匹配"
+                ch = bm25_store.get_content_hash()
+                if ch and ch != compute_content_hash(bm25_source):
+                    if (compute_content_hash_unordered(self.bm25.docs)
+                            != compute_content_hash_unordered(bm25_source)):
+                        return "BM25 内容 hash 不匹配"
+                return ""
+
+            if _snapshot_mismatch_reason():
+                logger.warning(
+                    f"[RAG] {self.mode} 模式只读快照校验失败"
+                    f"（{_snapshot_mismatch_reason()}），从 canonical 向量快照"
+                    "重建一次（N-1 自愈）")
+                try:
+                    self.bm25 = bm25_store.build(
+                        bm25_source, k=BM25_CANDIDATE_K,
+                        metadata=bm25_snapshot_metadata)
+                except Exception as exc:
+                    logger.error(f"[RAG] 只读快照 N-1 自愈重建失败: {exc}")
+            if _snapshot_mismatch_reason():
                 raise RuntimeError(
-                    f"{self.mode} 模式只读索引不可用：BM25 索引已过期，请先执行 index/import_fixture"
+                    f"{self.mode} 模式只读索引不可用：{_snapshot_mismatch_reason()}；"
+                    "恢复：docker exec agent-rag-service-1 /opt/venv/bin/python "
+                    "-m backend.scripts.rag_index_reconcile 对账后重启（N-1 自愈失败）"
                 )
-            if source_files_out_of_sync(self.bm25.docs, bm25_source):
-                raise RuntimeError(
-                    f"{self.mode} 模式只读索引不可用：BM25 与向量库文档集合不一致"
-                )
-            get_metadata = getattr(bm25_store, "get_metadata", None)
-            snapshot_meta = get_metadata() if callable(get_metadata) else {}
-            expected_vector_hash = snapshot_meta.get("vector_set_hash")
-            if expected_vector_hash:
-                current_vector_hash = compute_vector_manifest_hash(bm25_source)
-                if current_vector_hash != expected_vector_hash:
-                    raise RuntimeError(
-                        f"{self.mode} 模式只读索引不可用：BM25 向量集合 hash 不匹配"
-                    )
             content_hash = bm25_store.get_content_hash()
-            if content_hash and content_hash != compute_content_hash(bm25_source):
-                persisted_hash = compute_content_hash_unordered(self.bm25.docs)
-                current_hash = compute_content_hash_unordered(bm25_source)
-                if persisted_hash != current_hash:
-                    raise RuntimeError(
-                        f"{self.mode} 模式只读索引不可用：BM25 内容 hash 不匹配"
-                    )
-                logger.info(
-                    f"[RAG] {self.mode} 模式 BM25 内容一致，忽略存储顺序差异 "
-                    f"(stored_hash={content_hash})"
-                )
             logger.info(
                 f"[RAG] {self.mode} 模式加载只读 BM25 索引 "
                 f"({bm25_store.doc_count()} 文档, hash={content_hash})"
