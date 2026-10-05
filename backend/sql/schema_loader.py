@@ -68,6 +68,11 @@ class SchemaLoader:
         self.banned_functions: Set[str] = {
             f.upper() for f in self._config["banned_functions"]
         }
+        # G-17 fail-closed 白名单：pg_* 系统函数族默认全拒，只放行此处显式
+        # 批准的（默认空）——新型系统函数不再依赖事后补黑名单。
+        self.allowed_functions: Set[str] = {
+            f.upper() for f in self._config.get("allowed_functions", ())
+        }
         self.max_limit: int = self._config["max_limit"]
         self.query_timeout: float = self._config["query_timeout"]
 

@@ -69,6 +69,7 @@ class SQLValidator:
         self.allowed_schemas = schema_loader.allowed_schemas
         self.sensitive_columns = schema_loader.sensitive_columns
         self.banned_functions = schema_loader.banned_functions
+        self.allowed_functions = schema_loader.allowed_functions
         self.max_limit = schema_loader.max_limit
 
     # =================================================
@@ -372,24 +373,51 @@ class SQLValidator:
     # =================================================
 
     def _check_banned_functions(self, parsed: list) -> None:
-        """检查 SQL 中是否包含禁止的函数调用"""
+        """检查 SQL 中是否包含禁止/未批准的函数（G-17 fail-closed）。"""
         stmt = parsed[0]
         for func in stmt.find_all(exp.Anonymous):
             func_name = func.name.upper() if func.name else ""
-            if func_name in self.banned_functions:
-                raise ValidationError(
-                    f"禁止使用函数: {func_name}()",
-                    layer=4, reason="dangerous_function",
-                )
+            self._deny_dangerous_function(func_name, func)
         for func in stmt.find_all(exp.Func):
             func_name = type(func).__name__.upper()
-            sql_name = func.sql_name().upper() if hasattr(func, 'sql_name') else ""
-            for banned in self.banned_functions:
-                if sql_name == banned or func_name == banned:
-                    raise ValidationError(
-                        f"禁止使用函数: {banned}()",
-                        layer=4, reason="dangerous_function",
-                    )
+            self._deny_dangerous_function(func_name, func)
+            if hasattr(func, "sql_name"):
+                self._deny_dangerous_function(func.sql_name().upper(), func)
+        self._check_pg_catalog_qualified_calls(stmt)
+
+    def _deny_dangerous_function(self, func_name: str, func: exp.Expression) -> None:
+        """单一判定出口：显式黑名单 + pg_* 系统函数族 fail-closed。
+
+        pg_catalog 限定名挂在 exp.Dot 父节点上（func 节点自身渲染会丢
+        限定符），单独遍历 Dot 兜住 `pg_catalog.xxx()` 逃逸形态。
+        """
+        if not func_name:
+            return
+        if func_name in self.banned_functions:
+            raise ValidationError(
+                f"禁止使用函数: {func_name}()",
+                layer=4, reason="dangerous_function",
+            )
+        if func_name in self.allowed_functions:
+            return
+        if func_name.startswith("PG_"):
+            raise ValidationError(
+                f"未批准的系统函数: {func_name}()",
+                layer=4, reason="unapproved_system_function",
+            )
+
+    def _check_pg_catalog_qualified_calls(self, stmt: exp.Expression) -> None:
+        """pg_catalog/information_schema 限定函数调用一律拒绝（G-16/G-17）。"""
+        for dot in stmt.find_all(exp.Dot):
+            try:
+                rendered = dot.sql().upper()
+            except Exception:
+                continue
+            if "PG_CATALOG." in rendered or "INFORMATION_SCHEMA." in rendered:
+                raise ValidationError(
+                    f"禁止引用系统 schema 限定调用: {dot.sql()}",
+                    layer=4, reason="unapproved_system_function",
+                )
 
     # =================================================
     # Layer 5: LIMIT 强制添加

@@ -182,6 +182,17 @@ class SQLPolicyGuard:
                 f"user={policy.user_id!r} 无 sql.read 权限"
                 f"(roles={policy.principal.roles})",
             )
+        # G-20 fail-closed：身份字段缺失不允许「默认全局身份」。user_id 是
+        # 审计归因与 scope 注入的锚点，为空即拒绝——生产链路恒有
+        # JWT/MCP/图状态身份，空 user_id 只会来自未绑身份的旁路调用。
+        # 归 SCOPE_UNAVAILABLE（与 self-scope 缺 user 的既有语义一致）；
+        # 放在权限门之后：guest 无权限先按 PERMISSION_DENIED 拒，不改变
+        # 既有拒绝码契约。
+        if not (policy.user_id or "").strip():
+            raise SQLPolicyError(
+                SQL_SCOPE_UNAVAILABLE,
+                "身份信息缺失（user_id 为空），已按 fail-closed 拒绝",
+            )
         scope = policy.data_scope
         if scope not in _VALID_SCOPES:
             raise SQLPolicyError(

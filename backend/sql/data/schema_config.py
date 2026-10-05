@@ -324,12 +324,26 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     "max_limit": 100,
     "query_timeout": 5.0,
 
-    # ── 禁用函数黑名单（同上一版） ──
+    # ── 禁用函数黑名单 ──
+    # 2026-10-03 只读渗透（材料#14）确认 7 个非查询系统函数穿透旧名单，
+    # 全部补入（第⑥层 agent_readonly 只兜得住其中一部分，第④层纵深防御）：
+    #   - set_config 可篡改会话级行级安全上下文，行级隔离开启后 = 提权路径
+    #   - setval/nextval 篡改序列；pg_terminate_backend/pg_cancel_backend 干预连接
+    #   - lo_get 读大对象绕过敏感列防线
     "banned_functions": [
         "sleep", "pg_sleep", "benchmark",
-        "lo_import", "lo_export",
+        "lo_import", "lo_export", "lo_get",
         "pg_read_file", "pg_read_binary_file",
         "pg_write_file", "pg_write_binary_file",
         "dblink", "dblink_exec",
+        "setval", "nextval",
+        "set_config", "current_setting",
+        "pg_terminate_backend", "pg_cancel_backend",
+        # 信息探测类（非 pg_ 前缀，进显式黑名单）：权限/事务信息泄露
+        "has_table_privilege", "has_column_privilege", "txid_current",
     ],
+    # ── pg_* 系统函数族放行白名单（G-17 fail-closed，默认空）──
+    # 未列入 banned_functions 的 pg_* 函数一律拒绝；确有业务需要的系统函数
+    # 在此显式批准后放行，不给「黑名单外 = 安全」的默认。
+    "allowed_functions": [],
 }
