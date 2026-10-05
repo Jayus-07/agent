@@ -119,4 +119,9 @@ class LLMRouter:
             candidates=[CapabilityScore(name="rag.search", score=0.5)],
             confidence=0.3,
             reason=f"LLM Router 失败 ({reason})，默认 RAG",
+            routing_meta={
+                "architecture": "llm_router",
+                "decision_source": "llm_failure",
+                "fallback_reason": "llm_failure",
+            },
         )

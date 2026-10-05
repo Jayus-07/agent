@@ -1,6 +1,6 @@
 """router_node.py — Router LangGraph 节点（主编排）
 
-3 层 fallback Router 接入 LangGraph：
+统一 RoutingEngine 接入 LangGraph：
   - Router 节点在 graph 入口
   - RouteDecision 存到 state.route_decision
   - conditional_edges 按 execution_mode 分流
@@ -30,7 +30,7 @@ from backend.orchestration.graph.routing import (
     try_booking_pending,
     try_travel_pending,
 )
-from backend.orchestration.router import get_router
+from backend.orchestration.router import get_routing_engine
 from backend.shared.logger import logger
 
 # ── 旧符号 re-export（P1-2 拆分兼容层，勿删：tests/潜在引用方在用）──
@@ -41,7 +41,7 @@ from backend.orchestration.graph.routing import _ROUTE_MODE_DOMAIN  # noqa: F401
 
 
 def router_node(state: dict) -> dict:
-    """Router 节点：执行 3 层 fallback 路由，存 decision 到 state。
+    """Router 节点：执行统一路由引擎，存 decision 到 state。
 
     Returns:
         包含 route_decision 的 state 更新
@@ -218,28 +218,24 @@ def router_node(state: dict) -> dict:
         )
 
     try:
-        # P0-4: get_router() 懒加载（router 索引/向量资源首次初始化）曾贡献
-        # 数秒无埋点黑洞；单独成 span 使其在瀑布图中可见（埋点软失败）。
+        # 路由引擎初始化单独成 span，避免索引/模型资源初始化成为不可见耗时。
         try:
             from backend.observability.tracer import trace_collector
             init_span = trace_collector.start_span(
-                "router_init", name="Router 初始化", type="tool_call",
+                "router_init", name="RoutingEngine 初始化", type="tool_call",
                 input={"query_len": len(query)})
             t_init = time.time()
             try:
-                router = get_router()
+                engine = get_routing_engine()
             finally:
                 trace_collector.end_span(
                     init_span,
                     metrics={"init_ms": int((time.time() - t_init) * 1000)})
         except Exception:
             logger.debug("[RouterNode] router_init span 记录失败", exc_info=True)
-            router = get_router()
-        # 同步调用（router 主流程是同步的）。
-        # context 进入路由缓存键：同文 query 在不同 user/department 下不会
-        # 互串缓存。2026-09-22 起额外携带会话任务状态（active_domain 等），
-        # 供粗分类器/HierarchicalRouter 消费（纯规则延续判定已在上方完成，
-        # 这里是 Router 层的上下文可见性）。
+            engine = get_routing_engine()
+        # 同步调用（主图路由入口是同步的）。上下文完整传入引擎，
+        # 由引擎统一决定哪些字段参与路由与缓存，入口不再拼接第二套协议。
         route_context = {
             "department": state.get("department") or "",
             "user_id": state.get("user_id") or "",
@@ -249,19 +245,25 @@ def router_node(state: dict) -> dict:
             "brief_summary": routing_context.get("brief_summary") or {},
             "pending_question": routing_context.get("pending_question") or "",
         }
-        decision = router.route(query, context=route_context)
+        decision = engine.route(
+            query,
+            {
+                **state,
+                "routing_context": route_context,
+            },
+        )
         logger.info(
             f"[RouterNode] mode={decision.execution_mode.value} "
             f"conf={decision.confidence:.2f} "
             f"cands={[(c.name, c.score) for c in decision.candidates]}"
         )
     except Exception as e:
-        logger.warning(f"[RouterNode] 路由失败，回退到 plan: {e}")
+        logger.warning(f"[RouterNode] 统一路由引擎失败，进入安全澄清: {e}")
         update = {
             "route_decision": None,
-            "route_mode": "plan",
-            "router_fallback_reason": f"router:{e}",
-            "legacy_used": True,
+            "route_mode": "clarify",
+            "router_fallback_reason": f"engine:{type(e).__name__}",
+            "legacy_used": False,
         }
         return _with_router_decisions(
             state, update, query, existing_override=update,
@@ -270,9 +272,9 @@ def router_node(state: dict) -> dict:
     # V2: workflow / direct 不再降级到 plan
     mode = decision.execution_mode
 
-    # ── 分层路由（hierarchical routing，2026-09-22）──────────────
-    # RouteDecision.routing_meta 由 hierarchical 模式携带；legacy 恒 None。
-    # 消费顺序：域图类域 → 复用既有 prefilter（未放行回退 legacy 路由）；
+    # ── 统一路由元数据分派 ─────────────────────────────────────
+    # RouteDecision.routing_meta 由 RoutingEngine 携带。
+    # 消费顺序：域图类域 → 复用既有 prefilter（未放行回到同一引擎）；
     # unknown/低置信 → 澄清；工具域/plan → 决策照常向下，粗分类字段展平入 state。
     # 分派实现见 routing/hierarchical.py::_handle_hierarchical_meta。
     hierarchical_fields: dict = {}
@@ -292,8 +294,10 @@ def router_node(state: dict) -> dict:
     # ── QueryRouter 统一问题理解（治理改造 2026-09-22）──────────
     # 纯规则 + 既有路由决策合成（零新增 LLM 调用）；两个消费点：
     #   1. state["query_understanding"] 供 Planner/Reporter/Trace 消费；
-    #   2. 简单问题（单能力、无组合措辞）被路由丢给 plan 时降级为 direct，
-    #      阻止「SKU 库存多少」这类事实查询白跑 planner→critique→supervisor。
+    #   2. 为 Planner/Reporter 提供复杂度与 need_* 元数据。
+    # 路由归宿已经由 RoutingEngine 的统一策略拍板；这里禁止再根据理解层
+    # 建议改写 mode，否则会出现 route_decision=plan、route_mode=direct 的
+    # 双事实源，重新引入长期运行时最难排查的分叉。
     understanding: dict = {}
     try:
         from backend.orchestration.router.query_understanding import understand_query
@@ -302,20 +306,11 @@ def router_node(state: dict) -> dict:
         downgrade = understanding.get("downgrade")
         if downgrade:
             logger.info(
-                "[RouterNode] QueryRouter 降级 plan→direct: capability=%s "
-                "complexity=%s",
+                "[RouterNode] QueryRouter 仅记录 plan→direct 建议，不改写统一 RouteDecision: "
+                "capability=%s complexity=%s",
                 downgrade.get("capability"),
                 understanding.get("complexity"),
             )
-            mode = decision.execution_mode.DIRECT
-            try:
-                from backend.observability.tracer import trace_collector
-                t = trace_collector.current()
-                if t is not None:
-                    t.tags["queryrouter_downgrade"] = str(
-                        downgrade.get("capability") or "")
-            except Exception:
-                pass
     except Exception as e:
         logger.warning(f"[RouterNode] QueryRouter 理解失败（软降级，保持原路由）: {e}")
 
@@ -324,7 +319,8 @@ def router_node(state: dict) -> dict:
         "route_mode": mode.value,
         "query_understanding": understanding,
         **hierarchical_fields,
-        "legacy_used": meta is None,
+        # 历史字段保留 schema 兼容性，但统一引擎路径永远不是旧路由。
+        "legacy_used": False,
     }
     return _with_router_decisions(
         state,

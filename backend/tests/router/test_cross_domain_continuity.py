@@ -287,11 +287,11 @@ def test_fallback_keeps_legacy_state_and_records_reason(monkeypatch):
     result = _with_router_decisions(state, {}, "模糊请求")
 
     _assert_legacy_fields_preserved(result)
-    assert result["legacy_used"] is True
+    assert result["legacy_used"] is False
     assert result["router_fallback_reason"].startswith("decision_adapter:")
 
 
-def test_legacy_route_decision_trace_is_serializable_and_non_destructive():
+def test_engine_route_decision_trace_is_serializable_and_non_destructive():
     from backend.orchestration.graph.router_node import _with_router_decisions
 
     legacy = {
@@ -310,7 +310,7 @@ def test_legacy_route_decision_trace_is_serializable_and_non_destructive():
     _assert_trace(result)
     assert result["capability_decision"]["capability"] == "sql.query"
     assert result["execution_decision"]["mode"] == "direct"
-    assert result["legacy_used"] is True
+    assert result["legacy_used"] is False
     assert result["route_decision"] == legacy
     assert result["route_mode"] == "direct"
     assert result["query_understanding"] == state["query_understanding"]

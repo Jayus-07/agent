@@ -74,6 +74,7 @@ class CapabilityRouter:
                 f"domain={canonical_domain} fine_top1={selection.fine_top1} "
                 f"route_mode={selection.route_mode}"
             ),
+            "fallback_reason": selection.fallback_reason,
         }
 
     @staticmethod
@@ -109,7 +110,7 @@ class CapabilityRouter:
         domain: str,
         decision: Any,
     ) -> CapabilityDecision:
-        """把 legacy RouteDecision 变成候选快照，不触发任何执行。"""
+        """把已有 RouteDecision 变成候选快照，不触发任何执行。"""
 
         if hasattr(decision, "model_dump"):
             decision = decision.model_dump()
@@ -125,7 +126,7 @@ class CapabilityRouter:
                 "name": str(candidate.get("name") or ""),
                 "score": float(candidate.get("score") or 0.0),
                 "risk": "UNKNOWN",
-                "source": "legacy",
+                "source": "route_engine",
             })
         capability = rows[0]["name"] if rows else None
         return {
@@ -133,8 +134,8 @@ class CapabilityRouter:
             "capability": capability,
             "candidates": rows,
             "confidence": float(decision.get("confidence") or 0.0),
-            "source": "legacy",
-            "reasoning": str(decision.get("reason") or "legacy RouteDecision"),
+            "source": "route_engine",
+            "reasoning": str(decision.get("reason") or "RouteDecision 快照"),
         }
 
 

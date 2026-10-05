@@ -73,7 +73,7 @@ def _with_router_decisions(
     existing_override=None,
     hierarchical_meta: dict | None = None,
 ) -> dict:
-    """把新适配器结果增量写回 state，旧路由字段仍保持权威。
+    """把统一路由引擎结果增量写回 state，兼容字段仍保持可序列化。
 
     该函数只做决策对象组装，不执行 Tool/Skill/Workflow；prefilter 的调用顺序
     仍由 ``router_node`` 原有分支控制。任何适配器异常都软失败，不阻断旧路径。
@@ -84,6 +84,7 @@ def _with_router_decisions(
         from backend.orchestration.router.capability_router import CapabilityRouter
         from backend.orchestration.router.domain_router import DomainRouter
         from backend.orchestration.router.execution_mode import ExecutionModeResolver
+        from backend.orchestration.router.intent_router import IntentRouter
         from backend.orchestration.domain_registry import domain_graph_registry
 
         domain_router = DomainRouter()
@@ -98,18 +99,24 @@ def _with_router_decisions(
                 or "candidates" in existing_override
             )
         ):
-            # legacy 已经完成 rule/vector/LLM 拍板，不重复做一次 embedding。
+            # 统一引擎已经完成决策，不重复做一次 embedding。
             domain_decision = {
                 "domain": "unknown",
                 "subflow": None,
                 "confidence": 0.0,
-                "source": "legacy",
-                "reasoning": "legacy RouteDecision 已完成域外拍板",
+                "source": "route_engine",
+                "reasoning": "RouteDecision 已由统一引擎完成",
             }
         else:
             domain_decision = domain_router.route(
                 query, state, prefilter_update=update,
             )
+
+        intent_decision = IntentRouter().classify(
+            query,
+            domain_decision,
+            existing_override=existing_override,
+        )
 
         if hierarchical_meta is not None:
             capability_decision = CapabilityRouter.from_routing_meta(
@@ -155,26 +162,11 @@ def _with_router_decisions(
             capability_decision,
             resolver_override,
         )
-        current_legacy_used = bool((update or {}).get("legacy_used", False))
-        if hierarchical_meta is None and (
-            hasattr(existing_override, "model_dump")
-            or (
-                isinstance(existing_override, dict)
-                and (
-                    "execution_mode" in existing_override
-                    or "candidates" in existing_override
-                )
-            )
-        ):
-            current_legacy_used = True
-        if isinstance(existing_override, dict):
-            nested_decision = existing_override.get("route_decision")
-            if isinstance(nested_decision, dict) and nested_decision.get(
-                "execution_mode"
-            ):
-                current_legacy_used = True
+        # 历史字段保留以兼容 checkpoint，但统一引擎不再写入 True。
+        current_legacy_used = False
         result.update({
             "domain_decision": domain_decision,
+            "intent_decision": intent_decision,
             "capability_decision": capability_decision,
             "execution_decision": execution_decision.to_dict(),
             "router_fallback_reason": (update or {}).get(
@@ -188,12 +180,13 @@ def _with_router_decisions(
             domain_decision,
             capability_decision,
             execution_decision.to_dict(),
+            intent_decision,
         )
     except Exception as exc:
-        logger.warning("[RouterNode] Router 决策适配器失败，保持旧字段: %s", exc)
+        logger.warning("[RouterNode] 路由决策适配器失败，保持兼容字段: %s", exc)
         result.update({
             "router_fallback_reason": f"decision_adapter:{exc}",
-            "legacy_used": True,
+            "legacy_used": False,
         })
     return result
 

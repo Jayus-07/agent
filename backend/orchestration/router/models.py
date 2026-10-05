@@ -31,6 +31,34 @@ class CapabilityDecision(TypedDict):
     reasoning: str
 
 
+IntentKind = Literal[
+    "workflow",
+    "composite",
+    "single",
+    "domain_graph",
+    "general",
+    "clarify",
+    "task",
+]
+
+
+class IntentDecision(TypedDict):
+    """显式意图分类结果。
+
+    意图分类只描述“用户想完成什么”，不直接执行 Tool，也不越过统一
+    策略层拍板。规则命中是证据来源，最终分支仍由
+    :class:`ExecutionModeResolver` 决定。
+    """
+
+    intent: str
+    kind: IntentKind
+    confidence: float
+    source: str
+    reasoning: str
+    execution_hint: str | None
+    candidate_names: list[str]
+
+
 ExecutionMode = Literal["direct", "workflow", "plan", "domain_graph", "general"]
 
 
@@ -57,6 +85,8 @@ class ExecutionModeDecision:
 __all__ = [
     "CapabilityDecision",
     "DomainDecision",
+    "IntentDecision",
+    "IntentKind",
     "ExecutionModeDecision",
     "ExecutionMode",
 ]

@@ -120,8 +120,6 @@ class TestRouteDispatch:
         assert d.execution_mode == ExecutionMode.PLAN
 
     def test_unknown_clarify_action(self, monkeypatch):
-        from backend.config import COARSE_UNKNOWN_ACTION
-        monkeypatch.setattr(hier, "COARSE_UNKNOWN_ACTION", "clarify")
         r = HierarchicalRouter()
         r.rule = type("R", (), {"route": staticmethod(lambda q: None)})()
         r.classifier = type("Stub", (), {
@@ -150,17 +148,3 @@ class TestRouteDispatch:
         d = router.route("查一下销售额")
         restored = RouteDecision(**d.model_dump())
         assert restored.routing_meta["domain"] == "data"
-
-
-class TestShadowCompare:
-    def test_shadow_match_and_mismatch(self, router):
-        legacy = RouteDecision(
-            execution_mode=ExecutionMode.DIRECT,
-            candidates=[CapabilityScore(name="sql.query", score=0.9)],
-            confidence=0.9,
-        )
-        result = router.shadow_compare("查一下销售额", legacy)
-        assert result is not None
-        assert result["legacy_tool"] == "sql.query"
-        assert result["hierarchical_domain"] == "data"
-        assert result["is_match"] == (result["hierarchical_tool"] == "sql.query")

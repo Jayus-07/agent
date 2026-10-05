@@ -17,6 +17,7 @@ from backend.orchestration.router.domain_classifier import DomainPrediction
 from backend.orchestration.router.domain_router import DomainRouter
 from backend.orchestration.router.execution_mode import ExecutionModeResolver
 from backend.orchestration.router.hierarchical import HierarchicalRouter
+from backend.orchestration.router.intent_router import IntentRouter
 from backend.orchestration.router.models import (
     CapabilityDecision,
     DomainDecision,
@@ -214,6 +215,36 @@ class TestExecutionModeResolver:
         assert decision.compat_route_mode == "clarify"
 
 
+class TestIntentRouter:
+    def test_unknown_domain_is_explicit_clarify(self):
+        decision = IntentRouter().classify(
+            "帮我看看这个",
+            {
+                "domain": "unknown",
+                "subflow": None,
+                "confidence": 0.2,
+                "source": "embedding",
+                "reasoning": "LOW_CONFIDENCE",
+            },
+        )
+        assert decision["kind"] == "clarify"
+        assert decision["execution_hint"] == "clarify"
+
+    def test_prefilter_is_explicit_domain_graph_intent(self):
+        decision = IntentRouter().classify(
+            "规划大阪行程",
+            {
+                "domain": "travel",
+                "subflow": "planning",
+                "confidence": 1.0,
+                "source": "prefilter",
+                "reasoning": "prefilter",
+            },
+        )
+        assert decision["kind"] == "domain_graph"
+        assert decision["execution_hint"] == "domain_graph"
+
+
 def test_decisions_are_serializable():
     domain = _prediction("data")
     assert DomainRouter(_ClassifierStub(domain)).route("query", {})["domain"] == "data"
@@ -238,10 +269,11 @@ def test_router_node_compat_update_adds_serializable_snapshots():
     assert result["domain_decision"]["domain"] == "travel"
     assert result["execution_decision"]["mode"] == "domain_graph"
     assert result["execution_decision"]["target"] == "travel"
+    assert result["intent_decision"]["kind"] == "domain_graph"
     assert result["legacy_used"] is False
 
 
-def test_router_node_legacy_route_decision_becomes_capability_snapshot():
+def test_router_node_engine_decision_becomes_capability_snapshot():
     from backend.orchestration.graph.router_node import _with_router_decisions
     from backend.orchestration.router.types import (
         CapabilityScore,
@@ -259,14 +291,15 @@ def test_router_node_legacy_route_decision_becomes_capability_snapshot():
         {
             "route_decision": decision.model_dump(),
             "route_mode": "direct",
-            "legacy_used": True,
+            "legacy_used": False,
         },
         "查销售额",
         existing_override=decision,
     )
     assert result["capability_decision"]["capability"] == "sql.query"
     assert result["execution_decision"]["mode"] == "direct"
-    assert result["legacy_used"] is True
+    assert result["intent_decision"]["kind"] == "single"
+    assert result["legacy_used"] is False
 
 
 def test_router_node_records_sanitized_decision_in_current_trace_metadata():
@@ -303,7 +336,11 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
             "capability": "sql.query",
             "mode": "direct",
             "confidence": 0.93,
-            "source": "legacy",
+            "source": "route_engine",
+            "intent": "sql.query",
+            "intent_kind": "single",
+            "intent_source": "route_engine",
+            "intent_confidence": 0.93,
         }
     finally:
         trace_collector.clear_for_test()
@@ -311,7 +348,7 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
 
 @pytest.mark.parametrize(
     "module_name",
-    ["domain_router.py", "capability_router.py", "execution_mode.py"],
+    ["domain_router.py", "intent_router.py", "capability_router.py", "execution_mode.py"],
 )
 def test_adapters_do_not_import_execution_layers(module_name):
     """适配器源码不得 import 执行层（tools/skills/planner/workflow/sql/rag）。

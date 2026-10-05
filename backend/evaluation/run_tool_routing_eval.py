@@ -65,9 +65,9 @@ def main() -> int:
 
     _bootstrap_llm_registry()
 
-    from backend.orchestration.router.hierarchical import get_hierarchical_router
+    from backend.orchestration.router import get_routing_engine
 
-    router = get_hierarchical_router()
+    router = get_routing_engine()
     cases = json.loads(DATASET.read_text(encoding="utf-8"))["cases"]
     if args.limit:
         cases = cases[: args.limit]
@@ -79,7 +79,7 @@ def main() -> int:
         strict = case.get("strict", False)
         forbid = set(case.get("forbid") or [])
 
-        decision = router.route(query)
+        decision = router.route(query, {"tenant_id": "evaluation"})
         meta = decision.routing_meta or {}
         cands = decision.candidates or []
         top1 = cands[0].name if cands else (meta.get("fine_top1") or "")

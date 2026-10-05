@@ -130,9 +130,9 @@ class AgentState(TypedDict):
     # 不一致，跨轮上下文永远 miss（travel brief 同步同受此害）。
     # 与 user_id/department/session_id 同批「断链修复」口径：每轮覆盖写入。
     tenant_id: str
-    # ── 分层路由（hierarchical routing，2026-09-22）──────────────
-    # ROUTING_ARCHITECTURE=hierarchical 时由 router_node 从
-    # RouteDecision.routing_meta 展平写入；legacy 模式这些键缺省（.get() 消费）。
+    # ── 统一路由引擎元数据 ─────────────────────────────────────
+    # 由 router_node 从 RouteDecision.routing_meta 展平写入；所有生产请求
+    # 都走统一引擎，这些字段不再区分 legacy/hierarchical 模式。
     # 全部为可序列化标量/简单容器，兼容 Checkpointer；不塞模型原始响应对象。
     domain: str                                  # 粗域（knowledge/data/business/...）
     domain_confidence: float                     # 粗分类 top1 置信度
@@ -147,6 +147,7 @@ class AgentState(TypedDict):
     clarification_reason: str                    # LOW_CONFIDENCE | LOW_MARGIN | ...
     # STOP B Router 收口：三类决策对象的可序列化快照；旧字段继续为兼容事实源。
     domain_decision: dict
+    intent_decision: dict
     capability_decision: dict
     execution_decision: dict
     router_fallback_reason: str

@@ -1,4 +1,4 @@
-"""hierarchical.py — 分层路由 HierarchicalRouter（粗分类 → 域内细选择）
+"""hierarchical.py — RoutingEngine 使用的域内能力解析器。
 
 三层职责收敛（分层路由改造 2026-09-22，用户规格 §2/§14）：
   CoarseIntentClassifier   「属于哪个业务域？」   —— 本文件第一级
@@ -6,9 +6,8 @@
   FineToolRouter           「域内哪个 Tool？」      —— Fast Path / 交 tool_selector LLM
   tool_selector（Qwen3-8B）「灰区最终选 Tool + 填参」 —— 复用既有 FC 节点，仅见域内候选
 
-废弃的重复路由：hierarchical 模式下 legacy 三层 Router 的 vector/LLM 层
-不再承担「直接选 capability」职责（QueryRouter LLM fallback 不再触发）；
-确定性最强的两块规则保留为 domain_override：
+规则和向量只负责提供证据，最终执行方式由 RoutingEngine 统一决定；
+确定性最强的两块规则作为 domain_override：
   - workflow 强信号（每天跑日报…）→ 既有 workflow 路径
   - 复合意图（连接词 + ≥2 能力组）→ 既有 plan 编排路径
   这两类规则语义是「执行方式」而非「选哪个工具」，与粗分类不竞争。
@@ -24,7 +23,6 @@ import time
 from pydantic import BaseModel, Field
 
 from backend.config import (
-    COARSE_UNKNOWN_ACTION,
     FINE_TOOL_HIGH_CONFIDENCE,
     FINE_TOOL_MIN_MARGIN,
 )
@@ -34,6 +32,8 @@ from backend.orchestration.router.domain_classifier import (
 )
 from backend.orchestration.router.manifest import load_manifest
 from backend.orchestration.router.rule_router import RuleRouter
+from backend.orchestration.router.vector_router import VectorRouter
+from backend.orchestration.router.vector_router import VectorRouteError
 from backend.orchestration.router.types import (
     CapabilityScore,
     ExecutionMode,
@@ -73,6 +73,15 @@ class ToolSelection(BaseModel):
     # hits=各候选特征命中数，strong=强信号候选，basis=直通判定依据。
     # 空 dict = 本次未触发校准（无 opt-in 能力或零命中）。
     calibration: dict = Field(default_factory=dict)
+    fallback_reason: str = ""
+
+
+class _FineScoreMap(dict[str, float]):
+    """兼容旧 dict 接口，同时携带向量基础设施故障码。"""
+
+    def __init__(self, *args, failure_reason: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failure_reason = failure_reason
 
 
 def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
@@ -106,22 +115,21 @@ def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
 class HierarchicalRouter:
     """分层路由主流程（ coarse → resolve → fine → 组装 RouteDecision ）。"""
 
-    def __init__(self):
+    def __init__(self, vector_router: VectorRouter | None = None):
         self.rule = RuleRouter()  # 仅承担 workflow / 复合意图两类确定性 override
         self.classifier = get_coarse_classifier()
+        self.vector = vector_router or VectorRouter()
 
     # ── 细路由第一层：确定性 / 语义 Fast Path ──────────────────
     def _fine_scores(self, query: str, candidates: list[ToolCandidate]) -> dict[str, float]:
         """域内能力分数：复用既有向量路由索引（capability examples）。
 
         一次 pgvector 检索取全量分数（top_k 放大到域候选上限），按域内
-        候选过滤 —— 与 legacy 向量路由同一索引同一语义空间，无新设施。
+        候选过滤 —— 与统一 VectorRouter 共用同一索引和语义空间，无新设施。
         """
-        from backend.orchestration.router.router import get_router
-
         valid_names = {c.name for c in candidates}
         try:
-            decision = get_router().vector.route(query, top_k=8)
+            decision = self.vector.route(query, top_k=8)
             # TD-17（2026-10-03）：同一 capability 有多条 examples 时向量
             # 检索返回多行——dict 推导会被后行覆盖，capability 实际得分
             # 变成"最后一条 example"的分（实测"发票认证时限"0.640 的
@@ -131,10 +139,15 @@ class HierarchicalRouter:
             for c in decision.candidates:
                 if c.name in valid_names and c.score > scores.get(c.name, 0.0):
                     scores[c.name] = c.score
+        except VectorRouteError as exc:
+            return _FineScoreMap(
+                {c.name: 0.3 for c in candidates},
+                failure_reason=exc.code,
+            )
         except Exception:
             scores = {}
         # 未进 top-K 的候选给保底分（保持候选完整，交给 FC/灰区路径）
-        return {c.name: scores.get(c.name, 0.3) for c in candidates}
+        return _FineScoreMap({c.name: scores.get(c.name, 0.3) for c in candidates})
 
     def select_tool(self, query: str, domain: str,
                     candidates: list[ToolCandidate]) -> ToolSelection:
@@ -155,6 +168,7 @@ class HierarchicalRouter:
             return ToolSelection(need_clarification=True, clarification_reason="domain_has_no_tools")
 
         scores = self._fine_scores(query, candidates)
+        vector_failure_reason = getattr(scores, "failure_reason", "")
         ranked = sorted(candidates, key=lambda c: (-scores.get(c.name, 0.0), c.name))
 
         # 规则强信号：唯一 ≥2 特征命中的候选（如有）提到首位——向量召回被
@@ -175,6 +189,7 @@ class HierarchicalRouter:
             candidate_tools=[c.name for c in ranked],
             fine_top1=top1.name, fine_top1_score=round(s1, 3),
             fine_margin=round(margin, 3),
+            fallback_reason=vector_failure_reason,
         )
 
         fast_ok = (
@@ -209,7 +224,7 @@ class HierarchicalRouter:
 
         域图类域（CS/travel/selection）返回 plan 占位决策 + domain_action，
         由 router_node 复用既有 prefilter；prefilter 未命中时 router_node
-        回退 legacy 路由（灰度 control 组语义保持）。
+        交回统一 RoutingEngine（灰度 control 组语义保持）。
         """
         from backend.shared.logger import logger
 
@@ -233,8 +248,17 @@ class HierarchicalRouter:
 
         # 3. 域分派
         if prediction.source == "degraded":
-            # embedding 不可用 → 抛给 Router 回退 legacy（不阻塞请求）
-            raise RuntimeError(f"coarse classifier degraded: {prediction.reason_code}")
+            # 该类直接调用主要用于离线评测；线上由 RoutingEngine 捕获同类
+            # 状态并调用统一 LLM fallback，不能在这里抛出未分类异常。
+            return self._assemble(
+                RouteDecision(
+                    execution_mode=ExecutionMode.PLAN,
+                    candidates=[],
+                    confidence=0.0,
+                    reason=f"coarse classifier degraded: {prediction.reason_code}",
+                ),
+                _meta(prediction, "clarify", None, None, t0),
+            )
 
         if prediction.domain in _DOMAIN_ACTIONS:
             decision = RouteDecision(
@@ -257,23 +281,13 @@ class HierarchicalRouter:
             return self._assemble(decision, _meta(prediction, "general_chat", None, None, t0))
 
         if prediction.domain == "unknown":
-            if COARSE_UNKNOWN_ACTION == "clarify":
-                return self._assemble(
-                    RouteDecision(
-                        execution_mode=ExecutionMode.PLAN, candidates=[],
-                        confidence=prediction.confidence,
-                        reason=f"coarse unknown（{prediction.reason_code}）→ 澄清",
-                    ),
-                    _meta(prediction, "clarify", None, None, t0),
-                )
-            # legacy 处置：交回旧 plan 路径
             return self._assemble(
                 RouteDecision(
                     execution_mode=ExecutionMode.PLAN, candidates=[],
                     confidence=prediction.confidence,
-                    reason="coarse unknown → legacy plan 支线",
+                    reason=f"coarse unknown（{prediction.reason_code}）→ 澄清",
                 ),
-                _meta(prediction, "plan", None, None, t0),
+                _meta(prediction, "clarify", None, None, t0),
             )
 
         # 4. 工具域：resolve domain tools → fine route
@@ -317,36 +331,6 @@ class HierarchicalRouter:
     def _assemble(self, decision: RouteDecision, meta: dict) -> RouteDecision:
         decision.routing_meta = meta
         return decision
-
-    # ── Shadow mode（§20 双轨评估）────────────────────────────
-    def shadow_compare(self, query: str, legacy: RouteDecision) -> dict | None:
-        """legacy 拍板执行的同时，计算 hierarchical 结果并对比。
-
-        只做粗分类 + 域内向量细选（零 LLM，零额外模型成本）；
-        记录 legacy_tool / hierarchical_tool / is_match 供真实流量评估。
-        """
-        try:
-            prediction = self.classifier.classify(query)
-            hierarchical_tool = ""
-            if prediction.domain not in _DOMAIN_ACTIONS and prediction.domain not in (
-                "general", "unknown",
-            ):
-                candidates = resolve_domain_tools(prediction.domain)
-                if candidates:
-                    selection = self.select_tool(query, prediction.domain, candidates)
-                    hierarchical_tool = selection.fine_top1
-            legacy_tool = legacy.candidates[0].name if legacy.candidates else ""
-            return {
-                "legacy_tool": legacy_tool,
-                "legacy_mode": legacy.execution_mode.value,
-                "hierarchical_domain": prediction.domain,
-                "hierarchical_confidence": prediction.confidence,
-                "hierarchical_tool": hierarchical_tool,
-                "is_match": bool(legacy_tool) and legacy_tool == hierarchical_tool,
-            }
-        except Exception:
-            return None
-
 
 def _meta(source_or_prediction, action: str,
           selection: ToolSelection | None, decision_hint: str | None,

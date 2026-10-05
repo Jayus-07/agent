@@ -63,12 +63,9 @@ def main() -> int:
 
     _bootstrap_llm_registry()
 
-    from backend.orchestration.router.hierarchical import (
-        HierarchicalRouter,
-        resolve_domain_tools,
-    )
+    from backend.orchestration.router import get_routing_engine
 
-    router = HierarchicalRouter()
+    router = get_routing_engine()
     cases = load_cases()
     if args.limit:
         cases = cases[: args.limit]
@@ -82,31 +79,24 @@ def main() -> int:
         exp_tool = expected.get("tool")
 
         t0 = time.perf_counter()
-        prediction = router.classifier.classify(query)
+        decision = router.route(query, {"tenant_id": "evaluation"})
         coarse_ms = (time.perf_counter() - t0) * 1000
+        meta = decision.routing_meta or {}
 
-        fine_top1, route_mode = "", ""
-        if prediction.domain not in ("unknown", "general", "customer_service",
-                                     "travel", "selection_funnel"):
-            candidates = resolve_domain_tools(prediction.domain)
-            if candidates:
-                t1 = time.perf_counter()
-                selection = router.select_tool(query, prediction.domain, candidates)
-                fine_top1, route_mode = selection.fine_top1, selection.route_mode
-                latencies.append((time.perf_counter() - t0) * 1000)
-        else:
-            latencies.append((time.perf_counter() - t0) * 1000)
+        fine_top1 = str(meta.get("fine_top1") or "")
+        route_mode = str(meta.get("tool_route_mode") or "")
+        latencies.append((time.perf_counter() - t0) * 1000)
 
         rows.append({
             "query": query,
             "expected_domain": exp_domain,
             "expected_tool": exp_tool,
-            "domain": prediction.domain,
-            "confidence": prediction.confidence,
-            "margin": prediction.margin,
-            "top2": prediction.second_domain,
-            "source": prediction.source,
-            "reason_code": prediction.reason_code,
+            "domain": str(meta.get("domain") or "unknown"),
+            "confidence": float(meta.get("domain_confidence") or 0.0),
+            "margin": float(meta.get("domain_margin") or 0.0),
+            "top2": str(meta.get("domain_second") or ""),
+            "source": str(meta.get("domain_source") or ""),
+            "reason_code": str(meta.get("clarification_reason") or ""),
             "fine_top1": fine_top1,
             "route_mode": route_mode,
             "coarse_ms": round(coarse_ms, 1),

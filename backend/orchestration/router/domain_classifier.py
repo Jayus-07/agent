@@ -193,7 +193,7 @@ class CoarseIntentClassifier:
 
     def classify(self, query: str, context: dict | None = None) -> DomainPrediction:
         """query → DomainPrediction。任何后端故障软降级为 unknown+degraded，
-        由调用方（HierarchicalRouter）回退 legacy 路由，绝不阻塞请求。"""
+        由调用方（RoutingEngine）执行受控降级，绝不阻塞请求。"""
         t0 = time.perf_counter()
         query = (query or "").strip()
         if not query:
@@ -219,7 +219,7 @@ class CoarseIntentClassifier:
 
             domain, confidence, all_scores = self._ensure_backend().predict(query)
         except Exception:
-            # embedding 不可用（未绑定供应商/网络故障）→ 交回 legacy 路由
+            # embedding 不可用（未绑定供应商/网络故障）→ 交回统一引擎
             return DomainPrediction(
                 domain="unknown", confidence=0.0, margin=0.0,
                 source="degraded", reason_code="EMBEDDING_UNAVAILABLE",
