@@ -1,0 +1,66 @@
+{"ts": "2026-10-05T21:48:17.482Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 自动添加 LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 488}
+{"ts": "2026-10-05T21:48:17.482Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 校验通过: SELECT COUNT(*) AS n FROM \"order\".orders LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 547}
+{"ts": "2026-10-05T21:48:21.689Z", "level": "INFO", "logger": "rag_system", "msg": "[Executor] 连接池初始化: min=2 max=10 user=agent_readonly db=agent_business", "trace_id": null, "session_id": null, "user_id": null, "module": "executor", "line": 79}
+{"ts": "2026-10-05T21:48:21.724Z", "level": "INFO", "logger": "rag_system", "msg": "[Executor:struct] 查询完成: 1 行, 1 列", "trace_id": null, "session_id": null, "user_id": null, "module": "executor", "line": 351}
+{"ts": "2026-10-05T21:48:21.727Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 自动添加 LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 488}
+{"ts": "2026-10-05T21:48:21.729Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 校验通过: SELECT COUNT(*) AS n FROM \"order\".orders LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 547}
+{"ts": "2026-10-05T21:48:21.762Z", "level": "INFO", "logger": "rag_system", "msg": "[Executor:struct] 查询完成: 1 行, 1 列", "trace_id": null, "session_id": null, "user_id": null, "module": "executor", "line": 351}
+{"ts": "2026-10-05T21:48:21.766Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 自动添加 LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 488}
+{"ts": "2026-10-05T21:48:21.767Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 校验通过: SELECT COUNT(*) AS n FROM \"order\".orders LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 547}
+{"ts": "2026-10-05T21:48:21.770Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 自动添加 LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 488}
+{"ts": "2026-10-05T21:48:21.771Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 校验通过: SELECT COUNT(*) AS n FROM finance.expenses LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 547}
+{"ts": "2026-10-05T21:48:21.773Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 自动添加 LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 488}
+{"ts": "2026-10-05T21:48:21.776Z", "level": "INFO", "logger": "rag_system", "msg": "[Validator] 校验通过: SELECT COUNT(*) AS n FROM product.products LIMIT 100", "trace_id": null, "session_id": null, "user_id": null, "module": "sql_validator", "line": 547}
+{"ts": "2026-10-05T21:48:21.815Z", "level": "INFO", "logger": "rag_system", "msg": "[Executor:struct] 查询完成: 1 行, 1 列", "trace_id": null, "session_id": null, "user_id": null, "module": "executor", "line": 351}
+{
+  "matrix": {
+    "self_u3": {
+      "status": "success",
+      "rows": [
+        {
+          "n": 1
+        }
+      ],
+      "params": {
+        "sql_scope_self_value": 3
+      },
+      "sql_has_customer_filter": true
+    },
+    "self_u4": {
+      "status": "success",
+      "rows": [
+        {
+          "n": 0
+        }
+      ],
+      "params": {
+        "sql_scope_self_value": 4
+      },
+      "sql_has_customer_filter": true
+    },
+    "department_personal": {
+      "denied": true,
+      "code": "SQL_TABLE_NOT_ALLOWED"
+    },
+    "department_internal": {
+      "denied": true,
+      "code": "SQL_TABLE_NOT_ALLOWED"
+    },
+    "department_shared": {
+      "status": "success",
+      "rows": [
+        {
+          "n": 10
+        }
+      ],
+      "no_filter_injected": true
+    }
+  },
+  "verdict": {
+    "self_row_isolation": true,
+    "department_personal_fail_closed": true,
+    "department_internal_fail_closed": true,
+    "shared_open_read": true,
+    "G08_ROW_MATRIX_PASS": true
+  }
+}
