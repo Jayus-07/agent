@@ -133,10 +133,15 @@ class TestTimeWindowExtraction:
         assert extract_departure_time("福州玩3天") is None
 
     def test_fresh_brief_carries_time(self):
+        """「下周五」相对日期解析（日期断言动态计算，修 10-05 跨周界腐坏）。"""
         brief = extract_fresh_brief("下周五16点到泉州玩三天，10点走")
         assert brief.arrival_time == "16:00"
         assert brief.departure_time == "10:00"
-        assert brief.start_date == date(2026, 10, 9)
+        # 下周五 = 今天 + 7 - today.weekday() + 4（ISO 周一为首日），与
+        # requirement_agent 的相对日期推导同口径动态断言（原写死
+        # 2026-10-09，跨周后自然漂移为假失败）
+        expected = date.today() + timedelta(days=7 - date.today().weekday() + 4)
+        assert brief.start_date == expected
 
     def test_merge_keeps_previous_when_unmentioned(self):
         from backend.travel.services.requirement_service import merge_brief
