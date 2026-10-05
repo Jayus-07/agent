@@ -76,6 +76,9 @@ class DoneData(_Loose):
     # confidence = META 自报置信度（0~1），前端低于阈值显示「建议核实」
     answer_status: str | None = None
     confidence: float | None = None
+    # 2026-10-05 回复归因稳定码（reply_source）：knowledge_base /
+    # data_analysis / realtime_query / system_notice；缺省不标注
+    reply_source: str | None = None
 
 
 class ErrorData(_Loose):

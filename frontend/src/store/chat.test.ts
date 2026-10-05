@@ -288,6 +288,23 @@ describe('removeLastAssistant / replaceLastAssistant — 重新生成支撑', ()
     expect(msgs[1].thinking).toBe('思考全文')
     expect(msgs[1].thinkingSeconds).toBe(8)
   })
+
+  it('replaceLastAssistant 透传 replySource（done.reply_source 回复归因）', () => {
+    seedTurn()
+    useChatStore.getState().replaceLastAssistant('新回答', 'local1', undefined, undefined,
+      undefined, undefined, undefined, { replySource: 'knowledge_base' })
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[1].replySource).toBe('knowledge_base')
+  })
+
+  it('replaceLastAssistant 不传 replySource 时保留原值，undefined 不覆盖', () => {
+    seedTurn()
+    useChatStore.getState().replaceLastAssistant('新回答', 'local1', undefined, undefined,
+      undefined, undefined, undefined, { replySource: 'data_analysis' })
+    useChatStore.getState().replaceLastAssistant('新回答 v2', 'local1')
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[1].replySource).toBe('data_analysis')
+  })
 })
 
 describe('addStreamEvent — todo / usage 事件（P1）', () => {

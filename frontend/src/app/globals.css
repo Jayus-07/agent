@@ -104,6 +104,18 @@ html, body {
 .markdown-body th {
   background: var(--bg-elevated); font-weight: 600; color: var(--text-secondary);
 }
+/* 宽表横向滚动（2026-10-05 排版契约）：列数多时不撑破消息气泡，
+   外框归容器、内格只留分隔线 */
+.markdown-body .table-scroll {
+  width: 100%; overflow-x: auto;
+  border: 1px solid var(--border-subtle); border-radius: 8px;
+}
+.markdown-body .table-scroll table { margin: 0; }
+.markdown-body .table-scroll th:first-child,
+.markdown-body .table-scroll td:first-child { border-left: none; }
+.markdown-body .table-scroll th:last-child,
+.markdown-body .table-scroll td:last-child { border-right: none; }
+.markdown-body .table-scroll tr:last-child td { border-bottom: none; }
 .markdown-body tr:nth-child(even) { background: rgba(0, 0, 0, 0.015); }
 .markdown-body blockquote {
   border-left: 3px solid var(--accent);

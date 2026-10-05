@@ -11,6 +11,7 @@
  *   2. 用户气泡始终静态 → 不订阅任何 store 字段。
  */
 import { memo } from 'react'
+import { BookOpen, Database, Radio, Info } from 'lucide-react'
 import type { Message } from '@/lib/types'
 import { useChatStore } from '@/store/chat'
 import { useSSE } from '@/hooks/useSSE'
@@ -114,6 +115,11 @@ function MessageBubbleImpl({ message, isLast, sessionId, question, budgetBlocked
                     }
                   />
                 </div>
+                {/* 回复归因徽章（done.reply_source）：只标「答案怎么来的」语义，
+                    架构分层（agent/skill/tool）归 trace/管理面，不上用户面 */}
+                {!isCurrentStreaming && message.replySource && (
+                  <ReplyBadge source={message.replySource} />
+                )}
                 {/* RAG 拒答指引 / 低置信提示（done.answer_status / confidence） */}
                 {!isCurrentStreaming && message.content && (
                   <RagAnswerHint
@@ -158,6 +164,30 @@ function StreamingThinking() {
   const { text, seconds } = useChatThinking()
   const answering = useChatStore((s) => s.deltaText !== '')
   return <ThinkingPanel text={text} seconds={seconds} live answering={answering} />
+}
+
+/**
+ * 回复归因徽章（2026-10-05 回复呈现规范）：
+ * done.reply_source 稳定码 → 中文语义徽章；域图（客服/旅游）与闲聊后端
+ * 不下发此字段，天然不渲染。灰字小徽章，不与正文抢视觉。
+ */
+const REPLY_SOURCE_META: Record<string, { label: string; Icon: typeof BookOpen }> = {
+  knowledge_base: { label: '基于知识库回答', Icon: BookOpen },
+  data_analysis: { label: '基于业务数据分析', Icon: Database },
+  realtime_query: { label: '基于实时数据查询', Icon: Radio },
+  system_notice: { label: '系统提示', Icon: Info },
+}
+
+function ReplyBadge({ source }: { source: string }) {
+  const meta = REPLY_SOURCE_META[source]
+  if (!meta) return null
+  const { label, Icon } = meta
+  return (
+    <div className="mt-2 flex items-center gap-1 text-[11px] leading-none text-text-muted">
+      <Icon size={12} aria-hidden />
+      <span>{label}</span>
+    </div>
+  )
 }
 
 /**

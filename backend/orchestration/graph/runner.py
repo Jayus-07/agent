@@ -459,7 +459,9 @@ class GraphRunner:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
                 _funnel_note_resolved(clarify_click, message, session_id=session_id)
-                yield make_done_event(message, {}, start_time)
+                # 拦截提示非模型回答，归因=系统提示（前端标「系统提示」徽章）
+                yield make_done_event(message, {}, start_time,
+                                      reply_source="system_notice")
                 return
 
         # ── CS 窗口业务门禁：全局 Guard 放行后、域检测/子图之前 ──
@@ -489,7 +491,8 @@ class GraphRunner:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
                 _funnel_note_resolved(clarify_click, message, session_id=session_id)
-                yield make_done_event(message, {}, start_time)
+                yield make_done_event(message, {}, start_time,
+                                      reply_source="system_notice")
                 return
 
         # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
@@ -580,7 +583,9 @@ class GraphRunner:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
                 _funnel_note_resolved(clarify_click, message, session_id=session_id)
-                yield make_done_event(message, {}, start_time)
+                # 澄清追问是系统发起的引导语，非模型回答
+                yield make_done_event(message, {}, start_time,
+                                      reply_source="system_notice")
                 _end_root(trace, status="success",
                           metrics={"follow_up": "clarified"})
                 trace_collector.finish(
