@@ -860,16 +860,21 @@ routing_hierarchy_verdict_total = Counter(
     "rule_workflow / rule_composite / prefilter_* / plan）",
     labelnames=("verdict",),
 )
-routing_shadow_match_total = Counter(
-    "routing_shadow_match_total",
-    "shadow 双轨对比结果（is_match=true/false，legacy vs hierarchical）",
-    labelnames=("is_match",),
-)
 routing_latency_seconds = Histogram(
     "routing_latency_seconds",
     "分层路由分阶段耗时（coarse / fine / total，秒）",
     labelnames=("stage",),
     buckets=(0.001, 0.005, 0.01, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+router_fallback_total = Counter(
+    "router_fallback_total",
+    "统一路由引擎受控降级次数",
+    labelnames=("reason",),
+)
+router_cache_total = Counter(
+    "router_cache_total",
+    "统一路由引擎缓存结果",
+    labelnames=("result",),  # hit | miss
 )
 
 
@@ -889,18 +894,42 @@ def record_hierarchy_verdict(verdict: str) -> None:
         pass
 
 
-def record_shadow_match(is_match: bool) -> None:
-    """埋点 shadow 双轨对比（legacy_tool == hierarchical_tool）。"""
-    try:
-        routing_shadow_match_total.labels(is_match=str(bool(is_match)).lower()).inc()
-    except Exception:
-        pass
-
-
 def record_routing_latency(stage: str, elapsed_ms: float) -> None:
     """埋点分层路由分阶段耗时（毫秒入参，秒入桶）。"""
     try:
         routing_latency_seconds.labels(stage=stage or "-").observe(elapsed_ms / 1000.0)
+    except Exception:
+        pass
+
+
+def record_router_fallback(reason: str) -> None:
+    """记录低基数的路由降级原因。"""
+
+    allowed = {
+        "domain_classifier_degraded",
+        "domain_router_error",
+        "capability_router_error",
+        "vector_unavailable",
+        "vector_index_mismatch",
+        "vector_query_error",
+        "llm_failure",
+    }
+    label = reason.split(":", 1)[0] if reason else "unknown"
+    if label not in allowed:
+        label = "unknown"
+    try:
+        router_fallback_total.labels(reason=label).inc()
+    except Exception:
+        pass
+
+
+def record_router_cache(result: str) -> None:
+    """记录路由缓存命中/未命中。"""
+
+    try:
+        router_cache_total.labels(
+            result=result if result in {"hit", "miss"} else "miss",
+        ).inc()
     except Exception:
         pass
 
@@ -1510,10 +1539,14 @@ __all__ = [
     "router_decision_total",
     "router_layer_total",
     "router_confidence",
+    "router_fallback_total",
+    "router_cache_total",
     "record_rag_status",
     "record_feedback",
     "update_metadata_coverage",
     "record_router_decision",
+    "record_router_fallback",
+    "record_router_cache",
     "record_trace_finish",
     # FC 工具选择指标
     "tool_selector_total",

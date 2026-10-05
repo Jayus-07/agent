@@ -53,7 +53,9 @@ def _run_direct_flow(monkeypatch, seen):
         candidates=[CapabilityScore(name="report.generate", score=0.72)],
         confidence=0.72,
     )
-    monkeypatch.setattr(router_mod, "get_router", lambda: _FakeRouter(decision))
+    monkeypatch.setattr(
+        router_mod, "get_routing_engine", lambda: _FakeRouter(decision),
+    )
     # try_cs_prefilter 在 router_node 函数体内局部 import，patch 源模块
     import backend.orchestration.graph.cs_prefilter as cs_prefilter_mod
     monkeypatch.setattr(cs_prefilter_mod, "try_cs_prefilter", lambda q, s: None)

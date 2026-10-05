@@ -15,7 +15,7 @@
   APISIX 网关 :9080 ── JWT 验签 · 注入身份头（唯一入口）
         ▼
   ┌──────────────── Agent Platform（FastAPI :8000 + LangGraph）────────────────┐
-  │ Router Runtime ── 域预过滤 + 三层路由，拍板 route_mode                      │
+  │ Router Runtime ── 域预过滤 + RoutingEngine（域→能力→执行方式）拍板 route_mode │
   │   ├─ 域命中 ──► Domain Runtime（3 顶级域 / 5 物理域图，自带专家与 reporter）│
   │   ├─ direct/workflow ──► Capability Runtime（17 capability · 12 Skill）    │
   │   ├─ plan ──► Plan Runtime（任务拆解 → 并行调度）──► Capability Runtime     │
@@ -34,7 +34,7 @@
 
 ```
 1. 用户 input → POST /chat/stream（网关验签 → Input Guard → 记忆装配 → 指代解析）
-2. Router Runtime：域预过滤优先，三层路由拍板 route_mode
+2. Router Runtime：域预过滤优先，RoutingEngine 统一编排域判断、能力候选和执行方式；规则/向量/LLM 只提供证据，故障走受控降级
 3. 按路由分流：direct 直连 / workflow 预定义编排 / plan 拆解并行 / 域图接管 / 寒暄直答
 4. 能力执行：Skill → Tool Contract Boundary 归一 → Tool Runtime 治理执行
 5. Reporter / 域图 reporter 汇总 → SSE 流式输出 → 前端增量渲染
@@ -122,7 +122,7 @@
         ↓
 [GraphRunner 前置] Input Guard 门禁 → memory.start_session → Follow-up 指代解析
         ↓
-[Router Runtime] 域预过滤（客服锁域/旅游/选品）→ 三层路由拍板 route_mode
+[Router Runtime] 域预过滤（客服锁域/旅游/选品）→ RoutingEngine（domain → capability → execution）拍板 route_mode
    ├─ direct:  tool_selector → skill_executor（直连能力）
    ├─ workflow: workflow_executor（预定义编排）
    ├─ plan:    任务拆解 → 并行调度（Send）→ Skills

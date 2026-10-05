@@ -190,14 +190,14 @@ class TestDomainHintLock:
 
         def _boom():
             raise RuntimeError("router off in test")
-        monkeypatch.setattr(rn, "get_router", _boom)
+        monkeypatch.setattr(rn, "get_routing_engine", _boom)
 
         out = rn.router_node({
             "question": "退款怎么处理",
             "session_id": "s-lock-off",
             "domain_hint": "customer_service",
         })
-        assert out.get("route_mode") == "plan"  # 主 router 异常兜底路径
+        assert out.get("route_mode") == "clarify"  # 引擎异常的安全兜底路径
 
     def test_no_domain_hint_keeps_legacy_order(
         self, fake_detector, travel_on, cs_on,
@@ -253,8 +253,8 @@ class TestCsRedirectMain:
     def test_funnel_query_redirects_out_of_locked_cs(
         self, fake_detector, cs_on, monkeypatch,
     ):
-        import backend.config.selection_funnel as sf
-        monkeypatch.setattr(sf, "SELECTION_FUNNEL_ENABLED", True)
+        from backend.services import sys_config
+        sys_config._values["SELECTION_FUNNEL_ENABLED"] = "true"
         out = rn.router_node({
             "question": "给宠物零食做一次智能选品",
             "session_id": "s-redirect-funnel",
@@ -288,7 +288,7 @@ class TestCsRedirectMain:
 
         def _boom():
             raise RuntimeError("main router off in test")
-        monkeypatch.setattr(rn, "get_router", _boom)
+        monkeypatch.setattr(rn, "get_routing_engine", _boom)
 
         out = rn.router_node({
             "question": "帮我写一个快速排序的代码",
@@ -296,7 +296,7 @@ class TestCsRedirectMain:
             "domain_hint": "customer_service",
         })
         # 主 router 异常兜底路径：证明已转出域锁、未被 CS prefilter 接管
-        assert out.get("route_mode") == "plan"
+        assert out.get("route_mode") == "clarify"
 
     def test_llm_low_confidence_stays_locked(
         self, fake_detector, travel_on, cs_on, monkeypatch,

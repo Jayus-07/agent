@@ -3,7 +3,7 @@
 迁入内容（2026-09-30 纯移动，函数体逐字保留；方案四模块之外新增——
 router_node.py 在方案成文后增长出的分层路由块，拆分时必须有着落）：
   - _hierarchical_state_fields：routing_meta → AgentState 平铺字段
-  - _handle_hierarchical_meta：hierarchical 决策分派（prefilter 复用/澄清/legacy 回退）
+  - _handle_hierarchical_meta：统一路由决策分派（prefilter 复用/澄清/引擎续判）
 
 依赖方向（单向）：hierarchical → prefilter_chain + cs_understanding，不回环。
 """
@@ -15,6 +15,7 @@ from backend.orchestration.graph.routing.cs_understanding import (
 from backend.orchestration.graph.routing.prefilter_chain import (
     _mark_route_from_update,
 )
+from backend.orchestration.router import get_routing_engine
 from backend.shared.logger import logger
 
 
@@ -40,7 +41,7 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
     """hierarchical 决策分派。
 
     Returns:
-        dict → 提前返回的 state 更新（prefilter 命中 / 澄清 / legacy 回退）；
+        dict → 提前返回的 state 更新（prefilter 命中 / 澄清 / 引擎续判）；
         None → 决策照常向下（plan / tool_route），粗分类字段由调用方并入。
     """
     action = meta.get("domain_action") or "plan"
@@ -86,18 +87,22 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                 )
                 update = try_selection_funnel_prefilter(query, state)
         except Exception as e:
-            logger.warning(f"[RouterNode] 分层路由域图 prefilter 失败，回退 legacy: {e}")
+            logger.warning(f"[RouterNode] 域图 prefilter 失败，继续走统一路由引擎: {e}")
         if update is not None:
             return {**state, **_mark_route_from_update(
                 state, _enrich_with_understanding(update, query))}
-        # 未放行（如 CS 灰度 control 组 / 检测器不同意）→ legacy 路由重新决策；
-        # route_legacy 绕过 hierarchical 分支与缓存，粗分类字段保留供评测
-        from backend.orchestration.router import get_router
-        legacy_decision = get_router().route_legacy(query, route_context)
+        # 未放行（如 CS 灰度 control 组 / 检测器不同意）→ 交回统一引擎。
+        # 这里不能再调用旧 Router 兼容方法，否则一次请求会重新进入
+        # 另一套路由算法，导致结果来源不明、故障语义不一致。
+        engine_state = {
+            **state,
+            "routing_context": route_context,
+        }
+        engine_decision = get_routing_engine().route(query, engine_state)
         return {
             **state,
-            "route_decision": legacy_decision.model_dump(),
-            "route_mode": legacy_decision.execution_mode.value,
+            "route_decision": engine_decision.model_dump(),
+            "route_mode": engine_decision.execution_mode.value,
             **fields,
         }
 
@@ -136,7 +141,7 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                     "need_clarification": True,
                 }
         except Exception as e:
-            logger.warning(f"[RouterNode] 分层路由澄清构造失败，回退 plan 支线: {e}")
+            logger.warning(f"[RouterNode] 路由澄清构造失败，继续走统一 plan 支线: {e}")
         return None  # 防循环守卫不放行 / 构造失败 → 照常走 plan 支线
 
     # ── 工具域 / plan 拍板：回写路由上下文（下一轮延续判定数据源）──

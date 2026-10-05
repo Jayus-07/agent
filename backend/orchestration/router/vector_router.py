@@ -23,6 +23,7 @@ from backend.orchestration.router.types import (
     ALL_CAPABILITIES,
     WORKFLOW_NAMES,
 )
+from backend.shared.logger import logger
 
 
 # ── 路由 example queries：由 capabilities.yaml 派生（唯一事实源）──
@@ -37,6 +38,23 @@ WORKFLOW_EXAMPLES: dict[str, list[str]] = {
     w.name: list(w.examples) for w in _manifest.workflows
 }
 _EXPECTED_EXAMPLE_COUNT = _manifest.total_example_count
+
+
+class VectorRouteError(RuntimeError):
+    """向量路由基础设施故障，交由 RoutingEngine 做受控降级。"""
+
+    _CODES = {
+        "vector_unavailable",
+        "vector_index_mismatch",
+        "vector_query_error",
+    }
+
+    def __init__(self, code: str, cause: Exception | None = None) -> None:
+        if code not in self._CODES:
+            raise ValueError(f"未知向量路由故障码: {code}")
+        self.code = code
+        self.cause = cause
+        super().__init__(code)
 
 
 class VectorRouter:
@@ -141,42 +159,34 @@ class VectorRouter:
         Returns:
             RouteDecision: candidates 是按相似度排序的列表
         """
-        from backend.shared.logger import logger
-
         if self._store is None or self._store.count() == 0:
-            return RouteDecision(
-                execution_mode=ExecutionMode.PLAN,
-                candidates=[],
-                confidence=0.0,
-                reason="向量索引未初始化，交给 LLM Router",
-            )
+            raise VectorRouteError("vector_unavailable")
 
         try:
             results = self._store.similarity_search_with_score(query, k=top_k)
         except Exception as e:
-            # pgvector 侧检索异常（连接/维度等）→ 自动重建一次再试；
-            # 仍失败则降级 LLM Router（数秒级延迟）
-            if "dimension" in str(e).lower():
-                logger.warning(f"[VectorRouter] embedding 维度不匹配，自动重建路由索引: {e}")
-                self._rebuild_index()
+            from backend.rag.vectorstore.pgvector_store import (
+                IndexEmbeddingMismatchError,
+            )
+
+            if isinstance(e, IndexEmbeddingMismatchError):
                 try:
-                    results = self._store.similarity_search_with_score(query, k=top_k)
-                except Exception as e2:
-                    logger.warning(f"[VectorRouter] 重建后检索仍失败: {e2}")
-                    return RouteDecision(
-                        execution_mode=ExecutionMode.PLAN,
-                        candidates=[],
-                        confidence=0.0,
-                        reason="检索异常，交给 LLM Router",
+                    marker = getattr(self._store, "mark_rebuild_required", None)
+                    if callable(marker):
+                        marker()
+                except Exception:
+                    logger.warning(
+                        "[VectorRouter] 标记路由索引待重建失败",
+                        exc_info=True,
                     )
-            else:
-                logger.warning(f"[VectorRouter] 检索失败: {e}")
-                return RouteDecision(
-                    execution_mode=ExecutionMode.PLAN,
-                    candidates=[],
-                    confidence=0.0,
-                    reason="检索异常，交给 LLM Router",
+                logger.warning(
+                    "[VectorRouter] 路由索引 embedding 不匹配，交由统一引擎降级: %s",
+                    e,
                 )
+                raise VectorRouteError("vector_index_mismatch", e) from e
+
+            logger.warning("[VectorRouter] 路由索引检索失败，交由统一引擎降级: %s", e)
+            raise VectorRouteError("vector_query_error", e) from e
 
         # 归一化距离 → 相似度。pgvector cosine distance 已按 Chroma 量纲
         # （2−2·cos_sim）×2 对齐，分数公式与迁移前一致：1 / (1 + distance)
@@ -193,8 +203,7 @@ class VectorRouter:
         # 规则特征分数校准（2026-09-22 D6 修复）：向量召回完成后按
         # capabilities.yaml 声明的能力特征（calibrate_signals opt-in）对
         # 分数做加分/降权。纯函数零 IO；未 opt-in 的能力分数原样返回。
-        # legacy 三层路由与 hierarchical 细路由（_fine_scores 复用本方法）
-        # 在此单点同时生效。
+        # RoutingEngine 的能力解析与域内细路由都复用本方法，校准只在此单点生效。
         from backend.orchestration.router.score_calibration import calibrate_scores
 
         score_map = {c.name: c.score for c in candidates}

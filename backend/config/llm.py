@@ -231,19 +231,6 @@ TOOL_SELECTOR_FAST_PATH_SCORE = float(
 TOOL_SELECTOR_MAX_CANDIDATES = int(
     os.getenv("TOOL_SELECTOR_MAX_CANDIDATES", "3"))
 
-# ── 分层路由（hierarchical routing，2026-09-22）──────────────
-# ROUTING_ARCHITECTURE:
-#   legacy        三层 Router（rule→vector→LLM）直接选 capability（现行为）
-#   hierarchical  粗分类器（域）→ Domain Tool Registry → 细工具选择（Fast Path /
-#                 tool_selector LLM）；QueryRouter 不再承担具体 Tool 选择
-# 切换期间可用 ROUTING_SHADOW_MODE 双轨：legacy 拍板执行，hierarchical 同时
-# 计算 domain + fine top1 并记录 legacy/hierarchical 是否一致（shadow 不调
-# 任何 LLM，不产生额外模型成本），供真实流量评估后切换。
-ROUTING_ARCHITECTURE = os.getenv("ROUTING_ARCHITECTURE", "legacy").strip().lower()
-ROUTING_SHADOW_MODE = os.getenv(
-    "ROUTING_SHADOW_MODE", "false"
-).strip().lower() in ("1", "true", "yes")
-
 # 粗分类 Confidence Gate（§10）：top1 置信度与 top1-top2 margin 双阈值，
 # 任一不满足 → unknown（进澄清），不强行归域。
 # 例：knowledge=0.61 / data=0.59 —— margin=0.02 < 0.12，必须拒判。
@@ -254,8 +241,7 @@ COARSE_DOMAIN_MIN_MARGIN = float(os.getenv("COARSE_DOMAIN_MIN_MARGIN", "0.12"))
 COARSE_RULE_STRONG_HITS = int(os.getenv("COARSE_RULE_STRONG_HITS", "2"))
 # 规则弱信号对 embedding 分数的加成（每命中一次；上限 0.1 封顶防规则淹没语义）
 COARSE_RULE_HINT_BONUS = float(os.getenv("COARSE_RULE_HINT_BONUS", "0.05"))
-# unknown 处置：clarify = 进澄清（追问卡片）；legacy = 回退旧行为（plan 支线）
-COARSE_UNKNOWN_ACTION = os.getenv("COARSE_UNKNOWN_ACTION", "clarify").strip().lower()
+# unknown 处置固定进入澄清，避免不确定问题直接制造 plan 风暴。
 # embedding 域心余弦 → softmax 温度：把任意量纲的相似度转成校准概率
 # （top1 概率 / top1-top2 概率差直接对齐 COARSE_DOMAIN_* 阈值）。
 # 越小分布越尖锐；评测（§19）用真实流量校准后再调。

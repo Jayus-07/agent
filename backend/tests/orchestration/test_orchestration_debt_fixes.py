@@ -90,13 +90,14 @@ def test_make_sync_reuses_thread_local_loop():
 
 
 def test_route_cache_key_context_positions():
-    from backend.orchestration.router.router import (
-        _ROUTE_CACHE_CONTEXT_VERSION,
+    from backend.orchestration.router.engine import (
+        _ROUTE_ENGINE_CACHE_VERSION,
         _route_cache_key,
     )
 
     base = _route_cache_key("查库存")
-    assert base.startswith(_ROUTE_CACHE_CONTEXT_VERSION)
+    assert "routing-engine" in base
+    assert _ROUTE_ENGINE_CACHE_VERSION in base
     assert _route_cache_key("  查库存 ") == base  # strip/lower 归一保持
     ctx1 = {"user_id": "u1", "department": "d1"}
     assert _route_cache_key("查库存", ctx1) != base  # 上下文参与键构造
@@ -112,7 +113,7 @@ def test_route_cache_key_context_positions():
 
 def test_router_cache_scoped_by_context(monkeypatch):
     """行为级：同上下文命中缓存，不同上下文不互串。"""
-    import backend.orchestration.router.router as rmod
+    from backend.orchestration.router.engine import RoutingEngine
     from backend.orchestration.router.types import (
         CapabilityScore,
         ExecutionMode,
@@ -124,12 +125,29 @@ def test_router_cache_scoped_by_context(monkeypatch):
     class FakeRule:
         def route(self, q: str):
             calls["n"] += 1
-            return RouteDecision(
-                execution_mode=ExecutionMode.DIRECT,
-                candidates=[CapabilityScore(name="sql.query", score=0.9)],
-                confidence=0.9,
-                reason="fake-strong-rule",
-            )
+            return None
+
+    class FakeDomain:
+        def route(self, q, state):
+            return {"domain": "data", "confidence": 0.9, "source": "test"}
+
+    class FakeCapability:
+        def route(self, domain, q, context):
+            return {
+                "domain": domain,
+                "capability": "sql.query",
+                "candidates": [{"name": "sql.query", "score": 0.9}],
+                "confidence": 0.9,
+            }
+
+    class FakeResolver:
+        def resolve(self, domain, capability, override):
+            return type(
+                "Decision", (), {
+                    "mode": "direct", "target": "sql.query",
+                    "confidence": 0.9, "reasoning": "test",
+                },
+            )()
 
     class StubCache:
         def __init__(self):
@@ -141,17 +159,19 @@ def test_router_cache_scoped_by_context(monkeypatch):
         def set_json(self, k, v):
             self.store[k] = v
 
-    monkeypatch.setattr(rmod, "_router_cache", StubCache())
-    router = rmod.Router.__new__(rmod.Router)  # 跳过三层初始化（不碰向量索引）
-    router.rule = FakeRule()
-    router.vector = None
-    router.llm = None
+    router = RoutingEngine(
+        rule_router=FakeRule(),
+        domain_router=FakeDomain(),
+        capability_router=FakeCapability(),
+        execution_resolver=FakeResolver(),
+        cache=StubCache(),
+    )
 
-    router.route("同文问题", context={"user_id": "u1", "department": "d"})
-    router.route("同文问题", context={"user_id": "u1", "department": "d"})
+    router.route("同文问题", {"user_id": "u1", "department": "d"})
+    router.route("同文问题", {"user_id": "u1", "department": "d"})
     assert calls["n"] == 1, "同上下文第二次调用应命中缓存"
 
-    router.route("同文问题", context={"user_id": "u2", "department": "d"})
+    router.route("同文问题", {"user_id": "u2", "department": "d"})
     assert calls["n"] == 2, "不同 user_id 的同文问题不得互串缓存"
 
 

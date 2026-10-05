@@ -5,10 +5,10 @@
 
 三级识别（用户规格 §12，全部复用既有设施，不另起炉灶）：
   Level 1  确定性规则   —— 本模块的正则实体/意图关键词（~µs 级）
-  Level 2  既有三层路由 —— router_node 已算好的 RouteDecision
-                            （rule 强信号 / vector 分类 / LLM 兜底三层）
-  Level 3  LLM fallback —— 由既有三层 Router 的 LLM 层承担，置信度低时
-                            才触发；本模块**绝不**自己再调一次 LLM
+  Level 2  RoutingEngine —— router_node 已算好的 RouteDecision
+                            （域判断 / 能力候选 / 执行方式）
+  Level 3  LLM fallback —— 由 RoutingEngine 在基础设施降级时承担；
+                            本模块**绝不**自己再调一次 LLM
 
 输出（state["query_understanding"]）：
   {
@@ -149,9 +149,9 @@ def _needs_from_candidates(candidates: list) -> dict[str, bool]:
 
 
 def _decision_layer(decision: Any) -> str:
-    """从既有 RouteDecision 推断决策层（口径：confidence 阈值与 router.py 一致）。
+    """从 RoutingEngine 的 RouteDecision 推断证据来源。
 
-    rule 层 confidence>=0.8 即定案；0.5~0.8 是 vector 采纳区；更低是 LLM 兜底。
+    保留旧输出枚举，兼容评测报告；最终拍板只属于 RoutingEngine。
     """
     confidence = float(getattr(decision, "confidence", 0.0) or 0.0)
     if confidence >= 0.8:
@@ -164,10 +164,10 @@ def _decision_layer(decision: Any) -> str:
 # ── 主入口 ──────────────────────────────────────────────────
 
 def understand_query(query: str, decision: Any = None) -> dict[str, Any]:
-    """结构化问题理解。decision 是既有三层路由的 RouteDecision（可为 None）。
+    """结构化问题理解。decision 是 RoutingEngine 的 RouteDecision（可为 None）。
 
     纯函数：不调 LLM、不碰网络/DB —— Level 3 LLM fallback 已由 decision
-    的产生过程（router.route 内部）承担，这里只做规则合成。
+    的产生过程（RoutingEngine 内部）承担，这里只做规则合成。
     """
     query = (query or "").strip()
     if not query:

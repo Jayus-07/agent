@@ -241,7 +241,7 @@ def test_router_node_compat_update_adds_serializable_snapshots():
     assert result["legacy_used"] is False
 
 
-def test_router_node_legacy_route_decision_becomes_capability_snapshot():
+def test_router_node_engine_decision_becomes_capability_snapshot():
     from backend.orchestration.graph.router_node import _with_router_decisions
     from backend.orchestration.router.types import (
         CapabilityScore,
@@ -259,14 +259,14 @@ def test_router_node_legacy_route_decision_becomes_capability_snapshot():
         {
             "route_decision": decision.model_dump(),
             "route_mode": "direct",
-            "legacy_used": True,
+            "legacy_used": False,
         },
         "查销售额",
         existing_override=decision,
     )
     assert result["capability_decision"]["capability"] == "sql.query"
     assert result["execution_decision"]["mode"] == "direct"
-    assert result["legacy_used"] is True
+    assert result["legacy_used"] is False
 
 
 def test_router_node_records_sanitized_decision_in_current_trace_metadata():
@@ -303,7 +303,7 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
             "capability": "sql.query",
             "mode": "direct",
             "confidence": 0.93,
-            "source": "legacy",
+            "source": "route_engine",
         }
     finally:
         trace_collector.clear_for_test()

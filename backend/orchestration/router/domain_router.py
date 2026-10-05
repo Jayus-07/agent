@@ -116,6 +116,8 @@ class DomainRouter:
             "domain": prediction.domain,
             "subflow": None,
             "confidence": float(prediction.confidence),
+            "margin": float(getattr(prediction, "margin", 0.0)),
+            "second_domain": str(getattr(prediction, "second_domain", "") or ""),
             "source": source,
             "reasoning": prediction.reason_code,
         }
@@ -131,11 +133,13 @@ class DomainRouter:
             "gate": "embedding",
             "degraded": "fallback",
         }.get(str(meta.get("domain_source") or ""),
-               str(meta.get("domain_source") or "legacy"))
+               str(meta.get("domain_source") or "route_engine"))
         return {
             "domain": domain,
             "subflow": None,
             "confidence": float(meta.get("domain_confidence") or 0.0),
+            "margin": float(meta.get("domain_margin") or 0.0),
+            "second_domain": str(meta.get("domain_second") or ""),
             "source": source,
             "reasoning": str(meta.get("reason_code") or "hierarchical"),
         }

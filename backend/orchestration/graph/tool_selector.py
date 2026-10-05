@@ -191,7 +191,7 @@ def _validate_selection(cap: str, valid_caps: list[str],
     两层（最小保护，不改 Router / 不扩规则集）：
       1. candidate constraints —— 必须在本次绑定的候选集合内；
       2. domain conflict —— 与当前请求粗域冲突（如 data 域问题选中
-         knowledge 域能力）即拒绝。state 无域信息（legacy 路径）时跳过。
+         knowledge 域能力）即拒绝。state 无域信息（兼容短路）时跳过。
     合法但次优（如 sql 与 data.collect 都在域内）不拦 —— 优劣由校准与
     FC 意图判断负责，这里只拦非法。
     """
