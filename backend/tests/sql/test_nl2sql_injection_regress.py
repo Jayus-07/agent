@@ -103,13 +103,8 @@ class TestLegacyPentestPosture:
         # 子查询逃逸读系统表
         ("SELECT (SELECT count(*) FROM pg_user) FROM orders LIMIT 1",
          2, "table_forbidden"),
-        # ── 第③层：列字典（未限定表名当前不可解析 → 拒绝）──
-        ("SELECT id FROM orders LIMIT 1", 3, "column_undefined"),
-        ("SELECT id FROM orders", 3, "column_undefined"),
-        ("SELECT id FROM orders LIMIT 999999", 3, "column_undefined"),
-        ("SELECT id FROM orders /*x*/ WHERE 1=1 LIMIT 1", 3, "column_undefined"),
-        ("SELECT id FROM orders LIMIT 1 -- DROP TABLE orders", 3, "column_undefined"),
-        ("SELECT id::text FROM orders LIMIT 1", 3, "column_undefined"),
+        # 裸名归一化后 orders 可解析 → LIMIT 超限在第⑤层先拦（早于 guard 表域）
+        ("SELECT id FROM orders LIMIT 999999", 5, "limit_exceeded"),
         # ── 第④层：函数黑名单 ──
         ("SELECT pg_sleep(10)", 4, "dangerous_function"),
         ("SELECT pg_read_file('/etc/passwd')", 4, "dangerous_function"),
@@ -126,6 +121,14 @@ class TestLegacyPentestPosture:
         # validator 全通过（chr/除零无害），guard 表域策略拒绝未登记表名
         "SELECT chr(65) FROM orders LIMIT 1",
         "SELECT 1/0 FROM orders LIMIT 1",
+        # 2026-10-06 裸名归一化后（products/orders → 限定名），orders 为
+        # personal 域且无 department_column，department scope 不可表达 →
+        # guard 层 fail-closed 拒绝（原 column_undefined 是裸名半兼容的偶然拦截）
+        "SELECT id FROM orders LIMIT 1",
+        "SELECT id FROM orders",
+        "SELECT id FROM orders /*x*/ WHERE 1=1 LIMIT 1",
+        "SELECT id FROM orders LIMIT 1 -- DROP TABLE orders",
+        "SELECT id::text FROM orders LIMIT 1",
     ])
     def test_blocked_by_guard_table_domain(self, guard, sql):
         ctx = build_ctx(**EDITOR_CTX)

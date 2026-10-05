@@ -103,18 +103,22 @@ class TestValidatorAllowsSchemaQualified:
 
 
 class TestValidatorAllowsBareNamesBackward:
-    """LLM 偶尔会只输出裸表名（旧习惯），应容错识别。"""
+    """LLM 偶尔会只输出裸表名（旧习惯），应容错识别。
+
+    2026-10-06 起裸名在抽取层归一化到唯一 schema-qualified key：
+    列字典按限定名组织，裸名直传会让列校验查不到列（向后兼容只做一半的缺陷）。
+    """
 
     def test_bare_products_resolves(self):
         sql = "SELECT product_name FROM products LIMIT 3"
         safe, tables, _ = sql_validator.validate(sql)
-        # 命中 reverse-resolve：找到 schema-qualified 的 key
-        assert any(t == "products" for t in tables)
+        # 裸名被归一化到 schema-qualified 的 key（列校验可用）
+        assert "product.products" in tables
 
     def test_bare_orders_resolves(self):
         sql = "SELECT order_no FROM orders LIMIT 3"
         _, tables, _ = sql_validator.validate(sql)
-        assert "orders" in tables
+        assert "order.orders" in tables
 
 
 class TestValidatorRejectsForbidden:

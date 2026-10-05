@@ -11,6 +11,7 @@ from backend.sql.policy import (
     SQLPolicyError,
     SQL_TABLE_NOT_ALLOWED,
 )
+from backend.sql.schema_loader import schema_loader
 
 from tests.sql.conftest import make_ctx
 
@@ -22,13 +23,20 @@ INTERNAL_TABLES = [
 ]
 
 
+def _probe_sql(qname: str) -> str:
+    """探针列取数据字典首列——daily_profit 主键是 date 无 id，固定写 id
+    会被列校验先拦（column_undefined），到不了 scope 门，探针失真。"""
+    cols = sorted(schema_loader.get_browse_columns(qname))
+    return f"SELECT {cols[0] if cols else 'id'} FROM {qname}"
+
+
 class TestInternalDeniedBelowAll:
     @pytest.mark.parametrize("qname", INTERNAL_TABLES)
     def test_department_scope_denied(self, qname):
         ctx = make_ctx("department", department="hr")
         with pytest.raises(SQLPolicyError) as ei:
             SQLPolicyGuard().validate_and_rewrite(
-                f"SELECT id FROM {qname}", ctx)
+                _probe_sql(qname), ctx)
         assert ei.value.code == SQL_TABLE_NOT_ALLOWED
 
     @pytest.mark.parametrize("qname", INTERNAL_TABLES)
@@ -36,7 +44,7 @@ class TestInternalDeniedBelowAll:
         ctx = make_ctx("self", user_id="3")
         with pytest.raises(SQLPolicyError) as ei:
             SQLPolicyGuard().validate_and_rewrite(
-                f"SELECT id FROM {qname}", ctx)
+                _probe_sql(qname), ctx)
         assert ei.value.code == SQL_TABLE_NOT_ALLOWED
 
 
@@ -45,7 +53,7 @@ class TestInternalAllowedByAll:
     def test_all_scope_allowed(self, qname):
         ctx = make_ctx("all")
         guarded = SQLPolicyGuard().validate_and_rewrite(
-            f"SELECT id FROM {qname}", ctx)
+            _probe_sql(qname), ctx)
         assert guarded.applied_scopes == ()
         assert "LIMIT 100" in guarded.executable_sql
 
@@ -63,8 +71,10 @@ class TestInternalIndirectAccess:
     def test_internal_table_in_subquery_denied(self):
         """internal 表藏在子查询里同样拒绝（全 AST 表引用判定）。"""
         ctx = make_ctx("department", department="hr")
-        sql = ('SELECT id FROM product.products WHERE id IN '
-               '(SELECT product_id FROM ai.agent_tasks)')
+        outer_col = sorted(schema_loader.get_browse_columns("product.products"))[0]
+        inner_col = sorted(schema_loader.get_browse_columns("ai.agent_tasks"))[0]
+        sql = (f'SELECT {outer_col} FROM product.products WHERE {outer_col} IN '
+               f'(SELECT {inner_col} FROM ai.agent_tasks)')
         with pytest.raises(SQLPolicyError) as ei:
             SQLPolicyGuard().validate_and_rewrite(sql, ctx)
         assert ei.value.code == SQL_TABLE_NOT_ALLOWED

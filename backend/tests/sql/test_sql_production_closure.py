@@ -133,7 +133,7 @@ class TestKillSwitch:
 
 
 # =====================================================
-# Deny 终态（规格 §八：generate 次数=1、executor 次数=0）
+# Deny 终态（2026-10-06 语义：表域判定前置——generate=0、executor=0）
 # =====================================================
 
 class TestDenyTerminal:
@@ -160,7 +160,7 @@ class TestDenyTerminal:
 
     def test_terminal_deny_no_retry_no_executor(self, monkeypatch):
         """policy 链：策略拒绝（internal 表 + department scope）→ 终态——
-        generate 只发生 1 次、executor 零调用、不携带 feedback 重试（§八）。"""
+        表域判定前置，generate 零调用、executor 零调用（拒绝不花 LLM 成本）。"""
         import backend.sql.sql_agent as agent_mod
 
         calls = {"generate": 0, "executor": 0}
@@ -178,13 +178,12 @@ class TestDenyTerminal:
 
         agent = get_sql_agent()
         result = agent.ask_struct("查财务", policy=_editor_ctx(source="graph"))
-        assert calls["generate"] == 1
+        assert calls["generate"] == 0
         assert calls["executor"] == 0
         assert result.status == "permission_denied"
 
     def test_feedback_never_leaks_on_deny(self, monkeypatch):
-        """策略拒绝后 feedback 不携带上次 SQL/原因进入下一次生成
-        （capture generate 的 feedback 参数必须为 None）。"""
+        """策略拒绝发生在生成之前——generate 零调用，feedback 无从泄露。"""
         import backend.sql.sql_agent as agent_mod
 
         seen_feedback = []
@@ -198,7 +197,7 @@ class TestDenyTerminal:
         monkeypatch.setattr(agent_mod, "generate_sql", fake_generate)
         agent = get_sql_agent()
         agent.ask_struct("查财务", policy=_editor_ctx(source="graph"))
-        assert seen_feedback == [None]
+        assert seen_feedback == []
 
     def test_syntax_error_still_retryable(self, monkeypatch):
         """旧链：语法类（alias_undefined）保留既有有限修复重试——
@@ -536,8 +535,9 @@ class TestGraphIntegration:
 
         result = asyncio.run(run())
         sr = result["step_results"]["1"]
-        assert calls["guard"] == 1, calls
-        assert calls["generate"] == 1
+        # 表域判定前置：拒绝发生在 guard/生成之前，三者全零
+        assert calls["guard"] == 0, calls
+        assert calls["generate"] == 0
         assert calls["executor"] == 0
         # skill 层语义：permission_denied → step failed + error_type 保留原语义
         assert sr["status"] == "failed"

@@ -24,18 +24,20 @@ def test_customer_service_prompt_keys_are_registered_and_have_defaults():
 def test_query_llm_decompose_uses_prompt_service(monkeypatch):
     from backend.config import customer_service as config
     from backend.customer_service.experts import query
-    import backend.infra.llm as llm_module
+    import backend.infra.llm.proxy as llm_proxy
 
     monkeypatch.setattr(config, "CS_QUERY_LLM_DECOMPOSE_ENABLED", True)
     monkeypatch.setattr(config, "CS_QUERY_LLM_TIMEOUT_MS", 1000)
     calls: list[tuple[str, dict]] = []
 
-    class FakeLLM:
+    # G7 收编后生产路径走 llm 代理；_LLMProxy.__getattr__ 全委托——
+    # 连属性访问都会触发真实模型解析，mock 必须打在 _resolve_active_llm
+    class _FakeLLM:
         def invoke(self, messages):
             assert messages[0].content == "rendered-query-prompt"
             return SimpleNamespace(content='["t_order_status"]')
 
-    monkeypatch.setattr(llm_module, "get_llm", lambda: FakeLLM())
+    monkeypatch.setattr(llm_proxy, "_resolve_active_llm", lambda: _FakeLLM())
     monkeypatch.setattr(
         query,
         "render_prompt",
@@ -50,18 +52,18 @@ def test_query_llm_decompose_uses_prompt_service(monkeypatch):
 
 def test_complaint_llm_assess_uses_prompt_service(monkeypatch):
     from backend.customer_service.service import complaint_service
-    import backend.infra.llm as llm_module
+    import backend.infra.llm.proxy as llm_proxy
 
     calls: list[tuple[str, dict]] = []
 
-    class FakeLLM:
+    class _FakeLLM:
         def invoke(self, messages):
             assert messages[0].content == "rendered-complaint-prompt"
             return SimpleNamespace(
                 content='{"is_complaint": true, "severity": "high"}'
             )
 
-    monkeypatch.setattr(llm_module, "get_llm", lambda: FakeLLM())
+    monkeypatch.setattr(llm_proxy, "_resolve_active_llm", lambda: _FakeLLM())
     monkeypatch.setattr(
         complaint_service,
         "render_prompt",
@@ -81,18 +83,18 @@ def test_complaint_llm_assess_uses_prompt_service(monkeypatch):
 def test_supervisor_llm_decision_uses_prompt_service(monkeypatch):
     from backend.config import customer_service as config
     from backend.customer_service import supervisor
-    import backend.infra.llm as llm_module
+    import backend.infra.llm.proxy as llm_proxy
 
     monkeypatch.setattr(config, "CS_SUPERVISOR_LLM_ENABLED", True)
     monkeypatch.setattr(config, "CS_SUPERVISOR_LLM_TIMEOUT_MS", 1000)
     calls: list[tuple[str, dict]] = []
 
-    class FakeLLM:
+    class _FakeLLM:
         def invoke(self, messages):
             assert messages[0].content == "rendered-supervisor-prompt"
             return SimpleNamespace(content="query")
 
-    monkeypatch.setattr(llm_module, "get_llm", lambda: FakeLLM())
+    monkeypatch.setattr(llm_proxy, "_resolve_active_llm", lambda: _FakeLLM())
     monkeypatch.setattr(
         supervisor,
         "render_prompt",

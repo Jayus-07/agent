@@ -258,7 +258,7 @@ def test_a3_editor_cross_scope_denied(auth_user, task_db, monkeypatch):
     sr = out["step_results"]["1"]
     assert sr["status"] == "failed"
     assert sr["error_type"] == "permission_denied"
-    assert calls["generate"] == 1  # 生成发生了（表路由后 scope 注入拒绝）
+    assert calls["generate"] == 0  # 表域判定前置拒绝，生成零调用（2026-10-06 语义对齐）
     assert calls["executor"] == 0
     assert TaskStatus.FAILED not in task_db["status"]  # 任务本身成功收尾（skill 内失败≠任务失败）
 
@@ -541,8 +541,10 @@ def test_a11_concurrent_executors_no_auth_crosstalk(task_db, monkeypatch):
 
     monkeypatch.setattr(Guard, "precheck", _pre)
 
-    def _select(tables):
-        return tables
+    def _select(question, *args, **kwargs):
+        # 现契约：Router 收问题返表清单；收下 allowed_tables 以走
+        # _select_authorized_tables 的授权收口分支（editor 命中 shared 表）
+        return ["product.products"]
 
     def _generate(tables, question, **kwargs):
         return "SELECT sku FROM product.products LIMIT 3"

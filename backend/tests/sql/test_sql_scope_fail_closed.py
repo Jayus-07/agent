@@ -92,8 +92,8 @@ class TestSecurityRejectionIsTerminal:
             lambda q, t, feedback=None: "SELECT amount FROM finance.expenses")
 
     def test_policy_rejection_does_not_retry(self, monkeypatch):
-        """策略拒绝是终态：SQLAgent 策略链不重试（generate 只调一次），
-        不把拒绝原因反馈给模型再生成（§五十二）。"""
+        """策略拒绝是终态：表域判定前置，generate 零调用、不进入生成循环
+        （2026-10-06 语义对齐——拒绝不花 LLM 成本，也无 feedback 泄露面）。"""
         self._patch_agent_chain(monkeypatch)
         agent = get_sql_agent()
         calls = {"n": 0}
@@ -108,7 +108,7 @@ class TestSecurityRejectionIsTerminal:
         ctx = make_ctx("department", department="hr")
         result = agent._ask_struct_with_policy(
             "查财务费用", ctx)
-        assert calls["n"] == 1
+        assert calls["n"] == 0
         assert result.status == "permission_denied"
 
     def test_policy_rejection_error_is_safe(self, monkeypatch):
