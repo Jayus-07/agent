@@ -8,6 +8,7 @@ Alertmanager 原生 webhook 直连会被拒；本桥把 AM 标准告警 JSON 转
 通道（环境变量，全部可选，可同时配多个，同一条告警发给所有已配置通道）：
   ALERT_BRIDGE_WECOM_WEBHOOK     企微群机器人 webhook
   ALERT_BRIDGE_FEISHU_WEBHOOK    飞书群机器人 webhook
+  ALERT_BRIDGE_FEISHU_SECRET     飞书加签密钥（机器人开了「签名校验」才需要）
   ALERT_BRIDGE_DINGTALK_WEBHOOK  钉钉群机器人 webhook
   ALERT_BRIDGE_DINGTALK_SECRET   钉钉加签密钥（可选）
 """
@@ -16,6 +17,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,7 +29,18 @@ CHANNELS = {
     "dingtalk": os.environ.get("ALERT_BRIDGE_DINGTALK_WEBHOOK", "").strip(),
 }
 DINGTALK_SECRET = os.environ.get("ALERT_BRIDGE_DINGTALK_SECRET", "").strip()
+FEISHU_SECRET = os.environ.get("ALERT_BRIDGE_FEISHU_SECRET", "").strip()
 MAX_MSG_CHARS = 1800  # 群机器人单条消息上限（企微 2048 字节级），超长截断
+
+
+def _feishu_sign() -> dict:
+    """飞书自定义机器人「签名校验」：key=timestamp\\nsecret 对空串 HmacSHA256 再 base64"""
+    ts = str(int(time.time()))
+    sign_str = f"{ts}\n{FEISHU_SECRET}"
+    sign = base64.b64encode(
+        hmac.new(sign_str.encode(), digestmod=hashlib.sha256).digest()
+    ).decode()
+    return {"timestamp": ts, "sign": sign}
 
 
 def _post_json(url: str, payload: dict) -> None:
@@ -58,7 +71,10 @@ def _send(text: str) -> dict:
         _post_json(CHANNELS["wecom"], {"msgtype": "text", "text": {"content": text}})
         sent["wecom"] = "ok"
     if CHANNELS["feishu"]:
-        _post_json(CHANNELS["feishu"], {"msg_type": "text", "content": {"text": text}})
+        payload = {"msg_type": "text", "content": {"text": text}}
+        if FEISHU_SECRET:
+            payload.update(_feishu_sign())
+        _post_json(CHANNELS["feishu"], payload)
         sent["feishu"] = "ok"
     if CHANNELS["dingtalk"]:
         _post_json(_dingtalk_url(), {"msgtype": "text", "text": {"content": text}})
