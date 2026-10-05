@@ -18,6 +18,7 @@ EXPECTED_CORE_FILES = {
     "actions.py",
     "agent_base.py",
     "contracts.py",
+    "decision_store.py",  # M4 决策留痕持久化实现。
     "evidence_utils.py",
     "events.py",
     "intent_signals.py",

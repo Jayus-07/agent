@@ -26,7 +26,7 @@ from backend.travel.booking.store import BookingStore
 TENANT, USER = "tenant-A", "user-A"
 
 _HOTEL_PARAMS = {
-    "city": "大阪", "check_in": "2026-10-03", "check_out": "2026-10-05",
+    "city": "大阪", "check_in": "2027-10-03", "check_out": "2027-10-05",
     "adults": 2, "children": 0, "rooms": 1,
 }
 

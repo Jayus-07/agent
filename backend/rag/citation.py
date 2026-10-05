@@ -33,6 +33,17 @@ from backend.shared.logger import logger
 # Citation 校验阈值（与 RAGChain._verify_support 一致）
 CITATION_SUPPORT_THRESHOLD = 0.0  # 默认不做事后过滤，依靠 Rerank 分数已足够
 
+# 冲突证据只处理能确定识别的数值事实，避免把年份、章节号等普通数字
+# 误报成冲突。金额/价格是当前验收的重点，其他单位保留给同一机制扩展。
+_CONFLICT_VALUE_RE = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>元|人民币|￥|¥|%|公里|千米|km|小时|分钟|天|人)"
+)
+_CONFLICT_KEYWORDS = (
+    "开放时间", "营业时间", "门票价格", "门票", "票价", "价格", "费用", "收费",
+    "售价", "折扣", "容量", "距离", "时长", "数量", "人数", "温度",
+)
+
 # 文档类型中文标签：唯一事实源是 taxonomy_spec.DOC_TYPE_LABELS（含启动期覆盖度校验）。
 # 本模块历史上自持一份 _TYPE_LABEL_MAP，只覆盖 9 类、且含 yaml 里根本不存在的
 # report / manual 两个过期项，导致其余类型在引用标注里回落英文原始码。
@@ -127,6 +138,88 @@ class CitationFormatter:
 
         # 阶段 2: 完成（企业做法：Prompt 强制 LLM 标注引用 [1][2]，不做事后猜）
         return answer, verified
+
+    def annotate_conflicts(self, answer: str, docs: list, question: str = "") -> str:
+        """对同一问题的多源数值分歧做确定性提示并补齐引用。
+
+        这里只在问题锚点同时出现在两份来源、且同一事实关键词的数值集合
+        完全不同时触发。这样不会因为检索结果里恰好有两个不相干景点的
+        价格就误报；触发后不裁掉任何来源，也不替用户擅自选择一个值。
+        """
+        conflicts = self._find_conflicts(docs, question)
+        if not conflicts:
+            return answer
+
+        indexes = sorted({
+            int(doc.metadata["index"])
+            for conflict in conflicts
+            for doc in conflict
+            if str(doc.metadata.get("index", "")).isdigit()
+        })
+        citations = "、".join(f"[E{index}]" for index in indexes)
+        marker = f"存在不同说法：相关来源对同一事实给出了不同值，请按来源分别核对 {citations}。"
+        if "存在不同说法" in answer:
+            return answer if all(f"[E{index}]" in answer for index in indexes) else (
+                answer + "\n\n" + marker
+            )
+        return marker + "\n\n" + answer
+
+    @staticmethod
+    def _question_anchor(question: str, texts: list[str]) -> str:
+        """从问题中提取事实关键词前的实体，避免跨景点误报。"""
+        runs = re.findall(r"[一-鿿]{2,}", question or "")
+        best = ""
+        for run in runs:
+            for keyword in sorted(_CONFLICT_KEYWORDS, key=len, reverse=True):
+                position = run.find(keyword)
+                if position < 2:
+                    continue
+                candidate = run[:position]
+                if all(candidate in text for text in texts) and len(candidate) > len(best):
+                    best = candidate
+        return best
+
+    @classmethod
+    def _facts_for_anchor(cls, text: str, anchor: str) -> dict[str, set[str]]:
+        """提取含问题锚点的句子中的「事实关键词→数值」集合。"""
+        facts: dict[str, set[str]] = {}
+        sentences = re.split(r"[。！？\n]", text or "")
+        for sentence in sentences:
+            if anchor not in sentence:
+                continue
+            keyword_positions = [
+                (position, keyword)
+                for keyword in _CONFLICT_KEYWORDS
+                for position in [sentence.find(keyword)]
+                if position >= 0
+            ]
+            for match in _CONFLICT_VALUE_RE.finditer(sentence):
+                preceding = [item for item in keyword_positions if item[0] <= match.start()]
+                if not preceding:
+                    continue
+                keyword = max(preceding, key=lambda item: item[0])[1]
+                facts.setdefault(keyword, set()).add(
+                    f"{match.group('value')}{match.group('unit')}"
+                )
+        return facts
+
+    @classmethod
+    def _find_conflicts(cls, docs: list, question: str) -> list[tuple]:
+        """返回存在同一事实不同值的文档对。"""
+        conflicts = []
+        for left_index, left in enumerate(docs):
+            left_text = str(getattr(left, "page_content", "") or "")
+            for right in docs[left_index + 1:]:
+                right_text = str(getattr(right, "page_content", "") or "")
+                anchor = cls._question_anchor(question, [left_text, right_text])
+                if len(anchor) < 3:
+                    continue
+                left_facts = cls._facts_for_anchor(left_text, anchor)
+                right_facts = cls._facts_for_anchor(right_text, anchor)
+                common_keys = set(left_facts) & set(right_facts)
+                if any(left_facts[key].isdisjoint(right_facts[key]) for key in common_keys):
+                    conflicts.append((left, right))
+        return conflicts
 
     def format_references(self, docs: list, answer: str = "") -> str:
         """生成参考文献列表（Markdown）。

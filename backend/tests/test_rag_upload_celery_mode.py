@@ -193,6 +193,23 @@ class TestSettleIndexResult:
 
 class TestExecuteIndexTaskImpl:
 
+    def test_worker_settle_carries_actor_id_from_run(self, monkeypatch):
+        """Worker 收口审计必须带回派发时写入运行记录的上传者。"""
+        monkeypatch.setattr(ru, "_write_progress_redis", lambda *a, **kw: None)
+        monkeypatch.setattr(ru, "_do_index_sync",
+                            lambda *a, **kw: {"terminal": "done",
+                                              "trace_id": "t-actor",
+                                              "doc": {"doc_id": "d-actor"}})
+        monkeypatch.setattr(it, "_get_index_actor_id",
+                            lambda upload_id: "actor-42")
+        settle = MagicMock()
+        monkeypatch.setattr(ru, "_settle_index_result", settle)
+
+        out = it.execute_index_task_impl("u-actor", "/docs/a.pdf", "a.pdf")
+
+        assert out["status"] == "done"
+        assert settle.call_args.kwargs["actor_id"] == "actor-42"
+
     def test_success_returns_terminal(self, monkeypatch):
         redis_writes = []
         monkeypatch.setattr(ru, "_write_progress_redis",

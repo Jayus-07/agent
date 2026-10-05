@@ -219,6 +219,50 @@ class TestIntegration:
 
 
 # ==========================================================
+# 6. 多源数值冲突标注
+# ==========================================================
+
+class TestConflictingEvidence:
+    def test_marks_conflicting_values_and_keeps_both_citations(self, f):
+        """同一实体的不同数值必须显式提示，并把两份来源带入回答。"""
+        d1 = SimpleNamespace(
+            page_content="云水台景区门票价格为 50 元/人。",
+            metadata={"index": 1, "source_file": "公告甲.md"},
+        )
+        d2 = SimpleNamespace(
+            page_content="最新公告称云水台景区门票价格调整为 60 元/人。",
+            metadata={"index": 2, "source_file": "公告乙.md"},
+        )
+
+        result = f.annotate_conflicts(
+            "1. 门票价格为 50 元 [E1]。",
+            [d1, d2],
+            "云水台景区门票价格是多少？",
+        )
+
+        assert result.startswith("存在不同说法")
+        assert "[E1]" in result
+        assert "[E2]" in result
+
+    def test_does_not_mark_same_value_or_unrelated_numbers(self, f):
+        same_a = SimpleNamespace(
+            page_content="云水台景区门票价格为 50 元/人。",
+            metadata={"index": 1, "source_file": "公告甲.md"},
+        )
+        same_b = SimpleNamespace(
+            page_content="云水台景区门票价格仍为 50 元/人。",
+            metadata={"index": 2, "source_file": "公告乙.md"},
+        )
+        other = SimpleNamespace(
+            page_content="乌山风景区门票价格为 60 元/人。",
+            metadata={"index": 3, "source_file": "公告丙.md"},
+        )
+
+        assert f.annotate_conflicts("答案 [E1]", [same_a, same_b], "云水台门票多少钱") == "答案 [E1]"
+        assert f.annotate_conflicts("答案 [E1]", [same_a, other], "云水台景区门票多少钱") == "答案 [E1]"
+
+
+# ==========================================================
 # 6. normalize_point_layout（分点归一化，2026-09-19）
 # ==========================================================
 

@@ -1447,6 +1447,9 @@ class RAGChain:
         else:
             answer = cleaned_answer
             verified_docs = []
+        # 多源同事实出现不同数值时，确定性标注「存在不同说法」并保留双方引用；
+        # 不让一次 LLM 输出偶然只选择 top hit，亦不替用户静默裁决权威值。
+        answer = self.formatter.annotate_conflicts(answer, verified_docs, question)
         trace_collector.end_span(citation_span,
                              metrics={"verified_citations": len(verified_docs),
                                       "total_citations": len(context_docs),

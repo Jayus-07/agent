@@ -89,8 +89,8 @@ def test_graph_confirm_flow_double_click(booking_env, booking_service,
         lambda: booking_service)
     booking_service.create_quote(
         tenant_id="tenant-A", user_id="user-A", commerce_type="hotel",
-        search_params={"city": "大阪", "check_in": "2026-10-03",
-                       "check_out": "2026-10-05", "adults": 2,
+        search_params={"city": "大阪", "check_in": "2027-10-03",
+                       "check_out": "2027-10-05", "adults": 2,
                        "children": 0, "rooms": 1},
         selection={"index": 1})
     r1 = get_booking_graph().invoke(new_booking_graph_input(

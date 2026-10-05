@@ -928,7 +928,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                          upload_elapsed_ms: int | None, was_overwrite: bool,
                          upload_t0: float, result: dict | None, emit_fn,
                          exc: BaseException | None = None,
-                         staging_path: str = "") -> dict | None:
+                         staging_path: str = "", actor_id: str = "") -> dict | None:
     """索引终态收口 —— API 进程内与 Celery Worker 两条路径的统一出口（阶段4）。
 
     emit_fn: 同步事件发射器 (stage, message, **extra)。
@@ -1392,7 +1392,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
                 upload_id, filepath, filename, source, batch_id, kb_id,
                 upload_elapsed_ms, was_overwrite, _upload_t0,
                 result=None, emit_fn=emit_fn, exc=enqueue_err,
-                staging_path=staging_path)
+                staging_path=staging_path, actor_id=actor_id)
             await _finalize_upload_queue(upload_id)
             return
         # broker 不可达：可用性优先，回退本进程索引（与 task_manager 503 语义对齐）
@@ -1442,14 +1442,14 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
             upload_id, filepath, filename, source, batch_id, kb_id,
             upload_elapsed_ms, was_overwrite, _upload_t0,
             result=None, emit_fn=emit_fn, exc=e,
-            staging_path=staging_path)
+            staging_path=staging_path, actor_id=actor_id)
         await _finalize_upload_queue(upload_id)
         return
 
     _settle_index_result(
         upload_id, filepath, filename, source, batch_id, kb_id,
         upload_elapsed_ms, was_overwrite, _upload_t0,
-        result=result, emit_fn=emit_fn)
+        result=result, emit_fn=emit_fn, actor_id=actor_id)
     await _finalize_upload_queue(upload_id)
 
 def _remove_bak(filepath: str) -> None:

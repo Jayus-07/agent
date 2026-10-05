@@ -6,7 +6,7 @@
 链路（审计报告 §六 Commit A ②③④）：
   hop1  用户「帮我预订大阪的酒店」→ 子图缺槽 → 适配器写挂起
         （booking_intent）+ 回写活跃域（G1/G2）
-  hop2  用户「10月3日」→ 子图从挂起续填（G3）→ 已收 check_in、仍缺 check_out
+  hop2  用户「2027年10月3日」→ 子图从挂起续填（G3）→ 已收 check_in、仍缺 check_out
         → 挂起按同一 question_id 更新（续填不是新挂起）
 
 澄清路径不触达 BookingService（executor 在 action=unknown 时直接返回），
@@ -63,14 +63,14 @@ def test_two_hop_clarify_then_slot_answer_resumes(_memory_context_repo):
         resolve_booking_pending,
     )
 
-    route = resolve_booking_pending("10月3日", ctx)
+    route = resolve_booking_pending("2027年10月3日", ctx)
     assert route is not None and route["route_mode"] == "travel_booking"
 
-    out2 = travel_booking_graph_node(_state("10月3日"))
+    out2 = travel_booking_graph_node(_state("2027年10月3日"))
     assert out2["final_answer"]
 
     it2 = _intent(repo)
-    assert it2.get("collected", {}).get("check_in") == "2026-10-03"
+    assert it2.get("collected", {}).get("check_in") == "2027-10-03"
     assert it2.get("collected", {}).get("city") == "大阪"     # 上轮槽位保留
     assert it2.get("missing_slots") == ["check_out"]          # 只差退房日期
     # 续填是同一件事的推进：question_id 保留，不作废成新挂起
@@ -108,7 +108,7 @@ def test_router_dispatches_booking_pending_back(_memory_context_repo):
     import backend.orchestration.graph.router_node as rn
 
     state = {
-        "question": "10月3日",
+        "question": "2027年10月3日",
         "session_id": _SESSION,
         "user_id": _USER,
         "tenant_id": _TENANT,
