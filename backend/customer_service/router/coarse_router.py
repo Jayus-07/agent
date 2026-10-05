@@ -30,10 +30,16 @@ class CSCoarseRouter:
         # 售后词本身不等于办理动作：政策、范围、条件、费用等知识问句
         # 必须进入知识域，避免客服知识金标被 ActionExpert 误拦成补订单号。
         # 仅在完整默认双域词表存在时启用，保持单域/测试定制词表的既有语义。
+        if self._is_quality_complaint(query):
+            return CSDomain.COMPLAINT, CS_CONFIDENCE_CAUTIOUS, "quality_complaint: COMPLAINT"
+
         if {
             "KNOWLEDGE", "AFTER_SALES"
         }.issubset(CS_DOMAIN_KEYWORDS) and self._is_after_sales_policy_question(query):
             return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "policy_question: KNOWLEDGE"
+
+        if self._is_delivery_policy_question(query):
+            return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "delivery_policy: KNOWLEDGE"
 
         domain, conf, reason = self._rule_classify(query, CS_DOMAIN_KEYWORDS)
         # P2.1（audit #157）：规则决定线 0.8 → CS_CONFIDENCE_CAUTIOUS（0.6）。
@@ -75,16 +81,40 @@ class CSCoarseRouter:
     @staticmethod
     def _is_after_sales_policy_question(query: str) -> bool:
         """识别售后词驱动的知识问句，排除显式副作用动作。"""
-        if not any(token in query for token in ("退款", "退货", "换货", "售后", "维修", "保修")):
+        if not any(token in query for token in (
+            "退款", "退货", "退回", "换货", "售后", "维修", "保修"
+        )):
             return False
         if re.search(
-            r"(申请|提交|办理|我要|帮我|给我|退这个|换一个|怎么(退|换|修)|"
+            r"(申请|提交|办理|我要|帮我(?:申请|办理|退|换|修|提交)?|"
+            r"给我(?:申请|办理|退|换|修|提交)|退这个|换一个|怎么(退|换|修)|"
             r"送修|返修|报修)",
             query,
         ):
             return False
         return bool(re.search(
             r"(政策|规则|范围|条件|标准|时效|多久|几天|什么时候|包括|"
-            r"流程|费用|承担|赔付|是什么|怎样|怎么填|能不能|可以吗)",
+            r"流程|费用|承担|赔付|理赔|是什么|哪些|什么|谁|多少|"
+            r"不支持|不能|通常|一般|是什么|怎样|怎么填|能不能|可以吗|吗)",
             query,
         ))
+
+    @staticmethod
+    def _is_delivery_policy_question(query: str) -> bool:
+        """把配送时效/跨境清关等知识问句与订单查询分开。"""
+        if not any(token in query for token in (
+            "配送", "发货", "包邮", "清关", "寄件", "送达", "欧洲", "海外",
+        )):
+            return False
+        if re.search(r"(查|查询|我的|订单号|物流单号|包裹丢|没收到|未收到)", query):
+            return False
+        return bool(re.search(
+            r"(多久|几天|时效|什么时候|通常|一般|多长|多少天|到达)", query
+        ))
+
+    @staticmethod
+    def _is_quality_complaint(query: str) -> bool:
+        """质量事实与投诉诉求并存时优先进入投诉流。"""
+        has_complaint = bool(re.search(r"投诉|举报|不满意|维权|要说法|曝光", query))
+        has_quality = bool(re.search(r"破损|损坏|坏了|质量问题|瑕疵|裂痕|进水", query))
+        return has_complaint and has_quality

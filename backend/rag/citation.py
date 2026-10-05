@@ -326,6 +326,16 @@ class CitationFormatter:
                 doc_id = str(doc.metadata.get("doc_id", "") or "").strip()
                 if doc_id:
                     source["doc_id"] = doc_id
+                # 版本快照（A3）：REST 与 chat SourceCard 都必须能回答
+                # 「这条答案使用的是哪一版」，不能只依赖 detail 端点补查。
+                version_id = str(doc.metadata.get("version_id", "") or "").strip()
+                if version_id:
+                    source["version_id"] = version_id
+                supersedes = str(
+                    doc.metadata.get("supersedes_version_id", "") or ""
+                ).strip()
+                if supersedes:
+                    source["supersedes_version_id"] = supersedes
                 seen[fname] = source
 
         return sorted(seen.values(), key=lambda s: s.get("index", 0))

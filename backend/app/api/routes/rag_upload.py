@@ -940,6 +940,20 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
     Worker 模式无队列概念（SSE 由 Redis 轮询，见 stream_upload_progress）。
     """
     from backend.rag.progress_listener import ProgressListener
+    from backend.observability.metrics import (
+        rag_index_duration_seconds,
+        rag_upload_total,
+    )
+
+    def _record_terminal_metric(status: str, duration_ms: int) -> None:
+        """指标旁路：监控失败不能改变索引终态。"""
+        try:
+            rag_upload_total.labels(status=status).inc()
+            rag_index_duration_seconds.labels(status=status).observe(
+                max(duration_ms, 0) / 1000.0
+            )
+        except Exception:  # noqa: BLE001 — 观测旁路不可阻断业务收口
+            logger.debug("[RAG] 上传指标记录失败", exc_info=True)
 
     # ---- 失败终态 ----
     if exc is not None:
@@ -977,6 +991,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             error_envelope_from_exception,
         )
         duration_ms = int((time.time() - upload_t0) * 1000) + (upload_elapsed_ms or 0)
+        _record_terminal_metric("failed", duration_ms)
         if isinstance(exc, ChunkingEmptyError):
             protocol_error = ProtocolError(
                 ErrorCode.INVALID_PARAM,
@@ -1068,6 +1083,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
         if upload_elapsed_ms is not None:
             stage_elapsed["uploading"] = upload_elapsed_ms
         total_ms = (upload_elapsed_ms or 0) + int((time.time() - upload_t0) * 1000)
+        _record_terminal_metric("duplicate", total_ms)
         emit_fn("duplicate", "文件已存在，未重复索引",
                 doc=sanitize_doc_row(duplicate_doc), trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms,
                 processing_run_id=result.get("processing_run_id", ""),
@@ -1096,6 +1112,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
         # 优先用 sync_upload_impl 实测的上传耗时；缺失时回退到减法逻辑（向后兼容）
         index_elapsed_ms = int((time.time() - upload_t0) * 1000)
         total_ms = index_elapsed_ms + (upload_elapsed_ms or 0)
+        _record_terminal_metric("success", total_ms)
         if upload_elapsed_ms is not None:
             stage_elapsed["uploading"] = upload_elapsed_ms
         elif "uploading" not in stage_elapsed:

@@ -71,6 +71,15 @@ class TestClassifyCascade:
         assert intent == "as_refund"
         assert reason.startswith("rule:")
 
+    def test_aftersales_repair_and_quality_have_distinct_intents(self):
+        fr = CSFineRouter()
+
+        repair, _, _ = fr.classify("维修申请怎么提交", CSDomain.AFTER_SALES)
+        quality, _, _ = fr.classify("签收的时候发现商品破损怎么办", CSDomain.AFTER_SALES)
+
+        assert repair == "as_repair"
+        assert quality == "as_quality_issue"
+
     def test_aftersales_falls_to_default(self):
         """真正无域关键词的售后语句仍落域默认意图（default_fallback 分支
         本身不被规则化消灭）。"""

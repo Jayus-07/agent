@@ -61,10 +61,17 @@ def execute_knowledge(
     record_cs_rag_status("hit" if result.answer else "miss")
 
     evidence = []
-    if hasattr(result, "source_documents") and result.source_documents:
-        for doc in result.source_documents[:5]:
+    raw_sources = getattr(result, "source_documents", None) or getattr(
+        result, "sources", None
+    ) or []
+    for doc in raw_sources[:5]:
+        if isinstance(doc, dict):
             evidence.append({
-                "source": doc.get("source", doc.get("doc_id", "unknown")),
+                "source": doc.get(
+                    "source",
+                    doc.get("source_file", doc.get("doc_id", "unknown")),
+                ),
+                "doc_id": doc.get("doc_id", ""),
                 "score": doc.get("score", 0.0),
             })
 

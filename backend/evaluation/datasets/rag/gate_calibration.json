@@ -7265,5 +7265,5 @@
   ]
  },
  "rerank_candidate_k": 10,
- "rerank_entity_check": "production_top3_strong_entity_coverage"
+ "rerank_entity_check": "production_rerank_window_strong_entity_coverage"
 }

@@ -487,6 +487,19 @@ rag_query_total = Counter(
     labelnames=("status",),  # hit | rejected | fallback
 )
 
+rag_upload_total = Counter(
+    "rag_upload_total",
+    "RAG 上传索引终态总数（按结果状态）",
+    labelnames=("status",),  # success | duplicate | failed
+)
+
+rag_index_duration_seconds = Histogram(
+    "rag_index_duration_seconds",
+    "RAG 文档从索引开始到终态的耗时（秒）",
+    labelnames=("status",),
+    buckets=(0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600),
+)
+
 # RAG 防线异常软降级计数（R3 fail-visible）：fail-open 语义保留，
 # 但每次异常放行必须可见。layer: pre_wrap | gate1 | gate1_deserialize |
 # gate1_entity | risk_level | gate2 | claim_verify | faithfulness | prompt

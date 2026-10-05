@@ -40,7 +40,10 @@ _REFERENCE_PREDICATE = re.compile(
     r"|申请退款|申请退货|申请换货|办理退款|办理退货|办理换货)"
 )
 
-_ACTION_REFERENCE = re.compile(r"(申请退款|申请退货|申请换货|办理退款|办理退货|办理换货)")
+_ACTION_REFERENCE = re.compile(
+    r"(申请退款|申请退货|申请换货|办理退款|办理退货|办理换货|"
+    r"退款|退货|换货|维修|报修)"
+)
 
 # 负向信号：命中即放弃继承（知识/投诉/账号/非客服语境，不得被旧订单吞掉）
 _REFERENCE_NEGATIVE = re.compile(

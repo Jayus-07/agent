@@ -198,3 +198,47 @@ def test_search_rejects_unsupported_top_k_and_filter():
         except ValidationError:
             continue
         raise AssertionError("非法搜索参数必须被 schema 层拒绝")
+
+
+def test_search_exposes_citation_version_chain(monkeypatch):
+    """A3：REST search 结果必须透传引用版本链字段。"""
+    from langchain_core.documents import Document
+    from backend.app.api.routes import rag_search
+
+    class SearchPipeline:
+        is_index_stale = False
+
+        def retrieve_documents(self, *args, **kwargs):
+            return [Document(
+                page_content="v1 evidence",
+                metadata={
+                    "doc_id": "d1", "chunk_id": "c1", "kb_id": "travel",
+                    "source_file": "guide.md", "version_id": "v1",
+                    "supersedes_version_id": "v0", "score": 0.91,
+                },
+            )]
+
+    monkeypatch.setattr(rag_search, "get_rag_pipeline", lambda: SearchPipeline())
+    monkeypatch.setattr(
+        rag_search, "require_principal",
+        lambda request: SimpleNamespace(
+            user_id="1", user_name="tester", tenant_id="default", department="",
+            roles=("super_admin",), permissions=None, subject_type="employee",
+            authenticated=True, auth_type="jwt", source="header"),
+    )
+    class Authz:
+        def can_search_kb(self, kb_id):
+            return True
+
+        def can_read_row(self, row):
+            return True
+
+    monkeypatch.setattr(rag_search.RagAuthorization, "build", lambda principal: Authz())
+    app = FastAPI()
+    app.include_router(rag_search.router)
+
+    resp = _client(app).post("/search", json={"query": "guide", "kb_id": "travel"})
+    assert resp.status_code == 200, resp.text
+    metadata = resp.json()["results"][0]["metadata"]
+    assert metadata["version_id"] == "v1"
+    assert metadata["supersedes_version_id"] == "v0"

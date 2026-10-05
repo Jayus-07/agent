@@ -166,6 +166,24 @@ def test_extract_sources_carries_doc_id():
     assert "doc_id" not in sources[0]
 
 
+def test_extract_sources_carries_version_chain_marker():
+    formatter = CitationFormatter()
+    docs = [_doc({
+        "index": 1,
+        "source_file": "退款政策.md",
+        "doc_type": "policy",
+        "score": 0.91,
+        "doc_id": "refund-policy",
+        "version_id": "v2",
+        "supersedes_version_id": "v1",
+    })]
+
+    source = formatter.extract_sources(docs, "见 [E1]")[0]
+
+    assert source["version_id"] == "v2"
+    assert source["supersedes_version_id"] == "v1"
+
+
 def test_format_references_line_carries_doc_marker_and_parse_roundtrip():
     """参考文献行尾机器注释：Markdown 渲染不可见 + 文本解析可取回（往返一致）。"""
     formatter = CitationFormatter()

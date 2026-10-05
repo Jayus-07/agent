@@ -62,6 +62,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── 依赖 venv（来自 builder）──
 COPY --from=builder /opt/venv /opt/venv
 
+# ── 非 root 用户（uid 10001，固定值便于宿主侧对齐卷权限）──
+# 用户层置于代码 COPY 之前，代码变更时可复用；运行时数据与缓存由 compose named volume 提供。
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app \
+    && chown appuser:appuser /app
+
 # ── 代码 ──
 WORKDIR /app
 COPY backend/ ./backend/
@@ -69,10 +75,6 @@ COPY backend/ ./backend/
 COPY mcp_servers/ ./mcp_servers/
 COPY scripts/ ./scripts/
 
-# ── 非 root 用户（uid 10001，固定值便于宿主侧对齐卷权限）──
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
-    && mkdir -p /app/data/chroma /app/data/doc_db /app/data/long_term_memory /app/.cache/huggingface \
-    && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000

@@ -116,6 +116,7 @@ class FakeKnowledgeResult:
     suffix: str = ""
     error: str | None = None
     source_documents: list = None
+    sources: list = None
 
     def __post_init__(self):
         if self.decision is None:
@@ -124,6 +125,8 @@ class FakeKnowledgeResult:
             self.kb_ids = ["cs_faq"]
         if self.source_documents is None:
             self.source_documents = []
+        if self.sources is None:
+            self.sources = []
 
 
 class TestKnowledgeExpert:
@@ -196,6 +199,29 @@ class TestKnowledgeExpert:
 
         assert len(result["evidence"]) == 2
         assert result["evidence"][0]["source"] == "policy_doc_1"
+
+    @patch("backend.observability.metrics.record_cs_rag_status")
+    @patch("backend.customer_service.knowledge.get_knowledge_service")
+    def test_execute_knowledge_forwards_request_sources(self, mock_get_svc, mock_record):
+        fake_result = FakeKnowledgeResult(
+            answer="FAQ 答案",
+            sources=[{"source_file": "cs_faq.md", "doc_id": "faq-1"}],
+        )
+        mock_svc = MagicMock()
+        mock_svc.answer.return_value = fake_result
+        mock_get_svc.return_value = mock_svc
+
+        from backend.customer_service.experts.knowledge import execute_knowledge
+
+        result = execute_knowledge(
+            user_message="问题",
+            cs_route={"intent": "k_faq", "kb_ids": ["cs_faq"]},
+            session_id="s1",
+        )
+
+        assert result["evidence"] == [
+            {"source": "cs_faq.md", "doc_id": "faq-1", "score": 0.0}
+        ]
 
 
 class TestKnowledgeExpertNode:

@@ -24,7 +24,10 @@ router = APIRouter()
 _SEARCH_META_KEYS = (
     "doc_id", "chunk_id", "vector_id", "kb_id", "department",
     "doc_type", "business_domain", "source_file", "chunk_index",
-    "chunk_type", "section_title", "reporting_period",
+    "chunk_type", "section_title", "reporting_period", "pages",
+    # A3：REST search 与 chat SourceCard 共用版本链字段，调用方可以
+    # 在覆盖后识别原证据属于哪个版本，而不是只看到同名文件。
+    "version_id", "supersedes_version_id",
 )
 
 

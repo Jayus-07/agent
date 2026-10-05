@@ -218,6 +218,18 @@ def test_t7b_explicit_ordinal_selects_from_recent_order_list():
     assert resolved.resolved_query == "查询订单 MO-1001 的最新状态"
 
 
+def test_t7b_ordinal_action_selects_from_recent_order_list():
+    """列表后说“第一个订单退款”应承接选中订单进入办理，而非再次列单。"""
+    record_recent_orders(
+        "default", "u1", "s1", ["MO-1001", "MO-1002"],
+        source_intent="t_order_status",
+    )
+    resolved = _resolve("第一个订单退款")
+    assert resolved is not None
+    assert resolved.order_id == "MO-1001"
+    assert resolved.resolved_query == "第一个订单退款（订单 MO-1001）"
+
+
 def test_t7c_ordinal_out_of_range_does_not_guess():
     record_recent_orders(
         "default", "u1", "s1", ["MO-1001"],

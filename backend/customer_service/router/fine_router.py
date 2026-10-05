@@ -35,6 +35,8 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
     "AFTER_SALES": {
         "as_return": ["退货", "退换", "return"],
         "as_exchange": ["换货", "exchange"],
+        "as_repair": ["维修", "报修", "送修", "返修"],
+        "as_quality_issue": ["质量问题", "破损", "瑕疵", "裂痕", "进水"],
         "as_refund": ["退款", "退钱", "refund"],
     },
 }

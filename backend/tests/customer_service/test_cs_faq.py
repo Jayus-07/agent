@@ -133,6 +133,22 @@ class TestMatch:
         m = st.match("退款几天到账")
         assert m is not None and m.matched_by == "exact"
 
+    def test_refund_timing_natural_question_does_not_hit_shipping_fee(self, store):
+        st, s = store
+        st.upsert_faq(
+            "退款到账的时间一般是几个工作日",
+            "商品验收合格后 1-3 个工作日内原路退回支付账户。",
+            variants=["退货商品的钱什么时候退给我"],
+        )
+        st.upsert_faq(
+            "退货商品运费",
+            "质量问题由商家承担运费；无理由退货由买家承担运费。",
+        )
+        m = st.match("退货商品的钱什么时候退给我")
+        assert m is not None and m.faq_id != 2
+        assert "工作日" in m.answer
+        assert "运费" not in m.answer
+
     def test_reworded_query_jaccard_hit(self, store):
         st, s = store
         st.upsert_faq("退货运费由谁承担", "质量问题商家承担，无理由退货买家承担。")

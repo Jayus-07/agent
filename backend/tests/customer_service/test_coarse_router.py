@@ -63,6 +63,37 @@ class TestRuleClassify:
 
         assert domain == CSDomain.AFTER_SALES
 
+    def test_after_sales_question_forms_are_knowledge(self):
+        cr = CSCoarseRouter()
+        questions = (
+            "什么商品不支持七天无理由退货",
+            "退货运费谁来承担",
+            "赠品需要一起退回吗",
+            "退货商品的钱什么时候退给我",
+            "退货运费险怎么理赔",
+        )
+
+        assert all(cr.classify(query)[0] == CSDomain.KNOWLEDGE for query in questions)
+
+    def test_delivery_policy_questions_are_knowledge(self):
+        cr = CSCoarseRouter()
+
+        assert cr.classify("发欧洲多久能到")[0] == CSDomain.KNOWLEDGE
+        assert cr.classify("跨国包邮的包裹通常几天送达")[0] == CSDomain.KNOWLEDGE
+
+    def test_order_tracking_questions_remain_transactional(self):
+        cr = CSCoarseRouter()
+
+        assert cr.classify("查我的包裹什么时候到")[0] == CSDomain.TRANSACTION
+
+    def test_quality_complaint_does_not_fall_into_order_query(self):
+        cr = CSCoarseRouter()
+
+        domain, _, reason = cr.classify("这个包裹签收了但商品坏了要投诉")
+
+        assert domain == CSDomain.COMPLAINT
+        assert "quality_complaint" in reason
+
 
 class TestCascadeLogic:
     def test_rule_decides_first(self, monkeypatch):

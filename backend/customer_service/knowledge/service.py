@@ -30,6 +30,8 @@ class CSKnowledgeResult:
     faq_hit: bool = False
     faq_id: Optional[int] = None
     latency_ms: int = 0
+    # 请求级证据，供客服 Reporter/Trace 原样透传，避免只返回自然语言答案。
+    sources: list[dict] = field(default_factory=list)
 
 
 class CSKnowledgeService:
@@ -90,6 +92,11 @@ class CSKnowledgeService:
                 faq_hit=True,
                 faq_id=faq.faq_id,
                 latency_ms=latency_ms,
+                sources=[{
+                    "source": "客服FAQ",
+                    "faq_id": faq.faq_id,
+                    "question": faq.question,
+                }],
             )
 
         try:
@@ -160,6 +167,7 @@ class CSKnowledgeService:
                 confidence=confidence,
                 kb_ids=kb_ids,
                 suffix=cs_decision.suffix,
+                sources=list(getattr(outcome, "sources", None) or []),
             )
 
         except Exception as e:
