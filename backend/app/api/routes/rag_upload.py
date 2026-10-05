@@ -590,8 +590,10 @@ async def upload_document(request: Request, file: UploadFile = File(...),
             file_hash=result.get("file_hash", ""),
             staging_path=result.get("staging_path", ""),
             generation=result.get("generation", ""),
-            tenant_id=result.get("tenant_id", ""),
-            actor_id=result.get("actor_id", ""),
+            tenant_id=identity.tenant_id,
+            # actor 直取鉴权上下文（S4/S10）：sync_upload_impl 返回 dict
+            # 不含 actor_id，取 result 会恒为空 → 审计 user_id 恒 anonymous
+            actor_id=identity.user_id,
             idempotency_key=result.get("idempotency_key", ""),
             pre_dispatched=pre_dispatched,
             task_kwargs=None if pre_dispatched is not None else task_kwargs,
