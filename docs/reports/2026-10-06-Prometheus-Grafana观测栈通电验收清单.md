@@ -270,3 +270,12 @@ OBSERVABILITY_STACK_PRODUCTION_READY=true
 ```
 
 **收尾轮改动文件（与上节合计，均已入库提交）**：`docker/alert-bridge/`（新服务）、`docker/prometheus-alert-rules.yml`（AppMetricsDown+H7）、`docker/alertmanager.yml.tpl`（send_resolved）、`docker-compose.yml`（桥+端口 9095）、`.env.example`、`docs/architecture/system-overview.md`。
+
+## 六、飞书接入轮（2026-10-06 深夜补记，总会话收官）
+
+- **人话版报文**：`880b4e8` 起桥外投报文改为运维可读格式（告警名/实例/当前值/持续时间/一句处置建议），不再裸吐 Prometheus 原始 JSON。
+- **飞书加签**：桥支持 `ALERT_BRIDGE_FEISHU_SECRET` 飞书签名校验（`bfdabf8`），占位说明见 `.env.example`（`e9d9698`）；webhook 实值只存 `.env`（gitignored），**严禁入仓**。
+- **群内实测**：用户已在真实飞书群确认 🚨FIRING / ✅RESOLVED 双向到达——`ALERT_EXTERNAL_DELIVERY_PASS=true` 的外部证据闭环。
+- **resolved 通知节奏**：恢复通知由 Alertmanager `group_interval`（最迟 5 分钟）批量发出，属自动行为非缺陷；若群内未見 ✅，先查桥日志投递回执再查群机器人设置。
+- **看板生成器入库**：`gen_dashboards.py` 自 `D:/tmp` 移入 `docker/grafana/`（输出路径改为随脚本定位），跑法 `python docker/grafana/gen_dashboards.py PBFA97CFB590B2093`——看板改版唯一正道仍是改生成器/仓库 JSON 后经 provisioning 30s 装载。
+- 遗留 P3 挂账不变：桥 compose healthcheck、AM 按 severity 分流、上服务器 TSDB 17GB 磁盘预留。
