@@ -166,7 +166,9 @@ def main():
     made_docs.append(d_s5)
     s5_state, s5_approval = ensure_active(headers, d_s5)
     st_d, det = detail(headers, d_s5)
-    row = psql(f"SELECT permission_scope, tenant_id FROM doc_registry WHERE doc_id='{d_s5}'")
+    row = psql(
+        f"SELECT permission_scope, department, kb_id, file_name "
+        f"FROM doc_registry WHERE doc_id='{d_s5}'")
     results["S5_metadata_injection"] = {
         "upload_status": st, "detail_status": st_d,
         "doc_status": s5_state, "approval": s5_approval,
