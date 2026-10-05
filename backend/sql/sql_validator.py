@@ -32,6 +32,29 @@ TERMINAL_DENY_REASONS = frozenset({
     "column_forbidden", "star_projection", "dangerous_function",
 })
 
+# 2026-10-06 拍板：全函数正向白名单（G-17 由 pg_* 族扩大到全部函数）。
+# 初始集 = 黄金集 84 条 gold SQL 函数并集 + 常用只读标量/聚合函数；
+# 键覆盖三种遍历口径：SQL 文本名（Anonymous.name）、sqlglot 类名
+# （type(Func).__name__）、方言渲染名（Func.sql_name()）。
+# 运维追加走 schema 配置 allowed_functions（默认空，回归锁
+# test_allowed_functions_default_empty 不受影响）。
+POSITIVE_FUNCTION_ALLOWLIST: frozenset = frozenset({
+    # 聚合
+    "COUNT", "SUM", "AVG", "MIN", "MAX",
+    "STRING_AGG", "ARRAY_AGG", "BOOL_AND", "BOOL_OR",
+    # 标量 / 条件
+    "ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
+    "GREATEST", "LEAST", "COALESCE", "NULLIF", "CAST",
+    "LENGTH", "LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM",
+    "SUBSTRING", "SUBSTR", "CONCAT", "REPLACE", "SPLIT_PART", "POSITION",
+    # 时间
+    "CURRENT_DATE", "CURRENTDATE", "CURRENT_TIMESTAMP", "CURRENTTIMESTAMP",
+    "NOW", "DATE", "DATE_PART", "DATE_TRUNC", "TIMESTAMP_TRUNC",
+    "EXTRACT", "TO_CHAR", "AGE", "TIMESTOSTR", "TIME_TO_STR",
+    # 存在性（exp.Exists 不在 Func 遍历面，防御性列入）
+    "EXISTS",
+})
+
 
 class ValidationError(Exception):
     """校验失败异常，包含友好错误消息与低基数原因码。
@@ -396,10 +419,13 @@ class SQLValidator:
         self._check_pg_catalog_qualified_calls(stmt)
 
     def _deny_dangerous_function(self, func_name: str, func: exp.Expression) -> None:
-        """单一判定出口：显式黑名单 + pg_* 系统函数族 fail-closed。
+        """单一判定出口：显式黑名单 + 全函数正向白名单 fail-closed（2026-10-06 拍板）。
 
-        pg_catalog 限定名挂在 exp.Dot 父节点上（func 节点自身渲染会丢
-        限定符），单独遍历 Dot 兜住 `pg_catalog.xxx()` 逃逸形态。
+        G-17 原口径仅对 pg_* 族 fail-closed；渗透复验证实非 pg 前缀的危险
+        函数同样可穿透，判定面扩大到白名单外的全部函数。reason 码沿用
+        unapproved_system_function（存量渗透回归锁此值）。pg_catalog 限定名
+        挂在 exp.Dot 父节点上（func 节点自身渲染会丢限定符），单独遍历 Dot
+        兜住 `pg_catalog.xxx()` 逃逸形态。
         """
         if not func_name:
             return
@@ -408,13 +434,12 @@ class SQLValidator:
                 f"禁止使用函数: {func_name}()",
                 layer=4, reason="dangerous_function",
             )
-        if func_name in self.allowed_functions:
+        if func_name in self.allowed_functions or func_name in POSITIVE_FUNCTION_ALLOWLIST:
             return
-        if func_name.startswith("PG_"):
-            raise ValidationError(
-                f"未批准的系统函数: {func_name}()",
-                layer=4, reason="unapproved_system_function",
-            )
+        raise ValidationError(
+            f"未批准的函数: {func_name}()（不在正向白名单）",
+            layer=4, reason="unapproved_system_function",
+        )
 
     def _check_pg_catalog_qualified_calls(self, stmt: exp.Expression) -> None:
         """pg_catalog/information_schema 限定函数调用一律拒绝（G-16/G-17）。"""

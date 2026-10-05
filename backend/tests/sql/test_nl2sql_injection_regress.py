@@ -118,8 +118,8 @@ class TestLegacyPentestPosture:
         assert ei.value.reason == reason
 
     @pytest.mark.parametrize("sql", [
-        # validator 全通过（chr/除零无害），guard 表域策略拒绝未登记表名
-        "SELECT chr(65) FROM orders LIMIT 1",
+        # validator 全通过（白名单内函数/除零无害），guard 表域策略拒绝未登记表名
+        "SELECT round(1.2) FROM orders LIMIT 1",
         "SELECT 1/0 FROM orders LIMIT 1",
         # 2026-10-06 裸名归一化后（products/orders → 限定名），orders 为
         # personal 域且无 department_column，department scope 不可表达 →
@@ -204,13 +204,23 @@ class TestG17SystemFunctionFailClosed:
         assert ei.value.layer == 4
         assert ei.value.reason == "dangerous_function"
 
-    def test_harmless_nonpg_function_allowed(self, guard):
-        """策略边界：非 pg_ 前缀且无危害的函数不误伤（fail-closed 只针对
-        系统函数族，不是全函数白名单——全白名单需黄金集配合另立项）。"""
+    def test_whitelist_boundary_2026_10_06(self, guard):
+        """2026-10-06 拍板：fail-closed 从 pg_* 族扩大到全函数正向白名单
+        （原「另立项」落地）——白名单内放行，白名单外一律拒。
+
+        白名单常量 POSITIVE_FUNCTION_ALLOWLIST（sql_validator.py），初始集
+        = 黄金集 84 条 gold SQL 函数并集 + 常用只读标量/聚合；运维追加走
+        schema 配置 allowed_functions（默认空，test_allowed_functions_default_empty 锁）。
+        """
         ctx = build_ctx(**EDITOR_CTX)
-        guarded = guard.validate_and_rewrite("SELECT gen_random_uuid()", ctx)
-        # sqlglot 渲染会把函数名规范化为大写
-        assert "GEN_RANDOM_UUID()" in guarded.executable_sql.upper()
+        # 白名单内：放行
+        guarded = guard.validate_and_rewrite("SELECT round(1.234, 2)", ctx)
+        assert "ROUND(" in guarded.executable_sql.upper()
+        # 白名单外（gen_random_uuid 是真实函数但未列入初始集）：拒
+        with pytest.raises(ValidationError) as ei:
+            guard.validate_and_rewrite("SELECT gen_random_uuid()", ctx)
+        assert ei.value.layer == 4
+        assert ei.value.reason == "unapproved_system_function"
 
     def test_column_qualifier_dot_unaffected(self, guard):
         """Dot 检查不得误伤普通列限定（p.product_name）。"""
