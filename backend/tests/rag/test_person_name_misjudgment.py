@@ -7,24 +7,10 @@ filter 与文档人名索引对不上 → Stage1 person_name_miss → doc_ids=[]
 """
 from __future__ import annotations
 
-from backend.rag.retrieval.retrievers import ChunkLevelRetriever
-
-
-class _FakeRetriever(ChunkLevelRetriever):
-    """最小桩：只构造 person_index，不走真实检索。"""
-
-    def __init__(self, person_index):
-        # 绕过 pydantic 必填字段（base_retriever 等不参与本单测）
-        object.__setattr__(self, "__dict__", {})
-        self.person_index = person_index
-
-
 def test_verified_person_kept():
-    r = _FakeRetriever({"林觉民": ["doc1"]})
-    names = r and None
-    # 直接验证清洗逻辑片段（与 Stage1 内联实现同式）
-    names = ["林觉民"]
+    """索引存在的人名保留（正常人名过滤路径不受影响）。"""
     person_index = {"林觉民": ["doc1"]}
+    names = ["林觉民"]
     verified = [p for p in names if p in person_index]
     assert verified == ["林觉民"]
 
