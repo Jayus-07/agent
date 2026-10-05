@@ -108,6 +108,7 @@ async def transition_lifecycle(doc_id: str, body: LifecycleTransitionRequest, re
             _safe_log_op(
                 doc_id, doc.get("file_name", ""), f"lifecycle:{body.to_status}", source,
                 detail={"from": doc.get("status"), "to": result.get("to")},
+                user_id=actor,
             )
             _invalidate_retrieval_cache()
         return result
@@ -141,6 +142,7 @@ async def set_expire_at(doc_id: str, body: ExpireAtRequest, request: Request):
             _safe_log_op(
                 doc_id, doc.get("file_name", ""), "lifecycle:expire_at_set", source,
                 detail={"from": doc.get("status"), "expire_at": expire_at},
+                user_id=actor,
             )
             _invalidate_retrieval_cache()
         return result

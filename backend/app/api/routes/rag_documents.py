@@ -836,7 +836,8 @@ async def delete_document(doc_id: str, request: Request):
                          duration_ms=int((time.time() - _delete_t0) * 1000),
                          detail={"mode": "remote", "deleted_rows": result.get("deleted_rows"),
                                  "degraded": result.get("degraded"),
-                                 "warnings": result.get("warnings")})
+                                 "warnings": result.get("warnings")},
+                         user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
             return result
 
         # ① 软删 registry — 按 doc_id 删所有行（修复绝对/相对路径重复行漏删）

@@ -62,6 +62,8 @@ def _enhanced_hybrid_retrieve_impl(
     # §7 查询类型路由（R4-P3）：5 类判定 + RRF 加权策略
     from backend.rag.retrieval.query_router import route as route_query
     qroute = route_query(query)
+    from backend.rag.retrieval.hybrid import _classify_query_tier
+    query_tier = _classify_query_tier(query)
     vw = qroute.get("vector_weight", 1.0)
     bw = qroute.get("bm25_weight", 1.0)
 
@@ -77,6 +79,7 @@ def _enhanced_hybrid_retrieve_impl(
         "sparse_hits": 0,
         "final_k": effective_k,
         "fallback_used": False,
+        "query_tier": query_tier,
         "query_type": qroute["query_type"],
     }
 
