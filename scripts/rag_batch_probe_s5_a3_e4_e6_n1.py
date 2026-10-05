@@ -274,7 +274,7 @@ def main():
     n1_id_sql = ",".join(f"'{did}'" for did in n1_ids)
     dup_check = psql(
         f"SELECT count(*) FROM (SELECT doc_id, count(*) c FROM doc_registry "
-        f"WHERE doc_id IN ({n1_id_sql}) GROUP BY doc_id HAVING c > 1) t")
+        f"WHERE doc_id IN ({n1_id_sql}) GROUP BY doc_id HAVING count(*) > 1) t")
     if not dup_check:
         raise RuntimeError("重复行查询未返回结果")
     n1_results = [ensure_active(headers, did, timeout=240) for did in n1_ids]
