@@ -508,6 +508,28 @@ class ChunkLevelRetriever(BaseRetriever):
         keyword_filter: 退化到关键词过滤；domain_fallback: 0 匹配业务域回退。
         """
         st.person_names = extract_person_names(st.query)
+        # NER 误判交叉验证（D-13 修复 2026-10-05）：查询侧抽出的人名必须
+        # 存在于人名索引（文档元数据权威）才允许进 filter——jieba 把专名/
+        # 地名误标为 nr 人名（实测「乌塔」）→ person_name miss → Stage1
+        # 检索死（doc_ids=[] 无回退）。索引没有的「人名」剔除，filter 同步
+        # 清洗后走 doc 级相似度路径。
+        if st.person_names:
+            names = (st.person_names if isinstance(st.person_names, list)
+                     else [st.person_names])
+            verified = [p for p in names if p in self.person_index]
+            dropped = [p for p in names if p not in self.person_index]
+            if dropped:
+                logger.info(
+                    f"[Stage1] 人名 NER 误判剔除（人名索引无）：{dropped}，"
+                    f"保留：{verified or '无'}")
+            st.person_names = verified
+            if st.metadata_filter and st.metadata_filter.get("person_names"):
+                if verified:
+                    st.metadata_filter["person_names"] = verified
+                else:
+                    st.metadata_filter = {
+                        k: v for k, v in st.metadata_filter.items()
+                        if k != "person_names"}
         if st.metadata_filter:
             # MetadataFilter has already determined the scope — use it directly
             known_persons = st.metadata_filter.get("person_names")
