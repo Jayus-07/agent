@@ -194,7 +194,7 @@ def sql_audit_decision(status: str) -> str:
 class SQLAgent:
     """生产级 SQL Agent 入口"""
 
-    def __init__(self, db_config: dict, max_retries: int = 1):
+    def __init__(self, db_config: dict, max_retries: int = 2):
         """
         参数:
             db_config: PostgreSQL 连接配置
@@ -513,8 +513,11 @@ class SQLAgent:
                 error_type="router_error",
             )
         if not table_names:
-            _observe(decision="EXECUTION_FAILED", policy=policy,
-                     status="permission_denied", error_type="table_scope")
+            # scope 过滤后与授权表无交集 = 权限拒绝而非执行失败——
+            # 审计必须落 DENY_*（拒绝面归因契约），否则 deny 矩阵失真
+            _observe(decision="DENY_SCOPE", policy=policy,
+                     status="permission_denied", error_type="table_scope",
+                     deny_code="SQL_TABLE_NOT_ALLOWED")
             return SQLResult.failed(
                 status="permission_denied",
                 error="该数据不在当前可访问范围内。",
@@ -671,7 +674,7 @@ class SQLAgent:
 # 工厂（多 Agent/路由懒加载）
 # =================================================
 
-def init_sql_agent(db_config: dict, max_retries: int = 1) -> SQLAgent:
+def init_sql_agent(db_config: dict, max_retries: int = 2) -> SQLAgent:
     """构造 SQLAgent 实例。"""
     host = db_config.get("host", "?")
     dbname = db_config.get("dbname", "?")

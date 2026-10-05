@@ -246,10 +246,20 @@ class SQLValidator:
             if db:
                 qname = f"{db}.{name}"
             else:
-                # 裸名：若是 schema-qualified key（包含点）就保留原样
-                qname = name
+                # 裸名：归一化到唯一 schema-qualified key——列字典按限定名
+                # 组织，裸名直传会让列校验查不到列（向后兼容只做一半的缺陷）；
+                # 命中多个 schema 时保持裸名，交由白名单/列校验按原口径拒绝。
+                qname = self._resolve_bare_table(name) or name
             tables.add(qname)
         return tables
+
+    def _resolve_bare_table(self, bare: str) -> str | None:
+        """裸表名 → 唯一限定名；无匹配或多义返回 None。"""
+        matches = [
+            q for q in schema_loader.allowed_tables
+            if q.split(".", 1)[-1] == bare
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def _check_table_allowlist(self, table_names: Set[str]) -> None:
         """检查所有表名是否在白名单中。

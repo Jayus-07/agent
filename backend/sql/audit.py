@@ -8,10 +8,12 @@ execute_sql_tool——所有 NL2SQL 生产入口最终都汇聚到 agent 层，
 设计约束：
   - best-effort：审计写入失败只记日志 + 计数，绝不阻塞/失败正常查询
     （执行前的安全决策在内存中完成，不依赖审计成败，无 fail-open 面）
-  - 不存 SQL 原文（含用户 literal/订单号等 PII 风险），只存
-    query_hash = sha256(normalized_sql) + 表名集合（低敏感元数据）
+  - SQL 原文口径（2026-10-06 拍板变更）：存原文（sql_text，截断 8000 字符，
+    migration 077）用于事故复盘——042 原「不存原文」的 PII 保守设计被推翻；
+    生成 SQL 的 WHERE 可能内嵌用户 literal，以「审计表仅管理员可读 +
+    保留期清理」缓解。query_hash = sha256(normalized_sql) 继续保留（聚合比对）。
   - 禁止落库：Authorization/JWT/password/凭据/堆栈 secret
-  - 表：agent_memory.sql_query_audits（migration 042，登记 MIGRATION_TARGETS）
+  - 表：agent_memory.sql_query_audits（migration 042/077，登记 MIGRATION_TARGETS）
 """
 from __future__ import annotations
 
@@ -71,9 +73,12 @@ _INSERT_SQL = """
 INSERT INTO sql_query_audits (
     id, session_id, user_id, tenant_id, department, data_scope,
     source_channel, tool_name, query_hash, tables, decision, deny_code,
-    duration_ms, row_count, status, error_type, created_at
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+    duration_ms, row_count, status, error_type, sql_text, created_at
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
 """
+
+# 原文截断上限：防行膨胀（正常 NL2SQL 语句远小于此）
+_SQL_TEXT_MAX_LEN = 8000
 
 
 def record_sql_audit(
@@ -112,6 +117,7 @@ def record_sql_audit(
         row_count,
         (status or "")[:32],
         (error_type or "")[:64],
+        (sql or "")[:_SQL_TEXT_MAX_LEN],
     )
     thread = threading.Thread(
         target=_safe_insert, args=(row,), name="sql-audit", daemon=True)

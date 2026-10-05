@@ -101,7 +101,10 @@ class RoleSpec:
 MODEL_ROLES: dict[str, RoleSpec] = {
     "main": RoleSpec(
         env_key="LLM_MODEL",
-        default="MiniMax-M3",
+        # 2026-10-06 拍板：anthropic 驱动档位摘除——MiniMax-M3 走 Anthropic
+        # Messages 协议且 MINIMAX_API_KEY 未配，DB 解析缺失时落到它必构造失败；
+        # 灾备默认改为与 DB 权威绑定同款（doubao-seed-2.0-mini）。
+        default="doubao-seed-2.0-mini",
         desc="主问答 LLM（问答/RAG 生成链路，前端运行时可切换）",
         validator="registered_model",
     ),
