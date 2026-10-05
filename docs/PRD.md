@@ -144,7 +144,7 @@
 - ✅ SSE 流式响应（`POST /chat/stream`，meta → status/log/delta → done/error，支持断线恢复）
 - ✅ 中断生成（发送键兼任停止键）、历史会话加载
 - ✅ 客服抽屉（右上角，走客服锁域链路）
-- ✅ 三层 Router（规则 → 向量 → LLM）+ 三域预过滤（客服 > 旅游 > 选品）+ 灰度放量开关
+- ✅ RoutingEngine 统一路由（domain → intent → capability → policy，六阶段固定序）+ 三域预过滤（客服 > 旅游 > 选品）+ 灰度放量开关
 
 ### 4.2 RAG 知识库（FR-RAG-001 ~ FR-RAG-003）
 
@@ -375,11 +375,11 @@
 |---|---|
 | LLM 成本失控 | 预算闭环（租户级）+ Token 用量看板 + 模型价格双人审核 |
 | LLM 幻觉 | Faithfulness NLI + Evidence Gate 三层拒答 |
-| 域图误触发 | 三层 Router + 灰度开关默认全关 + 路由守护测试 |
+| 域图误触发 | RoutingEngine 统一决策 + 灰度开关默认全关 + 路由守护测试 |
 | 并行会话协作事故 | pathspec 提交纪律 + 阶段完成立即落库（见 AGENTS.md） |
 
 ---
 
 ## 验证
 
-最后验证：2026-10-03 · 结构与能力口径对照根 [README.md](../README.md)「系统规模」（2026-10-03 实测）与 [AGENTS.md](../AGENTS.md)；本次订正旅游数据源 live 化口径；数量类信息以根 README 为唯一权威，本文不复抄。
+最后验证：2026-10-05 · 路由口径随 RoutingEngine 收口更新（验收清单 `docs/reports/2026-10-05-路由层企业级改造验收清单.md`）；其余结构与能力口径对照根 [README.md](../README.md)「系统规模」（2026-10-03 实测）与 [AGENTS.md](../AGENTS.md)；数量类信息以根 README 为唯一权威，本文不复抄。

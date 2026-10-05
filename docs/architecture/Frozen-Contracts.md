@@ -28,8 +28,8 @@
 
 | 项 | 契约 | 理由与守卫 |
 |---|---|---|
-| route_mode | 取值集与语义（direct / workflow / plan + 域分流 + clarify） | 上游消费方（SSE 事件/评测/前端展示）绑定；守卫：`tests/orchestration/router/` |
-| prefilter 顺序 | 域预过滤优先于三层路由；优先级**客服 > 旅游 > 选品**（「订单里的行程单」属客服诉求） | 生产口径；守卫：`tests/orchestration/graph/test_router_prefilter_order.py` |
+| route_mode | 取值集与语义（direct / workflow / plan / clarify / general_chat + 域分流 domain_graph；2026-10-05 随 RoutingEngine 收口兼容扩容补齐归宿） | 上游消费方（SSE 事件/评测/前端展示）绑定；守卫：`tests/orchestration/router/` |
+| prefilter 顺序 | 域预过滤优先于 RoutingEngine 统一路由；优先级**客服 > 旅游 > 选品 > 预订 > 商务**（「订单里的行程单」属客服诉求） | 生产口径；守卫：`tests/orchestration/graph/test_router_prefilter_order.py` |
 | 注册键 | router 注册键冻结零 diff（STOP B/E） | 守卫：registry 一致性三件套 |
 
 ## 4. Capability 元数据

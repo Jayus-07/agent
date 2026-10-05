@@ -17,7 +17,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
                 ├─ CS 预过滤命中（CS_ENABLED + 灰度放量）──────→ 客服域图 cs_graph_node → END
                 ├─ 旅游预过滤命中（TRAVEL_ENABLED） → 旅游域图 travel_graph_node → END
                 ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
-                └─ 三层 Router（rule→vector→LLM）→ route_selector
+                └─ RoutingEngine（domain → intent → capability → policy → RouteDecision）→ route_selector
                       ├─ direct   → skill_executor（跳过 Planner 直调 skill）→ reporter → END
                       ├─ workflow → workflow_executor → reporter → END
                       └─ plan     → planner → critique → supervisor（Send 并行）→ reporter → END
@@ -25,6 +25,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 - **域图两条入口，勿混为一谈**：①**客服窗口锁域** —— 前端客服抽屉 `CSDrawer`（`useCSChat.ts`）每条消息带 `domain_hint=customer_service`，`router_node` 置 `cs_forced` 后**跳过域检测门/灰度/旅游与选品 prefilter** 直进 CS 管线（仍受 `CS_ENABLED` 总闸，关闭则降级主路由）；②**全局入口**（`domain_hint` 空）—— 走 CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测，CS 命中后再过 `CS_ROLLOUT_PERCENT` 灰度。锁域**非绝对**：无客服规则信号且命中旅游/选品强信号时仍走 `redirect_main` 转出（LLM 仲裁阶段默认 OFF = `CS_REDIRECT_MAIN_LLM_ENABLED`）。守护用例 `tests/orchestration/graph/test_router_prefilter_order.py`。
 - 域开关代码默认**全关**（`CS_ENABLED`/`TRAVEL_ENABLED`/`SELECTION_FUNNEL_ENABLED` 均 `false`），由根 `.env` 决定实际取值；三个 prefilter 均已接线（选品漏斗 2026-09-17 与旅游同层），无「待接线」项。
+- **RoutingEngine（2026-10-05 收口）**：主图唯一生产路由引擎（`orchestration/router/engine.py`），六阶段固定序 `entry_gate → domain → intent → capability → policy → route_decision`（`routing_meta.stage_order` 用例锁定）；DomainRouter／IntentRouter（`intent_router.py`，结构化分类阶段不新增 LLM 调用）／CapabilityRouter／ExecutionModeResolver 各只出一类决策，规则/向量/LLM 只是证据提供者、不各自拍板；旧三层 `route_legacy()` 与 `ROUTING_ARCHITECTURE`/`ROUTING_SHADOW_MODE` 架构开关已删除，`Router` 仅是兼容 facade——禁止新增调用方、禁止再引架构开关；`route_mode` 补齐 `clarify`/`general_chat`（域图显式 `domain_graph` 归宿），未知/低置信意图→clarify，不把空候选伪装成 plan；故障结构化四分类 `domain_classifier_degraded / vector_index_mismatch / vector_unavailable / llm_failure`，向量故障不在请求内重建索引。设计稿与验收清单：`docs/superpowers/specs/2026-10-05-routing-engine-design.md`、`docs/reports/2026-10-05-路由层企业级改造验收清单.md`。
 
 - 主图核心节点固定 9 个（含 general_chat，2026-09-25 口径对齐 builder.py:140-151），顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
 - planner→critique→supervisor 是 plan 支线专属；direct/workflow/三个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
@@ -102,7 +103,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 | Skill + capability | 5 | ①skill.py（仅执行实现 + `name`）②`__init__.py` 自注册图节点 ③`skills/registry.py::_instances` ④`skills/__init__.py` re-export ⑤`capabilities.yaml`（唯一业务 metadata）—— **漏⑤ = 启动 fail-fast** |
 | Workflow | 3 | 类实现 + `workflows/__init__.py::register_all()` + `capabilities.yaml` 的 `workflows` 段（漏第三处 = 向量路由失明） |
 | MCP Server | 2 | 继承 `MCPServer` + `servers/__init__.py::register_all()`；参数一律 `langchain_tool_to_mcp_meta` 从 `args_schema` 派生，**禁止手写** |
-| 域图 / 业务 Agent | 5~7 / 2 | 手册 §6/§7；域图用技能 `agent-platform-add-domain-graph`（prefilter 必须插进 `router_node.py`，否则域永不触发） |
+| 域图 / 业务 Agent | 5~7 / 2 | 手册 §6/§7；域图用技能 `agent-platform-add-domain-graph`（prefilter 实现放 `orchestration/graph/<域>_prefilter.py`、插进 `routing/prefilter_chain.py::run_domain_prefilters`，否则域永不触发） |
 
 **铁律**：**G1** 声明式注册、启动期派生、fail-fast｜**G2** 单一事实源，派生量禁止手写回去｜**G3** 谁定义谁注册，禁止集中代注册｜**G4** 例外必须登记规范 §4 台账。
 **方向**：`Planner → capability → Skill → Tool → Infrastructure`，上层调下层；MCP 不是第 5 层，是 Tool 的第二出口（Tool 不得 import Skill）。**第三方向（2026-10-02 拍板）**：外部 MCP server 可作为 Tool 的数据源——平台经 `infra/mcp_client.py`（官方 mcp SDK 同步薄客户端）消费，首例=12306 车票查询（`tools/travel/train.py`，compose 服务 mcp-12306，`TRAIN_MCP_ENABLED` 默认关，非官方源仅供学习不商用，失败不阻塞主链）；第二例=知乎官方 MCP（`tools/search/zhihu.py`，`zhihu_search`/`global_search` 双 Tool，Streamable HTTP + Bearer，`ZHIHU_MCP_ENABLED` 默认关、凭据 `ZHIHU_MCP_API_KEY` 只从 .env 读，月度配额计量，双路单路降级）。

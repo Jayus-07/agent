@@ -285,9 +285,9 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 4. ⚠️ **还差两步，缺了域永远不触发**（2026-09-16 补记，详见操作手册 §6）：
    - 写 `orchestration/graph/<domain>_prefilter.py`（暴露 `try_<domain>_prefilter(query, state)`，
      受 `config/<domain>.py` 的 `<DOMAIN>_ENABLED` 门控，**默认 false**）
-   - **在 `orchestration/graph/router_node.py` 里把该 prefilter 插进预过滤链路**
-     —— 当前顺序是**硬编码**的（CS → 旅游 → CS 语义兜底 → 三层 Router），
-     新增域必须手动加进这段，不是自动发现的
+   - **在 `orchestration/graph/routing/prefilter_chain.py` 里把该 prefilter 插进预过滤链路**
+     —— 当前顺序是**硬编码**的（CS → 旅游 → 选品 → 预订 → 商务，未命中统一落 RoutingEngine），
+     新增域必须手动加进这段，不是自动发现的（2026-10-05 起 `router_node.py` 只留编排，不再收 prefilter）
 
 ### 加一个 Workflow
 1. `orchestration/workflows/<name>.py`：`@workflow(name="<蛇形名>", ...)`
@@ -342,7 +342,7 @@ MCP 不是新的一层，而是 **Tool 的对外协议封装**。
 | 17 | `routed: false` 的隔离只覆盖路由层，Planner / Critique 未过滤，台账未登记 | 补 §4 **E9** 记录隔离生效/未生效的确切位置与 `email.watch` 风险点；§8 加 P2 跟进项 | 本文件 §4、§8 |
 | 18 | `competitor.watch` / `competitor.history` 的 `reason` 写「仅 selection_decision workflow 内部使用」，**经核实不成立** —— 该 workflow 的 `competitor_data` 步骤是直接 `store.list_watch()`（`selection_decision.py:125`），**不经过这两个能力**。这条错文案正是「样例与 watch 重叠」误判的源头 | 改写为可核实的表述：说明其真实语义是「不参与用户问题路由，用户侧请求由 `competitor.analyze` + `action` 分发承接」；并同步更正上方「仅 selection_decision workflow 消费」的注释 | `orchestration/router/capabilities.yaml` |
 
-| 19 | §5「加一个域图」只有 3 步，**漏掉 2 步接线**：`orchestration/graph/router_node.py` 的预过滤链路是**硬编码**的（CS → 旅游 → CS 语义兜底 → 三层 Router），域图不会自动被发现；且新域缺 `config/<domain>.py` 的开关 | §5 域图补第 4 步（写 prefilter + 改 `router_node.py`）；新增操作手册并把本手册 §5 的摘要指向它 | 本文件 §5、`docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md`（新） |
+| 19 | §5「加一个域图」只有 3 步，**漏掉 2 步接线**：`orchestration/graph/router_node.py` 的预过滤链路是**硬编码**的（CS → 旅游 → CS 语义兜底 → 三层 Router），域图不会自动被发现；且新域缺 `config/<domain>.py` 的开关 | §5 域图补第 4 步（写 prefilter + 改 `router_node.py`）；新增操作手册并把本手册 §5 的摘要指向它。**2026-10-05 注**：接线点已随路由收口迁至 `orchestration/graph/routing/prefilter_chain.py::run_domain_prefilters`，主路由收口为统一 RoutingEngine（旧三层 Router 与 `route_legacy()` 已删除），见本文件 §5 当前口径 | 本文件 §5、`docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md`（新） |
 
 **实测结果**：AST 扫描 34 个 `@tool` → 注册表 34 个，**0 漏注册、0 幽灵条目**；
 12 个 Skill → 12 个图节点全在；`register_all()` ↔ manifest 双向对齐。

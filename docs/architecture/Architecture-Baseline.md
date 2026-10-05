@@ -1,6 +1,8 @@
 # Architecture Baseline — 生产架构基线（冻结版）
 
 日期：2026-09-29（Architecture Simplification STOP A-H 收官，`PRODUCTION_ARCHITECTURE_BASELINE_FROZEN=true`）
+
+> 变更注记：2026-10-05 路由层收口——Router Runtime 内部由「三层路由（rule→vector→LLM）」替换为统一 **RoutingEngine**（六阶段固定序 `entry_gate → domain → intent → capability → policy → route_decision`，旧三层与架构开关已删除），见 [ai-runtime.md](ai-runtime.md) 与 `docs/reports/2026-10-05-路由层企业级改造验收清单.md`；分层结构与层间契约不变。
 性质：**平台维护阶段的架构基线**。此后功能迭代以本文为分层事实参考；本文不维护数量类口径（唯一权威 = 根 [README.md](../../README.md)「系统规模」），不维护明细映射（G2：以代码与 `capabilities.yaml` 为准）。
 
 > 读法：新会话/新人顺序 = 根 README（一眼看懂）→ **本文**（分层与生命周期）→ 按需深读 [ai-runtime.md](ai-runtime.md)（编排细节）/ [system-overview.md](system-overview.md)（部署）/ [domain-service-map.md](domain-service-map.md)（专家×服务×凭据）。改资产前先读 [Extension-Guide.md](Extension-Guide.md)；动契约前先读 [Frozen-Contracts.md](Frozen-Contracts.md)。
@@ -21,7 +23,7 @@ flowchart TB
 
     subgraph PLAT["Agent Platform（FastAPI app :8000 + LangGraph）"]
         direction TB
-        RR["Router Runtime<br/>域预过滤 + 三层路由"]
+        RR["Router Runtime<br/>域预过滤 + RoutingEngine"]
         DR["Domain Runtime<br/>3 顶级域 / 5 物理域图"]
         CR["Capability Runtime<br/>17 capability · 12 Skill · 4 Workflow"]
         PR["Plan Runtime<br/>任务拆解 → 并行调度"]
@@ -62,7 +64,7 @@ flowchart TB
 
 | Runtime 层 | 职责（一句话） | 代码落点 | 定型来源 |
 |---|---|---|---|
-| **Router Runtime** | 每请求拍板去向：域预过滤（客服锁域/旅游/选品）优先，三层路由（rule→vector→LLM）定 `route_mode` | `orchestration/graph/router_node.py`、`orchestration/router/` | STOP B（合并三 router） |
+| **Router Runtime** | 每请求拍板去向：域预过滤（客服锁域/旅游/选品）优先，RoutingEngine（domain→intent→capability→policy）定 `route_mode` | `orchestration/graph/router_node.py`、`orchestration/router/engine.py` | STOP B（合并三 router）；2026-10-05 收口为 RoutingEngine 六阶段 |
 | **Domain Runtime** | 垂直业务域的独立子图：自带专家、校验与 reporter，开关+灰度控制 | `domains/`、`customer_service/`、`travel/`（planning/commerce/booking 三子流）、`selection_funnel/` | STOP E（语义边界收口） |
 | **Capability Runtime** | Capability 的执行调度：capability→Skill 解析、direct/workflow 支线按 DAG 执行、失败留痕 | `orchestration/router/capabilities.yaml`（SSOT）、`orchestration/graph/direct_executor.py`、`skills/registry.py` | STOP C（元数据单源） |
 | **Plan Runtime** | plan 支线专属：任务拆解 → 计划校验 → 纯规则 DAG 并行调度（Send） | `orchestration/graph/`（planner/critique/supervisor 链） | 既有，边界随 STOP 序列冻结 |
@@ -95,7 +97,7 @@ sequenceDiagram
     GW->>RT: JWT 验签 · 注入身份头
     RT->>RT: Input Guard 门禁（拦截即短路）→ 记忆装配 → 指代解析
     RT->>RO: 进图
-    RO->>RO: ① 域预过滤（客服锁域/旅游/选品）② 三层路由定 route_mode
+    RO->>RO: ① 域预过滤（客服锁域/旅游/选品）② RoutingEngine 六阶段定 route_mode
     alt direct / workflow
         RO->>CA: capability DAG
         CA->>TC: Skill → Tool（边界归一 → 治理执行）

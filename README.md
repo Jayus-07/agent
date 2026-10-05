@@ -72,7 +72,7 @@ flowchart TB
 
 ### 2. Chat Request Runtime
 
-一次 `POST /chat/stream` 的真实执行顺序：网关验签 → Input Guard 门禁（拦截即短路）→ 记忆装配 → 指代解析 → 进图路由（域预过滤优先于三层路由）→ 按路由结果分流执行 → reporter / 域图自带 reporter → SSE 收尾。`rag-service`、模型、数据库都在 Skill / Tool 层之后，不在主流程图上单独展开。
+一次 `POST /chat/stream` 的真实执行顺序：网关验签 → Input Guard 门禁（拦截即短路）→ 记忆装配 → 指代解析 → 进图路由（域预过滤优先，RoutingEngine 统一拍板）→ 按路由结果分流执行 → reporter / 域图自带 reporter → SSE 收尾。`rag-service`、模型、数据库都在 Skill / Tool 层之后，不在主流程图上单独展开。
 
 ```mermaid
 flowchart TB
@@ -90,7 +90,7 @@ flowchart TB
     FU --> RT
 
     subgraph G["LangGraph 主图"]
-        RT["Router Runtime<br/>域预过滤 + 三层路由 rule → vector → LLM"]
+        RT["Router Runtime<br/>域预过滤 + RoutingEngine（domain → intent → capability → policy）"]
         RT -->|"direct"| DE["Capability Runtime<br/>skill_executor 直连执行"]
         RT -->|"workflow"| WE["workflow_executor"]
         RT -->|"plan"| PL["Plan Runtime<br/>任务拆解 → 并行调度（Send）"]
@@ -114,7 +114,7 @@ flowchart TB
 flowchart TB
     subgraph PLATFORM["Agent Platform"]
         direction TB
-        RR["Router Runtime — 每请求拍板去向（域预过滤 + 三层路由）"]
+        RR["Router Runtime — 每请求拍板去向（域预过滤 + RoutingEngine）"]
         DR["Domain Runtime — 3 个顶级业务域 / 5 个物理域图（客服 · 旅游〔planning/commerce/booking〕· 选品漏斗）"]
         CR["Capability Runtime — 17 capability · 12 Skill · 4 Workflow 的执行调度"]
         PR["Plan Runtime — 复杂请求的任务拆解与并行调度"]
@@ -145,7 +145,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Chat Runtime | `POST /chat/stream` 的应用层宿主：SSE 帧协议、流注册表、中止与 resume |
 | GraphRunner | 统一图执行核心：Input Guard → 记忆装配 → 指代解析 → `graph.stream` → trace / `memory.end_turn` |
 | Orchestration（编排层） | LangGraph 主图：9 个核心节点 + 自动发现的 Skill / 域图节点（`builder.py`） |
-| Router Runtime | 平台第一层：域预过滤 + 三层路由（rule → vector → LLM），拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
+| Router Runtime | 平台第一层：域预过滤 + RoutingEngine（domain → intent → capability → policy）统一拍板 route_mode；与 RAG / SQL 子系统内部同名组件无关 |
 | Domain Runtime | 垂直业务域的独立子图层：3 个顶级业务域 / 5 个物理域图，自带子 Agent 与 reporter |
 | Capability Runtime | 能力执行调度层：capability → Skill 解析与 direct / workflow 支线执行 |
 | Plan Runtime | 复杂请求的任务拆解与并行调度支线（细节属编排内幕，见 ai-runtime.md） |

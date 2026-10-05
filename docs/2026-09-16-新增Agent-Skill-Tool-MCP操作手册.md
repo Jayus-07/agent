@@ -359,7 +359,7 @@ def list_tools(self) -> list:
 | 1 | `<domain>/register.py` | `domain_graph_registry.register(DomainGraph(name=…, node_name=…, label=…, adapter=…))` | 域图不存在 |
 | 2 | `backend/domains/__init__.py` | **加一行 import** | 上面那步永远不执行 |
 | 3 | `orchestration/graph/<domain>_prefilter.py` | 廉价规则判定「是不是这个域的请求」，暴露 `try_<domain>_prefilter(query, state) -> dict \| None` | **域永远不触发**（主 Router 会把请求判成 rag.search 之类） |
-| 4 | **🔴 `orchestration/graph/router_node.py`** | **把新 prefilter 插进预过滤链路**（当前顺序硬编码：CS → 旅游 → CS 语义兜底 → 三层 Router） | **同上，域永远不触发** ← 最容易漏 |
+| 4 | **🔴 `orchestration/graph/routing/prefilter_chain.py`** | **把新 prefilter 插进 `run_domain_prefilters` 预过滤链**（当前顺序硬编码：CS → 旅游 → 选品 → 预订 → 商务，未命中统一落 RoutingEngine；`router_node.py` 只留编排，2026-10-05 起不再收 prefilter） | **同上，域永远不触发** ← 最容易漏 |
 | 5 | `config/<domain>.py` | `<DOMAIN>_ENABLED`（**默认 `false`**，与 `CS_ENABLED`/`TRAVEL_ENABLED` 同策略）+ 阈值集中于此，不散落魔数 | 未验收的域直接对全量流量开放 |
 | 6 | 域图内部节点 | 照 §3.1 形态：`slot_filler`(可选) + `supervisor` + N 个 expert + `validator`/`repair`(可选) + `reporter` | — |
 
