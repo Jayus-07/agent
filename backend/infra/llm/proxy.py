@@ -1830,6 +1830,18 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
                 "（fail-closed）", exc_info=True)
             raise
         if prepared.overflow:
+            # D-9 修复（2026-10-05）：压缩后仍超预算 → 优雅降级截断
+            # （保留 system 首条 + 最新消息，最新消息 content 尾部截断），
+            # 不再直接 500——多文档大召回场景（RAG）此前整体硬拒。
+            # CONTEXT_BUDGET_SOFT_OVERFLOW=false 可回退旧硬拒行为。
+            if _soft_overflow_enabled():
+                messages = _truncate_messages_to_budget(payload, budget)
+                from backend.context_budget.metrics import record_overflow
+                record_overflow("soft_truncate")
+                logger.warning(
+                    f"[LLM:preflight] overflow 优雅降级: {total} tokens → "
+                    f"截断至预算 {budget}（保留 system+最新消息）")
+                return (messages, *args[1:])
             _reject_overbudget(
                 prepared.usage.used_tokens if prepared.usage else total,
                 budget, "final_gate")
@@ -1858,6 +1870,33 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
     if _gate_fixed_shape(payload, budget):
         return args
     return args  # 不可达（消息形态在上面两分支已返回）
+
+
+def _soft_overflow_enabled() -> bool:
+    """D-9：压缩后仍超预算时是否优雅降级（默认 true；false=旧硬拒）。"""
+    import os
+    return os.getenv("CONTEXT_BUDGET_SOFT_OVERFLOW", "true").lower() == "true"
+
+
+def _truncate_messages_to_budget(payload: list, budget: int) -> list:
+    """D-9 优雅降级：保留首条（system）+ 最新消息；最新消息 content
+    超预算则按字符比例截断（≈ tokens×4 的保守换算，中文偏安全）。"""
+    from backend.memory.token_budget import count_message_tokens
+
+    messages = list(payload)
+    if not messages:
+        return messages
+    head, tail = messages[0], messages[-1]
+    tail_tokens = count_message_tokens(tail)
+    head_tokens = count_message_tokens(head) if len(messages) > 1 else 0
+    allowance = max(budget - head_tokens - 256, 512)  # 留输出余量
+    if tail_tokens > allowance:
+        content = tail.content if isinstance(tail.content, str) else str(tail.content)
+        # 字符比例截断（tokens→chars 用 allowance/tail_tokens 比例，再留 5% 余量）
+        keep_chars = max(int(len(content) * allowance / max(tail_tokens, 1) * 0.95), 256)
+        truncated = content[:keep_chars] + chr(10) + "…（上下文过长，已截断尾部）"
+        tail = tail.__class__(content=truncated, additional_kwargs=tail.additional_kwargs)
+    return [head, tail] if len(messages) > 1 else [tail]
 
 
 def _l5_trigger_ratio() -> float:
@@ -1993,6 +2032,18 @@ async def _apreflight_context(args: tuple, kwargs: dict | None = None,
                 "（fail-closed）", exc_info=True)
             raise
         if prepared.overflow:
+            # D-9 修复（2026-10-05）：压缩后仍超预算 → 优雅降级截断
+            # （保留 system 首条 + 最新消息，最新消息 content 尾部截断），
+            # 不再直接 500——多文档大召回场景（RAG）此前整体硬拒。
+            # CONTEXT_BUDGET_SOFT_OVERFLOW=false 可回退旧硬拒行为。
+            if _soft_overflow_enabled():
+                messages = _truncate_messages_to_budget(payload, budget)
+                from backend.context_budget.metrics import record_overflow
+                record_overflow("soft_truncate")
+                logger.warning(
+                    f"[LLM:preflight] overflow 优雅降级: {total} tokens → "
+                    f"截断至预算 {budget}（保留 system+最新消息）")
+                return (messages, *args[1:])
             _reject_overbudget(
                 prepared.usage.used_tokens if prepared.usage else total,
                 budget, "final_gate")
