@@ -173,6 +173,30 @@ class TestCapabilityManifest:
                 f"manifest 的 {c.name}.skill={c.skill!r} 与 Skill 实例 name={inst.name!r} 不一致"
             )
 
+    def test_planner_visible_list_rendered_from_manifest(self):
+        """Planner prompt 渲染的能力清单 == manifest 派生清单（M5/E9 防漂移）。
+
+        _format_capabilities_schema 的清单来源必须与 planner_visible 派生值
+        同源：routed:false 内部能力（email.watch 等）不得再出现在 prompt；
+        反向 manifest 派生清单里每个能力都能渲染出 schema 段。
+        """
+        from backend.agents.planner.planner import _format_capabilities_schema
+        from backend.orchestration.router.manifest import load_manifest
+
+        m = load_manifest()
+        rendered = _format_capabilities_schema()
+        rendered_names = {
+            line[4:] for line in rendered.splitlines() if line.startswith("### ")
+        }
+        visible = set(m.planner_visible_capability_names)
+        assert rendered_names == visible, (
+            f"Planner prompt 清单与 manifest 派生不一致："
+            f"多渲染={rendered_names - visible} 少渲染={visible - rendered_names}"
+        )
+        # E9 收缩的实体断言：内部能力确实退出了规划面
+        for internal in ("email.watch", "competitor.watch", "competitor.history"):
+            assert internal not in rendered_names, f"内部能力 {internal} 仍在 Planner 可见清单"
+
     def test_every_skill_capability_in_manifest(self):
         """反向对账：skills 注册表里每个 capability 都出现在 manifest
         （routed 或 unrouted）。新 Skill 加了 capability 忘了更新 manifest

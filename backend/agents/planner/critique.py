@@ -37,13 +37,21 @@ _ANALYSIS_TRIGGER_WORDS = ["分析", "风险", "建议", "洞察", "报告", "re
 
 
 def _check_capabilities_exist(nodes: dict) -> list[str]:
-    """规则1: 检查所有 capability 是否已注册。返回问题列表。"""
-    valid = set(tool_registry.get_available_capabilities())
+    """规则1: 检查所有 capability 是否在 Planner 可见清单内。返回问题列表。
+
+    多域隔离 M5/E9（2026-10-06）：口径从「已注册全量」收缩为「Planner 可见
+    清单」（manifest 派生，routed:false 内部能力退出规划面）——与 planner
+    prompt 渲染的清单同源，防缓存/改单路径把 email.watch 这类内部能力
+    塞回计划。
+    """
+    from backend.orchestration.router.manifest import load_manifest
+
+    valid = set(load_manifest().planner_visible_capability_names)
     issues = []
     for sid, node in nodes.items():
         cap = node.get("capability", "")
         if cap and cap not in valid:
-            issues.append(f"步骤{sid}: capability '{cap}' 未注册")
+            issues.append(f"步骤{sid}: capability '{cap}' 不在 Planner 可见清单内")
     return issues
 
 

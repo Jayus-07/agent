@@ -103,6 +103,28 @@ class RouterManifest:
         """全部声明过的 capability（含 routed:false 的内部能力）。"""
         return tuple(c.name for c in self.capabilities)
 
+    # 多域隔离收官 M5（E9 台账，2026-10-06）：Planner 可见清单兜底白名单。
+    # 判据拍板「一次性答案留主图」的兜底执行能力，即使 routed 翻 false
+    # 也强制可见（正常两者本就 routed:true，此白名单是防翻车的显式锚）。
+    PLANNER_FALLBACK_CAPABILITIES: tuple[str, ...] = (
+        "travel.poi_search", "map.lookup",
+    )
+
+    @property
+    def planner_visible_capability_names(self) -> tuple[str, ...]:
+        """Planner/critique 能力清单可见集（yaml 派生，禁止第二份手抄）。
+
+        = routed:true 全集 ∪ 兜底白名单。routed:false 的内部能力
+        （email.watch 120s 阻塞长轮询 / competitor.watch / competitor.history）
+        退出规划面：guide 模式下主图不再承接域规划，Planner 可选面应与
+        主图可执行面对齐；email.watch 被 Planner 选中会阻塞 Supervisor 调度。
+        """
+        names = [c.name for c in self.capabilities if c.routed]
+        for fallback in self.PLANNER_FALLBACK_CAPABILITIES:
+            if fallback not in names:
+                names.append(fallback)
+        return tuple(names)
+
     @property
     def domain_names(self) -> tuple[str, ...]:
         return tuple(d.name for d in self.domains)
