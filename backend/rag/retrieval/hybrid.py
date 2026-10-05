@@ -116,6 +116,17 @@ COMPLEX_PATTERNS = [
 # 多问号 / 多句子 → 多意图
 _MULTI_QUESTION_THRESHOLD = 2
 
+# Tier 1「简单 FAQ」的最大长度（去标点后字符数，D-Q2 修复 2026-10-05）：
+# 此前兜底过宽——任何不含复杂词/标识符的问句（含专名长问「崇妙保圣坚牢塔
+# 在哪里」）都落 vector_only 跳过 BM25；专名的向量语义弱、精确词匹配缺失，
+#  造成系统性召回损失（实测 travel 库 REST ask 拒答率 70%，验收清单 Q2）。
+# 收窄后：短问（≤8 字）维持 vector_only 纯向量；中长问句兜底走 hybrid
+# 双路 RRF（BM25 为进程内索引，零外部调用成本，检索质量只增不减）。
+_TIER1_MAX_CHARS = 8
+
+# 去除标点/空白后计长（问句核心内容长度）
+_TIER1_STRIP_RE = re.compile(r"[，。！？、；：「」《》\s!?;,.\[\]{}()\"'：:？—\-…]")
+
 
 def _classify_query_tier(query: str) -> str:
     """三层查询分类。统一控制 BM25 开关 + MultiQuery 触发。
@@ -156,8 +167,17 @@ def _classify_query_tier(query: str) -> str:
         if pattern.search(q):
             return "hybrid"
 
-    # ── Tier 1: 简单 FAQ → VECTOR_ONLY ──
-    return "vector_only"
+    # ── Tier 2.5: 引号/书名号专名 → HYBRID（D-Q2）──
+    # 「」""《》是用户显式标记的精确名称（景点/书/条款），BM25 精确
+    # 词匹配不可替代；这类 query 不满足 exact_id 正则但绝非「简单 FAQ」。
+    if any(mark in q for mark in ("「", "《", '"', "《")):
+        return "hybrid"
+
+    # ── Tier 1: 简短 FAQ → VECTOR_ONLY；中长问句兜底 HYBRID（D-Q2）──
+    compact = _TIER1_STRIP_RE.sub("", q)
+    if len(compact) <= _TIER1_MAX_CHARS:
+        return "vector_only"
+    return "hybrid"
 
 
 def _evaluate_retrieval_gate(merged: list, query: str):
