@@ -32,6 +32,9 @@ CORE_EVENTS: tuple[str, ...] = (
 )
 AUX_EVENTS: tuple[str, ...] = (
     "todo", "usage", "file", "clarification", "context", "thinking",
+    # 多域隔离收官 M1（2026-10-06）：主图域引导交接卡（目标域+参数包+引导话术），
+    # 契约本体 backend/orchestration/contracts/handoff.py::HandoffPayloadV1
+    "handoff",
 )
 TRANSPORT_EVENTS: tuple[str, ...] = ("ping",)
 KNOWN_EVENTS: frozenset[str] = frozenset(CORE_EVENTS + AUX_EVENTS + TRANSPORT_EVENTS)
@@ -121,6 +124,17 @@ class ThinkingData(_Loose):
     ts: float
 
 
+class HandoffData(_Loose):
+    """域引导交接卡（contracts/handoff.py::HandoffPayloadV1 的帧面投影）。
+
+    帧门禁只锁源码恒定提供的 v + target_domain；params/text 形态由契约
+    模型在构造期严格校验（extra=forbid），此处保持 loose 兼容演进。
+    """
+
+    v: int
+    target_domain: str
+
+
 class PingData(_Loose):
     ts: float
 
@@ -146,6 +160,7 @@ _DATA_MODELS: dict[str, type[BaseModel]] = {
     "clarification": ClarificationData,
     "context": ContextData,
     "thinking": ThinkingData,
+    "handoff": HandoffData,
     "ping": PingData,
 }
 

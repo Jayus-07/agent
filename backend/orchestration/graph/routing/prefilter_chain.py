@@ -15,7 +15,10 @@ logger）——用于把回写层口径改为注册表派生（2026-09-30 归属
 """
 from __future__ import annotations
 
+import re
+
 from backend.shared.logger import logger
+from backend.observability.log_privacy import query_preview
 from backend.orchestration.domain_registry import (
     DerivedDomainMap,
     domain_graph_registry,
@@ -223,6 +226,123 @@ def cs_rule_hits_of(query: str) -> int:
         return 1  # 保守：视作命中，维持 CS 优先
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 域入口模式（多域隔离收官 M2，2026-10-06）────────────────────────────
+# 拍板判据：一次性答案（主图现能力可答完，如 poi_search/map.lookup）留
+# 主图直答；产出作品（行程/漏斗报告/工单流）经 handoff 契约引导去专属页。
+# 每域一个入口模式开关（sys_config 登记，DB 覆盖免重启），默认 execute =
+# 行为零变化；域总闸（CS_ENABLED 等）关闭时 prefilter 本就不命中，模式
+# 开关只在「命中后」决定执行还是引导。
+# 域锁入口（CSDrawer domain_hint / 旅游页直达端点）不经过本判据。
+# ═══════════════════════════════════════════════════════════════════
+
+# route_mode → 域族（travel 家族三域图共用旅游页这一个专属入口）
+_ROUTE_MODE_FAMILY: dict[str, str] = {
+    "travel": "travel",
+    "travel_booking": "travel",
+    "travel_commerce": "travel",
+    "customer_service": "customer_service",
+    "selection_funnel": "selection_funnel",
+}
+
+_ENTRY_MODE_SWITCHES: dict[str, str] = {
+    "travel": "TRAVEL_GLOBAL_ENTRY_MODE",
+    "customer_service": "CS_GLOBAL_ENTRY_MODE",
+    "selection_funnel": "SELECTION_GLOBAL_ENTRY_MODE",
+}
+
+# guide 模式下旅游族的一次性查询豁免：命中这些「单点查询」语义时不引导，
+# 落回主路由由 travel.poi_search / map.lookup / rag 直答（判据左半边）。
+# 规划/多日/路线类语义不在表内 → 照常引导（判据右半边）。
+_ONE_SHOT_TRAVEL_RE = re.compile(
+    r"有什么景点|景点推荐|哪些景点|门票|开放时间|好玩吗|值得去吗|值得玩吗|"
+    r"在哪|怎么去|距离多远|人均|评分"
+)
+
+
+def domain_entry_mode(route_mode: str) -> str:
+    """route_mode 所属域的入口模式（execute | guide）；不可判一律 execute。"""
+    family = _ROUTE_MODE_FAMILY.get(route_mode or "")
+    if not family:
+        return "execute"
+    try:
+        from backend.services import sys_config
+        return sys_config.get_mode(_ENTRY_MODE_SWITCHES[family]) or "execute"
+    except Exception:
+        return "execute"
+
+
+def entry_mode_verdict(query: str, update: dict | None) -> str:
+    """prefilter 命中后的三态判定（execute | guide | passthrough）。
+
+    - execute：按既有路径进域图（默认模式，行为零变化）；
+    - guide：产 handoff 更新引导去专属页；
+    - passthrough：本次命中作废（旅游一次性查询），调用方按未命中继续。
+    cs_prefilter 的业务门禁短路（route_mode=clarify）等非域图归宿恒 execute。
+    """
+    if not isinstance(update, dict):
+        return "execute"
+    route_mode = str(update.get("route_mode") or "")
+    if route_mode not in _ROUTE_MODE_FAMILY:
+        return "execute"
+    if domain_entry_mode(route_mode) != "guide":
+        return "execute"
+    if (_ROUTE_MODE_FAMILY[route_mode] == "travel"
+            and _ONE_SHOT_TRAVEL_RE.search(query or "")):
+        return "passthrough"
+    return "guide"
+
+
+def handoff_update_for(query: str, state: dict, route_mode: str) -> dict:
+    """构造 handoff 路由更新（契约体 + 短路归宿；不回写路由上下文）。
+
+    注意：handoff 轮**不做** _mark_route_from_update——域并未真正开始，
+    回写 active_domain 会让下一轮「3天」这类短指令被 ContinuationResolver
+    拉进一个从未执行的域。
+    """
+    from backend.orchestration.contracts.handoff import build_handoff_payload
+
+    family = _ROUTE_MODE_FAMILY.get(route_mode, route_mode)
+    payload = build_handoff_payload(family, query).model_dump()
+    try:
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is not None:
+            trace.tags["handoff_target_domain"] = family
+    except Exception:  # noqa: BLE001 — 观测旁路
+        pass
+    logger.info(
+        "[PrefilterChain] 域引导(guide 模式): family=%s query=%s",
+        family, query_preview(query),
+    )
+    return {
+        "route_decision": None,
+        "route_mode": "handoff",
+        "_handoff": payload,
+    }
+
+
+def _finish_prefilter_hit(state: dict, query: str, update: dict) -> dict | None:
+    """prefilter 命中出口的统一收口（M2 判据接线，行为按模式分派）。
+
+    返回 None = passthrough（调用方继续下一个 prefilter / 后续链路）。
+    """
+    verdict = entry_mode_verdict(query, update)
+    if verdict == "passthrough":
+        return None
+    if verdict == "guide":
+        handoff = handoff_update_for(
+            query, state, str(update.get("route_mode") or ""))
+        return _with_router_decisions(
+            state, handoff, query, existing_override=handoff,
+        )
+    update = _mark_route_from_update(state, update)
+    return _with_router_decisions(
+        state, update, query, existing_override=update,
+    )
+
+
 def _try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | None:
     """CS 预过滤薄包装（原 router_node 主函数内嵌 def，抽为模块级）。"""
     # 逻辑在 cs_prefilter.py（只判断"是不是客服"，不判断"走哪个 expert"）
@@ -239,15 +359,16 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
 
     命中即返回完整 state 更新（含决策组装与路由上下文回写）；
     全部未命中返回 None（主函数继续 CS 兜底）。异常各段独立软失败回退。
+    M2（2026-10-06）：命中出口统一经 _finish_prefilter_hit 按域入口模式
+    分派执行/引导；guide 模式下旅游一次性查询 passthrough 继续后续链路。
     """
     try:
         from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
         travel_update = try_travel_prefilter(query, state)
         if travel_update is not None:
-            update = _mark_route_from_update(state, travel_update)
-            return _with_router_decisions(
-                state, update, query, existing_override=update,
-            )
+            result = _finish_prefilter_hit(state, query, travel_update)
+            if result is not None:
+                return result
     except Exception as e:
         logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
 
@@ -260,10 +381,9 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
         )
         funnel_update = try_selection_funnel_prefilter(query, state)
         if funnel_update is not None:
-            update = _mark_route_from_update(state, funnel_update)
-            return _with_router_decisions(
-                state, update, query, existing_override=update,
-            )
+            result = _finish_prefilter_hit(state, query, funnel_update)
+            if result is not None:
+                return result
     except Exception as e:
         logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
@@ -276,10 +396,9 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
         )
         booking_update = try_booking_prefilter(query, state)
         if booking_update is not None:
-            update = _mark_route_from_update(state, booking_update)
-            return _with_router_decisions(
-                state, update, query, existing_override=update,
-            )
+            result = _finish_prefilter_hit(state, query, booking_update)
+            if result is not None:
+                return result
     except Exception as e:
         logger.warning(f"[RouterNode] 预订预过滤失败，回退到主 Router: {e}")
 
@@ -293,10 +412,9 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
         )
         commerce_update = try_commerce_prefilter(query, state)
         if commerce_update is not None:
-            update = _mark_route_from_update(state, commerce_update)
-            return _with_router_decisions(
-                state, update, query, existing_override=update,
-            )
+            result = _finish_prefilter_hit(state, query, commerce_update)
+            if result is not None:
+                return result
     except Exception as e:
         logger.warning(f"[RouterNode] 商务预过滤失败，回退到主 Router: {e}")
 

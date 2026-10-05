@@ -1269,6 +1269,21 @@ def _build_graph_snapshot(state: dict, loop_count: int,
             "degradation_triggered": len(degraded_steps) > 0 if degraded_steps else False,
         }
 
+    # ── 短路直出模式（追问/域引导）：Router → Reporter，未执行任何 Skill ──
+    if route_mode in ("clarify", "handoff"):
+        return {
+            "nodes": [
+                {"id": "router", "label": "路由决策"},
+                {"id": "reporter", "label": "Reporter 汇总"},
+            ],
+            "edges": [
+                {"source": "router", "target": "reporter", "label": route_mode},
+            ],
+            "max_loops": 0,
+            "loop_count": 0,
+            "degradation_triggered": False,
+        }
+
     # ── 域图模式：Router → 域图节点 → END（通过 registry 动态查找）──
     from backend.orchestration.domain_registry import domain_graph_registry
     domain = domain_graph_registry.get(route_mode)

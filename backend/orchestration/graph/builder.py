@@ -185,6 +185,9 @@ def build_graph(checkpointer=None):
         "workflow_executor": "workflow_executor",
         # L1 弱命中追问（2026-09-19）：router 短路出追问，reporter 只出短文案
         "clarify": "reporter",
+        # 域引导（多域隔离 M2，2026-10-06）：guide 模式短路出引导卡，
+        # reporter 只出引导短文案，不进域图
+        "handoff": "reporter",
         # 寒暄/能力咨询直答（2026-09-22）：主 LLM 直连节点
         "general_chat": "general_chat",
     }

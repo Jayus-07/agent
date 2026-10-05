@@ -25,6 +25,8 @@ from backend.orchestration.graph.routing import (
     _with_router_decisions,
     cs_rule_hits_of,
     detect_cs_redirect,
+    entry_mode_verdict,
+    handoff_update_for,
     is_cs_forced,
     run_domain_prefilters,
     try_booking_pending,
@@ -140,8 +142,16 @@ def router_node(state: dict) -> dict:
                 state, update, query, existing_override=update,
             )
     elif not cs_forced and cs_rule_hits:
+        # 全局入口 CS 命中（多域隔离 M2）：guide 模式下产 handoff 引导去
+        # 客服抽屉，不再主图执行域图；域锁分支（下方 cs_forced）不受影响。
         cs_update = _try_cs_prefilter(query, state)
         if cs_update is not None:
+            if entry_mode_verdict(query, cs_update) == "guide":
+                handoff = handoff_update_for(
+                    query, state, str(cs_update.get("route_mode") or ""))
+                return _with_router_decisions(
+                    state, handoff, query, existing_override=handoff,
+                )
             update = _mark_route_from_update(
                 state, _enrich_with_understanding(cs_update, query))
             return _with_router_decisions(
@@ -161,6 +171,12 @@ def router_node(state: dict) -> dict:
     if not cs_rule_hits and not cs_forced:
         cs_update = _try_cs_prefilter(query, state)
         if cs_update is not None:
+            if entry_mode_verdict(query, cs_update) == "guide":
+                handoff = handoff_update_for(
+                    query, state, str(cs_update.get("route_mode") or ""))
+                return _with_router_decisions(
+                    state, handoff, query, existing_override=handoff,
+                )
             update = _mark_route_from_update(
                 state, _enrich_with_understanding(cs_update, query))
             return _with_router_decisions(
@@ -346,6 +362,10 @@ def route_selector(state: dict) -> str:
         # L1 弱命中追问：直接到 reporter 出短文案（builder edge_map
         # "clarify" → "reporter"），不执行任何 skill
         return "clarify"
+    if mode == "handoff":
+        # 域引导（多域隔离 M2）：guide 模式短路出引导卡，reporter 出引导
+        # 短文案（builder edge_map "handoff" → "reporter"），不进域图
+        return "handoff"
     if mode == "general_chat":
         # 寒暄/能力咨询直答（2026-09-22）：主 LLM 直连，不进 RAG/域图
         return "general_chat"

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "target_domain": "travel",
+  "reason": "domain_planning_request",
+  "params": {
+    "destination": "福州",
+    "days": 2,
+    "party_size": 3,
+    "budget_cny": 2000,
+    "must_go": ["三坊七巷"]
+  },
+  "text": "这是一次行程规划需求，主对话不直接生成完整行程。已把目的地、天数等整理进下方卡片，点击即可带参跳转「旅游规划」页，到那边我会实时检索景点、交通与预算并逐日排程。"
+}

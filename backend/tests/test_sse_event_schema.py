@@ -44,6 +44,8 @@ def _frame(event: str, **data) -> dict:
     _frame("clarification", question="去哪?", options=[]),
     {"event": "context", "data": {"kind": "l2_trimmed", "before": 10}},
     _frame("thinking", content="推理中"),
+    # 多域隔离 M1（2026-10-06）：域引导交接卡（v + target_domain 必填）
+    _frame("handoff", v=1, target_domain="travel"),
     _frame("ping"),
 ])
 def test_all_known_event_samples_pass(frame):
@@ -77,11 +79,12 @@ def test_non_dict_frame_rejected():
 
 
 def test_known_events_complete():
-    """契约登记完备性：核心六类 + 辅助六类 + ping。"""
+    """契约登记完备性：核心六类 + 辅助七类（含 handoff，多域隔离 M1）+ ping。"""
     assert {"meta", "status", "log", "delta", "done", "error"} <= KNOWN_EVENTS
-    assert {"todo", "usage", "file", "clarification", "context", "thinking"} <= KNOWN_EVENTS
+    assert {"todo", "usage", "file", "clarification", "context", "thinking",
+            "handoff"} <= KNOWN_EVENTS
     assert "ping" in KNOWN_EVENTS
-    assert len(KNOWN_EVENTS) == 13
+    assert len(KNOWN_EVENTS) == 14
 
 
 # ── 2) 帧序约束 ──────────────────────────────────────
@@ -100,6 +103,22 @@ def _full_stream() -> list[dict]:
 def test_valid_sequence_passes():
     out = validate_frame_sequence(_full_stream())
     assert [f["event"] for f in out] == ["meta", "status", "log", "delta", "done"]
+
+
+def test_handoff_aux_midstream_allowed():
+    """handoff 是 AUX 帧：中段任意位置任意次出现合法（多域隔离 M1）。"""
+    frames = _full_stream()
+    frames.insert(3, _frame("handoff", v=1, target_domain="travel"))
+    frames.insert(4, _frame("handoff", v=1, target_domain="customer_service"))
+    out = validate_frame_sequence(frames)
+    assert [f["event"] for f in out][:5] == [
+        "meta", "status", "log", "handoff", "handoff"]
+    assert out[-1]["event"] == "done"
+
+
+def test_handoff_missing_required_rejected():
+    with pytest.raises(Exception):
+        validate_frame({"event": "handoff", "data": {"v": 1, "ts": _T}})  # 缺 target_domain
 
 
 def test_ping_ignored_in_sequence():

@@ -53,6 +53,18 @@ def reporter_node(state: dict) -> dict:
             "final_answer": state.get("final_answer") or CLARIFY_STANDALONE_TEXT,
         }
 
+    # ── 域引导（多域隔离 M2，2026-10-06）：handoff 模式同 clarify 短路 ──
+    # 引导卡事件已由 router 节点原始输出（_handoff）发出，这里只出契约
+    # 自带的引导话术；话术缺失时按域兜底，保证旧前端在正文里也有引导。
+    if state.get("route_mode") == "handoff":
+        from backend.orchestration.contracts.handoff import GUIDE_TEXTS
+
+        payload = state.get("_handoff") or {}
+        return {
+            "final_answer": payload.get("text")
+            or GUIDE_TEXTS.get(str(payload.get("target_domain") or ""), ""),
+        }
+
     question = state.get("question", "")
     step_results = state.get("step_results", {})
 

@@ -39,6 +39,9 @@ from backend.orchestration.graph.routing.prefilter_chain import (
     _try_general_chat,
     _with_router_decisions,
     cs_rule_hits_of,
+    domain_entry_mode,
+    entry_mode_verdict,
+    handoff_update_for,
     run_domain_prefilters,
 )
 
@@ -51,6 +54,10 @@ __all__ = [
     "_try_cs_prefilter",
     "cs_rule_hits_of",
     "run_domain_prefilters",
+    # 域入口模式（多域隔离 M2）
+    "domain_entry_mode",
+    "entry_mode_verdict",
+    "handoff_update_for",
     # lock_domain
     "CS_FORCED_HINTS",
     "is_cs_forced",

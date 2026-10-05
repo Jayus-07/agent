@@ -105,6 +105,11 @@ def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
         yield from _build_clarify_events(
             node_output["_clarify"],
             session_id=str(node_output.get("session_id") or ""))
+    # 域引导交接卡（多域隔离 M1，2026-10-06）：router 节点 guide 模式输出带
+    # _handoff → 发 handoff AUX 帧。同 _clarify：键必须入 OrchestratorState
+    # schema，否则 LangGraph updates 流剥离后永远到不了这里。
+    if isinstance(node_output, dict) and node_output.get("_handoff"):
+        yield from _build_handoff_events(node_output["_handoff"])
     if node_name == "planner":
         yield from _build_planner_events(node_output)
     elif node_name == "critique":
@@ -185,6 +190,42 @@ def _build_clarify_events(marker: dict,
             ],
             "handoff_available": bool(marker.get("handoff_available")),
             "source": marker.get("source", ""),
+            "ts": time.time(),
+        },
+    }
+
+
+def _build_handoff_events(marker: dict) -> Generator[dict, None, None]:
+    """域引导交接卡事件（契约校验 + 曝光计数，软失败不阻断事件流）。
+
+    marker 来自 contracts/handoff.py::build_handoff_payload 的 model_dump；
+    此处再过一次契约模型属防御性校验——契约坏帧宁可静默丢（引导是增强
+    体验，消息正文里的引导话术仍在）也不给前端发结构非法的卡。
+    """
+    try:
+        from backend.orchestration.contracts.handoff import HandoffPayloadV1
+
+        payload = HandoffPayloadV1.model_validate(marker)
+    except Exception:  # noqa: BLE001 — 坏帧丢弃，正文话术兜底
+        from backend.shared.logger import logger
+
+        logger.warning("[Events] handoff 契约校验失败，帧已丢弃", exc_info=True)
+        return
+    try:
+        from backend.observability.metrics import agent_handoff_total
+
+        agent_handoff_total.labels(
+            target_domain=payload.target_domain, phase="shown").inc()
+    except Exception:  # noqa: BLE001 — 指标旁路
+        pass
+    yield {
+        "event": "handoff",
+        "data": {
+            "v": payload.v,
+            "target_domain": payload.target_domain,
+            "reason": payload.reason,
+            "params": payload.params,
+            "text": payload.text,
             "ts": time.time(),
         },
     }

@@ -14,6 +14,8 @@ from backend.orchestration.graph.routing.cs_understanding import (
 )
 from backend.orchestration.graph.routing.prefilter_chain import (
     _mark_route_from_update,
+    entry_mode_verdict,
+    handoff_update_for,
 )
 from backend.orchestration.router import get_routing_engine
 from backend.shared.logger import logger
@@ -98,16 +100,26 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
         except Exception as e:
             logger.warning(f"[RouterNode] 域图 prefilter 失败，继续走统一路由引擎: {e}")
         if update is not None:
-            return {**state, **_mark_route_from_update(
-                state, _enrich_with_understanding(update, query))}
-        # 未放行（如 CS 灰度 control 组 / 检测器不同意）→ 交回统一引擎。
-        # 这里不能再调用旧 Router 兼容方法，否则一次请求会重新进入
-        # 另一套路由算法，导致结果来源不明、故障语义不一致。
-        engine_state = {
-            **state,
-            "routing_context": route_context,
-        }
-        engine_decision = get_routing_engine().route(query, engine_state)
+            # 多域隔离 M2（2026-10-06）：guide 模式下命中 → handoff 引导，
+            # 旅游一次性查询 passthrough → 交回统一引擎（判据左半边兜底）。
+            verdict = entry_mode_verdict(query, update)
+            if verdict == "guide":
+                handoff = handoff_update_for(
+                    query, state, str(update.get("route_mode") or ""))
+                return {**state, **handoff}
+            if verdict == "execute":
+                return {**state, **_mark_route_from_update(
+                    state, _enrich_with_understanding(update, query))}
+        if update is None or entry_mode_verdict(query, update) == "passthrough":
+            # 未放行（如 CS 灰度 control 组 / 检测器不同意 / guide 模式一次性查询）
+            # → 交回统一引擎。
+            # 这里不能再调用旧 Router 兼容方法，否则一次请求会重新进入
+            # 另一套路由算法，导致结果来源不明、故障语义不一致。
+            engine_state = {
+                **state,
+                "routing_context": route_context,
+            }
+            engine_decision = get_routing_engine().route(query, engine_state)
         return {
             **state,
             "route_decision": engine_decision.model_dump(),

@@ -104,6 +104,25 @@ _SWITCHES: dict[str, dict[str, Any]] = {
         "default": "100",
         "desc": "客服域灰度放量百分比（按会话稳定哈希分桶，白名单恒 treatment；100=全量）",
     },
+    # ── 多域隔离收官 M2（2026-10-06）：域入口模式 ────────────────
+    # 只在域总闸开启且 prefilter 命中后生效：execute = 照旧进域图（默认，
+    # 行为零变化）；guide = 产 handoff 引导卡送专属页，AI 助手不执行域规划。
+    # 旅游开关覆盖 travel/travel_booking/travel_commerce 三域图（同属旅游页）。
+    "CS_GLOBAL_ENTRY_MODE": {
+        "allowed": ("execute", "guide"),
+        "default": "execute",
+        "desc": "客服域全局入口模式（execute=主图执行域图；guide=引导卡送客服抽屉；域锁入口不受影响）",
+    },
+    "TRAVEL_GLOBAL_ENTRY_MODE": {
+        "allowed": ("execute", "guide"),
+        "default": "execute",
+        "desc": "旅游域全局入口模式（覆盖 travel/booking/commerce 三域图；guide=引导卡送旅游页，一次性景点/地点查询仍主图直答）",
+    },
+    "SELECTION_GLOBAL_ENTRY_MODE": {
+        "allowed": ("execute", "guide"),
+        "default": "execute",
+        "desc": "选品漏斗域全局入口模式（guide=引导卡送选品专属页）",
+    },
 }
 
 _REFRESH_INTERVAL_S = 15.0

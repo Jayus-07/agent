@@ -197,6 +197,11 @@ class OrchestratorState(AgentState):
     # 流剥离 schema 外键」的活证据：任何改为从 state 读的消费方都会拿到
     # None。登记后与 cs_context 等域上下文字段同语义。
     cs_pending_action: dict | None
+    # 域引导交接卡（多域隔离收官 M1，2026-10-06）：router_node 在 guide 模式
+    # 下携带 HandoffPayloadV1.dict（contracts/handoff.py），events.py 据此发
+    # handoff SSE AUX 帧，reporter 据此出引导短文案。**必须入 schema**——
+    # LangGraph updates 流会剥离 schema 外的键（与 _clarify 同款暗雷）。
+    _handoff: dict | None
     # ── ephemeral 透出键补登记（P1-1 守卫落地时发现，2026-09-30）──────
     # 三个下划线键历史上「有意不进 schema、仅随 stream update 透出」
     # （tool_selector.py 尾注），但这正是 LangGraph 剥离的暗雷形态：任何
