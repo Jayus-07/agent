@@ -113,6 +113,21 @@ def wait_active(doc_id, timeout=150):
     return "timeout"
 
 
+def approve_doc(headers, doc_id):
+    """按生产审核流程发布待审核文档，避免探针把 pending_review 当 active。"""
+    return req("POST", f"/api/rag/pending/{doc_id}/approve", headers)
+
+
+def ensure_active(headers, doc_id, timeout=150):
+    """等待索引完成；若命中审核门，则显式审核后再确认 active。"""
+    status = wait_active(doc_id, timeout=timeout)
+    approval = None
+    if status == "pending_review":
+        approval = approve_doc(headers, doc_id)
+        status = wait_active(doc_id, timeout=timeout)
+    return status, approval
+
+
 def detail(headers, doc_id):
     return req("GET", f"/api/rag/documents/{doc_id}", headers)
 
@@ -146,13 +161,14 @@ def main():
                                     "permission_scope": "finance",
                                     "user_id": "999"})
     made_docs.append(d_s5)
-    wait_active(d_s5)
+    s5_state, s5_approval = ensure_active(headers, d_s5)
     st_d, det = detail(headers, d_s5)
     row = psql(f"SELECT permission_scope, tenant_id FROM doc_registry WHERE doc_id='{d_s5}'")
     results["S5_metadata_injection"] = {
         "upload_status": st, "detail_status": st_d,
+        "doc_status": s5_state, "approval": s5_approval,
         "registry_scope_tenant": row,
-        "pass": st == 200 and "evil-tenant" not in row and "finance" not in row,
+        "pass": st == 200 and s5_state == "active" and "evil-tenant" not in row and "finance" not in row,
     }
 
     # ── A3：版本快照可区分（覆盖后 detail 版本可区分 + 快照端点行为） ──
@@ -160,22 +176,24 @@ def main():
     d_a3 = doc_id_of(f_a3)
     made_docs.append(d_a3)
     upload(headers, f_a3, f"# A3 v1\n\n标志词a3v1{ts} 建于 1849 年。\n" + "内容。" * 500)
-    wait_active(d_a3)
+    a3_v1_state, a3_v1_approval = ensure_active(headers, d_a3)
     _, det_v1 = detail(headers, d_a3)
     ver_v1 = det_v1.get("version_id") or (det_v1.get("data") or {}).get("version_id")
     upload(headers, f_a3, f"# A3 v2\n\n标志词a3v2{ts} 建于 1932 年。\n" + "新内容。" * 500)
-    wait_active(d_a3)
+    a3_v2_state, a3_v2_approval = ensure_active(headers, d_a3)
     _, det_v2 = detail(headers, d_a3)
     ver_v2 = det_v2.get("version_id") or (det_v2.get("data") or {}).get("version_id")
     st_pv, pv = req("GET", f"/api/rag/documents/{d_a3}/preview", headers)
     results["A3_version_snapshot"] = {
         "version_v1": ver_v1, "version_v2": ver_v2,
+        "state_v1": a3_v1_state, "state_v2": a3_v2_state,
+        "approval_v1": a3_v1_approval, "approval_v2": a3_v2_approval,
         "version_distinguistable": bool(ver_v1 and ver_v2 and ver_v1 != ver_v2),
         "preview_status": st_pv,
         "preview_has_version": ("version" in json.dumps(pv)[:2000]),
         # 口径：doc_id 焊死同名覆盖，回答所用版本经 detail/version_id 可追溯，
         # 旧版本明确不可再检索（L3 已证），preview 恒为当前版本=不回退旧内容
-        "pass": bool(ver_v1 and ver_v2 and ver_v1 != ver_v2) and st_pv == 200,
+        "pass": bool(ver_v1 and ver_v2 and ver_v1 != ver_v2) and st_pv == 200 and a3_v2_state == "active",
     }
 
     # ── E4：数字证据溯源（答案数字必须能在语料 chunk 中找到） ──
@@ -186,7 +204,7 @@ def main():
     upload(headers, f_e4,
            f"# E4 数字语料\n\n{price_mark} 门票定价 42 元，开放时间 09:00-17:00，"
            f"始建于清道光二十九年（1849 年）。\n" + "正文内容。" * 800)
-    st_e4 = wait_active(d_e4)
+    st_e4, e4_approval = ensure_active(headers, d_e4)
     e4_cases = []
     for q in (f"{price_mark} 门票多少钱", f"{price_mark} 几点开门", f"{price_mark} 始建于哪一年"):
         st_q, ans = ask(headers, q)
@@ -202,8 +220,8 @@ def main():
             "corpus_contains_price_year": ("42" in corpus or "1849" in corpus),
         })
     results["E4_numeric_evidence"] = {
-        "doc_status": st_e4, "cases": e4_cases,
-        "pass": all(c["http"] == 200 and c["answer_len"] > 0 for c in e4_cases),
+        "doc_status": st_e4, "approval": e4_approval, "cases": e4_cases,
+        "pass": st_e4 == "active" and all(c["http"] == 200 and c["answer_len"] > 0 for c in e4_cases),
     }
 
     # ── E6：冲突证据（两篇不同答案 → 明示冲突/裁决，不静默任选） ──
@@ -214,17 +232,19 @@ def main():
     conflict_mark = f"双源亭{ts}"
     upload(headers, f_e6a, f"# E6 源甲\n\n{conflict_mark} 门票 60 元（管理处 2024 公告）。\n" + "甲内容。" * 600)
     upload(headers, f_e6b, f"# E6 源乙\n\n{conflict_mark} 门票 80 元（旅行社 2025 报价单）。\n" + "乙内容。" * 600)
-    wait_active(d_e6a)
-    wait_active(d_e6b)
+    e6a_state, e6a_approval = ensure_active(headers, d_e6a)
+    e6b_state, e6b_approval = ensure_active(headers, d_e6b)
     st_e6, ans_e6 = ask(headers, f"{conflict_mark} 门票多少钱")
     ans_text = str(ans_e6.get("answer") or "")
     has_both = ("60" in ans_text and "80" in ans_text)
     has_conflict_word = any(w in ans_text for w in ("不一致", "冲突", "两种", "分别", "差异", "存在不同"))
     results["E6_conflict_evidence"] = {
         "http": st_e6, "answer": ans_text[:200],
+        "state_a": e6a_state, "state_b": e6b_state,
+        "approval_a": e6a_approval, "approval_b": e6b_approval,
         "both_values_shown": has_both, "conflict_flagged": has_conflict_word,
         # 口径：LLM 不静默任选 = 两个值并列或明示冲突；仅报单值即违反
-        "pass": st_e6 == 200 and (has_both or has_conflict_word),
+        "pass": e6a_state == "active" and e6b_state == "active" and st_e6 == 200 and (has_both or has_conflict_word),
     }
 
     # ── N1：并发上传（10 文件同发，无串写/死锁/重复索引） ──
@@ -238,14 +258,18 @@ def main():
     ok10 = sum(1 for _, st_u in outs if st_u == 200)
     made_docs += [doc_id_of(fn) for fn, _ in outs]
     time.sleep(4)
+    n1_ids = [doc_id_of(fn) for fn, _ in outs[:10]]
+    n1_id_sql = ",".join(f"'{did}'" for did in n1_ids)
     dup_check = psql(
         f"SELECT count(*) FROM (SELECT doc_id, count(*) c FROM doc_registry "
-        f"WHERE doc_id LIKE '{doc_id_of('ZZZ-n1-' + ts + '-0')[:8]}%' GROUP BY doc_id HAVING c > 1) t")
-    n1_final = [wait_active(doc_id_of(fn), timeout=240) for fn, _ in outs[:10]]
-    n1_ok = sum(1 for s in n1_final if s in ("active", "pending_review"))
+        f"WHERE doc_id IN ({n1_id_sql}) GROUP BY doc_id HAVING c > 1) t")
+    n1_results = [ensure_active(headers, did, timeout=240) for did in n1_ids]
+    n1_final = [status for status, _ in n1_results]
+    n1_ok = sum(1 for s in n1_final if s == "active")
     results["N1_concurrent_upload"] = {
         "http_ok": ok10, "final_states": n1_final,
         "duplicate_registry_rows": dup_check,
+        "approvals": [approval for _, approval in n1_results],
         "pass": ok10 == 10 and n1_ok >= 8 and dup_check == "0",
     }
 
