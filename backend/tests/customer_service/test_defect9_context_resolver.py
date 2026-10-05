@@ -15,6 +15,7 @@ from backend.customer_service import context_resolver as cr
 from backend.customer_service.context_resolver import (
     context_key,
     record_recent_order,
+    record_recent_orders,
     resolve_turn_reference,
 )
 
@@ -194,6 +195,26 @@ def test_t7_list_query_never_records_single_referent(monkeypatch):
         tenant_id="default", session_id="s1",
     )
     assert captured == {}, "列表查询不得记录唯一订单上下文"
+
+
+def test_t7b_explicit_ordinal_selects_from_recent_order_list():
+    """列表后明确说“第一个订单”是显式选择，不属于猜测。"""
+    record_recent_orders(
+        "default", "u1", "s1", ["MO-1001", "MO-1002"],
+        source_intent="t_order_status",
+    )
+    resolved = _resolve("第一个订单什么状态")
+    assert resolved is not None
+    assert resolved.order_id == "MO-1001"
+    assert resolved.resolved_query == "查询订单 MO-1001 的最新状态"
+
+
+def test_t7c_ordinal_out_of_range_does_not_guess():
+    record_recent_orders(
+        "default", "u1", "s1", ["MO-1001"],
+        source_intent="t_order_status",
+    )
+    assert _resolve("第二个订单什么状态") is None
 
 
 # ── Test 8：session 隔离 ───────────────────────────────────────

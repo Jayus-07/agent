@@ -59,6 +59,12 @@ _LOGISTICS_HINT = re.compile(
     r"(到哪|物流|发货|寄出|运输|配送|到货|签收|收货|什么时候到|多久到|多久发货|发货了吗|到账)"
 )
 
+_ORDINAL_ORDER = re.compile(r"第([一二三四五六七八九十百0-9]+)(?:个)?订单")
+_CN_ORDINAL = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+
 
 @dataclass
 class ContextResolution:
@@ -123,6 +129,7 @@ def record_recent_order(
             context_key(tenant_id, user_id, session_id),
             {
                 "last_order_id": str(order_id),
+                "recent_order_ids": [str(order_id)],
                 "source_intent": source_intent,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -130,6 +137,35 @@ def record_recent_order(
         )
     except Exception as exc:
         logger.warning("[ContextResolver] record context failed: %s", exc)
+
+
+def record_recent_orders(
+    tenant_id: str,
+    user_id: str,
+    session_id: str,
+    order_ids: list[str],
+    source_intent: str = "",
+) -> None:
+    """记录本轮列表结果，供用户明确选择“第几个订单”时承接。
+
+    列表本身不产生 ``last_order_id``，因此不会把多订单误当成唯一
+    referent；只有下一轮带明确序号且序号在列表范围内时才会解析。
+    """
+    normalized = [str(item).strip() for item in order_ids if str(item).strip()]
+    if not normalized or not user_id or not session_id:
+        return
+    try:
+        _cache().set_json(
+            context_key(tenant_id, user_id, session_id),
+            {
+                "recent_order_ids": normalized[:20],
+                "source_intent": source_intent,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            ttl=_CONTEXT_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("[ContextResolver] record order list failed: %s", exc)
 
 
 def clear_recent_context(tenant_id: str, user_id: str, session_id: str) -> None:
@@ -177,14 +213,26 @@ def resolve_turn_reference(
 
     recent = get_recent_business_context(tenant_id, user_id, session_id)
     order_id = (recent or {}).get("last_order_id") or ""
-    if not order_id:
+    ordinal = _ORDINAL_ORDER.search(query)
+    if ordinal:
+        token = ordinal.group(1)
+        index = int(token) if token.isdigit() else _CN_ORDINAL.get(token, 0)
+        order_ids = list((recent or {}).get("recent_order_ids") or [])
+        if index <= 0 or index > len(order_ids):
+            return None
+        order_id = str(order_ids[index - 1]).strip()
+        if not order_id:
+            return None
+    elif not order_id:
         return None  # 无上下文：不得凭空产生 order_id
 
     # 负向语境（知识/投诉/非客服）优先于回指判定
     if _REFERENCE_NEGATIVE.search(query):
         return None
 
-    if not (_REFERENCE_PRONOUN.search(query) and _REFERENCE_PREDICATE.search(query)):
+    if not ordinal and not (
+        _REFERENCE_PRONOUN.search(query) and _REFERENCE_PREDICATE.search(query)
+    ):
         return None  # 不是订单回指表达：照常路由，不强行注入
 
     if _LOGISTICS_HINT.search(query):

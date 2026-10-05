@@ -226,6 +226,19 @@ def _dispatch_service(
                     )
                 return _format_order_list(result.orders)
             result = order_service.query_orders(user_id=user_id)
+            if result.orders:
+                from backend.customer_service.context_resolver import (
+                    record_recent_orders,
+                )
+
+                record_recent_orders(
+                    tenant_id,
+                    user_id,
+                    session_id,
+                    [str(order.get("order_no") or order.get("id") or "")
+                     for order in result.orders],
+                    source_intent=intent,
+                )
             return _format_order_list(result.orders)
         return _format_order_list([])
 
