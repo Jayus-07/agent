@@ -52,6 +52,16 @@ class _RuleRouter:
         return self.decision
 
 
+class _IntentRouter:
+    def __init__(self, decision):
+        self.decision = decision
+        self.calls: list[tuple[str, dict, object]] = []
+
+    def classify(self, query, domain_decision, rule_decision=None, **_kwargs):
+        self.calls.append((query, domain_decision, rule_decision))
+        return self.decision
+
+
 class _LLMRouter:
     def __init__(self, decision):
         self.decision = decision
@@ -92,6 +102,18 @@ def _direct_mode():
     )
 
 
+def _intent(kind="task", source="test", intent="data"):
+    return {
+        "kind": kind,
+        "intent": intent,
+        "confidence": 0.91,
+        "source": source,
+        "reasoning": "test",
+        "execution_hint": None,
+        "candidate_names": [],
+    }
+
+
 def test_engine_composes_domain_capability_and_execution_decisions():
     domain_router = _DomainRouter(_domain())
     capability_router = _CapabilityRouter(_capability())
@@ -114,6 +136,92 @@ def test_engine_composes_domain_capability_and_execution_decisions():
     assert domain_router.calls == [("查库存", {"routing_context": {"active_domain": "data"}})]
     assert capability_router.calls == [("data", "查库存", {"active_domain": "data"})]
     assert mode_resolver.calls[0][0] == _domain()
+
+
+def test_engine_exposes_explicit_domain_intent_capability_policy_order():
+    calls: list[str] = []
+
+    class OrderedDomain(_DomainRouter):
+        def route(self, query, state=None, **kwargs):
+            calls.append("domain")
+            return super().route(query, state, **kwargs)
+
+    class OrderedIntent(_IntentRouter):
+        def classify(self, query, domain_decision, rule_decision=None, **kwargs):
+            calls.append("intent")
+            return super().classify(query, domain_decision, rule_decision, **kwargs)
+
+    class OrderedCapability(_CapabilityRouter):
+        def route(self, domain, query, context=None):
+            calls.append("capability")
+            return super().route(domain, query, context)
+
+    class OrderedPolicy(_ModeResolver):
+        def resolve(self, domain, capability, override=None):
+            calls.append("policy")
+            return super().resolve(domain, capability, override)
+
+    intent_router = OrderedIntent(_intent())
+    engine = RoutingEngine(
+        domain_router=OrderedDomain(_domain()),
+        intent_router=intent_router,
+        capability_router=OrderedCapability(_capability()),
+        execution_resolver=OrderedPolicy(_direct_mode()),
+        rule_router=_RuleRouter(),
+        cache=_Cache(),
+    )
+
+    decision = engine.route("查库存")
+
+    assert calls == ["domain", "intent", "capability", "policy"]
+    assert decision.route_mode == "direct"
+    assert decision.routing_meta["stage_order"] == [
+        "entry_gate", "domain", "intent", "capability", "policy", "route_decision",
+    ]
+    assert decision.routing_meta["intent_kind"] == "task"
+    assert intent_router.calls[0][1] == _domain()
+
+
+def test_unknown_intent_becomes_clarify_without_capability_resolution():
+    from backend.orchestration.router.execution_mode import ExecutionModeResolver
+
+    capability = _CapabilityRouter(_capability())
+    engine = RoutingEngine(
+        domain_router=_DomainRouter(_domain("unknown", source="embedding")),
+        intent_router=None,
+        capability_router=capability,
+        execution_resolver=ExecutionModeResolver(),
+        rule_router=_RuleRouter(),
+        cache=_Cache(),
+    )
+
+    decision = engine.route("帮我看看这个")
+
+    assert capability.calls == []
+    assert decision.execution_mode is ExecutionMode.PLAN
+    assert decision.route_mode == "clarify"
+    assert decision.routing_meta["need_clarification"] is True
+    assert decision.routing_meta["intent_kind"] == "clarify"
+
+
+def test_general_intent_maps_to_general_chat_route_mode():
+    from backend.orchestration.router.execution_mode import ExecutionModeResolver
+
+    capability = _CapabilityRouter(_capability())
+    engine = RoutingEngine(
+        domain_router=_DomainRouter(_domain("general")),
+        capability_router=capability,
+        execution_resolver=ExecutionModeResolver(),
+        rule_router=_RuleRouter(),
+        cache=_Cache(),
+    )
+
+    decision = engine.route("你好")
+
+    assert capability.calls == []
+    assert decision.execution_mode is ExecutionMode.PLAN
+    assert decision.route_mode == "general_chat"
+    assert decision.routing_meta["domain_action"] == "general_chat"
 
 
 def test_engine_keeps_workflow_override_in_the_single_decision_path():

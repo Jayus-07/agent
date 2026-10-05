@@ -19,6 +19,7 @@ router_node 入口门禁与域 prefilter
         ↓
 RoutingEngine
   ├─ DomainRouter：只判断业务域
+  ├─ IntentRouter：只归类用户意图，不直接执行
   ├─ CapabilityRouter：只解析域内候选
   └─ ExecutionModeResolver：只决定执行方式
         ↓
@@ -31,10 +32,11 @@ route_selector → domain graph / direct / workflow / plan / clarify / general_c
 
 - `router_node`：保留客服锁域、续跑、域 prefilter 和入口追问的既有业务顺序；不再直接选择 legacy 或 hierarchical 架构
 - `DomainRouter`：消费 prefilter 结果或粗分类器结果，只输出 `DomainDecision`
+- `IntentRouter`：消费域判断和规则证据，输出可序列化 `IntentDecision`；强规则也必须经过该阶段，弱规则只能作为候选提示
 - `CapabilityRouter`：只在已确定的域内选择候选，不执行 Tool、Skill 或 Workflow
 - `ExecutionModeResolver`：根据域决策、能力候选和显式 override 输出执行方式
-- `RoutingEngine`：负责上述三者的组装、缓存、结构化降级和统一观测
-- `RouteDecision`：继续作为下游兼容协议，`routing_meta` 保存结构化证据，不新增执行职责
+- `RoutingEngine`：按固定顺序组装上述四个阶段、缓存、结构化降级和统一观测
+- `RouteDecision`：继续作为下游兼容协议；新增 `route_mode` 明确 direct/workflow/plan/clarify/domain_graph/general_chat，`routing_meta` 保存结构化证据，不新增执行职责
 
 ## 故障语义
 

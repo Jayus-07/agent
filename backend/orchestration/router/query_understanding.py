@@ -1,7 +1,7 @@
 """orchestration/router/query_understanding.py — 统一问题理解层（QueryRouter）
 
 治理改造（2026-09-22）。目标：给主图一个结构化的「用户想干什么」判断，
-并阻止简单问题进入 Planner —— 不为此新增任何固定 LLM 调用。
+并为 Planner/Reporter 提供复杂度元数据 —— 不为此新增任何固定 LLM 调用。
 
 三级识别（用户规格 §12，全部复用既有设施，不另起炉灶）：
   Level 1  确定性规则   —— 本模块的正则实体/意图关键词（~µs 级）
@@ -20,7 +20,7 @@
     "need_rag":         bool,
     "need_sql":         bool,
     "need_tool":        bool,   # 除 sql/rag 之外的业务工具
-    "need_planner":     bool,   # False 时 router_node 可把 plan 降级为 direct
+    "need_planner":     bool,   # 供 Planner/Reporter 理解复杂度，不改写 RouteDecision
     "entities":         {...},  # sku / order_id / error_code / url / date_range ...
     "time_range":       str|None,
     "confidence":       float,  # 0-1
@@ -227,7 +227,9 @@ def understand_query(query: str, decision: Any = None) -> dict[str, Any]:
     if mode == "workflow":
         need_planner = False
 
-    # ── 降级建议：路由给了 plan 但理解层判定简单 → 建议直连 ──
+    # ── 兼容性建议：路由给了 plan 但理解层判定简单 ──
+    # 该字段保留给评测/观测；统一 RouteDecision 已由 RoutingEngine 拍板，
+    # router_node 不消费它改写 route_mode。
     downgrade = None
     if mode == "plan" and not need_planner and complexity == "simple" and top is not None:
         downgrade = {"to": "direct", "capability": top_name}

@@ -20,8 +20,10 @@ from .models import (
     CapabilityDecision,
     DomainDecision,
     ExecutionModeDecision,
+    IntentDecision,
 )
 from .domain_router import DomainRouter
+from .intent_router import IntentRouter
 from .capability_router import CapabilityRouter
 from .execution_mode import ExecutionModeResolver
 
@@ -41,8 +43,10 @@ __all__ = [
     "LLMRouter",
     "DomainDecision",
     "CapabilityDecision",
+    "IntentDecision",
     "ExecutionModeDecision",
     "DomainRouter",
+    "IntentRouter",
     "CapabilityRouter",
     "ExecutionModeResolver",
 ]

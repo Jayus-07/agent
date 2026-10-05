@@ -37,9 +37,17 @@ class RouteDecision(BaseModel):
     设计原则：
     - candidates 列表提供 hints，**不** 强制选
     - execution_mode 决定执行方式
+    - route_mode 决定主图最终归宿，兼容域图与澄清分支
     - Planner 决定最终 DAG（基于 candidates + query）
     """
     execution_mode: ExecutionMode
+    # 对外暴露“路由归宿”而不是把域图/澄清硬塞进 execution_mode。
+    # execution_mode 继续保持 direct/plan/workflow 的下游兼容契约；
+    # route_mode 补齐 domain_graph/clarify/general_chat 的可观测分支。
+    route_mode: Optional[str] = Field(
+        None,
+        description="最终路由归宿：direct/workflow/plan/clarify/domain_graph/general_chat",
+    )
     candidates: List[CapabilityScore] = Field(default_factory=list)
     confidence: float = Field(..., ge=0.0, le=1.0, description="整体路由置信度")
     reason: Optional[str] = Field(None, description="路由判断依据")

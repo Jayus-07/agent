@@ -1,8 +1,8 @@
 """RoutingEngine：主图唯一的业务路由编排入口。
 
-Engine 只负责把域判断、能力解析和执行方式决策串成一条链路。
-DomainRouter、CapabilityRouter 和 ExecutionModeResolver 各自只返回决策，
-不执行 Tool、Skill 或 Workflow。
+Engine 固定编排：域判断 → 意图分类 → 候选能力解析 → 统一策略 →
+RouteDecision。入口门禁由 GraphRunner 的 Input Guard 在进入本引擎前完成；
+本引擎不复制安全门禁，也不执行 Tool、Skill 或 Workflow。
 """
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ from backend.infra.cache import get_cache
 from backend.orchestration.router.capability_router import CapabilityRouter
 from backend.orchestration.router.domain_router import DomainRouter
 from backend.orchestration.router.execution_mode import ExecutionModeResolver
+from backend.orchestration.router.intent_router import IntentRouter
 from backend.orchestration.router.llm_router import LLMRouter
 from backend.orchestration.router.models import (
     CapabilityDecision,
     DomainDecision,
     ExecutionModeDecision,
+    IntentDecision,
 )
 from backend.orchestration.router.rule_router import RuleRouter
 from backend.orchestration.router.vector_router import VectorRouteError
@@ -30,7 +32,15 @@ from backend.orchestration.router.types import (
 )
 
 
-_ROUTE_ENGINE_CACHE_VERSION = "v2"
+_ROUTE_ENGINE_CACHE_VERSION = "v3"
+ROUTING_STAGE_ORDER = (
+    "entry_gate",
+    "domain",
+    "intent",
+    "capability",
+    "policy",
+    "route_decision",
+)
 
 
 def _normalized_query(query: str) -> str:
@@ -132,6 +142,7 @@ class RoutingEngine:
         self,
         *,
         domain_router: DomainRouter | None = None,
+        intent_router: IntentRouter | None = None,
         capability_router: CapabilityRouter | None = None,
         execution_resolver: ExecutionModeResolver | None = None,
         rule_router: RuleRouter | None = None,
@@ -139,6 +150,7 @@ class RoutingEngine:
         cache: Any | None = None,
     ) -> None:
         self.domain_router = domain_router or DomainRouter()
+        self.intent_router = intent_router or IntentRouter()
         self.capability_router = capability_router or CapabilityRouter()
         self.execution_resolver = execution_resolver or ExecutionModeResolver()
         self.rule_router = rule_router or RuleRouter()
@@ -168,7 +180,12 @@ class RoutingEngine:
             decision = RouteDecision(**cached)
             meta = dict(decision.routing_meta or {})
             meta["cache"] = "hit"
-            return decision.model_copy(update={"routing_meta": meta})
+            return decision.model_copy(update={
+                "route_mode": decision.route_mode
+                or meta.get("route_mode")
+                or decision.execution_mode.value,
+                "routing_meta": meta,
+            })
 
         self._record_cache("miss")
         decision = self._route_uncached(
@@ -193,47 +210,100 @@ class RoutingEngine:
         existing_override: Any | None = None,
     ) -> RouteDecision:
         """执行不含缓存读写的单次决策。"""
-
-        rule_override = self.rule_router.route(query)
-        if self._is_execution_override(rule_override):
-            return self._from_route_decision(
-                rule_override,
-                decision_source="rule_override",
-            )
-
+        domain_error: Exception | None = None
         try:
             domain_decision = self.domain_router.route(query, state)
         except Exception as exc:
+            domain_error = exc
+            domain_decision = {
+                "domain": "unknown",
+                "subflow": None,
+                "confidence": 0.0,
+                "source": "degraded",
+                "reasoning": f"domain router error: {type(exc).__name__}",
+            }
+
+        try:
+            rule_decision = self.rule_router.route(query)
+        except Exception as exc:
+            # 规则是证据提供者，故障不能让整个请求崩溃；后续意图阶段
+            # 仍可依据域判断继续工作。
+            from backend.shared.logger import logger
+
+            logger.warning("[RoutingEngine] 规则意图分类失败，忽略规则证据: %s", exc)
+            rule_decision = None
+
+        intent_decision = self.intent_router.classify(
+            query,
+            domain_decision,
+            rule_decision,
+            existing_override=existing_override,
+        )
+        existing_decision = self._coerce_route_decision(existing_override)
+        if self._is_execution_override(rule_decision) or self._is_execution_override(
+            existing_decision
+        ):
+            decision = (
+                rule_decision
+                if self._is_execution_override(rule_decision)
+                else existing_decision
+            )
+            return self._from_route_decision(
+                decision,
+                decision_source=(
+                    "rule_override"
+                    if self._is_execution_override(rule_decision)
+                    else "existing_override"
+                ),
+                domain=domain_decision,
+                intent=intent_decision,
+            )
+
+        if domain_error is not None:
             return self._llm_fallback(
                 query,
-                reason=f"domain_router_error:{type(exc).__name__}",
+                reason=f"domain_router_error:{type(domain_error).__name__}",
+                intent=intent_decision,
             )
         if domain_decision.get("source") in {"degraded", "fallback"}:
             return self._llm_fallback(
                 query,
                 reason="domain_classifier_degraded",
+                intent=intent_decision,
             )
 
         context = state.get("routing_context")
-        try:
-            capability_decision = self.capability_router.route(
-                str(domain_decision.get("domain") or "unknown"),
-                query,
-                context if isinstance(context, Mapping) else {},
-            )
-        except VectorRouteError as exc:
-            return self._llm_fallback(query, reason=exc.code)
-        except Exception as exc:
-            return self._llm_fallback(
-                query,
-                reason=f"capability_router_error:{type(exc).__name__}",
-            )
-        if capability_decision.get("fallback_reason"):
-            return self._llm_fallback(
-                query,
-                reason=str(capability_decision["fallback_reason"]),
-            )
-        override = existing_override if existing_override is not None else rule_override
+        if intent_decision["kind"] in {"clarify", "general", "domain_graph"}:
+            # 这些分支的归宿由域/意图本身确定，不再做一次无意义的能力
+            # 向量解析；这样 clarify 不会因为未知域被误送 Planner。
+            capability_decision = self._empty_capability(domain_decision)
+        else:
+            try:
+                capability_decision = self.capability_router.route(
+                    str(domain_decision.get("domain") or "unknown"),
+                    query,
+                    context if isinstance(context, Mapping) else {},
+                )
+            except VectorRouteError as exc:
+                return self._llm_fallback(query, reason=exc.code, intent=intent_decision)
+            except Exception as exc:
+                return self._llm_fallback(
+                    query,
+                    reason=f"capability_router_error:{type(exc).__name__}",
+                    intent=intent_decision,
+                )
+            if capability_decision.get("fallback_reason"):
+                return self._llm_fallback(
+                    query,
+                    reason=str(capability_decision["fallback_reason"]),
+                    intent=intent_decision,
+                )
+
+        override = existing_override
+        if override is None and self._is_policy_override(rule_decision):
+            override = rule_decision
+        if intent_decision["kind"] == "clarify" and override is None:
+            override = {"route_mode": "clarify"}
         execution_decision = self.execution_resolver.resolve(
             domain_decision,
             capability_decision,
@@ -244,6 +314,7 @@ class RoutingEngine:
             capability_decision,
             execution_decision,
             decision_source="domain_capability_policy",
+            intent=intent_decision,
         )
 
     @staticmethod
@@ -258,18 +329,61 @@ class RoutingEngine:
         )
 
     @staticmethod
-    def _is_execution_override(decision: RouteDecision | None) -> bool:
+    def _coerce_route_decision(value: Any | None) -> RouteDecision | None:
+        if isinstance(value, RouteDecision):
+            return value
+        if isinstance(value, Mapping):
+            try:
+                return RouteDecision(**dict(value))
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _is_execution_override(decision: RouteDecision | Mapping[str, Any] | None) -> bool:
         if decision is None:
             return False
-        if decision.execution_mode is ExecutionMode.WORKFLOW:
+        mapping = decision if isinstance(decision, Mapping) else decision.model_dump()
+        mode = mapping.get("execution_mode")
+        mode = getattr(mode, "value", mode)
+        confidence = float(mapping.get("confidence") or 0.0)
+        candidates = mapping.get("candidates") or []
+        if mode == ExecutionMode.WORKFLOW.value:
             return True
         return (
-            decision.execution_mode is ExecutionMode.PLAN
-            and decision.confidence >= 0.8
-            and len(decision.candidates) >= 2
+            mode == ExecutionMode.PLAN.value
+            and confidence >= 0.8
+            and len(candidates) >= 2
+        ) or (
+            mode == ExecutionMode.DIRECT.value
+            and confidence >= 0.8
+            and bool(candidates)
         )
 
-    def _llm_fallback(self, query: str, *, reason: str) -> RouteDecision:
+    @classmethod
+    def _is_policy_override(cls, decision: RouteDecision | None) -> bool:
+        """强规则才可影响策略；弱规则只能作为候选提示。"""
+
+        return cls._is_execution_override(decision)
+
+    @staticmethod
+    def _empty_capability(domain: DomainDecision) -> CapabilityDecision:
+        return {
+            "domain": str(domain.get("domain") or "unknown"),
+            "capability": None,
+            "candidates": [],
+            "confidence": 0.0,
+            "source": "policy_skip",
+            "reasoning": "意图分支已确定，不进入候选能力解析",
+        }
+
+    def _llm_fallback(
+        self,
+        query: str,
+        *,
+        reason: str,
+        intent: IntentDecision | None = None,
+    ) -> RouteDecision:
         self._record_fallback(reason)
         decision = self.llm_router.route(query)
         llm_meta = decision.routing_meta or {}
@@ -277,8 +391,10 @@ class RoutingEngine:
         if llm_failed:
             self._record_fallback("llm_failure")
         return decision.model_copy(update={
+            "route_mode": decision.route_mode or decision.execution_mode.value,
             "routing_meta": {
                 "architecture": "routing_engine",
+                "stage_order": list(ROUTING_STAGE_ORDER),
                 "decision_source": "llm_fallback",
                 "fallback_reason": reason,
                 "llm_failure": llm_failed,
@@ -292,6 +408,14 @@ class RoutingEngine:
                 "selected_tool": "",
                 "need_clarification": False,
                 "clarification_reason": "",
+                "route_mode": decision.route_mode or decision.execution_mode.value,
+                "intent": (intent or {}).get("intent", ""),
+                "intent_kind": (intent or {}).get("kind", ""),
+                "intent_confidence": float((intent or {}).get("confidence") or 0.0),
+                "intent_source": (intent or {}).get("source", ""),
+                "intent_reasoning": (intent or {}).get("reasoning", ""),
+                "intent_execution_hint": (intent or {}).get("execution_hint"),
+                "intent_candidates": list((intent or {}).get("candidate_names") or []),
             },
         })
 
@@ -322,23 +446,37 @@ class RoutingEngine:
         decision: RouteDecision,
         *,
         decision_source: str,
+        domain: DomainDecision | None = None,
+        intent: IntentDecision | None = None,
     ) -> RouteDecision:
+        mode = decision.execution_mode.value
+        meta = {
+            "architecture": "routing_engine",
+            "stage_order": list(ROUTING_STAGE_ORDER),
+            "decision_source": decision_source,
+            "fallback_reason": "",
+            "domain": str((domain or {}).get("domain") or ""),
+            "domain_confidence": float((domain or {}).get("confidence") or 0.0),
+            "domain_margin": float((domain or {}).get("margin") or 0.0),
+            "domain_source": str((domain or {}).get("source") or ""),
+            "domain_action": mode,
+            "candidate_tools": [candidate.name for candidate in decision.candidates],
+            "candidate_tool_count": len(decision.candidates),
+            "selected_tool": "",
+            "need_clarification": False,
+            "clarification_reason": "",
+            "route_mode": mode,
+            "intent": (intent or {}).get("intent", ""),
+            "intent_kind": (intent or {}).get("kind", ""),
+            "intent_confidence": float((intent or {}).get("confidence") or 0.0),
+            "intent_source": (intent or {}).get("source", ""),
+            "intent_reasoning": (intent or {}).get("reasoning", ""),
+            "intent_execution_hint": (intent or {}).get("execution_hint"),
+            "intent_candidates": list((intent or {}).get("candidate_names") or []),
+        }
         return decision.model_copy(update={
-            "routing_meta": {
-                "architecture": "routing_engine",
-                "decision_source": decision_source,
-                "fallback_reason": "",
-                "domain": "",
-                "domain_confidence": 0.0,
-                "domain_margin": 0.0,
-                "domain_source": "rule",
-                "domain_action": decision.execution_mode.value,
-                "candidate_tools": [candidate.name for candidate in decision.candidates],
-                "candidate_tool_count": len(decision.candidates),
-                "selected_tool": "",
-                "need_clarification": False,
-                "clarification_reason": "",
-            },
+            "route_mode": mode,
+            "routing_meta": meta,
         })
 
     @staticmethod
@@ -348,10 +486,17 @@ class RoutingEngine:
         execution: ExecutionModeDecision,
         *,
         decision_source: str,
+        intent: IntentDecision | None = None,
     ) -> RouteDecision:
         mode = execution.mode
-        if mode in {"general", "clarify", "domain_graph"}:
-            route_mode = execution.target or mode
+        compat_route_mode = getattr(execution, "compat_route_mode", None)
+        if compat_route_mode:
+            route_mode = compat_route_mode
+            output_mode = ExecutionMode.PLAN
+        elif mode in {"general", "clarify", "domain_graph"}:
+            route_mode = execution.target or (
+                "general_chat" if mode == "general" else mode
+            )
             output_mode = ExecutionMode.PLAN
         else:
             route_mode = mode
@@ -368,6 +513,7 @@ class RoutingEngine:
         selected = execution.target if mode == "direct" else ""
         meta = {
             "architecture": "routing_engine",
+            "stage_order": list(ROUTING_STAGE_ORDER),
             "decision_source": decision_source,
             "fallback_reason": "",
             "domain": str(domain.get("domain") or "unknown"),
@@ -376,6 +522,14 @@ class RoutingEngine:
             "domain_second": str(domain.get("second_domain") or ""),
             "domain_source": str(domain.get("source") or ""),
             "domain_action": route_mode,
+            "route_mode": route_mode,
+            "intent": (intent or {}).get("intent", ""),
+            "intent_kind": (intent or {}).get("kind", ""),
+            "intent_confidence": float((intent or {}).get("confidence") or 0.0),
+            "intent_source": (intent or {}).get("source", ""),
+            "intent_reasoning": (intent or {}).get("reasoning", ""),
+            "intent_execution_hint": (intent or {}).get("execution_hint"),
+            "intent_candidates": list((intent or {}).get("candidate_names") or []),
             "candidate_tools": [row.name for row in rows],
             "candidate_tool_count": len(rows),
             "fine_top1": capability.get("capability") or "",
@@ -383,12 +537,13 @@ class RoutingEngine:
             "fine_margin": 0.0,
             "tool_route_mode": "policy",
             "selected_tool": selected,
-            "need_clarification": mode == "clarify",
-            "clarification_reason": "" if mode != "clarify" else execution.reasoning,
+            "need_clarification": route_mode == "clarify",
+            "clarification_reason": "" if route_mode != "clarify" else execution.reasoning,
             "routing_latency_ms": 0,
         }
         return RouteDecision(
             execution_mode=output_mode,
+            route_mode=route_mode,
             candidates=rows,
             confidence=max(0.0, min(1.0, float(execution.confidence))),
             reason=execution.reasoning,

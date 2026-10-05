@@ -16,6 +16,7 @@ def record_router_decision(
     domain_decision: Mapping[str, Any],
     capability_decision: Mapping[str, Any],
     execution_decision: Mapping[str, Any],
+    intent_decision: Mapping[str, Any] | None = None,
 ) -> None:
     """将安全的 Router 决策摘要写入本请求的已有 trace。"""
     try:
@@ -27,7 +28,7 @@ def record_router_decision(
 
         capability_confidence = _confidence(capability_decision.get("confidence"))
         domain_confidence = _confidence(domain_decision.get("confidence"))
-        trace.metadata["router"] = {
+        router_metadata = {
             "domain": _label(domain_decision.get("domain")),
             "subflow": _label(domain_decision.get("subflow")),
             "capability": _label(capability_decision.get("capability")),
@@ -42,6 +43,14 @@ def record_router_decision(
                 or domain_decision.get("source")
             ),
         }
+        if intent_decision is not None:
+            router_metadata.update({
+                "intent": _label(intent_decision.get("intent")),
+                "intent_kind": _label(intent_decision.get("kind")),
+                "intent_source": _label(intent_decision.get("source")),
+                "intent_confidence": _confidence(intent_decision.get("confidence")),
+            })
+        trace.metadata["router"] = router_metadata
     except Exception:
         logger.debug("[RouterTrace] 路由决策 metadata 写入失败", exc_info=True)
 

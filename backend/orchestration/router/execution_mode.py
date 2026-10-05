@@ -132,7 +132,7 @@ class ExecutionModeResolver:
         return ExecutionModeDecision(
             mode="plan",
             confidence=confidence,
-            reasoning="无可执行候选，保持旧 plan fallback",
+            reasoning="无可执行候选，进入 plan 交由统一 Planner 处理",
         )
 
     def _domain_graph_target(self, decision: DomainDecision) -> str | None:

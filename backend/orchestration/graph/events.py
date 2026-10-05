@@ -471,6 +471,7 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "_supervisor_loop_count": 0,
         "_plan_critiqued": False,
         "_plan_changed": False,
+        "intent_decision": {},
     }
 
 

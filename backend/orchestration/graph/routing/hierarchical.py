@@ -33,6 +33,15 @@ def _hierarchical_state_fields(meta: dict) -> dict:
         "tool_route_mode": meta.get("tool_route_mode") or "",
         "need_clarification": bool(meta.get("need_clarification")),
         "clarification_reason": meta.get("clarification_reason") or "",
+        "intent_decision": {
+            "intent": meta.get("intent") or "",
+            "kind": meta.get("intent_kind") or "",
+            "confidence": float(meta.get("intent_confidence") or 0.0),
+            "source": meta.get("intent_source") or "",
+            "reasoning": meta.get("intent_reasoning") or "",
+            "execution_hint": meta.get("intent_execution_hint"),
+            "candidate_names": list(meta.get("intent_candidates") or []),
+        },
     }
 
 
@@ -102,7 +111,7 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
         return {
             **state,
             "route_decision": engine_decision.model_dump(),
-            "route_mode": engine_decision.execution_mode.value,
+            "route_mode": engine_decision.route_mode or engine_decision.execution_mode.value,
             **fields,
         }
 

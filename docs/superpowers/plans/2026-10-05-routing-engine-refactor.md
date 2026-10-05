@@ -4,7 +4,7 @@
 
 **目标：** 将主图路由收口为唯一的 `RoutingEngine` 生产路径，删除 legacy/hierarchical/shadow 的长期分叉和 `route_legacy()` 逃生口。
 
-**架构：** 保留现有入口域门禁与 prefilter 顺序。主路由统一调用 `DomainRouter`、`CapabilityRouter`、`ExecutionModeResolver`，并由 `RoutingEngine` 负责缓存、fallback 和决策元数据。旧 `Router` 只作为兼容 facade，内部不再执行旧三层架构。
+**架构：** 保留现有入口域门禁与 prefilter 顺序。主路由统一调用 `DomainRouter`、`IntentRouter`、`CapabilityRouter`、`ExecutionModeResolver`，并由 `RoutingEngine` 负责缓存、fallback 和决策元数据。旧 `Router` 只作为兼容 facade，内部不再执行旧三层架构。
 
 **技术栈：** Python、Pydantic、LangGraph、Prometheus、pgvector、pytest。
 
@@ -34,7 +34,7 @@
 - Test: `backend/tests/orchestration/router/test_routing_engine.py`
 
 - [x] 写测试：workflow 和复合意图走统一引擎，输出仍为 `RouteDecision`
-- [x] 写测试：域分类、能力解析、执行方式 resolver 按固定顺序调用
+- [x] 写测试：域分类、意图分类、能力解析、统一策略按固定顺序调用
 - [x] 运行新增测试，确认在引擎不存在时失败
 - [x] 实现最小 `RoutingEngine.route()` 和模块级单例
 - [x] 运行新增测试并通过
@@ -86,6 +86,22 @@
 - [x] 实现稳定缓存键和固定版本指纹
 - [x] 记录 cache hit/miss、最终层级、fallback reason 和耗时
 - [x] 运行缓存与路由测试
+
+### Task 5.5: 显式意图阶段与单一决策事实源
+
+**Files:**
+
+- Create: `backend/orchestration/router/intent_router.py`
+- Modify: `backend/orchestration/router/engine.py`
+- Modify: `backend/orchestration/router/types.py`
+- Modify: `backend/orchestration/graph/router_node.py`
+- Modify: `backend/orchestration/graph/routing/prefilter_chain.py`
+
+- [x] 将域判断、意图分类、能力候选、统一策略固定为可测试调用顺序
+- [x] 未知意图显式进入 `clarify`，不把空候选伪装成普通 `plan`
+- [x] `RouteDecision.route_mode` 补齐 `clarify/domain_graph/general_chat` 归宿
+- [x] 禁止 `query_understanding` 在 RouteDecision 之后二次改写 route_mode
+- [x] 将 intent decision 写入 state 与低基数 Trace metadata
 
 ### Task 5: 删除旧生产分支并完成验证
 

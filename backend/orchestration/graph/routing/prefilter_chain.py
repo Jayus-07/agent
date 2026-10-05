@@ -84,6 +84,7 @@ def _with_router_decisions(
         from backend.orchestration.router.capability_router import CapabilityRouter
         from backend.orchestration.router.domain_router import DomainRouter
         from backend.orchestration.router.execution_mode import ExecutionModeResolver
+        from backend.orchestration.router.intent_router import IntentRouter
         from backend.orchestration.domain_registry import domain_graph_registry
 
         domain_router = DomainRouter()
@@ -110,6 +111,12 @@ def _with_router_decisions(
             domain_decision = domain_router.route(
                 query, state, prefilter_update=update,
             )
+
+        intent_decision = IntentRouter().classify(
+            query,
+            domain_decision,
+            existing_override=existing_override,
+        )
 
         if hierarchical_meta is not None:
             capability_decision = CapabilityRouter.from_routing_meta(
@@ -159,6 +166,7 @@ def _with_router_decisions(
         current_legacy_used = False
         result.update({
             "domain_decision": domain_decision,
+            "intent_decision": intent_decision,
             "capability_decision": capability_decision,
             "execution_decision": execution_decision.to_dict(),
             "router_fallback_reason": (update or {}).get(
@@ -172,6 +180,7 @@ def _with_router_decisions(
             domain_decision,
             capability_decision,
             execution_decision.to_dict(),
+            intent_decision,
         )
     except Exception as exc:
         logger.warning("[RouterNode] 路由决策适配器失败，保持兼容字段: %s", exc)

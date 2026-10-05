@@ -13,10 +13,12 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
                 ├─ 客服预过滤命中（CS_ENABLED + 灰度）     → 客服域图 → END
                 ├─ 旅游预过滤命中（TRAVEL_ENABLED）        → 旅游域图 → END
                 ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
-                └─ RoutingEngine（domain → capability → execution）→ route_selector
+                └─ RoutingEngine（domain → intent → capability → policy → RouteDecision）→ route_selector
                       ├─ direct   → tool_selector → skill_executor → reporter → END
                       ├─ workflow → workflow_executor → reporter → END
                       ├─ general_chat（寒暄/能力咨询）→ 主 LLM 直答 → END
+                      ├─ clarify  → 澄清 reporter → END
+                      ├─ domain_graph → 对应有状态域图 → END
                       └─ plan     → planner → critique → supervisor（Send 并行）
                                                     → reporter → END
 ```
@@ -25,7 +27,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 | 节点 | 职责边界 |
 |------|----------|
-| Router | 域预过滤（客服域锁 / CS / 旅游 / 选品 / 商务 / 预订，纯正则）+ RoutingEngine：DomainRouter → CapabilityRouter → ExecutionModeResolver；规则、向量和 LLM 是证据提供者，基础设施故障走显式 LLM fallback |
+| Router | 入口门禁（GraphRunner Input Guard）之后执行域预过滤（客服域锁 / CS / 旅游 / 选品 / 商务 / 预订，纯正则）+ RoutingEngine：DomainRouter → IntentRouter → CapabilityRouter → ExecutionModeResolver → RouteDecision；规则、向量和 LLM 是证据提供者，基础设施故障走显式 LLM fallback |
 | tool_selector | direct 路径首站：Function-Call 门控选工具 + 填参；失败/快路径直通零开销 |
 | Planner | 只做任务拆解 → Capability DAG，**禁调 Tool/Skill/DB** |
 | Critique | 规则校验优先，仅 anomaly 才调 LLM；含计划深度上限（≤8） |
@@ -34,7 +36,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | general_chat | 寒暄/能力咨询直答（2026-09-22 接线）：主 LLM 直连节点，不进 Planner/Skill 链路 |
 | Reporter | `step_results` → Markdown + 引用格式化 |
 
-**主链路 LLM 决策节点仅 4 个**（Planner / Critique / Reporter / general_chat 直答）；RoutingEngine 只在域分类或能力索引故障时走显式 fallback，Supervisor 本身是纯规则调度器。
+**主链路 LLM 决策节点仅 4 个**（Planner / Critique / Reporter / general_chat 直答）；RoutingEngine 的 IntentRouter 是结构化分类阶段，不新增 LLM 调用，只消费规则/域判断证据；仅在域分类或能力索引故障时走显式 fallback，Supervisor 本身是纯规则调度器。
 
 ## 垂直域图（Domain Graph）
 
@@ -82,7 +84,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 | 名称 | 位置 | 职责 |
 |---|---|---|
-| **主图 Router**（`orchestration/graph/router_node.py`） | LangGraph 主图入口节点 | 域预过滤 + RoutingEngine（domain→capability→execution）+ 拍板 route_mode（direct/workflow/plan/general_chat/clarify/域图） |
+| **主图 Router**（`orchestration/graph/router_node.py`） | LangGraph 主图入口节点 | Input Guard 之后执行域预过滤 + RoutingEngine（domain→intent→capability→policy→RouteDecision）+ 拍板 route_mode（direct/workflow/plan/general_chat/clarify/域图） |
 | RAG 查询路由（`rag/retrieval/query_router.py`） | rag-service 内检索管道 | 检索策略选择，属于 RAG 子系统内部实现 |
 | SQL Schema Router（`sql/` 内） | SQL 子系统内部 | 自动选表，属于 NL2SQL 子系统内部实现 |
 
