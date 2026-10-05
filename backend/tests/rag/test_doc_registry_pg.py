@@ -185,6 +185,26 @@ class TestInterface:
         row = pg_reg.get_by_doc_id("pending-delete")
         assert row["status"] == "deleted"
 
+    def test_delete_clears_generation_to_block_inflight_publish(self, pg_reg):
+        """删除与覆盖并发时，旧候选不得按旧发布指针复活文档。"""
+        pg_reg.register_published(
+            "test://inflight-delete.md", "inflight-delete", "hash-old", "kb1",
+            ["old-0"], "db-old", active_generation="generation-old",
+            expected_base_generation="",
+        )
+
+        assert pg_reg.mark_deleted_by_doc_id("inflight-delete") == 1
+        row = pg_reg.get_by_doc_id("inflight-delete")
+        assert row["status"] == "deleted"
+        assert row["active_generation"] == ""
+
+        # 旧任务仍带 generation-old 基准时，CAS 必须失败；新上传可从空指针起步。
+        assert pg_reg.register_published(
+            "test://inflight-delete.md", "inflight-delete", "hash-new", "kb1",
+            ["new-0"], "db-new", active_generation="generation-stale",
+            expected_base_generation="generation-old",
+        ) == 0
+
     def test_mark_deleted_by_doc_id_clears_failed_terminal_rows(self, pg_reg):
         """删除已失败文档时，不得把 failed 行留作存量脏数据。"""
         pg_reg.register(

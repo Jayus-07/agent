@@ -649,7 +649,8 @@ class PostgresDocumentRegistry(DocumentRegistry):
         with self._lock, self._conn() as conn:
             self._exec(
                 conn,
-                f"UPDATE {self._table} SET status = 'deleted', updated_at = { _NOW_SQL } "
+                f"UPDATE {self._table} SET status = 'deleted', active_generation = '', "
+                f"updated_at = { _NOW_SQL } "
                 "WHERE file_path = %s",
                 (file_path,),
             )
@@ -658,7 +659,8 @@ class PostgresDocumentRegistry(DocumentRegistry):
         with self._lock, self._conn() as conn:
             cur = self._exec(
                 conn,
-                f"UPDATE {self._table} SET status = 'deleted', updated_at = { _NOW_SQL } "
+                f"UPDATE {self._table} SET status = 'deleted', active_generation = '', "
+                f"updated_at = { _NOW_SQL } "
                 # pending_review / failed 都必须进入终态，否则删除后审批
                 # 或失败存量仍会留下幽灵行；active 保持原有删除语义。
                 "WHERE doc_id = %s AND status IN ('pending_review', 'failed', 'active')",
@@ -672,9 +674,11 @@ class PostgresDocumentRegistry(DocumentRegistry):
         with self._lock, self._conn() as conn:
             cur = self._exec(
                 conn,
-                f"UPDATE {self._table} SET status = %s, updated_at = { _NOW_SQL } "
+                f"UPDATE {self._table} SET status = %s, "
+                f"active_generation = CASE WHEN %s = 'deleted' THEN '' "
+                f"ELSE active_generation END, updated_at = { _NOW_SQL } "
                 "WHERE doc_id = %s AND status IN ('pending_review', 'active')",
-                (new_status, doc_id),
+                (new_status, new_status, doc_id),
             )
             return cur.rowcount
 
@@ -818,7 +822,8 @@ class PostgresDocumentRegistry(DocumentRegistry):
             for doc_id in doc_ids:
                 self._exec(
                     conn,
-                    f"UPDATE {self._table} SET status = 'deleted', updated_at = { _NOW_SQL } "
+                    f"UPDATE {self._table} SET status = 'deleted', active_generation = '', "
+                    f"updated_at = { _NOW_SQL } "
                     "WHERE doc_id = %s AND status = 'active'",
                     (doc_id,),
                 )
