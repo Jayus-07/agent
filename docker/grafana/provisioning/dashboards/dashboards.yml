@@ -1,0 +1,15 @@
+# Grafana 看板自动装配（2026-10-05）
+# 扫描本目录下的 *.json（与 provider 配置同目录，Grafana 只认 JSON），
+# 看板 uid：agent-biz-overview / agent-cost / agent-quality / agent-tasks
+apiVersion: 1
+providers:
+  - name: agent-platform
+    orgId: 1
+    folder: Agent 平台
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

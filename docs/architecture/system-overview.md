@@ -69,7 +69,8 @@ flowchart TB
 | 5433 → 5432 | `postgres` | 宿主 5433 映射容器 5432；`agent_business` + `agent_memory` |
 | 6379 | `redis` | Celery broker + result backend + 缓存 |
 | 9090 / 3001 | Prometheus / Grafana | `--profile observability` |
-| 9094 / 11434 | `kafka` / `ollama` | `--profile java-loop` / `--profile local-llm`，默认不启 |
+| 9093 / 9095 | Alertmanager / alert-bridge | 告警评估触达 / 告警外投桥（AM webhook → 企微/飞书/钉钉，`ALERT_BRIDGE_*` 未配置时落桥日志），`--profile observability` |
+| 9092 / 11434 | `kafka` / `ollama` | `--profile java-loop` / `--profile local-llm`，默认不启 |
 
 **请求链路**：前端 rewrite → APISIX:9080 → `X-User-Id` 等身份头 → app（`IDENTITY_SOURCE=header` 只认头）。
 
