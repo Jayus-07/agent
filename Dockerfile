@@ -41,10 +41,14 @@ WORKDIR /build
 
 # 依赖单独成层：pyproject.toml 未变时命中缓存
 COPY pyproject.toml ./
+# torch+cpu 传递依赖（ragas/sentence-transformers 族引入）：官方 extra-index
+# 在 fake-ip 构建网络不可达且镜像无 +cpu 版会挂死下载（2026-10-06 实测两次），
+# EXTRA_INDEX_URL 可传国内 pytorch-wheels 镜像（mirrors.aliyun.com/pytorch-wheels/cpu/）。
+ARG EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install -e ".[postgres]" \
-        --extra-index-url https://download.pytorch.org/whl/cpu
+        --extra-index-url ${EXTRA_INDEX_URL}
 
 # ════════════════════════════════════════════════
 # Stage 2 — runtime：最小运行时镜像
