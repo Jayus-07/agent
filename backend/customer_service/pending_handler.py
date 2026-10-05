@@ -58,6 +58,44 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
         ) == ConfirmationIntent.CANCEL:
             return _cancel_need_info(pending_action, state)
 
+        # 转人工逃生（2026-10-05 浏览器走查发现）：need_info 追问期用户
+        # 显式转人工必须立即放行——紧急通道优先于补槽追问，否则用户被
+        # 追问循环卡死（实机复现：抽屉内「转人工」被问订单号吞掉）。
+        # 释放 need_info pending（同取消的终态口径）后回 supervisor 重分诊，
+        # 由 handoff 触发链承接。
+        from backend.customer_service.handoff import detect_handoff_trigger
+
+        if detect_handoff_trigger(str(state.get("user_message", ""))):
+            from backend.customer_service.audit import (
+                append_audit,
+                build_audit_entry,
+            )
+            from backend.customer_service.confirmation_store import (
+                get_confirmation_store,
+            )
+
+            user_id_e = str(state.get("user_id", ""))
+            session_id_e = str(state.get("session_id", ""))
+            get_confirmation_store().clear(
+                user_id_e, session_id_e, final_state="cancelled")
+            logger.info(
+                "[CS PendingHandler] need_info 转人工逃生: user=%s session=%s",
+                user_id_e, session_id_e,
+            )
+            audit_entry = build_audit_entry(
+                user_id=user_id_e or "anonymous",
+                action_type="need_info_handoff_escape",
+                result="success",
+                target_type="need_info",
+                target_id=str(pending_action.get("intent", "")),
+                detail="user requested human during slot-fill; pending released",
+                conversation_id=state.get("conversation_id", ""),
+            )
+            return Command(goto="cs_supervisor", update={
+                "cs_audit_entries": append_audit(
+                    list(state.get("cs_audit_entries") or []), audit_entry),
+            })
+
         confirmation_state = state.get("confirmation_state", "")
         if confirmation_state in _PENDING_STATES:
             return Command(goto="cs_action_expert", update={})

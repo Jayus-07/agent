@@ -248,3 +248,56 @@ class TestNeedInfoCancel:
             ))
 
         assert cmd.goto == "cs_action_expert"
+
+
+class TestNeedInfoHandoffEscape:
+    """转人工逃生（2026-10-05 浏览器走查发现）：need_info 追问期显式转人工
+    必须释放 pending 回 supervisor（紧急通道优先于补槽追问）。"""
+
+    def test_need_info_handoff_escape(self, monkeypatch):
+        from backend.customer_service import pending_handler as ph
+        from backend.customer_service.confirmation_store import (
+            get_confirmation_store,
+        )
+
+        cleared = {}
+
+        def _fake_clear(user_id, session_id, final_state="cancelled"):
+            cleared["key"] = (user_id, session_id, final_state)
+
+        monkeypatch.setattr(get_confirmation_store(), "clear", _fake_clear)
+
+        state = _state(
+            user_message="转人工",
+            user_id="u-esc",
+            session_id="s-esc",
+            conversation_id="c-esc",
+            confirmation_state="",
+            pending_action=_need_info_pending(),
+        )
+        cmd = ph.cs_pending_handler_node(state)
+        assert cmd.goto == "cs_supervisor", f"应回 supervisor 重分诊: {cmd.goto}"
+        assert cleared.get("key") == ("u-esc", "s-esc", "cancelled"),             f"need_info pending 未释放: {cleared}"
+
+    def test_need_info_normal_slot_fill_unchanged(self, monkeypatch):
+        """回归：非转人工的补槽消息照旧转发 action expert（不误放行）。"""
+        from backend.customer_service import pending_handler as ph
+
+        cleared = []
+        from backend.customer_service.confirmation_store import (
+            get_confirmation_store,
+        )
+        monkeypatch.setattr(
+            get_confirmation_store(), "clear",
+            lambda *a, **kw: cleared.append(1))
+
+        state = _state(
+            user_message="订单 MO-63934327",
+            user_id="u-n",
+            session_id="s-n",
+            confirmation_state="pending_confirmation",
+            pending_action=_need_info_pending(),
+        )
+        cmd = ph.cs_pending_handler_node(state)
+        assert cmd.goto == "cs_action_expert", f"补槽应转发 action: {cmd.goto}"
+        assert not cleared, "非转人工不应释放 pending"
