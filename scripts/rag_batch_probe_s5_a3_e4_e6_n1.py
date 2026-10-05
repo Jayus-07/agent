@@ -66,7 +66,12 @@ def req(method, path, headers, body=None):
     r = urllib.request.Request(BASE + path, data=data, headers=hdrs, method=method)
     try:
         resp = urllib.request.urlopen(r, timeout=90)
-        return resp.status, json.loads(resp.read())
+        raw = resp.read()
+        try:
+            return resp.status, json.loads(raw)
+        except (TypeError, ValueError):
+            # 原文快照 /file 是二进制响应，验收只需记录 HTTP 成功和字节数。
+            return resp.status, {"raw_length": len(raw)}
     except urllib.error.HTTPError as e:
         try:
             return e.code, json.loads(e.read())
