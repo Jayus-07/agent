@@ -1,0 +1,16 @@
+event: meta
+id: 1
+data: {"node_labels":{"router":"路由决策","tool_selector":"工具选择","skill_executor":"直接执行","workflow_executor":"工作流执行","planner":"任务规划","critique":"计划审查","supervisor":"调度决策","sql_skill":"数据库查询","rag_skill":"知识库检索","report_skill":"报告生成","reporter":"结果汇总","general_chat":"寒暄直答","cs_graph_node":"客服图执行","travel_graph_node":"旅游规划图执行","travel_commerce_graph_node":"旅游商务查询（酒店/机票）","travel_booking_graph_node":"旅游预订（Booking Transaction）","selection_funnel_graph_node":"智能选品漏斗执行"},"request_id":"638421a7b48e41d18fc3f799b3063654","stream_id":"638421a7b48e41d18fc3f799b3063654","resume_supported":true,"seq":1}
+
+event: status
+id: 2
+data: {"node":"router","ts":1791227816.526241,"seq":2}
+
+event: ping
+data: {"ts":1791227831.8508637}
+
+event: ping
+data: {"ts":1791227847.1390333}
+
+event: ping
+data: {"ts":1791227862.4791756}
