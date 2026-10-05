@@ -74,6 +74,8 @@ flowchart TB
 
 **请求链路**：前端 rewrite → APISIX:9080 → `X-User-Id` 等身份头 → app（`IDENTITY_SOURCE=header` 只认头）。
 
+**入口拓扑「四扇门」（多域隔离收官 2026-10-06）**：主聊天（`/chat/stream` 主图，域诉求可发 handoff 引导卡带参跳转）＋旅游专属页＋客服抽屉（`CSDrawer` 域锁）＋`/selection-funnel` 选品专属页（第四扇门）。三开关 `CS/TRAVEL/SELECTION_GLOBAL_ENTRY_MODE`（`execute|guide`，默认 execute=行为零变化）控制全局入口域命中后的执行/引导分派，细节见 `ai-runtime.md`「域入口模式与 handoff 引导」。
+
 ## 异步层
 
 - `/chat/stream` 主链路**同步执行、不经队列**，SSE 直返（帧序 `meta → status/log/delta → done/error`）

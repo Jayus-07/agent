@@ -67,6 +67,15 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 预过滤优先级 **客服 > 旅游**（「订单里的行程单」按客服诉求处理）。
 
+### 域入口模式与 handoff 引导（多域隔离收官 2026-10-06）
+
+全局入口 prefilter 命中后的分派由三个模式开关控制：`CS/TRAVEL/SELECTION_GLOBAL_ENTRY_MODE`（`execute|guide`，**默认 execute＝行为零变化**）：
+
+- `execute`：照旧进入域图执行（基线等价）。
+- `guide`：主图**短路为 router→reporter**，reporter 直出契约自带引导话术（零 LLM），SSE 发 **AUX 帧 `handoff`**——契约 `orchestration/contracts/handoff.py::HandoffPayloadV1`（目标域＋参数包＋原因），与前端 `frontend/src/types/handoff.ts` 同构（共享 fixture `backend/tests/fixtures/handoff_payload_v1.json` 对齐测试）。前端 `HandoffCard` 提供三入口带参跳转（旅游页预填 / 选品页带参 / CSDrawer 预填＋`cs-drawer:open` 事件），点击埋点 `POST /observability/handoff/click`，指标 `agent_handoff_total{target_domain,phase}`。
+
+不受模式开关影响的两条通路：**旅游一次性查询**（「福州有什么景点」类，passthrough 落回主路由）与**客服窗口锁域**（`domain_hint` 强制进 CS 管线）。UI 归宿「四扇门」：主聊天 / 旅游页 / 客服抽屉 / `/selection-funnel` 选品专属页（选品漏斗的用域图载体实现的固定工作流范式）。验收：`docs/reports/2026-10-06-多域隔离收官验收报告.md`。
+
 > **客服窗口为什么必须锁域**：此处**不存在「漏进主图」的 A/B 对照语义**（用户已显式进入客服窗口），而每条消息重新判域有两个实测代价——
 > ① **召回漏判**：CS 规则阈值 `CS_RULE_MIN_HITS=2`，实测「东西坏了咋办」「我的订单三天前就显示已发货，为什么还没收到」规则命中**均仅 1** → 全局入口判非客服、落到 `route_mode=plan`，白跑一轮 Planner/LLM；
 > ② **域错配**：非客服问法被甩到主图 plan 支线（实测「下周去大阪怎么玩」`cs规则=0` → `route_mode=plan`）。
