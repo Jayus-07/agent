@@ -121,6 +121,22 @@ def wait_active(doc_id, timeout=150):
     return "timeout"
 
 
+def wait_run(upload_id, timeout=300):
+    """等待指定上传任务终态，避免把旧版本 registry 行误当新任务完成。"""
+    if not upload_id:
+        return {"status": "missing", "error": "upload_id 缺失"}
+    for _ in range(timeout // 3):
+        raw = psql(
+            f"SELECT status, error FROM rag_index_runs "
+            f"WHERE upload_id='{upload_id}'")
+        if raw:
+            status, _, error = raw.partition("|")
+            if status in ("published", "failed", "superseded"):
+                return {"status": status, "error": error}
+        time.sleep(3)
+    return {"status": "timeout", "error": "等待 rag_index_runs 终态超时"}
+
+
 def approve_doc(headers, doc_id):
     """按生产审核流程发布待审核文档，避免探针把 pending_review 当 active。"""
     return req("POST", f"/api/rag/pending/{doc_id}/approve", headers)
@@ -185,13 +201,19 @@ def main():
     f_a3 = f"ZZZ-a3-{ts}.md"
     d_a3 = doc_id_of(f_a3)
     made_docs.append(d_a3)
-    upload(headers, f_a3, f"# A3 v1\n\n标志词a3v1{ts} 建于 1849 年。\n" + "内容。" * 500)
+    st_a3_v1, body_a3_v1 = upload(
+        headers, f_a3,
+        f"# A3 v1\n\n标志词a3v1{ts} 建于 1849 年。\n" + "内容。" * 500)
+    run_a3_v1 = wait_run(body_a3_v1.get("upload_id"))
     a3_v1_state, a3_v1_approval = ensure_active(headers, d_a3)
     _, det_v1 = detail(headers, d_a3)
     doc_v1 = det_v1.get("doc") or det_v1.get("data") or {}
     ver_v1 = doc_v1.get("version_id")
     doc_version_v1 = doc_v1.get("doc_version")
-    upload(headers, f_a3, f"# A3 v2\n\n标志词a3v2{ts} 建于 1932 年。\n" + "新内容。" * 500)
+    st_a3_v2, body_a3_v2 = upload(
+        headers, f_a3,
+        f"# A3 v2\n\n标志词a3v2{ts} 建于 1932 年。\n" + "新内容。" * 500)
+    run_a3_v2 = wait_run(body_a3_v2.get("upload_id"))
     a3_v2_state, a3_v2_approval = ensure_active(headers, d_a3)
     _, det_v2 = detail(headers, d_a3)
     doc_v2 = det_v2.get("doc") or det_v2.get("data") or {}
@@ -201,6 +223,8 @@ def main():
     results["A3_version_snapshot"] = {
         "version_v1": ver_v1, "version_v2": ver_v2,
         "doc_version_v1": doc_version_v1, "doc_version_v2": doc_version_v2,
+        "upload_v1": st_a3_v1, "upload_v2": st_a3_v2,
+        "run_v1": run_a3_v1, "run_v2": run_a3_v2,
         "state_v1": a3_v1_state, "state_v2": a3_v2_state,
         "approval_v1": a3_v1_approval, "approval_v2": a3_v2_approval,
         "version_distinguistable": (
@@ -214,7 +238,9 @@ def main():
         "pass": (
             bool(ver_v1 and ver_v2 and ver_v1 != ver_v2)
             or doc_version_v1 != doc_version_v2
-        ) and st_pv == 200 and a3_v2_state == "active",
+        ) and st_pv == 200 and a3_v2_state == "active"
+        and run_a3_v1.get("status") == "published"
+        and run_a3_v2.get("status") == "published",
     }
 
     # ── E4：数字证据溯源（答案数字必须能在语料 chunk 中找到） ──
