@@ -6,7 +6,7 @@
 
 ## 主图（LangGraph StateGraph）
 
-固定 **9 个核心节点**（2026-09-25 口径对齐 `builder.py:142`），顺序与命名不得随意改动；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**：
+固定 **9 个核心节点**（2026-09-25 口径对齐 `builder.py:140-151`），顺序与命名不得随意改动；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**：
 
 ```
 START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度）→ 客服域图 → END
@@ -46,11 +46,13 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 | 域图 | 开关 | 节点序列 |
 |---|---|---|
-| 客服 | `CS_ENABLED` | `state_loader → pending_handler → cs_supervisor → 5 专家（knowledge/query/action/complaint/handoff）→ cs_reporter`；`cs_supervisor` 承担 handoff 拦截、循环上限、LLM 兜底 |
+| 客服 | `CS_ENABLED` | `state_loader → pending_handler → cs_supervisor → 5 专家（knowledge/query/action/complaint/handoff）→ cs_reporter`；`cs_supervisor` 承担 handoff 拦截、循环上限、LLM 兜底；v2 决策链（`CS_DECISION_V2`）在守卫之后、意图路由之前有 **L4.5 分诊直出**：寒暄→`chat_fallback` 一次 LLM 人设（`CS_CHAT_FALLBACK_ENABLED`）、出域→固定话术零 LLM（`CS_WINDOW_STANDALONE`；v1 回退路径不接出口）；`pending_handler` 在 need_info 补槽期**优先放行显式转人工**（命中 handoff 触发即释放 pending 回 supervisor 重分诊，审计 `need_info_handoff_escape`，2026-10-05 a65a167——追问不再吞掉转人工诉求） |
 | 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair → travel_reporter`；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`） |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | prefilter 已接线（`router_node` 内与旅游同层，2026-09-17）；仅受开关控制，无域锁通路 |
 | 旅游商务（Travel · commerce 子流） | `TRAVEL_COMMERCE_ENABLED`（默认关） | `backend/travel/commerce/`，2026-09-24 STOP K |
 | 旅游预订（Travel · booking 子流） | `TRAVEL_BOOKING_ENABLED`（默认关） | `backend/travel/booking/`，预订事务与幂等账本复用，2026-09-25 STOP L |
+
+**客服订单回指**（`customer_service/context/context_resolver.py`，2026-10-05 a65a167 同批）：列表查询结果落 `recent_order_ids`（≤20 条）后，「第N个订单」按序号解析（中文/阿拉伯数字；**越界不猜**——索引出界即不注入，照常路由）；代词回指仍要求 代词+谓词 双条件命中；当前轮显式订单号恒优先于继承（05ae6aa 显式序号订单指代）。
 
 旅游域的实时增强检索也遵循既有 Agent → Service → Tool 边界：Research Agent 按用户明确请求调用 `map_merchant_search_tool`（高德 `types=050000` 餐饮 / `types=100000` 住宿），Planning Agent 调用 `travel_train_search_tool`（12306 MCP）。`requirement.interpreted`、`tool.started`、`tool.result` 通过旅游 SSE 旁路投影到用户端；Tool 失败、空结果和未配置保持不同状态，不用静态演示数据补齐。
 
@@ -117,8 +119,9 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 - **城市指南与通用 Tool 缓存**（同批）：`GET /api/travel/city-guide` 轻端点（不进域图，四级内容链：文档摘要→RAG travel 库→知乎→暂无，7 天缓存）；旅游域 live 检索 Tool 走通用缓存层（`TRAVEL_TOOL_CACHE_ENABLED` 默认开 / TTL 默认 86400s）。
 - **POI 候选池三源与三路并发**（2026-10-04）：LBS 主源之上并入两个默认开启的新源——高德景点类目（`TRAVEL_POI_AMAP_SOURCE_ENABLED` 默认 true：rating/营业时间/检索时刻 open_status 标注与必去警告，单源失败只损失评分不损失腾讯候选）与 travel RAG 库本地攻略文档名解析补池（`TRAVEL_POI_LOCAL_DOC_ENABLED` 默认 true，≤5 条）；每次关键词检索 20 条、候选池上限 120。专家侧 candidates/guides/hotel 三路 ThreadPool 并行检索（ContextVar 经 copy_context 快照传播到工作线程，单路失败独立降级留痕）；美食商户按「就近+品类+评分」综合排序（品类加权表 `TRAVEL_FOOD_CATEGORY_BOOSTS` 默认空不启用）。
 - **抵达车票自动查询（#7a）**：有出发地+出发日期即自动查询，无需「查高铁」类触发词（触发词不再门控，`message` 参数仅为调用方签名兼容保留）；重复查询由 provider 共享缓存与 tool_cache 兜底，二次规划零成本。
+- **分类候选表**（2026-10-05 验收 #10，`721c9e4`）：POI 专家产出的候选池落 graph `state.candidates`（随 checkpoint 持久化），`GET /api/travel/candidates` 经域图单例读取（thread_id 与规划链同源）→ 前端 CandidatesPanel 分类展示（组内 rating 降序、每组 ≤12 条）；换入走 canvas_replace 草案管线，decision `entry=candidates_panel`；checkpoint 不可达如实 `available=false`，不伪造候选。
 
-最后验证：2026-10-05 · `TRAVEL_POI_SOURCE` 默认值、`TRAVEL_PLAN_VERSIONS_*` 配置、`itinerary.intercity` 契约字段、M3 档位/协商/城市指南实测；2026-10-05 增量补记 POI 候选池三源与三路并发 / 抵达车票自动触发 / slot_filler LLM 意图补判开关 / #80 人群节奏派生与旅游 pending resume。
+最后验证：2026-10-06 · `TRAVEL_POI_SOURCE` 默认值、`TRAVEL_PLAN_VERSIONS_*` 配置、`itinerary.intercity` 契约字段、M3 档位/协商/城市指南实测；2026-10-05 增量补记 POI 候选池三源与三路并发 / 抵达车票自动触发 / slot_filler LLM 意图补判开关 / #80 人群节奏派生与旅游 pending resume；2026-10-06 增量补记客服 L4.5 分诊直出 / need_info 转人工逃生 / 订单序号回指 / 旅游分类候选表状态管线。
 
 ## 相关文档
 

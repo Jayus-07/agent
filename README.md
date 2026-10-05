@@ -399,7 +399,7 @@ cp .env.example .env
 # 至少填 PGPASSWORD / PG_READONLY_PASSWORD —— compose 用 ${VAR:?} 强校验，缺失直接起不来
 ```
 
-- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是逐项带注释的启动模板（98 项，2026-10-04 实测；高德 / 12306 / 知乎 MCP 等新开关在此维护）；`backend/.env.example` 是早期后端模板副本（69 项，已落后于根模板，仅作参考）。
+- 根 `.env` 才是**生效配置**（`backend/.env` 不会被加载）。根 `.env.example` 是逐项带注释的启动模板（120 项，2026-10-06 实测；高德 / 12306 / 知乎 MCP 等新开关在此维护）；`backend/.env.example` 是早期后端模板副本（88 项，已落后于根模板，仅作参考）。
 - 模型 provider / model / api_key **不在 env 里配** —— 走 `sys_config`，由管理端「模型配置」页维护（DB override + 环境变量 fallback）。
 
 ### 1. 一键启停（唯一入口 = `devctl.bat`）
@@ -525,7 +525,7 @@ agent/
 │   ├── observability/         # Tracer / Metrics / Alerts
 │   ├── security/              # 认证 / 审批门 / 守卫
 │   ├── infra/                 # LLM 代理 / 计价 / 预算 / 限流
-│   └── tests/                 # 8573 用例
+│   └── tests/                 # 9289 用例（口径见「系统规模」表）
 ├── mcp_servers/               # MCP 服务（2 server / 5 tool）
 ├── frontend/                  # 用户端 Next.js（:3100）
 ├── frontend-admin/            # 管理端 Next.js（:3200）

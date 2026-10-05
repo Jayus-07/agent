@@ -3,7 +3,7 @@
 > PostgreSQL 双库 + Migration 治理。
 > 配套阅读：[PRD.md](PRD.md) / [ARCHITECTURE.md](ARCHITECTURE.md)
 >
-> ⚠️ **2026-09-29 口径注**：本文 §5 的「14 个 SQLite 散落」已于 **2026-09 全量收口下线**——PG + pgvector 是唯一存储实现（含 trace / 文档注册表 / chunk / 关键词 / 告警 / 报告 / workflow 运行），§5 保留作历史债务记录。Migration 已治理（`sql/migrations/` 编号至 054 + db-migrate 工具 + 三层校验），§6 的「003 编号重复」等问题已修复。
+> ⚠️ **2026-09-29 口径注**：本文 §5 的「14 个 SQLite 散落」已于 **2026-09 全量收口下线**——PG + pgvector 是唯一存储实现（含 trace / 文档注册表 / chunk / 关键词 / 告警 / 报告 / workflow 运行），§5 保留作历史债务记录。Migration 已治理（db-migrate 工具 + 三层校验；「编号至 054」为当时快照，现状见 §6.1 与文末验证行——2026-10-06 实测至 076），§6 的「003 编号重复」等问题已修复。
 
 ---
 
@@ -576,13 +576,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 | 062 | `ai.tool_contract_changes` | Tool 契约变更历史（生成器检测变更自动落库） |
 | 063 | `ai.release_records` | 发布记录 + 12 门结果（M8 / 台账 D8；verify_release_gate.py 落库；**无 061 编号**——并行批次让位空缺，发布记录实际落在本迁移） |
 | 064 | `trace_summary.ttft_ms` | 流式首 token 时间补齐 |
-| 065 | `prompt_runtime_state` + `prompt_reload_events` | Prompt Runtime 全局 epoch 与 Redis 通知失败补偿事件（⚠️ 文件在途未提交） |
+| 065 | `prompt_runtime_state` + `prompt_reload_events` | Prompt Runtime 全局 epoch 与 Redis 通知失败补偿事件 |
 | 066 | `budget_reservations` 预占状态/滞留处置 + `budget_*` 金额列 USD→CNY 更名 | 预算治理 P0：记账本位币统一 CNY + 预占待对账（needs_review） |
 | 067 | `doc_registry.active_generation` + `rag_index_runs` | RAG 候选版本/已发布代次指针 + 索引 run 台账（上传并发与失败回滚收口） |
-| 068 | `auth.sessions` 登录来源列 | 会话台账记录登录来源，用户端/管理端/客服端 refresh Cookie 隔离（⚠️ 文件在途未提交） |
+| 068 | `auth.sessions` 登录来源列 | 会话台账记录登录来源，用户端/管理端/客服端 refresh Cookie 隔离 |
 | 069 | `ai.prompt_release_records` | Prompt 候选发布门禁记录（带评测证据的环境切换留痕） |
-| 070 | `ai.unanswered_questions` | 业务拒答未答问题登记（RAG 未命中/SQL 空结果；observability/unanswered.py 旁路软失败写入，知识运营聚类输入；⚠️ 文件在途未提交） |
-| 071 | `ai.clarify_funnel_events` | 追问漏斗事件持久化（shown/clicked/resolved；observability/clarify_funnel.py 指标+PG 双写，重启归零的精确累计从本表取，GET /api/admin/clarify/stats 消费；⚠️ 文件在途未提交，**071 编号与下行重复**） |
+| 070 | `ai.unanswered_questions` | 业务拒答未答问题登记（RAG 未命中/SQL 空结果；observability/unanswered.py 旁路软失败写入，知识运营聚类输入） |
+| 071 | `ai.clarify_funnel_events` | 追问漏斗事件持久化（shown/clicked/resolved；observability/clarify_funnel.py 指标+PG 双写，重启归零的精确累计从本表取，GET /api/admin/clarify/stats 消费；**071 编号与下行重复**） |
 | 071（重号） | `ai.rag_reconcile_reports` | RAG 对账报告（BM25 状态 CHECK + detail JSONB；⚠️ 与上行同为 071 号——规范债已登记，二者独立顺序无关，后续新迁移自 077 顺排） |
 | 072 | `ai.travel_decision_audit` | 旅游页用户决策留痕（草案应用/放弃/画布替换/档位切换/删减协商，decision_type + source 归因；POST/GET /api/travel/decisions 消费） |
 | 073 | 决策留痕幂等部分唯一索引 | 同会话内「同决策+同版本+同前端轮次」防重（双击/重试不落重复记录） |
@@ -622,4 +622,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 验证
 
-最后验证：2026-10-05 · 迁移编号实测至 076（076_cs_faq_tables applied 验证）（061 编号空缺、发布记录实为 063 `ai.release_records`）；**071 编号重复已登记为规范债**（clarify_funnel_events 与 rag_reconcile_reports 两文件并存且均已提交，`MIGRATION_TARGETS` 均登记——登记键不冲突、二者相互独立顺序无关，init_db --check rc=0；后续新迁移从 077 顺排避让）；072~076 全部已提交并 applied 验证；076 的 `MIGRATION_TARGETS` 登记随 2f4859d 提交。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。
+最后验证：2026-10-06 · 迁移编号实测至 076（076_cs_faq_tables applied 验证）（061 编号空缺、发布记录实为 063 `ai.release_records`）；**071 编号重复已登记为规范债**（clarify_funnel_events 与 rag_reconcile_reports 两文件并存且均已提交，`MIGRATION_TARGETS` 均登记——登记键不冲突、二者相互独立顺序无关，init_db --check rc=0；后续新迁移从 077 顺排避让）；072~076 全部已提交并 applied 验证；076 的 `MIGRATION_TARGETS` 登记随 2f4859d 提交。2026-10-06 增量：清除 065/068/070/071_clarify 四行「⚠️ 文件在途未提交」过时角标（四文件均已于 472e736 提交，与 §6.1/本行「均已提交」口径对齐）。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。

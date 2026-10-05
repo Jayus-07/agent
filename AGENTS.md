@@ -145,7 +145,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 2. 读状态一律 `.get()`——本轮没写过的键不在最终状态里
 3. `brief_fingerprint` 变 → 只在 slot_filler 里 `planning_reset()`；不清则 supervisor 会把**上一轮行程**当新需求输出
 
-**checkpointer**：三处 `_build_checkpointer`（主图/客服/旅游）均 postgres 优先；开发环境失败降级 MemorySaver，**production 环境默认 fail-loud**——PG 不可用直接抛 `CheckpointerUnavailable` 拒绝启动，仅显式 `CHECKPOINTER_ALLOW_DEGRADE=true`（`config/checkpointer.py::degrade_or_raise`，默认 false）才允许降级内存检查点；需 psycopg **v3** + `langgraph-checkpoint-postgres`（依赖已在 pyproject.toml 与 requirements-lock.txt 声明，本地 venv 已补齐）；`config/startup.py` 只探测 import 不探测连通性，缺驱动时 warning 点名。
+**checkpointer**：三处 `_build_checkpointer`（主图/客服/旅游）均 postgres 优先；主图与客服 **production 默认 fail-loud**——PG 不可用直接抛 `CheckpointerUnavailable` 拒绝启动，仅显式 `CHECKPOINTER_ALLOW_DEGRADE=true`（`config/checkpointer.py::degrade_or_raise`，默认 false）才允许降级内存检查点（开发环境失败降级 MemorySaver）；**旅游域当前未接 degrade_or_raise**（`travel/graph_builder.py` postgres 失败仅 warning 后静默降级 MemorySaver，production 不拒启——与主图/客服不一致，待收口）；需 psycopg **v3** + `langgraph-checkpoint-postgres`（依赖已在 pyproject.toml 与 requirements-lock.txt 声明，本地 venv 已补齐）；`config/startup.py` 只探测 import 不探测连通性，缺驱动时 warning 点名。
 两个锁文件坑（**照旧装会失败**）：① `langgraph-checkpoint` 原钉 4.0.3 与 `-postgres==3.1.0` 要求的 >=4.1.0 冲突 → 已升 **4.2.0**；② Windows/无 libpq 必须装 `psycopg[binary]`，否则 `no pq wrapper available`。
 TTL 清理收敛 `orchestration/graph/checkpointer_cleanup.py`（全进程单例，改 TTL 三处一起改）。
 

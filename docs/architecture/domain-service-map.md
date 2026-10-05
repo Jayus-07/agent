@@ -1,7 +1,7 @@
 # Domain Service Map — 域图 × 专家 × 工具 × 第三方服务 × 凭据
 
 > 回答一个问题：**每个域图里的每个专家，用什么工具、调什么外部服务、凭据怎么管、挂了怎么办。**
-> 最后验证：2026-10-05 · 基于三路并行代码 survey（专家文件 import 与延迟 import 逐个核对、config 变量逐个 grep、`.env` 变量名实测）；2026-10-03 增量对齐 POI live 化 / intercity / 知乎 MCP / Tool 计数；2026-10-05 增量对齐 POI 三源候选池 / 车票自动触发 / 天气分级与区县级 / 客服拒答自救 / 天气超时 5s。
+> 最后验证：2026-10-06 · 基于三路并行代码 survey（专家文件 import 与延迟 import 逐个核对、config 变量逐个 grep、`.env` 变量名实测）；2026-10-03 增量对齐 POI live 化 / intercity / 知乎 MCP / Tool 计数；2026-10-05 增量对齐 POI 三源候选池 / 车票自动触发 / 天气分级与区县级 / 客服拒答自救 / 天气超时 5s；2026-10-06 增量对齐 supervisor L4.5 分诊直出与 need_info 转人工逃生。
 > 编排层（图结构 / 进入通路 / 跨轮契约）见 [ai-runtime.md](ai-runtime.md)；本文只写**依赖与治理**。
 
 ---
@@ -44,7 +44,7 @@
 
 **敏感操作链**（用户确认后执行）：前端确认卡 `CSConfirmCard.tsx` → `POST /api/cs/confirm` → `confirmation_flow`：原子认领（DB 条件 UPDATE pending→confirmed）→ 状态机 `PENDING→CONFIRMED→EXECUTING→…` → 幂等账本包裹执行 → 审计落库。TTL 900s / 重试上限 3。注意：**CS 这套 confirmation 体系与主图工具审批门（§8 tool_approval）是两条独立人机确认链**，前者管对话内动作确认，后者管编排层工具副作用。
 
-**supervisor 三层**：L1 handoff 拦截 + 循环上限（5）+ 低置信 finish；L2 pending 等待 / 同专家连跑 2 次截停；L3 LLM 兜底（`CS_SUPERVISOR_LLM_ENABLED`，默认 OFF）失败回退规则路由。人工接入超时（`CS_HANDOFF_TIMEOUT_SECONDS`=120）自动回退 AI。
+**supervisor 分层**：L1 handoff 拦截 + 循环上限（5）+ 低置信 finish；L2 pending 等待 / 同专家连跑 2 次截停；L3 LLM 兜底（`CS_SUPERVISOR_LLM_ENABLED`，默认 OFF）失败回退规则路由；v2 决策链（`CS_DECISION_V2`）在守卫兜底之后、意图路由之前另有 **L4.5 分诊直出**——寒暄→`customer_service.chat_fallback` 注册表 prompt 一次 LLM 人设（`CS_CHAT_FALLBACK_ENABLED`），出域→固定话术零 LLM 零检索（`CS_WINDOW_STANDALONE`），v1 回退路径不接出口。`pending_handler` 侧：need_info 补槽追问期命中 handoff 触发即**释放 pending 回 supervisor 重分诊**（转人工逃生，审计 `need_info_handoff_escape`）。人工接入超时（`CS_HANDOFF_TIMEOUT_SECONDS`=120）自动回退 AI。
 
 **转人工之后的派单与坐席**：`customer_service/dispatch/service.py`（P4 落池 / P6 单 PG 事务派单：优先级→在线容量过滤→最少负载→`agent_offered`）；offer 30s 超时回收，超 5 次关单恢复 AI；坐席 WS `ws/cs/agent?ticket=`（一次性 ticket，跨进程经 Redis `cs:events`），断线降级 2s 轮询。
 

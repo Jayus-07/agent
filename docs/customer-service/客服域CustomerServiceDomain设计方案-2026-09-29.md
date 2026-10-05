@@ -112,6 +112,8 @@
 人工客服系统：Handoff → Dispatch Worker → 坐席工作台（WS）
 ```
 
+> **2026-10-06 口径注**：上图「主 Agent 三层路由（rule → vector → LLM）」为 2026-09-29 历史设计口径，已失效——主图路由已收口为 **RoutingEngine 六阶段**（`entry_gate → domain → intent → capability → policy → route_decision`，规则/向量/LLM 只是证据提供者、不各自拍板），权威口径见根 `AGENTS.md` 与 `docs/architecture/ai-runtime.md`；本文其余架构叙述同样以该两处为准。
+
 ---
 
 # 二、用户体验与产品设计

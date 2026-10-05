@@ -20,7 +20,7 @@
 
 | 项 | 契约 | 理由与守卫 |
 |---|---|---|
-| checkpointer 构造 | 三处 `_build_checkpointer`（主图/客服/旅游）postgres 优先、失败降级 MemorySaver；psycopg v3 + `langgraph-checkpoint-postgres` | 跨轮状态与断点续跑的根基 |
+| checkpointer 构造 | 三处 `_build_checkpointer`（主图/客服/旅游）postgres 优先；主图/客服走 `degrade_or_raise`——production 默认 fail-loud（`CHECKPOINTER_ALLOW_DEGRADE` 默认 false），开发环境降级 MemorySaver；旅游域当前未接（postgres 失败静默降级，待收口）；psycopg v3 + `langgraph-checkpoint-postgres` | 跨轮状态与断点续跑的根基 |
 | thread 前缀 | `travel:{tenant:user}:{conv}` 前缀防 CS 共表覆盖 | 旅游跨轮恢复契约（STOP F-line）；守卫：`tests/travel/test_checkpointer.py` |
 | TTL 清理 | 收敛 `orchestration/graph/checkpointer_cleanup.py` 全进程单例，改 TTL 三处一起改 | 守卫：checkpointer_cleanup 用例 |
 

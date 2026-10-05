@@ -83,7 +83,7 @@
 ```
 _index_file()  ← 每个文件一棵 trace 树
   ├─ ① index_load        → 加载，获取文件大小
-  ├─ ② index_parse       → PyPDFLoader / Docx2txtLoader / TextLoader
+  ├─ ② index_parse       → PyPDFLoader / Docx2txtLoader / TextLoader（TxtParser 三级编码回退：utf-8 → gb18030 → replace，GBK 语料可索引）
   ├─ ③ index_clean       → DocumentCleaner (12 种清洗)
   ├─ ④ index_dedup       → SHA256 比对，重复则 skip
   ├─ ⑤ index_chunk       → ChunkStrategyRouter + ChunkFilter
@@ -232,8 +232,10 @@ def need_multi_query(query) -> (bool, reason):
 **LLM 改写流程**：
 
 ```
-LLM 改写 → Parse → Normalize（去编号） → Dedup（Jaccard 0.9） → Limit（默认 3）
+LLM 改写 → Parse → Normalize（去编号） → Dedup（Jaccard 0.9） → 合法性过滤 → Limit（默认 3）
 ```
+
+**合法性过滤**（2026-10-05 D-11 修复，`retrieval/multi_query.py` Step 3.5）：变体长度须 ≤ max(原问题×2, 40) 且 ≥ 4 字——chunk 原文形态的"变体"整条剔除；全部不合法时回退原始 query，不让改写退化成检索死。
 
 **多路并行检索**：
 
@@ -252,13 +254,18 @@ with ThreadPoolExecutor(max_workers=min(3, len(queries))) as ex:
 # 1. 优先 request metadata_filter（contextvars 注入）
 if request_metadata_filter:
     if "person_names" in filter:
-        matched_ids = self.person_index[person_names[0]]
+        # NER 误判交叉验证（2026-10-05 D-13 修复）：查询侧抽出的人名必须
+        # 存在于 person_index（文档元数据权威）才进 filter；误判剔除后走
+        # doc 级相似度兜底，不再 person_name_miss 检索死
+        verified = [p for p in person_names if p in self.person_index]
+        matched_ids = [i for p in verified for i in self.person_index.get(p, [])]
         doc_ids = matched_ids
     else:
         doc_ids = []
-# 2. 否则人名 / 关键词启发
+# 2. 否则人名 / 关键词启发（同样先过人名索引交叉验证）
 elif person_names:
-    matched_ids = self.person_index[person_name]
+    verified = [p for p in person_names if p in self.person_index]
+    matched_ids = [i for p in verified for i in self.person_index.get(p, [])]
 elif doc_results := doc_db.similarity_search(query, k=5):
     doc_ids = _filter_docs_by_keywords(query, doc_results)
 ```
@@ -455,7 +462,7 @@ Stage 1 文档候选数由 `RAG_DOC_CANDIDATE_K` 控制，默认 50；BM25 使�
                            ↓
                   ┌─────────────────────────┐
                   │   Gate 2: Rerank         │  重排序质量
-                  │   top1≥0.35 avg≥0.25     │  高风险 0.55
+                  │   top1≥0.40 avg≥0.10     │  高风险 0.55
                   └────────┬────────────────┘
                            ↓
                   ┌─────────────────────────┐
@@ -500,11 +507,13 @@ evidence_gate_rerank(
 )
 ```
 
-**通过条件**（任一不满足即拒）：
+**通过条件**（任一不满足即拒；2026-10-05 E1 拍板口径，与上方代码块 / `config/rag.py` 默认一致，生效值以 `.env` 覆盖为准）：
 
-- top1 ≥ 0.35（高风险问题 0.55）
-- avg ≥ 0.25
+- top1 ≥ 0.40（高风险问题 0.55）
+- avg ≥ 0.10
 - top1 - top2 ≥ 0.05
+
+> 上下文预算兜底（2026-10-05 D-9）：压缩后仍超预算时默认优雅降级（`CONTEXT_BUDGET_SOFT_OVERFLOW=true`，`infra/llm/proxy.py`）——保留 system + 最新消息、尾部按比例截断，多文档大召回不再 500；置 `false` 回退旧硬拒（抛 `ContextBudgetExceeded`）。
 
 ### 5.4 Gate 3 — Generation（LLM 自报）
 
@@ -757,15 +766,15 @@ def _evaluate(self, answer: str, context_docs: list) -> str:
 
 | 文件 | 职责 |
 |---|---|
-| `backend/tools/rag.py` | `@tool search_knowledge_tool(question, kb_id)`（被 Multi-Agent 调用）；2026-10-03 起权限显式化——主体（user_id/tenant_id）为空的调用 **fail-closed 拒绝**，平台内部调用方显式传 `system_subject` 标识留痕（如旅游域 `travel_domain`），不冒充用户主体 |
+| `backend/tools/rag.py` | `@tool search_knowledge_tool(question, kb_id)`（被 Multi-Agent 调用），转发 principal；2026-10-03 起权限显式化——守卫 raise 点在 `backend/rag/pipeline.py`（`retrieve_knowledge`：主体 user_id/tenant_id 为空且无 `system_subject` 即 **fail-closed 拒绝**），平台内部调用方显式传 `system_subject` 标识留痕（如旅游域 `travel_domain`），不冒充用户主体 |
 | `backend/rag/routing/kb_router.py` | 多知识库路由 |
 
 ### 7.5 索引运维与对账
 
-**生产索引只读对账**：`backend/rag/indexing/reconcile.py` 纯快照判断 + PostgreSQL 只读采样，比对 PG registry / 向量库 / chunk 库 / BM25 产物（含 in-flight 候选延后判定），不一致计数进 Prometheus（`agent_rag_reconcile_inconsistent` / `agent_rag_reconcile_source_available`）；rag-server 内部端点 `GET /admin/index/reconcile-snapshot`（`backend/services/rag_server.py`）供对账快照拉取；Celery beat 定时任务 `rag.index_reconcile`（每日北京时间 02:00，`backend/tasks/rag_maintenance_tasks.py`），报告落 `ai.rag_reconcile_reports`（迁移 `backend/sql/migrations/071_rag_reconcile_reports.sql`，迁移文件在途；reconcile 模块与定时任务文件当前亦为工作区在途）。
+**生产索引只读对账**：`backend/rag/indexing/reconcile.py` 纯快照判断 + PostgreSQL 只读采样，比对 PG registry / 向量库 / chunk 库 / BM25 产物（含 in-flight 候选延后判定），不一致计数进 Prometheus（`agent_rag_reconcile_inconsistent` / `agent_rag_reconcile_source_available`）；rag-server 内部端点 `GET /admin/index/reconcile-snapshot`（`backend/services/rag_server.py`）供对账快照拉取；Celery beat 定时任务 `rag.index_reconcile`（每日北京时间 02:00，`backend/tasks/rag_maintenance_tasks.py`），报告落 `ai.rag_reconcile_reports`（迁移 `backend/sql/migrations/071_rag_reconcile_reports.sql`；迁移与 reconcile/定时任务模块均已提交——2026-10-05 472e736 起）。
 
 ---
 
 ## 验证
 
-最后验证：2026-10-05 · 本次增量：清洗清单补第 12 类（维基抓取稿噪音行整行剔除）、新增 §4.4 BM25 跨进程热刷新与候选版本发布、§3.4 生命周期/deprecated 改已落地口径、新增 §7.5 生产索引只读对账；检索器类 / Evidence Gate / Faithfulness 结构对照代码复核仍准确，其余口径沿用 2026-10-04 记录，流水线阶段命名与存储口径见文首口径注，以根 [README.md](../README.md)「核心能力」为准。
+最后验证：2026-10-06 · 2026-10-05 增量：清洗清单补第 12 类（维基抓取稿噪音行整行剔除）、新增 §4.4 BM25 跨进程热刷新与候选版本发布、§3.4 生命周期/deprecated 改已落地口径、新增 §7.5 生产索引只读对账。2026-10-06 增量：§5.3 E1 拍板阈值残留两处改齐（0.40/0.10/0.05，此前仅代码块同步）、§2.2 补 TxtParser 编码三级回退（e3f53d6）、§3.3 补 MultiQuery 合法性过滤（0cf95c7）、§3.4 补 NER 人名交叉验证（af3101f）、§5.3 补预算软溢出降级（8b4b41f）、§7.4 fail-closed 归因改 `rag/pipeline.py`、§7.5 清除「在途」过时表述；检索器类 / Evidence Gate / Faithfulness 结构对照代码复核仍准确，其余口径沿用 2026-10-04 记录，流水线阶段命名与存储口径见文首口径注，以根 [README.md](../README.md)「核心能力」为准。

@@ -62,7 +62,7 @@
 | `/admin/clarify` | GET `/stats`（追问漏斗双口径：live=进程内 rate 口径 / persisted=PG 精确累计 + 转化率派生）（工作区在途） |
 | `/admin/tasks` | 既有 CRUD + POST `/{id}/reexecute`（克隆重执行）· GET `/{id}/operations`（操作审计）· GET `/queues`（五队列 backlog）【M10】 |
 | `/admin/releases` | 发布记录 + 12 门结果（M8） |
-| `/evaluation` | 既有 + GET `/prompt-version-runs?key&version`（版本→评测 run 反查）· POST `/run`（admin）· 运行生命周期：GET `/runs` · GET `/runs/{id}` · POST `/runs/{id}/cancel`（协作式取消，幂等+审计，admin）· GET `/runs/{id}/operations`（run 操作审计，admin）· POST `/cases/from-trace`（admin）；数据集治理台：GET `/datasets` · GET `/datasets/{id}/versions/{version}` · GET `/dataset-candidates` · POST `/dataset-candidates/from-trace`（202）· POST `.../{id}/approve`（201）· POST `.../{id}/reject` · GET `/suites`（读开放、写 admin）；读端点挂 `X-Tenant-Id` 租户钩子（单租户 default，其他值显式 403）；`GET /runs/{id}` 报告响应经展示层 PII 脱敏 |
+| `/evaluation` | 既有 + GET `/prompt-version-runs?key&version`（版本→评测 run 反查）· POST `/run`（admin）· 运行生命周期：GET `/runs` · GET `/runs/{id}` · POST `/runs/{id}/cancel`（协作式取消，幂等+审计，admin）· GET `/runs/{id}/operations`（run 操作审计，admin）· POST `/cases/from-trace`（admin）；数据集治理台：GET `/datasets` · GET `/datasets/{id}/versions/{version}` · GET `/dataset-candidates` · POST `/dataset-candidates/from-trace`（202）· POST `.../{id}/approve`（201）· POST `.../{id}/reject` · GET `/suites`（读开放、写 admin）；读端点挂 `X-Tenant-Id` 租户钩子（单租户 default，其他值显式 403；钩子当前挂在 `GET /runs/{id}`，其余读端点以代码为准）；`GET /runs/{id}` 报告响应经展示层 PII 脱敏 |
 | `/observability/tokens` | 既有 + GET `/breakdown?group_by=user\|tenant\|model\|skill\|tool\|domain`（六维聚合）· summary 含 by_currency 分列【M11】 |
 | `/prompts` | 既有 + POST `/{key}/aliases/{alias}`（production=发布语义 / staging=预发指针）· 版本带 change_kind + 发布门禁 6 端点：POST `/{key}/versions/{version}/release`（202 异步评测）· GET `/{key}/releases` · GET `/{key}/releases/{release_id}` · POST `.../approve` · POST `.../publish` · GET `.../comparison`（候选 vs production 审批对比，baseline 不可用时显式口径）（流程权威见根 AGENTS.md「Prompt 完整发布流程」；失败/超时/未审批不切换 production） |
 | 系统 | `/health`（含 build/migrations/schema_consistency/redis 探测）· `/metrics`（绕过 auth + CORS，供 K8s scrape） |
@@ -120,7 +120,7 @@ SSE v2 支持 **13 种事件，分三层**（契约权威：[backend/orchestrati
 | `status` | 宏观阶段切换 | `{node: "planner", ts}` | `store.currentStatus` |
 | `log` | 详细时间线 | 必填 `{node, ts}`，常见 `level / step_id / message / payload` | 环形追加（200 上限） |
 | `delta` | 流式内容块 | `{content: "...", ts}` | `store.deltaText += content` |
-| `done` | 结束信号（终帧） | `{elapsed（秒，1 位小数）, sources: [...]}`；可选 `usage / trace_id / pending_action / context_usage` 与 RAG 语义 `answer_status / confidence`；sources 元素可选定位字段：`department`（部门代码）、`pages`（PDF 页码升序数组）、`section`（章节标题）、`doc_id`（原文预览钥匙）——来源卡据此展示原文定位并支持点开快照预览；`answer_status` 取值 rag_no_evidence / rag_permission_denied / rag_hallucination（缺省=正常回答），`confidence`（0~1，<0.6 前端提示「建议核实」） | `replaceLastAssistant` + `persistSession` |
+| `done` | 结束信号（终帧） | `{elapsed（秒，1 位小数）, sources: [...]}`；可选 `usage / trace_id / pending_action / context_usage` 与 RAG 语义 `answer_status / confidence`、回复归因 `reply_source`；sources 元素可选定位字段：`department`（部门代码）、`pages`（PDF 页码升序数组）、`section`（章节标题）、`doc_id`（原文预览钥匙）——来源卡据此展示原文定位并支持点开快照预览；`answer_status` 取值 rag_no_evidence / rag_permission_denied / rag_hallucination（缺省=正常回答），`confidence`（0~1，<0.6 前端提示「建议核实」）；`reply_source`（2026-10-05）取值 knowledge_base / data_analysis / realtime_query / system_notice——按 `step_results` 成功步骤 capability 白名单推断（RAG 引用 > 数据分析 > 实时查询），拦截/澄清出口显式 `system_notice`，缺省不下发（域图/闲聊不标注，前端无徽章） | `replaceLastAssistant` + `persistSession` |
 | `error` | 错误/中止（终帧） | `{message: "...", ts: ...}` | 立即替换最后一条 assistant |
 
 **AUX（中段辅助帧，任意位置任意次）**：
@@ -609,6 +609,17 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 `POST /api/travel/decisions`——用户决策留痕（草案应用 / 放弃 / 画布替换 / 档位切换 / 删减协商五类），决策提交幂等（唯一约束防重）；`GET /api/travel/decisions?conversation_id=`——某会话决策链（时间新→旧）。持久化 `ai.travel_decision_audit`（迁移 072）+ 幂等约束（073），管理端/排查按 `decision_type` + `source` 归因（决策留痕权威口径见根 AGENTS.md 旅游段）。
 
+## 会话候选池（2026-10-05 验收 #10）
+
+`GET /api/travel/candidates?conversation_id=`——左栏分类候选表数据源：读域图 checkpoint 的 `state.candidates`（thread_id 与规划链同源：`travel:{tenant}:{user}:{conv}` 复合 namespace），按类别分组下发（组内 rating 降序、每组 ≤12 条）；响应含 `plan_version / destination / groups / available / hint`。checkpoint 不可达（降级 MemorySaver 后重启 / TTL 过期 / disabled）→ `available=false` + 空分组 + 提示，**不伪造**候选；权限对齐 plans 端点（无版本/越权一律 404）。前端 CandidatesPanel 换入走 canvas_replace 草案管线（decision `entry=candidates_panel`）。
+
+## 行程工具端点（P1 批次）
+
+`POST /api/travel/export/ics`——行程导出 ICS 日历（body 携带完整 itinerary，422 `invalid_itinerary`；中文目的地经 `filename*=UTF-8''` 编码，RFC 6266 合规）。
+`POST /api/travel/feedback`——行程单反馈（`vote=positive|negative` 必填，`reason / destination / plan_version` 可选，落既有 feedback 表）。
+`GET /api/travel/preferences` · `PUT /api/travel/preferences`——用户旅游偏好读写（`pace` 枚举 relaxed|moderate|intense，preferences ≤16 条）。
+`GET /api/travel/recommend?preferences=&top=`——按偏好标签推荐目的地（`top` 1–5，默认 3）。
+
 ## 验证
 
-最后验证：2026-10-05 · SSE §3 按 event_schema.py 13 事件三层契约重写（CORE/AUX/TRANSPORT、done 帧 `elapsed` 秒、log 帧字段、meta 帧四字段、seq/id 帧行示例顺序修正）、发布门 6 端点（补 comparison）、评测运行生命周期与数据集治理台端点族、`/evaluation` X-Tenant-Id 租户钩子 403 与 PII 脱敏、旅游 `/decisions` 决策留痕、上传 SSE 帧契约（was_overwrite）、RAG 知识生命周期 3 端点转已合并（3fd3c0b）。端点明细以 `backend/app/api/routes/` 目录为准；`/chat/stream` SSE 契约含 F2 Resume Protocol（seq/id 帧行、`/chat/stream/resume` 端点）。
+最后验证：2026-10-06 · SSE §3 按 event_schema.py 13 事件三层契约重写（CORE/AUX/TRANSPORT、done 帧 `elapsed` 秒、log 帧字段、meta 帧四字段、seq/id 帧行示例顺序修正）、发布门 6 端点（补 comparison）、评测运行生命周期与数据集治理台端点族、`/evaluation` X-Tenant-Id 租户钩子 403 与 PII 脱敏、旅游 `/decisions` 决策留痕、上传 SSE 帧契约（was_overwrite）、RAG 知识生命周期 3 端点转已合并（3fd3c0b）。端点明细以 `backend/app/api/routes/` 目录为准；`/chat/stream` SSE 契约含 F2 Resume Protocol（seq/id 帧行、`/chat/stream/resume` 端点）。2026-10-06 增量：done 帧补 `reply_source` 归因稳定码（3af6f54）、旅游 `/candidates` 会话候选池与 P1 批次工具端点（export/ics、feedback、preferences、recommend）补记、X-Tenant-Id 钩子覆盖面按代码收窄。
