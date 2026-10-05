@@ -1,0 +1,68 @@
+{"ts": "2026-10-05T21:49:57.100Z", "level": "INFO", "logger": "rag_system", "msg": "[PromptLoader] Loaded 48 defaults from D:\\Program Files\\workplace\\agent\\backend\\prompts\\defaults", "trace_id": null, "session_id": null, "user_id": null, "module": "loader", "line": 91}
+{"ts": "2026-10-05T21:49:58.350Z", "level": "INFO", "logger": "rag_system", "msg": "[Database] Engine 初始化完成", "trace_id": null, "session_id": null, "user_id": null, "module": "database", "line": 84}
+{"ts": "2026-10-05T21:49:58.350Z", "level": "INFO", "logger": "rag_system", "msg": "[Memory] 后台 event loop + DB engine 就绪", "trace_id": null, "session_id": null, "user_id": null, "module": "manager", "line": 47}
+{"ts": "2026-10-05T21:50:00.490Z", "level": "INFO", "logger": "rag_system", "msg": "[Redis] connected: redis://:94eea93f379e7358c571e3d943d61ce146e10d66@localhost:6379/0", "trace_id": null, "session_id": null, "user_id": null, "module": "client", "line": 63}
+{"ts": "2026-10-05T21:50:00.748Z", "level": "INFO", "logger": "rag_system", "msg": "[PromptLoader] Loaded 48 defaults from D:\\Program Files\\workplace\\agent\\backend\\prompts\\defaults", "trace_id": null, "session_id": null, "user_id": null, "module": "loader", "line": 91}
+{"ts": "2026-10-05T21:50:00.770Z", "level": "INFO", "logger": "rag_system", "msg": "[Router] 表数量 ≤ 2，直接返回全部: ['order.orders']", "trace_id": null, "session_id": null, "user_id": null, "module": "router", "line": 128}
+{"ts": "2026-10-05T21:50:00.771Z", "level": "INFO", "logger": "rag_system", "msg": "[Router] 表数量 ≤ 2，直接返回全部: ['order.orders']", "trace_id": null, "session_id": null, "user_id": null, "module": "router", "line": 128}
+{
+  "all": {
+    "allowed_count": 18,
+    "routed": [
+      "ai.agent_tasks",
+      "ai.agent_trace",
+      "crawler.competitor_price",
+      "crawler.competitor_products",
+      "crawler.product_reviews",
+      "customer.customer_behavior",
+      "customer.customers",
+      "finance.daily_profit",
+      "finance.expenses",
+      "inventory.inventory",
+      "inventory.purchase_orders",
+      "inventory.warehouses",
+      "order.order_items",
+      "order.orders",
+      "order.refunds",
+      "product.categories",
+      "product.product_tags",
+      "product.products"
+    ],
+    "visible_after_scope": [
+      "ai.agent_tasks",
+      "ai.agent_trace",
+      "crawler.competitor_price",
+      "crawler.competitor_products",
+      "crawler.product_reviews",
+      "customer.customer_behavior",
+      "customer.customers",
+      "finance.daily_profit",
+      "finance.expenses",
+      "inventory.inventory",
+      "inventory.purchase_orders",
+      "inventory.warehouses",
+      "order.order_items",
+      "order.orders",
+      "order.refunds",
+      "product.categories",
+      "product.product_tags",
+      "product.products"
+    ]
+  },
+  "self": {
+    "allowed_count": 1,
+    "routed": [
+      "order.orders"
+    ],
+    "visible_after_scope": [
+      "order.orders"
+    ]
+  },
+  "router_cache_second_call_same": true,
+  "verdict": {
+    "all_sees_more_tables": true,
+    "self_filtered_after_cache": true,
+    "no_cross_scope_leak": true,
+    "T06_CACHE_FINGERPRINT_PASS": true
+  }
+}
