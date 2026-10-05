@@ -326,3 +326,34 @@ class TestWorkflowRouting:
         assert trace.tags["kb_id"]  # 非空
         assert trace.tags["doc_id"]  # 非空
         assert trace.tags["file_ext"] == ".txt"
+
+# ==========================================================
+# API7/N-7 — upload_id correlation 进 trace.tags
+# ==========================================================
+
+class TestUploadIdCorrelation:
+    """worker 侧索引 trace 必须携带 upload_id（tasks/index_tasks 传
+    processing_task_id=upload_id），REST 受理 → worker 执行 → trace 三元可串。"""
+
+    def test_trace_tags_carry_upload_id(self, tmp_path, fresh_collector):
+        f = tmp_path / "corr.txt"
+        f.write_text("上传关联测试内容。" * 10, encoding="utf-8")
+        vectordb = MagicMock()
+        vectordb.add_documents.return_value = ["c1"]
+        doc_db = MagicMock()
+        doc_db.add_texts.return_value = ["d1"]
+        embedding = MagicMock()
+        embedding.embed_query.return_value = "v"
+        embedding.embed_documents.side_effect = lambda texts: [[0.1] * 128 for _ in texts]
+        registry = MagicMock()
+        registry.list_all.return_value = {}
+        idx = IncrementalIndexer(
+            docs_dir=str(tmp_path), vectordb=vectordb, doc_db=doc_db,
+            embedding=embedding, registry=registry,
+            processing_task_id="up-abc-123",
+        )
+
+        idx._index_file(str(f))
+
+        trace = fresh_collector.list(1, include_spans=True)[0]
+        assert trace.tags.get("upload_id") == "up-abc-123"

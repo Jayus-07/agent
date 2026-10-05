@@ -11,8 +11,11 @@
                         → 建表即带 rejected 摘要列，无需 JSON1（写入时同源提取）
   - sqlite3 隐式事务    → psycopg2 显式 commit/rollback（每次操作用完即关连接）
 
-时间戳语义：created_at 由应用侧生成（time.localtime 文本，与 SQLite 版逐字一致），
-不使用 PG 服务器时钟 —— list_since 的 cutoff（本地时间文本）比较语义零变化。
+时间戳语义：created_at 由应用侧生成，**统一 UTC 文本**（time.gmtime，N-3：
+此前 localtime 在容器=UTC、宿主直跑=北京 +8h，同一查询面混两种时区文本，
+2026-10-05 实测 124 条 +8h 记录霸占 list 排序头）。list_since 的 cutoff
+比较语义不变（同格式文本字典序）；查询面另加 created_at <= now(UTC) 天花板，
+存量漂移行不参与排序头。
 """
 
 from __future__ import annotations
@@ -28,6 +31,17 @@ import psycopg2
 import psycopg2.extras
 
 from backend.config.database import OBS_DB_PG_CONFIG
+
+
+def _utc_now_text() -> str:
+    """created_at 单一口径：UTC 文本（写入与查询天花板同源）。"""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+
+
+def _utc_ceiling_text() -> str:
+    """查询面时间天花板（N-3）：排比 created_at 晚于「现在」的存量漂移行
+    （宿主直跑进程曾以本地 +8h 文本写入），不再霸占 ORDER BY 头部。"""
+    return _utc_now_text()
 from backend.infra.db import engine_for
 from backend.observability.trace_store import _MAX_ROWS, TraceStore, _serialize_trace
 from backend.shared.logger import logger
@@ -111,8 +125,10 @@ class PostgresTraceStore(TraceStore):
             if not trace_id:
                 return
             json_str = json.dumps(data, ensure_ascii=False, default=str)
-            # 与 SQLite 版同源：本地时间文本（list_since cutoff 语义一致）
-            now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            # 统一 UTC 文本（N-3）：localtime 在宿主直跑进程是 +8h 本地时间，
+            # 与容器 UTC 写入混排导致查询面排序污染；UTC 单一口径 + 查询面
+            # 天花板（_utc_ceiling）双防御。
+            now = _utc_now_text()
             rejection = (data.get("metadata") or {}).get("rejection") or {}
             rejected_flag = 1 if (rejection.get("rejected")
                                   or data.get("status") == "rejected") else 0
@@ -203,13 +219,18 @@ class PostgresTraceStore(TraceStore):
         return None
 
     def list(self, limit: int = 20) -> list[dict]:
-        """最近 N 条 trace 摘要（不包含 spans 详情）。"""
+        """最近 N 条 trace 摘要（不包含 spans 详情）。
+
+        N-3：created_at <= UTC 天花板——未来时间戳（时钟漂移脏行）沉底，
+        不霸占排序头。
+        """
         try:
             with self._lock, self._conn() as conn:
                 rows = self._exec(
                     conn,
-                    f"SELECT data FROM {self._table} ORDER BY created_at DESC LIMIT %s",
-                    (limit,),
+                    f"SELECT data FROM {self._table} "
+                    f"WHERE created_at <= %s ORDER BY created_at DESC LIMIT %s",
+                    (_utc_ceiling_text(), limit),
                 ).fetchall()
             result = []
             for r in rows:
@@ -232,13 +253,13 @@ class PostgresTraceStore(TraceStore):
         """
         try:
             sql = (f"SELECT data, created_at FROM {self._table} "
-                   f"WHERE created_at >= %s ")
+                   f"WHERE created_at >= %s AND created_at <= %s ")
             if only_rejected:
                 sql += "AND rejected = 1 "
             sql += f"ORDER BY created_at DESC LIMIT %s"
             with self._lock, self._conn() as conn:
                 rows = self._exec(
-                    conn, sql, (cutoff_iso, max(limit, 5000))).fetchall()
+                    conn, sql, (cutoff_iso, _utc_ceiling_text(), max(limit, 5000))).fetchall()
             result = []
             for r in rows:
                 try:

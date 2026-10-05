@@ -119,7 +119,9 @@ class PostgresAnalyticsStore(AnalyticsStore):
                 for s in spans if isinstance(s, dict)
             ) or (data.get("cost") or {}).get("total_usd", 0) or 0
 
-            now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            # UTC 单一口径（N-3，与 trace_store_pg 写入侧一致）：localtime 在宿主直跑
+            # 进程是 +8h 本地文本，与容器 UTC 行混排污染排序/统计窗口
+            now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
             with self._lock, self._conn() as conn:
                 self._exec(conn, f"""
                     INSERT INTO {self._table} (
@@ -232,7 +234,7 @@ class PostgresAnalyticsStore(AnalyticsStore):
         try:
             cutoff = time.strftime(
                 "%Y-%m-%d 00:00:00",
-                time.localtime(time.time() - days * 86400),
+                time.gmtime(time.time() - days * 86400),
             )
             with self._lock, self._conn() as conn:
                 rows = self._exec(conn, f"""

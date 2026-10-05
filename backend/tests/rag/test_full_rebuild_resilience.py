@@ -117,8 +117,58 @@ class TestCrossDocTypeNearDup:
         assert hit == ""
 
 
-# ============ 加固 1：全量重建快照回填 ============
+# ============ D-7（2026-10-05）：deleted 行不被 sync 按 ADDED 复活 ============
 
+class TestDeletedNotReloadedBySync:
+    """D-7 根因回归：删除级联（registry→deleted、向量清理）后磁盘源文件仍在，
+    sync 的 active/nonactive 分桶只收 active 与 pending_review/failed——deleted
+    行两桶都不进 → 文件按 ADDED 重走索引 → 已删文档复活并产生新 cand 代次向量。
+    修复：deleted 纳入 STOP C 防线（hash 未变 → skip，不复活）。"""
+
+    def test_deleted_file_unchanged_is_not_reindexed(self, tmp_path, registry):
+        f = tmp_path / "gone.md"
+        f.write_text("deleted content", encoding="utf-8")
+        h = IncrementalIndexer._sha256(str(f))  # 与磁盘真实 hash 一致 → UNCHANGED 语义
+        registry.register(
+            file_path=str(f), doc_id="d_gone", file_hash=h,
+            kb_id="kb1", chunk_ids=["c1"], doc_db_id="ddb1",
+        )
+        registry.update_status(str(f), "deleted")
+        idx = _mk_indexer(tmp_path, registry)
+
+        with patch.object(idx, "_index_file",
+                          side_effect=AssertionError("deleted 行不得重索引")) as spy:
+            result = idx.sync()
+
+        assert result.added == 0
+        assert not spy.called
+        row = registry.get_by_path(str(f.resolve()))
+        assert row is not None and row["status"] == "deleted"  # 终态不被改写
+
+    def test_deleted_file_content_changed_is_reprocessed(self, tmp_path, registry):
+        """同名文件内容真改（磁盘 hash ≠ registry 行）→ 仍按 ADDED 重新入库
+        （合法新内容，不是复活）；防线不得修过头挡掉真实变更。"""
+        f = tmp_path / "renew.md"
+        f.write_text("v2 content", encoding="utf-8")
+        registry.register(
+            file_path=str(f), doc_id="d_old", file_hash="h_v1",
+            kb_id="kb1", chunk_ids=[], doc_db_id="",
+        )
+        registry.update_status(str(f), "deleted")
+        idx = _mk_indexer(tmp_path, registry)
+
+        def ok(path, *a, **kw):
+            registry.register(
+                file_path=str(path), doc_id="d_new", file_hash="h_v2",
+                kb_id="kb1", chunk_ids=[], doc_db_id="",
+            )
+        with patch.object(idx, "_index_file", side_effect=ok):
+            result = idx.sync()
+
+        assert result.added == 1
+
+
+# ============ 加固 1：全量重建快照回填 ============
 class TestFullRebuildSnapshotRestore:
 
     @pytest.fixture
