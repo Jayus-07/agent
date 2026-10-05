@@ -1071,7 +1071,11 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 processing_run_id=result.get("processing_run_id", ""),
                 model_summary=result.get("model_summary", []))
         _safe_log_op(
-        user_id=str(actor_id or ""),
+            duplicate_doc.get("doc_id", ""), filename, "upload", source,
+            trace_id="", batch_id=batch_id, result="duplicate",
+            duration_ms=total_ms,
+            detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
+            user_id=str(actor_id or ""),
         )
         return
 
@@ -1116,7 +1120,20 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
         logger.warning(f"[RAG] 获取入库文档信息失败: {e}")
 
     _safe_log_op(
-    user_id=str(actor_id or ""),
+        (new_doc or {}).get("doc_id", ""), filename, "upload", source,
+        trace_id=result.get("trace_id") or None,
+        batch_id=batch_id, result="success",
+        duration_ms=int((time.time() - upload_t0) * 1000),
+        detail={
+            "chunk_count": result.get("chunk_count", 0),
+            "file_hash": result.get("file_hash", ""),
+            "duplicate": False,
+            "processing_run_id": result.get("processing_run_id", ""),
+            "doc_type": (new_doc or {}).get("doc_type", "general"),
+            "llm_used": bool((new_doc or {}).get("llm_used", False)),
+            "confidence": (new_doc or {}).get("confidence", 0),
+        },
+        user_id=str(actor_id or ""),
     )
 
 
