@@ -115,7 +115,8 @@ def build_indexer(registry, doc: dict, pipeline, batch_id: str | None):
 def log_reindex_success(doc_id: str, doc_name: str, source: str, *,
                         trace_id: str | None, batch_id: str | None,
                         result: dict, duration_ms: int,
-                        executor: str = "rag_index_worker") -> None:
+                        executor: str = "rag_index_worker",
+                        user_id: str = "") -> None:
     """终态成功操作日志（审计口径与原路由 _safe_log_op 对齐）。"""
     from backend.config import DOC_OPERATION_LOG_PATH
     from backend.rag.indexing.operation_log_pg import (
@@ -126,6 +127,7 @@ def log_reindex_success(doc_id: str, doc_name: str, source: str, *,
     try:
         PostgresDocumentOperationLogger(DOC_OPERATION_LOG_PATH).log(
             doc_id=doc_id, doc_name=doc_name, operation="reindex", source=source,
+            user_id=user_id or "anonymous",
             trace_id=trace_id or None, batch_id=batch_id, result="success",
             detail={"chunk_count": result.get("chunk_count", 0),
                     "file_hash": result.get("file_hash", ""),
@@ -140,7 +142,7 @@ def log_reindex_success(doc_id: str, doc_name: str, source: str, *,
 
 
 def log_reindex_failed(doc_id: str, source: str, *, batch_id: str | None,
-                       error: str, duration_ms: int) -> None:
+                       error: str, duration_ms: int, user_id: str = "") -> None:
     """终态失败操作日志（由调用方在终态出口调用；重试中间态不写）。"""
     from backend.config import DOC_OPERATION_LOG_PATH
     from backend.rag.indexing.operation_log_pg import (
@@ -159,6 +161,7 @@ def log_reindex_failed(doc_id: str, source: str, *, batch_id: str | None,
             pass
         PostgresDocumentOperationLogger(DOC_OPERATION_LOG_PATH).log(
             doc_id=doc_id, doc_name=doc_name, operation="reindex", source=source,
+            user_id=user_id or "anonymous",
             trace_id=None, batch_id=batch_id, result="failed",
             detail={"error": str(error)[:200], "executor": "rag_index_worker"},
             duration_ms=duration_ms)
@@ -170,7 +173,8 @@ def log_reindex_failed(doc_id: str, source: str, *, batch_id: str | None,
 def run_reindex(doc_id: str, *, registry=None, pipeline=None,
                 batch_id: str | None = None, source: str = "worker",
                 emit: Callable[..., None] | None = None,
-                executor: str = "rag_index_worker") -> dict:
+                executor: str = "rag_index_worker",
+                user_id: str = "") -> dict:
     """单文档重索引完整执行（本地同步路径与 Celery 任务共用）。
 
     成功返回 {"ok": True, "doc_id", "chunk_count", "hash", "doc", "skipped"}
@@ -224,7 +228,7 @@ def run_reindex(doc_id: str, *, registry=None, pipeline=None,
     }
     log_reindex_success(doc_id, doc_name, source, trace_id=result.get("trace_id"),
                         batch_id=batch_id, result=payload, duration_ms=duration_ms,
-                        executor=executor)
+                        executor=executor, user_id=user_id)
     _emit("done" if not skipped else "duplicate",
           "内容未变化，已跳过重索引" if skipped else "重索引完成",
           doc_id=doc_id, chunk_count=payload["chunk_count"],

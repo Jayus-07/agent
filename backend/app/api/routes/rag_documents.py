@@ -669,11 +669,13 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
                         "error": "任务队列暂不可用，请稍后重试（需检查 rag-index-worker/broker）"}
 
         # 同步执行（开关关闭的历史路径 / local 降级），执行体与 worker 共用
+        from backend.app.api.identity import resolve_identity
         from backend.rag.indexing import reindex_service
+        sync_actor = resolve_identity(request)
         result = await asyncio.to_thread(
             reindex_service.run_reindex, doc_id,
             registry=reg, batch_id=batch_id, source=source,
-            executor="local_sync")
+            executor="local_sync", user_id=sync_actor.user_id)
         updated_doc = result.get("doc") or {}
         return {"ok": True, "doc_id": doc_id,
                 "chunk_count": result.get("chunk_count", 0),

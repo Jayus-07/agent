@@ -390,10 +390,20 @@ def reindex_document_task_impl(doc_id: str, *, batch_id: str | None = None,
                 f"重索引重试（第 {retries}/{CELERY_MAX_RETRIES} 次）...")
 
     def run_node() -> dict:
+        # S10（2026-10-06）：reindex 审计 actor 透传——tasks 行快照的 user_id
+        # （create_reindex_task_record 写入）随执行体进操作日志，杜绝 anonymous
+        actor = ""
+        if db_task_id:
+            try:
+                from backend.services.task_service import get_task
+                rec = get_task(db_task_id)
+                actor = (getattr(rec, "user_id", "") or "") if rec else ""
+            except Exception:  # noqa: BLE001 — 身份补查失败不阻断重索引
+                pass
         try:
             result = reindex_service.run_reindex(
                 doc_id, batch_id=batch_id, source=source or "worker",
-                emit=emit_fn)
+                emit=emit_fn, user_id=actor)
         except ReindexInProgressError as busy:
             # advisory 争用是瞬时互斥信号而非故障：规整为 ValueError 使
             # runtime 层与失败出口按同一 validation_error 口径落库
