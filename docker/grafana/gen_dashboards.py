@@ -210,6 +210,41 @@ P.append(panel("timeseries", "重试与恢复", 12, 27, 12, 9, [
 
 D4 = dashboard("agent-tasks", "Agent 平台 · 任务队列与 Worker", P)
 
+# ───────────────────────── D5 域对比（2026-10-06）─────────────────────────
+# 多域项目的核心视图：旅游/客服/选品/主图并排对比。数据全部来自既有指标
+# 的 domain 标签（routing_domain_total / agent_tool_* / agent_handoff_total）
+# 与账本成本投影 gauge（llm_usage_cost_cny_*，cost_gauge 每 600s 刷新），
+# 零新增埋点。域无流量时对应线/卡为空属正常。
+P = []
+P.append(panel("timeseries", "各域路由流量（速率）", 0, 0, 8, 9, [
+    ('sum(rate(routing_domain_total[5m])) by (domain)', "{{domain}}"),
+], "reqps", desc="RoutingEngine 域级决策速率；prefilter 命中与锁域直进均计入"))
+P.append(panel("timeseries", "各域 Tool 调用速率", 8, 0, 8, 9, [
+    ('sum(rate(agent_tool_calls_total[5m])) by (domain)', "{{domain}}"),
+], "reqps"))
+P.append(panel("timeseries", "各域 Tool 错误速率（七分类合计）", 16, 0, 8, 9, [
+    ('sum(rate(agent_tool_error_class_total[5m])) by (domain)', "{{domain}}"),
+], "reqps", desc="M3 统一七分类口径，按域拆分定位是哪个域的工具在坏"))
+P.append(panel("timeseries", "各域 24h LLM 成本（¥，账本投影）", 0, 9, 8, 9, [
+    ('sum(llm_usage_cost_cny_24h) by (domain)', "{{domain}}"),
+], "currencyCNY", desc="llm_usage 账本聚合投影（非记账，权威在 PG），600s 刷新"))
+P.append(panel("timeseries", "当月累计 LLM 成本（¥，按域）", 8, 9, 8, 9, [
+    ('sum(llm_usage_cost_cny_month) by (domain)', "{{domain}}"),
+], "currencyCNY", desc="账本当月累计；明细与对账走管理端成本看板"))
+P.append(panel("timeseries", "handoff 流向（按目标域×阶段）", 16, 9, 8, 9, [
+    ('sum(rate(agent_handoff_total[5m])) by (target_domain, phase)', "{{target_domain}} · {{phase}}"),
+], "reqps", desc="域间转交/引导卡流量（多域隔离 handoff 链路）"))
+P.append(panel("stat", "客服域 24h 成本（¥）", 0, 18, 6, 8,
+               [('llm_usage_cost_cny_24h{domain="customer_service"}', "¥")], "currencyCNY"))
+P.append(panel("stat", "旅游域 24h 成本（¥）", 6, 18, 6, 8,
+               [('llm_usage_cost_cny_24h{domain="travel"}', "¥")], "currencyCNY"))
+P.append(panel("stat", "选品域 24h 成本（¥）", 12, 18, 6, 8,
+               [('llm_usage_cost_cny_24h{domain="selection"}', "¥")], "currencyCNY"))
+P.append(panel("stat", "主图 24h 成本（¥）", 18, 18, 6, 8,
+               [('llm_usage_cost_cny_24h{domain="main"}', "¥")], "currencyCNY"))
+
+D5 = dashboard("agent-domains", "Agent 平台 · 域对比", P)
+
 # ───────────────────────── 写盘 ─────────────────────────
 os.makedirs(OUT, exist_ok=True)
 for fn, data in [
@@ -217,6 +252,7 @@ for fn, data in [
     ("agent-cost.json", D2),
     ("agent-quality.json", D3),
     ("agent-tasks.json", D4),
+    ("agent-domains.json", D5),
 ]:
     path = os.path.join(OUT, fn)
     with open(path, "w", encoding="utf-8") as f:
@@ -224,4 +260,4 @@ for fn, data in [
     n = len(data["panels"])
     print(f"OK {fn}: {n} panels")
 
-print("total dashboards: 4, total panels:", _pid)
+print("total dashboards: 5, total panels:", _pid)

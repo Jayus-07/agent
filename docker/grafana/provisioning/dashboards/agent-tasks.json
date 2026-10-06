@@ -26,7 +26,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -35,7 +35,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -71,7 +71,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -80,7 +80,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -130,7 +130,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -139,7 +139,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -176,7 +176,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -185,7 +185,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -222,7 +222,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -231,7 +231,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         },
         {
@@ -240,7 +240,7 @@
           "refId": "B",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         },
         {
@@ -249,7 +249,7 @@
           "refId": "C",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -284,7 +284,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -293,7 +293,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -328,7 +328,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -337,7 +337,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -373,7 +373,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -382,7 +382,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -417,7 +417,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -426,7 +426,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         },
         {
@@ -435,7 +435,7 @@
           "refId": "B",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         },
         {
@@ -444,7 +444,7 @@
           "refId": "C",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],
@@ -480,7 +480,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "prometheus"
       },
       "targets": [
         {
@@ -489,7 +489,7 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         },
         {
@@ -498,7 +498,7 @@
           "refId": "B",
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "prometheus"
           }
         }
       ],

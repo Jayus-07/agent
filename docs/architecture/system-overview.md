@@ -28,7 +28,7 @@ flowchart TB
         RD[("redis :6379<br/>broker + result + 缓存")]
     end
 
-    OBS["Prometheus :9090 / Grafana :3001<br/>--profile observability（默认不启）"]
+    OBS["Prometheus :9090 / Grafana :3001<br/>Tempo :13200 / Loki :13100 + promtail<br/>--profile observability（默认不启）"]
     KF["kafka :9094 · ollama :11434<br/>--profile java-loop / local-llm（默认不启）"]
 
     WEB --> GW
@@ -70,6 +70,7 @@ flowchart TB
 | 6379 | `redis` | Celery broker + result backend + 缓存 |
 | 9090 / 3001 | Prometheus / Grafana | `--profile observability` |
 | 9093 / 9095 | Alertmanager / alert-bridge | 告警评估触达 / 告警外投桥（AM webhook → 企微/飞书/钉钉，`ALERT_BRIDGE_*` 未配置时落桥日志），`--profile observability` |
+| 13100 / 13200 | Loki / Tempo（宿主映射；容器内 3100/3200 与前端端口错位） | 容器 stdout 日志聚合 / 自研 trace 的 OTel 镜像链路后端（`otel_exporter.py` 经 OTLP HTTP 4318 推送，`OTEL_TRACE_OTLP_ENABLED` 开关），promtail 经 docker socket 采集，`--profile observability` |
 | 9092 / 11434 | `kafka` / `ollama` | `--profile java-loop` / `--profile local-llm`，默认不启 |
 
 **请求链路**：前端 rewrite → APISIX:9080 → `X-User-Id` 等身份头 → app（`IDENTITY_SOURCE=header` 只认头）。
