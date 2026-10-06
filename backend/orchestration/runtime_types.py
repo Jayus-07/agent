@@ -2,6 +2,7 @@
 
 from enum import Enum
 
+from pydantic import BaseModel, Field
 
 class RuntimeType(str, Enum):
     """运行时家族，不绑定具体业务域。"""
@@ -11,3 +12,11 @@ class RuntimeType(str, Enum):
     PLAN = "plan_runtime"
     DIRECT = "direct_runtime"
     GENERIC = "generic_runtime"
+
+
+class RuntimeTarget(BaseModel):
+    """具体 Runtime 目标，放在中立模块避免 Registry→router 包循环。"""
+
+    type: RuntimeType
+    id: str = Field(..., min_length=1)
+    subflow: str | None = None

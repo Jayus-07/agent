@@ -14,6 +14,7 @@ Main Graph 的 builder 会自动为其布线（节点 + router 条件边 + 直�
 from backend.orchestration.domain_graph import DomainGraph
 from backend.orchestration.domain_registry import domain_graph_registry
 from backend.orchestration.graph.travel_graph_node import travel_graph_node
+from backend.orchestration.runtime_types import RuntimeType
 from backend.providers.travel import install_travel_providers
 
 domain_graph_registry.register(DomainGraph(
@@ -21,6 +22,12 @@ domain_graph_registry.register(DomainGraph(
     node_name="travel_graph_node",
     label="旅游规划图执行",
     adapter=travel_graph_node,
+    runtime_id="travel",
+    runtime_type=RuntimeType.WORKFLOW,
+    supports_checkpoint=True,
+    supports_interrupt=True,
+    entry_modes=("execute", "guide"),
+    continuation_policy="checkpoint_resume",
     # 顶级域自身的活动标签（决策层 subflow 展示位）：travel 图即 Travel Domain 本体，
     # 不是独立生命周期子流，故**不写 subflow**（STOP E §6.2 冻结口径）。
     decision_subflow="planning",

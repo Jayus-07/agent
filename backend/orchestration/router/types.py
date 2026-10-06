@@ -13,7 +13,7 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from backend.orchestration.runtime_types import RuntimeType
+from backend.orchestration.runtime_types import RuntimeTarget, RuntimeType
 
 
 class ExecutionMode(str, Enum):
@@ -82,14 +82,6 @@ class InteractionDecision(BaseModel):
     """交互控制，不混入执行方式。"""
 
     mode: InteractionMode
-
-
-class RuntimeTarget(BaseModel):
-    """具体 Runtime 目标。"""
-
-    type: RuntimeType
-    id: str = Field(..., min_length=1)
-    subflow: str | None = None
 
 
 class RouteDecisionV2(BaseModel):

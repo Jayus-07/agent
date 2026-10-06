@@ -7,6 +7,7 @@
 """
 from backend.orchestration.domain_graph import DomainGraph
 from backend.orchestration.domain_registry import domain_graph_registry
+from backend.orchestration.runtime_types import RuntimeType
 from backend.travel.commerce.graph_node import travel_commerce_graph_node
 
 domain_graph_registry.register(DomainGraph(
@@ -14,6 +15,12 @@ domain_graph_registry.register(DomainGraph(
     node_name="travel_commerce_graph_node",
     label="旅游商务查询（酒店/机票）",
     adapter=travel_commerce_graph_node,
+    runtime_id="travel_commerce",
+    runtime_type=RuntimeType.WORKFLOW,
+    supports_checkpoint=False,
+    supports_interrupt=False,
+    entry_modes=("execute",),
+    continuation_policy="context_resume",
     subflow="commerce",  # 域内子流标签（展示语义）：与决策层归一 travel_commerce → (travel, commerce) 一致
     domain="travel",  # 归属顶级域：执行层选图/回写层登记均由此派生，不再靠 f"travel_{subflow}" 拼接
 ))

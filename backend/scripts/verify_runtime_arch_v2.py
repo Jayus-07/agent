@@ -66,6 +66,12 @@ def _stage_paths(stage: str) -> list[str]:
             "backend/tests/orchestration/graph/test_router_semantic_split.py",
             "backend/tests/orchestration/graph/test_legacy_route_writer.py",
         ],
+        "C": [
+            "backend/tests/orchestration/test_runtime_registry.py",
+            "backend/tests/orchestration/test_domain_semantic_consistency.py",
+            "backend/tests/orchestration/test_domain_registry.py",
+            "backend/tests/test_domain_registration.py",
+        ],
     }
     return stage_test.get(stage, []) + BASELINE_TESTS
 
@@ -88,7 +94,10 @@ _STAGE_REQUIRED_KEYS = {
         "ROUTE_MODE_BACKWARD_COMPAT_PASS",
         "ROUTE_SINGLE_WRITER_PASS",
     ),
-    "C": ("RUNTIME_REGISTRY_PASS",),
+    "C": (
+        "RUNTIME_REGISTRY_PASS",
+        "DOMAIN_REGISTRATION_SINGLE_SOURCE_PASS",
+    ),
     "D": ("RUNTIME_RESULT_CONTRACT_PASS",),
     "E": ("STATE_CANONICALIZATION_PASS",),
     "F": ("DOMAIN_REGISTRATION_GOVERNANCE_PASS",),
@@ -130,6 +139,8 @@ def verify(stage: str, final: bool = False) -> dict[str, bool]:
             "ROUTE_MODE_BACKWARD_COMPAT_PASS": stage_ok,
             "ROUTE_SINGLE_WRITER_PASS": stage_ok,
         })
+    if stage == "C":
+        results["DOMAIN_REGISTRATION_SINGLE_SOURCE_PASS"] = stage_ok
     results["PRODUCTION_BEHAVIOR_CHANGED"] = not results["GLOBAL_REGRESSION_PASS"]
     results["AGENT_RUNTIME_ARCH_V2_READY"] = ready_for_final(results) if final else False
     report = {

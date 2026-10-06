@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping, Iterator
 from typing import Any
 
 from backend.orchestration.domain_graph import DomainGraph
+from backend.orchestration.runtime_types import RuntimeTarget
 from backend.shared.logger import logger
 
 
@@ -113,6 +114,42 @@ class DomainGraphRegistry:
         self._domains: dict[str, DomainGraph] = {}
 
     def register(self, domain: DomainGraph) -> None:
+        """注册 Runtime 描述符，并在启动期拦截归属冲突。"""
+
+        other_domains = {
+            name: item
+            for name, item in self._domains.items()
+            if name != domain.name
+        }
+        if not domain.runtime_id:
+            raise ValueError(f"域 {domain.name!r} 必须声明 runtime_id")
+        if domain.domain == domain.name:
+            raise ValueError(f"域 {domain.name!r} 的父域不能自指")
+        if domain.domain and domain.domain not in self._domains:
+            raise ValueError(
+                f"域 {domain.name!r} 的父域 {domain.domain!r} 尚未注册"
+            )
+        if any(
+            item.runtime_id == domain.runtime_id
+            for item in other_domains.values()
+        ):
+            raise ValueError(
+                f"runtime_id {domain.runtime_id!r} 已被其他域占用"
+            )
+        if len(set(domain.aliases)) != len(domain.aliases):
+            raise ValueError(f"域 {domain.name!r} 的 aliases 不能重复")
+        if domain.name in domain.aliases:
+            raise ValueError(f"域 {domain.name!r} 的 alias 不能与自身同名")
+        reserved_aliases = {
+            alias
+            for item in other_domains.values()
+            for alias in (item.name, *item.aliases)
+        }
+        conflicts = sorted(set(domain.aliases) & reserved_aliases)
+        if conflicts:
+            raise ValueError(
+                f"域 {domain.name!r} 的 alias 冲突: {', '.join(conflicts)}"
+            )
         if domain.name in self._domains:
             logger.warning("[DomainRegistry] 重复注册域图: %s，覆盖", domain.name)
         self._domains[domain.name] = domain
@@ -123,6 +160,46 @@ class DomainGraphRegistry:
 
     def get_all(self) -> dict[str, DomainGraph]:
         return dict(self._domains)
+
+    def resolve_alias(self, route_mode: str) -> str | None:
+        """把 canonical name 或 alias 解析为物理域图注册键。"""
+
+        for graph in self._snapshot().values():
+            if route_mode == graph.name or route_mode in graph.aliases:
+                return graph.name
+        return None
+
+    def route_mode_to_runtime_target(self) -> dict[str, RuntimeTarget]:
+        """派生 route_mode/alias → RuntimeTarget 活视图。"""
+
+        result: dict[str, RuntimeTarget] = {}
+        for graph in self._snapshot().values():
+            target = RuntimeTarget(
+                type=graph.runtime_type,
+                id=graph.runtime_id or graph.name,
+                subflow=graph.decision_subflow or graph.subflow,
+            )
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = target
+        return result
+
+    def route_mode_to_family(self) -> dict[str, Any]:
+        """派生 route_mode/alias → RuntimeType 活视图。"""
+
+        result: dict[str, Any] = {}
+        for graph in self._snapshot().values():
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = graph.runtime_type
+        return result
+
+    def route_mode_to_entry_mode(self) -> dict[str, tuple[str, ...]]:
+        """派生 route_mode/alias → 允许的入口交互模式活视图。"""
+
+        result: dict[str, tuple[str, ...]] = {}
+        for graph in self._snapshot().values():
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = graph.entry_modes
+        return result
 
     def get_node_names(self) -> set[str]:
         return {d.node_name for d in self._domains.values()}

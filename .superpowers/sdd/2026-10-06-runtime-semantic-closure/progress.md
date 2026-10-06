@@ -17,3 +17,9 @@ Task 2: Ruling: all main-router, prefilter, continuation, and pending-resume sta
 Task 2: Ruling: engine-backed direct/workflow/plan updates suppress projection-generated flat domain fields when no hierarchical metadata exists, allowing the existing adapter to derive its domain without changing tool-selector behavior — cost if wrong: retaining the compatibility defaults would overwrite the legacy domain snapshot and change direct-path parameter resolution.
 
 Task 2: complete (stage B aggregator: 142 passed, ROUTING_SEMANTIC_SPLIT_PASS=true, ROUTE_DECISION_V2_PASS=true, ROUTE_MODE_BACKWARD_COMPAT_PASS=true, ROUTE_SINGLE_WRITER_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)
+
+Task 3: Ruling: RuntimeTarget moved beside RuntimeType in runtime_types.py and router/types.py re-exports it; importing router.types from DomainGraphRegistry would otherwise execute the router package and recreate a registry/domain-router circular import — cost if wrong: one additional neutral contract module dependency.
+
+Task 3: Ruling: registry replacement by the same canonical name remains idempotent for existing registration behavior, while runtime_id collisions across different names, alias collisions, missing parents, and self-parenting fail fast — cost if wrong: stricter startup validation can reject an invalid registration instead of silently routing to the wrong runtime.
+
+Task 3: complete (stage C aggregator: 128 passed, RUNTIME_REGISTRY_PASS=true, DOMAIN_REGISTRATION_SINGLE_SOURCE_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)

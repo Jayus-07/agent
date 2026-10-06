@@ -15,12 +15,19 @@ from backend.orchestration.domain_registry import domain_graph_registry
 from backend.orchestration.graph.selection_funnel_graph_node import (
     selection_funnel_graph_node,
 )
+from backend.orchestration.runtime_types import RuntimeType
 
 domain_graph_registry.register(DomainGraph(
     name="selection_funnel",
     node_name="selection_funnel_graph_node",
     label="智能选品漏斗执行",
     adapter=selection_funnel_graph_node,
+    runtime_id="selection_funnel",
+    runtime_type=RuntimeType.WORKFLOW,
+    supports_checkpoint=False,
+    supports_interrupt=False,
+    entry_modes=("execute", "guide"),
+    continuation_policy="single_turn",
     # 顶级域自身的活动标签（决策层 subflow 展示位）：同上，不写 subflow（冻结口径）。
     decision_subflow="funnel",
 ))
