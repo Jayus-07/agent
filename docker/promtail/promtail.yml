@@ -1,0 +1,29 @@
+# Promtail（2026-10-06）：经 docker socket 发现本 compose 项目的容器 stdout，
+# 推送 Loki。标签仅低基数（job/container/service/stream）；日志行保持原始
+# JSON，trace_id 留在行内不提标签（高基数禁入标签，G2）。
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /positions/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=agent"]
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: stream

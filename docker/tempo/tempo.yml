@@ -1,0 +1,26 @@
+# Tempo 单机最小配置（2026-10-06，镜像 v3.0.0）：自研 trace（PG 权威）的
+# OTel 镜像出口后端。Grafana 查询 :3200；接收 otel_exporter.py 经 OTLP HTTP
+# 4318 推送的镜像 span。镜像数据仅供排障（保留走默认），权威审计仍在
+# 自研 trace → PG。
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

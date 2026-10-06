@@ -7,3 +7,38 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: false
+  # ── Loki（2026-10-06）：promtail 采集的容器 stdout JSON 日志 ──────────
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: false
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        # 日志行内 trace_id → Tempo 跳转（点击日志行定位整条链路瀑布）
+        - name: trace_id
+          matcherRegex: '"trace_id":"([^"]+)"'
+          datasourceUid: tempo
+          url: "${__value.raw}"
+  # ── Tempo（2026-10-06）：自研 trace 的 OTel 镜像出口后端 ─────────────
+  # span 属性 agent.trace_id（自研原始 id）→ Loki 过滤 JSON 行；
+  # 注意不能用 ${__span.traceId}（Tempo 侧为 128bit 左补零形态，与日志行
+  # 内 12 位原始 id 后缀不同），必须用 span 属性取原始值。
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: false
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShiftTime: "-10m"
+        spanEndTimeShiftTime: "10m"
+        filterByTraceID: false
+        customQuery: true
+        query: '{job=~".+"} | json | trace_id="${__span.attributes["agent.trace_id"]}"'

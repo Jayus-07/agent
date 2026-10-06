@@ -1027,6 +1027,71 @@ services:
           memory: 64m
           cpus: "0.1"
 
+  # ── Tempo（2026-10-06：OTel 链路后端，observability profile）──────────
+  # 自研 trace（PG 权威）不变；otel_exporter.py 镜像出口经 OTLP HTTP 4318
+  # 推送到此，Grafana 里看 span 瀑布 / TraceQL 检索。镜像数据仅供排障
+  # （7 天保留），权威审计仍在自研 trace → PG。
+  tempo:
+    image: grafana/tempo:latest
+    profiles: ["observability"]
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      # 宿主 13200：3200 是 frontend-admin（devctl）端口，错位避免冲突
+      - "127.0.0.1:13200:3200"
+    volumes:
+      - ./docker/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "0.5"
+
+  # ── Loki（容器 stdout 日志聚合，observability profile）───────────────
+  # promtail 采集 compose 容器日志（app 需 LOG_FORMAT=json，行自带
+  # trace_id）；Tempo span → Loki 日志互跳见 grafana provisioning。
+  loki:
+    image: grafana/loki:latest
+    profiles: ["observability"]
+    command: ["-config.file=/etc/loki/loki.yml"]
+    ports:
+      # 宿主 13100：3100 是 frontend（devctl）端口，错位避免冲突
+      - "127.0.0.1:13100:3100"
+    volumes:
+      - ./docker/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+
+  # ── Promtail（Loki 采集器：docker socket 发现本 compose 容器）────────
+  promtail:
+    image: grafana/promtail:latest
+    profiles: ["observability"]
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./docker/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail_data:/positions
+    depends_on:
+      - loki
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.1"
+
   redis-exporter:
     image: oliver006/redis_exporter:latest
     profiles: ["observability"]
@@ -1243,3 +1308,6 @@ volumes:
   kafka_data:
   prometheus_data:
   grafana_data:
+  tempo_data:
+  loki_data:
+  promtail_data:

@@ -1,0 +1,38 @@
+# Loki 单机最小配置（2026-10-06）：promtail 采集 compose 容器 stdout 日志。
+# 标签纪律：trace_id / session_id 等高基数一律不进标签（G2）——日志行本身
+# 是 JSON（LOG_FORMAT=json，logger.py 自带 trace_id 字段），LogQL 用
+# `| json | trace_id="..."` 过滤，Tempo↔Loki 按 trace_id 互跳。
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
