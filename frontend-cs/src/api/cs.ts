@@ -201,6 +201,34 @@ export async function declineOffer(
   );
 }
 
+/**
+ * 主管重派（STOP CS-A P0-5/E4）：解除当前分配并送回 waiting_human 由
+ * dispatcher 重挑。后端已有 API（supervisor 门禁），本批只补工作台入口。
+ * 409/403 的后端 detail 原样上抛（页面直接展示真实原因，不做文案映射）。
+ */
+export async function reassignHandoff(
+  handoffId: string,
+  reason?: string,
+): Promise<{
+  handoff_id: string;
+  conversation_id: string;
+  handoff_state: string;
+  agent_id: string | null;
+  assignment_version: number;
+  offer_expires_at: string | null;
+}> {
+  return request(
+    `/api/cs/handoffs/` + encodeURIComponent(handoffId) + `/reassign`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        reason && reason.trim() ? { reason: reason.trim() } : {},
+      ),
+    },
+  );
+}
+
 // ── 满意度统计（014_cs_rating）────────────────────
 
 export async function getCSStats(): Promise<CSStatsResponse> {

@@ -58,6 +58,8 @@ export interface HandoffQueueItem {
   conversation_id: string;
   user_id: string;
   handoff_state: string;
+  /** STOP CS-A P0-5/E4: 主管重派 API 寻址键 */
+  handoff_id?: string | null;
   trigger_type: string | null;
   trigger_reason: string | null;
   updated_at: string;
