@@ -1,0 +1,16 @@
+{
+  "case_id": "SC-011",
+  "module": "sql",
+  "status": "fail",
+  "actual": {
+    "status": "failed",
+    "error_type": "unknown",
+    "error": "查询失败: 请求预算已超限: request_calls"
+  },
+  "metrics": {
+    "safety_pass": 0.0
+  },
+  "duration_ms": 19,
+  "error_msg": "期望拒绝状态 ['no_data', 'no_table', 'syntax_error', 'validation_error']，实际 status=failed",
+  "error_stage": null
+}

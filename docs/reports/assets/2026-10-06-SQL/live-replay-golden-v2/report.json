@@ -1,0 +1,1594 @@
+{
+  "timestamp": "2026-10-06T04:08:33.949190",
+  "module": "sql",
+  "mode": "live",
+  "smoke": false,
+  "tier": "all",
+  "summaries": [
+    {
+      "module": "sql",
+      "total": 45,
+      "passed": 5,
+      "failed": 40,
+      "errors": 0,
+      "skipped": 0,
+      "pass_rate": 0.1111,
+      "metrics": {
+        "router_hit": 0.1905,
+        "safety_pass": 0.1778,
+        "execution_match": 0.625
+      }
+    }
+  ],
+  "results": [
+    {
+      "case_id": "SC-001",
+      "module": "sql",
+      "status": "pass",
+      "expected": {
+        "gold_sql": "SELECT COUNT(*) AS active_product_count FROM product.products WHERE status = 'active'",
+        "expected_tables": [
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 1,
+        "sql": "SELECT COUNT(*) FROM product.products WHERE status = 'active' LIMIT 100"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 1.0
+      },
+      "duration_ms": 3730,
+      "error_msg": null,
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-002",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, i.stock_quantity, i.safety_stock FROM inventory.inventory i JOIN product.products p ON p.id = i.product_id WHERE i.stock_quantity < i.safety_stock",
+        "expected_tables": [
+          "inventory.inventory",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 6,
+        "sql": "SELECT p.product_name, i.stock_quantity FROM inventory.inventory AS i JOIN product.products AS p ON i.product_id = p.id WHERE i.stock_quantity < i.safety_stock LIMIT 100"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 0.0
+      },
+      "duration_ms": 2911,
+      "error_msg": "生成 SQL 结果集与 gold_sql 不一致",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-003",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, COUNT(r.id) AS refund_count FROM product.products p JOIN \"order\".refunds r ON r.product_id = p.id GROUP BY p.product_name ORDER BY refund_count DESC LIMIT 10",
+        "expected_tables": [
+          "product.products",
+          "order.refunds"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 2,
+        "sql": "SELECT p.product_name, COUNT(r.id) AS refund_count FROM \"order\".refunds AS r JOIN product.products AS p ON r.product_id = p.id GROUP BY p.id, p.product_name ORDER BY refund_count DESC LIMIT 10"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 0.0
+      },
+      "duration_ms": 5144,
+      "error_msg": "生成 SQL 结果集与 gold_sql 不一致",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-004",
+      "module": "sql",
+      "status": "pass",
+      "expected": {
+        "gold_sql": "SELECT COUNT(*) AS order_count FROM \"order\".orders WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'",
+        "expected_tables": [
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 1,
+        "sql": "SELECT COUNT(id) AS order_count FROM \"order\".orders WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '30 DAYS' LIMIT 100"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 1.0
+      },
+      "duration_ms": 4767,
+      "error_msg": null,
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-005",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT c.name AS category_name, COUNT(p.id) AS product_count FROM product.categories c LEFT JOIN product.products p ON p.category_id = c.id GROUP BY c.name ORDER BY product_count DESC",
+        "expected_tables": [
+          "product.categories",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 6,
+        "sql": "SELECT c.name AS category_name, COUNT(p.id) AS product_count FROM product.categories AS c LEFT JOIN product.products AS p ON c.id = p.category_id GROUP BY c.id, c.name LIMIT 100"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 0.0
+      },
+      "duration_ms": 8564,
+      "error_msg": "生成 SQL 结果集与 gold_sql 不一致",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-006",
+      "module": "sql",
+      "status": "pass",
+      "expected": {
+        "gold_sql": "SELECT COUNT(*) AS competitor_count FROM crawler.competitor_products WHERE platform = 'TikTok Shop'",
+        "expected_tables": [
+          "crawler.competitor_products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 1,
+        "sql": "SELECT COUNT(*) FROM crawler.competitor_products WHERE platform = 'TikTok Shop' LIMIT 100"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 1.0
+      },
+      "duration_ms": 2723,
+      "error_msg": null,
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-007",
+      "module": "sql",
+      "status": "pass",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, COUNT(*) AS negative_count FROM crawler.product_reviews r JOIN product.products p ON p.id = r.product_id WHERE r.sentiment = 'negative' GROUP BY p.product_name ORDER BY negative_count DESC LIMIT 5",
+        "expected_tables": [
+          "crawler.product_reviews",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 1,
+        "sql": "SELECT p.product_name, COUNT(pr.id) AS negative_review_count FROM product.products AS p JOIN crawler.product_reviews AS pr ON pr.product_id = p.id WHERE pr.sentiment = 'negative' GROUP BY p.id, p.product_name ORDER BY negative_review_count DESC LIMIT 5"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 1.0
+      },
+      "duration_ms": 4262,
+      "error_msg": null,
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-008",
+      "module": "sql",
+      "status": "pass",
+      "expected": {
+        "gold_sql": "SELECT AVG(profit) AS avg_daily_profit FROM finance.daily_profit WHERE date >= CURRENT_DATE - INTERVAL '7 days'",
+        "expected_tables": [
+          "finance.daily_profit"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "success",
+        "row_count": 1,
+        "sql": "SELECT AVG(profit) AS average_daily_profit FROM finance.daily_profit WHERE date >= CURRENT_DATE - INTERVAL '7 DAYS' LIMIT 100"
+      },
+      "metrics": {
+        "router_hit": 1.0,
+        "safety_pass": 1.0,
+        "execution_match": 1.0
+      },
+      "duration_ms": 3978,
+      "error_msg": null,
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-009",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT cu.name, COUNT(*) AS add_cart_count FROM customer.customer_behavior b JOIN customer.customers cu ON cu.id = b.customer_id WHERE b.event_type = 'add_cart' GROUP BY cu.name ORDER BY add_cart_count DESC LIMIT 10",
+        "expected_tables": [
+          "customer.customer_behavior",
+          "customer.customers"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 14,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-010",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT COUNT(*) AS gold_member_count FROM customer.customers WHERE level = '金卡'",
+        "expected_tables": [
+          "customer.customers"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 14,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-011",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "expected_tables": [
+          "customer.customers"
+        ],
+        "should_reject": true,
+        "expected_status": [
+          "no_table",
+          "validation_error",
+          "syntax_error",
+          "no_data"
+        ]
+      },
+      "actual": {
+        "status": "failed",
+        "error_type": "unknown",
+        "error": "查询失败: 请求预算已超限: request_calls"
+      },
+      "metrics": {
+        "safety_pass": 0.0
+      },
+      "duration_ms": 19,
+      "error_msg": "期望拒绝状态 ['no_data', 'no_table', 'syntax_error', 'validation_error']，实际 status=failed",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-012",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "expected_tables": [],
+        "should_reject": true,
+        "expected_status": [
+          "no_table",
+          "validation_error"
+        ]
+      },
+      "actual": {
+        "status": "failed",
+        "error_type": "unknown",
+        "error": "查询失败: 请求预算已超限: request_calls"
+      },
+      "metrics": {
+        "safety_pass": 0.0
+      },
+      "duration_ms": 39,
+      "error_msg": "期望拒绝状态 ['no_table', 'validation_error']，实际 status=failed",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-013",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "expected_tables": [],
+        "should_reject": true,
+        "expected_status": [
+          "no_table"
+        ]
+      },
+      "actual": {
+        "status": "failed",
+        "error_type": "unknown",
+        "error": "查询失败: 请求预算已超限: request_calls"
+      },
+      "metrics": {
+        "safety_pass": 0.0
+      },
+      "duration_ms": 13,
+      "error_msg": "期望拒绝状态 ['no_table']，实际 status=failed",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-014",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, i.stock_quantity FROM product.products p JOIN inventory.inventory i ON i.product_id = p.id WHERE p.id NOT IN (SELECT DISTINCT oi.product_id FROM \"order\".order_items oi JOIN \"order\".orders o ON o.id = oi.order_id WHERE o.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days')",
+        "expected_tables": [
+          "product.products",
+          "inventory.inventory",
+          "order.order_items",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 19,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-015",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT cp.product_name, cp.platform, MIN(pr.price) AS lowest_price, MAX(pr.price) AS highest_price FROM crawler.competitor_products cp JOIN crawler.competitor_price pr ON pr.product_id = cp.id GROUP BY cp.product_name, cp.platform ORDER BY (MAX(pr.price) - MIN(pr.price)) DESC LIMIT 5",
+        "expected_tables": [
+          "crawler.competitor_products",
+          "crawler.competitor_price"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 66,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-101",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT sku, product_name FROM product.products WHERE brand = '华为' AND status = 'active'",
+        "expected_tables": [
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 12,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-102",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT COUNT(*) AS customer_count FROM customer.customers",
+        "expected_tables": [
+          "customer.customers"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 16,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-103",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT SUM(total_amount) AS total_amount FROM \"order\".orders WHERE status = 'completed'",
+        "expected_tables": [
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 69,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-104",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT c.name AS category_name, COUNT(*) AS product_count FROM product.products p JOIN product.categories c ON c.id = p.category_id GROUP BY c.name ORDER BY c.name",
+        "expected_tables": [
+          "product.products",
+          "product.categories"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 16,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-105",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT level, COUNT(*) AS customer_count FROM customer.customers GROUP BY level ORDER BY level",
+        "expected_tables": [
+          "customer.customers"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 18,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-106",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT SUM(total_amount) AS total_amount FROM \"order\".orders WHERE created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month' AND created_at < date_trunc('month', CURRENT_DATE)",
+        "expected_tables": [
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 65,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-107",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT created_at::date AS refund_date, COUNT(*) AS refund_count FROM \"order\".refunds WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' GROUP BY 1 ORDER BY 1",
+        "expected_tables": [
+          "order.refunds"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 16,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-108",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT SUM(total_amount) AS total_amount FROM \"order\".orders WHERE created_at >= '2026-04-01' AND created_at < '2026-07-01'",
+        "expected_tables": [
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 18,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-109",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, SUM(oi.quantity) AS total_qty FROM \"order\".order_items oi JOIN \"order\".orders o ON o.id = oi.order_id JOIN product.products p ON p.id = oi.product_id WHERE o.status <> 'cancelled' GROUP BY p.product_name ORDER BY total_qty DESC LIMIT 5",
+        "expected_tables": [
+          "order.order_items",
+          "order.orders",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 63,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-110",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT brand, AVG(sale_price) AS avg_price FROM product.products GROUP BY brand ORDER BY avg_price DESC LIMIT 1",
+        "expected_tables": [
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 23,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-111",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT DISTINCT ON (c.name) c.name AS category_name, p.product_name, p.sale_price FROM product.products p JOIN product.categories c ON c.id = p.category_id ORDER BY c.name, p.sale_price DESC",
+        "expected_tables": [
+          "product.products",
+          "product.categories"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 25,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-112",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT ROUND(((SELECT COALESCE(SUM(total_amount), 0) FROM \"order\".orders WHERE created_at >= date_trunc('month', CURRENT_DATE)) - (SELECT COALESCE(SUM(total_amount), 0) FROM \"order\".orders WHERE created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month' AND created_at < date_trunc('month', CURRENT_DATE))) / NULLIF((SELECT SUM(total_amount) FROM \"order\".orders WHERE created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month' AND created_at < date_trunc('month', CURRENT_DATE)), 0), 4) AS mom_growth",
+        "expected_tables": [
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 62,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-113",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT c.name, SUM(o.total_amount) AS total_spent FROM \"order\".orders o JOIN customer.customers c ON c.id = o.customer_id GROUP BY c.name ORDER BY total_spent DESC LIMIT 10",
+        "expected_tables": [
+          "order.orders",
+          "customer.customers"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 22,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-114",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, w.name AS warehouse_name FROM inventory.inventory i JOIN product.products p ON p.id = i.product_id JOIN inventory.warehouses w ON w.id = i.warehouse_id WHERE i.stock_quantity < i.safety_stock",
+        "expected_tables": [
+          "inventory.inventory",
+          "product.products",
+          "inventory.warehouses"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 21,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-115",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, SUM(oi.quantity) AS total_qty FROM \"order\".order_items oi JOIN product.products p ON p.id = oi.product_id GROUP BY p.product_name HAVING SUM(oi.quantity) > 100",
+        "expected_tables": [
+          "order.order_items",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 51,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-116",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name FROM product.products p WHERE NOT EXISTS (SELECT 1 FROM \"order\".order_items oi WHERE oi.product_id = p.id)",
+        "expected_tables": [
+          "product.products",
+          "order.order_items"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 28,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-117",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, ROUND(COALESCE(r.refund_amt, 0) / NULLIF(s.sales_amt, 0), 4) AS refund_rate FROM product.products p JOIN (SELECT product_id, SUM(quantity * price) AS sales_amt FROM \"order\".order_items GROUP BY product_id) s ON s.product_id = p.id LEFT JOIN (SELECT product_id, SUM(refund_amount) AS refund_amt FROM \"order\".refunds GROUP BY product_id) r ON r.product_id = p.id WHERE COALESCE(r.refund_amt, 0) > 0 ORDER BY refund_rate DESC LIMIT 1",
+        "expected_tables": [
+          "product.products",
+          "order.order_items",
+          "order.refunds"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 27,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-118",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT date_trunc('month', date)::date AS month, SUM(profit) AS profit FROM finance.daily_profit GROUP BY 1 ORDER BY profit DESC LIMIT 1",
+        "expected_tables": [
+          "finance.daily_profit"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 50,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-119",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, SUM(oi.quantity) AS total_qty FROM \"order\".order_items oi JOIN \"order\".orders o ON o.id = oi.order_id JOIN product.products p ON p.id = oi.product_id WHERE o.status <> 'cancelled' GROUP BY p.product_name ORDER BY total_qty DESC LIMIT 5",
+        "expected_tables": [
+          "order.order_items",
+          "order.orders",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 100,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-120",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT cp.product_name, COUNT(*) AS bad_review_count FROM crawler.product_reviews pr JOIN crawler.competitor_products cp ON cp.id = pr.product_id WHERE pr.rating <= 2 GROUP BY cp.product_name ORDER BY bad_review_count DESC LIMIT 1",
+        "expected_tables": [
+          "crawler.product_reviews",
+          "crawler.competitor_products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 43,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-121",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT m.month, ROUND(m.refund_amt / NULLIF(s.sales_amt, 0), 4) AS refund_rate FROM (SELECT to_char(created_at, 'YYYY-MM') AS month, SUM(refund_amount) AS refund_amt FROM \"order\".refunds WHERE created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month' GROUP BY 1) m JOIN (SELECT to_char(created_at, 'YYYY-MM') AS month, SUM(total_amount) AS sales_amt FROM \"order\".orders GROUP BY 1) s ON s.month = m.month ORDER BY m.month",
+        "expected_tables": [
+          "order.refunds",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 67,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-122",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT c.name, MAX(o.created_at) AS last_order_at FROM customer.customers c JOIN \"order\".orders o ON o.customer_id = c.id GROUP BY c.name ORDER BY c.name",
+        "expected_tables": [
+          "customer.customers",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 21,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-123",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT c.name FROM customer.customers c WHERE NOT EXISTS (SELECT 1 FROM \"order\".orders o WHERE o.customer_id = c.id AND o.created_at >= date_trunc('year', CURRENT_DATE))",
+        "expected_tables": [
+          "customer.customers",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 67,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-124",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.brand, SUM(oi.quantity * oi.price) AS sales_amount FROM \"order\".order_items oi JOIN product.products p ON p.id = oi.product_id JOIN \"order\".orders o ON o.id = oi.order_id WHERE p.brand IN ('华为', '小米') AND o.status <> 'cancelled' GROUP BY p.brand ORDER BY sales_amount DESC",
+        "expected_tables": [
+          "order.order_items",
+          "product.products",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 33,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-125",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name, SUM(oi.quantity * oi.price) AS sales_amount FROM \"order\".order_items oi JOIN product.products p ON p.id = oi.product_id WHERE p.category_id = (SELECT p2.category_id FROM \"order\".order_items oi2 JOIN product.products p2 ON p2.id = oi2.product_id GROUP BY p2.category_id ORDER BY SUM(oi2.quantity * oi2.price) DESC LIMIT 1) GROUP BY p.product_name ORDER BY sales_amount DESC LIMIT 3",
+        "expected_tables": [
+          "order.order_items",
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 61,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-126",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT c.name, SUM(r.refund_amount) AS refund_total FROM \"order\".refunds r JOIN \"order\".orders o ON o.id = r.order_id JOIN customer.customers c ON c.id = o.customer_id WHERE r.created_at >= CURRENT_DATE - INTERVAL '30 days' GROUP BY c.name HAVING SUM(r.refund_amount) > 1000",
+        "expected_tables": [
+          "order.refunds",
+          "order.orders",
+          "customer.customers"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 20,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-127",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT SUM(oi.quantity) / NULLIF(EXTRACT(DAY FROM CURRENT_DATE), 0) AS avg_daily_qty FROM \"order\".order_items oi JOIN \"order\".orders o ON o.id = oi.order_id WHERE o.created_at >= date_trunc('month', CURRENT_DATE)",
+        "expected_tables": [
+          "order.order_items",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 25,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-128",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT COUNT(*) AS order_count FROM \"order\".orders WHERE created_at >= (CURRENT_DATE - INTERVAL '1 day')::date + INTERVAL '20 hours' AND created_at < CURRENT_DATE",
+        "expected_tables": [
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 59,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-129",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT p.product_name FROM inventory.inventory i JOIN product.products p ON p.id = i.product_id WHERE i.stock_quantity < i.safety_stock AND EXISTS (SELECT 1 FROM \"order\".order_items oi JOIN \"order\".orders o ON o.id = oi.order_id WHERE oi.product_id = p.id AND o.created_at >= CURRENT_DATE - INTERVAL '30 days')",
+        "expected_tables": [
+          "inventory.inventory",
+          "product.products",
+          "order.order_items",
+          "order.orders"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 26,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    },
+    {
+      "case_id": "SC-130",
+      "module": "sql",
+      "status": "fail",
+      "expected": {
+        "gold_sql": "SELECT product_name FROM product.products WHERE product_name ILIKE '%pro%' AND brand <> '华为'",
+        "expected_tables": [
+          "product.products"
+        ],
+        "should_reject": false
+      },
+      "actual": {
+        "status": "failed",
+        "error": "查询失败: 请求预算已超限: request_calls",
+        "sql": null
+      },
+      "metrics": {
+        "router_hit": 0.0,
+        "safety_pass": 0.0,
+        "execution_match": null
+      },
+      "duration_ms": 70,
+      "error_msg": "查询失败 status=failed: 查询失败: 请求预算已超限: request_calls",
+      "error_stage": null
+    }
+  ],
+  "total_score": null,
+  "tier_summaries": [
+    {
+      "tier": "smoke",
+      "total": 9,
+      "passed": 3,
+      "failed": 6,
+      "pass_rate": 0.3333,
+      "threshold": 0.95,
+      "passed_threshold": false,
+      "errors": 0,
+      "skipped": 0,
+      "valid_samples": 9,
+      "min_samples": 8,
+      "passed_min_samples": true,
+      "gate_reasons": [
+        "通过率 33.3% 低于阈值 95.0%"
+      ]
+    },
+    {
+      "tier": "core",
+      "total": 25,
+      "passed": 2,
+      "failed": 23,
+      "pass_rate": 0.08,
+      "threshold": 0.85,
+      "passed_threshold": false,
+      "errors": 0,
+      "skipped": 0,
+      "valid_samples": 25,
+      "min_samples": 8,
+      "passed_min_samples": true,
+      "gate_reasons": [
+        "通过率 8.0% 低于阈值 85.0%"
+      ]
+    },
+    {
+      "tier": "hard",
+      "total": 11,
+      "passed": 0,
+      "failed": 11,
+      "pass_rate": 0.0,
+      "threshold": 0.7,
+      "passed_threshold": false,
+      "errors": 0,
+      "skipped": 0,
+      "valid_samples": 11,
+      "min_samples": 8,
+      "passed_min_samples": true,
+      "gate_reasons": [
+        "通过率 0.0% 低于阈值 70.0%"
+      ]
+    }
+  ],
+  "metadata": {
+    "run_id": "2026-10-06T04-07-56-6c5034",
+    "evaluator_mode": "self+ragas",
+    "buckets": {
+      "by_domain": {
+        "product": {
+          "total": 11,
+          "passed": 1,
+          "failed": 10,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0909
+        },
+        "inventory": {
+          "total": 4,
+          "passed": 0,
+          "failed": 4,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "after_sales": {
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "order": {
+          "total": 15,
+          "passed": 1,
+          "failed": 14,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0667
+        },
+        "crawler": {
+          "total": 4,
+          "passed": 2,
+          "failed": 2,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.5
+        },
+        "finance": {
+          "total": 2,
+          "passed": 1,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.5
+        },
+        "customer": {
+          "total": 7,
+          "passed": 0,
+          "failed": 7,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "policy": {
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "total": 6,
+          "passed": 4,
+          "failed": 2,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.6667
+        },
+        "medium": {
+          "total": 35,
+          "passed": 1,
+          "failed": 34,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0286
+        },
+        "hard": {
+          "total": 4,
+          "passed": 0,
+          "failed": 4,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        }
+      },
+      "by_query_type": {
+        "single_table": {
+          "total": 5,
+          "passed": 2,
+          "failed": 3,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.4
+        },
+        "join": {
+          "total": 7,
+          "passed": 0,
+          "failed": 7,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "join_aggregate": {
+          "total": 4,
+          "passed": 1,
+          "failed": 3,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.25
+        },
+        "time_window": {
+          "total": 2,
+          "passed": 2,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 1.0
+        },
+        "adversarial": {
+          "total": 3,
+          "passed": 0,
+          "failed": 3,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "multi_domain": {
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "aggregate_order": {
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "aggregate": {
+          "total": 7,
+          "passed": 0,
+          "failed": 7,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "time_semantic": {
+          "total": 7,
+          "passed": 0,
+          "failed": 7,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "rank": {
+          "total": 2,
+          "passed": 0,
+          "failed": 2,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "window": {
+          "total": 1,
+          "passed": 0,
+          "failed": 1,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "subquery": {
+          "total": 3,
+          "passed": 0,
+          "failed": 3,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        },
+        "negative": {
+          "total": 2,
+          "passed": 0,
+          "failed": 2,
+          "errors": 0,
+          "skipped": 0,
+          "pass_rate": 0.0
+        }
+      }
+    },
+    "ragas_samples": {
+      "valid": 0,
+      "invalid": 0
+    },
+    "ragas_degraded": false,
+    "ragas_config": {
+      "kind": "ragas",
+      "level": "standard",
+      "temperature": 0,
+      "temperature_source": "ragas_bridge.get_eval_chat_model(temperature=0)",
+      "seed_support": false,
+      "case_timeout_s": 180,
+      "metric_retries": 2,
+      "ragas_version": "not_installed",
+      "model": "doubao-seed-2.0-mini",
+      "provider": "custom-doubao-seed-2-0-mini"
+    },
+    "eval_provenance": {
+      "suite": "golden_v2",
+      "dataset_version": null,
+      "kb_id": "",
+      "fixture_set": "",
+      "version_id": "",
+      "multiquery": false,
+      "prompt_snapshot": {
+        "memory_trigger": "unversioned",
+        "context_followup_rewrite": "unversioned",
+        "customer_service_supervisor": "unversioned",
+        "rag_preprocessing_metadata_extract": "unversioned",
+        "planner_critique": "unversioned",
+        "competitor_extractor": "unversioned",
+        "selection_recommender_reason": "unversioned",
+        "rag_preprocessing_summary": "unversioned",
+        "evaluation_judge_user": "unversioned",
+        "rag_preprocessing_doc_ollama": "unversioned",
+        "reporter_summary": "unversioned",
+        "rag_guardrails_rewrite": "unversioned",
+        "memory_long_term_fact_extraction": "unversioned",
+        "customer_service_query_intent": "unversioned",
+        "rag_preprocessing_chunk_batch": "unversioned",
+        "memory_auto_compact": "unversioned",
+        "travel_llm_intent": "unversioned",
+        "rag_preprocessing_chunk_single": "unversioned",
+        "customer_service_system": "unversioned",
+        "selection_decision_differentiation": "unversioned",
+        "rag_qa": "unversioned",
+        "sql_generator": "unversioned",
+        "sql_router": "unversioned",
+        "router_tool_selector": "unversioned",
+        "skill_business_analysis": "unversioned",
+        "customer_service_answer": "unversioned",
+        "rag_preprocessing_llm_enrichment": "unversioned",
+        "general_chat_system": "unversioned",
+        "rag_preprocessing_arbitration": "unversioned",
+        "router_llm": "unversioned",
+        "selection_decision_review_pain": "unversioned",
+        "rag_contextualize": "unversioned",
+        "customer_service_chat_fallback": "unversioned",
+        "reporter_system": "unversioned",
+        "rag_guardrails_judge": "unversioned",
+        "business_report_polish": "unversioned",
+        "capability_inventory_analyzer": "unversioned",
+        "rag_multi_query": "unversioned",
+        "memory_session_summary": "unversioned",
+        "customer_service_complaint_assess": "unversioned",
+        "rag_preprocessing_doc_proxy": "unversioned",
+        "selection_panel_vote": "unversioned",
+        "market_research_analyzer": "unversioned",
+        "planner_system": "unversioned",
+        "rag_document": "unversioned",
+        "rag_indexing_doc_type": "unversioned",
+        "customer_service_redirect_main": "unversioned",
+        "rag_evidence_gate_self_correction": "unversioned"
+      },
+      "release_id": "",
+      "model_binding_fingerprint": "ec0e3ebef5dd4853",
+      "tool_contract_fingerprint": "09b9c98599d702f9",
+      "git_sha": "unknown"
+    },
+    "evaluation_snapshot_inputs": {
+      "suite": {
+        "name": "golden_v2",
+        "dataset_version": "",
+        "suite_content_hash": "",
+        "cases_hash": "b4c28d9e3288fc4b"
+      },
+      "prompt_versions": {},
+      "prompt_template_hashes": {},
+      "model_config": {
+        "binding_fingerprint": "ec0e3ebef5dd4853",
+        "eval_model": {
+          "model": "doubao-seed-2.0-mini",
+          "provider": "custom-doubao-seed-2-0-mini"
+        }
+      },
+      "retrieval_config": {
+        "top_k": 5,
+        "metadata_cascade_l1_top_k": 4,
+        "multiquery_top_k_per": 5,
+        "rerank_score_threshold": 0.3,
+        "multiquery": false
+      },
+      "judge_config": {},
+      "ragas_config": {
+        "kind": "ragas",
+        "level": "standard",
+        "temperature": 0,
+        "temperature_source": "ragas_bridge.get_eval_chat_model(temperature=0)",
+        "seed_support": false,
+        "case_timeout_s": 180,
+        "metric_retries": 2,
+        "ragas_version": "not_installed",
+        "model": "doubao-seed-2.0-mini",
+        "provider": "custom-doubao-seed-2-0-mini"
+      },
+      "tool_contract_fingerprint": "09b9c98599d702f9",
+      "corpus_version_id": "",
+      "git_sha": "unknown",
+      "threshold_snapshot": {
+        "tier_thresholds": {
+          "smoke": 0.95,
+          "core": 0.85,
+          "hard": 0.7,
+          "regression": 1.0,
+          "all": 0.85
+        },
+        "min_samples": null,
+        "min_valid_samples": null
+      }
+    },
+    "evaluation_snapshot_hash": "e3ccada456194e67",
+    "attempt_no": 1,
+    "run_guards": {
+      "case_timeout_s": 0,
+      "batch_deadline_s": 0,
+      "run_token_soft_limit": 0,
+      "run_token_hard_limit": 0,
+      "evaluator_token_limit": 0,
+      "token_accounting": "in_process_counters_only",
+      "budget_block_enabled": false,
+      "budget_tenant_id": "default",
+      "provider_breaker": {
+        "threshold": 5,
+        "window_s": 60,
+        "cooldown_s": 300
+      },
+      "judge_workers": 2,
+      "stop_reason": ""
+    }
+  },
+  "prompt_versions": {},
+  "run_id": "2026-10-06T04-07-56-6c5034"
+}
