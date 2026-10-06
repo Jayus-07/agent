@@ -613,6 +613,7 @@ class RerankCompressor(BaseDocumentCompressor):
                         self.__dict__['_backend_type'] = "local"
 
     def compress_documents(self, documents, query, **kwargs):
+        from backend.observability.metrics import record_rag_stage
         from backend.observability.tracer import trace_collector
 
         # 后端懒加载提前到 span 之前，确保 span name 正确
@@ -627,6 +628,7 @@ class RerankCompressor(BaseDocumentCompressor):
             trace_collector.end_span(span,
                                      metrics={"input_docs": 0, "output_docs": 0,
                                              "threshold": self.threshold, "backend_type": self._backend_type})
+            record_rag_stage("rerank", span.duration_ms)
             return []
 
         # 小文档集合跳过 rerank API 调用（≤2 篇排序无意义）
@@ -636,6 +638,7 @@ class RerankCompressor(BaseDocumentCompressor):
             trace_collector.end_span(span,
                                      metrics={"input_docs": len(documents), "output_docs": len(documents),
                                              "backend_type": self._backend_type, "skipped": "small_n"})
+            record_rag_stage("rerank", span.duration_ms)
             return list(documents)
 
         in_count = len(documents)
@@ -683,6 +686,7 @@ class RerankCompressor(BaseDocumentCompressor):
                                          "output_docs": len(result_docs),
                                          "threshold": RERANK_SCORE_THRESHOLD,
                                          "backend_type": self._backend_type})
+            record_rag_stage("rerank", span.duration_ms)
             return result_docs
 
         except Exception as e:
@@ -694,6 +698,7 @@ class RerankCompressor(BaseDocumentCompressor):
                                            "fallback": "passthrough",
                                            "error": str(e)[:100]},
                                    status="error")
+            record_rag_stage("rerank", span.duration_ms)
             logger.error(f"RerankCompressor 重排失败，降级透传原文档：{e}")
             # 降级契约：重排是增强组件，失败不得减少召回数量 —— 透传原文档，
             # 由下游 Evidence Gate 基于其他信号判定，而非静默清空触发误拒答

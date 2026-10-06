@@ -3,6 +3,11 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    # 注意（2026-10-06 观测重构）：不要给已存在的 Prometheus 数据源补 uid——
+    # 实测 Grafana 13 provisioning 对存量 DS 改 uid 会卡死启动
+    # （Datasource provisioning error: data source not found）。
+    # Dashboard JSON 统一引用自动生成的确定性 uid PBFA97CFB590B2093
+    # （Grafana 对 name 的 hash，同 name 恒同值）。
     access: proxy
     url: http://prometheus:9090
     isDefault: true

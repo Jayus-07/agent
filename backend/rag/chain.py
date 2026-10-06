@@ -532,10 +532,14 @@ class RAGChain:
             # 十几秒全部计入了"检索"。
             try:
                 retrieval_metrics = _build_retrieval_span_metrics(context_docs)
-                trace_collector.end_open_span(
+                ret_span = trace_collector.end_open_span(
                     "retrieval",
                     metrics={"retrieved_chunks": len(context_docs),
                              **retrieval_metrics})
+                # 观测重构（2026-10-06）：检索阶段长期时序（span 即真实边界）
+                if ret_span is not None:
+                    from backend.observability.metrics import record_rag_stage
+                    record_rag_stage("retrieve", ret_span.duration_ms)
             except Exception:
                 logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
             if not context_docs:
@@ -640,9 +644,14 @@ class RAGChain:
                     f"r_type={type(r).__name__} "
                     f"content_repr={repr(getattr(r, 'content', r))[:80]}")
                 trace_collector.end_span(llm_span, metrics=metrics)
+                # 观测重构（2026-10-06）：生成阶段长期时序
+                from backend.observability.metrics import record_rag_stage
+                record_rag_stage("generate", llm_span.duration_ms)
                 return r
             except Exception:
                 trace_collector.end_span(llm_span, status="error")
+                from backend.observability.metrics import record_rag_stage
+                record_rag_stage("generate", llm_span.duration_ms)
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
 
@@ -730,9 +739,17 @@ class RAGChain:
             set_context(ctx)
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
-            return self._respond(result, trace, question, session_id, t_total)
+            answer = self._respond(result, trace, question, session_id, t_total)
+            # 观测重构（2026-10-06）：全链耗时长线（含 verify/gate）
+            import time as _time
+            from backend.observability.metrics import record_rag_stage
+            record_rag_stage("total", (_time.time() - t_total) * 1000)
+            return answer
         except Exception:
             self._finish_error(trace, t_total)
+            from backend.observability.metrics import record_rag_stage
+            import time as _time
+            record_rag_stage("total", (_time.time() - t_total) * 1000)
             raise
 
     def _start(self, question: str, session_id: str):

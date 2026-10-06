@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import json
+import time
 from typing import Any
 
 from backend.infra.cache import get_cache
@@ -180,14 +181,17 @@ class RoutingEngine:
             decision = RouteDecision(**cached)
             meta = dict(decision.routing_meta or {})
             meta["cache"] = "hit"
-            return decision.model_copy(update={
+            out = decision.model_copy(update={
                 "route_mode": decision.route_mode
                 or meta.get("route_mode")
                 or decision.execution_mode.value,
                 "routing_meta": meta,
             })
+            self._record_decision_metrics(out, 0.0, verdict="cache_hit")
+            return out
 
         self._record_cache("miss")
+        _t0 = time.monotonic()
         decision = self._route_uncached(
             query,
             state,
@@ -200,6 +204,7 @@ class RoutingEngine:
                 from backend.shared.logger import logger
 
                 logger.debug("[RoutingEngine] 写入路由缓存失败，不影响决策", exc_info=True)
+        self._record_decision_metrics(decision, (time.monotonic() - _t0) * 1000)
         return decision
 
     def _route_uncached(
@@ -440,6 +445,40 @@ class RoutingEngine:
             from backend.shared.logger import logger
 
             logger.debug("[RoutingEngine] 路由降级指标记录失败", exc_info=True)
+
+    @staticmethod
+    def _record_decision_metrics(decision: Any, latency_ms: float,
+                                 verdict: str = "") -> None:
+        """观测重构（2026-10-06）：每次决策统一写看板指标（软失败）。
+
+        复活收口后无人写的 router_decision_total / router_layer_total /
+        router_confidence / routing_domain_total / routing_hierarchy_verdict_total
+        / routing_latency_seconds。verdict 缺省取 routing_meta.decision_source。
+        """
+        try:
+            from backend.observability.metrics import (
+                record_routing_engine_decision,
+            )
+
+            meta = decision.routing_meta or {}
+            source = (meta.get("intent_source") or meta.get("domain_source")
+                      or meta.get("decision_source") or "")
+            v = verdict or str(meta.get("decision_source") or "routing_engine")
+            confidence = (meta.get("intent_confidence")
+                          if meta.get("intent_confidence") is not None
+                          else meta.get("domain_confidence")) or 0.0
+            record_routing_engine_decision(
+                mode=getattr(decision, "route_mode", "") or meta.get("route_mode") or "",
+                source=str(source),
+                domain=str(meta.get("domain") or "unknown"),
+                confidence=float(confidence),
+                verdict=v,
+                latency_ms=latency_ms,
+            )
+        except Exception:
+            from backend.shared.logger import logger
+
+            logger.debug("[RoutingEngine] 决策指标记录失败", exc_info=True)
 
     @staticmethod
     def _from_route_decision(

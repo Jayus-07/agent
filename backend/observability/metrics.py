@@ -800,6 +800,19 @@ agent_tool_error_class_total = Counter(
     "success 不计）",
     labelnames=("tool", "domain", "error_class"),
 )
+# 旅游域 Failure Policy 结局指标（2026-10-07 Tool 失败降级改造）：调用/失败/
+# 重试/熔断由 agent_tool_* 族按 domain=travel 覆盖，这里只补工作流结局维度。
+# 标签全部受控词表（tool 名 / provider 常量），禁 conversation_id 等高基数。
+travel_tool_degraded_total = Counter(
+    "travel_tool_degraded_total",
+    "旅游域 Tool 降级次数（外部数据源失败但业务继续，行程已生成）",
+    labelnames=("tool", "provider"),
+)
+travel_tool_blocked_total = Counter(
+    "travel_tool_blocked_total",
+    "旅游域硬依赖阻断次数（依赖无法验证，Workflow 终止）",
+    labelnames=("tool", "provider"),
+)
 agent_request_degraded_total = Counter(
     "agent_request_degraded_total",
     "业务结果为 degraded 的请求数",
@@ -1040,6 +1053,49 @@ def record_router_cache(result: str) -> None:
         router_cache_total.labels(
             result=result if result in {"hit", "miss"} else "miss",
         ).inc()
+    except Exception:
+        pass
+
+
+# RoutingEngine 收口（2026-10-05）后旧分层指标无人写的补埋点
+# （2026-10-06 Grafana 观测重构）：证据源 → rule|embedding|llm 低基数归并，
+# 未知源归 other，禁止把自由文本放进 layer。
+_LAYER_ALIASES = {
+    "rule": "rule", "regex": "rule", "rule_override": "rule",
+    "rule_intent": "rule", "keyword": "rule",
+    "vector": "embedding", "embedding": "embedding",
+    "vector_index": "embedding", "vector_store": "embedding",
+    "llm": "llm", "llm_selector": "llm", "llm_fallback": "llm",
+    "llm_intent": "llm",
+}
+
+
+def record_routing_engine_decision(
+    *,
+    mode: str,
+    source: str,
+    domain: str,
+    confidence: float,
+    verdict: str,
+    latency_ms: float,
+) -> None:
+    """RoutingEngine 每次决策的统一观测出口（engine.route() 出口调用；软失败）。
+
+    复活收口后无人写的看板指标：router_decision_total / router_layer_total /
+    router_confidence / routing_domain_total / routing_hierarchy_verdict_total
+    + routing_latency_seconds{stage=hierarchical_total}。只做记账，
+    不参与任何路由决策。
+    """
+    try:
+        layer = _LAYER_ALIASES.get(str(source or "").lower(), "other")
+        router_decision_total.labels(mode=str(mode or "unknown")).inc()
+        router_layer_total.labels(layer=layer).inc()
+        router_confidence.observe(min(max(float(confidence or 0.0), 0.0), 1.0))
+        routing_domain_total.labels(
+            domain=str(domain or "unknown"), source=layer).inc()
+        routing_hierarchy_verdict_total.labels(verdict=str(verdict or "-")).inc()
+        routing_latency_seconds.labels(stage="hierarchical_total").observe(
+            max(float(latency_ms or 0), 1) / 1000)
     except Exception:
         pass
 
@@ -1679,6 +1735,7 @@ __all__ = [
     "record_router_decision",
     "record_router_fallback",
     "record_router_cache",
+    "record_routing_engine_decision",
     "record_trace_finish",
     # FC 工具选择指标
     "tool_selector_total",

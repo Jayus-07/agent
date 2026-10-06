@@ -65,7 +65,7 @@ def require_internal_boot(token: str | None = None,
 
 require_internal_boot()
 
-_INTERNAL_OPEN_PATHS = {"/healthz", "/readyz", "/docs", "/redoc", "/openapi.json"}
+_INTERNAL_OPEN_PATHS = {"/healthz", "/readyz", "/metrics", "/docs", "/redoc", "/openapi.json"}
 
 @app.middleware("http")
 async def _check_internal_token(request, call_next):
@@ -533,6 +533,23 @@ def reconcile_index_snapshot() -> dict[str, Any]:
 def healthz() -> dict[str, str]:
     """liveness：进程活着即 200（初始化中也算活）。"""
     return {"status": "ok", "service": "rag-service"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint() -> Any:
+    """Prometheus 指标出口（2026-10-06 观测重构）。
+
+    remote 模式下 RAG 链（rag_query_total / rag_stage_duration_seconds /
+    rag_upload_total / rag_index_duration_seconds 等）全部运行在本进程，
+    此前无端点导致 Prometheus 抓不到——Grafana 04 页 RAG 指标整体断链。
+    与 app /metrics 同口径（observability.metrics 全局 registry）。
+    """
+    from fastapi import Response
+
+    from backend.observability.metrics import render_metrics
+
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/readyz")
