@@ -334,16 +334,21 @@ class StateTransitionService:
         return "not_required"
 
     async def _load_handoff_state(self, user_id: str, session_id: str) -> str:
+        """读 handoff 状态——STOP CS-A P0-6：直读 PostgreSQL。
+
+        此前 peek_l1 优先：dispatcher/reaper 进程写 PG 后本进程 L1 残留
+        旧值，图内 supervisor 拦截判定会滞后一整个关单周期（AI 拒答/漏
+        转人工）。现在 handoff 关键状态每轮直读 PG（同 loop await 无嵌套
+        桥接），L1 仅在读后回填作展示加速。
+        """
         from backend.customer_service.handoff_store import get_handoff_store
         store = get_handoff_store()
-        data = store.peek_l1(user_id, session_id)
-        if data is None:
-            try:
-                data = await store._async_load(user_id, session_id)
-                if data is not None:
-                    store.cache_l1(user_id, session_id, data)
-            except Exception:
-                data = None
+        try:
+            data = await store._async_load(user_id, session_id)
+            if data is not None:
+                store.cache_l1(user_id, session_id, data)
+        except Exception:
+            data = None
         if data:
             return data.get("handoff_state", "ai_active")
         return "ai_active"

@@ -29,6 +29,7 @@ from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
 from backend.customer_service.models.event import CSEvent
 from backend.customer_service.models.handoff import CSHandoff
+from backend.customer_service.models.message import CSMessage
 
 _WAITING_STATE = "waiting_human"
 _OFFERED_STATE = "agent_offered"
@@ -507,6 +508,83 @@ def lock_overdue_waiting_handoff_stmt(
     )
 
 
+# ── STOP CS-A P0-5：human_active 自愈（坐席离线超时送回重派）────────
+
+
+def human_active_candidates_stmt(*, now: datetime, limit: int) -> Select:
+    """human_active 且最后活动已超过阈值的工单（无锁候选）。
+
+    「最后活动」= 该会话最后一条坐席消息（无消息则用工单 updated_at）；
+    presence 离线判定在 Redis（reaper 层），候选只按时间预算粗筛。
+    """
+    last_agent_msg = (
+        select(CSMessage.created_at)
+        .where(
+            CSMessage.conversation_id == CSHandoff.conversation_id,
+            CSMessage.sender_type == "human_agent",
+        )
+        .order_by(CSMessage.created_at.desc())
+        .limit(1)
+        .correlate(CSHandoff)
+        .scalar_subquery()
+    )
+    return (
+        select(
+            CSHandoff.tenant_id,
+            CSHandoff.handoff_id,
+            CSHandoff.conversation_id,
+            CSHandoff.assigned_agent_id,
+            CSHandoff.assignment_version,
+        )
+        .where(
+            CSHandoff.handoff_state == "human_active",
+            CSHandoff.assigned_agent_id.is_not(None),
+            func.coalesce(last_agent_msg, CSHandoff.updated_at) <= now,
+        )
+        .order_by(CSHandoff.updated_at.asc(), CSHandoff.id.asc())
+        .limit(limit)
+    )
+
+
+def lock_stale_human_active_handoff_stmt(
+    *,
+    tenant_id: str,
+    handoff_id: str,
+    assigned_agent_id: str,
+    assignment_version: int,
+) -> Select:
+    """锁内 CAS 复核：状态/坐席/版本全部仍匹配才允许自愈。
+
+    assignment_version 参与 CAS —— 坐席侧并发操作（accept/重派）会推进
+    版本，旧候选的恢复直接落空（SKIP LOCKED 等下一轮）。
+    """
+    return (
+        select(CSHandoff)
+        .where(
+            CSHandoff.tenant_id == tenant_id,
+            CSHandoff.handoff_id == handoff_id,
+            CSHandoff.handoff_state == "human_active",
+            CSHandoff.assigned_agent_id == assigned_agent_id,
+            CSHandoff.assignment_version == assignment_version,
+        )
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+
+
+def last_human_agent_message_at_stmt(*, conversation_id: str) -> Select:
+    """该会话最后一条坐席消息时间（锁内复核 grace 用）。"""
+    return (
+        select(CSMessage.created_at)
+        .where(
+            CSMessage.conversation_id == conversation_id,
+            CSMessage.sender_type == "human_agent",
+        )
+        .order_by(CSMessage.created_at.desc())
+        .limit(1)
+    )
+
+
 def active_assignments_for_handoff_stmt(*, tenant_id: str, handoff_id: str) -> Select:
     """锁定该工单当前的活动 assignment（offered|accepted）。"""
     return (
@@ -559,6 +637,53 @@ async def lock_overdue_waiting_handoff(
         )
     )
     return result.scalars().first()
+
+
+async def list_human_active_candidates(
+    session: AsyncSession, *, now: datetime, limit: int
+) -> list[dict]:
+    """human_active 自愈候选（无锁预读，逐行锁内 CAS 复核）。"""
+    result = await session.execute(
+        human_active_candidates_stmt(now=now, limit=limit)
+    )
+    return [
+        {
+            "tenant_id": str(row[0]),
+            "handoff_id": str(row[1]),
+            "conversation_id": str(row[2]),
+            "assigned_agent_id": str(row[3]),
+            "assignment_version": int(row[4] or 0),
+        }
+        for row in result.all()
+    ]
+
+
+async def lock_stale_human_active_handoff(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    handoff_id: str,
+    assigned_agent_id: str,
+    assignment_version: int,
+) -> CSHandoff | None:
+    result = await session.execute(
+        lock_stale_human_active_handoff_stmt(
+            tenant_id=tenant_id,
+            handoff_id=handoff_id,
+            assigned_agent_id=assigned_agent_id,
+            assignment_version=assignment_version,
+        )
+    )
+    return result.scalars().first()
+
+
+async def last_human_agent_message_at(
+    session: AsyncSession, *, conversation_id: str
+) -> datetime | None:
+    result = await session.execute(
+        last_human_agent_message_at_stmt(conversation_id=conversation_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def lock_active_assignments_for_handoff(

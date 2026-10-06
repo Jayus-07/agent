@@ -338,18 +338,34 @@ class TestComplaintExpert:
         mock_get_svc.return_value = mock_svc
 
         mock_store = MagicMock()
+        mock_store.get_active_by_conversation.return_value = None
         mock_get_store.return_value = mock_store
 
-        from backend.customer_service.experts.complaint import execute_complaint
+        # STOP CS-A P0-6：落盘走 lifecycle 唯一入口（store.save 不再是写路径）
+        entered = []
 
-        result = execute_complaint(
-            user_message="我要投诉！服务质量太差了！",
-            state={
-                "user_id": "user_123",
-                "session_id": "s1",
-                "conversation_id": "conv_1",
-            },
-        )
+        def _fake_enter(**kwargs):
+            entered.append(dict(kwargs))
+            return {
+                "handoff_id": "hex-1",
+                "handoff_state": "waiting_human",
+                "updated_at": "2026-10-07T00:00:00+00:00",
+            }
+
+        with patch(
+            "backend.customer_service.handoff.lifecycle.enter_waiting_handoff_sync",
+            _fake_enter,
+        ):
+            from backend.customer_service.experts.complaint import execute_complaint
+
+            result = execute_complaint(
+                user_message="我要投诉！服务质量太差了！",
+                state={
+                    "user_id": "user_123",
+                    "session_id": "s1",
+                    "conversation_id": "conv_1",
+                },
+            )
 
         assert result["status"] == "success"
         assert result["expert"] == "complaint"
@@ -358,7 +374,7 @@ class TestComplaintExpert:
         # P1 重构（2026-09-17）：投诉升级与显式转人工同流程 —— 直接落到
         # waiting_human 排队（此前卡 handoff_requested，坐席认领 409）
         assert result["data"]["handoff_state"] == "waiting_human"
-        mock_store.save.assert_called_once()
+        assert len(entered) == 1 and entered[0]["trigger_type"] == "complaint_escalation"
         mock_record.assert_called_once_with("complaint")
 
     @patch("backend.observability.metrics.record_cs_handoff")
@@ -410,18 +426,34 @@ class TestHandoffExpert:
 
         mock_store = MagicMock()
         mock_store.load.return_value = {"handoff_state": "ai_active"}
+        mock_store.get_active_by_conversation.return_value = None
         mock_get_store.return_value = mock_store
 
-        from backend.customer_service.experts.handoff import execute_handoff
+        # STOP CS-A P0-6：落盘走 lifecycle 唯一入口（单事务 + handling_mode 投影）
+        entered = []
 
-        result = execute_handoff(
-            user_message="转人工",
-            state={
-                "user_id": "user_123",
-                "session_id": "s1",
-                "conversation_id": "conv_1",
-            },
-        )
+        def _fake_enter(**kwargs):
+            entered.append(dict(kwargs))
+            return {
+                "handoff_id": "hex-1",
+                "handoff_state": "waiting_human",
+                "updated_at": "2026-10-07T00:00:00+00:00",
+            }
+
+        with patch(
+            "backend.customer_service.handoff.lifecycle.enter_waiting_handoff_sync",
+            _fake_enter,
+        ):
+            from backend.customer_service.experts.handoff import execute_handoff
+
+            result = execute_handoff(
+                user_message="转人工",
+                state={
+                    "user_id": "user_123",
+                    "session_id": "s1",
+                    "conversation_id": "conv_1",
+                },
+            )
 
         assert result["status"] == "success"
         assert result["expert"] == "handoff"
@@ -432,9 +464,8 @@ class TestHandoffExpert:
         assert result["data"]["handoff_state"] == "waiting_human"
         assert result["data"]["handling_mode"] == "human"
         assert result["data"]["ticket_id"].startswith("HANDOFF-")
-        # P1 重构（2026-09-17）：状态转换在内存完成，单次落盘最终态
-        # waiting_human（不再向 DB 暴露 handoff_requested 中间态）
-        assert mock_store.save.call_count == 1
+        # P0-6：单次持久化最终态 waiting_human（lifecycle 入口）
+        assert len(entered) == 1 and entered[0]["trigger_type"] == "explicit"
 
     @patch("backend.observability.metrics.record_cs_handoff")
     @patch("backend.customer_service.handoff.transition")
@@ -444,18 +475,27 @@ class TestHandoffExpert:
         mock_detect.return_value = None
         mock_store = MagicMock()
         mock_store.load.return_value = None
+        mock_store.get_active_by_conversation.return_value = None
         mock_get_store.return_value = mock_store
 
-        from backend.customer_service.experts.handoff import execute_handoff
-
-        result = execute_handoff(
-            user_message="",
-            state={
-                "user_id": "u1",
-                "session_id": "s1",
-                "conversation_id": "c1",
+        with patch(
+            "backend.customer_service.handoff.lifecycle.enter_waiting_handoff_sync",
+            lambda **kwargs: {
+                "handoff_id": "hex-1",
+                "handoff_state": "waiting_human",
+                "updated_at": "2026-10-07T00:00:00+00:00",
             },
-        )
+        ):
+            from backend.customer_service.experts.handoff import execute_handoff
+
+            result = execute_handoff(
+                user_message="",
+                state={
+                    "user_id": "u1",
+                    "session_id": "s1",
+                    "conversation_id": "c1",
+                },
+            )
 
         assert result["status"] == "success"
         assert result["data"]["trigger_type"] == "auto_trigger"
@@ -472,21 +512,30 @@ class TestHandoffExpert:
 
         mock_store = MagicMock()
         mock_store.load.return_value = {"handoff_state": "ai_active"}
+        mock_store.get_active_by_conversation.return_value = None
         mock_get_store.return_value = mock_store
 
-        from backend.customer_service.experts.handoff import handoff_expert_node
+        with patch(
+            "backend.customer_service.handoff.lifecycle.enter_waiting_handoff_sync",
+            lambda **kwargs: {
+                "handoff_id": "hex-1",
+                "handoff_state": "waiting_human",
+                "updated_at": "2026-10-07T00:00:00+00:00",
+            },
+        ):
+            from backend.customer_service.experts.handoff import handoff_expert_node
 
-        state = {
-            "user_message": "转人工",
-            "user_id": "u1",
-            "session_id": "s1",
-            "conversation_id": "c1",
-            "expert_history": [],
-            "cs_audit_entries": [],
-            "cs_context": {},
-        }
+            state = {
+                "user_message": "转人工",
+                "user_id": "u1",
+                "session_id": "s1",
+                "conversation_id": "c1",
+                "expert_history": [],
+                "cs_audit_entries": [],
+                "cs_context": {},
+            }
 
-        output = handoff_expert_node(state)
+            output = handoff_expert_node(state)
         assert output["last_expert_result"]["expert"] == "handoff"
         # 2026-09-17：创建后立即流转 waiting_human（排队），见上例说明
         assert output["cs_context"]["handoff_state"] == "waiting_human"

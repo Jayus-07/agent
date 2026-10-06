@@ -177,21 +177,23 @@ def execute_complaint(
     handoff_transition(
         HandoffState.HANDOFF_REQUESTED, HandoffState.WAITING_HUMAN,
     )
-    from datetime import datetime, timezone as _tz
 
-    _now = datetime.now(_tz.utc).isoformat()
-    handoff_data = {
-        "handoff_state": HandoffState.WAITING_HUMAN.value,
-        "trigger_type": "complaint_escalation",
-        "trigger_reason": f"投诉升级: severity={detection.severity}",
-        "ticket_id": ticket.ticket_id,
-        "created_at": _now,
-        "updated_at": _now,
-    }
-    from backend.customer_service.handoff_store import get_handoff_store
+    # STOP CS-A P0-6：与 HandoffExpert 同走 lifecycle 唯一入口 ——
+    # 单事务建 waiting_human 工单 + conversations.handling_mode 投影同写
+    # （旧 store.save 只写 handoffs 行，是双表口径分叉的两处之一）。
+    from backend.customer_service.handoff.lifecycle import (
+        enter_waiting_handoff_sync,
+    )
 
-    store = get_handoff_store()
-    store.save(user_id, session_id, handoff_data)
+    _tenant_id = str(state.get("tenant_id", "") or "")
+    handoff_row = enter_waiting_handoff_sync(
+        tenant_id=_tenant_id or "default",
+        conversation_id=conversation_id or session_id,
+        user_id=user_id,
+        trigger_type="complaint_escalation",
+        trigger_reason=f"投诉升级: severity={detection.severity}",
+        ticket_id=ticket.ticket_id,
+    )
     record_cs_handoff("complaint")
 
     # 实时推送：投诉工单进入坐席待接入队列（与显式转人工一致）
@@ -199,13 +201,15 @@ def execute_complaint(
 
     get_agent_hub().publish(
         "conversation.waiting",
+        tenant_id=_tenant_id or None,
         item={
-            "conversation_id": session_id,
+            "conversation_id": conversation_id or session_id,
             "user_id": user_id,
+            "tenant_id": _tenant_id or None,
             "handoff_state": HandoffState.WAITING_HUMAN.value,
             "trigger_type": "complaint_escalation",
-            "trigger_reason": handoff_data["trigger_reason"],
-            "updated_at": _now,
+            "trigger_reason": f"投诉升级: severity={detection.severity}",
+            "updated_at": handoff_row["updated_at"],
             "last_message_preview": (user_message[:80] if user_message else None),
         },
     )

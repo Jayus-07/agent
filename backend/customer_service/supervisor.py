@@ -135,7 +135,13 @@ def _decision_v1(state: dict[str, Any]) -> CSSupervisorDecision:
     try:
         _hs = HandoffState(handoff_state) if handoff_state else HandoffState.AI_ACTIVE
     except ValueError:
-        _hs = HandoffState.AI_ACTIVE
+        # STOP CS-A P0-6：与 v2 L1 同口径 —— 未知状态 fail loud（078 CHECK
+        # 已挡写入端），静默吞成 ai_active 会把脏数据当正常服务。
+        logger.error(
+            "[CS Supervisor][v1] unknown handoff_state=%r —— fail loud",
+            handoff_state,
+        )
+        raise
     if should_intercept(_hs):
         decision = _make_decision(
             ExpertAction.HANDOFF, ExpertType.HANDOFF, layer=1,
@@ -335,7 +341,15 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
     try:
         _hs = HandoffState(handoff_state) if handoff_state else HandoffState.AI_ACTIVE
     except ValueError:
-        _hs = HandoffState.AI_ACTIVE
+        # STOP CS-A P0-6：未知 handoff 状态禁止静默吞成 ai_active ——
+        # 数据库侧已有 CHECK 约束（migration 078）挡写入，此处出现未知值
+        # 只可能是程序错误/脏数据，fail loud 让本轮显式失败并留痕
+        # （cs_graph_node 异常路径会记 logger.exception + trace error）。
+        logger.error(
+            "[CS Supervisor] unknown handoff_state=%r (user=%s conv=%s) —— fail loud",
+            handoff_state, state.get("user_id"), state.get("conversation_id"),
+        )
+        raise
     if should_intercept(_hs):
         decision = _make_decision(
             ExpertAction.HANDOFF, ExpertType.HANDOFF, layer=1,
@@ -783,6 +797,11 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
         CS_QUERY_EXPERT,
         CS_REPORTER,
     )
+
+    # STOP CS-A P0-3（F2）：Supervisor 入口取消检查 —— 不再派发任何新专家
+    from backend.core.request_context import raise_if_cancelled
+
+    raise_if_cancelled("cs_supervisor")
 
     timeout_update = _recover_handoff_timeout(state)
     if timeout_update is not None:

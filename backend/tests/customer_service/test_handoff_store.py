@@ -13,10 +13,42 @@ from backend.customer_service.handoff_store import HandoffStore, get_handoff_sto
 
 @pytest.fixture(autouse=True)
 def mock_db_success(monkeypatch):
-    """Store 单测只验证缓存语义，持久化成功由显式桩表示。"""
-    monkeypatch.setattr(HandoffStore, "_db_save", lambda *args: True)
-    monkeypatch.setattr(HandoffStore, "_db_clear", lambda *args: True)
-    monkeypatch.setattr(HandoffStore, "_db_load", lambda *args: None)
+    """Store 单测只验证读写语义；DB 桩 = 进程内 dict（读写一致）。
+
+    STOP CS-A P0-6 后读路径 DB-first（L1 只是写后缓存），桩必须能回放
+    已保存的数据，否则 save→load 断言失真。
+    """
+    fake_db: dict[tuple, dict] = {}
+
+    def _db_save(self, user_id, session_id, data):
+        fake_db[(user_id, session_id)] = dict(data)
+        return True
+
+    def _db_clear(self, user_id, session_id):
+        fake_db.pop((user_id, session_id), None)
+        return True
+
+    def _db_load(self, user_id, session_id):
+        row = fake_db.get((user_id, session_id))
+        return dict(row) if row is not None else None
+
+    def _db_has_active(self, user_id):
+        return any(
+            k[0] == user_id and v.get("handoff_state") != "closed"
+            for k, v in fake_db.items()
+        )
+
+    def _db_get_active(self, user_id):
+        for (uid, sid), row in fake_db.items():
+            if uid == user_id and row.get("handoff_state") != "closed":
+                return {**dict(row), "_conversation_id": sid}
+        return None
+
+    monkeypatch.setattr(HandoffStore, "_db_save", _db_save)
+    monkeypatch.setattr(HandoffStore, "_db_clear", _db_clear)
+    monkeypatch.setattr(HandoffStore, "_db_load", _db_load)
+    monkeypatch.setattr(HandoffStore, "_db_has_active", _db_has_active)
+    monkeypatch.setattr(HandoffStore, "_db_get_active", _db_get_active)
 
 
 def _uid() -> str:

@@ -150,14 +150,16 @@ async def reap_stage(now=None) -> ReapResult | None:
             released=total.released + result.released,
             closed=total.closed + result.closed,
             contended=total.contended + result.contended,
+            recovered=total.recovered + getattr(result, "recovered", 0),
         )
         if result.scanned < chunk:
             break
-    if total.released or total.closed:
+    if total.released or total.closed or total.recovered:
         logger.info(
-            "[cs-dispatcher] reaped released=%s closed=%s scanned=%s",
+            "[cs-dispatcher] reaped released=%s closed=%s recovered=%s scanned=%s",
             total.released,
             total.closed,
+            total.recovered,
             total.scanned,
         )
     return total

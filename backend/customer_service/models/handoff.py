@@ -24,9 +24,11 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+# STOP CS-A P0-6：canonical 枚举与 Python HandoffState 严格一致。
+# 历史值 ``initiated`` 已由 migration 078 收敛为 ``ai_active`` 并加
+# CHECK 约束 —— 数据库允许的状态集合 = 本元组，禁止再出现幽灵状态。
 HANDOFF_STATES = (
     "ai_active",
-    "initiated",
     "handoff_requested",
     "waiting_human",
     "agent_offered",
@@ -85,8 +87,9 @@ class CSHandoff(CSBase):
     handoff_state = Column(
         String(20),
         nullable=False,
-        default="initiated",
-        comment="ai_active|initiated|handoff_requested|waiting_human|agent_offered|human_active|closed",
+        default="ai_active",
+        comment="ai_active|handoff_requested|waiting_human|agent_offered|human_active|closed"
+                "（STOP CS-A 078：CHECK 约束对齐 Python HandoffState，initiated 已废弃）",
     )
     trigger_type = Column(String(30), nullable=True)
     trigger_reason = Column(Text, nullable=True)

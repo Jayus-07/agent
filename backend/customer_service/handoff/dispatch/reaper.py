@@ -17,22 +17,31 @@ worker 的 tick 间隔是 1 秒，reaper 排在同 tick 派单之前，因此
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.cs_dispatch import (
+    CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS,
     CS_MAX_DISPATCH_ATTEMPTS,
     CS_REAPER_BATCH_LIMIT,
 )
-from backend.customer_service.handoff.dispatch import agent_busy, outbox, repository
+from backend.customer_service.handoff.dispatch import (
+    agent_busy,
+    outbox,
+    presence,
+    repository,
+)
+from backend.shared.logger import logger
 
 EVENT_OFFER_EXPIRED = "conversation.offer_expired"
 EVENT_HANDOFF_CLOSED = "conversation.handoff_closed"
+EVENT_HUMAN_ACTIVE_RECOVERED = "conversation.human_active_recovered"
 
 REASON_OFFER_TIMEOUT = "offer_timeout"
 REASON_MAX_ATTEMPTS = "max_attempts"
 REASON_TOTAL_DEADLINE = "total_deadline"
+REASON_AGENT_OFFLINE = "agent_offline_recovery"
 
 
 @dataclass(frozen=True)
@@ -43,6 +52,7 @@ class ReapResult:
     released: int = 0
     closed: int = 0
     contended: int = 0
+    recovered: int = 0  # STOP CS-A P0-5：human_active 离线自愈送回重派数
 
 
 def _now() -> datetime:
@@ -293,27 +303,148 @@ async def reap_overdue_waiting(
     return ReapResult(scanned=len(candidates), closed=closed, contended=contended)
 
 
+async def reap_stale_human_active(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    limit: int,
+) -> ReapResult:
+    """STOP CS-A P0-5：human_active 坐席离线自愈。
+
+    条件（全部满足才恢复）：
+      handoff_state == human_active
+      AND assigned 坐席 presence 离线（Redis，fail-closed：查不了不恢复）
+      AND 最后一条坐席消息/工单更新距今超过 CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS
+      AND 锁内 CAS（state + assigned_agent_id + assignment_version）仍成立
+      AND 锁后复核 grace 期内没有坐席新消息（防「判掉线瞬间坐席正在回复」）
+
+    恢复行为（E2）：human_active → waiting_human，清理 assignment（released，
+    不排除该坐席本单——恢复上线可重新认领）、assignment_version+1、
+    total_deadline 顺延一个完整窗口，dispatcher 下一 tick 自动重派。
+    不直接落 ai_active：用户主动进入人工服务后优先继续找人工；重派预算
+    耗尽后由既有 reaper 终态关闭并通知用户。
+    """
+    from backend.customer_service.handoff.lifecycle import transition_handoff
+
+    candidates = await repository.list_human_active_candidates(
+        session, now=now - timedelta(seconds=CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS),
+        limit=limit,
+    )
+    if not candidates:
+        return ReapResult()
+
+    scanned = contended = recovered = 0
+    # presence 按租户批量判定；Redis 不可用（None）= fail-closed，本租户候选全部跳过
+    by_tenant: dict[str, list[dict]] = {}
+    for cand in candidates:
+        by_tenant.setdefault(cand["tenant_id"], []).append(cand)
+
+    for tenant_id, tenant_candidates in by_tenant.items():
+        agent_ids = sorted({c["assigned_agent_id"] for c in tenant_candidates})
+        online = await presence.online_agent_ids(tenant_id=tenant_id, agent_ids=agent_ids)
+        if online is None:
+            logger.warning(
+                "[cs-reaper] presence unavailable, skip human_active recovery (tenant=%s)",
+                tenant_id,
+            )
+            contended += len(tenant_candidates)
+            continue
+
+        for cand in tenant_candidates:
+            scanned += 1
+            if cand["assigned_agent_id"] in online:
+                continue  # 坐席其实在线（候选时间粗筛误伤）
+
+            # 加锁顺序 conversations → handoffs（与全模块约定一致）
+            conversation = await repository.lock_conversation(
+                session, tenant_id=tenant_id,
+                conversation_id=cand["conversation_id"],
+            )
+            if conversation is None:
+                contended += 1
+                continue
+            handoff = await repository.lock_stale_human_active_handoff(
+                session,
+                tenant_id=tenant_id,
+                handoff_id=cand["handoff_id"],
+                assigned_agent_id=cand["assigned_agent_id"],
+                assignment_version=cand["assignment_version"],
+            )
+            if handoff is None:
+                contended += 1
+                continue
+
+            # 锁内 grace 复核：候选预读后坐席又发了消息 → 放弃本轮恢复
+            last_agent_msg_at = await repository.last_human_agent_message_at(
+                session, conversation_id=cand["conversation_id"],
+            )
+            reference = last_agent_msg_at or handoff.updated_at or now
+            if (now - reference).total_seconds() < CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS:
+                contended += 1
+                continue
+
+            await transition_handoff(
+                session,
+                tenant_id=tenant_id,
+                handoff=handoff,
+                conversation=conversation,
+                target_state="waiting_human",
+                clear_assigned_agent=True,
+                bump_assignment_version=True,
+                release_assignments="released",
+                clear_offer_fields=True,
+                event_type=EVENT_HUMAN_ACTIVE_RECOVERED,
+                event_payload={
+                    "reason": REASON_AGENT_OFFLINE,
+                    "previous_agent_id": cand["assigned_agent_id"],
+                    "offline_timeout_seconds": CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS,
+                    "notify_user": True,
+                    # 自愈=主管重派同语义：重新计满重派窗口（不立即触发终态）
+                    "deadline_extended": True,
+                },
+                actor_user_id="cs_reaper",
+                now=now,
+            )
+            # 自愈后重新计满总等待期（与 reassign_handoff 同语义），否则
+            # 人工已处理很久的工单回到队列下一 tick 就被 overdue 关闭。
+            handoff.total_deadline_at = now + timedelta(
+                seconds=_handoff_timeout_seconds()
+            )
+            recovered += 1
+
+    return ReapResult(scanned=scanned, recovered=recovered, contended=contended)
+
+
+def _handoff_timeout_seconds() -> int:
+    from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
+
+    return int(CS_HANDOFF_TIMEOUT_SECONDS)
+
+
 async def reap_once(
     session: AsyncSession,
     *,
     now: datetime | None = None,
     limit: int | None = None,
 ) -> ReapResult:
-    """一轮回收：先处理过期 offer，再关超期排队工单。
+    """一轮回收：先处理过期 offer，再关超期排队工单，最后自愈离线人工。
 
     顺序不可颠倒：``agent_offered`` 的行若已超总期限，需要先被
     ``reap_expired_offers`` 以 ``max_attempts``/``total_deadline`` 关闭；
     反过来先跑 ``reap_overdue_waiting`` 会漏掉这些行（它们状态不是
-    ``waiting_human``）。
+    ``waiting_human``）。human_active 自愈放最后：它消费 presence 且
+    会让工单重新入队，前两段的终态判定先执行避免同轮重复处理。
     """
     now = now or _now()
     batch = limit if limit is not None else CS_REAPER_BATCH_LIMIT
 
     expired = await reap_expired_offers(session, now=now, limit=batch)
     overdue = await reap_overdue_waiting(session, now=now, limit=batch)
+    recovered = await reap_stale_human_active(session, now=now, limit=batch)
     return ReapResult(
-        scanned=expired.scanned + overdue.scanned,
+        scanned=expired.scanned + overdue.scanned + recovered.scanned,
         released=expired.released,
         closed=expired.closed + overdue.closed,
-        contended=expired.contended + overdue.contended,
+        contended=expired.contended + overdue.contended + recovered.contended,
+        recovered=recovered.recovered,
     )

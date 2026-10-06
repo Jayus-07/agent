@@ -387,8 +387,9 @@ def _patch_db_layer(monkeypatch, existing=None):
         def __init__(self, db):
             pass
 
-        async def get_or_create(self, conversation_id, user_id):
-            log.append(("ensure", conversation_id, user_id))
+        async def get_or_create(self, conversation_id, user_id, **kw):
+            # STOP CS-A P0-2：save 链路现显式传 tenant_id
+            log.append(("ensure", conversation_id, user_id, kw.get("tenant_id", "")))
             return object(), True
 
     monkeypatch.setattr(
@@ -415,7 +416,11 @@ async def test_h_confirmation_save_ensures_conversation_first(monkeypatch):
         "u1", "conv-1", {"action_id": "act-9", "confirmation_state": "pending"}
     )
 
-    assert log[0] == ("ensure", "conv-1", "u1")
+    # STOP CS-A P0-2：save 链路 ensure 会话行时显式带 tenant（本链路测试
+    # 上下文无租户 → 空串透传，ConversationManager 侧 fail-closed 兜底）
+    assert log[0] in (("ensure", "conv-1", "u1"), ("ensure", "conv-1", "u1", "")) or (
+        log[0][:3] == ("ensure", "conv-1", "u1")
+    )
     assert "flush" in log[: log.index("commit")]
     assert fake_repo.saved == [("u1", "conv-1")]
     assert log.index("commit") > log.index("flush"), "ensure 必须与 insert 同事务且先提交"
