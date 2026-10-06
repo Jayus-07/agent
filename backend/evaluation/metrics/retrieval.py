@@ -1,13 +1,18 @@
-"""检索质量指标 — recall/precision/MRR/NDCG/chunk 级/噪声率/rerank 分离度。"""
+"""检索质量指标 — recall/precision/MRR/NDCG/chunk 级/噪声率/rerank 分离度。
+
+P0-02（JSON-safe）：不可计算的指标（如 0/0、无 expected 集合）一律返回
+None，禁止 float("nan")——NaN 会写进 report/per_case 成为非法 JSON，
+并在 FastAPI 严格序列化时把详情接口打成 500。
+"""
 import math
 import statistics
 from typing import Any
 
 
-def recall_at_k(actual: list[str], expected: list[str], k: int) -> float:
+def recall_at_k(actual: list[str], expected: list[str], k: int) -> float | None:
     """召回率@K：预期集中有多少出现在实际结果的前 K 个中。"""
     if not expected:
-        return float("nan")
+        return None
     if not actual:
         return 0.0
     actual_set = set(actual[:k])
@@ -15,10 +20,10 @@ def recall_at_k(actual: list[str], expected: list[str], k: int) -> float:
     return hits / len(expected)
 
 
-def mrr(actual: list[str], expected: list[str]) -> float:
+def mrr(actual: list[str], expected: list[str]) -> float | None:
     """Mean Reciprocal Rank：第一个相关结果排名的倒数均值。"""
     if not expected:
-        return float("nan")
+        return None
     if not actual:
         return 0.0
     expected_set = set(expected)
@@ -36,10 +41,10 @@ def dcg_at_k(relevances: list[float], k: int) -> float:
     return dcg
 
 
-def ndcg_at_k(actual: list[str], expected: list[str], k: int) -> float:
+def ndcg_at_k(actual: list[str], expected: list[str], k: int) -> float | None:
     """Normalized DCG@K：考虑位置权重的排序质量。"""
     if not expected:
-        return float("nan")
+        return None
     if not actual:
         return 0.0
     expected_set = set(expected)
@@ -72,10 +77,10 @@ def exact_match(actual: Any, expected: Any) -> float:
 
 def chunk_recall_at_k(
     actual_chunks: list[str], expected_chunks: set[str] | list[str], k: int
-) -> float:
+) -> float | None:
     """Chunk 级召回 — 真实校验细粒度命中。"""
     if not expected_chunks:
-        return float("nan")
+        return None
     expected = set(expected_chunks)
     top_k = set(actual_chunks[:k])
     return sum(1 for c in expected if c in top_k) / len(expected)
@@ -91,21 +96,21 @@ def precision_at_k(actual: list[str], expected: list[str], k: int) -> float:
     return relevant_count / len(top_k)
 
 
-def context_noise_rate(actual: list[str], expected: list[str], k: int = 10) -> float:
+def context_noise_rate(actual: list[str], expected: list[str], k: int = 10) -> float | None:
     """上下文噪声率：实际结果中不相关文档的比例。"""
     if not expected:
-        return float("nan")
+        return None
     prec = precision_at_k(actual, expected, k)
     return 1.0 - prec
 
 
 def reject_accuracy(
     results: list[Any], expected_reject_ids: set[str]
-) -> float:
+) -> float | None:
     """拒答准确率：out_of_scope 用例中系统主动说"无答案/资料未提及"的比例。"""
     oos = [r for r in results if r.case_id in expected_reject_ids]
     if not oos:
-        return float("nan")
+        return None
     rejected = sum(
         1 for r in oos
         if r.status == "pass" and r.metrics.get("reject_accuracy", 0.0) >= 1.0
@@ -127,28 +132,33 @@ def _string_jaccard(a: str, b: str) -> float:
     return len(grams_a & grams_b) / len(union) if union else 0.0
 
 
+def _round4(value):
+    """P0-02：可空指标安全取整——None 直通，禁止 round(None)。"""
+    return None if value is None else round(value, 4)
+
+
 def stage_retrieval_metrics(
     actual_docs: list[str],
     expected_docs: list[str],
     actual_chunks: list[str] | None = None,
     expected_chunks: list[str] | None = None,
     k_values: tuple[int, ...] = (1, 3, 5, 10),
-) -> dict[str, float]:
-    """检索阶段（Stage 1-3）综合指标。"""
+) -> dict[str, Any]:
+    """检索阶段（Stage 1-3）综合指标。不可计算项为 None（P0-02）。"""
     metrics: dict[str, float] = {}
 
     for k in k_values:
-        metrics[f"doc_recall@{k}"] = round(recall_at_k(actual_docs, expected_docs, k), 4)
+        metrics[f"doc_recall@{k}"] = _round4(recall_at_k(actual_docs, expected_docs, k))
         metrics[f"doc_precision@{k}"] = round(precision_at_k(actual_docs, expected_docs, k), 4)
 
-    metrics["doc_mrr"] = round(mrr(actual_docs, expected_docs), 4)
-    metrics["doc_ndcg@10"] = round(ndcg_at_k(actual_docs, expected_docs, 10), 4)
-    metrics["context_noise@10"] = round(context_noise_rate(actual_docs, expected_docs, 10), 4)
+    metrics["doc_mrr"] = _round4(mrr(actual_docs, expected_docs))
+    metrics["doc_ndcg@10"] = _round4(ndcg_at_k(actual_docs, expected_docs, 10))
+    metrics["context_noise@10"] = _round4(context_noise_rate(actual_docs, expected_docs, 10))
 
     if expected_docs and actual_docs:
         metrics["top1_accuracy"] = 1.0 if actual_docs[0] in set(expected_docs) else 0.0
     elif not expected_docs:
-        metrics["top1_accuracy"] = float("nan")
+        metrics["top1_accuracy"] = None
     else:
         metrics["top1_accuracy"] = 0.0
 

@@ -1152,7 +1152,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "recall@5": round(r5, 4),
                         "recall@10": round(r10, 4),
                         "precision@5": round(precision_at_k(actual_doc_strs, expected_doc_strs, 5), 4),
-                        "context_noise@10": round(context_noise_rate(actual_doc_strs, expected_doc_strs, 10), 4),
+                        "context_noise@10": (lambda v: None if v is None else round(v, 4))(
+                            context_noise_rate(actual_doc_strs, expected_doc_strs, 10)),
                         "mrr": round(mrr_val, 4),
                         "ndcg@10": round(ndcg_val, 4),
                         "chunk_recall": round(chunk_recall, 4),

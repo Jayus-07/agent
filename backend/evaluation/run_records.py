@@ -89,6 +89,15 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
     """把 run 摘要 upsert 进 ai.eval_run_records（软失败）。"""
     meta = meta or {}
     summary = _summarize(report)
+    # P0-04：有效性裁决（服务侧已随 report.metadata 落盘；历史/旁路路径现算兜底）
+    from backend.evaluation.validity import (
+        classify_report_validity,
+        validity_from_report_metadata,
+    )
+
+    validity_verdict = validity_from_report_metadata(report.metadata)
+    if validity_verdict is None:
+        validity_verdict = classify_report_validity(report)
     row = {
         "run_id": run_id,
         "module": report.module,
@@ -105,6 +114,8 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
         "evaluation_snapshot_hash": str(
             (report.metadata or {}).get("evaluation_snapshot_hash", "")
         ),
+        "validity": validity_verdict.validity.value,
+        "invalid_reason": validity_verdict.invalid_reason,
         "trigger": (meta.get("env") or {}).get("trigger", "manual"),
         "triggered_by": (meta.get("env") or {}).get("triggered_by", ""),
         **summary,
@@ -120,9 +131,10 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
                     run_id, module, mode, smoke, dataset_version, git_sha,
                     prompt_snapshot, model_binding_fingerprint,
                     status, attempt_no, evaluation_snapshot_hash,
+                    validity, invalid_reason,
                     trigger, triggered_by, metrics,
                     case_count, pass_count, pass_rate
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (run_id) DO UPDATE SET
                     metrics = EXCLUDED.metrics,
                     case_count = EXCLUDED.case_count,
@@ -131,6 +143,8 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
                     status = EXCLUDED.status,
                     attempt_no = EXCLUDED.attempt_no,
                     evaluation_snapshot_hash = EXCLUDED.evaluation_snapshot_hash,
+                    validity = EXCLUDED.validity,
+                    invalid_reason = EXCLUDED.invalid_reason,
                     updated_at = now()
                 """,
                 (
@@ -141,6 +155,7 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
                     row["model_binding_fingerprint"],
                     row["status"], row["attempt_no"],
                     row["evaluation_snapshot_hash"],
+                    row["validity"], row["invalid_reason"],
                     row["trigger"], row["triggered_by"],
                     json.dumps(row["metrics"], ensure_ascii=False),
                     row["case_count"], row["pass_count"], row["pass_rate"],

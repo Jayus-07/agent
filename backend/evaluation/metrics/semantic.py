@@ -1,4 +1,7 @@
-"""语义指标 — CrossEncoder/Embedding scorer 驱动的软评分。"""
+"""语义指标 — CrossEncoder/Embedding scorer 驱动的软评分。
+
+P0-02（JSON-safe）：不可计算的评分返回 None，禁止 float("nan")。
+"""
 from typing import Any
 
 from backend.evaluation.metrics.generation import _empty_faithfulness, _split_claims
@@ -9,12 +12,12 @@ def context_recall_semantic(
     ground_truth: list[str],
     scorer: Any,
     threshold: float = 0.50,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """RAGAS-style 语义上下文召回率。"""
     if not ground_truth:
         return {
-            "context_recall": float("nan"),
-            "context_recall_soft": float("nan"),
+            "context_recall": None,
+            "context_recall_soft": None,
             "covered_passages": 0,
             "total_passages": 0,
         }
@@ -51,12 +54,12 @@ def context_precision_semantic(
     scorer: Any,
     threshold: float = 0.50,
     k: int = 10,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """语义上下文精确率 — top-k 检索结果的平均相关性得分。"""
     if not retrieved_texts and not ground_truth:
-        return {"context_precision": float("nan"), "relevant_count": 0, "total_retrieved": 0}
+        return {"context_precision": None, "relevant_count": 0, "total_retrieved": 0}
     if not ground_truth:
-        return {"context_precision": float("nan"), "relevant_count": 0, "total_retrieved": len(retrieved_texts)}
+        return {"context_precision": None, "relevant_count": 0, "total_retrieved": len(retrieved_texts)}
     if not retrieved_texts:
         return {"context_precision": 0.0, "relevant_count": 0, "total_retrieved": 0}
 
@@ -84,10 +87,10 @@ def semantic_top1(
     ground_truth: list[str],
     scorer: Any,
     threshold: float = 0.50,
-) -> float:
+) -> float | None:
     """Top-1 语义命中 — 排名第一的检索结果是否与任一 GT 片段语义相似。"""
     if not ground_truth:
-        return float("nan")
+        return None
     if not retrieved_texts:
         return 0.0
 
@@ -101,10 +104,10 @@ def answer_similarity_semantic(
     answer: str,
     expected_answer: str,
     scorer: Any,
-) -> float:
+) -> float | None:
     """语义答案相似度 — scorer(answer, expected_answer)。"""
     if not expected_answer:
-        return float("nan")
+        return None
     if not answer:
         return 0.0
     scores = scorer.score_pairs([answer], [expected_answer])
@@ -154,11 +157,11 @@ def faithfulness_semantic(
     }
 
 
-def hallucination_rate(faithfulness_result: dict) -> float:
-    """幻觉率 = 1 - faithfulness。skipped（None）时返回 nan，不参与聚合。"""
+def hallucination_rate(faithfulness_result: dict) -> float | None:
+    """幻觉率 = 1 - faithfulness。skipped（None）时返回 None，不参与聚合（P0-02）。"""
     f = faithfulness_result.get("faithfulness")
     if f is None:
-        return float("nan")
+        return None
     return round(1.0 - f, 4)
 
 
@@ -166,10 +169,10 @@ def answer_relevancy_proxy(
     question: str,
     answer: str,
     scorer: Any,
-) -> float:
+) -> float | None:
     """答案相关性代理指标 — cosine(embed(question), embed(answer))。"""
     if not question:
-        return float("nan")
+        return None
     if not answer:
         return 0.0
     scores = scorer.score_pairs([question], [answer])

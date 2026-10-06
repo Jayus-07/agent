@@ -83,6 +83,12 @@ def write_json_report(
         "prompt_versions": report.prompt_versions,
     }
 
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # P0-02：导出文件同样禁绝 non-finite（清洗 + allow_nan=False 快速失败）
+    from backend.shared.jsonable import safe_jsonable
+
+    path.write_text(
+        json.dumps(safe_jsonable(data), ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     print(f"JSON report saved to: {path}")
     return path

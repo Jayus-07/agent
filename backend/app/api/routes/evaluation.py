@@ -279,11 +279,15 @@ async def get_eval_run(
         report, meta = load_report(run_id)
         from backend.evaluation.export_masking import mask_report_for_viewer
 
+        # P0-02 三层防御·第三层：历史旧 report 文件中仍可能存在 NaN/Infinity
+        # 字面量（pydantic 解析放行），出响应前统一清洗，禁止 500 打穿前端
+        from backend.shared.jsonable import safe_jsonable
+
         return {
             "run_id": run_id,
-            "report": mask_report_for_viewer(report.model_dump(mode="json")),
-            "meta": meta,
-            "run_status": read_run_status(run_id),
+            "report": safe_jsonable(mask_report_for_viewer(report.model_dump(mode="json"))),
+            "meta": safe_jsonable(meta),
+            "run_status": safe_jsonable(read_run_status(run_id)),
         }
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
