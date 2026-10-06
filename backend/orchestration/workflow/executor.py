@@ -35,6 +35,28 @@ from backend.orchestration.workflow.persistence import get_workflow_run_store
 from backend.observability.tracer import trace_collector
 from backend.shared.logger import logger
 
+# SkillStepFailure 等结构化失败异常携带的 step_result 键（鸭子类型读取，
+# 不 import skill_adapter——保持 executor 不依赖具体适配器实现）。
+_FAILURE_META_KEYS = (
+    "error", "error_type", "tool_status", "criticality",
+    "error_code", "fallback_used", "degraded", "needs_verification",
+)
+
+
+def _failure_metadata(exc: BaseException | None) -> dict:
+    """异常 → 结构化失败留痕。
+
+    SkillStepFailure（或任何带 step_result dict 的异常）透传其语义字段；
+    其余异常只留消息。WorkflowContext.step_failures / trace metrics 共用，
+    让「为什么 skip/degrade/abort」在 summary 与 trace 里可辨识。
+    """
+    sr = getattr(exc, "step_result", None)
+    if isinstance(sr, dict) and sr:
+        meta = {"error": str(exc)}
+        meta.update({k: sr[k] for k in _FAILURE_META_KEYS if sr.get(k) is not None})
+        return meta
+    return {"error": str(exc) if exc else "unknown error"}
+
 
 class WorkflowExecutor:
     """执行一个 Workflow 实例"""
@@ -122,8 +144,9 @@ class WorkflowExecutor:
                     self._run_step(name, steps, ctx, trace_root_span)
                     for name in layer
                 ])
-            # 全部 step 成功（run_if 条件跳过不算 partial，只有错误跳过才算）
-            if ctx.skip_steps - ctx.run_if_skips:
+            # 全部 step 成功（run_if 条件跳过不算 partial；错误跳过与降级
+            # 继续都算 partial——workflow 没有全绿就不许标 success）
+            if (ctx.skip_steps - ctx.run_if_skips) or ctx.degraded_steps:
                 ctx.mark_partial()
             else:
                 ctx.mark_success()
@@ -140,11 +163,18 @@ class WorkflowExecutor:
                 from backend.observability.tracer import trace_collector
                 trace_collector.end_span(
                     trace_root_span,
-                    status="success" if ctx.status in ("success", "partial") else "error",
+                    # partial 是降级成功不是成功：trace 如实标 degraded，
+                    # 禁止把「有 step 失败但流程走完」抹平成 success
+                    status={
+                        "success": "success",
+                        "partial": "degraded",
+                    }.get(ctx.status, "error"),
                     metrics={
                         "duration_ms": ctx.duration_ms or 0,
                         "step_count": len(steps),
                         "skip_count": len(ctx.skip_steps),
+                        "degraded_count": len(ctx.degraded_steps),
+                        "failure_count": len(ctx.step_failures),
                     },
                 )
                 # finish() 将 trace 持久化到 trace_store（SQLite，重启不丢失）
@@ -295,20 +325,41 @@ class WorkflowExecutor:
             except Exception:
                 logger.debug("[P1-10] step span 错误收尾失败", exc_info=True)
 
-        # on_error 分支
+        # on_error 分支（STOP B：三种策略语义分明，失败一律结构化留痕）
+        failure_meta = _failure_metadata(last_error)
         if config.on_error == "skip":
+            # 真正 optional：失败完全跳过，workflow 继续（partial）。
+            # 留痕进 step_failures 供 summary/trace 观测（不写 outputs——
+            # 下游 .get() 链行为不变）。
             ctx.skip_steps.add(step_name)
+            ctx.step_failures[step_name] = failure_meta
             logger.info(
-                f"[WorkflowExecutor] step {step_name} skip (on_error=skip)"
+                f"[WorkflowExecutor] step {step_name} skip (on_error=skip): "
+                f"{failure_meta.get('tool_status') or ''} {error_msg[:120]}"
             )
         elif config.on_error == "agent_degrade":
-            # TODO: Phase 5 — 调 LLM 智能兜底
+            # 降级继续：写入结构化 degraded 输出占位，下游 .get() 链安全
+            # （拿到的是 {} 形态），partial 判定经由 degraded_steps 生效。
+            # 按任务口径不硬接 LLM 兜底——无 LLM fallback 时就是
+            # 「明确标注的 degraded continuation」，而非改名 skip。
+            ctx.degraded_steps.add(step_name)
+            ctx.outputs[step_name] = {
+                "status": "degraded",
+                "data": None,
+                "warning": (
+                    f"步骤「{config.display_name or step_name}」执行失败，"
+                    "已降级继续，本节数据不可用"
+                ),
+                **failure_meta,
+            }
+            ctx.step_failures[step_name] = failure_meta
             logger.warning(
-                f"[WorkflowExecutor] step {step_name} agent_degrade 暂未实现，降级为 skip"
+                f"[WorkflowExecutor] step {step_name} agent_degrade 降级继续: {error_msg}"
             )
-            ctx.skip_steps.add(step_name)
         else:
-            # abort — 抛出异常让上层终止后续 layer
+            # abort — 当前 step 是 hard dependency，失败后 workflow 无法
+            # 安全继续：留痕后抛出让上层终止后续 layer。
+            ctx.step_failures[step_name] = failure_meta
             raise RuntimeError(
                 f"Workflow {ctx.workflow_name} step {step_name!r} failed: {error_msg}"
             ) from last_error
