@@ -374,15 +374,18 @@ def _is_technical_error(error: str) -> bool:
 
 def _is_step_successful(result: dict) -> bool:
     """检查步骤是否真正成功（结构化判断）"""
+    # workflow executor 直接产出最终答案（含 partial 降级续行），始终视为
+    # 有效产出——partial 由 workflow 自身的披露行/尾注交代；若在此判伪，
+    # workflow partial 会落入「## 抱歉」模板并误发追问卡（与已产出的
+    # partial 结果自相矛盾），还会误登记未答问题。
+    if result.get("capability") == "workflow":
+        return True
     if result.get("status") != "success":
         return False
     if result.get("is_empty"):
         return False
     if result.get("error_type"):
         return False
-    # workflow executor 直接产出最终答案，始终视为成功
-    if result.get("capability") == "workflow":
-        return True
     output = str(result.get("output", ""))
     # 降门槛：5 字符即可（原 20 字符过于严格，RAG 短摘要被误杀）
     if len(output.strip()) <= 5:
