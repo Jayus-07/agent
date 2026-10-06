@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 
@@ -51,14 +52,16 @@ def _try_continuation(state: dict, query: str, routing_context: dict) -> dict | 
     if domain == "travel":
         # 与 try_travel_prefilter 同构的域图入口；目的地/天数变更由域图
         # slot_filler 在 checkpoint 状态上处理（跨轮契约不变）
-        return {
-            "route_decision": None,
-            "route_mode": "travel",
-            "travel_context": {
-                "conversation_id": state.get("session_id", ""),
-                "travel_route": {"source": "continuation"},
+        return route_update_for_mode(
+            "travel",
+            extra={
+                "route_decision": None,
+                "travel_context": {
+                    "conversation_id": state.get("session_id", ""),
+                    "travel_route": {"source": "continuation"},
+                },
             },
-        }
+        )
     if domain == "customer_service":
         try:
             from backend.orchestration.graph.cs_prefilter import try_cs_prefilter

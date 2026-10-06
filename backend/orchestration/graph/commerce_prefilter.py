@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 
@@ -47,7 +48,7 @@ def try_commerce_prefilter(query: str, state: dict) -> dict | None:
     # ——主图 OrchestratorState 的 updates 流会剥离未登记键（travel_context
     # 漏登记即在案教训），Commerce 域图只消费 question/session_id 等
     # 既有键，无需透传任何新键
-    return {
-        "route_decision": None,
-        "route_mode": "travel_commerce",
-    }
+    return route_update_for_mode(
+        "travel_commerce",
+        extra={"route_decision": None},
+    )

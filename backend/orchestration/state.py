@@ -74,6 +74,7 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]     # ReAct 对话历史
     final_answer: str                           # Reporter 产物
     route_decision: dict                         # Router 决策（execution_mode + candidates + workflow_name）
+    route_decision_v2: dict                      # Canonical RouteDecisionV2 快照
     route_mode: str                              # Router 决策的模式字符串（direct/plan/workflow）
     query_understanding: dict                    # QueryRouter 结构化理解（intent/need_*/entities，治理 2026-09-22）
     resolved_params: dict | None                 # tool_selector（FC）解析出的执行参数；None=未解析，direct_executor 回退 question 透传

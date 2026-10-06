@@ -80,13 +80,27 @@ _STAGE_GATE_KEYS = {
     "G": "RUNTIME_OBSERVABILITY_PASS",
 }
 
+_STAGE_REQUIRED_KEYS = {
+    "A": ("CONTRACT_V2_PASS",),
+    "B": (
+        "ROUTING_SEMANTIC_SPLIT_PASS",
+        "ROUTE_DECISION_V2_PASS",
+        "ROUTE_MODE_BACKWARD_COMPAT_PASS",
+        "ROUTE_SINGLE_WRITER_PASS",
+    ),
+    "C": ("RUNTIME_REGISTRY_PASS",),
+    "D": ("RUNTIME_RESULT_CONTRACT_PASS",),
+    "E": ("STATE_CANONICALIZATION_PASS",),
+    "F": ("DOMAIN_REGISTRATION_GOVERNANCE_PASS",),
+    "G": ("RUNTIME_OBSERVABILITY_PASS",),
+}
+
 
 def ready_for_stage(results: dict[str, bool], stage: str) -> bool:
     """判断单个 STOP 是否满足阶段门和全局兼容门。"""
 
-    stage_key = _STAGE_GATE_KEYS[stage]
     return bool(
-        results.get(stage_key)
+        all(results.get(key) for key in _STAGE_REQUIRED_KEYS[stage])
         and results.get("GLOBAL_REGRESSION_PASS")
         and not results.get("PRODUCTION_BEHAVIOR_CHANGED")
     )
@@ -110,6 +124,12 @@ def verify(stage: str, final: bool = False) -> dict[str, bool]:
     stage_ok, _ = _run_pytest(_stage_paths(stage))
     results = _compatibility_checks()
     results[_STAGE_GATE_KEYS[stage]] = stage_ok
+    if stage == "B":
+        results.update({
+            "ROUTE_DECISION_V2_PASS": stage_ok,
+            "ROUTE_MODE_BACKWARD_COMPAT_PASS": stage_ok,
+            "ROUTE_SINGLE_WRITER_PASS": stage_ok,
+        })
     results["PRODUCTION_BEHAVIOR_CHANGED"] = not results["GLOBAL_REGRESSION_PASS"]
     results["AGENT_RUNTIME_ARCH_V2_READY"] = ready_for_final(results) if final else False
     report = {

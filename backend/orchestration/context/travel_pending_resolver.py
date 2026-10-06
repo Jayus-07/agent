@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 __all__ = ["resolve_travel_pending"]
@@ -138,20 +139,22 @@ def resolve_travel_pending(query: str, routing_context: dict | None) -> dict | N
         if is_cancel_run_query(query):
             logger.info(
                 "[TravelPendingResolver] 命中: mode=cancel run=%s", summary_run)
-            return {
-                "route_decision": None,
-                "route_mode": "travel",
-                "travel_context": {
-                    "conversation_id": ctx.get("conversation_id") or "",
-                    "travel_route": {
-                        "source": "pending_resume",
-                        "resume_mode": "cancel",
-                        "new_run": False,
-                        "requested_slots": list(requested or []),
-                        "filled_slots": [],
+            return route_update_for_mode(
+                "travel",
+                extra={
+                    "route_decision": None,
+                    "travel_context": {
+                        "conversation_id": ctx.get("conversation_id") or "",
+                        "travel_route": {
+                            "source": "pending_resume",
+                            "resume_mode": "cancel",
+                            "new_run": False,
+                            "requested_slots": list(requested or []),
+                            "filled_slots": [],
+                        },
                     },
                 },
-            }
+            )
 
     # ── avoid-PATCH 通道（STOP I2，STOP H Deferred #1）──────────────
     # completed 态（无 pending）的「不去鼓浪屿了」：补槽通道不工作
@@ -168,20 +171,22 @@ def resolve_travel_pending(query: str, routing_context: dict | None) -> dict | N
             logger.info(
                 "[TravelPendingResolver] 命中: mode=avoid_patch run=%s",
                 summary_run)
-            return {
-                "route_decision": None,
-                "route_mode": "travel",
-                "travel_context": {
-                    "conversation_id": ctx.get("conversation_id") or "",
-                    "travel_route": {
-                        "source": "pending_resume",
-                        "resume_mode": "patch_avoid",
-                        "new_run": False,
-                        "requested_slots": list(requested or []),
-                        "filled_slots": [],
+            return route_update_for_mode(
+                "travel",
+                extra={
+                    "route_decision": None,
+                    "travel_context": {
+                        "conversation_id": ctx.get("conversation_id") or "",
+                        "travel_route": {
+                            "source": "pending_resume",
+                            "resume_mode": "patch_avoid",
+                            "new_run": False,
+                            "requested_slots": list(requested or []),
+                            "filled_slots": [],
+                        },
                     },
                 },
-            }
+            )
 
     if not requested:
         return None  # 无结构化 pending（既有任务完成/无追问），不拦
@@ -202,17 +207,19 @@ def resolve_travel_pending(query: str, routing_context: dict | None) -> dict | N
         "[TravelPendingResolver] 命中: mode=%s run=%s requested=%s filled=%s",
         resume_mode, summary.get("travel_run_id") or "-", requested, filled,
     )
-    return {
-        "route_decision": None,
-        "route_mode": "travel",
-        "travel_context": {
-            "conversation_id": ctx.get("conversation_id") or "",
-            "travel_route": {
-                "source": "pending_resume",
-                "resume_mode": resume_mode,
-                "new_run": new_run,
-                "requested_slots": list(requested),
-                "filled_slots": filled,
+    return route_update_for_mode(
+        "travel",
+        extra={
+            "route_decision": None,
+            "travel_context": {
+                "conversation_id": ctx.get("conversation_id") or "",
+                "travel_route": {
+                    "source": "pending_resume",
+                    "resume_mode": resume_mode,
+                    "new_run": new_run,
+                    "requested_slots": list(requested),
+                    "filled_slots": filled,
+                },
             },
         },
-    }
+    )

@@ -18,6 +18,11 @@ from backend.orchestration.graph.routing.prefilter_chain import (
     handoff_update_for,
 )
 from backend.orchestration.router import get_routing_engine
+from backend.orchestration.router.projection import (
+    build_route_decision_v2_from_engine,
+    project_route_decision_to_legacy_state,
+    route_update_for_mode,
+)
 from backend.shared.logger import logger
 
 
@@ -77,9 +82,10 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
             pass
         return {
             **state,
-            "route_decision": None,
-            "route_mode": "general_chat",
-            **fields,
+            **route_update_for_mode(
+                "general_chat",
+                extra={"route_decision": None, **fields},
+            ),
         }
 
     # ── 域图类域：复用既有 prefilter（不新增路由实现）─────────────
@@ -120,10 +126,21 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                 "routing_context": route_context,
             }
             engine_decision = get_routing_engine().route(query, engine_state)
+        engine_route_mode = (
+            engine_decision.route_mode or engine_decision.execution_mode.value
+        )
+        v2_decision = build_route_decision_v2_from_engine(
+            engine_decision,
+            route_mode=engine_route_mode,
+            domain_meta=meta,
+        )
         return {
             **state,
-            "route_decision": engine_decision.model_dump(),
-            "route_mode": engine_decision.route_mode or engine_decision.execution_mode.value,
+            **project_route_decision_to_legacy_state(
+                v2_decision,
+                legacy_route_mode=engine_route_mode,
+                legacy_route_decision=engine_decision.model_dump(),
+            ),
             **fields,
         }
 
@@ -159,11 +176,15 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                     pass
                 return {
                     **state,
-                    "route_decision": None,
-                    "route_mode": "clarify",
-                    "_clarify": clarify,
-                    **fields,
-                    "need_clarification": True,
+                    **route_update_for_mode(
+                        "clarify",
+                        extra={
+                            "route_decision": None,
+                            "_clarify": clarify,
+                            **fields,
+                            "need_clarification": True,
+                        },
+                    ),
                 }
         except Exception as e:
             logger.warning(f"[RouterNode] 路由澄清构造失败，继续走统一 plan 支线: {e}")

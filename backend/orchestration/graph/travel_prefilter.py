@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 
 from backend.observability.log_privacy import query_preview
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 from backend.travel.agents.requirement_agent import _city_name_pattern, _iter_city_hits
 
@@ -117,11 +118,13 @@ def try_travel_prefilter(query: str, state: dict) -> dict | None:
 
     # 改写为域图可读的初始上下文；目的地由域图 slot_filler 负责抽取，
     # 预过滤不越权做抽取（两处抽取必然分叉）
-    return {
-        "route_decision": None,
-        "route_mode": "travel",
-        "travel_context": {
-            "conversation_id": state.get("session_id", ""),
-            "travel_route": {"source": "prefilter"},
+    return route_update_for_mode(
+        "travel",
+        extra={
+            "route_decision": None,
+            "travel_context": {
+                "conversation_id": state.get("session_id", ""),
+                "travel_route": {"source": "prefilter"},
+            },
         },
-    }
+    )

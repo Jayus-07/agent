@@ -33,6 +33,10 @@ from backend.orchestration.graph.routing import (
     try_travel_pending,
 )
 from backend.orchestration.router import get_routing_engine
+from backend.orchestration.router.projection import (
+    build_route_decision_v2_from_engine,
+    route_update_for_mode,
+)
 from backend.shared.logger import logger
 
 # ── 旧符号 re-export（P1-2 拆分兼容层，勿删：tests/潜在引用方在用）──
@@ -50,11 +54,15 @@ def router_node(state: dict) -> dict:
     """
     query = state.get("question") or state.get("query") or ""
     if not query:
+        update = route_update_for_mode(
+            "plan",
+            extra={"route_decision": None},
+        )
         return _with_router_decisions(
             state,
-            {"route_decision": None, "route_mode": "plan"},
+            update,
             query,
-            existing_override={"route_mode": "plan"},
+            existing_override=update,
         )
 
     # ── 预过滤顺序（2026-09-15 定序；2026-09-18 起已无性能收益）──────
@@ -224,11 +232,10 @@ def router_node(state: dict) -> dict:
             )
         except Exception:
             logger.debug("[RouterNode] 待答问题记录失败（软降级）", exc_info=True)
-        update = {
-            "route_decision": None,
-            "route_mode": "clarify",
-            "_clarify": clarify,
-        }
+        update = route_update_for_mode(
+            "clarify",
+            extra={"route_decision": None, "_clarify": clarify},
+        )
         return _with_router_decisions(
             state, update, query, existing_override=update,
         )
@@ -275,12 +282,14 @@ def router_node(state: dict) -> dict:
         )
     except Exception as e:
         logger.warning(f"[RouterNode] 统一路由引擎失败，进入安全澄清: {e}")
-        update = {
-            "route_decision": None,
-            "route_mode": "clarify",
-            "router_fallback_reason": f"engine:{type(e).__name__}",
-            "legacy_used": False,
-        }
+        update = route_update_for_mode(
+            "clarify",
+            extra={
+                "route_decision": None,
+                "router_fallback_reason": f"engine:{type(e).__name__}",
+                "legacy_used": False,
+            },
+        )
         return _with_router_decisions(
             state, update, query, existing_override=update,
         )
@@ -330,14 +339,23 @@ def router_node(state: dict) -> dict:
     except Exception as e:
         logger.warning(f"[RouterNode] QueryRouter 理解失败（软降级，保持原路由）: {e}")
 
-    update = {
-        "route_decision": decision.model_dump(),
-        "route_mode": mode.value,
-        "query_understanding": understanding,
-        **hierarchical_fields,
-        # 历史字段保留 schema 兼容性，但统一引擎路径永远不是旧路由。
-        "legacy_used": False,
-    }
+    v2_decision = build_route_decision_v2_from_engine(
+        decision,
+        route_mode=mode.value,
+        domain_meta=meta,
+    )
+    update = route_update_for_mode(
+        mode.value,
+        extra={
+            "route_decision": decision.model_dump(),
+            "route_decision_v2": v2_decision.model_dump(mode="json"),
+            "query_understanding": understanding,
+            **hierarchical_fields,
+            # 历史字段保留 schema 兼容性，但统一引擎路径永远不是旧路由。
+            "legacy_used": False,
+        },
+        include_legacy_flat_fields=False,
+    )
     return _with_router_decisions(
         state,
         update,

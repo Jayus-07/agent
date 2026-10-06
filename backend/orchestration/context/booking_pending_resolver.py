@@ -33,6 +33,7 @@ PG。用户说「帮我预订大阪的酒店」→ 子图反问「哪天入住�
 """
 from __future__ import annotations
 
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 __all__ = ["resolve_booking_pending"]
@@ -116,4 +117,7 @@ def resolve_booking_pending(
         "[BookingPendingResolver] 命中: mode=%s kind=%s missing %s→%s",
         route_mode, kind, missing, missing_after,
     )
-    return {"route_decision": None, "route_mode": route_mode}
+    return route_update_for_mode(
+        route_mode,
+        extra={"route_decision": None},
+    )

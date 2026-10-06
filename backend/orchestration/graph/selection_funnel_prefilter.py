@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from backend.observability.log_privacy import query_preview
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 # 选品漏斗强信号
@@ -68,11 +69,13 @@ def try_selection_funnel_prefilter(query: str, state: dict) -> dict | None:
         return None
 
     logger.info("[SelectionFunnelPrefilter] 选品域命中: query=%s", query_preview(query))
-    return {
-        "route_decision": None,
-        "route_mode": "selection_funnel",
-        "funnel_context": {
-            "conversation_id": state.get("session_id", ""),
-            "source": "prefilter",
+    return route_update_for_mode(
+        "selection_funnel",
+        extra={
+            "route_decision": None,
+            "funnel_context": {
+                "conversation_id": state.get("session_id", ""),
+                "source": "prefilter",
+            },
         },
-    }
+    )

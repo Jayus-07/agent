@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 _RE_BOOKING = re.compile(
@@ -43,7 +44,7 @@ def try_booking_prefilter(query: str, state: dict) -> dict | None:
         return None
 
     logger.info("[BookingPrefilter] 预订域命中: query=%s...", query[:60])
-    return {
-        "route_decision": None,
-        "route_mode": "travel_booking",
-    }
+    return route_update_for_mode(
+        "travel_booking",
+        extra={"route_decision": None},
+    )

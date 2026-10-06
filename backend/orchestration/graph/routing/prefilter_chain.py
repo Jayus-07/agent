@@ -23,6 +23,7 @@ from backend.orchestration.domain_registry import (
     DerivedDomainMap,
     domain_graph_registry,
 )
+from backend.orchestration.router.projection import route_update_for_mode
 
 # route_mode → ConversationContext.active_domain（预过滤命中回写用）。
 # 客服 clarify（route_mode=clarify，出自 cs_prefilter）不在此表，由
@@ -152,10 +153,10 @@ def _with_router_decisions(
         if isinstance(existing_override, dict):
             nested_decision = existing_override.get("route_decision")
             if isinstance(nested_decision, dict):
-                resolver_override = {
-                    **nested_decision,
-                    "route_mode": existing_override.get("route_mode") or "",
-                }
+                resolver_override = dict(nested_decision)
+                resolver_override["route_mode"] = (
+                    existing_override.get("route_mode") or ""
+                )
         registered_domains = domain_graph_registry.get_all()
         graph_modes = {name: name for name in registered_domains}
         execution_decision = ExecutionModeResolver(
@@ -203,11 +204,16 @@ def _try_general_chat(state: dict) -> dict | None:
         category = ((state.get("guard_result") or {}).get("category") or "")
         if category == "greeting":
             logger.info("[RouterNode] Guard GREETING → general_chat 直答")
-            return {
-                "route_decision": None,
-                "route_mode": "general_chat",
-                "query_understanding": {"intent": "greeting", "complexity": "chat"},
-            }
+            return route_update_for_mode(
+                "general_chat",
+                extra={
+                    "route_decision": None,
+                    "query_understanding": {
+                        "intent": "greeting",
+                        "complexity": "chat",
+                    },
+                },
+            )
     except Exception:
         logger.debug("[RouterNode] general_chat 判定失败，走正常路由", exc_info=True)
     return None
@@ -316,11 +322,10 @@ def handoff_update_for(query: str, state: dict, route_mode: str) -> dict:
         "[PrefilterChain] 域引导(guide 模式): family=%s query=%s",
         family, query_preview(query),
     )
-    return {
-        "route_decision": None,
-        "route_mode": "handoff",
-        "_handoff": payload,
-    }
+    return route_update_for_mode(
+        "handoff",
+        extra={"route_decision": None, "_handoff": payload},
+    )
 
 
 def _finish_prefilter_hit(state: dict, query: str, update: dict) -> dict | None:

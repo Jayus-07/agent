@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from backend.orchestration.router.projection import route_update_for_mode
 from backend.shared.logger import logger
 
 
@@ -163,11 +164,13 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
             f"[CsPrefilter] CS InputGuard {guard_result.action.value.upper()}: "
             f"category={guard_result.category.value} reason={guard_result.reason}"
         )
-        return {
-            "route_decision": None,
-            "route_mode": "clarify",
-            "final_answer": guard_result.message or "无法处理该客服请求。",
-        }
+        return route_update_for_mode(
+            "clarify",
+            extra={
+                "route_decision": None,
+                "final_answer": guard_result.message or "无法处理该客服请求。",
+            },
+        )
 
     # ── Trace: stamp conversation_id + cs_route + cs_target（路由一致率用）──
     try:
@@ -189,13 +192,15 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
     except Exception:
         pass
 
-    return {
-        "route_decision": None,
-        "route_mode": "customer_service",
-        "cs_context": _build_cs_context(
-            cs_result, cs_target, user_id, session_id, tenant_id
-        ),
-    }
+    return route_update_for_mode(
+        "customer_service",
+        extra={
+            "route_decision": None,
+            "cs_context": _build_cs_context(
+                cs_result, cs_target, user_id, session_id, tenant_id
+            ),
+        },
+    )
 
 
 class _RelayTrigger:
