@@ -28,7 +28,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | 节点 | 职责边界 |
 |------|----------|
 | Router | 入口门禁（GraphRunner Input Guard）之后执行域预过滤（客服域锁 / CS / 旅游 / 选品 / 商务 / 预订，纯正则）+ RoutingEngine：DomainRouter → IntentRouter → CapabilityRouter → ExecutionModeResolver → RouteDecision；规则、向量和 LLM 是证据提供者，基础设施故障走显式 LLM fallback |
-| tool_selector | direct 路径首站：Function-Call 门控选工具 + 填参；失败/快路径直通零开销；基础设施故障（LLM 超时/预算耗尽）且路由分数可决策（top≥0.4 且领先次选≥0.1，`TOOL_SELECTOR_TOP_CANDIDATE_*`，floor=0 关闭）时采纳路由首候选兜底，`source=router_top_candidate` 可溯源；分数模糊仍 clarify（2026-10-02 `7ec5fb2`） |
+| tool_selector | direct 路径首站：Function-Call 门控选工具 + 填参；失败/快路径直通零开销；**首候选分数兜底已删除（2026-10-06 Tool Governance Runtime，`b6b7973`）**——FC 失败/模型拒绝（`fit=no_match` 或 declined）/单候选无明确 fit/selector 预算耗尽一律 `clarify`，不再按候选分数自动执行（旧 `TOOL_SELECTOR_TOP_CANDIDATE_*` 行为与 `source=router_top_candidate` 已废弃）；模型不可提供 auto 参数；选出的 capability 执行必须经 `core/tool_governance/guard.py::GovernanceRuntime` 门（候选/域/intent_fit/Schema/确认/预算/限流熔断） |
 | Planner | 只做任务拆解 → Capability DAG，**禁调 Tool/Skill/DB** |
 | Critique | 规则校验优先，仅 anomaly 才调 LLM；含计划深度上限（≤8） |
 | Supervisor | 纯规则 DAG 调度，`Send[]` 并行 + 注入 `previous_outputs` |
