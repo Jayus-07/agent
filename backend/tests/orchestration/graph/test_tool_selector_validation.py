@@ -126,8 +126,8 @@ class TestLegalSelections:
         assert out["_tool_selection"]["capability"] == "web.crawl"
 
     def test_data_analysis(self, fc_env):
-        """数据分析：business 域 business.analyze 放行。"""
-        fc_env["raw"] = _FakeRaw("business.analyze")
+        """数据分析：business 域 business.analyze 放行，auto 参数由运行时注入。"""
+        fc_env["raw"] = _FakeRaw("business.analyze", args={})
         out = ts._fc_decide(
             _state("分析 SKU001 为什么销量下降",
                    [("business.analyze", 0.72), ("sql.query", 0.60)],
@@ -167,13 +167,14 @@ class TestIllegalSelections:
         # fn2cap 结构上只含候选集合 → 越界走既有重试耗尽澄清 fallback
         assert out.get("selection_blocked") is True
 
-    def test_out_of_set_single_passthrough(self, fc_env):
-        """越界单候选 → 兼容直通（保留旧行为），不澄清。"""
+    def test_out_of_set_single_candidate_blocks_execution(self, fc_env):
+        """越界单候选 → 澄清阻断，不因候选数为一而放行。"""
         fc_env["raw"] = _FakeRaw("report.generate")
         out = ts._fc_decide(
             _state("查一下订单", [("sql.query", 0.70)]),
             ["sql.query"], 0.0)
-        assert out["_tool_selection"]["source"] == "passthrough"
+        assert out["_tool_selection"]["source"] == "clarify"
+        assert out["selection_blocked"] is True
 
     def test_domain_conflict_rejected(self, fc_env):
         """域冲突：data 域请求选中 knowledge 域能力 → 拒绝澄清。"""

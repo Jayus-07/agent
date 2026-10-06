@@ -21,7 +21,7 @@ def test_direct_travel_tool_success_writes_canonical_span():
 
     class FakeTool:
         @staticmethod
-        def func(**_kwargs):
+        def invoke(_kwargs):
             return json.dumps({"status": "success", "data": {"trains": []}})
 
     raw = live_search_service._invoke(
@@ -44,23 +44,22 @@ def test_direct_travel_tool_failure_closes_span_with_error():
 
     class FakeTool:
         @staticmethod
-        def func(**_kwargs):
+        def invoke(_kwargs):
             return json.dumps({
-                "status": "error",
+                "status": "failed",
                 "error": "12306 MCP 暂时不可用",
                 "error_code": "MCP_UNAVAILABLE",
             })
 
-    raw = live_search_service._invoke(
-        FakeTool(), "travel_train_search_tool",
-        capability="travel.train.search", agent="planning",
-        from_station="北京", to_station="上海", date="2026-10-03", limit=6,
-    )
-
-    assert json.loads(raw)["status"] == "error"
+    with pytest.raises(live_search_service.LiveSearchError, match="12306 MCP"):
+        live_search_service._invoke(
+            FakeTool(), "travel_train_search_tool",
+            capability="travel.train.search", agent="planning",
+            from_station="北京", to_station="上海", date="2026-10-03", limit=6,
+        )
     span = next(span for span in trace.spans if span.type == "tool_call")
     assert span.status == "error"
-    assert span.metrics["error_code"] == "MCP_UNAVAILABLE"
+    assert span.metrics["error_code"] == "upstream_unavailable"
     assert span.metrics["error_class"] == "business_error"
     assert span.end_time
 
@@ -70,10 +69,10 @@ def test_direct_travel_tool_exception_keeps_source_error_code():
 
     class FakeTool:
         @staticmethod
-        def func(**_kwargs):
+        def invoke(_kwargs):
             raise RuntimeError("MCP socket closed")
 
-    with pytest.raises(RuntimeError, match="MCP socket closed"):
+    with pytest.raises(live_search_service.LiveSearchError, match="MCP socket closed"):
         live_search_service._invoke(
             FakeTool(), "travel_train_search_tool",
             capability="travel.train.search", agent="planning",
@@ -85,5 +84,5 @@ def test_direct_travel_tool_exception_keeps_source_error_code():
         if span.type == "tool_call"
     )
     assert span.status == "error"
-    assert span.metrics["error_code"] == "RuntimeError"
+    assert span.metrics["error_code"] == "internal_error"
     assert span.metrics["error_class"] == "business_error"

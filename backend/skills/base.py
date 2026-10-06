@@ -76,7 +76,12 @@ PARAM_TYPE_CHECKS = {
 }
 
 
-def validate_params(params_schema: dict, params: dict) -> str | None:
+def validate_params(
+    params_schema: dict,
+    params: dict,
+    *,
+    allow_auto: bool = False,
+) -> str | None:
     """按 params_schema 运行时校验入参，返回错误消息（None=通过）。
 
     模块级纯函数：BaseSkill._validate_params 与 tool_selector（function
@@ -86,34 +91,33 @@ def validate_params(params_schema: dict, params: dict) -> str | None:
       - auto=True 的参数由运行时自动注入（如 business.analyze 的
         sql_result 走 previous_outputs），不参与校验
     """
-    errors = []
-    for name, spec in params_schema.items():
-        if isinstance(spec, str):
-            continue
-        if isinstance(spec, dict) and spec.get("auto"):
-            continue
-        val = params.get(name)
-        if spec.get("required") and val in (None, ""):
-            errors.append(
-                f"缺少必填参数 {name}: {spec.get('description', '')}")
-            continue
-        if val is None:
-            continue
-        ptype = spec.get("type", "string")
-        expected = PARAM_TYPE_CHECKS.get(ptype)
-        type_ok = expected is not None and isinstance(val, expected)
-        # bool 是 int 的子类：声明 int/integer 时布尔值应判为类型错误
-        if ptype in ("int", "integer") and isinstance(val, bool):
-            type_ok = False
-        if expected is not None and not type_ok:
-            errors.append(
-                f"参数 {name} 类型应为 {ptype}，实际为 {type(val).__name__}")
-            continue
-        enum = spec.get("enum")
-        if enum and val not in enum:
-            errors.append(
-                f"参数 {name} 取值 {val!r} 不在允许范围 {list(enum)}")
-    return "; ".join(errors) or None
+    if not isinstance(params, dict):
+        return f"参数根类型应为 object，实际为 {type(params).__name__}"
+
+    # 参数校验的唯一实现位于 Governance Runtime。这里保留历史函数名，
+    # 让 Skill 与 FC 共用同一份 JSON Schema 语义。
+    from backend.core.tool_governance.schema_validator import (
+        SchemaValidationError,
+        legacy_params_to_schema,
+        validate_json_schema,
+    )
+
+    # FC/LLM 路径默认不允许提供 auto 参数；BaseSkill._validate_params 会
+    # 以 allow_auto=True 调用，因为那些字段已由运行时 previous_outputs 注入。
+    auto_names = {
+        name for name, spec in params_schema.items()
+        if isinstance(spec, dict) and spec.get("auto")
+    }
+    if auto_names.intersection(params) and not allow_auto:
+        return f"系统注入参数不可由模型提供: {sorted(auto_names.intersection(params))}"
+    try:
+        validate_json_schema(
+            params,
+            legacy_params_to_schema(params_schema, include_auto=allow_auto),
+        )
+    except SchemaValidationError as exc:
+        return str(exc)
+    return None
 
 
 def _with_llm_attribution(func):
@@ -249,7 +253,24 @@ class BaseSkill(ABC):
         """
         metadata = self.capability_metadata.get(capability, {})
         schema = metadata.get("params_schema", self.params_schema)
-        return validate_params(schema, params)
+        if not schema:
+            return None
+        # Skill 边界接收的 auto 字段来自 previous_outputs/运行时上下文，
+        # 因此允许它们参与最终 Schema 校验；模型选择器仍走默认拒绝。
+        from backend.core.tool_governance.schema_validator import (
+            SchemaValidationError,
+            legacy_params_to_schema,
+            validate_json_schema,
+        )
+
+        try:
+            validate_json_schema(
+                params,
+                legacy_params_to_schema(schema, include_auto=True),
+            )
+            return None
+        except SchemaValidationError as exc:
+            return str(exc)
 
     def _normalize_output(self, capability: str, output: Any) -> Any:
         """输出契约边界：按 capability 声明的类型归一化 Tool 返回值。
@@ -463,18 +484,58 @@ class BaseSkill(ABC):
             level = "warn" if ("fail" in event or "timeout" in event or "insufficient" in event) else "info"
             trace_collector.add_event(tool_span, event, level, event, info)
 
-        result = await safe_tool_executor.run(
-            tool_key=cap,
-            call=lambda: asyncio.to_thread(tool_fn.invoke, invoke_params),
-            policy=pol, deadline=deadline,
-            domain=self.name or cap.split(".", 1)[0],
-            on_event=_on_event,
-            tool_name=getattr(tool_fn, "name", ""),
-            trace_span=tool_span,
-            trace_capability=cap,
-            trace_agent=self.name,
-            trace_params=params,
+        # 统一进入 Tool Governance Runtime，再由其调用 SafeToolExecutor。
+        # auto 参数从模型参数中剥离，只有 previous_outputs/运行时注入可以
+        # 重新合并；候选和 intent_fit 也只从上游选择快照读取。
+        from backend.core.tool_governance.guard import ToolCallRequest, governance_runtime
+        from backend.core.tool_governance.registry import get_tool_spec
+
+        governance_spec = get_tool_spec(cap)
+        auto_names = set(governance_spec.auto_params) if governance_spec else set()
+        llm_params = {key: value for key, value in params.items() if key not in auto_names}
+        injected_params = {key: value for key, value in params.items() if key in auto_names}
+        selection = state.get("_tool_selection") or {}
+        selected_candidates = tuple(selection.get("candidates") or ())
+        request = ToolCallRequest(
+            capability=cap,
+            arguments=llm_params,
+            candidate_capabilities=selected_candidates,
+            domain=str(state.get("domain") or ""),
+            intent_fit=str(state.get("tool_intent_fit") or "match"),
+            selection_reason=str(selection.get("selection_reason") or ""),
+            runtime_injected=injected_params,
+            confirmation_id=str(state.get("tool_confirmation_id") or ""),
+            idempotency_key=str(params.get("idempotency_key") or ""),
         )
+        if governance_spec is None:
+            # 仅兼容没有 manifest 能力的内部 _CompatSkill；正式能力不
+            # 允许以此路径注册或执行。
+            result = await safe_tool_executor.run(
+                tool_key=cap,
+                call=lambda: asyncio.to_thread(tool_fn.invoke, invoke_params),
+                policy=pol,
+                deadline=deadline,
+                domain=self.name or cap.split(".", 1)[0],
+                on_event=_on_event,
+                tool_name=getattr(tool_fn, "name", ""),
+                trace_span=tool_span,
+                trace_capability=cap,
+                trace_agent=self.name,
+                trace_params=params,
+            )
+        else:
+            result = await governance_runtime.execute(
+                request,
+                lambda: asyncio.to_thread(tool_fn.invoke, invoke_params),
+                normalize_output=False,
+                policy=pol,
+                deadline=deadline,
+                domain=self.name or cap.split(".", 1)[0],
+                on_event=_on_event,
+                tool_name=getattr(tool_fn, "name", ""),
+                trace_span=tool_span,
+                trace_agent=self.name,
+            )
 
         # ── ToolResult → step_results 契约字段（下游零改动）+ 治理扩展字段 ──
         sr["retries"] = result.retry_count

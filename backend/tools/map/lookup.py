@@ -22,6 +22,8 @@ Capability: map.lookup（由 skills/map 的 MapLookupSkill 持有）
 """
 from __future__ import annotations
 
+import json
+
 from langchain_core.tools import tool
 
 from backend.shared.logger import logger
@@ -119,44 +121,89 @@ def map_lookup_tool(
             return fail(f"action={act} 缺少必填参数：{req}", required=list(required))
 
     try:
+        def _invoke_atomic(tool_obj, params: dict) -> str:
+            """聚合 Tool 的原子适配器也必须进入治理运行时。"""
+
+            from backend.core.tool_governance.guard import (
+                ToolCallRequest,
+                governance_runtime,
+            )
+            from backend.core.tool_runtime.models import ToolStatus
+
+            tool_name = str(getattr(tool_obj, "name", ""))
+            result = governance_runtime.execute_sync(
+                ToolCallRequest(
+                    capability=tool_name,
+                    arguments=params,
+                    domain="travel",
+                    intent_fit="match",
+                    selection_reason=f"map.lookup action={act}",
+                ),
+                lambda: tool_obj.invoke(params),
+                normalize_output=True,
+                domain="travel",
+                tool_name=tool_name,
+                trace_capability="map.lookup",
+                trace_agent="map_lookup",
+            )
+            if result.status is not ToolStatus.SUCCESS:
+                raise RuntimeError(
+                    result.error_message or result.error_code or "地图原子 Tool 调用失败"
+                )
+            return json.dumps(result.data, ensure_ascii=False)
+
         if act == "weather":
-            return map_weather_tool.func(city=city, location=location, kind=kind)
+            return _invoke_atomic(
+                map_weather_tool, {"city": city, "location": location, "kind": kind}
+            )
         if act == "geocode":
-            return map_geocode_tool.func(address=address or keyword, city=city)
+            return _invoke_atomic(
+                map_geocode_tool, {"address": address or keyword, "city": city}
+            )
         if act == "reverse_geocode":
-            return map_reverse_geocode_tool.func(location=location)
+            return _invoke_atomic(map_reverse_geocode_tool, {"location": location})
         if act == "place_search":
-            return map_place_search_tool.func(
-                keyword=keyword, city=city, near=near,
-                radius_m=radius_m or 3000, page_size=page_size,
+            return _invoke_atomic(
+                map_place_search_tool,
+                {"keyword": keyword, "city": city, "near": near,
+                 "radius_m": radius_m or 3000, "page_size": page_size},
             )
         if act == "merchant_search":
-            return map_merchant_search_tool.func(
-                keyword=keyword, city=city, near=near,
-                types=types,
-                radius_m=radius_m or 3000, page_size=page_size,
+            return _invoke_atomic(
+                map_merchant_search_tool,
+                {"keyword": keyword, "city": city, "near": near,
+                 "types": types, "radius_m": radius_m or 3000,
+                 "page_size": page_size},
             )
         if act == "route":
-            return map_route_tool.func(
-                from_location=from_location, to_location=to_location,
-                mode=mode or "driving",
+            return _invoke_atomic(
+                map_route_tool,
+                {"from_location": from_location, "to_location": to_location,
+                 "mode": mode or "driving"},
             )
         if act == "navigation":
             nav_mode = _ROUTE_TO_NAV_MODE.get((mode or "driving").lower(),
                                               mode or "drive")
-            return map_navigation_tool.func(
-                to_location=to_location, to_name=to_name,
-                from_location=from_location, mode=nav_mode,
+            return _invoke_atomic(
+                map_navigation_tool,
+                {"to_location": to_location, "to_name": to_name,
+                 "from_location": from_location, "mode": nav_mode},
             )
         if act == "static_map":
-            return map_static_map_tool.func(
-                center=location, zoom=zoom, size=size, markers=markers,
+            return _invoke_atomic(
+                map_static_map_tool,
+                {"center": location, "zoom": zoom, "size": size,
+                 "markers": markers},
             )
         if act == "district":
-            return map_district_tool.func(keyword=keyword, district_id=district_id)
+            return _invoke_atomic(
+                map_district_tool,
+                {"keyword": keyword, "district_id": district_id},
+            )
         # street_view
-        return map_street_view_tool.func(
-            location=location, radius_m=radius_m or 50,
+        return _invoke_atomic(
+            map_street_view_tool,
+            {"location": location, "radius_m": radius_m or 50},
         )
     except Exception as e:  # noqa: BLE001 — Tool 边界统一兜底
         logger.warning("[MapLookup] action=%s 失败: %s", act, e)
