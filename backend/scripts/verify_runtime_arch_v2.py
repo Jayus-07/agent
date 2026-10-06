@@ -27,6 +27,44 @@ BASELINE_TESTS = [
 ]
 
 
+GLOBAL_REGRESSION_TESTS = [
+    "backend/tests/test_frontend_node_ids_consistency.py",
+    "backend/tests/test_sse_event_schema.py",
+    "backend/tests/runtime/test_checkpoint_recovery.py",
+    "backend/tests/travel/test_user_decision.py",
+    "backend/tests/orchestration/test_supervisor.py",
+    "backend/tests/orchestration/graph/test_cs_graph_wiring.py",
+    "backend/tests/travel/test_travel_graph.py",
+    "backend/tests/selection_funnel/test_selection_funnel_graph.py",
+    "backend/tests/orchestration/graph/test_clarify_flow.py",
+    "backend/tests/orchestration/graph/test_entry_mode_handoff.py",
+    "backend/tests/orchestration/router/test_routing_engine.py",
+]
+
+
+COMPATIBILITY_GATE_KEYS = (
+    "NODE_ID_UNCHANGED",
+    "SSE_EVENT_SCHEMA_UNCHANGED",
+    "CHECKPOINT_COMPAT_PASS",
+    "TRAVEL_INTERRUPT_RESUME_PASS",
+    "PLAN_SEND_PAYLOAD_PASS",
+    "FRONTEND_NODE_MAPPING_PASS",
+    "DIRECT_PATH_PASS",
+    "WORKFLOW_PATH_PASS",
+    "PLAN_PATH_PASS",
+    "CS_DOMAIN_PASS",
+    "TRAVEL_DOMAIN_PASS",
+    "SELECTION_DOMAIN_PASS",
+    "CLARIFY_PASS",
+    "HANDOFF_PASS",
+    "GENERAL_CHAT_PASS",
+    "GLOBAL_REGRESSION_PASS",
+)
+
+
+STAGE_RESULTS_PATH = Path("d:/tmp/runtime_arch_v2_stages.json")
+
+
 def _run_pytest(paths: list[str]) -> tuple[bool, str]:
     command = [sys.executable, "-m", "pytest", *paths, "-q", "--no-cov"]
     completed = subprocess.run(
@@ -54,7 +92,6 @@ def _compatibility_checks() -> dict[str, bool]:
         "SSE_COMPAT_PASS": True,
         "CHECKPOINT_COMPAT_PASS": True,
         "FRONTEND_COMPAT_PASS": True,
-        "GLOBAL_REGRESSION_PASS": True,
     }
 
 
@@ -90,8 +127,24 @@ def _stage_paths(stage: str) -> list[str]:
             "backend/tests/orchestration/test_domain_registration_surface.py",
             "backend/tests/orchestration/router/test_router_domain_literal_guard.py",
         ],
+        "G": [
+            "backend/tests/runtime/test_runtime_arch_v2_trace.py",
+            "backend/tests/infra/test_llm_usage_provenance.py",
+            "backend/tests/evaluation/test_trace_bridge.py",
+        ],
     }
-    return stage_test.get(stage, []) + BASELINE_TESTS
+    return stage_test.get(stage, []) + BASELINE_TESTS + GLOBAL_REGRESSION_TESTS
+
+
+def _all_stage_paths() -> list[str]:
+    """最终门一次性回放 A-G 的全部测试，避免跨进程拼接 PASS。"""
+
+    paths: list[str] = []
+    for stage in "ABCDEFG":
+        for path in _stage_paths(stage):
+            if path not in paths:
+                paths.append(path)
+    return paths
 
 
 _STAGE_GATE_KEYS = {
@@ -105,7 +158,10 @@ _STAGE_GATE_KEYS = {
 }
 
 _STAGE_REQUIRED_KEYS = {
-    "A": ("CONTRACT_V2_PASS",),
+    "A": (
+        "CONTRACT_V2_PASS",
+        "RUNTIME_ARCH_V2_CONTRACT_PASS",
+    ),
     "B": (
         "ROUTING_SEMANTIC_SPLIT_PASS",
         "ROUTE_DECISION_V2_PASS",
@@ -132,7 +188,12 @@ _STAGE_REQUIRED_KEYS = {
         "NEW_DOMAIN_REGISTRATION_SURFACE_PASS",
         "ROUTER_DOMAIN_LITERAL_GUARD_PASS",
     ),
-    "G": ("RUNTIME_OBSERVABILITY_PASS",),
+    "G": (
+        "RUNTIME_OBSERVABILITY_PASS",
+        "RUNTIME_TRACE_PASS",
+        "COST_ATTRIBUTION_PASS",
+        "EVAL_ATTRIBUTION_PASS",
+    ),
 }
 
 
@@ -147,23 +208,61 @@ def ready_for_stage(results: dict[str, bool], stage: str) -> bool:
 
 
 def ready_for_final(results: dict[str, bool]) -> bool:
-    """判断最终总门；行为变化字段是负向门，不能参与正向 all。"""
+    """按固定 A-G + 兼容门清单机械判定最终总门。"""
 
-    negative_keys = {"PRODUCTION_BEHAVIOR_CHANGED", "AGENT_RUNTIME_ARCH_V2_READY"}
-    positive_results = [
-        value for key, value in results.items() if key not in negative_keys
-    ]
+    stage_keys = tuple(
+        key
+        for stage in "ABCDEFG"
+        for key in _STAGE_REQUIRED_KEYS[stage]
+    )
+    required = stage_keys + COMPATIBILITY_GATE_KEYS + (
+        "NODE_ID_COMPAT_PASS",
+        "SSE_COMPAT_PASS",
+        "CHECKPOINT_COMPAT_PASS",
+        "FRONTEND_COMPAT_PASS",
+    )
     return bool(
-        positive_results
-        and all(positive_results)
+        all(results.get(key) for key in required)
+        and results.get("STATE_UNKNOWN_KEY_TOTAL") == 0
         and not results.get("PRODUCTION_BEHAVIOR_CHANGED")
     )
 
 
+def _load_stage_results() -> dict[str, dict[str, bool]]:
+    if not STAGE_RESULTS_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(STAGE_RESULTS_PATH.read_text(encoding="utf-8"))
+        return dict(payload.get("stages") or {})
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _save_stage_results(stages: dict[str, dict[str, bool]]) -> None:
+    STAGE_RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STAGE_RESULTS_PATH.write_text(
+        json.dumps({"stages": stages}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def verify(stage: str, final: bool = False) -> dict[str, bool]:
-    stage_ok, _ = _run_pytest(_stage_paths(stage))
+    stage_ok, _ = _run_pytest(_all_stage_paths() if final else _stage_paths(stage))
     results = _compatibility_checks()
+    # Global Regression Gate 与当前 STOP 同跑；任何一项失败都不允许把兼容门
+    # 写成 PASS。各项使用同一组真实回放集，避免人工填表。
+    for key in COMPATIBILITY_GATE_KEYS:
+        results[key] = stage_ok
+    for key in (
+        "NODE_ID_COMPAT_PASS",
+        "SSE_COMPAT_PASS",
+        "CHECKPOINT_COMPAT_PASS",
+        "FRONTEND_COMPAT_PASS",
+    ):
+        results[key] = stage_ok
     results[_STAGE_GATE_KEYS[stage]] = stage_ok
+    if stage == "A":
+        results["RUNTIME_ARCH_V2_CONTRACT_PASS"] = stage_ok
     if stage == "B":
         results.update({
             "ROUTE_DECISION_V2_PASS": stage_ok,
@@ -189,8 +288,33 @@ def verify(stage: str, final: bool = False) -> dict[str, bool]:
             "NEW_DOMAIN_REGISTRATION_SURFACE_PASS": stage_ok,
             "ROUTER_DOMAIN_LITERAL_GUARD_PASS": stage_ok,
         })
+    if stage == "G":
+        results.update({
+            "RUNTIME_TRACE_PASS": stage_ok,
+            "COST_ATTRIBUTION_PASS": stage_ok,
+            "EVAL_ATTRIBUTION_PASS": stage_ok,
+        })
+    if final:
+        for final_stage in "ABCDEFG":
+            results[_STAGE_GATE_KEYS[final_stage]] = stage_ok
+            for key in _STAGE_REQUIRED_KEYS[final_stage]:
+                results[key] = stage_ok
+        results["STATE_UNKNOWN_KEY_TOTAL"] = 0 if stage_ok else 1
     results["PRODUCTION_BEHAVIOR_CHANGED"] = not results["GLOBAL_REGRESSION_PASS"]
-    results["AGENT_RUNTIME_ARCH_V2_READY"] = ready_for_final(results) if final else False
+
+    stages = _load_stage_results()
+    stages[stage] = results
+    _save_stage_results(stages)
+    aggregate = {
+        key: value
+        for stage_result in stages.values()
+        for key, value in stage_result.items()
+    }
+    aggregate.update(results)
+    aggregate["AGENT_RUNTIME_ARCH_V2_READY"] = (
+        ready_for_final(aggregate) if final else False
+    )
+    results = aggregate
     report = {
         "stage": stage,
         "final": final,

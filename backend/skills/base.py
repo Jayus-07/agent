@@ -130,6 +130,13 @@ def _with_llm_attribution(func):
         from backend.observability.llm_context import llm_attribution_scope
 
         with llm_attribution_scope(skill_id=self.name):
+            try:
+                from backend.orchestration.router.router_trace import (
+                    record_runtime_attribution,
+                )
+                record_runtime_attribution(skill_id=self.name)
+            except Exception:
+                logger.debug("Skill Runtime Trace 归因写入失败", exc_info=True)
             return await func(self, *args, **kwargs)
 
     return wrapper

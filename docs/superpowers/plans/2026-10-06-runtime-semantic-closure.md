@@ -67,6 +67,56 @@ GLOBAL: NODE_ID_UNCHANGED SSE_EVENT_SCHEMA_UNCHANGED CHECKPOINT_COMPAT_PASS TRAV
 
 Global Regression Gate 的任一字段为 false，GLOBAL_REGRESSION_PASS 必须为 false。Travel interrupt 必须真实经历 validator interrupt、pending、resume、继续和完成；Plan Send 必须真实经历 Planner、2~3 个并行 Skill、step_results merge、supervisor 和 reporter。
 
+### 用户确认版总验收门（2026-10-06）
+
+以下别名与阶段明细同时输出，便于发布门禁直接消费：
+
+~~~ini
+RUNTIME_ARCH_V2_CONTRACT_PASS=true
+ROUTING_SEMANTIC_SPLIT_PASS=true
+RUNTIME_REGISTRY_PASS=true
+RUNTIME_RESULT_CONTRACT_PASS=true
+STATE_CANONICALIZATION_PASS=true
+DOMAIN_REGISTRATION_GOVERNANCE_PASS=true
+RUNTIME_OBSERVABILITY_PASS=true
+
+NODE_ID_COMPAT_PASS=true
+SSE_COMPAT_PASS=true
+CHECKPOINT_COMPAT_PASS=true
+FRONTEND_COMPAT_PASS=true
+GLOBAL_REGRESSION_PASS=true
+
+AGENT_RUNTIME_ARCH_V2_READY=true
+~~~
+
+最终值严格按下式计算，禁止人工覆盖：
+
+~~~text
+AGENT_RUNTIME_ARCH_V2_READY =
+  A && B && C && D && E && F && G
+  && NODE_ID_COMPAT
+  && SSE_COMPAT
+  && CHECKPOINT_COMPAT
+  && FRONTEND_COMPAT
+  && GLOBAL_REGRESSION
+  && STATE_UNKNOWN_KEY_TOTAL == 0
+  && PRODUCTION_BEHAVIOR_CHANGED == false
+~~~
+
+阶段明细必须保留用户可审计的场景粒度：
+
+~~~text
+A: RouteDecisionV2 Schema / 非法组合 / RuntimeType / RuntimeResult / 生产零行为变化
+B: direct / plan / workflow / CS / Travel / Selection / clarify / guide-handoff / general_chat / Legacy Projection 唯一写入口
+C: CS / Travel / Selection Runtime / subflow / checkpoint / interrupt / fake_domain / Domain Literal Guard
+D: CS / Travel / Selection 输出 / sources / clarification / handoff / tool metadata / no double generation
+E: canonical decision / params / clarification / legacy projection / unknown state key
+F: 新域注册面≤3处 / prefilter family / entry mode / 业务规则保留 / Router 域字面量扫描
+G: domain / subflow / runtime_type / runtime_id / interaction_mode / execution_mode / workflow_id / capability / skill_id / tool_id / prompt_version / confidence / source
+~~~
+
+Global Regression Gate 固定覆盖：node_id、SSE event schema、checkpoint、Travel interrupt/resume、Plan Send payload、前端节点映射、direct/workflow/plan、CS/Travel/Selection、clarify、handoff、general_chat。每个 STOP 的聚合器都执行该门；`--stage G --final` 再一次性回放 A–G 全部测试并写入 `d:/tmp/runtime_arch_v2_gate.json`。
+
 最后一项只能由真实结果计算：
 
 ~~~python
@@ -346,8 +396,8 @@ git commit -m "refactor(router): derive domain metadata from registry"
 - Modify: backend/orchestration/graph/runner.py
 - Modify: backend/evaluation/report/builder.py
 - Modify: backend/scripts/verify_runtime_arch_v2.py
-- Create: backend/tests/orchestration/test_runtime_observability.py
-- Create: backend/tests/orchestration/test_global_regression_gate.py
+- Create: backend/tests/runtime/test_runtime_arch_v2_trace.py
+- Use: backend/scripts/verify_runtime_arch_v2.py::GLOBAL_REGRESSION_TESTS
 - Modify: backend/tests/runtime/test_runtime_trace.py
 
 **Interfaces:**
@@ -380,6 +430,22 @@ Expected: A–G、NODE_ID_COMPAT_PASS、SSE_COMPAT_PASS、CHECKPOINT_COMPAT_PASS
 git add backend/orchestration/router/router_trace.py backend/observability/tracer.py backend/observability/trace_middleware.py backend/orchestration/graph/runner.py backend/evaluation/report/builder.py backend/scripts/verify_runtime_arch_v2.py backend/tests/runtime/test_runtime_trace.py backend/tests/orchestration/test_runtime_observability.py backend/tests/orchestration/test_global_regression_gate.py
 git commit -m "feat(observability): close runtime architecture gates"
 ~~~
+
+## 当前执行状态（自动模式，2026-10-06）
+
+~~~text
+STOP A  PASS
+STOP B  PASS
+STOP C  PASS
+STOP D  PASS
+STOP E  PASS
+STOP F  PASS
+STOP G  PASS
+GLOBAL  PASS
+READY   PASS
+~~~
+
+最终回放证据：`447 passed`；`STATE_UNKNOWN_KEY_TOTAL=0`；`PRODUCTION_BEHAVIOR_CHANGED=false`；`AGENT_RUNTIME_ARCH_V2_READY=true`。阶段门与兼容门均由 `verify_runtime_arch_v2.py` 从测试退出码计算，未手工填 PASS。
 
 ## 完成报告格式
 

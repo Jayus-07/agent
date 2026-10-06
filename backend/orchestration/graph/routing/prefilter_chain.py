@@ -185,6 +185,7 @@ def _with_router_decisions(
             capability_decision,
             execution_decision.to_dict(),
             intent_decision,
+            route_decision_v2=result.get("route_decision_v2"),
         )
     except Exception as exc:
         logger.warning("[RouterNode] 路由决策适配器失败，保持兼容字段: %s", exc)

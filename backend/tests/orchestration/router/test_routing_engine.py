@@ -123,6 +123,9 @@ def test_engine_composes_domain_capability_and_execution_decisions():
         capability_router=capability_router,
         execution_resolver=mode_resolver,
         rule_router=_RuleRouter(),
+        # 组合顺序单测不验证 Redis 缓存；显式隔离跨 pytest 进程残留的
+        # routing-engine 命中，确保 domain_router 确实被调用。
+        cache=_Cache(),
     )
 
     decision = engine.route(

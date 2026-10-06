@@ -56,6 +56,13 @@ def _with_tool_attribution(func):
         from backend.observability.llm_context import llm_attribution_scope
 
         with llm_attribution_scope(tool_id=tool_key):
+            try:
+                from backend.orchestration.router.router_trace import (
+                    record_runtime_attribution,
+                )
+                record_runtime_attribution(tool_id=tool_key)
+            except Exception:
+                logger.debug("Tool Runtime Trace 归因写入失败", exc_info=True)
             return await func(self, tool_key=tool_key, **kwargs)
 
     return wrapper

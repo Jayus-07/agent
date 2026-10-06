@@ -506,6 +506,8 @@ class GraphRunner:
             _pv = prompt_service.current_versions()
             trace.tags["prompt_versions"] = ",".join(
                 f"{k}={v}" for k, v in sorted(_pv.items())[:12]) or "none"
+            trace.tags["prompt_version"] = trace.tags["prompt_versions"]
+            trace.metadata["prompt_versions"] = dict(_pv)
             runtime = prompt_runtime_metadata(_pv)
             trace.tags["prompt_runtime"] = runtime
             trace.tags["prompt_epoch"] = runtime["epoch"]

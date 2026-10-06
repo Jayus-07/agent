@@ -102,6 +102,13 @@ def with_domain_attribution(domain_name: str, adapter):
         from backend.observability.llm_context import llm_attribution_scope
 
         with llm_attribution_scope(agent_domain=domain_name):
+            try:
+                from backend.orchestration.router.router_trace import (
+                    record_runtime_attribution,
+                )
+                record_runtime_attribution(agent_domain=domain_name)
+            except Exception:
+                logger.debug("域图 Runtime Trace 归因写入失败", exc_info=True)
             return adapter(state)
 
     return wrapper
