@@ -1,7 +1,7 @@
 # AI Runtime — LangGraph 编排细节
 
-> 本文承接 README 的编排层细节：主图节点职责、垂直域图、客服锁域、跨轮状态契约。
-> 主图事实源 = `backend/orchestration/graph/builder.py`；域图注册事实源 = `backend/domains/__init__.py`；
+> 本文承接 README 的编排层细节：主图节点职责、垂直域图、客服锁域、Runtime 语义收口、跨轮状态契约。
+> 主图事实源 = `backend/orchestration/graph/builder.py`；域图注册事实源 = `backend/domains/__init__.py`（runtime 元数据 = `backend/orchestration/domain_registry.py`）；
 > capability→Skill 映射唯一事实源 = `backend/orchestration/router/capabilities.yaml`。
 
 ## 主图（LangGraph StateGraph）
@@ -85,6 +85,20 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 >
 > **锁域不等于绝对**：域锁下若「无任何客服规则信号 **且** 命中旅游/选品强信号」，仍会走 `redirect_main` 正则阶段转出主路由——但该正则**只认种子城市（福州/厦门/杭州）**，故「去大阪怎么玩」这类问法仍留守客服管线（阶段二 LLM 语义仲裁默认 OFF，`CS_REDIRECT_MAIN_LLM_ENABLED`）。混合信号（如「订单里的行程单怎么退款」含客服规则）**仍守 CS 优先**。行为有测试守护：`backend/tests/orchestration/graph/test_router_prefilter_order.py`（19 例全绿）。
 
+## Runtime 语义收口（V2 决策与投影，2026-10-06）
+
+路由事实源升级为 **`RouteDecisionV2`**（`orchestration/router/types.py` + `orchestration/runtime_types.py::RuntimeType/RuntimeTarget`），五类 Runtime 家族 `agent/workflow/plan/direct/generic_runtime`；旧 `route_mode`、`route_decision` 与平铺字段**只由唯一 Projection 生成**——`orchestration/router/projection.py::project_route_decision_to_legacy_state()` 统一写出 route_decision_v2、兼容 route_decision、route_mode、domain 平铺、candidate/tool route 与 clarification 字段。AST 守卫 `backend/tests/orchestration/graph/test_legacy_route_writer.py` 禁止在 projection 之外新增生产写入口；prefilter、continuation、clarify、handoff、general_chat 一律经 Projection 落字段。
+
+**域图注册表（`domain_registry.py`）扩展 runtime descriptor**：注册期校验 runtime_id 唯一、alias 不冲突、子流父域存在且不自指；`DomainGraph` 声明 `runtime_id / runtime_type / aliases / capabilities / supports_checkpoint / supports_interrupt / supports_streaming / result_contract_version / entry_modes / continuation_policy`（CS：checkpoint=true/interrupt=false；Travel：checkpoint=true/interrupt=true；Selection：均 false）。Router 的域族、入口模式、prefilter domain 与 subflow 元数据从 Registry 活视图派生（`resolve_alias` / `route_mode_to_runtime_target` / `route_mode_to_family` / `route_mode_to_entry_mode`），域字面量静态守卫 `test_router_domain_literal_guard.py` 保证**新增域不需要改 Router 文件**（注册面 ≤3 处）。
+
+**域图出口 RuntimeResult 归一**：`orchestration/runtime_result_adapter.py::attach_runtime_result()` 在 CS/Travel/Selection 域图节点返回既有 state update 前调用归一，写入可序列化的 state `runtime_result`（answer、answer_type、sources、clarification、handoff、tool_calls、metadata 不丢）；主 reporter 不读取域 runtime_result 做二次 LLM 改写，域图仍直连 END。
+
+**State canonical 化**：`orchestration/state_projection.py` 提供 canonical readers（`canonical_route_decision` / `resolved_params` / `clarification_request`），V2 decision 优先、旧字段缺失时可由 V2 投影读取；unknown state key 守卫为 0（`test_state_key_guard.py`）。
+
+**Trace 观测 13 字段**：domain、subflow、runtime_type、runtime_id、interaction_mode、execution_mode、workflow_id、capability、skill_id、tool_id、prompt_version、confidence、source（`orchestration/router/router_trace.py`）；Skill/Tool 归因装饰器埋 `record_runtime_attribution(skill_id/tool_id)`，与既有 llm_attribution_scope 叠加。
+
+**机械验收门** `python -m backend.scripts.verify_runtime_arch_v2 --stage G --final`：A–G 七阶段门 + node_id/SSE 事件/checkpoint/前端节点映射兼容门 + 全局回归（direct/workflow/plan、三域图、clarify、handoff、general_chat、Travel interrupt→pending→resume、Plan Send payload），全部由真实测试退出码计算、禁止手写 PASS；终态 447 passed、`STATE_UNKNOWN_KEY_TOTAL=0`、`PRODUCTION_BEHAVIOR_CHANGED=false`、`AGENT_RUNTIME_ARCH_V2_READY=true`。设计稿：[2026-10-06-runtime-semantic-closure-design.md](../superpowers/specs/2026-10-06-runtime-semantic-closure-design.md)；实施方案与执行状态：[2026-10-06-runtime-semantic-closure.md](../superpowers/plans/2026-10-06-runtime-semantic-closure.md)。
+
 ## 跨轮状态契约（checkpointer 关闭时同样必须遵守，域图通用）
 
 1. `new_*_graph_input()` **只放本轮输入**，不预置产物/执行态默认值 —— checkpointer 会把 input 当对上轮状态的**更新**合并，预置 `brief: {}` 等于每轮清空成果
@@ -139,3 +153,5 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 - [2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](../2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md) — 新增资产 checklist
 - [OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md](../OPTIMIZATION_P3_ASYNC_QUEUE_ARCHITECTURE.md) — Celery 异步运行时
 - [system-overview.md](system-overview.md) — 部署拓扑与端口
+- [2026-10-06-runtime-semantic-closure-design.md](../superpowers/specs/2026-10-06-runtime-semantic-closure-design.md) — Runtime 语义收口设计稿（RouteDecisionV2 / Projection / Registry descriptor）
+- [2026-10-06-runtime-semantic-closure.md](../superpowers/plans/2026-10-06-runtime-semantic-closure.md) — 实施方案与 STOP A–G 执行状态（机械验收门口径）
