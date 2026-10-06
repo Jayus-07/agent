@@ -167,7 +167,7 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 
 ---
 
-## 系统规模（2026-10-05 实测口径）
+## 系统规模（2026-10-07 实测口径）
 
 | 资产 | 数量 | 事实源 |
 |------|------|--------|
@@ -178,8 +178,8 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Workflow | 4 | `backend/orchestration/workflows/__init__.py::register_all()` |
 | 域图 | 5 个物理域图 = 3 个顶级业务域（客服 / 旅游〔含 planning + commerce + booking 子流〕/ 选品漏斗；**代码默认全部关闭**，见「垂直域图」） | `backend/domains/__init__.py` |
 | MCP Server / Tool | 2 / 5（自托管；另经 `infra/mcp_client.py` 接外部 MCP 数据源 2 例：mcp-12306、知乎官方 MCP） | `mcp_servers/servers/` |
-| 后端用例 | 9289（`pytest --collect-only`，2026-10-05；含工作区在途测试文件） | `backend/tests/` |
-| 前端路由 | 用户端 6（含 /change-password 临时密码改密）/ 管理端 48（含 /tools Tool 治理、/consistency 资产一致性、/data-explorer 数据查询、/knowledge/upload-failures 入库失败、selection-workbench / knowledge/workbench / evaluations/center / observability/monitoring 四个工作台页；侧栏入口已工作台合并，page.tsx 数 ≠ 侧栏条目数，2026-10-03）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
+| 后端用例 | 9727（`pytest --collect-only`，2026-10-07；含工作区在途测试文件） | `backend/tests/` |
+| 前端路由 | 用户端 7（含 /change-password 临时密码改密、/selection-funnel 选品专属页「第四扇门」）/ 管理端 48（含 /tools Tool 治理、/consistency 资产一致性、/data-explorer 数据查询、/knowledge/upload-failures 入库失败、selection-workbench / knowledge/workbench / evaluations/center / observability/monitoring 四个工作台页；侧栏入口已工作台合并，page.tsx 数 ≠ 侧栏条目数，2026-10-03）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
 
 > ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
 > [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)。
@@ -359,7 +359,7 @@ mcp_servers/
 - **Trace**：主图节点、Skill、Tool、检索与索引阶段均落 Span，类型由 `observability/tracer.py::SpanKind` 枚举强约束（**照 G2 不在此手抄阶段清单**）；每 Span 记录 latency / token_usage / retrieval_score / tool_args / execution_result
   - Evidence Gate 有 4 个专有 Span：`retrieval_gate` / `rerank_gate` / `faithfulness_gate` / `self_correction`
 - **Metrics**：Prometheus `/metrics`；黄金信号 = 首 token 延迟（TTFT P99 < 3s）/ 每 token 耗时（TPOT P99 < 200ms）/ 错误率 / 并发占用
-- **告警**：`docker/prometheus-alert-rules.yml`（52 条，warning/critical 两级）
+- **告警**：`docker/prometheus-alert-rules.yml`（55 条告警 + 6 条 recording 规则，warning/critical 两级；自监控抓取与 15d retention 见 `docker/prometheus.yml` / compose）
 - **成本治理**：`GET /observability/tokens/calls` 逐次调用 token 与成本；budgets + prices 可在管理端配置
 
 SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
@@ -375,9 +375,9 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
 | 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
-| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 069） |
+| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 077） |
 | 异步 | Celery + Redis（双队列）+ Kafka（`java-loop` profile，默认不启） |
-| 可观测 | 自建 Tracer + Prometheus + Grafana |
+| 可观测 | 自建 Tracer（OTel OTLP 出口 `OTEL_TRACE_OTLP_ENABLED` 默认关）+ Prometheus + Grafana + Tempo/Loki/Promtail + Alertmanager/alert-bridge（观测栈全家桶走 `--profile observability`，默认不启） |
 | MCP | stdio / HTTP SSE |
 | 前端 | Next.js 14 + React 18 + Tailwind 3 + Zustand + TanStack Query（用户端 / 管理端 / 客服坐席三端）｜小程序 Taro 已退役冻结（移动端由用户端响应式承接） |
 

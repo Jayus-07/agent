@@ -1,7 +1,7 @@
 # 项目文档总索引
 
 > **电商 RAG + Multi-Agent 平台** 的文档总入口。
-> 文档随代码一同演进，最后验证：2026-09-28。
+> 文档随代码一同演进，最后验证：2026-10-07。
 >
 > ⚠️ **口径提示**：`docs/` 历史上堆积过大量**带日期的交接 / 收口 / 审计报告**（2026-09-29 已归档
 > 146 个至 [archive/](archive/)），它们是历史事实记录，**不随后续代码演进回写**。引用系统规模、
@@ -9,6 +9,9 @@
 > 唯一权威；本文件只负责导览。
 
 - [旅游灵感式规划 v3 P0-A 收尾验收](reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md) — 意图、城市识别、天数选择、回归与金标变更证据。
+- [RoutingEngine 统一路由引擎设计](superpowers/specs/2026-10-05-routing-engine-design.md) — 六阶段路由 / 统一决策契约设计稿（2026-10-05 落地，7ad1fa8/7a47da0）。
+- [Runtime 语义收口设计](superpowers/specs/2026-10-06-runtime-semantic-closure-design.md) — RouteDecisionV2 / 唯一 Projection / Registry descriptor 设计源头（2026-10-06 落地，机械验收门 `verify_runtime_arch_v2`）。
+- [多域隔离收官实施计划](superpowers/specs/2026-10-06-多域隔离收官实施计划.md) — 域入口模式 / handoff 帧 / 第四扇门（M1-M6 已收官，验收报告见 reports/2026-10-06-多域隔离收官验收报告.md）。
 
 ---
 
@@ -57,6 +60,7 @@ docs/
 ├── PRD.md / ARCHITECTURE.md / DESIGN.md / RAG_DESIGN.md / AGENT_DESIGN.md
 ├── DATABASE.md / API.md / ROADMAP.md      ← 顶层 8 文档（新人入口）
 ├── architecture/adr/    ← ADR 决策记录
+├── superpowers/specs/   ← 现役设计稿与实施计划（specs=设计 / plans=执行状态，未归档即现行）
 ├── contracts/           ← 跨端契约（身份头协议等）
 ├── customer-service/    ← 客服域专项（refactor-plan / target-architecture / 五剧本）
 ├── decisions/ auth/     ← 技术决策与鉴权
@@ -84,7 +88,7 @@ docs/
 - **域图**：5 个（客服 / 旅游 / 选品漏斗 / 旅游商务 / 旅游预订），代码默认全关
 - **Trace 体系**：每请求一棵 span 树，SpanKind 枚举强约束（阶段清单见 `observability/tracer.py`，不在此手抄）
 - **Evidence Gate**：Retrieval / Rerank / Faithfulness 三层拒答 + Self-Correction
-- **SSE 协议**：meta / status / log / delta / done / error
+- **SSE 协议**：CORE 6 帧 meta / status / log / delta / done / error（+ AUX 辅助帧与 ping，全 14 种见 [API.md §3.1](API.md)）
 
 ---
 

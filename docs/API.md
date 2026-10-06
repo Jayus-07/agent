@@ -110,7 +110,7 @@ if client_key != API_KEY:
 
 ### 3.1 事件类型
 
-SSE v2 支持 **13 种事件，分三层**（契约权威：[backend/orchestration/graph/event_schema.py](../backend/orchestration/graph/event_schema.py)，回归门 `tests/test_sse_event_schema.py`；data 契约只锁必填字段，未知字段放行）：
+SSE v2 支持 **14 种事件，分三层**（契约权威：[backend/orchestration/graph/event_schema.py](../backend/orchestration/graph/event_schema.py)，回归门 `tests/test_sse_event_schema.py`；data 契约只锁必填字段，未知字段放行）：
 
 **CORE（帧序约束参与者）**：
 
@@ -133,6 +133,7 @@ SSE v2 支持 **13 种事件，分三层**（契约权威：[backend/orchestrati
 | `clarification` | 追问澄清（发出即双写追问漏斗 shown：Prometheus + PG） | `{question, options, ts}` |
 | `context` | 上下文事件（L2 裁剪 / L4 压缩，字段随事件类型变化） | dict |
 | `thinking` | 思考过程 | `{content, ts}` |
+| `handoff` | 域引导交接卡（多域隔离 M1，2026-10-06 `bb3b3df`：guide 模式主图短路 router→reporter 直出引导话术） | `HandoffData`：帧门禁只锁源码恒定的 `v` + `target_domain`；`params`（参数包）/`reason`/`text`（引导话术）由契约 `orchestration/contracts/handoff.py::HandoffPayloadV1` 构造期严格校验（extra=forbid）。前端 `HandoffCard` 三入口带参跳转（旅游页预填 / 选品页带参 / CSDrawer 预填），点击埋点 `POST /observability/handoff/click` |
 
 **TRANSPORT**：`ping`（`{ts}`，空闲心跳保活，不计入帧序，前端忽略）。
 
@@ -392,7 +393,7 @@ DELETE /memory/sessions/{id}                       删除级联消息
 PATCH  /memory/sessions/{id}                       重命名
 ```
 
-### 5.4 /observability（11 端点）
+### 5.4 /observability（22 端点，2026-10-07 实测；此处节选高频面，全量以 `routes/observability.py` 为准）
 
 ```
 GET /observability/traces?limit=N        最近 N 条（SQLite，轻量）
@@ -406,6 +407,7 @@ GET /observability/resources             CPU/内存
 GET /observability/breakers              熔断器状态
 GET /observability/alerts                告警
 GET /observability/graph                 拓扑图
+POST /observability/handoff/click        域引导卡点击埋点（多域隔离 M1；body {target_domain ∈ travel|customer_service|selection_funnel}，只计数不落明细，未知值 422）
 ```
 
 **DTO 适配**（`_to_span_dto` / `_to_trace_dto` / `_stored_dict_to_dto`）：
@@ -580,7 +582,7 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 ## 旅游规划问答与天数选择（v3 P0-A）
 
-`POST /api/travel/plan` 与 `/api/travel/plan/stream` 共用域图输出契约；流式 `done.data.result` 返回相同结构。静态问答、动态问答、目的地探索及尚不支持的逐条改单返回 `status=answered`、`itinerary=null`、`validation=null`，不写规划版本或规划 pending。
+`POST /api/travel/plan` 与 `/api/travel/plan/stream` 共用域图输出契约；流式 `done.data.result` 返回相同结构。静态问答、动态问答、目的地探索返回 `status=answered`、`itinerary=null`、`validation=null`，不写规划版本或规划 pending。**逐条改单（2026-10-07 `4ddc3c3` 起已支持）**：已有行程时的结构化改单走 `travel_partial_replan` 局部重规划（replace/remove/add/pace/end_time/hard_constraint 六操作，纯规则解析），返回**新 itinerary + validation**（`partial_result.validation_failed` → `status=failed`），只改被点名的天与条目、点名必去条目不被静默丢弃；新地点缺候选只补候选不重排。
 
 明确规划且仅缺天数时，`clarification_options` 返回两项：`{label:"按 3 天参考规划", days:3, message:"规划<目的地>3天行程"}` 与 `{label:"自己填天数", days:null, message:""}`。`days` 在点击前仍为空；前端发送第一项完整消息后，后端重新抽取并校验。第二项只聚焦输入，不发送请求。`requirement.interpreted` 同步携带 `intent` 与 `clarification_options`，两者均声明在旅游状态 schema。
 
@@ -589,7 +591,7 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 ## 历史规划与版本链（2026-10-02）
 
 `GET /api/travel/plans?limit=`（1–100，默认 30）——当前用户的历史规划列表（每会话最新版）。
-`GET /api/travel/plans/{conversation_id}/latest`——会话最新版行程（含完整 itinerary，供恢复历史规划）；不存在/越权一律 404，不泄露存在性。
+`GET /api/travel/plans/{conversation_id}/latest`——会话最新版行程（含完整 itinerary，供恢复历史规划）；不存在/越权一律 404，不泄露存在性。响应含 `active_plan_version / active_plan_status / active_itinerary`（2026-10-07 `4ddc3c3`：服务端 active 版本为 draft 时回带 active 内容，供前端 `reconcilePlanWithLatest` 会话校准；无 active 读取能力或无 active 版本时为 null）。
 `GET /api/travel/plans/{conversation_id}/versions`——行程版本历史（新→旧）。
 `POST /api/travel/plans/confirm`——确认整份行程（waiting_confirmation → confirmed）。
 `POST /api/travel/plans/restore`——以旧版内容生成新版本恢复。
@@ -605,6 +607,8 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 同批引入旅游域通用 Tool 缓存层：`TRAVEL_TOOL_CACHE_ENABLED`（默认开）/ `TRAVEL_TOOL_CACHE_TTL`（默认 86400s），对域内 live 检索 Tool 生效。
 
+2026-10-07 增量（`4ddc3c3`）：brief 契约新增 `budget_constraint`（`hard`=不得超出预算（默认）/ `soft`=可超需说明）与 `weather_conditions`（天气证据回显）；`TRAVEL_ARRIVAL_BUFFER_MINUTES`（默认 30）约束首日活动不得早于到达时间+缓冲。
+
 ## 用户决策留痕（2026-10-04 M4）
 
 `POST /api/travel/decisions`——用户决策留痕（草案应用 / 放弃 / 画布替换 / 档位切换 / 删减协商五类），决策提交幂等（唯一约束防重）；`GET /api/travel/decisions?conversation_id=`——某会话决策链（时间新→旧）。持久化 `ai.travel_decision_audit`（迁移 072）+ 幂等约束（073），管理端/排查按 `decision_type` + `source` 归因（决策留痕权威口径见根 AGENTS.md 旅游段）。
@@ -612,6 +616,10 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 ## 会话候选池（2026-10-05 验收 #10）
 
 `GET /api/travel/candidates?conversation_id=`——左栏分类候选表数据源：读域图 checkpoint 的 `state.candidates`（thread_id 与规划链同源：`travel:{tenant}:{user}:{conv}` 复合 namespace），按类别分组下发（组内 rating 降序、每组 ≤12 条）；响应含 `plan_version / destination / groups / available / hint`。checkpoint 不可达（降级 MemorySaver 后重启 / TTL 过期 / disabled）→ `available=false` + 空分组 + 提示，**不伪造**候选；权限对齐 plans 端点（无版本/越权一律 404）。前端 CandidatesPanel 换入走 canvas_replace 草案管线（decision `entry=candidates_panel`）。
+
+## 选品漏斗专属页（多域隔离 M4，2026-10-06）
+
+`POST /api/selection-funnel/run`——选品专属页（`/selection-funnel`，「四扇门」之一）直达域图执行，**不经主图**：复用主图域适配器 `selection_funnel_graph_node` 同一条执行链（淘空/缺槽如实收尾、E1 候选同步 ConversationContext、执行标签埋点全同），同步返回整包报告（一期不做 SSE 流）。请求体 `category / platform / conversation_id`（会话锚点，空=新建）；**运营角色门禁**（JWT 平台角色，服务凭据走内部令牌）。主图侧入口受 `SELECTION_GLOBAL_ENTRY_MODE` 约束（guide 模式经 §3.1 `handoff` 帧引导至此，`execute` 模式照旧进域图）。
 
 ## 行程工具端点（P1 批次）
 
@@ -622,4 +630,4 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 ## 验证
 
-最后验证：2026-10-06 · SSE §3 按 event_schema.py 13 事件三层契约重写（CORE/AUX/TRANSPORT、done 帧 `elapsed` 秒、log 帧字段、meta 帧四字段、seq/id 帧行示例顺序修正）、发布门 6 端点（补 comparison）、评测运行生命周期与数据集治理台端点族、`/evaluation` X-Tenant-Id 租户钩子 403 与 PII 脱敏、旅游 `/decisions` 决策留痕、上传 SSE 帧契约（was_overwrite）、RAG 知识生命周期 3 端点转已合并（3fd3c0b）。端点明细以 `backend/app/api/routes/` 目录为准；`/chat/stream` SSE 契约含 F2 Resume Protocol（seq/id 帧行、`/chat/stream/resume` 端点）。2026-10-06 增量：done 帧补 `reply_source` 归因稳定码（3af6f54）、旅游 `/candidates` 会话候选池与 P1 批次工具端点（export/ics、feedback、preferences、recommend）补记、X-Tenant-Id 钩子覆盖面按代码收窄。
+最后验证：2026-10-06 · SSE §3 按 event_schema.py 13 事件三层契约重写（CORE/AUX/TRANSPORT、done 帧 `elapsed` 秒、log 帧字段、meta 帧四字段、seq/id 帧行示例顺序修正）、发布门 6 端点（补 comparison）、评测运行生命周期与数据集治理台端点族、`/evaluation` X-Tenant-Id 租户钩子 403 与 PII 脱敏、旅游 `/decisions` 决策留痕、上传 SSE 帧契约（was_overwrite）、RAG 知识生命周期 3 端点转已合并（3fd3c0b）。端点明细以 `backend/app/api/routes/` 目录为准；`/chat/stream` SSE 契约含 F2 Resume Protocol（seq/id 帧行、`/chat/stream/resume` 端点）。2026-10-06 增量：done 帧补 `reply_source` 归因稳定码（3af6f54）、旅游 `/candidates` 会话候选池与 P1 批次工具端点（export/ics、feedback、preferences、recommend）补记、X-Tenant-Id 钩子覆盖面按代码收窄。2026-10-07 增量：SSE 事件 13→14（AUX 帧补 `handoff`，`HandoffPayloadV1` 契约）、新增选品漏斗 `POST /api/selection-funnel/run` 与 `POST /observability/handoff/click`（多域隔离 M1/M4）、旅游逐条改单局部重规划契约（`travel_partial_replan`）、plans/latest 响应补 `active_*` 三字段、brief 补 `budget_constraint`/`weather_conditions`（`4ddc3c3`）；§5.4 端点数按代码校准（22）。
