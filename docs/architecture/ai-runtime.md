@@ -13,7 +13,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
                 ├─ 客服预过滤命中（CS_ENABLED + 灰度）     → 客服域图 → END
                 ├─ 旅游预过滤命中（TRAVEL_ENABLED）        → 旅游域图 → END
                 ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
-                └─ RoutingEngine（domain → intent → capability → policy → RouteDecision）→ route_selector
+                └─ RoutingEngine（entry_gate → domain → intent → capability → policy → route_decision）→ route_selector
                       ├─ direct   → tool_selector → skill_executor → reporter → END
                       ├─ workflow → workflow_executor → reporter → END
                       ├─ general_chat（寒暄/能力咨询）→ 主 LLM 直答 → END
@@ -27,7 +27,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 | 节点 | 职责边界 |
 |------|----------|
-| Router | 入口门禁（GraphRunner Input Guard）之后执行域预过滤（客服域锁 / CS / 旅游 / 选品 / 商务 / 预订，纯正则）+ RoutingEngine：DomainRouter → IntentRouter → CapabilityRouter → ExecutionModeResolver → RouteDecision；规则、向量和 LLM 是证据提供者，基础设施故障走显式 LLM fallback |
+| Router | 入口门禁（GraphRunner Input Guard）之后执行域预过滤（客服域锁 / CS / 旅游 / 选品 / 商务 / 预订，纯正则）+ RoutingEngine 六阶段固定序 `entry_gate → domain → intent → capability → policy → route_decision`（DomainRouter / IntentRouter / CapabilityRouter / ExecutionModeResolver 各只出一类决策）；规则、向量和 LLM 只是证据提供者；基础设施故障结构化四分类 `domain_classifier_degraded / vector_index_mismatch / vector_unavailable / llm_failure`（向量故障不在请求内重建索引） |
 | tool_selector | direct 路径首站：Function-Call 门控选工具 + 填参；失败/快路径直通零开销；**首候选分数兜底已删除（2026-10-06 Tool Governance Runtime，`b6b7973`）**——FC 失败/模型拒绝（`fit=no_match` 或 declined）/单候选无明确 fit/selector 预算耗尽一律 `clarify`，不再按候选分数自动执行（旧 `TOOL_SELECTOR_TOP_CANDIDATE_*` 行为与 `source=router_top_candidate` 已废弃）；模型不可提供 auto 参数；选出的 capability 执行必须经 `core/tool_governance/guard.py::GovernanceRuntime` 门（候选/域/intent_fit/Schema/确认/预算/限流熔断） |
 | Planner | 只做任务拆解 → Capability DAG，**禁调 Tool/Skill/DB** |
 | Critique | 规则校验优先，仅 anomaly 才调 LLM；含计划深度上限（≤8） |
@@ -47,7 +47,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | 域图 | 开关 | 节点序列 |
 |---|---|---|
 | 客服 | `CS_ENABLED` | `state_loader → pending_handler → cs_supervisor → 5 专家（knowledge/query/action/complaint/handoff）→ cs_reporter`；`cs_supervisor` 承担 handoff 拦截、循环上限、LLM 兜底；v2 决策链（`CS_DECISION_V2`）在守卫之后、意图路由之前有 **L4.5 分诊直出**：寒暄→`chat_fallback` 一次 LLM 人设（`CS_CHAT_FALLBACK_ENABLED`）、出域→固定话术零 LLM（`CS_WINDOW_STANDALONE`；v1 回退路径不接出口）；`pending_handler` 在 need_info 补槽期**优先放行显式转人工**（命中 handoff 触发即释放 pending 回 supervisor 重分诊，审计 `need_info_handoff_escape`，2026-10-05 a65a167——追问不再吞掉转人工诉求） |
-| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair → travel_reporter`；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`） |
+| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair →（已有行程逐条改单）travel_partial_replan → travel_reporter`（11 节点，2026-10-07 `4ddc3c3` 增 `travel_partial_replan`：局部重规划只动被点名天与条目+强制重验证，见「旅游会话意图」节）；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`） |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | prefilter 已接线（`router_node` 内与旅游同层，2026-09-17）；仅受开关控制，无域锁通路 |
 | 旅游商务（Travel · commerce 子流） | `TRAVEL_COMMERCE_ENABLED`（默认关） | `backend/travel/commerce/`，2026-09-24 STOP K |
 | 旅游预订（Travel · booking 子流） | `TRAVEL_BOOKING_ENABLED`（默认关） | `backend/travel/booking/`，预订事务与幂等账本复用，2026-09-25 STOP L |
@@ -115,7 +115,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 | 名称 | 位置 | 职责 |
 |---|---|---|
-| **主图 Router**（`orchestration/graph/router_node.py`） | LangGraph 主图入口节点 | Input Guard 之后执行域预过滤 + RoutingEngine（domain→intent→capability→policy→RouteDecision）+ 拍板 route_mode（direct/workflow/plan/general_chat/clarify/域图） |
+| **主图 Router**（`orchestration/graph/router_node.py`） | LangGraph 主图入口节点 | Input Guard 之后执行域预过滤 + RoutingEngine 六阶段（entry_gate→domain→intent→capability→policy→route_decision）产出 `RouteDecisionV2`；旧 route_mode（direct/workflow/plan/general_chat/clarify/域图）等兼容字段只由唯一 Projection 生成（见上节「Runtime 语义收口」） |
 | RAG 查询路由（`rag/retrieval/query_router.py`） | rag-service 内检索管道 | 检索策略选择，属于 RAG 子系统内部实现 |
 | SQL Schema Router（`sql/` 内） | SQL 子系统内部 | 自动选表，属于 NL2SQL 子系统内部实现 |
 
@@ -123,15 +123,15 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 ## 旅游会话意图（v3 P0-A）
 
-`travel_slot_filler` 先做意图分类——**代码默认纯规则**；开关 `TRAVEL_LLM_INTENT_ENABLED`（默认关，`TRAVEL_LLM_INTENT_TIMEOUT_MS` 默认 3000）开启后，仅词表盲区（词表分类返回 None 的消息）交 LLM 补判一次 intent 家族：输出只取枚举 family 的结构守卫（其余键一律丢弃），失败/超时/无绑定一律回落词表，词表能接住的消息永不过 LLM。再合并需求，最后检查缺槽。已有行程的逐条改单优先；明确规划动作压过疑问；动态与静态问答优先于「城市＋天数」简写。抽取器能理解的结构化修改继续走既有指纹变化重排。`travel_supervisor` 的意图门禁先于缺槽判断，问答与探索直接到 reporter，不调规划子 Agent。
+`travel_slot_filler` 先做意图分类——**代码默认纯规则**；开关 `TRAVEL_LLM_INTENT_ENABLED`（默认关，`TRAVEL_LLM_INTENT_TIMEOUT_MS` 默认 3000）开启后，仅词表盲区（词表分类返回 None 的消息）交 LLM 补判一次 intent 家族：输出只取枚举 family 的结构守卫（其余键一律丢弃），失败/超时/无绑定一律回落词表，词表能接住的消息永不过 LLM。再合并需求，最后检查缺槽。已有行程的逐条改单优先；明确规划动作压过疑问；动态与静态问答优先于「城市＋天数」简写。能结构化解析的改单走 `parse_partial_request` → `travel_partial_replan` **局部重规划**（六操作 replace/remove/add/pace/end_time/hard_constraint，纯规则；只动被点名天与条目、强制重验证，`validation_failed` → failed；新地点缺候选只补候选不重排，`4ddc3c3`）；无法解析的改动信号仍走既有指纹变化整体重排。`travel_supervisor` 的意图门禁先于缺槽判断，问答与探索直接到 reporter，不调规划子 Agent。
 
-意图共六类，第六类 **`OUT_OF_SCOPE` 出域引导**（2026-10-03 `24dfb24`，M2-G）为最高优先级：非旅游域强信号词首中即拦，reporter 走引导出口（`_answer_out_of_scope`）——明确告知不属旅游域、不硬解析不硬排，引导回主对话/客服链路，避免旅游域图硬接非旅游诉求。
+意图共**八类**（PLAN / MODIFY / QUERY_DYNAMIC / QUERY_STATIC / DISCOVER / SOCIAL / META / **OUT_OF_SCOPE**；2026-10-07 `4ddc3c3` 增 `SOCIAL`/`META` 轻交互类，与 QUERY 家族同属 `NON_PLANNING_INTENTS`——只走 reporter 轻量出口 `_answer_social`/`_answer_meta`，不得进完整规划链），其中 **`OUT_OF_SCOPE` 出域引导**（2026-10-03 `24dfb24`，M2-G）为最高优先级：非旅游域强信号词首中即拦，reporter 走引导出口（`_answer_out_of_scope`）——明确告知不属旅游域、不硬解析不硬排，引导回主对话/客服链路，避免旅游域图硬接非旅游诉求。
 
 城市名录只用于识别与消歧，不能作为 live Provider 的支持范围闸门。目的地、出发地、路线和预过滤共用带负向词与后缀守卫的扫描入口；种子模式仍如实展示种子覆盖范围。静态问答的一次只读攻略检索在 slot_filler 侧完成，输出 available/empty/unavailable 三态；reporter 只渲染既有结果。问答对外不重复发布 checkpoint 中的旧行程，也不创建规划 pending。
 
 需求抽取侧的节奏口径（#80）：显式 pace 词优先；未提 pace 时按同行人群派生默认档位（requirement_agent 词表：老人/爸妈/带娃/亲子→relaxed，特种兵/暴走/学生党→intense；slot_filler 经 `extract_group_pace` 并入合并），经既有 pace 容量约束传导到排程，不新增排程分支。规划会话恢复：旅游域追问中断后的**纯槽位值回答**（「8万日元」「住难波」类，不含旅游/延续信号词）由 `TravelPendingResolver`（插在 ContinuationResolver 之前，纯规则零 LLM）判定短路回旅游域图，`TRAVEL_PENDING_RESUME_ENABLED` 默认 true；客服强信号仍优先放行。
 
-最后验证：2026-10-05 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)；本节意图分类口径已按 `TRAVEL_LLM_INTENT_ENABLED` 开关状态改写（默认纯规则不变）。
+最后验证：2026-10-07 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)；本节意图分类口径已按 `TRAVEL_LLM_INTENT_ENABLED` 开关状态改写（默认纯规则不变）。2026-10-07 增量：意图六类→八类（增 SOCIAL/META）、逐条改单接 `travel_partial_replan` 局部重规划（`4ddc3c3`）；路由表与六阶段链对齐 Runtime V2（`8d4dbb7` 收口的补充）。
 
 ## 旅游数据源与版本链（2026-10-02）
 
@@ -142,6 +142,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 - **城市指南与通用 Tool 缓存**（同批）：`GET /api/travel/city-guide` 轻端点（不进域图，四级内容链：文档摘要→RAG travel 库→知乎→暂无，7 天缓存）；旅游域 live 检索 Tool 走通用缓存层（`TRAVEL_TOOL_CACHE_ENABLED` 默认开 / TTL 默认 86400s）。
 - **POI 候选池三源与三路并发**（2026-10-04）：LBS 主源之上并入两个默认开启的新源——高德景点类目（`TRAVEL_POI_AMAP_SOURCE_ENABLED` 默认 true：rating/营业时间/检索时刻 open_status 标注与必去警告，单源失败只损失评分不损失腾讯候选）与 travel RAG 库本地攻略文档名解析补池（`TRAVEL_POI_LOCAL_DOC_ENABLED` 默认 true，≤5 条）；每次关键词检索 20 条、候选池上限 120。专家侧 candidates/guides/hotel 三路 ThreadPool 并行检索（ContextVar 经 copy_context 快照传播到工作线程，单路失败独立降级留痕）；美食商户按「就近+品类+评分」综合排序（品类加权表 `TRAVEL_FOOD_CATEGORY_BOOSTS` 默认空不启用）。
 - **抵达车票自动查询（#7a）**：有出发地+出发日期即自动查询，无需「查高铁」类触发词（触发词不再门控，`message` 参数仅为调用方签名兼容保留）；重复查询由 provider 共享缓存与 tool_cache 兜底，二次规划零成本。
+- **到达时间缓冲与 brief 契约扩展（2026-10-07 `4ddc3c3`）**：首日活动开始不得早于 `brief.arrival_time` + `TRAVEL_ARRIVAL_BUFFER_MINUTES`（默认 30）；brief 新增 `budget_constraint`（`hard`=不得超出预算（默认）/ `soft`=可超需说明）与 `weather_conditions`；会话级 trace 写 `travel_semantics` 投影（`travel/trace_semantics.py`：planning_mode / interaction_mode / base·active·draft 版本 / semantic_change / modified_days 等）。
 - **分类候选表**（2026-10-05 验收 #10，`721c9e4`）：POI 专家产出的候选池落 graph `state.candidates`（随 checkpoint 持久化），`GET /api/travel/candidates` 经域图单例读取（thread_id 与规划链同源）→ 前端 CandidatesPanel 分类展示（组内 rating 降序、每组 ≤12 条）；换入走 canvas_replace 草案管线，decision `entry=candidates_panel`；checkpoint 不可达如实 `available=false`，不伪造候选。
 
 最后验证：2026-10-06 · `TRAVEL_POI_SOURCE` 默认值、`TRAVEL_PLAN_VERSIONS_*` 配置、`itinerary.intercity` 契约字段、M3 档位/协商/城市指南实测；2026-10-05 增量补记 POI 候选池三源与三路并发 / 抵达车票自动触发 / slot_filler LLM 意图补判开关 / #80 人群节奏派生与旅游 pending resume；2026-10-06 增量补记客服 L4.5 分诊直出 / need_info 转人工逃生 / 订单序号回指 / 旅游分类候选表状态管线。

@@ -44,7 +44,7 @@
 
 | 维度 | 现状 | 改进方向 |
 |---|---|---|
-| **可观测性接入 OTel** | 自建 Tracer（功能完整） | OpenTelemetry → Jaeger / Tempo + Grafana |
+| **可观测性接入 OTel** | 自建 Tracer + OTel OTLP 出口（Tempo/Loki/Promtail 已入 `--profile observability`，2026-10-06 `8caa3f8`/`056d63f`） | 出口默认关的推广启用 + SLO 看板化 |
 | **健康检查** | `/health` 仅确认进程存活 | `/health/ready` 深度探测 DB / LLM / Chroma |
 | **测试覆盖** | 部分覆盖 + Vitest | 契约 + E2E + 负载 + Golden Dataset |
 | **驾驶舱** | Sidebar 首项"数据驾驶舱" → 重定向 `/agent` | 面向 3 类角色的差异化首页 |
@@ -213,4 +213,4 @@ Phase 3 平台化 P0 与垂直域生产收口（5 域图 / 坐席工作台 / 幂
 
 ## 验证
 
-最后验证：2026-10-03 · P0/Phase3 状态逐项对照代码与迁移目录核实（celery beat、scheduler、routes 计数实测；迁移编号订正至 069）；规模口径以根 [README.md](../README.md)「系统规模」为唯一权威。
+最后验证：2026-10-07 · P0/Phase3 状态逐项对照代码与迁移目录核实（celery beat、scheduler、routes 计数实测；迁移编号订正至 077）；规模口径以根 [README.md](../README.md)「系统规模」为唯一权威。2026-10-07 注：10-05~10-07 密集收官批（RAG 终审申报 `6d3e696`、SQL 验收 v1.3.2 实机、Tool Governance Runtime `b6b7973`、多域隔离 M1-M6 `52ce0c2`、Runtime V2 冻结 `9ed8f37`、旅游验收闭包 `4ddc3c3`）§差距矩阵未逐项回写，终态以各验收报告与根 AGENTS.md 为准。

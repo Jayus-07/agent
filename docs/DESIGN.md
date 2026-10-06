@@ -1,7 +1,7 @@
 # DESIGN — 前端三端设计规范
 
 > 用户端 `frontend`（:3100）· 管理端 `frontend-admin`（:3200）· 客服坐席端 `frontend-cs`（:3300）的统一设计规范。
-> 最后验证：2026-10-04 · 基于三端代码逐目录 survey（token 色值 / 组件路径 / 状态表现均实测）；本次同步 /travel 三栏形态、管理端侧栏二级标题、AI 身份告知。
+> 最后验证：2026-10-07 · 基于三端代码逐目录 survey（token 色值 / 组件路径 / 状态表现均实测）；本次同步 /travel 三栏形态、管理端侧栏二级标题、AI 身份告知。2026-10-07 增量：用户端 +`/selection-funnel` 第四扇门、`HandoffCard` 域引导卡、`ReplyBadge` 回复归因徽章、`MarkdownContent` 宽表/H1 排版契约（多域隔离 M3-M4 `bb3b3df`、回复呈现一期 `3af6f54`）。
 > 历史依据：[2026-09-17-UX体验架构设计.md](2026-09-17-UX体验架构设计.md)（三段式错误反馈 / 等待体验 / 空态体系的原始规范）、[2026-09-16-前端拆分计划.md](2026-09-16-前端拆分计划.md)（三端拆分背景）。
 
 ---
@@ -59,7 +59,7 @@
 
 ## 4. 页面清单（2026-10-02 实测）
 
-**用户端**（6 页）：`/` 统一门户（三端入口卡）· `/login` / `/register`（注册成功自动登录）· `/agent` 聊天主界面（`?cs=1` 客服抽屉、`?session=` 深链恢复）· `/travel` 三栏旅游控制台——左栏行程条件（TaskSidebar travel 模式：历史规划列表 + 需求摘要锁定），中栏行程画布（逐日时间轴 + 地图打点 + ICS 导出；生成中以 GeneratingCard 占位、真实美食/酒店/车次 Tool 结果按 SSE 动态进聊天流），右栏「旅行助手」页内对话式改单（复用同一会话，工具条收敛摘要 + 结果卡横向流 + 排队槽）；全局 Sidebar 控制台形态，另有 CityGuideDrawer 城市指南抽屉、方案档位切换器与预算协商卡；失败不以演示数据替代。
+**用户端**（7 页，2026-10-07 实测）：`/` 统一门户（三端入口卡）· `/login` / `/register`（注册成功自动登录）· `/agent` 聊天主界面（`?cs=1` 客服抽屉、`?session=` 深链恢复）· `/travel` 三栏旅游控制台——左栏行程条件（TaskSidebar travel 模式：历史规划列表 + 需求摘要锁定），中栏行程画布（逐日时间轴 + 地图打点 + ICS 导出；生成中以 GeneratingCard 占位、真实美食/酒店/车次 Tool 结果按 SSE 动态进聊天流），右栏「旅行助手」页内对话式改单（复用同一会话，工具条收敛摘要 + 结果卡横向流 + 排队槽）· `/selection-funnel` 选品漏斗专属页（「四扇门」之一，2026-10-06 `bb3b3df`：类目/平台带参直达域图，HandoffCard guide 引导的归宿之一）；全局 Sidebar 控制台形态，另有 CityGuideDrawer 城市指南抽屉、方案档位切换器与预算协商卡；失败不以演示数据替代。
 
 **管理端**（五组菜单，工作台承载高关联页面）：运营总览 `/` · 业务运营（`/data-explorer` / `/competitors` / `/selection-workbench`〔选品漏斗、选品决策 Tab〕/ `/reports`）· 内容与质量（`/knowledge/workbench`〔文档、待复核、入库失败、词库、操作日志 Tab〕/ `/evaluations/center`〔评测结果、评测集治理、反馈候选 Tab〕）· 运行中心（`/tasks` / `/observability/monitoring`〔问答追踪、网关安全、Token 用量 Tab〕/ `/security` / `/observability/alerts` / `/alerts` / `/schedules`）· 系统设置（`/prompts` / `/agents` / `/skills` / `/tools` / `/consistency` / `/releases` / `/cost-governance/budgets` / `/settings/models` / `/approvals` / `/settings/access`）。旧列表 URL 保留兼容重定向并参与当前菜单高亮，不再作为侧栏入口；侧栏同组页面通过“业务洞察 / 选品运营 / 业务产出 / 知识内容 / 评测治理 / 运行状态 / 告警与安全 / 自动化 / AI 资产 / 治理与发布 / 安全与权限”等二级标题区分。
 
@@ -79,7 +79,9 @@
 
 ### 5.2 用户端聊天核心组件（`frontend/src/components/chat/`）
 
-`ChatView`（编排：错误卡/预算条/澄清卡/上下面板/消息流/输入框）→ `MessageList` + `MessageBubble`（DeepSeek 式非对称气泡，memo 拦截重渲）→ `StreamingContent`（SSE delta rAF 节流逐字 + 独立光标 + 首 token 前 typing-dot）+ `ThinkingPanel`（已思考 N 秒折叠）+ `ProgressCards`（消息流内 bare 形态进度：节点 · token 消耗）+ `SourceCard`（引用来源彩色小片，按 doc_type 上色）+ `ChatInput` + `ComposerToolbar`（两段式输入）。
+`ChatView`（编排：错误卡/预算条/澄清卡/上下面板/消息流/输入框）→ `MessageList` + `MessageBubble`（DeepSeek 式非对称气泡，memo 拦截重渲；内嵌 `ReplyBadge` 回复归因徽章——done 帧 `reply_source` 四语义码中文映射「基于知识库回答/基于业务数据分析/基于实时数据查询/系统提示」，2026-10-05 `3af6f54`）→ `StreamingContent`（SSE delta rAF 节流逐字 + 独立光标 + 首 token 前 typing-dot）+ `ThinkingPanel`（已思考 N 秒折叠）+ `ProgressCards`（消息流内 bare 形态进度：节点 · token 消耗）+ `SourceCard`（引用来源彩色小片，按 doc_type 上色）+ `HandoffCard`（域引导交接卡，2026-10-06 `bb3b3df`：消费 SSE `handoff` AUX 帧，三入口带参跳转——旅游页预填 / 选品页带参 / CSDrawer 预填，点击埋点 `POST /observability/handoff/click`）+ `ChatInput` + `ComposerToolbar`（两段式输入）。
+
+`MarkdownContent` 排版契约（同批 `3af6f54`）：表格包 `.table-scroll` 横向滚动容器、不撑破气泡；消息流内 H1 降级为 H2 渲染（正文从 H2 起排）。
 
 ### 5.3 已知缺口（新页面不得效仿，应收敛到规范）
 

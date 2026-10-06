@@ -596,4 +596,4 @@ def route(self, question: str) -> tuple[str, float]:
 
 ## 验证
 
-最后验证：2026-10-02 · 旅游入口意图与条件增量复核； plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。
+最后验证：2026-10-07 · 旅游入口意图与条件增量复核； plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。2026-10-07 注：RoutingEngine 六阶段 / Runtime V2 收口 / Tool Governance 全貌以 [architecture/ai-runtime.md](architecture/ai-runtime.md) 为准（本文件按文首口径注不再复抄编排全貌）；SQL 6 层安全第④层已改「黑名单＋全函数正向白名单 fail-closed」，经 [PRD.md §4.3](PRD.md) 同步。

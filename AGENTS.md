@@ -32,9 +32,9 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 - 主图核心节点固定 9 个（含 general_chat，2026-09-25 口径对齐 builder.py:140-151），顺序与命名不得随意改动（`builder.py`）；Skill 节点与域图节点由自动发现加入，**不得手写进 builder**。
 - planner→critique→supervisor 是 plan 支线专属；direct/workflow/三个域图均绕过。预过滤优先级：客服 > 旅游（"订单里的行程单"属客服诉求）。
 - 客服子图：state_loader → pending_handler → cs_supervisor（handoff 拦截/循环上限/LLM 兜底）→ 5 子 Agent（代码名 Expert）→ 回 supervisor → cs_reporter
-- 旅游子图：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk/weather 五子 Agent → travel_validator →（未通过）travel_repair → 回 supervisor → travel_reporter
+- 旅游子图（**11 节点**，2026-10-07 `4ddc3c3` 起含局部重规划）：travel_slot_filler → travel_supervisor（纯规则）→ poi/transit/budget/risk/weather 五子 Agent → travel_validator →（未通过）travel_repair →（已有行程的逐条改单）travel_partial_replan → 回 supervisor → travel_reporter
 - RAG 子链路：改写 → MultiQuery → 混合检索（向量+BM25）→ 同文档扩展 → Rerank → EvidenceGate → 带引用生成 → META 尾拒答判定
-- 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error（AUX 辅助帧 todo/usage/file/clarification/context/thinking 可在中段任意位置任意次出现，ping 不计帧序——权威口径与回归门见 `orchestration/graph/event_schema.py` 与 `tests/test_sse_event_schema.py`）
+- 流式：节点 status/log + LLM stream_sink delta 汇入 merged_q；SSE 帧序 meta → status/log/delta → done/error（AUX 辅助帧 todo/usage/file/clarification/context/thinking/handoff 可在中段任意位置任意次出现，ping 不计帧序——权威口径与回归门见 `orchestration/graph/event_schema.py` 与 `tests/test_sse_event_schema.py`）
 
 ### 网关与异步层
 
@@ -85,7 +85,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 
 - **Planner**：只做任务拆解 → Capability DAG，禁调 Tool/Skill/DB ｜ **Critique**：规则校验优先，仅 anomaly 调 LLM ｜ **Supervisor**：纯规则 DAG 调度，Send[] 并行 + 注入 previous_outputs ｜ **Skill**：业务封装不碰外部系统 ｜ **Tool**：无状态可测试 ｜ **Reporter**：step_results → Markdown
 - 规模口径（2026-09-16）：12 Skill / 17 capability（3 内部 `routed:false`）/ 39 Tool（2026-10-03 对齐契约 lock；10-02 +5：高德商家检索、12306 车票/票价查询、知乎站内/知乎全网搜索）/ 4 workflow / 5 物理域图＝3 顶级业务域（travel 含 planning/commerce/booking 子流，2026-09-29 对齐）/ 主图 9 核心节点（2026-09-25 对齐 builder 实际）/ MCP 2 server 5 tool（另经 `infra/mcp_client.py` 接外部 MCP 数据源：12306、知乎官方 MCP）。勿把所有节点统称 Agent；权威口径与例外台账见 `docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md`。
-- `routed: false` 只约束路由层，Planner/critique 仍遍历全量 17 个（`email.watch` 是 120s 阻塞长轮询，收紧属行为变更，台账 E9）。
+- `routed: false` 只约束路由层；Planner/critique 可见集 = routed:true 全集 ∪ 兜底白名单（`travel.poi_search`/`map.lookup`），共 **14 个**——E9 已于 2026-10-06 `4ac75bc` 闭环：`email.watch`（120s 阻塞长轮询）/`competitor.watch`/`competitor.history` 退出规划面（唯一派生口 `orchestration/router/manifest.py::planner_visible_capability_names`，禁止第二份手抄）。
 
 ### Capability DAG
 
@@ -123,12 +123,14 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 ### SQL 子系统与数据库
 
 `SQLSkill → SQLAgent → Router → Generator → Validator(6层) → RowSecurity → Executor(连接池) → PostgreSQL`
-6 层安全：①SELECT 校验 ②表名白名单 ③敏感列拒绝 ④函数黑名单 ⑤LIMIT 强制 ⑥agent_readonly 只读角色。数据协议 SQLResult / BusinessInsight，步骤间 Supervisor 注入 `previous_outputs`。
+6 层安全：①SELECT 校验 ②表名白名单 ③敏感列拒绝 ④函数黑名单＋全函数正向白名单 fail-closed（2026-10-06 `3f76267` 拍板，白名单外一律拒）⑤LIMIT 强制 ⑥agent_readonly 只读角色。数据协议 SQLResult / BusinessInsight，步骤间 Supervisor 注入 `previous_outputs`。
 库：7 schema × 18 表（product/order/inventory/customer/crawler/finance/ai）；连接池 min=2 max=10；Migration 走 `sql/migrations/`。
 
 ### 智能客服域图（`backend/customer_service/`，2026-10-05 全量验收收官）
 
 **对话体验改造（T5/T6，2026-10-04 收官）**：锁域反转 `CS_WINDOW_STANDALONE`（true=独立窗口不出域，出域话题由域内分诊直出接住）；分诊直出出口 `_triage_direct_reply`（supervisor v2 L4.5 层：**寒暄→chat_fallback 一次 LLM 人设（CS_CHAT_FALLBACK_ENABLED）**、**出域→固定话术零 LLM（CS_WINDOW_STANDALONE）**），reporter 按 `supervisor_decision.direct_reply` 直出。**顺序铁律精确口径**：出域/寒暄豁免用业务域词表 `CS_SIGNAL_EXEMPT_PATTERNS`（vocab v2026-10-04.4），不用全域规则命中数（「怎么」类通用疑问词会误豁免）。
+
+**转人工逃生与序数承接（2026-10-05）**：need_info 补槽追问期用户显式转人工 → `pending_handler` 立即释放 pending 回 supervisor 重分诊（审计 `need_info_handoff_escape`，`a65a167`，紧急通道优先于补槽追问）；`context_resolver.record_recent_orders` 落 `recent_order_ids`（≤20 条）后「第N个订单」按序号解析（中文/阿拉伯数字，越界不猜不注入；列表引用不产生 `last_order_id`，`05ae6aa`）。域图侧口径见 `docs/architecture/ai-runtime.md` 客服域图行。
 
 **LLM 调用纪律（G7）**：客服域一切 LLM 调用必须走 `from backend.infra.llm import llm` **代理**（限流/韧性/llm_usage 记账）；`get_llm()` 返回裸实例绕过全部包装——chat_fallback/query/complaint/supervisor 四路径已收编。**记账口径**：客服域轮次 component=`customer_service`（`_usage_component()` 按 cs_target tag），主图=`llm`，对账须合并。
 
@@ -144,12 +146,14 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度/p
 **validator = 旅游域的 Evidence Gate**：纯规则零 LLM 零 IO；只判定不修改（修复在 `repair.py`）；error 阻塞交付并触发修复；四轴 = 时间/地理/体力/预算。**局部修复**只动被点名的天与条目，用户点名必去条目**永不被静默丢弃**（kept_required）。
 `travel.plan` 不注册主图 Skill（有状态多步流程已由域图承担）；只注册无状态的 `travel.poi_search`。数据源已切实时检索（2026-10-02 `599f4c7`：`TRAVEL_POI_SOURCE` 默认 **live**＝腾讯 LBS 实时检索，种子库下线、仅显式回退且 `TRAVEL_POI_FALLBACK_SEED` 默认关；票务查询侧=12306 MCP Tool）。规划产物走**版本链**（`plan_version` 修复重排 +1、`parent_plan_version` 指针，`TRAVEL_PLAN_VERSIONS_ENABLED` 默认开、保留 20 版，存 agent_memory 库）。开关 `TRAVEL_ENABLED`，阈值集中 `config/travel.py`。
 
+**逐条改单局部重规划（2026-10-07 `4ddc3c3`）**：已有行程时 slot_filler 经 `parse_partial_request` 纯规则解析改单意图（六操作 replace/remove/add/pace/end_time/hard_constraint），supervisor 优先分派 `travel_partial_replan`——只动被点名的天与条目并强制重验证（`validation_failed` → failed，不静默交付）；新地点缺候选只补候选不重排，用户点名必去条目不被静默丢弃。配套：`TRAVEL_ARRIVAL_BUFFER_MINUTES`（默认 30，首日活动不得早于到达时间+缓冲）；brief 契约新增 `budget_constraint`（`hard` 默认不得超预算 / `soft` 可超需说明）与 `weather_conditions`；trace 侧 `travel/trace_semantics.py` 写 `travel_semantics` 投影（planning_mode / base·active·draft 版本 / semantic_change / modified_days 等，`trace.tags["travel_*"]`）。
+
 **跨轮契约（checkpointer 关闭时也须遵守）**
 1. `new_travel_graph_input()` **只放本轮输入**，不预置产物/执行态默认值——checkpointer 把 input 当对上轮状态的**更新**合并，预置 `brief: {}` 等于每轮清空成果
 2. 读状态一律 `.get()`——本轮没写过的键不在最终状态里
 3. `brief_fingerprint` 变 → 只在 slot_filler 里 `planning_reset()`；不清则 supervisor 会把**上一轮行程**当新需求输出
 
-**checkpointer**：三处 `_build_checkpointer`（主图/客服/旅游）均 postgres 优先；主图与客服 **production 默认 fail-loud**——PG 不可用直接抛 `CheckpointerUnavailable` 拒绝启动，仅显式 `CHECKPOINTER_ALLOW_DEGRADE=true`（`config/checkpointer.py::degrade_or_raise`，默认 false）才允许降级内存检查点（开发环境失败降级 MemorySaver）；**旅游域当前未接 degrade_or_raise**（`travel/graph_builder.py` postgres 失败仅 warning 后静默降级 MemorySaver，production 不拒启——与主图/客服不一致，待收口）；需 psycopg **v3** + `langgraph-checkpoint-postgres`（依赖已在 pyproject.toml 与 requirements-lock.txt 声明，本地 venv 已补齐）；`config/startup.py` 只探测 import 不探测连通性，缺驱动时 warning 点名。
+**checkpointer**：三处 `_build_checkpointer`（主图/客服/旅游）均 postgres 优先；主图与客服 **production 默认 fail-loud**——PG 不可用直接抛 `CheckpointerUnavailable` 拒绝启动，仅显式 `CHECKPOINTER_ALLOW_DEGRADE=true`（`config/checkpointer.py::degrade_or_raise`，默认 false）才允许降级内存检查点（开发环境失败降级 MemorySaver）；**旅游域 2026-10-07 `4ddc3c3` 起同口径 fail-loud**（`travel/graph_builder.py` PG 初始化失败且未显式放行直接抛 `CheckpointerUnavailable` 拒绝启动——三处 `_build_checkpointer` 已全部收口一致）；需 psycopg **v3** + `langgraph-checkpoint-postgres`（依赖已在 pyproject.toml 与 requirements-lock.txt 声明，本地 venv 已补齐）；`config/startup.py` 只探测 import 不探测连通性，缺驱动时 warning 点名。
 两个锁文件坑（**照旧装会失败**）：① `langgraph-checkpoint` 原钉 4.0.3 与 `-postgres==3.1.0` 要求的 >=4.1.0 冲突 → 已升 **4.2.0**；② Windows/无 libpq 必须装 `psycopg[binary]`，否则 `no pq wrapper available`。
 TTL 清理收敛 `orchestration/graph/checkpointer_cleanup.py`（全进程单例，改 TTL 三处一起改）。
 

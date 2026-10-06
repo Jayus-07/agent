@@ -181,7 +181,7 @@
 **当前实现**：
 
 - ✅ 链路：SQLSkill → SQLAgent → Router → Generator → Validator（6 层）→ RowSecurity → Executor（连接池）→ PostgreSQL
-- ✅ 6 层安全：① SELECT 校验 ② 表名白名单 ③ 敏感列拒绝 ④ 函数黑名单 ⑤ LIMIT 强制 ⑥ `agent_readonly` 只读角色
+- ✅ 6 层安全：① SELECT 校验 ② 表名白名单 ③ 敏感列拒绝 ④ 函数黑名单＋全函数正向白名单 fail-closed（2026-10-06 `3f76267` 拍板：白名单外一律拒，`sql_validator.py` 单一判定出口；判定面排除 Connector/Case/Anonymous 防误拒，`20a2cec`）⑤ LIMIT 强制 ⑥ `agent_readonly` 只读角色
 - ✅ 8 种 SQLStatus 状态机 + 行级安全（sqlglot AST 重写 + 参数化）
 - ✅ 数据协议 SQLResult / BusinessInsight，供 Supervisor 跨步骤注入
 
@@ -382,4 +382,4 @@
 
 ## 验证
 
-最后验证：2026-10-05 · 路由口径随 RoutingEngine 收口更新（验收清单 `docs/reports/2026-10-05-路由层企业级改造验收清单.md`）；其余结构与能力口径对照根 [README.md](../README.md)「系统规模」（2026-10-03 实测）与 [AGENTS.md](../AGENTS.md)；数量类信息以根 README 为唯一权威，本文不复抄。
+最后验证：2026-10-07 · 路由口径随 RoutingEngine 收口更新（验收清单 `docs/reports/2026-10-05-路由层企业级改造验收清单.md`）；SQL 第④层安全口径随 2026-10-06 白名单拍板更新（`bd04f60`/`3f76267`/`20a2cec`）；其余结构与能力口径对照根 [README.md](../README.md)「系统规模」（2026-10-07 实测）与 [AGENTS.md](../AGENTS.md)；数量类信息以根 README 为唯一权威，本文不复抄。

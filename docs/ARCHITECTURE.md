@@ -15,7 +15,7 @@
   APISIX 网关 :9080 ── JWT 验签 · 注入身份头（唯一入口）
         ▼
   ┌──────────────── Agent Platform（FastAPI :8000 + LangGraph）────────────────┐
-  │ Router Runtime ── Input Guard 后：域预过滤 + RoutingEngine（域→意图→能力→策略→RouteDecision）│
+  │ Router Runtime ── Input Guard 后：域预过滤 + RoutingEngine（entry_gate→域→意图→能力→策略→route_decision）│
   │   ├─ 域命中 ──► Domain Runtime（3 顶级域 / 5 物理域图，自带专家与 reporter）│
   │   ├─ direct/workflow ──► Capability Runtime（17 capability · 12 Skill）    │
   │   ├─ plan ──► Plan Runtime（任务拆解 → 并行调度）──► Capability Runtime     │
@@ -34,7 +34,7 @@
 
 ```
 1. 用户 input → POST /chat/stream（网关验签 → Input Guard → 记忆装配 → 指代解析）
-2. Router Runtime：域预过滤优先，RoutingEngine 固定编排域判断 → 意图分类 → 候选能力解析 → 统一策略 → RouteDecision；规则/向量/LLM 只提供证据，故障走受控降级
+2. Router Runtime：域预过滤优先，RoutingEngine 固定六阶段 entry_gate → 域判断 → 意图分类 → 候选能力解析 → 统一策略 → RouteDecision（V2 唯一事实源，route_mode 等兼容字段经 Projection 投影）；规则/向量/LLM 只提供证据，基础设施故障结构化四分类（全貌见 architecture/ai-runtime.md「Runtime 语义收口」）
 3. 按 route_mode 分流：direct 直连 / workflow 预定义编排 / plan 拆解并行 / clarify 澄清 / domain_graph 域图接管 / 寒暄直答
 4. 能力执行：Skill → Tool Contract Boundary 归一 → Tool Runtime 治理执行
 5. Reporter / 域图 reporter 汇总 → SSE 流式输出 → 前端增量渲染
@@ -122,7 +122,7 @@
         ↓
 [GraphRunner 前置] Input Guard 门禁 → memory.start_session → Follow-up 指代解析
         ↓
-[Router Runtime] 域预过滤（客服锁域/旅游/选品）→ RoutingEngine（domain → intent → capability → policy → RouteDecision）拍板 route_mode
+[Router Runtime] 域预过滤（客服锁域/旅游/选品）→ RoutingEngine 六阶段（entry_gate → domain → intent → capability → policy → route_decision）产出 RouteDecisionV2（route_mode 等兼容字段由唯一 Projection 生成）
    ├─ direct:  tool_selector → skill_executor（直连能力）
    ├─ workflow: workflow_executor（预定义编排）
    ├─ plan:    任务拆解 → 并行调度（Send）→ Skills
@@ -319,4 +319,4 @@ docker compose -f docker-compose.yml up -d
 
 ## 验证
 
-最后验证：2026-09-29 · 过时口径已按根 [README.md](../README.md)「系统规模」校准（鉴权/存储/节点数）；数量类以根 README 为唯一权威。
+最后验证：2026-10-07 · 过时口径已按根 [README.md](../README.md)「系统规模」校准（鉴权/存储/节点数）；数量类以根 README 为唯一权威。2026-10-07 增量：RoutingEngine 六阶段链与 RouteDecisionV2 投影口径对齐（`9ed8f37`~`1d531e1` Runtime V2 收口，编排全貌见 [architecture/ai-runtime.md](architecture/ai-runtime.md)）。
