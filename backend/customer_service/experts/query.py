@@ -201,17 +201,38 @@ def _dispatch_service(
             # P3.5：问句带具体订单号 → detail 精确查（此前一律全量列表，
             # 「DEMO-1001 到哪了」返回整个订单列表，答非所问）。
             # B4 收敛：注入值 > 当前轮实体的优先级在 context_manager 单一实现
+            # STOP C（2026-10-07）：Service 层已区分 OrderNotFoundError（业务
+            # 不存在）与 DatabaseError（网关挂/超时/5xx/DB down），此处必须
+            # 分类承接——provider 故障不得译成「订单不存在」这种业务假信息。
+            from backend.customer_service.errors import (
+                DatabaseError,
+                OrderNotFoundError,
+                ValidationError,
+            )
             order_no = resolve_order_slot(cs_route, question) or None
             if order_no:
                 try:
                     result = order_service.query_orders(
                         user_id=user_id, order_id=order_no, query_type="detail",
                     )
-                except Exception:
+                except OrderNotFoundError:
                     return (
                         f"没有找到订单 {order_no} 的记录。请核对订单号，"
                         "或告诉我「查我的所有订单」，我来帮您列出全部订单。"
                     )
+                except ValidationError as exc:
+                    logger.warning(
+                        "[QueryExpert] 订单号校验失败: %s (%s)", order_no, exc,
+                    )
+                    return f"订单号「{order_no}」格式有误，请核对后再告诉我。"
+                except DatabaseError:
+                    return "订单服务暂时不可用，请稍后再试，稍后我来帮您再查一次。"
+                except Exception:
+                    # 未分类异常按安全失败处置：宁可说「不可用」，绝不说「不存在」
+                    logger.warning(
+                        "[QueryExpert] 订单查询失败（未分类异常）", exc_info=True,
+                    )
+                    return "订单服务暂时不可用，请稍后再试。"
                 # 缺陷9：精确查单返回唯一订单 → 记录会话业务上下文，
                 # 供下一轮回指（「那它到哪了」）继承。列表查询不写
                 # （多订单无唯一 referent，不得猜测）。
@@ -225,7 +246,15 @@ def _dispatch_service(
                         source_intent=intent,
                     )
                 return _format_order_list(result.orders)
-            result = order_service.query_orders(user_id=user_id)
+            try:
+                result = order_service.query_orders(user_id=user_id)
+            except DatabaseError:
+                return "订单服务暂时不可用，请稍后再试。"
+            except Exception:
+                logger.warning(
+                    "[QueryExpert] 订单列表查询失败（未分类异常）", exc_info=True,
+                )
+                return "订单服务暂时不可用，请稍后再试。"
             if result.orders:
                 from backend.customer_service.context_resolver import (
                     record_recent_orders,
@@ -243,6 +272,10 @@ def _dispatch_service(
         return _format_order_list([])
 
     if service_type == "logistics":
+        from backend.customer_service.errors import (
+            DatabaseError,
+            OrderNotFoundError,
+        )
         from backend.customer_service.service.logistics_service import get_logistics_service
         logistics = get_logistics_service()
         injected_order = str(
@@ -250,11 +283,35 @@ def _dispatch_service(
         ).strip()
         # 缺陷9：会话上下文注入的订单号优先；_get_latest_order_id（按用户
         # 全局最近一单）是既有 fallback，保留原行为不在本轮扩大。
-        order_id = injected_order or _get_latest_order_id(user_id)
-        if order_id:
+        # STOP C（2026-10-07）：订单/物流服务故障必须译成「服务不可用」，
+        # 不得落到「暂无物流信息」（没有物流记录 ≠ 查不到物流）。
+        try:
+            order_id = injected_order or _get_latest_order_id(user_id)
+        except DatabaseError:
+            return "订单服务暂时不可用，暂时无法查询物流，请稍后再试。"
+        except Exception:
+            logger.warning(
+                "[QueryExpert] 物流前置取单失败（未分类异常）", exc_info=True,
+            )
+            return "订单服务暂时不可用，暂时无法查询物流，请稍后再试。"
+        if not order_id:
+            # 真没有可查物流的订单（用户名下无订单），如实说明
+            return "您名下暂时没有可查询物流的订单，查询订单后即可查看物流。"
+        try:
             result = logistics.query_logistics(user_id=user_id, order_id=order_id)
             return _format_logistics(result)
-        return "暂无物流信息。请先查询您的订单。"
+        except OrderNotFoundError:
+            return (
+                f"没有找到订单 {order_id} 的物流记录。请核对订单号，"
+                "或告诉我「查我的所有订单」。"
+            )
+        except DatabaseError:
+            return "物流服务暂时不可用，请稍后再试，稍后我来帮您再查一次。"
+        except Exception:
+            logger.warning(
+                "[QueryExpert] 物流查询失败（未分类异常）", exc_info=True,
+            )
+            return "物流服务暂时不可用，请稍后再试。"
 
     if service_type == "ticket":
         # 批次C：工单进度查询（统一工单表，投诉/转人工落库后可查）
@@ -286,14 +343,16 @@ def _extract_order_no(question: str) -> str | None:
 
 
 def _get_latest_order_id(user_id: str) -> str | None:
-    """获取用户最新订单 ID（用于无指定 order_id 的物流查询）。"""
-    try:
-        from backend.customer_service.service.order_service import get_order_service
-        result = get_order_service().query_orders(user_id=user_id)
-        if result.orders:
-            return str(result.orders[0].get("id") or result.orders[0].get("order_no"))
-    except Exception:
-        pass
+    """获取用户最新订单 ID（用于无指定 order_id 的物流查询）。
+
+    STOP C（2026-10-07）：不吞异常——订单服务不可用（DatabaseError 等）
+    必须上抛给调用方按「服务不可用」话术处置；在此处吞成 None 会把
+    服务故障降级成「暂无物流信息」式的业务假信息。
+    """
+    from backend.customer_service.service.order_service import get_order_service
+    result = get_order_service().query_orders(user_id=user_id)
+    if result.orders:
+        return str(result.orders[0].get("id") or result.orders[0].get("order_no"))
     return None
 
 
