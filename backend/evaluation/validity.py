@@ -146,8 +146,17 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
         )
 
     total_hits = sum(matched.values())
-    threshold = max(INFRA_MIN_HITS, math.ceil(INFRA_MATCH_RATIO * len(non_skip)))
-    if total_hits >= threshold:
+    # 全量命中（不论样本数）→ 环境无效；部分命中需 ≥80% 且 ≥3 条
+    # （防个别瞬时抖动被放大成「本轮无效」）
+    full_match = 0 < total_hits == len(non_skip)
+    ratio_ok = (
+        total_hits >= INFRA_MIN_HITS
+        and total_hits >= math.ceil(INFRA_MATCH_RATIO * len(non_skip))
+    )
+    if full_match or ratio_ok:
+        threshold = len(non_skip) if full_match else math.ceil(
+            INFRA_MATCH_RATIO * len(non_skip)
+        )
         (dom_val, dom_reason), dom_hits = max(matched.items(), key=lambda kv: kv[1])
         return RunValidityVerdict(
             RunValidity(dom_val),
