@@ -147,6 +147,53 @@ def _is_complex(query: str) -> tuple[bool, str]:
 # Query Rewrite: Parse → Normalize → Deduplicate → Limit
 # =====================================================
 
+def _rewrite_with_budget(question: str) -> list[str]:
+    """带预算的改写入口（Phase 5 §25：改写超时/预算不足 → 原始 query）。
+
+    改写是检索前的**串行** LLM 调用（~1-2s），绝不允许它拖死整链：
+    - 剩余预算不足（<300ms）：直接跳过改写；
+    - LLM 调用超时（借 outer 池限时等待）：取消等待，降级原始 query。
+    _rewrite 内部失败本就回退 [question]，本包装补齐「时间维度」的降级。
+    """
+    from backend.config.rag import RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS
+    from backend.rag.retrieval_budget import remaining_ms
+
+    rewrite_ms = min(
+        RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS,
+        remaining_ms(RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS),
+    )
+    if rewrite_ms < 300:
+        logger.info(
+            f"[MultiQuery] 剩余预算不足({rewrite_ms:.0f}ms)，跳过改写用原始 query"
+        )
+        return [question]
+
+    from concurrent.futures import TimeoutError as _FutureTimeout
+
+    from backend.infra.thread_pools import retrieval_pool_outer
+
+    future = retrieval_pool_outer().submit(_rewrite, question)
+    try:
+        return future.result(timeout=rewrite_ms / 1000)
+    except _FutureTimeout:
+        future.cancel()
+        try:
+            from backend.observability.tracer import trace_collector
+
+            trace_collector.end_open_span(
+                "query_rewrite",
+                metrics={"degrade": "rewrite_timeout",
+                         "budget_ms": round(rewrite_ms, 1)},
+                status="timeout",
+            )
+        except Exception:  # noqa: BLE001 — 观测旁路
+            pass
+        logger.warning(
+            f"[MultiQuery] 改写超时({rewrite_ms:.0f}ms)，降级原始 query 走 hybrid"
+        )
+        return [question]
+
+
 def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
     try:
@@ -386,7 +433,7 @@ class MultiQueryRetriever(BaseRetriever):
                                      metrics={"variants": 0}, status="skipped")
             return self.base_retriever.invoke(query)
 
-        queries = _rewrite(query)
+        queries = _rewrite_with_budget(query)
         self._last_variants = len(queries)
         self._last_filtered = len(queries)
 
@@ -397,7 +444,7 @@ class MultiQueryRetriever(BaseRetriever):
             )
             return self.base_retriever.invoke(query)
 
-        from concurrent.futures import as_completed
+        from concurrent.futures import TimeoutError, as_completed
         from backend.infra.thread_pools import submit_rag_task
         import contextvars
         docs, seen = [], set()
@@ -419,28 +466,54 @@ class MultiQueryRetriever(BaseRetriever):
             return submit_rag_task("multi_query", ctx.run, base_invoke, q)
 
         future_to_q = {_submit_isolated(q): q for q in queries}
-        for future in as_completed(future_to_q):
-            q = future_to_q[future]
-            try:
-                q_docs = []
-                for d in future.result():
-                    cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
-                    if cid not in seen:
-                        seen.add(cid)
-                        d.metadata["source_query"] = q  # 标记来源查询
-                        q_docs.append(d)
-                        docs.append(d)
-                evidence_groups[q] = q_docs
-            except Exception as e:
-                logger.warning(f"[MultiQuery] 检索失败: {e}")
-                evidence_groups[q] = []
+        # Phase 5 §25：fan-out 限时——单个变体挂起不再无限等待；超时保留
+        # 已完成变体的部分结果（部分成功语义），未完成的取消等待
+        from backend.config.rag import RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS
+        from backend.rag.retrieval_budget import remaining_ms
+
+        fanout_s = min(
+            RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS,
+            remaining_ms(RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS),
+        ) / 1000
+        fanout_timed_out = False
+        try:
+            for future in as_completed(future_to_q, timeout=fanout_s):
+                q = future_to_q[future]
+                try:
+                    q_docs = []
+                    for d in future.result():
+                        cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
+                        if cid not in seen:
+                            seen.add(cid)
+                            d.metadata["source_query"] = q  # 标记来源查询
+                            q_docs.append(d)
+                            docs.append(d)
+                    evidence_groups[q] = q_docs
+                except Exception as e:
+                    logger.warning(f"[MultiQuery] 检索失败: {e}")
+                    evidence_groups[q] = []
+        except TimeoutError:
+            fanout_timed_out = True
+            for f in future_to_q:
+                if not f.done():
+                    f.cancel()
+            logger.warning(
+                f"[MultiQuery] fan-out 超时({fanout_s:.1f}s)，部分成功: "
+                f"已完成 {len(docs)} docs / {len(queries)} 变体"
+            )
+        # 超时后未产出结果的变体补空组，保证 evidence_groups 键完整
+        for q in queries:
+            evidence_groups.setdefault(q, [])
 
         # 注入 evidence_groups 到首个 doc，供 prompt 模板使用
         if docs:
             docs[0].metadata["_evidence_groups"] = evidence_groups
+            if fanout_timed_out:
+                docs[0].metadata["_mq_partial"] = True  # Phase 5：部分成功留痕
 
         logger.info(
             f"[MultiQuery] {reason}: {query[:30]} → "
             f"{len(queries)}变体 → {len(docs)}docs"
+            + ("（fan-out 部分成功）" if fanout_timed_out else "")
         )
         return docs

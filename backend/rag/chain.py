@@ -532,6 +532,13 @@ class RAGChain:
             # 十几秒全部计入了"检索"。
             try:
                 retrieval_metrics = _build_retrieval_span_metrics(context_docs)
+                # Phase 5：span 上留剩余预算——「为什么慢/在哪被降级」可答
+                from backend.rag.retrieval_budget import current_budget
+
+                _budget = current_budget()
+                if _budget is not None:
+                    retrieval_metrics["budget_remaining_ms"] = round(
+                        max(_budget.remaining_ms(), 0), 1)
                 trace_collector.end_open_span(
                     "retrieval",
                     metrics={"retrieved_chunks": len(context_docs),
@@ -1125,7 +1132,21 @@ class RAGChain:
 
         # ── 双链选择：无历史时跳过 HistoryAware LLM 调用 ──
         active_chain = self.chain_standalone if not chat_history else self.chain
-        result = active_chain.invoke({"input": question, "chat_history": chat_history})
+        # ── Phase 5（spec §23/§24）：检索级 deadline 预算——入口生成一次，
+        # 下游（MQ 改写/fan-out/adaptive/synonym）统一 remaining_ms() 消费；
+        # 预算经 ContextVar 随 multi_query 的提交方快照进入变体任务。
+        # 预算耗尽不抛异常，各阶段按 §25 阶梯降级。
+        from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
+        from backend.rag.retrieval_budget import (
+            clear_retrieval_budget,
+            start_retrieval_budget,
+        )
+
+        start_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS)
+        try:
+            result = active_chain.invoke({"input": question, "chat_history": chat_history})
+        finally:
+            clear_retrieval_budget()
 
         # ── 采集检索中间结果（正常路径 span 已提前收口，end_span 幂等跳过）──
         context_docs = result.get("context", [])
