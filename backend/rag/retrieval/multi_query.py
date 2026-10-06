@@ -74,7 +74,11 @@ def need_multi_query(query: str) -> tuple[bool, str]:
 #    （本表曾有 流程/步骤 而 hybrid 表没有，反向亦然），导致分类行为分叉。
 # 导入方向安全：hybrid 模块级不依赖本模块（need_multi_query 对 hybrid 的
 # 引用在函数内惰性执行）。
-from backend.rag.retrieval.hybrid import COMPLEX_PATTERNS  # noqa: E402
+from backend.rag.retrieval.hybrid import (  # noqa: E402
+    COMPLEX_PATTERNS,
+    COMPLEX_STRONG_PATTERNS,
+    COMPLEX_WEAK_PATTERNS,
+)
 
 # 业务关键词（2026-08-11 P2 多路融合）：自动触发 MultiQuery 改写
 # 解决"差评怎么处理"等业务查询不会触发改写的问题。
@@ -98,11 +102,24 @@ SIMPLE_FACT_PATTERNS = (
 
 
 def _is_complex(query: str) -> tuple[bool, str]:
-    """判断 query 是否需要 MultiQuery 改写（2026-08-11 加业务关键词触发）。"""
+    """判断 query 是否需要 MultiQuery 改写（分类器不可用时的本地兜底）。
+
+    Phase 4（2026-10-07）与 _classify_query_tier 同一 signal-score 语义：
+    强信号单一命中 / ≥2 个不同弱信号叠加 / 长问句+多意图连接词才触发改写；
+    单个「怎么/流程」类弱信号 → False（走 hybrid 双路，不上 3 变体改写）。
+    """
     q = query.strip()
-    for pat in COMPLEX_PATTERNS:
-        if pat in q:
-            return True, f"复杂度关键词: {pat}"
+    strong_hits = [p for p in COMPLEX_STRONG_PATTERNS if p in q]
+    if strong_hits:
+        return True, f"强信号: {strong_hits[0]}"
+    weak_hits = [p for p in COMPLEX_WEAK_PATTERNS if p in q]
+    # 弱信号叠加需跨子句或足够长（与 _classify_query_tier 同口径）：
+    # 单子句短问里 流程+怎么 天然共现仍算单一意图
+    import re as _re
+
+    clause_count = len([x for x in _re.split(r"[。！？；，、!?;,]", q) if x.strip()])
+    if len(weak_hits) >= 2 and (clause_count >= 2 or len(q) > 16):
+        return True, f"弱信号叠加: {weak_hits[:2]}"
     # 简单事实问句豁免（数值/时间点 + "什么是"等前缀）：即使命中业务关键词
     # 也无需多路改写，"退款审核时间是多少？""什么是库存周转率"均应豁免
     for pat in SIMPLE_FACT_PATTERNS:
@@ -120,6 +137,9 @@ def _is_complex(query: str) -> tuple[bool, str]:
     # 为其多付一次改写 LLM 调用（~1-2s 串行）不划算
     if len(q) > 40:
         return True, f"较长({len(q)}字)"
+    if weak_hits:
+        # 单个弱信号：双路 hybrid 足够（Phase 4 语义，禁止回落 vector_only）
+        return False, f"单弱信号({weak_hits[0]})→hybrid"
     return False, "默认简单"
 
 

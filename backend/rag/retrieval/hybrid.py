@@ -100,18 +100,30 @@ import re
 # §7 查询类型路由的 exact_id 判定与本处 Tier 2 判定共用同一份表。
 from backend.rag.retrieval.query_router import EXACT_IDENTIFIER_PATTERNS
 
-# 复杂查询信号：多意图 / 对比 / 多跳推理 / 操作流程 → HYBRID_MULTI_QUERY
-# ⭐ 单一事实来源（治理 B）：multi_query.py 的兜底复杂度检测也引用本清单，
-#    勿在此处与 multi_query.py 各维护一份（P1-12 重构时曾漂移——本表遗漏
-#    操作性信号导致"退款流程怎么操作"被判 vector_only，2026-09-13 回归修复）
-COMPLEX_PATTERNS = [
-    "分析", "对比", "比较", "总结", "汇总", "概述",
-    "全部", "所有", "区别", "差异", "不同",
-    "优缺点", "利弊", "优劣",
+# 复杂查询信号（Phase 4，2026-10-07 signal-score 分级，spec §21/§22）：
+#   强信号：多意图/对比/多跳的确定性信号，单一命中即 HYBRID_MULTI_QUERY；
+#   弱信号：「怎么/流程」类普通单意图常见词——单独命中只值 HYBRID 双路，
+#           ≥2 个不同弱信号叠加才升 MQ（历史上单一弱信号即触发 3 变体
+#           LLM 改写，「报销流程怎么走」也要付 ~1-2s 串行改写 + 3 路检索）。
+# ⭐ 单一事实来源（治理 B）：multi_query.py 的兜底复杂度检测引用
+#    COMPLEX_PATTERNS（= 强 ∪ 弱 聚合别名）；拆分仅发生在本文件，
+#    勿在 multi_query.py 另行维护分表（P1-12 曾漂移，2026-09-13 回归修复）。
+COMPLEX_STRONG_PATTERNS = [
+    "对比", "比较", "区别", "差异", "不同", "优缺点", "利弊", "优劣",
+    "分别", "各自", "两者", "哪个更",
+]
+COMPLEX_WEAK_PATTERNS = [
+    "分析", "总结", "汇总", "概述",
+    "全部", "所有",
     "关系", "影响", "作用", "意义",
     "以及", "同时", "另外", "还有", "并且",
     "怎么", "如何", "流程", "步骤", "方法", "原因", "为什么",
 ]
+# 兼容别名（旧消费方 = multi_query 兜底检测）：强 ∪ 弱
+COMPLEX_PATTERNS = COMPLEX_STRONG_PATTERNS + COMPLEX_WEAK_PATTERNS
+
+# 多意图连接词（长 query + 连接词 = §21 强信号「长 query + 多意图」）
+_MULTI_INTENT_CONNECTIVES = ("以及", "同时", "另外", "还有", "并且", "分别")
 
 # 多问号 / 多句子 → 多意图
 _MULTI_QUESTION_THRESHOLD = 2
@@ -146,19 +158,30 @@ def _classify_query_tier(query: str) -> str:
     q = query.strip()
 
     # ── Tier 3: 复杂 / 多意图 → HYBRID_MULTI_QUERY（最高优先级）──
-    # 多个问号/句子（多意图）
+    # 多个问号/句子（多意图）——§21 强信号
     question_marks = q.count("？") + q.count("?")
     # 过滤空字符串，避免 "问题？" split 后得到 ["问题", ""] 误判
+    # 子句分隔含全角逗号/顿号（Phase 4）：「A是什么，怎么操作」是两个诉求，
+    # 单靠句末标点会把它误判成单子句短问
     sentence_parts = [
-        x.strip() for x in re.split(r'[。！？；!?;]', q) if x.strip()
+        x.strip() for x in re.split(r'[。！？；，、!?;,]', q) if x.strip()
     ]
     if question_marks >= _MULTI_QUESTION_THRESHOLD or len(sentence_parts) >= 3:
         return "hybrid_multi_query"
 
-    # 复杂推理关键词
-    for pat in COMPLEX_PATTERNS:
-        if pat in q:
-            return "hybrid_multi_query"
+    # Phase 4 signal-score（§21）：
+    #   强信号单一命中 → MQ；弱信号需 ≥2 个不同词叠加 → MQ；
+    #   长 query + 多意图连接词 → MQ。
+    #   弱信号叠加的判别：必须跨子句或问句足够长——「报销流程怎么走？」
+    #   这类单子句短问里 流程+怎么 天然共现，仍算单一意图（任务书 §21 原例）。
+    strong_hits = [p for p in COMPLEX_STRONG_PATTERNS if p in q]
+    weak_hits = [p for p in COMPLEX_WEAK_PATTERNS if p in q]
+    if strong_hits:
+        return "hybrid_multi_query"
+    if len(weak_hits) >= 2 and (len(sentence_parts) >= 2 or len(q) > 16):
+        return "hybrid_multi_query"
+    if len(q) > 40 and any(c in q for c in _MULTI_INTENT_CONNECTIVES):
+        return "hybrid_multi_query"
 
     # ── Tier 2: 精确标识符 → HYBRID ──
     # 错误码/订单号/SKU 等在知识库中通常有标准文档，
@@ -171,6 +194,13 @@ def _classify_query_tier(query: str) -> str:
     # 「」""《》是用户显式标记的精确名称（景点/书/条款），BM25 精确
     # 词匹配不可替代；这类 query 不满足 exact_id 正则但绝非「简单 FAQ」。
     if any(mark in q for mark in ("「", "《", '"', "《")):
+        return "hybrid"
+
+    # ── Tier 2 弱信号单命中 → HYBRID（Phase 4 新语义）──
+    # 「报销流程怎么走？」类普通单意图：不再触发 3 变体 LLM 改写，
+    # 但必须保住 BM25 双路（禁落 vector_only——2026-09-13 事故语义：
+    # 流程类问题跳过 BM25 = 系统性召回损失）。
+    if weak_hits:
         return "hybrid"
 
     # ── Tier 1: 简短 FAQ → VECTOR_ONLY；中长问句兜底 HYBRID（D-Q2）──
