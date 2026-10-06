@@ -952,8 +952,11 @@ class RAGPipeline:
             if is_first_turn:
                 cached = self._check_answer_cache(question, kb_id)
                 if cached is not None:
+                    # STOP CS-A P0-4：缓存命中返回结构化记录（answer+meta），
+                    # 与首算同语义 —— CS Knowledge Gate 依据 meta 判定置信度，
+                    # 空 meta 会被强制 REFUSE（缓存把正确答案顶替成拒答的根因）
                     self._mark_session_seen(session_id)
-                    return cached, {}
+                    return str(cached.get("answer", "")), dict(cached.get("meta") or {})
 
             answer = self._execute_chain(question, session_id)
             self._mark_session_seen(session_id)
@@ -962,7 +965,7 @@ class RAGPipeline:
             answer_meta = dict(self.last_answer_meta or {})
 
             if is_first_turn and answer and not self._is_rejection(answer):
-                self._write_answer_cache(question, kb_id, answer)
+                self._write_answer_cache(question, kb_id, answer, meta=answer_meta)
 
             return answer, answer_meta
         finally:
@@ -1131,10 +1134,11 @@ class RAGPipeline:
         except Exception:
             self.last_answer_meta = {}
 
-    def _check_answer_cache(self, question: str, kb_id: str) -> str | None:
-        """首轮问答缓存查询。命中返回缓存答案，未命中返回 None。
+    def _check_answer_cache(self, question: str, kb_id: str) -> dict | None:
+        """首轮问答缓存查询。命中返回 v2 记录（answer+meta），未命中返回 None。
 
         RAG_ANSWER_CACHE_ENABLED=false 时整体旁路（调试看真实生成）。
+        STOP CS-A P0-4：返回结构化记录，v1 裸字符串视为 miss。
         """
         if not RAG_ANSWER_CACHE_ENABLED:
             return None
@@ -1155,8 +1159,16 @@ class RAGPipeline:
             logger.debug(f"[RAG.ask] 缓存查询失败（非致命）: {e}")
             return None
 
-    def _write_answer_cache(self, question: str, kb_id: str, answer: str) -> None:
-        """首轮问答成功后写入缓存。失败不影响主流程；开关关闭时跳过。"""
+    def _write_answer_cache(
+        self, question: str, kb_id: str, answer: str,
+        meta: dict | None = None,
+    ) -> None:
+        """首轮问答成功后写入缓存。失败不影响主流程；开关关闭时跳过。
+
+        STOP CS-A P0-4：meta（Evidence Gate 的 confidence/can_answer/
+        answer_status/sources）随答案一起缓存 —— 命中方据此还原与首算
+        一致的判定语义，不伪造可信度。
+        """
         if not RAG_ANSWER_CACHE_ENABLED:
             return
         try:
@@ -1168,7 +1180,7 @@ class RAGPipeline:
             scope = self._authorization_scope(ident)
             get_answer_cache().put(
                 question, kb_id, ctx.metadata_filter, LLM_MODEL, answer,
-                scope=scope,
+                scope=scope, meta=meta,
             )
         except Exception as e:
             logger.debug(f"[RAG.ask] 缓存写入失败（非致命）: {e}")
