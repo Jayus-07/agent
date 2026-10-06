@@ -156,6 +156,28 @@ def poi_expert_node(state: dict) -> dict:
             live_search["hotel"] = wave1["hotel"]
 
         skeleton = build_skeleton(brief, candidates)
+        # 预算-only 改动属于约束重算，不应无理由洗牌 POI。若上一版地点仍
+        # 在本轮候选池中，沿用其逐日骨架；缺失的天才退回常规骨架。
+        stable_days: list[int] = []
+        baseline = state.get("plan_stability_baseline") or {}
+        changed_fields = set(baseline.get("changed_fields") or [])
+        if changed_fields and changed_fields <= {"budget_cny", "budget_constraint"}:
+            candidate_map = {poi.poi_id: poi for poi in candidates}
+            old_itinerary = baseline.get("itinerary") or {}
+            for index, old_day in enumerate(old_itinerary.get("days") or []):
+                old_pois = [
+                    item.get("poi") for item in (old_day.get("items") or [])
+                    if item.get("poi")
+                ]
+                ids = [str(poi.get("poi_id") or "") for poi in old_pois]
+                if (index < len(skeleton.days) and ids
+                        and all(poi_id in candidate_map for poi_id in ids)):
+                    skeleton.days[index] = [candidate_map[poi_id] for poi_id in ids]
+                    stable_days.append(index + 1)
+            if stable_days:
+                skeleton.notes.append(
+                    f"预算变化仅重算费用与可行性，已保留第 {','.join(map(str, stable_days))} 天地点"
+                )
         # must_go 三态契约（STOP I1）：resolved/unresolved 在此唯一产生，
         # 金标 Q2（must_go_coverage）与下游披露都消费这里的事实
         resolution = resolve_must_go(brief, candidates)
@@ -213,6 +235,7 @@ def poi_expert_node(state: dict) -> dict:
                 "must_go_unresolved": resolution.unresolved,
                 "evidences": evidences,
                 "live_search": live_search,
+                "stability_preserved_days": stable_days,
             },
             "notes": extra_notes + skeleton.notes,
         }

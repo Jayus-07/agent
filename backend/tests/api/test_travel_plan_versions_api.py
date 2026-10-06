@@ -104,12 +104,18 @@ def test_plan_latest_ok(monkeypatch: pytest.MonkeyPatch) -> None:
                 "plan_status": "waiting_confirmation", "destination": "福州",
                 "created_at": "2026-10-01T00:00:00+00:00",
                 "itinerary": {"plan_version": 2, "days": []}}
-    _patch_service(monkeypatch, latest_version=_latest)
+    def _active(cid, uid):
+        return {"plan_version": 1, "plan_status": "confirmed",
+                "itinerary": {"plan_version": 1, "days": []}}
+    _patch_service(monkeypatch, latest_version=_latest,
+                   active_version=_active)
     r = _client().get(_CID_PATH + "/latest", headers=_AUTH)
     assert r.status_code == 200
     body = r.json()
     assert body["plan_version"] == 2
     assert body["itinerary"]["plan_version"] == 2
+    assert body["active_plan_version"] == 1
+    assert body["active_itinerary"]["plan_version"] == 1
 
 
 def test_plan_latest_missing_is_404(monkeypatch: pytest.MonkeyPatch) -> None:

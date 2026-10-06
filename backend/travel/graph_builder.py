@@ -38,6 +38,7 @@ from backend.travel.experts.weather import weather_expert_node
 from backend.travel.graph_state import (
     TRAVEL_BUDGET_EXPERT,
     TRAVEL_POI_EXPERT,
+    TRAVEL_PARTIAL_REPLAN,
     TRAVEL_REPAIR,
     TRAVEL_REPORTER,
     TRAVEL_RISK_EXPERT,
@@ -49,6 +50,7 @@ from backend.travel.graph_state import (
     TravelGraphState,
 )
 from backend.travel.repair import repair_node
+from backend.travel.partial_replan_node import partial_replan_node
 from backend.travel.reporter import travel_reporter_node
 from backend.travel.slot_filler import slot_filler_node
 from backend.travel.supervisor import travel_supervisor_node
@@ -62,6 +64,21 @@ def _evented_node(node_name: str, node_fn):
     def wrapped(state):
         from backend.travel.core.events import emit_travel_event
         from backend.travel.request_runtime import check_run
+
+        def _record_stage(status: str) -> None:
+            """Prometheus 阶段记账（2026-10-06 观测重构；软失败不影响图执行）。"""
+            try:
+                from backend.observability.metrics import (
+                    agent_stage_duration_seconds,
+                    agent_stage_total,
+                )
+                elapsed = time.monotonic() - started_at
+                agent_stage_duration_seconds.labels(
+                    domain="travel", stage=node_name).observe(elapsed)
+                agent_stage_total.labels(
+                    domain="travel", stage=node_name, status=status).inc()
+            except Exception:  # noqa: BLE001 — 指标旁路软失败
+                pass
 
         check_run()
         started_at = time.monotonic()
@@ -77,6 +94,7 @@ def _evented_node(node_name: str, node_fn):
                 status="failed", error_type=type(exc).__name__,
                 duration_ms=round((time.monotonic() - started_at) * 1000),
             )
+            _record_stage("failed")
             raise
 
         status = "success"
@@ -92,6 +110,7 @@ def _evented_node(node_name: str, node_fn):
             error_type=error_type,
             duration_ms=round((time.monotonic() - started_at) * 1000),
         )
+        _record_stage(status)
         return update
 
     return wrapped
@@ -100,6 +119,7 @@ def _evented_node(node_name: str, node_fn):
 _BACK_TO_SUPERVISOR = (
     TRAVEL_POI_EXPERT, TRAVEL_TRANSIT_EXPERT, TRAVEL_WEATHER_EXPERT,
     TRAVEL_BUDGET_EXPERT, TRAVEL_RISK_EXPERT, TRAVEL_VALIDATOR, TRAVEL_REPAIR,
+    TRAVEL_PARTIAL_REPLAN,
 )
 
 
@@ -125,6 +145,8 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         TRAVEL_VALIDATOR, travel_validator_node))
     wf.add_node(TRAVEL_REPAIR, _evented_node(
         TRAVEL_REPAIR, repair_node))
+    wf.add_node(TRAVEL_PARTIAL_REPLAN, _evented_node(
+        TRAVEL_PARTIAL_REPLAN, partial_replan_node))
     wf.add_node(TRAVEL_REPORTER, _evented_node(
         TRAVEL_REPORTER, travel_reporter_node))
 
@@ -141,7 +163,7 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         compile_kwargs["checkpointer"] = checkpointer
 
     graph = wf.compile(**compile_kwargs)
-    logger.info("[TravelGraph] 编译完成（10 节点，checkpointer=%s）",
+    logger.info("[TravelGraph] 编译完成（11 节点，checkpointer=%s）",
                 "on" if checkpointer else "off")
     return graph
 
@@ -158,7 +180,7 @@ _travel_graph_lock = threading.Lock()
 # 由 slot_filler（图入口）每轮写入 state，沿 supervisor_decision / reporter
 # 传播到 trace 与行程单 —— 降级从「日志里一行」变成「全链路可见的事实」。
 PERSISTENCE_HEALTHY = "healthy"      # postgres 等持久后端就绪
-PERSISTENCE_DEGRADED = "degraded"    # 降级到 MemorySaver（进程内存，重启即失）
+PERSISTENCE_DEGRADED = "degraded"    # 显式 MemorySaver（进程内存，重启即失）
 PERSISTENCE_DISABLED = "disabled"    # 未启用 checkpointer（无跨轮能力）
 
 _persistence_status: str = PERSISTENCE_DISABLED
@@ -188,14 +210,15 @@ def get_travel_graph() -> Any:
 def _build_checkpointer() -> tuple[Any, str]:
     """按 TRAVEL_CHECKPOINTER_ENABLED 构建 checkpointer，**返回 (实例, 状态)**。
 
-    与 CS 域图 / 主图同策略：默认关；**Postgres 优先**（跨进程、重启保留、
-    多 worker 共享），MemorySaver 仅作初始化失败与本地调试的降级 —— 内存实现
-    在进程内只增不减，且多 worker 各存一份，不能当生产方案。
+    默认关；**Postgres 优先**（跨进程、重启保留、多 worker 共享）。
+    Postgres 初始化失败默认 fail-loud，禁止把「已开启持久化」静默变成
+    MemorySaver；只有显式 ``CHECKPOINTER_ALLOW_DEGRADE=true`` 才允许降级。
+    ``TRAVEL_CHECKPOINTER_BACKEND=memory`` 是测试/本地调试的显式选择。
 
     状态语义（任务书 §10）：
       healthy   持久后端就绪，跨轮改单可信；
-      degraded  postgres 不可用退到 MemorySaver —— 同进程内跨轮仍可用，
-                但重启即失、多 worker 不共享，必须全链路披露；
+      degraded  显式选择 memory，或显式允许 postgres 失败后退到 MemorySaver；
+                同进程内跨轮仍可用，但重启即失、多 worker 不共享；
       disabled  未启用 checkpointer，无跨轮能力（属配置选择，非事故）。
 
     开启的真实用途是**跨轮改单**：状态里留着上一轮的 slot/brief/itinerary，
@@ -236,20 +259,37 @@ def _build_checkpointer() -> tuple[Any, str]:
                 logger.debug("[TravelGraph] cleanup daemon 启动失败（非致命）",
                              exc_info=True)
             return checkpointer, PERSISTENCE_HEALTHY
-        except Exception:
-            # 说清后果：不是「没启用」，而是「启用了但不持久」——
-            # 状态只在进程内存里，重启即失、多 worker 各存一份。
-            # 降级状态由 get_persistence_status() 上浮（任务书 §10），
-            # 不再只是日志里的一行。
-            logger.warning(
-                "[TravelGraph] 配置的后端 postgres 不可用（多为缺 psycopg v3 / "
-                "langgraph-checkpoint-postgres），已降级为 MemorySaver："
-                "跨轮状态不持久化、多 worker 不共享", exc_info=True)
+        except Exception as exc:
+            from backend.config.checkpointer import degrade_allowed
 
-    try:
+            reason = (
+                "PostgresSaver 初始化失败（请检查 psycopg v3、"
+                "langgraph-checkpoint-postgres、数据库连接与 setup）"
+            )
+            if not degrade_allowed():
+                # 这是配置为启用持久化却无法提供持久化的启动错误，
+                # 不把它伪装成普通 warning，也不偷偷换成进程内存。
+                logger.error("[TravelGraph] %s，拒绝静默降级", reason,
+                             exc_info=True)
+                from backend.config.checkpointer import CheckpointerUnavailable
+                raise CheckpointerUnavailable(
+                    f"[TravelGraph] {reason}；"
+                    "未设置 CHECKPOINTER_ALLOW_DEGRADE=true，已 fail-loud。"
+                ) from exc
+            logger.warning(
+                "[TravelGraph] %s，因 CHECKPOINTER_ALLOW_DEGRADE=true "
+                "显式降级为 MemorySaver：跨轮状态不持久化、多 worker 不共享",
+                reason, exc_info=True)
+            from langgraph.checkpoint.memory import MemorySaver
+            return MemorySaver(), PERSISTENCE_DEGRADED
+
+    if TRAVEL_CHECKPOINTER_BACKEND == "memory":
         from langgraph.checkpoint.memory import MemorySaver
-        logger.info("[TravelGraph] checkpointer enabled (MemorySaver, degraded)")
+        logger.info(
+            "[TravelGraph] checkpointer enabled (MemorySaver, explicit degraded)")
         return MemorySaver(), PERSISTENCE_DEGRADED
-    except Exception:
-        logger.warning("[TravelGraph] checkpointer init failed, running without")
-        return None, PERSISTENCE_DEGRADED
+
+    raise ValueError(
+        f"[TravelGraph] 不支持的 checkpointer backend: "
+        f"{TRAVEL_CHECKPOINTER_BACKEND!r}；仅支持 postgres 或显式 memory"
+    )

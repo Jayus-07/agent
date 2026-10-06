@@ -58,6 +58,17 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
         value = getattr(fresh, field)
         if value is not None and value != "":
             setattr(merged, field, value)
+    if fresh.budget_cny is not None and fresh.budget_constraint:
+        merged.budget_constraint = fresh.budget_constraint
+    if fresh.weather_conditions:
+        merged.weather_conditions = list(
+            dict.fromkeys(
+                tuple(sorted(item.items())) for item in (
+                    previous.weather_conditions + fresh.weather_conditions
+                )
+            )
+        )
+        merged.weather_conditions = [dict(item) for item in merged.weather_conditions]
     if fresh.party_size != 1 or previous.party_size == 1:
         if fresh.party_size >= 1:
             merged.party_size = fresh.party_size
@@ -124,14 +135,17 @@ class RequirementService:
         """需求变化检测与版本追踪（原 slot_filler_node 内联逻辑的服务化）。
 
         返回 {changed, fingerprint, new_version, change_reason,
-        changed_fields}：仅在「有上一轮指纹且不同」时判定变化（首次进入
-        不算）；变化时 new_version = previous.version + 1，reason =
-        CHANGE_BRIEF，changed_fields 为除 version 外的逐字段 diff（排序
-        保证确定性）。**不修改 brief**——version 递增由调用方执行（与
-        迁移前时序等价：version 不参与 diff 比较）。
+        changed_fields}。变化判断只比较「权威上一轮 brief」与本轮 brief
+        的派生指纹；``last_fingerprint`` 仅保留为兼容参数和诊断输入，
+        不能作为业务真相源。这样 checkpoint / planning_reset 把旧指纹带回
+        时，同一份 brief 仍然是 no-op。**不修改 brief**——version 递增由
+        调用方执行（与迁移前时序等价：version 不参与 diff 比较）。
         """
         fingerprint = self.fingerprint(brief)
-        changed = bool(last_fingerprint) and last_fingerprint != fingerprint
+        # 指纹是 derived value，previous brief 才是业务真相。不能用跨轮缓存
+        # 的 last_fingerprint 判定变化，否则旧值卡住会把每一轮都判成重规划。
+        previous_fingerprint = self.fingerprint(previous) if previous else ""
+        changed = bool(previous) and previous_fingerprint != fingerprint
         new_version: int | None = None
         change_reason = ""
         changed_fields: list[str] = []

@@ -193,6 +193,30 @@ def latest_version(conversation_id: str, user_id: str) -> dict | None:
         return None
 
 
+def active_version(conversation_id: str, user_id: str) -> dict | None:
+    """读取当前 Active 内容；待确认 draft 不得遮蔽最近已确认版本。"""
+    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+        return None
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""SELECT {_VERSION_COLS}, itinerary::text
+                    FROM {_TABLE}
+                    WHERE conversation_id = %s AND user_id = %s
+                      AND plan_status = 'confirmed'
+                    ORDER BY plan_version DESC LIMIT 1""",
+                (conversation_id[:128], user_id[:128]),
+            )
+            row = cur.fetchone()
+            if row:
+                return _version_row(row, with_itinerary=True)
+    except Exception as e:  # noqa: BLE001 — 读失败按无账本处理
+        logger.warning("[TravelPlanStore] Active 版本读取失败: %s", e)
+        return None
+    return latest_version(conversation_id, user_id)
+
+
 def get_version(conversation_id: str, user_id: str, plan_version: int) -> dict | None:
     """取指定版本（含完整 itinerary）；不存在/越权返回 None。"""
     if not conversation_id or not user_id or not enabled() or not _ensure_table():

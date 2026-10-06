@@ -17,6 +17,8 @@ is_avoid_patch_query **过渡状态**：它内部调用 avoid 抽取（agents �
 """
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from backend.config import travel as T
 from backend.shared.logger import logger
 from backend.travel.node_span import traced_node
@@ -27,12 +29,14 @@ from backend.travel.agents.requirement_agent import (
     detect_multi_city,
     extract_avoid,
     extract_budget,
+    extract_budget_constraint,
     extract_date_range_days,
     extract_days,
     extract_days_range,
     extract_destination,
     extract_diet,
     extract_fresh_brief,
+    is_long_term_preference_message,
     extract_lodging,
     extract_must_go,
     extract_origin,
@@ -44,12 +48,19 @@ from backend.travel.agents.requirement_agent import (
     extract_start_date,
     extract_unsupported_city,
     extract_vague_time_expr,
+    extract_weather_conditions,
     party_size_source,
 )
-from backend.travel.core.intent import TravelIntent, classify_intent
+from backend.travel.core.intent import (
+    NON_PLANNING_INTENTS,
+    QUERY_INTENTS,
+    TravelIntent,
+    classify_intent,
+)
 from backend.travel.core.intent_signals import is_cancel_run_query, is_new_run_query
 from backend.travel.graph_state import load_brief
 from backend.travel.models.brief import TravelBrief
+from backend.travel.partial_replan import parse_partial_request
 from backend.travel.services.requirement_service import (
     RequirementService,
     merge_brief,
@@ -66,6 +77,7 @@ __all__ = [
     "extract_avoid",
     "extract_brief",
     "extract_budget",
+    "extract_budget_constraint",
     "extract_date_range_days",
     "extract_days",
     "extract_days_range",
@@ -80,6 +92,8 @@ __all__ = [
     "extract_start_date",
     "extract_unsupported_city",
     "extract_fresh_brief",
+    "extract_weather_conditions",
+    "is_long_term_preference_message",
     "is_avoid_patch_query",
     "is_cancel_run_query",
     "is_new_run_query",
@@ -141,6 +155,7 @@ def slot_filler_node(state: dict) -> dict:
     from backend.travel.graph_state import planning_reset
 
     message = state.get("user_message", "")
+    long_term_preference = is_long_term_preference_message(message)
     # brief 基底：checkpoint 产物优先；无 checkpoint（STOP F3 reconstruct
     # 轮）时用适配器从 ConversationContext 重建的事实基底，二者皆无才从零抽
     raw_brief = state.get("brief") or state.get("reconstruct_brief") or {}
@@ -160,13 +175,45 @@ def slot_filler_node(state: dict) -> dict:
     require_fresh = (persistence_status == "degraded"
                      and T.TRAVEL_REQUIRE_PERSISTENCE)
 
-    fresh = _requirement_agent.extract_fresh_brief(
-        message, previous.destination if previous else "")
-    intent = classify_intent(
-        message,
-        has_itinerary=bool(state.get("itinerary")),
-        has_destination=bool(fresh.destination or (previous and previous.destination)),
-    )
+    has_itinerary = bool(state.get("itinerary"))
+    parsed_partial = parse_partial_request(message) if has_itinerary else None
+    # 没有点名日期的「改轻松一点」是全局节奏槽位变化，应触发完整重排；
+    # 只有「第一天别太赶」这类明确目标日才走局部 pace 修改。
+    partial_request = parsed_partial
+    if (parsed_partial is not None
+            and parsed_partial.operation == "pace"
+            and parsed_partial.target_day is None):
+        partial_request = None
+    # 先过意图门，再提取会影响 TripBrief 的候选字段。查询类为了回答问题
+    # 仍可抽取 query_destination，但绝不把它 merge 进本次 TripBrief。
+    if partial_request is not None:
+        # 局部改单以既有 brief 为基底；本轮「不要去/换成」不能被合并成
+        # 全局 avoid/must_go 后触发整份重排。
+        intent = TravelIntent.MODIFY
+        fresh = TravelBrief()
+        non_mutating = False
+        brief = previous.model_copy() if previous is not None else TravelBrief()
+    else:
+        intent = classify_intent(
+            message,
+            has_itinerary=has_itinerary,
+            has_destination=False,
+        )
+        fresh = TravelBrief()
+        if intent not in {
+            TravelIntent.SOCIAL,
+            TravelIntent.META,
+            TravelIntent.OUT_OF_SCOPE,
+        } or long_term_preference:
+            fresh = _requirement_agent.extract_fresh_brief(
+                message, previous.destination if previous else "")
+            if intent is None:
+                intent = classify_intent(
+                    message,
+                    has_itinerary=has_itinerary,
+                    has_destination=bool(
+                        fresh.destination or (previous and previous.destination)),
+                )
     if intent is None and T.TRAVEL_LLM_INTENT_ENABLED:
         # D 批理解层（#97/#98/#103）：只在词表盲区补判（铁律：词表能接住的
         # 永不过 LLM）。LLM 只产 intent 家族，字段抽取仍归词表正则——
@@ -175,7 +222,7 @@ def slot_filler_node(state: dict) -> dict:
 
         llm_intent = classify_intent_llm(
             message,
-            has_itinerary=bool(state.get("itinerary")),
+            has_itinerary=has_itinerary,
             has_destination=bool(fresh.destination or (previous and previous.destination)),
         )
         if llm_intent:
@@ -184,18 +231,26 @@ def slot_filler_node(state: dict) -> dict:
             # （实机踩过：首轮规划直接 failed）
             intent = TravelIntent(llm_intent)
             logger.info("[TravelSlotFiller] 词表盲区由 LLM 补判 intent=%s", intent.value)
-    brief = _requirement_service.merge(previous, fresh)
+    if partial_request is None:
+        non_mutating = intent in NON_PLANNING_INTENTS
+        brief = (
+            previous.model_copy() if previous is not None else TravelBrief()
+        ) if non_mutating else _requirement_service.merge(previous, fresh)
+    query_destination = ""
+    if intent in QUERY_INTENTS:
+        query_destination = fresh.destination or (
+            previous.destination if previous else "")
     # M3-e 方案档位：fresh.tier 缺省恒为 economy，无法区分「说了经济型」
     # 与「没提」；这里用原话显式判定并在 merge 后覆盖（含降档回 economy）。
     from backend.travel.agents.requirement_agent import extract_tier
-    explicit_tier = extract_tier(message)
+    explicit_tier = extract_tier(message) if not non_mutating else ""
     if explicit_tier:
         brief.tier = explicit_tier
 
     # 天数上限（验收 #72）：超长需求（30/60 天）按上限裁剪，明示不静默。
     # 放 merge 之后统一判——上一轮遗留的超限天数同样被兜住。
     days_clamped = False
-    if brief.days and brief.days > T.TRAVEL_MAX_DAYS:
+    if not non_mutating and brief.days and brief.days > T.TRAVEL_MAX_DAYS:
         logger.info("[TravelSlotFiller] 天数 %s 超上限，裁剪为 %s",
                     brief.days, T.TRAVEL_MAX_DAYS)
         brief.days = T.TRAVEL_MAX_DAYS
@@ -207,7 +262,8 @@ def slot_filler_node(state: dict) -> dict:
     #   回写 —— 本轮用户明确表达的偏好（标签/节奏/忌口）upsert 落库。
     #   Memory 边界：长期偏好只存稳定字段（origin/preferences/pace/diet），
     #   一次性 TripBrief 字段（目的地/天数/预算/必去）绝不进长期 memory。
-    if previous is None and T.TRAVEL_PREFS_ENABLED and state.get("user_id"):
+    if (not non_mutating and previous is None and T.TRAVEL_PREFS_ENABLED
+            and state.get("user_id")):
         try:
             from backend.tools.travel import preferences as prefs_store
 
@@ -227,16 +283,16 @@ def slot_filler_node(state: dict) -> dict:
                             brief.preferences, brief.pace)
         except Exception:  # noqa: BLE001 — 预填失败按未填处理
             logger.debug("[TravelSlotFiller] 偏好预填失败", exc_info=True)
-    if T.TRAVEL_PREFS_ENABLED and state.get("user_id"):
+    if (long_term_preference and T.TRAVEL_PREFS_ENABLED
+            and state.get("user_id")):
         try:
             from backend.tools.travel import preferences as prefs_store
 
             prefs_store.upsert_preferences(
                 state.get("user_id", ""),
-                origin=brief.origin or "",
-                preferences=brief.preferences,
-                pace=(brief.pace if brief.pace != "moderate" else ""),
-                diet=brief.diet or "",
+                preferences=extract_preferences(message),
+                pace=extract_pace(message) or "",
+                diet=extract_diet(message),
             )
         except Exception:  # noqa: BLE001 — 回写失败不影响本轮
             logger.debug("[TravelSlotFiller] 偏好回写失败", exc_info=True)
@@ -296,6 +352,38 @@ def slot_filler_node(state: dict) -> dict:
     # notes 每轮重写（旧轮提示对新规划已过时）；risk expert 在本轮末尾
     # 读取 state.notes 累加风险提示，不冲突。
     notes: list[str] = []
+    party_source = party_size_source(message)
+    slot_sources = {
+        "destination": (
+            "explicit" if fresh.destination else
+            ("inferred" if previous and previous.destination else "missing")
+        ),
+        "days": (
+            "explicit" if fresh.days is not None else
+            ("inferred" if previous and previous.days is not None else "missing")
+        ),
+        "party_size": (
+            "explicit" if party_source == "explicit" else
+            "guess" if party_source == "guess" else
+            "inferred" if previous is not None else "default"
+        ),
+    }
+    if long_term_preference:
+        slot_sources["long_term_preference"] = "explicit"
+    if brief.budget_cny is not None:
+        slot_sources["budget_constraint"] = brief.budget_constraint
+    if brief.weather_conditions:
+        notes.append(
+            "已记录天气条件："
+            + "、".join(
+                f"第{item.get('day_index')}天下雨时优先安排室内"
+                if item.get("day_index") else "下雨时优先安排室内"
+                for item in brief.weather_conditions
+            )
+        )
+    if (not non_mutating and slot_sources["party_size"] == "default"
+            and brief.party_size == 1):
+        notes.append("未说明同行人数，本次按 1 人默认；如不对，直接告诉我人数")
     # 日期区间透明化：「9月21到25日」按区间天数规划，让用户看得见换算结果
     date_range = extract_date_range_days(message)
     if date_range and brief.days == date_range[0]:
@@ -379,12 +467,12 @@ def slot_filler_node(state: dict) -> dict:
     # QUERY_STATIC：一轮一次定向灵感检索（v3 §3.1），产出三态灵感包供
     # reporter 渲染；检索失败不阻塞（status=unavailable 如实呈现）。
     inspiration: dict = {}
-    if intent is TravelIntent.QUERY_STATIC and brief.destination:
+    if intent is TravelIntent.QUERY_STATIC and query_destination:
         from backend.travel.services.inspiration_service import (
             fetch_destination_inspiration,
         )
 
-        inspiration = fetch_destination_inspiration(brief.destination)
+        inspiration = fetch_destination_inspiration(query_destination)
     elif intent is TravelIntent.DISCOVER:
         from backend.travel.recommend import recommend_cities
 
@@ -394,21 +482,31 @@ def slot_filler_node(state: dict) -> dict:
         ]}
 
     update: dict = {
-        "brief": brief.model_dump(),
         "brief_missing": missing,
         "clarifications": [clarification] if clarification else [],
         "clarification_options": clarification_options,
-        "brief_fingerprint": fingerprint,
+        "query_destination": query_destination,
+        "slot_sources": slot_sources,
+        "destination_change": "destination" in brief_changed_fields,
         "persistence_status": persistence_status,
         "stage": "slot",
+        "finished": False,
         "intent": intent.value if intent else "",
         "inspiration": inspiration,
+        "partial_replan": asdict(partial_request) if partial_request else {},
+        "partial_replan_done": False,
+        "partial_replan_result": {},
     }
+    # 无既有 Trip 的轻量消息不能把空 brief/fingerprint 写进 checkpoint；
+    # 否则下一条真正 PLAN 会被误判成「从空需求变化」，凭空产生一次 reset。
+    if previous is not None or not non_mutating:
+        update["brief"] = brief.model_dump()
+        update["brief_fingerprint"] = fingerprint
 
     previous_itinerary = state.get("itinerary") or {}
     previous_plan_version = int(previous_itinerary.get("plan_version") or 0) or None
 
-    if require_fresh:
+    if require_fresh and not non_mutating:
         # 强持久化策略下的降级处置（任务书 §10）：无条件清跨轮产物，
         # 即使指纹没变 —— 降级后端里留着的上一轮产物不可信（多 worker
         # 不共享、重启即失）。planning_reset 会清 notes，note 必须在其后写。
@@ -426,7 +524,13 @@ def slot_filler_node(state: dict) -> dict:
     if brief_changed:
         # 需求变了：旧行程作废，连同执行态一起清掉重新规划。
         # 注意 planning_reset() 会把 notes 置空，所以 notes 必须在它之后写。
+        previous_itinerary = state.get("itinerary")
         update.update(planning_reset(previous_plan_version))
+        if previous_itinerary:
+            update["plan_stability_baseline"] = {
+                "itinerary": previous_itinerary,
+                "changed_fields": list(brief_changed_fields),
+            }
         # 变化原因与差异字段不进 planning_reset 清单：变化当轮产生、当轮被
         # transit expert 消费（盖版本章），跨轮保留也无害（下次变化会覆盖）。
         update["brief_change_reason"] = brief_change_reason
@@ -455,7 +559,7 @@ def slot_filler_node(state: dict) -> dict:
     # M3-g 城市指南预热：城市级知乎/RAG 检索 fire-and-forget（结果写
     # 7 天缓存供速览卡/抽屉秒出）。不阻塞规划主链、失败静默。
     _dest = (brief.destination or "").strip()
-    if _dest:
+    if _dest and not non_mutating:
         try:
             from concurrent.futures import ThreadPoolExecutor
 
@@ -473,8 +577,10 @@ def slot_filler_node(state: dict) -> dict:
         brief=brief.model_dump(mode="json"),
         missing=missing,
         assumptions=notes,
+        slot_sources=slot_sources,
         intent=intent.value if intent else "",
         clarification_options=clarification_options,
         confidence="rule_based",
+        destination_change="destination" in brief_changed_fields,
     )
     return update

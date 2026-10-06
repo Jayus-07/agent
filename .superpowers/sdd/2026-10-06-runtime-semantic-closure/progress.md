@@ -41,3 +41,9 @@ Task 6: Ruling: registered domains now declare entry_mode_key and the registry d
 Task 6: Ruling: projection.py resolves domain runtime type/id/subflow through DomainGraphRegistry; a static AST guard rejects registered-domain mapping literals in projection, domain_router, execution_mode, and prefilter_chain. A fake_domain test proves metadata registration does not require edits to Router or builder — cost if wrong: a new domain may still require its own prefilter/intent evidence, but cannot require a second routing map.
 
 Task 6: complete (stage F aggregator: 122 passed, DOMAIN_REGISTRATION_GOVERNANCE_PASS=true, NEW_DOMAIN_REGISTRATION_SURFACE_PASS=true, ROUTER_DOMAIN_LITERAL_GUARD_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)
+
+Task 7: Ruling: Runtime Trace stores one fixed runtime dimension record (domain/subflow/runtime/interaction/execution/workflow/capability/skill/tool/prompt/confidence/source), while skill/tool/domain attribution updates only the existing record; prompt versions are copied from the request pin into Trace metadata without affecting execution — cost if wrong: Trace fields could drift across node types or lose cost/eval correlation.
+
+Task 7: Ruling: the final verifier runs the union of all A-G stage suites plus Global Regression Gate in one pytest process, persists stage evidence, and computes AGENT_RUNTIME_ARCH_V2_READY from an explicit fixed-key conjunction. A routing composition test now injects an in-memory cache so old Redis entries cannot bypass the injected router and create a false regression.
+
+Task 7: complete (final aggregator: 447 passed, all A-G and compatibility gates=true, STATE_UNKNOWN_KEY_TOTAL=0, PRODUCTION_BEHAVIOR_CHANGED=false, AGENT_RUNTIME_ARCH_V2_READY=true)

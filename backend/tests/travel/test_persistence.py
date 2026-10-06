@@ -65,8 +65,10 @@ class TestBuildCheckpointerStatus:
         checkpointer, status = _build_checkpointer()
         assert (checkpointer, status) == (None, PERSISTENCE_DISABLED)
 
-    def test_degraded_when_postgres_unavailable(self, monkeypatch):
-        """postgres 连接失败 → 降级 MemorySaver，状态必须是 degraded。"""
+    def test_postgres_unavailable_is_fail_loud_without_explicit_opt_in(
+        self, monkeypatch,
+    ):
+        """Postgres 失败不得静默变成 MemorySaver。"""
         monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_ENABLED", True)
         monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_BACKEND", "postgres")
         import psycopg
@@ -75,9 +77,25 @@ class TestBuildCheckpointerStatus:
             raise RuntimeError("pg down")
 
         monkeypatch.setattr(psycopg.Connection, "connect", _boom)
+        monkeypatch.delenv("CHECKPOINTER_ALLOW_DEGRADE", raising=False)
+        from backend.config.checkpointer import CheckpointerUnavailable
+        with pytest.raises(CheckpointerUnavailable):
+            _build_checkpointer()
+
+    def test_postgres_unavailable_can_only_degrade_with_explicit_opt_in(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_ENABLED", True)
+        monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_BACKEND", "postgres")
+        import psycopg
+
+        monkeypatch.setattr(psycopg.Connection, "connect",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                RuntimeError("pg down")))
+        monkeypatch.setenv("CHECKPOINTER_ALLOW_DEGRADE", "true")
         checkpointer, status = _build_checkpointer()
+        assert checkpointer is not None
         assert status == PERSISTENCE_DEGRADED
-        assert checkpointer is not None  # 降级产物 MemorySaver，不是裸跑
 
     def test_healthy_when_postgres_ready(self, monkeypatch):
         """postgres 就绪 → healthy。mock 连接与 Saver，不真连库。"""

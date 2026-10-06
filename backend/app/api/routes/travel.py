@@ -146,6 +146,27 @@ def _record_plan_version(out: dict, conversation_id: str, user_id: str) -> dict:
     return out
 
 
+def _attach_trace_plan_projection(state: dict, result: dict,
+                                  conversation_id: str,
+                                  user_id: str) -> None:
+    """把版本账本的 active/draft 事实放进观测旁路，不改变 API 响应。"""
+    if not conversation_id or not user_id or not isinstance(state, dict):
+        return
+    try:
+        from backend.travel.core.plan_service import plan_version_service
+
+        itinerary = result.get("itinerary") or state.get("itinerary") or {}
+        active = plan_version_service.active_version(conversation_id, user_id)
+        change = result.get("change_record") or {}
+        state["_trace_plan_versions"] = {
+            "base_plan_version": change.get("parent_plan_version") or "",
+            "active_plan_version": (active or {}).get("plan_version") or "",
+            "draft_plan_version": itinerary.get("plan_version") or "",
+        }
+    except Exception:  # noqa: BLE001 — 观测旁路软失败
+        logger.debug("[TravelAPI] Trace 版本投影失败", exc_info=True)
+
+
 def _travel_destination(state: dict | None, result: dict | None = None) -> str:
     """从旅游状态提取可审计的目的地标签，不依赖用户自报字段。"""
     state = state or {}
@@ -167,6 +188,21 @@ def _finish_travel_trace(trace, started_at: float, result: dict,
             "travel_run_id": run_id,
             "travel_destination": _travel_destination(state, result),
         })
+        from backend.travel.trace_semantics import build_trace_semantics
+
+        semantics_state = dict(state or {})
+        if not semantics_state.get("conversation_id"):
+            # 极简测试图/异常出口可能没有把输入键回传到最终 state；
+            # Trace 创建时的 session_id 仍是同一 conversation_id。
+            semantics_state["conversation_id"] = getattr(
+                trace, "session_id", "") or ""
+        semantics = build_trace_semantics(semantics_state, result)
+        trace.metadata["travel_semantics"] = semantics
+        for key, value in semantics.items():
+            if isinstance(value, list):
+                trace.tags[f"travel_{key}"] = ",".join(str(item) for item in value)
+            else:
+                trace.tags[f"travel_{key}"] = str(value)
         from backend.observability.tracer import trace_collector
         trace_collector.finish(
             trace,
@@ -259,6 +295,8 @@ async def travel_plan(request: Request):
             control.check()
             out = dict(build_travel_graph_result(final_state))
             out = _record_plan_version(out, conversation_id, identity.user_id or "")
+            _attach_trace_plan_projection(
+                final_state, out, conversation_id, identity.user_id or "")
             return out
         except RunStopped as exc:
             out = _stopped_result(exc.reason)
@@ -436,6 +474,8 @@ async def travel_plan_stream(request: Request):
                 trace_state = final_state if isinstance(final_state, dict) else {}
                 result = _record_plan_version(
                     result, conversation_id, identity.user_id or "")
+                _attach_trace_plan_projection(
+                    trace_state, result, conversation_id, identity.user_id or "")
                 trace_result = result
                 emit_travel_event(
                     "run.finished", agent="supervisor",
@@ -792,6 +832,9 @@ def travel_plan_latest(conversation_id: str, request: Request):
     if not latest:
         # 不存在 / 越权 / 账本不可用一律 404，不泄露存在性
         raise HTTPException(status_code=404, detail="无可用行程版本")
+    active_reader = getattr(plan_version_service, "active_version", None)
+    active = (active_reader(conversation_id, identity.user_id or "")
+              if active_reader else latest)
     return {
         "conversation_id": conversation_id,
         "plan_version": latest["plan_version"],
@@ -799,6 +842,9 @@ def travel_plan_latest(conversation_id: str, request: Request):
         "destination": latest["destination"],
         "created_at": latest["created_at"],
         "itinerary": latest.get("itinerary"),
+        "active_plan_version": active.get("plan_version") if active else None,
+        "active_plan_status": active.get("plan_status") if active else None,
+        "active_itinerary": active.get("itinerary") if active else None,
     }
 
 

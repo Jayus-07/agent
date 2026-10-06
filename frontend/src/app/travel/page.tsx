@@ -45,10 +45,12 @@ import {
   composePlanMessage,
   itineraryTotal,
   readConversationId,
+  readStoredConversationId,
   readPlanState,
   rotateConversationId,
   persistPlanState,
   previewPlanResponse,
+  reconcilePlanWithLatest,
   PACE_LABEL,
   type PlanState,
 } from '@/components/travel/planState'
@@ -61,6 +63,7 @@ import {
 import { TRAVEL_STAGE_LABELS, TRAVEL_STAGE_ORDER, TRAVEL_TOOL_LABELS } from '@/components/travel/travelDisplay'
 import {
   fetchItineraryIcs,
+  fetchTravelPlanList,
   fetchTravelPlanLatest,
   fetchTravelRecommendations,
   recordTravelDecision,
@@ -179,7 +182,9 @@ export default function TravelPage() {
   }, [])
 
   // ── 结果与线程 ──
+  const hadStoredConversation = readStoredConversationId() !== null
   const [conversationId, setConversationId] = useState(readConversationId)
+  const [recoverLatestHistory] = useState(() => !hadStoredConversation)
   const [planState, setPlanState] = useState<PlanState>(readPlanState)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -432,6 +437,41 @@ export default function TravelPage() {
     setPlanState((prev) => applyPlanResponse(prev, data))
     if (data.itinerary?.brief) applyBriefToForm(data.itinerary.brief)
   }, [applyBriefToForm])
+
+  // sessionStorage 被清空/标签页重开时，按用户服务端历史自动收养最近一份
+  // 会话；这样核心行程不依赖本地缓存，也不会把历史正文复制进另一套状态。
+  useEffect(() => {
+    if (!recoverLatestHistory) return
+    let alive = true
+    fetchTravelPlanList(1)
+      .then((plans) => {
+        const latest = plans[0]
+        if (!alive || !latest?.conversation_id) return
+        setConversationId(adoptConversationId(latest.conversation_id))
+      })
+      .catch(() => {
+        // 没有历史或服务端暂不可用时保留刚创建的空线程。
+      })
+    return () => { alive = false }
+  }, [recoverLatestHistory])
+
+  // 刷新/多标签页回到本页时，sessionStorage 只作瞬时缓存；服务端版本账本
+  // 才是 Active/Draft 真相源。确认版本直接替换，待确认版本只进入 pending。
+  useEffect(() => {
+    let alive = true
+    fetchTravelPlanLatest(conversationId)
+      .then((latest) => {
+        if (!alive || !latest.itinerary) return
+        setPlanState((prev) => reconcilePlanWithLatest(prev, latest))
+        if (latest.plan_status !== 'waiting_confirmation') {
+          applyBriefToForm(latest.itinerary.brief)
+        }
+      })
+      .catch(() => {
+        // 新会话尚未落账时 404 是正常状态，不覆盖本地缓存。
+      })
+    return () => { alive = false }
+  }, [applyBriefToForm, conversationId])
 
   const handleAssistantDraft = useCallback((data: PlanResponse) => {
     setPlanState((prev) => previewPlanResponse(prev, data))
@@ -717,24 +757,6 @@ export default function TravelPage() {
               {/* ── 结果 ── */}
               {itinerary ? (
                 <>
-                  {planState.pending?.itinerary && (
-                    <section
-                      aria-label="行程预览状态"
-                      role="status"
-                      aria-live="polite"
-                      className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                          预览中，尚未应用
-                        </span>
-                        <span className="text-xs text-amber-900">草案 v{planState.pending.itinerary.plan_version}</span>
-                      </div>
-                      <p className="mt-1 text-xs leading-relaxed text-amber-900">
-                        当前行程仍是 v{itinerary.plan_version}；请在右侧选择「应用新行程」或「保留原行程」。
-                      </p>
-                    </section>
-                  )}
                   {/* M1 反馈：Tool 执行记录移入右栏聊天流（内联 Tool 行常驻本轮对话），
                       中栏只保留行程本体 */}
                   <ItineraryView

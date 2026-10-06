@@ -20,6 +20,7 @@ import {
   persistPlanState,
   previewPlanResponse,
   clearPendingPlan,
+  reconcilePlanWithLatest,
   sanitizeTravelReply,
   rotateConversationId,
   type PlanFormInput,
@@ -171,6 +172,60 @@ describe('会话线程 — 刷新后仍接着改同一份行程', () => {
     } as PlanState
     persistPlanState(state)
     expect(readPlanState()).toEqual(state)
+  })
+
+  it('服务端已确认的新版本覆盖旧 sessionStorage，刷新后页面与 DB 对齐', () => {
+    const stale: PlanState = {
+      plan: { status: 'ready', final_answer: '旧内容', itinerary: makeItinerary({ plan_version: 2 }) },
+      pending: null,
+      notice: '',
+      discarded: [],
+    }
+    const next = reconcilePlanWithLatest(stale, {
+      conversation_id: 'conv-1',
+      plan_version: 4,
+      plan_status: 'confirmed',
+      destination: '杭州',
+      created_at: '',
+      itinerary: makeItinerary({ plan_version: 4 }),
+    })
+    expect(next.plan?.itinerary?.plan_version).toBe(4)
+    expect(next.pending).toBeNull()
+  })
+
+  it('服务端待确认的新版本进入 pending，不覆盖当前 active', () => {
+    const stale: PlanState = {
+      plan: { status: 'ready', final_answer: '旧内容', itinerary: makeItinerary({ plan_version: 2 }) },
+      pending: null,
+      notice: '',
+      discarded: [],
+    }
+    const next = reconcilePlanWithLatest(stale, {
+      conversation_id: 'conv-1',
+      plan_version: 3,
+      plan_status: 'waiting_confirmation',
+      destination: '杭州',
+      created_at: '',
+      itinerary: makeItinerary({ plan_version: 3 }),
+    })
+    expect(next.plan?.itinerary?.plan_version).toBe(2)
+    expect(next.pending?.itinerary?.plan_version).toBe(3)
+  })
+
+  it('本地缓存全空时，服务端同时恢复 active 与 draft', () => {
+    const next = reconcilePlanWithLatest(EMPTY_PLAN_STATE, {
+      conversation_id: 'conv-1',
+      plan_version: 5,
+      plan_status: 'waiting_confirmation',
+      destination: '杭州',
+      created_at: '',
+      itinerary: makeItinerary({ plan_version: 5 }),
+      active_plan_version: 4,
+      active_plan_status: 'confirmed',
+      active_itinerary: makeItinerary({ plan_version: 4 }),
+    })
+    expect(next.plan?.itinerary?.plan_version).toBe(4)
+    expect(next.pending?.itinerary?.plan_version).toBe(5)
   })
 })
 

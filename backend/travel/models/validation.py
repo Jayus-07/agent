@@ -24,6 +24,7 @@ CODE_TIME_CLOSED_WEEKDAY = "TIME_CLOSED_WEEKDAY"  # 安排到闭馆日
 CODE_TIME_OVERLAP = "TIME_OVERLAP"             # 同一天两项时间重叠
 CODE_TIME_DAY_OVERRUN = "TIME_DAY_OVERRUN"     # 超出一天的可用结束时刻
 CODE_TIME_LONG_WAIT = "TIME_LONG_WAIT"         # 到达后需长时间等候开门（提示）
+CODE_TIME_BEFORE_ARRIVAL = "TIME_BEFORE_ARRIVAL"  # 首日早于抵达+缓冲
 
 # ── 地理轴 ──
 CODE_GEO_FAR_LEG = "GEO_FAR_LEG"               # 单段通勤过长
@@ -41,6 +42,7 @@ CODE_PACE_TOO_INTENSE = "PACE_TOO_INTENSE"       # 单日有效活动时长超�
 # ── 预算轴 ──
 CODE_BUDGET_OVER = "BUDGET_OVER"               # 预算超支
 CODE_BUDGET_TIGHT = "BUDGET_TIGHT"             # 逼近预算上限（预警，不算失败）
+CODE_BUDGET_SOFT_OVER = "BUDGET_SOFT_OVER"     # 软预算超出但已明确披露
 
 # ── 覆盖度 ──
 CODE_MUST_GO_MISSING = "MUST_GO_MISSING"       # 用户点名必去的地点未落入行程（仅提示）

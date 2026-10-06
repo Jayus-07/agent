@@ -89,6 +89,10 @@ TRAVEL_USER_DECISION_INTERRUPT = os.getenv("TRAVEL_USER_DECISION_INTERRUPT", "fa
 # =============================================
 TRAVEL_DAY_START = os.getenv("TRAVEL_DAY_START", "08:30")
 TRAVEL_DAY_END = os.getenv("TRAVEL_DAY_END", "21:30")
+# 抵达后预留安顿/取行李/从站点到首个景点的缓冲，首日活动不得早于
+# arrival_time + buffer；用户可按部署环境调整，但默认不把抵达时刻当作可游玩时刻。
+TRAVEL_ARRIVAL_BUFFER_MINUTES = int(
+    os.getenv("TRAVEL_ARRIVAL_BUFFER_MINUTES", "30"))
 # 单个通勤段时长上限（分钟）：超过 warn 线记 warning，超过 err 线记 error
 TRAVEL_MAX_LEG_MINUTES_WARN = int(os.getenv("TRAVEL_MAX_LEG_MINUTES_WARN", "60"))
 TRAVEL_MAX_LEG_MINUTES_ERR = int(os.getenv("TRAVEL_MAX_LEG_MINUTES_ERR", "105"))

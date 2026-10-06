@@ -142,6 +142,27 @@ class TestSupervisorDecide:
         )
         assert decide(state).stage is TravelStage.VALIDATE
 
+    def test_partial_replan_runs_before_modify_answer(self):
+        state = _state(
+            intent="modify",
+            partial_replan={"operation": "remove_poi", "remove_names": ["西湖"]},
+            partial_replan_done=False,
+            itinerary=save_itinerary(_empty_itinerary()),
+        )
+        assert decide(state).stage is TravelStage.PARTIAL_REPLAN
+
+    def test_partial_replan_revalidates_then_reports(self):
+        base = _state(
+            intent="modify",
+            partial_replan={"operation": "remove_poi", "remove_names": ["西湖"]},
+            partial_replan_done=True,
+            partial_replan_result={"status": "applied", "validation_failed": False},
+            itinerary=save_itinerary(_empty_itinerary()),
+        )
+        assert decide(base).stage is TravelStage.VALIDATE
+        base["validation"] = save_validation(ValidationReport())
+        assert decide(base).stage is TravelStage.REPORT
+
     def test_stalled_repair_terminates(self):
         """修复器回报「无自动修复手段」后不得再回 REPAIR。
 

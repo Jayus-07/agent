@@ -8,7 +8,7 @@
  * 展示出来的行程清掉**（原 page.tsx 直接 `setPlan(data)`，一次追问就把
  * 用户刚拿到的行程顶没了）。规则放这里，页面与抽屉共用一份，可直测。
  */
-import type { PlanResponse } from '@/api/travel'
+import type { PlanResponse, TravelPlanLatest } from '@/api/travel'
 
 export interface PlanState {
   /** 当前展示的行程；null = 还没出过行程 */
@@ -142,6 +142,69 @@ export function clearPendingPlan(prev: PlanState): PlanState {
 }
 
 /**
+ * 刷新时用服务端账本校准本地 sessionStorage。
+ *
+ * sessionStorage 只是页面缓存，不是 Active/Draft 真相源：另一个标签页
+ * 应用/恢复版本后，当前标签页若只读本地缓存就会继续展示旧行程。已确认
+ * 的服务端版本覆盖本地 active；待确认版本进入 pending，不能覆盖当前
+ * active。被用户放弃的版本受墓碑保护，不能因刷新重新复活。
+ */
+export function reconcilePlanWithLatest(
+  state: PlanState,
+  latest: TravelPlanLatest,
+): PlanState {
+  const itinerary = latest.itinerary
+  if (!itinerary) return state
+  const remoteVersion = Number(itinerary.plan_version || latest.plan_version || 0)
+  if (!remoteVersion) return state
+  const activeVersion = Number(state.plan?.itinerary?.plan_version || 0)
+  const pendingVersion = Number(state.pending?.itinerary?.plan_version || 0)
+  const discarded = state.discarded.includes(remoteVersion)
+    || _loadDiscarded().includes(remoteVersion)
+  if (discarded) return state
+
+  if (latest.plan_status === 'waiting_confirmation') {
+    const recoveredActive = !state.plan && latest.active_itinerary
+      ? {
+          status: latest.active_itinerary.status || 'ready',
+          final_answer: '',
+          itinerary: latest.active_itinerary,
+          plan_status: latest.active_plan_status || 'confirmed',
+        } as PlanResponse
+      : state.plan
+    const baseState = recoveredActive && !state.plan
+      ? { ...state, plan: recoveredActive }
+      : state
+    const recoveredVersion = Number(baseState.plan?.itinerary?.plan_version || 0)
+    if (remoteVersion <= recoveredVersion || pendingVersion === remoteVersion) return baseState
+    return {
+      ...baseState,
+      pending: {
+        status: 'ready',
+        final_answer: '',
+        itinerary,
+        plan_status: 'waiting_confirmation',
+      },
+      notice: '',
+    }
+  }
+
+  // 只接受服务端比本地更新的 confirmed 版本；旧缓存不能反向覆盖新状态。
+  if (remoteVersion <= activeVersion && pendingVersion !== remoteVersion) return state
+  return {
+    plan: {
+      status: itinerary.status || 'ready',
+      final_answer: state.plan?.final_answer || '',
+      itinerary,
+      plan_status: latest.plan_status,
+    },
+    pending: null,
+    notice: '',
+    discarded: state.discarded,
+  }
+}
+
+/**
  * 助手文本的最后一道数据安全兜底。
  *
  * 后端升级或容器滚动期间，旧实例可能仍返回「seed:local / 费用预估 /
@@ -244,6 +307,16 @@ export function describePlanReply(data: PlanResponse): { tag: string; tone: 'ok'
 
 const CONVERSATION_KEY = 'travel:conversation'
 
+/** 只读本地线程，不在没有缓存时隐式创建新线程。 */
+export function readStoredConversationId(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.sessionStorage.getItem(CONVERSATION_KEY)
+  } catch {
+    return null
+  }
+}
+
 export function newConversationId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
   return `t-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -260,14 +333,8 @@ function persist(id: string): void {
 
 /** 读取当前线程 id；没有（首次进页/刷新后丢失）则新建一个并落盘。 */
 export function readConversationId(): string {
-  if (typeof window !== 'undefined') {
-    try {
-      const saved = window.sessionStorage.getItem(CONVERSATION_KEY)
-      if (saved) return saved
-    } catch {
-      /* 见 persist 注释 */
-    }
-  }
+  const saved = readStoredConversationId()
+  if (saved) return saved
   return rotateConversationId()
 }
 

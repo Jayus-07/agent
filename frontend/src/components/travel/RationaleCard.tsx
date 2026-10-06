@@ -52,7 +52,10 @@ export default function RationaleCard({ rationale, processState, itinerary, pace
   if (reqBrief.destination) chips.push({ k: '目的地', v: String(reqBrief.destination) })
   if (reqBrief.days) chips.push({ k: '天数', v: `${reqBrief.days} 天` })
   if (reqBrief.party_size) chips.push({ k: '人数', v: `${reqBrief.party_size} 人` })
-  if (reqBrief.budget_cny) chips.push({ k: '预算', v: `≤ ¥${reqBrief.budget_cny}` })
+  if (reqBrief.budget_cny) {
+    const budgetLabel = reqBrief.budget_constraint === 'soft' ? '约' : '≤'
+    chips.push({ k: '预算', v: `${budgetLabel} ¥${reqBrief.budget_cny}` })
+  }
   if (pace || reqBrief.pace) chips.push({ k: '节奏', v: PACE_LABEL[String(pace || reqBrief.pace)] ?? '适中' })
   ;(Array.isArray(reqBrief.preferences) ? reqBrief.preferences : []).forEach((p) =>
     chips.push({ k: '偏好', v: String(p), hot: true }))

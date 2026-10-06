@@ -6,6 +6,7 @@ v3 裁决 #1 的代码化：**先判意图，再合并 TripBrief，最后检查�
 槽位条件，问答/探索/修改诉求才能拿到正确的出口。
 
 优先级（v3 §2.1，自上而下首中即返回）：
+  0. SOCIAL / META / OUT_OF_SCOPE 轻交互与出域消息
   1. MODIFY    指向已有行程的改动（要求 has_itinerary，且抽取器没把它
                理解成结构化改动——后者走既有「指纹变化→重排」链）
   2. PLAN      明确规划动词（v3：显式动作词是用户主权，压过同句疑问）
@@ -28,6 +29,8 @@ import re
 class TravelIntent(str, enum.Enum):
     PLAN = "plan"
     MODIFY = "modify"
+    SOCIAL = "social"
+    META = "meta"
     QUERY_DYNAMIC = "query_dynamic"
     QUERY_STATIC = "query_static"
     DISCOVER = "discover"
@@ -44,6 +47,14 @@ QUERY_INTENTS: frozenset[str] = frozenset({
     TravelIntent.DISCOVER.value,
 })
 
+# 这些意图只能走轻量回答，不得进入 POI / transit / weather / budget / risk
+# 完整规划链。它们与 QUERY_INTENTS 分开，避免影响既有 LLM query 家族契约。
+NON_PLANNING_INTENTS: frozenset[str] = QUERY_INTENTS | frozenset({
+    TravelIntent.SOCIAL.value,
+    TravelIntent.META.value,
+    TravelIntent.OUT_OF_SCOPE.value,
+})
+
 # ── 0) OUT_OF_SCOPE：明确非旅游域诉求（M2 出域引导）──
 # 只收「强域信号」词，宁漏勿滥：漏了走既有链路只是答得普通，
 # 误判会把真行程诉求拦在门外。
@@ -53,12 +64,28 @@ _RE_OUT_OF_SCOPE = re.compile(
     r"|写代码|编程|数据库|\bSQL\b|报表|考勤|工资|社保|报销"
 )
 
+# 轻量社交/元问题必须在槽位抽取前完成语义裁决；使用整句匹配避免把
+# 「好吃吗」「好玩吗」等旅游问题误判成「好的」。
+_RE_SOCIAL = re.compile(
+    r"^(?:谢谢(?:你)?|多谢|感谢(?:你)?|辛苦了?|好的?|好哒|明白了?|"
+    r"了解了?|收到|懂了|谢了|嗯嗯?|行了?|可以了?|ok)[，。！!？?、\s]*$",
+    re.IGNORECASE,
+)
+_RE_META = re.compile(
+    r"你.*(?:是|属于).*(?:模型|机器人|人工智能|AI)|"
+    r"(?:你|您)?(?:能|可以|会)(?:够)?做什么|"
+    r"你是谁|你是什么模型|你的能力是什么|"
+    r"(?:记住|以后|长期|平时|一般).{0,20}(?:喜欢|偏好|倾向|慢节奏|"
+    r"轻松|历史文化|人文|美食|不吃辣|素食)",
+    re.IGNORECASE,
+)
+
 # ── 1) MODIFY：指向已有行程的逐条改动 ──────────────────────────────
 # 「第X天 + 动词」是强信号；裸「换成/重排」要求 has_itinerary 才判。
 # 显式天数表达（改成3天）不是 MODIFY —— 那是 days 槽位更新，走重排。
 _RE_MODIFY = re.compile(
-    r"第[一二三四五六七八九十\d]{1,3}天.{0,12}?(换成|改成|替换|调整为|去掉|删除|取消|移除)"
-    r"|(?:换成|改成|替换成|调整为|重排|调整下?顺序|删掉|去掉|加一?天|多住一?天|少去)"
+    r"第[一二三四五六七八九十\d]{1,3}天.{0,16}?(换成|改成|替换|调整为|去掉|删除|取消|移除|别|不要|不想|太赶|太满|早点结束|早些结束|加一个|增加|添加|必须同时安排)"
+    r"|(?:换成|改成|替换成|调整为|重排|调整下?顺序|删掉|去掉|加一?天|多住一?天|少去|加一个|增加|添加)"
 )
 _RE_HAS_DAYS_EXPR = re.compile(r"(?<![第\d])\d{1,2}\s*天|(?<!第)[一二两三四五六七八九十]{1,3}\s*天")
 
@@ -69,7 +96,10 @@ _RE_PLAN_VERB = re.compile(
 )
 # 「城市 + 天数」组合等价规划请求（「福州2天」）；负向断言排除「近/过去/
 # 前」引导的业务时间窗（「近3天订单量」类），口径与 prefilter 一致。
-_RE_DAYS_COUNT = re.compile(r"(?<![\d近过前])\d{1,2}\s*[天日](?!气)")
+_RE_DAYS_COUNT = re.compile(
+    r"(?<![\d近过前第一二两三四五六七八九十])"
+    r"(?:\d{1,2}|[一二两三四五六七八九十]{1,3})\s*[天日](?!气)"
+)
 
 # ── 3) QUERY_DYNAMIC：带时间锚的实时状态 ──
 _RE_DYNAMIC_FACT = re.compile(
@@ -113,6 +143,12 @@ def classify_intent(
     if _RE_OUT_OF_SCOPE.search(msg):
         return TravelIntent.OUT_OF_SCOPE
 
+    # SOCIAL / META：已有行程也必须在图入口轻量收尾。
+    if _RE_SOCIAL.fullmatch(msg):
+        return TravelIntent.SOCIAL
+    if _RE_META.search(msg):
+        return TravelIntent.META
+
     # 1) MODIFY：必须有已有行程可改；天数更新句（「改成3天」）不是逐条改单
     if has_itinerary and not _RE_HAS_DAYS_EXPR.search(msg):
         if _RE_MODIFY.search(msg):
@@ -145,5 +181,6 @@ def classify_intent(
 __all__ = [
     "TravelIntent",
     "QUERY_INTENTS",
+    "NON_PLANNING_INTENTS",
     "classify_intent",
 ]

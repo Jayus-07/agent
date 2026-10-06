@@ -57,6 +57,8 @@ async def test_travel_plan_rest_creates_and_finishes_trace(monkeypatch):
     assert captured[0].tags["travel_status"] == "success"
     assert captured[0].tags["travel_run_id"].startswith("travel-")
     assert captured[0].tags["travel_destination"] == "杭州"
+    assert captured[0].metadata["travel_semantics"]["conversation_id"] == "c-1"
+    assert "planning_mode" in captured[0].metadata["travel_semantics"]
 
 
 @pytest.mark.asyncio

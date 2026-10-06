@@ -141,7 +141,13 @@ _RE_BUDGET_YUAN = re.compile(r"(\d+(?:\.\d+)?)\s*(?:元|块钱|块|rmb|人民币
 _RE_BUDGET_WAN = re.compile(
     r"(?:预算|大概|差不多|总共)?\s*"
     rf"(\d+(?:\.\d+)?|{_CN_COMPOUND})\s*[万wW]")
-_RE_BUDGET_BARE = re.compile(r"预算[^。，,；;！!？?\d]{0,4}(\d+(?:\.\d+)?)")
+_RE_BUDGET_BARE = re.compile(r"预算[^。，,；;！!？?\d]{0,8}(\d+(?:\.\d+)?)")
+# 条件天气（STOP 6）：只抽取结构，不在 Requirement 层做天气判定。
+_RE_WEATHER_CONDITION = re.compile(
+    r"(?:第\s*([一二两三四五六七八九十\d]+)\s*[天日])?\s*"
+    r"(?:如果|若|要是)?\s*(?:下雨|有雨|雨天|下雪|恶劣天气)\s*"
+    r"(?:就|则|便)?\s*(?:安排|改为|优先)?\s*室内"
+)
 # 住宿区域（STOP F2）：「住难波」「住在梅田」「酒店订在难波」。排除问句
 # （住哪/住宿）与自指尾缀（「新宿的酒店」→ 新宿）。「住哪」是用户在问，
 # 不是在回答，绝不能进槽位。
@@ -155,9 +161,10 @@ _RE_DATE_CN = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?")
 # 相对日期（验收 #63）：「明天/后天/大后天」「下周五」「这周末」。
 # 「(周|星期|礼拜)X」允许无前缀（「周五」=最近的未来周五）；「周末」指周六+周日
 # 两天，歧义取周六并回显（slot_filler 消费）。匹配顺序：大后天必须先于后天。
-_RE_REL_DAYS = re.compile(r"(大后天|后天|明天)")
+_RE_REL_DAYS = re.compile(r"(今天|大后天|后天|明天)")
 _RE_REL_WEEKDAY = re.compile(r"(这|本|下)?(?:周|星期|礼拜)([一二三四五六日天])")
-_RE_REL_WEEKEND = re.compile(r"(这|本|下)?周末")
+_RE_REL_WEEKEND = re.compile(r"((?:这|本|下)个?)?周末")
+_RE_REL_WEEK_ONLY = re.compile(r"(这|本|下)周(?![一二三四五六日天末])")
 # 模糊时间词（验收 #64）：「月底去上海」无法唯一定日 —— 一律不猜具体日期，
 # 命中后由 slot_filler 明示（先按「第 1 天」排，确定后补具体日期）。
 _RE_VAGUE_TIME = re.compile(
@@ -165,7 +172,7 @@ _RE_VAGUE_TIME = re.compile(
     r"节假日|寒假|暑假|周末前后|月底前后|月初前后)")
 _WEEKDAY_CN_TO_MON1 = {"一": 1, "二": 2, "三": 3, "四": 4,
                        "五": 5, "六": 6, "日": 7, "天": 7}
-_REL_DAYS_OFFSET = {"明天": 1, "后天": 2, "大后天": 3}
+_REL_DAYS_OFFSET = {"今天": 0, "明天": 1, "后天": 2, "大后天": 3}
 
 # 首末日时间（验收 #82）：「16点到」「晚上8点到」「上午走」「10点出发」。
 # 显式时刻优先；「晚上到」「上午走」这类无数字的模糊时段按约定钟点承接
@@ -390,8 +397,18 @@ def _extract_route_city_pair(message: str) -> tuple[str, str] | None:
                 continue
             origin_pattern = _city_name_pattern(origin)
             destination_pattern = _city_name_pattern(destination)
+            # 路线角色由语义标记决定，不依赖城市目录顺序或城市左右紧邻。
+            # 「下周」/「我们准备」等自然语言可位于出发与目的地之间；
+            # 「现在在上海，想去杭州」则用当前位置标记确定 origin。
             patterns = (
-                rf"(?:从|由)\s*{origin_pattern}\s*(?:出发\s*)?(?:去|到|前往)\s*{destination_pattern}",
+                rf"(?:从|由)\s*{origin_pattern}\s*"
+                rf"(?:出发|启程)?[\s\S]{{0,24}}?"
+                rf"(?:去|到|前往)\s*{destination_pattern}",
+                rf"(?:现在|当前|目前)\s*在\s*{origin_pattern}"
+                rf"[\s\S]{{0,24}}?(?:想|准备|计划|要)?\s*"
+                rf"(?:去|到|前往)\s*{destination_pattern}",
+                rf"{origin_pattern}\s*(?:出发|启程)\s*[，,、\s]{{0,8}}"
+                rf"{destination_pattern}",
                 rf"{origin_pattern}\s*(?:到|去|前往)\s*{destination_pattern}",
             )
             if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
@@ -565,6 +582,32 @@ def extract_budget(message: str) -> float | None:
     return None
 
 
+def extract_budget_constraint(message: str) -> str | None:
+    """抽取预算 hard/soft 语义；未出现预算金额时返回 None。"""
+    if extract_budget(message) is None:
+        return None
+    if re.search(r"(?:不能|不得|不超过|以内|最多|上限|控制在|封顶)", message):
+        return "hard"
+    if re.search(r"(?:大概|大约|差不多|左右|约|上下|浮动)", message):
+        return "soft"
+    # 既有行为把未修饰的预算当作上限，保持兼容。
+    return "hard"
+
+
+def extract_weather_conditions(message: str) -> list[dict]:
+    """抽取条件天气约束，返回稳定的 per-day 结构。"""
+    result: list[dict] = []
+    for match in _RE_WEATHER_CONDITION.finditer(message or ""):
+        raw_day = match.group(1) or "0"
+        day_index = _to_int(raw_day) if raw_day != "0" else 0
+        if not day_index:
+            day_index = 0
+        item = {"day_index": day_index, "condition": "rain", "action": "indoor"}
+        if item not in result:
+            result.append(item)
+    return result
+
+
 def _clean_lodging(name: str) -> str:
     """剥掉捕获串里的尾缀与边界脏字（「新宿的酒店」→ 新宿）。"""
     for tail in _LODGING_TAIL_STRIP:
@@ -627,6 +670,13 @@ def _resolve_relative_date(message: str, today: date) -> date | None:
             return saturday + timedelta(days=7)
         return max(saturday, today)
 
+    match = _RE_REL_WEEK_ONLY.search(message)
+    if match:
+        this_monday = today - timedelta(days=today.weekday())
+        if match.group(1) == "下":
+            return this_monday + timedelta(days=7)
+        return max(this_monday, today)
+
     match = _RE_REL_WEEKDAY.search(message)
     if match:
         target = _WEEKDAY_CN_TO_MON1.get(match.group(2))
@@ -683,7 +733,12 @@ def extract_relative_date_expr(message: str) -> str:
     """
     if _RE_DATE_ISO.search(message) or _RE_DATE_CN.search(message):
         return ""
-    for pattern in (_RE_REL_DAYS, _RE_REL_WEEKEND, _RE_REL_WEEKDAY):
+    for pattern in (
+        _RE_REL_DAYS,
+        _RE_REL_WEEKEND,
+        _RE_REL_WEEKDAY,
+        _RE_REL_WEEK_ONLY,
+    ):
         match = pattern.search(message)
         if match:
             return match.group(0)
@@ -824,6 +879,22 @@ def extract_pace(message: str) -> str | None:
         if any(k in message for k in keywords):
             return pace
     return None
+
+
+_RE_LONG_TERM_PREFERENCE = re.compile(r"记住|以后|长期|平时|一般")
+
+
+def is_long_term_preference_message(message: str) -> bool:
+    """只识别用户明确要求跨会话保存的偏好表达。
+
+    普通行程里的「喜欢美食、节奏轻松」属于本次 TripBrief，不能因为
+    词面是偏好就写入长期表；必须出现「记住/以后/长期/一般」等长期
+    语义，同时确有可持久化的偏好字段。
+    """
+    text = message or ""
+    if not _RE_LONG_TERM_PREFERENCE.search(text):
+        return False
+    return bool(extract_pace(text) or extract_preferences(text) or extract_diet(text))
 
 
 # 人群节奏派生（验收 #80）：显式 pace 词优先；未提 pace 时按同行人群派生
@@ -1003,6 +1074,8 @@ def extract_fresh_brief(
         days=extract_days(message),
         party_size=1,
         budget_cny=extract_budget(message),
+        budget_constraint=extract_budget_constraint(message) or "hard",
+        weather_conditions=extract_weather_conditions(message),
         start_date=extract_start_date(message),
         arrival_time=extract_arrival_time(message) or "",
         departure_time=extract_departure_time(message) or "",
@@ -1113,6 +1186,7 @@ __all__ = [
     "extract_arrival_time",
     "extract_avoid",
     "extract_budget",
+    "extract_budget_constraint",
     "extract_date_range_days",
     "extract_days",
     "extract_days_range",
@@ -1127,11 +1201,13 @@ __all__ = [
     "extract_party_size",
     "extract_past_date",
     "extract_pace",
+    "is_long_term_preference_message",
     "extract_tier",
     "extract_preferences",
     "extract_start_date",
     "extract_unsupported_city",
     "extract_relative_date_expr",
     "extract_vague_time_expr",
+    "extract_weather_conditions",
     "party_size_source",
 ]

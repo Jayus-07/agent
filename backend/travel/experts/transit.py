@@ -25,6 +25,7 @@ from backend.travel.graph_state import (
 )
 from backend.travel.models.itinerary import CHANGE_INITIAL, KIND_VISIT
 from backend.travel.models.poi import Poi
+from backend.travel.stability import compare_plan_scope
 
 # 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：experts/__init__、
 # repair.py:26、test_p0_mvp 等的历史符号；rebuild_days 真身在
@@ -202,6 +203,14 @@ def transit_expert_node(state: dict) -> dict:
                     sum(len(d.legs) for d in itinerary.days),
                     itinerary.plan_version, itinerary.brief_version,
                     itinerary.change_reason)
+        baseline_itinerary = (state.get("plan_stability_baseline") or {}).get(
+            "itinerary")
+        stability = compare_plan_scope(baseline_itinerary, itinerary)
+        changed_fields = set(
+            (state.get("plan_stability_baseline") or {}).get("changed_fields") or []
+        )
+        if changed_fields <= {"budget_cny", "budget_constraint"} and stability["changed_days"]:
+            stability["scope_expansion_reason"] = "预算变化导致部分日期候选或可行性变化"
         # STOP I6 结构化事件（软失败）
         try:
             from backend.travel import quality_metrics as qm
@@ -214,7 +223,8 @@ def transit_expert_node(state: dict) -> dict:
             pass
         return {"status": "success",
                 "data": {"itinerary": save_itinerary(itinerary),
-                         "live_search": live_search},
+                         "live_search": live_search,
+                         "stability": stability},
                 "notes": extra_notes + notes}
 
     result = run_expert_safely("transit", _run, state)
@@ -236,6 +246,12 @@ def transit_expert_node(state: dict) -> dict:
             **(state.get("live_search") or {}),
             **data["live_search"],
         }
+    stability = data.get("stability") or {}
+    if stability:
+        update["preserved_days"] = stability.get("preserved_days", [])
+        update["changed_days"] = stability.get("changed_days", [])
+        update["scope_expansion_reason"] = stability.get(
+            "scope_expansion_reason", "")
     return update
 
 

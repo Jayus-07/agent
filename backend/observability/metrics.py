@@ -536,6 +536,49 @@ rag_version_filtered_total = Counter(
     "RAG 生成上下文中被版本窗口过滤剔除的证据条数（§6 版本治理消费方，R4）",
 )
 
+# ── RAG 阶段时延（2026-10-06 Grafana 观测重构，Grafana 04 页长期时序）──
+# stage 固定低基数枚举，禁止扩展：
+#   retrieve = 检索主阶段（BM25+向量+同文档扩展，到 context 就绪为止，含内部 rerank）
+#   rerank   = RerankCompressor 压缩耗时（retrieve 的子阶段）
+#   generate = LLM 生成（context 就绪 → chain.invoke 返回）
+#   total    = RAGChain.ask() 全链（含 verify/gate）
+rag_stage_duration_seconds = Histogram(
+    "rag_stage_duration_seconds",
+    "RAG 阶段耗时（秒，按固定低基数 stage 枚举）",
+    labelnames=("stage",),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 40, 80, 160),
+)
+
+
+def record_rag_stage(stage: str, duration_ms: float) -> None:
+    """rag_stage_duration_seconds 记账入口（挂点跨文件复用；软失败）。
+
+    stage 固定枚举 retrieve | rerank | generate | total，调用方传入其他值
+    会扩张 Prometheus 序列——此处不做白名单拦截以保持旁路零开销，
+    新 stage 值必须先改上面 Histogram 注释与 Grafana 面板。
+    """
+    try:
+        rag_stage_duration_seconds.labels(stage=stage).observe(
+            max(float(duration_ms), 1) / 1000)
+    except Exception:  # noqa: BLE001 — 指标旁路软失败
+        pass
+
+# ── 域图阶段统一埋点（2026-10-06 Grafana 观测重构，Grafana 06 页）──
+# 接线点：travel/graph_builder.py::_evented_node（唯一包装层）。
+# stage = 图节点名（低基数固定集合），status = success | failed；
+# 禁止 session_id/user_id/conversation_id 进 label。
+agent_stage_total = Counter(
+    "agent_stage_total",
+    "业务域图阶段调用计数（按域 × 阶段 × 状态）",
+    labelnames=("domain", "stage", "status"),
+)
+agent_stage_duration_seconds = Histogram(
+    "agent_stage_duration_seconds",
+    "业务域图阶段耗时（秒，按域 × 阶段）",
+    labelnames=("domain", "stage"),
+    buckets=(0.1, 0.25, 0.5, 1, 2, 4, 8, 15, 30, 60, 120),
+)
+
 
 feedback_total = Counter(
     "feedback_total",
@@ -1590,6 +1633,11 @@ __all__ = [
     # SSE 执行池观测（P1-3）
     "chat_sse_executor_active",
     "chat_sse_executor_wait_seconds",
+    # RAG 阶段时延 + 域图阶段统一埋点（2026-10-06 Grafana 观测重构）
+    "rag_stage_duration_seconds",
+    "record_rag_stage",
+    "agent_stage_total",
+    "agent_stage_duration_seconds",
     # 任务 Admission Control（Phase2 Step4）
     "task_admission_requests_total",
     "task_admission_allowed_total",

@@ -153,6 +153,44 @@ class TestRecordPlanResult:
         assert out["plan_status"] == "waiting_confirmation"
         assert out["change_record"] is None
 
+    def test_stale_graph_version_is_advanced_by_persistent_latest(self, svc):
+        svc.record_plan_result(CID, UID, _itin(version=9))
+        stale = _itin(days=2, version=2)
+
+        out = svc.record_plan_result(CID, UID, stale)
+
+        assert stale["plan_version"] == 10
+        assert stale["parent_plan_version"] == 9
+        assert out["change_record"]["version"] == 10
+        assert svc.latest_version(CID, UID)["plan_version"] == 10
+
+    def test_version_conflict_retries_from_new_persistent_latest(self):
+        class ConflictOnceStore(FakePlanStore):
+            def __init__(self):
+                super().__init__()
+                self.conflict_once = False
+
+            def save_version(self, cid, uid, itinerary, **kwargs):
+                if self.conflict_once:
+                    self.conflict_once = False
+                    # 模拟并发胜方先写入同一候选版本，再返回主键冲突。
+                    super().save_version(cid, uid, dict(itinerary), **kwargs)
+                    return False
+                return super().save_version(cid, uid, itinerary, **kwargs)
+
+        store = ConflictOnceStore()
+        svc = PlanVersionService(store=store)
+        svc.record_plan_result(CID, UID, _itin(version=1))
+        store.conflict_once = True
+
+        stale = _itin(days=2, version=1)
+        out = svc.record_plan_result(CID, UID, stale)
+
+        assert stale["plan_version"] == 3
+        assert stale["parent_plan_version"] == 2
+        assert out["change_record"]["version"] == 3
+        assert svc.latest_version(CID, UID)["plan_version"] == 3
+
 
 class TestConfirm:
     def _seed(self, svc):

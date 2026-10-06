@@ -39,10 +39,8 @@ class TestCheckpointerSelection:
         assert isinstance(saver, MemorySaver)
         assert status == travel_gb.PERSISTENCE_DEGRADED
 
-    def test_postgres_unavailable_falls_back_to_memory(self, monkeypatch):
-        """连不上 Postgres 时必须降级续跑，而不是让整个域瘫掉。"""
-        from langgraph.checkpoint.memory import MemorySaver
-
+    def test_postgres_unavailable_is_fail_loud(self, monkeypatch):
+        """连不上 Postgres 时不得静默降级。"""
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_ENABLED", True)
         monkeypatch.setattr("backend.config.travel.TRAVEL_CHECKPOINTER_BACKEND", "postgres")
 
@@ -53,9 +51,10 @@ class TestCheckpointerSelection:
 
         fake.Connection = types.SimpleNamespace(connect=_boom)
         monkeypatch.setitem(sys.modules, "psycopg", fake)
-        saver, status = travel_gb._build_checkpointer()
-        assert isinstance(saver, MemorySaver)
-        assert status == travel_gb.PERSISTENCE_DEGRADED
+        monkeypatch.delenv("CHECKPOINTER_ALLOW_DEGRADE", raising=False)
+        from backend.config.checkpointer import CheckpointerUnavailable
+        with pytest.raises(CheckpointerUnavailable):
+            travel_gb._build_checkpointer()
 
     def test_checkpointer_is_not_gated_by_domain_switch(self, monkeypatch):
         """域总开关与持久化开关是两件事：TRAVEL_ENABLED 关掉不代表
