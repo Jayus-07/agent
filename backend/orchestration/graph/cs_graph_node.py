@@ -17,6 +17,7 @@ from backend.customer_service.context import merge_cs_context
 from backend.customer_service.graph_builder import get_cs_graph
 from backend.customer_service.graph_state import new_cs_graph_input
 from backend.customer_service.models.graph_result import build_cs_graph_result
+from backend.orchestration.runtime_result_adapter import attach_runtime_result
 from backend.shared.logger import logger
 
 _FALLBACK_ANSWER = "抱歉，客服系统暂时不可用，请稍后再试。"
@@ -54,7 +55,11 @@ def cs_graph_node(state: dict) -> dict:
         result = build_cs_graph_result(final_state)
     except Exception:
         logger.exception("[cs_graph_node] CS Graph 执行异常，降级返回兜底回复")
-        return _fallback_update(state)
+        return attach_runtime_result(
+            _fallback_update(state),
+            runtime_id="customer_service",
+            status="error",
+        )
 
     _stamp_execution_tags(final_state)
     _persist_audit_records(final_state)
@@ -64,7 +69,12 @@ def cs_graph_node(state: dict) -> dict:
     clarify = _refusal_clarify(final_state, state)
     if clarify is not None:
         update["_clarify"] = clarify
-    return update
+    return attach_runtime_result(
+        update,
+        runtime_id="customer_service",
+        ui_payload=result,
+        clarification=clarify,
+    )
 
 
 def _enum_value(value: object) -> str:

@@ -136,13 +136,12 @@ def test_prefilter_semantics():
 
 def test_prefilter_gated_by_enabled_flag(monkeypatch):
     from backend.orchestration.graph import selection_funnel_prefilter as pf
-    monkeypatch.setattr(
-        "backend.config.selection_funnel.SELECTION_FUNNEL_ENABLED", True)
+    from backend.services import sys_config
+    monkeypatch.setitem(sys_config._values, "SELECTION_FUNNEL_ENABLED", "true")
     hit = pf.try_selection_funnel_prefilter("帮我做智能选品", {"session_id": "s1"})
     assert hit is not None
     assert hit["route_mode"] == "selection_funnel"
-    monkeypatch.setattr(
-        "backend.config.selection_funnel.SELECTION_FUNNEL_ENABLED", False)
+    monkeypatch.setitem(sys_config._values, "SELECTION_FUNNEL_ENABLED", "false")
     assert pf.try_selection_funnel_prefilter(
         "帮我做智能选品", {"session_id": "s1"}) is None
 

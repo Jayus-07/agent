@@ -72,6 +72,13 @@ def _stage_paths(stage: str) -> list[str]:
             "backend/tests/orchestration/test_domain_registry.py",
             "backend/tests/test_domain_registration.py",
         ],
+        "D": [
+            "backend/tests/orchestration/graph/test_runtime_result_adapters.py",
+            "backend/tests/orchestration/graph/test_domain_output_regression.py",
+            "backend/tests/orchestration/graph/test_cs_graph_node_contract.py",
+            "backend/tests/travel/test_travel_graph.py",
+            "backend/tests/selection_funnel/test_selection_funnel_graph.py",
+        ],
     }
     return stage_test.get(stage, []) + BASELINE_TESTS
 
@@ -98,7 +105,12 @@ _STAGE_REQUIRED_KEYS = {
         "RUNTIME_REGISTRY_PASS",
         "DOMAIN_REGISTRATION_SINGLE_SOURCE_PASS",
     ),
-    "D": ("RUNTIME_RESULT_CONTRACT_PASS",),
+    "D": (
+        "RUNTIME_RESULT_CONTRACT_PASS",
+        "RUNTIME_RESULT_PASS",
+        "DOMAIN_OUTPUT_REGRESSION_PASS",
+        "NO_DOUBLE_GENERATION_PASS",
+    ),
     "E": ("STATE_CANONICALIZATION_PASS",),
     "F": ("DOMAIN_REGISTRATION_GOVERNANCE_PASS",),
     "G": ("RUNTIME_OBSERVABILITY_PASS",),
@@ -141,6 +153,12 @@ def verify(stage: str, final: bool = False) -> dict[str, bool]:
         })
     if stage == "C":
         results["DOMAIN_REGISTRATION_SINGLE_SOURCE_PASS"] = stage_ok
+    if stage == "D":
+        results.update({
+            "RUNTIME_RESULT_PASS": stage_ok,
+            "DOMAIN_OUTPUT_REGRESSION_PASS": stage_ok,
+            "NO_DOUBLE_GENERATION_PASS": stage_ok,
+        })
     results["PRODUCTION_BEHAVIOR_CHANGED"] = not results["GLOBAL_REGRESSION_PASS"]
     results["AGENT_RUNTIME_ARCH_V2_READY"] = ready_for_final(results) if final else False
     report = {

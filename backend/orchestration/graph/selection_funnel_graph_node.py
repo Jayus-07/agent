@@ -9,6 +9,7 @@ import time
 import uuid
 from datetime import datetime
 
+from backend.orchestration.runtime_result_adapter import attach_runtime_result
 from backend.shared.logger import logger
 from backend.selection_funnel.graph_builder import get_selection_funnel_graph
 from backend.selection_funnel.graph_state import new_selection_funnel_graph_input
@@ -55,10 +56,14 @@ def selection_funnel_graph_node(state: dict) -> dict:
         # 失败率可与 empty_pool / need_info 分开统计，不伪装成正常终态。
         logger.exception("[selection_funnel_graph_node] 漏斗域图执行异常，降级返回兜底回复")
         _stamp_failed_status(run_id)
-        return {
-            "final_answer": _FALLBACK_ANSWER,
-            "funnel_context": funnel_context or {},
-        }
+        return attach_runtime_result(
+            {
+                "final_answer": _FALLBACK_ANSWER,
+                "funnel_context": funnel_context or {},
+            },
+            runtime_id="selection_funnel",
+            status="error",
+        )
 
     duration_ms = round((time.perf_counter() - t0) * 1000, 1)
     _stamp_execution_tags(final_state, result, run_id=run_id,
@@ -80,10 +85,14 @@ def selection_funnel_graph_node(state: dict) -> dict:
         run_id=run_id,
     )
 
-    return {
-        "final_answer": result.get("final_answer") or _FALLBACK_ANSWER,
-        "funnel_context": result.get("funnel_context") or {},
-    }
+    return attach_runtime_result(
+        {
+            "final_answer": result.get("final_answer") or _FALLBACK_ANSWER,
+            "funnel_context": result.get("funnel_context") or {},
+        },
+        runtime_id="selection_funnel",
+        ui_payload=result,
+    )
 
 
 def _stamp_failed_status(run_id: str) -> None:

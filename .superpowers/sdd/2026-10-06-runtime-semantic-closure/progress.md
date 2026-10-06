@@ -23,3 +23,9 @@ Task 3: Ruling: RuntimeTarget moved beside RuntimeType in runtime_types.py and r
 Task 3: Ruling: registry replacement by the same canonical name remains idempotent for existing registration behavior, while runtime_id collisions across different names, alias collisions, missing parents, and self-parenting fail fast — cost if wrong: stricter startup validation can reject an invalid registration instead of silently routing to the wrong runtime.
 
 Task 3: complete (stage C aggregator: 128 passed, RUNTIME_REGISTRY_PASS=true, DOMAIN_REGISTRATION_SINGLE_SOURCE_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)
+
+Task 4: Ruling: RuntimeResult is attached once at each domain adapter boundary; existing final_answer/domain context fields remain unchanged, while the original domain result is stored as ui_payload so Travel itinerary, CS evidence/action metadata, and Selection report context are not lost — cost if wrong: exposing only final_answer would silently discard structured domain output.
+
+Task 4: Ruling: legacy domain status values are mapped to the closed RuntimeResult status set inside the adapter (needs_clarification→clarification, needs_handoff→handoff, failed→error, no_data→partial); this keeps the public result contract strict without changing domain-local status values.
+
+Task 4: complete (stage D aggregator: 178 passed, RUNTIME_RESULT_CONTRACT_PASS=true, RUNTIME_RESULT_PASS=true, DOMAIN_OUTPUT_REGRESSION_PASS=true, NO_DOUBLE_GENERATION_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)

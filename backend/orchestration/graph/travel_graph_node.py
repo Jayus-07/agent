@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from backend.orchestration.runtime_result_adapter import attach_runtime_result
 from backend.shared.logger import logger
 from backend.travel.graph_builder import get_travel_graph
 from backend.travel.graph_state import new_travel_graph_input
@@ -95,7 +96,7 @@ def travel_graph_node(state: dict) -> dict:
     # 不进域图（不消耗专家/校验轮次）。
     cancel_update = _maybe_cancel_active_run(state, conversation_id)
     if cancel_update is not None:
-        return cancel_update
+        return attach_runtime_result(cancel_update, runtime_id="travel")
 
     graph_input = new_travel_graph_input(
         user_message=state.get("question") or state.get("query") or "",
@@ -131,19 +132,32 @@ def travel_graph_node(state: dict) -> dict:
         result = build_travel_graph_result(final_state)
     except Exception:
         logger.exception("[travel_graph_node] 旅游域图执行异常，降级返回兜底回复")
-        return _fallback_update(state)
+        return attach_runtime_result(
+            _fallback_update(state),
+            runtime_id="travel",
+            status="error",
+        )
 
     # interrupt 透传（任务书 §13，Phase 6）：域图暂停等决策时，把待决项
     # 结构化放 travel_context.pending_decision，final_answer 呈现请决定文案。
     if isinstance(final_state, dict) and final_state.get("__interrupt__"):
-        return _interrupt_update(state, final_state)
+        return attach_runtime_result(
+            _interrupt_update(state, final_state),
+            runtime_id="travel",
+            status="clarification",
+        )
 
     # run 同步在前：tags 需要 run_id（任务书 §21 观测字段）
     run_id = _sync_travel_run(state, final_state, result, travel_route)
     _stamp_execution_tags(final_state, result, resume_mode=resume_mode,
                           run_id=run_id)
     _stamp_context_tags(state, conversation_id, run_id)
-    return _build_main_state_update(result)
+    return attach_runtime_result(
+        _build_main_state_update(result),
+        runtime_id="travel",
+        ui_payload=result,
+        clarification=result.get("clarification") or None,
+    )
 
 
 def _stamp_context_tags(state: dict, conversation_id: str, run_id: str) -> None:
