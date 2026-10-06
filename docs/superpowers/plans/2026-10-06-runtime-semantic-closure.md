@@ -81,8 +81,10 @@ agent_runtime_arch_v2_ready = all(stage_results.values()) and all(global_results
 
 **Files:**
 - Modify: backend/orchestration/router/types.py
+- Create: backend/orchestration/runtime_types.py
 - Modify: backend/orchestration/domain_graph.py
 - Create: backend/tests/orchestration/router/test_runtime_contracts.py
+- Create: backend/tests/orchestration/test_runtime_architecture_gate.py
 - Create: backend/tests/orchestration/runtime_architecture_baseline.py
 - Create: backend/scripts/verify_runtime_arch_v2.py
 
