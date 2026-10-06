@@ -304,6 +304,14 @@ BM25_CANDIDATE_K = max(
 )
 HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "8"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
+
+# 检索线程池拓扑（Phase 3，2026-10-07）：multi_query 专池与 inner 分离，
+# 父任务（MQ 变体 fan-out）与子任务（vector/BM25 leg）绝不共池——历史上
+# 同池自嵌套在 2 个并发 MQ 请求下即线程饥饿死锁。默认值维持审计基线
+# （outer=4 / inner=6，MQ 取 4），先治理拓扑后调参数，不无脑扩容。
+RAG_POOL_MULTI_QUERY_WORKERS = max(1, int(os.getenv("RAG_POOL_MULTI_QUERY_WORKERS", "4")))
+RAG_POOL_OUTER_WORKERS = max(1, int(os.getenv("RAG_POOL_OUTER_WORKERS", "4")))
+RAG_POOL_INNER_WORKERS = max(1, int(os.getenv("RAG_POOL_INNER_WORKERS", "6")))
 # Rerank 阈值（sigmoid 归一化后）：CrossEncoder 输出的 logit 经 sigmoid 映射到 0-1。
 # 0.3 对应 logit ≈ -0.85，可召回弱相关文档。
 # 调高 → 更严格（噪音少，召回少）；调低 → 更宽松（召回多，噪音多）。

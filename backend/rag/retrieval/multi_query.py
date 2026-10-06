@@ -378,12 +378,11 @@ class MultiQueryRetriever(BaseRetriever):
             return self.base_retriever.invoke(query)
 
         from concurrent.futures import as_completed
-        from backend.infra.thread_pools import retrieval_pool_inner
+        from backend.infra.thread_pools import submit_rag_task
         import contextvars
         docs, seen = [], set()
         # 按 query 分组检索，每个 doc 标记来源查询
         evidence_groups: dict[str, list] = {}
-        ex = retrieval_pool_inner()
         base_invoke = self.base_retriever.invoke
 
         def _submit_isolated(q: str):
@@ -392,8 +391,12 @@ class MultiQueryRetriever(BaseRetriever):
             # 检索缓存），禁入库内容可经变体检索漏出（2026-09-14 冒烟实测）。
             # 每个任务持有独立 ctx 副本——多任务共享同一 ctx 并发 ctx.run 会抛
             # "cannot enter context: already entered"，变体检索全灭。
+            #
+            # Phase 3（2026-10-07）：父任务走 multi_query 专池——历史上提交进
+            # retrieval_pool_inner，变体任务的子 leg（hybrid vector/BM25）排
+            # 在同一池队列后方，2 个并发 MQ 请求即线程饥饿死锁。
             ctx = contextvars.copy_context()
-            return ex.submit(ctx.run, base_invoke, q)
+            return submit_rag_task("multi_query", ctx.run, base_invoke, q)
 
         future_to_q = {_submit_isolated(q): q for q in queries}
         for future in as_completed(future_to_q):

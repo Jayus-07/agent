@@ -563,6 +563,42 @@ def record_rag_stage(stage: str, duration_ms: float) -> None:
     except Exception:  # noqa: BLE001 — 指标旁路软失败
         pass
 
+
+# ── 检索线程池 wait/exec 观测（Phase 3，2026-10-07，spec §20）──
+# 接线点：infra/thread_pools.py::submit_rag_task（唯一提交出口）。
+# pool ∈ multi_query | outer | inner（低基数固定枚举）。
+# wait_ms 是池饥饿的直接信号——父子任务共池回潮时 wait 会先爆炸。
+rag_pool_wait_seconds = Histogram(
+    "rag_pool_wait_seconds",
+    "检索线程池排队等待时长（秒，submit→开始执行）",
+    labelnames=("pool",),
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+rag_pool_task_seconds = Histogram(
+    "rag_pool_task_seconds",
+    "检索线程池任务自身执行时长（秒）",
+    labelnames=("pool",),
+    buckets=(0.005, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20),
+)
+rag_pool_queued_tasks = Gauge(
+    "rag_pool_queued_tasks",
+    "任务提交时刻的池队列深度（采样值）",
+    labelnames=("pool",),
+)
+
+
+def record_rag_pool_timing(
+    pool: str, wait_ms: float, exec_ms: float, queued: int | None = None,
+) -> None:
+    """检索池 wait/exec/队列深度记账入口（submit_rag_task 专用；软失败）。"""
+    try:
+        rag_pool_wait_seconds.labels(pool=pool).observe(max(float(wait_ms), 0) / 1000)
+        rag_pool_task_seconds.labels(pool=pool).observe(max(float(exec_ms), 0) / 1000)
+        if queued is not None:
+            rag_pool_queued_tasks.labels(pool=pool).set(int(queued))
+    except Exception:  # noqa: BLE001 — 指标旁路软失败
+        pass
+
 # ── 域图阶段统一埋点（2026-10-06 Grafana 观测重构，Grafana 06 页）──
 # 接线点：travel/graph_builder.py::_evented_node（唯一包装层）。
 # stage = 图节点名（低基数固定集合），status = success | failed；

@@ -361,12 +361,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     if query_tier == "vector_only":
         # Vector-only 路径：优先纯向量，避免关键词噪声稀释语义信号；
         # 但向量失败/空召回时降级 BM25 兜底（软降级，不伪装成『没有资料』）
-        from backend.infra.thread_pools import retrieval_pool_inner
-        ex = retrieval_pool_inner()
+        from backend.infra.thread_pools import submit_rag_task
         failures: dict[str, BaseException] = {}
         try:
-            vector_docs = ex.submit(
-                vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
+            vector_docs = submit_rag_task(
+                "inner", vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
                 metadata_filter=metadata_filter, expanded_queries=expanded_queries,
             ).result()
         except Exception as e:
@@ -470,13 +469,13 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     except Exception as e:
         logger.warning(f"[hybrid_retrieve] SQL 旁路检索失败，降级纯 RAG: {e}")
 
-    # 并行执行：Vector 和 BM25 互不依赖（共享线程池）
-    from backend.infra.thread_pools import retrieval_pool_inner
-    ex = retrieval_pool_inner()
+    # 并行执行：Vector 和 BM25 互不依赖（inner 池；Phase 3 统一经
+    # submit_rag_task 出口埋 wait/exec 指标）
+    from backend.infra.thread_pools import submit_rag_task
     failures: dict[str, BaseException] = {}
-    vf = ex.submit(vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
-                    metadata_filter=metadata_filter, expanded_queries=expanded_queries)
-    bf = ex.submit(bm25_retriever.invoke, query)
+    vf = submit_rag_task("inner", vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
+                         metadata_filter=metadata_filter, expanded_queries=expanded_queries)
+    bf = submit_rag_task("inner", bm25_retriever.invoke, query)
     try:
         vector_docs = vf.result()
     except Exception as e:
