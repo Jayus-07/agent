@@ -133,6 +133,11 @@ def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
     return {
         **state,
         "selection_blocked": True,
+        "clarification_request": {
+            "question": "请补充一下您的需求，以便确定执行能力。",
+            "options": list(candidates),
+            "source": reason,
+        },
         "_tool_selection": {
             "source": "clarify",
             "reason": reason,
@@ -197,7 +202,6 @@ def _router_top_candidate_fallback(state: dict, reason: str) -> dict | None:
         "route_decision": new_decision,
         "resolved_params": params,
         "selected_tool": top_cap,
-        "tool_arguments": params,
         "tool_route_mode": state.get("tool_route_mode") or "llm_selection",
         "_tool_selection": {
             "source": "router_top_candidate",
@@ -538,7 +542,6 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             "resolved_params": params,
             # 分层路由平铺字段（§12）：FC 选定后回写，trace/评测消费
             "selected_tool": cap,
-            "tool_arguments": params,
             "tool_route_mode": state.get("tool_route_mode") or "llm_selection",
             "_tool_selection": {
                 "source": "fc", "capability": cap, "params": params,

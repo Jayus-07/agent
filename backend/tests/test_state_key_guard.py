@@ -46,6 +46,9 @@ def test_historical_stripped_keys_registered():
         "cs_pending_action",   # 活证据：runner 侧读原始输出、state 侧为 None
         "prompt_versions",     # 治理 M4/#5
         "tenant_id",           # 跨轮上下文 miss 根因
+        "route_decision_v2",   # STOP B canonical decision
+        "runtime_result",      # STOP D domain result contract
+        "clarification_request",  # STOP E canonical clarification
     ]
     for key in historical:
         assert key in KNOWN_STATE_KEYS, f"历史踩坑键未登记: {key}"

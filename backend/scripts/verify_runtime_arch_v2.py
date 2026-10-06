@@ -79,6 +79,13 @@ def _stage_paths(stage: str) -> list[str]:
             "backend/tests/travel/test_travel_graph.py",
             "backend/tests/selection_funnel/test_selection_funnel_graph.py",
         ],
+        "E": [
+            "backend/tests/orchestration/test_state_canonicalization.py",
+            "backend/tests/test_state_key_guard.py",
+            "backend/tests/orchestration/graph/test_tool_selector.py",
+            "backend/tests/orchestration/graph/test_clarify_flow.py",
+            "backend/tests/orchestration/graph/test_reply_source.py",
+        ],
     }
     return stage_test.get(stage, []) + BASELINE_TESTS
 
@@ -111,7 +118,11 @@ _STAGE_REQUIRED_KEYS = {
         "DOMAIN_OUTPUT_REGRESSION_PASS",
         "NO_DOUBLE_GENERATION_PASS",
     ),
-    "E": ("STATE_CANONICALIZATION_PASS",),
+    "E": (
+        "STATE_CANONICALIZATION_PASS",
+        "STATE_CANONICAL_SOURCE_PASS",
+        "LEGACY_PROJECTION_PASS",
+    ),
     "F": ("DOMAIN_REGISTRATION_GOVERNANCE_PASS",),
     "G": ("RUNTIME_OBSERVABILITY_PASS",),
 }
@@ -158,6 +169,12 @@ def verify(stage: str, final: bool = False) -> dict[str, bool]:
             "RUNTIME_RESULT_PASS": stage_ok,
             "DOMAIN_OUTPUT_REGRESSION_PASS": stage_ok,
             "NO_DOUBLE_GENERATION_PASS": stage_ok,
+        })
+    if stage == "E":
+        results.update({
+            "STATE_CANONICAL_SOURCE_PASS": stage_ok,
+            "LEGACY_PROJECTION_PASS": stage_ok,
+            "STATE_UNKNOWN_KEY_TOTAL": 0 if stage_ok else 1,
         })
     results["PRODUCTION_BEHAVIOR_CHANGED"] = not results["GLOBAL_REGRESSION_PASS"]
     results["AGENT_RUNTIME_ARCH_V2_READY"] = ready_for_final(results) if final else False

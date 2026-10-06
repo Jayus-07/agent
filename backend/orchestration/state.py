@@ -62,6 +62,15 @@ class StepResult(TypedDict, total=False):
     error_type: str | None                      # 错误分类: timeout / parse / auth / network / unknown
 
 
+class ClarificationRequest(TypedDict, total=False):
+    """Canonical 结构化澄清请求；_clarify 仅为 SSE 兼容投影。"""
+
+    question: str
+    options: list[Any]
+    source: str
+    handoff_available: bool
+
+
 class AgentState(TypedDict):
     """Multi-Agent 工作流全局状态"""
     question: str                               # 用户原始问题
@@ -75,6 +84,7 @@ class AgentState(TypedDict):
     final_answer: str                           # Reporter 产物
     route_decision: dict                         # Router 决策（execution_mode + candidates + workflow_name）
     route_decision_v2: dict                      # Canonical RouteDecisionV2 快照
+    runtime_result: dict                          # 域 RuntimeResult 可序列化快照
     route_mode: str                              # Router 决策的模式字符串（direct/plan/workflow）
     query_understanding: dict                    # QueryRouter 结构化理解（intent/need_*/entities，治理 2026-09-22）
     resolved_params: dict | None                 # tool_selector（FC）解析出的执行参数；None=未解析，direct_executor 回退 question 透传
@@ -177,6 +187,7 @@ class OrchestratorState(AgentState):
     # clarification SSE 事件。**必须入 schema**——LangGraph updates 流会剥离
     # schema 外的键（实测 2026-09-19），剥离后追问事件永远发不出去。
     _clarify: dict | None
+    clarification_request: ClarificationRequest | None  # canonical 澄清事实源
     # 选品漏斗域上下文（2026-09-23 补登记）：selection_funnel_prefilter /
     # selection_funnel_graph_node 写入（conversation_id / source / top 等），
     # workflow_executor 的 _build_workflow_inputs 据此向 selection_decision

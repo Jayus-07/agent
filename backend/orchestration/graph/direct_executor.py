@@ -14,6 +14,10 @@ import asyncio
 
 from backend.orchestration.capability_registry import tool_registry
 from backend.orchestration.router.types import ExecutionMode
+from backend.orchestration.state_projection import (
+    legacy_route_decision,
+    resolved_params,
+)
 from backend.shared.logger import logger
 
 
@@ -110,7 +114,7 @@ def _resolved_params(state: dict) -> dict:
     report_type/enum 等）；未设置/为空时回退旧行为（question 透传，
     参数抽取交给 skill 内部 NL2SQL）。
     """
-    return state.get("resolved_params") or {"question": state.get("question", "")}
+    return resolved_params(state) or {"question": state.get("question", "")}
 
 
 def _run_skill_step(skill_nodes: dict, state: dict, step_id: str,
@@ -165,7 +169,7 @@ def skill_executor_node(state: dict) -> dict:
     路径:
       candidates[0] → tool_registry.get_skill_node(name) → 调 → 写 step_results
     """
-    decision = state.get("route_decision") or {}
+    decision = legacy_route_decision(state)
     candidates = decision.get("candidates", []) if isinstance(decision, dict) else []
 
     if state.get("selection_blocked"):
@@ -365,7 +369,7 @@ def workflow_executor_node(state: dict) -> dict:
     import asyncio
     from backend.orchestration.workflow.scheduler import get_workflow_scheduler
 
-    decision = state.get("route_decision") or {}
+    decision = legacy_route_decision(state)
     wf_name = decision.get("workflow_name") if isinstance(decision, dict) else None
 
     if not wf_name:

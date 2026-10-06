@@ -83,7 +83,11 @@ def reporter_node(state: dict) -> dict:
     # clarification 事件）。拒答正文照常返回，不做静默替换。
     clarify = _refusal_clarify_marker(answer, state)
     if clarify is not None:
-        return {"final_answer": answer, "_clarify": clarify}
+        return {
+            "final_answer": answer,
+            "clarification_request": clarify,
+            "_clarify": clarify,
+        }
     return {"final_answer": answer}
 
 

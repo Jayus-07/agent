@@ -29,3 +29,9 @@ Task 4: Ruling: RuntimeResult is attached once at each domain adapter boundary; 
 Task 4: Ruling: legacy domain status values are mapped to the closed RuntimeResult status set inside the adapter (needs_clarification→clarification, needs_handoff→handoff, failed→error, no_data→partial); this keeps the public result contract strict without changing domain-local status values.
 
 Task 4: complete (stage D aggregator: 178 passed, RUNTIME_RESULT_CONTRACT_PASS=true, RUNTIME_RESULT_PASS=true, DOMAIN_OUTPUT_REGRESSION_PASS=true, NO_DOUBLE_GENERATION_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)
+
+Task 5: Ruling: State canonical readers prefer route_decision_v2, resolved_params, and clarification_request; route_decision, tool_arguments, and _clarify remain read-only compatibility fallbacks so存量 checkpoint and SSE consumers continue to work — cost if wrong: removing fallback reads would break old checkpoint resumes.
+
+Task 5: Ruling: tool_selector no longer emits tool_arguments on new selection updates; resolved_params is the new execution-parameter writer, while direct_executor reads the compatibility fallback only when resuming older state.
+
+Task 5: complete (stage E aggregator: 226 passed, STATE_CANONICALIZATION_PASS=true, STATE_CANONICAL_SOURCE_PASS=true, LEGACY_PROJECTION_PASS=true, STATE_UNKNOWN_KEY_TOTAL=0, PRODUCTION_BEHAVIOR_CHANGED=false)

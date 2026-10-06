@@ -101,9 +101,11 @@ def stream_node_events(node_name: str, node_output: dict, skill_nodes: set,
     # （L2 拒答）的节点输出带 _clarify 标记 → 发 clarification 事件。
     # 注意 _clarify 已入 OrchestratorState schema——LangGraph updates 流会剥离
     # schema 外的键，不声明就永远到不了这里（实测 2026-09-19）。
-    if isinstance(node_output, dict) and node_output.get("_clarify"):
+    from backend.orchestration.state_projection import clarification_request
+    marker = clarification_request(node_output) if isinstance(node_output, dict) else None
+    if marker:
         yield from _build_clarify_events(
-            node_output["_clarify"],
+            marker,
             session_id=str(node_output.get("session_id") or ""))
     # 域引导交接卡（多域隔离 M1，2026-10-06）：router 节点 guide 模式输出带
     # _handoff → 发 handoff AUX 帧。同 _clarify：键必须入 OrchestratorState
@@ -651,6 +653,8 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "current_step_id": None,
         "messages": list(messages),
         "final_answer": "",
+        "route_decision_v2": {},
+        "runtime_result": {},
         "alerts": [],
         "guard_result": guard_result or {},
         "resolved_params": None,
@@ -658,6 +662,7 @@ def make_initial_state(question: str, session_id: str, kb_id: str, messages: lis
         "_plan_critiqued": False,
         "_plan_changed": False,
         "intent_decision": {},
+        "clarification_request": None,
     }
 
 
