@@ -551,6 +551,11 @@ class EvaluationService:
                 or ("cancelled" if is_cancel_requested(run_id) else "")
             )
             report.metadata["run_guards"] = guard_meta
+            # P0-04：run 有效性（VALID/INVALID_*）随报告落盘——release_gate、
+            # DB 台账与管理端「环境无效」徽章共用这一个裁决口径
+            from backend.evaluation.validity import classify_report_validity
+
+            report.metadata["run_validity"] = classify_report_validity(report).as_dict()
             return report
         except Exception as exc:
             mark_run_status(run_id, "failed", error=str(exc))
