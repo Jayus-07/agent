@@ -240,3 +240,36 @@ def test_sliding_window_rate_limit_blocks_before_provider() -> None:
     assert limiter.allow("tool:t1", config, now=1.0)
     assert not limiter.allow("tool:t1", config, now=2.0)
     assert limiter.allow("tool:t1", config, now=62.0)
+
+
+def test_execute_sync_allows_sync_tool_with_inner_event_loop() -> None:
+    """STOP A 回归（2026-10-07 12306 全挂事故）：同步适配器 loop 内的同步
+    Tool 内部再起 asyncio.run（MCP 同步桥形态）必须成功。
+
+    修复前：execute_sync 用 asyncio.run 起 loop，provider 在 loop 线程
+    内联执行，内部 asyncio.run 撞「cannot be called from a running
+    event loop」——12306/知乎所有真实调用（缓存未命中）全挂。
+    修复后：SafeToolExecutor 把同步 call 挪到工作线程，嵌套 loop 不复现。
+    """
+    import asyncio
+    import threading
+
+    runtime = GovernanceRuntime()
+    seen_threads: list[int] = []
+
+    def provider() -> dict:
+        seen_threads.append(threading.get_ident())
+        asyncio.run(asyncio.sleep(0))  # 修复前此处抛 RuntimeError
+        return {"items": [{"id": 1}], "total": 1}
+
+    result = runtime.execute_sync(
+        ToolCallRequest(
+            capability="sql.query",
+            arguments={"question": "查订单"},
+            user_id="u-stop-a",
+            tenant_id="t1",
+        ),
+        provider,
+    )
+    assert result.ok, f"预期成功封套，实际 {result.status}: {result.error_message}"
+    assert seen_threads, "同步 Tool 未被执行"

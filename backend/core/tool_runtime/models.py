@@ -56,6 +56,17 @@ class ToolResult:
     # 走了哪条降级路径：circuit_breaker / bulkhead / deadline_budget /
     # optional_tool_skipped / check_operation_status ...
     fallback_used: str | None = None
+    # 降级后实际供数 Provider（"" = 无 fallback 或未降级）。与 fallback_used
+    #（策略名）分工：一个记「走了哪条路」，一个记「谁在供数」。
+    fallback_provider: str = ""
+    # 降级原因（用户可读短语，如「上游 12306 不可用」）；成功时为空。
+    degraded_reason: str = ""
+    # 域内 Failure Policy 回填：该 Tool 对**当前用户目标**是否硬依赖。
+    # True = 依赖无法满足，上层 Workflow 应终止（BLOCKED），不得假装继续。
+    # 默认 False；由调用方按 brief/约束动态判定（禁止全局静态配死）。
+    blocking: bool = False
+    # 依赖级别回显（OPTIONAL/IMPORTANT/REQUIRED），trace 自包含归因用。
+    criticality: ToolCriticality | None = None
     # ErrorMapper 保留的原始异常（供日志 / trace 使用，禁止透出给用户）
     original_exception: BaseException | None = field(default=None, repr=False)
 

@@ -140,6 +140,19 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
     expert_history = state.get("expert_history") or []
     tool_count = 0 if mode in {"social", "query"} else len(expert_history)
 
+    # Failure Policy 结局投影（2026-10-07 容错契约）：降级了哪些 Tool、
+    # 是否发生硬依赖阻断——「Tool failed ≠ run failed」在 trace 层可判。
+    degraded_tools = [
+        str((item or {}).get("tool") or "")
+        for item in (state.get("degraded_tools") or [])
+        if isinstance(item, dict)
+    ]
+    blocked_tools = [
+        str((item or {}).get("tool") or "")
+        for item in (state.get("blocked_tools") or [])
+        if isinstance(item, dict)
+    ]
+
     return {
         "conversation_id": str(state.get("conversation_id") or ""),
         "intent": intent,
@@ -156,6 +169,9 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
         "full_replan": mode == "plan" and bool(itinerary),
         "partial_replan": partial,
         "tool_count": tool_count,
+        "degraded_tools": [t for t in degraded_tools if t],
+        "blocked_tools": [t for t in blocked_tools if t],
+        "workflow_continued": not bool(blocked_tools),
     }
 
 

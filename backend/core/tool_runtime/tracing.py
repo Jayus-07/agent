@@ -41,13 +41,23 @@ def finish_tool_span(
     result: ToolResult,
     output: Any = None,
 ) -> None:
-    """按 ToolResult 收口 Span，并写入统一错误分类与失败事件。"""
+    """按 ToolResult 收口 Span，并写入统一错误分类与失败事件。
+
+    Failure Policy 归因字段（2026-10-07）：fallback_provider / blocking /
+    dependency_level / degraded_reason 随 span metrics 落库——从 trace 一眼
+    回答「为什么失败、有没有降级、是不是阻断、业务有没有继续」。
+    """
     error_class = unify_tool_status(result.status)
     metrics: dict[str, Any] = {
         "latency_ms": result.latency_ms,
         "retries": result.retry_count,
         "fallback_used": result.fallback_used or "",
+        "fallback_provider": result.fallback_provider or "",
+        "blocking": bool(result.blocking),
+        "dependency_level": result.criticality.value if result.criticality else "",
     }
+    if result.degraded_reason:
+        metrics["degraded_reason"] = result.degraded_reason
     if result.status is ToolStatus.SUCCESS:
         metrics["error_class"] = "success"
         trace_collector.end_span(
@@ -73,6 +83,19 @@ def finish_tool_span(
             "error_code": metrics["error_code"],
         },
     )
+    # 降级/阻断裁决单独落事件：run 维度归因在 travel_semantics（state 账本
+    # 聚合），span 维度在此保留单次调用的裁决现场。
+    if result.blocking or result.degraded_reason:
+        trace_collector.add_event(
+            span,
+            "tool.failure_policy",
+            "error" if result.blocking else "warning",
+            result.degraded_reason or result.error_code or "",
+            {
+                "blocking": "true" if result.blocking else "false",
+                "workflow_continued": "false" if result.blocking else "true",
+            },
+        )
     trace_collector.end_span(span, metrics=metrics, status="error")
 
 

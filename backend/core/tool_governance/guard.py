@@ -305,7 +305,15 @@ class GovernanceRuntime:
         call: Callable[[], Any],
         **kwargs: Any,
     ) -> ToolResult:
-        """同步适配器，供同步域图/Tool Adapter 复用同一治理链路。"""
+        """同步适配器，供同步域图/Tool Adapter 复用同一治理链路。
+
+        sync/async 边界契约：本方法用 asyncio.run 驱动治理门 + 执行器
+        （它们是 async 实现），**事件循环只属于这层机器**；``call``（用户
+        Tool 代码）由 SafeToolExecutor 统一挪到工作线程执行——同步 Tool
+        内部再起 asyncio.run（MCP 同步桥）不会撞上运行中的 loop
+        （2026-10-06 12306 全挂事故的根因）。因此本方法要求调用线程自身
+        没有正在运行的事件循环；异步调用方请直接 await :meth:`execute`。
+        """
 
         return asyncio.run(self.execute(request, call, **kwargs))
 

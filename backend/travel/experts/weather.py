@@ -128,9 +128,35 @@ def weather_expert_node(state: dict) -> dict:
             note = "天气预报暂时不可用"
             if degrade_reason and degrade_reason != "天气服务暂时不可用":
                 note = f"天气检查已跳过（{degrade_reason}）"
-            return {"status": "success", "data": {}, "notes": [
-                f"{note}，本次未做天气检查；出行前请自行确认天气"
-            ]}
+            notes = [f"{note}，本次未做天气检查；出行前请自行确认天气"]
+            # E2（2026-10-07 容错契约）：用户表达了条件天气约束（如「下雨
+            # 就安排室内」）而预报不可用 = 约束无法验证——必须明说，不得
+            # silently success 让用户以为约束已被满足。
+            conditions = brief.weather_conditions or []
+            if conditions:
+                day_desc = "、".join(
+                    f"第{item.get('day_index') or '?'}天"
+                    for item in conditions if isinstance(item, dict))
+                notes.append(
+                    f"你要求的条件天气安排（{day_desc or '条件天气'}）当前无法验证"
+                    "——预报不可用期间不保证该约束已落实，出行前请关注天气"
+                    "或临近出发时让我重新检查")
+            return {
+                "status": "success",
+                "data": {
+                    "degraded_tools": [{
+                        "tool": "travel.weather.query",
+                        "provider": "qweather",
+                        "dependency_level": "important",
+                        "duration_ms": 0,
+                        "reason": degrade_reason or note,
+                        "note": notes[0],
+                    }],
+                    "blocked_tools": [],
+                    "tool_failures": [],
+                },
+                "notes": notes,
+            }
 
         # 预报窗口与行程日期求交：预报只覆盖未来几天，远期行程按日匹配，
         # 匹配不到的日期自然不触发替换。
@@ -226,6 +252,11 @@ def weather_expert_node(state: dict) -> dict:
         "expert_history": history,
         "notes": list(state.get("notes", [])) + list(result.get("notes", [])),
     }
+    # Failure Policy 结局账跨专家合并写入（与 transit 同款纪律）
+    for key in ("degraded_tools", "blocked_tools", "tool_failures"):
+        merged = list(state.get(key) or []) + list(data.get(key) or [])
+        if merged or state.get(key):
+            update[key] = merged
     evidences = data.get("evidences") or {}
     if evidences:
         # 合并写入（无 reducer 键是覆盖语义，直接写会冲掉 poi 节点证据）

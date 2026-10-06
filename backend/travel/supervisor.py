@@ -157,6 +157,19 @@ def decide(state: dict) -> TravelDecision:
             f"达到步数上限 {T.TRAVEL_MAX_STEPS}，强制收尾",
         )
 
+    # Hard Dependency BLOCKED（2026-10-07 容错契约）：硬依赖无法验证时
+    # 不再继续任何规划步骤——不能产出「假装满足约束」的行程。排在专家
+    # 派发之前：只要账上有阻断事实（本轮写入，planning_reset 跨轮清空），
+    # 唯一出路就是如实报告。
+    blocked = state.get("blocked_tools") or []
+    if blocked:
+        first = blocked[0] or {}
+        return TravelDecision(
+            TravelStage.REPORT,
+            f"硬依赖无法验证（{first.get('reason') or first.get('tool', 'Tool')}），"
+            "停止规划并如实披露",
+        )
+
     # 局部改单先于普通 MODIFY 轻量出口：已生成行程时，结构化的
     # replace/remove/add/pace/end_time 请求必须真正修改草案，而不是回复
     # 「还在建设中」。成功后只重新跑 validator，不回到全量专家链。

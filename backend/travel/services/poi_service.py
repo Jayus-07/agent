@@ -86,6 +86,7 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
     observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     pois: list[Poi] = []
     seen: set[str] = set()
+    tencent_failures = 0
     for q in queries:
         try:
             data = live_search_service.search_places(
@@ -94,6 +95,7 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
         except live_search_service.LiveSearchError as exc:
             logger.warning("[PoiService] 实时候选检索 %s 失败: %s", q, exc)
             notes.append(f"「{q}」实时检索失败，该类候选缺失")
+            tencent_failures += 1
             continue
         for item in data.get("pois") or []:
             if not isinstance(item, dict):
@@ -133,9 +135,20 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 # 两个语义——地图打点按 location_status 判定（字段级拆分）。
                 location_status="verified",
             ))
-    pois, amap_notes = _merge_amap_candidates(
-        brief, queries, pois, observed_at)
-    notes.extend(amap_notes)
+    # F1 Provider fallback（2026-10-07 容错契约）：腾讯全败且高德可用时，
+    # 高德景点类目源顶上做主候选（真实已有 Provider，非造假数据）；两路
+    # 全败才交空候选池由上层如实终止。单类失败仍走逐类降级留痕。
+    if not pois and queries and tencent_failures == len(queries):
+        pois, fallback_notes = _merge_amap_candidates(
+            brief, queries, [], observed_at)
+        if pois:
+            notes.append(
+                "腾讯位置服务全部检索失败，已改用高德作为候选来源（非实时评分源）")
+        notes.extend(fallback_notes)
+    else:
+        pois, amap_notes = _merge_amap_candidates(
+            brief, queries, pois, observed_at)
+        notes.extend(amap_notes)
     pois, local_notes = _merge_local_doc_candidates(brief, pois)
     notes.extend(local_notes)
     return pois, notes

@@ -377,6 +377,23 @@ def _assemble(state: dict) -> str:
     if state.get("brief_missing"):
         return build_clarification(brief, state.get("user_message", ""))
 
+    # 1.5) Hard Dependency BLOCKED（2026-10-07 容错契约）：硬依赖无法验证
+    # 时如实说明为什么不继续，绝不输出「假装满足约束」的方案，也绝不把
+    # 内部异常细节透给用户（技术账在 trace/管理端）。
+    blocked = state.get("blocked_tools") or []
+    if blocked:
+        first = blocked[0] or {}
+        user_message = str(first.get("user_message") or "").strip()
+        reason = str(first.get("reason") or "").strip()
+        body = user_message or (
+            f"目前无法验证满足约束的实时信息（{reason or '数据源不可用'}），"
+            "因此没有继续生成可能不成立的方案。"
+        )
+        return (
+            f"{body}\n\n"
+            "可以稍后重试，或去掉该硬约束后让我重新规划。"
+        )
+
     # 2) 候选池为空 → 如实说明数据覆盖范围
     if not state.get("candidates"):
         notes = state.get("notes", [])
@@ -576,6 +593,18 @@ def _render_itinerary(state: dict, itinerary) -> str:
         f"\n*行程 v{itinerary.plan_version}（{lineage}，需求 v{itinerary.brief_version}，"
         f"状态 {itinerary.status}）。*"
     )
+
+    # 实时数据降级披露（2026-10-07 容错契约）：行程已生成但部分实时数据
+    # 未经验证——必须让用户带着预期出行，而不是默认「全部已核实」。
+    degraded = state.get("degraded_tools") or []
+    if degraded:
+        lines.append("## 实时信息核验情况")
+        lines.append("")
+        for item in degraded:
+            note = str(item.get("note") or "").strip()
+            if note:
+                lines.append(f"- ⚠ {note}")
+        lines.append("")
 
     # 持久化降级披露（任务书 §10，Phase 4）：跨轮改单的可信度受损必须让
     # 用户知道，而不是只留在服务端日志里。disabled 属配置选择，不作事故披露。

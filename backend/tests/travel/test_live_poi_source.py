@@ -48,17 +48,43 @@ def test_live_candidates_build_and_dedup(monkeypatch):
 
 
 def test_live_total_failure_disclosed_no_fallback(monkeypatch):
-    """严格模式（默认）：LBS 全失败 → 空候选 + 如实披露，不回退种子。"""
+    """严格模式（默认）：LBS 全失败且无可用 fallback → 空候选 + 如实披露。
+    高德源一并置败——「全部实时 POI 来源不可用才允许空候选」是 2026-10-07
+    容错契约的 F4 场景。"""
     def boom(**kw):
         raise live_search_service.LiveSearchError("配额尽")
 
     monkeypatch.setattr(live_search_service, "search_places", boom)
+    monkeypatch.setattr(live_search_service, "search_attractions", boom)
     monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
     monkeypatch.setattr(poi_service.T, "TRAVEL_POI_FALLBACK_SEED", False)
 
     candidates, notes = poi_service.retrieve_candidates(_brief())
     assert candidates == []
     assert any("无结果" in n for n in notes)
+
+
+def test_live_total_failure_falls_back_to_amap_primary(monkeypatch):
+    """F1（2026-10-07 容错契约）：腾讯全败、高德可用 → 高德顶上做主候选
+    （真实已有 Provider），留痕披露，绝不静默混用。"""
+    def boom(**kw):
+        raise live_search_service.LiveSearchError("配额尽")
+
+    def amap_primary(**kw):
+        return {"merchants": [{
+            "name": "高德候选景点", "lat": 26.05, "lng": 119.31,
+            "rating": 4.5, "id": "B001",
+        }]}
+
+    monkeypatch.setattr(live_search_service, "search_places", boom)
+    monkeypatch.setattr(live_search_service, "search_attractions", amap_primary)
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_SOURCE", "live")
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_AMAP_SOURCE_ENABLED", True)
+    monkeypatch.setattr(poi_service.T, "TRAVEL_POI_FALLBACK_SEED", False)
+
+    candidates, notes = poi_service.retrieve_candidates(_brief())
+    assert [p.source for p in candidates] == ["amap"]
+    assert any("高德作为候选来源" in n for n in notes)
 
 
 def test_live_failure_with_explicit_seed_fallback(monkeypatch):

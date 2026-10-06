@@ -135,7 +135,7 @@ describe('reduceTravelStreamEvent', () => {
     expect(state.tools[0].preview?.[0]).toEqual({ name: '真实小吃店', source: 'amap' })
   })
 
-  it('只根据真实 stage/tool 事件更新过程，并保留 Tool 失败', () => {
+  it('Tool 失败只标记该行，不把整轮 run 拖成 error（Tool Failure ≠ Workflow Failure）', () => {
     let state = initialTravelProcess('run-1')
     state = reduceTravelStreamEvent(state, {
       event: 'stage.started',
@@ -153,11 +153,49 @@ describe('reduceTravelStreamEvent', () => {
       },
     })
 
-    expect(state.status).toBe('error')
+    expect(state.status).toBe('running')
     expect(state.tools).toEqual([{
       tool: 'travel.search_poi', status: 'failed', errorType: 'ProviderTimeout',
     }])
     expect(state.stages.travel_poi_expert.status).toBe('running')
+  })
+
+  it('降级 Tool 显示 degraded 并给用户可读说明，整轮保持正常', () => {
+    let state = initialTravelProcess('run-degraded')
+    state = reduceTravelStreamEvent(state, {
+      event: 'tool.started',
+      data: { run_id: 'run-degraded', seq: 1, tool: 'travel_train_search_tool' },
+    })
+    state = reduceTravelStreamEvent(state, {
+      event: 'tool.result',
+      data: {
+        run_id: 'run-degraded', seq: 2, tool: 'travel_train_search_tool',
+        status: 'degraded', data_status: 'unavailable',
+        user_message: '12306 实时查询暂时不可用，已继续生成行程',
+      },
+    })
+
+    expect(state.status).toBe('running')
+    expect(state.tools[0].status).toBe('degraded')
+    expect(state.tools[0].userMessage).toBe('12306 实时查询暂时不可用，已继续生成行程')
+  })
+
+  it('只有 BLOCKED（硬依赖终止）才把整轮标记为终止', () => {
+    let state = initialTravelProcess('run-blocked')
+    state = reduceTravelStreamEvent(state, {
+      event: 'tool.started',
+      data: { run_id: 'run-blocked', seq: 1, tool: 'travel_train_search_tool' },
+    })
+    state = reduceTravelStreamEvent(state, {
+      event: 'tool.result',
+      data: {
+        run_id: 'run-blocked', seq: 2, tool: 'travel_train_search_tool',
+        status: 'blocked', user_message: '无法验证满足交通约束的实时班次',
+      },
+    })
+
+    expect(state.status).toBe('error')
+    expect(state.tools[0].status).toBe('blocked')
   })
 
   it('拒绝旧 run 和乱序 seq，不让迟到事件覆盖当前过程', () => {

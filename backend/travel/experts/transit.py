@@ -17,6 +17,13 @@ from datetime import timedelta
 from backend.shared.logger import logger
 from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
+from backend.travel.services.tool_failure_policy import (
+    PROVIDER_12306,
+    realtime_disclosure,
+    resolve_transport_dependency,
+    run_checked,
+    state_records,
+)
 from backend.travel.graph_state import (
     data_snapshot_version,
     load_brief,
@@ -68,6 +75,11 @@ def build_itinerary(brief, pois_by_day):
 
 def transit_expert_node(state: dict) -> dict:
     """通勤专家节点：骨架 → 带时刻的行程。"""
+    # Failure Policy 结局账（外层作用域持有）：run_expert_safely 对
+    # failed 收口会清空 data，阻断记录必须放在闭包外才能进入 state。
+    degraded_tools: list[dict] = []
+    blocked_tools: list[dict] = []
+    tool_failures: list[dict] = []
 
     def _run(_state: dict) -> dict:
         brief = load_brief(state)
@@ -80,6 +92,7 @@ def transit_expert_node(state: dict) -> dict:
                     "notes": [], "error": "骨架为空，无法排程"}
 
         live_search: dict[str, dict] = {}
+        degraded_notes: list[str] = []
         if _needs_train_search(state.get("user_message", ""), brief):
             def _search_trains_with_prices() -> dict:
                 """余票 + 前 2 车次票价并查，结果并入同一份车次数据。
@@ -103,12 +116,41 @@ def transit_expert_node(state: dict) -> dict:
                     limit=2,
                 )
 
-            live_search["train"] = run_travel_tool(
+            # Failure Policy（2026-10-07）：12306 是实时增强数据而非规划
+            # 硬依赖——查询失败降级披露继续排程（车次不伪造）；仅当本轮
+            # 表达了「必须 X 点前抵达否则不要方案」的硬约束时升级为
+            # REQUIRED，无法验证即 BLOCKED（不产出假装满足约束的行程）。
+            dependency = resolve_transport_dependency(
+                brief, state.get("user_message", ""))
+            train_value, train_result = run_checked(
                 "travel_train_search_tool",
                 "planning",
                 _search_trains_with_prices,
+                provider=PROVIDER_12306,
+                dependency=dependency,
                 result_summary=_planning.train_event_summary,
             )
+            policy_update = state_records(
+                "travel_train_search_tool", PROVIDER_12306, train_result,
+                note=realtime_disclosure(PROVIDER_12306),
+            )
+            degraded_tools.extend(policy_update["degraded_tools"])
+            blocked_tools.extend(policy_update["blocked_tools"])
+            tool_failures.extend(policy_update["tool_failures"])
+            if train_value is not None:
+                live_search["train"] = train_value
+            else:
+                degraded_notes.append(realtime_disclosure(PROVIDER_12306))
+                if train_result.blocking:
+                    # 硬依赖无法验证：排程阶段直接失败收口（无 itinerary），
+                    # 原因经 blocked_tools（闭包外层账本）传给 supervisor /
+                    # reporter 出用户可读话术——不产出假装满足约束的行程。
+                    return {
+                        "status": "failed",
+                        "data": {},
+                        "notes": degraded_notes,
+                        "error": train_result.degraded_reason,
+                    }
 
         extra_notes: list[str] = []
         pois_by_day = [
@@ -225,7 +267,7 @@ def transit_expert_node(state: dict) -> dict:
                 "data": {"itinerary": save_itinerary(itinerary),
                          "live_search": live_search,
                          "stability": stability},
-                "notes": extra_notes + notes}
+                "notes": extra_notes + degraded_notes + notes}
 
     result = run_expert_safely("transit", _run, state)
     data = result.get("data") or {}
@@ -239,6 +281,14 @@ def transit_expert_node(state: dict) -> dict:
         "expert_history": history,
         "notes": list(state.get("notes", [])) + list(result.get("notes", [])),
     }
+    # Failure Policy 结局账合并写入（外层闭包持有，failed 收口也不丢；
+    # planning_reset 跨轮清空防污染下一轮）
+    for key, records in (("degraded_tools", degraded_tools),
+                         ("blocked_tools", blocked_tools),
+                         ("tool_failures", tool_failures)):
+        merged = list(state.get(key) or []) + list(records)
+        if merged or state.get(key):
+            update[key] = merged
     if data.get("itinerary"):
         update["itinerary"] = data["itinerary"]
     if data.get("live_search"):
