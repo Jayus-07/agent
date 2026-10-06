@@ -246,6 +246,23 @@ def start_faq_gauge_refresher() -> None:
         logger.warning(f"[Startup] FAQ gauge refresher start failed: {exc}")
 
 
+@app.on_event("startup")
+def start_cost_gauge_refresher() -> None:
+    """账本成本投影（2026-10-06）：llm_usage 聚合值周期刷 Prometheus gauge。
+
+    G2：PG 账本是成本唯一权威，本线程只做只读投影（600s），供域对比
+    看板与告警消费；Prometheus 侧无成本计数器，杜绝双轨漂移。
+    """
+    try:
+        from backend.observability.cost_gauge import (
+            start_cost_gauge_refresher as _start,
+        )
+
+        _start()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Startup] cost gauge refresher start failed: {exc}")
+
+
 # ═══════════════════════════════════════════════════
 # 启动时后台初始化 RAG Pipeline（避免首次上传等 13 秒）
 # ═══════════════════════════════════════════════════

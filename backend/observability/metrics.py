@@ -1407,6 +1407,23 @@ def record_cs_qa_satisfaction(avg_rating) -> None:
         pass
 
 
+# ── 账本成本投影（2026-10-06，G2：llm_usage 唯一权威，此处仅投影）──────
+# Prometheus 侧不做任何记账（无成本计数器）：这两个 gauge 由
+# observability/cost_gauge 周期从 llm_usage 聚合刷新，数字永远由账本算出，
+# 杜绝「指标累计 vs 账本」双轨漂移。成本口径 = ¥ 本位币（currency=CNY 原
+# 值，否则按 BUDGET_FX_USD_CNY 折算），domain 归并口径见 cost_gauge_snapshot。
+llm_usage_cost_cny_24h = Gauge(
+    "llm_usage_cost_cny_24h",
+    "账本投影：近 24h LLM 成本（¥，llm_usage 聚合，按域×模型）",
+    labelnames=("domain", "model"),
+)
+llm_usage_cost_cny_month = Gauge(
+    "llm_usage_cost_cny_month",
+    "账本投影：当月累计 LLM 成本（¥，llm_usage 聚合，按域×模型）",
+    labelnames=("domain", "model"),
+)
+
+
 # ── 任务 Admission Control 指标（Phase2 Step4，2026-09-23）────
 # 基数控制：workflow / scope / reason / kind / result / stage 均为固定
 # 低基数词表；tenant_id / user_id / task_id 禁止作为 label（高基数）。

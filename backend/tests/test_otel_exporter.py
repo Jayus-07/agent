@@ -146,3 +146,58 @@ def test_idempotent_install(monkeypatch, in_memory_exporter):
     listeners_after_first = len(trace_collector._listeners)
     assert install_if_enabled() is True  # 二次调用不重复订阅
     assert len(trace_collector._listeners) == listeners_after_first
+
+
+# ── 显式 ID 映射（2026-10-06 Tempo 接入）：瀑布聚合与日志关联的前提 ──
+
+def _fake_span_with_parent(span_id: str, parent_id: str | None):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        span_id=span_id, parent_id=parent_id, name=span_id, type="tool_call",
+        kind="tool", status="success", duration_ms=10, retry_count=0,
+        metrics={}, input=None, output=None, errors=[],
+    )
+
+
+def test_explicit_ids_group_waterfall(monkeypatch, in_memory_exporter):
+    """同 trace 的 span 共享 OTel trace_id，parent 链接成立；hex trace id
+    整数值等价映射（Tempo 侧左补零展示）。"""
+    from types import SimpleNamespace
+    _make_mirror(monkeypatch, in_memory_exporter)
+    mirror = oe.OtelSpanMirror("http://x", exporter=in_memory_exporter)
+    trace = SimpleNamespace(id="9f86d08112ab")  # uuid4.hex[:12] 形态
+    mirror.emit(trace, _fake_span_with_parent("root-span", None))
+    mirror.emit(trace, _fake_span_with_parent("child-span", "root-span"))
+    mirror._provider.force_flush()
+
+    spans = in_memory_exporter.get_finished_spans()
+    assert len(spans) == 2
+    root, child = spans
+    assert root.parent is None
+    assert root.context.trace_id == child.context.trace_id
+    assert root.context.trace_id == int("9f86d08112ab", 16)
+    assert child.parent.span_id == root.context.span_id
+
+
+def test_mapping_deterministic():
+    """同一字符串映射恒等（parent_id ↔ span_id 对齐的根基）；非 hex 兜底。"""
+    assert oe._otel_span_id("router") == oe._otel_span_id("router")
+    assert oe._otel_span_id("router") != oe._otel_span_id("router#2")
+    assert oe._otel_trace_id("trace-abc") == oe._otel_trace_id("trace-abc")
+    # 合法 hex 全零 → 兜底（OTel 禁止全零 trace id）
+    assert oe._otel_trace_id("000000000000") == oe._otel_trace_id("000000000000")
+
+
+def test_duration_reflected_in_timing(monkeypatch, in_memory_exporter):
+    """duration_ms 映射为 span 时序跨度（瀑布相对序按真实耗时排布）。"""
+    from types import SimpleNamespace
+    _make_mirror(monkeypatch, in_memory_exporter)
+    mirror = oe.OtelSpanMirror("http://x", exporter=in_memory_exporter)
+    span = SimpleNamespace(
+        span_id="s", parent_id=None, name="s", type="tool_call",
+        kind="tool", status="success", duration_ms=1000, retry_count=0,
+        metrics={}, input=None, output=None, errors=[])
+    mirror.emit(SimpleNamespace(id="9f86d08112ab"), span)
+    mirror._provider.force_flush()
+    s = in_memory_exporter.get_finished_spans()[0]
+    assert s.end_time - s.start_time == 1_000_000_000

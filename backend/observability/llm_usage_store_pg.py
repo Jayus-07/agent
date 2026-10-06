@@ -552,6 +552,43 @@ class PostgresLLMUsageStore(LLMUsageStore):
             logger.warning(f"[LLMUsageStore-PG] dashboard 聚合失败: {e}")
             return empty
 
+    def cost_gauge_snapshot(self, cutoff: str) -> list[dict]:
+        """账本成本投影（observability/cost_gauge 消费，只读非记账）。
+
+        成本口径与 dashboard() 一致：currency=CNY 用原值，否则按
+        BUDGET_FX_USD_CNY 折算为 ¥。domain 归并：agent_domain 优先（M5 域图
+        归因列），空则 component（'llm' 为主图 → 'main'，同 M5 口径），再空
+        'main'。软失败返回空列表，绝不影响账本本身。"""
+        from backend.config.budget import BUDGET_FX_USD_CNY
+        cost_cny_expr = (
+            "COALESCE(SUM(CASE WHEN COALESCE(NULLIF(currency, ''), 'USD') = 'CNY' "
+            f"THEN total_cost ELSE total_cost * {float(BUDGET_FX_USD_CNY)} END), 0)"
+        )
+        domain_expr = (
+            "COALESCE(NULLIF(agent_domain, ''), "
+            "NULLIF(CASE WHEN component = 'llm' THEN 'main' ELSE component END, ''), 'main')"
+        )
+        try:
+            with self._lock, self._conn() as conn:
+                rows = self._exec(conn, f"""
+                    SELECT {domain_expr} AS domain,
+                           model,
+                           {cost_cny_expr} AS cost_cny
+                    FROM {self._table} WHERE ts >= %s
+                    GROUP BY 1, 2
+                    HAVING {cost_cny_expr} > 0
+                    ORDER BY 3 DESC
+                    LIMIT 200
+                """, (cutoff,)).fetchall()
+            return [
+                {"domain": str(r["domain"]), "model": str(r["model"]),
+                 "cost_cny": round(float(r["cost_cny"]), 6)}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"[LLMUsageStore-PG] cost_gauge_snapshot 失败: {e}")
+            return []
+
     # M5 归因列 → group_by 合法维度白名单（防注入：列名不进参数）
     _GROUP_BY_COLUMNS = {
         "user": "user_id", "tenant": "tenant_id", "model": "model",
