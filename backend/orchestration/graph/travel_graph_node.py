@@ -361,6 +361,16 @@ def _stamp_execution_tags(final_state: dict, result: dict,
         if trace is None:
             return
         trace.tags["travel_status"] = result.get("status", "")
+        from backend.travel.trace_semantics import build_trace_semantics
+
+        semantics = build_trace_semantics(final_state, result)
+        trace.metadata["travel_semantics"] = semantics
+        for key, value in semantics.items():
+            if isinstance(value, list):
+                trace.tags[f"travel_{key}"] = ",".join(
+                    str(item) for item in value)
+            else:
+                trace.tags[f"travel_{key}"] = str(value)
         if resume_mode:
             # 任务书 §21：resume 模式必须可观测（checkpoint / reconstruct /
             # fresh / new_run / continue）
@@ -371,11 +381,37 @@ def _stamp_execution_tags(final_state: dict, result: dict,
         if missing:
             trace.tags["travel_pending_slots"] = ",".join(missing)
         dirty = final_state.get("brief_changed_fields") or []
+        trace.tags["travel_destination_change"] = str(
+            "destination" in dirty
+        ).lower()
+        slot_sources = final_state.get("slot_sources") or {}
+        if slot_sources.get("long_term_preference"):
+            trace.tags["travel_preference_source"] = slot_sources[
+                "long_term_preference"
+            ]
+        partial = final_state.get("partial_replan_result") or {}
+        if partial:
+            trace.tags["partial_replan"] = "true"
+            trace.tags["partial_replan_operation"] = str(
+                partial.get("operation") or "")
+            if partial.get("target_day"):
+                trace.tags["partial_replan_target_day"] = str(
+                    partial["target_day"])
         if dirty:
             trace.tags["travel_dirty_fields"] = ",".join(dirty[:8])
+        trace.tags["travel_preserved_days"] = ",".join(
+            str(day) for day in (final_state.get("preserved_days") or []))
+        trace.tags["travel_changed_days"] = ",".join(
+            str(day) for day in (final_state.get("changed_days") or []))
+        if final_state.get("scope_expansion_reason"):
+            trace.tags["travel_scope_expansion_reason"] = str(
+                final_state["scope_expansion_reason"])
         brief = final_state.get("brief") or {}
         if brief.get("destination"):
             trace.tags["travel_destination"] = brief["destination"]
+        if brief.get("budget_constraint"):
+            trace.tags["travel_budget_constraint"] = str(
+                brief["budget_constraint"])
 
         validation = final_state.get("validation") or {}
         codes = [v.get("code", "") for v in validation.get("violations", [])]

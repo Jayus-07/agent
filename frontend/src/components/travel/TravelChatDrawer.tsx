@@ -141,6 +141,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   // M4/G3：重试保留原始来源归因（lastRequest 只存文本，source 走 ref）
   const lastSourceRef = useRef<TravelSource>('manual')
   const [applying, setApplying] = useState(false)
+  const [showPendingDetails, setShowPendingDetails] = useState(true)
   const [stopped, setStopped] = useState(false)
   const [clarificationOptions, setClarificationOptions] = useState<TravelClarificationOption[]>([])
   const [fillingDays, setFillingDays] = useState(false)
@@ -255,10 +256,10 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
         ...prev,
         {
           role: 'assistant',
-          text: sanitizeTravelReply(
-            data.itinerary ? (data.final_answer || '已生成一份调整预览。') : (data.final_answer || '（没有返回内容）'),
-          ),
-          tag: data.itinerary ? `预览中 · v${data.itinerary.plan_version}` : tag,
+          text: data.itinerary
+            ? `已生成草案 v${data.itinerary.plan_version}，请查看变化后选择应用或放弃。`
+            : sanitizeTravelReply(data.final_answer || '（没有返回内容）'),
+          tag: data.itinerary ? '有待应用修改' : tag,
           tone: data.itinerary ? 'ok' : tone,
           rationale: (data as { rationale?: RationaleData }).rationale || undefined,
         },
@@ -636,10 +637,19 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
             <div className="flex items-start gap-2">
               <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-[#087b73]" aria-hidden />
               <div className="min-w-0 flex-1">
-                <h3 className="text-xs font-semibold text-[#183037]">
-                  变更草案 v{pendingResponse.itinerary.plan_version}
-                  {pendingChangeCount > 0 && ` · ${pendingChangeCount} 处调整`}
-                </h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-semibold text-[#183037]">
+                    有待应用修改 · v{pendingResponse.itinerary.plan_version}
+                    {pendingChangeCount > 0 && ` · ${pendingChangeCount} 处调整`}
+                  </h3>
+                  <button
+                    type="button"
+                    className="shrink-0 text-[10px] font-medium text-[#087b73] hover:underline"
+                    onClick={() => setShowPendingDetails((value) => !value)}
+                  >
+                    {showPendingDetails ? '收起变化' : '查看变化'}
+                  </button>
+                </div>
                 {pendingStale ? (
                   <p className="mt-1 text-[10px] leading-relaxed text-amber-700">
                     行程已更新至 v{itinerary?.plan_version}，此草案已过期；请放弃后基于最新行程重新生成。
@@ -649,7 +659,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                     确认后生效；当前行程仍保持不变。
                   </p>
                 )}
-                {pendingSummary ? (
+                {showPendingDetails && (pendingSummary ? (
                   <dl className="mt-2 space-y-1 text-[10px] leading-relaxed text-[#5c7074]">
                     {pendingSummary.briefFields.length > 0 && (
                       <div><dt className="inline text-[#8aa09c]">需求：</dt><dd className="inline">{pendingSummary.briefFields.join('、')}</dd></div>
@@ -663,7 +673,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   </dl>
                 ) : (
                   <p className="mt-2 text-[10px] text-[#5c7074]">这是当前会话的首份行程，应用后会作为当前版本。</p>
-                )}
+                ))}
                 <div className="mt-3 flex gap-2">
                   <button
                     type="button"

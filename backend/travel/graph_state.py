@@ -31,6 +31,7 @@ TRAVEL_BUDGET_EXPERT = "travel_budget_expert"
 TRAVEL_RISK_EXPERT = "travel_risk_expert"
 TRAVEL_VALIDATOR = "travel_validator"
 TRAVEL_REPAIR = "travel_repair"
+TRAVEL_PARTIAL_REPLAN = "travel_partial_replan"
 TRAVEL_REPORTER = "travel_reporter"
 
 # 专家节点名 ←→ 专家标识（supervisor 与 graph_builder 的单一映射源）
@@ -80,6 +81,11 @@ class TravelGraphState(TypedDict, total=False):
     # 本轮重规划前的产物版本。planning_reset 会清掉 itinerary，但版本链
     # 不能因此回到 v1；transit expert 用它为新产物盖 parent + 1。
     plan_parent_version: int | None
+    # 需求变更前的可序列化快照，用于局部稳定性计算与预算-only 保留 POI。
+    plan_stability_baseline: dict
+    preserved_days: list[int]
+    changed_days: list[int]
+    scope_expansion_reason: str
 
     # === 规划产物 ===
     candidates: list[dict]
@@ -119,12 +125,22 @@ class TravelGraphState(TypedDict, total=False):
     # 走既有规划链）；supervisor 意图先行门禁与 reporter 问答出口消费。
     # 必须入 schema——LangGraph updates 会剥离 schema 外的键。
     intent: str
+    # 查询消息中的城市主题；仅用于轻量回答，不属于 TripBrief 目的地。
+    query_destination: str
+    # 槽位事实来源：explicit / default / inferred / missing，供 Trace 与
+    # 前端解释「未说人数为何按 1 人」；不参与业务指纹。
+    slot_sources: dict[str, str]
+    destination_change: bool
     # QUERY_STATIC 意图的灵感包（services/inspiration_service 产出）：
     # {destination, guides: [{title,url,summary,author,source}], status}。
     # 增强信息：检索失败不阻塞任何链路，reporter 按 status 三态渲染。
     inspiration: dict
 
     # === 执行态 ===
+    # 本轮局部改单请求与确定性执行结果；dict 形态保证可进入 checkpoint。
+    partial_replan: dict
+    partial_replan_done: bool
+    partial_replan_result: dict
     stage: str
     step_count: int
     current_expert: str
@@ -217,10 +233,17 @@ def build_travel_context(state: dict) -> dict:
         "live_search": state.get("live_search", {}),
         "brief_missing": state.get("brief_missing", []),
         "intent": state.get("intent", ""),
+        "query_destination": state.get("query_destination", ""),
+        "slot_sources": state.get("slot_sources", {}),
         "clarification_options": state.get("clarification_options", []),
         "stage": state.get("stage", ""),
         "repair_rounds": state.get("repair_rounds", 0),
         "repair_log": state.get("repair_log", []),
+        "partial_replan": state.get("partial_replan", {}),
+        "partial_replan_result": state.get("partial_replan_result", {}),
+        "preserved_days": state.get("preserved_days", []),
+        "changed_days": state.get("changed_days", []),
+        "scope_expansion_reason": state.get("scope_expansion_reason", ""),
         "validation_codes": validation.codes() if validation else [],
         "validation_passed": validation.passed if validation else None,
         "day_count": len(itinerary.days) if itinerary else 0,
@@ -248,6 +271,8 @@ def brief_fingerprint(brief: TravelBrief) -> str:
         "departure_time": brief.departure_time or None,
         "party_size": brief.party_size,
         "budget_cny": brief.budget_cny,
+        "budget_constraint": brief.budget_constraint,
+        "weather_conditions": brief.weather_conditions,
         "preferences": sorted(brief.preferences),
         "must_go": sorted(brief.must_go),
         "optional_go": sorted(brief.optional_go),
@@ -289,6 +314,10 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
     """
     return {
         "plan_parent_version": parent_plan_version,
+        "plan_stability_baseline": {},
+        "preserved_days": [],
+        "changed_days": [],
+        "scope_expansion_reason": "",
         "candidates": [],
         "live_search": {},
         "inspiration": {},
@@ -305,6 +334,9 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
         "repair_log": [],
         "last_repair_constraint_sig": "",
         "repair_no_improvement_streak": 0,
+        "partial_replan": {},
+        "partial_replan_done": False,
+        "partial_replan_result": {},
         "expert_history": [],
         "last_expert_result": {},
         "supervisor_decision": {},
@@ -315,4 +347,8 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
         "notes": [],
         "knowledge_refs": [],
         "candidate_plans": [],
+        "plan_stability_baseline": {},
+        "preserved_days": [],
+        "changed_days": [],
+        "scope_expansion_reason": "",
     }

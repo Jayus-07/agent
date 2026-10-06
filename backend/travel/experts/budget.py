@@ -60,7 +60,9 @@ def budget_expert_node(state: dict) -> dict:
         # 账），超支判定仍归 validator 轴四。
         negotiation: dict | None = None
         budget = brief.budget_cny
-        if budget is not None and budget > 0 and float(itinerary.cost.total) > budget:
+        if (budget is not None and budget > 0
+                and float(itinerary.cost.total) > budget
+                and brief.budget_constraint != "soft"):
             from backend.travel.services import budget_service as _bs
 
             econ_total = round(float(_bs.estimate_cost(

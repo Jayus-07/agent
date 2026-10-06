@@ -34,6 +34,7 @@ from backend.travel.graph_state import (
     EXPERT_TO_NODE,
     TRAVEL_BUDGET_EXPERT,
     TRAVEL_POI_EXPERT,
+    TRAVEL_PARTIAL_REPLAN,
     TRAVEL_REPAIR,
     TRAVEL_REPORTER,
     TRAVEL_RISK_EXPERT,
@@ -56,6 +57,7 @@ class TravelStage(str, Enum):
     RISK = "risk"
     VALIDATE = "validate"
     REPAIR = "repair"
+    PARTIAL_REPLAN = "partial_replan"
     REPORT = "report"
     DONE = "done"
 
@@ -68,6 +70,7 @@ _STAGE_TO_NODE: dict[TravelStage, str] = {
     TravelStage.RISK: TRAVEL_RISK_EXPERT,
     TravelStage.VALIDATE: TRAVEL_VALIDATOR,
     TravelStage.REPAIR: TRAVEL_REPAIR,
+    TravelStage.PARTIAL_REPLAN: TRAVEL_PARTIAL_REPLAN,
     TravelStage.REPORT: TRAVEL_REPORTER,
     TravelStage.DONE: TRAVEL_REPORTER,
 }
@@ -90,6 +93,7 @@ _STAGE_TO_ACTION: dict[TravelStage, str] = {
     TravelStage.RISK: "run_risk",
     TravelStage.VALIDATE: "run_validation",
     TravelStage.REPAIR: "run_repair",
+    TravelStage.PARTIAL_REPLAN: "run_partial_replan",
     TravelStage.REPORT: "finish_report",
     TravelStage.DONE: "finish_done",
 }
@@ -115,6 +119,9 @@ class TravelDecision:
 # 规划专家链，直接转 reporter 的问答出口。必须排在 brief_missing 之前
 # ——「丽江好玩吗」抽得到目的地、缺天数，按旧顺序会被误追问「玩几天」。
 _INTENT_REPORT_REASONS: dict[str, str] = {
+    "social": "社交回应：不启动规划链",
+    "meta": "能力说明：不启动规划链",
+    "out_of_scope": "出域诉求：转为能力边界引导，不启动规划链",
     "query_static": "静态问答意图：给有出处的观点，不启动规划链",
     "query_dynamic": "实时状态问答：暂无可靠实时来源，如实告知",
     "discover": "找目的地/灵感：给可解释候选，不启动规划链",
@@ -132,6 +139,14 @@ def decide(state: dict) -> TravelDecision:
     单测可以穷举各种状态组合，不需要构造 LangGraph 运行时 —— 这正是把
     调度做成纯函数的目的。
     """
+    # 新一轮输入可能继承上一轮 reporter 的 finished=true；只要槽位层已经
+    # 识别出新的局部改单且结果尚未生成，必须优先进入局部节点。
+    if state.get("partial_replan") and not state.get("partial_replan_result"):
+        return TravelDecision(
+            TravelStage.PARTIAL_REPLAN,
+            "执行用户点名日期的局部改单",
+        )
+
     if state.get("finished"):
         return TravelDecision(TravelStage.DONE, "已结束")
 
@@ -140,6 +155,33 @@ def decide(state: dict) -> TravelDecision:
         return TravelDecision(
             TravelStage.REPORT,
             f"达到步数上限 {T.TRAVEL_MAX_STEPS}，强制收尾",
+        )
+
+    # 局部改单先于普通 MODIFY 轻量出口：已生成行程时，结构化的
+    # replace/remove/add/pace/end_time 请求必须真正修改草案，而不是回复
+    # 「还在建设中」。成功后只重新跑 validator，不回到全量专家链。
+    partial = state.get("partial_replan") or {}
+    if partial:
+        if (not state.get("partial_replan_done")
+                or not state.get("partial_replan_result")):
+            return TravelDecision(
+                TravelStage.PARTIAL_REPLAN,
+                "执行用户点名日期的局部改单",
+            )
+        partial_result = state.get("partial_replan_result") or {}
+        if partial_result.get("validation_failed"):
+            return TravelDecision(
+                TravelStage.REPORT,
+                "局部修改无法完全满足，向用户披露约束失败",
+            )
+        if load_validation(state) is None:
+            return TravelDecision(
+                TravelStage.VALIDATE,
+                "局部修改完成，重新校验受影响行程",
+            )
+        return TravelDecision(
+            TravelStage.REPORT,
+            "局部修改已校验，收尾输出新草案",
         )
 
     # 意图先行（v3 §2.1）：问答/探索/改单出口优先于槽位缺失追问

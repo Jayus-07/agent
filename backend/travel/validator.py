@@ -33,6 +33,7 @@ from backend.travel.models.itinerary import (
 )
 from backend.travel.models.poi import is_seed_source
 from backend.travel.models.validation import (
+    CODE_BUDGET_SOFT_OVER,
     CODE_BUDGET_OVER,
     CODE_BUDGET_TIGHT,
     CODE_GEO_FAR_LEG,
@@ -47,6 +48,7 @@ from backend.travel.models.validation import (
     CODE_PACE_TOO_MANY_POIS,
     CODE_SOURCE_STALE,
     CODE_TIME_CLOSED,
+    CODE_TIME_BEFORE_ARRIVAL,
     CODE_TIME_CLOSED_WEEKDAY,
     CODE_TIME_DAY_OVERRUN,
     CODE_TIME_LONG_WAIT,
@@ -150,6 +152,24 @@ def check_time(itinerary: Itinerary) -> list[Violation]:
 
     for day in itinerary.days:
         prev_end: int | None = None
+
+        if day.day_index == 1 and itinerary.brief.arrival_time and day.items:
+            arrival = to_min(itinerary.brief.arrival_time, 0)
+            earliest = arrival + T.TRAVEL_ARRIVAL_BUFFER_MINUTES
+            first_start = min(to_min(item.start, 0) for item in day.items)
+            if first_start < earliest:
+                out.append(Violation(
+                    code=CODE_TIME_BEFORE_ARRIVAL,
+                    level=LEVEL_ERROR,
+                    day_index=1,
+                    message=(f"首日首项 {from_min(first_start)} 早于抵达"
+                             f" {itinerary.brief.arrival_time} 后的缓冲窗口"
+                             f" {from_min(earliest)}"),
+                    detail={"arrival_time": itinerary.brief.arrival_time,
+                            "buffer_minutes": T.TRAVEL_ARRIVAL_BUFFER_MINUTES,
+                            "first_start": from_min(first_start),
+                            "earliest_start": from_min(earliest)},
+                ))
 
         for item in day.items:
             start = to_min(item.start, 0)
@@ -339,7 +359,18 @@ def check_budget(itinerary: Itinerary) -> list[Violation]:
         return []
 
     total = itinerary.cost.total
+    constraint = getattr(itinerary.brief, "budget_constraint", "hard")
     if total > budget:
+        if constraint == "soft":
+            return [Violation(
+                code=CODE_BUDGET_SOFT_OVER, level=LEVEL_WARNING, day_index=0,
+                message=(f"预估总花费 ¥{total:.0f} 略高于软预算 ¥{budget:.0f}"
+                         "，已保留方案并明确说明"),
+                detail={"total": total, "budget": budget,
+                        "over": round(total - budget, 2),
+                        "constraint": constraint,
+                        "breakdown": itinerary.cost.model_dump()},
+            )]
         return [Violation(
             code=CODE_BUDGET_OVER, level=LEVEL_ERROR, day_index=0,
             message=(f"预估总花费 ¥{total:.0f} 超出预算 ¥{budget:.0f}"

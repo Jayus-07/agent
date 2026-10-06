@@ -98,6 +98,9 @@ export interface ItineraryBrief {
   days: number | null;
   party_size: number;
   budget_cny: number | null;
+  /** 预算语义：hard=不得超出，soft=大概范围。 */
+  budget_constraint?: 'hard' | 'soft' | string;
+  weather_conditions?: Array<{ day_index: number; condition: string; action: string }>;
   preferences: string[];
   must_go: string[];
   avoid: string[];
@@ -268,6 +271,10 @@ export interface TravelPlanLatest {
   destination: string;
   created_at: string;
   itinerary: Itinerary | null;
+  /** 服务端最新行为 draft 时，单独返回当前 Active 内容供刷新恢复。 */
+  active_plan_version?: number | null;
+  active_plan_status?: string | null;
+  active_itinerary?: Itinerary | null;
 }
 
 export interface TravelPlanDiff {

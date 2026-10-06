@@ -175,7 +175,7 @@ class TestScheduleTimeWindow:
     def test_first_day_starts_at_arrival(self):
         brief = TravelBrief(destination="测试城", days=2, arrival_time="16:00")
         day1 = schedule_day(list(self.POIS), 1, None, brief)
-        assert day1.items[0].start == "16:00"
+        assert day1.items[0].start == "16:30"
         day2 = schedule_day(list(self.POIS), 2, None, brief)
         assert day2.items[0].start == "08:30"  # 非首日不受影响
 

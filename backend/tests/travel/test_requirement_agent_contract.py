@@ -160,16 +160,11 @@ class TestMemoryBoundary:
         update = slot_filler.slot_filler_node(state)
         return {"update": update, "calls": calls}
 
-    def test_upsert_never_receives_one_off_fields(self, monkeypatch):
+    def test_trip_input_never_writes_long_term_preferences(self, monkeypatch):
         result = self._run_node(
             monkeypatch, "杭州2天，预算3000元，必去西湖，住西湖边")
         upserts = result["calls"]["upsert"]
-        assert upserts, "回写应发生（本轮显式表达了偏好类信息）"
-        for kwargs in upserts:
-            assert set(kwargs) <= {"origin", "preferences", "pace", "diet"}
-            for banned in ("destination", "days", "start_date", "budget_cny",
-                           "must_go", "avoid", "lodging"):
-                assert banned not in kwargs
+        assert upserts == []
 
     def test_prefill_only_on_first_turn(self, monkeypatch):
         result = self._run_node(

@@ -123,11 +123,21 @@ def _answer_out_of_scope() -> str:
     )
 
 
+def _answer_social() -> str:
+    """SOCIAL：轻量回应，不读取或重排当前行程。"""
+    return "不用客气！如果你想继续调整行程，直接告诉我具体哪一天或哪项需求即可。"
+
+
+def _answer_meta() -> str:
+    """META：说明旅游规划助手边界，不启动规划链。"""
+    return "我是旅游规划助手，可以帮你规划行程、查询景点与天气信息，并根据你的要求调整方案。"
+
+
 def _answer_static(state: dict) -> str:
     """QUERY_STATIC：知乎攻略观点（inspiration 包）+ 轻规划引导。"""
     brief = load_brief(state)
     inspiration = state.get("inspiration") or {}
-    destination = (brief.destination or inspiration.get("destination")
+    destination = (inspiration.get("destination") or brief.destination
                    or "目的地").strip()
     status = inspiration.get("status") or "unavailable"
     guides = inspiration.get("guides") or []
@@ -165,7 +175,7 @@ def _answer_static(state: dict) -> str:
 def _answer_dynamic(state: dict) -> str:
     """QUERY_DYNAMIC：实时状态无可靠来源 → 如实告知（v3 §2.1 优先级 2）。"""
     brief = load_brief(state)
-    destination = (brief.destination or "").strip()
+    destination = (state.get("query_destination") or brief.destination or "").strip()
     dest_label = destination or "目的地"
     return (
         "「是否开门 / 当前票价 / 实时余票」这类随时会变的事实，"
@@ -332,10 +342,22 @@ def _stamp_plan_run(state: dict) -> None:
 
 
 def _assemble(state: dict) -> str:
+    partial_result = state.get("partial_replan_result") or {}
+    if partial_result.get("validation_failed"):
+        # 硬约束失败时不能把旧草案包装成「已经全部安排好了」。
+        return (
+            "这次局部修改不能全部满足，未生成假成功的方案：\n\n"
+            f"- {partial_result.get('message') or '存在未满足的硬约束'}\n"
+            "- 当前保留原行程；请减少地点数量、拆分到多天，或告诉我接受哪些取舍。"
+        )
     # 0) 会话意图问答出口（v3 §2.1，P0-A）：问答/探索/未接线的改单诉求
     #    不走行程渲染。分支必须在 brief_missing 之前——「丽江好玩吗」
     #    抽得到目的地、缺天数，落到追问分支就变成了「误规划」。
     intent = state.get("intent") or ""
+    if intent == "social":
+        return _answer_social()
+    if intent == "meta":
+        return _answer_meta()
     if intent == "out_of_scope":
         return _answer_out_of_scope()
     if intent == "query_static":
@@ -344,7 +366,9 @@ def _assemble(state: dict) -> str:
         return _answer_dynamic(state)
     if intent == "discover":
         return _answer_discover(state)
-    if intent == "modify":
+    # 局部改单成功后继续渲染新草案；只有未识别为结构化局部修改的
+    # 存量改单请求才走旧的兜底提示，避免把已完成的修改说成仍在建设中。
+    if intent == "modify" and partial_result.get("status") != "applied":
         return _answer_modify()
 
     brief = load_brief(state)
@@ -451,6 +475,10 @@ def _render_itinerary(state: dict, itinerary) -> str:
                   if brief.start_date else "未指定出发日期")
     lines.append(f"# {brief.destination} {len(itinerary.days)} 天行程")
     lines.append("")
+    partial_result = state.get("partial_replan_result") or {}
+    if partial_result.get("status") == "applied":
+        lines.append(f"> 局部修改：{partial_result.get('message', '')}")
+        lines.append("")
     # M2 验收反馈：无费用数据不展示「费用数据 暂无数据」（零信息量）；预算上限保留
     lines.append(
         f"**人数** {brief.party_size} 人 ｜ "

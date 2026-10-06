@@ -102,8 +102,9 @@ def schedule_day(
     cursor = day_start_min
     if day_index == 1 and brief.arrival_time:
         arrival_min = to_min(brief.arrival_time, day_start_min)
-        # 早于默认起点不提前（刚到达还有安顿开销），只推迟
-        cursor = max(cursor, arrival_min)
+        # 早于默认起点不提前；抵达时刻不是可游玩时刻，预留安顿/取行李
+        # 缓冲，validator 与排程共享同一硬口径。
+        cursor = max(cursor, arrival_min + T.TRAVEL_ARRIVAL_BUFFER_MINUTES)
     day_end_min = MINUTES_PER_DAY - 1
     is_last_day = day_index >= max(1, brief.resolved_days())
     if is_last_day and brief.departure_time:

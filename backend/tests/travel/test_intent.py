@@ -113,7 +113,8 @@ def test_static_slot_integration():
     with patch("backend.travel.services.live_search_service.search_zhihu_guides", return_value={"results": []}):
         result = slot_filler_node({"user_message": "丽江好玩吗"})
     assert result["intent"] == "query_static"
-    assert result["brief"]["destination"] == "丽江"
+    assert result.get("brief", {}).get("destination", "") == ""
+    assert result["query_destination"] == "丽江"
     assert result["inspiration"]["status"] == "empty"
 
 

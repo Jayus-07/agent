@@ -103,6 +103,10 @@ def test_plan_stream_exposes_real_tool_events_and_structured_result(
     assert "tool.result" in event_names
     assert events[-1]["event"] == "done"
     assert events[-1]["result"]["itinerary"]["plan_version"] == 1
+    assert len({event["run_id"] for event in events}) == 1
+    assert [event["seq"] for event in events] == list(
+        range(1, len(events) + 1))
+    assert sum(event["event"] in {"done", "error"} for event in events) == 1
 
 
 def test_graph_node_wrapper_reports_the_actual_node_failure() -> None:

@@ -149,6 +149,24 @@ def weather_expert_node(state: dict) -> dict:
                 "本次未做天气检查；临近出发时可让我重新评估"
             ]}
         hit_dates = sorted(set(bad_dates) & trip_dates)
+        conditions = brief.weather_conditions or []
+        if conditions:
+            # 条件天气只约束被点名的日期；没有条件的日期不因同一份预报
+            # 被连带改排，满足“只影响必要日期”的局部语义。
+            target_days = {
+                int(item.get("day_index") or 0)
+                for item in conditions
+                if item.get("action") == "indoor"
+            }
+            if target_days and 0 not in target_days:
+                date_to_day = {
+                    (brief.start_date + timedelta(days=index - 1)).isoformat(): index
+                    for index in range(1, brief.resolved_days() + 1)
+                }
+                hit_dates = sorted(
+                    day for day in hit_dates
+                    if date_to_day.get(day) in target_days
+                )
         # 天气分级（2026-10-04）：仅「小雨」的 mild 日提示带伞不替换——
         # 替换的扰动比小雨对出游的实际损失大；强天气仍走户外→室内替换。
         mild_hit = sorted(set(mild_weather_dates(forecast)) & trip_dates)
@@ -175,6 +193,8 @@ def weather_expert_node(state: dict) -> dict:
             itinerary, _state.get("candidates", []), hit_dates,
         )
         notes = list(extra_notes)
+        if conditions and hit_dates:
+            notes.append("已按条件天气约束，将命中雨天优先调整为室内安排")
         if not new_itinerary:
             if actions:  # 理论不达：有动作却没有产物，防御性兜底
                 return {"status": "success", "data": {}, "notes": notes}

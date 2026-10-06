@@ -114,6 +114,11 @@ class TravelBrief(BaseModel):
     adults: int | None = Field(default=None, ge=1)
     children: int | None = Field(default=None, ge=0)
     budget_cny: float | None = None
+    # 预算约束语义：hard=不得超出，soft=大概范围，可超出但必须说明。
+    # 存量 brief 缺字段时按 hard 兼容，避免旧行程静默变成软约束。
+    budget_constraint: str = "hard"
+    # 条件天气约束，如 {day_index: 2, condition: "rain", action: "indoor"}。
+    weather_conditions: list[dict] = Field(default_factory=list)
     preferences: list[str] = Field(default_factory=list)
     must_go: list[str] = Field(default_factory=list)
     # 软必去（验收 #67）：「有空再去/顺便去/如果来得及」——能排就排，

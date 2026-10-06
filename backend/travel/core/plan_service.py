@@ -82,28 +82,62 @@ class PlanVersionService:
             return {"plan_status": plan_status, "change_record": None}
         try:
             prev = self._store.latest_version(conversation_id, user_id)
-            if prev and prev.get("itinerary"):
-                # brief_fields 由两版 brief 确定性派生（G2），不信任新行程
-                # 自述的 changed_fields（修复/恢复链路不写该字段）
-                brief_fields = _brief_changed_fields(
-                    prev["itinerary"].get("brief") or {},
-                    itinerary.get("brief") or {},
+            for _attempt in range(3):
+                if prev:
+                    latest_version = int(prev["plan_version"])
+                    incoming_version = int(itinerary.get("plan_version") or 1)
+                    if incoming_version <= latest_version:
+                        # 旧 checkpoint 恢复后，版本必须在持久化边界重新接续。
+                        itinerary["parent_plan_version"] = latest_version
+                        itinerary["plan_version"] = latest_version + 1
+                        logger.warning(
+                            "[TravelPlanService] 修正过期行程版本: incoming=%s latest=%s next=%s",
+                            incoming_version,
+                            latest_version,
+                            itinerary["plan_version"],
+                        )
+                if prev and prev.get("itinerary"):
+                    # brief_fields 由两版 brief 确定性派生（G2），不信任新行程
+                    # 自述的 changed_fields（修复/恢复链路不写该字段）
+                    brief_fields = _brief_changed_fields(
+                        prev["itinerary"].get("brief") or {},
+                        itinerary.get("brief") or {},
+                    )
+                else:
+                    brief_fields = list(itinerary.get("changed_fields") or [])
+                candidate_change = build_change_record(
+                    new_version=int(itinerary.get("plan_version") or 1),
+                    parent_version=(
+                        prev["plan_version"] if prev else _ROOT_PARENT_VERSION
+                    ),
+                    old_itinerary=prev["itinerary"] if prev else None,
+                    new_itinerary=itinerary,
+                    brief_changed_fields=brief_fields,
+                    change_reason=str(itinerary.get("change_reason") or ""),
+                    quality=str(itinerary.get("status") or ""),
                 )
-            else:
-                brief_fields = list(itinerary.get("changed_fields") or [])
-            change_record = build_change_record(
-                new_version=int(itinerary.get("plan_version") or 1),
-                parent_version=prev["plan_version"] if prev else _ROOT_PARENT_VERSION,
-                old_itinerary=prev["itinerary"] if prev else None,
-                new_itinerary=itinerary,
-                brief_changed_fields=brief_fields,
-                change_reason=str(itinerary.get("change_reason") or ""),
-                quality=str(itinerary.get("status") or ""),
-            )
-            self._store.save_version(
-                conversation_id, user_id, itinerary, plan_status=plan_status,
-                change=change_record,
-            )
+                saved = self._store.save_version(
+                    conversation_id, user_id, itinerary, plan_status=plan_status,
+                    change=candidate_change,
+                )
+                if saved:
+                    change_record = candidate_change
+                    break
+
+                # 版本主键冲突说明并发请求已经抢先写入；从持久化层重读
+                # latest 后继续接号，避免败方把旧 checkpoint 的版本带回去。
+                latest_after_conflict = self._store.latest_version(
+                    conversation_id, user_id,
+                )
+                if (
+                    latest_after_conflict
+                    and int(latest_after_conflict["plan_version"])
+                    >= int(itinerary.get("plan_version") or 1)
+                ):
+                    prev = latest_after_conflict
+                    continue
+                change_record = None
+                break
         except Exception as e:  # noqa: BLE001 — 账本故障不挡规划主链
             logger.warning("[TravelPlanService] 版本落账失败（软降级）: %s", e)
             change_record = None
@@ -224,6 +258,10 @@ class PlanVersionService:
     def latest_version(self, conversation_id: str, user_id: str) -> dict | None:
         """当前最新版本（含完整 itinerary）；无账本/越权返回 None。"""
         return self._store.latest_version(conversation_id, user_id)
+
+    def active_version(self, conversation_id: str, user_id: str) -> dict | None:
+        """当前 Active 版本；waiting_confirmation 草案不覆盖已确认内容。"""
+        return self._store.active_version(conversation_id, user_id)
 
     def diff(
         self, conversation_id: str, user_id: str,

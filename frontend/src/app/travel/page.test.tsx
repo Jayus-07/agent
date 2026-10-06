@@ -6,7 +6,8 @@ import TravelPage from './page'
 const { stream } = vi.hoisted(() => ({ stream: vi.fn() }))
 vi.mock('@/api/travel', () => ({
   streamTravelPlan: stream, fetchTravelRecommendations: vi.fn().mockResolvedValue([]),
-  fetchTravelPlanLatest: vi.fn(), fetchItineraryIcs: vi.fn(),
+  fetchTravelPlanList: vi.fn().mockResolvedValue([]),
+  fetchTravelPlanLatest: vi.fn().mockResolvedValue({}), fetchItineraryIcs: vi.fn(),
   reverseGeocodeTravelOrigin: vi.fn(), sendTravelFeedback: vi.fn(),
 }))
 vi.mock('@/hooks/useBudgetStatus', () => ({ useBudgetStatus: () => ({ blocked: false }) }))

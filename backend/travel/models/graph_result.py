@@ -44,13 +44,17 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
         if item.get("status") == "failed"
     ]
 
+    partial_result = final_state.get("partial_replan_result") or {}
     answering = final_state.get("intent") in {
-        "query_static", "query_dynamic", "discover", "modify",
-    }
+        "social", "meta", "out_of_scope", "query_static", "query_dynamic",
+        "discover",
+    } or (final_state.get("intent") == "modify" and not partial_result)
 
     if answering:
         status = STATUS_ANSWERED
         itinerary = None
+    elif partial_result.get("validation_failed"):
+        status = STATUS_FAILED
     elif failed_experts:
         status = STATUS_FAILED
     elif missing:
