@@ -201,6 +201,29 @@ class DomainGraphRegistry:
                 result[route_mode] = graph.entry_modes
         return result
 
+    def route_mode_to_entry_mode_key(self) -> dict[str, str | None]:
+        """派生 route_mode/alias → 配置中心入口模式键活视图。"""
+
+        result: dict[str, str | None] = {}
+        for graph in self._snapshot().values():
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = graph.entry_mode_key
+        return result
+
+    def route_mode_to_domain_family(self) -> dict[str, str]:
+        """派生 route_mode/alias → 顶级域族活视图。
+
+        子流图（如 travel_booking）和顶级图共享父域族；普通新域默认以
+        自身注册名作为域族。入口模式与 handoff 目标均从此视图派生。
+        """
+
+        result: dict[str, str] = {}
+        for graph in self._snapshot().values():
+            family = graph.domain or graph.name
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = family
+        return result
+
     def get_node_names(self) -> set[str]:
         return {d.node_name for d in self._domains.values()}
 
@@ -217,7 +240,11 @@ class DomainGraphRegistry:
         域图。原为手写字典（prefilter_chain._ROUTE_MODE_DOMAIN），D2 的 G1
         就是漏登记两个交易域所致。
         """
-        return {name: name for name in self._snapshot()}
+        result: dict[str, str] = {}
+        for graph in self._snapshot().values():
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = graph.name
+        return result
 
     def route_mode_to_domain_decision(self) -> dict[str, tuple[str, str | None]]:
         """【决策层】route_mode → (顶级域, subflow 展示位)。
@@ -227,13 +254,15 @@ class DomainGraphRegistry:
         否则回退 ``subflow``（独立生命周期子流，如 booking/commerce）。
         原为手写字典（domain_router._PREFILTER_DOMAIN_MAP 的域图部分）。
         """
-        return {
-            graph.name: (
+        result: dict[str, tuple[str, str | None]] = {}
+        for graph in self._snapshot().values():
+            decision = (
                 graph.domain or graph.name,
                 graph.decision_subflow or graph.subflow,
             )
-            for graph in self._snapshot().values()
-        }
+            for route_mode in (graph.name, *graph.aliases):
+                result[route_mode] = decision
+        return result
 
     def route_mode_to_graph_mode(self) -> dict[str, str]:
         """【执行层默认表】顶级域图名 → 自身。

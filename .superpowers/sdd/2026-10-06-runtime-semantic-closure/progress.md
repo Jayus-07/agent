@@ -35,3 +35,9 @@ Task 5: Ruling: State canonical readers prefer route_decision_v2, resolved_param
 Task 5: Ruling: tool_selector no longer emits tool_arguments on new selection updates; resolved_params is the new execution-parameter writer, while direct_executor reads the compatibility fallback only when resuming older state.
 
 Task 5: complete (stage E aggregator: 226 passed, STATE_CANONICALIZATION_PASS=true, STATE_CANONICAL_SOURCE_PASS=true, LEGACY_PROJECTION_PASS=true, STATE_UNKNOWN_KEY_TOTAL=0, PRODUCTION_BEHAVIOR_CHANGED=false)
+
+Task 6: Ruling: registered domains now declare entry_mode_key and the registry derives domain family, entry-mode switch, runtime target, and aliases; prefilter guide/handoff logic consumes those live views instead of maintaining route-mode maps — cost if wrong: a missing descriptor field fails closed to execute rather than silently selecting a wrong guide target.
+
+Task 6: Ruling: projection.py resolves domain runtime type/id/subflow through DomainGraphRegistry; a static AST guard rejects registered-domain mapping literals in projection, domain_router, execution_mode, and prefilter_chain. A fake_domain test proves metadata registration does not require edits to Router or builder — cost if wrong: a new domain may still require its own prefilter/intent evidence, but cannot require a second routing map.
+
+Task 6: complete (stage F aggregator: 122 passed, DOMAIN_REGISTRATION_GOVERNANCE_PASS=true, NEW_DOMAIN_REGISTRATION_SURFACE_PASS=true, ROUTER_DOMAIN_LITERAL_GUARD_PASS=true, PRODUCTION_BEHAVIOR_CHANGED=false)

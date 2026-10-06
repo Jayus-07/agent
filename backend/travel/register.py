@@ -27,6 +27,7 @@ domain_graph_registry.register(DomainGraph(
     supports_checkpoint=True,
     supports_interrupt=True,
     entry_modes=("execute", "guide"),
+    entry_mode_key="TRAVEL_GLOBAL_ENTRY_MODE",
     continuation_policy="checkpoint_resume",
     # 顶级域自身的活动标签（决策层 subflow 展示位）：travel 图即 Travel Domain 本体，
     # 不是独立生命周期子流，故**不写 subflow**（STOP E §6.2 冻结口径）。

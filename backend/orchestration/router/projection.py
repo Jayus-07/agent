@@ -18,15 +18,7 @@ from backend.orchestration.router.types import (
     RuntimeTarget,
     RuntimeType,
 )
-
-
-_DOMAIN_GRAPH_ROUTES = {
-    "customer_service": ("customer_service", RuntimeType.AGENT, ExecutionMode.WORKFLOW),
-    "travel": ("travel", RuntimeType.WORKFLOW, ExecutionMode.WORKFLOW),
-    "travel_commerce": ("travel", RuntimeType.WORKFLOW, ExecutionMode.WORKFLOW),
-    "travel_booking": ("travel", RuntimeType.WORKFLOW, ExecutionMode.WORKFLOW),
-    "selection_funnel": ("selection", RuntimeType.WORKFLOW, ExecutionMode.WORKFLOW),
-}
+from backend.orchestration.domain_registry import domain_graph_registry
 
 
 def build_route_decision_v2_from_route(
@@ -67,13 +59,19 @@ def build_route_decision_v2_from_route(
         interaction = InteractionMode.HANDOFF
         runtime_type = RuntimeType.GENERIC
         runtime_id = "handoff"
-    elif route_mode in _DOMAIN_GRAPH_ROUTES:
-        domain_name, runtime_type, execution = _DOMAIN_GRAPH_ROUTES[route_mode]
-        runtime_id = route_mode
-        if route_mode == "travel_commerce":
-            subflow = subflow or "commerce"
-        elif route_mode == "travel_booking":
-            subflow = subflow or "booking"
+    else:
+        canonical_route_mode = domain_graph_registry.resolve_alias(route_mode)
+        graph = (
+            domain_graph_registry.get(canonical_route_mode)
+            if canonical_route_mode
+            else None
+        )
+        if graph is not None:
+            domain_name = graph.domain or graph.name
+            runtime_type = graph.runtime_type
+            execution = ExecutionMode.WORKFLOW
+            runtime_id = graph.runtime_id or graph.name
+            subflow = subflow or graph.decision_subflow or graph.subflow
 
     return RouteDecisionV2(
         domain=DomainDecisionV2(
@@ -158,7 +156,11 @@ def project_route_decision_to_legacy_state(
     }
     intent_decision = {
         "intent": decision.intent.name,
-        "kind": "domain_graph" if route_mode in _DOMAIN_GRAPH_ROUTES else route_mode,
+        "kind": (
+            "domain_graph"
+            if domain_graph_registry.resolve_alias(route_mode) is not None
+            else route_mode
+        ),
         "confidence": decision.intent.confidence,
         "source": decision.intent.source,
         "reasoning": decision.intent.reasoning,

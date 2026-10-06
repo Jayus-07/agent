@@ -242,21 +242,6 @@ def cs_rule_hits_of(query: str) -> int:
 # 域锁入口（CSDrawer domain_hint / 旅游页直达端点）不经过本判据。
 # ═══════════════════════════════════════════════════════════════════
 
-# route_mode → 域族（travel 家族三域图共用旅游页这一个专属入口）
-_ROUTE_MODE_FAMILY: dict[str, str] = {
-    "travel": "travel",
-    "travel_booking": "travel",
-    "travel_commerce": "travel",
-    "customer_service": "customer_service",
-    "selection_funnel": "selection_funnel",
-}
-
-_ENTRY_MODE_SWITCHES: dict[str, str] = {
-    "travel": "TRAVEL_GLOBAL_ENTRY_MODE",
-    "customer_service": "CS_GLOBAL_ENTRY_MODE",
-    "selection_funnel": "SELECTION_GLOBAL_ENTRY_MODE",
-}
-
 # guide 模式下旅游族的一次性查询豁免：命中这些「单点查询」语义时不引导，
 # 落回主路由由 travel.poi_search / map.lookup / rag 直答（判据左半边）。
 # 规划/多日/路线类语义不在表内 → 照常引导（判据右半边）。
@@ -268,12 +253,14 @@ _ONE_SHOT_TRAVEL_RE = re.compile(
 
 def domain_entry_mode(route_mode: str) -> str:
     """route_mode 所属域的入口模式（execute | guide）；不可判一律 execute。"""
-    family = _ROUTE_MODE_FAMILY.get(route_mode or "")
-    if not family:
+    entry_mode_key = domain_graph_registry.route_mode_to_entry_mode_key().get(
+        route_mode or ""
+    )
+    if not entry_mode_key:
         return "execute"
     try:
         from backend.services import sys_config
-        return sys_config.get_mode(_ENTRY_MODE_SWITCHES[family]) or "execute"
+        return sys_config.get_mode(entry_mode_key) or "execute"
     except Exception:
         return "execute"
 
@@ -289,11 +276,12 @@ def entry_mode_verdict(query: str, update: dict | None) -> str:
     if not isinstance(update, dict):
         return "execute"
     route_mode = str(update.get("route_mode") or "")
-    if route_mode not in _ROUTE_MODE_FAMILY:
+    family = domain_graph_registry.route_mode_to_domain_family().get(route_mode)
+    if not family:
         return "execute"
     if domain_entry_mode(route_mode) != "guide":
         return "execute"
-    if (_ROUTE_MODE_FAMILY[route_mode] == "travel"
+    if (family == "travel"
             and _ONE_SHOT_TRAVEL_RE.search(query or "")):
         return "passthrough"
     return "guide"
@@ -308,7 +296,9 @@ def handoff_update_for(query: str, state: dict, route_mode: str) -> dict:
     """
     from backend.orchestration.contracts.handoff import build_handoff_payload
 
-    family = _ROUTE_MODE_FAMILY.get(route_mode, route_mode)
+    family = domain_graph_registry.route_mode_to_domain_family().get(
+        route_mode, route_mode
+    )
     payload = build_handoff_payload(family, query).model_dump()
     try:
         from backend.observability.tracer import trace_collector

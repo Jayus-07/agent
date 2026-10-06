@@ -20,6 +20,7 @@ domain_graph_registry.register(DomainGraph(
     supports_checkpoint=False,
     supports_interrupt=False,
     entry_modes=("execute",),
+    entry_mode_key="TRAVEL_GLOBAL_ENTRY_MODE",
     continuation_policy="context_resume",
     subflow="commerce",  # 域内子流标签（展示语义）：与决策层归一 travel_commerce → (travel, commerce) 一致
     domain="travel",  # 归属顶级域：执行层选图/回写层登记均由此派生，不再靠 f"travel_{subflow}" 拼接

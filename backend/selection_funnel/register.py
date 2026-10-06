@@ -27,6 +27,7 @@ domain_graph_registry.register(DomainGraph(
     supports_checkpoint=False,
     supports_interrupt=False,
     entry_modes=("execute", "guide"),
+    entry_mode_key="SELECTION_GLOBAL_ENTRY_MODE",
     continuation_policy="single_turn",
     # 顶级域自身的活动标签（决策层 subflow 展示位）：同上，不写 subflow（冻结口径）。
     decision_subflow="funnel",

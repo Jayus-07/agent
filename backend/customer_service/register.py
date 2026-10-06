@@ -18,5 +18,6 @@ domain_graph_registry.register(DomainGraph(
     supports_checkpoint=True,
     supports_interrupt=False,
     entry_modes=("execute", "guide"),
+    entry_mode_key="CS_GLOBAL_ENTRY_MODE",
     continuation_policy="checkpoint",
 ))

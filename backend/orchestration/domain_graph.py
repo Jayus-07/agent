@@ -53,6 +53,7 @@ class DomainGraph:
     supports_streaming: bool = True
     result_contract_version: str = "v1"
     entry_modes: tuple[str, ...] = ("execute",)
+    entry_mode_key: str | None = None
     continuation_policy: str | None = None
 
     def __post_init__(self) -> None:

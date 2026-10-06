@@ -86,6 +86,10 @@ def _stage_paths(stage: str) -> list[str]:
             "backend/tests/orchestration/graph/test_clarify_flow.py",
             "backend/tests/orchestration/graph/test_reply_source.py",
         ],
+        "F": [
+            "backend/tests/orchestration/test_domain_registration_surface.py",
+            "backend/tests/orchestration/router/test_router_domain_literal_guard.py",
+        ],
     }
     return stage_test.get(stage, []) + BASELINE_TESTS
 
@@ -123,7 +127,11 @@ _STAGE_REQUIRED_KEYS = {
         "STATE_CANONICAL_SOURCE_PASS",
         "LEGACY_PROJECTION_PASS",
     ),
-    "F": ("DOMAIN_REGISTRATION_GOVERNANCE_PASS",),
+    "F": (
+        "DOMAIN_REGISTRATION_GOVERNANCE_PASS",
+        "NEW_DOMAIN_REGISTRATION_SURFACE_PASS",
+        "ROUTER_DOMAIN_LITERAL_GUARD_PASS",
+    ),
     "G": ("RUNTIME_OBSERVABILITY_PASS",),
 }
 
@@ -175,6 +183,11 @@ def verify(stage: str, final: bool = False) -> dict[str, bool]:
             "STATE_CANONICAL_SOURCE_PASS": stage_ok,
             "LEGACY_PROJECTION_PASS": stage_ok,
             "STATE_UNKNOWN_KEY_TOTAL": 0 if stage_ok else 1,
+        })
+    if stage == "F":
+        results.update({
+            "NEW_DOMAIN_REGISTRATION_SURFACE_PASS": stage_ok,
+            "ROUTER_DOMAIN_LITERAL_GUARD_PASS": stage_ok,
         })
     results["PRODUCTION_BEHAVIOR_CHANGED"] = not results["GLOBAL_REGRESSION_PASS"]
     results["AGENT_RUNTIME_ARCH_V2_READY"] = ready_for_final(results) if final else False
