@@ -167,10 +167,12 @@ class TestTraceStorePG:
         store = get_trace_store()
         store.save_dict(_trace_dict("pgtid0400"))
         store.save_dict(_trace_dict("pgtid0401", rejected=True))
-        # created_at 为写入时刻（本地时间文本），cutoff 用相对写入时刻的窗口
+        # created_at 为写入时刻——N-3 起统一 UTC 文本（time.gmtime 同源），
+        # cutoff 必须用 gmtime：localtime（宿主 +8h）会让窗口下限晚于全部
+        # UTC 写入行，list_since 恒空
         fmt = "%Y-%m-%d %H:%M:%S"
-        cutoff_before = time.strftime(fmt, time.localtime(time.time() - 60))
-        cutoff_after = time.strftime(fmt, time.localtime(time.time() + 3600))
+        cutoff_before = time.strftime(fmt, time.gmtime(time.time() - 60))
+        cutoff_after = time.strftime(fmt, time.gmtime(time.time() + 3600))
         rows = store.list_since(cutoff_before)
         assert {r["id"] for r in rows} == {"pgtid0400", "pgtid0401"}
         assert store.list_since(cutoff_after) == []
