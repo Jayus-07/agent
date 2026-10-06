@@ -73,6 +73,40 @@ def _llm_json(messages) -> Any:
     return json.loads(resp.content.strip().strip("`").removeprefix("json").strip())
 
 
+async def _invoke_governed_tool(tool_obj: Any, tool_name: str,
+                                arguments: dict[str, Any]) -> Any:
+    """Workflow Tool Adapter：禁止在 Workflow 内裸调 Tool。"""
+
+    from backend.core.tool_governance.guard import (
+        ToolCallRequest,
+        governance_runtime,
+    )
+    from backend.core.tool_runtime.models import ToolStatus
+
+    result = await governance_runtime.execute(
+        ToolCallRequest(
+            capability=tool_name,
+            arguments=arguments,
+            intent_fit="match",
+            selection_reason="market_research workflow evidence pipeline",
+        ),
+        lambda: tool_obj.invoke(arguments),
+        normalize_output=True,
+        domain="selection",
+        tool_name=tool_name,
+        trace_capability=tool_name,
+        trace_agent="market_research",
+    )
+    if result.status is not ToolStatus.SUCCESS:
+        raise RuntimeError(
+            result.error_message or result.error_code or f"{tool_name} 调用失败"
+        )
+    payload = result.data
+    if isinstance(payload, dict) and payload.get("status") == "success":
+        return payload.get("data")
+    return payload
+
+
 @workflow(
     name="market_research",
     description="品类市场调研 — 采集/证据标准化/分组分析/事实锁定/12章节报告五段式证据管线",
@@ -103,8 +137,11 @@ class MarketResearch:
         search_failures = 0
         for q in queries:
             try:
-                md = web_search_tool.invoke({"query": q,
-                                             "num_results": SEARCH_RESULTS_PER_QUERY})
+                md = await _invoke_governed_tool(
+                    web_search_tool,
+                    "web_search_tool",
+                    {"query": q, "num_results": SEARCH_RESULTS_PER_QUERY},
+                )
                 parsed = parse_search_results(md)
                 if not parsed:
                     search_failures += 1  # 零结果也算软失败，进覆盖缺口
@@ -130,7 +167,11 @@ class MarketResearch:
             if len(raw) >= MAX_CRAWL:
                 break
             try:
-                content = web_crawl_tool.invoke({"url": r["url"]})
+                content = await _invoke_governed_tool(
+                    web_crawl_tool,
+                    "web_crawl_tool",
+                    {"url": r["url"]},
+                )
                 raw.append({**r, "content": str(content)[:RAW_TEXT_LIMIT]})
             except Exception as e:
                 crawl_failures += 1

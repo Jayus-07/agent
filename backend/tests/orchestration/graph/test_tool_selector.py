@@ -4,9 +4,9 @@
 覆盖:
   - 门控: fast_path 高置信零 LLM / flag 关闭直通 / 非 direct 模式 / 无候选
   - FC 成功: 选定候选 + 填参 + candidates 重排
-  - 降级: 越界选择重试后成功 / 重试仍失败 passthrough / 参数校验失败重试
-  - 无 tool_calls（无匹配）→ 保守直通
-  - LLM 异常 → passthrough
+  - 降级: 越界选择重试后成功 / 重试仍失败澄清 / 参数校验失败重试
+  - 无 tool_calls（无匹配）→ 澄清阻断
+  - LLM 异常 → 澄清阻断
   - events 层: fc/no_match 发 log 事件，直通不发
 """
 from unittest.mock import patch
@@ -135,13 +135,13 @@ class TestFCSelection:
         assert out["_tool_selection"]["source"] == "fc"
         assert out["_tool_selection"]["attempts"] == 1
 
-    def test_empty_args_falls_back_to_question(self):
-        """business.analyze 全 auto 参数 → 模型返回空 args → 回退 question"""
+    def test_empty_args_do_not_inject_auto_only_parameters(self):
+        """business.analyze 全 auto 参数 → 模型返回空 args → 保持运行时注入"""
         fake = _FakeLLM([AIMessage(content="", tool_calls=[
             _tc("business__analyze", {})])])
         with patch.object(ts, "llm", fake):
             out = tool_selector_node(_state([{"name": "business.analyze", "score": 0.7}]))
-        assert out["resolved_params"] == {"question": "生成上个月 Amazon US 的销售日报"}
+        assert out["resolved_params"] == {}
 
     def test_out_of_candidate_retry_then_success(self):
         """越界选择 → 带反馈重试 1 次 → 第二次合法则采纳"""
@@ -161,7 +161,7 @@ class TestFCSelection:
         assert out["_tool_selection"]["attempts"] == 2
 
     def test_invalid_enum_retry_then_give_up(self):
-        """参数校验失败重试 1 次仍失败 → passthrough，候选与参数不动"""
+        """参数校验失败重试 1 次仍失败 → 澄清，候选与参数不动"""
         fake = _FakeLLM([
             AIMessage(content="", tool_calls=[
                 _tc("report__generate", {"report_type": "bad_type"})]),
@@ -177,7 +177,7 @@ class TestFCSelection:
         assert out["route_decision"]["candidates"][0]["name"] == "report.generate"
 
     def test_no_tool_calls_means_no_match(self):
-        """模型明确不调工具（无匹配/降级话术）→ 保守直通，不重试"""
+        """模型明确不调工具（无匹配/降级话术）→ 澄清阻断，不重试"""
         fake = _FakeLLM([AIMessage(content="无匹配工具")])
         with patch.object(ts, "llm", fake):
             out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
@@ -478,8 +478,8 @@ class TestSelectorBudget:
     def _fake_selector_model(self, monkeypatch):
         monkeypatch.setattr(ts, "_configured_tool_selector_model", lambda: "fake-selector")
 
-    def test_selector_budget_exhausted_single_candidate_passthrough(self):
-        """selector 预算耗尽：单候选降级直通，不再消耗工具执行保底预算。"""
+    def test_selector_budget_exhausted_blocks_execution(self):
+        """selector 预算耗尽：单候选也必须澄清阻断。"""
         from backend.core.tool_runtime.deadline import RequestDeadline
 
         dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
@@ -488,8 +488,9 @@ class TestSelectorBudget:
         # 直接 patch 返回对象：dict 通道会触发 from_dict 时钟重校准（checkpoint 语义）
         with patch.object(ts, "_deadline_from_state", lambda _s: dl):
             out = tool_selector_node(st)
-        assert out["_tool_selection"]["source"] == "passthrough"
+        assert out["_tool_selection"]["source"] == "clarify"
         assert out["_tool_selection"]["reason"] == "selector_budget_exhausted"
+        assert out["selection_blocked"] is True
 
     def test_selector_budget_exhausted_multi_candidates_clarify(self):
         """selector 预算耗尽 + 多候选：走澄清阻断（同 LLM 失败语义）。"""

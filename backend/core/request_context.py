@@ -179,6 +179,9 @@ class RequestContext:
         from backend.infra.llm.budget import (
             bind_request_budget, clear_request_budget,
         )
+        from backend.core.tool_governance.budget import (
+            RequestToolBudget, bind_tool_budget, reset_tool_budget,
+        )
         from backend.observability.tracer import trace_collector
         from backend.shared.logger import set_log_context
         from backend.rag.context import attach_identity
@@ -192,10 +195,13 @@ class RequestContext:
                     user_id=self.user_id,
                     tenant_id=self.tenant_id,
                 )
+                bind_tool_budget(RequestToolBudget())
             else:
                 clear_request_budget()
+                reset_tool_budget()
         elif self.bind_sink:
             clear_request_budget()
+            reset_tool_budget()
         set_session_id(self.session_id)
         set_current_user_id(self.user_id)
         set_tool_user_id(self.user_id)

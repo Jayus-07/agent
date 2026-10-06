@@ -3,14 +3,12 @@
 该层只负责调用已注册 Tool、解析统一封套和返回结构化业务数据；不提供
 任何本地假数据。Tool 的失败会转成明确异常，由旅游域专家和 SSE 原样收口。
 
-治理口径：本层是同步域图路径，不经 safe_tool_executor（async 执行器），
-直调 `.func` 后补统一记账出口 record_tool_result，保证管理端 /tools
-统计与七分类错误分布覆盖本链路（2026-10-02 审查 P3 收口）。
+治理口径：本层是同步域图路径，通过 GovernanceRuntime 的同步适配器进入
+SafeToolExecutor；Tool Adapter 只负责调用具体 Tool 并原样传递统一封套。
 """
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
 
 from backend.config import map as map_config
@@ -29,53 +27,6 @@ class LiveSearchError(RuntimeError):
     """真实数据源不可用或返回了无法消费的结构。"""
 
 
-def _record_tool_metrics(raw: Any, tool_name: str, latency_ms: int,
-                         error: str = "", error_code: str = ""):
-    """把一次直调转换成 ToolResult 并记入治理指标。"""
-    try:
-        from backend.core.tool_runtime.metrics import record_tool_result
-        from backend.core.tool_runtime.models import ToolResult, ToolStatus
-
-        payload = None
-        if isinstance(raw, str):
-            try:
-                payload = json.loads(raw)
-            except (TypeError, json.JSONDecodeError):
-                payload = None
-        failed = not (isinstance(payload, dict) and payload.get("status") == "success")
-        result = ToolResult(
-            status=ToolStatus.FAILED if failed else ToolStatus.SUCCESS,
-            tool_name=tool_name,
-            latency_ms=latency_ms,
-            data=payload,
-            error_code=(
-                (
-                    error_code
-                    or (payload.get("error_code") or payload.get("code")
-                        if isinstance(payload, dict) else "")
-                    or "TOOL_FAILED"
-                )
-                if failed else None
-            ),
-            error_message=(
-                error or str(payload.get("error") or "")
-                if failed and isinstance(payload, dict) else error
-            ),
-        )
-        record_tool_result(result, domain="travel", tool_name=tool_name)
-        return result
-    except Exception:
-        logger.debug("[LiveSearch] Tool 治理记账失败: %s", tool_name, exc_info=True)
-        from backend.core.tool_runtime.models import ToolResult, ToolStatus
-        return ToolResult(
-            status=ToolStatus.FAILED,
-            tool_name=tool_name,
-            latency_ms=latency_ms,
-            error_code="TRACE_METRICS_ERROR",
-            error_message=error or "Tool 治理记账失败",
-        )
-
-
 def _invoke(
     tool: Any,
     tool_name: str,
@@ -84,57 +35,61 @@ def _invoke(
     agent: str = "travel_live_search",
     **kwargs: Any,
 ) -> str:
-    """同步直调 Tool 并补延迟与治理记账，原样返回封套字符串。
-
-    Tool 自身按「新 Tool 三规」把失败折叠进失败封套；这里只兜意外异常
-    （记 FAILED 后原样上抛，失败语义仍由专家层收口）。
-    """
-    from backend.core.tool_runtime.models import ToolResult, ToolStatus
+    """同步 Tool Adapter：所有真实调用均先经过 GovernanceRuntime。"""
+    from backend.core.tool_governance.guard import (
+        ToolCallRequest,
+        governance_runtime,
+    )
+    from backend.core.tool_runtime.models import ToolStatus
     from backend.core.tool_runtime.tracing import finish_tool_span, start_tool_span
     from backend.travel.services.tool_cache import cached_envelope
 
-    started = time.monotonic()
+    def _call() -> str:
+        from backend.config.travel import TRAVEL_TOOL_CACHE_TTL
+
+        raw, cache_hit = cached_envelope(
+            tool_name,
+            dict(kwargs),
+            lambda: tool.invoke(kwargs),
+            ttl=TRAVEL_TOOL_CACHE_TTL,
+        )
+        if cache_hit:
+            payload = json.loads(raw)
+            payload["cache_hit"] = True
+            return json.dumps(payload, ensure_ascii=False)
+        return raw
+
+    request = ToolCallRequest(
+        capability=tool_name,
+        arguments=dict(kwargs),
+        domain="travel",
+        intent_fit="match",
+        selection_reason=capability or tool_name,
+    )
     span = start_tool_span(
         tool_name,
         capability=capability or tool_name,
         params=kwargs,
         agent=agent,
     )
-    try:
-        def _call() -> str:
-            return tool.func(**kwargs)
-
-        from backend.config.travel import TRAVEL_TOOL_CACHE_TTL
-        raw, _cache_hit = cached_envelope(
-            tool_name, dict(kwargs), _call, ttl=TRAVEL_TOOL_CACHE_TTL)
-        if _cache_hit:
-            try:
-                _envelope = json.loads(raw)
-                _envelope["cache_hit"] = True  # 观测注：命中标记，不改业务语义
-                raw = json.dumps(_envelope, ensure_ascii=False)
-            except Exception:  # noqa: BLE001
-                pass
-    except Exception as exc:
-        result = ToolResult(
-            status=ToolStatus.FAILED,
-            tool_name=tool_name,
-            latency_ms=round((time.monotonic() - started) * 1000),
-            error_code=type(exc).__name__,
-            error_message=str(exc),
+    executed = governance_runtime.execute_sync(
+        request,
+        _call,
+        normalize_output=True,
+        domain="travel",
+        tool_name=tool_name,
+        trace_span=span,
+        trace_capability=capability or tool_name,
+        trace_agent=agent,
+    )
+    finish_tool_span(span, executed)
+    if executed.status is not ToolStatus.SUCCESS:
+        raise LiveSearchError(
+            executed.error_message or executed.error_code or f"{tool_name} 调用失败"
         )
-        _record_tool_metrics(
-            None,
-            tool_name,
-            result.latency_ms,
-            error=f"{type(exc).__name__}: {exc}",
-            error_code=type(exc).__name__,
-        )
-        finish_tool_span(span, result)
-        raise
-    result = _record_tool_metrics(
-        raw, tool_name, round((time.monotonic() - started) * 1000))
-    finish_tool_span(span, result)
-    return raw
+    if not isinstance(executed.data, dict):
+        raise LiveSearchError(f"{tool_name} 返回了无效封套")
+    return json.dumps(executed.data, ensure_ascii=False)
 
 
 def _decode_success(raw: str, tool_name: str) -> dict[str, Any]:

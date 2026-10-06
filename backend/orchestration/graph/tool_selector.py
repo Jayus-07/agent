@@ -13,7 +13,7 @@ question 透传"的旧行为。
 
 降级策略：
   - 多候选时 LLM 超时/异常/无 tool_calls/校验重试失败 → 澄清，不执行首项
-  - 单候选仍保留旧 passthrough 兼容行为
+  - 单候选也必须有明确的 FC match；模型未选择时不能硬执行
   - 选择越界/参数校验失败 → 带反馈重试 1 次
 """
 from __future__ import annotations
@@ -148,70 +148,14 @@ def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
 
 
 def _router_top_candidate_fallback(state: dict, reason: str) -> dict | None:
-    """selector 基础设施故障（LLM 超时/预算耗尽）时的首候选兜底（TD-06）。
+    """保留旧导入名，但彻底禁用按候选分数自动执行。"""
 
-    路由器自身分数分布可决策时（top ≥ floor 且对次选领先 ≥ margin），
-    直接采纳路由首候选执行——selector 挂掉不应否决路由器的确定性证据，
-    也不应把整问打成澄清失败。分数模糊（不满足双阈值）返回 None，
-    调用方维持 clarify：模糊问题宁问不猜。
-
-    返回与 FC 成功同构的状态（source=router_top_candidate 可溯源）；
-    floor=0 时返回 None（配置关闭兜底，回旧行为）。
-    """
-    from backend.config import (
-        TOOL_SELECTOR_TOP_CANDIDATE_FLOOR,
-        TOOL_SELECTOR_TOP_CANDIDATE_MARGIN,
+    logger.info(
+        "[ToolSelector] 忽略已废弃的首候选兜底: reason=%s candidates=%s",
+        reason,
+        len((state.get("route_decision") or {}).get("candidates") or []),
     )
-    from backend.observability.metrics import record_tool_selection
-
-    floor = TOOL_SELECTOR_TOP_CANDIDATE_FLOOR
-    if floor <= 0:
-        return None
-    decision = state.get("route_decision") or {}
-    scored = [
-        (str(c.get("name") or ""), float(c.get("score") or 0))
-        for c in (decision.get("candidates") or [])
-        if isinstance(c, dict) and c.get("name")
-    ]
-    if not scored:
-        return None
-    top_cap, top_score = scored[0]
-    margin = (top_score - scored[1][1]) if len(scored) > 1 else top_score
-    if top_score < floor or margin < TOOL_SELECTOR_TOP_CANDIDATE_MARGIN:
-        return None
-    query = state.get("query") or state.get("question") or ""
-    params = {"question": query}
-    new_decision = {
-        **decision,
-        "candidates": [{"name": top_cap, "score": top_score}] + [
-            {"name": n, "score": s} for n, s in scored[1:]
-        ],
-    }
-    _record("router_top", reason, capability=top_cap)
-    try:
-        record_tool_selection("router_top_candidate", reason)
-    except Exception:
-        pass
-    logger.warning(
-        "[ToolSelector] %s → 首候选兜底生效: %s (score=%.2f, margin=%.2f) "
-        "——selector 基础设施故障不否决路由器确定性证据",
-        reason, top_cap, top_score, margin,
-    )
-    return {
-        **state,
-        "route_decision": new_decision,
-        "resolved_params": params,
-        "selected_tool": top_cap,
-        "tool_route_mode": state.get("tool_route_mode") or "llm_selection",
-        "_tool_selection": {
-            "source": "router_top_candidate",
-            "reason": reason,
-            "capability": top_cap,
-            "params": params,
-            "top_score": round(top_score, 3),
-            "margin": round(margin, 3),
-        },
-    }
+    return None
 
 
 def _build_user_prompt(query: str, valid_caps: list[str],
@@ -375,16 +319,15 @@ def _selector_deadline_log(deadline, decision: str, reason: str) -> None:
 
 
 def _selector_degrade(state: dict, reason: str) -> dict:
-    """selector 预算耗尽时的降级：多候选澄清 / 单候选直通（同 LLM 失败路径，
-    绝不继续消耗工具执行保底预算）。"""
-    from backend.observability.metrics import record_tool_selection
+    """selector 预算耗尽时澄清阻断，不继续消耗工具执行预算。"""
 
     _selector_deadline_log(_deadline_from_state(state), "selector_skip", reason)
-    try:
-        record_tool_selection("passthrough", reason)
-    except Exception:
-        pass
-    return {**state, "_tool_selection": {"source": "passthrough", "reason": reason}}
+    candidates = [
+        str(item.get("name"))
+        for item in ((state.get("route_decision") or {}).get("candidates") or [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    return _clarify_selection(state, reason, candidates)
 
 
 def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
@@ -397,7 +340,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
     decision = state.get("route_decision") or {}
     tools, fn2cap = capabilities_to_tools(valid_caps)
     if not tools:
-        return _passthrough(state, "schema_convert_failed")
+        return _clarify_selection(state, "schema_convert_failed", valid_caps)
 
     deadline = _deadline_from_state(state)
     selector_budget_ms = deadline.selector_budget_ms if deadline is not None else None
@@ -413,12 +356,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                 reason="selector_budget_exhausted",
             ),
         )
-        if len(valid_caps) > 1:
-            fallback = _router_top_candidate_fallback(state, "selector_budget_exhausted")
-            if fallback is not None:
-                return fallback
-            return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
-        return _selector_degrade(state, "selector_budget_exhausted")
+        return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
 
     # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
     # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录
@@ -439,12 +377,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                         reason="selector_budget_exhausted",
                     ),
                 )
-                if len(valid_caps) > 1:
-                    fallback = _router_top_candidate_fallback(state, "selector_budget_exhausted")
-                    if fallback is not None:
-                        return fallback
-                    return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
-                return _selector_degrade(state, "selector_budget_exhausted")
+                return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
             # 单次尝试超时同时被角色策略与 selector 剩余预算封顶
             timeout_s = min(timeout_s, selector_remaining_ms / 1000)
 
@@ -464,18 +397,14 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             if raw is not None:
                 break
         if raw is None:
-            # 多候选时不能因 FC 故障盲执行首项；路由分数可决策时走首候选
-            # 兜底（TD-06），仍模糊才 clarify。单候选保留兼容路径。
+            # FC 故障时不能因候选分数或候选数量自动执行。
             logger.warning("[ToolSelector] LLM 超时/异常")
             _selector_deadline_log(deadline, "selector_timeout", "llm_failed")
-            if len(valid_caps) > 1:
-                fallback = _router_top_candidate_fallback(state, "llm_failed")
-                if fallback is not None:
-                    return fallback
-                return _clarify_selection(state, "llm_failed", valid_caps)
-            return _passthrough(state, "llm_failed")
+            return _clarify_selection(state, "llm_failed", valid_caps)
 
         tool_calls = getattr(raw, "tool_calls", None) or []
+        fit = "match"
+        reason = ""
         if not tool_calls:
             # 文本兜底：模型把调用写成了 JSON 文本
             content = getattr(raw, "content", "") or ""
@@ -486,22 +415,34 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             else:
                 # 多候选时模型明确不调工具不能解释为首项可执行。
                 logger.info(f"[ToolSelector] 模型未调用工具: {content[:100]}")
-                if len(valid_caps) > 1:
-                    return _clarify_selection(state, "model_declined", valid_caps)
                 elapsed_ms = int((time.time() - t0) * 1000)
                 _record("no_match", "model_declined", t0=t0)
-                return {**state, "_tool_selection": {
-                    "source": "no_match", "candidates": valid_caps,
-                    "elapsed_ms": elapsed_ms,
-                }}
+                return {
+                    **state,
+                    "selection_blocked": True,
+                    "_tool_selection": {
+                        "source": "no_match", "candidates": valid_caps,
+                        "reason": "model_declined",
+                        "next_action": "clarify",
+                        "elapsed_ms": elapsed_ms,
+                    },
+                }
         else:
             tc = tool_calls[0]
             cap = fn2cap.get(tc.get("name", ""))
             args = dict(tc.get("args") or {})
+            fit = tc.get("fit", args.pop("_fit", "match"))
+            reason = str(tc.get("reason") or args.pop("_reason", ""))
             if cap is None:
                 feedback = f"工具 {tc.get('name')} 不在候选列表内，只能从候选工具中选择。"
                 logger.warning(f"[ToolSelector] 越界选择 {tc.get('name')}，重试")
                 continue
+            if fit not in {"match", "no_match"}:
+                return _clarify_selection(state, "invalid_intent_fit", valid_caps)
+            if fit == "no_match":
+                return _clarify_selection(
+                    state, "tool_intent_mismatch", valid_caps
+                )
 
         # selector 结果校验（Step 2）：非法选择直接拒绝进现有 fallback，
         # 不做带反馈重试（重试只会教模型钻规则，不会改变合法性）
@@ -511,10 +452,9 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             logger.warning(
                 f"[ToolSelector] 非法选择 {cap}（{reject_reason}），直接拒绝")
             _record("rejected", reject_reason, capability=cap)
-            if len(valid_caps) > 1:
-                return _clarify_selection(state, f"selection_rejected:{reject_reason}",
-                                          valid_caps)
-            return _passthrough(state, f"selection_rejected:{reject_reason}")
+            return _clarify_selection(
+                state, f"selection_rejected:{reject_reason}", valid_caps
+            )
 
         schema = tool_registry.get_schema(cap)
         err = validate_params(schema["params"], args) if schema else None
@@ -523,7 +463,11 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             logger.warning(f"[ToolSelector] {cap} 参数校验失败: {err}，重试")
             continue
 
-        params = args or {"question": query}
+        # 只有声明了 question 的 capability 才能使用旧的 question 回退。
+        # auto-only capability（如 business.analyze）必须等待运行时注入，
+        # 不能把 question 伪装成其参数，也不能接受模型主动传 auto 字段。
+        schema_params = (tool_registry.get_schema(cap) or {}).get("params") or {}
+        params = args or ({"question": query} if "question" in schema_params else {})
         # 模型选中的候选提到首位（skill_executor 取 candidates[0]）
         rest = [c for c in (decision.get("candidates") or [])
                 if isinstance(c, dict) and c.get("name") != cap]
@@ -546,13 +490,12 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             "_tool_selection": {
                 "source": "fc", "capability": cap, "params": params,
                 "candidates": valid_caps, "attempts": attempt + 1,
+                "fit": "match", "selection_reason": reason,
                 "elapsed_ms": int((time.time() - t0) * 1000),
             },
         }
 
-    if len(valid_caps) > 1:
-        return _clarify_selection(state, "fc_invalid_after_retry", valid_caps)
-    return _passthrough(state, "fc_invalid_after_retry")
+    return _clarify_selection(state, "fc_invalid_after_retry", valid_caps)
 
 
 def _in_rollout(session_id: str) -> bool:

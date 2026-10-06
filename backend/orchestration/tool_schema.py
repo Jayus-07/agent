@@ -21,6 +21,7 @@ import re
 from typing import Optional
 
 from backend.orchestration.capability_registry import tool_registry
+from backend.core.tool_governance.schema_validator import legacy_params_to_schema
 
 # OpenAI function name 约束: ^[a-zA-Z0-9_-]+$
 _FUNC_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -58,25 +59,9 @@ def capability_to_function(capability: str) -> Optional[dict]:
     if not schema:
         return None
 
-    properties: dict = {}
-    required: list[str] = []
-    for pname, spec in schema["params"].items():
-        if isinstance(spec, str):
-            # 旧式声明：视为 string 可选
-            properties[pname] = {"type": "string", "description": spec}
-            continue
-        if spec.get("auto"):
-            # 运行时自动注入（previous_outputs），不由模型填写
-            continue
-        prop = {
-            "type": _JSON_TYPES.get(spec.get("type", "string"), "string"),
-            "description": spec.get("description", ""),
-        }
-        if spec.get("enum"):
-            prop["enum"] = list(spec["enum"])
-        properties[pname] = prop
-        if spec.get("required"):
-            required.append(pname)
+    json_schema = legacy_params_to_schema(schema["params"], include_auto=False)
+    properties = dict(json_schema.get("properties") or {})
+    required = list(json_schema.get("required") or [])
 
     desc = schema["description"]
     example = schema.get("示例")
@@ -92,6 +77,7 @@ def capability_to_function(capability: str) -> Optional[dict]:
                 "type": "object",
                 "properties": properties,
                 "required": required,
+                "additionalProperties": False,
             },
         },
     }
