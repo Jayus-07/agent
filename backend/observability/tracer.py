@@ -785,6 +785,10 @@ class TraceCollector:
         """
         if (record.metadata.get("rejection") or {}).get("rejected"):
             return "rejected"
+        # STOP CS-A P0-3/F4：用户主动中止的 trace 终态 = cancelled（优先级
+        # 仅次于 rejection —— 取消不是错误，也不得被聚合成 success）
+        if record.metadata.get("cancelled"):
+            return "cancelled"
         business = record.metadata.get("business_outcome")
         if business in ("degraded", "failed"):
             return business

@@ -684,6 +684,12 @@ class GraphRunner:
             # ContextVar 不跨线程：worker 入口整体绑定一次请求上下文；
             # Send 内部线程分支由节点入口的 bind_from_state 覆盖
             request_ctx.bind()
+            # STOP CS-A P0-3：把 /chat/abort 的 stop_event 绑进请求上下文
+            # （ContextVar 随 copy_context 传播进域图节点与专家线程），
+            # CS 图内各取消检查边界据此在节点/调用边界提前终止
+            from backend.core.request_context import bind_cancel_event
+
+            bind_cancel_event(stop_event)
             # context SSE 事件 sink（L1/L2/L3 压缩发生时发声，2026-09-22）：
             # worker 线程内挂载（ContextVar 不跨线程继承），退出时还原
             from backend.context_budget.metrics import (
@@ -805,10 +811,12 @@ class GraphRunner:
             except Exception as e:
                 logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
                 ctx["worker_error"] = True
-                import traceback as _tb
-                _tb_tail = "\n".join(_tb.format_exc().splitlines()[-12:])
+                # Internal Runtime Status ≠ User-facing Error Message：
+                # 用户帧只保留单行可读原因；堆栈尾 12 行此前直接拼进
+                # message 被前端原样渲染（STOP H 收口），全栈只在日志
+                # （上一行 exc_info=True）与 trace 留存。
                 merged_q.put(("evt", {"event": "error",
-                                      "data": {"message": f"执行失败: {e}\n{_tb_tail}",
+                                      "data": {"message": f"执行失败: {e}",
                                                "ts": time.time()}}))
             finally:
                 reset_context_sink(_sink_token)
@@ -826,11 +834,23 @@ class GraphRunner:
             各自 _end_root+finish，而「生成器被关闭」路径什么都不执行——该轮
             trace 永不落库、root span 泄漏在内存 collector 里，中止/断连恰是
             流式最常见的退出方式。
+
+            STOP CS-A P0-3（F4）：用户主动中止的终态语义 = cancelled（不再
+            伪装成 error），并落 cancel_source / cancel_stage 归因标签。
             """
             if ctx.get("trace_finalized"):
                 return
             ctx["trace_finalized"] = True
             try:
+                if status == "cancelled":
+                    trace.tags["cancel_source"] = "user"
+                    stage = (
+                        (ctx.get("cs_context_snapshot") or {}).get("cancel_stage")
+                        or ctx.get("cancel_stage")
+                        or "graph_boundary"
+                    )
+                    trace.tags["cancel_stage"] = str(stage)
+                    trace.metadata["cancelled"] = True
                 _end_root(trace, status=status, metrics=metrics or {})
                 trace_collector.finish(
                     trace,
@@ -849,7 +869,8 @@ class GraphRunner:
             # ── 图执行结束后的收尾 ──
             if ctx["aborted"]:
                 yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
-                _finalize_trace("error", {"reason": "user_abort"})
+                # STOP CS-A P0-3/F4：trace 终态 = cancelled（cancel_source= user）
+                _finalize_trace("cancelled", {"reason": "user_abort"})
                 return
             if ctx["worker_error"]:
                 _finalize_trace("error", {"error": "graph_failed"})
@@ -865,7 +886,7 @@ class GraphRunner:
                 yield from emit_delta_events(answer, stop_event)
                 if stop_event is not None and stop_event.is_set():
                     yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
-                    _finalize_trace("error", {"reason": "user_abort"})
+                    _finalize_trace("cancelled", {"reason": "user_abort"})
                     return
 
             # ── Tracing: 重建 span 树 ──
@@ -885,6 +906,7 @@ class GraphRunner:
 
             _persist_cs_turn_if_needed(
                 ctx["cs_context_snapshot"], session_id, question, answer, trace.id,
+                tenant_id=tenant_id,
             )
 
             # 内部事件：ask() 从这里取最终回答（SSE 层过滤）
@@ -923,7 +945,12 @@ class GraphRunner:
             reason = ("user_abort"
                       if (stop_event is not None and stop_event.is_set())
                       or ctx["aborted"] else "client_disconnect")
-            _finalize_trace("error", {"reason": reason})
+            # STOP CS-A P0-3/F4：用户中止 → cancelled；纯断连保持 error
+            #（producer 继续跑完，不是取消语义）
+            _finalize_trace(
+                "cancelled" if reason == "user_abort" else "error",
+                {"reason": reason},
+            )
             raise
         except Exception as e:
             import traceback as _tb
@@ -1063,8 +1090,14 @@ def _persist_cs_turn_if_needed(
     question: str,
     answer: str,
     trace_id: str,
+    tenant_id: str = "",
 ) -> None:
-    """Fire-and-forget CS turn persistence — no-op when not a CS request."""
+    """Fire-and-forget CS turn persistence — no-op when not a CS request.
+
+    STOP CS-A P0-2：租户显式传递给 record_cs_turn（keyword-only 必传），
+    优先取身份链的 tenant_id，cs_context 快照兜底；两者皆空时由
+    conversation_store fail-closed 跳过落库。
+    """
     if not cs_context or not cs_context.get("conversation_id"):
         return
     try:
@@ -1076,6 +1109,7 @@ def _persist_cs_turn_if_needed(
             answer=answer,
             trace_id=trace_id,
             cs_route=cs_context.get("cs_route"),
+            tenant_id=str(tenant_id or cs_context.get("tenant_id") or ""),
         )
     except Exception:
         logger.debug("[GraphRunner] CS turn persistence failed", exc_info=True)

@@ -34,6 +34,11 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
     2. pending 已过期 → 清理 + 超时回复 → cs_reporter
     3. pending 有效 → 检测用户意图 → 执行/取消/追问 → cs_reporter
     """
+    # STOP CS-A P0-3（F2）：pending 处理前的取消检查（确认消费是写操作）
+    from backend.core.request_context import raise_if_cancelled
+
+    raise_if_cancelled("cs_pending")
+
     pending_action = state.get("pending_action")
     if not pending_action:
         return Command(goto="cs_supervisor", update={})

@@ -45,7 +45,13 @@ def cs_graph_node(state: dict) -> dict:
         tenant_id=cs_context.get("tenant_id", "default"),
     )
 
+    # STOP CS-A P0-3（F2）：进入 cs_graph_node 前的取消检查 —— 用户已点
+    # 停止时不启动任何 CS 子图节点/LLM 调用（RequestCancelled 在下方
+    # except 统一转 cancelled 语义，不走兜底话术）
+    from backend.core.request_context import RequestCancelled, raise_if_cancelled
+
     try:
+        raise_if_cancelled("cs_graph_entry")
         graph = get_cs_graph()
         invoke_config = _build_invoke_config(
             conversation_id,
@@ -53,6 +59,27 @@ def cs_graph_node(state: dict) -> dict:
             user_id=cs_context.get("authenticated_user_id", ""))
         final_state = graph.invoke(cs_input, config=invoke_config)
         result = build_cs_graph_result(final_state)
+    except RequestCancelled as exc:
+        # STOP CS-A P0-3：用户中止不是系统故障 —— 不落兜底话术、不产生
+        # 正常回复；final_answer 置空（runner 不落库/不发 done），cancel
+        # 归因随 cs_context 快照回传（trace.cancel_stage）。中止轮不构造
+        # RuntimeResult 投影（status 枚举无 cancelled，且 runner 随后在
+        # 节点边界 break，投影不再被消费）。
+        logger.info("[cs_graph_node] 用户中止，CS 图在 %s 边界终止", exc.stage)
+        return {
+            "final_answer": "",
+            "cs_context": {
+                "authenticated_user_id": cs_context.get("authenticated_user_id"),
+                "session_id": cs_context.get("session_id"),
+                "cs_target": cs_context.get("cs_target"),
+                "conversation_id": conversation_id,
+                "cancelled": True,
+                "cancel_stage": exc.stage,
+            },
+            "cs_action_result": {},
+            "cs_audit_entries": [],
+            "cs_pending_action": None,
+        }
     except Exception:
         logger.exception("[cs_graph_node] CS Graph 执行异常，降级返回兜底回复")
         return attach_runtime_result(
