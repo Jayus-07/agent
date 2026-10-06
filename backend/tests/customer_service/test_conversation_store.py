@@ -26,6 +26,7 @@ class TestRecordCsTurn:
                 answer="你好！",
                 trace_id="trace-abc",
                 cs_route={"intent": "greeting", "confidence": 0.95},
+                tenant_id="default",
             )
 
     def test_soft_fail_on_run_sync_error(self):
@@ -41,6 +42,7 @@ class TestRecordCsTurn:
                 user_id="user-1",
                 question="test",
                 answer="test",
+                tenant_id="default",
             )
 
     def test_soft_fail_on_import_error(self):
@@ -58,6 +60,7 @@ class TestRecordCsTurn:
                     user_id="user-1",
                     question="test",
                     answer="test",
+                    tenant_id="default",
                 )
 
     def test_no_trace_id_is_valid(self):
@@ -75,6 +78,7 @@ class TestRecordCsTurn:
                 answer="a",
                 trace_id=None,
                 cs_route=None,
+                tenant_id="default",
             )
 
     def test_returns_none(self):
@@ -90,5 +94,23 @@ class TestRecordCsTurn:
                 user_id="user-1",
                 question="q",
                 answer="a",
+                tenant_id="default",
             )
         assert result is None
+
+    def test_missing_tenant_skips_local_write(self):
+        """STOP CS-A P0-2：缺可信 tenant → fail-closed 跳过（不写 default 租户）。"""
+        from backend.customer_service import conversation_store
+
+        with patch(
+            "backend.customer_service._db_loop.run_sync"
+        ) as mock_sync:
+            result = conversation_store.record_cs_turn(
+                conversation_id="conv-1",
+                user_id="user-1",
+                question="q",
+                answer="a",
+                tenant_id="",
+            )
+        assert result is None
+        mock_sync.assert_not_called()  # 未触碰数据库桥

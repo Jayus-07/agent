@@ -25,6 +25,48 @@ def client(monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def _operator_identity(monkeypatch):
+    """STOP CS-A P0-1：list/stats/detail/traces 已挂 operator 闸 + 租户谓词。
+
+    默认以「平台 admin（tenant=default）」身份驱动全部用例；个别用例
+    （guest/普通用户/他人会话 403）在自己的作用域内覆盖 resolve_identity。
+    """
+    from backend.app.api.identity import Identity
+
+    monkeypatch.setattr(
+        "backend.app.api.identity.resolve_identity",
+        lambda req: Identity(
+            user_id="op-1", user_name="op-1", auth_type="jwt",
+            source="header", roles=("admin",), tenant_id="default",
+        ),
+    )
+
+
+def _conv_row_stub(user_id="user-1", tenant_id="default", assigned=None):
+    """detail/traces 归属校验的会话行桩（AsyncSessionLocal.first()）。"""
+    from types import SimpleNamespace
+
+    class _Result:
+        def first(self):
+            return SimpleNamespace(
+                user_id=user_id, tenant_id=tenant_id,
+                assigned_agent_id=assigned,
+            )
+
+    class _DB:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def execute(self, _q):
+            return _Result()
+
+    return _DB()
+
+
 def _make_summary(**overrides):
     defaults = dict(
         conversation_id="conv-001",
@@ -115,7 +157,11 @@ class TestListConversations:
 class TestGetConversation:
 
     def test_returns_detail(self, client, monkeypatch):
-        """Existing conversation → 200 with messages."""
+        """Existing conversation → 200 with messages（admin 免归属限制）。"""
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal",
+            lambda: _conv_row_stub(),
+        )
         detail = cs_admin.ConversationDetail(
             conversation_id="conv-001",
             user_id="user-1",
@@ -147,20 +193,37 @@ class TestGetConversation:
         assert data["messages"][0]["content"] == "你好"
 
     def test_not_found_returns_404(self, client, monkeypatch):
-        """Missing conversation → 404."""
-        async def fake_get(conv_id, run_sync):
-            return None
+        """Missing conversation → 404（归属校验阶段即判 404，不泄露存在性）。"""
+        class _Result:
+            def first(self):
+                return None
 
-        monkeypatch.setattr(cs_admin, "_async_get_conversation", fake_get)
+        class _DB:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def execute(self, _q):
+                return _Result()
+
+        monkeypatch.setattr("backend.memory.database.AsyncSessionLocal", lambda: _DB())
         resp = client.get("/cs/conversations/nonexistent")
         assert resp.status_code == 404
 
     def test_db_error_returns_503(self, client, monkeypatch):
-        """DB failure → 503."""
-        async def fake_get(conv_id, run_sync):
-            raise RuntimeError("connection refused")
+        """DB failure → 503（归属校验阶段即 503）。"""
+        class _BrokenDB:
+            async def __aenter__(self):
+                raise RuntimeError("connection refused")
 
-        monkeypatch.setattr(cs_admin, "_async_get_conversation", fake_get)
+            async def __aexit__(self, *args):
+                return False
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _BrokenDB()
+        )
         resp = client.get("/cs/conversations/conv-001")
         assert resp.status_code == 503
 
@@ -169,6 +232,11 @@ class TestGetConversationTraces:
 
     def test_returns_traces(self, client, monkeypatch):
         """Traces endpoint resolves trace_ids and returns DTOs."""
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal",
+            lambda: _conv_row_stub(),
+        )
+
         async def fake_trace_ids(conv_id, run_sync):
             return ["trace-1", "trace-2"]
 
@@ -196,6 +264,11 @@ class TestGetConversationTraces:
 
     def test_missing_trace_skipped(self, client, monkeypatch):
         """If trace_store.get returns None, that trace is skipped."""
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal",
+            lambda: _conv_row_stub(),
+        )
+
         async def fake_trace_ids(conv_id, run_sync):
             return ["trace-1", "trace-missing"]
 
@@ -218,10 +291,16 @@ class TestGetConversationTraces:
 
     def test_db_error_returns_503(self, client, monkeypatch):
         """DB failure during trace_id lookup → 503."""
-        async def fake_trace_ids(conv_id, run_sync):
-            raise RuntimeError("connection refused")
+        class _BrokenDB:
+            async def __aenter__(self):
+                raise RuntimeError("connection refused")
 
-        monkeypatch.setattr(cs_admin, "_async_get_trace_ids", fake_trace_ids)
+            async def __aexit__(self, *args):
+                return False
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _BrokenDB()
+        )
         resp = client.get("/cs/conversations/conv-001/traces")
         assert resp.status_code == 503
 
@@ -237,6 +316,7 @@ class TestMyConversations:
             user_id=user_id,
             auth_type="jwt" if user_id else "guest",
             source="header" if user_id else "guest",
+            tenant_id="default",
         )
 
     def test_guest_returns_401(self, client, monkeypatch):
@@ -252,8 +332,9 @@ class TestMyConversations:
         """认证用户 → 返回自己的会话（含消息），user_id/limit 透传 helper。"""
         captured = {}
 
-        async def fake_my(*, user_id, limit):
+        async def fake_my(*, user_id, tenant_id, limit):
             captured["user_id"] = user_id
+            captured["tenant_id"] = tenant_id
             captured["limit"] = limit
             return cs_admin.MyConversationsResponse(items=[
                 cs_admin.MyConversationItem(
@@ -285,7 +366,7 @@ class TestMyConversations:
         )
         resp = client.get("/cs/conversations/my?limit=5")
         assert resp.status_code == 200
-        assert captured == {"user_id": "9", "limit": 5}
+        assert captured == {"user_id": "9", "tenant_id": "default", "limit": 5}
         items = resp.json()["items"]
         assert len(items) == 1
         assert items[0]["conversation_id"] == "conv-9"
@@ -367,8 +448,8 @@ class TestReplayConversationEvents:
             def __init__(self, _db):
                 pass
 
-            async def replay(self, conversation_id, after_seq, limit):
-                calls.append((conversation_id, after_seq, limit))
+            async def replay(self, conversation_id, after_seq, limit, tenant_id=None):
+                calls.append((conversation_id, after_seq, limit, tenant_id))
                 return [
                     {
                         "seq": 4,
@@ -407,7 +488,7 @@ class TestReplayConversationEvents:
         assert [event["event_id"] for event in data["events"]] == [
             "event-4", "event-5",
         ]
-        assert calls == [("conv-1", 3, 2)]
+        assert calls == [("conv-1", 3, 2, "default")]
 
 
 class TestMyMessages:
@@ -428,11 +509,14 @@ class TestMyMessages:
 
     @staticmethod
     def _patch_db(monkeypatch, owner_user_id):
-        """桩掉归属查询：AsyncSessionLocal 返回固定 owner 的假会话。"""
+        """桩掉归属查询：_ensure_my_conversation 读 (user_id, tenant_id) 行。"""
+        from types import SimpleNamespace
 
         class _Result:
-            def scalar_one_or_none(self):
-                return owner_user_id
+            def first(self):
+                return SimpleNamespace(
+                    user_id=owner_user_id, tenant_id="default",
+                )
 
         class _FakeDB:
             async def __aenter__(self):
@@ -536,9 +620,13 @@ class TestTyping:
 
     @staticmethod
     def _patch_db(monkeypatch, owner_user_id):
+        from types import SimpleNamespace
+
         class _Result:
-            def scalar_one_or_none(self):
-                return owner_user_id
+            def first(self):
+                return SimpleNamespace(
+                    user_id=owner_user_id, tenant_id="default",
+                )
 
         class _FakeDB:
             async def __aenter__(self):

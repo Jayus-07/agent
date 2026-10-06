@@ -118,6 +118,31 @@ def _require_cs_operator(request: Request) -> None:
         )
 
 
+def _resolve_tenant_scope(request: Request) -> str | None:
+    """解析列表/统计类端点的租户过滤范围（STOP CS-A P0-2）。
+
+    - 服务间 API-Key 通道（受信任的 BFF/脚本凭据）：返回 ``None`` = 跨租户
+      服务视图（与派单 dispatcher 的跨租户语义一致）；
+    - JWT 通道：返回网关验签后的 ``tenant_id``；缺失即可信身份不完整，
+      fail-closed 403，绝不静默回落 'default'。
+    """
+    if _is_service_channel(request):
+        return None
+
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    if not ident.tenant_id:
+        raise HTTPException(403, detail="缺少可信租户身份")
+    return ident.tenant_id
+
+
+def _require_operator_and_tenant(request: Request) -> str | None:
+    """operator 闸 + 租户范围解析的组合（list/stats/queue 共用）。"""
+    _require_cs_operator(request)
+    return _resolve_tenant_scope(request)
+
+
 async def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
     """坐席身份解析（P7：不再用 user_name 冒充 agent_id）。
 
@@ -343,20 +368,31 @@ class CSStatsResponse(BaseModel):
 
 @router.get("", response_model=PaginatedConversations)
 async def list_conversations(
+    request: Request,
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None, description="last_activity_at cursor for keyset pagination"),
     status: str | None = Query(None, description="Filter by conversation_status"),
     handling_mode: str | None = Query(None),
     user_id: str | None = Query(None),
     q: str | None = Query(None, description="Search in summary/messages"),
+    tenant_id: str | None = Query(None, description="显式租户过滤（仅服务间通道可跨租户）"),
 ):
-    """Paginated conversation list ordered by last_activity_at DESC."""
+    """Paginated conversation list ordered by last_activity_at DESC.
+
+    STOP CS-A P0-1：本端点此前无任何权限闸（审计实测 viewer 可全库枚举），
+    现统一走 operator 闸 + 租户谓词 —— JWT 操作者只能看本租户，服务间
+    通道可跨租户（可显式传 tenant_id 收窄）。
+    """
+    tenant_scope = _require_operator_and_tenant(request)
+    if tenant_scope is not None:
+        tenant_id = tenant_scope
     if _use_java_source():
         try:
             from urllib.parse import urlencode
             params = {k: v for k, v in {
                 "limit": limit, "cursor": cursor, "status": status,
                 "handling_mode": handling_mode, "user_id": user_id, "q": q,
+                "tenant_id": tenant_id,
             }.items() if v is not None}
             return await _proxy_to_java(f"/cs/conversations?{urlencode(params)}")
         except HTTPException:
@@ -370,8 +406,11 @@ async def list_conversations(
         return await _async_list_conversations(
             limit=limit, cursor=cursor, status=status,
             handling_mode=handling_mode, user_id=user_id, q=q,
+            tenant_id=tenant_id,
             run_sync=run_sync,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"[CSAdmin] list_conversations failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
@@ -381,11 +420,18 @@ async def list_conversations(
 # 注意：GET /stats 必须注册在 GET /{conversation_id} 之前，否则 "stats" 被当作 conversation_id
 
 @router.get("/stats", response_model=CSStatsResponse)
-async def cs_stats():
-    """管理端统计汇总：会话/消息量、满意度均分与分布、意图分布、转人工会话数。"""
+async def cs_stats(request: Request):
+    """管理端统计汇总：会话/消息量、满意度均分与分布、意图分布、转人工会话数。
+
+    STOP CS-A P0-1/P0-2：operator 闸 + 租户谓词（JWT 操作者只统计本租户，
+    服务间通道跨租户）—— 此前任何登录用户可读全库统计。
+    """
+    tenant_scope = _require_operator_and_tenant(request)
     try:
         from backend.customer_service._db_loop import run_sync
-        return await _async_cs_stats(run_sync)
+        return await _async_cs_stats(run_sync, tenant_id=tenant_scope)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"[CSAdmin] stats failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
@@ -441,7 +487,8 @@ async def replay_conversation_events(
 
         async with AsyncSessionLocal() as db:
             events = await EventRepository(db).replay(
-                conversation_id, after_seq, limit
+                conversation_id, after_seq, limit,
+                tenant_id=conv_row.tenant_id,
             )
         return {
             "conversation_id": conversation_id,
@@ -539,7 +586,9 @@ async def list_my_conversations(
         raise HTTPException(401, detail="未认证：客服会话按登录用户隔离")
 
     try:
-        return await _async_my_conversations(user_id=ident.user_id, limit=limit)
+        return await _async_my_conversations(
+            user_id=ident.user_id, tenant_id=ident.tenant_id, limit=limit,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -548,8 +597,14 @@ async def list_my_conversations(
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)
-async def get_conversation(conversation_id: str):
-    """Conversation detail with ordered messages."""
+async def get_conversation(conversation_id: str, request: Request):
+    """Conversation detail with ordered messages.
+
+    STOP CS-A P0-1：复用 ``_ensure_conversation_access``（owner/当前坐席/
+    admin/同租户），不新建第二套 ownership 判断 —— 此前本端点无任何归属
+    校验，登录用户可读任意他人会话（审计实测）。java 代理分支的归属校验
+    属 business-service 的 cutover 契约（CS_ADMIN_SOURCE 当前为 local）。
+    """
     if _use_java_source():
         try:
             return await _proxy_to_java(f"/cs/conversations/{conversation_id}")
@@ -558,6 +613,38 @@ async def get_conversation(conversation_id: str):
         except Exception as e:
             logger.warning(f"[CSAdmin] java proxy get_conversation failed: {e}")
             raise HTTPException(502, detail="business-service unavailable")
+
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.conversation import CSConversation
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            conv = (
+                await db.execute(
+                    select(
+                        CSConversation.user_id,
+                        CSConversation.tenant_id,
+                        CSConversation.assigned_agent_id,
+                    )
+                    .where(CSConversation.conversation_id == conversation_id)
+                    .limit(1)
+                )
+            ).first()
+        if conv is None:
+            raise HTTPException(404, detail="Conversation not found")
+        await _ensure_conversation_access(
+            request,
+            conv.user_id,
+            conv.tenant_id,
+            assigned_agent_id=conv.assigned_agent_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] get_conversation ownership check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
 
     try:
         from backend.customer_service._db_loop import run_sync
@@ -573,11 +660,49 @@ async def get_conversation(conversation_id: str):
 
 
 @router.get("/{conversation_id}/traces")
-async def get_conversation_traces(conversation_id: str):
-    """Resolve distinct trace_ids for a conversation and return trace summaries."""
+async def get_conversation_traces(conversation_id: str, request: Request):
+    """Resolve distinct trace_ids for a conversation and return trace summaries.
+
+    STOP CS-A P0-1：同 detail 端点，归属校验复用 ``_ensure_conversation_access``
+    —— 此前可枚举任意会话的 trace 关联。
+    """
+    try:
+        from sqlalchemy import select
+
+        from backend.customer_service.models.conversation import CSConversation
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            conv = (
+                await db.execute(
+                    select(
+                        CSConversation.user_id,
+                        CSConversation.tenant_id,
+                        CSConversation.assigned_agent_id,
+                    )
+                    .where(CSConversation.conversation_id == conversation_id)
+                    .limit(1)
+                )
+            ).first()
+        if conv is None:
+            raise HTTPException(404, detail="Conversation not found")
+        await _ensure_conversation_access(
+            request,
+            conv.user_id,
+            conv.tenant_id,
+            assigned_agent_id=conv.assigned_agent_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] get_conversation_traces ownership check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
     try:
         from backend.customer_service._db_loop import run_sync
         trace_ids = await _async_get_trace_ids(conversation_id, run_sync)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"[CSAdmin] get_trace_ids failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
@@ -602,6 +727,8 @@ class HandoffQueueItem(BaseModel):
     conversation_id: str
     user_id: str
     handoff_state: str
+    # STOP CS-A P0-5/E4：主管重派 API 以 handoff_id 寻址，队列项透出该键
+    handoff_id: str | None = None
     trigger_type: str | None = None
     trigger_reason: str | None = None
     updated_at: str
@@ -655,13 +782,13 @@ async def get_handoff_queue(
     ),
 ):
     """坐席工作台待接入队列（WS 降级轮询源 / 初始全量拉取）。"""
-    _require_cs_operator(request)
+    tenant_scope = _require_operator_and_tenant(request)
     state_list = (
         [s.strip() for s in states.split(",") if s.strip()] if states else None
     )
     try:
         from backend.customer_service._db_loop import run_sync
-        return await _async_handoff_queue(state_list, run_sync)
+        return await _async_handoff_queue(state_list, run_sync, tenant_id=tenant_scope)
     except Exception as e:
         logger.warning(f"[CSAdmin] handoff queue failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
@@ -927,8 +1054,9 @@ async def post_agent_typing(
 async def _ensure_my_conversation(request: Request, conversation_id: str) -> None:
     """用户侧归属校验（/my/messages 与 /my/typing 共用）。
 
-    登录强制（401 拒 guest）→ 本人会话精确匹配（user_id 比对，403 他人）
-    → 404 不泄露存在性 → DB 故障 503。
+    登录强制（401 拒 guest）→ 本人会话精确匹配（user_id + tenant_id 双因子，
+    与 _ensure_conversation_access 同口径，STOP CS-A P0-2）→ 404 不泄露
+    存在性 → DB 故障 503。
     """
     from backend.app.api.identity import resolve_identity
 
@@ -943,17 +1071,26 @@ async def _ensure_my_conversation(request: Request, conversation_id: str) -> Non
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
-            conv_user_id = (
+            row = (
                 await db.execute(
-                    select(CSConversation.user_id)
+                    select(
+                        CSConversation.user_id,
+                        CSConversation.tenant_id,
+                    )
                     .where(CSConversation.conversation_id == conversation_id)
                     .limit(1)
                 )
-            ).scalar_one_or_none()
-        if conv_user_id is None:
+            ).first()
+        if row is None:
             raise HTTPException(404, detail="Conversation not found")
-        if conv_user_id != ident.user_id:
+        if row.user_id != ident.user_id:
             raise HTTPException(403, detail="无权访问他人会话")
+        if (
+            ident.tenant_id
+            and row.tenant_id
+            and row.tenant_id != ident.tenant_id
+        ):
+            raise HTTPException(403, detail="无权访问其他租户的会话")
     except HTTPException:
         raise
     except Exception as e:
@@ -1003,14 +1140,20 @@ async def post_my_typing(request: Request, conversation_id: str):
     """
     await _ensure_my_conversation(request, conversation_id)
 
+    from backend.app.api.identity import resolve_identity
     from backend.customer_service.typing_state import set_typing
 
     set_typing("user", conversation_id)
 
+    ident = resolve_identity(request)
     from backend.customer_service.realtime import get_agent_hub
 
+    # STOP CS-A P0-2/B3：瞬态事件信封带租户，坐席侧按租户过滤投递
     get_agent_hub().publish(
-        "user.typing", conversation_id=conversation_id, persist=False
+        "user.typing",
+        conversation_id=conversation_id,
+        tenant_id=ident.tenant_id,
+        persist=False,
     )
     return {"conversation_id": conversation_id, "ok": True}
 
@@ -1074,7 +1217,9 @@ async def get_conversation_messages(
 
 # ── Async helpers ────────────────────────────────────────
 
-async def _async_my_conversations(*, user_id: str, limit: int) -> MyConversationsResponse:
+async def _async_my_conversations(
+    *, user_id: str, tenant_id: str, limit: int,
+) -> MyConversationsResponse:
     """当前用户的最近会话（含消息，单会话上限 100 条）。"""
     from sqlalchemy import select
 
@@ -1083,17 +1228,17 @@ async def _async_my_conversations(*, user_id: str, limit: int) -> MyConversation
     from backend.memory.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
+        conv_q = (
+            select(CSConversation)
+            .where(CSConversation.user_id == user_id)
+            .order_by(CSConversation.last_activity_at.desc().nulls_last())
+            .limit(limit)
+        )
+        # STOP CS-A P0-2：user_id 全局唯一是假设不是约束 —— 租户谓词显式化
+        if tenant_id:
+            conv_q = conv_q.where(CSConversation.tenant_id == tenant_id)
         convs = (
-            (
-                await db.execute(
-                    select(CSConversation)
-                    .where(CSConversation.user_id == user_id)
-                    .order_by(CSConversation.last_activity_at.desc().nulls_last())
-                    .limit(limit)
-                )
-            )
-            .scalars()
-            .all()
+            (await db.execute(conv_q)).scalars().all()
         )
         if not convs:
             return MyConversationsResponse(items=[])
@@ -1144,7 +1289,7 @@ async def _async_my_conversations(*, user_id: str, limit: int) -> MyConversation
 
 
 async def _async_list_conversations(
-    *, limit, cursor, status, handling_mode, user_id, q, run_sync,
+    *, limit, cursor, status, handling_mode, user_id, q, tenant_id, run_sync,
 ) -> PaginatedConversations:
     from datetime import datetime
 
@@ -1160,6 +1305,11 @@ async def _async_list_conversations(
             base = select(CSConversation)
             count_q = select(func.count()).select_from(CSConversation)
 
+            # STOP CS-A P0-2：租户谓词显式化 —— JWT 操作者只见本租户；
+            # 服务间通道 tenant_id=None 时跨租户（受信任服务视图）。
+            if tenant_id:
+                base = base.where(CSConversation.tenant_id == tenant_id)
+                count_q = count_q.where(CSConversation.tenant_id == tenant_id)
             if status:
                 base = base.where(CSConversation.conversation_status == status)
                 count_q = count_q.where(CSConversation.conversation_status == status)
@@ -1215,7 +1365,7 @@ async def _async_list_conversations(
     return await _query()
 
 
-async def _async_cs_stats(run_sync) -> CSStatsResponse:
+async def _async_cs_stats(run_sync, tenant_id: str | None = None) -> CSStatsResponse:
     from sqlalchemy import distinct, func, select
 
     from backend.customer_service.models.conversation import CSConversation
@@ -1224,21 +1374,40 @@ async def _async_cs_stats(run_sync) -> CSStatsResponse:
     from backend.memory.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
+        # STOP CS-A P0-2：统计按租户隔离（服务间通道 tenant_id=None 跨租户）
+        conv_base = select(CSConversation)
+        msg_base = select(CSMessage)
+        if tenant_id:
+            conv_base = conv_base.where(CSConversation.tenant_id == tenant_id)
+
         session_count = int(
-            (await db.execute(select(func.count()).select_from(CSConversation))).scalar() or 0
+            (await db.execute(
+                select(func.count()).select_from(conv_base.subquery())
+            )).scalar() or 0
         )
+        if tenant_id:
+            msg_base = msg_base.where(
+                CSMessage.conversation_id.in_(
+                    select(CSConversation.conversation_id).where(
+                        CSConversation.tenant_id == tenant_id,
+                    )
+                )
+            )
         message_count = int(
-            (await db.execute(select(func.count()).select_from(CSMessage))).scalar() or 0
+            (await db.execute(
+                select(func.count()).select_from(msg_base.subquery())
+            )).scalar() or 0
         )
 
         # 满意度：均分 + 1-5 分布
-        rating_rows = (
-            await db.execute(
-                select(CSConversation.rating, func.count())
-                .where(CSConversation.rating.isnot(None))
-                .group_by(CSConversation.rating)
-            )
-        ).all()
+        rating_q = (
+            select(CSConversation.rating, func.count())
+            .where(CSConversation.rating.isnot(None))
+            .group_by(CSConversation.rating)
+        )
+        if tenant_id:
+            rating_q = rating_q.where(CSConversation.tenant_id == tenant_id)
+        rating_rows = (await db.execute(rating_q)).all()
         rating_dist: dict[int, int] = {}
         rated_total = 0
         rated_sum = 0
@@ -1248,25 +1417,29 @@ async def _async_cs_stats(run_sync) -> CSStatsResponse:
             rated_sum += int(rating_val) * int(cnt)
 
         # 意图分布（来自消息级意图识别，取 top 6）
-        intent_rows = (
-            await db.execute(
-                select(CSMessage.intent_name, func.count())
-                .where(CSMessage.intent_name.isnot(None))
-                .group_by(CSMessage.intent_name)
-                .order_by(func.count().desc())
-                .limit(6)
+        intent_q = (
+            select(CSMessage.intent_name, func.count())
+            .where(CSMessage.intent_name.isnot(None))
+            .group_by(CSMessage.intent_name)
+            .order_by(func.count().desc())
+            .limit(6)
+        )
+        if tenant_id:
+            intent_q = intent_q.where(
+                CSMessage.conversation_id.in_(
+                    select(CSConversation.conversation_id).where(
+                        CSConversation.tenant_id == tenant_id,
+                    )
+                )
             )
-        ).all()
+        intent_rows = (await db.execute(intent_q)).all()
         intent_dist = [{"name": name, "count": int(cnt)} for name, cnt in intent_rows]
 
         # 转人工：出现 handoff 记录的会话数（去重）
-        handoff_count = int(
-            (
-                await db.execute(
-                    select(func.count(distinct(CSHandoff.conversation_id)))
-                )
-            ).scalar() or 0
-        )
+        handoff_q = select(func.count(distinct(CSHandoff.conversation_id)))
+        if tenant_id:
+            handoff_q = handoff_q.where(CSHandoff.tenant_id == tenant_id)
+        handoff_count = int((await db.execute(handoff_q)).scalar() or 0)
 
     return CSStatsResponse(
         session_count=session_count,
@@ -1354,7 +1527,7 @@ async def _async_get_trace_ids(conversation_id: str, run_sync):
         return [row[0] for row in result.all()]
 
 
-async def _async_handoff_queue(state_list, run_sync):
+async def _async_handoff_queue(state_list, run_sync, tenant_id: str | None = None):
     from sqlalchemy import select
 
     from backend.customer_service.models.message import CSMessage
@@ -1364,7 +1537,8 @@ async def _async_handoff_queue(state_list, run_sync):
         from backend.customer_service.repository import HandoffRepository
 
         repo = HandoffRepository(db)
-        rows = await repo.list_open(states=state_list)
+        # STOP CS-A P0-2：队列按租户隔离（服务间通道跨租户）
+        rows = await repo.list_open(states=state_list, tenant_id=tenant_id)
 
         items = []
         for h in rows:
@@ -1383,6 +1557,7 @@ async def _async_handoff_queue(state_list, run_sync):
                 conversation_id=h.conversation_id,
                 user_id=h.user_id,
                 handoff_state=h.handoff_state,
+                handoff_id=h.handoff_id,
                 trigger_type=h.trigger_type,
                 trigger_reason=h.trigger_reason,
                 updated_at=h.updated_at.isoformat() if h.updated_at else "",
@@ -1483,7 +1658,10 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                 )
 
                 conv_mgr = ConversationManager(db)
-                await conv_mgr.get_or_create(conversation_id, handoff_user_id)
+                await conv_mgr.get_or_create(
+                    conversation_id, handoff_user_id,
+                    tenant_id=row.tenant_id,
+                )
                 await conv_mgr.assign_agent(
                     conversation_id, agent_id, assigned_by=agent_id,
                 )
@@ -1550,7 +1728,10 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
         )
 
         conv_mgr = ConversationManager(db)
-        await conv_mgr.get_or_create(conversation_id, handoff_user_id)
+        await conv_mgr.get_or_create(
+            conversation_id, handoff_user_id,
+            tenant_id=row.tenant_id,
+        )
         await conv_mgr.escalate_to_human(
             conversation_id, agent_id, assigned_by=agent_id,
         )
@@ -1617,7 +1798,10 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
             ConversationManager,
         )
         conv_mgr = ConversationManager(db)
-        conv, _ = await conv_mgr.get_or_create(conversation_id, row.user_id)
+        conv, _ = await conv_mgr.get_or_create(
+            conversation_id, row.user_id,
+            tenant_id=row.tenant_id,
+        )
         _assert_current_agent(conv.assigned_agent_id, agent_id)
 
         from backend.customer_service.managers.message_manager import MessageManager

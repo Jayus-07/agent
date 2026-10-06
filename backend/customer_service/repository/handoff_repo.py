@@ -35,7 +35,7 @@ class HandoffRepository:
             handoff_id=handoff_id,
             conversation_id=conversation_id,
             user_id=user_id,
-            handoff_state=handoff_data.get("handoff_state", "initiated"),
+            handoff_state=handoff_data.get("handoff_state", "ai_active"),
             trigger_type=handoff_data.get("trigger_type"),
             trigger_reason=handoff_data.get("trigger_reason"),
             ticket_id=handoff_data.get("ticket_id"),
@@ -113,6 +113,7 @@ class HandoffRepository:
         self,
         *,
         states: list[str] | None = None,
+        tenant_id: str | None = None,
         limit: int = 50,
     ) -> list[CSHandoff]:
         """列出进行中的 handoff（坐席工作台队列）。
@@ -120,8 +121,12 @@ class HandoffRepository:
         Args:
             states: 只取这些状态（缺省=全部未关闭），按 updated_at 升序
                 （最早请求的排最前，避免老会话饿死）。
+            tenant_id: 租户谓词（STOP CS-A P0-2）；None=跨租户（受信任
+                服务视图），JWT 通道必须传本租户。
         """
         q = select(CSHandoff)
+        if tenant_id:
+            q = q.where(CSHandoff.tenant_id == tenant_id)
         if states:
             q = q.where(CSHandoff.handoff_state.in_(states))
         else:

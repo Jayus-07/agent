@@ -30,8 +30,14 @@ class TestCutoverSwitch:
             return {"items": [], "total": 0, "has_more": False}
 
         monkeypatch.setattr(cs_admin, "_proxy_to_java", fake_proxy)
-        result = await cs_admin.list_conversations(limit=20, cursor=None, status="open",
-                                                   handling_mode=None, user_id=None, q=None)
+        # STOP CS-A P0-1：路由挂 operator 闸 —— 直调需带 Request（api-key 服务通道）
+        from starlette.requests import Request as _Req
+
+        _request = _Req({"type": "http", "headers": [(b"x-auth-type", b"api-key")]})
+        result = await cs_admin.list_conversations(
+            _request, limit=20, cursor=None, status="open",
+            handling_mode=None, user_id=None, q=None, tenant_id=None,
+        )
         assert result == {"items": [], "total": 0, "has_more": False}
         assert "status=open" in captured["path"]
         assert captured["path"].startswith("/cs/conversations?")
@@ -48,6 +54,9 @@ class TestCutoverSwitch:
             return {"conversation_id": "conv-1"}
 
         monkeypatch.setattr(cs_admin, "_proxy_to_java", fake_proxy)
-        result = await cs_admin.get_conversation("conv-1")
+        from starlette.requests import Request as _Req
+
+        _request = _Req({"type": "http", "headers": [(b"x-auth-type", b"api-key")]})
+        result = await cs_admin.get_conversation("conv-1", _request)
         assert result["conversation_id"] == "conv-1"
         assert captured["path"] == "/cs/conversations/conv-1"

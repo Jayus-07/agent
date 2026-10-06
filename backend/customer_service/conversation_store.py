@@ -31,6 +31,8 @@ def record_cs_turn(
     answer: str,
     trace_id: str | None = None,
     cs_route: dict | None = None,
+    *,
+    tenant_id: str = "",
 ) -> None:
     """Persist one user+assistant message pair with optional trace linkage.
 
@@ -38,18 +40,32 @@ def record_cs_turn(
     Safe to call from sync graph-node context — internally dispatches to the
     background event loop.
 
+    STOP CS-A P0-2：``tenant_id`` 为显式必传（keyword-only）——缺失即身份链
+    断裂，fail-closed 跳过落库并 error 留痕，**绝不静默写进 default 租户**
+    （跨租户数据一致性优先于单轮消息可查性）。
+
     java 写权模式下改经 business_client 调 POST /internal/messages
     （Java 端 saveMessage 内部 get_or_create 会话），Python 停止直写。
     """
+    if not (tenant_id or "").strip():
+        # fail-closed：宁可丢一条 fire-and-forget 消息，不可写错租户
+        logger.error(
+            "[ConversationStore] record_cs_turn 缺少可信 tenant_id，跳过落库 "
+            "(conversation=%s user=%s) —— 请检查身份链注入",
+            conversation_id, user_id,
+        )
+        return
     try:
         if _use_java_write():
             _java_record_turn(
                 conversation_id, user_id, question, answer, trace_id, cs_route,
+                tenant_id=tenant_id,
             )
         else:
             from backend.customer_service._db_loop import run_sync
             operation = _async_record_turn(
                 conversation_id, user_id, question, answer, trace_id, cs_route,
+                tenant_id=tenant_id,
             )
             try:
                 run_sync(operation)
@@ -68,6 +84,8 @@ def _java_record_turn(
     answer: str,
     trace_id: str | None,
     cs_route: dict | None,
+    *,
+    tenant_id: str = "",
 ) -> None:
     """java 写权模式：question/answer 拆两条消息代理到 business-service"""
     from backend.infra.http.business_client import BusinessServiceError, post_json_sync
@@ -85,6 +103,7 @@ def _java_record_turn(
     body_common = {
         "conversation_id": conversation_id,
         "user_id": user_id,
+        "tenant_id": tenant_id,
         "trace_id": trace_id,
         "content_type": "text",
         "private": False,
@@ -137,6 +156,8 @@ async def _async_record_turn(
     answer: str,
     trace_id: str | None,
     cs_route: dict | None,
+    *,
+    tenant_id: str = "",
 ) -> None:
     from datetime import datetime, timezone
 
@@ -157,6 +178,7 @@ async def _async_record_turn(
 
         conv, created = await conv_mgr.get_or_create(
             conversation_id, user_id,
+            tenant_id=tenant_id,
         )
 
         intent_domain = None
@@ -210,15 +232,19 @@ async def _async_record_turn(
             }
 
         hub = get_agent_hub()
+        # STOP CS-A P0-2/B3：message.created 信封带租户，坐席 WS 按
+        # tenant（+target_agent）双条件过滤投递
         hub.publish(
             "message.created",
             conversation_id=conversation_id,
+            tenant_id=tenant_id,
             last_id=q.id,
             message=_msg_payload(q),
         )
         hub.publish(
             "message.created",
             conversation_id=conversation_id,
+            tenant_id=tenant_id,
             last_id=a.id,
             message=_msg_payload(a),
         )
