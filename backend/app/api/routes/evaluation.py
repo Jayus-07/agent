@@ -161,6 +161,7 @@ async def run_evaluation(
 class RunSummary(BaseModel):
     run_id: str
     module: str = ""
+    mode: str = ""
     pass_rate: float = 0.0
     top1_accuracy: float = 0.0
     faithfulness: float = 0.0
@@ -179,6 +180,14 @@ class RunSummary(BaseModel):
     trigger: str = ""
     triggered_by: str = ""
     evaluator_mode: str = ""
+    # P0-04/Phase2：有效性（VALID/INVALID_*）与环境无效原因——管理端据此
+    # 显示「环境无效」徽章而非红色 0%；P2：列表摘要来源（postgres=权威 /
+    # file_fallback=PG 不可用降级，禁止静默）
+    validity: str = ""
+    invalid_reason: str = ""
+    case_count: int = 0
+    pass_count: int = 0
+    summary_source: str = "postgres"
 
 
 def _run_status_fields(run_id: str, meta: dict) -> dict:
@@ -199,31 +208,131 @@ def _run_status_fields(run_id: str, meta: dict) -> dict:
     }
 
 
+def _load_run_rows_from_pg(limit: int) -> list[dict] | None:
+    """读 ai.eval_run_records 最新 N 行（PG=Run Summary 权威）。
+
+    返回 None = PG 不可用/表缺列（如 078 未迁移）——调用方降级文件列表，
+    并显式标注 summary_source=file_fallback，禁止静默。
+    """
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT run_id, module, mode, status, validity, invalid_reason,
+                       case_count, pass_count, pass_rate, metrics,
+                       dataset_version, git_sha, trigger, triggered_by,
+                       created_at
+                FROM ai.eval_run_records
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:  # noqa: BLE001 — 台账不可达时降级文件口径
+        logger.warning(f"[evaluation] PG 台账不可达，列表降级文件口径: {e}")
+        return None
+
+
+def _row_to_summary(row: dict) -> RunSummary:
+    """台账行 → 列表 DTO。rag 专属指标从该 run 主模块的 metrics 取。"""
+    metrics_by_module = row.get("metrics") or {}
+    own = metrics_by_module.get(row.get("module") or "", {}) or {}
+    own_metrics = own.get("metrics", {}) if isinstance(own, dict) else {}
+    dataset_version = row.get("dataset_version")
+    if not isinstance(dataset_version, str):
+        # provenance 结构（suite 化运行）取 dataset_version 字段
+        dataset_version = (
+            str(dataset_version.get("dataset_version", ""))
+            if isinstance(dataset_version, dict) else ""
+        )
+    return RunSummary(
+        run_id=row["run_id"],
+        module=str(row.get("module") or ""),
+        mode=str(row.get("mode") or ""),
+        pass_rate=float(row.get("pass_rate") or 0.0),
+        top1_accuracy=float(own_metrics.get("top1_accuracy", 0.0) or 0.0),
+        faithfulness=float(own_metrics.get("sem_faithfulness",
+                                           own_metrics.get("gen_S7_faithfulness", 0.0)) or 0.0),
+        answer_correctness=float(own_metrics.get("sem_answer_correctness",
+                                                 own_metrics.get("gen_S6_answer_correctness", 0.0)) or 0.0),
+        recall_at_5=float(own_metrics.get("recall@5", 0.0) or 0.0),
+        reject_accuracy=float(own_metrics.get("reject_accuracy", 0.0) or 0.0),
+        mrr=float(own_metrics.get("mrr", 0.0) or 0.0),
+        ndcg_at_10=float(own_metrics.get("ndcg@10", 0.0) or 0.0),
+        timestamp=str(row.get("created_at") or ""),
+        status=str(row.get("status") or ""),
+        suite=str(own.get("suite", "") if isinstance(own, dict) else ""),
+        dataset_version=dataset_version,
+        trigger=str(row.get("trigger") or ""),
+        triggered_by=str(row.get("triggered_by") or ""),
+        validity=str(row.get("validity") or ""),
+        invalid_reason=str(row.get("invalid_reason") or ""),
+        case_count=int(row.get("case_count") or 0),
+        pass_count=int(row.get("pass_count") or 0),
+        summary_source="postgres",
+    )
+
+
 @router.get("/runs", response_model=list[RunSummary])
 async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返回数量")):
-    """列出历史评测运行记录。"""
+    """列出历史评测运行记录。
+
+    Phase 2 数据源收口：**PG ai.eval_run_records = Run Summary 权威**（M7
+    设计口径的落地——此前本接口遍历 report 文件且只取 rag summary，SQL/
+    CS/Travel 的真实通过率被显示成 0%）。PG 不可达时降级文件列表并显式
+    标注 summary_source=file_fallback；Run Detail 仍读文件（明细权威）。
+    """
+    rows = await asyncio.to_thread(_load_run_rows_from_pg, limit)
+    if rows is not None:
+        return [_row_to_summary(row) for row in rows]
+
+    # 文件降级口径（离线/无 PG 环境保留可用性；来源显式可见）
     run_ids = list_runs(limit=limit)
     summaries = []
     for run_id in run_ids:
         try:
             report, _meta = load_report(run_id)
-            rag = next((s for s in report.summaries if s.module == "rag"), None)
+            # 降级口径与 PG 一致：取 run 自身模块的 summary（旧实现硬编码 rag，
+            # SQL/CS/Travel 在降级模式下同样会被显示成 0%）
+            own = next(
+                (s for s in report.summaries if s.module == report.module), None,
+            )
+            validity_meta = (report.metadata or {}).get("run_validity") or {}
             summaries.append(RunSummary(
                 run_id=run_id,
                 module=report.module,
-                pass_rate=rag.pass_rate if rag else 0.0,
-                top1_accuracy=rag.metrics.get("top1_accuracy", 0.0) if rag else 0.0,
-                faithfulness=rag.metrics.get("sem_faithfulness", rag.metrics.get("gen_S7_faithfulness", 0.0)) if rag else 0.0,
-                answer_correctness=rag.metrics.get("sem_answer_correctness", rag.metrics.get("gen_S6_answer_correctness", 0.0)) if rag else 0.0,
-                recall_at_5=rag.metrics.get("recall@5", 0.0) if rag else 0.0,
-                reject_accuracy=rag.metrics.get("reject_accuracy", 0.0) if rag else 0.0,
-                mrr=rag.metrics.get("mrr", 0.0) if rag else 0.0,
-                ndcg_at_10=rag.metrics.get("ndcg@10", 0.0) if rag else 0.0,
+                mode=report.mode,
+                pass_rate=own.pass_rate if own else 0.0,
+                top1_accuracy=float(own.metrics.get("top1_accuracy", 0.0) or 0.0) if own else 0.0,
+                faithfulness=float(own.metrics.get("sem_faithfulness",
+                                                   own.metrics.get("gen_S7_faithfulness", 0.0)) or 0.0) if own else 0.0,
+                answer_correctness=float(own.metrics.get("sem_answer_correctness",
+                                                         own.metrics.get("gen_S6_answer_correctness", 0.0)) or 0.0) if own else 0.0,
+                recall_at_5=float(own.metrics.get("recall@5", 0.0) or 0.0) if own else 0.0,
+                reject_accuracy=float(own.metrics.get("reject_accuracy", 0.0) or 0.0) if own else 0.0,
+                mrr=float(own.metrics.get("mrr", 0.0) or 0.0) if own else 0.0,
+                ndcg_at_10=float(own.metrics.get("ndcg@10", 0.0) or 0.0) if own else 0.0,
                 timestamp=report.timestamp,
+                validity=str(validity_meta.get("validity", "") or ""),
+                invalid_reason=str(validity_meta.get("invalid_reason", "") or ""),
+                case_count=len(report.results),
+                pass_count=sum(1 for r in report.results if r.status == "pass"),
+                summary_source="file_fallback",
                 **_run_status_fields(run_id, _meta),
             ))
-        except Exception:
-            summaries.append(RunSummary(run_id=run_id, **_run_status_fields(run_id, {})))
+        except Exception as e:  # noqa: BLE001 — 单个坏文件不拖垮列表，但必须留痕
+            logger.warning(f"[evaluation] run {run_id} 文件报告解析失败，列表降级空行: {e}")
+            summaries.append(RunSummary(
+                run_id=run_id,
+                summary_source="file_fallback",
+                **_run_status_fields(run_id, {}),
+            ))
     return summaries
 
 
