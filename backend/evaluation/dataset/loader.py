@@ -103,8 +103,16 @@ def _load_selection(
 
 
 def file_content_hash(path: Path) -> str:
-    """文件内容 sha256 前 16 位（suite/数据集内容身份，P0-02/C6-1）。"""
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    """文件内容 sha256 前 16 位（suite/数据集内容身份，P0-02/C6-1）。
+
+    P0-03：hash 前做行尾归一化（CRLF→LF）。历史上 suite 的 cases_hash 在
+    Windows（autocrlf 检出 CRLF）生成，CI Linux checkout 为 LF，二者永不相等，
+    每日回归连续 5 天误报「canonical 已被修改」。归一化后与 git 入库字节
+    （LF）一致，任何平台 checkout 计算同值。配套：.gitattributes 登记了
+    ``*.jsonl text eol=lf``，从源头禁止行尾漂移。
+    """
+    data = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()[:16]
 
 
 def load_suite_config(module: str, selection: str) -> dict:

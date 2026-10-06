@@ -38,6 +38,10 @@ Dockerfile.*      text eol=lf
 # 容器内渲染的模板（如 alertmanager.yml.tpl：sed 注入后进 YAML 解析器，CRLF 会污染值行）
 *.tpl   text eol=lf
 *.json  text eol=lf
+# 数据集 JSONL：内容 hash 类守卫（suite cases_hash / manifest content_hash）
+# 对字节敏感，行尾必须全平台一致（2026-10-07：漏登记导致每日 RAG 回归
+# 在 CI 上连续 5 天误报 cases_hash 漂移，见 docs/reports/ 施工前审计 §1.5）
+*.jsonl text eol=lf
 *.toml  text eol=lf
 *.ini   text eol=lf
 *.cfg   text eol=lf

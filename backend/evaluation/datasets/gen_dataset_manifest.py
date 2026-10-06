@@ -23,7 +23,14 @@ DATASETS_ROOT = Path(__file__).resolve().parent
 
 
 def file_content_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    """行尾归一化内容指纹——委托 loader 唯一实现（P0-03，禁第二份口径）。
+
+    历史上这里用裸字节 hash：Windows 生成 CRLF 口径、CI 读 LF，指纹永不
+    相等（每日 RAG 回归连续 5 天误报的帮凶之一）。
+    """
+    from backend.evaluation.dataset.loader import file_content_hash as _normalized
+
+    return _normalized(path)
 
 
 def refresh_dataset(split_dir: Path) -> bool:

@@ -477,6 +477,13 @@ class EvaluationService:
                     f"租户 {_rg.BUDGET_TENANT_ID} 预算超限，评测 run 拒绝启动"
                     f"（reason={budget_reason}，COST-10 fail-closed）"
                 )
+        # P0-03：评测 preflight——suite 身份字段与数据一致性在真正运行前
+        # fail-fast（历史上 suite hash 漂移在 CI 跑完 init_db/fixture 导入后
+        # 才爆出，每轮白跑数分钟）。仅约束 suite 化运行（config.selection）。
+        if config.selection and (config.module or "all") in ("rag", "all"):
+            from backend.evaluation.preflight import run_preflight_strict
+
+            run_preflight_strict(module="rag", selection=config.selection)
         # 运行一开始就固定 run_id：checkpoint 与最终报告使用同一目录；
         # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
         run_id = config.run_id or make_run_id()

@@ -99,6 +99,11 @@ jobs:
           print("RAG regression models ready")
           PY
 
+      - name: Evaluation preflight
+        env:
+          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+        run: python -m backend.evaluation.preflight --module rag --selection "$EVAL_SELECTION"
+
       - name: Initialize isolated evaluation databases
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
 

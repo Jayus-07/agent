@@ -33,6 +33,6 @@
   "dataset_version": "5.0.0-unified",
   "kb_id": "rag_eval_kb",
   "fixture_set": "baseline",
-  "cases_hash": "b4c28d9e3288fc4b",
+  "cases_hash": "87c0ee4098f9d7c0",
   "min_samples": 20
 }
