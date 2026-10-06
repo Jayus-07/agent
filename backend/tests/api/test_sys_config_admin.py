@@ -161,7 +161,14 @@ def test_get_config_lists_registered_switches(client, monkeypatch):
         "CS_DISPATCH_ROLLOUT_PERCENT",
         "CS_ENABLED", "TRAVEL_ENABLED", "SELECTION_FUNNEL_ENABLED",
         "CS_ROLLOUT_PERCENT",
+        # 多域隔离 M2（2026-10-06）：域入口模式三开关
+        "CS_GLOBAL_ENTRY_MODE", "TRAVEL_GLOBAL_ENTRY_MODE",
+        "SELECTION_GLOBAL_ENTRY_MODE",
     }
+    # 入口模式默认 execute（行为零变化）
+    assert items["CS_GLOBAL_ENTRY_MODE"]["mode"] == "execute"
+    assert items["TRAVEL_GLOBAL_ENTRY_MODE"]["mode"] == "execute"
+    assert items["SELECTION_GLOBAL_ENTRY_MODE"]["mode"] == "execute"
     assert items["JWT_SESSION_GUARD_MODE"]["allowed"] == ["off", "audit", "enforce"]
     assert items["SENSITIVE_API_GUARD_MODE"]["source"] == "env-default"
     assert items["CS_DISPATCH_ROLLOUT_PERCENT"]["mode"] == "100"
