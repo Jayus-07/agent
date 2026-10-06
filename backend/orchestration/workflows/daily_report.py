@@ -73,11 +73,13 @@ class DailyReport:
         })
         return {"sales": result.get("rows", result)}
 
-    @step(name="拉取库存数据")
+    @step(name="拉取库存数据", on_error="skip")
     async def fetch_inventory(self, ctx):
         """Step 2: 拉当前库存（SQL）— 与 fetch_sales 并行
 
         2026-08-12 修正：字段名 current_qty → stock_quantity
+        STOP E（2026-10-07）：库存是报告的重要章节但非存在前提——失败降级
+        为缺节继续（workflow=partial + 缺数披露），不炸整份日报。
         """
         logger.info("[DailyReport] Step fetch_inventory 开始")
         result = await call_sql({
@@ -86,11 +88,12 @@ class DailyReport:
         })
         return {"inventory": result.get("rows", result)}
 
-    @step(name="拉取活动数据")
+    @step(name="拉取活动数据", on_error="skip")
     async def fetch_promotions(self, ctx):
         """Step 3: 拉近期退款（SQL）— 与 fetch_sales/fetch_inventory 并行
 
         2026-08-12 修正：原 FROM promotions 表不存在，改为 order.refunds（退款作为"活动"指标）
+        STOP E（2026-10-07）：同 fetch_inventory——缺节降级，不炸整份日报。
         """
         logger.info("[DailyReport] Step fetch_promotions 开始")
         # 2026-08-21 fix f15 配套：同 fetch_sales，窗口基于最新退款时间滚动。
@@ -168,12 +171,17 @@ class DailyReport:
     @step(
         depends_on=["generate_report"],
         timeout_sec=60,
-        retry=2,
-        on_error="abort",
+        # STOP E（2026-10-07）：邮件发送失败不抹掉已生成并落库的报告——
+        # 报告行状态机 generated → sent / delivery_failed，workflow 以
+        # partial 收场（REPORT_GENERATED=true ∧ EMAIL_DELIVERY_FAILED=true）。
+        # retry=0：邮件是写操作，响应丢失时结果未知，禁止盲重试（防重复投递），
+        # 失败走 on_error=skip 的 partial 语义由人工/下次调度补发。
+        retry=0,
+        on_error="skip",
         name="发送邮件",
     )
     async def send_email(self, ctx):
-        """Step 7: 发邮件 + 写 daily_reports 表"""
+        """Step 7: 发邮件 + 写 daily_reports 表（行状态机：generated→sent/delivery_failed）"""
         logger.info("[DailyReport] Step send_email 开始")
         report_output = ctx.outputs.get("generate_report", {}).get("report", {})
         if isinstance(report_output, str):
@@ -193,6 +201,9 @@ class DailyReport:
         # 提取 KPI 摘要（从上游 step output）
         sales = ctx.outputs.get("fetch_sales", {}).get("sales", [])
         inventory = ctx.outputs.get("fetch_inventory", {}).get("inventory", [])
+        # 注：库存字段真实键为 stock_quantity/safety_stock（fetch_inventory SQL），
+        # current_qty/min_qty 是历史遗留键名漂移——alert_count 修复属业务字段
+        # 问题，不在本轮失败语义范围（见验收报告 §7 备忘）。
         alerting = [i for i in inventory if isinstance(i, dict) and i.get("current_qty", 999) < i.get("min_qty", 0)]
 
         kpi_summary = {
@@ -202,27 +213,41 @@ class DailyReport:
             "report_date": today,
         }
 
-        # 写 daily_reports 表
+        # 写 daily_reports 表：先落「已生成」——发送失败不得让报告凭空消失
         from backend.seed.demo.runner import get_daily_report_store
         report_store = get_daily_report_store()
-        report_store.save({
+        report_row = {
             "id": ctx.run_id,
             "report_date": today,
             "report_content": f"# 经营日报 {today}\n\n{body}",
             "kpi_summary": kpi_summary,
             "trace_id": ctx.trace_id or "",
-            "status": "success",
-        })
-        logger.info(f"[DailyReport] 日报已写入 daily_reports: {ctx.run_id}")
+            "status": "generated",
+        }
+        report_store.save(report_row)
+        logger.info(f"[DailyReport] 日报已生成落库: {ctx.run_id} (status=generated)")
 
         # 发邮件（收件人 REPORT_EMAIL_TO 可配置，未配置回落 demo 地址）
         recipients = _report_email_recipients()
         logger.info(f"[DailyReport] 邮件收件人: {recipients}")
-        result = await call_email({
-            "to": [a.strip() for a in recipients.split(",") if a.strip()],
-            "subject": f"[经营日报] {today}",
-            "body": f"# 经营日报 {today}\n\n{body}",
-        })
+        try:
+            result = await call_email({
+                "to": [a.strip() for a in recipients.split(",") if a.strip()],
+                "subject": f"[经营日报] {today}",
+                "body": f"# 经营日报 {today}\n\n{body}",
+            })
+        except Exception:
+            # 投递失败：报告行如实标记 delivery_failed 后原样上抛——
+            # workflow 走 on_error=skip 的 partial 语义，报告本身保留可查
+            report_row["status"] = "delivery_failed"
+            report_store.save(report_row)
+            logger.error(
+                "[DailyReport] 邮件投递失败，日报保留 (status=delivery_failed): %s",
+                ctx.run_id,
+            )
+            raise
+        report_row["status"] = "sent"
+        report_store.save(report_row)
         return {"email": result, "report_id": ctx.run_id}
 
 
