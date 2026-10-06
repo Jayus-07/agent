@@ -60,6 +60,13 @@ export interface RunSummary {
   triggered_by?: string;
   /** UI-04：RAGAS 徽标数据源——self=未跑 RAGAS，self+ragas=双轨 */
   evaluator_mode?: string;
+  /** P0-04：run 有效性——INVALID_* 的 run 显示「环境无效」而非红色 0% */
+  validity?: string;
+  invalid_reason?: string;
+  case_count?: number;
+  pass_count?: number;
+  /** Phase 2：列表摘要来源（postgres=权威 / file_fallback=PG 不可用降级） */
+  summary_source?: string;
 }
 
 export interface DatasetCatalogItem {
