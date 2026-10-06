@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from backend.orchestration.runtime_types import RuntimeType
+
 
 @dataclass(frozen=True)
 class DomainGraph:
@@ -42,3 +44,19 @@ class DomainGraph:
     subflow: str | None = None
     domain: str | None = None
     decision_subflow: str | None = None
+    runtime_id: str | None = None
+    runtime_type: RuntimeType = RuntimeType.WORKFLOW
+    aliases: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
+    supports_checkpoint: bool = False
+    supports_interrupt: bool = False
+    supports_streaming: bool = True
+    result_contract_version: str = "v1"
+    entry_modes: tuple[str, ...] = ("execute",)
+    continuation_policy: str | None = None
+
+    def __post_init__(self) -> None:
+        """以域名作为默认 Runtime ID，兼容旧注册调用。"""
+
+        if self.runtime_id is None:
+            object.__setattr__(self, "runtime_id", self.name)
