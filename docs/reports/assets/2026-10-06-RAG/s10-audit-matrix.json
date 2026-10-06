@@ -1,0 +1,29 @@
+{
+  "doc_id": "5c3dd55c9b",
+  "actions_attempted": {
+    "upload": {
+      "http": 200,
+      "upload_id": "f47bc30d7c0c"
+    },
+    "activate": {
+      "state": "active",
+      "approved": false
+    },
+    "overwrite": {
+      "http": 200,
+      "was_overwrite": null
+    },
+    "reindex": {
+      "http": 200
+    },
+    "delete": {
+      "http": 200,
+      "deleted_rows": 0
+    }
+  },
+  "audit_rows": [],
+  "distinct_actions_logged": [],
+  "anonymous_rows": 0,
+  "pass": false,
+  "note": "S10 口径：五动作审计行 actor/user_id 非空（历史 anonymous 行不回写）；审批动作依赖 pending 路径，本轮文档走规则链免审（approve 行由 F15 与 pending 清零轮证据承接）"
+}
