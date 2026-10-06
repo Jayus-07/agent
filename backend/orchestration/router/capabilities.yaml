@@ -234,6 +234,11 @@ capabilities:
     domain: data
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     # rule_keywords：规则路由（RuleRouter）单意图强/弱信号关键词（正则）。
     # 未声明的 capability 由 rule_router 回退内置缺省表，行为不变。
     rule_keywords:
@@ -300,6 +305,11 @@ capabilities:
     domain: knowledge
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     rule_keywords:
       - 制度
       - 规定
@@ -355,6 +365,11 @@ capabilities:
     domain: business
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 分析库存不足的原因
       - 毛利率下降趋势分析
@@ -390,6 +405,11 @@ capabilities:
     domain: report
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: create
+      risk_level: R1
+      confirmation_policy: none
     examples:
       - 生成月度销售报告
       - 生成库存分析报告
@@ -470,6 +490,15 @@ capabilities:
     domain: communication
     risk_level: HIGH
     fast_path_enabled: false
+    tool_spec:
+      version: 2
+      operation: send
+      operation_by:
+        search: read
+        read: read
+        watch: read
+      risk_level: R2
+      confirmation_policy: user_confirmation
     examples:
       - 发送邮件给运营
       - 把日报发给 CEO
@@ -552,6 +581,11 @@ capabilities:
     domain: communication
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 帮我搜一下邮箱里关于发货单的邮件
       - 最近收到了哪些邮件
@@ -632,6 +666,11 @@ capabilities:
     domain: communication
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 读一下这封邮件的内容
       - 这封邮件里说了什么
@@ -713,6 +752,11 @@ capabilities:
     domain: communication
     risk_level: HIGH
     fast_path_enabled: false
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     reason: 新邮件监听为长轮询阻塞操作，仅通知闭环与 automation 内部使用
 
   - name: data.export
@@ -738,6 +782,11 @@ capabilities:
     domain: data
     risk_level: MEDIUM
     fast_path_enabled: false
+    tool_spec:
+      version: 2
+      operation: export
+      risk_level: R2
+      confirmation_policy: user_confirmation
     examples:
       - 导出销售数据到 Excel
       - 把客户名单导出
@@ -764,6 +813,11 @@ capabilities:
     domain: knowledge
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 搜索 Amazon 政策更新
       - 查 Google 趋势
@@ -794,6 +848,11 @@ capabilities:
     domain: data
     risk_level: MEDIUM
     fast_path_enabled: false
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 抓取竞品网站
       - 爬取新闻内容
@@ -837,6 +896,11 @@ capabilities:
     domain: data
     risk_level: MEDIUM
     fast_path_enabled: false
+    tool_spec:
+      version: 2
+      operation: external_write
+      risk_level: R2
+      confirmation_policy: user_confirmation
     # D6 修复：此前零关键词声明，「统计本月订单金额」类 SQL 问题被本能力的
     # 采集类 examples（语义过近）拉走向量 top1。现在补齐采集/同步/导入侧
     # 特征词，并在校准层与 sql.query 对峙（SQL 统计词命中时本能力零命中降权）。
@@ -901,6 +965,11 @@ capabilities:
     domain: travel
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 福州有哪些值得去的景点
       - 厦门必去的打卡点有哪些
@@ -1013,6 +1082,11 @@ capabilities:
     domain: travel
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 福州现在天气怎么样
       - 明天厦门会下雨吗
@@ -1079,6 +1153,32 @@ capabilities:
     domain: business
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      operation_by:
+        add: create
+        remove: delete
+        toggle: update
+        watch: read
+      risk_by:
+        analyze: R0
+        watch: R0
+        history: R0
+        list: R0
+        add: R2
+        remove: R2
+        toggle: R2
+      confirmation_by:
+        analyze: none
+        watch: none
+        history: none
+        list: none
+        add: user_confirmation
+        remove: user_confirmation
+        toggle: user_confirmation
+      risk_level: R0
+      confirmation_policy: none
     examples:
       - 分析这个竞品链接
       - 帮我跟竞品比价
@@ -1143,6 +1243,11 @@ capabilities:
     domain: business
     risk_level: HIGH
     fast_path_enabled: false
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     reason: 竞品巡检为全量扫描 + 快照写入，不参与用户问题路由：用户侧「巡检/监控」类提问由 competitor.analyze 承接并经 action=watch 分发（selection_decision workflow 直接读 store，不经过本能力）
 
   - name: competitor.history
@@ -1199,6 +1304,11 @@ capabilities:
     domain: business
     risk_level: LOW
     fast_path_enabled: true
+    tool_spec:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
     reason: 竞品快照历史查询依赖已存快照，不参与用户问题路由：用户侧「价格历史」类提问由 competitor.analyze 承接并经 action=history 分发（selection_decision workflow 直接读 store，不经过本能力）
 
 workflows:
@@ -1231,3 +1341,125 @@ workflows:
       - 帮我做一次选品决策
       - 这个品类能不能上
       - 给宠物零食品类出一份选品决策报告
+
+# 具体 @tool 适配器的治理契约。主路由 Capability 仍以上面的
+# capabilities 为唯一入口；未参与主路由、但被域图/Workflow/MCP 直接消费的
+# Tool 也必须在这里声明完整 ToolSpec，禁止通过裸调用绕过治理运行时。
+tool_specs:
+  - name: calculate_tool
+    params_schema: {type: object, additionalProperties: false, properties: {expression: {type: string, minLength: 1}}, required: [expression]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: competitor_analyze_tool
+    params_schema: {type: object, additionalProperties: false, properties: {url: {type: string}, name: {type: string}, question: {type: string}, idempotency_key: {type: string}}}
+    governance: {version: 2, operation: create, risk_level: R1, confirmation_policy: none}
+  - name: competitor_watch_tool
+    params_schema: {type: object, additionalProperties: false, properties: {idempotency_key: {type: string}}}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: competitor_history_tool
+    params_schema: {type: object, additionalProperties: false, properties: {url: {type: string}, question: {type: string}}}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: competitor_watchlist_tool
+    params_schema: {type: object, additionalProperties: false, properties: {action: {type: string, enum: [list, add, remove, toggle]}, url: {type: string}, name: {type: string}, enabled: {type: boolean}, idempotency_key: {type: string}}}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none, operation_by: {add: create, remove: delete, toggle: update, list: read}, risk_by: {add: R2, remove: R2, toggle: R2, list: R0}, confirmation_by: {add: user_confirmation, remove: user_confirmation, toggle: user_confirmation, list: none}}
+  - name: data_collection_tool
+    params_schema: {type: object, additionalProperties: false, properties: {source: {type: string}, target_table: {type: string}, fetcher_type: {type: string}, dedup_keys: {type: string}, groupby_keys: {type: string}, write_mode: {type: string}, enable_analysis: {type: boolean}, idempotency_key: {type: string}}}
+    governance: {version: 2, operation: external_write, risk_level: R2, confirmation_policy: user_confirmation}
+  - name: execute_sql_tool
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}}, required: [query]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: sql_query_tool
+    params_schema: {type: object, additionalProperties: false, properties: {question: {type: string, minLength: 1}}, required: [question]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: export_csv_tool
+    params_schema: {type: object, additionalProperties: false, properties: {question: {type: string, minLength: 1}, filename: {type: string}, idempotency_key: {type: string}}, required: [question]}
+    governance: {version: 2, operation: export, risk_level: R2, confirmation_policy: user_confirmation}
+  - name: generate_report_tool
+    params_schema: {type: object, additionalProperties: false, properties: {report_type: {type: string, minLength: 1}, filters: {type: object, additionalProperties: true}}, required: [report_type]}
+    governance: {version: 2, operation: create, risk_level: R1, confirmation_policy: none}
+  - name: memory_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, top_k: {type: integer, minimum: 1, maximum: 100}}, required: [query]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: memory_store_tool
+    params_schema: {type: object, additionalProperties: false, properties: {content: {type: string, minLength: 1}, memory_type: {type: string}, memory_key: {type: string}, structured_value: {type: string}}, required: [content]}
+    governance: {version: 2, operation: update, risk_level: R1, confirmation_policy: none}
+  - name: search_knowledge_tool
+    params_schema: {type: object, additionalProperties: false, properties: {question: {type: string, minLength: 1}, kb_id: {type: string}}, required: [question]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: send_email_tool
+    params_schema: {type: object, additionalProperties: false, properties: {to: {type: string, minLength: 1}, subject: {type: string, minLength: 1}, body: {type: string, minLength: 1}, cc: {type: string}, idempotency_key: {type: string}}, required: [to, subject, body]}
+    governance: {version: 2, operation: send, risk_level: R2, confirmation_policy: user_confirmation}
+  - name: search_email_tool
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, folder: {type: string}, limit: {type: integer, minimum: 1, maximum: 100}, cursor: {type: string}}, required: [query]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: read_email_tool
+    params_schema: {type: object, additionalProperties: false, properties: {message_id: {type: string, minLength: 1}}, required: [message_id]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: watch_email_tool
+    params_schema: {type: object, additionalProperties: false, properties: {timeout_sec: {type: integer, minimum: 1, maximum: 120}},}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_geocode_tool
+    params_schema: {type: object, additionalProperties: false, properties: {address: {type: string, minLength: 1}, city: {type: string}}, required: [address]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_reverse_geocode_tool
+    params_schema: {type: object, additionalProperties: false, properties: {location: {type: string, minLength: 1}, with_poi: {type: boolean}}, required: [location]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_ip_location_tool
+    params_schema: {type: object, additionalProperties: false, properties: {ip: {type: string}}}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_district_tool
+    params_schema: {type: object, additionalProperties: false, properties: {keyword: {type: string}, district_id: {type: string}}}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_place_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {keyword: {type: string, minLength: 1}, city: {type: string}, near: {type: string}, radius_m: {type: integer, minimum: 1}, page_size: {type: integer, minimum: 1, maximum: 20}}, required: [keyword]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_place_suggest_tool
+    params_schema: {type: object, additionalProperties: false, properties: {keyword: {type: string, minLength: 1}, city: {type: string}}, required: [keyword]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_lookup_tool
+    params_schema: {type: object, additionalProperties: false, properties: {action: {type: string, minLength: 1}, address: {type: string}, city: {type: string}, keyword: {type: string}, location: {type: string}, from_location: {type: string}, to_location: {type: string}, to_name: {type: string}, mode: {type: string}, kind: {type: string}, near: {type: string}, types: {type: string}, zoom: {type: integer}, size: {type: string}, markers: {type: string}, radius_m: {type: integer}, page_size: {type: integer}, district_id: {type: string}}, required: [action]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_merchant_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {keyword: {type: string, minLength: 1}, city: {type: string}, near: {type: string}, types: {type: string}, radius_m: {type: integer, minimum: 1}, page_size: {type: integer, minimum: 1, maximum: 20}}, required: [keyword]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_distance_matrix_tool
+    params_schema: {type: object, additionalProperties: false, properties: {from_locations: {type: string, minLength: 1}, to_locations: {type: string, minLength: 1}, mode: {type: string}}, required: [from_locations, to_locations]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_route_tool
+    params_schema: {type: object, additionalProperties: false, properties: {from_location: {type: string, minLength: 1}, to_location: {type: string, minLength: 1}, mode: {type: string}, policy: {type: string}}, required: [from_location, to_location]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_navigation_tool
+    params_schema: {type: object, additionalProperties: false, properties: {to_location: {type: string, minLength: 1}, to_name: {type: string}, from_location: {type: string}, from_name: {type: string}, mode: {type: string}, policy: {type: integer}}, required: [to_location]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_static_map_tool
+    params_schema: {type: object, additionalProperties: false, properties: {center: {type: string, minLength: 1}, zoom: {type: integer}, size: {type: string}, maptype: {type: string}, markers: {type: string}}, required: [center]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_street_view_tool
+    params_schema: {type: object, additionalProperties: false, properties: {location: {type: string, minLength: 1}, radius_m: {type: integer}, heading: {type: integer}, pitch: {type: integer}}, required: [location]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_coord_convert_tool
+    params_schema: {type: object, additionalProperties: false, properties: {location: {type: string, minLength: 1}, from_type: {type: string}}, required: [location]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: map_weather_tool
+    params_schema: {type: object, additionalProperties: false, properties: {city: {type: string}, location: {type: string}, kind: {type: string}}}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: travel_poi_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {city: {type: string, minLength: 1}, preferences: {type: string}, avoid: {type: string}, must_go: {type: string}, limit: {type: integer, minimum: 1, maximum: 120}}, required: [city]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: travel_train_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {from_station: {type: string, minLength: 1}, to_station: {type: string, minLength: 1}, date: {type: string, minLength: 1}, limit: {type: integer, minimum: 1, maximum: 20}}, required: [from_station, to_station, date]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: travel_train_price_tool
+    params_schema: {type: object, additionalProperties: false, properties: {from_station: {type: string, minLength: 1}, to_station: {type: string, minLength: 1}, train_date: {type: string, minLength: 1}, train_code: {type: string, minLength: 1}}, required: [from_station, to_station, train_date, train_code]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: zhihu_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, count: {type: integer, minimum: 1, maximum: 50}}, required: [query]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: global_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, count: {type: integer, minimum: 1, maximum: 50}}, required: [query]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: web_search_tool
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, num_results: {type: integer, minimum: 1, maximum: 50}}, required: [query]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+  - name: web_crawl_tool
+    params_schema: {type: object, additionalProperties: false, properties: {url: {type: string, minLength: 1}, mode: {type: string}}, required: [url]}
+    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
