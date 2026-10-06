@@ -96,7 +96,8 @@ def test_raw_ignores_env(monkeypatch):
     _clear_role_env(monkeypatch)
     monkeypatch.setenv("LLM_MODEL", "qwen3.7-plus")
     info = resolve_raw("main")
-    assert info["value"] == "MiniMax-M3"
+    # 2026-10-06 拍板：anthropic 驱动档位摘除，代码默认改 doubao-seed-2.0-mini
+    assert info["value"] == "doubao-seed-2.0-mini"
     assert info["source"] == SOURCE_DEFAULT
     assert info["explicit"] is False
 
@@ -117,7 +118,7 @@ def test_raw_unknown_role_raises(monkeypatch):
 def test_raw_strips_surrounding_whitespace(monkeypatch):
     _clear_role_env(monkeypatch)
     monkeypatch.setenv("LLM_MODEL", "  qwen3.7-plus  ")
-    assert resolve_raw("main")["value"] == "MiniMax-M3"
+    assert resolve_raw("main")["value"] == "doubao-seed-2.0-mini"
 
 
 # =====================================================
@@ -198,10 +199,10 @@ def test_db_override_beats_env(monkeypatch):
 def test_override_removed_falls_back_to_code_default(monkeypatch):
     _clear_role_env(monkeypatch)
     monkeypatch.setenv("LLM_MODEL", "qwen3.7-plus")
-    inject_overrides({"main": "MiniMax-M3"})
+    inject_overrides({"main": "doubao-seed-2.0-mini"})
     assert resolve_raw("main")["source"] == SOURCE_DB
     reset_overrides()
-    assert resolve_raw("main")["value"] == "MiniMax-M3"
+    assert resolve_raw("main")["value"] == "doubao-seed-2.0-mini"
     assert resolve_raw("main")["source"] == SOURCE_DEFAULT
 
 
@@ -263,7 +264,10 @@ def test_secret_never_returns_ciphertext(monkeypatch):
 
 def test_provider_of_registered_model():
     assert provider_of("qwen3.7-plus") == "qwen"
-    assert provider_of("deepseek-v4-flash") == "deepseek"
+    # hermetic：断言用 SEED_MODELS 种子条目（fixture 注入的测试态注册表），
+    # 不依赖宿主 DB 的 enabled 状态
+    assert provider_of("deepseek-compat-test") == "deepseek"
+    assert provider_of("MiniMax-M3") == "minimax"
 
 
 def test_provider_of_unregistered_model_is_none():
@@ -311,11 +315,12 @@ def test_validate_roles_catches_unregistered(monkeypatch):
 
 def test_validate_roles_silent_when_all_registered(monkeypatch):
     _clear_role_env(monkeypatch)
+    # 全部用 SEED_MODELS 种子条目（hermetic 测试态，不依赖宿主 DB）
     inject_overrides({
         "main": "qwen3.7-plus",
-        "fallback": "Qwen/Qwen3-32B",
+        "fallback": "Qwen/Qwen3-32B-AWQ",
         "doc": "qwen2.5:3b",
-        "tool_selector": "deepseek-v4-flash",
+        "tool_selector": "deepseek-compat-test",
     })
     assert validate_roles() == []
 
