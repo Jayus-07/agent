@@ -10,8 +10,13 @@ from __future__ import annotations
 from typing import Any
 
 from backend.core.tool_runtime.models import ToolResult, ToolStatus
-from backend.observability.error_taxonomy import unify_tool_status
 from backend.observability.tracer import Span, SpanKind, trace_collector
+
+# 注意：本模块禁止顶层 import backend.observability.error_taxonomy——
+# error_taxonomy 顶层又 import core.tool_runtime.models（触发本包 __init__
+# 全量初始化 → executor → 回读本模块），admin 路由先于 tools 链导入
+# error_taxonomy 时形成循环导入，app 启动即崩（2026-10-08 实测）。
+# 统一在 finish_tool_span 调用时点惰性导入。
 
 
 def start_tool_span(
@@ -47,6 +52,8 @@ def finish_tool_span(
     dependency_level / degraded_reason 随 span metrics 落库——从 trace 一眼
     回答「为什么失败、有没有降级、是不是阻断、业务有没有继续」。
     """
+    from backend.observability.error_taxonomy import unify_tool_status
+
     error_class = unify_tool_status(result.status)
     metrics: dict[str, Any] = {
         "latency_ms": result.latency_ms,
