@@ -62,6 +62,8 @@ export interface AgentTraceStats {
   p95_duration_ms: number;
   error_count: number;
   total_cost_usd: number;
+  /** 来源三分类计数（2026-10-08 #12，后端 trace_source 唯一分类出口） */
+  sources?: { travel: number; cs: number; ai_assistant: number };
 }
 
 export async function getAgentTraceStats(hours: number): Promise<AgentTraceStats | null> {

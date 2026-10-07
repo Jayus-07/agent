@@ -10,6 +10,7 @@ v3 裁决 #1 的代码化：**先判意图，再合并 TripBrief，最后检查�
   1. MODIFY    指向已有行程的改动（要求 has_itinerary，且抽取器没把它
                理解成结构化改动——后者走既有「指纹变化→重排」链）
   2. PLAN      明确规划动词（v3：显式动作词是用户主权，压过同句疑问）
+  2.5 QUERY_TRANSIT 交通/车票查询（最快的车/高铁/怎么去）——只调 Tool 直出
   3. QUERY_DYNAMIC 带日期/现时的实时状态问题（开门/票价/天气/余票）
   4. QUERY_STATIC 背景与主观观点问题（好玩吗/值得去/怎么样）
   5. DISCOVER  还在选择目的地（去哪玩/推荐个城市）
@@ -33,6 +34,10 @@ class TravelIntent(str, enum.Enum):
     META = "meta"
     QUERY_DYNAMIC = "query_dynamic"
     QUERY_STATIC = "query_static"
+    # 交通/车票查询（2026-10-08 #2）：「明天去厦门最快的车」类纯查询——
+    # 只调 12306 查车次直出，不启动规划链（此前词表无交通词，被当成
+    # 规划需求追问「玩几天」或把旧行程原样重吐）。
+    QUERY_TRANSIT = "query_transit"
     DISCOVER = "discover"
     # M2 出域引导（2026-10-03）：明确指向非旅游域的诉求（订单/退款/写代码…）。
     # 优先级最高——这类词与行程改动几乎不会同句出现，先拦下避免 slot_filler
@@ -44,6 +49,7 @@ class TravelIntent(str, enum.Enum):
 QUERY_INTENTS: frozenset[str] = frozenset({
     TravelIntent.QUERY_DYNAMIC.value,
     TravelIntent.QUERY_STATIC.value,
+    TravelIntent.QUERY_TRANSIT.value,
     TravelIntent.DISCOVER.value,
 })
 
@@ -99,6 +105,17 @@ _RE_PLAN_VERB = re.compile(
 _RE_DAYS_COUNT = re.compile(
     r"(?<![\d近过前第一二两三四五六七八九十])"
     r"(?:\d{1,2}|[一二两三四五六七八九十]{1,3})\s*[天日](?!气)"
+)
+
+# ── 2.5) QUERY_TRANSIT：交通/车票查询 ──
+# 只收交通名词与出行方式问法，不收裸「票/坐」（防「门票」「演出票」误伤——
+# 那是 QUERY_DYNAMIC 的景区语义）。放在 PLAN 之后（「帮我规划…顺便看高铁」
+# 主诉求是规划）、QUERY_DYNAMIC 之前（「高铁票价多少钱」按车票查询处理，
+# 不落罐头话术）。
+_RE_TRANSIT_QUERY = re.compile(
+    r"车票|高铁|火车|动车|城际|班车|大巴|客运|航班|机票|飞机"
+    r"|(?:最快|最早|最晚|最便宜|首班|末班).{0,2}?(?:的车|车次|班次|一?班)"
+    r"|怎么去|怎么走|坐车|乘车"
 )
 
 # ── 3) QUERY_DYNAMIC：带时间锚的实时状态 ──
@@ -158,6 +175,10 @@ def classify_intent(
     #    顺便查天气」主诉求是改；「丽江三天直接规划」主诉求是规划）
     if _RE_PLAN_VERB.search(msg):
         return TravelIntent.PLAN
+
+    # 2.5) QUERY_TRANSIT：交通/车票查询（「明天去厦门最快的车」）
+    if _RE_TRANSIT_QUERY.search(msg):
+        return TravelIntent.QUERY_TRANSIT
 
     # 3) QUERY_DYNAMIC：实时状态问题（开门/票价/天气…）
     if _RE_DYNAMIC_FACT.search(msg):

@@ -124,6 +124,7 @@ _INTENT_REPORT_REASONS: dict[str, str] = {
     "out_of_scope": "出域诉求：转为能力边界引导，不启动规划链",
     "query_static": "静态问答意图：给有出处的观点，不启动规划链",
     "query_dynamic": "实时状态问答：暂无可靠实时来源，如实告知",
+    "query_transit": "交通/车票查询：slot 层已预取车次，直出答案不启动规划链",
     "discover": "找目的地/灵感：给可解释候选，不启动规划链",
     "modify": "逐条改单诉求：无结构化改动信号，如实说明当前支持范围",
 }

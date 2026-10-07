@@ -178,12 +178,93 @@ def _answer_dynamic(state: dict) -> str:
     destination = (state.get("query_destination") or brief.destination or "").strip()
     dest_label = destination or "目的地"
     return (
-        "「是否开门 / 当前票价 / 实时余票」这类随时会变的事实，"
+        "「是否开门 / 当前票价」这类随时会变的事实，"
         "我还没有可核验的实时来源，不能拿旧攻略冒充现状——"
         "建议出行前通过景区或官方渠道核实。\n\n"
+        "火车/高铁车次不用等：直接说「明天从福州到厦门最快的高铁」，"
+        "我帮你查实时车次。\n\n"
         f"我能帮上的：规划一份{dest_label}的行程（说「做一份{dest_label} N 天行程」），"
         "行程里的门票与开放时段会如实标注数据状态，不编数字。"
     )
+
+
+def _parse_duration_minutes(duration: str) -> int:
+    """把 12306 历时文本（「1小时25分」「01:25」等形态）折成分钟；解析
+    失败返回极大值保持原序（检索本身按出发时间升序）。"""
+    import re as _re
+
+    text = str(duration or "").strip()
+    if not text:
+        return 10 ** 6
+    m = _re.search(r"(\d+)\s*(?:小时|时|h|:|：)\s*(\d{1,2})?\s*(?:分|m)?", text)
+    if m:
+        hours = int(m.group(1))
+        minutes = int(m.group(2) or 0)
+        return hours * 60 + minutes
+    m = _re.search(r"(\d+)\s*分", text)
+    if m:
+        return int(m.group(1))
+    return 10 ** 6
+
+
+def _render_seat_summary(seats: dict, limit: int = 3) -> str:
+    """席别余票摘要：「二等座 有 / 一等座 12」形态；空数据如实显示。"""
+    items = []
+    for name, count in list(seats.items())[:limit]:
+        items.append(f"{name} {count}")
+    return " / ".join(items) if items else "余票数据缺失"
+
+
+def _answer_transit_query(state: dict) -> str:
+    """QUERY_TRANSIT：车票查询直出（2026-10-08 #2）。
+
+    数据全部来自 slot 层预取的 state["transit_query"]，本函数只做渲染
+    与排序，不发起网络请求；缺出发地/目的地不猜，带可解析的示例追问。
+    """
+    info = state.get("transit_query") or {}
+    status = str(info.get("status") or "failed")
+    destination = str(info.get("destination") or state.get("query_destination") or "").strip()
+
+    if status == "missing_origin":
+        return (
+            f"查{destination or '目的地'}的车票需要知道从哪出发——"
+            "告诉我出发城市即可，例如：「查明天从福州到厦门最快的高铁」。"
+        )
+    if status == "missing_destination":
+        return (
+            "想帮你查车票，还差一个到达城市——"
+            "例如：「明天从福州到厦门最快的高铁」。"
+        )
+    if status != "ok":
+        return (
+            f"{destination or '这段行程'}的车票查询暂时不可用"
+            "（12306 数据源超时或未启用），请稍后重试；"
+            "急用可到 12306 官方渠道查询。"
+        )
+
+    origin = str(info.get("origin") or "")
+    date_label = str(info.get("date") or "")
+    trains = [t for t in info.get("trains") or [] if isinstance(t, dict)]
+    if not trains:
+        return (
+            f"{origin} → {destination}（{date_label}）暂未查到直达车次；"
+            "可考虑中转，或换一个日期再试。"
+        )
+
+    ranked = sorted(trains, key=lambda t: _parse_duration_minutes(t.get("duration")))
+    lines = [f"{origin} → {destination}（{date_label}）最快的车次：", ""]
+    for t in ranked[:3]:
+        lines.append(
+            f"- **{t.get('train_no', '')}**　{t.get('start_time', '')} 出发 → "
+            f"{t.get('arrive_time', '')} 到达（历时 {t.get('duration', '') or '—'}）\n"
+            f"  余票：{_render_seat_summary(t.get('seats') or {})}"
+        )
+    lines += [
+        "",
+        f"数据来自 {info.get('source') or '12306'} 非官方聚合源，余票可能延迟，不作为购票依据。",
+        "要查票价或其他日期，直接说，例如「明天福州到厦门最便宜的车」。",
+    ]
+    return "\n".join(lines)
 
 
 def _answer_discover(state: dict) -> str:
@@ -364,6 +445,8 @@ def _assemble(state: dict) -> str:
         return _answer_static(state)
     if intent == "query_dynamic":
         return _answer_dynamic(state)
+    if intent == "query_transit":
+        return _answer_transit_query(state)
     if intent == "discover":
         return _answer_discover(state)
     # 局部改单成功后继续渲染新草案；只有未识别为结构化局部修改的

@@ -29,7 +29,6 @@ x-build: &build
     BUILD_TIME: ${BUILD_TIME:-unknown}
     DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
     PIP_INDEX_URL: ${PIP_INDEX_URL:-}
-    EXTRA_INDEX_URL: ${EXTRA_INDEX_URL:-}
 
 # ── Worker 公共锚（Phase2 Step5：五 workload 五 worker）────────
 # 所有 Celery worker 共享：镜像/env_file/数据卷/网络/重启与温停策略/

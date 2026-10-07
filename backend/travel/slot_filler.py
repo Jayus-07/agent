@@ -340,6 +340,7 @@ def slot_filler_node(state: dict) -> dict:
             {"label": "自己填天数", "days": None, "message": ""},
         ]
     if intent in {TravelIntent.QUERY_STATIC, TravelIntent.QUERY_DYNAMIC,
+                  TravelIntent.QUERY_TRANSIT,
                   TravelIntent.DISCOVER, TravelIntent.MODIFY}:
         clarification = ""
 
@@ -481,6 +482,58 @@ def slot_filler_node(state: dict) -> dict:
             for rec in recommend_cities(brief.preferences or [], top=3)
         ]}
 
+    # QUERY_TRANSIT：车票预取（2026-10-08 #2）。仿 inspiration 模式：失败
+    # 不阻塞（status=failed 如实呈现）。缺出发地/目的地不猜——reporter 带
+    # 示例追问；缺日期按明天兜底并明示（12306 只收今天与未来日期）。
+    transit_query: dict = {}
+    if intent is TravelIntent.QUERY_TRANSIT:
+        transit_destination = query_destination.strip()
+        transit_origin = (
+            fresh.origin or (previous.origin if previous else "")).strip()
+        if not transit_destination:
+            transit_query = {"status": "missing_destination"}
+        elif not transit_origin:
+            transit_query = {
+                "status": "missing_origin",
+                "destination": transit_destination,
+            }
+        else:
+            transit_date = (fresh.start_date.isoformat()
+                            if fresh.start_date else "")
+            date_defaulted = False
+            if not transit_date:
+                from datetime import date as _date, timedelta as _timedelta
+
+                transit_date = (_date.today() + _timedelta(days=1)).isoformat()
+                date_defaulted = True
+            try:
+                from backend.travel.services import live_search_service
+
+                payload = live_search_service.search_trains(
+                    from_station=transit_origin,
+                    to_station=transit_destination,
+                    travel_date=transit_date, limit=6)
+                transit_query = {
+                    "status": "ok",
+                    "origin": transit_origin,
+                    "destination": transit_destination,
+                    "date": transit_date,
+                    **(payload if isinstance(payload, dict) else {}),
+                }
+            except Exception as exc:  # noqa: BLE001 — 查询失败如实呈现不阻塞
+                logger.warning("[TravelSlotFiller] 车票预取失败: %s", exc)
+                transit_query = {
+                    "status": "failed",
+                    "origin": transit_origin,
+                    "destination": transit_destination,
+                    "date": transit_date,
+                }
+            if date_defaulted:
+                notes.append(
+                    f"未说出发日期，车票按明天（{transit_date}）查；"
+                    "要查其他日期直接说日期（如「10月20日的车」）"
+                )
+
     update: dict = {
         "brief_missing": missing,
         "clarifications": [clarification] if clarification else [],
@@ -554,6 +607,7 @@ def slot_filler_node(state: dict) -> dict:
 
     # reset 清理的是旧产物；本轮问答检索结果必须在 reset 之后写回。
     update["inspiration"] = inspiration
+    update["transit_query"] = transit_query
     update["notes"] = notes
 
     # M3-g 城市指南预热：城市级知乎/RAG 检索 fire-and-forget（结果写
