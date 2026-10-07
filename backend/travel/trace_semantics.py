@@ -154,6 +154,11 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
         if isinstance(item, dict)
     ]
 
+    # LLM 理解层观测（2026-10-08 STOP 1/4）：槽位解析来源与两次 LLM 调用
+    # 的结局投影。全部标量、无敏感原文（用户消息不进 tags）。
+    slot_llm = _as_dict(state.get("slot_llm_meta"))
+    clarify_meta = _as_dict(state.get("clarification_meta"))
+
     return {
         "conversation_id": str(state.get("conversation_id") or ""),
         "intent": intent,
@@ -173,6 +178,22 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
         "degraded_tools": [t for t in degraded_tools if t],
         "blocked_tools": [t for t in blocked_tools if t],
         "workflow_continued": not bool(blocked_tools),
+        "slot_parse_source": str(state.get("slot_parse_source") or "rule"),
+        "slot_llm_used": str(bool(slot_llm.get("used"))).lower(),
+        "slot_llm_model": str(slot_llm.get("model") or ""),
+        "slot_llm_prompt_version": str(slot_llm.get("prompt_version") or ""),
+        "slot_llm_latency_ms": slot_llm.get("latency_ms") or 0,
+        "slot_llm_candidate_count": slot_llm.get("candidate_count") or 0,
+        "slot_llm_accepted_count": slot_llm.get("accepted_count") or 0,
+        "slot_llm_rejected_count": slot_llm.get("rejected_count") or 0,
+        "slot_llm_fallback_reason": str(slot_llm.get("fallback_reason") or ""),
+        "clarification_source": str(state.get("clarification_source") or ""),
+        "clarification_slot": str(clarify_meta.get("slot") or ""),
+        "clarification_prompt_version": str(
+            clarify_meta.get("prompt_version") or ""),
+        "clarification_latency_ms": clarify_meta.get("latency_ms") or 0,
+        "clarification_fallback_reason": str(
+            clarify_meta.get("fallback_reason") or ""),
     }
 
 

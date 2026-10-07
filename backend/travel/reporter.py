@@ -20,7 +20,6 @@ from backend.travel.graph_state import (
 from backend.travel.models.itinerary import KIND_MEAL
 from backend.travel.models.poi import CATEGORY_MEAL, PLAYABLE_MEAL_MARKERS, source_provider
 from backend.travel.planning import names_match
-from backend.travel.slot_filler import build_clarification
 
 # 数据来源标识 → 面向用户的说明。
 # **新增数据源必须在此登记**，否则用户会看到「tencent:lbs — tencent:lbs」
@@ -456,9 +455,23 @@ def _assemble(state: dict) -> str:
 
     brief = load_brief(state)
 
-    # 1) 必填槽位缺失 → 追问（不猜、不硬排）
+    # 1) 必填槽位缺失 → 追问。文案单一生成点在 slot_filler（2026-10-08
+    #    STOP 3/4/5 收口）：ClarificationPlan → Renderer（LLM→模板降级）
+    #    的产物已随 state["clarifications"] 带回，reporter 只消费不重算
+    #    ——不重判缺什么槽、不再调一次模板/LLM（避免同轮两个不同追问）。
+    #    clarifications 缺失（历史 checkpoint / 异常态）时用纯模板按当前
+    #    brief 兜底，零 LLM。
     if state.get("brief_missing"):
-        return build_clarification(brief, state.get("user_message", ""))
+        existing = (state.get("clarifications") or [""])[0]
+        if existing:
+            return existing
+        from backend.travel.services.clarification_service import (
+            build_clarification_plan,
+            render_template,
+        )
+
+        plan = build_clarification_plan(brief, state.get("user_message", ""))
+        return render_template(plan) if plan is not None else ""
 
     # 1.5) Hard Dependency BLOCKED（2026-10-07 容错契约）：硬依赖无法验证
     # 时如实说明为什么不继续，绝不输出「假装满足约束」的方案，也绝不把

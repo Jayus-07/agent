@@ -60,7 +60,10 @@ class TestMultiturn:
         final = _ask(memory_graph, "帮我规划个行程", tid)
         ans = final.get("final_answer", "")
         assert "还需要确认" in ans
-        assert "去哪个城市" in ans and "玩几天" in ans
+        # P0-11（2026-10-08）：一次只问一个核心槽位——先问目的地，
+        # 用户补齐城市后下一轮才问天数（见 t2）
+        assert "去哪个城市" in ans
+        assert "玩几天" not in ans
         # P1-3：追问附目的地推荐，用户可直接选
         assert "先看看" in ans
 

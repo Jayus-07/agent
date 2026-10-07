@@ -1,0 +1,52 @@
+{"id": "g01", "message": "福州3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "福州", "days": 3}, "note": "规则直接识别，富化 LLM 必须为 0 次"}
+{"id": "g02", "message": "帮我规划一个行程", "family": "plan", "missing": ["destination", "days"], "ask": ["destination"], "fields": {}, "note": "全缺：一次只问 destination（P0-11）"}
+{"id": "g03", "message": "福州", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "福州"}, "note": "只缺天数"}
+{"id": "g04", "message": "3天", "family": "plan", "missing": ["destination"], "ask": ["destination"], "fields": {"days": 3}, "note": "只缺目的地"}
+{"id": "g05", "message": "下个月初和朋友去福州玩几天", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "福州", "party_size": 2}, "note": "月初/朋友/几天：目的不丢、人数 guess=2、几天不猜成具体天数"}
+{"id": "g06", "message": "月底想带爸妈去杭州逛逛", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "杭州", "party_size": 3}, "note": "月底不幻觉具体日期；带爸妈=3 人 guess"}
+{"id": "g07", "message": "国庆前后想去厦门，别安排太赶", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "厦门", "pace": "relaxed"}, "note": "别太赶=relaxed；国庆前后不定日"}
+{"id": "g08", "message": "带爸妈去杭州玩3天，别太赶", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "杭州", "days": 3, "party_size": 3, "pace": "relaxed"}, "note": "人数/节奏/天数全命中"}
+{"id": "g09", "message": "预算3000去杭州3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "杭州", "days": 3, "budget_cny": 3000.0}, "note": "预算+天数完整"}
+{"id": "g10", "message": "改成4天", "family": "plan", "missing": ["destination"], "ask": ["destination"], "fields": {"days": 4}, "note": "改单句式抽天数"}
+{"id": "g11", "message": "重新规划", "family": "plan", "missing": ["destination", "days"], "ask": ["destination"], "fields": {}, "note": "NEW_RUN 语义，槽位仍追问目的地"}
+{"id": "g12", "message": "福州好玩吗", "family": "query_static", "missing": null, "ask": null, "fields": {}, "note": "问答保护（Golden M）：不得因缺天数追问"}
+{"id": "g13", "message": "厦门三天好玩吗", "family": "query_static", "missing": null, "ask": null, "fields": {}, "note": "带天数的好玩吗仍是问答"}
+{"id": "g14", "message": "两个人去福州玩5天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "福州", "days": 5, "party_size": 2}, "note": "显式人数"}
+{"id": "g15", "message": "一家三口去厦门3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "厦门", "days": 3, "party_size": 3}, "note": "一家三口=3 人"}
+{"id": "g16", "message": "和朋友去厦门玩", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "厦门", "party_size": 2}, "note": "同伴 guess"}
+{"id": "g17", "message": "10月1号去福州玩2天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "福州", "days": 2}, "note": "过去日期自动进位下年"}
+{"id": "g18", "message": "下周五去杭州玩两天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "杭州", "days": 2}, "note": "相对日期词"}
+{"id": "g19", "message": "想去福州", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "福州"}, "note": "意愿表达缺天数"}
+{"id": "g20", "message": "喀纳斯玩两天", "family": "plan", "missing": ["destination"], "ask": ["destination"], "fields": {"days": 2}, "note": "名录外地名不猜目的地（LLM 候选也须过名录校验）"}
+{"id": "g21", "message": "月底去上海", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "上海"}, "note": "模糊时间不定日"}
+{"id": "g22", "message": "春节去哈尔滨看冰灯玩4天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "哈尔滨", "days": 4}, "note": "节假日词不拦抽取"}
+{"id": "g23", "message": "五一去南京玩，两三天吧", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "南京", "days": 3}, "note": "区间天数取上限（透明口径）"}
+{"id": "g24", "message": "去福州待一周", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "福州"}, "note": "待一周：规则盲区，LLM 富化正例靶（days=7）"}
+{"id": "g25", "message": "去苏州逛两天，慢节奏", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "苏州", "days": 2, "pace": "relaxed"}, "note": "慢节奏=relaxed"}
+{"id": "g26", "message": "带娃去三亚玩4天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "三亚", "days": 4, "pace": "relaxed"}, "note": "带娃→人群节奏派生 relaxed；人数不猜"}
+{"id": "g27", "message": "两大人一小孩去北京玩4天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "北京", "days": 4, "party_size": 3}, "note": "大人/儿童拆分派生 3 人"}
+{"id": "g28", "message": "我想去东京玩3天", "family": "plan", "missing": ["destination"], "ask": ["destination"], "fields": {"days": 3}, "note": "境外不支持城市如实追问"}
+{"id": "g29", "message": "从福州出发去大理玩3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "大理", "origin": "福州", "days": 3}, "note": "路线对：出发地/目的地各归其位"}
+{"id": "g30", "message": "9月21到25日去福州玩", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "福州", "days": 5}, "note": "日期区间兑现天数"}
+{"id": "g31", "message": "周末去武夷山走走", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "武夷山"}, "note": "周末歧义取周六并回显；缺天数追问"}
+{"id": "g32", "message": "国庆去长沙玩个四五天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "长沙", "days": 5}, "note": "四五天区间取上限"}
+{"id": "g33", "message": "去成都3天，行程轻松点", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "成都", "days": 3, "pace": "relaxed"}, "note": "轻松=relaxed"}
+{"id": "g34", "message": "吃什么不重要，主要是去长沙打卡4天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "长沙", "days": 4}, "note": "打卡捕获串含天数被清洗，不产生脏必去"}
+{"id": "g35", "message": "去泉州", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "泉州"}, "note": "只报名目的地"}
+{"id": "g36", "message": "一个人去西塘古镇玩两天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "西塘", "days": 2, "party_size": 1}, "note": "显式 1 人"}
+{"id": "g37", "message": "公司团建二十个人去千岛湖2天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "千岛湖", "days": 2, "party_size": 20}, "note": "中文复合数字人数"}
+{"id": "g38", "message": "想去海边城市放松两天", "family": "plan", "missing": ["destination"], "ask": ["destination"], "fields": {"days": 2}, "note": "泛目的地不猜"}
+{"id": "g39", "message": "十月底去北京看红叶玩三天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "北京", "days": 3}, "note": "模糊时间+明确天数"}
+{"id": "g40", "message": "帮我安排厦门的行程", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "厦门"}, "note": "安排=规划动词"}
+{"id": "g41", "message": "查一下明天福州的天气", "family": "query_dynamic", "missing": null, "ask": null, "fields": {}, "note": "实时问答不规划"}
+{"id": "g42", "message": "福州到厦门的高铁票", "family": "query_transit", "missing": null, "ask": null, "fields": {}, "note": "车票查询快路（#2）不被误规划"}
+{"id": "g43", "message": "推荐个小众目的地", "family": "discover", "missing": null, "ask": null, "fields": {}, "note": "找灵感出口"}
+{"id": "g44", "message": "你能做什么", "family": "meta", "missing": null, "ask": null, "fields": {}, "note": "能力说明"}
+{"id": "g45", "message": "帮我退个订单", "family": "out_of_scope", "missing": null, "ask": null, "fields": {}, "note": "出域引导"}
+{"id": "g46", "message": "好的", "family": "social", "missing": null, "ask": null, "fields": {}, "note": "寒暄"}
+{"id": "g47", "message": "去成都吃美食玩3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "成都", "days": 3, "preferences": ["美食"]}, "note": "偏好标签"}
+{"id": "g48", "message": "带女朋友去大理洱海拍照玩两天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "大理", "days": 2, "party_size": 2, "preferences": ["摄影"]}, "note": "同伴+偏好+天数"}
+{"id": "g49", "message": "十一月去漠河看极光3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "漠河", "days": 3}, "note": "中文月份不误读为日期"}
+{"id": "g50", "message": "和闺蜜周末去杭州逛逛", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "杭州", "party_size": 2}, "note": "闺蜜+周末"}
+{"id": "g51", "message": "杭州3天", "family": "plan", "missing": [], "ask": null, "fields": {"destination": "杭州", "days": 3}, "note": "城市+天数组合=规划"}
+{"id": "g52", "message": "帮我规划福州的行程", "family": "plan", "missing": ["days"], "ask": ["days"], "fields": {"destination": "福州"}, "note": "days 追问附可路由选项"}

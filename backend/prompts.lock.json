@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generated_at": "2026-10-06T02:47:24+08:00",
-  "git_sha": "083006d",
+  "generated_at": "2026-10-08T04:38:52+08:00",
+  "git_sha": "b1f222e",
   "source": "postgres://agent_memory.prompts",
-  "prompt_count": 48,
+  "prompt_count": 49,
   "prompts": {
     "business_report.polish": {
       "active_version": 1,
@@ -38,6 +38,11 @@
     "customer_service.complaint_assess": {
       "active_version": 1,
       "template_hash": "006cd7b8cd1dfeb2",
+      "change_kind": null
+    },
+    "customer_service.complaint_escalate": {
+      "active_version": 1,
+      "template_hash": "b554a5ee723f982d",
       "change_kind": null
     },
     "customer_service.query_intent": {

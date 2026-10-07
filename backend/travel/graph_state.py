@@ -71,6 +71,19 @@ class TravelGraphState(TypedDict, total=False):
     brief_missing: list[str]
     clarifications: list[str]
     clarification_options: list[dict]
+    # 追问单一生成点（2026-10-08 STOP 3/5）：slot_filler 产出的追问计划与
+    # 渲染来源（llm|template，空=无追问）。reporter 只消费 clarifications，
+    # 不再二次生成。必须入 schema——LangGraph 会剥离 schema 外的更新键。
+    clarification_plan: dict
+    clarification_source: str
+    clarification_meta: dict
+    # LLM 槽位富化观测（2026-10-08 STOP 1）：slot_parse_source ∈
+    # rule | rule+llm | rule_fallback；slot_llm_meta = 调用结局投影
+    # （used/status/model/prompt_version/latency_ms/candidate/accepted/
+    # rejected/fallback_reason，全标量）。只是观测投影——LLM 在结构上
+    # 不写任何业务状态。
+    slot_parse_source: str
+    slot_llm_meta: dict
     # 上一轮 brief 的指纹：跨轮（checkpointer 开启）时用来判断需求是否变化，
     # 变了就清空规划产物重排，避免拿新约束贴旧行程
     brief_fingerprint: str

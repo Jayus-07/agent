@@ -40,6 +40,21 @@ TRAVEL_MAX_DAYS = max(1, int(os.getenv("TRAVEL_MAX_DAYS", "15")))
 TRAVEL_LLM_INTENT_ENABLED = os.getenv("TRAVEL_LLM_INTENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 TRAVEL_LLM_INTENT_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_INTENT_TIMEOUT_MS", "3000")))
 
+# LLM Slot Semantic Fallback（2026-10-08 STOP 1）：规则抽取缺口的槽位候选
+# 补全（「待一周」「乌镇」类词表盲区）。默认关（灰度纪律，同上）——关闭
+# =完全回到纯规则解析，零 LLM。硬约束：单轮 ≤1 次、失败禁重试、只补规则
+# missing 的白名单槽、永不覆盖规则值（explicit_rule > llm_candidate）。
+TRAVEL_LLM_SLOT_ENRICHMENT_ENABLED = os.getenv("TRAVEL_LLM_SLOT_ENRICHMENT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+TRAVEL_LLM_SLOT_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_SLOT_TIMEOUT_MS", "3000")))
+# 候选置信度门槛：低于此值的 LLM 候选一律丢弃（宁追问不瞎填）
+TRAVEL_LLM_SLOT_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("TRAVEL_LLM_SLOT_MIN_CONFIDENCE", "0.7"))))
+
+# LLM Clarification Renderer（2026-10-08 STOP 4）：只把**已确定**的追问意图
+# 渲染得自然（问什么/问哪个槽/选项全由规则先行决定）。默认关——关闭=完全
+# 回到模板追问。失败立即模板接管，不重试（低价值高频链路，降级优先）。
+TRAVEL_LLM_CLARIFICATION_ENABLED = os.getenv("TRAVEL_LLM_CLARIFICATION_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+TRAVEL_LLM_CLARIFICATION_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_CLARIFICATION_TIMEOUT_MS", "2500")))
+
 # 独立子图运行时。
 # **默认值由 TRAVEL_MAX_STEPS 派生，不能各自硬编码**：一个调度回合要花 2 个
 # 图步（supervisor 自己 + 它跳到的那个节点），所以 recursion_limit 必须显著

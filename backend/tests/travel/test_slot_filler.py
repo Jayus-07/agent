@@ -327,10 +327,16 @@ class TestBriefAndClarification:
         assert brief.missing_slots() == ["destination"]
         assert brief.is_ready() is False
 
-    def test_clarification_lists_each_missing_slot(self):
+    def test_clarification_asks_highest_priority_slot_only(self):
+        """P0-11（2026-10-08）：一次只问优先级最高的槽位（destination 先于 days）。"""
         text = build_clarification(TravelBrief())
         assert "去哪个城市" in text
+        assert "玩几天" not in text
+
+    def test_clarification_asks_days_after_destination_filled(self):
+        text = build_clarification(TravelBrief(destination="福州"))
         assert "玩几天" in text
+        assert "去哪个城市" not in text
 
     def test_no_clarification_when_ready(self):
         assert build_clarification(

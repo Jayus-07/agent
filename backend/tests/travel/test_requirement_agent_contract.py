@@ -123,7 +123,11 @@ class TestMissingSlotDetection:
         assert "destination" in missing and "days" in missing
         text = agent.build_clarification(brief, "我想出去玩")
         assert text.startswith("为了把行程排准，还需要确认：")
-        assert "1." in text and "2." in text
+        assert "1." in text
+        # P0-11（2026-10-08）：一次只问优先级最高的一个槽位（destination 先于
+        # days），用户补齐后下一轮再问下一个——不再一次抛全表单。
+        assert "2." not in text
+        assert "去哪个城市" in text
 
     def test_unsupported_city_named(self):
         agent = RequirementAgent()
@@ -226,11 +230,17 @@ class TestLLMForbidden:
         assert not hasattr(T, "TRAVEL_REQUIREMENT_LLM_ENABLED")
 
     def test_extension_note_documented(self):
-        # 扩展位只允许以文档形式存在（模块 docstring 说明接入硬约束）
-        source = (TRAVEL_DIR / "agents" / "requirement_agent.py").read_text(
+        # 扩展位已落地为独立受限服务（2026-10-08 STOP 1/4）：requirement_agent
+        # 本体保持零 LLM；槽位补全/追问渲染的接入硬约束在服务模块锁定
+        agent_source = (TRAVEL_DIR / "agents" / "requirement_agent.py").read_text(
             encoding="utf-8")
-        assert "LLM 结构化补全的扩展位" in source
-        assert "单 run ≤1 次" in source
+        assert "零 LLM（冻结维持）" in agent_source
+        assert "llm_slot_enrichment_service" in agent_source
+        enrich_source = (
+            TRAVEL_DIR / "services" / "llm_slot_enrichment_service.py"
+        ).read_text(encoding="utf-8")
+        assert "单轮 ≤1 次" in enrich_source
+        assert "永不被覆盖" in enrich_source
 
 
 class TestAgentServiceBoundary:
