@@ -436,8 +436,11 @@ class TestGraphIntegration:
             build_travel_graph_result,
         )
 
+        # 消息不含「高铁/车票」等交通词（2026-10-08 修 a2344db 先行漂移）：
+        # QUERY_TRANSIT 快路会把含交通词的消息接走出问答出口，blocked 契约
+        # 根本不进规划链；硬依赖阻断测试需要一条纯规划消息。
         final, events = self._invoke(
-            "必须找到2026-10-08上午9点前抵达厦门的高铁，否则不要给我行程，"
+            "必须找到2026-10-08上午9点前抵达厦门的车，否则不要给我行程，"
             "从福州出发，厦门1天", monkeypatch)
         result = build_travel_graph_result(final)
 

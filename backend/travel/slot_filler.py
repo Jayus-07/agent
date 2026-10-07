@@ -69,6 +69,8 @@ from backend.travel.services.requirement_service import (
 # 无状态进程级单例：节点编排经此调用 Agent/Service 公开面。
 _requirement_agent = RequirementAgent()
 _requirement_service = RequirementService()
+# 追问计划唯一事实源（STOP 3）：Plan 构建/模板渲染/前端选项映射都在该模块
+from backend.travel.services import clarification_service as _clarification_service
 
 __all__ = [
     "RequirementAgent",
@@ -231,6 +233,52 @@ def slot_filler_node(state: dict) -> dict:
             # （实机踩过：首轮规划直接 failed）
             intent = TravelIntent(llm_intent)
             logger.info("[TravelSlotFiller] 词表盲区由 LLM 补判 intent=%s", intent.value)
+    # ── STOP 1（2026-10-08）：LLM Slot Semantic Fallback ─────────────
+    # 触发门禁（全部满足才调，单轮 ≤1 次）：规划轨（未分类或 PLAN）+
+    # 合并后仍缺 required 槽 + 非 cancel/new_run。候选只填空槽
+    # （apply_candidates 确定性合并），规则值永不被覆盖；任何失败回落
+    # 纯规则结果，slot_parse_source 如实记录三种来源供 trace 消费。
+    # 注意必须在 merge 之前改 fresh——merge 消费的就是这里的产物。
+    slot_enrichment: dict = {}
+    slot_parse_source = "rule"
+    llm_party_guess = False
+    if (partial_request is None
+            and intent in (None, TravelIntent.PLAN)
+            and not is_cancel_run_query(message)
+            and not is_new_run_query(message)):
+        pending_missing = (
+            _requirement_service.merge(previous, fresh).missing_slots()
+            if previous is not None else fresh.missing_slots()
+        )
+        if pending_missing:
+            from backend.travel.services.llm_slot_enrichment_service import (
+                apply_candidates,
+                enrich_slots,
+            )
+
+            outcome = enrich_slots(message, missing_slots=pending_missing)
+            # 显式人数表达（「3个人」「2个大人」）时丢弃 LLM party 候选：
+            # apply_candidates 是纯函数看不到原话，显式 1 与缺省 1 不可区分，
+            # 这道过滤放在持有原话的编排层。
+            usable_candidates = [
+                c for c in outcome.candidates
+                if c.slot != "party_size"
+                or party_size_source(message) != "explicit"]
+            fresh, accepted_slots = apply_candidates(
+                fresh, usable_candidates)
+            outcome.accepted = [
+                c for c in usable_candidates if c.slot in accepted_slots]
+            slot_parse_source = "rule+llm" if outcome.used else "rule_fallback"
+            slot_enrichment = outcome.meta()
+            if accepted_slots:
+                logger.info(
+                    "[TravelSlotFiller] LLM 富化接受槽位 %s（status=%s）",
+                    accepted_slots, outcome.status)
+                if "party_size" in accepted_slots:
+                    # 富化人数是 guess 级事实（规则没接住、LLM 有据补全），
+                    # 口径与同伴推断对齐——不让透明化提示误报「按 1 人默认」
+                    llm_party_guess = True
+
     if partial_request is None:
         non_mutating = intent in NON_PLANNING_INTENTS
         brief = (
@@ -301,7 +349,30 @@ def slot_filler_node(state: dict) -> dict:
     # 时「丽江好玩吗」会因缺天数被误追问「玩几天」——supervisor 拿到
     # intent 后转问答出口，不再按规划链走。
     missing = brief.missing_slots()
-    clarification = _requirement_agent.build_clarification(brief, message)
+    # ── STOP 3/4（2026-10-08）：追问单一生成点 ────────────────────────
+    # 规划轨（未分类/PLAN）走 ClarificationPlan → Renderer（LLM→模板降级，
+    # 一次只问优先级最高的一个槽）；其余意图沿用模板出口（下游按意图转
+    # 问答出口或清空，行为与收口前一致）。Reporter 只消费
+    # state["clarifications"]，不再二次生成（STOP 5）。
+    clarification_plan = None
+    clarification_meta: dict = {"source": "template"}
+    clarification = ""
+    if missing:
+        if intent in (None, TravelIntent.PLAN):
+            from backend.travel.services.clarification_renderer import (
+                render_clarification,
+            )
+
+            clarification_plan = _clarification_service.build_clarification_plan(
+                brief, message,
+                unsupported_city=(
+                    extract_unsupported_city(message) if message else ""),
+            )
+            if clarification_plan is not None:
+                clarification, clarification_meta = render_clarification(
+                    clarification_plan, message)
+        else:
+            clarification = _requirement_agent.build_clarification(brief, message)
     if clarification:  # M12：slot 追问计数（缺槽数分桶，软失败）
         try:
             from backend.observability.metrics import travel_slot_clarify_total
@@ -332,13 +403,12 @@ def slot_filler_node(state: dict) -> dict:
     if intent is TravelIntent.MODIFY and (brief_changed or missing):
         intent = None
 
+    # 点击选项来自 ClarificationPlan（规则生成，LLM 零参与）：destination
+    # 追问给城市 chips、days 追问给「快捷 3 天/自由输入」，全部可重发回域。
     clarification_options: list[dict] = []
-    if intent is TravelIntent.PLAN and missing == ["days"]:
-        clarification_options = [
-            {"label": "按 3 天参考规划", "days": 3,
-             "message": f"规划{brief.destination}3天行程"},
-            {"label": "自己填天数", "days": None, "message": ""},
-        ]
+    if clarification_plan is not None and intent in (None, TravelIntent.PLAN):
+        clarification_options = _clarification_service.frontend_options(
+            clarification_plan)
     if intent in {TravelIntent.QUERY_STATIC, TravelIntent.QUERY_DYNAMIC,
                   TravelIntent.QUERY_TRANSIT,
                   TravelIntent.DISCOVER, TravelIntent.MODIFY}:
@@ -371,6 +441,8 @@ def slot_filler_node(state: dict) -> dict:
     }
     if long_term_preference:
         slot_sources["long_term_preference"] = "explicit"
+    if llm_party_guess:
+        slot_sources["party_size"] = "guess"
     if brief.budget_cny is not None:
         slot_sources["budget_constraint"] = brief.budget_constraint
     if brief.weather_conditions:
@@ -538,6 +610,17 @@ def slot_filler_node(state: dict) -> dict:
         "brief_missing": missing,
         "clarifications": [clarification] if clarification else [],
         "clarification_options": clarification_options,
+        # LLM 理解层观测（STOP 1/3/4）：解析来源、两次 LLM 调用 meta 与
+        # 追问计划。全部可序列化标量/dict；LLM 在结构上不写业务状态，
+        # 这些键只是观测投影。必须入 schema（graph_state.TypedDict）。
+        "slot_parse_source": slot_parse_source,
+        "slot_llm_meta": slot_enrichment,
+        "clarification_plan": (
+            clarification_plan.model_dump()
+            if clarification_plan is not None else {}),
+        "clarification_source": (
+            clarification_meta.get("source", "") if clarification else ""),
+        "clarification_meta": clarification_meta if clarification else {},
         "query_destination": query_destination,
         "slot_sources": slot_sources,
         "destination_change": "destination" in brief_changed_fields,
@@ -634,7 +717,8 @@ def slot_filler_node(state: dict) -> dict:
         slot_sources=slot_sources,
         intent=intent.value if intent else "",
         clarification_options=clarification_options,
-        confidence="rule_based",
+        # 解析来源三态（rule / rule+llm / rule_fallback），取代硬编码
+        confidence=slot_parse_source,
         destination_change="destination" in brief_changed_fields,
     )
     return update

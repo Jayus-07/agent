@@ -43,6 +43,22 @@ class TestByteExactness:
 
         assert _render("travel.llm_intent") == llm_intent_service._SYSTEM_PROMPT
 
+    def test_travel_slot_enrichment_matches_constant(self):
+        from backend.travel.services import llm_slot_enrichment_service
+
+        missing = "destination、days"
+        assert _render("travel.slot_enrichment", missing_slots=missing) == (
+            llm_slot_enrichment_service._SYSTEM_PROMPT.format(
+                missing_slots=missing))
+
+    def test_travel_clarification_renderer_matches_constant(self):
+        from backend.travel.services import clarification_renderer
+
+        variables = {"known_facts": '{"destination": "福州"}',
+                     "ask_slot": "days", "slot_question": "打算玩几天？"}
+        assert _render("travel.clarification_renderer", **variables) == (
+            clarification_renderer._SYSTEM_PROMPT.format(**variables))
+
     def test_chat_fallback_matches_constant(self):
         from backend.customer_service import chat_fallback
 
@@ -133,6 +149,21 @@ class TestRegistryFirst:
         assert prompt == "SENTINEL::context.followup_rewrite"
         assert capture_render_sync == ["context.followup_rewrite"]
 
+    def test_travel_slot_enrichment_uses_registry(self, capture_render_sync):
+        from backend.travel.services import llm_slot_enrichment_service
+
+        text, _ = llm_slot_enrichment_service._prompt("destination、days")
+        assert text == "SENTINEL::travel.slot_enrichment"
+        assert capture_render_sync == ["travel.slot_enrichment"]
+
+    def test_travel_clarification_renderer_uses_registry(
+            self, capture_render_sync):
+        from backend.travel.services import clarification_renderer
+
+        text, _ = clarification_renderer._prompt("{}", "days", "打算玩几天？")
+        assert text == "SENTINEL::travel.clarification_renderer"
+        assert capture_render_sync == ["travel.clarification_renderer"]
+
 
 # ── 不变量 3：降级等价 ─────────────────────────────────────────
 
@@ -166,6 +197,23 @@ class TestDegradedFallback:
         assert llm_intent_service._intent_system_prompt() == (
             llm_intent_service._SYSTEM_PROMPT
         )
+
+    def test_travel_slot_enrichment_falls_back_to_constant(self, monkeypatch):
+        from backend.travel.services import llm_slot_enrichment_service
+
+        self._broken_render_sync(monkeypatch)
+        text, _ = llm_slot_enrichment_service._prompt("days")
+        assert text == llm_slot_enrichment_service._SYSTEM_PROMPT.format(
+            missing_slots="days")
+
+    def test_travel_clarification_renderer_falls_back_to_constant(
+            self, monkeypatch):
+        from backend.travel.services import clarification_renderer
+
+        self._broken_render_sync(monkeypatch)
+        text, _ = clarification_renderer._prompt("{}", "days", "打算玩几天？")
+        assert text == clarification_renderer._SYSTEM_PROMPT.format(
+            known_facts="{}", ask_slot="days", slot_question="打算玩几天？")
 
     def test_chat_fallback_falls_back_to_constant(self, monkeypatch):
         from backend.customer_service import chat_fallback

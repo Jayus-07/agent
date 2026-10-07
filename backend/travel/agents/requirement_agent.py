@@ -1,14 +1,17 @@
 """travel/agents/requirement_agent.py — Requirement Agent（v3 §3.1 ② / Phase 2）
 
-职责边界（冻结）：自然语言需求理解 / 槽位抽取 / 缺失检测 / TripBrief 生成 /
-追问文案。只回答「用户这轮说了什么」，不做合并（merge_brief 归
-services/requirement_service.py）、不碰 checkpoint、不碰 memory、不判会话
-意图（重开/取消信号在 core/intent_signals.py）。
+职责边界（2026-10-08 更新）：自然语言需求理解 / 槽位抽取 / 缺失检测 /
+TripBrief 生成 / 追问**模板**文案。只回答「用户这轮说了什么」，不做合并
+（merge_brief 归 services/requirement_service.py）、不碰 checkpoint、不碰
+memory、不判会话意图（重开/取消信号在 core/intent_signals.py）。
 
-零 LLM（Phase 2 冻结，确定性优先）：全部为可单测穷举的正则与词典。未来
-LLM 结构化补全的扩展位只在本文档说明，**不设代码接口、不接配置**——
-接入时的硬约束：仅当规则层 required 槽缺失/低置信才允许触发；单 run ≤1 次；
-禁止重试；失败必须回落规则结果+追问；LLM 不得写业务状态。
+零 LLM（冻结维持）：全部为可单测穷举的正则与词典。LLM 理解缺口由两个
+独立受限服务承接（本模块不设 LLM 接口，编排归 slot_filler）：
+  - 槽位候选补全 → services/llm_slot_enrichment_service.py（只在规则
+    missing 的白名单槽上出候选，规则值永不被覆盖）；
+  - 追问自然化 → services/clarification_renderer.py（只改写
+    clarification_service 已确定的追问意图）；追问计划与模板的唯一事实源
+    在 services/clarification_service.py，build_clarification 是模板通道。
 
 抽取边界（明确不猜，历史事故修复原样保留）：
   - 没有货币单位的数字不当预算（"3天"不是 3000 元）
@@ -29,7 +32,6 @@ from backend.travel.models.brief import (
     PACE_KEYWORDS,
     PREFERENCE_KEYWORDS,
     TIER_KEYWORDS,
-    SLOT_QUESTIONS,
     TravelBrief,
 )
 from backend.travel.services.requirement_service import (
@@ -1104,56 +1106,26 @@ def extract_fresh_brief(
 
 
 def build_clarification(brief: TravelBrief, user_message: str = "") -> str:
-    """必填槽位缺失时的追问文案。
+    """必填槽位缺失时的追问文案（**模板通道**）。
 
+    追问计划的唯一事实源是 clarification_service.build_clarification_plan：
+    问哪个槽（一次只问优先级最高的一个，P0-11）、选项、背景行都在那里
+    确定；本函数恒走模板渲染 —— slot_filler 规划轨经 ClarificationRenderer
+    （LLM→模板降级）消费同一份 Plan，本函数供非规划轨与兼容消费方使用。
     user_message 用于识别「用户点名了不支持的城市」——此时明确告知原因，
     而不是让用户对着城市列表猜自己哪里答错了。
-    P1-3：destination 缺失时附偏好推荐，让用户有「可以直接选」的起点。
-    支持范围口径随数据源分叉（v3 P0-A）：live 模式 = 全国主要城市
-    （识别名录 + 实时地图检索），seed 模式仍如实只报种子 3 城。
     """
-    missing = brief.missing_slots()
-    if not missing:
-        return ""
-    questions = [SLOT_QUESTIONS.get(s, s) for s in missing]
-    lines = ["为了把行程排准，还需要确认："]
-    lines += [f"{i}. {q}" for i, q in enumerate(questions, 1)]
-    from backend.config.travel import TRAVEL_POI_SOURCE
+    from backend.travel.services.clarification_service import (
+        build_clarification_plan,
+        render_template,
+    )
 
     unsupported = extract_unsupported_city(user_message) if user_message else ""
-    if TRAVEL_POI_SOURCE == "seed":
-        cities_line = "、".join(poi_seed.all_cities())
-        if unsupported and "destination" in missing:
-            lines.append(
-                f"\n你提到的「{unsupported}」暂时无法规划（还没有当地的地点数据），"
-                f"当前可规划的城市：{cities_line}"
-            )
-        else:
-            lines.append(f"\n（当前可规划的城市：{cities_line}）")
-    else:
-        if unsupported and "destination" in missing:
-            lines.append(
-                f"\n你提到的「{unsupported}」暂时无法规划（暂不支持境外及"
-                "该目的地），境内主要城市都可以试。"
-            )
-        else:
-            lines.append(
-                "\n（全国主要城市均可规划，地点信息来自实时地图检索）"
-            )
-    if "destination" in missing:
-        try:
-            from backend.travel.recommend import (
-                recommend_cities,
-                render_recommendation_line,
-            )
-
-            rec_line = render_recommendation_line(
-                recommend_cities(brief.preferences))
-            if rec_line:
-                lines.append(f"\n{rec_line}，回复城市名即可开始规划。")
-        except Exception:  # noqa: BLE001 — 推荐是增强项，失败不影响追问
-            pass
-    return "\n".join(lines)
+    plan = build_clarification_plan(
+        brief, user_message, unsupported_city=unsupported)
+    if plan is None:
+        return ""
+    return render_template(plan)
 
 
 class RequirementAgent:

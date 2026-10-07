@@ -15,10 +15,10 @@ from backend.prompts.loader import load_defaults
 
 class TestRegistryShape:
     def test_total_count(self):
-        # 2026-10-06 裸 Prompt 收口（router.tool_selector / general_chat.system /
-        # context.followup_rewrite / travel.llm_intent）+ chat_fallback 断线补注册，
-        # 基线 45 增至 50。
-        assert len(PROMPT_REGISTRY) == 50
+        # 2026-10-06 裸 Prompt 收口后主干基线 51；2026-10-08 并行两线各增：
+        # travel 理解层 2 键（STOP 1/4）+ 客服 LLM 语义层 4 键（intent_understanding/
+        # slot_enrichment/confirm_candidate/response_composer），51 → 57。
+        assert len(PROMPT_REGISTRY) == 57
 
     def test_exactly_one_code_controlled(self):
         code_controlled = [s for s in PROMPT_REGISTRY.values() if s.code_controlled]

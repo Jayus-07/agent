@@ -488,6 +488,48 @@ _register(PromptSpec(
     agent="customer_service",
 ))
 
+# ── CS LLM 语义层 / 回复层（2026-10-08 客服域 LLM 收口改造）──────
+
+_register(PromptSpec(
+    key="customer_service.intent_understanding",
+    name="客服意图理解 LLM 补判 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("user_message"), R("intent_candidates")),
+    default_file="customer_service_intent_understanding.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.slot_enrichment",
+    name="客服语义槽位抽取 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("user_message"), R("intent")),
+    default_file="customer_service_slot_enrichment.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.confirm_candidate",
+    name="客服确认语义候选 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("user_message"),),
+    default_file="customer_service_confirm_candidate.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
+    key="customer_service.response_composer",
+    name="客服自然回复撰写 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("expert_type"), R("user_message"), R("facts"), R("draft")),
+    default_file="customer_service_response_composer.yaml",
+    agent="customer_service",
+))
+
 # ── Travel（原裸字符串收编，2026-10-06）────────────────────────
 
 _register(PromptSpec(
@@ -496,6 +538,26 @@ _register(PromptSpec(
     category="travel",
     risk_level="medium",
     default_file="travel_llm_intent.yaml",
+))
+
+# ── Travel LLM 理解层（2026-10-08 STOP 1/4：槽位富化 + 追问渲染）──
+
+_register(PromptSpec(
+    key="travel.slot_enrichment",
+    name="旅游槽位 LLM 富化 Prompt",
+    category="travel",
+    risk_level="medium",
+    variables=(R("missing_slots"),),
+    default_file="travel_slot_enrichment.yaml",
+))
+
+_register(PromptSpec(
+    key="travel.clarification_renderer",
+    name="旅游追问自然化渲染 Prompt",
+    category="travel",
+    risk_level="medium",
+    variables=(R("known_facts"), R("ask_slot"), R("slot_question")),
+    default_file="travel_clarification_renderer.yaml",
 ))
 
 # ── Agent Capability ───────────────────────────────────────────
