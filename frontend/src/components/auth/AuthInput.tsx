@@ -49,7 +49,9 @@ export default function AuthInput({
             setFocused(false);
             rest.onBlur?.(e);
           }}
-          className={`h-12 w-full bg-transparent text-[14px] text-[#16191A] outline-none placeholder:text-[#A3ADA8] ${
+          // 16px 起：iOS Safari 对 <16px 的输入框会在聚焦时自动放大整页，
+          // 移动端必须 16px 才不会「一点输入框页面就跳」
+          className={`h-12 w-full bg-transparent text-[16px] text-[#16191A] outline-none placeholder:text-[#A3ADA8] sm:text-[14px] ${
             className ?? ""
           }`}
         />

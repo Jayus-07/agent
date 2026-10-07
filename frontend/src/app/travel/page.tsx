@@ -139,6 +139,22 @@ function useIsWide(): boolean {
   return wide
 }
 
+/**
+ * 手机端（≤md=768px）聊天全屏模式（2026-10-07 用户拍板）。
+ * 手机上只保留对话给行程计划，行程卡/时间轴/地图放不下也不好看。
+ */
+function useIsMobileChat(): boolean {
+  const [mobile, setMobile] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const sync = () => setMobile(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return mobile
+}
+
 export default function TravelPage() {
   // ── 表单 ──
   const [origin, setOrigin] = useState('')
@@ -192,6 +208,9 @@ export default function TravelPage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [feedbackSent, setFeedbackSent] = useState<'' | 'positive' | 'negative'>('')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // 手机端（≤md）聊天全屏：首次进入（有行程时）自动展开聊天，行程详情靠返回键切换。
+  // 用 ref 记住「已自动展开过」，避免 hasRightRail 由 false→true 时重复弹出打断用户。
+  const mobileChatAutoOpenedRef = useRef(false)
   // 当前选中天：行程视图与右侧助手共享（点日卡片 → 助手知道「正在看第几天」）
   const [activeDay, setActiveDay] = useState(1)
   // 出行程后左栏折叠为摘要；「调整条件」再展开
@@ -256,6 +275,7 @@ export default function TravelPage() {
   const { status: budgetStatus } = useBudgetStatus(setBudgetBlocked)
   const abortRef = useRef<AbortController | null>(null)
   const isWide = useIsWide()
+  const isMobileChat = useIsMobileChat()
 
   const preferenceKey = preferences.join(',')
 
@@ -606,6 +626,14 @@ export default function TravelPage() {
   const hasLeftRail = loading || !!itinerary
   // 右栏助手：设计稿态1 没有助手栏 —— 空态时连助手都不出现，输入卡是唯一焦点
   const hasRightRail = loading || !!itinerary || chatActivated
+
+  // 手机端首次具备助手时自动展开聊天（只做一次；之后由用户在聊天/行程间手动切换）
+  useEffect(() => {
+    if (!isMobileChat || !hasRightRail) return
+    if (mobileChatAutoOpenedRef.current) return
+    mobileChatAutoOpenedRef.current = true
+    setDrawerOpen(true)
+  }, [isMobileChat, hasRightRail])
   const userName = getCachedUser()?.username || '本地用户'
 
   return (
@@ -715,8 +743,14 @@ export default function TravelPage() {
               {/* ── 左栏已移除（M1）：条件摘要上移为顶部 TripConditionsBar，调整入口在其「调整」按钮 ── */}
 
             {/* ── 中栏：行程（唯一结果主视图，栏内滚动） ── */}
-            {/* M2 布局反馈：中栏改 flex 列，行程大卡 flex-1 与右栏聊天等高（时间轴/须知各自内滚） */}
-            <main className="flex min-w-0 min-h-0 flex-col gap-4 lg:overflow-hidden lg:pr-0.5">
+            {/* M2 布局反馈：中栏改 flex 列，行程大卡 flex-1 与右栏聊天等高（时间轴/须知各自内滚）
+                2026-10-07 手机口径：手机端聊天全屏（常态展开）；点顶栏返回键
+                则收起聊天、露出行程详情——两个视图在手机上互斥切换。 */}
+            <main
+              className={`flex min-w-0 min-h-0 flex-col gap-4 lg:overflow-hidden lg:pr-0.5 ${
+                isMobileChat && drawerOpen ? 'hidden' : ''
+              }`}
+            >
               {!itinerary && !loading && !planState.notice && (
                 <PlanIntakeCard
                   value={quickIdea}
@@ -908,11 +942,18 @@ export default function TravelPage() {
         onNewPlan={startNewTrip}
       />
 
-      {/* 中窄屏：「对话改行程」边缘按钮 + 展开抽屉（态1 无助手，不出入口） */}
+      {/* 中窄屏：「对话改行程」边缘按钮 + 展开抽屉（态1 无助手，不出入口）
+          2026-10-07 手机口径：≤md 只聊天给行程计划——行程卡/时间轴/地图在
+          390px 屏放不下也不好看，故手机端让聊天全屏（抽屉常态展开、去掉贴边把手），
+          行程细节请在桌面端查看。md~xl 维持原覆盖抽屉形态（把手是设计意图）。 */}
       {!isWide && hasRightRail && (
         <TravelChatDrawer
           mode="drawer"
+          // 手机全屏也走 drawerOpen 这一个开关：初次进入由 effect 自动置 true，
+          // 点顶栏返回键置 false → 聊天收起、露出行程详情。不能写
+          // `drawerOpen || isMobileChat`——那样 isMobileChat 恒真，返回键永远失效。
           open={drawerOpen}
+          isMobileFull={isMobileChat}
           onOpen={() => setDrawerOpen(true)}
           onClose={() => setDrawerOpen(false)}
           planVersion={itinerary?.plan_version}

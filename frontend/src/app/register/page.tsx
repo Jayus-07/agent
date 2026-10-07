@@ -131,8 +131,11 @@ function RegisterForm() {
       nav={<AuthNav brand="智能协作平台" links={[{ label: "返回官网" }, { label: "帮助中心" }]} />}
       left={left}
     >
-      <div className="mb-6">
-        <h2 className="text-[26px] font-semibold text-[#16191A]">创建你的账号</h2>
+      <div className="mb-5 lg:mb-6">
+        <span className="mb-3 inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3 py-1 text-[12px] text-[#4A544F] lg:hidden">
+          AI 问答 · 多模态客服
+        </span>
+        <h2 className="text-[22px] font-semibold text-[#16191A] sm:text-[24px] lg:text-[26px]">创建你的账号</h2>
         <p className="mt-1.5 text-[13px] text-[#7A8480]">30 秒完成注册，马上开始提问</p>
       </div>
 

@@ -134,8 +134,11 @@ function LoginForm() {
       }
       left={left}
     >
-      <div className="mb-6">
-        <h2 className="text-[26px] font-semibold text-[#16191A]">
+      <div className="mb-5 lg:mb-6">
+        <span className="mb-3 inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3 py-1 text-[12px] text-[#4A544F] lg:hidden">
+          AI 问答 · 多模态客服
+        </span>
+        <h2 className="text-[22px] font-semibold text-[#16191A] sm:text-[24px] lg:text-[26px]">
           登录你的 AI 助手
         </h2>
         <p className="mt-1.5 text-[13px] text-[#7A8480]">
@@ -214,25 +217,29 @@ function LoginForm() {
           {loading ? "处理中…" : "登录"}
         </button>
 
-        <div className="my-5 flex items-center gap-3 text-[12px] text-[#98A29D]">
-          <span className="h-px flex-1 bg-[#E4EAE6]" />
-          或使用以下方式登录
-          <span className="h-px flex-1 bg-[#E4EAE6]" />
+        {/* 第三方登录占位：桌面保留（占位说明产品规划），移动端收掉——
+            三枚 disabled 按钮在窄屏既占掉首屏高度又点不动，是纯噪音 */}
+        <div className="hidden lg:block">
+          <div className="my-5 flex items-center gap-3 text-[12px] text-[#98A29D]">
+            <span className="h-px flex-1 bg-[#E4EAE6]" />
+            或使用以下方式登录
+            <span className="h-px flex-1 bg-[#E4EAE6]" />
+          </div>
+          <div className="grid grid-cols-3 gap-2.5">
+            {["微信", "企业微信", "SSO"].map((name) => (
+              <button
+                key={name}
+                type="button"
+                disabled
+                title="敬请期待"
+                className="h-11 rounded-xl border border-[#E3E8E4] bg-white/85 text-[13px] text-[#3F4A46] opacity-60"
+              >
+                {name}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-3 gap-2.5">
-          {["微信", "企业微信", "SSO"].map((name) => (
-            <button
-              key={name}
-              type="button"
-              disabled
-              title="敬请期待"
-              className="h-11 rounded-xl border border-[#E3E8E4] bg-white/85 text-[13px] text-[#3F4A46] opacity-60"
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-        <p className="mt-5 text-center text-[12px] text-[#98A29D]">
+        <p className="mt-5 text-center text-[12px] text-[#98A29D] lg:mt-5">
           登录即代表你同意《服务条款》与《隐私政策》
         </p>
       </form>

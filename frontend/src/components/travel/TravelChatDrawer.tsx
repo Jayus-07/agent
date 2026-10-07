@@ -25,7 +25,7 @@
 import Link from 'next/link'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
-  AlertCircle, Check, CheckCircle2, Clock3, Info, MessageSquarePlus,
+  AlertCircle, ArrowLeft, Check, CheckCircle2, Clock3, Info, MessageSquarePlus,
   PlaneTakeoff, RefreshCw, Send, Square, X,
 } from 'lucide-react'
 import {
@@ -40,9 +40,8 @@ import ToolProcessRows from './ToolProcessRows'
 import RationaleCard, { type RationaleData } from './RationaleCard'
 import { useTypewriter } from './useTypewriter'
 import { describePlanReply, sanitizeTravelReply } from './planState'
-import {
-  buildChangeSummary, travelProcessStatusLabel, type TravelProcessState,
-} from './travelRuntime'
+import { buildChangeSummary, travelProcessStatusLabel, type TravelProcessState } from './travelRuntime'
+import { TRAVEL_TOOL_LABELS } from './travelDisplay'
 
 interface ChatMsg {
   role: 'user' | 'assistant'
@@ -54,15 +53,84 @@ interface ChatMsg {
 }
 
 /**
- * 短助手气泡 + 打字机渐显（M2-e）：仅对最新一条短回复开动画，
- * 历史/长文（details 折叠）直显；reduced-motion 由 hook 内部兜底。
+ * 打字机渐显 + 长文打完自动折叠（2026-10-07 用户口径：
+ * 「不管问什么都会一直显示非常长的一页行程在聊天框」）。
+ *
+ * 原实现的问题：只有 <600 字的短回复走打字机，长回复直接 <details> 折叠——
+ * 而 AI 每次改行程回的都是整份行程单 Markdown（上千字是常态），于是
+ * 用户看到的是「一坨字突然出现」，既没人味又把整屏占满。
+ *
+ * 现在：
+ * - 不分长短统一渐显（长文会自动加速，整条 ≤2s 打完）
+ * - 打完后若仍超阈值，折成一行摘要（带字数 + 展开箭头），点开看全文
+ * - 历史消息（animate=false）直显全文并保持折叠，不重放动画
  */
-function TypedAssistantText({ text, animate }: { text: string; animate: boolean }) {
+function TypedAssistantText({
+  text,
+  animate,
+  isPlanning,
+}: {
+  text: string
+  animate: boolean
+  /** 该回复是否来自「按需求重排行程」（决定折叠摘要的措辞） */
+  isPlanning?: boolean
+}) {
   const shown = useTypewriter(text, animate)
+  const done = shown.length >= text.length
+  // 折叠阈值：与旧的 600 字口径一致，避免短回复被无谓折叠
+  const isLong = text.length > 600
+  const [expanded, setExpanded] = useState(false)
+  // 长文打字过程中先「点一下立刻出全文」：AI 吐字两秒没人愿意干等
+  const [skipped, setSkipped] = useState(false)
+
+  // 换一条消息就复位展开态
+  useEffect(() => { setExpanded(false); setSkipped(false) }, [text])
+
+  // 短文：直接渐显全文
+  if (!isLong) {
+    return (
+      <div className="markdown-body travel-md leading-relaxed">
+        <MarkdownContent content={shown} />
+      </div>
+    )
+  }
+
+  // 长文打字中：限高 + 可点「立即显示全文」，避免未完成的千字行程糊满整屏
+  if (!done && animate && !skipped) {
+    return (
+      <div>
+        <div className="markdown-body travel-md max-h-[220px] overflow-hidden leading-relaxed">
+          <MarkdownContent content={shown} />
+        </div>
+        <button
+          type="button"
+          onClick={() => setSkipped(true)}
+          className="mt-1 text-[11px] font-medium text-[#087b73]"
+        >
+          立即显示全文 ▾
+        </button>
+      </div>
+    )
+  }
+
+  // 长文已打完（或主动跳过）：折成一行摘要，点开看全文
   return (
-    <div className="markdown-body travel-md leading-relaxed">
-      <MarkdownContent content={shown} />
-    </div>
+    <>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-left text-[11px] font-medium text-[#087b73]"
+      >
+        <span>{isPlanning ? '行程已按你说的更新' : '查看完整说明'}</span>
+        <span className="text-[#5c7074]">（{text.length} 字）</span>
+        <span className="transition-transform" style={{ transform: expanded ? 'rotate(180deg)' : 'none' }}>▾</span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 markdown-body travel-md leading-relaxed">
+          <MarkdownContent content={text} />
+        </div>
+      )}
+    </>
   )
 }
 
@@ -78,6 +146,11 @@ export interface TravelChatDrawerHandle {
 interface Props {
   /** drawer = 覆盖抽屉（中窄屏，右缘按钮唤起）；panel = 常驻右栏（宽屏 grid 列） */
   mode: 'drawer' | 'panel'
+  /**
+   * 手机端（≤md）聊天全屏（2026-10-07）：常态展开、隐藏贴边把手。
+   * 手机上只聊天给行程计划，行程卡/地图在窄屏放不下也不好看。
+   */
+  isMobileFull?: boolean
   /** 仅 drawer 形态使用：收起/展开状态 */
   open?: boolean
   onOpen?: () => void
@@ -128,7 +201,7 @@ interface Props {
  */
 
 const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function TravelChatDrawer({
-  mode, open = true, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
+  mode, open = true, isMobileFull = false, onOpen, onClose, planVersion, activeDay = null, conversationId, hasItinerary,
   brief = null, itinerary = null, onResponse, processState, onProcessEvent,
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
   introMessage = '', introRationale = null, handoverUserMessage = null, onOpenCityGuide,
@@ -423,9 +496,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     : 0
 
   // 消息渲染：提问段/回答段两段共用（工具执行块插在两段之间=提问→工具→回答）
-  const renderMsg = (m: ChatMsg, i: number, animate: boolean) => {              // 长回复折叠：改单回复常是整份行程单 Markdown，全量铺开字多压迫感强
-              //（用户实测反馈「字很大不友好」）；tag 摘要常驻，全文点开再看
-              const isLong = m.role === 'assistant' && m.text.length > 600
+  // 2026-10-07：原 isLong(>600) 走 <details> 的分支已移除——长回复不再「一坨出现」，
+  // 统一交 TypedAssistantText 渐显、打完自动折成一行摘要。
+  const renderMsg = (m: ChatMsg, i: number, animate: boolean) => {
               return (
                 <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                   <div className={`max-w-[94%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
@@ -443,17 +516,12 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                       />
                     ) : m.role === 'user' ? (
                       <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                    ) : isLong ? (
-                      <details>
-                        <summary className="cursor-pointer text-[11px] font-medium text-[#087b73] [&::-webkit-details-marker]:hidden">
-                          {m.tag === '规划说明' ? '为什么这样排？点开查看规划说明 ▾' : '行程已按你说的重算，点开查看完整说明 ▾'}
-                        </summary>
-                        <div className="mt-1.5 markdown-body travel-md leading-relaxed">
-                          <MarkdownContent content={m.text} />
-                        </div>
-                      </details>
                     ) : (
-                      <TypedAssistantText text={m.text} animate={animate} />
+                      <TypedAssistantText
+                        text={m.text}
+                        animate={animate}
+                        isPlanning={m.tag === '有待应用修改'}
+                      />
                     )}
                     {m.tag && (
                       <span className={`mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
@@ -484,12 +552,12 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           <button
             type="button"
             onClick={onClose}
-            title="收起对话框"
-            aria-label="收起对话框"
+            title={isMobileFull ? '查看行程详情' : '收起对话框'}
+            aria-label={isMobileFull ? '查看行程详情' : '收起对话框'}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#5c7074]
               transition-colors hover:bg-[#f5faf9] hover:text-[#183037]"
           >
-            <X size={16} />
+            {isMobileFull ? <ArrowLeft size={16} /> : <X size={16} />}
           </button>
         )}
       </div>
@@ -518,6 +586,15 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           // M2-a 收敛口径：进行中逐条实时；完成后收敛成一行摘要（点开看明细）
           const collapsed = !loading && processState?.status === 'completed' && !processExpanded
           const outOfScope = processState?.requirement?.intent === 'out_of_scope'
+          // 2026-10-07 用户口径：进行中要说清「正在干什么」，而不是笼统的「工具执行中」。
+          // 取最后一个 running 的 Tool（后端按执行序追加，末位即当前在跑的那个）。
+          // 注意：不能用 findLast（ES2023，本项目 target=ES2017 会编译报错），
+          // 复制后 reverse 找最后一个 running——后端按执行序追加，末位即当前在跑的。
+          const runningTool = [...doneTools].reverse().find((t) => t.status === 'running')
+          const runningLabel = runningTool
+            ? (TRAVEL_TOOL_LABELS[runningTool.tool] ?? runningTool.tool)
+            : ''
+          const doneCount = doneTools.filter((t) => t.status !== 'running').length
           const processBlock = showProcess ? (
             <div className="mt-3">
               <div className="mb-1.5 flex items-center gap-2 text-[10px] text-[#8fa5a3]">
@@ -525,7 +602,13 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   className={`h-1.5 w-1.5 rounded-full ${loading ? 'animate-pulse bg-[#087b73]' : processState.status === 'error' ? 'bg-red-400' : 'bg-[#087b73]'}`}
                   aria-hidden
                 />
-                <span>{loading ? '工具执行中' : `本轮共 ${processState.tools.length} 个 Tool`}</span>
+                <span>
+                  {loading
+                    ? (runningLabel
+                      ? `正在${runningLabel}`
+                      : (doneCount > 0 ? `正在思考 · 已完成 ${doneCount} 步` : '正在理解你的需求'))
+                    : `本轮共 ${processState.tools.length} 个 Tool`}
+                </span>
                 <span>· {travelProcessStatusLabel({ loading, stopped, status: processState.status })}</span>
               </div>
               {collapsed ? (
@@ -828,8 +911,10 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   if (isDrawer) {
     return (
       <>
-        {/* 右侧边缘按钮：收起态常驻，点开变成对话框 */}
-        {!open && onOpen && (
+        {/* 右侧边缘按钮：收起态常驻，点开变成对话框。
+            手机全屏模式（isMobileFull）下常态展开且不显示把手——把手在 390px
+            屏是个无意义的悬浮控件，且会压住对话内容。 */}
+        {!isMobileFull && !open && onOpen && (
           <button
             type="button"
             onClick={onOpen}
