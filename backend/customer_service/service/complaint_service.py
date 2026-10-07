@@ -177,6 +177,67 @@ class ComplaintService:
         base = _EMPATHY_RESPONSES.get(detection.severity, _EMPATHY_RESPONSES["low"])
         return f"{base} (工单号: {ticket.ticket_id})"
 
+    def build_collect_response(self) -> str:
+        """A 案收集话术（2026-10-08 投诉分级拍板）：安抚 + 三要素追问。
+
+        不建转人工单，引导用户补齐「哪个订单/什么问题/期望怎么解决」，
+        下一轮带着信息重新评估；同时把「试功能」的 casual 输入挡在这一层。
+        """
+        return (
+            "非常抱歉给您带来了不好的体验，我先帮您把问题记录清楚，"
+            "这样才能最快解决。麻烦补充一下：\n"
+            "1️⃣ 是哪个订单或哪件商品的问题（订单号更好）？\n"
+            "2️⃣ 具体遇到了什么问题？\n"
+            "3️⃣ 您希望怎么解决（退款/补发/赔偿/其他）？\n"
+            "您回复后我会立即为您升级处理。"
+        )
+
+    def llm_escalate_arbitration(self, query: str) -> dict | None:
+        """B 案 medium 灰区仲裁（2026-10-08 拍板直做，不灰度）。
+
+        判定该条 medium 投诉是否需要立即转人工。返回 {"escalate": bool,
+        "reason": str}；**LLM 失败或格式无效返回 None**——调用方语义是
+        fail-safe 偏人工（用户明说投诉却无人接比多转一单更糟）。
+        """
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from backend.config.customer_service import CS_COMPLAINT_LLM_TIMEOUT_MS
+            from backend.infra.async_utils import sync_call_with_timeout
+            from backend.infra.llm import llm  # 代理：限流/韧性/llm_usage 记账
+
+            from backend.customer_service.pii import mask_pii
+            masked_query, _vault = mask_pii(query)
+            prompt = render_prompt(
+                "customer_service.complaint_escalate",
+                query=masked_query[:300],
+            )
+            # 线程级限时（与 _llm_assess 同款理由：config timeout 不生效）
+            timeout_s = CS_COMPLAINT_LLM_TIMEOUT_MS / 1000.0
+            response = sync_call_with_timeout(
+                llm.invoke, timeout_s, [HumanMessage(content=prompt)],
+            )
+            content = response.content.strip()
+            if content.startswith("```"):
+                content = content.strip("`")
+                if content.startswith("json"):
+                    content = content[4:]
+            data = json.loads(content)
+            if isinstance(data, dict) and isinstance(data.get("escalate"), bool):
+                logger.info(
+                    "[ComplaintService] 转人工仲裁: escalate=%s reason=%s",
+                    data["escalate"], data.get("reason", ""),
+                )
+                return {
+                    "escalate": data["escalate"],
+                    "reason": str(data.get("reason", ""))[:40],
+                }
+            logger.warning("[ComplaintService] 仲裁返回格式无效，按需转人工处理")
+            return None
+        except Exception as e:
+            logger.warning("[ComplaintService] 转人工仲裁失败，按需转人工处理: %s", e)
+            return None
+
     def simulate_execute(self, ticket: ComplaintTicket) -> dict:
         """模拟投诉工单写入 (Phase 5)。"""
         return {

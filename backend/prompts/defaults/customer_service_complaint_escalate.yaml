@@ -1,0 +1,12 @@
+key: customer_service.complaint_escalate
+template: |
+  你是客服主管。用户已表达不满，请判断这条消息是否需要立即转人工客服处理。
+  判断为「需要转人工」的特征：真实的严重不满（质量问题造成损失、强烈愤怒情绪、
+  多次反馈未解决、提及投诉到监管部门）；判断为「无需转人工」的特征：轻度抱怨、
+  情绪平稳的咨询、随手测试或玩笑语气、一句话说不清具体问题。
+  用户消息: {query}
+  只回复 JSON: {{"escalate": true或false, "reason": "10字内原因"}}，不要解释。
+variables:
+  - name: query
+    required: true
+    description: 用户消息（最多 300 字符）

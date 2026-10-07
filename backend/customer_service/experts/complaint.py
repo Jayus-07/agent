@@ -115,6 +115,98 @@ def execute_complaint(
     service = get_complaint_service()
     detection = service.detect_with_llm_fallback(user_message)
 
+    # ── 投诉分级（2026-10-08 拍板 A+B 直做）──────────────────────
+    # 此前任何进入本专家的输入都无条件建单+转人工——用户随手「投诉一下
+    # 试试」也会占用人工队列。现在三级分流：
+    #   1) 非投诉（LLM 兜底也否认）→ 安抚+引导，不建单不转人工
+    #   2) medium 灰区 → LLM 仲裁（B 案）判定真伪与急迫度；同会话第二次
+    #      命中投诉（complaint_collect_count≥1）不再仲裁直接升级——
+    #      反复投诉=真不满，且仲裁语义由「是否升级」收敛为「何时升级」
+    #   3) high/critical → 立即升级（现状流程）
+    # 仲裁 fail-safe 偏人工：LLM 挂/格式无效 = 升级（维持旧行为）。
+    collect_count = int(cs_context.get("complaint_collect_count") or 0)
+    if not detection.is_complaint and collect_count == 0:
+        logger.info(
+            "[ComplaintExpert] 分级: 非投诉（路由误入/试探），安抚不建单 user=%s",
+            user_id,
+        )
+        return ExpertResult(
+            expert="complaint",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "看起来您可能遇到了需要反馈的问题。如果是商品、物流或服务"
+                "方面的不满，请直接描述具体情况（订单号+问题），我会立即"
+                "为您记录处理。"
+            ),
+            data={
+                "severity": "low",
+                "escalated": False,
+                "complaint_classified": "not_complaint",
+            },
+        )
+
+    escalate = detection.severity in ("high", "critical") or collect_count >= 1
+    arbitration_reason = ""
+    if not escalate:
+        verdict = service.llm_escalate_arbitration(user_message)
+        if verdict is None:
+            escalate = True  # fail-safe 偏人工
+            arbitration_reason = "arbitration_failed"
+        else:
+            escalate = bool(verdict.get("escalate"))
+            arbitration_reason = str(verdict.get("reason", ""))
+
+    if not escalate:
+        # A 案收集：安抚 + 三要素追问，轻工单记录但不动人工队列
+        ticket = service.create_ticket(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            severity=detection.severity,
+            summary=user_message,
+        )
+        service.simulate_execute(ticket)
+        # 轻工单同样落库镜像（可查询性；失败不阻断收集回复）
+        try:
+            from backend.customer_service.ticket_store import get_ticket_store
+
+            get_ticket_store().create_sync(
+                ticket_id=ticket.ticket_id,
+                conversation_id=conversation_id or session_id,
+                user_id=user_id,
+                type="complaint",
+                status="open",
+                source="ai",
+                severity=detection.severity,
+                priority=_severity_to_priority(detection.severity),
+                title=f"投诉收集（{detection.severity}）：{user_message[:80]}",
+                description=user_message[:2000],
+            )
+        except Exception:
+            logger.warning(
+                "[ComplaintExpert] 收集工单落库失败（不阻断）: %s",
+                ticket.ticket_id, exc_info=True,
+            )
+        logger.info(
+            "[ComplaintExpert] 分级: medium 收集模式 ticket=%s reason=%s user=%s",
+            ticket.ticket_id, arbitration_reason, user_id,
+        )
+        return ExpertResult(
+            expert="complaint",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=service.build_collect_response(),
+            data={
+                "ticket_id": ticket.ticket_id,
+                "severity": detection.severity,
+                "escalated": False,
+                "complaint_classified": "collect",
+                "arbitration_reason": arbitration_reason,
+            },
+        )
+
+    logger.info(
+        "[ComplaintExpert] 分级: 升级人工 severity=%s reason=%s user=%s",
+        detection.severity, arbitration_reason or "high_or_repeat", user_id,
+    )
     ticket = service.create_ticket(
         user_id=user_id,
         conversation_id=conversation_id,
@@ -249,6 +341,8 @@ def execute_complaint(
         data={
             "ticket_id": ticket.ticket_id,
             "severity": detection.severity,
+            "escalated": True,
+            "arbitration_reason": arbitration_reason,
             "handoff_state": HandoffState.WAITING_HUMAN.value,
             "handling_mode": "human",
             "audit_entry": audit_entry,
@@ -289,10 +383,21 @@ def complaint_expert_node(state: dict[str, Any]) -> dict[str, Any]:
         cs_context["handoff_state"] = result["data"]["handoff_state"]
     if result.get("data", {}).get("handling_mode"):
         cs_context["handling_mode"] = result["data"]["handling_mode"]
-    # 记录已建工单：供 complaint 专家幂等防重入（见 execute_complaint）
-    if result.get("data", {}).get("ticket_id") and not result.get("data", {}).get("duplicate"):
-        cs_context["complaint_ticket_id"] = result["data"]["ticket_id"]
-        cs_context["complaint_severity"] = result["data"].get("severity", "medium")
+    # 记录已建工单：供 complaint 专家幂等防重入（见 execute_complaint）。
+    # 仅升级路径可作幂等键——收集态轻工单不锁后续投诉（第二次命中要能
+    # 走到「直接升级」分支）。
+    _d = result.get("data", {})
+    if _d.get("ticket_id") and _d.get("escalated") and not _d.get("duplicate"):
+        cs_context["complaint_ticket_id"] = _d["ticket_id"]
+        cs_context["complaint_severity"] = _d.get("severity", "medium")
+    # 投诉分级（2026-10-08）：收集模式计数（第二次命中直接升级），升级后清零
+    data = result.get("data", {})
+    if data.get("complaint_classified") == "collect":
+        cs_context["complaint_collect_count"] = (
+            int(cs_context.get("complaint_collect_count") or 0) + 1
+        )
+    elif data.get("escalated"):
+        cs_context["complaint_collect_count"] = 0
 
     return {
         "last_expert_result": dict(result),
