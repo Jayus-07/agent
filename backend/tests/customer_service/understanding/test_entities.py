@@ -19,6 +19,11 @@ class TestOrderIdExtraction:
         # 两段式不得截断（WP-G 缺陷回归）
         assert _ids("订单 ORD-20260915-0042 申请退款") == ["ORD-20260915-0042"]
 
+    def test_three_segment_with_single_char_middle(self):
+        # 三段式订单号中间段为单字符（DEMO-SHOW-O-002，演示 seed 实际形态）
+        # —— 连字段下限必须是 1，{2,12} 会把整串截断到 DEMO-SHOW（2026-10-08 服务器验收实测）
+        assert _ids("DEMO-SHOW-O-002 申请退款") == ["DEMO-SHOW-O-002"]
+
     def test_multiple_orders(self):
         assert _ids("DEMO-1001 和 DEMO-1002 都帮我看看") == ["DEMO-1001", "DEMO-1002"]
 
