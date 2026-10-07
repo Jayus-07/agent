@@ -134,8 +134,8 @@ export default function PortalPage() {
         }}
       />
 
-      {/* 顶部导航 */}
-      <nav className="relative z-20 flex h-[72px] items-center justify-between px-12">
+      {/* 顶部导航（≤md 收起文字链接，避免窄屏挤压竖排） */}
+      <nav className="relative z-20 flex h-[72px] items-center justify-between px-6 md:px-12">
         <div className="flex items-center gap-2.5">
           <span
             className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[13px] font-bold text-white"
@@ -147,10 +147,10 @@ export default function PortalPage() {
             智能协作平台
           </span>
         </div>
-        <div className="flex items-center gap-7">
-          <span className="text-[14px] text-[#5C6662]">工作台</span>
-          <span className="text-[14px] text-[#5C6662]">帮助中心</span>
-          <span className="text-[14px] text-[#5C6662]">使用文档</span>
+        <div className="flex items-center gap-3 md:gap-7">
+          <span className="hidden text-[14px] text-[#5C6662] md:inline">工作台</span>
+          <span className="hidden text-[14px] text-[#5C6662] md:inline">帮助中心</span>
+          <span className="hidden text-[14px] text-[#5C6662] md:inline">使用文档</span>
           <span
             className="rounded-full px-3 py-1.5 text-[12px] font-medium"
             style={{ background: "rgba(31,122,77,0.10)", color: "#1F7A4D" }}
@@ -161,11 +161,11 @@ export default function PortalPage() {
       </nav>
 
       {/* 主视觉 */}
-      <section className="relative z-10 mx-auto flex max-w-[920px] flex-col items-center px-6 pt-16 pb-8 text-center">
+      <section className="relative z-10 mx-auto flex max-w-[920px] flex-col items-center px-6 pt-10 pb-8 text-center md:pt-16">
         <span className="inline-flex items-center rounded-full border border-black/10 bg-white/70 px-4 py-1.5 text-[13px] text-[#4A544F]">
           统一入口 · 一个平台，三个工作台
         </span>
-        <h1 className="mt-6 text-[50px] font-bold leading-[62px] tracking-[-1px] text-[#16191A]">
+        <h1 className="mt-6 text-[34px] font-bold leading-[44px] tracking-[-1px] text-[#16191A] md:text-[50px] md:leading-[62px]">
           选择一个工作台，开始你的工作
         </h1>
         <p className="mt-5 max-w-[660px] text-[17px] leading-7 text-[#6E7873]">
@@ -229,8 +229,8 @@ export default function PortalPage() {
         })}
       </section>
 
-      {/* 页脚 */}
-      <footer className="relative z-10 flex h-16 items-center justify-between border-t border-[#EEF1EF] bg-[#F7F9F8] px-12">
+      {/* 页脚（移动端纵排换行） */}
+      <footer className="relative z-10 flex min-h-16 flex-col items-start justify-center gap-1.5 border-t border-[#EEF1EF] bg-[#F7F9F8] px-6 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-0 md:px-12">
         <div className="flex items-center gap-2 text-[13px] text-[#7A8480]">
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
             <rect x="3.2" y="6.5" width="8.6" height="6.3" rx="1.4" stroke="#7A8480" strokeWidth="1.2" />
