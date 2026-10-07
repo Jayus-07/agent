@@ -97,6 +97,8 @@ WORKDIR /app
 COPY backend/ ./backend/
 # 2026-09-21：alembic 退役，迁移统一走 scripts/init_db.py（已随 scripts/ 拷入）
 COPY mcp_servers/ ./mcp_servers/
+# appuser(uid 10001) 运行时要在代码目录下建 data/uploads（routes/data.py 模块导入期 mkdir；2026-10-07 容器部署实测 PermissionError 崩溃循环）
+RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/data
 COPY scripts/ ./scripts/
 
 USER appuser

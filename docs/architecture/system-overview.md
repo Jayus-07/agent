@@ -65,7 +65,8 @@ flowchart TB
 | 8090 | `rag-service` | 独立 RAG 服务（embedding / rerank / 索引持有者） |
 | 8091 | `mcp-service` | MCP 服务（Tool 的第二出口） |
 | 18000 | `mcp-12306` | 外部 MCP 数据源容器（12306 车票查询，`TRAIN_MCP_ENABLED` 默认关；宿主 `127.0.0.1:18000` → 容器 8000） |
-| 3100 / 3200 / 3300 | 用户端 / 管理端 / 客服坐席工作台 | `next dev`（本地进程，非容器） |
+| 3100 / 3200 / 3300 | 用户端 / 管理端 / 客服坐席工作台 | `next dev`（本地开发进程，非容器）；生产容器化见下行 |
+| 80 / 8080 / 8082 | 容器化前端 web / admin-web / cs-web | 容器内统一 3000，`docker-compose.public.yml` override 声明（8081 被 business-mock 占用错位）；`API_URL=http://apisix:9080` + `API_KEY` 注入；门户跨应用跳转 `NEXT_PUBLIC_ADMIN_URL`/`NEXT_PUBLIC_CS_URL` 构建期注入（standalone 输出） |
 | 5433 → 5432 | `postgres` | 宿主 5433 映射容器 5432；`agent_business` + `agent_memory` |
 | 6379 | `redis` | Celery broker + result backend + 缓存 |
 | 9090 / 3001 | Prometheus / Grafana | `--profile observability` |

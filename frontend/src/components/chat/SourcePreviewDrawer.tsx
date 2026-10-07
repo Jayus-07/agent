@@ -61,10 +61,9 @@ export default function SourcePreviewDrawer({ docId, filename, pages, onClose }:
         const data = await resp.arrayBuffer()
         if (cancelled) return
         const pdfjs = await import('pdfjs-dist')
-        pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-          'pdfjs-dist/build/pdf.worker.min.mjs',
-          import.meta.url,
-        ).toString()
+        // worker 走 public/ 静态文件（绕开 webpack/Terser 对 .mjs 的处理，
+        // pdfjs v6 worker 含 import.meta 会编译失败，见 2026-10-07 部署记录）
+        pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
         const task = pdfjs.getDocument({ data })
         taskRef.current = task
         const pdf = await task.promise
