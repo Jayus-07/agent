@@ -326,88 +326,31 @@ def compute_reject_hallucination_pareto(
     return rows
 
 
-# ============ 发布门控阈值（V1.0） ============
-DEFAULT_THRESHOLDS: dict[str, float] = {
-    "recall@5": 0.80,
-    "mrr": 0.75,
-    "top1_accuracy": 0.80,
-    "sem_context_recall": 0.50,
-    "reject_accuracy": 0.85,
-    "false_answer_rate": 0.10,
-    "required_fact_coverage": 0.60,
-    "citation_accuracy": 0.70,
-    "citation_completeness": 0.60,
-    "multi_hop_success": 0.50,
-    "ragas_context_recall": 0.60,
-    "ragas_context_precision": 0.60,
-    "ragas_faithfulness": 0.70,
-    "ragas_answer_relevancy": 0.70,
-    "ragas_answer_correctness": 0.60,
-}
-
-LOWER_IS_BETTER: set[str] = {"false_answer_rate", "sem_hallucination_rate", "dept_leak", "context_noise@10"}
-
-METRIC_SOURCE: dict[str, str] = {
-    "recall@5": "自研", "recall@10": "自研", "mrr": "自研",
-    "top1_accuracy": "自研", "ndcg@10": "自研",
-    "sem_context_recall": "自研", "sem_context_precision": "自研",
-    "sem_faithfulness": "自研", "sem_answer_correctness": "自研",
-    "reject_accuracy": "自研", "false_answer_rate": "自研",
-    "required_fact_coverage": "自研", "citation_accuracy": "自研",
-    "citation_completeness": "自研", "multi_hop_success": "自研",
-    "ragas_context_recall": "RAGAS", "ragas_context_precision": "RAGAS",
-    "ragas_faithfulness": "RAGAS", "ragas_answer_relevancy": "RAGAS",
-    "ragas_answer_correctness": "RAGAS",
-}
-
-GATE_METRICS = [
-    ("recall@5", "检索"),
-    ("mrr", "检索"),
-    ("sem_context_recall", "检索"),
-    ("ragas_context_recall", "检索"),
-    ("ragas_context_precision", "检索"),
-    ("ragas_faithfulness", "生成"),
-    ("ragas_answer_correctness", "生成"),
-    ("required_fact_coverage", "生成"),
-    ("false_answer_rate", "安全"),
-    ("reject_accuracy", "安全"),
-    ("citation_accuracy", "引用"),
-    ("multi_hop_success", "复杂"),
-]
+# ============ 发布门控（P0-01 起裁决逻辑收口 release_gate.py） ============
+# 常量迁至 backend/evaluation/release_gate.py，此处 re-export 仅为旧 import 兼容；
+# 模块感知三态裁决唯一出口 = release_gate.compute_module_release_gate。
+from backend.evaluation.release_gate import (  # noqa: E402,F401 — 兼容 re-export
+    DEFAULT_THRESHOLDS,
+    GATE_METRICS,
+    LOWER_IS_BETTER,
+    METRIC_SOURCE,
+)
+from backend.evaluation.release_gate import compute_metrics_gate  # noqa: E402
 
 
 def compute_release_gate(
     metrics: dict[str, float],
     thresholds: dict[str, float] | None = None,
+    *,
+    module: str = "rag",
 ) -> dict[str, Any]:
-    """计算每个指标的 pass/fail 和总体发布决策。"""
-    th = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
-    items: list[dict[str, Any]] = []
-    all_pass = True
-    for key, dimension in GATE_METRICS:
-        val = metrics.get(key)
-        threshold = th.get(key)
-        if val is None or threshold is None:
-            items.append({
-                "metric": key, "dimension": dimension,
-                "value": val, "threshold": threshold,
-                "source": METRIC_SOURCE.get(key, "—"),
-                "passed": None, "label": METRIC_LABELS.get(key, key),
-            })
-            continue
-        if key in LOWER_IS_BETTER:
-            passed = val <= threshold
-        else:
-            passed = val >= threshold
-        if not passed:
-            all_pass = False
-        items.append({
-            "metric": key, "dimension": dimension,
-            "value": round(val, 4), "threshold": threshold,
-            "source": METRIC_SOURCE.get(key, "—"),
-            "passed": passed, "label": METRIC_LABELS.get(key, key),
-        })
-    return {"overall": all_pass, "items": items}
+    """已废弃的旧门禁入口（仅指标面、无 validity/层级）——仅为旧调用方兼容保留。
+
+    P0-01 修复前该函数对 required 缺失 fail-open（None→continue→overall 恒
+    True），SQL 5/45 也能 PASS。禁止新增调用方；新代码一律使用
+    ``release_gate.compute_module_release_gate(report)``（模块感知三态）。
+    """
+    return compute_metrics_gate(module, metrics, thresholds)
 
 
 def compute_dataset_validation(report: EvalReport) -> dict[str, Any]:

@@ -1,4 +1,8 @@
 """兼容垫片 — 实际实现已拆分到 builder / markdown / json 子模块。"""
+from backend.evaluation.release_gate import (  # noqa: F401 — 门禁裁决唯一出口
+    GateVerdict,
+    compute_module_release_gate,
+)
 from backend.evaluation.report.builder import (
     DEFAULT_THRESHOLDS,
     METRIC_LABELS,
@@ -21,6 +25,7 @@ from backend.evaluation.report.markdown import write_markdown_report
 
 __all__ = [
     "DEFAULT_THRESHOLDS",
+    "GateVerdict",
     "METRIC_LABELS",
     "METRIC_LAYERS",
     "METRIC_SOURCE",
@@ -29,6 +34,7 @@ __all__ = [
     "STATUS_LABELS",
     "_categorize_metric",
     "compute_dataset_validation",
+    "compute_module_release_gate",
     "compute_performance_stats",
     "compute_query_type_stats",
     "compute_regression_diff",

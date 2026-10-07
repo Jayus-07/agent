@@ -154,4 +154,6 @@ class TestDatasetIntegrity:
         assert manifest["targets"] == {"false_reject_max": 0.10, "miss_reject_max": 0.05}
         # manifest sha256 必须与当前数据集文件一致（锁版）
         import hashlib
-        assert manifest["sha256"] == hashlib.sha256(_DATASET.read_bytes()).hexdigest()
+        # P0-03：行尾归一化口径（与 .gitattributes *.jsonl eol=lf 一致）
+        normalized = _DATASET.read_bytes().replace(b"\r\n", b"\n")
+        assert manifest["sha256"] == hashlib.sha256(normalized).hexdigest()

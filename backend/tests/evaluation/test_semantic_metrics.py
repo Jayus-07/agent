@@ -37,9 +37,10 @@ def fake():
 
 
 class TestContextRecallSemantic:
-    def test_empty_gt_returns_nan(self, fake):
+    def test_empty_gt_returns_none(self, fake):
+        # P0-02：不可计算指标返回 None（JSON-safe），禁止 NaN 进报告
         result = context_recall_semantic(["doc1"], [], fake)
-        assert math.isnan(result["context_recall"])
+        assert result["context_recall"] is None
         assert result["total_passages"] == 0
 
     def test_empty_retrieved_returns_zero(self, fake):
@@ -72,10 +73,10 @@ class TestContextRecallSemantic:
 
 
 class TestContextPrecisionSemantic:
-    def test_empty_gt_returns_nan(self, fake):
-        import math
+    def test_empty_gt_returns_none(self, fake):
+        # P0-02：不可计算指标返回 None（JSON-safe）
         result = context_precision_semantic(["doc1"], [], fake)
-        assert math.isnan(result["context_precision"])
+        assert result["context_precision"] is None
 
     def test_empty_retrieved_returns_zero(self, fake):
         result = context_precision_semantic([], ["gt1"], fake)
@@ -94,8 +95,8 @@ class TestContextPrecisionSemantic:
 
 
 class TestSemanticTop1:
-    def test_empty_gt_returns_nan(self, fake):
-        assert math.isnan(semantic_top1(["doc"], [], fake))
+    def test_empty_gt_returns_none(self, fake):
+        assert semantic_top1(["doc"], [], fake) is None
 
     def test_empty_retrieved_returns_zero(self, fake):
         assert semantic_top1([], ["gt"], fake) == 0.0
@@ -112,10 +113,10 @@ class TestSemanticTop1:
 
 class TestAnswerSimilarity:
     def test_both_empty(self, fake):
-        assert math.isnan(answer_similarity_semantic("", "", fake))
+        assert answer_similarity_semantic("", "", fake) is None
 
     def test_one_empty(self, fake):
-        assert math.isnan(answer_similarity_semantic("answer", "", fake))
+        assert answer_similarity_semantic("answer", "", fake) is None
 
     def test_identical(self, fake):
         assert answer_similarity_semantic("same text", "same text", fake) == 1.0
@@ -175,7 +176,7 @@ class TestHallucinationRate:
 
 class TestAnswerRelevancyProxy:
     def test_both_empty(self, fake):
-        assert math.isnan(answer_relevancy_proxy("", "", fake))
+        assert answer_relevancy_proxy("", "", fake) is None
 
     def test_one_empty(self, fake):
         assert answer_relevancy_proxy("q", "", fake) == 0.0

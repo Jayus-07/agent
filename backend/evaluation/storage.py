@@ -353,10 +353,15 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. report.json — EvalReport 全量序列化
-    report_dict = report.model_dump(mode="json")
+    # P0-02 三层防御·第二层：落盘前 safe_jsonable 清洗（NaN/Inf→None）+
+    # allow_nan=False——任何漏网的 non-finite 在写盘阶段即抛错暴露，
+    # 而不是落一份 FastAPI 读不回去的坏文件
+    from backend.shared.jsonable import safe_jsonable
+
+    report_dict = safe_jsonable(report.model_dump(mode="json"))
     report_dict["run_id"] = run_id
     (run_dir / "report.json").write_text(
-        json.dumps(report_dict, ensure_ascii=False, indent=2),
+        json.dumps(report_dict, ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
     )
 
@@ -364,8 +369,10 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
     per_case_dir = run_dir / "per_case"
     per_case_dir.mkdir(exist_ok=True)
     for r in report.results:
+        case_payload = safe_jsonable(r.model_dump(mode="json", exclude={"expected"}))
         (per_case_dir / f"{r.case_id}.json").write_text(
-            r.model_dump_json(indent=2, exclude={"expected"}),  # expected 已在 report
+            # expected 已在 report，exclude 口径与历史一致
+            json.dumps(case_payload, ensure_ascii=False, indent=2, allow_nan=False),
             encoding="utf-8",
         )
 

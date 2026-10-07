@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.evaluation.models import EvalReport
+from backend.evaluation.release_gate import compute_module_release_gate
 from .builder import (
     compute_dataset_validation,
     compute_performance_stats,
-    compute_release_gate,
 )
 
 
@@ -21,9 +21,8 @@ def write_json_report(
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     path = output_dir / f"eval-{report.module}-{ts}.json"
 
-    rag_summary = next((s for s in report.summaries if s.module == "rag"), None)
-    metrics = rag_summary.metrics if rag_summary else {}
-    gate = compute_release_gate(metrics, thresholds)
+    # P0-01：模块感知三态门禁（PASS/FAIL/INVALID），替代旧的单 RAG 指标表
+    gate = compute_module_release_gate(report, thresholds)
     dataset_val = compute_dataset_validation(report)
     perf = compute_performance_stats(report.results)
 
@@ -35,7 +34,10 @@ def write_json_report(
         "tier": report.tier,
         "total_score": report.total_score,
         "release_gate": {
-            "verdict": "PASS" if gate["overall"] else "FAIL",
+            "verdict": gate["verdict"],
+            "overall": gate["overall"],
+            "invalid_reason": gate["invalid_reason"],
+            "validity": gate["validity"],
             "metrics": gate["items"],
         },
         "dataset_validation": dataset_val,
@@ -81,6 +83,12 @@ def write_json_report(
         "prompt_versions": report.prompt_versions,
     }
 
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # P0-02：导出文件同样禁绝 non-finite（清洗 + allow_nan=False 快速失败）
+    from backend.shared.jsonable import safe_jsonable
+
+    path.write_text(
+        json.dumps(safe_jsonable(data), ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     print(f"JSON report saved to: {path}")
     return path

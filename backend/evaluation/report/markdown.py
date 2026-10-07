@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.evaluation.models import EvalReport
+from backend.evaluation.release_gate import compute_module_release_gate
 from .builder import (
     DEFAULT_THRESHOLDS,
     GATE_METRICS,
@@ -20,7 +21,6 @@ from .builder import (
     compute_dataset_validation,
     compute_performance_stats,
     compute_query_type_stats,
-    compute_release_gate,
     compute_reject_hallucination_pareto,
 )
 
@@ -40,7 +40,8 @@ def write_markdown_report(
 
     rag_summary = next((s for s in report.summaries if s.module == "rag"), None)
     metrics = rag_summary.metrics if rag_summary else {}
-    gate = compute_release_gate(metrics, thresholds)
+    # P0-01：模块感知三态门禁（PASS/FAIL/INVALID），替代旧的单 RAG 指标表
+    gate = compute_module_release_gate(report, thresholds)
     dataset_val = compute_dataset_validation(report)
     perf = compute_performance_stats(report.results)
     qt_stats = compute_query_type_stats(report.results)
@@ -50,7 +51,12 @@ def write_markdown_report(
     # ── 1. 总体结论 ──
     lines.append(f"# RAG 评测 Release Gate 报告 — {module_zh}")
     lines.append("")
-    verdict = "**PASS** ✅ 可以发布" if gate["overall"] else "**FAIL** ❌ 不建议发布"
+    if gate["verdict"] == "INVALID":
+        verdict = f"**INVALID** ⛔ 环境无效——本轮不可用于质量评价（{gate['invalid_reason']}）"
+    elif gate["verdict"] == "PASS":
+        verdict = "**PASS** ✅ 可以发布"
+    else:
+        verdict = "**FAIL** ❌ 不建议发布"
     lines.append(f"## 1. 总体结论")
     lines.append("")
     lines.append(f"### {verdict}")
@@ -71,7 +77,14 @@ def write_markdown_report(
         lines.append("**未达标指标**:")
         lines.append("")
         for it in failed_metrics:
-            lines.append(f"- {it['label']} = {it['value']:.4f} (阈值 {it['threshold']}, {it['source']})")
+            value = (
+                f"{it['value']:.4f}" if isinstance(it.get("value"), (int, float))
+                else "缺失/非有限值"
+            )
+            reason = f"—— {it['reason']}" if it.get("reason") else ""
+            lines.append(
+                f"- {it['label']} = {value} (阈值 {it['threshold']}, {it['source']}){reason}"
+            )
         lines.append("")
 
     # ── 2. 评测集概况 ──
