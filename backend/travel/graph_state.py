@@ -135,6 +135,11 @@ class TravelGraphState(TypedDict, total=False):
     # {destination, guides: [{title,url,summary,author,source}], status}。
     # 增强信息：检索失败不阻塞任何链路，reporter 按 status 三态渲染。
     inspiration: dict
+    # QUERY_TRANSIT 意图的车票查询包（2026-10-08 #2，slot_filler 预取）：
+    # {status: ok|failed|missing_origin|missing_destination, origin,
+    #  destination, date, trains: [...], source}。与 inspiration 同口径：
+    # 预取失败不阻塞（status 如实呈现），reporter 消费渲染。
+    transit_query: dict
 
     # === 执行态 ===
     # 本轮局部改单请求与确定性执行结果；dict 形态保证可进入 checkpoint。
@@ -331,6 +336,7 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
         "candidates": [],
         "live_search": {},
         "inspiration": {},
+        "transit_query": {},
         "day_plan": [],
         "must_go_unresolved": [],
         "itinerary": None,
