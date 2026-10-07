@@ -532,13 +532,21 @@ class RAGChain:
             # 十几秒全部计入了"检索"。
             try:
                 retrieval_metrics = _build_retrieval_span_metrics(context_docs)
+                # Phase 5：span 上留剩余预算——「为什么慢/在哪被降级」可答
+                from backend.rag.retrieval_budget import current_budget
+
+                _budget = current_budget()
+                if _budget is not None:
+                    retrieval_metrics["budget_remaining_ms"] = round(
+                        max(_budget.remaining_ms(), 0), 1)
                 ret_span = trace_collector.end_open_span(
                     "retrieval",
                     metrics={"retrieved_chunks": len(context_docs),
                              **retrieval_metrics})
-                # 观测重构（2026-10-06）：检索阶段长期时序（span 即真实边界）
+                # Phase 6：检索阶段长期时序（span 即真实检索边界）
                 if ret_span is not None:
                     from backend.observability.metrics import record_rag_stage
+
                     record_rag_stage("retrieve", ret_span.duration_ms)
             except Exception:
                 logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
@@ -644,13 +652,15 @@ class RAGChain:
                     f"r_type={type(r).__name__} "
                     f"content_repr={repr(getattr(r, 'content', r))[:80]}")
                 trace_collector.end_span(llm_span, metrics=metrics)
-                # 观测重构（2026-10-06）：生成阶段长期时序
+                # Phase 6：生成阶段长期时序
                 from backend.observability.metrics import record_rag_stage
+
                 record_rag_stage("generate", llm_span.duration_ms)
                 return r
             except Exception:
                 trace_collector.end_span(llm_span, status="error")
                 from backend.observability.metrics import record_rag_stage
+
                 record_rag_stage("generate", llm_span.duration_ms)
                 raise
         stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
@@ -740,15 +750,19 @@ class RAGChain:
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
             answer = self._respond(result, trace, question, session_id, t_total)
-            # 观测重构（2026-10-06）：全链耗时长线（含 verify/gate）
+            # Phase 6：全链耗时长线（含 verify/gate）
             import time as _time
+
             from backend.observability.metrics import record_rag_stage
+
             record_rag_stage("total", (_time.time() - t_total) * 1000)
             return answer
         except Exception:
             self._finish_error(trace, t_total)
-            from backend.observability.metrics import record_rag_stage
             import time as _time
+
+            from backend.observability.metrics import record_rag_stage
+
             record_rag_stage("total", (_time.time() - t_total) * 1000)
             raise
 
@@ -1142,7 +1156,21 @@ class RAGChain:
 
         # ── 双链选择：无历史时跳过 HistoryAware LLM 调用 ──
         active_chain = self.chain_standalone if not chat_history else self.chain
-        result = active_chain.invoke({"input": question, "chat_history": chat_history})
+        # ── Phase 5（spec §23/§24）：检索级 deadline 预算——入口生成一次，
+        # 下游（MQ 改写/fan-out/adaptive/synonym）统一 remaining_ms() 消费；
+        # 预算经 ContextVar 随 multi_query 的提交方快照进入变体任务。
+        # 预算耗尽不抛异常，各阶段按 §25 阶梯降级。
+        from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
+        from backend.rag.retrieval_budget import (
+            clear_retrieval_budget,
+            start_retrieval_budget,
+        )
+
+        start_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS)
+        try:
+            result = active_chain.invoke({"input": question, "chat_history": chat_history})
+        finally:
+            clear_retrieval_budget()
 
         # ── 采集检索中间结果（正常路径 span 已提前收口，end_span 幂等跳过）──
         context_docs = result.get("context", [])

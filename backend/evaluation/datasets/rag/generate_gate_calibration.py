@@ -208,7 +208,7 @@ def main() -> None:
         "module": "rag-gate",
         "counts": {"answerable": len(A), "unanswerable": len(R), "total": len(cases)},
         "targets": {"false_reject_max": 0.10, "miss_reject_max": 0.05},
-        "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
+        "sha256": hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
         "notes": "应答题锚定 active 语料真实主题；录制后 answerable 且 top1<0.35 标 suspicious 需人工核对。阈值实验台不改生产阈值（决策门 T5.3）。",
     }
     (HERE / "gate_calibration_manifest.json").write_text(

@@ -31,7 +31,8 @@ def test_travel_golden_v1_has_fixed_50_case_mix():
     }
     assert all(not row["expected_doc"] for row in rows
                if row["type"] in {"no_answer", "permission_negative"})
-    digest = hashlib.sha256(_DATASET.read_bytes()).hexdigest()
+    # P0-03：行尾归一化后计算——与 .gitattributes(*.jsonl eol=lf) 的入库字节一致
+    digest = hashlib.sha256(_DATASET.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     assert manifest["version"] == "travel-golden-v1"
     assert manifest["case_count"] == 50
     assert manifest["content_sha256"] == digest

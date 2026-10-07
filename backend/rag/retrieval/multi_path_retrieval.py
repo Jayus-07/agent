@@ -191,7 +191,7 @@ class MultiPathRetrievalOrchestrator:
     def retrieve(self, query: str, k: int = 8, doc_type: str = None) -> List[Document]:
         """三路并行召回 + 动态权重融合"""
         
-        from backend.infra.thread_pools import retrieval_pool_outer
+        from backend.infra.thread_pools import submit_rag_task
         
         # 1. 分析查询类型，预估各路径成功率
         success_probs = self._estimate_success_probabilities(query, doc_type)
@@ -199,18 +199,17 @@ class MultiPathRetrievalOrchestrator:
         # 2. 根据概率分配资源
         weights = self._compute_optimal_weights(success_probs)
         
-        # 3. 并行执行三路召回（共享线程池）
-        executor = retrieval_pool_outer()
-        future_rule = executor.submit(self._retrieve_with_weight, 
-                                     self.rule_retriever.retrieve, 
-                                     query, k=int(k*weights["rule"]))
-        future_dense = executor.submit(self._retrieve_with_weight,
-                                      self.dense_retriever.retrieve,
-                                      query, k=int(k*weights["dense"]),
-                                      doc_type_hint=doc_type)
-        future_sparse = executor.submit(self._retrieve_with_weight,
-                                       self.sparse_retriever.retrieve,
-                                       query, k=int(k*weights["sparse"]))
+        # 3. 并行执行三路召回（outer 池，统一经 submit_rag_task 出口埋指标）
+        future_rule = submit_rag_task("outer", self._retrieve_with_weight,
+                                      self.rule_retriever.retrieve,
+                                      query, k=int(k*weights["rule"]))
+        future_dense = submit_rag_task("outer", self._retrieve_with_weight,
+                                       self.dense_retriever.retrieve,
+                                       query, k=int(k*weights["dense"]),
+                                       doc_type_hint=doc_type)
+        future_sparse = submit_rag_task("outer", self._retrieve_with_weight,
+                                        self.sparse_retriever.retrieve,
+                                        query, k=int(k*weights["sparse"]))
         
         rule_docs = future_rule.result() or []
         dense_docs = future_dense.result() or []

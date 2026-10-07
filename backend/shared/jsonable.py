@@ -5,10 +5,13 @@ P2:从 evaluation/runners/builtin.py:_safe_jsonable 抽出,让报告生成器等
 设计:
   - 深度递归 dict / list / tuple
   - str/int/float/bool/None 直通
+  - 非有限浮点(NaN/Infinity/-Infinity)→ None(P0-02:它们是合法 Python float
+    但非法 JSON;json.dumps 默认放行写出 "NaN",FastAPI 严格序列化时 500)
   - 其它对象(自定义类 / numpy / set / LangChain Document / Chroma metadata)
     → 尝试 str() 截断 500 字符;失败返 None
   - 防御性:任何层级异常都不传播,保证序列化永不掉链
 """
+import math
 
 
 def safe_jsonable(obj, max_str_len: int = 500) -> object:
@@ -27,8 +30,11 @@ def safe_jsonable(obj, max_str_len: int = 500) -> object:
         >>> safe_jsonable(some_doc_with_circular_ref)  # 不死循环
         '...truncated string...'
     """
-    if obj is None or isinstance(obj, (str, int, float, bool)):
+    if obj is None or isinstance(obj, (str, int, bool)):
         return obj
+    if isinstance(obj, float):
+        # P0-02：NaN/Infinity 是合法 Python float 但非法 JSON——统一归 None
+        return obj if math.isfinite(obj) else None
     if isinstance(obj, (list, tuple)):
         return [safe_jsonable(x, max_str_len) for x in obj]
     if isinstance(obj, dict):

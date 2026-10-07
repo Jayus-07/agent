@@ -83,25 +83,24 @@ def _enhanced_hybrid_retrieve_impl(
         "query_type": qroute["query_type"],
     }
 
-    # Step 2: 三路并行召回（共享线程池，避免每次检索创建/销毁）
-    from backend.infra.thread_pools import retrieval_pool_outer
-    executor = retrieval_pool_outer()
+    # Step 2: 三路并行召回（outer 池；Phase 3 统一经 submit_rag_task 出口）
+    from backend.infra.thread_pools import submit_rag_task
 
     # Path A: Rule-Based (仅当启用时)
     if rule_retriever:
-        rule_future = executor.submit(rule_retriever.retrieve, query, k=int(effective_k * 0.3))
+        rule_future = submit_rag_task("outer", rule_retriever.retrieve, query, k=int(effective_k * 0.3))
         metrics["rule_available"] = True
     else:
         rule_future = None
         metrics["rule_available"] = False
 
     # Path B: Dense Vector Search
-    dense_future = executor.submit(vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
-                                    metadata_filter=metadata_filter, expanded_queries=expanded_queries)
+    dense_future = submit_rag_task("outer", vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
+                                   metadata_filter=metadata_filter, expanded_queries=expanded_queries)
     metrics["dense_available"] = True
 
     # Path C: Sparse Search (BM25+TF-IDF)
-    sparse_future = executor.submit(bm25_retriever.invoke, query) if bm25_retriever else None
+    sparse_future = submit_rag_task("outer", bm25_retriever.invoke, query) if bm25_retriever else None
     if sparse_future:
         metrics["sparse_available"] = True
 

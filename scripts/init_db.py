@@ -228,6 +228,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     "076_cs_faq_tables.sql": "memory",
     # SQL 审计补存原文（2026-10-06 拍板）：042 的 PII 保守口径被推翻。
     "077_sql_query_audits_sql_text.sql": "memory",
+    # 评测 run 有效性列（2026-10-07）：VALID/INVALID_* 区分环境故障与质量失败。
+    # ⚠️ 078 编号重复规范债（同 071 先例）：eval 线（main 先合）与客服线
+    # （e611289）各有一个 078 文件，二者独立顺序无关，均登记。
+    "078_eval_run_validity.sql": "memory",
     # 客服 handoff 状态对齐（2026-10-07 STOP CS-A P0-6）：initiated→ai_active
     # 收敛 + default 对齐 + CHECK 约束 fail-loud（幽灵状态写入层拒绝）。
     "078_cs_handoff_state_alignment.sql": "memory",

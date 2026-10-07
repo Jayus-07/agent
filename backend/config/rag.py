@@ -304,6 +304,28 @@ BM25_CANDIDATE_K = max(
 )
 HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "8"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
+
+# 检索线程池拓扑（Phase 3，2026-10-07）：multi_query 专池与 inner 分离，
+# 父任务（MQ 变体 fan-out）与子任务（vector/BM25 leg）绝不共池——历史上
+# 同池自嵌套在 2 个并发 MQ 请求下即线程饥饿死锁。默认值维持审计基线
+# （outer=4 / inner=6，MQ 取 4），先治理拓扑后调参数，不无脑扩容。
+RAG_POOL_MULTI_QUERY_WORKERS = max(1, int(os.getenv("RAG_POOL_MULTI_QUERY_WORKERS", "4")))
+RAG_POOL_OUTER_WORKERS = max(1, int(os.getenv("RAG_POOL_OUTER_WORKERS", "4")))
+RAG_POOL_INNER_WORKERS = max(1, int(os.getenv("RAG_POOL_INNER_WORKERS", "6")))
+
+# 检索级 deadline 预算（Phase 5，2026-10-07，spec §23）：入口生成一次
+# deadline，下游统一 remaining_ms() 消费，禁止各层重算 timeout。
+# 默认值来自 2026-10-07 审计基线（rag 检索 p50 5.5s / p95 28.8s）——
+# 预算不是新的失败点：超预算一律走 §25 阶梯降级，不整链失败。
+RAG_RETRIEVAL_DEADLINE_MS = max(1000, float(os.getenv("RAG_RETRIEVAL_DEADLINE_MS", "8000")))
+# MQ 改写（LLM）子预算：超时 → 放弃改写用原始 query 走 hybrid
+RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS = max(200, float(os.getenv("RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", "1800")))
+# MQ fan-out 子预算：超时 → 用已完成变体的部分结果（部分成功语义）
+RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS = max(500, float(os.getenv("RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS", "4500")))
+# adaptive 扩展需要的最低剩余预算：不足 → 用当前 evidence，不再扩
+RAG_ADAPTIVE_MIN_BUDGET_MS = max(0, float(os.getenv("RAG_ADAPTIVE_MIN_BUDGET_MS", "2000")))
+# synonym retry 需要的最低剩余预算：不足 → 不重试
+RAG_SYNONYM_RETRY_MIN_BUDGET_MS = max(0, float(os.getenv("RAG_SYNONYM_RETRY_MIN_BUDGET_MS", "800")))
 # Rerank 阈值（sigmoid 归一化后）：CrossEncoder 输出的 logit 经 sigmoid 映射到 0-1。
 # 0.3 对应 logit ≈ -0.85，可召回弱相关文档。
 # 调高 → 更严格（噪音少，召回少）；调低 → 更宽松（召回多，噪音多）。

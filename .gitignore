@@ -456,3 +456,4 @@ AGENTS.md.bak-*
 # 路由专项收口（2026-09-22 Step 4）：数据库备份与本地验证产物不进版本库
 backups/
 tmp/
+.bench_tmp/

@@ -1149,12 +1149,15 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         },
                     },
                     metrics={
-                        "recall@5": round(r5, 4),
-                        "recall@10": round(r10, 4),
+                        # P0-02：None-safe 取整——不可计算指标（无 expected 集）
+                        # 保持 None，禁止 round(None) 把用例打成 error（CI 实测回归）
+                        "recall@5": r5 if r5 is None else round(r5, 4),
+                        "recall@10": r10 if r10 is None else round(r10, 4),
                         "precision@5": round(precision_at_k(actual_doc_strs, expected_doc_strs, 5), 4),
-                        "context_noise@10": round(context_noise_rate(actual_doc_strs, expected_doc_strs, 10), 4),
-                        "mrr": round(mrr_val, 4),
-                        "ndcg@10": round(ndcg_val, 4),
+                        "context_noise@10": (lambda v: None if v is None else round(v, 4))(
+                            context_noise_rate(actual_doc_strs, expected_doc_strs, 10)),
+                        "mrr": mrr_val if mrr_val is None else round(mrr_val, 4),
+                        "ndcg@10": ndcg_val if ndcg_val is None else round(ndcg_val, 4),
                         "chunk_recall": round(chunk_recall, 4),
                         **({"top1_accuracy": round(top1_accuracy, 4)} if top1_accuracy is not None else {}),
                         **({"reject_top1_accuracy": round(reject_top1_accuracy, 4)} if reject_top1_accuracy is not None else {}),

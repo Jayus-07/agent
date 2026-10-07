@@ -716,20 +716,31 @@ class ChunkLevelRetriever(BaseRetriever):
         # 相似度阈值全过滤；空召回时补充候选是纯增益（rerank/Gate 照常把关），
         # 且只在空召回路径发生，正常请求零额外开销
         if not st.docs and st.expanded_queries is None:
-            retry_expanded = expand_query(st.query)
-            if len(retry_expanded) > 1:
+            # Phase 5 §25：同义词重试需剩余预算 ≥ 门槛；无预算（旁路调用）
+            # 时 remaining_ms 返回门槛值本身 → 行为不变
+            from backend.config.rag import RAG_SYNONYM_RETRY_MIN_BUDGET_MS
+            from backend.rag.retrieval_budget import remaining_ms
+
+            if remaining_ms(RAG_SYNONYM_RETRY_MIN_BUDGET_MS) < RAG_SYNONYM_RETRY_MIN_BUDGET_MS:
                 logger.info(
-                    f"ChunkLevelRetriever: Stage 2 首查空召回, "
-                    f"同义词扩展重试 ({len(retry_expanded) - 1} 个变体)"
+                    "ChunkLevelRetriever: Stage 2 空召回但剩余预算不足，"
+                    "跳过同义词扩展重试"
                 )
-                st.stage1_path = f"{st.stage1_path}+synonym_retry"
-                st.stage1_fallback_count += 1
-                self._hybrid_collect(st, retry_expanded)
-                from backend.observability.tracer import trace_collector
-                trace_collector.add_event(st.span, "stage2_synonym_retry", "info",
-                    f"Stage2 空召回 → 同义词扩展重试: {len(retry_expanded) - 1} 变体 → {len(st.docs)} chunks",
-                    data={"expanded_queries": retry_expanded,
-                          "output_count": len(st.docs)})
+            else:
+                retry_expanded = expand_query(st.query)
+                if len(retry_expanded) > 1:
+                    logger.info(
+                        f"ChunkLevelRetriever: Stage 2 首查空召回, "
+                        f"同义词扩展重试 ({len(retry_expanded) - 1} 个变体)"
+                    )
+                    st.stage1_path = f"{st.stage1_path}+synonym_retry"
+                    st.stage1_fallback_count += 1
+                    self._hybrid_collect(st, retry_expanded)
+                    from backend.observability.tracer import trace_collector
+                    trace_collector.add_event(st.span, "stage2_synonym_retry", "info",
+                        f"Stage2 空召回 → 同义词扩展重试: {len(retry_expanded) - 1} 变体 → {len(st.docs)} chunks",
+                        data={"expanded_queries": retry_expanded,
+                              "output_count": len(st.docs)})
 
     def _hybrid_collect(self, st: "_Staging", expanded_queries) -> None:
         """执行一次 hybrid_retrieve，结果按 chunk_id 去重增量并入 st.docs/st.seen。
@@ -896,10 +907,22 @@ class ChunkLevelRetriever(BaseRetriever):
         )
 
         effective_k = self.k
+        # Phase 5 §25：逐级扩展前检查剩余预算——无预算不再重跑完整 hybrid，
+        # 用当前 evidence 交付（spec：adaptive 无预算 → 不扩）。无预算
+        # （旁路调用）时 remaining_ms 返回门槛值本身 → 行为不变。
+        from backend.config.rag import RAG_ADAPTIVE_MIN_BUDGET_MS
+        from backend.rag.retrieval_budget import remaining_ms
+
         # 逐级扩展 K 直到满足阈值或用尽步长
         for step_k in ADAPTIVE_K_STEPS:
             if step_k <= self.k:
                 continue
+            if remaining_ms(RAG_ADAPTIVE_MIN_BUDGET_MS) < RAG_ADAPTIVE_MIN_BUDGET_MS:
+                logger.info(
+                    f"[Adaptive] 剩余预算不足，停止扩展（当前 k={effective_k}，"
+                    f"docs={len(docs)}）"
+                )
+                break
             logger.info(
                 f"[Adaptive] 覆盖面不足 → 扩展 k={self.k}→{step_k}"
             )
