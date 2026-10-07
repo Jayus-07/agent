@@ -639,7 +639,7 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 `POST /api/travel/export/ics`——行程导出 ICS 日历（body 携带完整 itinerary，422 `invalid_itinerary`；中文目的地经 `filename*=UTF-8''` 编码，RFC 6266 合规）。
 `POST /api/travel/feedback`——行程单反馈（`vote=positive|negative` 必填，`reason / destination / plan_version` 可选，落既有 feedback 表）。
-`GET /api/travel/preferences` · `PUT /api/travel/preferences`——用户旅游偏好读写（`pace` 枚举 relaxed|moderate|intense，preferences ≤16 条）。
+`GET /api/travel/preferences` · `PUT /api/travel/preferences`——用户旅游偏好读写（请求模型六字段：`origin`/`diet`/`lodging`/`transport` 各 ≤64 字符、`pace` 枚举 relaxed|moderate|intense、`preferences` ≤16 条；2026-10-08 起新用户问卷 `TravelOnboarding` 以 origin/pace/diet/transport 四键消费此端点，`a570fac`）。
 `GET /api/travel/recommend?preferences=&top=`——按偏好标签推荐目的地（`top` 1–5，默认 3）。
 
 ## 验证
