@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database,
+  ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database, Inbox,
   MessageSquareText, RefreshCw, RotateCcw, Search, Table2,
 } from 'lucide-react'
 import { nanoid } from 'nanoid'
@@ -26,8 +26,9 @@ import {
 } from '@/api/dataQuery'
 import type { SSEStreamEvent } from '@/lib/types'
 import QueryProcessPanel from '@/components/data-query/QueryProcessPanel'
+import QuestionLedgerPanel from '@/components/data-query/QuestionLedgerPanel'
 
-type Tab = 'ask' | 'browse'
+type Tab = 'ask' | 'browse' | 'ledger'
 
 /** 快捷示例（覆盖商品/订单/库存/竞品四域，供一键填入） */
 const EXAMPLES = [
@@ -346,6 +347,7 @@ export default function DataExplorerPage() {
           {([
             { key: 'ask', label: '问数据', icon: <MessageSquareText size={14} /> },
             { key: 'browse', label: '浏览表', icon: <Table2 size={14} /> },
+            { key: 'ledger', label: '问题收集', icon: <Inbox size={14} /> },
           ] as const).map(({ key, label, icon }) => (
             <button key={key} onClick={() => setTab(key)}
               className={`flex items-center gap-1.5 px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${
@@ -392,6 +394,8 @@ export default function DataExplorerPage() {
             {askResult && <AskResult result={askResult} />}
           </div>
         )}
+
+        {tab === 'ledger' && <QuestionLedgerPanel />}
 
         {tab === 'browse' && (
           <div className="grid grid-cols-4 gap-4">
