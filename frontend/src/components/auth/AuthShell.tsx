@@ -67,8 +67,10 @@ export default function AuthShell({
           {left}
         </section>
 
-        {/* 右侧表单卡 */}
-        <section className="flex w-full items-center justify-center px-4 py-8 sm:px-6 sm:py-12 lg:w-[48%]">
+        {/* 右侧表单卡（flex-1：≤lg 竖排时撑满 nav 以下剩余屏幕高度，
+            卡片经 items-center 垂直居中——修复手机上卡片贴顶、底部大片死空白；
+            lg 横排时与左栏 52%/48% 分屏兼容，桌面视觉不变） */}
+        <section className="flex w-full flex-1 items-center justify-center px-4 py-8 sm:px-6 sm:py-12 lg:w-[48%]">
           <div
             className="w-full max-w-[420px] rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_18px_44px_-12px_rgba(15,26,20,0.12)] backdrop-blur-xl sm:p-9"
             style={{ WebkitBackdropFilter: "blur(20px)" }}

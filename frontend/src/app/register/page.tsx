@@ -10,10 +10,12 @@
  * 后端契约说明：当前 /api/sys/users/register 仅持久化 username/password/realName，
  * 邮箱、企业名称作为附加字段发送（后端暂忽略），后续扩展后端模型后即可落库。
  */
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { consumeExpiredFlag, login, register, saveUsername } from "@/lib/auth";
+import { RefreshCw } from "lucide-react";
+import { consumeExpiredFlag, fetchRegisterCaptcha, login, register, saveUsername } from "@/lib/auth";
+import type { RegisterCaptcha } from "@/lib/auth";
 import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
 import AuthInput from "@/components/auth/AuthInput";
 
@@ -40,6 +42,29 @@ function RegisterForm() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // 图形验证码（2026-10-07）：4 位纯数字，一码一用——提交后无论对错都换图
+  const [captcha, setCaptcha] = useState<RegisterCaptcha | null>(null);
+  const [captchaCode, setCaptchaCode] = useState("");
+  const [captchaLoading, setCaptchaLoading] = useState(true);
+
+  const refreshCaptcha = useCallback(async () => {
+    setCaptchaLoading(true);
+    setCaptchaCode("");
+    try {
+      setCaptcha(await fetchRegisterCaptcha());
+    } catch {
+      setCaptcha(null);
+    } finally {
+      setCaptchaLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void refreshCaptcha(); }, [refreshCaptcha]);
+
+  const svgDataUri = captcha
+    ? `data:image/svg+xml;utf8,${encodeURIComponent(captcha.svg)}`
+    : null;
 
   useEffect(() => {
     if (consumeExpiredFlag()) setNotice("登录已过期，请重新登录");
@@ -83,7 +108,14 @@ function RegisterForm() {
     setLoading(true);
     try {
       // 手机号作为注册账号；邮箱 / 企业名称为 best-effort 附加字段
-      await register(phone.trim(), password, confirm, company.trim() || undefined);
+      try {
+        await register(phone.trim(), password, confirm, company.trim() || undefined,
+          captcha ? { ticket: captcha.ticket, code: captchaCode.trim() } : undefined);
+      } catch (regErr) {
+        // 验证码一码一用：无论对错都已销毁，换图让用户重填
+        void refreshCaptcha();
+        throw regErr;
+      }
       await login(phone.trim(), password);
       saveUsername(phone.trim());
       goNext();
@@ -198,6 +230,56 @@ function RegisterForm() {
           />
         </div>
 
+        {/* 图形验证码（2026-10-07）：4 位纯数字，点图/刷新按钮换一张，
+            inputmode=numeric 让手机直弹数字键盘 */}
+        <div className="mt-4">
+          <label htmlFor="register-captcha" className="mb-1.5 block text-[13px] text-[#3F4A46]">
+            图形验证码
+          </label>
+          <div className="flex items-center gap-2.5">
+            <input
+              id="register-captcha"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={4}
+              placeholder="输入图中 4 位数字"
+              value={captchaCode}
+              onChange={(e) => setCaptchaCode(e.target.value.replace(/\D/g, ""))}
+              className="h-12 min-w-0 flex-1 rounded-xl border border-[#E3E8E4] bg-white px-3.5
+                text-[16px] text-[#16191A] placeholder:text-[#98A29D] outline-none
+                focus:border-[#1F7A4D] transition-colors"
+            />
+            {/* 验证码图（后端手绘 SVG 转 data-URI 内联，无外部请求）；点击图也可刷新 */}
+            <button
+              type="button"
+              onClick={() => void refreshCaptcha()}
+              disabled={captchaLoading}
+              aria-label="换一张验证码"
+              title="看不清？换一张"
+              className="shrink-0 overflow-hidden rounded-xl border border-[#E3E8E4] transition-opacity hover:opacity-80 disabled:opacity-60"
+            >
+              {svgDataUri ? (
+                <img src={svgDataUri} alt="图形验证码" width={86} height={42} className="block" />
+              ) : (
+                <span className="flex h-[42px] w-[86px] items-center justify-center bg-[#F4F6F3] text-[11px] text-[#98A29D]">
+                  {captchaLoading ? "加载中" : "点击获取"}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => void refreshCaptcha()}
+              disabled={captchaLoading}
+              aria-label="刷新验证码"
+              title="换一张"
+              className="shrink-0 rounded-lg p-2 text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.08] disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={captchaLoading ? "animate-spin" : ""} />
+            </button>
+          </div>
+        </div>
+
         <label className="mt-4 flex cursor-pointer items-start gap-2 text-[13px] text-[#5C6662]">
           <input
             type="checkbox"
@@ -225,6 +307,18 @@ function RegisterForm() {
         >
           {loading ? "处理中…" : "创建账号"}
         </button>
+
+        {/* 登录入口（2026-10-07 手机端补）：与登录页注册入口对称，两端可见 */}
+        <Link
+          href="/login"
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#1F7A4D]/15 bg-[#1F7A4D]/[0.06] py-3 text-[14px] font-medium text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.12]"
+        >
+          已有账号？直接登录
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path d="M2.6 8H13.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            <path d="M8.8 3.6L13.2 8L8.8 12.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
 
         <p className="mt-5 text-center text-[12px] text-[#98A29D]">
           注册即代表你同意《服务条款》与《隐私政策》

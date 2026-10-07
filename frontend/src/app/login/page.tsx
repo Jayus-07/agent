@@ -242,6 +242,19 @@ function LoginForm() {
         <p className="mt-5 text-center text-[12px] text-[#98A29D] lg:mt-5">
           登录即代表你同意《服务条款》与《隐私政策》
         </p>
+
+        {/* 注册入口（2026-10-07 手机端补）：原入口在左侧品牌区，≤lg 整块隐藏
+            导致手机端没有可点的注册路径——移一条进表单卡，两端可见 */}
+        <Link
+          href="/register"
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#1F7A4D]/15 bg-[#1F7A4D]/[0.06] py-3 text-[14px] font-medium text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.12]"
+        >
+          还没有账号？免费注册
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path d="M2.6 8H13.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            <path d="M8.8 3.6L13.2 8L8.8 12.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
       </form>
     </AuthShell>
   );
