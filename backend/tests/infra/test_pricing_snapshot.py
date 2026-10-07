@@ -69,7 +69,11 @@ def test_snapshot_prices_reach_usage_event(monkeypatch):
     assert row["output_unit_price"] == pytest.approx(2.0)
     assert row["cache_input_unit_price"] == pytest.approx(0.02)
     assert row["cost_status"] == "exact"
-    assert abs(row["cost_usd"] - 15.84) < 1e-6  # 兼容列暂存 billed CNY（Phase 3 切 V2）
+    # cost_usd = 原生 USD 审计口径（$2.2）；记账金额在 billed_cost_cny（¥15.84）
+    assert abs(row["cost_usd"] - 2.2) < 1e-6
+    assert abs(row["billed_cost_cny"] - 15.84) < 1e-6
+    assert row["native_currency"] == "USD"
+    assert row["fx_rate"] == pytest.approx(7.2)
 
 
 def test_price_unknown_leaves_unit_prices_null(monkeypatch):
