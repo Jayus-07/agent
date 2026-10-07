@@ -1065,6 +1065,9 @@ _LAYER_ALIASES = {
     "rule_intent": "rule", "keyword": "rule",
     "vector": "embedding", "embedding": "embedding",
     "vector_index": "embedding", "vector_store": "embedding",
+    # CoarseIntentClassifier（本地 embedding 向量粗分类）命中后 source=classifier
+    # ——「embedding 层命中」的真实仓库枚举（2026-10-07 补验②修正）
+    "classifier": "embedding",
     "llm": "llm", "llm_selector": "llm", "llm_fallback": "llm",
     "llm_intent": "llm",
 }

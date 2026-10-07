@@ -88,3 +88,41 @@ class TestAgentStageMetrics:
                         "status": "failed"}.items()):
                     calls += int(sample.value)
         assert calls >= 1
+
+
+class TestL5FailurePath:
+    """补验①（2026-10-07）：D 组「Context L5 failed 或测试级失败路径」。
+
+    真实调用生产记账入口 record_l5_attempt（与 auto_compact.py
+    lock_conflict/stale_waterline 真实失败出口同一函数），非法 reason
+    走 provider_error 兜底分支——不是改 Gauge 数值模拟。
+    """
+
+    def test_l5_failed_recorded_and_alarm_expr_matches(self):
+        from backend.context_budget.metrics import record_l5_attempt
+        from backend.observability.metrics import context_l5_total
+
+        def _failed_count():
+            found = 0
+            for metric in context_l5_total.collect():
+                for sample in metric.samples:
+                    if sample.name != "context_l5_total":
+                        continue  # 排除 _created 时间戳样本
+                    if all(sample.labels.get(k) == v for k, v in
+                           {"status": "failed", "reason": "provider_error"}.items()):
+                        found += int(sample.value)
+            return found
+
+        before = _failed_count()
+        # 非法 reason → provider_error 兜底（生产防基数爆炸分支真实执行）
+        record_l5_attempt(status="failed", reason="probe_nonexistent_reason")
+        after = _failed_count()
+        assert after == before + 1
+
+        # ContextL5FailureRateHigh 告警表达式的分子序列（status=failed）可查询
+        ratio_numerator = 0
+        for metric in context_l5_total.collect():
+            for sample in metric.samples:
+                if sample.name == "context_l5_total" and sample.labels.get("status") == "failed":
+                    ratio_numerator += int(sample.value)
+        assert ratio_numerator >= 1
