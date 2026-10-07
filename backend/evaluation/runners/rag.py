@@ -1214,13 +1214,18 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     )
     case_timeout_s = run_guards.CASE_TIMEOUT_SECONDS
 
-    def _guarded_case(case: TestCase) -> EvalResult:
-        """C5-1：单条 case 超时包装（EVAL_CASE_TIMEOUT_S，0=关）。"""
+    def _guarded_case(case: TestCase) -> tuple[EvalResult, dict | None]:
+        """C5-1：单条 case 超时包装，并保留延迟评测任务。
+
+        ``_eval_case`` 的第二个返回值承载 RAGAS deferred 输入。此前这里
+        只返回 ``EvalResult``，导致串行/并发两条路径都静默丢弃 RAGAS
+        任务，报告虽标记 ``self+ragas``，实际 ``ragas_samples`` 却始终为 0。
+        """
         if case_timeout_s <= 0:
-            return _eval_case(case)[0]
+            return _eval_case(case)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            return executor.submit(lambda: _eval_case(case)[0]).result(
+            return executor.submit(lambda: _eval_case(case)).result(
                 timeout=case_timeout_s
             )
         except concurrent.futures.TimeoutError:
@@ -1228,12 +1233,15 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 "[RAG eval] %s 单条超时（>%ss），记 error（checkpoint 不写，续跑重试）",
                 case.id, case_timeout_s,
             )
-            return EvalResult(
-                case_id=case.id, module="rag", status="error",
-                expected=case.expected, actual={"question": case.question},
-                error_msg=f"case timeout after {case_timeout_s}s",
-                error_stage="timeout",
-                duration_ms=case_timeout_s * 1000,
+            return (
+                EvalResult(
+                    case_id=case.id, module="rag", status="error",
+                    expected=case.expected, actual={"question": case.question},
+                    error_msg=f"case timeout after {case_timeout_s}s",
+                    error_stage="timeout",
+                    duration_ms=case_timeout_s * 1000,
+                ),
+                None,
             )
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -1265,7 +1273,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             for _fut in concurrent.futures.as_completed(_futures):
                 _c = _futures[_fut]
                 try:
-                    evaluated[_c.id] = (_fut.result(), None)
+                    evaluated[_c.id] = _fut.result()
                 except Exception as e:  # noqa: BLE001 — 单条异常不丢批
                     evaluated[_c.id] = (EvalResult(
                         case_id=_c.id, module="rag", status="error",
@@ -1292,7 +1300,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 stop_reason = guard.blocking_reason()
             if stop_reason:
                 break
-            evaluated[c.id] = (_guarded_case(c), None)
+            evaluated[c.id] = _guarded_case(c)
         if stop_reason:
             remaining = [c for c in pending if c.id not in evaluated]
             for r in _skip_remaining(remaining, stop_reason):
