@@ -7,6 +7,7 @@ api/routes/memory.py — 会话记忆 API
   GET    /memory/sessions/{id}/context — 获取 Agent 工作上下文
   DELETE /memory/sessions/{id}         — 删除会话
   PATCH  /memory/sessions/{id}         — 重命名会话
+  GET    /memory/profile               — 当前用户长期画像（设置页只读）
 
 PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委托。
 
@@ -91,6 +92,22 @@ def list_sessions(request: Request,
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().list_sessions(user_id=user_id, limit=limit, before=before)
+        )
+    )
+
+
+@router.get("/profile")
+def get_profile(request: Request, limit: int = 50):
+    """当前用户的长期画像记忆（设置页只读展示，仅本人）。
+
+    返回 memory_records 全部 eligible active 行（preference/user_fact/
+    decision/knowledge），不做语义召回、不更新 access_count。前端分组
+    按 memory_type 自行渲染。
+    """
+    user_id = _require_user(request)
+    return _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().get_profile(user_id=user_id, limit=limit)
         )
     )
 

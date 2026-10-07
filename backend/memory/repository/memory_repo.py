@@ -99,6 +99,33 @@ class MemoryRepository:
         result = await self._s.execute(query)
         return [(row[0], float(row[1])) for row in result.all() if float(row[1]) >= threshold]
 
+    async def list_active_profile(
+        self, user_id: str, tenant_id: str = "", limit: int = 50,
+    ) -> list[MemoryRecord]:
+        """画像展示：列出用户全部 eligible active 记忆（不走向量召回）。
+
+        与 search_hybrid 的分工：画像页要「全量画像」而非「与问题相关的
+        记忆」，故不做语义召回；eligibility 口径与 STOP D 一致（is_active
+        + (tenant, user) 双维度 + 未过期），按重要度、最近访问排序。
+        """
+        tenant_id = normalize_tenant_id(tenant_id)
+        query = (
+            select(MemoryRecord)
+            .where(
+                MemoryRecord.is_active == True,
+                MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.user_id == user_id,
+                (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+            )
+            .order_by(
+                MemoryRecord.importance_score.desc(),
+                MemoryRecord.last_access_at.desc(),
+            )
+            .limit(limit)
+        )
+        result = await self._s.execute(query)
+        return list(result.scalars().all())
+
     async def find_active_by_key(
         self, tenant_id: str, user_id: str, memory_key: str, *, for_update: bool = False,
     ) -> MemoryRecord | None:
