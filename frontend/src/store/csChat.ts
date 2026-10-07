@@ -47,6 +47,8 @@ interface CSChatState {
   pendingProposal: PendingProposal | null
   // 退款候选点选（2026-10-08）：后端 clarification 帧（source=refund_candidates）
   candidateOptions: { id: string; label: string }[] | null
+  // 转人工等待元信息（A 案排队透明化）：倒计时数据源
+  handoffMeta: { handoff_id: string; handoff_state: string; total_deadline_at: string | null; queue_position: number } | null
   /** 双向输入中指示：坐席正在输入（/my/messages 轮询携带，TTL 5s） */
   agentTyping: boolean
 
@@ -69,6 +71,7 @@ interface CSChatState {
   setHandoffState: (state: CSHandoffState) => void
   setPendingProposal: (p: PendingProposal | null) => void
   setCandidateOptions: (opts: { id: string; label: string }[] | null) => void
+  setHandoffMeta: (m: { handoff_id: string; handoff_state: string; total_deadline_at: string | null; queue_position: number } | null) => void
   setAgentTyping: (v: boolean) => void
 }
 
@@ -142,6 +145,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     csTimeline: [],
     pendingProposal: null,
     candidateOptions: null,
+    handoffMeta: null,
     agentTyping: false,
 
     currentMessages: () => {
@@ -283,7 +287,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     resetStream: () => set({
       currentStatus: '', deltaText: '',
       currentRequestId: null, currentNode: null, csTimeline: [],
-      pendingProposal: null, candidateOptions: null,
+      pendingProposal: null, candidateOptions: null, handoffMeta: null,
     }),
 
     replaceLastAssistant: (content, sessionId) => {
@@ -313,6 +317,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     setHandoffState: (state) => set({ handoffState: state }),
     setPendingProposal: (p) => set({ pendingProposal: p }),
     setCandidateOptions: (opts) => set({ candidateOptions: opts }),
+    setHandoffMeta: (m) => set({ handoffMeta: m }),
     setAgentTyping: (v) => set({ agentTyping: v }),
   }
 })

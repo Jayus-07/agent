@@ -103,7 +103,7 @@ export default function ChatHeader({
       {onNewTask && (
         <button
           onClick={onNewTask}
-          className="hidden md:flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
+          className="flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
             hover:text-text-primary hover:bg-black/5 transition-colors"
           aria-label="新建任务"
           title="新建任务"

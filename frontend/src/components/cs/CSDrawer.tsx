@@ -50,6 +50,24 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const newSession = useCSChatStore((s) => s.newSession)
   const pendingProposal = useCSChatStore((s) => s.pendingProposal)
   const candidateOptions = useCSChatStore((s) => s.candidateOptions)
+  const handoffMeta = useCSChatStore((s) => s.handoffMeta)
+  // A 案倒计时（2026-10-08）：waiting_human 时按 total_deadline_at 每秒刷新剩余秒数
+  const [waitRemaining, setWaitRemaining] = useState<number | null>(null)
+  useEffect(() => {
+    if (handoffState !== 'waiting' || !handoffMeta?.total_deadline_at) {
+      setWaitRemaining(null)
+      return
+    }
+    const deadline = Date.parse(handoffMeta.total_deadline_at)
+    if (Number.isNaN(deadline)) {
+      setWaitRemaining(null)
+      return
+    }
+    const tick = () => setWaitRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)))
+    tick()
+    const t = setInterval(tick, 1000)
+    return () => clearInterval(t)
+  }, [handoffState, handoffMeta?.total_deadline_at])
   const agentTyping = useCSChatStore((s) => s.agentTyping)
   const addMessage = useCSChatStore((s) => s.addMessage)
   const setPendingProposal = useCSChatStore((s) => s.setPendingProposal)
@@ -267,6 +285,17 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                 currentNode={currentNode}
               />
               {handoffState !== 'none' && <CSHandoffCard handoffState={handoffState} />}
+              {handoffState === 'waiting' && waitRemaining !== null && (
+                <div className="px-3 mb-3">
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                    ⏳ 人工接入中 · 剩余 {waitRemaining} 秒
+                    {handoffMeta && handoffMeta.queue_position > 0
+                      ? `（前面 ${handoffMeta.queue_position} 位等待）`
+                      : ''}
+                    ，超时将自动为您登记工单
+                  </div>
+                </div>
+              )}
               {pendingProposal && (
                 <CSConfirmCard
                   content={pendingProposal.proposalText}
