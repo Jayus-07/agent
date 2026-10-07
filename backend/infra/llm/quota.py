@@ -316,6 +316,27 @@ class PostgresQuotaReservation:
     reserved_cny: Decimal
 
 
+#: 继承来源 → 中文展示名（2026-10-08 #1）：「额度来源」此前只回
+#: scope_type:scope_id 技术串，前端恒走英文回退。label 是纯展示字段，
+#: scope 两键保持原样（既有消费方兼容）；命名与 AGENTS.md 继承链口径一致。
+_POLICY_SOURCE_LABELS = {
+    "user": "用户策略",
+    "tenant": "租户策略",
+    "tenant_default": "租户默认策略",
+    "platform": "平台默认策略",
+}
+
+
+def policy_source_label(scope_type: str, scope_id: str) -> str:
+    """策略继承来源的中文展示名（纯函数；未知 scope 回退「继承策略」）。"""
+    if not scope_type or scope_type == "unknown":
+        return "未知"
+    label = _POLICY_SOURCE_LABELS.get(scope_type, "继承策略")
+    if scope_type in ("user", "tenant") and scope_id:
+        return f"{label}（{scope_id}）"
+    return label
+
+
 class PostgresQuotaStore:
     """PG 原子预占/结算存储；额度表是跨进程权威。"""
 
@@ -488,6 +509,12 @@ class PostgresQuotaStore:
         from backend.config import llm as llm_config
         from backend.config.budget import BUDGET_BASE_CURRENCY, BUDGET_FX_USD_CNY
 
+        # 来源中文名（2026-10-08 #1）：展示字段，scope 两键不变（消费方兼容）
+        source_label = policy_source_label(
+            source.scope_type if source else "unknown",
+            source.scope_id if source else "",
+        )
+
         return {
             "currency": BUDGET_BASE_CURRENCY,
             "fx_usd_cny": str(BUDGET_FX_USD_CNY),
@@ -499,6 +526,7 @@ class PostgresQuotaStore:
             "policy_source": {
                 "scope_type": source.scope_type if source else "unknown",
                 "scope_id": source.scope_id if source else "unknown",
+                "label": source_label,
             },
             "daily": user_daily,
             "monthly": user_monthly,
