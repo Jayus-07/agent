@@ -9,6 +9,9 @@ vi.mock('@/api/travel', () => ({
   fetchTravelPlanList: vi.fn().mockResolvedValue([]),
   fetchTravelPlanLatest: vi.fn().mockResolvedValue({}), fetchItineraryIcs: vi.fn(),
   reverseGeocodeTravelOrigin: vi.fn(), sendTravelFeedback: vi.fn(),
+  // 偏好引导（2026-10-08）：测试统一视为老用户（不弹问卷）
+  fetchMyPreferences: vi.fn().mockResolvedValue({ origin: '福州', preferences: [], pace: 'relaxed', diet: '', lodging: '', transport: '' }),
+  isEmptyPrefs: () => false,
 }))
 vi.mock('@/hooks/useBudgetStatus', () => ({ useBudgetStatus: () => ({ blocked: false }) }))
 vi.mock('@/lib/auth', () => ({ getCachedUser: () => null }))

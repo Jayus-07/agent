@@ -34,6 +34,7 @@ import ItineraryView from '@/components/travel/ItineraryView'
 import CandidatesPanel from '@/components/travel/CandidatesPanel'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import TravelChatDrawer, { type TravelChatDrawerHandle } from '@/components/travel/TravelChatDrawer'
+import TravelOnboarding from '@/components/travel/TravelOnboarding'
 import CityGuideDrawer from '@/components/travel/CityGuideDrawer'
 import TravelPlanList from '@/components/travel/TravelPlanList'
 import TaskSidebar from '@/components/agent/TaskSidebar'
@@ -75,6 +76,8 @@ import {
   type TravelStreamEvent,
   type PlanResponse,
   type Recommendation,
+  fetchMyPreferences,
+  isEmptyPrefs,
 } from '@/api/travel'
 import { getCachedUser } from '@/lib/auth'
 
@@ -165,6 +168,8 @@ export default function TravelPage() {
   const [budget, setBudget] = useState('')
   const [startDate, setStartDate] = useState('')
   const [pace, setPace] = useState('')
+  const [diet, setDiet] = useState('')
+  const [transport, setTransport] = useState('')
   const [preferences, setPreferences] = useState<string[]>([])
   const [extra, setExtra] = useState('')
   // 首屏引导的一句话输入：直接交给后端 slot_filler 解析（缺的信息由域内追问补齐）
@@ -762,6 +767,14 @@ export default function TravelPage() {
                 isMobileChat && drawerOpen ? 'hidden' : ''
               }`}
             >
+              {!itinerary && !loading && !planState.notice && (
+                <TravelOnboardingGate
+                  origin={origin} onOrigin={setOrigin}
+                  pace={pace} onPace={setPace}
+                  diet={diet} onDiet={setDiet}
+                  transport={transport} onTransport={setTransport}
+                />
+              )}
               {!itinerary && !loading && !planState.notice && (
                 <PlanIntakeCard
                   value={quickIdea}
@@ -1573,3 +1586,43 @@ function PlanIntakeCard({
   )
 }
 
+
+/**
+ * 新用户偏好引导门（2026-10-08 拍板）：进旅游页时查偏好，全空（新用户）
+ * 显示 4 题选项卡问卷；答完自动保存并把 origin/pace/diet/transport 回填
+ * 表单。老用户不弹；保存失败/跳过都不拦路（引导是增强不是前置门）。
+ */
+function TravelOnboardingGate({
+  origin, onOrigin, pace, onPace, diet, onDiet, transport, onTransport,
+}: {
+  origin: string; onOrigin: (v: string) => void
+  pace: string; onPace: (v: string) => void
+  diet: string; onDiet: (v: string) => void
+  transport: string; onTransport: (v: string) => void
+}) {
+  // null=加载中（不渲染防闪）；false=不显示；true=显示问卷
+  const [show, setShow] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchMyPreferences().then((prefs) => {
+      if (alive && isEmptyPrefs(prefs)) setShow(true)
+      else if (alive) setShow(false)
+    })
+    return () => { alive = false }
+  }, [])
+
+  if (show === null || show === false) return null
+  return (
+    <TravelOnboarding
+      onDone={(prefs) => {
+        if (prefs.origin && !origin) onOrigin(prefs.origin)
+        if (prefs.pace && !pace) onPace(prefs.pace)
+        if (prefs.diet && !diet) onDiet(prefs.diet)
+        if (prefs.transport && !transport) onTransport(prefs.transport)
+        setShow(false)
+      }}
+      onSkip={() => setShow(false)}
+    />
+  )
+}
