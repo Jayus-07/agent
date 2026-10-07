@@ -21,12 +21,13 @@
 -- 执行：docker exec -i agent-postgres-1 psql -U postgres -d agent_memory < 本文件
 -- ═══════════════════════════════════════════════════════════════════
 
--- 1.1 演示账号（password_hash = pbkdf2_sha256(200000, "Demo@2026")）
-INSERT INTO auth.users (username, password_hash, real_name, dept, status)
+-- 1.1 演示账号（password_hash = pbkdf2_sha256(200000, "Demo@2026")，local_jwt.py 的 hex 格式）
+-- tenant_id 必填：登录按 (username, tenant_id) 查询，缺省 NULL 将永远 400（2026-10-08 服务器验收实测）
+INSERT INTO auth.users (username, tenant_id, password_hash, real_name, dept, status)
 VALUES
-  ('demo_fuzhou', 'pbkdf2_sha256$200000$030187a9c884162a228920e410c4581f$8b764558115caec7b4f51092a8c4637973d53faf94fdd9a103ae459a8df7f517', '演示·福州行', 'general', 1),
-  ('demo_li',     'pbkdf2_sha256$200000$030187a9c884162a228920e410c4581f$8b764558115caec7b4f51092a8c4637973d53faf94fdd9a103ae459a8df7f517', '演示·李经理', 'general', 1),
-  ('demo_wang',   'pbkdf2_sha256$200000$030187a9c884162a228920e410c4581f$8b764558115caec7b4f51092a8c4637973d53faf94fdd9a103ae459a8df7f517', '演示·王同学', 'general', 1)
+  ('demo_fuzhou', 'default', 'pbkdf2_sha256$200000$030187a9c884162a228920e410c4581f$8b764558115caec7b4f51092a8c4637973d53faf94fdd9a103ae459a8df7f517', '演示·福州行', 'general', 1),
+  ('demo_li',     'default', 'pbkdf2_sha256$200000$030187a9c884162a228920e410c4581f$8b764558115caec7b4f51092a8c4637973d53faf94fdd9a103ae459a8df7f517', '演示·李经理', 'general', 1),
+  ('demo_wang',   'default', 'pbkdf2_sha256$200000$030187a9c884162a228920e410c4581f$8b764558115caec7b4f51092a8c4637973d53faf94fdd9a103ae459a8df7f517', '演示·王同学', 'general', 1)
 ON CONFLICT (username) DO NOTHING;
 
 -- 登记角色：auth.users.role 默认即 viewer（009），演示账号无需提权；
