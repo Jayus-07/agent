@@ -105,6 +105,28 @@ def _require_sql_read(policy: SQLPolicyContext) -> None:
         raise HTTPException(status_code=403, detail="当前查询超出你的数据访问范围。")
 
 
+def _record_question(policy: SQLPolicyContext, req) -> None:
+    """线上问题台账（2026-10-08 #13）：NL2SQL 域用户原话入账。
+
+    挂在权限预检之后——只有真正放行的数据诉求才值得进候选池；
+    sql_query_audits 只存生成的 SQL 没有原文，台账补上这一块。
+    旁路软失败：台账断流不影响查询链。
+    """
+    try:
+        from backend.observability.question_ledger import record_question
+
+        record_question(
+            domain="sql",
+            question=req.question,
+            user_id=policy.user_id,
+            session_id=getattr(req, "session_id", "") or "",
+            tenant_id=policy.tenant_id or "default",
+            source="nl2sql",
+        )
+    except Exception:  # noqa: BLE001 — 台账断流不影响查询
+        logger.debug("[SQL] 问题台账写入失败", exc_info=True)
+
+
 def _ask_sql_agent(
     agent,
     question: str,
@@ -175,6 +197,7 @@ async def sql_query(
     _require_sql_enabled()
     policy = _build_policy(principal)
     _require_sql_read(policy)
+    _record_question(policy, req)
 
     agent = get_sql_agent()
     query_context = None
@@ -241,6 +264,7 @@ async def sql_query_stream(
     _require_sql_enabled()
     policy = _build_policy(principal)
     _require_sql_read(policy)
+    _record_question(policy, req)
 
     if req.current_user_id is not None:
         logger.warning(

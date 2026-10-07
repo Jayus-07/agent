@@ -856,6 +856,24 @@ class GraphRunner:
                     trace,
                     answer if answer is not None else (ctx["final_answer"] or ""),
                     int((time.time() - start_time) * 1000), "", "")
+                # 线上问题台账（2026-10-08 #13）：主图+客服窗口流量统一在此
+                # 入账（域由 #12 三分类推导，plan 支线细分 planner）。主图
+                # trace.question 是明文——入账前必须过 PII 掩码唯一出口；
+                # 独立兜底，台账断流不能影响上面的 trace 收尾。
+                try:
+                    from backend.observability.question_ledger import (
+                        record_question_from_trace,
+                    )
+                    from backend.shared.pii_mask import mask_pii
+
+                    _masked_q, _vault = mask_pii(
+                        str(getattr(trace, "question", "") or ""))
+                    record_question_from_trace(
+                        trace, question=_masked_q,
+                        answer_summary=str(ctx.get("final_answer") or ""),
+                    )
+                except Exception:
+                    logger.debug("[GraphRunner] 问题台账写入失败", exc_info=True)
             except Exception:
                 logger.debug("[GraphRunner] trace 收尾失败", exc_info=True)
 
