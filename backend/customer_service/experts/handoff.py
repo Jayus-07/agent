@@ -168,6 +168,12 @@ def execute_handoff(
             "[HandoffExpert] 转人工工单落库失败（不阻断主流程）: %s",
             ticket_id, exc_info=True,
         )
+        # P2 完整性观测（2026-10-07）：镜像行缺失=坐席端工单查询看不到该转接
+        try:
+            from backend.observability import metrics as _m
+            _m.cs_ticket_integrity_total.labels(kind="handoff_mirror_write_failed").inc()
+        except Exception:  # pragma: no cover — 指标软失败
+            pass
 
     # 实时推送：新工单进入坐席待接入队列（WebSocket，无连接时静默丢弃）
     from backend.customer_service.realtime import get_agent_hub

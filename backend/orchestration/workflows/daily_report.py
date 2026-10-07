@@ -198,13 +198,19 @@ class DailyReport:
         from datetime import date
         today = date.today().isoformat()
 
-        # 提取 KPI 摘要（从上游 step output）
+        # 提取 KPI 摘要（从上游 step output）。
+        # 2026-10-07 修正字段漂移：SQL 返回 stock_quantity/safety_stock
+        # （fetch_inventory），旧键 current_qty/min_qty 永远缺失 →
+        # alert_count 恒 0。字段缺失的行不参与判定（缺数不告警）。
         sales = ctx.outputs.get("fetch_sales", {}).get("sales", [])
         inventory = ctx.outputs.get("fetch_inventory", {}).get("inventory", [])
-        # 注：库存字段真实键为 stock_quantity/safety_stock（fetch_inventory SQL），
-        # current_qty/min_qty 是历史遗留键名漂移——alert_count 修复属业务字段
-        # 问题，不在本轮失败语义范围（见验收报告 §7 备忘）。
-        alerting = [i for i in inventory if isinstance(i, dict) and i.get("current_qty", 999) < i.get("min_qty", 0)]
+        alerting = [
+            i for i in inventory
+            if isinstance(i, dict)
+            and i.get("stock_quantity") is not None
+            and i.get("safety_stock") is not None
+            and i["stock_quantity"] < i["safety_stock"]
+        ]
 
         kpi_summary = {
             "total_products": len(inventory),

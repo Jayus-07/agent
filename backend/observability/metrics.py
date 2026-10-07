@@ -1124,6 +1124,12 @@ cs_confirmation_total = Counter(
     "客服确认状态转换总数",
     labelnames=("transition",),
 )
+cs_ticket_integrity_total = Counter(
+    "cs_ticket_integrity_total",
+    "工单完整性降级总数（投诉幂等预检跳过/投诉与转接的工单镜像落库失败"
+    "——不阻断主流程的声明式取舍，但必须可被运维察觉而非只有 warning 日志）",
+    labelnames=("kind",),
+)
 cs_handoff_total = Counter(
     "cs_handoff_total",
     "客服人工转接总数（按触发类型）",

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from backend.customer_service.errors import (
+    AccountNotFoundError,
     AuthenticationError,
     DatabaseError,
 )
@@ -29,7 +30,8 @@ class AccountService:
             user_id: 当前认证用户 ID
 
         Raises:
-            AuthenticationError: user_id 无效
+            AuthenticationError: user_id 缺失或 anonymous（身份层问题）
+            AccountNotFoundError: 身份有效但客户表无此账户行（业务不存在）
             DatabaseError: 数据库异常
         """
         if not user_id or user_id == "anonymous":
@@ -51,7 +53,10 @@ class AccountService:
             raise DatabaseError(f"查询账户信息失败: {result.error}")
 
         if not result.rows:
-            raise AuthenticationError(
+            # 2026-10-07 口径修正（收口审计 P2-7）：能走到这里说明身份已在
+            # 入口校验通过，「客户表无此行」是业务不存在，不是「未认证」
+            # ——旧映射 AuthenticationError 会把查无账户谎报成登录问题。
+            raise AccountNotFoundError(
                 f"Customer not found for user_id={user_id}"
             )
 
