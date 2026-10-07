@@ -36,12 +36,20 @@ interface HandoffMessageDTO {
   created_at: string
 }
 
+interface HandoffMeta {
+  handoff_id: string
+  handoff_state: string
+  total_deadline_at: string | null
+  queue_position: number
+}
+
 interface HandoffMessagesResponse {
   conversation_id: string
   handoff_state: string
   last_id: number
   messages: HandoffMessageDTO[]
   agent_typing?: boolean
+  handoff_meta?: HandoffMeta | null
 }
 
 const STATE_MAP: Record<string, CSHandoffState> = {
@@ -72,7 +80,7 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
         if (!alive || !res.ok) return
         const data = (await res.json()) as HandoffMessagesResponse
 
-        const { setHandoffState, setAgentTyping, addMessage } = useCSChatStore.getState()
+        const { setHandoffState, setAgentTyping, setHandoffMeta } = useCSChatStore.getState()
 
         // 坐席消息入列（历史补拉 + 增量都走这里；id=message_id 幂等，
         // appendAgentMessage 按 id 去重——切换会话/水合恢复后 since_id 归零
@@ -106,6 +114,8 @@ export function useCSHandoffSync(sessionId: string, enabled: boolean) {
         setHandoffState(mapped)
         // 「坐席正在输入」：服务端 TTL 5s，靠下一拍轮询续期/消退
         setAgentTyping(data.agent_typing === true)
+        // A 案倒计时（2026-10-08）：waiting_human 期透出截止时间与排队序
+        setHandoffMeta(data.handoff_meta ?? null)
       } catch {
         // 静默重试
       } finally {

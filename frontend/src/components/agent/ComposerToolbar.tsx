@@ -3,19 +3,13 @@
 /**
  * ComposerToolbar — 输入框下方工具栏（两段式输入框的下半段）
  *
- * 从左到右：当前部门 · 附件 · （弹性空隙）· 模型切换 · 发送/停止。
- *  - 当前部门：只读徽标（授权收口 §35）。部门是账号组织属性，由管理员
- *    维护、随 JWT 下发，检索授权由后端按它计算——用户不可自选，旧
- *    「部门选择器」对授权零作用，属误导 UI 已移除。
- *  - 附件：P0 占位，点击提示能力开发中
- *  - 模型切换：LLMSwitcher 从 ChatHeader 下移至此
+ * 2026-10-07 移动端改版精简：移除 预算圆圈 / 当前部门 / 附件占位 / 模型切换，
+ * 只保留 发送/停止。理由：部门是授权属性不是操作项、附件未上线、模型与余额
+ * 对移动端用户是噪音（用户拍板「模型和部门都不要显示，附件也不要，余额也不要」）。
+ *  - 发送/停止：生成中按钮变为停止按钮，点击中止本轮流式（原有行为不变）。
+ *  - LLMSwitcher / BudgetRing 组件保留在原位未删：能力还在，后续要恢复只接回来。
  */
-import { ArrowUp, Building2, Paperclip, Square } from 'lucide-react'
-import { getCurrentDepartment } from '@/lib/department'
-import { useToast } from '@/components/shared/Toast'
-import LLMSwitcher from '@/components/agent/LLMSwitcher'
-import BudgetRing from '@/components/chat/BudgetRing'
-import type { BudgetStatus } from '@/api/budgets'
+import { ArrowUp, Square } from 'lucide-react'
 
 interface Props {
   disabled?: boolean
@@ -23,70 +17,31 @@ interface Props {
   onSend: () => void
   /** 生成中时发送按钮变为停止按钮，点击中止本轮流式 */
   onStop?: () => void
-  /** 预算圆圈数据（ChatView 经 useBudgetStatus 轮询下发） */
-  budgetStatus?: BudgetStatus | null
+  /** 兼容旧签名（ChatView → ChatInput 透传）；精简后不再渲染预算圆圈 */
+  budgetStatus?: unknown
 }
 
 export default function ComposerToolbar({
-  disabled = false, canSend, onSend, onStop, budgetStatus = null,
+  disabled = false, canSend, onSend, onStop,
 }: Props) {
-  const toast = useToast()
-  const department = getCurrentDepartment()
-
   return (
-    // flex-wrap：320px 级窄屏下放不下单行（部门+附件+模型胶囊+权限+发送 ≈ 380px），
-    // 模型切换器整组换行而不是溢出；≥sm 视口仍单行。
-    // 左簇（部门+附件）与右簇（模型+权限+发送）用 ml-auto 分开，行内垂直统一居中
-    <div className="flex flex-wrap items-center gap-1.5 gap-y-1 pt-2">
-      {/* 左簇：预算圆圈 + 当前部门（只读）+ 附件 */}
-      <div className="flex items-center gap-0.5 shrink-0">
-        <BudgetRing status={budgetStatus} />
-        <div
-          className="min-w-0 flex items-center gap-1 rounded-lg px-2 py-1.5"
-          title="部门由管理员在管理端维护，决定知识库检索授权范围"
-        >
-          <Building2 size={14} className="text-text-muted" aria-hidden />
-          <span className="text-xs text-text-secondary max-w-[120px] truncate">
-            {department ? `当前部门：${department.label}` : '未分配部门'}
-          </span>
-        </div>
-
-        {/* 附件（P0 占位） */}
-        <button
-          type="button"
-          onClick={() => toast.info('附件上传能力开发中，敬请期待')}
-          className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-black/[0.05]
-            transition-colors"
-          aria-label="添加附件"
-          title="添加附件"
-        >
-          <Paperclip size={15} />
-        </button>
-      </div>
-
-      {/* 右簇：模型切换 + 发送/停止；窄屏下模型胶囊整组换行，由 wrap 兜底 */}
-      <div className="flex items-center gap-1 ml-auto basis-full sm:basis-auto">
-        <div className="flex-1 sm:flex-none flex justify-end sm:block min-w-0">
-          <LLMSwitcher />
-        </div>
-
-        {/* 发送 / 停止：生成中按钮切换为停止，随时可点（不随 canSend 置灰）。
-            注意停止态背景用默认调色板，项目的 surface/text 令牌在 bg- 前缀下不可用 */}
-        <button
-          type="button"
-          onClick={disabled ? onStop : onSend}
-          disabled={disabled ? !onStop : !canSend}
-          aria-label={disabled ? '停止生成' : '发送'}
-          title={disabled ? '停止生成' : '发送'}
-          className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center
-            transition-all duration-200 active:scale-95 shadow-sm
-            ${disabled
-              ? 'bg-neutral-800 text-white hover:bg-neutral-700'
-              : 'bg-accent text-white hover:bg-accent-hover disabled:opacity-20 disabled:cursor-not-allowed'}`}
-        >
-          {disabled ? <Square size={12} className="fill-current" /> : <ArrowUp size={16} strokeWidth={2.5} />}
-        </button>
-      </div>
+    <div className="flex items-center justify-end pt-2">
+      {/* 发送 / 停止：生成中按钮切换为停止，随时可点（不随 canSend 置灰）。
+          注意停止态背景用默认调色板，项目的 surface/text 令牌在 bg- 前缀下不可用 */}
+      <button
+        type="button"
+        onClick={disabled ? onStop : onSend}
+        disabled={disabled ? !onStop : !canSend}
+        aria-label={disabled ? '停止生成' : '发送'}
+        title={disabled ? '停止生成' : '发送'}
+        className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center
+          transition-all duration-200 active:scale-95 shadow-sm
+          ${disabled
+            ? 'bg-neutral-800 text-white hover:bg-neutral-700'
+            : 'bg-accent text-white hover:bg-accent-hover disabled:opacity-20 disabled:cursor-not-allowed'}`}
+      >
+        {disabled ? <Square size={12} className="fill-current" /> : <ArrowUp size={16} strokeWidth={2.5} />}
+      </button>
     </div>
   )
 }

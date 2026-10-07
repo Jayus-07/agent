@@ -61,15 +61,18 @@ export default function AuthShell({
       {nav}
 
       <div className="relative z-10 flex min-h-screen flex-col lg:flex-row">
-        {/* 左侧品牌主张区 */}
-        <section className="flex w-full flex-col justify-center px-10 py-16 lg:w-[52%] lg:px-20">
+        {/* 左侧品牌主张区（≤md 隐藏：56px 中文标题在 390px 屏必然竖排爆版，
+            且手机首屏最该给的是表单本身。页面侧另备 md 以下的小标题兜底） */}
+        <section className="hidden w-full flex-col justify-center px-10 py-16 lg:flex lg:w-[52%] lg:px-20">
           {left}
         </section>
 
-        {/* 右侧表单卡 */}
-        <section className="flex w-full items-center justify-center px-6 py-12 lg:w-[48%]">
+        {/* 右侧表单卡（flex-1：≤lg 竖排时撑满 nav 以下剩余屏幕高度，
+            卡片经 items-center 垂直居中——修复手机上卡片贴顶、底部大片死空白；
+            lg 横排时与左栏 52%/48% 分屏兼容，桌面视觉不变） */}
+        <section className="flex w-full flex-1 items-center justify-center px-4 py-8 sm:px-6 sm:py-12 lg:w-[48%]">
           <div
-            className="w-full max-w-[420px] rounded-3xl border border-white/70 bg-white/70 p-9 shadow-[0_18px_44px_-12px_rgba(15,26,20,0.12)] backdrop-blur-xl"
+            className="w-full max-w-[420px] rounded-3xl border border-white/70 bg-white/70 p-6 shadow-[0_18px_44px_-12px_rgba(15,26,20,0.12)] backdrop-blur-xl sm:p-9"
             style={{ WebkitBackdropFilter: "blur(20px)" }}
           >
             {children}
@@ -91,32 +94,32 @@ export function AuthNav({
   badge?: string;
 }) {
   return (
-    <nav className="absolute inset-x-0 top-0 z-20 flex h-[72px] items-center justify-between px-12">
-      <div className="flex items-center gap-2.5">
+    <nav className="absolute inset-x-0 top-0 z-20 flex h-16 items-center justify-between px-4 sm:h-[72px] sm:px-6 md:px-12">
+      <div className="flex min-w-0 items-center gap-2.5">
         <span
-          className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[13px] font-bold text-white"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] text-[13px] font-bold text-white"
           style={{ background: "#16191A" }}
         >
           A
         </span>
-        <span className="text-[17px] font-bold tracking-wide text-[#16191A]">
+        <span className="truncate text-[15px] font-bold tracking-wide text-[#16191A] sm:text-[17px]">
           {brand}
         </span>
       </div>
-      <div className="flex items-center gap-7">
+      <div className="flex shrink-0 items-center gap-3 md:gap-7">
         {links?.map((l) =>
           l.href ? (
             <a
               key={l.label}
               href={l.href}
-              className="text-[14px] text-[#5C6662] transition-colors hover:text-[#16191A]"
+              className="hidden text-[14px] text-[#5C6662] transition-colors hover:text-[#16191A] md:inline"
             >
               {l.label}
             </a>
           ) : (
             <span
               key={l.label}
-              className="text-[14px] text-[#5C6662]"
+              className="hidden text-[14px] text-[#5C6662] md:inline"
             >
               {l.label}
             </span>

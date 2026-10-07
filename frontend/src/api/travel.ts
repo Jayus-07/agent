@@ -555,3 +555,57 @@ export async function reverseGeocodeTravelOrigin(
   const district = result.district || result.result?.district || ''
   return { city, label: district ? `${city} · ${district}` : city }
 }
+
+/** 用户旅游偏好（travel_preferences 表投影；后端 GET/PUT /api/travel/preferences） */
+export interface TravelPrefs {
+  origin: string;
+  preferences: string[];
+  pace: '' | 'relaxed' | 'moderate' | 'intense';
+  diet: string;
+  lodging: string;
+  transport: string;
+}
+
+const EMPTY_PREFS: TravelPrefs = {
+  origin: '', preferences: [], pace: '', diet: '', lodging: '', transport: '',
+};
+
+export function emptyTravelPrefs(): TravelPrefs {
+  return { ...EMPTY_PREFS, preferences: [] };
+}
+
+/** 是否从未填过偏好（引导问卷触发条件：全空 = 新用户） */
+export function isEmptyPrefs(p: TravelPrefs): boolean {
+  return (
+    !p.origin && p.preferences.length === 0 && !p.pace &&
+    !p.diet && !p.lodging && !p.transport
+  );
+}
+
+/** GET /api/travel/preferences — 读当前用户偏好（404/空 = 新用户） */
+export async function fetchMyPreferences(): Promise<TravelPrefs> {
+  try {
+    const data = await request<Partial<TravelPrefs>>('/api/travel/preferences');
+    return {
+      origin: data.origin ?? '',
+      preferences: Array.isArray(data.preferences) ? data.preferences : [],
+      pace: (data.pace ?? '') as TravelPrefs['pace'],
+      diet: data.diet ?? '',
+      lodging: data.lodging ?? '',
+      transport: data.transport ?? '',
+    };
+  } catch {
+    // 401/404/网络失败都按「无偏好」处理——引导问卷是增强，不是前置门
+    return emptyTravelPrefs();
+  }
+}
+
+/** PUT /api/travel/preferences — 写入问卷收集的偏好 */
+export async function saveMyPreferences(prefs: TravelPrefs): Promise<boolean> {
+  const res = await fetchRaw('/api/travel/preferences', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(prefs),
+  });
+  return res.ok;
+}

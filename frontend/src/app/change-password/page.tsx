@@ -79,7 +79,7 @@ export default function ChangePasswordPage() {
               autoComplete="current-password"
               value={oldPwd}
               onChange={(e) => setOldPwd(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg border border-border-subtle bg-surface-base text-sm text-text-primary outline-none focus:border-accent"
+              className="w-full h-12 px-3 rounded-lg border border-border-subtle bg-surface-base text-[16px] sm:text-sm text-text-primary outline-none focus:border-accent"
               placeholder="请输入临时密码"
             />
           </div>
@@ -93,7 +93,7 @@ export default function ChangePasswordPage() {
               autoComplete="new-password"
               value={newPwd}
               onChange={(e) => setNewPwd(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg border border-border-subtle bg-surface-base text-sm text-text-primary outline-none focus:border-accent"
+              className="w-full h-12 px-3 rounded-lg border border-border-subtle bg-surface-base text-[16px] sm:text-sm text-text-primary outline-none focus:border-accent"
               placeholder="请输入新密码"
             />
           </div>
@@ -107,7 +107,7 @@ export default function ChangePasswordPage() {
               autoComplete="new-password"
               value={confirmPwd}
               onChange={(e) => setConfirmPwd(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg border border-border-subtle bg-surface-base text-sm text-text-primary outline-none focus:border-accent"
+              className="w-full h-12 px-3 rounded-lg border border-border-subtle bg-surface-base text-[16px] sm:text-sm text-text-primary outline-none focus:border-accent"
               placeholder="请再次输入新密码"
             />
           </div>

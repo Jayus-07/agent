@@ -707,6 +707,52 @@ class MemoryService:
                 logger.error(f"[MemoryService] get_session_messages 失败: {e}")
                 return {"session_id": session_id, "messages": [], "error": str(e)}
 
+    async def list_profile_memories(self, user_id: str = "default",
+                                    limit: int = 50, tenant_id: str = "") -> dict:
+        """列出当前用户的画像记忆（memory_records active 行，设置页只读展示）。
+
+        与 /memory/sessions（会话记忆）互补：这里只出长期记忆四类
+        （user_fact / preference / decision / knowledge），按最近访问排序。
+        只读，不触发 access_count 更新（避免展示行为污染记忆衰减信号）。
+        """
+        from sqlalchemy import select
+
+        from backend.memory.keying import normalize_tenant_id
+        from backend.memory.models.memory import MemoryRecord
+
+        tenant_id = normalize_tenant_id(tenant_id)
+        async with AsyncSessionLocal() as db_session:
+            try:
+                stmt = (
+                    select(MemoryRecord)
+                    .where(
+                        MemoryRecord.user_id == user_id,
+                        MemoryRecord.tenant_id == tenant_id,
+                        MemoryRecord.is_active.is_(True),
+                    )
+                    .order_by(
+                        MemoryRecord.last_access_at.desc(),
+                        MemoryRecord.created_at.desc(),
+                    )
+                    .limit(max(1, min(limit, 200)))
+                )
+                rows = (await db_session.execute(stmt)).scalars().all()
+                await db_session.commit()
+                return {
+                    "records": [
+                        {
+                            "memory_type": r.memory_type,
+                            "content": r.content,
+                            "created_at": r.created_at.isoformat() if r.created_at else None,
+                        }
+                        for r in rows
+                    ],
+                }
+            except Exception as e:
+                await db_session.rollback()
+                logger.error(f"[MemoryService] list_profile_memories 失败: {e}")
+                return {"records": [], "error": str(e)}
+
     async def get_session_context(self, session_id: str, user_id: str | None = None) -> dict:
         """获取会话 Agent 工作上下文。"""
         async with AsyncSessionLocal() as db_session:

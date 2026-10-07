@@ -134,8 +134,11 @@ function LoginForm() {
       }
       left={left}
     >
-      <div className="mb-6">
-        <h2 className="text-[26px] font-semibold text-[#16191A]">
+      <div className="mb-5 lg:mb-6">
+        <span className="mb-3 inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3 py-1 text-[12px] text-[#4A544F] lg:hidden">
+          AI 问答 · 多模态客服
+        </span>
+        <h2 className="text-[22px] font-semibold text-[#16191A] sm:text-[24px] lg:text-[26px]">
           登录你的 AI 助手
         </h2>
         <p className="mt-1.5 text-[13px] text-[#7A8480]">
@@ -214,27 +217,44 @@ function LoginForm() {
           {loading ? "处理中…" : "登录"}
         </button>
 
-        <div className="my-5 flex items-center gap-3 text-[12px] text-[#98A29D]">
-          <span className="h-px flex-1 bg-[#E4EAE6]" />
-          或使用以下方式登录
-          <span className="h-px flex-1 bg-[#E4EAE6]" />
+        {/* 第三方登录占位：桌面保留（占位说明产品规划），移动端收掉——
+            三枚 disabled 按钮在窄屏既占掉首屏高度又点不动，是纯噪音 */}
+        <div className="hidden lg:block">
+          <div className="my-5 flex items-center gap-3 text-[12px] text-[#98A29D]">
+            <span className="h-px flex-1 bg-[#E4EAE6]" />
+            或使用以下方式登录
+            <span className="h-px flex-1 bg-[#E4EAE6]" />
+          </div>
+          <div className="grid grid-cols-3 gap-2.5">
+            {["微信", "企业微信", "SSO"].map((name) => (
+              <button
+                key={name}
+                type="button"
+                disabled
+                title="敬请期待"
+                className="h-11 rounded-xl border border-[#E3E8E4] bg-white/85 text-[13px] text-[#3F4A46] opacity-60"
+              >
+                {name}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-3 gap-2.5">
-          {["微信", "企业微信", "SSO"].map((name) => (
-            <button
-              key={name}
-              type="button"
-              disabled
-              title="敬请期待"
-              className="h-11 rounded-xl border border-[#E3E8E4] bg-white/85 text-[13px] text-[#3F4A46] opacity-60"
-            >
-              {name}
-            </button>
-          ))}
-        </div>
-        <p className="mt-5 text-center text-[12px] text-[#98A29D]">
+        <p className="mt-5 text-center text-[12px] text-[#98A29D] lg:mt-5">
           登录即代表你同意《服务条款》与《隐私政策》
         </p>
+
+        {/* 注册入口（2026-10-07 手机端补）：原入口在左侧品牌区，≤lg 整块隐藏
+            导致手机端没有可点的注册路径——移一条进表单卡，两端可见 */}
+        <Link
+          href="/register"
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#1F7A4D]/15 bg-[#1F7A4D]/[0.06] py-3 text-[14px] font-medium text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.12]"
+        >
+          还没有账号？免费注册
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path d="M2.6 8H13.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            <path d="M8.8 3.6L13.2 8L8.8 12.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
       </form>
     </AuthShell>
   );

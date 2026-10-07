@@ -10,7 +10,9 @@ export function useSendMessage() {
 
   const send = useCallback(
     async (question: string) => {
-      await startStream(question, currentId)
+      // AI 助手页锁域（2026-10-08）：每条消息带 domain_hint=main——旅游/选品
+      // 等域请求不在本页执行，后端改产引导卡送用户去专属页。
+      await startStream(question, currentId, 'main')
     },
     [currentId, startStream],
   )
