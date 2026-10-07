@@ -3,7 +3,7 @@
 > PostgreSQL 双库 + Migration 治理。
 > 配套阅读：[PRD.md](PRD.md) / [ARCHITECTURE.md](ARCHITECTURE.md)
 >
-> ⚠️ **2026-09-29 口径注**：本文 §5 的「14 个 SQLite 散落」已于 **2026-09 全量收口下线**——PG + pgvector 是唯一存储实现（含 trace / 文档注册表 / chunk / 关键词 / 告警 / 报告 / workflow 运行），§5 保留作历史债务记录。Migration 已治理（db-migrate 工具 + 三层校验；「编号至 054」为当时快照，现状见 §6.1 与文末验证行——2026-10-06 实测至 076），§6 的「003 编号重复」等问题已修复。
+> ⚠️ **2026-09-29 口径注**：本文 §5 的「14 个 SQLite 散落」已于 **2026-09 全量收口下线**——PG + pgvector 是唯一存储实现（含 trace / 文档注册表 / chunk / 关键词 / 告警 / 报告 / workflow 运行），§5 保留作历史债务记录。Migration 已治理（db-migrate 工具 + 三层校验；「编号至 054」为当时快照，现状见 §6.1 与文末验证行——2026-10-07 实测至 079），§6 的「003 编号重复」等问题已修复。
 
 ---
 
@@ -547,7 +547,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ### 6.1 migration 治理现状（2026-10-02）
 
-`sql/migrations/` 顺序编号治理，最新编号 **078**（2026-10-07 `e611289`：`078_cs_handoff_state_alignment.sql` 客服 `customer_service.handoffs.handoff_state` 收敛 `initiated→ai_active` + default 对齐 + CHECK 约束 fail-loud；⚠️ **078 编号撞号预警**：未合并分支 `feat/eval-rag-governance` 另有 `078_eval_run_validity.sql`（828cdec，已在该分支登记 init_db）——两分支合并前必须一方改号（建议 eval 侧改 079），否则同号双文件 + `MIGRATION_TARGETS` 键冲突；071 编号重复为已登记规范债：两文件并存且均已提交、`MIGRATION_TARGETS` 均登记，二者独立顺序无关，`init_db --check` rc=0）；061 编号空缺（让位历史并行批次）。配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
+`sql/migrations/` 顺序编号治理，最新编号 **079**（2026-10-07 `079_llm_usage_billing_v2.sql`：llm_usage 计费 V2 列族 + CNY 可信回填，详见下表）；**078 编号重复为已登记规范债**（同 071 先例：`078_eval_run_validity.sql` 来自 eval 线 PR #1 先合入 main、`078_cs_handoff_state_alignment.sql` 来自客服线 `e611289` 后合入，两文件并存且均在 `MIGRATION_TARGETS` 登记，二者独立顺序无关）；061 编号空缺（让位历史并行批次）。配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
@@ -590,6 +590,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 | 075 | `ai.eval_run_samples` 样本级 DB 层 + 引用删除保护 | 评测逐样本落库（UNIQUE + RESTRICT；数据集版本删除保护守卫消费，C3-2） |
 | 076 | `ai.cs_faq` + `ai.cs_faq_query_log` 建表迁移化（E5） | FAQ 精准匹配层与缺口台账入迁移体系（DDL 与 faq.py 惰性建表逐字一致，迁移为唯一权威；头部含 down 注释；applied 已验证） |
 | 077 | `sql_query_audits.sql_text` 审计存 SQL 原文 | 2026-10-06 拍板（`8506550`）：事故可复盘优先，落实际生成/执行的 SQL 原文（截断 8000 字符，`query_hash` 口径不变）——推翻 042「不存原文」PII 保守设计（缓解=审计表仅管理员可读+保留期清理）；拒绝面审计同步归因（`DENY_SCOPE`+`deny_code`） |
+| 078 | `ai.eval_run_records` validity/invalid_reason 两列 | Eval Runtime 可信度收口（PR #1 eval 线）：validity 六级（VALID/INVALID_ENV/INVALID_PROVIDER/INVALID_BUDGET/INVALID_DATASET/INVALID_INFRA，裁决唯一出口 `backend/evaluation/validity.py`）+ invalid_reason；环境无效 run 不得显示为真实质量 0%/不得作 Gate 证据（⚠️ 与下一行同号，规范债） |
+| 078（重号） | `customer_service.handoffs.handoff_state` 收敛 | 2026-10-07 `e611289`：`initiated→ai_active` + default 对齐 + CHECK 约束 fail-loud，supervisor 对未知状态不再静默吞（STOP CS-A P0 ③） |
+| 079 | `llm_usage` Billing V2 列族 | 2026-10-07 计费统一收口：新列 `billing_schema_version/native_cost/native_currency/billed_cost_cny/fx_rate/price_version/pricing_source/usage_source` + 分项 `*_cost_cny/*_unit_price`（reasoning/cache_write/tool_call）；旧列语义冻结——`cost_usd`=原生 USD 审计口径（deprecated）、`currency`=供应商报价币种、`total_cost`=记账 CNY（legacy）；历史规则：currency='CNY' 行 26975 行回填 `billed_cost_cny=total_cost` 升 V2，USD/空币种 1078 行不猜保 legacy（版本 1、billed_cost_cny=NULL）；幂等 IF NOT EXISTS，与 `llm_usage_store_pg._init_db` 启动自愈段同口径 |
 
 ### 6.2 P1 治理目标
 
@@ -623,4 +626,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 验证
 
-最后验证：2026-10-07 · 迁移编号实测至 078（078_cs_handoff_state_alignment 已提交并登记 `MIGRATION_TARGETS`，`e611289` 引入 / 登记随本轮文档同步补齐；applied 状态未复验，072~076 applied 验证）（061 编号空缺、发布记录实为 063 `ai.release_records`）；**071 编号重复已登记为规范债**（clarify_funnel_events 与 rag_reconcile_reports 两文件并存且均已提交，`MIGRATION_TARGETS` 均登记——登记键不冲突、二者相互独立顺序无关，init_db --check rc=0）；076 的 `MIGRATION_TARGETS` 登记随 2f4859d 提交。2026-10-06 增量：清除 065/068/070/071_clarify 四行「⚠️ 文件在途未提交」过时角标（四文件均已于 472e736 提交，与 §6.1/本行「均已提交」口径对齐）。**2026-10-07 增量**：078 登记 + §6.1 撞号预警（feat/eval-rag-governance 另有 078_eval_run_validity，合并前须改号）。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。
+最后验证：2026-10-07 · 迁移编号实测至 079（078 双文件=eval 线 `078_eval_run_validity` 已在 main / 客服线 `078_cs_handoff_state_alignment` `e611289` 引入，均登记 `MIGRATION_TARGETS`；`079_llm_usage_billing_v2` 本地 5433 applied 2026-10-07，078_cs applied 2026-10-06，078_eval 待部署时容器内库应用）；**071/078 编号重复均已登记为规范债**（同号双文件并存且均已提交、`MIGRATION_TARGETS` 均登记——登记键不冲突、二者相互独立顺序无关）。**2026-10-07 增量**：079 计费 V2 登记 + §6.1 撞号预警落定为双 078 规范债（eval 侧保持 078，客服侧不改号）。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。

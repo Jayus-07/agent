@@ -376,7 +376,7 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
 | 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
-| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 078） |
+| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 079） |
 | 异步 | Celery + Redis（双队列）+ Kafka（`java-loop` profile，默认不启） |
 | 可观测 | 自建 Tracer（OTel OTLP 出口 `OTEL_TRACE_OTLP_ENABLED` 默认关）+ Prometheus + Grafana + Tempo/Loki/Promtail + Alertmanager/alert-bridge（观测栈全家桶走 `--profile observability`，默认不启） |
 | MCP | stdio / HTTP SSE |
