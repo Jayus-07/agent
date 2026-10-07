@@ -68,6 +68,7 @@
 | 系统 | `/health`（含 build/migrations/schema_consistency/redis 探测）· `/metrics`（绕过 auth + CORS，供 K8s scrape） |
 | `/admin/email` | GET `/channel`（邮件通道健康只读：引擎 smtp/agently、凭据仅回布尔、beat 周期任务候选） |
 | `/approvals` | GET `/`（写操作审批单列表，支持 `status`/`limit`/`tool` 筛选）+ 审批放行/拒绝（副作用 Tool 审批门） |
+| `/cs`（智能客服） | 会话管理 `/cs/conversations`（列表/stats/`{id}`详情/events/rating/traces/close/claim/agent-messages/typing + `/my` 用户侧）· 坐席面 GET `/cs/handoff/queue` · POST `/cs/agent/ws-ticket`（坐席 WS 票据）· 坐席 offer：GET `/cs/agents/me/offers` · POST `.../{id}/accept` · `.../{id}/decline` · POST `/cs/handoffs/{id}/reassign`（主管重派，主管/admin）· 统一工单 `/cs/tickets` · 确认卡片 `/cs/**`（confirm_router）。**2026-10-07 STOP CS-A**：管理端读面租户/IDOR 全链显式收口（跨租户不可见，`b6c2dbd`）；坐席离线自愈与 handoff 状态机见根 AGENTS.md 客服段 |
 
 ---
 
@@ -630,4 +631,4 @@ Supervisor 根据错误类型决定降级（详见 [AGENT_DESIGN.md §6](AGENT_D
 
 ## 验证
 
-最后验证：2026-10-06 · SSE §3 按 event_schema.py 13 事件三层契约重写（CORE/AUX/TRANSPORT、done 帧 `elapsed` 秒、log 帧字段、meta 帧四字段、seq/id 帧行示例顺序修正）、发布门 6 端点（补 comparison）、评测运行生命周期与数据集治理台端点族、`/evaluation` X-Tenant-Id 租户钩子 403 与 PII 脱敏、旅游 `/decisions` 决策留痕、上传 SSE 帧契约（was_overwrite）、RAG 知识生命周期 3 端点转已合并（3fd3c0b）。端点明细以 `backend/app/api/routes/` 目录为准；`/chat/stream` SSE 契约含 F2 Resume Protocol（seq/id 帧行、`/chat/stream/resume` 端点）。2026-10-06 增量：done 帧补 `reply_source` 归因稳定码（3af6f54）、旅游 `/candidates` 会话候选池与 P1 批次工具端点（export/ics、feedback、preferences、recommend）补记、X-Tenant-Id 钩子覆盖面按代码收窄。2026-10-07 增量：SSE 事件 13→14（AUX 帧补 `handoff`，`HandoffPayloadV1` 契约）、新增选品漏斗 `POST /api/selection-funnel/run` 与 `POST /observability/handoff/click`（多域隔离 M1/M4）、旅游逐条改单局部重规划契约（`travel_partial_replan`）、plans/latest 响应补 `active_*` 三字段、brief 补 `budget_constraint`/`weather_conditions`（`4ddc3c3`）；§5.4 端点数按代码校准（22）。
+最后验证：2026-10-06 · SSE §3 按 event_schema.py 13 事件三层契约重写（CORE/AUX/TRANSPORT、done 帧 `elapsed` 秒、log 帧字段、meta 帧四字段、seq/id 帧行示例顺序修正）、发布门 6 端点（补 comparison）、评测运行生命周期与数据集治理台端点族、`/evaluation` X-Tenant-Id 租户钩子 403 与 PII 脱敏、旅游 `/decisions` 决策留痕、上传 SSE 帧契约（was_overwrite）、RAG 知识生命周期 3 端点转已合并（3fd3c0b）。端点明细以 `backend/app/api/routes/` 目录为准；`/chat/stream` SSE 契约含 F2 Resume Protocol（seq/id 帧行、`/chat/stream/resume` 端点）。2026-10-06 增量：done 帧补 `reply_source` 归因稳定码（3af6f54）、旅游 `/candidates` 会话候选池与 P1 批次工具端点（export/ics、feedback、preferences、recommend）补记、X-Tenant-Id 钩子覆盖面按代码收窄。2026-10-07 增量：SSE 事件 13→14（AUX 帧补 `handoff`，`HandoffPayloadV1` 契约）、新增选品漏斗 `POST /api/selection-funnel/run` 与 `POST /observability/handoff/click`（多域隔离 M1/M4）、旅游逐条改单局部重规划契约（`travel_partial_replan`）、plans/latest 响应补 `active_*` 三字段、brief 补 `budget_constraint`/`weather_conditions`（`4ddc3c3`）；§5.4 端点数按代码校准（22）。2026-10-07 增量②：§1.2 补 `/cs` 智能客服端点族速查行（会话管理/坐席 offer/重派/工单/确认卡，STOP CS-A 租户/IDOR 收口 `b6c2dbd`）；用户中止 trace 终态新增 `cancelled`（`d0c9a5a`，SSE error 帧契约不变）。

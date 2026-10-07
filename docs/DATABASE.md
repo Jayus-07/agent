@@ -547,7 +547,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ### 6.1 migration 治理现状（2026-10-02）
 
-`sql/migrations/` 顺序编号治理，最新编号 **077**（2026-10-06 `8506550`：`sql_query_audits.sql_text` 审计存 SQL 原文；⚠️ 071 编号重复为已登记规范债：两文件并存且均已提交、`MIGRATION_TARGETS` 均登记，二者独立顺序无关，`init_db --check` rc=0；后续新迁移自 078 顺排）；061 编号空缺（让位历史并行批次）。配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
+`sql/migrations/` 顺序编号治理，最新编号 **078**（2026-10-07 `e611289`：`078_cs_handoff_state_alignment.sql` 客服 `customer_service.handoffs.handoff_state` 收敛 `initiated→ai_active` + default 对齐 + CHECK 约束 fail-loud；⚠️ **078 编号撞号预警**：未合并分支 `feat/eval-rag-governance` 另有 `078_eval_run_validity.sql`（828cdec，已在该分支登记 init_db）——两分支合并前必须一方改号（建议 eval 侧改 079），否则同号双文件 + `MIGRATION_TARGETS` 键冲突；071 编号重复为已登记规范债：两文件并存且均已提交、`MIGRATION_TARGETS` 均登记，二者独立顺序无关，`init_db --check` rc=0）；061 编号空缺（让位历史并行批次）。配套 db-migrate 工具与迁移三层校验（发布门禁），登记表 `scripts/init_db.py::MIGRATION_TARGETS`（漏登记 fail-fast）。下表为初始 001~005 明细（历史，003 编号重复问题已在治理中修复）：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
@@ -623,4 +623,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA <各 schema> GRANT SELECT ON TABLES TO agent_
 
 ## 验证
 
-最后验证：2026-10-07 · 迁移编号实测至 077（077_sql_query_audits_sql_text 已提交并登记 `MIGRATION_TARGETS`，`8506550`；applied 状态未复验，072~076 applied 验证）（061 编号空缺、发布记录实为 063 `ai.release_records`）；**071 编号重复已登记为规范债**（clarify_funnel_events 与 rag_reconcile_reports 两文件并存且均已提交，`MIGRATION_TARGETS` 均登记——登记键不冲突、二者相互独立顺序无关，init_db --check rc=0；后续新迁移从 078 顺排避让）；076 的 `MIGRATION_TARGETS` 登记随 2f4859d 提交。2026-10-06 增量：清除 065/068/070/071_clarify 四行「⚠️ 文件在途未提交」过时角标（四文件均已于 472e736 提交，与 §6.1/本行「均已提交」口径对齐）。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。
+最后验证：2026-10-07 · 迁移编号实测至 078（078_cs_handoff_state_alignment 已提交并登记 `MIGRATION_TARGETS`，`e611289` 引入 / 登记随本轮文档同步补齐；applied 状态未复验，072~076 applied 验证）（061 编号空缺、发布记录实为 063 `ai.release_records`）；**071 编号重复已登记为规范债**（clarify_funnel_events 与 rag_reconcile_reports 两文件并存且均已提交，`MIGRATION_TARGETS` 均登记——登记键不冲突、二者相互独立顺序无关，init_db --check rc=0）；076 的 `MIGRATION_TARGETS` 登记随 2f4859d 提交。2026-10-06 增量：清除 065/068/070/071_clarify 四行「⚠️ 文件在途未提交」过时角标（四文件均已于 472e736 提交，与 §6.1/本行「均已提交」口径对齐）。**2026-10-07 增量**：078 登记 + §6.1 撞号预警（feat/eval-rag-governance 另有 078_eval_run_validity，合并前须改号）。18 业务表结构复核仍准确。SQLite 收口 / 租户隔离 / Migration 治理状态见文首口径注，迁移最新编号以 `sql/migrations/` 目录为准。

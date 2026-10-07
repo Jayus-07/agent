@@ -228,6 +228,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "076_cs_faq_tables.sql": "memory",
     # SQL 审计补存原文（2026-10-06 拍板）：042 的 PII 保守口径被推翻。
     "077_sql_query_audits_sql_text.sql": "memory",
+    # 客服 handoff 状态对齐（2026-10-07 STOP CS-A P0-6）：initiated→ai_active
+    # 收敛 + default 对齐 + CHECK 约束 fail-loud（幽灵状态写入层拒绝）。
+    "078_cs_handoff_state_alignment.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

@@ -520,9 +520,13 @@ def route(self, question: str) -> tuple[str, float]:
 - **失败兜底单一**：仅回退到 `rag.search`，不知用户原意是 SQL 还是 RAG
 - **仅 1 步时跳过 Critique**：单步计划完全跳过审查
 
-### 9.3 降级
+### 9.3 失败与降级（2026-10-07 STOP A/B/E/H 收口后口径）
 
-- **仅 3 条降级映射**：其他 capability 失败无降级路径
+> 旧条目「仅 3 条降级映射：其他 capability 失败无降级路径」已由失败语义贯通（`d3ff0a6`/`2b8ee5e`/`6f275d1`）推翻，现状如下：
+
+- **Skill 失败必上抛**：`SkillAdapter` 成败只认结构化 status——failed/skipped/契约缺失一律抛 `SkillStepFailure`（携带完整 step_result），不再吞失败伪装成功（`workflow/skill_adapter.py`）
+- **on_error 按业务依赖排布**：`WorkflowExecutor` 尊重各 workflow 声明的 on_error 语义——日报/库存告警缺非关键节降级继续产出，发送失败不抹掉已生成报告（`workflows/daily_report.py` / `inventory_alert.py`）
+- **degraded ≠ failed**：todo 帧状态映射 `partial→completed`（终态，不得永久挂 in_progress）；降级完成以 info 呈现（「已降级完成，结果可能不完整，流程继续」），超时/不可用给用户友好话术，底层细节只进 trace（`graph/events.py`）
 - **每步最多降级 1 次**：防死循环但牺牲完成率
 
 ### 9.4 Workflow
@@ -596,4 +600,4 @@ def route(self, question: str) -> tuple[str, float]:
 
 ## 验证
 
-最后验证：2026-10-07 · 旅游入口意图与条件增量复核； plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。2026-10-07 注：RoutingEngine 六阶段 / Runtime V2 收口 / Tool Governance 全貌以 [architecture/ai-runtime.md](architecture/ai-runtime.md) 为准（本文件按文首口径注不再复抄编排全貌）；SQL 6 层安全第④层已改「黑名单＋全函数正向白名单 fail-closed」，经 [PRD.md §4.3](PRD.md) 同步。
+最后验证：2026-10-07 · 旅游入口意图与条件增量复核； plan 支线与 Workflow 引擎描述对照代码复核仍准确；主图规模与 Capability 总数已按根 [README.md](../README.md)「系统规模」校准（见文首口径注）。2026-10-07 注：RoutingEngine 六阶段 / Runtime V2 收口 / Tool Governance 全貌以 [architecture/ai-runtime.md](architecture/ai-runtime.md) 为准（本文件按文首口径注不再复抄编排全貌）；SQL 6 层安全第④层已改「黑名单＋全函数正向白名单 fail-closed」，经 [PRD.md §4.3](PRD.md) 同步。2026-10-07 增量：§9.3 失败语义收口改写（SkillStepFailure 上抛 / on_error 业务依赖排布 / degraded≠failed，`d3ff0a6`/`2b8ee5e`/`6f275d1`）。
