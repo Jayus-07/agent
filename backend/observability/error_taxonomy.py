@@ -123,4 +123,23 @@ __all__ = [
     "unify_model_error",
     "unify_task_error",
     "unify_tool_status",
+    "is_not_configured_text",
 ]
+
+
+# --- 「未配置/未启用」展示分级（2026-10-08 #11）--------------------------------
+# 不是第八个错误分类（七分类口径不动）：这只是健康度聚合的**展示分级**标记
+# ——「数据源没配 Key/开关没开」与「配了但坏了」在整页红里无法区分，运维
+# 无法分诊。命中标记的失败在 skill-health 里归入 neutral（灰），真故障才红。
+_NOT_CONFIGURED_MARKERS = (
+    "未配置", "未启用", "未设置", "缺少配置",
+    "not configured", "not enabled",
+)
+
+
+def is_not_configured_text(text: str) -> bool:
+    """失败文案是否为「数据源未配置/未启用」形态（纯函数，永不抛错）。"""
+    if not text:
+        return False
+    lowered = str(text).lower()
+    return any(marker in lowered for marker in _NOT_CONFIGURED_MARKERS)
