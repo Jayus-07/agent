@@ -231,6 +231,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 客服 handoff 状态对齐（2026-10-07 STOP CS-A P0-6）：initiated→ai_active
     # 收敛 + default 对齐 + CHECK 约束 fail-loud（幽灵状态写入层拒绝）。
     "078_cs_handoff_state_alignment.sql": "memory",
+    # llm_usage Billing V2（2026-10-07 Model Billing 收口）：唯一计费事实链
+    # （billing_schema_version/native/billed_cost_cny/fx/price_version 等），
+    # currency='CNY' 历史行可信回填，USD/空币种行保 legacy 不猜。
+    "079_llm_usage_billing_v2.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

@@ -48,7 +48,10 @@ export interface TraceDetail {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    /** deprecated：原生 USD（Billing V2） */
     cost_usd: number;
+    /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
+    cost_cny?: number;
     model_name: string;
     model_provider: string;
   };
@@ -104,7 +107,10 @@ export interface Span {
     response_text: string;
     prompt_tokens: number;
     completion_tokens: number;
+    /** deprecated：原生 USD（Billing V2） */
     cost_usd: number;
+    /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
+    cost_cny?: number;
   };
   /** 网络耗时拆分（type=http 或含 HTTP 调用时有值） */
   http_breakdown?: {

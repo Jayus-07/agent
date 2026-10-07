@@ -11,27 +11,29 @@ interface Props {
 }
 
 export default function CostPanel({ trace }: Props) {
-  // 成本人民币为主（2026-10-01）：优先精确 cost_cny，存量 trace 退回混算值
-  const totalUsd = trace.cost_cny ?? trace.cost_usd ?? 0;
+  // 记账本位币主口径（Billing V2，2026-10-07）：cost_cny 权威（写入时汇率
+  // 已固化）；存量 trace 无该值 → 显示 —（混算 cost_usd 不再兜底展示，
+  // 消灭「变量叫 usd、页面显示 ¥」的语义污染）
+  const totalCny = trace.cost_cny ?? null;
   const spans = trace.spans || [];
   const totalTokens = trace.usage?.total_tokens ?? 0;
 
-  // P0-2: 成本数据是否采集到（有 cost / 有 token / 有 per-span llm 成本任一即算）
-  const collected = totalUsd > 0 || totalTokens > 0
-    || spans.some((s) => Number(s.llm_call?.cost_usd ?? 0) > 0
-      || Number(s.metrics?.cost_usd ?? 0) > 0);
+  // P0-2: 成本数据是否采集到（有 cost / 有 token / 有 per-span 成本任一即算）
+  const collected = (totalCny ?? 0) > 0 || totalTokens > 0
+    || spans.some((s) => Number(s.llm_call?.cost_cny ?? s.llm_call?.cost_usd ?? 0) > 0
+      || Number(s.metrics?.cost_cny ?? s.metrics?.cost_usd ?? 0) > 0);
 
   // 按 span 聚合成本（llm_call 字段优先，回退 span metrics — 回填数据在 metrics 里）
   const perStep = spans
     .map((s) => ({
       label: s.name,
       ms: s.duration_ms,
-      usd: Number(s.llm_call?.cost_usd ?? s.metrics?.cost_usd ?? 0),
+      cny: Number(s.llm_call?.cost_cny ?? s.metrics?.cost_cny ?? 0),
     }))
-    .filter((s) => s.usd > 0)
-    .sort((a, b) => b.usd - a.usd);
+    .filter((s) => s.cny > 0)
+    .sort((a, b) => b.cny - a.cny);
 
-  const maxUsd = Math.max(...perStep.map((x) => x.usd), 0.000001);
+  const maxCny = Math.max(...perStep.map((x) => x.cny), 0.000001);
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
@@ -39,7 +41,7 @@ export default function CostPanel({ trace }: Props) {
         <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">总成本</p>
         {collected ? (
           <>
-            <p className="font-mono text-xl font-bold text-emerald-600">{formatCost(totalUsd)}</p>
+            <p className="font-mono text-xl font-bold text-emerald-600">{formatCost(totalCny ?? 0)}</p>
             <p className="text-[10px] text-slate-400 mt-0.5">后端价格表权威值</p>
           </>
         ) : (
@@ -59,10 +61,10 @@ export default function CostPanel({ trace }: Props) {
                 <div className="flex-1 h-4 bg-slate-100 rounded overflow-hidden">
                   <div
                     className="h-full bg-emerald-400"
-                    style={{ width: `${(s.usd / maxUsd) * 100}%` }}
+                    style={{ width: `${(s.cny / maxCny) * 100}%` }}
                   />
                 </div>
-                <span className="font-mono text-slate-600 tabular-nums w-20 text-right">{formatCost(s.usd)}</span>
+                <span className="font-mono text-slate-600 tabular-nums w-20 text-right">{formatCost(s.cny)}</span>
               </div>
             ))}
           </div>
@@ -74,7 +76,7 @@ export default function CostPanel({ trace }: Props) {
         <div className="flex justify-between"><span>Provider</span><span className="font-mono text-slate-600">{trace.model.provider}</span></div>
         <div className="flex justify-between"><span>总 Token</span><span className="font-mono text-slate-600">{totalTokens > 0 ? totalTokens : "未采集"}</span></div>
         <div className="flex justify-between"><span>单 Token</span><span className="font-mono text-slate-600">
-          {totalTokens ? formatCost(totalUsd / totalTokens) : "--"}
+          {totalTokens && totalCny != null ? formatCost(totalCny / totalTokens) : "--"}
         </span></div>
       </div>
     </div>

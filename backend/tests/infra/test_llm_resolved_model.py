@@ -188,18 +188,25 @@ class TestSelectorAttribution:
 
 class TestPriceUnknown:
     def test_usage_still_records_real_model(self, monkeypatch):
-        """缺价：usage 照记真实 model_id，cost_status=price_unknown。"""
+        """缺价：usage 照记真实 model_id，cost_status 透传（price_unknown）。"""
         _patch_resolution(monkeypatch, "unpriced-model")
         import decimal
 
         import backend.infra.llm.pricing as pricing_mod
+        from backend.infra.llm.pricing import BillingResult
 
-        def _fake_status(model, quantities):
+        def _fake_price(model, component, usage, *, enforce, usage_source="provider"):
             assert model == "unpriced-model"  # 计价收到的就是真实模型
-            return decimal.Decimal("0.001"), "price_unknown", "USD", {}
+            return BillingResult(
+                model_name=model, component=component,
+                native_cost=decimal.Decimal("0.001"), native_currency="USD",
+                billed_cost_cny=decimal.Decimal("0.0072"), fx_rate=decimal.Decimal("7.2"),
+                cost_status="price_unknown",
+                usage_source=usage_source,
+                pricing_source=pricing_mod.PRICING_SOURCE_REGISTRY_FALLBACK,
+            )
 
-        monkeypatch.setattr(pricing_mod, "calculate_llm_cost_with_status",
-                            _fake_status)
+        monkeypatch.setattr(pricing_mod, "price_usage", _fake_price)
 
         proxy_mod.llm.invoke("问题")
 
