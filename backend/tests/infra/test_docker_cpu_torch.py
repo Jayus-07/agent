@@ -11,6 +11,7 @@ def test_docker_builder_pins_cpu_torch_before_project_dependencies():
     normalized_dockerfile = re.sub(
         r"\s+", " ", re.sub(r"\\\s*", " ", dockerfile)
     )
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     constraint_path = REPO_ROOT / "constraints" / "torch-cpu.txt"
     assert constraint_path.is_file(), "缺少 CPU Torch 约束文件"
     torch_constraint = constraint_path.read_text(encoding="utf-8").strip()
@@ -33,3 +34,4 @@ def test_docker_builder_pins_cpu_torch_before_project_dependencies():
         project_install
     )
     assert "EXTRA_INDEX_URL" not in normalized_dockerfile
+    assert "EXTRA_INDEX_URL" not in compose
