@@ -98,6 +98,11 @@ function RegisterForm() {
       setError("请先阅读并同意《服务条款》与《隐私政策》");
       return;
     }
+    // 验证码空着就别发请求了：后端一码一用，空提交也会作废刚领的码
+    if (!captchaCode.trim()) {
+      setError("请输入图形验证码");
+      return;
+    }
 
     setLoading(true);
     try {

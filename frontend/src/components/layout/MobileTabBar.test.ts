@@ -12,7 +12,7 @@
  * - 2026-10-01 五次收敛：「对话」→「AI 助手」，跟随 navConfig 侧栏文案。
  */
 import { describe, it, expect } from 'vitest'
-import { isTabActive, MOBILE_TABS } from './MobileTabBar'
+import { isTabActive, MOBILE_TABS, CS_TAB_LABEL } from './MobileTabBar'
 
 const agent = MOBILE_TABS.find((t) => t.path === '/agent')!
 const travel = MOBILE_TABS.find((t) => t.path === '/travel')!
@@ -39,8 +39,14 @@ describe('isTabActive — 底部 tab 高亮', () => {
     }
   })
 
-  it('tab 契约：AI 助手 + 旅游规划（2026-10-01，与 navConfig 用户端边界一致）', () => {
+  it('tab 契约：链接型 tab = AI 助手 + 旅游规划（与 navConfig 用户端边界一致）', () => {
     expect(MOBILE_TABS.map((t) => t.label)).toEqual(['AI 助手', '旅游规划'])
+  })
+
+  it('智能客服升为第三 tab（2026-10-07）：按钮型、非链接，不进 MOBILE_TABS 路由契约', () => {
+    expect(CS_TAB_LABEL).toBe('智能客服')
+    // 防复发：它不是路由 tab，不得以 path 形式混进链接型数组
+    expect(MOBILE_TABS.map((t) => t.path)).not.toContain('/agent?cs=1')
   })
 
   it('tab 不得指向已裁撤路由（2026-09-30 新增边界，防失效导航复发）', () => {

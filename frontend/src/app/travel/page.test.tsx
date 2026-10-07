@@ -12,6 +12,8 @@ vi.mock('@/api/travel', () => ({
 }))
 vi.mock('@/hooks/useBudgetStatus', () => ({ useBudgetStatus: () => ({ blocked: false }) }))
 vi.mock('@/lib/auth', () => ({ getCachedUser: () => null }))
+// 2026-10-07 顶栏头像进设置页需要 router —— 测试无 App Router 上下文，mock 之
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/components/travel/ItineraryView', () => ({ default: () => null }))
 vi.mock('@/components/travel/TravelPlanList', () => ({ default: () => null }))
 vi.mock('@/components/agent/TaskSidebar', () => ({ default: () => null }))

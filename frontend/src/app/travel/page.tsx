@@ -27,6 +27,7 @@
  * 后端契约、不引依赖；后端没有分步进度 API，生成中只显示等待状态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AlertCircle, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
@@ -634,6 +635,7 @@ export default function TravelPage() {
     mobileChatAutoOpenedRef.current = true
     setDrawerOpen(true)
   }, [isMobileChat, hasRightRail])
+  const router = useRouter()
   const userName = getCachedUser()?.username || '本地用户'
 
   return (
@@ -679,36 +681,41 @@ export default function TravelPage() {
           )}
           <Plane size={16} className="text-[#087b73]" aria-hidden />
           <span className="text-sm font-semibold text-[#183037]">行程规划</span>
-          {/* M3-h 城市指南入口（常驻，空态可点；内容随 brief 目的地） */}
+          {/* M3-h 城市指南入口（2026-10-07 用户拍板：手机端收掉，仅桌面展示） */}
           <button
             type="button"
             onClick={() => setCityGuideOpen(true)}
             title="城市指南"
             aria-label="城市指南"
-            className="cursor-pointer rounded-lg p-1.5 text-[#087b73] transition-colors hover:bg-[#e2f0ee]"
+            className="hidden md:inline-flex cursor-pointer rounded-lg p-1.5 text-[#087b73] transition-colors hover:bg-[#e2f0ee]"
           >
             <BookOpen size={15} aria-hidden />
           </button>
-          {/* M2 布局反馈：条件 chips 并入顶栏（原独立条件条省掉一行高度） */}
+          {/* M2 布局反馈：条件 chips 并入顶栏（2026-10-07 手机端收掉——移动端
+              不展示高级选项表格，桌面保留） */}
           {hasLeftRail && (
-            <TripConditionsChips
-              loading={loading}
-              destination={itinerary?.brief.destination || destination}
-              startDate={itinerary?.brief.start_date || startDate}
-              days={days}
-              partySize={partySize}
-              pace={itinerary?.brief.pace || pace}
-              itineraryDays={itinerary?.days.length ?? null}
-              costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
-              budget={budget}
-            />
+            <div className="hidden md:flex items-center">
+              <TripConditionsChips
+                loading={loading}
+                destination={itinerary?.brief.destination || destination}
+                startDate={itinerary?.brief.start_date || startDate}
+                days={days}
+                partySize={partySize}
+                pace={itinerary?.brief.pace || pace}
+                itineraryDays={itinerary?.days.length ?? null}
+                costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
+                budget={budget}
+              />
+            </div>
           )}
           <div className="ml-auto flex items-center gap-1.5">
+            {/* 高级选项表单（调整）：2026-10-07 用户拍板手机端收掉——移动端走
+                示例/对话改行程，桌面保留表单入口 */}
             {hasLeftRail && !loading && (
               <button
                 type="button"
                 onClick={() => setConditionsOpen(true)}
-                className="cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
+                className="hidden md:inline-flex cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
               >
                 调整
               </button>
@@ -721,12 +728,16 @@ export default function TravelPage() {
               <History size={12} aria-hidden />
               历史规划
             </button>
-            <span className="hidden items-center gap-1.5 text-xs text-[#5c7074] sm:inline-flex">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#087b73]/10 text-[10px] font-medium text-[#087b73]">
-                {userName.slice(0, 1).toUpperCase()}
-              </span>
-              {userName}
-            </span>
+            {/* 用户头像（2026-10-07）：与 AI 助手顶栏同款，点击进设置页（两端一致） */}
+            <button
+              type="button"
+              onClick={() => router.push('/settings')}
+              aria-label="打开设置"
+              title="设置"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#087b73]/10 text-[11px] font-medium text-[#087b73] transition-colors hover:bg-[#087b73]/20"
+            >
+              {userName.slice(0, 1).toUpperCase()}
+            </button>
           </div>
         </header>
 

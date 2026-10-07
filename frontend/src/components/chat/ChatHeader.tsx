@@ -56,19 +56,20 @@ export default function ChatHeader({
 
   return (
     <header className="shrink-0 h-14 flex items-center gap-2 px-4 bg-surface-base/80">
-      {/* 用户头像入口（两端都显示）：点击进设置页（画像记忆 / 登出）。
-          2026-10-07 移动端改版新增，桌面端同位可用 */}
-      <button
-        onClick={() => router.push('/settings')}
-        className="shrink-0 w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center
-          text-[13px] font-medium text-accent hover:bg-accent/20 transition-colors"
-        aria-label="打开设置"
-        title="设置"
-      >
-        {avatarInitial}
-      </button>
+      {/* 历史会话（移动端 <md）：用户拍板 2026-10-07——手机顶栏左侧=历史，右侧=头像 */}
+      {onOpenHistory && (
+        <button
+          onClick={onOpenHistory}
+          className="md:hidden shrink-0 flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-text-secondary
+            hover:text-text-primary hover:bg-black/5 transition-colors"
+          aria-label="历史会话"
+          title="历史会话"
+        >
+          <History size={17} />
+        </button>
+      )}
 
-      {/* 任务栏开关（窄视口下任务栏本就隐藏，开关无意义） */}
+      {/* 任务栏开关（桌面；窄视口下任务栏本就隐藏，开关无意义） */}
       <button
         onClick={onToggleSidebar}
         className="hidden md:block p-1.5 rounded-lg hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors"
@@ -82,11 +83,11 @@ export default function ChatHeader({
         {title}
       </h1>
 
-      {/* 智能客服：WorkBuddy 式右上角白底胶囊入口（不遮挡内容，任何会话状态均可见） */}
+      {/* 智能客服（桌面入口）：移动端 2026-10-07 起挪进底部导航第三 tab，顶栏收掉 */}
       {onOpenCS && (
         <button
           onClick={onOpenCS}
-          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border-subtle bg-white
+          className="hidden md:flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-full border border-border-subtle bg-white
             text-xs text-text-secondary shadow-[0_1px_2px_rgba(0,0,0,0.04)]
             hover:text-text-primary hover:border-black/15 hover:shadow
             focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent/40
@@ -102,7 +103,7 @@ export default function ChatHeader({
       {onNewTask && (
         <button
           onClick={onNewTask}
-          className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
+          className="hidden md:flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
             hover:text-text-primary hover:bg-black/5 transition-colors"
           aria-label="新建任务"
           title="新建任务"
@@ -111,22 +112,10 @@ export default function ChatHeader({
         </button>
       )}
 
-      {/* 历史会话（移动端 <md 专用）：桌面端历史在左侧任务栏，此处不重复 */}
-      {onOpenHistory && (
-        <button
-          onClick={onOpenHistory}
-          className="md:hidden shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
-            hover:text-text-primary hover:bg-black/5 transition-colors"
-          aria-label="历史会话"
-          title="历史会话"
-        >
-          <History size={16} />
-        </button>
-      )}
-
+      {/* 分享 / 退出登录：桌面保留；移动端收进设置页（用户拍板 2026-10-07） */}
       <button
         onClick={handleShare}
-        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
+        className="hidden md:flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
           hover:text-text-primary hover:bg-black/5 transition-colors"
         aria-label="分享会话链接"
         title="分享会话链接"
@@ -136,12 +125,24 @@ export default function ChatHeader({
 
       <button
         onClick={handleLogout}
-        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
+        className="hidden md:flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
           hover:text-text-primary hover:bg-black/5 transition-colors"
         aria-label="退出登录"
         title="退出登录"
       >
         <LogOut size={16} />
+      </button>
+
+      {/* 用户头像（两端，最右）：点击进设置页（画像记忆 / 登出）。
+          移动端顶栏唯一右侧元素——登出/分享已收进设置页 */}
+      <button
+        onClick={() => router.push('/settings')}
+        className="ml-auto shrink-0 w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center
+          text-[13px] font-medium text-accent hover:bg-accent/20 transition-colors"
+        aria-label="打开设置"
+        title="设置"
+      >
+        {avatarInitial}
       </button>
     </header>
   )
