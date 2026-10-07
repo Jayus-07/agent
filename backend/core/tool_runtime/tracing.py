@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 from backend.core.tool_runtime.models import ToolResult, ToolStatus
-from backend.observability.error_taxonomy import unify_tool_status
 from backend.observability.tracer import Span, SpanKind, trace_collector
 
 
@@ -46,7 +45,14 @@ def finish_tool_span(
     Failure Policy 归因字段（2026-10-07）：fallback_provider / blocking /
     dependency_level / degraded_reason 随 span metrics 落库——从 trace 一眼
     回答「为什么失败、有没有降级、是不是阻断、业务有没有继续」。
+
+    unify_tool_status 在函数内延迟导入：error_taxonomy 顶层 import 了
+    tool_runtime.models（会触发父包 __init__ → executor → 本模块），本模块
+    顶部再 import error_taxonomy 即成循环——app 启动恰先导 error_taxonomy
+    时以「partially initialized」炸 ImportError（2026-10-08 实机崩溃根因）。
     """
+    from backend.observability.error_taxonomy import unify_tool_status
+
     error_class = unify_tool_status(result.status)
     metrics: dict[str, Any] = {
         "latency_ms": result.latency_ms,
