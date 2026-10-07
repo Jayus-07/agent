@@ -1650,6 +1650,125 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 29,
+      "type": "stat",
+      "title": "price_unknown 无法计价 (24h)",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "价格表缺失该模型导致拒付的调用次数（billing P1-08；>0 需补价格表）",
+      "targets": [
+        {
+          "expr": "sum(increase(budget_request_total{result=\"price_unknown\"}[24h])) or on() vector(0)",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "amber",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 30,
+      "type": "stat",
+      "title": "needs_review 待对账比率 (24h)",
+      "gridPos": {
+        "x": 4,
+        "y": 80,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "description": "预算预占滞留待对账占全部预算请求比率（billing P1-08；持续升高需巡检 budget_reservations）",
+      "targets": [
+        {
+          "expr": "100 * (sum(increase(budget_request_total{result=\"needs_review\"}[24h])) or on() vector(0)) / ((clamp_min(sum(increase(budget_request_total[24h])), 1)) or on() vector(1))",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "amber",
+                "value": 5
+              }
+            ]
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "orientation": "auto"
+      }
     }
   ],
   "schemaVersion": 39,
