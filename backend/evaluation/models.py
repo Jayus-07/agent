@@ -15,14 +15,17 @@ ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-pro
 # 其余全部经此常量派生（守护见 tests/evaluation/test_module_kind_single_source.py）。
 MODULE_KINDS: tuple[ModuleKind, ...] = get_args(ModuleKind)
 
+# 探针模块：需 --live 连真实数据源才有意义，离线跑不出有效结论（目录页据此打 probe 标签）。
+PROBE_MODULES: frozenset[str] = frozenset(
+    {"travel-provider", "travel-commerce", "travel-booking"}
+)
+
 # `all` 默认跑的模块集：可离线完成的常规质量评测。
 # 显式排除项各带理由，且以「差集」形式表达——新模块默认进来，
 # 若要排除必须在这里写清楚为什么（避免又一次静默的口径漂移）：
 #   - cs：结构 sanity 锁版校验，语义与质量评测不同，单独跑
-#   - travel-provider / travel-commerce / travel-booking：探针，需 --live 才有意义
-ALL_EXCLUDED_MODULES: frozenset[str] = frozenset(
-    {"cs", "travel-provider", "travel-commerce", "travel-booking"}
-)
+#   - travel 三探针：见 PROBE_MODULES
+ALL_EXCLUDED_MODULES: frozenset[str] = frozenset({"cs", *PROBE_MODULES})
 ALL_RUN_MODULES: tuple[ModuleKind, ...] = tuple(
     m for m in MODULE_KINDS if m not in ALL_EXCLUDED_MODULES
 )

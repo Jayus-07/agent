@@ -78,6 +78,8 @@ export interface RunSummary {
 export interface DatasetCatalogItem {
   dataset_id: string;
   module: string;
+  /** core=常规质量评测集；probe=需 --live 的探针集（旧后端不返回，前端按 core 兜底） */
+  kind?: 'core' | 'probe';
   dataset_version: string;
   owner: string;
   review_status: string;
