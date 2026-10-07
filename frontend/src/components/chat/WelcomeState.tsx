@@ -7,13 +7,18 @@
  * 输入框由 ChatView 紧随其后渲染，胶囊行与输入框视觉上成组（对齐 WorkBuddy：
  * 标题 → 能力胶囊 → 大输入框）。问候语/日期/说明文案让位给 WorkBuddy 式简洁。
  */
-import { BookOpen, Database, FileText, LineChart } from 'lucide-react'
+import { BookOpen, Database, FileText, Globe } from 'lucide-react'
 
+/**
+ * 2026-10-07 移动端改版：示例从「功能词」换成「用户真会问的话」，
+ * 四条分别对应真实路由：sql.query / rag.search / web.search / daily_report 工作流。
+ * 胶囊直接显示完整问题，点击整条发送。
+ */
 const EXAMPLES = [
-  { label: '数据查询', text: '查询上个月销量前 10 的商品', Icon: Database },
-  { label: '知识检索', text: '退款审核时间是多少？', Icon: BookOpen },
-  { label: '生成报告', text: '分析最近一个月价格最高商品并生成报告', Icon: FileText },
-  { label: '复杂分析', text: '对比各部门绩效，给出改进建议', Icon: LineChart },
+  { text: '查上个月销量前 10 的商品', Icon: Database },
+  { text: '退款审核时间是多少？', Icon: BookOpen },
+  { text: '搜一下最近一周新能源汽车的行业新闻', Icon: Globe },
+  { text: '生成今日最高商品日报', Icon: FileText },
 ]
 
 interface Props {
@@ -32,9 +37,9 @@ export default function EmptyState({ onExampleClick, budgetBlocked = false }: Pr
           Agent AI，我帮你
         </h1>
 
-        {/* 能力胶囊行：与下方输入框成组；点击发送完整示例问题，hover 显示全文 */}
+        {/* 能力胶囊行：与下方输入框成组；点击发送完整示例问题 */}
         <div className="flex flex-wrap justify-center gap-2 mt-7">
-          {EXAMPLES.map(({ label, text, Icon }) => (
+          {EXAMPLES.map(({ text, Icon }) => (
             <button
               key={text}
               disabled={budgetBlocked}
@@ -48,7 +53,7 @@ export default function EmptyState({ onExampleClick, budgetBlocked = false }: Pr
                 transition-all duration-200"
             >
               <Icon size={13} aria-hidden />
-              <span>{label}</span>
+              <span>{text}</span>
             </button>
           ))}
         </div>

@@ -86,6 +86,19 @@ routes:
             # 与 auth 路由同语义：无条件覆盖，浏览器注册固定进 default 租户。
             X-Tenant-Id: "default"
 
+  # 注册页图形验证码签发（2026-10-07）：匿名可达，语义同 sys-register
+  # （后端 auth_local.py 是公开端点；漏配会落进下方 gateway-auth 通配 → 401）
+  - id: sys-register-captcha
+    uri: /api/sys/users/captcha
+    upstream_id: app
+    plugins:
+      prometheus: {}
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+        headers:
+          set:
+            X-Tenant-Id: "default"
+
   - id: system-service
     uri: /api/sys/*
     upstream_id: app

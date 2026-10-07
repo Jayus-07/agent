@@ -20,7 +20,9 @@
 """
 from __future__ import annotations
 
+import random
 import re
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -682,6 +684,86 @@ async def change_password(request: Request, response: Response):
     })
 
 
+# ── 图形验证码（注册防灌水，2026-10-07）──────────────────────
+# 一码一用：答案只存本进程内存，5 分钟过期 / 校验即销毁（错或对都作废，防重放）。
+# 当前 app 单容器单进程，内存 store 够用；未来 app 扩多副本时须挪到 Redis
+# （发码与校验落在不同进程会导致永远验不过）。
+
+_CAPTCHA_TTL_SECONDS = 300
+_CAPTCHA_STORE: dict[str, tuple[str, float]] = {}
+_CAPTCHA_LOCK = threading.Lock()
+
+
+def _captcha_issue() -> tuple[str, str]:
+    """签发一题：4 位纯数字 + 手绘 SVG（每位随机旋转 + 干扰线噪点）。
+
+    数字-only 是产品拍板：手机上 inputmode=numeric 直弹数字键盘。
+    """
+    code = "".join(random.choice("0123456789") for _ in range(4))
+    ticket = uuid.uuid4().hex
+    now = time.time()
+    with _CAPTCHA_LOCK:
+        # 顺手清过期项，store 不随时间无界增长
+        expired = [k for k, (_, exp) in _CAPTCHA_STORE.items() if exp <= now]
+        for k in expired:
+            _CAPTCHA_STORE.pop(k, None)
+        _CAPTCHA_STORE[ticket] = (code, now + _CAPTCHA_TTL_SECONDS)
+
+    # 手绘 SVG：86×42 与前端验证码图框一致
+    glyphs: list[str] = []
+    x = 10
+    for d in code:
+        angle = random.randint(-16, 16)
+        baseline = 31 + random.randint(-3, 3)
+        color = random.choice(["#3F4A46", "#5C6662", "#1F7A4D"])
+        glyphs.append(
+            f'<text x="{x}" y="{baseline}" font-size="23" font-weight="600" '
+            f'fill="{color}" transform="rotate({angle} {x + 7} {baseline - 7})">{d}</text>'
+        )
+        x += 18
+    noise: list[str] = []
+    for _ in range(2):
+        y1, y2 = random.randint(4, 38), random.randint(4, 38)
+        noise.append(
+            f'<line x1="{random.randint(2, 20)}" y1="{y1}" '
+            f'x2="{random.randint(64, 84)}" y2="{y2}" '
+            f'stroke="{random.choice(["#9CA8A0", "#B7C2BA"])}" stroke-width="1"/>'
+        )
+    for _ in range(4):
+        noise.append(
+            f'<circle cx="{random.randint(6, 80)}" cy="{random.randint(6, 36)}" '
+            f'r="1.4" fill="#9CA8A0"/>'
+        )
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 86 42" '
+        'width="86" height="42">'
+        '<rect width="86" height="42" rx="8" fill="#F4F6F3"/>'
+        + "".join(noise) + "".join(glyphs) + "</svg>"
+    )
+    return ticket, svg
+
+
+def _captcha_verify(ticket: str, code: str) -> bool:
+    """校验并立刻销毁（无论对错）。ticket 不存在 / 过期 / 答案不符都算失败。"""
+    if not ticket or not code:
+        return False
+    with _CAPTCHA_LOCK:
+        entry = _CAPTCHA_STORE.pop(ticket, None)
+    if entry is None:
+        return False
+    answer, expires_at = entry
+    if expires_at <= time.time():
+        return False
+    return answer == code.strip()
+
+
+@sys_router.get("/users/captcha")
+async def register_captcha():
+    """注册页图形验证码签发：{ticket, svg}。svg 由前端内联渲染，ticket 随注册提交。"""
+    ticket, svg = _captcha_issue()
+    return _result({"ticket": ticket, "svg": svg})
+
+
 # ── /sys/users/register（对齐前端 register 契约）─────────────
 
 @sys_router.post("/users/register")
@@ -701,6 +783,10 @@ async def register(request: Request):
         return _fail("密码长度需为 6-20 个字符", code=400)
     if password != confirm:
         return _fail("两次输入的密码不一致", code=400)
+    # 图形验证码：一码一用，错/对都销毁，前端需换图重填
+    if not _captcha_verify((body.get("captchaTicket") or "").strip(),
+                           (body.get("captchaCode") or "").strip()):
+        return _fail("图形验证码错误或已过期，请刷新后重试", code=400)
 
     async with _db() as session:
         exists = (await session.execute(text(

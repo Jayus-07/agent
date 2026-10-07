@@ -18,8 +18,8 @@
  *   （侧栏已无「AI 对话/智能问答/智能客服」三词并存，移动端也不能留旧称）。
  */
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { MessageCircle, Plane } from 'lucide-react'
+import { usePathname, useRouter } from 'next/navigation'
+import { Headphones, MessageCircle, Plane } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 export interface TabItem {
@@ -42,15 +42,57 @@ export const MOBILE_TABS: TabItem[] = [
   { label: '旅游规划', path: '/travel', match: 'prefix', icon: <Plane size={20} /> },
 ]
 
+/** 智能客服（2026-10-07 升为第三 tab）：非链接型——/agent 内直接开抽屉，
+ *  其它页先跳 /agent?cs=1 再由页面 effect 自动弹出 */
+export const CS_TAB_LABEL = '智能客服'
+
 export default function MobileTabBar() {
   const pathname = usePathname()
+  const router = useRouter()
+
+  const openCs = () => {
+    if (pathname.startsWith('/agent')) {
+      // 已在助手页：同路由导航不重挂载，?cs=1 effect 不会再跑 → 直接发事件开抽屉
+      window.dispatchEvent(new Event('cs-drawer:open'))
+    } else {
+      router.push('/agent?cs=1')
+    }
+  }
 
   return (
     <nav
       aria-label="移动端主导航"
       className="fixed bottom-0 inset-x-0 z-40 flex md:hidden glass border-t border-black/5 h-16"
     >
-      {MOBILE_TABS.map((tab) => {
+      {MOBILE_TABS.slice(0, 1).map((tab) => {
+        const active = isTabActive(pathname, tab)
+        return (
+          <Link
+            key={tab.path}
+            href={tab.path}
+            aria-current={active ? 'page' : undefined}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] transition-colors ${
+              active ? 'text-accent' : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {tab.icon}
+            <span>{tab.label}</span>
+          </Link>
+        )
+      })}
+
+      {/* 智能客服（中位）：按钮而非链接，见 openCs */}
+      <button
+        type="button"
+        onClick={openCs}
+        className="flex-1 flex flex-col items-center justify-center gap-0.5 text-[11px] text-text-secondary transition-colors hover:text-text-primary"
+        aria-label={CS_TAB_LABEL}
+      >
+        <Headphones size={20} />
+        <span>{CS_TAB_LABEL}</span>
+      </button>
+
+      {MOBILE_TABS.slice(1).map((tab) => {
         const active = isTabActive(pathname, tab)
         return (
           <Link

@@ -74,6 +74,22 @@ def _require_user(request: Request) -> str:
     return ident.user_id
 
 
+@router.get("/profile")
+def list_profile(request: Request, limit: int = 50):
+    """列出当前登录用户的画像记忆（长期记忆四类，只读，仅本人）。
+
+    设置页「用户画像」数据源：memory_records 的 active 行
+    （user_fact / preference / decision / knowledge），按最近访问排序。
+    与 /sessions（会话记忆）互补；错误语义同 _raise_for_error（故障 503）。
+    """
+    user_id = _require_user(request)
+    return _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().list_profile_memories(user_id=user_id, limit=limit)
+        )
+    )
+
+
 @router.get("/sessions")
 def list_sessions(request: Request,
                   limit: int = 50, before: str | None = None):

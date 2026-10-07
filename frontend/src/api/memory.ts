@@ -23,6 +23,21 @@ export async function listSessions(): Promise<SessionMeta[]> {
   return data.sessions || [];
 }
 
+/** 画像记忆条目（memory_records active 行的只读投影） */
+export interface ProfileMemory {
+  memory_type: string;
+  content: string;
+  created_at: string | null;
+}
+
+/** GET /memory/profile — 列出当前用户的画像记忆（长期记忆，仅本人） */
+export async function listProfileMemories(limit = 50): Promise<ProfileMemory[]> {
+  const data = await request<{ records: ProfileMemory[] }>(
+    `/api/memory/profile?limit=${limit}`,
+  );
+  return data.records || [];
+}
+
 /** GET /memory/sessions/{id} — 获取会话消息 */
 export async function getSessionMessages(
   sessionId: string,

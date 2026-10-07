@@ -8,8 +8,14 @@
  * - 管理端：独立应用 frontend-admin（:3200），此处用绝对链接跨应用跳转
  *
  * 纯静态呈现，无登录态要求；背景雾团与三端登录页视觉同源，进入对应端后色调延续。
+ *
+ * 移动端（≤md）口径（2026-10-07 用户拍板）：三端只有用户端适合手机展示，
+ * 门户页在窄屏直接让位给登录页——手机开首页看到三张卡再点用户端等于白绕一屏。
+ * 故 ≤md 走 MobileRedirect 重定向 /login，桌面保持三卡门户。
+ * 客服端/管理端在手机端不提供入口（客服外出用手机接单的诉求已由用户确认放弃）。
  */
 import Link from "next/link";
+import MobileRedirect from "@/components/layout/MobileRedirect";
 
 const ADMIN_URL =
   process.env.NEXT_PUBLIC_ADMIN_URL && process.env.NEXT_PUBLIC_ADMIN_URL.trim()
@@ -104,6 +110,8 @@ const ENTRIES: Entry[] = [
 export default function PortalPage() {
   return (
     <main className="relative min-h-screen w-full overflow-hidden bg-white">
+      {/* 移动端让位登录页；桌面端本组件渲染 null，门户三卡照常 */}
+      <MobileRedirect to="/login" />
       {/* 绿调雾团背景（与用户端登录同源） */}
       <div
         aria-hidden

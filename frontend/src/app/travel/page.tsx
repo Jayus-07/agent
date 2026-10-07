@@ -27,12 +27,14 @@
  * 后端契约、不引依赖；后端没有分步进度 API，生成中只显示等待状态。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AlertCircle, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Gauge, History, Hotel, LocateFixed, Loader2, MapPin, Minus, PanelLeftOpen, Plane, Plus, Sparkles, Users, Utensils, Wallet } from 'lucide-react'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import ItineraryView from '@/components/travel/ItineraryView'
 import CandidatesPanel from '@/components/travel/CandidatesPanel'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import TravelChatDrawer, { type TravelChatDrawerHandle } from '@/components/travel/TravelChatDrawer'
+import TravelOnboarding from '@/components/travel/TravelOnboarding'
 import CityGuideDrawer from '@/components/travel/CityGuideDrawer'
 import TravelPlanList from '@/components/travel/TravelPlanList'
 import TaskSidebar from '@/components/agent/TaskSidebar'
@@ -74,6 +76,8 @@ import {
   type TravelStreamEvent,
   type PlanResponse,
   type Recommendation,
+  fetchMyPreferences,
+  isEmptyPrefs,
 } from '@/api/travel'
 import { getCachedUser } from '@/lib/auth'
 
@@ -139,6 +143,22 @@ function useIsWide(): boolean {
   return wide
 }
 
+/**
+ * 手机端（≤md=768px）聊天全屏模式（2026-10-07 用户拍板）。
+ * 手机上只保留对话给行程计划，行程卡/时间轴/地图放不下也不好看。
+ */
+function useIsMobileChat(): boolean {
+  const [mobile, setMobile] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const sync = () => setMobile(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return mobile
+}
+
 export default function TravelPage() {
   // ── 表单 ──
   const [origin, setOrigin] = useState('')
@@ -148,6 +168,8 @@ export default function TravelPage() {
   const [budget, setBudget] = useState('')
   const [startDate, setStartDate] = useState('')
   const [pace, setPace] = useState('')
+  const [diet, setDiet] = useState('')
+  const [transport, setTransport] = useState('')
   const [preferences, setPreferences] = useState<string[]>([])
   const [extra, setExtra] = useState('')
   // 首屏引导的一句话输入：直接交给后端 slot_filler 解析（缺的信息由域内追问补齐）
@@ -192,6 +214,9 @@ export default function TravelPage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [feedbackSent, setFeedbackSent] = useState<'' | 'positive' | 'negative'>('')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // 手机端（≤md）聊天全屏：首次进入（有行程时）自动展开聊天，行程详情靠返回键切换。
+  // 用 ref 记住「已自动展开过」，避免 hasRightRail 由 false→true 时重复弹出打断用户。
+  const mobileChatAutoOpenedRef = useRef(false)
   // 当前选中天：行程视图与右侧助手共享（点日卡片 → 助手知道「正在看第几天」）
   const [activeDay, setActiveDay] = useState(1)
   // 出行程后左栏折叠为摘要；「调整条件」再展开
@@ -256,6 +281,7 @@ export default function TravelPage() {
   const { status: budgetStatus } = useBudgetStatus(setBudgetBlocked)
   const abortRef = useRef<AbortController | null>(null)
   const isWide = useIsWide()
+  const isMobileChat = useIsMobileChat()
 
   const preferenceKey = preferences.join(',')
 
@@ -606,6 +632,15 @@ export default function TravelPage() {
   const hasLeftRail = loading || !!itinerary
   // 右栏助手：设计稿态1 没有助手栏 —— 空态时连助手都不出现，输入卡是唯一焦点
   const hasRightRail = loading || !!itinerary || chatActivated
+
+  // 手机端首次具备助手时自动展开聊天（只做一次；之后由用户在聊天/行程间手动切换）
+  useEffect(() => {
+    if (!isMobileChat || !hasRightRail) return
+    if (mobileChatAutoOpenedRef.current) return
+    mobileChatAutoOpenedRef.current = true
+    setDrawerOpen(true)
+  }, [isMobileChat, hasRightRail])
+  const router = useRouter()
   const userName = getCachedUser()?.username || '本地用户'
 
   return (
@@ -651,36 +686,41 @@ export default function TravelPage() {
           )}
           <Plane size={16} className="text-[#087b73]" aria-hidden />
           <span className="text-sm font-semibold text-[#183037]">行程规划</span>
-          {/* M3-h 城市指南入口（常驻，空态可点；内容随 brief 目的地） */}
+          {/* M3-h 城市指南入口（2026-10-07 用户拍板：手机端收掉，仅桌面展示） */}
           <button
             type="button"
             onClick={() => setCityGuideOpen(true)}
             title="城市指南"
             aria-label="城市指南"
-            className="cursor-pointer rounded-lg p-1.5 text-[#087b73] transition-colors hover:bg-[#e2f0ee]"
+            className="hidden md:inline-flex cursor-pointer rounded-lg p-1.5 text-[#087b73] transition-colors hover:bg-[#e2f0ee]"
           >
             <BookOpen size={15} aria-hidden />
           </button>
-          {/* M2 布局反馈：条件 chips 并入顶栏（原独立条件条省掉一行高度） */}
+          {/* M2 布局反馈：条件 chips 并入顶栏（2026-10-07 手机端收掉——移动端
+              不展示高级选项表格，桌面保留） */}
           {hasLeftRail && (
-            <TripConditionsChips
-              loading={loading}
-              destination={itinerary?.brief.destination || destination}
-              startDate={itinerary?.brief.start_date || startDate}
-              days={days}
-              partySize={partySize}
-              pace={itinerary?.brief.pace || pace}
-              itineraryDays={itinerary?.days.length ?? null}
-              costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
-              budget={budget}
-            />
+            <div className="hidden md:flex items-center">
+              <TripConditionsChips
+                loading={loading}
+                destination={itinerary?.brief.destination || destination}
+                startDate={itinerary?.brief.start_date || startDate}
+                days={days}
+                partySize={partySize}
+                pace={itinerary?.brief.pace || pace}
+                itineraryDays={itinerary?.days.length ?? null}
+                costTotal={itinerary ? itineraryTotal(itinerary.cost) : null}
+                budget={budget}
+              />
+            </div>
           )}
           <div className="ml-auto flex items-center gap-1.5">
+            {/* 高级选项表单（调整）：2026-10-07 用户拍板手机端收掉——移动端走
+                示例/对话改行程，桌面保留表单入口 */}
             {hasLeftRail && !loading && (
               <button
                 type="button"
                 onClick={() => setConditionsOpen(true)}
-                className="cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
+                className="hidden md:inline-flex cursor-pointer rounded-lg border border-[#dae7e5] px-2.5 py-1 text-xs text-[#5c7074] transition-colors hover:border-[#087b73]/40 hover:text-[#183037]"
               >
                 调整
               </button>
@@ -693,12 +733,16 @@ export default function TravelPage() {
               <History size={12} aria-hidden />
               历史规划
             </button>
-            <span className="hidden items-center gap-1.5 text-xs text-[#5c7074] sm:inline-flex">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#087b73]/10 text-[10px] font-medium text-[#087b73]">
-                {userName.slice(0, 1).toUpperCase()}
-              </span>
-              {userName}
-            </span>
+            {/* 用户头像（2026-10-07）：与 AI 助手顶栏同款，点击进设置页（两端一致） */}
+            <button
+              type="button"
+              onClick={() => router.push('/settings')}
+              aria-label="打开设置"
+              title="设置"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#087b73]/10 text-[11px] font-medium text-[#087b73] transition-colors hover:bg-[#087b73]/20"
+            >
+              {userName.slice(0, 1).toUpperCase()}
+            </button>
           </div>
         </header>
 
@@ -715,8 +759,22 @@ export default function TravelPage() {
               {/* ── 左栏已移除（M1）：条件摘要上移为顶部 TripConditionsBar，调整入口在其「调整」按钮 ── */}
 
             {/* ── 中栏：行程（唯一结果主视图，栏内滚动） ── */}
-            {/* M2 布局反馈：中栏改 flex 列，行程大卡 flex-1 与右栏聊天等高（时间轴/须知各自内滚） */}
-            <main className="flex min-w-0 min-h-0 flex-col gap-4 lg:overflow-hidden lg:pr-0.5">
+            {/* M2 布局反馈：中栏改 flex 列，行程大卡 flex-1 与右栏聊天等高（时间轴/须知各自内滚）
+                2026-10-07 手机口径：手机端聊天全屏（常态展开）；点顶栏返回键
+                则收起聊天、露出行程详情——两个视图在手机上互斥切换。 */}
+            <main
+              className={`flex min-w-0 min-h-0 flex-col gap-4 lg:overflow-hidden lg:pr-0.5 ${
+                isMobileChat && drawerOpen ? 'hidden' : ''
+              }`}
+            >
+              {!itinerary && !loading && !planState.notice && (
+                <TravelOnboardingGate
+                  origin={origin} onOrigin={setOrigin}
+                  pace={pace} onPace={setPace}
+                  diet={diet} onDiet={setDiet}
+                  transport={transport} onTransport={setTransport}
+                />
+              )}
               {!itinerary && !loading && !planState.notice && (
                 <PlanIntakeCard
                   value={quickIdea}
@@ -908,11 +966,18 @@ export default function TravelPage() {
         onNewPlan={startNewTrip}
       />
 
-      {/* 中窄屏：「对话改行程」边缘按钮 + 展开抽屉（态1 无助手，不出入口） */}
+      {/* 中窄屏：「对话改行程」边缘按钮 + 展开抽屉（态1 无助手，不出入口）
+          2026-10-07 手机口径：≤md 只聊天给行程计划——行程卡/时间轴/地图在
+          390px 屏放不下也不好看，故手机端让聊天全屏（抽屉常态展开、去掉贴边把手），
+          行程细节请在桌面端查看。md~xl 维持原覆盖抽屉形态（把手是设计意图）。 */}
       {!isWide && hasRightRail && (
         <TravelChatDrawer
           mode="drawer"
+          // 手机全屏也走 drawerOpen 这一个开关：初次进入由 effect 自动置 true，
+          // 点顶栏返回键置 false → 聊天收起、露出行程详情。不能写
+          // `drawerOpen || isMobileChat`——那样 isMobileChat 恒真，返回键永远失效。
           open={drawerOpen}
+          isMobileFull={isMobileChat}
           onOpen={() => setDrawerOpen(true)}
           onClose={() => setDrawerOpen(false)}
           planVersion={itinerary?.plan_version}
@@ -1521,3 +1586,43 @@ function PlanIntakeCard({
   )
 }
 
+
+/**
+ * 新用户偏好引导门（2026-10-08 拍板）：进旅游页时查偏好，全空（新用户）
+ * 显示 4 题选项卡问卷；答完自动保存并把 origin/pace/diet/transport 回填
+ * 表单。老用户不弹；保存失败/跳过都不拦路（引导是增强不是前置门）。
+ */
+function TravelOnboardingGate({
+  origin, onOrigin, pace, onPace, diet, onDiet, transport, onTransport,
+}: {
+  origin: string; onOrigin: (v: string) => void
+  pace: string; onPace: (v: string) => void
+  diet: string; onDiet: (v: string) => void
+  transport: string; onTransport: (v: string) => void
+}) {
+  // null=加载中（不渲染防闪）；false=不显示；true=显示问卷
+  const [show, setShow] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchMyPreferences().then((prefs) => {
+      if (alive && isEmptyPrefs(prefs)) setShow(true)
+      else if (alive) setShow(false)
+    })
+    return () => { alive = false }
+  }, [])
+
+  if (show === null || show === false) return null
+  return (
+    <TravelOnboarding
+      onDone={(prefs) => {
+        if (prefs.origin && !origin) onOrigin(prefs.origin)
+        if (prefs.pace && !pace) onPace(prefs.pace)
+        if (prefs.diet && !diet) onDiet(prefs.diet)
+        if (prefs.transport && !transport) onTransport(prefs.transport)
+        setShow(false)
+      }}
+      onSkip={() => setShow(false)}
+    />
+  )
+}

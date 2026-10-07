@@ -261,15 +261,33 @@ export interface RegisterResult {
   message?: string;
 }
 
+export interface RegisterCaptcha {
+  ticket: string;
+  /** 后端手绘 SVG 字符串，前端以 data-URI 内联渲染 */
+  svg: string;
+}
+
+/**
+ * GET /api/sys/users/captcha — 注册页图形验证码签发（4 位纯数字）。
+ * ticket 一次性：随注册提交，错/对都作废，前端需换图重填。
+ */
+export async function fetchRegisterCaptcha(): Promise<RegisterCaptcha> {
+  const res = await fetch(`${API_BASE}/api/sys/users/captcha`);
+  const body = await res.json().catch(() => null);
+  return unwrapResult<RegisterCaptcha>(body);
+}
+
 /**
  * 注册开发者账号：走网关 /api/sys/** → system-service（context-path /system）
  * 用户名 3-20 字符、密码 6-20 字符（后端 @Size 校验）。
+ * 需携带图形验证码（ticket + 4 位数字答案），后端一码一用校验。
  */
 export async function register(
   username: string,
   password: string,
   confirmPassword: string,
   realName?: string,
+  captcha?: { ticket: string; code: string },
 ): Promise<RegisterResult> {
   const res = await fetch(`${API_BASE}/api/sys/users/register`, {
     method: "POST",
@@ -279,6 +297,7 @@ export async function register(
       password,
       confirmPassword,
       ...(realName ? { realName } : {}),
+      ...(captcha ? { captchaTicket: captcha.ticket, captchaCode: captcha.code } : {}),
     }),
   });
   const body = await res.json().catch(() => null);
