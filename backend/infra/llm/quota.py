@@ -710,8 +710,15 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    # Billing V2（2026-10-07）：总成本 = 记账本位币唯一口径
+                    # （V2 行取 billed_cost_cny，legacy 行按旧 currency 逻辑折算），
+                    # 不再对 total_cost 做无币种感知的混算直和。
+                    from backend.observability.llm_usage_store_pg import (
+                        cost_cny_sql_expr,
+                    )
+
                     cur.execute(
-                        """SELECT COALESCE(SUM(total_cost), 0),
+                        f"""SELECT COALESCE(SUM({cost_cny_sql_expr()}), 0),
                                   COUNT(*) FILTER (WHERE cost_status IN ('exact', 'estimated')),
                                   COUNT(*) FILTER (WHERE cost_status = 'unpriced'),
                                   COUNT(*) FILTER (WHERE cost_status = 'price_unknown'),
@@ -1275,6 +1282,33 @@ class PostgresQuotaStore:
                          - timedelta(hours=float(BUDGET_RECONCILE_WINDOW_HOURS)),),
                     )
                     window_total, window_reviewed = cur.fetchone()
+                    # P1-09 billing_mismatch（2026-10-07 Billing 收口）：窗口内
+                    # 已结算预占按 request 聚合后与 V2 用量行（billed_cost_cny）
+                    # 逐笔对账——正常恒 0；非 0 = 结算与记账分叉（少结/多结/
+                    # 丢 usage 行），是对账日报的新红信号。
+                    cur.execute(
+                        f"""SELECT COUNT(*) FROM (
+                                SELECT r.request_id,
+                                       SUM(r.settled_cny) AS settled_cny,
+                                       COALESCE((SELECT SUM(u.billed_cost_cny)
+                                                   FROM llm_usage u
+                                                  WHERE u.request_id = r.request_id
+                                                    AND u.billing_schema_version >= 2
+                                                    AND u.billed_cost_cny IS NOT NULL), 0)
+                                           AS billed_cny
+                                  FROM (SELECT DISTINCT ON (id) id, request_id,
+                                               settled_cny
+                                          FROM {self._reservations}
+                                         WHERE status = 'settled'
+                                           AND COALESCE(settled_at, created_at) >= %s
+                                         ORDER BY id, created_at) r
+                                 GROUP BY r.request_id
+                            ) m
+                            WHERE ABS(m.settled_cny - m.billed_cny) > 0.000001""",
+                        (datetime.now(timezone.utc)
+                         - timedelta(hours=float(BUDGET_RECONCILE_WINDOW_HOURS)),),
+                    )
+                    billing_mismatch = cur.fetchone()[0]
             oldest_age_hours = (
                 round(
                     (datetime.now(timezone.utc) - oldest).total_seconds() / 3600, 1,
@@ -1295,6 +1329,8 @@ class PostgresQuotaStore:
                     round(int(window_reviewed or 0) / int(window_total), 4)
                     if window_total else 0.0
                 ),
+                # P1-09：结算 vs V2 用量对账分叉计数（正常 0）
+                "billing_mismatch_count": int(billing_mismatch or 0),
             }
         except Exception as exc:
             raise QuotaConfigurationError("待对账汇总读取失败") from exc

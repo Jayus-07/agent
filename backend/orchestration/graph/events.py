@@ -594,7 +594,8 @@ def summarize_turn_usage() -> dict | None:
             return None
         summary = {
             "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+            "cost_cny": 0.0, "cost_usd": 0.0,
             "calls": 0,
         }
         models = {}
@@ -602,14 +603,19 @@ def summarize_turn_usage() -> dict | None:
             for k in ("prompt_tokens", "completion_tokens", "total_tokens",
                       "cached_tokens", "reasoning_tokens", "calls"):
                 summary[k] += int(e.get(k, 0) or 0)
-            summary["cost_usd"] += float(e.get("cost_usd", 0) or 0.0)
+            # 记账金额唯一口径 = cost_cny（BillingResult.billed_cost_cny 累加，
+            # 2026-10-07 收口）；cost_usd 不再承载金额（历史双金额语义已消灭，
+            # 兼容字段归零，前端未消费该键）
+            summary["cost_cny"] += float(
+                e.get("cost_cny", e.get("cost_usd", 0)) or 0.0
+            )
             models[model] = {
                 "prompt_tokens": int(e.get("prompt_tokens", 0) or 0),
                 "completion_tokens": int(e.get("completion_tokens", 0) or 0),
                 "total_tokens": int(e.get("total_tokens", 0) or 0),
                 "calls": int(e.get("calls", 0) or 0),
             }
-        summary["cost_usd"] = round(summary["cost_usd"], 6)
+        summary["cost_cny"] = round(summary["cost_cny"], 6)
         summary["models"] = models
         return summary
     except Exception:
