@@ -210,6 +210,11 @@ def _dispatch_service(
                 ValidationError,
             )
             order_no = resolve_order_slot(cs_route, question) or None
+            if not order_no:
+                # 语义槽位唯一匹配（2026-10-08）：「买耳机的那单什么状态」
+                # 类自然引用 → 精确查单而非全量列表。解析失败/多候选/无
+                # 匹配保持既有列表查询（多候选时列表本身就是选择入口）。
+                order_no = _semantic_unique_order(cs_route, user_id, tenant_id)
             if order_no:
                 try:
                     result = order_service.query_orders(
@@ -281,12 +286,18 @@ def _dispatch_service(
         injected_order = str(
             (cs_route.get("metadata") or {}).get("order_id") or ""
         ).strip()
+        # 语义槽位唯一匹配（2026-10-08）优先于 latest 兜底：「耳机那单到
+        # 哪了」按商品引用精确锁定订单，而非盲查最近一单。解析失败保持
+        # latest 既有路径（读侧放宽口径不变）。
+        order_id = injected_order
+        if not order_id:
+            order_id = _semantic_unique_order(cs_route, user_id, tenant_id) or ""
         # 缺陷9：会话上下文注入的订单号优先；_get_latest_order_id（按用户
         # 全局最近一单）是既有 fallback，保留原行为不在本轮扩大。
         # STOP C（2026-10-07）：订单/物流服务故障必须译成「服务不可用」，
         # 不得落到「暂无物流信息」（没有物流记录 ≠ 查不到物流）。
         try:
-            order_id = injected_order or _get_latest_order_id(user_id)
+            order_id = order_id or _get_latest_order_id(user_id)
         except DatabaseError:
             return "订单服务暂时不可用，暂时无法查询物流，请稍后再试。"
         except Exception:
@@ -340,6 +351,31 @@ def _extract_order_no(question: str) -> str | None:
     from backend.customer_service.context_manager import extract_order_entity
 
     return extract_order_entity(question) or None
+
+
+def _semantic_unique_order(cs_route: dict, user_id: str, tenant_id: str) -> str:
+    """语义槽位唯一匹配（2026-10-08，读侧增强）。
+
+    语义候选（product/time 引用）按真实业务数据解析，唯一匹配返回订单号；
+    多候选/无匹配/服务故障一律返回空串（读侧放宽口径：调用方保持既有
+    列表查询或 latest 兜底），绝不抛异常打断查询主链。
+    """
+    try:
+        from backend.customer_service.context.semantic_slots import (
+            resolve_from_metadata,
+        )
+
+        resolution = resolve_from_metadata(tenant_id, user_id, cs_route)
+        if resolution.resolved:
+            return resolution.order_id
+        if resolution.ambiguous:
+            logger.info(
+                "[QueryExpert] semantic slots ambiguous (%d candidates) "
+                "→ 保持既有查询路径", len(resolution.candidates),
+            )
+    except Exception:
+        logger.warning("[QueryExpert] semantic slot resolve failed", exc_info=True)
+    return ""
 
 
 def _get_latest_order_id(user_id: str) -> str | None:

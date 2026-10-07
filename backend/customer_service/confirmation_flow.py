@@ -60,8 +60,14 @@ def process_confirmation(
     if confirmation_sm.is_expired(pending_action):
         return _handle_expired(pending_action, user_id, session_id)
 
-    # ── 2. 意图检测 ──
+    # ── 2. 意图检测（规则权威；规则 NONE 时可选 LLM 语义候选）──
     user_intent = confirmation_sm.detect_confirmation_intent(user_message)
+
+    if user_intent == confirmation_sm.ConfirmationIntent.NONE:
+        # LLM semantic candidate（2026-10-08，任务书 §十三「可以」项）：
+        # 只补 confirm/cancel 白名单决策，最终仍由下方状态机执行；
+        # 开关默认关（词表已覆盖 P0 模糊确认案例），疑问句永不进入。
+        user_intent = _llm_confirm_candidate(user_message)
 
     if user_intent == confirmation_sm.ConfirmationIntent.CONFIRM:
         return _handle_confirm(pending_action, user_id, session_id,
@@ -72,6 +78,37 @@ def process_confirmation(
 
     # ── 3. 意图不明 → 追问（带 retry 上限，防止无限追问）──
     return _handle_reask(pending_action, user_id, session_id)
+
+
+def _llm_confirm_candidate(user_message: str) -> confirmation_sm.ConfirmationIntent:
+    """确认语义 LLM 候选（CS_CONFIRM_LLM_CANDIDATE_ENABLED，默认 false）。
+
+    红线：疑问句（「可不可以退」）在词表层已判 NONE，此处显式再拦——
+    疑问语气绝不交给 LLM 表决；LLM 只能返回 confirm/cancel 白名单值
+    （validator 校验），unknown/失败一律维持 NONE 走追问。不修改
+    pending action 内容，不直接驱动状态机。
+    """
+    try:
+        from backend.customer_service.understanding.llm_confirm_candidate import (
+            confirm_candidate_enabled,
+            llm_confirm_decision,
+        )
+
+        if not confirm_candidate_enabled():
+            return confirmation_sm.ConfirmationIntent.NONE
+
+        text_lower = user_message.strip().lower()
+        if not text_lower or confirmation_sm._is_question_form(text_lower):
+            return confirmation_sm.ConfirmationIntent.NONE
+
+        decision = llm_confirm_decision(user_message)
+        if decision == "confirm":
+            return confirmation_sm.ConfirmationIntent.CONFIRM
+        if decision == "cancel":
+            return confirmation_sm.ConfirmationIntent.CANCEL
+        return confirmation_sm.ConfirmationIntent.NONE
+    except Exception:
+        return confirmation_sm.ConfirmationIntent.NONE
 
 
 # ── 过期 ─────────────────────────────────────────────────────

@@ -37,6 +37,25 @@ _ACTION_TYPE_LABELS = {
     "password_reset": "密码重置",
 }
 
+# 语义槽位解析失败的空结果占位已移除——异常路径统一走 _new_empty_resolution()
+
+
+def _new_empty_resolution() -> Any:
+    from backend.customer_service.context.semantic_slots import (
+        SemanticSlotResolution,
+    )
+
+    return SemanticSlotResolution()
+
+
+def _inject_order_id(cs_route: dict, order_id: str) -> dict:
+    """语义解析唯一绑定 → 写入 metadata.order_id 权威 referent。"""
+    cs_route = dict(cs_route or {})
+    metadata = dict(cs_route.get("metadata") or {})
+    metadata["order_id"] = order_id
+    cs_route["metadata"] = metadata
+    return cs_route
+
 
 def _resolve_tenant(state: dict[str, Any]) -> str:
     """可信租户解析（STOP D §67）：cs_context（runner 身份链注入）优先，
@@ -103,9 +122,47 @@ def execute_action(
 
     # 缺陷6.2（2026-09-23）：副作用动作缺订单号时必须结构化追问，
     # 禁止 fallback "latest"（最近一单）替用户决定操作对象。
+    # 语义槽位解析（2026-10-08）：追问前先用 LLM 语义候选（product/time
+    # 引用）按真实业务数据解析 —— 唯一匹配自动绑定落穿 proposal（资格
+    # 校验照常），多候选进点选，无匹配保持既有追问。业务服务故障如实
+    # 告知不可用（与 proposal 阶段同口径），不伪装成「没有匹配」。
     if intent in _SLOT_ORDER_INTENTS and not _resolve_order_id(cs_route, user_message):
-        return _ask_missing_slot(user_id, intent, session_id, store,
-                                 tenant_id=tenant_id)
+        try:
+            from backend.customer_service.context.semantic_slots import (
+                resolve_from_metadata,
+            )
+
+            resolution = resolve_from_metadata(tenant_id, user_id, cs_route)
+        except DatabaseError:
+            logger.warning("[ActionExpert] semantic slot resolve: service unavailable")
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    "业务服务暂时不可用，请稍后重试；"
+                    "您也可以回复「转人工」由人工客服协助。"
+                ),
+                data={},
+            )
+        except Exception:
+            # 语义解析自身异常 = 增强不可用，保持既有追问路径
+            logger.warning(
+                "[ActionExpert] semantic slot resolve failed", exc_info=True,
+            )
+            resolution = _new_empty_resolution()
+        if resolution.resolved:
+            cs_route = _inject_order_id(cs_route, resolution.order_id)
+            logger.info(
+                "[ActionExpert] semantic slot bound: order=%s product=%r",
+                resolution.order_id, resolution.matched_product,
+            )
+        elif resolution.ambiguous:
+            return _ask_missing_slot(user_id, intent, session_id, store,
+                                     tenant_id=tenant_id,
+                                     candidates_override=resolution.candidates)
+        else:
+            return _ask_missing_slot(user_id, intent, session_id, store,
+                                     tenant_id=tenant_id)
 
     try:
         return _build_new_proposal(user_id, intent, cs_route, session_id, store,
@@ -413,6 +470,7 @@ def _extract_order_id_from_message(user_message: str) -> str:
 def _ask_missing_slot(
     user_id: str, intent: str, session_id: str, store: Any,
     tenant_id: str = "",
+    candidates_override: list[dict] | None = None,
 ) -> ExpertResult:
     """缺订单槽位：持久化 need_info 型 pending_action 并结构化追问。
 
@@ -420,6 +478,11 @@ def _ask_missing_slot(
     session_id) 键），仅追加 need_info 专用字段；confirmation_state 仍为
     pending_confirmation（满足 confirmations.state CHECK 约束，
     pending_handler据此转入 action expert 补槽，不进确认流程）。
+
+    candidates_override（2026-10-08 语义槽位）：语义解析得到的多候选订单
+    直接作为点选数据源（order_id/order_no/product_names/amount/status），
+    跳过退款政策窗口查询——语义引用（「买耳机的那笔」）的候选集来自
+    用户真实订单匹配，不再受退款窗口收窄。仅在动作意图族生效。
     """
     import uuid
     from datetime import datetime, timezone
@@ -437,9 +500,14 @@ def _ask_missing_slot(
     # 退款点选候选（2026-10-08 拍板）：缺订单号时不再让用户手输——按
     # 退款政策窗口列出可退订单（订单号+商品名+金额）供用户点选/回复序号。
     # 候选查询失败或 http 网关模式返回空 → 退回手输路径（现状行为）。
+    # 语义槽位多候选（candidates_override）优先：来自用户真实订单的
+    # 语义匹配集，适用于全部订单型动作意图（资格校验由 proposal 阶段
+    # 的 service 把关，点选不跳过任何红线）。
     candidates: list[dict] = []
     window_days = 0
-    if action_type == "refund":
+    if candidates_override:
+        candidates = list(candidates_override)
+    elif action_type == "refund":
         try:
             from backend.customer_service.service.refund_service import (
                 get_refund_service,
@@ -454,17 +522,24 @@ def _ask_missing_slot(
     if candidates:
         options: list[str] = []
         lines: list[str] = []
+        action_label = _ACTION_TYPE_LABELS.get(
+            f"{action_type}_request", action_type,
+        )
         for idx, c in enumerate(candidates, start=1):
             product = c.get("product_names") or "商品信息缺失"
             label_text = (
                 f"{c['order_no']} ¥{c['amount']:.2f} {product}"
             )
-            options.append(f"申请退款：{label_text}")
+            options.append(f"{action_label}：{label_text}")
             lines.append(f"**{idx}.** `{c['order_no']}` — {product}（¥{c['amount']:.2f}，{c['status']}）")
+        if candidates_override:
+            lead = "为您找到多个相关订单，请点选或回复序号选择要办理的订单："
+        else:
+            lead = f"为您找到近 {window_days} 天内符合退款政策的订单，请点选或回复序号："
         response_draft = (
-            f"为您找到近 {window_days} 天内符合退款政策的订单，请点选或回复序号：\n\n"
+            lead + "\n\n"
             + "\n\n".join(lines)
-            + "\n\n点击上方选项即可发起该订单的退款申请。"
+            + f"\n\n点击上方选项即可发起该订单的{action_label}。"
         )
         pending = {
             "action_id": str(uuid.uuid4()),
@@ -501,8 +576,11 @@ def _ask_missing_slot(
                 # CS 图透传为 clarification 帧（events.py 发射，前端渲染
                 # 可点选项；选项=用户话术，点击即作为消息发送）
                 "_clarify": {
-                    "source": "refund_candidates",
-                    "question": "请选择要申请退款的订单：",
+                    "source": (
+                        "semantic_candidates" if candidates_override
+                        else "refund_candidates"
+                    ),
+                    "question": f"请选择要办理{action_label}的订单：",
                     "options": options,
                     "handoff_available": False,
                 },
@@ -591,6 +669,25 @@ def _handle_slot_fill(
             logger.info(
                 "[ActionExpert] candidate #%s picked -> order_id=%s",
                 stripped, order_id,
+            )
+    if not order_id:
+        # 语义槽位补槽（2026-10-08）：用户用自然引用回答追问（「就耳机
+        # 那个」）时，按当前轮语义候选解析；唯一绑定照常走 proposal，
+        # 多候选/无匹配保持追问。解析失败（服务故障/异常）不阻断追问。
+        try:
+            from backend.customer_service.context.semantic_slots import (
+                resolve_from_metadata,
+            )
+
+            _resolution = resolve_from_metadata(tenant_id, user_id, cs_route)
+            if _resolution.resolved:
+                order_id = _resolution.order_id
+                logger.info(
+                    "[ActionExpert] semantic slot fill: order_id=%s", order_id,
+                )
+        except Exception:
+            logger.warning(
+                "[ActionExpert] semantic slot fill failed", exc_info=True,
             )
     if order_id:
         cs_route = dict(cs_route or {})

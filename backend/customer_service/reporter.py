@@ -30,6 +30,23 @@ def cs_reporter_node(state: dict[str, Any]) -> dict[str, Any]:
 
     answer = _assemble_answer(decision, expert_result, handoff_state, state)
 
+    # Response Composer（2026-10-08 LLM 收口改造）：按 Expert 策略生成
+    # 自然回复（query/complaint=LLM 转写、knowledge=直通、action/handoff=
+    # 模板）。分诊直出话术不进 composer——寒暄人设回复已是 LLM 产物、
+    # 出域固定话术零 LLM 是验收口径。OutputGuard 仍在其后（P0-20）。
+    if not decision.get("direct_reply"):
+        try:
+            from backend.customer_service.response.composer import compose_reply
+
+            answer, _response_source = compose_reply(
+                str(expert_result.get("expert") or ""),
+                answer, expert_result,
+                state.get("cs_route") or {}, state,
+            )
+        except Exception:
+            logger.warning("[CS Reporter] Response Composer 失败，用模板初稿",
+                           exc_info=True)
+
     answer = _run_output_guard(answer, state)
 
     logger.debug("[CS Reporter] final_answer length=%d", len(answer))
@@ -184,6 +201,18 @@ def _run_output_guard(answer: str, state: dict) -> str:
     try:
         from backend.customer_service.security.output_guard import get_output_guard
         result = get_output_guard().check(answer, state.get("cs_context"))
+        if result.filtered:
+            # cs_response_guard_result 终值：OutputGuard 过滤是回复链最后
+            # 一道守卫，其结果优先于 composer 守卫 tag（软失败）
+            try:
+                from backend.observability.tracer import trace_collector
+                tracer = trace_collector.current()
+                if tracer is not None:
+                    tracer.tags["cs_response_guard_result"] = (
+                        "filtered:" + ",".join(result.reasons[:3])
+                    )
+            except Exception:
+                pass
         return result.text
     except Exception:
         logger.warning("[CS Reporter] OutputGuard failed, returning raw answer")

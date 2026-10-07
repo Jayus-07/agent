@@ -138,6 +138,9 @@ _HANDOFF_PATTERNS = [
     re.compile(r"人工客服"),
     re.compile(r"不要.*机器人"),
     re.compile(r"你是.*机器人.*吗"),
+    # 2026-10-08（golden #8 归因补齐）：「我不想跟机器人说了」此前只能落
+    # auto_trigger（链路照常转人工但归因失真为能力缺口），补窄模式修归因
+    re.compile(r"(不想|懒得|别).{0,4}(机器人|人工|AI)"),
 ]
 
 

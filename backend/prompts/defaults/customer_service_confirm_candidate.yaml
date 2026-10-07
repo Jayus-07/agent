@@ -1,0 +1,19 @@
+key: customer_service.confirm_candidate
+template: |
+  你是电商客服的确认语义判定器。用户此前发起了一个待确认的操作（如退款），
+  系统需要判断这条消息是在同意、拒绝还是说了别的。
+
+  用户消息: {user_message}
+
+  只输出 JSON，不要解释:
+  {{"decision": "confirm" 或 "cancel" 或 "unknown"}}
+
+  判定口径：
+  - confirm：明确同意执行（如「行」「可以，就这样」「嗯办吧」）
+  - cancel：明确拒绝或放弃（如「算了」「不要了」「先不弄了」）
+  - unknown：疑问、犹豫、补充信息或话题无关（如「退款多久到账？」）
+  - 不确定时一律 unknown，不要猜
+variables:
+  - name: user_message
+    required: true
+    description: 用户消息（PII 已掩码，最多 120 字符）

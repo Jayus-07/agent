@@ -115,6 +115,21 @@ def execute_complaint(
     service = get_complaint_service()
     detection = service.detect_with_llm_fallback(user_message)
 
+    # severity 溯源（2026-10-08 LLM 收口，P0-23）：rule vs llm_fallback
+    # 必须可归因——工单/升级决策仍由规则矩阵消费 severity（本层不变）。
+    severity_source = (
+        "llm_fallback"
+        if "llm_fallback" in (detection.matched_patterns or [])
+        else "rule"
+    )
+    try:
+        from backend.observability.tracer import trace_collector
+        _t = trace_collector.current()
+        if _t is not None:
+            _t.tags["cs_severity_source"] = severity_source
+    except Exception:
+        pass
+
     # ── 投诉分级（2026-10-08 拍板 A+B 直做）──────────────────────
     # 此前任何进入本专家的输入都无条件建单+转人工——用户随手「投诉一下
     # 试试」也会占用人工队列。现在三级分流：

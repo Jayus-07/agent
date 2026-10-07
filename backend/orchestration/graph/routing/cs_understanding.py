@@ -2,10 +2,47 @@
 
 迁入内容（2026-09-30 纯移动，函数体逐字保留）：
   - _enrich_with_understanding：CSUnderstanding 结果并入 cs_route
+
+追加（2026-10-08 客服域 LLM 语义层收口）：
+  - _enrich_with_semantic：规则理解层之后的 LLM 语义增强（intent 补判 +
+    语义槽位候选）。Rule First：规则明确则 LLM 0 次；关闭开关或任何失败
+    软降级，行为与改造前一致。
 """
 from __future__ import annotations
 
 from backend.shared.logger import logger
+
+
+def _enrich_with_semantic(cs_update: dict, query: str) -> dict:
+    """LLM 语义理解增强（2026-10-08）：规则层之后、CS 图之前执行。
+
+    产出（全部经 validator 白名单）：
+      - rule miss/低置信时 LLM intent 补判 → cs_route.intent 改写（画像派生）
+      - 意图需要业务对象且无显式订单号 → 语义槽位候选 metadata.semantic_slots
+        （真实对象解析在专家层用真实 user_id 完成，router 层零新增 IO）
+    软降级：开关关闭/LLM 失败/异常 → cs_route 保持规则层原样。
+    """
+    try:
+        from backend.customer_service.understanding.semantic import (
+            enrich_semantic_understanding,
+            semantic_layer_enabled,
+        )
+
+        if not semantic_layer_enabled():
+            return cs_update
+
+        ctx = cs_update.get("cs_context")
+        cs_route = ctx.get("cs_route") if isinstance(ctx, dict) else None
+        if not isinstance(cs_route, dict):
+            cs_route = cs_update.get("cs_route")
+        if not isinstance(cs_route, dict):
+            return cs_update
+
+        enrich_semantic_understanding(cs_route, query)
+        return cs_update
+    except Exception as e:
+        logger.warning(f"[RouterNode] CS 语义增强软降级: {e}")
+        return cs_update
 
 
 def _enrich_with_understanding(cs_update: dict, query: str) -> dict:
@@ -57,6 +94,8 @@ def _enrich_with_understanding(cs_update: dict, query: str) -> dict:
                     t.tags["cs_sentiment"] = u.sentiment.value
         except Exception:
             pass
+        # LLM 语义增强（2026-10-08）：规则层之后执行，软降级不阻塞路由
+        _enrich_with_semantic(cs_update, query)
         return cs_update
     except Exception as e:
         logger.warning(f"[RouterNode] CSUnderstanding 软降级: {e}")
