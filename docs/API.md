@@ -9,7 +9,7 @@
 
 ## 1. 总览
 
-### 1.1 路由文件（下表为 2026-08 口径 22 个；现 62 个 .py〔含 2 个非路由共享文件〕，清单以目录为准）[backend/app/api/routes/](../backend/app/api/routes/)
+### 1.1 路由文件（下表为 2026-08 口径 22 个；现 66 个 .py〔含 2 个非路由共享文件〕，清单以目录为准）[backend/app/api/routes/](../backend/app/api/routes/)
 
 | 路由文件 | 端点数 | 用途 |
 |---|---|---|
@@ -42,10 +42,11 @@
 |---|---|
 | `/chat` | POST `/` · `/stream` (SSE) · `/messages` · `/abort` |
 | `/sql` | POST `/` · POST `/query` · GET `/tables`（角色可见表目录）· GET `/tables/{schema}/{table}`（分页浏览，脱敏） |
-| `/budgets` | GET `/budgets/me`（上限/已用/占额即时口径）· `/admin/budgets/summary` · `/subjects` · `/policies` · `/events` · `/audit` · GET `/admin/budgets/reconciliation`（对账日报，响应含 `report.usage` cost_status 分布与 `report.derived` 未决率） |
+| `/budgets` | GET `/budgets/me`（上限/已用/占额即时口径；`policy_source` 附中文 label 展示名，2026-10-08 `f9ea547`）· `/admin/budgets/summary` · `/subjects` · `/policies` · `/events` · `/audit` · GET `/admin/budgets/reconciliation`（对账日报，响应含 `report.usage` cost_status 分布与 `report.derived` 未决率） |
 | `/rag` | 搜索 / 文档 CRUD / 重索引（异步任务化 + `/reindex/status` 轮询）/ 上传 / `upload-failures`（入库失败待处理）/ 关键词 / 知识库 |
-| `/memory` | `/sessions` · `/sessions/{id}` · `/sessions/{id}/context` · DELETE · PATCH |
-| `/observability` | `/traces` · `/traces/active` · `/traces/{id}` · `/rag-traces` · `/metrics` · `/resources` · `/breakers` · `/alerts` · `/graph` |
+| `/memory` | `/sessions` · `/sessions/{id}` · `/sessions/{id}/context` · DELETE · PATCH · GET `/profile`（当前用户长期画像只读，preference/user_fact/decision/knowledge 全量 eligible active 行，2026-10-08） |
+| `/question-ledger` | GET `/`（线上问题台账分页，domain/status 筛选）· POST `/{question_id}/status`（accepted/dismissed，admin）· POST `/to-candidates`（转候选评测集，source_type=online_ledger）【2026-10-08 #13，迁移 080；写入侧 sql/travel 放行链路旁路软失败】 |
+| `/observability` | `/traces`（支持 `?source=travel\|cs\|ai_assistant` 来源三分类过滤，2026-10-08 #12，未知值忽略不 422）· `/traces/active` · `/traces/{id}` · `/rag-traces` · `/metrics` · `/resources` · `/breakers` · `/alerts`（能力健康度三色 severity 分诊 + span 错误摘要，2026-10-08 #11）· `/graph` |
 | `/llm` | `/models` · `/current` · `/balance` · `/multiquery` · POST `/switch` |
 | `/inventory` | `/thresholds` · `/cases` · `/stats` · `/cases/{id}` · POST `/cases/{id}/resolve` · PATCH · `/policies` |
 | `/reports` | `/` · `/latest` · `/{id}` |
@@ -68,7 +69,7 @@
 | 系统 | `/health`（含 build/migrations/schema_consistency/redis 探测）· `/metrics`（绕过 auth + CORS，供 K8s scrape） |
 | `/admin/email` | GET `/channel`（邮件通道健康只读：引擎 smtp/agently、凭据仅回布尔、beat 周期任务候选） |
 | `/approvals` | GET `/`（写操作审批单列表，支持 `status`/`limit`/`tool` 筛选）+ 审批放行/拒绝（副作用 Tool 审批门） |
-| `/cs`（智能客服） | 会话管理 `/cs/conversations`（列表/stats/`{id}`详情/events/rating/traces/close/claim/agent-messages/typing + `/my` 用户侧）· 坐席面 GET `/cs/handoff/queue` · POST `/cs/agent/ws-ticket`（坐席 WS 票据）· 坐席 offer：GET `/cs/agents/me/offers` · POST `.../{id}/accept` · `.../{id}/decline` · POST `/cs/handoffs/{id}/reassign`（主管重派，主管/admin）· 统一工单 `/cs/tickets` · 确认卡片 `/cs/**`（confirm_router）。**2026-10-07 STOP CS-A**：管理端读面租户/IDOR 全链显式收口（跨租户不可见，`b6c2dbd`）；坐席离线自愈与 handoff 状态机见根 AGENTS.md 客服段 |
+| `/cs`（智能客服） | 会话管理 `/cs/conversations`（列表/stats/`{id}`详情/events/rating/traces/close/claim/agent-messages/typing + `/my` 用户侧）· 坐席面 GET `/cs/handoff/queue` · POST `/cs/agent/ws-ticket`（坐席 WS 票据）· 坐席 offer：GET `/cs/agents/me/offers` · POST `.../{id}/accept` · `.../{id}/decline` · POST `/cs/handoffs/{id}/reassign`（主管重派，主管/admin）· 统一工单 `/cs/tickets` · 确认卡片 `/cs/**`（confirm_router）。**2026-10-07 STOP CS-A**：管理端读面租户/IDOR 全链显式收口（跨租户不可见，`b6c2dbd`）；坐席离线自愈与 handoff 状态机见根 AGENTS.md 客服段。**2026-10-08 转人工 A+B 案**（`883d9f3`）：会话轮询响应新增 `handoff_meta{handoff_id, handoff_state, total_deadline_at, queue_position}`（仅存在未关闭 handoff 时返回），支撑用户侧 30s 排队倒计时；超时由 reaper 关单并压缩诉求登记留言工单（GD- 单号） |
 
 ---
 
@@ -197,6 +198,11 @@ class ChatRequest(BaseModel):
     session_id: str = "default"
     kb_id: Optional[str] = None
     request_id: Optional[str] = "default"
+    # 入口域提示（2026-10-08 起 3 取值）：
+    #   customer_service/cs = 客服窗口锁域（直接进客服管线，不重新判域/不受灰度影响）
+    #   main/agent          = AI 助手页锁域（跳过旅游/选品/预订/商务域 prefilter，强信号改产 handoff 引导卡）
+    #   空                  = 全局入口按需路由
+    domain_hint: Optional[str] = ""
 
 class ChatResponse(BaseModel):
     answer: str
@@ -392,12 +398,18 @@ GET    /memory/sessions/{id}                       会话消息列表
 GET    /memory/sessions/{id}/context               Agent 工作上下文
 DELETE /memory/sessions/{id}                       删除级联消息
 PATCH  /memory/sessions/{id}                       重命名
+GET    /memory/profile?limit=50                    当前用户长期画像（只读，2026-10-08 `e715672`：
+                                                   preference/user_fact/decision/knowledge 全量
+                                                   eligible active 行；不做语义召回、不更新
+                                                   access_count，前端按 memory_type 分组渲染）
 ```
 
 ### 5.4 /observability（22 端点，2026-10-07 实测；此处节选高频面，全量以 `routes/observability.py` 为准）
 
 ```
-GET /observability/traces?limit=N        最近 N 条（SQLite，轻量）
+GET /observability/traces?limit=N        最近 N 条（SQLite，轻量）；支持 ?source=travel|cs|ai_assistant
+                                         来源三分类过滤（2026-10-08 #12，分类唯一出口
+                                         observability/trace_source.py；未知值忽略不 422）
 GET /observability/traces/active         活跃（contextvar / thread-local）
 GET /observability/traces/{id}           完整详情（内存 → SQLite 兜底）
 GET /observability/rag-traces            RAG 专用（向后兼容）
@@ -406,7 +418,8 @@ GET /observability/rag-traces/{id}
 GET /observability/metrics               指标
 GET /observability/resources             CPU/内存
 GET /observability/breakers              熔断器状态
-GET /observability/alerts                告警
+GET /observability/alerts                告警（能力健康度三色 severity：ok/warn/crit 分诊 +
+                                         span 错误摘要，2026-10-08 #11，error_taxonomy 七分类映射）
 GET /observability/graph                 拓扑图
 POST /observability/handoff/click        域引导卡点击埋点（多域隔离 M1；body {target_domain ∈ travel|customer_service|selection_funnel}，只计数不落明细，未知值 422）
 ```
