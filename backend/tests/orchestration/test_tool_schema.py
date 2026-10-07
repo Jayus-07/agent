@@ -77,7 +77,9 @@ class TestValidateParams:
 
     def test_string_value_rejected(self):
         err = validate_params(self.SCHEMA, {"num_results": "很多"})
-        assert err and "类型应为 integer" in err
+        # 消息格式随 schema_validator 演进带字段路径与类型列表
+        # （"$.num_results: 类型应为 ['integer']，实际为 str"），锁定语义不锁措辞
+        assert err and "integer" in err and "num_results" in err
 
     def test_bool_rejected_for_integer(self):
         err = validate_params(self.SCHEMA, {"num_results": True})

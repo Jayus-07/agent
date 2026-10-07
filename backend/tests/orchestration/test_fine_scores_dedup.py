@@ -19,8 +19,20 @@ def _cs(name, score):
     return SimpleNamespace(name=name, score=score)
 
 
+def _fake_router_with_vector(decision) -> HierarchicalRouter:
+    """构造自带假 vector 的 HierarchicalRouter（构造参数注入）。
+
+    路由层收口后 _fine_scores 直接用 self.vector（__init__ 自建真实
+    VectorRouter，测试环境无 embedding 供应商 Key 必然初始化失败 →
+    降级地板分），旧写法 monkeypatch get_router 不在调用路径上——
+    改为构造参数注入假 vector（只 mock 外部边界，不触真 DB）。
+    """
+    return HierarchicalRouter(
+        vector_router=SimpleNamespace(route=lambda q, top_k=8: decision),
+    )
+
+
 def test_fine_scores_takes_best_per_capability(monkeypatch):
-    hr = HierarchicalRouter()
     # route 返回 8 行：rag.search 两行（首行 0.640 正确、第 7 行 0.443）
     decision = SimpleNamespace(candidates=[
         _cs("rag.search", 0.640),
@@ -32,10 +44,7 @@ def test_fine_scores_takes_best_per_capability(monkeypatch):
         _cs("rag.search", 0.443),
         _cs("data.collect", 0.442),
     ])
-    monkeypatch.setattr(
-        "backend.orchestration.router.router.get_router",
-        lambda: SimpleNamespace(vector=SimpleNamespace(route=lambda q, top_k=8: decision)),
-    )
+    hr = _fake_router_with_vector(decision)
     cands = [SimpleNamespace(name="rag.search"), SimpleNamespace(name="web.search")]
     scores = hr._fine_scores("发票认证时限是多久", cands)
     assert scores["rag.search"] == 0.640, "同名 capability 必须取最优分"
@@ -61,12 +70,8 @@ def test_vector_route_dedupes_same_capability():
 
 def test_fine_scores_all_below_keeps_floor(monkeypatch):
     """未进 top-K 的候选给保底分 0.3（既有语义保持）。"""
-    hr = HierarchicalRouter()
     decision = SimpleNamespace(candidates=[_cs("web.search", 0.453)])
-    monkeypatch.setattr(
-        "backend.orchestration.router.router.get_router",
-        lambda: SimpleNamespace(vector=SimpleNamespace(route=lambda q, top_k=8: decision)),
-    )
+    hr = _fake_router_with_vector(decision)
     cands = [SimpleNamespace(name="rag.search"), SimpleNamespace(name="web.search")]
     scores = hr._fine_scores("任何问题", cands)
     assert scores["rag.search"] == 0.3

@@ -379,6 +379,24 @@ class Skeleton:
     notes: list[str] = field(default_factory=list)
 
 
+def resolve_missing_candidates(
+    destination: str, existing: list[Poi], missing_names: list[str],
+) -> tuple[list[Poi], list[str]]:
+    """点名新地点的批量补全（局部改单通道，与 must_go 的 resolve_missing_places
+    同一 Provider 出口：共享缓存 / 3s 预算 / 坐标校验 / quota 软预算）。
+
+    Provider 未启用返回空（如实不补全，不伪造）；异常由调用方披露。
+    边界纪律：Provider 触点只允许在 services 层——graph 节点不得直连。
+    """
+    from backend.providers.travel.live import get_place_provider
+    from backend.providers.travel.live.tencent import resolve_missing_places
+
+    provider = get_place_provider()
+    if not provider.is_enabled():
+        return [], []
+    return resolve_missing_places(destination, list(existing), list(missing_names))
+
+
 def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
     """候选池检索（TRAVEL_POI_SOURCE: live | seed）+ 必去项 Provider 补全。
 
