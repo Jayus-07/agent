@@ -148,14 +148,15 @@ class TestRecordTokensMeta:
             finish_reason="stop",
         )
         # 使用仅存在于测试注册表的合成模型名，不把已下线的生产模型写进测试。
-        # 价格表注册价为 USD；成本计量出口已统一折算为 CNY：
-        # 0.00028 USD × 7.20 = 0.002016 CNY。
+        # Billing V2：注册价格为原生 USD；cost_usd 保留原生金额，
+        # cost_cny 是唯一记账金额（按 FX=7.20 折算）。
         import unittest.mock as mock
         with mock.patch.object(proxy_mod, "LLM_MODEL", _PRICING_TEST_MODEL):
             proxy_mod._record_tokens(r)
         meta = proxy_mod._last_call_meta_var.get()
-        assert meta["cost_usd"] == pytest.approx(0.002016, abs=1e-6)
-        assert meta["currency"] == "CNY"
+        assert meta["cost_cny"] == pytest.approx(0.002016, abs=1e-6)
+        assert meta["cost_usd"] == pytest.approx(0.00028, abs=1e-6)
+        assert meta["currency"] == "USD"
 
     def test_finish_reason_defaults_unknown_when_missing(self):
         r = self._fake_result(

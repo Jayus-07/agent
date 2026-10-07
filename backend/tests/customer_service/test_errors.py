@@ -129,7 +129,7 @@ class TestErrorUserMessagesMap:
             "AUTH_FAILED", "PERMISSION_DENIED", "VALIDATION_ERROR",
             "ORDER_NOT_FOUND", "BUSINESS_RULE", "RETRIEVAL_ERROR",
             "EXTERNAL_SERVICE", "DATABASE_ERROR", "ACTION_FAILED",
-            "HANDOFF_ERROR",
+            "HANDOFF_ERROR", "ACCOUNT_NOT_FOUND",
         }
         assert expected_codes == set(ERROR_USER_MESSAGES.keys())
 

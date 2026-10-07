@@ -36,11 +36,21 @@ def _doc(destination: str, fname: str, summary: str) -> dict:
     }
 
 
+def _patch_registry(monkeypatch, stub):
+    """Patch function-local import after PG fixtures may reload the module."""
+    import importlib
+
+    current_module = importlib.import_module(
+        "backend.rag.indexing.doc_registry_pg"
+    )
+    monkeypatch.setattr(current_module, "PostgresDocumentRegistry", lambda: stub)
+
+
 def test_doc_summary_returns_summary_for_matching_destination(monkeypatch):
     stub = StubRegistry([
         _doc("福州", "福州-景点-三坊七巷.md", "三坊七巷是福州历史文化街区。"),
     ])
-    monkeypatch.setattr(registry_module, "PostgresDocumentRegistry", lambda: stub)
+    _patch_registry(monkeypatch, stub)
 
     out = city_guide_service._doc_summary("福州")
 
@@ -53,6 +63,6 @@ def test_doc_summary_returns_none_for_other_destination(monkeypatch):
     stub = StubRegistry([
         _doc("福州", "福州-景点-三坊七巷.md", "三坊七巷是福州历史文化街区。"),
     ])
-    monkeypatch.setattr(registry_module, "PostgresDocumentRegistry", lambda: stub)
+    _patch_registry(monkeypatch, stub)
 
     assert city_guide_service._doc_summary("厦门") is None

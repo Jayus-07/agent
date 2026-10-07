@@ -3,7 +3,11 @@ from unittest.mock import patch
 
 import pytest
 
-from backend.customer_service.errors import AuthenticationError, DatabaseError
+from backend.customer_service.errors import (
+    AccountNotFoundError,
+    AuthenticationError,
+    DatabaseError,
+)
 from backend.customer_service.service.account_service import (
     AccountService,
 )
@@ -40,7 +44,7 @@ class TestQueryAccount:
     @patch(_EXEC_PATCH)
     def test_not_found(self, mock_exec, service):
         mock_exec.return_value = _make_sql_result([])
-        with pytest.raises(AuthenticationError):
+        with pytest.raises(AccountNotFoundError):
             service.query_account(user_id="999")
 
     @patch(_EXEC_PATCH)

@@ -107,19 +107,29 @@ class TestHandoffTimeoutRecovery:
         assert _recover_handoff_timeout(_cs_state()) is None
         store.clear("u_timeout_test", "s1")
 
-    def test_expired_handoff_recovered_to_ai_active(self):
+    def test_expired_handoff_recovered_to_ai_active(self, monkeypatch):
         from backend.customer_service.supervisor import _recover_handoff_timeout
         from backend.customer_service.handoff_store import get_handoff_store
 
         store = get_handoff_store()
         old = (datetime.now(timezone.utc) - timedelta(seconds=700)).isoformat()
-        store.save("u_timeout_test", "s1", {
+        active = {
             "handoff_state": "waiting_human",
             "trigger_type": "explicit_request",
             "ticket_id": "T1",
-        })
-        # 直接篡改缓存条目时间戳，避免测试等 600s
-        store._data[("u_timeout_test", "s1")]["updated_at"] = old
+            "updated_at": old,
+        }
+        # STOP CS-A P0-6 后 handoff store 读路径 DB-first；本单测只测
+        # Supervisor 超时裁决，注入事实源桩，避免依赖本机 PG/改 L1 缓存。
+        monkeypatch.setattr(
+            store, "get_active_handoff", lambda _user_id: active if active else None,
+        )
+
+        def _clear(_user_id, _session_id):
+            nonlocal active
+            active = None
+
+        monkeypatch.setattr(store, "clear", _clear)
 
         update = _recover_handoff_timeout(_cs_state())
         assert update is not None

@@ -121,7 +121,7 @@ def test_evaluate_marks_failed_on_runner_crash(eval_root, monkeypatch):
 
 def test_evaluator_mode_flags():
     assert _evaluator_mode(EvalConfig(module="rag")) == "self+ragas"
-    assert _evaluator_mode(EvalConfig(module="rag", ragas=True)) == "self+ragas"
+    assert _evaluator_mode(EvalConfig(module="rag", ragas=True)) == "ragas"
     assert _evaluator_mode(EvalConfig(module="rag", no_ragas=True)) == "self"
 
 

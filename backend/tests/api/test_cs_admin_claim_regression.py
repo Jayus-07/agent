@@ -68,8 +68,10 @@ class _FakeConversationManager:
     def __init__(self, db):
         self.db = db
 
-    async def get_or_create(self, conversation_id, user_id):
-        self.calls.append(("get_or_create", conversation_id, user_id))
+    async def get_or_create(self, conversation_id, user_id, **kwargs):
+        self.calls.append(
+            ("get_or_create", conversation_id, user_id, kwargs.get("tenant_id"))
+        )
         return object(), False
 
     async def escalate_to_human(self, conversation_id, agent_id, *, assigned_by):
@@ -112,7 +114,7 @@ async def test_claim_persists_conversation_assignment(monkeypatch):
         "already_claimed": False,
     }
     assert _FakeConversationManager.calls == [
-        ("get_or_create", "conv-1", "user-1"),
+        ("get_or_create", "conv-1", "user-1", "default"),
         ("escalate_to_human", "conv-1", "agent-1", "agent-1"),
     ]
     assert db.committed is True

@@ -162,5 +162,9 @@ class TestRecordSqlColumns:
         )
         for col in ("skill_id", "tool_id", "agent_domain"):
             assert col in columns, f"record() INSERT 缺归因列 {col}"
-        # 归因三列的值位置正确（最后四个 = skill/tool/domain/created_at）
-        assert values[-4] == "rag" and values[-3] == "t" and values[-2] == "travel"
+        # 归因三列的值位置正确；Billing V2 在其后新增多列，不能再用
+        # “最后四个”这种会随 schema 演进失效的 positional 断言。
+        by_column = dict(zip(columns, values))
+        assert by_column["skill_id"] == "rag"
+        assert by_column["tool_id"] == "t"
+        assert by_column["agent_domain"] == "travel"
