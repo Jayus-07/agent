@@ -105,9 +105,19 @@ function stableSerialize(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(",")}}`;
 }
 
-export function createIdempotencyKey(): string {
+/**
+ * crypto.randomUUID 的非安全上下文降级。
+ * HTTP 部署（如 ECS 公网 IP）下 window.isSecureContext=false，randomUUID
+ * 不存在直接抛 TypeError——批量上传/删除在生成 batchId 时就会挂死且无提示
+ * （2026-10-08 ECS 实测）。凡需要随机 ID 的新代码一律走本函数，禁止裸调 randomUUID。
+ */
+export function randomId(prefix = "id"): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  return `idem-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+export function createIdempotencyKey(): string {
+  return randomId("idem");
 }
 
 export interface MutationFetchRawOptions extends RequestInit {
