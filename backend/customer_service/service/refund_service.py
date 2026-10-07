@@ -63,6 +63,64 @@ class RefundService:
             status=status,
         )
 
+    def fetch_policy_window_days(self) -> int:
+        """退款窗口天数（2026-10-08 拍板：政策驱动而非写死）。
+
+        RAG 检索知识库最新退款政策 → 从政策原文解析「N 天」→ 兜底
+        RETURN_WINDOW_DAYS 常量。检索/解析任何失败都退回兜底值，绝不
+        让政策查询阻塞退款主流程。
+        """
+        try:
+            import re
+
+            from backend.rag.pipeline import get_rag_pipeline
+
+            docs = get_rag_pipeline().retrieve_documents(
+                question="退款政策 下单后多少天内可以申请退款退货",
+                kb_id="cs_faq", top_k=3, subject_type="customer",
+            )
+            for doc in docs:
+                content = str(getattr(doc, "page_content", "") or "")
+                m = re.search(r"(?:下单[后起])?(\d+)\s*天[内之]", content)
+                if m:
+                    days = int(m.group(1))
+                    if 1 <= days <= 90:
+                        logger.info(
+                            "[RefundService] 退款政策窗口: %s天（RAG 政策解析）", days,
+                        )
+                        return days
+            logger.info("[RefundService] 政策未解析出窗口天数，退回默认 %s 天",
+                        self.RETURN_WINDOW_DAYS)
+        except Exception as e:
+            logger.warning("[RefundService] 退款政策检索失败，用默认窗口: %s", e)
+        return self.RETURN_WINDOW_DAYS
+
+    def list_refund_candidates(self, user_id: str) -> dict:
+        """退款候选列表（点选数据源）：政策窗口 → 可退订单（联商品名）。
+
+        Returns:
+            {"window_days": int, "candidates": [
+                {"order_id", "order_no", "product_names", "amount", "status"},
+            ]}
+        """
+        window_days = self.fetch_policy_window_days()
+        from backend.customer_service.service.order_service import get_order_service
+
+        rows = get_order_service().list_refundable_orders(
+            user_id, window_days=window_days,
+        )
+        candidates = [
+            {
+                "order_id": str(r.get("id") or r.get("order_no", "")),
+                "order_no": str(r.get("order_no", "")),
+                "product_names": str(r.get("product_names") or ""),
+                "amount": float(r.get("total_amount") or 0),
+                "status": str(r.get("status") or ""),
+            }
+            for r in rows
+        ]
+        return {"window_days": window_days, "candidates": candidates}
+
     def build_refund_proposal(
         self, user_id: str, order_id: str, reason: str = ""
     ) -> ActionProposal:
