@@ -76,7 +76,11 @@ def recommend_cities(
 
 
 def render_recommendation_line(recs: list[CityRecommendation]) -> str:
-    """推荐结果 → 追问文案里的一行（供 build_clarification 拼接）。"""
+    """推荐结果 → 追问文案里的一行（供 build_clarification 拼接）。
+
+    口径：所有推荐都未命中偏好标签（典型=新用户无偏好，纯热度榜）时，
+    前缀改用「热门城市」，避免「根据你的偏好」的无个性化误导（2026-10-07 实测反馈）。
+    """
     if not recs:
         return ""
     parts: list[str] = []
@@ -88,4 +92,6 @@ def render_recommendation_line(recs: list[CityRecommendation]) -> str:
             )
         else:
             parts.append(f"{r.city}（{'/'.join(r.highlights)}）")
-    return "根据你的偏好，可以先看看：" + "；".join(parts)
+    personalized = any(r.matched_preferences for r in recs)
+    prefix = "根据你的偏好，可以先看看：" if personalized else "可以先看看这些热门城市："
+    return prefix + "；".join(parts)

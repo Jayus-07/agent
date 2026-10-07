@@ -39,16 +39,20 @@ RUN if [ -n "$DEBIAN_MIRROR" ]; then \
 
 WORKDIR /build
 
-# 依赖单独成层：pyproject.toml 未变时命中缓存
+# 依赖单独成层：依赖声明与 Torch 约束未变时命中缓存
 COPY pyproject.toml ./
-# torch+cpu 传递依赖（ragas/sentence-transformers 族引入）：官方 extra-index
-# 在 fake-ip 构建网络不可达且镜像无 +cpu 版会挂死下载（2026-10-06 实测两次），
-# EXTRA_INDEX_URL 可传国内 pytorch-wheels 镜像（mirrors.aliyun.com/pytorch-wheels/cpu/）。
-ARG EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
+COPY constraints/torch-cpu.txt ./constraints/torch-cpu.txt
+# sentence-transformers 会传递引入 Torch。仅追加 CPU 索引会让 pip 在所有索引
+# 中选择最高版本，可能从 PyPI 拉入整套 CUDA 依赖；先装 CPU wheel 并用约束锁定。
+ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
+    && /opt/venv/bin/pip install --no-deps \
+        --index-url ${TORCH_CPU_INDEX_URL} \
+        -r constraints/torch-cpu.txt \
     && /opt/venv/bin/pip install -e ".[postgres,ragas]" \
-        --extra-index-url ${EXTRA_INDEX_URL}
+        --constraint constraints/torch-cpu.txt \
+        --extra-index-url ${TORCH_CPU_INDEX_URL}
 
 # ════════════════════════════════════════════════
 # Stage 2 — runtime：最小运行时镜像
@@ -97,6 +101,8 @@ WORKDIR /app
 COPY backend/ ./backend/
 # 2026-09-21：alembic 退役，迁移统一走 scripts/init_db.py（已随 scripts/ 拷入）
 COPY mcp_servers/ ./mcp_servers/
+# appuser(uid 10001) 运行时要在代码目录下建 data/uploads（routes/data.py 模块导入期 mkdir；2026-10-07 容器部署实测 PermissionError 崩溃循环）
+RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/data
 COPY scripts/ ./scripts/
 
 USER appuser

@@ -430,6 +430,20 @@ docker compose down               # ⚠️ 加 -v 会连数据卷一起删
 
 `devctl backend` 只操作 compose 的 `app` 服务，**不会**动 postgres / redis / apisix / rag-service / mcp-service / worker。
 
+### 前端容器化部署（override）
+
+三个前端不在主 compose 里（本地开发走 devctl/node 进程）；生产容器化用 override 叠加声明（2026-10-07 阿里云 ECS 实测）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.public.yml build web admin-web cs-web
+docker compose -f docker-compose.yml -f docker-compose.public.yml up -d web admin-web cs-web
+```
+
+- 端口：web `:80`、admin-web `:8080`、cs-web `:8082`（8081 被 business-mock 占用，错位）；容器内统一 3000（standalone 输出）。
+- 容器 env：`API_URL=http://apisix:9080`（BFF 服务端转发）+ `API_KEY`（BFF 注入 `X-API-Key`，缺省=全接口 401）。
+- 门户跨应用跳转：`NEXT_PUBLIC_ADMIN_URL` / `NEXT_PUBLIC_CS_URL` 是**编译期**变量，需经 web 服务 build.args 注入，改地址要重建镜像。
+- ⚠️ `docker compose build`/`stash` 前勿删 override 文件——它未入 git 时（历史版本）构建会因缺文件失败；现已随仓库维护。
+
 ### 非 Windows 环境（macOS / Linux）
 
 一键启停脚本目前是 Windows 批处理，其他平台用等价的 compose / node 命令即可，功能无差异：
