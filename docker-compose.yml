@@ -958,8 +958,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: "0.5"
+          # 2026-10-07：512m 不够——运行时实测 493MiB（96.5%）贴近上限，GC 压力
+          # 导致 HTTP 不响应（health 超时、页面挂起，restarts=2 同因）。调到 1g
+          # 并放宽 CPU（7 张看板 + 插件后台安装的真实占用）。
+          memory: 1g
+          cpus: "1.0"
 
   # ── Alertmanager（B4：告警只响不给的触达修复，observability profile）──
   # Prometheus 40+ 条规则触发后经本服务外推：webhook receiver（generic JSON，

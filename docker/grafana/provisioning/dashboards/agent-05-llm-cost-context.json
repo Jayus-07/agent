@@ -913,7 +913,7 @@
       "description": null,
       "targets": [
         {
-          "expr": "sum(rate(llm_tokens_total{model=~\"$model\", ,direction=\"prompt\"}[5m])) by (model)",
+          "expr": "sum(rate(llm_tokens_total{model=~\"$model\",direction=\"prompt\"}[5m])) by (model)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -922,7 +922,7 @@
           "legendFormat": "prompt · {{model}}"
         },
         {
-          "expr": "sum(rate(llm_tokens_total{model=~\"$model\", ,direction=\"completion\"}[5m])) by (model)",
+          "expr": "sum(rate(llm_tokens_total{model=~\"$model\",direction=\"completion\"}[5m])) by (model)",
           "refId": "B",
           "datasource": {
             "type": "prometheus",

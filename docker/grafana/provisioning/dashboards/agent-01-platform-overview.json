@@ -435,7 +435,7 @@
       "description": null,
       "targets": [
         {
-          "expr": "rag_hit_rate * 100",
+          "expr": "max(rag_hit_rate) * 100",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
