@@ -34,10 +34,8 @@ function RegisterForm() {
   const redirect = searchParams.get("redirect") || "/agent";
 
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [company, setCompany] = useState("");
   const [agree, setAgree] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -84,10 +82,6 @@ function RegisterForm() {
       setError("请输入有效的 11 位手机号");
       return;
     }
-    if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
-      setError("邮箱格式不正确");
-      return;
-    }
     if (password.length < 8 || password.length > 20) {
       setError("密码长度需为 8-20 个字符");
       return;
@@ -107,9 +101,9 @@ function RegisterForm() {
 
     setLoading(true);
     try {
-      // 手机号作为注册账号；邮箱 / 企业名称为 best-effort 附加字段
+      // 2026-10-07 用户拍板：注册只收 手机号+密码+验证码（邮箱/企业名字段已移除）
       try {
-        await register(phone.trim(), password, confirm, company.trim() || undefined,
+        await register(phone.trim(), password, confirm, undefined,
           captcha ? { ticket: captcha.ticket, code: captchaCode.trim() } : undefined);
       } catch (regErr) {
         // 验证码一码一用：无论对错都已销毁，换图让用户重填
@@ -194,15 +188,6 @@ function RegisterForm() {
             onChange={(e) => setPhone(e.target.value)}
           />
           <AuthInput
-            label="邮箱（选填）"
-            accent={ACCENT}
-            type="email"
-            autoComplete="email"
-            placeholder="用于找回密码与接收通知"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-          <AuthInput
             label="设置密码"
             accent={ACCENT}
             type="password"
@@ -219,14 +204,6 @@ function RegisterForm() {
             placeholder="请再次输入密码"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
-          />
-          <AuthInput
-            label="企业 / 团队名称（选填）"
-            accent={ACCENT}
-            type="text"
-            placeholder="用于创建你的工作空间"
-            value={company}
-            onChange={(e) => setCompany(e.target.value)}
           />
         </div>
 
