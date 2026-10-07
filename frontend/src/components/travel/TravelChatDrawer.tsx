@@ -53,6 +53,18 @@ interface ChatMsg {
 }
 
 /**
+ * 移动端聊天的三个可调手感参数（2026-10-07）。
+ * 抽成常量：用户对「打字多快 / 多长该折 / 打字时占多高」的感受是主观的，
+ * 改的时候不用翻遍组件——这三个数就是全部旋钮。
+ */
+export const CHAT_TUNING = {
+  /** 超过多少字，打完后折成一行摘要（点开看全文）。短于此直接显示不折 */
+  FOLD_AFTER_CHARS: 600,
+  /** 打字过程中正文限高（px）——防止未完成的千字行程糊满整屏 */
+  TYPEWRITER_MAX_H: 220,
+} as const
+
+/**
  * 打字机渐显 + 长文打完自动折叠（2026-10-07 用户口径：
  * 「不管问什么都会一直显示非常长的一页行程在聊天框」）。
  *
@@ -78,7 +90,7 @@ function TypedAssistantText({
   const shown = useTypewriter(text, animate)
   const done = shown.length >= text.length
   // 折叠阈值：与旧的 600 字口径一致，避免短回复被无谓折叠
-  const isLong = text.length > 600
+  const isLong = text.length > CHAT_TUNING.FOLD_AFTER_CHARS
   const [expanded, setExpanded] = useState(false)
   // 长文打字过程中先「点一下立刻出全文」：AI 吐字两秒没人愿意干等
   const [skipped, setSkipped] = useState(false)
@@ -99,7 +111,8 @@ function TypedAssistantText({
   if (!done && animate && !skipped) {
     return (
       <div>
-        <div className="markdown-body travel-md max-h-[220px] overflow-hidden leading-relaxed">
+        <div className="markdown-body travel-md overflow-hidden leading-relaxed"
+          style={{ maxHeight: CHAT_TUNING.TYPEWRITER_MAX_H }}>
           <MarkdownContent content={shown} />
         </div>
         <button
