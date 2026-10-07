@@ -49,6 +49,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const setHandoffState = useCSChatStore((s) => s.setHandoffState)
   const newSession = useCSChatStore((s) => s.newSession)
   const pendingProposal = useCSChatStore((s) => s.pendingProposal)
+  const candidateOptions = useCSChatStore((s) => s.candidateOptions)
   const agentTyping = useCSChatStore((s) => s.agentTyping)
   const addMessage = useCSChatStore((s) => s.addMessage)
   const setPendingProposal = useCSChatStore((s) => s.setPendingProposal)
@@ -272,6 +273,29 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                   onConfirm={() => handleConfirmAction('confirm')}
                   onCancel={() => handleConfirmAction('cancel')}
                 />
+              )}
+              {candidateOptions && candidateOptions.length > 0 && (
+                <div className="px-3 mb-4 ml-11">
+                  <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3">
+                    <p className="text-xs font-medium text-sky-700 mb-2">
+                      点选要办理的订单（也可直接回复序号）
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {candidateOptions.map((opt, i) => (
+                        <button
+                          key={opt.id || i}
+                          onClick={() => handleSend(opt.label)}
+                          disabled={isLoading}
+                          className="text-left text-sm text-sky-900 bg-white border
+                            border-sky-200 rounded-lg px-3 py-2 hover:bg-sky-100
+                            transition-colors disabled:opacity-50"
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               )}
               {showRatingCard && (
                 <CSSatisfactionCard
