@@ -239,6 +239,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     # （billing_schema_version/native/billed_cost_cny/fx/price_version 等），
     # currency='CNY' 历史行可信回填，USD/空币种行保 legacy 不猜。
     "079_llm_usage_billing_v2.sql": "memory",
+    # 线上问题台账（2026-10-08 #13）：候选评测集供给侧，旁路软失败写入，
+    # 管理端 data-explorer「问题收集」tab 消费（与 trace_summary 同层观测数据）。
+    "080_question_ledger.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

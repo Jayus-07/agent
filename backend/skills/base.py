@@ -578,8 +578,22 @@ class BaseSkill(ABC):
                           error_type="permission" if pending_approval else "invalid_param",
                           finished_at=time.time())
                 step_results[sr["step_id"]] = dict(sr)
+                # 后置校验失败要带上原始原因与健康度分级标记（2026-10-08 #11）：
+                # 只有 "validation:semantic" 层名时管理端无法分诊「未配置」与
+                # 真故障；reason 在 ValidationFailure.envelope.details。
+                _fail_reason = ""
+                try:
+                    _fail_reason = str(
+                        (getattr(e.envelope, "details", None) or {}).get("reason") or "")
+                except Exception:  # noqa: BLE001 — 观测增强不改变失败路径
+                    _fail_reason = ""
+                from backend.observability.error_taxonomy import is_not_configured_text
+
                 trace_collector.end_span(tool_span, status="error",
-                    metrics={"error": f"validation:{e.layer}", "retries": result.retry_count,
+                    metrics={"error": f"validation:{e.layer}",
+                             "error_detail": _fail_reason[:200],
+                             "not_configured": is_not_configured_text(_fail_reason),
+                             "retries": result.retry_count,
                              **(contract_md or {})})
                 logger.warning(f"[{self.name}] step={sr['step_id']} 输出校验失败: {e.layer}")
                 return

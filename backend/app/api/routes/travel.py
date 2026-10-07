@@ -211,6 +211,21 @@ def _finish_travel_trace(trace, started_at: float, result: dict,
             model="travel",
             provider="travel_graph",
         )
+        # 线上问题台账（2026-10-08 #13）：question 在入口已过 PII 掩码；
+        # 旁路软失败且独立兜底，不能影响上面的 trace 收口语义
+        try:
+            from backend.observability.question_ledger import (
+                record_question_from_trace,
+            )
+
+            record_question_from_trace(
+                trace,
+                domain="travel",
+                answer_summary=result.get("final_answer") or "",
+                source="travel",
+            )
+        except Exception:  # noqa: BLE001 — 台账断流不影响主流程
+            logger.debug("[TravelAPI] 问题台账写入失败", exc_info=True)
     except Exception:  # noqa: BLE001 — 观测旁路软失败
         logger.debug("[TravelAPI] Trace 收口失败", exc_info=True)
 

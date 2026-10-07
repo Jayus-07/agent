@@ -225,6 +225,44 @@ class OrderService:
             query_type="list",
         )
 
+    def list_recent_orders_with_products(
+        self, user_id: str, limit: int = 20,
+    ) -> list[dict]:
+        """近期订单列表（含商品名，语义槽位解析数据源，2026-10-08）。
+
+        与 list_refundable_orders 的区别：不过滤状态/政策窗口 —— 语义
+        引用（「买耳机的那笔」）针对用户全部近期订单，状态筛选是调用方
+        （动作资格校验）的职责。http 网关模式暂不支持（返回空，上层走
+        既有降级路径）。
+        """
+        if _use_http_gateway():
+            return []
+
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        user_id = resolve_user_id(user_id)
+        from backend.sql.executor import execute_sql_struct
+
+        sql = """
+            SELECT o.id, o.order_no, o.total_amount, o.status, o.created_at,
+                   COALESCE((
+                       SELECT string_agg(DISTINCT p.product_name, '、')
+                       FROM "order".order_items oi
+                       LEFT JOIN product.products p ON p.id = oi.product_id
+                       WHERE oi.order_id = o.id
+                   ), '') AS product_names
+            FROM "order".orders o
+            WHERE o.customer_id::text = %(user_id)s
+            ORDER BY o.created_at DESC
+            LIMIT %(limit)s
+        """
+        result = execute_sql_struct(
+            sql, params={"user_id": str(user_id), "limit": int(limit)},
+        )
+        if result.status not in ("success", "no_data"):
+            raise DatabaseError(f"查询近期订单失败: {result.error}")
+        return list(result.rows or [])
+
     def list_refundable_orders(
         self, user_id: str, window_days: int = 7, limit: int = 5,
     ) -> list[dict]:

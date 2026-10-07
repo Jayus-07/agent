@@ -66,10 +66,18 @@ _LOGISTICS_HINT = re.compile(
 )
 
 _ORDINAL_ORDER = re.compile(r"第([一二三四五六七八九十百0-9]+)(?:个)?订单")
+# 裸序数指称（2026-10-08 golden #3）：上一轮刚列出订单清单后，用户回复
+# 「第二个」「第2单」——整条消息就是序数指称时无须「订单」后缀。
+# 仅整句匹配（防「第二个问题」类误绑定），且要求 recent_order_ids 非空。
+_ORDINAL_BARE = re.compile(r"^第([一二三四五六七八九十百0-9]+)[个单笔张份]?$")
 _CN_ORDINAL = {
     "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
     "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
 }
+
+
+def _parse_ordinal_index(token: str) -> int:
+    return int(token) if token.isdigit() else _CN_ORDINAL.get(token, 0)
 
 
 @dataclass
@@ -219,11 +227,13 @@ def resolve_turn_reference(
 
     recent = get_recent_business_context(tenant_id, user_id, session_id)
     order_id = (recent or {}).get("last_order_id") or ""
+    order_ids = list((recent or {}).get("recent_order_ids") or [])
     ordinal = _ORDINAL_ORDER.search(query)
-    if ordinal:
-        token = ordinal.group(1)
-        index = int(token) if token.isdigit() else _CN_ORDINAL.get(token, 0)
-        order_ids = list((recent or {}).get("recent_order_ids") or [])
+    bare_ordinal = _ORDINAL_BARE.match(query.strip())
+    if ordinal or bare_ordinal:
+        token = (ordinal or bare_ordinal).group(1)
+        index = _parse_ordinal_index(token)
+        # 序数解析必须有上一轮订单清单兜底：没有列表 = 无从索引，不猜
         if index <= 0 or index > len(order_ids):
             return None
         order_id = str(order_ids[index - 1]).strip()
@@ -236,7 +246,7 @@ def resolve_turn_reference(
     if _REFERENCE_NEGATIVE.search(query):
         return None
 
-    if not ordinal and not (
+    if not ordinal and not bare_ordinal and not (
         _REFERENCE_PRONOUN.search(query) and _REFERENCE_PREDICATE.search(query)
     ):
         return None  # 不是订单回指表达：照常路由，不强行注入

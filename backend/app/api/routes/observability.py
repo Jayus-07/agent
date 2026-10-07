@@ -85,6 +85,7 @@ from backend.app.api.routes._trace_dto import (  # noqa: E402
     stored_dict_to_dto as _stored_dict_to_dto,
     backfill_usage_from_llm_store as _backfill_usage,
 )
+from backend.observability.error_taxonomy import is_not_configured_text  # noqa: E402
 from backend.observability.trace_source import (  # noqa: E402
     SOURCE_AI_ASSISTANT,
     SOURCE_CS,
@@ -478,17 +479,44 @@ async def skill_health(limit: int = Query(200, ge=1, le=1000)):
             s = stats.setdefault(name, {
                 "name": name, "type": sp_type,
                 "total": 0, "success": 0, "error": 0, "skipped": 0,
+                # 展示分级（2026-10-08 #11）：neutral = 未配置/策略拦截——
+                # 不是能力故障，前端三色展示里归灰；real_errors 才是红。
+                "neutral": 0, "real_errors": 0, "last_error_kind": "",
                 "duration_sum_ms": 0, "retries": 0,
                 "last_status": "", "last_error": "", "last_ts": "",
+                "_last_err_ts": "",
             })
             s["total"] += 1
             if status == "success":
                 s["success"] += 1
             elif status in ("error", "failed"):
                 s["error"] += 1
-                err = _get(sp, "error", None)
-                if err and not s["last_error"]:
-                    s["last_error"] = str(err)[:200]
+                metrics = _get(sp, "metrics", {}) or {}
+                # 错误摘要回退链（#11）：span.error 字段多数失败路径不填，
+                # 真正的消息在 metrics.error / metrics.error_detail 里——
+                # 只有这样「最近失败」才不是恒空。
+                err_text = str(
+                    _get(sp, "error", None)
+                    or metrics.get("error_detail")
+                    or metrics.get("error")
+                    or "")
+                if (metrics.get("decision") == "deny"
+                        or str(metrics.get("reason_code") or "").endswith("_DENIED")):
+                    kind = "denied"
+                elif (metrics.get("not_configured")
+                        or is_not_configured_text(err_text)):
+                    kind = "not_configured"
+                else:
+                    kind = "failure"
+                if kind == "denied" and not err_text:
+                    # sql.guard 拦截 span 只有 decision/reason_code 没有消息键
+                    err_text = f"策略拦截：{metrics.get('reason_code') or 'policy_denied'}"
+                if kind in ("denied", "not_configured"):
+                    s["neutral"] += 1
+                if err_text and ts >= s["_last_err_ts"]:
+                    s["_last_err_ts"] = ts
+                    s["last_error"] = err_text[:200]
+                    s["last_error_kind"] = kind
             elif status == "skipped":
                 s["skipped"] += 1
             s["duration_sum_ms"] += duration
@@ -500,6 +528,8 @@ async def skill_health(limit: int = Query(200, ge=1, le=1000)):
     items = []
     for s in stats.values():
         executed = s["success"] + s["error"]
+        s["real_errors"] = s["error"] - s["neutral"]
+        s.pop("_last_err_ts", None)
         items.append({
             **s,
             "avg_duration_ms": round(s["duration_sum_ms"] / s["total"]) if s["total"] else 0,

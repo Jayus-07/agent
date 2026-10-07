@@ -28,12 +28,18 @@ interface SkillHealth {
   total: number
   success: number
   error: number
+  /** 展示分级（2026-10-08 #11）：未配置/策略拦截的失败数——不是能力故障 */
+  neutral?: number
+  /** 真故障数 = error - neutral；红/灰三色以此为准 */
+  real_errors?: number
   skipped: number
   retries: number
   avg_duration_ms: number
   success_rate: number | null
   last_status: string
   last_error: string
+  /** 最近失败的分级：failure=真故障（红）/ denied|not_configured=中性（灰） */
+  last_error_kind?: string
   last_ts: string
 }
 
@@ -159,27 +165,43 @@ export default function DegradationAlertsPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
               {health.slice(0, 10).map((s) => {
                 const rate = s.success_rate
+                // 三色分诊（2026-10-08 #11）：只有真故障才红/黄；
+                // 「全是未配置/拦截」的灰显 + 中性徽标，不再整页红。
+                const realErrors = s.real_errors ?? s.error
+                const neutral = s.neutral ?? 0
+                const onlyNeutral = realErrors === 0 && neutral > 0
                 const rateColor =
                   rate === null ? 'bg-slate-100 text-slate-500'
-                  : rate >= 0.95 ? 'bg-emerald-100 text-emerald-700'
+                  : onlyNeutral ? 'bg-slate-100 text-slate-500'
+                  : realErrors === 0 ? 'bg-emerald-100 text-emerald-700'
                   : rate >= 0.8 ? 'bg-amber-100 text-amber-700'
                   : 'bg-red-100 text-red-700'
+                const badgeText = onlyNeutral ? `拦截/未配置 ${neutral}` : rate === null ? '--' : `${(rate * 100).toFixed(0)}%`
+                const errKindNeutral = s.last_error_kind === 'denied' || s.last_error_kind === 'not_configured'
                 return (
                   <div key={s.name} className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-slate-700 truncate" title={s.name}>{s.name}</span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${rateColor}`}>
-                        {rate === null ? '--' : `${(rate * 100).toFixed(0)}%`}
+                        {badgeText}
                       </span>
                     </div>
                     <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] text-slate-500">
                       <span>调用 <b className="text-slate-700 font-mono">{s.total}</b></span>
-                      <span>失败 <b className={s.error > 0 ? 'text-red-600 font-mono' : 'text-slate-700 font-mono'}>{s.error}</b></span>
+                      <span>失败 <b className={realErrors > 0 ? 'text-red-600 font-mono' : 'text-slate-700 font-mono'}>{realErrors}</b></span>
                       <span>均值 <b className="text-slate-700 font-mono">{s.avg_duration_ms}ms</b></span>
                       <span>重试 <b className={s.retries > 0 ? 'text-orange-600 font-mono' : 'text-slate-700 font-mono'}>{s.retries}</b></span>
+                      {neutral > 0 && (
+                        <span className="col-span-2">未配置/拦截 <b className="text-slate-400 font-mono">{neutral}</b>（非故障，配置后自动恢复）</span>
+                      )}
                     </div>
                     {s.last_error && (
-                      <p className="text-[10px] text-red-500 truncate" title={s.last_error}>最近失败: {s.last_error}</p>
+                      <p
+                        className={`text-[10px] truncate ${errKindNeutral ? 'text-slate-400' : 'text-red-500'}`}
+                        title={s.last_error}
+                      >
+                        最近失败: {s.last_error}
+                      </p>
                     )}
                   </div>
                 )

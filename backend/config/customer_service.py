@@ -189,8 +189,7 @@ CS_WINDOW_STANDALONE = os.getenv("CS_WINDOW_STANDALONE", "true").strip().lower()
 
 # ── 坐席辅助（agent assist，AI 给人工坐席实时推荐回复）────────
 # 总开关：关闭后 hub 不再调度生成任务，前端无推荐事件（默认开启，失败静默）
-CS_AGENT_ASSIST_ENABLED = os.getenv("CS_AGENT_ASSIST_ENABLED", "true").strip().lower() in ("1", "true", "yes")
-# 单次推荐最多条数
+CS_AGENT_ASSIST_ENABLED = os.getenv("CS_AGENT_ASSIST_ENABLED", "true").strip().lower() in ("1", "true", "yes")# 单次推荐最多条数
 CS_AGENT_ASSIST_TOP_K = max(1, min(5, int(os.getenv("CS_AGENT_ASSIST_TOP_K", "3"))))
 # 单次生成总超时（秒）：超时静默放弃，绝不阻塞消息主链路。
 # 默认 15s：实测 RAG+LLM 一次生成 10-50s（首次调用含模型加载更久），
@@ -200,6 +199,22 @@ CS_AGENT_ASSIST_TIMEOUT_SECONDS = float(os.getenv("CS_AGENT_ASSIST_TIMEOUT_SECON
 CS_AGENT_ASSIST_MAX_CONCURRENCY = max(1, int(os.getenv("CS_AGENT_ASSIST_MAX_CONCURRENCY", "4")))
 # 参与推荐的最近消息条数
 CS_AGENT_ASSIST_HISTORY_LIMIT = max(2, int(os.getenv("CS_AGENT_ASSIST_HISTORY_LIMIT", "10")))
+
+# ── LLM 语义理解层 + Response Composer（2026-10-08 客服域 LLM 收口）──
+# 意图补判（Rule First：规则明确时 LLM=0 次；失败回规则路由软降级）
+CS_UNDERSTANDING_LLM_ENABLED = os.getenv("CS_UNDERSTANDING_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+CS_UNDERSTANDING_LLM_TIMEOUT_MS = int(os.getenv("CS_UNDERSTANDING_LLM_TIMEOUT_MS", "2500"))
+# 语义槽位补全（LLM 只出语义引用候选，真实 ID 由业务数据解析）
+CS_SLOT_LLM_ENABLED = os.getenv("CS_SLOT_LLM_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+CS_SLOT_LLM_TIMEOUT_MS = int(os.getenv("CS_SLOT_LLM_TIMEOUT_MS", "2500"))
+# LLM 意图候选采纳后的路由置信度（固定保守值 > CS_CONFIDENCE_CAUTIOUS；
+# 不采信 LLM 自报分数驱动路由，自报值只进 trace）
+CS_LLM_INTENT_CONFIDENCE = float(os.getenv("CS_LLM_INTENT_CONFIDENCE", "0.65"))
+# Response Composer（query/complaint 回复 LLM 转写；action/handoff 恒模板）
+CS_RESPONSE_COMPOSER_ENABLED = os.getenv("CS_RESPONSE_COMPOSER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+CS_RESPONSE_COMPOSER_TIMEOUT_MS = int(os.getenv("CS_RESPONSE_COMPOSER_TIMEOUT_MS", "6000"))
+# 确认语义 LLM 候选（词表 NONE 时的补判；词表已覆盖 P0 模糊确认案例，默认关）
+CS_CONFIRM_LLM_CANDIDATE_ENABLED = os.getenv("CS_CONFIRM_LLM_CANDIDATE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
 # ── 业务网关（批次B：客服业务服务经 HTTP 调真实业务系统）────────
 # sandbox（默认）：直查内部演示库 + demo 身份映射，行为与历史版本一致

@@ -720,6 +720,20 @@ def _record_decision(decision: CSSupervisorDecision) -> None:
             decision["decision_layer"], "unknown"
         )
         record_cs_supervisor_decision(layer_label, decision["next_action"])
+        # cs_supervisor_decision_source（2026-10-08 LLM 收口）：trace 归因
+        # rule/llm/fallback——L7 规则降级（LLM 不可用/白名单无效）必须与
+        # LLM 真实决策可区分（P0-23）。
+        from backend.observability.tracer import trace_collector
+        tracer = trace_collector.current()
+        if tracer is not None:
+            if decision["decision_layer"] == 3:
+                source = (
+                    "fallback" if "LLM 决策不可用" in decision.get("reason", "")
+                    else "llm"
+                )
+            else:
+                source = "rule"
+            tracer.tags["cs_supervisor_decision_source"] = source
     except Exception:
         pass
 

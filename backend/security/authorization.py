@@ -45,6 +45,13 @@ ROLE_PERMISSION_CODES: dict[str, frozenset[str]] = {
         "admin.users.read", "admin.users.write",
         "sql.read",
     }),
+    # service_workflow（2026-10-08 #10 定时工作流服务身份）：APScheduler
+    # 触发的系统工作流（inventory_alert/daily_report）以 svc:workflow:<名>
+    # 机器主体执行确定性 SQL。只授 sql.read；六层 SQL 安全（只读校验/
+    # 表白名单/敏感列/函数白名单/LIMIT/readonly 连接角色）不因服务身份
+    # 豁免。仅在 scheduler._run_async 绑定（security/service_identity.py），
+    # 手动触发保留调用者真人身份。
+    "service_workflow": frozenset({"sql.read"}),
 }
 
 # 角色 → 数据范围（未来 SQL 行级收敛的表达位；多角色取最宽）
@@ -54,6 +61,9 @@ ROLE_DATA_SCOPE: dict[str, str] = {
     "editor": "department",
     "admin": "all",
     "super_admin": "all",
+    # 服务主体按 all：定时工作流是全库扫描语义（库存预警/日报），
+    # 行级 self/department 对机器主体无意义；仍受表白名单等其余层约束。
+    "service_workflow": "all",
 }
 
 

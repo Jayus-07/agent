@@ -140,16 +140,24 @@ class ComplaintService:
                 if content.startswith("json"):
                     content = content[4:]
             data = json.loads(content)
-            if (
-                isinstance(data, dict)
-                and isinstance(data.get("is_complaint"), bool)
-                and data.get("severity") in ("low", "medium", "high")
-            ):
-                logger.info(
-                    "[ComplaintService] LLM 兜底: is_complaint=%s severity=%s",
-                    data["is_complaint"], data["severity"],
+            if isinstance(data, dict) and isinstance(data.get("is_complaint"), bool):
+                # severity validator（2026-10-08 LLM 收口，任务书 §十五）：
+                # LLM candidate 必须过白名单校验（low/medium/high），
+                # 非法值整体丢弃回规则结果——绝不部分采纳。
+                from backend.customer_service.understanding.validator import (
+                    validate_severity,
                 )
-                return data
+
+                severity = validate_severity(data.get("severity"))
+                if severity is not None:
+                    logger.info(
+                        "[ComplaintService] LLM 兜底: is_complaint=%s severity=%s",
+                        data["is_complaint"], severity,
+                    )
+                    return {
+                        "is_complaint": data["is_complaint"],
+                        "severity": severity,
+                    }
             logger.warning("[ComplaintService] LLM 返回格式无效，回退规则结果")
             return None
         except Exception as e:

@@ -1186,6 +1186,42 @@ travel_slot_clarify_total = Counter(
     "旅游域 slot_filler 追问次数（缺槽触发 build_clarification，M12 指标）",
     labelnames=("missing_count_bucket",),
 )
+# ── 旅游域 LLM 理解层（2026-10-08 STOP 1/4：Slot Fallback + Clarification Renderer）──
+# status 取值域：ok（候选≥1）/ empty（合法但零候选）/ schema_invalid /
+# error / disabled。fallback 记「本次未采用 LLM 结果」的原因。
+travel_slot_llm_total = Counter(
+    "travel_slot_llm_total",
+    "旅游域槽位 LLM 富化调用数",
+    labelnames=("status",),
+)
+travel_slot_llm_fallback_total = Counter(
+    "travel_slot_llm_fallback_total",
+    "旅游域槽位 LLM 富化回落规则数（reason=disabled|no_model|llm_error|"
+    "invalid_json|schema_invalid|low_confidence|no_candidates）",
+    labelnames=("reason",),
+)
+travel_slot_llm_latency_seconds = Histogram(
+    "travel_slot_llm_latency_seconds",
+    "旅游域槽位 LLM 富化耗时",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0),
+)
+# source 取值域：llm / template。fallback 记 LLM 渲染未采用的原因。
+travel_clarification_total = Counter(
+    "travel_clarification_total",
+    "旅游域追问渲染数（按最终采用来源计）",
+    labelnames=("source",),
+)
+travel_clarification_fallback_total = Counter(
+    "travel_clarification_fallback_total",
+    "旅游域追问 LLM 渲染回落模板数（reason=disabled|no_model|llm_error|"
+    "invalid_json|empty|too_long|forbidden_content）",
+    labelnames=("reason",),
+)
+travel_clarification_latency_seconds = Histogram(
+    "travel_clarification_latency_seconds",
+    "旅游域追问渲染耗时",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 3.0),
+)
 cs_store_db_failure_total = Counter(
     "cs_store_db_failure_total",
     "客服状态 Store DB 写失败总数（strict 模式抛错，非 strict 告警降级）",
@@ -1208,6 +1244,37 @@ cs_expert_result_total = Counter(
     "cs_expert_result_total",
     "CS Expert 执行结果总数（按专家类型与状态）",
     labelnames=("expert", "status"),
+)
+
+# ── CS LLM 语义层/回复层指标（2026-10-08 LLM 收口改造）──
+# 任务书 §二十九：label 只用低基数枚举，禁止 user_id/order_id/手机号/原文。
+cs_understanding_llm_total = Counter(
+    "cs_understanding_llm_total",
+    "CS 意图理解 LLM 调用结果（status=accepted|no_candidate|rule_skipped|"
+    "disabled——rule_skipped 即 Rule First 达成计数）",
+    labelnames=("status",),
+)
+cs_slot_llm_total = Counter(
+    "cs_slot_llm_total",
+    "CS 语义槽位 LLM 调用结果（status=accepted|rejected|no_candidate）",
+    labelnames=("status",),
+)
+cs_slot_llm_fallback_total = Counter(
+    "cs_slot_llm_fallback_total",
+    "CS 语义槽位 LLM 回落数（reason=llm_error|invalid_json|schema_fail|"
+    "empty|prompt_unavailable|empty_input）",
+    labelnames=("reason",),
+)
+cs_response_total = Counter(
+    "cs_response_total",
+    "CS 回复生成来源（source=template|llm|llm_fallback；knowledge 的 "
+    "llm=RAG 上游生成直通）",
+    labelnames=("source",),
+)
+cs_response_llm_fallback_total = Counter(
+    "cs_response_llm_fallback_total",
+    "CS 回复 LLM 转写回落数（reason=llm_error|guard_fail）",
+    labelnames=("reason",),
 )
 
 # 实时 rate（Gauge 缓存最新计算值）
@@ -1804,6 +1871,12 @@ __all__ = [
     "record_cs_expert_result",
     "cs_supervisor_decision_total",
     "cs_expert_result_total",
+    # CS LLM 语义层/回复层（2026-10-08 收口）
+    "cs_understanding_llm_total",
+    "cs_slot_llm_total",
+    "cs_slot_llm_fallback_total",
+    "cs_response_total",
+    "cs_response_llm_fallback_total",
     # CS 派单/outbox 指标（P8）
     "cs_dispatch_queue_depth",
     "cs_dispatch_offered_total",

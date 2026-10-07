@@ -39,6 +39,7 @@ from backend.app.api.routes import (
     observability,
     prompts,
     prompt_releases,
+    question_ledger,
     prompt_eval_callback,
     rag,
     rbac,
@@ -132,6 +133,7 @@ api_router.include_router(tasks.router)  # 异步任务编排（Celery + LangGra
 api_router.include_router(admin_tasks.router)  # 管理端任务中心（管理员闸 + 操作审计）
 api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /api/map/*，Key 不出后端）
 api_router.include_router(travel.router)  # 旅游域 REST：plan/ICS导出/反馈/偏好/推荐（2026-09-22）
+api_router.include_router(question_ledger.router)  # 线上问题台账（候选评测集供给侧，2026-10-08 #13）
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)

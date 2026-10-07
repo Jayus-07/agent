@@ -213,9 +213,19 @@ class WorkflowScheduler:
             self._aps = AsyncIOScheduler()
 
     async def _run_async(self, workflow_name: str):
-        """APScheduler 触发器包装（async context）"""
+        """APScheduler 触发器包装（async context）
+
+        服务身份（2026-10-08 #10）：定时线程无用户上下文，SQL 守卫权限门
+        （sql.read）+ G-20 空身份 fail-closed 连环拒——inventory_alert 在
+        ECS 上「failed (0 steps)」的实测根因。在此绑 svc:workflow:<名>
+        服务主体。只绑本入口：run_now（手动触发）保留调用者真人身份；
+        executor 共享给主图用户请求，不能在下层覆盖身份。
+        """
+        from backend.security.service_identity import bind_service_identity
+
         try:
-            ctx = await self.executor.run(workflow_name)
+            with bind_service_identity(workflow_name):
+                ctx = await self.executor.run(workflow_name)
             logger.info(
                 f"[WorkflowScheduler] 定时触发完成: {workflow_name} "
                 f"status={ctx.status}"
