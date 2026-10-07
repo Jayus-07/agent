@@ -23,6 +23,74 @@ def is_cs_forced(state: dict) -> bool:
     return domain_hint in CS_FORCED_HINTS
 
 
+# AI 助手页（主聊天 /agent）锁域 hint 集合：前端 useChat 每条消息带
+# domain_hint=main（与 CS 抽屉带 customer_service 同机制、互斥取值）
+MAIN_HINTS = ("main", "agent")
+
+
+def is_main_forced(state: dict) -> bool:
+    """AI 助手页锁域判定（2026-10-08 产品拍板：隔离+引导卡）。
+
+    AI 助手 = 独立通用助手：跳过旅游/选品/预订/商务域 prefilter 与旅游
+    延续判定，域请求不在本页执行；旅游族/选品强信号改产 handoff 引导卡
+    送用户去专属页。CS 引导、general_chat 与主路由（sql/rag/plan）不受影响。
+    """
+    domain_hint = (state.get("domain_hint") or "").strip().lower()
+    return domain_hint in MAIN_HINTS
+
+
+def main_forced_handoff_update(query: str, state: dict) -> dict | None:
+    """AI 助手锁域下的强信号引导卡：命中返回 handoff 路由更新，否则 None。
+
+    优先级与全局 prefilter 一致（旅游 > 选品 > 预订/商务）；预订/商务
+    归旅游族（commerce 为旅游子流），一并引导去旅游页。纯判定零副作用
+    ——不复用 run_domain_prefilters：其命中路径会经 _finish_prefilter_hit
+    回写路由上下文，与 handoff 语义「域并未真正开始」冲突（见
+    handoff_update_for docstring）。
+    """
+    target: str | None = None
+    try:
+        from backend.orchestration.graph.travel_prefilter import is_travel_request
+        from backend.orchestration.graph.selection_funnel_prefilter import (
+            is_selection_funnel_request,
+        )
+        from backend.orchestration.graph.booking_prefilter import is_booking_request
+        from backend.orchestration.graph.commerce_prefilter import is_commerce_request
+
+        if is_travel_request(query):
+            target = "travel"
+        elif is_selection_funnel_request(query):
+            target = "selection_funnel"
+        elif is_booking_request(query) or is_commerce_request(query):
+            target = "travel"
+    except Exception as e:
+        logger.debug(f"[LockDomain] main 锁域强信号判定失败，按无信号处理: {e}")
+        return None
+    if target is None:
+        return None
+
+    from backend.orchestration.contracts.handoff import build_handoff_payload
+    from backend.orchestration.router.projection import route_update_for_mode
+
+    payload = build_handoff_payload(
+        target, query, reason="main_lock_domain_guide",
+    ).model_dump()
+    try:
+        from backend.observability.tracer import trace_collector
+
+        trace = trace_collector.current()
+        if trace is not None:
+            trace.tags["handoff_target_domain"] = target
+            trace.tags["main_lock_guide"] = "true"
+    except Exception:  # noqa: BLE001 — 观测旁路
+        pass
+    logger.info("[LockDomain] main 锁域引导: target=%s query=%s", target, query[:48])
+    return route_update_for_mode(
+        "handoff",
+        extra={"route_decision": None, "_handoff": payload},
+    )
+
+
 def detect_cs_redirect(query: str) -> str | None:
     """redirect_main 两阶段判定（原 router_node 主函数 ~438-471 段）。
 

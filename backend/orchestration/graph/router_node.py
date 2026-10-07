@@ -28,6 +28,8 @@ from backend.orchestration.graph.routing import (
     entry_mode_verdict,
     handoff_update_for,
     is_cs_forced,
+    is_main_forced,
+    main_forced_handoff_update,
     run_domain_prefilters,
     try_booking_pending,
     try_travel_pending,
@@ -89,6 +91,10 @@ def router_node(state: dict) -> dict:
     # 也消费它，与拆分前同源。
     domain_hint = (state.get("domain_hint") or "").strip().lower()
     cs_forced = is_cs_forced(state)
+    # AI 助手页锁域（2026-10-08）：/agent 页每条消息带 domain_hint=main，
+    # 域请求不在该页执行（隔离），强信号改产 handoff 引导卡。与 cs_forced
+    # 互斥（hint 取值不同源）。判定与引导卡构造见 routing/lock_domain.py。
+    main_forced = is_main_forced(state)
 
     # ── 路由入口重构（2026-09-22）：Guard → Context Assembler →
     # ContinuationResolver → Coarse Domain Router ──────────────────
@@ -96,30 +102,31 @@ def router_node(state: dict) -> dict:
     # 缺省空 dict = 无活跃任务，延续判定自动失效。
     routing_context = state.get("routing_context") or {}
     if not cs_forced:
-        # Travel Pending Resolver（STOP F2，先于 ContinuationResolver），
-        # 命中条件与异常语义见 routing/continuation.py::try_travel_pending
-        pending_update = try_travel_pending(query, routing_context)
-        if pending_update is not None:
-            return _with_router_decisions(
-                state, _mark_route_from_update(state, pending_update), query,
-                existing_override=pending_update,
-            )
-        # 交易挂起续填（Phase 5 / D2）：预订/比价子图澄清期，用户答纯槽位值
-        # （「10月3日」）——两子图无 checkpointer，不拦就掉域。命中条件与
-        # 异常语义见 routing/continuation.py::try_booking_pending
-        booking_pending = try_booking_pending(query, routing_context)
-        if booking_pending is not None:
-            return _with_router_decisions(
-                state, _mark_route_from_update(state, booking_pending), query,
-                existing_override=booking_pending,
-            )
-        # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
-        cont_update = _try_continuation(state, query, routing_context)
-        if cont_update is not None:
-            return _with_router_decisions(
-                state, _mark_route_from_update(state, cont_update), query,
-                existing_override=cont_update,
-            )
+        if not main_forced:
+            # Travel Pending Resolver（STOP F2，先于 ContinuationResolver），
+            # 命中条件与异常语义见 routing/continuation.py::try_travel_pending
+            pending_update = try_travel_pending(query, routing_context)
+            if pending_update is not None:
+                return _with_router_decisions(
+                    state, _mark_route_from_update(state, pending_update), query,
+                    existing_override=pending_update,
+                )
+            # 交易挂起续填（Phase 5 / D2）：预订/比价子图澄清期，用户答纯槽位值
+            # （「10月3日」）——两子图无 checkpointer，不拦就掉域。命中条件与
+            # 异常语义见 routing/continuation.py::try_booking_pending
+            booking_pending = try_booking_pending(query, routing_context)
+            if booking_pending is not None:
+                return _with_router_decisions(
+                    state, _mark_route_from_update(state, booking_pending), query,
+                    existing_override=booking_pending,
+                )
+            # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
+            cont_update = _try_continuation(state, query, routing_context)
+            if cont_update is not None:
+                return _with_router_decisions(
+                    state, _mark_route_from_update(state, cont_update), query,
+                    existing_override=cont_update,
+                )
         # 问候/能力咨询 → general_chat 主 LLM 直答（禁 RAG，不进域图）
         general_update = _try_general_chat(state)
         if general_update is not None:
@@ -168,7 +175,15 @@ def router_node(state: dict) -> dict:
 
     # ── 旅游/选品/预订/商务四连预过滤（域锁且未转出时跳过）─────────
     # 顺序与语义冻结，实现见 routing/prefilter_chain.py::run_domain_prefilters
-    if not cs_forced or cs_redirect:
+    # main 锁域（2026-10-08）：强信号不执行域图，改产 handoff 引导卡
+    # （隔离+引导，产品拍板）；弱信号继续主路由。
+    if main_forced:
+        main_handoff = main_forced_handoff_update(query, state)
+        if main_handoff is not None:
+            return _with_router_decisions(
+                state, main_handoff, query, existing_override=main_handoff,
+            )
+    elif not cs_forced or cs_redirect:
         domain_result = run_domain_prefilters(query, state)
         if domain_result is not None:
             return domain_result
@@ -205,7 +220,9 @@ def router_node(state: dict) -> dict:
             clarify_allowed,
             mark_clarified,
         )
-        clarify = build_entry_clarify(query, domain_hint)
+        # main 锁域跳过 L1 追问：现有入口追问只有选品类目暗示分支，
+        # 引导语义与锁域页冲突（域请求不在该页执行）。
+        clarify = None if main_forced else build_entry_clarify(query, domain_hint)
         if clarify is not None and not clarify_allowed(
                 state.get("session_id", ""), query):
             clarify = None

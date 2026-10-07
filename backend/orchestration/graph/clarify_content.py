@@ -47,6 +47,13 @@ _GENERIC_OPTIONS = (
     "查一下经营数据",
 )
 
+# AI 助手锁域（main）专属导航：域请求不在该页执行，不给旅游/选品倾向选项
+_MAIN_GENERIC_OPTIONS = (
+    "换个说法再描述一下需求",
+    "查一下经营数据",
+    "搜索一下相关资讯",
+)
+
 # 客服语境选项（CS 域规则可命中）
 _CS_OPTIONS = (
     "查询订单状态",
@@ -127,6 +134,21 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
             "question": "为了更快帮您处理，请补充一下您的诉求：",
             "options": list(_CS_OPTIONS),
             "handoff_available": True,
+        }
+
+    from backend.orchestration.graph.routing.lock_domain import MAIN_HINTS
+    from backend.orchestration.router.rule_router import sql_lean_hits
+
+    # AI 助手锁域：跳过旅游/选品定向卡（本页不执行域请求），保留 SQL
+    # 倾向（AI 助手有该能力）与通用导航（选项不含域倾向）。
+    if (domain_hint or "").strip().lower() in MAIN_HINTS:
+        if sql_lean_hits(query) >= 1:
+            return build_sql_empty_clarify(query, executed=False)
+        return {
+            "source": "refusal_main",
+            "question": "这个问题我暂时没找到可靠答案。您可以换个说法，或试试：",
+            "options": list(_MAIN_GENERIC_OPTIONS),
+            "handoff_available": False,
         }
 
     from backend.orchestration.graph.selection_funnel_prefilter import (
