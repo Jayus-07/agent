@@ -154,6 +154,19 @@ class _Txn:
         return False
 
 
+class _EmptyResult:
+    """execute() 的空结果：scalars().all()=[]、scalar()=0（B 案消息查询/计数面）。"""
+
+    def scalars(self) -> "_EmptyResult":
+        return self
+
+    def all(self) -> list:
+        return []
+
+    def scalar(self):
+        return 0
+
+
 class FakeSession:
     """reaper 不开事务（事务边界由 worker 持有），但 outbox 需要 add 面。"""
 
@@ -165,6 +178,9 @@ class FakeSession:
 
     async def flush(self) -> None:
         return None
+
+    async def execute(self, *_a, **_k) -> _EmptyResult:
+        return _EmptyResult()
 
 
 async def test_expired_offer_is_released_back_to_queue(scenario: Scenario) -> None:
@@ -353,3 +369,86 @@ async def test_release_does_not_record_metric_before_commit(
     await reaper.reap_expired_offers(scenario.session, now=NOW, limit=50)
 
     assert recorded == []
+
+
+# ── B 案（2026-10-08）：总等待期超时 → 压缩诉求 + 登记留言工单 + 用户通知 ──
+
+
+def _ticket_of(session) -> object | None:
+    from backend.customer_service.models.ticket import CSTicket
+
+    for obj in session.added:
+        if isinstance(obj, CSTicket):
+            return obj
+    return None
+
+
+def _notice_of(session) -> object | None:
+    from backend.customer_service.models.message import CSMessage
+
+    for obj in session.added:
+        if isinstance(obj, CSMessage) and obj.sender_type == "assistant":
+            return obj
+    return None
+
+
+async def test_total_deadline_creates_ticket_and_notice(scenario: Scenario) -> None:
+    """超时关单登记 GD- 工单 + 用户通知消息 + closed_reason/outbox 带单号。"""
+    scenario.overdue_candidates = [(TENANT, "hd-1", "conv-1")]
+
+    result = await reaper.reap_overdue_waiting(scenario.session, now=NOW, limit=50)
+
+    assert result.closed == 1
+    ticket = _ticket_of(scenario.session)
+    assert ticket is not None, "超时关单必须登记留言工单"
+    assert ticket.type == "handoff" and ticket.status == "open"
+    assert ticket.ticket_id.startswith("GD-")
+    assert ticket.handoff_id == "hd-1" and ticket.user_id == "user-1"
+
+    reason = scenario.handoff.closed_reason or ""
+    assert ticket.ticket_id in reason, "closed_reason 必须带工单号"
+
+    notice = _notice_of(scenario.session)
+    assert notice is not None, "必须有用户可见的工单通知消息"
+    assert ticket.ticket_id in notice.content
+    assert (notice.metadata_ or {}).get("kind") == "handoff_timeout_ticket"
+
+    events = [o for o in scenario.session.added if isinstance(o, CSEvent)]
+    assert any(
+        (e.payload or {}).get("ticket_id") == ticket.ticket_id for e in events
+    ), "outbox 事件必须带 ticket_id"
+
+
+async def test_ticket_priority_alias_mapping(scenario: Scenario) -> None:
+    """handoffs 宽松 priority 域收敛到 tickets 合法枚举。"""
+    from backend.customer_service.models.ticket import TICKET_PRIORITIES
+
+    scenario.handoff.priority = "P2"
+    scenario.overdue_candidates = [(TENANT, "hd-1", "conv-1")]
+    await reaper.reap_overdue_waiting(scenario.session, now=NOW, limit=50)
+    ticket = _ticket_of(scenario.session)
+    assert ticket is not None and ticket.priority in TICKET_PRIORITIES
+
+    # int/未知值（历史脏数据）一律 medium，不抛错
+    scenario.handoff.priority = 50
+    scenario.session.added.clear()
+    scenario.overdue_candidates = [(TENANT, "hd-1", "conv-1")]
+    await reaper.reap_overdue_waiting(scenario.session, now=NOW, limit=50)
+    ticket2 = _ticket_of(scenario.session)
+    assert ticket2 is not None and ticket2.priority == "medium"
+
+
+async def test_compress_failure_still_creates_ticket(
+    scenario: Scenario, monkeypatch,
+) -> None:
+    """LLM 压缩失败 → 降级摘要，工单照建（关单不受影响）。"""
+    monkeypatch.setattr(
+        reaper, "_compress_request_sync", lambda _texts: (_ for _ in ()).throw(
+            RuntimeError("llm down")),
+    )
+    scenario.overdue_candidates = [(TENANT, "hd-1", "conv-1")]
+
+    result = await reaper.reap_overdue_waiting(scenario.session, now=NOW, limit=50)
+
+    assert result.closed == 1
+    assert _ticket_of(scenario.session) is not None
