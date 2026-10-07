@@ -412,7 +412,10 @@ class ConfirmationStore:
             conv_mgr = ConversationManager(db)
             try:
                 async with db.begin_nested():
-                    await conv_mgr.get_or_create(session_id, user_id)
+                    # STOP CS-A P0-2：会话行 tenant 与确认链路同源显式传递
+                    await conv_mgr.get_or_create(
+                        session_id, user_id, tenant_id=tenant_id,
+                    )
                     await db.flush()
             except IntegrityError:
                 logger.info(

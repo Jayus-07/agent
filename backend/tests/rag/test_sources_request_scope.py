@@ -79,7 +79,7 @@ def _make_stub_pipeline(answer: str, sources: list):
         pipe, "last_answer_meta", {"can_answer": True, "confidence": 0.9,
                                    "sources": list(sources)})
     pipe._is_rejection = lambda answer: False
-    pipe._write_answer_cache = lambda question, kb_id, answer: None
+    pipe._write_answer_cache = lambda question, kb_id, answer, meta=None: None
     pipe._cleanup = lambda: None
     return pipe
 

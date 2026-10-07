@@ -123,6 +123,30 @@ def test_node_skips_when_forecast_unavailable(monkeypatch):
     assert "itinerary" not in update
 
 
+def test_node_conditional_constraint_unverifiable_when_forecast_down(monkeypatch):
+    """STOP E2（2026-10-07 容错契约）：用户表达了条件天气约束而预报不可用
+    = 约束无法验证——必须明说，不得 silently success 让用户以为已满足。"""
+    itinerary, _ = _rainy_itinerary()
+    monkeypatch.setattr(W, "fetch_forecast_evidence",
+                        lambda city: (None, "天气服务暂时不可用", None))
+    state = {
+        "brief": TravelBrief(
+            destination="测试城", days=1, start_date=date(2026, 9, 15),
+            weather_conditions=[{"day_index": 1, "condition": "rain",
+                                 "action": "indoor"}],
+        ).model_dump(),
+        "itinerary": itinerary.model_dump(),
+        "candidates": [],
+    }
+    update = weather_expert_node(state)
+    joined = "\n".join(update["notes"])
+    assert "无法验证" in joined
+    assert "条件天气" in joined
+    # 降级账入 state（reporter「实时信息核验情况」段的数据源）
+    degraded = update.get("degraded_tools") or []
+    assert any(d["tool"] == "travel.weather.query" for d in degraded)
+
+
 def test_node_swaps_and_logs(monkeypatch):
     itinerary, candidates = _rainy_itinerary()
     monkeypatch.setattr(W, "fetch_forecast_evidence",

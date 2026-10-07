@@ -94,8 +94,14 @@ class TestRecordRunSoftFail:
         assert params[1] == "rag"
         assert params[5] == "deadbee"                    # git_sha
         assert '"rag.system": 3' in params[6]            # prompt_snapshot JSON
-        assert params[8] == "manual" and params[9] == "op"
-        assert params[11] == 5 and params[12] == 4       # case/pass
+        # 074 生命周期列已插入 trigger 之前；按列名定位，避免新增列
+        # 再次造成“列和值错位”的假失败。
+        columns = [c.strip() for c in
+                   sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+        by_column = dict(zip(columns, params))
+        assert by_column["trigger"] == "manual"
+        assert by_column["triggered_by"] == "op"
+        assert by_column["case_count"] == 5 and by_column["pass_count"] == 4
 
 
 class TestEnvInfo:

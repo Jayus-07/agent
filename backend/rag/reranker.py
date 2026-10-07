@@ -359,34 +359,64 @@ class DashScopeReranker(BaseDocumentCompressor):
             from backend.observability.llm_usage_store import get_llm_usage_store
             from backend.observability.tracer import current_trace_context
             trace_id, session_id = current_trace_context()
-            cost_usd = 0.0
+            # Billing V2（2026-10-07 收口）：唯一计费入口，行金额恒 CNY 记账，
+            # 原生成本/币种随行走 V2 列（此前 CNY 值写 cost_usd 且 currency 空，
+            # 会被按 USD 二次换汇）。
+            billing = None
             if (total_tokens or 0) > 0:
                 try:
-                    from backend.infra.llm.pricing import calculate_current_cost
+                    from backend.infra.llm.pricing import (
+                        NormalizedUsage,
+                        price_usage,
+                    )
 
-                    cost_usd = float(calculate_current_cost(
+                    billing = price_usage(
                         _configured_rerank_model(),
                         "rerank",
-                        {"input": total_tokens},
+                        NormalizedUsage(input_tokens=total_tokens),
                         enforce=False,
-                    ))
+                    )
                 except Exception as e:
                     logger.debug(
                         "[Reranker] 用量计费失败（用量行照常记录，成本记 0）: %s", e,
                     )
-            get_llm_usage_store().record({
+            event = {
                 "component": "rerank",
                 "model": _configured_rerank_model(),
                 "provider": RERANK_API_FORMAT,
                 "prompt_tokens": total_tokens,
                 "completion_tokens": 0,
                 "total_tokens": total_tokens,
-                "cost_usd": cost_usd,
                 "duration_ms": duration_ms,
                 "trace_id": trace_id or "",
                 "session_id": session_id or "",
                 "finish_reason": status,
-            })
+            }
+            if billing is not None:
+                event.update({
+                    "billing_schema_version": 2,
+                    "native_cost": float(billing.native_cost),
+                    "native_currency": billing.native_currency,
+                    "billed_cost_cny": float(billing.billed_cost_cny),
+                    "total_cost": float(billing.billed_cost_cny),
+                    "fx_rate": (float(billing.fx_rate)
+                                if billing.fx_rate is not None else None),
+                    "price_version": billing.price_version or "",
+                    "pricing_source": billing.pricing_source,
+                    "usage_source": billing.usage_source,
+                    "input_cost": float(billing.input_cost_cny),
+                    "cost_status": billing.cost_status,
+                    "cost_usd": (float(billing.native_cost)
+                                 if billing.native_currency == "USD" else 0.0),
+                    "currency": billing.native_currency,
+                })
+            else:
+                event.update({
+                    "cost_usd": 0.0,
+                    "total_cost": 0.0,
+                    "cost_status": "unpriced",
+                })
+            get_llm_usage_store().record(event)
         except Exception:
             pass  # 软失败
 
@@ -613,6 +643,7 @@ class RerankCompressor(BaseDocumentCompressor):
                         self.__dict__['_backend_type'] = "local"
 
     def compress_documents(self, documents, query, **kwargs):
+        from backend.observability.metrics import record_rag_stage
         from backend.observability.tracer import trace_collector
 
         # 后端懒加载提前到 span 之前，确保 span name 正确

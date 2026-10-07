@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -42,6 +41,7 @@ def execute_handoff(
     user_id = state.get("user_id", "anonymous")
     session_id = state.get("session_id", "default")
     conversation_id = state.get("conversation_id", "")
+    tenant_id = str(state.get("tenant_id", "") or "")
 
     logger.info("[HandoffExpert] user_id=%s initiating handoff", user_id)
 
@@ -56,7 +56,12 @@ def execute_handoff(
     record_cs_handoff(trigger_type)
 
     store = get_handoff_store()
-    existing = store.load(user_id, session_id)
+    # STOP CS-A P0-6：复用判定直读 PG（get_active_by_conversation 走
+    # run_sync 桥）——L1 旧值会把已关单会话误判为仍在排队。
+    existing = (
+        store.get_active_by_conversation(conversation_id)
+        if conversation_id else store.load(user_id, session_id)
+    )
     current_state_str = (existing or {}).get(
         "handoff_state", HandoffState.AI_ACTIVE.value,
     )
@@ -108,7 +113,6 @@ def execute_handoff(
     handoff_transition(current_state, HandoffState.HANDOFF_REQUESTED)
 
     ticket_id = f"HANDOFF-{uuid.uuid4().hex[:8].upper()}"
-    now = datetime.now(timezone.utc).isoformat()
 
     # 2026-09-17 修复：工单立即进入排队（HANDOFF_REQUESTED → WAITING_HUMAN）。
     # 此前生产代码没有任何位置执行这一步，工单永久卡在 handoff_requested，
@@ -118,18 +122,30 @@ def execute_handoff(
         HandoffState.HANDOFF_REQUESTED, HandoffState.WAITING_HUMAN,
     )
 
-    # P1 修正（audit-report §P2-16）：两次 store.save 会在 DB 暴露
-    # handoff_requested 中间态 —— 状态机转换全部在内存完成，只持久化
-    # 最终态 WAITING_HUMAN（单次写入，原子可见）。
+    # STOP CS-A P0-6：状态迁移收敛到 lifecycle 唯一入口 —— 单事务建
+    # waiting_human 工单 + 同事务维护 conversations.handling_mode 投影
+    # + total_deadline_at（此前图内工单无总期限，无人接单永不兜底关闭）。
+    # 旧 store.save 两跳写只落 handoffs 行，是双表口径分叉的根源。
+    from backend.customer_service.handoff.lifecycle import (
+        enter_waiting_handoff_sync,
+    )
+
+    handoff_row = enter_waiting_handoff_sync(
+        tenant_id=tenant_id or "default",
+        conversation_id=conversation_id or session_id,
+        user_id=user_id,
+        trigger_type=trigger_type,
+        trigger_reason=trigger_reason,
+        ticket_id=ticket_id,
+    )
     handoff_data = {
-        "handoff_state": HandoffState.WAITING_HUMAN.value,
+        "handoff_state": handoff_row["handoff_state"],
         "trigger_type": trigger_type,
         "trigger_reason": trigger_reason,
         "ticket_id": ticket_id,
-        "created_at": now,
-        "updated_at": now,
+        "created_at": handoff_row["updated_at"],
+        "updated_at": handoff_row["updated_at"],
     }
-    store.save(user_id, session_id, handoff_data)
 
     # 批次C：转人工工单落库（与 handoff 行同 ticket_id 关联）。
     # fire-and-forget：落库失败只损失工单可查询性，不阻断转接。
@@ -152,14 +168,22 @@ def execute_handoff(
             "[HandoffExpert] 转人工工单落库失败（不阻断主流程）: %s",
             ticket_id, exc_info=True,
         )
+        # P2 完整性观测（2026-10-07）：镜像行缺失=坐席端工单查询看不到该转接
+        try:
+            from backend.observability import metrics as _m
+            _m.cs_ticket_integrity_total.labels(kind="handoff_mirror_write_failed").inc()
+        except Exception:  # pragma: no cover — 指标软失败
+            pass
 
     # 实时推送：新工单进入坐席待接入队列（WebSocket，无连接时静默丢弃）
     from backend.customer_service.realtime import get_agent_hub
     get_agent_hub().publish(
         "conversation.waiting",
+        tenant_id=tenant_id or None,
         item={
-            "conversation_id": session_id,  # handoff 行的 conversation_id 即 session_id
+            "conversation_id": conversation_id or session_id,  # handoff 行的 conversation_id 即 session_id
             "user_id": user_id,
+            "tenant_id": tenant_id or None,
             "handoff_state": HandoffState.WAITING_HUMAN.value,
             "trigger_type": trigger_type,
             "trigger_reason": trigger_reason,

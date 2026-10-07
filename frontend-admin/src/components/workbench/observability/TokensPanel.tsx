@@ -124,7 +124,7 @@ export default function TokensPanel() {
     { icon: <Coins size={16} />, label: "总 Token", value: formatNum(totals?.total_tokens), sub: `${formatNum(totals?.calls)} 次 LLM 调用` },
     { icon: <ArrowDownToLine size={16} />, label: "输入 Token", value: formatNum(totals?.prompt_tokens), sub: hasCached ? `含缓存命中 ${formatNum(totals?.cached_tokens)}` : "prompt" },
     { icon: <ArrowUpFromLine size={16} />, label: "输出 Token", value: formatNum(totals?.completion_tokens), sub: hasReasoning ? `含推理 ${formatNum(totals?.reasoning_tokens)}` : "completion" },
-    { icon: <Wallet size={16} />, label: "预估成本", value: formatCost(totals?.cost_usd), sub: "按后端生效价格表计费" },
+    { icon: <Wallet size={16} />, label: "总成本", value: formatCost(totals?.cost_cny), sub: "记账本位币 ¥（价格表权威值）" },
     { icon: <Hash size={16} />, label: "请求轮次", value: formatNum(totals?.requests), sub: "按 trace 去重" },
   ];
 
@@ -242,7 +242,7 @@ export default function TokensPanel() {
                   <th className="px-4 py-2.5 font-medium text-right">总 Token</th>
                   {hasCached && <th className="px-4 py-2.5 font-medium text-right">缓存命中</th>}
                   {hasReasoning && <th className="px-4 py-2.5 font-medium text-right">推理</th>}
-                  <th className="px-4 py-2.5 font-medium text-right">预估成本</th>
+                  <th className="px-4 py-2.5 font-medium text-right">成本 ¥</th>
                 </tr>
               </thead>
               <tbody>
@@ -268,7 +268,7 @@ export default function TokensPanel() {
                       <td className="px-4 py-2.5 text-right font-mono tabular-nums font-medium">{formatNum(m.total_tokens)}</td>
                       {hasCached && <td className="px-4 py-2.5 text-right font-mono tabular-nums text-emerald-600">{formatNum(m.cached_tokens)}</td>}
                       {hasReasoning && <td className="px-4 py-2.5 text-right font-mono tabular-nums text-violet-600">{formatNum(m.reasoning_tokens)}</td>}
-                      <td className="px-4 py-2.5 text-right font-mono tabular-nums">{formatCost(m.cost_usd)}</td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums">{formatCost(m.cost_cny)}</td>
                     </tr>
                   ))
                 )}
@@ -369,7 +369,7 @@ export default function TokensPanel() {
                           <td className="px-4 py-2 text-right font-mono tabular-nums font-medium">{formatNum(c.total_tokens)}</td>
                           {hasCached && <td className="px-4 py-2 text-right font-mono tabular-nums text-emerald-600">{formatNum(c.cached_tokens)}</td>}
                           {hasReasoning && <td className="px-4 py-2 text-right font-mono tabular-nums text-violet-600">{formatNum(c.reasoning_tokens)}</td>}
-                          <td className="px-4 py-2 text-right font-mono tabular-nums">{formatCost(c.cost_usd)}</td>
+                          <td className="px-4 py-2 text-right font-mono tabular-nums">{formatCost(c.cost_cny ?? c.cost_usd)}</td>
                           <td className="px-4 py-2 text-right font-mono tabular-nums text-slate-500">
                             {c.duration_ms ? `${(c.duration_ms / 1000).toFixed(1)}s` : "-"}
                           </td>

@@ -35,7 +35,13 @@ export interface RunEvalResult {
   recall_at_5: number;
   timestamp: string;
   error?: string;
+  run_id?: string;
+  suite?: string;
+  evaluation_mode?: string;
+  evaluator_mode?: string;
 }
+
+export type EvaluationMode = 'offline' | 'semantic' | 'ragas' | 'self+ragas'
 
 export interface RunSummary {
   run_id: string;
@@ -72,6 +78,8 @@ export interface RunSummary {
 export interface DatasetCatalogItem {
   dataset_id: string;
   module: string;
+  /** core=常规质量评测集；probe=需 --live 的探针集（旧后端不返回，前端按 core 兜底） */
+  kind?: 'core' | 'probe';
   dataset_version: string;
   owner: string;
   review_status: string;
@@ -242,9 +250,10 @@ export const evaluationService = {
     return request<EvalCase[]>(`${BASE}/cases?module=${encodeURIComponent(module)}`);
   },
 
-  runEval(module: string = "rag"): Promise<RunEvalResult> {
+  runEval(module: string = "rag", options?: { evaluation_mode?: EvaluationMode; suite?: string }): Promise<RunEvalResult> {
     return request<RunEvalResult>(`${BASE}/run?module=${encodeURIComponent(module)}`, {
       method: "POST",
+      body: JSON.stringify(options || { evaluation_mode: 'offline', suite: 'pr_baseline' }),
       timeout: 120000,
     });
   },

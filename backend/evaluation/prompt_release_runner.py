@@ -18,6 +18,7 @@ from backend.config.settings import (
     PROMPT_RELEASE_REGRESSION_GATE_ENABLED,
 )
 from backend.evaluation.config import EvalConfig
+from backend.evaluation.mode import resolve_evaluation_mode
 from backend.evaluation.service import EvaluationService
 from backend.evaluation.storage import persist_report
 from backend.infra.llm.registry_store import refresh_registry
@@ -44,10 +45,15 @@ async def run_prompt_release_evaluation(
 def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
     with _evaluation_env(release.created_by):
         asyncio.run(refresh_registry())
+        mode = resolve_evaluation_mode(
+            release.dataset_provenance.get("evaluation_mode")
+        )
         report = EvaluationService().evaluate(
             EvalConfig(
                 module="rag",
-                live=True,
+                live=mode.live,
+                ragas=mode.ragas,
+                no_ragas=mode.no_ragas,
                 selection=release.eval_suite,
                 dataset_version=str(
                     release.dataset_provenance.get("version")

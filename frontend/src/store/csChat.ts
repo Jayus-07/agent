@@ -164,26 +164,48 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
 
     switchSession: (id) => set({ currentId: id, error: null }),
 
-    // 刷新后恢复：抽屉首次打开时用服务端「我的客服会话」水合。
+    // 刷新后恢复：抽屉打开时用服务端「我的客服会话」水合。
     // 服务端按 last_activity_at 倒序返回；只并入本地没有的会话（幂等）。
+    // STOP CS-A P0-3/F5：关抽屉/刷新窗口期间完成的轮次也要补齐 ——
+    // 当前会话若在服务端有记录且本地未在流式中，以服务端消息为准补齐
+    // （仅当服务端条数 ≥ 本地时替换：record_cs_turn 是 fire-and-forget，
+    // 服务端短暂滞后时绝不回退本地已显示的内容）。
     hydrateFromServer: (items) => {
       const restored = items
         .map(mapConversation)
         .filter((s): s is CSSession => s !== null)
       if (restored.length === 0) return
       set((state) => {
-        const existingIds = new Set(state.sessions.map((s) => s.id))
+        let sessions = state.sessions
+        // F5：当前会话服务端补齐（不在流式中才允许，流式中本地是权威）
+        const serverCurrent = restored.find((r) => r.id === state.currentId)
+        if (serverCurrent && !state.isLoading) {
+          sessions = sessions.map((s) => {
+            if (s.id !== state.currentId) return s
+            const serverLonger = serverCurrent.messages.length >= s.messages.length
+            const sameAsServer =
+              s.messages.length === serverCurrent.messages.length &&
+              s.messages.every((m, i) => serverCurrent.messages[i]?.id === m.id)
+            if (sameAsServer || !serverLonger) return s
+            return {
+              ...s,
+              messages: serverCurrent.messages,
+              updatedAt: Math.max(s.updatedAt, serverCurrent.updatedAt),
+            }
+          })
+        }
+        const existingIds = new Set(sessions.map((s) => s.id))
         const fresh = restored.filter((s) => !existingIds.has(s.id))
-        if (fresh.length === 0) return {}
-        const current = state.sessions.find((s) => s.id === state.currentId)
+        if (fresh.length === 0 && sessions === state.sessions) return {}
+        const current = sessions.find((s) => s.id === state.currentId)
         const currentActive = !!current && current.messages.length > 0
-        if (currentActive) {
+        if (currentActive || fresh.length === 0) {
           // 用户本轮已在聊：只并入历史，不抢 currentId
-          return { sessions: [...fresh, ...state.sessions] }
+          return fresh.length > 0 ? { sessions: [...fresh, ...sessions] } : { sessions }
         }
         // 当前是未动过的空占位 → 最近一条恢复为当前会话，空占位丢弃
         const latest = fresh[0]
-        const others = state.sessions.filter((s) => s.messages.length > 0)
+        const others = sessions.filter((s) => s.messages.length > 0)
         return {
           sessions: [
             latest,

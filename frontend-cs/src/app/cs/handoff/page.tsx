@@ -19,9 +19,11 @@ import {
   getHandoffQueue,
   getMyOffers,
   notifyAgentTyping,
+  reassignHandoff,
   sendAgentMessage,
   type MyOfferItem,
 } from "@/api/cs";
+import { getCsRole } from "@/lib/auth";
 import { useAgentSocket, type AgentEvent } from "@/lib/csAgentWs";
 import AgentAssistPanel, {
   type AssistSuggestion,
@@ -579,6 +581,44 @@ export default function HandoffWorkbenchPage() {
     (selected.handoff_state === "waiting_human" ||
       selected.handoff_state === "human_active");
 
+  // STOP CS-A P0-5/E4：主管重派入口 —— 坐席掉线等场景下 human_active /
+  // agent_offered 会话可被 supervisor 手动送回排队（后端 API 原已存在，
+  // agent 角色由后端 403 兜底，这里只做入口显隐）。
+  const isSupervisor = getCsRole() === "supervisor";
+  const [reassigning, setReassigning] = useState(false);
+  const reassignable =
+    !!selected &&
+    isSupervisor &&
+    !!selected.handoff_id &&
+    (selected.handoff_state === "human_active" ||
+      selected.handoff_state === "agent_offered");
+
+  const handleReassign = async () => {
+    if (!selected?.handoff_id || reassigning) return;
+    // 二次确认（人工重派是不可逆的用户可见操作）
+    const ok = window.confirm(
+      "确定重新派单？当前坐席将被解除，会话回到排队队列由系统重新分配。",
+    );
+    if (!ok) return;
+    setError(null);
+    setReassigning(true);
+    try {
+      await reassignHandoff(selected.handoff_id, "supervisor_manual_reassign");
+      await refreshQueue();
+      void refreshOffersRef.current?.();
+      setSelected((s) =>
+        s && s.conversation_id === selected.conversation_id
+          ? { ...s, handoff_state: "waiting_human" }
+          : s,
+      );
+    } catch (e) {
+      // 409/403 直接展示后端真实 detail（不做文案映射）
+      setError((e as Error).message ?? "重派失败");
+    } finally {
+      setReassigning(false);
+    }
+  };
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-4">
@@ -799,6 +839,19 @@ export default function HandoffWorkbenchPage() {
                 </span>
                 <div className="flex items-center gap-2">
                   {stateBadge(selected.handoff_state)}
+                  {reassignable && (
+                    <button
+                      onClick={() => void handleReassign()}
+                      disabled={reassigning}
+                      className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg
+                        border border-amber-300 text-amber-700 hover:bg-amber-50
+                        disabled:opacity-50 transition-colors"
+                      title="主管重派：解除当前坐席并送回排队重新分配"
+                    >
+                      <UserRound size={13} />
+                      {reassigning ? "重派中…" : "重新派单"}
+                    </button>
+                  )}
                   {closable && (
                     <button
                       onClick={handleClose}

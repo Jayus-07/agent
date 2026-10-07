@@ -100,12 +100,13 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   // 人工介入同步：坐席消息轮询入列 + 转接状态卡片（抽屉打开期间生效）
   useCSHandoffSync(currentId, open)
 
-  // csChat store 纯内存，刷新即失——首次打开抽屉时从 CS 域恢复最近会话
-  // （GET /cs/conversations/my 按登录身份过滤；静默失败不打扰， guest 401 跳过）
-  const hydratedRef = useRef(false)
+  // csChat store 纯内存，刷新即失——打开抽屉时从 CS 域恢复最近会话
+  // （GET /cs/conversations/my 按登录身份过滤；静默失败不打扰， guest 401 跳过）。
+  // STOP CS-A P0-3/F5：每次打开都重新拉取（不再 hydratedRef 一次性）——
+  // 关抽屉期间后端继续执行的轮次，重开抽屉时由服务端补齐（store 侧
+  // 只并入不回退，数据不丢）。
   useEffect(() => {
-    if (!open || hydratedRef.current) return
-    hydratedRef.current = true
+    if (!open) return
     listMyConversations(10).then((items) => {
       if (items.length > 0) useCSChatStore.getState().hydrateFromServer(items)
     })

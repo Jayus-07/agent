@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.evaluation.dataset.loader import DATASET_DIR
+from backend.evaluation.models import MODULE_KINDS, PROBE_MODULES
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/evaluation", tags=["评测集治理"])
@@ -251,6 +252,8 @@ def _catalog_item(module: str, root: Path | None = None) -> dict[str, Any]:
     return {
         "dataset_id": module,
         "module": module,
+        # 探针模块打 probe 标签（口径唯一源 models.PROBE_MODULES），前端分组展示
+        "kind": "probe" if module in PROBE_MODULES else "core",
         "dataset_version": version,
         "owner": str(manifest.get("owner", "evaluation-platform")),
         "review_status": str(manifest.get("review_status", "approved")),
@@ -340,8 +343,13 @@ def _stage_candidate(candidate: DatasetCandidate, reviewer: str) -> DatasetCandi
 
 @router.get("/datasets")
 async def list_datasets(module: str | None = Query(default=None)):
+    # 目录扫描只认 MODULE_KINDS 声明过的模块（sql_v2/travel_v2 等专项金标集
+    # 由 pytest/验收脚本直读，不进评测框架口径，不刷目录页）；
+    # 显式点名 module 时不过滤，治理侧仍可单独查看。
+    known_modules = frozenset(MODULE_KINDS)
     modules = [module] if module else sorted(
-        path.name for path in DATASET_DIR.iterdir() if path.is_dir() and (path / "cases.jsonl").exists()
+        path.name for path in DATASET_DIR.iterdir()
+        if path.is_dir() and (path / "cases.jsonl").exists() and path.name in known_modules
     ) if DATASET_DIR.exists() else []
     return {"items": [_catalog_item(item) for item in modules]}
 

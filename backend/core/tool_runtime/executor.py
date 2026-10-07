@@ -306,8 +306,19 @@ class SafeToolExecutor:
 
     @staticmethod
     async def _invoke(call: Callable[[], Any]) -> Any:
-        result = call()
+        if asyncio.iscoroutinefunction(call):
+            return await call()
+        # 同步 Tool 一律放到工作线程执行，不在事件循环线程上内联跑：
+        # 治理链路的同步适配器（GovernanceRuntime.execute_sync）用
+        # asyncio.run 驱动整个执行循环，同步函数若在 loop 线程内联运行，
+        # 内部再起 asyncio.run（如 MCP 客户端同步桥）会触发
+        # 「asyncio.run() cannot be called from a running event loop」。
+        # to_thread 复制 ContextVar（归因/会话上下文不丢）；附带收益是
+        # wait_for 超时对同步 Tool 真正可生效（同步阻塞不再卡死 loop）。
+        result = await asyncio.to_thread(call)
         if isinstance(result, Awaitable) or asyncio.iscoroutine(result):
+            # call 是同步闭包但返回 awaitable（BaseSkill 的
+            # lambda: asyncio.to_thread(...) 形态）：回到当前 loop 上等待。
             return await result
         return result
 

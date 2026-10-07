@@ -49,6 +49,42 @@ _current_permissions: ContextVar[tuple[str, ...] | None] = ContextVar(
 _current_roles: ContextVar[tuple[str, ...] | None] = ContextVar(
     "tool_roles", default=None
 )
+# STOP CS-A P0-3：请求级取消信号（threading.Event，由 /chat/abort 的
+# stop_event 注入）。ContextVar 载体 = 随 LangGraph copy_context 传播进
+# 节点线程与专家线程（THREAD_ISOLATED 亦复制），**不进任何可持久化
+# GraphState**——Event 不可序列化，塞进 state 会破坏 checkpoint。
+_current_cancel_event: ContextVar[Any] = ContextVar(
+    "request_cancel_event", default=None
+)
+
+
+class RequestCancelled(RuntimeError):
+    """用户主动中止（/chat/abort）——在取消检查边界抛出。
+
+    stage = 检查点标签（cs_graph_entry / cs_supervisor / cs_expert:<name> /
+    cs_reporter / knowledge_rag 等），供 trace.cancel_stage 归因。
+    """
+
+    def __init__(self, stage: str = ""):
+        super().__init__(f"request cancelled at {stage}" if stage else "request cancelled")
+        self.stage = stage
+
+
+def bind_cancel_event(event: Any) -> None:
+    """worker/节点入口绑定当前请求的取消信号（None = 无取消通道）。"""
+    _current_cancel_event.set(event)
+
+
+def is_cancelled() -> bool:
+    event = _current_cancel_event.get()
+    return event is not None and event.is_set()
+
+
+def raise_if_cancelled(stage: str) -> None:
+    """取消检查边界：已中止 → 抛 RequestCancelled（不启动新的下游调用）。"""
+    event = _current_cancel_event.get()
+    if event is not None and event.is_set():
+        raise RequestCancelled(stage)
 
 
 def set_session_id(sid: str) -> None:

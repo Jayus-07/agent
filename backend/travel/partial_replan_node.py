@@ -49,18 +49,19 @@ def partial_replan_node(state: dict) -> dict:
     if missing_add:
         # 换入新地点时复用既有「点名地点补全」能力；只补候选，不重新
         # 搜索整座城市，也不触发 POI 专家/Transit/Weather 全量链。
+        # 边界纪律（test_agent_service_boundary）：Provider 触点只在
+        # services 层——节点经 poi_service 封装调用，不直连 provider。
         try:
-            from backend.providers.travel.live import get_place_provider
-            from backend.providers.travel.live.tencent import resolve_missing_places
+            from backend.travel.services.poi_service import (
+                resolve_missing_candidates,
+            )
 
-            provider = get_place_provider()
-            if provider.is_enabled():
-                added, provider_notes = resolve_missing_places(
-                    itinerary.brief.destination,
-                    list(candidates.values()),
-                    missing_add,
-                )
-                candidates.update({poi.poi_id: poi for poi in added})
+            added, provider_notes = resolve_missing_candidates(
+                itinerary.brief.destination,
+                list(candidates.values()),
+                missing_add,
+            )
+            candidates.update({poi.poi_id: poi for poi in added})
         except Exception:  # noqa: BLE001 — 补全失败交给局部结果如实披露
             provider_notes = []
     result = apply_partial_replan(itinerary, candidates, request)

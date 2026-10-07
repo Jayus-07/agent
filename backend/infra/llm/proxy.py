@@ -970,7 +970,7 @@ def _accumulate_turn_usage(model: str, p: int, c: int, t: int,
         "provider": resolved_provider,
         "calls": 0,
         "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-        "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
+        "cached_tokens": 0, "reasoning_tokens": 0, "cost_cny": 0.0,
     })
     # 模型已在累计中但 provider 此前推断错误时，以本次权威值纠正
     entry.setdefault("provider", resolved_provider)
@@ -982,13 +982,17 @@ def _accumulate_turn_usage(model: str, p: int, c: int, t: int,
     entry["total_tokens"] = int(entry["total_tokens"]) + int(t or 0)
     entry["cached_tokens"] = int(entry["cached_tokens"]) + int(cached or 0)
     entry["reasoning_tokens"] = int(entry["reasoning_tokens"]) + int(reasoning or 0)
-    entry["cost_usd"] = float(entry["cost_usd"]) + float(cost or 0.0)
+    # cost 入参 = BillingResult.billed_cost_cny（恒 CNY，2026-10-07 收口）
+    entry["cost_cny"] = float(entry["cost_cny"]) + float(cost or 0.0)
     acc[model] = entry
     _turn_usage_var.set(acc)
 
 
 def get_turn_usage() -> dict:
-    """读取当前上下文本轮 LLM 用量汇总：{model: {calls, tokens..., cost_usd}}。"""
+    """读取当前上下文本轮 LLM 用量汇总：{model: {calls, tokens..., cost_cny}}。
+
+    cost_cny = BillingResult.billed_cost_cny 累加（记账本位币唯一口径）。
+    """
     return dict(_turn_usage_var.get() or {})
 
 
@@ -1054,7 +1058,16 @@ def _record_failed_attempt(
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
+                # ── Billing V2 失败留痕行：调用可能已计费但用量不可知 ──
+                "billing_schema_version": 2,
+                "native_cost": 0.0,
+                "native_currency": "",
+                "billed_cost_cny": 0.0,
+                "price_version": "",
+                "pricing_source": "unpriced",
+                "usage_source": "unavailable",
                 "cost_usd": 0.0,
+                "total_cost": 0.0,
                 "cost_status": COST_STATUS_UNPRICED,
                 "currency": "",
                 "requested_model": "",
@@ -1209,58 +1222,59 @@ def _record_tokens(
                 result.response_metadata.get("stop_reason", "unknown"),
             )
         from backend.infra.llm.budget import current_request_budget
-        from backend.infra.llm.pricing import calculate_current_cost
+        from backend.infra.llm.pricing import (
+            USAGE_SOURCE_PROVIDER,
+            NormalizedUsage,
+            price_usage,
+        )
 
         budget_state = current_request_budget()
-        cost_quantities = {
-            "input": billable_input,
-            "output": c,
-            "cache_read": cached,
-            "cache_write": int(in_details.get("cache_creation", 0) or 0),
-            "reasoning": reasoning,
-            "tool_call": int(tu.get("tool_calls", 0) or 0),
-        }
         enforce = bool(
             budget_state
             and budget_state.mode == "enforce"
             and budget_state.quota_store is not None
         )
-        if enforce:
-            # 硬预算门（P0 治理修正 2026-09-22）：有价按真实价结算；
-            # 缺价/价格库不可用不再让已成功的调用变错误或丢 usage 行 ——
-            # 按注册表估价记账，cost_status=price_unknown 显式标记
-            # （不静默算 0：token 照常入预算与用量库，状态可查）。
-            try:
-                cost_decimal = calculate_current_cost(
-                    model, "llm", cost_quantities, enforce=True,
-                )
-                cost_status, currency = "exact", "USD"
-                cost_breakdown: dict[str, float] = {}
-            except Exception as pricing_err:
-                from backend.infra.llm.pricing import (
-                    COST_STATUS_PRICE_UNKNOWN,
-                    calculate_fallback_cost,
-                )
-
-                cost_decimal = calculate_fallback_cost(
-                    model, billable_input + cached, c,
-                )
-                cost_status = COST_STATUS_PRICE_UNKNOWN
-                currency = "USD"
-                cost_breakdown = {}
-                logger.warning(
-                    "[Pricing][price_unknown] model=%s 调用成功但无生效价格，"
-                    "按注册表估价 %s USD 记账: %s",
-                    model, cost_decimal, pricing_err,
-                )
-        else:
-            # 软统计：状态化计费入口，永不抛错（exact/estimated/unpriced）。
-            from backend.infra.llm.pricing import calculate_llm_cost_with_status
-
-            cost_decimal, cost_status, currency, cost_breakdown = (
-                calculate_llm_cost_with_status(model, cost_quantities)
-            )
+        # 唯一计费入口（2026-10-07 收口）：observe/enforce 同算法同金额，
+        # 差异只在 cost_status（缺价时 price_unknown vs estimated）与门禁行为。
+        # BillingResult.billed_cost_cny 恒为 CNY——预算结算、llm_usage、
+        # trace、看板全部消费同一结果，任何一层不得重新算钱或二次换汇。
+        billing = price_usage(
+            model, "llm",
+            NormalizedUsage(
+                input_tokens=int(p),
+                cached_input_tokens=cached,
+                cache_write_tokens=int(in_details.get("cache_creation", 0) or 0),
+                output_tokens=int(c),
+                reasoning_tokens=reasoning,
+                tool_calls=int(tu.get("tool_calls", 0) or 0),
+            ),
+            enforce=enforce,
+            usage_source=USAGE_SOURCE_PROVIDER,
+        )
+        cost_decimal = billing.billed_cost_cny
+        cost_status = billing.cost_status
+        # currency 列语义（V2）= 供应商原生报价币种；记账金额看 billed_cost_cny
+        currency = billing.native_currency
+        cost_breakdown = {
+            "input_cost": float(billing.input_cost_cny),
+            "cached_input_cost": float(billing.cached_input_cost_cny),
+            "output_cost": float(billing.output_cost_cny),
+            # 单价快照 = 原生币种；无价（fallback/unpriced）为 None → 落库 NULL
+            "input_unit_price": (
+                float(billing.input_unit_price)
+                if billing.input_unit_price is not None else None
+            ),
+            "output_unit_price": (
+                float(billing.output_unit_price)
+                if billing.output_unit_price is not None else None
+            ),
+            "cache_input_unit_price": (
+                float(billing.cache_input_unit_price)
+                if billing.cache_input_unit_price is not None else None
+            ),
+        }
         cost = float(cost_decimal)
+        native_cost = float(billing.native_cost)
         try:
             from backend.infra.llm.budget import record_model_usage
 
@@ -1281,14 +1295,22 @@ def _record_tokens(
             "cached_tokens": cached,
             "reasoning_tokens": reasoning,
             "finish_reason": finish_reason,
-            "cost_usd": cost,
-            "input_cost": cost_breakdown.get("input_cost", 0.0),
-            "cached_input_cost": cost_breakdown.get("cached_input_cost", 0.0),
-            "output_cost": cost_breakdown.get("output_cost", 0.0),
-            # 单价快照（C6）：price_unknown 分支 breakdown 为空 → None（未知）
-            "input_unit_price": cost_breakdown.get("input_unit_price"),
-            "output_unit_price": cost_breakdown.get("output_unit_price"),
-            "cache_input_unit_price": cost_breakdown.get("cache_input_unit_price"),
+            # 币种契约（V2）：cost_usd 只在原生币种确为 USD 时有值；
+            # 记账金额一律看 cost_cny / billed_cost_cny。
+            "cost_usd": native_cost if billing.native_currency == "USD" else 0.0,
+            "cost_cny": cost,
+            "native_cost": native_cost,
+            "native_currency": billing.native_currency,
+            "fx_rate": float(billing.fx_rate) if billing.fx_rate is not None else None,
+            "price_version": billing.price_version or "",
+            "pricing_source": billing.pricing_source,
+            "usage_source": billing.usage_source,
+            "input_cost": cost_breakdown["input_cost"],
+            "cached_input_cost": cost_breakdown["cached_input_cost"],
+            "output_cost": cost_breakdown["output_cost"],
+            "input_unit_price": cost_breakdown["input_unit_price"],
+            "output_unit_price": cost_breakdown["output_unit_price"],
+            "cache_input_unit_price": cost_breakdown["cache_input_unit_price"],
             "cost_status": cost_status,
             "currency": currency,
             "model": model,
@@ -1330,19 +1352,47 @@ def _record_tokens(
                 "billable_input_tokens": billable_input,
                 "cached_tokens": cached,
                 "reasoning_tokens": reasoning,
-                "cost_usd": cost,
-                "input_cost": cost_breakdown.get("input_cost", 0.0),
-                "cached_input_cost": cost_breakdown.get("cached_input_cost", 0.0),
-                "output_cost": cost_breakdown.get("output_cost", 0.0),
+                # ── Billing V2（2026-10-07 冻结契约）：唯一权威字段 ──
+                "billing_schema_version": 2,
+                "native_cost": native_cost,
+                "native_currency": billing.native_currency,
+                "billed_cost_cny": cost,
+                "fx_rate": (float(billing.fx_rate)
+                            if billing.fx_rate is not None else None),
+                "price_version": billing.price_version or "",
+                "pricing_source": billing.pricing_source,
+                "usage_source": billing.usage_source,
+                "input_cost": cost_breakdown["input_cost"],
+                "cached_input_cost": cost_breakdown["cached_input_cost"],
+                "output_cost": cost_breakdown["output_cost"],
+                "reasoning_cost_cny": float(billing.reasoning_cost_cny),
+                "cache_write_cost_cny": float(billing.cache_write_cost_cny),
+                "tool_call_cost_cny": float(billing.tool_call_cost_cny),
                 "cost_status": cost_status,
+                # 兼容列过渡语义：currency=原生币种；cost_usd 仅原生 USD 时有值，
+                # CNY 原生行为 0（真相在 billed_cost_cny，读层 V2-aware）。
+                "cost_usd": native_cost if billing.native_currency == "USD" else 0.0,
                 "currency": currency,
-                # 身份链（STOP C C2）+ 单价快照（C6）
+                "total_cost": cost,
+                # 身份链（STOP C C2）+ 单价快照（原生币种）
                 "requested_model": requested_override,
                 "upstream_model_id": upstream_model or "",
                 "binding_source": ctx.binding_source if ctx is not None else "",
-                "input_unit_price": cost_breakdown.get("input_unit_price"),
-                "output_unit_price": cost_breakdown.get("output_unit_price"),
-                "cache_input_unit_price": cost_breakdown.get("cache_input_unit_price"),
+                "input_unit_price": cost_breakdown["input_unit_price"],
+                "output_unit_price": cost_breakdown["output_unit_price"],
+                "cache_input_unit_price": cost_breakdown["cache_input_unit_price"],
+                "reasoning_unit_price": (
+                    float(billing.reasoning_unit_price)
+                    if billing.reasoning_unit_price is not None else None
+                ),
+                "cache_write_unit_price": (
+                    float(billing.cache_write_unit_price)
+                    if billing.cache_write_unit_price is not None else None
+                ),
+                "tool_call_unit_price": (
+                    float(billing.tool_call_unit_price)
+                    if billing.tool_call_unit_price is not None else None
+                ),
                 "finish_reason": finish_reason,
                 "decision": current_call_decision(),
                 "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
@@ -1419,17 +1469,28 @@ def _settle_estimated_stream_usage(
             provider_resolved = _get_provider_for(model)
 
         from backend.infra.llm.pricing import (
-            COST_STATUS_ESTIMATED, calculate_llm_cost_with_status,
+            USAGE_SOURCE_ESTIMATED, NormalizedUsage, price_usage,
         )
-        cost_decimal, _pricing_status, _currency, cost_breakdown = (
-            calculate_llm_cost_with_status(model, {
-                "input": prompt_tokens, "output": completion_tokens,
-                "cache_read": 0, "cache_write": 0, "reasoning": 0,
-                "tool_call": 0,
-            })
-        )
+        from backend.infra.llm.budget import current_request_budget
 
-        # 预算结算：估算值视为本次调用的实际用量（保守性由 reserved 上限保证）
+        _budget_state = current_request_budget()
+        _enforce = bool(
+            _budget_state
+            and _budget_state.mode == "enforce"
+            and _budget_state.quota_store is not None
+        )
+        billing = price_usage(
+            model, "llm",
+            NormalizedUsage(input_tokens=prompt_tokens, output_tokens=completion_tokens),
+            enforce=_enforce,
+            usage_source=USAGE_SOURCE_ESTIMATED,
+        )
+        cost_decimal = billing.billed_cost_cny
+        cost_status = billing.cost_status
+        _currency = billing.native_currency
+
+        # 预算结算：估算值视为本次调用的实际用量（保守性由 reserved 上限保证）；
+        # 结算金额 = BillingResult.billed_cost_cny（恒 CNY，与 observe/enforce 同源）
         from backend.infra.llm.budget import (
             current_call_decision, record_model_usage,
         )
@@ -1447,6 +1508,7 @@ def _settle_estimated_stream_usage(
             "cached_tokens": 0, "reasoning_tokens": 0,
         })
         cost = float(cost_decimal)
+        _native_cost = float(billing.native_cost)
         _last_call_meta_var.set({
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -1454,14 +1516,28 @@ def _settle_estimated_stream_usage(
             "billable_input_tokens": prompt_tokens,
             "cached_tokens": 0, "reasoning_tokens": 0,
             "finish_reason": "estimated_no_usage",
-            "cost_usd": cost,
-            "input_cost": cost_breakdown.get("input_cost", 0.0),
+            # 币种契约（V2）：记账金额看 cost_cny；cost_usd 仅原生 USD 时有值
+            "cost_usd": _native_cost if billing.native_currency == "USD" else 0.0,
+            "cost_cny": cost,
+            "native_cost": _native_cost,
+            "native_currency": billing.native_currency,
+            "fx_rate": float(billing.fx_rate) if billing.fx_rate is not None else None,
+            "price_version": billing.price_version or "",
+            "pricing_source": billing.pricing_source,
+            "usage_source": billing.usage_source,
+            "input_cost": float(billing.input_cost_cny),
             "cached_input_cost": 0.0,
-            "output_cost": cost_breakdown.get("output_cost", 0.0),
-            "input_unit_price": cost_breakdown.get("input_unit_price"),
-            "output_unit_price": cost_breakdown.get("output_unit_price"),
+            "output_cost": float(billing.output_cost_cny),
+            "input_unit_price": (
+                float(billing.input_unit_price)
+                if billing.input_unit_price is not None else None
+            ),
+            "output_unit_price": (
+                float(billing.output_unit_price)
+                if billing.output_unit_price is not None else None
+            ),
             "cache_input_unit_price": None,
-            "cost_status": COST_STATUS_ESTIMATED,
+            "cost_status": cost_status,
             "currency": _currency,
             "model": model,
             "canonical_model_id": model,
@@ -1496,17 +1572,37 @@ def _settle_estimated_stream_usage(
                 "total_tokens": total_tokens,
                 "billable_input_tokens": prompt_tokens,
                 "cached_tokens": 0, "reasoning_tokens": 0,
-                "cost_usd": cost,
-                "input_cost": cost_breakdown.get("input_cost", 0.0),
+                # ── Billing V2（估算行：usage_source=estimated）──
+                "billing_schema_version": 2,
+                "native_cost": _native_cost,
+                "native_currency": billing.native_currency,
+                "billed_cost_cny": cost,
+                "fx_rate": (float(billing.fx_rate)
+                            if billing.fx_rate is not None else None),
+                "price_version": billing.price_version or "",
+                "pricing_source": billing.pricing_source,
+                "usage_source": billing.usage_source,
+                "input_cost": float(billing.input_cost_cny),
                 "cached_input_cost": 0.0,
-                "output_cost": cost_breakdown.get("output_cost", 0.0),
-                "cost_status": COST_STATUS_ESTIMATED,
+                "output_cost": float(billing.output_cost_cny),
+                "reasoning_cost_cny": 0.0,
+                "cache_write_cost_cny": 0.0,
+                "tool_call_cost_cny": 0.0,
+                "cost_status": cost_status,
+                "cost_usd": _native_cost if billing.native_currency == "USD" else 0.0,
                 "currency": _currency,
+                "total_cost": cost,
                 "requested_model": "",
                 "upstream_model_id": ctx.model_id if ctx is not None else "",
                 "binding_source": "estimated",
-                "input_unit_price": cost_breakdown.get("input_unit_price"),
-                "output_unit_price": cost_breakdown.get("output_unit_price"),
+                "input_unit_price": (
+                    float(billing.input_unit_price)
+                    if billing.input_unit_price is not None else None
+                ),
+                "output_unit_price": (
+                    float(billing.output_unit_price)
+                    if billing.output_unit_price is not None else None
+                ),
                 "cache_input_unit_price": None,
                 "finish_reason": "estimated_no_usage",
                 "decision": current_call_decision(),

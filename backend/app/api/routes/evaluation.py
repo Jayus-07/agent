@@ -7,11 +7,13 @@ from typing import Any
 
 import json
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.app.api.deps import OperatorIdentity, require_admin_user
 from backend.evaluation.curator import append_case, list_cases
+from backend.evaluation.config import EvalConfig
+from backend.evaluation.mode import resolve_evaluation_mode
 from backend.evaluation.models import ModuleKind
 from backend.evaluation.storage import (
     list_runs,
@@ -140,19 +142,78 @@ class RunEvalResponse(BaseModel):
     recall_at_5: float = 0.0
     timestamp: str = ""
     error: str = ""
+    run_id: str = ""
+    suite: str = ""
+    evaluation_mode: str = ""
+    evaluator_mode: str = ""
+
+
+class RunEvalRequest(BaseModel):
+    """评测中心运行选项；旧客户端不传 body 时保持离线口径。"""
+
+    evaluation_mode: str = "offline"
+    suite: str = "pr_baseline"
 
 
 @router.post("/run", response_model=RunEvalResponse)
 async def run_evaluation(
     module: ModuleKind = Query("rag", description="评测模块"),
+    body: RunEvalRequest | None = Body(default=None),
     _operator: OperatorIdentity = Depends(require_admin_user),
 ):
-    """运行评测（当前仅支持 rag 模块离线评测；P0-01：执行仅限管理员）。"""
+    """运行 RAG 评测；可选离线、自研、RAGAS 或双轨方式。"""
     if module != "rag":
         raise HTTPException(status_code=400, detail="当前仅支持 rag 模块评测")
     try:
-        result = await asyncio.to_thread(run_weekly_rag_eval)
-        return RunEvalResponse(**result)
+        request = body or RunEvalRequest()
+        mode = resolve_evaluation_mode(request.evaluation_mode)
+        if mode.mode == "offline":
+            result = await asyncio.to_thread(run_weekly_rag_eval)
+            return RunEvalResponse(
+                **result,
+                suite=request.suite,
+                evaluation_mode=mode.mode,
+                evaluator_mode="self",
+            )
+
+        def _run_selected() -> RunEvalResponse:
+            from backend.evaluation.service import EvaluationService
+            from backend.evaluation.storage import persist_report
+            from backend.infra.llm.registry_store import refresh_registry
+
+            asyncio.run(refresh_registry())
+            report = EvaluationService().evaluate(
+                EvalConfig(
+                    module="rag",
+                    live=mode.live,
+                    ragas=mode.ragas,
+                    no_ragas=mode.no_ragas,
+                    selection=request.suite,
+                )
+            )
+            run_dir = persist_report(report)
+            summary = next(
+                (item for item in report.summaries if item.module == "rag"), None
+            )
+            if summary is None:
+                raise RuntimeError("rag module summary not found")
+            return RunEvalResponse(
+                ok=True,
+                total=summary.total,
+                passed=summary.passed,
+                failed=summary.failed + summary.errors,
+                pass_rate=summary.pass_rate,
+                top1_accuracy=summary.metrics.get("top1_accuracy", 0.0),
+                reject_accuracy=summary.metrics.get("reject_accuracy", 0.0),
+                recall_at_5=summary.metrics.get("recall@5", 0.0),
+                timestamp=report.timestamp,
+                run_id=run_dir.name,
+                suite=request.suite,
+                evaluation_mode=mode.mode,
+                evaluator_mode=str(report.metadata.get("evaluator_mode") or ""),
+            )
+
+        return await asyncio.to_thread(_run_selected)
     except Exception as e:
         logger.error(f"评测运行失败: {e}")
         return RunEvalResponse(ok=False, error=str(e))

@@ -589,3 +589,61 @@ groups:
         annotations:
           summary: "FAQ 层故障 10 分钟内超过 5 次（自动降级 RAG 链）"
           description: "FAQ 依赖 agent_memory PG（ai.cs_faq）；故障不阻断问答但承接占比与 TTFT 劣化。排查 PG 连通性与 ai.cs_faq 可用性；app 冷启动后约 1 分钟内依赖未热的偶发降级属已知现象（见客服上线 Runbook）"
+
+  # ── Grafana 观测重构补缺告警（2026-10-06，审计 §五：有指标有看板位无告警）──
+  # 只补 P0 SLI 缺口，不动既有 55 条。阈值口径：
+  #   失败/超时按速率占比（rate 比，天然抗重启归零）；降级/回退按绝对增量。
+  - name: agent-platform-tool-runtime
+    interval: 30s
+    rules:
+      - alert: ToolFailureSpike
+        expr: |
+          sum(rate(agent_tool_failure_total[10m]))
+            / clamp_min(sum(rate(agent_tool_calls_total[10m])), 0.001) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool 失败率超过 10%（10 分钟窗口）"
+          description: "失败含 timeout/unavailable/rate_limited/failed 四态。按 tool/domain 标签定位失败 Tool（Grafana 03 页排名表），再进管理端 Trace 按时间窗过滤；供应商侧故障看 05 页 LLM 维度。治理层重试已内置，持续超阈值先查外部依赖连通性"
+
+      - alert: ToolTimeoutSpike
+        expr: |
+          sum(rate(agent_tool_timeout_total[10m]))
+            / clamp_min(sum(rate(agent_tool_calls_total[10m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool 超时率超过 5%（持续 10 分钟）"
+          description: "按 tool 标签定位超时 Tool，核对其外部依赖 RTT 与该 Tool 的超时配置；P95 延迟同步看 Grafana 03 页。个别慢源不要全局调大超时，优先给该 Tool 配 fallback"
+
+      - alert: RagGateDegradedSpike
+        expr: increase(rag_gate_degraded_total[15m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG 防线软降级 15 分钟内超过 10 次"
+          description: "按 layer 标签定位降级防线（retrieval/rerank/evaluation/claim_verify）。软降级不阻断问答但质量门失效，拒答率与幻觉风险同步升高；常见根因为 rerank 上游故障或 Evidence Gate 依赖异常，恢复后观察 rag_gate_degraded_total 停止增长"
+
+      - alert: RouterFallbackSpike
+        expr: sum(increase(router_fallback_total[10m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "路由降级 10 分钟内超过 20 次"
+          description: "按 reason 标签定位（向量故障四分类 domain_classifier_degraded/vector_index_mismatch/vector_unavailable/llm_failure）。向量故障不在请求内重建索引；llm_failure 持续出现检查分类模型配额与凭据。Fallback 流量落入 rule 层会拉低意图准确率"
+
+      - alert: TravelValidationFailureSpike
+        expr: |
+          sum(rate(travel_itinerary_validation_total{status="errors"}[15m]))
+            / clamp_min(sum(rate(travel_itinerary_validation_total[15m])), 0.001) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          domain: travel
+        annotations:
+          summary: "旅游行程校验失败率超过 30%（15 分钟窗口）"
+          description: "校验失败会触发 travel_repair 修复循环，连续失败阻塞交付。按约束类型看 Grafana 06 页「约束违例」面板（BUDGET_OVER/GEO_SCATTER 等），结合 trace 定位是需求本身不可满足还是 expert 产物质量退化"

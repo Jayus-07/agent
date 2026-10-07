@@ -35,7 +35,11 @@ class HandoffStore:
     """跨 turn 的 handoff 状态存储。
 
     Key: (user_id, session_id) → handoff_data dict.
-    内存 dict 作为 L1 缓存, DB 作为持久层。
+    STOP CS-A P0-6 原则冻结：PostgreSQL 是唯一事实源；本进程内存 dict
+    只是**写后加速缓存**——所有读路径（load / get_active_handoff /
+    has_active_handoff）一律 DB-first，禁止 L1 旧值参与 supervisor 拦截
+    判定（dispatcher/reaper 进程直写 PG 不会失效本进程 L1，此前
+    peek-first 导致图状态可比 PG 滞后一整个关单周期）。
     """
 
     def __init__(self):
@@ -43,27 +47,36 @@ class HandoffStore:
         self._lock = threading.Lock()
 
     def peek_l1(self, user_id: str, session_id: str) -> dict | None:
-        """P3.5：纯内存直读（无 DB 桥接）——供已运行在 _db_loop 线程的
-        async 代码调用（嵌套 run_sync 会自死锁）。"""
+        """P3.5：纯内存直读（无 DB 桥接）——仅供已运行在 _db_loop 线程、
+        无法嵌套 run_sync 的 async 代码使用；**禁止作为关键判定输入**
+        （state_transition 的 handoff 读已改为 PG 直读，见 P0-6）。"""
         with self._lock:
             return self._data.get((user_id, session_id))
 
     def cache_l1(self, user_id: str, session_id: str, data: dict) -> None:
-        """P3.5：DB 读回填 L1 缓存（与 load 的缓存行为一致）。"""
+        """P3.5：DB 读回填 L1 缓存（写后加速，非事实源）。"""
         with self._lock:
             self._data[(user_id, session_id)] = data
 
-    def load(self, user_id: str, session_id: str) -> dict | None:
+    def _invalidate_user(self, user_id: str) -> None:
+        """DB 判定「无活跃工单」时清理该用户全部 L1 残留（防旧值复活）。"""
         with self._lock:
-            cached = self._data.get((user_id, session_id))
-            if cached is not None:
-                return cached
+            for key in [k for k in self._data if k[0] == user_id]:
+                self._data.pop(key, None)
 
+    def load(self, user_id: str, session_id: str) -> dict | None:
+        # P0-6：DB-first —— L1 命中可能是 dispatcher/reaper 已推进前的旧值
         db_data = self._db_load(user_id, session_id)
         if db_data is not None:
             with self._lock:
                 self._data[(user_id, session_id)] = db_data
-        return db_data
+            return db_data
+        self._invalidate_user_key(user_id, session_id)
+        return None
+
+    def _invalidate_user_key(self, user_id: str, session_id: str) -> None:
+        with self._lock:
+            self._data.pop((user_id, session_id), None)
 
     def save(self, user_id: str, session_id: str, handoff_data: dict) -> None:
         from datetime import datetime, timezone
@@ -91,28 +104,23 @@ class HandoffStore:
             self._data.pop((user_id, session_id), None)
 
     def has_active_handoff(self, user_id: str) -> bool:
-        with self._lock:
-            for k, v in self._data.items():
-                if k[0] == user_id:
-                    state = v.get("handoff_state")
-                    if state and state != "closed":
-                        return True
-        return self._db_has_active(user_id)
+        # P0-6：DB-first（同 get_active_handoff）
+        active = self._db_has_active(user_id)
+        if not active:
+            self._invalidate_user(user_id)
+        return active
 
     def get_active_handoff(self, user_id: str) -> dict | None:
-        with self._lock:
-            for k, v in self._data.items():
-                if k[0] == user_id:
-                    state = v.get("handoff_state")
-                    if state and state != "closed":
-                        return v
-
+        # P0-6：DB-first —— 跨进程（reaper/dispatcher）写库不失效本进程
+        # L1，L1 旧值会把「已关单/已恢复」的会话误判为仍在人工流程中。
         db_data = self._db_get_active(user_id)
         if db_data is not None:
             sid = db_data.pop("_conversation_id", "unknown")
             with self._lock:
                 self._data[(user_id, sid)] = db_data
-        return db_data
+            return db_data
+        self._invalidate_user(user_id)
+        return None
 
     def get_active_by_conversation(self, conversation_id: str) -> dict | None:
         """按会话查活跃转接（批次C 修正）。
@@ -215,7 +223,7 @@ class HandoffStore:
             if existing is not None:
                 await repo.update_state(
                     existing.handoff_id,
-                    handoff_data.get("handoff_state", "initiated"),
+                    handoff_data.get("handoff_state", "ai_active"),
                 )
             else:
                 await repo.save(user_id, session_id, handoff_data)

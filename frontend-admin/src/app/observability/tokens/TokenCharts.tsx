@@ -15,9 +15,9 @@ function formatNum(n: number | undefined | null): string {
 }
 
 function formatCost(n: number | undefined | null): string {
-  // 成本数值 2026-10-01 起为记账本位币 CNY
-  const usd = n ?? 0;
-  return `¥${usd.toFixed(2)}`;
+  // 记账本位币 CNY（Billing V2，2026-10-07）：数据源 cost_cny，禁止二次换汇
+  const cny = n ?? 0;
+  return `¥${cny.toFixed(2)}`;
 }
 
 function compact(n: number): string {
@@ -55,14 +55,15 @@ export default function TokenCharts({ data, metric }: { data: TokenChartRow[]; m
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#94a3b8" />
           <YAxis
-            tickFormatter={(v: number) => `$${compact(v)}`}
+            tickFormatter={(v: number) => `¥${compact(v)}`}
             tick={{ fontSize: 11 }} stroke="#94a3b8"
           />
           <Tooltip
             formatter={((v: unknown) => [formatCost(Number(v)), '成本']) as never}
             labelFormatter={((l: unknown) => `日期 ${String(l)}`) as never}
           />
-          <Line type="monotone" dataKey="cost_usd" stroke="#4D6BFE" strokeWidth={2} dot={{ r: 3 }} />
+          {/* 记账本位币主口径（Billing V2）：cost_cny，Y 轴/Tooltip/数据源全部 ¥ */}
+          <Line type="monotone" dataKey="cost_cny" stroke="#4D6BFE" strokeWidth={2} dot={{ r: 3 }} />
         </LineChart>
       </ResponsiveContainer>
     </div>

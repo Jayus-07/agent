@@ -64,11 +64,16 @@ def test_snapshot_prices_reach_usage_event(monkeypatch):
     row = store.events[0]
     assert row["model"] == "doubao-seed-2.0-mini"          # canonical 赢
     assert row["upstream_model_id"] == "doubao-seed-2-0-mini-260428"
-    assert row["input_unit_price"] == pytest.approx(1.44)
-    assert row["output_unit_price"] == pytest.approx(14.4)
-    assert row["cache_input_unit_price"] == pytest.approx(0.144)
+    # 2026-10-07 Billing 收口：单价快照 = 原生币种（per_1m），汇率单独固化
+    assert row["input_unit_price"] == pytest.approx(0.2)
+    assert row["output_unit_price"] == pytest.approx(2.0)
+    assert row["cache_input_unit_price"] == pytest.approx(0.02)
     assert row["cost_status"] == "exact"
-    assert abs(row["cost_usd"] - 15.84) < 1e-6
+    # cost_usd = 原生 USD 审计口径（$2.2）；记账金额在 billed_cost_cny（¥15.84）
+    assert abs(row["cost_usd"] - 2.2) < 1e-6
+    assert abs(row["billed_cost_cny"] - 15.84) < 1e-6
+    assert row["native_currency"] == "USD"
+    assert row["fx_rate"] == pytest.approx(7.2)
 
 
 def test_price_unknown_leaves_unit_prices_null(monkeypatch):

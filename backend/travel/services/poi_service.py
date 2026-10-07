@@ -86,6 +86,7 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
     observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     pois: list[Poi] = []
     seen: set[str] = set()
+    tencent_failures = 0
     for q in queries:
         try:
             data = live_search_service.search_places(
@@ -94,6 +95,7 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
         except live_search_service.LiveSearchError as exc:
             logger.warning("[PoiService] 实时候选检索 %s 失败: %s", q, exc)
             notes.append(f"「{q}」实时检索失败，该类候选缺失")
+            tencent_failures += 1
             continue
         for item in data.get("pois") or []:
             if not isinstance(item, dict):
@@ -133,9 +135,20 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 # 两个语义——地图打点按 location_status 判定（字段级拆分）。
                 location_status="verified",
             ))
-    pois, amap_notes = _merge_amap_candidates(
-        brief, queries, pois, observed_at)
-    notes.extend(amap_notes)
+    # F1 Provider fallback（2026-10-07 容错契约）：腾讯全败且高德可用时，
+    # 高德景点类目源顶上做主候选（真实已有 Provider，非造假数据）；两路
+    # 全败才交空候选池由上层如实终止。单类失败仍走逐类降级留痕。
+    if not pois and queries and tencent_failures == len(queries):
+        pois, fallback_notes = _merge_amap_candidates(
+            brief, queries, [], observed_at)
+        if pois:
+            notes.append(
+                "腾讯位置服务全部检索失败，已改用高德作为候选来源（非实时评分源）")
+        notes.extend(fallback_notes)
+    else:
+        pois, amap_notes = _merge_amap_candidates(
+            brief, queries, pois, observed_at)
+        notes.extend(amap_notes)
     pois, local_notes = _merge_local_doc_candidates(brief, pois)
     notes.extend(local_notes)
     return pois, notes
@@ -364,6 +377,24 @@ class Skeleton:
     days: list[list[Poi]] = field(default_factory=list)
     dropped: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+
+def resolve_missing_candidates(
+    destination: str, existing: list[Poi], missing_names: list[str],
+) -> tuple[list[Poi], list[str]]:
+    """点名新地点的批量补全（局部改单通道，与 must_go 的 resolve_missing_places
+    同一 Provider 出口：共享缓存 / 3s 预算 / 坐标校验 / quota 软预算）。
+
+    Provider 未启用返回空（如实不补全，不伪造）；异常由调用方披露。
+    边界纪律：Provider 触点只允许在 services 层——graph 节点不得直连。
+    """
+    from backend.providers.travel.live import get_place_provider
+    from backend.providers.travel.live.tencent import resolve_missing_places
+
+    provider = get_place_provider()
+    if not provider.is_enabled():
+        return [], []
+    return resolve_missing_places(destination, list(existing), list(missing_names))
 
 
 def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:

@@ -52,7 +52,11 @@ def _resolve_ocr_runtime_config() -> dict[str, str]:
             entry = models_mod.get_model_entry(model)
             provider_id = str(entry.get("provider") or "").strip() if entry else ""
             provider = models_mod.get_provider_entry(provider_id) or {}
-            if entry and models_mod.model_kind_of(entry) == "chat":
+            # OCR 角色在模型目录中有独立用途 ``ocr``；历史上这里仅接受
+            # ``chat``，导致管理端即使登记并绑定了 OCR 模型，运行时仍被
+            # 当成“无凭据”。两种用途都使用 OpenAI Chat 视觉协议，均可
+            # 解析统一供应商凭据；用途匹配由角色绑定 API 另行守卫。
+            if entry and models_mod.model_kind_of(entry) in {"chat", "ocr"}:
                 try:
                     credentials = credentials_mod.resolve_credentials(
                         provider_id,

@@ -35,7 +35,12 @@ def run_weekly_rag_eval(dataset_file: str | None = None) -> dict[str, Any]:
     importlib.import_module("backend.evaluation.runners_config")
     from backend.evaluation import persist_report, run_all
 
-    report = run_all(module="rag", live=False, dataset_file=dataset_file)
+    # 周期离线评测只跑确定性自研指标；不应因为没有在线答卷而生成一批
+    # RAGAS invalid 样本，再把它们混进管理端质量分数。
+    report = run_all(
+        module="rag", live=False, dataset_file=dataset_file,
+        ragas=False, no_ragas=True,
+    )
 
     # 持久化失败不阻断（CLI 同款策略）
     try:

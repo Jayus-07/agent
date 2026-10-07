@@ -73,6 +73,15 @@ class OrderNotFoundError(BusinessRuleError):
         )
 
 
+class AccountNotFoundError(BusinessRuleError):
+    """账户记录不存在（查无此账户行——与「未认证」是两件事，2026-10-07 口径修正）"""
+
+    def __init__(self, message: str = "账户不存在", **kw):
+        CustomerServiceError.__init__(
+            self, message, "ACCOUNT_NOT_FOUND", "未找到相关账户信息", **kw,
+        )
+
+
 class OrderNotEligibleError(BusinessRuleError):
     def __init__(self, message: str, **kw):
         CustomerServiceError.__init__(
@@ -134,6 +143,7 @@ ERROR_USER_MESSAGES: dict[str, str | None] = {
     "PERMISSION_DENIED": "您没有权限执行此操作。",
     "VALIDATION_ERROR":  "输入信息有误，请检查后重试。",
     "ORDER_NOT_FOUND":   "未找到相关订单信息，请确认订单号是否正确。",
+    "ACCOUNT_NOT_FOUND": "未找到相关账户信息，请确认后再试。",
     "BUSINESS_RULE":     None,
     "RETRIEVAL_ERROR":   "暂时无法查询相关信息，请稍后重试。",
     "EXTERNAL_SERVICE":  "系统繁忙，请稍后重试。",

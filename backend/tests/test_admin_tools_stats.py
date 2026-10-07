@@ -50,7 +50,9 @@ class TestAggregateToolStats:
 
         import prometheus_client
         monkeypatch.setattr(prometheus_client.REGISTRY, "collect", fake_collect)
-        report = mod._aggregate_tool_stats()
+        # 只测进程内 fake Prometheus 样本，避免默认 merged 模式把本机
+        # Redis 历史日聚合混进断言。
+        report = mod._aggregate_tool_stats(source="process")
 
         assert report["totals"]["tools_seen"] == 2
         assert report["totals"]["calls"] == 20
@@ -75,7 +77,7 @@ class TestAggregateToolStats:
 
         import prometheus_client
         monkeypatch.setattr(prometheus_client.REGISTRY, "collect", fake_collect)
-        report = mod._aggregate_tool_stats()
+        report = mod._aggregate_tool_stats(source="process")
         assert report["totals"]["tools_seen"] == 0
         assert report["totals"]["success_rate"] is None
         assert report["top_failed_tools"] == []
@@ -116,7 +118,7 @@ class TestToolInventory:
             pass
 
         resp = await mod.tool_inventory(_FakeRequest())
-        assert resp["count"] == 34
+        assert resp["count"] == 39
         assert not resp["lock_error"]
         # 归属已知限制：单 Tool Skill 主链（_tool_fn）可静态派生（10 个）；
         # SQLSkill(_tool_fn=NotImplementedError)/Competitor 多 Tool 分发不可静态求值

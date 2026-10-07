@@ -107,7 +107,8 @@ def test_handoff_model_exposes_dispatch_fields_and_queue_indexes():
     assert _default(CSHandoff, "priority") == 50
     assert _default(CSHandoff, "assignment_version") == 0
     assert _default(CSHandoff, "attempt_count") == 0
-    assert _default(CSHandoff, "handoff_state") == "initiated"
+    # STOP CS-A P0-6：default 与 Python HandoffState 首状态对齐（078 废弃 initiated）
+    assert _default(CSHandoff, "handoff_state") == "ai_active"
 
     active = _index(CSHandoff, "uq_cs_handoff_tenant_conversation_active")
     assert active.unique is True
@@ -264,7 +265,6 @@ def test_event_model_exposes_tenant_event_sequence_and_outbox_contract():
 def test_dispatch_states_are_explicit_and_preserve_legacy_values():
     assert {
         "ai_active",
-        "initiated",
         "handoff_requested",
         "waiting_human",
         "human_active",

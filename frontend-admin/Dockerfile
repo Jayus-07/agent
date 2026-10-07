@@ -9,7 +9,9 @@ WORKDIR /app
 
 # 安装依赖（利用 Docker 缓存层）
 COPY package.json package-lock.json* ./
-RUN npm ci
+# Next 14 的 SWC/图像依赖含平台可选包；Docker Linux 构建必须显式保留
+# optionalDependencies，否则 npm ci 会误报 package-lock 缺少 @emnapi/*。
+RUN npm ci --include=optional
 
 # 复制源码
 COPY . .

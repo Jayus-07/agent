@@ -205,37 +205,49 @@ class TokenTracker:
                 try:
                     from backend.infra.llm.budget import record_model_usage
                     from backend.infra.llm.budget import current_request_budget
-                    from backend.infra.llm.pricing import calculate_current_cost
+                    from backend.infra.llm.pricing import (
+                        NormalizedUsage,
+                        price_usage,
+                    )
 
                     budget_state = current_request_budget()
-                    cost_usd = calculate_current_cost(
+                    # Billing V2（2026-10-07 收口）：预占结算与用量行同源——
+                    # 此前结算走 PG 实价（CNY）、用量行走注册表估价（USD），
+                    # 同一调用两本账；现在同一次 price_usage 出唯一 BillingResult。
+                    _enforce = bool(
+                        budget_state
+                        and budget_state.mode == "enforce"
+                        and budget_state.quota_store is not None
+                    )
+                    billing = price_usage(
                         self.model_name,
                         self.component,
-                        {"input": total_tokens or 0},
-                        enforce=bool(
-                            budget_state
-                            and budget_state.mode == "enforce"
-                            and budget_state.quota_store is not None
-                        ),
+                        NormalizedUsage(input_tokens=total_tokens or 0),
+                        enforce=_enforce,
                     )
 
                     record_model_usage(
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         total_tokens=total_tokens,
-                        cost=cost_usd,
+                        cost=billing.billed_cost_cny,
                     )
                 except Exception as e:
                     # 预算统计失败不得覆盖原始模型结果/异常，但留痕便于排查。
                     from backend.shared.logger import logger as _logger
                     _logger.debug(f"[TokenTracker] 预算统计失败: {e}")
-                
+                    billing = None
+
+                # billing 挂在事件对象的非字段属性上（asdict/to_json 不序列化
+                # 非字段属性，JSONL 形状不变；方法签名不变，测试桩兼容）
+                event._billing = billing
+
                 # JSONL 写入 (线程安全)
                 self._write_jsonl(event)
-                
-                # SQLite 写入（统一数据源供看板聚合）
+
+                # SQLite 写入（统一数据源供看板聚合；复用同一 BillingResult）
                 self._write_sqlite(event)
-                
+
                 # Prometheus 指标 (独立 metric)
                 self._record_prometheus(event)
                 
@@ -270,23 +282,26 @@ class TokenTracker:
                 f.write(event.to_json() + "\n")
     
     def _write_sqlite(self, event: TokenUsageEvent):
-        """同步写入 SQLite（LLMUsageStore），供看板聚合。软失败不阻塞主流程。"""
+        """同步写入 SQLite（LLMUsageStore），供看板聚合。软失败不阻塞主流程。
+
+        billing 从 ``event._billing`` 读取（与预算结算同源的 BillingResult，
+        Billing V2 单一事实链）；缺失（计费失败/local 模型）时落 unpriced 行，
+        不冒充免费。
+        """
+        billing = getattr(event, "_billing", None)
         try:
-            from backend.infra.llm.models import compute_embedding_cost
             from backend.observability.llm_usage_store import get_llm_usage_store
 
             tokens = event.total_tokens or 0
-            cost_usd = compute_embedding_cost(event.model_name, tokens) if event.backend == "cloud" else 0.0
 
             store = get_llm_usage_store()
-            store.record({
+            row = {
                 "component": event.component,
                 "model": event.model_name,
                 "provider": "dashscope" if event.backend == "cloud" else "local",
                 "prompt_tokens": tokens,
                 "completion_tokens": 0,
                 "total_tokens": tokens,
-                "cost_usd": cost_usd,
                 "duration_ms": event.duration_ms,
                 "trace_id": event.trace_id or "",
                 "request_id": event.request_id or "",
@@ -299,7 +314,32 @@ class TokenTracker:
                 "step_id": event.step_id or "",
                 "role": event.role or "",
                 "stage": event.stage or "",
-            })
+            }
+            if billing is not None:
+                row.update({
+                    "billing_schema_version": 2,
+                    "native_cost": float(billing.native_cost),
+                    "native_currency": billing.native_currency,
+                    "billed_cost_cny": float(billing.billed_cost_cny),
+                    "total_cost": float(billing.billed_cost_cny),
+                    "fx_rate": (float(billing.fx_rate)
+                                if billing.fx_rate is not None else None),
+                    "price_version": billing.price_version or "",
+                    "pricing_source": billing.pricing_source,
+                    "usage_source": billing.usage_source,
+                    "input_cost": float(billing.input_cost_cny),
+                    "cost_status": billing.cost_status,
+                    "cost_usd": (float(billing.native_cost)
+                                 if billing.native_currency == "USD" else 0.0),
+                    "currency": billing.native_currency,
+                })
+            else:
+                row.update({
+                    "cost_usd": 0.0,
+                    "total_cost": 0.0,
+                    "cost_status": "unpriced",
+                })
+            store.record(row)
         except Exception as e:
             # 软失败：SQLite 写入失败不影响主流程和 JSONL 记录
             try:

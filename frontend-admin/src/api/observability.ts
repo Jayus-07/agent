@@ -111,8 +111,9 @@ export interface TokenUsageTotals {
   total_tokens: number
   cached_tokens: number
   reasoning_tokens: number
+  /** deprecated（Billing V2 前混算语义）：不再作为展示口径 */
   cost_usd: number
-  /** 本位币（CNY）合计：按行币种折算，展示主口径（2026-10-01） */
+  /** 记账本位币（CNY）合计：V2 行取 billed_cost_cny，唯一展示主口径（2026-10-07） */
   cost_cny: number
 }
 
@@ -122,7 +123,9 @@ export interface TokenUsageDaily {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  /** deprecated（混算语义） */
   cost_usd: number
+  /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
   cost_cny: number
 }
 
@@ -136,8 +139,9 @@ export interface TokenUsageByModel {
   total_tokens: number
   cached_tokens: number
   reasoning_tokens: number
+  /** deprecated（混算语义） */
   cost_usd: number
-  /** 本位币（CNY）合计：按行币种折算，展示主口径（2026-10-01） */
+  /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
   cost_cny: number
 }
 
@@ -167,7 +171,12 @@ export interface TokenCallRow {
   total_tokens: number
   cached_tokens: number
   reasoning_tokens: number
+  /** deprecated：原生 USD 金额（Billing V2），仅审计用 */
   cost_usd: number
+  /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
+  cost_cny?: number
+  cost_status?: string
+  price_version?: string
   duration_ms: number
   finish_reason: string
 }

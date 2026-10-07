@@ -269,6 +269,10 @@ class InventoryAlert:
     @step(
         depends_on=["alert_state_machine"],
         timeout_sec=30,
+        # STOP E（2026-10-07）：纯聚合占位（事件在 alert_state_machine 里
+        # 已落库），失败降级为空聚合继续——告警邮件才是本 workflow 的核心
+        # 交付物，事件计数缺失不该炸掉通知。
+        on_error="skip",
         name="记录告警事件",
     )
     async def create_event(self, ctx):
@@ -281,6 +285,9 @@ class InventoryAlert:
     @step(
         depends_on=["alert_state_machine"],
         timeout_sec=10,
+        # STOP E（2026-10-07）：本 step 输出无人消费（send_alert_email 自行
+        # plan() 决策），失败跳过对结果零影响，不应炸全局。
+        on_error="skip",
         name="加载通知策略",
     )
     async def load_notification_policies(self, ctx):

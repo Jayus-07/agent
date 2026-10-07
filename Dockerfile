@@ -47,7 +47,7 @@ COPY pyproject.toml ./
 ARG EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install -e ".[postgres]" \
+    && /opt/venv/bin/pip install -e ".[postgres,ragas]" \
         --extra-index-url ${EXTRA_INDEX_URL}
 
 # ════════════════════════════════════════════════

@@ -51,6 +51,20 @@ CS_AGENT_OFFER_COOLDOWN_SECONDS = int(
     os.getenv("CS_AGENT_OFFER_COOLDOWN_SECONDS", "60")
 )
 
+# ── human_active 自愈（STOP CS-A P0-5）────────────────────────
+# 坐席在人工处理中（human_active）掉线且超时无作为 → reaper 自动把工单
+# 送回 waiting_human 重派（assignment_version+1），而不是让会话永久滞留。
+# 触发条件（全部满足）：
+#   handoff_state == human_active
+#   AND assigned 坐席 presence 离线（Redis TTL 45s，WS 心跳 15s）
+#   AND「最后一条坐席消息 / 工单更新」距今超过本阈值
+#   AND 锁内 CAS（state + assigned_agent_id + assignment_version）仍成立
+# 阈值取 120s = presence TTL(45s) 的 2.7 倍：抖动断连（45s 内自动恢复）
+# 不触发；真实离线（关页面/崩溃）最迟 120s 自愈，期间用户最多多等 1 分钟。
+CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS = int(
+    os.getenv("CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS", "120")
+)
+
 # reaper 每轮最多处理的工单数（多副本下用 SKIP LOCKED 分批，避免长事务）。
 CS_REAPER_BATCH_LIMIT = int(os.getenv("CS_REAPER_BATCH_LIMIT", "200"))
 # 审查 #17：reaper 分块提交 —— 每块一个独立事务，避免单事务横跨全批

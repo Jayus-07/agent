@@ -19,6 +19,11 @@ def cs_reporter_node(state: dict[str, Any]) -> dict[str, Any]:
 
     从 Expert 的结构化输出组装最终回复，统一执行 OutputGuard。
     """
+    # STOP CS-A P0-3（F2）：Reporter 前取消检查 —— 中止后不再产出"正常回复"
+    from backend.core.request_context import raise_if_cancelled
+
+    raise_if_cancelled("cs_reporter")
+
     decision = state.get("supervisor_decision", {})
     expert_result = state.get("last_expert_result", {})
     handoff_state = state.get("handoff_state", "ai_active")

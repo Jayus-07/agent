@@ -39,21 +39,22 @@ def fake_tools(monkeypatch):
     responses: dict[str, list] = {"zhihu": [], "web": []}
 
     def _make(name):
-        class _FakeTool:  # 只需满足 _invoke 的 .func 访问
-            pass
+        class _FakeTool:
+            # 满足 _invoke 的治理链路：GovernanceRuntime 按 capability 名
+            # （真实 ToolSpec）判门后调 tool.invoke(arguments)（2026-10-06
+            # 治理改造后的契约；旧 .func 直调缝已废弃）
+            def invoke(self, kwargs):
+                calls.append((name, dict(kwargs)))
+                if not responses[name]:
+                    raise AssertionError(f"{name} 未预置响应")
+                item = responses[name].pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                if isinstance(item, str):
+                    return item
+                return json.dumps(item, ensure_ascii=False)
 
-        def _func(**kwargs):
-            calls.append((name, dict(kwargs)))
-            if not responses[name]:
-                raise AssertionError(f"{name} 未预置响应")
-            item = responses[name].pop(0)
-            if isinstance(item, Exception):
-                raise item
-            return item
-
-        tool = _FakeTool()
-        tool.func = _func
-        return tool
+        return _FakeTool()
 
     monkeypatch.setattr(LIVE, "zhihu_search_tool", _make("zhihu"))
     monkeypatch.setattr(LIVE, "global_search_tool", _make("web"))
@@ -95,7 +96,9 @@ class TestServiceLayer:
     def test_unparseable_envelope_raises(self, fake_tools):
         _, responses = fake_tools
         responses["web"].append("不是 JSON")
-        with pytest.raises(LiveSearchError, match="无法解析"):
+        # 治理归一化后失败文案由封套校验器决定，这里锁定的是契约本身：
+        # 不可解析的上游输出必须以 LiveSearchError 显式失败，不得吞成空结果
+        with pytest.raises(LiveSearchError):
             LIVE.search_web_guides(destination="泉州")
 
     def test_preview_shape(self):

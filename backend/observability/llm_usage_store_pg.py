@@ -46,6 +46,11 @@ _COLS += ", run_id, step_id, role, stage"
 # upstream 回传名与调用时单价）
 _COLS += (", requested_model, upstream_model_id, binding_source, "
           "input_unit_price, output_unit_price, cache_input_unit_price")
+# Billing V2（2026-10-07 收口，migration 079）：唯一计费事实链落库列
+_COLS += (", billing_schema_version, native_cost, native_currency, "
+          "billed_cost_cny, fx_rate, price_version, pricing_source, usage_source, "
+          "reasoning_cost_cny, cache_write_cost_cny, tool_call_cost_cny, "
+          "reasoning_unit_price, cache_write_unit_price, tool_call_unit_price")
 
 
 def _optional_decimal(value) -> float | None:
@@ -56,6 +61,25 @@ def _optional_decimal(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def cost_cny_sql_expr() -> str:
+    """行级记账本位币（CNY）SQL 表达式——全仓库唯一折算口径（G2）。
+
+    - Billing V2 行（billing_schema_version>=2）：直接取 ``billed_cost_cny``
+      ——汇率已在写入时由 BillingResult 固化，**读层禁止二次换汇**（P0-A 修复点）；
+    - legacy 行（版本 1）：按旧 currency 逻辑展示（CNY 原值 / 其余 × 当前
+      FX）——历史行币种不可机判，属 legacy_estimated 兼容语义，不伪造精确。
+    消费方：dashboard / cost_gauge_snapshot / breakdown / quota.summary。
+    """
+    from backend.config.budget import BUDGET_FX_USD_CNY
+
+    return (
+        "CASE WHEN billing_schema_version >= 2 AND billed_cost_cny IS NOT NULL "
+        "THEN billed_cost_cny "
+        "WHEN COALESCE(NULLIF(currency, ''), 'USD') = 'CNY' THEN total_cost "
+        f"ELSE total_cost * {float(BUDGET_FX_USD_CNY)} END"
+    )
 
 
 class PostgresLLMUsageStore(LLMUsageStore):
@@ -241,6 +265,59 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 f"CREATE INDEX IF NOT EXISTS idx_{t}_attribution "
                 f"ON {t}(skill_id, tool_id, agent_domain, ts)"
             )
+            # Billing V2（2026-10-07 收口）：唯一计费事实链，与
+            # sql/migrations/079_llm_usage_billing_v2.sql 同口径，启动即自愈补列。
+            # billed_cost_cny 可空 = legacy 行未回填（读层按旧 currency 逻辑展示）。
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS billing_schema_version "
+                "INTEGER NOT NULL DEFAULT 1"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS native_cost "
+                "NUMERIC(18, 6) NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS native_currency "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS billed_cost_cny "
+                "NUMERIC(18, 6)"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS fx_rate NUMERIC(18, 6)"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS price_version "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS pricing_source "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS usage_source "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            for _cost_col in (
+                "reasoning_cost_cny", "cache_write_cost_cny", "tool_call_cost_cny",
+            ):
+                cur.execute(
+                    f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {_cost_col} "
+                    "NUMERIC(18, 6) NOT NULL DEFAULT 0"
+                )
+            for _price_col in (
+                "reasoning_unit_price", "cache_write_unit_price",
+                "tool_call_unit_price",
+            ):
+                cur.execute(
+                    f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {_price_col} "
+                    "NUMERIC(18, 6)"
+                )
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{t}_billing "
+                f"ON {t}(billing_schema_version, cost_status, ts)"
+            )
 
     # ---- 写入 ----
 
@@ -264,12 +341,19 @@ class PostgresLLMUsageStore(LLMUsageStore):
                         input_unit_price, output_unit_price, cache_input_unit_price,
                         duration_ms, finish_reason, decision,
                         run_id, step_id, role, stage,
-                        skill_id, tool_id, agent_domain, created_at
+                        skill_id, tool_id, agent_domain,
+                        billing_schema_version, native_cost, native_currency,
+                        billed_cost_cny, fx_rate, price_version, pricing_source,
+                        usage_source, reasoning_cost_cny, cache_write_cost_cny,
+                        tool_call_cost_cny, reasoning_unit_price,
+                        cache_write_unit_price, tool_call_unit_price, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s,
                               %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s)
+                              %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     event.get("timestamp") or now,
                     str(event.get("trace_id") or ""),
@@ -297,7 +381,7 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     str(event.get("requested_model") or ""),
                     str(event.get("upstream_model_id") or ""),
                     str(event.get("binding_source") or ""),
-                    # 单价快照（C6）：None 落 NULL（price_unknown 语义）
+                    # 单价快照（原生币种，V2 语义）：None 落 NULL
                     _optional_decimal(event.get("input_unit_price")),
                     _optional_decimal(event.get("output_unit_price")),
                     _optional_decimal(event.get("cache_input_unit_price")),
@@ -311,6 +395,21 @@ class PostgresLLMUsageStore(LLMUsageStore):
                     str(event.get("skill_id") or ""),
                     str(event.get("tool_id") or ""),
                     str(event.get("agent_domain") or ""),
+                    # ── Billing V2（2026-10-07 冻结契约）──────────────────
+                    int(event.get("billing_schema_version") or 1),
+                    float(event.get("native_cost") or 0.0),
+                    str(event.get("native_currency") or ""),
+                    _optional_decimal(event.get("billed_cost_cny")),
+                    _optional_decimal(event.get("fx_rate")),
+                    str(event.get("price_version") or ""),
+                    str(event.get("pricing_source") or ""),
+                    str(event.get("usage_source") or ""),
+                    float(event.get("reasoning_cost_cny") or 0.0),
+                    float(event.get("cache_write_cost_cny") or 0.0),
+                    float(event.get("tool_call_cost_cny") or 0.0),
+                    _optional_decimal(event.get("reasoning_unit_price")),
+                    _optional_decimal(event.get("cache_write_unit_price")),
+                    _optional_decimal(event.get("tool_call_unit_price")),
                     now,
                 ))
                 self._write_count += 1
@@ -439,10 +538,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
             period = "day"
         bucket_key = "month" if period == "month" else "day"
         bucket_expr = "substr(ts, 1, 7)" if period == "month" else "substr(ts, 1, 10)"
-        from backend.config.budget import BUDGET_FX_USD_CNY
+        # Billing V2 感知折算（唯一口径见 cost_cny_sql_expr）：V2 行取
+        # billed_cost_cny 不再二次换汇；legacy 行按旧 currency 逻辑兜底。
         cost_cny_expr = (
-            "COALESCE(SUM(CASE WHEN COALESCE(NULLIF(currency, ''), 'USD') = 'CNY' "
-            f"THEN total_cost ELSE total_cost * {float(BUDGET_FX_USD_CNY)} END), 0) AS cost_cny"
+            f"COALESCE(SUM({cost_cny_sql_expr()}), 0) AS cost_cny"
         )
         empty = {
             "totals": {
@@ -504,7 +603,7 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 else:
                     daily = trend
 
-                # ③ 按模型细分（Provider/Model 维度）
+                # ③ 按模型细分（Provider/Model 维度；cost_cny 为记账主口径）
                 models = [dict(r) for r in self._exec(conn, f"""
                     SELECT provider, model,
                            COUNT(*) AS calls,
@@ -514,7 +613,8 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
                            COALESCE(SUM(reasoning_tokens), 0)  AS reasoning_tokens,
-                           COALESCE(SUM(cost_usd), 0)          AS cost_usd
+                           COALESCE(SUM(cost_usd), 0)          AS cost_usd,
+                           {cost_cny_expr}
                     FROM {self._table} WHERE {where_sql}
                     GROUP BY provider, model
                     ORDER BY total_tokens DESC
@@ -542,6 +642,7 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 m["cost_cny"] = round(float(m.get("cost_cny") or 0), 6)
             for m in models:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
+                m["cost_cny"] = round(float(m.get("cost_cny") or 0), 6)
             result = {"totals": totals, "daily": daily, "monthly": monthly,
                       "models": models,
                       "period": period}
@@ -555,15 +656,11 @@ class PostgresLLMUsageStore(LLMUsageStore):
     def cost_gauge_snapshot(self, cutoff: str) -> list[dict]:
         """账本成本投影（observability/cost_gauge 消费，只读非记账）。
 
-        成本口径与 dashboard() 一致：currency=CNY 用原值，否则按
-        BUDGET_FX_USD_CNY 折算为 ¥。domain 归并：agent_domain 优先（M5 域图
-        归因列），空则 component（'llm' 为主图 → 'main'，同 M5 口径），再空
-        'main'。软失败返回空列表，绝不影响账本本身。"""
-        from backend.config.budget import BUDGET_FX_USD_CNY
-        cost_cny_expr = (
-            "COALESCE(SUM(CASE WHEN COALESCE(NULLIF(currency, ''), 'USD') = 'CNY' "
-            f"THEN total_cost ELSE total_cost * {float(BUDGET_FX_USD_CNY)} END), 0)"
-        )
+        成本口径与 dashboard() 一致（cost_cny_sql_expr 唯一折算口径，V2 行
+        取 billed_cost_cny 不二次换汇）。domain 归并：agent_domain 优先（M5
+        域图归因列），空则 component（'llm' 为主图 → 'main'，同 M5 口径），
+        再空 'main'。软失败返回空列表，绝不影响账本本身。"""
+        cost_cny_expr = f"COALESCE(SUM({cost_cny_sql_expr()}), 0)"
         domain_expr = (
             "COALESCE(NULLIF(agent_domain, ''), "
             "NULLIF(CASE WHEN component = 'llm' THEN 'main' ELSE component END, ''), 'main')"
@@ -616,7 +713,8 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COUNT(*) AS calls,
                            COALESCE(SUM(total_tokens), 0) AS total_tokens,
                            COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
-                           COALESCE(SUM(cost_usd), 0)     AS cost_usd
+                           COALESCE(SUM(cost_usd), 0)     AS cost_usd,
+                           COALESCE(SUM({cost_cny_sql_expr()}), 0) AS cost_cny
                     FROM {self._table} WHERE {' AND '.join(where)}
                     GROUP BY {column}
                     ORDER BY total_tokens DESC
@@ -625,7 +723,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
             out = []
             for r in rows:
                 d = dict(r)
+                # cost_usd 为 deprecated 兼容列（混算语义，2026-10-07 起
+                # 不再作为展示口径）；cost_cny = 记账本位币唯一口径
                 d["cost_usd"] = round(d.get("cost_usd", 0) or 0, 6)
+                d["cost_cny"] = round(float(d.get("cost_cny") or 0), 6)
                 out.append(d)
             return out
         except Exception as e:

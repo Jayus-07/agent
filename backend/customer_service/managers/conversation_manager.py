@@ -42,10 +42,24 @@ class ConversationManager:
         handling_mode: HandlingMode = HandlingMode.AI,
         priority: str = "medium",
         assigned_agent_id: str | None = None,
+        tenant_id: str = "",
     ) -> CSConversation:
+        """创建会话行。
+
+        STOP CS-A P0-2：``tenant_id`` 必须由调用方显式提供（身份链解析值）；
+        空值 fail-closed 抛 ValidationError，禁止静默落 'default' 租户
+        （此前 ORM default 让所有本地写路径的会话都归 default 租户）。
+        """
+        tenant = (tenant_id or "").strip()
+        if not tenant:
+            raise ValidationError(
+                "tenant_id is required to create a CS conversation "
+                "(fail-closed: 拒绝写入 default 租户)"
+            )
         conv = CSConversation(
             conversation_id=conversation_id or uuid.uuid4().hex,
             user_id=user_id,
+            tenant_id=tenant,
             conversation_status=ConvStatus.OPEN.value,
             handling_mode=handling_mode.value,
             channel=channel,
@@ -67,7 +81,10 @@ class ConversationManager:
 
     async def get_or_create(self, conversation_id: str, user_id: str,
                             **kw) -> tuple[CSConversation, bool]:
-        """Return (conversation, created).  created=True if newly inserted."""
+        """Return (conversation, created).  created=True if newly inserted.
+
+        tenant_id 经 ``**kw`` 透传给 create（缺省时 create fail-closed）。
+        """
         conv = await self.get(conversation_id)
         if conv:
             return conv, False

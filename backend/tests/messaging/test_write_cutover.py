@@ -127,6 +127,7 @@ class TestConversationStoreJavaWrite:
         conversation_store.record_cs_turn(
             "c1", "u1", "问题", "回答",
             trace_id="t-1", cs_route={"intent": "order_query", "confidence": 0.9, "domain": "order"},
+            tenant_id="tenant-a",
         )
 
         assert len(captured) == 2
@@ -135,9 +136,26 @@ class TestConversationStoreJavaWrite:
         assert user_msg["sender_type"] == "user"
         assert user_msg["content"] == "问题"
         assert user_msg["trace_id"] == "t-1"
+        assert user_msg["tenant_id"] == "tenant-a"
         assert assistant_msg["sender_type"] == "assistant"
         assert assistant_msg["content"] == "回答"
         assert assistant_msg["metadata"]["intent_name"] == "order_query"
+
+    def test_missing_tenant_skipped(self, monkeypatch, caplog):
+        """STOP CS-A P0-2：缺可信 tenant → fail-closed 跳过写，绝不落 default。"""
+        import backend.config.messaging as cfg
+        from backend.infra.http import business_client
+
+        monkeypatch.setattr(cfg, "CS_WRITE_SOURCE", "java", raising=False)
+        captured = []
+
+        def fake_post(path, body):
+            captured.append((path, body))
+            return {"message_id": "m-1", "created_at": "2026-09-12T00:00:00Z"}
+
+        monkeypatch.setattr(business_client, "post_json_sync", fake_post)
+        conversation_store.record_cs_turn("c1", "u1", "问题", "回答", tenant_id="")
+        assert captured == []  # 未发出任何写请求
 
     def test_java_record_unavailable_does_not_raise(self, monkeypatch):
         """java 写权模式下 Java 不可用：记录 warning，不抛异常（fire-and-forget 语义保留）"""
@@ -151,4 +169,4 @@ class TestConversationStoreJavaWrite:
 
         monkeypatch.setattr(business_client, "post_json_sync", failing_post)
         # 不抛异常即通过（调用方是图节点，异常会中断对话链路）
-        conversation_store.record_cs_turn("c1", "u1", "问题", "回答")
+        conversation_store.record_cs_turn("c1", "u1", "问题", "回答", tenant_id="t1")

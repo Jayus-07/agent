@@ -169,6 +169,30 @@ class TestClientFailures:
         assert n["count"] == 1
         mcp_client.clear_cache()
 
+    def test_callable_inside_running_event_loop(self, monkeypatch):
+        """STOP A 回归：在运行中的事件循环线程上被调时，同步桥必须显式
+        跳线程执行而不是嵌套 asyncio.run（RuntimeError）。
+
+        2026-10-06 实测事故：治理同步适配器把同步 Tool 包进自己的 loop，
+        本层 asyncio.run 撞运行中的 loop → 12306/知乎真实调用全挂。
+        """
+        async def _fake(*a, **kw):
+            return {"success": True, "count": 0}
+
+        monkeypatch.setattr(mcp_client, "_call_async", _fake)
+        monkeypatch.setattr(MCP_CFG, "TRAIN_MCP_MIN_INTERVAL", 0.0)
+        mcp_client.clear_cache()
+        payload: dict = {}
+
+        async def _scenario():
+            # 直接在 loop 线程上同步调用（模拟异步宿主内 invoke 同步 Tool）
+            payload["result"] = mcp_client.call_tool(
+                "http://x/mcp", "query-tickets", {"k": "v"}, ttl=0)
+
+        asyncio.run(_scenario())
+        assert payload["result"] == {"success": True, "count": 0}
+        mcp_client.clear_cache()
+
 
 # =============================================
 # 3. Tool 层

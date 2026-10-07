@@ -380,6 +380,9 @@ class AgentHub:
                     event_id=envelope["event_id"],
                     type=envelope["type"],
                     payload=payload,
+                    # STOP CS-A P0-2：事件落库带租户（信封统一收口后由
+                    # publish 调用方显式传递；缺省沿用库默认兼容存量）
+                    tenant_id=str(payload.get("tenant_id") or "") or None,
                 )
         except Exception:
             logger.warning(
@@ -523,6 +526,15 @@ class AgentHub:
         target_agent_id = str(envelope.get("target_agent_id") or "").strip()
         target_tenant_id = str(envelope.get("tenant_id") or "").strip()
         conns = list(self._connections)
+        # STOP CS-A P0-2/B3：租户不匹配一律不投递 —— 此前仅定向事件
+        # （target_agent_id 存在时）做租户+坐席双过滤，无 target 的
+        # message.created 会广播给所有租户的在线坐席。
+        if target_tenant_id:
+            conns = [
+                ws for ws in conns
+                if (self._connection_identity.get(ws) or ("", ""))[0]
+                == target_tenant_id
+            ]
         if target_agent_id:
             if not target_tenant_id:
                 return

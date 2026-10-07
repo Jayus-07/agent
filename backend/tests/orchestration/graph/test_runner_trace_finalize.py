@@ -164,7 +164,9 @@ def test_user_abort_mid_stream_finishes_once_with_reason(_spy_finish):
     record, _answer = _spy_finish.calls[0]
     root = _root(record)
     assert root.end_time != ""
-    assert root.status == "error"
+    # STOP CS-A P0-3/F4（d0c9a5a）：用户主动中止终态语义 = cancelled
+    # （纯断连仍为 error，见下方 disconnect 用例）
+    assert root.status == "cancelled"
     assert root.metrics.get("reason") == "user_abort"
 
 

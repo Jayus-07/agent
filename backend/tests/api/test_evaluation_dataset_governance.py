@@ -128,3 +128,37 @@ def test_catalog_and_suite_expose_scope_and_hash(governance):
     assert catalog.json()["items"][0]["content_hash"]
     assert suites.json()["items"][0]["name"] == "pr_baseline"
     assert suites.json()["items"][0]["kb_id"] == "rag_eval_kb"
+
+
+def test_catalog_filters_special_and_tags_probe_datasets(governance):
+    """专项金标集不进目录页；探针模块打 probe 标签（2026-10-07 治理口径）。"""
+    module, client = governance
+
+    # sql_v2：专项验收集，不在 MODULE_KINDS，应被目录扫描排除
+    sql_v2_root = module.DATASET_DIR / "sql_v2"
+    sql_v2_root.mkdir()
+    (sql_v2_root / "cases.jsonl").write_text(
+        json.dumps({"id": "SV-001", "question": "q", "module": "sql_v2"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (sql_v2_root / "manifest.json").write_text(
+        json.dumps({"version": "2.0", "case_count": 1}), encoding="utf-8"
+    )
+    # travel-commerce：探针模块（MODULE_KINDS 内），应在列表中且 kind=probe
+    probe_root = module.DATASET_DIR / "travel-commerce"
+    probe_root.mkdir()
+    (probe_root / "cases.jsonl").write_text(
+        json.dumps({"id": "TC-001", "question": "q", "module": "travel-commerce"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    body = client.get("/api/evaluation/datasets").json()
+    listed = {item["module"]: item for item in body["items"]}
+
+    assert "sql_v2" not in listed
+    assert listed["travel-commerce"]["kind"] == "probe"
+    assert listed["rag"]["kind"] == "core"
+    # 显式点名专项集仍可查（治理可见性不丢）
+    single = client.get("/api/evaluation/datasets", params={"module": "sql_v2"})
+    assert single.status_code == 200
+    assert [item["module"] for item in single.json()["items"]] == ["sql_v2"]

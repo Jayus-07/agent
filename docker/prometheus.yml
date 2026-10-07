@@ -23,6 +23,13 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:8000"]
 
+  - job_name: rag-service
+    # RAG 独立服务（remote 模式下 RAG 链进程：rag_query_total /
+    # rag_stage_duration_seconds / rag_upload_* 等指标的真实归属进程）。
+    # 2026-10-06 观测重构：rag_server 挂 /metrics 前这些指标整体不可抓。
+    static_configs:
+      - targets: ["rag-service:8090"]
+
   - job_name: agent-platform-apisix
     # APISIX 独立导出服务（容器网络内 9091，compose 未发布该端口到宿主机）；
     # 自定义指标：gateway_auth_denied_total{route,reason} / gateway_auth_would_deny_total
@@ -68,3 +75,17 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # ── 观测栈自监控（2026-10-06 Grafana 观测重构：07 页依赖健康矩阵需要
+  # Alertmanager / Loki / Tempo 的 up 序列；此前三者无自抓取，矩阵恒 No data）──
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]

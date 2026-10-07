@@ -151,6 +151,16 @@ class TravelGraphState(TypedDict, total=False):
     # slot_filler（图入口）从 graph_builder 单例读取后写进 state ——
     # supervisor_decision 携带进 trace，reporter 据此向用户披露降级事实。
     persistence_status: str
+    # Tool Failure Policy 结局记录（2026-10-07 容错改造）。契约冻结：
+    # Tool Failure ≠ Workflow Failure——degraded_tools 是「实时数据未验证
+    # 但行程继续」的披露账（reporter 渲染 ⚠ 段、trace.travel_* 打标）；
+    # blocked_tools 是「硬依赖无法验证、Workflow 终止」的事实（supervisor
+    # 据此 REPORT 终止，reporter 给用户可读原因）；tool_failures 是原始
+    # 失败账（error_code/retry_count 等，管理端/排障用，不直接给用户）。
+    # 三者都是 dict 列表（可序列化进 checkpoint），跨专家累积合并写入。
+    degraded_tools: list[dict]
+    blocked_tools: list[dict]
+    tool_failures: list[dict]
     # 候选方案容器（任务书 §14，Phase 7 预留）：P0 单方案产出，无节点写入，
     # 仅占位——将来「出 A/B 两版让用户挑」时由规划层填充 CandidatePlan 快照。
     candidate_plans: list[dict]
@@ -337,6 +347,11 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
         "partial_replan": {},
         "partial_replan_done": False,
         "partial_replan_result": {},
+        # Failure Policy 结局账随重规划清空：blocked_tools 残留会让 supervisor
+        # 在新一轮直接终止（上一轮的「必须 X 点前到」不该阻断本轮新需求）
+        "degraded_tools": [],
+        "blocked_tools": [],
+        "tool_failures": [],
         "expert_history": [],
         "last_expert_result": {},
         "supervisor_decision": {},

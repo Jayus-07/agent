@@ -75,6 +75,50 @@ class LogisticsService:
         from backend.customer_service.service.demo_mode import resolve_user_id
 
         user_id = resolve_user_id(user_id)
+
+        order = self._resolve_order(user_id, order_id)
+        status = str(order.get("status") or "unknown")
+
+        tracking_info, trace_events, estimated_delivery = self._resolve_tracking(
+            str(order.get("order_no") or order_id), status
+        )
+
+        return LogisticsResult(
+            order_id=str(order.get("id") or order.get("order_id") or order_id),
+            order_no=str(order.get("order_no") or order_id),
+            status=status,
+            status_display=_STATUS_DISPLAY.get(status, status),
+            estimated_delivery=estimated_delivery,
+            tracking_info=tracking_info,
+            trace_events=trace_events,
+        )
+
+    @staticmethod
+    def _resolve_order(user_id: str, order_id: str) -> dict:
+        """订单事实获取。
+
+        2026-10-07 修复（收口审计 P1-6）：http 网关模式下订单事实源在
+        business service 侧（缺陷6.4 红线），此前物流恒查本地 orders 表——
+        同一笔订单在订单侧（网关 404）与物流侧（本地库查到/查不到）会给出
+        相互矛盾的业务结论（split-brain）。现 http 模式统一委托
+        OrderService.detail（网关 404→OrderNotFound / 网关不可用→DatabaseError
+        分类齐全）；sandbox 模式保持本地库直查。
+        """
+        from backend.customer_service.service.order_service import (
+            _use_http_gateway,
+            get_order_service,
+        )
+
+        if _use_http_gateway():
+            result = get_order_service().query_orders(
+                user_id=user_id, order_id=order_id, query_type="detail",
+            )
+            if not result.orders:
+                raise OrderNotFoundError(
+                    f"Order {order_id} not found for user {user_id}"
+                )
+            return result.orders[0]
+
         from backend.sql.executor import execute_sql_struct
 
         sql = """
@@ -95,22 +139,7 @@ class LogisticsService:
                 f"Order {order_id} not found for user {user_id}"
             )
 
-        order = result.rows[0]
-        status = order.get("status", "unknown")
-
-        tracking_info, trace_events, estimated_delivery = self._resolve_tracking(
-            str(order["order_no"]), status
-        )
-
-        return LogisticsResult(
-            order_id=str(order["id"]),
-            order_no=order["order_no"],
-            status=status,
-            status_display=_STATUS_DISPLAY.get(status, status),
-            estimated_delivery=estimated_delivery,
-            tracking_info=tracking_info,
-            trace_events=trace_events,
-        )
+        return result.rows[0]
 
     @staticmethod
     def _resolve_tracking(

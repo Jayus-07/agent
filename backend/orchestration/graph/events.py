@@ -28,7 +28,9 @@ def _capability_owner(cap: str) -> Optional[str]:
 # P1: todo 快照 + 流中用量
 # =====================================================
 
-_TODO_STATUS_MAP = {"success": "completed", "failed": "failed", "skipped": "skipped"}
+# partial = 降级完成（有产出但非全绿）——终态，不得永久挂 in_progress
+_TODO_STATUS_MAP = {"success": "completed", "failed": "failed",
+                    "skipped": "skipped", "partial": "completed"}
 
 
 def make_todo_event(plan_nodes: dict, step_results: dict) -> dict:
@@ -396,7 +398,11 @@ def _build_skill_events(node_name: str, output: dict, make_step_payload) -> Gene
         # Tool 治理（2026-09-22）：降级/超时/不可用时给用户友好状态提示，
         # 底层错误码/异常细节只进 trace，不下发前端。
         tool_status = sr.get("tool_status", "")
-        if tool_status == "timeout" and status in ("failed", "skipped"):
+        if sr.get("degraded") or tool_status == "degraded":
+            # STOP H（2026-10-07）：降级成功是 info 不是 error——
+            # 「degraded ≠ failed」，结果可用但可能不完整，如实告知
+            message = f"「{desc}」已降级完成，结果可能不完整，流程继续"
+        elif tool_status == "timeout" and status in ("failed", "skipped"):
             message = f"「{desc}」响应超时，已切换降级模式，正在生成回答…"
         elif tool_status in ("unavailable", "rate_limited") and status in ("failed", "skipped"):
             message = f"「{desc}」服务暂时不可用，已切换降级模式，正在生成回答…"
@@ -588,7 +594,8 @@ def summarize_turn_usage() -> dict | None:
             return None
         summary = {
             "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-            "cached_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+            "cost_cny": 0.0, "cost_usd": 0.0,
             "calls": 0,
         }
         models = {}
@@ -596,14 +603,19 @@ def summarize_turn_usage() -> dict | None:
             for k in ("prompt_tokens", "completion_tokens", "total_tokens",
                       "cached_tokens", "reasoning_tokens", "calls"):
                 summary[k] += int(e.get(k, 0) or 0)
-            summary["cost_usd"] += float(e.get("cost_usd", 0) or 0.0)
+            # 记账金额唯一口径 = cost_cny（BillingResult.billed_cost_cny 累加，
+            # 2026-10-07 收口）；cost_usd 不再承载金额（历史双金额语义已消灭，
+            # 兼容字段归零，前端未消费该键）
+            summary["cost_cny"] += float(
+                e.get("cost_cny", e.get("cost_usd", 0)) or 0.0
+            )
             models[model] = {
                 "prompt_tokens": int(e.get("prompt_tokens", 0) or 0),
                 "completion_tokens": int(e.get("completion_tokens", 0) or 0),
                 "total_tokens": int(e.get("total_tokens", 0) or 0),
                 "calls": int(e.get("calls", 0) or 0),
             }
-        summary["cost_usd"] = round(summary["cost_usd"], 6)
+        summary["cost_cny"] = round(summary["cost_cny"], 6)
         summary["models"] = models
         return summary
     except Exception:
@@ -708,10 +720,19 @@ def make_step_log_event(node_name: str, step_id: str, status: str,
         "success": "完成", "failed": "失败", "skipped": "跳过", "pending": "派发",
     }.get(status, status)
 
+    message = f"{status_label}: {desc}"
+    # 与 _build_skill_events 同口径：降级成功是 info（degraded ≠ failed），
+    # 超时/不可用给用户友好降级提示，底层细节只进 trace。
+    if sr.get("degraded") or sr.get("tool_status") == "degraded":
+        message = f"「{desc}」已降级完成，结果可能不完整，流程继续"
+    elif sr.get("tool_status") in ("timeout", "unavailable", "rate_limited") \
+            and status in ("failed", "skipped"):
+        message = f"「{desc}」服务暂时不可用，已切换降级模式，正在生成回答…"
+
     return {
         "event": "log", "data": {
             "level": level, "node": node_name, "step_id": step_id,
-            "message": f"{status_label}: {desc}",
+            "message": message,
             "payload": make_step_payload(sr),
             "ts": time.time(),
         },

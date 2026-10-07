@@ -27,6 +27,12 @@ class WorkflowContext:
     - error: 失败信息
     - skip_steps: 跳过的 Step 集合（on_error="skip"）
     - run_if_skips: run_if 条件跳过集合，不参与 partial 判定
+    - degraded_steps: 降级继续的 Step 集合（on_error="agent_degrade"，
+      产出 degraded 输出后流程继续；参与 partial 判定）
+    - step_failures: 失败/跳过 step 的结构化失败留痕
+      {step: {error, error_type, tool_status, criticality, error_code...}}，
+      供 summary()/trace/persistence 观测（STOP B：失败必须可辨识，
+      不再只有集合名）
     """
     workflow_name: str
     run_id: str
@@ -39,6 +45,8 @@ class WorkflowContext:
     error: str | None = None
     skip_steps: set[str] = field(default_factory=set)
     run_if_skips: set[str] = field(default_factory=set)
+    degraded_steps: set[str] = field(default_factory=set)
+    step_failures: dict[str, dict] = field(default_factory=dict)
 
     @property
     def duration_ms(self) -> int | None:
@@ -73,5 +81,7 @@ class WorkflowContext:
             "duration_ms": self.duration_ms,
             "error": self.error,
             "skip_steps": list(self.skip_steps),
+            "degraded_steps": list(self.degraded_steps),
+            "step_failures": dict(self.step_failures),
             "outputs_keys": list(self.outputs.keys()),
         }

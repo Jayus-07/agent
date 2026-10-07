@@ -1,4 +1,20 @@
-"""Q8 模型价格表：PostgreSQL 权威记录与 USD 六位精度计算。"""
+"""Q8 模型价格表 + 唯一计费入口（Model Billing Unified Closure 2026-10-07）。
+
+计费事实链（唯一算法 ``price_usage``）：
+
+    Provider Usage → NormalizedUsage → price_usage() → BillingResult
+                                                         ├ llm_usage
+                                                         ├ Budget settle
+                                                         ├ Trace
+                                                         └ Dashboard/Grafana
+
+不变量：同 Usage + 同价格版本 + 同 FX → 只有一个成本答案。
+observe / enforce 的区别只在门禁策略（是否预占/阻断），金额与状态恒出自同一
+BillingResult；硬模式缺价不再在结算层抛错（缺价放行 + price_unknown 语义，
+预占期的缺价探测仍由 budget.reserve 的 require(enforce=True) 负责）。
+``calculate_current_cost`` / ``calculate_llm_cost_with_status`` 降级为兼容
+wrapper（历史签名不变），内部全部走 ``price_usage``。
+"""
 from __future__ import annotations
 
 import os
@@ -300,15 +316,6 @@ def clear_price_cache() -> None:
         _price_cache.clear()
 
 
-def _to_base(amount: Decimal, currency: str) -> Decimal:
-    """按记账本位币折算（config/budget.py 唯一汇率出口）。"""
-    from backend.config.budget import to_base_currency
-
-    return to_base_currency(amount, currency).quantize(
-        _SIX_PLACES, rounding=ROUND_HALF_UP,
-    )
-
-
 def calculate_current_cost(
     model_name: str,
     component: str,
@@ -316,62 +323,28 @@ def calculate_current_cost(
     *,
     enforce: bool,
 ) -> Decimal:
-    """按 PG 价格表计费；硬模式缺价直接抛出，关闭时兼容旧估算。
+    """兼容 wrapper（2026-10-07 收口）：返回 ``price_usage().billed_cost_cny``。
 
-    2026-10-01 起返回值恒为记账本位币 CNY（价格行原生币种在此折算）。
+    历史契约保留：``enforce=True`` 时缺价/价格表不可用仍抛
+    ``MissingModelPrice`` / ``PriceTableUnavailable``（预占期探测依赖该信号）；
+    金额算法与 observe 同源（BillingResult.billed_cost_cny，恒 CNY）。
+    ``quantities['input']`` 沿用历史口径 = billable input（不含缓存命中），
+    缓存命中量放 ``cache_read``。
     """
-    if not enforce:
-        try:
-            table = get_current_price_table(model_name, component)
-            if table.require(model_name, component, enforce=False) is None:
-                _record_price_metric(component, "missing")
-                _logger.warning(
-                    "model_price_missing: model=%s component=%s; "
-                    "budget hard gate is disabled, token-only alert path",
-                    model_name,
-                    component,
-                )
-            else:
-                result = table.calculate_cost(model_name, component, quantities)
-                _record_price_metric(component, "hit")
-                return _to_base(result, table.currency_for(model_name, component))
-        except PriceTableUnavailable:
-            _record_price_metric(component, "unavailable")
-            _logger.warning(
-                "model_price_unavailable: model=%s component=%s; "
-                "budget hard gate is disabled, token-only alert path",
-                model_name,
-                component,
-            )
-        except MissingModelPrice:
-            _record_price_metric(component, "missing")
-            _logger.warning(
-                "model_price_incomplete: model=%s component=%s; "
-                "budget hard gate is disabled, token-only alert path",
-                model_name,
-                component,
-            )
-        if component == "llm":
-            return _to_base(
-                calculate_fallback_cost(
-                    model_name,
-                    int(quantities.get("input", 0)),
-                    int(quantities.get("output", 0)),
-                ),
-                "USD",
-            )
-        from backend.infra.llm.models import compute_embedding_cost
-
-        return _to_base(
-            Decimal(str(compute_embedding_cost(
-                model_name, int(sum(quantities.values()))
-            ))),
-            "USD",
+    if enforce:
+        get_current_price_table(model_name, component).require(
+            model_name, component, enforce=True,
         )
-    table = get_current_price_table(model_name, component)
-    result = table.calculate_cost(model_name, component, quantities)
-    _record_price_metric(component, "hit")
-    return _to_base(result, table.currency_for(model_name, component))
+    usage = NormalizedUsage(
+        input_tokens=int(quantities.get("input", 0) or 0)
+        + int(quantities.get("cache_read", 0) or 0),
+        cached_input_tokens=int(quantities.get("cache_read", 0) or 0),
+        cache_write_tokens=int(quantities.get("cache_write", 0) or 0),
+        output_tokens=int(quantities.get("output", 0) or 0),
+        reasoning_tokens=int(quantities.get("reasoning", 0) or 0),
+        tool_calls=int(quantities.get("tool_call", 0) or 0),
+    )
+    return price_usage(model_name, component, usage, enforce=enforce).billed_cost_cny
 
 
 def calculate_fallback_cost(
@@ -395,183 +368,375 @@ COST_STATUS_ESTIMATED = "estimated"
 COST_STATUS_UNPRICED = "unpriced"
 COST_STATUS_PRICE_UNKNOWN = "price_unknown"
 
+# 用量可信度（Billing V2）：token 数字从哪来。
+USAGE_SOURCE_PROVIDER = "provider"
+USAGE_SOURCE_ESTIMATED = "estimated"
+USAGE_SOURCE_UNAVAILABLE = "unavailable"
 
-def _llm_cost_breakdown(
-    rows: dict[str, PriceLine],
-    billable_input: int,
-    cached_input: int,
-    output_tokens: int,
-) -> tuple[Decimal, dict[str, Decimal]]:
-    """按价格行分项计算（全部 Decimal，1M tokens 口径）。
+# 计价来源（Billing V2）：金额按哪份价格算的。
+PRICING_SOURCE_APPROVED_TABLE = "approved_price_table"
+PRICING_SOURCE_REGISTRY_FALLBACK = "registry_fallback"
+PRICING_SOURCE_UNPRICED = "unpriced"
 
-    缓存价格行缺失时，缓存部分按普通 input 价计算 —— 这正是
-    ``cost_status='estimated'`` 的语义（保守估算，不猜价）。
+
+# =====================================================
+# Billing Contract（2026-10-07 冻结，唯一事实链）
+# =====================================================
+
+@dataclass(frozen=True)
+class NormalizedUsage:
+    """归一化后的单次调用用量（计费唯一入参）。
+
+    口径铁律：``input_tokens`` 是 provider 回传的 prompt/input **总量**
+    （含缓存命中部分）；``cached_input_tokens`` 是其子集。计费输入恒为
+    ``billable_input_tokens = input_tokens - cached_input_tokens``，
+    缓存部分单独按 cache_read 价计——禁止 input 全量 × input 价 + 缓存
+    × 缓存价的双算。
     """
-    in_p = rows["input"].price_per_unit
-    out_p = rows["output"].price_per_unit
-    cache_line = rows.get("cache_read")
-    cache_p = cache_line.price_per_unit if cache_line is not None else in_p
-    input_cost = (Decimal(billable_input) / Decimal("1000000") * in_p)
-    cached_cost = (Decimal(cached_input) / Decimal("1000000") * cache_p)
-    output_cost = (Decimal(output_tokens) / Decimal("1000000") * out_p)
-    total = (input_cost + cached_cost + output_cost).quantize(
-        _SIX_PLACES, rounding=ROUND_HALF_UP
-    )
-    breakdown = {
-        "input_cost": input_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
-        "cached_input_cost": cached_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
-        "output_cost": output_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
-    }
-    return total, breakdown
+
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    tool_calls: int = 0
+
+    def __post_init__(self):
+        for name in (
+            "input_tokens", "cached_input_tokens", "cache_write_tokens",
+            "output_tokens", "reasoning_tokens", "tool_calls",
+        ):
+            object.__setattr__(self, name, max(int(getattr(self, name) or 0), 0))
+
+    @property
+    def billable_input_tokens(self) -> int:
+        return max(self.input_tokens - self.cached_input_tokens, 0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
 
-def _unit_price_snapshot(
-    rows: dict[str, PriceLine],
-) -> dict[str, float]:
-    """调用时单价快照（Billing Snapshot / C6）：随 usage 行落库，事后可审计
-    历史成本用的是哪一版价格（per_1m_tokens 口径；缓存价缺行时按当时实际
-    参与计算的 input 价记录，与 cost_status='estimated' 语义对齐）。"""
-    cache_line = rows.get("cache_read")
-    return {
-        "input_unit_price": float(rows["input"].price_per_unit),
-        "output_unit_price": float(rows["output"].price_per_unit),
-        "cache_input_unit_price": float(
-            cache_line.price_per_unit if cache_line is not None
-            else rows["input"].price_per_unit
-        ),
-    }
+@dataclass(frozen=True)
+class BillingResult:
+    """一次模型调用的唯一计费事实（observe/enforce/trace/账本共消费）。
+
+    - ``native_cost``/``native_currency``：供应商原始报价币种成本（审计用）；
+    - ``billed_cost_cny``：平台记账本位币金额，预算结算 / 管理端 / 看板
+      唯一取用值，恒为 CNY；
+    - ``fx_rate``：本调用实际使用的汇率快照；原生币种即 CNY 时为 None。
+    """
+
+    model_name: str
+    component: str
+
+    # Usage 回显
+    input_tokens: int = 0
+    billable_input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cache_write_tokens: int = 0
+    tool_calls: int = 0
+
+    # 供应商原始成本
+    native_cost: Decimal = Decimal("0")
+    native_currency: str = "USD"
+
+    # 平台记账成本（恒 CNY）
+    billed_cost_cny: Decimal = Decimal("0")
+    base_currency: str = "CNY"
+
+    # 汇率快照（未换汇 = None）
+    fx_rate: Decimal | None = None
+
+    # 分项成本（CNY）
+    input_cost_cny: Decimal = Decimal("0")
+    cached_input_cost_cny: Decimal = Decimal("0")
+    output_cost_cny: Decimal = Decimal("0")
+    reasoning_cost_cny: Decimal = Decimal("0")
+    cache_write_cost_cny: Decimal = Decimal("0")
+    tool_call_cost_cny: Decimal = Decimal("0")
+
+    # 调用时单价快照（原生币种 per_1m_tokens / per_call；无价 = None）
+    input_unit_price: Decimal | None = None
+    output_unit_price: Decimal | None = None
+    cache_input_unit_price: Decimal | None = None
+    reasoning_unit_price: Decimal | None = None
+    cache_write_unit_price: Decimal | None = None
+    tool_call_unit_price: Decimal | None = None
+
+    # 价格治理
+    price_version: str | None = None
+    pricing_source: str = PRICING_SOURCE_UNPRICED
+
+    # 可信度
+    usage_source: str = USAGE_SOURCE_PROVIDER
+    cost_status: str = COST_STATUS_UNPRICED
 
 
-_MONEY_KEYS = (
-    "input_cost", "cached_input_cost", "output_cost",
-    "input_unit_price", "output_unit_price", "cache_input_unit_price",
+# 计价维度 → NormalizedUsage 取量函数（固定序，禁止调用方自由拼维度）
+_BILLING_DIMENSIONS: tuple[tuple[str, str], ...] = (
+    ("input", "billable_input_tokens"),
+    ("cache_read", "cached_input_tokens"),
+    ("output", "output_tokens"),
+    ("cache_write", "cache_write_tokens"),
+    ("reasoning", "reasoning_tokens"),
+    ("tool_call", "tool_calls"),
 )
+_UNIT_PRICE_FIELDS = {
+    "input": "input_unit_price",
+    "output": "output_unit_price",
+    "cache_read": "cache_input_unit_price",
+    "reasoning": "reasoning_unit_price",
+    "cache_write": "cache_write_unit_price",
+    "tool_call": "tool_call_unit_price",
+}
 
 
-def _to_base_or_unpriced(
-    total: Decimal,
-    payload: dict[str, float],
-    currency: str,
-    status: str,
-) -> tuple[Decimal, str, str, dict[str, float]]:
-    """把原生币种金额折算为记账本位币（CNY）后返回；折算失败降级 unpriced。
+def _dimension_amount(line: PriceLine, quantity: int) -> Decimal:
+    """单维度金额（原生币种）：per_1m_tokens 千万级换算 / per_call 直乘。"""
+    count = Decimal(quantity)
+    if line.unit == "per_call":
+        return (count * line.price_per_unit).quantize(
+            _SIX_PLACES, rounding=ROUND_HALF_UP,
+        )
+    return (count / Decimal("1000000") * line.price_per_unit).quantize(
+        _SIX_PLACES, rounding=ROUND_HALF_UP,
+    )
 
-    本入口契约永不抛错：币种未登记汇率属于价格配置错误，降级为 unpriced
-    （只记 token 不计费）并告警，绝不把金额按错误汇率静默计入。
+
+def price_usage(
+    model_name: str,
+    component: str,
+    usage: NormalizedUsage,
+    *,
+    enforce: bool,
+    usage_source: str = USAGE_SOURCE_PROVIDER,
+) -> BillingResult:
+    """唯一计费入口：同 Usage + 同价格版本 + 同 FX → 只有一个成本答案。
+
+    契约（永不抛错）：
+      - PG 有完整必选维度价格行 → 按 PriceLine 逐维计价（全部六维覆盖，
+        有量无价的维度降级 estimated，不静默跳过）；缓存命中且无 cache_read
+        价行时缓存按 input 价保守计（estimated，与既有策略一致）。
+      - PG 缺价 / 价格表不可用 → 注册表内置估价（pricing_source=
+        registry_fallback）：observe 下 estimated，enforce 下 price_unknown
+        （缺价放行政策，2026-09-22 拍板）；估价为 0 → unpriced（不冒充免费）。
+      - 原生币种 → CNY 只折一次（fx_rate 随结果固化）；币种未登记汇率 =
+        价格配置错误，降级 unpriced 并告警，绝不按错误汇率静默计入。
+      - ``usage_source='estimated'`` 时最终状态不为 exact（用量近似污染
+        精确性，P0-12）。
     """
     from backend.config.budget import BUDGET_BASE_CURRENCY, to_base_currency
     from backend.shared.logger import logger
 
+    rows: dict[str, PriceLine] | None
+    currency = "USD"
     try:
-        total_base = to_base_currency(total, currency)
-        converted = dict(payload)
-        for key in _MONEY_KEYS:
-            converted[key] = float(
-                to_base_currency(payload.get(key) or 0.0, currency)
-            )
-        return total_base, status, BUDGET_BASE_CURRENCY, converted
-    except ValueError as exc:
+        table = get_current_price_table(model_name, component)
+        rows = table.require(model_name, component, enforce=False)
+        currency = table.currency_for(model_name, component)
+    except PriceTableUnavailable:
+        rows = None
+    except Exception:
+        # 计费永不抛错：价格层意外异常与"表不可用"同语义，退注册表估价。
         logger.warning(
-            "[Pricing] 币种 %r 无折算汇率，本次按 unpriced 记账"
-            "（请在价格治理登记汇率或改报价币种）: %s", currency, exc,
+            "[Pricing] 价格表读取异常，退注册表估价 model=%s/%s",
+            model_name, component, exc_info=True,
         )
-        return Decimal("0"), COST_STATUS_UNPRICED, BUDGET_BASE_CURRENCY, {
-            key: 0.0 for key in _MONEY_KEYS
+        rows = None
+
+    required = _REQUIRED_DIMENSIONS.get(component, frozenset())
+    priced_from_table = rows is not None and required.issubset(rows.keys())
+
+    native_per_dim: dict[str, Decimal] = {dim: Decimal("0") for dim, _ in _BILLING_DIMENSIONS}
+    unit_prices: dict[str, Decimal | None] = {dim: None for dim, _ in _BILLING_DIMENSIONS}
+    status = COST_STATUS_EXACT
+    price_version: str | None = None
+
+    if priced_from_table:
+        assert rows is not None
+        pricing_source = PRICING_SOURCE_APPROVED_TABLE
+        versions = {
+            line.price_table_version for line in rows.values()
+            if line.price_table_version
         }
+        # 同快照内版本一致（按生效时间倒序 setdefault 的首行优先）
+        input_line = rows.get("input")
+        price_version = (
+            input_line.price_table_version if input_line is not None and input_line.price_table_version
+            else next(iter(versions), None)
+        )
+        for dimension, attr in _BILLING_DIMENSIONS:
+            quantity = getattr(usage, attr)
+            line = rows.get(dimension)
+            if line is not None:
+                native_per_dim[dimension] = _dimension_amount(line, quantity)
+                unit_prices[dimension] = line.price_per_unit
+                continue
+            if dimension == "cache_read" and quantity > 0:
+                # 缓存命中无缓存价：按普通 input 价保守估算（§7.2 既有策略）。
+                native_per_dim[dimension] = _dimension_amount(
+                    rows["input"], quantity,
+                )
+                unit_prices[dimension] = rows["input"].price_per_unit
+                status = COST_STATUS_ESTIMATED
+            elif quantity > 0:
+                # 有量无价：不静默跳过，显式降级 estimated。
+                status = COST_STATUS_ESTIMATED
+        native_cost = sum(native_per_dim.values(), Decimal("0")).quantize(
+            _SIX_PLACES, rounding=ROUND_HALF_UP,
+        )
+        native_currency = currency
+    else:
+        # PG 无完整必选维度：注册表内置估价（input+output 两维口径）。
+        if component == "llm":
+            fallback = calculate_fallback_cost(
+                model_name,
+                usage.input_tokens,
+                usage.output_tokens,
+            )
+        else:
+            from backend.infra.llm.models import compute_embedding_cost
+
+            fallback = Decimal(str(compute_embedding_cost(
+                model_name, usage.total_tokens,
+            ))).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
+        if enforce:
+            status = COST_STATUS_PRICE_UNKNOWN
+            _record_price_metric(component, "missing")
+        elif fallback > 0:
+            status = COST_STATUS_ESTIMATED
+        else:
+            status = COST_STATUS_UNPRICED
+        pricing_source = (
+            PRICING_SOURCE_UNPRICED if fallback == 0
+            else PRICING_SOURCE_REGISTRY_FALLBACK
+        )
+        native_cost = fallback
+        native_currency = "USD"
+        _record_price_metric(component, "fallback")
+
+    # ── 原生币种 → 记账本位币（只折一次，fx 快照固化）──────────────────
+    fx_rate: Decimal | None = None
+    if native_currency != BUDGET_BASE_CURRENCY:
+        try:
+            fx_rate = Decimal(str(to_base_currency(Decimal("1"), native_currency)))
+            billed_cost = to_base_currency(native_cost, native_currency)
+        except ValueError as exc:
+            logger.warning(
+                "[Pricing] 币种 %r 无折算汇率，本次按 unpriced 记账"
+                "（请在价格治理登记汇率或改报价币种）: %s", native_currency, exc,
+            )
+            status = COST_STATUS_UNPRICED
+            pricing_source = PRICING_SOURCE_UNPRICED
+            fx_rate = None
+            billed_cost = Decimal("0")
+            native_per_dim = {dim: Decimal("0") for dim in native_per_dim}
+    else:
+        billed_cost = native_cost
+
+    # 用量近似污染精确性：估算用量即使价格精确也不标 exact（P0-12）。
+    if status == COST_STATUS_EXACT and usage_source == USAGE_SOURCE_ESTIMATED:
+        status = COST_STATUS_ESTIMATED
+
+    def _cny(amount: Decimal) -> Decimal:
+        if fx_rate is not None:
+            return (amount * fx_rate).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
+        return amount.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
+
+    return BillingResult(
+        model_name=model_name,
+        component=component,
+        input_tokens=usage.input_tokens,
+        billable_input_tokens=usage.billable_input_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
+        output_tokens=usage.output_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        tool_calls=usage.tool_calls,
+        native_cost=native_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
+        native_currency=native_currency,
+        billed_cost_cny=billed_cost.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP),
+        base_currency=BUDGET_BASE_CURRENCY,
+        fx_rate=fx_rate,
+        input_cost_cny=_cny(native_per_dim["input"]),
+        cached_input_cost_cny=_cny(native_per_dim["cache_read"]),
+        output_cost_cny=_cny(native_per_dim["output"]),
+        reasoning_cost_cny=_cny(native_per_dim["reasoning"]),
+        cache_write_cost_cny=_cny(native_per_dim["cache_write"]),
+        tool_call_cost_cny=_cny(native_per_dim["tool_call"]),
+        input_unit_price=unit_prices["input"],
+        output_unit_price=unit_prices["output"],
+        cache_input_unit_price=unit_prices["cache_read"],
+        reasoning_unit_price=unit_prices["reasoning"],
+        cache_write_unit_price=unit_prices["cache_write"],
+        tool_call_unit_price=unit_prices["tool_call"],
+        price_version=price_version,
+        pricing_source=pricing_source,
+        usage_source=usage_source,
+        cost_status=status,
+    )
 
 
 def calculate_llm_cost_with_status(
     model_name: str,
     quantities: dict[str, int | float | Decimal],
 ) -> tuple[Decimal, str, str, dict[str, float]]:
-    """第一阶段统一成本入口（软统计）：返回 (total, status, currency, breakdown)。
+    """兼容 wrapper（2026-10-07 收口）：``price_usage`` 的四元组投影。
 
-    与 ``calculate_current_cost``（预算硬门，缺价抛异常）不同，本入口**永不抛错**
-    ——成本统计失败不能影响模型主链路（2026-09-22 拍板）。
-
-    quantities 口径（proxy 已标准化）：
-      - ``input``   = **billable** input tokens（不含缓存命中部分）
-      - ``cache_read`` = 缓存命中 tokens
-      - ``output``  = output tokens
-
-    状态判定：
-      - exact     ：PG 有审核生效的 input+output 价格；缓存命中为 0 或已有
-                    cache_read 价格行。
-      - estimated ：缓存命中 > 0 但模型未配置 cache_read 价格 —— 缓存部分按
-                    普通 input 价保守估算；或 PG 价格表不可用/缺行，退回注册表
-                    内置估价。
-      - unpriced  ：PG 无价格且注册表内置估价也为 0 —— 只记 token，不计费。
-
-    分项成本（breakdown）恒给出：input_cost / cached_input_cost / output_cost
-    （USD float，6 位小数）。货币取自价格行；fallback 场景注册表价固定 USD。
-
-    STOP C（C6 Billing Snapshot）：PG 价格行在场时 breakdown 额外携带
-    input_unit_price / output_unit_price / cache_input_unit_price（per 1M
-    tokens 调用时单价）—— proxy 原样落 llm_usage，改价不污染历史对账。
-    fallback 估价场景无单价可快照（按 0 记，cost_status 已标 estimated/unpriced）。
+    返回 ``(billed_cost_cny, cost_status, 'CNY', breakdown)``——金额恒为
+    记账本位币（price_usage 只折一次汇），breakdown 为 CNY 分项成本 +
+    原生币种单价快照（无价按 0.0 记，不伪造）。``quantities['input']``
+    沿用历史口径 = billable input，缓存命中量放 ``cache_read``。
+    调用方建议迁移到 ``price_usage`` 直接消费 BillingResult。
     """
-    billable = max(int(quantities.get("input", 0) or 0), 0)
-    cached = max(int(quantities.get("cache_read", 0) or 0), 0)
-    output = max(int(quantities.get("output", 0) or 0), 0)
-    zero: dict[str, float] = {
-        "input_cost": 0.0, "cached_input_cost": 0.0, "output_cost": 0.0,
-        "input_unit_price": 0.0, "output_unit_price": 0.0,
-        "cache_input_unit_price": 0.0,
+    result = price_usage(
+        model_name,
+        "llm",
+        NormalizedUsage(
+            input_tokens=int(quantities.get("input", 0) or 0)
+            + int(quantities.get("cache_read", 0) or 0),
+            cached_input_tokens=int(quantities.get("cache_read", 0) or 0),
+            output_tokens=int(quantities.get("output", 0) or 0),
+        ),
+        enforce=False,
+    )
+    breakdown = {
+        "input_cost": float(result.input_cost_cny),
+        "cached_input_cost": float(result.cached_input_cost_cny),
+        "output_cost": float(result.output_cost_cny),
+        "input_unit_price": float(result.input_unit_price or 0),
+        "output_unit_price": float(result.output_unit_price or 0),
+        "cache_input_unit_price": float(result.cache_input_unit_price or 0),
     }
-
-    rows: dict[str, PriceLine] | None
-    currency = "USD"
-    try:
-        table = get_current_price_table(model_name, "llm")
-        rows = table.require(model_name, "llm", enforce=False)
-        currency = table.currency_for(model_name, "llm")
-    except PriceTableUnavailable:
-        rows = None
-    except Exception:
-        # 本入口的契约是**永不抛错**（成本统计失败不能影响主链路）：
-        # 价格层的意外异常（连接池耗尽等）与"表不可用"同语义，退注册表估价
-        # 并打日志，绝不把异常透给调用方（STOP C 测试 test_billing_never_raises 锁定）。
-        from backend.shared.logger import logger
-
-        logger.warning(
-            "[Pricing] 价格表读取异常，退注册表估价 model=%s", model_name,
-            exc_info=True,
-        )
-        rows = None
-
-    if rows is None or "input" not in rows or "output" not in rows:
-        # PG 无审核生效价格：退回注册表内置估价（语义 = estimated），无内置价则 unpriced。
-        fallback = calculate_fallback_cost(model_name, billable + cached, output)
-        status = COST_STATUS_ESTIMATED if fallback > 0 else COST_STATUS_UNPRICED
-        return _to_base_or_unpriced(fallback, zero, "USD", status)
-
-    if cached > 0 and "cache_read" not in rows:
-        # 缓存命中但无缓存价：缓存部分按普通 input 价保守估算。
-        total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
-        payload = {key: float(value) for key, value in breakdown.items()}
-        payload.update(_unit_price_snapshot(rows))
-        return _to_base_or_unpriced(total, payload, currency, COST_STATUS_ESTIMATED)
-
-    total, breakdown = _llm_cost_breakdown(rows, billable, cached, output)
-    payload = {key: float(value) for key, value in breakdown.items()}
-    payload.update(_unit_price_snapshot(rows))
-    return _to_base_or_unpriced(total, payload, currency, COST_STATUS_EXACT)
+    return result.billed_cost_cny, result.cost_status, result.base_currency, breakdown
 
 
 __all__ = [
+    "BillingResult",
     "COST_STATUS_ESTIMATED",
     "COST_STATUS_EXACT",
     "COST_STATUS_UNPRICED",
     "COST_STATUS_PRICE_UNKNOWN",
     "MissingModelPrice",
+    "NormalizedUsage",
     "PRICE_DIMENSIONS",
+    "PRICING_SOURCE_APPROVED_TABLE",
+    "PRICING_SOURCE_REGISTRY_FALLBACK",
+    "PRICING_SOURCE_UNPRICED",
     "PriceLine",
     "PriceTable",
     "PriceTableUnavailable",
     "PostgresPriceRepository",
+    "USAGE_SOURCE_ESTIMATED",
+    "USAGE_SOURCE_PROVIDER",
+    "USAGE_SOURCE_UNAVAILABLE",
     "calculate_current_cost",
     "calculate_fallback_cost",
     "calculate_llm_cost_with_status",
     "clear_price_cache",
     "get_current_price_table",
+    "price_usage",
 ]

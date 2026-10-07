@@ -75,15 +75,15 @@ class TicketStore:
     def list_for_user_sync(
         self, user_id: str, tenant_id: str = "default", limit: int = 20,
     ) -> list[dict]:
-        try:
-            from backend.customer_service._db_loop import run_sync
+        """列用户工单。DB 故障上抛（STOP C 2026-10-07）——
+        此前吞成 [] 会把「服务不可用」译成「您当前没有进行中的工单」
+        业务假信息；唯一调用方（QueryExpert）已有正确的失败兜底话术，
+        空列表（真没有工单）语义不受影响。"""
+        from backend.customer_service._db_loop import run_sync
 
-            return run_sync(
-                self.async_list_for_user(user_id, tenant_id, limit),
-            )
-        except Exception:
-            logger.warning("[TicketStore] list failed", exc_info=True)
-            return []
+        return run_sync(
+            self.async_list_for_user(user_id, tenant_id, limit),
+        )
 
     def transition_sync(
         self, ticket_id: str, target_status: str,

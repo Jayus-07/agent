@@ -1,6 +1,9 @@
-# Grafana 看板自动装配（2026-10-05）
+# Grafana 看板自动装配（2026-10-06 企业级重构：7 张，uid 固定）
 # 扫描本目录下的 *.json（与 provider 配置同目录，Grafana 只认 JSON），
-# 看板 uid：agent-biz-overview / agent-cost / agent-quality / agent-tasks
+# uid：agent-01-platform-overview / agent-02-router-runtime / agent-03-tool-runtime /
+#      agent-04-rag-knowledge / agent-05-llm-cost-context / agent-06-domain-business /
+#      agent-07-infra-async
+# 注意：allowUiUpdates=true 时 UI 手改会保存进库，但 provisioning 每 30s 以本目录文件为准恢复。
 apiVersion: 1
 providers:
   - name: agent-platform

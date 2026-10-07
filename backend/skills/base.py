@@ -554,7 +554,10 @@ class BaseSkill(ABC):
         sr["fallback_used"] = result.fallback_used
         sr["degraded"] = result.status is ToolStatus.DEGRADED
 
-        if result.status is ToolStatus.SUCCESS:
+        # ── 成功/降级成功分支：DEGRADED 属 ok（models.py：部分能力降级后
+        # 仍给出可用结果），携带的数据必须放行而非当失败丢弃；degraded
+        # 标记已在上方随 sr["degraded"] 写入，下游据此区分纯成功与降级成功。
+        if result.status in (ToolStatus.SUCCESS, ToolStatus.DEGRADED):
             output = self._normalize_output(cap, result.data)
             declared_type = self.output_types.get(cap, self.output_type)
             try:
@@ -593,7 +596,13 @@ class BaseSkill(ABC):
             sr["output"] = output
             step_results[sr["step_id"]] = dict(sr)
             elapsed = result.latency_ms / 1000
-            logger.info(f"[{self.name}] step={sr['step_id']} 成功 (耗时 {elapsed:.2f}s)")
+            if result.status is ToolStatus.DEGRADED:
+                logger.info(
+                    f"[{self.name}] step={sr['step_id']} 降级成功 "
+                    f"(fallback={result.fallback_used}, 耗时 {elapsed:.2f}s)"
+                )
+            else:
+                logger.info(f"[{self.name}] step={sr['step_id']} 成功 (耗时 {elapsed:.2f}s)")
             trace_collector.end_span(tool_span,
                 output={"result": output},
                 metrics={"elapsed_s": round(elapsed, 2), "retries": result.retry_count,

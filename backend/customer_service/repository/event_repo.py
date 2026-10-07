@@ -23,16 +23,24 @@ class EventRepository:
         event_id: str,
         type: str,
         payload: dict,
+        tenant_id: str | None = None,
     ) -> int:
-        """落库并返回 seq（即主键 id）。event_id 冲突 → 返回已存在行的 id。"""
+        """落库并返回 seq（即主键 id）。event_id 冲突 → 返回已存在行的 id。
+
+        tenant_id：调用方显式传递（STOP CS-A P0-2 信封收口）；None 时省略
+        该列 → 落库层默认（兼容存量调用），核心会话事件一律显式传租户。
+        """
+        values: dict = {
+            "conversation_id": conversation_id,
+            "event_id": event_id,
+            "type": type,
+            "payload": payload,
+        }
+        if tenant_id:
+            values["tenant_id"] = tenant_id
         stmt = (
             pg_insert(CSEvent)
-            .values(
-                conversation_id=conversation_id,
-                event_id=event_id,
-                type=type,
-                payload=payload,
-            )
+            .values(**values)
             .on_conflict_do_nothing(index_elements=["event_id"])
             .returning(CSEvent.id)
         )
@@ -55,20 +63,25 @@ class EventRepository:
         conversation_id: str,
         after_seq: int = 0,
         limit: int = 200,
+        tenant_id: str | None = None,
     ) -> list[dict]:
-        """按 seq 升序回放 > after_seq 的事件（补发用）。"""
+        """按 seq 升序回放 > after_seq 的事件（补发用）。
+
+        tenant_id：显式租户谓词（STOP CS-A P0-2）；路由层已做归属校验，
+        此处为第二道防线。
+        """
         from sqlalchemy import select
 
+        q = select(CSEvent).where(
+            CSEvent.conversation_id == conversation_id,
+            CSEvent.id > after_seq,
+        )
+        if tenant_id:
+            q = q.where(CSEvent.tenant_id == tenant_id)
         rows = (
             (
                 await self._db.execute(
-                    select(CSEvent)
-                    .where(
-                        CSEvent.conversation_id == conversation_id,
-                        CSEvent.id > after_seq,
-                    )
-                    .order_by(CSEvent.id)
-                    .limit(limit)
+                    q.order_by(CSEvent.id).limit(limit)
                 )
             )
             .scalars()

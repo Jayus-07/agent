@@ -57,6 +57,9 @@ VALID_TRANSITIONS: dict[HandoffState, frozenset[HandoffState]] = {
         HandoffState.CLOSED,
     }),
     HandoffState.HUMAN_ACTIVE: frozenset({
+        # STOP CS-A P0-5：坐席离线自愈 —— human_active 回到排队由
+        # dispatcher 重派（recovery reaper / 主管重派同语义），不是非法边。
+        HandoffState.WAITING_HUMAN,
         HandoffState.CLOSED,
     }),
     HandoffState.CLOSED: frozenset(),

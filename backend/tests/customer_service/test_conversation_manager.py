@@ -28,8 +28,10 @@ def manager(mock_session):
 
 class TestCreate:
     async def test_create_with_defaults(self, manager, mock_session):
-        conv = await manager.create(user_id="user-001")
+        # STOP CS-A P0-2：tenant_id 必传（fail-closed 拒绝 default 兜底）
+        conv = await manager.create(user_id="user-001", tenant_id="default")
         assert conv.user_id == "user-001"
+        assert conv.tenant_id == "default"
         assert conv.conversation_status == "open"
         assert conv.handling_mode == "ai"
         assert conv.channel == "web"
@@ -44,11 +46,20 @@ class TestCreate:
             conversation_id="custom-id",
             handling_mode=HandlingMode.WAITING_HUMAN,
             priority="high",
+            tenant_id="tenant-x",
         )
         assert conv.conversation_id == "custom-id"
         assert conv.channel == "app"
         assert conv.handling_mode == "waiting_human"
         assert conv.priority == "high"
+        assert conv.tenant_id == "tenant-x"
+
+    async def test_create_without_tenant_fail_closed(self, manager, mock_session):
+        """STOP CS-A P0-2：缺 tenant 拒绝创建（不静默落 default）。"""
+        from backend.customer_service.errors import ValidationError
+
+        with pytest.raises(ValidationError):
+            await manager.create(user_id="user-001")
 
 
 class TestGet:

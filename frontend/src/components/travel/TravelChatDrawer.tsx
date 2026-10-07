@@ -25,7 +25,7 @@
 import Link from 'next/link'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
-  AlertCircle, Check, CheckCircle2, Clock3, Info, MessageSquarePlus,
+  AlertCircle, AlertTriangle, Check, CheckCircle2, Clock3, Info, MessageSquarePlus,
   PlaneTakeoff, RefreshCw, Send, Square, X,
 } from 'lucide-react'
 import {
@@ -513,10 +513,15 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           const showProcess = processState && (processState.tools.length > 0 || processState.requirement)
           const doneTools = processState?.tools ?? []
           const okCount = doneTools.filter((t) => t.status === 'success').length
+          const degradedCount = doneTools.filter((t) => t.status === 'degraded').length
           const failCount = doneTools.filter((t) => t.status === 'failed').length
+          const blockedCount = doneTools.filter((t) => t.status === 'blocked').length
           const withResult = doneTools.filter((t) => (t.preview?.length ?? 0) > 0).length
           // M2-a 收敛口径：进行中逐条实时；完成后收敛成一行摘要（点开看明细）
           const collapsed = !loading && processState?.status === 'completed' && !processExpanded
+          // 降级横幅：有降级 Tool 且本轮未整体失败时提示「部分实时信息未验证」，
+          // 不改变整轮状态（Tool Failure ≠ Workflow Failure）
+          const showDegradedBanner = degradedCount > 0 && processState?.status !== 'error'
           const outOfScope = processState?.requirement?.intent === 'out_of_scope'
           const processBlock = showProcess ? (
             <div className="mt-3">
@@ -525,9 +530,19 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   className={`h-1.5 w-1.5 rounded-full ${loading ? 'animate-pulse bg-[#087b73]' : processState.status === 'error' ? 'bg-red-400' : 'bg-[#087b73]'}`}
                   aria-hidden
                 />
-                <span>{loading ? '工具执行中' : `本轮共 ${processState.tools.length} 个 Tool`}</span>
+                <span>
+                  {loading
+                    ? '工具执行中'
+                    : `本轮共 ${processState.tools.length} 个 Tool${!loading && processState.status !== 'error' ? ` · ${okCount} 成功${degradedCount > 0 ? ` · ${degradedCount} 降级` : ''}${failCount > 0 ? ` · ${failCount} 失败` : ''}` : ''}`}
+                </span>
                 <span>· {travelProcessStatusLabel({ loading, stopped, status: processState.status })}</span>
               </div>
+              {showDegradedBanner && (
+                <div className="mb-1.5 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-800" role="status">
+                  <AlertTriangle size={12} className="shrink-0 text-amber-500" aria-hidden />
+                  <span className="min-w-0 flex-1">部分实时信息未验证（{degradedCount} 个数据源降级），行程已继续生成；出行前请通过官方渠道确认。</span>
+                </div>
+              )}
               {collapsed ? (
                 <button
                   type="button"

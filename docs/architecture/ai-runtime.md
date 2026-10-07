@@ -47,7 +47,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | 域图 | 开关 | 节点序列 |
 |---|---|---|
 | 客服 | `CS_ENABLED` | `state_loader → pending_handler → cs_supervisor → 5 专家（knowledge/query/action/complaint/handoff）→ cs_reporter`；`cs_supervisor` 承担 handoff 拦截、循环上限、LLM 兜底；v2 决策链（`CS_DECISION_V2`）在守卫之后、意图路由之前有 **L4.5 分诊直出**：寒暄→`chat_fallback` 一次 LLM 人设（`CS_CHAT_FALLBACK_ENABLED`）、出域→固定话术零 LLM（`CS_WINDOW_STANDALONE`；v1 回退路径不接出口）；`pending_handler` 在 need_info 补槽期**优先放行显式转人工**（命中 handoff 触发即释放 pending 回 supervisor 重分诊，审计 `need_info_handoff_escape`，2026-10-05 a65a167——追问不再吞掉转人工诉求） |
-| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair →（已有行程逐条改单）travel_partial_replan → travel_reporter`（11 节点，2026-10-07 `4ddc3c3` 增 `travel_partial_replan`：局部重规划只动被点名天与条目+强制重验证，见「旅游会话意图」节）；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`） |
+| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair →（已有行程逐条改单）travel_partial_replan → travel_reporter`（11 节点，2026-10-07 `4ddc3c3` 增 `travel_partial_replan`：局部重规划只动被点名天与条目+强制重验证，见「旅游会话意图」节）；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）；**Tool Failure Policy（2026-10-07）**：外部数据源失败 ≠ Workflow 失败——非硬依赖失败降级披露继续（`travel/services/tool_failure_policy.py::run_checked`，状态 `degraded_tools`，行程照常产出、实时数据不伪造），仅「本轮表达了必须 X 点前抵达否则不要」类硬约束无法验证时 BLOCKED 终止（`blocked_tools`，supervisor 直报 reporter 出用户话术），内部规划算法异常原样 failed 不降级；POI 腾讯全败时高德顶上做主候选（F1） |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | prefilter 已接线（`router_node` 内与旅游同层，2026-09-17）；仅受开关控制，无域锁通路 |
 | 旅游商务（Travel · commerce 子流） | `TRAVEL_COMMERCE_ENABLED`（默认关） | `backend/travel/commerce/`，2026-09-24 STOP K |
 | 旅游预订（Travel · booking 子流） | `TRAVEL_BOOKING_ENABLED`（默认关） | `backend/travel/booking/`，预订事务与幂等账本复用，2026-09-25 STOP L |
@@ -131,7 +131,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 需求抽取侧的节奏口径（#80）：显式 pace 词优先；未提 pace 时按同行人群派生默认档位（requirement_agent 词表：老人/爸妈/带娃/亲子→relaxed，特种兵/暴走/学生党→intense；slot_filler 经 `extract_group_pace` 并入合并），经既有 pace 容量约束传导到排程，不新增排程分支。规划会话恢复：旅游域追问中断后的**纯槽位值回答**（「8万日元」「住难波」类，不含旅游/延续信号词）由 `TravelPendingResolver`（插在 ContinuationResolver 之前，纯规则零 LLM）判定短路回旅游域图，`TRAVEL_PENDING_RESUME_ENABLED` 默认 true；客服强信号仍优先放行。
 
-最后验证：2026-10-07 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)；本节意图分类口径已按 `TRAVEL_LLM_INTENT_ENABLED` 开关状态改写（默认纯规则不变）。2026-10-07 增量：意图六类→八类（增 SOCIAL/META）、逐条改单接 `travel_partial_replan` 局部重规划（`4ddc3c3`）；路由表与六阶段链对齐 Runtime V2（`8d4dbb7` 收口的补充）。
+最后验证：2026-10-07 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)；本节意图分类口径已按 `TRAVEL_LLM_INTENT_ENABLED` 开关状态改写（默认纯规则不变）。2026-10-07 增量：意图六类→八类（增 SOCIAL/META）、逐条改单接 `travel_partial_replan` 局部重规划（`4ddc3c3`）；Tool Failure Policy 落地（Tool Failure ≠ Workflow Failure 契约，降级/阻断账本 `degraded_tools`/`blocked_tools`/`tool_failures` 入 state 与 trace）；路由表与六阶段链对齐 Runtime V2（`8d4dbb7` 收口的补充）。
 
 ## 旅游数据源与版本链（2026-10-02）
 

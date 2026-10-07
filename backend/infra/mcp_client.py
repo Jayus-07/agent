@@ -7,9 +7,13 @@
 设计约束：
 
 1. **同步桥接**。LangChain Tool 是同步函数，而官方 mcp SDK 是 asyncio
-   生态。此处每次调用开一个短命事件循环 + 短命会话（initialize →
-   call_tool → 关闭）。代价是每次多一轮握手 RTT——对本机容器内毫秒级
-   往返的低频查询可接受；**不要**在高频路径上用它，届时应改长驻会话。
+   生态。此处每次调用经 ``infra/async_utils.run_async`` 起一个短命事件
+   循环 + 短命会话（initialize → call_tool → 关闭）：调用线程无 loop 时
+   直接 asyncio.run；已在运行中 loop 内被调时显式跳独立线程执行——
+   两条路径都**绝不在运行中的 loop 上嵌套起 loop**（2026-10-06 实测事故：
+   治理同步适配器的 loop 内联调用本层导致 12306/知乎全挂）。代价是每次
+   多一轮握手 RTT——对本机容器内毫秒级往返的低频查询可接受；**不要**在
+   高频路径上用它，届时应改长驻会话。
 2. **失败必须显式**。连接失败 / 协议错误 / 工具报错 / 超时统一映射为
    :class:`McpClientError`，由调用方转成「查不了」封套——绝不能把
    异常吞成空结果，否则限流会被当成「没有车票」。
@@ -27,11 +31,20 @@ from datetime import timedelta
 from typing import Any
 
 from backend.config import mcp as MCP_CFG
+from backend.infra.async_utils import run_async
 from backend.shared.logger import logger
 
 
 class McpClientError(Exception):
     """外部 MCP server 调用失败（连接 / 协议 / 工具报错 / 超时）。"""
+
+
+def _unwrap_exception_group(exc: BaseException) -> BaseException:
+    """TaskGroup/anyio 的 ExceptionGroup → 首个子异常（3.11 前后形态兼容）。"""
+    if exc.__class__.__name__ not in ("BaseExceptionGroup", "ExceptionGroup"):
+        return exc
+    subs = getattr(exc, "exceptions", None) or ()
+    return subs[0] if subs else exc
 
 
 # ── 节流 + TTL 缓存：外部源怕突发，同参短窗内直接复用 ──
@@ -177,14 +190,33 @@ def call_tool(base_url: str, tool_name: str, arguments: dict, *,
     _throttle(base_url, interval_s)
     started = time.perf_counter()
     try:
-        payload = asyncio.run(_call_async(base_url, tool_name, dict(arguments),
-                                          timeout_s, headers))
+        # run_async 是本模块与 asyncio 生态的**显式 sync/async 边界**：
+        # 调用线程无事件循环 → 直接 asyncio.run；已在运行中的 loop 内被调
+        # （如异步节点直接 invoke 本工具）→ 携协程跳到独立线程起 loop，
+        # 绝不在运行中的 loop 上嵌套 asyncio.run（RuntimeError）。
+        # 异常语义不变：超时/连接/协议错误仍映射 McpClientError。
+        payload = run_async(_call_async(base_url, tool_name, dict(arguments),
+                                        timeout_s, headers))
     except McpClientError:
         raise
     except asyncio.TimeoutError as e:
         raise McpClientError(
             f"MCP 调用超时（>{timeout_s}s）: {base_url}.{tool_name}") from e
     except Exception as e:  # noqa: BLE001 — 连接/协议层异常统一收口
+        # anyio TaskGroup 把真实根因包在 ExceptionGroup 里（3.11+ 内建 /
+        # 更早版本 anyio 自带 backport）。诊断口径要求「为什么失败」一眼
+        # 可见：解出首个子异常按原路径重抛。
+        root = _unwrap_exception_group(e)
+        if root is not e:
+            if isinstance(root, McpClientError):
+                raise root
+            if isinstance(root, asyncio.TimeoutError):
+                raise McpClientError(
+                    f"MCP 调用超时（>{timeout_s}s）: {base_url}.{tool_name}"
+                ) from root
+            raise McpClientError(
+                f"MCP 调用失败: {base_url}.{tool_name} — "
+                f"{type(root).__name__}: {root}") from root
         raise McpClientError(f"MCP 调用失败: {base_url}.{tool_name} — "
                              f"{type(e).__name__}: {e}") from e
 

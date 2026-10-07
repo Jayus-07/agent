@@ -252,8 +252,15 @@ async def test_overdue_waiting_handoff_is_closed(scenario: Scenario) -> None:
     assert scenario.conversation.handling_mode == "ai"
 
 
-async def test_reap_once_runs_expired_before_overdue(scenario: Scenario) -> None:
+async def test_reap_once_runs_expired_before_overdue(scenario: Scenario, monkeypatch) -> None:
     scenario.overdue_candidates = [(TENANT, "hd-2", "conv-1")]
+
+    # STOP CS-A P0-5：reap_once 追加了 human_active 自愈阶段（本用例只锁
+    # expired→overdue 的顺序语义，recovery 由专测覆盖，此处桩空）
+    async def _noop_recovery(session, *, now, limit):
+        return reaper.ReapResult()
+
+    monkeypatch.setattr(reaper, "reap_stale_human_active", _noop_recovery)
 
     result = await reaper.reap_once(scenario.session, now=NOW)
 

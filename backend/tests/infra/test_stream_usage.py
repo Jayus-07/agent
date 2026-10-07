@@ -77,16 +77,29 @@ def _inc_counters(monkeypatch) -> dict[str, list]:
 
 
 def _pricing_stub(monkeypatch) -> list:
-    """定价打桩：返回确定成本，隔离测试环境的价格库。"""
+    """定价打桩：返回确定 BillingResult，隔离测试环境的价格库。
+
+    2026-10-07 Billing 收口：proxy 结算路径已切换到唯一入口 price_usage，
+    打桩点同步迁移（旧 calculate_llm_cost_with_status 不再被调用）。
+    """
     calls = []
 
-    def _fake(model, quantities):
-        calls.append((model, dict(quantities)))
-        return (Decimal("0.002"), "exact", "USD",
-                {"input_cost": 0.001, "output_cost": 0.001})
+    def _fake(model, component, usage, *, enforce, usage_source="provider"):
+        calls.append((model, usage))
+        from backend.infra.llm.pricing import BillingResult
+
+        return BillingResult(
+            model_name=model, component=component,
+            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+            native_cost=Decimal("0.002"), native_currency="USD",
+            billed_cost_cny=Decimal("0.0144"), fx_rate=Decimal("7.20"),
+            input_cost_cny=Decimal("0.0072"), output_cost_cny=Decimal("0.0072"),
+            cost_status="estimated", usage_source=usage_source,
+            pricing_source="registry_fallback",
+        )
 
     import backend.infra.llm.pricing as pricing_mod
-    monkeypatch.setattr(pricing_mod, "calculate_llm_cost_with_status", _fake)
+    monkeypatch.setattr(pricing_mod, "price_usage", _fake)
     return calls
 
 
@@ -136,14 +149,15 @@ def test_astream_without_usage_chunk_settles_estimated(monkeypatch):
         # 主 context 读不到（与 with-usage 对照测试同款约束）
         assert calls[-1] == ("record", {
             "prompt_tokens": 0, "completion_tokens": 5, "total_tokens": 5,
-            "cost": Decimal("0.002"),
+            "cost": Decimal("0.0144"),  # Billing V2：预算结算收 billed_cost_cny
         })
         meta = proxy_mod._last_call_meta_var.get()
         assert meta["cost_status"] == "estimated"
         assert meta["binding_source"] == "estimated"
         assert meta["finish_reason"] == "estimated_no_usage"
         assert meta["total_tokens"] == 5
-        assert meta["cost_usd"] == 0.002
+        assert meta["cost_cny"] == 0.0144
+        assert meta["cost_usd"] == 0.002  # 原生 USD 审计口径
 
     asyncio.run(_consume())
     # 缺失事件照常计数 + 估算结算计数（计数器是普通对象，跨上下文可见）

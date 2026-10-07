@@ -92,7 +92,10 @@ async def _invoke_governed_tool(tool_obj: Any, tool_name: str,
         ),
         lambda: tool_obj.invoke(arguments),
         normalize_output=True,
-        domain="selection",
+        # 不传 domain → executor 按 tool_key 前缀派生（web.search/web.crawl
+        # → "web"）。旧值 "selection" 是错域标签：selection_funnel 才是选品
+        # 域名，market_research 是 workflow 不是域，看板按域聚合时这两个
+        # Tool 的量被记进一个不存在的域。
         tool_name=tool_name,
         trace_capability=tool_name,
         trace_agent="market_research",

@@ -237,9 +237,11 @@ def _run_module(
 def _evaluator_mode(config: EvalConfig) -> str:
     """RAGAS-01/02：评估器模式标记，随 report/metadata 与 meta.json 落盘。
 
-    自研指标恒执行；RAGAS 批量默认开启（rag.py 按 no_ragas 关闭），
-    因此只有 self（显式 --no-ragas）与 self+ragas（默认/显式 --ragas）两态。
+    ``ragas`` 是 RAGAS-only 模式，会关闭自研语义指标；默认配置是
+    self+ragas；``no_ragas`` 则是 self-only。
     """
+    if config.ragas and not config.no_ragas:
+        return "ragas"
     if config.no_ragas:
         return "self"
     return "self+ragas"

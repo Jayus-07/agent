@@ -33,9 +33,9 @@ def backfill_usage_from_llm_store(data) -> None:
             return
         by_comp: dict[str, dict] = {}
         total_cost = 0.0
-        # 本位币折算（2026-10-01 成本人民币为主）：cost_usd 列存行本币值，
-        # 按行 currency 折 CNY；空币种行实测金额恒为 0，归 USD 侧不影响。
-        from backend.config.budget import BUDGET_FX_USD_CNY
+        # Billing V2（2026-10-07 收口）：V2 行直接取 billed_cost_cny（写入时
+        # 已固化汇率，读层禁止二次换汇）；legacy 行（版本 1）按旧 currency
+        # 逻辑兜底展示（legacy_estimated）。cost_usd 兼容 = 原生 USD 口径。
         total_cost_cny = 0.0
         for r in rows:
             comp = r.get("component") or "llm"
@@ -47,12 +47,22 @@ def backfill_usage_from_llm_store(data) -> None:
                       "cached_tokens", "reasoning_tokens"):
                 agg[k] += r.get(k) or 0
             agg["calls"] += 1
-            _row_cost = r.get("cost_usd") or 0.0
-            total_cost += _row_cost
-            if (r.get("currency") or "USD").strip().upper() == "CNY":
-                total_cost_cny += _row_cost
+            _is_v2 = int(r.get("billing_schema_version") or 1) >= 2
+            if _is_v2 and r.get("billed_cost_cny") is not None:
+                total_cost_cny += float(r["billed_cost_cny"])
             else:
-                total_cost_cny += _row_cost * float(BUDGET_FX_USD_CNY)
+                _row_cost = r.get("cost_usd") or 0.0
+                if (r.get("currency") or "USD").strip().upper() == "CNY":
+                    total_cost_cny += _row_cost
+                else:
+                    from backend.config.budget import BUDGET_FX_USD_CNY
+
+                    total_cost_cny += _row_cost * float(BUDGET_FX_USD_CNY)
+            if _is_v2:
+                if (r.get("native_currency") or "").strip().upper() == "USD":
+                    total_cost += float(r.get("native_cost") or 0.0)
+            else:
+                total_cost += r.get("cost_usd") or 0.0
         llm_agg = by_comp.get("llm")
         if llm_agg and llm_agg["total_tokens"] > 0:
             usage = dict(llm_agg)
@@ -103,11 +113,24 @@ def backfill_usage_from_llm_store(data) -> None:
             pool = in_window or pending
             row = min(pool, key=lambda r: abs(_ts_key(r.get("ts", "")) - st))
             pending.remove(row)
+            # 行级成本（Billing V2）：cost_cny 记账主口径；cost_usd 兼容
+            _row_v2 = int(row.get("billing_schema_version") or 1) >= 2
+            if _row_v2 and row.get("billed_cost_cny") is not None:
+                _row_cost_cny = float(row["billed_cost_cny"])
+            else:
+                _rc = row.get("cost_usd") or 0.0
+                if (row.get("currency") or "USD").strip().upper() == "CNY":
+                    _row_cost_cny = _rc
+                else:
+                    from backend.config.budget import BUDGET_FX_USD_CNY
+
+                    _row_cost_cny = _rc * float(BUDGET_FX_USD_CNY)
             m.update({
                 "prompt_tokens": row.get("prompt_tokens") or 0,
                 "completion_tokens": row.get("completion_tokens") or 0,
                 "total_tokens": row.get("total_tokens") or 0,
                 "cost_usd": row.get("cost_usd") or 0.0,
+                "cost_cny": round(_row_cost_cny, 6),
                 "model_name": row.get("model") or "",
                 "token_source": "llm_usage_backfill",
             })
@@ -153,6 +176,8 @@ def to_span_dto(s, all_spans: list, total_ms: int) -> dict:
             "prompt_tokens": m.get("prompt_tokens", 0) if isinstance(m, dict) else 0,
             "completion_tokens": m.get("completion_tokens", 0) if isinstance(m, dict) else 0,
             "cost_usd": m.get("cost_usd", 0) if isinstance(m, dict) else 0,
+            # 记账本位币主口径（Billing V2，2026-10-07）
+            "cost_cny": m.get("cost_cny") if isinstance(m, dict) else None,
             # 文本回退链：prompt/question/query（路由 LLM 的 input 用 query 键）、
             # response/metrics.completion_text（chain 层截断写入）
             "prompt_text": ((inp.get("prompt") or inp.get("question") or inp.get("query") or "")
@@ -204,9 +229,9 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
         ),
         "usage": get("usage", {}),
         "cost_usd": get("cost_usd", 0),
-        # 本位币口径：读时回填/新写入的 trace 有精确值；存量 stored trace
-        # 的混算值不出（None → 前端显示 —），避免误导
-        "cost_cny": (get("usage", {}) or {}).get("cost_cny"),
+        # 记账本位币主口径（Billing V2）：record.cost_cny 权威，usage dict 兜底；
+        # 存量 stored trace 无该值 → None，前端显示 —（混算 cost_usd 不再展示）
+        "cost_cny": get("cost_cny") or (get("usage", {}) or {}).get("cost_cny"),
         "error": get("error", {}),
         "metadata": get("metadata", {}),
         "status": stored_status,

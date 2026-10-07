@@ -7,10 +7,11 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.deps import OperatorIdentity, resolve_operator_role
 from backend.config.settings import PROMPT_EVAL_EXECUTOR
+from backend.evaluation.mode import resolve_evaluation_mode
 from backend.prompts.registry import PROMPT_REGISTRY
 from backend.prompts.eval_dispatch import (
     GitHubPromptEvalDispatcher,
@@ -26,7 +27,12 @@ _dispatch_tasks: set[asyncio.Task[None]] = set()
 
 
 class CreateReleaseRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     suite: str = Field(min_length=1)
+    evaluation_mode: Literal["offline", "semantic", "ragas", "self+ragas"] = Field(
+        "self+ragas", alias="evaluationMode"
+    )
     dataset_version: dict[str, Any] = Field(default_factory=dict)
     executor: Literal["local", "github"] = Field(
         default="github" if PROMPT_EVAL_EXECUTOR not in {"local", "github"}
@@ -185,12 +191,16 @@ async def create_release(
 ):
     _check_permission(key, "draft", operator.role)
     try:
+        # 先在 API 边界校验，避免把拼写错误的模式落进不可解释的 pending release。
+        resolve_evaluation_mode(body.evaluation_mode)
         service = get_release_service()
+        dataset_version = dict(body.dataset_version)
+        dataset_version["evaluation_mode"] = body.evaluation_mode
         record = await service.create_release(
             key=key,
             version=version,
             suite=body.suite,
-            dataset_version=body.dataset_version,
+            dataset_version=dataset_version,
             actor=operator.actor,
             executor=body.executor,
             target_env=body.target_env,

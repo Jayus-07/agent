@@ -9,6 +9,34 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _pin_disabled_email(monkeypatch):
+    """把 send_email_tool 钉在 [EMAIL DISABLED] 分支（本套件测参数/格式，不真发信）。
+
+    本机 .env 已配置真实 SMTP（email 能力线），且工具层 STOP C 身份硬门
+    （缺可信租户 → IdempotencyContextMissing fail-closed）先后落地——旧写法
+    裸调 invoke 在配置齐全的环境会穿透 DISABLED 早退、撞身份门。此处同时
+    ①monkeypatch backend.config 包属性使 DISABLED 早退必命中（常量在函数
+    体内每次现读，patch 包属性即生效）；②注入可信租户身份保持与生产
+    契约一致（身份门不应被测试绕开的语义保持原样，只是测试永远到不了它）。
+    """
+    from backend.core.request_context import (
+        set_tool_tenant_id,
+        set_tool_user_id,
+    )
+
+    import backend.config as config_pkg
+
+    monkeypatch.setattr(config_pkg, "EMAIL_ENGINE", "smtp", raising=False)
+    monkeypatch.setattr(config_pkg, "SMTP_USER", "", raising=False)
+    monkeypatch.setattr(config_pkg, "SMTP_PASSWORD", "", raising=False)
+    set_tool_tenant_id("test-tenant")
+    set_tool_user_id("uitest")
+    yield
+    set_tool_user_id("")
+    set_tool_tenant_id("")
+
+
 class TestEmailToolRegistry:
     """Email Tool 注册中心测试"""
     

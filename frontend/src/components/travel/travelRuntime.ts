@@ -162,14 +162,24 @@ export interface TravelRequirementInterpretation {
   intent?: string
 }
 
+export type TravelToolProcessStatus = 'running' | 'success' | 'degraded' | 'failed' | 'blocked'
+
 export interface TravelProcessTool {
   tool: string
-  status: 'running' | 'success' | 'failed'
+  /**
+   * Tool Failure ≠ Workflow Failure（2026-10-07 容错契约）：
+   * degraded = 实时数据未验证但行程继续生成；failed = 该次调用失败
+   * （上层已重试/降级）；blocked = 硬依赖无法满足，整轮才会终止。
+   * 三者都不再联动把整轮 run 标成 error。
+   */
+  status: TravelToolProcessStatus
   dataStatus?: string
   resultCount?: number
   durationMs?: number
   errorType?: string
   error?: string
+  /** 用户可读的降级说明（后端 user_safe_message，无内部堆栈） */
+  userMessage?: string
   category?: string
   preview?: Array<Record<string, unknown>>
 }
@@ -265,8 +275,16 @@ export function reduceTravelStreamEvent(
       const current = actualIndex >= 0 ? next.tools[actualIndex] : { tool, status: 'running' as const }
       const updated: TravelProcessTool = {
         ...current,
-        status: data.status === 'failed' ? 'failed' : 'success',
+        status: data.status === 'degraded'
+          ? 'degraded'
+          : data.status === 'blocked'
+            ? 'blocked'
+            : data.status === 'failed'
+              ? 'failed'
+              : 'success',
       }
+      const userMessage = stringField(data, 'user_message')
+      if (userMessage) updated.userMessage = userMessage
       const dataStatus = stringField(data, 'data_status')
       const errorType = stringField(data, 'error_type')
       const resultCount = numberField(data, 'result_count')
@@ -286,9 +304,11 @@ export function reduceTravelStreamEvent(
       }
       if (actualIndex >= 0) next.tools[actualIndex] = updated
       else next.tools.push(updated)
-      if (updated.status === 'failed') {
+      // Tool 失败/降级只标记该行，不再把整轮 run 拖成 error——
+      // 只有 BLOCKED（硬依赖终止）与真正的 run 终止事件才改变轮次状态。
+      if (updated.status === 'blocked') {
         next.status = 'error'
-        next.error = error || errorType || 'Tool 执行失败'
+        next.error = userMessage || error || '硬依赖无法验证，已停止生成'
       }
     }
   } else if (event.event === 'error') {

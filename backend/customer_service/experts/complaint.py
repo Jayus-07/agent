@@ -81,6 +81,13 @@ def execute_complaint(
                 "[ComplaintExpert] handoff store 查询失败，跳过跨 turn 幂等检查",
                 exc_info=True,
             )
+            # P2 完整性观测（2026-10-07）：fail-open 是声明式取舍（拒绝投诉
+            # 伤害核心诉求，且随后的建单写也在同一库族上），但跳闸必须可数
+            try:
+                from backend.observability import metrics as _m
+                _m.cs_complaint_integrity_total.labels(kind="idempotency_check_skipped").inc()
+            except Exception:  # pragma: no cover — 指标软失败
+                pass
     if existing_ticket:
         logger.info(
             "[ComplaintExpert] 幂等返回: ticket=%s（会话已有投诉工单）",
@@ -139,6 +146,12 @@ def execute_complaint(
             ticket.ticket_id,
             exc_info=True,
         )
+        # P2 完整性观测：镜像行缺失意味着工单查询查不到该编号
+        try:
+            from backend.observability import metrics as _m
+            _m.cs_complaint_integrity_total.labels(kind="ticket_mirror_write_failed").inc()
+        except Exception:  # pragma: no cover — 指标软失败
+            pass
 
     # 迁移 B12：统一案件 cs_case 并行写入（设计方案 §10.1「case 是唯一
     # 案件事实源」；与 tickets 并存过渡，全面并表走后续批次）。SLA 按
@@ -177,21 +190,23 @@ def execute_complaint(
     handoff_transition(
         HandoffState.HANDOFF_REQUESTED, HandoffState.WAITING_HUMAN,
     )
-    from datetime import datetime, timezone as _tz
 
-    _now = datetime.now(_tz.utc).isoformat()
-    handoff_data = {
-        "handoff_state": HandoffState.WAITING_HUMAN.value,
-        "trigger_type": "complaint_escalation",
-        "trigger_reason": f"投诉升级: severity={detection.severity}",
-        "ticket_id": ticket.ticket_id,
-        "created_at": _now,
-        "updated_at": _now,
-    }
-    from backend.customer_service.handoff_store import get_handoff_store
+    # STOP CS-A P0-6：与 HandoffExpert 同走 lifecycle 唯一入口 ——
+    # 单事务建 waiting_human 工单 + conversations.handling_mode 投影同写
+    # （旧 store.save 只写 handoffs 行，是双表口径分叉的两处之一）。
+    from backend.customer_service.handoff.lifecycle import (
+        enter_waiting_handoff_sync,
+    )
 
-    store = get_handoff_store()
-    store.save(user_id, session_id, handoff_data)
+    _tenant_id = str(state.get("tenant_id", "") or "")
+    handoff_row = enter_waiting_handoff_sync(
+        tenant_id=_tenant_id or "default",
+        conversation_id=conversation_id or session_id,
+        user_id=user_id,
+        trigger_type="complaint_escalation",
+        trigger_reason=f"投诉升级: severity={detection.severity}",
+        ticket_id=ticket.ticket_id,
+    )
     record_cs_handoff("complaint")
 
     # 实时推送：投诉工单进入坐席待接入队列（与显式转人工一致）
@@ -199,13 +214,15 @@ def execute_complaint(
 
     get_agent_hub().publish(
         "conversation.waiting",
+        tenant_id=_tenant_id or None,
         item={
-            "conversation_id": session_id,
+            "conversation_id": conversation_id or session_id,
             "user_id": user_id,
+            "tenant_id": _tenant_id or None,
             "handoff_state": HandoffState.WAITING_HUMAN.value,
             "trigger_type": "complaint_escalation",
-            "trigger_reason": handoff_data["trigger_reason"],
-            "updated_at": _now,
+            "trigger_reason": f"投诉升级: severity={detection.severity}",
+            "updated_at": handoff_row["updated_at"],
             "last_message_preview": (user_message[:80] if user_message else None),
         },
     )

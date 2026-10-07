@@ -86,6 +86,12 @@ def run_expert_safely(
         ExpertResult — 保证包含 expert + status 字段
     """
     deadline = timeout_s if timeout_s is not None and timeout_s > 0 else None
+    # STOP CS-A P0-3（F2）：Expert 开始前的取消检查边界 —— 放在 NodeRunner
+    # 之外，RequestCancelled 直接向上传播（不被 SWALLOW_TO_STATUS 吞成
+    # failed），由 cs_graph_node 统一转 cancelled 语义。
+    from backend.core.request_context import raise_if_cancelled
+
+    raise_if_cancelled(f"cs_expert:{expert_name}")
     ctx = ExecutionContext(node_name=expert_name, domain="cs", deadline=deadline)
     node_result = NodeRunner().run(
         ctx,

@@ -11,6 +11,7 @@ Router 决定 execution_mode=direct 或 workflow 时：
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from backend.orchestration.capability_registry import tool_registry
 from backend.orchestration.router.types import ExecutionMode
@@ -19,6 +20,28 @@ from backend.orchestration.state_projection import (
     resolved_params,
 )
 from backend.shared.logger import logger
+
+
+def _run_coro_sync(coro):
+    """协程 → 同步结果（STOP D 显式 async 边界，2026-10-07）。
+
+    常态：本模块两个节点是主图**同步节点**（builder.py:144-145），LangGraph
+    把同步节点放进线程池执行（runner 以专属 daemon 线程驱动 stream），调用
+    线程没有运行中的事件循环 → 直接 asyncio.run。
+    防御：一旦有人在 loop 线程上直接调用（历史外 test/新接线），裸
+    asyncio.run 会抛「cannot be called from a running event loop」（12306
+    事故同族）。此处不嵌套、不起 nest_asyncio、不在调用线程偷换 loop——
+    交给单工作线程隔离执行并取回结果。
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    logger.warning(
+        "[DirectExecutor] 检测到调用线程已有事件循环，协程转入专用线程执行"
+    )
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="coro-sync") as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _extract_capability_name(capability: str) -> str:
@@ -136,7 +159,7 @@ def _run_skill_step(skill_nodes: dict, state: dict, step_id: str,
         "params": params,
     }
     skill_func = skill_nodes[_extract_capability_name(cap_name)]
-    result = asyncio.run(skill_func({
+    result = _run_coro_sync(skill_func({
         **state,
         "step_id": step_id,
         "question": state.get("question", ""),
@@ -160,6 +183,14 @@ def _run_skill_step(skill_nodes: dict, state: dict, step_id: str,
         step["error"] = skill_output["error"]
     if skill_output.get("error_type"):
         step["error_type"] = skill_output["error_type"]
+    # STOP H parity（2026-10-07）：治理语义字段必须随 direct 路径透传——
+    # 此前 tool_status/criticality 在此被丢弃，同一 Tool 失败在 direct
+    # 路径丢 tool_status、workflow/planner 路径保留，log 帧的降级提示
+    # 也因此退化成通用文案（events._build_skill_events 按 tool_status 分支）。
+    for parity_key in ("tool_status", "criticality", "error_code",
+                       "degraded", "fallback_used"):
+        if skill_output.get(parity_key) is not None:
+            step[parity_key] = skill_output[parity_key]
     return step
 
 
@@ -385,8 +416,8 @@ def workflow_executor_node(state: dict) -> dict:
 
     try:
         scheduler = get_workflow_scheduler()
-        # run_now 是 async
-        ctx = asyncio.run(scheduler.run_now(
+        # run_now 是 async（STOP D：经显式 sync adapter，防 loop 线程误调用）
+        ctx = _run_coro_sync(scheduler.run_now(
             wf_name, inputs=_build_workflow_inputs(wf_name, state)))
 
         # 构造 final_answer：汇总所有 step outputs
@@ -403,6 +434,14 @@ def workflow_executor_node(state: dict) -> dict:
                 for step_name, output in ctx.outputs.items():
                     if output:
                         answer_parts.append(f"### {step_name}\n{str(output)[:500]}\n")
+        # STOP E/§15（2026-10-07）：partial 时必须披露哪些环节数据不可用，
+        # 而不是让缺节静默消失、用户误以为结果完整。
+        if ctx.step_failures:
+            unavailable = "、".join(ctx.step_failures)
+            answer_parts.append(
+                f"\n> ⚠️ 以下环节数据本次不可用：{unavailable}。"
+                "以上为可用部分的结果。"
+            )
         answer_parts.append(f"\n---\n*状态: {ctx.status} | run_id: {ctx.run_id}*")
 
         final_answer = "\n".join(answer_parts)

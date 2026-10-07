@@ -74,6 +74,10 @@ function statusOf(error: unknown): number | undefined {
 }
 
 function readableError(error: unknown, fallback: string): string {
+  // RBAC 接口会返回已经脱敏且可操作的业务原因（用户名重复、部门无效、
+  // 角色权限不足等）。此前统一错误层把它们全部折叠成“请求参数有误”，
+  // 管理员无法知道该改什么。
+  if (error instanceof ApiError && error.message.trim()) return error.message.trim();
   const descriptor = describeApiError(error);
   return descriptor.cause === error && descriptor.status
     ? descriptor.message

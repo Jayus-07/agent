@@ -359,7 +359,8 @@ mcp_servers/
 - **Trace**：主图节点、Skill、Tool、检索与索引阶段均落 Span，类型由 `observability/tracer.py::SpanKind` 枚举强约束（**照 G2 不在此手抄阶段清单**）；每 Span 记录 latency / token_usage / retrieval_score / tool_args / execution_result
   - Evidence Gate 有 4 个专有 Span：`retrieval_gate` / `rerank_gate` / `faithfulness_gate` / `self_correction`
 - **Metrics**：Prometheus `/metrics`；黄金信号 = 首 token 延迟（TTFT P99 < 3s）/ 每 token 耗时（TPOT P99 < 200ms）/ 错误率 / 并发占用
-- **告警**：`docker/prometheus-alert-rules.yml`（55 条告警 + 6 条 recording 规则，warning/critical 两级；自监控抓取与 15d retention 见 `docker/prometheus.yml` / compose）
+- **告警**：`docker/prometheus-alert-rules.yml`（60 条告警 + 6 条 recording 规则，warning/critical 两级；2026-10-07 `b88a557` 观测重构 +5 条 P0 SLI：Tool/RAG/Router/Travel；自监控抓取与 15d retention 见 `docker/prometheus.yml` / compose）
+- **看板**：Grafana provisioning 7 张编号看板（`agent-01` 总览 / `agent-02` 路由 / `agent-03` Tool / `agent-04` RAG / `agent-05` LLM成本Context / `agent-06` 业务域 / `agent-07` 基础设施，2026-10-07 `b88a557` 替换旧 5 张；`docker/grafana/provisioning/dashboards/`）
 - **成本治理**：`GET /observability/tokens/calls` 逐次调用 token 与成本；budgets + prices 可在管理端配置
 
 SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
@@ -375,7 +376,7 @@ SLO 定义见 [docs/observability/slo.md](docs/observability/slo.md)。
 | LLM | DeepSeek / Qwen / Ollama（`sys_config` + 管理端可切换） |
 | 向量 | PostgreSQL + pgvector（`rag_vectors`，HNSW + cosine）｜embedding 双轨：text-embedding-v3 1024d / bge-small-zh-v1.5 512d |
 | 检索 | BM25 + Vector → RRF → CrossEncoder Rerank |
-| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 077） |
+| 数据 | PostgreSQL（业务库 7 schema × 18 表｜元数据库含向量表 `rag_vectors`，迁移已至 079） |
 | 异步 | Celery + Redis（双队列）+ Kafka（`java-loop` profile，默认不启） |
 | 可观测 | 自建 Tracer（OTel OTLP 出口 `OTEL_TRACE_OTLP_ENABLED` 默认关）+ Prometheus + Grafana + Tempo/Loki/Promtail + Alertmanager/alert-bridge（观测栈全家桶走 `--profile observability`，默认不启） |
 | MCP | stdio / HTTP SSE |
