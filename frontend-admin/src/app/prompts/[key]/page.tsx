@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap, Activity } from 'lucide-react'
-import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus, type PromptRuntimeStatus, type PromptReleaseRecord } from '@/api/prompts'
+import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus, type PromptRuntimeStatus, type PromptReleaseRecord, type PromptEvaluationMode } from '@/api/prompts'
 import { evaluationService } from '@/api/evaluation'
 import { WHITELIST_KEYS } from '@/config/promptGroups'
 import { PROMPT_RELEASE_EXECUTOR, PROMPT_RELEASE_SUITE } from '@/config/promptRelease'
@@ -45,6 +45,7 @@ export default function PromptDetailPage() {
   const [runtimeStatus, setRuntimeStatus] = useState<PromptRuntimeStatus | null>(null)
   const [releases, setReleases] = useState<PromptReleaseRecord[]>([])
   const [releaseLoading, setReleaseLoading] = useState(false)
+  const [promptEvaluationMode, setPromptEvaluationMode] = useState<PromptEvaluationMode>('self+ragas')
 
   const refreshReleases = useCallback(async () => {
     try {
@@ -161,6 +162,7 @@ export default function PromptDetailPage() {
         suite: PROMPT_RELEASE_SUITE,
         dataset_version: { version: '5.0.0-unified', source: 'admin-console' },
         executor: PROMPT_RELEASE_EXECUTOR,
+        evaluation_mode: promptEvaluationMode,
       })
       setReleases(previous => [record, ...previous.filter(item => item.release_id !== record.release_id)])
       toast.info(`v${version} 已进入评测队列`)
@@ -373,6 +375,24 @@ export default function PromptDetailPage() {
               onRollback={handleRollbackRelease}
               loading={releaseLoading}
             />
+          </div>
+        )}
+
+        {decodedKey === 'rag.qa' && !isReadOnly && (
+          <div className="mb-4 flex items-center gap-2 text-xs text-text-secondary">
+            <span>发布评测方式</span>
+            <select
+              value={promptEvaluationMode}
+              onChange={event => setPromptEvaluationMode(event.target.value as PromptEvaluationMode)}
+              disabled={releaseLoading}
+              className={INPUT_CLS}
+            >
+              <option value="offline">离线自研指标</option>
+              <option value="semantic">在线自研指标</option>
+              <option value="ragas">RAGAS</option>
+              <option value="self+ragas">在线自研 + RAGAS</option>
+            </select>
+            <span className="text-[11px] text-text-muted">新建发布评测时生效</span>
           </div>
         )}
 

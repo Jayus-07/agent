@@ -151,6 +151,7 @@ jobs:
           from pathlib import Path
 
           from backend.evaluation.config import EvalConfig
+          from backend.evaluation.mode import resolve_evaluation_mode
           from backend.evaluation.report import write_markdown_report
           from backend.evaluation.service import EvaluationService
           from backend.evaluation.storage import persist_report
@@ -167,9 +168,15 @@ jobs:
               if isinstance(dataset_provenance, dict) and dataset_provenance.get("version")
               else dataset_version_raw or None
           )
+          mode = resolve_evaluation_mode(
+              dataset_provenance.get("evaluation_mode")
+              if isinstance(dataset_provenance, dict) else None
+          )
           config = EvalConfig(
               module="rag",
-              live=True,
+              live=mode.live,
+              ragas=mode.ragas,
+              no_ragas=mode.no_ragas,
               selection=os.environ["PROMPT_EVAL_SUITE"],
               dataset_version=dataset_version,
               run_id=os.environ["RUN_ID"],

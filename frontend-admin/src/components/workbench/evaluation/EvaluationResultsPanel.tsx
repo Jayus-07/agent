@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward, PlayCircle, Download, Ban } from 'lucide-react'
-import { evaluationService, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
+import { evaluationService, type EvaluationMode, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
 import CaseSampleDetail from '@/components/evaluations/CaseSampleDetail'
 import { useToast } from '@/components/shared/Toast'
 import EmptyState from '@/components/shared/EmptyState'
@@ -68,6 +68,9 @@ function RagasBadge({ mode }: { mode?: string }) {
   if (mode === 'self+ragas') {
     return <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 shrink-0">RAGAS</span>
   }
+  if (mode === 'ragas') {
+    return <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 shrink-0">仅 RAGAS</span>
+  }
   if (mode === 'self') {
     return <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500 shrink-0">仅自研</span>
   }
@@ -105,6 +108,7 @@ export default function EvaluationResultsPanel() {
   const [moduleFilter, setModuleFilter] = useState<string>('all')
   const [suiteFilter, setSuiteFilter] = useState<string>('')
   const [triggerFilter, setTriggerFilter] = useState<string>('')
+  const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>('offline')
 
   const filteredRuns = useMemo(() => runs.filter(r => {
     if (statusFilter !== 'all' && (r.status || '') !== statusFilter) return false
@@ -176,10 +180,19 @@ export default function EvaluationResultsPanel() {
   }, [toast])
 
   const handleRunEval = async () => {
-    if (!confirm('发起 RAG 评测？（离线 smoke 口径，完成后自动刷新列表）')) return
+    const labels: Record<EvaluationMode, string> = {
+      offline: '离线自研指标',
+      semantic: '在线自研指标',
+      ragas: 'RAGAS',
+      'self+ragas': '在线自研 + RAGAS',
+    }
+    if (!confirm(`发起 RAG 评测？方式：${labels[evaluationMode]}，完成后自动刷新列表。`)) return
     setRunning(true)
     try {
-      const result = await evaluationService.runEval('rag')
+      const result = await evaluationService.runEval('rag', {
+        evaluation_mode: evaluationMode,
+        suite: 'pr_baseline',
+      })
       toast.success(`评测完成：通过率 ${(result.pass_rate * 100).toFixed(1)}%`)
       await loadRuns()
     } catch (e) {
@@ -267,6 +280,20 @@ export default function EvaluationResultsPanel() {
         {/* 操作 */}
         <div className="flex items-center justify-end mb-6">
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-text-secondary">
+              <span>测评方式</span>
+              <select
+                value={evaluationMode}
+                onChange={event => setEvaluationMode(event.target.value as EvaluationMode)}
+                disabled={running}
+                className="px-2.5 py-1.5 rounded-lg border border-border-subtle bg-surface-base text-xs text-text-primary"
+              >
+                <option value="offline">离线自研指标</option>
+                <option value="semantic">在线自研指标</option>
+                <option value="ragas">RAGAS</option>
+                <option value="self+ragas">在线自研 + RAGAS</option>
+              </select>
+            </label>
             <button
               onClick={handleRunEval}
               disabled={running}

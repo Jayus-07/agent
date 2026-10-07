@@ -240,6 +240,8 @@ def _evaluator_mode(config: EvalConfig) -> str:
     自研指标恒执行；RAGAS 批量默认开启（rag.py 按 no_ragas 关闭），
     因此只有 self（显式 --no-ragas）与 self+ragas（默认/显式 --ragas）两态。
     """
+    if config.ragas and not config.no_ragas:
+        return "ragas"
     if config.no_ragas:
         return "self"
     return "self+ragas"

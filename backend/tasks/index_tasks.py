@@ -141,6 +141,12 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     from backend.app.api.routes.rag_upload import (
         _do_index_sync, _settle_index_result,
     )
+    # 管理端保存供应商/Embedding 后，Celery prefork 子进程不会共享 API
+    # 进程的 15s 注册表缓存。每个索引任务开始前刷新一次，避免 worker
+    # 长时间运行后继续使用“无 Key”的旧快照；刷新失败则保留上次已知配置，
+    # 由 pipeline 给出原有可操作错误。
+    from backend.tasks.celery_app import refresh_worker_model_registry
+    refresh_worker_model_registry()
     from backend.tasks.index_task_runtime import (
         IndexTaskCancelled, IndexTaskPaused, run_with_task_state,
     )

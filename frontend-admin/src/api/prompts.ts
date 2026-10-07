@@ -137,6 +137,8 @@ export interface PromptReleaseRecord {
   runtime_status?: PromptRuntimeStatus
 }
 
+export type PromptEvaluationMode = 'offline' | 'semantic' | 'ragas' | 'self+ragas'
+
 const BASE = '/api/prompts'
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -181,6 +183,7 @@ export const promptsService = {
       dataset_version?: Record<string, unknown>
       executor?: 'local' | 'github'
       target_env?: string
+      evaluation_mode?: PromptEvaluationMode
     },
   ): Promise<PromptReleaseRecord> {
     return api(`${BASE}/${encodeURIComponent(key)}/versions/${version}/release`, {
