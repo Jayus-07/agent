@@ -450,6 +450,16 @@ _register(PromptSpec(
 ))
 
 _register(PromptSpec(
+    key="customer_service.complaint_escalate",
+    name="客服投诉转人工仲裁 Prompt",
+    category="customer_service",
+    risk_level="high",
+    variables=(R("query"),),
+    default_file="customer_service_complaint_escalate.yaml",
+    agent="customer_service",
+))
+
+_register(PromptSpec(
     key="customer_service.supervisor",
     name="客服域主 Agent 决策 Prompt",
     category="customer_service",

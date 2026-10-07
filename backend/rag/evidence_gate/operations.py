@@ -163,9 +163,17 @@ def find_missing_entities(query: str, docs: list, top_n: int = 8) -> list[str]:
         entities = _extract_gate_entities(query)
         if not entities:
             return []
-        text = "".join(
-            (getattr(d, "page_content", "") or "") for d in docs[:top_n]
-        )
+        # 覆盖文本 = chunk 正文 + section_title：旅游/制度类语料按「标题承载
+        # 实体」写作（###=POI/条款边界），chunking 后标题只落在 metadata，
+        # 只看正文会把标题实体误判缺失 → 攻略类文档被 gate 系统性误拒
+        # （2026-10-08 travel_eval_kb 实测）。
+        parts: list[str] = []
+        for d in docs[:top_n]:
+            content = getattr(d, "page_content", "") or ""
+            meta = getattr(d, "metadata", None) or {}
+            title = str(meta.get("section_title") or "")
+            parts.append(content + "\n" + title)
+        text = "".join(parts)
         text = "".join(text.split())
         missing = []
         for ent in entities:

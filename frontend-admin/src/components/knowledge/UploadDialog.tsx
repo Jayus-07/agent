@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { knowledgeService } from '@/api/knowledge'
-import { fetchRaw } from '@/api/client'
+import { fetchRaw, randomId } from '@/api/client'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
@@ -126,7 +126,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
 
     let okCount = 0
-    const batchId = files.length > 1 ? crypto.randomUUID() : undefined
+    const batchId = files.length > 1 ? randomId('batch') : undefined
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i]

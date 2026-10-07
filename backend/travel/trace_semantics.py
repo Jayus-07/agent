@@ -18,9 +18,10 @@ _NON_PLANNING_INTENTS = {
     "out_of_scope",
     "query_static",
     "query_dynamic",
+    "query_transit",
     "discover",
 }
-_QUERY_INTENTS = {"query_static", "query_dynamic", "discover"}
+_QUERY_INTENTS = {"query_static", "query_dynamic", "query_transit", "discover"}
 
 
 def _as_dict(value: Any) -> dict:

@@ -764,6 +764,17 @@ class AgentMessageResponse(BaseModel):
     created_at: str
 
 
+class HandoffMeta(BaseModel):
+    """转人工等待元信息（A 案排队透明化，2026-10-08）：支撑用户侧倒计时。"""
+
+    handoff_id: str
+    handoff_state: str
+    # 总等待截止（ISO）；前端据此渲染「剩余 N 秒，超时将自动登记工单」
+    total_deadline_at: str | None = None
+    # 前面还有几单（同租户 waiting_human 先到序）；0 = 下一个就轮到本单
+    queue_position: int = 0
+
+
 class HandoffMessagesResponse(BaseModel):
     conversation_id: str
     handoff_state: str
@@ -771,6 +782,8 @@ class HandoffMessagesResponse(BaseModel):
     messages: list[MessageDTO]
     # 双向输入中指示（2026-09-18）：坐席正在输入（TTL 5s 瞬态，读 Redis）
     agent_typing: bool = False
+    # 等待元信息（仅存在未关闭 handoff 时返回；none 态为 null）
+    handoff_meta: HandoffMeta | None = None
 
 
 @router.get("/handoff/queue", response_model=HandoffQueueResponse)
@@ -1850,7 +1863,7 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
 
 
 async def _async_messages_since(conversation_id: str, since_id: int, limit: int, run_sync):
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from backend.customer_service.models.handoff import CSHandoff
     from backend.customer_service.models.message import CSMessage
@@ -1880,12 +1893,40 @@ async def _async_messages_since(conversation_id: str, since_id: int, limit: int,
         ).scalars().all()
 
         last_id = max((r.id for r in rows), default=since_id)
+
+        # A 案（2026-10-08）：waiting_human 时计算排队位置与总等待截止，
+        # 支撑用户侧倒计时（「剩余 N 秒，超时将自动登记工单」）。
+        handoff_meta = None
+        if handoff_row is not None:
+            queue_position = 0
+            if handoff_row.handoff_state == "waiting_human":
+                ahead = (
+                    await db.execute(
+                        select(func.count(CSHandoff.id)).where(
+                            CSHandoff.tenant_id == handoff_row.tenant_id,
+                            CSHandoff.handoff_state == "waiting_human",
+                            CSHandoff.created_at < handoff_row.created_at,
+                        )
+                    )
+                ).scalar()
+                queue_position = int(ahead or 0)
+            handoff_meta = HandoffMeta(
+                handoff_id=handoff_row.handoff_id,
+                handoff_state=handoff_row.handoff_state,
+                total_deadline_at=(
+                    handoff_row.total_deadline_at.isoformat()
+                    if handoff_row.total_deadline_at else None
+                ),
+                queue_position=queue_position,
+            )
+
         return HandoffMessagesResponse(
             conversation_id=conversation_id,
             # 2026-09-17: 无进行中工单返回 none（原为 closed，会让没有
             # 转人工记录的新会话在用户侧误显示「人工服务已结束」）
             handoff_state=handoff_row.handoff_state if handoff_row else "none",
             last_id=last_id,
+            handoff_meta=handoff_meta,
             messages=[
                 MessageDTO(
                     message_id=m.message_id,

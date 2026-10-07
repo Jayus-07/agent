@@ -11,7 +11,7 @@ export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
 const BASE = '/api/rag'
 
-import { createIdempotencyKey, fetchRaw, mutationFetchRaw } from '@/api/client'
+import { createIdempotencyKey, fetchRaw, mutationFetchRaw, randomId } from '@/api/client'
 
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
@@ -259,7 +259,7 @@ export const knowledgeService: any = {
    * 批量删除（并发）— 使用 X-Batch-Id 头关联同一批次，操作中心按批次折叠展示。
    */
   batchDelete: (docs: { id: string; name: string }[]) => {
-    const batchId = docs.length > 1 ? crypto.randomUUID() : undefined
+    const batchId = docs.length > 1 ? randomId('batch') : undefined
     const headers: Record<string, string> = {}
     if (batchId) headers['X-Batch-Id'] = batchId
 
@@ -294,7 +294,7 @@ export const knowledgeService: any = {
    * 互斥在 worker 侧），ok 计数=成功提交数，失败=提交失败。
    */
   batchReindex: async (ids: string[]) => {
-    const batchId = ids.length > 1 ? crypto.randomUUID() : undefined
+    const batchId = ids.length > 1 ? randomId('batch') : undefined
     const failed: { id: string; error: string }[] = []
     let ok = 0
     const headers: Record<string, string> = {}

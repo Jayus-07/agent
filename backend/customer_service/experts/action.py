@@ -434,6 +434,81 @@ def _ask_missing_slot(
     action_type = _INTENT_ACTION_MAP.get(intent, "refund")
     label = _ACTION_TYPE_LABELS.get(f"{action_type}_request", action_type)
 
+    # 退款点选候选（2026-10-08 拍板）：缺订单号时不再让用户手输——按
+    # 退款政策窗口列出可退订单（订单号+商品名+金额）供用户点选/回复序号。
+    # 候选查询失败或 http 网关模式返回空 → 退回手输路径（现状行为）。
+    candidates: list[dict] = []
+    window_days = 0
+    if action_type == "refund":
+        try:
+            from backend.customer_service.service.refund_service import (
+                get_refund_service,
+            )
+
+            bundle = get_refund_service().list_refund_candidates(user_id)
+            candidates = bundle.get("candidates") or []
+            window_days = int(bundle.get("window_days") or 0)
+        except Exception as e:
+            logger.warning("[ActionExpert] 退款候选查询失败，退回手输: %s", e)
+
+    if candidates:
+        options: list[str] = []
+        lines: list[str] = []
+        for idx, c in enumerate(candidates, start=1):
+            product = c.get("product_names") or "商品信息缺失"
+            label_text = (
+                f"{c['order_no']} ¥{c['amount']:.2f} {product}"
+            )
+            options.append(f"申请退款：{label_text}")
+            lines.append(f"**{idx}.** `{c['order_no']}` — {product}（¥{c['amount']:.2f}，{c['status']}）")
+        response_draft = (
+            f"为您找到近 {window_days} 天内符合退款政策的订单，请点选或回复序号：\n\n"
+            + "\n\n".join(lines)
+            + "\n\n点击上方选项即可发起该订单的退款申请。"
+        )
+        pending = {
+            "action_id": str(uuid.uuid4()),
+            "action_type": f"{action_type}_request",
+            "intent": intent,
+            "status": "need_info",
+            "missing_slots": ["order_id"],
+            "collected_slots": {},
+            # 点选候选映射：用户回复序号 N → candidates[N-1].order_id
+            "candidates": candidates,
+            "target_type": "order",
+            "target_id": "",
+            "risk_level": "high",
+            "requires_confirmation": False,
+            "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
+            "retry_count": 0,
+            "created_at": now.isoformat(),
+            "expires_at": compute_expires_at(
+                now, CS_CONFIRMATION_TTL_SECONDS
+            ).isoformat(),
+        }
+        store.save(user_id, session_id, pending, tenant_id=tenant_id)
+        logger.info(
+            "[ActionExpert] missing slot order_id, %d refund candidates offered: "
+            "intent=%s user_id=%s", len(candidates), intent, user_id,
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=response_draft,
+            data={
+                "pending_action": pending,
+                "confirmation_state": pending["confirmation_state"],
+                # CS 图透传为 clarification 帧（events.py 发射，前端渲染
+                # 可点选项；选项=用户话术，点击即作为消息发送）
+                "_clarify": {
+                    "source": "refund_candidates",
+                    "question": "请选择要申请退款的订单：",
+                    "options": options,
+                    "handoff_available": False,
+                },
+            },
+        )
+
     pending = {
         "action_id": str(uuid.uuid4()),
         "action_type": f"{action_type}_request",
@@ -458,11 +533,14 @@ def _ask_missing_slot(
         intent, user_id,
     )
 
+    window_note = (
+        f"（当前退款政策：下单后 {window_days} 天内可申请）" if window_days else ""
+    )
     return ExpertResult(
         expert="action",
         status=ExpertStatus.SUCCESS.value,
         response_draft=(
-            f"请提供需要办理{label}的订单号（例如 DEMO-1002），"
+            f"请提供需要办理{label}的订单号（例如 DEMO-1002）{window_note}，"
             "我会先为您核对订单，确认无误后再提交申请。"
         ),
         data={
@@ -494,7 +572,26 @@ def _handle_slot_fill(
     # （设计方案 场景4；取消后不进 supervisor 再路由——B6 实机验证定位），
     # 此处只负责补槽/追问。
 
+    # 点选候选序号回填（2026-10-08）：用户回复「1/2/3」→ 映射到缺槽
+    # 追问时下发的候选订单。先于订单实体提取执行（候选数 ≤5，纯 1-2 位
+    # 数字不会是合法订单号，避免被实体提取先吞）。
+    candidates = pending_action.get("candidates") or []
+    stripped = (user_message or "").strip()
+    picked_candidate = None
+    if (
+        candidates and stripped.isdigit()
+        and len(stripped) <= 2 and 1 <= int(stripped) <= len(candidates)
+    ):
+        picked_candidate = candidates[int(stripped) - 1]
+
     order_id = _extract_order_id_from_message(user_message)
+    if picked_candidate and not order_id:
+        order_id = str(picked_candidate.get("order_id") or picked_candidate.get("order_no") or "")
+        if order_id:
+            logger.info(
+                "[ActionExpert] candidate #%s picked -> order_id=%s",
+                stripped, order_id,
+            )
     if order_id:
         cs_route = dict(cs_route or {})
         metadata = dict(cs_route.get("metadata") or {})

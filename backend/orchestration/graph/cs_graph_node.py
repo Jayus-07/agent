@@ -94,6 +94,16 @@ def cs_graph_node(state: dict) -> dict:
     # L2 拒答兜底追问（2026-09-19）：知识域拒答时在原始输出附带 _clarify
     # （events.py 据此发 clarification 事件），拒答正文照常返回
     clarify = _refusal_clarify(final_state, state)
+    if clarify is None:
+        # 退款候选点选卡（2026-10-08）：action 专家缺槽时下发的候选选项
+        # 透传为 clarification 帧，前端渲染可点选订单列表。
+        try:
+            expert_data = (final_state.get("last_expert_result") or {}).get("data") or {}
+            expert_clarify = expert_data.get("_clarify")
+            if isinstance(expert_clarify, dict) and expert_clarify.get("options"):
+                clarify = expert_clarify
+        except Exception:
+            clarify = None
     if clarify is not None:
         update["_clarify"] = clarify
     return attach_runtime_result(

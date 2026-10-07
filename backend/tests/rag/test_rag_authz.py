@@ -90,10 +90,26 @@ def test_admin_cross_department_read_and_manage():
     assert ok
 
 
-def test_test_audience_kb_invisible_to_everyone_including_admin():
-    for roles in (("editor",), ("admin",)):
+def test_test_audience_kb_invisible_except_super_admin():
+    """2026-10-08 拍板：audience=test 测试库仅 super_admin 可见/可用。
+
+    admin 及以下仍不可见；customer/employee 走 authorized_kbs 恒不含 test。
+    super_admin 的可见性仅供管理端治理与评测语料上传——对客请求主体
+    永远不含 super_admin，测试库数据不进对客检索。
+    """
+    for roles in (("editor",), ("admin",), ("viewer",)):
         authz = RagAuthorization.build(_principal(roles=roles))
         assert not authz.can_search_kb("rag_eval_kb")
+        assert not authz.can_search_kb("cs_eval_kb")
+        assert not authz.can_search_kb("travel_eval_kb")
+
+    sup = RagAuthorization.build(_principal(roles=("super_admin",)))
+    assert sup.can_search_kb("rag_eval_kb")
+    assert sup.can_search_kb("cs_eval_kb")
+    assert sup.can_search_kb("travel_eval_kb")
+    # 超管同时保留全部非 test 库可见性（is_admin 语义不变）
+    assert sup.can_search_kb("policy_hr")
+    assert sup.can_search_kb("cs_faq")
 
 
 def test_customer_scope_only_cs_kbs():
@@ -187,6 +203,24 @@ def test_retrieval_authorized_kbs_undeclared_subject_none_passthrough():
 def test_readable_kb_ids_admin_parameter():
     assert "policy_finance" in readable_kb_ids("employee", "hr", is_admin=True)
     assert "rag_100_docs" not in readable_kb_ids("employee", "hr", is_admin=True)
+
+
+def test_readable_kb_ids_include_test_only_for_super_admin():
+    # admin 不含 test 库；include_test=True（super_admin 口径）放开全部
+    admin_kbs = readable_kb_ids("employee", "hr", is_admin=True)
+    assert "rag_eval_kb" not in admin_kbs
+    assert "cs_eval_kb" not in admin_kbs
+    sup_kbs = readable_kb_ids("employee", "hr", is_admin=True, include_test=True)
+    assert {"rag_eval_kb", "cs_eval_kb", "travel_eval_kb"} <= set(sup_kbs)
+
+
+def test_retrieval_authorized_kbs_super_admin_via_roles():
+    from backend.rag.authz import retrieval_authorized_kbs
+
+    admin_set = retrieval_authorized_kbs("employee", "hr", roles=("admin",))
+    sup_set = retrieval_authorized_kbs("employee", "hr", roles=("super_admin",))
+    assert "cs_eval_kb" not in set(admin_set or [])
+    assert "cs_eval_kb" in set(sup_set or [])
 
 
 def test_is_admin_roles_via_permission_codes():

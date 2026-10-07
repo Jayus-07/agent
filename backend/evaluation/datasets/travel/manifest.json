@@ -4,5 +4,7 @@
   "module": "travel",
   "schema_description": "旅游域规划质量评估数据集 — 按任务书 §15 的 A-F 六组组织用例，metadata.group 标组、metadata.tier 标层级（smoke/core/hard/regression），runner 调旅游子图断言 final_answer/validation 违反/版本链/修复行为。A-F 分组依据 TRAVEL_ARCHITECTURE_AUDIT.md §3.13 的任务书线索落地：A=正常规划，B=槽位抽取，C=跨轮多轮，D=约束修复，E=用户决策（必去闭馆），F=容错失败（Provider 失败注入）。 2026-09-24 STOP I5：新增 G 组（质量金标 T1-T15 映射，12 条）——基础规划/缺槽/预算PATCH(裸数字)/avoid PATCH/must-go/冲突覆盖/NEW_RUN/lodging/预算不可能/未知必去/营业时间/reporter grounding；聚合指标与门禁见 evaluation/travel_quality.py 与 tests/travel/test_quality_golden.py。",
   "notes": "Phase 5 探路版（2026-09-18）。expected 字段为 runner 契约：status/must_contain/must_not_contain/days/party_size/pace/min_plan_version/parent_linked/repair_triggered/decision_required/no_error_violations/violation_codes/confidence_max/notes_contain/notes_not_contain/clarification/destination；跨轮用例 metadata.followup 为第二轮消息（same_thread 同 thread_id），expected.followup 为第二轮断言（同构）。Failure 组 metadata.fail_transit/fail_poi 触发假 Provider 注入（TransitProvider 走 routing.set_route_provider 插槽、POI 走 tools.travel.poi.search_poi 插桩）。",
-  "content_hash": "bbc465c9ed8c4466"
+  "content_hash": "bbc465c9ed8c4466",
+  "kb_id": "travel_eval_kb",
+  "kb_note": "模块评测库（audience=test，仅 super_admin 可见/可用）；离线评测零检索依赖，合成测试语料存此库，live 探针消费接线为后续任务"
 }

@@ -29,8 +29,11 @@ from backend.orchestration.graph.routing.hierarchical import (
 )
 from backend.orchestration.graph.routing.lock_domain import (
     CS_FORCED_HINTS,
+    MAIN_HINTS,
     detect_cs_redirect,
     is_cs_forced,
+    is_main_forced,
+    main_forced_handoff_update,
 )
 from backend.orchestration.graph.routing.prefilter_chain import (
     _ROUTE_MODE_DOMAIN,
@@ -60,7 +63,10 @@ __all__ = [
     "handoff_update_for",
     # lock_domain
     "CS_FORCED_HINTS",
+    "MAIN_HINTS",
     "is_cs_forced",
+    "is_main_forced",
+    "main_forced_handoff_update",
     "detect_cs_redirect",
     # continuation
     "_try_continuation",

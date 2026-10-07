@@ -16,9 +16,12 @@ worker 的 tick 间隔是 1 秒，reaper 排在同 tick 派单之前，因此
 """
 from __future__ import annotations
 
+import asyncio
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.cs_dispatch import (
@@ -26,6 +29,7 @@ from backend.config.cs_dispatch import (
     CS_MAX_DISPATCH_ATTEMPTS,
     CS_REAPER_BATCH_LIMIT,
 )
+from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
 from backend.customer_service.handoff.dispatch import (
     agent_busy,
     outbox,
@@ -57,6 +61,116 @@ class ReapResult:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# ── B 案（2026-10-08 拍板）：总等待期到点不再干等——压缩诉求、登记留言
+# 工单（24h 回访承诺）、把工单号作为会话消息告知用户。压缩走 llm 代理
+# （G7：限流/韧性/记账），失败确定性降级为原文拼接，绝不阻塞关单本身。
+
+_COMPRESS_PROMPT = (
+    "以下是用户在客服会话中的几条消息。请把它们合并压缩成一句不超过60字的"
+    "中文诉求陈述（保留订单号/金额等关键事实），只输出压缩结果，不要任何前缀：\n"
+)
+
+
+def _compress_request_sync(user_texts: list[str]) -> str | None:
+    """LLM 压缩诉求；线程级限时，任何失败返回 None（调用方降级拼接）。"""
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from backend.config.customer_service import CS_COMPLAINT_LLM_TIMEOUT_MS
+        from backend.infra.async_utils import sync_call_with_timeout
+        from backend.infra.llm import llm  # 代理：限流/韧性/llm_usage 记账
+
+        joined = "\n".join(f"- {t[:120]}" for t in user_texts[-8:])
+        timeout_s = CS_COMPLAINT_LLM_TIMEOUT_MS / 1000.0
+        response = sync_call_with_timeout(
+            llm.invoke, timeout_s, [HumanMessage(content=_COMPRESS_PROMPT + joined)],
+        )
+        text = (response.content or "").strip()
+        if text.startswith("```"):
+            text = text.strip("`").lstrip("json").strip()
+        return text[:200] or None
+    except Exception as e:
+        logger.warning(f"[Reaper] 诉求压缩失败，降级原文拼接: {e}")
+        return None
+
+
+async def _build_timeout_ticket(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    handoff,
+    now: datetime,
+) -> tuple[str | None, str]:
+    """超时关单时登记留言工单。返回 (ticket_id, 诉求摘要)；失败返回 (None, 降级摘要)。
+
+    与关单同事务提交：工单缺席时 closed_reason 退回「保留会话记录」旧话术，
+    保证两态一致（有单必有号，无号不承诺）。
+    """
+    from backend.customer_service.models.message import CSMessage
+    from backend.customer_service.models.ticket import CSTicket
+
+    user_texts: list[str] = []
+    try:
+        rows = (
+            await session.execute(
+                select(CSMessage)
+                .where(
+                    CSMessage.conversation_id == handoff.conversation_id,
+                    CSMessage.sender_type == "user",
+                    CSMessage.private.is_(False),
+                )
+                .order_by(CSMessage.created_at.desc())
+                .limit(8)
+            )
+        ).scalars().all()
+        user_texts = [r.content for r in reversed(rows) if r.content]
+    except Exception as e:
+        # 会话原文读不到（如测试假 session/读库抖动）不阻塞关单——降级摘要兜底
+        logger.warning(f"[Reaper] 超时工单读取会话原文失败: {e}")
+    fallback = "；".join(t[:60] for t in user_texts[-3:]) or "用户请求人工服务（会话原文缺失）"
+
+    compressed: str | None = None
+    if user_texts:
+        try:
+            compressed = await asyncio.to_thread(_compress_request_sync, user_texts)
+        except Exception as e:  # noqa: BLE001 — to_thread 传播的非 LLC 失败同样降级
+            logger.warning(f"[Reaper] 诉求压缩线程失败: {e}")
+    summary = compressed or fallback
+
+    # handoffs.priority 是宽松字符串域（"medium"/"P2"/历史 int），收敛到
+    # tickets 的合法枚举（TICKET_PRIORITIES），未知值一律 medium。
+    raw_priority = str(handoff.priority or "medium")
+    ticket_priority = {"P0": "critical", "P1": "high", "P2": "medium", "P3": "low"}.get(
+        raw_priority, raw_priority,
+    )
+    if ticket_priority not in ("low", "medium", "high", "critical"):
+        ticket_priority = "medium"
+
+    try:
+        ticket_id = f"GD-{now:%Y%m%d}-{secrets.token_hex(2).upper()}"
+        session.add(CSTicket(
+            ticket_id=ticket_id,
+            tenant_id=tenant_id,
+            type="handoff",
+            status="open",
+            source="ai",
+            conversation_id=str(handoff.conversation_id),
+            user_id=str(handoff.user_id or ""),
+            handoff_id=str(handoff.handoff_id),
+            priority=ticket_priority,
+            title=f"人工超时留言：{summary[:60]}",
+            description=(
+                f"[超时降级] {summary}\n"
+                f"（会话 {handoff.conversation_id}，等待人工 {CS_HANDOFF_TIMEOUT_SECONDS}s 无人接入）"
+            ),
+        ))
+        await session.flush()
+        return ticket_id, summary
+    except Exception as e:
+        logger.warning(f"[Reaper] 超时留言工单创建失败（关单继续）: {e}")
+        return None, summary
 
 
 def _terminal_reason(handoff, now: datetime) -> str | None:
@@ -108,11 +222,23 @@ async def _close_handoff(
 
     previous_agent_id = handoff.assigned_agent_id
     handoff.handoff_state = "closed"
+    ticket_id: str | None = None
+    request_summary = ""
     if reason == REASON_TOTAL_DEADLINE:
-        # 池空/无人接单到达总等待期：给用户「留言兜底」语义而不是冷冰冰的超时
-        handoff.closed_reason = (
-            "total_deadline:人工坐席繁忙，已为您保留会话记录，客服稍后会主动联系您"
+        # B 案（2026-10-08）：总等待期到点 → 登记留言工单（24h 回访承诺），
+        # 把工单号写进 closed_reason 与会话通知消息，不再只留一句模糊话术。
+        ticket_id, request_summary = await _build_timeout_ticket(
+            session, tenant_id=tenant_id, handoff=handoff, now=now,
         )
+        if ticket_id:
+            handoff.closed_reason = (
+                f"total_deadline:人工坐席繁忙，已登记留言工单 {ticket_id}，"
+                f"客服 24 小时内回访"
+            )
+        else:
+            handoff.closed_reason = (
+                "total_deadline:人工坐席繁忙，已为您保留会话记录，客服稍后会主动联系您"
+            )
     else:
         handoff.closed_reason = f"{reason}:超时未接单，已恢复 AI 服务"
     handoff.closed_at = now
@@ -126,6 +252,28 @@ async def _close_handoff(
         conversation.handling_mode = "ai"
         conversation.assigned_agent_id = None
         conversation.updated_at = now
+        if reason == REASON_TOTAL_DEADLINE and ticket_id:
+            # 用户可见的工单通知（此前 notify_user 只改状态无消息，用户
+            # 看不到任何话术——B 案补上真实消息落库）。通知写失败不阻塞
+            # 关单（状态变更已在 handoff 行上，用户端仍能看到终态）。
+            try:
+                from backend.customer_service.managers.message_manager import (
+                    MessageManager,
+                )
+
+                notice = (
+                    f"很抱歉，人工坐席暂时都无法接入。已为您整理工单：\n"
+                    f"📋 工单号：{ticket_id}\n"
+                    f"💬 诉求：{request_summary}\n"
+                    f"⏱ 客服将在 24 小时内回访。如需电话回访，请直接回复您的手机号。\n"
+                    f"您也可以继续问我其他问题～"
+                )
+                await MessageManager(session).create(
+                    str(handoff.conversation_id), notice, sender_type="assistant",
+                    metadata={"kind": "handoff_timeout_ticket", "ticket_id": ticket_id},
+                )
+            except Exception as e:  # noqa: BLE001 — 通知是增强，不是关单的前置
+                logger.warning(f"[Reaper] 超时工单通知消息写入失败: {e}")
 
     outbox.append_event(
         session,
@@ -142,6 +290,7 @@ async def _close_handoff(
             "previous_agent_id": previous_agent_id,
             "released_agent_ids": released_agents,
             "attempt_count": int(handoff.attempt_count or 0),
+            "ticket_id": ticket_id,
         },
         handoff_id=handoff.handoff_id,
         actor_user_id="cs_reaper",

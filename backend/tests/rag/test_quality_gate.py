@@ -274,3 +274,21 @@ class TestRegistryPermissionColumn:
         # update_fields 白名单放行
         r.update_fields(p, {"permission_scope": "hr_confidential"})
         assert r.get_by_path(p)["permission_scope"] == "hr_confidential"
+
+
+def test_entity_coverage_counts_section_title():
+    """标题实体并入覆盖文本：正文缺失但 section_title 含实体的 chunk 不误拒。
+
+    2026-10-08 travel_eval_kb 实测：旅游攻略按「### 标题=POI」写作，chunking
+    后实体只落在 metadata.section_title，gate 只看正文会把标题实体判缺失。
+    """
+    from types import SimpleNamespace
+    from backend.rag.evidence_gate.operations import find_missing_entities
+
+    doc = SimpleNamespace(
+        page_content="测试日出观赏点，索道早 6:30 运行；虚构门票 80 元含往返索道。",
+        metadata={"section_title": "澜山云海观景台"},
+    )
+    assert find_missing_entities("澜山云海观景台的索道几点运行？", [doc]) == []
+    # 标题也没有的实体仍然拒（防误放行）
+    assert find_missing_entities("汐洲岛灯塔步道多长？", [doc]) != []

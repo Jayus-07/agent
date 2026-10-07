@@ -45,8 +45,10 @@ from backend.skills.base import _deadline_from_state, validate_params
 
 # 参数平凡（只有 question）/自动注入（business.analyze 的 sql_result 走
 # previous_outputs）的高频能力：路由高置信时直通，避免无意义的 LLM 调用。
+# web.search 同为单 question 参数：搜索意图（如行业新闻）不再被 FC 拒绝
+# 后落入 clarify，直通 web_search_skill 由 Reporter 带来源总结。
 # 阈值与候选上限可经 env 校准（评测数据说话后调，见 run_tool_selector_eval）
-FAST_PATH_CAPS = {"sql.query", "rag.search", "business.analyze"}
+FAST_PATH_CAPS = {"sql.query", "rag.search", "business.analyze", "web.search"}
 FAST_PATH_SCORE = TOOL_SELECTOR_FAST_PATH_SCORE
 MAX_FC_CANDIDATES = TOOL_SELECTOR_MAX_CANDIDATES
 

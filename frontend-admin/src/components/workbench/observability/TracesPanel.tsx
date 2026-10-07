@@ -167,6 +167,8 @@ export default function TracesPanel() {
 
     if (filter.kb_id) arr = arr.filter((t) => String(t.metadata?.kb_id) === filter.kb_id);
     if (filter.model) arr = arr.filter((t) => t.model?.name === filter.model);
+    // 来源三分类（2026-10-08 #12）：DTO 直带 source（后端唯一分类出口）
+    if (filter.source) arr = arr.filter((t) => t.source === filter.source);
 
     if (filter.keyword.trim()) {
       const kw = filter.keyword.toLowerCase();

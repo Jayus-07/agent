@@ -645,6 +645,46 @@ class MemoryService:
                 logger.error(f"[MemoryService] list_sessions 失败: {e}")
                 return {"sessions": [], "total": 0, "error": str(e)}
 
+    async def get_profile(self, user_id: str, tenant_id: str = "",
+                          limit: int = 50) -> dict:
+        """用户画像：全部 eligible active 长期记忆（设置页只读展示）。
+
+        与 Agent 检索（search_hybrid）走同一 eligibility 口径（is_active +
+        (tenant, user) 双维度 + 未过期），但不做语义召回、不更新 access_count
+        ——展示读不得污染召回排序的 recency 信号。
+        """
+        async with AsyncSessionLocal() as db_session:
+            try:
+                repo = MemoryRepository(db_session)
+                records = await repo.list_active_profile(
+                    user_id=user_id, tenant_id=tenant_id, limit=limit,
+                )
+                await db_session.commit()
+                return {
+                    "records": [
+                        {
+                            "id": str(r.id),
+                            "memory_type": r.memory_type,
+                            "content": r.content,
+                            "memory_key": r.memory_key,
+                            "structured_value": r.structured_value,
+                            "origin": r.origin,
+                            "importance_score": float(r.importance_score or 0),
+                            "confidence_score": float(r.confidence_score or 0),
+                            "created_at": r.created_at.isoformat() if r.created_at else None,
+                            "last_access_at": (
+                                r.last_access_at.isoformat() if r.last_access_at else None
+                            ),
+                        }
+                        for r in records
+                    ],
+                    "total": len(records),
+                }
+            except Exception as e:
+                await db_session.rollback()
+                logger.error(f"[MemoryService] get_profile 失败: {e}")
+                return {"records": [], "total": 0, "error": str(e)}
+
     async def get_session_messages(self, session_id: str, user_id: str | None = None) -> dict:
         """获取会话消息列表。"""
         async with AsyncSessionLocal() as db_session:
