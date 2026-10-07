@@ -91,7 +91,7 @@ export function AuthNav({
   badge?: string;
 }) {
   return (
-    <nav className="absolute inset-x-0 top-0 z-20 flex h-[72px] items-center justify-between px-12">
+    <nav className="absolute inset-x-0 top-0 z-20 flex h-[72px] items-center justify-between px-6 md:px-12">
       <div className="flex items-center gap-2.5">
         <span
           className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[13px] font-bold text-white"
@@ -103,20 +103,20 @@ export function AuthNav({
           {brand}
         </span>
       </div>
-      <div className="flex items-center gap-7">
+      <div className="flex items-center gap-3 md:gap-7">
         {links?.map((l) =>
           l.href ? (
             <a
               key={l.label}
               href={l.href}
-              className="text-[14px] text-[#5C6662] transition-colors hover:text-[#16191A]"
+              className="hidden text-[14px] text-[#5C6662] transition-colors hover:text-[#16191A] md:inline"
             >
               {l.label}
             </a>
           ) : (
             <span
               key={l.label}
-              className="text-[14px] text-[#5C6662]"
+              className="hidden text-[14px] text-[#5C6662] md:inline"
             >
               {l.label}
             </span>
