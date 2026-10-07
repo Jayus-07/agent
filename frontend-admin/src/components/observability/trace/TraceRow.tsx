@@ -8,6 +8,7 @@ import {
   formatTime,
   formatRelative,
   formatCost,
+  TRACE_SOURCE_LABELS,
 } from "@/types/trace";
 
 /**
@@ -121,6 +122,15 @@ function TraceRowInner({
               <>
                 <span className="text-slate-200">|</span>
                 <span className="truncate max-w-[80px]">kb:{String(t.metadata?.kb_id)}</span>
+              </>
+            )}
+            {/* 来源三分类（2026-10-08 #12）：后端 DTO source，显示名同口径映射 */}
+            {t.source && (
+              <>
+                <span className="text-slate-200">|</span>
+                <span className="font-medium text-violet-600">
+                  {TRACE_SOURCE_LABELS[t.source] ?? t.source}
+                </span>
               </>
             )}
             {t.workflow_name && (

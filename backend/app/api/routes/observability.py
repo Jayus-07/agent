@@ -85,6 +85,12 @@ from backend.app.api.routes._trace_dto import (  # noqa: E402
     stored_dict_to_dto as _stored_dict_to_dto,
     backfill_usage_from_llm_store as _backfill_usage,
 )
+from backend.observability.trace_source import (  # noqa: E402
+    SOURCE_AI_ASSISTANT,
+    SOURCE_CS,
+    SOURCE_TRAVEL,
+    classify_trace_source,
+)
 
 
 # ═══════════════════════════════════════════════════
@@ -96,7 +102,8 @@ async def list_traces(limit: int = Query(20, ge=1, le=200),
                       workflow_name: str | None = Query(None),
                       session_id: str | None = Query(None),
                       has_tag: str | None = Query(None),
-                      has_tool: str | None = Query(None)):
+                      has_tool: str | None = Query(None),
+                      source: str | None = Query(None)):
     """最近 N 条 trace 摘要（SQLite TraceStore）。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
@@ -105,7 +112,18 @@ async def list_traces(limit: int = Query(20, ge=1, le=200),
     has_tool：按 tool_call span 的契约名过滤（span input.tool，治理埋点落键；
     旧 trace 无该键时回退 span name 后缀匹配）——/tools 页失败行「Trace 下钻」
     用它，键与契约 lock/指标同口径。
+    source：来源三分类过滤（travel|cs|ai_assistant，2026-10-08 #12），分类
+    唯一出口 observability.trace_source；未知值忽略（不 422，前端下拉不产生）。
     """
+    # 直调守卫（2026-10-08 #12 顺手修先在失败）：单测直调本端点时，未传的
+    # 参数缺省是 FastAPI Query 对象（真值），会把 has_tool/has_tag 等过滤
+    # 条件全部误触发（test_list_traces_has_tag_filter 先在失败正是此因）。
+    # 统一归一成普通值：只有真实字符串才参与过滤。
+    workflow_name = workflow_name if isinstance(workflow_name, str) else None
+    session_id = session_id if isinstance(session_id, str) else None
+    has_tag = has_tag if isinstance(has_tag, str) else None
+    has_tool = has_tool if isinstance(has_tool, str) else None
+    source = source if isinstance(source, str) else None
     if has_tool:
         stored = trace_collector.list(limit, include_spans=True)
         matched = []
@@ -135,6 +153,14 @@ async def list_traces(limit: int = Query(20, ge=1, le=200),
         stored = [d for d in stored
                   if has_tag in ((d.get("tags") if isinstance(d, dict)
                                   else getattr(d, "tags", None)) or {})]
+    # 来源三分类（2026-10-08 #12）：DTO 直带 source（后端唯一分类出口）
+    if source:
+        stored = [d for d in stored
+                  if classify_trace_source(
+                      (d.get("workflow_name") if isinstance(d, dict)
+                       else getattr(d, "workflow_name", "")),
+                      (d.get("tags") if isinstance(d, dict)
+                       else getattr(d, "tags", None))) == source]
     traces = [_stored_dict_to_dto(d) if isinstance(d, dict) else _to_trace_dto(d)
               for d in stored]
     return {"traces": traces}
@@ -184,6 +210,13 @@ async def trace_stats(hours: float = Query(24, gt=0, le=24 * 30),
     durations = sorted((r.get("duration_ms", 0) for r in completed), reverse=True)
     p95 = durations[int(n * 0.05)] if n else 0
     err_count = sum(1 for r in rows if _is_err(r))
+    # 来源三分类计数（2026-10-08 #12）：analytics 行的 tags 是 JSON 文本、
+    # collector 行是 dict，分类器内统一兼容；只统计三分类命中的流量。
+    sources = {SOURCE_TRAVEL: 0, SOURCE_CS: 0, SOURCE_AI_ASSISTANT: 0}
+    for r in rows:
+        src = classify_trace_source(r.get("workflow_name", ""), r.get("tags"))
+        if src in sources:
+            sources[src] += 1
     return {
         "total_24h": len(rows),
         "success_rate": round((n - sum(1 for r in completed if _is_err(r))) / n, 3) if n else 0,
@@ -191,6 +224,7 @@ async def trace_stats(hours: float = Query(24, gt=0, le=24 * 30),
         "p95_duration_ms": p95,
         "error_count": err_count,
         "total_cost_usd": round(sum(r.get("cost_usd", 0) or 0 for r in rows), 6),
+        "sources": sources,
     }
 
 

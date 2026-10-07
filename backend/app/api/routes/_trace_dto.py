@@ -4,6 +4,7 @@ Extracted from ``observability.py`` so that both the existing observability
 API and the new CS admin API can produce identical DTOs.
 """
 from backend.config.observability import TRACE_DETAIL_LEVEL
+from backend.observability.trace_source import classify_trace_source
 
 
 def backfill_usage_from_llm_store(data) -> None:
@@ -243,6 +244,9 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
         "children_ids": get("children_ids", []),
         "graph": get("graph"),
         "tags": get("tags", {}),
+        # 来源三分类（2026-10-08 #12）：唯一分类出口在 observability.trace_source，
+        # 前端只渲染该字段，不复制映射。
+        "source": classify_trace_source(get("workflow_name", ""), get("tags", {})),
         "summary": summary,
     }
     level = detail_level or TRACE_DETAIL_LEVEL
@@ -281,6 +285,7 @@ def stored_dict_to_dto(d: dict, detail_level: str | None = None) -> dict:
         "children_ids": d.get("children_ids", []),
         "graph": None,
         "tags": d.get("tags", {}),
+        "source": classify_trace_source(d.get("workflow_name", ""), d.get("tags", {})),
     }
     level = detail_level or TRACE_DETAIL_LEVEL
     if level != "full":

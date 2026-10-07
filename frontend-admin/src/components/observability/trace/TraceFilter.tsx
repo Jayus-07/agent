@@ -1,6 +1,6 @@
 "use client";
 
-import { TraceFilter as FilterType, TraceRecord } from "@/types/trace";
+import { TraceFilter as FilterType, TraceRecord, TRACE_SOURCE_LABELS } from "@/types/trace";
 import { useMemo } from "react";
 
 interface Props {
@@ -91,6 +91,18 @@ export default function TraceFilterBar({ filter, onChange, traces }: Props) {
         <option value="">全部模型</option>
         {modelOptions.map((m) => (
           <option key={m} value={m}>{m}</option>
+        ))}
+      </select>
+
+      {/* 来源（2026-10-08 #12）：旅游域/客服/AI 助手三分类，值为后端 DTO source */}
+      <select
+        value={filter.source ?? ""}
+        onChange={(e) => onChange({ ...filter, source: e.target.value || undefined })}
+        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+      >
+        <option value="">全部来源</option>
+        {Object.entries(TRACE_SOURCE_LABELS).map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
         ))}
       </select>
 

@@ -168,6 +168,9 @@ export interface TraceRecord {
   };
   /** 自由标签（kb_id, doc_id, file_ext 等，文档索引 trace 用） */
   tags?: Record<string, string>;
+  /** 来源三分类（后端 observability/trace_source 唯一分类出口，DTO 直带；
+   *  travel=旅游域 / cs=客服 / ai_assistant=AI 助手，空串=未归类） */
+  source?: string;
   /** LangGraph 图拓扑（agent workflow 才有） */
   graph?: {
     nodes: { id: string; label: string }[];
@@ -270,7 +273,16 @@ export interface TraceFilter {
   pageSize: number;
   kb_id?: string;
   model?: string;
+  source?: string;
 }
+
+/** 来源三分类显示名（2026-10-08 #12，与后端 trace_source.SOURCE_LABELS 同口径；
+ *  先只做三个，selection_funnel/rag 等未归类来源不进下拉） */
+export const TRACE_SOURCE_LABELS: Record<string, string> = {
+  travel: "旅游域",
+  cs: "客服",
+  ai_assistant: "AI 助手",
+};
 
 // ── Span type 枚举 ───────────────────────────────────
 // 前端按 type 路由渲染，新增 type 只需加一个 case
