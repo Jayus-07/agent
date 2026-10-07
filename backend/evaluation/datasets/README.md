@@ -28,3 +28,20 @@
 1. 新增/修改用例一律改 `{module}/cases.jsonl`；rag 模块改完记得同步受影响的 suites（suite 只存 case_id 引用，不会自动适配期望变化）。
 2. manifest 的 `case_count` 必须与 cases.jsonl 行数一致（本次发现 e2e 曾失同步）。
 3. 弃用集不删除，改名加 `.deprecated.` 中缀 + `_DEPRECATED`/`_replacement` 字段，loader 与 storage 均按此约定拦截。
+
+## 模块 ↔ 测试知识库对照（2026-10-08 修正版，manifest kb_id 为权威）
+
+> 口径：**独立测试库 = audience=test 的隔离库**（合成/受控数据，禁止对客，UI 按设计不可见、
+> 只能内部脚本/fixture 灌数）。cs_faq/travel/policy_general 均为**生产对客检索库**，
+> 不得声明为测试库，不得灌测试性质语料。
+
+| 模块 | kb_id | 性质 | 说明 |
+|------|-------|------|------|
+| rag | `rag_eval_kb` | ✅ 唯一独立测试库（audience=test） | 269 条全绑定；语料源=data/docs/{rag_test_kb,rag_100_docs,rag_eval_kb}（兼容目录，勿删）；UI 不可见，走 fixture/脚本灌数 |
+| cs | （空） | 评测本体零检索依赖 | knowledge 组件 live 消费生产库 cs_*（Router 硬映射）；独立测试库=治理缺口，建库需代码注册+域图支持覆盖 |
+| travel | （空） | 离线评测零检索依赖 | live 探针消费生产库 travel；同上 |
+| sql | （空） | 非 RAG | NL2SQL 直连业务库 agent_business |
+| planner | （空） | 无检索依赖 | 只评任务拆解 |
+| e2e | （空） | 无检索依赖 | Graph 故障注入 |
+
+`content_hash` 只锁 cases.jsonl，manifest 加字段不触发不可变锁。
