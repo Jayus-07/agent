@@ -33,13 +33,13 @@
 
 > 口径：**独立测试库 = audience=test 的隔离库**（合成/受控数据，禁止对客，UI 按设计不可见、
 > 只能内部脚本/fixture 灌数）。cs_faq/travel/policy_general 均为**生产对客检索库**，
-> 不得声明为测试库，不得灌测试性质语料。
+> 不得声明为测试库，不得灌测试性质语料。测试库（audience=test）仅 super_admin 主体可见/可用（authz include_test 口径，2026-10-08 拍板），UI 上传/检索治理用，对客链路恒不可见。
 
 | 模块 | kb_id | 性质 | 说明 |
 |------|-------|------|------|
 | rag | `rag_eval_kb` | ✅ 唯一独立测试库（audience=test） | 269 条全绑定；语料源=data/docs/{rag_test_kb,rag_100_docs,rag_eval_kb}（兼容目录，勿删）；UI 不可见，走 fixture/脚本灌数 |
-| cs | （空） | 评测本体零检索依赖 | knowledge 组件 live 消费生产库 cs_*（Router 硬映射）；独立测试库=治理缺口，建库需代码注册+域图支持覆盖 |
-| travel | （空） | 离线评测零检索依赖 | live 探针消费生产库 travel；同上 |
+| cs | `cs_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | 评测本体零检索依赖；合成测试语料存此库；域图 live 仍走生产库 cs_*，接线为后续任务 |
+| travel | `travel_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | 离线评测零检索依赖；合成测试语料存此库；live 探针仍走生产库 travel，接线为后续任务 |
 | sql | （空） | 非 RAG | NL2SQL 直连业务库 agent_business |
 | planner | （空） | 无检索依赖 | 只评任务拆解 |
 | e2e | （空） | 无检索依赖 | Graph 故障注入 |

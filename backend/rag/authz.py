@@ -51,20 +51,34 @@ def is_admin_roles(roles: tuple[str, ...]) -> bool:
     return RAG_ADMIN_PERMISSION in _permission_codes(roles)
 
 
+def is_super_admin(roles: tuple[str, ...]) -> bool:
+    """roles → 是否超级管理员。
+
+    为什么按角色字符串判定：ROLE_PERMISSION_CODES 中 super_admin 与 admin
+    的权限码集合相同（都是 admin 超集语义），无法用权限点区分二者；
+    平台唯一权威角色名在 auth.users.role（2026-10-08 拍板：audience=test
+    测试库仅 super_admin 主体可见/可用，admin 及以下仍不可见）。
+    """
+    return "super_admin" in (roles or ())
+
+
 def readable_kb_ids(
-    subject_type: str, department: str = "", *, is_admin: bool = False
+    subject_type: str, department: str = "", *, is_admin: bool = False,
+    include_test: bool = False,
 ) -> list[str] | None:
     """主体属性 → 可见 KB 集合。未声明主体透传 None（仅内部调用合法）。
 
-    admin 跨部门：全部非 test 库。其余主体按 authorized_kbs（None =
-    未声明主体，HTTP 入口视同空集拒绝）。
+    admin 跨部门：全部非 test 库；super_admin（include_test=True）额外
+    放开 audience=test 测试库——仅供管理端治理/评测语料上传与检索验证，
+    对客请求主体永远不含 super_admin，测试库数据不进对客检索。
+    其余主体按 authorized_kbs（None = 未声明主体，HTTP 入口视同空集拒绝）。
     """
     from backend.config.knowledge_base import KNOWLEDGE_BASES, authorized_kbs
 
     if is_admin:
         return [
             kb_id for kb_id, info in KNOWLEDGE_BASES.items()
-            if info.get("audience") != "test"
+            if info.get("audience") != "test" or include_test
         ]
     return authorized_kbs(subject_type, department)
 
@@ -78,7 +92,8 @@ def retrieval_authorized_kbs(
     旧行为）。admin 跨部门口径在此收口，检索层禁止再自行判角色。
     """
     return readable_kb_ids(
-        subject_type, department, is_admin=is_admin_roles(roles)
+        subject_type, department,
+        is_admin=is_admin_roles(roles), include_test=is_super_admin(roles),
     )
 
 
@@ -99,7 +114,8 @@ class RagAuthorization:
             if not principal.authenticated:
                 raise RagAuthorizationError("未认证主体不允许进入 RAG 授权面")
             allowed = readable_kb_ids(
-                principal.subject_type, principal.department, is_admin=is_admin
+                principal.subject_type, principal.department,
+                is_admin=is_admin, include_test=is_super_admin(principal.roles),
             )
             # None 只可能来自未声明主体（authorized_kbs 的内部直调语义）；
             # HTTP 入口视为授权失效，按空集拒绝而不是放行。

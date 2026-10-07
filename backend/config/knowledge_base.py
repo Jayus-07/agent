@@ -31,6 +31,11 @@ KNOWLEDGE_BASES: Dict[str, dict] = {
     "policy_general": {"name": "企业公共制度知识库", "domain": "general", "owner_depts": ["all"], "audience": "internal"},
     # 统一评测库为合成数据，绝不可进入生产兜底检索或对客授权集合。
     "rag_eval_kb":    {"name": "统一 RAG 评测知识库", "domain": "general", "owner_depts": ["all"], "audience": "test"},
+    # 模块评测库（2026-10-08 拍板）：audience=test 隔离，仅 super_admin 主体
+    # 可见/可用（authz.readable_kb_ids 的 include_test 口径），合成测试语料
+    # 专用；域图 live 检索仍走生产库（cs_*/travel），评测消费接线为后续任务。
+    "cs_eval_kb":     {"name": "客服评测知识库", "domain": "customer_service", "owner_depts": ["all"], "audience": "test"},
+    "travel_eval_kb": {"name": "旅游评测知识库", "domain": "travel", "owner_depts": ["all"], "audience": "test"},
     # 旧库只读兼容一个迁移周期；新写入应由评测 profile 转向 rag_eval_kb。
     "rag_test_kb":    {"name": "RAG 小型评测知识库（兼容）", "domain": "general", "owner_depts": ["all"], "audience": "test", "deprecated": True, "read_only": True, "alias_for": "rag_eval_kb"},
     "rag_100_docs":   {"name": "RAG 100 文档评测知识库（兼容）", "domain": "general", "owner_depts": ["all"], "audience": "test", "deprecated": True, "read_only": True, "alias_for": "rag_eval_kb"},

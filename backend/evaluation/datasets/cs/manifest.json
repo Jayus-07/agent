@@ -16,6 +16,6 @@
   "sha256": "dd6271284144090679e476299333b01e016bd56ba7bf74f3461487ec392db1cd",
   "notes": "v2.0 锁版（P0 评审拍板 2026-09-19）：意图 20/20 覆盖（映射评审依据 INTENT_PROFILES：a_login_issue/c_feedback→cs_knowledge，h_supervisor→cs_handoff）；C4 子覆盖调整为 显式转人工(h_handoff)14+主管升级(h_supervisor)2+投诉建单(c_complaint)12+情绪升级(c_complaint)10+反馈(c_feedback)2；变更须升版本号并重算 sha256。",
   "content_hash": "dd62712841440906",
-  "kb_id": "",
-  "kb_note": "评测本体（意图/行为层 320 条）零检索依赖；域内 knowledge 组件 live 消费生产库 cs_*（CS Router 硬映射，入口 kb_id 不生效）。独立测试库=治理缺口，待拍板建 cs_eval_kb"
+  "kb_id": "cs_eval_kb",
+  "kb_note": "模块评测库（audience=test，仅 super_admin 可见/可用）；评测本体零检索依赖，合成测试语料存此库，域图 live 消费接线为后续任务"
 }
