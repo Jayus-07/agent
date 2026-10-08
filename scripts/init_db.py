@@ -244,6 +244,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "080_question_ledger.sql": "memory",
     # 客服超时回访手机号（2026-10-08）：auth.users 可选 phone 字段。
     "081_auth_user_phone.sql": "memory",
+    "082_cs_confirmation_versioned_claim.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

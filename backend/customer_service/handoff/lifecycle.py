@@ -25,6 +25,7 @@ offer 生命周期写）此前已逐处维护全部字段（审计确认无双�
 """
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -93,6 +94,33 @@ async def enter_waiting_handoff(
     )
 
     now = now or _now()
+    conv_mgr = ConversationManager(session)
+    conversation, _ = await conv_mgr.get_or_create(
+        conversation_id, user_id, tenant_id=tenant_id,
+    )
+    if (
+        conversation.user_id != user_id
+        or conversation.tenant_id != tenant_id
+    ):
+        raise BusinessRuleError("会话归属与人工转接请求身份不一致")
+
+    # 与确认认领、派单和恢复事务共用 conversations → handoffs 锁序。
+    locked_conversation_result = await session.execute(
+        select(CSConversation)
+        .where(
+            CSConversation.tenant_id == tenant_id,
+            CSConversation.conversation_id == conversation_id,
+        )
+        .with_for_update()
+    )
+    conversation = locked_conversation_result.scalar_one_or_none()
+    if (
+        conversation is None
+        or conversation.user_id != user_id
+        or conversation.tenant_id != tenant_id
+    ):
+        raise BusinessRuleError("无法锁定当前租户下归属用户的会话")
+
     existing = (
         await session.execute(
             select(CSHandoff)
@@ -101,18 +129,12 @@ async def enter_waiting_handoff(
                 CSHandoff.conversation_id == conversation_id,
                 CSHandoff.handoff_state != "closed",
             )
+            .with_for_update()
             .limit(1)
         )
     ).scalar_one_or_none()
     if existing is not None:
         return existing
-
-    # 会话行可能尚不存在（turn 落库是 fire-and-forget）——同事务幂等补齐，
-    # tenant 与本入口显式同源（P0-2：缺租户由 ConversationManager fail-closed）
-    conv_mgr = ConversationManager(session)
-    conversation, _ = await conv_mgr.get_or_create(
-        conversation_id, user_id, tenant_id=tenant_id,
-    )
 
     handoff = CSHandoff(
         handoff_id=handoff_id(),
@@ -271,8 +293,9 @@ def enter_waiting_handoff_sync(
                 ),
             }
 
+    operation = _op()
     try:
-        return run_sync(_op())
+        return run_sync(operation)
     except BusinessRuleError:
         raise
     except Exception as exc:
@@ -301,10 +324,13 @@ def enter_waiting_handoff_sync(
             "handoff_state": HandoffState.WAITING_HUMAN.value,
             "updated_at": datetime.now(_tz.utc).isoformat(),
         }
+    finally:
+        if inspect.getcoroutinestate(operation) == inspect.CORO_CREATED:
+            operation.close()
 
 
 def load_active_handoff_sync(
-    tenant_id: str, conversation_id: str,
+    tenant_id: str, conversation_id: str, *, raise_on_error: bool = False,
 ) -> dict[str, Any] | None:
     """图内按会话直读 PG 活跃工单（sync 桥；L1 不参与）。"""
     from backend.customer_service._db_loop import run_sync
@@ -334,8 +360,15 @@ def load_active_handoff_sync(
             "updated_at": row.updated_at.isoformat() if row.updated_at else "",
         }
 
+    operation = _op()
     try:
-        return run_sync(_op())
+        return run_sync(operation)
     except Exception as exc:
         logger.warning("[HandoffLifecycle] load_active_handoff failed: %s", exc)
+        if raise_on_error:
+            raise
         return None
+    finally:
+        # run_sync 可能在调度前拒绝（如启动期桥接不可用），及时关闭协程。
+        if inspect.getcoroutinestate(operation) == inspect.CORO_CREATED:
+            operation.close()

@@ -69,15 +69,25 @@
 - Modify: `backend/customer_service/confirmation_store.py`
 - Modify: `backend/customer_service/models/confirmation.py`
 - Modify: `backend/customer_service/repository/confirmation_repo.py`
+- Modify: `backend/customer_service/handoff/lifecycle.py`
+- Modify: `backend/customer_service/security/input_guard.py`
+- Modify: `backend/customer_service/vocab.py`
+- Modify: `scripts/init_db.py`
 - Create: `backend/sql/migrations/082_cs_confirmation_versioned_claim.sql`
 - Test: `backend/tests/api/test_cs_confirm_api.py`
 - Test: `backend/tests/customer_service/test_confirmation_store.py`
 - Test: `backend/tests/customer_service/test_confirmation_repo.py`
 - Test: `backend/tests/customer_service/test_confirmation.py`
+- Test: `backend/tests/customer_service/test_handoff_lifecycle.py`
+- Test: `backend/tests/customer_service/test_idempotency.py`
+- Test: `backend/tests/customer_service/test_cs_input_guard.py`
+- Test: `backend/tests/customer_service/test_vocab.py`
+- Test: `backend/tests/customer_service/test_defect6_action_chain.py`
+- Test: `backend/tests/test_cs_confirmation_migration.py`
 
-**Interfaces:** 请求携带 `proposal_id: str`、`expected_version: int`、`client_action_id: UUID string` 和现有 `session_id: str/decision`；服务端绑定 authenticated user、tenant、conversation、当前有效 Proposal 和当前版本。响应保留旧 `{status,answer,confirmation_state,action_result}` 字段并增加已确认的 proposal/version/action/status 事实。DB 无法完成 strict claim 时返回拒绝/冲突且不得执行；L1 只允许非副作用读取。
+**Interfaces:** 请求携带 `proposal_id: str`、`expected_version: int`、`client_action_id: UUID string` 和现有 `session_id: str/decision`；服务端绑定 authenticated user、tenant、conversation、当前有效 Proposal 和当前版本。响应保留旧 `{status,answer,confirmation_state,action_result}` 字段并增加已确认的 proposal/version/action/status 事实。DB 无法完成 strict claim 时返回拒绝/冲突且不得执行；L1 只允许非副作用读取。session-only 旧请求因无法证明用户看到的 Proposal 版本而返回 409；身份/租户缺失不映射到共享默认值。
 
-- [ ] **Step 1: 先写并运行失败测试**
+- [x] **Step 1: 先写并运行失败测试**
 
 增加断言：版本错、proposal 错、租户/用户不匹配、过期、人工接管、DB claim 失败、相同 action id 重试均不触发一次以上副作用；合法新请求仍调用既有 ConfirmationFlow。运行 `D:/Python/python.exe -m pytest backend/tests/api/test_cs_confirm_api.py backend/tests/customer_service/test_confirmation_store.py -q --no-cov`，确认新增用例因缺契约/旧 L1 执行而 RED。
 
@@ -92,13 +102,15 @@ def test_confirm_rejects_stale_proposal_without_executing(client, fake_identity,
     assert fake_process.calls == []
 ```
 
-- [ ] **Step 2: 实现兼容请求校验和严格 claim**
+- [x] **Step 2: 实现兼容请求校验和严格 claim**
 
-使用 Pydantic 请求模型校验新增字段；旧客户端在唯一且无歧义的既有 pending 上按安全兼容规则处理，歧义时 409。持久 claim 在同一事务中验证身份、租户、proposal/version/state/expiry/handoff 和 `client_action_id`；strict DB 错误禁止调用 L1 执行路径。重用 `cs_action:{confirmation_id}` 幂等账本，不创建平行副作用账本。
+使用 Pydantic 请求模型校验新增字段；session-only 旧客户端无法证明用户看到的目标版本，全部拒绝并要求刷新卡片。持久 claim 在同一事务中验证身份、租户、proposal/version/state/expiry/handoff 和 `client_action_id`；strict DB 错误禁止调用 L1 执行路径。更新 Proposal 使用 pending 状态与上一版本的 CAS，认领后不能再覆写目标。重用 `cs_action:{confirmation_id}` 幂等账本，不创建平行副作用账本。
 
-- [ ] **Step 3: 迁移与安全对抗回归**
+- [x] **Step 3: 迁移与安全对抗回归**
 
 新增向后兼容 migration，旧行有确定性初始 version；补测朋友订单、借用账号、免验证退款、伪管理员、提示注入/绕过确认。运行目标测试、客服确认与权限测试、`D:/Python/python.exe -m backend.scripts.verify_migration_state`。回滚只回滚应用代码，不删除已写入的兼容迁移数据。
+
+记录：Phase 1 目标测试 `222 passed`、词表门禁全过、Layer1 黄金回放 `230/230`；迁移仓库层 `86/86` 已登记。权威 PostgreSQL 只读 preflight 报告基线迁移 `078/080/081` 未应用，且新迁移 `082` 待应用；本阶段不提前改动数据库，留在 P0 本机环境切换前处理。
 
 - [ ] **Step 4: Commit Phase 1**
 

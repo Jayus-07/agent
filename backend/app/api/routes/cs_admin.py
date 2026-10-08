@@ -10,9 +10,10 @@ traces 端点始终走 Python（trace 数据在 observability.trace_store）。
 from __future__ import annotations
 
 import asyncio
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.shared.logger import logger
 
@@ -26,6 +27,9 @@ class ConfirmActionBody(BaseModel):
     """确认卡片点击请求。decision: confirm | cancel"""
     session_id: str
     decision: str
+    proposal_id: str | None = None
+    expected_version: int | None = Field(default=None, ge=1)
+    client_action_id: UUID | None = None
 
 
 @confirm_router.post("/confirm")
@@ -39,25 +43,84 @@ async def confirm_pending_action(request: Request, body: ConfirmActionBody) -> d
     decision = (body.decision or "").strip().lower()
     if decision not in ("confirm", "cancel"):
         raise HTTPException(422, detail="decision 必须为 confirm 或 cancel")
+    contract_fields = (
+        body.proposal_id, body.expected_version, body.client_action_id,
+    )
+    if any(value is not None for value in contract_fields) and not all(
+        value is not None for value in contract_fields
+    ):
+        raise HTTPException(422, detail="proposal_id、expected_version 与 client_action_id 必须同时提供")
 
     from backend.app.api.identity import resolve_identity
     ident = resolve_identity(request)
-    user_id = ident.user_id or "anonymous"
+    user_id = (getattr(ident, "user_id", "") or "").strip()
+    if (
+        not user_id
+        or user_id == "anonymous"
+        or not getattr(ident, "authenticated", False)
+    ):
+        raise HTTPException(401, detail="确认操作需要已认证用户身份")
+    tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
+    if not tenant_id:
+        raise HTTPException(403, detail="确认操作需要有效租户身份")
+    if body.proposal_id is None:
+        # 旧客户端只提交 session_id，无法证明用户看到的版本；
+        # 若直接接受，可能确认掉替换了原提案的新操作。
+        raise HTTPException(409, detail="确认卡片缺少版本信息，请刷新后重试")
 
     from backend.customer_service.confirmation_flow import process_confirmation
     from backend.customer_service.confirmation_store import get_confirmation_store
+    from backend.customer_service.confirmation_store import StoreWriteError
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    try:
+        handoff = load_active_handoff_sync(
+            tenant_id, body.session_id, raise_on_error=True,
+        )
+    except Exception as exc:
+        logger.error("[CSConfirm] Handoff state unavailable; refusing confirmation")
+        raise HTTPException(503, detail="人工服务状态暂不可核验，请稍后重试") from exc
+    if handoff and handoff.get("handoff_state") in {
+        "handoff_requested", "waiting_human", "agent_offered", "human_active",
+    }:
+        raise HTTPException(409, detail="人工客服已接管该会话，当前确认操作已暂停")
 
     store = get_confirmation_store()
-    pending = store.load(user_id, body.session_id)
+    try:
+        pending = store.load_authoritative(user_id, body.session_id, tenant_id)
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="待确认状态暂不可核验，请稍后重试") from exc
     if not pending:
         raise HTTPException(409, detail="当前没有待确认的操作（可能已处理或已过期）")
+    if pending.get("tenant_id") != tenant_id:
+        raise HTTPException(409, detail="待确认操作与当前租户不匹配")
 
-    outcome = process_confirmation(
-        pending,
-        "确认" if decision == "confirm" else "取消",
-        user_id,
-        body.session_id,
+    current_proposal_id = str(
+        pending.get("proposal_id") or pending.get("action_id") or "",
     )
+    current_version = int(pending.get("version", 1) or 1)
+    if body.proposal_id is not None and (
+        body.proposal_id != current_proposal_id
+        or body.expected_version != current_version
+    ):
+        raise HTTPException(409, detail="待确认操作已更新或失效，请刷新后重试")
+
+    client_action_id = str(body.client_action_id) if body.client_action_id else None
+    try:
+        outcome = process_confirmation(
+            pending,
+            "确认" if decision == "confirm" else "取消",
+            user_id,
+            body.session_id,
+            tenant_id=tenant_id,
+            proposal_id=current_proposal_id,
+            expected_version=current_version,
+            client_action_id=client_action_id,
+        )
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="确认状态写入失败，操作未执行") from exc
+    if outcome.kind == "duplicate":
+        raise HTTPException(409, detail="该确认已被处理，请刷新会话状态")
 
     logger.info(
         "[CSConfirm] card action: user=%s session=%s decision=%s → %s",
@@ -68,6 +131,9 @@ async def confirm_pending_action(request: Request, body: ConfirmActionBody) -> d
         "answer": outcome.answer,
         "confirmation_state": outcome.confirmation_state,
         "action_result": outcome.action_result,
+        "proposal_id": current_proposal_id,
+        "version": current_version,
+        "client_action_id": client_action_id,
     }
 
 
