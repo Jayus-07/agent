@@ -40,6 +40,34 @@ from backend.sql.stream_events import emit_sql_stage
 # ── 服务不可用语义（kill switch 关闭时；区别于权限拒绝，避免误导诊断）──
 _UNAVAILABLE_ERROR = "SQL 查询服务暂不可用，请稍后重试。"
 
+# ── 校验拒绝的两种语义必须分开（2026-10-08 实测收口）──
+# validator 的 `table_forbidden` 只说明「生成的 SQL 引用了未纳管的表」——
+# 可能是同库其它子系统的表（public.selection_* 等）、模型编造的表名或系统表。
+# 这**不是**权限问题，回「请调整问法后重试」会让用户以为是缺陷、也让排障跑偏
+# （042/043 台账里真实出现过该误判）。对外文案按「能力边界」说清楚，且不
+# 回显表名（沿用 policy.py「详细原因只进日志」的口径）。
+_VALIDATOR_DENY_ERROR = "查询未通过安全校验，请调整问题后重试。"
+_UNMANAGED_TABLE_ERROR = (
+    "这个问题涉及的数据不在 SQL 助手的可查询范围内：当前只纳管商品、订单、"
+    "库存、客户、竞品、财务、Agent 运行 7 个业务域。请换个问法，"
+    "或到对应的业务页面查询。"
+)
+
+
+def _validation_failure_result(reason: str) -> SQLResult:
+    """ValidationError.reason → 对外结构化结果（表级拒绝单独文案）。"""
+    if reason == "table_forbidden":
+        return SQLResult.failed(
+            status="validation_error",
+            error=_UNMANAGED_TABLE_ERROR,
+            error_type="table_not_managed",
+        )
+    return SQLResult.failed(
+        status="validation_error",
+        error=_VALIDATOR_DENY_ERROR,
+        error_type="validation",
+    )
+
 # 数据库发现的对象/列不存在属于生成错误，允许一次受控反馈修复；
 # 真实安全拒绝、SQL 语法错误和权限错误仍然是终态。
 _REPAIRABLE_SCHEMA_ERROR_TYPES = frozenset({
@@ -400,11 +428,7 @@ class SQLAgent:
                         f"被安全校验拒绝（{e}），请避免同样问题"
                     )
                     continue
-                return SQLResult.failed(
-                    status="validation_error",
-                    error="查询未通过安全校验，请调整问题后重试。",
-                    error_type="validation",
-                )
+                return _validation_failure_result(e.reason or "")
 
             except RowSecurityError as e:
                 logger.error(f"[SQLAgent] 行级安全注入失败: {e}")
@@ -643,11 +667,7 @@ class SQLAgent:
                         f"被安全校验拒绝（{e}），请避免同样问题"
                     )
                     continue
-                return SQLResult.failed(
-                    status="validation_error",
-                    error="查询未通过安全校验，请调整问题后重试。",
-                    error_type="validation",
-                )
+                return _validation_failure_result(e.reason or "")
 
             except Exception as e:
                 logger.error(f"[SQLAgent:policy] 执行失败 (第{attempt+1}次): {e}")

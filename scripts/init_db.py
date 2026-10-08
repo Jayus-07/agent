@@ -242,10 +242,20 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 线上问题台账（2026-10-08 #13）：候选评测集供给侧，旁路软失败写入，
     # 管理端 data-explorer「问题收集」tab 消费（与 trace_summary 同层观测数据）。
     "080_question_ledger.sql": "memory",
+    # 只读角色 ai 域授权收窄（2026-10-08 SQL Agent 收口）：004 的
+    # `GRANT SELECT ON ALL TABLES IN SCHEMA ai` 让未纳管的
+    # ai.tool_approval_requests 也进了 agent_readonly 可见面，
+    # 收窄为 schema_config 声明的两张表（agent_tasks/agent_trace）。
+    "083_readonly_ai_grant_scope.sql": "business",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
-ORDER_LAST = ["004_readonly_role.sql", "043_readonly_public_revoke.sql"]
+# 083 与 043 同因：必须晚于 004 的 schema 级 GRANT，否则会被重新授予。
+ORDER_LAST = [
+    "004_readonly_role.sql",
+    "043_readonly_public_revoke.sql",
+    "083_readonly_ai_grant_scope.sql",
+]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 
 # 运行时管理的迁移（Platform Readiness STOP B）：对象由应用启动时的
