@@ -15,7 +15,9 @@ import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
 import {
   listMyConversations,
   listMyTickets,
+  getMyPendingAction,
   type MyTicket,
+  type PendingActionSnapshot,
   confirmAction,
   notifyUserTyping,
   requestHandoff,
@@ -41,16 +43,19 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const messages = useCSChatStore((s) =>
     s.sessions.find((sess) => sess.id === s.currentId)?.messages ?? []
   )
+  const sessions = useCSChatStore((s) => s.sessions)
   const isLoading = useCSChatStore((s) => s.isLoading)
   const error = useCSChatStore((s) => s.error)
   const currentStatus = useCSChatStore((s) => s.currentStatus)
   const intentDetected = useCSChatStore((s) => s.intentDetected)
   const handoffState = useCSChatStore((s) => s.handoffState)
   const currentNode = useCSChatStore((s) => s.currentNode)
+  const csTimeline = useCSChatStore((s) => s.csTimeline)
   const setError = useCSChatStore((s) => s.setError)
   const setHandoffState = useCSChatStore((s) => s.setHandoffState)
   const newSession = useCSChatStore((s) => s.newSession)
-  const pendingProposal = useCSChatStore((s) => s.pendingProposal)
+  const switchSession = useCSChatStore((s) => s.switchSession)
+  const pendingProposal = useCSChatStore((s) => s.pendingBySession[s.currentId] ?? null)
   const candidateOptions = useCSChatStore((s) => s.candidateOptions)
   const handoffMeta = useCSChatStore((s) => s.handoffMeta)
   // A 案倒计时（2026-10-08）：waiting_human 时按 total_deadline_at 每秒刷新剩余秒数
@@ -74,11 +79,15 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   }, [handoffState, handoffMeta?.total_deadline_at])
   const agentTyping = useCSChatStore((s) => s.agentTyping)
   const addMessage = useCSChatStore((s) => s.addMessage)
-  const setPendingProposal = useCSChatStore((s) => s.setPendingProposal)
+  const setPendingAction = useCSChatStore((s) => s.setPendingAction)
 
   const [handoffPending, setHandoffPending] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  const confirmBusyRef = useRef(false)
   const handoffRequestRef = useRef(false)
   const handoffKeyRef = useRef<{ conversationId: string; key: string } | null>(null)
+  const handoffOwnsConversation =
+    handoffState === 'requested' || handoffState === 'waiting' || handoffState === 'active'
 
   // 多域隔离 M3：主图引导卡带来的预填问题（HandoffCard 写 sessionStorage +
   // 派发 cs-drawer:open 事件）。抽屉打开时读取并清除，nonce 触发 CSInput 覆盖。
@@ -96,28 +105,51 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
     }
   }, [open])
 
-  // P3.1 确认卡片：POST /cs/confirm 幂等端点（后端原子认领闸门兜底并发）。
-  // 409 = 该待办已被处理（重复提交/另一端先确认）→ 静默清卡片；
-  // 其余失败保留卡片供重试，并把错误落进消息流。
+  // 确认卡片：本地同步闸门防双击，服务端仍以 PG 原子认领为最终幂等门。
+  // 409 后重读权威快照并说明状态变化，不依据旧客户端状态自行清卡。
   const handleConfirmAction = useCallback(
     async (decision: 'confirm' | 'cancel') => {
+      const pending = useCSChatStore.getState().pendingBySession[currentId]
+      if (
+        confirmBusyRef.current
+        || !pending
+        || pending.state !== 'pending'
+        || handoffOwnsConversation
+      ) return
+      confirmBusyRef.current = true
+      setConfirmBusy(true)
       try {
-        const resp = await confirmAction(currentId, decision)
+        const resp = await confirmAction(currentId, pending, decision, crypto.randomUUID())
         addMessage('assistant', resp.answer, currentId)
-        setPendingProposal(null)
+        setPendingAction(currentId, null)
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          setPendingProposal(null)
+          try {
+            const latest = await getMyPendingAction(currentId)
+            setPendingAction(currentId, latest)
+            addMessage(
+              'assistant',
+              latest
+                ? latest.state === 'expired'
+                  ? '这项操作的确认已过期，请重新发起后再办理。'
+                  : latest.state === 'paused_handoff'
+                    ? '人工客服已接管会话，这项操作暂时暂停。'
+                    : '这项操作的确认信息已更新，请检查最新内容后再选择。'
+                : '这项操作已完成、取消或过期，当前没有待确认事项。',
+              currentId,
+            )
+          } catch {
+            setError('确认状态已变化，但最新状态暂不可用。请稍后重试或重新打开会话。')
+          }
           return
         }
-        addMessage(
-          'assistant',
-          `⚠️ 操作处理失败：${err instanceof Error ? err.message : '未知错误'}`,
-          currentId,
-        )
+        setError(`操作处理失败：${err instanceof Error ? err.message : '未知错误'}`)
+      } finally {
+        confirmBusyRef.current = false
+        setConfirmBusy(false)
       }
     },
-    [currentId, addMessage, setPendingProposal],
+    [currentId, addMessage, handoffOwnsConversation, setError, setPendingAction],
   )
 
   // 人工介入同步：坐席消息轮询入列 + 转接状态卡片（抽屉打开期间生效）
@@ -137,6 +169,20 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
     listMyTickets(8).then(setTickets)
   }, [open])
 
+  // 打开抽屉或切换会话时，从认证后的 PostgreSQL 接口恢复本会话待确认状态。
+  useEffect(() => {
+    if (!open || !currentId) return
+    let active = true
+    getMyPendingAction(currentId)
+      .then((pending) => {
+        if (active) setPendingAction(currentId, pending)
+      })
+      .catch(() => {
+        // 快照读取失败不清本地已有卡片；下一次打开/切换会话会再尝试。
+      })
+    return () => { active = false }
+  }, [open, currentId, setPendingAction])
+
   // 满意度评价：会话有回复且非流式中显示；切换会话时重置
   const [showSatisfaction, setShowSatisfaction] = useState(true)
   useEffect(() => {
@@ -144,14 +190,15 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   }, [currentId])
   const lastRole = messages.length > 0 ? messages[messages.length - 1].role : null
   const showRatingCard = messages.length > 0 && !isLoading && showSatisfaction
-    && (lastRole === 'assistant' || lastRole === 'agent')
+    && !pendingProposal && (lastRole === 'assistant' || lastRole === 'agent')
 
   const handleSend = useCallback(
     (text: string) => {
+      if (handoffOwnsConversation) return
       setError(null)
       startStream(text, currentId)
     },
-    [currentId, startStream, setError]
+    [currentId, handoffOwnsConversation, startStream, setError]
   )
 
   // P4：显式按钮直连入池接口，不把“转人工”伪装成一条自然语言问题。
@@ -232,7 +279,23 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-text-primary truncate">智能客服</h2>
-            <p className="text-[10px] text-text-muted truncate">AI 驱动的客户服务中心</p>
+            {sessions.length > 1 ? (
+              <select
+                aria-label="切换客服会话"
+                value={currentId}
+                onChange={(event) => switchSession(event.target.value)}
+                className="block max-w-full bg-transparent text-[10px] text-text-muted
+                  truncate outline-none cursor-pointer"
+              >
+                {sessions.map((session) => (
+                  <option key={session.id} value={session.id}>
+                    {session.title || '客服会话'}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-[10px] text-text-muted truncate">AI 驱动的客户服务中心</p>
+            )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {hasMessages && handoffState === 'none' && (
@@ -290,6 +353,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                 messages={messages}
                 isLoading={isLoading}
                 currentNode={currentNode}
+                timeline={csTimeline}
               />
               {handoffState !== 'none' && <CSHandoffCard handoffState={handoffState} />}
               {handoffState === 'waiting' && waitRemaining !== null && (
@@ -305,7 +369,9 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
               )}
               {pendingProposal && (
                 <CSConfirmCard
-                  content={pendingProposal.proposalText}
+                  pending={pendingProposal as PendingActionSnapshot}
+                  busy={confirmBusy}
+                  disabled={handoffOwnsConversation}
                   onConfirm={() => handleConfirmAction('confirm')}
                   onCancel={() => handleConfirmAction('cancel')}
                 />
@@ -321,7 +387,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                         <button
                           key={opt.id || i}
                           onClick={() => handleSend(opt.label)}
-                          disabled={isLoading}
+                          disabled={isLoading || handoffOwnsConversation}
                           className="text-left text-sm text-sky-900 bg-white border
                             border-sky-200 rounded-lg px-3 py-2 hover:bg-sky-100
                             transition-colors disabled:opacity-50"
@@ -410,7 +476,14 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
         />
 
         {/* Input */}
-        <CSInput onSend={handleSend} onStop={stopStream} isLoading={isLoading} onTyping={handleUserTyping} draft={prefillDraft} />
+        <CSInput
+          onSend={handleSend}
+          onStop={stopStream}
+          isLoading={isLoading}
+          disabled={handoffOwnsConversation}
+          onTyping={handleUserTyping}
+          draft={prefillDraft}
+        />
       </div>
     </>
   )

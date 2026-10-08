@@ -954,7 +954,8 @@ class GraphRunner:
                                   usage=ctx["usage"],
                                   pending_action=ctx.get("cs_pending_action"),
                                   trace_id=trace.id,
-                                  context_usage=context_usage)
+                                  context_usage=context_usage,
+                                  include_pending_action="cs_pending_action" in ctx)
 
         except GeneratorExit:
             # 消费方关闭生成器（客户端断连 / 用户中止后前端停止拉流）：

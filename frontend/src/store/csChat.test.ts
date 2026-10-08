@@ -18,6 +18,7 @@ function resetStore() {
     handoffState: 'none',
     currentNode: null,
     csTimeline: [],
+    pendingBySession: {},
   })
 }
 
@@ -94,5 +95,47 @@ describe('resetStream', () => {
     expect(state.currentStatus).toBe('')
     expect(state.csTimeline).toEqual([])
     expect(state.sessions).toHaveLength(1)
+  })
+})
+
+describe('待确认操作的会话隔离', () => {
+  const pending = {
+    proposal_id: 'proposal-1',
+    version: 3,
+    action_type: 'refund',
+    masked_target: '订单尾号 ****1234',
+    summary: '为订单申请退款',
+    expires_at: '2026-10-08T12:00:00Z',
+    state: 'pending' as const,
+  }
+
+  it('不同会话各自恢复待确认状态，切换不会串卡', () => {
+    useCSChatStore.getState().setPendingAction('cs1', pending)
+    useCSChatStore.getState().setPendingAction('cs2', { ...pending, proposal_id: 'proposal-2' })
+    useCSChatStore.getState().switchSession('cs2')
+
+    expect(useCSChatStore.getState().pendingBySession.cs1).toEqual(pending)
+    expect(useCSChatStore.getState().pendingBySession.cs2?.proposal_id).toBe('proposal-2')
+    expect(useCSChatStore.getState().pendingBySession[useCSChatStore.getState().currentId])
+      .toMatchObject({ proposal_id: 'proposal-2' })
+  })
+
+  it('清理流式字段、创建新会话不丢已有会话的服务端待确认状态', () => {
+    useCSChatStore.getState().setPendingAction('cs1', pending)
+    useCSChatStore.getState().resetStream()
+    useCSChatStore.getState().newSession()
+
+    expect(useCSChatStore.getState().pendingBySession.cs1).toEqual(pending)
+    expect(useCSChatStore.getState().pendingBySession[useCSChatStore.getState().currentId])
+      .toBeUndefined()
+  })
+
+  it('显式 null 清除该会话状态，其他会话仍保留', () => {
+    useCSChatStore.getState().setPendingAction('cs1', pending)
+    useCSChatStore.getState().setPendingAction('cs2', pending)
+    useCSChatStore.getState().setPendingAction('cs1', null)
+
+    expect(useCSChatStore.getState().pendingBySession.cs1).toBeNull()
+    expect(useCSChatStore.getState().pendingBySession.cs2).toEqual(pending)
   })
 })

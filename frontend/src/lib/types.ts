@@ -90,7 +90,7 @@ export interface DoneEvent {
   /** 回复归因稳定码（2026-10-05）：knowledge_base / data_analysis / realtime_query / system_notice；缺省不标注 */
   reply_source?: string
   /** P3.1：CS 确认流等待用户点击确认卡片（非空时前端渲染 CSConfirmCard） */
-  pending_action?: PendingActionInfo
+  pending_action?: PendingActionInfo | null
   /** 上下文用量快照（2026-09-22 Context Budget）：前端显示「上下文 xx%」 */
   context_usage?: ContextUsageSnapshot
 }
@@ -115,10 +115,9 @@ export interface ContextEvent {
   ts: number
 }
 
-/** CS 待确认操作摘要（done 帧 pending_action） */
+/** CS done 帧待确认状态变更信号；详情从认证接口读取。 */
 export interface PendingActionInfo {
-  proposal_text: string
-  action_type: string
+  action_type?: string
 }
 
 export interface ErrorEvent {

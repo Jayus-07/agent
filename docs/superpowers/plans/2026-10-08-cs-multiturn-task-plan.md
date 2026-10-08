@@ -275,18 +275,24 @@ def test_fact_projection_recursively_drops_identity_and_audit_fields():
 - Modify: `frontend/src/components/cs/CSDrawer.tsx`
 - Modify: `frontend/src/components/cs/CSConfirmCard.tsx`
 - Modify: `frontend/src/components/cs/CSMessageList.tsx`
-- Modify: `frontend/src/components/cs/CSStatusBar.tsx`
+- Modify: `frontend/src/components/cs/CSInput.tsx`
+- Modify: `frontend/src/lib/types.ts`
 - Modify: `backend/app/api/routes/cs_admin.py`
+- Modify: `backend/orchestration/graph/events.py`
+- Modify: `backend/orchestration/graph/runner.py`
 - Test: `frontend/src/store/csChat.test.ts`
 - Test: `frontend/src/api/cs.test.ts`
+- Create: `frontend/src/hooks/useCSChat.test.tsx`
 - Create: `frontend/src/components/cs/CSConfirmCard.test.tsx`
 - Create: `frontend/src/components/cs/CSDrawer.test.tsx`
+- Create: `frontend/src/components/cs/CSMessageList.test.tsx`
+- Test: `backend/tests/orchestration/graph/test_reply_source.py`
 - Create: `backend/tests/api/test_cs_pending_api.py`
 - Test: `frontend/e2e/cs-pending-confirmation.spec.ts`
 
 **Interfaces:** Store `pendingBySession: Record<session_id, PendingSnapshot | null>` 以会话隔离，写口 `setPendingAction(session_id, snapshotOrNull)`；SSE `pending_action` 缺省表示“不变”，显式 null 表示清空。打开/切换/刷新经 authenticated endpoint 恢复 `{proposal_id,version,action_type,masked_target,summary,expires_at,state}`。确认提交 `{proposal_id,expected_version,client_action_id,session_id,decision}`；重复点击禁用；409 后 GET authoritative state 并展示解释。业务进度完全来自 status/log/SSE 事件，不用定时器。
 
-- [ ] **Step 1: 写 Store/API/组件和响应式浏览器测试并观察 RED**
+- [x] **Step 1: 写 Store/API/组件和响应式浏览器测试并观察 RED**
 
 覆盖两个会话独立 pending、SSE 缺字段不清空、显式 null 清空、刷新及切换会话恢复、请求期间双击仅发送一次、409 展示最新状态、真实事件形成进度、不靠 `setTimeout` 伪造业务阶段。Playwright viewport 至少 390px、中间断点及桌面。
 
@@ -298,11 +304,13 @@ it('retains a session proposal when SSE omits pending_action', () => {
 })
 ```
 
-- [ ] **Step 2: 实现 typed client 和状态恢复**
+记录：先新增测试；原实现下 Pending Store 三条用例 RED（缺少 `setPendingAction`），待确认 API 五条用例 RED（路由 404），会话切换 UI RED（无会话选择器）。增加实现后这些目标用例全部转绿。
 
-从服务端权威数据重建 store；confirm API 绑定版本与幂等 id；将存在 pending 和 human queue 的禁用规则用于现有入口/抽屉，不新增页面。
+- [x] **Step 2: 实现 typed client 和状态恢复**
 
-- [ ] **Step 3: 实现确认卡、真实事件进度与 Handoff 状态**
+从服务端权威数据重建 store；confirm API 绑定版本与幂等 id；将存在 pending 和 human queue 的禁用规则用于现有入口/抽屉，不新增页面。头部会话选择器可切换已恢复会话，pending map 随 session_id 独立读取。
+
+- [x] **Step 3: 实现确认卡、真实事件进度与 Handoff 状态**
 
 确认卡显示脱敏操作/目标/摘要/期限/状态和按钮；Handoff 队列使用后端真实 deadline/status，human_active 禁止 AI 业务入口。
 
@@ -310,9 +318,13 @@ it('retains a session proposal when SSE omits pending_action', () => {
 
 进入 `frontend` 目录，运行 `npx tsc --noEmit`。在同一目录单独运行 `npm test`，再单独运行 `npm run build`。随后按 Playwright 技能启动真实本机浏览器操作，报告每个尺寸、刷新/切换、确认/取消/409 的截图及操作证据。
 
-- [ ] **Step 5: Commit Phase 5**
+当前自动验证：`npx tsc --noEmit` 通过；`npm test` 52 文件/441 用例通过；`npm run build` 退出码 0；后端待确认/确认/SSE 事件目标回归 41 条通过。E2E 脚本已覆盖 390px/768px/1280px、刷新/切换、确认/取消/409 与截图输出。真实浏览器走查暂缓：Phase 6 明确要求 P0 自动化全绿后才启动本机服务；当前尚未完成 Phase 6 P0 门禁。
+
+- [x] **Step 5: Commit Phase 5**
 
 阶段提交：先 `git status --short` 并只暂存本任务 Files 列表中的路径，再检查 `git diff --cached --stat` 和 `git diff --cached --check`，最后运行 `git commit -m "feat(cs): restore pending state and show live progress"`。
+
+阶段提交：`825665e feat(cs): restore pending state and show live progress`。Phase 5 浏览器自动化文件已提交；实际浏览器走查待 Phase 6 P0 自动化门禁通过后补记证据。
 
 ### Task 7: Phase 6 端到端 P0 验收、报告和本机切换
 

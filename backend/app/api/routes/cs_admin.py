@@ -662,6 +662,106 @@ async def list_my_conversations(
         raise HTTPException(503, detail="Database unavailable")
 
 
+@router.get("/my/{conversation_id}/pending")
+async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
+    """读取当前用户会话的权威待确认快照，仅投影 UI 确认所需的安全字段。"""
+    await _ensure_my_conversation(request, conversation_id)
+
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    user_id = (getattr(ident, "user_id", "") or "").strip()
+    tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
+    if not user_id or not getattr(ident, "authenticated", False):
+        raise HTTPException(401, detail="未认证：请登录后访问会话")
+    if not tenant_id:
+        raise HTTPException(403, detail="待确认状态需要有效租户身份")
+
+    from backend.customer_service.confirmation_store import (
+        StoreWriteError,
+        get_confirmation_store,
+    )
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    try:
+        pending = get_confirmation_store().load_authoritative(
+            user_id, conversation_id, tenant_id,
+        )
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="待确认状态暂不可核验，请稍后重试") from exc
+    if pending is None:
+        return {"pending_action": None}
+
+    try:
+        handoff = load_active_handoff_sync(
+            tenant_id, conversation_id, raise_on_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(503, detail="人工服务状态暂不可核验，请稍后重试") from exc
+
+    from datetime import datetime, timezone
+
+    from backend.shared.pii_mask import mask_pii
+
+    raw_target = str(pending.get("target_id") or "").strip()
+    target_type = str(pending.get("target_type") or "业务对象").strip()
+    target_label = {
+        "order": "订单",
+        "order_id": "订单",
+        "ticket": "工单",
+        "refund": "退款申请",
+        "return": "退货申请",
+    }.get(target_type.lower(), "业务对象")
+    if raw_target:
+        masked_target = (
+            f"{target_label}尾号 ****{raw_target[-4:]}"
+            if len(raw_target) > 4
+            else target_label
+        )
+    else:
+        masked_target = target_label
+
+    raw_summary = str(pending.get("proposal_text") or "待确认的业务操作")
+    if raw_target:
+        raw_summary = raw_summary.replace(raw_target, masked_target)
+    summary, _ = mask_pii(raw_summary)
+
+    expires_at = pending.get("expires_at")
+    if hasattr(expires_at, "isoformat"):
+        expires_at = expires_at.isoformat()
+    expires_at = str(expires_at) if expires_at else None
+    expired = False
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            expired = expiry <= datetime.now(timezone.utc)
+        except ValueError:
+            # 不可解析的过期时间无法支持安全确认，前端按失效状态处理。
+            expired = True
+
+    handoff_state = str((handoff or {}).get("handoff_state") or "")
+    if handoff_state in {
+        "handoff_requested", "waiting_human", "agent_offered", "human_active",
+    }:
+        state = "paused_handoff"
+    else:
+        state = "expired" if expired else "pending"
+
+    return {
+        "pending_action": {
+            "proposal_id": str(pending.get("proposal_id") or pending.get("action_id") or ""),
+            "version": int(pending.get("version") or pending.get("proposal_version") or 1),
+            "action_type": str(pending.get("action_type") or "unknown"),
+            "masked_target": masked_target,
+            "summary": summary,
+            "expires_at": expires_at,
+            "state": state,
+        },
+    }
+
+
 @router.get("/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation(conversation_id: str, request: Request):
     """Conversation detail with ordered messages.

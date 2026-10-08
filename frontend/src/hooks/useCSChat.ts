@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useCSChatStore } from '@/store/csChat'
 import { streamChat, abortChat } from '@/api/chat'
+import { getMyPendingAction } from '@/api/cs'
 import { nanoid } from 'nanoid'
 
 export function useCSChat() {
@@ -77,12 +78,22 @@ export function useCSChat() {
         if (evt.event === 'done') {
           const finalState = useCSChatStore.getState()
           replaceLastAssistant(finalState.deltaText || '(空回答)', sessionId)
-          // P3.1: done 帧 pending_action → 确认卡片（非空时抽屉渲染 CSConfirmCard；
-          // 无则显式清，防止上一轮残留）。startStream 开头的 resetStream 也会清。
-          const pa = evt.data.pending_action
-          finalState.setPendingProposal(
-            pa ? { proposalText: pa.proposal_text, actionType: pa.action_type } : null,
-          )
+          // SSE 缺少 pending_action 表示「状态未变化」；只有显式 null 才清卡。
+          // 非空事件只作变更信号，确认 id/version 等字段从 PG 权威接口恢复。
+          if (Object.prototype.hasOwnProperty.call(evt.data, 'pending_action')) {
+            if (evt.data.pending_action === null) {
+              finalState.setPendingAction(sessionId, null)
+            } else if (evt.data.pending_action) {
+              try {
+                const pending = await getMyPendingAction(sessionId)
+                if (useCSChatStore.getState().currentRequestId === requestId) {
+                  useCSChatStore.getState().setPendingAction(sessionId, pending)
+                }
+              } catch {
+                // SSE 主回答已完成；快照暂不可读时保留本地卡片，打开/切换会话可重试。
+              }
+            }
+          }
           // 持久化由后端 CS 管线统一完成（runner end_turn → record_cs_turn →
           // cs_conversations/cs_messages），前端不再调 /chat/messages 二次写入 ——
           // 双写会把客服会话漏进主对话记忆库，侧栏「任务」列表因此混入
