@@ -55,7 +55,7 @@ _REFERENCE_NEGATIVE = re.compile(
 # 号时回指解析必须让位（显式实体 > 继承实体）
 _EXPLICIT_ORDER = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9-]*[A-Za-z])"
-    r"([A-Za-z0-9]{2,10}(?:-[A-Za-z0-9]{2,12})+)(?![A-Za-z0-9])"
+    r"([A-Za-z0-9]{2,10}(?:-[A-Za-z0-9]{1,12})+)(?![A-Za-z0-9])"
 )
 
 _MAX_REFERENCE_LEN = 40  # 回指句是短句，超长视为普通查询

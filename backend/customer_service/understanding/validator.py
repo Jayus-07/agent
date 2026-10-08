@@ -26,7 +26,7 @@ from backend.customer_service.understanding.contracts import (
 #  - 工单号：HANDOFF-/COMPLAINT-/GD- 前缀形态
 #  - UUID / 超长 token
 _ORDER_ID_LIKE = re.compile(
-    r"(?<![A-Za-z0-9])[A-Za-z0-9]{1,12}(?:-[A-Za-z0-9]{2,12})+(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])[A-Za-z0-9]{1,12}(?:-[A-Za-z0-9]{1,12})+(?![A-Za-z0-9])"
 )
 # 公开别名（response/composer 守卫复用同款形态定义，避免两处漂移）
 ORDER_ID_LIKE = _ORDER_ID_LIKE
