@@ -14,6 +14,8 @@ import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
 import {
   listMyConversations,
+  listMyTickets,
+  type MyTicket,
   confirmAction,
   notifyUserTyping,
   requestHandoff,
@@ -53,6 +55,8 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const handoffMeta = useCSChatStore((s) => s.handoffMeta)
   // A 案倒计时（2026-10-08）：waiting_human 时按 total_deadline_at 每秒刷新剩余秒数
   const [waitRemaining, setWaitRemaining] = useState<number | null>(null)
+  const [tickets, setTickets] = useState<MyTicket[]>([])
+  const [ticketsOpen, setTicketsOpen] = useState(false)
   useEffect(() => {
     if (handoffState !== 'waiting' || !handoffMeta?.total_deadline_at) {
       setWaitRemaining(null)
@@ -129,6 +133,8 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
     listMyConversations(10).then((items) => {
       if (items.length > 0) useCSChatStore.getState().hydrateFromServer(items)
     })
+    // 历史工单（2026-10-08 拍板：客服域要有工单真实记录展示）；失败静默为空
+    listMyTickets(8).then(setTickets)
   }, [open])
 
   // 满意度评价：会话有回复且非流式中显示；切换会话时重置
@@ -343,6 +349,41 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
                 handoffDisabled={!hasMessages || isLoading || handoffState !== 'none'}
                 handoffPending={handoffPending}
               />
+              {tickets.length > 0 && (
+                <div className="px-3 mt-2">
+                  <div className="rounded-xl border border-border-subtle bg-white overflow-hidden">
+                    <button
+                      onClick={() => setTicketsOpen(!ticketsOpen)}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs text-text-secondary hover:bg-black/[0.03]"
+                    >
+                      <span>📋 我的工单（{tickets.length}）</span>
+                      <span className="text-text-muted">{ticketsOpen ? '收起' : '展开'}</span>
+                    </button>
+                    {ticketsOpen && (
+                      <div className="divide-y divide-black/[0.04]">
+                        {tickets.map((t) => (
+                          <div key={t.ticket_id} className="px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-mono text-text-muted shrink-0">{t.ticket_id}</span>
+                              <span className={`shrink-0 text-[10px] rounded-full px-1.5 py-0.5 ${
+                                t.status === 'open' || t.status === 'processing'
+                                  ? 'bg-blue-50 text-blue-700'
+                                  : t.status === 'resolved'
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : 'bg-black/5 text-text-muted'
+                              }`}>
+                                {t.status === 'open' ? '待处理' : t.status === 'processing' ? '处理中'
+                                  : t.status === 'pending_user' ? '待补充' : t.status === 'resolved' ? '已解决' : '已关闭'}
+                              </span>
+                            </div>
+                            <p className="text-[12px] text-text-primary mt-0.5 break-words">{t.title || t.type}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

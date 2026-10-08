@@ -109,7 +109,8 @@ function RegisterForm() {
       // 2026-10-07 用户拍板：注册只收 手机号+密码+验证码（邮箱/企业名字段已移除）
       try {
         await register(phone.trim(), password, confirm, undefined,
-          captcha ? { ticket: captcha.ticket, code: captchaCode.trim() } : undefined);
+          captcha ? { ticket: captcha.ticket, code: captchaCode.trim() } : undefined,
+          phone.trim());
       } catch (regErr) {
         // 验证码一码一用：无论对错都已销毁，换图让用户重填
         void refreshCaptcha();

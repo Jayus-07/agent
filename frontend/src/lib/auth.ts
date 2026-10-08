@@ -288,6 +288,8 @@ export async function register(
   confirmPassword: string,
   realName?: string,
   captcha?: { ticket: string; code: string },
+  /** 回访手机号（2026-10-08）：转人工超时降级话术按此确认；与 username 解耦存储 */
+  phone?: string,
 ): Promise<RegisterResult> {
   const res = await fetch(`${API_BASE}/api/sys/users/register`, {
     method: "POST",
@@ -297,6 +299,7 @@ export async function register(
       password,
       confirmPassword,
       ...(realName ? { realName } : {}),
+      ...(phone ? { phone } : {}),
       ...(captcha ? { captchaTicket: captcha.ticket, captchaCode: captcha.code } : {}),
     }),
   });

@@ -766,6 +766,9 @@ async def register_captcha():
 
 # ── /sys/users/register（对齐前端 register 契约）─────────────
 
+_PHONE_RE = re.compile(r"1\d{10}")
+
+
 @sys_router.post("/users/register")
 async def register(request: Request):
     body = await request.json()
@@ -776,6 +779,11 @@ async def register(request: Request):
     password = body.get("password") or ""
     confirm = body.get("confirmPassword") or ""
     real_name = (body.get("realName") or "").strip()[:50]
+    # 手机号（2026-10-08 拍板）：可选收集，供转人工超时降级的回话确认；
+    # 11 位大陆手机号或空——宽松校验（负例直接 400，不静默清洗）
+    phone = (body.get("phone") or "").strip()
+    if phone and not _PHONE_RE.fullmatch(phone):
+        return _fail("手机号格式不正确（11 位数字）", code=400)
 
     if not (3 <= len(username) <= 20):
         return _fail("用户名长度需为 3-20 个字符", code=400)
@@ -795,14 +803,15 @@ async def register(request: Request):
             return _fail("用户名已存在", code=400)
         row = (await session.execute(text(
             "INSERT INTO auth.users "
-            "(username, password_hash, real_name, role, tenant_id) "
-            "VALUES (:u, :p, :r, 'viewer', :tenant_id) "
-            "RETURNING id, username, real_name, role, tenant_id"),
+            "(username, password_hash, real_name, role, tenant_id, phone) "
+            "VALUES (:u, :p, :r, 'viewer', :tenant_id, :phone) "
+            "RETURNING id, username, real_name, role, tenant_id, phone"),
             {
                 "u": username,
                 "p": hash_password(password),
                 "r": real_name,
                 "tenant_id": tenant_id,
+                "phone": phone,
             })).mappings().first()
         await session.commit()
 

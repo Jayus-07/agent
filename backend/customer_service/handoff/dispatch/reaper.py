@@ -261,11 +261,41 @@ async def _close_handoff(
                     MessageManager,
                 )
 
+                # 回访联系方式（2026-10-08 拍板）：注册手机号打码带出供
+                # 用户确认；未登记则引导补号码。查询失败按未登记处理。
+                masked_phone = ""
+                try:
+                    from sqlalchemy import text as _text
+
+                    row = (
+                        await session.execute(
+                            _text(
+                                "SELECT phone FROM auth.users "
+                                "WHERE id::text = :uid LIMIT 1"
+                            ),
+                            {"uid": str(handoff.user_id or "")},
+                        )
+                    ).first()
+                    raw_phone = str(row[0] or "") if row else ""
+                    if len(raw_phone) == 11:
+                        masked_phone = f"{raw_phone[:3]}****{raw_phone[7:]}"
+                except Exception:
+                    masked_phone = ""
+                if masked_phone:
+                    contact_line = (
+                        f"⏱ 客服将在 24 小时内回访。回访手机号是 {masked_phone} 吗？"
+                        f"（回复「可以」，或直接发我正确的号码）"
+                    )
+                else:
+                    contact_line = (
+                        "⏱ 客服将在 24 小时内回访。如需电话回访，"
+                        "请直接回复您的手机号。"
+                    )
                 notice = (
                     f"很抱歉，人工坐席暂时都无法接入。已为您整理工单：\n"
                     f"📋 工单号：{ticket_id}\n"
                     f"💬 诉求：{request_summary}\n"
-                    f"⏱ 客服将在 24 小时内回访。如需电话回访，请直接回复您的手机号。\n"
+                    f"{contact_line}\n"
                     f"您也可以继续问我其他问题～"
                 )
                 await MessageManager(session).create(

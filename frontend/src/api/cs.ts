@@ -162,3 +162,29 @@ export async function confirmAction(
     body: JSON.stringify({ session_id: sessionId, decision }),
   })
 }
+
+/** 我的工单条目（customer_service.tickets 只读投影） */
+export interface MyTicket {
+  ticket_id: string
+  type: string
+  status: 'open' | 'processing' | 'pending_user' | 'resolved' | 'closed'
+  priority: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * 我的工单列表（GET /cs/tickets，后端按网关身份过滤仅本人）。
+ * 客服抽屉欢迎态「历史工单」卡数据源；失败静默返回空（展示是增强）。
+ */
+export async function listMyTickets(limit = 10): Promise<MyTicket[]> {
+  try {
+    const data = await request<{ items: MyTicket[]; total: number }>(
+      `/api/cs/tickets?limit=${limit}`,
+    )
+    return data.items || []
+  } catch {
+    return []
+  }
+}
