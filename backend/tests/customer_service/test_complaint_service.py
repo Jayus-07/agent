@@ -77,7 +77,8 @@ class TestBuildComfortResponse:
             summary="test",
         )
         response = service.build_comfort_response(detection, ticket)
-        assert "COMPLAINT-TEST1234" in response
+        # 内部工单号不外显（output_guard 打码口径一致，2026-10-08）
+        assert "COMPLAINT-TEST1234" not in response
         assert "抱歉" in response or "重视" in response
 
     def test_medium_severity_response(self, service):
@@ -90,7 +91,7 @@ class TestBuildComfortResponse:
             summary="test",
         )
         response = service.build_comfort_response(detection, ticket)
-        assert "COMPLAINT-MED5678" in response
+        assert "COMPLAINT-MED5678" not in response
 
 
 class TestSimulateExecute:

@@ -181,9 +181,12 @@ class ComplaintService:
         )
 
     def build_comfort_response(self, detection: ComplaintDetection, ticket: ComplaintTicket) -> str:
-        """构建安抚响应文本。"""
-        base = _EMPATHY_RESPONSES.get(detection.severity, _EMPATHY_RESPONSES["low"])
-        return f"{base} (工单号: {ticket.ticket_id})"
+        """构建安抚响应文本。
+
+        不拼内部工单号（COMPLAINT-*）——output_guard 按策略打码内部号，
+        模板侧带上只会让用户看到「(工单号: [已过滤])」（2026-10-08 实测）。
+        """
+        return _EMPATHY_RESPONSES.get(detection.severity, _EMPATHY_RESPONSES["low"])
 
     def build_collect_response(self) -> str:
         """A 案收集话术（2026-10-08 投诉分级拍板）：安抚 + 三要素追问。
