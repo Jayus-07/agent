@@ -71,8 +71,19 @@ class TestMaskWithAlias:
         lineage = _output_lineage(
             "SELECT name AS n, brand FROM customer.customers"
         )
-        assert lineage.get("n") == {"name"}
-        assert lineage.get("brand") == {"brand"}
+        # 2026-10-08 起 lineage 产出**表限定**源列（单表作用域下裸列也限定），
+        # 脱敏匹配据此只认 qualified 键，避免任何叫 name 的列被误伤。
+        assert lineage.get("n") == {"customer.customers.name"}
+        assert lineage.get("brand") == {"customer.customers.brand"}
+
+    def test_output_lineage_qualifies_join_alias(self):
+        from backend.sql.executor import _output_lineage
+        lineage = _output_lineage(
+            "SELECT w.name AS warehouse, p.product_name "
+            "FROM inventory.warehouses w JOIN product.products p ON p.id = 1"
+        )
+        assert lineage.get("warehouse") == {"inventory.warehouses.name"}
+        assert lineage.get("product_name") == {"product.products.product_name"}
 
     def test_lineage_parse_failure_degrades_to_empty(self):
         from backend.sql.executor import _output_lineage
@@ -99,6 +110,46 @@ class TestMaskWithAlias:
             masked = ex._mask_row({"name": "张三丰", "level": "VIP"}, ["name", "level"])
             assert masked["name"] == "张***"
             assert masked["level"] == "VIP"
+        finally:
+            ex.schema_loader.masked_columns.clear()
+            ex.schema_loader.masked_columns.update(original)
+
+    def test_qualified_lineage_does_not_overreach_other_tables(self):
+        """回归（2026-10-08 实测）：仓库名/类目名被 customer.customers.name 误脱敏。
+
+        `inventory.warehouses.name` / `product.categories.name` 与脱敏配置
+        只是**列名同形**，表不同 → 不得打码；否则演示里仓库名会变成「演***」。
+        """
+        from backend.sql import executor as ex
+        original = dict(ex.schema_loader.masked_columns)
+        try:
+            ex.schema_loader.masked_columns["customer.customers.name"] = (1, 0)
+            masked = ex._mask_row(
+                {"warehouse": "演示仓·杭州", "category": "智能家居"},
+                ["warehouse", "category"],
+                lineage={
+                    "warehouse": {"inventory.warehouses.name"},
+                    "category": {"product.categories.name"},
+                },
+            )
+            assert masked["warehouse"] == "演示仓·杭州"
+            assert masked["category"] == "智能家居"
+        finally:
+            ex.schema_loader.masked_columns.clear()
+            ex.schema_loader.masked_columns.update(original)
+
+    def test_qualified_lineage_still_masks_target_table(self):
+        """反向守卫：命中真实目标表时仍必须打码（不能修成漏脱敏）。"""
+        from backend.sql import executor as ex
+        original = dict(ex.schema_loader.masked_columns)
+        try:
+            ex.schema_loader.masked_columns["customer.customers.name"] = (1, 0)
+            masked = ex._mask_row(
+                {"customer": "张三丰"},
+                ["customer"],
+                lineage={"customer": {"customer.customers.name"}},
+            )
+            assert masked["customer"] == "张***"
         finally:
             ex.schema_loader.masked_columns.clear()
             ex.schema_loader.masked_columns.update(original)

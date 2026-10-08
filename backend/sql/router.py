@@ -123,7 +123,12 @@ def select_tables(
 
     # context_tables 只能帮助追问恢复上一轮涉及的表，永远先与本轮授权
     # 表集合求交集，避免上下文扩大权限边界。
-    remembered = _normalize_tables(context_tables, all_tables)
+    # ⚠️ 无上下文必须解析为「空集」：`_normalize_tables(None, ...)` 的语义是
+    # 「不过滤 = 全部表」（授权面用得上），把它当 remembered 会让下面的
+    # fast_match 恒等于全表 → `1 <= len(fast_match) <= 3` 永不成立 →
+    # 关键词快路径成死代码，每次选表都打 LLM（2026-10-08 实测：本机 LLM 网关
+    # 不可用时静默回退「全部 18 张表」，选表质量塌成「全给」）。
+    remembered = _normalize_tables(context_tables or [], all_tables)
     if len(all_tables) <= 2:
         logger.info(f"[Router] 表数量 ≤ 2，直接返回全部: {all_tables}")
         return list(dict.fromkeys(remembered or all_tables))

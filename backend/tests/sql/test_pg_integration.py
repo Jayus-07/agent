@@ -92,10 +92,13 @@ class TestExecuteStructRealPG:
         assert result.status == "success"
         assert result.row_count >= 5
         assert result.columns == ["id", "sku", "product_name", "sale_price"]
-        # seed: 羊毛外套 599 是最高
-        top = result.rows[0]
-        assert top["product_name"] == "羊毛外套"
-        assert float(top["sale_price"]) == 599.00
+        # 断言「排序 + 字段完整性」不变量，不绑定具体商品：
+        # 演示种子（backend/sql/seeds/sql_agent_demo_business.sql）会批量扩充
+        # 商品池，写死"最贵的是羊毛外套 599"会让用例随种子数据漂移而恒红。
+        prices = [float(row["sale_price"]) for row in result.rows]
+        assert prices == sorted(prices, reverse=True)
+        assert all(str(row["product_name"]).strip() for row in result.rows)
+        assert all(str(row["sku"]).strip() for row in result.rows)
 
     def test_select_returns_structured(self):
         result = execute_sql_struct(
@@ -282,10 +285,14 @@ class TestEndToEndMockLLM:
         output = sr["output"]
         assert isinstance(output, dict)
         rows = output.get("rows", [])
+        assert len(rows) == 5
+        # 不绑定具体商品名（演示种子会扩充商品池）：断言真实数据形态 +
+        # ORDER BY sale_price DESC 的排序不变量。
         product_names = [r.get("product_name", "") for r in rows]
-        assert "羊毛外套" in product_names
-        assert "丝绸连衣裙" in product_names
-        assert "珍珠项链" in product_names
+        assert all(str(name).strip() for name in product_names)
+        assert all(r.get("brand") for r in rows)
+        prices = [float(r["sale_price"]) for r in rows]
+        assert prices == sorted(prices, reverse=True)
         # 没有错误信息泄漏
         assert sr["error"] is None
         assert sr["error_type"] is None
