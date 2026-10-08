@@ -160,7 +160,7 @@ def test_readonly_question_keeps_pending_and_routes_to_supervisor():
 
 记录：先运行新测试观察到 12 项 RED（Pending 分类、Handoff 优先、Supervisor 白名单与 StateLoader 重置均缺失），实现后覆盖 Phase 2 四个主测试文件与确认/API/状态迁移/权限执行链，共 `274 passed`。PostgreSQL Handoff 读取以 tenant+conversation 限定并启用 `raise_on_error=True`；等待人工与读取失败均直接 Reporter，读取失败不调 ConfirmationFlow；Pending FAQ/物流分别只派 Knowledge/Query 一次，need_info 只接受明确订单选择/编号继续 ActionExpert。
 
-- [ ] **Step 4: Commit Phase 2**
+- [x] **Step 4: Commit Phase 2**
 
 阶段提交：先 `git status --short` 并只暂存本任务 Files 列表中的路径，再检查 `git diff --cached --stat` 和 `git diff --cached --check`，最后运行 `git commit -m "feat(cs): allow guarded readonly turns while pending"`。
 
@@ -173,19 +173,20 @@ def test_readonly_question_keeps_pending_and_routes_to_supervisor():
 - Create: `backend/customer_service/understanding/task_plan.py`
 - Modify: `backend/customer_service/understanding/semantic.py`
 - Modify: `backend/customer_service/understanding/validator.py`
-- Modify: `backend/customer_service/understanding/llm_intent_fallback.py`
 - Modify: `backend/customer_service/graph_state.py`
+- Modify: `backend/customer_service/graph_builder.py`
 - Modify: `backend/customer_service/supervisor.py`
 - Modify: `backend/customer_service/experts/query.py`
 - Modify: `backend/customer_service/experts/action.py`
 - Test: `backend/tests/customer_service/test_understanding_contracts.py`
 - Test: `backend/tests/customer_service/test_task_plan.py`
 - Test: `backend/tests/customer_service/test_query_expert.py`
-- Test: `backend/tests/customer_service/test_action.py`
+- Test: `backend/tests/customer_service/test_conditional_action_plan.py`
+- Test: `backend/tests/customer_service/understanding/test_semantic_layer.py`
 
 **Interfaces:** `CSTaskPlan(schema_version=1, primary_intent, tasks)` 限定 query_logistics/query_order_status/propose_refund；每个 task 有 `task_id, capability, depends_on, optional condition`。condition 只允许 `shipping_status eq <枚举值>` 等固定字段和枚举。纯函数 `evaluate_task_condition(condition, facts) -> bool` 对缺失/未知 fact 返回 `False`。`CSTaskResult` 含 `task_id,status,facts,source,error_type`；Graph state 使用 `task_plan/task_cursor/task_results/current_task`。用户请求和本地退款资格规则必须同时允许才进入 Action Expert。结构化理解复用客服 Understanding Layer 已接入的统一 LLM 代理和 Prompt Registry 版本，不新增客服私有代理或未注册 Prompt。
 
-- [ ] **Step 1: 写 Schema、DAG、未知值和真实订单来源测试并观察 RED**
+- [x] **Step 1: 写 Schema、DAG、未知值和真实订单来源测试并观察 RED**
 
 拒绝额外 capability/任意 URL/SQL/代码、重复 task id、循环依赖、超量任务、模型提供的真实订单号、多个/不存在订单；未知 shipping status 必须 skip write。用受控 fake LLM/Sandbox 边界断言不发生第二次同轮 `_llm_decompose_intents()`。
 
@@ -204,19 +205,21 @@ def test_missing_shipping_fact_never_satisfies_refund_condition():
     assert evaluate_task_condition(condition, {}) is False
 ```
 
-- [ ] **Step 2: 实现候选解析和服务端验证**
+记录：先提交 Schema、Graph 输入、Query 与 Action 红测；首次运行因 `task_plan.py` 尚不存在而在收集阶段 RED。随后补齐显式复合请求解析、真实订单来源、未知物流状态、重复 LLM 分解和多订单澄清断言。
+
+- [x] **Step 2: 实现候选解析和服务端验证**
 
 Pydantic 验证白名单与有限步数；用户订单号只能用于查询服务端授权结果，不可由 LLM 输出替代。QueryExpert 返回结构化 facts/source/error_type，来自 `business-mock` 权威订单及物流适配；重复分解使用同一结构化 understanding，不再调用重复意图拆解。
 
-- [ ] **Step 3: 实现规则条件、资格门和 Proposal**
+- [x] **Step 3: 实现规则条件、资格门和 Proposal**
 
 Supervisor 按 DAG 单次执行；条件 evaluator 为纯确定性代码。ActionExpert 只在 query 成功、订单唯一、用户有权、条件成立、退款资格通过后生成确认 Proposal；执行仍只在后续用户确认中调用 ConfirmationFlow。
 
-- [ ] **Step 4: 运行 TaskPlan/Sandbox 安全回归**
+- [x] **Step 4: 运行 TaskPlan/Sandbox 安全回归**
 
-运行 `D:/Python/python.exe -m pytest backend/tests/customer_service/test_task_plan.py backend/tests/customer_service/test_query_expert.py backend/tests/customer_service/test_action.py -q --no-cov`。分别证明条件成立生成 Pending、不成立跳过、未知/服务失败/多订单不产生写 Proposal。
+运行 13 个 TaskPlan、Query、Action、Pending、Supervisor、Handoff、CS 图、订单引用与 Semantic 相关测试文件：`237 passed`；其中新计划与语义测试筛选 `28 passed`。独立审查发现任务计划绕过 handoff/risk 门及退款否定句误触发两项问题，现已修复并补回归：覆盖人工接管、风险命中、不要/别/不需要/没打算/没必要/不考虑退款，以及“算了/不用了/改主意/反悔/收回/放弃”等句中撤回；Graph 新请求无候选时明确重置计划及执行游标。覆盖条件成立走现有 Proposal、业务资格复核拒绝不生成 Pending、已发货/未知/服务失败/多订单/无显式退款均不触发提案。一次完整 Semantic 运行中的旧异步 Ollama fallback 收到 502 并打印线程日志异常，但 pytest 断言全部通过；不作为模型在线可用性证据。
 
-- [ ] **Step 5: Commit Phase 3**
+- [x] **Step 5: Commit Phase 3**
 
 阶段提交：先 `git status --short` 并只暂存本任务 Files 列表中的路径，再检查 `git diff --cached --stat` 和 `git diff --cached --check`，最后运行 `git commit -m "feat(cs): execute constrained conditional task plans"`。
 

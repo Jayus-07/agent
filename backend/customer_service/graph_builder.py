@@ -79,6 +79,9 @@ def cs_state_loader_node(state: dict[str, Any]) -> dict[str, Any]:
         "expert_loop_count": 0,
         "supervisor_decision": {},
         "current_expert": "",
+        "task_cursor": 0,
+        "task_results": [],
+        "current_task": None,
     }
 
 

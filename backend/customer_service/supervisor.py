@@ -1028,6 +1028,21 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
     action = decision["next_action"]
     expert = decision.get("next_expert", "")
 
+    # TaskPlan 只能覆盖普通 Query 调度；人工接管、确认、风险、Pending
+    # 一次性分流和投诉直通等更高优先级决策均沿原路径执行。
+    if (
+        action == ExpertAction.RUN_EXPERT.value
+        and expert == ExpertType.QUERY.value
+        and not decision.get("requires_handoff")
+        and not decision.get("requires_confirmation")
+        and not decision.get("consume_pending_turn")
+        and not decision.get("direct_reply")
+        and not decision.get("is_finished")
+    ):
+        plan_command = _task_plan_command(state)
+        if plan_command is not None:
+            return plan_command
+
     if action in (ExpertAction.FINISH.value, ExpertAction.PENDING.value):
         target = CS_REPORTER
     elif action == ExpertAction.HANDOFF.value and decision.get("is_finished"):
@@ -1052,5 +1067,161 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
             **({"pending_turn_expert_consumed": True}
                if decision.get("consume_pending_turn") else {}),
             **(timeout_update or {}),
+        },
+    )
+
+
+def _task_plan_command(state: dict[str, Any]) -> Command | None:
+    """单步调度有限 TaskPlan；无计划时交回原有 Supervisor 决策链。"""
+    raw_plan = state.get("task_plan")
+    if not raw_plan:
+        return None
+
+    from backend.customer_service.understanding.task_plan import (
+        CSTaskPlan,
+        CSTaskResult,
+        evaluate_task_condition,
+    )
+
+    try:
+        plan = CSTaskPlan.model_validate(raw_plan)
+    except Exception:
+        return _task_plan_finish(
+            "这次复合请求的任务结构无法安全确认，没有发起任何操作。"
+        )
+
+    results = list(state.get("task_results") or [])
+    cursor = max(0, int(state.get("task_cursor") or 0))
+    current = state.get("current_task") or {}
+    current_id = str(current.get("task_id") or "")
+    completed_ids = {
+        str(item.get("task_id") or "") for item in results
+        if isinstance(item, dict)
+    }
+
+    if current_id and current_id not in completed_ids:
+        last = state.get("last_expert_result") or {}
+        raw_result = ((last.get("data") or {}).get("task_result")
+                      if isinstance(last, dict) else None)
+        if isinstance(raw_result, dict):
+            try:
+                parsed_result = CSTaskResult.model_validate(raw_result)
+                results.append(parsed_result.model_dump())
+            except Exception:
+                results.append(CSTaskResult(
+                    task_id=current_id, status="failed", facts={},
+                    source="unknown", error_type="contract_error",
+                ).model_dump())
+        else:
+            results.append(CSTaskResult(
+                task_id=current_id, status="failed", facts={},
+                source="unknown", error_type="provider_error",
+            ).model_dump())
+        task_ids = [task.task_id for task in plan.tasks]
+        cursor = (
+            task_ids.index(current_id) + 1
+            if current_id in task_ids else len(task_ids)
+        )
+
+    while cursor < len(plan.tasks):
+        task = plan.tasks[cursor]
+        by_id = {
+            str(item.get("task_id") or ""): item for item in results
+            if isinstance(item, dict)
+        }
+        dependencies = [by_id.get(dep) for dep in task.depends_on]
+        if any(dep is None for dep in dependencies):
+            return _task_plan_finish(
+                "完成这项处理还需要先确认订单信息。请补充订单号，或回复「转人工」。",
+                results=results,
+            )
+        if any(dep.get("status") != "success" for dep in dependencies):
+            results.append(CSTaskResult(
+                task_id=task.task_id, status="skipped", facts={},
+                source="unknown",
+            ).model_dump())
+            if task.capability == "propose_refund":
+                last = state.get("last_expert_result") or {}
+                reply = str(last.get("response_draft") or
+                            "订单信息暂时无法核实，这次没有发起退款申请。")
+                return _task_plan_finish(reply, results=results)
+            cursor += 1
+            continue
+
+        facts: dict[str, Any] = {}
+        for dependency in dependencies:
+            facts.update(dependency.get("facts") or {})
+        if task.condition is not None and not evaluate_task_condition(
+            task.condition, facts,
+        ):
+            results.append(CSTaskResult(
+                task_id=task.task_id, status="skipped", facts={},
+                source=str(dependencies[-1].get("source") or "unknown"),
+            ).model_dump())
+            status = facts.get("shipping_status")
+            if status == "shipped":
+                reply = "查询结果显示订单已发货，因此没有发起退款申请。"
+            elif status == "delivered":
+                reply = "查询结果显示订单已签收，因此没有发起退款申请。"
+            elif status == "cancelled":
+                reply = "查询结果显示订单已取消，因此没有发起退款申请。"
+            else:
+                reply = "暂时无法确认物流状态，这次没有发起退款申请。"
+            return _task_plan_finish(reply, results=results)
+
+        from backend.customer_service.graph_state import CS_ACTION_EXPERT, CS_QUERY_EXPERT
+
+        target = (
+            CS_ACTION_EXPERT if task.capability == "propose_refund"
+            else CS_QUERY_EXPERT
+        )
+        expert = "action" if task.capability == "propose_refund" else "query"
+        return Command(
+            goto=target,
+            update={
+                "task_cursor": cursor,
+                "current_task": task.model_dump(),
+                "task_results": results,
+                "current_expert": expert,
+                "supervisor_decision": {
+                    "next_action": ExpertAction.RUN_EXPERT.value,
+                    "next_expert": expert,
+                    "decision_layer": 1,
+                    "reason": "validated_task_plan",
+                    "requires_confirmation": task.capability == "propose_refund",
+                    "requires_handoff": False,
+                    "is_finished": False,
+                    "context_updates": {},
+                },
+                "expert_loop_count": state.get("expert_loop_count", 0) + 1,
+            },
+        )
+
+    return _task_plan_finish(
+        str((state.get("last_expert_result") or {}).get("response_draft") or
+            "已完成本轮查询。"),
+        results=results,
+    )
+
+
+def _task_plan_finish(reply: str, results: list[dict] | None = None) -> Command:
+    """TaskPlan 的静态安全收尾。"""
+    from backend.customer_service.graph_state import CS_REPORTER
+
+    return Command(
+        goto=CS_REPORTER,
+        update={
+            "task_results": results or [],
+            "supervisor_decision": {
+                "next_action": ExpertAction.FINISH.value,
+                "next_expert": None,
+                "decision_layer": 1,
+                "reason": "task_plan_finished",
+                "requires_confirmation": False,
+                "requires_handoff": False,
+                "is_finished": True,
+                "context_updates": {},
+                "direct_reply": reply,
+            },
         },
     )

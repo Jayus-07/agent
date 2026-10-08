@@ -22,6 +22,7 @@ from backend.customer_service.understanding.validator import (
     validate_intent_candidate,
     validate_severity,
     validate_slots,
+    validate_task_plan_candidate,
 )
 from backend.customer_service.router.intents import INTENT_PROFILES
 
@@ -116,6 +117,22 @@ class TestValidateSeverityAndConfirm:
         assert validate_confirm_decision("execute") is None
         assert validate_confirm_decision(None) is None
 
+    def test_task_plan_candidate_is_strictly_validated(self):
+        candidate = {
+            "schema_version": 1, "primary_intent": "t_logistics",
+            "tasks": [
+                {"task_id": "q1", "capability": "query_logistics", "depends_on": []},
+                {"task_id": "a1", "capability": "propose_refund",
+                 "depends_on": ["q1"], "condition": {
+                     "fact": "shipping_status", "operator": "eq",
+                     "value": "not_shipped",
+                 }},
+            ],
+        }
+        assert validate_task_plan_candidate(candidate) == candidate
+        candidate["tasks"][1]["order_id"] = "MODEL-9999"
+        assert validate_task_plan_candidate(candidate) is None
+
 
 # ── Rule First 判定 ────────────────────────────────────────
 
@@ -137,6 +154,33 @@ def _route(intent="unknown", confidence=0.0, **metadata):
 
 
 class TestSemanticEnrich:
+    def test_explicit_conditional_refund_builds_rule_plan_without_llm(self, monkeypatch):
+        from backend.config import customer_service as cs_config
+        monkeypatch.setattr(cs_config, "CS_UNDERSTANDING_LLM_ENABLED", False)
+        route = _route(intent="t_logistics", confidence=0.9)
+
+        result = semantic.enrich_semantic_understanding(
+            route, "查下物流，如果没发货就申请退款",
+        )
+
+        assert result.task_plan_source == "rule_candidate"
+        assert result.task_plan_candidate["tasks"][1]["capability"] == "propose_refund"
+        assert route["metadata"]["task_plan_candidate"] == result.task_plan_candidate
+
+    def test_trace_does_not_expose_plan_values(self, monkeypatch):
+        from backend.config import customer_service as cs_config
+        monkeypatch.setattr(cs_config, "CS_UNDERSTANDING_LLM_ENABLED", False)
+        route = _route(intent="t_logistics", confidence=0.9)
+        result = semantic.enrich_semantic_understanding(
+            route, "查下物流，如果没发货就申请退款",
+        )
+
+        fields = result.to_trace_fields()
+        assert fields["cs_task_plan_source"] == "rule_candidate"
+        assert fields["cs_task_count"] == 2
+        assert "task_plan_candidate" not in fields
+        assert "propose_refund" not in str(fields)
+
     def test_disabled_switch_untouched(self, monkeypatch):
         from backend.config import customer_service as cs_config
         monkeypatch.setattr(cs_config, "CS_UNDERSTANDING_LLM_ENABLED", False)

@@ -120,6 +120,13 @@ class CSGraphState(TypedDict, total=False):
     pending_turn_expert_consumed: bool
     pending_turn_slot_fill: bool
 
+    # === 当前轮有限复合任务计划 ===
+    task_plan: dict | None
+    task_plan_source: str
+    task_cursor: int
+    task_results: list[dict]
+    current_task: dict | None
+
     # === 输出 (CS Reporter 生成) ===
     final_answer: str
     cs_context: dict
@@ -139,6 +146,13 @@ def new_cs_graph_input(
 
     cs_state_loader 节点会在此基础上填充状态快照字段。
     """
+    metadata = (cs_route or {}).get("metadata") or {}
+    candidate = metadata.get("task_plan_candidate")
+    from backend.customer_service.understanding.validator import (
+        validate_task_plan_candidate,
+    )
+    validated_plan = validate_task_plan_candidate(candidate)
+
     return {
         "user_message": user_message,
         "user_id": user_id,
@@ -159,6 +173,11 @@ def new_cs_graph_input(
         "pending_turn_decision": None,
         "pending_turn_expert_consumed": False,
         "pending_turn_slot_fill": False,
+        "task_plan": validated_plan,
+        "task_plan_source": str(metadata.get("task_plan_source") or ""),
+        "task_cursor": 0,
+        "task_results": [],
+        "current_task": None,
         "final_answer": "",
         "cs_context": {},
         "cs_audit_entries": [],
