@@ -9,6 +9,7 @@ from scripts.init_db import MIGRATION_TARGETS
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "sql" / "migrations" / "054_auth_super_admin.sql"
+PHONE_MIGRATION = ROOT / "sql" / "migrations" / "081_auth_user_phone.sql"
 
 
 def test_super_admin_migration_is_registered_for_memory_database():
@@ -16,6 +17,13 @@ def test_super_admin_migration_is_registered_for_memory_database():
 
     assert MIGRATION.exists()
     assert MIGRATION_TARGETS[MIGRATION.name] == "memory"
+
+
+def test_user_phone_migration_is_registered_for_memory_database():
+    """新增认证字段必须登记，否则 init_db 会在发布时 fail-fast。"""
+
+    assert PHONE_MIGRATION.exists()
+    assert MIGRATION_TARGETS[PHONE_MIGRATION.name] == "memory"
 
 
 def test_super_admin_migration_widens_role_and_preserves_role_constraint():

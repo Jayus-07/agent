@@ -242,6 +242,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 线上问题台账（2026-10-08 #13）：候选评测集供给侧，旁路软失败写入，
     # 管理端 data-explorer「问题收集」tab 消费（与 trace_summary 同层观测数据）。
     "080_question_ledger.sql": "memory",
+    # 客服超时回访手机号（2026-10-08）：auth.users 可选 phone 字段。
+    "081_auth_user_phone.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
