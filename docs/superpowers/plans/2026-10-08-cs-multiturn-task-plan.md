@@ -239,7 +239,7 @@ Supervisor 按 DAG 单次执行；条件 evaluator 为纯确定性代码。Actio
 
 **Interfaces:** `FactSet` 由 Query/Complaint/Knowledge 实际结果投影而来；仅允许白名单业务字段和经屏蔽的值，嵌套 object/list 递归按对应 schema 投影。Composer 输入只包含 FactSet、用户问题和允许的知识证据；输出必须通过金额、到账承诺、物流状态、操作状态和 Sandbox 来源一致性检查，否则返回固定模板。Response Composer 至多一次 LLM；Knowledge 已有 RAG 回复不再无条件二次调用。
 
-- [ ] **Step 1: 写嵌套恶意事实和编造回复测试并观察 RED**
+- [x] **Step 1: 写嵌套恶意事实和编造回复测试并观察 RED**
 
 注入嵌套手机号、他人身份、审计字段、模型 prompt、伪造金额/到账日期/已退款/虚构物流/Sandbox 真实化等；断言投影剔除敏感键、OutputGuard 仍最后执行、Composer 不一致时用模板。
 
@@ -250,15 +250,19 @@ def test_fact_projection_recursively_drops_identity_and_audit_fields():
     assert projected == {"order": {"status": "shipped"}}
 ```
 
-- [ ] **Step 2: 实现递归 FactSet 投影和输出校验**
+- [x] **Step 2: 实现递归 FactSet 投影和输出校验**
 
 复用统一 pii masker；schema 白名单按 facts 类别定义，不把 audit/raw LLM payload 复制进 Prompt。将 `cs_understanding_source`、`cs_task_plan_source`、`cs_task_count`、`cs_task_status`、`cs_pending_turn_kind`、`cs_response_source`、`cs_response_guard_result` 及 Prompt 版本沿用现有 Trace tags，Token/Cost 由统一 LLM 账本归因。
 
-- [ ] **Step 3: 运行回复与现有 EvidenceGate 测试**
+- [x] **Step 3: 运行回复与现有 EvidenceGate 测试**
 
 运行 `D:/Python/python.exe -m pytest backend/tests/customer_service/response/test_composer.py backend/tests/customer_service/response/test_facts.py backend/tests/customer_service/test_reporter_facts.py -q --no-cov`，并确认 Knowledge RAG 已答复路径 composer 调用次数为零。
 
-- [ ] **Step 4: Commit Phase 4**
+记录：先对嵌套身份/审计投影、虚构事实、状态/金额/ETA、退款执行、Sandbox 来源和 OutputGuard 异常补测试并观察 RED。独立复审发现多笔订单金额串单、负数/未知币种、退款待确认和真实来源改写问题，逐项补回归并修正。后续复审继续发现“另外一单/余下那单”、多单状态串用、物流 ETA 混作退款到账 ETA、否定模拟措辞与 sandbox 退款成功缺标注、ETA 跨承诺和年份丢失、金额类型串用、“剩下的那笔”、相对订单状态歧义和复合真实来源等反例，均已加入测试并收紧守卫。最新一轮还补了混合订单发货正反状态、每条退款执行声明单独模拟标记、金额旁注不能更改其类别、长修饰语真实数据、“到达”ETA，以及退款完成不可借用订单完成状态、未知来源不可宣称真实业务数据、裸星期 ETA、退款资格否定极性、退款申请完成同义句、已寄出物流状态、双重否定、退款成功/失败事实冲突、“已完成退款”语序、快递揽收、简式退款资格、退款成功/申请提交别名、已出库物流状态、发货 ETA 不能借用送达 ETA、“支持退款”“已成功申请退款”“已发出”“预计揽收日期不能借用送达 ETA”、同订单订单/物流冲突状态、预计出库/寄出时间不能借用送达 ETA，以及早期“模拟流程”标记不能覆盖靠近执行声明的否定模拟标记和“送到”类 ETA 承诺。新增回归均先 RED 后修复；当前运行回复与 Expert/EvidenceGate 相关的 10 个测试文件结果 `179 passed`，语法编译及 `git diff --check` 通过。测试日志仍显示本 worktree 缺少 `.env` 导致 PostgreSQL 预检不可用，该项不作为 Phase 6 真实 PG 证据。
+
+- [x] **Step 4: Commit Phase 4**
+
+补充复核：为“预计明天签收/收货”及送货、配送、投递、妥投、派送等常见 ETA 目标词补充无事实拒绝用例，并区分送达 ETA 与发货/揽收 ETA；相关 10 文件回归仍为 `179 passed`。
 
 阶段提交：先 `git status --short` 并只暂存本任务 Files 列表中的路径，再检查 `git diff --cached --stat` 和 `git diff --cached --check`，最后运行 `git commit -m "fix(cs): recursively constrain customer service facts"`。
 
