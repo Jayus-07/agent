@@ -8,7 +8,11 @@
  * 展示出来的行程清掉**（原 page.tsx 直接 `setPlan(data)`，一次追问就把
  * 用户刚拿到的行程顶没了）。规则放这里，页面与抽屉共用一份，可直测。
  */
-import type { PlanResponse, TravelPlanLatest } from '@/api/travel'
+import type {
+  PlanResponse,
+  TravelBriefInput,
+  TravelPlanLatest,
+} from '@/api/travel'
 
 export interface PlanState {
   /** 当前展示的行程；null = 还没出过行程 */
@@ -98,6 +102,32 @@ export function composePlanMessage(input: PlanFormInput): string {
   if (input.preferences.length) parts.push(`喜欢${input.preferences.join('、')}`)
   if (input.extra.trim()) parts.push(input.extra.trim())
   return parts.join('，')
+}
+
+/**
+ * 表单 → 结构化需求事实。extra 保留在用户原话里，不在这里猜测拆分语义。
+ */
+export function buildTravelBriefInput(input: PlanFormInput): TravelBriefInput {
+  const brief: TravelBriefInput = {
+    destination: input.destination.trim(),
+    preferences: [...input.preferences],
+  }
+  const origin = input.origin?.trim()
+  const days = Number(input.days)
+  const startDate = input.startDate.trim()
+  const partySize = Number(input.partySize)
+  const budget = Number(input.budget)
+  const pace = input.pace.trim()
+
+  if (origin) brief.origin = origin
+  if (Number.isInteger(days) && days > 0) brief.days = days
+  if (startDate) brief.start_date = startDate
+  if (Number.isInteger(partySize) && partySize > 0) brief.party_size = partySize
+  if (input.budget.trim() && Number.isFinite(budget) && budget >= 0) {
+    brief.budget_cny = budget
+  }
+  if (pace) brief.pace = pace
+  return brief
 }
 
 /**

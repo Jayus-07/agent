@@ -319,7 +319,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     try {
       let data: PlanResponse | null = null
       for await (const event of streamTravelPlan(message, conversationId, {
-        signal: controller.signal, clientRunId, source,
+        signal: controller.signal, clientRunId, source, mode: 'chat',
       })) {
         if (controller.signal.aborted || currentRunRef.current !== clientRunId) break
         onProcessEvent(event)

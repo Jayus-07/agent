@@ -33,9 +33,10 @@ import asyncio
 import json
 import threading
 import time
-from uuid import uuid4
 from datetime import date, timedelta
+from typing import Any, Literal
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
@@ -43,6 +44,7 @@ from pydantic import BaseModel, Field
 
 from backend.app.api.identity import require_identity
 from backend.shared.logger import logger
+from backend.travel.models.brief import TravelBrief
 
 router = APIRouter(prefix="/travel", tags=["旅游域"])
 
@@ -50,12 +52,22 @@ router = APIRouter(prefix="/travel", tags=["旅游域"])
 # ============================================================
 # POST /travel/plan — 非流式规划（返回 markdown 行程单 + 结构化行程）
 # ============================================================
+class TravelUiContext(BaseModel):
+    selected_day: int | None = Field(None, ge=1)
+    selected_poi_id: str | None = Field(None, max_length=128)
+
+
 class TravelPlanRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000,
                          description="本轮用户输入（如「帮我排杭州2天行程，亲子，带娃不累」）")
     session_id: str = Field("", max_length=128)
     conversation_id: str = Field("", max_length=128,
                                  description="跨轮会话标识；同一值可跨轮改单（依赖 checkpointer）")
+    mode: Literal["plan", "chat", "action"] = "plan"
+    brief_input: TravelBrief | None = None
+    base_plan_version: int | None = Field(None, ge=1)
+    ui_context: TravelUiContext = Field(default_factory=TravelUiContext)
+    action_payload: dict[str, Any] = Field(default_factory=dict)
     # M4/G2-G3：前端轮次标识与来源归因，随消息体透传进 trace.tags
     #（可选字段向后兼容旧前端；source 白名单 card_action/canvas_action/
     # tier_switch/budget_negotiate/manual，原样记录不做枚举校验——
@@ -64,6 +76,58 @@ class TravelPlanRequest(BaseModel):
                                description="前端生成的轮次标识（client-<ts>-<rand>），trace.tags 关联用")
     source: str = Field("", max_length=32,
                         description="消息来源归因：card_action/canvas_action/tier_switch/budget_negotiate/manual")
+
+
+class TravelResponseMetadata(BaseModel):
+    result_kind: Literal[
+        "answer", "plan", "draft", "clarification", "task_result",
+    ]
+    conversation_id: str
+    turn_id: str
+    active_plan_version: int | None = None
+    draft_plan_version: int | None = None
+    base_plan_version: int | None = None
+    task_results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def _attach_travel_response_metadata(
+    result: dict,
+    *,
+    conversation_id: str,
+    turn_id: str,
+    base_plan_version: int | None,
+) -> dict:
+    """在不覆盖既有状态字段的前提下补齐统一轮次响应契约。"""
+    itinerary = result.get("itinerary")
+    clarification = result.get("clarification")
+    task_results = result.get("task_results")
+    kind = result.get("result_kind")
+    if kind not in {"answer", "plan", "draft", "clarification", "task_result"}:
+        if clarification or result.get("status") == "needs_clarification":
+            kind = "clarification"
+        elif task_results and not itinerary:
+            kind = "task_result"
+        elif itinerary:
+            kind = "plan" if result.get("plan_status") == "confirmed" else "draft"
+        else:
+            kind = "answer"
+
+    draft_version = result.get("draft_plan_version")
+    if (draft_version is None and kind == "draft"
+            and result.get("plan_status") == "waiting_confirmation"):
+        draft_version = (itinerary or {}).get("plan_version")
+
+    metadata = TravelResponseMetadata(
+        result_kind=kind,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        active_plan_version=result.get("active_plan_version"),
+        draft_plan_version=draft_version,
+        base_plan_version=(base_plan_version if base_plan_version is not None
+                           else result.get("base_plan_version")),
+        task_results=task_results if isinstance(task_results, list) else [],
+    )
+    return {**result, **metadata.model_dump()}
 
 
 def _masked_trace_question(message: str) -> str:
@@ -97,6 +161,36 @@ def _annotate_trace_source(trace, client_run_id: str, source: str) -> None:
 
 def _plan_error(message: str, status: str = "failed") -> dict:
     return {"status": status, "final_answer": message, "itinerary": None}
+
+
+def _build_travel_graph_input(
+    req: TravelPlanRequest,
+    identity: Any,
+    conversation_id: str,
+    turn_id: str,
+) -> dict[str, Any]:
+    """构造本轮输入并保留结构化请求，不让 LangGraph 丢弃 schema 外字段。"""
+    from backend.travel.graph_state import new_travel_graph_input
+
+    brief_input = (
+        req.brief_input.model_dump(mode="json", exclude_unset=True)
+        if req.brief_input is not None else None
+    )
+    graph_input = new_travel_graph_input(
+        user_message=req.message,
+        user_id=identity.user_id or "",
+        session_id=req.session_id,
+        conversation_id=conversation_id,
+    )
+    graph_input.update({
+        "request_mode": req.mode,
+        "brief_input": brief_input,
+        "base_plan_version": req.base_plan_version,
+        "ui_context": req.ui_context.model_dump(exclude_none=True),
+        "action_payload": req.action_payload,
+        "turn_id": turn_id,
+    })
+    return graph_input
 
 
 def _seed_cross_turn_base(graph_input: dict, conversation_id: str,
@@ -272,7 +366,6 @@ async def travel_plan(request: Request):
         _build_invoke_config,  # 复用 thread_id/recursion_limit 组装（单一事实源）
     )
     from backend.travel.graph_builder import get_travel_graph
-    from backend.travel.graph_state import new_travel_graph_input
     from backend.travel.models.graph_result import build_travel_graph_result
 
     # 鉴权先于 body 解析：未认证不消费请求体（fail-closed）
@@ -282,6 +375,7 @@ async def travel_plan(request: Request):
 
     conversation_id = req.conversation_id or req.session_id
     run_id = f"travel-{uuid4().hex}"
+    turn_id = req.client_run_id or f"turn-{uuid4().hex}"
     from backend.travel.request_runtime import RunStopped
 
     def worker(control):
@@ -293,10 +387,8 @@ async def travel_plan(request: Request):
             workflow_name="agent",
         )
         _annotate_trace_source(trace, req.client_run_id, req.source)
-        graph_input = new_travel_graph_input(
-            user_message=req.message, user_id=identity.user_id or "",
-            session_id=req.session_id, conversation_id=conversation_id,
-        )
+        graph_input = _build_travel_graph_input(
+            req, identity, conversation_id, turn_id)
         _seed_cross_turn_base(graph_input, conversation_id,
                               identity.user_id or "")
         final_state: dict = {}
@@ -310,14 +402,32 @@ async def travel_plan(request: Request):
             control.check()
             out = dict(build_travel_graph_result(final_state))
             out = _record_plan_version(out, conversation_id, identity.user_id or "")
+            out = _attach_travel_response_metadata(
+                out,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                base_plan_version=req.base_plan_version,
+            )
             _attach_trace_plan_projection(
                 final_state, out, conversation_id, identity.user_id or "")
             return out
         except RunStopped as exc:
             out = _stopped_result(exc.reason)
+            out = _attach_travel_response_metadata(
+                out,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                base_plan_version=req.base_plan_version,
+            )
             return out
         except Exception:
             logger.exception("[TravelAPI] 域图执行异常")
+            out = _attach_travel_response_metadata(
+                out,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                base_plan_version=req.base_plan_version,
+            )
             return out
         finally:
             _finish_travel_trace(trace, trace_started_at, out, final_state, run_id)
@@ -386,6 +496,7 @@ async def travel_plan_stream(request: Request):
 
     conversation_id = req.conversation_id or req.session_id
     run_id = f"travel-{uuid4().hex}"
+    turn_id = req.client_run_id or f"turn-{uuid4().hex}"
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=512)
     cancelled = threading.Event()
@@ -451,16 +562,11 @@ async def travel_plan_stream(request: Request):
         from backend.travel.request_runtime import RunStopped
         from backend.orchestration.graph.travel_graph_node import _build_invoke_config
         from backend.travel.core.events import emit_travel_event, travel_event_scope
-        from backend.travel.graph_state import new_travel_graph_input
         from backend.travel.models.graph_result import build_travel_graph_result
         from backend.travel.graph_builder import get_travel_graph
 
-        graph_input = new_travel_graph_input(
-            user_message=req.message,
-            user_id=identity.user_id or "",
-            session_id=req.session_id,
-            conversation_id=conversation_id,
-        )
+        graph_input = _build_travel_graph_input(
+            req, identity, conversation_id, turn_id)
         _seed_cross_turn_base(graph_input, conversation_id,
                               identity.user_id or "")
         started_at = time.monotonic()
@@ -478,7 +584,7 @@ async def travel_plan_stream(request: Request):
                 control.check()
                 emit_travel_event(
                     "run.started", agent="supervisor", run_id=run_id,
-                    conversation_id=conversation_id,
+                    conversation_id=conversation_id, turn_id=turn_id,
                 )
                 final_state = get_travel_graph().invoke(
                     graph_input, config=_build_invoke_config(
@@ -489,12 +595,19 @@ async def travel_plan_stream(request: Request):
                 trace_state = final_state if isinstance(final_state, dict) else {}
                 result = _record_plan_version(
                     result, conversation_id, identity.user_id or "")
+                result = _attach_travel_response_metadata(
+                    result,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    base_plan_version=req.base_plan_version,
+                )
                 _attach_trace_plan_projection(
                     trace_state, result, conversation_id, identity.user_id or "")
                 trace_result = result
                 emit_travel_event(
                     "run.finished", agent="supervisor",
                     status=result.get("status", "failed"),
+                    turn_id=turn_id,
                     duration_ms=round((time.monotonic() - started_at) * 1000),
                 )
                 queue_event({
@@ -504,12 +617,18 @@ async def travel_plan_stream(request: Request):
                     "result": result,
                 })
         except RunStopped as exc:
-            trace_result = _stopped_result(exc.reason)
+            trace_result = _attach_travel_response_metadata(
+                _stopped_result(exc.reason),
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                base_plan_version=req.base_plan_version,
+            )
         except Exception as exc:  # noqa: BLE001 — 真实失败向前端终止
             logger.exception("[TravelAPI] 旅游域 SSE 执行异常")
             with travel_event_scope(queue_event):
                 emit_travel_event(
                     "run.finished", agent="supervisor", status="failed",
+                    turn_id=turn_id,
                     error_type=type(exc).__name__,
                     duration_ms=round((time.monotonic() - started_at) * 1000),
                 )

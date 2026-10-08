@@ -52,6 +52,27 @@ it.each(['福州美食周末', '福州 → 厦门', '泉州慢游'])('示例 %s 
   await act(async () => example(title).click())
   expect(stream).toHaveBeenCalledTimes(1)
   expect(stream.mock.calls[0][0]).toContain('2027-01-01')
+  expect(stream.mock.calls[0][2]).toMatchObject({
+    mode: 'plan',
+    briefInput: { start_date: '2027-01-01' },
+  })
+})
+
+it('组合交通示例提交结构化行程 Brief 与查票原话', async () => {
+  stream.mockImplementation(async function* () {
+    yield { event: 'done', data: { result: { status: 'answered', final_answer: 'ok', itinerary: null } } }
+  })
+  await mount()
+  await act(async () => example('福州 → 厦门').click())
+
+  expect(stream.mock.calls[0][0]).toContain('查高铁票')
+  expect(stream.mock.calls[0][2]).toMatchObject({
+    mode: 'plan',
+    briefInput: {
+      origin: '福州', destination: '厦门', days: 2,
+      party_size: 2, preferences: ['美食'], pace: 'moderate',
+    },
+  })
 })
 
 it('同一批次连点示例只执行一次', async () => {

@@ -44,6 +44,7 @@ import {
   adoptConversationId,
   applyPlanResponse,
   clearPendingPlan,
+  buildTravelBriefInput,
   composePlanMessage,
   itineraryTotal,
   readConversationId,
@@ -75,6 +76,7 @@ import {
   type ItineraryBrief,
   type TravelStreamEvent,
   type PlanResponse,
+  type TravelBriefInput,
   type Recommendation,
   fetchMyPreferences,
   isEmptyPrefs,
@@ -321,11 +323,19 @@ export default function TravelPage() {
   }, [])
 
   // ── 表单提交：开一份新行程 ──
-  const submit = useCallback(async (messageOverride?: string) => {
+  const submit = useCallback(async (
+    messageOverride?: string,
+    structuredBriefOverride?: TravelBriefInput,
+  ) => {
     if (abortRef.current || budgetBlocked) return
     const message = messageOverride ?? composePlanMessage({
       origin, destination, days, startDate, partySize, budget, pace, preferences, extra,
     })
+    const briefInput = structuredBriefOverride ?? (messageOverride === undefined
+      ? buildTravelBriefInput({
+        origin, destination, days, startDate, partySize, budget, pace, preferences, extra,
+      })
+      : undefined)
     // 新行程 = 新线程。旧行程属于旧线程，留着会让「改单」打到错误的行程上，
     // 因此立刻清空（配合下方的生成中占位，不会显得东西凭空消失）。
     const cid = rotateConversationId()
@@ -349,6 +359,8 @@ export default function TravelPage() {
       let data: PlanResponse | null = null
       for await (const event of streamTravelPlan(message, cid, {
         signal: controller.signal, clientRunId, source: 'manual',
+        mode: 'plan',
+        ...(briefInput ? { briefInput } : {}),
       })) {
         if (controller.signal.aborted || abortRef.current !== controller) return
         handleTravelEvent(event)
@@ -409,7 +421,7 @@ export default function TravelPage() {
     setPace(form.pace)
     setExtra(form.extra)
     setStartDate(form.startDate)
-    void submit(composePlanMessage(form))
+    void submit(composePlanMessage(form), buildTravelBriefInput(form))
   }, [budgetBlocked, loading, submit])
 
   const useCurrentLocation = useCallback(() => {

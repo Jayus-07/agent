@@ -59,6 +59,13 @@ class TravelGraphState(TypedDict, total=False):
     session_id: str
     conversation_id: str
     travel_route: dict
+    # 本轮统一请求契约；每轮显式覆盖，避免 Checkpointer 留下上轮 UI/动作状态。
+    request_mode: str
+    brief_input: dict | None
+    base_plan_version: int | None
+    ui_context: dict
+    action_payload: dict
+    turn_id: str
     # graceful reconstruction（STOP F3）：checkpoint 缺失但会话摘要存在时，
     # 适配器从 ConversationContext 重建的 brief 基底。只在 thread 无
     # checkpoint 时出现；slot_filler 以它为 previous 合并本轮消息。
