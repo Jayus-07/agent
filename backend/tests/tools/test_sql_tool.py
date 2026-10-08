@@ -177,7 +177,9 @@ class TestExecuteSQLToolSecurity:
 
         safe_queries = [
             "SELECT * FROM products",
-            "SELECT name, price FROM inventory WHERE quantity > 0",
+            # 裸表名 + 数据字典内真实列（inventory.inventory 无 name/price/quantity，
+            # 旧样例是更早 schema 的遗留，会被 Layer 3 column_undefined 正确拒绝）
+            "SELECT product_id, stock_quantity FROM inventory WHERE stock_quantity > 0",
             "SELECT COUNT(*) FROM product.products WHERE status = 'active'",
         ]
 

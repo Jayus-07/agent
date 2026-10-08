@@ -222,6 +222,20 @@ class SQLValidator:
             for table in table_names
         }
         for column in stmt.find_all(exp.Column):
+            # 限流子句里的标识符不是列引用：sqlglot 把 `LIMIT ALL` 解析成
+            # Column('ALL')（parent=Limit），旧实现会拿 "all" 去数据字典里找
+            # → 合法 SQL 被 Layer 3 误拒，L5 的 LIMIT 改写永远走不到
+            # （2026-10-08 实测；回归 TestLimitEnforcement 两条用例）。
+            ancestor = column.parent
+            in_limit_clause = False
+            while ancestor is not None:
+                if isinstance(ancestor, (exp.Limit, exp.Fetch, exp.Offset)):
+                    in_limit_clause = True
+                    break
+                ancestor = ancestor.parent
+            if in_limit_clause:
+                continue
+
             name = column.name.lower()
             qualifier = column.table.lower() if column.table else ""
             if not name or name == "*":

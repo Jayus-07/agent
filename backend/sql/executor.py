@@ -403,26 +403,56 @@ def _struct_error_text(status: str, timeout: float) -> str:
 
 
 def _output_lineage(sql: str) -> dict[str, set[str]]:
-    """输出列名 → 源列名集合 的映射（用于别名脱敏，审查 #10）。
+    """输出列名 → 源列引用集合 的映射（用于别名脱敏，审查 #10）。
 
     `SELECT name AS n` 的结果列名是 n，按结果列名匹配 masked_columns
-    会漏脱敏。这里解析 AST 把 n → {name} 映射出来，_mask_row 据此
-    回溯源列名匹配。解析失败返回空 dict（退化为按结果列名匹配，
-    不阻塞查询）。
+    会漏脱敏。这里解析 AST 把 n → 源列引用 映射出来，_mask_row 据此回溯源列。
+
+    **表限定优先（2026-10-08 修复）**：源列尽量解析成 `schema.table.column`
+    形态（FROM/JOIN 表名或别名的映射；单表作用域下裸列也能限定），只有解析
+    不出表（CTE/多表歧义/别名未知）时才落回裸列名。旧实现只产出裸列名，
+    配合 _mask_row 的后缀匹配会把**任何**叫 name 的列一并脱敏——
+    实测 `inventory.warehouses.name`、`product.categories.name` 被误打码成
+    「演***」，演示与核对都受影响。解析失败返回空 dict（退化为按结果列名
+    匹配，不阻塞查询）。
     """
     try:
         stmt = sqlglot.parse_one(sql, read="postgres")
-        mapping: dict[str, set[str]] = {}
-        for proj in stmt.expressions:
-            out_name = (getattr(proj, "alias", "") or proj.output_name or "")
-            if not out_name:
-                continue
-            cols = {c.name.lower() for c in proj.find_all(exp.Column)}
-            if cols:
-                mapping[out_name.lower()] = cols
-        return mapping
     except Exception:
         return {}
+
+    # 表别名/表名 → 限定表名；以及当前作用域内出现的表
+    alias_to_table: dict[str, str] = {}
+    tables_in_scope: set[str] = set()
+    for table in stmt.find_all(exp.Table):
+        table_name = (table.name or "").lower()
+        if not table_name:
+            continue
+        schema_name = (table.db or "").lower()
+        qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        tables_in_scope.add(qualified)
+        alias_to_table[(table.alias or "").lower() or table_name] = qualified
+
+    mapping: dict[str, set[str]] = {}
+    for proj in stmt.expressions:
+        out_name = (getattr(proj, "alias", "") or proj.output_name or "")
+        if not out_name:
+            continue
+        refs: set[str] = set()
+        for column in proj.find_all(exp.Column):
+            column_name = column.name.lower()
+            owner = (column.table or "").lower()
+            if owner:
+                target = alias_to_table.get(owner)
+                refs.add(f"{target}.{column_name}" if target else column_name)
+            elif len(tables_in_scope) == 1:
+                # 单表作用域：裸列可安全限定（保住 fail-closed 的脱敏覆盖）
+                refs.add(f"{next(iter(tables_in_scope))}.{column_name}")
+            else:
+                refs.add(column_name)
+        if refs:
+            mapping[out_name.lower()] = refs
+    return mapping
 
 
 def _apply_mask(value: str, prefix_len: int, suffix_len: int) -> str:
@@ -439,18 +469,40 @@ def _apply_mask(value: str, prefix_len: int, suffix_len: int) -> str:
     return masked
 
 
+def _mask_config_for(column_key: str, refs: set[str]) -> tuple | None:
+    """解析某个结果列该用哪条脱敏配置（表限定优先、裸名兜底）。
+
+    masked_columns 的键是 schema-qualified（`customer.customers.name`）：
+      1. lineage 解析出源表 → **只认 qualified 精确键**——这样
+         `inventory.warehouses.name` / `product.categories.name` 不会被
+         `customer.customers.name` 的后缀匹配误伤；
+      2. 解析不出源表（表达式 / 多表歧义 / AST 解析失败）→ 退回裸列名匹配
+         （fail-closed：宁可多脱敏，不可漏脱敏）。
+    """
+    masked_columns = schema_loader.masked_columns
+    qualified_refs = {ref for ref in refs if "." in ref}
+    if qualified_refs:
+        for ref in sorted(qualified_refs):
+            if ref in masked_columns:
+                return masked_columns[ref]
+        return None
+
+    candidates = {column_key.lower()} | {ref.lower() for ref in refs}
+    for key in sorted(candidates):
+        for mask_key, config in masked_columns.items():
+            if mask_key == key or ("." not in key and mask_key.endswith(f".{key}")):
+                return config
+    return None
+
+
 def _mask_value(value: Any, column_key: str) -> Any:
-    """对单值执行脱敏"""
+    """对单值执行脱敏（无 lineage 的旧路径：按裸列名匹配）"""
     if value is None:
         return value
     if not isinstance(value, str):
         return value
 
-    mask_config = None
-    for mc_key, mc_val in schema_loader.masked_columns.items():
-        if mc_key.endswith(f".{column_key}") or mc_key == column_key:
-            mask_config = mc_val
-            break
+    mask_config = _mask_config_for(column_key, set())
 
     if not mask_config:
         return value
@@ -461,23 +513,14 @@ def _mask_value(value: Any, column_key: str) -> Any:
 def _mask_row(row: dict, column_names: list, lineage: dict | None = None) -> dict:
     """对一行数据执行列级脱敏。
 
-    结果列名与源列名（lineage 解析出的别名映射）都参与匹配：
-    `SELECT name AS n` 时结果列名 n 不在 masked_columns 里，
-    但源列名 name 在 → 仍需脱敏。多个键命中时取第一个匹配配置，
-    只打码一次。
+    结果列名与源列引用（lineage 解析出的别名/限定名映射）都参与匹配：
+    `SELECT name AS n` 时结果列名 n 不在 masked_columns 里，但源列在 →
+    仍按源列判定；表限定优先的匹配规则见 _mask_config_for。
     """
     masked = {}
     for col, val in row.items():
-        keys = [col.lower()] + sorted((lineage or {}).get(col.lower(), set()))
-        config = next(
-            (
-                cfg
-                for key in keys
-                for mk, cfg in schema_loader.masked_columns.items()
-                if mk.endswith(f".{key}") or mk == key
-            ),
-            None,
-        )
+        refs = (lineage or {}).get(col.lower(), set())
+        config = _mask_config_for(col, set(refs))
         if config and isinstance(val, str):
             masked[col] = _apply_mask(val, config[0], config[1])
         else:
