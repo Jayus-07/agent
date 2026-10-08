@@ -111,6 +111,34 @@ class TestTriageDirectExits:
         d = make_supervisor_decision(_state("你好"))
         assert "direct_reply" not in d
 
+    def test_out_of_scope_guide_travel(self, _stub_llm, monkeypatch):
+        """A 案：旅游话题出域 + 引导开关开 → 指路旅游页而非固定话术。"""
+        monkeypatch.setattr(cs_config, "CS_TRIAGE_GUIDE_ENABLED", True)
+        d = make_supervisor_decision(_state("福州有什么好玩的景点"))
+        assert d["next_action"] == ExpertAction.FINISH.value
+        assert "旅游规划" in d.get("direct_reply", "")
+        assert "不在本窗口的服务范围内" not in d.get("direct_reply", "")
+        assert "出域引导" in d["reason"]
+
+    def test_out_of_scope_guide_off_keeps_fixed(self, _stub_llm, monkeypatch):
+        """引导开关关（config 默认 false）→ 维持固定话术现行为。"""
+        monkeypatch.setattr(cs_config, "CS_TRIAGE_GUIDE_ENABLED", False)
+        d = make_supervisor_decision(_state("福州有什么好玩的景点"))
+        assert d["next_action"] == ExpertAction.FINISH.value
+        assert "不在本窗口的服务范围内" in d.get("direct_reply", "")
+
+    def test_out_of_scope_platform_never_guides(self, _stub_llm, monkeypatch):
+        """平台外话题（天气等）不在引导组，开关开也走固定话术。"""
+        monkeypatch.setattr(cs_config, "CS_TRIAGE_GUIDE_ENABLED", True)
+        d = make_supervisor_decision(_state("今天天气怎么样"))
+        assert "不在本窗口的服务范围内" in d.get("direct_reply", "")
+
+    def test_out_of_scope_guide_selection(self, _stub_llm, monkeypatch):
+        """选品话题 → 指路选品工作台。"""
+        monkeypatch.setattr(cs_config, "CS_TRIAGE_GUIDE_ENABLED", True)
+        d = make_supervisor_decision(_state("帮我做一下竞品分析"))
+        assert "选品工作台" in d.get("direct_reply", "")
+
     def test_cs_signal_beats_out_of_scope(self):
         """顺序铁律：客服规则信号命中 → 出域词表不截胡，落业务漏斗。"""
         d = make_supervisor_decision(_state("订单里的行程单丢了怎么办"))

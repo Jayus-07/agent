@@ -13,10 +13,12 @@ from backend.customer_service.context.understanding.types import EntitySpan, Ent
 # 订单号：字母数字混合前缀 + 至少一段连字数字字母段，且整串必须含字母
 # （排除 2026-09-15 日期、138-0000 电话分段等纯数字形态）。
 # 形近错别字（DEM0-1006 / DEMO-1O08）必须整体命中——零改写的前提是先能
-# 原样认领。与 experts/action.py、query.py 的 P3.5 正则同族，接线时收敛。
+# 原样认领。连字段下限 1：三段式订单号（DEMO-SHOW-O-002）的中间段可为
+# 单字符，{2,12} 会把整串截断到前两段（2026-10-08 服务器验收实测）。
+# 与 experts/action.py、query.py 的 P3.5 正则同族，接线时收敛。
 _ORDER_ID = re.compile(
     r"(?<![A-Za-z0-9])(?=[A-Za-z0-9-]*[A-Za-z])"
-    r"([A-Za-z0-9]{2,10}(?:-[A-Za-z0-9]{2,12})+)(?![A-Za-z0-9])"
+    r"([A-Za-z0-9]{2,10}(?:-[A-Za-z0-9]{1,12})+)(?![A-Za-z0-9])"
 )
 # 关键词引导的纯数字单号（订单号 12345678）——无字母前缀形态，单独认领
 _ORDER_ID_DIGITS = re.compile(r"订单[号]?\s*[:：为]?\s*(\d{5,20})")

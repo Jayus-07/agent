@@ -10,6 +10,7 @@
 
 ```
 START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度）→ 客服域图 → END
+                ├─ AI助手锁域（domain_hint=main，跳过域 prefilter）→ 主路由（强信号产 handoff 引导卡）→ END
                 ├─ 客服预过滤命中（CS_ENABLED + 灰度）     → 客服域图 → END
                 ├─ 旅游预过滤命中（TRAVEL_ENABLED）        → 旅游域图 → END
                 ├─ 选品预过滤命中（SELECTION_FUNNEL_ENABLED）→ 选品漏斗域图 → END
@@ -47,7 +48,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | 域图 | 开关 | 节点序列 |
 |---|---|---|
 | 客服 | `CS_ENABLED` | `state_loader → pending_handler → cs_supervisor → 5 专家（knowledge/query/action/complaint/handoff）→ cs_reporter`；`cs_supervisor` 承担 handoff 拦截、循环上限、LLM 兜底；v2 决策链（`CS_DECISION_V2`）在守卫之后、意图路由之前有 **L4.5 分诊直出**：寒暄→`chat_fallback` 一次 LLM 人设（`CS_CHAT_FALLBACK_ENABLED`）、出域→固定话术零 LLM（`CS_WINDOW_STANDALONE`；v1 回退路径不接出口）；`pending_handler` 在 need_info 补槽期**优先放行显式转人工**（命中 handoff 触发即释放 pending 回 supervisor 重分诊，审计 `need_info_handoff_escape`，2026-10-05 a65a167——追问不再吞掉转人工诉求） |
-| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair →（已有行程逐条改单）travel_partial_replan → travel_reporter`（11 节点，2026-10-07 `4ddc3c3` 增 `travel_partial_replan`：局部重规划只动被点名天与条目+强制重验证，见「旅游会话意图」节）；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）；**Tool Failure Policy（2026-10-07）**：外部数据源失败 ≠ Workflow 失败——非硬依赖失败降级披露继续（`travel/services/tool_failure_policy.py::run_checked`，状态 `degraded_tools`，行程照常产出、实时数据不伪造），仅「本轮表达了必须 X 点前抵达否则不要」类硬约束无法验证时 BLOCKED 终止（`blocked_tools`，supervisor 直报 reporter 出用户话术），内部规划算法异常原样 failed 不降级；POI 腾讯全败时高德顶上做主候选（F1） |
+| 旅游（Travel · planning 子流） | `TRAVEL_ENABLED` | `travel_slot_filler → travel_supervisor → poi/transit/budget/risk/weather 五专家 → travel_validator →（未过）travel_repair →（已有行程逐条改单）travel_partial_replan → travel_reporter`（11 节点，2026-10-07 `4ddc3c3` 增 `travel_partial_replan`：局部重规划只动被点名天与条目+强制重验证，见「旅游会话意图」节）；**QUERY_TRANSIT 车票快路（2026-10-08 `a2344db`）**：「明天去厦门最快的车」类纯交通/车票查询（`travel/core/intent.py` intent 2.5 档）经 prefilter 进域后**只调 12306 直出、不启动规划链**（不追问「玩几天」、不重吐旧行程；词表不收裸「票/坐」防「门票」误伤）；validator 纯规则零 LLM 零 IO，只判定不修改（修复在 repair），四轴 = 时间/地理/体力/预算；error 级违反阻塞交付；局部修复只动被点名的天与条目，用户点名必去条目永不被静默丢弃（`kept_required`）；**Tool Failure Policy（2026-10-07）**：外部数据源失败 ≠ Workflow 失败——非硬依赖失败降级披露继续（`travel/services/tool_failure_policy.py::run_checked`，状态 `degraded_tools`，行程照常产出、实时数据不伪造），仅「本轮表达了必须 X 点前抵达否则不要」类硬约束无法验证时 BLOCKED 终止（`blocked_tools`，supervisor 直报 reporter 出用户话术），内部规划算法异常原样 failed 不降级；POI 腾讯全败时高德顶上做主候选（F1）；**QUERY_TRANSIT 车票快路（2026-10-08 `a2344db`）**：「明天去厦门最快的车」类纯交通/车票查询（intent 2.5 档，见「旅游会话意图」节）进域后**只调 12306 直出、不启动规划链**（不追问「玩几天」、不重吐旧行程） |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | prefilter 已接线（`router_node` 内与旅游同层，2026-09-17）；仅受开关控制，无域锁通路 |
 | 旅游商务（Travel · commerce 子流） | `TRAVEL_COMMERCE_ENABLED`（默认关） | `backend/travel/commerce/`，2026-09-24 STOP K |
 | 旅游预订（Travel · booking 子流） | `TRAVEL_BOOKING_ENABLED`（默认关） | `backend/travel/booking/`，预订事务与幂等账本复用，2026-09-25 STOP L |
@@ -63,7 +64,8 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 | 入口 | 触发方式 | 行为 |
 |---|---|---|
 | **客服窗口锁域** | 用户端客服抽屉 `CSDrawer` 每条消息带 `domain_hint=customer_service`（`frontend/src/hooks/useCSChat.ts`） | `router_node` 置 `cs_forced` → **跳过域检测门、跳过灰度判定（恒 treatment）、跳过旅游/选品 prefilter**，直接进客服管线。仍受 `CS_ENABLED` 总闸约束（关闭则降级回主路由） |
-| **全局入口** | `domain_hint` 为空（普通对话页） | 在 router 内按序判定：CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测（同为纯正则，与第一步同源）；CS 命中后还须过服务端灰度 `CS_ROLLOUT_PERCENT`（默认 100），落 control 组则回主图 |
+| **AI 助手页锁域**（2026-10-08 `0541be6`） | AI 助手页（主聊天 `/agent`）每条消息带 `domain_hint=main`（`frontend/src/hooks/useChat.ts`，与 CS 抽屉同机制、互斥取值） | `orchestration/graph/routing/lock_domain.py::is_main_forced` → **跳过旅游/选品/预订/商务域 prefilter 与旅游延续判定**；旅游族/选品强信号**不执行**、改产 `handoff` 引导卡送用户去专属页（CS 引导、general_chat 与主路由 sql/rag/plan 不受影响）。行为测试 `backend/tests/orchestration/graph/test_main_lock_domain.py` |
+| **全局入口** | `domain_hint` 为空（移动端旧页 / 未带 hint 的调用方） | 在 router 内按序判定：CS 廉价规则预判 → 旅游正则 → 选品正则 → CS 完整检测（同为纯正则，与第一步同源）；CS 命中后还须过服务端灰度 `CS_ROLLOUT_PERCENT`（默认 100），落 control 组则回主图 |
 
 预过滤优先级 **客服 > 旅游**（「订单里的行程单」按客服诉求处理）。
 
@@ -74,7 +76,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 - `execute`：照旧进入域图执行（基线等价）。
 - `guide`：主图**短路为 router→reporter**，reporter 直出契约自带引导话术（零 LLM），SSE 发 **AUX 帧 `handoff`**——契约 `orchestration/contracts/handoff.py::HandoffPayloadV1`（目标域＋参数包＋原因），与前端 `frontend/src/types/handoff.ts` 同构（共享 fixture `backend/tests/fixtures/handoff_payload_v1.json` 对齐测试）。前端 `HandoffCard` 提供三入口带参跳转（旅游页预填 / 选品页带参 / CSDrawer 预填＋`cs-drawer:open` 事件），点击埋点 `POST /observability/handoff/click`，指标 `agent_handoff_total{target_domain,phase}`。
 
-不受模式开关影响的两条通路：**旅游一次性查询**（「福州有什么景点」类，passthrough 落回主路由）与**客服窗口锁域**（`domain_hint` 强制进 CS 管线）。UI 归宿「四扇门」：主聊天 / 旅游页 / 客服抽屉 / `/selection-funnel` 选品专属页（选品漏斗的用域图载体实现的固定工作流范式）。验收：`docs/reports/2026-10-06-多域隔离收官验收报告.md`。
+不受模式开关影响的两条通路：**旅游一次性查询**（「福州有什么景点」类，passthrough 落回主路由）与**窗口锁域**（`domain_hint` 强制：客服抽屉进 CS 管线、AI 助手页锁 main）。UI 归宿「四扇门」：主聊天（AI 助手页，2026-10-08 起锁 `main`）/ 旅游页 / 客服抽屉 / `/selection-funnel` 选品专属页（选品漏斗的用域图载体实现的固定工作流范式）。验收：`docs/reports/2026-10-06-多域隔离收官验收报告.md`。
 
 > **客服窗口为什么必须锁域**：此处**不存在「漏进主图」的 A/B 对照语义**（用户已显式进入客服窗口），而每条消息重新判域有两个实测代价——
 > ① **召回漏判**：CS 规则阈值 `CS_RULE_MIN_HITS=2`，实测「东西坏了咋办」「我的订单三天前就显示已发货，为什么还没收到」规则命中**均仅 1** → 全局入口判非客服、落到 `route_mode=plan`，白跑一轮 Planner/LLM；
@@ -127,13 +129,13 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 
 **LLM 理解层与追问单一生成点（2026-10-08）**：requirement_agent 保持零 LLM；slot_filler 在规划轨且合并后 required 槽仍缺失时调 `services/llm_slot_enrichment_service.py`（单轮 ≤1 次、白名单 destination/days/party_size/pace/preferences、候选经 Schema+值域校验后只填空槽永不覆盖规则值，`slot_parse_source` ∈ rule/rule+llm/rule_fallback）。追问由 `services/clarification_service.py::ClarificationPlan` 单一生成（`CLARIFICATION_PRIORITY` 一次只问一个槽、options 全规则生成可重发回域）→ `services/clarification_renderer.py`（LLM 只生成 question，失败立即模板接管，`clarification_source` ∈ llm/template）；reporter 只消费 `state["clarifications"]` 不再二次生成。开关 `TRAVEL_LLM_SLOT_ENRICHMENT_ENABLED`/`TRAVEL_LLM_CLARIFICATION_ENABLED` 默认关（关闭=纯规则/纯模板零 LLM）；prompt 走注册表 `travel.slot_enrichment`/`travel.clarification_renderer`，LLM 调用补 `record_llm_result` 计量 + `agent_domain=travel` 归因。golden=datasets/travel_slot_llm_golden.jsonl 52 条。
 
-意图共**八类**（PLAN / MODIFY / QUERY_DYNAMIC / QUERY_STATIC / DISCOVER / SOCIAL / META / **OUT_OF_SCOPE**；2026-10-07 `4ddc3c3` 增 `SOCIAL`/`META` 轻交互类，与 QUERY 家族同属 `NON_PLANNING_INTENTS`——只走 reporter 轻量出口 `_answer_social`/`_answer_meta`，不得进完整规划链），其中 **`OUT_OF_SCOPE` 出域引导**（2026-10-03 `24dfb24`，M2-G）为最高优先级：非旅游域强信号词首中即拦，reporter 走引导出口（`_answer_out_of_scope`）——明确告知不属旅游域、不硬解析不硬排，引导回主对话/客服链路，避免旅游域图硬接非旅游诉求。
+意图共**九类**（PLAN / **QUERY_TRANSIT** / MODIFY / QUERY_DYNAMIC / QUERY_STATIC / DISCOVER / SOCIAL / META / **OUT_OF_SCOPE**；2026-10-07 `4ddc3c3` 增 `SOCIAL`/`META` 轻交互类，与 QUERY 家族同属 `NON_PLANNING_INTENTS`——只走 reporter 轻量出口 `_answer_social`/`_answer_meta`，不得进完整规划链；2026-10-08 `a2344db` 增 **`QUERY_TRANSIT` 车票快路**（intent 2.5 档，排在 PLAN 之后/QUERY_DYNAMIC 之前——「帮我规划…顺便看高铁」主诉求仍是规划，「高铁票价多少钱」按车票查询处理）：正则只收交通名词（车票/高铁/火车/动车/城际/班车/大巴/客运/航班/机票/飞机）与出行方式问法（怎么去/怎么走/坐车/乘车）及最值班次句式，**不收裸「票/坐」**（防「门票」「演出票」误伤）；命中后只调 12306 查车次直出（reporter `_answer_transit_query`），不追问天数、不启动规划链、不重吐旧行程；测试 `backend/tests/travel/test_transit_query_fastpath.py`），其中 **`OUT_OF_SCOPE` 出域引导**（2026-10-03 `24dfb24`，M2-G）为最高优先级：非旅游域强信号词首中即拦，reporter 走引导出口（`_answer_out_of_scope`）——明确告知不属旅游域、不硬解析不硬排，引导回主对话/客服链路，避免旅游域图硬接非旅游诉求。
 
 城市名录只用于识别与消歧，不能作为 live Provider 的支持范围闸门。目的地、出发地、路线和预过滤共用带负向词与后缀守卫的扫描入口；种子模式仍如实展示种子覆盖范围。静态问答的一次只读攻略检索在 slot_filler 侧完成，输出 available/empty/unavailable 三态；reporter 只渲染既有结果。问答对外不重复发布 checkpoint 中的旧行程，也不创建规划 pending。
 
 需求抽取侧的节奏口径（#80）：显式 pace 词优先；未提 pace 时按同行人群派生默认档位（requirement_agent 词表：老人/爸妈/带娃/亲子→relaxed，特种兵/暴走/学生党→intense；slot_filler 经 `extract_group_pace` 并入合并），经既有 pace 容量约束传导到排程，不新增排程分支。规划会话恢复：旅游域追问中断后的**纯槽位值回答**（「8万日元」「住难波」类，不含旅游/延续信号词）由 `TravelPendingResolver`（插在 ContinuationResolver 之前，纯规则零 LLM）判定短路回旅游域图，`TRAVEL_PENDING_RESUME_ENABLED` 默认 true；客服强信号仍优先放行。
 
-最后验证：2026-10-07 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)；本节意图分类口径已按 `TRAVEL_LLM_INTENT_ENABLED` 开关状态改写（默认纯规则不变）。2026-10-07 增量：意图六类→八类（增 SOCIAL/META）、逐条改单接 `travel_partial_replan` 局部重规划（`4ddc3c3`）；Tool Failure Policy 落地（Tool Failure ≠ Workflow Failure 契约，降级/阻断账本 `degraded_tools`/`blocked_tools`/`tool_failures` 入 state 与 trace）；路由表与六阶段链对齐 Runtime V2（`8d4dbb7` 收口的补充）。
+最后验证：2026-10-08 · 见 [P0-A 收尾验收](../reports/2026-10-02-旅游灵感式规划v3-P0-A收尾验收.md)；本节意图分类口径已按 `TRAVEL_LLM_INTENT_ENABLED` 开关状态改写（默认纯规则不变）。2026-10-07 增量：意图六类→八类（增 SOCIAL/META）、逐条改单接 `travel_partial_replan` 局部重规划（`4ddc3c3`）；Tool Failure Policy 落地（Tool Failure ≠ Workflow Failure 契约，降级/阻断账本 `degraded_tools`/`blocked_tools`/`tool_failures` 入 state 与 trace）；路由表与六阶段链对齐 Runtime V2（`8d4dbb7` 收口的补充）。2026-10-08 增量：意图八类→九类（增 `QUERY_TRANSIT` 车票快路，`a2344db`）。
 
 ## 旅游数据源与版本链（2026-10-02）
 
@@ -147,7 +149,7 @@ START → router ─┬─ 客服域锁（domain_hint=cs，跳过判域/灰度�
 - **到达时间缓冲与 brief 契约扩展（2026-10-07 `4ddc3c3`）**：首日活动开始不得早于 `brief.arrival_time` + `TRAVEL_ARRIVAL_BUFFER_MINUTES`（默认 30）；brief 新增 `budget_constraint`（`hard`=不得超出预算（默认）/ `soft`=可超需说明）与 `weather_conditions`；会话级 trace 写 `travel_semantics` 投影（`travel/trace_semantics.py`：planning_mode / interaction_mode / base·active·draft 版本 / semantic_change / modified_days 等）。
 - **分类候选表**（2026-10-05 验收 #10，`721c9e4`）：POI 专家产出的候选池落 graph `state.candidates`（随 checkpoint 持久化），`GET /api/travel/candidates` 经域图单例读取（thread_id 与规划链同源）→ 前端 CandidatesPanel 分类展示（组内 rating 降序、每组 ≤12 条）；换入走 canvas_replace 草案管线，decision `entry=candidates_panel`；checkpoint 不可达如实 `available=false`，不伪造候选。
 
-最后验证：2026-10-06 · `TRAVEL_POI_SOURCE` 默认值、`TRAVEL_PLAN_VERSIONS_*` 配置、`itinerary.intercity` 契约字段、M3 档位/协商/城市指南实测；2026-10-05 增量补记 POI 候选池三源与三路并发 / 抵达车票自动触发 / slot_filler LLM 意图补判开关 / #80 人群节奏派生与旅游 pending resume；2026-10-06 增量补记客服 L4.5 分诊直出 / need_info 转人工逃生 / 订单序号回指 / 旅游分类候选表状态管线。
+最后验证：2026-10-08 · `TRAVEL_POI_SOURCE` 默认值、`TRAVEL_PLAN_VERSIONS_*` 配置、`itinerary.intercity` 契约字段、M3 档位/协商/城市指南实测；2026-10-05 增量补记 POI 候选池三源与三路并发 / 抵达车票自动触发 / slot_filler LLM 意图补判开关 / #80 人群节奏派生与旅游 pending resume；2026-10-06 增量补记客服 L4.5 分诊直出 / need_info 转人工逃生 / 订单序号回指 / 旅游分类候选表状态管线；2026-10-08 增量补记 QUERY_TRANSIT 车票快路（`a2344db`）与 LLM 理解层/自然追问收口（`781c5b6`，追问单一生成点=slot_filler、reporter 只消费 clarifications）。
 
 ## 相关文档
 

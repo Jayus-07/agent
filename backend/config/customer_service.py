@@ -186,6 +186,14 @@ CS_CHAT_LLM_TIMEOUT_MS = int(os.getenv("CS_CHAT_LLM_TIMEOUT_MS", "8000"))
 # 独立客服窗口：true=非客服域消息不出域，走出域固定话术（false=旧 redirect_main）
 # 消费方 router_node（任务卡 T5，混线解锁后接线；先落配置保持口径单一源）
 CS_WINDOW_STANDALONE = os.getenv("CS_WINDOW_STANDALONE", "true").strip().lower() in ("1", "true", "yes")
+# 分诊阶梯（2026-10-08 服务器验收拍板 A 案）：出域消息先判引导去向——
+# 旅游/选品话题引导去对口域入口而非固定话术挡回；平台外话题仍固定话术。
+# false = 出域一律固定话术（现行为）
+CS_TRIAGE_GUIDE_ENABLED = os.getenv("CS_TRIAGE_GUIDE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+# 排队态消息分流（C 案）：waiting_human 期间非客服诉求不再被排队话术吞掉
+# ——寒暄/出域正常直答；客服诉求保持排队话术。human_active（人工已接入）
+# 不分流，AI 零抢答铁律不动。false = 排队态一律排队话术（现行为）
+CS_WAITING_HUMAN_DIVERT_ENABLED = os.getenv("CS_WAITING_HUMAN_DIVERT_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
 # ── 坐席辅助（agent assist，AI 给人工坐席实时推荐回复）────────
 # 总开关：关闭后 hub 不再调度生成任务，前端无推荐事件（默认开启，失败静默）
