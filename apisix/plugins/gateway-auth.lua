@@ -286,6 +286,8 @@ local ROLE_GATE_EXEMPT_PATTERNS = {
     "^/api/cs/conversations/my/.+$",                      -- 我的会话消息/typing
     "^/api/cs/conversations/[^/]+/handoff$",              -- 用户发起转人工
     "^/api/cs/conversations/[^/]+/rating$",               -- 用户满意度评分
+    "^/api/cs/tickets$",                                  -- 我的工单列表（2026-10-08：B案工单展示）
+    "^/api/cs/tickets/[^/]+$",                            -- 工单详情（admin/* 不命中，仍走前缀闸）
 }
 
 local function role_gate(uri, method, roles)
