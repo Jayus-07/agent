@@ -195,6 +195,9 @@ def _sanitize_facts(data: dict) -> dict:
         "audit_entry", "pending_action", "confirmation_state",
         "handoff_state", "handling_mode", "_clarify",
         "user_id", "tenant_id",
+        # 内部工单号（COMPLAINT-*）：不进可引用事实——LLM 会把它编进话术，
+        # output_guard 再打码就留下「（编号[已过滤]）」残迹（2026-10-08 实测）
+        "ticket_id",
     }
     return {k: v for k, v in data.items() if k not in blocked}
 

@@ -137,3 +137,15 @@ class TestGuard:
         baseline = composer._collect_order_nos("订单 DEMO-1001")
         out = composer._collect_order_nos("订单 DEMO-1001 和 DEMO-8888")
         assert out - baseline == {"DEMO-8888"}
+
+class TestSanitizeFacts:
+    def test_internal_ticket_id_blocked(self):
+        # 内部工单号（COMPLAINT-*）不进可引用事实：LLM 引用它会被
+        # output_guard 打码留下「（编号[已过滤]）」（2026-10-08 实测）
+        facts = composer._sanitize_facts({
+            "ticket_id": "COMPLAINT-AB12CD34",
+            "severity": "medium",
+            "duplicate": True,
+        })
+        assert "ticket_id" not in facts
+        assert facts["severity"] == "medium"

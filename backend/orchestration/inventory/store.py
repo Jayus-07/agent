@@ -32,10 +32,13 @@ class InventoryStore:
         优先：sku 匹配 → category 匹配 → global
         """
         rules = self.list_thresholds(enabled_only=True)
-        # 1. sku 匹配
+        # 1. sku 匹配（两侧都按文本比较：表列是 TEXT，扫描侧传入的
+        #    inventory.product_id 是 int——原 == 直比在 PG 下永假，sku
+        #    规则静默失效，2026-10-08 ECS 走查实测）
         if product_id:
             for r in rules:
-                if r["rule_type"] == "sku" and r["product_id"] == product_id:
+                if (r["rule_type"] == "sku"
+                        and str(r.get("product_id")) == str(product_id)):
                     return r
         # 2. category 匹配
         if category:
