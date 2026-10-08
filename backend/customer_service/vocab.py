@@ -40,18 +40,29 @@ VOCAB_VERSION = "2026-10-04.4"
 # 再过出域词表（→固定话术，零 LLM）。判定顺序铁律：先客服信号后出域——
 # 含客服域信号的句子不得被出域词表截胡（"订单里的行程单丢了"属客服诉求）。
 # 两段变更均过 vocab_gate（fail-closed）。
-OUT_OF_SCOPE_PATTERNS = [
-    re.compile(p) for p in [
-        # 旅游话题（话题词参考 router_node 旅游 prefilter 强信号集；
-        # 机票/酒店等出行事务是客服窗口场景的出域扩展——prefilter 不管它们）
-        r"旅游|旅游攻略|景点|行程(规划)?|自由行|跟团|自驾游|一日游",
-        r"机票|火车票|高铁票|酒店|民宿|门票|签证",
-        # 选品漏斗域话题
-        r"选品|选款|爆款|铺货|竞品分析|类目分析",
-        # 明显平台外话题（客服窗口只答购物客服）
-        r"天气|股市|股票|彩票|外卖|点餐|打车|导航",
-    ]
+#
+# 出域词表按「引导去向」分三组（2026-10-08 分诊阶梯）：travel/selection
+# 组命中且引导开关开启 → 引导去对应域入口而非固定话术；platform 组只
+# 固定话术。正则内容与拆分前逐条一致（仅重组，词表内容零变更不升版）。
+_GUIDE_TRAVEL_RAW = [
+    # 旅游话题（话题词参考 router_node 旅游 prefilter 强信号集；
+    # 机票/酒店等出行事务是客服窗口场景的出域扩展——prefilter 不管它们）
+    r"旅游|旅游攻略|景点|行程(规划)?|自由行|跟团|自驾游|一日游",
+    r"机票|火车票|高铁票|酒店|民宿|门票|签证",
 ]
+_GUIDE_SELECTION_RAW = [
+    # 选品漏斗域话题
+    r"选品|选款|爆款|铺货|竞品分析|类目分析",
+]
+_PLATFORM_OUT_RAW = [
+    # 明显平台外话题（客服窗口只答购物客服）
+    r"天气|股市|股票|彩票|外卖|点餐|打车|导航",
+]
+OUT_OF_SCOPE_PATTERNS = [
+    re.compile(p) for p in _GUIDE_TRAVEL_RAW + _GUIDE_SELECTION_RAW + _PLATFORM_OUT_RAW
+]
+_GUIDE_TRAVEL_PATTERNS = [re.compile(p) for p in _GUIDE_TRAVEL_RAW]
+_GUIDE_SELECTION_PATTERNS = [re.compile(p) for p in _GUIDE_SELECTION_RAW]
 
 # 出域/寒暄豁免信号（顺序铁律的精确口径，2026-10-04.2）：
 # 出域词表含"行程"等与业务交叉的话题词（"订单里的行程单丢了"），而
@@ -97,6 +108,38 @@ def format_out_of_scope(topic: str = "该问题") -> str:
 def match_out_of_scope(text: str) -> bool:
     """出域命中判定：调用方必须先确认无客服域信号（顺序铁律见段注释）。"""
     return any(p.search(text or "") for p in OUT_OF_SCOPE_PATTERNS)
+
+
+def match_out_of_scope_guide(text: str) -> str | None:
+    """出域消息的引导去向：travel / selection / None（平台外只固定话术）。
+
+    引导优先于固定话术（分诊阶梯 2026-10-08）：能引去对口域入口的出域
+    话题不再用罐头话术挡回。命中组 ⊆ OUT_OF_SCOPE_PATTERNS，调用方仍须
+    先过顺序铁律（客服信号豁免）。
+    """
+    t = text or ""
+    if any(p.search(t) for p in _GUIDE_TRAVEL_PATTERNS):
+        return "travel"
+    if any(p.search(t) for p in _GUIDE_SELECTION_PATTERNS):
+        return "selection"
+    return None
+
+
+def format_out_of_scope_guide(guide: str, topic: str = "该问题") -> str:
+    """出域引导话术：指路对口域入口 + 保留客服窗口职责边界。"""
+    if guide == "travel":
+        return (
+            f"您说的「{topic}」更适合旅游助手来答——首页左侧『旅游规划』"
+            "可以问行程、景点、车票，还能直接生成攻略。这边随时帮您处理"
+            "订单、退款、物流这些购物问题。"
+        )
+    if guide == "selection":
+        return (
+            f"您说的「{topic}」更适合选品工作台来答——首页『选品工作台』"
+            "支持竞品分析、类目筛选和爆款挖掘。这边随时帮您处理订单、"
+            "退款、物流这些购物问题。"
+        )
+    return format_out_of_scope(topic)
 
 
 def match_chitchat(text: str) -> bool:

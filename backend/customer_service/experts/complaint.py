@@ -97,7 +97,9 @@ def execute_complaint(
             expert="complaint",
             status=ExpertStatus.SUCCESS.value,
             response_draft=(
-                f"您的投诉工单（{existing_ticket}）已在处理中，"
+                # 内部工单号（COMPLAINT-*）不外显——output_guard 按策略打码，
+                # 模板侧直接不带，避免用户看到「（[已过滤]）」
+                "您的投诉工单已在处理中，"
                 "专人正在跟进，我们会尽快给您答复。"
             ),
             data={

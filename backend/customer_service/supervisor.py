@@ -351,6 +351,13 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
         )
         raise
     if should_intercept(_hs):
+        # 排队态分流（C 案）：waiting_human 期间非客服诉求直答，不被
+        # 排队话术吞掉；human_active 不进分流（AI 零抢答铁律）。
+        if _hs == HandoffState.WAITING_HUMAN:
+            divert = _waiting_human_divert(state)
+            if divert is not None:
+                _record_decision(divert)
+                return divert
         decision = _make_decision(
             ExpertAction.HANDOFF, ExpertType.HANDOFF, layer=1,
             reason=f"[v2·L1] handoff 拦截: state={handoff_state}",
@@ -590,21 +597,121 @@ def _triage_direct_reply(state: dict[str, Any]) -> CSSupervisorDecision | None:
             _tag_triage_direct("chitchat", bool(result.error))
             return decision
 
-    # 出口二：出域 → 固定话术（V1 验收口径：零 LLM，TTFT≤500ms）
+    # 出口二：出域 → 引导（分诊阶梯 A 案）或固定话术（V1 验收口径：零 LLM）
     if CS_WINDOW_STANDALONE and match_out_of_scope(query_text):
         topic = _out_of_scope_topic(query_text)
+        guide = _out_of_scope_guide_reply(query_text, topic)
         decision = _make_decision(
             ExpertAction.FINISH, None, layer=1,
-            reason=f"[v2·L4.5] 出域固定话术: {topic}（零 LLM 零检索）",
+            reason=(
+                f"[v2·L4.5] 出域{'引导:' + guide[0] if guide else '固定话术'}: "
+                f"{topic}（零 LLM 零检索）"
+            ),
             is_finished=True,
         )
-        decision["direct_reply"] = format_out_of_scope(topic)
-        _tag_triage_direct("out_of_scope", False)
-        try:  # M12 口径：出域属拒答类（不服务该话题），计数软失败
-            from backend.observability.metrics import cs_rejection_total
-            cs_rejection_total.labels(layer="out_of_scope").inc()
-        except Exception:
-            pass
+        decision["direct_reply"] = guide[1] if guide else format_out_of_scope(topic)
+        _tag_triage_direct("out_of_scope_guide" if guide else "out_of_scope", False)
+        if not guide:  # M12 口径：固定话术属拒答类；引导是服务出口不计数
+            try:
+                from backend.observability.metrics import cs_rejection_total
+                cs_rejection_total.labels(layer="out_of_scope").inc()
+            except Exception:
+                pass
+        return decision
+
+    return None
+
+
+def _out_of_scope_guide_reply(query_text: str, topic: str) -> tuple[str, str] | None:
+    """出域引导（A 案，CS_TRIAGE_GUIDE_ENABLED）：旅游/选品话题指路对口域。
+
+    返回 (去向, 引导话术)；未开启开关 / 平台外话题返回 None（落固定话术）。
+    引导命中组 ⊆ 出域词表，顺序铁律已由调用方保证。
+    """
+    from backend.config.customer_service import CS_TRIAGE_GUIDE_ENABLED
+    from backend.customer_service.vocab import (
+        format_out_of_scope_guide,
+        match_out_of_scope_guide,
+    )
+    if not CS_TRIAGE_GUIDE_ENABLED:
+        return None
+    guide = match_out_of_scope_guide(query_text)
+    if not guide:
+        return None
+    return guide, format_out_of_scope_guide(guide, topic)
+
+
+def _waiting_human_divert(state: dict[str, Any]) -> CSSupervisorDecision | None:
+    """排队态消息分流（C 案，CS_WAITING_HUMAN_DIVERT_ENABLED）。
+
+    waiting_human 期间的非客服诉求不再被排队话术吞掉：
+      - 寒暄 → chat_fallback 直答；出域 → 固定话术/引导直答；
+      - 客服诉求（催单/订单/退款等业务域词）→ None，保持排队话术
+        （该话术本身承载「已同步人工」语义）；
+      - human_active（人工已接入）不进来——AI 零抢答铁律不动。
+    全程复用既有词表与出口实现，零新词表、零新 LLM 面。
+    """
+    from backend.config.customer_service import CS_WAITING_HUMAN_DIVERT_ENABLED
+    from backend.customer_service.handoff import HandoffState
+    if not CS_WAITING_HUMAN_DIVERT_ENABLED:
+        return None
+    if state.get("handoff_state") != HandoffState.WAITING_HUMAN.value:
+        return None
+
+    query_text = (
+        state.get("user_message")
+        or state.get("question")
+        or state.get("query")
+        or ""
+    ).strip()
+    if not query_text:
+        return None
+    # 顺序铁律同源：客服域词命中 = 催单/补充类诉求，保持排队话术
+    try:
+        from backend.customer_service.vocab import match_cs_signal_exempt
+        if match_cs_signal_exempt(query_text):
+            return None
+    except Exception:
+        return None
+
+    from backend.customer_service.chat_fallback import (
+        chat_fallback_enabled,
+        run_chat_fallback,
+    )
+    from backend.customer_service.vocab import (
+        format_out_of_scope,
+        match_chitchat,
+        match_out_of_scope,
+    )
+
+    if chat_fallback_enabled() and match_chitchat(query_text):
+        result = run_chat_fallback(query_text)
+        if result is not None:
+            decision = _make_decision(
+                ExpertAction.FINISH, None, layer=1,
+                reason=(
+                    "[v2·L1-divert] 排队期寒暄直答: chat_fallback"
+                    + ("(llm_error_fallback)" if result.error else "")
+                ),
+                is_finished=True,
+            )
+            decision["direct_reply"] = result.reply
+            _tag_triage_direct("waiting_chitchat", bool(result.error))
+            return decision
+
+    if match_out_of_scope(query_text):
+        topic = _out_of_scope_topic(query_text)
+        guide = _out_of_scope_guide_reply(query_text, topic)
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=1,
+            reason=(
+                "[v2·L1-divert] 排队期出域直答: "
+                + ("引导:" + guide[0] if guide else f"固定话术 {topic}")
+            ),
+            is_finished=True,
+        )
+        decision["direct_reply"] = guide[1] if guide else format_out_of_scope(topic)
+        _tag_triage_direct("waiting_out_of_scope", False)
         return decision
 
     return None
