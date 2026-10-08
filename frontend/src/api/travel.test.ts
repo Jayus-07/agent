@@ -57,13 +57,44 @@ describe('旅游行程版本 API', () => {
 
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/travel/plan/stream')
     expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual({
-      message: '福州1天', session_id: 'conv-1', conversation_id: 'conv-1',
+      message: '福州1天', session_id: 'conv-1', conversation_id: 'conv-1', mode: 'plan',
     })
     expect(events.map((event) => event.event)).toEqual([
       'run.started', 'tool.started', 'tool.result', 'done',
     ])
     expect(events.at(-1)?.data).toMatchObject({
       status: 'success', result: { itinerary: { plan_version: 1 } },
+    })
+  })
+
+  it('双端规划请求发送结构化 Brief、模式及版本/界面上下文', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({ status: 'success' }),
+    )
+    const stream = [
+      'event: done',
+      'data: {"event":"done","result":{"status":"success"}}',
+      '',
+    ].join('\n')
+    fetchSpy.mockResolvedValue(new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+
+    for await (const _event of streamTravelPlan('厦门两天，顺便查高铁', 'conv-2', {
+      mode: 'plan',
+      briefInput: { destination: '厦门', days: 2, party_size: 2 },
+      basePlanVersion: 3,
+      uiContext: { selected_day: 2, selected_poi_id: 'poi-1' },
+      actionPayload: { operation: 'replace_poi' },
+    })) { /* 消费完成帧 */ }
+
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toMatchObject({
+      mode: 'plan',
+      brief_input: { destination: '厦门', days: 2, party_size: 2 },
+      base_plan_version: 3,
+      ui_context: { selected_day: 2, selected_poi_id: 'poi-1' },
+      action_payload: { operation: 'replace_poi' },
     })
   })
 

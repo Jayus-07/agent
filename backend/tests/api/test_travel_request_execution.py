@@ -1,5 +1,6 @@
 """旅游 API 异步响应与实际工作寿命分离的回归测试。"""
 import asyncio
+import importlib
 import threading
 from types import SimpleNamespace
 
@@ -30,15 +31,30 @@ def request():
 
 @pytest.mark.asyncio
 async def test_rest_does_not_block_event_loop(setup_runtime, monkeypatch):
+    setup_runtime.timeout_s = 1.0
+    # 预热 worker 内的首次导入，避免冷导入时间混入事件循环行为断言。
+    for module_name in (
+        "backend.observability.tracer",
+        "backend.orchestration.graph.travel_graph_node",
+        "backend.travel.graph_state",
+    ):
+        importlib.import_module(module_name)
     started, release = threading.Event(), threading.Event()
+
     class Graph:
         def invoke(self, *args, **kwargs):
             started.set()
             release.wait(0.3)
             return {}
     monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    # 本测试只验证同步图调用被移出事件循环；输入构造、账本和 Trace
+    # 分别由契约/集成测试覆盖，不能让冷启动与外部 I/O 混入本用例计时。
+    monkeypatch.setattr(travel, "_build_travel_graph_input", lambda *_: {})
+    monkeypatch.setattr(travel, "_seed_cross_turn_base", lambda *_: None)
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
     task = asyncio.create_task(travel.travel_plan(request()))
     try:
+        await asyncio.wait_for(asyncio.to_thread(started.wait, 0.5), 0.6)
         await asyncio.sleep(0.01)
         assert started.is_set()
         assert not task.done(), "同步 invoke 不得阻塞事件循环直到工作完成"

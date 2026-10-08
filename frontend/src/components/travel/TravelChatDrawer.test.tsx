@@ -51,6 +51,7 @@ it('默认天数经点击接受，连点只发出一次完整规划请求', asyn
   const chip = [...container.querySelectorAll('button')].find((b) => b.textContent === '按 3 天参考规划')!
   expect(chip).toBeDefined()
   expect(stream).toHaveBeenCalledTimes(1)
+  expect(stream.mock.calls[0][2]).toMatchObject({ mode: 'chat' })
   let release!: () => void
   stream.mockImplementation(async function* () {
     await new Promise<void>((resolve) => { release = resolve })

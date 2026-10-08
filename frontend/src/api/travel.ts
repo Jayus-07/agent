@@ -114,6 +114,54 @@ export interface ItineraryBrief {
   transport: string;
 }
 
+/** 表单直接传递给旅游域的事实字段，空值允许缺省而不是改写成自然语言。 */
+export interface TravelBriefInput {
+  destination?: string;
+  origin?: string;
+  start_date?: string | null;
+  days?: number | null;
+  party_size?: number;
+  budget_cny?: number | null;
+  preferences?: string[];
+  must_go?: string[];
+  avoid?: string[];
+  pace?: string;
+  diet?: string;
+  lodging?: string;
+  transport?: string;
+}
+
+export type TravelRequestMode = 'plan' | 'chat' | 'action';
+
+export interface TravelUiContext {
+  selected_day?: number;
+  selected_poi_id?: string;
+}
+
+/** 与后端 TravelPlanRequest 对齐的 JSON 请求体（snake_case wire format）。 */
+export interface TravelPlanRequestPayload {
+  message: string;
+  session_id: string;
+  conversation_id: string;
+  client_run_id?: string;
+  source?: TravelSource;
+  mode?: TravelRequestMode;
+  brief_input?: TravelBriefInput;
+  base_plan_version?: number | null;
+  ui_context?: TravelUiContext;
+  action_payload?: Record<string, unknown>;
+}
+
+export interface TravelResponseMetadata {
+  result_kind: 'answer' | 'plan' | 'draft' | 'clarification' | 'task_result';
+  conversation_id: string;
+  turn_id: string;
+  active_plan_version: number | null;
+  draft_plan_version: number | null;
+  base_plan_version: number | null;
+  task_results: Array<Record<string, unknown>>;
+}
+
 export interface ItineraryCost {
   tickets: number;
   meals: number;
@@ -225,6 +273,13 @@ export interface PlanResponse {
   intent?: string;
   plan_status?: 'waiting_confirmation' | 'confirmed' | string;
   change_record?: Record<string, unknown> | null;
+  result_kind?: TravelResponseMetadata['result_kind'];
+  conversation_id?: string;
+  turn_id?: string;
+  active_plan_version?: number | null;
+  draft_plan_version?: number | null;
+  base_plan_version?: number | null;
+  task_results?: Array<Record<string, unknown>>;
 }
 
 export interface CityGuide {
@@ -298,6 +353,37 @@ export interface Recommendation {
  */
 export const TRAVEL_PLAN_TIMEOUT_MS = 55_000;
 
+export interface TravelPlanOptions {
+  signal?: AbortSignal;
+  clientRunId?: string;
+  source?: TravelSource;
+  mode?: TravelRequestMode;
+  briefInput?: TravelBriefInput;
+  basePlanVersion?: number | null;
+  uiContext?: TravelUiContext;
+  actionPayload?: Record<string, unknown>;
+}
+
+function buildTravelPlanRequestPayload(
+  message: string,
+  conversationId: string,
+  options: TravelPlanOptions,
+): TravelPlanRequestPayload {
+  return {
+    message,
+    session_id: conversationId,
+    conversation_id: conversationId,
+    mode: options.mode ?? 'plan',
+    ...(options.clientRunId ? { client_run_id: options.clientRunId } : {}),
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.briefInput ? { brief_input: options.briefInput } : {}),
+    ...(options.basePlanVersion !== undefined
+      ? { base_plan_version: options.basePlanVersion } : {}),
+    ...(options.uiContext ? { ui_context: options.uiContext } : {}),
+    ...(options.actionPayload ? { action_payload: options.actionPayload } : {}),
+  };
+}
+
 export type TravelStreamEventName =
   | "run.started"
   | "requirement.interpreted"
@@ -326,20 +412,13 @@ export interface TravelStreamEvent {
 export function planTravel(
   message: string,
   conversationId: string,
-  options: { signal?: AbortSignal; clientRunId?: string; source?: TravelSource } = {},
+  options: TravelPlanOptions = {},
 ): Promise<PlanResponse> {
   return request<PlanResponse>("/api/travel/plan", {
     method: "POST",
     // body 直传对象：client.ts 的 JSON 层会序列化并补 Content-Type
     // （2026-09-22 复盘：直传对象出网成 "[object Object]" 的根因已在该层收口）
-    body: {
-      message,
-      session_id: conversationId,
-      conversation_id: conversationId,
-      // M4/G2-G3：可选归因字段，后端写 trace.tags（旧后端忽略未知字段）
-      ...(options.clientRunId ? { client_run_id: options.clientRunId } : {}),
-      ...(options.source ? { source: options.source } : {}),
-    },
+    body: buildTravelPlanRequestPayload(message, conversationId, options),
     timeout: TRAVEL_PLAN_TIMEOUT_MS,
     signal: options.signal,
   });
@@ -352,19 +431,12 @@ export function planTravel(
 export async function* streamTravelPlan(
   message: string,
   conversationId: string,
-  options: { signal?: AbortSignal; clientRunId?: string; source?: TravelSource } = {},
+  options: TravelPlanOptions = {},
 ): AsyncGenerator<TravelStreamEvent> {
   const response = await fetchRaw("/api/travel/plan/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message,
-      session_id: conversationId,
-      conversation_id: conversationId,
-      // M4/G2-G3：可选归因字段（向后兼容，旧后端忽略）
-      ...(options.clientRunId ? { client_run_id: options.clientRunId } : {}),
-      ...(options.source ? { source: options.source } : {}),
-    }),
+    body: JSON.stringify(buildTravelPlanRequestPayload(message, conversationId, options)),
     signal: options.signal,
   })
 

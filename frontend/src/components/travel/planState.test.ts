@@ -11,6 +11,7 @@ import {
   EMPTY_PLAN_STATE,
   adoptConversationId,
   applyPlanResponse,
+  buildTravelBriefInput,
   composePlanMessage,
   describePlanReply,
   formatDayDate,
@@ -70,6 +71,18 @@ describe('composePlanMessage — 表单转域图消息', () => {
   it('出发地存在时放在目的地后，供域图优先抽取', () => {
     expect(composePlanMessage({ ...emptyForm, destination: '厦门', origin: '福州', days: '2' }))
       .toBe('厦门，从福州出发，2天')
+  })
+
+  it('表单同时投影为结构化 Brief，不把数值字段留作自由文本', () => {
+    expect(buildTravelBriefInput({
+      destination: ' 厦门 ', origin: ' 福州 ', days: '2',
+      startDate: '2026-10-10', partySize: '2', budget: '2000',
+      pace: 'relaxed', preferences: ['美食'], extra: '顺便查高铁',
+    })).toEqual({
+      destination: '厦门', origin: '福州', days: 2,
+      start_date: '2026-10-10', party_size: 2, budget_cny: 2000,
+      pace: 'relaxed', preferences: ['美食'],
+    })
   })
 })
 
