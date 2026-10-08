@@ -242,6 +242,12 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 线上问题台账（2026-10-08 #13）：候选评测集供给侧，旁路软失败写入，
     # 管理端 data-explorer「问题收集」tab 消费（与 trace_summary 同层观测数据）。
     "080_question_ledger.sql": "memory",
+    # 客服超时回访手机号（2026-10-08）：auth.users 可选 phone 字段。
+    # 081 的文件先于登记合进了 main（登记在 `c97b02d fix: register user phone
+    # migration` 上、未随文件一起进 main），导致 main 的 init_db.py 对
+    # 「磁盘有文件但未登记」fail-fast（rc=2，RAG Smoke 的建库步骤直接红）。
+    # 此处补齐登记，属修复 main 既有断链，不是本 PR 的新面。
+    "081_auth_user_phone.sql": "memory",
     # 只读角色 ai 域授权收窄（2026-10-08 SQL Agent 收口）：004 的
     # `GRANT SELECT ON ALL TABLES IN SCHEMA ai` 让未纳管的
     # ai.tool_approval_requests 也进了 agent_readonly 可见面，
