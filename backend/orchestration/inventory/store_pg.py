@@ -213,12 +213,15 @@ class PostgresInventoryStore(InventoryStore):
 
     def upsert_case(self, case: dict) -> int:
         """insert or update case（按 product_id UNIQUE 约束）"""
+        # product_id 列是 TEXT（迁移 016），扫描侧传入的是 int——统一按
+        # 文本绑定，否则 text = integer 直接报错（2026-10-08 ECS 走查实测）
+        pid = str(case["product_id"])
         now = datetime.now().isoformat()
         with self._lock, self._conn() as conn:
             row = self._exec(
                 conn,
                 f"SELECT id FROM {_T_CASES} WHERE product_id = %s",
-                (case["product_id"],),
+                (pid,),
             ).fetchone()
 
             if row:
@@ -235,7 +238,7 @@ class PostgresInventoryStore(InventoryStore):
                         case.get("resolution_type"),
                         case.get("last_detected_at", now),
                         now,
-                        case["product_id"],
+                        pid,
                     ),
                 )
                 case_id = row["id"]
@@ -248,7 +251,7 @@ class PostgresInventoryStore(InventoryStore):
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                        RETURNING id""",
                     (
-                        case["product_id"],
+                        pid,
                         case.get("current_state"),
                         case.get("current_level"),
                         case.get("status", "open"),
@@ -263,15 +266,16 @@ class PostgresInventoryStore(InventoryStore):
             return case_id
 
     def get_cases_by_products(self, product_ids: list[str]) -> dict[str, dict]:
-        """批量查 case（一次 SQL 连接）"""
+        """批量查 case（一次 SQL 连接；product_id 列 TEXT，参数归一文本）"""
         if not product_ids:
             return {}
-        placeholders = ",".join("%s" for _ in product_ids)
+        ids = [str(p) for p in product_ids]
+        placeholders = ",".join("%s" for _ in ids)
         with self._conn() as conn:
             rows = self._exec(
                 conn,
                 f"SELECT * FROM {_T_CASES} WHERE product_id IN ({placeholders})",
-                tuple(product_ids),
+                tuple(ids),
             ).fetchall()
         return {r["product_id"]: dict(r) for r in rows}
 
