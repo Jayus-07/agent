@@ -32,6 +32,7 @@ class TestQueryTaskFacts:
     @patch("backend.customer_service.service.logistics_service.get_logistics_service")
     @patch("backend.customer_service.service.order_service.get_order_service")
     @patch("backend.customer_service.experts.query._llm_decompose_intents")
+    @patch("backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE", "sandbox")
     def test_logistics_returns_sandbox_facts_without_second_decomposition(
         self, decompose, get_orders, get_logistics, _identity,
     ):

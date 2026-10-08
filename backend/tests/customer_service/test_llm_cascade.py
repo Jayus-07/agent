@@ -77,7 +77,7 @@ class TestComplaintDetectCascade:
     def test_llm_invalid_json_returns_none(self):
         svc = ComplaintService()
         llm = _FakeLLM("这不是 JSON")
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with patch("backend.infra.llm.llm", new=llm):
             assert svc._llm_assess("随便什么") is None
         assert llm.calls == 1
 
@@ -97,7 +97,7 @@ class TestComplaintDetectCascade:
 
         svc = ComplaintService()
         with patch.object(cs_config, "CS_COMPLAINT_LLM_TIMEOUT_MS", 300), \
-             patch("backend.infra.llm.get_llm", return_value=_HangingLLM()):
+             patch("backend.infra.llm.llm", new=_HangingLLM()):
             t0 = time.monotonic()
             assert svc._llm_assess("委婉表达的不满") is None
             elapsed = time.monotonic() - t0
@@ -121,24 +121,24 @@ class TestCompoundSuspected:
 class TestLLMDecompose:
     def test_valid_multi_intent(self):
         llm = _FakeLLM('["t_order_status", "t_logistics"]')
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with patch("backend.infra.llm.llm", new=llm):
             intents = _llm_decompose_intents("查订单和物流")
         assert intents == ["t_order_status", "t_logistics"]
 
     def test_invalid_intent_filtered(self):
         llm = _FakeLLM('["t_order_status", "fake_intent"]')
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with patch("backend.infra.llm.llm", new=llm):
             intents = _llm_decompose_intents("查订单")
         assert intents == ["t_order_status"]
 
     def test_llm_failure_returns_none(self):
         llm = _FakeLLM(exc=RuntimeError("LLM 不可用"))
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with patch("backend.infra.llm.llm", new=llm):
             assert _llm_decompose_intents("查订单和物流") is None
 
     def test_non_array_returns_none(self):
         llm = _FakeLLM('{"intent": "t_order_status"}')
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with patch("backend.infra.llm.llm", new=llm):
             assert _llm_decompose_intents("查订单和物流") is None
 
 

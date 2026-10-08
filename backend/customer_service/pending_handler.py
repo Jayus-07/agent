@@ -149,7 +149,11 @@ def _classify_pending_turn(state: dict[str, Any]) -> PendingTurnDecision:
     if intent == ConfirmationIntent.CANCEL:
         return PendingTurnDecision.CANCEL
 
-    route_path = str((state.get("cs_route") or {}).get("route_path", ""))
+    from backend.customer_service.graph_state import route_path_value
+
+    route_path = route_path_value(
+        (state.get("cs_route") or {}).get("route_path")
+    )
     if route_path in {"knowledge_query", "business_query"}:
         return PendingTurnDecision.READ_ONLY_QUERY
 

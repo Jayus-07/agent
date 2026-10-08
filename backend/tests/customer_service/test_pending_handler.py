@@ -312,6 +312,27 @@ class TestNeedInfoHandoffEscape:
 
 
 class TestPendingTurnClassification:
+    def test_need_info_faq_accepts_enum_route_path_from_router_model_dump(self):
+        """生产路由的 model_dump 保留 StrEnum，PendingHandler 仍须识别只读问句。"""
+        from backend.customer_service.router.types import CSRoutePath
+
+        pending = _need_info_pending()
+        cmd = cs_pending_handler_node(_state(
+            user_message="退款一般多久到账？",
+            cs_route={
+                "domain": "KNOWLEDGE",
+                "route_path": CSRoutePath.KNOWLEDGE_QUERY,
+                "intent": "k_faq",
+                "confidence": 0.9,
+            },
+            pending_action=pending,
+            confirmation_state="pending",
+        ))
+
+        assert cmd.goto == "cs_supervisor"
+        assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
+        assert cmd.update["pending_action"] == pending
+
     def test_readonly_question_keeps_proposal_and_routes_supervisor(self):
         """Pending proposal 期间的常见问题允许单轮只读分流，proposal 不变。"""
         pending = _pending_action(

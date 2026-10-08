@@ -127,7 +127,10 @@ class TestGoldenIntegrity:
     def test_manifest_sha256_matches_files(self):
         manifest = json.loads((_GATE_DIR / "manifest.json").read_text(encoding="utf-8"))
         for name, expected in manifest["sha256"].items():
-            actual = hashlib.sha256((_GATE_DIR / name).read_bytes()).hexdigest()
+            # Git autocrlf and Windows text writes may change only line endings.
+            # Hash canonical LF bytes so the manifest is platform-independent.
+            content = (_GATE_DIR / name).read_bytes().replace(b"\r\n", b"\n")
+            actual = hashlib.sha256(content).hexdigest()
             assert actual == expected, f"{name} 被手改未重新生成（跑 generate_golden.py）"
 
     def test_manifest_counts_match_files(self):

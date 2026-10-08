@@ -487,6 +487,9 @@ class ConfirmationStore:
                 "[BusinessGuard] 身份缺失（非严格模式放行占位行）: %s",
                 pending_action.get("action_type", ""),
             )
+        trusted_tenant_id = (
+            identity.tenant_id if identity is not None else (tenant_id or "")
+        )
 
         async with AsyncSessionLocal() as db:
             # FK 生命周期（缺陷6.5，2026-09-23）：confirmations.conversation_id
@@ -503,9 +506,16 @@ class ConfirmationStore:
             try:
                 async with db.begin_nested():
                     # STOP CS-A P0-2：会话行 tenant 与确认链路同源显式传递
-                    await conv_mgr.get_or_create(
+                    conversation, _created = await conv_mgr.get_or_create(
                         session_id, user_id, tenant_id=tenant_id,
                     )
+                    if (
+                        conversation.user_id != user_id
+                        or (tenant_id and conversation.tenant_id != tenant_id)
+                    ):
+                        raise StoreWriteError(
+                            "ConfirmationStore", "conversation_identity_mismatch",
+                        )
                     await db.flush()
             except IntegrityError:
                 logger.info(
@@ -544,7 +554,7 @@ class ConfirmationStore:
                 pending_action["version"] = proposal_version
                 await _update_with_guard(
                     db, repo, existing.confirmation_id, pending_action,
-                    tenant_id=identity.tenant_id if identity else "",
+                    tenant_id=trusted_tenant_id,
                     fingerprint=identity.semantic_fingerprint if identity else None,
                     proposal_version=proposal_version,
                 )
@@ -565,7 +575,7 @@ class ConfirmationStore:
                     pending_action.setdefault("version", 1)
                     await repo.save(
                         user_id, session_id, pending_action,
-                        tenant_id=identity.tenant_id if identity else "",
+                        tenant_id=trusted_tenant_id,
                         semantic_fingerprint=(
                             identity.semantic_fingerprint if identity else None),
                     )

@@ -35,6 +35,13 @@ class PendingTurnDecision(str, Enum):
     HANDOFF = "HANDOFF"
     AMBIGUOUS = "AMBIGUOUS"
 
+
+def route_path_value(value: Any) -> str:
+    """归一 Router 的 route_path 字符串或 Enum 值。"""
+    if value is None:
+        return ""
+    return str(getattr(value, "value", value) or "")
+
 # ============================================================
 # 路由映射 — 单一事实源（P2.2 映射统一，此前 4 处独立硬编码存在漂移风险）
 # ============================================================

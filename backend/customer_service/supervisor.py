@@ -65,6 +65,7 @@ from backend.customer_service.graph_state import (
     DOMAIN_TO_EXPERT_NAME as _DOMAIN_TO_EXPERT,
     EXPERT_NAME_TO_NODE as _EXPERT_NAME_TO_NODE,
     ROUTE_PATH_TO_EXPERT_NAME as _ROUTE_PATH_TO_EXPERT,
+    route_path_value,
 )
 
 
@@ -92,7 +93,7 @@ def _make_decision(
 
 def _resolve_expert(cs_route: dict) -> str:
     """从 cs_route 解析目标 expert — route_path 优先，domain 兜底。"""
-    route_path = cs_route.get("route_path", "")
+    route_path = route_path_value(cs_route.get("route_path"))
     if route_path and route_path in _ROUTE_PATH_TO_EXPERT:
         return _ROUTE_PATH_TO_EXPERT[route_path]
 
@@ -171,7 +172,9 @@ def _pending_turn_decision(
         )
 
     if turn == PendingTurnDecision.READ_ONLY_QUERY:
-        route_path = str((state.get("cs_route") or {}).get("route_path", ""))
+        route_path = route_path_value(
+            (state.get("cs_route") or {}).get("route_path")
+        )
         expert_name = ROUTE_PATH_TO_EXPERT_NAME.get(route_path)
         if expert_name in {ExpertType.KNOWLEDGE.value, ExpertType.QUERY.value}:
             decision = _make_decision(

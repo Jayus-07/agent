@@ -196,6 +196,24 @@ class TestLayer2StateCombinations:
 
 
 class TestPendingTurnSupervisor:
+    def test_pending_readonly_normalizes_enum_route_path_from_router_model_dump(self):
+        from backend.customer_service.router.types import CSRoutePath
+
+        state = _state(
+            cs_route={
+                "domain": "KNOWLEDGE",
+                "route_path": CSRoutePath.KNOWLEDGE_QUERY,
+                "confidence": 0.9,
+            },
+            confirmation_state="pending",
+            pending_turn_decision="READ_ONLY_QUERY",
+            pending_turn_expert_consumed=False,
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_KNOWLEDGE_EXPERT
+        assert cmd.update["pending_turn_expert_consumed"] is True
+
     def test_pending_readonly_routes_only_to_allowed_knowledge_expert_once(self):
         state = _state(
             confirmation_state="pending",

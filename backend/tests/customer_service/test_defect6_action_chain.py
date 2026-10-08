@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -391,7 +392,9 @@ def _patch_db_layer(monkeypatch, existing=None):
         async def get_or_create(self, conversation_id, user_id, **kw):
             # STOP CS-A P0-2：save 链路现显式传 tenant_id
             log.append(("ensure", conversation_id, user_id, kw.get("tenant_id", "")))
-            return object(), True
+            return SimpleNamespace(
+                user_id=user_id, tenant_id=kw.get("tenant_id", ""),
+            ), True
 
     monkeypatch.setattr(
         "backend.memory.database.AsyncSessionLocal", _Factory()

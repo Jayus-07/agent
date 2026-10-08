@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.customer_service.models.confirmation import CSConfirmation
@@ -32,11 +32,24 @@ class ConfirmationRepository:
             CSConfirmation.conversation_id == conversation_id,
             CSConfirmation.state == "pending",
         ]
+        query = select(CSConfirmation)
         if tenant_id is not None:
-            filters.append(CSConfirmation.tenant_id == tenant_id)
-        result = await self._s.execute(
-            select(CSConfirmation).where(*filters)
-        )
+            # 兼容早期 need_info 占位记录：它们没有业务 target，旧写路径
+            # 因而可能 tenant_id=NULL。只在父会话已绑定本用户/租户时读回，
+            # 后续 proposal 升级会在同一事务内补齐确认行的 tenant_id。
+            query = query.join(
+                CSConversation,
+                CSConversation.conversation_id == CSConfirmation.conversation_id,
+            )
+            filters.extend((
+                or_(
+                    CSConfirmation.tenant_id == tenant_id,
+                    CSConfirmation.tenant_id.is_(None),
+                ),
+                CSConversation.user_id == user_id,
+                CSConversation.tenant_id == tenant_id,
+            ))
+        result = await self._s.execute(query.where(*filters))
         return result.scalar_one_or_none()
 
     async def save(

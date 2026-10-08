@@ -14,9 +14,9 @@
   "confirm_cancel_accuracy_min": 0.95
  },
  "sha256": {
-  "intent_triage_golden.json": "f7307d0b91dff5c77a4bebb6c6d3e98b0c93fd8008cf7635b0b1476dc0308a40",
-  "handoff_timing_golden.json": "0f46173fb1d2d0a221207be977c8dc71fa596fbc86b07718783363ac3166dd40",
-  "confirm_cancel_golden.json": "698962aae122059364e347c9e090e8d28ce0719bc6c381a7937bfa21963ac911"
+  "intent_triage_golden.json": "8377cf8816d6c2cbf4eaf2d276062d75246146b0107f3dfd1f40bba2c7a45148",
+  "handoff_timing_golden.json": "e9a047340823c629e90344195c61df178893dda05850901f776b530468a34cf5",
+  "confirm_cancel_golden.json": "bb63381fae651f7fc71faa0311d62f60157114deede20500f981ad36d12aef6f"
  },
  "notes": "口径见 generate_golden.py 模块注释；改任何 case 必须重跑门禁测试与阈值对照。"
 }
