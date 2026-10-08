@@ -195,6 +195,90 @@ class TestLayer2StateCombinations:
         assert d["decision_layer"] == 2
 
 
+class TestPendingTurnSupervisor:
+    def test_pending_readonly_routes_only_to_allowed_knowledge_expert_once(self):
+        state = _state(
+            confirmation_state="pending",
+            pending_turn_decision="READ_ONLY_QUERY",
+            pending_turn_expert_consumed=False,
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_KNOWLEDGE_EXPERT
+        assert cmd.update["pending_turn_expert_consumed"] is True
+
+    def test_pending_readonly_query_route_is_allowed_once(self):
+        state = _state(
+            cs_route={"domain": "TRANSACTION", "route_path": "business_query", "confidence": 0.9},
+            confirmation_state="pending",
+            pending_turn_decision="READ_ONLY_QUERY",
+            pending_turn_expert_consumed=False,
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_QUERY_EXPERT
+        assert cmd.update["pending_turn_expert_consumed"] is True
+
+    def test_pending_readonly_followup_finishes_without_second_expert(self):
+        state = _state(
+            confirmation_state="pending",
+            pending_turn_decision="READ_ONLY_QUERY",
+            pending_turn_expert_consumed=True,
+            last_expert_result={"response_draft": "退款通常会在 3-5 个工作日到账。"},
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_REPORTER
+        assert cmd.update["supervisor_decision"]["next_action"] == "finish"
+
+    def test_pending_turn_never_routes_to_action_expert(self):
+        state = _state(
+            cs_route={"domain": "AFTER_SALES", "route_path": "business_action", "confidence": 0.99},
+            confirmation_state="pending",
+            pending_turn_decision="READ_ONLY_QUERY",
+            pending_turn_expert_consumed=False,
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_REPORTER
+        assert cmd.goto != CS_ACTION_EXPERT
+
+    def test_pending_handoff_request_routes_to_handoff_expert_once(self):
+        state = _state(
+            confirmation_state="pending",
+            pending_turn_decision="HANDOFF",
+            pending_turn_expert_consumed=False,
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_HANDOFF_EXPERT
+        assert cmd.update["pending_turn_expert_consumed"] is True
+
+    def test_active_handoff_overrides_pending_readonly_flag(self):
+        state = _state(
+            handoff_state="waiting_human",
+            confirmation_state="pending",
+            pending_turn_decision="READ_ONLY_QUERY",
+            pending_turn_expert_consumed=True,
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_REPORTER
+        assert cmd.update["supervisor_decision"]["next_action"] == "handoff"
+
+    def test_pending_need_info_slot_fill_is_allowed_only_for_existing_action(self):
+        state = _state(
+            confirmation_state="pending_confirmation",
+            pending_turn_decision="AMBIGUOUS",
+            pending_turn_slot_fill=True,
+            cs_route={"domain": "AFTER_SALES", "route_path": "business_action", "confidence": 0.99},
+        )
+        cmd = cs_supervisor_node(state)
+
+        assert cmd.goto == CS_REPORTER
+        assert cmd.update["supervisor_decision"]["next_action"] in {"pending", "finish"}
+
+
 class TestDefaultRouting:
     @patch("backend.config.customer_service.CS_CONFIDENCE_CAUTIOUS", 0.60)
     def test_high_confidence_routes_to_expert(self):

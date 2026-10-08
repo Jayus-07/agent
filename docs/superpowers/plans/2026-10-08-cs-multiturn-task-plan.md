@@ -112,7 +112,7 @@ def test_confirm_rejects_stale_proposal_without_executing(client, fake_identity,
 
 记录：Phase 1 目标测试 `222 passed`、词表门禁全过、Layer1 黄金回放 `230/230`；迁移仓库层 `86/86` 已登记。权威 PostgreSQL 只读 preflight 报告基线迁移 `078/080/081` 未应用，且新迁移 `082` 待应用；本阶段不提前改动数据库，留在 P0 本机环境切换前处理。
 
-- [ ] **Step 4: Commit Phase 1**
+- [x] **Step 4: Commit Phase 1**
 
 阶段提交：先 `git status --short` 并只暂存本任务 Files 列表中的路径，再检查 `git diff --cached --stat` 和 `git diff --cached --check`，最后运行 `git commit -m "fix(cs): require durable versioned confirmation"`。
 
@@ -122,6 +122,7 @@ def test_confirm_rejects_stale_proposal_without_executing(client, fake_identity,
 
 **Files:**
 - Modify: `backend/customer_service/graph_state.py`
+- Modify: `backend/customer_service/graph_builder.py`（StateLoader 每轮重置 turn state）
 - Modify: `backend/customer_service/pending_handler.py`
 - Modify: `backend/customer_service/supervisor.py`
 - Modify: `backend/customer_service/handoff/lifecycle.py`
@@ -129,10 +130,11 @@ def test_confirm_rejects_stale_proposal_without_executing(client, fake_identity,
 - Test: `backend/tests/customer_service/test_pending_handler.py`
 - Test: `backend/tests/customer_service/test_cs_supervisor.py`
 - Test: `backend/tests/customer_service/test_handoff_lifecycle.py`
+- Test: `backend/tests/customer_service/test_cs_graph.py`（StateLoader turn reset 与 Reporter 跳过 Composer）
 
 **Interfaces:** `PendingTurnDecision ∈ {CONFIRM,CANCEL,READ_ONLY_QUERY,NEW_WRITE_CONFLICT,HANDOFF,AMBIGUOUS}`；一次只读标记仅在当前 turn state 有效。Handoff authoritative read 返回明确 lifecycle state；读取失败不是 `None/未排队`，而是 fail-closed。只读白名单仅 `KnowledgeExpert` 与 `QueryExpert`；Action 永远不在集合中。
 
-- [ ] **Step 1: 写 Pending 转移矩阵测试并观察 RED**
+- [x] **Step 1: 写 Pending 转移矩阵测试并观察 RED**
 
 覆盖 active Pending 下普通 FAQ/物流查询保留原 Proposal，疑问式“可以退吗”不得确认，新写操作冲突，模糊语句追问；need_info 下“退款一般多久到账？”走知识、“第二个订单”补槽、“算了”取消。测试 waiting_human/human_active 与 handoff 状态读取异常均不进入 AI 查询、Action 或 AI confirm。
 
@@ -148,13 +150,15 @@ def test_readonly_question_keeps_pending_and_routes_to_supervisor():
     assert cmd.update["pending_action"]["proposal_text"] == _pending_action()["proposal_text"]
 ```
 
-- [ ] **Step 2: 实现 Handoff 优先和当前轮决策**
+- [x] **Step 2: 实现 Handoff 优先和当前轮决策**
 
 入口先读 Handoff 权威状态，再分类 Pending 消息；只读/确认/取消使用既有专家和 ConfirmationFlow，不创建第二张图。StateLoader 每轮初始化 turn decision，Supervisor 只对当前 turn 允许一次 Knowledge/Query，回环时直接 Reporter，不二次触发 pending 追问。
 
-- [ ] **Step 3: 针对执行链和迁移恢复跑测试**
+- [x] **Step 3: 针对执行链和迁移恢复跑测试**
 
 运行 `D:/Python/python.exe -m pytest backend/tests/customer_service/test_pending_handler.py backend/tests/customer_service/test_cs_supervisor.py backend/tests/customer_service/test_handoff_lifecycle.py -q --no-cov`；对照 Pending 对象指纹、expiry、proposal/version 执行前后不变。
+
+记录：先运行新测试观察到 12 项 RED（Pending 分类、Handoff 优先、Supervisor 白名单与 StateLoader 重置均缺失），实现后覆盖 Phase 2 四个主测试文件与确认/API/状态迁移/权限执行链，共 `274 passed`。PostgreSQL Handoff 读取以 tenant+conversation 限定并启用 `raise_on_error=True`；等待人工与读取失败均直接 Reporter，读取失败不调 ConfirmationFlow；Pending FAQ/物流分别只派 Knowledge/Query 一次，need_info 只接受明确订单选择/编号继续 ActionExpert。
 
 - [ ] **Step 4: Commit Phase 2**
 

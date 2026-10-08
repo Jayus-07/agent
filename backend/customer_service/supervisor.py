@@ -56,6 +56,7 @@ class CSSupervisorDecision(TypedDict, total=False):
     # 回复。仅 FINISH 终态决策携带，cs_reporter._assemble_answer 直出，
     # 不进任何 expert（reporter 消费后即弃，不落 expert_history）。
     direct_reply: str
+    consume_pending_turn: bool
 
 
 # P2.2：route_path / domain → expert 映射统一到 graph_state 单一事实源
@@ -105,11 +106,106 @@ def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
     v2（默认）：七层固定优先级（设计方案 §4.2，见 _decision_v2）；
     v1（CS_DECISION_V2=false 本机回退）：存量三层顺序，语义保留不动。
     """
+    # Pending turn 的有限 override 只在确认没有活跃人工工单时运行；
+    # 人工优先级仍由 v1/v2 的首层状态机兜底。
+    if not _has_active_handoff_state(state.get("handoff_state", "ai_active")):
+        pending_turn_decision = _pending_turn_decision(state)
+        if pending_turn_decision is not None:
+            _record_decision(pending_turn_decision)
+            return pending_turn_decision
+
     from backend.config.customer_service import CS_DECISION_V2
 
     if CS_DECISION_V2:
         return _decision_v2(state)
     return _decision_v1(state)
+
+
+def _has_active_handoff_state(value: Any) -> bool:
+    """状态快照表示人工接管时，不允许 Pending override 抢在其前面。"""
+    from backend.customer_service.handoff import HandoffState, should_intercept
+
+    try:
+        return should_intercept(HandoffState(value)) if value else False
+    except ValueError:
+        # 未知状态交给原 v1/v2 决策链 fail loud。
+        return True
+
+
+def _pending_turn_decision(
+    state: dict[str, Any],
+) -> CSSupervisorDecision | None:
+    """对 Pending 当前轮执行有限分流：只读一次、动作/歧义直接收尾。"""
+    from backend.customer_service.graph_state import (
+        PendingTurnDecision,
+        ROUTE_PATH_TO_EXPERT_NAME,
+    )
+
+    raw = state.get("pending_turn_decision")
+    if not raw:
+        return None
+    try:
+        turn = PendingTurnDecision(str(raw))
+    except ValueError:
+        logger.error("[CS Supervisor] unknown pending_turn_decision=%r", raw)
+        return _make_decision(
+            ExpertAction.FINISH, None, layer=1,
+            reason="Pending turn 分类未知，fail closed",
+            is_finished=True,
+        )
+
+    if state.get("pending_turn_expert_consumed"):
+        return _make_decision(
+            ExpertAction.FINISH, None, layer=2,
+            reason="Pending turn 已执行一次只读/转人工 Expert，直接收尾",
+            is_finished=True,
+        )
+
+    if state.get("pending_turn_slot_fill"):
+        # PendingHandler 已明确把本轮识别为既有 need_info 槽位答案，
+        # ActionExpert 完成本次补槽后回 Reporter，不再进入第二个 Expert。
+        return _make_decision(
+            ExpertAction.FINISH, None, layer=2,
+            reason="need_info 槽位补充已处理，直接收尾",
+            is_finished=True,
+        )
+
+    if turn == PendingTurnDecision.READ_ONLY_QUERY:
+        route_path = str((state.get("cs_route") or {}).get("route_path", ""))
+        expert_name = ROUTE_PATH_TO_EXPERT_NAME.get(route_path)
+        if expert_name in {ExpertType.KNOWLEDGE.value, ExpertType.QUERY.value}:
+            decision = _make_decision(
+                ExpertAction.RUN_EXPERT, ExpertType(expert_name), layer=1,
+                reason="Pending 期间一次只读查询（Knowledge/Query 白名单）",
+            )
+            decision["consume_pending_turn"] = True
+            return decision
+        return _make_decision(
+            ExpertAction.FINISH, None, layer=1,
+            reason="Pending 只读请求不在 Knowledge/Query 白名单，fail closed",
+            is_finished=True,
+        )
+
+    if turn == PendingTurnDecision.HANDOFF:
+        decision = _make_decision(
+            ExpertAction.RUN_EXPERT, ExpertType.HANDOFF, layer=1,
+            reason="Pending 期间用户请求转人工，人工分流优先",
+        )
+        decision["consume_pending_turn"] = True
+        return decision
+
+    if turn in {
+        PendingTurnDecision.AMBIGUOUS,
+        PendingTurnDecision.NEW_WRITE_CONFLICT,
+        PendingTurnDecision.CONFIRM,
+        PendingTurnDecision.CANCEL,
+    }:
+        return _make_decision(
+            ExpertAction.FINISH, None, layer=2,
+            reason=f"Pending turn={turn.value} 已由 PendingHandler 消费，不再派发 Expert",
+            is_finished=True,
+        )
+    return None
 
 
 def _decision_v1(state: dict[str, Any]) -> CSSupervisorDecision:
@@ -953,6 +1049,8 @@ def cs_supervisor_node(state: dict[str, Any]) -> Command:
             "supervisor_decision": dict(decision),
             "current_expert": expert or "",
             "expert_loop_count": state.get("expert_loop_count", 0) + 1,
+            **({"pending_turn_expert_consumed": True}
+               if decision.get("consume_pending_turn") else {}),
             **(timeout_update or {}),
         },
     )

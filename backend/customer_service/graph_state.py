@@ -8,6 +8,7 @@ customer_service/graph_state.py — CS Graph 独立状态定义
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, TypedDict
 
 # ============================================================
@@ -22,6 +23,17 @@ CS_QUERY_EXPERT = "cs_query_expert"
 CS_ACTION_EXPERT = "cs_action_expert"
 CS_COMPLAINT_EXPERT = "cs_complaint_expert"
 CS_HANDOFF_EXPERT = "cs_handoff_expert"
+
+
+class PendingTurnDecision(str, Enum):
+    """Pending 期间仅对当前用户轮次有效的分流决策。"""
+
+    CONFIRM = "CONFIRM"
+    CANCEL = "CANCEL"
+    READ_ONLY_QUERY = "READ_ONLY_QUERY"
+    NEW_WRITE_CONFLICT = "NEW_WRITE_CONFLICT"
+    HANDOFF = "HANDOFF"
+    AMBIGUOUS = "AMBIGUOUS"
 
 # ============================================================
 # 路由映射 — 单一事实源（P2.2 映射统一，此前 4 处独立硬编码存在漂移风险）
@@ -104,6 +116,9 @@ class CSGraphState(TypedDict, total=False):
     handoff_state: str
     confirmation_state: str
     pending_action: dict | None
+    pending_turn_decision: str | None
+    pending_turn_expert_consumed: bool
+    pending_turn_slot_fill: bool
 
     # === 输出 (CS Reporter 生成) ===
     final_answer: str
@@ -141,6 +156,9 @@ def new_cs_graph_input(
         "handoff_state": "",
         "confirmation_state": "",
         "pending_action": None,
+        "pending_turn_decision": None,
+        "pending_turn_expert_consumed": False,
+        "pending_turn_slot_fill": False,
         "final_answer": "",
         "cs_context": {},
         "cs_audit_entries": [],
