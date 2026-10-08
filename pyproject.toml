@@ -124,6 +124,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
+    "pytest-xdist>=3.0",  # pytest.ini 推荐的 -n 4 并发全量跑依赖此插件（2026-10-08 补声明，此前从未声明过）
     "reportlab>=4.0",  # backend/scripts/generate_test_docs.py 生成测试 PDF
 ]
 
