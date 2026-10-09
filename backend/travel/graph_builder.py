@@ -2,6 +2,7 @@
 
 拓扑（与 CS Graph 同样是独立子图 + 自带 reporter）：
   START → travel_slot_filler → travel_supervisor
+            ├─ travel_auxiliary_tasks ─┘（本轮附加查询，失败独立降级）
             ├─ travel_poi_expert      ─┐
             ├─ travel_transit_expert   │
             ├─ travel_weather_expert   ├→ travel_supervisor（循环）
@@ -30,15 +31,18 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+from backend.shared.logger import logger
+from backend.travel.auxiliary_tasks import auxiliary_tasks_node
 from backend.travel.experts.budget import budget_expert_node
 from backend.travel.experts.poi import poi_expert_node
 from backend.travel.experts.risk import risk_expert_node
 from backend.travel.experts.transit import transit_expert_node
 from backend.travel.experts.weather import weather_expert_node
 from backend.travel.graph_state import (
+    TRAVEL_AUXILIARY_TASKS,
     TRAVEL_BUDGET_EXPERT,
-    TRAVEL_POI_EXPERT,
     TRAVEL_PARTIAL_REPLAN,
+    TRAVEL_POI_EXPERT,
     TRAVEL_REPAIR,
     TRAVEL_REPORTER,
     TRAVEL_RISK_EXPERT,
@@ -49,13 +53,12 @@ from backend.travel.graph_state import (
     TRAVEL_WEATHER_EXPERT,
     TravelGraphState,
 )
-from backend.travel.repair import repair_node
 from backend.travel.partial_replan_node import partial_replan_node
+from backend.travel.repair import repair_node
 from backend.travel.reporter import travel_reporter_node
 from backend.travel.slot_filler import slot_filler_node
 from backend.travel.supervisor import travel_supervisor_node
 from backend.travel.validator import travel_validator_node
-from backend.shared.logger import logger
 
 
 def _evented_node(node_name: str, node_fn):
@@ -120,6 +123,7 @@ _BACK_TO_SUPERVISOR = (
     TRAVEL_POI_EXPERT, TRAVEL_TRANSIT_EXPERT, TRAVEL_WEATHER_EXPERT,
     TRAVEL_BUDGET_EXPERT, TRAVEL_RISK_EXPERT, TRAVEL_VALIDATOR, TRAVEL_REPAIR,
     TRAVEL_PARTIAL_REPLAN,
+    TRAVEL_AUXILIARY_TASKS,
 )
 
 
@@ -147,6 +151,8 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         TRAVEL_REPAIR, repair_node))
     wf.add_node(TRAVEL_PARTIAL_REPLAN, _evented_node(
         TRAVEL_PARTIAL_REPLAN, partial_replan_node))
+    wf.add_node(TRAVEL_AUXILIARY_TASKS, _evented_node(
+        TRAVEL_AUXILIARY_TASKS, auxiliary_tasks_node))
     wf.add_node(TRAVEL_REPORTER, _evented_node(
         TRAVEL_REPORTER, travel_reporter_node))
 
@@ -163,12 +169,13 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         compile_kwargs["checkpointer"] = checkpointer
 
     graph = wf.compile(**compile_kwargs)
-    logger.info("[TravelGraph] 编译完成（11 节点，checkpointer=%s）",
+    logger.info("[TravelGraph] 编译完成（12 节点，checkpointer=%s）",
                 "on" if checkpointer else "off")
     return graph
 
 
 _travel_graph: Any = None
+_travel_read_only_graph: Any = None
 _travel_graph_lock = threading.Lock()
 
 # ============================================================
@@ -205,6 +212,16 @@ def get_travel_graph() -> Any:
                 _persistence_status = status
                 _travel_graph = build_travel_graph(checkpointer=checkpointer)
     return _travel_graph
+
+
+def get_travel_read_only_graph() -> Any:
+    """获取不挂 checkpointer 的问答图，避免问答覆盖行程执行态。"""
+    global _travel_read_only_graph
+    if _travel_read_only_graph is None:
+        with _travel_graph_lock:
+            if _travel_read_only_graph is None:
+                _travel_read_only_graph = build_travel_graph(checkpointer=None)
+    return _travel_read_only_graph
 
 
 def _build_checkpointer() -> tuple[Any, str]:

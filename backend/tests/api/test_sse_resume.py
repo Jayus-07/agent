@@ -24,8 +24,10 @@ class _SlowFakeAgent:
     def __init__(self, n: int = 6, interval: float = 0.2):
         self.n = n
         self.interval = interval
+        self.stream_calls = 0
 
     def stream_events(self, question, session_id, **kwargs):
+        self.stream_calls += 1
         for i in range(self.n):
             time.sleep(self.interval)
             yield {"event": "delta", "data": {"content": f"c{i}"}}
@@ -39,11 +41,12 @@ def client(monkeypatch):
     from backend.app.api import stream_resume as sr_mod
 
     sr_mod.reset_stream_registry()
-    monkeypatch.setattr(chat_mod, "get_multi_agent",
-                        lambda: _SlowFakeAgent())
+    agent = _SlowFakeAgent()
+    monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
     monkeypatch.setattr(auth_mw, "API_KEY", "test")
     from backend.app.server import app
     with TestClient(app) as c:
+        c.fake_agent = agent
         yield c
     sr_mod.reset_stream_registry()
 
@@ -88,6 +91,7 @@ def test_stream_frames_carry_seq_and_resume_capability(client):
 def test_resume_finished_stream_replays_tail_with_terminal(client):
     with client.stream("POST", "/chat/stream", json=REQ, headers=HDR) as resp:
         b"".join(resp.iter_bytes())
+    assert client.fake_agent.stream_calls == 1
 
     with client.stream("POST", "/chat/stream/resume",
                        json={"request_id": "sr-1", "after_seq": 2},
@@ -98,6 +102,7 @@ def test_resume_finished_stream_replays_tail_with_terminal(client):
     seqs = [f["data"]["seq"] for f in frames]
     assert all(s > 2 for s in seqs), "只重放 after_seq 之后的事件"
     assert frames[-1]["event"] == "done", "重放尾必须含终端帧（不挂 live，立即返回）"
+    assert client.fake_agent.stream_calls == 1, "resume 只能重放原流，不得重跑 Runner"
 
 
 def test_resume_unknown_stream_404(client):

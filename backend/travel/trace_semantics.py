@@ -6,11 +6,11 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from backend.travel.graph_state import brief_fingerprint
 from backend.travel.models.brief import TravelBrief
-
 
 _NON_PLANNING_INTENTS = {
     "social",
@@ -157,7 +157,40 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
     # LLM 理解层观测（2026-10-08 STOP 1/4）：槽位解析来源与两次 LLM 调用
     # 的结局投影。全部标量、无敏感原文（用户消息不进 tags）。
     slot_llm = _as_dict(state.get("slot_llm_meta"))
+    turn_decision = _as_dict(state.get("turn_decision"))
+    turn_meta = _as_dict(state.get("turn_decision_meta"))
+    decision_changes = [
+        item for item in (turn_decision.get("changes") or [])
+        if isinstance(item, dict)
+    ]
+    decision_tasks = [
+        item for item in (turn_decision.get("additional_tasks") or [])
+        if isinstance(item, dict)
+    ]
     clarify_meta = _as_dict(state.get("clarification_meta"))
+    task_results = [
+        item for item in (state.get("task_results") or [])
+        if isinstance(item, dict)
+    ]
+    reporter_meta = _as_dict(state.get("reporter_meta"))
+    task_plan_summary = [
+        {
+            "task_id": str(item.get("task_id") or ""),
+            "type": str(item.get("type") or ""),
+        }
+        for item in decision_tasks[:8]
+    ]
+    task_result_summary = [
+        {
+            "task_id": str(item.get("task_id") or ""),
+            "type": str(item.get("type") or ""),
+            "status": str(item.get("status") or ""),
+            "data_status": str(item.get("data_status") or ""),
+            "result_count": item.get("result_count") or 0,
+            "duration_ms": item.get("duration_ms") or 0,
+        }
+        for item in task_results[:12]
+    ]
 
     return {
         "conversation_id": str(state.get("conversation_id") or ""),
@@ -171,6 +204,8 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
         "semantic_change": semantic_change,
         "modification_operation": operation,
         "modified_days": modified_days,
+        "scope_expansion_reason": str(
+            state.get("scope_expansion_reason") or ""),
         "planning_mode": mode,
         "full_replan": mode == "plan" and bool(itinerary),
         "partial_replan": partial,
@@ -187,6 +222,33 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
         "slot_llm_accepted_count": slot_llm.get("accepted_count") or 0,
         "slot_llm_rejected_count": slot_llm.get("rejected_count") or 0,
         "slot_llm_fallback_reason": str(slot_llm.get("fallback_reason") or ""),
+        "primary_action": str(turn_decision.get("primary_action") or ""),
+        "additional_task_types": [
+            str(item.get("type") or "") for item in decision_tasks
+            if item.get("type")
+        ],
+        "task_plan_summary": json.dumps(
+            task_plan_summary, ensure_ascii=False, separators=(",", ":")),
+        "task_result_summary": json.dumps(
+            task_result_summary, ensure_ascii=False, separators=(",", ":")),
+        "modification_operations": [
+            str(item.get("op") or "") for item in decision_changes
+            if item.get("op")
+        ],
+        "turn_decision_confidence": turn_decision.get("confidence") or 0,
+        "turn_decision_parse_source": str(
+            turn_decision.get("parse_source") or ""),
+        "turn_decision_needs_clarification": str(
+            bool(turn_decision.get("needs_clarification"))).lower(),
+        "turn_decision_llm_status": str(turn_meta.get("status") or ""),
+        "turn_decision_model": str(turn_meta.get("model") or ""),
+        "turn_decision_prompt_version": str(
+            turn_meta.get("prompt_version") or ""),
+        "turn_decision_latency_ms": turn_meta.get("latency_ms") or 0,
+        "turn_decision_input_tokens": turn_meta.get("input_tokens") or 0,
+        "turn_decision_output_tokens": turn_meta.get("output_tokens") or 0,
+        "turn_decision_fallback_reason": str(
+            turn_meta.get("fallback_reason") or ""),
         "clarification_source": str(state.get("clarification_source") or ""),
         "clarification_slot": str(clarify_meta.get("slot") or ""),
         "clarification_prompt_version": str(
@@ -194,6 +256,17 @@ def build_trace_semantics(state: dict | None, result: dict | None = None) -> dic
         "clarification_latency_ms": clarify_meta.get("latency_ms") or 0,
         "clarification_fallback_reason": str(
             clarify_meta.get("fallback_reason") or ""),
+        "reporter_source": str(reporter_meta.get("source") or ""),
+        "reporter_model": str(reporter_meta.get("model") or ""),
+        "reporter_prompt_version": str(
+            reporter_meta.get("prompt_version") or ""),
+        "reporter_prompt_source": str(
+            reporter_meta.get("prompt_source") or ""),
+        "reporter_latency_ms": reporter_meta.get("latency_ms") or 0,
+        "reporter_input_tokens": reporter_meta.get("input_tokens") or 0,
+        "reporter_output_tokens": reporter_meta.get("output_tokens") or 0,
+        "reporter_fallback_reason": str(
+            reporter_meta.get("fallback_reason") or ""),
     }
 
 

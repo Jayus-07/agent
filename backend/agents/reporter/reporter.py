@@ -12,7 +12,10 @@ reporter.py — 最终 Markdown 回答生成 + LangGraph 节点适配
   - 数据库 / 向量库
 """
 
+import ast
+import json
 import re
+from collections.abc import Mapping
 
 from backend.infra.llm import llm
 from langchain_core.messages import AIMessage
@@ -68,10 +71,15 @@ def reporter_node(state: dict) -> dict:
     question = state.get("question", "")
     step_results = state.get("step_results", {})
 
+    route_mode = str(state.get("route_mode") or state.get("executor_mode") or "")
+    # Direct / Workflow 已有确定性执行结果；Reporter 仍保留在图中以维持
+    # state 与出边契约，但只做规则渲染，不再调用会被 Runner 丢弃的 LLM。
+    allow_llm = route_mode not in {"direct", "workflow"}
     answer = generate_final_answer(
         question=question,
         step_results=step_results,
-        context_filter=True,
+        context_filter=allow_llm,
+        allow_llm=allow_llm,
     )
 
     # ── 未答问题旁路登记（2026-10-03 知识运营闭环第一环）────────────
@@ -100,13 +108,24 @@ def _sql_empty_hit(state: dict) -> bool:
     for sr in (state.get("step_results") or {}).values():
         if sr.get("capability") != "sql.query":
             continue
+        if sr.get("status") == "success" and sr.get("is_empty"):
+            return True
         if _is_step_successful(sr):
             continue
-        err = str(sr.get("error") or "")
-        if err and _is_technical_error(err):
+        if _is_technical_error(sr):
             continue
         return True
     return False
+
+
+def _has_actionable_failure(state: dict) -> bool:
+    return any(
+        _result_kind(sr) in {
+            "permission_denied", "approval_required", "timeout",
+            "unavailable", "rate_limited", "invalid_request", "failed",
+        }
+        for sr in (state.get("step_results") or {}).values()
+    )
 
 
 def _log_unanswered(answer: str, state: dict) -> None:
@@ -200,6 +219,7 @@ def generate_final_answer(
     step_results: dict,
     *,
     context_filter: bool = True,
+    allow_llm: bool = True,
 ) -> str:
     """
     生成最终 Markdown 回答（纯函数，无副作用）。
@@ -208,37 +228,18 @@ def generate_final_answer(
         question: 原始用户问题
         step_results: {step_id: {capability, description, output, status, ...}}
         context_filter: 是否启用 Context Filter 过滤无关 RAG 结果
+        allow_llm: 允许非流式最终汇总时调用 Reporter LLM
 
     Returns:
         最终 Markdown 格式回答（含参考文献）
     """
-    # —— 全部失败 / 无有效输出：直接返回 ——
+    # —— 全部失败 / 无有效输出：按 Tool Runtime 的结构化状态给安全话术 ——
     all_success = {
         sid: sr for sid, sr in step_results.items()
         if _is_step_successful(sr)
     }
     if not all_success:
-        failed_descs = []
-        for sid, sr in step_results.items():
-            label = _user_step_label(sr)
-            err = sr.get("error", "")
-            if err and _is_technical_error(err):
-                # 技术错误不暴露给用户，只记日志
-                logger.error(f"[Reporter] step={sid} 技术错误: {err[:200]}")
-                failed_descs.append(f"- {label}: 服务暂时不可用")
-            elif err:
-                # 业务错误保留提示，但只记日志原始错误（可能含内部细节）
-                logger.warning(f"[Reporter] step={sid} 执行失败: {err[:200]}")
-                failed_descs.append(f"- {label}: 未找到相关信息")
-            else:
-                failed_descs.append(f"- {label}: 未找到相关信息")
-        logger.info(f"[Reporter] 无有效输出，返回降级提示")
-        return (
-            f"## 抱歉\n\n"
-            f"未能找到与「{question[:60]}」相关的信息。\n\n"
-            + "\n".join(failed_descs) +
-            f"\n\n建议换个关键词或查阅其他资料。"
-        )
+        return _render_failure_summary(question, step_results)
 
     # Context Filter — 仅多步骤时启用（单步骤无交叉过滤意义，省掉 CrossEncoder ~1-2s）
     if context_filter and len(step_results) > 1:
@@ -262,7 +263,8 @@ def generate_final_answer(
         rag_output = list(rag_steps.values())[0].get("output", "")
         if rag_output:
             logger.info("[Reporter] RAG 有实质输出且其他步骤无，直接透传")
-            return strip_rag_meta(rag_output)
+            return _append_degraded_disclosure(
+                strip_rag_meta(rag_output), step_results)
 
     # —— 快速路径：单步骤有实质输出时直接透传（省掉 LLM 总结 ~2s）——
     # 仅限字符串输出（RAG/报告类）；SQL/BusinessInsight 是结构化 dict，
@@ -272,7 +274,11 @@ def generate_final_answer(
         sole_output = sole_sr.get("output", "")
         if isinstance(sole_output, str) and len(sole_output.strip()) > 5:
             logger.info("[Reporter] 单步骤有实质输出，直接透传（跳过 LLM 总结）")
-            return strip_rag_meta(sole_output)
+            rendered = render_result_for_user(
+                sole_sr.get("description", "查询结果"),
+                sole_sr.get("capability", ""), sole_output,
+            )
+            return _append_degraded_disclosure(rendered, step_results)
 
     # 提取参考文献
     rag_references = _extract_rag_references(step_results)
@@ -289,6 +295,11 @@ def generate_final_answer(
     # ── P2 性能优化：结构化渲染（0ms 模板）+ LLM 一句话总结（~2s）──
     structured = _render_structured_sections(step_results)
     if structured:
+        if not allow_llm:
+            final = f"## 查询结果\n\n{structured}"
+            if rag_references:
+                final += rag_references
+            return final
         try:
             # LLM 只写一句话执行摘要（max_tokens=64 防超长；模板由 reporter.summary 提供）
             data_summary = _build_data_summary(step_results)
@@ -305,7 +316,12 @@ def generate_final_answer(
         except Exception as e:
             logger.warning(f"[Reporter] LLM 一句话总结失败，降级: {e}")
             final = f"## 数据分析报告\n\n{structured}"
+            if rag_references:
+                final += rag_references
             return final
+
+    if not allow_llm:
+        return render_step_results_deterministically(step_results)
 
     # ── 非结构化数据：走完整 LLM 路径（与旧行为一致）──
     try:
@@ -361,15 +377,321 @@ def generate_final_answer(
 # 辅助函数
 # =====================================================
 
-def _is_technical_error(error: str) -> bool:
-    """判断错误是否为技术性错误（不应暴露给用户）。"""
-    tech_patterns = [
-        "Expected where value", "ChromaDB", "chromadb",
-        "psycopg2", "connection", "timeout",
-        "SQLSTATE", "syntax error", "Traceback",
-        "ModuleNotFoundError", "ImportError",
-    ]
-    return any(p.lower() in error.lower() for p in tech_patterns)
+def _enum_text(value) -> str:
+    return str(getattr(value, "value", value) or "").strip().lower()
+
+
+def _result_kind(result: dict) -> str:
+    """把已有 StepResult / ToolStatus 字段映射为用户展示语义。"""
+    tool_status = _enum_text(result.get("tool_status"))
+    error_type = _enum_text(result.get("error_type"))
+    error_code = _enum_text(result.get("error_code"))
+    lifecycle = _enum_text(result.get("lifecycle") or result.get("tool_lifecycle"))
+    status = _enum_text(result.get("status"))
+    cap = _enum_text(result.get("capability"))
+
+    # 明确的安全拒绝优先于其他故障语义。
+    if (tool_status == "unauthorized"
+            or error_type in {"permission_denied", "unauthorized", "auth_failed",
+                              "table_scope", "row_security"}
+            or error_code in {"permission_denied", "unauthorized"}):
+        return "permission_denied"
+    if error_code == "approval_required" or lifecycle in {
+            "pending_approval", "pending_confirmation"}:
+        return "approval_required"
+    if error_type == "permission":
+        return "permission_denied"
+
+    if (tool_status == "timeout" or error_type in {"timeout", "provider_timeout"}
+            or error_code in {"timeout", "read_timeout", "connect_timeout"}):
+        return "timeout"
+    if (tool_status == "unavailable"
+            or error_type in {"network", "service_unavailable", "unavailable",
+                              "connection", "provider_error", "internal_error",
+                              "exception", "router_error", "retry_exhausted"}
+            or error_code in {"connect_error", "http_transport_error", "infra_error",
+                              "circuit_open", "tool_busy"}):
+        return "unavailable"
+    if tool_status == "rate_limited" or error_type == "rate_limited" \
+            or error_code == "rate_limited":
+        return "rate_limited"
+    if (tool_status == "invalid_request"
+            or error_type in {"invalid_param", "validation_error", "invalid_request"}):
+        return "invalid_request"
+
+    if status == "partial":
+        return "partial_success"
+    if status == "success" and (
+            result.get("degraded") is True
+            or tool_status == "degraded"
+            or bool(result.get("fallback_used"))):
+        return "degraded"
+
+    output = result.get("output")
+    if status == "success" and cap == "sql.query" and (
+            result.get("is_empty") is True
+            or (isinstance(output, Mapping) and "rows" in output
+                and not output.get("rows"))):
+        return "no_data"
+    if status == "success" and cap == "rag.search" \
+            and isinstance(output, str) and _is_empty_output(output):
+        return "no_evidence"
+    if status == "skipped":
+        return "skipped"
+    if status == "failed" or status == "error":
+        return "failed"
+    if error_type:
+        return "failed"
+    return "success" if status == "success" else "failed"
+
+
+_FAILURE_TEXT = {
+    "permission_denied": "当前账号无权执行或访问该内容。",
+    "approval_required": "该操作需要确认后才能执行，目前尚未完成。",
+    "timeout": "查询超时，建议稍后重试。",
+    "unavailable": "服务暂时不可用，请稍后重试。",
+    "rate_limited": "请求受到频率限制，请稍后重试。",
+    "invalid_request": "请求参数有误，请检查后重试。",
+    "failed": "本次操作未能完成，建议稍后重试。",
+    "skipped": "该步骤未执行，因此没有可展示的结果。",
+    "no_evidence": "知识库没有足够可靠的依据回答该问题。",
+    "no_data": "查询成功，但没有符合条件的数据（0 行）。",
+    "degraded": "已使用降级结果，信息可能不完整。",
+    "partial_success": "部分步骤已完成，结果可能不完整。",
+}
+
+
+def _failure_text(result: dict) -> str:
+    kind = _result_kind(result)
+    if (kind == "approval_required"
+            and isinstance(result.get("output"), str)
+            and result.get("output").strip()):
+        return result["output"].strip()[:300]
+    return _FAILURE_TEXT.get(kind, _FAILURE_TEXT["failed"])
+
+
+def _is_technical_error(error_or_result) -> bool:
+    """只根据 ToolStatus / error_type 判故障，不猜测异常文本。"""
+    if not isinstance(error_or_result, Mapping):
+        return False
+    return _result_kind(dict(error_or_result)) in {
+        "timeout", "unavailable", "rate_limited", "invalid_request", "failed",
+    }
+
+
+def _render_failure_summary(question: str, step_results: dict) -> str:
+    kinds = [_result_kind(sr) for sr in step_results.values()]
+    if kinds and all(kind == "no_evidence" for kind in kinds):
+        return (
+            "## 抱歉\n\n"
+            "知识库没有足够可靠的依据回答该问题。可以补充关键词或提供相关资料。"
+        )
+
+    rows = []
+    for sr in step_results.values():
+        kind = _result_kind(sr)
+        label = _user_step_label(sr)
+        rows.append(f"- {label}：{_FAILURE_TEXT.get(kind, _FAILURE_TEXT['failed'])}")
+        error = str(sr.get("error") or "")
+        if error:
+            logger.warning("[Reporter] step 执行未完成: %s", error[:200])
+    if not rows:
+        return "## 查询未完成\n\n本轮没有可展示的结果，请调整问题后重试。"
+    if all(kind == "no_evidence" for kind in kinds if kind):
+        heading = "## 抱歉"
+    else:
+        heading = "## 查询未完成"
+    return heading + "\n\n" + "\n".join(rows)
+
+
+def _is_step_successful(result: dict) -> bool:
+    """依据步骤状态判断是否有可用结果；DEGRADED 仍保留成功数据。"""
+    if result.get("capability") == "workflow":
+        return result.get("status") in {"success", "partial"}
+    if result.get("status") != "success":
+        return False
+    kind = _result_kind(result)
+    if kind in {"permission_denied", "approval_required", "timeout", "unavailable",
+                "rate_limited", "invalid_request", "failed", "no_evidence"}:
+        return False
+    if kind == "no_data":
+        return True
+    if result.get("error_type"):
+        return False
+    output = result.get("output")
+    if output is None:
+        return False
+    if isinstance(output, str):
+        if len(output.strip()) <= 5 or _is_empty_output(output):
+            return False
+    return True
+
+
+_MAP_FIELD_LABELS = {
+    "address": "地址", "formatted_address": "详细地址", "name": "名称",
+    "title": "标题", "province": "省份", "city": "城市", "district": "区县",
+    "lat": "纬度", "lng": "经度", "location": "坐标", "count": "结果数",
+    "pois": "地点", "suggestions": "候选地点", "merchants": "商家",
+    "distance": "距离", "distance_m": "距离（米）", "duration": "用时",
+    "duration_min": "用时（分钟）", "from": "起点", "to": "终点",
+    "route": "路线", "routes": "路线", "mode": "出行方式",
+    "current": "当前天气", "days": "天气预报", "hours": "逐小时天气",
+    "weather": "天气", "temperature": "温度", "condition": "天气状况",
+    "humidity": "湿度", "wind": "风况", "description": "说明",
+    "note": "说明", "text": "结果", "summary": "摘要", "data": "结果",
+}
+_INTERNAL_RESULT_KEYS = frozenset({
+    "context_compacted", "type", "status", "error", "error_code", "raw",
+    "debug", "traceback", "provider", "endpoint", "artifact_id",
+    "original_tokens", "compacted", "sql", "sql_text", "tool", "step_id",
+})
+
+
+def _is_compacted_preview(output) -> bool:
+    return (isinstance(output, Mapping)
+            and output.get("context_compacted") is True
+            and output.get("type") == "tool_result_preview")
+
+
+def _render_map_data(value, depth: int = 0) -> str:
+    if depth > 4:
+        return ""
+    if isinstance(value, Mapping):
+        lines = []
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in _INTERNAL_RESULT_KEYS:
+                continue
+            label = _MAP_FIELD_LABELS.get(key_text)
+            if not label or item is None or item == "":
+                continue
+            if isinstance(item, Mapping):
+                nested = _render_map_data(item, depth + 1)
+                if nested:
+                    lines.append(f"**{label}：**\n{nested}")
+            elif isinstance(item, list):
+                rendered = []
+                for child in item[:20]:
+                    if isinstance(child, Mapping):
+                        child_text = _render_map_data(child, depth + 1)
+                        if child_text:
+                            rendered.append(f"- {child_text.replace(chr(10), chr(10) + '  ')}")
+                    elif isinstance(child, (str, int, float)):
+                        rendered.append(f"- {child}")
+                if rendered:
+                    lines.append(f"**{label}：**\n" + "\n".join(rendered))
+            elif isinstance(item, (str, int, float, bool)):
+                lines.append(f"- {label}：{item}")
+        return "\n".join(lines)
+    return ""
+
+
+def _safe_text_output(output: str):
+    text = strip_rag_meta(output or "").strip()
+    if not text:
+        return ""
+    if text.startswith(("{", "[", "(")):
+        parsed = None
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+        if isinstance(parsed, (Mapping, list, tuple)):
+            return parsed
+        if text.startswith(("{", "[")):
+            return None
+    if "Traceback (most recent call last)" in text or "provider=" in text \
+            or "endpoint=" in text:
+        return None
+    return text
+
+
+def render_result_for_user(description: str, capability: str, output) -> str:
+    """按已知业务结果类型确定性渲染；未知机器对象返回安全说明。"""
+    label = description or _CAP_USER_LABELS.get(capability, "查询结果")
+    if _is_compacted_preview(output):
+        return (f"### {label}\n\n结果已压缩，目前无法可靠展示完整内容。"
+                "请缩小查询范围后重试。")
+    if isinstance(output, str):
+        output = _safe_text_output(output)
+        if output is None:
+            return f"### {label}\n\n{_RESULT_UNAVAILABLE}"
+        if isinstance(output, str):
+            return output
+    if isinstance(output, Mapping):
+        if output.get("status") in {"success", "ok"} and "data" in output:
+            return render_result_for_user(label, capability, output.get("data"))
+        if isinstance(output.get("report_md"), str):
+            return output["report_md"].strip()
+        if "rows" in output and ("columns" in output or capability == "sql.query"):
+            columns = output.get("columns") or []
+            rows = output.get("rows") or []
+            if not rows:
+                return f"### {label}\n\n{_FAILURE_TEXT['no_data']}"
+            if not columns and isinstance(rows[0], Mapping):
+                columns = list(rows[0])
+            return _render_table_section(label, columns, rows)
+        if "summary" in output and any(
+                key in output for key in ("risks", "suggestions", "confidence")):
+            return _render_insight_section(label, dict(output))
+        if capability == "map.lookup":
+            rendered = _render_map_data(output)
+            if rendered:
+                return f"### {label}\n\n{rendered}"
+        for key in ("answer", "text", "message"):
+            if isinstance(output.get(key), str) and output.get(key).strip():
+                return strip_rag_meta(output[key]).strip()
+        return f"### {label}\n\n{_RESULT_UNAVAILABLE}"
+    if isinstance(output, (list, tuple)) and all(
+            isinstance(item, (str, int, float)) for item in output):
+        return "\n".join(f"- {item}" for item in output)
+    if isinstance(output, (int, float)):
+        return str(output)
+    return f"### {label}\n\n{_RESULT_UNAVAILABLE}"
+
+
+_RESULT_UNAVAILABLE = (
+    "已取得结果，但当前格式无法可靠展示。请缩小查询范围或稍后重试。"
+)
+
+
+def _append_degraded_disclosure(answer: str, step_results: dict) -> str:
+    degraded = [sr for sr in step_results.values()
+                if _result_kind(sr) in {"degraded", "partial_success"}]
+    if not degraded:
+        return answer
+    if _FAILURE_TEXT["degraded"] in answer:
+        return answer
+    notes = sorted({_FAILURE_TEXT[_result_kind(sr)] for sr in degraded})
+    return answer.rstrip() + "\n\n> ⚠️ " + "；".join(notes)
+
+
+def render_step_results_deterministically(step_results: dict) -> str:
+    """Runner 兜底与 Direct/Workflow 共用的纯规则安全渲染。"""
+    sections = []
+    for step_id, sr in sorted((step_results or {}).items()):
+        kind = _result_kind(sr)
+        label = _user_step_label(sr)
+        status = _enum_text(sr.get("status"))
+        if kind in {"permission_denied", "approval_required", "timeout", "unavailable",
+                    "rate_limited", "invalid_request", "failed", "skipped",
+                    "no_evidence"}:
+            sections.append(f"- {label}：{_FAILURE_TEXT[kind]}")
+            continue
+        output = sr.get("output")
+        rendered = render_result_for_user(label, sr.get("capability", ""), output)
+        if rendered:
+            sections.append(rendered)
+        if kind in {"degraded", "partial_success"}:
+            sections.append(f"> ⚠️ {_FAILURE_TEXT[kind]}")
+        elif status not in {"success", "partial"}:
+            sections.append(f"- {label}：{_FAILURE_TEXT['failed']}")
+    if not sections:
+        return "## 查询未完成\n\n本轮没有可展示的结果，请调整问题后重试。"
+    return "## 查询结果\n\n" + "\n\n---\n\n".join(sections)
 
 
 def _is_step_successful(result: dict) -> bool:
@@ -497,9 +819,8 @@ def _format_step_outputs(step_results: dict[str, dict], strip_references: bool =
 
         header = f"### 步骤 {step_id}: {description}"
         if status == "success":
-            output = str(sr.get("output", ""))
-            # 机器标记不进汇总 LLM 视野（与 strip_references 同层，先剥标记）
-            output = strip_rag_meta(output)
+            output = render_result_for_user(
+                _user_step_label(sr), capability, sr.get("output"))
             if strip_references and capability == "rag.search":
                 for marker in ["\n\n---\n\n### 参考文献", "\n\n---\n\n### 参考来源"]:
                     idx = output.find(marker)
@@ -508,11 +829,13 @@ def _format_step_outputs(step_results: dict[str, dict], strip_references: bool =
                         break
             if len(output) > 3000:
                 output = output[:3000] + "\n\n*(输出过长，已截断)*"
-            parts.append(f"{header}\n状态: ✅ 成功 ({capability})\n\n{output}\n")
+            suffix = (f"\n状态: 已降级，信息可能不完整"
+                      if _result_kind(sr) == "degraded" else "")
+            parts.append(f"{header}\n状态: ✅ 成功\n\n{output}{suffix}\n")
         elif status == "failed":
-            parts.append(f"{header}\n状态: ❌ 失败 ({capability})\n错误: {sr.get('error', '未知错误')}\n")
+            parts.append(f"{header}\n状态: ❌ 未完成\n{_failure_text(sr)}\n")
         elif status == "skipped":
-            parts.append(f"{header}\n状态: ⏭️ 已跳过 ({capability})\n原因: {sr.get('error', '')}\n")
+            parts.append(f"{header}\n状态: ⏭️ 已跳过\n{_failure_text(sr)}\n")
         else:
             parts.append(f"{header}\n状态: ⏳ {status}\n")
     return "\n".join(parts) if parts else ""
@@ -535,41 +858,50 @@ def _render_structured_sections(step_results: dict) -> str:
         status = sr.get("status", "unknown")
         output = sr.get("output")
         capability = sr.get("capability", "")
-        description = sr.get("description", step_id)
+        description = _user_step_label(sr)
 
-        if status == "success" and isinstance(output, dict):
+        if status == "success" and isinstance(output, Mapping):
+            section_index = len(sections)
             # SQLResult → 表格（0 行也渲染说明，不再静默丢弃）
-            if "columns" in output and "rows" in output and capability == "sql.query":
+            if "rows" in output and capability == "sql.query":
                 columns = output.get("columns", [])
                 rows = output.get("rows", [])
                 if rows:
+                    if not columns and isinstance(rows[0], Mapping):
+                        columns = list(rows[0])
                     section = _render_table_section(description, columns, rows)
                 else:
                     section = (
                         f"### {description}\n\n"
-                        f"查询执行成功，但未返回任何数据（0 行）。\n\n"
-                        f"可能原因：筛选条件下当前无匹配记录，或相关表暂无数据。"
+                        f"{_FAILURE_TEXT['no_data']}"
                     )
                 sections.append(section)
             # BusinessInsight → 风险+建议
-            elif "summary" in output and "risks" in output:
+            elif "summary" in output and any(
+                    key in output for key in ("risks", "suggestions", "confidence")):
                 section = _render_insight_section(description, output)
                 sections.append(section)
+            else:
+                rendered = render_result_for_user(description, capability, output)
+                if rendered:
+                    sections.append(rendered)
+            if (len(sections) > section_index
+                    and _result_kind(sr) in {"degraded", "partial_success"}):
+                sections[-1] += f"\n\n> ⚠️ {_FAILURE_TEXT[_result_kind(sr)]}"
             continue
 
         # 非成功 / 空话术步骤：显式交代（原实现完全隐身）
         if status != "success":
-            reason = sr.get("error", "") or "步骤未执行成功"
             label = _user_step_label(sr)
             sections.append(
-                f"### {description}\n\n"
-                f"- {label}未获得数据：{reason[:120]}"
+                f"### {label}\n\n"
+                f"- {_failure_text(sr)}"
             )
         elif isinstance(output, str) and _is_empty_output(output):
             label = _user_step_label(sr)
             sections.append(
-                f"### {description}\n\n"
-                f"- {label}未找到相关内容（数据源中无匹配信息）。"
+                f"### {label}\n\n"
+                f"- {_FAILURE_TEXT[_result_kind(sr)]}"
             )
 
     # 有任一节就走结构化路径（原 >=2 门槛导致单节被丢弃、回退弱 LLM 路径）
@@ -593,6 +925,8 @@ def _render_table_section(description: str, columns: list[str], rows: list[dict]
 
     lines = [
         f"### {description}",
+        "",
+        f"查询成功，共 {len(rows)} 行。",
         "",
         header,
         sep,
@@ -628,7 +962,7 @@ def _render_insight_section(description: str, output: dict) -> str:
         lines.append("")
 
     confidence = output.get("confidence", None)
-    if confidence is not None:
+    if isinstance(confidence, (int, float)) and 0 <= confidence <= 1:
         bar = "█" * max(1, int(confidence * 10))
         lines.append(f"*置信度: {bar} {confidence:.0%}*")
 
@@ -660,26 +994,8 @@ def _build_data_summary(step_results: dict) -> str:
 
 
 def _fallback_summary(question: str, step_results: dict, error: str) -> str:
-    """LLM 调用失败时的降级汇总（纯拼接，不调 LLM）"""
-    lines = [
-        f"## 查询结果汇总",
-        f"> ⚠️ LLM 汇总失败: {error}",
-        f"> 原始问题: {question}",
-        "",
-    ]
-    for step_id, sr in sorted(step_results.items()):
-        desc = sr.get("description", step_id)
-        status = sr.get("status", "unknown")
-        output = sr.get("output", "")
-        if status == "success":
-            lines.append(f"### {desc}")
-            lines.append(str(output))
-            lines.append("")
-        elif status == "failed":
-            lines.append(f"### {desc} ❌")
-            lines.append(f"执行失败: {sr.get('error', '未知错误')}")
-            lines.append("")
-    return "\n".join(lines)
+    """LLM 失败时回退到安全确定性渲染；异常细节只留在日志与 Trace。"""
+    return render_step_results_deterministically(step_results)
 
 
 __all__ = [
@@ -692,4 +1008,6 @@ __all__ = [
     "_user_step_label",
     "_format_step_outputs",
     "_fallback_summary",
+    "render_result_for_user",
+    "render_step_results_deterministically",
 ]

@@ -253,6 +253,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     # ai.tool_approval_requests 也进了 agent_readonly 可见面，
     # 收窄为 schema_config 声明的两张表（agent_tasks/agent_trace）。
     "083_readonly_ai_grant_scope.sql": "business",
+    "082_cs_confirmation_versioned_claim.sql": "memory",
+    # 旅游行程账本租户隔离（与客服 082 来自独立分支，目标同为 memory）。
+    "082_travel_plan_tenant_scope.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）

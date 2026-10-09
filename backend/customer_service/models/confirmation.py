@@ -4,7 +4,7 @@ Maps to ``customer_service.confirmations`` (created by 006 raw SQL migration).
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Column, DateTime, String
+from sqlalchemy import BigInteger, Column, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.customer_service.models.conversation import CSBase
@@ -30,6 +30,10 @@ class CSConfirmation(CSBase):
     tenant_id = Column(String(64), nullable=True, index=True)
     semantic_fingerprint = Column(String(64), nullable=True)
     proposal = Column(JSONB, nullable=False)
+    # 乐观版本用于确认卡绑定当前提案；历史行从迁移默认值 1 起算。
+    proposal_version = Column(Integer, nullable=False, default=1, server_default="1")
+    # 前端幂等键；仅一次性认领请求写入，同租户同用户不可复用。
+    client_action_id = Column(String(36), nullable=True)
     state = Column(String(20), nullable=False, default="pending")
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)

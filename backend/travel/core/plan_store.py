@@ -41,19 +41,40 @@ _SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {_TABLE} (
     conversation_id TEXT NOT NULL,
     plan_version    INTEGER NOT NULL,
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
     user_id         TEXT NOT NULL DEFAULT '',
     plan_status     TEXT NOT NULL DEFAULT 'waiting_confirmation',
     destination     TEXT NOT NULL DEFAULT '',
     itinerary       JSONB NOT NULL,
     change          JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (conversation_id, plan_version)
+    PRIMARY KEY (tenant_id, user_id, conversation_id, plan_version)
 );
+ALTER TABLE {_TABLE} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = '{_TABLE}'::regclass
+          AND contype = 'p'
+          AND pg_get_constraintdef(oid) LIKE '%tenant_id%'
+          AND pg_get_constraintdef(oid) LIKE '%user_id%'
+    ) THEN
+        ALTER TABLE {_TABLE} DROP CONSTRAINT IF EXISTS travel_plan_versions_pkey;
+        ALTER TABLE {_TABLE}
+            ADD CONSTRAINT travel_plan_versions_pkey
+            PRIMARY KEY (tenant_id, user_id, conversation_id, plan_version);
+    END IF;
+END $$;
 """
 
 # 会话内保留的最大版本数（超出裁最旧； rollback_record 的历史永不删除语义
 # 在保留窗口内成立，窗口外按方案 §10.2 明确告知不可恢复）
 _KEEP = max(2, TRAVEL_PLAN_VERSIONS_KEEP)
+
+
+class PlanStoreUnavailable(RuntimeError):
+    """账本不可用；规划成功路径必须 fail-closed。"""
 
 
 @contextmanager
@@ -123,6 +144,13 @@ _VERSION_COLS = (
 )
 
 
+def _lock_scope(cur: Any, tenant_id: str, user_id: str,
+                conversation_id: str) -> None:
+    """串行化同一会话的版本写入与生命周期 CAS。"""
+    lock_key = f"{tenant_id[:128]}:{user_id[:128]}:{conversation_id[:128]}"
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
+
+
 def save_version(
     conversation_id: str,
     user_id: str,
@@ -130,23 +158,30 @@ def save_version(
     *,
     plan_status: str = "waiting_confirmation",
     change: dict | None = None,
+    tenant_id: str = "default",
+    strict: bool = False,
 ) -> bool:
     """追加一个版本（主键冲突 = 并发提交败方，返回 False 由调用方裁决）。"""
-    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
+        if strict:
+            raise PlanStoreUnavailable("行程版本账本未启用或无法初始化")
         return False
     brief = itinerary.get("brief") or {}
     try:
         with _conn() as conn:
             cur = conn.cursor()
+            _lock_scope(cur, tenant_id, user_id, conversation_id)
             cur.execute(
                 f"""INSERT INTO {_TABLE}
-                    (conversation_id, plan_version, user_id, plan_status,
+                    (conversation_id, plan_version, tenant_id, user_id, plan_status,
                      destination, itinerary, change)
-                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
-                    ON CONFLICT (conversation_id, plan_version) DO NOTHING""",
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                    ON CONFLICT (tenant_id, user_id, conversation_id, plan_version) DO NOTHING""",
                 (
                     conversation_id[:128],
                     int(itinerary.get("plan_version") or 0),
+                    tenant_id[:128],
                     user_id[:128],
                     plan_status,
                     str(brief.get("destination") or "")[:64],
@@ -159,22 +194,35 @@ def save_version(
             # 保留窗口：只留最近 _KEEP 版（窗口外按承诺边界不可恢复）
             cur.execute(
                 f"""DELETE FROM {_TABLE}
-                    WHERE conversation_id = %s AND user_id = %s
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
                       AND plan_version <= (
                           SELECT max(plan_version) - %s FROM {_TABLE}
-                          WHERE conversation_id = %s AND user_id = %s)""",
-                (conversation_id[:128], user_id[:128], _KEEP,
-                 conversation_id[:128], user_id[:128]),
+                          WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s)
+                      AND plan_version <> COALESCE((
+                          SELECT max(plan_version) FROM {_TABLE}
+                          WHERE tenant_id = %s AND conversation_id = %s
+                            AND user_id = %s AND plan_status = 'confirmed'), -1)""",
+                (tenant_id[:128], conversation_id[:128], user_id[:128], _KEEP,
+                 tenant_id[:128], conversation_id[:128], user_id[:128],
+                 tenant_id[:128], conversation_id[:128], user_id[:128]),
             )
         return True
     except Exception as e:  # noqa: BLE001 — 账本写失败不挡规划主链
         logger.warning("[TravelPlanStore] 版本写入失败（跳过）: %s", e)
+        if strict:
+            raise PlanStoreUnavailable("行程版本账本写入失败") from e
         return False
 
 
-def latest_version(conversation_id: str, user_id: str) -> dict | None:
+def latest_version(
+    conversation_id: str, user_id: str, tenant_id: str = "default", *,
+    strict: bool = False,
+) -> dict | None:
     """当前最新版本（含完整 itinerary）；无账本/越权/失败返回 None。"""
-    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
+        if strict:
+            raise PlanStoreUnavailable("行程版本账本未启用或无法初始化")
         return None
     try:
         with _conn() as conn:
@@ -182,20 +230,28 @@ def latest_version(conversation_id: str, user_id: str) -> dict | None:
             cur.execute(
                 f"""SELECT {_VERSION_COLS}, itinerary::text
                     FROM {_TABLE}
-                    WHERE conversation_id = %s AND user_id = %s
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
                     ORDER BY plan_version DESC LIMIT 1""",
-                (conversation_id[:128], user_id[:128]),
+                (tenant_id[:128], conversation_id[:128], user_id[:128]),
             )
             row = cur.fetchone()
             return _version_row(row, with_itinerary=True) if row else None
     except Exception as e:  # noqa: BLE001 — 读失败按无账本处理
         logger.warning("[TravelPlanStore] 最新版本读取失败: %s", e)
+        if strict:
+            raise PlanStoreUnavailable("行程版本账本读取失败") from e
         return None
 
 
-def active_version(conversation_id: str, user_id: str) -> dict | None:
+def active_version(
+    conversation_id: str, user_id: str, tenant_id: str = "default", *,
+    strict: bool = False,
+) -> dict | None:
     """读取当前 Active 内容；待确认 draft 不得遮蔽最近已确认版本。"""
-    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
+        if strict:
+            raise PlanStoreUnavailable("行程版本账本未启用或无法初始化")
         return None
     try:
         with _conn() as conn:
@@ -203,23 +259,29 @@ def active_version(conversation_id: str, user_id: str) -> dict | None:
             cur.execute(
                 f"""SELECT {_VERSION_COLS}, itinerary::text
                     FROM {_TABLE}
-                    WHERE conversation_id = %s AND user_id = %s
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
                       AND plan_status = 'confirmed'
                     ORDER BY plan_version DESC LIMIT 1""",
-                (conversation_id[:128], user_id[:128]),
+                (tenant_id[:128], conversation_id[:128], user_id[:128]),
             )
             row = cur.fetchone()
             if row:
                 return _version_row(row, with_itinerary=True)
     except Exception as e:  # noqa: BLE001 — 读失败按无账本处理
         logger.warning("[TravelPlanStore] Active 版本读取失败: %s", e)
+        if strict:
+            raise PlanStoreUnavailable("Active 行程版本读取失败") from e
         return None
-    return latest_version(conversation_id, user_id)
+    return None
 
 
-def get_version(conversation_id: str, user_id: str, plan_version: int) -> dict | None:
+def get_version(
+    conversation_id: str, user_id: str, plan_version: int,
+    tenant_id: str = "default",
+) -> dict | None:
     """取指定版本（含完整 itinerary）；不存在/越权返回 None。"""
-    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
         return None
     try:
         with _conn() as conn:
@@ -227,8 +289,9 @@ def get_version(conversation_id: str, user_id: str, plan_version: int) -> dict |
             cur.execute(
                 f"""SELECT {_VERSION_COLS}, itinerary::text
                     FROM {_TABLE}
-                    WHERE conversation_id = %s AND user_id = %s AND plan_version = %s""",
-                (conversation_id[:128], user_id[:128], int(plan_version)),
+                    WHERE tenant_id = %s AND conversation_id = %s
+                      AND user_id = %s AND plan_version = %s""",
+                (tenant_id[:128], conversation_id[:128], user_id[:128], int(plan_version)),
             )
             row = cur.fetchone()
             return _version_row(row, with_itinerary=True) if row else None
@@ -237,9 +300,12 @@ def get_version(conversation_id: str, user_id: str, plan_version: int) -> dict |
         return None
 
 
-def list_versions(conversation_id: str, user_id: str) -> list[dict]:
+def list_versions(
+    conversation_id: str, user_id: str, tenant_id: str = "default"
+) -> list[dict]:
     """版本元数据列表（不含 itinerary，按版本号新→旧）。"""
-    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
         return []
     try:
         with _conn() as conn:
@@ -247,9 +313,9 @@ def list_versions(conversation_id: str, user_id: str) -> list[dict]:
             cur.execute(
                 f"""SELECT {_VERSION_COLS}
                     FROM {_TABLE}
-                    WHERE conversation_id = %s AND user_id = %s
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
                     ORDER BY plan_version DESC""",
-                (conversation_id[:128], user_id[:128]),
+                (tenant_id[:128], conversation_id[:128], user_id[:128]),
             )
             return [_version_row(r, with_itinerary=False) for r in cur.fetchall()]
     except Exception as e:  # noqa: BLE001
@@ -257,10 +323,12 @@ def list_versions(conversation_id: str, user_id: str) -> list[dict]:
         return []
 
 
-def list_conversations(user_id: str, limit: int = 30) -> list[dict]:
+def list_conversations(
+    user_id: str, limit: int = 30, tenant_id: str = "default"
+) -> list[dict]:
     """某用户的历史规划列表：每个会话取最新版元数据（不含 itinerary），
     按最近更新新→旧。账本不可用/参数为空返回空列表（前端隐藏入口）。"""
-    if not user_id or not enabled() or not _ensure_table():
+    if not user_id or not tenant_id or not enabled() or not _ensure_table():
         return []
     try:
         with _conn() as conn:
@@ -270,19 +338,21 @@ def list_conversations(user_id: str, limit: int = 30) -> list[dict]:
                            v.destination, v.created_at,
                            (SELECT count(*) FROM {_TABLE} t2
                             WHERE t2.conversation_id = v.conversation_id
+                              AND t2.tenant_id = %s
                               AND t2.user_id = %s) AS versions_count
                     FROM {_TABLE} v
                     JOIN (
                         SELECT conversation_id, max(plan_version) AS max_version
                         FROM {_TABLE}
-                        WHERE user_id = %s
+                        WHERE tenant_id = %s AND user_id = %s
                         GROUP BY conversation_id
                     ) m ON v.conversation_id = m.conversation_id
                        AND v.plan_version = m.max_version
-                    WHERE v.user_id = %s
+                    WHERE v.tenant_id = %s AND v.user_id = %s
                     ORDER BY v.created_at DESC
                     LIMIT %s""",
-                (user_id[:128], user_id[:128], user_id[:128],
+                (tenant_id[:128], user_id[:128], tenant_id[:128], user_id[:128],
+                 tenant_id[:128], user_id[:128],
                  max(1, min(int(limit), 100))),
             )
             return [
@@ -301,27 +371,86 @@ def list_conversations(user_id: str, limit: int = 30) -> list[dict]:
         return []
 
 
-def confirm_version(conversation_id: str, user_id: str, plan_version: int) -> str | None:
+def confirm_version(
+    conversation_id: str, user_id: str, plan_version: int,
+    tenant_id: str = "default",
+) -> str | None:
     """确认整份行程（CAS）：仅 waiting_confirmation → confirmed 单语句原子。
 
     Returns: 成功返回 "confirmed"；版本不存在/已确认/越权返回 None
     （调用方区分 404 与 409 需先查当前态）。
     """
-    if not conversation_id or not user_id or not enabled() or not _ensure_table():
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
         return None
     try:
         with _conn() as conn:
             cur = conn.cursor()
+            _lock_scope(cur, tenant_id, user_id, conversation_id)
             cur.execute(
                 f"""UPDATE {_TABLE} SET plan_status = 'confirmed'
-                    WHERE conversation_id = %s AND user_id = %s
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
                       AND plan_version = %s
                       AND plan_status = 'waiting_confirmation'
+                      AND plan_version = (
+                          SELECT max(p.plan_version) FROM {_TABLE} p
+                          WHERE p.tenant_id = %s AND p.user_id = %s
+                            AND p.conversation_id = %s)
                     RETURNING plan_status""",
-                (conversation_id[:128], user_id[:128], int(plan_version)),
+                (tenant_id[:128], conversation_id[:128], user_id[:128],
+                 int(plan_version), tenant_id[:128], user_id[:128],
+                 conversation_id[:128]),
             )
             row = cur.fetchone()
             return row[0] if row else None
     except Exception as e:  # noqa: BLE001
         logger.warning("[TravelPlanStore] 确认失败: %s", e)
+        return None
+
+
+def discard_version(
+    conversation_id: str, user_id: str, plan_version: int,
+    tenant_id: str = "default",
+) -> str | None:
+    """放弃当前最新草案；同版本重复请求幂等，历史 Active 不受影响。"""
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
+        return None
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            _lock_scope(cur, tenant_id, user_id, conversation_id)
+            cur.execute(
+                f"""UPDATE {_TABLE} SET plan_status = 'discarded'
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
+                      AND plan_version = %s
+                      AND plan_status = 'waiting_confirmation'
+                      AND plan_version = (
+                          SELECT max(p.plan_version) FROM {_TABLE} p
+                          WHERE p.tenant_id = %s AND p.user_id = %s
+                            AND p.conversation_id = %s)
+                    RETURNING plan_status""",
+                (tenant_id[:128], conversation_id[:128], user_id[:128],
+                 int(plan_version), tenant_id[:128], user_id[:128],
+                 conversation_id[:128]),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+            cur.execute(
+                f"""SELECT plan_status FROM {_TABLE}
+                    WHERE tenant_id = %s AND conversation_id = %s AND user_id = %s
+                      AND plan_version = %s
+                      AND plan_version = (
+                          SELECT max(p.plan_version) FROM {_TABLE} p
+                          WHERE p.tenant_id = %s AND p.user_id = %s
+                            AND p.conversation_id = %s)""",
+                (tenant_id[:128], conversation_id[:128], user_id[:128],
+                 int(plan_version), tenant_id[:128], user_id[:128],
+                 conversation_id[:128]),
+            )
+            existing = cur.fetchone()
+            return "discarded" if existing and existing[0] == "discarded" else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[TravelPlanStore] 放弃草案失败: %s", e)
         return None

@@ -29,7 +29,8 @@ def _patch_service(monkeypatch: pytest.MonkeyPatch, latest=None) -> None:
     class _Stub:
         pass
 
-    _Stub.latest_version = staticmethod(lambda cid, uid: latest)
+    _Stub.latest_version = staticmethod(
+        lambda cid, uid, *, tenant_id: latest)
     monkeypatch.setattr(svc_mod, "plan_version_service", _Stub())
 
 

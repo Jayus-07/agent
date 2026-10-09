@@ -69,6 +69,12 @@ SLOT_QUESTIONS: dict[str, str] = {
     "party_size": "几个人一起？",
     "budget_cny": "有预算范围吗？",
     "lodging": "希望住在哪个区域？（不确定可以不说）",
+    "origin": "从哪里出发？",
+    "start_date": "计划哪天出发？",
+    "target_day": "你想调整行程的第几天？",
+    "selected_poi_id": "你指的是行程中的哪个景点？",
+    "replacement_poi": "想换成什么类型或哪个景点？",
+    "desired_change": "你希望这一天具体怎样调整？",
 }
 
 # 饮食忌口/偏好关键词（P1-1 偏好管理）：命中即记入 brief.diet。

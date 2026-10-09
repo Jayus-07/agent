@@ -2,38 +2,35 @@
 import asyncio
 import time
 
+from langchain_core.messages import SystemMessage
 from sqlalchemy.exc import IntegrityError
 
-from backend.memory.database import get_session, AsyncSessionLocal
-from backend.memory.repository.session_repo import SessionRepository, SessionOwnerMismatch
-from backend.memory.repository.memory_repo import MemoryRepository
-from backend.memory.session import SessionMemory
-from backend.memory.long_term import LongTermMemory, MemoryFact
-from backend.memory.short_term import ShortTermBuffer
-from backend.memory.trigger import MemoryWorthinessClassifier
-from backend.memory.importance import ImportanceScorer
-from backend.memory.retriever import HybridRetriever
+from backend.config import HISTORY_TOKEN_BUDGET, MEMORY_ORIGIN_INFERRED, PREVIOUS_OUTPUTS_MAX_TOKENS
+from backend.context_budget import context_budget
+from backend.memory.database import AsyncSessionLocal, get_session
 from backend.memory.decay import MemoryDecayService
+from backend.memory.importance import ImportanceScorer
+from backend.memory.long_term import LongTermMemory, MemoryFact
 from backend.memory.pii_filter import scan_and_sanitize
+from backend.memory.repository.memory_repo import MemoryRepository
+from backend.memory.repository.session_repo import SessionOwnerMismatch, SessionRepository
+from backend.memory.retriever import HybridRetriever
+from backend.memory.session import SessionMemory
+from backend.memory.short_term import ShortTermBuffer
 from backend.memory.token_budget import (
     count_message_tokens,
     count_tokens,
     trim_messages_to_budget,
 )
-from backend.config import HISTORY_TOKEN_BUDGET
-from backend.config import PREVIOUS_OUTPUTS_MAX_TOKENS
-from backend.config import MEMORY_ORIGIN_INFERRED
-from backend.context_budget import context_budget
-from langchain_core.messages import SystemMessage
-from backend.shared.logger import logger
+from backend.memory.trigger import MemoryWorthinessClassifier
 from backend.observability.metrics import (
     degradation_alerts_total,
     memory_access_mark_failure_total,
     memory_access_mark_total,
     memory_conflict_total,
+    memory_explicit_total,
     memory_extraction_candidate_total,
     memory_extraction_rejected_total,
-    memory_explicit_total,
     memory_inferred_total,
     memory_retrieval_failure_total,
     memory_retrieval_latency_seconds,
@@ -41,6 +38,7 @@ from backend.observability.metrics import (
     memory_store_outcome_total,
     memory_supersede_total,
 )
+from backend.shared.logger import logger
 
 
 def _metric_safe(fn, **labels) -> None:
@@ -583,6 +581,28 @@ class MemoryService:
             logger.error(f"[MemoryService] save_messages 失败: {e}")
         return {"saved": saved}
 
+    async def replace_session_messages(
+        self, session_id: str, messages: list[dict[str, str]],
+        user_id: str = "default",
+    ) -> dict:
+        """以单事务替换会话快照，供客户端按轮同步时保持幂等。"""
+        if not session_id or len(session_id) > 128:
+            return {"saved": 0, "error": "会话标识无效"}
+        try:
+            async with AsyncSessionLocal() as db_session:
+                repo = SessionRepository(db_session)
+                try:
+                    await repo.get_or_create(session_id, user_id)
+                except SessionOwnerMismatch:
+                    await db_session.rollback()
+                    return {"saved": 0, "error": "会话不存在"}
+                saved = await repo.replace_messages(session_id, messages)
+                await db_session.commit()
+                return {"saved": len(saved)}
+        except Exception as e:
+            logger.error(f"[MemoryService] replace_session_messages 失败: {e}")
+            return {"saved": 0, "error": str(e)}
+
     @staticmethod
     def _scoped_session_id(session_id: str, user_id: str) -> str:
         """跨用户收养拦截后的隔离存储键（确定性：同一用户恒映射同键）。"""
@@ -698,7 +718,8 @@ class MemoryService:
                 return {
                     "session_id": session_id,
                     "messages": [
-                        {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+                        {"id": m.id, "role": m.role, "content": m.content,
+                         "created_at": m.created_at.isoformat()}
                         for m in msgs
                     ],
                 }

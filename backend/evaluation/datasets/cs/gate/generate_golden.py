@@ -489,9 +489,15 @@ def main() -> None:
         "counts": {"intent_triage": len(triage), "handoff_timing": len(handoff), "confirm_cancel": len(confirm_cancel)},
         "thresholds": {"triage_accuracy_min": 0.90, "handoff_missed_max": 0, "handoff_false_rate_max": 0.10, "confirm_cancel_accuracy_min": 0.95},
         "sha256": {
-            "intent_triage_golden.json": hashlib.sha256(p1.read_bytes()).hexdigest(),
-            "handoff_timing_golden.json": hashlib.sha256(p2.read_bytes()).hexdigest(),
-            "confirm_cancel_golden.json": hashlib.sha256(p3.read_bytes()).hexdigest(),
+            "intent_triage_golden.json": hashlib.sha256(
+                p1.read_bytes().replace(b"\r\n", b"\n")
+            ).hexdigest(),
+            "handoff_timing_golden.json": hashlib.sha256(
+                p2.read_bytes().replace(b"\r\n", b"\n")
+            ).hexdigest(),
+            "confirm_cancel_golden.json": hashlib.sha256(
+                p3.read_bytes().replace(b"\r\n", b"\n")
+            ).hexdigest(),
         },
         "notes": "口径见 generate_golden.py 模块注释；改任何 case 必须重跑门禁测试与阈值对照。",
     }

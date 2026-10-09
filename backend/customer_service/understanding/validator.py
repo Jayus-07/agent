@@ -148,6 +148,18 @@ def validate_confirm_decision(raw: object) -> str | None:
     return decision if decision in ("confirm", "cancel", "unknown") else None
 
 
+def validate_task_plan_candidate(raw: object) -> dict | None:
+    """校验模型/规则候选任务计划；非法或带额外字段的计划整体拒绝。"""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        from backend.customer_service.understanding.task_plan import CSTaskPlan
+
+        return CSTaskPlan.model_validate(raw).model_dump(exclude_none=True)
+    except Exception:
+        return None
+
+
 def extract_json_object(content: str) -> dict | None:
     """LLM 返回文本 → JSON object（容 ```json 包裹）；无效返回 None。"""
     import json

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from langgraph.types import Command
 
 from backend.customer_service.pending_handler import cs_pending_handler_node
@@ -35,14 +36,30 @@ def _pending_action(**overrides) -> dict:
 def _state(**overrides) -> dict:
     base = {
         "user_id": "u1",
+        "tenant_id": "tenant-1",
         "session_id": "s1",
         "conversation_id": "c1",
         "user_message": "确认",
+        "cs_route": {
+            "domain": "AFTER_SALES",
+            "route_path": "business_action",
+            "intent": "as_refund",
+            "confidence": 0.9,
+        },
         "pending_action": None,
         "confirmation_state": "not_required",
     }
     base.update(overrides)
     return base
+
+
+@pytest.fixture(autouse=True)
+def _no_active_handoff(monkeypatch):
+    """Pending 单测默认没有 PG 活跃工单；需要时由用例覆盖该权威读取。"""
+    monkeypatch.setattr(
+        "backend.customer_service.handoff.lifecycle.load_active_handoff_sync",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 class TestPendingHandlerPassthrough:
@@ -76,6 +93,11 @@ class TestPendingHandlerExpiry:
         cmd = cs_pending_handler_node(_state(
             pending_action=_pending_action(),
             confirmation_state="pending",
+            user_message="退款一般多久到账？",
+            cs_route={
+                "domain": "KNOWLEDGE", "route_path": "knowledge_query",
+                "intent": "k_faq", "confidence": 0.9,
+            },
         ))
 
         assert cmd.goto == "cs_reporter"
@@ -152,7 +174,10 @@ class TestPendingHandlerCancel:
 
         assert cmd.goto == "cs_reporter"
         assert cmd.update["confirmation_state"] == "cancelled"
-        mock_store.clear.assert_called_once_with("u1", "s1")
+        mock_store.cancel_pending.assert_called_once_with(
+            "u1", "s1", tenant_id="tenant-1", proposal_id="", expected_version=1,
+            client_action_id=None,
+        )
 
 
 class TestPendingHandlerUnclear:
@@ -218,8 +243,8 @@ class TestNeedInfoCancel:
         assert cmd.update["cs_audit_entries"][0]["action_type"] == "pending_cancelled"
 
     @patch("backend.customer_service.confirmation.is_expired", return_value=False)
-    def test_question_mark_not_cancelled_forwards_to_action(self, _mock_expired):
-        """疑问句不算表态（confirmation 单源保护）：继续转发 action 补槽。"""
+    def test_question_mark_not_cancelled_asks_for_clarity(self, _mock_expired):
+        """疑问句不算取消，也不能当作缺槽答案或确认。"""
         with patch(
             "backend.customer_service.confirmation_store.get_confirmation_store",
         ), patch(
@@ -231,11 +256,12 @@ class TestNeedInfoCancel:
                 user_message="可以取消吗",
             ))
 
-        assert cmd.goto == "cs_action_expert"
+        assert cmd.goto == "cs_reporter"
+        assert cmd.update["pending_turn_decision"] == "AMBIGUOUS"
 
     @patch("backend.customer_service.confirmation.is_expired", return_value=False)
-    def test_plain_new_question_still_forwards_to_action(self, _mock_expired):
-        """纯新问题（无取消词）不吞掉：照常转发补槽（缺陷6.3 语义保留）。"""
+    def test_readonly_policy_question_routes_to_supervisor(self, _mock_expired):
+        """need_info 期间的知识问句可以只读回答，不消费缺槽 pending。"""
         with patch(
             "backend.customer_service.confirmation_store.get_confirmation_store",
         ), patch(
@@ -245,9 +271,14 @@ class TestNeedInfoCancel:
                 pending_action=_need_info_pending(),
                 confirmation_state="pending_confirmation",
                 user_message="帮我查一下保修政策",
+                cs_route={
+                    "domain": "KNOWLEDGE", "route_path": "knowledge_query",
+                    "intent": "k_faq", "confidence": 0.9,
+                },
             ))
 
-        assert cmd.goto == "cs_action_expert"
+        assert cmd.goto == "cs_supervisor"
+        assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
 
 
 class TestNeedInfoHandoffEscape:
@@ -279,6 +310,230 @@ class TestNeedInfoHandoffEscape:
         assert cmd.goto == "cs_supervisor", f"应回 supervisor 重分诊: {cmd.goto}"
         assert cleared.get("key") == ("u-esc", "s-esc", "cancelled"),             f"need_info pending 未释放: {cleared}"
 
+
+class TestPendingTurnClassification:
+    def test_need_info_faq_accepts_enum_route_path_from_router_model_dump(self):
+        """生产路由的 model_dump 保留 StrEnum，PendingHandler 仍须识别只读问句。"""
+        from backend.customer_service.router.types import CSRoutePath
+
+        pending = _need_info_pending()
+        cmd = cs_pending_handler_node(_state(
+            user_message="退款一般多久到账？",
+            cs_route={
+                "domain": "KNOWLEDGE",
+                "route_path": CSRoutePath.KNOWLEDGE_QUERY,
+                "intent": "k_faq",
+                "confidence": 0.9,
+            },
+            pending_action=pending,
+            confirmation_state="pending",
+        ))
+
+        assert cmd.goto == "cs_supervisor"
+        assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
+        assert cmd.update["pending_action"] == pending
+
+    def test_readonly_question_keeps_proposal_and_routes_supervisor(self):
+        """Pending proposal 期间的常见问题允许单轮只读分流，proposal 不变。"""
+        pending = _pending_action(
+            action_id="act-readonly", proposal_id="proposal-v4", version=4,
+        )
+        state = _state(
+            user_message="退款一般多久到账？",
+            cs_route={
+                "domain": "KNOWLEDGE", "route_path": "knowledge_query",
+                "intent": "k_faq", "confidence": 0.9,
+            },
+            pending_action=pending,
+            confirmation_state="pending",
+        )
+
+        cmd = cs_pending_handler_node(state)
+
+        assert cmd.goto == "cs_supervisor"
+        assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
+        assert cmd.update["pending_action"] == pending
+        assert cmd.update["pending_action"]["proposal_id"] == "proposal-v4"
+        assert cmd.update["pending_action"]["version"] == 4
+
+    def test_logistics_read_routes_to_query_expert_path(self):
+        pending = _pending_action(action_id="act-logistics", version=3)
+        cmd = cs_pending_handler_node(_state(
+            user_message="查一下我的订单物流",
+            cs_route={
+                "domain": "TRANSACTION", "route_path": "business_query",
+                "intent": "t_logistics", "confidence": 0.9,
+            },
+            pending_action=pending,
+            confirmation_state="pending",
+        ))
+
+        assert cmd.goto == "cs_supervisor"
+        assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
+        assert cmd.update["pending_action"] == pending
+
+    @patch("backend.customer_service.confirmation_flow.process_confirmation")
+    def test_question_about_return_is_never_confirmation(self, process, monkeypatch):
+        pending = _pending_action()
+        state = _state(
+            user_message="可以退吗？",
+            pending_action=pending,
+            confirmation_state="pending",
+        )
+
+        cmd = cs_pending_handler_node(state)
+
+        process.assert_not_called()
+        assert cmd.goto == "cs_reporter"
+        assert cmd.update["pending_turn_decision"] == "AMBIGUOUS"
+        assert cmd.update.get("pending_action", pending) == pending
+        assert "确认" in cmd.update["last_expert_result"]["response_draft"]
+
+    def test_new_write_request_conflicts_without_replacing_pending(self):
+        pending = _pending_action(action_id="act-old", proposal_id="proposal-old", version=2)
+        state = _state(
+            user_message="帮我申请退款",
+            pending_action=pending,
+            confirmation_state="pending",
+        )
+
+        cmd = cs_pending_handler_node(state)
+
+        assert cmd.goto == "cs_reporter"
+        assert cmd.update["pending_turn_decision"] == "NEW_WRITE_CONFLICT"
+        assert cmd.update["pending_action"] == pending
+        assert "取消" in cmd.update["last_expert_result"]["response_draft"]
+
+    @patch("backend.customer_service.confirmation.is_expired", return_value=False)
+    @patch("backend.customer_service.confirmation_flow.process_confirmation")
+    def test_confirm_passes_tenant_and_proposal_version(
+        self, process, _expired,
+    ):
+        from types import SimpleNamespace
+
+        process.return_value = SimpleNamespace(
+            kind="duplicate", confirmation_state="confirmed",
+            answer="该操作已处理。", action_type="refund_request",
+            action_result=None, audit_entry=None, pending_action=None,
+        )
+        pending = _pending_action(
+            action_id="act-4", proposal_id="proposal-4", version=4,
+        )
+
+        cs_pending_handler_node(_state(
+            user_message="确认", pending_action=pending,
+            confirmation_state="pending",
+        ))
+
+        process.assert_called_once_with(
+            pending, "确认", "u1", "s1", tenant_id="tenant-1",
+            proposal_id="proposal-4", expected_version=4,
+        )
+
+    def test_need_info_faq_routes_knowledge_without_changing_slot_pending(self):
+        pending = _need_info_pending()
+        state = _state(
+            user_message="退款一般多久到账？",
+            cs_route={
+                "domain": "KNOWLEDGE", "route_path": "knowledge_query",
+                "intent": "k_faq", "confidence": 0.9,
+            },
+            pending_action=pending,
+            confirmation_state="pending_confirmation",
+        )
+
+        cmd = cs_pending_handler_node(state)
+
+        assert cmd.goto == "cs_supervisor"
+        assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
+        assert cmd.update["pending_action"] == pending
+
+    def test_need_info_order_choice_continues_slot_fill(self):
+        pending = _need_info_pending()
+        state = _state(
+            user_message="第二个订单",
+            cs_route={
+                "domain": "AFTER_SALES", "route_path": "business_action",
+                "intent": "as_return", "confidence": 0.9,
+            },
+            pending_action=pending,
+            confirmation_state="pending_confirmation",
+        )
+
+        cmd = cs_pending_handler_node(state)
+
+        assert cmd.goto == "cs_action_expert"
+        assert cmd.update["pending_turn_slot_fill"] is True
+        assert cmd.update["pending_action"] == pending
+
+    @pytest.mark.parametrize("handoff_state", ["waiting_human", "human_active"])
+    @patch("backend.customer_service.confirmation_flow.process_confirmation")
+    @patch("backend.customer_service.experts.action.action_expert_node")
+    def test_handoff_state_blocks_pending_execution(
+        self, action_node, process, monkeypatch, handoff_state,
+    ):
+        from backend.customer_service.handoff import lifecycle
+
+        monkeypatch.setattr(
+            lifecycle,
+            "load_active_handoff_sync",
+            lambda *_args, **_kwargs: {"handoff_state": handoff_state},
+        )
+        pending = _pending_action()
+        cmd = cs_pending_handler_node(_state(
+            user_message="确认",
+            pending_action=pending,
+            confirmation_state="pending",
+        ))
+
+        process.assert_not_called()
+        action_node.assert_not_called()
+        assert cmd.goto == "cs_reporter"
+        assert cmd.update["handoff_state"] == handoff_state
+        assert cmd.update["pending_action"] == pending
+        assert cmd.update["supervisor_decision"]["direct_reply"]
+
+    @patch("backend.customer_service.confirmation_flow.process_confirmation")
+    def test_handoff_authoritative_read_error_fails_closed(self, process, monkeypatch):
+        from backend.customer_service.handoff import lifecycle
+
+        def _fail(*_args, **_kwargs):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(lifecycle, "load_active_handoff_sync", _fail)
+        pending = _pending_action()
+        cmd = cs_pending_handler_node(_state(
+            user_message="确认", pending_action=pending,
+            confirmation_state="pending",
+        ))
+
+        process.assert_not_called()
+        assert cmd.goto == "cs_reporter"
+        assert cmd.update["pending_action"] == pending
+        assert "暂时无法核实" in cmd.update["last_expert_result"]["response_draft"]
+        assert cmd.update["supervisor_decision"]["direct_reply"]
+
+    def test_handoff_read_is_tenant_and_conversation_scoped(self, monkeypatch):
+        from backend.customer_service.handoff import lifecycle
+
+        calls = []
+        monkeypatch.setattr(
+            lifecycle,
+            "load_active_handoff_sync",
+            lambda tenant, conversation, **kwargs: calls.append(
+                (tenant, conversation, kwargs),
+            ) or None,
+        )
+
+        cmd = cs_pending_handler_node(_state(
+            pending_action=_pending_action(), confirmation_state="pending",
+            user_message="退款一般多久到账？",
+            cs_route={"route_path": "knowledge_query", "domain": "KNOWLEDGE"},
+        ))
+
+        assert cmd.goto == "cs_supervisor"
+        assert calls == [("tenant-1", "c1", {"raise_on_error": True})]
+
     def test_need_info_normal_slot_fill_unchanged(self, monkeypatch):
         """回归：非转人工的补槽消息照旧转发 action expert（不误放行）。"""
         from backend.customer_service import pending_handler as ph
@@ -300,4 +555,5 @@ class TestNeedInfoHandoffEscape:
         )
         cmd = ph.cs_pending_handler_node(state)
         assert cmd.goto == "cs_action_expert", f"补槽应转发 action: {cmd.goto}"
+        assert cmd.update["pending_turn_slot_fill"] is True
         assert not cleared, "非转人工不应释放 pending"

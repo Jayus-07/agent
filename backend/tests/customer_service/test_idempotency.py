@@ -83,6 +83,86 @@ class TestDuplicateConfirm:
         # 终态写 success（而非旧实现一律 cancelled）
         store.clear.assert_called_once_with("u1", "s1", final_state="success")
 
+    @patch("backend.customer_service.confirmation_flow._execute_confirmed_action")
+    @patch("backend.customer_service.confirmation_store.get_confirmation_store")
+    def test_confirm_claim_is_bound_to_tenant_proposal_version_and_action_id(
+        self, mock_store_fn, mock_execute,
+    ):
+        store = _make_store(claim_result="act-001")
+        mock_store_fn.return_value = store
+        mock_execute.return_value = {"action_id": "act-001"}
+
+        pending = _pending_action(
+            proposal_id="proposal-1", version=4, tenant_id="tenant-1",
+        )
+        outcome = process_confirmation(
+            pending,
+            "确认",
+            "u1",
+            "s1",
+            tenant_id="tenant-1",
+            proposal_id="proposal-1",
+            expected_version=4,
+            client_action_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+        )
+
+        assert outcome.kind == "success"
+        store.claim_for_execution.assert_called_once_with(
+            "u1",
+            "s1",
+            tenant_id="tenant-1",
+            proposal_id="proposal-1",
+            expected_version=4,
+            client_action_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+        )
+
+    @patch("backend.customer_service.confirmation_store.get_confirmation_store")
+    def test_cancel_uses_conditional_versioned_database_transition(self, mock_store_fn):
+        store = _make_store(claim_result=None)
+        store.cancel_pending.return_value = True
+        mock_store_fn.return_value = store
+
+        outcome = process_confirmation(
+            _pending_action(proposal_id="proposal-1", version=3),
+            "取消",
+            "u1",
+            "s1",
+            tenant_id="tenant-1",
+            proposal_id="proposal-1",
+            expected_version=3,
+            client_action_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+        )
+
+        assert outcome.kind == "cancelled"
+        store.cancel_pending.assert_called_once_with(
+            "u1", "s1", tenant_id="tenant-1", proposal_id="proposal-1",
+            expected_version=3,
+            client_action_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+        )
+        store.clear.assert_not_called()
+
+    @patch("backend.customer_service.confirmation_store.get_confirmation_store")
+    def test_stale_conditional_cancel_is_duplicate_and_preserves_pending(
+        self, mock_store_fn,
+    ):
+        store = _make_store(claim_result=None)
+        store.cancel_pending.return_value = False
+        mock_store_fn.return_value = store
+
+        outcome = process_confirmation(
+            _pending_action(proposal_id="proposal-1", version=3),
+            "取消",
+            "u1",
+            "s1",
+            tenant_id="tenant-1",
+            proposal_id="proposal-1",
+            expected_version=2,
+            client_action_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+        )
+
+        assert outcome.kind == "duplicate"
+        store.clear.assert_not_called()
+
 
 class TestConcurrentClaim:
     def test_repo_claim_pending_conditional_update(self):

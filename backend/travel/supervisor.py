@@ -29,12 +29,12 @@ from langgraph.types import Command
 
 from backend.config import travel as T
 from backend.shared.logger import logger
-from backend.travel.node_span import traced_node
 from backend.travel.graph_state import (
     EXPERT_TO_NODE,
+    TRAVEL_AUXILIARY_TASKS,
     TRAVEL_BUDGET_EXPERT,
-    TRAVEL_POI_EXPERT,
     TRAVEL_PARTIAL_REPLAN,
+    TRAVEL_POI_EXPERT,
     TRAVEL_REPAIR,
     TRAVEL_REPORTER,
     TRAVEL_RISK_EXPERT,
@@ -46,6 +46,7 @@ from backend.travel.graph_state import (
     load_itinerary,
     load_validation,
 )
+from backend.travel.node_span import traced_node
 
 
 class TravelStage(str, Enum):
@@ -58,6 +59,7 @@ class TravelStage(str, Enum):
     VALIDATE = "validate"
     REPAIR = "repair"
     PARTIAL_REPLAN = "partial_replan"
+    AUXILIARY_TASKS = "auxiliary_tasks"
     REPORT = "report"
     DONE = "done"
 
@@ -71,6 +73,7 @@ _STAGE_TO_NODE: dict[TravelStage, str] = {
     TravelStage.VALIDATE: TRAVEL_VALIDATOR,
     TravelStage.REPAIR: TRAVEL_REPAIR,
     TravelStage.PARTIAL_REPLAN: TRAVEL_PARTIAL_REPLAN,
+    TravelStage.AUXILIARY_TASKS: TRAVEL_AUXILIARY_TASKS,
     TravelStage.REPORT: TRAVEL_REPORTER,
     TravelStage.DONE: TRAVEL_REPORTER,
 }
@@ -94,6 +97,7 @@ _STAGE_TO_ACTION: dict[TravelStage, str] = {
     TravelStage.VALIDATE: "run_validation",
     TravelStage.REPAIR: "run_repair",
     TravelStage.PARTIAL_REPLAN: "run_partial_replan",
+    TravelStage.AUXILIARY_TASKS: "run_auxiliary_tasks",
     TravelStage.REPORT: "finish_report",
     TravelStage.DONE: "finish_done",
 }
@@ -124,7 +128,7 @@ _INTENT_REPORT_REASONS: dict[str, str] = {
     "out_of_scope": "出域诉求：转为能力边界引导，不启动规划链",
     "query_static": "静态问答意图：给有出处的观点，不启动规划链",
     "query_dynamic": "实时状态问答：暂无可靠实时来源，如实告知",
-    "query_transit": "交通/车票查询：slot 层已预取车次，直出答案不启动规划链",
+    "query_transit": "交通/车票查询：附加任务节点已完成车次查询，直出答案不启动规划链",
     "discover": "找目的地/灵感：给可解释候选，不启动规划链",
     "modify": "逐条改单诉求：无结构化改动信号，如实说明当前支持范围",
 }
@@ -134,12 +138,58 @@ def _experts_done(state: dict) -> set[str]:
     return {e.get("expert", "") for e in state.get("expert_history", [])}
 
 
+def _has_pending_auxiliary_tasks(state: dict) -> bool:
+    decision = state.get("turn_decision") or {}
+    tasks = decision.get("additional_tasks") or []
+    if not tasks:
+        return False
+    results = state.get("task_results") or []
+    completed_ids = {
+        str(item.get("task_id") or "")
+        for item in results if isinstance(item, dict)
+    }
+    completed_types = {
+        str(item.get("type") or "")
+        for item in results if isinstance(item, dict)
+    }
+    return any(
+        str(task.get("task_id") or "") not in completed_ids
+        and str(task.get("type") or "") not in completed_types
+        for task in tasks if isinstance(task, dict)
+    )
+
+
 def decide(state: dict) -> TravelDecision:
     """纯函数决策：状态 → 下一步阶段。
 
     单测可以穷举各种状态组合，不需要构造 LangGraph 运行时 —— 这正是把
     调度做成纯函数的目的。
     """
+    if state.get("request_mode") == "read_only":
+        intent = state.get("intent") or ""
+        allowed_intents = {
+            "social", "meta", "out_of_scope", "query_static",
+            "query_dynamic", "query_transit", "discover", "read_only_qa",
+        }
+        tasks = (state.get("turn_decision") or {}).get("additional_tasks") or []
+        allowed_task_types = {
+            "query_train", "query_weather", "query_poi", "query_hotel",
+        }
+        if (intent not in allowed_intents
+                or any(not isinstance(task, dict)
+                       or task.get("type") not in allowed_task_types
+                       for task in tasks)):
+            return TravelDecision(
+                TravelStage.REPORT,
+                "只读问答安全门拒绝未允许的规划动作",
+            )
+        if _has_pending_auxiliary_tasks(state):
+            return TravelDecision(
+                TravelStage.AUXILIARY_TASKS,
+                "执行只读问答允许的查询任务",
+            )
+        return TravelDecision(TravelStage.REPORT, "只读问答直接收尾")
+
     # 新一轮输入可能继承上一轮 reporter 的 finished=true；只要槽位层已经
     # 识别出新的局部改单且结果尚未生成，必须优先进入局部节点。
     if state.get("partial_replan") and not state.get("partial_replan_result"):
@@ -150,6 +200,14 @@ def decide(state: dict) -> TravelDecision:
 
     if state.get("finished"):
         return TravelDecision(TravelStage.DONE, "已结束")
+
+    # 附加查询先独立执行并记账；其失败由 optional Tool Policy 降级，
+    # 不阻断后续的局部改单或主规划链。
+    if _has_pending_auxiliary_tasks(state):
+        return TravelDecision(
+            TravelStage.AUXILIARY_TASKS,
+            "执行与主规划正交的附加查询任务",
+        )
 
     step_count = state.get("step_count") or 0
     if step_count >= T.TRAVEL_MAX_STEPS:
@@ -336,5 +394,6 @@ __all__ = [
     "decide",
     "EXPERT_TO_NODE",
     "TRAVEL_SUPERVISOR",
+    "TRAVEL_AUXILIARY_TASKS",
     "_STAGE_TO_ACTION",
 ]

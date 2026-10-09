@@ -160,13 +160,15 @@ def build_clarification_plan(
     user_message: str = "",
     *,
     unsupported_city: str | None = None,
+    additional_missing: list[str] | None = None,
 ) -> ClarificationPlan | None:
     """构建追问计划；无缺失槽位返回 None。
 
     unsupported_city 由调用方传入（requirement_agent 抽取层的判定结果），
     本模块不做抽取 —— 计划层保持零业务抽取依赖，避免与 agents 层成环。
     """
-    missing = brief.missing_slots()
+    missing = list(dict.fromkeys(
+        [*brief.missing_slots(), *(additional_missing or [])]))
     if not missing:
         return None
     ask = _ask_slot(missing)
@@ -193,7 +195,9 @@ def build_clarification_plan(
     elif ask == "days":
         options = _days_options(brief.destination)
     return ClarificationPlan(
-        reason="必填槽位缺失，需要用户补充",
+        reason=("必填槽位缺失，需要用户补充"
+                if ask in {"destination", "days"}
+                else "修改目标或附加查询信息不明确，需要用户确认"),
         missing_slots=list(missing),
         ask_slots=[ask],
         known_facts=known_facts,

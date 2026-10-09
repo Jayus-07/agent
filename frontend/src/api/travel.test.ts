@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   confirmTravelPlan,
+  discardTravelPlan,
   fetchTravelPlanDiff,
   fetchTravelPlanVersions,
   reverseGeocodeTravelOrigin,
@@ -110,19 +111,24 @@ describe('旅游行程版本 API', () => {
     )
   })
 
-  it('确认和恢复分别发送当前版本与 CAS 基准', async () => {
+  it('确认、放弃和恢复分别发送当前版本与 CAS 基准', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       jsonResponse({ status: 'ok' }),
     )
 
     await confirmTravelPlan('conv-1', 2)
+    await discardTravelPlan('conv-1', 3)
     await restoreTravelPlan('conv-1', 1, 2)
 
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
     expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual({
       conversation_id: 'conv-1', plan_version: 2,
     })
     expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))).toEqual({
+      conversation_id: 'conv-1', plan_version: 3,
+    })
+    expect(fetchSpy.mock.calls[1][0]).toBe('/api/travel/plans/discard')
+    expect(JSON.parse(String(fetchSpy.mock.calls[2][1]?.body))).toEqual({
       conversation_id: 'conv-1', target_version: 1, base_version: 2,
     })
   })

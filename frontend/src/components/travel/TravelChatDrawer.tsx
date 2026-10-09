@@ -29,7 +29,7 @@ import {
   PlaneTakeoff, RefreshCw, Send, Square, X,
 } from 'lucide-react'
 import {
-  confirmTravelPlan, type Itinerary, type ItineraryBrief, type PlanResponse,
+  confirmTravelPlan, discardTravelPlan, type Itinerary, type ItineraryBrief, type PlanResponse,
   recordTravelDecision, streamTravelPlan, type TravelSource, type TravelStreamEvent,
   type TravelClarificationOption,
 } from '@/api/travel'
@@ -38,19 +38,12 @@ import type { BudgetStatus } from '@/api/budgets'
 import MarkdownContent from '@/components/chat/MarkdownContent'
 import ToolProcessRows from './ToolProcessRows'
 import RationaleCard, { type RationaleData } from './RationaleCard'
+import TravelChangeSummaryView from './TravelChangeSummaryView'
+import { useTravelConversation, type TravelConversationMessage } from './useTravelConversation'
 import { useTypewriter } from './useTypewriter'
-import { describePlanReply, sanitizeTravelReply } from './planState'
+import { describePlanReply, travelChatReplyText } from './planState'
 import { buildChangeSummary, travelProcessStatusLabel, type TravelProcessState } from './travelRuntime'
 import { TRAVEL_TOOL_LABELS } from './travelDisplay'
-
-interface ChatMsg {
-  role: 'user' | 'assistant'
-  text: string
-  tag?: string
-  tone?: 'ok' | 'warn'
-  /** M2：结构化「为什么这样排」（后端 PlanResponse.rationale），有值时渲染 RationaleCard */
-  rationale?: RationaleData
-}
 
 /**
  * 移动端聊天的三个可调手感参数（2026-10-07）。
@@ -219,7 +212,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   onStartNewTrip, pendingResponse, onDraft, onDiscardPending, generating = false, disabled, disabledHint, budgetStatus = null,
   introMessage = '', introRationale = null, handoverUserMessage = null, onOpenCityGuide,
 }: Props, ref) {
-  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const { messages, setMessages, syncError } = useTravelConversation(conversationId)
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -227,7 +220,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   // M4/G3：重试保留原始来源归因（lastRequest 只存文本，source 走 ref）
   const lastSourceRef = useRef<TravelSource>('manual')
   const [applying, setApplying] = useState(false)
-  const [showPendingDetails, setShowPendingDetails] = useState(true)
+  const [showPendingDetails, setShowPendingDetails] = useState(false)
   const [stopped, setStopped] = useState(false)
   const [clarificationOptions, setClarificationOptions] = useState<TravelClarificationOption[]>([])
   const [fillingDays, setFillingDays] = useState(false)
@@ -251,7 +244,6 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     prevConvRef.current = conversationId
     abortRef.current?.abort()
     currentRunRef.current = ''
-    setMessages([])
     setError('')
     setLoading(false)
     setStopped(false)
@@ -264,10 +256,13 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   useEffect(() => {
     if (!handoverUserMessage) return
     setMessages((prev) => {
-      if (prev.some((m) => m.role === 'user' && m.text === handoverUserMessage)) return prev
-      return [...prev, { role: 'user', text: handoverUserMessage }]
+      const id = `handover:${conversationId}`
+      if (prev.some((m) => m.id === id)) return prev
+      return [...prev, {
+        id, conversationId, turnId: id, role: 'user', text: handoverUserMessage,
+      }]
     })
-  }, [handoverUserMessage])
+  }, [conversationId, handoverUserMessage, setMessages])
 
   // 自动滚到底（新消息 / 进行中提示出现时）
   useEffect(() => {
@@ -292,13 +287,13 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     const message = raw.trim()
     if (!message) return
     // M2-f 排队槽：本轮忙时消息不丢，进单条排队槽（可编辑/可取消，空闲自动发）
-    if (abortRef.current || loading || generating || pendingResponse) {
+    if (abortRef.current || loading || generating) {
       queuedSourceRef.current = source
       setQueuedText(message)
       setText('')
       return
     }
-    if (disabled) return
+    if (disabled && !pendingResponse) return
     // 记下发起时所属的线程：请求返回时若线程已换（用户点了「新行程」），
     // 这条回复属于旧行程，不能再往新对话里写。
     const sentConv = conversationId
@@ -312,14 +307,18 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     setText('')
     setClarificationOptions([])
     setFillingDays(false)
-    setMessages((prev) => [...prev, { role: 'user', text: message }])
+    setMessages((prev) => [...prev, {
+      id: `${clientRunId}:user`, conversationId: sentConv, turnId: clientRunId,
+      role: 'user', text: message,
+    }])
     setLoading(true)
     const controller = new AbortController()
     abortRef.current = controller
     try {
       let data: PlanResponse | null = null
       for await (const event of streamTravelPlan(message, conversationId, {
-        signal: controller.signal, clientRunId, source, mode: 'chat',
+        signal: controller.signal, clientRunId, source,
+        mode: pendingResponse ? 'read_only' : 'chat',
       })) {
         if (controller.signal.aborted || currentRunRef.current !== clientRunId) break
         onProcessEvent(event)
@@ -334,23 +333,34 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
       if (prevConvRef.current !== sentConv || currentRunRef.current !== clientRunId) return
       if (!data) throw new Error('旅游规划流未返回结构化结果')
       if (data.status === 'failed') {
-        throw new Error(data.final_answer || '旅游规划执行失败')
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `${clientRunId}:assistant`, conversationId: sentConv, turnId: clientRunId,
+            role: 'assistant',
+            text: data.final_answer || '本次旅游查询未完成，请稍后重试。',
+            tag: '未完成', tone: 'warn',
+          },
+        ])
+        return
       }
       setClarificationOptions(data.clarification_options ?? [])
       const { tag, tone } = describePlanReply(data)
+      const hasDraft = Boolean(
+        data.itinerary && data.plan_status === 'waiting_confirmation',
+      )
       setMessages((prev) => [
         ...prev,
         {
+          id: `${clientRunId}:assistant`, conversationId: sentConv, turnId: clientRunId,
           role: 'assistant',
-          text: data.itinerary
-            ? `已生成草案 v${data.itinerary.plan_version}，请查看变化后选择应用或放弃。`
-            : sanitizeTravelReply(data.final_answer || '（没有返回内容）'),
-          tag: data.itinerary ? '有待应用修改' : tag,
+          text: travelChatReplyText(data, hasDraft),
+          tag: hasDraft ? '有待应用修改' : data.itinerary ? '当前行程' : tag,
           tone: data.itinerary ? 'ok' : tone,
           rationale: (data as { rationale?: RationaleData }).rationale || undefined,
         },
       ])
-      if (data.itinerary) {
+      if (hasDraft) {
         onDraft(data)
       } else {
         onResponse(data)
@@ -360,6 +370,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
       if (controller.signal.aborted) {
         // 用户主动中止：留一行痕迹，不当成错误
         setMessages((prev) => [...prev, {
+          id: `${clientRunId}:assistant`, conversationId: sentConv, turnId: clientRunId,
           role: 'assistant', text: '（已停止本次规划，已完成的结果仍保留）', tag: '已停止', tone: 'warn',
         }])
       } else {
@@ -387,7 +398,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
 
   // M2-f 排队槽自动发送：本轮结束（且无草案待决、未禁用）即发出
   useEffect(() => {
-    if (loading || generating || disabled || pendingResponse || !queuedText) return
+    if (loading || generating || (disabled && !pendingResponse) || !queuedText) return
     if (abortRef.current) return
     const t = queuedText
     const src = queuedSourceRef.current
@@ -425,6 +436,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
         ? { ...pendingResponse, plan_status: 'confirmed' }
         : pendingResponse)
       setMessages((prev) => [...prev, {
+        id: `decision:${conversationId}:${pendingResponse.itinerary!.plan_version}:applied`,
+        conversationId,
+        turnId: pendingResponse.turn_id || currentRunRef.current || `decision:${pendingResponse.itinerary!.plan_version}`,
         role: 'assistant',
         text: `已将 v${pendingResponse.itinerary?.plan_version} 应用到当前行程。`,
         tag: '已应用',
@@ -438,20 +452,32 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   }, [applying, conversationId, onResponse, pendingResponse])
 
   const discardPending = useCallback(async () => {
-    if (!pendingResponse) return
-    // M4/G1 决策留痕：草案放弃先上报再清理本地（软失败不阻断）
-    await recordTravelDecision({
-      decision: 'discard_draft',
-      conversationId,
-      planVersion: pendingResponse.itinerary?.plan_version ?? 0,
-      source: 'manual',
-      clientRunId: currentRunRef.current || undefined,
-    })
-    setMessages((prev) => [...prev, {
-      role: 'assistant', text: '已保留原行程，这次修改没有应用到当前视图。', tag: '未应用', tone: 'warn',
-    }])
-    onDiscardPending()
-  }, [conversationId, onDiscardPending, pendingResponse])
+    if (!pendingResponse?.itinerary || applying) return
+    setApplying(true)
+    setError('')
+    try {
+      await discardTravelPlan(conversationId, pendingResponse.itinerary.plan_version)
+      // 决策留痕是审计旁路；业务状态已由 discard API 原子提交。
+      await recordTravelDecision({
+        decision: 'discard_draft',
+        conversationId,
+        planVersion: pendingResponse.itinerary.plan_version,
+        source: 'manual',
+        clientRunId: currentRunRef.current || undefined,
+      })
+      setMessages((prev) => [...prev, {
+        id: `decision:${conversationId}:${pendingResponse.itinerary!.plan_version}:discarded`,
+        conversationId,
+        turnId: pendingResponse.turn_id || currentRunRef.current || `decision:${pendingResponse.itinerary!.plan_version}`,
+        role: 'assistant', text: '已保留原行程，这次修改没有应用到当前视图。', tag: '未应用', tone: 'warn',
+      }])
+      onDiscardPending()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '放弃草案失败，请刷新后重试')
+    } finally {
+      setApplying(false)
+    }
+  }, [applying, conversationId, onDiscardPending, pendingResponse])
 
   const retry = useCallback(() => {
     if (lastRequest && !loading) void send(lastRequest, lastSourceRef.current)
@@ -467,18 +493,29 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
   // 出单规划说明（「为什么这样排/美食推荐」）作为首条助手消息常驻对话流。
   // 时序：移交的用户气泡（空态发送的那句话）排在规划说明**之前**——
   // 用户先提问、后出说明；说明之后再来的对话按原顺序追加。
-  const visibleMessages = useMemo<ChatMsg[]>(() => {
+  const visibleMessages = useMemo<TravelConversationMessage[]>(() => {
     if (!introMessage.trim()) return messages
-    const intro: ChatMsg = {
+    const intro: TravelConversationMessage = {
+      id: `intro:${conversationId}`,
+      conversationId,
+      turnId: `intro:${conversationId}`,
       role: 'assistant', text: introMessage.trim(), tag: '规划说明',
       rationale: introRationale ?? undefined,
     }
     const firstAssistant = messages.findIndex((m) => m.role === 'assistant')
     const cut = firstAssistant === -1 ? messages.length : firstAssistant
     return [...messages.slice(0, cut), intro, ...messages.slice(cut)]
-  }, [introMessage, introRationale, messages])
+  }, [conversationId, introMessage, introRationale, messages])
   // M2-h 快捷话术（2026-10-03 拍板四条；目的地/天数来自真实 brief/activeDay）
-  const quickChips = useMemo(() => {
+  const quickChips = useMemo<Array<{
+    key: string; label: string; text: string; cityGuide?: boolean
+  }>>(() => {
+    if (pendingResponse) {
+      return [
+        { key: 'draft-cost', label: '草案预算怎么算', text: '这份草案的预算估算怎么算的？' },
+        { key: 'draft-reason', label: '为什么这样安排', text: '这趟为什么这样安排？' },
+      ]
+    }
     const dest = (brief?.destination || '').trim()
     const chips: Array<{ key: string; label: string; text: string; cityGuide?: boolean }> = []
     if (dest) chips.push({ key: 'guide', label: `介绍下${dest}特色`, cityGuide: true, text: `介绍下${dest}特色，适合玩几天、有什么必吃必逛` })
@@ -486,7 +523,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
     chips.push({ key: 'hotel', label: '想住得离海近一点', text: '想住得离海近一点，帮我调整住宿' })
     chips.push({ key: 'budget', label: '预算调到 ¥2000', text: '预算调到 2000，帮我重排行程' })
     return chips
-  }, [brief?.destination, hasItinerary, activeDay])
+  }, [brief?.destination, hasItinerary, activeDay, pendingResponse])
 
   const hasMessages = visibleMessages.length > 0
   const inputDisabled = disabled || loading || generating || Boolean(pendingResponse)
@@ -504,29 +541,41 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
       : null,
     [itinerary, pendingResponse],
   )
+  useEffect(() => {
+    setShowPendingDetails(false)
+  }, [pendingResponse?.itinerary?.plan_version])
   const pendingChangeCount = pendingSummary
-    ? pendingSummary.briefFields.length + pendingSummary.moved.length
+    ? pendingSummary.itemChanges.length + pendingSummary.briefFields.length + Number(pendingSummary.budgetDelta !== 0)
     : 0
 
   // 消息渲染：提问段/回答段两段共用（工具执行块插在两段之间=提问→工具→回答）
   // 2026-10-07：原 isLong(>600) 走 <details> 的分支已移除——长回复不再「一坨出现」，
   // 统一交 TypedAssistantText 渐显、打完自动折成一行摘要。
-  const renderMsg = (m: ChatMsg, i: number, animate: boolean) => {
+  const renderMsg = (m: TravelConversationMessage, i: number, animate: boolean) => {
               return (
-                <li key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                <li key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                   <div className={`max-w-[94%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
                     m.role === 'user'
                       ? 'border border-[#d5e5e0] bg-[#e9f3f0] text-[#183037]'
                       : 'border border-[#dae7e5] bg-white text-[#183037]'
                   }`}>
                     {m.role === 'assistant' && m.rationale && Object.keys(m.rationale).length > 0 ? (
-                      <RationaleCard
-                        rationale={m.rationale}
-                        processState={processState}
-                        itinerary={itinerary}
-                        pace={String((processState?.requirement?.brief as Record<string, unknown> | undefined)?.pace ?? '')}
-                        onAsk={(t) => void send(t, 'card_action')}
-                      />
+                      <>
+                        {m.text && (
+                          <TypedAssistantText
+                            text={m.text}
+                            animate={animate}
+                            isPlanning={m.tag === '有待应用修改'}
+                          />
+                        )}
+                        <RationaleCard
+                          rationale={m.rationale}
+                          processState={processState}
+                          itinerary={itinerary}
+                          pace={String((processState?.requirement?.brief as Record<string, unknown> | undefined)?.pace ?? '')}
+                          onAsk={(t) => void send(t, 'card_action')}
+                        />
+                      </>
                     ) : m.role === 'user' ? (
                       <p className="whitespace-pre-wrap break-words">{m.text}</p>
                     ) : (
@@ -713,7 +762,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
               {processBlock}
               {after.length > 0 && (
                 <ul className="space-y-4" aria-label="旅行助手消息">
-                  {after.map((m, i) => renderMsg(m, i, i === after.length - 1))}
+                  {after.map((m, i) => renderMsg(
+                    m, i, m.id === `${currentRunRef.current}:assistant`,
+                  ))}
                 </ul>
               )}
             </>
@@ -744,18 +795,11 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
             <div className="flex items-start gap-2">
               <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-[#087b73]" aria-hidden />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
                   <h3 className="text-xs font-semibold text-[#183037]">
                     有待应用修改 · v{pendingResponse.itinerary.plan_version}
                     {pendingChangeCount > 0 && ` · ${pendingChangeCount} 处调整`}
                   </h3>
-                  <button
-                    type="button"
-                    className="shrink-0 text-[10px] font-medium text-[#087b73] hover:underline"
-                    onClick={() => setShowPendingDetails((value) => !value)}
-                  >
-                    {showPendingDetails ? '收起变化' : '查看变化'}
-                  </button>
                 </div>
                 {pendingStale ? (
                   <p className="mt-1 text-[10px] leading-relaxed text-amber-700">
@@ -763,24 +807,21 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   </p>
                 ) : (
                   <p className="mt-1 text-[10px] leading-relaxed text-[#5c7074]">
-                    确认后生效；当前行程仍保持不变。
+                    确认后生效；当前行程仍保持不变。草案期间可继续提问，修改需先应用或放弃。
                   </p>
                 )}
-                {showPendingDetails && (pendingSummary ? (
-                  <dl className="mt-2 space-y-1 text-[10px] leading-relaxed text-[#5c7074]">
-                    {pendingSummary.briefFields.length > 0 && (
-                      <div><dt className="inline text-[#8aa09c]">需求：</dt><dd className="inline">{pendingSummary.briefFields.join('、')}</dd></div>
-                    )}
-                    {pendingSummary.moved.length > 0 && (
-                      <div><dt className="inline text-[#8aa09c]">移动：</dt><dd className="inline">{pendingSummary.moved.map((item) => `${item.name} 第${item.fromDay}天→第${item.toDay}天`).join('、')}</dd></div>
-                    )}
-                    {pendingSummary.briefFields.length === 0 && pendingSummary.moved.length === 0 && (
-                      <div>行程内容有微调，应用后可在时间轴里对比。</div>
-                    )}
-                  </dl>
+                {pendingSummary ? (
+                  <div className="mt-2">
+                    <TravelChangeSummaryView
+                      summary={pendingSummary}
+                      compact={mode === 'drawer'}
+                      expanded={showPendingDetails}
+                      onToggle={() => setShowPendingDetails((value) => !value)}
+                    />
+                  </div>
                 ) : (
                   <p className="mt-2 text-[10px] text-[#5c7074]">这是当前会话的首份行程，应用后会作为当前版本。</p>
-                ))}
+                )}
                 <div className="mt-3 flex gap-2">
                   <button
                     type="button"
@@ -826,6 +867,12 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           </div>
         )}
 
+        {syncError && (
+          <p role="status" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {syncError}
+          </p>
+        )}
+
         {!loading && processState?.status === 'error' && lastRequest && (
           <button
             type="button"
@@ -846,7 +893,6 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
               <button
                 key={chip.key}
                 type="button"
-                disabled={Boolean(pendingResponse)}
                 onClick={() => {
                   if (chip.cityGuide) { onOpenCityGuide?.(); return }
                   void send(chip.text)
@@ -894,7 +940,7 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
             rows={1}
             placeholder={
               loading || generating ? '本轮进行中，先说下一条？结束后自动发送'
-                : pendingResponse ? '请先应用或保留当前预览，再继续修改…'
+                : pendingResponse ? '草案待确认，可继续提问；如需修改请先应用或放弃…'
                   : fillingDays ? '请输入想玩的天数，例如：4 天'
                     : hasItinerary ? '比如：第二天别排太满…' : '比如：杭州 3 天，2 个人，喜欢自然…'
             }

@@ -73,6 +73,9 @@ class DeltaData(_Loose):
 class DoneData(_Loose):
     elapsed: float
     sources: list
+    # 兼容旧客户端新增的权威终态答案与生产节点归因。
+    answer: str | None = None
+    answer_source: str | None = None
     # 2026-10-03 RAG 拒答/置信度语义（缺省 = 正常回答）：answer_status 来自
     # 工具 RAGMETA 标记，取值 rag_no_evidence / rag_permission_denied /
     # rag_hallucination（evidence_gate.models.ANSWER_STATUS_BY_REASON）；

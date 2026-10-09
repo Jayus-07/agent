@@ -88,3 +88,33 @@ def test_new_plan_trace_is_the_only_full_replan_mode():
     assert got["full_replan"] is True
     assert got["partial_replan"] is False
     assert got["draft_plan_version"] == 1
+
+
+def test_trace_contains_task_scope_and_reporter_attribution_without_raw_content():
+    got = build_trace_semantics({
+        "intent": "modify",
+        "scope_expansion_reason": "需要同步调整交通",
+        "turn_decision": {
+            "primary_action": "modify_plan",
+            "additional_tasks": [{"task_id": "train-1", "type": "query_train"}],
+        },
+        "task_results": [{
+            "task_id": "train-1", "type": "query_train", "status": "success",
+            "data_status": "verified", "result_count": 2, "duration_ms": 21,
+            "message": "private detail must not enter Trace",
+        }],
+        "reporter_meta": {
+            "source": "llm", "model": "main-test",
+            "prompt_version": "travel.reporter@3", "prompt_source": "snapshot",
+            "latency_ms": 42, "input_tokens": 31, "output_tokens": 12,
+        },
+    })
+
+    assert got["primary_action"] == "modify_plan"
+    assert '"task_id":"train-1"' in got["task_plan_summary"]
+    assert '"result_count":2' in got["task_result_summary"]
+    assert got["scope_expansion_reason"] == "需要同步调整交通"
+    assert got["reporter_source"] == "llm"
+    assert got["reporter_prompt_version"] == "travel.reporter@3"
+    assert got["reporter_input_tokens"] == 31
+    assert "private detail" not in str(got)

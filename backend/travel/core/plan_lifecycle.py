@@ -23,6 +23,7 @@ class TravelPlanStatus(str, enum.Enum):
     OPTIMIZING = "optimizing"
     WAITING_CONFIRMATION = "waiting_confirmation"
     CONFIRMED = "confirmed"
+    DISCARDED = "discarded"
     TRAVELING = "traveling"
     COMPLETED = "completed"
     ARCHIVED = "archived"
@@ -48,6 +49,7 @@ LEGAL_TRANSITIONS: dict[TravelPlanStatus, frozenset[TravelPlanStatus]] = {
     TravelPlanStatus.OPTIMIZING: frozenset({TravelPlanStatus.WAITING_CONFIRMATION}),
     TravelPlanStatus.WAITING_CONFIRMATION: frozenset({
         TravelPlanStatus.CONFIRMED,
+        TravelPlanStatus.DISCARDED,
         # 用户修改：brief 槽变 → 重走 RESEARCHING；仅行程级调整 → PLANNING；
         # 仅排程/换点类 → OPTIMIZING。
         TravelPlanStatus.RESEARCHING,
@@ -62,6 +64,7 @@ LEGAL_TRANSITIONS: dict[TravelPlanStatus, frozenset[TravelPlanStatus]] = {
     TravelPlanStatus.TRAVELING: frozenset({TravelPlanStatus.COMPLETED}),
     TravelPlanStatus.COMPLETED: frozenset({TravelPlanStatus.ARCHIVED}),
     TravelPlanStatus.ARCHIVED: frozenset(),
+    TravelPlanStatus.DISCARDED: frozenset(),
 }
 
 

@@ -91,7 +91,7 @@ export function useSSE() {
           return
         }
 
-        // done 事件 → 将累积的 delta 文本 + sources + 思考链写入最终消息
+        // done 事件 → 以服务端权威答案定稿；旧后端缺字段时兼容回退 delta。
         if (evt.event === 'done') {
           const finalState = useChatStore.getState()
           // 固化执行过程快照（完成态常驻行回看用）；done 前已截取，此处 streamEvents 已被终态清空
@@ -103,8 +103,11 @@ export function useSSE() {
               nodeLabels: snapshot.nodeLabels,
             })
           }
+          const answer = typeof evt.data.answer === 'string'
+            ? evt.data.answer
+            : finalState.deltaText
           replaceLastAssistant(
-            finalState.deltaText || '(空回答)',
+            answer || '(空回答)',
             sessionId,
             evt.data.sources,
             evt.data.usage,

@@ -22,6 +22,15 @@ _INTENT_SERVICE_MAP = {
     "as_quality_issue": "order",
 }
 
+
+class _QueryServiceResponse(str):
+    """保留文本兼容，同时携带本次服务实际返回的结构化事实。"""
+
+    def __new__(cls, answer: str, facts: dict[str, Any]):
+        instance = super().__new__(cls, answer)
+        instance.facts = facts
+        return instance
+
 # 复合问题预判：问题命中 ≥2 个不同服务域的关键词 → 疑似复合诉求
 
 
@@ -50,6 +59,12 @@ def execute_query(
         intent, user_id, user_message[:60],
     )
 
+    current_task = state.get("current_task") or {}
+    if current_task.get("capability") in ("query_logistics", "query_order_status"):
+        return _execute_task_query(
+            current_task, user_id, user_message, cs_route, state,
+        )
+
     intents = None
     if _compound_suspected(user_message):
         intents = _llm_decompose_intents(user_message)
@@ -57,37 +72,229 @@ def execute_query(
     if intents and len(intents) > 1:
         # 复合问题：逐意图查询后合并（同一服务去重，避免重复输出）
         sections: list[str] = []
+        service_facts: list[dict[str, Any]] = []
         dispatched_services: list[str] = []
         for it in intents:
             service_type = _INTENT_SERVICE_MAP.get(it, "order")
             if service_type in dispatched_services:
                 continue
             dispatched_services.append(service_type)
-            sections.append(_dispatch_service(
+            section = _dispatch_service(
                 user_id, it, user_message, cs_route,
                 tenant_id=str(state.get("tenant_id") or "default"),
                 session_id=str(state.get("session_id") or ""),
-            ))
+            )
+            sections.append(str(section))
+            if isinstance(section, _QueryServiceResponse):
+                service_facts.append(section.facts)
         answer = "\n\n---\n\n".join(sections)
+        data = {"intent": intents, "user_id": user_id, "decomposed": True}
+        merged_facts = _merge_service_facts(service_facts)
+        if merged_facts:
+            data["service_facts"] = merged_facts
         return ExpertResult(
             expert="query",
             status=ExpertStatus.SUCCESS.value,
             response_draft=answer,
-            data={"intent": intents, "user_id": user_id, "decomposed": True},
+            data=data,
         )
 
     tenant_id = str(state.get("tenant_id") or "default")
     session_id = str(state.get("session_id") or "")
-    answer = _dispatch_service(
+    service_response = _dispatch_service(
         user_id, intent, user_message, cs_route,
         tenant_id=tenant_id, session_id=session_id,
     )
-
+    data = {"intent": intent, "user_id": user_id}
+    if isinstance(service_response, _QueryServiceResponse):
+        data["service_facts"] = service_response.facts
     return ExpertResult(
         expert="query",
         status=ExpertStatus.SUCCESS.value,
-        response_draft=answer,
-        data={"intent": intent, "user_id": user_id},
+        response_draft=str(service_response),
+        data=data,
+    )
+
+
+def _merge_service_facts(fact_sets: list[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for facts in fact_sets:
+        for key, value in facts.items():
+            if isinstance(value, list) and isinstance(merged.get(key), list):
+                merged[key].extend(value)
+            else:
+                merged[key] = value
+    return merged
+
+
+def _order_service_facts(orders: list[dict]) -> dict[str, Any]:
+    allowed = (
+        "order_no", "status", "total_amount", "currency", "created_at",
+        "refund_eligible",
+    )
+    return {
+        "orders": [
+            {key: order[key] for key in allowed if key in order}
+            for order in orders[:10] if isinstance(order, dict)
+        ],
+        "source": _task_query_source("order"),
+    }
+
+
+def _execute_task_query(
+    current_task: dict[str, Any],
+    user_id: str,
+    user_message: str,
+    cs_route: dict,
+    state: dict[str, Any],
+) -> ExpertResult:
+    """执行单个计划查询，订单身份只取业务服务核验后的记录。"""
+    from backend.customer_service.errors import DatabaseError, OrderNotFoundError
+    from backend.customer_service.understanding.task_plan import CSTaskResult
+
+    task_id = str(current_task.get("task_id") or "")
+    facts: dict[str, Any] = {}
+    metadata = cs_route.get("metadata") or {}
+    order_ref = str(metadata.get("order_id") or "").strip()
+    if not order_ref:
+        from backend.customer_service.context_manager import resolve_order_slot
+
+        order_ref = resolve_order_slot(cs_route, user_message)
+
+    try:
+        from backend.customer_service.service.order_service import get_order_service
+
+        order_service = get_order_service()
+        if order_ref:
+            order_response = order_service.query_orders(
+                user_id=user_id, order_id=order_ref, query_type="detail",
+            )
+        else:
+            order_response = order_service.query_orders(user_id=user_id)
+        orders = list(getattr(order_response, "orders", []) or [])
+        facts["order_count"] = len(orders)
+        if len(orders) != 1:
+            answer = (
+                "您有多笔订单，请告诉我订单号，或回复「查我的所有订单」后"
+                "选择要查询的那一笔。"
+                if len(orders) > 1
+                else "暂时没有找到可核实的订单，请告诉我订单号后我再帮您查询。"
+            )
+            result = CSTaskResult(
+                task_id=task_id, status="needs_clarification", facts=facts,
+                source=_task_query_source("order"),
+            )
+            return ExpertResult(
+                expert="query", status=ExpertStatus.SUCCESS.value,
+                response_draft=answer,
+                data={
+                    "task_result": result.model_dump(),
+                    "intent": current_task.get("capability"),
+                },
+            )
+
+        order = orders[0]
+        trusted_order_id = str(
+            order.get("id") or order.get("order_id") or order.get("order_no") or ""
+        ).strip()
+        order_no = str(order.get("order_no") or trusted_order_id)
+        if not trusted_order_id:
+            result = CSTaskResult(
+                task_id=task_id, status="failed", facts={"order_count": 1},
+                source="unknown", error_type="contract_error",
+            )
+            return ExpertResult(
+                expert="query", status=ExpertStatus.SUCCESS.value,
+                response_draft="订单服务返回的信息不完整，暂时无法安全继续。",
+                data={"task_result": result.model_dump()},
+            )
+
+        raw_order_status = str(order.get("status") or "unknown").lower()
+        normalized_order_status = raw_order_status if raw_order_status in {
+            "pending", "paid", "shipped", "completed", "cancelled",
+        } else "unknown"
+        facts.update({
+            "order_id": trusted_order_id,
+            "order_no": order_no,
+            "order_status": normalized_order_status,
+        })
+        if current_task.get("capability") == "query_order_status":
+            result = CSTaskResult(
+                task_id=task_id, status="success", facts=facts,
+                source=_task_query_source("order"),
+            )
+            return ExpertResult(
+                expert="query", status=ExpertStatus.SUCCESS.value,
+                response_draft=_format_order_list([order]),
+                data={"task_result": result.model_dump(), "intent": "t_order_status"},
+            )
+
+        from backend.customer_service.service.logistics_service import (
+            get_logistics_service,
+        )
+
+        logistics = get_logistics_service().query_logistics(
+            user_id=user_id, order_id=trusted_order_id,
+        )
+        raw_status = str(getattr(logistics, "status", "") or "unknown").lower()
+        shipping_status = {
+            "pending": "not_shipped", "paid": "not_shipped",
+            "shipped": "shipped", "completed": "delivered",
+            "cancelled": "cancelled",
+        }.get(raw_status, "unknown")
+        facts.update({
+            "order_id": str(getattr(logistics, "order_id", "") or trusted_order_id),
+            "order_no": str(getattr(logistics, "order_no", "") or order_no),
+            "shipping_status": shipping_status,
+            "order_status": normalized_order_status,
+        })
+        result = CSTaskResult(
+            task_id=task_id, status="success", facts=facts,
+            source=_task_query_source("logistics"),
+        )
+        return ExpertResult(
+            expert="query", status=ExpertStatus.SUCCESS.value,
+            response_draft=_format_logistics(logistics),
+            data={"task_result": result.model_dump(), "intent": "t_logistics"},
+        )
+    except OrderNotFoundError:
+        result = CSTaskResult(
+            task_id=task_id, status="needs_clarification", facts={},
+            source=_task_query_source("order"), error_type="business_error",
+        )
+        return ExpertResult(
+            expert="query", status=ExpertStatus.SUCCESS.value,
+            response_draft="没有找到这笔订单，请核对订单号后再试。",
+            data={"task_result": result.model_dump()},
+        )
+    except DatabaseError:
+        logger.warning("[QueryExpert] task query business service unavailable")
+        return _failed_task_query(task_id)
+    except Exception:
+        logger.warning("[QueryExpert] task query failed", exc_info=True)
+        return _failed_task_query(task_id)
+
+
+def _task_query_source(kind: str) -> str:
+    from backend.config.customer_service import CS_BUSINESS_GATEWAY_MODE
+
+    prefix = "business" if CS_BUSINESS_GATEWAY_MODE == "http" else "sandbox"
+    if kind == "order":
+        return f"{prefix}_order_service"
+    return f"{prefix}_logistics_service"
+
+
+def _failed_task_query(task_id: str) -> ExpertResult:
+    from backend.customer_service.understanding.task_plan import CSTaskResult
+
+    result = CSTaskResult(
+        task_id=task_id, status="failed", facts={}, source="unknown",
+        error_type="provider_error",
+    )
+    return ExpertResult(
+        expert="query", status=ExpertStatus.SUCCESS.value,
+        response_draft="订单或物流服务暂时不可用，这次没有发起退款申请，请稍后重试。",
+        data={"task_result": result.model_dump()},
     )
 
 
@@ -250,7 +457,10 @@ def _dispatch_service(
                         tenant_id, user_id, session_id, order_no,
                         source_intent=intent,
                     )
-                return _format_order_list(result.orders)
+                return _QueryServiceResponse(
+                    _format_order_list(result.orders),
+                    _order_service_facts(result.orders),
+                )
             try:
                 result = order_service.query_orders(user_id=user_id)
             except DatabaseError:
@@ -273,8 +483,13 @@ def _dispatch_service(
                      for order in result.orders],
                     source_intent=intent,
                 )
-            return _format_order_list(result.orders)
-        return _format_order_list([])
+            return _QueryServiceResponse(
+                _format_order_list(result.orders),
+                _order_service_facts(result.orders),
+            )
+        return _QueryServiceResponse(
+            _format_order_list([]), _order_service_facts([]),
+        )
 
     if service_type == "logistics":
         from backend.customer_service.errors import (
@@ -310,7 +525,29 @@ def _dispatch_service(
             return "您名下暂时没有可查询物流的订单，查询订单后即可查看物流。"
         try:
             result = logistics.query_logistics(user_id=user_id, order_id=order_id)
-            return _format_logistics(result)
+            shipping_status = {
+                "pending": "not_shipped", "paid": "not_shipped",
+                "shipped": "shipped", "completed": "delivered",
+                "cancelled": "cancelled",
+            }.get(str(getattr(result, "status", "") or "").lower(), "unknown")
+            return _QueryServiceResponse(
+                _format_logistics(result),
+                {
+                    "order": {
+                        "order_no": str(getattr(result, "order_no", "") or ""),
+                        "status": str(getattr(result, "status", "") or "unknown"),
+                        "shipping_status": shipping_status,
+                    },
+                    "logistics": {
+                        "status": str(getattr(result, "status", "") or "unknown"),
+                        "shipping_status": shipping_status,
+                        "estimated_delivery": str(
+                            getattr(result, "estimated_delivery", "") or ""
+                        ),
+                    },
+                    "source": _task_query_source("logistics"),
+                },
+            )
         except OrderNotFoundError:
             return (
                 f"没有找到订单 {order_id} 的物流记录。请核对订单号，"
@@ -334,7 +571,14 @@ def _dispatch_service(
             tickets = get_ticket_store().list_for_user_sync(
                 user_id=user_id, limit=10,
             )
-            return _format_ticket_list(tickets)
+            return _QueryServiceResponse(
+                _format_ticket_list(tickets),
+                {"tickets": [
+                    {key: ticket[key] for key in ("type", "status")
+                     if isinstance(ticket, dict) and key in ticket}
+                    for ticket in tickets[:10]
+                ]},
+            )
         except Exception:
             logger.warning("[QueryExpert] 工单查询失败", exc_info=True)
             return "暂时查不到您的工单信息，请稍后再试。"

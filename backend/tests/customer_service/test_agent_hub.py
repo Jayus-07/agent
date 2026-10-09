@@ -27,6 +27,20 @@ class _FakeWS:
         self.sent.append(data)
 
 
+class _FakeTicketRedis:
+    """为 ticket 单测提供内存 Redis，不依赖本机 Redis 服务。"""
+
+    def __init__(self):
+        self.values: dict[str, str] = {}
+
+    def setex(self, key: str, _ttl: int, value: str) -> bool:
+        self.values[key] = value
+        return True
+
+    def getdel(self, key: str) -> str | None:
+        return self.values.pop(key, None)
+
+
 def _bare_hub() -> AgentHub:
     """带主 loop 但不起 Redis 订阅线程的 Hub（单元测试口径）。"""
     hub = AgentHub()
@@ -77,16 +91,20 @@ def _stub_persist(monkeypatch, request):
 # ── ticket 鉴权 ──────────────────────────────────────────
 
 
-async def test_ticket_roundtrip_single_use():
+async def test_ticket_roundtrip_single_use(monkeypatch):
     hub = AgentHub()
+    redis = _FakeTicketRedis()
+    monkeypatch.setattr(hub, "_redis", lambda: redis)
     ticket = hub.issue_ticket()
     assert hub.redeem_ticket(ticket) is True
     # 一次性：第二次核销失败
     assert hub.redeem_ticket(ticket) is False
 
 
-async def test_ticket_invalid_and_expired():
+async def test_ticket_invalid_and_expired(monkeypatch):
     hub = AgentHub()
+    redis = _FakeTicketRedis()
+    monkeypatch.setattr(hub, "_redis", lambda: redis)
     assert hub.redeem_ticket("no-such-ticket") is False
     ticket = hub.issue_ticket()
     # 人为置为过期
@@ -261,6 +279,16 @@ async def test_persist_event_propagates_database_failure_to_compensation_layer(
     async def _boom(self, **_kwargs):
         raise RuntimeError("postgres unavailable")
 
+    class _FakeSession:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    from backend.memory import database
+
+    monkeypatch.setattr(database, "AsyncSessionLocal", _FakeSession)
     monkeypatch.setattr(EventRepository, "append", _boom)
 
     hub = AgentHub()

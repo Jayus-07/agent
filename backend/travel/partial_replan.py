@@ -95,7 +95,7 @@ def parse_partial_request(message: str) -> PartialReplanRequest | None:
             required_count=_to_int(hard.group(1)) or 0,
         )
 
-    if re.search(r"(?:别太赶|不要太赶|轻松一点|慢一点|放松一点)", text):
+    if re.search(r"(?:别太赶|不要太赶|别太累|不要太累|轻松一点|慢一点|放松一点)", text):
         return PartialReplanRequest(
             operation="pace",
             target_day=target,

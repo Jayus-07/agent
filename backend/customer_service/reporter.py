@@ -27,6 +27,7 @@ def cs_reporter_node(state: dict[str, Any]) -> dict[str, Any]:
     decision = state.get("supervisor_decision", {})
     expert_result = state.get("last_expert_result", {})
     handoff_state = state.get("handoff_state", "ai_active")
+    _tag_reporter_trace(state)
 
     answer = _assemble_answer(decision, expert_result, handoff_state, state)
 
@@ -213,10 +214,70 @@ def _run_output_guard(answer: str, state: dict) -> str:
                     )
             except Exception:
                 pass
+        else:
+            try:
+                from backend.observability.tracer import trace_collector
+                tracer = trace_collector.current()
+                if tracer is not None and tracer.tags.get(
+                    "cs_response_guard_result",
+                ) not in {
+                    "rejected_unverified_facts", "rejected_new_facts",
+                }:
+                    tracer.tags["cs_response_guard_result"] = "passed"
+            except Exception:
+                pass
         return result.text
     except Exception:
-        logger.warning("[CS Reporter] OutputGuard failed, returning raw answer")
-        return answer
+        logger.warning("[CS Reporter] OutputGuard failed, returning safe template")
+        try:
+            from backend.observability.tracer import trace_collector
+
+            tracer = trace_collector.current()
+            if tracer is not None:
+                tracer.tags.update({
+                    "cs_response_source": "template",
+                    "cs_response_guard_result": "failed_closed",
+                    "cs_response_fallback_reason": "output_guard_error",
+                })
+        except Exception:
+            pass
+        return "抱歉，当前无法安全核实这条回复，请稍后重试或转人工客服。"
+
+
+def _tag_reporter_trace(state: dict) -> None:
+    """记录本轮计划、任务状态与 Pending 分流；不写入业务实体值。"""
+    try:
+        from backend.observability.tracer import trace_collector
+
+        tracer = trace_collector.current()
+        if tracer is None:
+            return
+        plan = state.get("task_plan") or {}
+        route = state.get("cs_route") or {}
+        metadata = route.get("metadata") or {} if isinstance(route, dict) else {}
+        tasks = plan.get("tasks", []) if isinstance(plan, dict) else []
+        results = state.get("task_results") or []
+        statuses = [
+            str(item.get("status")) for item in results[:3]
+            if isinstance(item, dict)
+            and item.get("status") in {
+                "success", "needs_clarification", "skipped", "failed",
+            }
+        ]
+        pending_kind = state.get("pending_turn_decision") or "none"
+        pending_kind = getattr(pending_kind, "value", pending_kind)
+        tracer.tags.update({
+            "cs_understanding_source": str(
+                tracer.tags.get("cs_understanding_source")
+                or metadata.get("understanding_source") or "unchanged"
+            ),
+            "cs_task_plan_source": str(state.get("task_plan_source") or "none"),
+            "cs_task_count": len(tasks),
+            "cs_task_status": ",".join(statuses) or "none",
+            "cs_pending_turn_kind": str(pending_kind),
+        })
+    except Exception:
+        pass
 
 
 def _build_cs_context_snapshot(state: dict) -> dict:

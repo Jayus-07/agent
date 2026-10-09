@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -359,10 +360,11 @@ class _FakeRepo:
         self.saved = []
         self.updated = []
 
-    async def load(self, user_id, conversation_id):
+    async def load(self, user_id, conversation_id, *, tenant_id=None):
         if self.saved:
             row = MagicMock()
             row.confirmation_id = "conf-1"
+            row.proposal_version = 1
             return row
         return self._existing
 
@@ -370,8 +372,8 @@ class _FakeRepo:
         self.saved.append((user_id, conversation_id))
         return MagicMock()
 
-    async def update_proposal(self, confirmation_id, pending_action, tenant_id="", semantic_fingerprint=None):
-        self.updated.append(confirmation_id)
+    async def update_proposal(self, confirmation_id, pending_action, tenant_id="", semantic_fingerprint=None, proposal_version=None):
+        self.updated.append((confirmation_id, proposal_version))
         return True
 
 
@@ -390,7 +392,9 @@ def _patch_db_layer(monkeypatch, existing=None):
         async def get_or_create(self, conversation_id, user_id, **kw):
             # STOP CS-A P0-2：save 链路现显式传 tenant_id
             log.append(("ensure", conversation_id, user_id, kw.get("tenant_id", "")))
-            return object(), True
+            return SimpleNamespace(
+                user_id=user_id, tenant_id=kw.get("tenant_id", ""),
+            ), True
 
     monkeypatch.setattr(
         "backend.memory.database.AsyncSessionLocal", _Factory()
@@ -440,7 +444,7 @@ async def test_i_ensure_is_idempotent_and_updates_instead_of_duplicate(monkeypat
     ensure_calls = [e for e in log if isinstance(e, tuple) and e[0] == "ensure"]
     assert len(ensure_calls) == 2
     assert fake_repo.saved == [("u1", "conv-1")], "首次插入且仅一次"
-    assert fake_repo.updated == ["conf-1"], "第二次保存升级既有行而非重复插入"
+    assert fake_repo.updated == [("conf-1", 2)], "第二次保存升级既有行而非重复插入"
 
 
 # ── J. Step6 保护：非订单号回复不补槽（不实现 pronoun 改写）────

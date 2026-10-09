@@ -85,6 +85,14 @@ def test_remove_and_add_do_not_replan_unrelated_days():
     assert _names(added.itinerary, 3) == _names(itinerary, 3)
 
 
+def test_plain_language_too_tiring_request_maps_to_relaxed_pace():
+    request = parse_partial_request("第二天别太累")
+
+    assert request.operation == "pace"
+    assert request.target_day == 2
+    assert request.pace == "relaxed"
+
+
 def test_pace_and_end_time_are_day_scoped():
     itinerary, candidates = _itinerary()
     relaxed = apply_partial_replan(

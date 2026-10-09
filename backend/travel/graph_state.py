@@ -32,6 +32,7 @@ TRAVEL_RISK_EXPERT = "travel_risk_expert"
 TRAVEL_VALIDATOR = "travel_validator"
 TRAVEL_REPAIR = "travel_repair"
 TRAVEL_PARTIAL_REPLAN = "travel_partial_replan"
+TRAVEL_AUXILIARY_TASKS = "travel_auxiliary_tasks"
 TRAVEL_REPORTER = "travel_reporter"
 
 # 专家节点名 ←→ 专家标识（supervisor 与 graph_builder 的单一映射源）
@@ -61,11 +62,16 @@ class TravelGraphState(TypedDict, total=False):
     travel_route: dict
     # 本轮统一请求契约；每轮显式覆盖，避免 Checkpointer 留下上轮 UI/动作状态。
     request_mode: str
+    # read_only 问答只从版本账本注入 Active/Draft 事实，且运行于无 checkpoint 图。
+    read_only_context: dict
     brief_input: dict | None
     base_plan_version: int | None
     ui_context: dict
     action_payload: dict
     turn_id: str
+    # 本轮单一需求决策；旧 intent 是供存量节点消费的兼容投影。
+    turn_decision: dict
+    turn_decision_meta: dict
     # graceful reconstruction（STOP F3）：checkpoint 缺失但会话摘要存在时，
     # 适配器从 ConversationContext 重建的 brief 基底。只在 thread 无
     # checkpoint 时出现；slot_filler 以它为 previous 合并本轮消息。
@@ -141,6 +147,8 @@ class TravelGraphState(TypedDict, total=False):
     # 用户明确要求实时查美食/酒店/车票时的真实 Tool 结果摘要；只存可序列化
     # 的展示数据，不把上游响应对象塞进 checkpoint。
     live_search: dict[str, dict]
+    # 本轮与主规划正交的 Tool 结果；每轮由 slot_filler 重置，供 API/Reporter 消费。
+    task_results: list[dict]
     # 会话意图（v3 §2.1，P0-A）：slot_filler 每轮分类后写入（空串 = 未分类，
     # 走既有规划链）；supervisor 意图先行门禁与 reporter 问答出口消费。
     # 必须入 schema——LangGraph updates 会剥离 schema 外的键。
@@ -155,7 +163,7 @@ class TravelGraphState(TypedDict, total=False):
     # {destination, guides: [{title,url,summary,author,source}], status}。
     # 增强信息：检索失败不阻塞任何链路，reporter 按 status 三态渲染。
     inspiration: dict
-    # QUERY_TRANSIT 意图的车票查询包（2026-10-08 #2，slot_filler 预取）：
+    # QUERY_TRANSIT 意图的车票查询包（由 travel_auxiliary_tasks 写入）：
     # {status: ok|failed|missing_origin|missing_destination, origin,
     #  destination, date, trains: [...], source}。与 inspiration 同口径：
     # 预取失败不阻塞（status 如实呈现），reporter 消费渲染。
@@ -196,6 +204,8 @@ class TravelGraphState(TypedDict, total=False):
     # M2：结构化「为什么这样排」（reporter 产出 → PlanResponse.rationale）。
     # 必须入 schema——LangGraph 会剥离 schema 外的更新键（AGENTS.md 同款教训）。
     rationale: dict
+    # Reporter 表达来源与用量归因；所有字段均为可序列化标量。
+    reporter_meta: dict
     # M3-f 预算协商（budget expert 产出 → rationale.budget_negotiation）
     budget_negotiation: dict
     finished: bool
@@ -266,6 +276,7 @@ def build_travel_context(state: dict) -> dict:
     return {
         "brief": state.get("brief", {}),
         "live_search": state.get("live_search", {}),
+        "task_results": state.get("task_results", []),
         "brief_missing": state.get("brief_missing", []),
         "intent": state.get("intent", ""),
         "query_destination": state.get("query_destination", ""),
@@ -357,6 +368,7 @@ def planning_reset(parent_plan_version: int | None = None) -> dict:
         "live_search": {},
         "inspiration": {},
         "transit_query": {},
+        "task_results": [],
         "day_plan": [],
         "must_go_unresolved": [],
         "itinerary": None,

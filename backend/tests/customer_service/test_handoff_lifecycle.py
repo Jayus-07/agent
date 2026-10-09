@@ -187,3 +187,100 @@ class TestEnterWaitingSyncBridge:
                 trigger_type="explicit_request", trigger_reason="r",
                 ticket_id="T1",
             )
+
+
+@pytest.mark.asyncio
+async def test_enter_waiting_handoff_locks_owned_conversation_before_handoff(monkeypatch):
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import postgresql
+
+    from backend.customer_service.handoff import lifecycle
+
+    conversation = SimpleNamespace(
+        conversation_id="c1", user_id="u1", tenant_id="t1",
+        handling_mode="ai", updated_at=None, last_activity_at=None,
+    )
+    captured = []
+
+    class _Result:
+        def __init__(self, row):
+            self._row = row
+
+        def scalar_one_or_none(self):
+            return self._row
+
+    class _Session:
+        def add(self, row):
+            return None
+
+        async def execute(self, statement):
+            captured.append(statement)
+            return _Result(conversation if len(captured) == 1 else None)
+
+        async def flush(self):
+            return None
+
+    class _ConversationManager:
+        def __init__(self, _session):
+            pass
+
+        async def get_or_create(self, _conversation_id, _user_id, **_kwargs):
+            return conversation, False
+
+    monkeypatch.setattr(
+        "backend.customer_service.managers.conversation_manager.ConversationManager",
+        _ConversationManager,
+    )
+
+    await lifecycle.enter_waiting_handoff(
+        _Session(), tenant_id="t1", conversation_id="c1", user_id="u1",
+        trigger_type="explicit_request", trigger_reason="reason", ticket_id="T1",
+    )
+
+    first_sql = str(captured[0].compile(dialect=postgresql.dialect()))
+    second_sql = str(captured[1].compile(dialect=postgresql.dialect()))
+    assert "customer_service.conversations" in first_sql
+    assert "FOR UPDATE" in first_sql
+    assert "customer_service.handoffs" in second_sql
+
+
+@pytest.mark.asyncio
+async def test_enter_waiting_handoff_rejects_conversation_owned_by_other_user(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend.customer_service.handoff import lifecycle
+
+    conversation = SimpleNamespace(
+        conversation_id="c1", user_id="someone-else", tenant_id="t1",
+    )
+
+    class _ConversationManager:
+        def __init__(self, _session):
+            pass
+
+        async def get_or_create(self, _conversation_id, _user_id, **_kwargs):
+            return conversation, False
+
+    monkeypatch.setattr(
+        "backend.customer_service.managers.conversation_manager.ConversationManager",
+        _ConversationManager,
+    )
+
+    with pytest.raises(BusinessRuleError):
+        await lifecycle.enter_waiting_handoff(
+            object(), tenant_id="t1", conversation_id="c1", user_id="u1",
+            trigger_type="explicit_request", trigger_reason="reason", ticket_id="T1",
+        )
+def test_authoritative_handoff_read_can_fail_closed(monkeypatch):
+    import pytest
+    import backend.customer_service._db_loop as db_loop
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    def database_down(_operation):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(db_loop, "run_sync", database_down)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        load_active_handoff_sync("tenant-1", "conversation-1", raise_on_error=True)

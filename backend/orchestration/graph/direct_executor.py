@@ -324,7 +324,7 @@ def skill_executor_node(state: dict) -> dict:
 
 
 def _coerce_final_answer(step: dict) -> str:
-    """final_answer 必须是 str:dict 形态的 SQLResult 渲染为 Markdown 表格。
+    """确定性渲染 direct 结果，不把结构化对象序列化为用户正文。
 
     背景: sql.query 的 output 是 SQLResult dict,曾原样塞进 final_answer,
     导致下游所有按字符串处理的地方崩溃
@@ -334,30 +334,22 @@ def _coerce_final_answer(step: dict) -> str:
     返回 str(None) 曾让用户看到字面量 "None" 且被记忆落库。
     """
     if step.get("status") != "success":
-        # 审批待办：提示文本保留在 output（base.py 语义校验 PERMISSION_DENIED
-        # 分支），作为 final_answer 透出——用户直接看到「需要人工审批」与
-        # 审批单号，而不是兜底的「未找到相关信息」追问文案
-        if step.get("error_type") == "permission" and step.get("output"):
-            return str(step["output"])
+        if (step.get("error_code") == "approval_required"
+                or step.get("error_type") == "permission") and (
+                    isinstance(step.get("output"), str)
+                    and "需要人工审批后执行" in step.get("output", "")):
+            return step["output"]
         return ""
     out = step.get("output")
     if out is None or out == "":
         return ""
-    if isinstance(out, str):
-        return out
-    if isinstance(out, dict) and "columns" in out and "rows" in out:
-        try:
-            from backend.agents.reporter.reporter import _render_table_section
-            return _render_table_section(
-                step.get("description", "查询结果"),
-                out.get("columns", []), out.get("rows", []),
-            )
-        except Exception:
-            logger.warning("[SkillExecutor] SQLResult 渲染失败,降级 JSON", exc_info=True)
-    if isinstance(out, dict):
-        import json
-        return json.dumps(out, ensure_ascii=False, default=str)
-    return str(out)
+    from backend.agents.reporter.reporter import render_result_for_user
+
+    return render_result_for_user(
+        step.get("description", "查询结果"),
+        step.get("capability", ""),
+        out,
+    )
 
 
 def _build_workflow_inputs(wf_name: str, state: dict) -> dict:
@@ -420,31 +412,36 @@ def workflow_executor_node(state: dict) -> dict:
         ctx = _run_coro_sync(scheduler.run_now(
             wf_name, inputs=_build_workflow_inputs(wf_name, state)))
 
-        # 构造 final_answer：汇总所有 step outputs
-        answer_parts = [f"## 工作流 {wf_name} 执行结果\n"]
+        # 构造面向用户的确定性结果；内部 workflow 名、run_id 与异常细节留在
+        # workflow_result / Trace，不混入最终正文。
+        from backend.agents.reporter.reporter import render_result_for_user
+
+        answer_parts = []
+        report_out = ctx.outputs.get("report") or {}
+        report_md = report_out.get("report_md") if isinstance(report_out, dict) else None
         if ctx.status == "failed":
-            answer_parts.append(f"❌ 失败: {ctx.error or '未知错误'}\n")
+            answer_parts.append("## 工作流未完成\n\n工作流未能完成，建议稍后重试。")
+        elif report_md:
+            answer_parts.append(str(report_md).strip())
         else:
-            # 报告类 workflow（如 market_research）直接输出完整报告而非每步截断 500 字
-            report_out = ctx.outputs.get("report") or {}
-            report_md = report_out.get("report_md") if isinstance(report_out, dict) else None
-            if report_md:
-                answer_parts = [str(report_md)]
-            else:
-                for step_name, output in ctx.outputs.items():
-                    if output:
-                        answer_parts.append(f"### {step_name}\n{str(output)[:500]}\n")
+            for index, output in enumerate(ctx.outputs.values(), start=1):
+                if output is None or output == "":
+                    continue
+                rendered = render_result_for_user(
+                    f"工作流结果 {index}", "workflow", output)
+                if rendered:
+                    answer_parts.append(rendered)
+            if not answer_parts:
+                answer_parts.append(
+                    "## 工作流执行结果\n\n工作流已完成，但没有可展示的业务结果。")
         # STOP E/§15（2026-10-07）：partial 时必须披露哪些环节数据不可用，
         # 而不是让缺节静默消失、用户误以为结果完整。
-        if ctx.step_failures:
-            unavailable = "、".join(ctx.step_failures)
+        if ctx.step_failures or ctx.status == "partial":
             answer_parts.append(
-                f"\n> ⚠️ 以下环节数据本次不可用：{unavailable}。"
-                "以上为可用部分的结果。"
+                "> ⚠️ 部分步骤未能完成，以上结果可能不完整。"
             )
-        answer_parts.append(f"\n---\n*状态: {ctx.status} | run_id: {ctx.run_id}*")
 
-        final_answer = "\n".join(answer_parts)
+        final_answer = "\n\n---\n\n".join(answer_parts)
         # 设 step_results 防 reporter 覆盖 final_answer（workflow executor 不走 planner 管线）
         step_results = {
             f"workflow_{wf_name}": {
@@ -471,7 +468,7 @@ def workflow_executor_node(state: dict) -> dict:
         }
     except Exception as e:
         logger.error(f"[WorkflowExecutor] {wf_name} 失败: {e}")
-        error_msg = f"## 工作流 {wf_name} 失败\n\n{str(e)}"
+        error_msg = "## 工作流未完成\n\n工作流未能完成，建议稍后重试。"
         return {
             **state,
             "final_answer": error_msg,

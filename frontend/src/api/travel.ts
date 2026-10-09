@@ -131,7 +131,7 @@ export interface TravelBriefInput {
   transport?: string;
 }
 
-export type TravelRequestMode = 'plan' | 'chat' | 'action';
+export type TravelRequestMode = 'plan' | 'chat' | 'action' | 'read_only';
 
 export interface TravelUiContext {
   selected_day?: number;
@@ -160,6 +160,33 @@ export interface TravelResponseMetadata {
   draft_plan_version: number | null;
   base_plan_version: number | null;
   task_results: Array<Record<string, unknown>>;
+}
+
+export interface TravelStoredConversationMessage {
+  id: number | string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at?: string | null;
+}
+
+/** 从账号级会话存储恢复旅游对话消息。 */
+export async function getTravelConversationMessages(
+  conversationId: string,
+): Promise<{ messages: TravelStoredConversationMessage[] }> {
+  return request<{ messages: TravelStoredConversationMessage[] }>(
+    `/api/travel/conversations/${encodeURIComponent(conversationId)}/messages`,
+  );
+}
+
+/** 幂等替换旅游对话快照，重试不会在服务器端追加重复消息。 */
+export async function saveTravelConversationMessages(
+  conversationId: string,
+  messages: Array<Pick<TravelStoredConversationMessage, 'role' | 'content'>>,
+): Promise<{ saved: number }> {
+  return request<{ saved: number }>(
+    `/api/travel/conversations/${encodeURIComponent(conversationId)}/messages`,
+    { method: 'PUT', body: JSON.stringify({ messages }) },
+  );
 }
 
 export interface ItineraryCost {
@@ -264,6 +291,8 @@ export interface RationaleData {
 export interface PlanResponse {
   /** 结构化规划说明；旧数据/降级无此字段 → 前端回退 Markdown */
   rationale?: RationaleData;
+  /** 简短回复来源与模型用量；模板降级及旧服务可省略 */
+  reporter_meta?: Record<string, unknown>;
   /** success | answered | needs_clarification | needs_user_decision | failed */
   status: string;
   final_answer: string;
@@ -588,6 +617,17 @@ export function confirmTravelPlan(
   planVersion: number,
 ): Promise<{ status: string; plan_version: number; plan_status: string }> {
   return request('/api/travel/plans/confirm', {
+    method: 'POST',
+    body: { conversation_id: conversationId, plan_version: planVersion },
+  })
+}
+
+/** 服务端放弃当前草案；页面只能在该操作成功后清理本地 pending。 */
+export function discardTravelPlan(
+  conversationId: string,
+  planVersion: number,
+): Promise<{ status: string; plan_version: number; plan_status: string }> {
+  return request('/api/travel/plans/discard', {
     method: 'POST',
     body: { conversation_id: conversationId, plan_version: planVersion },
   })

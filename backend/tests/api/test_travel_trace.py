@@ -26,6 +26,12 @@ async def test_travel_plan_rest_creates_and_finishes_trace(monkeypatch):
 
     class FakeGraph:
         def invoke(self, *_args, **_kwargs):
+            from backend.travel.core.events import run_travel_tool
+
+            run_travel_tool(
+                "travel.search_poi", "research", lambda: {"private": "not stored"},
+                task_id="poi-task-1",
+            )
             return {"brief": {"destination": "杭州"}}
 
     monkeypatch.setattr(travel, "require_identity", lambda _request: SimpleNamespace(user_id="u-1"))
@@ -59,6 +65,14 @@ async def test_travel_plan_rest_creates_and_finishes_trace(monkeypatch):
     assert captured[0].tags["travel_destination"] == "杭州"
     assert captured[0].metadata["travel_semantics"]["conversation_id"] == "c-1"
     assert "planning_mode" in captured[0].metadata["travel_semantics"]
+    assert captured[0].tags["travel_tool_call_count"] == "1"
+    tool_call = captured[0].metadata["travel_tool_calls"][0]
+    assert tool_call["tool_call_id"].startswith("call-")
+    assert tool_call["task_id"] == "poi-task-1"
+    assert tool_call["tool"] == "travel.search_poi"
+    assert tool_call["agent"] == "research"
+    assert tool_call["status"] == "success"
+    assert "private" not in str(tool_call)
 
 
 @pytest.mark.asyncio

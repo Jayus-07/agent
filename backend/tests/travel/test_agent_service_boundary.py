@@ -219,9 +219,8 @@ class TestRuntimeFrozen:
 # ---------- 4. 五节点注册顺序冻结 ----------
 
 class TestNodeRegistrationOrder:
-    # 4ddc3c3 局部改单收官新增 TRAVEL_PARTIAL_REPLAN（repair 之后、
-    # reporter 之前，AGENTS.md 口径 11 节点）——顺序契约随之冻结；
-    # 再新增节点必须显式更新本清单并说明业务依据。
+    # Phase 3 将与主规划正交的实时查询集中到单个辅助节点（局部改单之后、
+    # reporter 之前），保留原五个子 Agent；节点顺序契约随之冻结。
     FROZEN_ORDER = [
         "TRAVEL_SLOT_FILLER",
         "TRAVEL_SUPERVISOR",
@@ -233,6 +232,7 @@ class TestNodeRegistrationOrder:
         "TRAVEL_VALIDATOR",
         "TRAVEL_REPAIR",
         "TRAVEL_PARTIAL_REPLAN",
+        "TRAVEL_AUXILIARY_TASKS",
         "TRAVEL_REPORTER",
     ]
 

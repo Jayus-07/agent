@@ -7,6 +7,8 @@ interface Props {
   onSend: (text: string) => void
   onStop: () => void
   isLoading: boolean
+  /** 人工坐席已接管时，阻止客服窗口继续向 AI 业务管线发送。 */
+  disabled?: boolean
   /** 输入内容变化回调（双向「输入中」指示上行，节流由调用方负责） */
   onTyping?: () => void
   /** 外部预填（多域隔离 M3：主图引导卡带来的 prefill_question）。
@@ -14,7 +16,7 @@ interface Props {
   draft?: { text: string; nonce: number } | null
 }
 
-export default function CSInput({ onSend, onStop, isLoading, onTyping, draft }: Props) {
+export default function CSInput({ onSend, onStop, isLoading, disabled = false, onTyping, draft }: Props) {
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -31,7 +33,7 @@ export default function CSInput({ onSend, onStop, isLoading, onTyping, draft }: 
 
   const handleSend = () => {
     const trimmed = text.trim()
-    if (!trimmed || isLoading) return
+    if (!trimmed || isLoading || disabled) return
     onSend(trimmed)
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
@@ -54,15 +56,18 @@ export default function CSInput({ onSend, onStop, isLoading, onTyping, draft }: 
             ref={textareaRef}
             value={text}
             onChange={(e) => {
+              if (disabled) return
               setText(e.target.value)
               onTyping?.()
             }}
             onKeyDown={handleKeyDown}
-            placeholder="输入您的问题..."
+            disabled={disabled}
+            placeholder={disabled ? '人工客服已接入，AI 输入已暂停' : '输入您的问题...'}
             rows={1}
             className="w-full resize-none rounded-xl border border-border-subtle bg-bg-root
               px-4 py-2.5 pr-10 text-sm text-text-primary placeholder:text-text-muted
-              outline-none focus:border-accent/50 focus:shadow-input transition-all"
+              outline-none focus:border-accent/50 focus:shadow-input transition-all
+              disabled:cursor-not-allowed disabled:bg-gray-100 disabled:opacity-70"
           />
           <div className="absolute right-2 bottom-1.5 flex items-center gap-1">
             {isLoading ? (
@@ -76,7 +81,7 @@ export default function CSInput({ onSend, onStop, isLoading, onTyping, draft }: 
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!text.trim()}
+                disabled={disabled || !text.trim()}
                 className="p-1.5 rounded-lg text-accent hover:bg-accent/10
                   disabled:text-text-muted/30 disabled:hover:bg-transparent transition-colors"
                 title="发送"

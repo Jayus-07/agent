@@ -31,8 +31,10 @@ class ValidationFailure(ProtocolError):
 
     layer: str = ""
 
-    def __init__(self, layer: str, code: ErrorCode, reason: str) -> None:
+    def __init__(self, layer: str, code: ErrorCode, reason: str,
+                 semantic_code: str = "") -> None:
         self.layer = layer
+        self.semantic_code = semantic_code
         super().__init__(
             code,
             _safe_message(layer, code),
@@ -343,6 +345,7 @@ def validate_semantics(capability: str, params: dict, output: Any) -> None:
         raise ValidationFailure(
             "permission", ErrorCode.PERMISSION_DENIED,
             f"{capability} 尚未完成人工审批",
+            semantic_code="approval_required",
         )
 
     if capability.startswith("competitor."):

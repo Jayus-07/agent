@@ -577,6 +577,8 @@ class BaseSkill(ABC):
                           error=f"输出校验失败: {e.layer}",
                           error_type="permission" if pending_approval else "invalid_param",
                           finished_at=time.time())
+                if getattr(e, "semantic_code", ""):
+                    sr["error_code"] = e.semantic_code
                 step_results[sr["step_id"]] = dict(sr)
                 # 后置校验失败要带上原始原因与健康度分级标记（2026-10-08 #11）：
                 # 只有 "validation:semantic" 层名时管理端无法分诊「未配置」与

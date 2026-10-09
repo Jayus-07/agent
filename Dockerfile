@@ -77,11 +77,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface
 
 # 运行时依赖：curl（compose healthcheck 用）、libpq5（psycopg2）、中文字体（报告/图表渲染）
-# 源镜像口径同 builder 段 DEBIAN_MIRROR（ARG 在每个 stage 独立声明）
-ARG DEBIAN_MIRROR=
-RUN if [ -n "$DEBIAN_MIRROR" ]; then \
-        sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null \
-        || sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list; \
+# 与 builder 分开指定运行时镜像，切换运行时 apt 源时仍可复用 builder 依赖缓存
+ARG RUNTIME_DEBIAN_MIRROR=
+RUN if [ -n "$RUNTIME_DEBIAN_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org|https://$RUNTIME_DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+        || sed -i "s|http://deb.debian.org|https://$RUNTIME_DEBIAN_MIRROR|g" /etc/apt/sources.list; \
     fi \
     && apt-get update && apt-get install -y --no-install-recommends \
     curl libpq5 fonts-wqy-microhei \

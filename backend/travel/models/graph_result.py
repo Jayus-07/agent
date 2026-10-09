@@ -31,6 +31,8 @@ class TravelGraphResult(TypedDict, total=False):
     intent: str
     travel_context: dict
     rationale: dict
+    reporter_meta: dict
+    task_results: list[dict]
 
 
 def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
@@ -47,7 +49,7 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
     partial_result = final_state.get("partial_replan_result") or {}
     answering = final_state.get("intent") in {
         "social", "meta", "out_of_scope", "query_static", "query_dynamic",
-        "query_transit", "discover",
+        "query_transit", "discover", "read_only_qa", "read_only_blocked",
     } or (final_state.get("intent") == "modify" and not partial_result)
 
     if answering:
@@ -79,4 +81,6 @@ def build_travel_graph_result(final_state: dict[str, Any]) -> TravelGraphResult:
         intent=final_state.get("intent", ""),
         travel_context=final_state.get("travel_context") or {},
         rationale=final_state.get("rationale") or {},
+        reporter_meta=final_state.get("reporter_meta") or {},
+        task_results=final_state.get("task_results") or [],
     )

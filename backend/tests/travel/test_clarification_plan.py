@@ -208,3 +208,15 @@ def test_trace_semantics_carries_llm_layer_fields():
     assert base["slot_parse_source"] == "rule"
     assert base["slot_llm_used"] == "false"
     assert base["clarification_source"] == ""
+
+
+def test_plan_can_ask_for_an_unresolved_selected_poi_reference():
+    plan = build_clarification_plan(
+        TravelBrief(destination="福州", days=2),
+        "把这个景点换掉",
+        additional_missing=["selected_poi_id"],
+    )
+
+    assert plan.missing_slots == ["selected_poi_id"]
+    assert plan.ask_slots == ["selected_poi_id"]
+    assert "哪个景点" in render_template(plan)

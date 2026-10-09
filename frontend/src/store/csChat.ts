@@ -3,14 +3,8 @@ import { nanoid } from 'nanoid'
 import type { SSEStreamEvent } from '@/lib/types'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
 import type { CSConfirmationState, CSHandoffState } from '@/components/cs/constants'
-import type { MyConversationItem } from '@/api/cs'
+import type { MyConversationItem, PendingActionSnapshot } from '@/api/cs'
 import type { PendingActionInfo } from '@/lib/types'
-
-/** P3.1: 确认卡片数据（done 帧 pending_action → CSConfirmCard） */
-export interface PendingProposal {
-  proposalText: string
-  actionType: string
-}
 
 export interface CSMessage {
   id: string
@@ -43,8 +37,8 @@ interface CSChatState {
   handoffState: CSHandoffState
   currentNode: string | null
   csTimeline: string[]
-  /** P3.1: 非空时渲染 CSConfirmCard（done 帧 pending_action） */
-  pendingProposal: PendingProposal | null
+  /** 每个客服会话独立保存权威待确认快照；刷新后由服务端恢复。 */
+  pendingBySession: Record<string, PendingActionSnapshot | null>
   // 退款候选点选（2026-10-08）：后端 clarification 帧（source=refund_candidates）
   candidateOptions: { id: string; label: string }[] | null
   // 转人工等待元信息（A 案排队透明化）：倒计时数据源
@@ -69,7 +63,7 @@ interface CSChatState {
   setIntentDetected: (intent: string | null) => void
   setConfirmationState: (state: CSConfirmationState) => void
   setHandoffState: (state: CSHandoffState) => void
-  setPendingProposal: (p: PendingProposal | null) => void
+  setPendingAction: (sessionId: string, pending: PendingActionSnapshot | null) => void
   setCandidateOptions: (opts: { id: string; label: string }[] | null) => void
   setHandoffMeta: (m: { handoff_id: string; handoff_state: string; total_deadline_at: string | null; queue_position: number } | null) => void
   setAgentTyping: (v: boolean) => void
@@ -143,7 +137,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     handoffState: 'none',
     currentNode: null,
     csTimeline: [],
-    pendingProposal: null,
+    pendingBySession: {},
     candidateOptions: null,
     handoffMeta: null,
     agentTyping: false,
@@ -164,7 +158,6 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
         handoffState: 'none',
         currentNode: null,
         csTimeline: [],
-        pendingProposal: null,
         agentTyping: false,
       }))
       return s.id
@@ -228,13 +221,16 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     deleteSession: (id) => {
       set((state) => {
         const remaining = state.sessions.filter((s) => s.id !== id)
+        const pendingBySession = { ...state.pendingBySession }
+        delete pendingBySession[id]
         if (remaining.length === 0) {
           const fallback = createCSSession()
-          return { sessions: [fallback], currentId: fallback.id }
+          return { sessions: [fallback], currentId: fallback.id, pendingBySession }
         }
         return {
           sessions: remaining,
           currentId: state.currentId === id ? remaining[0].id : state.currentId,
+          pendingBySession,
         }
       })
     },
@@ -309,7 +305,7 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     resetStream: () => set({
       currentStatus: '', deltaText: '',
       currentRequestId: null, currentNode: null, csTimeline: [],
-      pendingProposal: null, candidateOptions: null, handoffMeta: null,
+      candidateOptions: null, handoffMeta: null,
     }),
 
     replaceLastAssistant: (content, sessionId) => {
@@ -337,7 +333,9 @@ export const useCSChatStore = create<CSChatState>((set, get) => {
     setIntentDetected: (intent) => set({ intentDetected: intent }),
     setConfirmationState: (state) => set({ confirmationState: state }),
     setHandoffState: (state) => set({ handoffState: state }),
-    setPendingProposal: (p) => set({ pendingProposal: p }),
+    setPendingAction: (sessionId, pending) => set((state) => ({
+      pendingBySession: { ...state.pendingBySession, [sessionId]: pending },
+    })),
     setCandidateOptions: (opts) => set({ candidateOptions: opts }),
     setHandoffMeta: (m) => set({ handoffMeta: m }),
     setAgentTyping: (v) => set({ agentTyping: v }),

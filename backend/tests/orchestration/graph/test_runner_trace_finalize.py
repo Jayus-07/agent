@@ -62,6 +62,9 @@ def _spy_finish(monkeypatch):
 
 
 class _FakeMemory:
+    def __init__(self):
+        self.end_turn_calls = []
+
     def start_session(self, session_id, question, user_id="default",
                       tenant_id=""):
         from backend.memory.short_term import ShortTermBuffer
@@ -70,6 +73,7 @@ class _FakeMemory:
     def end_turn(self, session_id, question, answer, user_id="default",
                  tenant_id=""):
         self.last_answer = answer
+        self.end_turn_calls.append((session_id, question, answer))
 
 
 def _root(record):
@@ -123,6 +127,14 @@ class _ExplodingGraph:
         raise RuntimeError("boom-in-graph")
 
 
+class _TimedOutGraph:
+    """图节点超时后退出：不得把未完成答案写入 Memory。"""
+
+    def stream(self, initial_state, config=None):
+        raise TimeoutError("synthetic-timeout")
+        yield  # pragma: no cover
+
+
 def _events_normal():
     return [
         {"router": {"route_mode": "plan", "cs_context": {}}},
@@ -143,6 +155,7 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     assert len(_spy_finish.calls) == 1
     record, answer = _spy_finish.calls[0]
     assert answer == "最终回答"
+    assert sys_obj._memory.end_turn_calls == [("s-1", "测试问题", "最终回答")]
     root = _root(record)
     assert root.end_time != ""
     assert root.status == "success"
@@ -168,6 +181,7 @@ def test_user_abort_mid_stream_finishes_once_with_reason(_spy_finish):
     # （纯断连仍为 error，见下方 disconnect 用例）
     assert root.status == "cancelled"
     assert root.metrics.get("reason") == "user_abort"
+    assert sys_obj._memory.end_turn_calls == []
 
 
 def test_generator_close_finishes_once_as_client_disconnect(_spy_finish):
@@ -192,6 +206,7 @@ def test_generator_close_finishes_once_as_client_disconnect(_spy_finish):
     assert root.status == "error"
     # stop_event 未置位 → 归因为客户端断连，而非用户中止
     assert root.metrics.get("reason") == "client_disconnect"
+    assert sys_obj._memory.end_turn_calls == []
 
 
 def test_generator_close_after_abort_reports_user_abort(_spy_finish):
@@ -210,6 +225,7 @@ def test_generator_close_after_abort_reports_user_abort(_spy_finish):
     assert len(_spy_finish.calls) == 1
     record, _answer = _spy_finish.calls[0]
     assert _root(record).metrics.get("reason") == "user_abort"
+    assert sys_obj._memory.end_turn_calls == []
 
 
 def test_worker_exception_finishes_once_with_error(_spy_finish):
@@ -225,6 +241,17 @@ def test_worker_exception_finishes_once_with_error(_spy_finish):
     assert root.end_time != ""
     assert root.status == "error"
     assert root.metrics.get("error") == "graph_failed"
+    assert sys_obj._memory.end_turn_calls == []
+
+
+def test_worker_timeout_does_not_persist_memory(_spy_finish):
+    sys_obj = _make_system(_TimedOutGraph())
+    out = list(sys_obj.stream_events("测试问题", "s-1", user_id="u-1"))
+
+    assert any(event["event"] == "error" for event in out)
+    assert not any(event["event"] == "done" for event in out)
+    assert len(_spy_finish.calls) == 1
+    assert sys_obj._memory.end_turn_calls == []
 
 
 def test_double_close_does_not_finish_twice(_spy_finish):
@@ -243,3 +270,4 @@ def test_double_close_does_not_finish_twice(_spy_finish):
         pass
 
     assert len(_spy_finish.calls) == 1
+    assert sys_obj._memory.end_turn_calls == []

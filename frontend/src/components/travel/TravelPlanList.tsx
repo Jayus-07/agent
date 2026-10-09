@@ -157,10 +157,16 @@ export default function TravelPlanList({
                     <div className="mt-0.5 flex items-center gap-1.5 text-[10px]">
                       <span
                         className={
-                          p.plan_status === 'confirmed' ? 'text-green-600' : 'text-amber-600'
+                          p.plan_status === 'confirmed'
+                            ? 'text-green-600'
+                            : p.plan_status === 'discarded'
+                              ? 'text-text-muted'
+                              : 'text-amber-600'
                         }
                       >
-                        {p.plan_status === 'confirmed' ? '已确认' : '待确认'}
+                        {p.plan_status === 'confirmed'
+                          ? '已确认'
+                          : p.plan_status === 'discarded' ? '已放弃' : '待确认'}
                       </span>
                       <span className="text-text-muted">v{p.plan_version}</span>
                       {isCurrent && <span className="text-accent">当前</span>}

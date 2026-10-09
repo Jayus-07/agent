@@ -28,7 +28,8 @@ import { formatDayDate } from './planState'
 import {
   dayLoad, dayMealItems, dayRouteColor, dayVisitTitles, departureBadge, formatDuration,
 } from './travelDisplay'
-import { classifyFact } from './travelRuntime'
+import { buildChangeSummary, classifyFact, type ItineraryChange, type TravelChangeSummary } from './travelRuntime'
+import TravelChangeSummaryView from './TravelChangeSummaryView'
 
 // ── 页面级主题（travelTheme.ts 收口；勿当全局 token 用） ──
 import { TP } from './travelTheme'
@@ -315,7 +316,7 @@ function LegRow({ leg }: { leg: TransitLeg }) {
   )
 }
 
-function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVersion = 0, onRequestReplace, onAskNearby, onHoverItem }: {
+function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVersion = 0, onRequestReplace, onAskNearby, onHoverItem, changeSummary }: {
   day: ItineraryDay
   /** 当前行程版本（与候选捕获版本比对打「旧版」标记，#102） */
   planVersion?: number
@@ -325,6 +326,7 @@ function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVer
   onRequestReplace?: (dayIndex: number, itemTitle: string, candidateName: string) => void
   onAskNearby?: (text: string) => void
   onHoverItem?: (focus: { lat: number; lng: number; title: string; transit: string } | null) => void
+  changeSummary?: TravelChangeSummary | null
 }) {
   // M2 画布直选：replaceFor=打开弹层的条目 idx；picked=点选待确认的候选名
   const [replaceFor, setReplaceFor] = useState<number | null>(null)
@@ -387,6 +389,7 @@ function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVer
         {day.items.map((item, idx) => {
           const style = KIND_STYLE[item.kind] ?? { dot: '#cbd5e1', label: '', icon: null }
           const leg = legForItem.get(idx)
+          const itemChange = changeSummary?.itemChanges.find((change) => change.nextItem === item)
           return (
             <Fragment key={`${item.title}-${idx}`}>
               <li
@@ -413,6 +416,7 @@ function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVer
                       </span>
                     )}
                     <ItemTags item={item} />
+                    {itemChange && <ItemChangeBadge change={itemChange} />}
                   </span>
                 </div>
                 {/* 入选理由（2026-10-03）：「为什么选它」——必去点名/检索来源/知乎攻略提及 */}
@@ -540,6 +544,33 @@ function DayCard({ day, planVersion = 0, replaceCandidates, replaceCandidatesVer
         </div>
       )}
     </section>
+  )
+}
+
+function ItemChangeBadge({ change }: { change: ItineraryChange }) {
+  const label = change.kind === 'replaced'
+    ? (change.certainty === 'inferred' ? '可能替换' : '替换')
+    : change.kind === 'added'
+      ? '新增'
+      : change.kind === 'moved'
+        ? `从第 ${change.previousDay} 天移入`
+        : change.kind === 'time_changed'
+          ? '时段调整'
+          : ''
+  if (!label) return null
+  const tone = change.kind === 'replaced'
+    ? 'border-[#ead9b8] bg-[#fffaf0] text-[#8c5a10]'
+    : change.kind === 'added'
+      ? 'border-[#c7e5dc] bg-[#f2faf7] text-[#26765f]'
+      : 'border-[#d8e1e8] bg-[#f5f8fa] text-[#536c7b]'
+  return (
+    <span
+      data-change-kind={change.kind}
+      className={`ml-1.5 inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] ${tone}`}
+    >
+      {label}
+      {change.kind === 'moved' && change.details.timeChanged && ' · 时段调整'}
+    </span>
   )
 }
 
@@ -904,6 +935,10 @@ const STATUS_LABEL: Record<string, string> = {
 
 export interface ItineraryViewProps {
   itinerary: Itinerary
+  /** Draft 只用于预览；不得显示成 Active 或暴露 Active 版本操作。 */
+  draftPreview?: boolean
+  baselineItinerary?: Itinerary | null
+  draftBaseVersion?: number | null
   conversationId: string
   /** M2 画布直选：本轮商户检索候选（「换一家」弹层，来自 tool.result preview） */
   replaceCandidates?: Array<Record<string, unknown>>
@@ -945,10 +980,15 @@ export interface ItineraryViewProps {
 }
 export default function ItineraryView({
   itinerary, conversationId, planStatus = '', notice, exporting = false,
+  draftPreview = false, baselineItinerary = null, draftBaseVersion = null,
   feedbackSent, selectedDay: selectedDayProp, onSelectedDayChange, onExportIcs, onFeedback, onPlanResponse,
   replaceCandidates, replaceCandidatesVersion = 0, onRequestReplace, onAskNearby, tier, onTierChange, budgetNegotiation, onNegotiateBudget,
 }: ItineraryViewProps) {
   const dayCount = itinerary.days.length
+  const changeSummary = useMemo(
+    () => draftPreview && baselineItinerary ? buildChangeSummary(baselineItinerary, itinerary) : null,
+    [baselineItinerary, draftPreview, itinerary],
+  )
   // 受控优先（页面要跟右侧助手共享选中天）；未传时退回内部自管。
   const [innerDay, setInnerDay] = useState(1)
   const selectedDay = selectedDayProp ?? innerDay
@@ -1027,7 +1067,7 @@ export default function ItineraryView({
       )}
 
       {/* M3-f 预算协商：自动降档明示 / 缺口卡（勾选删减由聊天管线承接） */}
-      {budgetNegotiation && (
+      {!draftPreview && budgetNegotiation && (
         <section
           className={budgetNegotiation.tier_downgraded
             ? 'animate-fade-in rounded-2xl border border-[#e6d3ab] bg-[#fffaf0] p-4'
@@ -1091,13 +1131,13 @@ export default function ItineraryView({
       {/* 标题行（设计稿③）：行程名 + 版本徽章 | 确认 / 导出 / 反馈 + 距出发 */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 className="text-2xl font-bold text-[#183037]">
-          {itinerary.brief.destination || '未命名目的地'} · {dayCount} 天
+          {itinerary.brief.destination || '未命名目的地'} · {dayCount} 天{draftPreview && ' · 草案预览'}
         </h2>
         <span className="rounded-full bg-[#e2f0ee] px-2.5 py-1 text-xs font-medium text-[#087b73]">
-          v{itinerary.plan_version} {localPlanStatus === 'waiting_confirmation' ? '草案' : '已确认'}
+          v{itinerary.plan_version} {draftPreview ? '草案 · 未应用' : localPlanStatus === 'waiting_confirmation' ? '草案' : '已确认'}
         </span>
         {/* M3-e 档位切换器：切换 → 代发重排 → 草案 diff 确认（apply 走聊天管线） */}
-        {onTierChange && (
+        {!draftPreview && onTierChange && (
           <span className="inline-flex items-center overflow-hidden rounded-lg border border-[#dae7e5]" role="group" aria-label="方案档位">
             {(['economy', 'comfortable'] as const).map((t) => {
               const active = (tier || 'economy') === t
@@ -1123,7 +1163,7 @@ export default function ItineraryView({
             {STATUS_LABEL[itinerary.status]}
           </span>
         )}
-        {localPlanStatus === 'waiting_confirmation' && (
+        {!draftPreview && localPlanStatus === 'waiting_confirmation' && (
           <button
             type="button"
             onClick={() => void confirmCurrent()}
@@ -1133,7 +1173,7 @@ export default function ItineraryView({
             <Check size={12} /> {actionLoading ? '确认中…' : '确认行程'}
           </button>
         )}
-        <div className="ml-auto flex items-center gap-3">
+        {!draftPreview && <div className="ml-auto flex items-center gap-3">
           <div className="flex items-center gap-1">
             <button
               type="button"
@@ -1183,8 +1223,29 @@ export default function ItineraryView({
               {badge}
             </span>
           )}
-        </div>
+        </div>}
       </header>
+      {draftPreview && (
+        <section className="rounded-2xl border border-[#d8e1e8] bg-[#f8fafb] p-4" aria-label="正式版与草案差异">
+          <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h3 className="text-sm font-semibold text-[#183037]">本次草案变化</h3>
+            {baselineItinerary && (
+              <span className="text-[11px] text-[#5c7074]">正式版 v{baselineItinerary.plan_version} → 草案 v{itinerary.plan_version}</span>
+            )}
+          </div>
+          <p className="mb-3 text-[11px] text-[#5c7074]">尚未应用；当前正式行程保持不变。</p>
+          {draftBaseVersion != null && baselineItinerary && draftBaseVersion !== baselineItinerary.plan_version && (
+            <p className="mb-3 rounded-lg border border-[#ead9b8] bg-[#fffaf0] px-3 py-2 text-[11px] text-[#8c5a10]">
+              此草案基于 v{draftBaseVersion} 生成，当前正式版为 v{baselineItinerary.plan_version}；差异仅供查看，能否应用仍由服务端版本校验决定。
+            </p>
+          )}
+          {changeSummary ? (
+            <TravelChangeSummaryView summary={changeSummary} />
+          ) : (
+            <p className="text-[11px] text-[#5c7074]">这是首份行程草案，当前没有正式版可对比。</p>
+          )}
+        </section>
+      )}
       {historyError && <p className="text-xs text-red-600">{historyError}</p>}
 
       {activeDayData && (
@@ -1247,9 +1308,10 @@ export default function ItineraryView({
               planVersion={itinerary.plan_version}
               replaceCandidates={replaceCandidates}
               replaceCandidatesVersion={replaceCandidatesVersion}
-              onRequestReplace={onRequestReplace}
-              onAskNearby={onAskNearby}
+              onRequestReplace={draftPreview ? undefined : onRequestReplace}
+              onAskNearby={draftPreview ? undefined : onAskNearby}
               onHoverItem={setHoverFocus}
+              changeSummary={changeSummary}
             />
             <div className="flex min-h-0 flex-col gap-3">
               {dayCount > 1 && (

@@ -210,6 +210,7 @@ export default function TravelPage() {
   const [conversationId, setConversationId] = useState(readConversationId)
   const [recoverLatestHistory] = useState(() => !hadStoredConversation)
   const [planState, setPlanState] = useState<PlanState>(readPlanState)
+  const [centerDraftVersion, setCenterDraftVersion] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
@@ -310,6 +311,14 @@ export default function TravelPage() {
   }, [planState])
 
   const itinerary = planState.plan?.itinerary ?? null
+  const pendingItinerary = planState.pending?.itinerary ?? null
+  useEffect(() => {
+    setCenterDraftVersion(pendingItinerary?.plan_version ?? null)
+  }, [pendingItinerary?.plan_version])
+  const centerShowsDraft = Boolean(
+    isWide && pendingItinerary && centerDraftVersion === pendingItinerary.plan_version,
+  )
+  const centerItinerary = centerShowsDraft ? pendingItinerary : itinerary
 
   const handleTravelEvent = useCallback((event: TravelStreamEvent) => {
     const runId = event.data.run_id
@@ -554,20 +563,17 @@ export default function TravelPage() {
     setError('')
     try {
       const latest = await fetchTravelPlanLatest(cid)
-      if (!latest.itinerary) throw new Error('这份规划没有可恢复的行程内容')
-      const data: PlanResponse = {
-        status: latest.itinerary.status || 'ready',
-        final_answer: '',
-        itinerary: latest.itinerary,
-        plan_status: latest.plan_status,
-        change_record: null,
-      }
+      const recovered = reconcilePlanWithLatest(EMPTY_PLAN_STATE, latest)
+      const recoveredItinerary = recovered.pending?.itinerary
+        || recovered.plan?.itinerary
+      if (!recoveredItinerary) throw new Error('这份规划没有可恢复的当前行程')
       abortRef.current?.abort()
       abortRef.current = null
       setLoading(false)
+      setHandoverMessage('') // 收养历史线程时，上一条新行程首句不属于该会话
       setConversationId(adoptConversationId(cid))
-      setPlanState(applyPlanResponse(EMPTY_PLAN_STATE, data))
-      applyBriefToForm(latest.itinerary.brief)
+      setPlanState(recovered)
+      applyBriefToForm(recoveredItinerary.brief)
       setFeedbackSent('')
       setError('')
       setTravelProcess(null)
@@ -825,37 +831,64 @@ export default function TravelPage() {
               )}
 
               {/* ── 结果 ── */}
-              {itinerary ? (
+              {centerItinerary ? (
                 <>
+                  {isWide && pendingItinerary && itinerary && (
+                    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="选择行程版本">
+                      <button
+                        type="button"
+                        aria-pressed={centerShowsDraft}
+                        onClick={() => setCenterDraftVersion(pendingItinerary.plan_version)}
+                        className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${centerShowsDraft
+                          ? 'border-[#087b73] bg-[#e9f3f0] font-medium text-[#087b73]'
+                          : 'border-[#dae7e5] bg-white text-[#5c7074] hover:bg-[#f5faf9]'}`}
+                      >
+                        草案 v{pendingItinerary.plan_version} · 未应用
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={!centerShowsDraft}
+                        onClick={() => setCenterDraftVersion(null)}
+                        className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${!centerShowsDraft
+                          ? 'border-[#087b73] bg-[#e9f3f0] font-medium text-[#087b73]'
+                          : 'border-[#dae7e5] bg-white text-[#5c7074] hover:bg-[#f5faf9]'}`}
+                      >
+                        正式版 v{itinerary.plan_version}
+                      </button>
+                    </div>
+                  )}
                   {/* M1 反馈：Tool 执行记录移入右栏聊天流（内联 Tool 行常驻本轮对话），
                       中栏只保留行程本体 */}
                   <ItineraryView
-                  itinerary={itinerary}
-                  notice={planState.notice}
-                  exporting={exporting}
+                  itinerary={centerItinerary}
+                  draftPreview={centerShowsDraft}
+                  baselineItinerary={centerShowsDraft ? itinerary : null}
+                  draftBaseVersion={centerShowsDraft ? planState.pending?.base_plan_version : null}
+                  notice={centerShowsDraft ? undefined : planState.notice}
+                  exporting={centerShowsDraft ? false : exporting}
                   feedbackSent={feedbackSent}
                   conversationId={conversationId}
-                  planStatus={planState.plan?.plan_status}
+                  planStatus={centerShowsDraft ? 'waiting_confirmation' : planState.plan?.plan_status}
                   selectedDay={activeDay}
                   onSelectedDayChange={setActiveDay}
-                  onExportIcs={downloadIcs}
-                  onFeedback={sendFeedback}
+                  onExportIcs={centerShowsDraft ? () => {} : downloadIcs}
+                  onFeedback={centerShowsDraft ? () => {} : sendFeedback}
                   onPlanResponse={handleAssistantResponse}
-                  replaceCandidates={replaceCandidates}
+                  replaceCandidates={centerShowsDraft ? undefined : replaceCandidates}
                   replaceCandidatesVersion={replaceCandidatesVersion}
-                  onRequestReplace={handleRequestReplace}
-                  onAskNearby={(text) => chatRef.current?.send(text, 'canvas_action')}
-                  tier={itinerary.brief.tier || 'economy'}
-                  budgetNegotiation={planState.plan?.rationale?.budget_negotiation ?? null}
-                  onNegotiateBudget={handleNegotiateBudget}
-                  onTierChange={(t) => {
+                  onRequestReplace={centerShowsDraft ? undefined : handleRequestReplace}
+                  onAskNearby={centerShowsDraft ? undefined : (text) => chatRef.current?.send(text, 'canvas_action')}
+                  tier={centerItinerary.brief.tier || 'economy'}
+                  budgetNegotiation={centerShowsDraft ? null : planState.plan?.rationale?.budget_negotiation ?? null}
+                  onNegotiateBudget={centerShowsDraft ? undefined : handleNegotiateBudget}
+                  onTierChange={centerShowsDraft ? undefined : (t) => {
                     // M4/G1+G3 档位切换确认：先落 decision=tier_switch 留痕
                     // （from→to）再代发重排（source=tier_switch 归因进 trace）
                     void recordTravelDecision({
                       decision: 'tier_switch',
                       conversationId,
-                      planVersion: itinerary.plan_version,
-                      tierFrom: itinerary.brief.tier || 'economy',
+                      planVersion: centerItinerary.plan_version,
+                      tierFrom: centerItinerary.brief.tier || 'economy',
                       tierTo: t,
                       payload: { message: t === 'comfortable'
                         ? '方案切换成舒适均衡型，帮我重排（住宿餐饮升档，尽量不超预算）'
@@ -873,16 +906,16 @@ export default function TravelPage() {
                   {/* 分类候选表（验收 #10）：换入走既有代发草案管线
                       （decision=canvas_replace 留痕 + canvas_action 代发），
                       与画布换一家同一条链；生成中置灰防双发。 */}
-                  <CandidatesPanel
+                  {!centerShowsDraft && <CandidatesPanel
                     conversationId={conversationId}
-                    planVersion={itinerary.plan_version}
+                    planVersion={itinerary?.plan_version ?? 0}
                     generating={loading}
                     activeDay={activeDay}
                     onAskReplace={(candidate, targetDay) => {
                       void recordTravelDecision({
                         decision: 'canvas_replace',
                         conversationId,
-                        planVersion: itinerary.plan_version,
+                        planVersion: itinerary?.plan_version ?? 0,
                         payload: {
                           candidate_name: candidate.name,
                           candidate_poi_id: candidate.poi_id,
@@ -897,7 +930,7 @@ export default function TravelPage() {
                         'canvas_action',
                       )
                     }}
-                  />
+                  />}
                 </>
               ) : loading ? (
                 <GeneratingCard processState={travelProcess} expectedDays={parseInt(days, 10) || 0} />

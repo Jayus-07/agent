@@ -3,7 +3,7 @@
 2026-10-08 #2：词表此前无交通词，「明天去厦门最快的车」被当成规划需求
 追问「玩几天」（或把旧行程原样重吐）。快路契约：
   - 意图判定：交通名词/问法 → QUERY_TRANSIT，且 MODIFY/PLAN 优先级不变
-  - slot 层：预取车票（失败不阻塞）、缺出发地/目的地不猜、缺日期按明天兜底
+  - 辅助任务层：查询车票（失败不阻塞）、缺出发地/目的地不猜、缺日期按明天兜底
   - supervisor：意图先行 REPORT 短路，不进专家链
   - graph_result：answered（itinerary=None、不写 pending）
   - prefilter：交通查询 + 城市名可冷启动进域；业务时间窗守卫不回退
@@ -28,7 +28,6 @@ from backend.travel.reporter import (
     _assemble,
     _parse_duration_minutes,
 )
-from backend.travel.slot_filler import slot_filler_node
 from backend.travel.supervisor import TravelStage, decide
 
 
@@ -67,6 +66,28 @@ class TestSupervisorShortCircuit:
         assert decision.stage is TravelStage.REPORT
         assert "车票" in decision.reason or "直出" in decision.reason
 
+    def test_query_with_pending_train_task_runs_auxiliary_node_first(self):
+        decision = decide({
+            "intent": "query_transit",
+            "brief_missing": ["days"],
+            "turn_decision": {"additional_tasks": [{
+                "task_id": "train-1", "type": "query_train",
+            }]},
+            "task_results": [],
+        })
+        assert decision.stage is TravelStage.AUXILIARY_TASKS
+
+    def test_completed_train_task_does_not_repeat(self):
+        decision = decide({
+            "intent": "query_transit",
+            "brief_missing": ["days"],
+            "turn_decision": {"additional_tasks": [{
+                "task_id": "train-1", "type": "query_train",
+            }]},
+            "task_results": [{"task_id": "train-1", "status": "success"}],
+        })
+        assert decision.stage is TravelStage.REPORT
+
 
 class TestGraphResultAnswered:
     def test_query_transit_is_answered(self):
@@ -78,69 +99,6 @@ class TestGraphResultAnswered:
         })
         assert result["status"] == STATUS_ANSWERED
         assert result["itinerary"] is None
-
-
-class TestSlotFillerPrefetch:
-    @staticmethod
-    def _fake_search(monkeypatch, payload=None, error=None):
-        from backend.travel.services import live_search_service
-
-        calls = {}
-
-        def fake(**kwargs):
-            calls.update(kwargs)
-            if error is not None:
-                raise error
-            return payload
-
-        monkeypatch.setattr(live_search_service, "search_trains", fake)
-        return calls
-
-    _PAYLOAD = {
-        "trains": [
-            {"train_no": "G510", "start_time": "08:10", "arrive_time": "09:35",
-             "duration": "1小时25分", "seats": {"二等座": "有", "一等座": "12"}},
-            {"train_no": "D6213", "start_time": "07:00", "arrive_time": "09:10",
-             "duration": "2小时10分", "seats": {"二等座": "无"}},
-        ],
-        "from_station": "福州", "to_station": "厦门",
-        "date": "2026-10-09", "source": "12306", "count": 2,
-    }
-
-    def test_ok_path_prefetches_and_stays_lightweight(self, monkeypatch):
-        calls = self._fake_search(monkeypatch, payload=dict(self._PAYLOAD))
-        update = slot_filler_node({"user_message": "明天从福州到厦门最快的高铁"})
-        assert update["intent"] == "query_transit"
-        tq = update["transit_query"]
-        assert tq["status"] == "ok"
-        assert tq["origin"] == "福州"
-        assert tq["destination"] == "厦门"
-        assert len(tq["trains"]) == 2
-        # 查询参数确实来自词表抽取（出发地/到达地/日期）
-        assert calls["from_station"] == "福州"
-        assert calls["to_station"] == "厦门"
-        # 轻量回答不写规划产物基底（previous=None 且 non_mutating）
-        assert "brief" not in update
-        assert update["clarifications"] == []
-
-    def test_missing_origin_asks_with_example(self, monkeypatch):
-        self._fake_search(monkeypatch, payload=dict(self._PAYLOAD))
-        update = slot_filler_node({"user_message": "明天去厦门的最快的车"})
-        assert update["transit_query"]["status"] == "missing_origin"
-        assert update["transit_query"]["destination"] == "厦门"
-
-    def test_search_failure_tolerated(self, monkeypatch):
-        self._fake_search(monkeypatch, error=RuntimeError("12306 timeout"))
-        update = slot_filler_node({"user_message": "明天从福州到厦门最快的高铁"})
-        assert update["transit_query"]["status"] == "failed"
-
-    def test_missing_date_defaults_to_tomorrow_with_note(self, monkeypatch):
-        self._fake_search(monkeypatch, payload=dict(self._PAYLOAD))
-        update = slot_filler_node({"user_message": "从福州到厦门最快的高铁"})
-        tq = update["transit_query"]
-        assert tq["status"] == "ok"
-        assert tq["date"]  # 有兜底日期
-        assert any("明天" in n for n in update["notes"])
 
 
 class TestReporterRendering:
