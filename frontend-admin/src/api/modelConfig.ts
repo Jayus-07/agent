@@ -42,6 +42,9 @@ export interface ProviderUpdateInput {
   modelName?: string
   modelKind?: ModelKind
   extraHeaders?: Record<string, string>
+  /** 附加请求体（如 {"thinking":{"type":"disabled"}} 关闭思考）。
+   *  不传 = 保留库中原值；{} = 显式清空。 */
+  extraBody?: Record<string, unknown>
   /** 不传 = 保留旧密钥；非空 = 轮换；clearApiKey = 清除。 */
   apiKey?: string
   clearApiKey?: boolean
@@ -57,6 +60,8 @@ export interface ProviderCreateInput {
   billing?: ProviderRow['billing']
   enabled?: boolean
   extraHeaders?: Record<string, string>
+  /** 附加请求体（如关闭思考）；缺省空对象 = 不附加 */
+  extraBody?: Record<string, unknown>
   apiKey: string
 }
 

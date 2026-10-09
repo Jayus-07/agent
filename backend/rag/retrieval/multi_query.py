@@ -4,6 +4,7 @@ need_multi_query() 是唯一入口，所有 MultiQuery 判断必须经过此函�
 """
 
 import re
+import time
 from typing import Any, List
 
 from langchain_core.documents import Document
@@ -23,6 +24,48 @@ from backend.shared.logger import logger
 
 # 运行时模式（可通过 API POST /llm/multiquery 动态切换）
 _mq_mode: str = _DEFAULT_MODE
+
+# 改写输出的 token 下限。历史值 200 被实测证明**不足**：2026-10-09 从
+# trace_store 统计 154 次改写，151 次 completion_tokens 恰好等于 200 且
+# 只解析出 1 个变体（145/155/191 tokens 的 3 次全部正常出 3 个即 98% 撞上限）。
+# 根因是主模型为思考型（doubao-seed-2.0-mini），reasoning 计入
+# completion_tokens，思考吃掉大部分预算后正文被截断——多查询因此长期
+# 静默退化为单查询，还白付 ~2.3s 串行等待。
+# 修复=角色化（改走 non-thinking 轻模型）+ 上限兜底到 512，两者缺一不可：
+# 只调角色时若管理员仍绑定思考型模型，512 仍会被思考吃光。
+_REWRITE_MAX_TOKENS_FLOOR = 512
+
+
+def _resolve_rewrite_llm():
+    """改写专用 LLM：multi_query 角色（空 = 继承 main，行为兼容旧版）。
+
+    改写是「3 行查询文本」的简单转换，不需要推理能力。走独立角色后可绑定
+    non-thinking 轻模型，既避免思考型模型吃光 token 预算，又显著降低延迟。
+    解析失败回落主链 llm，保证可用性优先（与既有 fail-open 口径一致）。
+    """
+    try:
+        from backend.config import model_roles
+
+        name = str(model_roles.resolve_runtime_name("multi_query") or "").strip()
+        if name:
+            # 与既有角色消费点（llm_enrichment / verify_model_governance）同路径：
+            # get_llm_for_role 只在 proxy 模块导出，不在包 __init__ 面
+            from backend.infra.llm.proxy import get_llm_for_role
+
+            return get_llm_for_role("multi_query")
+    except Exception as e:  # noqa: BLE001 — 角色不可用不阻塞检索
+        logger.warning(f"[MultiQuery] multi_query 角色解析失败，回落主链 LLM: {e}")
+    from backend.infra.llm import llm
+
+    return llm
+
+
+def _rewrite_max_tokens() -> int:
+    """改写 token 上限：配置值与安全下限取大（防思考型模型截断变体）。"""
+    try:
+        return max(int(MULTI_QUERY_MAX_TOKENS), _REWRITE_MAX_TOKENS_FLOOR)
+    except (TypeError, ValueError):
+        return _REWRITE_MAX_TOKENS_FLOOR
 
 
 def get_mq_mode() -> str:
@@ -200,18 +243,15 @@ def _rewrite(question: str) -> list[str]:
         from backend.observability.tracer import trace_collector
         span = trace_collector.start_span("query_rewrite", name="LLM 改写",
                                           input={"question": question[:500]})
-        from backend.infra.llm import llm
         from langchain_core.messages import HumanMessage
 
         r = prompt_service.render_sync("rag.multi_query", count=MULTI_QUERY_COUNT, question=question)
         # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
         if isinstance(span.input, dict):
             span.input["prompt"] = r.text[:1000]
-        result = llm.invoke(
+        result = _resolve_rewrite_llm().invoke(
             [HumanMessage(content=r.text)],
-            # 改写输出只是几行查询（MULTI_QUERY_MAX_TOKENS=200 足够），
-            # 限制生成上限直接缩短这次串行 LLM 调用的耗时
-            max_tokens=MULTI_QUERY_MAX_TOKENS,
+            max_tokens=_rewrite_max_tokens(),
         )
         
         # 正确提取 content（可能是 AIMessage 或其他类型）

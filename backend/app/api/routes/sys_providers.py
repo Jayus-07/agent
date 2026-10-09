@@ -329,6 +329,8 @@ def _db_rows(snap: registry_store.RegistrySnapshot) -> list[dict]:
             "baseUrl": effective_base_url,
             "networkScope": _normalize_scope(p.get("network_scope")),
             "billing": str(p.get("billing") or "metered"),
+            # 附加请求体（087 迁移）：管理端据此回显/编辑「关闭思考」等字段
+            "extraBody": dict(p.get("extra_body") or {}),
             "isBuiltin": bool(p.get("is_builtin")),
             "enabled": bool(p.get("enabled", True)),
             "modelCount": counts.get(pid, 0),

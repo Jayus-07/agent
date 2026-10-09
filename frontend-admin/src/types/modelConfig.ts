@@ -307,6 +307,9 @@ export interface ProviderRow {
   }>
   networkScope: NetworkScope
   billing: BillingMode
+  /** 附加请求体（087 迁移）：如 {"thinking":{"type":"disabled"}} 关闭思考。
+   *  由 driver 原样透传给上游 API；缺省空对象 = 不附加。 */
+  extraBody?: Record<string, unknown>
   isBuiltin: boolean
   enabled: boolean
   modelCount: number

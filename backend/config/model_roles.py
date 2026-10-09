@@ -158,6 +158,14 @@ MODEL_ROLES: dict[str, RoleSpec] = {
         has_inherit_semantics=True,
         validator="registered_model",
     ),
+    "multi_query": RoleSpec(
+        env_key="MULTI_QUERY_MODEL",
+        default="",
+        desc="多查询改写（低延迟 non-thinking 轻模型优先；空 = 跟随主问答模型）",
+        inherit="main",
+        has_inherit_semantics=True,
+        validator="registered_model",
+    ),
     "fallback": RoleSpec(
         env_key="LLM_FALLBACK_MODEL",
         default="",
@@ -228,6 +236,9 @@ ROLE_RUNTIME_DEFAULTS: dict[str, RoleRuntimeDefaults] = {
     # L5 摘要是保险层：调用失败不换模型重试，走确定性裁剪兜底（skip 语义）；
     # 实际超时上限由 CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS 统一判定
     "context_compactor": RoleRuntimeDefaults(timeout_seconds=30, max_retries=0, failure_policy="skip"),
+    # 多查询改写在检索前置的串行步骤上：超时/失败必须快速回退原始 query
+    # （skip 语义 = 降级为单查询），不能拖垮整个检索；10s × 1 上限
+    "multi_query": RoleRuntimeDefaults(timeout_seconds=10, max_retries=0, failure_policy="skip"),
     # 熔断兜底角色本身不再套 fallback
     "fallback": RoleRuntimeDefaults(timeout_seconds=30, max_retries=0, failure_policy="fail_fast"),
     # 入库链路：单阶段失败不阻塞整篇文档，标记后继续

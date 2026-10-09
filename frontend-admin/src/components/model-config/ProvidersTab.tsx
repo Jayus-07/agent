@@ -37,7 +37,7 @@ import ProviderEditor from './providers/ProviderEditor'
 import ProviderModelEditor from './providers/ProviderModelEditor'
 import { unresolvedPlaceholder } from './providers/urlUtils'
 import { formatElapsed, formatLiveElapsed, modelKindBadgeClass, modelKindShortLabel, probeModeLabel } from './providers/format'
-import { draftFromRow, modelRemovalBlockReason, newDraft, type Draft, type ModelDraft, type ModelRemoval } from './providers/draft'
+import { draftFromRow, modelRemovalBlockReason, newDraft, resolveExtraBody, type Draft, type ModelDraft, type ModelRemoval } from './providers/draft'
 
 /** 价格徽标的货币符号（第一阶段仅 CNY / USD）。 */
 function currencySymbol(currency?: string): string {
@@ -434,6 +434,20 @@ export default function ProvidersTab({
 
     setBusy(true)
     try {
+      // 附加请求体：自定义 JSON 非法时拦在本地，不发请求（后端也会拒，但本地报错更快）
+      const extraBodyResult = resolveExtraBody(
+        editing.extraBodyPreset, editing.extraBodyText,
+      )
+      if ('error' in extraBodyResult) {
+        toast.error(extraBodyResult.error)
+        setDraftProbeError(extraBodyResult.error)
+        return
+      }
+      // 未改动就不提交该字段：后端 update 用 COALESCE，传 undefined 即保持原值。
+      // 这样避免「打开抽屉又保存」把库里的值意外覆盖成预设。
+      const extraBodyUnchanged = JSON.stringify(extraBodyResult.value)
+        === JSON.stringify(editing.originalExtraBody ?? {})
+
       const common = {
         displayName: editing.displayName.trim(),
         driver: editing.driver,
@@ -445,6 +459,7 @@ export default function ProvidersTab({
         enabled: editing.enabled,
         apiKey: editing.apiKey?.trim() || undefined,
         clearApiKey: editing.clearApiKey,
+        extraBody: extraBodyUnchanged ? undefined : extraBodyResult.value,
       }
       if (editing.id) {
         await saveProvider(editing.id, common)
