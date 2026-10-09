@@ -650,6 +650,39 @@ def test_l3_skip_does_not_block(monkeypatch):
     assert res.summary == "厂商连通性通过"
 
 
+def test_ocr_kind_is_accepted_and_probes_via_chat_l2(monkeypatch):
+    """`ocr` 是管理端可选用途（MODEL_KINDS 含 ocr），探测必须接受并走聊天 L2。
+
+    2026-10-10 事故：探测白名单漏了 ocr，所有 OCR 模型在入口被
+    「不支持的模型用途：ocr」秒拒——与 vision 同理，OCR 模型走 OpenAI
+    兼容聊天端点，由 L2 真实调用给出归因。
+    """
+    monkeypatch.setattr(P, "probe_l0", _async_step("L0", P.STATUS_PASS, "可达"))
+    captured: dict = {}
+
+    async def _l2(*_args, **kwargs):
+        captured.update(kwargs)
+        return P.ProbeStep("L2", P.STATUS_PASS, "模型可用")
+
+    monkeypatch.setattr(P, "probe_l2", _l2)
+
+    res = _run(P.probe_provider(driver="openai", base_url="https://x/v1",
+                                api_key="k", model_name="qwen-ocr",
+                                model_kind="ocr"))
+    assert res.ok is True
+    assert res.blocked_at is None
+    assert [s.level for s in res.steps] == ["L0", "L2", "L3"]
+    assert "ocr" not in res.summary
+
+
+def test_unsupported_model_kind_still_rejected():
+    res = _run(P.probe_provider(driver="openai", base_url="https://x/v1",
+                                api_key="k", model_name="m", model_kind="banana"))
+    assert res.ok is False
+    assert res.blocked_at == "L2"
+    assert "不支持的模型用途" in res.summary
+
+
 # ── 结构性契约：探测排除在统计之外 ──────────────────────────────────────
 
 
