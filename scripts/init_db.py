@@ -253,6 +253,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     # ai.tool_approval_requests 也进了 agent_readonly 可见面，
     # 收窄为 schema_config 声明的两张表（agent_tasks/agent_trace）。
     "083_readonly_ai_grant_scope.sql": "business",
+    # 旅游助手 V2 独立行程存储、旧规划表退役与住宿/城际安排扩展。
+    "084_travel_v2_schema.sql": "memory",
+    "085_drop_legacy_travel_planning.sql": "memory",
+    "086_travel_v2_arrangements.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
@@ -261,6 +265,8 @@ ORDER_LAST = [
     "004_readonly_role.sql",
     "043_readonly_public_revoke.sql",
     "083_readonly_ai_grant_scope.sql",
+    "085_drop_legacy_travel_planning.sql",
+    "086_travel_v2_arrangements.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 

@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 import time
@@ -47,6 +48,9 @@ from backend.shared.logger import logger
 from backend.travel.models.brief import TravelBrief
 
 router = APIRouter(prefix="/travel", tags=["旅游域"])
+# V1 行程端点保留在源码中供算法迁移期间定位，但不注册到应用。
+# 正式行程读写统一由 backend.travel_v2.api.router 提供。
+_retired_v1_router = APIRouter(prefix="/travel", tags=["已退役旅游 V1"])
 
 
 # ============================================================
@@ -63,7 +67,7 @@ class TravelPlanRequest(BaseModel):
     session_id: str = Field("", max_length=128)
     conversation_id: str = Field("", max_length=128,
                                  description="跨轮会话标识；同一值可跨轮改单（依赖 checkpointer）")
-    mode: Literal["plan", "chat", "action"] = "plan"
+    mode: Literal["plan", "chat", "action", "read_only"] = "plan"
     brief_input: TravelBrief | None = None
     base_plan_version: int | None = Field(None, ge=1)
     ui_context: TravelUiContext = Field(default_factory=TravelUiContext)
@@ -88,6 +92,15 @@ class TravelResponseMetadata(BaseModel):
     draft_plan_version: int | None = None
     base_plan_version: int | None = None
     task_results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TravelConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=20_000)
+
+
+class TravelConversationMessagesRequest(BaseModel):
+    messages: list[TravelConversationMessage] = Field(..., max_length=100)
 
 
 def _attach_travel_response_metadata(
@@ -151,6 +164,9 @@ def _annotate_trace_source(trace, client_run_id: str, source: str) -> None:
     对失败轮次同样成立。
     """
     try:
+        # 来源分类在建 trace 时就落定：中途崩溃/超时的轮次同样要能归到
+        # 旅游域，不能只依赖收口路径（收口失败即永久误判为 AI 助手）。
+        trace.tags["runtime_domain"] = "travel"
         if client_run_id:
             trace.tags["client_run_id"] = str(client_run_id)[:64]
         if source:
@@ -194,7 +210,7 @@ def _build_travel_graph_input(
 
 
 def _seed_cross_turn_base(graph_input: dict, conversation_id: str,
-                          user_id: str) -> None:
+                          user_id: str, tenant_id: str = "default") -> None:
     """跨轮基底自愈（#53/#140 地基）：checkpointer 丢失（强杀/重启/降级
     MemorySaver）后，改单轮拿不到上一轮的 brief 基底与版本 parent ——
     slot_filler 变化检测恒 False（旧行程被当草案输出）、transit 版本号
@@ -211,11 +227,14 @@ def _seed_cross_turn_base(graph_input: dict, conversation_id: str,
     try:
         from backend.travel.core.plan_service import plan_version_service
 
-        latest = plan_version_service.latest_version(conversation_id, user_id)
-        if latest and latest.get("itinerary"):
+        latest = plan_version_service.latest_version(
+            conversation_id, user_id, tenant_id=tenant_id, strict=True)
+        active = plan_version_service.active_version(
+            conversation_id, user_id, tenant_id=tenant_id, strict=True)
+        if active and active.get("itinerary"):
+            active_itinerary = active["itinerary"]
             graph_input["reconstruct_brief"] = (
-                latest["itinerary"].get("brief") or {})
-            graph_input["plan_parent_version"] = latest.get("plan_version")
+                active_itinerary.get("brief") or {})
             # 指纹基线同样可派生：对账本 brief 重算——没有它，
             # detect_brief_change 的 `bool(last_fingerprint)` 恒 False，
             # 改单轮永远判「需求没变」（实测：改单轮旧行程被当草案输出）
@@ -223,26 +242,225 @@ def _seed_cross_turn_base(graph_input: dict, conversation_id: str,
             from backend.travel.models.brief import TravelBrief
 
             graph_input["brief_fingerprint"] = brief_fingerprint(
-                TravelBrief(**(latest["itinerary"].get("brief") or {})))
+                TravelBrief(**(active_itinerary.get("brief") or {})))
+        if latest:
+            graph_input["plan_parent_version"] = latest.get("plan_version")
     except Exception:  # noqa: BLE001 — 自愈是增强项，失败不挡规划主链
         logger.debug("[TravelAPI] 跨轮基底预置失败（按无基底执行）",
                      exc_info=True)
 
 
-def _record_plan_version(out: dict, conversation_id: str, user_id: str) -> dict:
+def _load_read_only_plan_context(
+    conversation_id: str,
+    user_id: str,
+    tenant_id: str = "default",
+) -> dict[str, Any]:
+    """按当前身份读取 Active/Draft；只读问答不信任前端传来的行程快照。"""
+    if not conversation_id or not user_id:
+        return {
+            "active_plan_version": None,
+            "draft_plan_version": None,
+            "reference_itinerary": None,
+            "reference_status": "missing_identity",
+        }
+    try:
+        from backend.travel.core.plan_service import plan_version_service
+
+        latest = plan_version_service.latest_version(
+            conversation_id, user_id, tenant_id=tenant_id, strict=True)
+        active = plan_version_service.active_version(
+            conversation_id, user_id, tenant_id=tenant_id, strict=True)
+        draft = latest if latest and latest.get("plan_status") == "waiting_confirmation" else None
+        reference = draft or active
+        return {
+            "active_plan_version": (active or {}).get("plan_version"),
+            "draft_plan_version": (draft or {}).get("plan_version"),
+            "reference_status": (draft or active or {}).get("plan_status", "missing"),
+            "reference_itinerary": (reference or {}).get("itinerary"),
+        }
+    except Exception:  # noqa: BLE001 — 缺上下文时仍保持只读，不读 checkpoint 草案
+        logger.warning("[TravelAPI] 只读问答读取版本上下文失败", exc_info=True)
+        return {
+            "active_plan_version": None,
+            "draft_plan_version": None,
+            "reference_itinerary": None,
+            "reference_status": "unavailable",
+        }
+
+
+def _latest_pending_draft(
+    conversation_id: str,
+    user_id: str,
+    tenant_id: str = "default",
+) -> dict[str, Any] | None:
+    """读账本检查是否已有待决草案；写请求需在执行图前拒绝。"""
+    if not conversation_id or not user_id:
+        return None
+    try:
+        from backend.travel.core.plan_service import plan_version_service
+
+        latest = plan_version_service.latest_version(
+            conversation_id, user_id, tenant_id=tenant_id, strict=True)
+        if latest and latest.get("plan_status") == "waiting_confirmation":
+            return latest
+    except Exception:  # noqa: BLE001 — 无法确认无草案时禁止写入 checkpoint
+        logger.error("[TravelAPI] 待确认草案预检失败，拒绝规划写请求", exc_info=True)
+        raise
+    return None
+
+
+def _restore_from_chat_reference(
+    req: TravelPlanRequest,
+    identity: Any,
+    conversation_id: str,
+    turn_id: str,
+) -> dict | None:
+    """将明确的自然语言回退指令接到现有版本恢复/CAS 链路。
+
+    只处理可写聊天模式；read_only 请求继续由只读图拦截，绝不借此绕过
+    P1-02 的只读门。无法唯一定位时直接澄清，不落入普通规划图。
+    """
+    if req.mode == "read_only":
+        return None
+    from backend.travel.core.restore_reference import (
+        parse_restore_reference,
+        resolve_restore_target,
+    )
+
+    reference = parse_restore_reference(req.message)
+    if reference is None:
+        return None
+
+    from backend.travel.core.plan_service import plan_version_service
+
+    user_id = identity.user_id or ""
+    tenant_id = getattr(identity, "tenant_id", "") or "default"
+    latest = plan_version_service.latest_version(
+        conversation_id, user_id, tenant_id=tenant_id, strict=True)
+    if not latest:
+        return _attach_travel_response_metadata(
+            {
+                "status": "needs_clarification",
+                "final_answer": "当前会话还没有可恢复的行程，请先生成一份行程。",
+                "clarification": "当前会话没有可恢复的历史版本。",
+                "itinerary": None,
+            },
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            base_plan_version=req.base_plan_version,
+        )
+
+    versions = plan_version_service.list_versions(
+        conversation_id, user_id, tenant_id=tenant_id)
+    if not versions:
+        versions = [latest]
+    active = plan_version_service.active_version(
+        conversation_id, user_id, tenant_id=tenant_id, strict=True)
+    target_version = resolve_restore_target(reference, versions)
+    latest_version = int(latest["plan_version"])
+    if target_version is None:
+        candidates = [
+            int(row["plan_version"])
+            for row in versions
+            if int(row.get("plan_version") or 0) < latest_version
+        ]
+        if reference.kind == "explicit" and reference.target_version == latest_version:
+            message = f"当前已经是 v{latest_version}，请指定更早的版本号。"
+        elif candidates:
+            choices = "、".join(f"v{version}" for version in candidates[:8])
+            message = (
+                f"我暂时无法唯一确定要恢复的版本。当前是 v{latest_version}，"
+                f"可恢复历史版本：{choices}。请说“恢复到第 N 版”。"
+            )
+        else:
+            message = "当前会话没有更早的可恢复版本，请指定已有的历史版本号。"
+        return _attach_travel_response_metadata(
+            {
+                "status": "needs_clarification",
+                "final_answer": message,
+                "clarification": message,
+                "itinerary": None,
+                "active_plan_version": (active or {}).get("plan_version"),
+                "draft_plan_version": (
+                    latest_version
+                    if latest.get("plan_status") == "waiting_confirmation"
+                    else None
+                ),
+            },
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            base_plan_version=(
+                req.base_plan_version
+                if req.base_plan_version is not None else latest_version
+            ),
+        )
+
+    base_version = (
+        req.base_plan_version
+        if req.base_plan_version is not None else latest_version
+    )
+    restored = plan_version_service.restore(
+        conversation_id,
+        user_id,
+        target_version=target_version,
+        base_version=base_version,
+        tenant_id=tenant_id,
+    )
+    itinerary = restored["itinerary"]
+    draft_version = int(itinerary["plan_version"])
+    result = {
+        "status": "success",
+        "result_kind": "draft",
+        "final_answer": (
+            f"已将 v{target_version} 的内容恢复为待确认草案 v{draft_version}；"
+            "正式行程尚未改变，请确认后应用。"
+        ),
+        "itinerary": itinerary,
+        "plan_status": "waiting_confirmation",
+        "change_record": restored.get("change_record"),
+        "active_plan_version": (active or {}).get("plan_version"),
+        "draft_plan_version": draft_version,
+        "base_plan_version": base_version,
+    }
+    return _attach_travel_response_metadata(
+        result,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        base_plan_version=base_version,
+    )
+
+
+def _read_only_graph_input(
+    graph_input: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """注入账本权威的问答上下文，图本身不挂持久化状态。"""
+    graph_input["read_only_context"] = context
+    itinerary = context.get("reference_itinerary")
+    if isinstance(itinerary, dict):
+        graph_input["itinerary"] = itinerary
+        graph_input["brief"] = itinerary.get("brief") or {}
+    return graph_input
+
+
+def _record_plan_version(
+    out: dict, conversation_id: str, user_id: str,
+    tenant_id: str = "default",
+) -> dict:
     """把成功行程投影进版本账本；与非流式入口共用。"""
     itinerary = out.get("itinerary")
-    if itinerary and conversation_id and user_id:
+    if itinerary and out.get("status") == "success":
         from backend.travel.core.plan_service import plan_version_service
 
         out.update(plan_version_service.record_plan_result(
-            conversation_id, user_id, itinerary))
+            conversation_id, user_id, itinerary, tenant_id=tenant_id))
     return out
 
 
 def _attach_trace_plan_projection(state: dict, result: dict,
                                   conversation_id: str,
-                                  user_id: str) -> None:
+                                  user_id: str,
+                                  *, tenant_id: str = "default") -> None:
     """把版本账本的 active/draft 事实放进观测旁路，不改变 API 响应。"""
     if not conversation_id or not user_id or not isinstance(state, dict):
         return
@@ -250,12 +468,15 @@ def _attach_trace_plan_projection(state: dict, result: dict,
         from backend.travel.core.plan_service import plan_version_service
 
         itinerary = result.get("itinerary") or state.get("itinerary") or {}
-        active = plan_version_service.active_version(conversation_id, user_id)
+        active = plan_version_service.active_version(
+            conversation_id, user_id, tenant_id=tenant_id)
         change = result.get("change_record") or {}
         state["_trace_plan_versions"] = {
             "base_plan_version": change.get("parent_plan_version") or "",
             "active_plan_version": (active or {}).get("plan_version") or "",
-            "draft_plan_version": itinerary.get("plan_version") or "",
+            "draft_plan_version": (
+                result.get("draft_plan_version")
+                or itinerary.get("plan_version") or ""),
         }
     except Exception:  # noqa: BLE001 — 观测旁路软失败
         logger.debug("[TravelAPI] Trace 版本投影失败", exc_info=True)
@@ -273,11 +494,52 @@ def _travel_destination(state: dict | None, result: dict | None = None) -> str:
     return str(getattr(itinerary, "destination", "") or "")
 
 
+def _record_travel_tool_trace_event(records: list[dict], event: dict) -> None:
+    """把 Tool 事件压成白名单 Trace 字段，不保存原始参数、预览或错误文本。"""
+    event_name = str(event.get("event") or "")
+    if event_name not in {"tool.started", "tool.result", "tool.degraded", "tool.blocked"}:
+        return
+    call_id = str(event.get("tool_call_id") or "")
+    record = next(
+        (item for item in records
+         if call_id and item.get("tool_call_id") == call_id),
+        None,
+    )
+    if record is None:
+        record = {
+            "tool_call_id": call_id or f"legacy-{len(records) + 1}",
+            "task_id": str(event.get("task_id") or ""),
+            "tool": str(event.get("tool") or ""),
+            "agent": str(event.get("agent") or ""),
+            "status": "running" if event_name == "tool.started" else "",
+            "data_status": "",
+            "result_count": 0,
+            "duration_ms": 0,
+            "error_type": "",
+        }
+        records.append(record)
+    for key in ("task_id", "tool", "agent"):
+        if event.get(key):
+            record[key] = str(event[key])[:128]
+    if event_name in {"tool.result", "tool.degraded", "tool.blocked"}:
+        for key in ("status", "data_status", "result_count", "duration_ms", "error_type"):
+            if event.get(key) is not None:
+                value = event[key]
+                record[key] = str(value)[:128] if key in {"status", "data_status", "error_type"} else value
+
+
 def _finish_travel_trace(trace, started_at: float, result: dict,
-                         state: dict | None, run_id: str) -> None:
+                         state: dict | None, run_id: str,
+                         tool_events: list[dict] | None = None) -> None:
     """收口旅游入口 Trace；观测失败不能改变已生成的业务结果。"""
     try:
         trace.tags.update({
+            # runtime_domain 是 trace_source 三分类的唯一依据（单一事实源）。
+            # 旅游入口绕过主图 Router，没有 prefilter_chain 的
+            # record_router_decision 写入 runtime_* 归因，因此必须在这里
+            # 显式声明，否则 classify_trace_source 只能退到
+            # workflow_name=="agent" 分支，把旅游误判成 AI 助手。
+            "runtime_domain": "travel",
             "travel_status": result.get("status", "failed"),
             "travel_run_id": run_id,
             "travel_destination": _travel_destination(state, result),
@@ -292,6 +554,8 @@ def _finish_travel_trace(trace, started_at: float, result: dict,
                 trace, "session_id", "") or ""
         semantics = build_trace_semantics(semantics_state, result)
         trace.metadata["travel_semantics"] = semantics
+        trace.metadata["travel_tool_calls"] = list(tool_events or [])
+        trace.tags["travel_tool_call_count"] = str(len(tool_events or []))
         for key, value in semantics.items():
             if isinstance(value, list):
                 trace.tags[f"travel_{key}"] = ",".join(str(item) for item in value)
@@ -354,7 +618,7 @@ async def travel_city_guide(request: Request, destination: str, force: bool = Fa
     return get_city_guide(destination, force=force)
 
 
-@router.post("/plan", summary="旅游规划（非流式，返回行程单与结构化行程）")
+@_retired_v1_router.post("/plan", summary="已退役：V1 旅游规划")
 async def travel_plan(request: Request):
     """手动 request.json() 解析 body —— 对齐 chat_stream 先例。
 
@@ -365,7 +629,10 @@ async def travel_plan(request: Request):
     from backend.orchestration.graph.travel_graph_node import (
         _build_invoke_config,  # 复用 thread_id/recursion_limit 组装（单一事实源）
     )
-    from backend.travel.graph_builder import get_travel_graph
+    from backend.travel.graph_builder import (
+        get_travel_graph,
+        get_travel_read_only_graph,
+    )
     from backend.travel.models.graph_result import build_travel_graph_result
 
     # 鉴权先于 body 解析：未认证不消费请求体（fail-closed）
@@ -373,7 +640,7 @@ async def travel_plan(request: Request):
 
     req = await _load_travel_plan_request(request)
 
-    conversation_id = req.conversation_id or req.session_id
+    conversation_id = req.conversation_id or req.session_id or f"travel-{uuid4().hex}"
     run_id = f"travel-{uuid4().hex}"
     turn_id = req.client_run_id or f"turn-{uuid4().hex}"
     from backend.travel.request_runtime import RunStopped
@@ -389,27 +656,82 @@ async def travel_plan(request: Request):
         _annotate_trace_source(trace, req.client_run_id, req.source)
         graph_input = _build_travel_graph_input(
             req, identity, conversation_id, turn_id)
-        _seed_cross_turn_base(graph_input, conversation_id,
-                              identity.user_id or "")
+        tenant_id = getattr(identity, "tenant_id", "") or "default"
         final_state: dict = {}
+        read_only_context: dict[str, Any] = {}
+        tool_events: list[dict] = []
         out = _plan_error("抱歉，旅游规划服务暂时不可用，请稍后再试。")
         try:
             control.check()
-            final_state = get_travel_graph().invoke(
-                graph_input, config=_build_invoke_config(
-                    conversation_id, getattr(identity, "tenant_id", ""),
-                    identity.user_id or ""))
+            user_id = identity.user_id or ""
+            if req.mode == "read_only":
+                read_only_context = _load_read_only_plan_context(
+                    conversation_id, user_id, tenant_id)
+                _read_only_graph_input(graph_input, read_only_context)
+                graph = get_travel_read_only_graph()
+                invoke_conversation_id = f"{conversation_id}:read-only:{turn_id}"
+            else:
+                restored = _restore_from_chat_reference(
+                    req, identity, conversation_id, turn_id)
+                if restored is not None:
+                    out = restored
+                    final_state = {"conversation_id": conversation_id}
+                    _attach_trace_plan_projection(
+                        final_state, out, conversation_id, user_id,
+                        tenant_id=tenant_id)
+                    return out
+                pending = _latest_pending_draft(
+                    conversation_id, user_id, tenant_id)
+                if pending:
+                    out = _plan_error(
+                        "当前有待确认草案；请先应用或放弃，再提交行程修改。")
+                    out["error_type"] = "draft_pending"
+                    return _attach_travel_response_metadata(
+                        out,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        base_plan_version=req.base_plan_version,
+                    )
+                _seed_cross_turn_base(
+                    graph_input, conversation_id, user_id, tenant_id)
+                graph = get_travel_graph()
+                invoke_conversation_id = conversation_id
+            from backend.travel.core.events import travel_event_scope
+
+            with travel_event_scope(
+                    lambda event: _record_travel_tool_trace_event(
+                        tool_events, event)):
+                final_state = graph.invoke(
+                    graph_input, config=_build_invoke_config(
+                        invoke_conversation_id, tenant_id, user_id))
             control.check()
             out = dict(build_travel_graph_result(final_state))
-            out = _record_plan_version(out, conversation_id, identity.user_id or "")
+            if req.mode == "read_only":
+                out.update({
+                    "result_kind": "answer",
+                    "active_plan_version": read_only_context.get(
+                        "active_plan_version"),
+                    "draft_plan_version": read_only_context.get(
+                        "draft_plan_version"),
+                })
+            else:
+                out = _record_plan_version(
+                    out, conversation_id, user_id, tenant_id)
+            base_plan_version = req.base_plan_version
+            if req.mode == "read_only" and base_plan_version is None:
+                base_plan_version = (
+                    read_only_context.get("draft_plan_version")
+                    or read_only_context.get("active_plan_version")
+                )
             out = _attach_travel_response_metadata(
                 out,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
-                base_plan_version=req.base_plan_version,
+                base_plan_version=base_plan_version,
             )
             _attach_trace_plan_projection(
-                final_state, out, conversation_id, identity.user_id or "")
+                final_state, out, conversation_id, identity.user_id or "",
+                tenant_id=tenant_id)
             return out
         except RunStopped as exc:
             out = _stopped_result(exc.reason)
@@ -420,8 +742,21 @@ async def travel_plan(request: Request):
                 base_plan_version=req.base_plan_version,
             )
             return out
-        except Exception:
+        except Exception as exc:
             logger.exception("[TravelAPI] 域图执行异常")
+            from backend.travel.core.plan_service import (
+                PlanVersionConflict,
+                PlanVersionPersistenceError,
+            )
+            if isinstance(exc, PlanVersionConflict):
+                out = _plan_error(str(exc))
+                out["error_type"] = "plan_version_conflict"
+            elif isinstance(exc, PlanVersionPersistenceError):
+                out = _plan_error(
+                    "行程已生成，但未能安全保存到版本账本；请稍后重试。")
+                out["error_type"] = "plan_version_persistence_failed"
+            else:
+                out = _plan_error("抱歉，旅游规划服务暂时不可用，请稍后再试。")
             out = _attach_travel_response_metadata(
                 out,
                 conversation_id=conversation_id,
@@ -430,7 +765,8 @@ async def travel_plan(request: Request):
             )
             return out
         finally:
-            _finish_travel_trace(trace, trace_started_at, out, final_state, run_id)
+            _finish_travel_trace(
+                trace, trace_started_at, out, final_state, run_id, tool_events)
 
     handle = _submit_travel_request(identity, conversation_id, worker)
     future = asyncio.wrap_future(handle.future)
@@ -462,10 +798,10 @@ def _stopped_result(reason: str) -> dict:
 
 
 def _submit_travel_request(identity, conversation_id, worker):
-    from backend.travel.request_runtime import get_request_executor, RequestRejected
+    from backend.travel.request_runtime import RequestRejected, get_request_executor
     try:
         return get_request_executor().submit(
-            getattr(identity, "tenant_id", ""), identity.user_id or "",
+            getattr(identity, "tenant_id", "") or "default", identity.user_id or "",
             conversation_id, worker,
         )
     except RequestRejected as exc:
@@ -483,23 +819,45 @@ def _travel_sse_frame(event: dict) -> str:
     return f"event: {event_name}\ndata: {payload}\n\n"
 
 
-@router.post("/plan/stream", summary="旅游规划（真实 Tool 事件流 + 结构化结果）")
+@_retired_v1_router.post("/plan/stream", summary="已退役：V1 旅游规划流")
 async def travel_plan_stream(request: Request):
+    return await _travel_plan_stream_impl(request, persist_legacy_plan=True)
+
+
+@router.post("/v2/plan/stream", summary="旅游 V2 Agent 规划流")
+async def travel_v2_plan_stream(request: Request):
+    """调用既有旅游 Agent 图，返回真实 SSE 事件与结构化结果。
+
+    V2 行程由独立 Trip API 保存；此入口不读写已退役的 V1 版本账本。
+    """
+    return await _travel_plan_stream_impl(request, persist_legacy_plan=False)
+
+
+async def _travel_plan_stream_impl(
+    request: Request, *, persist_legacy_plan: bool,
+):
     """旅游域真实事件流。
 
     图仍由既有旅游域执行；SSE 只把 ``travel/core/events.py`` 的真实 Tool
-    事件投影给用户端，并在结束时发送同一份结构化 PlanResponse。没有 mock
-    Tool，也不把固定阶段动画当作执行事实。
+    事件投影给用户端，并在结束时发送同一份结构化结果。没有 mock Tool，
+    也不把固定阶段动画当作执行事实。V2 调用用独立会话命名空间，避免恢复
+    V1 checkpoint；只有退役入口才触碰 V1 计划账本。
     """
     identity = require_identity(request)
     req = await _load_travel_plan_request(request)
+    if not persist_legacy_plan and req.mode == "read_only":
+        raise HTTPException(status_code=422, detail="旅游 V2 规划流不接受 V1 只读模式")
 
-    conversation_id = req.conversation_id or req.session_id
+    conversation_id = req.conversation_id or req.session_id or f"travel-{uuid4().hex}"
+    execution_conversation_id = (
+        conversation_id if persist_legacy_plan else f"travel-v2:{conversation_id}"
+    )
     run_id = f"travel-{uuid4().hex}"
     turn_id = req.client_run_id or f"turn-{uuid4().hex}"
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=512)
     cancelled = threading.Event()
+    tool_events: list[dict] = []
     sequence = 0
     sequence_lock = threading.Lock()
     # 为终止标记保留一个队列槽；业务事件最多占 511 个槽，满载时仍能
@@ -517,6 +875,7 @@ async def travel_plan_stream(request: Request):
 
     def queue_event(event: dict) -> None:
         nonlocal sequence
+        _record_travel_tool_trace_event(tool_events, event)
         if cancelled.is_set():
             return
         if not pending_events.acquire(blocking=False):
@@ -559,26 +918,30 @@ async def travel_plan_stream(request: Request):
     def worker(control) -> None:
         nonlocal run_control
         run_control = control
-        from backend.travel.request_runtime import RunStopped
         from backend.orchestration.graph.travel_graph_node import _build_invoke_config
         from backend.travel.core.events import emit_travel_event, travel_event_scope
+        from backend.travel.graph_builder import (
+            get_travel_graph,
+            get_travel_read_only_graph,
+        )
         from backend.travel.models.graph_result import build_travel_graph_result
-        from backend.travel.graph_builder import get_travel_graph
+        from backend.travel.request_runtime import RunStopped
 
         graph_input = _build_travel_graph_input(
-            req, identity, conversation_id, turn_id)
-        _seed_cross_turn_base(graph_input, conversation_id,
-                              identity.user_id or "")
+            req, identity, execution_conversation_id, turn_id)
+        graph_input["session_id"] = execution_conversation_id
+        tenant_id = getattr(identity, "tenant_id", "") or "default"
         started_at = time.monotonic()
         from backend.observability.tracer import trace_collector
         trace = trace_collector.start(
             _masked_trace_question(req.message),
-            session_id=conversation_id or req.session_id,
+            session_id=execution_conversation_id or req.session_id,
             workflow_name="agent",
         )
         _annotate_trace_source(trace, req.client_run_id, req.source)
         trace_result: dict = _plan_error("旅游规划执行失败，请稍后再试。")
         trace_state: dict = {}
+        read_only_context: dict[str, Any] = {}
         try:
             with travel_event_scope(queue_event):
                 control.check()
@@ -586,23 +949,98 @@ async def travel_plan_stream(request: Request):
                     "run.started", agent="supervisor", run_id=run_id,
                     conversation_id=conversation_id, turn_id=turn_id,
                 )
-                final_state = get_travel_graph().invoke(
+                user_id = identity.user_id or ""
+                if req.mode == "read_only":
+                    read_only_context = _load_read_only_plan_context(
+                        conversation_id, user_id, tenant_id)
+                    _read_only_graph_input(graph_input, read_only_context)
+                    graph = get_travel_read_only_graph()
+                    invoke_conversation_id = f"{conversation_id}:read-only:{turn_id}"
+                else:
+                    if persist_legacy_plan:
+                        restored = _restore_from_chat_reference(
+                            req, identity, conversation_id, turn_id)
+                        if restored is not None:
+                            trace_state = {"conversation_id": conversation_id}
+                            _attach_trace_plan_projection(
+                                trace_state, restored, conversation_id,
+                                identity.user_id or "", tenant_id=tenant_id)
+                            trace_result = restored
+                            emit_travel_event(
+                                "run.finished", agent="supervisor",
+                                status=restored.get("status", "failed"),
+                                turn_id=turn_id,
+                                duration_ms=round(
+                                    (time.monotonic() - started_at) * 1000),
+                            )
+                            queue_event({
+                                "event": "done",
+                                "source": "travel",
+                                "status": restored.get("status", "failed"),
+                                "result": restored,
+                            })
+                            return
+                        pending = _latest_pending_draft(
+                            conversation_id, user_id, tenant_id)
+                        if pending:
+                            message = "当前有待确认草案；请先应用或放弃，再提交行程修改。"
+                            trace_result = _attach_travel_response_metadata(
+                                {**_plan_error(message), "error_type": "draft_pending"},
+                                conversation_id=conversation_id,
+                                turn_id=turn_id,
+                                base_plan_version=req.base_plan_version,
+                            )
+                            emit_travel_event(
+                                "run.finished", agent="supervisor", status="failed",
+                                turn_id=turn_id, error_type="draft_pending",
+                                duration_ms=round((time.monotonic() - started_at) * 1000),
+                            )
+                            queue_event({
+                                "event": "error", "source": "travel",
+                                "status": "failed", "message": message,
+                                "error_type": "draft_pending",
+                            })
+                            return
+                        _seed_cross_turn_base(
+                            graph_input, conversation_id, user_id, tenant_id)
+                        graph = get_travel_graph()
+                        invoke_conversation_id = conversation_id
+                    else:
+                        graph = get_travel_graph()
+                        invoke_conversation_id = execution_conversation_id
+                final_state = graph.invoke(
                     graph_input, config=_build_invoke_config(
-                        conversation_id, getattr(identity, "tenant_id", ""),
-                        identity.user_id or ""))
+                        invoke_conversation_id, tenant_id, user_id))
                 control.check()
                 result = dict(build_travel_graph_result(final_state))
                 trace_state = final_state if isinstance(final_state, dict) else {}
-                result = _record_plan_version(
-                    result, conversation_id, identity.user_id or "")
+                if req.mode == "read_only":
+                    result.update({
+                        "result_kind": "answer",
+                        "active_plan_version": read_only_context.get(
+                            "active_plan_version"),
+                        "draft_plan_version": read_only_context.get(
+                            "draft_plan_version"),
+                    })
+                elif persist_legacy_plan:
+                    result = _record_plan_version(
+                        result, conversation_id, user_id, tenant_id)
+                base_plan_version = req.base_plan_version
+                if req.mode == "read_only" and base_plan_version is None:
+                    base_plan_version = (
+                        read_only_context.get("draft_plan_version")
+                        or read_only_context.get("active_plan_version")
+                    )
                 result = _attach_travel_response_metadata(
                     result,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
-                    base_plan_version=req.base_plan_version,
+                    base_plan_version=base_plan_version,
                 )
-                _attach_trace_plan_projection(
-                    trace_state, result, conversation_id, identity.user_id or "")
+                if persist_legacy_plan:
+                    _attach_trace_plan_projection(
+                        trace_state, result, conversation_id, identity.user_id or "",
+                        tenant_id=tenant_id)
                 trace_result = result
                 emit_travel_event(
                     "run.finished", agent="supervisor",
@@ -625,27 +1063,41 @@ async def travel_plan_stream(request: Request):
             )
         except Exception as exc:  # noqa: BLE001 — 真实失败向前端终止
             logger.exception("[TravelAPI] 旅游域 SSE 执行异常")
+            from backend.travel.core.plan_service import (
+                PlanVersionConflict,
+                PlanVersionPersistenceError,
+            )
+            if isinstance(exc, PlanVersionConflict):
+                error_type = "plan_version_conflict"
+                message = str(exc)
+            elif isinstance(exc, PlanVersionPersistenceError):
+                error_type = "plan_version_persistence_failed"
+                message = "行程已生成，但未能安全保存到版本账本；请稍后重试。"
+            else:
+                error_type = type(exc).__name__
+                message = "旅游规划执行失败，请根据已显示的 Tool 失败信息重试。"
             with travel_event_scope(queue_event):
                 emit_travel_event(
                     "run.finished", agent="supervisor", status="failed",
                     turn_id=turn_id,
-                    error_type=type(exc).__name__,
+                    error_type=error_type,
                     duration_ms=round((time.monotonic() - started_at) * 1000),
                 )
                 queue_event({
                     "event": "error",
                     "source": "travel",
                     "status": "failed",
-                    "message": "旅游规划执行失败，请根据已显示的 Tool 失败信息重试。",
-                    "error_type": type(exc).__name__,
+                    "message": message,
+                    "error_type": error_type,
                 })
         finally:
             _finish_travel_trace(
                 trace, started_at, trace_result, trace_state, run_id,
+                tool_events,
             )
             queue_terminal(None)
 
-    handle = _submit_travel_request(identity, conversation_id, worker)
+    handle = _submit_travel_request(identity, execution_conversation_id, worker)
 
     async def event_stream():
         from backend.travel.request_runtime import RunStopped
@@ -880,7 +1332,7 @@ async def travel_feedback(request: Request):
 # ============================================================
 # GET/PUT /travel/preferences — 用户偏好（P1-1）
 # ============================================================
-@router.get("/preferences", summary="读取用户旅游偏好")
+@_retired_v1_router.get("/preferences", summary="已退役：V1 旅游偏好")
 def travel_get_preferences(request: Request):
     from backend.tools.travel import preferences as prefs_store
 
@@ -897,7 +1349,7 @@ class TravelPreferencesRequest(BaseModel):
     transport: str = Field("", max_length=64)
 
 
-@router.put("/preferences", summary="写入/更新用户旅游偏好")
+@_retired_v1_router.put("/preferences", summary="已退役：V1 旅游偏好")
 async def travel_put_preferences(request: Request):
     identity = require_identity(request)
     try:
@@ -945,30 +1397,137 @@ def travel_recommend(request: Request, preferences: str = "", top: int = 3):
 # travel_plan_versions 当会话索引用 —— 每会话投影最新一行，供前端
 # 「历史规划」入口列表与点击恢复（恢复=切回该 conversation 继续）。
 # ============================================================
-@router.get("/plans", summary="当前用户的历史规划列表（每会话最新版）")
+def _travel_message_session_id(
+    conversation_id: str, user_id: str, tenant_id: str,
+) -> str:
+    """映射到无 schema 变更的 memory 会话键，并绑定用户与租户。"""
+    conversation_id = (conversation_id or "").strip()
+    if not conversation_id or len(conversation_id) > 128:
+        raise HTTPException(status_code=422, detail="会话标识无效")
+    scope = "\0".join((
+        (tenant_id or "").strip() or "default", user_id, conversation_id,
+    ))
+    digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+    return f"travel:{digest}"
+
+
+def _travel_message_owner_id(user_id: str, tenant_id: str) -> str:
+    """给无 tenant_id 列的共享 memory 表提供租户隔离属主键。"""
+    scope = f"{(tenant_id or '').strip() or 'default'}\0{user_id}"
+    digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+    return f"travel:{digest[:57]}"  # ChatSession.user_id 列宽为 64
+
+
+def _run_travel_memory(operation):
+    """沿用 memory_manager 后台 loop，避免跨 loop 使用 asyncpg engine。"""
+    from backend.memory.manager import memory_manager
+    from backend.memory.service import MemoryService
+
+    return memory_manager.run_tool(lambda: operation(MemoryService()))
+
+
+@router.get("/conversations/{conversation_id}/messages",
+            summary="恢复当前用户有权访问的旅游对话消息")
+def travel_conversation_messages(conversation_id: str, request: Request):
+    identity = require_identity(request)
+    user_id = identity.user_id
+    tenant_id = getattr(identity, "tenant_id", "") or "default"
+    memory_owner_id = _travel_message_owner_id(user_id, tenant_id)
+    memory_session_id = _travel_message_session_id(
+        conversation_id, user_id, tenant_id,
+    )
+    result = _run_travel_memory(
+        lambda service: service.get_session_messages(
+            memory_session_id, user_id=memory_owner_id,
+        )
+    )
+    if result.get("error") == "会话不存在":
+        # 新会话和无权会话对外同语义，避免泄露内部存储键是否存在。
+        return {"conversation_id": conversation_id, "messages": []}
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="旅游对话历史暂不可用")
+    return {
+        "conversation_id": conversation_id,
+        "messages": result.get("messages", []),
+    }
+
+
+@router.put("/conversations/{conversation_id}/messages",
+            summary="幂等替换当前用户的旅游对话消息快照")
+def replace_travel_conversation_messages(
+    conversation_id: str,
+    payload: TravelConversationMessagesRequest,
+    request: Request,
+):
+    identity = require_identity(request)
+    user_id = identity.user_id
+    tenant_id = getattr(identity, "tenant_id", "") or "default"
+    memory_owner_id = _travel_message_owner_id(user_id, tenant_id)
+    memory_session_id = _travel_message_session_id(
+        conversation_id, user_id, tenant_id,
+    )
+    result = _run_travel_memory(
+        lambda service: service.replace_session_messages(
+            memory_session_id,
+            [message.model_dump() for message in payload.messages],
+            user_id=memory_owner_id,
+        )
+    )
+    if result.get("error") == "会话不存在":
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="旅游对话历史暂不可用")
+    return {"conversation_id": conversation_id, "saved": result.get("saved", 0)}
+
+
+@_retired_v1_router.get("/plans", summary="已退役：V1 历史规划")
 def travel_plan_list(request: Request, limit: int = Query(30, ge=1, le=100)):
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
     plans = plan_version_service.list_conversations(
-        identity.user_id or "", limit=limit)
+        identity.user_id or "", limit=limit,
+        tenant_id=getattr(identity, "tenant_id", "") or "default")
     return {"plans": plans}
 
 
-@router.get("/plans/{conversation_id}/latest",
-            summary="会话最新版行程（含完整 itinerary，供恢复历史规划）")
+@_retired_v1_router.delete("/plans/{conversation_id}", summary="已退役：V1 历史规划")
+def delete_travel_plan(conversation_id: str, request: Request):
+    """删除行程记录及其版本账本；租户/用户范围由身份上下文确定。"""
+    from backend.travel.core.plan_service import (
+        PlanVersionPersistenceError,
+        plan_version_service,
+    )
+
+    identity = require_identity(request)
+    try:
+        deleted = plan_version_service.delete_conversation(
+            conversation_id,
+            identity.user_id or "",
+            tenant_id=getattr(identity, "tenant_id", "") or "default",
+        )
+    except PlanVersionPersistenceError as exc:
+        raise HTTPException(status_code=503, detail="行程未能删除，请稍后重试") from exc
+    return {"conversation_id": conversation_id, "deleted": deleted}
+
+
+@_retired_v1_router.get("/plans/{conversation_id}/latest",
+                         summary="已退役：V1 行程恢复")
 def travel_plan_latest(conversation_id: str, request: Request):
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
     latest = plan_version_service.latest_version(
-        conversation_id, identity.user_id or "")
+        conversation_id, identity.user_id or "",
+        tenant_id=getattr(identity, "tenant_id", "") or "default")
     if not latest:
         # 不存在 / 越权 / 账本不可用一律 404，不泄露存在性
         raise HTTPException(status_code=404, detail="无可用行程版本")
     active_reader = getattr(plan_version_service, "active_version", None)
-    active = (active_reader(conversation_id, identity.user_id or "")
-              if active_reader else latest)
+    active = (active_reader(
+        conversation_id, identity.user_id or "",
+        tenant_id=getattr(identity, "tenant_id", "") or "default")
+        if active_reader else None)
     return {
         "conversation_id": conversation_id,
         "plan_version": latest["plan_version"],
@@ -1014,8 +1573,8 @@ def _group_candidates(raw: list[dict]) -> dict[str, list[dict]]:
     return buckets
 
 
-@router.get("/candidates",
-            summary="会话候选池（分类候选表，验收 #10）")
+@_retired_v1_router.get("/candidates",
+                         summary="已退役：V1 行程候选集")
 def travel_candidates(conversation_id: str, request: Request):
     """左栏分类候选表数据源：最新行程版本关联的候选池，按类别分组。
 
@@ -1026,12 +1585,13 @@ def travel_candidates(conversation_id: str, request: Request):
     + 空分组 + 提示，**不伪造**候选。权限对齐 plans 端点：账本查无此人
     （不存在/越权）一律 404。
     """
-    from backend.travel.graph_builder import get_travel_graph
     from backend.travel.core.plan_service import plan_version_service
+    from backend.travel.graph_builder import get_travel_graph
 
     identity = require_identity(request)
     latest = plan_version_service.latest_version(
-        conversation_id, identity.user_id or "")
+        conversation_id, identity.user_id or "",
+        tenant_id=getattr(identity, "tenant_id", "") or "default")
     if not latest:
         raise HTTPException(status_code=404, detail="无可用行程版本")
 
@@ -1067,7 +1627,9 @@ def travel_candidates(conversation_id: str, request: Request):
 def _version_http_error(e: Exception) -> HTTPException:
     """service 层异常 → HTTP 语义（404 不泄露 / 409 带当前版本号 / 422 语义非法）。"""
     from backend.travel.core.plan_service import (
-        PlanVersionConflict, PlanVersionInvalid, PlanVersionNotFound,
+        PlanVersionConflict,
+        PlanVersionInvalid,
+        PlanVersionNotFound,
     )
 
     if isinstance(e, PlanVersionNotFound):
@@ -1083,13 +1645,14 @@ def _version_http_error(e: Exception) -> HTTPException:
     raise e
 
 
-@router.get("/plans/{conversation_id}/versions", summary="行程版本历史（新→旧）")
+@_retired_v1_router.get("/plans/{conversation_id}/versions", summary="已退役：V1 行程版本")
 def travel_plan_versions(conversation_id: str, request: Request):
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
     versions = plan_version_service.list_versions(
-        conversation_id, identity.user_id or "")
+        conversation_id, identity.user_id or "",
+        tenant_id=getattr(identity, "tenant_id", "") or "default")
     return {"conversation_id": conversation_id, "versions": versions}
 
 
@@ -1099,7 +1662,7 @@ class TravelPlanConfirmRequest(BaseModel):
                               description="要确认的版本号；必须是当前最新版")
 
 
-@router.post("/plans/confirm", summary="确认整份行程（waiting_confirmation → confirmed）")
+@_retired_v1_router.post("/plans/confirm", summary="已退役：V1 草案确认")
 async def travel_plan_confirm(request: Request):
     identity = require_identity(request)
     try:
@@ -1112,7 +1675,32 @@ async def travel_plan_confirm(request: Request):
         # service 内是同步 PG I/O + itinerary JSON 校验，to_thread 避免阻塞事件循环
         return await asyncio.to_thread(
             plan_version_service.confirm,
-            req.conversation_id, identity.user_id or "", req.plan_version)
+            req.conversation_id, identity.user_id or "", req.plan_version,
+            tenant_id=getattr(identity, "tenant_id", "") or "default")
+    except Exception as e:
+        raise _version_http_error(e)
+
+
+class TravelPlanDiscardRequest(BaseModel):
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    plan_version: int = Field(..., ge=1,
+                              description="要放弃的当前待确认草案版本")
+
+
+@_retired_v1_router.post("/plans/discard", summary="已退役：V1 草案放弃")
+async def travel_plan_discard(request: Request):
+    identity = require_identity(request)
+    try:
+        req = TravelPlanDiscardRequest(**(await request.json()))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"解析失败: {e}")
+    from backend.travel.core.plan_service import plan_version_service
+
+    try:
+        return await asyncio.to_thread(
+            plan_version_service.discard,
+            req.conversation_id, identity.user_id or "", req.plan_version,
+            tenant_id=getattr(identity, "tenant_id", "") or "default")
     except Exception as e:
         raise _version_http_error(e)
 
@@ -1125,7 +1713,7 @@ class TravelPlanRestoreRequest(BaseModel):
                               description="乐观并发基准：发起请求时看到的当前最新版本号")
 
 
-@router.post("/plans/restore", summary="恢复历史版本（以旧版内容生成新版本）")
+@_retired_v1_router.post("/plans/restore", summary="已退役：V1 行程恢复")
 async def travel_plan_restore(request: Request):
     identity = require_identity(request)
     try:
@@ -1138,12 +1726,13 @@ async def travel_plan_restore(request: Request):
         return await asyncio.to_thread(
             plan_version_service.restore,
             req.conversation_id, identity.user_id or "",
-            target_version=req.target_version, base_version=req.base_version)
+            target_version=req.target_version, base_version=req.base_version,
+            tenant_id=getattr(identity, "tenant_id", "") or "default")
     except Exception as e:
         raise _version_http_error(e)
 
 
-@router.get("/plans/{conversation_id}/diff", summary="两版行程确定性差异")
+@_retired_v1_router.get("/plans/{conversation_id}/diff", summary="已退役：V1 行程差异")
 def travel_plan_diff(
     conversation_id: str,
     request: Request,
@@ -1156,7 +1745,8 @@ def travel_plan_diff(
     try:
         return plan_version_service.diff(
             conversation_id, identity.user_id or "",
-            from_version=from_version, to_version=to_version)
+            from_version=from_version, to_version=to_version,
+            tenant_id=getattr(identity, "tenant_id", "") or "default")
     except Exception as e:
         raise _version_http_error(e)
 
@@ -1182,7 +1772,7 @@ class TravelDecisionRequest(BaseModel):
     client_run_id: str = Field("", max_length=64)
 
 
-@router.post("/decisions", summary="用户决策留痕（草案应用/放弃/画布替换/档位切换/删减协商）")
+@_retired_v1_router.post("/decisions", summary="已退役：V1 行程决策")
 async def travel_record_decision(request: Request):
     """落一条决策留痕。**软失败语义**：留痕写失败不挡前端 UI 动作
     （返回 200 + recorded=false，前端照常继续本地更新）——决策留痕是
@@ -1207,7 +1797,7 @@ async def travel_record_decision(request: Request):
     return {"status": "recorded" if record_id else "skipped", "id": record_id}
 
 
-@router.get("/decisions", summary="某会话的用户决策留痕链（时间新→旧）")
+@_retired_v1_router.get("/decisions", summary="已退役：V1 行程决策")
 def travel_list_decisions(request: Request, conversation_id: str = Query(..., min_length=1),
                           limit: int = Query(100, ge=1, le=500)):
     """按 conversation_id 查决策链（强制 user_id scope：越权 = 空列表）。
@@ -1218,4 +1808,3 @@ def travel_list_decisions(request: Request, conversation_id: str = Query(..., mi
 
     return {"decisions": list_decisions(
         identity.user_id or "", conversation_id, limit=limit)}
-

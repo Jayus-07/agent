@@ -131,7 +131,7 @@ export interface TravelBriefInput {
   transport?: string;
 }
 
-export type TravelRequestMode = 'plan' | 'chat' | 'action';
+export type TravelRequestMode = 'plan' | 'chat' | 'action' | 'read_only';
 
 export interface TravelUiContext {
   selected_day?: number;
@@ -160,6 +160,33 @@ export interface TravelResponseMetadata {
   draft_plan_version: number | null;
   base_plan_version: number | null;
   task_results: Array<Record<string, unknown>>;
+}
+
+export interface TravelStoredConversationMessage {
+  id: number | string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at?: string | null;
+}
+
+/** 从账号级会话存储恢复旅游对话消息。 */
+export async function getTravelConversationMessages(
+  conversationId: string,
+): Promise<{ messages: TravelStoredConversationMessage[] }> {
+  return request<{ messages: TravelStoredConversationMessage[] }>(
+    `/api/travel/conversations/${encodeURIComponent(conversationId)}/messages`,
+  );
+}
+
+/** 幂等替换旅游对话快照，重试不会在服务器端追加重复消息。 */
+export async function saveTravelConversationMessages(
+  conversationId: string,
+  messages: Array<Pick<TravelStoredConversationMessage, 'role' | 'content'>>,
+): Promise<{ saved: number }> {
+  return request<{ saved: number }>(
+    `/api/travel/conversations/${encodeURIComponent(conversationId)}/messages`,
+    { method: 'PUT', body: JSON.stringify({ messages }) },
+  );
 }
 
 export interface ItineraryCost {
@@ -264,6 +291,8 @@ export interface RationaleData {
 export interface PlanResponse {
   /** 结构化规划说明；旧数据/降级无此字段 → 前端回退 Markdown */
   rationale?: RationaleData;
+  /** 简短回复来源与模型用量；模板降级及旧服务可省略 */
+  reporter_meta?: Record<string, unknown>;
   /** success | answered | needs_clarification | needs_user_decision | failed */
   status: string;
   final_answer: string;
@@ -315,7 +344,6 @@ export interface TravelPlanSummary {
   plan_status: string;
   destination: string;
   created_at: string;
-  versions_count: number;
 }
 
 /** 历史规划最新版详情：点击列表项恢复时取的完整行程。 */
@@ -330,6 +358,59 @@ export interface TravelPlanLatest {
   active_plan_version?: number | null;
   active_plan_status?: string | null;
   active_itinerary?: Itinerary | null;
+}
+
+/** 平台模板目录与只读预览契约。 */
+export interface TravelPlatformTemplate {
+  slug: string;
+  city: string;
+  title: string;
+  duration: string;
+  days_count: number;
+  style: string;
+  people: number;
+  budget_label: string;
+  description: string;
+  image: string;
+  tags: string[];
+  stops: number;
+  days: Array<{
+    day_index: number;
+    items: Array<{ title: string; start: string; minutes: number; note: string }>;
+  }>;
+}
+
+export interface TravelTemplateCopyResponse {
+  conversation_id: string;
+  plan_version: number;
+  plan_status: string;
+  destination: string;
+  itinerary: Itinerary;
+  reused?: boolean;
+}
+
+/** 查询平台精选模板目录。 */
+export function fetchTravelTemplates(): Promise<TravelPlatformTemplate[]> {
+  return request<{ templates: TravelPlatformTemplate[] }>('/api/travel/templates')
+    .then((response) => response.templates ?? [])
+}
+
+/** 查询单个模板的完整只读预览。 */
+export function fetchTravelTemplate(slug: string): Promise<TravelPlatformTemplate> {
+  return request<{ template: TravelPlatformTemplate }>(
+    `/api/travel/templates/${encodeURIComponent(slug)}`,
+  ).then((response) => response.template)
+}
+
+/** 创建模板的个人行程副本；服务端写入失败会 reject，不伪报成功。 */
+export function copyTravelTemplate(
+  slug: string,
+  conversationId: string,
+): Promise<TravelTemplateCopyResponse> {
+  return request<TravelTemplateCopyResponse>(
+    `/api/travel/templates/${encodeURIComponent(slug)}/copy`,
+    { method: 'POST', body: { conversation_id: conversationId } },
+  )
 }
 
 export interface TravelPlanDiff {
@@ -433,7 +514,25 @@ export async function* streamTravelPlan(
   conversationId: string,
   options: TravelPlanOptions = {},
 ): AsyncGenerator<TravelStreamEvent> {
-  const response = await fetchRaw("/api/travel/plan/stream", {
+  yield* streamTravelPlanFromPath("/api/travel/plan/stream", message, conversationId, options)
+}
+
+/** V2 对话专用规划流；正式行程仅由后续 V2 Trip API 保存。 */
+export async function* streamTravelPlanV2(
+  message: string,
+  conversationId: string,
+  options: TravelPlanOptions = {},
+): AsyncGenerator<TravelStreamEvent> {
+  yield* streamTravelPlanFromPath("/api/travel/v2/plan/stream", message, conversationId, options)
+}
+
+async function* streamTravelPlanFromPath(
+  path: string,
+  message: string,
+  conversationId: string,
+  options: TravelPlanOptions,
+): AsyncGenerator<TravelStreamEvent> {
+  const response = await fetchRaw(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildTravelPlanRequestPayload(message, conversationId, options)),
@@ -534,6 +633,15 @@ export function fetchTravelPlanList(limit = 30): Promise<TravelPlanSummary[]> {
     .then((r) => r.plans ?? [])
 }
 
+/** 删除一条个人行程及其版本账本；失败会 reject，页面不得乐观隐藏。 */
+export function deleteTravelPlan(
+  conversationId: string,
+): Promise<{ conversation_id: string; deleted: boolean }> {
+  return request(`/api/travel/plans/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE',
+  })
+}
+
 /** ── 分类候选表（验收 #10）────────────────────────────────── */
 
 export interface TravelCandidate {
@@ -588,6 +696,17 @@ export function confirmTravelPlan(
   planVersion: number,
 ): Promise<{ status: string; plan_version: number; plan_status: string }> {
   return request('/api/travel/plans/confirm', {
+    method: 'POST',
+    body: { conversation_id: conversationId, plan_version: planVersion },
+  })
+}
+
+/** 服务端放弃当前草案；页面只能在该操作成功后清理本地 pending。 */
+export function discardTravelPlan(
+  conversationId: string,
+  planVersion: number,
+): Promise<{ status: string; plan_version: number; plan_status: string }> {
+  return request('/api/travel/plans/discard', {
     method: 'POST',
     body: { conversation_id: conversationId, plan_version: planVersion },
   })

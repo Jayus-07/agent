@@ -90,5 +90,61 @@ async def test_timeout_does_not_record_late_result(setup_runtime, monkeypatch, s
     assert records == []
 
 
+@pytest.mark.asyncio
+async def test_v2_stream_uses_isolated_session_without_v1_plan_ledger(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    captured = {}
+
+    class Graph:
+        def invoke(self, graph_input, config):
+            captured["graph_input"] = graph_input
+            captured["config"] = config
+            return {"conversation_id": graph_input["conversation_id"]}
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(
+        "backend.travel.models.graph_result.build_travel_graph_result",
+        lambda _state: {
+            "status": "success",
+            "final_answer": "泉州行程已生成",
+            "itinerary": {"brief": {"destination": "泉州"}, "days": []},
+        },
+    )
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
+    for name in (
+        "_restore_from_chat_reference",
+        "_latest_pending_draft",
+        "_seed_cross_turn_base",
+        "_record_plan_version",
+        "_attach_trace_plan_projection",
+    ):
+        monkeypatch.setattr(
+            travel, name,
+            lambda *args, _name=name, **kwargs: pytest.fail(f"V2 不得调用 { _name }"),
+        )
+
+    submitted = {}
+    submit = travel._submit_travel_request
+
+    def capture_submit(identity, conversation_id, worker):
+        submitted["conversation_id"] = conversation_id
+        return submit(identity, conversation_id, worker)
+
+    monkeypatch.setattr(travel, "_submit_travel_request", capture_submit)
+    response = await travel.travel_v2_plan_stream(request())
+    frames = await _frames(response)
+
+    done_frames = [frame for frame in frames if frame.startswith("event: done")]
+    assert len(done_frames) == 1, "\n".join(frames)
+    done_frame = done_frames[0]
+    payload = __import__("json").loads(done_frame.split("data: ", 1)[1])
+    assert payload["result"]["itinerary"]["brief"]["destination"] == "泉州"
+    assert captured["graph_input"]["conversation_id"] == "travel-v2:execution"
+    assert captured["graph_input"]["session_id"] == "travel-v2:execution"
+    assert "travel-v2:execution" in submitted["conversation_id"]
+
+
 async def _frames(response):
     return [frame async for frame in response.body_iterator]
