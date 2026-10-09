@@ -26,7 +26,7 @@ powershell -Command "(Get-NetTCPConnection -LocalPort 8000 -State Listen | Measu
 # 期望：1
 ```
 
-⚠️ **如果只看到 `Reloading...` 没有 `Started server process` → reload 失败**，见 [`uvicorn-restart-recipes.md`](uvicorn-restart-recipes.md)。
+⚠️ **如果只看到 `Reloading...` 没有 `Started server process` → reload 失败**，参见[常用命令](commands.md)并按当前运行环境重启服务。
 
 ---
 
@@ -235,16 +235,16 @@ npx tsc --noEmit  # 类型检查
 |------|------|
 | 改 SSE 协议（编码、字段、阶段） | `sse-pipeline-debugging.md` |
 | 改 uvicorn 启动脚本（bat） | `uvicorn-restart-recipes.md` |
-| 改 Trace 数据模型（WorkflowKind / SpanKind） | `trace-model.md`（已有） |
-| 改前端 SSE 消费逻辑 | `sse-pipeline-debugging.md` 第 7 节 |
-| 改 start_all.bat / restart_all.bat | `uvicorn-restart-recipes.md` |
-| 新增阶段或新业务（duplicate → 新 stage） | `sse-pipeline-debugging.md` Bug 3 |
+| 改 Trace 数据模型（WorkflowKind / SpanKind） | [Trace 模型](../observability/trace-model.md) |
+| 改前端 SSE 消费逻辑 | [Runtime 事件契约](../architecture/ai-runtime.md) |
+| 改服务启动脚本 | [常用命令](commands.md) |
+| 新增阶段或新业务（duplicate → 新 stage） | [Runtime 事件契约](../architecture/ai-runtime.md) |
 
 ---
 
 ## 关联文档
 
-- [`sse-pipeline-debugging.md`](../observability/sse-pipeline-debugging.md) —— 7 类 SSE bug 排查
-- [`uvicorn-restart-recipes.md`](uvicorn-restart-recipes.md) —— reload 卡住处理
+- [Runtime 事件契约](../architecture/ai-runtime.md) —— SSE 事件结构与源码入口
+- [常用命令](commands.md) —— 当前服务启动和验证方式
 - [`trace-model.md`](../observability/trace-model.md) —— Trace / Span 数据模型
-- `docs/development/testing.md` —— 测试要求（前端必须 vitest + 后端必须 pytest）
+- [测试策略](../development/testing-guide.md) —— 验证分层与范围选择

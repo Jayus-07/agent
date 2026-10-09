@@ -8,7 +8,7 @@
 
 ## Architecture
 
-> **架构基线已冻结**（2026-09-29，Architecture Simplification STOP A-H 收官）：九层 Runtime 分层与请求生命周期以 [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md) 为基线，契约红线见 [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md)，扩展入口见 [docs/architecture/Extension-Guide.md](docs/architecture/Extension-Guide.md)。
+> 编排与运行契约见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)，公共守卫见 [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md)，扩展规范见 [docs/development/tool-skill-guide.md](docs/development/tool-skill-guide.md)。
 
 三张图各答一个问题：**系统由什么组成**（图 1）、**一次请求怎么跑**（图 2）、**平台分层**（图 3）。
 部署细节（端口 / 异步层 / 网关认证）见 [docs/architecture/system-overview.md](docs/architecture/system-overview.md)；
@@ -108,15 +108,15 @@ flowchart TB
 
 ### 3. Runtime 分层（架构基线）
 
-平台最终形态是九层 Runtime 分层，不是万能 Agent Runtime——每层只做一件事，层间契约冻结（详见 [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md) 与 [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md)）：
+平台按职责拆分 Runtime 层，层间契约以当前实现为准（见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md) 与 [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md)）：
 
 ```mermaid
 flowchart TB
     subgraph PLATFORM["Agent Platform"]
         direction TB
         RR["Router Runtime — 每请求拍板去向（域预过滤 + RoutingEngine）"]
-        DR["Domain Runtime — 3 个顶级业务域 / 5 个物理域图（客服 · 旅游〔planning/commerce/booking〕· 选品漏斗）"]
-        CR["Capability Runtime — 17 capability · 12 Skill · 4 Workflow 的执行调度"]
+        DR["Domain Runtime — 各业务域图（接入方式见 AI Runtime）"]
+        CR["Capability Runtime — Capability、Skill 与 Workflow 的执行调度"]
         PR["Plan Runtime — 复杂请求的任务拆解与并行调度"]
         ER["Expert Runtime — 域内专家节点的公共执行生命周期"]
         TCB["Tool Contract Boundary — 两型输出契约（text 给 LLM 读 / structured 给程序）+ 边界归一"]
@@ -136,8 +136,8 @@ flowchart TB
 
 ### Architecture Vocabulary
 
-README 与架构文档统一使用以下术语（四层完整定义与例外台账见
-[docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)）：
+README 与架构文档统一使用以下术语；开发职责与接线规范见
+[docs/development/tool-skill-guide.md](docs/development/tool-skill-guide.md)）：
 
 | 术语 | 一句话定义 |
 |------|-----------|
@@ -181,8 +181,8 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | 后端用例 | 9727（`pytest --collect-only`，2026-10-07；含工作区在途测试文件） | `backend/tests/` |
 | 前端路由 | 用户端 7（含 /change-password 临时密码改密、/selection-funnel 选品专属页「第四扇门」）/ 管理端 48（含 /tools Tool 治理、/consistency 资产一致性、/data-explorer 数据查询、/knowledge/upload-failures 入库失败、selection-workbench / knowledge/workbench / evaluations/center / observability/monitoring 四个工作台页；侧栏入口已工作台合并，page.tsx 数 ≠ 侧栏条目数，2026-10-03）/ 客服坐席 8 | `*/src/app/**/page.tsx` |
 
-> ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。四层定义与例外台账见
-> [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md)。
+> ⚠️ **口径纪律**：不要把"节点""Skill""Tool"统称 Agent。扩展规范见
+> [docs/development/tool-skill-guide.md](docs/development/tool-skill-guide.md)。
 
 ---
 
@@ -273,33 +273,14 @@ README 与架构文档统一使用以下术语（四层完整定义与例外台�
 | Context Budget | `context_budget/` | 上下文装配 / 压缩预算（GraphRunner 与调度器内侧） |
 | Model Governance | `infra/llm` + 管理端 | 模型注册表 DB 治理、价格双人审核、配额与健康探测 |
 | Idempotency | `ai.idempotency_records` | 副作用幂等账本 + IN_DOUBT 裁决 + 运维 CLI |
-| Observability | `observability/` + Prometheus | Tracer（44 种 SpanKind）/ metrics / 告警 / trace 留存，详见下文 [Observability](#observability) |
-| Evaluation | `evaluation/` | planner / rag / sql / e2e / travel 数据集与 runners，详见「评测结果」 |
+| Observability | `observability/` + Prometheus | Trace、指标、告警与留存，详见下文 [Observability](#observability) |
+| Evaluation | `evaluation/` | 数据集与 Runner 以 `backend/evaluation/` 为准；命令见[常用命令](docs/operations/commands.md) |
 
 ---
 
-## 评测结果（实测，非目标值）
+## 评测
 
-| 模块 | 数据集 / 子集 | 用例数 | 关键指标 | 运行记录 |
-|------|--------------|:---:|------|------|
-| RAG 检索 | `datasets/rag/suites/expanded_100.json` | 100 | Recall@5 **0.9588** ｜ MRR **0.8980** ｜ Top-1 **1.0000** ｜ 通过 **99%** | `data/eval_runs/2026-09-17T20-54-57-c76a1b/` |
-| RAG 快评 | 20 例子集 | 20 | Recall@5 **0.9608** ｜ MRR **0.9314** ｜ Top-1 **1.0000** ｜ 通过 **100%** | `data/eval_runs/2026-09-18T04-12-24-efe47d/` |
-| 旅游规划 | `datasets/travel/cases.jsonl` | 34（金标已冻结） | **33 通过 + 1 skip**（T-G10 需关闭 live map 的环境性跳过，2026-09-25 全量） | `data/eval_runs/2026-09-25T01-45-11-9b68f7/` |
-| 旅游 Provider | travel-provider（探针七态契约） | 8 | **8/8** | `data/eval_runs/2026-09-25T01-50-40-cf40ea/` |
-| 旅游商务 | travel-commerce | 26 | **26/26** | `data/eval_runs/2026-09-25T01-46-26-091445/` |
-| 旅游预订 | travel-booking | 18 | **18/18** | `data/eval_runs/2026-09-25T01-46-35-931e90/` |
-| NL2SQL | `datasets/sql/cases.jsonl` | 15 | Release Gate **PASS**（准确率 / 拒答指标当前为「无数据」，尚未启用） | `data/eval_runs/2026-09-10T09-01-00-e81bc8/` |
-| 端到端 | `datasets/e2e/cases.jsonl` | 25（含 F-* 故障注入） | Release Gate **PASS**（最近全量运行记录为 2026-09-11，当时 13 例口径） | `data/eval_runs/2026-09-11T08-55-26-153602/` |
-
-> 注：旅游商务 / 旅游预订两行的 `travel-commerce` / `travel-booking` 是评测模块 ID（runner 命名空间，历史可比性绑定），对应 Travel Domain 的 commerce / booking 子流域图，**不是独立业务域**（STOP E 口径）。
-
-复现：
-```bash
-python -m backend.evaluation rag --selection expanded_100 --live --compare latest
-```
-
-> ⚠️ **引用指标必须同时写明 suite 与 run id。** `datasets/rag/cases.jsonl` 现为 **269 例 unified v5.0.0**，上表 100 / 20 是套在其上的 suite 子集而非全量。
-> 历史上曾出现「同名不同 schema」的误口径运行 —— 同一天同时存在 30% FAIL 与 100% PASS 两份报告，FAIL 那份是把 `rag_100_docs.json` 的 V1/V2 schema 喂给 V4 评测器而产生的假阴性，**不是真实回归**。判定依据与清理过程见 `docs/2026-09-18-全站存储收口交接报告.md` §3.4。
+评测数据集、Runner、指标和每次运行结果以当前代码及 `data/eval_runs/<run_id>/` 为准；历史分数不代表当前质量结论。常用 RAG / SQL 命令见[常用命令](docs/operations/commands.md)，测试范围见[测试策略](docs/development/testing-guide.md)。
 
 ---
 
@@ -319,7 +300,7 @@ Infrastructure — PostgreSQL（含 pgvector）/ Redis / SMTP / 地图服务 / M
 
 方向固定：`Planner → capability → Skill → Tool → Infrastructure`。
 **MCP 不是第 5 层**，是 Tool 的第二出口（Tool 不得 import Skill）。
-Runtime 视角的九层分层与请求生命周期见 [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md)。
+主图与请求运行机制见 [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md)。
 
 三条铁律：**G1** 声明式注册、启动期派生、fail-fast ｜ **G2** 单一事实源，派生量禁止手写回去 ｜ **G3** 谁定义谁注册，禁止集中代注册。
 
@@ -468,7 +449,7 @@ cd frontend-cs    && npm install && npx next dev -p 3300       # 等价 devctl s
 > 前端请求目标由 `next.config.js` 的 `API_URL` 决定，默认 `http://127.0.0.1:9080`（走网关）。
 > `API_URL=http://localhost:8000 npx next dev` 可绕过网关直连后端，**仅调试用**（chat 身份一律 guest）。
 
-完整命令速查与故障排查见 [命令文档.md](命令文档.md)。
+完整命令速查与故障排查见[常用命令](docs/operations/commands.md)。
 
 ---
 
@@ -512,9 +493,7 @@ npx vitest run        # 单测
 
 ### 新增资产
 
-Tool / Skill / Workflow / MCP / 域图的改动点位与隐藏接线点见
-[docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md)。
-**约定：Tool 一律定义在 `backend/tools/`（禁止在 `skills/` 下定义），返回 JSON 字符串；写操作类 Tool 必须过 `security/tool_approval.ensure_approved()` 审批门。**
+Tool / Skill / Workflow / MCP / 域图的职责、接线与治理规范见 [tool-skill-guide.md](docs/development/tool-skill-guide.md)。
 
 ---
 
@@ -559,7 +538,7 @@ agent/
 └── AGENTS.md                  # 项目级硬约束（改代码前先读）
 ```
 
-> `data/` 与 `tmp/` 目前有较多语料/中间产物直接入库（分别约 760 / 1500 个文件）。**这是已知待清理项**：语料本体宜转为按需拉取，仓库只保留 schema 与小型固件集。
+> `data/` 与 `tmp/` 保存语料、评测产物和中间数据；具体数据治理以对应数据说明和脚本为准。
 
 ---
 
@@ -567,28 +546,14 @@ agent/
 
 | 文档 | 用途 |
 |------|------|
-| [AGENTS.md](AGENTS.md) | 项目级硬约束与架构知识（**改代码前先读**） |
-| [命令文档.md](命令文档.md) | 启停 / 评测 CLI / 可观测性速查 |
-| [docs/README.md](docs/README.md) | 文档总索引 |
-| [docs/architecture/Architecture-Baseline.md](docs/architecture/Architecture-Baseline.md) | **架构基线**：Runtime 九层分层 / 请求生命周期 / 数据流（STOP H 冻结版） |
-| [docs/architecture/Extension-Guide.md](docs/architecture/Extension-Guide.md) | 扩展指南：新增 Domain / Capability / Skill / Tool / MCP |
-| [docs/architecture/Frozen-Contracts.md](docs/architecture/Frozen-Contracts.md) | 冻结契约清单：SSE / checkpoint / route_mode / Tool Contract 等红线与变更流程 |
-| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | 部署拓扑 / 端口表 / 异步层 / 网关认证 |
-| [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md) | 主图节点职责 / 域图细节 / 客服锁域 / 跨轮状态契约 |
-| [docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md](docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md) | 四层定义、写法、例外台账 |
-| [docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](docs/2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md) | 新增资产 checklist |
-| [docs/gateway-apisix-migration-plan.md](docs/gateway-apisix-migration-plan.md) | 网关迁移计划（B0→B4 分批 + 审批门禁） |
-| [docs/2026-09-16-总交接与实施计划.md](docs/2026-09-16-总交接与实施计划.md) | 跨会话交接与施工顺序（推荐入口） |
-| [docs/未完成功能进度汇总-2026-09-16.md](docs/未完成功能进度汇总-2026-09-16.md) | 功能欠账 + 开工顺序 |
-| [docs/2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md](docs/2026-09-25-五线计划书进度盘点-未完成与遗漏项汇总.md) | 五线进度盘点（客服/旅游/记忆/上下文/代码审查，**最新欠账口径**） |
-| [docs/2026-09-25-FinalRC-TestDebt-Closure.md](docs/2026-09-25-FinalRC-TestDebt-Closure.md) | 全量回归收官：测试债清偿与 flaky 甄别 |
-| [docs/gateway-apisix-final-report.md](docs/gateway-apisix-final-report.md) | APISIX 网关迁移收官与实测踩坑清单 |
-| [docs/java-side-handover.md](docs/java-side-handover.md) | Java 侧（Enterprise_OA）割接清单 |
-| [docs/contracts/identity-header-protocol.md](docs/contracts/identity-header-protocol.md) | 网关注入身份头（X-User-Id）契约 |
-| [docs/HANDOFF.md](docs/HANDOFF.md) | 会话交接记录 |
-| [docs/TRAVEL_ARCHITECTURE_AUDIT.md](docs/TRAVEL_ARCHITECTURE_AUDIT.md) | 旅游域架构审计（Phase 0，含数据 Provider 层缺口） |
-| [docs/production-readiness-assessment.md](docs/production-readiness-assessment.md) | 生产就绪风险清单（P0/P1，含未修复项） |
-| [docs/2026-09-18-全站存储收口交接报告.md](docs/2026-09-18-全站存储收口交接报告.md) | 评测口径澄清与存储收口 |
+| [AGENTS.md](AGENTS.md) | 仓库协作规则和按需文档入口 |
+| [docs/README.md](docs/README.md) | 当前文档导航 |
+| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | 部署、网关和服务边界 |
+| [docs/architecture/ai-runtime.md](docs/architecture/ai-runtime.md) | Router、主图和运行契约 |
+| [docs/architecture/domain-service-map.md](docs/architecture/domain-service-map.md) | 域服务、Provider 和失败边界 |
+| [docs/development/tool-skill-guide.md](docs/development/tool-skill-guide.md) | Agent、Skill、Tool、Workflow 和 MCP 规范 |
+| [docs/development/testing-guide.md](docs/development/testing-guide.md) | 测试分层与范围选择 |
+| [docs/operations/commands.md](docs/operations/commands.md) | 常用服务和验证命令 |
 
 ---
 
@@ -617,4 +582,3 @@ agent/
 RAG 的引用标注与 Evidence Gate 拒答、NL2SQL 的执行计划与脱敏结果。
 截图时注意不要带真实业务数据与密钥。
 -->
-

@@ -418,14 +418,14 @@ Expected: 所有测试通过；验证脚本输出无重复 run/step、无缺失�
 
 当前开发 Compose 证据：
 
-- [metadata-load-v1-20260920-64.json](../../../docs/evidence/metadata/metadata-load-v1-20260920-64.json)：峰值 `8/4=2.0x`，64/64 成功，队列最终排空，血缘 API P95 `313ms`，处理端到端 P95 `2406ms`，PG 连接池等待 P95 `0ms`、最大 `47ms`，LLM/Embedding/OCR 调用 `0`，缓存命中率 `100%`，重复写入 `0`，API 错误 `0`。
+- [metadata-load-v1-20260920-64.json](../../../evidence/metadata/metadata-load-v1-20260920-64.json)：峰值 `8/4=2.0x`，64/64 成功，队列最终排空，血缘 API P95 `313ms`，处理端到端 P95 `2406ms`，PG 连接池等待 P95 `0ms`、最大 `47ms`，LLM/Embedding/OCR 调用 `0`，缓存命中率 `100%`，重复写入 `0`，API 错误 `0`。
 - 同一 64 任务将血缘异步写线程从 4 临时提高到 8 的对照报告显示 P95 `3640ms`、连接池等待最大 `141ms`，因此不把 8 线程作为默认上线参数；当前默认值保持 4。
 
 这条证据证明的是“血缘记录/API/缓存命中”高并发门禁，不等价于真实外部模型冷启动或模型限流压测；生产上线前仍需在隔离配额下补一轮真实 OCR/Embedding/统一抽取数据，并补齐影子开启和回滚演练证据。不满足门禁时只回滚记录功能开关，不删除历史血缘数据。
 
-已补 [metadata-rollback-v1-20260920.json](../../../docs/evidence/metadata/metadata-rollback-v1-20260920.json)：只切换共享路由指针，旧指纹存在、幂等重放成功、重复写入 0、演练耗时 0 秒，并恢复演练前指针；该报告已通过 `_rollback_report_gate`。
+已补 [metadata-rollback-v1-20260920.json](../../../evidence/metadata/metadata-rollback-v1-20260920.json)：只切换共享路由指针，旧指纹存在、幂等重放成功、重复写入 0、演练耗时 0 秒，并恢复演练前指针；该报告已通过 `_rollback_report_gate`。
 
-已补 [metadata-shadow-v1-20260920.json](../../../docs/evidence/metadata/metadata-shadow-v1-20260920.json)：开发 Compose 中真实上传 3 份文件，主链路 3/3 完成；FAQ 样本命中 R0，`metadata_extract` 为 `skipped/route_r0`，元数据 LLM 调用和 Token 均为 0；影子独立队列 3/3 成功，其中 FAQ 为 `L0/agreement=true`。本轮同时修复了级联路径漏提交影子任务，以及同步 Celery→临时事件循环桥接导致 `create_task` 可能未提交的问题，现改为直接投递专用影子线程池。
+已补 [metadata-shadow-v1-20260920.json](../../../evidence/metadata/metadata-shadow-v1-20260920.json)：开发 Compose 中真实上传 3 份文件，主链路 3/3 完成；FAQ 样本命中 R0，`metadata_extract` 为 `skipped/route_r0`，元数据 LLM 调用和 Token 均为 0；影子独立队列 3/3 成功，其中 FAQ 为 `L0/agreement=true`。本轮同时修复了级联路径漏提交影子任务，以及同步 Celery→临时事件循环桥接导致 `create_task` 可能未提交的问题，现改为直接投递专用影子线程池。
 
 - [ ] **Step 7: 提交分阶段变更**
 

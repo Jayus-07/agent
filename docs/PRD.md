@@ -293,7 +293,7 @@
 - 新增 Skill + capability：5 处接线，漏 `capabilities.yaml` 启动即报错
 - 契约回归门：registry / layer / adr0001 / base_output 四个一致性测试 + e2e 故障注入
 
-完整模板见 [2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md](2026-09-16-新增Agent-Skill-Tool-MCP操作手册.md)。
+新增与修改资产的开发规范见 [tool-skill-guide.md](development/tool-skill-guide.md)。
 
 ### 5.3 可观测性
 

@@ -25,7 +25,7 @@
 | `prompt_aliases` | 命名版本指针 | `prompt_id`、`alias`（`production`/`staging`）、`version` |
 | `prompt_audit_log` | 操作审计 | `prompt_key`、`action`、`from_version`、`to_version` |
 
-建表迁移为 [018_prompts_pg.sql](/D:/Program%20Files/workplace/agent/backend/sql/migrations/018_prompts_pg.sql)，版本语义与 alias 为 [057_prompt_alias.sql](/D:/Program%20Files/workplace/agent/backend/sql/migrations/057_prompt_alias.sql)。ORM 定义在 [prompt.py](/D:/Program%20Files/workplace/agent/backend/memory/models/prompt.py)。
+建表迁移为 [018_prompts_pg.sql](../backend/sql/migrations/018_prompts_pg.sql)，版本语义与 alias 为 [057_prompt_alias.sql](../backend/sql/migrations/057_prompt_alias.sql)。ORM 定义在 [prompt.py](../backend/memory/models/prompt.py)。
 
 `prompts.active_version` 是生产读取路径的唯一事实源；`prompt_aliases.production` 在发布时与它同步，`staging` 当前不参与运行时读取。
 
@@ -55,7 +55,7 @@
 
 ### 1.3 发布与回滚入口
 
-管理 API 位于 [prompts.py](/D:/Program%20Files/workplace/agent/backend/app/api/routes/prompts.py)：
+管理 API 位于 [prompts.py](../backend/app/api/routes/prompts.py)：
 
 | 操作 | HTTP 入口 | 服务入口 | 现有行为 |
 |---|---|---|---|
@@ -65,13 +65,13 @@
 | 切 production | `POST /prompts/{key}/aliases/production` | `PromptService.set_alias()` | 复用 `publish()`，因此等同发布 |
 | 切 staging | `POST /prompts/{key}/aliases/staging` | `PromptService.set_alias()` | 仅更新 alias，不影响运行时读取 |
 
-发布实现位于 [service.py](/D:/Program%20Files/workplace/agent/backend/prompts/service.py:249)。目前在 DB 提交后仅调用本进程的 `_fire_hooks(key)`；仓库没有生产环境的 `register_reload_hook()` 调用方。
+发布实现位于 [service.py](../backend/prompts/service.py#L249)。目前在 DB 提交后仅调用本进程的 `_fire_hooks(key)`；仓库没有生产环境的 `register_reload_hook()` 调用方。
 
 ## 2. Prompt Read Path
 
 ### 2.1 统一服务与优先级
 
-[PromptService](/D:/Program%20Files/workplace/agent/backend/prompts/service.py) 的读取规则如下：
+[PromptService](../backend/prompts/service.py) 的读取规则如下：
 
 ```text
 render_sync / get_template_sync
@@ -89,10 +89,10 @@ get_active（异步）
 
 | 进程/场景 | 位置 | 触发时机 |
 |---|---|---|
-| FastAPI app | [server.py](/D:/Program%20Files/workplace/agent/backend/app/server.py:189) | app startup |
-| Celery prefork 子进程 | [celery_app.py](/D:/Program%20Files/workplace/agent/backend/tasks/celery_app.py:226) | `worker_process_init` |
-| rag-service | [rag_server.py](/D:/Program%20Files/workplace/agent/backend/services/rag_server.py:139) | service startup |
-| YAML seed | [service.py](/D:/Program%20Files/workplace/agent/backend/prompts/service.py:404) | seed 完成后 |
+| FastAPI app | [server.py](../backend/app/server.py#L189) | app startup |
+| Celery prefork 子进程 | [celery_app.py](../backend/tasks/celery_app.py#L226) | `worker_process_init` |
+| rag-service | [rag_server.py](../backend/services/rag_server.py#L139) | service startup |
+| YAML seed | [service.py](../backend/prompts/service.py#L404) | seed 完成后 |
 
 当前运行中有 app、7 个 Celery worker/dispatcher、beat 和 rag-service；它们的快照相互独立。现已在 app、Celery prefork 子进程和 rag-service 启动 `PromptHotReload` listener，并在请求/任务入口执行 epoch 对比。
 
@@ -134,7 +134,7 @@ TaskExecutor.start_trace()
   → trace.tags["prompt_versions"]
 ```
 
-对应位置为 [runner.py](/D:/Program%20Files/workplace/agent/backend/orchestration/graph/runner.py:386) 和 [task_executor.py](/D:/Program%20Files/workplace/agent/backend/orchestration/checkpoint/task_executor.py:256)。当前已通过 `PromptService.pin_snapshot()`、`bind_prompt_versions()` 和 Trace middleware 节点边界绑定实现版本绑定；长请求中途发布不会改变已 pin 的模板。
+对应位置为 [runner.py](../backend/orchestration/graph/runner.py#L386) 和 [task_executor.py](../backend/orchestration/checkpoint/task_executor.py#L256)。当前已通过 `PromptService.pin_snapshot()`、`bind_prompt_versions()` 和 Trace middleware 节点边界绑定实现版本绑定；长请求中途发布不会改变已 pin 的模板。
 
 ### 3.2 每次实际渲染的版本记录
 
@@ -144,7 +144,7 @@ TaskExecutor.start_trace()
 2. 调用 `record_prompt_version(key, version, source)`；
 3. 在 trace 收尾时由 `trace_collector.finish()` 收集，写入 `trace.metadata["prompt_versions"]`。
 
-相关实现：[service.py](/D:/Program%20Files/workplace/agent/backend/prompts/service.py:149)、[prompt_trace.py](/D:/Program%20Files/workplace/agent/backend/observability/prompt_trace.py)、[tracer.py](/D:/Program%20Files/workplace/agent/backend/observability/tracer.py:535)。
+相关实现：[service.py](../backend/prompts/service.py#L149)、[prompt_trace.py](../backend/observability/prompt_trace.py)、[tracer.py](../backend/observability/tracer.py#L535)。
 
 当前 Trace 可保存 `key`、`version`、`source`，并在 `tags.prompt_runtime` 保存 `epoch`、`versions`、`snapshot_time`、`reload_source`；实际渲染记录的 source 会标记为 `pinned`。
 

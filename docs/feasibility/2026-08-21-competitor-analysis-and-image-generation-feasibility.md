@@ -2,7 +2,7 @@
 
 > 评估对象：电商智能运营 Agent 平台（FastAPI + LangGraph + Next.js，9 Skill 已注册）
 > 评估日期：2026-08-21
-> 配套阅读：[PRD.md](../PRD.md)、[AGENT_DESIGN.md](../AGENT_DESIGN.md)、[2026-08-21 方案3/4落地计划](superpowers/plans/2026-08-21-recommendation-and-competitor-analysis-implementation-plan.md)
+> 配套阅读：[PRD.md](../PRD.md)、[AGENT_DESIGN.md](../AGENT_DESIGN.md)、[2026-08-21 方案3/4落地计划](../archive/superpowers/plans/2026-08-21-recommendation-and-competitor-analysis-implementation-plan.md)
 
 ---
 

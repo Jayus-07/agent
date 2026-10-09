@@ -1,7 +1,7 @@
 # 方案 3 / 方案 4 落地实施计划对比报告
 
 > 基于现有「电商智能运营 Agent 平台」能力，对两个候选方案分别制定落地计划、资源评估、风险应对、成功指标，并给出优先级建议。  
-> 配套阅读：[PRD.md](../../PRD.md)、[ARCHITECTURE.md](../../ARCHITECTURE.md)、[AGENT\_DESIGN.md](../../AGENT_DESIGN.md)、[ROADMAP.md](../../ROADMAP.md)
+> 配套阅读：[PRD.md](../../../PRD.md)、[ARCHITECTURE.md](../../../ARCHITECTURE.md)、[AGENT\_DESIGN.md](../../../AGENT_DESIGN.md)、[ROADMAP.md](../../../ROADMAP.md)
 
 ---
 

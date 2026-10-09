@@ -203,5 +203,5 @@ supervisor ─Command(goto)─→ poi / transit / weather / budget / risk / vali
 2. **G1-G4**：声明式注册、单一事实源（capabilities.yaml 禁手抄派生量）、谁定义谁注册、例外必须登记规范 §4 台账——目录迁移后注册链不能断。
 3. **局部测试跑必须 `--no-cov`**；改 params_schema/prompt 后跑 planner 评估。
 4. **多会话并行纪律**：pathspec 双重限定提交；每阶段独立 commit 可回滚。
-5. **术语对齐**：`docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md` 口径"勿把所有节点统称 Agent"——本次引入的 "Agent" 命名需在设计文档中显式定义并登记台账（G4），避免文档体系自相矛盾。
+5. **术语对齐**：`docs/development/tool-skill-guide.md` 口径"勿把所有节点统称 Agent"——本次引入的 "Agent" 命名需在设计文档中显式定义并登记台账（G4），避免文档体系自相矛盾。
 6. **checkpointer 共表**：旅游 checkpoint 与主图/CS 共用三表，state 键变更必须保持 checkpoint 可序列化纪律（dict 进、dict 出，运行时对象只在节点边界经 load_*/save_*）。
