@@ -15,7 +15,7 @@ import { maskSecret, modelKindLabel, type ModelCatalogResponse, type ModelKind, 
 import ErrorNote from './ErrorNote'
 import ModelCatalogPicker from './ModelCatalogPicker'
 import ProbeResultDetails from './ProbeResultDetails'
-import type { Draft } from './draft'
+import { EXTRA_BODY_PRESETS, resolveExtraBody, type Draft, type ExtraBodyPreset } from './draft'
 import { fixHintsFor, type FixHint } from './fixHints'
 import { formatLiveElapsed, probeModeLabel } from './format'
 import { unresolvedPlaceholder } from './urlUtils'
@@ -49,6 +49,10 @@ export default function ProviderEditor({
   const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch })
   const isNew = !draft.id
   const row = draft.id ? providers.find((item) => item.id === draft.id) ?? null : null
+  // 自定义 JSON 就地校验：非法时不阻塞其它字段编辑，但保存会被拦下（见 ProvidersTab）
+  const extraBodyError = draft.extraBodyPreset === 'custom'
+    ? (resolveExtraBody('custom', draft.extraBodyText) as { error?: string }).error ?? null
+    : null
 
   // 测试深度：默认快速。完整测试只多查一项「流式是否回传 usage」，与可用性判断无关，
   // 因此收进高级设置，不再占用底部一个常驻按钮。
@@ -228,6 +232,17 @@ export default function ProviderEditor({
               <label className="md:col-span-2">测试深度<select data-testid="provider-probe-depth" value={probeDepth} onChange={(event) => setProbeDepth(event.target.value as ProbeMode)} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="fast">快速 —— 只确认能调用（推荐）</option><option value="full">完整 —— 额外检查流式是否回传 usage</option></select>
                 <span className="mt-1 block text-[10px] text-text-muted">「流式 usage」只影响记账能否拿到 token 数，与模型能不能用无关，所以完整测试更慢却不一定更有用。</span>
               </label>
+              <label className="md:col-span-2">附加请求体
+                <select data-testid="provider-extra-body-preset" value={draft.extraBodyPreset} onChange={(event) => update({ extraBodyPreset: event.target.value as ExtraBodyPreset })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs">
+                  {EXTRA_BODY_PRESETS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+                <span className="mt-1 block text-[10px] text-text-muted">{EXTRA_BODY_PRESETS.find((item) => item.value === draft.extraBodyPreset)?.hint}</span>
+              </label>
+              {draft.extraBodyPreset === 'custom' && <label className="md:col-span-2">自定义附加字段（JSON 对象）
+                <textarea data-testid="provider-extra-body-text" value={draft.extraBodyText} onChange={(event) => update({ extraBodyText: event.target.value })} rows={4} spellCheck={false} className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-[11px]" placeholder={'{\n  "thinking": { "type": "disabled" }\n}'} />
+                {extraBodyError && <span data-testid="provider-extra-body-error" className="mt-1 block text-[10px] text-red-700">{extraBodyError}</span>}
+                <span className="mt-1 block text-[10px] text-text-muted">字段会原样透传给上游 API。model / stream / tools / api_key 等保留字段会被服务端拒绝。</span>
+              </label>}
             </div>
             {!isNew && draft.credentialConfigured && <label className="mt-3 flex items-center gap-2 text-[11px] text-red-700"><input type="checkbox" checked={Boolean(draft.clearApiKey)} onChange={(event) => update({ clearApiKey: event.target.checked, apiKey: undefined })} />清除托管 API Key</label>}
           </details>

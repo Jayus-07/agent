@@ -330,6 +330,66 @@ def _normalize_extra_headers(value: Any) -> dict[str, str]:
     return {str(key): str(item) for key, item in extra_headers.items()}
 
 
+# 附加请求体禁写清单（2026-10-09）：这些键会改变调用语义或越权，
+# 必须由代码/专用字段控制，不能经管理端自由写入。
+#   - model / messages / stream / input：会在协议层顶替既有参数
+#     （模型名由角色绑定决定，stream 由 ENABLE_TOKEN_STREAMING 决定）；
+#   - tools / tool_choice / functions：绕过 Tool 治理与审批链路；
+#   - api_key / authorization：凭据只能走 API Key 字段。
+_FORBIDDEN_EXTRA_BODY_KEYS = frozenset({
+    "model", "messages", "stream", "input", "prompt",
+    "tools", "tool_choice", "functions", "function_call",
+    "api_key", "authorization", "apikey",
+})
+# 值深度/长度上限：防止把超大对象塞进每次请求体
+_EXTRA_BODY_MAX_KEYS = 20
+_EXTRA_BODY_MAX_DEPTH = 3
+
+
+def _extra_body_depth(value: Any, _level: int = 1) -> int:
+    """返回嵌套深度（标量为 1）。"""
+    if isinstance(value, Mapping):
+        if not value:
+            return _level
+        return max(_extra_body_depth(v, _level + 1) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return max((_extra_body_depth(v, _level + 1) for v in value), default=_level)
+    return _level
+
+
+def _normalize_extra_body(value: Any) -> dict[str, Any]:
+    """附加请求体（如关闭思考 thinking/enable_thinking）。
+
+    与 extraHeaders 同级的供应商默认值，最终由 driver_compat 透传给
+    ChatOpenAI(extra_body=...)。校验三件事：
+      1. 必须是对象，键为字符串；
+      2. 不得含改变调用语义/越权的保留键（见禁写清单）；
+      3. 规模有界（键数、嵌套深度），避免撑大每次请求体。
+    空对象 = 不附加任何字段（保持历史行为）。
+    """
+    extra_body = value or {}
+    if not isinstance(extra_body, Mapping):
+        raise ValueError("extraBody 必须是对象")
+    if len(extra_body) > _EXTRA_BODY_MAX_KEYS:
+        raise ValueError(f"extraBody 键数不能超过 {_EXTRA_BODY_MAX_KEYS}")
+    normalized: dict[str, Any] = {}
+    for key, item in extra_body.items():
+        name = str(key).strip()
+        if not name:
+            raise ValueError("extraBody 存在空键")
+        if name.lower() in _FORBIDDEN_EXTRA_BODY_KEYS:
+            raise ValueError(
+                f"extraBody 不允许设置保留字段 {name!r}"
+                "（模型名/流式/工具/凭据请用对应专用配置）"
+            )
+        if _extra_body_depth(item) > _EXTRA_BODY_MAX_DEPTH:
+            raise ValueError(
+                f"extraBody[{name}] 嵌套过深（上限 {_EXTRA_BODY_MAX_DEPTH} 层）"
+            )
+        normalized[name] = item
+    return normalized
+
+
 def _provider_slug(display_name: str, base_url: str) -> str:
     """根据名称或域名生成稳定、可读的自定义供应商 ID。"""
     hostname = urlparse(base_url).hostname or "custom-api"
@@ -1092,6 +1152,11 @@ class ModelConfigService:
         if api_key is not None and not str(api_key).strip() and not clear_api_key:
             raise ValueError("apiKey 为空时请使用 clearApiKey=true 明确清除")
         extra_headers = _normalize_extra_headers(payload.get("extraHeaders"))
+        # None = 未提交该字段（保持原值，见 SQL 的 COALESCE）；{} = 显式清空
+        extra_body = (
+            _normalize_extra_body(payload.get("extraBody"))
+            if payload.get("extraBody") is not None else None
+        )
 
         old_row: Mapping[str, Any] | None = None
         old_credential: Mapping[str, Any] | None = None
@@ -1128,6 +1193,8 @@ class ModelConfigService:
                     "UPDATE llm_providers SET display_name = :display_name, "
                     "driver = :driver, base_url = :base_url, "
                     "network_scope = :network_scope, extra_headers = CAST(:extra_headers AS jsonb), "
+                    # 未提交 extraBody（None）时保持原值：COALESCE 让 NULL 落回列现值
+                    "extra_body = COALESCE(CAST(:extra_body AS jsonb), extra_body), "
                     "billing = :billing, enabled = :enabled, updated_at = now() "
                     "WHERE id = :provider_id"
                 ),
@@ -1138,6 +1205,11 @@ class ModelConfigService:
                     "base_url": base_url,
                     "network_scope": network_scope,
                     "extra_headers": json.dumps(extra_headers, ensure_ascii=False),
+                    # None = 未提交 extraBody（不覆盖，见 SQL 的 COALESCE）
+                    "extra_body": (
+                        json.dumps(extra_body, ensure_ascii=False)
+                        if extra_body is not None else None
+                    ),
                     "billing": billing,
                     "enabled": bool(payload.get("enabled", True)),
                 },
@@ -1823,6 +1895,7 @@ class ModelConfigService:
         if billing not in {"metered", "subscription", "local"}:
             raise ValueError("billing 只能是 metered、subscription 或 local")
         extra_headers = _normalize_extra_headers(payload.get("extraHeaders"))
+        extra_body = _normalize_extra_body(payload.get("extraBody"))
 
         # 2026-09-22 拍板：测试与保存独立 —— 保存不再强制探测（与
         # add_provider_model 同口径，见彼处注释）。payload.probe=true 时仍
@@ -1877,10 +1950,11 @@ class ModelConfigService:
                 text(
                     "INSERT INTO llm_providers "
                     "(id, display_name, driver, base_url, network_scope, "
-                    "extra_headers, billing, is_builtin, enabled, created_by, updated_at) "
+                    "extra_headers, extra_body, billing, is_builtin, enabled, "
+                    "created_by, updated_at) "
                     "VALUES (:id, :display_name, :driver, :base_url, :network_scope, "
-                    "CAST(:extra_headers AS jsonb), :billing, false, :enabled, "
-                    ":operator, now())"
+                    "CAST(:extra_headers AS jsonb), CAST(:extra_body AS jsonb), "
+                    ":billing, false, :enabled, :operator, now())"
                 ),
                 {
                     "id": provider_id,
@@ -1889,6 +1963,7 @@ class ModelConfigService:
                     "base_url": base_url,
                     "network_scope": network_scope,
                     "extra_headers": json.dumps(extra_headers, ensure_ascii=False),
+                    "extra_body": json.dumps(extra_body, ensure_ascii=False),
                     "billing": billing,
                     "enabled": bool(payload.get("enabled", True)),
                     "operator": operator,

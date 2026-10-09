@@ -128,6 +128,52 @@ _MULTI_INTENT_CONNECTIVES = ("以及", "同时", "另外", "还有", "并且", "
 # 多问号 / 多句子 → 多意图
 _MULTI_QUESTION_THRESHOLD = 2
 
+# ── 反问句剔除（2026-10-09 误触发修复）──────────────────────────────
+# 缺陷：原先直接数问号（q.count("？")），把「一个论点 + 一个反问强调」
+# 误判成多意图。实测「rag搜索不应该要30s？生产环境不能这么慢吧？」被判
+# hybrid_multi_query → 触发 1 次 LLM 改写 + 3 路检索（白付 ~2.3s），
+# 而它其实只有一个检索诉求。
+# 修法：统计「真实疑问句」而非标点数量，反问句不计入。
+#   1) 正反问 A不A（是不是/要不要/有没有…）→ 真问题，先排除；
+#   2) 强反问标记（难道/岂/莫非）→ 反问；
+#   3) 否定词 + 无疑问代词（不应该要30s？）→ 陈述式质疑，反问；
+#   4) 否定词 + 吗/吧 结尾（不能这么慢吧？）→ 反问。
+# 保守取向：判不准时按「真问题」处理（宁可多查一次，不可漏检多意图）。
+_PROPER_QUESTION = re.compile(
+    r"(是不是|要不要|能不能|有没有|可不可以|该不该|会不会|好不好)")
+_RHETORICAL_MARKERS = re.compile(r"(难道|岂|莫非)")
+_NEGATION = re.compile(r"(不|没|别|无|非)")
+_QUESTION_WORDS = re.compile(
+    r"(为什么|怎么|什么|哪|谁|多少|几|是否|能否|如何|何时|何处)")
+
+
+def _is_rhetorical(sentence: str) -> bool:
+    """判断单个分句是否为反问句（无疑问意图，不计入多意图信号）。"""
+    s = (sentence or "").strip().rstrip("？?").strip()
+    if not s:
+        return False
+    # 正反问 A不A 是真问题（「是不是有问题？」），必须优先排除
+    if _PROPER_QUESTION.search(s):
+        return False
+    if _RHETORICAL_MARKERS.search(s):
+        return True
+    # 陈述式质疑：含否定但无疑问代词（「不应该要30s？」）
+    if _NEGATION.search(s) and not _QUESTION_WORDS.search(s):
+        return True
+    # 否定 + 吗/吧 收尾（「生产环境不能这么慢吧？」）
+    if _NEGATION.search(s) and re.search(r"(吗|吧)$", s):
+        return True
+    return False
+
+
+def _count_real_questions(query: str) -> int:
+    """统计真实疑问句数量（反问句不计）。
+
+    与旧 q.count("？") 的差异就是本次修复点：把标点计数换成意图计数。
+    """
+    parts = [p.strip() for p in re.split(r"[？?]", query) if p.strip()]
+    return sum(0 if _is_rhetorical(p) else 1 for p in parts)
+
 # Tier 1「简单 FAQ」的最大长度（去标点后字符数，D-Q2 修复 2026-10-05）：
 # 此前兜底过宽——任何不含复杂词/标识符的问句（含专名长问「崇妙保圣坚牢塔
 # 在哪里」）都落 vector_only 跳过 BM25；专名的向量语义弱、精确词匹配缺失，
@@ -158,15 +204,20 @@ def _classify_query_tier(query: str) -> str:
     q = query.strip()
 
     # ── Tier 3: 复杂 / 多意图 → HYBRID_MULTI_QUERY（最高优先级）──
-    # 多个问号/句子（多意图）——§21 强信号
-    question_marks = q.count("？") + q.count("?")
+    # 只计真实疑问句（反问剔除），见 _count_real_questions 的缺陷说明
+    question_marks = _count_real_questions(q)
     # 过滤空字符串，避免 "问题？" split 后得到 ["问题", ""] 误判
     # 子句分隔含全角逗号/顿号（Phase 4）：「A是什么，怎么操作」是两个诉求，
     # 单靠句末标点会把它误判成单子句短问
     sentence_parts = [
         x.strip() for x in re.split(r'[。！？；，、!?;,]', q) if x.strip()
     ]
-    if question_marks >= _MULTI_QUESTION_THRESHOLD or len(sentence_parts) >= 3:
+    # 收紧（2026-10-09）：由「问号≥2 **或** 子句≥3」改为
+    # 「(真实问号≥2 且 子句≥2) **或** 子句≥3」。
+    # 单纯两个问号不足以判定多意图（反驳/追问式表达常见），
+    # 需同时具备多子句结构；子句≥3 仍单独成立（明确的并列诉求）。
+    if (question_marks >= _MULTI_QUESTION_THRESHOLD
+            and len(sentence_parts) >= 2) or len(sentence_parts) >= 3:
         return "hybrid_multi_query"
 
     # Phase 4 signal-score（§21）：

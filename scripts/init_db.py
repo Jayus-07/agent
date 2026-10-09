@@ -106,6 +106,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "019_gateway_access_logs_pg.sql": "memory",
     "020_alembic_gaps_pg.sql": "memory",
     "023_auth_sessions.sql": "memory",
+    # 082 是当前本地工作区已有的旅游租户范围迁移，需在 085 旧表退役前
+    # 按原定义重放；它不属于 V2 Repository 的运行时依赖。
+    "082_travel_plan_tenant_scope.sql": "memory",
     "024_rag_eval_fixture_set.sql": "memory",
     "025_metadata_rule_governance.sql": "memory",
     "026_metadata_shadow_jobs.sql": "memory",
@@ -253,6 +256,14 @@ MIGRATION_TARGETS: dict[str, str] = {
     # ai.tool_approval_requests 也进了 agent_readonly 可见面，
     # 收窄为 schema_config 声明的两张表（agent_tasks/agent_trace）。
     "083_readonly_ai_grant_scope.sql": "business",
+    "084_travel_v2_schema.sql": "memory",
+    "085_drop_legacy_travel_planning.sql": "memory",
+    "086_travel_v2_arrangements.sql": "memory",
+    # 供应商级附加请求体（2026-10-09）：llm_providers.extra_body jsonb。
+    # 凭据层早已支持 extra_body（driver_compat 透传给 ChatOpenAI），但
+    # 该值此前只能来自 env/代码，管理端无法配置关闭思考
+    # （实测主模型 reasoning/completion=0.73，73% 生成 token 花在思考上）。
+    "087_llm_provider_extra_body.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
@@ -261,6 +272,8 @@ ORDER_LAST = [
     "004_readonly_role.sql",
     "043_readonly_public_revoke.sql",
     "083_readonly_ai_grant_scope.sql",
+    "085_drop_legacy_travel_planning.sql",
+    "086_travel_v2_arrangements.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 

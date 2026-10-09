@@ -19,6 +19,89 @@ export type Draft = {
   originalModelKind: ModelKind
   credentialConfigured: boolean
   keyLast4: string | null
+  /** 附加请求体的预设选择：'none' | 'thinking-off' | 'low-effort' | 'custom' */
+  extraBodyPreset: ExtraBodyPreset
+  /** 自定义 JSON 原文（仅 preset='custom' 时参与提交）。
+   *  存字符串而非对象：非法 JSON 要就地报错，不能等到保存才炸。 */
+  extraBodyText: string
+  /** 打开抽屉时库里的原值（用于「未改动 = 不提交」判定，避免误覆盖） */
+  originalExtraBody: Record<string, unknown>
+}
+
+/** 附加请求体预设。覆盖主流供应商的关闭思考参数名差异：
+ *  火山方舟 thinking / 通义 enable_thinking / OpenAI 系 reasoning_effort。 */
+export type ExtraBodyPreset = 'none' | 'thinking-off' | 'low-effort' | 'custom'
+
+export const EXTRA_BODY_PRESETS: Array<{
+  value: ExtraBodyPreset
+  label: string
+  hint: string
+  /** 生成提交值；custom 由文本框决定，故为 null */
+  build: (() => Record<string, unknown>) | null
+}> = [
+  {
+    value: 'none',
+    label: '不附加（默认）',
+    hint: '按供应商默认行为调用，不添加任何额外字段。',
+    build: () => ({}),
+  },
+  {
+    value: 'thinking-off',
+    label: '关闭思考（火山方舟）',
+    hint: '传 {"thinking":{"type":"disabled"}}。实测思考占生成 token 的 73%，关闭后回答更快。',
+    build: () => ({ thinking: { type: 'disabled' } }),
+  },
+  {
+    value: 'low-effort',
+    label: '低推理强度（OpenAI 系）',
+    hint: '传 {"reasoning_effort":"low"}。保留少量推理但显著降低 token 与延迟。',
+    build: () => ({ reasoning_effort: 'low' }),
+  },
+  {
+    value: 'custom',
+    label: '自定义 JSON',
+    hint: '手写附加字段。保留字段（model/stream/tools/api_key 等）会被服务端拒绝。',
+    build: null,
+  },
+]
+
+/** 从库中原值反推预设与文本（打开抽屉时用）。 */
+export function extraBodyToDraft(value: Record<string, unknown> | undefined): {
+  preset: ExtraBodyPreset
+  text: string
+} {
+  const obj = value ?? {}
+  if (Object.keys(obj).length === 0) return { preset: 'none', text: '' }
+  for (const item of EXTRA_BODY_PRESETS) {
+    if (!item.build) continue
+    if (JSON.stringify(item.build()) === JSON.stringify(obj)) {
+      return { preset: item.value, text: '' }
+    }
+  }
+  return { preset: 'custom', text: JSON.stringify(obj, null, 2) }
+}
+
+/** 把预设/文本解析为提交值。返回错误信息表示无法提交。 */
+export function resolveExtraBody(
+  preset: ExtraBodyPreset,
+  text: string,
+): { value: Record<string, unknown> } | { error: string } {
+  if (preset !== 'custom') {
+    const item = EXTRA_BODY_PRESETS.find((p) => p.value === preset)
+    return { value: item?.build ? item.build() : {} }
+  }
+  const raw = text.trim()
+  if (!raw) return { value: {} }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { error: '自定义附加字段不是合法 JSON' }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { error: '自定义附加字段必须是 JSON 对象（形如 {"key": "value"}）' }
+  }
+  return { value: parsed as Record<string, unknown> }
 }
 
 export type ProbeStatus = ProbeResponse['steps'][number]['status']
@@ -84,6 +167,14 @@ export function draftFromRow(
     originalModelKind: modelKind,
     credentialConfigured: row.credential.configured,
     keyLast4: row.credential.last4,
+    ...(() => {
+      const { preset, text } = extraBodyToDraft(row.extraBody)
+      return {
+        extraBodyPreset: preset,
+        extraBodyText: text,
+        originalExtraBody: row.extraBody ?? {},
+      }
+    })(),
   }
 }
 
@@ -103,5 +194,8 @@ export function newDraft(): Draft {
     originalModelKind: 'chat',
     credentialConfigured: false,
     keyLast4: null,
+    extraBodyPreset: 'none',
+    extraBodyText: '',
+    originalExtraBody: {},
   }
 }
