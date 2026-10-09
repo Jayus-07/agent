@@ -305,12 +305,11 @@ export function sanitizeTravelReply(text: string): string {
   return kept.join('\n')
 }
 
-/** 旅游聊天气泡短回复；仅 Reporter 明确标记 llm 时替换既有状态文案。 */
+/** 旅游聊天气泡短回复；优先展示 Reporter，包含确定性降级模板。 */
 export function travelChatReplyText(data: PlanResponse, hasDraft: boolean): string {
   if (data.itinerary) {
-    if (data.reporter_meta?.source === 'llm') {
-      return sanitizeTravelReply(data.final_answer || '行程已整理，请查看行程卡。')
-    }
+    const finalAnswer = sanitizeTravelReply(data.final_answer || '').trim()
+    if (finalAnswer) return finalAnswer
     return hasDraft
       ? `已生成草案 v${data.itinerary.plan_version}，请查看变化后选择应用或放弃。`
       : `已创建当前行程 v${data.itinerary.plan_version}。`

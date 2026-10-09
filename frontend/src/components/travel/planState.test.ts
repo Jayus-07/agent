@@ -55,13 +55,13 @@ describe('Reporter 聊天气泡短回复', () => {
     expect(travelChatReplyText(data, false)).toBe('安排见行程卡。')
   })
 
-  it('模板或旧服务仍使用原有状态提示', () => {
+  it('LLM 降级时仍展示 Reporter 模板正文', () => {
     const data = {
       status: 'success', final_answer: '模板正文',
       itinerary: makeItinerary(), reporter_meta: { source: 'template' },
     } as PlanResponse
-    expect(travelChatReplyText(data, false)).toBe('已创建当前行程 v1。')
-    expect(travelChatReplyText(data, true)).toBe(
+    expect(travelChatReplyText(data, false)).toBe('模板正文')
+    expect(travelChatReplyText({ ...data, final_answer: '' }, true)).toBe(
       '已生成草案 v1，请查看变化后选择应用或放弃。',
     )
   })

@@ -4,7 +4,7 @@
 
 **Goal:** 让旅游助手每轮面向用户的自然语言答复由 LLM 基于已验证的行程事实和工具结果生成；SSE 继续展示工具执行过程，最终答复与结构化理由都显示在聊天区。
 
-**Architecture:** 保留确定性的 Router、Supervisor、Tool Governance、数据校验和版本生命周期。图完成后把已验证事实交给 Reporter LLM 组织最终文字；LLM 不可用或答复校验失败时回退到确定性模板，并在 metadata 中标记降级。前端先展示已有 SSE 工具过程，再同时显示 Reporter 文字和结构化理由；失败/无数据结果也保留在聊天消息里。
+**Architecture:** 保留确定性的 Router、Supervisor、Tool Governance、数据校验和版本生命周期。旅游域图的正常出口最终经过 `travel_reporter`；工具执行过程及状态先由 SSE 展示，汇总后的白名单事实再交给 Reporter LLM 组织 `done.final_answer`，并同时显示结构化理由。SystemMessage 只包含静态指令，用户原话、工具摘要和模板事实基线放在独立 HumanMessage JSON 中。LLM 不可用或答复校验失败时回退到确定性模板，并在 metadata 中标记降级；失败/无数据结果也保留在聊天消息里。
 
 **Tech Stack:** FastAPI、LangGraph、Python、Next.js、React、Vitest、pytest。
 
@@ -13,7 +13,9 @@
 ## Global Constraints
 
 - Router、Supervisor、Tool Governance、权限、确认和行程校验继续使用确定性规则。
-- Reporter 只能基于状态中的验证事实和 Tool 结果组织措辞；不得新造票价、时间、路线、营业状态或已应用承诺。
+- Reporter 只能基于状态中的验证事实和 Tool 结果组织措辞；不得新造地点、日期、票价、时间、路线、营业状态或已应用承诺。
+- Tool 事实按类别字段白名单投影；facts 快照不超过 12 KB UTF-8，完整 HumanMessage 不超过 16 KB UTF-8。
+- 校验地点、日期/星期、中英文数字、预约、营业、交通与路线等事实锚点；证据不足时回退模板。
 - LLM 超时、空答复、解析失败或事实校验不通过时立即回退模板，不重试并如实标记降级。
 - SSE 工具事件顺序与事件契约不变；最终自然语言答复走现有 `done` 结果。
 - Apply、Discard、Active 版本更新语义保持不变。
@@ -22,7 +24,7 @@
 
 - 完整成功行程中，Reporter 获得经验证的 Tool/任务结果，不能只得到一条空的聊天文本。
 - 无数据或失败轮次仍显示助手说明，不得仅在页面角落显示错误后丢失会话答复。
-- Reporter 回传新数字、未核实营业/交通事实或“已应用”承诺时，事实校验必须阻止该文本并回退。
+- Reporter 回传新地点、日期/数字、预约/营业/交通/路线事实或“已应用”承诺时，事实校验必须阻止该文本并回退。
 - 环境未设置开关时默认符合用户要求启用 Reporter；显式关闭仍可作为故障排查/回滚开关。
 - 同一条助手消息同时带文本和 rationale 时，桌面/手机都能阅读两者；SSE 工具进度仍排在最终答复之前。
 
@@ -42,7 +44,7 @@
 
 - [x] **Step 1: 写失败测试**
 
-  补测环境变量未设置时 Reporter 启用；显式 `false` 仍关闭；构造带成功/降级 Tool 结果的 state，断言 Reporter prompt 的事实输入包含任务类型、状态、结果摘要和降级说明；保留空输出/非法数字/模型异常回退用例。
+  补测环境变量未设置时 Reporter 启用；显式 `false` 仍关闭；构造带成功/降级 Tool 结果的 state，断言 Reporter prompt 的事实输入包含任务类型、状态、结果摘要和降级说明；补充地点、中文数字、预约/路线事实边界、任务类型字段白名单、12 KB/16 KB 总字节数以及 System/Human 消息隔离；保留空输出/非法数字/模型异常回退用例。
 
 - [x] **Step 2: 运行测试观察预期失败**
 
@@ -52,7 +54,7 @@
 
 - [x] **Step 3: 最小实现**
 
-  将 `TRAVEL_LLM_REPORTER_ENABLED` 默认改为 `true`，尊重用户显式设置的开/关；向模型提供受限成功 Tool 摘要与降级状态；同步更新默认 Prompt 允许复述已验证 Tool 事实；沿用 `_validate_reply` 阻止无证据数字、状态和应用承诺。
+  将 `TRAVEL_LLM_REPORTER_ENABLED` 默认改为 `true`，尊重用户显式设置的开/关；按 Tool 类别白名单投影受限成功摘要与降级状态，限制 facts 与完整 HumanMessage 字节数；将动态输入从 SystemMessage 移到 HumanMessage；同步更新默认 Prompt；沿用 `_validate_reply` 阻止无证据地点、数字、旅游业务事实和应用承诺。
 
 - [x] **Step 4: 运行测试确认通过**
 
