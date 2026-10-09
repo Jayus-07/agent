@@ -248,17 +248,29 @@ def test_happy_path_parses_candidates(monkeypatch, _flag_on):
 
 # ── P0-01/02：slot_filler 触发面（单轮 ≤1 次 / 完整命中零调用）────
 
-def _count_enrich(monkeypatch) -> list[list[str]]:
-    calls: list[list[str]] = []
+def _patch_turn_decision(monkeypatch, decision=None, status="schema_invalid"):
+    from backend.config import travel as travel_config
+    from backend.travel.services import turn_decision_service
+    from backend.travel.services import city_guide_service
 
-    def _fake(message, *, missing_slots, timeout_ms=None):
-        calls.append(list(missing_slots))
-        return SlotEnrichmentOutcome(status="empty",
-                                     fallback_reason="no_candidates")
+    monkeypatch.setattr(
+        travel_config, "TRAVEL_TURN_DECISION_LLM_ENABLED", True)
+    monkeypatch.setattr(
+        travel_config, "TRAVEL_LLM_CLARIFICATION_ENABLED", False)
+    monkeypatch.setattr(city_guide_service, "prime_city_guide", lambda _city: None)
+    calls = []
 
-    from backend.travel.services import llm_slot_enrichment_service as mod
+    def _fake(message, *, context, timeout_ms=None):
+        calls.append((message, context))
+        return turn_decision_service.TurnDecisionOutcome(
+            decision=decision, status=status,
+            fallback_reason="invalid_json" if decision is None else "",
+            model="test-model", prompt_version="travel.turn_decision@v-test",
+            latency_ms=5,
+        )
 
-    monkeypatch.setattr(mod, "enrich_slots", _fake)
+    monkeypatch.setattr(
+        turn_decision_service, "interpret_turn_with_llm", _fake)
     return calls
 
 
@@ -266,7 +278,7 @@ def test_rule_complete_means_zero_llm_calls(monkeypatch):
     """P0-01：规则完整识别 → 富化 0 次，slot_parse_source=rule。"""
     from backend.travel.slot_filler import slot_filler_node
 
-    calls = _count_enrich(monkeypatch)
+    calls = _patch_turn_decision(monkeypatch)
     result = slot_filler_node({"user_message": "福州3天"})
     assert result["brief_missing"] == []
     assert calls == []
@@ -274,35 +286,58 @@ def test_rule_complete_means_zero_llm_calls(monkeypatch):
     assert result["slot_llm_meta"] == {}
 
 
-def test_missing_slot_triggers_enrichment_at_most_once(monkeypatch):
-    """P0-02：缺槽规划轮恰好多调一次（不管结果成败）。"""
+def test_complex_missing_slot_uses_one_unified_decision_call(monkeypatch):
+    """复杂表达只调用一次统一决策，不再分别调意图与槽位服务。"""
     from backend.travel.slot_filler import slot_filler_node
 
-    calls = _count_enrich(monkeypatch)
-    result = slot_filler_node({"user_message": "帮我规划福州"})
+    calls = _patch_turn_decision(monkeypatch)
+    result = slot_filler_node({"user_message": "去福州待一周"})
     assert len(calls) == 1
-    assert calls[0] == ["days"]
+    assert calls[0][0] == "去福州待一周"
     assert result["slot_parse_source"] == "rule_fallback"
-    assert result["slot_llm_meta"]["fallback_reason"] == "no_candidates"
+    assert result["slot_llm_meta"]["fallback_reason"] == "invalid_json"
 
 
 def test_query_intent_never_triggers_enrichment(monkeypatch):
-    calls = _count_enrich(monkeypatch)
+    calls = _patch_turn_decision(monkeypatch)
     from backend.travel.slot_filler import slot_filler_node
 
     slot_filler_node({"user_message": "福州好玩吗"})
     assert calls == []
 
 
+def test_structured_action_does_not_call_turn_decision_llm(monkeypatch):
+    """来自按钮的白名单结构化操作不需要再次做语义分类。"""
+    calls = _patch_turn_decision(monkeypatch)
+    from backend.travel.slot_filler import slot_filler_node
+
+    result = slot_filler_node({
+        "user_message": "把节奏调轻松",
+        "request_mode": "action",
+        "action_payload": {"operation": "set_pace", "value": "relaxed"},
+    })
+    assert calls == []
+    assert result["turn_decision"]["primary_action"] == "modify_plan"
+    assert result["turn_decision"]["parse_source"] == "structured"
+
+
 def test_enrichment_fills_days_end_to_end(monkeypatch, _flag_on):
     """富化正例：规则盲区（待一周）经 mock LLM 补 days=7 → 不再追问。"""
-    content = json.dumps({"candidates": [
-        {"slot": "days", "value": 7, "confidence": 0.9,
-         "evidence_text": "待一周"}]}, ensure_ascii=False)
-    _patch_llm(monkeypatch, content)
+    from backend.travel.core.intent import TravelTurnDecision
+
+    decision = TravelTurnDecision(
+        primary_action="create_plan",
+        brief_candidates=[{
+            "slot": "days", "value": 7, "confidence": 0.9,
+            "evidence_text": "待一周",
+        }],
+        parse_source="llm",
+    )
+    calls = _patch_turn_decision(monkeypatch, decision, status="ok")
     from backend.travel.slot_filler import slot_filler_node
 
     result = slot_filler_node({"user_message": "去福州待一周"})
+    assert len(calls) == 1
     assert result["brief"]["days"] == 7
     assert result["brief_missing"] == []
     assert result["clarifications"] == []
@@ -313,19 +348,19 @@ def test_enrichment_fills_days_end_to_end(monkeypatch, _flag_on):
 
 def test_enrichment_never_overrides_rule_end_to_end(monkeypatch, _flag_on):
     """规则 days=3 + LLM days=5 → 3（Golden L 端到端）；且富化根本不触发。"""
-    calls: list[list[str]] = []
+    from backend.travel.core.intent import TravelTurnDecision
 
-    def _fake(message, *, missing_slots, timeout_ms=None):
-        calls.append(list(missing_slots))
-        return SlotEnrichmentOutcome(
-            candidates=[SlotCandidate(slot="days", value=5, confidence=0.99)],
-            status="ok")
-
-    from backend.travel.services import llm_slot_enrichment_service as mod
-
-    monkeypatch.setattr(mod, "enrich_slots", _fake)
+    decision = TravelTurnDecision(
+        primary_action="create_plan",
+        brief_candidates=[{
+            "slot": "days", "value": 5, "confidence": 0.99,
+            "evidence_text": "规则不得被覆盖",
+        }],
+        parse_source="llm",
+    )
+    calls = _patch_turn_decision(monkeypatch, decision, status="ok")
     from backend.travel.slot_filler import slot_filler_node
 
     result = slot_filler_node({"user_message": "福州3天"})
-    assert calls == []  # 规则完整命中，富化入口未触发
+    assert calls == []  # 规则完整命中，统一理解入口未触发
     assert result["brief"]["days"] == 3

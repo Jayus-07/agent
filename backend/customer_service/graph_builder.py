@@ -70,11 +70,18 @@ def cs_state_loader_node(state: dict[str, Any]) -> dict[str, Any]:
         "handoff_state": snapshot.get("handoff_state", "ai_active"),
         "confirmation_state": snapshot.get("confirmation_state", "not_required"),
         "pending_action": snapshot.get("pending_action"),
+        # 只读分流是单轮策略，不得沿 checkpoint 泄漏到下一条用户消息。
+        "pending_turn_decision": None,
+        "pending_turn_expert_consumed": False,
+        "pending_turn_slot_fill": False,
         "expert_history": [],
         "last_expert_result": {},
         "expert_loop_count": 0,
         "supervisor_decision": {},
         "current_expert": "",
+        "task_cursor": 0,
+        "task_results": [],
+        "current_task": None,
     }
 
 

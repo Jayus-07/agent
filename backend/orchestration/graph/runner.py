@@ -461,7 +461,8 @@ class GraphRunner:
                 _funnel_note_resolved(clarify_click, message, session_id=session_id)
                 # 拦截提示非模型回答，归因=系统提示（前端标「系统提示」徽章）
                 yield make_done_event(message, {}, start_time,
-                                      reply_source="system_notice")
+                                      reply_source="system_notice",
+                                      answer_source="input_guard")
                 return
 
         # ── CS 窗口业务门禁：全局 Guard 放行后、域检测/子图之前 ──
@@ -492,7 +493,8 @@ class GraphRunner:
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
                 _funnel_note_resolved(clarify_click, message, session_id=session_id)
                 yield make_done_event(message, {}, start_time,
-                                      reply_source="system_notice")
+                                      reply_source="system_notice",
+                                      answer_source="cs_input_guard")
                 return
 
         # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
@@ -587,7 +589,8 @@ class GraphRunner:
                 _funnel_note_resolved(clarify_click, message, session_id=session_id)
                 # 澄清追问是系统发起的引导语，非模型回答
                 yield make_done_event(message, {}, start_time,
-                                      reply_source="system_notice")
+                                      reply_source="system_notice",
+                                      answer_source="follow_up_resolver")
                 _end_root(trace, status="success",
                           metrics={"follow_up": "clarified"})
                 trace_collector.finish(
@@ -642,6 +645,7 @@ class GraphRunner:
             deadline=RequestDeadline.started_now())
         ctx = {
             "final_answer": "",
+            "answer_source": "",
             "all_step_results": {},
             "current_plan": dict(initial_state.get("plan", {})),
             "plan_changed": False,
@@ -650,6 +654,7 @@ class GraphRunner:
             "usage": None,
             "aborted": False,       # 用户中止（worker 内检测）
             "worker_error": False,  # 图执行异常（worker 已 yield error 事件）
+            "memory_persisted": False,
         }
         streamed = [False]  # 本轮是否发生过真流式 delta
 
@@ -764,10 +769,16 @@ class GraphRunner:
                             if not isinstance(executor_answer, str):
                                 executor_answer = str(executor_answer)
                             ctx["final_answer"] = executor_answer
+                            ctx["answer_source"] = node_name
                     elif node_name == "reporter":
-                        # reporter 只在 plan 模式下才是最终答案；direct/workflow 已由 executor 产出
-                        if not ctx["final_answer"]:
-                            ctx["final_answer"] = node_output.get("final_answer", "")
+                        # Direct / Workflow 的 reporter 只做确定性业务结果渲染，
+                        # 其输出覆盖 executor 的旧拼接答案；Plan 仍由 reporter 汇总。
+                        reporter_answer = node_output.get("final_answer", "")
+                        if reporter_answer and (
+                                ctx["route_mode"] in {"direct", "workflow"}
+                                or not ctx["final_answer"]):
+                            ctx["final_answer"] = reporter_answer
+                            ctx["answer_source"] = "reporter"
                     elif node_name == "router":
                         # fix f8：捕获路由模式供 trace 拓扑快照使用
                         if node_output.get("route_mode"):
@@ -885,6 +896,10 @@ class GraphRunner:
                 yield evt
 
             # ── 图执行结束后的收尾 ──
+            # abort 可能发生在图已产出答案、但 Runner 尚未发 done 的窗口；
+            # 此时取消优先，避免把未完成的本轮写入 Memory。
+            if stop_event is not None and stop_event.is_set():
+                ctx["aborted"] = True
             if ctx["aborted"]:
                 yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
                 # STOP CS-A P0-3/F4：trace 终态 = cancelled（cancel_source= user）
@@ -898,6 +913,11 @@ class GraphRunner:
             # 两轨统一：正常完成但无最终回答时，用 step_results 兜底汇总
             if not answer:
                 answer = _fallback_summary_from_results(ctx["all_step_results"])
+            if answer:
+                # canonical answer 的唯一快照同时供 Trace、Memory、done 使用。
+                ctx["final_answer"] = answer
+                if not ctx["answer_source"]:
+                    ctx["answer_source"] = "step_results"
 
             # 未发生过真流式输出 → 兜底假打字机（guard/降级/非 LLM 路径仍有增量呈现）
             if fallback_deltas and not streamed[0] and answer:
@@ -918,6 +938,10 @@ class GraphRunner:
                 "route_mode": ctx["route_mode"],   # fix f8
                 "cs_context": ctx["cs_context_snapshot"],
             }
+            trace.tags["answer_source"] = ctx["answer_source"] or "unknown"
+            trace.tags["delta_source"] = (
+                "llm_stream" if streamed[0] else "runner_fallback"
+            )
             trace_from_state(trace, state_for_trace)
             _finalize_trace("success", {"span_count": len(trace.spans) - 1},
                             answer=answer)
@@ -926,6 +950,19 @@ class GraphRunner:
                 ctx["cs_context_snapshot"], session_id, question, answer, trace.id,
                 tenant_id=tenant_id,
             )
+
+            # 只在成功路径持久化一次。断连续传由 chat.py 重放同一流，不会
+            # 重跑 Runner；中止/超时/异常在到达此处前退出，因此不写错误答案。
+            if (answer and not ctx["memory_persisted"]
+                    and not ctx["cs_context_snapshot"].get("conversation_id")):
+                ctx["memory_persisted"] = True
+                try:
+                    self._memory.end_turn(
+                        session_id, question, answer,
+                        user_id=user_id, tenant_id=tenant_id,
+                    )
+                except Exception:
+                    logger.warning("[GraphRunner] Memory end_turn 写入失败", exc_info=True)
 
             # 内部事件：ask() 从这里取最终回答（SSE 层过滤）
             yield {"event": _ANSWER_EVENT, "data": {"answer": answer}}
@@ -954,7 +991,9 @@ class GraphRunner:
                                   usage=ctx["usage"],
                                   pending_action=ctx.get("cs_pending_action"),
                                   trace_id=trace.id,
-                                  context_usage=context_usage)
+                                  context_usage=context_usage,
+                                  include_pending_action="cs_pending_action" in ctx,
+                                  answer_source=ctx.get("answer_source") or "unknown")
 
         except GeneratorExit:
             # 消费方关闭生成器（客户端断连 / 用户中止后前端停止拉流）：
@@ -977,16 +1016,6 @@ class GraphRunner:
             yield {"event": "error",
                    "data": {"message": f"执行失败: {e}\n{_tb_tail}", "ts": time.time()}}
             _finalize_trace("error", {"error": str(e)[:100]})
-        finally:
-            # 中止/早期失败路径 final_answer 为空：不落库，避免历史恢复时出现空气泡
-            # CS 轮次不落主库：客服域已由 _persist_cs_turn_if_needed 独家落库
-            # （customer_service.conversations/messages），再写 chat_sessions 会让
-            # 客服会话泄漏进主历史侧栏（「我想转接人工客服」混入任务列表的根因）
-            if ctx["final_answer"] and not (
-                ctx["cs_context_snapshot"].get("conversation_id")
-            ):
-                self._memory.end_turn(session_id, question, ctx["final_answer"],
-                                      user_id=user_id, tenant_id=tenant_id)
 
 
 # =====================================================
@@ -1144,20 +1173,12 @@ def _end_root(trace, output: dict = None, metrics: dict = None,
 
 
 def _fallback_summary_from_results(step_results: dict) -> str:
-    """final_answer 为空时，用 step_results 兜底汇总（原 ask._fallback_summary）。"""
-    lines = ["## 执行结果", ""]
-    for step_id, sr in sorted(step_results.items()):
-        status = sr.get("status", "?")
-        desc = sr.get("description", step_id)
-        if status == "success":
-            lines.append(f"### {desc}")
-            lines.append(str(sr.get("output", "")))
-            lines.append("")
-        elif status == "failed":
-            lines.append(f"### {desc} ❌")
-            lines.append(f"失败: {sr.get('error', '')}")
-            lines.append("")
-    return "\n".join(lines) if len(lines) > 2 else "## 无结果\n\n未能获取任何有效数据。"
+    """无最终答案时复用 Reporter 的纯规则渲染，避免 dict/异常原文外泄。"""
+    from backend.agents.reporter.reporter import render_step_results_deterministically
+
+    if not step_results:
+        return "## 无结果\n\n未能获取任何有效数据。"
+    return render_step_results_deterministically(step_results)
 
 
 def _count_rounds_from_results(step_results: dict) -> int:

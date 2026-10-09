@@ -31,6 +31,8 @@ from backend.customer_service.understanding.llm_slot_enrichment import (
     intent_wants_slots,
     llm_slot_candidates,
 )
+from backend.customer_service.understanding.task_plan import build_rule_task_plan
+from backend.customer_service.understanding.validator import validate_task_plan_candidate
 from backend.shared.logger import logger
 
 # semantic_slots 在 metadata 中的键名（专家层消费方：experts/action.py、
@@ -98,8 +100,22 @@ def enrich_semantic_understanding(cs_route: dict, query: str) -> CSUnderstanding
 
     result = CSUnderstandingResult(source=CSUnderstandingSource.UNCHANGED)
 
+    # 该小型复合场景由有限规则生成候选计划，执行仍受 Supervisor 条件门
+    # 与 ActionExpert 双重校验；不额外调用 LLM 或查询业务数据。
+    plan_candidate = validate_task_plan_candidate(
+        build_rule_task_plan(query),
+    )
+    if plan_candidate is not None:
+        metadata["task_plan_candidate"] = plan_candidate
+        metadata["task_plan_source"] = "rule_candidate"
+        result.task_plan_candidate = plan_candidate
+        result.task_plan_source = "rule_candidate"
+
     if not CS_UNDERSTANDING_LLM_ENABLED:
         _metrics_inc("cs_understanding_llm_total", "disabled")
+        if plan_candidate is not None:
+            result.source = CSUnderstandingSource.RULE
+            tag_trace(**result.to_trace_fields())
         return result
 
     # ── 1. 意图补判（rule miss / 低置信才触发）────────────────────

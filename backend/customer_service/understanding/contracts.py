@@ -73,6 +73,8 @@ class CSUnderstandingResult(BaseModel):
     requires_clarification: bool = False
     source: CSUnderstandingSource = CSUnderstandingSource.UNCHANGED
     confidence: float = 0.0
+    task_plan_candidate: Optional[dict[str, Any]] = None
+    task_plan_source: Optional[str] = None
 
     def to_trace_fields(self) -> dict[str, Any]:
         """trace/metrics 低基数字段（不含用户原文与槽位值本身）。"""
@@ -81,4 +83,8 @@ class CSUnderstandingResult(BaseModel):
             "cs_llm_intent_used": bool(self.intent_candidate),
             "cs_llm_slot_used": bool(self.slots),
             "cs_llm_slot_candidate_count": len(self.slots),
+            "cs_task_plan_source": self.task_plan_source or "",
+            "cs_task_count": len(
+                (self.task_plan_candidate or {}).get("tasks") or []
+            ),
         }

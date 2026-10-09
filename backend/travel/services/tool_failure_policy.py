@@ -37,7 +37,11 @@ from typing import Any, Callable, TypeVar
 
 from backend.core.tool_runtime.models import ToolCriticality, ToolResult, ToolStatus
 from backend.shared.logger import logger
-from backend.travel.core.events import emit_travel_event, run_travel_tool
+from backend.travel.core.events import (
+    emit_travel_event,
+    new_tool_call_id,
+    run_travel_tool,
+)
 from backend.travel.services.live_search_service import LiveSearchError
 
 _T = TypeVar("_T")
@@ -161,6 +165,7 @@ def run_checked(
     *,
     provider: str,
     dependency: ToolCriticality,
+    task_id: str = "",
     result_summary: Callable[[Any], dict] | None = None,
     constraint_hint: str = "",
 ) -> tuple[_T | None, ToolResult]:
@@ -182,7 +187,10 @@ def run_checked(
     check = _import_check_run()
     check()
     started_at = time.monotonic()
-    emit_travel_event("tool.started", agent=agent, tool=tool)
+    call_fields = {"tool_call_id": new_tool_call_id()}
+    if task_id:
+        call_fields["task_id"] = str(task_id)[:64]
+    emit_travel_event("tool.started", agent=agent, tool=tool, **call_fields)
     try:
         value = fn()
         check()
@@ -190,7 +198,8 @@ def run_checked(
         duration_ms = round((time.monotonic() - started_at) * 1000)
         return None, _resolve_failure(
             tool, agent, provider, dependency, exc,
-            duration_ms=duration_ms, constraint_hint=constraint_hint)
+            duration_ms=duration_ms, constraint_hint=constraint_hint,
+            call_fields=call_fields)
     # 内部异常（含 CancelledError 语义上抛）：不 catch，让
     # run_expert_safely 按「系统自身不能正确规划」收口为 failed。
     duration_ms = round((time.monotonic() - started_at) * 1000)
@@ -200,7 +209,8 @@ def run_checked(
             fields.update(result_summary(value))
         except Exception:  # noqa: BLE001 — 摘要失败不改变真实 Tool 结果
             fields["summary_status"] = "unavailable"
-    emit_travel_event("tool.result", agent=agent, tool=tool, **fields)
+    emit_travel_event(
+        "tool.result", agent=agent, tool=tool, **call_fields, **fields)
     return value, ToolResult(
         status=ToolStatus.SUCCESS, tool_name=tool, latency_ms=duration_ms,
         data=value, criticality=dependency,
@@ -216,18 +226,21 @@ def _resolve_failure(
     *,
     duration_ms: int,
     constraint_hint: str,
+    call_fields: dict[str, str] | None = None,
 ) -> ToolResult:
     """外部数据源失败的域内裁决：DEGRADED 继续 / BLOCKED 终止。"""
     if dependency is ToolCriticality.REQUIRED:
         message = blocked_disclosure(provider, constraint_hint)
         emit_travel_event(
-            "tool.result", agent=agent, tool=tool, status="blocked",
+            "tool.result", agent=agent, tool=tool,
+            **(call_fields or {}), status="blocked",
             error_type=type(exc).__name__,
             user_message=message, data_status="unavailable",
             duration_ms=duration_ms,
         )
         emit_travel_event(
-            "tool.blocked", agent=agent, tool=tool, provider=provider,
+            "tool.blocked", agent=agent, tool=tool,
+            **(call_fields or {}), provider=provider,
             dependency_level=dependency.value, user_message=message,
         )
         result = ToolResult(
@@ -243,12 +256,14 @@ def _resolve_failure(
 
     message = realtime_disclosure(provider)
     emit_travel_event(
-        "tool.result", agent=agent, tool=tool, status="degraded",
+        "tool.result", agent=agent, tool=tool,
+        **(call_fields or {}), status="degraded",
         error_type=type(exc).__name__, user_message=message,
         data_status="unavailable", duration_ms=duration_ms,
     )
     emit_travel_event(
-        "tool.degraded", agent=agent, tool=tool, provider=provider,
+        "tool.degraded", agent=agent, tool=tool,
+        **(call_fields or {}), provider=provider,
         dependency_level=dependency.value, user_message=message,
     )
     logger.warning("[TravelFailurePolicy] %s（%s）降级继续: %s", tool,

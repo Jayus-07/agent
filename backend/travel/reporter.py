@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from backend.shared.logger import logger
 from backend.travel.graph_state import (
     build_travel_context,
@@ -17,9 +19,7 @@ from backend.travel.graph_state import (
     load_itinerary,
     load_validation,
 )
-from backend.travel.models.itinerary import KIND_MEAL
 from backend.travel.models.poi import CATEGORY_MEAL, PLAYABLE_MEAL_MARKERS, source_provider
-from backend.travel.planning import names_match
 
 # 数据来源标识 → 面向用户的说明。
 # **新增数据源必须在此登记**，否则用户会看到「tencent:lbs — tencent:lbs」
@@ -173,6 +173,9 @@ def _answer_static(state: dict) -> str:
 
 def _answer_dynamic(state: dict) -> str:
     """QUERY_DYNAMIC：实时状态无可靠来源 → 如实告知（v3 §2.1 优先级 2）。"""
+    task_lines = _render_auxiliary_task_results(state)
+    if task_lines:
+        return "\n".join(task_lines)
     brief = load_brief(state)
     destination = (state.get("query_destination") or brief.destination or "").strip()
     dest_label = destination or "目的地"
@@ -185,6 +188,100 @@ def _answer_dynamic(state: dict) -> str:
         f"我能帮上的：规划一份{dest_label}的行程（说「做一份{dest_label} N 天行程」），"
         "行程里的门票与开放时段会如实标注数据状态，不编数字。"
     )
+
+
+def _render_auxiliary_task_results(
+    state: dict,
+    *,
+    omit_train: bool = False,
+) -> list[str]:
+    """只渲染本轮任务节点记录的结果，不从状态补造实时事实。"""
+    results = [
+        item for item in (state.get("task_results") or [])
+        if isinstance(item, dict)
+        and not (omit_train and item.get("type") == "query_train")
+    ]
+    if not results:
+        return []
+
+    lines = ["## 附加查询结果", ""]
+    titles = {
+        "query_train": "车次查询",
+        "query_weather": "天气查询",
+        "query_poi": "景点查询",
+        "query_hotel": "酒店查询",
+    }
+    for item in results:
+        task_type = str(item.get("type") or "")
+        params = item.get("params") or {}
+        subject = str(
+            params.get("city") or params.get("destination") or ""
+        ).strip()
+        title = titles.get(task_type, "查询")
+        lines.append(f"### {title}{f'：{subject}' if subject else ''}")
+        status = str(item.get("status") or "")
+        data_status = str(item.get("data_status") or "")
+        if status == "degraded":
+            lines.append(f"- {item.get('message') or '实时数据源暂时不可用。'}")
+        elif status == "needs_clarification":
+            lines.append(f"- {item.get('message') or '还需要补充查询条件。'}")
+        elif status in {"rejected", "skipped_limit"}:
+            lines.append(f"- {item.get('message') or '本次查询未执行。'}")
+        elif data_status == "empty":
+            lines.append("- 暂未查到结果。")
+        elif status == "success" and task_type == "query_train":
+            lines.extend(
+                f"- {line}" for line in _answer_transit_query(state).splitlines()
+                if line.strip()
+            )
+        elif status == "success":
+            preview = (item.get("data") or {}).get("preview") or []
+            if task_type == "query_weather":
+                for forecast in preview[:5]:
+                    if not isinstance(forecast, dict):
+                        continue
+                    date_label = str(forecast.get("date") or "").strip()
+                    weather = str(forecast.get("weather") or "").strip()
+                    detail = "，".join(x for x in (date_label, weather) if x)
+                    if detail:
+                        lines.append(f"- {detail}")
+                if not preview:
+                    lines.append("- 已查询，但没有可展示的预报条目。")
+            else:
+                shown = 0
+                for place in preview[:6]:
+                    if not isinstance(place, dict):
+                        continue
+                    name = str(place.get("name") or place.get("title") or "").strip()
+                    if not name:
+                        continue
+                    details = [
+                        str(place.get("rating") or "").strip(),
+                        str(place.get("address") or "").strip(),
+                    ]
+                    tail = f"（{' · '.join(value for value in details if value)}）" if any(details) else ""
+                    lines.append(f"- **{name}**{tail}")
+                    shown += 1
+                if not shown:
+                    lines.append("- 已查询，但没有可展示的地点条目。")
+        else:
+            lines.append("- 查询结果不可用。")
+        lines.append("")
+    return lines
+
+
+def _append_auxiliary_task_results(
+    answer: str,
+    state: dict,
+    *,
+    omit_train: bool = False,
+) -> str:
+    """把独立任务结果附加到问答或行程回复，不改写主任务结论。"""
+    task_lines = _render_auxiliary_task_results(state, omit_train=omit_train)
+    if not task_lines:
+        return answer
+    task_text = "\n".join(task_lines).strip()
+    return f"{answer.rstrip()}\n\n{task_text}"
 
 
 def _parse_duration_minutes(duration: str) -> int:
@@ -217,7 +314,7 @@ def _render_seat_summary(seats: dict, limit: int = 3) -> str:
 def _answer_transit_query(state: dict) -> str:
     """QUERY_TRANSIT：车票查询直出（2026-10-08 #2）。
 
-    数据全部来自 slot 层预取的 state["transit_query"]，本函数只做渲染
+    数据全部来自附加任务节点写入的 state["transit_query"]，本函数只做渲染
     与排序，不发起网络请求；缺出发地/目的地不猜，带可解析的示例追问。
     """
     info = state.get("transit_query") or {}
@@ -293,15 +390,83 @@ def _answer_modify() -> str:
     )
 
 
+def _answer_read_only_qa(state: dict) -> str:
+    """依据服务端版本账本中的行程事实，回答草案问答，不触发行程输出。"""
+    itinerary = load_itinerary(state)
+    if itinerary is None:
+        return "当前没有可读取的正式行程或待确认草案；你可以先生成一份行程。"
+
+    version = itinerary.plan_version
+    question = str(state.get("user_message") or "")
+    if re.search(r"预算|花费|费用|价格|多少钱|总价|总额|成本", question):
+        cost = itinerary.cost
+        budget = itinerary.brief.budget_cny
+        budget_text = f"；预算上限 ¥{budget:.0f}" if budget is not None else ""
+        return (
+            f"草案 v{version} 的行程费用估算合计约 ¥{cost.total:.0f}："
+            f"门票 ¥{cost.tickets:.0f}、餐饮 ¥{cost.meals:.0f}、住宿 ¥{cost.lodging:.0f}、"
+            f"交通 ¥{cost.transit:.0f}{budget_text}。这是行程估算，不是实时报价。"
+        )
+
+    if re.search(r"为什么|为何|理由|原因|怎么安排", question):
+        day_match = re.search(r"第([一二两三四五六七八九十\d]+)天", question)
+        day_numbers = {
+            "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+        }
+        requested_day = None
+        if day_match:
+            token = day_match.group(1)
+            try:
+                requested_day = int(token)
+            except ValueError:
+                requested_day = day_numbers.get(token)
+        days = itinerary.days
+        if requested_day is not None:
+            days = [day for day in days if day.day_index == requested_day]
+        else:
+            days = days[:2]
+        if not days:
+            return f"草案 v{version} 没有第 {requested_day} 天的安排记录。"
+        day_summaries = []
+        for day in days:
+            items = []
+            for item in day.items[:4]:
+                line = f"{item.title}（{item.start}–{item.end}）"
+                if item.note:
+                    line += f"：{item.note}"
+                items.append(line)
+            if items:
+                day_summaries.append(f"第 {day.day_index} 天：{'；'.join(items)}")
+        pace = itinerary.brief.pace_label()
+        if day_summaries:
+            return (
+                f"草案 v{version}按{pace}节奏安排；"
+                f"{'。'.join(day_summaries)}。以上依据草案中记录的时段与备注，"
+                "未记录的取舍原因我不会补猜。"
+            )
+        return f"草案 v{version}未记录具体日程备注，暂时无法说明更细的安排原因。"
+
+    brief = itinerary.brief
+    return (
+        f"当前参考的是草案 v{version}：{brief.destination}、{len(itinerary.days)} 天、"
+        f"{brief.pace_label()}节奏。可以继续问预算估算、某一天的安排原因或某个景点。"
+    )
+
+
 def travel_reporter_node(state: dict) -> dict:
     """行程单节点。"""
-    answer = _assemble(state)
+    template_answer = _assemble(state)
+    from backend.travel.services.reporter_renderer import render_travel_reply
+
+    answer, reporter_meta = render_travel_reply(state, template_answer)
     _stamp_plan_run(state)
     logger.info("[TravelReporter] final_answer length=%d", len(answer))
     return {
         "final_answer": answer,
         "travel_context": build_travel_context(state),
         "rationale": _build_rationale(state),
+        "reporter_meta": reporter_meta,
     }
 
 
@@ -422,10 +587,14 @@ def _stamp_plan_run(state: dict) -> None:
 
 
 def _assemble(state: dict) -> str:
+    def _with_tasks(answer: str, *, omit_train: bool = False) -> str:
+        return _append_auxiliary_task_results(
+            answer, state, omit_train=omit_train)
+
     partial_result = state.get("partial_replan_result") or {}
     if partial_result.get("validation_failed"):
         # 硬约束失败时不能把旧草案包装成「已经全部安排好了」。
-        return (
+        return _with_tasks(
             "这次局部修改不能全部满足，未生成假成功的方案：\n\n"
             f"- {partial_result.get('message') or '存在未满足的硬约束'}\n"
             "- 当前保留原行程；请减少地点数量、拆分到多天，或告诉我接受哪些取舍。"
@@ -435,23 +604,30 @@ def _assemble(state: dict) -> str:
     #    抽得到目的地、缺天数，落到追问分支就变成了「误规划」。
     intent = state.get("intent") or ""
     if intent == "social":
-        return _answer_social()
+        return _with_tasks(_answer_social())
     if intent == "meta":
-        return _answer_meta()
+        return _with_tasks(_answer_meta())
     if intent == "out_of_scope":
-        return _answer_out_of_scope()
+        return _with_tasks(_answer_out_of_scope())
+    if intent == "read_only_blocked":
+        return (
+            "当前有待确认草案，这一轮只回答问题，不会修改或应用行程。"
+            "如需修改，请先应用或放弃草案。"
+        )
+    if intent == "read_only_qa":
+        return _with_tasks(_answer_read_only_qa(state))
     if intent == "query_static":
-        return _answer_static(state)
+        return _with_tasks(_answer_static(state))
     if intent == "query_dynamic":
         return _answer_dynamic(state)
     if intent == "query_transit":
-        return _answer_transit_query(state)
+        return _with_tasks(_answer_transit_query(state), omit_train=True)
     if intent == "discover":
-        return _answer_discover(state)
+        return _with_tasks(_answer_discover(state))
     # 局部改单成功后继续渲染新草案；只有未识别为结构化局部修改的
     # 存量改单请求才走旧的兜底提示，避免把已完成的修改说成仍在建设中。
     if intent == "modify" and partial_result.get("status") != "applied":
-        return _answer_modify()
+        return _with_tasks(_answer_modify())
 
     brief = load_brief(state)
 
@@ -464,14 +640,15 @@ def _assemble(state: dict) -> str:
     if state.get("brief_missing"):
         existing = (state.get("clarifications") or [""])[0]
         if existing:
-            return existing
+            return _with_tasks(existing)
         from backend.travel.services.clarification_service import (
             build_clarification_plan,
             render_template,
         )
 
         plan = build_clarification_plan(brief, state.get("user_message", ""))
-        return render_template(plan) if plan is not None else ""
+        return _with_tasks(
+            render_template(plan) if plan is not None else "")
 
     # 1.5) Hard Dependency BLOCKED（2026-10-07 容错契约）：硬依赖无法验证
     # 时如实说明为什么不继续，绝不输出「假装满足约束」的方案，也绝不把
@@ -485,7 +662,7 @@ def _assemble(state: dict) -> str:
             f"目前无法验证满足约束的实时信息（{reason or '数据源不可用'}），"
             "因此没有继续生成可能不成立的方案。"
         )
-        return (
+        return _with_tasks(
             f"{body}\n\n"
             "可以稍后重试，或去掉该硬约束后让我重新规划。"
         )
@@ -494,7 +671,7 @@ def _assemble(state: dict) -> str:
     if not state.get("candidates"):
         notes = state.get("notes", [])
         detail = ("\n".join(f"- {n}" for n in notes)) if notes else ""
-        return (
+        return _with_tasks(
             f"暂时无法为「{brief.destination}」规划行程：当前没有该城市的地点数据。\n\n"
             f"{detail}\n\n"
             "可以换一个目的地，或等数据源接入后再试。"
@@ -502,11 +679,11 @@ def _assemble(state: dict) -> str:
 
     itinerary = load_itinerary(state)
     if itinerary is None:
-        return (
+        return _with_tasks(
             "行程未能生成（排程阶段未产出结果），请补充或调整需求后重试。"
         )
 
-    return _render_itinerary(state, itinerary)
+    return _with_tasks(_render_itinerary(state, itinerary))
 
 
 def _render_rationale(state: dict, itinerary) -> list[str]:

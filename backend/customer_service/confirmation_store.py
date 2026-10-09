@@ -119,7 +119,8 @@ async def _raise_on_in_doubt_ledger(repo, identity) -> None:
 
 async def _update_with_guard(db, repo, confirmation_id: str,
                              pending_action: dict, *, tenant_id: str,
-                             fingerprint: str | None) -> None:
+                             fingerprint: str | None,
+                             proposal_version: int | None = None) -> None:
     """proposal 覆盖 + 身份原子刷新（D19）；身份变更撞唯一索引 → 冲突（D20）。
 
     begin_nested：IntegrityError 只回滚内层 savepoint，外层事务
@@ -127,10 +128,15 @@ async def _update_with_guard(db, repo, confirmation_id: str,
     """
     try:
         async with db.begin_nested():
-            await repo.update_proposal(
+            updated = await repo.update_proposal(
                 confirmation_id, pending_action,
                 tenant_id=tenant_id, semantic_fingerprint=fingerprint,
+                proposal_version=proposal_version,
             )
+            if not updated and proposal_version is not None:
+                raise StoreWriteError(
+                    "ConfirmationStore", "update_proposal_version_conflict",
+                )
     except IntegrityError as exc:
         logger.info(
             "[BusinessGuard] proposal-update collision on %s (D20)", confirmation_id)
@@ -207,6 +213,27 @@ class ConfirmationStore:
                 self._data[(user_id, session_id)] = db_data
         return db_data
 
+    def load_authoritative(
+        self, user_id: str, session_id: str, tenant_id: str,
+    ) -> dict | None:
+        """只从租户绑定的 PostgreSQL 读取有效 Proposal，不读 L1。"""
+        if not tenant_id:
+            raise StoreWriteError("ConfirmationStore", "authoritative_load")
+        try:
+            pending = self._db_load_authoritative(user_id, session_id, tenant_id)
+        except Exception as exc:
+            logger.error(
+                "[ConfirmationStore] authoritative load failed: %s", exc,
+                exc_info=True,
+            )
+            raise StoreWriteError(
+                "ConfirmationStore", "authoritative_load",
+            ) from exc
+        if pending is not None:
+            with self._lock:
+                self._data[(user_id, session_id)] = pending
+        return pending
+
     def peek_l1(self, user_id: str, session_id: str) -> dict | None:
         """P3.5：纯内存直读（无 DB 桥接）——供已运行在 _db_loop 线程的
         async 代码调用（嵌套 run_sync 会自死锁，见 state_transition）。
@@ -224,10 +251,13 @@ class ConfirmationStore:
              tenant_id: str = "") -> None:
         # PostgreSQL 是确认状态的唯一事实源：只有持久化成功后才能更新
         # L1，否则后续 claim 可能把未落库的动作当成可执行状态。
-        if self._db_save(user_id, session_id, pending_action, tenant_id=tenant_id):
+        pending = dict(pending_action)
+        pending.setdefault("proposal_id", pending.get("action_id", ""))
+        pending["version"] = int(pending.get("version", 1) or 1)
+        if self._db_save(user_id, session_id, pending, tenant_id=tenant_id):
             with self._lock:
                 self._claimed_l1.discard((user_id, session_id))
-                self._data[(user_id, session_id)] = pending_action
+                self._data[(user_id, session_id)] = pending
 
     def clear(self, user_id: str, session_id: str, *, final_state: str = "cancelled") -> None:
         """清除 pending 并把 DB 行置为终态。
@@ -239,7 +269,16 @@ class ConfirmationStore:
             with self._lock:
                 self._data.pop((user_id, session_id), None)
 
-    def claim_for_execution(self, user_id: str, session_id: str) -> str | None:
+    def claim_for_execution(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        tenant_id: str = "",
+        proposal_id: str = "",
+        expected_version: int | None = None,
+        client_action_id: str | None = None,
+    ) -> str | None:
         """原子认领待确认动作（幂等闸门，P1）。
 
         DB 侧单条条件 UPDATE pending→confirmed：并发重复确认只有一方成功。
@@ -252,12 +291,23 @@ class ConfirmationStore:
             if key in self._claimed_l1:
                 return None
         try:
-            claimed_id = self._db_claim(user_id, session_id)
+            claimed_id = self._db_claim(
+                user_id,
+                session_id,
+                tenant_id=tenant_id,
+                proposal_id=proposal_id,
+                expected_version=expected_version,
+                client_action_id=client_action_id,
+            )
             if claimed_id is not None:
                 # DB 认领成功 → 移除 L1 pending 条目
                 with self._lock:
                     self._data.pop(key, None)
                 return claimed_id
+            if _strict_writes():
+                # PostgreSQL 是副作用认领的唯一事实源；strict 模式下
+                # DB 无行不能把进程缓存提升为可执行授权。
+                return None
             # DB 确认无行（可能是 save 降级未落库）→ 回退 L1 认领。
             # L1 pop 原子，单进程内幂等保持；DB 有行时走 DB 闸门
             # （多实例安全），两分支都只认领一次。
@@ -304,6 +354,12 @@ class ConfirmationStore:
             )
             return None
 
+    def _db_load_authoritative(
+        self, user_id: str, session_id: str, tenant_id: str,
+    ) -> dict | None:
+        from backend.customer_service._db_loop import run_sync
+        return run_sync(self._async_load(user_id, session_id, tenant_id=tenant_id))
+
     def _db_save(self, user_id: str, session_id: str, pending_action: dict,
                  tenant_id: str = "") -> bool:
         try:
@@ -340,9 +396,36 @@ class ConfirmationStore:
             _db_write_failed("ConfirmationStore", "clear", exc)
             return False
 
-    def _db_claim(self, user_id: str, session_id: str) -> str | None:
+    def cancel_pending(
+        self, user_id: str, session_id: str, *, tenant_id: str,
+        proposal_id: str, expected_version: int,
+        client_action_id: str | None = None,
+    ) -> bool:
+        """按 Proposal 版本执行条件取消；数据库故障时返回失败并保留状态。"""
+        try:
+            from backend.customer_service._db_loop import run_sync
+            result = run_sync(self._async_cancel_pending(
+                user_id, session_id, tenant_id, proposal_id, expected_version,
+                client_action_id,
+            ))
+        except Exception as exc:
+            _db_write_failed("ConfirmationStore", "versioned_cancel", exc)
+            raise StoreWriteError("ConfirmationStore", "versioned_cancel") from exc
+        if result:
+            with self._lock:
+                self._data.pop((user_id, session_id), None)
+        return result
+
+    def _db_claim(
+        self, user_id: str, session_id: str, *, tenant_id: str = "",
+        proposal_id: str = "", expected_version: int | None = None,
+        client_action_id: str | None = None,
+    ) -> str | None:
         from backend.customer_service._db_loop import run_sync
-        return run_sync(self._async_claim(user_id, session_id))
+        return run_sync(self._async_claim(
+            user_id, session_id, tenant_id=tenant_id, proposal_id=proposal_id,
+            expected_version=expected_version, client_action_id=client_action_id,
+        ))
 
     def _db_has_pending(self, user_id: str) -> bool:
         try:
@@ -353,15 +436,22 @@ class ConfirmationStore:
             return False
 
     @staticmethod
-    async def _async_load(user_id: str, session_id: str) -> dict | None:
+    async def _async_load(
+        user_id: str, session_id: str, *, tenant_id: str | None = None,
+    ) -> dict | None:
         from backend.customer_service.repository import ConfirmationRepository
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
             repo = ConfirmationRepository(db)
-            row = await repo.load(user_id, session_id)
+            row = await repo.load(user_id, session_id, tenant_id=tenant_id)
             if row is not None:
-                return row.proposal
+                pending = dict(row.proposal)
+                pending["proposal_id"] = row.confirmation_id
+                pending["version"] = row.proposal_version
+                pending["tenant_id"] = row.tenant_id or ""
+                pending["expires_at"] = row.expires_at.isoformat()
+                return pending
             return None
 
     @staticmethod
@@ -397,6 +487,9 @@ class ConfirmationStore:
                 "[BusinessGuard] 身份缺失（非严格模式放行占位行）: %s",
                 pending_action.get("action_type", ""),
             )
+        trusted_tenant_id = (
+            identity.tenant_id if identity is not None else (tenant_id or "")
+        )
 
         async with AsyncSessionLocal() as db:
             # FK 生命周期（缺陷6.5，2026-09-23）：confirmations.conversation_id
@@ -413,9 +506,16 @@ class ConfirmationStore:
             try:
                 async with db.begin_nested():
                     # STOP CS-A P0-2：会话行 tenant 与确认链路同源显式传递
-                    await conv_mgr.get_or_create(
+                    conversation, _created = await conv_mgr.get_or_create(
                         session_id, user_id, tenant_id=tenant_id,
                     )
+                    if (
+                        conversation.user_id != user_id
+                        or (tenant_id and conversation.tenant_id != tenant_id)
+                    ):
+                        raise StoreWriteError(
+                            "ConfirmationStore", "conversation_identity_mismatch",
+                        )
                     await db.flush()
             except IntegrityError:
                 logger.info(
@@ -423,7 +523,9 @@ class ConfirmationStore:
                     "committed row: session=%s", session_id)
 
             repo = ConfirmationRepository(db)
-            existing = await repo.load(user_id, session_id)
+            existing = await repo.load(
+                user_id, session_id, tenant_id=tenant_id or None,
+            )
             if existing is not None:
                 # 已有 pending 行（need_info 升级为正式 proposal、reask 更新
                 # retry_count）：整行覆盖 proposal JSON。此前只 update_state
@@ -447,10 +549,14 @@ class ConfirmationStore:
                             existing.confirmation_id if exclude_self else ""),
                         completed_message="该业务操作已提交成功，不允许重复发起。",
                     )
+                proposal_version = existing.proposal_version + 1
+                pending_action["proposal_id"] = existing.confirmation_id
+                pending_action["version"] = proposal_version
                 await _update_with_guard(
                     db, repo, existing.confirmation_id, pending_action,
-                    tenant_id=identity.tenant_id if identity else "",
+                    tenant_id=trusted_tenant_id,
                     fingerprint=identity.semantic_fingerprint if identity else None,
+                    proposal_version=proposal_version,
                 )
             else:
                 if identity is not None:
@@ -463,9 +569,13 @@ class ConfirmationStore:
                     # Phase2 ledger 留有 UNCERTAIN/running 记录，守卫不得释放
                     await _raise_on_in_doubt_ledger(repo, identity)
                 try:
+                    pending_action.setdefault(
+                        "proposal_id", pending_action.get("action_id", ""),
+                    )
+                    pending_action.setdefault("version", 1)
                     await repo.save(
                         user_id, session_id, pending_action,
-                        tenant_id=identity.tenant_id if identity else "",
+                        tenant_id=trusted_tenant_id,
                         semantic_fingerprint=(
                             identity.semantic_fingerprint if identity else None),
                     )
@@ -489,15 +599,55 @@ class ConfirmationStore:
             await db.commit()
 
     @staticmethod
-    async def _async_claim(user_id: str, session_id: str) -> str | None:
+    async def _async_claim(
+        user_id: str,
+        session_id: str,
+        *,
+        tenant_id: str = "",
+        proposal_id: str = "",
+        expected_version: int | None = None,
+        client_action_id: str | None = None,
+    ) -> str | None:
+        from sqlalchemy.exc import IntegrityError
         from backend.customer_service.repository import ConfirmationRepository
         from backend.memory.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
             repo = ConfirmationRepository(db)
-            claimed_id = await repo.claim_pending(user_id, session_id)
-            await db.commit()
-            return claimed_id
+            try:
+                claimed_id = await repo.claim_pending(
+                    user_id, session_id, tenant_id=tenant_id,
+                    proposal_id=proposal_id, expected_version=expected_version,
+                    client_action_id=client_action_id,
+                )
+                await db.commit()
+                return claimed_id
+            except IntegrityError:
+                await db.rollback()
+                return None
+
+    @staticmethod
+    async def _async_cancel_pending(
+        user_id: str, session_id: str, tenant_id: str,
+        proposal_id: str, expected_version: int, client_action_id: str | None,
+    ) -> bool:
+        from sqlalchemy.exc import IntegrityError
+        from backend.customer_service.repository import ConfirmationRepository
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            repo = ConfirmationRepository(db)
+            try:
+                cancelled = await repo.cancel_pending(
+                    user_id, session_id, tenant_id=tenant_id,
+                    proposal_id=proposal_id, expected_version=expected_version,
+                    client_action_id=client_action_id,
+                )
+                await db.commit()
+                return cancelled
+            except IntegrityError:
+                await db.rollback()
+                return False
 
     @staticmethod
     async def _async_has_pending(user_id: str) -> bool:

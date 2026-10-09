@@ -19,6 +19,7 @@ def test_tool_events_are_delivered_to_the_active_stream_sink() -> None:
             "travel.search_poi",
             "research",
             lambda: [{"poi_id": "p1"}],
+            task_id="poi-task-1",
             result_summary=lambda value: {"result_count": len(value)},
         )
 
@@ -30,6 +31,24 @@ def test_tool_events_are_delivered_to_the_active_stream_sink() -> None:
     assert events[0]["tool"] == "travel.search_poi"
     assert events[1]["status"] == "success"
     assert events[1]["result_count"] == 1
+    assert events[0]["task_id"] == events[1]["task_id"] == "poi-task-1"
+    assert events[0]["tool_call_id"] == events[1]["tool_call_id"]
+    assert events[0]["tool_call_id"].startswith("call-")
+
+
+def test_repeated_same_tool_calls_have_distinct_ids() -> None:
+    events: list[dict] = []
+    with travel_event_scope(events.append):
+        for _ in range(2):
+            run_travel_tool("travel.search_poi", "research", lambda: [])
+
+    call_ids = [event["tool_call_id"] for event in events
+                if event["event"] == "tool.started"]
+    assert len(call_ids) == 2
+    assert len(set(call_ids)) == 2
+    assert [event["tool_call_id"] for event in events] == [
+        call_ids[0], call_ids[0], call_ids[1], call_ids[1],
+    ]
 
 
 def test_tool_failure_is_emitted_and_propagated_without_a_fake_result() -> None:
@@ -79,7 +98,9 @@ def test_plan_stream_exposes_real_tool_events_and_structured_result(
     monkeypatch.setattr(
         "backend.travel.core.plan_service.plan_version_service",
         type("PlanService", (), {
-            "record_plan_result": staticmethod(lambda *_args: {}),
+            "latest_version": staticmethod(lambda *_args, **_kwargs: None),
+            "active_version": staticmethod(lambda *_args, **_kwargs: None),
+            "record_plan_result": staticmethod(lambda *_args, **_kwargs: {}),
         })(),
     )
 
@@ -176,3 +197,19 @@ def test_graph_result_cannot_turn_a_failed_expert_into_success() -> None:
     })
 
     assert result["status"] == "failed"
+
+
+def test_graph_result_preserves_reporter_attribution() -> None:
+    from backend.travel.models.graph_result import build_travel_graph_result
+
+    result = build_travel_graph_result({
+        "intent": "social",
+        "final_answer": "你好。",
+        "reporter_meta": {
+            "source": "llm", "model": "main-test",
+            "prompt_version": "travel.reporter@3", "input_tokens": 12,
+        },
+    })
+
+    assert result["reporter_meta"]["source"] == "llm"
+    assert result["reporter_meta"]["prompt_version"] == "travel.reporter@3"

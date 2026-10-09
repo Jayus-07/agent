@@ -23,6 +23,7 @@ import {
   clearPendingPlan,
   reconcilePlanWithLatest,
   sanitizeTravelReply,
+  travelChatReplyText,
   rotateConversationId,
   type PlanFormInput,
   type PlanState,
@@ -44,6 +45,27 @@ function makeItinerary(overrides: Partial<Itinerary> = {}): Itinerary {
     ...overrides,
   }
 }
+
+describe('Reporter 聊天气泡短回复', () => {
+  it('LLM Reporter 成功时显示其短回复', () => {
+    const data = {
+      status: 'success', final_answer: '安排见行程卡。',
+      itinerary: makeItinerary(), reporter_meta: { source: 'llm' },
+    } as PlanResponse
+    expect(travelChatReplyText(data, false)).toBe('安排见行程卡。')
+  })
+
+  it('模板或旧服务仍使用原有状态提示', () => {
+    const data = {
+      status: 'success', final_answer: '模板正文',
+      itinerary: makeItinerary(), reporter_meta: { source: 'template' },
+    } as PlanResponse
+    expect(travelChatReplyText(data, false)).toBe('已创建当前行程 v1。')
+    expect(travelChatReplyText(data, true)).toBe(
+      '已生成草案 v1，请查看变化后选择应用或放弃。',
+    )
+  })
+})
 
 const emptyForm: PlanFormInput = {
   destination: '', days: '', startDate: '', partySize: '',
@@ -239,6 +261,33 @@ describe('会话线程 — 刷新后仍接着改同一份行程', () => {
     })
     expect(next.plan?.itinerary?.plan_version).toBe(4)
     expect(next.pending?.itinerary?.plan_version).toBe(5)
+  })
+
+  it('服务端 discarded 状态清除同版本 pending 并恢复 Active', () => {
+    const stale: PlanState = {
+      plan: null,
+      pending: {
+        status: 'ready', final_answer: '',
+        itinerary: makeItinerary({ plan_version: 6 }),
+        plan_status: 'waiting_confirmation',
+      },
+      notice: '',
+      discarded: [],
+    }
+    const next = reconcilePlanWithLatest(stale, {
+      conversation_id: 'conv-1',
+      plan_version: 6,
+      plan_status: 'discarded',
+      destination: '杭州',
+      created_at: '',
+      itinerary: makeItinerary({ plan_version: 6 }),
+      active_plan_version: 5,
+      active_plan_status: 'confirmed',
+      active_itinerary: makeItinerary({ plan_version: 5 }),
+    })
+    expect(next.plan?.itinerary?.plan_version).toBe(5)
+    expect(next.pending).toBeNull()
+    expect(next.discarded).toContain(6)
   })
 })
 

@@ -8,6 +8,7 @@ customer_service/graph_state.py — CS Graph 独立状态定义
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, TypedDict
 
 # ============================================================
@@ -22,6 +23,24 @@ CS_QUERY_EXPERT = "cs_query_expert"
 CS_ACTION_EXPERT = "cs_action_expert"
 CS_COMPLAINT_EXPERT = "cs_complaint_expert"
 CS_HANDOFF_EXPERT = "cs_handoff_expert"
+
+
+class PendingTurnDecision(str, Enum):
+    """Pending 期间仅对当前用户轮次有效的分流决策。"""
+
+    CONFIRM = "CONFIRM"
+    CANCEL = "CANCEL"
+    READ_ONLY_QUERY = "READ_ONLY_QUERY"
+    NEW_WRITE_CONFLICT = "NEW_WRITE_CONFLICT"
+    HANDOFF = "HANDOFF"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+def route_path_value(value: Any) -> str:
+    """归一 Router 的 route_path 字符串或 Enum 值。"""
+    if value is None:
+        return ""
+    return str(getattr(value, "value", value) or "")
 
 # ============================================================
 # 路由映射 — 单一事实源（P2.2 映射统一，此前 4 处独立硬编码存在漂移风险）
@@ -104,6 +123,16 @@ class CSGraphState(TypedDict, total=False):
     handoff_state: str
     confirmation_state: str
     pending_action: dict | None
+    pending_turn_decision: str | None
+    pending_turn_expert_consumed: bool
+    pending_turn_slot_fill: bool
+
+    # === 当前轮有限复合任务计划 ===
+    task_plan: dict | None
+    task_plan_source: str
+    task_cursor: int
+    task_results: list[dict]
+    current_task: dict | None
 
     # === 输出 (CS Reporter 生成) ===
     final_answer: str
@@ -124,6 +153,13 @@ def new_cs_graph_input(
 
     cs_state_loader 节点会在此基础上填充状态快照字段。
     """
+    metadata = (cs_route or {}).get("metadata") or {}
+    candidate = metadata.get("task_plan_candidate")
+    from backend.customer_service.understanding.validator import (
+        validate_task_plan_candidate,
+    )
+    validated_plan = validate_task_plan_candidate(candidate)
+
     return {
         "user_message": user_message,
         "user_id": user_id,
@@ -141,6 +177,14 @@ def new_cs_graph_input(
         "handoff_state": "",
         "confirmation_state": "",
         "pending_action": None,
+        "pending_turn_decision": None,
+        "pending_turn_expert_consumed": False,
+        "pending_turn_slot_fill": False,
+        "task_plan": validated_plan,
+        "task_plan_source": str(metadata.get("task_plan_source") or ""),
+        "task_cursor": 0,
+        "task_results": [],
+        "current_task": None,
         "final_answer": "",
         "cs_context": {},
         "cs_audit_entries": [],

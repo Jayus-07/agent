@@ -109,6 +109,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 082 是当前本地工作区已有的旅游租户范围迁移，需在 085 旧表退役前
     # 按原定义重放；它不属于 V2 Repository 的运行时依赖。
     "082_travel_plan_tenant_scope.sql": "memory",
+    # 客服确认幂等租约与 claim token；与旅行域 082 使用不同迁移名。
+    "082_cs_confirmation_versioned_claim.sql": "memory",
     "024_rag_eval_fixture_set.sql": "memory",
     "025_metadata_rule_governance.sql": "memory",
     "026_metadata_shadow_jobs.sql": "memory",

@@ -47,6 +47,9 @@ def process_confirmation(
     session_id: str,
     *,
     tenant_id: str = "",
+    proposal_id: str = "",
+    expected_version: int | None = None,
+    client_action_id: str | None = None,
 ) -> ConfirmationOutcome:
     """处理用户对 pending action 的响应 — 唯一入口。
 
@@ -71,10 +74,19 @@ def process_confirmation(
 
     if user_intent == confirmation_sm.ConfirmationIntent.CONFIRM:
         return _handle_confirm(pending_action, user_id, session_id,
-                               tenant_id=tenant_id)
+                               tenant_id=tenant_id,
+                               proposal_id=proposal_id,
+                               expected_version=expected_version,
+                               client_action_id=client_action_id)
 
     if user_intent == confirmation_sm.ConfirmationIntent.CANCEL:
-        return _handle_cancel(pending_action, user_id, session_id)
+        return _handle_cancel(
+            pending_action, user_id, session_id,
+            tenant_id=tenant_id,
+            proposal_id=proposal_id,
+            expected_version=expected_version,
+            client_action_id=client_action_id,
+        )
 
     # ── 3. 意图不明 → 追问（带 retry 上限，防止无限追问）──
     return _handle_reask(pending_action, user_id, session_id)
@@ -193,7 +205,9 @@ def _execute_confirmed_action(
 
 def _handle_confirm(
     pending_action: dict, user_id: str, session_id: str,
-    *, tenant_id: str = "",
+    *, tenant_id: str = "", proposal_id: str = "",
+    expected_version: int | None = None,
+    client_action_id: str | None = None,
 ) -> ConfirmationOutcome:
     from backend.customer_service.audit import build_audit_entry
     from backend.customer_service.confirmation_store import get_confirmation_store
@@ -206,7 +220,20 @@ def _handle_confirm(
     action_type = pending_action.get("action_type", "unknown")
 
     # ── 原子认领（幂等闸门）：认领失败 = 已被处理，绝不重复执行 ──
-    claimed_id = store.claim_for_execution(user_id, session_id)
+    claimed_id = store.claim_for_execution(
+        user_id,
+        session_id,
+        tenant_id=tenant_id,
+        proposal_id=proposal_id or str(
+            pending_action.get("proposal_id") or pending_action.get("action_id") or "",
+        ),
+        expected_version=(
+            expected_version
+            if expected_version is not None
+            else int(pending_action.get("version", 1) or 1)
+        ),
+        client_action_id=client_action_id,
+    )
     if claimed_id is None:
         audit_entry = build_audit_entry(
             user_id=user_id,
@@ -332,14 +359,46 @@ def _handle_confirm(
 
 def _handle_cancel(
     pending_action: dict, user_id: str, session_id: str,
+    *, tenant_id: str = "", proposal_id: str = "",
+    expected_version: int | None = None,
+    client_action_id: str | None = None,
 ) -> ConfirmationOutcome:
     from backend.customer_service.audit import build_audit_entry
     from backend.customer_service.confirmation_store import get_confirmation_store
     from backend.observability.metrics import record_cs_confirmation
 
     CS = confirmation_sm.ConfirmationState
+    store = get_confirmation_store()
+    versioned_cancel = bool(tenant_id and expected_version is not None)
+    if versioned_cancel:
+        cancelled = store.cancel_pending(
+            user_id,
+            session_id,
+            tenant_id=tenant_id,
+            proposal_id=proposal_id or str(
+                pending_action.get("proposal_id") or pending_action.get("action_id") or "",
+            ),
+            expected_version=expected_version,
+            client_action_id=client_action_id,
+        )
+        if not cancelled:
+            audit_entry = build_audit_entry(
+                user_id=user_id,
+                action_type=pending_action.get("action_type", "unknown"),
+                result="denied",
+                detail="stale or duplicate versioned cancel ignored",
+            )
+            return ConfirmationOutcome(
+                kind="duplicate",
+                answer="待确认操作已更新或已处理，请刷新会话状态。",
+                action_type=pending_action.get("action_type", "unknown"),
+                confirmation_state=CS.USER_CANCELLED.value,
+                audit_entry=audit_entry,
+            )
+    else:
+        store.clear(user_id, session_id)  # graph 内自然语言取消的旧入口
+
     confirmation_sm.transition(CS.PENDING_CONFIRMATION, CS.USER_CANCELLED)
-    get_confirmation_store().clear(user_id, session_id)  # final_state=cancelled
     record_cs_confirmation("cancelled")
 
     action_type = pending_action.get("action_type", "unknown")

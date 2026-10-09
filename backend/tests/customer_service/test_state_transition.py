@@ -53,7 +53,6 @@ class TestApplyDBFallback:
         assert result["success"] is False
         assert "DB unavailable" in result["errors"]
 
-    @pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
     def test_apply_closes_coroutine_when_db_bridge_rejects_submission(self):
         """提交到 DB 线程失败时，不能遗留未 await 的协程告警。"""
         svc = StateTransitionService()

@@ -191,7 +191,31 @@ export function reconcilePlanWithLatest(
   const pendingVersion = Number(state.pending?.itinerary?.plan_version || 0)
   const discarded = state.discarded.includes(remoteVersion)
     || _loadDiscarded().includes(remoteVersion)
-  if (discarded) return state
+  if (discarded && latest.plan_status !== 'discarded') return state
+
+  if (latest.plan_status === 'discarded') {
+    _recordDiscarded(remoteVersion)
+    const remoteActiveVersion = Number(latest.active_itinerary?.plan_version || 0)
+    const recoveredPlan = latest.active_itinerary
+      && remoteActiveVersion > activeVersion
+      ? {
+          status: latest.active_itinerary.status || 'ready',
+          final_answer: state.plan?.final_answer || '',
+          itinerary: latest.active_itinerary,
+          plan_status: latest.active_plan_status || 'confirmed',
+        } as PlanResponse
+      : state.plan
+    const nextDiscarded = state.discarded.includes(remoteVersion)
+      ? state.discarded
+      : [...state.discarded, remoteVersion].slice(-DISCARDED_CAP)
+    return {
+      ...state,
+      plan: recoveredPlan,
+      pending: pendingVersion === remoteVersion ? null : state.pending,
+      notice: '',
+      discarded: nextDiscarded,
+    }
+  }
 
   if (latest.plan_status === 'waiting_confirmation') {
     const recoveredActive = !state.plan && latest.active_itinerary
@@ -279,6 +303,19 @@ export function sanitizeTravelReply(text: string): string {
     '- **坐标：暂无数据**',
   )
   return kept.join('\n')
+}
+
+/** 旅游聊天气泡短回复；仅 Reporter 明确标记 llm 时替换既有状态文案。 */
+export function travelChatReplyText(data: PlanResponse, hasDraft: boolean): string {
+  if (data.itinerary) {
+    if (data.reporter_meta?.source === 'llm') {
+      return sanitizeTravelReply(data.final_answer || '行程已整理，请查看行程卡。')
+    }
+    return hasDraft
+      ? `已生成草案 v${data.itinerary.plan_version}，请查看变化后选择应用或放弃。`
+      : `已创建当前行程 v${data.itinerary.plan_version}。`
+  }
+  return sanitizeTravelReply(data.final_answer || '（没有返回内容）')
 }
 
 const PLAN_STATE_KEY = 'travel:plan-state'

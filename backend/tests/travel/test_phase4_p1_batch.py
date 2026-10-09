@@ -9,17 +9,16 @@ from datetime import date
 
 import pytest
 
+from backend.tests.travel.conftest import make_poi
 from backend.travel.agents.requirement_agent import (
+    extract_fresh_brief,
     extract_optional_go,
     extract_vague_time_expr,
-    extract_fresh_brief,
 )
 from backend.travel.graph_state import brief_fingerprint
 from backend.travel.models.brief import TravelBrief
-from backend.travel.services.requirement_service import merge_brief
-from backend.tests.travel.conftest import make_poi
 from backend.travel.services import poi_service
-
+from backend.travel.services.requirement_service import merge_brief
 
 TODAY = date(2026, 10, 4)
 
@@ -109,9 +108,9 @@ class TestOptionalScheduling:
 
     def test_repair_drops_optional_first(self):
         """时长超限修复：软必去先于普通候选被移除。"""
+        from backend.tests.travel.conftest import make_day, make_item, make_itinerary
         from backend.travel.repair import repair_itinerary
         from backend.travel.validator import check_itinerary
-        from backend.tests.travel.conftest import make_day, make_item, make_itinerary
 
         # 时长超限（PACE_TOO_INTENSE）走「选择删谁」路径：两点各 200 分钟
         # 超 relaxed 上限，删除顺序应先软必去后普通点。开场 09:00 后避开
@@ -353,8 +352,15 @@ class TestCrossTurnBaseSeed:
         import backend.app.api.routes.travel as route_mod
 
         class _FakeService:
-            def latest_version(self, cid, uid):
+            def latest_version(self, cid, uid, *, tenant_id, strict=False):
                 return {"plan_version": 7,
+                        "plan_status": "confirmed",
+                        "itinerary": {"brief": {"destination": "福州",
+                                                "days": 2}}}
+
+            def active_version(self, cid, uid, *, tenant_id, strict=False):
+                return {"plan_version": 7,
+                        "plan_status": "confirmed",
                         "itinerary": {"brief": {"destination": "福州",
                                                 "days": 2}}}
 
@@ -377,7 +383,10 @@ class TestCrossTurnBaseSeed:
         import backend.app.api.routes.travel as route_mod
 
         class _FakeService:
-            def latest_version(self, cid, uid):
+            def latest_version(self, cid, uid, *, tenant_id, strict=False):
+                return None
+
+            def active_version(self, cid, uid, *, tenant_id, strict=False):
                 return None
 
         monkeypatch.setattr(
@@ -393,7 +402,7 @@ class TestCrossTurnBaseSeed:
         import backend.app.api.routes.travel as route_mod
 
         class _Boom:
-            def latest_version(self, cid, uid):
+            def latest_version(self, cid, uid, *, tenant_id, strict=False):
                 raise RuntimeError("db down")
 
         monkeypatch.setattr(
@@ -461,8 +470,15 @@ class TestOldCheckpointCompat:
         import backend.app.api.routes.travel as route_mod
 
         class _FakeService:
-            def latest_version(self, cid, uid):
+            def latest_version(self, cid, uid, *, tenant_id, strict=False):
                 return {"plan_version": 3,
+                        "plan_status": "confirmed",
+                        "itinerary": {"brief": {"destination": "福州",
+                                                "days": 2}}}
+
+            def active_version(self, cid, uid, *, tenant_id, strict=False):
+                return {"plan_version": 3,
+                        "plan_status": "confirmed",
                         "itinerary": {"brief": {"destination": "福州",
                                                 "days": 2}}}
 
@@ -502,8 +518,8 @@ class TestRunDeadline:
     def test_executor_carries_configured_timeout(self, monkeypatch):
         """executor 的 timeout_s 必须来自 TRAVEL_REQUEST_TIMEOUT_S（显式
         总 deadline 的单一来源），不散落硬编码。"""
-        from backend.config import travel as travel_config
         import backend.travel.request_runtime as rr
+        from backend.config import travel as travel_config
 
         executor = rr.RequestExecutor(
             workers=1, timeout_s=travel_config.TRAVEL_REQUEST_TIMEOUT_S)

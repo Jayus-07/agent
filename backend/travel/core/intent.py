@@ -25,6 +25,97 @@ from __future__ import annotations
 
 import enum
 import re
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class _StrictDecisionModel(BaseModel):
+    """决策契约拒绝模型未声明字段，避免把自然语言输出变成执行指令。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TravelChangeScope(_StrictDecisionModel):
+    day_index: int | None = Field(default=None, ge=1)
+    poi_id: str | None = Field(default=None, min_length=1, max_length=128)
+    time_slot: Literal["morning", "afternoon", "evening", "all"] | None = None
+
+
+class TravelChange(_StrictDecisionModel):
+    op: Literal[
+        "set_pace", "set_days", "set_budget", "set_destination",
+        "set_preferences", "add_poi", "remove_poi", "replace_poi",
+        "set_weather_condition",
+    ]
+    scope: TravelChangeScope = Field(default_factory=TravelChangeScope)
+    value: str | int | float | list[str] | None = None
+    target_name: str | None = Field(default=None, max_length=128)
+    replacement_name: str | None = Field(default=None, max_length=128)
+    evidence_text: str = Field(default="", max_length=500)
+
+
+class TravelBriefCandidate(_StrictDecisionModel):
+    """LLM 可建议的槽位；调用方还要过既有字段值校验与只填空槽合并。"""
+
+    slot: Literal["destination", "days", "party_size", "pace", "preferences"]
+    value: str | int | list[str]
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_text: str = Field(default="", max_length=500)
+
+
+class TravelTaskParams(_StrictDecisionModel):
+    """附加任务的受限参数面，不接受任意 Tool 名或自由执行参数。"""
+
+    origin: str = Field(default="", max_length=100)
+    destination: str = Field(default="", max_length=100)
+    city: str = Field(default="", max_length=100)
+    travel_date: str = Field(default="", max_length=32)
+    day_index: int | None = Field(default=None, ge=1)
+
+
+class TravelAdditionalTask(_StrictDecisionModel):
+    task_id: str = Field(
+        min_length=1, max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    )
+    type: Literal["query_train", "query_weather", "query_poi", "query_hotel"]
+    params: TravelTaskParams = Field(default_factory=TravelTaskParams)
+
+
+class TravelTurnDecision(_StrictDecisionModel):
+    """单轮语义决策：主任务、受限改动、独立附加任务与追问状态。"""
+
+    primary_action: Literal[
+        "answer", "discover", "create_plan", "modify_plan", "replan_plan",
+    ]
+    changes: list[TravelChange] = Field(default_factory=list)
+    additional_tasks: list[TravelAdditionalTask] = Field(
+        default_factory=list, max_length=4)
+    brief_candidates: list[TravelBriefCandidate] = Field(default_factory=list)
+    needs_clarification: bool = False
+    missing_fields: list[Literal[
+        "destination", "days", "origin", "start_date", "target_day",
+        "selected_poi_id", "replacement_poi", "desired_change",
+    ]] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    parse_source: Literal[
+        "structured", "rule", "llm", "rule_fallback", "clarification",
+    ] = "rule"
+
+    @model_validator(mode="after")
+    def validate_decision_consistency(self) -> "TravelTurnDecision":
+        task_ids = [task.task_id for task in self.additional_tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("additional_tasks task_id 必须唯一")
+        task_types = [task.type for task in self.additional_tasks]
+        if len(task_types) != len(set(task_types)):
+            raise ValueError("每轮每种附加任务最多执行一次")
+        if self.primary_action in {"answer", "discover"} and self.changes:
+            raise ValueError("answer/discover 决策不能携带行程修改")
+        if self.needs_clarification and not self.missing_fields:
+            raise ValueError("needs_clarification=true 时必须说明 missing_fields")
+        return self
 
 
 class TravelIntent(str, enum.Enum):
@@ -92,6 +183,7 @@ _RE_META = re.compile(
 _RE_MODIFY = re.compile(
     r"第[一二三四五六七八九十\d]{1,3}天.{0,16}?(换成|改成|替换|调整为|去掉|删除|取消|移除|别|不要|不想|太赶|太满|早点结束|早些结束|加一个|增加|添加|必须同时安排)"
     r"|(?:换成|改成|替换成|调整为|重排|调整下?顺序|删掉|去掉|加一?天|多住一?天|少去|加一个|增加|添加)"
+    r"|(?:这个|那个|选中的|刚才的?)(?:景点|地方).{0,8}(?:换掉|替换|改掉|删掉)"
 )
 _RE_HAS_DAYS_EXPR = re.compile(r"(?<![第\d])\d{1,2}\s*天|(?<!第)[一二两三四五六七八九十]{1,3}\s*天")
 

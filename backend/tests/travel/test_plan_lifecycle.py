@@ -11,9 +11,11 @@ from backend.travel.core.plan_lifecycle import (
     LEGAL_TRANSITIONS,
     RESERVED_STATUSES,
     IllegalPlanTransition,
-    TravelPlanStatus as S,
     history_entry,
     transition,
+)
+from backend.travel.core.plan_lifecycle import (
+    TravelPlanStatus as S,
 )
 
 
@@ -45,6 +47,9 @@ class TestHappyPath:
         # 已确认计划修改：出新版本后重新待确认
         assert transition(S.CONFIRMED, S.WAITING_CONFIRMATION) is S.WAITING_CONFIRMATION
 
+    def test_waiting_draft_can_be_discarded(self):
+        assert transition(S.WAITING_CONFIRMATION, S.DISCARDED) is S.DISCARDED
+
 
 class TestIllegalTransitions:
     @pytest.mark.parametrize(
@@ -58,6 +63,7 @@ class TestIllegalTransitions:
             (S.CONFIRMED, S.ARCHIVED),
             (S.ARCHIVED, S.DRAFT),  # 终态不可迁出
             (S.WAITING_CONFIRMATION, S.TRAVELING),  # 未确认不得出发
+            (S.DISCARDED, S.WAITING_CONFIRMATION),  # 放弃是终态
         ],
     )
     def test_raises(self, current, target):
@@ -81,7 +87,7 @@ class TestReservedStatuses:
 class TestTableIntegrity:
     def test_all_states_have_rules(self):
         assert set(LEGAL_TRANSITIONS) == set(S)
-        assert len(S) == 10
+        assert len(S) == 11
 
     def test_history_entry_shape(self):
         at = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)

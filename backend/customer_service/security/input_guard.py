@@ -83,6 +83,30 @@ _SCOPE_PATTERNS: list[tuple[re.Pattern, str]] = [
     # 名词表补 记录/物流/售后
     (re.compile(r"(查|看)(一下)?(别人|其他|所有)(用户|人)?(的)?.{0,4}(订单|信息|数据|记录|物流|售后)"), "query_other_user"),
     (re.compile(r"(帮我|给我)(修改|改|删除|删)(别人|其他)(用户|人)?(的)"), "modify_other_user"),
+    (
+        re.compile(r"(?:订单|账号|账户).{0,32}(?:我)?(?:朋友|别人|他人|其他用户)(?:的)?"),
+        "foreign_resource_owner",
+    ),
+    (
+        re.compile(r"(?:我)?(?:朋友|别人|他人|其他用户)(?:的)?(?:订单|账号|账户)"),
+        "foreign_resource_owner",
+    ),
+    (
+        re.compile(r"(?:借用|借来的|共用|共享).{0,8}(?:账号|账户)"),
+        "borrowed_account",
+    ),
+    (
+        re.compile(
+            r"(?:不用|不需要|无需|免去|跳过|绕过).{0,6}(?:身份)?验证"
+            r"|(?:直接退款|直接退货|直接执行).{0,12}"
+            r"(?:不用|不需要|无需).{0,6}验证"
+        ),
+        "authentication_bypass",
+    ),
+    (
+        re.compile(r"(?:假冒|冒充|伪装成).{0,8}(?:管理员|客服主管|客服|坐席)"),
+        "role_impersonation",
+    ),
 ]
 
 _SENSITIVE_PATTERNS: list[tuple[re.Pattern, str]] = [

@@ -10,9 +10,10 @@ traces 端点始终走 Python（trace 数据在 observability.trace_store）。
 from __future__ import annotations
 
 import asyncio
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.shared.logger import logger
 
@@ -26,6 +27,9 @@ class ConfirmActionBody(BaseModel):
     """确认卡片点击请求。decision: confirm | cancel"""
     session_id: str
     decision: str
+    proposal_id: str | None = None
+    expected_version: int | None = Field(default=None, ge=1)
+    client_action_id: UUID | None = None
 
 
 @confirm_router.post("/confirm")
@@ -39,25 +43,84 @@ async def confirm_pending_action(request: Request, body: ConfirmActionBody) -> d
     decision = (body.decision or "").strip().lower()
     if decision not in ("confirm", "cancel"):
         raise HTTPException(422, detail="decision 必须为 confirm 或 cancel")
+    contract_fields = (
+        body.proposal_id, body.expected_version, body.client_action_id,
+    )
+    if any(value is not None for value in contract_fields) and not all(
+        value is not None for value in contract_fields
+    ):
+        raise HTTPException(422, detail="proposal_id、expected_version 与 client_action_id 必须同时提供")
 
     from backend.app.api.identity import resolve_identity
     ident = resolve_identity(request)
-    user_id = ident.user_id or "anonymous"
+    user_id = (getattr(ident, "user_id", "") or "").strip()
+    if (
+        not user_id
+        or user_id == "anonymous"
+        or not getattr(ident, "authenticated", False)
+    ):
+        raise HTTPException(401, detail="确认操作需要已认证用户身份")
+    tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
+    if not tenant_id:
+        raise HTTPException(403, detail="确认操作需要有效租户身份")
+    if body.proposal_id is None:
+        # 旧客户端只提交 session_id，无法证明用户看到的版本；
+        # 若直接接受，可能确认掉替换了原提案的新操作。
+        raise HTTPException(409, detail="确认卡片缺少版本信息，请刷新后重试")
 
     from backend.customer_service.confirmation_flow import process_confirmation
     from backend.customer_service.confirmation_store import get_confirmation_store
+    from backend.customer_service.confirmation_store import StoreWriteError
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    try:
+        handoff = load_active_handoff_sync(
+            tenant_id, body.session_id, raise_on_error=True,
+        )
+    except Exception as exc:
+        logger.error("[CSConfirm] Handoff state unavailable; refusing confirmation")
+        raise HTTPException(503, detail="人工服务状态暂不可核验，请稍后重试") from exc
+    if handoff and handoff.get("handoff_state") in {
+        "handoff_requested", "waiting_human", "agent_offered", "human_active",
+    }:
+        raise HTTPException(409, detail="人工客服已接管该会话，当前确认操作已暂停")
 
     store = get_confirmation_store()
-    pending = store.load(user_id, body.session_id)
+    try:
+        pending = store.load_authoritative(user_id, body.session_id, tenant_id)
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="待确认状态暂不可核验，请稍后重试") from exc
     if not pending:
         raise HTTPException(409, detail="当前没有待确认的操作（可能已处理或已过期）")
+    if pending.get("tenant_id") != tenant_id:
+        raise HTTPException(409, detail="待确认操作与当前租户不匹配")
 
-    outcome = process_confirmation(
-        pending,
-        "确认" if decision == "confirm" else "取消",
-        user_id,
-        body.session_id,
+    current_proposal_id = str(
+        pending.get("proposal_id") or pending.get("action_id") or "",
     )
+    current_version = int(pending.get("version", 1) or 1)
+    if body.proposal_id is not None and (
+        body.proposal_id != current_proposal_id
+        or body.expected_version != current_version
+    ):
+        raise HTTPException(409, detail="待确认操作已更新或失效，请刷新后重试")
+
+    client_action_id = str(body.client_action_id) if body.client_action_id else None
+    try:
+        outcome = process_confirmation(
+            pending,
+            "确认" if decision == "confirm" else "取消",
+            user_id,
+            body.session_id,
+            tenant_id=tenant_id,
+            proposal_id=current_proposal_id,
+            expected_version=current_version,
+            client_action_id=client_action_id,
+        )
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="确认状态写入失败，操作未执行") from exc
+    if outcome.kind == "duplicate":
+        raise HTTPException(409, detail="该确认已被处理，请刷新会话状态")
 
     logger.info(
         "[CSConfirm] card action: user=%s session=%s decision=%s → %s",
@@ -68,6 +131,9 @@ async def confirm_pending_action(request: Request, body: ConfirmActionBody) -> d
         "answer": outcome.answer,
         "confirmation_state": outcome.confirmation_state,
         "action_result": outcome.action_result,
+        "proposal_id": current_proposal_id,
+        "version": current_version,
+        "client_action_id": client_action_id,
     }
 
 
@@ -594,6 +660,106 @@ async def list_my_conversations(
     except Exception as e:
         logger.warning(f"[CSAdmin] list_my_conversations failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
+
+
+@router.get("/my/{conversation_id}/pending")
+async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
+    """读取当前用户会话的权威待确认快照，仅投影 UI 确认所需的安全字段。"""
+    await _ensure_my_conversation(request, conversation_id)
+
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    user_id = (getattr(ident, "user_id", "") or "").strip()
+    tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
+    if not user_id or not getattr(ident, "authenticated", False):
+        raise HTTPException(401, detail="未认证：请登录后访问会话")
+    if not tenant_id:
+        raise HTTPException(403, detail="待确认状态需要有效租户身份")
+
+    from backend.customer_service.confirmation_store import (
+        StoreWriteError,
+        get_confirmation_store,
+    )
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    try:
+        pending = get_confirmation_store().load_authoritative(
+            user_id, conversation_id, tenant_id,
+        )
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="待确认状态暂不可核验，请稍后重试") from exc
+    if pending is None:
+        return {"pending_action": None}
+
+    try:
+        handoff = load_active_handoff_sync(
+            tenant_id, conversation_id, raise_on_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(503, detail="人工服务状态暂不可核验，请稍后重试") from exc
+
+    from datetime import datetime, timezone
+
+    from backend.shared.pii_mask import mask_pii
+
+    raw_target = str(pending.get("target_id") or "").strip()
+    target_type = str(pending.get("target_type") or "业务对象").strip()
+    target_label = {
+        "order": "订单",
+        "order_id": "订单",
+        "ticket": "工单",
+        "refund": "退款申请",
+        "return": "退货申请",
+    }.get(target_type.lower(), "业务对象")
+    if raw_target:
+        masked_target = (
+            f"{target_label}尾号 ****{raw_target[-4:]}"
+            if len(raw_target) > 4
+            else target_label
+        )
+    else:
+        masked_target = target_label
+
+    raw_summary = str(pending.get("proposal_text") or "待确认的业务操作")
+    if raw_target:
+        raw_summary = raw_summary.replace(raw_target, masked_target)
+    summary, _ = mask_pii(raw_summary)
+
+    expires_at = pending.get("expires_at")
+    if hasattr(expires_at, "isoformat"):
+        expires_at = expires_at.isoformat()
+    expires_at = str(expires_at) if expires_at else None
+    expired = False
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            expired = expiry <= datetime.now(timezone.utc)
+        except ValueError:
+            # 不可解析的过期时间无法支持安全确认，前端按失效状态处理。
+            expired = True
+
+    handoff_state = str((handoff or {}).get("handoff_state") or "")
+    if handoff_state in {
+        "handoff_requested", "waiting_human", "agent_offered", "human_active",
+    }:
+        state = "paused_handoff"
+    else:
+        state = "expired" if expired else "pending"
+
+    return {
+        "pending_action": {
+            "proposal_id": str(pending.get("proposal_id") or pending.get("action_id") or ""),
+            "version": int(pending.get("version") or pending.get("proposal_version") or 1),
+            "action_type": str(pending.get("action_type") or "unknown"),
+            "masked_target": masked_target,
+            "summary": summary,
+            "expires_at": expires_at,
+            "state": state,
+        },
+    }
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)

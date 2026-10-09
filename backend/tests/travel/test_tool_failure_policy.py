@@ -18,7 +18,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -409,8 +409,9 @@ class TestGraphIntegration:
             build_travel_graph_result,
         )
 
+        trip_date = date.today() + timedelta(days=1)
         final, events = self._invoke(
-            "厦门1天行程，从福州出发，2026-10-08出发", monkeypatch)
+            f"厦门1天行程，从福州出发，{trip_date.isoformat()}出发", monkeypatch)
         result = build_travel_graph_result(final)
 
         # B1/B2：workflow 不 FAILED、行程存在
@@ -439,8 +440,9 @@ class TestGraphIntegration:
         # 消息不含「高铁/车票」等交通词（2026-10-08 修 a2344db 先行漂移）：
         # QUERY_TRANSIT 快路会把含交通词的消息接走出问答出口，blocked 契约
         # 根本不进规划链；硬依赖阻断测试需要一条纯规划消息。
+        trip_date = date.today() + timedelta(days=1)
         final, events = self._invoke(
-            "必须找到2026-10-08上午9点前抵达厦门的车，否则不要给我行程，"
+            f"必须找到{trip_date.isoformat()}上午9点前抵达厦门的车，否则不要给我行程，"
             "从福州出发，厦门1天", monkeypatch)
         result = build_travel_graph_result(final)
 

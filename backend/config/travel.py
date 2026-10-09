@@ -4,6 +4,7 @@ P0 口径：全部阈值可 env 覆盖，且校验器只读本文件，不散落
 默认 TRAVEL_ENABLED=false —— 与 CS_ENABLED 同策略，避免未验收的域
 被线上流量命中；验证通过后再开启。
 """
+import json as _json
 import os
 
 from dotenv import load_dotenv
@@ -49,11 +50,34 @@ TRAVEL_LLM_SLOT_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_SLOT_TIMEOUT_MS"
 # 候选置信度门槛：低于此值的 LLM 候选一律丢弃（宁追问不瞎填）
 TRAVEL_LLM_SLOT_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("TRAVEL_LLM_SLOT_MIN_CONFIDENCE", "0.7"))))
 
+# Requirement 统一决策（Phase 2）：一次 LLM Structured Output 同时给出动作、
+# 修改候选、附加任务与槽位候选；未单独配置时沿用旧意图/槽位开关的开启状态，
+# 但执行链不再分别调用两个旧理解服务。
+_TRAVEL_TURN_LLM_DEFAULT = (
+    TRAVEL_LLM_INTENT_ENABLED or TRAVEL_LLM_SLOT_ENRICHMENT_ENABLED
+)
+TRAVEL_TURN_DECISION_LLM_ENABLED = os.getenv(
+    "TRAVEL_TURN_DECISION_LLM_ENABLED",
+    "true" if _TRAVEL_TURN_LLM_DEFAULT else "false",
+).strip().lower() in ("1", "true", "yes")
+TRAVEL_TURN_DECISION_TIMEOUT_MS = max(
+    500,
+    int(os.getenv(
+        "TRAVEL_TURN_DECISION_TIMEOUT_MS",
+        str(max(TRAVEL_LLM_INTENT_TIMEOUT_MS, TRAVEL_LLM_SLOT_TIMEOUT_MS)),
+    )),
+)
+
 # LLM Clarification Renderer（2026-10-08 STOP 4）：只把**已确定**的追问意图
 # 渲染得自然（问什么/问哪个槽/选项全由规则先行决定）。默认关——关闭=完全
 # 回到模板追问。失败立即模板接管，不重试（低价值高频链路，降级优先）。
 TRAVEL_LLM_CLARIFICATION_ENABLED = os.getenv("TRAVEL_LLM_CLARIFICATION_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 TRAVEL_LLM_CLARIFICATION_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_CLARIFICATION_TIMEOUT_MS", "2500")))
+
+# Reporter LLM（Phase 6）：面向用户的最终答复默认由 LLM 根据已验证的
+# 行程与工具事实组织；异常/越权声明仍立即回落确定性模板。显式 false 可排障。
+TRAVEL_LLM_REPORTER_ENABLED = os.getenv("TRAVEL_LLM_REPORTER_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+TRAVEL_LLM_REPORTER_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_REPORTER_TIMEOUT_MS", "2500")))
 
 # 独立子图运行时。
 # **默认值由 TRAVEL_MAX_STEPS 派生，不能各自硬编码**：一个调度回合要花 2 个
@@ -211,7 +235,6 @@ TRAVEL_WEATHER_SEVERE_OVERRIDE_KEYWORDS: tuple[str, ...] = (
 # A4 美食「品类对味」加权表（2026-10-04）：category 含关键词 → 综合分加成。
 # 默认空 = 不启用（品类的「对味」映射是主观口径，机制先行、词表留给实机
 # 调参；形如 {"福建菜": 0.5, "老字号": 0.3}，JSON 解析失败整体忽略）。
-import json as _json
 _raw_food_boosts = os.getenv("TRAVEL_FOOD_CATEGORY_BOOSTS", "{}").strip()
 try:
     TRAVEL_FOOD_CATEGORY_BOOSTS: dict[str, float] = {

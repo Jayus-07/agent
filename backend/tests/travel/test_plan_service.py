@@ -15,6 +15,7 @@ from backend.travel.core.plan_service import (
     PlanVersionConflict,
     PlanVersionInvalid,
     PlanVersionNotFound,
+    PlanVersionPersistenceError,
     PlanVersionService,
 )
 from backend.travel.models.brief import TravelBrief
@@ -27,51 +28,59 @@ class FakePlanStore:
     """内存版账本：与 plan_store 同签名（service 注入面）。"""
 
     def __init__(self):
-        self._rows: dict[tuple[str, int], dict] = {}
+        self._rows: dict[tuple[str, str, str, int], dict] = {}
         self._tick = 0  # 每次落账递增，模拟 PG now() 的单调时间（列表排序依赖）
 
     def enabled(self) -> bool:
         return True
 
     def save_version(self, cid, uid, itinerary, *, plan_status="waiting_confirmation",
-                     change=None) -> bool:
+                     change=None, tenant_id="default", strict=False) -> bool:
         v = int(itinerary.get("plan_version") or 0)
-        if (cid, v) in self._rows:
+        key = (tenant_id, uid, cid, v)
+        if key in self._rows:
             return False
         brief = itinerary.get("brief") or {}
         self._tick += 1
-        self._rows[(cid, v)] = {
+        self._rows[key] = {
             "conversation_id": cid, "plan_version": v, "user_id": uid,
+            "tenant_id": tenant_id,
             "plan_status": plan_status, "destination": brief.get("destination", ""),
             "itinerary": itinerary, "change": change or {},
             "created_at": f"2026-10-01T00:00:{self._tick:02d}+00:00",
         }
         return True
 
-    def _scoped(self, cid, uid):
+    def _scoped(self, cid, uid, tenant_id="default"):
         return [r for r in self._rows.values()
-                if r["conversation_id"] == cid and r["user_id"] == uid]
+                if r["conversation_id"] == cid and r["user_id"] == uid
+                and r["tenant_id"] == tenant_id]
 
-    def latest_version(self, cid, uid):
-        rows = self._scoped(cid, uid)
+    def latest_version(self, cid, uid, tenant_id="default", *, strict=False):
+        rows = self._scoped(cid, uid, tenant_id)
         return max(rows, key=lambda r: r["plan_version"]) if rows else None
 
-    def get_version(self, cid, uid, v):
-        for r in self._scoped(cid, uid):
+    def active_version(self, cid, uid, tenant_id="default", *, strict=False):
+        rows = [r for r in self._scoped(cid, uid, tenant_id)
+                if r["plan_status"] == "confirmed"]
+        return max(rows, key=lambda r: r["plan_version"]) if rows else None
+
+    def get_version(self, cid, uid, v, tenant_id="default"):
+        for r in self._scoped(cid, uid, tenant_id):
             if r["plan_version"] == int(v):
                 return dict(r)
         return None
 
-    def list_versions(self, cid, uid):
-        return sorted(self._scoped(cid, uid),
+    def list_versions(self, cid, uid, tenant_id="default"):
+        return sorted(self._scoped(cid, uid, tenant_id),
                       key=lambda r: r["plan_version"], reverse=True)
 
-    def list_conversations(self, uid, limit=30):
+    def list_conversations(self, uid, limit=30, tenant_id="default"):
         # 与真实现同口径：每会话取最新版一行，按 created_at 新→旧
         newest: dict[str, dict] = {}
         counts: dict[str, int] = {}
         for r in self._rows.values():
-            if r["user_id"] != uid:
+            if r["user_id"] != uid or r["tenant_id"] != tenant_id:
                 continue
             counts[r["conversation_id"]] = counts.get(r["conversation_id"], 0) + 1
             cur = newest.get(r["conversation_id"])
@@ -91,12 +100,29 @@ class FakePlanStore:
             for r in rows[:max(1, min(int(limit), 100))]
         ]
 
-    def confirm_version(self, cid, uid, v) -> str | None:
-        for r in self._scoped(cid, uid):
+    def confirm_version(self, cid, uid, v, tenant_id="default") -> str | None:
+        latest = self.latest_version(cid, uid, tenant_id)
+        if not latest or int(latest["plan_version"]) != int(v):
+            return None
+        for r in self._scoped(cid, uid, tenant_id):
             if r["plan_version"] == int(v):
                 if r["plan_status"] == "waiting_confirmation":
                     r["plan_status"] = "confirmed"
                     return "confirmed"
+                return None
+        return None
+
+    def discard_version(self, cid, uid, v, tenant_id="default") -> str | None:
+        latest = self.latest_version(cid, uid, tenant_id)
+        if not latest or int(latest["plan_version"]) != int(v):
+            return None
+        for r in self._scoped(cid, uid, tenant_id):
+            if r["plan_version"] == int(v):
+                if r["plan_status"] == "waiting_confirmation":
+                    r["plan_status"] = "discarded"
+                    return "discarded"
+                if r["plan_status"] == "discarded":
+                    return "discarded"
                 return None
         return None
 
@@ -129,7 +155,7 @@ CID, UID = "conv-1", "user-15"
 class TestRecordPlanResult:
     def test_first_version_recorded(self, svc):
         out = svc.record_plan_result(CID, UID, _itin())
-        assert out["plan_status"] == "waiting_confirmation"
+        assert out["plan_status"] == "confirmed"
         rec = out["change_record"]
         assert rec["parent_version"] == 0  # 首版占位：无父版
         # build_change_record 冻结语义：old=None 表示首版，无父版 diff
@@ -138,20 +164,42 @@ class TestRecordPlanResult:
     def test_second_version_diffs(self, svc):
         svc.record_plan_result(CID, UID, _itin(poi_ids=("p1",)))
         out = svc.record_plan_result(CID, UID, _itin(days=2, poi_ids=("p1", "p2"), version=2))
+        assert out["plan_status"] == "waiting_confirmation"
         rec = out["change_record"]
         assert rec["parent_version"] == 1
         assert rec["change"]["added"] == ["p2"]
         assert rec["change"]["brief_fields"] == ["days"]
 
-    def test_store_failure_degrades_softly(self, svc):
+    def test_store_failure_fails_closed(self, svc):
         class BrokenStore(FakePlanStore):
             def latest_version(self, cid, uid):
                 raise RuntimeError("db down")
         broken = PlanVersionService(store=BrokenStore())
-        out = broken.record_plan_result(CID, UID, _itin())
-        # 账本故障不挡主链：plan_status 仍如实返回，change_record 置空
-        assert out["plan_status"] == "waiting_confirmation"
-        assert out["change_record"] is None
+        with pytest.raises(PlanVersionPersistenceError):
+            broken.record_plan_result(CID, UID, _itin())
+
+    def test_only_one_unconfirmed_draft_can_exist(self, svc):
+        svc.record_plan_result(CID, UID, _itin())
+        svc.record_plan_result(CID, UID, _itin(days=2, version=2))
+        with pytest.raises(PlanVersionConflict):
+            svc.record_plan_result(CID, UID, _itin(days=3, version=3))
+
+    def test_active_version_is_not_shadowed_by_draft(self, svc):
+        svc.record_plan_result(CID, UID, _itin())
+        svc.record_plan_result(CID, UID, _itin(days=2, version=2))
+        assert svc.active_version(CID, UID)["plan_version"] == 1
+
+    def test_unconfirmed_first_version_is_not_an_active_fallback(self, svc):
+        store = FakePlanStore()
+        store.save_version(CID, UID, _itin(), plan_status="waiting_confirmation")
+        assert PlanVersionService(store=store).active_version(CID, UID) is None
+
+    def test_new_plan_after_discard_is_confirmed_when_no_active_exists(self, svc):
+        store = FakePlanStore()
+        store.save_version(CID, UID, _itin(), plan_status="discarded")
+        out = PlanVersionService(store=store).record_plan_result(
+            CID, UID, _itin(version=2))
+        assert out["plan_status"] == "confirmed"
 
     def test_stale_graph_version_is_advanced_by_persistent_latest(self, svc):
         svc.record_plan_result(CID, UID, _itin(version=9))
@@ -164,7 +212,7 @@ class TestRecordPlanResult:
         assert out["change_record"]["version"] == 10
         assert svc.latest_version(CID, UID)["plan_version"] == 10
 
-    def test_version_conflict_retries_from_new_persistent_latest(self):
+    def test_version_conflict_does_not_create_a_second_pending_draft(self):
         class ConflictOnceStore(FakePlanStore):
             def __init__(self):
                 super().__init__()
@@ -184,12 +232,10 @@ class TestRecordPlanResult:
         store.conflict_once = True
 
         stale = _itin(days=2, version=1)
-        out = svc.record_plan_result(CID, UID, stale)
-
-        assert stale["plan_version"] == 3
-        assert stale["parent_plan_version"] == 2
-        assert out["change_record"]["version"] == 3
-        assert svc.latest_version(CID, UID)["plan_version"] == 3
+        with pytest.raises(PlanVersionConflict):
+            svc.record_plan_result(CID, UID, stale)
+        assert svc.latest_version(CID, UID)["plan_version"] == 2
+        assert svc.active_version(CID, UID)["plan_version"] == 1
 
 
 class TestConfirm:
@@ -217,6 +263,30 @@ class TestConfirm:
     def test_confirm_unknown_conversation_not_found(self, svc):
         with pytest.raises(PlanVersionNotFound):
             svc.confirm("conv-other", UID, 1)
+
+    def test_confirm_is_scoped_to_tenant(self, svc):
+        svc.record_plan_result(CID, UID, _itin(), tenant_id="tenant-a")
+        with pytest.raises(PlanVersionNotFound):
+            svc.confirm(CID, UID, 1, tenant_id="tenant-b")
+
+
+class TestDiscard:
+    def test_discard_latest_draft_preserves_active_and_is_idempotent(self, svc):
+        svc.record_plan_result(CID, UID, _itin())
+        svc.record_plan_result(CID, UID, _itin(days=2, version=2))
+
+        assert svc.discard(CID, UID, 2) == {
+            "status": "ok", "plan_version": 2, "plan_status": "discarded",
+        }
+        assert svc.discard(CID, UID, 2)["plan_status"] == "discarded"
+        assert svc.latest_version(CID, UID)["plan_status"] == "discarded"
+        assert svc.active_version(CID, UID)["plan_version"] == 1
+
+    def test_stale_discard_conflicts(self, svc):
+        svc.record_plan_result(CID, UID, _itin())
+        svc.record_plan_result(CID, UID, _itin(days=2, version=2))
+        with pytest.raises(PlanVersionConflict):
+            svc.discard(CID, UID, 1)
 
 
 class TestRestore:
@@ -296,6 +366,10 @@ class TestScope:
             svc.confirm(CID, "user-other", 1)
         assert svc.list_versions(CID, "user-other") == []
         assert svc.latest_version(CID, "user-other") is None
+
+    def test_same_user_and_conversation_are_isolated_by_tenant(self, svc):
+        svc.record_plan_result(CID, UID, _itin(), tenant_id="tenant-a")
+        assert svc.latest_version(CID, UID, tenant_id="tenant-b") is None
 
 
 class TestListConversations:

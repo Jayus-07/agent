@@ -80,4 +80,28 @@ describe('useSSE 会话级模型覆盖', () => {
     const body = vi.mocked(streamChat).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(body.model).toBe('model-b')
   })
+
+  it('done.answer 覆盖流式预览并成为最终展示正文', async () => {
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield { event: 'delta', data: { content: '临时流式片段', ts: 1 } } as any
+      yield {
+        event: 'done',
+        data: {
+          elapsed: 0,
+          sources: [],
+          answer: '最终权威答案',
+          answer_source: 'reporter',
+        },
+      } as any
+    })
+    const sessionId = useChatStore.getState().newSession()
+    const api = mount()
+
+    await act(async () => { await api.startStream('问题', sessionId) })
+    await flush()
+
+    const session = useChatStore.getState().sessions.find((item) => item.id === sessionId)
+    const messages = session?.messages ?? []
+    expect(messages[messages.length - 1]?.content).toBe('最终权威答案')
+  })
 })

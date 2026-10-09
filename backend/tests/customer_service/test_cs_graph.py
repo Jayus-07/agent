@@ -116,6 +116,50 @@ class TestCSGraphCompiles:
         assert graph is not None
 
     @patch("backend.customer_service.graph_builder.get_state_transition_service")
+    def test_state_loader_resets_pending_turn_flags_each_request(self, mock_sts):
+        """Turn-scope 分类和消费标记不可从上一轮 checkpoint 泄漏。"""
+        mock_sts.return_value.load_snapshot.return_value = {
+            "conversation_status": "open",
+            "handling_mode": "ai",
+            "handoff_state": "ai_active",
+            "confirmation_state": "pending",
+            "pending_action": {"action_id": "act-1", "version": 2},
+        }
+
+        from backend.customer_service.graph_builder import cs_state_loader_node
+
+        update = cs_state_loader_node({
+            "user_id": "u1", "tenant_id": "tenant-1",
+            "session_id": "s1", "conversation_id": "c1",
+            "pending_turn_decision": "READ_ONLY_QUERY",
+            "pending_turn_expert_consumed": True,
+            "pending_turn_slot_fill": True,
+        })
+
+        assert update["pending_turn_decision"] is None
+        assert update["pending_turn_expert_consumed"] is False
+        assert update["pending_turn_slot_fill"] is False
+
+    @patch("backend.customer_service.response.composer.compose_reply")
+    def test_reporter_skips_llm_composer_for_active_handoff_reply(self, compose):
+        from backend.customer_service.reporter import cs_reporter_node
+
+        answer = "您好，已为您转接人工客服，正在排队中，请稍候。"
+        result = cs_reporter_node({
+            "user_id": "u1", "conversation_id": "c1",
+            "handoff_state": "waiting_human",
+            "supervisor_decision": {
+                "next_action": "handoff", "direct_reply": answer,
+            },
+            "last_expert_result": {"response_draft": answer, "expert": "handoff"},
+            "cs_route": {"route_path": "business_action"},
+            "cs_context": {},
+        })
+
+        compose.assert_not_called()
+        assert result["final_answer"] == answer
+
+    @patch("backend.customer_service.graph_builder.get_state_transition_service")
     def test_invoke_knowledge_path_with_command_routing(self, mock_sts):
         """端到端: state_loader → supervisor → Command → knowledge_expert → supervisor → reporter"""
         mock_sts.return_value.load_snapshot.return_value = {

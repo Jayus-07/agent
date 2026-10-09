@@ -385,8 +385,9 @@ async def test_d19_proposal_upgrade_atomic_fingerprint():
     """D19：need_info 占位升级为正式 proposal → 指纹原子补全。"""
     user = _PREFIX + "d19"
     session = user + "-conv"
+    proposal_id = f"conf-ph-{uuid.uuid4().hex}"
     placeholder = {
-        "action_id": "conf-ph", "action_type": "refund_request", "intent": "as_refund",
+        "action_id": proposal_id, "action_type": "refund_request", "intent": "as_refund",
         "status": "need_info", "missing_slots": ["order_id"], "collected_slots": {},
         "target_type": "order", "target_id": "", "risk_level": "high",
         "requires_confirmation": False, "confirmation_state": "pending",
@@ -395,7 +396,19 @@ async def test_d19_proposal_upgrade_atomic_fingerprint():
     _save_threaded(user, session, placeholder)
     rows = _db_rows(user)
     assert rows[0]["fingerprint"] is None  # 占位不参与守卫
-    upgraded = _pending(action_id="conf-ph", target_id="ORDER123", amount=100)
+    assert rows[0]["tenant_id"] == _TENANT
+
+    # 兼容旧版已落库的 need_info 占位记录：租户列可能为空，但父会话仍
+    # 必须绑定当前用户与租户；升级时应识别并原子补齐租户与业务指纹。
+    with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=5) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE customer_service.confirmations SET tenant_id=NULL "
+                "WHERE confirmation_id=%s",
+                (proposal_id,),
+            )
+
+    upgraded = _pending(action_id=proposal_id, target_id="ORDER123", amount=100)
     _save_threaded(user, session, upgraded)
     rows = _db_rows(user)
     assert len(rows) == 1 and rows[0]["target_id"] == "ORDER123"

@@ -540,11 +540,14 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
                     pending_action: dict | None = None,
                     trace_id: str = "",
                     context_usage: dict | None = None,
-                    reply_source: Optional[str] = None) -> dict:
+                    reply_source: Optional[str] = None,
+                    include_pending_action: bool = False,
+                    answer_source: Optional[str] = None) -> dict:
     """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。
 
-    P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
-    前端据此渲染 CSConfirmCard；其余场景恒为 None，前端无感。
+    P3.1：仅客服图调用方设置 include_pending_action；该字段会显式下发
+    pending 或 null，让前端区分「状态未更新」与「本轮已清除」。摘要不经
+    SSE 透传，确认卡片由认证后的会话状态接口读取脱敏快照。
     context_usage（2026-09-22）：上下文用量快照，前端显示「上下文 xx%」。
     answer_status/confidence（2026-10-03）：RAG 拒答语义码与 META 自报
     置信度，来源是工具输出的 RAGMETA 标记；缺省 = 正常回答，前端无感。
@@ -558,7 +561,14 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     sources = _extract_sources_from_steps(all_step_results)
     if not sources and final_answer:
         sources = parse_sources_from_text(final_answer)
-    data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
+    # done.answer 是服务端权威答案；delta 仅是生成过程中的可选预览。
+    data: dict = {
+        "elapsed": round(elapsed, 1),
+        "sources": sources,
+        "answer": final_answer,
+    }
+    if answer_source:
+        data["answer_source"] = answer_source
     effective_reply_source = reply_source or infer_reply_source(all_step_results)
     if effective_reply_source:
         data["reply_source"] = effective_reply_source
@@ -571,11 +581,12 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
         data["usage"] = usage
     if trace_id:
         data["trace_id"] = trace_id
-    if pending_action:
+    if include_pending_action and pending_action:
         data["pending_action"] = {
-            "proposal_text": pending_action.get("proposal_text", ""),
             "action_type": pending_action.get("action_type", "unknown"),
         }
+    elif include_pending_action:
+        data["pending_action"] = None
     if context_usage:
         data["context_usage"] = context_usage
     return {"event": "done", "data": data}

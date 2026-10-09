@@ -120,6 +120,18 @@ def execute_action(
             tenant_id=tenant_id,
         )
 
+    current_task = state.get("current_task") or {}
+    if current_task.get("capability") == "propose_refund":
+        return _execute_conditional_refund_task(
+            user_message, user_id, session_id, store, tenant_id, state,
+        )
+    if state.get("task_plan"):
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft="当前任务不允许办理写操作，没有发起任何申请。",
+            data={"task_status": "skipped"},
+        )
+
     # 缺陷6.2（2026-09-23）：副作用动作缺订单号时必须结构化追问，
     # 禁止 fallback "latest"（最近一单）替用户决定操作对象。
     # 语义槽位解析（2026-10-08）：追问前先用 LLM 语义候选（product/time
@@ -182,8 +194,6 @@ def execute_action(
             data={},
         )
     except OrderNotEligibleError as e:
-        # 业务规则拒绝（P0 实测修复 2026-09-19）：资格不满足是正常业务结论，
-        # 必须向用户给出可读原因与下一步，而不是当作专家异常降级为通用报错。
         logger.info("[ActionExpert] proposal declined: %s", e)
         return ExpertResult(
             expert="action",
@@ -195,7 +205,6 @@ def execute_action(
             data={},
         )
     except OrderNotFoundError:
-        # 缺槽位兜底 "latest" 也可能无订单可用（新用户/无演示数据）。
         logger.info("[ActionExpert] order not found for proposal")
         return ExpertResult(
             expert="action",
@@ -205,6 +214,130 @@ def execute_action(
                 "（例如 DEMO-1002），或回复「查我的所有订单」先查看订单。"
             ),
             data={},
+        )
+
+
+def _execute_conditional_refund_task(
+    user_message: str,
+    user_id: str,
+    session_id: str,
+    store: Any,
+    tenant_id: str,
+    state: dict[str, Any],
+) -> ExpertResult:
+    """只把已核实的唯一物流结果转成现有退款提案流程。"""
+    from backend.customer_service.understanding.task_plan import (
+        CSTaskPlan,
+        CSTask,
+        CSTaskResult,
+        build_rule_task_plan,
+        evaluate_task_condition,
+    )
+
+    safe_reply = "订单和物流信息尚未满足退款条件，这次没有发起退款申请。"
+    current = state.get("current_task") or {}
+    task_id = str(current.get("task_id") or "")
+    query_result = None
+    facts: dict[str, Any] = {}
+
+    def task_result(status: str, error_type: str | None = None) -> dict:
+        source = query_result.source if query_result is not None else "unknown"
+        task_facts = {
+            key: facts[key] for key in (
+                "shipping_status", "order_count", "order_id", "order_no",
+            ) if key in facts
+        }
+        return CSTaskResult(
+            task_id=task_id, status=status, facts=task_facts,
+            source=source, error_type=error_type,
+        ).model_dump()
+
+    try:
+        plan = CSTaskPlan.model_validate(state.get("task_plan") or {})
+        expected = build_rule_task_plan(user_message)
+        task = next(
+            item for item in plan.tasks
+            if item.task_id == current.get("task_id")
+        )
+        expected_plan = (
+            CSTaskPlan.model_validate(expected).model_dump() if expected else None
+        )
+        current_task = CSTask.model_validate(current).model_dump()
+        if (
+            expected is None
+            or plan.model_dump() != expected_plan
+            or task.capability != "propose_refund"
+            or task.model_dump() != current_task
+        ):
+            raise ValueError("request does not match the constrained refund plan")
+
+        results = {
+            item.get("task_id"): CSTaskResult.model_validate(item)
+            for item in (state.get("task_results") or [])
+            if isinstance(item, dict)
+        }
+        dependencies = [results.get(dep) for dep in task.depends_on]
+        if not dependencies or any(item is None or item.status != "success"
+                                   for item in dependencies):
+            raise ValueError("query dependency did not succeed")
+        query_result = next(
+            (
+                item for item in dependencies
+                if item.source in (
+                    "sandbox_logistics_service", "business_logistics_service",
+                )
+            ),
+            None,
+        )
+        if query_result is None:
+            raise ValueError("authoritative logistics facts are missing")
+        facts = {}
+        for item in dependencies:
+            facts.update(item.facts)
+        if (
+            facts.get("order_count") != 1
+            or not facts.get("order_id")
+            or task.condition is None
+            or not evaluate_task_condition(task.condition, facts)
+        ):
+            raise ValueError("refund condition is not satisfied by unique facts")
+    except Exception:
+        logger.info("[ActionExpert] conditional refund task rejected closed")
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=safe_reply,
+            data={"task_status": "skipped", "task_result": task_result("skipped")},
+        )
+
+    trusted_route = _inject_order_id(
+        {**(state.get("cs_route") or {}), "intent": "as_refund"},
+        str(facts["order_id"]),
+    )
+    try:
+        proposal_result = _build_new_proposal(
+            user_id, "as_refund", trusted_route, session_id, store,
+            user_message, tenant_id=tenant_id,
+        )
+        proposal_data = dict(proposal_result.get("data") or {})
+        proposal_data["task_result"] = task_result("success")
+        return {**proposal_result, "data": proposal_data}
+    except DatabaseError:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft="业务服务暂时不可用，未发起退款申请，请稍后重试。",
+            data={"task_result": task_result("failed", "provider_error")},
+        )
+    except OrderNotEligibleError as exc:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=f"{exc}\n\n本次没有发起退款申请。",
+            data={"task_result": task_result("failed", "business_error")},
+        )
+    except OrderNotFoundError:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft="未能核实该订单，未发起退款申请。",
+            data={"task_result": task_result("failed", "business_error")},
         )
 
 

@@ -597,13 +597,9 @@ class RAGChain:
                         if not text:
                             continue
                         emit_text = mfilter.feed(text)
-                        if emit_text:
-                            emit_stream_delta(emit_text)
                         if not isinstance(chunk, str) and hasattr(chunk, "content"):
                             is_message = True
                     tail = mfilter.flush()
-                    if tail:
-                        emit_stream_delta(tail)
                     joined = mfilter.full
                     r = AIMessage(content=joined) if is_message else joined
                 else:
@@ -750,6 +746,10 @@ class RAGChain:
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
             answer = self._respond(result, trace, question, session_id, t_total)
+            # RAG 的 claim/fidelity/META gates 在 _respond 中收口；通过或拒答的
+            # 最终文本只能在此后进入答案 SSE，生成中的候选正文不外发。
+            if ENABLE_TOKEN_STREAMING and answer:
+                emit_stream_delta(answer)
             # Phase 6：全链耗时长线（含 verify/gate）
             import time as _time
 
@@ -881,11 +881,12 @@ class RAGChain:
         else:
             self._record_rag_metric("hit")
 
-        self._remember_turn(session_id, question, answer)
+        self._remember_turn(session_id, question, answer, trace=trace)
         self._finish(trace, answer, t_total)
         return answer
 
-    def _remember_turn(self, session_id: str, question: str, answer: str) -> None:
+    def _remember_turn(self, session_id: str, question: str, answer: str,
+                       trace=None) -> None:
         """memory 唯一写点（2026-09-23 D1-5）。
 
         仅在全部 Gate（EvidenceGate/ClaimVerifier/Faithfulness/META 自报）
@@ -893,6 +894,10 @@ class RAGChain:
         进入 L2/L3（此前被拒答案已随 _verify 写入并回注 prompt 污染后续
         回答）；self-correction 复用本写点，同一 turn 只写最终版本一次。
         """
+        # 父 Runner 是嵌入模式的唯一 Memory 写入者；独立 RAG 入口仍保留
+        # 原有写点，避免主图与 RAG 以同一 session 重复保存一轮问答。
+        if trace is not None and getattr(trace, "_rag_embedded", False):
+            return
         if self._memory:
             try:
                 identity = get_context().identity
@@ -926,7 +931,7 @@ class RAGChain:
         if self.corrector.can_retry():
             retried = self._try_self_correct(decision, trace, question, session_id, t_total)
             if retried is not None:
-                self._remember_turn(session_id, question, retried)
+                self._remember_turn(session_id, question, retried, trace=trace)
                 self._finish(trace, retried, t_total)
                 return retried
 

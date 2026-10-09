@@ -98,6 +98,29 @@ def test_done_event_without_evidence_omits_field():
     validate_frame(evt)
 
 
+def test_cs_done_event_distinguishes_pending_update_from_omitted_field():
+    pending = {"action_type": "refund", "proposal_text": "手机号 13800138000"}
+    evt = make_done_event(
+        "已生成待确认申请", {}, start_time=time.time(), pending_action=pending,
+        include_pending_action=True,
+    )
+    assert evt["data"]["pending_action"] == {"action_type": "refund"}
+    assert "13800138000" not in str(evt)
+    validate_frame(evt)
+
+    cleared = make_done_event(
+        "操作已取消", {}, start_time=time.time(), pending_action=None,
+        include_pending_action=True,
+    )
+    assert cleared["data"]["pending_action"] is None
+    validate_frame(cleared)
+
+    unrelated = make_done_event(
+        "普通回答", {}, start_time=time.time(), pending_action=None,
+    )
+    assert "pending_action" not in unrelated["data"]
+
+
 def test_domain_graph_answer_omits_field():
     evt = make_done_event("行程如下…", {"1": {"status": "success", "output": "…"}},
                           start_time=time.time())

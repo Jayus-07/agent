@@ -1,8 +1,10 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
-from sqlalchemy import select, update, func
-from sqlalchemy.ext.asyncio import AsyncSession
-from backend.memory.models.session import ChatSession, ChatMessage
 from datetime import datetime, timezone
+
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.memory.models.session import ChatMessage, ChatSession
 
 
 class SessionOwnerMismatch(Exception):
@@ -71,6 +73,40 @@ class SessionRepository:
             .values(title=question[:128])
         )
         return q, a
+
+    async def replace_messages(
+        self, session_id: str, messages: list[dict[str, str]],
+    ) -> list[ChatMessage]:
+        """原子替换会话消息快照，并清除已失效的摘要水位线。"""
+        await self._s.execute(
+            delete(ChatMessage).where(ChatMessage.session_id == session_id)
+        )
+        await self._s.execute(
+            update(ChatSession)
+            .where(ChatSession.session_id == session_id)
+            .values(
+                summary=None,
+                summary_through_message_id=None,
+                summary_token_count=None,
+                summary_updated_at=None,
+            )
+        )
+        saved = []
+        first_user_text = ""
+        for message in messages:
+            role = message["role"]
+            content = message["content"]
+            saved.append(await self.save_message(session_id, role, content))
+            if role == "user" and not first_user_text:
+                first_user_text = content
+        if first_user_text:
+            await self._s.execute(
+                update(ChatSession)
+                .where(ChatSession.session_id == session_id,
+                       ChatSession.title.is_(None))
+                .values(title=first_user_text[:128])
+            )
+        return saved
 
     async def message_count(self, session_id: str) -> int:
         result = await self._s.execute(

@@ -148,18 +148,46 @@ export interface ConfirmActionResponse {
   action_result?: Record<string, unknown> | null
 }
 
+export interface PendingActionSnapshot {
+  proposal_id: string
+  version: number
+  action_type: string
+  masked_target: string
+  summary: string
+  expires_at: string | null
+  state: 'pending' | 'paused_handoff' | 'expired'
+}
+
+/** 登录用户读取本人会话的 PostgreSQL 权威待确认快照。 */
+export async function getMyPendingAction(
+  conversationId: string,
+): Promise<PendingActionSnapshot | null> {
+  const data = await request<{ pending_action: PendingActionSnapshot | null }>(
+    `/api/cs/conversations/my/${encodeURIComponent(conversationId)}/pending`,
+  )
+  return data.pending_action ?? null
+}
+
 /**
  * 确认/取消待执行操作。幂等：并发重复提交由后端原子认领闸门兜底，
- * 已处理的提交返回 409（调用方静默清卡片即可）。
+ * proposal 版本与客户端 action id 共同构成一次性确认契约。
  */
 export async function confirmAction(
   sessionId: string,
+  pending: PendingActionSnapshot,
   decision: 'confirm' | 'cancel',
+  clientActionId: string,
 ): Promise<ConfirmActionResponse> {
   return request<ConfirmActionResponse>('/api/cs/confirm', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, decision }),
+    body: JSON.stringify({
+      session_id: sessionId,
+      decision,
+      proposal_id: pending.proposal_id,
+      expected_version: pending.version,
+      client_action_id: clientActionId,
+    }),
   })
 }
 

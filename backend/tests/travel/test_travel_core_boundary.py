@@ -27,6 +27,7 @@ EXPECTED_CORE_FILES = {
     "plan_lifecycle.py",
     "plan_service.py",  # v2 已落库的版本链服务。
     "plan_store.py",  # v2 已落库的版本账本。
+    "restore_reference.py",  # 历史版本恢复引用解析。
 }
 
 

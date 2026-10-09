@@ -211,11 +211,17 @@ class TestHumanActiveRecoveryRealPG:
     """P0-5：真 PG + 真 Redis presence 的自愈全链。"""
 
     def test_offline_agent_recovered(self, env, monkeypatch):
+        from backend.config.cs_dispatch import (
+            CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS,
+        )
+
         suffix = uuid.uuid4().hex[:8]
         conv_id = f"stpa-{suffix}"
         handoff_id = f"h-{suffix}"
         agent_id = f"agent-gone-{suffix}"
-        stale = datetime.now(timezone.utc) - timedelta(seconds=600)
+        stale = datetime.now(timezone.utc) - timedelta(
+            seconds=CS_HUMAN_ACTIVE_OFFLINE_TIMEOUT_SECONDS + 60,
+        )
         cur = env.cursor()
         try:
             # handoffs.assigned_agent_id 有 (tenant, agent) 复合 FK —— 先建档
@@ -265,9 +271,9 @@ class TestHumanActiveRecoveryRealPG:
                         limit=50,
                     )
 
-            result = _run(_do_recovery())
-
-            assert result.recovered >= 1  # 本用例工单必在恢复集内
+            # 本机 dispatcher 可能在本次调用前先恢复同一条工单；以 PG
+            # 的最终状态/版本/outbox 为准，验证多实例竞争下恰好一次生效。
+            _run(_do_recovery())
             cur.execute(
                 "SELECT handoff_state, assigned_agent_id, assignment_version,"
                 " total_deadline_at IS NOT NULL"

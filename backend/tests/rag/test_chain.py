@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 
 
 # =====================================================
@@ -74,6 +75,129 @@ def _stub_chain():
     chain.formatter = CitationFormatter()
     chain._chains_dirty = False
     return chain
+
+
+class _UnusedRetriever(BaseRetriever):
+    """只用于构建真实 LCEL 链；测试会在 rerank 边界注入合成文档。"""
+
+    def _get_relevant_documents(self, query, *, run_manager):
+        return []
+
+
+class _StreamAnswerLLM:
+    def stream(self, messages, *args, **kwargs):
+        from langchain_core.messages import AIMessageChunk
+
+        yield AIMessageChunk(content="未验证正文")
+        yield AIMessageChunk(content=" 编造数字 999")
+
+
+def test_rag_claim_rejection_never_streams_unverified_body(monkeypatch):
+    """AC-25/26：拒绝正文只发终稿，Memory/Trace/安全事件均来自 Gate 结果。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import proxy as proxy_mod
+    from backend.rag import chain as rag_chain_module
+    from backend.rag.chain import RAGChain
+    from backend.observability.tracer import trace_collector
+
+    chain = _stub_chain()
+    chain.chunk_retriever_base = _UnusedRetriever()
+    docs = _inject_gate_ok(_make_docs())
+    chain._gate_wrap_retrieve = lambda _payload: docs
+    chain._build_chains()
+    chain._rerank_wrapper = SimpleNamespace(invoke=lambda _query: docs)
+    monkeypatch.setattr(rag_chain_module, "ENABLE_TOKEN_STREAMING", True)
+    monkeypatch.setattr(proxy_mod, "_resolve_active_llm", lambda: _StreamAnswerLLM())
+    monkeypatch.setattr(chain, "_verify", lambda *_args: "未验证正文 编造数字 999")
+    monkeypatch.setattr(chain, "_verify_claims", lambda _answer, _docs: None)
+
+    class MemorySpy:
+        def __init__(self):
+            self.calls = []
+
+        def start_session(self, *_args, **_kwargs):
+            from backend.memory.short_term import ShortTermBuffer
+
+            return ShortTermBuffer()
+
+        def end_turn(self, session_id, question, answer, **kwargs):
+            self.calls.append((session_id, question, answer, kwargs))
+
+    memory = MemorySpy()
+    chain._memory = memory
+    security_events = []
+    monkeypatch.setattr(
+        "backend.security.events.record_security_event",
+        lambda *args, **kwargs: security_events.append((args, kwargs)),
+    )
+    trace = trace_collector.start("rag-claim-rejection", session_id="synthetic")
+    trace._rag_embedded = True
+    try:
+        trace_collector.start_span("root", parent_id=None,
+                                   name="test", type="agent")
+    except RuntimeError:
+        pass
+    monkeypatch.setattr(chain, "_start", lambda _question, _session: (trace, 0.0))
+    finished = []
+    def finish_spy(record, answer, _t0):
+        record.answer_preview = answer[:200]
+        finished.append(answer)
+
+    monkeypatch.setattr(chain, "_finish", finish_spy)
+    emitted = []
+    proxy_mod.set_stream_sink(
+        lambda text, kind="answer": emitted.append((kind, text)))
+
+    try:
+        answer = chain.ask("哪些资料支持数字 999？", session_id="synthetic")
+    finally:
+        proxy_mod.reset_stream_sink()
+        trace_collector.bind(None)
+        trace_collector._thread_current = None
+        from backend.observability.tracer import _scope_root_var
+
+        _scope_root_var.set(None)
+
+    assert "未验证正文" not in answer
+    assert emitted == [("answer", answer)]
+    assert finished == [answer]
+    assert trace.answer_preview == answer
+    assert trace.metadata["rejection"]["rejected"] is True
+    assert trace.metadata["rejection"]["layer"] == "claim_verify"
+    assert len(security_events) == 1
+    assert security_events[0][0][0] == "EVIDENCE_REJECT"
+    assert security_events[0][1]["detail"]["layer"] == "claim_verify"
+    # Gate 拒绝的候选正文不进 RAG Memory；主图 Runner 只持久化这里返回的拒答。
+    assert memory.calls == []
+
+
+def test_embedded_rag_answer_is_persisted_only_by_parent_runner(monkeypatch):
+    """父 Trace 内的 RAG 不单独 end_turn，最终只由 Runner 写一次。"""
+    chain = _stub_chain()
+
+    class MemorySpy:
+        def __init__(self):
+            self.calls = []
+
+        def end_turn(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    memory = MemorySpy()
+    chain._memory = memory
+    chain._verify = lambda *_args: "有证据支持的答案"
+    chain._verify_claims = lambda answer, _docs: answer
+    monkeypatch.setattr(chain, "_evaluate", lambda answer, _docs: answer)
+    trace, t0 = _start_trace("embedded-rag")
+    trace._rag_embedded = True
+
+    answer = chain._respond(
+        {"context": _make_docs(), "answer": "有证据支持的答案"},
+        trace, "问题", "synthetic", t0,
+    )
+
+    assert answer == "有证据支持的答案"
+    assert memory.calls == []
 
 
 def _start_trace(name: str):

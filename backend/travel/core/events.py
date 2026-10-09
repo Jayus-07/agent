@@ -11,6 +11,7 @@ import json
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, TypeVar
+from uuid import uuid4
 
 from backend.shared.logger import logger
 
@@ -57,11 +58,17 @@ def travel_event_scope(sink: _EventSink) -> Iterator[None]:
         _event_sink.reset(token)
 
 
+def new_tool_call_id() -> str:
+    """为每次真实 Tool 调用生成不可复用的关联标识。"""
+    return f"call-{uuid4().hex}"
+
+
 def run_travel_tool(
     tool: str,
     agent: str,
     fn: Callable[[], _ResultT],
     *,
+    task_id: str = "",
     result_summary: _ResultSummary | None = None,
 ) -> _ResultT:
     """执行真实旅游 Tool，并发出开始/结果事件。
@@ -74,7 +81,10 @@ def run_travel_tool(
 
     check_run()
     started_at = time.monotonic()
-    emit_travel_event("tool.started", agent=agent, tool=tool)
+    call_fields = {"tool_call_id": new_tool_call_id()}
+    if task_id:
+        call_fields["task_id"] = str(task_id)[:64]
+    emit_travel_event("tool.started", agent=agent, tool=tool, **call_fields)
     try:
         result = fn()
         check_run()
@@ -83,6 +93,7 @@ def run_travel_tool(
             "tool.result",
             agent=agent,
             tool=tool,
+            **call_fields,
             status="failed",
             error_type=type(exc).__name__,
             error=str(exc),
@@ -102,5 +113,6 @@ def run_travel_tool(
             logger.debug("[TravelEvent] Tool 结果摘要失败: %s", tool,
                          exc_info=True)
             fields["summary_status"] = "unavailable"
-    emit_travel_event("tool.result", agent=agent, tool=tool, **fields)
+    emit_travel_event(
+        "tool.result", agent=agent, tool=tool, **call_fields, **fields)
     return result
