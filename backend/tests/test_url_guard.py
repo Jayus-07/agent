@@ -134,6 +134,39 @@ class TestFakeIpAware:
             assert assert_url_allowed("https://zh.wikipedia.org/wiki/Main_Page") == \
                 "https://zh.wikipedia.org/wiki/Main_Page"
 
+    def test_fakeip_v6_blocked_by_default(self, monkeypatch):
+        """TUN 开 IPv6 后 AAAA 返回 2001:2::/48（mihomo IPv6 fake-ip 池），默认照拦"""
+        monkeypatch.delenv("SSRF_FAKEIP_AWARE", raising=False)
+        assert _is_forbidden_ip(_ip("2001:2::60"))
+        # AAAA fake-ip（复现 2026-10-10 事故：volces.com 解析出 2001:2::60 被拦）
+        fake = [
+            ("AF_INET", 1, 6, "", ("198.18.0.97", 0)),
+            ("AF_INET6", 1, 6, "", ("2001:2::60", 443, 0, 0)),
+        ]
+        with patch.object(socket, "getaddrinfo", return_value=fake):
+            with pytest.raises(UrlBlockedError, match="SSRF"):
+                assert_url_allowed("https://ark.cn-beijing.volces.com/api/v3")
+
+    def test_fakeip_v6_allowed_when_aware(self, monkeypatch):
+        monkeypatch.setenv("SSRF_FAKEIP_AWARE", "true")
+        assert not _is_forbidden_ip(_ip("2001:2::60"))
+        assert not _is_forbidden_ip(_ip("2001:2::ffff:ffff:ffff:ffff"))
+        # v4+v6 fake-ip 混合解析（getaddrinfo 真实返回形态）整体放行
+        fake = [
+            ("AF_INET", 1, 6, "", ("198.18.0.97", 0)),
+            ("AF_INET6", 1, 6, "", ("2001:2::60", 443, 0, 0)),
+        ]
+        with patch.object(socket, "getaddrinfo", return_value=fake):
+            assert assert_url_allowed("https://ark.cn-beijing.volces.com/api/v3") == \
+                "https://ark.cn-beijing.volces.com/api/v3"
+
+    def test_fakeip_aware_does_not_overallow_v6(self, monkeypatch):
+        """开关只放行两个 fake-ip 池，真实 v6 内网/保留段照拦"""
+        monkeypatch.setenv("SSRF_FAKEIP_AWARE", "true")
+        assert _is_forbidden_ip(_ip("fd00::1"))
+        assert _is_forbidden_ip(_ip("fe80::1"))
+        assert _is_forbidden_ip(_ip("2001:db8::1"))
+
     def test_fakeip_aware_still_blocks_private_and_loopback(self, monkeypatch):
         """开关只放行 fake-ip 段，真实内网/环照拦"""
         monkeypatch.setenv("SSRF_FAKEIP_AWARE", "true")
