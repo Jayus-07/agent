@@ -83,7 +83,10 @@ STATUS_FAIL = "fail"
 STATUS_DEGRADED = "fail_degraded"
 STATUS_SKIP = "skip"
 
-_MODEL_KINDS = frozenset({"chat", "embedding", "rerank", "vision", "speech"})
+# 与 infra.llm.models.MODEL_KINDS 对齐（含 ocr——管理端可选，OCR 模型
+# 走 OpenAI 兼容聊天端点，与 vision 同路探测；2026-10-10 事故：漏了 ocr
+# 导致所有 OCR 模型在探测入口秒拒「不支持的模型用途」）。
+_MODEL_KINDS = frozenset({"chat", "embedding", "rerank", "vision", "speech", "ocr"})
 
 # 归因代号：前端据此决定显示哪个「去修」动作（不要在文案里做字符串匹配）。
 # 只是**显示层**契约，不影响 ok / blocked_at 的判定语义。
@@ -908,7 +911,7 @@ async def probe_provider(
             level="L2",
             status=STATUS_FAIL,
             summary=f"不支持的模型用途：{model_kind}",
-            detail="可选用途：chat、embedding、rerank、vision、speech",
+            detail="可选用途：chat、embedding、rerank、vision、speech、ocr",
         )
         return ProbeResult(
             ok=False,
