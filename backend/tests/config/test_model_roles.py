@@ -72,6 +72,10 @@ def test_all_roles_registered():
         "main", "doc", "tool_selector", "fallback", "context_compactor",
         "ocr", "embedding", "rerank", "eval_gen",
         "metadata_extract", "question_gen", "table_describe",
+        # 2026-10-09：多查询改写独立角色（non-thinking 轻模型优先）。
+        # 此前改写固定走主链 LLM，思考型主模型把 completion_tokens 吃光导致
+        # 变体被截断（实测 98% 的调用只出 1 个变体），多查询静默退化。
+        "multi_query",
     }
 
 

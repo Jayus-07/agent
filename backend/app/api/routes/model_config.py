@@ -73,6 +73,9 @@ class ProviderUpdateRequest(BaseModel):
         None, alias="modelKind"
     )
     extra_headers: dict[str, str] = Field(default_factory=dict, alias="extraHeaders")
+    # 附加请求体（如 {"thinking":{"type":"disabled"}} 关闭思考）。
+    # None = 不改（保持库中原值）；{} = 显式清空。
+    extra_body: dict | None = Field(None, alias="extraBody")
     # None = 不改；非空 = 轮换；clearApiKey=true = 删除。
     api_key: str | None = Field(None, alias="apiKey", max_length=4096)
     clear_api_key: bool = Field(False, alias="clearApiKey")
@@ -101,6 +104,8 @@ class ProviderCreateRequest(BaseModel):
     )
     api_key: str = Field(..., alias="apiKey", min_length=1, max_length=4096)
     extra_headers: dict[str, str] = Field(default_factory=dict, alias="extraHeaders")
+    # 附加请求体（如关闭思考）；缺省空对象 = 不附加
+    extra_body: dict = Field(default_factory=dict, alias="extraBody")
 
 
 class ProviderModelCreateRequest(BaseModel):

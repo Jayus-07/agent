@@ -63,7 +63,7 @@ class RegistrySnapshot:
 
 _SELECT_PROVIDERS = """
     SELECT id, display_name, driver, base_url, network_scope,
-           extra_headers, billing, is_builtin, enabled,
+           extra_headers, extra_body, billing, is_builtin, enabled,
            last_probe_at, last_probe_ok, last_probe_worst_grade
     FROM llm_providers
     WHERE enabled = true
@@ -297,6 +297,9 @@ def _credential(row, providers_by_id: dict[str, dict]) -> ProviderCredentials | 
         api_key=api_key,
         base_url=provider_row.get("base_url") or None,
         extra_headers=provider_row.get("extra_headers") or {},
+        # 供应商级附加请求体（087 迁移新增，如关闭思考）；凭据行无该列，
+        # 故此处是唯一来源——与 extra_headers 同级的供应商默认值
+        extra_body=provider_row.get("extra_body") or {},
         source="db",
         version=int(row["key_version"] or 0),
     )
@@ -350,11 +353,13 @@ async def load_registry() -> RegistrySnapshot:
     for provider_id, provider_row in providers_by_id.items():
         if provider_id in creds:
             continue
-        if provider_row.get("base_url") or provider_row.get("extra_headers"):
+        if (provider_row.get("base_url") or provider_row.get("extra_headers")
+                or provider_row.get("extra_body")):
             creds[provider_id] = ProviderCredentials(
                 provider=provider_id,
                 base_url=provider_row.get("base_url") or None,
                 extra_headers=provider_row.get("extra_headers") or {},
+                extra_body=provider_row.get("extra_body") or {},
                 source="db",
                 version=0,
             )
