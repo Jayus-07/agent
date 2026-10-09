@@ -50,10 +50,13 @@ _TRUSTED_SUFFIXES = tuple(
 )
 
 # fake-ip 感知（默认关闭）：Clash/mihomo 类 TUN 代理的 fake-ip 模式会把**所有**
-# 域名解析到 198.18.0.0/15（RFC 2544 基准测试保留段，真实公网服务绝不落在这段）。
-# 本机开发开启 SSRF_FAKEIP_AWARE=true 后，对该段跳过拦截（字面私网 IP 与
+# 域名解析到 fake-ip 池——IPv4 是 198.18.0.0/15（RFC 2544 基准测试保留段），
+# TUN 开 IPv6 后 AAAA 查询还会返回 2001:2::/48（RFC 5180 基准测试保留段，
+# Python 判为 is_private）。真实公网服务绝不落在这两段。
+# 本机开发开启 SSRF_FAKEIP_AWARE=true 后，对这两段跳过拦截（字面私网 IP 与
 # loopback/元数据地址仍照拦；真实出站流量由本地代理接管）。
 _FAKEIP_V4_NET = ipaddress.ip_network("198.18.0.0/15")
+_FAKEIP_V6_NET = ipaddress.ip_network("2001:2::/48")
 
 
 def _fakeip_aware() -> bool:
@@ -77,10 +80,12 @@ def _is_forbidden_ip(ip: ipaddress._BaseAddress) -> bool:
     """判断 IP 是否落在禁止访问的网段。"""
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
         return True
-    if isinstance(ip, ipaddress.IPv4Address):
-        # fake-ip 感知：198.18.0.0/15 在开关开启时放行（见 _FAKEIP_V4_NET 注释）
-        if ip in _FAKEIP_V4_NET and _fakeip_aware():
-            return False
+    # fake-ip 感知：两个 fake-ip 池在开关开启时放行（见 _FAKEIP_V4_NET 注释）
+    if _fakeip_aware() and (
+        (isinstance(ip, ipaddress.IPv4Address) and ip in _FAKEIP_V4_NET)
+        or (isinstance(ip, ipaddress.IPv6Address) and ip in _FAKEIP_V6_NET)
+    ):
+        return False
     if ip.is_private or ip.is_reserved:
         return True
     if isinstance(ip, ipaddress.IPv4Address):
