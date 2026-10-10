@@ -1,5 +1,6 @@
 """SQLAlchemy ORM for chat_sessions + chat_messages"""
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 
@@ -34,6 +35,11 @@ class ChatMessage(Base):
     session_id = Column(String(128), ForeignKey("chat_sessions.session_id", ondelete="CASCADE"), nullable=False)
     role = Column(String(16), nullable=False)
     content = Column(Text, nullable=False)
+    # 旧行保持 NULL；新 LangChain 行保存 human/ai/tool 类型及非正文元数据。
+    message_type = Column(String(32), nullable=True)
+    message_metadata = Column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True,
+    )
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")

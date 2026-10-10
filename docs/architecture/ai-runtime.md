@@ -24,6 +24,7 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 - Checkpoint 的身份键和数据读写必须按用户、租户、会话隔离；只读查询不应覆盖可写工作流状态。
 - SSE 事件结构与事件顺序以 backend/orchestration/graph/event_schema.py、具体事件生成器和 API 契约为准；新增事件须同步检查后端和消费端。
 - `/chat/stream` 的成功轮次持久化以 `Idempotency-Key` 为幂等键；未提供时使用服务端 `request_id`。Memory 在同一事务中提交 L2 问答、幂等收据与 L3 outbox；收据按 tenant/user/session 隔离，只保留键和问题的 SHA-256。相同键与问题复用原轮次；相同键绑定不同问题时拒绝再次写入。表结构由 `090_memory_turn_idempotency.sql` 管理，随会话/消息删除级联清除。
+- L2 `chat_messages` 兼容保留普通 user/assistant 文本行；受控 LangChain 写入额外记录 `message_type`（human/ai/tool）及 JSON `message_metadata`，可恢复 `AIMessage.tool_calls` 和 `ToolMessage.tool_call_id` 等协议字段。恢复时始终以数据库消息 ID 生成 LangChain ID，旧行的空类型列继续按 user/assistant 还原。字段由 `091_chat_message_langchain_metadata.sql` 管理；当前主 Graph Runner 尚未把实际工具消息写入此入口。
 - HTTP 请求完成、Tool 执行结果、Domain Graph 业务结果是不同状态；错误和部分成功须保留可解释结果。
 - Trace 与日志应记录必要的运行归因、耗时和错误类别，不写入敏感参数。
 

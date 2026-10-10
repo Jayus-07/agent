@@ -9,9 +9,12 @@ def test_memory_profile_and_extraction_migrations_are_registered_in_order():
     profile = "088_memory_profile_scope_verification.sql"
     outbox = "089_memory_extraction_outbox.sql"
     turn = "090_memory_turn_idempotency.sql"
+    langchain_messages = "091_chat_message_langchain_metadata.sql"
 
     assert MIGRATION_TARGETS[profile] == "memory"
     assert MIGRATION_TARGETS[outbox] == "memory"
     assert MIGRATION_TARGETS[turn] == "memory"
+    assert MIGRATION_TARGETS[langchain_messages] == "memory"
     assert names.index(profile) < names.index(outbox)
     assert names.index(outbox) < names.index(turn)
+    assert names.index(turn) < names.index(langchain_messages)

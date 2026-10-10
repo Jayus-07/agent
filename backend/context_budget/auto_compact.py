@@ -366,8 +366,10 @@ def _release_l5_lock(lock) -> None:
 
 
 def _format_conversation(rows: list[tuple[int, str, str]]) -> str:
+    from backend.memory.message_codec import role_label
+
     return "\n".join(
-        f"{'用户' if role == 'user' else '助手'}: {content}"
+        f"{role_label(role)}: {content}"
         for _mid, role, content in rows
     )
 

@@ -1,5 +1,5 @@
 """L2 会话记忆 — PostgreSQL async backend"""
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 from backend.config import SESSION_MAX_MESSAGES
 from backend.shared.logger import logger
 
@@ -27,15 +27,8 @@ class SessionMemory:
 
     async def load_messages(self, limit: int | None = None) -> list[BaseMessage]:
         rows = await self._repo.load_messages(self.session_id, limit=limit)
-        messages = []
-        for row in rows:
-            # 数据库主键是跨恢复稳定的消息身份，传入 LangChain/LangGraph
-            # state，供后续状态合并按消息身份去重。
-            row_id = getattr(row, "id", None)
-            message_id = f"chat-message:{row_id}" if row_id is not None else None
-            message_type = HumanMessage if row.role == "user" else AIMessage
-            messages.append(message_type(content=row.content, id=message_id))
-        return messages
+        from backend.memory.message_codec import restore_message
+        return [restore_message(row) for row in rows]
 
     async def save_turn(self, question: str, answer: str) -> None:
         await self._repo.save_turn(self.session_id, question, answer)
@@ -77,8 +70,9 @@ class SessionMemory:
                     f"回退全量路径: {e}")
 
         rows = await self._repo.load_messages(self.session_id, limit=SESSION_MAX_MESSAGES)
+        from backend.memory.message_codec import role_label
         conversation = "\n".join(
-            f"{'用户' if r.role == 'user' else '助手'}: {r.content}"
+            f"{role_label(r.role)}: {r.content}"
             for r in rows[-SESSION_MAX_MESSAGES:]
         )
         try:

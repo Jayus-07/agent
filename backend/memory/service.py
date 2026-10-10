@@ -537,13 +537,9 @@ class MemoryService:
 
                     # L2 以模型感知 Token 数作为主触发条件；消息数仍为历史
                     # 长度硬上限。达到 Token 线的长消息增量可绕过小批量门。
-                    from langchain_core.messages import AIMessage, HumanMessage
+                    from backend.memory.message_codec import restore_message
                     delta_tokens = sum(
-                        count_message_tokens(
-                            HumanMessage(content=row.content or "")
-                            if row.role == "user"
-                            else AIMessage(content=row.content or "")
-                        )
+                        count_message_tokens(restore_message(row))
                         for row in rows
                     )
                     token_triggered = (

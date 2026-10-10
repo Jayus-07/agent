@@ -1,9 +1,11 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
 from datetime import datetime, timezone
 
+from langchain_core.messages import BaseMessage
 from sqlalchemy import DateTime, delete, func, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.memory.message_codec import serialize_message
 from backend.memory.models.session import ChatMessage, ChatSession
 
 
@@ -47,14 +49,24 @@ class SessionRepository:
         q = select(ChatMessage).where(ChatMessage.session_id == session_id)
         if limit:
             recent = await self._s.execute(
-                q.order_by(ChatMessage.created_at.desc()).limit(limit)
+                q.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+                .limit(limit)
             )
             return list(recent.scalars().all())[::-1]
-        result = await self._s.execute(q.order_by(ChatMessage.created_at))
+        result = await self._s.execute(
+            q.order_by(ChatMessage.created_at, ChatMessage.id)
+        )
         return list(result.scalars().all())
 
-    async def save_message(self, session_id: str, role: str, content: str) -> ChatMessage:
-        msg = ChatMessage(session_id=session_id, role=role, content=content)
+    async def save_message(
+        self, session_id: str, role: str, content: str, *,
+        message_type: str | None = None,
+        message_metadata: dict | None = None,
+    ) -> ChatMessage:
+        msg = ChatMessage(
+            session_id=session_id, role=role, content=content,
+            message_type=message_type, message_metadata=message_metadata,
+        )
         self._s.add(msg)
         # touch session updated_at
         await self._s.execute(
@@ -62,6 +74,17 @@ class SessionRepository:
         )
         await self._s.flush()
         return msg
+
+    async def save_langchain_message(
+        self, session_id: str, message: BaseMessage,
+    ) -> ChatMessage:
+        """保存服务端 LangChain 消息，并以数据库主键作为恢复身份。"""
+        payload = serialize_message(message)
+        return await self.save_message(
+            session_id, payload["role"], payload["content"],
+            message_type=payload["message_type"],
+            message_metadata=payload["message_metadata"],
+        )
 
     async def save_turn(self, session_id: str, question: str, answer: str) -> tuple[ChatMessage, ChatMessage]:
         q = await self.save_message(session_id, "user", question)
