@@ -155,3 +155,13 @@
 - 实际运行 `D:/Python/python.exe -m pytest backend/tests/orchestration/graph/test_runner_trace_finalize.py -k "generator_close_stops_background_graph or user_abort_mid_stream or worker_exception or worker_timeout or normal_completion_finishes_once or double_close" -q --no-cov`：6 passed、3 deselected，11.55 秒。`py_compile` 与 `git diff --check` 通过。
 - 尝试路由级断连续播验证：`D:/Python/python.exe -m pytest backend/tests/api/test_sse_resume.py -k "slow_consumer_union_complete_via_registry" -q --no-cov`。测试 fixture 在导入应用时由 `feedback.init_db()` 连接 PostgreSQL，因本 Worktree 未提供 `PGPASSWORD` 报 1 setup error、10 deselected，路由断言未运行；该项仍待隔离数据库凭据环境验证。
 - 实现提交：`1997bd7`（`fix(runtime): stop graph after runner stream closes`）。Phase 1 其他状态、身份、Redis/重启和真实 E2E 验收仍未收口。
+
+## 2026-10-11：Phase 1 L2 会话 tenant/user 隔离
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main`，从本地 `main`/任务分支共同基线 `3f6206d` 实施。实现提交：`99e508d`（`fix(memory): isolate L2 sessions by tenant`）。
+- 新增并登记 `092_chat_session_tenant_scope.sql`，`chat_sessions` 增加非空 tenant_id 和 tenant/user 索引。历史行仅通过同库 `auth.users.id → tenant_id` 权威映射；其余行留在运行时不能产生的 `quarantine`，不猜归属。
+- `SessionRepository` 创建、属主查询、列表与计数均按 tenant/user 约束；MemoryService 的会话启动、成功轮次、批量消息、提取状态、读取、改名、删除均传递/检查租户。会话 ID 冲突时按 tenant/user 派生不超过列宽的稳定键；兼容复用旧 user-only 键前，先核对数据库中的完整 owner tuple。旅游历史适配器继续使用其已将可信租户并入的内部 user key。
+- `/memory/sessions` 及单会话读/上下文/改名/删除把验签身份的 tenant/user 交给服务层；`POST /chat/messages` 改为要求认证身份，并忽略请求体自报 user/tenant。
+- 隔离 SQLite 覆盖同一 user 跨 tenant 的列表、读取、改名、删除与键隔离；API 覆盖可信身份传递、请求体伪造忽略及 guest 401。实际运行：`D:/Python/python.exe -m pytest backend/tests/domain_runtime/test_session_ownership.py backend/tests/memory/test_session_tenant_scope.py backend/tests/memory/test_message_codec.py backend/tests/memory/test_migration_registration.py -q --no-cov`：12 passed；`D:/Python/python.exe -m pytest backend/tests/api/test_memory_routes.py backend/tests/api/test_chat_memory_persistence.py backend/tests/api/test_travel_conversation_messages.py backend/tests/api/test_path_classes.py -q --no-cov`：31 passed。
+- 在一次性 PostgreSQL 17 容器中执行迁移两次：首次权威映射 1 行，未映射行保留 `quarantine`；第二次更新 0 行且索引/列保持幂等。容器随后停止并移除，未连接共享开发库。相关 Python `py_compile`、`git diff --check` 均通过。
+- 未运行需要共享 PostgreSQL 的 `test_memory_extraction_outbox.py`、全量回归或真实流式 Agent E2E；未对共享库应用迁移。无法由 `auth.users` 映射的历史会话在正式迁移后将不可由普通租户读取，需按权威归属另行处理。Phase 1 的取消/重启、Redis 恢复及完整真实链路门禁仍未完成。
