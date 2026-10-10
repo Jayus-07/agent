@@ -94,14 +94,20 @@ class MemoryService:
                 # STOP C（C4 属主隔离）：session 被其他用户占用时派生隔离
                 # 存储键——该用户的所有读写落到自己的键下，互不可见
                 try:
-                    srow = await srepo.get_or_create(session_id, user_id)
+                    srow = await srepo.get_or_create(
+                        session_id, user_id, tenant_id,
+                    )
                 except SessionOwnerMismatch:
                     original = session_id
-                    session_id = self._scoped_session_id(session_id, user_id)
+                    session_id = await self._scoped_session_id_for_owner(
+                        srepo, session_id, user_id, tenant_id,
+                    )
                     logger.warning(
-                        "[MemoryService] session %s 属主不匹配（跨用户收养拦截），"
+                        "[MemoryService] session %s 租户/属主不匹配（跨域收养拦截），"
                         "隔离至派生键", original)
-                    srow = await srepo.get_or_create(session_id, user_id)
+                    srow = await srepo.get_or_create(
+                        session_id, user_id, tenant_id,
+                    )
 
                 # L2 → L1（只取最近 SHORT_TERM_MAX_MESSAGES*2 条：
                 #  ① 查询层限量，避免长会话全量拉取；② 多取一倍给去重留余量）
@@ -390,10 +396,12 @@ class MemoryService:
                 # Ensure chat_sessions row exists (may not if start_session was never called)
                 # STOP C（C4 属主隔离）：与 start_session 同口径派生隔离键
                 try:
-                    await srepo.get_or_create(session_id, user_id)
+                    await srepo.get_or_create(session_id, user_id, tenant_id)
                 except SessionOwnerMismatch:
-                    session_id = self._scoped_session_id(session_id, user_id)
-                    await srepo.get_or_create(session_id, user_id)
+                    session_id = await self._scoped_session_id_for_owner(
+                        srepo, session_id, user_id, tenant_id,
+                    )
+                    await srepo.get_or_create(session_id, user_id, tenant_id)
 
                 receipt = None
                 if key_hash:
@@ -797,8 +805,14 @@ class MemoryService:
     async def archive(self, record_id: str) -> bool:
         return await self.update(record_id, is_active=False)
 
-    async def save_messages(self, session_id: str, messages: list[dict], user_id: str = "default") -> dict:
+    async def save_messages(
+        self, session_id: str, messages: list[dict], user_id: str = "default",
+        tenant_id: str = "",
+    ) -> dict:
         """批量保存会话消息（供 chat API 调用）。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         if not session_id or not messages:
             return {"saved": 0}
         saved = 0
@@ -807,10 +821,12 @@ class MemoryService:
                 repo = SessionRepository(db)
                 # STOP C（C4 属主隔离）：与 start/end_turn 同口径
                 try:
-                    await repo.get_or_create(session_id, user_id)
+                    await repo.get_or_create(session_id, user_id, tenant_id)
                 except SessionOwnerMismatch:
-                    session_id = self._scoped_session_id(session_id, user_id)
-                    await repo.get_or_create(session_id, user_id)
+                    session_id = await self._scoped_session_id_for_owner(
+                        repo, session_id, user_id, tenant_id,
+                    )
+                    await repo.get_or_create(session_id, user_id, tenant_id)
                 for m in messages:
                     await repo.save_message(session_id, m.get("role", "user"), m.get("content", ""))
                     saved += 1
@@ -821,16 +837,22 @@ class MemoryService:
 
     async def replace_session_messages(
         self, session_id: str, messages: list[dict[str, str]],
-        user_id: str = "default",
+        user_id: str = "default", tenant_id: str | None = None,
     ) -> dict:
         """以单事务替换会话快照，供客户端按轮同步时保持幂等。"""
+        if tenant_id is not None:
+            from backend.memory.keying import normalize_tenant_id
+
+            tenant_id = normalize_tenant_id(tenant_id)
         if not session_id or len(session_id) > 128:
             return {"saved": 0, "error": "会话标识无效"}
         try:
             async with AsyncSessionLocal() as db_session:
                 repo = SessionRepository(db_session)
                 try:
-                    await repo.get_or_create(session_id, user_id)
+                    await repo.get_or_create(
+                        session_id, user_id, tenant_id,
+                    )
                 except SessionOwnerMismatch:
                     await db_session.rollback()
                     return {"saved": 0, "error": "会话不存在"}
@@ -843,12 +865,41 @@ class MemoryService:
 
 
     @staticmethod
-    def _scoped_session_id(session_id: str, user_id: str) -> str:
-        """跨用户收养拦截后的隔离存储键（确定性：同一用户恒映射同键）。"""
+    def _scoped_session_id(
+        session_id: str, user_id: str, tenant_id: str = "default",
+    ) -> str:
+        """跨用户/租户收养拦截后的稳定隔离键，且不超过数据库列宽。"""
         import hashlib
 
-        digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
-        return f"{session_id}::u:{digest}"
+        if tenant_id == "default":
+            # 保留既有默认租户映射，避免升级后旧的用户隔离会话失联。
+            digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
+            legacy = f"{session_id}::u:{digest}"
+            if len(legacy) <= 128:
+                return legacy
+            digest = hashlib.sha1(
+                f"{session_id}\0{user_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            return f"{session_id[:100]}::u:{digest}"
+
+        digest = hashlib.sha256(
+            f"{session_id}\0{tenant_id}\0{user_id}".encode("utf-8")
+        ).hexdigest()[:32]
+        return f"{session_id[:92]}::t:{digest}"
+
+    async def _scoped_session_id_for_owner(
+        self, repo: SessionRepository, session_id: str,
+        user_id: str, tenant_id: str,
+    ) -> str:
+        """复用归属可证明的旧 user-only 键，否则生成 tenant/user 新键。"""
+        tenant_scoped = self._scoped_session_id(session_id, user_id, tenant_id)
+        if tenant_id != "default":
+            # C4 已上线过 user-only 派生键。仅当数据库中的真实 owner tuple
+            # 与当前请求完全相同才复用；同 user 的其他租户仍转到新键。
+            legacy = self._scoped_session_id(session_id, user_id, "default")
+            if await repo.get_owner(legacy) == (tenant_id, user_id):
+                return legacy
+        return tenant_scoped
 
     async def run_decay(self) -> dict:
         async with AsyncSessionLocal() as db_session:
@@ -863,22 +914,29 @@ class MemoryService:
     # ============================================================
 
     @staticmethod
-    async def _check_owner(repo, session_id: str, user_id: str | None) -> str | None:
-        """路由面属主校验：user_id 给定时，非属主/不存在都返回统一「会话不存在」。
+    async def _check_owner(
+        repo, session_id: str, user_id: str | None,
+        tenant_id: str | None = None,
+    ) -> str | None:
+        """路由面属主校验：检查已提供的用户与租户，失败统一返回 404。
 
-        返回 None 表示校验通过（user_id=None 为内部调用方直通，不做校验）。
+        返回 None 表示校验通过（user_id=None 为内部调用方直通）。tenant_id
+        为空仅供把租户编码进 user_id 的内部适配器兼容使用；公开 API 必须传入
+        服务端身份中的 tenant_id。
         404 而非 403：不向调用方泄露 session_id 是否真实存在。
         """
         if user_id is None:
             return None
         owner = await repo.get_owner(session_id)
-        if owner != user_id:
+        if (owner is None or owner[1] != user_id
+                or (tenant_id is not None and owner[0] != tenant_id)):
             return "会话不存在"
         return None
 
     async def list_sessions(self, user_id: str = "default",
                             limit: int = 50, before: str | None = None,
-                            before_session_id: str | None = None) -> dict:
+                            before_session_id: str | None = None,
+                            tenant_id: str = "") -> dict:
         """列出用户所有会话（支持分页）。
 
         Args:
@@ -886,12 +944,16 @@ class MemoryService:
             before: 游标分页时间戳
             before_session_id: 时间相同时用于稳定分页的会话 ID
         """
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
                 safe_limit = max(1, min(int(limit), 200))
                 sessions = await repo.list_all(
                     user_id=user_id,
+                    tenant_id=tenant_id,
                     limit=safe_limit + 1,
                     before=before,
                     before_session_id=before_session_id,
@@ -902,7 +964,9 @@ class MemoryService:
                 # 是否有下一页由 limit + 1 的前瞻查询判断。
                 total: int | None = None
                 if before is None:
-                    total = await repo.count_sessions(user_id=user_id)
+                    total = await repo.count_sessions(
+                        user_id=user_id, tenant_id=tenant_id,
+                    )
                 await db_session.commit()
                 return {
                     "sessions": sessions,
@@ -1003,7 +1067,7 @@ class MemoryService:
         async with AsyncSessionLocal() as db_session:
             try:
                 denied = await self._check_owner(
-                    SessionRepository(db_session), session_id, user_id,
+                    SessionRepository(db_session), session_id, user_id, tenant_id,
                 )
                 if denied:
                     return {"jobs": [], "total": 0, "error": denied}
@@ -1087,12 +1151,21 @@ class MemoryService:
                 logger.error("[MemoryService] delete_profile_memory 失败: %s", e)
                 return {"ok": False, "error": str(e)}
 
-    async def get_session_messages(self, session_id: str, user_id: str | None = None) -> dict:
+    async def get_session_messages(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
         """获取会话消息列表。"""
+        if tenant_id is not None:
+            from backend.memory.keying import normalize_tenant_id
+
+            tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"session_id": session_id, "messages": [], "error": denied}
                 msgs = await repo.load_messages(session_id)
@@ -1156,12 +1229,20 @@ class MemoryService:
                 logger.error(f"[MemoryService] list_profile_memories 失败: {e}")
                 return {"records": [], "error": str(e)}
 
-    async def get_session_context(self, session_id: str, user_id: str | None = None) -> dict:
+    async def get_session_context(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str = "",
+    ) -> dict:
         """获取会话 Agent 工作上下文。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"session_id": session_id, "context": None, "error": denied}
                 ctx = await repo.get_context(session_id)
@@ -1178,12 +1259,20 @@ class MemoryService:
                 await db_session.rollback()
                 return {"session_id": session_id, "context": None, "error": str(e)}
 
-    async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
+    async def delete_session(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str = "",
+    ) -> dict:
         """删除会话及消息。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"ok": False, "error": denied}
                 from backend.memory.models.memory import MemoryExtractionJob
@@ -1196,6 +1285,9 @@ class MemoryService:
                     cancel_jobs = cancel_jobs.where(
                         MemoryExtractionJob.user_id == user_id,
                     )
+                cancel_jobs = cancel_jobs.where(
+                    MemoryExtractionJob.tenant_id == tenant_id,
+                )
                 await db_session.execute(cancel_jobs.values(
                     status="CANCELLED",
                     last_error_code="SESSION_DELETED",
@@ -1212,12 +1304,20 @@ class MemoryService:
                 logger.error(f"[MemoryService] delete_session 失败: {e}")
                 return {"ok": False, "error": str(e)}
 
-    async def rename_session(self, session_id: str, title: str, user_id: str | None = None) -> dict:
+    async def rename_session(
+        self, session_id: str, title: str, user_id: str | None = None,
+        tenant_id: str = "",
+    ) -> dict:
         """重命名会话。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"ok": False, "error": denied}
                 ok = await repo.rename(session_id, title)

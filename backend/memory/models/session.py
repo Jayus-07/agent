@@ -1,5 +1,5 @@
 """SQLAlchemy ORM for chat_sessions + chat_messages"""
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Index, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
@@ -8,10 +8,17 @@ Base = declarative_base()
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("idx_chat_sessions_tenant_user", "tenant_id", "user_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     session_id = Column(String(128), unique=True, nullable=False, index=True)
     user_id = Column(String(64), nullable=False, default="default")
+    # 运行时空租户归一为 default；quarantine 仅用于无法权威映射的旧会话。
+    tenant_id = Column(
+        String(64), nullable=False, default="default", server_default="quarantine",
+    )
     # 会话标题：首轮用户问题截断（save_turn 自动填）或用户重命名；
     # 与 L2 自动摘要 summary 分离 —— 摘要只喂 prompt，标题只管展示
     title = Column(String(128), nullable=True, comment="会话标题（与L2摘要summary分离）")

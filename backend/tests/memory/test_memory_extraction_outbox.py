@@ -46,7 +46,7 @@ async def _isolated_postgres_data():
 async def _create_turn(session_id: str = _SESSION) -> tuple[int, int]:
     async with AsyncSessionLocal() as db:
         repo = SessionRepository(db)
-        await repo.get_or_create(session_id, _USER)
+        await repo.get_or_create(session_id, _USER, _TENANT)
         user_message, assistant_message = await repo.save_turn(
             session_id, "我平时喜欢安静的酒店", "收到，我会记住。",
         )
@@ -131,7 +131,7 @@ async def test_end_turn_idempotency_is_atomic_and_scoped(monkeypatch):
 
     await _require_turn_receipt_schema()
     async with AsyncSessionLocal() as db:
-        await SessionRepository(db).get_or_create(_SESSION, _USER)
+        await SessionRepository(db).get_or_create(_SESSION, _USER, _TENANT)
         await db.commit()
 
     published: list[str] = []
@@ -306,7 +306,9 @@ async def test_deleting_session_cancels_pending_and_running_extractions():
         job.claimed_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         await db.commit()
 
-    result = await MemoryService().delete_session(_SESSION, user_id=_USER)
+    result = await MemoryService().delete_session(
+        _SESSION, user_id=_USER, tenant_id=_TENANT,
+    )
 
     assert result["ok"] is True
     async with AsyncSessionLocal() as db:

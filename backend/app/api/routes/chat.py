@@ -685,7 +685,7 @@ async def chat_stream_resume(
 # POST /chat/messages — 持久化会话消息到 PG
 # ═══════════════════════════════════════════════════
 @router.post("/messages")
-def save_messages(req: dict):
+def save_messages(req: dict, request: Request):
     """批量保存会话消息（前端 SSE done 后调用）
 
     body: { session_id, messages: [{ role, content }, ...] }
@@ -694,12 +694,19 @@ def save_messages(req: dict):
     主 loop 直接 await 会抛 "attached to a different loop"（CS 页消息
     持久化失败的根因）。
     """
+    from backend.app.api.identity import resolve_identity
+
+    identity = resolve_identity(request)
+    if not identity.authenticated:
+        raise HTTPException(status_code=401, detail="未认证：会话记忆按登录身份隔离")
     from backend.memory.manager import memory_manager
     from backend.memory.service import MemoryService
     return memory_manager.run_tool(
         lambda: MemoryService().save_messages(
             session_id=req.get("session_id", ""),
             messages=req.get("messages", []),
+            user_id=identity.user_id,
+            tenant_id=identity.tenant_id,
         )
     )
 
