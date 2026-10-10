@@ -11,7 +11,7 @@
 保留：graph_topology() + NODE_LABELS（LangGraph 多 Agent 拓扑，独立有用）
 新增：INDEXING_TOPOLOGY + INDEXING_LABELS（Knowledge Index 流水线拓扑，Phase 1）
 
-── 2026-09-30 结构病修复（docs/reports/2026-09-30-结构病代码审查报告.md P1-1）──
+── 2026-09-30 结构病修复 ──
 本文件过去手写了一份节点标签与节点清单，与 builder 真源漂移：
 残留 `sql_worker`/`rag_worker`/`report_worker` 旧名（真实为 `*_skill`），
 缺 router/tool_selector/skill_executor/workflow_executor/general_chat 与 5 张域图，

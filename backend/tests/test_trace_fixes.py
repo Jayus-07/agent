@@ -233,6 +233,42 @@ class TestObservabilitySlaDto:
         assert dto["sla"]["breached"] is True
 
 
+
+# =====================================================
+# 4b. trace.summary 计数口径（embedding 不计入 LLM 调用）
+# =====================================================
+
+class TestTraceSummaryCounts:
+    """summary.llm_calls 只统计真正的 LLM 对话调用。
+
+    回归：记忆检索向量化 span 曾被标成 type="llm_call"，导致概览
+    「LLM 调用」把 embedding 也算进去，与 LLM 调用明细的数量对不上。
+    向量化 span 现使用 type="embedding"。
+    """
+
+    def _dto(self, spans):
+        from backend.app.api.routes.observability import _to_trace_dto
+        from backend.observability.tracer import Span, TraceRecord
+
+        rec = TraceRecord(id="tsum", question="q", duration_ms=100)
+        rec.spans = [Span(span_id=f"s{i}", parent_id=None, name=f"s{i}", type=t)
+                     for i, t in enumerate(spans)]
+        return _to_trace_dto(rec)
+
+    def test_embedding_span_not_counted_as_llm_call(self):
+        dto = self._dto(["llm_call", "embedding", "llm_call"])
+        assert dto["summary"]["llm_calls"] == 2
+        assert dto["summary"]["span_count"] == 3
+
+    def test_embedding_only_trace_reports_zero_llm_calls(self):
+        dto = self._dto(["embedding", "embedding"])
+        assert dto["summary"]["llm_calls"] == 0
+
+    def test_tool_and_retrieval_counts_unchanged(self):
+        dto = self._dto(["tool_call", "tool_call", "retrieval", "rerank"])
+        assert dto["summary"]["tool_calls"] == 2
+        assert dto["summary"]["retrieval_calls"] == 2
+
 # =====================================================
 # 5. trace_store 序列化不泄漏内部属性
 # =====================================================

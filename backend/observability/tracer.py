@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
@@ -43,6 +44,66 @@ _current_trace_var: ContextVar[TraceRecord | None] = ContextVar(
 _scope_root_var: ContextVar[str | None] = ContextVar(
     "trace_scope_root", default=None
 )
+_external_parent_trace_id: ContextVar[str | None] = ContextVar(
+    "trace_external_parent_id", default=None,
+)
+_external_child_trace_id: ContextVar[str | None] = ContextVar(
+    "trace_external_child_id", default=None,
+)
+# LangGraph 图节点当前执行深度：非 0 时 start_span 显式挂到该节点 span，
+# 不再按"最近未关闭 span"推断父级。
+_graph_node_var: ContextVar[str | None] = ContextVar(
+    "trace_graph_node", default=None,
+)
+
+
+def bind_graph_node(span_id: str | None):
+    """把当前执行上下文标记为图节点 span，返回用于恢复的 token。
+
+    图节点（planner/supervisor/reporter/rag_skill/sql_skill/cs_*）是 LangGraph
+    的调度单元，语义上平铺在 root 之下。它们不传 parent_id，若走
+    "最近未关闭 span" 推断，会被挂到同层未收口的兄弟 span（如
+    adaptive_expansion）下，瀑布图把 reporter 画成检索的一部分且耗时
+    归因失真。显式绑定后，节点自身及其内部未指定父级的埋点都收敛到
+    该节点 span，链内部真实嵌套保持不变。
+    """
+    return _graph_node_var.set(span_id)
+
+
+def reset_graph_node(token) -> None:
+    """恢复图节点绑定前的上下文。"""
+    _graph_node_var.reset(token)
+
+
+def get_graph_node() -> str | None:
+    return _graph_node_var.get()
+
+
+def bind_external_parent_trace_id(trace_id: str | None):
+    """为跨服务 Trace 关联绑定请求级父 Trace ID。"""
+    return _external_parent_trace_id.set(trace_id)
+
+
+def reset_external_parent_trace_id(token) -> None:
+    """恢复请求前的跨服务 Trace 关联上下文。"""
+    _external_parent_trace_id.reset(token)
+
+
+def get_external_parent_trace_id() -> str | None:
+    return _external_parent_trace_id.get()
+
+
+def bind_external_child_trace_id(trace_id: str | None):
+    """为跨服务子 Trace 绑定由调用方预分配的 ID。"""
+    return _external_child_trace_id.set(trace_id)
+
+
+def reset_external_child_trace_id(token) -> None:
+    _external_child_trace_id.reset(token)
+
+
+def get_external_child_trace_id() -> str | None:
+    return _external_child_trace_id.get()
 
 # span_id → type 自动推断表（type 未传时使用）
 _TYPE_INFER: dict[str, str] = {
@@ -231,7 +292,9 @@ class TraceCollector:
 
     def start(self, question: str = "", session_id: str = "default",
               workflow_name: str = "rag_agent",
-              workflow_kind: str = WorkflowKind.OTHER.value) -> TraceRecord:
+              workflow_kind: str = WorkflowKind.OTHER.value,
+              parent_trace_id: str | None = None,
+              trace_id: str | None = None) -> TraceRecord:
         """开始一次新的 trace。线程/异步安全。
 
         Args:
@@ -240,10 +303,18 @@ class TraceCollector:
             workflow_name: 工作流名称
             workflow_kind: WorkflowKind 枚举值（前端按 kind 路由渲染）
         """
-        rid = uuid.uuid4().hex[:12]
+        requested_id = (
+            trace_id if isinstance(trace_id, str)
+            and re.fullmatch(r"[0-9a-f]{12}", trace_id) else None
+        )
+        rid = requested_id or uuid.uuid4().hex[:12]
         # 嵌套检测：已有 active trace 时建立父子链（而非覆盖后丢失外层上下文）。
         # 典型场景：MultiAgent 图内执行 rag_skill → RAGChain.ask() 自带 trace。
         prev = _current_trace_var.get() or self._thread_current
+        actual_parent_id = (
+            parent_trace_id if requested_id else
+            (prev.id if prev else parent_trace_id)
+        )
         trace = TraceRecord(
             id=rid,
             request_id=rid,
@@ -252,7 +323,7 @@ class TraceCollector:
             question=question,
             workflow_name=workflow_name,
             workflow_kind=workflow_kind,
-            parent_id=prev.id if prev else None,
+            parent_id=actual_parent_id,
         )
         # 反馈/评测闭环需要服务端可验证的 Trace 归属；从权威请求上下文
         # 注入租户与操作者标签，绝不消费请求体中客户端自报的身份字段。
@@ -267,7 +338,7 @@ class TraceCollector:
                 trace.tags["user_id"] = get_tool_user_id()
         except Exception:
             logger.debug("[Tracer] Trace 归属标签注入失败", exc_info=True)
-        if prev is not None:
+        if prev is not None and actual_parent_id == prev.id:
             prev.children_ids.append(rid)
             # P1-6: span → 子 trace 关联 — 在触发方 span 上记录子 trace id，
             # 前端瀑布图可从父 span 直接跳转查看子 trace（软失败不影响主流程）。
@@ -281,7 +352,7 @@ class TraceCollector:
         with self._lock:
             self._span_seq = 0
             self._thread_current = trace
-            if prev is not None:
+            if prev is not None and actual_parent_id == prev.id:
                 self._parents[rid] = prev
         _current_trace_var.set(trace)
         # O2: 自动注入 trace_id/session_id 到日志
@@ -348,16 +419,23 @@ class TraceCollector:
         # Why: chain 内部埋点（chunk_retrieval / enhanced_hybrid_retrieval / rerank 等）
         # 不传 parent_id，旧实现一律平铺到 scope_root/root，嵌套层级丢失，
         # 前端树形图与火焰图无法表达包含关系。
+        # 注意：LangGraph 图节点不能走本推断（见 bind_graph_node），否则会被
+        # 误挂到未收口的兄弟 span 下。
         if parent_id is None and span_id != trace.root_span_id:
-            open_stack = getattr(trace, "_open_spans", None)
-            if open_stack:
-                parent_id = open_stack[-1].span_id
+            graph_node = _graph_node_var.get()
+            if graph_node is not None:
+                # 图节点内部：父级固定为所属节点 span，不做时间嵌套推断。
+                parent_id = graph_node
             else:
-                scope_root = _scope_root_var.get()
-                if scope_root is not None:
-                    parent_id = scope_root
+                open_stack = getattr(trace, "_open_spans", None)
+                if open_stack:
+                    parent_id = open_stack[-1].span_id
                 else:
-                    parent_id = trace.root_span_id or None
+                    scope_root = _scope_root_var.get()
+                    if scope_root is not None:
+                        parent_id = scope_root
+                    else:
+                        parent_id = trace.root_span_id or None
         # P1-9: parent_id 指向不存在的 span（如 skill 在 graph 之外执行时
         # 父 span 尚未创建），或误传了 Span 对象（不可哈希）→ 回退到 root，
         # 避免孤儿 span 导致 trace 树断裂

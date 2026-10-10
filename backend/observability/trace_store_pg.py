@@ -218,6 +218,31 @@ class PostgresTraceStore(TraceStore):
             logger.warning(f"[TraceStore-PG] 读取失败 {trace_id}: {e}")
         return None
 
+    def list_children(self, parent_id: str, limit: int = 50) -> list[dict]:
+        """按既有 parent_id 列查询子 Trace，供详情页恢复跨服务 Trace 关系。"""
+        if not parent_id:
+            return []
+        try:
+            with self._lock, self._conn() as conn:
+                rows = self._exec(
+                    conn,
+                    f"SELECT data FROM {self._table} WHERE parent_id = %s "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (parent_id, max(1, min(int(limit), 200))),
+                ).fetchall()
+            children: list[dict] = []
+            for row in rows:
+                try:
+                    data = json.loads(row["data"]) if row.get("data") else {}
+                except Exception:
+                    continue
+                if data.get("id") or data.get("trace_id"):
+                    children.append(data)
+            return children
+        except Exception as e:
+            logger.warning(f"[TraceStore-PG] 子 Trace 查询失败 {parent_id}: {e}")
+            return []
+
     def list(self, limit: int = 20) -> list[dict]:
         """最近 N 条 trace 摘要（不包含 spans 详情）。
 

@@ -50,6 +50,35 @@ class TestClassify:
         assert classify_trace_source("agent", "not-json") == SOURCE_AI_ASSISTANT
         assert classify_trace_source("agent", None) == SOURCE_AI_ASSISTANT
 
+
+    def test_travel_trace_tags_classify_as_travel(self):
+        """旅游入口链路必须带 runtime_domain=travel。
+
+        回归：旅游链路绕过主图 Router，没有 prefilter_chain 的
+        record_router_decision 写 runtime_* 归因，只写 travel_* 业务标签。
+        分类器只认 runtime_domain/domain，于是 workflow_name=="agent"
+        的分支把旅游 trace 全判成 AI 助手（线上 28/28 条旅游 trace 全错）。
+        """
+        travel_tags = {
+            "travel_run_id": "travel-9a65d0be11394559bdf2f7c253f86fbb",
+            "travel_destination": "杭州",
+            "travel_intent": "plan",
+            "travel_status": "success",
+            "runtime_domain": "travel",
+        }
+        assert classify_trace_source("agent", travel_tags) == SOURCE_TRAVEL
+
+    def test_travel_without_runtime_domain_is_regression_shape(self):
+        """只带 travel_* 但缺 runtime_domain 会被判成 AI 助手。
+
+        固化「写入侧必须补 runtime_domain」这一契约：若哪天旅游入口的
+        runtime_domain 写入被删掉，本用例仍通过（记录当前分类器行为），
+        但 test_travel_trace_tags_classify_as_travel 会失败——两者一起
+        表达「分类器只看 runtime_domain，写入侧负责提供」。
+        """
+        bare = {"travel_run_id": "travel-x", "travel_destination": "福州"}
+        assert classify_trace_source("agent", bare) == SOURCE_AI_ASSISTANT
+
     def test_cs_beats_generic_when_both_present(self):
         assert classify_trace_source(
             "agent", {"runtime_domain": "customer_service", "domain": "travel"},

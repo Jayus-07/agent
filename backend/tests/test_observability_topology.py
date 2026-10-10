@@ -5,7 +5,7 @@
 ``*_skill``），缺 router/tool_selector/skill_executor/workflow_executor/
 general_chat 与 5 张域图，注释却自称「与 graph.py _NODE_LABELS 保持一致」；
 而 ``GET /observability/graph`` 正是把这份过期数据下发出去。
-详见 docs/reports/2026-09-30-结构病代码审查报告.md。
+由回归测试锁定节点标签来自后端真源，边端点必须属于当前节点集。
 
 守护口径：
   1. 标签表 = **派生视图**（结构守护），不是手写字典；

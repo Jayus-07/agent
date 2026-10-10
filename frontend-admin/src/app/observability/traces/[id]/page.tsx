@@ -12,6 +12,7 @@ import LLMCallDetail from "@/components/observability/trace/LLMCallDetail";
 import CostPanel from "@/components/observability/trace/CostPanel";
 import HttpBreakdown from "@/components/observability/trace/HttpBreakdown";
 import SpanTypeSummary from "@/components/observability/trace/SpanTypeSummary";
+import { mergeChildTraceSpans } from "@/components/observability/trace/traceSpanTree";
 
 // 两个可视化组件含 recharts，懒加载避免拖慢详情页首帧
 const StepTimeline = dynamic(() => import("@/components/observability/trace/StepTimeline"), {
@@ -54,7 +55,6 @@ export default function TraceDetailPage() {
   const [jsonExpanded, setJsonExpanded] = useState<Set<string>>(new Set());
   const [highlightStepId, setHighlightStepId] = useState<string | null>(null);
   const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());  // 空=全部
-  const [autoExpandLarge, setAutoExpandLarge] = useState(true);  // 自动展开大耗时 span
   const [addingToEval, setAddingToEval] = useState(false);  // 加入评测集请求中
   const [replaying, setReplaying] = useState(false);  // 重放请求中（必须在 early return 之前声明，否则违反 Rules of Hooks）
   const toast = useToast();
@@ -72,16 +72,35 @@ export default function TraceDetailPage() {
       const t = await getTraceById(id);
       if (cancelled) return;
       setTrace(t);
-      // 父子链并行加载
-      const [p, cs] = await Promise.all([
-        t?.parent_id ? getTraceById(t.parent_id) : Promise.resolve(null),
-        t?.children_ids?.length
-          ? Promise.all(t.children_ids.map((cid) => getTraceById(cid)))
-          : Promise.resolve([]),
-      ]);
+      if (!t) {
+        setParent(null);
+        setChildren([]);
+        setLoading(false);
+        return;
+      }
+      // 父 Trace 与全部子孙 Trace 并行/分层加载。详情 API 从现有 parent_id
+      // 关系补 children_ids，因此远端 RAG 超时后仍可发现已经落库的子 Trace。
+      const pTask = t?.parent_id ? getTraceById(t.parent_id) : Promise.resolve(null);
+      const descendants: TraceRecord[] = [];
+      const seen = new Set<string>([t.id]);
+      let pending = [...(t.children_ids || [])];
+      while (pending.length > 0 && descendants.length < 100) {
+        const batch = [...new Set(pending.filter((childId) => !seen.has(childId)))].slice(0, 25);
+        if (batch.length === 0) break;
+        const batchIds = new Set(batch);
+        pending = pending.filter((childId) => !batchIds.has(childId));
+        batch.forEach((childId) => seen.add(childId));
+        const fetched = await Promise.all(batch.map((childId) => getTraceById(childId)));
+        for (const child of fetched) {
+          if (!child) continue;
+          descendants.push(child);
+          pending.push(...(child.children_ids || []));
+        }
+      }
+      const p = await pTask;
       if (cancelled) return;
       setParent(p);
-      setChildren(cs.filter(Boolean) as TraceRecord[]);
+      setChildren(descendants);
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -128,8 +147,8 @@ export default function TraceDetailPage() {
   const mqSpan = spans.find((s) => s.id === "mq_check" || s.name === "MultiQuery");
   const errorStepId = typeof err.error_node === "string" ? err.error_node : null;
 
-  // 所有 span（StepTimeline 内部按 parent_id 构建树）
-  const childSpans = spans;
+  // 主 Trace 与远端子 Trace 共用一条时间线；子 Trace Span 会映射到其工具调用下。
+  const childSpans = mergeChildTraceSpans(spans, children);
 
   // Span Type 过滤
   const filteredSpans = activeSpanTypes.size === 0
@@ -340,10 +359,6 @@ export default function TraceDetailPage() {
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">📊 Span 耗时时间线 (嵌套层级)</h2>
                   <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 text-[11px] text-slate-500 cursor-pointer">
-                      <input type="checkbox" checked={autoExpandLarge} onChange={e => setAutoExpandLarge(e.target.checked)} className="rounded" />
-                      <span>自动展开 &gt;1s 的步骤</span>
-                    </label>
                     <span className="text-[10px] text-slate-400">
                       {filteredSpans.length}/{childSpans.length} span
                       {activeSpanTypes.size > 0 && <button onClick={() => setActiveSpanTypes(new Set())} className="ml-2 text-violet-500 hover:text-violet-700">清除过滤</button>}
@@ -365,7 +380,6 @@ export default function TraceDetailPage() {
                         setJsonExpanded(next);
                       }}
                       highlightStepId={highlightStepId}
-                      autoExpandLarge={autoExpandLarge}
                     />
                   </div>
 

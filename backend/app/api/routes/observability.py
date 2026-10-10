@@ -249,11 +249,33 @@ async def get_trace(trace_id: str):
     # trace_collector.get() 直读 SQLite TraceStore；
     # 再保留一层 store 直读兜底（极端情况下 collector 异常）
     data = trace_collector.get(trace_id)
+    store = None
     if data is None:
-        store = get_trace_store()
-        data = store.get(trace_id)
+        try:
+            store = get_trace_store()
+            data = store.get(trace_id)
+        except Exception as exc:
+            logger.warning("Trace 详情存储不可用: %s", exc)
+            raise HTTPException(status_code=503, detail="Trace 存储暂不可用") from exc
     if data is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+    # 远端 RAG Trace 在请求完成后才回传 ID；父调用超时/断连时回传可能丢失，
+    # 子 Trace 仍会以既有 parent_id 落库。详情读取时按该关系补齐 children_ids。
+    try:
+        store = store or get_trace_store()
+        stored_children = store.list_children(trace_id)
+        if stored_children:
+            data = dict(data)
+            known = list(data.get("children_ids") or [])
+            seen = set(known)
+            for child in stored_children:
+                child_id = child.get("id") or child.get("trace_id")
+                if child_id and child_id not in seen:
+                    known.append(child_id)
+                    seen.add(child_id)
+            data["children_ids"] = known
+    except Exception:
+        logger.debug("Trace 子关系补齐失败: %s", trace_id, exc_info=True)
     # 读取时回填：存量 trace 的 usage/model/cost 以 llm_usage 明细补齐（历史数据兼容）
     _backfill_usage(data)
     return _to_trace_dto(data)  # 统一转为前端 DTO 格式
