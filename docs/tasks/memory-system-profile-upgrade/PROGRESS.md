@@ -146,3 +146,12 @@
 - 实际运行 `D:/Python/python.exe -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_message_codec.py -q --no-cov`：9 passed，8.86 秒。测试中的 MemoryService 使用伪造仓储和数据库上下文，没有连接共享 PostgreSQL。
 - `D:/Python/python.exe -m py_compile backend/memory/service.py backend/tests/memory/test_l1_message_identity.py` 与 `git diff --check` 均通过。未运行全量回归或真实 Agent E2E。
 - 实现提交：`4fc8cdd1449dbc80e7b09913ba94f80d95ca8f61`（`fix(memory): preserve repeated L1 message content`）。
+
+## 2026-10-11：Phase 1 Runner 生成器关闭取消后台图
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main`，基于 `5864c5e` 实施。
+- Runner 未提供取消信号时为本次执行创建独立 `threading.Event`。Runner 生成器收到 `GeneratorExit` 时先保留原终态归因，再设置取消信号，使后台图在下一检查边界停止；关闭路径不进入成功收尾，也不写入 L2/outbox。HTTP 浏览器断连仍由 SSE 恢复层保留 producer 并继续生成原流。
+- 新增阻塞图回归测试，确认 Runner 生成器关闭后后台线程收到取消且不持久化答案；TASK 与 Runtime 文档补充取消/断连边界。
+- 实际运行 `D:/Python/python.exe -m pytest backend/tests/orchestration/graph/test_runner_trace_finalize.py -k "generator_close_stops_background_graph or user_abort_mid_stream or worker_exception or worker_timeout or normal_completion_finishes_once or double_close" -q --no-cov`：6 passed、3 deselected，11.55 秒。`py_compile` 与 `git diff --check` 通过。
+- 尝试路由级断连续播验证：`D:/Python/python.exe -m pytest backend/tests/api/test_sse_resume.py -k "slow_consumer_union_complete_via_registry" -q --no-cov`。测试 fixture 在导入应用时由 `feedback.init_db()` 连接 PostgreSQL，因本 Worktree 未提供 `PGPASSWORD` 报 1 setup error、10 deselected，路由断言未运行；该项仍待隔离数据库凭据环境验证。
+- 实现提交：`1997bd7`（`fix(runtime): stop graph after runner stream closes`）。Phase 1 其他状态、身份、Redis/重启和真实 E2E 验收仍未收口。
