@@ -87,6 +87,7 @@ _CELERY_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.execute_index": ("rag_index", "workflow_binding"),
     "tasks.reindex_document": ("rag_index", "workflow_binding"),
     "tasks.execute_metadata_shadow": ("metadata_shadow", "workflow_binding"),
+    "memory.extract": ("maintenance", "workflow_binding"),
 }
 
 # beat / 手动维护任务 → workload_class（全部显式登记，禁止依赖 default queue）。
@@ -99,6 +100,7 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "cs.qa_daily_report": ("report", "beat_binding"),
     "cs.faq.gap_review": ("report", "beat_binding"),
     "memory.daily_decay": ("maintenance", "beat_binding"),
+    "memory.extraction_recovery": ("maintenance", "beat_binding"),
     "tasks.pending_recovery": ("maintenance", "beat_binding"),
     "tasks.zombie_reconcile": ("maintenance", "beat_binding"),
     "tasks.stale_execution_recovery": ("maintenance", "beat_binding"),

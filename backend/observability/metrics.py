@@ -712,6 +712,21 @@ memory_inferred_total = Counter(
     "memory_inferred_total",
     "后台自动提取写入的长期记忆总数（origin=inferred）",
 )
+memory_extraction_job_total = Counter(
+    "memory_extraction_job_total",
+    "L3 持久提取队列的投递与任务终态（低基数结果）",
+    labelnames=("outcome",),  # enqueued|recovered|retry|succeeded|failed|cancelled|dispatch_failed|exhausted
+)
+memory_extraction_queue_backlog = Gauge(
+    "memory_extraction_queue_backlog",
+    "L3 持久提取任务当前积压数量",
+    labelnames=("status",),  # pending|running|failed
+)
+memory_extraction_duration_seconds = Histogram(
+    "memory_extraction_duration_seconds",
+    "单个 L3 提取 worker 执行耗时（秒）",
+    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 180.0, 600.0),
+)
 
 # ── Memory 事实版本管理指标（048，STOP C）──
 # 回答：多少 duplicate/reaffirm/supersede/conflict？label 用固定 outcome 枚举，

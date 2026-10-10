@@ -3,6 +3,7 @@ import asyncio
 import time
 
 from langchain_core.messages import SystemMessage
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from backend.config import HISTORY_TOKEN_BUDGET, MEMORY_ORIGIN_INFERRED, PREVIOUS_OUTPUTS_MAX_TOKENS
@@ -74,10 +75,11 @@ class MemoryService:
 
     async def start_session(
         self, session_id: str, user_id: str = "default", query: str = "",
-        tenant_id: str = "",
+        tenant_id: str = "", domain: str | None = None,
     ) -> ShortTermBuffer:
-        from backend.memory.keying import normalize_tenant_id
+        from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
         tenant_id = normalize_tenant_id(tenant_id)
+        domain = normalize_memory_domain(domain)
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
@@ -148,7 +150,7 @@ class MemoryService:
                 # PII/租户标识（§七 trace 红线）。
                 from backend.observability.tracer import trace_collector
                 retrieve_span = trace_collector.start_span(
-                    "memory.retrieve", name="长期记忆检索", type="retrieval")
+                    "memory.retrieve.async", name="长期记忆异步检索", type="retrieval")
                 try:
                     async with AsyncSessionLocal() as l3_db:
                         l3_repo = MemoryRepository(l3_db)
@@ -157,9 +159,64 @@ class MemoryService:
                         # L3 语义 query：用当前用户问题检索长期记忆（此前误用 session_id，
                         # 召回与当前问题语义无关）；空 query 兜底回退 session_id 保持旧行为
                         l3_query = query or session_id
-                        emb = l3.embedding.embed_query(l3_query)
-                        retrieved = await retriever.retrieve(l3_query, emb, user_id,
-                                                             tenant_id=tenant_id)
+                        # type=embedding 而非 llm_call：向量化是 embedding
+                        # 调用，不是 LLM 对话调用。标成 llm_call 会被
+                        # trace.summary.llm_calls 与"LLM 调用明细"计入，
+                        # 导致概览数字与真实 LLM 次数不一致。
+                        embedding_span = trace_collector.start_span(
+                            "memory.embedding_query", name="记忆检索向量化", type="embedding")
+                        embedding_started = time.perf_counter()
+                        try:
+                            emb = l3.embedding.embed_query(l3_query)
+                        except BaseException as exc:
+                            trace_collector.end_span(
+                                embedding_span,
+                                status="cancelled" if isinstance(exc, asyncio.CancelledError) else "error",
+                                metrics={
+                                    "elapsed_ms": round(
+                                        (time.perf_counter() - embedding_started) * 1000, 1,
+                                    ),
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                            raise
+                        else:
+                            trace_collector.end_span(
+                                embedding_span,
+                                metrics={"elapsed_ms": round(
+                                    (time.perf_counter() - embedding_started) * 1000, 1,
+                                )},
+                            )
+                        candidates_span = trace_collector.start_span(
+                            "memory.retrieve_candidates", name="记忆候选检索", type="retrieval")
+                        candidates_started = time.perf_counter()
+                        try:
+                            retrieved = await retriever.retrieve(
+                                l3_query, emb, user_id, tenant_id=tenant_id,
+                                domain=domain,
+                            )
+                        except BaseException as exc:
+                            trace_collector.end_span(
+                                candidates_span,
+                                status="cancelled" if isinstance(exc, asyncio.CancelledError) else "error",
+                                metrics={
+                                    "elapsed_ms": round(
+                                        (time.perf_counter() - candidates_started) * 1000, 1,
+                                    ),
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                            raise
+                        else:
+                            trace_collector.end_span(
+                                candidates_span,
+                                metrics={
+                                    "elapsed_ms": round(
+                                        (time.perf_counter() - candidates_started) * 1000, 1,
+                                    ),
+                                    **dict(retriever.last_stage_counts),
+                                },
+                            )
                     try:
                         trace_collector.end_span(
                             retrieve_span, metrics=dict(retriever.last_stage_counts))
@@ -210,6 +267,23 @@ class MemoryService:
                     _metric_safe(
                         memory_retrieval_total.labels(
                             status="success", operation="retrieve").inc)
+                except asyncio.CancelledError:
+                    # MemoryManager 的同步桥接到时会取消该任务。确保 L3 span
+                    # 收口并把取消传回 concurrent Future，避免 Trace 悬挂。
+                    try:
+                        trace_collector.end_span(
+                            retrieve_span,
+                            status="cancelled",
+                            metrics={
+                                "elapsed_ms": round(
+                                    (time.perf_counter() - l3_started) * 1000, 1,
+                                ),
+                                "cancelled": True,
+                            },
+                        )
+                    except Exception:  # pragma: no cover - 观测面异常不外泄
+                        pass
+                    raise
                 except Exception as l3_exc:
                     # 降级：记录日志 + metric，主流程继续（不允许 L3 失败打挂聊天）
                     logger.error(
@@ -290,9 +364,10 @@ class MemoryService:
 
     async def end_turn(self, session_id: str, question: str, answer: str,
                        user_id: str = "default", tenant_id: str = "") -> None:
-        # save_turn 之前失败的路径同样要能进入后台 store（provenance 允许缺失，
-        # 但不能因 UnboundLocalError 让 end_turn 抛异常）
-        user_message_id: int | None = None
+        # L2 消息与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
+        from backend.memory.models.memory import MemoryExtractionJob
+
+        job_id: str | None = None
         async with AsyncSessionLocal() as db_session:
             try:
                 srepo = SessionRepository(db_session)
@@ -305,11 +380,22 @@ class MemoryService:
                     session_id = self._scoped_session_id(session_id, user_id)
                     await srepo.get_or_create(session_id, user_id)
 
-                # L2 persistence —— save_turn 返回已落库的 (user_msg, assistant_msg)，
-                # user message id 在此确定并作为不可变参数传入后台 store：
-                # 禁止在后台协程里"查最新用户消息"取 provenance（并发 turn 会串轮）
-                q_msg, _a_msg = await srepo.save_turn(session_id, question, answer)
-                user_message_id = q_msg.id if q_msg is not None else None
+                # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
+                q_msg, a_msg = await srepo.save_turn(session_id, question, answer)
+                if q_msg is not None and q_msg.id is not None:
+                    from backend.memory.keying import normalize_tenant_id
+
+                    job = MemoryExtractionJob(
+                        tenant_id=normalize_tenant_id(tenant_id),
+                        user_id=user_id,
+                        session_id=session_id,
+                        source_message_id=q_msg.id,
+                        assistant_message_id=a_msg.id if a_msg is not None else None,
+                        status="PENDING",
+                    )
+                    db_session.add(job)
+                    await db_session.flush()
+                    job_id = str(job.id)
 
                 await db_session.commit()
             except Exception as e:
@@ -322,10 +408,17 @@ class MemoryService:
         # save_turn 已提交，摘要读独立会话；失败安全回退（旧摘要保留）。
         asyncio.ensure_future(self._summarize_if_needed(session_id))
 
-        # L3: background write — caller's loop must keep running (Manager handles this)
-        asyncio.ensure_future(self.store(question, answer, session_id, user_id,
-                                         source_message_id=user_message_id,
-                                         tenant_id=tenant_id))
+        # Broker 只收到 job UUID；投递失败留给 durable recovery 扫描器恢复。
+        if job_id:
+            try:
+                from backend.tasks.memory_extraction_tasks import dispatch_memory_extraction
+
+                await dispatch_memory_extraction(job_id)
+            except Exception as exc:  # 聊天已提交，outbox 保证稍后可恢复
+                logger.warning(
+                    "[MemoryService] L3 任务投递失败，将由扫描器恢复 (job=%s, error=%s)",
+                    job_id, type(exc).__name__,
+                )
 
     async def _summarize_if_needed(self, session_id: str) -> None:
         """L2 摘要后台任务（STOP E）。
@@ -343,11 +436,12 @@ class MemoryService:
             async with AsyncSessionLocal() as db_session:
                 try:
                     srepo = SessionRepository(db_session)
-                    if not await srepo.needs_summarization(session_id):
-                        return
                     from backend.config import (
+                        CONTEXT_L2_SUMMARY_TRIGGER_TOKENS,
                         CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES,
                         CONTEXT_L4_KEEP_RECENT_TURNS,
+                        CONTEXT_L5_MAX_DELTA_MESSAGES,
+                        SESSION_MAX_MESSAGES,
                     )
                     state = await srepo.get_summary_state(session_id)
                     through = int(state.get("through_id") or 0)
@@ -357,9 +451,33 @@ class MemoryService:
                         return
                     rows = await srepo.load_messages_since(
                         session_id, through, boundary,
-                        limit=CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES)
-                    if len(rows) < CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES:
-                        return  # 攒批：增量不足，等后续轮次凑批
+                        limit=CONTEXT_L5_MAX_DELTA_MESSAGES)
+                    if not rows:
+                        return
+
+                    # L2 以模型感知 Token 数作为主触发条件；消息数仍为历史
+                    # 长度硬上限。达到 Token 线的长消息增量可绕过小批量门。
+                    from langchain_core.messages import AIMessage, HumanMessage
+                    delta_tokens = sum(
+                        count_message_tokens(
+                            HumanMessage(content=row.content or "")
+                            if row.role == "user"
+                            else AIMessage(content=row.content or "")
+                        )
+                        for row in rows
+                    )
+                    token_triggered = (
+                        CONTEXT_L2_SUMMARY_TRIGGER_TOKENS > 0
+                        and delta_tokens >= CONTEXT_L2_SUMMARY_TRIGGER_TOKENS
+                    )
+                    message_cap_reached = await srepo.needs_summarization(
+                        session_id, max_messages=SESSION_MAX_MESSAGES,
+                    )
+                    if not token_triggered and not message_cap_reached:
+                        return
+                    if (not token_triggered
+                            and len(rows) < CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES):
+                        return  # 小增量攒批；达到 Token 线时无需等满消息数
                     l2 = await SessionMemory.create(session_id, srepo)
                     summary = await l2.summarize()
                     if summary is None:
@@ -395,9 +513,11 @@ class MemoryService:
     # ============================================================
 
     async def search(self, query: str, session_id: str, user_id: str = "default",
-                     top_k: int = 5, tenant_id: str = "") -> list[MemoryFact]:
-        from backend.memory.keying import normalize_tenant_id
+                     top_k: int = 5, tenant_id: str = "",
+                     domain: str | None = None) -> list[MemoryFact]:
+        from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
         tenant_id = normalize_tenant_id(tenant_id)
+        domain = normalize_memory_domain(domain)
         async with AsyncSessionLocal() as db_session:
             try:
                 mrepo = MemoryRepository(db_session)
@@ -409,6 +529,7 @@ class MemoryService:
                 # 仅真正返回给 Agent 的记忆 mark_accessed（§31，带 scope）
                 retrieved = await retriever.retrieve(query, emb, user_id, top_k=top_k,
                                                      tenant_id=tenant_id,
+                                                     domain=domain,
                                                      enforce_gate=False)
                 records = [m.record for m in retrieved]
 
@@ -418,8 +539,16 @@ class MemoryService:
                     await db_session.commit()
 
                 return [
-                    MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id,
-                               created_at=str(r.created_at), importance_score=r.importance_score)
+                    MemoryFact(
+                        fact_type=r.memory_type,
+                        content=r.content,
+                        session_id=r.session_id,
+                        created_at=str(r.created_at),
+                        importance_score=r.importance_score,
+                        memory_key=r.memory_key,
+                        structured_value=r.structured_value,
+                        memory_id=str(r.id),
+                    )
                     for r in records
                 ]
             except Exception as e:
@@ -432,7 +561,8 @@ class MemoryService:
     # ============================================================
 
     async def store(self, question: str, answer: str, session_id: str, user_id: str = "default",
-                    source_message_id: int | None = None, tenant_id: str = "") -> None:
+                    source_message_id: int | None = None, tenant_id: str = "",
+                    job_id: str | None = None, job_attempt: int | None = None) -> dict:
         """后台管线: extract → evidence gate → PII → classify → score → conflict resolution → write
 
         provenance 契约（STOP B）：
@@ -448,7 +578,12 @@ class MemoryService:
         LLM 同步调用（提取/分类）必须放到线程池，否则会阻塞整个 loop，
         导致同期其他记忆操作（会话持久化等）超时降级。
         """
+        from uuid import UUID
+
         from backend.memory.keying import normalize_tenant_id
+        from backend.memory.models.memory import MemoryExtractionJob
+
+        job_uuid = UUID(str(job_id)) if job_id is not None else None
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             write_started = time.perf_counter()
@@ -461,10 +596,25 @@ class MemoryService:
                 for reason in rejections:
                     _metric_safe(memory_extraction_rejected_total.labels(reason=reason).inc)
                 if not facts:
-                    return
+                    extraction_failed = "error" in rejections
+                    return {
+                        "status": "failed" if extraction_failed else "succeeded",
+                        "error_code": "EXTRACTION_ERROR" if extraction_failed else None,
+                        "facts": 0,
+                        "stored": 0,
+                    }
 
                 stored = 0
                 for fact in facts:
+                    if job_uuid and job_attempt is not None:
+                        lease = await db_session.execute(select(MemoryExtractionJob.id).where(
+                            MemoryExtractionJob.id == job_uuid,
+                            MemoryExtractionJob.status == "RUNNING",
+                            MemoryExtractionJob.attempts == job_attempt,
+                        ))
+                        if lease.scalar_one_or_none() is None:
+                            await db_session.rollback()
+                            return {"status": "cancelled", "facts": len(facts), "stored": stored}
                     # 2. Provenance 强制赋值（代码层，非模型层）
                     fact.origin = MEMORY_ORIGIN_INFERRED
                     fact.source_message_id = source_message_id
@@ -482,6 +632,15 @@ class MemoryService:
                     if not self._get_importance().should_store(fact.importance_score):
                         _metric_safe(memory_extraction_rejected_total.labels(reason="low_importance").inc)
                         continue
+                    if job_uuid and job_attempt is not None:
+                        lease = await db_session.execute(select(MemoryExtractionJob.id).where(
+                            MemoryExtractionJob.id == job_uuid,
+                            MemoryExtractionJob.status == "RUNNING",
+                            MemoryExtractionJob.attempts == job_attempt,
+                        ))
+                        if lease.scalar_one_or_none() is None:
+                            await db_session.rollback()
+                            return {"status": "cancelled", "facts": len(facts), "stored": stored}
                     # 5. Conflict resolution + write（per-fact 事务：一个 fact 失败不丢同批其他）
                     try:
                         result = await l3.store_with_resolution(fact, user_id, session_id, tenant_id)
@@ -510,8 +669,13 @@ class MemoryService:
                         stored += 1
                         _metric_safe(memory_inferred_total.inc)
                     else:
+                        rejection_reason = (
+                            "deleted" if result.outcome.value == "BLOCKED_BY_DELETE"
+                            else "stale" if result.outcome.value == "BLOCKED_STALE_EVENT"
+                            else "duplicate"
+                        )
                         _metric_safe(memory_extraction_rejected_total.labels(
-                            reason="duplicate").inc)
+                            reason=rejection_reason).inc)
 
                 if stored:
                     logger.info(
@@ -521,6 +685,7 @@ class MemoryService:
                 _metric_safe(
                     memory_retrieval_total.labels(
                         status="success", operation="write").inc)
+                return {"status": "succeeded", "facts": len(facts), "stored": stored}
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] store 失败: {e}")
@@ -532,6 +697,7 @@ class MemoryService:
                         operation="write").inc)
                 _metric_safe(
                     memory_extraction_rejected_total.labels(reason="error").inc)
+                return {"status": "failed", "error_code": "STORE_ERROR"}
             finally:
                 try:
                     memory_retrieval_latency_seconds.labels(
@@ -581,28 +747,6 @@ class MemoryService:
             logger.error(f"[MemoryService] save_messages 失败: {e}")
         return {"saved": saved}
 
-    async def replace_session_messages(
-        self, session_id: str, messages: list[dict[str, str]],
-        user_id: str = "default",
-    ) -> dict:
-        """以单事务替换会话快照，供客户端按轮同步时保持幂等。"""
-        if not session_id or len(session_id) > 128:
-            return {"saved": 0, "error": "会话标识无效"}
-        try:
-            async with AsyncSessionLocal() as db_session:
-                repo = SessionRepository(db_session)
-                try:
-                    await repo.get_or_create(session_id, user_id)
-                except SessionOwnerMismatch:
-                    await db_session.rollback()
-                    return {"saved": 0, "error": "会话不存在"}
-                saved = await repo.replace_messages(session_id, messages)
-                await db_session.commit()
-                return {"saved": len(saved)}
-        except Exception as e:
-            logger.error(f"[MemoryService] replace_session_messages 失败: {e}")
-            return {"saved": 0, "error": str(e)}
-
     @staticmethod
     def _scoped_session_id(session_id: str, user_id: str) -> str:
         """跨用户收养拦截后的隔离存储键（确定性：同一用户恒映射同键）。"""
@@ -638,19 +782,29 @@ class MemoryService:
         return None
 
     async def list_sessions(self, user_id: str = "default",
-                            limit: int = 50, before: str | None = None) -> dict:
+                            limit: int = 50, before: str | None = None,
+                            before_session_id: str | None = None) -> dict:
         """列出用户所有会话（支持分页）。
 
         Args:
             limit: 单次返回上限（50 / 100 / 200 等）
-            before: 游标分页 — 仅返回 updated_at < before 的会话
+            before: 游标分页时间戳
+            before_session_id: 时间相同时用于稳定分页的会话 ID
         """
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                sessions = await repo.list_all(user_id=user_id, limit=limit, before=before)
-                # 第一页（无 cursor）时返回 total；分页时 total 不变（cost）
-                # 前端可据此判断 hasMore = (已显示 < total)
+                safe_limit = max(1, min(int(limit), 200))
+                sessions = await repo.list_all(
+                    user_id=user_id,
+                    limit=safe_limit + 1,
+                    before=before,
+                    before_session_id=before_session_id,
+                )
+                has_more = len(sessions) > safe_limit
+                sessions = sessions[:safe_limit]
+                # 第一页返回精确总数供旧调用方使用；后续页避免重复 COUNT。
+                # 是否有下一页由 limit + 1 的前瞻查询判断。
                 total: int | None = None
                 if before is None:
                     total = await repo.count_sessions(user_id=user_id)
@@ -658,7 +812,7 @@ class MemoryService:
                 return {
                     "sessions": sessions,
                     "total": total if total is not None else len(sessions),
-                    "has_more": total is not None and len(sessions) < (total or 0),
+                    "has_more": has_more,
                 }
             except Exception as e:
                 await db_session.rollback()
@@ -676,9 +830,13 @@ class MemoryService:
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = MemoryRepository(db_session)
-                records = await repo.list_active_profile(
-                    user_id=user_id, tenant_id=tenant_id, limit=limit,
+                all_records = await repo.list_active_profile(
+                    user_id=user_id, tenant_id=tenant_id, limit=None,
                 )
+                from backend.memory.profile import build_profile_projection
+
+                safe_limit = max(1, min(int(limit), 200))
+                records = all_records[:safe_limit]
                 await db_session.commit()
                 return {
                     "records": [
@@ -688,7 +846,11 @@ class MemoryService:
                             "content": r.content,
                             "memory_key": r.memory_key,
                             "structured_value": r.structured_value,
+                            "scope": r.scope,
+                            "domain": r.domain,
+                            "version": int(r.version or 1),
                             "origin": r.origin,
+                            "verification_status": r.verification_status,
                             "importance_score": float(r.importance_score or 0),
                             "confidence_score": float(r.confidence_score or 0),
                             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -698,12 +860,137 @@ class MemoryService:
                         }
                         for r in records
                     ],
-                    "total": len(records),
+                    "total": len(all_records),
+                    "has_more": len(all_records) > len(records),
+                    "profile": build_profile_projection(all_records),
                 }
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] get_profile 失败: {e}")
                 return {"records": [], "total": 0, "error": str(e)}
+
+    async def get_pending_profile(self, user_id: str, tenant_id: str = "",
+                                  limit: int = 100) -> dict:
+        """返回需用户确认的自动推断候选；不将候选混入有效画像。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                records = await MemoryRepository(db_session).list_pending_profile(
+                    user_id=user_id, tenant_id=tenant_id, limit=limit,
+                )
+                await db_session.commit()
+                return {
+                    "records": [{
+                        "id": str(r.id),
+                        "memory_type": r.memory_type,
+                        "content": r.content,
+                        "memory_key": r.memory_key,
+                        "structured_value": r.structured_value,
+                        "domain": r.domain,
+                        "version": int(r.version or 1),
+                        "verification_status": r.verification_status,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    } for r in records],
+                    "total": len(records),
+                }
+            except Exception as e:
+                await db_session.rollback()
+                logger.error("[MemoryService] get_pending_profile 失败: %s", e)
+                return {"records": [], "total": 0, "error": str(e)}
+
+    async def list_extraction_jobs(
+        self, session_id: str, user_id: str, tenant_id: str = "", limit: int = 100,
+    ) -> dict:
+        """返回会话内 L3 提取状态，不返回对话正文或异常原文。"""
+        from backend.memory.keying import normalize_tenant_id
+        from backend.memory.models.memory import MemoryExtractionJob
+
+        tenant_id = normalize_tenant_id(tenant_id)
+        async with AsyncSessionLocal() as db_session:
+            try:
+                denied = await self._check_owner(
+                    SessionRepository(db_session), session_id, user_id,
+                )
+                if denied:
+                    return {"jobs": [], "total": 0, "error": denied}
+                filters = (
+                    MemoryExtractionJob.tenant_id == tenant_id,
+                    MemoryExtractionJob.user_id == user_id,
+                    MemoryExtractionJob.session_id == session_id,
+                )
+                safe_limit = max(1, min(int(limit), 200))
+                rows = (await db_session.execute(
+                    select(MemoryExtractionJob)
+                    .where(*filters)
+                    .order_by(MemoryExtractionJob.created_at.desc())
+                    .limit(safe_limit)
+                )).scalars().all()
+                count = await db_session.scalar(
+                    select(func.count()).select_from(MemoryExtractionJob).where(*filters)
+                )
+                total = int(count or 0)
+                await db_session.commit()
+                return {
+                    "jobs": [{
+                        "job_id": str(row.id),
+                        "status": row.status.lower(),
+                        "attempts": row.attempts,
+                        "error_code": row.last_error_code,
+                        "created_at": row.created_at.isoformat() if row.created_at else None,
+                        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                    } for row in rows],
+                    "total": total,
+                    "has_more": total > len(rows),
+                }
+            except Exception as e:
+                await db_session.rollback()
+                logger.error("[MemoryService] list_extraction_jobs 失败: %s", e)
+                return {"jobs": [], "total": 0, "error": str(e)}
+
+    async def verify_profile_memory(
+        self, user_id: str, tenant_id: str, memory_id: str,
+    ) -> dict:
+        """用户明确确认候选后才允许其进入检索和画像。"""
+        async with AsyncSessionLocal() as db_session:
+            try:
+                changed = await MemoryRepository(db_session).verify_pending_memory(
+                    user_id=user_id, tenant_id=tenant_id, record_id=memory_id,
+                )
+                if not changed:
+                    await db_session.rollback()
+                    return {"ok": False, "error": "记忆不存在"}
+                await db_session.commit()
+                return {"ok": True, "memory_id": memory_id,
+                        "verification_status": "verified"}
+            except Exception as e:
+                await db_session.rollback()
+                logger.error("[MemoryService] verify_profile_memory 失败: %s", e)
+                return {"ok": False, "error": str(e)}
+
+    async def delete_profile_memory(
+        self, user_id: str, tenant_id: str = "", *,
+        memory_id: str | None = None, memory_key: str | None = None,
+    ) -> dict:
+        """删除当前用户的长期记忆；正文/向量物理清除，最小 tombstone 防旧任务复活。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
+        async with AsyncSessionLocal() as db_session:
+            try:
+                result = await MemoryRepository(db_session).delete_profile_memory(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    record_id=memory_id,
+                    memory_key=memory_key,
+                )
+                if result is None:
+                    await db_session.rollback()
+                    return {"ok": False, "error": "记忆不存在"}
+                await db_session.commit()
+                return {"ok": True, **result}
+            except Exception as e:
+                await db_session.rollback()
+                logger.error("[MemoryService] delete_profile_memory 失败: %s", e)
+                return {"ok": False, "error": str(e)}
 
     async def get_session_messages(self, session_id: str, user_id: str | None = None) -> dict:
         """获取会话消息列表。"""
@@ -804,6 +1091,21 @@ class MemoryService:
                 denied = await self._check_owner(repo, session_id, user_id)
                 if denied:
                     return {"ok": False, "error": denied}
+                from backend.memory.models.memory import MemoryExtractionJob
+
+                cancel_jobs = update(MemoryExtractionJob).where(
+                    MemoryExtractionJob.session_id == session_id,
+                    MemoryExtractionJob.status.in_(("PENDING", "RUNNING")),
+                )
+                if user_id is not None:
+                    cancel_jobs = cancel_jobs.where(
+                        MemoryExtractionJob.user_id == user_id,
+                    )
+                await db_session.execute(cancel_jobs.values(
+                    status="CANCELLED",
+                    last_error_code="SESSION_DELETED",
+                    updated_at=func.now(),
+                ))
                 ok = await repo.delete(session_id)
                 await db_session.commit()
                 if ok:

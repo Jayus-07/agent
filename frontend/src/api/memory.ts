@@ -17,10 +17,30 @@ export interface SessionMeta {
   context_summary?: string | null;
 }
 
+export interface SessionPage {
+  sessions: SessionMeta[];
+  total: number;
+  has_more: boolean;
+}
+
+export const SESSION_PAGE_SIZE = 10;
+
 /** GET /memory/sessions — 列出所有会话 */
 export async function listSessions(): Promise<SessionMeta[]> {
   const data = await request<{ sessions: SessionMeta[] }>("/api/memory/sessions");
   return data.sessions || [];
+}
+
+/** GET /memory/sessions — 分页读取历史会话 */
+export async function listSessionsPage(
+  limit = SESSION_PAGE_SIZE,
+  before?: string,
+  beforeSessionId?: string,
+): Promise<SessionPage> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set("before", before);
+  if (beforeSessionId) params.set("before_session_id", beforeSessionId);
+  return request<SessionPage>(`/api/memory/sessions?${params.toString()}`);
 }
 
 /** 画像记忆条目（memory_records active 行的只读投影） */

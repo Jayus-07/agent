@@ -12,14 +12,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-import psycopg2
 import pytest
 
-from backend.config.database import MEMORY_DB_CONFIG
 from backend.memory.database import AsyncSessionLocal
 from backend.memory.models.memory import MemoryRecord
 from backend.memory.repository.memory_repo import MemoryRepository
 from backend.memory.service import MemoryService
+from backend.tests.memory.conftest import require_memory_pg
 
 pytestmark = pytest.mark.asyncio
 
@@ -33,11 +32,8 @@ _TENANT = "default"
 
 
 def _require_pg() -> None:
-    try:
-        with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2):
-            pass
-    except Exception as exc:
-        pytest.skip(f"agent_memory PostgreSQL 不可达，跳过画像真实验收: {exc}")
+    # 会话级缓存（原实现每用例新建连接，~2s/例，见 conftest.require_memory_pg）
+    require_memory_pg()
 
 
 @pytest.fixture(autouse=True)

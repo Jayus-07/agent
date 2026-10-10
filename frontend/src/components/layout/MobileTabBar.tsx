@@ -42,22 +42,14 @@ export const MOBILE_TABS: TabItem[] = [
   { label: '旅游规划', path: '/travel', match: 'prefix', icon: <Plane size={20} /> },
 ]
 
-/** 智能客服（2026-10-07 升为第三 tab）：非链接型——/agent 内直接开抽屉，
- *  其它页先跳 /agent?cs=1 再由页面 effect 自动弹出 */
+/** 智能客服独立页入口；所有页面都直接导航到 /customer-service。 */
 export const CS_TAB_LABEL = '智能客服'
 
 export default function MobileTabBar() {
   const pathname = usePathname()
   const router = useRouter()
 
-  const openCs = () => {
-    if (pathname.startsWith('/agent')) {
-      // 已在助手页：同路由导航不重挂载，?cs=1 effect 不会再跑 → 直接发事件开抽屉
-      window.dispatchEvent(new Event('cs-drawer:open'))
-    } else {
-      router.push('/agent?cs=1')
-    }
-  }
+  const openCs = () => router.push('/customer-service')
 
   return (
     <nav

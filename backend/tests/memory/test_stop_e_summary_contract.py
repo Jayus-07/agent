@@ -82,17 +82,20 @@ async def _summary_state(session_id: str) -> dict:
 
 
 async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
-    """E8：end_turn 只调度后台摘要协程，不在本协程内等待其完成。"""
+    """E8：摘要后台化；L3 先持久化 outbox，再以 job ID 投递。"""
     from backend.memory import service as service_mod
+    from types import SimpleNamespace
+    import backend.tasks.memory_extraction_tasks as extraction_tasks
 
     executed: list[str] = []
+    jobs = []
 
     class _FakeSRepo:
         async def get_or_create(self, *a, **kw):
             return None
 
         async def save_turn(self, *a, **kw):
-            return (None, None)
+            return (SimpleNamespace(id=101), SimpleNamespace(id=102))
 
         async def needs_summarization(self, *a, **kw):
             executed.append("needs_summarization")
@@ -110,6 +113,14 @@ async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
             executed.append("update_summary")
 
     class _FakeDBSession:
+        def add(self, job):
+            jobs.append(job)
+
+        async def flush(self):
+            # 模拟 ORM flush 时生成数据库默认 UUID。
+            if jobs[-1].id is None:
+                jobs[-1].id = uuid.uuid4()
+
         async def rollback(self):
             return None
 
@@ -129,11 +140,16 @@ async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
         scheduled.append(coro)
         return None
 
+    async def _dispatch(job_id):
+        executed.append(f"dispatch:{job_id}")
+        return True
+
     svc = service_mod.MemoryService.__new__(service_mod.MemoryService)
     svc._sessions = {}
     monkeypatch.setattr(service_mod, "AsyncSessionLocal", lambda: _FakeCtx())
     monkeypatch.setattr(service_mod, "SessionRepository", lambda db: _FakeSRepo())
     monkeypatch.setattr(service_mod.asyncio, "ensure_future", _capture)
+    monkeypatch.setattr(extraction_tasks, "dispatch_memory_extraction", _dispatch)
 
     await svc.end_turn("no-block", "q", "a", user_id=_USER)
 
@@ -141,7 +157,14 @@ async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
     assert "commit" in executed
     assert "needs_summarization" not in executed, (
         "end_turn 不得在关闭路径执行摘要查询链（必须后台化）")
-    assert len(scheduled) == 2, "应调度 摘要 + store 两个后台任务"
+    assert len(jobs) == 1
+    assert jobs[0].source_message_id == 101
+    assert jobs[0].assistant_message_id == 102
+    dispatch_index = next(i for i, event in enumerate(executed)
+                          if event.startswith("dispatch:"))
+    assert executed.index("commit") < dispatch_index
+    assert executed[dispatch_index] == f"dispatch:{jobs[0].id}"
+    assert len(scheduled) == 1, "进程内只调度摘要；L3 由已提交 outbox 投递"
     for coro in scheduled:
         coro.close()
 
@@ -198,16 +221,36 @@ async def test_delta_gate_accumulates_then_summarizes(monkeypatch):
 
 
 async def test_below_trigger_count_never_summarizes(monkeypatch):
-    """E2：条数未达 SESSION_MAX_MESSAGES 时整段跳过（触发口径不变）。"""
+    """短历史低于 Token 线和消息硬上限时不触发摘要。"""
+    import backend.config as config
     from backend.memory.service import MemoryService
 
     session_id = f"{_PREFIX}low-{uuid.uuid4().hex[:8]}"
     await _seed_messages(session_id, turns=10)  # 20 条 < 50
+    monkeypatch.setattr(config, "CONTEXT_L2_SUMMARY_TRIGGER_TOKENS", 100_000)
     stub = _stub_llm(monkeypatch, raise_on_call=True)
     svc = MemoryService()
     await svc._summarize_if_needed(session_id)
     state = await _summary_state(session_id)
     assert not state["summary"]
+
+
+async def test_token_budget_triggers_before_message_cap(monkeypatch):
+    """达到 Token 阈值后，无需等消息硬上限或最小增量数。"""
+    import backend.config as config
+    from backend.memory.service import MemoryService
+
+    session_id = f"{_PREFIX}token-{uuid.uuid4().hex[:8]}"
+    await _seed_messages(session_id, turns=6)  # 12 条，低于 50 条硬上限
+    monkeypatch.setattr(config, "CONTEXT_L2_SUMMARY_TRIGGER_TOKENS", 1)
+    stub = _stub_llm(monkeypatch, content="Token 预算触发摘要")
+
+    await MemoryService()._summarize_if_needed(session_id)
+
+    state = await _summary_state(session_id)
+    assert len(stub.calls) == 1
+    assert state["summary"].startswith("Token 预算触发摘要")
+    assert state["through_id"] is not None
 
 
 async def test_fallback_summary_output_cap(monkeypatch):

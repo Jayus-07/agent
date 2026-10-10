@@ -32,10 +32,11 @@ def _context_ids() -> tuple[str, str, str]:
 
 
 @tool
-def memory_search_tool(query: str, top_k: int = 5) -> str:
+def memory_search_tool(query: str, top_k: int = 5, domain: str = "general") -> str:
     """
     检索当前用户的长期记忆（L3，语义+混合检索）。
-    输入自然语言查询，返回相关记忆条目列表。
+    输入自然语言查询和用户明确指定的 domain（general/travel/customer_service/
+    knowledge/sql/business），返回该域及 user_global 记忆；默认仅查 general。
     适用场景：回答前确认用户的偏好/历史决定/背景事实（如"用户之前提过什么需求"）。
     """
     from backend.memory.manager import memory_manager
@@ -48,7 +49,7 @@ def memory_search_tool(query: str, top_k: int = 5) -> str:
         facts = memory_manager.run_tool(
             lambda: memory_manager.service.search(
                 query.strip(), session_id, user_id=user_id, top_k=max(1, min(int(top_k), 10)),
-                tenant_id=tenant_id,
+                tenant_id=tenant_id, domain=domain,
             )
         )
     except Exception as e:
@@ -57,7 +58,11 @@ def memory_search_tool(query: str, top_k: int = 5) -> str:
 
     if not facts:
         return "未找到相关长期记忆。"
-    lines = [f"- [{f.fact_type}] {f.content}" for f in facts]
+    lines = [
+        f"- [{f.fact_type}] memory_id={f.memory_id or 'unknown'}"
+        f" key={f.memory_key or 'unkeyed'}: {f.content}"
+        for f in facts
+    ]
     output = f"找到 {len(facts)} 条相关长期记忆:\n" + "\n".join(lines)
     return output[:_MAX_OUTPUT_CHARS]
 
@@ -152,7 +157,45 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
     return "⏭ 内容与已有记忆重复或重要性不足，未写入。"
 
 
+@tool
+def memory_forget_tool(memory_id: str) -> str:
+    """删除当前登录用户的一条长期记忆。
+
+    必须先通过 memory_search_tool 找到准确条目并取得 memory_id；仅在用户
+    明确要求遗忘/删除该记忆时调用。服务端身份、租户和删除屏障由 Memory
+    服务校验，删除操作受 Tool Governance 确认策略约束。
+    """
+    from backend.memory.manager import memory_manager
+
+    if not memory_id or not memory_id.strip():
+        return "❌ 错误: memory_id 不能为空"
+    _session_id, user_id, tenant_id = _context_ids()
+    try:
+        result = memory_manager.run_tool(
+            lambda: memory_manager.service.delete_profile_memory(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                memory_id=memory_id.strip(),
+            )
+        )
+    except Exception as e:
+        logger.error(f"[Tool:memory_forget] 删除失败: {e}")
+        return "❌ 记忆删除失败，请稍后重试。"
+    if not isinstance(result, dict):
+        return "❌ 记忆服务暂不可用，删除未确认成功。"
+    if result.get("ok"):
+        logger.info(
+            f"[Tool:memory_forget] 用户删除记忆 (user={user_id}, "
+            f"memory_id={memory_id.strip()})"
+        )
+        return "✅ 已删除该长期记忆。"
+    if result.get("error") == "记忆不存在":
+        return "未找到可删除的记忆，或该记忆已被删除。"
+    return "❌ 记忆服务暂不可用，删除未确认成功。"
+
+
 # ==================== Tool Registry 自动注册 ====================
 from backend.tools.tool_registry import tool_registry
 tool_registry.register(memory_search_tool, __file__)
 tool_registry.register(memory_store_tool, __file__)
+tool_registry.register(memory_forget_tool, __file__)

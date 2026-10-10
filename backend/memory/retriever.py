@@ -64,7 +64,7 @@ class HybridRetriever:
     async def retrieve(
         self, query: str, embedding: list[float], user_id: str,
         top_k: int | None = None, tenant_id: str = "",
-        enforce_gate: bool = True,
+        enforce_gate: bool = True, domain: str | None = None,
     ) -> list[RetrievedMemory]:
         """candidate（SQL eligibility）→ gate → rank → merge → max-K。
 
@@ -84,7 +84,8 @@ class HybridRetriever:
         candidate_k = max(MEMORY_RETRIEVAL_CANDIDATES, max_k)       # §66 invariant
 
         candidates = await self._repo.search_hybrid(
-            embedding, user_id, top_k=candidate_k, tenant_id=tenant_id)
+            embedding, user_id, top_k=candidate_k, tenant_id=tenant_id,
+            domain=domain)
         _metric_safe(memory_retrieval_candidate_total.inc)
         now = datetime.now(timezone.utc)
 

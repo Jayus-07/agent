@@ -58,10 +58,10 @@ def test_frozen_hard_gates_from_real_run():
 
 
 def test_frozen_threshold_baseline():
-    """threshold=0.35 是真实 sweep 的定稿值（STOP F 冻结）。"""
+    """threshold=0.35 是 Memory Golden 集评测锁定的默认值。"""
     from backend.config import MEMORY_MIN_RELEVANCE_SCORE
     assert abs(float(MEMORY_MIN_RELEVANCE_SCORE) - 0.35) < 1e-9, (
-        "MEMORY_MIN_RELEVANCE_SCORE 应为 STOP F 实证定标值 0.35")
+        "MEMORY_MIN_RELEVANCE_SCORE 应与已评测基线 0.35 一致")
     results = json.loads(RESULTS.read_text(encoding="utf-8"))
     sweep = {s["threshold"]: s for s in results["sweep"]}
     t35 = sweep[0.35]
