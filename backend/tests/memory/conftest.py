@@ -22,8 +22,31 @@ from backend.memory.database import AsyncSessionLocal
 from backend.memory.models.memory import EMBEDDING_DIM
 
 
+_REQUIRED_MEMORY_COLUMNS = frozenset(
+    {"origin", "tenant_id", "memory_key", "structured_value"}
+)
+
+# 本次 pytest 会话内 schema 前置检查的结果缓存。
+# 背景（2026-10-09 实测）：require_memory_pg() 原本每个用例都新建一条
+# psycopg2 连接做 information_schema 查询，单次约 2.0s；配合用例级
+# cleanup 的连接开销，memory 模块 93 例累计 315s，而用例本身只有毫秒级。
+# 该检查验证的是"库可达 + migration 已应用"这类**会话期不变**的前置条件，
+# 与具体用例无关，因此按会话缓存结果即可；失败原因照旧原样抛出，
+# 不会把 skip 变成静默通过。
+_schema_checked: bool = False
+# 同上，按 "列名|类型" 缓存；供各测试文件的 _require_pg 复用。
+_column_checked: set[str] = set()
+
+
 def require_memory_pg() -> None:
-    """权威库不可达或 048 列缺失时显式 skip（不静默假装通过）。"""
+    """权威库不可达或 048 列缺失时显式 skip（不静默假装通过）。
+
+    结果按 pytest 会话缓存：schema 前置条件在一次运行内不会变化，
+    重复探测只是把 ~2s/用例的连接开销白送给整个模块。
+    """
+    global _schema_checked
+    if _schema_checked:
+        return
     try:
         with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2) as conn:
             with conn.cursor() as cursor:
@@ -35,9 +58,40 @@ def require_memory_pg() -> None:
                 cols = {row[0] for row in cursor.fetchall()}
     except Exception as exc:
         pytest.skip(f"agent_memory PostgreSQL 不可达，跳过真实验收: {exc}")
-    missing = {"origin", "tenant_id", "memory_key", "structured_value"} - cols
+    missing = _REQUIRED_MEMORY_COLUMNS - cols
     if missing:
         pytest.skip(f"memory_records 缺列 {sorted(missing)}（047/048 未应用），跳过")
+    _schema_checked = True
+
+
+def require_memory_column(column: str, *, udt: str | None = None, label: str = "") -> None:
+    """按会话缓存地校验 memory_records 的某一列存在（可选校验其类型）。
+
+    与 require_memory_pg() 同理：这是"迁移是否已应用"的会话期不变前置条件。
+    各测试文件原先各自新建 psycopg2 连接重复探测（每次 ~2s），
+    在用例数多的模块里是纯粹的固定开销。
+    """
+    probe = f"{column}|{udt or ''}"
+    if probe in _column_checked:
+        return
+    try:
+        with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT udt_name FROM information_schema.columns "
+                    "WHERE table_name='memory_records' AND column_name=%s",
+                    (column,),
+                )
+                row = cursor.fetchone()
+    except Exception as exc:
+        pytest.skip(f"agent_memory PostgreSQL 不可达，跳过真实验收: {exc}")
+    if row is None:
+        pytest.skip(f"memory_records.{column} 不存在（迁移未应用），跳过{label}")
+    if udt is not None and row[0] != udt:
+        pytest.skip(
+            f"memory_records.{column} 尚为 {row[0]}（期望 {udt}，迁移未应用），跳过{label}"
+        )
+    _column_checked.add(probe)
 
 
 async def cleanup_memory_prefix(prefix: str) -> None:

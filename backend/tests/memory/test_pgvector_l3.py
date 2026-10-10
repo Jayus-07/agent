@@ -14,14 +14,13 @@ from __future__ import annotations
 import uuid
 
 import numpy as np
-import psycopg2
 import pytest
 from sqlalchemy import text
 
-from backend.config.database import MEMORY_DB_CONFIG
 from backend.memory.database import AsyncSessionLocal
 from backend.memory.models.memory import EMBEDDING_DIM, MemoryRecord
 from backend.memory.repository.memory_repo import MemoryRepository
+from backend.tests.memory.conftest import require_memory_column
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,27 +31,8 @@ _USER_B = f"{_PREFIX}user-b"
 
 def _require_pg() -> None:
     """PG 不可达或 032 迁移未应用时显式跳过。"""
-    try:
-        with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT udt_name
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public'
-                      AND table_name = 'memory_records'
-                      AND column_name = 'embedding'
-                    """
-                )
-                row = cursor.fetchone()
-    except Exception as exc:
-        pytest.skip(f"agent_memory PostgreSQL 不可达，跳过 P1 真实验收: {exc}")
-    if row is None:
-        pytest.skip("memory_records 表不存在，跳过 P1 真实验收")
-    if row[0] != "vector":
-        pytest.skip(
-            f"memory_records.embedding 尚为 {row[0]}（032 迁移未应用），跳过真实验收"
-        )
+    # 会话级缓存（原实现每用例新建连接，~2s/例，见 conftest.require_memory_column）
+    require_memory_column("embedding", udt="vector", label="P1 真实验收")
 
 
 @pytest.fixture(autouse=True)

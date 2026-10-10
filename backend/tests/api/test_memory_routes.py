@@ -57,14 +57,54 @@ class _FakeService:
     def __init__(self, payload: dict):
         self._payload = payload
         self.seen_user_id: str | None = None
+        self.seen_tenant_id: str | None = None
+        self.seen_memory_id: str | None = None
 
     # 注：路由会传 limit/before（P1-12 加的分页参数）；fake 接收可变参数忽略
     async def list_sessions(self, user_id: str = "default", **_: object) -> dict:
         self.seen_user_id = user_id
         return self._payload
 
+    async def get_profile(
+        self, user_id: str = "default", tenant_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def get_pending_profile(
+        self, user_id: str = "default", tenant_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def verify_profile_memory(
+        self, user_id: str = "default", tenant_id: str = "",
+        memory_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        self.seen_memory_id = memory_id
+        return self._payload
+
+    async def delete_profile_memory(
+        self, user_id: str = "default", tenant_id: str = "", **kwargs: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        self.seen_memory_id = str(kwargs.get("memory_id") or "")
+        return self._payload
+
     async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
         self.seen_user_id = user_id
+        return self._payload
+
+    async def list_extraction_jobs(
+        self, session_id: str, user_id: str, tenant_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
         return self._payload
 
 
@@ -107,6 +147,87 @@ def test_list_sessions_rejects_self_reported_user_id(client_factory):
     res = client.get("/memory/sessions?user_id=999", headers={"X-User-Id": "15"})
     assert res.status_code == 200
     assert service.seen_user_id == "15"
+
+
+def test_profile_uses_authenticated_tenant_scope(client_factory):
+    service = _FakeService({"records": [], "total": 0})
+    client = client_factory(service)
+    res = client.get(
+        "/memory/profile?tenant_id=attacker",
+        headers={
+            "X-User-Id": "15",
+            "X-Tenant-Id": "tenant-a",
+            "X-Auth-Type": "jwt",
+        },
+    )
+    assert res.status_code == 200
+    assert service.seen_user_id == "15"
+    assert service.seen_tenant_id == "tenant-a"
+
+
+def test_delete_profile_memory_uses_owner_and_tenant_scope(client_factory):
+    service = _FakeService({"ok": True, "memory_id": "m-1"})
+    client = client_factory(service)
+    res = client.delete(
+        "/memory/profile/m-1?user_id=attacker&tenant_id=other",
+        headers={
+            "X-User-Id": "15",
+            "X-Tenant-Id": "tenant-a",
+            "X-Auth-Type": "jwt",
+        },
+    )
+    assert res.status_code == 200
+    assert service.seen_user_id == "15"
+    assert service.seen_tenant_id == "tenant-a"
+    assert service.seen_memory_id == "m-1"
+
+
+def test_delete_profile_memory_guest_returns_401(client_factory):
+    client = client_factory(_FakeService({"ok": True}))
+    res = client.delete("/memory/profile/m-1")
+    assert res.status_code == 401
+
+
+def test_pending_profile_and_verify_use_authenticated_scope(client_factory):
+    service = _FakeService({"ok": True, "memory_id": "m-1"})
+    client = client_factory(service)
+    headers = {
+        "X-User-Id": "15",
+        "X-Tenant-Id": "tenant-a",
+        "X-Auth-Type": "jwt",
+    }
+
+    pending = client.get(
+        "/memory/profile/pending?tenant_id=attacker", headers=headers,
+    )
+    assert pending.status_code == 200
+    assert service.seen_user_id == "15"
+    assert service.seen_tenant_id == "tenant-a"
+
+    verified = client.post(
+        "/memory/profile/m-1/verify?user_id=attacker", headers=headers,
+    )
+    assert verified.status_code == 200
+    assert service.seen_user_id == "15"
+    assert service.seen_tenant_id == "tenant-a"
+    assert service.seen_memory_id == "m-1"
+
+
+def test_extraction_status_uses_authenticated_scope(client_factory):
+    service = _FakeService({"jobs": [{"status": "pending"}], "total": 1})
+    client = client_factory(service)
+    res = client.get(
+        "/memory/sessions/session-a/extractions?tenant_id=attacker",
+        headers={
+            "X-User-Id": "15",
+            "X-Tenant-Id": "tenant-a",
+            "X-Auth-Type": "jwt",
+        },
+    )
+    assert res.status_code == 200
+    assert res.json()["jobs"][0]["status"] == "pending"
+    assert service.seen_user_id == "15"
+    assert service.seen_tenant_id == "tenant-a"
 
 
 def test_list_sessions_db_failure_returns_503_not_empty_200(client_factory):

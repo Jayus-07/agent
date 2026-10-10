@@ -140,9 +140,11 @@ async def test_same_key_same_value_reaffirm_upgrades_origin(emb):
 
 async def test_inferred_new_value_supersedes_inferred(emb):
     old = await _store(emb, _fact(memory_key="project.main_llm", structured_value="deepseek",
-                                  origin="inferred", confidence_score=0.8), StoreOutcome.INSERTED)
+                                  origin="inferred", confidence_score=0.8,
+                                  source_message_id=100), StoreOutcome.INSERTED)
     new = await _store(emb, _fact(memory_key="project.main_llm", structured_value="doubao",
-                                  origin="inferred", confidence_score=0.85), StoreOutcome.SUPERSEDED)
+                                  origin="inferred", confidence_score=0.85,
+                                  source_message_id=101), StoreOutcome.SUPERSEDED)
     rows = await _rows("project.main_llm")
     active = [r for r in rows if r[3]]
     inactive = [r for r in rows if not r[3]]
@@ -218,11 +220,27 @@ async def test_keyed_supersede_ignores_embedding_order(emb):
     """C13：existing 与新事实 embedding 完全正交（top-1 盲区场景），
     keyed 路径仍按 memory_key 精确 supersede。"""
     await _store(emb, _fact(content="旧版本内容 A", memory_key="job.target_role",
-                            structured_value="backend", origin="inferred"), StoreOutcome.INSERTED)
+                            structured_value="backend", origin="inferred",
+                            source_message_id=200), StoreOutcome.INSERTED)
     result = await _store(emb, _fact(content="完全不同表述的新版本 B",
                                      memory_key="job.target_role",
-                                     structured_value="sre", origin="inferred"))
+                                     structured_value="sre", origin="inferred",
+                                     source_message_id=201))
     assert result.outcome == StoreOutcome.SUPERSEDED  # embedding 无关（C13）
+
+
+async def test_older_inferred_event_cannot_supersede_newer_value(emb):
+    """乱序完成时，较旧的用户来源事件不能覆盖较新版本。"""
+    await _store(emb, _fact(memory_key="travel.pace", structured_value="relaxed",
+                            origin="inferred", source_message_id=302),
+                 StoreOutcome.INSERTED)
+    result = await _store(emb, _fact(memory_key="travel.pace",
+                                     structured_value="packed", origin="inferred",
+                                     source_message_id=301))
+
+    assert result.outcome == StoreOutcome.BLOCKED_STALE_EVENT
+    rows = [r for r in await _rows("travel.pace") if r[3]]
+    assert len(rows) == 1 and rows[0][1] == "relaxed"
 
 
 # ============================================================
