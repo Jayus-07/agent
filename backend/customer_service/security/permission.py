@@ -1,7 +1,7 @@
 """customer_service/security/permission.py — 权限校验层
 
 身份验证 + 资源归属校验，确保用户只能访问自己的数据。
-设计参考: docs/customer-service/design.md §6
+设计参考: docs/domains/customer-service.md §6
 """
 from __future__ import annotations
 

@@ -11,7 +11,7 @@ customer_service/supervisor.py — CS Supervisor 决策引擎
 
 decision_layer 度量口径不变: {1: rule, 2: combination, 3: llm}。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §5.3
+设计参考: docs/domains/customer-service.md §5.3
 """
 from __future__ import annotations
 

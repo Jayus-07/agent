@@ -10,7 +10,7 @@ http 模式失败映射回既存异常类型（OrderNotFoundError/DatabaseError�
 调用方（query_expert 等）的错误处理路径无需感知模式。
 网关失败**不降级回 sandbox**——真环境返回假数据比查不到更危险。
 
-设计参考: docs/customer-service/design.md §5.3
+设计参考: docs/domains/customer-service.md §5.3
 """
 from __future__ import annotations
 

@@ -120,8 +120,7 @@ CS_EXPERT_MAX_LOOPS = int(os.getenv("CS_EXPERT_MAX_LOOPS", "5"))
 # ── 状态写入严格模式（P1 重构 2026-09-17）────────────────────
 # true（生产默认）：HandoffStore/ConfirmationStore 的 DB 写失败 → error 级日志
 #   + 记录指标 + 抛 StoreWriteError（PostgreSQL 是唯一事实源，禁止静默降级
-#   成内存态——此前 cache-only 降级导致内存与 DB 永久分叉，见
-#   docs/customer-service/audit-report.md §P0-5）。
+#   成内存态，避免内存与数据库状态分叉）。
 # false：写失败仅告警并继续用内存态（仅限单元测试/无 DB 的本地调试）。
 # 测试进程（pytest）默认 false，除非显式设置该环境变量。
 import sys as _sys
@@ -237,7 +236,7 @@ CS_QUALITY_ALERT_CAPABILITY_HANDOFF_RATE = float(os.getenv("CS_QUALITY_ALERT_CAP
 
 # =============================================
 # 演示业务沙盒（Demo Business Sandbox）
-# 方案: docs/customer-service/演示沙盒方案-2026-09-17.md
+# 方案: docs/customer-service/demo-sandbox.md
 # =============================================
 # 演示模式总开关：开启后客服业务查询将 user_id 映射为 CS_DEMO_CUSTOMER_ID，
 # 使无真实业务数据的注册账号也能走完整客服流程。默认关闭，不影响生产链路。

@@ -3,7 +3,7 @@
 业务操作 Expert：退款、退货、换货、地址修改等写操作 + 确认状态机。
 从 graph/nodes.py cs_business_action 提取核心逻辑。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.3
+设计参考: docs/domains/customer-service.md §6.3
 """
 from __future__ import annotations
 

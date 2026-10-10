@@ -3,7 +3,7 @@
 人工转接 Expert：检测触发 → 状态转换 → 创建工单 → 返回等待提示。
 从 graph/nodes.py cs_handoff 提取核心逻辑。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.5
+设计参考: docs/domains/customer-service.md §6.5
 """
 from __future__ import annotations
 

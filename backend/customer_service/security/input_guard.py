@@ -6,7 +6,7 @@
   - 敏感信息输入 (密码/银行卡)
   - 系统探测 (prompt 探测)
 
-设计参考: docs/customer-service/design.md §15.1
+设计参考: docs/domains/customer-service.md §15.1
 """
 from __future__ import annotations
 

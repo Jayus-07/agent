@@ -8,7 +8,7 @@ customer_service/state_transition.py — 统一状态转换服务
   3. 写入 PostgreSQL（通过 Store / Repository）
   4. 返回 StateTransitionResult 快照
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §8
+设计参考: docs/domains/customer-service.md §8
 """
 from __future__ import annotations
 

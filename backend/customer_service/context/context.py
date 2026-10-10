@@ -4,7 +4,7 @@ customer_service/context.py — CSContext 统一类型定义
 Main Graph 中 cs_context 字段的 TypedDict 定义 + 构建/合并辅助函数。
 Phase 1: 类型层 — 运行时无行为变更，仅类型安全 + 中央化构造。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §7.3
+设计参考: docs/domains/customer-service.md §7.3
 """
 from __future__ import annotations
 

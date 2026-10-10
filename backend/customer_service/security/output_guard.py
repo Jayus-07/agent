@@ -7,7 +7,7 @@
   4. 转接内部信息过滤 (HandoffState 枚举值 / ticket_id / 内部系统信息)
   5. 投诉内部信息过滤 (severity 评估 / pattern 匹配详情 / 工单内部细节)
 
-设计参考: docs/customer-service/design.md §15.2
+设计参考: docs/domains/customer-service.md §15.2
 """
 from __future__ import annotations
 

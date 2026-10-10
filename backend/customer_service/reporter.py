@@ -5,7 +5,7 @@ CS Graph 内部的最终回复生成器。
 职责: 组装 Expert 结构化输出 → 安全审查 → 格式化用户回复。
 不做: 不执行业务逻辑、不操作 DB、不决策。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §12.1
+设计参考: docs/domains/customer-service.md §12.1
 """
 from __future__ import annotations
 

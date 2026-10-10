@@ -6,6 +6,7 @@ LLM 失败一律确定性回退。
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -35,6 +36,26 @@ class _FakeLLM:
         if self._exc:
             raise self._exc
         return _FakeResp(self._content or "")
+
+
+@contextmanager
+def _fake_active_llm(fake):
+    """把当前活跃 LLM 替换为 fake（拦截真实 provider 调用）。
+
+    为什么不能 patch backend.infra.llm.get_llm：生产代码走的是 llm 代理单例
+    （_LLMProxy），其 __getattr__ 每次调用都通过 _resolve_active_llm() 实时解析
+    当前模型——函数体内的 from backend.infra.llm import llm 拿到的是这个代理对象，
+    不是 get_llm() 的返回值。因此 patch get_llm 完全不生效：fake 的 invoke 计数为 0，
+    请求会真的打到 provider（2026-10-09 实测：无凭据/网络不通时表现为 502，
+    测试因拿到 None 而误判为「分解失败」，掩盖了「根本没被隔离」这一事实）。
+
+    直接 patch _resolve_active_llm（代理实际使用的解析入口）才能让 llm.invoke
+    命中 fake，且不依赖具体调用点写了哪种导入形式。
+    """
+    import backend.infra.llm.proxy as proxy_mod
+
+    with patch.object(proxy_mod, "_resolve_active_llm", return_value=fake):
+        yield fake
 
 
 # =====================================================
@@ -77,7 +98,7 @@ class TestComplaintDetectCascade:
     def test_llm_invalid_json_returns_none(self):
         svc = ComplaintService()
         llm = _FakeLLM("这不是 JSON")
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with _fake_active_llm(llm):
             assert svc._llm_assess("随便什么") is None
         assert llm.calls == 1
 
@@ -96,8 +117,11 @@ class TestComplaintDetectCascade:
                 return _FakeResp('{"is_complaint": true, "severity": "high"}')
 
         svc = ComplaintService()
+        # _HangingLLM 必须真的挂住 2s，才能验证线程级限时确实生效：
+        # 若隔离失效，请求会打到真实 provider 并快速失败，
+        # elapsed < 1.5 会"因为错误的原因"通过，掩盖限时回归。
         with patch.object(cs_config, "CS_COMPLAINT_LLM_TIMEOUT_MS", 300), \
-             patch("backend.infra.llm.get_llm", return_value=_HangingLLM()):
+             _fake_active_llm(_HangingLLM()):
             t0 = time.monotonic()
             assert svc._llm_assess("委婉表达的不满") is None
             elapsed = time.monotonic() - t0
@@ -121,24 +145,24 @@ class TestCompoundSuspected:
 class TestLLMDecompose:
     def test_valid_multi_intent(self):
         llm = _FakeLLM('["t_order_status", "t_logistics"]')
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with _fake_active_llm(llm):
             intents = _llm_decompose_intents("查订单和物流")
         assert intents == ["t_order_status", "t_logistics"]
 
     def test_invalid_intent_filtered(self):
         llm = _FakeLLM('["t_order_status", "fake_intent"]')
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with _fake_active_llm(llm):
             intents = _llm_decompose_intents("查订单")
         assert intents == ["t_order_status"]
 
     def test_llm_failure_returns_none(self):
         llm = _FakeLLM(exc=RuntimeError("LLM 不可用"))
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with _fake_active_llm(llm):
             assert _llm_decompose_intents("查订单和物流") is None
 
     def test_non_array_returns_none(self):
         llm = _FakeLLM('{"intent": "t_order_status"}')
-        with patch("backend.infra.llm.get_llm", return_value=llm):
+        with _fake_active_llm(llm):
             assert _llm_decompose_intents("查订单和物流") is None
 
 

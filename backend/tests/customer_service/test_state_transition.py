@@ -11,8 +11,6 @@ import gc
 import warnings
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from backend.customer_service.state_transition import (
     StateTransitionRequest,
     StateTransitionResult,
@@ -53,12 +51,25 @@ class TestApplyDBFallback:
         assert result["success"] is False
         assert "DB unavailable" in result["errors"]
 
-    @pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
     def test_apply_closes_coroutine_when_db_bridge_rejects_submission(self):
-        """提交到 DB 线程失败时，不能遗留未 await 的协程告警。"""
+        """提交到 DB 线程失败时，不能遗留未 await 的协程。
+
+        断言口径（2026-10-09 修正）：原实现叠加了
+        filterwarnings("error::PytestUnraisableExceptionWarning")，于是把
+        **任何** unraisable 异常都升级成失败。实测失败来自前序真库用例遗留的
+        Windows asyncio 传输层析构：
+            _ProactorBasePipeTransport.__del__ → RuntimeError: Event loop is closed
+        它发生在本用例的 gc.collect() 时点，与本用例要验证的"协程是否被关闭"
+        毫无关系，导致该用例在 test_p5_stopcs_a_realpg.py 之后必然红（单跑必绿）。
+        这类跨用例 GC 噪声不该由本用例承担。
+
+        这里改为只对**目标症状**断言：捕获到的告警中不得出现
+        "coroutine ... was never awaited"。既保留原始回归意图，
+        又不会把无关的析构噪声误判为本用例的缺陷。
+        """
         svc = StateTransitionService()
         with warnings.catch_warnings(record=True) as captured:
-            warnings.simplefilter("always", RuntimeWarning)
+            warnings.simplefilter("always")
             with patch(
                 "backend.customer_service._db_loop.run_sync",
                 side_effect=RuntimeError("loop stopped"),
@@ -71,7 +82,11 @@ class TestApplyDBFallback:
             gc.collect()
 
         assert result["success"] is False
-        assert not any("was never awaited" in str(item.message) for item in captured)
+        leaked = [
+            str(item.message) for item in captured
+            if "was never awaited" in str(item.message)
+        ]
+        assert not leaked, f"DB 桥接失败时遗留未 await 的协程: {leaked}"
 
 
 class TestLoadSnapshotDBFallback:

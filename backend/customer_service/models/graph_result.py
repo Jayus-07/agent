@@ -4,7 +4,7 @@ customer_service/models/graph_result.py — CS Graph 输出契约
 CS Graph 通过此契约与 Main Graph 通信，解耦两个图的内部状态结构。
 cs_graph_node 适配器负责将 CSGraphState → CSGraphResult → Main State 转换。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §7.4
+设计参考: docs/domains/customer-service.md §7.4
 """
 from __future__ import annotations
 

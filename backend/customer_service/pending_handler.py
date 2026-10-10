@@ -13,7 +13,7 @@ P1 重构（2026-09-17）：核心逻辑收敛到 confirmation_flow.process_conf
 （与 ActionExpert 共用单一实现，含原子认领幂等闸门），本模块只做
 Command 输出映射。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.3
+设计参考: docs/domains/customer-service.md §6.3
 """
 from __future__ import annotations
 

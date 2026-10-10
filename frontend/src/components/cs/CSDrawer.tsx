@@ -1,14 +1,15 @@
 'use client'
 
 /**
- * CSDrawer — 用户端右侧客服抽屉
+ * CSDrawer — 用户端客服会话组件
  *
  * 复用现有 CS 组件树（CSWelcome/CSMessageList/CSStatusBar/CSInput/CSHandoffCard）
- * 与 useCSChat 流式 hook，在 /agent 页右侧滑出，展示客服聊天记录。
+ * 与 useCSChat 流式 hook，在独立客服页展示会话；保留抽屉模式供旧入口兼容。
  * 组件装配方式与管理端 frontend-admin/src/app/cs/page.tsx 保持一致。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Headphones, Plus, UserRound, X } from 'lucide-react'
+import { Headphones, House, Plus, UserRound, X } from 'lucide-react'
+import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
@@ -32,9 +33,18 @@ import CSSatisfactionCard from '@/components/cs/CSSatisfactionCard'
 interface CSDrawerProps {
   open: boolean
   onClose: () => void
+  /** 独立客服页面使用整页布局；默认仍作为用户端抽屉展示 */
+  standalone?: boolean
+  /** 独立页窄屏时展开客户资料面板 */
+  onOpenCustomerContext?: () => void
 }
 
-export default function CSDrawer({ open, onClose }: CSDrawerProps) {
+export default function CSDrawer({
+  open,
+  onClose,
+  standalone = false,
+  onOpenCustomerContext,
+}: CSDrawerProps) {
   const { startStream, stopStream } = useCSChat()
 
   const currentId = useCSChatStore((s) => s.currentId)
@@ -80,8 +90,8 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   const handoffRequestRef = useRef(false)
   const handoffKeyRef = useRef<{ conversationId: string; key: string } | null>(null)
 
-  // 多域隔离 M3：主图引导卡带来的预填问题（HandoffCard 写 sessionStorage +
-  // 派发 cs-drawer:open 事件）。抽屉打开时读取并清除，nonce 触发 CSInput 覆盖。
+  // 主助手引导卡带来的预填问题（HandoffCard 写 sessionStorage + 派发事件）。
+  // 独立客服页打开时读取并清除，nonce 触发 CSInput 覆盖。
   const [prefillDraft, setPrefillDraft] = useState<{ text: string; nonce: number } | null>(null)
   useEffect(() => {
     if (!open) return
@@ -209,21 +219,23 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   return (
     <>
       {/* 遮罩：点击关闭 */}
-      {open && (
+      {open && !standalone && (
         <div
           className="fixed inset-0 z-40 bg-black/20 transition-opacity"
           onClick={onClose}
         />
       )}
 
-      {/* 右侧滑出抽屉 —— ASSISTANT UNAWARE
+      {/* 客服对话面板：独立页整屏展示，用户端入口作为右侧抽屉
           宽度：桌面固定 440px，窄屏撑满可用宽度（原 max-w-[92vw] 会留出 8vw 的无用边缝，
           遮罩下露出主界面且在 1024px 级屏幕上浪费近 80px 内容宽度） */}
       <div
-        className={`fixed right-0 top-0 z-50 h-full w-[440px] max-sm:w-full
-          flex flex-col bg-white border-l border-border-subtle shadow-2xl
-          transition-transform duration-300 ease-out
-          ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        className={standalone
+          ? 'relative z-10 flex h-[100dvh] w-full min-w-0 flex-col border-x border-border-subtle bg-white shadow-xl'
+          : `fixed right-0 top-0 z-50 h-full w-[440px] max-sm:w-full
+            flex flex-col border-l border-border-subtle bg-white shadow-2xl
+            transition-transform duration-300 ease-out
+            ${open ? 'translate-x-0' : 'translate-x-full'}`}
       >
         {/* Header */}
         <div className="shrink-0 flex items-center gap-2.5 px-4 py-3 border-b border-border-subtle bg-white">
@@ -235,6 +247,21 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
             <p className="text-[10px] text-text-muted truncate">AI 驱动的客户服务中心</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {standalone && <MobileAssistantDrawer />}
+            {standalone && onOpenCustomerContext && (
+              <button
+                type="button"
+                onClick={onOpenCustomerContext}
+                title="查看客户资料和订单"
+                aria-label="查看客户资料和订单"
+                className="flex lg:hidden items-center gap-1 px-2 h-7 rounded-lg
+                  border border-border-subtle text-[11px] text-text-secondary
+                  hover:text-text-primary hover:border-accent/40 transition-colors"
+              >
+                <UserRound size={13} />
+                <span>资料</span>
+              </button>
+            )}
             {hasMessages && handoffState === 'none' && (
               <button
                 onClick={handleRequestHandoff}
@@ -260,15 +287,28 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
             >
               <Plus size={14} />
             </button>
-            <button
-              onClick={onClose}
-              title="收起客服窗口"
-              aria-label="收起客服窗口"
-              className="flex items-center justify-center w-7 h-7 rounded-lg text-text-secondary
-                hover:text-text-primary hover:bg-surface-elevated transition-colors"
-            >
-              <X size={16} />
-            </button>
+            {standalone ? (
+              <button
+                onClick={onClose}
+                title="返回主页门户"
+                aria-label="返回主页门户"
+                className="hidden h-8 shrink-0 items-center gap-1 rounded-lg border border-border-subtle px-2 md:flex
+                  text-[11px] text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+              >
+                <House size={14} />
+                <span>门户</span>
+              </button>
+            ) : (
+              <button
+                onClick={onClose}
+                title="收起客服窗口"
+                aria-label="收起客服窗口"
+                className="flex items-center justify-center w-7 h-7 rounded-lg text-text-secondary
+                  hover:text-text-primary hover:bg-surface-elevated transition-colors"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
         </div>
 

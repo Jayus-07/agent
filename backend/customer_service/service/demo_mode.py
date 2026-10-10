@@ -10,7 +10,7 @@ Demo Business Sandbox 的身份映射收口点。
   订单号统一 ``DEMO-`` 前缀，仅归属 demo customer。
 - 关闭开关即回到真实身份与真实数据，不改任何权限模型。
 
-设计见 docs/customer-service/演示沙盒方案-2026-09-17.md §三 SB-1。
+设计见 docs/customer-service/demo-sandbox.md §三 SB-1。
 """
 from __future__ import annotations
 

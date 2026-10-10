@@ -3,7 +3,7 @@
 业务查询 Expert：订单查询、物流查询等只读操作。
 从 graph/nodes.py cs_business_query 提取核心逻辑。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.2
+设计参考: docs/domains/customer-service.md §6.2
 """
 from __future__ import annotations
 

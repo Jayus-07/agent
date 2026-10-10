@@ -3,7 +3,7 @@
 投诉处理 Expert：投诉检测 → 创建工单 → 安抚响应 → 触发转接。
 从 graph/nodes.py cs_complaint 提取核心逻辑。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.4
+设计参考: docs/domains/customer-service.md §6.4
 """
 from __future__ import annotations
 
