@@ -447,3 +447,30 @@
 - **处置**：先 `git reset`（mixed）取消暂存；再备份 25 个冲突文件到 `D:\tmp\conflict-backup-20261010`；再 `git checkout HEAD -- <25 文件>`；最后备份完整污染补丁到 `D:\tmp\integ-ws-polluted.patch` 并 `git checkout HEAD -- .` 整体恢复。
 - **结果**：冲突标记 0、未暂存修改 0；`runner.py` 的 `memory_scope` 与 `include_pending_action` 均完好；HEAD 提交链（`2020457`/`55c944e`/…）完好；**主工作区 `stash@{0}`（记忆/客服会话的工作）完好未被消耗**。剩余 240 个未跟踪文件为 `stash pop` 带入，已在下方单独处置。
 - **教训（用于后续）**：不应在集成树上用 `git stash` 做临时改动隔离来跑基线；正确做法是在临时 worktree 上跑基线（本任务此前几轮即用此法，本轮一度偏离）。
+
+### 三个 AI 工作流逐项标注（已合入 / 已被替代 / 暂不合入 / 仍待处理）
+
+| 来源 | 状态 | 标注 |
+| --- | --- | --- |
+| `codex/cs-travel-acceptance-20261009` @ `8c5da51` | **已合入**集成树（`0138759` merge） | 客服/旅游验收批次，含 Reporter 加固（`fd4cf7b`） |
+| `codex/memory-system-profile-upgrade` @ `76df67a` | **部分已合入** | 观测/客服/基础设施/文档已进集成树；**记忆与旅游业务代码仍待处理**（见下） |
+| `codex/tri-ai-integration-20261010` @ `7dd4dd6` | **本任务集成树本身** | 29+4 个提交，本轮新增 `2020457`、`7dd4dd6` |
+| 救援快照 `D:\tmp\tri-ai-rescue-20261010-035854` | **完好保留** | `rescue-refs=211`（与记录一致）；`git bundle verify` → **「records a complete history / is okay」**；6 个快照 worktree 均在 |
+
+**仍待处理（不属于本轮范围）**：
+
+- **记忆系统业务代码**：`backend/memory/**`、`backend/tasks/memory_extraction_tasks.py`、迁移 `088/089`、`backend/tests/memory/**`、`frontend/src/api/memory.ts`。由记忆会话在其 worktree 处理。
+- **旅游 V2 业务代码**：`backend/travel/**`、`backend/travel_v2/**`、`backend/tests/travel*/**`、`frontend/src/**/travel*/**`、`docs/travel-domain-design-v5.md`。由旅游会话处理。
+- **客服用户侧新路由**：`backend/app/api/routes/cs_customer.py` 等未跟踪文件，属客服会话在途工作。
+
+### 集成树当前未跟踪文件说明（25 项）
+
+- 本轮 `git stash pop` 事件后，集成树残留 25 个未跟踪文件（`backend/memory/profile.py`、迁移 088/089、`cs_customer.py`、若干测试、`_salvage/`、`artifacts/`、`gui-test-screenshots/`）。
+- **处置：原地保留，未删除**——它们是记忆/客服会话的真实工作产物，删除即等于丢弃他人成果。已确认均**不在 HEAD 中**，不参与本任务任何提交。
+- 已通过 `.gitignore` 忽略顶层 `data/*.json`（215 个运行时产物），使其不再干扰状态判断。
+
+### 第 2 步结论
+
+- **五条关键链路**：Trace 权限（含**真实数据库跨租户端到端验证，通过**）、SQL trace 埋点、评测 deferred RAGAS、SSE 帧序、客服/旅游——其中 4 条定向测试通过；SSE 的 1 个失败经基线比对确认为**既有环境问题**（`FEEDBACK_PG_CONFIG` 不可达），非本轮引入。
+- **已关闭的未验证项**：「Trace 跨租户真实数据库过滤」由未验证转为**已验证通过**。
+- **仍明确的未验证项**：①Trace 默认 `full` 档仍不脱敏（敏感原文不得新增写入的约束继续生效，SQL 两处 `question` 埋点仍排除）；②SSE 完整帧序测试依赖的 `FEEDBACK_PG_CONFIG` 在当前环境不可达，该用例未通过；③记忆/旅游业务代码尚未并入集成树。
