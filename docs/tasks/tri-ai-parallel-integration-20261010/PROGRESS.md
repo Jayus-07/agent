@@ -231,3 +231,25 @@
 
 - 该 P0 **仍未解决**，保留阻塞记录：`/api/observability/traces` 与 `/api/observability/traces/{trace_id}` 无 `require_admin_operator` 依赖，APISIX `ROLE_GATE_PREFIXES` 不覆盖该前缀，`TRACE_DETAIL_LEVEL` 默认 `full` 使 `redaction.py` 直接返回不脱敏。
 - 因此 SQL 的两处 `sql.table_router`（含 `question[:500]`）埋点继续**不予合入**；在该项修复前，任何写入用户原文的 span 埋点都不得进入集成树。
+
+## 2026-10-10：评测主题差异审阅（未新增整批合入）
+
+- 来源 Git 状态（实测，均无未提交修改需要保全）：`rag-eval-kb-unification` 分支 `codex/rag-eval-kb-unification`，HEAD `6cfc3fbef0a6cf1377223b9b6e8bf76ea2e4a5c0`（2026-09-19），`git status` 全空；`eval-rag-governance` 目录下实际分支为 `report-final`（非同名分支），HEAD `7538d0238b4fb1720f6d2a261db2c8ad961e97c4`（2026-10-07），`git status` 全空。两者均未做任何修改。
+- **决定性事实**：两个来源提交**都已经是集成分支 HEAD 的祖先**（`git merge-base --is-ancestor <sha> codex/tri-ai-integration-20261010` 两次均 rc=0）。即评测内容此前已被并入集成树，本轮**不应重复整分支合并**。完整性另经逐一哈希复核：`service.py`、`runners/rag.py`、`prompt_release_runner.py` 的集成树版本与主工作区**完全相同**。
+- 因此本主题的结论是：**逐项核实后无需新增合入**；集成树在关键风险点上均**领先于**来源分支，若按来源覆盖反而会引入回退。
+
+### 风险逐项核实
+
+- **风险2（_guarded_case/_run_rag 丢弃 deferred RAGAS 输入）→ 来源确有该缺陷，集成树已修复**。治理分支版 `_guarded_case` 返回裸 `EvalResult`，并在调用处写 `(_guarded_case(c), None)` / `_eval_case(case)[0]`，确实丢弃 RAGAS deferred 输入。集成树版返回 `tuple[EvalResult, dict | None]`，docstring 明确记载旧实现「报告虽标记 self+ragas，实际 ragas_samples 却始终为 0」，修复提交为 `cd263ba fix(eval): preserve deferred ragas tasks`（已提交，工作区干净）。**若合入来源即为回退**。
+- **风险3（weekly.py 移除 no_ragas=True）→ 不成立**。治理分支与集成树的 `weekly.py` 经规范化行尾后**内容完全一致**（68 行），二者都在 `framework.py` 侧处理 ragas 开关；`weekly.py` 全文**不存在 `no_ragas`**，`git log -S 'no_ragas'` 无命中，历史上也没有被移除过。主工作区与集成树 `weekly.py` 的 68 字节差异经字节级比对与「规范化行尾后 SHA256」确认**仅为 CRLF/LF 行尾差异**，内容零差异。
+- **风险4（prompt_release_runner.py 强制 live）→ 来源确有该缺陷，集成树已修复**。治理分支 `_run_sync` 硬编码 `live=True` 且不传 ragas/no_ragas；集成树改为 `mode = resolve_evaluation_mode(release.dataset_provenance.get('evaluation_mode'))` 并传 `live=mode.live`、`ragas=mode.ragas`、`no_ragas=mode.no_ragas`，**尊重 recorded/offline 模式**；`backend/evaluation/mode.py` 存在且提供该解析。该修正来自比治理分支基线更晚的提交 `22f666f`。**若合入来源即为回退**。
+- **风险1（数据集版本/数量/fixture 绑定）→ 集成树数据完整且自校验通过，来源反而缺失**。集成树 `cs/cases.jsonl` = **320 条**（与 manifest `case_count: 320` 一致），含 300 条 cs-v2（`C1_faq_60`60 + `C2_query_60`60 + `C3_action_60`60 + `C4_complaint_40`40 + `C5_multi_40`40 + `C6_safety_40`40 = 300）+ 20 条 v1；`travel/cases.jsonl` 与 `travel_v2/cases.jsonl` 均 = **34 条**（与 manifest `case_count: 34` 一致）。而 unification 工作树中**根本没有 `datasets/cs/v2/` 目录**（0 个文件），其客服数据集显著落后。
+- **fixture/kb_id 绑定核对**：绑定在 manifest 而非 case metadata。`cs/manifest.json` → `kb_id: cs_eval_kb`，且带版本锁 `sha256: dd6271...db1cd` 与 `content_hash: dd62712841440906`；`travel/manifest.json` → `kb_id: travel_eval_kb`（`content_hash bbc465c9ed8c4466`）；`travel_v2/manifest.json` 为 1.1.0-golden-evolution。实测把 manifest 声明值与磁盘数据对照：三个模块 `case_count` **全部等于实际行数**；`cs` 的 `sha256` 与磁盘文件实算值**逐字符相同**；travel 两模块的 `content_hash` 前缀亦与实算 sha256 前缀一致。绑定未被破坏。
+- **旧记录『三个 metadata baseline JSONL 差异尚未定位』→ 本轮已定位并定性**。文件为 `backend/eval/metadata_baseline/golden_sample.jsonl`（3 行）、`golden_seed.jsonl`（52 行）、`preds_unified_seed.jsonl`（52 行）。三方 SHA256 互有不同，但**行数完全一致**，且经「规范化 CRLF/LF 后比较」与「排序后比较」双重校验，**集成树 == 主工作区 == 治理分支，内容零差异**——差异**全部来自行尾**。此前的『未确认』结论不再沿用，现更正为已定位：**非语义差异，无需合入**。
+
+### 定向测试与结果
+
+- `python -m pytest backend/tests/evaluation/ backend/tests/eval/ backend/tests/test_eval_run_records.py -q`（集成树，PYTHONPATH 指向集成树）：**344 passed, 112 skipped, 0 failed**（185.73s）。评测测试面在集成树上全绿。
+- `python -m pytest backend/tests/evaluation/test_evaluation_mode.py backend/tests/evaluation/test_rag_pipeline_evaluation_mode.py -q`：**4 passed**（模式解析与运行时标志，覆盖 recorded/live 区分）。
+- **补充最小定向测试**（本轮唯一新增）：`backend/tests/evaluation/test_rag_deferred_ragas_preserved.py`，**4 passed**。针对风险2 的 `cd263ba` 修复此前**无任何专门测试**这一缺口：锁定并发/串行两条路径均按 `(result, deferred)` 解包、deferred 汇聚分支存在、`_guarded_case` 返回注解为二元组、超时分支以 `None` 占位，并含反向断言禁止回退为 `_eval_case(case)[0]`。说明：`_eval_case`/`_guarded_case` 是 `_run_rag` 的内部闭包（模块级不可 monkeypatch），故采用源码契约断言而非伪造可 patch 符号——初版曾据此误判并失败，已改正，未用 skip/xfail 掩盖。
+- 未执行：全量评测、付费/live 模型调用、数据库迁移或写入。评测测试全部为离线路径（112 skipped 中含需外部依赖的用例）。
