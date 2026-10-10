@@ -110,3 +110,13 @@
 - 更新 L1 身份测试，覆盖轮数淘汰、消息数淘汰及保留完整工具调用轮；同步更新 `ai-runtime.md` 和 Phase 1 检查项。
 - 实际运行 `D:/Python/python.exe -m pytest backend/tests/memory/test_l1_message_identity.py -q --no-cov`：4 passed，4.41 秒；`D:/Python/python.exe -m py_compile backend/config/memory.py backend/config/__init__.py backend/memory/short_term.py`：通过；提交前 `git diff --check` 与暂存区检查通过。
 - 尚未验证数据库中 ToolMessage 类型与元数据持久化、真实 API/Agent 多轮指代、Checkpoint/Redis 故障和跨用户隔离；Phase 1 及全任务门禁未完成。下一步补足 ToolMessage L2 往返契约，再核验 Graph State 与取消/重启终态；不在本次改动中执行迁移或真实 Agent E2E。
+
+## 2026-10-11：Phase 1 L2 LangChain 消息往返契约
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main`，基于本地 main 合并点 `54c2e1e` 实施；共享主工作区和其他 Worktree 未修改。
+- 新增受控文本消息编解码：L2 可保存/恢复 HumanMessage、AIMessage、ToolMessage；正文单独保存，JSON 元数据保留 AI `tool_calls`、Tool `tool_call_id`/name/artifact/status 等字段；恢复时以数据库 ID 生成稳定 LangChain ID。旧行空类型字段仍按 user/assistant 恢复，不接受 SystemMessage、多模态正文、role/type 不匹配或非 JSON 元数据。
+- 新增并登记 `091_chat_message_langchain_metadata.sql`，两个字段均可空；ORM 对 PostgreSQL 使用 JSONB、对隔离 SQLite 测试使用 JSON。摘要角色格式化现在可区分工具消息。`ai-runtime.md` 已说明契约边界，TASK 将持久化基础与真实 Runner 接线拆为两项。
+- 实际运行 `D:/Python/python.exe -m pytest backend/tests/memory/test_message_codec.py backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_migration_registration.py backend/tests/context_budget/test_auto_compact.py backend/tests/memory/test_summary_visibility.py backend/tests/memory/test_stop_e_summary_contract.py -q --no-cov`：33 passed、6 skipped，7.00 秒。往返测试使用独立内存 SQLite，不连接共享 PostgreSQL。
+- 所有触及的 Python 文件 `py_compile` 通过，`git diff --check` 通过。未在 PostgreSQL 实库或临时容器应用 091，也未运行真实 Graph Runner/Agent 端到端测试；当前主 Graph Runner 尚未把真实 ToolMessage 写入新入口。
+- 该步骤仅完成 L2 存取契约和隔离往返验证；Runner 接线、Graph State 恢复、取消/失败/进程重启边界仍待实施与验收，Phase 1 未完成。
+- 实现提交：`1973d7e`（`feat(memory): persist typed LangChain messages`）。
