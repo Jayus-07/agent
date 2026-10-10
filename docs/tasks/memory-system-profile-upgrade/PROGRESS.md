@@ -75,5 +75,5 @@
 - 定向 T1/T2：`backend/tests/orchestration/test_request_context.py`、`backend/tests/tools/test_memory_domain_scope.py`、`backend/tests/api/test_memory_routes.py`、`backend/tests/tools/test_memory_forget_tool.py`、`backend/tests/test_tool_contract_lock.py`：52 passed，11.17s。覆盖可信域绑定、checkpoint 往返和旧 checkpoint 清理、Tool schema/透传、既有记忆 API/遗忘契约及契约锁。
 - 七个月画像场景已有独立数据/服务层验证：`backend/tests/memory/test_profile_evolution.py` 为 1 passed（12.62s）。这是确定性数据库服务测试，不等价于真实 LLM Agent E2E；真实 Agent E2E、准确率/误写率、性能成本基线与生产故障恢复仍未完成。
 - T0 `git diff --check` 无 whitespace error；Git 对生成的 lock 文件提示工作副本 CRLF 将规范化为 LF。没有运行迁移，也没有改共享主目录或整合 main 工作树。
-- 本停止点包含此前已迁入的记忆/Profile/outbox/删除屏障及其定向测试差异（共 36 个已跟踪文件修改、13 个新文件/目录，`git diff --stat` 对已跟踪文件统计为 1,407 insertions / 213 deletions）。当前独立分支仍未提交；后续不进入更多 Phase，先处理合并。
-- 合并约束：整合 `main` 工作树 `C:\Users\wh\.codex\worktrees\tool-governance-runtime\agent` 仍处于 HEAD `098632a` 且拥有大量其他会话的暂存变更。不得对其切分支、合并或重置。本任务可在独立分支提交并准备 clean-base merge candidate；要移动 `main` 引用须待该共享工作树的暂存工作安全收口。
+- 本停止点包含此前已迁入的记忆/Profile/outbox/删除屏障及其定向测试差异（共 36 个已跟踪文件修改、13 个新文件/目录；提交前已跟踪文件统计为 1,407 insertions / 213 deletions）。功能实现已提交到 `codex/memory-profile-upgrade-main`，SHA `3679821`。后续不进入更多 Phase，先处理合并。
+- 合并约束：整合 `main` 工作树 `C:\Users\wh\.codex\worktrees\tool-governance-runtime\agent` 仍处于 HEAD `098632a`，有 851 条其他会话暂存状态。该工作树的 index/文件内容不可由本任务改写，因此本次没有执行合并。功能提交是 `098632a` 的直接子提交，干净目标上可 fast-forward；待共享工作树中的暂存工作由其归属会话安全收口后再更新 `main`。未 stash、清理或迁移他人改动。
