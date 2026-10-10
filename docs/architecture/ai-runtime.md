@@ -36,7 +36,7 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 
 ## 上下文预算与跨请求状态
 
-L1 短期历史由 `SHORT_TERM_MAX_MESSAGES` 和 `SHORT_TERM_MAX_TURNS` 分别限制消息数和用户轮数；裁剪以用户消息为轮次边界，轮内 AI/Tool 消息一并保留。消息数上限用于淘汰旧的完整轮次；最新单轮即使超过该数也不拆分，实际模型输入仍由后续 Token Budget 硬门禁约束。模型调用前由 `backend/context_budget/` 统一估算输入 token、预留模型输出和安全空间，并对历史、RAG 证据及工具结果做有界裁剪或压缩。原始会话历史不因预检而改写；裁剪后仍超预算时，由模型代理按稳定错误契约拒绝发送。预算策略和 L4/L5 实现以该模块、配置及测试为准。
+L1 短期历史由 `SHORT_TERM_MAX_MESSAGES` 和 `SHORT_TERM_MAX_TURNS` 分别限制消息数和用户轮数；裁剪以用户消息为轮次边界，轮内 AI/Tool 消息一并保留。L1 按稳定数据库消息 ID 去重；相同正文但不同 ID 的消息仍保留为独立历史。消息数上限用于淘汰旧的完整轮次；最新单轮即使超过该数也不拆分，实际模型输入仍由后续 Token Budget 硬门禁约束。模型调用前由 `backend/context_budget/` 统一估算输入 token、预留模型输出和安全空间，并对历史、RAG 证据及工具结果做有界裁剪或压缩。原始会话历史不因预检而改写；裁剪后仍超预算时，由模型代理按稳定错误契约拒绝发送。预算策略和 L4/L5 实现以该模块、配置及测试为准。
 
 跨请求的轻量业务上下文通过 `ConversationContextRepository` 读写：Memory 后端用于测试/本地场景，Redis 后端承载共享热状态。调用方提交表达业务意图的 mutation；并发更新使用版本、run id 或 question id 做 CAS，不能用无条件整对象覆盖。Redis 上下文是有 TTL 的热状态，不替代持久业务记录或图 checkpoint；键按 tenant、user、conversation 隔离。后端不可用、过期或被驱逐时的恢复/降级路径以仓库实现和对应测试为准。
 

@@ -90,3 +90,67 @@ def test_session_memory_restores_database_ids_and_human_ai_roles():
         "chat-message:41", "chat-message:42",
     ]
     assert [message.content for message in messages] == ["杭州三日游", "好的"]
+
+
+def test_memory_service_keeps_repeated_text_from_distinct_l2_rows(monkeypatch):
+    """同一用户连续重复发送相同内容时，L1 保留不同数据库消息身份。"""
+    from backend.memory import service as service_mod
+
+    rows = [
+        SimpleNamespace(id=51, role="user", content="好的"),
+        SimpleNamespace(id=52, role="assistant", content="收到"),
+        SimpleNamespace(id=53, role="user", content="好的"),
+        SimpleNamespace(id=54, role="assistant", content="收到"),
+    ]
+
+    class Repository:
+        async def get_or_create(self, *_args, **_kwargs):
+            return SimpleNamespace(summary=None)
+
+        async def message_count(self, _session_id):
+            return len(rows)
+
+        async def load_messages(self, _session_id, limit=None):
+            assert limit is not None
+            return rows
+
+    class DatabaseSession:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class DatabaseContext:
+        async def __aenter__(self):
+            return DatabaseSession()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class Retriever:
+        last_stage_counts = {}
+        embedding = SimpleNamespace(embed_query=lambda _query: [0.0])
+
+        def __init__(self, _repository):
+            pass
+
+        async def retrieve(self, *_args, **_kwargs):
+            return []
+
+    monkeypatch.setattr(service_mod, "AsyncSessionLocal", DatabaseContext)
+    monkeypatch.setattr(service_mod, "SessionRepository", lambda _db: Repository())
+    monkeypatch.setattr(service_mod, "MemoryRepository", lambda _db: object())
+    monkeypatch.setattr(service_mod, "HybridRetriever", Retriever)
+
+    buffer = asyncio.run(service_mod.MemoryService().start_session(
+        "session-repeated-text", user_id="user-1", query="好的",
+    ))
+
+    assert [type(message) for message in buffer.get_all()] == [
+        HumanMessage, AIMessage, HumanMessage, AIMessage,
+    ]
+    assert [message.id for message in buffer.get_all()] == [
+        "chat-message:51", "chat-message:52",
+        "chat-message:53", "chat-message:54",
+    ]

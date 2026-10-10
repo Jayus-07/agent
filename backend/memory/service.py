@@ -111,14 +111,10 @@ class MemoryService:
 
                 l1 = ShortTermBuffer()
                 history = await l2.load_messages(limit=SHORT_TERM_MAX_MESSAGES * 2)
-                # 历史双写修复：旧数据曾因前端+后端各持久化一次，产生连续重复消息。
-                # 注入上下文前按 (role, content) 连续去重，避免重复历史挤占窗口、误导模型
-                prev = None
+                # L1 按持久消息 ID 去重；相同正文但 ID 不同可能是用户真实重复发送，
+                # 必须保留为独立消息，不能按 (role, content) 合并。
                 for msg in history:
-                    if prev is not None and type(msg) is type(prev) and msg.content == prev.content:
-                        continue
                     l1.add(msg)
-                    prev = msg
 
                 # L2 摘要注入：超过短消息窗口的更早上下文由会话摘要补足 ——
                 # 否则摘要落库后从未参与 prompt，长会话的早期信息完全丢失。
