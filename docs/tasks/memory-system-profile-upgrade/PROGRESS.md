@@ -82,3 +82,11 @@
 - 新增 `backend/tests/memory/test_l1_message_identity.py`。实际运行 `python -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_summary_visibility.py backend/tests/memory/test_stop_e_summary_contract.py backend/tests/orchestration/graph/test_stream_events_flow.py backend/tests/rag/test_chain.py -q --no-cov`：55 passed、6 skipped，166.51 秒。未运行全量回归或真实 Agent E2E。
 - 集成复核后将数据库 ID 命名空间限定为 `chat-message:`，再运行 `python -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_summary_visibility.py -q --no-cov`：7 passed，未跳过。
 - 本次实现提交：`5f12747`（`fix(memory): preserve stable L1 message identities`）。L1 消息/轮次配置、当前请求与 Graph State 的幂等关系、取消/失败恢复和真实 E2E 仍待验证。
+
+## 2026-10-10：Phase 1 SSE 重复 request_id 屏障
+
+- 复核发现 `/chat/stream` 对已登记的 `request_id` 会覆盖 `StreamRegistry` 原记录并继续启动新 Runner；若首条流仍在运行，会丢失其恢复缓冲；同一轮再次执行也有重复写入 L2 的风险。
+- `StreamRegistry.create()` 现于注册锁内拒绝恢复 TTL 内的重复流 ID；路由将重复初始 POST 返回 `409 IDEMPOTENCY_CONFLICT`，提示调用方通过原 ID resume 或使用新 ID。注册表保留原记录，重复请求不会启动 Runner。
+- 新增路由冲突测试和 8 线程并发占位测试。实际运行 `python -m pytest backend/tests/api/test_sse_resume.py -k "duplicate_initial_request or registry_allows" -q --no-cov`：2 passed，8 deselected，11.58 秒；`git diff --check` 通过。
+- 尝试完整 `python -m pytest backend/tests/api/test_sse_resume.py backend/tests/api/test_chat_stream_hardening.py -q --no-cov`：5 passed、14 errors。失败均在完整应用 fixture 导入期间由 `feedback.init_db()` 连接 PostgreSQL 时触发，原因是此 Worktree 的测试进程没有 `PGPASSWORD`；并未执行相关 HTTP 断言。需在具备隔离数据库凭据的环境重跑，当前记录为环境阻塞，不计通过。
+- 该屏障仅对本进程恢复注册表及 finished TTL 生效；进程重启或记录过期后的持久请求幂等、request_id 到 L2 `end_turn` 的关联、取消/失败恢复仍未实现。Phase 1 及全任务门禁均未完成；未运行迁移、真实 Agent E2E 或全量回归。

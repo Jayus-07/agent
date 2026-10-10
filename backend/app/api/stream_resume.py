@@ -131,6 +131,10 @@ class StreamRecord:
         return time.monotonic() - self.created_at
 
 
+class DuplicateStreamIdError(ValueError):
+    """同一恢复窗口内的 request_id 已被其他流占用。"""
+
+
 class StreamRegistry:
     """进程内流注册表（单例；app 重启即清空 = 诚实不可恢复）。"""
 
@@ -144,6 +148,8 @@ class StreamRegistry:
                               user_id=user_id, tenant_id=tenant_id)
         with self._lock:
             self._sweep_locked()
+            if stream_id in self._records:
+                raise DuplicateStreamIdError(stream_id)
             self._records[stream_id] = record
         return record
 
