@@ -103,6 +103,20 @@ class _StaticGraph:
         yield from self._events
 
 
+class _CheckpointGraph(_StaticGraph):
+    """捕获主图提交给 checkpointer 的每轮配置。"""
+
+    checkpointer = object()
+
+    def __init__(self, events):
+        super().__init__(events)
+        self.configs = []
+
+    def stream(self, initial_state, config=None):
+        self.configs.append(config)
+        yield from self._events
+
+
 class _AbortingGraph:
     """产出第一个事件后置位 stop_event，模拟用户在流式中途点停止。"""
 
@@ -162,6 +176,28 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     root = _root(record)
     assert root.end_time != ""
     assert root.status == "success"
+
+
+def test_main_checkpointer_uses_opaque_unique_thread_id_per_turn():
+    import threading
+
+    graph = _CheckpointGraph(_events_normal())
+    sys_obj = _make_system(graph)
+    for _ in range(2):
+        list(sys_obj.stream_events(
+            "测试问题", "private-session", user_id="private-user",
+            tenant_id="private-tenant", stop_event=threading.Event(),
+        ))
+
+    thread_ids = [config["configurable"]["thread_id"] for config in graph.configs]
+    assert len(thread_ids) == 2
+    assert len(set(thread_ids)) == 2
+    assert all(value.startswith("agent-") for value in thread_ids)
+    assert all(
+        sensitive not in thread_id
+        for thread_id in thread_ids
+        for sensitive in ("private-session", "private-user", "private-tenant")
+    )
 
 
 def test_user_abort_mid_stream_finishes_once_with_reason(_spy_finish):

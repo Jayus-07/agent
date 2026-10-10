@@ -246,6 +246,11 @@ def _domain_node_names() -> set[str]:
         return set()
 
 
+def _new_main_graph_thread_id() -> str:
+    """返回每次主图执行独立且不含会话标识的 Checkpointer 键。"""
+    return f"agent-{uuid.uuid4().hex}"
+
+
 def _looks_like_refusal_text(message: str) -> bool:
     """回答是否为拒答/短路类文案（追问漏斗 resolved 的近似口径）。
 
@@ -728,16 +733,13 @@ class GraphRunner:
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
                 # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
-                # thread_id：每轮唯一（session+毫秒+uuid），checkpoint 定位用于崩溃
-                # 恢复/审计，不做跨轮状态合并（多轮记忆由 MemoryService 负责）。
-                # uuid 后缀防同毫秒重复提交撞 thread_id（建议项 2026-09-21）
+                # thread_id：每次执行使用不透明随机键，避免把 session_id
+                # 放进 checkpoint 索引；不做跨轮状态合并（由 MemoryService
+                # 管理多轮历史，避免 messages reducer 跨轮累积）。
                 invoke_config: dict = {"recursion_limit": MAIN_GRAPH_RECURSION_LIMIT}
                 if has_checkpointer:
                     invoke_config["configurable"] = {
-                        "thread_id": (
-                            f"agent-{session_id}-{int(time.time() * 1000)}"
-                            f"-{uuid.uuid4().hex[:8]}"
-                        ),
+                        "thread_id": _new_main_graph_thread_id(),
                     }
                 for event in self._graph.stream(initial_state, config=invoke_config):
                     if stop_event is not None and stop_event.is_set():

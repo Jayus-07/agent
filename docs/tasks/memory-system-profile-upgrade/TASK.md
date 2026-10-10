@@ -66,6 +66,7 @@
 ### Phase 2：L2、Checkpoint 与摘要
 
 - [ ] 分离原始历史、会话摘要和结构化 Graph/Domain 任务状态，保存业务 ID/版本及未完成事项。
+- [x] 主图 Checkpointer 使用每次执行独立的不透明 thread_id，避免 session_id 写入 checkpoint 索引及 messages reducer 跨轮累积。
 - [x] 按 Token 预算触发增量摘要，复用已有 frontier/版本机制；保留确认条件、未解决约束及关键引用。（L2 Token 触发已接入；关键条件保留与真实长会话门禁仍待验收。）
 - [ ] 核验同 thread_id 持久恢复和 namespace 隔离；不得以摘要覆盖旅游 Active/Draft、客服确认或人工接管状态。
 - [ ] 修补 L5 同步/异步差异、摘要失败和并发覆盖；失败保留安全上下文并记录降级。
