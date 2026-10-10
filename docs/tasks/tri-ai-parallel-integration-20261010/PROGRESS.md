@@ -1,0 +1,143 @@
+# 进展记录
+
+## 2026-10-10：救援快照与集成基线
+
+- 用户确认开始执行审计报告中的救援与合并计划。
+- 外置快照：D:\tmp\tri-ai-rescue-20261010-035854
+- 已复制主工作区、5 个脏 Worktree 和 Git common dir；6 个状态/差异/索引补丁指纹在复制前后均一致。
+- 为 28 个 Worktree HEAD 和 183 个不可达 commit 建立 211 个 refs/rescue/tri-ai/20261010-035854/... 引用；原有 81 个引用仍在。
+- rescue-history.bundle 已生成并通过 git bundle verify；40 MB 左右。
+- 主工作区仍有 1,283 个未提交状态项（M322/D602/??359），未提交内容没有被做成提交。
+- 例外：4 个 Git 忽略的 Next.js .next/trace 文件在快照期间被运行中的开发进程更新；快照保留复制时版本。源 trace 当前被进程占用，未停止服务或覆盖文件。见快照目录 volatile-files-exceptions.csv。
+- 基线选择：从本地 main 创建隔离集成 Worktree，保留 Travel V2；将 origin/main 的 3 个远端提交并入该集成分支，保留 URL Guard/OCR 修复。
+- 集成 Worktree：D:\tmp\tri-ai-integration-20261010
+- 集成分支：codex/tri-ai-integration-20261010
+- 当前 HEAD：b17833852849a78e7aa1220e890846c5622654d2
+- 本阶段尚未合并 origin/main、未运行测试、未写数据库。
+
+## 初始下一步（基线创建前记录；后续完成情况见下文）
+
+1. 在集成 Worktree 将 origin/main 合入新分支，逐个检查自动合并和冲突结果。
+2. 完成基线冲突与契约核对后，再逐域评审 rescue refs 和脏 Worktree 快照。
+3. 每个领域通过定向验证后再形成独立集成提交。
+
+## 2026-10-10：主线基线合入
+
+- 在隔离集成分支试合并 origin/main，无文件冲突；保留本地 Travel V2 两笔提交与远端 URL Guard/OCR 三笔提交历史。
+- 暂存差异：backend/services/provider_probe.py、backend/tests/services/test_provider_probe.py、backend/tests/test_url_guard.py、backend/tools/url_guard.py；82 行增加、8 行删除。
+- testing-guide.md 在当前本地 main 基线中缺失；使用 docs-governance 救援快照中的测试策略确定最小 T2 验证范围。
+- 首次组合验证：66 passed、7 failed。失败均为本机 DNS/代理将 mock 测试域名解析到 fake-IP，测试未启用 SSRF_FAKEIP_AWARE。
+- 复验：设置仅对测试进程生效的 SSRF_FAKEIP_AWARE=true，backend/tests/services/test_provider_probe.py：51 passed，1 个 pynvml 弃用警告。
+- 复验：清除该环境变量，backend/tests/test_url_guard.py：22 passed。
+- 合并补丁 diff --check 通过；无 unmerged paths。
+- 当前步骤将创建基线合并提交；应用代码与数据库未做其它修改。
+
+## 2026-10-10：RAG multi-query / extra_body 批次
+
+- 合并来源：origin/feat/rag-multi-query-fix，保留原始来源 commit ed7390a 作为 merge parent；与主工作区 d177694 patch-id 相同，不重复应用。
+- migration registry 冲突人工对照三阶段版本解决，保留 081、083、084–087 登记及原 ORDER_LAST 顺序。
+- 来源提交登记了 082，但不包含对应文件；为避免“已登记但缺文件”，从救援快照纳入主工作区 082_travel_plan_tenant_scope.sql，SHA256 与源文件一致。082 属 Travel 依赖，后续单独审阅；085/087 等迁移均未执行。
+- 后端定向测试：反问/多查询、token 预算、extra_body 校验、model roles、Travel V2 migration registration，99 passed。
+- 管理端 draft.test.ts：14 passed；使用缓存依赖和主工作区 Vitest config，执行的是集成 Worktree 源文件。
+- 管理端 TypeScript 检查：临时 tsconfig 指向集成源和现有缓存类型，tsc_exit=0。
+- API 写端点测试未能收集：导入全局 api_router 时 feedback 模块执行模块级 init_db；集成 Worktree 无 PGPASSWORD，连接在认证前失败。未发生数据库写入；该 API/数据库持久化边界仍未验证。
+- 首次 fake-IP 环境条件、成功复验和基线合并测试记录见上节。
+- 本批已完成 diff --check，未解决冲突项为 0；提交后继续其它主题。
+
+## 2026-10-10：客服/旅游批次与 Reporter 加固
+
+- 在隔离集成分支合入 `codex/cs-travel-acceptance-20261009`，提交 `0138759`。人工处理 7 个冲突，保留 Travel V2 页面与路由边界，同时合入客服的只读上下文、客服状态和 migration 注册。
+- 客服 API 的一个过期固定时间测试 fixture 改为相对未来时间；`backend/tests/api/test_cs_pending_api.py` 复测 5 passed。初轮 19 个后端测试文件为 224 passed、1 failed；失败仅为该过期 fixture，修复后整文件通过。
+- 前端 14 个测试文件 110 passed，TypeScript 检查通过。
+- 从客服/旅游来源 Worktree 的 7 个脏文件中人工挑选 Reporter 事实校验与 fallback 加固，提交 `fd4cf7b`；来源 Worktree 保持未修改。Reporter 测试 19 passed，相关前端 3 个文件 43 passed，TypeScript 检查通过。
+- 验证记录绑定在集成 Worktree；源 Worktree 与主工作区未进行清理、重置或覆盖操作。
+
+## 2026-10-10：SSE 分支预合并审查
+
+- 对 `codex/sse-recovery` 执行一次隔离的非提交预合并，出现 27 个文件冲突；随后安全撤销预合并，当前集成分支仍停在 `fd4cf7b`，来源 Worktree 未修改。
+- 核心契约冲突：当前集成采用 `seq/after_seq` 与 `/chat/stream/resume`；来源分支采用 Redis Streams 与 `Last-Event-ID`。两者的事件存储、API、客户端恢复逻辑需先选定统一方向。
+- 已向用户询问该协议选择。选择到达前不继续整合 SSE 依赖项；不执行其新增 migration。
+
+## 当前状态与后续
+
+- 已集成批次：主线基线、RAG multi-query/extra_body、客服/Travel、Reporter 加固；集成分支最后已知提交为 `fd4cf7b`。
+- 尚待独立审阅：docs governance（含大量文档删除）、主工作区大规模未提交改动、CS P3.5 与当前实现差异、production-readiness 未跟踪文件。
+- 原始救援快照、bundle、refs、stash 和所有来源 Worktree 均按审计记录保留。数据库 migration 未执行。
+- 每个后续主题开始前复核集成分支状态与提交哈希；SSE 公开协议已定为 F2 `seq/after_seq`，其来源分支暂不整批合入。
+
+## 2026-10-10：SSE 恢复协议决策
+
+- 依据集成版本 `backend/app/api/stream_resume.py`、`backend/app/api/routes/chat.py`、前端 `frontend/src/api/chat.ts` 与 F2 协议设计记录，确定继续采用已冻结的公开契约：事件序号 `seq`，`POST /chat/stream/resume` 携带 `{request_id, after_seq}`；at-least-once 重放由客户端按 seq 去重。
+- 依据：该契约已有无丢洞的注册表同步设计、身份隔离、gap 诚实失败语义，设计记录载有 8 项协议测试及 APISIX 实机 100 次验收结果；保持它可避免替换已验证的客户端/后端恢复语义。
+- SSE recovery 来源分支的 `Last-Event-ID` 使用 Redis Stream ID（字符串），并把 Redis 作为跨进程回放事实存储；它与当前整数 `after_seq` 的游标类型、重连入口和存储生命周期不同，不能直接混合。
+- 本次选择保留 F2 作为唯一公开恢复协议；不把 Redis Stream ID 暴露为第二种游标协议。跨 worker / 跨进程恢复能力不纳入本批；当前 F2 的进程重启边界继续诚实返回不可恢复。若将来要求共享回放存储，须作为独立架构任务设计兼容映射，并重跑跨实例身份隔离、无丢洞、重复/终态和故障降级验证。
+- 因此 SSE recovery 分支暂不整批合入；其中 outbox、任务恢复、客服/RAG 等非协议能力分别留待后续主题审查，不因本决策而丢弃来源分支或救援快照。
+
+## 2026-10-10：文档治理与主工作区改动只读复核
+
+- 对照当前集成树、docs-governance 脏 Worktree 与根工作区的实体文件清单：docs 分别为 624、584、76 个文件。docs-governance 相对集成树少 45 个路径、多 5 个路径；该结果是不同提交基线的树对树比较，不等同于 479a8cb 的提交删除清单，也不据此断言文件已被删除或迁移。
+- 45 个集成树独有文件未发现与 docs-governance 现存文件 SHA256 完全一致的同内容迁移目标；历史审计/验收记录应逐项追踪引用，不能直接接受整批删档。
+- docs-governance 的 5 个新增入口为 `docs/development/testing-guide.md`、`tool-skill-guide.md` 及客服/RAG/SQL 域文档。testing-guide 与根工作区版本 SHA256 相同；另外 4 个核心文档与根版本不同。根版本有更多实现路径/权限细节，但存在重复段落，必须以当前代码校核后择取，不整文件覆盖。
+- docs-governance README 所列的 system-overview、ai-runtime、domain-service-map、Frozen-Contracts、commands、travel 等导航目标在其 Worktree、集成树和根工作区均存在；新增测试/工具/客服/RAG/SQL文档链接仅在根工作区与 docs-governance 存在，当前集成树尚缺这 5 个路径。
+- 主工作区大规模改动维持原审计结论：1,283 个状态项（M322、D602、??359），其中 docs 566 个删除、frontend-mp 25 个删除，data 约 37 MB 未跟踪。没有逐项确认删除意图与来源前，不接受这组清理变更；完整救援快照继续保留。
+- 本阶段仅做文件树、内容和导航核对；未合并文档主题、未运行测试、未更改根工作区或来源 Worktree。提交级删除清单及每个历史文件的引用/替代关系仍需在 Git 差异可用时逐项核对。
+
+## 2026-10-10：CS P3.5 文件级初审
+
+- 复核来源快照列出的 12 个未提交 CS P3.5 文件；当前读取到的 12 个 P3.5 文件哈希均不同于集成版本。根工作区与集成版本仅 `customer_service/knowledge/service.py`、`customer_service/realtime.py` 两项哈希相同，其余 10 项根工作区也有不同内容；不将 P3.5 整批覆盖到集成树。
+- 已知语义差异显示 P3.5 基线落后：handoff timeout 为 600 秒而当前实现为 30 秒；配置重复客服词汇而当前实现集中在 `customer_service/vocab.py`；订单号判断使用简单正则，而当前实现有语义上下文解析与错误分类；知识置信度 fallback 与当前 `outcome.answer_meta` 严格路径不同；状态迁移版本缺少更新的 DB 权威读取以避免 dispatcher/reaper 后 L1 陈旧值。
+- `_is_confirmation_text` 在当前集成版本已存在，不重复引入。剩余 P3.5 独立改动须逐项确认目标行为、调用边界和定向测试后再决定是否摘取；本阶段没有合并或运行测试。
+
+## 2026-10-10：SQL、评测、管理端与基础设施冲突初审
+
+- SQL：根工作区有 `policy.py`、`sql_agent.py`、demo seed 和 040/047/048 迁移修改；另有 082/084/085/086 迁移未跟踪。`e6c90a4` 与 `acd295d`、`c97b02d` 与 `9bef169` 均不能按提交标题或相近目的视为重复。085 包含旧旅游表 DROP；迁移 checksum、环境应用状态和数据处置未复核前不纳入/执行。
+- 评测：`rag-eval-kb-unification` 与 `eval-rag-governance` 同时改动 `backend/evaluation`：两 Worktree 在 112 个共有文本源文件中有 47 个哈希不同，在 15 个共有评测测试中有 3 个不同。相对集成树，unification 分支还涉及大量数据集/评测代码与测试差异；governance 分支改动多个 dataset manifest、mode/model/service/runner 文件，并有 3 个 metadata baseline JSONL 与集成树不同。不能顺序整分支叠加；需先明确共同评测目录/fixture catalog 版本，再审阅数据来源和预期结果。
+- 管理端：根工作区的 7 个修改项及 3 个未跟踪项集中在 Trace 详情/StepTimeline；新页面会按 `children_ids` 递归取父子 Trace。根后端 `observability.py` 已按 `parent_id` 查询并回填 `children_ids`，当前集成副本尚无这段；因此前后端必须作为同一个 API 主题集成，不能单独取前端。新增 `traceSpanTree`/`StepTimeline` 用例也应随功能纳入；尚未执行测试。
+- 基础设施：根工作区修改根/前端 Dockerfile、APISIX 路由与配置、`gateway-auth.lua`、Redis 配置和 `pyproject.toml`。来源提交还包括 docker-torch-cpu、mobile-responsive、demo gateway 等；Docker 依赖缓存/运行用户与网关身份/路径豁免存在交叠。待应用 API 主题稳定后，逐配置审阅并绑定 APISIX 配置检查和受影响镜像的定向构建；本阶段未构建镜像、未启动/停止服务。
+- 以上为文件路径、内容指纹、现存路由和来源记录的初审，不替代 Git 提交级祖先/补丁差异审查；涉及来源提交的最终纳入仍需依据原提交和人工逐块比对决定。
+- 新增 P0 待核：Trace 详情页会递归按 `children_ids` 请求 trace；根工作区通用 `/observability/traces` API 路由没有看到显式 `require_admin_operator` 依赖，APISIX `ROLE_GATE_PREFIXES` 静态配置只列 `/api/observability/gateway`，未列通用 trace 路径。由于 DTO 含 prompt/answer、session/user、LLM 用量等字段，必须先用 viewer/editor/admin 角色矩阵确认现有访问策略，并为子 Trace 递归访问覆盖资源授权/数据范围；此点未实机验证，未改代码，作为管理端/API 集成阻塞项。
+
+## 2026-10-10：用户确认文档与主工作区删除意图
+
+- 用户明确确认 docs-governance 与主工作区状态清单中标记为删除（`D`）的文件是其有意删除。该确认覆盖删除意图，不视为所有修改（`M`）和未跟踪文件（`??`）都已审阅、可合并或通过验收。此前“未确认前不接受删除”的判断由本条更新；救援 bundle、快照、来源 Worktree 与历史继续保留。
+- 静态核对确认主工作区 `frontend-mp/` 当前不存在，集成 Worktree 中仍有该目录；前次状态快照列出 25 个小程序文件删除。代码、构建和部署配置搜索未发现指向 `frontend-mp` 的运行时依赖；发现的引用位于 README/架构文档和过期前端拆分计划。尤其 UX 设计文档写有“冻结：不删代码”，与用户后续删除决定冲突；前端拆分计划仍描述小程序待做。后续文档主题应按已确认退役与删除现状更新这些现行说明，不恢复代码目录。
+- 主工作区缺少 `docs/2026-09-25-F2-SSE恢复协议-审计与设计.md`，该路径也在删除状态快照中；集成副本与救援资料仍保留。SSE 契约决策已记在本进度文件。文档主题应保留设计决策的可追溯记录（例如整理至当前架构文档/决策记录），但不因该需要擅自恢复被用户确认删除的原路径。
+- 5 份核心指南（testing-guide、tool-skill-guide、客服、RAG、SQL）在主工作区存在、集成树缺失；后续需审核后按文档主题纳入，并校验导航链接与代码事实。
+- 静态搜索还发现旧 UX 设计/README 的“冻结”表述和评测语料中的通用“小程序壳”描述。后者是评测样例文本，不是运行时引用，是否修订应由评测数据事实性审查决定。
+- 本次只检查当前文件存在性及集成树的文本引用，并补记用户确认；没有执行 Git 操作、合并或测试，也没有修改业务代码。Git 状态细节仍引用 2026-10-10 03:53 保存的快照，不能视为本次刷新结果。
+
+## 2026-10-10：文档主题定向复核结果（集成前）
+
+- 当前实体树核对：主工作区 docs 76 个文件、集成树 624 个、docs-governance 树 584 个。主工作区与集成树有 49 个同路径文件，其中 17 个内容不同；主工作区另有 27 个独有文件。主工作区与 docs-governance 有 48 个同路径文件、19 个内容不同、主工作区独有 28 个路径，治理树另有 536 个路径。长篇 `DATABASE.md`、PRD、模型配置设计和 Travel 设计稿在主工作区显著缩短；这是用户确认的文档清理主题，不能把旧长文自动覆盖回去。历史/提案文档的业务信息是否应迁移，仅在其仍是现行规范或仍被代码/文档引用时处理。
+- 主工作区 `README.md`、`AGENTS.md` 和 `docs/**/*.md` 共 74 个文档中的 137 个相对本地 Markdown 链接逐项存在，未发现断链。`docs/architecture/Frozen-Contracts.md` 保留了 SSE `seq` 有序、at-least-once 重放、按序号去重、缓冲缺口/重启不可恢复时显式失败等核心协议；F2 详细设计文件删除不会令协议决策只剩任务日志。
+- 主工作区代码、构建、部署配置中未发现 `frontend-mp`/`frontend_mp` 引用；主工作区现存 docs 只有 `docs/operations/commands.md:55` 仍建议为 `frontend-mp/` 使用 Taro 构建脚本，应随本主题修正。旧 UX/前端拆分计划仍存在于集成树，但不在主工作区现行 docs 树中，按用户确认的文档删除清单处理，不继续把它们当作现行规范。
+- 本节验证对象是主工作区当前文档树的 74 个 Markdown 文件（对应扫描时的文件内容），不是集成后的树；链接扫描脚本检查了 Markdown 相对链接，不覆盖外部 URL、HTML 生成结果或内容事实验证。该结果不应记作集成通过。
+- 由于本轮执行环境对 Git 操作返回“Not a git repo, skipping”，且本主题必须保留原提交历史并按来源清单生成集成结果，尚未替换/删除集成树文件、创建合并提交或在集成树复跑链接检查。当前完成的是集成前审阅与定向 source-tree link check；文档主题尚未集成，不能进入下一个主题。
+
+## 2026-10-10：文档主题应用被拦截
+
+- 用户要求清理旧文档并继续合并。根据已保存主工作区状态清单，准确解析出 566 个 docs 删除项与 25 个 `frontend-mp` 删除项；全部 591 个文件当前都还存在于隔离集成目录，在主工作区都已不存在。另识别 9 个既不在主工作区文档树、也不在确认删除清单中的集成专有文件（含近期客服/旅游验收证据和本任务 TASK/PROGRESS），计划保留。
+- 为回退准备，先备份了隔离目录的 624 个 docs 文件、25 个 frontend-mp 文件，以及 README、AGENTS、CLAUDE、命令文档到 `D:\tmp\tri-ai-doc-theme-backup-20261010-121408`。
+- 计划只应用本主题：删除明确确认的 docs 与小程序删除项；将主工作区现有 76 份 docs 及 README、AGENTS、命令文档作为目标版本；删除主工作区确认删除的根 `CLAUDE.md`；保留上述 9 个集成专有文件；并修正 `docs/operations/commands.md` 中仍指向 Taro 构建的句子。
+- 自动安全检查拒绝了上述一次性批量删除/覆盖命令，返回 `blocked by policy`，未给出更详细原因。拒绝后复核确认集成目录未变化：docs 仍 624 个文件，frontend-mp 仍 25 个文件，README 与主工作区不同，CLAUDE.md 仍在。未通过换工具重复同一批删除/覆盖。
+- 因此当前文档主题**尚未整合**。主工作区来源文档的 137 个相对链接静态检查通过，但不能作为集成树通过；没有创建主题提交，也没有开始 CS P3.5 等下一主题。Git 状态仍以先前快照为准。
+
+## 2026-10-10：续工状态刷新与文档主题阻塞确认
+
+- 续工前在集成目录确认 git rev-parse --is-inside-work-tree 返回 true。当前分支为 codex/tri-ai-integration-20261010，HEAD 为 fd4cf7b259d3a9104d42c172ac0632bb5e0d81dc（Harden travel reporter facts and surface fallback response）。状态只有未跟踪的 docs/tasks/tri-ai-parallel-integration-20261010/；git diff --check 通过，tracked diff 为空。
+- git worktree list --porcelain 显示 D:/tmp/tri-ai-integration-20261010 是该仓库登记的 Git worktree。Codex 会话附件列表为空；调用 attach_worktree 返回 The checkout exists but is not a managed worktree，因此应用无法将本会话正式附加到它。本轮 Git 检查均以该目标目录为显式工作目录执行；没有创建、重置或清理 worktree。
+- 文档主题仍未整合。上次面向该主题的文档删除/覆盖批量操作被安全检查拒绝，记录为 blocked by policy，检查未提供更具体原因。依据用户本轮明确限制，没有换工具、拆分操作或再次尝试相同删除/覆盖。
+- 本轮没有应用 docs-governance 来源提交 479a8cb6de6bcee1813bd13fc515193cdcfc1862，也没有应用主工作区未提交文档状态；没有创建提交、修改业务文件或运行测试。此前主工作区链接检查不代表集成树验证，本轮未将其记为通过。
+- 阻塞结论：文档主题尚未合并；按用户要求停在该主题，不进入 CS P3.5 或其他后续主题。数据库迁移未执行。
+
+## 2026-10-10：续工 Git 状态刷新与文档主题阻塞复核（第二轮）
+
+- 续工前按用户要求刷新集成工作区 Git 事实，替换此前“以 03:53 快照为准”的表述。`git rev-parse --is-inside-work-tree` 返回 true，仓库根 `D:/tmp/tri-ai-integration-20261010`，git-dir `D:/Program Files/workplace/agent/.git/worktrees/tri-ai-integration-20261010`（common dir `D:/Program Files/workplace/agent/.git`）。
+- 当前分支 `codex/tri-ai-integration-20261010`；HEAD `fd4cf7b259d3a9104d42c172ac0632bb5e0d81dc`（Harden travel reporter facts and surface fallback response，2026-10-10 04:50:57 +0800）。记录中的最后提交 fd4cf7b 经复核**仍然有效**，未过时。本次刷新没有做 fetch/pull，不与远端比较。
+- 提交链复核：fd4cf7b → 0138759（Merge cs-travel-acceptance-20261009）→ e5e5d7c（Merge RAG multi-query fix）→ cf7dec4（Merge origin/main）→ 384c8b6 → b178338。
+- 工作区状态：仅未跟踪 `docs/tasks/tri-ai-parallel-integration-20261010/`；tracked diff 为空；`git diff --check` 退出码 0。
+- `git worktree list --porcelain` 共 28 个 worktree，主工作区与全部来源 Worktree 的 HEAD 与本任务救援时的记录一致；本次未创建、重置、清理或删除任何 worktree。
+- 文档主题只读差异复核（树对树，非提交级）：集成树 docs 624 个文件、frontend-mp 25 个文件、根工作区 docs 76 个文件且 frontend-mp 不存在。docs 路径集对比：集成树相对主工作区多 575 个、主工作区相对集成树多 27 个；docs-governance 相对集成树多 5 个路径（development/testing-guide.md、development/tool-skill-guide.md、domains/customer-service.md、domains/rag.md、domains/sql.md），与此前记录一致。docs-governance 仍是 Git 仓库，HEAD `479a8cb6de6bcee1813bd13fc515193cdcfc1862`（docs: 重构精简 Agent Platform 文档体系），其工作树有 10 个状态项。
+- 拦截后不变性复核：docs 仍 624、frontend-mp 仍 25、CLAUDE.md 仍存在、集成树 README 与主工作区 README 的 SHA256 仍不同（DBB2375… vs 12197EF…）。证明上次 `blocked by policy` 之后集成树没有任何部分生效的半成品状态。
+- 本轮遵守用户限制：没有换工具、没有拆分操作、没有以批处理之外的方式重试被拦截的删除/覆盖；没有执行 Git 写操作，没有创建提交。
+- 阻塞结论（第二轮确认）：文档主题仍然**未整合**。阻塞条件与上轮相同且未变化——面向该主题的批量文档删除/覆盖被安全检查以 `blocked by policy` 拒绝，且未给出更具体原因。按用户要求停在此处，不进入 CS P3.5、SQL、评测、管理端或基础设施等后续主题，不声称文档主题已合并。数据库迁移未执行。

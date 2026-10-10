@@ -6,11 +6,11 @@ Prompt 是系统中的**可版本化、可测试、可发布、可回滚、可�
 
 ```
 backend/prompts/
-  registry.py      # 36 个 prompt 的静态元数据注册表
+  registry.py      # Prompt 静态元数据注册表
   renderer.py      # 模板渲染引擎 (str.format 语义)
   loader.py        # YAML defaults 加载 + DB seed
   service.py       # 核心服务 (snapshot/cache/DB/defaults 4 层读取)
-  defaults/        # 35 个 YAML 默认模板文件
+  defaults/        # YAML 默认模板
 ```
 
 ## Prompt Registry
@@ -30,12 +30,8 @@ backend/prompts/
 | `required_substrings` | 渲染后必须包含的子串（用于 contract 校验） |
 | `default_file` | 对应 YAML 文件名 |
 
-当前共 **36 个注册项**，1 个 code-controlled（`security.input_guard`），按风险等级分布：
-
-- critical: 1
-- high: 5
-- medium: 14
-- low: 16
+注册项、风险等级和默认模板以 `PROMPT_REGISTRY` 与 `backend/prompts/defaults/` 为准；
+`security.input_guard` 是代码控制项，不能通过数据库编辑。
 
 ## 3-Tier Read Path
 
