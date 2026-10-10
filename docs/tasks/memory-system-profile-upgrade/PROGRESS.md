@@ -102,3 +102,11 @@
 - `python -m pytest backend/tests/orchestration/graph/test_runner_trace_finalize.py -q --no-cov`：6 passed、1 failed，19.67 秒。失败为断连用例期望首事件 `status/delta`、实际首事件 `log`；客户端关闭生成器时尚未进入 Runner 成功收尾及本次 `end_turn` 调用。本地 trace/question ledger 旁路还因未配置 `PGPASSWORD` 输出连接告警；没有弱化或删除断言。
 - 改动源码、测试与 `scripts/init_db.py` 的 `python -m py_compile` 通过；`git diff --check` 通过。未运行全量 pytest、真实 Agent/LLM 链路、迁移到共享库或重启/队列故障 E2E。
 - 本次只完成 Phase 1 的流式 L2/outbox 持久幂等子步骤，不勾选 Phase 1 完成。仍需验收 L1 消息窗口/对话轮次语义、ToolMessage 持久元数据、Checkpoint 恢复、取消/失败/进程重启边界；后续再进入 Phase 2 未完成项。
+
+## 2026-10-11：Phase 1 L1 窗口按完整轮次裁剪
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main` 实施；代码提交 `e0de293`（`fix(memory): trim L1 history by complete turns`）。未修改共享主工作区或其他 Worktree。
+- 新增 `SHORT_TERM_MAX_TURNS`；默认值由旧 `SHORT_TERM_MAX_MESSAGES` 的一半派生，默认仍为 20 条消息/10 轮。L1 分别限制轮数和累计消息数，按 HumanMessage 开始的完整轮淘汰旧历史；轮内 AI/tool call/ToolMessage 不被拆开。没有 HumanMessage 的兼容历史继续按消息数裁剪。单个最新轮可超过消息数阈值，模型输入仍由 Context Budget 硬门禁控制。
+- 更新 L1 身份测试，覆盖轮数淘汰、消息数淘汰及保留完整工具调用轮；同步更新 `ai-runtime.md` 和 Phase 1 检查项。
+- 实际运行 `D:/Python/python.exe -m pytest backend/tests/memory/test_l1_message_identity.py -q --no-cov`：4 passed，4.41 秒；`D:/Python/python.exe -m py_compile backend/config/memory.py backend/config/__init__.py backend/memory/short_term.py`：通过；提交前 `git diff --check` 与暂存区检查通过。
+- 尚未验证数据库中 ToolMessage 类型与元数据持久化、真实 API/Agent 多轮指代、Checkpoint/Redis 故障和跨用户隔离；Phase 1 及全任务门禁未完成。下一步补足 ToolMessage L2 往返契约，再核验 Graph State 与取消/重启终态；不在本次改动中执行迁移或真实 Agent E2E。
