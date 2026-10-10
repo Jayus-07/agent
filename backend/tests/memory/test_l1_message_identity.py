@@ -32,6 +32,43 @@ def test_l1_deduplicates_by_stable_id_and_keeps_equal_text_messages():
     ]
 
 
+def test_l1_turn_limit_keeps_tool_messages_with_their_turn():
+    buffer = ShortTermBuffer(max_messages=20, max_turns=2)
+    messages = [
+        HumanMessage(content="第一轮", id="user-1"),
+        AIMessage(content="第一轮回答", id="assistant-1"),
+        HumanMessage(content="第二轮", id="user-2"),
+        AIMessage(content="", tool_calls=[{
+            "name": "lookup", "args": {}, "id": "call-2",
+        }], id="assistant-call-2"),
+        ToolMessage(content="工具结果", tool_call_id="call-2", id="tool-2"),
+        AIMessage(content="第二轮回答", id="assistant-2"),
+        HumanMessage(content="第三轮", id="user-3"),
+        AIMessage(content="第三轮回答", id="assistant-3"),
+    ]
+    for message in messages:
+        buffer.add(message)
+
+    assert buffer.turn_count == 2
+    assert [message.id for message in buffer.get_all()] == [
+        "user-2", "assistant-call-2", "tool-2", "assistant-2",
+        "user-3", "assistant-3",
+    ]
+
+
+def test_l1_message_limit_evicts_whole_old_turns():
+    buffer = ShortTermBuffer(max_messages=3, max_turns=10)
+    for index in range(3):
+        buffer.add(HumanMessage(content=f"问题{index}", id=f"user-{index}"))
+        buffer.add(AIMessage(content=f"回答{index}", id=f"assistant-{index}"))
+
+    assert len(buffer) == 2
+    assert buffer.turn_count == 1
+    assert [message.id for message in buffer.get_all()] == [
+        "user-2", "assistant-2",
+    ]
+
+
 def test_session_memory_restores_database_ids_and_human_ai_roles():
     rows = [
         SimpleNamespace(id=41, role="user", content="杭州三日游"),
