@@ -33,7 +33,6 @@ export default function TraceDetailPanels({ trace }: Props) {
   const [jsonExpanded, setJsonExpanded] = useState<Set<string>>(new Set());
   const [highlightStepId, setHighlightStepId] = useState<string | null>(null);
   const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());
-  const [autoExpandLarge, setAutoExpandLarge] = useState(true);
   const [showEvalModal, setShowEvalModal] = useState(false);
 
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
@@ -120,10 +119,6 @@ export default function TraceDetailPanels({ trace }: Props) {
           <section>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">Span 耗时分布</h2>
-              <label className="flex items-center gap-2 text-[11px] text-slate-500 cursor-pointer">
-                <input type="checkbox" checked={autoExpandLarge} onChange={e => setAutoExpandLarge(e.target.checked)} className="rounded" />
-                <span>自动展开 &gt;1s 的步骤</span>
-              </label>
             </div>
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <StepTimeline
@@ -138,7 +133,6 @@ export default function TraceDetailPanels({ trace }: Props) {
                   setJsonExpanded(next);
                 }}
                 highlightStepId={highlightStepId}
-                autoExpandLarge={autoExpandLarge}
               />
             </div>
           </section>

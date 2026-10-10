@@ -253,3 +253,75 @@
 - `python -m pytest backend/tests/evaluation/test_evaluation_mode.py backend/tests/evaluation/test_rag_pipeline_evaluation_mode.py -q`：**4 passed**（模式解析与运行时标志，覆盖 recorded/live 区分）。
 - **补充最小定向测试**（本轮唯一新增）：`backend/tests/evaluation/test_rag_deferred_ragas_preserved.py`，**4 passed**。针对风险2 的 `cd263ba` 修复此前**无任何专门测试**这一缺口：锁定并发/串行两条路径均按 `(result, deferred)` 解包、deferred 汇聚分支存在、`_guarded_case` 返回注解为二元组、超时分支以 `None` 占位，并含反向断言禁止回退为 `_eval_case(case)[0]`。说明：`_eval_case`/`_guarded_case` 是 `_run_rag` 的内部闭包（模块级不可 monkeypatch），故采用源码契约断言而非伪造可 patch 符号——初版曾据此误判并失败，已改正，未用 skip/xfail 掩盖。
 - 未执行：全量评测、付费/live 模型调用、数据库迁移或写入。评测测试全部为离线路径（112 skipped 中含需外部依赖的用例）。
+
+## 2026-10-10：管理端/API 主题（Trace 授权 + 详情页）开工核实与方案
+
+- Git 刷新：HEAD 实测 `a997bfcc82f158ea59912758ae5e873277acef3c`；`3970a99`（SQL 收尾，2 文件）与 `a997bfc`（评测审阅，2 文件）均核实存在、范围与记录一致，未重复应用。评测主题结论维持「无需新增合并」；weekly.py 与 metadata JSONL 的更正记录保留。
+
+### 既有机制核实（本主题必须沿用，不新建平行实现）
+
+- 角色解析唯一入口：`backend/app/api/deps.py::resolve_operator_role`。双通道——JWT 用户（网关验签注入 `X-User-Id`/`X-User-Roles`）与服务凭据（`X-Internal-Token`）。角色枚举 viewer/editor/admin/super_admin，`_ROLE_RANK` 取最高，`is_platform_admin()` 判定 admin/super_admin。
+- 敏感端点统一守卫已存在：`deps.py::require_user_actor`（仅 kind=="user"）与 `deps.py::require_admin_user`（user 且平台管理员）。其 docstring 明确写着「语义与 observability.require_admin_operator 等价，作为收敛后的统一实现提供」。灰度开关 `SENSITIVE_API_GUARD_MODE`（audit/enforce），拒绝时经 `record_security_event('AUTHZ_DENIED')` 落审计。**本主题复用这两个依赖，不自造守卫。**
+- 身份/租户模型：`backend/app/api/identity.py::Identity` 提供 `user_id`、`tenant_id`（`_normalize_tenant_id` 校验，空值表示未声明且**不得降级为共享租户**）、`department`、`roles`、`permissions`。租户标签由网关验签注入，不信任请求体自报字段。
+- Trace 归属事实源：`backend/observability/tracer.py:259-267` 在 `start()` 时把**权威请求上下文**的 `get_tool_tenant_id()` / `get_tool_user_id()` 写入 `trace.tags['tenant_id']` / `trace.tags['user_id']`（注释明确「绝不消费请求体中客户端自报的身份字段」）。`TraceRecord` 另有 `session_id` 字段。**这是资源级授权与租户隔离可用的判据。**
+
+### 现状缺陷（已实测确认，非推断）
+
+- **缺口一（无授权）**：`/observability/traces`（observability.py:101）与 `/observability/traces/{trace_id}`（:246）既无 router 级 `dependencies=`，也无端点级 `Depends`。`require_admin_operator` 仅挂在 `/tokens/breakdown`。SQL 主题已记录该 P0，本轮修复。
+- **缺口二（子 Trace 无租户隔离）**：来源 `trace_store_pg.py::list_children` 只按 `WHERE parent_id = %s` 过滤，**无 tenant/user 条件**；`get_trace` 聚合 `children_ids` 时也未做任何资源级过滤。集成树当前**完全没有** `list_children`（全库检索为空），即该能力尚未进入集成树。
+- **缺口三（读取不脱敏）**：`TRACE_DETAIL_LEVEL` 默认 `full`，`redaction.py:57-58` 直接 `return dto`。虽然 `TRACE_PII_MASKING_ENABLED` 默认 true，但在 full 档完全不生效。
+- 集成树与主工作区 `observability.py` 差异 26 行、`trace_store_pg.py` 差异 25 行、`tracer.py` 差异 102 行；`traceSpanTree.ts`、`test_observability_trace_children.py`、`StepTimeline.test.tsx` 等在主工作区为**未跟踪新增**。
+
+### 本轮方案（最小范围，逐块整合）
+
+1. 后端授权：给 traces 列表/详情端点挂既有 `require_admin_user`（后端直连同样受保护，不依赖网关门）。
+2. 资源级隔离：`list_children` 增加 tenant/user 作用域过滤；`get_trace` 读取单条 trace 前校验归属，越权返回 404（不泄露存在性）。管理角色同样遵守数据范围，不默认跨租户。
+3. 字段脱敏：默认档不返回含用户原文的字段；复用既有 `redaction.py`，不另造脱敏。
+4. 前端：整合 `traceSpanTree.ts`、`StepTimeline`、Trace 详情页与 `children_ids` 递归（去重/循环/上限/部分失败降级）。
+5. SQL 原始问题埋点**继续排除**；即使 Trace 权限修好也不自动恢复原文写入。
+
+## 2026-10-10：管理端/API 主题——Trace 授权、租户隔离与详情页整合完成
+
+- 集成提交：`<PENDING>`。提交前 HEAD 为 `a997bfc`。
+
+### 1. 后端授权（缺口一，已修复）
+
+- 修复前实测：`/observability/traces`（列表）与 `/observability/traces/{trace_id}`（详情）**均无任何后端守卫**；`require_admin_operator` 只挂在 `/tokens/breakdown`。
+- 修复方式（复用既有机制，不新建平行实现）：新增模块级依赖 `observability.py::_require_trace_reader`，内部直接调用既有的 `deps.require_user_actor`（仅 JWT 用户身份 `kind == "user"`）。**采用 FastAPI `Depends`**，因此后端直连同样受保护，不依赖网关。
+- 采用 `Depends` 而非函数内判断的原因与代价（已实测）：`Depends` **只在 HTTP 链路生效**，直接调用 handler 会绕过。这正是既有 `test_gateway_access_logs_api.py` 用 `TestClient` 测权限的原因；本主题的权限用例也改为 HTTP 层驱动。
+- 网关第二层：`apisix/plugins/gateway-auth.lua` 的 `ROLE_GATE_PREFIXES` 增加 `["/api/observability/traces"] = { read = "admin", write = "admin" }`。原表只覆盖 `/api/observability/gateway`，故此前 viewer 可经网关直达。后端仍是权威判定，网关仅纵深防御。
+- **Lua 语法实测**：`docker run --rm -v <plugins>:/scripts:ro alpine:3.20 sh -c "apk add --no-cache lua5.1 && luac5.1 -p /scripts/gateway-auth.lua && echo LUA_SYNTAX_OK"` → `LUA_SYNTAX_OK`（只读挂载，未构建镜像、未启动服务）。
+
+### 2. 资源级授权与租户隔离（缺口二，已修复）
+
+- 新增 `backend/app/api/routes/_trace_authz.py`：`trace_visible_to()` 按 Trace 归属标签判定。归属来自 `tracer.py:259-267` 写入的 `tags['tenant_id']` / `tags['user_id']`（权威请求上下文，不消费客户端自报字段）。
+- 规则：未声明 tenant 的 Trace 仅 `super_admin` 可读（空租户**不降级为共享**）；请求方无 tenant 则拒绝；跨租户仅 `super_admin`，**admin 同样不得跨租户**；同租户内声明了 user_id 时按主体收敛。越权统一 **404**，不以状态码差异泄露存在性。
+- 列表端点同样逐条过滤，避免越权条目连同 session/user 标识一起下发。
+- **既有缺陷更正**：来源主工作区的 `trace_store_pg.py::list_children` 只按 `WHERE parent_id = %s` 过滤，**无租户条件**；集成树此前**完全没有** `list_children`（全库检索为空）。本主题新增的版本强制要求 `tenant_id`，未声明租户时返回空集（不发起无作用域查询）。
+
+### 3. 子 Trace 授权与递归约束（要求三，已实现）
+
+- `collect_authorized_children()` 对**每个子 Trace 独立执行资源级授权**：可读父 Trace 不等于可读子 Trace；无权子既不进入 `children_ids`，也不作为继续下钻的跳板。
+- 去重与循环：`seen` 集合；父子互指/自环不死循环。递归上限 `MAX_CHILD_DEPTH = 3`、每层 `MAX_CHILDREN_PER_NODE = 50`。子查询失败软降级，不影响父 Trace 返回。
+- 前端详情页同样以 `seen` 去重、总量上限 100、批大小 25（BFS）。
+
+### 4. 前端整合（要求四，前后端同一主题）
+
+- 逐块整合（非整文件覆盖；7 个文件完成后与主工作区**逐字节一致**）：`traceSpanTree.ts`（新增）、`traceSpanTree.test.ts`（新增）、`StepTimeline.tsx`（+298/-25）、`StepTimeline.test.tsx`（新增）、`types/trace.ts`（span 状态与类型扩充）、详情页 `page.tsx`（递归发现子 Trace + `mergeChildTraceSpans`）、`TraceDetailPanels.tsx`。
+- 详情页移除了「自动展开 >1s 步骤」的手动开关（改由状态语义驱动），属来源的有意改动，已一并纳入。
+
+### 5. 字段脱敏与 SQL 埋点（要求二 + 用户约束）
+
+- 复用既有 `backend/observability/redaction.py`，未另造脱敏。按其档位：`full`（默认，不脱敏）/ `masked` / `summary`。**默认 full 档下读取不脱敏**，因此写入侧约束仍然成立。
+- SQL 的两处含 `question[:500]` 的 `sql.table_router` 埋点**继续不纳入**；即使 Trace 接口权限已修复，也**不自动恢复原文写入**，敏感数据不入日志的规则依旧。
+- 文档同步：`docs/observability/trace-model.md` 新增「访问控制与数据范围」并更正过期的「当前实现/待集成」段（原文写 Tracer 在 `backend/rag/tracer.py`、PG 持久化仍待集成，均与现状不符）。
+
+### 6. 定向验证与结果
+
+- 新增 `backend/tests/api/test_observability_trace_authz.py`：**14 passed**（HTTP 层经 `TestClient` 驱动真实依赖）。覆盖：未认证被拒；admin 跨租户 404；super_admin 跨租户放行；同租户 admin 放行；viewer 读他人 Trace 404；列表未认证被拒；列表过滤越权条目；未声明租户不共享；请求无租户不得读归属数据；子 Trace 逐条授权（跨租户子不暴露）；循环去重；深度封顶；store 失败软降级；子查询带租户作用域（未声明租户不发查询）。
+- 后端回归（`backend/tests/test_observability_routes.py backend/tests/api/ backend/tests/observability/`，排除两个既有 PG 依赖文件）：**51 failed, 662 passed, 27 skipped, 39 errors**。
+- **无新增失败的严格比对**：在临时 worktree（`git worktree add --detach D:\tmp\admin-baseline-check HEAD`，即 `a997bfc`）跑同一命令得 **51 failed, 648 passed, 27 skipped, 39 errors**。逐项 diff 后「仅基线失败」与「仅我失败」**两个集合均为空**——失败集**完全相同**，通过数净增 14（全部为本轮新增用例）。该临时 worktree 已 `git worktree remove --force` 移除，未触碰任何来源 worktree。
+- **本轮修正的真实回归（如实记录）**：给 `list_traces` 加必填 `request` 参数后，`test_list_traces_has_tag_filter` 与 `test_has_tool_filter_does_not_restrict_workflow_name` 因直调失败（`TypeError: missing 1 required positional argument`）。已改为 `request` 可省 + 守卫走 `Depends`，两用例恢复通过。**未删断言、未 skip/xfail 掩盖**。
+- 前端（集成树文件与主工作区逐字节一致，复用主工作区已装依赖执行）：`vitest run traceSpanTree.test.ts StepTimeline.test.tsx` → **11 passed**（2 + 9）。`tsc --noEmit` → **tsc_exit=0**。
+- 未验证项（明确记录，不称通过）：19 个错误与 2 个采集错误均因本机无法连接 PostgreSQL（`fe_sendauth: no password supplied`），这些用例**未执行到断言**；跨租户读取的**真实数据库行级过滤**未做端到端验证（本轮的租户过滤在 Python 层与 store 的 SQL 参数上验证，未连真实 PG 表）。数据库未修改，未执行迁移。
+- 未执行：全量回归、数据库迁移或写入、修改主工作区或任何来源 worktree、reset --hard / clean -fd / 强推 / 删除分支或 worktree / 丢弃 stash。

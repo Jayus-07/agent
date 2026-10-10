@@ -86,7 +86,7 @@ export interface Span {
   type: string;                       // 节点类型：agent | llm_call | retrieval | rerank | tool_call | http | sql | memory | workflow | custom
   name: string;                       // 人类可读名称（如 "LLM生成"、"混合检索"）
   parent_id: string | null;           // 父 span ID（null = 根 span）
-  status: "running" | "success" | "error" | "skipped";
+  status: "running" | "success" | "error" | "skipped" | "timeout" | "cancelled" | "rejected" | "partial" | "leaked";
   start_time: string;                 // ISO 8601
   end_time?: string;                  // ISO 8601
   duration_ms: number;
@@ -94,7 +94,7 @@ export interface Span {
   /** 通用属性（OpenTelemetry 风格：llm.model, retrieval.method 等） */
   attributes: Record<string, unknown>;
   /** 数值指标（token、文档数、延迟等） */
-  metrics: Record<string, number | boolean | string>;
+  metrics: Record<string, number | boolean | string | unknown[]>;
   /** 输入快照 */
   input?: Record<string, unknown>;
   /** 输出快照 */
@@ -290,6 +290,7 @@ export const TRACE_SOURCE_LABELS: Record<string, string> = {
 export const SPAN_TYPES = [
   "agent",
   "llm_call",
+  "embedding",
   "retrieval",
   "rerank",
   "tool_call",
@@ -306,6 +307,7 @@ export type SpanType = (typeof SPAN_TYPES)[number];
 export const SPAN_TYPE_LABELS: Record<string, string> = {
   agent: "Agent",
   llm_call: "LLM 调用",
+  embedding: "向量化",
   retrieval: "检索",
   rerank: "Rerank",
   tool_call: "工具调用",
@@ -338,6 +340,8 @@ export function statusDot(status: string): string {
     case "success":   return "bg-emerald-500";
     case "error":     return "bg-red-500";
     case "timeout":   return "bg-amber-500";
+    case "partial":   return "bg-amber-500";
+    case "rejected":  return "bg-orange-500";
     case "cancelled": return "bg-slate-400";
     default:          return "bg-slate-300";
   }
@@ -348,6 +352,7 @@ export function statusBadge(status: string): { bg: string; text: string; label: 
     case "success":   return { bg: "bg-emerald-100 text-emerald-700", text: "text-emerald-700", label: "SUCCESS" };
     case "error":     return { bg: "bg-red-100 text-red-700", text: "text-red-700", label: "ERROR" };
     case "timeout":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "TIMEOUT" };
+    case "partial":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "PARTIAL" };
     case "rejected":  return { bg: "bg-orange-100 text-orange-700", text: "text-orange-700", label: "REJECTED" };
     case "cancelled": return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "CANCELLED" };
     case "skipped":   return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "SKIPPED" };
@@ -358,7 +363,9 @@ export function statusBadge(status: string): { bg: string; text: string; label: 
 /** Span 状态颜色（替代 stepColor，接受 Span 或兼容 status+ms） */
 export function spanColor(status: string, ms: number): string {
   if (status === "skipped" || status === "cancelled") return "bg-slate-200 border-dashed border-slate-300";
+  if (status === "timeout" || status === "partial") return "bg-amber-500";
   if (status === "error") return "bg-red-400";
+  if (status === "rejected") return "bg-orange-500";
   if (ms > 1000) return "bg-amber-500";
   return "bg-violet-500";
 }
@@ -371,6 +378,7 @@ export function spanTypeColor(type: string): string {
   switch (type) {
     case "agent":     return "bg-indigo-500";
     case "llm_call":  return "bg-violet-500";
+    case "embedding": return "bg-fuchsia-500";
     case "retrieval": return "bg-emerald-500";
     case "rerank":    return "bg-amber-500";
     case "tool_call": return "bg-cyan-500";

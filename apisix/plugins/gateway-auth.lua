@@ -266,6 +266,11 @@ local ROLE_GATE_PREFIXES = {
     -- require_admin_operator 仍保留，双层分工）。api-key 通道无 roles，
     -- 按既有设计不在此拦，由后端统一守卫判定
     ["/api/observability/gateway"] = { read = "admin", write = "admin" },
+    -- Trace 详情/列表（2026-10-10 管理端/API 主题）：这些端点会返回
+    -- prompt/answer、用户问题与 session/user 标识，此前网关不覆盖该前缀，
+    -- 任何 viewer 均可读取。外层补 admin 硬闸（后端 require_user_actor +
+    -- 资源级租户校验仍是权威判定，网关只是第二层；后端直连不依赖本规则）。
+    ["/api/observability/traces"] = { read = "admin", write = "admin" },
     -- 客服端（2026-09-21 三端拆分 + 身份接线）：/api/cs/* 仅限客服域角色
     -- （cs_agents.role=agent/supervisor，登录/刷新时并入 JWT roles claim）。
     -- any_of 语义：命中任一角色即放行，**不走 ROLE_RANK**——坐席不是平台

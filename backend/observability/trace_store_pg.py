@@ -218,6 +218,50 @@ class PostgresTraceStore(TraceStore):
             logger.warning(f"[TraceStore-PG] 读取失败 {trace_id}: {e}")
         return None
 
+    def list_children(self, parent_id: str, limit: int = 50,
+                      *, tenant_id: str | None = None) -> list[dict]:
+        """按既有 parent_id 列查询子 Trace，供详情页恢复跨服务 Trace 关系。
+
+        安全（2026-10-10 管理端/API 主题）：**必须带租户作用域**。子 Trace
+        同样含 prompt/answer 与 session 标识，若只按 parent_id 过滤，持有
+        任一父 Trace 的调用者就能枚举出其他租户的子 Trace —— 父 Trace 会
+        沦为越权发现子 ID 的跳板。tenant_id 为 None 表示调用方未声明租户，
+        此时返回空集（不得降级为「不过滤」）。
+        """
+        if not parent_id:
+            return []
+        if not tenant_id:
+            # 未声明租户 → 不做无作用域查询；上层按不可见处理。
+            return []
+        try:
+            with self._lock, self._conn() as conn:
+                rows = self._exec(
+                    conn,
+                    f"SELECT data FROM {self._table} WHERE parent_id = %s "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (parent_id, max(1, min(int(limit), 200))),
+                ).fetchall()
+            children: list[dict] = []
+            for row in rows:
+                try:
+                    data = json.loads(row["data"]) if row.get("data") else {}
+                except Exception:
+                    continue
+                if not (data.get("id") or data.get("trace_id")):
+                    continue
+                tags = data.get("tags")
+                child_tenant = ""
+                if isinstance(tags, dict):
+                    child_tenant = str(tags.get("tenant_id") or "").strip()
+                # 租户严格相等才返回；跨租户子 Trace 一律不可见。
+                if child_tenant != str(tenant_id).strip():
+                    continue
+                children.append(data)
+            return children
+        except Exception as e:
+            logger.warning(f"[TraceStore-PG] 子 Trace 查询失败 {parent_id}: {e}")
+            return []
+
     def list(self, limit: int = 20) -> list[dict]:
         """最近 N 条 trace 摘要（不包含 spans 详情）。
 

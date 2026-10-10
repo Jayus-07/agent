@@ -10,7 +10,7 @@ import time
 import hashlib
 import threading
 
-from fastapi import APIRouter, Query, HTTPException, Request
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse, Response
 
@@ -24,6 +24,24 @@ from backend.observability.trace_store import get_trace_store
 from backend.memory.database import AsyncSessionLocal
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
+
+
+# -- Trace 读取的统一身份闸（2026-10-10 管理端/API 主题）------------
+#
+# 此前 /observability/traces 与 /observability/traces/{id} 完全没有后端
+# 授权：router 与端点均无守卫，网关 ROLE_GATE_PREFIXES 也不覆盖该前缀，
+# 于是任何经网关验签的 viewer 都能读取完整 Trace（含 prompt/answer、
+# 用户问题、session/user 标识），且默认 detail_level=full 不做脱敏。
+#
+# 这里复用既有依赖 deps.require_user_actor（仅 JWT 用户身份）——与
+# gateway-access-logs 的 require_admin_operator 同源的收敛实现。采用
+# Depends 而非函数内判断，是为了让后端直连同样受保护：守卫由 FastAPI
+# 依赖系统强制执行，不依赖任何客户端行为，也不依赖网关照做角色门。
+async def _require_trace_reader(request: Request):
+    """Trace 读取身份闸：返回 OperatorIdentity，供端点继续做资源级判定。"""
+    from backend.app.api.deps import require_user_actor
+
+    return await require_user_actor(request)
 
 
 # ═══════════════════════════════════════════════════
@@ -99,12 +117,15 @@ from backend.observability.trace_source import (  # noqa: E402
 # ═══════════════════════════════════════════════════
 
 @router.get("/traces")
-async def list_traces(limit: int = Query(20, ge=1, le=200),
-                      workflow_name: str | None = Query(None),
-                      session_id: str | None = Query(None),
-                      has_tag: str | None = Query(None),
-                      has_tool: str | None = Query(None),
-                      source: str | None = Query(None)):
+async def list_traces(
+        request: Request = None,  # type: ignore[assignment]
+        limit: int = Query(20, ge=1, le=200),
+        workflow_name: str | None = Query(None),
+        session_id: str | None = Query(None),
+        has_tag: str | None = Query(None),
+        has_tool: str | None = Query(None),
+        source: str | None = Query(None),
+        _reader=Depends(_require_trace_reader)):
     """最近 N 条 trace 摘要（SQLite TraceStore）。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
@@ -162,6 +183,25 @@ async def list_traces(limit: int = Query(20, ge=1, le=200),
                        else getattr(d, "workflow_name", "")),
                       (d.get("tags") if isinstance(d, dict)
                        else getattr(d, "tags", None))) == source]
+    # 资源级 / 租户隔离（2026-10-10）：列表同样是敏感面——只返回调用者
+    # 有权读取的 Trace，不把越权条目连同 session/user 标识一起下发。
+    #
+    # 说明：HTTP 链路上 FastAPI 恒注入 request，守卫与过滤必然执行（见文件
+    # 顶部 _require_trace_reader 依赖）。request 为 None 仅出现在单测直调
+    # handler 的场景（不经 FastAPI），此时不注入身份、也不做归属过滤，
+    # 以免把既有的「过滤语义」单元测试变成身份测试；真正的访问控制在
+    # 依赖层，直调不可能出现在生产路径。
+    # 身份来自 FastAPI 依赖（_require_trace_reader），不接受客户端自报。
+    # request 为 None 仅见于单测直调 handler（不经 FastAPI），此时不注入
+    # 身份、也不做归属过滤；真正的访问控制在依赖层，直调不存在于生产路径。
+    if request is not None:
+        from backend.app.api.routes._trace_authz import trace_visible_to
+
+        stored = [
+            d for d in stored
+            if trace_visible_to(request, d if isinstance(d, dict) else None,
+                                role=getattr(_reader, "role", "") or "")
+        ]
     traces = [_stored_dict_to_dto(d) if isinstance(d, dict) else _to_trace_dto(d)
               for d in stored]
     return {"traces": traces}
@@ -244,9 +284,22 @@ async def cs_quality_report(hours: float = Query(24, gt=0, le=24 * 30)):
 
 
 @router.get("/traces/{trace_id}")
-async def get_trace(trace_id: str):
-    """获取单条 trace 完整详情（SQLite TraceStore）"""
-    # trace_collector.get() 直读 SQLite TraceStore；
+async def get_trace(trace_id: str, request: Request,
+                     _reader=Depends(_require_trace_reader)):
+    """获取单条 trace 完整详情。
+
+    2026-10-10 管理端/API 主题：本端点此前**完全无后端授权**，任何通过网关
+    验签的 viewer 都能读取含 prompt/answer/用户问题/session 标识的完整 Trace，
+    且默认 detail_level=full 不做脱敏。现改为：
+      ① 身份闸（require_trace_viewer，复用 deps 既有机制，后端直连同样受保护）；
+      ② 资源级归属校验（租户 + 主体），越权统一返回 404 而非 403——
+         避免以状态码差异泄露「该 trace 存在」这一事实。
+    """
+    from backend.app.api.routes._trace_authz import trace_visible_to
+
+    ident = _reader
+
+    # trace_collector.get() 直读 TraceStore；
     # 再保留一层 store 直读兜底（极端情况下 collector 异常）
     data = trace_collector.get(trace_id)
     if data is None:
@@ -254,6 +307,34 @@ async def get_trace(trace_id: str):
         data = store.get(trace_id)
     if data is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+    # 资源级授权：无权访问按「不存在」处理，不泄露存在性。
+    if not trace_visible_to(request, data, role=ident.role):
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+    # 子 Trace 发现（远端 RAG Trace 在父请求超时/断连时可能未回传 ID，
+    # 但已按 parent_id 落库）。每个子 Trace **独立执行资源级授权**，无权者
+    # 不进入 children_ids，也不作为继续下钻的跳板；循环与深度均有上限。
+    try:
+        from backend.app.api.routes._trace_authz import (
+            collect_authorized_children,
+        )
+
+        store = store or get_trace_store()
+        authorized_children = collect_authorized_children(
+            request, store, trace_id, role=ident.role,
+        )
+        if authorized_children:
+            data = dict(data)
+            known = list(data.get("children_ids") or [])
+            seen = set(known)
+            for child in authorized_children:
+                child_id = child.get("id") or child.get("trace_id")
+                if child_id and child_id not in seen:
+                    known.append(child_id)
+                    seen.add(child_id)
+            data["children_ids"] = known
+    except Exception:
+        # 子关系补齐是增强能力：失败不得影响父 Trace 详情返回。
+        logger.debug("Trace 子关系补齐失败: %s", trace_id, exc_info=True)
     # 读取时回填：存量 trace 的 usage/model/cost 以 llm_usage 明细补齐（历史数据兼容）
     _backfill_usage(data)
     return _to_trace_dto(data)  # 统一转为前端 DTO 格式
