@@ -3,8 +3,7 @@
 -- 背景：上下文预算管理 Phase 3（2026-09-22）。L5 AutoCompact 需要
 --       「增量摘要」水位线：记录当前 summary 已覆盖到哪一条 chat_message，
 --       避免每次摘要都把整段会话重新发给 LLM（成本/延迟翻倍）。
---       设计见 docs/2026-09-22-context-budget-phase2-实机验证与L4实施计划.md
---       §十二（附：L5 数据基础评估结论）。
+--       预算策略见 docs/architecture/ai-runtime.md#上下文预算与跨请求状态。
 -- 红线：L5 只推进 active prompt projection 的摘要水位，绝不删除/改写
 --       chat_messages 原始行。
 -- 目标库：agent_memory

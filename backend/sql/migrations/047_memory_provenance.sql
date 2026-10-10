@@ -1,9 +1,8 @@
 -- =====================================================
 -- 047_memory_provenance.sql — Memory provenance（STOP B，Memory Production Closure）
 --
--- 背景：STOP A 审计（docs/2026-09-24-Memory-Production-Closure-STOPA-Audit.md）
---       确认 memory_records 无来源（origin）与用户消息追溯（source_message_id），
---       assistant 回答可与用户话语平权地成为长期记忆事实源（G1/G7/G8）。
+-- 背景：持久记忆需要区分来源，并能追溯到产生该事实的用户消息；
+--       assistant 回答不能与用户明确提供的事实混为同一来源。
 --
 -- 变更：
 --   origin             VARCHAR(16) NOT NULL DEFAULT 'legacy'

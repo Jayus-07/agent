@@ -169,6 +169,14 @@ class GuardedSQL:
 class SQLPolicyGuard:
     """组合 sql_validator + 三维 scope 注入的确定性策略闸门。"""
 
+    def __init__(self) -> None:
+        # 同一实例内 sql.guard span 的调用序号，用于生成稳定且唯一的 span_id
+        self._guard_span_seq = 0
+
+    def _next_guard_span_seq(self) -> int:
+        self._guard_span_seq += 1
+        return self._guard_span_seq
+
     def precheck(self, policy: SQLPolicyContext) -> None:
         """前置权限门（STOP C §八）：权限点 + scope 合法性校验。
 
@@ -225,11 +233,14 @@ class SQLPolicyGuard:
         try:
             from backend.observability.tracer import trace_collector
 
-            import uuid as _uuid
-
+            # span_id 必须稳定：管理端按 span_id 做聚合/对比，随机后缀会让
+            # 同一逻辑步骤每次请求都是新 id，跨 trace 无法归并，按名查找也会
+            # 落空。同一次查询内 validate_and_rewrite 可能被调用多次
+            # （count/rows 双查询），用递增序号保持 id 唯一且可读。
+            _seq = self._next_guard_span_seq()
             _span = trace_collector.start_span(
-                f"sql.guard.{_uuid.uuid4().hex[:8]}", name="sql.guard",
-                kind="tool_call",
+                "sql.guard" if _seq == 1 else f"sql.guard#{_seq}",
+                name="sql.guard", kind="tool_call",
             )
         except Exception:
             _span = None

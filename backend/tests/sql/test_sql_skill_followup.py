@@ -19,9 +19,11 @@ def test_sql_skill_passes_previous_query_context_to_agent(monkeypatch):
     )
 
     class FakeAgent:
-        def ask_struct(self, question, policy=None, query_context=None):
+        def ask_struct(self, question, policy=None, query_context=None,
+                       event_sink=None):
             seen["question"] = question
             seen["query_context"] = query_context
+            seen["event_sink_provided"] = event_sink is not None
             return SQLResult.success(
                 rows=[{"product_name": "A"}],
                 columns=["product_name"],

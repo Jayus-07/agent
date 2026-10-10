@@ -701,11 +701,23 @@ class GraphRunner:
                 reset_context_sink,
                 set_context_sink,
             )
+            from backend.orchestration.graph.sse_event_sink import (
+                bind_sse_event_sink,
+                reset_sse_event_sink,
+            )
 
             def _context_sink(evt: dict) -> None:
                 merged_q.put(("evt", {"event": "context", "data": evt}))
 
+            def _sse_event_sink(evt: dict) -> None:
+                if ctx.get("sse_events_closed"):
+                    return
+                if stop_event is not None and stop_event.is_set():
+                    return
+                merged_q.put(("evt", evt))
+
             _sink_token = set_context_sink(_context_sink)
+            _sse_sink_token = bind_sse_event_sink(_sse_event_sink)
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
                 # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
@@ -729,8 +741,6 @@ class GraphRunner:
                     if node_name is None:
                         continue
 
-                    merged_q.put(("evt", {"event": "status",
-                                          "data": {"node": node_name, "ts": time.time()}}))
                     if node_name in self._skill_nodes or node_name in (
                             "skill_executor", "workflow_executor"):
                         merged_q.put(("evt", {"event": "log", "data": {
@@ -830,6 +840,8 @@ class GraphRunner:
                                       "data": {"message": f"执行失败: {e}",
                                                "ts": time.time()}}))
             finally:
+                ctx["sse_events_closed"] = True
+                reset_sse_event_sink(_sse_sink_token)
                 reset_context_sink(_sink_token)
                 reset_stream_sink()
                 merged_q.put(("done", None))

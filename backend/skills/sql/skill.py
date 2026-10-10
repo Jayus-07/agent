@@ -15,6 +15,7 @@ import time
 
 from backend.shared.logger import logger
 from backend.shared.error_protocol import error_envelope_from_exception
+from backend.orchestration.graph.sse_event_sink import emit_sse_event
 from backend.skills.base import BaseSkill
 from backend.skills.validation import (
     ValidationFailure,
@@ -254,13 +255,15 @@ class SQLSkill(BaseSkill):
                     result = await asyncio.wait_for(
                         asyncio.to_thread(
                             agent.ask_struct, question, policy=policy_ctx,
-                            query_context=query_context),
+                            query_context=query_context,
+                            event_sink=emit_sse_event),
                         timeout=timeout,
                     )
                 else:
                     result = await asyncio.wait_for(
                         asyncio.to_thread(
-                            agent.ask_struct, question, policy=policy_ctx),
+                            agent.ask_struct, question, policy=policy_ctx,
+                            event_sink=emit_sse_event),
                         timeout=timeout,
                     )
                 last_result = result

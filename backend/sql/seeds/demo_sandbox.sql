@@ -1,6 +1,6 @@
 -- ============================================================
 -- demo_sandbox.sql — 客服演示业务沙盒播种数据
--- 方案: docs/customer-service/演示沙盒方案-2026-09-17.md (SB-1)
+-- 方案: docs/customer-service/demo-sandbox.md (SB-1)
 --
 -- ⚠️ 全部为「模拟数据」，仅供演示沙盒使用：
 --   - 归属演示客户 customer_id = 99001（对应配置 CS_DEMO_CUSTOMER_ID）
