@@ -885,7 +885,7 @@ async def get_conversation_traces(conversation_id: str, request: Request):
 
 
 # ── 人工介入（坐席侧）─────────────────────────────────────
-# v1 坐席工作台走轮询（2s），机制说明见 docs/customer-service/演示沙盒方案-2026-09-17.md §七。
+# v1 坐席工作台走轮询（2s），机制说明见 docs/customer-service/demo-sandbox.md §七。
 # 企业标准是 WebSocket/SSE 推送坐席队列，此处先用轮询保证 APISIX 兼容与实现简单。
 
 

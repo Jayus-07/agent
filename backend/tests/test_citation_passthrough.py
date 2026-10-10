@@ -65,6 +65,23 @@ class TestPipelineMetaSnapshot:
         p._snapshot_answer_meta()
         assert "sources" not in p.last_answer_meta
 
+    def test_remote_trace_id_included_in_request_meta(self):
+        from backend.rag.context import get_context
+
+        class FakeChain:
+            _last_meta = {}
+            _last_sources = []
+
+        context = get_context()
+        old_meta = dict(context.meta or {})
+        try:
+            context.meta = {"trace_id": "012345abcdef"}
+            p = _bare_pipeline(FakeChain())
+            p._snapshot_answer_meta()
+            assert p.last_answer_meta["trace_id"] == "012345abcdef"
+        finally:
+            context.meta = old_meta
+
 
 class TestRagServerAskPassthrough:
     @pytest.fixture()
@@ -82,7 +99,7 @@ class TestRagServerAskPassthrough:
             # 分别随角色口径与 TD-14 预算归属加入）
             def ask(self, question, session_id="default", kb_id="default",
                    kb_ids=None, subject_type="", department="", permissions=None,
-                   roles=(), user_id="", tenant_id=""):
+                    roles=(), user_id="", tenant_id="", persist_memory=True):
                 self.received_permissions = permissions
                 self.received_user_id = user_id
                 return "答案"

@@ -4,7 +4,7 @@ customer_service/graph_builder.py — CS Graph 构建器
 独立于 Main Graph 的 CS Graph，内部由 Supervisor + Expert + Reporter 组成。
 Phase 4: Supervisor 使用 Command(goto=...) 路由，替代 conditional edges。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §7
+设计参考: docs/domains/customer-service.md §7
 """
 from __future__ import annotations
 

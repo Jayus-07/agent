@@ -366,7 +366,12 @@ class SQLAgent:
 
         # — Step 1: 路由选表 —
         try:
-            table_names = select_tables(effective_question)
+            with _sql_trace_stage(
+                "sql.table_router", "数据表路由",
+                input_data={"question_length": len(effective_question)},
+            ) as (stage, metrics):
+                table_names = select_tables(effective_question)
+                metrics.update(table_count=len(table_names), tables=table_names[:20])
             logger.info(f"[SQLAgent] 选中表: {table_names}")
             emit_sql_stage(
                 event_sink, node="table_router", phase="table_routing",
@@ -383,6 +388,8 @@ class SQLAgent:
             )
 
         if not table_names:
+            stage["status"] = "rejected"
+            metrics["decision"] = "no_table"
             _observe(decision="EXECUTION_FAILED", policy=None,
                      status="no_table", error_type="no_table")
             return SQLResult.failed(
@@ -614,14 +621,24 @@ class SQLAgent:
 
         # — Step 1: 路由选表（与旧链路一致）—
         try:
-            allowed_tables = guard.get_allowed_tables(policy)
-            # 兼容现有 Router/测试替身的单参数调用，同时把最终交给
-            # Generator 的表集合收口到当前主体授权范围。
-            table_names = [
-                table for table in _select_authorized_tables(
-                    question, allowed_tables)
-                if table in allowed_tables
-            ]
+            with _sql_trace_stage(
+                "sql.table_router", "授权数据表路由",
+                input_data={"question_length": len(question),
+                            "data_scope": str(policy.data_scope or "")},
+            ) as (stage, metrics):
+                allowed_tables = guard.get_allowed_tables(policy)
+                # 兼容现有 Router/测试替身的单参数调用，同时把最终交给
+                # Generator 的表集合收口到当前主体授权范围。
+                table_names = [
+                    table for table in _select_authorized_tables(
+                        question, allowed_tables)
+                    if table in allowed_tables
+                ]
+                metrics.update(
+                    allowed_table_count=len(allowed_tables),
+                    selected_table_count=len(table_names),
+                    selected_tables=table_names[:20],
+                )
             emit_sql_stage(
                 event_sink, node="table_router", phase="table_routing",
                 message=f"已匹配 {len(table_names)} 张授权数据表",
@@ -636,6 +653,8 @@ class SQLAgent:
                 error_type="router_error",
             )
         if not table_names:
+            stage["status"] = "rejected"
+            metrics["decision"] = "no_authorized_table"
             # scope 过滤后与授权表无交集 = 权限拒绝而非执行失败——
             # 审计必须落 DENY_*（拒绝面归因契约）；decision 与 _DENY_DECISION
             # 对 SQL_TABLE_NOT_ALLOWED 的映射（DENY_TABLE）保持同一口径，

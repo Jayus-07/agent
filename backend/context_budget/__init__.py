@@ -1,7 +1,7 @@
 """context_budget — 上下文预算管理（基础版 L1/L2/L3 + Preflight）
 
 统一管理发送给模型的 active context 的 token 预算；原始 chat_messages
-不受影响。完整设计见 docs/2026-09-22-context-budget-management-实施规格.md。
+不受影响。完整设计见 docs/architecture/ai-runtime.md#上下文预算与跨请求状态。
 
 用法：
     from backend.context_budget import context_budget, guard_tool_result

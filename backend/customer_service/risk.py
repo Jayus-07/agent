@@ -6,7 +6,7 @@
   HIGH     — 需要确认 + 审计 (如退款、退货)
   CRITICAL — 双重确认 + 人工审核 (如批量退款、删号)
 
-设计参考: docs/customer-service/design.md §15.1
+设计参考: docs/domains/customer-service.md §15.1
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """tests/customer_service/test_demo_sandbox.py — 演示业务沙盒单测
 
 覆盖 SB-1（demo 身份映射）与 SB-4（物流轨迹 Mock + 故障注入）的纯逻辑部分，
-不依赖数据库。方案: docs/customer-service/演示沙盒方案-2026-09-17.md
+不依赖数据库。方案: docs/customer-service/demo-sandbox.md
 """
 from __future__ import annotations
 

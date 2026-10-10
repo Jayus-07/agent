@@ -13,7 +13,7 @@
    `inheritedFrom`）。在边界收敛，不改 P0 常量（它另有消费方与测试）。
 2. **补三个派生字段** `provider` / `registered` / `missingKeyEnv`：`effective_snapshot()`
    只给「值 + 来源」，这三个要跨到 `infra/llm`；而 `model_roles` 是**纯 stdlib** 模块
-   （硬约束：不得 import `infra.llm.*`，见主设计附录 A），故只能在端点层拼。
+   （硬约束：不得 import `infra.llm.*`，见主设计 §8），故只能在端点层拼。
 3. **`provider` 与 `registered` 同源**：都取**当前可用清单**（代码层 + DB 动态层）。
    不用 `model_roles.provider_of` —— 它只看代码层 `AVAILABLE_MODELS`，会让自建模型
    出现「registered=true 但 provider=null」的自相矛盾。

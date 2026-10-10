@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """idempotency_ops.py — Side-Effect 幂等 ledger 运维 CLI（在 app 容器内运行）。
 
-用途（生产 Runbook 配套，见 docs/2026-09-24-Side-Effect-Idempotency-Production-Runbook.md）：
+用途（生产 Runbook 配套，见 docs/operations/idempotency-runbook.md）：
   - IN_DOUBT（stale running）发现与人工裁决：resolve_stale_side_effect 的
     受控封装——只允许处理租约已过期的 running 行，decision/result/reason
     全部落库（error_code 标记 + 结构化日志），禁止绕过 ledger 直改。

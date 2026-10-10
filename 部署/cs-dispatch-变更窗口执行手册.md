@@ -1,134 +1,68 @@
 # 客服派单/RBAC 变更窗口执行手册
 
-> 任务：客服高并发派单、RBAC 与登出（P0–P9 已全部落地，分支 `codex/cs-dispatch-rbac-logout`，
-> 提交链 `5b9175a`..`8ed6e8d`，客服域回归 949 passed / 8 skipped）。
-> 本手册覆盖 P9 收口时登记的三项遗留门槛，供变更窗口值班人逐步执行。
+> 本手册只记录可复用的部署操作。当前迁移状态、阻塞和证据见 [客服派单验收任务](../docs/tasks/cs-dispatch-rollout-acceptance/PROGRESS.md)；所有执行必须使用隔离或获批准的目标环境。
 
-## 环境快照（2026-09-21 03:45 实测，只读检查）
+## 变更前检查
 
-| 项 | 实测值 |
-|---|---|
-| 共享 PG | 容器 `agent-postgres-1`，宿主 `127.0.0.1:5433`→5432，业务库 **`agent_memory`**（另有 `agent_business`，本任务不涉及） |
-| 028 状态 | **未部署**（18/18 关键对象全部缺失，见 `docs/reports/cs-dispatch-migrate-preflight-*.json`） |
-| 029 状态 | **未部署**（`auth.rbac_audits` 不存在、`auth.users` 无 version/tenant_id） |
-| cs-dispatcher 容器 | **未运行**（compose 定义已在，部署窗口随栈启动） |
-| APISIX | `agent-apisix` 运行于 127.0.0.1:9080（共享入口，**勿直接压测**） |
-| WS 路由 | `apisix/apisix.yaml` 已含 `/ws/cs/*` 路由；HTTP API 走 B1 基线兼容路由 |
+- 确认操作人、目标环境、版本、APISIX 地址、回滚联系人和变更窗口。
+- 禁止对共享开发数据库、Redis、APISIX 或其他会话使用的容器执行写操作或故障注入。
+- 数据库操作前确认目标库、`customer_service`/`auth` schema 备份位置和可恢复性。
+- 当前开发环境状态以实时预检为准，不使用本手册中的历史快照。
 
-## 门槛一：共享库 028/029 迁移部署
+## 门槛一：028/029 数据库迁移
 
-⚠️ **执行前必读**：
-
-- **028 并非纯加法**：含一条存量数据 UPDATE（`assignments` 中无 `handoff_id` 的
-  offered/accepted 行降级为 `released`），并有 4 组孤儿/重复数据 RAISE EXCEPTION
-  检查——**存量数据不干净时迁移会主动失败**（这是设计行为，不是事故）。
-- **029 会给 `auth.users` 加列**（version/tenant_id，均有 DEFAULT，不锁业务写入，
-  但仍是共享表 DDL）。
-- 两文件均幂等（`IF NOT EXISTS`），重复执行安全；每文件单事务，失败整体回滚。
-
-### 执行步骤
+迁移 028 会规范无 `handoff_id` 的旧 assignment 状态，并对孤儿/重复数据执行前置检查；不满足约束时应停止并先核实数据。迁移 029 会扩展 `auth.users`，属于共享表 DDL。两项在正式目标上执行前必须备份并处于批准的低峰/停写窗口。
 
 ```bash
-# 1. 预检（只读，可随时跑）
+# 只读预检
 python scripts/cs_dispatch_shared_migrate.py --json
 
-# 2. 备份（必须；只备相关 schema，避免全库拖太久）
-docker exec agent-postgres-1 pg_dump -U postgres -d agent_memory \
-  -n customer_service -n auth \
-  -f /tmp/pre_028_029_backup.sql
-docker exec agent-postgres-1 ls -la /tmp/pre_028_029_backup.sql
-# 拷出容器留存：
-docker cp agent-postgres-1:/tmp/pre_028_029_backup.sql ./backup-pre-028-029.sql
+# 备份两个相关 schema；替换为目标环境凭据和容器名
+pg_dump -h <目标数据库> -U <操作账号> -d <目标库> -n customer_service -n auth -f <安全备份目录>/pre-028-029.sql
 
-# 3. 确认低峰/停写窗口内，执行（脚本自带复核 + JSON 报告）
-python scripts/cs_dispatch_shared_migrate.py --apply --confirm --operator <你的标识>
+# 仅在确认目标、备份和窗口后执行
+python scripts/cs_dispatch_shared_migrate.py --apply --confirm --operator <标识>
 
-# 4. 人工抽查（脚本复核之外的双保险）
-docker exec agent-postgres-1 psql -U postgres -d agent_memory -c \
-  "\d customer_service.handoffs" -c "\d auth.rbac_audits"
+# 复核迁移对象和服务健康状态
+psql -h <目标数据库> -U <操作账号> -d <目标库> -c "\\d customer_service.handoffs" -c "\\d auth.rbac_audits"
 ```
 
-### 回滚预案
+如果迁移失败，不得跳过约束或手改生产数据。029 的新增对象可按迁移回滚方案处理；028 发生状态更新后优先前滚修复，任何回滚先根据备份核对受影响 assignment。
 
-- 029：`DROP TABLE IF EXISTS auth.rbac_audits;` + `ALTER TABLE auth.users DROP COLUMN IF EXISTS version, DROP COLUMN IF EXISTS tenant_id;`（新对象，回滚零风险）。
-- 028：**优先前滚修复而非回滚**（新列/索引/约束均为加法，可保留）。若必须回滚：恢复 pg_dump 中 customer_service schema 即可；`assignments` 状态降级 UPDATE 的逆向不可自动推导，回滚前先从备份表核对。
-- 验收脚本（隔离临时库，不碰共享库）随时可复跑：
-  `python scripts/cs_dispatch_pg_acceptance.py`（A/B/C 三组，判据见报告 JSON）。
+隔离临时库的 PostgreSQL 并发验收：`python scripts/cs_dispatch_pg_acceptance.py`。它不能替代目标环境迁移验收。
 
-## 门槛二：网关挂载压测（APISIX）
+## 门槛二：APISIX 负载测试
 
-⚠️ **教训（2026-09-20）**：曾误向共享网关 `localhost:9080` 冒烟压测，200 并发被
-转发到共享后端，8 分钟未完成——已强杀并确认无残留进程。**正式压测只在部署窗口、
-对指向隔离后端的网关执行。**
+正式压测只对指向隔离后端的部署 APISIX 执行；不得压测共享开发入口 `localhost:9080`。
 
 ```bash
-# 1. 确认目标网关指向部署窗口专用后端（非共享 9080）
-curl -s http://<隔离网关>:9080/health
-
-# 2. 先 burst-only 冒烟（200 并发一次性突发）
+curl -fsS http://<隔离网关>:9080/health
 python scripts/cs_dispatch_loadtest.py --gateway http://<隔离网关>:9080 --burst-only
-
-# 3. 全量：突发 200 并发 + 20 RPS × 10 分钟持续
 python scripts/cs_dispatch_loadtest.py --gateway http://<隔离网关>:9080
-
-# 写路径压测（转人工入池）会落测试数据，需显式开启并自担清理：
-python scripts/cs_dispatch_loadtest.py --gateway http://<隔离网关>:9080 --include-write
 ```
 
-判据（报告 JSON 落 `docs/reports/cs-dispatch-loadtest-<ts>.json`）：
-burst P95 < 2s 零 5xx；sustained 全程零 5xx、P95 稳定无爬升。
+正式负载为 200 并发突发和 20 RPS × 10 分钟持续；按验收方案检查 5xx、P95/P99、队列、assignment 容量和 offer 投递。只有明确批准写路径数据与清理责任后才加 `--include-write`。输出 JSON 按需写入 `docs/reports/`。
 
-## 门槛三：容器级故障演练
-
-脚本分两层，共享资源故障只出人工清单（内置期望现象与恢复判据）：
+## 门槛三：故障恢复演练
 
 ```bash
-# 1. 只读预检（基线证据：Redis 连通/心跳、outbox 积压、028 列、API /health）
+# 只读预检
 python scripts/cs_dispatch_chaos.py
 
-# 2. 受控演练（唯一写操作：停启本任务专属 cs-dispatcher，不碰共享容器）
+# 唯一自动受控写操作：停启本任务的 cs-dispatcher
 python scripts/cs_dispatch_chaos.py --target dispatcher --apply
-
-# 3. Redis / PG / API 故障：按脚本输出的人工清单在变更窗口执行
-#    （stop → 观察 60s → start；判据：fail-closed 不产生脏绑定、
-#     outbox pending 恢复后 1-2 tick 清零、dispatcher 循环不退出）
 ```
 
-## 部署后启用顺序（一次变更窗口内的推荐节奏）
+Redis、PostgreSQL 和 API 实例属于共享依赖，脚本只生成手动演练步骤；值班人仅可在获批窗口中执行。检查 fail-closed、无重复/超容量绑定、dispatcher 恢复健康，以及 outbox 在 1–2 个 worker tick 内收敛。
 
-1. **门槛一**：028/029 部署 + 复核通过。
-2. 启动 dispatcher：`docker compose up -d cs-dispatcher`（healthcheck 过 + Redis 心跳
-   `cs:dispatcher:heartbeat:*` 出现）。
-3. `CS_DISPATCH_MODE=shadow` 观察 ≥24h：`/cs/ops/dispatch/stats` 与 Prometheus
-   组 `agent-platform-cs-dispatch`（6 条告警）无异常、shadow 不写真实绑定。
-4. 放量：`python scripts/cs_dispatch_rollout.py --set 5 --operator <标识>` →
-   稳定后 20 → 50 → 100（sys_config DB 覆盖 + 15s TTL，免重启）。
-5. 确认 100% 稳定后切 `CS_DISPATCH_MODE=enforce`。
-6. **门槛二/三**在步骤 2 之后、步骤 3 之前或并行窗口内完成。
+## 启动与放量顺序
 
-## 登记状态
+1. 028/029 预检、备份、迁移和对象复核通过。
+2. 启动 `cs-dispatcher`，确认健康检查与 Redis 心跳。
+3. 以 `CS_DISPATCH_MODE=shadow` 观察，并检查 `/cs/ops/dispatch/stats`、Prometheus 指标及告警。
+4. 经批准后运行 `scripts/cs_dispatch_rollout.py --set <百分比> --operator <标识>`，按验收方案观察各档，再进入 `enforce`。
+5. 任一数据不一致、超容量或恢复异常，立即切回 `off` 并停止放量。
 
-| 门槛 | 状态 | 证据 |
-|---|---|---|
-| 028/029 共享库部署 | ✅ **已执行**（2026-09-21 04:12，操作人 `workbuddy-20260921T0411`，低峰窗口） | 执行前预检 `cs-dispatch-migrate-preflight-20260921T041116.json`（PENDING_DEPLOY，风险项全 N/A）；备份 `backup-pre-028-029.sql`（475KB，customer_service+auth 双 schema，容器 `/tmp` 与 worktree 根各一份）；执行后复核 `cs-dispatch-migrate-apply-20260921T041215.json`（**ALL_APPLIED**）；人工抽查 handoffs 新列 5/5、`auth.rbac_audits` 建表、`auth.users` 补 version/tenant_id；存量数据零降级（assignments 仅 1 条 released）、共享后端 /health 正常 |
-| 网关挂载压测 | 未执行（待隔离环境） | 2026-09-20 误压已终止，无残留进程 |
-| 容器级故障演练 | ✅ dispatcher 受控项**已执行**（2026-09-21 12:01）：stop→心跳 40s 内过期 →start→两副本 healthy、心跳恢复（脚本 10s 检查窗判 False 系冷启动 ~25s 慢于窗口，实测自愈成功）；Redis/PG/API 停启演练仍待窗口 | `cs-dispatch-chaos-20260921T040131.json`；⚠️ 脚本 compose 调用须加 `COMPOSE_PROJECT_NAME=agent`（容器属 agent project，worktree 默认 project 名不同会停不中）；其 `.env` 连错库问题同前 |
+## 记录结果
 
-## 运行时收口（2026-09-21 上午）
-
-| 项 | 状态 | 证据 |
-|---|---|---|
-| 分支合 main | ✅ 合并提交 `a1eaa7a`（3 冲突全保双：router.py import 并集、gateway-auth.lua 注释融合、navConfig.tsx 取并集；46 路由模块文件全存在、include 引用零缺失） | `git log main -1` |
-| app 镜像重建 + recreate | ✅ 11:52–11:54，openapi 实测 `/cs/agents/me/offers`、`/cs/ops/dispatch/stats`、`/cs/handoffs` 全 OK（cs 路径 17→23），/health 正常 | 运行时缺口关闭 |
-| Prometheus 告警装载 | ✅ 重启 prometheus 后 `agent-platform-cs-dispatch` 组 6 条规则全部加载（CsNoOnlineAgents / CsPresenceUnavailableSpike critical 等） | `GET :9090/api/v1/rules` |
-| 备份文件 | ✅ 移出仓库工作区 → `D:/Program Files/workplace/backups/backup-pre-028-029-20260921.sql`（容器 `/tmp` 副本仍在） | — |
-
-## 部署后启用进度（随窗口滚动更新）
-
-| 步骤 | 状态 | 备注 |
-|---|---|---|
-| 1. 028/029 部署 + 复核 | ✅ 2026-09-21 04:12 | ALL_APPLIED |
-| 2. 启动 dispatcher | ✅ 2026-09-21 04:24 | `CS_DISPATCH_MODE=shadow` 双副本 healthy；启动期每副本 1 条 `dispatch iteration failed`（event loop 重建瞬时错误，不复发）；心跳 `cs:dispatcher:heartbeat:*` 双实例各 1 条 |
-| 3. shadow 观察 ≥24h | ⏭️ **取消**（用户决策：开发阶段不灰度，2026-09-21 04:37） | shadow 实际运行 13 分钟（04:24–04:37）已完成使命：relay 清空 456 条积压、零脏绑定 |
-| 4. 放量 5→20→50→100 | ⏭️ 不适用 | `CS_DISPATCH_ROLLOUT_PERCENT` env 兜底默认即 100（`backend/config/cs_dispatch.py:96`），sys_config 无覆盖行，enforce 天然全量 |
-| 5. 切 enforce | ✅ 2026-09-21 04:37 | 双副本 `--force-recreate` 为 `CS_DISPATCH_MODE=enforce`，日志确认 `mode=enforce`、零错误、心跳换新实例；当前队列空闲（19 closed / 2 human_active），首个真实转人工将秒级派单 |
+将目标环境、代码版本、迁移复核、负载指标、故障现象、恢复判据和未通过项更新到 `docs/tasks/cs-dispatch-rollout-acceptance/PROGRESS.md`。机器输出只按当前验收需要保留。

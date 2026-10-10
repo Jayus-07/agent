@@ -114,6 +114,19 @@ def test_selection_and_intent_guards_are_deterministic() -> None:
     assert runtime.prepare(unknown).code == "invalid_param"
 
 
+def test_rag_search_allows_customer_service_domain_with_kb_authorization() -> None:
+    """客服对话可复用只读 RAG；文档可见性仍由 RAG 主体授权单独裁决。"""
+    runtime = GovernanceRuntime()
+    decision = runtime.prepare(ToolCallRequest(
+        capability="rag.search",
+        arguments={"question": "退款申请处理流程"},
+        candidate_capabilities=("rag.search",),
+        domain="customer_service",
+    ))
+
+    assert decision.allowed is True
+
+
 def test_auto_arguments_must_be_runtime_injected() -> None:
     runtime = GovernanceRuntime()
     direct = ToolCallRequest(

@@ -19,6 +19,7 @@ from backend.agents.reporter.reporter import (
     _is_technical_error,
     _user_step_label,
     reporter_node,
+    render_step_results_deterministically,
 )
 
 
@@ -98,6 +99,45 @@ class TestDegradedMessageNoLeak:
         assert "无权" in permission or "权限" in permission
         assert "需要确认" in approval or "审批" in approval
         assert "未找到相关信息" not in permission + approval
+
+    def test_sql_permission_message_is_direct_and_does_not_guess_a_role(self):
+        sql_answer = generate_final_answer("查询上月销量", {
+            "s1": {**_failed_step(capability="sql.query"),
+                   "tool_status": "unauthorized",
+                   "error_type": "permission_denied"},
+        }, context_filter=False)
+        rag_answer = generate_final_answer("退款怎么处理", {
+            "s1": {**_failed_step(capability="rag.search"),
+                   "tool_status": "unauthorized",
+                   "error_type": "permission_denied"},
+        }, context_filter=False)
+
+        assert "当前账号无权执行该查询或访问相关数据" in sql_answer
+        assert "请联系管理员申请相应的数据访问权限" in sql_answer
+        assert "管理员权限" not in sql_answer
+        assert sql_answer.startswith("## 权限不足")
+        assert rag_answer.startswith("## 查询未完成")
+        assert "当前账号无权执行或访问该内容" in rag_answer
+
+    def test_sql_permission_message_matches_deterministic_stream_fallback(self):
+        answer = render_step_results_deterministically({
+            "s1": {**_failed_step(capability="sql.query"),
+                   "tool_status": "unauthorized",
+                   "error_type": "permission_denied"},
+        })
+
+        assert answer.startswith("## 权限不足")
+        assert "请联系管理员申请相应的数据访问权限" in answer
+
+    def test_invalid_request_is_not_presented_as_permission_denial(self):
+        answer = generate_final_answer("退款怎么处理", {
+            "s1": {**_failed_step(capability="rag.search"),
+                   "tool_status": "invalid_request",
+                   "error_type": "validation_error"},
+        }, context_filter=False)
+
+        assert "请求参数有误" in answer
+        assert "无权执行或访问" not in answer
 
     def test_degraded_result_discloses_possible_incompleteness(self):
         answer = generate_final_answer("查天气", {

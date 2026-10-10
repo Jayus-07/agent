@@ -7,11 +7,16 @@
 - _summarize_output 只提取状态/行数/错误摘要，不落整行数据
 """
 import asyncio
+import time
 
 import pytest
 
 from backend.observability.trace_middleware import TraceMiddleware, _NODE_LABELS
 from backend.observability.tracer import trace_collector
+from backend.orchestration.graph.sse_event_sink import (
+    bind_sse_event_sink,
+    reset_sse_event_sink,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +54,32 @@ class TestNoActiveTrace:
 
 
 class TestSyncNode:
+
+    def test_status_events_expose_node_start_and_measured_completion(self, mw):
+        trace_collector.start(question="合成问题")
+        events = []
+        token = bind_sse_event_sink(events.append)
+        try:
+            def measured_node(_state):
+                time.sleep(0.02)
+                return {"ok": True}
+
+            wrapped = mw.wrap_sync_node("rag_skill", measured_node)
+            wrapped({})
+        finally:
+            reset_sse_event_sink(token)
+
+        statuses = [
+            event["data"] for event in events
+            if event.get("event") == "status"
+        ]
+        assert [event["phase"] for event in statuses] == [
+            "started", "completed",
+        ]
+        assert statuses[0]["node"] == statuses[1]["node"] == "rag_skill"
+        assert statuses[0]["execution_id"] == statuses[1]["execution_id"]
+        assert statuses[0]["started_at"] <= statuses[1]["finished_at"]
+        assert statuses[1]["duration_ms"] >= 15
 
     def test_success_creates_span_with_label(self, mw):
         trace = trace_collector.start(question="测试问题")

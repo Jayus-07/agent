@@ -26,7 +26,7 @@ import backend.skills  # noqa: F401
 from backend.agents.planner.critique import critique_node
 from backend.agents.planner.planner import planner_node
 from backend.agents.reporter.reporter import reporter_node
-from backend.observability.trace_middleware import guard_node_update, trace_middleware
+from backend.observability.trace_middleware import trace_middleware
 from backend.orchestration.domain_registry import domain_graph_registry, with_domain_attribution
 from backend.orchestration.graph.direct_executor import skill_executor_node, workflow_executor_node
 from backend.orchestration.graph.general_chat_node import general_chat_node
@@ -51,6 +51,11 @@ _NODE_LABELS = {
     "critique":           "计划审查",
     "supervisor":         "调度决策",
     "sql_skill":          "数据库查询",
+    "query_understanding": "查询理解",
+    "table_router":       "数据表匹配",
+    "sql_generator":      "SQL 生成",
+    "sql_validator":      "安全校验",
+    "sql_executor":       "数据查询",
     "rag_skill":          "知识库检索",
     "report_skill":       "报告生成",
     "reporter":           "结果汇总",
@@ -132,12 +137,9 @@ def build_graph(checkpointer=None):
     wf = StateGraph(OrchestratorState)
 
     # ── 内置节点（永远不变，TraceMiddleware 自动记录 Span）──
-    # 注意：router 不用中间件包装 —— MultiTierRouter.route() 内部已自建
-    # 完整 span（含 rule/vector/llm 三层事件与 metrics）。双重包装会产生
-    # 同名重复 span（浏览器实测发现的 0ms+真实时长两条"路由决策"）。
-    # guard_node_update = 纯状态键守卫包装（P1-1，无 span）：router 的
-    # update 同样会被 LangGraph 剥离，必须纳入守卫覆盖。
-    wf.add_node("router", guard_node_update("router", router_node))
+    # RouterEngine 的内部阶段 Trace 与节点外层耗时同时保留；中间件本身
+    # 也负责状态键守卫，避免依赖已过期的 MultiTierRouter 自建 span 假设。
+    wf.add_node("router", trace_middleware.wrap_sync_node("router", router_node))
     # direct 路径: router --direct--> tool_selector（FC 门控选工具+填参，
     # 失败/快路径直通零开销）→ skill_executor
     wf.add_node("tool_selector", trace_middleware.wrap_sync_node("tool_selector", tool_selector_node))

@@ -1,6 +1,6 @@
 """gen_tool_contract_lock.py — Tool 契约快照（lock）生成与漂移检测
 
-为什么存在（M1 技术债，docs/2026-09-30-企业级治理技术债修复台账.md D1）：
+为什么存在：
 34 个 Tool 的契约（args schema / output_type / 归属）此前只有 7 组
 运行时守卫测试，且 CI 全 disabled——契约的破坏性变更无法在发布前被
 机械拦截，事后也无法回答「哪个构建改了什么契约」。

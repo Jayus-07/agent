@@ -93,7 +93,7 @@ export default function SettingsPage() {
         </section>
 
         {/* 用户画像记忆 */}
-        <section>
+        <section id="profile-memory" className="scroll-mt-16">
           <div className="flex items-center justify-between px-1 pb-2">
             <h2 className="text-xs text-text-muted">用户画像 · 长期记忆</h2>
             <button

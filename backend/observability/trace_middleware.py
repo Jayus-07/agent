@@ -13,10 +13,15 @@ observability/trace_middleware.py — 统一 Trace 中间件
 
 import functools
 import time
+import uuid
 
 from backend.config import STATE_KEY_GUARD_MODE
 from backend.observability.metrics import state_unknown_key_total
-from backend.observability.tracer import trace_collector
+from backend.observability.tracer import (
+    bind_graph_node,
+    reset_graph_node,
+    trace_collector,
+)
 from backend.orchestration.state import validate_state_update
 from backend.shared.logger import logger
 
@@ -30,7 +35,11 @@ _NODE_LABELS: dict[str, str] = {
     "report_skill":         "报告生成",
     "reporter":             "结果汇总",
     "business_analysis_skill": "业务分析",
-    "router":              "路由决策",
+    # 与 RoutingEngine 内部的 routing.route_decision span（同为"路由决策"）
+    # 区分：本节点是图上的外层阶段，内部还嵌套 entry_gate/domain/intent/
+    # capability/policy/route_decision 等细分阶段。同名会让时间线出现两行
+    # 无法分辨的「路由决策」（744ms 聚合行 vs 1ms 真实决策行）。
+    "router":              "路由阶段",
     "tool_selector":       "工具选择",
     "skill_executor":      "直接执行",
     "workflow_executor":   "工作流执行",
@@ -116,6 +125,42 @@ def guard_node_update(node_name: str, node_fn):
     return wrapper
 
 
+def _emit_node_status(
+    *,
+    node_name: str,
+    execution_id: str,
+    phase: str,
+    started_at: float,
+    finished_at: float | None = None,
+    duration_ms: float | None = None,
+    status: str,
+) -> None:
+    """发送与节点真实执行边界对齐的 SSE status 帧。"""
+    try:
+        from backend.orchestration.graph.sse_event_sink import emit_sse_event
+
+        data = {
+            "node": node_name,
+            "ts": finished_at if finished_at is not None else started_at,
+            "phase": phase,
+            "execution_id": execution_id,
+            "started_at": started_at,
+            "status": status,
+        }
+        if finished_at is not None:
+            data["finished_at"] = finished_at
+        if duration_ms is not None:
+            data["duration_ms"] = round(duration_ms, 1)
+        emit_sse_event({"event": "status", "data": data})
+    except Exception:
+        # 进度帧是旁路观测，不能改变节点的业务结果。
+        return
+
+
+def _new_execution_id(node_name: str) -> str:
+    return f"{node_name}:{uuid.uuid4().hex}"
+
+
 class TraceMiddleware:
     """统一 Trace 中间件。
 
@@ -135,51 +180,88 @@ class TraceMiddleware:
             bind_from_state(state)
 
             trace = trace_collector.current()
-            if trace is None:
-                result = node_fn(state)
-                # 状态键守卫（P1-1）：无 trace 也要检查（剥离与 trace 无关）
-                check_state_update(node_name, result)
-                return result
-
             label = _NODE_LABELS.get(node_name, node_name)
             kind = _NODE_KINDS.get(node_name, "agent")
             step_id = state.get("current_step_id", "")
             question = state.get("question", "")[:80]
+            span = None
+            graph_token = None
+            if trace is not None:
+                # 图节点显式挂到 root：不参与"最近未关闭 span"推断，
+                # 否则会被上一层未收口的兄弟 span 吞掉。
+                span = trace_collector.start_span(
+                    span_id=f"{node_name}:{step_id}" if step_id else node_name,
+                    parent_id=trace.root_span_id or None,
+                    name=label,
+                    kind=kind,
+                    input={"step_id": step_id, "question": question},
+                )
+                graph_token = bind_graph_node(span.span_id)
 
-            span = trace_collector.start_span(
-                span_id=f"{node_name}:{step_id}" if step_id else node_name,
-                name=label,
-                kind=kind,
-                input={
-                    "step_id": step_id,
-                    "question": question,
-                },
-            )
-
+            execution_id = _new_execution_id(node_name)
+            started_at = time.time()
             t0 = time.monotonic()
+            _emit_node_status(
+                node_name=node_name,
+                execution_id=execution_id,
+                phase="started",
+                started_at=started_at,
+                status="running",
+            )
             try:
-                result = node_fn(state)
-                # 守卫在 span 收口前：enforce 抛错时 span 以 error 收口
-                check_state_update(node_name, result)
-                elapsed_ms = (time.monotonic() - t0) * 1000
-                trace_collector.end_span(
-                    span,
-                    output=self._summarize_output(result, node_name),
-                    metrics={"elapsed_ms": round(elapsed_ms, 1)},
-                    status="success",
-                )
-                return result
-            except Exception as e:
-                elapsed_ms = (time.monotonic() - t0) * 1000
-                trace_collector.end_span(
-                    span,
-                    status="error",
-                    metrics={
-                        "elapsed_ms": round(elapsed_ms, 1),
-                        "error": str(e)[:200],
-                    },
-                )
-                raise
+                try:
+                    result = node_fn(state)
+                    # 守卫在 span 收口前：enforce 抛错时 span 以 error 收口
+                    check_state_update(node_name, result)
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    node_status = self._node_span_status(result)
+                    if span is not None:
+                        trace_collector.end_span(
+                            span,
+                            output=self._summarize_output(result, node_name),
+                            metrics={"elapsed_ms": round(elapsed_ms, 1)},
+                            status=node_status,
+                        )
+                    finished_at = time.time()
+                    _emit_node_status(
+                        node_name=node_name,
+                        execution_id=execution_id,
+                        phase="completed",
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        duration_ms=elapsed_ms,
+                        status=node_status,
+                    )
+                    return result
+                except BaseException as e:
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    cancelled = isinstance(e, (GeneratorExit, KeyboardInterrupt)) or (
+                        type(e).__name__ == "CancelledError"
+                    )
+                    event_status = "cancelled" if cancelled else "error"
+                    if span is not None:
+                        trace_collector.end_span(
+                            span,
+                            status=event_status,
+                            metrics={
+                                "elapsed_ms": round(elapsed_ms, 1),
+                                "error": str(e)[:200],
+                            },
+                        )
+                    finished_at = time.time()
+                    _emit_node_status(
+                        node_name=node_name,
+                        execution_id=execution_id,
+                        phase="cancelled" if cancelled else "failed",
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        duration_ms=elapsed_ms,
+                        status=event_status,
+                    )
+                    raise
+            finally:
+                if graph_token is not None:
+                    reset_graph_node(graph_token)
 
         @functools.wraps(node_fn)
         def wrapper(state: dict) -> dict:
@@ -196,49 +278,85 @@ class TraceMiddleware:
         @functools.wraps(node_fn)
         async def traced_wrapper(state: dict) -> dict:
             trace = trace_collector.current()
-            if trace is None:
-                result = await node_fn(state)
-                check_state_update(node_name, result)
-                return result
-
             label = _NODE_LABELS.get(node_name, node_name)
             kind = _NODE_KINDS.get(node_name, "agent")
             step_id = state.get("current_step_id", "")
             question = state.get("question", "")[:80]
+            span = None
+            graph_token = None
+            if trace is not None:
+                # 图节点显式挂到 root：不参与"最近未关闭 span"推断，
+                # 否则会被上一层未收口的兄弟 span 吞掉。
+                span = trace_collector.start_span(
+                    span_id=f"{node_name}:{step_id}" if step_id else node_name,
+                    parent_id=trace.root_span_id or None,
+                    name=label,
+                    kind=kind,
+                    input={"step_id": step_id, "question": question},
+                )
+                graph_token = bind_graph_node(span.span_id)
 
-            span = trace_collector.start_span(
-                span_id=f"{node_name}:{step_id}" if step_id else node_name,
-                name=label,
-                kind=kind,
-                input={
-                    "step_id": step_id,
-                    "question": question,
-                },
-            )
-
+            execution_id = _new_execution_id(node_name)
+            started_at = time.time()
             t0 = time.monotonic()
+            _emit_node_status(
+                node_name=node_name,
+                execution_id=execution_id,
+                phase="started",
+                started_at=started_at,
+                status="running",
+            )
             try:
-                result = await node_fn(state)
-                check_state_update(node_name, result)
-                elapsed_ms = (time.monotonic() - t0) * 1000
-                trace_collector.end_span(
-                    span,
-                    output=self._summarize_output(result, node_name),
-                    metrics={"elapsed_ms": round(elapsed_ms, 1)},
-                    status="success",
-                )
-                return result
-            except Exception as e:
-                elapsed_ms = (time.monotonic() - t0) * 1000
-                trace_collector.end_span(
-                    span,
-                    status="error",
-                    metrics={
-                        "elapsed_ms": round(elapsed_ms, 1),
-                        "error": str(e)[:200],
-                    },
-                )
-                raise
+                try:
+                    result = await node_fn(state)
+                    check_state_update(node_name, result)
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    node_status = self._node_span_status(result)
+                    if span is not None:
+                        trace_collector.end_span(
+                            span,
+                            output=self._summarize_output(result, node_name),
+                            metrics={"elapsed_ms": round(elapsed_ms, 1)},
+                            status=node_status,
+                        )
+                    finished_at = time.time()
+                    _emit_node_status(
+                        node_name=node_name,
+                        execution_id=execution_id,
+                        phase="completed",
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        duration_ms=elapsed_ms,
+                        status=node_status,
+                    )
+                    return result
+                except BaseException as e:
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    cancelled = type(e).__name__ == "CancelledError"
+                    event_status = "cancelled" if cancelled else "error"
+                    if span is not None:
+                        trace_collector.end_span(
+                            span,
+                            status=event_status,
+                            metrics={
+                                "elapsed_ms": round(elapsed_ms, 1),
+                                "error": str(e)[:200],
+                            },
+                        )
+                    finished_at = time.time()
+                    _emit_node_status(
+                        node_name=node_name,
+                        execution_id=execution_id,
+                        phase="cancelled" if cancelled else "failed",
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        duration_ms=elapsed_ms,
+                        status=event_status,
+                    )
+                    raise
+            finally:
+                if graph_token is not None:
+                    reset_graph_node(graph_token)
 
         @functools.wraps(node_fn)
         async def wrapper(state: dict) -> dict:
@@ -267,6 +385,32 @@ class TraceMiddleware:
                 summary[f"step_{sid}_error"] = str(error)[:100]
 
         return summary
+
+    @staticmethod
+    def _node_span_status(result: dict) -> str:
+        """按业务结果决定节点 span 状态。
+
+        Why: 节点函数正常返回不代表业务成功——step_results 里可能是 failed
+        （如 RAG 工具连接错误）。旧实现一律写 success，于是出现"工具 error、
+        所在节点 success"的矛盾，掩盖真实失败原因。这里按 step_results 的
+        失败面降级为 error/partial，保留 success 语义不被滥用。
+        """
+        if not isinstance(result, dict):
+            return "success"
+        step_results = result.get("step_results") or {}
+        if not isinstance(step_results, dict):
+            return "success"
+        statuses = [
+            str(sr.get("status") or "").lower()
+            for sr in step_results.values()
+            if isinstance(sr, dict)
+        ]
+        failed = {"failed", "error", "timeout", "permission_denied",
+                  "validation_error", "syntax_error", "no_table", "unavailable"}
+        if any(status in failed for status in statuses):
+            succeeded = {"success", "no_data", "done", "partial"}
+            return "partial" if any(s in succeeded for s in statuses) else "error"
+        return "success"
 
 
 # 全局单例

@@ -1,6 +1,6 @@
 """context_budget.manager — ContextBudgetManager 统一预算管理器
 
-基础版职责（完整规格见 docs/2026-09-22-context-budget-management-实施规格.md）：
+基础版职责（完整规格见 docs/architecture/ai-runtime.md#上下文预算与跨请求状态）：
   - get_input_budget():  input = LLM_CONTEXT_LENGTH - 输出预留 - 安全余量
   - calculate_usage():   统一用量计算入口（业务层禁止自行重复计算）
   - history_budget():    L2 动态历史预算（HISTORY_TOKEN_BUDGET 只是上限）

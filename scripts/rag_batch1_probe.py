@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """scripts/rag_batch1_probe.py — RAG Batch1 实机探针（L1/N2/API1/API4/API7）
 
-验收依据：docs/reports/2026-10-04-RAG验收剩余项实施方案.md Batch 1。
+验收依据：docs/tasks/rag-acceptance-remaining/IMPLEMENTATION_PLAN.md Batch 1。
 全部走 APISIX 9080（自签 JWT + 会话键，密钥 printenv 现取）；造数用
 rag_test_kb + ZZZ- 前缀，脚本尾删除并断言 registry 无残留。
 证据 JSON：D:/tmp/rag-acceptance/batch1-probe-<ts>.json

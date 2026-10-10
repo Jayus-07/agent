@@ -4,7 +4,7 @@
   Case 5 — 含 _LLM_REJECT_ 的问题 → stub 自报 can_answer=false → generation 层拒答
   Case 6 — 含 _SELF_CORRECT_ 的问题 → stub 第一次 false、第二次 true → Self-Correction 救活
 
-依据文档: docs/architecture/rag-evidence-gate.md §0.4 + §3.3
+依据当前实现与 docs/domains/rag.md 的拒答边界
 """
 from __future__ import annotations
 

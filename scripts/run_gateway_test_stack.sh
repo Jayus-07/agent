@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # run_gateway_test_stack.sh — 启动/重建 9081 网关测试台架（echo 桩 + APISIX 测试实例）
 #
-# 背景：B2~B3 时代的 9081 启动脚本历史会话未留存（docs/team-prompts/01-member-gateway.md
-# 有明确记录），本脚本按 apisix-test/ 配置与 B2 任务日志重建，行为对齐：
+# 背景：本脚本按 apisix-test/ 配置与历史验收约束重建，行为对齐：
 #   - echo 桩(8099)：scripts/gateway_echo_stub.py，支持 ?delay=N（limit-conn 测试用）
 #   - APISIX 测试实例(9081)：enforce 模式，issuer=hongmeng-oa（12 场景矩阵的合同值），
 #     黑名单前缀与生产一致（auth:blacklist:），matrix 场景 9 直接在共享 redis 种子

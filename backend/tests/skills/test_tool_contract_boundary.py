@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tests/skills/test_tool_contract_boundary.py — STOP G Tool Contract 边界行为
 
-锁（docs/architecture/STOP_G_Preparation_Audit.md M2/M3/M4）：
+锁定 Tool/Skill 输出契约（docs/development/tool-skill-guide.md）：
   - unwrap_envelope：封套识别与解包的唯一出口（success→data / failed→封套保留 /
     非封套原样），skill_adapter 与 skill 边界共用；
   - validate_semantics：status=="failed" 为失败判定第一等依据，error 键嗅探保留兼容；

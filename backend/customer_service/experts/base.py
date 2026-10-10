@@ -3,7 +3,7 @@
 Expert 统一输出类型 + 安全执行包装器。
 所有 Expert 共享此契约，Supervisor 通过 run_expert_safely 调度。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6
+设计参考: docs/domains/customer-service.md §6
 STOP F（2026-09-29）：执行生命周期内部收敛到 core/node_runtime（六段公共
 生命周期 + THREAD_ISOLATED 超时唯一实现）；本模块公开契约（函数签名/
 ExpertResult 字段/status 枚举/日志前缀/metrics 名）逐字节冻结不变。

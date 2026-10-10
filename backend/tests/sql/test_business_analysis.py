@@ -23,6 +23,7 @@ def _make_state(
     question: str = "哪些商品库存不足？",
     previous_outputs: dict | None = None,
     step_results: dict | None = None,
+    plan_params: dict | None = None,
 ) -> dict:
     return {
         "question": question,
@@ -37,6 +38,7 @@ def _make_state(
                     "step_id": "2",
                     "capability": "business.analyze",
                     "description": "分析库存风险",
+                    "params": plan_params or {},
                 },
             },
             "edges": {"2": ["1"]},
@@ -96,6 +98,9 @@ class TestBusinessAnalysisSuccess:
                 ) as mock_analyze:
                     mock_analyze.return_value = _make_insight()
                     out = await BusinessAnalysisSkill().execute(state)
+
+                    mock_analyze.assert_called_once()
+                    assert mock_analyze.call_args.args[0] == _make_sql_result()
 
             sr = out["step_results"]["2"]
             assert sr["status"] == "success"

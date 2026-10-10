@@ -26,6 +26,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "search_knowledge_tool": "知识库检索",
     "memory_search_tool": "记忆检索",
     "memory_store_tool": "记忆写入",
+    "memory_forget_tool": "记忆删除",
     # ── 竞品 ──
     "competitor_analyze_tool": "竞品分析",
     "competitor_history_tool": "竞品价格历史",
@@ -154,6 +155,7 @@ TOOL_DATA_SOURCES: dict[str, dict[str, str]] = {
     "search_knowledge_tool": {"type": "internal"},
     "memory_search_tool": {"type": "internal"},
     "memory_store_tool": {"type": "internal"},
+    "memory_forget_tool": {"type": "internal"},
     "competitor_analyze_tool": {"type": "internal"},
     "competitor_history_tool": {"type": "internal"},
     "competitor_watch_tool": {"type": "internal"},

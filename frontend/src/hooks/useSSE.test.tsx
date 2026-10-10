@@ -1,5 +1,5 @@
 /**
- * useSSE — 会话级模型覆盖透传（B.9 决策② / docs/model-config-admin-ui-design.md §16）
+ * useSSE — 会话级模型覆盖透传（B.9 决策② / docs/model-config-admin-ui-design.md §14.1）
  *
  * 守卫两条不变量：
  *   1. 未设置会话覆盖时，请求体**不带** model（走后端全局默认）；

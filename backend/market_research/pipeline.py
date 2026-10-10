@@ -1,6 +1,6 @@
 """market_research/pipeline.py — 证据管线纯函数层
 
-设计约定（docs/superpowers/plans/2026-09-15-skill-integration-plan.md 批次 2）：
+设计约定（本模块的证据结构与置信度规则）：
 - 证据 schema: {evidence_id, source_type(official/media/ugc), url, fetched_at,
   published_at, raw_text 摘录, numbers[], title}
 - 来源分级 official > media > ugc，参与结论置信度计算

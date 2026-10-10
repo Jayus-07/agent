@@ -5,7 +5,7 @@
 Phase 5: 模拟工单写入 (simulate_execute)。
 Phase 6: 替换为 DB 持久化。
 
-设计参考: docs/customer-service/design.md §11
+设计参考: docs/domains/customer-service.md §11
 """
 from __future__ import annotations
 

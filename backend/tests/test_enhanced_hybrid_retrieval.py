@@ -63,3 +63,13 @@ class TestUltimateRRFFusion:
         )
 
         assert _ultimate_rrf_fusion([], rrf_k=60, top_k=5) == []
+
+
+def test_parallel_retrieval_branch_timing_preserves_results():
+    from backend.rag.retrieval.enhanced_hybrid_retrieval import _timed_retrieval
+
+    timings = {}
+    result = _timed_retrieval(timings, "dense", lambda value: [value], "candidate")
+
+    assert result == ["candidate"]
+    assert timings["dense"] >= 0

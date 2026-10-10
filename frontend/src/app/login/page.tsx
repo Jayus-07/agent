@@ -227,6 +227,42 @@ function LoginForm() {
           />
         </div>
 
+        <div className="mt-4 rounded-xl border border-[#E3E8E4] bg-white/70 p-3.5">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-1.5">
+            <span className="text-[13px] font-medium text-[#3F4A46]">演示账号</span>
+            <span className="text-[11px] text-[#7A8480]">
+              统一密码：{DEMO_LOGIN_PASSWORD}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {DEMO_LOGIN_ACCOUNTS.map(({ username, label, role }) => (
+              <button
+                key={username}
+                type="button"
+                onClick={() => {
+                  setAccount(username);
+                  setPassword(DEMO_LOGIN_PASSWORD);
+                  setRemember(true);
+                  setError("");
+                }}
+                className={`min-w-0 rounded-lg border px-2 py-2 text-left transition-colors ${
+                  account === username
+                    ? "border-[#1F7A4D]/40 bg-[#1F7A4D]/[0.07]"
+                    : "border-[#E3E8E4] bg-white hover:border-[#1F7A4D]/30"
+                }`}
+                aria-pressed={account === username}
+              >
+                <span className="block truncate text-[12px] font-medium text-[#26312B]">
+                  {label}
+                </span>
+                <span className="block truncate text-[10px] text-[#7A8480]">
+                  {username} · {role}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <label className="mt-4 flex cursor-pointer items-center gap-2 text-[13px] text-[#5C6662]">
           <input
             type="checkbox"

@@ -49,6 +49,12 @@ def test_historical_stripped_keys_registered():
         "route_decision_v2",   # STOP B canonical decision
         "runtime_result",      # STOP D domain result contract
         "clarification_request",  # STOP E canonical clarification
+        "score_type",          # P0 路由证据，用于门禁与 Trace 复核
+        "fine_top1",
+        "fine_top1_score",
+        "fine_top2",
+        "fine_top2_score",
+        "fine_margin",
     ]
     for key in historical:
         assert key in KNOWN_STATE_KEYS, f"历史踩坑键未登记: {key}"

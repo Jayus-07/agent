@@ -1,6 +1,6 @@
 """F2 SSE Resume Protocol 契约测试。
 
-覆盖（docs/2026-09-25-F2-SSE恢复协议-审计与设计.md §2/§三）：
+覆盖（docs/architecture/Frozen-Contracts.md#sse-与事件 §2/§三）：
   - 注册表语义：seq 单调、subscribe_after 原子重放+live 挂接（无丢洞）、
     gap 不可恢复、finished 清 waiters、身份归属、终帧必达
   - 端点契约：404 STREAM_NOT_RESUMABLE / 403 跨用户 / 422 非法游标 /

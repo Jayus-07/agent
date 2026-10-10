@@ -722,7 +722,8 @@ class RAGChain:
     # Step C: 公共入口
     # =================================================
 
-    def ask(self, question: str, session_id: str = "default") -> str:
+    def ask(self, question: str, session_id: str = "default",
+            persist_memory: bool = True) -> str:
         """RAGChain 入口：线性 3 段 — prepare → execute → respond。
 
         每次调用先初始化请求级中间态（P1 并发隔离）：
@@ -745,11 +746,20 @@ class RAGChain:
             set_context(ctx)
             chat_history = self._prepare(question, session_id)
             result = self._execute(question, chat_history)
-            answer = self._respond(result, trace, question, session_id, t_total)
+            answer = self._respond(
+                result, trace, question, session_id, t_total,
+                persist_memory=persist_memory,
+            )
             # RAG 的 claim/fidelity/META gates 在 _respond 中收口；通过或拒答的
             # 最终文本只能在此后进入答案 SSE，生成中的候选正文不外发。
             if ENABLE_TOKEN_STREAMING and answer:
                 emit_stream_delta(answer)
+            # 远端 RAG Trace 由代理随响应回链到主 Trace；本字段只用于内部
+            # 观测关联，不改变答案、引用或 Evidence Gate 决策。
+            try:
+                get_context().meta["trace_id"] = trace.id
+            except Exception:  # noqa: BLE001 — trace 关联不能阻断最终答复
+                pass
             # Phase 6：全链耗时长线（含 verify/gate）
             import time as _time
 
@@ -776,8 +786,10 @@ class RAGChain:
         import time as _time
 
         from backend.observability.tracer import _scope_root_var, trace_collector
+        from backend.observability.tracer import get_external_child_trace_id
+        external_child_id = get_external_child_trace_id()
         prev = trace_collector.current()
-        if prev is not None:
+        if prev is not None and not external_child_id:
             trace = prev
             trace._rag_embedded = True
             trace_collector.start_span(
@@ -786,7 +798,14 @@ class RAGChain:
             _scope_root_var.set("rag_skill")
             logger.info(f"[RAGChain] 嵌入模式（父 trace={prev.id[:8]}）: {question[:60]}...")
         else:
-            trace = trace_collector.start(question, session_id)
+            from backend.observability.tracer import get_external_parent_trace_id
+
+            trace = trace_collector.start(
+                question,
+                session_id,
+                parent_trace_id=get_external_parent_trace_id(),
+                trace_id=external_child_id,
+            )
             trace._rag_embedded = False
             trace.sla_threshold_ms = 30000
             trace_collector.start_span("root", parent_id=None,
@@ -806,7 +825,8 @@ class RAGChain:
         except Exception:  # noqa: BLE001 — 追踪失败不能阻断问答
             logger.debug("[RAGChain] Prompt 运行版本记录失败", exc_info=True)
 
-    def _respond(self, result, trace, question, session_id, t_total) -> str:
+    def _respond(self, result, trace, question, session_id, t_total,
+                 persist_memory: bool = True) -> str:
         """统一决策：Gate 1+2(注入) → verify+evaluate → Gate 3 LLM 自报 → Self-Correction。
 
         返回 answer 或 rejection msg。
@@ -871,7 +891,10 @@ class RAGChain:
         # Gate 3: LLM 自报拒答 (META can_answer=False)
         meta = self._last_meta or {}
         if not meta.get("can_answer", True):
-            answer = self._handle_llm_reject(meta, trace, question, session_id, t_total)
+            answer = self._handle_llm_reject(
+                meta, trace, question, session_id, t_total,
+                persist_memory=persist_memory,
+            )
             self._record_rag_metric("rejected")
             return answer
 
@@ -881,12 +904,15 @@ class RAGChain:
         else:
             self._record_rag_metric("hit")
 
-        self._remember_turn(session_id, question, answer, trace=trace)
+        self._remember_turn(
+            session_id, question, answer, trace=trace,
+            persist_memory=persist_memory,
+        )
         self._finish(trace, answer, t_total)
         return answer
 
     def _remember_turn(self, session_id: str, question: str, answer: str,
-                       trace=None) -> None:
+                       trace=None, persist_memory: bool = True) -> None:
         """memory 唯一写点（2026-09-23 D1-5）。
 
         仅在全部 Gate（EvidenceGate/ClaimVerifier/Faithfulness/META 自报）
@@ -896,7 +922,9 @@ class RAGChain:
         """
         # 父 Runner 是嵌入模式的唯一 Memory 写入者；独立 RAG 入口仍保留
         # 原有写点，避免主图与 RAG 以同一 session 重复保存一轮问答。
-        if trace is not None and getattr(trace, "_rag_embedded", False):
+        if not persist_memory or (
+            trace is not None and getattr(trace, "_rag_embedded", False)
+        ):
             return
         if self._memory:
             try:
@@ -918,7 +946,8 @@ class RAGChain:
             # 埋点失败不影响主流程（可观测降级），但必须留痕，不能静默吞掉
             logger.debug(f"[RAGChain] 指标埋点失败: {e}", exc_info=True)
 
-    def _handle_llm_reject(self, meta, trace, question, session_id, t_total) -> str:
+    def _handle_llm_reject(self, meta, trace, question, session_id, t_total,
+                           persist_memory: bool = True) -> str:
         """Gate 3（LLM 自报拒答）的统一处理。
 
         先尝试 self-correction（改写 query 重试）——目的是把『资料确实没有』
@@ -931,7 +960,10 @@ class RAGChain:
         if self.corrector.can_retry():
             retried = self._try_self_correct(decision, trace, question, session_id, t_total)
             if retried is not None:
-                self._remember_turn(session_id, question, retried, trace=trace)
+                self._remember_turn(
+                    session_id, question, retried, trace=trace,
+                    persist_memory=persist_memory,
+                )
                 self._finish(trace, retried, t_total)
                 return retried
 
@@ -1471,6 +1503,7 @@ class RAGChain:
                     "score": round(score, 4),
                     "snippet": doc.page_content[:120],
                     "source": doc.metadata.get("source_file", ""),
+                    "source_query": doc.metadata.get("source_query", ""),
                     "doc_type": doc.metadata.get("doc_type", ""),
                 })
         if rerank_scores:
@@ -1484,6 +1517,7 @@ class RAGChain:
             data={"chunks": [{
                 "chunk_id": d.metadata.get("chunk_id", ""),
                 "source": d.metadata.get("source_file", ""),
+                "source_query": d.metadata.get("source_query", ""),
                 "doc_type": d.metadata.get("doc_type", ""),
                 "keywords": d.metadata.get("chunk_keywords", ""),
                 "snippet": d.page_content[:100],

@@ -50,7 +50,10 @@
     ".next-dev-275628361/types/**/*.ts",
     ".next-dev-277973370/types/**/*.ts",
     ".next-dev-1379320170/types/**/*.ts",
-    ".next-phase0-batch2/types/**/*.ts"
+    ".next-dev-1770218634/types/**/*.ts",
+    ".next-travel-v2-preview/types/**/*.ts",
+    ".next-travel-v2-3220/types/**/*.ts",
+    ".next-travel-v2-batch2-check/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

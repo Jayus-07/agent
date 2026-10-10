@@ -4,7 +4,7 @@ customer_service/graph_state.py — CS Graph 独立状态定义
 独立于 Main Graph 的 OrchestratorState，CS Graph 内部所有节点读写此状态。
 通过 cs_graph_node 适配器 + CSGraphResult 契约与 Main Graph 通信。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §7.2
+设计参考: docs/domains/customer-service.md §7.2
 """
 from __future__ import annotations
 

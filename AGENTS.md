@@ -34,15 +34,15 @@
 
 ## 按需读取
 
-| 任务 | 现行文档 |
-| --- | --- |
-| 网关、部署、异步运行 | [system-overview.md](docs/architecture/system-overview.md) |
-| Router、LangGraph、Runtime、SSE、Checkpoint | [ai-runtime.md](docs/architecture/ai-runtime.md) |
-| Provider、凭据和跨域服务关系 | [domain-service-map.md](docs/architecture/domain-service-map.md) |
-| 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md) |
-| 测试策略 | [testing-guide.md](docs/development/testing-guide.md) |
-| 常用启动、测试和调试命令 | [commands.md](docs/operations/commands.md) |
-| 旅游、客服、RAG、SQL 业务 | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
+| 任务                                         | 现行文档                                                                                                                         |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 网关、部署、异步运行                         | [system-overview.md](docs/architecture/system-overview.md)                                                                       |
+| Router、LangGraph、Runtime、SSE、Checkpoint  | [ai-runtime.md](docs/architecture/ai-runtime.md)                                                                                 |
+| Provider、凭据和跨域服务关系                 | [domain-service-map.md](docs/architecture/domain-service-map.md)                                                                 |
+| 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md)                                                                      |
+| 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
+| 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
+| 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
 
 普通 Bug 优先阅读相关源码与测试。只阅读当前任务需要的文档，不要求加载整个 README 或 docs；历史报告不作为默认上下文。
 
@@ -59,3 +59,31 @@
 - 文档与代码冲突时，核实当前代码、配置、迁移和测试后再修正文档。
 - 文档移动或删除前检查 Git 跟踪状态、引用、工具依赖和是否属于在途任务。
 - 交付时简述改动、实际验证结果、文档同步情况及未完成风险。
+
+
+
+## Git Worktree 并行开发规范
+
+1. 每个独立开发任务使用独立 Git Worktree + `task/<任务标识>` 分支；同一任务跨会话继续时复用原 Worktree。
+
+2. 开始修改前，必须检查当前分支、工作区状态和 `git worktree list`，确认任务所在目录。
+
+3. 如果当前位于主工作树，新任务必须基于最新的已提交 `main` 创建独立 Worktree；不得直接修改主工作树。
+
+4. 如果发现未提交修改、分支冲突或任务归属不明，停止创建和切换，先报告并保护现有改动。
+
+5. 创建 Worktree 后，只能在对应任务目录中开发；如果无法自动切换工作目录，必须告知用户正确路径，不得继续在原目录修改。
+
+6. 各 AI 不得修改其他任务工作树，不得擅自合并到 `main`。
+
+7. 完成任务后提交代码，报告 Commit SHA、改动摘要、测试结果、遗留问题及合并建议。
+
+8. 合并必须经过集成审查及必要测试，冲突不得简单覆盖。合并前不得自动删除工作树。
+
+9. 清理 Worktree 前检查未提交文件、未合并提交及忽略文件；不得丢失重要数据或任务记录。
+
+10. 禁止使用 `reset --hard`、`clean -fd`、强制推送等破坏性命令跳过检查。
+
+11. Worktree 不隔离数据库、Docker、端口和共享文件；涉及共享资源的操作必须独立隔离或串行执行。
+
+原则：**任务自动隔离、开发独立进行、合并统一审核、历史可追溯。**

@@ -9,7 +9,9 @@ customer_service/knowledge、mcp_servers/servers/rag.py 等消费方零改动。
   - 索引管理面（vectordb / 上传 / 一致性检查）：不代理，remote 模式下访问
     即抛错并给出指引 —— 这些能力归属 rag-service（或切 RAG_MODE=local）
 """
+import re
 import threading
+import uuid
 from collections.abc import Iterable
 from typing import Any
 
@@ -23,6 +25,35 @@ _ASK_TIMEOUT_S = 300.0
 _RETRIEVE_TIMEOUT_S = 30.0
 # 审核拒绝会执行 BM25 重建，允许覆盖中等规模知识库的清理耗时
 _REVIEW_TIMEOUT_S = 300.0
+
+
+def _set_child_trace_link(parent_trace, span, old_id: str | None, new_id: str | None) -> None:
+    """更新既有父 Trace / Tool Span 子 Trace 关联，避免依赖响应才能建链。"""
+    if parent_trace is None:
+        return
+    try:
+        if old_id and old_id in parent_trace.children_ids:
+            parent_trace.children_ids = [
+                trace_id for trace_id in parent_trace.children_ids
+                if trace_id != old_id
+            ]
+        if new_id and new_id not in parent_trace.children_ids:
+            parent_trace.children_ids.append(new_id)
+        if span is None:
+            return
+        ids = span.metrics.get("child_trace_ids")
+        if not isinstance(ids, list):
+            ids = []
+        if old_id:
+            ids = [trace_id for trace_id in ids if trace_id != old_id]
+        if new_id and new_id not in ids:
+            ids.append(new_id)
+        if ids:
+            span.metrics["child_trace_ids"] = ids
+        else:
+            span.metrics.pop("child_trace_ids", None)
+    except Exception:  # noqa: BLE001 — Trace 关联不得阻断 RAG 调用
+        logger.debug("[RAGProxy] 子 Trace 关联更新失败", exc_info=True)
 
 
 class RAGServiceProxy:
@@ -61,10 +92,35 @@ class RAGServiceProxy:
         user_id: str = "",
         tenant_id: str = "",
         roles: tuple[str, ...] = (),
+        persist_memory: bool = True,
     ) -> str:
         try:
+            headers = {}
+            parent_trace = None
+            parent_span = None
+            reserved_child_trace_id = None
+            try:
+                from backend.observability.tracer import trace_collector
+
+                parent_trace = trace_collector.current()
+                if parent_trace is not None:
+                    reserved_child_trace_id = uuid.uuid4().hex[:12]
+                    headers["X-Agent-Parent-Trace-Id"] = parent_trace.id
+                    headers["X-Agent-Child-Trace-Id"] = reserved_child_trace_id
+                    open_spans = getattr(parent_trace, "_open_spans", [])
+                    parent_span = next(
+                        (span for span in reversed(open_spans)
+                         if not span.end_time),
+                        None,
+                    )
+                    _set_child_trace_link(
+                        parent_trace, parent_span, None, reserved_child_trace_id,
+                    )
+            except Exception:  # noqa: BLE001 — Trace 关联不得阻断 RAG 调用
+                parent_trace = None
             resp = self._client.post(
                 "/ask",
+                headers=headers,
                 json={
                     "question": question,
                     "session_id": session_id,
@@ -76,17 +132,29 @@ class RAGServiceProxy:
                     "user_id": user_id,
                     "tenant_id": tenant_id,
                     "roles": list(roles),
+                    "persist_memory": persist_memory,
                 },
                 timeout=_ASK_TIMEOUT_S,
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
+            # 连接建立前失败时服务端不会创建子 Trace；清理预留关系。
+            if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+                _set_child_trace_link(
+                    parent_trace, parent_span, reserved_child_trace_id, None,
+                )
             raise RuntimeError(
                 f"RAG 服务调用失败(ask): {e} —— 检查 rag-service({self._base_url}) "
                 f"是否运行及 /readyz 状态"
             ) from e
         payload = resp.json()
         self.last_answer_meta = payload.get("meta") or {}
+        child_trace_id = self.last_answer_meta.get("trace_id")
+        if (parent_trace is not None and isinstance(child_trace_id, str)
+                and re.fullmatch(r"[0-9a-fA-F]{12}", child_trace_id)):
+            _set_child_trace_link(
+                parent_trace, parent_span, reserved_child_trace_id, child_trace_id,
+            )
         from backend.shared.logger import logger as _logger
         _logger.info(f"[RAG client.ask] HTTP {resp.status_code} answer_len={len(payload.get('answer') or '')}")
         return payload["answer"]
@@ -186,6 +254,7 @@ class RAGServiceProxy:
         user_id: str = "",
         tenant_id: str = "",
         roles: tuple[str, ...] = (),
+        persist_memory: bool = True,
     ):
         """问答面补齐（2026-09-28 生产冒烟实测缺陷）：/rag/ask 路由调用
         ask_result，此前代理未覆盖 → remote 部署形态下该 API 恒 500。
@@ -197,7 +266,7 @@ class RAGServiceProxy:
             question, session_id=session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
             permissions=permissions, user_id=user_id, tenant_id=tenant_id,
-            roles=roles,
+            roles=roles, persist_memory=persist_memory,
         )
         meta = dict(self.last_answer_meta or {})
         sources = list(meta.pop("sources", []) or [])

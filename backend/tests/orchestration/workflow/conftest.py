@@ -1,6 +1,6 @@
 """workflow 测试 conftest — 共享 fixtures
 
-设计原则（按 [docs/architecture/workflow-phase1.md](../../../docs/architecture/workflow-phase1.md)）：
+设计原则按 docs/development/tool-skill-guide.md 的 Workflow 接入规则：
 - 测试不污染生产 DB：monkeypatch 切到 tmp_path
 - 避免模块级单例串扰：reset singletons
 - Trace 集成显式开：fresh_tracer

@@ -131,7 +131,7 @@ function AdminLoginForm() {
             A
           </span>
           <span className="text-[17px] font-bold tracking-wide text-[#16191A]">
-            智能协作平台 · 管理
+            智能助手平台 · 管理
           </span>
         </div>
         <div className="flex items-center gap-7">

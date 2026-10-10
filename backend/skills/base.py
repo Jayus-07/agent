@@ -247,6 +247,12 @@ class BaseSkill(ABC):
         """
         return self._tool_fn, params
 
+    def _normalize_invocation_params(
+        self, state: dict, capability: str, params: dict,
+    ) -> dict:
+        """在通用参数校验前允许 Skill 按请求上下文补全参数。"""
+        return params
+
     # 历史名保留（子类/测试可能引用）：指向模块级 PARAM_TYPE_CHECKS
     _PARAM_TYPE_CHECKS = PARAM_TYPE_CHECKS
 
@@ -376,9 +382,10 @@ class BaseSkill(ABC):
 
         params = dict(step_info.get("params", {}))
         params.pop("_previous_outputs", None)
+        capability = sr["capability"]
+        params = self._normalize_invocation_params(state, capability, params)
 
         # ── 四层前置校验：参数 + 权限失败不可进入 Tool ──
-        capability = sr["capability"]
         try:
             validate_invocation(
                 sr["capability"], params,

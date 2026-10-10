@@ -1,7 +1,7 @@
 """PgVectorKnowledgeStore — 向量知识库的 PostgreSQL + pgvector 实现。
 
 迁移计划 2026-09-17「Chroma → pgvector」落地（方案见
-docs/chroma-pgvector迁移方案-2026-09-17.md）。实现 KnowledgeStore ABC
+docs/domains/rag.md）。实现 KnowledgeStore ABC
 （backend/rag/vectorstore/knowledge_store.py），存储层：
 Chroma 本地目录 → PG rag_vectors 表（collection 列区分）。
 

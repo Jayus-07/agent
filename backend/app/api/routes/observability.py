@@ -302,9 +302,14 @@ async def get_trace(trace_id: str, request: Request,
     # trace_collector.get() 直读 TraceStore；
     # 再保留一层 store 直读兜底（极端情况下 collector 异常）
     data = trace_collector.get(trace_id)
+    store = None
     if data is None:
-        store = get_trace_store()
-        data = store.get(trace_id)
+        try:
+            store = get_trace_store()
+            data = store.get(trace_id)
+        except Exception as exc:
+            logger.warning("Trace 详情存储不可用: %s", exc)
+            raise HTTPException(status_code=503, detail="Trace 存储暂不可用") from exc
     if data is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
     # 资源级授权：无权访问按「不存在」处理，不泄露存在性。

@@ -294,3 +294,13 @@ def test_workflow_executor_renders_actual_business_result_without_run_metadata(m
             previous_outputs={"plan_1": {"rows": []}}))
         assert "direct_0" not in out["step_results"]
         assert out["step_results"]["direct_1"]["status"] == "success"
+
+
+def test_business_analyze_does_not_receive_question_fallback():
+    """有 auto 前置依赖的 direct 能力不接收通用 question 参数。"""
+    state = _state(question="分析库存周转", candidates=_mk_candidates("business.analyze"))
+
+    assert direct_executor._resolved_params(state, "business.analyze") == {}
+    assert direct_executor._resolved_params(state, "sql.query") == {
+        "question": "分析库存周转"
+    }

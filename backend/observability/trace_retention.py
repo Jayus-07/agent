@@ -1,7 +1,7 @@
 """trace_retention.py — trace 留存期限清理（合规确认结论落地）。
 
-规划：docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md §7.2；
-合规确认：docs/2026-09-19-元数据抽取数据送LLM合规确认申请.md §5.5
+规划：docs/domains/rag.md#上传元数据与级联决策 §7.2；
+合规确认：docs/security/llm-data-handling.md §5.5
 （2026-09-19 结论：默认 14 天，敏感数据 180 天）。
 
 敏感判定按 trace 内 doc_type（financial/customer_data/legal，配置可调）：

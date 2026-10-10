@@ -7,7 +7,7 @@ orchestration/graph/cs_graph_node.py — Main Graph ↔ CS Graph 适配器
   3. 通过 build_cs_graph_result() 将 CSGraphState → CSGraphResult
   4. 将 CSGraphResult 映射回 Main State 字段
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §7.3
+设计参考: docs/domains/customer-service.md §7.3
 """
 from __future__ import annotations
 

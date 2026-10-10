@@ -6,7 +6,7 @@
  * 下行主通道：WebSocket /ws/cs/agent（ticket 一次性鉴权，断线指数退避重连）。
  * 降级：WS 未连接时回退 2s 轮询（transport fallback，不进业务逻辑）。
  * 上行：全走 HTTP（认领 / 发消息 / 关闭，X-API-Key 由 BFF 服务端注入）。
- * 事件语义见 docs/customer-service/演示沙盒方案-2026-09-17.md §七。
+ * 事件语义见 docs/customer-service/demo-sandbox.md §七。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BellRing, Headphones, Send, UserRound, Volume2, VolumeX, XCircle } from "lucide-react";

@@ -125,6 +125,35 @@ def test_stream_events_true_streaming_order(monkeypatch):
     assert finished["trace"].tags["answer_source"] == "reporter"
 
 
+def test_rag_progress_sse_reaches_primary_stream_without_planner():
+    """RAG Direct 的检索进度经 Runner 进入主 SSE，期间不经过 Planner。"""
+    from backend.orchestration.graph.sse_event_sink import emit_sse_progress
+
+    class RagDirectGraph(_FakeGraph):
+        def stream(self, initial_state, config=None):
+            emit_sse_progress(
+                node="rag_skill", phase="rag_search",
+                message="正在检索知识库并核验资料", tool="rag.search",
+            )
+            yield {"router": {"route_mode": "direct", "cs_context": {}}}
+            yield {"skill_executor": {"final_answer": "RAG 权威答案"}}
+
+    events = _collect_events(_make_system(RagDirectGraph([])))
+    progress = next(
+        event for event in events
+        if event["event"] == "log"
+        and event["data"].get("payload", {}).get("phase") == "rag_search"
+    )
+    done = next(event["data"] for event in events if event["event"] == "done")
+
+    assert progress["data"]["node"] == "rag_skill"
+    assert done["answer"] == "RAG 权威答案"
+    assert not any(
+        event["event"] == "status" and event["data"].get("node") == "planner"
+        for event in events
+    )
+
+
 def test_general_chat_streaming_keeps_final_answer_contract():
     """普通 General Chat 继续透传 delta，终态正文由 done.answer 定稿。"""
     sys_obj = _make_system(_FakeGraph(

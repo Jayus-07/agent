@@ -201,43 +201,14 @@ check_perf() {
 # 6. 文档状态
 # ==========================================================
 check_docs() {
-    sec "6. 文档状态（ADR 索引 + CHANGELOG + structure.md）"
+    sec "6. 文档导航"
 
-    # 6.1 ADR 索引
-    if [ -f "docs/architecture/adr/README.md" ]; then
-        local n=$(grep -c "^| \[0" docs/architecture/adr/README.md)
-        ok "ADR 索引包含 $n 篇 ADR"
+    if [[ -f "docs/README.md" \
+        && -f "docs/architecture/ai-runtime.md" \
+        && -f "docs/development/testing-guide.md" ]]; then
+        ok "当前文档导航与架构/测试入口存在"
     else
-        fail "ADR 索引缺失"
-    fi
-
-    # 6.2 ADR-0002 状态（取 markdown 表格第 3 列）
-    if [ -f "docs/architecture/adr/0002-ragchain-decomposition.md" ]; then
-        status=$(grep -m1 "^| \*\*状态\*\*" docs/architecture/adr/0002-ragchain-decomposition.md \
-            | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $3); print $3}')
-        if [[ "$status" == *"Accepted"* ]] && [[ "$status" != *"Partially"* ]]; then
-            ok "ADR-0002 状态: $status"
-        elif [[ "$status" == *"Partially"* ]]; then
-            warn "ADR-0002 状态: $status（PR-1.4 完成后改 Accepted）"
-        else
-            warn "ADR-0002 状态: $status"
-        fi
-    fi
-
-    # 6.3 production-readiness.md（路线图 + O1/R1 状态）
-    if [ -f "docs/architecture/production-readiness.md" ]; then
-        ok "生产化路线图存在"
-        # 检查 O1 / R1 是否勾掉（行内含 [x] 紧跟 O1/R1）
-        if grep -E "^\| O1 \|.*\[x\]" docs/architecture/production-readiness.md >/dev/null 2>&1; then
-            ok "O1（Prometheus）路线图已勾掉"
-        else
-            warn "O1（Prometheus）路线图未勾掉"
-        fi
-        if grep -E "^\| R1 \|.*\[x\]" docs/architecture/production-readiness.md >/dev/null 2>&1; then
-            ok "R1（LLM 限流）路线图已勾掉"
-        else
-            warn "R1（LLM 限流）路线图未完全勾掉（需 PR-2.4 接 429）"
-        fi
+        fail "当前文档导航或必要开发入口缺失"
     fi
 
     # 6.4 经验 memory

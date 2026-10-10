@@ -52,7 +52,7 @@ npm test -- <测试文件>
 npx tsc --noEmit
 ~~~
 
-前端测试和类型检查按改动目录选择；上述三个目录统一使用 Vitest 与 `tsc --noEmit`。已退役的小程序目录 `frontend-mp/` 不再保留构建脚本。
+前端测试和类型检查按改动目录选择；`frontend-mp/` 使用自己的 Taro 构建脚本，不套用上述 Vitest 命令。
 
 ## RAG 与 SQL 评测
 

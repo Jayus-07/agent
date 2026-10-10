@@ -200,6 +200,33 @@ def test_embedded_rag_answer_is_persisted_only_by_parent_runner(monkeypatch):
     assert memory.calls == []
 
 
+def test_remote_chat_rag_can_defer_memory_to_parent_runner(monkeypatch):
+    """HTTP 嵌套调用不共享 Trace Context，仍必须能显式延后 Memory 落库。"""
+    chain = _stub_chain()
+
+    class MemorySpy:
+        def __init__(self):
+            self.calls = []
+
+        def end_turn(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    memory = MemorySpy()
+    chain._memory = memory
+    monkeypatch.setattr(chain, "_evaluate", lambda answer, _docs: answer)
+    trace, t0 = _start_trace("remote-chat-rag")
+    trace._rag_embedded = False
+    monkeypatch.setattr(chain, "_finish", lambda *_args: None)
+
+    answer = chain._respond(
+        {"context": _make_docs(), "answer": "有证据支持的答案"},
+        trace, "问题", "synthetic", t0, persist_memory=False,
+    )
+
+    assert answer.startswith("有证据支持的答案")
+    assert memory.calls == []
+
+
 def _start_trace(name: str):
     """起一个 trace + root span，返回 (trace, t0)。"""
     from backend.observability.tracer import trace_collector

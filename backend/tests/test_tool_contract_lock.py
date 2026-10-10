@@ -8,7 +8,7 @@
 3. 变更分类规则穷举：BREAKING / DEGRADED / COMPATIBLE 每条规则至少 1 例，
    整体 classification 取最重。
 
-分类规则口径见 docs/2026-09-30-企业级治理技术债修复台账.md D1：
+分类规则契约：
 BREAKING=删Tool/删参数/参数类型变/可选→必填；DEGRADED=新增必填/默认值变/
 output_type 变；COMPATIBLE=新增Tool/新增可选/必填→可选/描述变/归属变。
 """

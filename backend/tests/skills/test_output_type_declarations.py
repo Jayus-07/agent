@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tests/skills/test_output_type_declarations.py — STOP G M5 契约守卫
 
-锁两件事（docs/architecture/STOP_G_Preparation_Audit.md §5.1 M1/M5）：
+锁定 docs/development/tool-skill-guide.md 中的输出类型契约：
   1. 全部 12 个 Skill 必须显式声明 output_type（text|structured），禁止隐式默认
      ——隐式声明会让「Tool 实际返回封套但边界按 text 放行」的漂移静默发生
      （map.lookup 裸 JSON 透出缺陷即由此而来）；

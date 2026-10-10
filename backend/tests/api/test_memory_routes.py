@@ -100,6 +100,37 @@ class _FakeService:
         self.seen_memory_id = str(kwargs.get("memory_id") or "")
         return self._payload
 
+    async def get_profile(
+        self, user_id: str = "default", tenant_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def get_pending_profile(
+        self, user_id: str = "default", tenant_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def verify_profile_memory(
+        self, user_id: str = "default", tenant_id: str = "",
+        memory_id: str = "", **_: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        self.seen_memory_id = memory_id
+        return self._payload
+
+    async def delete_profile_memory(
+        self, user_id: str = "default", tenant_id: str = "", **kwargs: object,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        self.seen_memory_id = str(kwargs.get("memory_id") or "")
+        return self._payload
+
     async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
         self.seen_user_id = user_id
         return self._payload

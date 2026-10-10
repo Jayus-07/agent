@@ -302,7 +302,12 @@ class TestL5FaultBoundary:
 class TestHardGate:
     def test_oversized_current_question_rejected_zero_provider_calls(
             self, monkeypatch):
-        """12 万字符当前问题：明确错误 + provider spy 调用数为 0。"""
+        """12 万字符当前问题 + 关闭软降级：明确错误 + provider spy 调用数为 0。
+
+        D-9（commit 8b4b41f）后 overflow 默认走优雅降级截断，硬拒由
+        CONTEXT_BUDGET_SOFT_OVERFLOW=false 回退。本用例锁定回退态下的
+        硬门禁契约：超限必须报错且**一次都不能**打 provider。
+        """
         from backend.infra.llm import proxy
 
         calls: list = []
@@ -312,6 +317,7 @@ class TestHardGate:
                 calls.append(args)
                 return AIMessage(content="ok")
 
+        monkeypatch.setenv("CONTEXT_BUDGET_SOFT_OVERFLOW", "false")
         monkeypatch.setattr(proxy, "_resolve_active_llm", lambda: _SpyLLM())
         monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda u: None)
         _small_window(monkeypatch, window=512)
@@ -324,6 +330,40 @@ class TestHardGate:
         assert calls == [], "provider 被调用 = 硬门禁失守"
         assert ei.value.code == "context_length_exceeded"
         assert ei.value.used_tokens > 512
+
+    def test_oversized_current_question_soft_truncates_by_default(
+            self, monkeypatch):
+        """同一超限输入在默认（软降级）下：截断放行，且问题不被整段吞掉。
+
+        D-9 的取舍是"不把大召回打成 500"，但必须保留 system 与最新用户
+        消息的可辨识内容——本用例防止实现退化成"清空消息后照常发"。
+        """
+        from backend.infra.llm import proxy
+
+        calls: list = []
+
+        class _SpyLLM:
+            def invoke(self, *args, **kwargs):
+                calls.append(args)
+                return AIMessage(content="ok")
+
+        monkeypatch.setenv("CONTEXT_BUDGET_SOFT_OVERFLOW", "true")
+        monkeypatch.setattr(proxy, "_resolve_active_llm", lambda: _SpyLLM())
+        monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda u: None)
+        _small_window(monkeypatch, window=512)
+
+        big_q = "问" * 120_000
+        msgs = [SystemMessage(content="系统提示"),
+                HumanMessage(content=big_q)]
+        proxy.llm.invoke(msgs)
+
+        assert len(calls) == 1, "软降级应当放行一次调用"
+        sent = list(calls[0][0])
+        assert sent, "软降级不得把消息清空"
+        assert isinstance(sent[0], SystemMessage), "system 指令被丢弃"
+        assert sent[0].content == "系统提示"
+        assert any(isinstance(m, HumanMessage) and m.content
+                   for m in sent), "最新用户消息被整体丢弃"
 
     def test_system_plus_pin_over_budget_rejected(self, monkeypatch):
         """System＋当前问题＋业务 pin 总和超预算 → manager 报 overflow，
@@ -347,7 +387,14 @@ class TestHardGate:
         assert "当前问题" in kept_text, "当前问题被丢弃"
 
     def test_overflow_prepared_rejected_at_proxy(self, monkeypatch):
-        """manager 返回 overflow=True → proxy 必须抛错（不放行）。"""
+        """overflow 且关闭软降级 → proxy 必须抛错（硬门禁不放行）。
+
+        背景（D-9，commit 8b4b41f）：overflow 的**默认**终局已从硬拒改为
+        优雅降级截断（CONTEXT_BUDGET_SOFT_OVERFLOW 默认 true），
+        因为多文档大召回整体硬拒会造成 500。硬拒路径仍然保留，
+        由该开关回退——本用例锁定"关掉软降级时门禁必须真的拒发"，
+        软降级路径由下一条用例覆盖。
+        """
         from backend.context_budget import context_budget as budget_manager
         from backend.context_budget.models import ContextUsage, PreparedContext
         from backend.infra.llm import proxy
@@ -358,6 +405,7 @@ class TestHardGate:
             return PreparedContext(messages=kwargs.get("messages") or [],
                                    usage=usage, overflow=True)
 
+        monkeypatch.setenv("CONTEXT_BUDGET_SOFT_OVERFLOW", "false")
         monkeypatch.setattr(budget_manager, "prepare_llm_context", _overflow)
         # 预算归零 → 快路径必不通过 → prepare 的 overflow 结果被门禁消费
         monkeypatch.setattr(
@@ -365,6 +413,35 @@ class TestHardGate:
         msgs = [SystemMessage(content="s"), HumanMessage(content="q")]
         with pytest.raises(ContextBudgetExceededError):
             proxy._preflight_context((msgs,))
+
+    def test_overflow_prepared_soft_truncates_by_default(self, monkeypatch):
+        """overflow 且软降级开启（默认）→ 截断后放行，且保留 system + 最新消息。
+
+        D-9 的契约：宁可降级截断也不把整轮请求打成 500，但**不能丢**
+        system 指令与当前用户问题——否则模型会在无指令、无问题的状态下作答。
+        """
+        from backend.context_budget import context_budget as budget_manager
+        from backend.context_budget.models import ContextUsage, PreparedContext
+        from backend.infra.llm import proxy
+
+        def _overflow(**kwargs):
+            usage = ContextUsage(used_tokens=9999, input_budget=100,
+                                 remaining_tokens=0, usage_ratio=99.99)
+            return PreparedContext(messages=kwargs.get("messages") or [],
+                                   usage=usage, overflow=True)
+
+        monkeypatch.setenv("CONTEXT_BUDGET_SOFT_OVERFLOW", "true")
+        monkeypatch.setattr(budget_manager, "prepare_llm_context", _overflow)
+        monkeypatch.setattr(
+            budget_manager, "get_input_budget", lambda **k: 100000)
+        msgs = [SystemMessage(content="系统指令"), HumanMessage(content="当前问题")]
+        out = proxy._preflight_context((msgs,))
+        kept = out[0]
+        assert kept, "软降级不得把消息清空"
+        assert isinstance(kept[0], SystemMessage), "system 指令被丢弃"
+        assert kept[0].content == "系统指令"
+        assert any(isinstance(m, HumanMessage) and "当前问题" in str(m.content)
+                   for m in kept), "最新用户消息被丢弃"
 
     def test_preflight_failure_fails_closed(self, monkeypatch):
         """预检自身故障 = 无法证明预算内 → 拒发（不再原样放行）。"""

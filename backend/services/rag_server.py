@@ -16,9 +16,10 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
     python -m uvicorn backend.services.rag_server:app --host 0.0.0.0 --port 8090
 """
 import threading
+import re
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -115,6 +116,9 @@ class AskRequest(BaseModel):
     # rag-service 侧落库的归属主体；空 = 未声明（保持旧行为，不建预算）。
     user_id: str = Field("", description="调用方用户 ID（预算归属）")
     tenant_id: str = Field("", description="调用方租户 ID（预算归属）")
+    # 默认保持独立 RAG 问答的既有 Memory 行为；主聊天图显式关闭，
+    # 由父 Runner 统一保存 Reporter 的最终答案。
+    persist_memory: bool = Field(True, description="是否由 RAG 服务写入会话记忆")
 
 
 class RetrieveRequest(BaseModel):
@@ -284,7 +288,11 @@ def _start_index_published_listener() -> None:
 # ==================== 端点 ====================
 
 @app.post("/ask")
-def ask(req: AskRequest) -> dict[str, Any]:
+def ask(
+    req: AskRequest,
+    parent_trace_id: str | None = Header(default=None, alias="X-Agent-Parent-Trace-Id"),
+    child_trace_id: str | None = Header(default=None, alias="X-Agent-Child-Trace-Id"),
+) -> dict[str, Any]:
     """完整问答。返回 {answer, meta}，meta 对齐 RAGPipeline.last_answer_meta。"""
     try:
         pipeline = _get_pipeline()
@@ -304,6 +312,26 @@ def ask(req: AskRequest) -> dict[str, Any]:
             _budget_bound = True
         except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞问答
             logger.warning(f"[RAG /ask] 预算绑定失败（放行）: {e}")
+    parent_id = (
+        parent_trace_id
+        if isinstance(parent_trace_id, str)
+        and re.fullmatch(r"[0-9a-fA-F]{12}", parent_trace_id)
+        else None
+    )
+    child_id = (
+        child_trace_id
+        if isinstance(child_trace_id, str)
+        and re.fullmatch(r"[0-9a-f]{12}", child_trace_id)
+        else None
+    )
+    from backend.observability.tracer import (
+        bind_external_child_trace_id,
+        bind_external_parent_trace_id,
+        reset_external_child_trace_id,
+        reset_external_parent_trace_id,
+    )
+    parent_token = bind_external_parent_trace_id(parent_id)
+    child_token = bind_external_child_trace_id(child_id)
     try:
         answer = pipeline.ask(
             question=req.question,
@@ -316,8 +344,11 @@ def ask(req: AskRequest) -> dict[str, Any]:
             roles=tuple(req.roles),
             user_id=req.user_id,
             tenant_id=req.tenant_id,
+            persist_memory=req.persist_memory,
         )
     finally:
+        reset_external_child_trace_id(child_token)
+        reset_external_parent_trace_id(parent_token)
         if _budget_bound:
             try:
                 from backend.infra.llm.budget import clear_request_budget

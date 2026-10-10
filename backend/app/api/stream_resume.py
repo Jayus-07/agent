@@ -1,6 +1,6 @@
 """app/api/stream_resume.py — /chat/stream 断线恢复注册表（F2 Resume Protocol）
 
-语义（冻结，详见 docs/2026-09-25-F2-SSE恢复协议-审计与设计.md）：
+语义（冻结，详见 docs/architecture/Frozen-Contracts.md#sse-与事件）：
   - 传输 at-least-once：事件带 (stream_id, seq) 单调序号，重放可能重复；
     前端按 seq 去重 → UI effectively-once。不构造 exactly-once 传输。
   - 断连不中止：客户端断开只脱离订阅，producer 继续执行并把事件写入

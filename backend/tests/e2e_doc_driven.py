@@ -1,7 +1,7 @@
 """端到端测试 — 文档驱动 (v2，预先 mock LLM)
 
-依据 docs/architecture/rag-evidence-gate.md §1.1 列出的 5 个 P0/P1 失效模式，
-构造真实 RAG 调用，验证 Evidence Gate 改造后行为是否与文档承诺一致。
+依据 docs/domains/rag.md 与当前 Evidence Gate 契约，
+构造真实 RAG 调用，验证无证据、拒答与引用行为。
 
 修复 v1：原版 monkey-patch 太晚，RAGChain.__init__ 已经触发了 build_deepseek。
 v2 策略：在 import RAGPipeline 之前完成所有 LLM mock，避免真实网络/依赖。

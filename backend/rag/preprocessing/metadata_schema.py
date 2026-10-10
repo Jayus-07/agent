@@ -1,12 +1,11 @@
 """metadata_schema.py — 元数据统一抽取 JSON Schema v1（Pydantic v2）。
 
-规划（docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md）阶段 2.1：
 统一 schema 是唯一抽取契约——LLM 输出、级联路由各层产物、基线评估脚本
 的预测都校验到同一模型上。
 
 枚举治理：doc_type 枚举与规则词表 domain_data.DOC_TYPE_RULES 一一映射，
 由 tests/rag/test_metadata_schema.py 一致性测试锁定；新增类型必须同时改
-DOC_TYPES 与 DOC_TYPE_RULES（schema 演进流程，规划 §2.2 N6），禁止只改一处。
+DOC_TYPES 与 DOC_TYPE_RULES，禁止只改一处。
 """
 from __future__ import annotations
 

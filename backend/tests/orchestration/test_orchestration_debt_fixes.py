@@ -141,7 +141,7 @@ def test_router_cache_scoped_by_context(monkeypatch):
             }
 
     class FakeResolver:
-        def resolve(self, domain, capability, override):
+        def resolve(self, domain, capability, override, **_kwargs):
             return type(
                 "Decision", (), {
                     "mode": "direct", "target": "sql.query",

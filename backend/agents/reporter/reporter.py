@@ -42,6 +42,12 @@ def strip_rag_meta(text: str) -> str:
 
 def reporter_node(state: dict) -> dict:
     """LangGraph 节点适配器: state → generate_final_answer → {"final_answer": ...}"""
+    from backend.orchestration.graph.sse_event_sink import emit_sse_progress
+
+    emit_sse_progress(
+        node="reporter", phase="answer_generation",
+        message="正在整理最终答复",
+    )
     # ── L1 弱命中追问（2026-09-19 拒答转追问）：clarify 模式下不执行任何
     # 汇总/LLM 逻辑；追问卡片事件已由 router 节点原始输出发出，这里只出
     # 一句如实告知的短文案（"_clarify" 不重复附带，防双卡片）
@@ -463,6 +469,8 @@ _FAILURE_TEXT = {
 
 def _failure_text(result: dict) -> str:
     kind = _result_kind(result)
+    if kind == "permission_denied" and result.get("capability") == "sql.query":
+        return "当前账号无权执行该查询或访问相关数据，请联系管理员申请相应的数据访问权限后重试。"
     if (kind == "approval_required"
             and isinstance(result.get("output"), str)
             and result.get("output").strip()):
@@ -491,13 +499,20 @@ def _render_failure_summary(question: str, step_results: dict) -> str:
     for sr in step_results.values():
         kind = _result_kind(sr)
         label = _user_step_label(sr)
-        rows.append(f"- {label}：{_FAILURE_TEXT.get(kind, _FAILURE_TEXT['failed'])}")
+        rows.append(f"- {label}：{_failure_text(sr)}")
         error = str(sr.get("error") or "")
         if error:
             logger.warning("[Reporter] step 执行未完成: %s", error[:200])
     if not rows:
         return "## 查询未完成\n\n本轮没有可展示的结果，请调整问题后重试。"
-    if all(kind == "no_evidence" for kind in kinds if kind):
+    sql_permission_denied = (
+        kinds
+        and all(kind == "permission_denied" for kind in kinds)
+        and all(sr.get("capability") == "sql.query" for sr in step_results.values())
+    )
+    if sql_permission_denied:
+        heading = "## 权限不足"
+    elif all(kind == "no_evidence" for kind in kinds if kind):
         heading = "## 抱歉"
     else:
         heading = "## 查询未完成"
@@ -679,7 +694,7 @@ def render_step_results_deterministically(step_results: dict) -> str:
         if kind in {"permission_denied", "approval_required", "timeout", "unavailable",
                     "rate_limited", "invalid_request", "failed", "skipped",
                     "no_evidence"}:
-            sections.append(f"- {label}：{_FAILURE_TEXT[kind]}")
+            sections.append(f"- {label}：{_failure_text(sr)}")
             continue
         output = sr.get("output")
         rendered = render_result_for_user(label, sr.get("capability", ""), output)
@@ -691,7 +706,18 @@ def render_step_results_deterministically(step_results: dict) -> str:
             sections.append(f"- {label}：{_FAILURE_TEXT['failed']}")
     if not sections:
         return "## 查询未完成\n\n本轮没有可展示的结果，请调整问题后重试。"
-    return "## 查询结果\n\n" + "\n\n---\n\n".join(sections)
+    results = list((step_results or {}).values())
+    sql_permission_denied = (
+        results
+        and all(_result_kind(sr) == "permission_denied" for sr in results)
+        and all(sr.get("capability") == "sql.query" for sr in results)
+    )
+    heading = (
+        "## 权限不足"
+        if sql_permission_denied
+        else "## 查询结果"
+    )
+    return heading + "\n\n" + "\n\n---\n\n".join(sections)
 
 
 def _is_step_successful(result: dict) -> bool:

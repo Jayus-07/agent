@@ -16,7 +16,7 @@ P7 把它补成一等状态。
 纯函数模块 — 不持有状态，只校验转换并返回结果。
 持久化由 HandoffStore 负责。
 
-设计参考: docs/customer-service/design.md §10
+设计参考: docs/domains/customer-service.md §10
 """
 from __future__ import annotations
 

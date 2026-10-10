@@ -1,6 +1,6 @@
 """node_runtime/models.py — NodeResult 通用生命周期结果
 
-STOP F 冻结约束（docs/architecture/STOP_F_Preparation_Audit.md §6 风险5）：
+公共结果契约（docs/architecture/ai-runtime.md「Node Runtime」）：
 仅允许 status / error / duration_ms / data 四个字段，业务字段
 （CS 的 response_draft/evidence、Travel 的 data/notes 语义）禁入——
 域结果契约（ExpertResult / TravelExpertResult）各自保留在 experts/base.py；

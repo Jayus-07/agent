@@ -5,8 +5,18 @@
 
 from typing import List, Tuple, Optional
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+
+def _timed_retrieval(path_timings: dict, path: str, fn, *args, **kwargs):
+    """记录并行召回分支自身耗时，不改变候选集或 Evidence Gate 输入。"""
+    started = time.perf_counter()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        path_timings[path] = round((time.perf_counter() - started) * 1000, 1)
 
 
 def enhanced_hybrid_retrieve(
@@ -73,6 +83,7 @@ def _enhanced_hybrid_retrieve_impl(
                f"k={effective_k}, query_type={qroute['query_type']}")
 
     path_results: list[tuple[list, float]] = []
+    path_timings: dict[str, float] = {}
     metrics = {
         "rule_hits": 0,
         "dense_hits": 0,
@@ -88,19 +99,28 @@ def _enhanced_hybrid_retrieve_impl(
 
     # Path A: Rule-Based (仅当启用时)
     if rule_retriever:
-        rule_future = submit_rag_task("outer", rule_retriever.retrieve, query, k=int(effective_k * 0.3))
+        rule_future = submit_rag_task(
+            "outer", _timed_retrieval, path_timings, "rule",
+            rule_retriever.retrieve, query, k=int(effective_k * 0.3),
+        )
         metrics["rule_available"] = True
     else:
         rule_future = None
         metrics["rule_available"] = False
 
     # Path B: Dense Vector Search
-    dense_future = submit_rag_task("outer", vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
-                                   metadata_filter=metadata_filter, expanded_queries=expanded_queries)
+    dense_future = submit_rag_task(
+        "outer", _timed_retrieval, path_timings, "dense",
+        vector_retriever.retrieve, query, k=effective_k, doc_ids=doc_ids,
+        metadata_filter=metadata_filter, expanded_queries=expanded_queries,
+    )
     metrics["dense_available"] = True
 
     # Path C: Sparse Search (BM25+TF-IDF)
-    sparse_future = submit_rag_task("outer", bm25_retriever.invoke, query) if bm25_retriever else None
+    sparse_future = submit_rag_task(
+        "outer", _timed_retrieval, path_timings, "sparse",
+        bm25_retriever.invoke, query,
+    ) if bm25_retriever else None
     if sparse_future:
         metrics["sparse_available"] = True
 
@@ -150,6 +170,7 @@ def _enhanced_hybrid_retrieve_impl(
         fallback_docs = hybrid_retrieve(query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids, rrf_k=rrf_k, metadata_filter=metadata_filter, expanded_queries=expanded_queries)
         metrics["fallback_used"] = True
         metrics["retrieved_chunks"] = len(fallback_docs)
+        metrics["path_elapsed_ms"] = dict(path_timings)
         trace_collector.end_span(span, metrics={"status": "fallback", **metrics})
         # 与正常出口保持同一 meta 形状；保留旧键以兼容早期调用方。
         return fallback_docs, {
@@ -161,7 +182,9 @@ def _enhanced_hybrid_retrieve_impl(
         }
     
     # Step 5: RRF 融合（各路径独立计分，保留跨路径一致性信号）
+    fusion_started = time.perf_counter()
     merged_docs = _ultimate_rrf_fusion(path_results, rrf_k, k, query=query)
+    metrics["fusion_elapsed_ms"] = round((time.perf_counter() - fusion_started) * 1000, 1)
     
     # Step 6: 计算综合置信度
     overall_confidence = 0.0
@@ -189,6 +212,7 @@ def _enhanced_hybrid_retrieve_impl(
 
     trace_collector.end_span(span, metrics={
         **metrics,
+        "path_elapsed_ms": dict(path_timings),
         "retrieved_chunks": len(merged_docs),
         "total_docs": len(merged_docs),
         "overall_confidence": round(overall_confidence, 4),

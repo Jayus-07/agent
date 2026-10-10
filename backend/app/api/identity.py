@@ -1,4 +1,4 @@
-"""app/api/identity.py — 请求身份解析的单一入口（P3，docs/auth/03 五之二第 1 条）
+"""app/api/identity.py — 请求身份解析的单一入口（P3；身份协议见 docs/contracts/identity-header-protocol.md）
 
 此前身份解析散落各路由且口径不一：chat 是「请求体 user_id 优先、
 TRUST_USER_HEADER 时头次之」（请求体可伪造），sql 是「开关+头」，

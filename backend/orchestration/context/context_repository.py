@@ -1,6 +1,6 @@
 """context_repository.py — ConversationContext 分布式仓库（STOP G1/G2）。
 
-职责冻结（docs/2026-09-24-TravelDistributedContext-STOPG0-审计与设计.md §六）：
+职责冻结（docs/architecture/ai-runtime.md#上下文预算与跨请求状态 §六）：
 
     ConversationContextRepository (Protocol)
         ├── MemoryConversationContextRepository   单测 / 本地开发 / 显式降级

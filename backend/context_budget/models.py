@@ -1,6 +1,6 @@
 """context_budget.models — 上下文预算数据模型
 
-基础版数据模型（规格见 docs/2026-09-22-context-budget-management-实施规格.md）：
+基础版数据模型（规格见 docs/architecture/ai-runtime.md#上下文预算与跨请求状态）：
 
 - ContextUsage:     上下文用量快照（前端 / 业务层不自行重复计算）
 - ToolResultRef:    L1 工具结果引用（preview + 未来 ArtifactStore 的 artifact_id 预留）

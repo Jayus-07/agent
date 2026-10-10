@@ -1,7 +1,7 @@
 /**
  * lib/auth.ts — 登录态管理（对接网关 + auth-service JWT 体系）
  *
- * 契约（docs/auth/02-详细架构设计.md + Enterprise_OA common-api）：
+ * 身份契约见 docs/contracts/identity-header-protocol.md；实现导航见 docs/auth/README.md。
  * - POST /api/auth/login  {username, password, deviceId?} → Result{data: LoginVO}
  *   LoginVO: { token, refreshToken(始终为 null，改走 HttpOnly Cookie),
  *              tokenType: "Bearer", expiresIn(ms), userInfo }
@@ -385,4 +385,3 @@ export function clearSavedUsername(): void {
     /* ignore */
   }
 }
-

@@ -3,7 +3,7 @@
 log_start → timer → invoke（可选 TimeoutStrategy）→ exception policy →
 result wrap → log_done
 
-定位（docs/architecture/STOP_F_Preparation_Audit.md §4/§7）：这是专家/域内
+定位（docs/architecture/ai-runtime.md「Node Runtime」）：这是专家/域内
 节点层的公共生命周期，不是第二套 Tool 治理——retry/breaker/bulkhead 属
 core/tool_runtime，专家层唯一的执行关切是 timeout。runner 对业务零感知：
 结果包装（域 TypedDict）、遥测形态（CS metrics-only / Travel span）、

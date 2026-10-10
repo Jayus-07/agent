@@ -58,6 +58,13 @@ class MetaData(_Loose):
 class StatusData(_Loose):
     node: str
     ts: float
+    # 新状态帧在节点入口/出口各一条；旧客户端与旧历史仍可只含 node/ts。
+    phase: str | None = None
+    execution_id: str | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    duration_ms: float | None = None
+    status: str | None = None
 
 
 class LogData(_Loose):

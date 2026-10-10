@@ -130,14 +130,21 @@ def _predecessor_capability(cap_name: str) -> str | None:
     return None
 
 
-def _resolved_params(state: dict) -> dict:
+def _resolved_params(state: dict, capability: str = "") -> dict:
     """本次 direct 步骤的执行参数。
 
     tool_selector FC 选参成功时用 resolved_params（模型抽取的
     report_type/enum 等）；未设置/为空时回退旧行为（question 透传，
     参数抽取交给 skill 内部 NL2SQL）。
     """
-    return resolved_params(state) or {"question": state.get("question", "")}
+    params = resolved_params(state)
+    if params:
+        return params
+    # 依赖型能力将输入从 previous_outputs 注入；通用 question 回退会成为
+    # 未声明参数，并且不能替代 schema 中必需的 auto 字段。
+    if capability and _predecessor_capability(capability):
+        return {}
+    return {"question": state.get("question", "")}
 
 
 def _run_skill_step(skill_nodes: dict, state: dict, step_id: str,
@@ -253,7 +260,7 @@ def skill_executor_node(state: dict) -> dict:
     # 构造 step（供 reporter 读取 + BaseSkill 需要 plan.nodes[step_id]）
     step_id = "direct_1"
     step_results: dict = {}
-    main_params = _resolved_params(state)
+    main_params = _resolved_params(state, cap_name)
 
     # fix f13（重构版）：business.analyze 等依赖型 capability 在 direct 模式
     # 缺前置输出，先自动补前置步骤（sql.query 拉数）再执行本体，避免必败。

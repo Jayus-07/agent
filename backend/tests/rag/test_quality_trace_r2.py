@@ -1,6 +1,6 @@
 """R2 质量留痕改造测试（R-P0-3 原文可追溯 + R-P1-3 过滤明细）。
 
-对应 docs/RAG质量专项-01-审计报告.md §三 P0/P1 修复项：
+覆盖检索质量失败路径的 Trace 记录与错误分类：
 - DocumentNode 新增 raw_text / cleaning_operations 字段（位置构造兼容）
 - pipeline.parse_and_chunk 清洗前留存原文 + 清洗操作留痕
 - indexer._filter_quality_summary 汇总串格式

@@ -3,7 +3,7 @@
 知识问答 Expert：调用 CSKnowledgeService 执行 RAG 问答。
 从 graph/nodes.py cs_knowledge_node 提取核心逻辑。
 
-设计参考: docs/customer-service/langgraph-multi-expert-design.md §6.1
+设计参考: docs/domains/customer-service.md §6.1
 """
 from __future__ import annotations
 
