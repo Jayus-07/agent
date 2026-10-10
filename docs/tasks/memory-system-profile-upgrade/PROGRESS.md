@@ -81,4 +81,4 @@
 - `backend/memory/session.py` 在恢复 Human/AI 历史消息时保留 `chat_messages.id` 为 LangChain message ID；`backend/memory/short_term.py` 按稳定 ID 去重，正文相同但 ID 不同的消息仍分别保留。L1 使用 `BaseMessage`，因此 ToolMessage 可在缓冲中保持类型并接受相同 ID 去重；持久化工具调用元数据仍未实现。
 - 新增 `backend/tests/memory/test_l1_message_identity.py`。实际运行 `python -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_summary_visibility.py backend/tests/memory/test_stop_e_summary_contract.py backend/tests/orchestration/graph/test_stream_events_flow.py backend/tests/rag/test_chain.py -q --no-cov`：55 passed、6 skipped，166.51 秒。未运行全量回归或真实 Agent E2E。
 - 集成复核后将数据库 ID 命名空间限定为 `chat-message:`，再运行 `python -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_summary_visibility.py -q --no-cov`：7 passed，未跳过。
-- 本次代码与文档改动尚未提交；L1 消息/轮次配置、当前请求与 Graph State 的幂等关系、取消/失败恢复和真实 E2E 仍待验证。
+- 本次实现提交：`5f12747`（`fix(memory): preserve stable L1 message identities`）。L1 消息/轮次配置、当前请求与 Graph State 的幂等关系、取消/失败恢复和真实 E2E 仍待验证。
