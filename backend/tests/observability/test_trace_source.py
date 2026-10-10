@@ -22,6 +22,19 @@ class TestClassify:
     def test_travel_domain_tag(self):
         assert classify_trace_source("agent", {"runtime_domain": "travel"}) == SOURCE_TRAVEL
 
+    def test_travel_trace_with_runtime_domain_is_classified_as_travel(self):
+        travel_tags = {
+            "travel_run_id": "travel-test",
+            "travel_destination": "杭州",
+            "runtime_domain": "travel",
+        }
+        assert classify_trace_source("agent", travel_tags) == SOURCE_TRAVEL
+
+    def test_travel_business_tags_without_runtime_domain_still_match_ai_fallback(self):
+        # 分类器只读运行时来源标签；旅游写入侧必须补齐 runtime_domain。
+        travel_tags = {"travel_run_id": "travel-test", "travel_destination": "福州"}
+        assert classify_trace_source("agent", travel_tags) == SOURCE_AI_ASSISTANT
+
     @pytest.mark.parametrize("tags", [
         {"runtime_domain": "customer_service"},
         {"domain": "customer_service"},  # 客服窗口旧标签口径（无 runtime_domain）

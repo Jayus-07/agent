@@ -59,6 +59,10 @@ def _maybe_cancel_active_run(state: dict, conversation_id: str) -> dict | None:
             from backend.observability.tracer import trace_collector
             trace = trace_collector.current()
             if trace is not None:
+                # runtime_domain 是 trace_source 三分类（旅游/客服/AI 助手）的
+                # 唯一依据。旅游链路不走主图 Router，没有 record_router_decision
+                # 写 runtime_* 归因，必须显式声明，否则会被判成 AI 助手。
+                trace.tags["runtime_domain"] = "travel"
                 trace.tags["travel_status"] = "cancelled"
                 trace.tags["travel_resume_mode"] = "cancel"
                 trace.tags["travel_run_id"] = run_id
@@ -360,6 +364,10 @@ def _stamp_execution_tags(final_state: dict, result: dict,
         trace = trace_collector.current()
         if trace is None:
             return
+        # runtime_domain 是 trace_source 三分类（旅游/客服/AI 助手）的唯一
+        # 依据。旅游链路不走主图 Router，没有 record_router_decision 写
+        # runtime_* 归因，必须在此显式声明，否则会被判成 AI 助手。
+        trace.tags["runtime_domain"] = "travel"
         trace.tags["travel_status"] = result.get("status", "")
         from backend.travel.trace_semantics import build_trace_semantics
 
