@@ -32,24 +32,26 @@ def _context_ids() -> tuple[str, str, str]:
 
 
 @tool
-def memory_search_tool(query: str, top_k: int = 5, domain: str = "general") -> str:
+def memory_search_tool(query: str, top_k: int = 5) -> str:
     """
     检索当前用户的长期记忆（L3，语义+混合检索）。
-    输入自然语言查询和用户明确指定的 domain（general/travel/customer_service/
-    knowledge/sql/business），返回该域及 user_global 记忆；默认仅查 general。
+    只检索可信请求入口域及 user_global 记忆；业务域来自服务端 RequestContext，
+    不接受模型参数选择，以免不同业务域的用户画像被交叉注入。
     适用场景：回答前确认用户的偏好/历史决定/背景事实（如"用户之前提过什么需求"）。
     """
     from backend.memory.manager import memory_manager
+    from backend.tools.session import get_tool_domain_hint
 
     if not query or not query.strip():
         return "❌ 错误: query 不能为空"
 
     session_id, user_id, tenant_id = _context_ids()
+    domain_hint = get_tool_domain_hint()
     try:
         facts = memory_manager.run_tool(
             lambda: memory_manager.service.search(
                 query.strip(), session_id, user_id=user_id, top_k=max(1, min(int(top_k), 10)),
-                tenant_id=tenant_id, domain=domain,
+                tenant_id=tenant_id, domain=domain_hint,
             )
         )
     except Exception as e:

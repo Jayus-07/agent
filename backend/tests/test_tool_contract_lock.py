@@ -75,6 +75,14 @@ class TestDerivationStability:
                 f"{name} 两次派生 hash 不一致（快照非确定性）"
             )
 
+    def test_repository_tool_modules_are_worktree_independent(self, snapshot):
+        """lock 的仓库内模块来源不绑定某台机器或某个 worktree 绝对路径。"""
+        for name, entry in snapshot["tools"].items():
+            module = entry["module"]
+            if module != "unknown":
+                assert not Path(module).is_absolute(), name
+                assert module.startswith("backend/"), name
+
     def test_args_schema_marks_required(self, snapshot):
         """required 语义抽查：已知契约（sql 必填 query；rag 可选 kb_id）。"""
         sql = snapshot["tools"].get("execute_sql_tool", {}).get("args_schema", {})

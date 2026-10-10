@@ -1,7 +1,7 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import DateTime, delete, func, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.memory.models.session import ChatMessage, ChatSession
@@ -130,7 +130,12 @@ class SessionRepository:
         """
         from sqlalchemy import and_, desc, or_
         limit = max(1, min(limit, 201))
-        sort_updated_at = func.coalesce(ChatSession.updated_at, ChatSession.created_at)
+        # 实际迁移列是 timestamp without time zone（写入值按 UTC 约定）；显式
+        # 保持游标比较为 timestamp，避免把列隐式转成 timestamptz 后发生时区偏移。
+        sort_updated_at = type_coerce(
+            func.coalesce(ChatSession.updated_at, ChatSession.created_at),
+            DateTime(timezone=False),
+        )
         q = (
             select(
                 ChatSession.session_id,
@@ -152,6 +157,8 @@ class SessionRepository:
             try:
                 from datetime import datetime as _dt
                 cursor = _dt.fromisoformat(before.replace("Z", "+00:00"))
+                if cursor.tzinfo is not None:
+                    cursor = cursor.astimezone(timezone.utc).replace(tzinfo=None)
                 if before_session_id:
                     q = q.where(or_(
                         sort_updated_at < cursor,

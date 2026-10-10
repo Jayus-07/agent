@@ -643,7 +643,8 @@ class GraphRunner:
         from backend.security.authorization import widest_data_scope
         request_ctx = RequestContext(
             session_id=session_id, user_id=user_id, kb_id=kb_id,
-            tenant_id=tenant_id, idempotency_key=idempotency_key,
+            tenant_id=tenant_id, domain_hint=domain_hint,
+            idempotency_key=idempotency_key,
             department=department, permissions=permissions,
             roles=tuple(roles),
             data_scope=widest_data_scope(tuple(roles)) or "",

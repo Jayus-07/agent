@@ -34,6 +34,8 @@ _current_user_id: ContextVar[str] = ContextVar("tool_user_id", default="")
 # 当前请求租户身份：只接受入口解析后的可信值；空值表示未声明，
 # 下游不得将其静默替换成共享租户。
 _current_tenant_id: ContextVar[str] = ContextVar("tool_tenant_id", default="")
+# 当前请求的可信业务域提示；记忆 Tool 用它过滤 user_domain 记忆，模型参数不可覆盖。
+_current_domain_hint: ContextVar[str] = ContextVar("tool_domain_hint", default="")
 # 客户端幂等键（Idempotency-Key）；未提供时由业务工具从请求体指纹派生。
 _current_idempotency_key: ContextVar[str] = ContextVar(
     "tool_idempotency_key", default=""
@@ -122,6 +124,15 @@ def get_tool_tenant_id() -> str:
     return _current_tenant_id.get()
 
 
+def set_tool_domain_hint(domain_hint: str) -> None:
+    _current_domain_hint.set(domain_hint or "")
+
+
+def get_tool_domain_hint() -> str:
+    """当前可信入口业务域；无上下文时返回空串，由记忆层退回 general。"""
+    return _current_domain_hint.get()
+
+
 def set_tool_idempotency_key(idempotency_key: str) -> None:
     _current_idempotency_key.set(idempotency_key or "")
 
@@ -200,6 +211,9 @@ class RequestContext:
     deadline: Any = None
     # dict 还原形态为 False：不覆盖当前线程已绑定的 sink/trace（防清掉 worker 主上下文）
     bind_sink: bool = True
+    # 入口路由域提示，不是 Tool/LLM 参数；隔离域级用户记忆。
+    # 放在末尾以保持既有 RequestContext 位置参数顺序兼容。
+    domain_hint: str = ""
 
     def bind(self) -> None:
         """把上下文绑定到当前线程的 ContextVar（节点入口 / worker 入口调用）。
@@ -242,6 +256,7 @@ class RequestContext:
         set_current_user_id(self.user_id)
         set_tool_user_id(self.user_id)
         set_tool_tenant_id(self.tenant_id)
+        set_tool_domain_hint(self.domain_hint)
         set_tool_idempotency_key(self.idempotency_key)
         set_tool_department(self.department)
         set_tool_permissions(self.permissions)
@@ -260,6 +275,7 @@ class RequestContext:
             "session_id": self.session_id,
             "user_id": self.user_id,
             "tenant_id": self.tenant_id,
+            "domain_hint": self.domain_hint,
             "idempotency_key": self.idempotency_key,
             "kb_id": self.kb_id,
             "department": self.department,

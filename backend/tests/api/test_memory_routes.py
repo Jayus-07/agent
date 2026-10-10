@@ -59,10 +59,14 @@ class _FakeService:
         self.seen_user_id: str | None = None
         self.seen_tenant_id: str | None = None
         self.seen_memory_id: str | None = None
+        self.seen_before: str | None = None
+        self.seen_before_session_id: str | None = None
 
     # 注：路由会传 limit/before（P1-12 加的分页参数）；fake 接收可变参数忽略
-    async def list_sessions(self, user_id: str = "default", **_: object) -> dict:
+    async def list_sessions(self, user_id: str = "default", **kwargs: object) -> dict:
         self.seen_user_id = user_id
+        self.seen_before = kwargs.get("before")
+        self.seen_before_session_id = kwargs.get("before_session_id")
         return self._payload
 
     async def get_profile(
@@ -147,6 +151,18 @@ def test_list_sessions_rejects_self_reported_user_id(client_factory):
     res = client.get("/memory/sessions?user_id=999", headers={"X-User-Id": "15"})
     assert res.status_code == 200
     assert service.seen_user_id == "15"
+
+
+def test_list_sessions_passes_stable_cursor_to_service(client_factory):
+    service = _FakeService({"sessions": [], "total": 0})
+    client = client_factory(service)
+    res = client.get(
+        "/memory/sessions?before=2026-10-10T12%3A00%3A00%2B00%3A00&before_session_id=s-1",
+        headers={"X-User-Id": "15"},
+    )
+    assert res.status_code == 200
+    assert service.seen_before == "2026-10-10T12:00:00+00:00"
+    assert service.seen_before_session_id == "s-1"
 
 
 def test_profile_uses_authenticated_tenant_scope(client_factory):

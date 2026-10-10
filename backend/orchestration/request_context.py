@@ -49,6 +49,7 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
             session_id=ctx.get("session_id", "default"),
             user_id=ctx.get("user_id", "default"),
             tenant_id=ctx.get("tenant_id", ""),
+            domain_hint=ctx.get("domain_hint", ""),
             idempotency_key=ctx.get("idempotency_key", ""),
             kb_id=ctx.get("kb_id", "default"),
             department=ctx.get("department", ""),

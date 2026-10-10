@@ -40,6 +40,17 @@ class TestDataclassContext:
         finally:
             tool_session._current_tenant_id.reset(token)
 
+    def test_bind_propagates_trusted_domain_hint(self):
+        from backend.tools import session as tool_session
+
+        ctx = RequestContext(session_id="s1", user_id="u9", domain_hint="travel")
+        token = tool_session._current_domain_hint.set("")
+        try:
+            ctx.bind()
+            assert tool_session.get_tool_domain_hint() == "travel"
+        finally:
+            tool_session._current_domain_hint.reset(token)
+
     def test_bind_clears_stale_sink(self):
         from backend.infra.llm import proxy
 
@@ -82,6 +93,7 @@ class TestCheckpointSafe:
         # 可序列化身份集 user_id/tenant_id/department/roles/data_scope）
         assert safe == {"session_id": "s1", "user_id": "u1",
                         "tenant_id": "",
+                        "domain_hint": "",
                         "idempotency_key": "",
                         "kb_id": "k1", "department": "",
                         "roles": (), "data_scope": "",
@@ -93,7 +105,8 @@ class TestCheckpointSafe:
 
     def test_dict_state_round_trip(self):
         ctx = RequestContext(session_id="s1", user_id="u2", kb_id="k2",
-                             tenant_id="tenant-2", idempotency_key="req-2",
+                             tenant_id="tenant-2", domain_hint="travel",
+                             idempotency_key="req-2",
                              model="deepseek-chat", trace=object())
         state = {"request_context": ctx.checkpoint_safe()}
         restored = get_context_from_state(state)
@@ -101,6 +114,7 @@ class TestCheckpointSafe:
         assert restored.session_id == "s1"
         assert restored.user_id == "u2"
         assert restored.tenant_id == "tenant-2"
+        assert restored.domain_hint == "travel"
         assert restored.idempotency_key == "req-2"
         assert restored.model == "deepseek-chat"
         assert restored.subject_type == ""
@@ -134,6 +148,19 @@ class TestCheckpointSafe:
             assert proxy._stream_sink_var.get() is sentinel
         finally:
             proxy.reset_stream_sink()
+
+    def test_legacy_checkpoint_clears_stale_domain_hint(self):
+        """旧 checkpoint 没有域字段时必须清除线程池里的前一请求域。"""
+        from backend.core.request_context import _current_domain_hint
+
+        state = {"request_context": {"session_id": "s", "user_id": "u"}}
+        restored = get_context_from_state(state)
+        token = _current_domain_hint.set("travel")
+        try:
+            restored.bind()
+            assert _current_domain_hint.get() == ""
+        finally:
+            _current_domain_hint.reset(token)
 
     def test_dataclass_state_still_supported(self):
         ctx = RequestContext(session_id="s", user_id="u", kb_id="k")

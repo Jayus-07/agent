@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "generated_at": "2026-10-02T11:28:01+08:00",
-  "git_sha": "57698d5",
-  "tool_count": 39,
+  "generated_at": "2026-10-10T18:19:05+08:00",
+  "git_sha": "098632a",
+  "tool_count": 40,
   "tools": {
     "calculate_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/calculator.py",
+      "module": "backend/tools/calculator.py",
       "display_name": "数学计算",
       "data_source": {
         "type": "internal"
@@ -25,7 +25,7 @@
       "content_hash": "7fc69f2e3723b63a"
     },
     "competitor_analyze_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "module": "backend/tools/competitor.py",
       "display_name": "竞品分析",
       "data_source": {
         "type": "internal"
@@ -74,7 +74,7 @@
       "content_hash": "feafd216f1f571da"
     },
     "competitor_history_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "module": "backend/tools/competitor.py",
       "display_name": "竞品价格历史",
       "data_source": {
         "type": "internal"
@@ -101,7 +101,7 @@
       "content_hash": "2578615c64b1106c"
     },
     "competitor_watch_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "module": "backend/tools/competitor.py",
       "display_name": "竞品巡检",
       "data_source": {
         "type": "internal"
@@ -121,7 +121,7 @@
       "content_hash": "ff6a220499108e7e"
     },
     "competitor_watchlist_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/competitor.py",
+      "module": "backend/tools/competitor.py",
       "display_name": "竞品监控清单管理",
       "data_source": {
         "type": "internal"
@@ -169,7 +169,7 @@
       "content_hash": "16a6f1fc22bc604c"
     },
     "data_collection_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/data_collection.py",
+      "module": "backend/tools/data_collection.py",
       "display_name": "数据采集入库",
       "data_source": {
         "type": "internal"
@@ -242,7 +242,7 @@
       "content_hash": "b42e4b2201eb2e26"
     },
     "execute_sql_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
+      "module": "backend/tools/sql.py",
       "display_name": "SQL 只读查询",
       "data_source": {
         "type": "internal"
@@ -262,7 +262,7 @@
       "content_hash": "b69a0ff373e3599a"
     },
     "export_csv_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/export.py",
+      "module": "backend/tools/export.py",
       "display_name": "CSV 导出",
       "data_source": {
         "type": "internal"
@@ -300,7 +300,7 @@
       "content_hash": "9c4c56175e0189f2"
     },
     "generate_report_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/report.py",
+      "module": "backend/tools/report.py",
       "display_name": "报告生成",
       "data_source": {
         "type": "internal"
@@ -339,7 +339,7 @@
       "content_hash": "ec17a7fc00e087be"
     },
     "global_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/search/zhihu.py",
+      "module": "backend/tools/search/zhihu.py",
       "display_name": "全网搜索",
       "data_source": {
         "type": "mcp",
@@ -375,7 +375,7 @@
       "content_hash": "93d1a21dbb92935b"
     },
     "map_coord_convert_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "module": "backend/tools/map/geo.py",
       "display_name": "坐标转换",
       "data_source": {
         "type": "rest",
@@ -409,7 +409,7 @@
       "content_hash": "71a868a1490a4723"
     },
     "map_distance_matrix_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "module": "backend/tools/map/route.py",
       "display_name": "多点距离矩阵",
       "data_source": {
         "type": "rest",
@@ -450,7 +450,7 @@
       "content_hash": "ebcfc9eff8cb3abe"
     },
     "map_district_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "module": "backend/tools/map/geo.py",
       "display_name": "行政区划查询",
       "data_source": {
         "type": "rest",
@@ -484,7 +484,7 @@
       "content_hash": "25555712e2cf3a8d"
     },
     "map_geocode_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "module": "backend/tools/map/geo.py",
       "display_name": "地理编码",
       "data_source": {
         "type": "rest",
@@ -518,7 +518,7 @@
       "content_hash": "0a1edb139968f854"
     },
     "map_ip_location_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "module": "backend/tools/map/geo.py",
       "display_name": "IP 定位",
       "data_source": {
         "type": "rest",
@@ -545,7 +545,7 @@
       "content_hash": "3b2d21699b960852"
     },
     "map_lookup_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/lookup.py",
+      "module": "backend/tools/map/lookup.py",
       "display_name": "地图聚合查询",
       "data_source": {
         "type": "rest",
@@ -695,7 +695,7 @@
       "content_hash": "72e0f9a761f198ba"
     },
     "map_merchant_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/merchant.py",
+      "module": "backend/tools/map/merchant.py",
       "display_name": "商家搜索",
       "data_source": {
         "type": "rest",
@@ -755,7 +755,7 @@
       "content_hash": "44621261c6a161ee"
     },
     "map_navigation_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "module": "backend/tools/map/route.py",
       "display_name": "导航调起链接",
       "data_source": {
         "type": "rest",
@@ -817,7 +817,7 @@
       "content_hash": "0728c27f5a79d3f9"
     },
     "map_place_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
+      "module": "backend/tools/map/place.py",
       "display_name": "地点搜索",
       "data_source": {
         "type": "rest",
@@ -872,7 +872,7 @@
       "content_hash": "a9153f228dd6983c"
     },
     "map_place_suggest_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/place.py",
+      "module": "backend/tools/map/place.py",
       "display_name": "地点输入联想",
       "data_source": {
         "type": "rest",
@@ -906,7 +906,7 @@
       "content_hash": "08a51da5b5c18af3"
     },
     "map_reverse_geocode_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/geo.py",
+      "module": "backend/tools/map/geo.py",
       "display_name": "逆地理编码",
       "data_source": {
         "type": "rest",
@@ -940,7 +940,7 @@
       "content_hash": "1bd2d81e56cbbfd3"
     },
     "map_route_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/route.py",
+      "module": "backend/tools/map/route.py",
       "display_name": "路线规划",
       "data_source": {
         "type": "rest",
@@ -988,7 +988,7 @@
       "content_hash": "aa2e16777fcfc85f"
     },
     "map_static_map_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/static_map.py",
+      "module": "backend/tools/map/static_map.py",
       "display_name": "静态地图",
       "data_source": {
         "type": "rest",
@@ -1043,7 +1043,7 @@
       "content_hash": "92312c78a68ee3ab"
     },
     "map_street_view_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/street_view.py",
+      "module": "backend/tools/map/street_view.py",
       "display_name": "街景查询",
       "data_source": {
         "type": "rest",
@@ -1091,7 +1091,7 @@
       "content_hash": "e29b4024083f49c8"
     },
     "map_weather_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/map/weather.py",
+      "module": "backend/tools/map/weather.py",
       "display_name": "天气查询",
       "data_source": {
         "type": "rest",
@@ -1131,13 +1131,31 @@
       "output_types": {},
       "content_hash": "ef10f24a65688cd9"
     },
+    "memory_forget_tool": {
+      "module": "backend/tools/memory.py",
+      "display_name": "",
+      "data_source": null,
+      "description_hash": "067fd1df512dfb21",
+      "args_schema": {
+        "memory_id": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "064b23a1bebfa6c3"
+    },
     "memory_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "module": "backend/tools/memory.py",
       "display_name": "记忆检索",
       "data_source": {
         "type": "internal"
       },
-      "description_hash": "306fe94770e4d6f2",
+      "description_hash": "cc4dc4c313a344d2",
       "args_schema": {
         "query": {
           "schema": {
@@ -1159,7 +1177,7 @@
       "content_hash": "39e11f1a94de7939"
     },
     "memory_store_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "module": "backend/tools/memory.py",
       "display_name": "记忆写入",
       "data_source": {
         "type": "internal"
@@ -1200,7 +1218,7 @@
       "content_hash": "a5c7d0ca80c913cd"
     },
     "read_email_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "module": "backend/tools/email.py",
       "display_name": "邮件读取",
       "data_source": {
         "type": "rest",
@@ -1221,7 +1239,7 @@
       "content_hash": "e2104ca1f07b940a"
     },
     "search_email_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "module": "backend/tools/email.py",
       "display_name": "邮件搜索",
       "data_source": {
         "type": "rest",
@@ -1263,7 +1281,7 @@
       "content_hash": "73560b7f8fba3a74"
     },
     "search_knowledge_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/rag.py",
+      "module": "backend/tools/rag.py",
       "display_name": "知识库检索",
       "data_source": {
         "type": "internal"
@@ -1294,7 +1312,7 @@
       "content_hash": "b2295344e9798489"
     },
     "send_email_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "module": "backend/tools/email.py",
       "display_name": "邮件发送",
       "data_source": {
         "type": "rest",
@@ -1353,7 +1371,7 @@
       "content_hash": "ee42ff9f1a8446a5"
     },
     "sql_query_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/sql.py",
+      "module": "backend/tools/sql.py",
       "display_name": "自然语言查库",
       "data_source": {
         "type": "internal"
@@ -1373,7 +1391,7 @@
       "content_hash": "bb96a1893da888f7"
     },
     "travel_poi_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/travel/poi.py",
+      "module": "backend/tools/travel/poi.py",
       "display_name": "景点搜索",
       "data_source": {
         "type": "internal"
@@ -1425,7 +1443,7 @@
       "content_hash": "dc6e1969551b83c4"
     },
     "travel_train_price_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/travel/train.py",
+      "module": "backend/tools/travel/train.py",
       "display_name": "火车票票价查询",
       "data_source": {
         "type": "mcp",
@@ -1469,7 +1487,7 @@
       "content_hash": "b4da6929370ffe29"
     },
     "travel_train_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/travel/train.py",
+      "module": "backend/tools/travel/train.py",
       "display_name": "火车票余票查询",
       "data_source": {
         "type": "mcp",
@@ -1513,7 +1531,7 @@
       "content_hash": "e95620bcff552c97"
     },
     "watch_email_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/email.py",
+      "module": "backend/tools/email.py",
       "display_name": "邮件监听",
       "data_source": {
         "type": "rest",
@@ -1534,7 +1552,7 @@
       "content_hash": "6bfc600331764b6d"
     },
     "web_crawl_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
+      "module": "backend/tools/web.py",
       "display_name": "网页抓取",
       "data_source": {
         "type": "rest",
@@ -1566,7 +1584,7 @@
       "content_hash": "41bed023616e1b8c"
     },
     "web_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/web.py",
+      "module": "backend/tools/web.py",
       "display_name": "网页搜索",
       "data_source": {
         "type": "rest",
@@ -1598,7 +1616,7 @@
       "content_hash": "7a0bc6126da98991"
     },
     "zhihu_search_tool": {
-      "module": "D:/Program Files/workplace/agent/backend/tools/search/zhihu.py",
+      "module": "backend/tools/search/zhihu.py",
       "display_name": "知乎搜索",
       "data_source": {
         "type": "mcp",
