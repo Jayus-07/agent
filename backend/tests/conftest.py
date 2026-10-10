@@ -270,6 +270,7 @@ def _reset_request_scoped_state() -> None:
     from backend.core.request_context import (
         set_session_id,
         set_tool_department,
+        set_tool_domain_hint,
         set_tool_idempotency_key,
         set_tool_permissions,
         set_tool_roles,
@@ -289,6 +290,7 @@ def _reset_request_scoped_state() -> None:
     set_tool_tenant_id("")
     set_tool_idempotency_key("")
     set_tool_department("")
+    set_tool_domain_hint("")
     set_tool_permissions(None)
     set_tool_roles(())
     proxy.set_current_user_id(None)

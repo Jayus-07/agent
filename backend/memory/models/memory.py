@@ -1,7 +1,10 @@
 """SQLAlchemy ORM for memory_records"""
 from uuid import uuid4
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, Float, Integer, Boolean, DateTime, ForeignKey
+from sqlalchemy import (
+    Column, String, Text, Float, Integer, Boolean, DateTime, ForeignKey,
+    Index, UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base
 from pgvector.sqlalchemy import Vector
@@ -35,9 +38,45 @@ class MemoryRecord(Base):
     # 同 (tenant,user,key) 最多一个 active（partial unique index uq_memory_active_key）
     memory_key = Column(String(128), nullable=True)
     structured_value = Column(String(256), nullable=True)
+    # memory 领域隔离与动态画像契约（088）：scope 仅能由服务端策略确定；
+    # verification_status=pending 的自动推断不得注入上下文或用户画像。
+    scope = Column(String(24), nullable=False, default="user_domain")
+    domain = Column(String(32), nullable=False, default="general")
+    version = Column(Integer, nullable=False, default=1)
+    verification_status = Column(String(24), nullable=False, default="legacy")
     access_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_access_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     expire_at = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     superseded_by = Column(UUID(as_uuid=True), ForeignKey("memory_records.id"), nullable=True)
+
+
+class MemoryExtractionJob(Base):
+    """持久 L3 提取队列；broker payload 仅传 job UUID，不传对话正文。"""
+    __tablename__ = "memory_extraction_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "user_id", "source_message_id",
+            name="uq_memory_extraction_source",
+        ),
+        Index("idx_memory_extraction_dispatch", "status", "last_enqueued_at"),
+        Index("idx_memory_extraction_session", "tenant_id", "user_id", "session_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id = Column(String(64), nullable=False)
+    user_id = Column(String(64), nullable=False)
+    session_id = Column(String(128), nullable=False)
+    source_message_id = Column(Integer, nullable=False)
+    assistant_message_id = Column(Integer, nullable=True)
+    status = Column(String(16), nullable=False, default="PENDING")
+    attempts = Column(Integer, nullable=False, default=0)
+    last_enqueued_at = Column(DateTime(timezone=True), nullable=True)
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_code = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                         default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                         default=lambda: datetime.now(timezone.utc),
+                         onupdate=lambda: datetime.now(timezone.utc))

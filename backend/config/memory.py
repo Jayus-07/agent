@@ -25,11 +25,24 @@ HISTORY_TOKEN_BUDGET = int(os.getenv("HISTORY_TOKEN_BUDGET", "2048"))
 # 会话记忆 (L2)
 SESSION_MAX_MESSAGES = int(os.getenv("SESSION_MAX_MESSAGES", "50"))
 
+# L2 增量摘要主触发线；默认复用现有会话历史 Token 预算。
+CONTEXT_L2_SUMMARY_TRIGGER_TOKENS = int(os.getenv(
+    "CONTEXT_L2_SUMMARY_TRIGGER_TOKENS", str(max(1, HISTORY_TOKEN_BUDGET))))
+
 # L2 摘要滞后门（STOP E E2）：触发条件为条数制（SESSION_MAX_MESSAGES），
 # 稳态每轮新增 2 条消息都会满足"水位线后有新增量"，若无最小增量门会导致
 # 每轮一次摘要 LLM 调用（每轮重复 summary）。攒批到 ≥K 条增量才摘要。
 CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES = int(
     os.getenv("CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES", "10"))
+
+# L3 durable extraction jobs：worker 崩溃后 beat 以锁租期重新派发，普通模型
+# 或存储故障有界重试；队列只传 job ID，源消息仍由 PostgreSQL 读取。
+MEMORY_EXTRACTION_MAX_ATTEMPTS = int(os.getenv("MEMORY_EXTRACTION_MAX_ATTEMPTS", "3"))
+MEMORY_EXTRACTION_STALE_SECONDS = int(os.getenv("MEMORY_EXTRACTION_STALE_SECONDS", "600"))
+MEMORY_EXTRACTION_RECOVERY_BATCH_SIZE = int(
+    os.getenv("MEMORY_EXTRACTION_RECOVERY_BATCH_SIZE", "100"))
+MEMORY_EXTRACTION_DISPATCH_COOLDOWN_SECONDS = int(
+    os.getenv("MEMORY_EXTRACTION_DISPATCH_COOLDOWN_SECONDS", "15"))
 
 # 长期记忆 (L3)
 ENABLE_LONG_TERM_MEMORY = os.getenv("ENABLE_LONG_TERM_MEMORY", "true").lower() == "true"
@@ -59,12 +72,8 @@ MEMORY_RETRIEVAL_CANDIDATES = int(os.getenv("MEMORY_RETRIEVAL_CANDIDATES", "20")
 # 最终注入上限（0~K，0 条合法；不再强凑 top5）
 MEMORY_MAX_INJECTED = int(os.getenv("MEMORY_MAX_INJECTED", "5"))
 # 语义相关性硬门（cosine similarity，1.0-cosine_distance 口径，越高越相关）。
-# 0.35 由 STOP F Memory Golden 实证定标（2026-09-24，60 例 7 类别，
-# 生产同款 embedding qwen3.7-text-embedding 真库 sweep）：
-# 0.30~0.35 平台 recall=1.0 / precision=0.889 / irr_inj=0.105，0.45 处
-# recall 崩至 0.797（过敏类安全记忆 0.448 被拒）换 irr 仅 0.069。
-# 选 0.35：与 0.30 指标全同，且距无关带主体（0.24~0.31）有 0.05 边距。
-# 依据与 sweep 全表见 docs/2026-09-24-Memory-Production-Closure-STOPF-Golden-Evaluation.md
+# 默认阈值 0.35 已由 Memory Golden 集评测锁定；变更前重跑
+# backend/scripts/eval_memory_golden.py 并复核 backend/tests/memory/ 中的契约断言。
 MEMORY_MIN_RELEVANCE_SCORE = float(os.getenv("MEMORY_MIN_RELEVANCE_SCORE", "0.35"))
 # 全局响应偏好：memory_key 命中这些前缀的 active 记忆免 semantic gate
 # （"回答用中文"与问题主题无关但任何轮次都适用）；白名单为确定性策略，
@@ -80,7 +89,7 @@ MEMORY_MAX_GLOBAL_PREFERENCES = int(os.getenv("MEMORY_MAX_GLOBAL_PREFERENCES", "
 
 # ── 上下文预算管理（Context Budget Management，2026-09-22）──
 # 统一管理 active context（发给模型的上下文）的 token 预算；原始 chat_messages 不受影响。
-# 完整设计见 docs/2026-09-22-context-budget-management-实施规格.md
+# 完整设计见 docs/architecture/ai-runtime.md#上下文预算与跨请求状态
 # LLM_CONTEXT_LENGTH 复用 config/llm.py，不在此复制第二份窗口配置。
 CONTEXT_BUDGET_ENABLED = os.getenv("CONTEXT_BUDGET_ENABLED", "true").lower() == "true"
 

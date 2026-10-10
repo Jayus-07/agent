@@ -118,6 +118,12 @@ def derive_snapshot() -> dict[str, Any]:
         fn = tool_registry.available_tools[name]
         own = ownership.get(name, {"capabilities": [], "output_types": {}})
         sources = tool_registry._tool_sources.get(name) or ["unknown"]
+        source_path = Path(sources[-1]).resolve()
+        try:
+            module_path = source_path.relative_to(REPO_ROOT.resolve()).as_posix()
+        except ValueError:
+            # 仓库外注册的扩展保留来源路径；仓库内快照不写入本机工作区绝对路径。
+            module_path = source_path.as_posix()
         description = getattr(fn, "description", "") or ""
         # display_name：中文名标签（backend/tools/labels.py 单一事实源），
         # 只进 lock 供管理端展示，不参与 content_hash（不影响契约本体）；
@@ -126,7 +132,7 @@ def derive_snapshot() -> dict[str, Any]:
         # 同为展示元数据不参与 content_hash；未登记 = None。
         from backend.tools.labels import get_data_source, get_display_name
         entry = {
-            "module": Path(sources[-1]).as_posix(),
+            "module": module_path,
             "display_name": get_display_name(name),
             "data_source": get_data_source(name),
             "description_hash": hashlib.sha256(description.encode("utf-8")).hexdigest()[:16],

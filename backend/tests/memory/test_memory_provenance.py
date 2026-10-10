@@ -21,7 +21,6 @@ import types
 import uuid
 
 import numpy as np
-import psycopg2
 import pytest
 from sqlalchemy import text
 
@@ -32,6 +31,7 @@ from backend.config import (
 )
 from backend.config.database import MEMORY_DB_CONFIG
 from backend.memory.database import AsyncSessionLocal
+from backend.tests.memory.conftest import require_memory_column
 from backend.memory.long_term import (
     MemoryFact,
     LongTermMemory,
@@ -51,18 +51,8 @@ _SESSION = f"{_PREFIX}session-{uuid.uuid4().hex[:8]}"
 
 
 def _require_pg() -> None:
-    try:
-        with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name='memory_records' AND column_name='origin'"
-                )
-                row = cursor.fetchone()
-    except Exception as exc:
-        pytest.skip(f"agent_memory PostgreSQL 不可达，跳过 STOP B 真实验收: {exc}")
-    if row is None:
-        pytest.skip("memory_records.origin 不存在（047 迁移未应用），跳过真实验收")
+    # 会话级缓存（原实现每用例新建连接，~2s/例，见 conftest.require_memory_column）
+    require_memory_column("origin", label="STOP B 真实验收")
 
 
 @pytest.fixture(autouse=True)

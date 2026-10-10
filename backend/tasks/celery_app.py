@@ -46,6 +46,7 @@ celery_app = Celery(
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
              "backend.tasks.budget_reconciliation_tasks",  # 治理：预算对账日报（beat）
              "backend.tasks.memory_maintenance_tasks",  # STOP C：Memory 衰减生命周期（beat）
+             "backend.tasks.memory_extraction_tasks",  # L3 durable outbox + 提取 worker
              "backend.tasks.travel_booking_tasks",  # STOP L：Booking 恢复扫描（beat）
              "backend.tasks.prompt_eval_tasks",  # Prompt 发布评测 GitHub 轮询
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
@@ -161,6 +162,11 @@ celery_app.conf.update(
             "task": "memory.daily_decay",
             "schedule": crontab(hour=4, minute=30),
             "options": {"queue": beat_queue("memory.daily_decay")},
+        },
+        "memory-extraction-recovery": {
+            "task": "memory.extraction_recovery",
+            "schedule": 15.0,
+            "options": {"queue": beat_queue("memory.extraction_recovery")},
         },
         # B5（2026-09-21 高并发审查）：僵尸任务定期收尸。
         # 阈值与间隔均可经 env 覆盖（TASK_ZOMBIE_*，见 backend/config/tasks.py）

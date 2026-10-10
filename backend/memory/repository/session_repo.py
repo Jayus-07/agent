@@ -1,7 +1,7 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import DateTime, delete, func, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.memory.models.session import ChatMessage, ChatSession
@@ -119,16 +119,23 @@ class SessionRepository:
         return count >= max_messages
 
     async def list_all(self, user_id: str = "default", limit: int = 50,
-                       before: str | None = None) -> list[dict]:
+                       before: str | None = None,
+                       before_session_id: str | None = None) -> list[dict]:
         """列出用户的所有会话（id + 标题 + 消息数 + 时间）。
 
         Args:
-            limit: 最多返回 N 条（默认 50，硬上限 200）
-            before: 游标分页 ISO timestamp，仅返回 updated_at < before 的会话；
-                    用于下拉刷新"加载更早"。
+            limit: 最多返回 N 条（默认 50；内部允许 201 条用于判断下一页）
+            before: 游标分页 ISO timestamp
+            before_session_id: 时间相同时作为次级游标，避免会话翻页遗漏
         """
-        from sqlalchemy import desc
-        limit = max(1, min(limit, 200))
+        from sqlalchemy import and_, desc, or_
+        limit = max(1, min(limit, 201))
+        # 实际迁移列是 timestamp without time zone（写入值按 UTC 约定）；显式
+        # 保持游标比较为 timestamp，避免把列隐式转成 timestamptz 后发生时区偏移。
+        sort_updated_at = type_coerce(
+            func.coalesce(ChatSession.updated_at, ChatSession.created_at),
+            DateTime(timezone=False),
+        )
         q = (
             select(
                 ChatSession.session_id,
@@ -137,20 +144,32 @@ class SessionRepository:
                 ChatSession.summary,
                 ChatSession.context_summary,
                 ChatSession.created_at,
-                ChatSession.updated_at,
+                sort_updated_at.label("updated_at"),
                 func.count(ChatMessage.id).label("message_count"),
             )
             .outerjoin(ChatMessage, ChatMessage.session_id == ChatSession.session_id)
             .where(ChatSession.user_id == user_id)
             .group_by(ChatSession.id)
-            .order_by(desc(ChatSession.updated_at))
+            .order_by(desc(sort_updated_at), desc(ChatSession.session_id))
             .limit(limit)
         )
         if before:
             try:
                 from datetime import datetime as _dt
                 cursor = _dt.fromisoformat(before.replace("Z", "+00:00"))
-                q = q.where(ChatSession.updated_at < cursor)
+                if cursor.tzinfo is not None:
+                    cursor = cursor.astimezone(timezone.utc).replace(tzinfo=None)
+                if before_session_id:
+                    q = q.where(or_(
+                        sort_updated_at < cursor,
+                        and_(
+                            sort_updated_at == cursor,
+                            ChatSession.session_id < before_session_id,
+                        ),
+                    ))
+                else:
+                    # 兼容只传时间戳的旧分页调用。
+                    q = q.where(sort_updated_at < cursor)
             except (ValueError, AttributeError):
                 # 非法 cursor 静默忽略 → 退化为第一页
                 pass
