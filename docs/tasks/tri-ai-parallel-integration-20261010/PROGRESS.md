@@ -282,7 +282,7 @@
 
 ## 2026-10-10：管理端/API 主题——Trace 授权、租户隔离与详情页整合完成
 
-- 集成提交：`<PENDING>`。提交前 HEAD 为 `a997bfc`。
+- 集成提交：`b5ccadd1644140874e4178aee021fc514ad88908`（feat(observability): authorize Trace access and integrate trace detail tree）。提交前 HEAD 为 `a997bfc`。
 
 ### 1. 后端授权（缺口一，已修复）
 
