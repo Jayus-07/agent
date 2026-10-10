@@ -1,36 +1,24 @@
 # 模型与供应商管理端 UI 设计（实现级）
 
-> **定位**：主设计 `docs/model-config-governance-design.md` 的 §7（管理端）/ §7.3（端点草案）/ B.7（前端）/ B.9（决策）的**实现级展开**。
-> 主文档定「做什么、谁能做、流程多重」；本文定「用什么组件、字段怎么摆、态怎么分、请求怎么发」。
-> **冲突裁决**：权限与流程以主文档为准；命中本文 §3.1 指出的内部矛盾时，以本文的修正方案为准（已在主文档加修订批注）。
->
-> **状态**：设计定稿；管理端模型配置闭环已于 2026-09-19 实施并完成本地验证。
-> 当前实现、迁移和上线前剩余事项以 `docs/model-config-governance-progress-report-2026-09-19.md` §10 为准。
-> 本文 §14–§16 中的「缺口 / 未实施」文字保留为设计过程快照，不能按当前线上状态解读。
-> **前置依赖**：P1a-2（凭据链路闭合）、P1b（探测服务）已满足；生产上线仍需执行迁移并按发布流程灰度。
->
-> 日期：2026-09-19 ｜ 关联：UX 架构 `docs/2026-09-17-UX体验架构设计.md`（§4.2 门禁 / §4.6 空态 / §五 token）
+> **定位**：本文记录模型与供应商管理端的交互、权限和请求契约。配置治理与密钥规则见 [模型配置治理设计](model-config-governance-design.md)。
+> 页面实现以 frontend-admin 中的页面、API 模块和测试为准；本文不保存实现进度或历史验收记录。
 
 ---
 
-## 0. 一屏结论
+## 0. 交互总览
 
-| 项 | 结论 |
+| 区域 | 约束 |
 |---|---|
-| 页面 | `/settings/models`「模型与供应商」，5 个 tab |
-| 技术形态 | `'use client'` 单页 + `useState` 切 tab（**不引子路由**）；react-query 取数；手写 Tailwind |
-| 门禁 | 页级 `RoleGate minRole="editor"` + tab 级 `atLeast('admin')`（**修正主文档 §7.1**，见 §3） |
-| 新增文件 | 页面 1 + 组件 ~8 + API 模块 1 + 类型 1 |
-| 改动文件 | `navConfig.tsx`（+1 条）、`cost-governance/prices/page.tsx`（改重定向）、`LLMSwitcher.tsx`、`api/chat.ts`、`hooks/useSSE.ts` |
-| **后端缺口** | **6 个端点需要新写**（含 history / rollback / drift / verify-draft），前端无法独立交付 |
-| 可先行 | ③ 价格搬移、④⑤ 的**只读骨架**（若后端先给 GET） |
-| 硬约束 | **不引入新设计 token**（暗色与状态色 token 已于 UX §七 拍板砍掉）；Modal 而非 Drawer（项目无 Drawer 先例） |
+| 页面 | 模型与供应商配置入口按角色显示；交互分为模型角色、供应商与密钥、价格、变更历史、体检与漂移等职责。 |
+| 权限 | 页级和操作级权限分别校验；只读用户不得看到或调用受限操作。 |
+| 请求 | 前端按后端实际裸对象响应契约处理；不擅自增加 Result 解包。 |
+| 会话模型 | 临时模型选择仅作用于当前会话；改变全局默认走管理员配置流程。 |
+| 敏感字段 | 密钥写入后只返回状态或掩码，不回显明文。 |
 
----
+具体 tab、字段和状态交互见下文；运行时行为以对应代码与测试为准。
+## 1. 前端共用模式
 
-## 1. 现状核对（已实测的前端约定）
-
-设计必须落在既有约定上，不自造模式。以下 12 条均为代码实测结论。
+设计复用管理端既有组件、权限和 API 客户端模式；新增行为仍以当前组件和测试为准。
 
 | # | 约定 | 证据 | 对本设计的约束 |
 |---|---|---|---|
@@ -47,48 +35,11 @@
 | 11 | 设计 token：`text-text-primary/secondary/muted`、`bg-accent`、`border-border-subtle`、`shadow-card`；**暗色不做、状态色 token 已砍** | `app/globals.css:11-44`；`tailwind.config.ts`；UX §七-2 | 只用现有语义色，**不新增 CSS 变量** |
 | 12 | 测试：vitest 与被测代码共置；`navConfig.test.ts` 锁「六组 + 组 minRole」；`surface.test.ts` 锁「每域一个模块」 | `components/layout/navConfig.test.ts:24-29,103-108`；`api/surface.test.ts:20-45` | 新 API **只能加一个域模块**（见 §2.4）；`navConfig` 只加条目不动组 |
 
-### 1.1 ⚠️ 顺带发现并已修：安全运营页的开关切换是「假失败」
+### 1.1.1 API 响应形态：新端点使用裸对象
 
-排查第 10 条（响应形态）时撞到的，**与本设计无关但影响同一批 API 写法**：
+管理端 request<T> 返回后端响应体，不自动解包 data。新增模型配置端点按裸对象返回；HTTP 错误通过 ApiError 表达。已有接口若采用其他响应结构，按其现有契约和测试处理，不要为了统一而破坏兼容性。
 
-| 环节 | 事实 |
-|---|---|
-| 后端契约 | `PUT /sys/config/{key}` 返回**裸 dict** `{"key","old","new","changedBy"}` —— `sys_config_admin.py:51`，且 `services/sys_config.py:247` 是 `return {"old","new"}` |
-| 契约已被测试锁定 | `tests/api/test_sys_config_admin.py:177` `assert body["old"] is None and body["new"] == "audit"`（读**顶层**字段） |
-| 前端却按 Result 壳取 | `api/securityOps.ts:97-106`：`request<Result<...>>(...)` → **`return res.data`** |
-| 响应体原样透传（两头都不包装） | BFF `app/api/[...path]/route.ts:98` `new Response(upstream.body)`；`api/client.ts:367` `return data as T`（不解包） |
-| 消费者 | `app/security/page.tsx:201` `const { old, new: newVal } = await updateGuardMode(...)` |
-
-**结论**：`res.data` 恒为 `undefined` → 解构抛 `TypeError` → 被 catch 显示「切换失败: Cannot destructure property 'old' of 'undefined'」，**但后端此时已写库并落审计**，且因抛出而跳过 `await load(true)`，界面不刷新。
-
-即：**admin 在「安全运营」页切换守卫开关，看到的是「失败」，实际已生效** —— 本仓库最忌讳的「假失败」（「真实原因被埋在 N 层语义错误之下」的同类）。
-
-**根因**：`/sys` 前缀下**两种响应形态并存** ——
-- `/sys/security/*` → `{code,message,data,timestamp}`（`auth_local.py:114`）→ 前端 `res.data` ✓
-- `/sys/config` → 裸 dict → 前端 `res.data` ✗
-
-**修复（2026-09-19 已实施，改前端 1 处）**：`securityOps.updateGuardMode` 去掉 `Result` 包裹，直返 `request<GuardModeUpdateResult>`（新增具名类型，注释写明「裸 dict，无壳」）。**未改后端**：`test_sys_config_admin.py:177` 已把顶层字段锁成契约，包壳会打破它，且会连带 `/sys/security/*` 侧一起动 —— 代价大于收益。
-
-配套新增共置契约测试 `api/securityOps.test.ts`（4 例），用**真实响应形状**（裸 dict）驱动。**有效性已验证**：把实现临时改回 `res.data` 后 **3 failed / 1 passed**（症状与原 bug 一致：`expected undefined to be defined`）；其中「请求形态」一例仍绿，说明断言分工准确 —— 坏的是读，不是写。
-
-### 1.1.1 决策：新端点一律**裸 dict**（无 Result 壳）
-
-这条直接决定 §5.4 与 §14 的端点契约。**已拍板，非建议**：
-
-| # | 理由 | 依据 |
-|---|---|---|
-| ① | 与既成事实正交 | `client.ts:295,367` 的 `request<T>` **不解包**、`return data as T`（被 `client.test.ts` 锁定）。用壳 = 每个调用点手工 `.data`，**靠人记住** —— 本次 bug 正是「没记住」的产物 |
-| ② | 类型系统能兜住 | 裸 dict 下返回值即 `T`，形状错配在类型层可见；壳下 `request<Result<T>>` 的 `.data` **类型完全合法**，TS 全程不报错，只在运行时炸 |
-| ③ | 与最近邻同源 | 同前缀 `/sys/config` 已是裸 dict；新端点 `/sys/model-roles`、`/sys/providers`… 与它同级同前缀 |
-| ④ | 消除第二套错误通道 | `client.ts` 已在 HTTP 层用 `ApiError` 表达失败，壳里的 `code` 是冗余通道 —— **两套通道并存本身就是问题源**（`/sys` 下两形态并存正是本次根因） |
-
-**存量不动**：`/sys/security/*` 的 Result 壳**保持原样**（有测试契约锁定 + 多处消费，迁移收益 < 成本）。口径记为「**一域一形态；新域一律裸 dict**」，不启动全站统一化 —— 那属另一工作面，与本设计无关。
-
-**对 P1b / P2 的硬要求**：每个新增 API 域模块**必须有共置契约测试**，且用真实响应形状驱动（照 `securityOps.test.ts` 写法）。
-
----
-
-## 2. 路由、导航与文件落点
+---## 2. 路由、导航与文件落点
 
 ### 2.1 路由
 
@@ -150,38 +101,15 @@
 
 ---
 
-## 3. 权限模型（对主设计 §7.1 的修正）
+## 3. 权限模型
 
-### 3.1 主文档内部的矛盾（必须解决，否则无法实施）
+### 3.1 页面和操作门禁
 
-| 位置 | 原文 | 问题 |
-|---|---|---|
-| §7.1 | 「权限：`minRole: 'admin'` —— 因含密钥操作，不能给 editor」 | 页级 admin |
-| §7.2 tab⑤ | 「体检与漂移 ｜ 权限：**editor 可见**」 | **页级 admin 门禁下 editor 进不了页面，这条要求无法成立** |
+页级允许 editor 进入只读查看；修改模型绑定、供应商、密钥、价格或历史记录需 admin。后端仍须独立执行授权，隐藏按钮不能替代服务端检查。
 
-两条自相矛盾。同时 B.6 的权限表写「查看供应商 / 模型 ｜ admin」，进一步收紧。
+### 3.2 敏感信息
 
-### 3.2 修正方案：页级 `editor` + tab 级 `admin`
-
-**采用与 `cost-governance/prices/page.tsx` 逐字一致的模式**（`RoleGate minRole="editor"` + `canAdmin = atLeast('admin')` + 顶部只读提示条）：
-
-```tsx
-export default function SettingsModelsPage() {
-  const canAdmin = atLeast('admin')
-  return <RoleGate minRole="editor" pageName="模型与供应商">
-    ...
-    {!canAdmin && <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-xs text-blue-800">
-      当前角色为只读模式：可查看模型生效值与配置体检结果。密钥、供应商与模型绑定需要管理员。
-    </div>}
-```
-
-理由（三条，按权重）：
-1. **⑧ tab⑤ 要 editor 可见是主文档自己的要求** —— 页级 admin 会让这条设计目标归零；
-2. 项目**已有完全一致的先例**，不引入新模式；
-3. 「查看模型生效值」是本页对 editor 的核心价值（排障时 editor 要能自证「我用的是哪个模型」），把整页锁成 admin 会把这个场景推回给管理员。
-
-**修正后须同步主文档 §7.1**（已加修订批注）。
-
+密钥明文永不回传。editor 的供应商、密钥和体检信息按 §3.4 脱敏；变更历史中的供应商地址按既有审计契约展示。
 ### 3.3 tab 可见性矩阵
 
 | tab | viewer | editor | admin | editor 视角的差异 |
@@ -391,12 +319,7 @@ export interface DriftItem {
 **布局**：单表格，**5 列**，按**业务链路分组**渲染（分组常量 = `frontend-admin/src/types/modelConfig.ts::ROLE_GROUPS`：
 问答链路 / 入库链路 / 检索链路 / 评测链路，未登记角色落末位「其他」组）。
 
-> 版式沿革：最初 5 列（来源独立）→ 2026-09-21 上午并成 4 列（来源徽章并入「当前绑定」）→
-> 实机发现信息堆叠过密（继承 + 空值行叠四层，行高失控）→ 当日改回 **5 列**，
-> 「当前绑定」只留模型信息，配置状态（来源 / 审计 / 字面值）独立成「来源」列。
-
-行数 = 后端 `MODEL_ROLES` 的角色数，**2026-09-21 起为 11 个**（main / doc / metadata_extract /
-question_gen / table_describe / tool_selector / fallback / ocr / embedding / rerank / eval_gen）。
+角色行数与分组从后端 MODEL_ROLES 派生，不在文档复制动态数量。新增角色时同步维护 ROLE_LABELS 和 ROLE_GROUPS；测试应覆盖缺少映射时的显示行为。
 ⚠️ 后端新增角色时，`ROLE_LABELS` 与 `ROLE_GROUPS` 必须**同批补齐** —— 漏补不报错，只会让角色列
 显示英文代码（`roleLabel` 回落为 role），`types/modelConfig.test.ts` 的两条用例即为此设的护栏。
 
@@ -501,7 +424,7 @@ question_gen / table_describe / tool_selector / fallback / ocr / embedding / rer
 - 列表以徽章显示「内网」（`bg-amber-50 text-amber-700`），与 `public` 一眼可分
 - **不得实现为「自动识别私网就放行」**（B.6 明令：DNS rebinding 会绕过）。前端唯一职责是把勾选值如实传给后端；判定在后端。
 
-### 7.5 模型用途目录（2026-09-20 实施）
+### 7.5 模型用途目录
 
 供应商是协议、地址和凭据的容器，模型是供应商下可独立切换的目录条目。每个模型必须带用途：
 
@@ -576,21 +499,13 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 
 ---
 
-## 9. tab③ 价格（搬移）
+## 9. tab③ 价格
 
-- **逻辑零改动**：`prices/page.tsx` 的 127 行整体移入 `PriceTab.tsx`，仅去掉外层 `RoleGate` 与 `PageHeader`（改由父页提供）
-- `canAdmin` 由 props 传入（原本是组件内 `atLeast('admin')`，统一到 §4 的 props 约定）
-- **视觉标注「需审批生效」**（主设计 §10 风险 5：同页两个 tab 一个即时、一个要等 24h，不区分用户会以为「改了没生效」）：
-  - tab 按钮文案后缀一枚小徽章「需审核」
-  - tab 内容顶部一条说明：「本 tab 的变更需**双人审核 + 24 小时灰度**后才生效；其余 tab 即时生效。」
-- 旧路由 `/cost-governance/prices` 重定向到 `?tab=prices`；其 **`navConfig` 条目删除**（2026-09-19 已定，避免两个入口）。**重定向保留** —— 外部收藏与既有文档链接不失效。
-  - **删除是零测试改动**（已核实）：`navConfig.test.ts:31-50` 的「核心路由不丢失」清单（13 条）**不含** `/cost-governance/prices`；「六组齐全」（`:24-29`）与「组 minRole 同语义」（`:103-108`）两条均不受影响。
-  - ⚠️ **已接受的连带后果**：该条目属 **「成本治理」组**（`navConfig.tsx:66-73`），组内仅两条（预算策略 + 模型价格）。删除后**该组只剩「预算策略」一条**。接受单条目组 —— 另一条路是把本页挂到「成本治理」组以填满它，但那会把「配置类」页面与「成本类」页面混组，语义上不如现方案（§2.2 挂「质量与配置」，与 Prompt 管理 / Agent 节点 / 能力与技能同级）。
-  - 该组**无组级 minRole**（故 viewer 可见），而「模型价格」页自带 `RoleGate minRole="editor"` —— 即组门禁与页门禁**本就分离**，删除条目不改这一点。
+价格数据沿用现有价格治理流程；管理页应明确标示审批与生效状态，并复用已有价格页面的数据契约。价格规则与模型角色切换规则分开维护。
 
----
+旧路由如仍被书签或外部文档使用，应保留兼容重定向；导航只提供一个主入口。
 
-## 10. tab④ 变更历史
+---## 10. tab④ 变更历史
 
 **数据源**：`sys_config_history` + `provider_credentials_history` 的**合并时间线**（后端合并后下发，前端不做两次请求再拼 —— 排序与分页在后端做才对）。
 
@@ -618,7 +533,7 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 | **DB 覆盖与 `.env` 不一致** | role 的 `source==='db'` 且 `.env` 里也有不同的值 | `warn`（主设计 §10 风险 4：持久化后「重启模型与 .env 不一致」是**常态**，不是 bug —— 故文案须写「当前由 DB 覆盖，`.env` 的值不再生效」而非「冲突错误」） |
 | 缺 Key / 未注册模型 | `RoleBinding.missingKeyEnv` / `!registered` | `critical` |
 | provider 未验证 / 探测失败 | `ProviderRow.lastProbe` | `warn` |
-| 索引模型与生效 embedding 模型不一致 | 需后端比对索引元数据（**后端缺口**，见 §14） | `critical`（检索会静默变差） |
+| 索引模型与生效 embedding 模型不一致 | 比对索引元数据与当前角色配置 | critical（检索质量会受影响） |
 
 **呈现**：
 - 每条：严重度图标 + 一句话 + `hint`（可操作建议）+ 跳转（如「去 tab①修改」）
@@ -634,7 +549,7 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 | tab | 加载中 | 接口未就绪（404/501） | 数据为空 | 错误 |
 |---|---|---|---|---|
 | ① | `<Skeleton rows={8} cols={5} />` | 见 §6 空态注记：组件层不区分「未就绪」与「真空」，统一 `EmptyState no_data`（description 提示确认 `/sys/model-roles`），错误由页级错误条兜底 | `no_data` +「未登记任何模型角色」+ 重新加载（§6） | ErrorCard |
-| ② | Skeleton | `under_construction` +「供应商注册表尚未接通（等待 P1b）」 | `no_data` +「尚无自建供应商」+ **CTA「新增供应商」**（canEdit） | ErrorCard |
+| ② | Skeleton | 服务不可用时展示可重试提示 | `no_data` +「尚无自建供应商」+ **CTA「新增供应商」**（canEdit） | ErrorCard |
 | ③ | Skeleton | 复用价格页既有空态 | 既有 | 既有 |
 | ④ | Skeleton | `under_construction` | `no_data` +「暂无变更记录」 | ErrorCard |
 | ⑤ | Skeleton | `under_construction` | **不适用**（全绿也要出结论卡） | ErrorCard |
@@ -643,363 +558,35 @@ idle ──click──▶ probing ──每级完成──▶ probing(累计 ste
 
 ---
 
-## 13. 会话级模型切换（B.9 决策 ②）
+## 13. 会话级模型切换
 
-目标：**回收 editor 的全局切换权**，全局默认只 admin 可改；editor 保留「本次会话临时换模型」。
+会话级模型覆盖仅作用于当前会话请求，不改变全局默认模型。切换器的选择值应与会话状态同生命周期；重新生成沿用该会话所选模型，清除覆盖后回到全局默认。
 
-现状（已实测）：
-- 后端通道**已经完整存在**：`ChatRequest.model` → `RequestContext` → `set_request_model()` → contextvar
-- 前端**完全没用**：`api/chat.ts:10-19` 的 `ChatRequest` **没有 `model` 字段**；`LLMSwitcher` 走的是 `switchLLM()` 那条全局路径
-- `useSSE.runStream(question, sessionId)` **只有两个参数**，不传 model
+全局默认和模型配置属于管理员操作；普通编辑者只能选择本次会话使用的已注册模型。API 边界执行模型可用性和凭据校验，错误需说明原因。权限、规则和请求契约分别由前端组件、chat API 与模型注册表测试锁定。
+### 13.1 请求级模型校验
 
-**三处改动**（后端零改动 —— 这是本决策最大的收益）：
+会话模型覆盖只对当前请求生效。API 边界调用共享的模型校验规则；模型未注册、Ollama 未启用或供应商凭据缺失时返回明确的 400 错误。合法模型才进入请求上下文。
 
-```
-① api/chat.ts      ChatRequest 加 `model?: string`；streamChat 原样透传（body 已整体序列化）
-② hooks/useSSE.ts  runStream(question, sessionId, modelOverride?) —— 新增第三参数，
-                   streamChat({..., model: modelOverride})
-                   ⚠️ 三个调用方都要过：useChat.startStream / MessageBubble.regenerate / stopStream 路径
-③ LLMSwitcher.tsx  受控化：从「自己 fetch 全局 + switchLLM」改为
-                   - 读：全局默认（useQuery ['llm-current']，只读）
-                   - 写：只写会话态（store 或父组件 state），**不调 switchLLM**
-                   - 视觉：当前会话覆盖时，触发器显示后缀「· 本会话」（否则用户以为改了全局）
-```
+上下文绑定层保留其既有宽容语义，因为评测和脚本等非 HTTP 调用方没有 HTTP 错误响应通道。规则实现见 backend/infra/llm/models.py，API 入口见 backend/app/api/routes/chat.py。
 
-**状态放置**：会话级模型属「一次会话的临时偏好」，放 `store/chat.ts` 的 `sessionModel: string | null`（与 `sessionId` 同生命周期），而非组件本地 state —— 因为 `ChatView` / `ComposerToolbar` / `MessageBubble.regenerate` 三处都要读它。`regenerate` 必须带同一 model（否则「重新生成」会换模型，结果不可比）。
-
-**permission**：`/llm/switch`（全局）加 `require_admin_user`；`LLMSwitcher` 对非 admin 隐藏「设为全局默认」项。保留 `set_current` 的内存语义作 admin 调试通道（主设计 §3.4）。
-
-### 13.1 后端校验（已定：需要）—— 但现状是「有校验、无拒绝」
-
-**先纠正一个前提**：会话级 model 的校验**早就存在**，本项不是「新增校验」。
-
-`proxy.py:72-105` 的 `set_request_model` 已做三级检查（口径与 `set_current` 对齐）：
-
-| 检查 | 现状行为 |
-|---|---|
-| 不在 `AVAILABLE_MODELS` | warning + **静默清空**（回退全局默认） |
-| `provider == ollama` 且 `OLLAMA_ENABLED` 关 | warning + 静默清空 |
-| provider 需要 Key 而该 Key 未配置 | warning + 静默清空 |
-
-**缺的是「拒绝」，不是「校验」**：三条全部落到同一句 `_request_model_var.set("")` ——
-非法输入被静默吞掉、**实际在用全局默认模型，而用户以为在用自己选的那个**。
-这与 P0 发现的 `LLM_FALLBACK_MODEL` 未注册、`_get_provider` 静默兜底 ollama 是同源病灶
-（「以为在用 A、实际在用 B，且无从察觉」）。
-
-**契约（已定）**：**API 边界 fail-fast，`set_request_model` 保持宽容**。
-
-```
-POST /chat → ① api 层校验 model（唯一规则来源）
-               非法 → 400，detail 说明原因（未注册 / provider Key 缺失 / Ollama 未启用）
-               合法 → 透传
-           → ② RequestContext → set_request_model()  仍 warning + 清空（不变）
-```
-
-**为什么分两层、且只在前一层严格** —— 这就是「改校验而不破既有契约」的做法：
-
-| 理由 | 内容 |
-|---|---|
-| 职责分离 | `set_request_model` 是**上下文绑定**而非输入校验 —— 它还被非 HTTP 路径调用（评测生成、脚本），拿不到请求上下文来报错 |
-| 不破契约 | `tests/test_llm_bind_tools.py:117-144` 有 **4 例锁定静默语义**（`test_unregistered_model_ignored` / `test_missing_provider_key_ignored` / `test_ollama_disabled_in_cloud_ignored` / `test_valid_model_with_key_accepted`）。让 `set_request_model` 抛错会**直接打破它们**，并波及非 HTTP 调用方 |
-| 规则单点 | 抽 `validate_override_model(model) -> (ok, reason)` 供 **proxy 与 api 层共用**；否则两套规则必然漂移（这正是 §1.1 那类错配的成因） |
-
-**不做模型级 ACL**（显式取舍，非遗漏）：不引入「editor 不许用某模型」的表与 UI。
-理由：可切换的都是**同一批系统已注册模型**，不存在「editor 才不该用」的成员；
-成本由既有 `budget` / `quota` 硬阻断兜住。若将来要分级，那属独立议题。
+不引入独立的模型级 ACL；使用已有权限、预算和配额机制。
 
 ---
 
-## 14. 后端缺口清单（设计时阻塞项；历史快照）
+## 14. 回归契约
 
-⚠️ 以下结论来自页面设计阶段的核查快照，不再代表当前状态。当前端点已由
-`sys_model_roles.py`、`sys_providers.py`、`model_config.py` 接入主 `api_router`；
-实现明细和验证证据见治理进度报告 §10。
+### 14.1 会话模型覆盖
 
-| # | 端点 | 依赖阶段 | 阻塞的 tab |
-|---|---|---|---|
-| 1 | `GET /sys/model-roles` | P2 | ①⑤ |
-| 2 | `PUT /sys/model-roles/{role}` | P2 | ① |
-| 3 | `GET /sys/providers` | P2 | ②⑤ |
-| 4 | `PUT /sys/providers/{id}`（含 credential / network_scope） | P2 | ② |
-| 5 | `POST /sys/providers/{id}/verify` + `POST /sys/providers/verify-draft` | **P1b** | ②（测试图标） |
-| 5a | `POST /sys/providers/{id}/models` + `GET /sys/providers/{id}/models?modelKind=...` | P2 | ②（按用途新增/过滤模型） |
-| 6 | `GET /sys/config/history` + `POST /sys/config/history/{id}/rollback` | P2（**新写**，历史表已有但无读取端点） | ④ |
-| 7 | `GET /sys/config/drift` | P2（含索引模型比对，见下） | ⑤ |
+API 校验与上下文绑定共用同一模型规则；非法覆盖应在 HTTP 边界拒绝，合法覆盖应随请求传递。更新请求协议时同步检查 chat API、SSE、重新生成和测试覆盖。
 
-**三点必须与后端对齐**：
-1. **响应形态逐端点写死**（§1.1 的教训：`/sys/config` 裸 dict、`/sys/security/*` 是 Result 壳，前端曾因此误用）。**决策见 §1.1.1：新端点一律裸 dict**，逐端点不得再靠猜。
-2. **索引模型比对**（tab⑤ 的 `index_model_mismatch`）需要读索引元数据（embedding 模型名 + 维度）。若后端暂不提供，**该检查项须显式标注「暂不支持」而非静默缺失**。
-3. **会话级 model 校验不新增端点**（§13.1）—— 它是既有 `POST /chat` 的请求校验增强，且 `set_request_model` 的静默语义**保持不动**（4 例测试锁定）。属于「改行为」而非「加端点」，故不计入上表 6 项。
+### 14.2 Provider 凭据传递
+
+Provider 构建路径必须将解析后的凭据显式传给对应构造器。新增 Provider 分支时同时更新分发表和契约测试，避免管理端保存的密钥在真实问答链路中被静默绕过。凭据或探测行为的安全规则见模型配置治理设计 B.3–B.6、B.14–B.15。
+
+### 14.3 最小检查入口
+
+- 后端请求级模型校验：backend/tests/test_model_override_validation.py。
+- Provider 凭据分发：backend/tests/infra/test_llm_proxy_credentials.py。
+- 前端请求与会话覆盖：对应 API、SSE 和模型切换组件测试。
 
 ---
-
-## 15. 落地顺序
-
-| 批 | 内容 | 前置 |
-|---|---|---|
-| **A（可先行）** | 类型与纯函数（`types/modelConfig.ts` + 测试）、`api/modelConfig.ts`（对着 mock）、③ 价格搬移 + 重定向、④⑤ 的只读骨架（若后端给了 GET） | 无（不动热路径） |
-| **B** | tab① 角色绑定（只读先上，写操作随后端 `PUT` 上线） | 后端 #1 #2 |
-| **C** | tab② 列表 + 编辑 Modal（先无测试图标） | 后端 #3 #4 |
-| **D** | 连通性测试 UI | **P1b** 的 #5 |
-| **E** | ④ 历史 + 回滚、⑤ 漂移 | 后端 #6 #7 |
-| **F** | 会话级切换（§13）+ `/llm/switch` 加门禁 | 无（后端已就绪） |
-
-**F 其实可以提到最前**：它零后端依赖、独立可验收，且**先做能立刻收掉 B.5#6 的权限洞**（editor 现在就能切全局模型 —— 那是当下正在生效的风险，不是设计债）。
-
-**不建议先做 A 的页面骨架**：B.8 的硬闸门是明确的 —— P1a-2 / P1b 未完成前，页面「配了不生效」。只做**纯函数与 API 模块（含 mock 测试）**是安全的，因为它们不产生可点击的 UI。
-
-### 15.1 F 批实施状态（2026-09-19）
-
-**已落码并通过验证**（两端 `tsc --noEmit` 零错误；后端 10 例 + 前端 5 例测试全绿）：
-
-| 落点 | 改动 | 状态 |
-|---|---|---|
-| `backend/infra/llm/models.py` | 新增 `validate_override_model()` —— 覆盖校验的单一事实来源（显式 `ollama_enabled` 注入，纯函数可测） | ✅ 已提交 |
-| `backend/app/api/routes/chat.py` | `/chat` 与 `/chat/stream` 加 `_validate_model_override()`（非法 → 400 fail-fast） | ✅ 已提交 |
-| `backend/tests/test_model_override_validation.py` | 规则单点 + API 边界两层契约（10 例） | ✅ 已提交 |
-| `backend/infra/llm/proxy.py` | `set_request_model` 复用单点规则（保持宽容静默 + 既有 monkeypatch 路径有效） | ⏸ 工作区 |
-| `backend/app/api/routes/llm.py` | `/llm/switch` 叠加 `require_admin_user` | ⏸ 工作区 |
-| `frontend{,-admin}/src/api/chat.ts` | `ChatRequest.model` | ⏸ 工作区 |
-| `frontend{,-admin}/src/hooks/useSSE.ts` | `runStream(…, modelOverride?)` + `startStream`/`regenerate` 透传 | ⏸ 工作区 |
-| `frontend{,-admin}/src/store/chat.ts` | `sessionModel` + `setSessionModel`（与 sessionId 同生命周期，**不进** `resetStream`） | ⏸ 工作区 |
-| `frontend{,-admin}/src/components/agent/LLMSwitcher.tsx` | 受控化：只写会话态 + 「· 本会话」标记 + 回到全局默认；admin 端多一个 `atLeast('admin')` 可见的「设为全局默认」 | ⏸ 工作区 |
-| `frontend/src/hooks/useSSE.test.tsx`、`components/agent/LLMSwitcher.test.tsx` | 透传契约 + 「不调 switchLLM」守卫（5 例） | ⏸ 工作区 |
-
-**⏸ 项为何未提交** —— 三条硬约束，均非疏漏：
-
-1. **`proxy.py` 提交即炸主干**：工作区该文件同时承载并发会话的预算计价改动（`release_model_reservation` / `calculate_current_cost`），而它们依赖的 `budget.py` / `pricing.py` / `quota.py` 仍未提交。单独提交 `proxy.py` 会让主干 import 失败。
-2. **`llm.py` 门禁必须与前端受控化原子提交**：`SENSITIVE_API_GUARD_MODE` 默认 **enforce**，门禁单独上线会让仍在调 `switchLLM` 的旧前端直接 403。收紧本身是想要的，但不能以"点不动"的方式落地。
-3. **前端 6 个改动文件与并发会话的未提交改动同文件**：它们承载另一条功能线（幂等键 / 澄清卡片 / `trace_id`），按路径限定提交也无法剥离**同一文件内**的他人改动。
-
-**可安全分离的部分已提交**：`models.py` 是纯增量（新增函数，零调用方变更）；`chat.py` 的 fail-fast 对"不传 model"的现有前端完全无影响（现有前端从不传 model）。
-
-### 15.2 P1b 实施状态（2026-09-19）
-
-**P1b（探测服务）三片已全部落码、验证并提交**：
-
-| 落点 | 改动 | 提交 |
-|---|---|---|
-| `backend/infra/llm/registry_store.py` | `refresh_loop()`（15s 轮询，单轮异常不退出） | `a8c21f4` |
-| `backend/app/server.py` | startup 钩子 `start_llm_registry_refresh` | `a8c21f4` |
-| `backend/tools/url_guard.py` | `allow_private` 关键字（默认 False，行为不变） | `153b475` |
-| `backend/services/provider_probe.py` | 四级探测 L0–L3（新增） | `153b475` |
-| `backend/app/api/routes/sys_providers.py` | 两个探测端点 + 滑动窗口限流（新增） | `18bccd2` |
-| 测试 | `test_llm_registry_store.py`(5) + `test_provider_probe.py`(18) + `test_sys_providers_probe_api.py`(14) | 同上 |
-
-**实施时新定的三条决策（原文档未写，勿当成偏离）**：
-
-1. **探测不经 proxy** —— L2/L3 用裸 langchain 客户端（按 driver 构建）。这使 B.4 硬约束 3「探测排除在用量与预算统计之外」**结构性成立**，无需侵入 `token_tracker`（该文件正被并发会话持有）。`test_provider_probe.py` 用 **AST 断言 import 列表**守这条 —— 若有人把探测改成走 proxy，测试会红。
-2. **私网放行比 B.6 原文更严一点** —— 只放开 IP 网段、不放开协议；且云元数据地址（`169.254.169.254` / `fd00:ec2::254`）**即便放行也始终拦**。理由：元数据是「取实例凭据」入口，泄露后果与「访问内网 LLM」完全不成比例。
-3. **只有 L0 失败短路** —— L1 的 404/401 一律降级后继续跑 L2。有些站点 `/models` 需额外 scope，L1 401 不代表 chat 端点也 401，过早判死会毁掉测试按钮的可信度。
-
-✅ 当前已完成注册：`sys_providers.router` 已包含在 `api_router`，并已通过实际
-TestClient 读取验证。下文关于「差一行未生效」的内容属于注册前快照。
-
-**对 B.8 硬闸门的影响**：P1b 完成后，闸门**只剩 P1a-2**。⚠️ 但 P1a-2 的**真实范围比此处原写的「billing 传播」更大** —— 见 §15.5：它还包含「proxy 的构建路径不传凭据」这一条，而**那条才是 BYOK 至今不生效的直接原因**。落点仍是并发会话持有的 `proxy.py` / `budget.py` / `quota.py`。
-
-### 15.3 P2 数据源：供应商清单端点（2026-09-19）
-
-tab② 的数据源已就位（与探测端点同文件、同待注册批次）。
-
-| 落点 | 改动 | 提交 |
-|---|---|---|
-| `backend/infra/llm/registry_store.py` | `RegistrySnapshot.credential_meta`（指纹/last4/轮换）+ `_SELECT_CREDENTIALS` 补 `updated_by`/`updated_at` | `e76bb2a` |
-| `backend/app/api/routes/sys_providers.py` | `GET /sys/providers` 只读清单（字段对齐 §6 `ProviderRow`） | `e76bb2a` |
-| `backend/tests/api/test_sys_providers_list_api.py` | 6 例（新增） | `e76bb2a` |
-
-**两条分支的语义**（本端点最容易被做错的地方）：
-
-| DB 状态 | `source` | `items` | 前端应表现 |
-|---|---|---|---|
-| 可用 + 有数据 | `db` | 快照（含自建实例） | 正常列表 |
-| 可用 + 表为空 | `db` | `[]` | 「还没有配置供应商」 |
-| 不可用 / 表未建 | `builtin` | 代码层内置厂商 | 「配置暂不可用，展示内置厂商」 |
-
-分支依据是 `loaded`，**不是** `items` 是否为空 —— 二者差别是「真没配」与「故障」，混同会让运维去查错方向。两条都有测试锁定。
-
-**实施时新定的三条决策**：
-
-1. **凭据展示元数据不塞进 `ProviderCredentials`**，另立 `RegistrySnapshot.credential_meta` —— 前者是出站调用热路径的数据类，展示字段混进去会让每个 provider 构造点背无关数据；且它与「能否解密」解耦（解密失败仍要能看到「已落库但不可用」）。
-2. **兜底不是空列表** —— 见上表。空列表会把「库没就绪」伪装成「配置被删光」。
-3. **不为「列出已停用实例」改动 `_SELECT_PROVIDERS`** —— 该 SQL 被 `refresh_registry` 与探测端点共用（都依赖 `enabled=true` 语义）。故清单里 `enabled` 恒 true；停用项展示随 P2 的「停用/编辑」功能另开查询。
-
-**实现后的状态（原缺口已关闭）**：
-
-- `lastProbe` 已在迁移 0018 后持久化到 provider 表；尚未探测的 provider 仍为 `null`，前端按「未验证」灰显，tab⑤ 漂移会点名。
-- 清单与两个探测端点已注册；本段早期的「差一行注册」是实现前快照。
-
-### 15.4 P2 数据源：模型角色绑定视图（2026-09-19）
-
-tab①⑤ 的数据源，与 §15.3 同批落码，同样落在独占新文件上。
-
-| 落点 | 改动 | 提交 |
-|---|---|---|
-| `backend/app/api/routes/sys_model_roles.py` | `GET /sys/model-roles`（新增），字段对齐 §5.4 `RoleBinding` | `e608484` |
-| `backend/tests/api/test_sys_model_roles_api.py` | 9 例（新增） | `e608484` |
-
-**端点层做的两处归一化**（都不改 P0 的 `model_roles` —— 它另有消费方与测试）：
-
-| 内部值 | 契约值（§5.4） | 漏掉的后果 |
-|---|---|---|
-| `code-default` | `default` | 前端 TS 判别落到 `else`，静默显示错来源 |
-| `inherit:<父role>` | `inherit`（父 role 走 `inheritedFrom`） | 同上，且该值不在契约联合类型内 |
-
-**一条一致性约束**：`provider` 与 `registered` **必须同源**（都用 `get_available_models()`，即代码层 + DB 动态层）。若 `provider` 沿用 `model_roles.provider_of`（只看代码层 `AVAILABLE_MODELS`），自建模型会显示「已注册但无所属供应商」—— 自相矛盾且无从排查。有测试锁定。
-
-**⚠️ 本轮查实的一个 P0→P1 缺口（设计阶段记录；本轮已补齐）**
-
-「模型选型进 DB」（决策 1）在设计阶段**只有解析器、没有数据通道**：
-
-1. 当时 `model_roles.inject_overrides()` **零调用点** —— 旧设计上由 `services/sys_config.py` 的刷新循环注入，但该循环只处理守卫开关。
-2. **即便接线，旧运行时也不会即时生效** —— `config/llm.py` 的 `LLM_MODEL = _literal_model("main")` 是**模块级赋值 → 导入时冻结**。
-
-   → 要做到「本实例即时」，须把消费方从「读 `config.LLM_MODEL` 常量」改成「调用时 `resolve_name(role)`」。落点分散在 `infra/llm/proxy.py`（`_resolve_active_llm` / `get_active_model_name`）、`rag/chain.py`、`infra/llm/factory.py` 等 —— **其中 `rag/chain.py` 与 `proxy.py` 正被并发会话持有未提交改动**。
-
-   → 本轮通过 `registry_store` 刷新动态注入角色覆盖，并在 `proxy` 的 active/default 解析路径按请求读取，因此主问答模型保存后无需重启即可对后续请求生效。
-
-**当前 `source` 的取值**：可为 `db` / `env` / `inherit` / `default`；DB 覆盖由
-`registry_store` 注入，端点与运行时共享同一快照。
-
-**实现后的状态**：探测结果已由迁移 0018 持久化；清单、角色和探测端点已注册，
-写入、历史、回滚和漂移端点由 `model_config.py` 提供。旧「仍未落地」结论仅是设计阶段快照。
-
-### 15.5 P1a-2 真实范围的前置核查 + 两条实测缺陷（2026-09-19）
-
-在动手做 P2 页面前，先把「闸门到底还剩什么」查实。结论：**剩下的后端项几乎全部卡在同一处**，且其中一条比原估更严重。
-
-**（一）P1a-2 比「billing 传播」更大：线上聊天路径根本不读 DB 凭据**
-
-| 事实 | 位置 |
-|---|---|
-| 线上聊天用的 `get_llm()` **来自 `proxy`，不是 `factory`** | `infra/llm/__init__.py:17` |
-| `factory` **已经**在调用时解析凭据并传给 provider（P1a-1 的成果） | `infra/llm/factory.py:128` |
-| 但 `proxy._build_llm_for` 自己的分发表**不传凭据**，末尾 `else` 落到 ChatOllama | `infra/llm/proxy.py:208-240` |
-
-→ **后果**：管理端 / DB 里配好的供应商实例与密钥**在真实问答中被忽略**，一律回落 `.env`。
-即 P1a-1 + P1b 的全部产物目前是「能配、能测、不能用」。这是 B.8 闸门要防的「配了不生效」，
-但它发生在**后端**而非页面 —— 所以**即使页面先做出来也不会暴露这个问题**。这直接决定了本轮不做页面。
-
-**（二）`proxy._build_llm_for` 缺 `vllm` 分支（既存缺陷，同类于 2026-09-17 的 `qwen_tp`）**
-
-`models.py:75` 注册了 `vllm`，`models.py:136` 有 `Qwen/Qwen3-32B-AWQ`（provider=`vllm`）在 `AVAILABLE_MODELS` 里（用户可选）。
-选中后落到末尾 `ChatOllama(model="Qwen/Qwen3-32B-AWQ")` → 报一个与真因无关的 Ollama 连接错误。
-`proxy.py:220-225` 的注释显示 `qwen_tp` 曾被同样的问题绊过 —— 这是**第二例同型缺陷**（分发表手写、与 `factory` 双维护）。
-
-> 四条修正建议（`proxy` 复用 `factory` 的分发逻辑、`credentials` 形参、`vllm` 分支、以及 `proxy` 与 `factory` 的**分发一致性守卫测试**）已写入
-> `docs/coordination/2026-09-19-llm-model-config-handoff.md` §2②，附可粘贴的补丁骨架。
-> **用户已拍板「改」→ 已按方案 b 落码（未提交），见 §15.6。**
-
-**（三）§15.4 那条「即时生效」缺口的消费方清单（实测补全）**
-
-8 个角色常量全部是模块级赋值（导入时冻结）：`config/llm.py:74,83,115,171,231,308`（eval_gen / embedding / rerank / main / tool_selector / fallback）、`config/rag.py:81,98`（ocr / doc）。
-要做到「本实例即时」须改的消费方共 8 处：`infra/llm/proxy.py:28`、`infra/llm/factory.py:31`、`rag/chain.py:848`、
-`rag/indexing/indexer.py:34`、`rag/embedding_singleton.py`、`evaluation/generation.py:16`、`evaluation/ragas_bridge.py:37`、`app/api/routes/rag_upload.py`。
-
-→ **blast radius 远大于设计写下时的预估**，且 `indexer.py` / `rag_upload.py` / `chain.py` 未必在本会话手上。
-→ **当前实现状态（2026-09-19）**：新增 `model_roles.resolve_runtime_name()` 作为兼容入口，
-`main`、`fallback`、`doc`、`tool_selector`、`ocr`、`rerank`、`eval_gen` 的实际调用点已改为在 DB 覆盖存在时读取新值；
-`embedding` 仍保留单例与向量空间安全门槛，页面明确提示必须重建索引，不能在线切换当前索引。
-因此 UI 不再统一显示「下一次请求生效」，而按角色提示热切换或重建索引要求。
-
-**（四）注册死锁的一个新认知（重要）**
-
-`router.py` 不能靠「只提交我这几行」绕开。除「引用未提交模块 → 主干 import 失败」外，还有第二个更隐蔽的后果：
-部分提交后我的行进 HEAD，而持有方的工作区副本**不含**我的行 → 他**下一次提交该文件会把我的行静默删掉**（文件级提交取工作区内容）→ 端点悄然回到 404 且无任何报错。
-故注册只能由 `router.py` 的持有方落定后补，或由其明确授权代加。已写入协同文档 §2①。
-
-### 15.6 P1a-2 收口：proxy 构建路径的凭据传参 + 分发统一（2026-09-19）
-
-用户拍板「改」后，把 §15.5（一）（二）两条一起收掉。当前改动已在工作区完成并验证，
-是否提交由发布流程另行决定。
-
-**落点：`backend/infra/llm/proxy.py`（全在 200–283 行，与并发会话的预算改动 340+ 行完全不相邻）**
-
-| 改动 | 内容 |
-|---|---|
-| `_build_llm_for` | 调用时 `resolve_credentials(provider, model_name=…)` 并**显式传入**每个 `build_xxx(model_name, credentials)` |
-| `_build_llm_for` | 补 **`vllm` 分支** → `build_vllm(model_name, credentials)` |
-| `_get_provider_for` | 由「遍历代码层 `AVAILABLE_MODELS`」改为委托 **`models.resolve_provider`**（与 `factory._get_provider` 同源） |
-| ollama 兜底 | 由**内联** `ChatOllama(...)` 改为复用 `providers/ollama.build_ollama`（与 factory 同源） |
-| `_resolve_credentials_or_none`（新） | 凭据解析异常 → 只 warning + 返回 `None`（= 与改造前逐位一致），**不在聊天热路径新增崩溃点** |
-
-**三条实施决策（原文档未写）**
-
-1. **顺手收掉「第二张分发表」**：`_get_provider_for` 统一到 `resolve_provider` 不只是整洁 —— 旧实现只遍历代码层 `AVAILABLE_MODELS`，DB 覆盖层登记的自建模型一律**误判成 ollama**；而同一个值还写进 `_last_call_meta["provider"]` 供计价链读取 → **费用归属记到错误的 provider 上**。即这是一个**独立的计价正确性缺陷**，与凭据链路同源。
-2. **ollama 兜底复用 `build_ollama`**：它是原内联写法的**严格超集**（多 `base_url` 与 `keep_alive=OLLAMA_KEEP_ALIVE=30m`；当前 `.env` 的 `OLLAMA_BASE_URL=http://localhost:11434` 与 config 默认、langchain 默认三者同值 → base_url 取值未变）。两条构建路径至此**完全同源**，这才是 §15.5 那条缺陷的根因修复。
-3. **凭据解析失败兜底为 `None` 而非抛错**：设计约定「不传凭据 == 改造前行为」，故 `None` 是安全值；聊天热路径上新增崩溃点的代价高于「静默回落 env」，且异常仍记 warning、不吞信息。
-
-**新增测试：`backend/tests/infra/test_llm_proxy_credentials.py`（10 例）**
-
-其中两条是**结构性契约**，价值高于普通打桩测试：
-
-- `test_every_provider_build_call_passes_credentials` —— **AST 断言** proxy 模块里每个 `build_*` 调用必须两参。未来任何人给分发表加分支时忘传凭据，测试立刻变红；而「打桩调用一次」只覆盖当时存在的分支。
-- `test_proxy_dispatch_covers_every_known_provider` —— 断言分发表覆盖 `models.PROVIDERS` 的每个 provider，防**第三例** `qwen_tp`(09-17) / `vllm`(09-19) 型漏项。
-
-**已做反证验证**：临时把 `build_vllm(model_name, credentials)` 改回单参 → 上述断言**变红** → 按 sha256 校验还原（`dc2c429d2844` 前后一致）。即该守卫**确实**能抓到「凭据被静默丢弃」，不是一条永远为真的摆设。
-
-**为什么零行为变化（已实测）**：DB 覆盖层为空时 `resolve_credentials` 对全部 provider 返回 `source=env`、且值与 provider 自身回落值**相同**（实测 `deepseek` / `qwen` / `vllm` / `ollama` / `siliconflow` 五家）。故本改动在 0017 表与 P2 写端点落地前**行为等价**。
-
-**为什么未提交**
-
-| 约束 | 说明 |
-|---|---|
-| 同文件并发 | `proxy.py` 同时承载并发会话的预算改动（`reserve_model_call` / `release_model_reservation` / `calculate_current_cost`），路径限定提交**不能剥离**同文件内的他人改动 |
-| 提交即运行时坏 | 这些符号在未提交的 `budget.py` / `pricing.py` 中（已实测 `git show HEAD:` 确认缺失） |
-| ⚠️ **更正一处旧表述** | §15.5 / 交接单此前写「单独提交 `proxy.py` 会让主干 `import` 失败」—— **该说法不准确**。这些 `from backend.infra.llm.budget import (...)` 是**函数内延迟导入**（429–432 / 468–471 / 706 行），`import backend.infra.llm.proxy` **会成功**，故障在**调用到预算预留 / 计价那几行时**才抛 `ImportError`。结论（不该单独提交）不变，但故障形态更隐蔽：**排查时容易误判成预算模块自身的问题**。（§15.5(四) 对 `router.py` 的同一表述是对的 —— 那里的 `include_router` 是**模块级**导入。） |
-| 无生产收益 | 因上一条「零行为变化」，此刻提交不产生任何线上收益 → **不值得**为此承担并发写风险 |
-
-**验证**：合并回归 **199 passed** 零失败（含 `test_url_guard` / `registry_store` / `credentials` / `registry_models` / `model_roles` / `provider_probe` / 三个 api / `override_validation` / `bind_tools` / `llm_usage_component` / `llm_cascade`）。
-
-**对 B.8 闸门的影响**：§15.5 两条缺陷、0018 迁移、P2 写端点和页面均已在本轮
-完成本地验证；生产上线仍需执行迁移、部署并按 §10.3 灰度。
-
----
-
-## 16. 测试策略（vitest）
-
-沿用「共置 + 纯函数优测」的仓库口径（`src/api/*.test.ts`、`components/knowledge/fmtMs.test.ts`）。
-
-| 测试 | 覆盖 |
-|---|---|
-| `types/modelConfig.test.ts` | `gradeLabel` 四级文案；`sourceLabel` 的 inherit 展开；`redactForRole` **三类对象的脱敏矩阵（含 canAdmin=true 与 false 两侧）**；`isModelSelectable` 的未注册/缺 Key 两分支；`maskSecret` |
-| `api/modelConfig.test.ts` | 请求形状（method/path/body）照 `modelPrices.test.ts` 写法；**响应形态断言（裸 dict，不是 Result 壳）** ← 防 §1.1 的同类回归 |
-| `ConnectivityProbe` 组件测试 | **L1 失败但 L2 通过时整体为「通过」且 L1 渲染为黄色 ⚠ 而非红色**（B.4 硬约束 1 的守卫测试） |
-| `ProviderEditorModal` 组件测试 | 密钥三态：未配置必填校验 / 已配置留空则 body **不含** key 字段 / 轮换则 body 含新值 |
-| `navConfig.test.ts`（既有） | 新增条目后**既有断言须全绿**；补一条「`/settings/models` 条目 minRole=admin」 |
-| `api/chat.ts` 相关 | `ChatRequest.model` 透传（若 `surface.test.ts` 有涉及则一并） |
-| `useSSE` | `runStream` 带与不带 `modelOverride` 时 `streamChat` 收到的 body |
-
-**禁止**：为了让测试通过而 mock 掉 `atLeast` —— 权限矩阵测试应通过 `sessionStorage.setItem('agent.user_info', ...)` 真实切换角色（照 `navConfig.test.ts:71-74` 的 `loginAs` 写法）。
-
-### 16.1 批次 A 前半落地（2026-09-19）：类型 + 纯函数
-
-已交付 `frontend-admin/src/types/modelConfig.ts` 与其共置测试 `modelConfig.test.ts`（**28 例全绿**，`tsc --noEmit` 零错误）。
-类型与 §5.4 逐字对齐（含 `ProviderListResponse.source` 的 `db|builtin` 分支 —— 它是 §15.3 fail-open 兜底的可见性出口）；
-纯函数覆盖 §16 第一行的全部条目，另加 §8.1 的 `probeFallbackSummary` / `probeOverallLabel`（把「每级失败含义不同」这条 B.4 约束变成可测的纯函数，而不是散在组件里的三元表达式）。
-
-**两条对 §5.4 签名的有意偏离**（写在此处以免被当成笔误）：
-
-| 函数 | 文档签名 | 实际签名 | 理由 |
-|---|---|---|---|
-| `isModelSelectable` | `(role, model, models)` | **`(model)`** | 可选性只由该模型自身的「是否注册 / 是否缺 Key」决定（§6 明写「唯一判据」）。`models` 是冗余的（调用方本已持有该 `ModelOption`）；`role` 只影响保存时的 `requiresReindex` 二次确认，与可选性无关 —— 留着无用形参会让调用方以为它有作用。 |
-| `sourceLabel` | `(source, inheritedFrom)` | **`(source, inheritedFrom, inheritedValue?)`** | 两参签名**无法**产出文档自己要求的文案「跟随 main（**当前 = xxx**）」。「当前 = xxx」必须由调用方把父角色的生效值传进来；否则退化成「让人猜」，与主设计 §3.1 直接冲突。第 3 参可选，缺省时只给「跟随 main」。 |
-
-**一条刻意的安全网**：`redactForRole` 在当前契约下，`canAdmin` 对四类已知对象**不产生差异**（密钥类对管理员也只给指纹 —— 库里本就没有可展示的值）。
-仍保留该形参并用在 **未知对象类型** 的兜底分支上（非 admin 一律不显示值）：将来新增带秘密的对象类型时，默认就是安全的，而不是等发现泄漏再补。测试用一个 `provider_header` 假类型锁定了这条兜底。
-
-**已实现**：`frontend-admin/src/api/modelConfig.ts` 已对接上述裸 dict 端点，并有
-请求形状测试；组件和页面状态见治理进度报告 §10。
-
----
-
-## 17. 决策记录
-
-**全部已定**（2026-09-19 拍板完毕，无遗留待确认项）：
-
-| # | 事项 | 决策 | 落点 |
-|---|---|---|---|
-| 1 | §1.1 的「假失败」bug | **修**（已实施） | §1.1；提交 `ecf2e90` |
-| 2 | 新端点响应形态 | **一律裸 dict**，无 Result 壳 | §1.1.1 |
-| 3 | tab② 对 editor | **整 tab 隐藏**（按 B.6「查看供应商 = admin」从严） | §3.3 / §3.4 |
-| 4 | 会话级 model 后端校验 | **需要** —— API 边界 fail-fast 400；`set_request_model` 静默语义**不动** | §13.1 |
-| 5 | `/cost-governance/prices` 的 nav 条目 | **删除**，重定向保留（连带：该组只剩一条，见 §9） | §9 |

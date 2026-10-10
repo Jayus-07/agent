@@ -1,12 +1,6 @@
 # 模型配置治理设计（Model Config Governance）
 
-> 2026-09-19 起草。背景：`agent/.env` 已膨胀到 339 行 / 109 个变量，模型相关配置散落在
-> 三处互不知情的事实来源上，管理端已有的模型切换器写的是进程内存态（重启即失效）。
-> 本文给出收敛设计与实施分期。原文是设计阶段基线；管理端闭环已在本轮落码并完成本地验证，
-> 当前实现、测试统计、迁移与上线前事项以 `docs/model-config-governance-progress-report-2026-09-19.md` §10 为准。
->
-> **2026-09-20 实施补充**：附录 B 的通用 Chat BYOK 方案已落地；其中 embedding / rerank
-> 专项链路已按 B.10 的独立协议适配器实现，当前状态以进度报告 §10.6 为准。
+> 本文定义模型配置的数据来源、密钥治理、供应商接入和模型选择规则。实现细节以 backend/infra/llm、backend/services、数据库迁移、管理端代码及对应测试为准；本文不记录进度、提交或验收历史。
 
 ## 0. 决策记录
 
@@ -16,133 +10,81 @@
 | 2 | 密钥是否允许管理端配置 | **允许**（附带加密与脱敏硬约束，见 §4） |
 | 3 | 是否合并现有「模型价格」页 | **合并** |
 
-## 1. 核心判断：扩展 `sys_config`，不新建配置层
+## 1. 配置边界：守卫开关与模型配置分开治理
 
-原设计草案曾提议新建 `runtime_settings` 覆盖层。实际勘察后**推翻该方案** ——
-`backend/services/sys_config.py`（2026-09-16 Lite 版，设计见
-`docs/2026-09-16-动态配置lite与API-Key多Key化方案.md`）已经落地了本设计需要的
-全部五个不变量：
+`backend/services/sys_config.py` 管理动态守卫开关，提供进程缓存、后台刷新、审计和环境默认值回退。模型角色、供应商实例及出站凭据使用专用模型注册/数据库治理实现，不能把密钥写入 `sys_config` 或普通配置历史。
 
-1. 存储分层：DB `sys_config` 表是覆盖层，表内无记录回落 env 默认值
-2. 免重启生效：进程内缓存 + 后台 15s `refresh_loop`，写本实例即时生效
-3. 审计含旧值：`sys_config_history` 落 old→new + 操作人，回滚 = 写回旧值
-4. 权限收口：写接口挂 `require_admin_user`（`app/api/deps.py:328`）
-5. fail-closed：DB/值非法/键未知一律回退「上次已知值 → env 默认」
+稳定边界：
 
-在同一套机制外再建一层会制造重复。设计阶段原计划扩展 `sys_config`；当前实现将模型治理
-配置拆成专用的 `llm_providers` / `llm_provider_credentials` / `llm_model_role_bindings` 表，
-由 `registry_store` 注入同一进程内覆盖层，避免把可逆密文塞进 `sys_config_history`。
+- `sys_config` 只承载适合字符串覆盖的运行开关；守卫读取必须保持热路径无同步数据库 I/O，并对未知或非法值安全回退。
+- 模型名需保留大小写并通过当前注册模型集合验证；角色解析、供应商解析和密钥读取走专用入口，不能让调用方各自读取环境变量。
+- Provider 驱动与协议能力随代码发布；供应商实例配置、角色绑定和密钥按专用迁移与注册仓储管理。
+- 密钥写入、审计和读取遵循 §4 与附录 B；不得复用会记录普通 old/new 值的开关审计路径。
 
-### 1.1 现有实现的五处不满足（本设计的核心工作量）
+### 1.1 读取与校验边界
 
-| # | 现有约束 | 为什么不满足模型/密钥场景 | 扩展方向 |
-|---|---|---|---|
-| 1 | `_normalize()` 强制 `.strip().lower()`（`sys_config.py:103`） | 模型名**大小写敏感**：`MiniMax-M3`、`Qwen/Qwen3-8B`、`BAAI/bge-m3` 会被改写成小写从而匹配不上 | 键登记项增加 `case_sensitive`，校验与缓存均保留原大小写 |
-| 2 | `_SWITCHES[*].allowed` 是静态 tuple，硬编码在代码里 | 模型角色的合法集 = `AVAILABLE_MODELS` **动态集合**，且会随代码升级变化 | 登记项支持 `validator` 回调（函数式白名单），替代静态 `allowed` |
-| 3 | `get_mode()` 同步、零 IO、只回缓存 | 只能返回开关字符串；密钥需要解密+失败语义，模型需要角色解析 | 拆出三个语义入口，见 §3.3 |
-| 4 | `sys_config.value VARCHAR(128)`；`sys_config_history.old_value/new_value VARCHAR(128)` | Fernet 密文长度 ≈ `enc:` + base64(1+8+16+n+16+32) 字节，一个 60 字符的 Key 加密后 **>180 字符**，`VARCHAR(128)` 直接截断/报错 | 密钥走**独立表** `provider_credentials`（TEXT 列 + 指纹列 + 版本列） |
-| 5 | 审计直接打印值：`logger.warning("[SysConfigAudit] actor=%s ... old=%s new=%s", ...)`（`sys_config.py:214`） | 密钥会**明文进日志与历史表** | 密钥通道走脱敏分支：只落指纹 + 掩码尾部，见 §4.3 |
-
-> 第 5 条不是理论风险：`sys_config_history` 会长期保留每一版值，一旦存过明文密钥，
-> 此后任何一次库导出/备份/只读排查都是泄漏面。
+守卫开关和模型角色虽可热更新，但其数据来源与错误策略不同。修改时分别核对 `backend/services/sys_config.py`、`backend/config/model_roles.py`、`backend/infra/llm/registry_store.py`、对应迁移和失败路径测试；不能根据旧实现说明推断当前生效值。
 
 ## 2. 事实来源分层（定稿）
 
 ```
 [ 消费方 ]  resolve_model(role)  ·  get_secret(provider)   ← 唯一读取入口
-                 ↑ 覆盖优先            ↑ 覆盖优先
-[ 覆盖层 ]  sys_config 表          provider_credentials 表   ← 管理端可写，带审计与版本
-                 ↑ 兜底                ↑ 兜底
-[ 底座   ]  .env（密钥 / 基础设施 / 启动期必需项）           ← 部署兜底 + 应急通道
-                 ↑ 最后兜底
-[ 代码   ]  AVAILABLE_MODELS 元数据（provider 能力矩阵）      ← 只读，随代码发布
+[ 持久层 ]  llm_model_roles / llm_models / provider_credentials  ← 专用迁移与审计
+[ 驱动层 ]  PROVIDERS、Provider drivers、模型用途适配器           ← 代码只读
+[ 配置层 ]  .env 基础设施设置与代码默认值                         ← 按各配置项契约读取
 ```
 
 三条不变量：
 
-1. **env 语义不变**：`.env` 继续是部署兜底与应急通道，DB 无记录时行为与今天完全一致。
-2. **读取方不感知层级**：任何消费方只调 `resolve_model(role)` / `get_secret(provider)`，
-   不直接 `os.getenv`。这是收敛的标志——只要还有人在读 `os.getenv("LLM_MODEL")`，
-   分层就没有真正建立。
-3. **每个生效值都带来源**：读取接口返回 `{value, source: db|env|code-default}`，
-   供管理端与排障展示。
+1. **模型清单以数据库为准**：`llm_models` 是运行时模型清单；代码默认值不能绕过注册与绑定校验。
+2. **模型角色有唯一解析入口**：消费方使用 `backend/config/model_roles.py` 暴露的解析函数；历史 env 名称仅供兼容展示，不作为模型选择来源。
+3. **Provider 凭据独立治理**：出站 Key 只由凭据解析模块读取和解密；不得通过 `.env` 兜底发送旧 Key。
 
 ## 3. 模型角色（role）抽象
 
 ### 3.1 角色表
 
-现状是一组靠变量名后缀约定的散变量，收敛为显式角色：
+角色名、用途、继承语义和专项模型校验由 `MODEL_ROLES`（`backend/config/model_roles.py`）唯一维护；持久绑定从数据库读取。`RoleSpec.env_key` 是历史环境变量名，仅兼容展示。新增角色必须同步配置消费方、模型用途校验和回归测试，不在本文复制动态角色清单。
 
-| role | 语义 | 现变量 | 现状问题 |
-|---|---|---|---|
-| `main` | 主问答 LLM | `LLM_MODEL` | 与 `LLM_FACTORY` 内存态不一致 |
-| `doc` | 入库链路文档级关键词 | `DOC_LLM_MODEL` | 留空 = 跟随 main，隐式继承无表达 |
-| `tool_selector` | FC 工具选择+填参 | `TOOL_SELECTOR_MODEL` | 留空 = 跟随 main，同上 |
-| `fallback` | 熔断/重试耗尽兜底 | `LLM_FALLBACK_MODEL` | 「须在 models.py 注册」纯注释维护，无强校验 |
-| `ocr` | 扫描件 OCR | `RAG_OCR_DASHSCOPE_MODEL` | 与 embedding 用不同 Key，归属不清 |
-| `embedding` | 向量化 | `EMBEDDING_MODEL` + `EMBEDDING_PROVIDER` | 与向量索引强绑定，切换需全量重建 |
-| `rerank` | 重排 | `RERANK_MODEL` + `RERANK_PROVIDER` | 同上，另有 `RERANK_API_FORMAT` 协议开关 |
-| `eval_gen` | 评测答案生成 / RAGAS | `EVAL_GEN_MODEL` 或 DB 角色绑定 | 必须绑定已登记且可用的供应商模型；空值表示停用 |
+### 3.2 Provider 驱动与供应商实例
 
-「留空 = 跟随 main」这类**继承语义显式化**：登记为 `inherit: main`，而非空字符串。
-管理端据此渲染「跟随 main（当前 = xxx）」而不是让人猜空值含义。
+协议类型、请求格式和能力适配由代码中的 Provider driver 定义；自建供应商实例的 URL、模型目录及凭据由专用配置管理。边界为「**驱动留代码，实例数据按治理入口管理**」，不得把用户输入直接变成任意网络代理。安全与探测细节见附录 B。
 
-### 3.2 provider 能力矩阵（留代码，不进 DB）
-
-> ⚠️ **2026-09-19 修订**：本节只界定「**协议与能力**」留代码，未覆盖「**厂商实例**」。
-> 后续需求（用户自建供应商 / BYOK + 连通性自测）要求厂商的可变部分进 DB。
-> 边界勘定为「**驱动留代码，实例进 DB**」，见 **附录 B**。本节其余内容仍然成立。
-
-以下三项属于「随代码发布」的事实，不能由管理端改，否则会把系统配成不可用：
+以下由代码驱动层维护，不能由管理端以实例配置覆盖：
 
 - 协议类型（openai-compatible / anthropic-compatible / dashscope-native / jina / ollama）
 - 是否支持 `stream_options.include_usage`（现 `.env` 注释里写「MiniMax 兼容性未验证」）
 - 是否支持余额查询、是否支持 rerank 端点（现注释：「token-plan 不支持 rerank 端点」）
 
-现状散落在 `infra/llm/providers/*.py` 与 `.env` 注释中。收敛为
-`AVAILABLE_MODELS[*]` 上的显式字段（保留在 `models.py`，属代码层）。
+Provider driver 与能力适配以 `backend/infra/llm/models.py`、`backend/infra/llm/providers/` 为准；模型目录本身由数据库提供。`AVAILABLE_MODELS` 已不是可添加模型的事实源，新增或移除模型应经数据库治理接口与引用检查。
 
 ### 3.3 三个读取入口
 
 | 入口 | 语义 | 失败策略 |
 |---|---|---|
-| `resolve_model(role) -> {value, source}` | 同步、读进程内缓存、零 IO | 回退「上次已知值 → env → 代码默认」，**绝不返回未注册模型** |
+| `resolve_model(role) -> {value, source}` | 同步、读进程内缓存、零 IO | 按 DB 绑定及代码默认策略解析；**绝不返回未注册模型** |
 | `resolve_provider(role) -> str` | 由模型名反查 provider | 同上 |
 | `get_secret(provider) -> str \| None` | 解密后的明文（仅进程内使用） | **fail-loud**，见 §4.4 |
 
-`resolve_model` 沿用 `get_mode()` 的「热路径零阻塞」不变量：守卫与问答热路径绝不能
-因为 DB 抖动而被拖慢。DB 轮询仍由后台 `refresh_loop` 承担。
+`resolve_model` 的热路径不得执行同步数据库 I/O；注册表后台刷新及数据库故障时的缓存保留策略以 `registry_store.py` 为准。
 
 > 实施口径：`main`、`fallback`、`doc`、`tool_selector`、`ocr`、`rerank`、`eval_gen`
 > 已由实际调用点读取 DB 覆盖；`embedding` 受单例和向量索引一致性约束，管理端保存后必须
 > 配合全量索引重建，当前索引不会自动切换。
 
-### 3.4 与 `LLMFactory` 的关系（本次必须一并修）
+### 3.4 运行时取值
 
-`LLMFactory.__init__` 里 `self._current_model = LLM_MODEL`（`factory.py:53`），
-`set_current()` 只改内存（`factory.py:108-113`），**不落盘**。这导致：
-
-- 管理端切换器（`frontend-admin/src/components/agent/LLMSwitcher.tsx`）是「会消失的开关」
-- 多实例部署时各实例模型不一致
-
-改造后：`set_current` 写入 `sys_config` 的 `role=main`（或独立的运行时 main 覆盖），
-实例间靠既有 15s TTL 收敛；`LLMSwitcher` 从"改内存"变为"改配置"。
-
-⚠️ 需明确一个语义分歧：`role=main`（持久配置）与「临时切一下试试」（运行时态）
-是两件事。建议保留 `set_current` 的纯内存语义作为 debug 通道，但**管理端不再调用它**，
-改调配置接口，避免再次出现"重启就变回去"的困惑。
+`LLMFactory`、统一代理和管理端必须使用当前模型角色解析入口。持久角色绑定与请求级临时覆盖是不同作用域；请求级覆盖不得写回全局配置。页面和 API 的权限、响应和覆盖行为见[管理端交互契约](model-config-admin-ui-design.md)，实际生效模型以解析结果及来源字段为准。
 
 ## 4. 密钥存储设计
 
 ### 4.1 关键区分：入站 hash vs 出站可逆
 
-项目已有的 `api_keys` 方案（`docs/2026-09-16-动态配置lite与API-Key多Key化方案.md` §2.2）
-规定「`key_hash` = SHA-256 明文，库中不存明文」，这是**正确的，但只适用于入站凭据**。
 两类密钥方向相反，不能套用同一策略：
 
 | 类别 | 例子 | 我们的角色 | 存储方式 |
 |---|---|---|---|
-| 入站凭据 | `X-API-Key`（现有 `API_KEY`） | 校验方：只比对，不用还原 | SHA-256 hash，**不可逆** |
+| 入站凭据 | `X-API-Key` | 校验方：只比对，不用还原 | 按当前认证实现存储/比对，禁止在文档或日志暴露明文 |
 | 出站凭据 | `QWEN_API_KEY` / `DEEPSEEK_API_KEY` / `SILICONFLOW_API_KEY` … | 调用方：必须把明文发给第三方 | **必须可逆** → 加密存储 |
 
 哈希对出站 Key 无解——我们得拿着明文去调 DashScope。所以「密钥允许管理端配置」
@@ -209,33 +151,11 @@ provider=aliyun_dashscope  →  credential（1 条）
 （native `/api/v1` vs `compatible-mode/v1`）。因此 credential 收敛的是「密钥」，
 协议仍由 provider 能力矩阵决定——不要顺手把端点也合并了。
 
-## 5. 与 `.env` 的关系
+## 5. 环境变量边界
 
-### 5.1 分层归属（定稿）
+`.env` 仍用于数据库、Redis、认证、加密主密钥和部署参数。模型角色从数据库绑定与代码默认值解析；历史模型变量名只作兼容展示，不作为运行时模型来源。Provider 出站密钥由专用加密凭据表解析，不得在配置缺失时退回旧环境变量 Key。
 
-| 内容 | 归属 | 理由 |
-|---|---|---|
-| 出站 provider 密钥（作兜底）、`SECRETS_ENCRYPTION_KEY`、`JWT_SECRET`、`API_KEY` | `.env` | 启动期必需 / 引导密钥 |
-| PG / Redis / 端口 / `RAG_DATA_DIR` / `CORS_ORIGINS` | `.env` | 部署环境事实，随容器编排走 |
-| `ENVIRONMENT`、`ENV_MODE` | `.env` | 启动期决定行为分支，运行期不该变 |
-| 模型角色绑定（8 个 role） | DB 覆盖层 | 运行期可调，需审计 |
-| provider 密钥（主存储） | DB（加密） | 本次决策 2 |
-| 功能开关（`CS_ENABLED` / `TRAVEL_ENABLED` / `SELECTION_FUNNEL_ENABLED` / `ENABLE_*`） | DB 覆盖层，`.env` 保留兜底 | 现已是纯 env，纳入 `_SWITCHES` 登记即可 |
-| RAG 检索参数（`CHUNK_SIZE` / `BM25_SEARCH_K` / `RERANK_TOP_K` …） | **暂缓** | 影响索引一致性，误改代价高；先只读展示，不允许写 |
-| 治理模式（`LLM_BUDGET_MODE` / `GATEWAY_AUTH_MODE`） | DB 覆盖层 | 已有对应治理页（`/cost-governance/budgets`） |
-
-⚠️ `EMBEDDING_MODEL` / `EMBEDDING_PROVIDER` 是**特例**：与向量索引强绑定，切换后必须
-全量重建索引（`.env` 第 293、302 行均标注）。管理端允许改，但必须：
-
-- 二次确认对话框，明示「需全量重建向量索引」
-- 写审计时打 `requires_reindex: true` 标记
-- 视图上把「当前生效 embedding 模型」与「索引实际使用的模型」并列显示 —— 后者需要新增
-  一处索引元数据记录（这是本次设计外溢出的一个小需求，见 §9 P2）
-
-### 5.2 `.env` 瘦身目标
-
-P3 完成后 `.env` 的模型段从 ~40 行降到 ~8 行（只留 provider 级兜底与主密钥），
-并把所有「回滚 = 恢复下行注释」的人肉操作改为管理端的版本回滚。
+只有显式登记到 `sys_config` 的守卫开关走 DB 覆盖与环境默认值回退；不能据此推断所有 `*_ENABLED`、RAG 参数或治理模式都能从管理端热改。Embedding 与索引语义绑定，改模型前核对 `requires_reindex` 契约、当前索引元数据和对应迁移。
 
 ## 6. 合并模型价格页
 
@@ -260,62 +180,39 @@ pending → reviewed_1 → scheduled → canary（需满 24h）→ active
 
 | 对象 | 流程 | 生效延迟 |
 |---|---|---|
-| 模型角色绑定 / 开关 | 单 admin 写 + 审计 + 一键回滚（`sys_config` 现有语义） | 本实例即时，其他实例 ≤1 TTL |
+| 模型角色绑定 | 专用角色绑定接口写入 + 审计；请求级覆盖不改全局默认 | 以模型注册仓储刷新语义为准 |
+| 动态守卫开关 | `sys_config` 登记项校验 + 审计 + 安全回退 | 以配置刷新周期为准 |
 | 模型价格 | 双人审核 + 24h 灰度（现有状态机，原样保留） | 最快 24h |
 
-### 6.2 消除两套价格（关键收益）
+### 6.2 价格事实来源
 
-现状价格有两个来源，且第二套是权威的：
-
-1. `infra/llm/models.py` 的 `AVAILABLE_MODELS[*].input_price_per_1m` —— 硬编码 USD 字面量
-2. PG `model_price` 表（`price_table_version` + `approval_status`）—— 权威，带审批
-
-本次合并后 **退役第 1 套**：`get_model_pricing()` 改为读价格表，
-`compute_cost_usd()`（`models.py:170`）随之改数据源。收益：
-
-- cost 估算与预算阻断用同一套价格，不再有「看板显示 0.014 但预算按 0.4 拦」这类不一致
-- 价格变更走审批，不再需要改代码发版
-
-> ⚠️ **合并时必须一并修的缺口**：`EMBEDDING_RERANK_PRICING`（`models.py:194`）只登记了
-> DashScope 的 `qwen3-rerank` / `text-embedding-v3` / `text-embedding-v4` /
-> `qwen-vl-embedding`。而 2026-09-19 已切到 SiliconFlow 的 `BAAI/bge-m3` 与
-> `BAAI/bge-reranker-v2-m3` —— 这两者不在表内，`compute_embedding_cost` 返回 0.0，
-> **当前 embedding/rerank 成本在估算中是被低估为 0 的**。合并价格页时须按硅基流动账单补录。
-
+LLM 与 embedding/rerank 的计费必须使用当前统一价格治理实现，不得在模型注册表和调用路径中维护相互冲突的单价。成本估算、预算阻断和账单展示应采用一致的价格版本与币种口径；价格来源和计算以价格仓储、迁移及测试为准。
 ## 7. 管理端
 
-> **实现级展开**：`docs/model-config-admin-ui-design.md`（2026-09-19，组件树 / 字段级契约 /
-> 态设计 / 后端缺口清单）。本节只定「做什么」，实施细节看那份。
+> 管理端交互契约见 [模型与供应商管理端设计](model-config-admin-ui-design.md)。本节定义治理边界，字段和请求形态以交互契约与当前代码为准。
 
 ### 7.1 页面位置与权限
 
 - 路由：`/settings/models`，页面名「模型与供应商」
 - 导航：挂「质量与配置」组（`components/layout/navConfig.tsx:74-81`），
   与「Prompt 管理 / Agent 节点 / 能力与技能」同级
-- 权限：**页级 `minRole: 'editor'` + tab 级 `admin`**（2026-09-19 修订）
+- 权限：页级 editor 只读可见；修改操作需 admin。
 - 现有页 `/cost-governance/prices` **重定向**到新页的「价格」tab；其 `navConfig` 条目
-  **删除**（2026-09-19 定，避免两个入口）。重定向保留 —— 外部收藏与既有文档链接不失效
+  导航只保留一个主入口；外部路由继续兼容重定向。
 
-> ⚠️ **修订说明（2026-09-19）**：本节原写「`minRole: 'admin'`」，与 §7.2 的
-> 「tab⑤ 体检与漂移 → editor 可见」**自相矛盾** —— 页级 admin 门禁下 editor 根本
-> 进不了页面，§7.2 那条要求无法成立。
-> 改为「页级 `editor` + tab 级 `admin`」，与既有先例
-> `frontend-admin/src/app/cost-governance/prices/page.tsx:29,105` 的
-> `RoleGate minRole="editor"` + `canAdmin = atLeast('admin')` + 顶部只读提示条**逐字一致**。
-> 配套：tab② 供应商与密钥**对 editor 整 tab 隐藏**（非只读，B.6「查看供应商 = admin」），
-> tab④ 的密钥类条目脱敏。完整矩阵见 UI 设计文档 §3.3。
+> 页面采用页级 editor 只读可见、管理员操作门禁；供应商与密钥 tab 仅 admin 可见，体检与漂移允许 editor 查看。具体字段脱敏和 tab 矩阵见管理端交互契约 §3.3–§3.4。
 
 ### 7.2 五个 tab
 
 | tab | 内容 | 权限 | 数据源 |
 |---|---|---|---|
-| ① 角色绑定 | 8 个 role 各选模型；显示「生效值 + 来源（db/env/默认）+ 校验结果」；未注册模型或缺 Key 标红不可选；`embedding` 改值时弹二次确认 | admin | `resolve_model` |
+| ① 角色绑定 | 每个注册 role 选择已登记模型；显示生效值、来源与校验结果；缺 Key 或类型不兼容时不可保存；Embedding 变更遵循重建索引提示 | admin | `resolve_model` |
 | ② 供应商与密钥 | provider 列表（base_url、协议、能力矩阵只读）；密钥只显示「已配置/未配置 + 掩码尾部 + 指纹」；可写入/轮换；连通性自检按钮；余额（复用 `/llm/balance`） | admin | `provider_credentials` |
 | ③ 价格 | 现有价格版本的导入/审核/灰度完整流程（原样搬移） | admin | `price_governance` |
 | ④ 变更历史 | 两类对象的合并时间线：谁在何时把哪个键/role 从 A 改成 B；支持一键回滚 | admin | `sys_config_history` + `provider_credentials_history` |
 | ⑤ 体检与漂移 | DB 覆盖与 `.env` 不一致时点名；缺 Key / 未注册模型 / 索引模型与生效模型不一致 | editor 可见 | 聚合 |
 
-### 7.3 后端端点（草案）
+### 7.3 API surface
 
 沿用 `/sys/config` 的既有分层（`require_admin_user` + `/sys` 前缀在 api_key_middleware
 白名单 + service 层校验）：
@@ -334,17 +231,7 @@ POST   /sys/config/history/{id}/rollback 一键回滚
 GET    /sys/config/drift                 漂移与体检报告
 ```
 
-**响应形态：一律裸 dict，不带 Result 壳** —— 与同前缀 `/sys/config` 一致。
-理由链与决策记录见 `docs/model-config-admin-ui-design.md` §1.1.1。一句话版本：
-`client.ts` 的 `request<T>` **不解包**，用壳等于每个调用点手工 `.data`（靠人记住），
-且壳里的 `code` 与 HTTP 层的 `ApiError` 构成**两套冗余错误通道**。
-
-> ⚠️ **不要把 `securityOps.updateGuardMode` 当模板。** 本节原写「复用它的写法」，
-> **方向恰好相反** —— 它在 2026-09-19 之前是错的：对裸 dict 响应写了 `return res.data`，
-> 造成「界面报切换失败、后端其实已写库」的假失败（`docs/model-config-admin-ui-design.md` §1.1）。
-> 可复用的是它的**路径前缀**（`/api/sys/...`，网关剥 `/api`）；
-> **响应解包方式不可复用**。正确模板是修复后的 `securityOps.ts` 与其共置契约测试
-> `api/securityOps.test.ts`（用真实响应形状驱动，改回 `.data` 会失败）。
+新增端点按裸对象响应，与现有客户端契约一致。`request<T>` 不自动解包响应体，HTTP 错误通过 `ApiError` 表达。已有接口若使用其他结构，继续遵循其自身契约并由测试覆盖。
 
 前端 API 层路径：`/api/sys/...`（网关剥 `/api` 前缀）。
 
@@ -353,77 +240,25 @@ GET    /sys/config/drift                 漂移与体检报告
 `LLMSwitcher.tsx` 的视觉语言（胶囊触发器 + 下拉 + 勾号反馈 + 余额徽章）建议保留，
 只把数据源从 `/llm/switch` 换成新的 role 接口。它已经跑在真实页面上，重做没有收益。
 
-## 8. 改动波及面（已实测）
+## 8. 实现与安全边界
 
-| 对象 | 文件数 | 具体位置 |
-|---|---|---|
-| `AVAILABLE_MODELS` 消费方 | 5 | `app/api/routes/llm.py:14,60`；`infra/llm/factory.py:37,71,75,98,158`；`infra/llm/proxy.py:37,85-88,206,882-883`；`config/startup.py:245-253`；`infra/llm/models.py` 本体 |
-| `config.llm` 引用 | 16 | 需逐个改为 `resolve_model(role)`，其中 8 个 role 覆盖大部分 |
-| `LLMFactory` | 1 | `factory.py:53,65-113`（`set_current` 落盘改造） |
-| 加密模块 | 2 | `competitor/crypto.py` 抽取；`competitor/store_pg.py` 保持接口不变 |
-| 管理端 | 5 | 新页面 + `navConfig.tsx` + `api/modelRoles.ts` + `api/providers.ts` + `LLMSwitcher.tsx` |
-| 价格 | 3 | `models.py:get_model_pricing` 改数据源；`proxy.py:compute_cost_usd` 调用点；`/cost-governance/prices` 迁移 |
+- 模型与供应商清单的权威来源由当前注册表和数据库迁移定义；不得另造并行清单。
+- 配置写入必须通过受保护的管理端 API，并校验角色、供应商归属和输入。
+- 模型角色解析模块保持轻依赖；需要 Provider 能力或注册表快照的数据由 API 边界组装。
+- 密钥只在写入时接收明文，存储前加密；读取接口不得回传明文，日志和审计仅保留必要的脱敏信息。
+- Provider 探测与模型目录读取不得变成任意 URL 代理；网络范围、限流、授权和审计规则见附录 B.4、B.6、B.14。
+- 价格治理与模型角色切换属于不同风险等级，分别遵循各自审批和生效策略。
 
-**排雷提示**：`proxy.py` 的 5 处 `AVAILABLE_MODELS` 调用里有 2 处是**启动期/请求期校验**
-（第 85-88、882-883 行），改成从 DB 读之后要保证「DB 不可用时仍能校验」——按
-`sys_config` 的 fail-closed 不变量，回退到代码层 `AVAILABLE_MODELS` 即可，不要因为 DB
-抖动而放行未注册模型。
+## 9. 修改与验证
 
-## 9. 实施分期
-
-### P0 — 契约层（零行为变化，可独立验收）
-
-- `sys_config` 扩展：`case_sensitive` 键登记项、`validator` 回调、三个读取入口
-  （`resolve_model` / `resolve_provider` / `get_secret`）
-- 8 个 role 登记进 `_SWITCHES`（此时**仍全部从 env 取值**，DB 覆盖表为空）
-- 唯一目标：把 16 个文件的 `os.getenv` 收敛到 `resolve_model(role)`，行为与今天逐位一致
-- 验收：全量 pytest 通过 + 生效快照与 `.env` 逐项比对一致
-
-> 这一步是整个方案的风险闸门。它不动任何行为，却把"散落在 16 个文件里的配置读取"
-> 变成一个可审计的入口。此步完成前不应进入 P1。
-
-### P1 — 密钥通道
-
-- `backend/shared/crypto.py` 抽取（`competitor/crypto.py` 保持行为不变）
-- 新表 `provider_credentials` + `provider_credentials_history`（alembic 记忆库迁移 0017）
-- 密钥写入/读取/脱敏/审计/`key_version` 轮换 + fail-loud 语义
-- 密钥去重：`QWEN_API_KEY`/`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY`/`EMBEDDING_API_KEY`/`RERANK_API_KEY` 收敛为 provider 级
-- 顺带处理：`.env` 第 312 行注释里的真实 SiliconFlow Key 明文（违反该文件自定规则
-  「注释里一律只写占位符」）→ 轮换该 Key
-
-### P2 — 角色绑定与管理端页面
-
-- `set_current` 落盘改造 + `LLMSwitcher` 数据源切换
-- 管理端 `/settings/models`：tab ①②④⑤ + `navConfig` 注册
-- 索引元数据记录（供 §5.1 的「生效模型 vs 索引模型」对比）
-- `EMBEDDING_MODEL` 改值的二次确认与 `requires_reindex` 审计标记
-
-### P3 — 价格合并与 `.env` 瘦身
-
-- 价格治理搬入 tab ③；`/cost-governance/prices` 重定向
-- 退役 `AVAILABLE_MODELS[*].*_price_per_1m`，`get_model_pricing` 改读价格表
-- **补录 SiliconFlow `bge-m3` / `bge-reranker-v2-m3` 价格**（修 §6.2 的成本低估缺口）
-- `.env` 模型段瘦身 + 漂移告警接入 `config/startup.py` 现有 warning 机制
-
-## 10. 风险与待确认
-
-| # | 风险 / 待确认 | 说明 |
-|---|---|---|
-| 1 | **多实例 TTL 延迟** | `sys_config` 现为各实例 15s 轮询。模型/密钥切换存在 ≤15s 不一致窗口。当前单实例无感；若后续扩多实例，需评估是否上 Redis pub/sub 即时失效（该文档 §1.2 已预留此选项） |
-| 2 | **主密钥丢失 = 全部出站 Key 不可用** | `SECRETS_ENCRYPTION_KEY` 必须在部署时持久化并可恢复。需在文档与部署脚本中显式告警，建议纳入备份清单 |
-| 3 | **密钥进 DB 后的访问面** | 现在密钥只在 `.env`（文件系统权限即可保护）；进 DB 后，任何有 PG 读权限的进程理论上可拿到密文。缓解：主密钥只在 app 进程内存 + 审计只落指纹 + 只读账号 `agent_readonly`（已存在）不得有 `provider_credentials` 读权限 |
-| 4 | **`role=main` 持久化后的预期变化** | 今天"重启回 `.env`"是隐性行为；改为持久后会出现「重启后模型与 `.env` 不一致」的常态。需在管理端明示来源（§7.2 tab ① 已含），否则会被当成 bug |
-| 5 | **价格流程与角色流程同页不同重** | 同页两个 tab 一个即时生效、一个要等 24h，交互上必须强区分（建议价格 tab 视觉上标注「需审批生效」），否则用户会以为改了没生效 |
-| 6 | **P0 的 16 文件收敛是主要工作量** | 纯重构但触及问答主链路，需在无并发会话跑全量 pytest 的窗口做（仓库约定：全量 pytest 约 20 分钟，期间不得改 `backend/`） |
-| 7 | 是否把 RAG 检索参数也纳入 DB | 本设计**暂缓**（§5.1），因其影响索引一致性。待确认是否需要管理端只读展示 |
-
+修改模型注册、凭据解析、探测或角色切换时，检查对应调用路径、数据库迁移、管理端响应契约及失败测试。外部 Provider 或凭据不可用时，说明未实测范围；不得以 mock 验证冒充真实连通验收。
 ## 附：本设计引用的代码位置
 
 | 主题 | 位置 |
 |---|---|
 | 现有动态配置层 | `backend/services/sys_config.py` |
 | 动态配置管理路由 | `backend/app/api/routes/sys_config_admin.py` |
-| 动态配置方案文档 | `docs/2026-09-16-动态配置lite与API-Key多Key化方案.md` |
+| 模型配置事实源 | `backend/infra/llm/`、数据库迁移及对应测试 |
 | 管理员依赖 | `backend/app/api/deps.py:328` `require_admin_user` |
 | 模型注册表 | `backend/infra/llm/models.py`（`AVAILABLE_MODELS` / `PROVIDERS` / `PROVIDER_API_KEY_ENV`） |
 | 模型工厂 | `backend/infra/llm/factory.py:53,65-113` |
@@ -438,117 +273,7 @@ GET    /sys/config/drift                 漂移与体检报告
 
 ---
 
-# 附录 A：P0 实施记录（2026-09-19，commit `41a5df9`）
-
-P0 已落地。以下记录与原设计不一致之处，以及实施中发现的新事实 —— **P1 开工前必读**。
-
-## A.1 范围收窄：实际只改了 2 个 config 文件，不是 16 个
-
-§9 原写「把 16 个文件的 `os.getenv` 收敛到 `resolve_model(role)`」。实测后收窄为：
-
-| 分类 | 数量 | 处理 |
-|---|---|---|
-| 走 `from backend.config.llm import LLM_MODEL`（**导常量**） | 12 | **零改动** —— 常量求值路径改了，它们自动受益 |
-| 绕过配置层直接 `os.getenv` | 4 | 其中只有 2 处是模型名（`config/rag.py`）；另 2 处是 provider/URL 枚举，归 P1 |
-| 属于 P0 目标但**工作区已被其他会话改动** | 4 | `infra/llm/budget.py`、`proxy.py`、`quota.py`、`rag/chain.py` —— 暂不动，见 A.3 |
-
-实际改动：`config/llm.py`（6 个常量）+ `config/rag.py`（2 个常量）= **8 个模型常量**。
-这正是「导常量」设计的好处：收敛成本远低于预估。
-
-## A.2 实施中发现的三个坑（已在代码里用测试锁住）
-
-1. **`resolve_raw` 与 `resolve_effective` 必须分开。**
-   `DOC_LLM_MODEL` / `TOOL_SELECTOR_MODEL` / `LLM_FALLBACK_MODEL` 的**空串在
-   消费方手里有语义**（如 `if DOC_LLM_MODEL:` 判断是否启用本地 Ollama）。
-   若把常量物化成「继承 main」的模型名，「未配置」会变成「配了」，行为改变。
-   → legacy 常量一律用 `resolve_name`（字面值）；`resolve_effective` 只给新代码用。
-
-2. **模型角色不能登记进 `sys_config._SWITCHES`。**
-   `tests/api/test_sys_config_admin.py::test_get_config_lists_registered_switches`
-   断言 `GET /sys/config` 的返回集合**恰好**是那两个守卫开关。塞进去会直接挂测试。
-   而且模型名大小写敏感，`_normalize()` 的小写归一也会破坏它。
-   → 模型角色注册表放在 `backend/config/model_roles.py`，`sys_config` 只加通用校验能力。
-
-3. **注册表位置受导入链约束。**
-   `config/llm.py` 处在几乎所有模块的导入链上。若把注册表放进
-   `backend/services/`，而 `config/llm.py` 要 import 它，就会把
-   `services/__init__`（可能含 SQLAlchemy）拖进配置导入链。
-   更致命的是：**模块级 import `backend.infra.llm.models` 会先执行
-   `infra/llm/__init__.py` → `factory` + `proxy` → langchain**，并与
-   `proxy.py` 形成循环导入（`proxy` → `config.llm` → 本模块 → `infra.llm` → `proxy`）。
-   → 注册表放 `backend/config/model_roles.py`（纯 stdlib，含 `dataclasses`）；
-     `infra.llm` 的数据一律**函数内延迟 import**。
-   已加两条测试锁住：子进程验证无重依赖、源码级禁止模块级 `infra.llm` 导入。
-
-## A.3 ⚠️ 并发会话状态（P1 开工前必须重新确认）
-
-P0 实施期间实测到另一会话正在活跃（1 小时内改过 `customer_service/maintenance.py`、
-`rag/indexing/indexer.py`、`orchestration/graph/runner.py`，并在期间提交了 `89be962`）。
-
-**当前有 4 个 P1 必需文件处于「他人未提交」状态**，改动它们会污染对方的在途工作、
-且路径限定提交会把对方改动一起收编：
-
-```
-backend/infra/llm/proxy.py       ← 含 5 处 AVAILABLE_MODELS 调用点（§8）
-backend/infra/llm/budget.py
-backend/infra/llm/quota.py
-backend/rag/chain.py
-```
-
-另：工作区约有 300 个未提交文件（`M` 200+ / `??` 60+），`.env` **不在 git 跟踪内**。
-
-→ P1 开工前先 `git status` + 确认这 4 个文件已由对方提交或已确认归属。
-
-## A.4 发现的两个既有缺陷（P0 只点名，未修）
-
-### ① `LLM_FALLBACK_MODEL` 指向未注册模型 —— 熔断兜底实际不可用
-
-实测当前 `.env`：`LLM_FALLBACK_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507`，
-而 `AVAILABLE_MODELS` 里没有这个模型（可用集：`MiniMax-M3` / `Qwen/Qwen3-32B` /
-`Qwen/Qwen3-32B-AWQ` / `Qwen/Qwen3-8B` / `deepseek-v4-flash` / `qwen2.5:3b` /
-`qwen3.7-plus` / `qwen3.7-plus@tp`）。
-
-`config/llm.py` 的注释写着「须在 `infra/llm/models.py` 注册」，但**没有任何强制**
-—— 配错时熔断开路切备用模型会构建失败，即"以为有兜底，实际没有"。
-P0 后启动校验会点名（已在真实 `.env` 下验证）：
-```
-[Startup 校验] 模型角色 fallback（LLM_FALLBACK_MODEL）的值
-'Qwen/Qwen3-30B-A3B-Instruct-2507' 非法：未在 AVAILABLE_MODELS 注册（可用: [...]）
-```
-
-> 注意：`.env` 在 P0 实施期间被改动过（原先读到的值是 `Qwen/Qwen3-32B`，后来变成
-> 上述值），疑为另一会话在途操作。**未擅自修改** —— 需与对方确认是补注册模型还是换值。
-
-### ② `EMBEDDING_RERANK_PRICING` 缺 SiliconFlow 条目（§6.2 已记，此处重申）
-
-当前 `EMBEDDING_MODEL=BAAI/bge-m3`、`RERANK_MODEL=BAAI/bge-reranker-v2-m3`，
-均不在 `EMBEDDING_RERANK_PRICING` 内 → `compute_embedding_cost` 返回 `0.0`，
-**embedding/rerank 成本在估算中被计为 0**。P3 合并价格页时按硅基流动账单补录。
-
-## A.5 P0 验收证据
-
-| 项 | 结果 |
-|---|---|
-| 8 个模型常量 vs 改造前旧表达式 | **逐项一致**（含 `source` 标注） |
-| `sys_config` 既有测试 | 13 passed（守卫开关行为零变化） |
-| 新增测试 `test_model_roles.py` | 37 passed |
-| 新增测试 `test_sys_config_normalize.py` | 14 passed |
-| 受影响面（startup_validation / tool_selector / llm_resilience / pdf_ocr / production_auth） | 105 passed, 1 skipped |
-| `infra` + `config` 目录 | 51 passed |
-| 真实 `.env` 下启动校验 | 正确点名 A.4① 的未注册模型 |
-| 配置导入链重依赖 | 子进程验证：无 langchain / torch / SQLAlchemy / transformers |
-
-**未做全量 pytest**（仓库约定：约 20 分钟，且期间不得有并发会话改 `backend/`；
-实施期间检测到并发会话活跃，故只跑定向回归）。
-
-## A.6 P1 前置项（按优先级）
-
-1. 确认 A.3 的 4 个文件归属，再动 `proxy.py`。
-2. 决策 A.4① 的处理方式（补注册 `Qwen/Qwen3-30B-A3B-Instruct-2507` 还是换值）。
-3. `backend/shared/crypto.py` 抽取（`competitor/crypto.py` 行为保持不变）。
-4. 迁移编号取 `0017`（当前最新为 `0016_price_governance.py`）。
-
-# 附录 B：用户自建供应商（BYOK）与连通性自测（2026-09-19 追加，历史方案）
+# 附录 B：用户自建供应商与连通性契约
 
 需求原文：各大厂商有 apikey 和 url，另有 coding plan 套餐也是自己输 apikey 和 url；
 希望用户能自己添加/修改，输入完点测试图标验证能不能用。
@@ -619,7 +344,7 @@ llm_models                         -- 用户自建模型（builtin 仍留代码�
   display / capabilities JSONB / context_length / pricing JSONB / enabled / source
 ```
 
-**`billing` 三态与成本口径（2026-09-19 已拍板：订阅制显示「订阅制·不计 token」）**
+**`billing` 三态与成本口径**
 
 | billing | 成本估算 | 预算阻断 | Token 用量 | 现有归属 |
 |---|---|---|---|---|
@@ -633,7 +358,7 @@ llm_models                         -- 用户自建模型（builtin 仍留代码�
 `EMBEDDING_RERANK_PRICING` 缺 SiliconFlow 条目（§6.2 / A.4②）被漏掉是同一类问题。
 补 `billing` 字段后，`qwen_tp` 应改标 `subscription`。
 
-**落地影响（跨模块，须与 P1a 一起做）**：
+**跨模块约束**：
 - `compute_cost_usd(model_name, ...)`（`models.py:170`）目前只按模型名查价格表，
   **拿不到 billing** → 签名需带上 provider 或先查 billing，否则无法区分「订阅制」与「免费」
 - `budget.py` / `quota.py` 的成本累加需按 billing 跳过 `subscription` / `local`
@@ -675,7 +400,7 @@ env 兜底是同构的，沿用既有模式。
 6. **UI 只承诺「厂商连通性」，不承诺「业务可用」。** 业务链还要过限流 / 预算 /
    工具绑定，说「可用」是过度承诺。
 
-### B.4.1 L1 形状嗅探：200 不等于「这是 OpenAI 兼容基址」（2026-09-21 补充）
+### B.4.1 L1 形状嗅探：200 不等于「这是 OpenAI 兼容基址」
 
 **触发场景（实测）**：用户在「阿里云百炼 · 北京 · Token Plan」新增模型，L0 / L1 通过，
 L2 报 `最小调用失败：OpenAIModelNotFoundError: Error code: 404`。
@@ -715,7 +440,7 @@ L2 报 `最小调用失败：OpenAIModelNotFoundError: Error code: 404`。
 只有明确命中「原生信封」才降级，且降级文案直接给出**改地址的方向**，
 而不是让用户在错误的地址上反复试模型名。
 
-### B.4.2 L2 归因：先判「地址错」，再判「模型名错」（2026-09-21 补充）
+### B.4.2 L2 归因：先判「地址错」，再判「模型名错」
 
 原实现只有「模型名错 / Key 错」二分，所以上面那类**地址错**要么被误归到「模型名错」，
 要么被关键字表漏掉、落到兜底文案「最小调用失败」——**最没用的那一句**。
@@ -788,7 +513,7 @@ L2 报 `最小调用失败：OpenAIModelNotFoundError: Error code: 404`。
 3. **探测报文固定**，不允许用户自定义 body；额外 header 走键白名单
 4. 限流（同 admin 每分钟 N 次），防止被用来扫内网
 
-**私网放行机制（2026-09-19 已拍板：允许 + 显式标注 + 审计）**
+**私网放行机制**
 
 **不做全局环境变量白名单，改为「按实例显式勾选」。** 理由：全局白名单一开就是全站放行，
 无法回答「谁允许的、为哪个厂商开的」；而按实例勾选天然可审计。
@@ -821,31 +546,7 @@ L2 报 `最小调用失败：OpenAIModelNotFoundError: Error code: 404`。
 1. **区分「Key 错」与「模型名错」** —— 尤其中转 / coding plan 站点，这两种最易混。
 2. **base_url 归一化提示**：去尾斜杠、缺 `/v1` 时给建议（由 L1 的 404 触发）。
 
-## B.8 分期（接 §9，原 P1 拆为两段）
-
-- **P1a — 凭据与注册表通道（无 UI，可独立验收，零行为变化）**
-  - `shared/crypto.py` 抽取（`competitor/crypto.py` 行为不变）
-  - 三张表 + 迁移 0017（含 `network_scope` / `billing` 字段，DB 空表时不影响行为）
-  - 破 B.5#1（provider 改传参式）、#2（`invalidate()` + `key_version` 比对）、
-    #3（`get_available_models()` 统一入口 + fail-closed 回退代码层）、
-    #4（去名称启发式，猜不出显式报错）、#5（收敛 `resolve_credentials`）
-  - 验收：**全部仍读 env、DB 空表**，生效快照与 `41a5df9` 逐项一致 + 定向回归
-  - ⚠️ **文件归属依赖**：`billing` 传播到 `compute_cost_usd` 需要改 `proxy.py` /
-    `budget.py` / `quota.py`，这三个文件当前是「他人未提交」状态（2026-09-19 13:34 核实）。
-    可拆为 **P1a-1**（provider / factory / models / crypto / 迁移，全在净文件与新建文件）
-    与 **P1a-2**（billing 传播，等上述三文件落定）。数字上零变化：`qwen_tp` 现在
-    无论算 metered-0 还是 subscription 都是 0 成本，差别只在展示口径。
-- **P1b — 探测服务**：分级探测 + `POST /sys/providers/{id}/verify`（支持草稿态）+
-  `network_scope` 私网放行 + 探测流量打标排除统计
-- **P2 — 管理端**：tab② CRUD + 测试图标；builtin 也可在页面停用；
-  **`LLMSwitcher` 改会话级 + `chat.ts` 加 `model` 字段 + `/llm/switch` 加 admin 门禁**（B.9②）
-- **P3 — 收尾**：embedding/rerank 凭据与绑定（含重建索引二次确认）、价格合并、
-  `.env` 瘦身、密钥去重与轮换（含 §P1 记的第 312 行明文 Key）。其中专项凭据与绑定已在
-  2026-09-20 通过迁移 `0019` 和独立适配器提前落地；价格合并与 `.env` 瘦身仍是后续工作。
-
-**P1a 与 P1b 之间是硬闸门**：P1a 完成前做 UI，会得到一个「配了不生效」的页面。
-
-## B.9 决策记录（2026-09-19 已拍板）
+## B.9 决策记录
 
 ### ① 自建 provider 允许指向私网 → **允许 + 显式标注 + 审计**
 
@@ -879,7 +580,7 @@ ChatRequest.model (chat.py:105,182)
 ⚠️ 与 B.5#3 的耦合：`_request_model_var` 在 `proxy.py:85-88` 对未注册模型是
 **warning + 静默清空** → 自建模型必须先落注册表，否则会话级切换会「选了没反应且无提示」。
 
-**2026-09-19 补充决策（用户拍板「需要后端校验」）：把静默改为 API 边界 fail-fast 400。**
+**请求级模型校验决策：把静默改为 API 边界 fail-fast 400。**
 
 需要纠正一个前提：会话级 model 的**校验早就存在**（`proxy.py:72-105` 已做注册表 /
 Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 —— 三条全部落到
@@ -900,111 +601,7 @@ Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 �
 
 ---
 
-# 附录 C：P1a-1 实施记录（2026-09-19）
-
-**范围**：provider 传参式、凭据解析唯一入口、可用模型统一入口、实例缓存失效、
-密钥通道原语抽取、迁移 0017 与 DAO。验收口径是「DB 空表 + 全读 env，行为与
-`41a5df9` 逐项一致」。
-
-## C.1 交付物
-
-| 文件 | 状态 | 说明 |
-|---|---|---|
-| `backend/shared/crypto.py` | 新增 | Fernet 原语：按 env 名分桶缓存、`invalidate`、**fail-loud** 与优雅降级双语义、`fingerprint`/`last4`/`mask_secret` |
-| `backend/competitor/crypto.py` | 改 | 委托 shared；保留 `_fernet` 模块变量（既有测试用它重置缓存） |
-| `backend/infra/llm/models.py` | 改 | `get_available_models()` / `get_model_entry()` / `is_known_model()` / `resolve_provider()` / `ProviderResolutionError` / `set_dynamic_models()`；`PROVIDERS` 增 `driver`+`billing`；`get_provider_billing` / `get_model_billing` / `get_provider_driver` |
-| `backend/infra/llm/credentials.py` | 新增 | `ProviderCredentials` + `resolve_credentials()`（调用时读 config 模块属性，非值拷贝）+ `set_db_credentials()` / `credentials_version()` / `missing_key_message()` / `check_provider_usable()` / `snapshot()` |
-| `backend/infra/llm/providers/*.py` | 改 7 个 | `build_xxx(model_name, credentials=None)`、`get_xxx_balance(credentials=None)`；空字段回落 config |
-| `backend/infra/llm/factory.py` | 改 | 走统一入口；`_get_provider` 委托 `resolve_provider`；`_build_instance` 传凭据；`set_current` 的 8 个硬编码 if 收敛；新增 `available_models()` / `invalidate()` / `key_version()` |
-| `backend/infra/llm/registry_store.py` | 新增 | DB 三表读取 → `set_dynamic_models` / `set_db_credentials`；fail-open；凭据解密 fail-loud（单条失败只跳过该 provider） |
-| `backend/sql/alembic/memory/versions/0017_llm_providers.py` | 新增 | 三表 + 索引（⚠️ 见 C.4 提交依赖） |
-| `backend/tests/infra/{test_shared_crypto,test_llm_credentials,test_llm_registry_models,test_llm_provider_passthrough}.py` | 新增 | 56 例 |
-| `backend/tests/infra/test_llm_siliconflow_provider.py` | 改 1 处 | monkeypatch 注入点 factory → `config.llm`（见 C.3②） |
-
-## C.2 与设计的偏差（1 处，理由已核实）
-
-**B.8 写的「#4 去名称启发式，猜不出显式报错」→ 只做了一半。**
-
-实测：`_get_provider` 最后那句 `return "ollama"` **不是无意的 bug，而是唯一的本地模型
-表达方式** —— Ollama 模型名不可穷举（`llama3` / `qwen2.5:7b` / 任意 pull 下来的名字），
-而评测生成此前依赖 `OLLAMA_MODEL=qwen2.5:3b` 这类本地默认值。现在 `eval_gen`
-要求显式绑定已登记模型，未配置或不可用时由管理端展示原因并跳过评测生成，避免
-把云端模型名误送到 Ollama。
-
-故落地为：
-
-- `resolve_provider(name)` 宽松模式 —— 保持历史行为，但**判不出时记一次 warning**
-  （历史实现完全静默，静默正是「自建模型被误判成 ollama 且无从发现」的成因）
-- `resolve_provider(name, strict=True)` —— 判不出抛 `ProviderResolutionError`，
-  供管理端校验（P2）与探测（P1b）使用
-- 自建模型一旦登记进 DB 覆盖层，启发式自然不再触发（`get_model_entry` 先命中）
-
-真正的 fail-closed 切换放到 P1b（那时自建模型有显式 `provider` 归属）。
-
-## C.3 实施中发现的四件事
-
-**① `proxy.py` 有第二条独立的构建路径 —— 运行时凭据链路在 P1a-1 无法打通。**
-`proxy.py:204-231` 自带 `_get_provider_for()` 并**直接调 `build_xxx(model_name)`**，
-不经过 factory。本轮的传参式改动对它是**向后兼容**的（`credentials=None` → 读 config），
-所以不破坏现状；但「管理端改了密钥，会话立刻用新 Key」这条链路必须等 P1a-2
-（`proxy.py` 落定后）才能闭合。**这也是 P1a → P1b 之间那道硬闸门的具体内容。**
-
-**② 收敛 `set_current` 会破坏一个既有测试的注入点。**
-`test_llm_siliconflow_provider.py::test_set_current_rejects_when_siliconflow_key_missing`
-用 `monkeypatch.setattr(factory_module, "SILICONFLOW_API_KEY", "")` 注入 ——
-依赖 factory 模块持有该常量。凭据收敛后 factory 不再持有它，故把注入点改为
-`backend.config.llm.SILICONFLOW_API_KEY`（`resolve_credentials` 在**调用时**
-读 config 模块属性，所以该注入有效）。测试意图与断言未变。
-
-**③ 顺带发现：`proxy.py` 与 factory 的密钥判定口径不一致。**
-`proxy.py` 的 `set_request_model` 用 `os.getenv(key_env)`（运行时读环境变量），
-而 factory 改造前读 `config.llm` 的**导入时常量**。二者在「只改 env 不重启」时
-结论可能不同。本轮的 `resolve_credentials` 统一为「读 config 模块属性」，
-与 factory 历史语义等价；proxy 侧待 P1a-2 一并统一。
-
-**④ 顺带发现：`MINIMAX_API_MASE` 与 provider 硬编码同值不同源。**
-`providers/minimax.py` 用的是**字面量** `https://api.minimaxi.com/anthropic`，
-而 `config.llm.MINIMAX_API_BASE` 的**代码默认**是 `https://api.minimax.chat/v1`
-（OpenAI 兼容端点，另一套协议）；只是当前 `.env` 把它也设成了 Anthropic 端点，
-两者恰好同值。**若「顺手」把 provider 改读 config，`.env` 缺失时会静默漂移到
-另一套协议。** 本轮保留字面量（改由 `credentials.MINIMAX_ANTHROPIC_URL` 承载）。
-
-## C.4 ⚠️ 提交依赖：0017 不能单独提交
-
-`0014` / `0015` / `0016` 当前是**另一会话的在途工作**（`git status` 为 untracked）。
-本迁移 `down_revision = "0016"`，若先于它们提交，`alembic upgrade head` 会报
-`Can't locate revision identified by '0016'` —— **迁移链断裂**。
-故 0017 须与 0016 一并（或在其落地之后）提交。
-
-同理，`proxy.py` / `budget.py` / `quota.py` / `api/router.py` / `test_llm_budget.py` /
-`test_llm_quota.py` 仍是他人未提交状态，本轮**未触碰**。
-
-## C.5 验收证据
-
-| 项 | 结果 |
-|---|---|
-| 8 个模型常量 vs 改造前（P0 快照） | 逐项一致（未改动 `config/llm.py`） |
-| `resolve_provider` vs 旧 `_get_provider` | 25 个用例**逐位一致**（含启发式与 ollama 兜底） |
-| `resolve_credentials` vs providers 实际使用的常量 | 7 个 provider 逐项一致（含 minimax 字面量端点） |
-| provider 传参式（mock 客户端 kwargs） | 不传 = 改造前逐位一致；传了 = 覆盖生效；空字段 = 回落 |
-| 可用性判定 vs 旧 8 个 if 链 | 不可用集合一致；文案逐字保留（含 `（sk-sp- 模型包 Key）` / `（deploy.sh 会生成）`） |
-| `registry_store` 在表不存在时 | `loaded=False`、不清空动态层、凭据回落 env（日志实测 `UndefinedTable`） |
-| competitor crypto 行为 | `TestCrypto` 7 passed（含 `_fernet` 重置约定） |
-| 新增测试 | `tests/infra/` 74 passed |
-| 配置导入链重依赖 | 无 langchain / torch / sqlalchemy（`models.py` 顶层检查） |
-
-**未跑全量 pytest**：仓库约定约 20 分钟且期间不得有并发会话改 `backend/`，
-而本轮实施期间实测另一会话活跃（pytest 缓存 13:32 被写、容器 46 分钟前重建、
-`0014~0016` 新增 untracked）。按约定只跑定向回归。
-
-## C.6 P1a-2 开工前的前置
-
-1. `proxy.py` / `budget.py` / `quota.py` / `router.py` 落定 —— 这是运行时凭据链路的最后一段
-2. `0016` 落地后提交 0017
-3. 决定 `billing` 传播（`compute_cost_usd` 签名需带 provider 或先查 billing）—— 数字上零变化，
-   但会碰 `budget.py` / `quota.py`
-
-## B.10 当前实施补充：embedding / rerank 专项适配器（2026-09-20）
+## B.10 Embedding 与 rerank 适配器契约
 
 本节覆盖附录 B 原方案没有展开的第二条协议链路。专项模型不是通用 Chat 模型，不能复用
 `GET /models` 或 Chat 最小请求作为唯一测试：Anthropic Messages、OpenAI Chat、DashScope
@@ -1034,13 +631,7 @@ Ollama 启用 / provider Key 三级检查），缺的是**拒绝**而非校验 �
 4. embedding 模型切换只解决“新请求使用哪个模型”，不改变旧向量的语义空间；仍必须全量重建
    索引，并在体检页确认索引状态。
 
-### B.10.3 已验证事实
-
-本地管理端真实配置并测试 `qwen3.7-text-embedding` 与 `qwen3.7-text-rerank` 均通过；RAG
-运行时实际返回 1024 维向量和有效重排分数。测试耗时在页面展示，Key 只显示掩码。生产发布时
-除迁移 `0019` 外，还必须把 `SECRETS_ENCRYPTION_KEY` 纳入持久化密钥托管与备份。
-
-## B.11 当前实施补充：预置端点目录与「三选一」新增流程（2026-09-20）
+## B.11 预置端点目录与新增流程
 
 B.7 把新增抽屉写成「显示名 · 驱动 · base_url · API Key · 模型名 · 计费模式」，但**驱动下拉从未
 落地**（`newDraft()` 硬编码 `driver: 'openai'`），于是大量 Anthropic 兼容端点根本登记不进来；
@@ -1057,22 +648,12 @@ base_url 也全靠手敲，而同一家厂商在不同计费计划下的端点**
 | Coding Plan | `subscription` | 同上 |
 | 按量付费 | `metered` | 原语义不变 |
 
-⚠️ **不要为此新增第 4 个 billing 值。** 那要连带改 DB CHECK 约束、`ModelConfigService` 三处
-白名单、`get_provider_billing`、以及 `compute_cost_usd` / `budget.py` / `quota.py`（B.8 已注明
-这三个文件曾是「他人未提交」状态）。计划类型的区分靠 `display_name` 与 provider id 足够。
+⚠️ **不要为此新增第 4 个 billing 值。** 那要连带改 DB CHECK 约束、`ModelConfigService` 白名单、
+`get_provider_billing` 及成本/预算/配额计算路径，所有消费端必须同步使用同一 billing 类型。
 
-### B.11.2 目录落点：代码内置 + 只读下发
+### B.11.2 预置目录与只读接口
 
-- `backend/infra/llm/provider_presets.py` —— 49 条预置（Token Plan 16 / Coding Plan 8 /
-  按量付费 25），只含静态数据与纯函数，无 IO、不读 env、**不参与任何解析链**。
-  （2026-09-21 按「视觉/OCR 模型端点表」补录 6 条：MiniMax 国内 Anthropic 端点、OpenAI、
-  Anthropic、Google Gemini（收录的是 OpenAI 兼容入口 `/v1beta/openai/`，非原生协议）、
-  硅基流动、百度千帆国际；同时修正 MiniMax 国内域名 `api.minimax.cn` → `api.minimaxi.com`。）
-- `GET /api/sys/providers/presets` —— admin only（与 B.6 的 SSRF 边界同源），返回
-  `{plans, items, actor}`，条目为 camelCase，字段受白名单约束（**不得出现名为 `apiKey` 的字段**，
-  `apiKeyHint` 只是「Key 长什么样」的说明）。
-- 放代码而非 DB，依据 B.0 边界：**驱动与厂商能力矩阵留代码，不进 DB**。
-
+内置供应商端点目录由代码静态维护，不参与模型解析链。管理端按需读取白名单字段；响应不得包含 API Key 或其他秘密。新增目录条目时同步检查协议、计费类型、模型用途及安全测试。
 ### B.11.3 编辑态靠反查回填，不新增字段
 
 库里没有 `preset_id`。编辑时按 `(driver, base_url)` 归一化后反查（去尾斜杠、scheme/host 小写，
@@ -1114,7 +695,7 @@ base_url 也全靠手敲，而同一家厂商在不同计费计划下的端点**
 即改造前的行为，并显式提示「预置厂商目录不可用」。不能因为一个参考数据接口不可用就让
 「新增供应商」变成死路。
 
-## B.12 当前实施补充：模型级移除与供应商卡片分组（2026-09-20）
+## B.12 模型移除与供应商分组
 
 需求原文：`/settings/models?tab=providers` 「只显示已配置的厂商，一个厂商下面平铺它已配置的多个模型，
 未配置的厂商不显示；并且可以编辑已保存的模型，优化界面」。
@@ -1191,50 +772,11 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   **不隐藏按钮** —— 藏起来会让用户以为功能缺失；灰掉 + 说明才是可自助的。
 - 移除走二次确认弹窗（红色），并在弹窗内提示「若仍被角色或价格表引用，后端会拒绝并说明原因」。
 
-### B.12.8 验收证据
+## B.13 Base URL 输入辅助
 
-- 后端：`backend/tests/services/test_model_config_remove_model.py`（新增 8 例：成功+记账、
-  内置拒绝、不存在、归属不符、角色占用、专项占用、价格占用、空参）+ `test_model_config_write_api.py`
-  新增 3 例（幂等键缺失、query 传名断言、409 映射）+ `test_sys_providers_list_api.py` 更新 1 例、
-  新增 1 例（`source`/`usedByRoles` 正确性）。
-- 前端：`ProvidersTab.test.tsx` 22 例全过（含卡片分组、专项供应商并卡、移除拦截）；
-  `tsc --noEmit` 零错；全量 `vitest run` 322 例全过。
-- **活服务实测（重建 `app` 容器后）**：`openapi.json` 实测该路径为
-  `['delete','get','post']`；缺 `Idempotency-Key` → 400；被角色占用 → 409（点名角色）；
-  代码层内置 → 409；归属不符 → 409（点名真实归属方）；不存在 → 404；editor → 403；
-  **200 成功路径**用一次性行做真机 E2E（插入 → 200 → 行消失 → 审计
-  `object_type=provider` / `rollbackable=false` → 重复调用 404），验证数据已清理。
-- 实测事实补充：治理表在 **`agent_memory`** 库（`agent_business` 只有业务表）；
-  `llm_models` 的列名是 `provider_id` 而非 `provider`。
+### B.13.1 设计场景
 
-### B.12.9 明确未做
-
-- **未提供模型改名 / 改用途**：与 B.11.4 的硬约束冲突，属独立变更。
-- **未引入 `object_type='model'`**：不动 CHECK、不加迁移。
-- **未做批量移除**：逐个确认，避免一次误删多个被引用模型。
-- 未改列表分页 / 搜索（本次只动展示与移除链路）。
-
-## B.13 Base URL 地址助手（2026-09-21，B1 批）
-
-### B.13.1 起因：一个「界面无感」的静默错误
-
-2026-09-20 的真实工单：在「新增供应商」里选完
-`阿里云百炼 · 北京 · Token Plan`，Base URL 却填了 `https://maas.qianwenaiapi.com/api/v1`
-（该厂商的**原生协议**前缀），随后卡在 L2「最小调用 404」。
-
-排查后确认两件事：
-
-1. **根因与模型名无关**。同一 host 下 `POST /api/v1/chat/completions` 返回
-   **404 且响应体为空**，发生在鉴权之前 —— 网关根本没这条路由。正确前缀是
-   `/compatible-mode/v1`（B.4.1/B.4.2 已补上探测侧的形状嗅探与归因顺序）。
-2. **界面完全不觉得这有问题**。`applyPreset()` 回填 Base URL 后，用户若手改地址，
-   `presetId` **仍然保留**：界面继续显示预置的「API Key 格式：sk- 开头」、
-   计费口径与显示名，**没有任何「你已偏离预置」的标记**。`findPresetForRow()`
-   只在编辑态反查回填时使用，**不参与校验**。于是「显示名写着阿里云百炼·北京·
-   Token Plan、地址却是另一套前缀」这个状态，UI 无感。
-
-本批（B1）就是补这个开口。**纯前端、零后端改动、零迁移**。
-
+基础地址的主机可达，不代表其 API 路径符合所选服务计划。界面可依据预置目录提示可能的路径不匹配，但不能把目录当作权威验证或拦截用户自建端点。
 ### B.13.2 硬约束：只做「据实提示」，不做「地址校验」
 
 这是本批最重要的一条设计约束，也是与「顺手加个 URL 格式校验」的分界线：
@@ -1282,40 +824,7 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
   - 复用既有 `applyPreset(presetId)` 做「一键替换 / 还原」，**不新增写接口**。
 - 类型未导出：与文件内既有纯函数（`findPresetForRow` 等）一致，全部经组件行为覆盖。
 
-### B.13.5 验收证据
-
-- 单测（`ProvidersTab.test.tsx` 新增 7 例，共 29 例全过；`tsc --noEmit` 零错；
-  全量 `vitest run` **329 例**全过）：
-  一致时只给确认不出告警、偏离后一键还原、计划不符可切回、**未选预置时同样给出可切回端点**、
-  同域名列出多候选、陌生域名 `api/vN` 只提示且**不含任何按钮**、
-  合法自建网关与「带业务空间的按量地址」**都不触发提示**（含取值断言防假阳性）。
-- **活服务实测**（当时为真实 43 条预置目录，浏览器经 :3200 → 登录 admin → 供应商 tab；
-  目录已于 2026-09-21 扩至 49 条，本次实测结论不受影响）：
-  - 选 `阿里云百炼 · 北京 · OpenAI 兼容` → `matched`，`baseUrl` 确为
-    `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。
-  - 覆写成工单地址 `https://maas.qianwenaiapi.com/api/v1` → `deviated`，预置原值与
-    `/compatible-mode` 差异并排可见；Key 提示带上「而地址已被改过」。
-  - 点「还原为预置地址」→ 回到预置值并转 `matched`。
-  - 切到「自定义」后填同一地址 → `suspect`，文案命中「404 且响应体为空」，
-    **候选按钮数 = 0**（不给伪正解）。
-  - **误报扫描**（真实地址 7 例）：合法自建网关 → 无提示；`{WorkspaceId}` 换成真实
-    取值的按量地址 → 无提示；`ark…/api/v9` → `suggest`（列 3 个候选）；
-    `ark…/api/v3`（当前计划 Coding Plan）→ `plan-mismatch`；`api.deepseek.com/anthropic`
-    （当前协议 OpenAI）→ `suggest`。**零误报**。
-
-### B.13.6 明确未做（留给后续批次）
-
-- **B2**：模型名从探测拿到的目录里选（需探测响应回传 `availableModels`）+
-  探测结果区重构（归因配下一步动作、失败自动滚入视野）+ 底部 4 个平级按钮收敛为 3 个。
-- **B3**：列表页筛选/搜索 + 角色占用徽标 +「去改绑」跳转；editor 只读可见。
-- **B4**：1003 行单文件拆成 `providers/` 子目录（纯重构，零行为变化）。
-- **`apiKeyHint` 的团队版文案**（`provider_presets.py:171` 写「sk- 开头」，而官方团队版
-  是 `sk-sp-` 开头）：属后端预置内容变更，随 B2 一并处理并需重建容器。
-- **偏离时的「显示名」陈旧**：`applyPlan()` 会清 `presetId` 与地址，但**不清
-  `displayName`**；先选预置再换计划时，显示名可能仍留着上一个计划的字样。本批未动
-  （改动会波及 slug 生成），记为 B3 候选。
-
-## B.14 分层职责重划 + 模型目录按需拉取 + 失败归因「去修」（2026-09-21，B2 批）
+## B.14 分级探测、模型目录与失败归因
 
 ### B.14.1 分层职责重划：L1 移出探测链（关键决策）
 
@@ -1379,24 +888,7 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
 移入「高级设置」下拉，附一句「流式 usage 只影响记账，与能不能用无关」。
 新抽屉保存按钮文案为「测试并保存」（新配置必然先测后存）。
 
-### B.14.5 顺带
-
-- `apiKeyHint` 团队版文案改 `sk-sp- 开头`（`provider_presets.py`，随容器重建生效；
-  已被并发提交 `ae2130e` 一并收编）。
-- B.13.6 中「探测响应加 availableModels」的 B2 原方案作废，以本节为准。
-
-### B.14.6 验收证据
-
-- 后端：`test_provider_probe.py` 重写（L1 用例转目录用例 + 中文化守门）49 例；
-  新增 `test_sys_providers_catalog_api.py`；相关 5 个测试文件 124 例全绿；
-  后端全量 pytest 通过。
-- 前端：`ProvidersTab.test.tsx` 29 → 37 例（目录按需拉取/分组折叠/手打兜底/
-  去修按钮/一键替换/无动作不造按钮/英文只进技术细节/底部 3 按钮），全量
-  vitest + `tsc --noEmit` 零错。
-- 实施过程注意：对同一文件**并行发多个 Edit 会互相覆盖**（本次 3 处补字段语句
-  被吞，靠 vitest 红灯逐个找回）——同文件多处修改必须串行编辑 + grep 复核。
-
-## B.15 模型清单 DB 统一控制：代码层种子退役（2026-09-21）
+## B.15 数据库模型清单的唯一来源
 
 **决策**（源自用户：「不需要种子，只要 DB 来统一控制；DB 里没有却被引用的应该报错」）：
 
@@ -1434,73 +926,3 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
 1. **绑定时**：角色校验（`_registered_model`）未命中 → 拒绝并列出可用清单；
 2. **启动时**：`validate_roles()` 对默认/备用/各角色指向的未登记模型发告警；
 3. **运行时**：`validate_override_model` / proxy 对未注册模型名 fail-fast（既有）。
-
-### B.15.4 测试与验收
-
-- 受影响 13 个测试文件全部转 DB 注入（`SEED_MODELS` fixture 模拟 registry 已加载），
-  **168+ 例通过**；基线复跑确认 4 个**既有失败**与本批无关：
-  `test_missing_key_env_reported_when_key_absent`（断言已废弃的 env 分支）、
-  `test_llm_siliconflow_provider::test_set_current_rejects_when_siliconflow_key_missing`
-  （报错文案已改断言未跟）、`test_database_model_config_authority` 2 例（OCR/embedding
-  旧 env 语义）；
-- 前端 `tsc --noEmit` 零错，`ProvidersTab.test.tsx` 37/37；
-- ⚠️ 全量 pytest 未在本批重跑（历史基线另有 65 failed/3 error 均为无关区域，见 B.14）。
-
-### B.16 B3 列表体验 + B4 文件拆分（2026-09-21 续会话，提交 067aa8c / 2a30b92）
-
-#### B.16.1 B3（提交 067aa8c，7 文件 +282/-31）
-
-| 项 | 实现 |
-|---|---|
-| 列表筛选/搜索 | ProvidersTab 工具条：搜索（显示名/ID/地址/模型名）+ 用途/状态下拉 + `N/M 家` 计数 + 双空态（无供应商 vs 筛选无结果）；纯客户端过滤 |
-| 角色占用徽标 | `usedByRoles` 逐角色紫色徽标，点击 `onGoToRoles(role)` → 切角色 tab 并以 URL `?role=` 带参；RoleBindingsTab 接 `highlightRole`，目标行琥珀高亮 + `scrollIntoView` 居中 |
-| editor 只读可见 | **后端配套**：`GET /sys/providers` 由 `require_admin_user` 放宽为 `require_user_actor`（与 model-roles 读同档，service/API-Key 身份仍拦；写/探测/目录端点不变）；前端 tab 过滤与 query `enabled` 同步放开，写操作仍按 canAdmin 门控 |
-| applyPlan 不清 displayName | 现状已满足，补回归测试固化（换计划清地址、保留手改显示名） |
-
-#### B.16.2 B4（提交 2a30b92，纯重构，行为零改动）
-
-`ProvidersTab.tsx` 1860 行 → 主文件 632 行（列表渲染 + 数据编排）+ `providers/` 11 子模块：
-`presets.ts`（预置反查/六态地址诊断）、`draft.ts`（草稿类型/工厂）、`format.ts`、
-`catalogSections.ts`、`fixHints.ts` 纯函数 + `ProbeResultDetails` / `BaseUrlAdvisor` /
-`ErrorNote` / `ModelCatalogPicker` / `ProviderEditor` / `ProviderModelEditor` 组件。
-import 单向无环；`tsc --noEmit` 零错；frontend-admin 348 例全绿。
-
-#### B.16.3 既有失败处置（提交 7baab20）
-
-- `test_missing_key_env_*` → 改写为 `test_missing_key_env_is_none_in_db_mode`
-  （missingKeyEnv 在 DB 模式恒 None）；
-- siliconflow 拒绝用例断言对齐新文案「未在数据库配置 API Key」；
-- `test_database_model_config_authority` 2 例 **xfail(strict=False)** 显式标注：
-  实现侧保留「无 DB 绑定回退旧 env」开发兼容（embedding_singleton / ocr docstring
-  明示），与收口目标态断言冲突 —— **是否删除兼容路径待拍板**：删除会使无 DB
-  绑定的开发环境失去 embedding/OCR 云端能力。
-
-#### B.16.4 遗留
-
-- ✅ 全量 pytest 已回归（2026-09-21，14m06s，PGHOST=127.0.0.1 PGPORT=5433）：
-  **5217 passed / 51 failed / 3 errors / 2 xfailed**，对照历史基线 65 failed/3 error
-  **净减 14 例**（含本批修复的 4 例 + 基线统计时点差异）；3 errors 仍为 rerank 顺序
-  既有组；model-config 改动面（sys_providers / sys_model_roles / siliconflow /
-  authority）**零失败**，51 例全部落在既有无关区域（competitor、rag_upload、
-  lineage、tool_approval、email 幂等、memory_routes 503 等）；
-- P0（宿主 5432 原生 PG 误迁移）已拍板：**保留不回滚**（2026-09-21）；
-- ✅ env 开发兼容路径终局拍板（2026-09-21，用户裁定**都用 DB，删除回退**，
-  推翻当日早间「保留」初判）：
-  - `embedding_singleton._resolve_cloud_embedding_config`：无绑定时返回空配置
-    （provider=""），由 `_get_cloud_embedding` 以「数据库未配置…请先在管理端」
-    明确报错；删除 `EMBEDDING_API_KEY/BASE` import（模块 docstring 的 P0 约束
-    本就要求 DB 唯一来源，此次是实现归位）；
-  - `ocr.py`：删除 `_resolve_dashscope_key` 三级 env 回退链；`_resolve_ocr_runtime_config`
-    非 DB 分支 api_key 恒空；`ocr_available`/`ocr_image` 告警与报错文案改为
-    「云端 Key 只来自数据库」；`ocr_image` 非 DB dashscope 路径补 Key 防线；
-  - 测试归位：authority 2 例回到「env 不再生效」目标态断言；
-    `test_pdf_ocr` 6 处 env 注入改 DB 形状运行时配置/绑定注入；
-    `test_embedding_singleton` 超时用例改走 DB 绑定路径；
-    顺手修复基线 51 例中的既有失败 `test_reranker_fallback::test_factory_selects_by_env_mode`
-    （reranker 工厂本已 DB-only，测试仍假设 env Key 生效）；
-  - 影响面确认：活库 embedding/ocr/rerank 均已有 DB 绑定，删除回退不改变
-    活服务行为；仅「无 DB 绑定」环境失去云端能力，须先在管理端绑定；
-  - 验证：受影响 5 个测试文件 49/49 全绿；
-  - 待变更窗口：rebuild app 容器后生效（同时带上 B3 读权限放行）。
-- ⏳ 活服务容器未重建，B3 读权限放行需随下次变更窗口生效（当日工作区有他会话
-  合并中間态：`backend/app/api/router.py` 等处于 UU 冲突未决，禁止此时 rebuild）。
