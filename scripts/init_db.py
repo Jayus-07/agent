@@ -150,6 +150,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     # migration 静默跳过」事故复现（实库对象已被并行会话手工补齐；本登记使
     # schema_migrations 收敛，避免下次重建 rc=2 整栈拒绝启动）。
     "048_memory_scope_and_versioning.sql": "memory",
+    # Memory 动态画像契约：范围/业务域、递增版本与推断待确认状态（仅元数据）。
+    "088_memory_profile_scope_verification.sql": "memory",
+    # L3 Celery 提取 outbox：与 user turn 同事务写入，broker 丢投由扫描器恢复。
+    "089_memory_extraction_outbox.sql": "memory",
     # Phase3 STOP B（2026-09-24）：tasks PENDING Recovery 列 + 索引。
     # tasks 表演进权威在 backend/tasks/schema.sql（ensure_schema 幂等），
     # 本文件为 db-migrate 流程的实库执行留痕，语句全部 IF NOT EXISTS 幂等。

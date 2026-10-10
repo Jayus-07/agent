@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generated_at": "2026-10-02T11:28:01+08:00",
-  "git_sha": "57698d5",
-  "tool_count": 39,
+  "generated_at": "2026-10-10T15:02:55+08:00",
+  "git_sha": "d177694",
+  "tool_count": 40,
   "tools": {
     "calculate_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/calculator.py",
@@ -1130,6 +1130,26 @@
       "capabilities": [],
       "output_types": {},
       "content_hash": "ef10f24a65688cd9"
+    },
+    "memory_forget_tool": {
+      "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",
+      "display_name": "记忆删除",
+      "data_source": {
+        "type": "internal"
+      },
+      "description_hash": "067fd1df512dfb21",
+      "args_schema": {
+        "memory_id": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        }
+      },
+      "capabilities": [],
+      "output_types": {},
+      "content_hash": "064b23a1bebfa6c3"
     },
     "memory_search_tool": {
       "module": "D:/Program Files/workplace/agent/backend/tools/memory.py",

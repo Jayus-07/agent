@@ -4,7 +4,7 @@ PromptSpec is a frozen dataclass; PROMPT_REGISTRY is the single source of truth.
 security.input_guard is flagged code_controlled=True (never DB-editable).
 总数断言在 tests/prompts/test_registry_defaults.py（改键数先改它）。
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -238,7 +238,7 @@ _register(PromptSpec(
     name="LLM 路由 Prompt",
     category="router",
     risk_level="high",
-    variables=(R("query"),),
+    variables=(R("query"), R("allowed_candidates")),
     default_file="router_llm.yaml",
 ))
 
@@ -540,6 +540,15 @@ _register(PromptSpec(
     default_file="travel_llm_intent.yaml",
 ))
 
+_register(PromptSpec(
+    key="travel.turn_decision",
+    name="旅游轮次统一决策 Prompt",
+    category="travel",
+    risk_level="medium",
+    default_file="travel_turn_decision.yaml",
+    agent="travel_requirement",
+))
+
 # ── Travel LLM 理解层（2026-10-08 STOP 1/4：槽位富化 + 追问渲染）──
 
 _register(PromptSpec(
@@ -558,6 +567,16 @@ _register(PromptSpec(
     risk_level="medium",
     variables=(R("known_facts"), R("ask_slot"), R("slot_question")),
     default_file="travel_clarification_renderer.yaml",
+))
+
+_register(PromptSpec(
+    key="travel.reporter",
+    name="旅游 Reporter 事实约束回复 Prompt",
+    category="travel",
+    risk_level="medium",
+    variables=(R("user_message"), R("verified_facts"), R("template_answer")),
+    default_file="travel_reporter.yaml",
+    agent="travel_reporter",
 ))
 
 # ── Agent Capability ───────────────────────────────────────────
