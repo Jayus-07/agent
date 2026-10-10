@@ -238,6 +238,15 @@ describe("StepTimeline Span 明细", () => {
     expect(container.querySelector("#step-router\\.grand")).toBeNull();
   });
 
+  it("无子步骤的 span 不显示折叠三角与收起提示", () => {
+    // 折叠控件只在含子步骤的行出现，避免误导用户以为可以展开
+    const container = mountTimeline(makeSpan({ id: "leaf", name: "叶子步骤" }));
+
+    expect(container.querySelector('button[title="展开子步骤"]')).toBeNull();
+    expect(container.querySelector('button[title="收起子步骤"]')).toBeNull();
+    expect(container.textContent).not.toContain("已收起");
+  });
+
   it("大耗时步骤默认折叠，点击后展开明细", () => {
     const container = mountTimeline(makeSpan({ duration_ms: 1_250 }));
 
