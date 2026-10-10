@@ -192,12 +192,42 @@
 - 风险 2 已解决：`policy.py` 的 `sql.guard` span_id 由随机 uuid 改为实例内递增序号，同一查询内多次 Guard 调用可得稳定、可归并的 id。定向测试断言 `sql.guard` 的 parent 为 `sql.validate.attempt_1`，覆盖「多次 Guard 共享同一 trace」的父子关系。
 - 风险 3 已验证通过：`sse_event_sink.py` 的 bind/reset 在 `runner.py` 同一 worker 线程内配对且位于 `finally`；`skills/sql/skill.py` 用 `asyncio.to_thread(..., event_sink=emit_sse_event)` 显式传参，不依赖 ContextVar 跨线程继承。`emit_sql_stage` 只产 `{"event": "status"|"log"}` 帧、不带 `seq`，seq 由序列化层统一分配，与 F2 `seq/after_seq` 契约兼容。`test_trace_middleware.py` 的 `bind_sse_event_sink`/`reset_sse_event_sink` 用例覆盖该行为。
 - 风险 4 已核实：040/047/048 的实际 Git 差异确为纯注释（指向已删文档改为现行架构文档），无 DDL/schema/数据变更。
-- 风险 5 已遵守：`085_drop_legacy_travel_planning.sql` 及 082/084/086 均未纳入、未执行。`git status` 对 `backend/sql/migrations/0[89]` 为空。所有迁移未运行，无数据库写入。
+- 风险 5 已遵守：`085_drop_legacy_travel_planning.sql` 及 082/084/086 **未在本主题的这次 SQL 提交中改动**（该表述仅描述本提交范围）。**更正此前含混表述**：这四个迁移文件在集成树中**确实存在且已被 Git 跟踪**，并非不存在——`082_travel_plan_tenant_scope.sql`、`084_travel_v2_schema.sql`、`085_drop_legacy_travel_planning.sql`、`086_travel_v2_arrangements.sql` 四者 `git ls-files` 均命中。它们随此前 Travel V2 相关批次进入集成树。所有迁移均未执行，无数据库写入。
 - 定向测试命令与结果（集成树，PYTHONPATH 指向集成树）：
   - `python -m pytest backend/tests/sql/test_sql_agent_trace_stages.py -v`：**3 passed**（阶段 span 记录、拒绝态可见、P0 回归「span input 不得含原始问题」）。
   - `python -m pytest backend/tests/sql/ backend/tests/test_trace_middleware.py -q`：**365 passed, 7 failed, 22 skipped, 19 errors**。
-  - 无回归的严格证明：在临时 worktree（`git worktree add --detach D:\tmp\sql-baseline-check HEAD`，即 `18df1f8`，不含本轮改动）上跑同一命令，基线为 **354 passed, 7 failed, 22 skipped, 19 errors**。失败项与错误项**逐项完全相同**（6 项 `test_business_analysis.py` 既有断言失败、1 项 `test_sql_query_stream.py`、19 项 `test_sql_browse.py`/`test_sql_http_auth.py` 因本机 PostgreSQL 无密码的既有环境限制）。本轮改动通过数净增 11，零新增失败。该临时 worktree 检查后已用 `git worktree remove --force` 移除，未触碰任何来源 worktree。
+  - 无新增失败的基线对比（措辞更正）：在临时 worktree（`git worktree add --detach D:\tmp\sql-baseline-check HEAD`，即 `18df1f8`，不含本轮改动）上跑同一命令，基线为 **354 passed, 7 failed, 22 skipped, 19 errors**。失败项与错误项**逐项完全相同**（6 项 `test_business_analysis.py` 既有断言失败、1 项 `test_sql_query_stream.py`、19 项 `test_sql_browse.py`/`test_sql_http_auth.py` 因本机 PostgreSQL 无密码的既有环境限制）。该临时 worktree 检查后已用 `git worktree remove --force` 移除，未触碰任何来源 worktree。**必须准确表述**：这只说明「本次所执行的这批测试没有新增失败」，不等于全通过，也不构成严格无回归证明——本机无法连接 PostgreSQL，19 个用例根本没跑到断言，评测覆盖不完整。
   - 修复的真实回归：`test_sql_skill_followup.py` 的 `FakeAgent.ask_struct` 替身缺少 `event_sink` 形参，加入 sink 透传后失败；已按真实签名（`ask_struct(..., event_sink=None)`）补齐替身，未删除断言、未 skip/xfail。修复后该文件通过。
   - 静态检查基线对比：`python -m ruff check` 对改动文件报 14 个问题（I001/F401/E402），与 HEAD 基线同规则同数量，仅行号位移，**未引入新的 lint 问题**；既有 lint 债不在本主题范围内，未顺手修改。
 - 未执行：全量回归、数据库迁移、主工作区与任何来源 worktree 的修改、reset --hard / clean -fd / 强推 / 删除分支或 worktree / 丢弃 stash。
 - 遗留风险：`/api/observability/traces` 与 `/api/observability/traces/{trace_id}` 缺管理员角色门 + `TRACE_DETAIL_LEVEL` 默认 full 导致读取不脱敏，是**跨主题**的 observability 安全项，本主题未修复；在该项解决前，任何把用户原文写入 span.input 的埋点都不应合入。
+
+## 2026-10-10：SQL 主题收尾检查（四项）
+
+- Git 刷新：`git rev-parse --is-inside-work-tree` 返回 true；分支 `codex/tri-ai-integration-20261010`；HEAD 实测 `0ef23254c1b657ab4112dd3e050032cf391af324`。`7bdd6ea` 核实存在且仅含此前记录的 12 个文件（runner.py、sse_event_sink.py 新增、sql_generator.yaml、skills/sql/skill.py、040/047/048、policy.py、demo_sandbox.sql、sql_agent.py、test_sql_agent_trace_stages.py 新增、test_sql_skill_followup.py），改动范围与 PROGRESS 记录一致，未重复应用。
+
+### 1. 多 Guard 实例 / 多次调用的 trace 覆盖
+
+- 现状核对：原有覆盖仅 `test_sql_production_closure.py::TestSqlGuardSpan` 的 3 个用例，均为**单个 Guard 实例、单次调用**（`test_allow_...`、`test_deny_...`、`test_noop_...`）。**结论：原有测试不充分**，未覆盖「同一 trace 内两个不同实例」与「每实例多次调用」。
+- 生产链路确有两种形态并存：`backend/app/api/routes/sql.py:474-478` 复用同一实例连续调用（count + rows）；`backend/sql/policy.py:479` 与 `backend/tools/sql.py:87` 每次调用新建实例。因此该组合是真实场景，非假设。
+- 补充最小定向测试（新增 2 个用例到既有 `TestSqlGuardSpan`，使用独立 `TraceCollector` + `monkeypatch` 隔离，避开全局 collector 的 PostgreSQL 依赖）：`test_multiple_guards_and_calls_share_trace_with_unique_ids`（2 实例共 4 次调用）、`test_guard_span_ids_are_reproducible_not_random`（确定性）。
+- 实测结论：**未发现代码缺陷**。穷举验证（1/2/3/5 个实例 × 1/2/3/4/5 次调用共 9 种组合）显示 span_id **始终唯一**、父级始终为 root、span 均正常收口 success。
+- 一处**非缺陷的命名观察**（如实记录，未修改）：`_guard_span_seq` 是实例级计数，而 tracer 的 `#N` 去重是同 trace 级，两者叠加会出现序号跳号或二次后缀。实测：单实例两次调用得 `['sql.guard', 'sql.guard#2']`（跳过 #1）；两实例各两次调用曾出现 `sql.guard#2#1`。但该序列**跨多次独立执行完全可复现**，已达成「替代不可复现随机 uuid、可按名归并」的设计意图，且不影响唯一性与父子关系，故按「只修暴露的问题」原则不改动上游代码。
+- 测试命令与结果：`python -m pytest backend/tests/sql/test_sql_production_closure.py::TestSqlGuardSpan -v` → **5 passed**（3 既有 + 2 新增）。
+
+### 2. 082/084/085/086 的存在与登记状态
+
+- **存在性**：四个文件在集成树中均存在且 `git ls-files` 显示为已跟踪（082_travel_plan_tenant_scope.sql、084_travel_v2_schema.sql、085_drop_legacy_travel_planning.sql、086_travel_v2_arrangements.sql）。此前「SQL 本批未纳入」仅描述该提交范围，**不代表文件不存在**；本条更正此前含混表述。
+- **登记状态**：登记表在 `scripts/init_db.py` 的 `MIGRATION_TARGETS`。四者均已登记：082→memory、084→memory、085→memory、086→memory，其中 085/086 同时列入 `ORDER_LAST`（需晚于 004/043 的 schema 级 GRANT 执行）。
+- 只读解析验证（不连数据库、不执行迁移）：`from scripts.init_db import discover_migrations` → `registered_count=92`、`unregistered=[]`（**无「磁盘有文件但未登记」的 fail-fast 风险**），四个 08x 均出现在有序执行列表中。
+- 未执行任何迁移，未连接数据库，无数据库写入。
+
+### 3. 验证结论措辞更正
+
+- 前文「无回归的严格证明」表述过强，已就地更正为「无新增失败的基线对比」。准确含义：与基线 `18df1f8` 的失败/错误集**逐项相同**，说明**本次所执行的这批测试没有新增失败**。
+- **不得**据此声称「全通过」或「严格无回归证明」：本机无法连接 PostgreSQL（`fe_sendauth: no password supplied`），19 个用例在 setup 即错误、根本没执行到断言；6 个 `test_business_analysis.py` 断言失败亦为既有问题。该批测试的覆盖不完整。
+
+### 4. Trace API 鉴权与脱敏 P0（继续阻塞）
+
+- 该 P0 **仍未解决**，保留阻塞记录：`/api/observability/traces` 与 `/api/observability/traces/{trace_id}` 无 `require_admin_operator` 依赖，APISIX `ROLE_GATE_PREFIXES` 不覆盖该前缀，`TRACE_DETAIL_LEVEL` 默认 `full` 使 `redaction.py` 直接返回不脱敏。
+- 因此 SQL 的两处 `sql.table_router`（含 `question[:500]`）埋点继续**不予合入**；在该项修复前，任何写入用户原文的 span 埋点都不得进入集成树。

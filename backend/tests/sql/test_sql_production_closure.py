@@ -717,3 +717,91 @@ class TestSqlGuardSpan:
         guarded = SQLPolicyGuard().validate_and_rewrite(
             "SELECT sku FROM product.products WHERE id = 1", ctx)
         assert guarded is not None
+
+
+    def test_multiple_guards_and_calls_share_trace_with_unique_ids(self, monkeypatch):
+        """同一 trace 内多个 Guard 实例、每实例多次调用：span_id 唯一且父子正确。
+
+        生产链路存在两种形态：``app/api/routes/sql.py`` 复用一个实例连续调用
+        validate_and_rewrite（count + rows），``sql/policy.py`` 的模块级函数与
+        ``tools/sql.py`` 则每次调用新建实例。span_id 由实例内递增序号生成
+        （``sql.guard`` / ``sql.guard#N``），tracer 对同 trace 内重复 id 追加
+        ``#N`` 去重兜底。本用例锁定：两种形态叠加时 id 仍唯一、父级仍为 root、
+        span 正常收口。
+
+        使用独立 TraceCollector 并挂到 tracer 模块，避免全局 trace_collector
+        的持久化后端（依赖 PostgreSQL）——与 test_sql_agent_trace_stages.py
+        同一隔离方式。
+        """
+        import backend.observability.tracer as tracer_module
+        from backend.observability.tracer import TraceCollector
+        from backend.sql.policy import SQLPolicyGuard
+        from tests.sql.conftest import build_ctx
+
+        collector = TraceCollector()
+        monkeypatch.setattr(tracer_module, "trace_collector", collector)
+        trace = collector.start("sql guard shared", "s-shared", workflow_name="agent")
+        collector.start_span("root", parent_id=None, name="Agent", type="workflow")
+        try:
+            ctx = build_ctx(user_id="3", department="ecom",
+                            tenant_id="t1", roles=("editor",))
+            sql = "SELECT sku FROM product.products WHERE id = 1"
+
+            shared = SQLPolicyGuard()
+            shared.validate_and_rewrite(sql, ctx)   # sql.py count
+            shared.validate_and_rewrite(sql, ctx)   # sql.py rows
+
+            fresh = SQLPolicyGuard()
+            fresh.validate_and_rewrite(sql, ctx)
+            SQLPolicyGuard().validate_and_rewrite(sql, ctx)  # 又一只新实例
+
+            spans = [s for s in trace.spans if s.name == "sql.guard"]
+            assert len(spans) == 4
+
+            ids = [s.span_id for s in spans]
+            assert len(ids) == len(set(ids)), f"span_id 必须唯一: {ids}"
+
+            # 每个 Guard span 都是独立逻辑步骤，父级统一挂 root，不互相嵌套
+            assert {s.parent_id for s in spans} == {"root"}, (
+                f"Guard span 不得互相嵌套: "
+                f"{[(s.span_id, s.parent_id) for s in spans]}"
+            )
+            assert all(s.status == "success" for s in spans)
+            assert all(s.metrics.get("decision") in ("allow", "allow_no_scope")
+                       for s in spans)
+        finally:
+            collector.clear_for_test()
+
+    def test_guard_span_ids_are_reproducible_not_random(self, monkeypatch):
+        """同一调用序列重复执行应得到相同 span_id 序列（替代随机 uuid 后缀）。
+
+        管理端按 span_id 聚合/对比；随机后缀会让同一逻辑步骤每次请求都是新
+        id，跨 trace 无法归并。本用例锁定确定性：两次独立执行结果一致。
+        """
+        import backend.observability.tracer as tracer_module
+        from backend.observability.tracer import TraceCollector
+        from backend.sql.policy import SQLPolicyGuard
+        from tests.sql.conftest import build_ctx
+
+        def run_once():
+            collector = TraceCollector()
+            monkeypatch.setattr(tracer_module, "trace_collector", collector)
+            trace = collector.start("sql guard repro", "s-repro", workflow_name="agent")
+            try:
+                ctx = build_ctx(user_id="3", department="ecom",
+                                tenant_id="t1", roles=("editor",))
+                sql = "SELECT sku FROM product.products WHERE id = 1"
+                guard = SQLPolicyGuard()
+                guard.validate_and_rewrite(sql, ctx)   # count
+                guard.validate_and_rewrite(sql, ctx)   # rows
+                return [s.span_id for s in trace.spans if s.name == "sql.guard"]
+            finally:
+                collector.clear_for_test()
+
+        first = run_once()
+        second = run_once()
+        assert first == second, f"span_id 序列应可复现: {first} vs {second}"
+        assert first[0] == "sql.guard"
+        assert all(not sid.startswith("sql.guard.") for sid in first), (
+            "不得回退为随机 uuid 后缀命名"
+        )
