@@ -87,6 +87,46 @@ def test_langchain_messages_round_trip_through_l2_sqlite():
     asyncio.run(scenario())
 
 
+def test_session_repository_save_turn_uses_typed_l2_messages():
+    async def scenario():
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(ChatSession.__table__.create)
+                await connection.run_sync(ChatMessage.__table__.create)
+
+            factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async with factory() as db:
+                repository = SessionRepository(db)
+                await repository.get_or_create("l2-runner-turn", "user-2")
+                question_row, answer_row = await repository.save_turn(
+                    "l2-runner-turn", "用户问题", "最终回答",
+                )
+                await db.commit()
+
+                rows = await repository.load_messages("l2-runner-turn")
+                memory = SessionMemory("l2-runner-turn")
+                memory._repo = repository
+                restored = await memory.load_messages()
+
+                assert [row.message_type for row in rows] == ["human", "ai"]
+                assert [row.role for row in rows] == ["user", "assistant"]
+                assert [type(message) for message in restored] == [
+                    HumanMessage, AIMessage,
+                ]
+                assert [message.id for message in restored] == [
+                    f"chat-message:{question_row.id}",
+                    f"chat-message:{answer_row.id}",
+                ]
+                assert [message.content for message in restored] == [
+                    "用户问题", "最终回答",
+                ]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_legacy_rows_restore_as_human_or_ai_with_database_identity():
     restored = restore_message(
         type("LegacyRow", (), {

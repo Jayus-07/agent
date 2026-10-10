@@ -56,7 +56,8 @@
 - [x] L1 窗口按消息数与用户轮数分别配置；按 HumanMessage 边界淘汰旧的完整轮，轮内 AI/Tool 消息不拆分。
 - [x] 持久化 Human/AI 消息恢复时保留数据库稳定 ID，L1 对所有 BaseMessage 按稳定 ID 去重。
 - [x] 增加受控 LangChain 文本消息的 L2 持久化/恢复契约，保留 human/ai/tool 类型、AI 工具调用参数及 ToolMessage 必要元数据，并补齐往返测试。
-- [ ] 将可信 ToolMessage 接入实际 Runner/Session 持久化入口，并覆盖真实会话恢复；当前主 Graph Runner 尚未产出该持久化流。
+- [x] 主图成功轮次的 `end_turn → save_turn` 写入已接入 typed HumanMessage/AIMessage，并保留同事务的幂等收据与 outbox。
+- [ ] 将真实执行图产生的可信 ToolMessage 接入持久化入口；当前主 Graph Runner 只返回结构化 step results，尚未产出 LangChain ToolMessage 流，不得由业务结果伪造。
 - [x] `/chat/stream` 使用 request_id/Idempotency-Key 与持久轮次收据实现成功轮次幂等；见 2026-10-11 进度记录。
 - [ ] 收口 Graph State 注入及取消、失败终态；校验用户/租户/会话范围、Redis 故障恢复和服务重启，超窗历史交由 L2。
 

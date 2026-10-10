@@ -1,7 +1,7 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
 from datetime import datetime, timezone
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import DateTime, delete, func, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -87,8 +87,14 @@ class SessionRepository:
         )
 
     async def save_turn(self, session_id: str, question: str, answer: str) -> tuple[ChatMessage, ChatMessage]:
-        q = await self.save_message(session_id, "user", question)
-        a = await self.save_message(session_id, "assistant", answer)
+        # GraphRunner.end_turn 的真实落库入口走受控消息编解码；工具协议消息
+        # 只有在执行图实际提供 LangChain ToolMessage 时才单独持久化。
+        q = await self.save_langchain_message(
+            session_id, HumanMessage(content=question),
+        )
+        a = await self.save_langchain_message(
+            session_id, AIMessage(content=answer),
+        )
         # 首轮自动设标题（仅当 title 为空，不覆盖用户重命名）
         await self._s.execute(
             update(ChatSession)
