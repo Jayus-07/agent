@@ -31,9 +31,11 @@
 - 基线黄金集文件目前 60 行；旧结果文件存在但尚未核验评测版本、真实运行环境及指标可比性，不能作为本任务基线。真实 API/Agent、准确率、误写率、延迟和成本测量尚未进行，Phase 0 尚未完成。
 - 后续重点：建立隔离验证身份并检查 schema 实表；量清服务侧身份/tenant/domain 是否贯通各业务域；再基于实际差距设计 additive migration、可靠事件屏障、确定性删除及动态 profile 投影。
 
-## 下一步
+## 下一步（2026-10-10 复核）
 
-继续 Phase 3：补齐 scope/domain/version/verification schema 及授权过滤；将 L3 自动提取改为可恢复的 Celery 持久任务（任务行与 turn 同事务入库、发布失败可扫描补投）；随后按 Phase 1–7 推进剩余契约和门禁。Phase 0 性能/准确率基线尚未采集，不能据现有定向测试宣称生产就绪。
+- 当前任务 Worktree 已快进至 `da087cb`；`main` 已包含 088/089 迁移、scope/domain/version/verification、待确认画像 API、删除屏障、结构化画像投影及持久提取 outbox。不得按旧进度再次实现这些能力。
+- Phase 1 继续核验 L1 与 Graph State 的消息身份、消息窗口与 turn 语义，以及取消/重试时的持久化边界；本次稳定 ID 改动只覆盖数据库历史消息恢复和短期缓冲去重，不代表整个 Phase 1 完成。
+- Phase 0 的真实 API/Agent 基线、准确率、误写率、延迟及成本尚未采集；真实检查点需隔离用户和资源后进行，之前的定向单测不能替代该基线或生产验收。
 
 ## 当前风险与待核验
 
@@ -71,3 +73,12 @@
 - 候选提交：记忆实现 `1116c2e`（画像生命周期、删除屏障、提取 outbox、L2 token 触发）；前端与客服上下文 `23501fc`（统一门户、登录注册回跳、会话分页、共享侧栏、独立客服/订单页）。
 - 已将以上功能分支无冲突合入整合分支 `codex/memory-travel-integration`，merge commit 为 `42a2592f7be46c971e5d7665acf0775d6b17203b`，基于最新 `origin/main` 的 `dffc21f103c0db1d3cc9b7f0250ae0f9cfd02ae6`。因 `main` 正在另一 Worktree 中且存在其他会话的暂存/未提交修改，没有更新 `main` 分支指针，也没有推送。
 - 下一步：由用户统一决定何时将干净整合分支纳入 `main`；不得覆盖共享目录或继续扩展未验收的记忆阶段。
+
+## 2026-10-10：快进到最新 main 并补齐 L1 稳定身份
+
+- 复核时 `C:\Users\wh\.codex\worktrees\memory-profile-main\agent` 在 `codex/memory-profile-upgrade-main`，工作区干净，HEAD 为 `e1e3dfc`；当前 `main` 在 `da087cb` 且干净。确认 `e1e3dfc` 是 `main` 祖先后，仅在本任务 Worktree 执行 `git merge --ff-only main`，本分支快进至 `da087cb`；未改主工作区和其他 Worktree。
+- 代码复核确认，整合后的 `main` 已含 088/089 schema 与提取 outbox、scope/domain/version/verification、待确认画像接口、画像投影和删除屏障；此前“下一步补 schema/outbox”的记录已过期，现已改为继续 Phase 1。
+- `backend/memory/session.py` 在恢复 Human/AI 历史消息时保留 `chat_messages.id` 为 LangChain message ID；`backend/memory/short_term.py` 按稳定 ID 去重，正文相同但 ID 不同的消息仍分别保留。L1 使用 `BaseMessage`，因此 ToolMessage 可在缓冲中保持类型并接受相同 ID 去重；持久化工具调用元数据仍未实现。
+- 新增 `backend/tests/memory/test_l1_message_identity.py`。实际运行 `python -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_summary_visibility.py backend/tests/memory/test_stop_e_summary_contract.py backend/tests/orchestration/graph/test_stream_events_flow.py backend/tests/rag/test_chain.py -q --no-cov`：55 passed、6 skipped，166.51 秒。未运行全量回归或真实 Agent E2E。
+- 集成复核后将数据库 ID 命名空间限定为 `chat-message:`，再运行 `python -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_summary_visibility.py -q --no-cov`：7 passed，未跳过。
+- 本次代码与文档改动尚未提交；L1 消息/轮次配置、当前请求与 Graph State 的幂等关系、取消/失败恢复和真实 E2E 仍待验证。

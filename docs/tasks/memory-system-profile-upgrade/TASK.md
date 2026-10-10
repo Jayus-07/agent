@@ -1,6 +1,6 @@
 # 企业级三层记忆与动态用户画像改造计划
 
-日期：2026-10-10。状态：实施中（分支 `codex/memory-travel-frontend`，基于整合后 main `098632a`）。
+日期：2026-10-10。状态：实施中（分支 `codex/memory-profile-upgrade-main`，基于整合后 main `da087cb`）。
 
 ## 目标与任务来源
 

@@ -23,6 +23,16 @@ class ShortTermBuffer:
         self.retrieval_stats: dict = {}
 
     def add(self, msg: BaseMessage) -> None:
+        # 同一持久消息可能经恢复/状态合并再次到达；按稳定 ID 去重，
+        # 不按正文去重，避免丢掉用户连续发送的相同内容。
+        message_id = getattr(msg, "id", None)
+        identity = str(message_id).strip() if message_id is not None else ""
+        if identity and any(
+            getattr(existing, "id", None) is not None
+            and str(existing.id) == identity
+            for existing in self._messages
+        ):
+            return
         self._messages.append(msg)
         if len(self._messages) > self._max:
             self._messages = self._messages[-self._max:]

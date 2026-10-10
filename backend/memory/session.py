@@ -27,11 +27,15 @@ class SessionMemory:
 
     async def load_messages(self, limit: int | None = None) -> list[BaseMessage]:
         rows = await self._repo.load_messages(self.session_id, limit=limit)
-        return [
-            HumanMessage(content=r.content) if r.role == "user"
-            else AIMessage(content=r.content)
-            for r in rows
-        ]
+        messages = []
+        for row in rows:
+            # 数据库主键是跨恢复稳定的消息身份，传入 LangChain/LangGraph
+            # state，供后续状态合并按消息身份去重。
+            row_id = getattr(row, "id", None)
+            message_id = f"chat-message:{row_id}" if row_id is not None else None
+            message_type = HumanMessage if row.role == "user" else AIMessage
+            messages.append(message_type(content=row.content, id=message_id))
+        return messages
 
     async def save_turn(self, question: str, answer: str) -> None:
         await self._repo.save_turn(self.session_id, question, answer)
