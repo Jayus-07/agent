@@ -70,6 +70,9 @@ pyenv.cfg
 *.sqlite3
 *.sqlite-journal
 *.db-journal
+# 根 data 目录的运行时产物（RAG 索引元数据 / 评测中间结果等）：
+# 由测试与本地运行生成，不参与版本控制（业务种子数据另见 backend/sql/seeds/）
+data/*.json
 data/*.db
 data/*.sqlite
 data/*.sqlite3

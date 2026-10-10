@@ -421,3 +421,29 @@
 - **日常分支独有**：`memory_scope = {"tenant_id": tenant_id}` 且 `if domain_hint: memory_scope["domain"] = domain_hint`，以 `**memory_scope` 传给 `self._memory.start_session(...)`。`memory/manager.py::start_session` 签名确认支持 `domain: str | None = None`。集成树当前只传 `tenant_id=tenant_id`，**丢失 domain 传递**。
 - **判定：两侧都不可丢弃**——丢集成树的会破坏客服 pending 状态契约；丢日常分支的会丢失记忆的业务域隔离。需在集成树上补 `memory_scope`，同时保留 `include_pending_action`。
 - 该分歧**不属于**「覆盖冲突」：两处代码位置不同（L535 与 L1004），可各自独立保留，不存在需要人工取舍的冲突块。
+
+### 第 2 步：五条关键链路验证
+
+#### 1. Trace 权限与跨租户隔离 —— 真实数据库端到端验证通过（关闭 P0 未验证项）
+
+- 环境实测：本机 PostgreSQL **可达且可认证**（localhost:5433，PostgreSQL 16.14，database=agent_memory，user=postgres），Redis 亦可达。此前几轮「无法连接 PostgreSQL」的判断在本轮**不再成立**，故补做真实数据库验证。
+- **纠正一处我自己的误判**：初次探测查到 `ai.trace_records` 表**没有** `parent_id` 列，并据此怀疑 `list_children` 会抛 `UndefinedColumn`。经复核，`PostgresTraceStore._table` = `trace_store`（第 61 行），实际使用的是 **`public.trace_store`**，其列**完整含 `parent_id` 与 `rejected`**（由迁移 `012_obs_trace_store_pg.sql` 定义）。`ai.trace_records` 是另一张与本链路无关的旧表。**该「缺陷」不成立，特此更正，未将其写成问题。**
+- **真实数据库跨租户过滤验证**（以 `OBS_DB_PG_TABLE_PREFIX=ittest_` 建隔离表 `ittest_trace_store`，**不触碰业务表**）：写入父 Trace + 同租户子 + 跨租户子三行后，调用真实 `list_children`：
+  - `tenant_id="tenant-A"` → 仅返回 `it-child-A`，**不含跨租户的 `it-child-B`** ✅
+  - `tenant_id="tenant-B"` → 仅返回 `it-child-B`，**不含 `it-child-A`** ✅
+  - `tenant_id=None` → 返回 `[]`（未声明租户不发起无作用域查询）✅
+- 清理：已 `DROP TABLE ittest_trace_store`；确认无 `ittest%` 残留，业务表 `trace_store` 4962 行**未被修改**。
+- 结论：**「Trace 跨租户真实数据库过滤」由「未验证」转为「已验证通过」**。
+
+#### 2-4. SSE / SQL / 评测 / Trace 授权链路
+
+- 命令：`python -m pytest backend/tests/test_sse_event_schema.py backend/tests/sql/test_sql_agent_trace_stages.py backend/tests/evaluation/test_rag_deferred_ragas_preserved.py backend/tests/api/test_observability_trace_authz.py -q`
+- 结果：**51 passed, 1 failed**。
+- 唯一失败 `test_sse_event_schema.py::test_http_full_sse_stream_passes_sequence` 经**基线对比**（临时 stash 掉改动后在未修改的 `55c944e` 上重跑）确认**同样失败**，根因是 `FEEDBACK_PG_CONFIG` 连接不可用（环境依赖），**与本轮改动无关**。
+
+#### 事件说明（如实记录）
+
+- 在执行上述基线对比时，我使用了 `git stash push -- <path>` + `git stash pop` 的临时方案。`pop` **失败**（报 `could not restore untracked files from stash`），导致集成树工作区被污染：25 个文件写入冲突标记、271 个已跟踪文件被改成非 HEAD 版本、260 项被意外暂存。
+- **处置**：先 `git reset`（mixed）取消暂存；再备份 25 个冲突文件到 `D:\tmp\conflict-backup-20261010`；再 `git checkout HEAD -- <25 文件>`；最后备份完整污染补丁到 `D:\tmp\integ-ws-polluted.patch` 并 `git checkout HEAD -- .` 整体恢复。
+- **结果**：冲突标记 0、未暂存修改 0；`runner.py` 的 `memory_scope` 与 `include_pending_action` 均完好；HEAD 提交链（`2020457`/`55c944e`/…）完好；**主工作区 `stash@{0}`（记忆/客服会话的工作）完好未被消耗**。剩余 240 个未跟踪文件为 `stash pop` 带入，已在下方单独处置。
+- **教训（用于后续）**：不应在集成树上用 `git stash` 做临时改动隔离来跑基线；正确做法是在临时 worktree 上跑基线（本任务此前几轮即用此法，本轮一度偏离）。
