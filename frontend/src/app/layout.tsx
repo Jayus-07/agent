@@ -12,37 +12,32 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const pathname = usePathname()
 
-  // /agent 与 /travel 走任务模式：全局控制台导航让位给页面自渲染的 TaskSidebar
-  // （业务入口常驻上半区「全部功能」折叠组，会话/规划历史在下半区；
-  //   两处侧栏均从 navConfig 的 NAV 数组渲染，故 NAV 加项即两处同时生效）。
-  // /travel 2026-10-02 加入：旅游页复用同一套侧栏（历史区=历史规划列表）。
-  // 用精确匹配而非 startsWith，避免子路径误判（2026-09-30 修正过期注释：
-  // 原文提到的 /agent/tasks 页面目录已于 09-21 裁撤）。
-  const isTaskMode = pathname === '/agent' || pathname === '/travel'
-  // 登录页 / 注册页 / 统一门户主页 独立呈现：不渲染全局侧边栏与移动端 tab
-  // （AuthGate 同样对这些路径放行）。用精确匹配，避免误伤 /login-xxx 之类子路径。
+  // 助手与旅游工作区使用页面自带导航，不叠加通用控制台侧栏。
+  const isTravelMode = pathname === '/travel' || pathname.startsWith('/travel/')
+  const isTaskMode = pathname === '/agent' || isTravelMode
+  // 门户、登录/注册和用户智能客服页使用独立布局。
   const isStandalone =
     pathname === '/login' ||
     pathname === '/register' ||
-    pathname === '/'
+    pathname === '/' ||
+    pathname === '/customer-service'
+  const showMobileTabBar = !isStandalone && !isTravelMode && pathname !== '/agent'
 
   return (
     <html lang="zh-CN">
       <head>
         <title>Agent AI</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
       </head>
       <body className="h-full flex bg-surface-root">
         {!isTaskMode && !isStandalone && (
           <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
         )}
-        <main className="flex-1 flex flex-col min-w-0 pb-16 md:pb-0">
+        <main className={`flex-1 flex flex-col min-w-0 ${showMobileTabBar ? 'pb-16 md:pb-0' : ''}`}>
           <AuthGate>
             <ToastProvider>{children}</ToastProvider>
           </AuthGate>
-          {/* UX P2-⑨ 移动断点：≤768px 底部四 tab（桌面 md:hidden 由 Sidebar 接管）；
-              登录/注册/门户等独立页不放导航 */}
-          {!isStandalone && <MobileTabBar />}
+          {showMobileTabBar && <MobileTabBar />}
         </main>
       </body>
     </html>

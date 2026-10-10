@@ -216,3 +216,29 @@ export async function listMyTickets(limit = 10): Promise<MyTicket[]> {
     return []
   }
 }
+
+/** 当前登录用户的客服档案及近期订单；后端以网关注入身份限制数据范围。 */
+export interface MyCustomerContext {
+  customer: {
+    display_name: string
+    gender?: string | null
+    level?: string | null
+    register_time?: string | null
+  }
+  orders: {
+    id: string
+    order_no: string
+    total_amount?: number | null
+    status: string
+    payment_status?: string | null
+    created_at?: string | null
+    product_summary: string
+  }[]
+  demo_mode: boolean
+  mock_data: boolean
+  profile_unavailable: boolean
+}
+
+export function getMyCustomerContext(): Promise<MyCustomerContext> {
+  return request<MyCustomerContext>('/api/cs/customer-context')
+}

@@ -1,253 +1,219 @@
 /**
- * / — 统一门户主页（设计稿 05 · 内部使用）
+ * / — 统一门户主页
  *
- * 面向公司内部的统一入口：一屏内提供用户端 / 客服端 / 管理端三个工作台的导航卡，
- * 员工无需分别记忆入口。
- * - 用户端：本应用内（/login 登录后进入 /agent）
- * - 客服端：独立应用 frontend-cs（:3300），此处用绝对链接跨应用跳转
- * - 管理端：独立应用 frontend-admin（:3200），此处用绝对链接跨应用跳转
- *
- * 纯静态呈现，无登录态要求；背景雾团与三端登录页视觉同源，进入对应端后色调延续。
- *
- * 移动端（≤md）口径（2026-10-07 用户拍板）：三端只有用户端适合手机展示，
- * 门户页在窄屏直接让位给登录页——手机开首页看到三张卡再点用户端等于白绕一屏。
- * 故 ≤md 走 MobileRedirect 重定向 /login，桌面保持三卡门户。
- * 客服端/管理端在手机端不提供入口（客服外出用手机接单的诉求已由用户确认放弃）。
+ * 桌面端展示三种 AI 助手，以及客服端、管理端两个工作台入口；
+ * 手机端只展示三种 AI 助手。助手入口登录后分别进入对应对话。
  */
 import Link from "next/link";
-import MobileRedirect from "@/components/layout/MobileRedirect";
+import {
+  ArrowRight,
+  Building2,
+  Headphones,
+  MapPin,
+  MessageCircle,
+  Settings2,
+  type LucideIcon,
+} from "lucide-react";
 
 const ADMIN_URL =
-  process.env.NEXT_PUBLIC_ADMIN_URL && process.env.NEXT_PUBLIC_ADMIN_URL.trim()
-    ? process.env.NEXT_PUBLIC_ADMIN_URL.trim()
-    : "http://localhost:3200";
-
+  process.env.NEXT_PUBLIC_ADMIN_URL?.trim() || "http://localhost:3200";
 const CS_URL =
-  process.env.NEXT_PUBLIC_CS_URL && process.env.NEXT_PUBLIC_CS_URL.trim()
-    ? process.env.NEXT_PUBLIC_CS_URL.trim()
-    : "http://localhost:3300";
+  process.env.NEXT_PUBLIC_CS_URL?.trim() || "http://localhost:3300";
+const ADMIN_LOGIN_URL = `${ADMIN_URL.replace(/\/+$/, "")}/login?redirect=%2Fsettings%2Faccess`;
+const CS_LOGIN_URL = `${CS_URL.replace(/\/+$/, "")}/login?redirect=%2Fcs`;
 
-type Entry = {
-  key: string;
-  tag: string;
-  tagColor: string;
-  tagBg: string;
+type AssistantEntry = {
   title: string;
-  desc: string;
-  accent: string;
+  description: string;
+  example: string;
+  action: string;
   href: string;
-  external?: boolean;
-  icon: React.ReactNode;
+  icon: LucideIcon;
+  tone: "green" | "blue" | "orange";
 };
 
-const ENTRIES: Entry[] = [
+const ASSISTANTS: AssistantEntry[] = [
   {
-    key: "user",
-    tag: "用户端",
-    tagColor: "#1F7A4D",
-    tagBg: "rgba(31,122,77,0.10)",
-    title: "AI 问答 · 多模态客服",
-    desc: "知识库问答、图片与文档理解、订单与售后查询，一句话全部接住；答不了的问题自动转人工。",
-    accent: "#1F7A4D",
-    href: "/login",
-    icon: (
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-        <path
-          d="M5 8.5C5 7.1 6.1 6 7.5 6H20.5C21.9 6 23 7.1 23 8.5V17.5C23 18.9 21.9 20 20.5 20H11L6 24V20H7.5C6.1 20 5 18.9 5 17.5V8.5Z"
-          fill="#1F7A4D"
-        />
-        <circle cx="11" cy="13" r="1.4" fill="#fff" />
-        <circle cx="14" cy="13" r="1.4" fill="#fff" />
-        <circle cx="17" cy="13" r="1.4" fill="#fff" />
-      </svg>
-    ),
+    title: "企业助手",
+    description: "公司里的百事通。制度、流程、写材料，想问就问。",
+    example: "报销流程又藏到哪儿了？",
+    action: "找它聊聊",
+    href: "/login?redirect=%2Fagent",
+    icon: Building2,
+    tone: "green",
   },
   {
-    key: "cs",
-    tag: "客服端",
-    tagColor: "#2C6E9E",
-    tagBg: "rgba(44,110,158,0.10)",
-    title: "客服工作台",
-    desc: "AI 优先应答，答不了自动转人工；会话、工单与知识库在同一屏流转，转接与质检全程留痕。",
-    accent: "#2C6E9E",
-    href: CS_URL,
-    external: true,
-    icon: (
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-        <path
-          d="M6 14V12C6 8.7 8.7 6 12 6H16C19.3 6 22 8.7 22 12V14"
-          stroke="#2C6E9E"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-        />
-        <rect x="4.5" y="13" width="4" height="7" rx="2" fill="#2C6E9E" />
-        <rect x="19.5" y="13" width="4" height="7" rx="2" fill="#2C6E9E" />
-        <path d="M22 19V20C22 22.2 20.2 24 18 24H15" stroke="#2C6E9E" strokeWidth="2.2" strokeLinecap="round" />
-      </svg>
-    ),
+    title: "智能客服",
+    description: "客户的小问题，让 AI 先接住；需要时再转人工。",
+    example: "我的订单到哪儿啦？",
+    action: "问问客服",
+    href: "/login?redirect=%2Fcustomer-service",
+    icon: MessageCircle,
+    tone: "blue",
   },
   {
-    key: "admin",
-    tag: "管理端",
-    tagColor: "#2E333A",
-    tagBg: "rgba(46,51,58,0.10)",
-    title: "管理控制台",
-    desc: "模型与技能编排、权限与租户、审计与配额，全部集中管理；所有变更可追溯、可回滚。",
-    accent: "#2E333A",
-    href: ADMIN_URL,
-    external: true,
-    icon: (
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-        <rect x="5" y="5" width="8" height="8" rx="2" fill="#2E333A" />
-        <rect x="15" y="5" width="8" height="5" rx="2" fill="#2E333A" />
-        <rect x="15" y="12" width="8" height="11" rx="2" fill="#2E333A" />
-        <rect x="5" y="15" width="8" height="8" rx="2" fill="#2E333A" />
-      </svg>
-    ),
+    title: "旅游助手",
+    description: "还没想好去哪？说说时间和心情，一起找灵感。",
+    example: "周末想出去放松两天。",
+    action: "聊聊去哪",
+    href: "/login?redirect=%2Ftravel%2Fchat",
+    icon: MapPin,
+    tone: "orange",
   },
 ];
 
+const toneStyles = {
+  green: {
+    icon: "bg-[#e8f3eb] text-[#287448]",
+    dot: "bg-[#287448]",
+    hover: "group-hover:border-[#a9cdb4]",
+    action: "text-[#287448]",
+  },
+  blue: {
+    icon: "bg-[#eaf1f8] text-[#356b98]",
+    dot: "bg-[#356b98]",
+    hover: "group-hover:border-[#b4cce0]",
+    action: "text-[#356b98]",
+  },
+  orange: {
+    icon: "bg-[#fbf0df] text-[#a56b21]",
+    dot: "bg-[#a56b21]",
+    hover: "group-hover:border-[#e5c99e]",
+    action: "text-[#a56b21]",
+  },
+};
+
 export default function PortalPage() {
   return (
-    <main className="relative min-h-screen w-full overflow-hidden bg-white">
-      {/* 移动端让位登录页；桌面端本组件渲染 null，门户三卡照常 */}
-      <MobileRedirect to="/login" />
-      {/* 绿调雾团背景（与用户端登录同源） */}
+    <main className="relative flex min-h-screen flex-col overflow-x-hidden overflow-y-auto bg-[#f7faf7] text-[#1d2822]">
       <div
-        aria-hidden
-        className="pointer-events-none absolute"
-        style={{
-          top: "-22%",
-          right: "8%",
-          width: "60%",
-          height: "70%",
-          background:
-            "radial-gradient(circle at 30% 30%, rgba(80,160,110,0.40), transparent 70%)",
-          filter: "blur(110px)",
-          opacity: 0.9,
-        }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute"
-        style={{
-          bottom: "-10%",
-          left: "2%",
-          width: "46%",
-          height: "58%",
-          background:
-            "radial-gradient(circle at 50% 50%, rgba(200,225,205,0.55), transparent 70%)",
-          filter: "blur(90px)",
-          opacity: 0.9,
-        }}
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-56 left-1/2 h-[430px] w-[760px] -translate-x-1/2 rounded-full bg-[#dcecdf] opacity-70 blur-[100px]"
       />
 
-      {/* 顶部导航（≤md 收起文字链接，避免窄屏挤压竖排） */}
-      <nav className="relative z-20 flex h-[72px] items-center justify-between px-6 md:px-12">
-        <div className="flex items-center gap-2.5">
-          <span
-            className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[13px] font-bold text-white"
-            style={{ background: "#16191A" }}
-          >
+      <header className="relative z-10 mx-auto flex h-[88px] w-full max-w-[1240px] shrink-0 items-center justify-between px-5 sm:h-[96px] sm:px-8 lg:px-12">
+        <Link href="/" className="relative top-3 flex items-center gap-3 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#287448]">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#1d2822] text-sm font-bold text-white">
             A
           </span>
-          <span className="text-[17px] font-bold tracking-wide text-[#16191A]">
-            智能协作平台
+          <span className="text-[15px] font-semibold tracking-[0.01em] sm:text-base">
+            智能助手平台
           </span>
-        </div>
-        <div className="flex items-center gap-3 md:gap-7">
-          <span className="hidden text-[14px] text-[#5C6662] md:inline">工作台</span>
-          <span className="hidden text-[14px] text-[#5C6662] md:inline">帮助中心</span>
-          <span className="hidden text-[14px] text-[#5C6662] md:inline">使用文档</span>
-          <span
-            className="rounded-full px-3 py-1.5 text-[12px] font-medium"
-            style={{ background: "rgba(31,122,77,0.10)", color: "#1F7A4D" }}
+        </Link>
+        <nav aria-label="账号入口" className="relative top-3 flex items-center gap-2 sm:gap-3">
+          <Link
+            href="/login"
+            className="rounded-full px-4 py-2 text-sm font-medium text-[#46534b] transition-colors hover:bg-white hover:text-[#1d2822] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#287448]"
           >
-            内部系统
-          </span>
-        </div>
-      </nav>
+            登录
+          </Link>
+          <Link
+            href="/register"
+            className="rounded-full bg-[#287448] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#1d6038] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#287448]"
+          >
+            注册
+          </Link>
+        </nav>
+      </header>
 
-      {/* 主视觉 */}
-      <section className="relative z-10 mx-auto flex max-w-[920px] flex-col items-center px-6 pt-10 pb-8 text-center md:pt-16">
-        <span className="inline-flex items-center rounded-full border border-black/10 bg-white/70 px-4 py-1.5 text-[13px] text-[#4A544F]">
-          统一入口 · 一个平台，三个工作台
-        </span>
-        <h1 className="mt-6 text-[34px] font-bold leading-[44px] tracking-[-1px] text-[#16191A] md:text-[50px] md:leading-[62px]">
-          选择一个工作台，开始你的工作
-        </h1>
-        <p className="mt-5 max-w-[660px] text-[17px] leading-7 text-[#6E7873]">
-          本门户整合 AI 问答、客服工作台与管理控制台，按需进入对应系统，无需分别记忆入口。
-        </p>
-        <p className="mt-3 text-[13px] text-[#98A29D]">
-          已为 3 个业务系统提供统一单点入口
-        </p>
-      </section>
+      <div className="relative z-10 mx-auto flex w-full max-w-[1120px] flex-1 flex-col px-5 pb-10 sm:px-8 lg:px-10">
+        <section className="pb-9 pt-12 text-center sm:pb-11 sm:pt-16">
+          <p className="text-sm font-medium text-[#287448]">你的 AI 助手，都在这儿</p>
+          <h1 className="mx-auto mt-4 max-w-[760px] text-[34px] font-semibold leading-[1.2] tracking-[-0.045em] text-[#1d2822] sm:text-[48px]">
+            今天，想让哪位助手帮你？
+          </h1>
+          <p className="mx-auto mt-4 max-w-[520px] text-[15px] leading-7 text-[#69766e] sm:text-base">
+            选一个，聊聊就有答案。
+          </p>
+        </section>
 
-      {/* 入口卡 */}
-      <section className="relative z-10 mx-auto flex max-w-[1200px] flex-col items-stretch justify-center gap-7 px-6 pb-16 sm:flex-row">
-        {ENTRIES.map((e) => {
-          const Inner = (
-            <div className="flex w-full max-w-[360px] flex-col rounded-2xl border border-[#E3E8E4] bg-white p-7 shadow-[0_12px_28px_rgba(15,26,20,0.08)] transition-transform hover:-translate-y-1">
-              <div
-                className="flex h-14 w-14 items-center justify-center rounded-2xl"
-                style={{ background: e.tagBg }}
-              >
-                {e.icon}
-              </div>
-              <span
-                className="mt-5 inline-flex w-fit items-center rounded-full px-2.5 py-1 text-[12px] font-medium"
-                style={{ background: e.tagBg, color: e.tagColor }}
-              >
-                {e.tag}
+        <section aria-labelledby="assistants-heading">
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <h2 id="assistants-heading" className="text-lg font-semibold text-[#26342b]">
+              AI 助手
+            </h2>
+            <p className="hidden text-sm text-[#87928b] sm:block">遇到不同的事，就找不同的搭档</p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
+            {ASSISTANTS.map((assistant) => {
+              const Icon = assistant.icon;
+              const tone = toneStyles[assistant.tone];
+
+              return (
+                <Link
+                  key={assistant.title}
+                  href={assistant.href}
+                  className={`group flex min-h-[270px] flex-col rounded-[20px] border border-[#e2e9e3] bg-white p-5 shadow-[0_5px_18px_rgba(26,50,34,0.035)] transition-colors ${tone.hover} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#287448] sm:p-6`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`flex h-11 w-11 items-center justify-center rounded-[14px] ${tone.icon}`}>
+                      <Icon size={21} strokeWidth={1.8} aria-hidden="true" />
+                    </span>
+                    <span className={`h-2 w-2 rounded-full ${tone.dot}`} aria-hidden="true" />
+                  </div>
+                  <h3 className="mt-5 text-[19px] font-semibold tracking-[-0.02em] text-[#1d2822]">
+                    {assistant.title}
+                  </h3>
+                  <p className="mt-2 min-h-[48px] text-sm leading-6 text-[#68756d]">
+                    {assistant.description}
+                  </p>
+                  <p className="mt-4 rounded-xl bg-[#f6f8f6] px-3.5 py-3 text-[13px] leading-5 text-[#536158]">
+                    “{assistant.example}”
+                  </p>
+                  <span className={`mt-auto flex items-center gap-2 pt-5 text-sm font-semibold ${tone.action}`}>
+                    {assistant.action}
+                    <ArrowRight size={16} strokeWidth={1.8} aria-hidden="true" />
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+
+        <section aria-labelledby="workbenches-heading" className="mt-10 hidden md:block">
+          <div className="mb-4 flex items-end justify-between gap-4 border-b border-[#e3e9e4] pb-3">
+            <h2 id="workbenches-heading" className="text-lg font-semibold text-[#26342b]">
+              工作台
+            </h2>
+            <p className="text-sm text-[#87928b]">客服与平台管理入口</p>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <a
+              href={CS_LOGIN_URL}
+              className="group flex items-center gap-4 rounded-2xl border border-[#e2e9e3] bg-white px-5 py-4 transition-colors hover:border-[#b9cbbd] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#287448]"
+            >
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-[#edf3f8] text-[#356b98]">
+                <Headphones size={21} strokeWidth={1.8} aria-hidden="true" />
               </span>
-              <h3 className="mt-3 text-[20px] font-semibold text-[#16191A]">
-                {e.title}
-              </h3>
-              <p className="mt-2 flex-1 text-[14px] leading-[22px] text-[#6E7873]">
-                {e.desc}
-              </p>
-              <span
-                className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl py-3 text-[15px] font-medium text-white"
-                style={{ background: e.accent }}
-              >
-                进入{e.tag === "用户端" ? "工作台" : e.tag === "客服端" ? "工作台" : "控制台"}
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M2.6 8H13.2" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
-                  <path
-                    d="M8.8 3.6L13.2 8L8.8 12.4"
-                    stroke="#fff"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-semibold text-[#26342b]">客服端</span>
+                <span className="mt-1 block text-sm text-[#748078]">真人客服的工作台，接待会话、跟进客户问题</span>
               </span>
-            </div>
-          );
-          return e.external ? (
-            <a key={e.key} href={e.href} className="flex justify-center">
-              {Inner}
+              <ArrowRight size={17} className="shrink-0 text-[#89948d] transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
             </a>
-          ) : (
-            <Link key={e.key} href={e.href} className="flex justify-center">
-              {Inner}
-            </Link>
-          );
-        })}
-      </section>
+            <a
+              href={ADMIN_LOGIN_URL}
+              className="group flex items-center gap-4 rounded-2xl border border-[#e2e9e3] bg-white px-5 py-4 transition-colors hover:border-[#b9cbbd] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#287448]"
+            >
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] bg-[#f0f0ee] text-[#535b54]">
+                <Settings2 size={21} strokeWidth={1.8} aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-semibold text-[#26342b]">管理端</span>
+                <span className="mt-1 block text-sm text-[#748078]">管理平台配置，为已注册用户分配角色</span>
+              </span>
+              <ArrowRight size={17} className="shrink-0 text-[#89948d] transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+            </a>
+          </div>
+        </section>
+      </div>
 
-      {/* 页脚（移动端纵排换行） */}
-      <footer className="relative z-10 flex min-h-16 flex-col items-start justify-center gap-1.5 border-t border-[#EEF1EF] bg-[#F7F9F8] px-6 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-0 md:px-12">
-        <div className="flex items-center gap-2 text-[13px] text-[#7A8480]">
-          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-            <rect x="3.2" y="6.5" width="8.6" height="6.3" rx="1.4" stroke="#7A8480" strokeWidth="1.2" />
-            <path d="M5 6.5V4.6C5 3.2 6.1 2.2 7.5 2.2C8.9 2.2 10 3.2 10 4.6V6.5" stroke="#7A8480" strokeWidth="1.2" />
-            <circle cx="7.5" cy="9.4" r="1" fill="#7A8480" />
-          </svg>
-          内部系统 · 仅限授权人员访问 · 所有访问与操作均记录审计日志
+      <footer className="relative z-10 border-t border-[#e7ece8] bg-white/70">
+        <div className="mx-auto flex min-h-[58px] max-w-[1240px] flex-col justify-center gap-1 px-5 py-3 text-xs text-[#849087] sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-12">
+          <span>智能助手平台 · 让每个问题，都有合适的搭档</span>
+          <span>© 2026 公司名称</span>
         </div>
-        <span className="text-[13px] text-[#98A29D]">© 2026 公司名称</span>
       </footer>
     </main>
   );

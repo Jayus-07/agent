@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { CalendarDays, CircleUserRound, Compass, Info, Plane, Sparkles } from 'lucide-react'
+import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
 
 export type TravelNavItem = 'home' | 'trips' | 'me'
 
@@ -22,11 +23,7 @@ export function TravelTopBar({ active = 'home' }: { active?: TravelNavItem }) {
         <a aria-current={active === 'trips' ? 'page' : undefined} href="/travel/itineraries" className={`rounded-full px-4 py-2 text-sm transition ${active === 'trips' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>我的行程</a>
         <a href="/travel/templates/hangzhou-slow" className="rounded-full px-4 py-2 text-sm text-[#65758b] transition hover:bg-white">旅行灵感</a>
       </nav>
-      <a href="/settings" className="hidden items-center gap-2 rounded-full border border-[#e4ebf4] bg-white px-3 py-2 text-xs font-medium text-[#53657c] shadow-sm md:flex">
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#eaf2ff] text-[#2878f5]">林</span>
-        我的
-      </a>
-      <span className="md:hidden rounded-full border border-[#dbe8fb] bg-white px-2.5 py-1 text-[10px] font-medium text-[#2878f5]">旅行灵感</span>
+      <MobileAssistantDrawer />
     </header>
   )
 }

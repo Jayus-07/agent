@@ -30,13 +30,19 @@ import CSStatusBar from '@/components/cs/CSStatusBar'
 import CSHandoffCard from '@/components/cs/CSHandoffCard'
 import CSConfirmCard from '@/components/cs/CSConfirmCard'
 import CSSatisfactionCard from '@/components/cs/CSSatisfactionCard'
+import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
 
 interface CSDrawerProps {
   open: boolean
   onClose: () => void
+  /** true 时作为独立客服页内的聊天主栏展示。 */
+  standalone?: boolean
+  onOpenCustomerContext?: () => void
 }
 
-export default function CSDrawer({ open, onClose }: CSDrawerProps) {
+export default function CSDrawer({
+  open, onClose, standalone = false, onOpenCustomerContext,
+}: CSDrawerProps) {
   const { startStream, stopStream } = useCSChat()
 
   const currentId = useCSChatStore((s) => s.currentId)
@@ -256,7 +262,7 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
   return (
     <>
       {/* 遮罩：点击关闭 */}
-      {open && (
+      {open && !standalone && (
         <div
           className="fixed inset-0 z-40 bg-black/20 transition-opacity"
           onClick={onClose}
@@ -266,12 +272,12 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
       {/* 右侧滑出抽屉 —— ASSISTANT UNAWARE
           宽度：桌面固定 440px，窄屏撑满可用宽度（原 max-w-[92vw] 会留出 8vw 的无用边缝，
           遮罩下露出主界面且在 1024px 级屏幕上浪费近 80px 内容宽度） */}
-      <div
-        className={`fixed right-0 top-0 z-50 h-full w-[440px] max-sm:w-full
-          flex flex-col bg-white border-l border-border-subtle shadow-2xl
+      <div className={standalone
+        ? 'relative z-10 flex h-[100dvh] w-full min-w-0 flex-col border-x border-border-subtle bg-white shadow-xl'
+        : `fixed right-0 top-0 z-50 h-full w-[440px] max-sm:w-full
+          flex flex-col border-l border-border-subtle bg-white shadow-2xl
           transition-transform duration-300 ease-out
-          ${open ? 'translate-x-0' : 'translate-x-full'}`}
-      >
+          ${open ? 'translate-x-0' : 'translate-x-full'}`}>
         {/* Header */}
         <div className="shrink-0 flex items-center gap-2.5 px-4 py-3 border-b border-border-subtle bg-white">
           <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0">
@@ -298,6 +304,21 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {standalone && <MobileAssistantDrawer />}
+            {standalone && onOpenCustomerContext && (
+              <button
+                type="button"
+                onClick={onOpenCustomerContext}
+                title="查看客户资料和订单"
+                aria-label="查看客户资料和订单"
+                className="flex lg:hidden items-center gap-1 px-2 h-7 rounded-lg
+                  border border-border-subtle text-[11px] text-text-secondary
+                  hover:text-text-primary hover:border-accent/40 transition-colors"
+              >
+                <UserRound size={13} />
+                <span>资料</span>
+              </button>
+            )}
             {hasMessages && handoffState === 'none' && (
               <button
                 onClick={handleRequestHandoff}
@@ -323,15 +344,17 @@ export default function CSDrawer({ open, onClose }: CSDrawerProps) {
             >
               <Plus size={14} />
             </button>
-            <button
-              onClick={onClose}
-              title="收起客服窗口"
-              aria-label="收起客服窗口"
-              className="flex items-center justify-center w-7 h-7 rounded-lg text-text-secondary
-                hover:text-text-primary hover:bg-surface-elevated transition-colors"
-            >
-              <X size={16} />
-            </button>
+            {!standalone && (
+              <button
+                onClick={onClose}
+                title="收起客服窗口"
+                aria-label="收起客服窗口"
+                className="flex items-center justify-center w-7 h-7 rounded-lg text-text-secondary
+                  hover:text-text-primary hover:bg-surface-elevated transition-colors"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
         </div>
 

@@ -7,15 +7,22 @@
  *  - 用户来回切换时（50ms 内）复用前次结果。
  *  - TTL 10s 防止连续请求打爆后端，又不至于过期（业务变更后最多 10s 看到新数据）。
  */
-import { listSessions, type SessionMeta } from '@/api/memory'
+import {
+  listSessions,
+  listSessionsPage,
+  SESSION_PAGE_SIZE,
+  type SessionMeta,
+  type SessionPage,
+} from '@/api/memory'
 
-interface CacheEntry {
-  promise: Promise<SessionMeta[]>
+interface CacheEntry<T> {
+  promise: Promise<T>
   cachedAt: number
 }
 
 const TTL_MS = 10_000
-let cache: CacheEntry | null = null
+let cache: CacheEntry<SessionMeta[]> | null = null
+let pageCache: CacheEntry<SessionPage> | null = null
 
 export async function getSessionsCached(forceRefresh = false): Promise<SessionMeta[]> {
   const now = Date.now()
@@ -31,7 +38,22 @@ export async function getSessionsCached(forceRefresh = false): Promise<SessionMe
   return promise
 }
 
+/** 历史会话首屏分页缓存，与旧版完整列表缓存分开，避免影响其他调用方。 */
+export async function getSessionPageCached(forceRefresh = false): Promise<SessionPage> {
+  const now = Date.now()
+  if (!forceRefresh && pageCache && now - pageCache.cachedAt < TTL_MS) {
+    return pageCache.promise
+  }
+  const promise = listSessionsPage(SESSION_PAGE_SIZE).catch((err) => {
+    pageCache = null
+    throw err
+  })
+  pageCache = { promise, cachedAt: now }
+  return promise
+}
+
 /** 失效缓存：删除/重命名会话成功后调用，避免 UI 显示陈旧数据 */
 export function invalidateSessionsCache(): void {
   cache = null
+  pageCache = null
 }
