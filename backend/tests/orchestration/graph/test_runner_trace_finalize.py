@@ -64,6 +64,7 @@ def _spy_finish(monkeypatch):
 class _FakeMemory:
     def __init__(self):
         self.end_turn_calls = []
+        self.end_turn_idempotency_keys = []
 
     def start_session(self, session_id, question, user_id="default",
                       tenant_id=""):
@@ -71,9 +72,10 @@ class _FakeMemory:
         return ShortTermBuffer()
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id=""):
+                 tenant_id="", idempotency_key=""):
         self.last_answer = answer
         self.end_turn_calls.append((session_id, question, answer))
+        self.end_turn_idempotency_keys.append(idempotency_key)
 
 
 def _root(record):
@@ -147,7 +149,7 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     sys_obj = _make_system(_StaticGraph(_events_normal()))
     out = list(sys_obj.stream_events(
         "测试问题", "s-1", kb_id="default", user_id="u-1",
-        stop_event=threading.Event()))
+        stop_event=threading.Event(), idempotency_key="turn-key-1"))
 
     names = [e["event"] for e in out]
     assert "done" in names
@@ -156,6 +158,7 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     record, answer = _spy_finish.calls[0]
     assert answer == "最终回答"
     assert sys_obj._memory.end_turn_calls == [("s-1", "测试问题", "最终回答")]
+    assert sys_obj._memory.end_turn_idempotency_keys == ["turn-key-1"]
     root = _root(record)
     assert root.end_time != ""
     assert root.status == "success"

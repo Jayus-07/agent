@@ -156,6 +156,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "088_memory_profile_scope_verification.sql": "memory",
     # L3 Celery 提取 outbox：与 user turn 同事务写入，broker 丢投由扫描器恢复。
     "089_memory_extraction_outbox.sql": "memory",
+    # L2 turn 收据：同一幂等键不重复写消息或提取 outbox。
+    "090_memory_turn_idempotency.sql": "memory",
     # Phase3 STOP B（2026-09-24）：tasks PENDING Recovery 列 + 索引。
     # tasks 表演进权威在 backend/tasks/schema.sql（ensure_schema 幂等），
     # 本文件为 db-migrate 流程的实库执行留痕，语句全部 IF NOT EXISTS 幂等。

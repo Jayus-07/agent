@@ -976,9 +976,15 @@ class GraphRunner:
                     and not ctx["cs_context_snapshot"].get("conversation_id")):
                 ctx["memory_persisted"] = True
                 try:
+                    memory_kwargs = {
+                        "user_id": user_id,
+                        "tenant_id": tenant_id,
+                    }
+                    if idempotency_key:
+                        memory_kwargs["idempotency_key"] = idempotency_key
                     self._memory.end_turn(
                         session_id, question, answer,
-                        user_id=user_id, tenant_id=tenant_id,
+                        **memory_kwargs,
                     )
                 except Exception:
                     logger.warning("[GraphRunner] Memory end_turn 写入失败", exc_info=True)

@@ -426,7 +426,10 @@ async def chat_stream(
                 model=req.model or "",
                 domain_hint=req.domain_hint or "",
                 tenant_id=ident.tenant_id,
-                idempotency_key=(r.headers.get("Idempotency-Key") or "").strip(),
+                idempotency_key=(
+                    (r.headers.get("Idempotency-Key") or "").strip()
+                    or request_id
+                ),
                 roles=ident.roles,
             ):
                 # 先入恢复缓冲再检查 stop：abort 的「用户中止」error 帧本身

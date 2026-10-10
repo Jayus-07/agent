@@ -128,9 +128,11 @@ class MemoryManager:
         return result
 
     def end_turn(self, session_id: str, question: str, answer: str,
-                 user_id: str = "default", tenant_id: str = "") -> None:
+                 user_id: str = "default", tenant_id: str = "",
+                 idempotency_key: str = "") -> None:
         self._run(lambda: self._service.end_turn(
-            session_id, question, answer, user_id, tenant_id=tenant_id))
+            session_id, question, answer, user_id, tenant_id=tenant_id,
+            idempotency_key=idempotency_key))
 
     @property
     def service(self) -> MemoryService:

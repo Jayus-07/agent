@@ -1,9 +1,11 @@
 """MemoryService — 统一记忆服务入口"""
 import asyncio
+import hashlib
+import json
 import time
 
 from langchain_core.messages import SystemMessage
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from backend.config import HISTORY_TOKEN_BUDGET, MEMORY_ORIGIN_INFERRED, PREVIOUS_OUTPUTS_MAX_TOKENS
@@ -48,6 +50,10 @@ def _metric_safe(fn, **labels) -> None:
         fn(**labels)
     except Exception:  # pragma: no cover - 观测面异常不外泄
         pass
+
+
+class MemoryTurnIdempotencyConflict(ValueError):
+    """幂等键已绑定到不同问题；拒绝把冲突请求写入 L2。"""
 
 
 class MemoryService:
@@ -363,10 +369,23 @@ class MemoryService:
                 raise
 
     async def end_turn(self, session_id: str, question: str, answer: str,
-                       user_id: str = "default", tenant_id: str = "") -> None:
-        # L2 消息与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
-        from backend.memory.models.memory import MemoryExtractionJob
+                       user_id: str = "default", tenant_id: str = "",
+                       idempotency_key: str = "") -> None:
+        # L2 消息、请求收据与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
+        from backend.memory.models.memory import (
+            MemoryExtractionJob,
+            MemoryTurnReceipt,
+        )
+        from backend.memory.models.session import ChatMessage
+        from backend.memory.keying import normalize_tenant_id
 
+        tenant_id = normalize_tenant_id(tenant_id)
+        idempotency_key = (idempotency_key or "").strip()
+        key_hash = (
+            hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+            if idempotency_key else ""
+        )
+        question_hash = hashlib.sha256(question.encode("utf-8")).hexdigest()
         job_id: str | None = None
         async with AsyncSessionLocal() as db_session:
             try:
@@ -380,24 +399,85 @@ class MemoryService:
                     session_id = self._scoped_session_id(session_id, user_id)
                     await srepo.get_or_create(session_id, user_id)
 
-                # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
-                q_msg, a_msg = await srepo.save_turn(session_id, question, answer)
-                if q_msg is not None and q_msg.id is not None:
-                    from backend.memory.keying import normalize_tenant_id
-
-                    job = MemoryExtractionJob(
-                        tenant_id=normalize_tenant_id(tenant_id),
-                        user_id=user_id,
-                        session_id=session_id,
-                        source_message_id=q_msg.id,
-                        assistant_message_id=a_msg.id if a_msg is not None else None,
-                        status="PENDING",
+                receipt = None
+                if key_hash:
+                    # 对相同逻辑轮次串行化查询与写入；唯一约束是跨进程的最终防线。
+                    lock_scope = json.dumps(
+                        [tenant_id, user_id, session_id, key_hash],
+                        ensure_ascii=False, separators=(",", ":"),
                     )
-                    db_session.add(job)
-                    await db_session.flush()
-                    job_id = str(job.id)
+                    await db_session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                        {"lock_key": f"memory-turn:{lock_scope}"},
+                    )
+                    receipt_result = await db_session.execute(
+                        select(MemoryTurnReceipt).where(
+                            MemoryTurnReceipt.tenant_id == tenant_id,
+                            MemoryTurnReceipt.user_id == user_id,
+                            MemoryTurnReceipt.session_id == session_id,
+                            MemoryTurnReceipt.idempotency_key_hash == key_hash,
+                        )
+                    )
+                    receipt = receipt_result.scalar_one_or_none()
+
+                if receipt is not None:
+                    if receipt.question_hash != question_hash:
+                        raise MemoryTurnIdempotencyConflict(
+                            "幂等键已绑定到另一条用户问题"
+                        )
+                    q_msg = await db_session.get(ChatMessage, receipt.user_message_id)
+                    a_msg = await db_session.get(
+                        ChatMessage, receipt.assistant_message_id,
+                    )
+                    if (q_msg is None or a_msg is None
+                            or q_msg.session_id != session_id
+                            or a_msg.session_id != session_id
+                            or q_msg.role != "user" or a_msg.role != "assistant"):
+                        raise RuntimeError("记忆轮次收据引用的消息不完整")
+                else:
+                    # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
+                    q_msg, a_msg = await srepo.save_turn(session_id, question, answer)
+                    if key_hash and q_msg.id is not None and a_msg.id is not None:
+                        db_session.add(MemoryTurnReceipt(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            idempotency_key_hash=key_hash,
+                            question_hash=question_hash,
+                            user_message_id=q_msg.id,
+                            assistant_message_id=a_msg.id,
+                        ))
+                        await db_session.flush()
+
+                if q_msg is not None and q_msg.id is not None:
+                    job = None
+                    if receipt is not None:
+                        job_result = await db_session.execute(
+                            select(MemoryExtractionJob).where(
+                                MemoryExtractionJob.tenant_id == tenant_id,
+                                MemoryExtractionJob.user_id == user_id,
+                                MemoryExtractionJob.source_message_id == q_msg.id,
+                            )
+                        )
+                        job = job_result.scalar_one_or_none()
+                    if job is None:
+                        job = MemoryExtractionJob(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            source_message_id=q_msg.id,
+                            assistant_message_id=a_msg.id if a_msg is not None else None,
+                            status="PENDING",
+                        )
+                        db_session.add(job)
+                        await db_session.flush()
+                    if job.status == "PENDING":
+                        job_id = str(job.id)
 
                 await db_session.commit()
+            except MemoryTurnIdempotencyConflict:
+                await db_session.rollback()
+                raise
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] end_turn 失败: {e}")

@@ -154,6 +154,42 @@ def test_duplicate_initial_request_does_not_replace_or_rerun_stream(monkeypatch)
     assert agent.stream_calls == 0
 
 
+def test_stream_request_id_is_used_as_memory_idempotency_key(monkeypatch):
+    """未显式提供 Idempotency-Key 时，Runner 收到稳定 request_id。"""
+    from fastapi import FastAPI
+
+    from backend.app.api import stream_resume as sr_mod
+    import backend.app.api.routes.chat as chat_mod
+    from backend.infra.llm.rate_limiter import require_rate_limit
+
+    class CapturingAgent:
+        calls = []
+
+        def stream_events(self, question, session_id, **kwargs):
+            self.calls.append(kwargs)
+            yield {"event": "done", "data": {"elapsed": 0, "sources": []}}
+
+    sr_mod.reset_stream_registry()
+    agent = CapturingAgent()
+    monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
+    app = FastAPI()
+    app.include_router(chat_mod.router)
+    app.dependency_overrides[require_rate_limit] = lambda: None
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST", "/chat/stream",
+            json={"question": "稳定轮次", "session_id": "stable-turn",
+                  "request_id": "stable-turn-request"},
+        ) as response:
+            assert response.status_code == 200
+            b"".join(response.iter_bytes())
+
+    assert len(agent.calls) == 1
+    assert agent.calls[0]["idempotency_key"] == "stable-turn-request"
+    sr_mod.reset_stream_registry()
+
+
 def test_resume_unknown_stream_404(client):
     resp = client.post("/chat/stream/resume",
                        json={"request_id": "no-such-stream", "after_seq": 0},

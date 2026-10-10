@@ -90,3 +90,14 @@
 - 新增路由冲突测试和 8 线程并发占位测试。实际运行 `python -m pytest backend/tests/api/test_sse_resume.py -k "duplicate_initial_request or registry_allows" -q --no-cov`：2 passed，8 deselected，11.58 秒；`git diff --check` 通过。
 - 尝试完整 `python -m pytest backend/tests/api/test_sse_resume.py backend/tests/api/test_chat_stream_hardening.py -q --no-cov`：5 passed、14 errors。失败均在完整应用 fixture 导入期间由 `feedback.init_db()` 连接 PostgreSQL 时触发，原因是此 Worktree 的测试进程没有 `PGPASSWORD`；并未执行相关 HTTP 断言。需在具备隔离数据库凭据的环境重跑，当前记录为环境阻塞，不计通过。
 - 该屏障仅对本进程恢复注册表及 finished TTL 生效；进程重启或记录过期后的持久请求幂等、request_id 到 L2 `end_turn` 的关联、取消/失败恢复仍未实现。Phase 1 及全任务门禁均未完成；未运行迁移、真实 Agent E2E 或全量回归。
+
+## 2026-10-11：Phase 1 持久轮次幂等
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main` 基于 `a9184e4` 实施；未修改共享主工作区或其他 Worktree。
+- `/chat/stream` 把显式 `Idempotency-Key`（否则 `request_id`）传过 Runner 与 MemoryManager 到 MemoryService。MemoryService 对键和问题只存 SHA-256；按 tenant/user/session/key 加 PostgreSQL advisory transaction lock，在单事务中写 L2 问答、轮次收据和 L3 outbox。相同键/问题复用原消息与 job；相同键绑定不同问题时回滚并抛出冲突。收据引用会话与两条消息并级联删除。
+- 新增并登记 `090_memory_turn_idempotency.sql` 与 `MemoryTurnReceipt` 模型；更新 `ai-runtime.md` 的流式轮次持久化契约。迁移没有应用到开发/权威 PostgreSQL。
+- 在一次性 PostgreSQL 17 Docker 容器内，以隔离测试 schema 执行 089/090，实际运行 `python -m pytest backend/tests/memory/test_memory_extraction_outbox.py -k "end_turn_commits_outbox_with_messages_and_dispatches_only_job_id or end_turn_idempotency_is_atomic_and_scoped" -q --no-cov`：2 passed，3 deselected，5.61 秒。覆盖并发相同请求仅产生一组 L2 消息/receipt/job、相同问题重试复用 job、不同问题同键拒绝、不同会话/用户作用域独立；容器测试后停止并自动移除，未连接共享开发库。
+- `python -m pytest backend/tests/api/test_sse_resume.py -k "duplicate_initial_request or registry_allows or stream_request_id" -q --no-cov`：3 passed，8 deselected，17.60 秒；`python -m pytest backend/tests/memory/test_migration_registration.py -q --no-cov`：1 passed，6.21 秒；`python -m pytest backend/tests/orchestration/graph/test_stream_events_flow.py -q --no-cov`：27 passed，27.82 秒。
+- `python -m pytest backend/tests/orchestration/graph/test_runner_trace_finalize.py -q --no-cov`：6 passed、1 failed，19.67 秒。失败为断连用例期望首事件 `status/delta`、实际首事件 `log`；客户端关闭生成器时尚未进入 Runner 成功收尾及本次 `end_turn` 调用。本地 trace/question ledger 旁路还因未配置 `PGPASSWORD` 输出连接告警；没有弱化或删除断言。
+- 改动源码、测试与 `scripts/init_db.py` 的 `python -m py_compile` 通过；`git diff --check` 通过。未运行全量 pytest、真实 Agent/LLM 链路、迁移到共享库或重启/队列故障 E2E。
+- 本次只完成 Phase 1 的流式 L2/outbox 持久幂等子步骤，不勾选 Phase 1 完成。仍需验收 L1 消息窗口/对话轮次语义、ToolMessage 持久元数据、Checkpoint 恢复、取消/失败/进程重启边界；后续再进入 Phase 2 未完成项。

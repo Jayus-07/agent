@@ -1,5 +1,10 @@
 from backend.memory.models.session import ChatSession, ChatMessage
-from backend.memory.models.memory import MemoryExtractionJob, MemoryRecord, Base
+from backend.memory.models.memory import (
+    MemoryExtractionJob,
+    MemoryRecord,
+    MemoryTurnReceipt,
+    Base,
+)
 from backend.memory.models.prompt import Prompt, PromptVersion, PromptAuditLog
 
 __all__ = [
@@ -7,6 +12,7 @@ __all__ = [
     "ChatMessage",
     "MemoryRecord",
     "MemoryExtractionJob",
+    "MemoryTurnReceipt",
     "Prompt",
     "PromptVersion",
     "PromptAuditLog",
