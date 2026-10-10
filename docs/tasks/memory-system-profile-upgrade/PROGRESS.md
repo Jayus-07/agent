@@ -129,3 +129,11 @@
 - 实际运行 `D:/Python/python.exe -m pytest backend/tests/memory/test_message_codec.py backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_migration_registration.py backend/tests/context_budget/test_auto_compact.py backend/tests/memory/test_summary_visibility.py backend/tests/memory/test_stop_e_summary_contract.py -q --no-cov`：34 passed、6 skipped，10.54 秒。测试数据库为独立内存 SQLite；未连接或迁移共享 PostgreSQL。
 - `backend/memory/repository/session_repo.py` 与新增/更新测试的 `py_compile` 通过；`git diff --check` 通过。未运行真实 PostgreSQL 的 `end_turn` outbox/idempotency 集成测试或 Graph E2E；本项只完成成功轮次的 Human/AI 接线，ToolMessage、失败/取消/重启边界仍待后续验收。
 - 实现提交：`972d9ed`（`feat(memory): persist typed runner turns`）。
+
+## 2026-10-11：Phase 2 主图 Checkpointer 索引键隔离
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main`，从本地 main `6e4a82e` 继续；未修改共享主工作区或其他 Worktree。
+- 主图每次执行仍使用独立 thread，避免 `AgentState.messages` 的 `add_messages` reducer 跨轮累积；thread_id 改为 `agent-<UUID>`，不再把 session_id 原文放进 Checkpointer 索引。补充架构说明和任务子项。
+- 新增纯函数格式/唯一性测试，以及 GraphRunner 开启 Checkpointer 后实际传参测试（同一 session 连续两次执行 thread_id 不同且不包含 session/user/tenant 原文）。实际运行 `D:/Python/python.exe -m pytest backend/tests/orchestration/graph/test_main_checkpointer_identity.py backend/tests/orchestration/graph/test_runner_trace_finalize.py -k "main_graph_thread_ids or main_checkpointer_uses_opaque or normal_completion_finishes_once" -q --no-cov`：3 passed、6 deselected，18.83 秒。
+- 触及 Python 文件 `py_compile` 通过，`git diff --check` 通过。未连接 PostgreSQL Checkpointer 或执行进程重启恢复测试；当前没有按此随机 thread_id 恢复中断主图的公开路径，Phase 2 Checkpoint 验收仍未完成。
+- 实现提交：`b992e8b`（`fix(runtime): use opaque main checkpoint ids`）。
