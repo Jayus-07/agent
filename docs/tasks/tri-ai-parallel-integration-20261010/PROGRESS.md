@@ -141,6 +141,7 @@
 - 拦截后不变性复核：docs 仍 624、frontend-mp 仍 25、CLAUDE.md 仍存在、集成树 README 与主工作区 README 的 SHA256 仍不同（DBB2375… vs 12197EF…）。证明上次 `blocked by policy` 之后集成树没有任何部分生效的半成品状态。
 - 本轮遵守用户限制：没有换工具、没有拆分操作、没有以批处理之外的方式重试被拦截的删除/覆盖；没有执行 Git 写操作，没有创建提交。
 - 阻塞结论（第二轮确认）：文档主题仍然**未整合**。阻塞条件与上轮相同且未变化——面向该主题的批量文档删除/覆盖被安全检查以 `blocked by policy` 拒绝，且未给出更具体原因。按用户要求停在此处，不进入 CS P3.5、SQL、评测、管理端或基础设施等后续主题，不声称文档主题已合并。数据库迁移未执行。
+
 ## 2026-10-10：文档主题整合完成（第三轮，阻塞解除）
 
 - 用户在本轮授予权限并把文件策略切换为 danger-full-access。与上一轮区分：上轮的失败是**批量删除/覆盖触发安全检查**（blocked by policy），不是文件沙箱权限问题；本轮先用单文件探针实测该检查是否放行，再决定范围。
@@ -158,3 +159,45 @@
 - 未执行事项：未做全量回归，未运行数据库迁移，未改动主工作区或任何来源 Worktree，未执行 reset --hard / clean -fd / 强推 / 删除分支或 Worktree / 丢弃 stash。docs-governance 来源提交 479a8cb 未被直接 cherry-pick，本主题按用户确认的删除清单与主工作区现行文档树重建。
 - 回退材料：D:\tmp\tri-ai-doc-theme-backup-20261010-121408 下含 docs/、frontend-mp/、root-docs/，以及本轮新增的 integ-overwrite-pre/ 与 integ-root-pre/。
 - 文档主题**已完成整合**。后续主题（CS P3.5、SQL、评测、管理端/API、基础设施）尚未开始。
+
+## 2026-10-10：SQL 主题开工前的状态核实与记录补齐
+
+- 按用户报告核实 Git 事实，不采信报告本身。实测：`git rev-parse --is-inside-work-tree` 返回 true，仓库根 `D:/tmp/tri-ai-integration-20261010`，git-dir `D:/Program Files/workplace/agent/.git/worktrees/tri-ai-integration-20261010`，分支 `codex/tri-ai-integration-20261010`。
+- HEAD 实测为 `18df1f86e0a551f94938dc449533104d9a0ee4b5`（docs(tasks): record documentation theme integration evidence，2026-10-10 13:37:55 +0800），与用户报告一致。`18df1f8` 的 parent 为 `1f8478d`，`1f8478d` 的 parent 为 `fd4cf7b`，父子链闭合。工作区干净，`git diff --check` 退出码 0。
+- 记录缺口核实：上一轮 PROGRESS.md 第 157 行记到文档主题提交 `1f8478d`，但全文没有出现 `18df1f8`。该提交只改 PROGRESS.md 自身（1 file changed，+18/-1），属自指收尾提交，此前未被记录。用户报告的“PROGRESS 只明确记到 1f8478d”属实。
+- 本次补齐：新增本节记录 `18df1f8` 的存在、父子关系与内容；同时修正上一轮新增小节标题前缺失的空行（原第 143/144 行紧贴）。除此之外未改动文档主题已提交的内容。
+- 本轮没有撤销或重做文档主题；文档主题维持已完成状态。
+
+## 2026-10-10：SQL 主题差异审阅与 P0 阻塞认定
+
+- 来源事实：用户指定的 SQL 来源快照 `D:\tmp\tri-ai-rescue-20261010-035854\worktrees\root` 经实测**不是 Git 仓库**（无 `.git`，`git rev-parse` 返回 fatal: not a git repository）。该目录是救援时的纯文件树副本，无法在其中执行 Git 差异。SQL 主题的提交级差异改以主工作区 `D:\Program Files\workplace\agent`（分支 `feat/multi-query-and-extra-body`，HEAD `d177694`）为权威来源读取；救援快照仅作为保全证据保留，未做任何修改。
+- 集成树与主工作区在 SQL 相关文件上全部存在差异（SHA256 对比）：policy.py、sql_agent.py、skills/sql/skill.py、sql_generator.yaml、demo_sandbox.sql、040/047/048 迁移、runner.py 均为 DIFF；`sse_event_sink.py` 在集成树**不存在**。确认这批 SQL 改动尚未集成。
+- **P0 阻塞（判定为不可合入）**：SQL trace 埋点把用户原始问题写入可持久化 Trace。证据链：①`backend/sql/sql_agent.py` 两处 `_sql_trace_stage` 的 `input_data` 含 `{"question": question[:500]}`（旧链路）与 `{"question": effective_question[:500]}`（授权链路）；②`backend/observability/tracer.py:230/482` 把 `input` 存入 `Span.input`；③`backend/observability/trace_store_pg.py` 对 spans 全量 `json.dumps` 落库，仅在摘要查询时 `d.pop("spans")`（第 264/299 行），详情路径保留 spans；④`otel_exporter.py:165-166` 亦把 `span.input` 写入 OTEL attribute。
+- P0 放大条件一（读取侧不脱敏）：`backend/config/observability.py` 中 `TRACE_PII_MASKING_ENABLED` 默认 true，但 `TRACE_DETAIL_LEVEL` 默认 `full`；`backend/observability/redaction.py:57-58` 在 `level == "full"` 时直接 `return dto`，**跳过全部 span input/output 脱敏**。即默认配置下 span.input 明文返回。
+- P0 放大条件二（权限门缺失）：`backend/app/api/routes/observability.py` 的 router 定义（第 26 行）与挂载点（`backend/app/api/router.py:91`）均无 `dependencies=`；`/traces`（第 101 行）与 `/traces/{trace_id}`（第 246 行）端点**没有** `Depends(require_admin_operator)`——该守卫仅显式用于 `/tokens/breakdown`（第 375 行）。网关侧 `apisix/plugins/gateway-auth.lua:261-268` 的 `ROLE_GATE_PREFIXES` 用前缀匹配且只列 `/api/approvals`、`/api/prompts`、`/api/observability/gateway`、`/api/cs`，`/api/observability/traces` 不命中任何前缀。结论：任何通过网关验签的 viewer 角色用户即可读取含用户原始问题的完整 Trace。
+- 按用户指令，**含用户原始问题的两处 `sql.table_router` 埋点不合入**；该 P0 在本主题内无法妥善解决（涉及 Trace 存储脱敏口径与 observability API 鉴权两个跨主题改动），故不声称通过。
+- 其余 7 处埋点（generate/validate/execute/permission_precheck）的 `input_data` 仅含长度、计数、表名、data_scope、source_channel 等元数据，不含问题原文，属可合入范围。
+- 风险 2 复核：`backend/sql/policy.py` 的改动正是把随机 `uuid4().hex[:8]` span_id 改为实例内递增序号（`sql.guard` / `sql.guard#N`），使同一次查询内多次 `validate_and_rewrite`（count/rows 双查询）共享同一 trace 时可稳定归并；集成树当前仍是随机后缀。该改动方向正确且无 P0 风险。
+- 风险 3 复核：`sse_event_sink.py` 用 `ContextVar` + `bind`/`reset`；调用点仅 `runner.py:720/844` 一处，两者在同一个 worker 线程函数内且 `reset` 位于 `finally`，第 699 行注释显式说明 ContextVar 不跨线程继承。`skills/sql/skill.py` 通过 `asyncio.to_thread(..., event_sink=emit_sse_event)` **显式传参**，不依赖 ContextVar 跨线程传播。`emit_sql_stage` 只产生 `{"event": "status"|"log"}` 帧、不携带 `seq`，seq 由序列化层统一分配，与已选定的 F2 `seq` 契约**兼容**。
+- 风险 4 复核：040/047/048 三个迁移的实际 Git 差异**确实只有注释**——把指向已删除文档的路径改写为现行架构文档（040 指向 `docs/architecture/ai-runtime.md#上下文预算与跨请求状态`，047/048 改为描述性背景）。无 DDL、无 schema、无数据变更，与既有审阅结论一致。
+- 风险 5：`085_drop_legacy_travel_planning.sql` 属 Travel 主题且含 DROP 旧旅游表，**本主题不纳入、不执行**。所有迁移均未执行，未做任何数据库写操作。
+- 另需注意的耦合：`runner.py` 除 SSE sink 外还包含 `answer_source` 标记、Memory 落库时机迁移、Reporter 渲染替换、路由改造等跨主题内容；本主题只取与 SQL/SSE 链路相关的 sink 绑定与「泛化 status 帧改由 skill 发结构化帧」这一原子改动。
+
+## 2026-10-10：SQL 主题整合完成
+
+- 集成提交：`7bdd6ea4e41073ddf1eee977babe15e2dc7dce1f`（feat(sql): integrate SQL trace stages and SSE stage forwarding）。提交前 HEAD 为 `18df1f8`。
+- 实际合入的 12 个文件：`backend/sql/policy.py`、`backend/sql/sql_agent.py`、`backend/skills/sql/skill.py`、`backend/orchestration/graph/sse_event_sink.py`（新增）、`backend/orchestration/graph/runner.py`、`backend/prompts/defaults/sql_generator.yaml`、`backend/sql/seeds/demo_sandbox.sql`、migrations 040/047/048、`backend/tests/sql/test_sql_agent_trace_stages.py`（新增）、`backend/tests/sql/test_sql_skill_followup.py`。
+- 逐块整合方式：全部通过精确文本替换完成，未用覆盖文件消除冲突。policy.py、skill.py、040/047/048、demo_sandbox.sql、sql_generator.yaml、sse_event_sink.py 完成后与主工作区版本 **SHA256 完全一致**。runner.py 保留 3 行有意差异（集成树已有的 `include_pending_action` 及更稳健的 `ctx.get("answer_source")` 写法），未强行对齐以免降级。
+- **P0 处置（未合入）**：两处 `sql.table_router` 埋点因把 `question[:500]` 写入 `span.input` 而排除。`sql_agent.py` 全文已无任何 `"question"` 进入 `input_data`（实测检索为空）；helper docstring 显式记录该约束，防止后续回退。
+- 风险 2 已解决：`policy.py` 的 `sql.guard` span_id 由随机 uuid 改为实例内递增序号，同一查询内多次 Guard 调用可得稳定、可归并的 id。定向测试断言 `sql.guard` 的 parent 为 `sql.validate.attempt_1`，覆盖「多次 Guard 共享同一 trace」的父子关系。
+- 风险 3 已验证通过：`sse_event_sink.py` 的 bind/reset 在 `runner.py` 同一 worker 线程内配对且位于 `finally`；`skills/sql/skill.py` 用 `asyncio.to_thread(..., event_sink=emit_sse_event)` 显式传参，不依赖 ContextVar 跨线程继承。`emit_sql_stage` 只产 `{"event": "status"|"log"}` 帧、不带 `seq`，seq 由序列化层统一分配，与 F2 `seq/after_seq` 契约兼容。`test_trace_middleware.py` 的 `bind_sse_event_sink`/`reset_sse_event_sink` 用例覆盖该行为。
+- 风险 4 已核实：040/047/048 的实际 Git 差异确为纯注释（指向已删文档改为现行架构文档），无 DDL/schema/数据变更。
+- 风险 5 已遵守：`085_drop_legacy_travel_planning.sql` 及 082/084/086 均未纳入、未执行。`git status` 对 `backend/sql/migrations/0[89]` 为空。所有迁移未运行，无数据库写入。
+- 定向测试命令与结果（集成树，PYTHONPATH 指向集成树）：
+  - `python -m pytest backend/tests/sql/test_sql_agent_trace_stages.py -v`：**3 passed**（阶段 span 记录、拒绝态可见、P0 回归「span input 不得含原始问题」）。
+  - `python -m pytest backend/tests/sql/ backend/tests/test_trace_middleware.py -q`：**365 passed, 7 failed, 22 skipped, 19 errors**。
+  - 无回归的严格证明：在临时 worktree（`git worktree add --detach D:\tmp\sql-baseline-check HEAD`，即 `18df1f8`，不含本轮改动）上跑同一命令，基线为 **354 passed, 7 failed, 22 skipped, 19 errors**。失败项与错误项**逐项完全相同**（6 项 `test_business_analysis.py` 既有断言失败、1 项 `test_sql_query_stream.py`、19 项 `test_sql_browse.py`/`test_sql_http_auth.py` 因本机 PostgreSQL 无密码的既有环境限制）。本轮改动通过数净增 11，零新增失败。该临时 worktree 检查后已用 `git worktree remove --force` 移除，未触碰任何来源 worktree。
+  - 修复的真实回归：`test_sql_skill_followup.py` 的 `FakeAgent.ask_struct` 替身缺少 `event_sink` 形参，加入 sink 透传后失败；已按真实签名（`ask_struct(..., event_sink=None)`）补齐替身，未删除断言、未 skip/xfail。修复后该文件通过。
+  - 静态检查基线对比：`python -m ruff check` 对改动文件报 14 个问题（I001/F401/E402），与 HEAD 基线同规则同数量，仅行号位移，**未引入新的 lint 问题**；既有 lint 债不在本主题范围内，未顺手修改。
+- 未执行：全量回归、数据库迁移、主工作区与任何来源 worktree 的修改、reset --hard / clean -fd / 强推 / 删除分支或 worktree / 丢弃 stash。
+- 遗留风险：`/api/observability/traces` 与 `/api/observability/traces/{trace_id}` 缺管理员角色门 + `TRACE_DETAIL_LEVEL` 默认 full 导致读取不脱敏，是**跨主题**的 observability 安全项，本主题未修复；在该项解决前，任何把用户原文写入 span.input 的埋点都不应合入。
