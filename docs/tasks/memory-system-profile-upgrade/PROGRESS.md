@@ -137,3 +137,12 @@
 - 新增纯函数格式/唯一性测试，以及 GraphRunner 开启 Checkpointer 后实际传参测试（同一 session 连续两次执行 thread_id 不同且不包含 session/user/tenant 原文）。实际运行 `D:/Python/python.exe -m pytest backend/tests/orchestration/graph/test_main_checkpointer_identity.py backend/tests/orchestration/graph/test_runner_trace_finalize.py -k "main_graph_thread_ids or main_checkpointer_uses_opaque or normal_completion_finishes_once" -q --no-cov`：3 passed、6 deselected，18.83 秒。
 - 触及 Python 文件 `py_compile` 通过，`git diff --check` 通过。未连接 PostgreSQL Checkpointer 或执行进程重启恢复测试；当前没有按此随机 thread_id 恢复中断主图的公开路径，Phase 2 Checkpoint 验收仍未完成。
 - 实现提交：`b992e8b`（`fix(runtime): use opaque main checkpoint ids`）。
+
+## 2026-10-11：Phase 1 按稳定 ID 保留重复文本消息
+
+- 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main`，基于 `6d171c0` 实施。
+- 修复 `MemoryService.start_session` 在 L2→L1 加载时按连续 `(role, content)` 合并消息的问题。现在恢复消息统一交给 `ShortTermBuffer` 按稳定 LangChain ID 去重；相同正文但数据库 ID 不同的真实消息继续保留。
+- 新增会话加载入口回归测试，验证重复的 Human/AI 文本及不同数据库 ID 全部进入 L1；同步 Runtime 契约和 TASK 验收描述。
+- 实际运行 `D:/Python/python.exe -m pytest backend/tests/memory/test_l1_message_identity.py backend/tests/memory/test_message_codec.py -q --no-cov`：9 passed，8.86 秒。测试中的 MemoryService 使用伪造仓储和数据库上下文，没有连接共享 PostgreSQL。
+- `D:/Python/python.exe -m py_compile backend/memory/service.py backend/tests/memory/test_l1_message_identity.py` 与 `git diff --check` 均通过。未运行全量回归或真实 Agent E2E。
+- 实现提交：`4fc8cdd1449dbc80e7b09913ba94f80d95ca8f61`（`fix(memory): preserve repeated L1 message content`）。
