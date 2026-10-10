@@ -88,9 +88,9 @@ def fetch_forecast_evidence(destination: str) -> tuple[dict | None, str, dict | 
     fetch_forecast 的证据增强版：预报与七态降级说明语义逐字保留，第三位
     返回 Evidence dict（取不到数据时为 None）。Evidence 在 service 层组装
     （provider 层零改动）：status×Freshness→LIVE/CACHE，stale 降 0.6，
-    expire_at=observed_at+TTL(weather)（v4 §4「现有 TTL 即 expire_at」）；
+    expire_at=observed_at+TTL(weather)（travel-domain-design-v5.md §13「现有 TTL 即 expire_at」）；
     降级链的实际服务源由 result.provider 自带——qweather 接管后信任口径
-    自动反映（v4 §8「每次降级记 Evidence」）。
+    自动反映（travel-domain-design-v5.md §15「每次降级记 Evidence」）。
 
     Returns:
         (预报 dict 或 None, 降级说明, Evidence dict 或 None)

@@ -957,7 +957,7 @@ def slot_filler_node(state: dict) -> dict:
         except Exception:  # noqa: BLE001 — 回写失败不影响本轮
             logger.debug("[TravelSlotFiller] 偏好回写失败", exc_info=True)
 
-    # 会话意图（v3 §2.1，P0-A 裁决 #1）：先判意图，后查条件。没有意图层
+    # 会话意图（backend/travel/core/intent.py，P0-A 裁决 #1）：先判意图，后查条件。没有意图层
     # 时「丽江好玩吗」会因缺天数被误追问「玩几天」——supervisor 拿到
     # intent 后转问答出口，不再按规划链走。
     missing = brief.missing_slots()
@@ -1043,7 +1043,7 @@ def slot_filler_node(state: dict) -> dict:
     if brief_changed and previous is not None:
         brief.version = detection["new_version"]
 
-    # MODIFY 意图退让（v3 §2.1）：抽取器已把改动理解成结构化字段（avoid/
+    # MODIFY 意图退让（backend/travel/core/intent.py）：抽取器已把改动理解成结构化字段（avoid/
     # must_go/天数…指纹变化）时走既有「重排」链——那是有校验兜底的路径，
     # 只有「第二天换成室内」这类抽取器理解不了的逐条改单才转问答出口。
     if intent is TravelIntent.MODIFY and (brief_changed or missing):
@@ -1279,7 +1279,7 @@ def slot_filler_node(state: dict) -> dict:
             "如需更长行程请分段规划"
         )
 
-    # QUERY_STATIC：一轮一次定向灵感检索（v3 §3.1），产出三态灵感包供
+    # QUERY_STATIC：静态观点查询一轮执行一次定向灵感检索，产出三态灵感包供
     # reporter 渲染；检索失败不阻塞（status=unavailable 如实呈现）。
     inspiration: dict = {}
     if intent is TravelIntent.QUERY_STATIC and query_destination:

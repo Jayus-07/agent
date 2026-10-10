@@ -69,7 +69,7 @@ def retrieve_knowledge(
 def build_knowledge_evidence(
     destination: str, chunks: list[str], source_tag: str,
 ) -> dict[str, dict]:
-    """知识摘录证据表（v4 §4，Phase 4；纯函数，检索逻辑零改动）。
+    """知识摘录证据表（travel-domain-design-v5.md §13，Phase 4；纯函数，检索逻辑零改动）。
 
     source_type=RAG（基线 0.7）；verified_at=检索时点——检索即核实事件，
     来源文档经 source_tag 锚定进 source。value 只存摘录索引不存全文

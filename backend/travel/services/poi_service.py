@@ -466,7 +466,7 @@ def retrieve_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
 
 
 def build_candidate_evidences(candidates: list[Poi]) -> dict[str, dict]:
-    """候选池证据表（v4 §4，Phase 4；纯函数派生，检索逻辑零改动）。
+    """候选池证据表（travel-domain-design-v5.md §13，Phase 4；纯函数派生，检索逻辑零改动）。
 
     - 种子 POI → SEED/0.5/expire_at=None（坐标/营业时间/票价是自声明示例值，
       诚实标注且不冒充时效）；

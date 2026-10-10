@@ -1,6 +1,6 @@
 """tests/travel/test_provider_router.py — ProviderRouter 契约测试（Phase 4 Commit A）
 
-覆盖（v4 §8 冻结纪律）：
+覆盖（travel-domain-design-v5.md §15 冻结纪律）：
 - 链账完整性：PROVIDER_CHAINS 每条链非空、成员名可解析（含占位成员白名单）、
   weather 链与 capabilities.py 能力账对齐；
 - 装配 parity：有和风 key → FallbackWeatherProvider(腾讯, 和风)；

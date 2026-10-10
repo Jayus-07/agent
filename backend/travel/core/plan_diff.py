@@ -1,4 +1,4 @@
-"""travel/core/plan_diff.py — 版本变更记录派生（v4 §3.2 冻结）
+"""travel/core/plan_diff.py — 版本变更记录派生（backend/travel/core/plan_diff.py 冻结）
 
 change 由新旧版本**确定性 diff 派生**，禁止手写变更记录（G2）。回滚 =
 以旧版本内容生成新版本并标记 type=rollback，永不删除/改写历史版本。
@@ -54,7 +54,7 @@ def build_change_record(
     change_reason: str = "user_request",
     quality: str = "",
 ) -> dict:
-    """构造进 history 的变更记录（v4 §3.2 冻结结构）。
+    """构造进 history 的变更记录（backend/travel/core/plan_diff.py 冻结结构）。
 
     old_itinerary=None 表示首版（无 parent diff）；brief_changed_fields
     由指纹机制传入（brief_changed_fields 既有口径），本模块不重复推导。

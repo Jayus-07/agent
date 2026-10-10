@@ -312,6 +312,20 @@ class PlanVersionService:
         return self._store.list_conversations(
             user_id, limit=limit, tenant_id=tenant_id)
 
+    def delete_conversation(
+        self, conversation_id: str, user_id: str, *, tenant_id: str = "default",
+    ) -> bool:
+        """删除当前账号的整条行程记录及其账本版本。"""
+        if not conversation_id or not user_id or not tenant_id:
+            raise PlanVersionPersistenceError("行程缺少有效的删除范围")
+        if not self._store.enabled():
+            raise PlanVersionPersistenceError("行程版本账本未启用")
+        try:
+            return bool(self._store.delete_conversation(
+                conversation_id, user_id, tenant_id, strict=True))
+        except Exception as exc:  # noqa: BLE001 — 删除失败必须对调用方显式报错
+            raise PlanVersionPersistenceError("行程记录删除失败") from exc
+
     def latest_version(
         self, conversation_id: str, user_id: str, *, tenant_id: str = "default",
         strict: bool = False,

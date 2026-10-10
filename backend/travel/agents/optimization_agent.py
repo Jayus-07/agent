@@ -1,4 +1,4 @@
-"""travel/agents/optimization_agent.py — Optimization Agent（v3 §3.1 ⑤ / Phase 3 Commit B）
+"""travel/agents/optimization_agent.py — Optimization Agent（travel-domain-design-v5.md §10 ⑤ / Phase 3 Commit B）
 
 能力边界：把骨架变成定稿——时刻排程与重排（rebuild_days 唯一实现经
 transit_service）、坏天气适应（Plan B 替换）、费用核算。无状态：不读写

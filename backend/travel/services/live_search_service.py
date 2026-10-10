@@ -26,6 +26,27 @@ from backend.tools.travel.train import (
 class LiveSearchError(RuntimeError):
     """真实数据源不可用或返回了无法消费的结构。"""
 
+    def __init__(self, message: str, *, category: str = "business_failure"):
+        super().__init__(message)
+        self.category = category
+
+
+def _search_error_category(status: Any = None, message: str = "") -> str:
+    """保留 ToolRuntime 的失败类别，避免把「查不了」显示成「无结果」。"""
+    value = getattr(status, "value", status)
+    text = (message or "").lower()
+    if value == "timeout" or any(token in text for token in (
+        "timeout", "timed out", "connection timeout", "超时",
+    )):
+        return "network_timeout"
+    if "未启用" in message or "disabled" in text:
+        return "disabled"
+    if value == "unavailable" or value == "rate_limited" or any(token in text for token in (
+        "配额", "限流", "未配置", "不可用",
+    )):
+        return "provider_unavailable"
+    return "business_failure"
+
 
 def _invoke(
     tool: Any,
@@ -84,8 +105,13 @@ def _invoke(
     )
     finish_tool_span(span, executed)
     if executed.status is not ToolStatus.SUCCESS:
+        detail = executed.data if isinstance(executed.data, dict) else {}
+        error = detail.get("error") if isinstance(detail, dict) else None
+        detail_message = error.get("message") if isinstance(error, dict) else error
+        message = str(detail_message or executed.error_message or executed.error_code or f"{tool_name} 调用失败")
         raise LiveSearchError(
-            executed.error_message or executed.error_code or f"{tool_name} 调用失败"
+            message,
+            category=_search_error_category(executed.status, message),
         )
     if not isinstance(executed.data, dict):
         raise LiveSearchError(f"{tool_name} 返回了无效封套")
@@ -99,7 +125,11 @@ def _decode_success(raw: str, tool_name: str) -> dict[str, Any]:
         raise LiveSearchError(f"{tool_name} 返回了无法解析的封套") from exc
     if not isinstance(payload, dict) or payload.get("status") != "success":
         detail = payload.get("error") if isinstance(payload, dict) else None
-        raise LiveSearchError(str(detail or f"{tool_name} 调用失败"))
+        message = str(detail or f"{tool_name} 调用失败")
+        raise LiveSearchError(
+            message,
+            category=_search_error_category(message=message),
+        )
     data = payload.get("data")
     if not isinstance(data, dict):
         raise LiveSearchError(f"{tool_name} 成功但缺少 data")

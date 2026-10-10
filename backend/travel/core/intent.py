@@ -1,11 +1,11 @@
-"""travel/core/intent.py — 会话意图分类（v3 §2.1，P0-A，纯规则零 LLM）
+"""travel/core/intent.py — 会话意图分类（backend/travel/core/intent.py，P0-A，纯规则零 LLM）
 
 v3 裁决 #1 的代码化：**先判意图，再合并 TripBrief，最后检查下一步所需
 条件**。没有意图层时，「丽江好玩吗」会抽到目的地、缺天数 → 被误追问
 「玩几天」；「把第二天换成室内」指纹不变 → 旧行程被原样重报。意图先于
 槽位条件，问答/探索/修改诉求才能拿到正确的出口。
 
-优先级（v3 §2.1，自上而下首中即返回）：
+优先级（backend/travel/core/intent.py，自上而下首中即返回）：
   0. SOCIAL / META / OUT_OF_SCOPE 轻交互与出域消息
   1. MODIFY    指向已有行程的改动（要求 has_itinerary，且抽取器没把它
                理解成结构化改动——后者走既有「指纹变化→重排」链）
@@ -263,7 +263,7 @@ def classify_intent(
         if _RE_MODIFY.search(msg):
             return TravelIntent.MODIFY
 
-    # 2) PLAN：明确规划动词压过同句疑问（v3 §2.1 例：「把第二天换成室内，
+    # 2) PLAN：明确规划动词压过同句疑问（backend/travel/core/intent.py 例：「把第二天换成室内，
     #    顺便查天气」主诉求是改；「丽江三天直接规划」主诉求是规划）
     if _RE_PLAN_VERB.search(msg):
         return TravelIntent.PLAN

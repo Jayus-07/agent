@@ -1,4 +1,4 @@
-"""travel/agents/requirement_agent.py — Requirement Agent（v3 §3.1 ② / Phase 2）
+"""travel/agents/requirement_agent.py — Requirement Agent（travel-domain-design-v5.md §10 ② / Phase 2）
 
 职责边界（2026-10-08 更新）：自然语言需求理解 / 槽位抽取 / 缺失检测 /
 TripBrief 生成 / 追问**模板**文案。只回答「用户这轮说了什么」，不做合并
@@ -1129,7 +1129,7 @@ def build_clarification(brief: TravelBrief, user_message: str = "") -> str:
 
 
 class RequirementAgent:
-    """Requirement Agent（v3 §3.1 ②）。
+    """Requirement Agent（travel-domain-design-v5.md §10 ②）。
 
     自然语言需求理解 / 槽位抽取 / 缺失检测 / TripBrief 生成。无状态
     （state 读写归图节点编排），实例可进程级复用。模块级同名函数是其

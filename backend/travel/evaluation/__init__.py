@@ -1,4 +1,4 @@
-"""travel/evaluation/ — 评测与指标（v4 §9 冻结）
+"""travel/evaluation/ — 评测与指标（travel/evaluation/ 冻结）
 
 Phase 1 仅建包。Phase 2 落 slot 评测集与 runner（槽位 ≥95% / 人数 ≥99% /
 否定 ≥98%）；Phase 4 落 research freshness/coverage；Phase 6 落

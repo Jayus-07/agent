@@ -1,7 +1,7 @@
-"""travel/core/contracts.py — 跨 Agent 统一契约（v4 §4/§5 冻结）
+"""travel/core/contracts.py — 跨 Agent 统一契约（旅游域统一契约 冻结）
 
 Phase 1 只立契约不接线：现有 Agent/专家代码不经此文件，Phase 3 起逐个
-接入。字段口径以 docs/travel-domain-agent-runtime-design-v4.md 为准，
+接入。字段口径以 docs/travel-domain-design-v5.md 为准，
 冻结后只向后兼容演进（新增可选字段），破坏性变更走版本化。
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 
 
 class SourceType(str, enum.Enum):
-    """事实来源类型（Evidence.source_type，v4 §4 冻结口径）。
+    """事实来源类型（Evidence.source_type，travel-domain-design-v5.md §13 冻结口径）。
 
     SEED 是对四类基线（LIVE/RAG/CACHE/ESTIMATE）的诚实扩展：种子库的
     坐标/营业时间/票价是自声明示例值，既非实时数据也非估算——冒充任何
@@ -27,7 +27,7 @@ class SourceType(str, enum.Enum):
     ESTIMATE = "estimate"
 
 
-# source_type → confidence 基线（v4 §4 冻结表）。
+# source_type → confidence 基线（travel-domain-design-v5.md §13 冻结表）。
 CONFIDENCE_BASELINE: dict[SourceType, float] = {
     SourceType.LIVE: 0.95,
     SourceType.CACHE: 0.85,
@@ -42,7 +42,7 @@ UNVERIFIED_CONFIDENCE_CAP = 0.5
 
 @dataclass(frozen=True)
 class TravelContext:
-    """工具统一信封的追踪上下文（v4 §5）。
+    """工具统一信封的追踪上下文（travel-domain-design-v5.md §9）。
 
     一次构造全链透传；request_id 对齐平台 request_context，trace_id
     对齐 SSE/trace 链路。frozen 防止中途篡改血缘。
@@ -56,7 +56,7 @@ class TravelContext:
 
 @dataclass(frozen=True)
 class Evidence:
-    """统一事实可信模型（v4 §4 冻结）。
+    """统一事实可信模型（travel-domain-design-v5.md §13 冻结）。
 
     所有进入 state 的旅游事实（POI/天气/知识/预算分项）经此包装，
     reporter 与 assistant 按 evidence_level() 唯一口径渲染；validator 的
@@ -90,7 +90,7 @@ class Evidence:
             )
 
     def evidence_level(self) -> str:
-        """三档消费口径（v4 §4 冻结，reporter/assistant 唯一渲染依据）。
+        """三档消费口径（travel-domain-design-v5.md §13 冻结，reporter/assistant 唯一渲染依据）。
 
         trusted = LIVE 且未过期；may_change = CACHE/已过期/stale；
         needs_confirmation = SEED/ESTIMATE/低置信。

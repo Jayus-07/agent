@@ -1,9 +1,8 @@
-"""travel/core/agent_base.py — BaseAgent 统一契约（v3 §2 / v4 §5 冻结）
+"""travel/core/agent_base.py — BaseAgent 统一契约（travel-domain-design-v5.md §9）
 
 Agent = LangGraph 域图节点 + 本契约（命名/输入输出契约/超时预算/降级
-策略/遥测五要素），不是新框架。Phase 1 只立规格；experts/base.py 的
-run_expert_safely（异常不穿透语义）在 Phase 3 升格接入本契约。子 Agent
-互相禁止调用，数据传递只走共享 state；工具白名单见 tools/spec.py。
+策略/遥测五要素），不是新框架。子 Agent 互相禁止调用，数据传递只走共享
+state；工具白名单见 tools/spec.py。
 """
 from __future__ import annotations
 
@@ -39,7 +38,7 @@ class AgentSpec:
     degradation: str
 
 
-# 超时/降级口径 = v3 §3 职责边界表的代码化（冻结值）。
+# 超时/降级口径 = travel-domain-design-v5.md §10 职责边界表的代码化（冻结值）。
 AGENT_SPECS: dict[str, AgentSpec] = {
     AGENT_SUPERVISOR: AgentSpec(
         name=AGENT_SUPERVISOR,

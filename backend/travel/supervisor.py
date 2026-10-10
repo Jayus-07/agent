@@ -256,7 +256,7 @@ def decide(state: dict) -> TravelDecision:
             "局部修改已校验，收尾输出新草案",
         )
 
-    # 意图先行（v3 §2.1）：问答/探索/改单出口优先于槽位缺失追问
+    # 意图先行（backend/travel/core/intent.py）：问答/探索/改单出口优先于槽位缺失追问
     intent = state.get("intent") or ""
     if intent in _INTENT_REPORT_REASONS:
         return TravelDecision(TravelStage.REPORT, _INTENT_REPORT_REASONS[intent])

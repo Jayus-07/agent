@@ -474,7 +474,7 @@ def check_pool(
 
 
 # ============================================================
-# 数据可信轴与负偏好轴（Phase 4，v4 §4）
+# 数据可信轴与负偏好轴（Phase 4，travel-domain-design-v5.md §13）
 # 全 warning 级、零 IO；不进 AXES 六轴（SOURCE_STALE 消费 state.evidences、
 # PREFERENCE_VIOLATION 消费 brief——轴函数签名只吃 itinerary），由
 # travel_validator_node 在六轴之后追加进同一 violations 列表。
@@ -600,7 +600,7 @@ def travel_validator_node(state: dict) -> dict:
                  if c.get("poi_id")} or None
     report = check_itinerary(itinerary, valid_poi_ids=valid_ids)
 
-    # 数据可信与负偏好检查（Phase 4，v4 §4）：全 warning 级追加进同一
+    # 数据可信与负偏好检查（Phase 4，travel-domain-design-v5.md §13）：全 warning 级追加进同一
     # violations 列表——后续 compute_confidence / 结论映射 / 遥测按既有
     # 逻辑自然消费，本节点不再特判。warning 不翻结论（errors 才翻）。
     report.violations.extend(

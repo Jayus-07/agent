@@ -747,6 +747,29 @@ class MemoryService:
             logger.error(f"[MemoryService] save_messages 失败: {e}")
         return {"saved": saved}
 
+    async def replace_session_messages(
+        self, session_id: str, messages: list[dict[str, str]],
+        user_id: str = "default",
+    ) -> dict:
+        """以单事务替换会话快照，供客户端按轮同步时保持幂等。"""
+        if not session_id or len(session_id) > 128:
+            return {"saved": 0, "error": "会话标识无效"}
+        try:
+            async with AsyncSessionLocal() as db_session:
+                repo = SessionRepository(db_session)
+                try:
+                    await repo.get_or_create(session_id, user_id)
+                except SessionOwnerMismatch:
+                    await db_session.rollback()
+                    return {"saved": 0, "error": "会话不存在"}
+                saved = await repo.replace_messages(session_id, messages)
+                await db_session.commit()
+                return {"saved": len(saved)}
+        except Exception as e:
+            logger.error(f"[MemoryService] replace_session_messages 失败: {e}")
+            return {"saved": 0, "error": str(e)}
+
+
     @staticmethod
     def _scoped_session_id(session_id: str, user_id: str) -> str:
         """跨用户收养拦截后的隔离存储键（确定性：同一用户恒映射同键）。"""

@@ -1,12 +1,12 @@
 """travel/services/inspiration_service.py — 问答/灵感层的只读检索聚合（v3 P0-A 薄层）
 
-职责：QUERY_STATIC 意图一轮内的**一次定向攻略检索**（v3 §3.1：首次一次
+职责：QUERY_STATIC 意图一轮内的**一次定向攻略检索**（backend/travel/core/intent.py：首次一次
 定向检索，证据不足的补检是 P0-B 的轮次上限机制，本层固定 1 次不补检）。
 复用 live_search_service 的知乎官方 MCP 通路与统一封套解码，本层不做
 Provider 级新事物；产出可序列化的灵感包，reporter 只渲染不检索。
 
 检索是**增强信息**：失败/空结果/未启用都以 status 三态如实呈现
-（available / empty / unavailable，对应 v3 §6 的三态文案），绝不阻塞
+（available / empty / unavailable，对应 本模块 的三态文案），绝不阻塞
 其他链路，也绝不捏造知乎来源。
 """
 from __future__ import annotations

@@ -76,21 +76,8 @@ def _conn() -> Iterator[Any]:
 
 
 def _ensure_table() -> bool:
-    """幂等建表（进程内双检锁）；失败返回 False（调用方按留痕不可用降级）。"""
-    global _initialized
-    if _initialized:
-        return True
-    with _init_lock:
-        if _initialized:
-            return True
-        try:
-            with _conn() as conn:
-                conn.cursor().execute(_SCHEMA_SQL)
-            _initialized = True
-            return True
-        except Exception as e:  # noqa: BLE001 — 建表失败软降级
-            logger.warning("[TravelDecisionStore] 决策留痕表初始化失败（本轮跳过）: %s", e)
-            return False
+    """V1 决策留痕表已退役；禁止请求时连接数据库或重建旧表。"""
+    return False
 
 
 def record_decision(

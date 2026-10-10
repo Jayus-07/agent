@@ -126,7 +126,7 @@ def poi_expert_node(state: dict) -> dict:
 
         candidates, extra_notes_c = wave1["candidates"] or ([], [])
         extra_notes = extra_notes_c + wave1_notes
-        # 候选池证据表（Phase 4，v4 §4）：种子=SEED/腾讯补全=LIVE，
+        # 候选池证据表（Phase 4，travel-domain-design-v5.md §13）：种子=SEED/腾讯补全=LIVE，
         # 纯函数派生自 Poi 字段，随 candidates 一起进 state
         evidences = build_candidate_evidences(candidates)
 

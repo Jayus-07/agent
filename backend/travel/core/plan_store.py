@@ -92,21 +92,8 @@ def _conn() -> Iterator[Any]:
 
 
 def _ensure_table() -> bool:
-    """幂等建表（进程内双检锁）；失败返回 False（调用方按无账本降级）。"""
-    global _initialized
-    if _initialized:
-        return True
-    with _init_lock:
-        if _initialized:
-            return True
-        try:
-            with _conn() as conn:
-                conn.cursor().execute(_SCHEMA_SQL)
-            _initialized = True
-            return True
-        except Exception as e:  # noqa: BLE001 — 建表失败软降级
-            logger.warning("[TravelPlanStore] 版本账本表初始化失败（本轮跳过）: %s", e)
-            return False
+    """V1 行程账本已退役；禁止请求时连接数据库或重建旧表。"""
+    return False
 
 
 def enabled() -> bool:
@@ -330,6 +317,8 @@ def list_conversations(
     按最近更新新→旧。账本不可用/参数为空返回空列表（前端隐藏入口）。"""
     if not user_id or not tenant_id or not enabled() or not _ensure_table():
         return []
+
+
     try:
         with _conn() as conn:
             cur = conn.cursor()
@@ -369,6 +358,36 @@ def list_conversations(
     except Exception as e:  # noqa: BLE001 — 列表读失败按无账本处理
         logger.warning("[TravelPlanStore] 历史规划列表读取失败: %s", e)
         return []
+
+
+def delete_conversation(
+    conversation_id: str,
+    user_id: str,
+    tenant_id: str = "default",
+    *,
+    strict: bool = False,
+) -> bool:
+    """删除当前用户与租户名下某条行程的全部账本版本。"""
+    if (not conversation_id or not user_id or not tenant_id
+            or not enabled() or not _ensure_table()):
+        if strict:
+            raise PlanStoreUnavailable("行程版本账本未启用或无法初始化")
+        return False
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            _lock_scope(cur, tenant_id, user_id, conversation_id)
+            cur.execute(
+                f"""DELETE FROM {_TABLE}
+                    WHERE tenant_id = %s AND user_id = %s AND conversation_id = %s""",
+                (tenant_id[:128], user_id[:128], conversation_id[:128]),
+            )
+            return cur.rowcount > 0
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[TravelPlanStore] 行程记录删除失败: %s", e)
+        if strict:
+            raise PlanStoreUnavailable("行程记录删除失败") from e
+        return False
 
 
 def confirm_version(

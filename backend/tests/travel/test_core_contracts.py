@@ -1,4 +1,4 @@
-"""tests/travel/test_core_contracts.py — 核心契约守护测试（v4 §4）
+"""tests/travel/test_core_contracts.py — 核心契约守护测试（travel-domain-design-v5.md §13）
 
 Evidence 两条 fail-fast 不变量 + 三档消费口径 + 信封/事件可序列化。
 """

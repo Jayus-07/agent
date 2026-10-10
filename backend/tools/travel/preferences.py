@@ -68,21 +68,8 @@ def _conn() -> Iterator[Any]:
 
 
 def _ensure_table() -> bool:
-    """幂等建表（进程内双检锁）；失败返回 False（调用方降级跳过）。"""
-    global _initialized
-    if _initialized:
-        return True
-    with _init_lock:
-        if _initialized:
-            return True
-        try:
-            with _conn() as conn:
-                conn.cursor().execute(_SCHEMA_SQL)
-            _initialized = True
-            return True
-        except Exception as e:  # noqa: BLE001 — 建表失败软降级
-            logger.warning("[TravelPrefs] 偏好表初始化失败（本轮跳过）: %s", e)
-            return False
+    """V1 长期偏好表已退役；旧 Agent 仅按空偏好继续运行。"""
+    return False
 
 
 def _row_to_dict(row: tuple) -> dict:

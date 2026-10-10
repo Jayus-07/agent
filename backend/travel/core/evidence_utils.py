@@ -1,6 +1,6 @@
 """travel/core/evidence_utils.py — Evidence 组装/序列化辅助（Phase 4）
 
-Evidence 模型**唯一归属 core/contracts.py**（v4 §4 冻结契约，禁第二套证据
+Evidence 模型**唯一归属 core/contracts.py**（travel-domain-design-v5.md §13 冻结契约，禁第二套证据
 模型）；本模块只是三个组装点（poi/weather/risk_service）与消费方
 （validator SOURCE_STALE）共用的转换薄层：
 
@@ -43,7 +43,7 @@ def make_evidence(
     expire_at: datetime | None = None,
     confidence: float | None = None,
 ) -> Evidence:
-    """按冻结基线构造 Evidence（v4 §4 confidence 基线表的应用出口）。
+    """按冻结基线构造 Evidence（travel-domain-design-v5.md §13 confidence 基线表的应用出口）。
 
     confidence 缺省取 source_type 基线；缺 verified_at 时压到
     UNVERIFIED_CONFIDENCE_CAP——基线再高，无核实时点也不允许高置信

@@ -1,15 +1,14 @@
 'use client'
 
 /**
- * CSDrawer — 用户端客服会话组件
+ * CSDrawer — 用户端右侧客服抽屉
  *
  * 复用现有 CS 组件树（CSWelcome/CSMessageList/CSStatusBar/CSInput/CSHandoffCard）
- * 与 useCSChat 流式 hook，在独立客服页展示会话；保留抽屉模式供旧入口兼容。
+ * 与 useCSChat 流式 hook，在 /agent 页右侧滑出，展示客服聊天记录。
  * 组件装配方式与管理端 frontend-admin/src/app/cs/page.tsx 保持一致。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Headphones, House, Plus, UserRound, X } from 'lucide-react'
-import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
+import { Headphones, Plus, UserRound, X } from 'lucide-react'
 import { useCSChatStore } from '@/store/csChat'
 import { useCSChat } from '@/hooks/useCSChat'
 import { useCSHandoffSync } from '@/hooks/useCSHandoffSync'
@@ -96,8 +95,8 @@ export default function CSDrawer({
   const handoffOwnsConversation =
     handoffState === 'requested' || handoffState === 'waiting' || handoffState === 'active'
 
-  // 主助手引导卡带来的预填问题（HandoffCard 写 sessionStorage + 派发事件）。
-  // 独立客服页打开时读取并清除，nonce 触发 CSInput 覆盖。
+  // 多域隔离 M3：主图引导卡带来的预填问题（HandoffCard 写 sessionStorage +
+  // 派发 cs-drawer:open 事件）。抽屉打开时读取并清除，nonce 触发 CSInput 覆盖。
   const [prefillDraft, setPrefillDraft] = useState<{ text: string; nonce: number } | null>(null)
   useEffect(() => {
     if (!open) return
@@ -270,7 +269,7 @@ export default function CSDrawer({
         />
       )}
 
-      {/* 客服对话面板：独立页整屏展示，用户端入口作为右侧抽屉
+      {/* 右侧滑出抽屉 —— ASSISTANT UNAWARE
           宽度：桌面固定 440px，窄屏撑满可用宽度（原 max-w-[92vw] 会留出 8vw 的无用边缝，
           遮罩下露出主界面且在 1024px 级屏幕上浪费近 80px 内容宽度） */}
       <div className={standalone

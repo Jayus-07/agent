@@ -104,7 +104,7 @@ def _user_visible_items(values) -> list[str]:
     ]
 
 
-# ── 会话意图问答出口（v3 §2.1，P0-A）────────────────────────────
+# ── 会话意图问答出口（backend/travel/core/intent.py，P0-A）────────────────────────────
 # 渲染纪律不变：只把 state 里的事实（inspiration 包/推荐结果）组织成
 # 人话，不检索、不补造观点；检索类信息缺失时如实说「不可用/没有找到」。
 
@@ -172,7 +172,7 @@ def _answer_static(state: dict) -> str:
 
 
 def _answer_dynamic(state: dict) -> str:
-    """QUERY_DYNAMIC：实时状态无可靠来源 → 如实告知（v3 §2.1 优先级 2）。"""
+    """QUERY_DYNAMIC：实时状态无可靠来源 → 如实告知（backend/travel/core/intent.py 优先级 2）。"""
     task_lines = _render_auxiliary_task_results(state)
     if task_lines:
         return "\n".join(task_lines)
@@ -599,7 +599,7 @@ def _assemble(state: dict) -> str:
             f"- {partial_result.get('message') or '存在未满足的硬约束'}\n"
             "- 当前保留原行程；请减少地点数量、拆分到多天，或告诉我接受哪些取舍。"
         )
-    # 0) 会话意图问答出口（v3 §2.1，P0-A）：问答/探索/未接线的改单诉求
+    # 0) 会话意图问答出口（backend/travel/core/intent.py，P0-A）：问答/探索/未接线的改单诉求
     #    不走行程渲染。分支必须在 brief_missing 之前——「丽江好玩吗」
     #    抽得到目的地、缺天数，落到追问分支就变成了「误规划」。
     intent = state.get("intent") or ""

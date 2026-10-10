@@ -1,4 +1,4 @@
-"""tests/travel/test_plan_lifecycle.py — 生命周期状态机守护测试（v4 §3.1）
+"""tests/travel/test_plan_lifecycle.py — 生命周期状态机守护测试（backend/travel/core/plan_lifecycle.py）
 
 冻结口径：10 态 + 合法迁移表 + fail-fast。非法迁移必须抛
 IllegalPlanTransition，不允许静默放行。

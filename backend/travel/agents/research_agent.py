@@ -1,4 +1,4 @@
-"""travel/agents/research_agent.py — Research Agent（v3 §3.1 ③ / Phase 3 Commit B）
+"""travel/agents/research_agent.py — Research Agent（travel-domain-design-v5.md §10 ③ / Phase 3 Commit B）
 
 能力边界：数据获取与事实准备——候选检索（含必去项补全）、天气预报获取、
 风险溯源、知识库摘录。无状态：不读写 graph state（归图节点）、无 LLM。

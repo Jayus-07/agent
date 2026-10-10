@@ -137,7 +137,7 @@ class TravelGraphState(TypedDict, total=False):
     # 「知识库参考」段。与 notes 分开：notes 是「行程被迫做的取舍」，
     # 摘录是「可引用的外部知识」，语义不同不应混排。
     knowledge_refs: list[str]
-    # 统一证据表（v4 §4，Phase 4）：fact_id → Evidence dict。模型唯一归属
+    # 统一证据表（travel-domain-design-v5.md §13，Phase 4）：fact_id → Evidence dict。模型唯一归属
     # core/contracts.py，本文件只声明 state 键。纪律：不进
     # new_travel_graph_input 预置（跨轮契约 1）；读取一律 .get()（跨轮契约
     # 2——旧 checkpoint 无此键 = 无证据，SOURCE_STALE 不误报）；写入走
@@ -149,7 +149,7 @@ class TravelGraphState(TypedDict, total=False):
     live_search: dict[str, dict]
     # 本轮与主规划正交的 Tool 结果；每轮由 slot_filler 重置，供 API/Reporter 消费。
     task_results: list[dict]
-    # 会话意图（v3 §2.1，P0-A）：slot_filler 每轮分类后写入（空串 = 未分类，
+    # 会话意图（backend/travel/core/intent.py，P0-A）：slot_filler 每轮分类后写入（空串 = 未分类，
     # 走既有规划链）；supervisor 意图先行门禁与 reporter 问答出口消费。
     # 必须入 schema——LangGraph updates 会剥离 schema 外的键。
     intent: str

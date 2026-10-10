@@ -1,10 +1,10 @@
-"""travel/tools/spec.py — Domain Tool 治理规格（v4 §5 冻结）
+"""travel/tools/spec.py — Domain Tool 治理规格（travel-domain-design-v5.md §12 冻结）
 
 与 capabilities.yaml 的边界：后者管主图 Skill 面（travel.poi_search 唯一
 注册项），本表管域内治理面（副作用级别/确认要求/Agent 白名单），两者
 不重复不冲突（G2）。治理规则：
   1. TRANSACTION 只经 Commerce Agent（守护测试断言）；
-  2. requires_confirmation=True 必须先有审批单（v4 §6）才能执行；
+  2. requires_confirmation=True 必须先有审批单（travel-domain-design-v5.md §14）才能执行；
   3. Agent→Tool 白名单 = 本表 allowed_agents 的逆向视图，Phase 3 接入
      BaseAgent 后由守护测试静态断言 import 面不越界。
 标记「契约位」的工具：规格先行，实现等真实数据源（BLOCKED 纪律）。
@@ -25,7 +25,7 @@ from backend.travel.core.agent_base import (
 
 
 class SideEffect(str, enum.Enum):
-    """副作用四级（v4 §5 冻结）。"""
+    """副作用四级（travel-domain-design-v5.md §12 冻结）。"""
 
     READ = "read"          # 检索/读取
     COMPUTE = "compute"    # 纯计算

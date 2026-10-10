@@ -1,4 +1,4 @@
-"""travel/core/events.py — 旅游域统一事件出口（v3 §2 骨架）
+"""travel/core/events.py — 旅游域统一事件出口（travel-domain-design-v5.md §9 骨架）
 
 Phase 1 仅提供结构化 logger 出口；quality_metrics 的 Prometheus 面在
 Phase 3 统一收编（届时各专家散落的 qm.record_* 改经此处）。事件字段一律

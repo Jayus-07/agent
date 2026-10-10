@@ -76,7 +76,7 @@ def risk_expert_node(state: dict) -> dict:
             knowledge_refs = chunks
             if source_tag and source_tag not in itinerary.sources:
                 itinerary.sources.append(source_tag)
-            # 摘录证据表（Phase 4，v4 §4）：RAG/0.7，检索时点即核实事件
+            # 摘录证据表（Phase 4，travel-domain-design-v5.md §13）：RAG/0.7，检索时点即核实事件
             evidences = build_knowledge_evidence(
                 brief.destination, chunks, source_tag)
 

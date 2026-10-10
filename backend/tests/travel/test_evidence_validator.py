@@ -1,6 +1,6 @@
 """tests/travel/test_evidence_validator.py — Evidence 与 validator 数据可信面契约（Phase 4 Commit B）
 
-覆盖（v4 §4 冻结口径）：
+覆盖（travel-domain-design-v5.md §13 冻结口径）：
 - evidence_utils：基线定档 / 缺 verified_at 压帽 / enum-datetime 感知序列化 /
   过期判定（无 expire_at 不判 stale）；
 - 三组装点：候选池（SEED/LIVE）、天气（status×Freshness→LIVE/CACHE、stale

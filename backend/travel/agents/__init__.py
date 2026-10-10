@@ -1,4 +1,4 @@
-"""travel/agents/ — Requirement Agent 及后续业务 Agent 包（v3 §1 / Phase 2）
+"""travel/agents/ — Requirement Agent 及后续业务 Agent 包（travel-domain-design-v5.md §9 / Phase 2）
 
 Phase 2 只落 RequirementAgent：自然语言需求理解 / 槽位抽取 / 缺失检测 /
 TripBrief 生成。合并、指纹、版本与变更追踪在 services/requirement_service.py；

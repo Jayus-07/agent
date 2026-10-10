@@ -1,4 +1,4 @@
-"""tests/travel/test_plan_diff.py — 版本变更记录派生守护测试（v4 §3.2）
+"""tests/travel/test_plan_diff.py — 版本变更记录派生守护测试（backend/travel/core/plan_diff.py）
 
 强断言：diff 输出确定性（同输入同输出）、结构冻结、回滚永不删史。
 """

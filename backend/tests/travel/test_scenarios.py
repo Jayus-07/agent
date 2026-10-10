@@ -1,6 +1,6 @@
 """tests/travel/test_scenarios.py — 验收场景自动化（2026-09-22）
 
-对应 docs/travel-test-scenarios-2026-09-22.md 的 T/W/B/C 四组：
+对应 docs/domains/travel-test-scenarios.md 的 T/W/B/C 四组：
   T 多轮会话（memory checkpointer，跨轮行为）
   W 外部调用失败软降级（mock 外部依赖，验证不阻塞主链）
   B 输入边界（纯函数层，离线）

@@ -1,4 +1,4 @@
-"""travel/core/plan_lifecycle.py — TravelPlan 生命周期状态机（v4 §3.1 冻结）
+"""travel/core/plan_lifecycle.py — TravelPlan 生命周期状态机（backend/travel/core/plan_lifecycle.py 冻结）
 
 生命周期挂在 plan 实体（trip_id）上，与图 stage（单次运行执行位置）正交：
 stage 管本轮执行到哪，plan_status 管这个计划处于什么阶段——「修改第三天
@@ -36,7 +36,7 @@ RESERVED_STATUSES: frozenset[TravelPlanStatus] = frozenset({
     TravelPlanStatus.ARCHIVED,
 })
 
-# 合法迁移表（v4 §3.1 冻结）。键 = 当前态，值 = 允许迁往的目标态集合；
+# 合法迁移表（backend/travel/core/plan_lifecycle.py 冻结）。键 = 当前态，值 = 允许迁往的目标态集合；
 # 自环（COLLECTING_REQUIREMENTS 追问轮）显式列出，不计违规。
 LEGAL_TRANSITIONS: dict[TravelPlanStatus, frozenset[TravelPlanStatus]] = {
     TravelPlanStatus.DRAFT: frozenset({TravelPlanStatus.COLLECTING_REQUIREMENTS}),

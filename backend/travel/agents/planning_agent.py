@@ -1,4 +1,4 @@
-"""travel/agents/planning_agent.py — Planning Agent（v3 §3.1 ④ / Phase 3 Commit B）
+"""travel/agents/planning_agent.py — Planning Agent（travel-domain-design-v5.md §10 ④ / Phase 3 Commit B）
 
 能力边界：must_go 消费下的日程骨架分配（哪天放什么）。无状态：不读写
 graph state、无 LLM、不做时刻排程（归 OptimizationAgent）。
