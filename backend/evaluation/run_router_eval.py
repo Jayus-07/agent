@@ -83,12 +83,15 @@ def main() -> int:
         coarse_ms = (time.perf_counter() - t0) * 1000
         meta = decision.routing_meta or {}
 
-        # RoutingEngine 契约：灰区细路由结果在 selected_tool；规则强信号
-        # 直通（decision_source=rule_override）时 selected_tool 为空、命中
-        # 能力记在 intent。旧 hierarchical 的 fine_top1/tool_route_mode
-        # 已不在 routing_meta（worktree 验收遗留的取数口径，实跑修正）。
-        fine_top1 = str(meta.get("selected_tool") or meta.get("intent") or "")
-        route_mode = str(meta.get("route_mode") or "")
+        # 统一引擎将 top1 和 selection_mode 作为显式证据；route_mode 是
+        # 最终归宿（direct/clarify 等），不能拿它统计 Fast Path。
+        fine_top1 = str(
+            meta.get("fine_top1") or meta.get("selected_tool") or meta.get("intent") or ""
+        )
+        selection_mode = str(
+            meta.get("selection_mode") or meta.get("tool_route_mode") or ""
+        )
+        route_mode = str(meta.get("route_mode") or decision.route_mode or "")
         latencies.append((time.perf_counter() - t0) * 1000)
 
         rows.append({
@@ -102,7 +105,9 @@ def main() -> int:
             "source": str(meta.get("domain_source") or ""),
             "reason_code": str(meta.get("clarification_reason") or ""),
             "fine_top1": fine_top1,
+            "selection_mode": selection_mode,
             "route_mode": route_mode,
+            "final_destination": str(meta.get("final_destination") or route_mode),
             "coarse_ms": round(coarse_ms, 1),
         })
 
@@ -127,7 +132,7 @@ def main() -> int:
     )
     tool_cases = [r for r in rows if r["expected_tool"]]
     tool_hit = sum(1 for r in tool_cases if r["fine_top1"] == r["expected_tool"])
-    fast_cases = [r for r in rows if r["route_mode"] == "fast_path"]
+    fast_cases = [r for r in rows if r["selection_mode"] == "fast_path"]
     fast_precision = (
         sum(1 for r in fast_cases if r["fine_top1"] == r["expected_tool"]) / len(fast_cases)
         if fast_cases else 0.0

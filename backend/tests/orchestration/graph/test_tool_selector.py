@@ -2,7 +2,7 @@
 """tool_selector（FC 工具选择节点）单测——全部 mock LLM，不依赖外部服务。
 
 覆盖:
-  - 门控: fast_path 高置信零 LLM / flag 关闭直通 / 非 direct 模式 / 无候选
+  - 门控: 校验后的 fast_path 零 LLM / 灰区受限消歧 / 非 direct 模式 / 无候选阻断
   - FC 成功: 选定候选 + 填参 + candidates 重排
   - 降级: 越界选择重试后成功 / 重试仍失败澄清 / 参数校验失败重试
   - 无 tool_calls（无匹配）→ 澄清阻断
@@ -53,45 +53,81 @@ class _FakeLLM:
 
 def _state(candidates, question="生成上个月 Amazon US 的销售日报",
            route_mode="direct", **extra):
+    domain = extra.pop("domain", "")
+    selection_mode = extra.pop("selection_mode", "llm_selection")
+    top = candidates[0] if candidates else {}
+    second = candidates[1] if len(candidates) > 1 else {}
+    top_score = float(top.get("score") or 0.0)
+    second_score = float(second.get("score") or 0.0)
+    routing_meta = {
+        "domain": domain,
+        "selection_mode": selection_mode,
+        "tool_route_mode": selection_mode,
+        "fine_top1_score": top_score,
+        "fine_top2": second.get("name", ""),
+        "fine_top2_score": second_score,
+        "fine_margin": top_score - second_score,
+        "score_type": extra.pop("score_type", "vector_similarity_heuristic"),
+        "selected_tool": top.get("name", "") if selection_mode == "fast_path" else "",
+    }
     st = {
         "question": question,
         "route_mode": route_mode,
+        "domain": domain,
+        "tool_route_mode": selection_mode,
+        "selected_tool": extra.pop("selected_tool", routing_meta["selected_tool"]),
         "route_decision": {"execution_mode": "direct", "candidates": candidates,
-                           "confidence": 0.7},
+                           "confidence": 0.7, "routing_meta": routing_meta},
     }
     st.update(extra)
     return st
 
 
-@pytest.fixture(autouse=True)
-def _fc_enabled(monkeypatch):
-    monkeypatch.setattr(ts, "ENABLE_FC_TOOL_SELECTION", True)
+def _valid_fast_path_state():
+    return _state([{
+        "name": "sql.query", "score": 0.9, "risk": "LOW",
+        "fast_path_enabled": True, "permission_ready": True,
+    }], domain="data", selection_mode="fast_path")
 
 
 class TestGating:
     def test_fast_path_skips_llm(self):
-        """sql.query 高置信（≥0.85）直通：零 LLM 调用，TTFT 不受影响"""
+        """已注册、低风险且分数与 margin 达标的 hierarchical Fast Path 直通。"""
         fake = _FakeLLM()
         with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
+            out = tool_selector_node(_state([{
+                "name": "sql.query", "score": 0.91, "risk": "LOW",
+                "fast_path_enabled": True, "permission_ready": True,
+            }], domain="data", selection_mode="fast_path"))
         assert fake.bound_calls == 0
-        assert out["_tool_selection"]["reason"] == "fast_path"
+        assert out["_tool_selection"]["reason"] == "validated_hierarchical_fast_path"
         assert "resolved_params" not in out
 
-    def test_flag_off_passthrough(self, monkeypatch):
-        monkeypatch.setattr(ts, "ENABLE_FC_TOOL_SELECTION", False)
-        fake = _FakeLLM()
-        with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state([{"name": "report.generate", "score": 0.7}]))
-        assert fake.bound_calls == 0
-        assert out["_tool_selection"]["reason"] == "flag_off"
+    def test_fast_path_pins_executor_to_validated_target(self):
+        state = _state([
+            {"name": "sql.query", "score": 0.9, "risk": "LOW",
+             "fast_path_enabled": True, "permission_ready": True},
+            {"name": "data.collect", "score": 0.7, "risk": "HIGH",
+             "fast_path_enabled": False, "permission_ready": True},
+        ], domain="data", selection_mode="fast_path")
+        state["route_decision"]["candidates"].reverse()
+        out = tool_selector_node(state)
+        assert out["_tool_selection"]["capability"] == "sql.query"
+        assert [row["name"] for row in out["route_decision"]["candidates"]] == ["sql.query"]
 
-    def test_fast_path_still_triggers_for_grey_zone(self):
-        """fast set 能力但置信 0.7（灰区）仍走 FC——校验门控是组合条件"""
+    def test_direct_hint_without_selection_mode_is_blocked(self):
+        out = tool_selector_node(_state(
+            [{"name": "sql.query", "score": 0.99}], selection_mode=""))
+        assert out["selection_blocked"] is True
+        assert out["_tool_selection"]["reason"] == "selection_mode_missing_or_invalid"
+
+    def test_gray_zone_uses_fc_even_for_fast_path_capability(self):
+        """Fast Path allowlist 能力的低分候选仍必须经过 FC 灰区消歧。"""
         fake = _FakeLLM([AIMessage(content="", tool_calls=[
             _tc("rag__search", {"question": "退款政策"})])])
         with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state([{"name": "rag.search", "score": 0.7}]))
+            out = tool_selector_node(_state(
+                [{"name": "rag.search", "score": 0.7}], domain="knowledge"))
         assert fake.bound_calls == 1
         assert out["resolved_params"] == {"question": "退款政策"}
 
@@ -106,12 +142,14 @@ class TestGating:
         fake = _FakeLLM()
         with patch.object(ts, "llm", fake):
             out = tool_selector_node(_state([]))
-        assert out["_tool_selection"]["reason"] == "no_candidates"
+        assert out["selection_blocked"] is True
+        assert out["_tool_selection"]["reason"] == "no_valid_candidates"
 
     def test_unregistered_candidates_passthrough(self):
         fake = _FakeLLM()
         with patch.object(ts, "llm", fake):
             out = tool_selector_node(_state([{"name": "ghost.cap", "score": 0.9}]))
+        assert out["selection_blocked"] is True
         assert out["_tool_selection"]["reason"] == "no_valid_candidates"
 
 
@@ -255,38 +293,6 @@ class TestEvents:
         assert self._build({}) == []
 
 
-class TestRollout:
-    """灰度放量：白名单 session 优先，其余按 md5 稳定哈希百分比。"""
-
-    def test_zero_percent_all_passthrough(self, monkeypatch):
-        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ROLLOUT_PERCENT", 0)
-        fake = _FakeLLM()
-        with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state(
-                [{"name": "report.generate", "score": 0.7}], session_id="s1"))
-        assert fake.bound_calls == 0
-        assert out["_tool_selection"]["reason"] == "rollout_skip"
-
-    def test_whitelist_overrides_zero_percent(self, monkeypatch):
-        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ROLLOUT_PERCENT", 0)
-        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ALLOWLIST", ["vip-session"])
-        fake = _FakeLLM([AIMessage(content="", tool_calls=[
-            _tc("report__generate", {"report_type": "daily_sales"})])])
-        with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state(
-                [{"name": "report.generate", "score": 0.7}], session_id="vip-session"))
-        assert out["resolved_params"] == {"report_type": "daily_sales"}
-
-    def test_stable_hash_grouping(self, monkeypatch):
-        """同一 session_id 多次判定结果稳定（md5 无随机盐）"""
-        monkeypatch.setattr(ts, "FC_TOOL_SELECTION_ROLLOUT_PERCENT", 50)
-        results = {ts._in_rollout("stable-session") for _ in range(5)}
-        assert len(results) == 1
-
-    def test_default_100_percent_passes(self):
-        assert ts._in_rollout("any-session") is True
-
-
 class TestDedicatedModel:
     """TOOL_SELECTOR_MODEL 专用轻量模型：配置时优先，空/失败回退全局。"""
 
@@ -370,8 +376,8 @@ class TestMetricsRecording:
         calls = self._recorder(monkeypatch)
         fake = _FakeLLM()
         with patch.object(ts, "llm", fake):
-            tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
-        assert ("passthrough", "fast_path", "") in calls
+            tool_selector_node(_valid_fast_path_state())
+        assert ("passthrough", "validated_hierarchical_fast_path", "sql.query") in calls
 
     def test_no_match_recorded(self, monkeypatch):
         calls = self._recorder(monkeypatch)
@@ -434,9 +440,17 @@ class TestTraceObservability:
         spans, metadata = self._fake_trace(monkeypatch)
         fake = _FakeLLM()
         with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
+            out = tool_selector_node(_valid_fast_path_state())
         assert metadata["tool_selection"]["source"] == "passthrough"
-        assert metadata["tool_selection"]["reason"] == "fast_path"
+        assert metadata["tool_selection"]["reason"] == "validated_hierarchical_fast_path"
+        assert metadata["tool_selection"]["capability"] == "sql.query"
+        routing = metadata["routing_decision"]
+        assert routing["selection_mode"] == "fast_path"
+        assert routing["selection_block_reason"] == ""
+        assert routing["block_reason"] == ""
+        assert routing["selected_tool"] == "sql.query"
+        assert routing["final_destination"] == "skill_executor"
+        assert routing["route_policy_version"] == "routing-p0-1"
 
     def test_llm_failure_span_marked_failed(self, monkeypatch):
         spans, metadata = self._fake_trace(monkeypatch)
@@ -457,8 +471,8 @@ class TestTraceObservability:
         monkeypatch.setattr(tracer_mod, "trace_collector", _NoneCollector())
         fake = _FakeLLM()
         with patch.object(ts, "llm", fake):
-            out = tool_selector_node(_state([{"name": "sql.query", "score": 0.9}]))
-        assert out["_tool_selection"]["reason"] == "fast_path"
+            out = tool_selector_node(_valid_fast_path_state())
+        assert out["_tool_selection"]["reason"] == "validated_hierarchical_fast_path"
 
 
 class TestActiveModelName:

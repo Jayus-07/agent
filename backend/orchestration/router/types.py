@@ -38,9 +38,9 @@ class InteractionMode(str, Enum):
 
 
 class CapabilityScore(BaseModel):
-    """单个 capability 的评分（Router 给的 hint，不是最终决定）。"""
+    """单个 capability 的启发式排序分数，不是概率或最终决定。"""
     name: str = Field(..., description="capability 名，如 'sql.query'")
-    score: float = Field(..., ge=0.0, le=1.0, description="置信度 0-1")
+    score: float = Field(..., ge=0.0, le=1.0, description="路由排序分数；解释见 score_type")
 
 
 class DomainDecisionV2(BaseModel):
@@ -49,6 +49,8 @@ class DomainDecisionV2(BaseModel):
     name: str = Field(..., min_length=1)
     subflow: str | None = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
+    margin: float = 0.0
+    score_type: str = "unknown"
     source: str = "unknown"
     reasoning: str = ""
 
@@ -68,6 +70,15 @@ class CapabilityDecisionV2(BaseModel):
     name: str | None = None
     candidates: list[CapabilityScore] = Field(default_factory=list)
     confidence: float = Field(0.0, ge=0.0, le=1.0)
+    selection_mode: str = ""
+    top1: str = ""
+    top1_score: float = 0.0
+    top2: str = ""
+    top2_score: float = 0.0
+    margin: float = 0.0
+    risk_level: str = "UNKNOWN"
+    score_type: str = "unknown"
+    block_reason: str = ""
     source: str = "unknown"
     reasoning: str = ""
 
@@ -95,6 +106,7 @@ class RouteDecisionV2(BaseModel):
     capability: CapabilityDecisionV2 | None = None
     workflow_name: str | None = None
     confidence: float = Field(0.0, ge=0.0, le=1.0)
+    route_policy_version: str = ""
     reason: str | None = None
 
     @model_validator(mode="after")
@@ -215,7 +227,7 @@ class RouteDecision(BaseModel):
         description="最终路由归宿：direct/workflow/plan/clarify/domain_graph/general_chat",
     )
     candidates: List[CapabilityScore] = Field(default_factory=list)
-    confidence: float = Field(..., ge=0.0, le=1.0, description="整体路由置信度")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="向后兼容的路由分值；含义见 routing_meta.score_type")
     reason: Optional[str] = Field(None, description="路由判断依据")
     workflow_name: Optional[str] = Field(None, description="WORKFLOW 模式时指定 workflow 名")
     # 分层路由（hierarchical routing，2026-09-22）决策上下文。

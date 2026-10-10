@@ -35,14 +35,6 @@ def test_low_top_score_keeps_clarify():
     assert out is None
 
 
-def test_floor_zero_disables_fallback(monkeypatch):
-    import backend.config as config
-
-    monkeypatch.setattr(config, "TOOL_SELECTOR_TOP_CANDIDATE_FLOOR", 0.0)
-    out = _router_top_candidate_fallback(_state(), "llm_failed")
-    assert out is None
-
-
 def test_single_candidate_high_score_does_not_fall_back():
     """单候选 + 高分（无次选）→ 仍不能自动执行。"""
     out = _router_top_candidate_fallback(_state(top=0.9, second=None), "llm_failed")

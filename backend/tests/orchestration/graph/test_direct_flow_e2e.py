@@ -50,15 +50,41 @@ class _FakeFC:
 def _run_direct_flow(monkeypatch, seen):
     decision = RouteDecision(
         execution_mode=ExecutionMode.DIRECT,
+        route_mode="direct",
         candidates=[CapabilityScore(name="report.generate", score=0.72)],
         confidence=0.72,
+        routing_meta={
+            "domain": "report",
+            "domain_source": "route_engine",
+            "selection_mode": "llm_selection",
+            "tool_route_mode": "llm_selection",
+            "candidate_source": "hierarchical",
+            "candidate_tools": ["report.generate"],
+            "candidate_details": [{
+                "name": "report.generate",
+                "score": 0.72,
+                "risk": "LOW",
+                "fast_path_enabled": True,
+                "permission_ready": True,
+            }],
+            "fine_top1": "report.generate",
+            "fine_top1_score": 0.72,
+            "fine_top2": "",
+            "fine_top2_score": 0.0,
+            "fine_margin": 0.72,
+            "score_type": "vector_similarity_heuristic",
+            "risk_level": "LOW",
+            "route_policy_version": "routing-p0-1",
+        },
     )
     monkeypatch.setattr(
         router_mod, "get_routing_engine", lambda: _FakeRouter(decision),
     )
     # try_cs_prefilter 在 router_node 函数体内局部 import，patch 源模块
     import backend.orchestration.graph.cs_prefilter as cs_prefilter_mod
-    monkeypatch.setattr(cs_prefilter_mod, "try_cs_prefilter", lambda q, s: None)
+    monkeypatch.setattr(
+        cs_prefilter_mod, "try_cs_prefilter", lambda q, s, forced=False: None,
+    )
 
     fake_fc = _FakeFC()
     monkeypatch.setattr(ts, "bind_tools_for_model", lambda n, t: None)

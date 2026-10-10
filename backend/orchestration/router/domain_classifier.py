@@ -43,18 +43,22 @@ __all__ = [
 # softmax 数值下溢防护：exp 参数超过该值时按最大值平移（softmax 平移不变性）
 _EXP_OVERFLOW = 700.0
 
-# 域分数经 softmax 概率化（见 EmbeddingPrototypeBackend.predict），
-# 与 Confidence Gate 的 [0,1] 阈值直接对齐。
+# softmax 仅用于把 prototype 相似度转换成排序分数；未做校准评测，不能
+# 解读为真实概率。Confidence Gate 阈值针对该排序分数，不代表统计置信度。
 
 
 class DomainPrediction(BaseModel):
     """粗分类统一输出（结构化，无自然语言长解释）。"""
     domain: str = Field(..., description="粗域：knowledge/data/business/... 或 unknown")
-    confidence: float = Field(0.0, ge=0.0, le=1.0, description="top1 置信度")
+    confidence: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description="兼容字段；表示 top1 路由分数，语义由 score_type 指明，不是校准概率",
+    )
     second_domain: str = Field("", description="次优域（空 = 无有效次优）")
     second_confidence: float = Field(0.0, ge=0.0, le=1.0)
     margin: float = Field(0.0, description="top1 - top2 置信度差")
     source: str = Field("classifier", description="rule | classifier | gate | degraded")
+    score_type: str = Field("unknown", description="rule_strength_heuristic | softmax_rank_score | none")
     reason_code: str = Field(
         "DOMAIN_CONFIDENT",
         description="DOMAIN_CONFIDENT | RULE_OVERRIDE | LOW_CONFIDENCE | LOW_MARGIN | EMBEDDING_UNAVAILABLE",
@@ -62,7 +66,7 @@ class DomainPrediction(BaseModel):
 
 
 class DomainBackend(Protocol):
-    """可插拔分类后端协议：query → (domain, confidence, 全域分数)。
+    """可插拔分类后端协议：query → (domain, top1 路由分数, 全域分数)。
 
     分数 dict 必须覆盖全部声明域（margin 计算需要 top2）。
     """
@@ -93,8 +97,8 @@ class EmbeddingPrototypeBackend:
 
     启动后首次调用时：把每个域的 description + examples 各 embed 一次，
     逐条归一化后取均值再归一化 = 域心；查询时 query embed 一次，与全部
-    域心算余弦，再经 softmax 温度化为校准概率（top1 概率与概率差直接
-    对齐 Confidence Gate 阈值，不受 embedding 模型余弦量纲漂移影响）。
+    域心算余弦，再经 softmax 温度化为排序分数。该分数未经统计校准，
+    不作为概率解释；top1 分数与分差仅用于内部路由门槛。
     域数量 ~9、维度 1024 → 内存运算为微秒级，无额外基础设施。
 
     未来替换为 supervised classifier 时，实现同一 DomainBackend 协议即可。
@@ -166,7 +170,7 @@ class EmbeddingPrototypeBackend:
             domain: sum(a * b for a, b in zip(centroid, query_vec))
             for domain, centroid in centroids.items()
         }
-        # softmax 温度化：余弦量纲 → 校准概率（对齐 Confidence Gate 阈值）。
+        # softmax 温度化：余弦相似度 → 内部排序分数（不是校准概率）。
         # 平移不变性：减去最大余弦防 exp 溢出。
         max_cos = max(cosines.values())
         exp_scores = {
@@ -215,6 +219,7 @@ class CoarseIntentClassifier:
                     domain=domain, confidence=round(conf, 2),
                     second_domain="", second_confidence=0.0, margin=conf,
                     source="rule", reason_code="RULE_OVERRIDE",
+                score_type="rule_strength_heuristic",
                 )
 
             domain, confidence, all_scores = self._ensure_backend().predict(query)
@@ -244,6 +249,7 @@ class CoarseIntentClassifier:
                 second_domain=top2_domain, second_confidence=round(top2, 3),
                 margin=round(margin, 3),
                 source="gate", reason_code="LOW_CONFIDENCE",
+                score_type="softmax_rank_score",
             )
         if margin < COARSE_DOMAIN_MIN_MARGIN:
             return DomainPrediction(
@@ -251,12 +257,14 @@ class CoarseIntentClassifier:
                 second_domain=top2_domain, second_confidence=round(top2, 3),
                 margin=round(margin, 3),
                 source="gate", reason_code="LOW_MARGIN",
+                score_type="softmax_rank_score",
             )
         return DomainPrediction(
             domain=top1_domain, confidence=round(top1, 3),
             second_domain=top2_domain, second_confidence=round(top2, 3),
             margin=round(margin, 3),
             source="classifier", reason_code="DOMAIN_CONFIDENT",
+            score_type="softmax_rank_score",
         )
 
 

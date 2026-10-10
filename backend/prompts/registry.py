@@ -238,7 +238,7 @@ _register(PromptSpec(
     name="LLM 路由 Prompt",
     category="router",
     risk_level="high",
-    variables=(R("query"),),
+    variables=(R("query"), R("allowed_candidates")),
     default_file="router_llm.yaml",
 ))
 

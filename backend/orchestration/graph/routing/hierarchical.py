@@ -187,8 +187,23 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                     ),
                 }
         except Exception as e:
-            logger.warning(f"[RouterNode] 路由澄清构造失败，继续走统一 plan 支线: {e}")
-        return None  # 防循环守卫不放行 / 构造失败 → 照常走 plan 支线
+            logger.warning(f"[RouterNode] 路由澄清内容构造失败，保持澄清阻断: {e}")
+        # 澄清防循环或文案构造失败都不能把无目标决策放回 Planner；
+        # route_mode=clarify 仍走 Reporter，不会调用任何业务 Tool。
+        return {
+            **state,
+            **route_update_for_mode(
+                "clarify",
+                extra={
+                    "route_decision": None,
+                    **fields,
+                    "need_clarification": True,
+                    "clarification_reason": (
+                        fields.get("clarification_reason") or "clarification_unavailable"
+                    ),
+                },
+            ),
+        }
 
     # ── 工具域 / plan 拍板：回写路由上下文（下一轮延续判定数据源）──
     if action in ("tool_route", "plan"):
