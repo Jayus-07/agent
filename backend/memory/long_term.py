@@ -69,6 +69,8 @@ class MemoryFact:
     # 入口统一 normalize+validate（非法 key/value 双双置 NULL 走 unkeyed 路径）
     memory_key: str | None = None
     structured_value: str | None = None
+    # 检索结果携带稳定 ID，Agent 才能发起确定性本人删除。
+    memory_id: str | None = None
 
 
 def clamp_confidence(value, default: float = MEMORY_INFERRED_DEFAULT_CONFIDENCE) -> float:
@@ -205,12 +207,20 @@ class LongTermMemory:
 
     # ── Retrieval ──
     async def retrieve(self, query: str, user_id: str = "default", k: int = 20,
-                       tenant_id: str = "") -> list[MemoryFact]:
+                       tenant_id: str = "", domain: str | None = None) -> list[MemoryFact]:
         emb = self.embedding.embed_query(query)
         rows = await self._repo.search_hybrid(emb, user_id, top_k=k,
-                                              tenant_id=normalize_tenant_id(tenant_id))
-        return [MemoryFact(fact_type=r.memory_type, content=r.content, session_id=r.session_id,
-                           created_at=str(r.created_at)) for r, _sim in rows]
+                                              tenant_id=normalize_tenant_id(tenant_id),
+                                              domain=domain)
+        return [MemoryFact(
+            fact_type=r.memory_type,
+            content=r.content,
+            session_id=r.session_id,
+            created_at=str(r.created_at),
+            memory_key=r.memory_key,
+            structured_value=r.structured_value,
+            memory_id=str(r.id),
+        ) for r, _sim in rows]
 
     async def store_with_resolution(self, fact: MemoryFact, user_id: str,
                                     session_id: str, tenant_id: str = "") -> StoreResult:

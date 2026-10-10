@@ -14,9 +14,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useChatStore } from '@/store/chat'
 import type { SessionMeta } from '@/api/memory'
-import { deleteMemorySession, renameMemorySession } from '@/api/memory'
+import {
+  deleteMemorySession,
+  listSessionsPage,
+  renameMemorySession,
+  SESSION_PAGE_SIZE,
+} from '@/api/memory'
 import { useToast } from '@/components/shared/Toast'
-import { getSessionsCached, invalidateSessionsCache } from '@/lib/sessions-cache'
+import { getSessionPageCached, invalidateSessionsCache } from '@/lib/sessions-cache'
 import { BUCKET_LABELS, filterByKeyword, groupByTime } from '@/lib/session-groups'
 import SessionRow from './SessionRow'
 
@@ -29,9 +34,13 @@ interface Props {
   onRefreshingChange?: (refreshing: boolean) => void
   /** 空态里的引导动作（通常是「新建任务」） */
   onEmptyAction?: () => void
+  /** 移动端侧栏选中会话后关闭侧栏 */
+  onSessionSelect?: () => void
 }
 
-export default function SessionList({ keyword = '', refreshKey = 0, onRefreshingChange, onEmptyAction }: Props) {
+export default function SessionList({
+  keyword = '', refreshKey = 0, onRefreshingChange, onEmptyAction, onSessionSelect,
+}: Props) {
   const historyError = useChatStore((s) => s.historyError)
   const sessionsVersion = useChatStore((s) => s.sessionsVersion)
   const currentId = useChatStore((s) => s.currentId)
@@ -45,6 +54,13 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
+  const sessionsRef = useRef<SessionMeta[]>([])
+  const loadingMoreRef = useRef(false)
+  const requestVersionRef = useRef(0)
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null)
 
   // 乐观插入：新会话要等后端 end_turn 持久化 + 1.2s 后刷新才会出现在接口列表里，
   // 期间发送第一条消息时侧边栏仍是"暂无任务记录"。这里把 store 里当前会话
@@ -73,22 +89,70 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
   useEffect(() => { refreshingCbRef.current = onRefreshingChange }, [onRefreshingChange])
 
   const refresh = useCallback(async (force: boolean) => {
+    const requestVersion = ++requestVersionRef.current
+    loadingMoreRef.current = false
+    setLoadingMore(false)
+    setLoadMoreError(null)
     if (force) {
       setRefreshing(true)
       refreshingCbRef.current?.(true)
     }
     try {
-      const data = await getSessionsCached(force)
-      setSessions(data)
+      const data = await getSessionPageCached(force)
+      if (requestVersion !== requestVersionRef.current) return
+      sessionsRef.current = data.sessions
+      setSessions(data.sessions)
+      setHasMore(data.has_more)
       setLoadError(null)
     } catch (e: unknown) {
+      if (requestVersion !== requestVersionRef.current) return
       setLoadError(e instanceof Error ? e.message : '加载历史失败')
     } finally {
-      setLoading(false)
-      setRefreshing(false)
-      refreshingCbRef.current?.(false)
+      if (requestVersion === requestVersionRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+        refreshingCbRef.current?.(false)
+      }
     }
   }, [])
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || loadingMoreRef.current) return
+    const currentPage = sessionsRef.current
+    const cursor = currentPage[currentPage.length - 1]
+    if (!cursor?.updated_at) {
+      setHasMore(false)
+      return
+    }
+
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    setLoadMoreError(null)
+    const requestVersion = requestVersionRef.current
+    try {
+      const page = await listSessionsPage(
+        SESSION_PAGE_SIZE, cursor.updated_at, cursor.session_id,
+      )
+      if (requestVersion !== requestVersionRef.current) return
+      const knownIds = new Set(currentPage.map((session) => session.session_id))
+      const nextSessions = [
+        ...currentPage,
+        ...page.sessions.filter((session) => !knownIds.has(session.session_id)),
+      ]
+      sessionsRef.current = nextSessions
+      setSessions(nextSessions)
+      setHasMore(page.has_more)
+    } catch (e: unknown) {
+      if (requestVersion === requestVersionRef.current) {
+        setLoadMoreError(e instanceof Error ? e.message : '加载更多历史失败')
+      }
+    } finally {
+      if (requestVersion === requestVersionRef.current) {
+        loadingMoreRef.current = false
+        setLoadingMore(false)
+      }
+    }
+  }, [hasMore])
 
   // 首次挂载：走缓存（10s TTL / 并发 dedup）
   useEffect(() => { refresh(false) }, [refresh])
@@ -107,6 +171,23 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
     refresh(true)
   }, [refreshKey, refresh])
 
+  // 历史区滚动到底部时继续读取下一页；搜索时自动向更早的会话查找。
+  useEffect(() => {
+    const target = loadMoreSentinelRef.current
+    if (
+      !target || typeof IntersectionObserver === 'undefined'
+      || !hasMore || loading || loadingMore || loadMoreError
+    ) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore()
+      },
+      { rootMargin: '80px' },
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [hasMore, loading, loadingMore, loadMoreError, loadMore])
+
   const activeRowRef = useRef<HTMLButtonElement | null>(null)
 
   // 当前会话滚动到可视区域
@@ -115,8 +196,8 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
   }, [currentId, sessions])
 
   const handleSelect = (sid: string) => {
-    if (sid === currentId) return
-    router.push(`/agent?session=${sid}`)
+    if (sid !== currentId) router.push(`/agent?session=${sid}`)
+    onSessionSelect?.()
   }
 
   const handleRename = async (sid: string, title: string) => {
@@ -151,6 +232,22 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
   const filtered = useMemo(() => filterByKeyword(mergedSessions, keyword), [mergedSessions, keyword])
   const groups = useMemo(() => groupByTime(filtered), [filtered])
 
+  useEffect(() => {
+    if (keyword && !loading && !loadingMore && hasMore && filtered.length === 0 && !loadMoreError) {
+      void loadMore()
+    }
+  }, [keyword, loading, loadingMore, hasMore, filtered.length, loadMoreError, loadMore])
+
+  const loadMoreFooter = hasMore ? (
+    <div ref={loadMoreSentinelRef} className="px-2 py-2 text-center text-[10px] text-text-muted">
+      {loadingMore ? '正在加载更早的会话…' : loadMoreError ? (
+        <button onClick={() => void loadMore()} className="text-accent hover:underline">
+          加载失败，点击重试
+        </button>
+      ) : keyword && filtered.length === 0 ? '正在查找更早的会话…' : '向下滚动加载更多'}
+    </div>
+  ) : null
+
   if (loading) {
     return <p className="text-xs text-text-muted px-2 py-6 text-center">加载中...</p>
   }
@@ -176,6 +273,7 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
             新建第一个任务
           </button>
         )}
+        {loadMoreFooter}
       </div>
     )
   }
@@ -212,6 +310,7 @@ export default function SessionList({ keyword = '', refreshKey = 0, onRefreshing
       {historyError && (
         <p className="text-[10px] text-amber-600 px-2 py-1 mt-2">提示：{historyError}</p>
       )}
+      {loadMoreFooter}
     </div>
   )
 }

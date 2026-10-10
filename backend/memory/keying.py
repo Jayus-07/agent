@@ -28,6 +28,18 @@ _MEMORY_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){0,3}$")
 MEMORY_KEY_MAX_LEN = 128
 MEMORY_VALUE_MAX_LEN = 256
 
+_DOMAIN_ALIASES = {
+    "travel": "travel", "trip": "travel", "hotel": "travel", "tourism": "travel",
+    "customer_service": "customer_service", "support": "customer_service",
+    "ticket": "customer_service", "rag": "knowledge", "knowledge": "knowledge",
+    "document": "knowledge", "sql": "sql", "data": "sql",
+    "business": "business", "product": "business",
+    "response": "general", "general": "general",
+}
+MEMORY_DOMAINS = frozenset({
+    "travel", "customer_service", "knowledge", "sql", "business", "general",
+})
+
 
 def normalize_tenant_id(raw: str | None) -> str:
     """租户归一：空/未声明 → default；非法字符 → default（不 fail-open）。
@@ -78,6 +90,24 @@ def normalize_memory_value(raw: str | None) -> str | None:
     return value
 
 
+def memory_scope_domain(memory_key: str | None) -> tuple[str, str]:
+    """只按代码白名单将稳定 key 映射到用户全局或单一业务域。"""
+    key = (memory_key or "").strip().lower()
+    if key.startswith("response."):
+        return "user_global", "general"
+    root = key.split(".", 1)[0]
+    return "user_domain", _DOMAIN_ALIASES.get(root, "general")
+
+
+def normalize_memory_domain(raw: str | None) -> str | None:
+    """规范可信路由域；未知/缺失返回 None，调用方仅读全局与通用记忆。"""
+    value = (raw or "").strip().lower()
+    value = {"cs": "customer_service", "main": "general", "agent": "general"}.get(
+        value, value,
+    )
+    return value if value in MEMORY_DOMAINS else None
+
+
 class StoreOutcome(str, Enum):
     """写入裁决结果（§31：禁止再用 True/False 表达所有行为）。"""
 
@@ -86,6 +116,8 @@ class StoreOutcome(str, Enum):
     REAFFIRMED = "REAFFIRMED"
     SUPERSEDED = "SUPERSEDED"
     CONFLICT_BLOCKED_EXPLICIT = "CONFLICT_BLOCKED_EXPLICIT"
+    BLOCKED_STALE_EVENT = "BLOCKED_STALE_EVENT"
+    BLOCKED_BY_DELETE = "BLOCKED_BY_DELETE"
     REJECTED = "REJECTED"
 
 

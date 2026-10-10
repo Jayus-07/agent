@@ -10,6 +10,7 @@ Fixes:
 import asyncio
 import atexit
 import threading
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from backend.memory.service import MemoryService
 from backend.memory.short_term import ShortTermBuffer
 from backend.shared.logger import logger
@@ -66,9 +67,20 @@ class MemoryManager:
         if loop is None or not loop.is_running():
             self._degraded("memory_loop_not_running", "memory loop 未运行，本次记忆操作被跳过")
             return None
+        future = None
         try:
             future = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
             return future.result(timeout=_MEMORY_TIMEOUT)
+        except FutureTimeoutError:
+            # 非关键记忆查询超过预算后立即请求取消，不能让它在后台继续占用
+            # DB 连接、embedding 配额和 memory event loop。
+            if future is not None:
+                future.cancel()
+            self._degraded(
+                "memory_op_timeout",
+                f"memory 操作超过 {_MEMORY_TIMEOUT}s，已请求取消后台协程",
+            )
+            return None
         except Exception as e:
             self._degraded("memory_op_failed", f"memory 操作失败: {e}")
             return None
@@ -106,10 +118,11 @@ class MemoryManager:
             logger.debug("[P1-10] async engine 关闭失败（进程退出路径）", exc_info=True)
 
     def start_session(self, session_id: str, question: str, user_id: str = "default",
-                      tenant_id: str = "") -> ShortTermBuffer:
+                      tenant_id: str = "", domain: str | None = None) -> ShortTermBuffer:
         # question 透传给 L3：长期记忆检索用当前问题做语义 query（此前误用 session_id）
         result = self._run(lambda: self._service.start_session(
-            session_id, user_id, query=question, tenant_id=tenant_id))
+            session_id, user_id, query=question, tenant_id=tenant_id,
+            domain=domain))
         if result is None:
             return ShortTermBuffer()
         return result

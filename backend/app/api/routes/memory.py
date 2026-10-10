@@ -4,6 +4,7 @@ api/routes/memory.py — 会话记忆 API
 端点:
   GET    /memory/sessions              — 列出所有会话
   GET    /memory/sessions/{id}         — 获取会话详情（消息列表）
+  GET    /memory/sessions/{id}/extractions — 查询会话 L3 提取任务状态
   GET    /memory/sessions/{id}/context — 获取 Agent 工作上下文
   DELETE /memory/sessions/{id}         — 删除会话
   PATCH  /memory/sessions/{id}         — 重命名会话
@@ -31,7 +32,7 @@ _memory_service = None
 
 # MemoryService 用 {"error": "会话不存在"} 表达业务性缺失，其余 error 都来自
 # except 分支（DB 连不上、SQL 失败等基础设施故障），两者 HTTP 语义不同
-_NOT_FOUND_MESSAGE = "会话不存在"
+_NOT_FOUND_MESSAGES = {"会话不存在", "记忆不存在"}
 
 
 def _get_service():
@@ -53,7 +54,7 @@ def _raise_for_error(result: dict) -> dict:
     error = result.get("error")
     if not error:
         return result
-    if error == _NOT_FOUND_MESSAGE:
+    if error in _NOT_FOUND_MESSAGES:
         raise HTTPException(status_code=404, detail=error)
     raise HTTPException(status_code=503, detail=f"记忆库不可用: {error}")
 
@@ -62,8 +63,8 @@ class RenameRequest(BaseModel):
     title: str
 
 
-def _require_user(request: Request) -> str:
-    """记忆按登录用户隔离：解析身份，guest（无网关注入身份头）直接 401。
+def _require_identity(request: Request):
+    """记忆按登录身份隔离：返回可信用户/租户身份，guest 直接 401。
 
     注意必须在 memory_manager.run_tool 之外先解析——Request 头读取
     在线程池 lambda 里也可用，但统一在路由入口判定语义更清晰。
@@ -71,33 +72,24 @@ def _require_user(request: Request) -> str:
     ident = resolve_identity(request)
     if not ident.authenticated:
         raise HTTPException(status_code=401, detail="未认证：记忆库按登录用户隔离")
-    return ident.user_id
+    return ident
 
 
-@router.get("/profile")
-def list_profile(request: Request, limit: int = 50):
-    """列出当前登录用户的画像记忆（长期记忆四类，只读，仅本人）。
-
-    设置页「用户画像」数据源：memory_records 的 active 行
-    （user_fact / preference / decision / knowledge），按最近访问排序。
-    与 /sessions（会话记忆）互补；错误语义同 _raise_for_error（故障 503）。
-    """
-    user_id = _require_user(request)
-    return _raise_for_error(
-        memory_manager.run_tool(
-            lambda: _get_service().list_profile_memories(user_id=user_id, limit=limit)
-        )
-    )
+def _require_user(request: Request) -> str:
+    """兼容仅需要用户 ID 的会话端点。"""
+    return _require_identity(request).user_id
 
 
 @router.get("/sessions")
 def list_sessions(request: Request,
-                  limit: int = 50, before: str | None = None):
+                  limit: int = 50, before: str | None = None,
+                  before_session_id: str | None = None):
     """列出当前登录用户的所有持久化会话（支持游标分页）。
 
     Query:
       limit: 单次返回上限（默认 50，最大 200）
-      before: ISO timestamp 游标；只返回 updated_at < before 的会话
+      before: ISO timestamp 游标；与 before_session_id 一起定位下一页起点
+      before_session_id: 时间相同时用于稳定排序的会话 ID
 
     注意必须经 memory_manager 后台 loop 桥接执行：DB engine 在该 loop
     上初始化后即绑死（asyncpg 连接不可跨 loop），路由若在主 loop 直接
@@ -107,7 +99,10 @@ def list_sessions(request: Request,
     user_id = _require_user(request)
     return _raise_for_error(
         memory_manager.run_tool(
-            lambda: _get_service().list_sessions(user_id=user_id, limit=limit, before=before)
+            lambda: _get_service().list_sessions(
+                user_id=user_id, limit=limit, before=before,
+                before_session_id=before_session_id,
+            )
         )
     )
 
@@ -120,12 +115,67 @@ def get_profile(request: Request, limit: int = 50):
     decision/knowledge），不做语义召回、不更新 access_count。前端分组
     按 memory_type 自行渲染。
     """
-    user_id = _require_user(request)
+    ident = _require_identity(request)
     return _raise_for_error(
         memory_manager.run_tool(
-            lambda: _get_service().get_profile(user_id=user_id, limit=limit)
+            lambda: _get_service().get_profile(
+                user_id=ident.user_id, tenant_id=ident.tenant_id, limit=limit,
+            )
         )
     )
+
+
+@router.get("/profile/pending")
+def get_pending_profile(request: Request, limit: int = 100):
+    """列出当前用户需确认的自动推断候选；候选不会进入有效画像。"""
+    ident = _require_identity(request)
+    return _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().get_pending_profile(
+                user_id=ident.user_id, tenant_id=ident.tenant_id, limit=limit,
+            )
+        )
+    )
+
+
+@router.post("/profile/{memory_id}/verify")
+def verify_profile_memory(memory_id: str, request: Request):
+    """用户明确确认本人候选记忆；仅服务端身份可以提升 verification 状态。"""
+    ident = _require_identity(request)
+    result = _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().verify_profile_memory(
+                user_id=ident.user_id,
+                tenant_id=ident.tenant_id,
+                memory_id=memory_id,
+            )
+        )
+    )
+    if not result.get("ok"):
+        if result.get("error") == "记忆不存在":
+            raise HTTPException(status_code=404, detail="记忆不存在")
+        raise HTTPException(status_code=503, detail="记忆库不可用")
+    return result
+
+
+@router.delete("/profile/{memory_id}")
+def delete_profile_memory(memory_id: str, request: Request):
+    """删除本人画像记忆；身份和租户来自验签上下文，不能由请求参数自报。"""
+    ident = _require_identity(request)
+    result = _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().delete_profile_memory(
+                user_id=ident.user_id,
+                tenant_id=ident.tenant_id,
+                memory_id=memory_id,
+            )
+        )
+    )
+    if not result.get("ok"):
+        if result.get("error") == "记忆不存在":
+            raise HTTPException(status_code=404, detail="记忆不存在")
+        raise HTTPException(status_code=503, detail="记忆库不可用")
+    return result
 
 
 @router.get("/sessions/{session_id}")
@@ -146,6 +196,22 @@ def get_session_context(session_id: str, request: Request):
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().get_session_context(session_id, user_id=user_id)
+        )
+    )
+
+
+@router.get("/sessions/{session_id}/extractions")
+def list_extraction_jobs(session_id: str, request: Request, limit: int = 100):
+    """查询本人会话的长期记忆抽取状态；身份域来自网关验签上下文。"""
+    ident = _require_identity(request)
+    return _raise_for_error(
+        memory_manager.run_tool(
+            lambda: _get_service().list_extraction_jobs(
+                session_id=session_id,
+                user_id=ident.user_id,
+                tenant_id=ident.tenant_id,
+                limit=limit,
+            )
         )
     )
 
