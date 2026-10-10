@@ -125,6 +125,11 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-mock>=3.12",
     "pytest-xdist>=3.0",  # pytest.ini 推荐的 -n 4 并发全量跑依赖此插件（2026-10-08 补声明，此前从未声明过）
+    # 用例级硬超时：替换 artifacts/final_rc/BASELINE_RUNBOOK.md 记录的"人工看护"
+    # 做法（vpnkit→PG 半路挂死时 psycopg 握手会无限等待，此前只能靠观察日志
+    # 停滞来人工判断挂死并杀进程）。用法与取值依据见 pytest.ini 内注释：
+    #   pytest ... --timeout=300 --timeout-method=thread
+    "pytest-timeout>=2.3",
     "reportlab>=4.0",  # backend/scripts/generate_test_docs.py 生成测试 PDF
 ]
 

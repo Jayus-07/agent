@@ -43,7 +43,7 @@ PROMPT_RUNTIME_HEARTBEAT_INTERVAL = float(
     os.getenv("PROMPT_RUNTIME_HEARTBEAT_INTERVAL", "10")
 )
 
-# ── 熔断状态跨进程共享（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）──
+# ── 熔断状态跨进程共享（审查 #13 / docs/architecture/domain-service-map.md#下游熔断）──
 # 开 = fail 计数与 OPEN 广播走 Redis（多 worker/多副本下阈值不再放大 N 倍）；
 # Redis 不可用时自动退回进程内状态（方向安全：等于现状行为）。
 # 走缓存实例（REDIS_URL，allkeys-lru）：键被驱逐 = 短暂退回本地计数，可接受。

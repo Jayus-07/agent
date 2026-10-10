@@ -1,5 +1,5 @@
 # APISIX 数据面配置（standalone：配置来源 = 同目录 apisix.yaml，无 etcd/控制面）
-# 部署形态见 docs/gateway-apisix-migration-plan.md §8（standalone 多副本 + 五步发布流程）
+# 身份头约束见 docs/contracts/identity-header-protocol.md；部署边界见 docs/architecture/system-overview.md。
 
 deployment:
   role: data_plane

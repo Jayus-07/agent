@@ -325,3 +325,70 @@
 - 前端（集成树文件与主工作区逐字节一致，复用主工作区已装依赖执行）：`vitest run traceSpanTree.test.ts StepTimeline.test.tsx` → **11 passed**（2 + 9）。`tsc --noEmit` → **tsc_exit=0**。
 - 未验证项（明确记录，不称通过）：19 个错误与 2 个采集错误均因本机无法连接 PostgreSQL（`fe_sendauth: no password supplied`），这些用例**未执行到断言**；跨租户读取的**真实数据库行级过滤**未做端到端验证（本轮的租户过滤在 Python 层与 store 的 SQL 参数上验证，未连真实 PG 表）。数据库未修改，未执行迁移。
 - 未执行：全量回归、数据库迁移或写入、修改主工作区或任何来源 worktree、reset --hard / clean -fd / 强推 / 删除分支或 worktree / 丢弃 stash。
+
+## 2026-10-10：基础设施主题——差异逐项审阅与决策
+
+- Git 刷新：HEAD 实测 `b3813122a6ce630d3cb8c1f1d1ad4f0e2942f0c0`（仅改 PROGRESS.md，1 文件 +1/-1）。`b381312` 的上游 `b5ccadd` 为管理端/API 主题；Trace 后端授权、租户过滤与 APISIX 角色门均已在本轮开始前复核在册并保持完好。
+- 来源：主工作区 `D:\Program Files\workplace\agent`（分支 `codex/memory-system-profile-upgrade`，HEAD `d177694`）的**未提交**基础设施改动，共 11 项：`.dockerignore`、`Dockerfile`、`apisix/apisix.yaml`、`apisix/config.yaml`、`apisix-test/config.yaml`、`apisix/plugins/gateway-auth.lua`、`backend/config/redis.py`、`frontend/Dockerfile`、`frontend-admin/Dockerfile`、`frontend-cs/Dockerfile`、`pyproject.toml`、`pytest.ini`。救援快照为纯文件副本（无 `.git`），仅作保全证据，实际差异以主工作区为权威来源。
+
+### 逐项核实结论（含风险 1–5 重新核实）
+
+- **风险2（DEBIAN_MIRROR 不一致）→ 集成树已领先，来源反而是回退。** 集成树 `Dockerfile` 已有独立的 `ARG RUNTIME_DEBIAN_MIRROR`（第 81 行，注释明确「与 builder 分开指定运行时镜像，切换运行时 apt 源时仍可复用 builder 依赖缓存」），`docker-compose.yml` 也有 `RUNTIME_DEBIAN_MIRROR: ${RUNTIME_DEBIAN_MIRROR:-${DEBIAN_MIRROR:-}}` 的回退链；该设计由已提交的 `2838b46` 引入。来源主工作区**没有** `RUNTIME_DEBIAN_MIRROR`，其 builder/runtime 两段都用 `DEBIAN_MIRROR`。**决策：runtime 段一律不取来源版本**，保留集成树的分离设计。
+- **风险3（旧 APISIX 覆盖新规则）→ 已核实来源不含旧配置，但确实会丢新规则。** `gateway-auth.lua` 全文件逐行 diff 仅 7 行差异：来源侧只有一行注释路径更新；集成树侧则是该注释 + **管理端主题刚加入的 `/api/observability/traces` admin 硬闸**。集成树与来源**都**保留 `ROLE_GATE_EXEMPT_PATTERNS` 中的 `^/api/cs/tickets$` 与 `^/api/cs/tickets/[^/]+$`。**决策：不整文件覆盖 `gateway-auth.lua`**；仅逐块取注释更新，绝不动集成树已有的 traces 闸与 cs/tickets 规则。
+- **风险4（APISIX/Redis 差异是否仅注释）→ 确认为纯注释。** `apisix/apisix.yaml`（5 行差异）、`apisix/config.yaml`（1 行）、`apisix-test/config.yaml`（1 行）全部是文档路径引用更新，无路由/插件/超时/端口等行为变化；`backend/config/redis.py` 仅注释中的文档路径由已删除的 `docs/2026-09-21-熔断状态Redis共享设计.md` 改为 `docs/architecture/domain-service-map.md#下游熔断`。三者引用的新路径在集成树中**均存在**。
+- **风险1（cache mount 与权限）→ 已验证兼容。** 所有新增 `--mount=type=cache` 都出现在**任何 `USER` 指令之前**（根 `Dockerfile` 唯一 `USER appuser` 在第 108 行，cache mount 在第 47 行；三个前端 Dockerfile 根本没有 `USER`），因此安装步骤以 root 执行，与镜像运行时非 root 用户不冲突。根 Dockerfile 移除 builder 段 `PIP_NO_CACHE_DIR=1` 后由 BuildKit 缓存承接，**runtime 段的 `PIP_NO_CACHE_DIR=1`（第 74 行）保留**，不影响镜像体积口径。前端 npm cache id 统一为 `agent-platform-npm`，pip 为 `agent-platform-pip`，`sharing=locked` 防并发写坏。
+- **风险5（pytest-timeout 依赖策略）→ 已核对，属新增声明且不触发升级。** 仓库**没有** `requirements*.txt`/`uv.lock`/`poetry.lock`，唯一约束文件是 `constraints/torch-cpu.txt`（仅 1 行，管 torch，与 pytest 无关），因此新增 dev 依赖**不会改动任何锁文件或触发无关升级**。`pytest.ini` 的对应改动是**纯注释**：作者显式说明为何不写进 `addopts`（缺插件会 `unrecognized arguments` 起不来）或 ini 键（产生 Unknown config option 噪声且当时离线无法验证键名），只登记依赖与 CLI 用法。集成树 `pytest.ini` 当前未引用 `--timeout`，故插件未安装也不会失败。
+
+### 实际合入（最小范围）与排除
+
+**合入的 11 项改动**（全部经逐块整合，非整文件覆盖）：
+
+| 文件 | 改动 | 与来源一致性 |
+| --- | --- | --- |
+| `Dockerfile` | builder 段移除 `PIP_NO_CACHE_DIR=1`，加 `--mount=type=cache,id=agent-platform-pip,target=/root/.cache/pip,sharing=locked` | 仅 builder 段；**runtime 段保留集成树的 `RUNTIME_DEBIAN_MIRROR`** |
+| `frontend/Dockerfile`、`frontend-admin/Dockerfile`、`frontend-cs/Dockerfile` | 加 `--mount=type=cache,id=agent-platform-npm,target=/root/.npm` | 规范化行尾后一致 |
+| `.dockerignore` | 加根 `data/` 与三个前端的 `node_modules/.next/.next-*` | 一致 |
+| `apisix/apisix.yaml`、`apisix/config.yaml`、`apisix-test/config.yaml` | **仅注释**（文档路径） | 一致 |
+| `apisix/plugins/gateway-auth.lua` | **仅第 1 行注释** | 其余保留集成树 traces 闸 |
+| `backend/config/redis.py` | **仅注释**（文档路径） | 一致 |
+| `pyproject.toml` | 新增 dev 依赖 `pytest-timeout>=2.3` | 一致 |
+| `pytest.ini` | **仅注释**（登记依赖与 CLI 用法） | 一致 |
+
+**明确排除项**：
+
+- **`Dockerfile` runtime 段的来源版本不予采纳**：来源用 `DEBIAN_MIRROR` 且无 `RUNTIME_DEBIAN_MIRROR`，集成树已有更优的分离设计（`2838b46` 引入）。采纳来源 = 功能回退。
+- **`gateway-auth.lua` 不整文件覆盖**：来源侧仅一行注释更新，整文件覆盖会删除集成树 `b5ccadd` 刚加入的 `/api/observability/traces` admin 硬闸（风险 3 的具体形态）。已改为逐块只取注释。
+- **Docker compose 文件未改**：来源 `docker-compose.yml` 无未提交改动；集成树版本已含正确的 `RUNTIME_DEBIAN_MIRROR` 回退链。
+- 文档删除项（`docs/gateway-apisix-*.md`、熔断 Redis 设计稿）属文档主题范畴，本主题不动。
+
+### 保护验证（管理端/API 主题成果未被破坏）
+
+- APISIX traces 闸仍在：`apisix/plugins/gateway-auth.lua:273` `["/api/observability/traces"] = { read = "admin", write = "admin" }`。
+- `cs/tickets` 豁免规则仍在：第 294/295 行 `^/api/cs/tickets$`、`^/api/cs/tickets/[^/]+$`。
+- 后端 Trace 授权仍在：`observability.py::_require_trace_reader`（第 40 行）与端点 `Depends`（第 128 行）。
+- 租户过滤仍在：`_trace_authz.py` 的 `CROSS_TENANT_ROLES`（第 32 行）与 `trace_visible_to`（第 58 行）。
+- 回归实测：`python -m pytest backend/tests/api/test_observability_trace_authz.py -q` → **14 passed**（19.00s），基础设施改动未影响 Trace 授权。
+
+### 定向验证命令与结果（全部实际执行）
+
+| 验证 | 命令 | 结果 |
+| --- | --- | --- |
+| compose 解析 | `docker compose -f docker-compose.yml config --quiet`（临时 `.env` 占位，验证后删除） | **exit 0** |
+| 镜像参数回退链 | 未设 → `DEBIAN_MIRROR`/`RUNTIME_DEBIAN_MIRROR` 均 `""`；设 `DEBIAN_MIRROR=mirrors.A.test` → RUNTIME **继承 A**；再设 `RUNTIME_DEBIAN_MIRROR=mirrors.B.test` → RUNTIME **为 B** | **回退链符合设计** |
+| 根 Dockerfile 语法 | `docker build --check -f Dockerfile .` | **Check complete, no warnings found**（exit 0） |
+| 三个前端 Dockerfile | `docker build --check -f <d>/Dockerfile <d>` | **三者均 exit 0，无警告** |
+| Lua 语法 | `docker run --rm -v <plugins>:/scripts:ro alpine:3.20 sh -c "apk add --no-cache lua5.1 && luac5.1 -p /scripts/gateway-auth.lua && echo LUA_SYNTAX_OK"` | **LUA_SYNTAX_OK** |
+| YAML 语法 | `python -c yaml.safe_load_all` 对三个 APISIX 配置 | **YAML_OK ×3** |
+| `redis.py` | `py_compile` + `from backend.config import redis` | **compile_exit=0；IMPORT_OK**（心跳 10.0） |
+| `pyproject.toml` | TOML 解析（tomli） | **TOML_OK**，dev 依赖 7 项，`has_pytest_timeout=True` |
+| `pytest.ini` | `configparser` 解析 | **INI_OK**，`addopts` 仍为 `--strict-markers --tb=short`（未落 ini 键） |
+| pytest 可收集 | `pytest --collect-only backend/tests/sql/test_sql_agent_trace_stages.py` | **3 tests collected** |
+
+- 未构建任何镜像、未启动/重启任何服务；`docker build --check` 只做静态检查，`docker run --rm` 仅一次性 `luac` 校验。
+- 临时 `.env`（复制自主工作区并补镜像变量）与 `.env.validation-tmp` 仅用于 compose 解析，**均已删除**，`git status` 不含它们（`.env` 本就在 gitignore 内）。
+
+### 保留的未完成项（不得标为通过）
+
+1. **Trace 默认 `full` 档仍不脱敏**：读取路径不做 PII 掩码，故「敏感原文不得新增写入」的约束继续生效；SQL 两处含 `question[:500]` 的埋点仍排除在外。
+2. **Trace 跨租户真实数据库过滤尚未端到端验证**：本轮及上一轮的租户隔离均在 Python 层与 SQL 参数层验证；因本机无法连接 PostgreSQL，未对真实 PG 表做跨租户行级过滤的端到端验证。列入最终 P0 验收清单。
+- 数据库未修改，未执行迁移；未修改主工作区或任何来源 worktree；未执行 reset --hard / clean -fd / 强推 / 删除分支或 worktree / 丢弃 stash。

@@ -9,7 +9,7 @@ WORKDIR /app
 
 # 安装依赖（利用 Docker 缓存层）
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN --mount=type=cache,id=agent-platform-npm,target=/root/.npm npm ci
 
 # 复制源码
 COPY . .
