@@ -94,6 +94,7 @@
 ## 2026-10-11：Phase 1 持久轮次幂等
 
 - 在任务 Worktree `C:\Users\wh\.codex\worktrees\memory-profile-main\agent`、分支 `codex/memory-profile-upgrade-main` 基于 `a9184e4` 实施；未修改共享主工作区或其他 Worktree。
+- 实现提交：`9faba71fb039771073f7a4457941bc8cf331a4b6`（`fix(memory): persist turn idempotency`）。
 - `/chat/stream` 把显式 `Idempotency-Key`（否则 `request_id`）传过 Runner 与 MemoryManager 到 MemoryService。MemoryService 对键和问题只存 SHA-256；按 tenant/user/session/key 加 PostgreSQL advisory transaction lock，在单事务中写 L2 问答、轮次收据和 L3 outbox。相同键/问题复用原消息与 job；相同键绑定不同问题时回滚并抛出冲突。收据引用会话与两条消息并级联删除。
 - 新增并登记 `090_memory_turn_idempotency.sql` 与 `MemoryTurnReceipt` 模型；更新 `ai-runtime.md` 的流式轮次持久化契约。迁移没有应用到开发/权威 PostgreSQL。
 - 在一次性 PostgreSQL 17 Docker 容器内，以隔离测试 schema 执行 089/090，实际运行 `python -m pytest backend/tests/memory/test_memory_extraction_outbox.py -k "end_turn_commits_outbox_with_messages_and_dispatches_only_job_id or end_turn_idempotency_is_atomic_and_scoped" -q --no-cov`：2 passed，3 deselected，5.61 秒。覆盖并发相同请求仅产生一组 L2 消息/receipt/job、相同问题重试复用 job、不同问题同键拒绝、不同会话/用户作用域独立；容器测试后停止并自动移除，未连接共享开发库。
