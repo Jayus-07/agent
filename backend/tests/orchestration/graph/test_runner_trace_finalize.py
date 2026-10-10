@@ -151,6 +151,35 @@ class _TimedOutGraph:
         yield  # pragma: no cover
 
 
+class _BlockingGraphUntilStopped:
+    """Runner 关闭后等待取消信号的图，模拟仍在后台执行的节点。"""
+
+    def __init__(self):
+        import threading
+
+        self.started = threading.Event()
+        self.waiting = threading.Event()
+        self.stopped = threading.Event()
+
+    def stream(self, initial_state, config=None):
+        self.started.set()
+        yield {"router": {
+            "route_mode": "plan",
+            "cs_context": {},
+            "query_understanding": {"intent": "general_chat"},
+        }}
+        self.waiting.set()
+        import time
+        from backend.core.request_context import is_cancelled
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not is_cancelled():
+            time.sleep(0.005)
+        if is_cancelled():
+            self.stopped.set()
+            yield {"reporter": {"final_answer": "不应持久化"}}
+
+
 def _events_normal():
     return [
         {"router": {"route_mode": "plan", "cs_context": {}}},
@@ -246,6 +275,26 @@ def test_generator_close_finishes_once_as_client_disconnect(_spy_finish):
     # stop_event 未置位 → 归因为客户端断连，而非用户中止
     assert root.metrics.get("reason") == "client_disconnect"
     assert sys_obj._memory.end_turn_calls == []
+
+
+def test_generator_close_stops_background_graph_without_persisting_memory(_spy_finish):
+    """Runner 被关闭时应停止后台图，避免无人消费时继续执行节点副作用。"""
+    graph = _BlockingGraphUntilStopped()
+    sys_obj = _make_system(graph)
+    gen = sys_obj.stream_events(
+        "测试问题", "s-1", kb_id="default", user_id="u-1",
+    )
+
+    next(gen)
+    assert graph.started.wait(timeout=1)
+    assert graph.waiting.wait(timeout=1)
+    gen.close()
+
+    assert graph.stopped.wait(timeout=1)
+    assert sys_obj._memory.end_turn_calls == []
+    assert len(_spy_finish.calls) == 1
+    record, _answer = _spy_finish.calls[0]
+    assert _root(record).metrics.get("reason") == "client_disconnect"
 
 
 def test_generator_close_after_abort_reports_user_abort(_spy_finish):

@@ -59,7 +59,7 @@
 - [x] 主图成功轮次的 `end_turn → save_turn` 写入已接入 typed HumanMessage/AIMessage，并保留同事务的幂等收据与 outbox。
 - [ ] 将真实执行图产生的可信 ToolMessage 接入持久化入口；当前主 Graph Runner 只返回结构化 step results，尚未产出 LangChain ToolMessage 流，不得由业务结果伪造。
 - [x] `/chat/stream` 使用 request_id/Idempotency-Key 与持久轮次收据实现成功轮次幂等；见 2026-10-11 进度记录。
-- [ ] 收口 Graph State 注入及取消、失败终态；校验用户/租户/会话范围、Redis 故障恢复和服务重启，超窗历史交由 L2。
+- [ ] 收口 Graph State 注入及取消、失败终态；验证用户取消与 Runner 关闭不写成功轮次、SSE 断连续播同一轮；校验用户/租户/会话范围、Redis 故障恢复和服务重启，超窗历史交由 L2。
 
 门禁：杭州三日游 → “第二天不要太累”正确指代；同一消息只注入一次；跨会话和用户不串话。覆盖 M01、M02、M04，关联 M17。
 

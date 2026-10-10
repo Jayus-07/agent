@@ -325,6 +325,9 @@ class GraphRunner:
             domain_hint: 入口域提示（customer_service = 客服窗口锁域，
                 router_node 据此强制走 CS 预过滤并跳过其他域图 prefilter）
         """
+        if stop_event is None:
+            stop_event = threading.Event()
+
         from backend.observability.tracer import SpanKind, trace_collector
 
         start_time = time.time()
@@ -1025,12 +1028,16 @@ class GraphRunner:
         except GeneratorExit:
             # 消费方关闭生成器（客户端断连 / 用户中止后前端停止拉流）：
             # 生成器挂起在 yield 处收到 GeneratorExit，此前这里不执行任何
-            # 收尾。GeneratorExit 处理内禁止 yield；收尾后必须重新抛出。
+            # 收尾。外层 /chat/stream 的断连由恢复注册表继续消费 Runner；若
+            # Runner 自身被关闭，则停止后台图，避免无人消费时继续执行副作用。
+            # GeneratorExit 处理内禁止 yield；收尾后必须重新抛出。
             reason = ("user_abort"
                       if (stop_event is not None and stop_event.is_set())
                       or ctx["aborted"] else "client_disconnect")
+            if stop_event is not None:
+                stop_event.set()
             # STOP CS-A P0-3/F4：用户中止 → cancelled；纯断连保持 error
-            #（producer 继续跑完，不是取消语义）
+            #（由上层 SSE 恢复协议决定 producer 是否继续）。
             _finalize_trace(
                 "cancelled" if reason == "user_abort" else "error",
                 {"reason": reason},

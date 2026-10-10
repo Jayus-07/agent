@@ -26,6 +26,7 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 - `/chat/stream` 的成功轮次持久化以 `Idempotency-Key` 为幂等键；未提供时使用服务端 `request_id`。Memory 在同一事务中提交 L2 问答、幂等收据与 L3 outbox；收据按 tenant/user/session 隔离，只保留键和问题的 SHA-256。相同键与问题复用原轮次；相同键绑定不同问题时拒绝再次写入。表结构由 `090_memory_turn_idempotency.sql` 管理，随会话/消息删除级联清除。
 - L2 `chat_messages` 兼容保留普通 user/assistant 文本行；成功轮次的 `end_turn → save_turn` 以受控 LangChain 写入记录 `message_type`（human/ai）及 JSON `message_metadata`。通用写入也支持 tool，可恢复 `AIMessage.tool_calls` 和 `ToolMessage.tool_call_id` 等协议字段；恢复时始终以数据库消息 ID 生成 LangChain ID，旧行的空类型列继续按 user/assistant 还原。字段由 `091_chat_message_langchain_metadata.sql` 管理。当前主 Graph Runner 只暴露最终问答和结构化 step results，尚无可信 LangChain ToolMessage 流可接入。
 - HTTP 请求完成、Tool 执行结果、Domain Graph 业务结果是不同状态；错误和部分成功须保留可解释结果。
+- `/chat/stream` 的浏览器断连由 SSE 恢复层继续消费 producer；若 Runner 生成器本身被关闭，则设置取消信号停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
 - Trace 与日志应记录必要的运行归因、耗时和错误类别，不写入敏感参数。
 
 ## Node Runtime
