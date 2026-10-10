@@ -2,9 +2,8 @@
 -- 048_memory_scope_and_versioning.sql — Memory scope + 事实版本管理
 -- （STOP C，Memory Production Closure）
 --
--- 背景：STOP A/B 审计确认（docs/2026-09-24-Memory-Production-Closure-STOPA-Audit.md
---       / STOPB-Provenance.md）：①memory_records 无 tenant_id，隔离只靠
---       user_id（P0-5）；②事实版本管理纯靠 embedding 相似度（P0-1/P0-2/P0-3）。
+-- 背景：持久记忆必须按 tenant/user 隔离，并为事实版本提供显式更新语义；
+--       不能只依赖 embedding 相似度推断版本关系。
 --
 -- 变更：
 --   tenant_id        VARCHAR(64) NOT NULL DEFAULT 'quarantine'

@@ -127,7 +127,7 @@ class ConversationContext:
     # ── Travel Run（STOP F1，2026-09-23）──
     # 一次旅游规划任务的身份与结构化 pending。只存结构化事实与摘要，
     # 不存 itinerary 大对象（域图 checkpointer 才是权威执行状态——
-    # 职责冻结见 docs/2026-09-23-TravelResume-STOPF0-审计与设计.md §三）。
+    # 职责冻结见 docs/architecture/ai-runtime.md#上下文预算与跨请求状态 §三）。
     travel_run_seq: int = 0      # 会话内 run 序号（0 = 无活跃 run）
     travel_run_id: str = ""      # trv_{hash8}_{seq:03d}
     travel_stage: str = ""       # slot / planned / completed / cancelled

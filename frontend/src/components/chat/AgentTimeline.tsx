@@ -10,8 +10,8 @@
  *
  * 设计原则：
  *   - 不持有独立 state，全部从 store 派生（避免双重数据源）
- *   - 后端只发节点"进入"事件，无"退出"事件 → 根据 currentStatus + isLoading 推断节点状态
- *   - isLoading=false 且最后一个 status 事件即当前 → 该节点标记为 done（见 store.replaceLastAssistant 的 done 事件之后）
+ *   - 新版 status 帧带节点执行起止时间，节点耗时只取后端实测值
+ *   - 旧版 status 帧仍可回看节点顺序，但不再用相邻事件或总耗时伪造单节点时长
  */
 
 import { useMemo, useState } from 'react'
@@ -25,7 +25,7 @@ interface TimelineNode {
   status: 'pending' | 'running' | 'done' | 'error'
   startTs: number                // 节点首次出现的 status.ts
   endTs: number | null           // 下一个节点开始时 / 流结束时
-  elapsedSec: number             // endTs - startTs
+  elapsedSec: number | null      // 旧版历史没有真实耗时则为 null
   logs: LogEvent[]               // 该节点期间产出的 log 事件
   hasError: boolean              // 是否有 level=error 的 log
 }
@@ -42,6 +42,96 @@ const STREAM_PHASE_LABELS: Record<string, string> = {
 /** 把后端结构化阶段翻译成用户可读标签，管理端与用户端保持同一口径。 */
 export function streamPhaseLabel(phase: unknown): string {
   return typeof phase === 'string' ? (STREAM_PHASE_LABELS[phase] ?? '执行进度') : '执行进度'
+}
+
+const STREAM_PROGRESS_BY_PHASE: Record<string, string> = {
+  routing: '正在识别问题并选择处理路径…',
+  capability_selection: '正在选择合适的查询能力…',
+  understanding: '正在理解查询需求…',
+  table_routing: '正在匹配可访问的数据表…',
+  sql_generation: '正在生成 SQL 查询…',
+  sql_validation: '正在校验 SQL 安全性…',
+  rag_search: '正在检索知识库并核验资料…',
+  answer_generation: '正在整理最终答复…',
+}
+
+const STREAM_PROGRESS_BY_NODE: Record<string, string> = {
+  router: '正在识别问题并选择处理路径…',
+  tool_selector: '正在选择合适的查询能力…',
+  skill_executor: '正在执行所选查询步骤…',
+  workflow_executor: '正在执行工作流步骤…',
+  planner: '正在规划多步骤任务…',
+  critique: '正在检查执行计划…',
+  supervisor: '正在调度执行步骤…',
+  sql_skill: '正在查询业务数据…',
+  query_understanding: '正在理解数据查询需求…',
+  table_router: '正在匹配可访问的数据表…',
+  sql_generator: '正在生成 SQL 查询…',
+  sql_validator: '正在校验 SQL 安全性…',
+  sql_executor: '正在执行安全的数据查询…',
+  rag_skill: '正在检索知识库并核验资料…',
+  reporter: '正在整理最终答复…',
+  general_chat: '正在生成回复…',
+}
+
+function progressForLog(log: LogEvent): string | null {
+  const phase = log.payload?.phase
+  const tool = log.payload?.tool
+  if (typeof phase !== 'string') return null
+
+  if (phase === 'tool_start') {
+    if (tool === 'rag.search' || (typeof tool === 'string' && tool.includes('rag'))) {
+      return STREAM_PROGRESS_BY_PHASE.rag_search
+    }
+    if (tool === 'sql.query' || (typeof tool === 'string' && tool.includes('sql'))) {
+      return '正在执行安全的数据查询…'
+    }
+    return '正在执行所选查询步骤…'
+  }
+  if (phase === 'tool_result') {
+    if (tool === 'rag.search' || (typeof tool === 'string' && tool.includes('rag'))) {
+      return '知识库检索完成，正在整理答案…'
+    }
+    if (tool === 'sql.query' || (typeof tool === 'string' && tool.includes('sql'))) {
+      return '数据查询完成，正在整理结果…'
+    }
+  }
+  return STREAM_PROGRESS_BY_PHASE[phase] ?? null
+}
+
+/** 只按已收到的 SSE 状态/阶段事件生成文案，不估算百分比或虚构阶段。 */
+export function streamProgressLabel(
+  events: SSEStreamEvent[],
+  currentStatus = '',
+  nodeLabels: Record<string, string> = {},
+): string {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]
+    if (event.event === 'log') {
+      const progress = progressForLog(event.data)
+      if (progress) return progress
+    } else if (event.event === 'status') {
+      if (event.data.phase === 'completed') return '当前步骤已完成，正在继续处理…'
+      if (event.data.phase === 'failed' || event.data.phase === 'cancelled') return '正在收尾本次请求…'
+      const progress = STREAM_PROGRESS_BY_NODE[event.data.node]
+      if (progress) return progress
+      const label = nodeLabels[event.data.node]
+      if (label) return `正在执行「${label}」…`
+    }
+  }
+
+  return STREAM_PROGRESS_BY_NODE[currentStatus]
+    || (nodeLabels[currentStatus] ? `正在执行「${nodeLabels[currentStatus]}」…` : '')
+    || '正在识别问题并选择处理路径…'
+}
+
+function ProgressLine({ label }: { label: string }) {
+  return (
+    <div role="status" aria-live="polite" className="flex items-center gap-1.5 py-0.5 text-[11px] text-text-secondary">
+      <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+      {label}
+    </div>
+  )
 }
 
 function TimelineLogLine({ log }: { log: LogEvent }) {
@@ -88,21 +178,39 @@ function PhaseStrip({ events }: { events: SSEStreamEvent[] }) {
   )
 }
 
-/** 从 SSE 事件流派生 TimelineNode[]
- *  totalElapsedHint：完成态回看时由 trace.elapsed 传入的总耗时（秒）。
- *  末节点没有"下一个节点开始时间"可作终点，此前用当前时钟补 → 回看模式下
- *  末节点耗时随每次重渲染无限增长，且与 CompletionLine 的总耗时口径不一致。
- *  现改为：回看态用 hint 反推（末节点 = hint − 距首节点的偏移），生成态仍用当前时钟。 */
-function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, string>, isLoading: boolean, totalElapsedHint?: number): TimelineNode[] {
-  // 按出现顺序收集所有 status 节点
-  const nodeOrder: { name: string; ts: number }[] = []
+/** 按 execution_id 合并起止帧；旧版事件没有实测时长时只显示节点状态。 */
+function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, string>, isLoading: boolean): TimelineNode[] {
+  const runs = new Map<string, {
+    name: string
+    startTs: number
+    endTs: number | null
+    durationMs: number | null
+    status: string
+    timed: boolean
+  }>()
   for (const evt of events) {
     if (evt.event === 'status') {
-      // 同名节点多次出现时（如 supervisor 多轮调度），保留最后一次
-      const existing = nodeOrder.find((n) => n.name === evt.data.node)
-      if (!existing) nodeOrder.push({ name: evt.data.node, ts: evt.data.ts })
+      const status = evt.data
+      const key = status.execution_id || `legacy:${status.node}`
+      const existing = runs.get(key)
+      const startTs = status.started_at ?? existing?.startTs ?? status.ts
+      const endTs = status.finished_at ?? existing?.endTs ?? null
+      const durationMs = typeof status.duration_ms === 'number'
+        ? status.duration_ms
+        : existing?.durationMs ?? null
+      const eventStatus = status.status
+        || (status.phase === 'failed' ? 'error' : status.phase === 'cancelled' ? 'cancelled' : '')
+      runs.set(key, {
+        name: status.node,
+        startTs,
+        endTs,
+        durationMs,
+        status: eventStatus || existing?.status || (status.phase === 'started' ? 'running' : ''),
+        timed: Boolean(status.execution_id || status.duration_ms !== undefined),
+      })
     }
   }
+  const nodeOrder = [...runs.values()]
   if (nodeOrder.length === 0) return []
 
   // 关联 log 事件到所属节点
@@ -115,38 +223,48 @@ function buildTimeline(events: SSEStreamEvent[], nodeLabels: Record<string, stri
     }
   }
 
-  // 计算每个节点的结束时间 = 下一个节点的开始时间
-  const currentNodeName = nodeOrder[nodeOrder.length - 1].name
   const nowSec = Date.now() / 1000
   return nodeOrder.map((n, i) => {
-    const nextTs = i < nodeOrder.length - 1 ? nodeOrder[i + 1].ts : null
-    const isLast = i === nodeOrder.length - 1
-    const isRunning = isLast && isLoading
-    const endTs = isRunning ? null : nextTs
-    let elapsedSec: number
-    if (endTs !== null) {
-      elapsedSec = Math.max(0, endTs - n.ts)
-    } else if (isLast && !isLoading && totalElapsedHint && totalElapsedHint > 0) {
-      // 完成态回看：末节点终点用 hint 反推，耗时定格且与总耗时口径一致
-      elapsedSec = Math.max(0, totalElapsedHint - (n.ts - nodeOrder[0].ts))
-    } else {
-      // 生成中（running）：实时用当前时钟
-      elapsedSec = Math.max(0, nowSec - n.ts)
-    }
+    const isLegacyCurrent = !n.timed && i === nodeOrder.length - 1 && isLoading
+    const isRunning = n.status === 'running' || isLegacyCurrent
+    const elapsedSec = n.durationMs !== null
+      ? Math.max(0, n.durationMs / 1000)
+      : isRunning
+        ? Math.max(0, nowSec - n.startTs)
+        : null
     const logs = logsByNode[n.name] || []
     const hasError = logs.some((l) => l.level === 'error')
+    const status = hasError || n.status === 'error' || n.status === 'cancelled'
+      ? 'error'
+      : isRunning
+        ? 'running'
+        : 'done'
 
     return {
       name: n.name,
       label: nodeLabels[n.name] || n.name,
-      status: hasError ? 'error' : isRunning ? 'running' : 'done',
-      startTs: n.ts,
-      endTs,
+      status,
+      startTs: n.startTs,
+      endTs: n.endTs,
       elapsedSec,
       logs,
       hasError,
     }
   })
+}
+
+function timelineElapsed(events: SSEStreamEvent[], isLoading: boolean, totalElapsedHint?: number): number | null {
+  if (typeof totalElapsedHint === 'number' && totalElapsedHint > 0) return totalElapsedHint
+  const timedStatuses = events
+    .filter((event): event is Extract<SSEStreamEvent, { event: 'status' }> => event.event === 'status')
+    .filter(event => typeof event.data.started_at === 'number')
+  if (timedStatuses.length === 0) return null
+  const starts = timedStatuses.map(event => event.data.started_at as number)
+  const ends = timedStatuses
+    .map(event => event.data.finished_at ?? (isLoading ? Date.now() / 1000 : null))
+    .filter((value): value is number => value !== null)
+  if (ends.length === 0) return null
+  return Math.max(0, Math.max(...ends) - Math.min(...starts))
 }
 
 interface TimelineProps {
@@ -172,13 +290,14 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
   const currentStatus = useChatStore((s) => s.currentStatus)
   const events = eventsProp ?? storeEvents
   const nodeLabels = labelsProp ?? storeLabels
+  const progressLabel = streamProgressLabel(events, currentStatus, nodeLabels)
 
   const nodes = useMemo(
-    () => buildTimeline(events, nodeLabels, isLoading, totalElapsedHint),
+    () => buildTimeline(events, nodeLabels, isLoading),
     [events, nodeLabels, isLoading, totalElapsedHint],
   )
   const doneCount = nodes.filter((n) => n.status === 'done' || n.status === 'error').length
-  const totalElapsed = nodes.reduce((s, n) => s + n.elapsedSec, 0)
+  const totalElapsed = timelineElapsed(events, isLoading, totalElapsedHint)
   const totalLogs = nodes.reduce((s, n) => s + n.logs.length, 0)
 
   // 折叠态：紧凑按钮（bare 形态不存在折叠态，折叠由外层行负责）
@@ -199,10 +318,7 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
     if (bare) {
       if (!isLoading) return null
       return (
-        <div className="flex items-center gap-1.5 py-0.5 text-[11px] text-text-secondary">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-          正在规划执行步骤，请稍候…
-        </div>
+        <ProgressLine label={progressLabel} />
       )
     }
     const waiting = isLoading
@@ -216,10 +332,7 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
         </div>
         <div className={`px-4 py-6 text-center text-[11px] ${waiting ? 'text-text-secondary' : 'text-text-muted'}`}>
           {waiting ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-              正在规划执行步骤，请稍候…
-            </span>
+            <ProgressLine label={progressLabel} />
           ) : (
             '发送问题后，将在此展示 LangGraph 多 Agent 执行过程'
           )}
@@ -232,8 +345,9 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
   if (bare) {
     return (
       <div className="pl-5 py-0.5">
+        {isLoading && <ProgressLine label={progressLabel} />}
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[10px] text-text-muted">{doneCount}/{nodes.length} 节点 · {totalElapsed.toFixed(1)}s</span>
+          <span className="text-[10px] text-text-muted">{doneCount}/{nodes.length} 节点 · {totalElapsed === null ? '—' : `${totalElapsed.toFixed(1)}s`}</span>
           <button onClick={() => setShowLogs(!showLogs)}
             className={`text-[10px] transition-colors ${showLogs ? 'text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
             Logs {totalLogs > 0 && `(${totalLogs})`}
@@ -277,10 +391,11 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
             className={`text-[10px] px-2 py-0.5 rounded-full transition-colors ${showLogs ? 'bg-accent/10 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
             Logs {totalLogs > 0 && `(${totalLogs})`}
           </button>
-          <span className="text-[10px] text-text-muted">{totalElapsed.toFixed(1)}s</span>
+          <span className="text-[10px] text-text-muted">{totalElapsed === null ? '—' : `${totalElapsed.toFixed(1)}s`}</span>
         </div>
       </div>
 
+      {isLoading && <div className="px-4 pt-2"><ProgressLine label={progressLabel} /></div>}
       <PhaseStrip events={events} />
 
       {/* Logs panel（按节点分组的所有 log 事件） */}
@@ -301,7 +416,7 @@ export default function AgentTimeline({ collapsed: outerCollapsed, onToggle, eve
           <TimelineNodeRow key={`${node.name}-${i}`} node={node} isLast={i === nodes.length - 1}
             expanded={expandedNode === node.name}
             onToggle={() => setExpandedNode(expandedNode === node.name ? null : node.name)}
-            isCurrent={currentStatus === node.name}
+            isCurrent={currentStatus === node.name && node.status === 'running'}
           />
         ))}
       </div>
@@ -336,7 +451,7 @@ function TimelineNodeRow({ node, isLast, expanded, onToggle, isCurrent }: {
           {expanded ? <ChevronDown size={11} className="text-text-muted" /> : <ChevronRight size={11} className="text-text-muted" />}
           <span className="text-[11px] text-text-primary font-medium">{node.label}</span>
           {isCurrent && <span className="text-[9px] text-amber-500 bg-amber-50 px-1 rounded">running</span>}
-          <span className="text-[10px] text-text-muted ml-auto tabular-nums">{node.elapsedSec.toFixed(2)}s</span>
+          <span className="text-[10px] text-text-muted ml-auto tabular-nums">{node.elapsedSec === null ? '—' : `${node.elapsedSec.toFixed(2)}s`}</span>
         </button>
 
         {/* Expandable detail：展示该节点的 logs */}

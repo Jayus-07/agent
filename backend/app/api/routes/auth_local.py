@@ -984,7 +984,7 @@ async def security_overview(request: Request,
                 "source": "deployment",
                 "scope": "apisix-container",
                 "note": "部署层 env（GATEWAY_SESSION_CHECK，默认 audit），app 进程读不到；"
-                        "切换 runbook 见 docs/2026-09-16-方案A-JWT单通道实施报告.md",
+                        "在 APISIX 部署配置中切换；app 进程读不到该环境变量",
             },
         },
         "endpoints": endpoints,

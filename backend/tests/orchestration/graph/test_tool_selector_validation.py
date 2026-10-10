@@ -55,10 +55,8 @@ def _state(query: str, caps: list[tuple[str, float]], domain: str = "data") -> d
 
 @pytest.fixture
 def fc_env(monkeypatch):
-    """桩掉 LLM 调用与 rollout 门控，_fc_decide 决策逻辑真实执行。"""
+    """桩掉 LLM 调用，_fc_decide 决策逻辑真实执行。"""
     holder = {"raw": None}
-    monkeypatch.setattr(ts, "ENABLE_FC_TOOL_SELECTION", True)
-    monkeypatch.setattr(ts, "_in_rollout", lambda sid: True)
     monkeypatch.setattr(ts, "bind_tools_for_model", lambda m, t: None)
 
     class _FakeLLM:
@@ -218,9 +216,10 @@ class TestValidateSelectionUnit:
         reason = ts._validate_selection("rag.search", ["sql.query", "rag.search"], "data")
         assert reason is not None and reason.startswith("domain_conflict")
 
-    def test_unknown_capability_domain_skipped(self):
-        """未声明域的 capability 不被误杀。"""
-        assert ts._validate_selection("unknown.cap", ["unknown.cap"], "data") is None
+    def test_unregistered_capability_is_rejected_even_if_candidate_list_contains_it(self):
+        """未注册能力即使被上游塞入候选，也不得通过域内合法性校验。"""
+        reason = ts._validate_selection("unknown.cap", ["unknown.cap"], "data")
+        assert reason is not None
 
     def test_all_grey_zone_pairs_domain_consistent(self):
         """规格场景的域内候选组合全部通过校验。"""

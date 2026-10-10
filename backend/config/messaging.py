@@ -3,7 +3,7 @@
 微服务拆分后的事件总线：
   - Python AI 系统发布：会话状态变更、消息落库等事件
   - Java 业务系统发布：conversation/handoff/action 事件
-  - 双方通过 topic 契约协作，见 docs/architecture-overview.md
+  - 双方通过 topic 契约协作；topic 定义以本模块为准
 """
 import os
 

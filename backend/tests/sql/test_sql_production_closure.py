@@ -707,6 +707,56 @@ class TestSqlGuardSpan:
         assert spans[0].metrics["decision"] == "deny"
         assert spans[0].metrics["reason_code"] == "SQL_TABLE_NOT_ALLOWED"
 
+
+    def test_span_id_is_stable_across_guard_instances(self):
+        """span_id 必须稳定：同一逻辑步骤在不同 Guard/请求上 id 一致。
+
+        回归：原实现用 f"sql.guard.{uuid4().hex[:8]}"，同一 trace 内每次
+        调用都是新 id，管理端按 span_id 聚合会碎裂，按 "sql.guard" 查表
+        也永远落空。
+        """
+        from backend.observability.tracer import trace_collector
+        from backend.sql.policy import SQLPolicyGuard
+        from tests.sql.conftest import build_ctx
+
+        ctx = build_ctx(user_id="3", department="ecom",
+                        tenant_id="t1", roles=("editor",))
+        sql = "SELECT sku FROM product.products WHERE id = 1"
+
+        # 两个独立实例、独立 trace → 首个 guard span id 都是 "sql.guard"
+        seen_ids = []
+        for _ in range(2):
+            trace = self._trace()
+            try:
+                SQLPolicyGuard().validate_and_rewrite(sql, ctx)
+            finally:
+                trace_collector.finish(trace, "", 1, "", "")
+            spans = self._guard_spans(trace)
+            assert len(spans) == 1
+            seen_ids.append(spans[0].span_id)
+        assert seen_ids == ["sql.guard", "sql.guard"]
+
+    def test_multiple_calls_in_one_trace_get_unique_stable_ids(self):
+        """同一 trace 内多次调用（count/rows 双查询）id 唯一且可预测。"""
+        from backend.observability.tracer import trace_collector
+        from backend.sql.policy import SQLPolicyGuard
+        from tests.sql.conftest import build_ctx
+
+        trace = self._trace()
+        try:
+            ctx = build_ctx(user_id="3", department="ecom",
+                            tenant_id="t1", roles=("editor",))
+            guard = SQLPolicyGuard()
+            guard.validate_and_rewrite(
+                "SELECT count(*) FROM product.products", ctx)
+            guard.validate_and_rewrite(
+                "SELECT sku FROM product.products WHERE id = 1", ctx)
+        finally:
+            trace_collector.finish(trace, "", 1, "", "")
+
+        ids = [s.span_id for s in self._guard_spans(trace)]
+        assert ids == ["sql.guard", "sql.guard#2"]
+
     def test_noop_span_without_active_trace_does_not_raise(self):
         """无 active trace（worker 直调等）→ noop span 软失败不阻塞查询。"""
         from backend.sql.policy import SQLPolicyGuard

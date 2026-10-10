@@ -444,7 +444,6 @@ scripts/_diag_*.py
 .claude/
 .codex/
 .learnings/
-.superpowers/
 .qoderignore
 .mcp.json
 # 测试夹具临时输出（scripts 侧生成）

@@ -39,6 +39,14 @@ export interface MetaEvent {
 export interface StatusEvent {
   node: string    // LangGraph 节点名（前端自行映射为 emoji 标签）
   ts: number
+  /** started/completed/failed/cancelled；缺省表示旧版兼容帧 */
+  phase?: 'started' | 'completed' | 'failed' | 'cancelled'
+  /** 节点单次执行 ID，用于把起止帧合并并抵御 SSE 续传重复帧 */
+  execution_id?: string
+  started_at?: number
+  finished_at?: number
+  duration_ms?: number
+  status?: 'running' | 'success' | 'error' | 'cancelled'
 }
 
 export interface LogEvent {
@@ -80,6 +88,10 @@ export interface TokenUsage {
 
 export interface DoneEvent {
   elapsed: number
+  /** 服务端权威最终答案；缺省时兼容旧后端，回退到已收集的 delta。 */
+  answer?: string
+  /** 产出权威答案的 Runner 节点或系统出口。 */
+  answer_source?: string
   trace_id?: string
   sources?: Source[]
   usage?: TokenUsage

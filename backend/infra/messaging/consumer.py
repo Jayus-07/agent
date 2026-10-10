@@ -1,6 +1,6 @@
 """infra.messaging.consumer — Kafka 入站消费者（WhatsApp 闭环）。
 
-闭环链路（docs/architecture-overview.md §2/§4）：
+闭环链路按当前 consumer、publisher 与 topic 配置协作：
   Meta webhook → Java 落库 → channel.whatsapp.inbound
     → 本消费者 → MultiAgentSystem.ask() 生成回复
     → ai.reply.events → Java AiReplyConsumer → WhatsAppSender 发送

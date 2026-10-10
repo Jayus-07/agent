@@ -5,6 +5,7 @@ tracer.py 这类纯逻辑模块不需要 DB/Redis mock；将来 P0.2/P0.3 的测
 """
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,20 @@ os.environ["OBS_ANALYTICS_ENABLED"] = "false"
 # 成页面顶部「失败次数」）。需真测 Redis 写侧的用例自行 monkeypatch 开启
 # （参照 tests/test_tool_stats_aggregation.py 的显式 setattr 写法）。
 os.environ["TOOL_STATS_REDIS_ENABLED"] = "false"
+# 日志文件重定向到临时目录：backend/shared/logger.py 在 module import 期就按
+# LOG_FILE 创建 RotatingFileHandler，默认值是工作区根的 rag_system.log（单文件
+# 上限 50MB，实测已累积到 48MB）。该路径不可写时 import 直接抛 PermissionError，
+# 而 conftest 的 import 链（sql/travel/context_budget/memory 等）都经过
+# backend.shared.logger —— 结果是整个测试模块在**收集期**就崩掉，表现为一片
+# "ERROR collecting ... PermissionError: ... rag_system.log"。
+# 触发场景不限于只读检出：文件被其他进程占用（正在跑的服务）、权限收紧、
+# 磁盘或路径异常时同样复现。日志落点与测试要验证的行为无关，统一隔离到
+# 临时目录即可；需要检查日志内容的用例自行指定路径。
+# 必须在任何 backend import 之前设置（同下方 RAG_DATA_DIR 的理由）。
+os.environ.setdefault(
+    "LOG_FILE",
+    os.path.join(tempfile.gettempdir(), f"agent_test_log_{os.getpid()}.log"),
+)
 
 
 def pytest_addoption(parser):

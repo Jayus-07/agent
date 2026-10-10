@@ -1,4 +1,4 @@
-"""config/auth.py — app 侧身份来源模式机（P3，docs/auth/03 五之二）
+"""config/auth.py — app 侧身份来源模式机（P3；身份协议见 docs/contracts/identity-header-protocol.md）
 
 网关（AuthenticationGlobalFilter）验完 JWT 后向下游注入身份头：
 

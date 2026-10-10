@@ -205,9 +205,10 @@ METADATA_RULE_LOCAL_CACHE_SECONDS = float(
 
 # 影子采集（规划阶段 5 基建）：主路径统一抽取成功后并行跑级联 L0-L2 只读对比，
 # 不参与任何决策；agree/differ 打点进 metadata_route_total{level=shadow_*}。
-# 默认开启：纯只读 + 独立短超时 + 异常静默，是解锁阶段 5 影子报告的唯一途径
-METADATA_CASCADE_SHADOW_ENABLED = os.getenv("METADATA_CASCADE_SHADOW_ENABLED", "true").lower() == "true"
-METADATA_SHADOW_QUEUE_ENABLED = os.getenv("METADATA_SHADOW_QUEUE_ENABLED", "true").lower() == "true"
+# 默认关闭：影子一致率实测 69.3%（目标 >=95%）未达标，级联未切流，采集已无
+# 观测价值反而消耗 Embedding 配额；需要重启阶段 5 数据时显式设为 true。
+METADATA_CASCADE_SHADOW_ENABLED = os.getenv("METADATA_CASCADE_SHADOW_ENABLED", "false").lower() == "true"
+METADATA_SHADOW_QUEUE_ENABLED = os.getenv("METADATA_SHADOW_QUEUE_ENABLED", "false").lower() == "true"
 # 影子 embedding 独立短超时（秒）：压测实测云端单查询 P95≈338ms（A2 FAIL 记录），
 # 3s 余量足够且确保影子采集不拖累主路径延迟
 METADATA_CASCADE_SHADOW_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_SHADOW_EMBED_TIMEOUT", "3"))
@@ -464,7 +465,7 @@ NLI_USE_LLM = os.getenv("NLI_USE_LLM", "false").lower() == "true"
 # ====================================
 # Evidence Gate — RAG 主动拒答
 # 设计与 RAGFlow / Vertex AI / LangGraph CRAG 对齐
-# 详见 docs/architecture/rag-evidence-gate.md
+# 当前拒答与引用约束见 docs/domains/rag.md；门控实现见 backend/rag/evidence_gate/。
 # ====================================
 
 # 总开关：false 时全部 Gate 旁路（与 Faithfulness 默认 true 独立）

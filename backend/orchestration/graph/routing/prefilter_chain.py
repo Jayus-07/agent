@@ -88,6 +88,7 @@ def _with_router_decisions(
         from backend.orchestration.router.capability_router import CapabilityRouter
         from backend.orchestration.router.domain_router import DomainRouter
         from backend.orchestration.router.execution_mode import ExecutionModeResolver
+        from backend.orchestration.router.engine import RoutingEngine
         from backend.orchestration.router.intent_router import IntentRouter
         from backend.orchestration.domain_registry import domain_graph_registry
 
@@ -103,13 +104,21 @@ def _with_router_decisions(
                 or "candidates" in existing_override
             )
         ):
-            # 统一引擎已经完成决策，不重复做一次 embedding。
+            # 统一引擎已经完成决策，不重复做一次 embedding；沿用其真实域证据。
+            snapshot = (
+                existing_override.model_dump()
+                if hasattr(existing_override, "model_dump")
+                else dict(existing_override)
+            )
+            meta = snapshot.get("routing_meta") or {}
             domain_decision = {
-                "domain": "unknown",
-                "subflow": None,
-                "confidence": 0.0,
-                "source": "route_engine",
-                "reasoning": "RouteDecision 已由统一引擎完成",
+                "domain": str(meta.get("domain") or "unknown"),
+                "subflow": meta.get("subflow"),
+                "confidence": float(meta.get("domain_confidence") or 0.0),
+                "margin": float(meta.get("domain_margin") or 0.0),
+                "score_type": str(meta.get("domain_score_type") or "unknown"),
+                "source": str(meta.get("domain_source") or "route_engine"),
+                "reasoning": str(meta.get("domain_reasoning") or "RouteDecision 已由统一引擎完成"),
             }
         else:
             domain_decision = domain_router.route(
@@ -165,6 +174,7 @@ def _with_router_decisions(
             domain_decision,
             capability_decision,
             resolver_override,
+            verified_context=RoutingEngine._capability_context(result),
         )
         # 历史字段保留以兼容 checkpoint，但统一引擎不再写入 True。
         current_legacy_used = False

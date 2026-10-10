@@ -1,6 +1,6 @@
 """客服 P0 验收脚本（批次四能力 MVP，2026-09-22）—— 在 agent-app-1 容器内运行。
 
-覆盖场景清单（docs/customer-service/客服验收测试场景清单-2026-09-22.md）
+覆盖场景清单（docs/customer-service/acceptance-scenarios.md）
 中可脚本化的 P0：
 
   A 组 坐席工作台链路（模拟网关注入身份头 user=24 → cs_wire_e2e）

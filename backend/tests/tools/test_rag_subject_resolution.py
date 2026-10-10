@@ -25,7 +25,7 @@ def captured(monkeypatch):
         def ask_result(self, question, session_id="default", kb_id="default",
                        subject_type="", department="", permissions=None, **kw):
             got.update({"subject_type": subject_type, "department": department,
-                        "kb_id": kb_id})
+                        "kb_id": kb_id, **kw})
             # 工具消费 outcome.answer/answer_meta（2026-10-03 RAGMETA 标记）
             from backend.rag.pipeline import AskOutcome
             return AskOutcome(answer="ok", sources=[], answer_meta={})
@@ -82,3 +82,9 @@ class TestSubjectResolution:
         _bind(user_id="u-42", department="", monkeypatch=monkeypatch)
         _call()
         assert captured["kb_id"] == "policy_general"
+
+    def test_chat_rag_defers_memory_write_to_parent_runner(self, captured, monkeypatch):
+        """主图 RAG 子调用不单独写 Memory，最终由 Runner 保存权威答案。"""
+        _bind(user_id="u-42", department="", monkeypatch=monkeypatch)
+        _call()
+        assert captured["persist_memory"] is False

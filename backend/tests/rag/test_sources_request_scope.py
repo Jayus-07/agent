@@ -63,7 +63,7 @@ def _make_stub_pipeline(answer: str, sources: list):
     pipe._check_answer_cache = lambda question, kb_id: None
     pipe._mark_session_seen = lambda session_id: None
 
-    def _execute_chain(question, session_id):
+    def _execute_chain(question, session_id, persist_memory=True):
         # 模拟 chain 执行期写入请求级 sources（contextvar 在本线程内）
         set_context(RagRequestState(
             metadata_filter={}, intent_label="", query=question))
@@ -100,6 +100,26 @@ def test_ask_compat_returns_answer_string():
     clear_context()
     pipe = _make_stub_pipeline("兼容答案", [{"title": "s"}])
     assert pipe.ask("问题", "sess-1") == "兼容答案"
+
+
+def test_execute_chain_forwards_memory_policy():
+    """主图可要求 RAG 返回核验答案但不自行落库。"""
+    from types import SimpleNamespace
+
+    captured = {}
+
+    def ask(question, *, session_id, persist_memory):
+        captured.update(question=question, session_id=session_id,
+                        persist_memory=persist_memory)
+        return "核验后的答案"
+
+    pipe = RAGPipeline.__new__(RAGPipeline)
+    pipe.lc_chain = SimpleNamespace(ask=ask)
+
+    assert pipe._execute_chain("问题", "session", persist_memory=False) == "核验后的答案"
+    assert captured == {
+        "question": "问题", "session_id": "session", "persist_memory": False,
+    }
 
 
 def test_concurrent_ask_results_do_not_cross():

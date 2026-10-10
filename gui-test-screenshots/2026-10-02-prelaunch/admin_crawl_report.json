@@ -1,0 +1,212 @@
+[
+  {
+    "route": "/",
+    "len": 488,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 运营总览 系统状态与待办速览 · 明细见「",
+    "bad": []
+  },
+  {
+    "route": "/agents",
+    "len": 1214,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System Agent 节点 主图 Agent 层总览",
+    "bad": []
+  },
+  {
+    "route": "/alerts",
+    "len": 158,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 告警中心 库存预警实时监控 · 状态机管理",
+    "bad": []
+  },
+  {
+    "route": "/approvals",
+    "len": 371,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 工具审批 写操作工具的人工审批门 · 批准",
+    "bad": []
+  },
+  {
+    "route": "/competitors",
+    "len": 201,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 竞品监控 价格追踪 · 竞品对比 · 自动",
+    "bad": []
+  },
+  {
+    "route": "/consistency",
+    "len": 123,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 资产一致性中心 七段对账矩阵 · 全部实时",
+    "bad": []
+  },
+  {
+    "route": "/cost-governance/budgets",
+    "len": 6408,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 预算治理 预算状态由后端权威计算；金额为记",
+    "bad": []
+  },
+  {
+    "route": "/cost-governance/prices",
+    "len": 88,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System",
+    "bad": []
+  },
+  {
+    "route": "/data-explorer",
+    "len": 219,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 数据查询 自然语言问答 + 表分页浏览 ·",
+    "bad": []
+  },
+  {
+    "route": "/evaluations",
+    "len": 125,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 评测结果 RAG 检索评测历史与详情 发起",
+    "bad": []
+  },
+  {
+    "route": "/evaluations/datasets",
+    "len": 343,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 评测集治理 canonical + rev",
+    "bad": []
+  },
+  {
+    "route": "/evaluations/feedback",
+    "len": 171,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 反馈候选治理 负反馈与纠错先进入 pend",
+    "bad": []
+  },
+  {
+    "route": "/knowledge",
+    "len": 2098,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 文档管理 管理 RAG 知识库文档，支持 ",
+    "bad": []
+  },
+  {
+    "route": "/knowledge/documents",
+    "len": 2098,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 文档管理 管理 RAG 知识库文档，支持 ",
+    "bad": []
+  },
+  {
+    "route": "/knowledge/keywords",
+    "len": 387,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 词库管理 按业务场景 → 文档类型两级分组",
+    "bad": []
+  },
+  {
+    "route": "/knowledge/operations",
+    "len": 3038,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 文档操作中心 记录文档上传、重索引、删除操",
+    "bad": []
+  },
+  {
+    "route": "/knowledge/pending",
+    "len": 155,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 📋 文档审核队列 自动标注置信度低或业务",
+    "bad": []
+  },
+  {
+    "route": "/observability",
+    "len": 446,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 可观测中心 / 链路追踪 链路追踪 共 0",
+    "bad": []
+  },
+  {
+    "route": "/observability/alerts",
+    "len": 702,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 可观测中心 / 系统告警 · 降级事件流 ",
+    "bad": []
+  },
+  {
+    "route": "/observability/gateway",
+    "len": 10337,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 可观测中心 / 网关安全 网关安全 API",
+    "bad": []
+  },
+  {
+    "route": "/observability/selection-funnel",
+    "len": 484,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 可观测中心 / 选品漏斗 选品漏斗运行历史",
+    "bad": []
+  },
+  {
+    "route": "/observability/tokens",
+    "len": 798,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System Token 用量 LLM / Embedd",
+    "bad": []
+  },
+  {
+    "route": "/observability/traces",
+    "len": 1130,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 可观测中心 / 链路追踪 链路追踪 共 5",
+    "bad": []
+  },
+  {
+    "route": "/prompts",
+    "len": 801,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System Prompt CI/CD 管理业务 Pro",
+    "bad": []
+  },
+  {
+    "route": "/releases",
+    "len": 438,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 发布记录 12 门 Release Gat",
+    "bad": []
+  },
+  {
+    "route": "/reports",
+    "len": 122,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 报告中心 Workflow 自动生成 · ",
+    "bad": []
+  },
+  {
+    "route": "/schedules",
+    "len": 318,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 定时任务配置 修改后即时生效，无需重启服务",
+    "bad": []
+  },
+  {
+    "route": "/security",
+    "len": 7815,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 可观测中心 / 安全运营 安全运营 JWT",
+    "bad": []
+  },
+  {
+    "route": "/selection-decision",
+    "len": 265,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 选品决策（Go/No-Go） 提交后异步执",
+    "bad": []
+  },
+  {
+    "route": "/selection-funnel",
+    "len": 586,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 选品漏斗 · 数据工作台 上传商品榜/关键",
+    "bad": []
+  },
+  {
+    "route": "/settings/access",
+    "len": 3333,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 访问控制 用户与客服权限 只展示当前租户的",
+    "bad": []
+  },
+  {
+    "route": "/settings/models",
+    "len": 3136,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 模型与供应商 集中管理模型角色、供应商地址",
+    "bad": []
+  },
+  {
+    "route": "/skills",
+    "len": 2537,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 能力与技能 Capability 路由清单",
+    "bad": []
+  },
+  {
+    "route": "/tasks",
+    "len": 3786,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System 任务中心 异步 Agent 任务：状态 /",
+    "bad": []
+  },
+  {
+    "route": "/tools",
+    "len": 4974,
+    "head": "电商智能数据平台 运营总览 知识库 业务分析 运维监控 平台管理 UITest 管理员 平台用户 Powered by LangGraph Multi-Agent System Tool 治理中心 契约快照 tool_c",
+    "bad": []
+  }
+]

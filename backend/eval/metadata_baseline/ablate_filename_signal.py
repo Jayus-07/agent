@@ -9,7 +9,7 @@ macro-F1=0.9206 存在循环论证虚高。本脚本量化虚高幅度：
   形态 2（纯正文）：filename/file_path 传空，只剩正文正则 + 标题 hints + 动态词库。
 
 两形态之差 = 文件名循环贡献。结论记录于
-docs/2026-09-19-影子一致率模拟报告与标注排期.md §7。
+实验比较文件名特征启用前后的元数据一致率。
 
 用法（仓库根）：
   python -m backend.eval.metadata_baseline.ablate_filename_signal \

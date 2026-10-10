@@ -8,8 +8,8 @@
   C5 beat 每项 queue 一律经 beat_queue 派生（单一事实源）
   C6 fencing / owner CAS 原语存在（旧 execution 不得破坏新 owner）
 
-核心文件清单见 docs/2026-09-24-Phase2-Async-Runtime-Production-Closure.md §Freeze Rules；
-对本清单文件的修改必须触发本契约回归。
+核心文件清单由当前 QueueRouter、队列配置与 compose 定义；对本清单文件的修改
+必须触发本契约回归。
 """
 from __future__ import annotations
 

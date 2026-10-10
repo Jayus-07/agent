@@ -1,6 +1,6 @@
 """test_dag.py — DAG 拓扑分层 + cycle/missing 检测
 
-覆盖 [docs/architecture/workflow-phase1.md](../../../docs/architecture/workflow-phase1.md) 验证项：
+覆盖 Workflow DAG 的当前拓扑与失败契约：
 - 拓扑分层（Kahn's algorithm）正确性
 - 循环检测（CycleDetectedError）
 - 缺失依赖（MissingDependencyError）

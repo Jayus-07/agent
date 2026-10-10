@@ -18,6 +18,7 @@ sql_agent.py — SQL Agent 主编排器
     旧 row_security 注入（受 SQL_ROW_SECURITY_ENABLED 控制）。
 """
 import inspect
+from contextlib import contextmanager
 from typing import Callable, Optional
 
 from backend.config import SQL_AGENT_ENABLED
@@ -219,6 +220,62 @@ def sql_audit_decision(status: str) -> str:
     return decision_from_result(status)
 
 
+@contextmanager
+def _sql_trace_stage(
+    span_id: str,
+    name: str,
+    *,
+    span_type: str = "workflow",
+    input_data: dict | None = None,
+):
+    """给已有 SQL 阶段增加共享 Trace Span；埋点异常不影响查询。"""
+    span = None
+    try:
+        from backend.observability.tracer import SpanKind, trace_collector
+
+        span = trace_collector.start_span(
+            span_id,
+            name=name,
+            type=span_type,
+            kind=(SpanKind.LLM.value if span_type == "llm_call"
+                  else SpanKind.TOOL.value),
+            input=input_data,
+        )
+    except Exception:
+        logger.debug("SQL Trace 阶段启动失败: %s", span_id, exc_info=True)
+
+    result = {"status": "success"}
+    metrics: dict = {}
+    try:
+        yield result, metrics
+    except Exception as exc:
+        result["status"] = (
+            "rejected"
+            if getattr(exc, "code", None) or getattr(exc, "reason", None)
+            else "error"
+        )
+        metrics["error_type"] = type(exc).__name__
+        code = getattr(exc, "code", None)
+        if code:
+            metrics["error_code"] = str(code)
+        reason = getattr(exc, "reason", None)
+        if reason:
+            metrics["error_reason"] = str(reason)[:160]
+        raise
+    finally:
+        if span is not None:
+            try:
+                from backend.observability.tracer import trace_collector
+
+                trace_collector.end_span(
+                    span,
+                    status=result["status"],
+                    metrics=metrics,
+                )
+            except Exception:
+                logger.debug("SQL Trace 阶段收口失败: %s", span_id, exc_info=True)
+
+
 class SQLAgent:
     """生产级 SQL Agent 入口"""
 
@@ -304,7 +361,12 @@ class SQLAgent:
 
         # — Step 1: 路由选表 —
         try:
-            table_names = select_tables(effective_question)
+            with _sql_trace_stage(
+                "sql.table_router", "数据表路由",
+                input_data={"question": effective_question[:500]},
+            ) as (stage, metrics):
+                table_names = select_tables(effective_question)
+                metrics.update(table_count=len(table_names), tables=table_names[:20])
             logger.info(f"[SQLAgent] 选中表: {table_names}")
             emit_sql_stage(
                 event_sink, node="table_router", phase="table_routing",
@@ -321,6 +383,8 @@ class SQLAgent:
             )
 
         if not table_names:
+            stage["status"] = "rejected"
+            metrics["decision"] = "no_table"
             _observe(decision="EXECUTION_FAILED", policy=None,
                      status="no_table", error_type="no_table")
             return SQLResult.failed(
@@ -339,13 +403,27 @@ class SQLAgent:
                 emit_sql_stage(
                     event_sink, node="sql_generator", phase="sql_generation",
                     message="正在生成查询语句")
-                sql = generate_sql(effective_question, table_names, feedback=feedback)
+                with _sql_trace_stage(
+                    f"sql.generate.attempt_{attempt + 1}",
+                    f"SQL 生成（第 {attempt + 1} 次）",
+                    span_type="llm_call",
+                    input_data={"attempt": attempt + 1, "table_count": len(table_names),
+                                "has_feedback": bool(feedback)},
+                ) as (_stage, metrics):
+                    sql = generate_sql(effective_question, table_names, feedback=feedback)
+                    metrics["sql_length"] = len(sql or "")
                 last_sql = sql
 
                 emit_sql_stage(
                     event_sink, node="sql_validator", phase="sql_validation",
                     message="正在校验查询安全性")
-                safe_sql, _, _ = sql_validator.validate(sql)
+                with _sql_trace_stage(
+                    f"sql.validate.attempt_{attempt + 1}",
+                    f"SQL 安全校验（第 {attempt + 1} 次）",
+                    input_data={"sql_length": len(sql or "")},
+                ) as (stage, metrics):
+                    safe_sql, _, _ = sql_validator.validate(sql)
+                    metrics["decision"] = "allow"
 
                 # 行级安全：返回 (sql_with_placeholders, params_dict)
                 safe_sql, rs_params = inject_row_filter(safe_sql, user_context)
@@ -354,7 +432,24 @@ class SQLAgent:
                 emit_sql_stage(
                     event_sink, node="sql_executor", phase="tool_start",
                     message="正在调用数据查询工具", status="running")
-                result = execute_sql_struct(safe_sql, self.db_config, params=rs_params)
+                with _sql_trace_stage(
+                    f"sql.execute.attempt_{attempt + 1}",
+                    f"数据库执行（第 {attempt + 1} 次）",
+                    span_type="sql",
+                    input_data={"sql_length": len(safe_sql or "")},
+                ) as (stage, metrics):
+                    result = execute_sql_struct(
+                        safe_sql, self.db_config, params=rs_params)
+                    metrics.update(
+                        execution_status=result.status,
+                        row_count=result.row_count,
+                        elapsed_ms=int((result.elapsed_sec or 0) * 1000),
+                        error_type=result.error_type or "",
+                    )
+                    if result.status not in ("success", "no_data"):
+                        stage["status"] = (
+                            "rejected" if result.status == "permission_denied"
+                            else "error")
                 last_result = result
                 emit_sql_stage(
                     event_sink, node="sql_executor", phase="tool_result",
@@ -498,7 +593,13 @@ class SQLAgent:
         # — Step 0: 前置权限门（STOP C §八）：无权限/非法 scope 在任何
         #    LLM 调用之前拒绝——路由选表与 SQL 生成都不发生
         try:
-            guard.precheck(policy)
+            with _sql_trace_stage(
+                "sql.permission_precheck", "SQL 权限预检",
+                input_data={"data_scope": str(policy.data_scope or ""),
+                            "source_channel": policy.source_channel or "unknown"},
+            ) as (_stage, metrics):
+                guard.precheck(policy)
+                metrics.update(decision="allow")
         except SQLPolicyError as e:
             logger.warning(f"[SQLAgent:policy] 前置策略拒绝 code={e.code}: {e}")
             _observe(decision=_DENY_DECISION.get(e.code, "DENY_SCOPE"),
@@ -515,14 +616,24 @@ class SQLAgent:
 
         # — Step 1: 路由选表（与旧链路一致）—
         try:
-            allowed_tables = guard.get_allowed_tables(policy)
-            # 兼容现有 Router/测试替身的单参数调用，同时把最终交给
-            # Generator 的表集合收口到当前主体授权范围。
-            table_names = [
-                table for table in _select_authorized_tables(
-                    question, allowed_tables)
-                if table in allowed_tables
-            ]
+            with _sql_trace_stage(
+                "sql.table_router", "授权数据表路由",
+                input_data={"question": question[:500],
+                            "data_scope": str(policy.data_scope or "")},
+            ) as (stage, metrics):
+                allowed_tables = guard.get_allowed_tables(policy)
+                # 兼容现有 Router/测试替身的单参数调用，同时把最终交给
+                # Generator 的表集合收口到当前主体授权范围。
+                table_names = [
+                    table for table in _select_authorized_tables(
+                        question, allowed_tables)
+                    if table in allowed_tables
+                ]
+                metrics.update(
+                    allowed_table_count=len(allowed_tables),
+                    selected_table_count=len(table_names),
+                    selected_tables=table_names[:20],
+                )
             emit_sql_stage(
                 event_sink, node="table_router", phase="table_routing",
                 message=f"已匹配 {len(table_names)} 张授权数据表",
@@ -537,6 +648,8 @@ class SQLAgent:
                 error_type="router_error",
             )
         if not table_names:
+            stage["status"] = "rejected"
+            metrics["decision"] = "no_authorized_table"
             # scope 过滤后与授权表无交集 = 权限拒绝而非执行失败——
             # 审计必须落 DENY_*（拒绝面归因契约）；decision 与 _DENY_DECISION
             # 对 SQL_TABLE_NOT_ALLOWED 的映射（DENY_TABLE）保持同一口径，
@@ -559,19 +672,54 @@ class SQLAgent:
                 emit_sql_stage(
                     event_sink, node="sql_generator", phase="sql_generation",
                     message="正在生成查询语句")
-                sql = generate_sql(question, table_names, feedback=feedback)
+                with _sql_trace_stage(
+                    f"sql.generate.attempt_{attempt + 1}",
+                    f"SQL 生成（第 {attempt + 1} 次）",
+                    span_type="llm_call",
+                    input_data={"attempt": attempt + 1, "table_count": len(table_names),
+                                "has_feedback": bool(feedback)},
+                ) as (_stage, metrics):
+                    sql = generate_sql(question, table_names, feedback=feedback)
+                    metrics["sql_length"] = len(sql or "")
 
                 emit_sql_stage(
                     event_sink, node="sql_validator", phase="sql_validation",
                     message="正在校验查询安全性")
-                guarded = guard.validate_and_rewrite(sql, policy)
+                with _sql_trace_stage(
+                    f"sql.validate.attempt_{attempt + 1}",
+                    f"SQL 策略校验（第 {attempt + 1} 次）",
+                    input_data={"sql_length": len(sql or "")},
+                ) as (stage, metrics):
+                    guarded = guard.validate_and_rewrite(sql, policy)
+                    metrics.update(
+                        decision="allow",
+                        referenced_table_count=len(guarded.referenced_tables),
+                        referenced_tables=guarded.referenced_tables[:20],
+                    )
                 emit_sql_stage(
                     event_sink, node="sql_executor", phase="tool_start",
                     message="正在调用数据查询工具", status="running")
-                result = execute_sql_struct(
-                    guarded.executable_sql, self.db_config,
-                    params=guarded.params,
-                )
+                with _sql_trace_stage(
+                    f"sql.execute.attempt_{attempt + 1}",
+                    f"数据库执行（第 {attempt + 1} 次）",
+                    span_type="sql",
+                    input_data={"sql_length": len(guarded.executable_sql or ""),
+                                "referenced_tables": guarded.referenced_tables[:20]},
+                ) as (stage, metrics):
+                    result = execute_sql_struct(
+                        guarded.executable_sql, self.db_config,
+                        params=guarded.params,
+                    )
+                    metrics.update(
+                        execution_status=result.status,
+                        row_count=result.row_count,
+                        elapsed_ms=int((result.elapsed_sec or 0) * 1000),
+                        error_type=result.error_type or "",
+                    )
+                    if result.status not in ("success", "no_data"):
+                        stage["status"] = (
+                            "rejected" if result.status == "permission_denied"
+                            else "error")
                 last_result = result
                 emit_sql_stage(
                     event_sink, node="sql_executor", phase="tool_result",

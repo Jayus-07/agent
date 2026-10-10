@@ -306,7 +306,7 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
     已在调用时解析并传入 —— 两条构建路径分叉的后果是：管理端配好的供应商与密钥
     在真实问答中被**绕开**（`infra/llm/__init__.py` 的 `get_llm` 来自本模块，
     故线上聊天走的正是这条无凭据路径）。即 P1a-1 + P1b 交付的能力此前处于
-    「能配、能测、不能用」状态（见 model-config-admin-ui-design.md §15.5）。
+    「能配、能测、不能用」状态（见 model-config-admin-ui-design.md §14.2）。
     """
     provider = _get_provider_for(model_name)
     credentials = _resolve_credentials_or_none(provider, model_name)

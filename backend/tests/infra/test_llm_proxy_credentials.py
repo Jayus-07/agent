@@ -6,7 +6,7 @@
 调 `build_xxx(model_name)` 不传凭据，而 `factory._build_instance` 传了。两条构建
 路径分叉没有任何报错，症状是「管理端配了供应商与密钥、线上仍用 `.env`」，而
 `infra/llm/__init__.py` 的 `get_llm` 恰好来自 proxy → 线上聊天走的正是那条无凭据
-路径。排查成本极高（见 docs/model-config-admin-ui-design.md §15.5 结论 1）。
+路径。排查成本极高（见 docs/model-config-admin-ui-design.md §14.2）。
 
 AST 断言的价值在于：未来任何人给分发表加分支时忘了传凭据，本测试立刻变红；
 而普通的「打桩调用一次」测试只覆盖当时存在的分支。

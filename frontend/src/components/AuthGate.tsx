@@ -44,8 +44,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       if (ok) {
         setState("ok");
       } else {
-        // 未登录兜底：弹回统一门户主页（redirect 不带——门户卡片的
-        // /login 链接不透传参数，带了也无消费方）
+        // 未登录兜底：弹回统一门户，由用户选择助手入口进入带目标页的登录/注册流程。
         window.location.assign("/");
       }
     });

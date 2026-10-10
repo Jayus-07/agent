@@ -36,9 +36,10 @@
 #     RuleRouter 只命中「竞品」1 个弱信号（confidence 0.72 < 0.8），
 #     会 fallback 到向量路由；删掉这条样例会让「监控」类提问失去
 #     determinism，而不是「消除重叠」。
-#   - routed: false 只约束**路由层**：Planner prompt 与 critique 的能力
-#     清单取 orchestration/tool_registry 全量（17 个，含内部），故内部
-#     能力对 Planner LLM 仍可见。详见四层设计规范 §4 台账 E9。
+#   - Planner prompt 与 critique 的能力清单由
+#     manifest.planner_visible_capability_names 派生：包含 routed:true 能力
+#     和显式 Planner fallback 白名单（travel.poi_search / map.lookup）；普通
+#     routed:false 内部能力不进入规划面。详见 manifest.py 与对应 Planner 测试。
 #
 # =====================================================
 # 分层路由（hierarchical routing，2026-09-22）
@@ -82,6 +83,7 @@ domains:
       - 定义
       - 条例
       - 指南
+      - 怎么
       - "SOP"
 
   - name: data
@@ -184,6 +186,7 @@ domains:
       - 攻略
       - 出行
       - 天气
+      - 行程
 
   - name: selection_funnel
     description: 智能选品：品类评估、选品漏斗、上不上架决策（域图承载）
@@ -303,6 +306,10 @@ capabilities:
     - question: Amazon FBA发货的标准操作流程SOP
     routed: true
     domain: knowledge
+    # 知识检索会被主知识域与客服对话复用；读权限仍由 RAG 主体/知识库授权核验。
+    domains:
+      - knowledge
+      - customer_service
     risk_level: LOW
     fast_path_enabled: true
     tool_spec:
@@ -1377,11 +1384,14 @@ tool_specs:
     params_schema: {type: object, additionalProperties: false, properties: {report_type: {type: string, minLength: 1}, filters: {type: object, additionalProperties: true}}, required: [report_type]}
     governance: {version: 2, operation: create, risk_level: R1, confirmation_policy: none}
   - name: memory_search_tool
-    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, top_k: {type: integer, minimum: 1, maximum: 100}}, required: [query]}
+    params_schema: {type: object, additionalProperties: false, properties: {query: {type: string, minLength: 1}, top_k: {type: integer, minimum: 1, maximum: 100}, domain: {type: string, enum: [general, travel, customer_service, knowledge, sql, business]}}, required: [query]}
     governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
   - name: memory_store_tool
     params_schema: {type: object, additionalProperties: false, properties: {content: {type: string, minLength: 1}, memory_type: {type: string}, memory_key: {type: string}, structured_value: {type: string}}, required: [content]}
     governance: {version: 2, operation: update, risk_level: R1, confirmation_policy: none}
+  - name: memory_forget_tool
+    params_schema: {type: object, additionalProperties: false, properties: {memory_id: {type: string, minLength: 1}}, required: [memory_id]}
+    governance: {version: 2, operation: delete, risk_level: R1, confirmation_policy: user_confirmation}
   - name: search_knowledge_tool
     params_schema: {type: object, additionalProperties: false, properties: {question: {type: string, minLength: 1}, kb_id: {type: string}}, required: [question]}
     governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}

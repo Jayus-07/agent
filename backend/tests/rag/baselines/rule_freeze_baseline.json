@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "frozen_note": "规划阶段 0.2 冻结快照；更新 = 架构师审批 + 规划文档 §7 台账登记",
-    "plan": "docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md"
+    "frozen_note": "Taxonomy snapshot; reviewed taxonomy changes only",
+    "plan": "docs/domains/rag.md#上传元数据与级联决策"
   },
   "DOC_TYPE_RULES": {
     "sha256": "9f573f246e2f904c",

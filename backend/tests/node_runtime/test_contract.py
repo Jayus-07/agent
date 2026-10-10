@@ -42,7 +42,7 @@ def _ctx(name="n1", **kw):
 
 class TestFrozenModels:
     def test_node_result_exactly_four_fields(self):
-        """审计 §6 风险5：通用模型禁止业务字段渗入。"""
+        """通用结果模型只包含运行字段，禁止领域业务字段渗入。"""
         assert [f.name for f in dataclasses.fields(NodeResult)] == [
             "status", "error", "duration_ms", "data",
         ]

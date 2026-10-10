@@ -4,7 +4,7 @@
 生命周期（log_start → timer → invoke → exception policy → wrap → log_done）。
 不是第二套 Tool 治理（retry/breaker/bulkhead 属 tool_runtime）；
 业务字段禁入 NodeResult，域 TypedDict 各自保留。
-设计审计与冻结边界：docs/architecture/STOP_F_Preparation_Audit.md
+当前生命周期与公共契约见 docs/architecture/ai-runtime.md。
 """
 from backend.core.node_runtime.context import ExecutionContext
 from backend.core.node_runtime.error_policy import ErrorPolicy, TimeoutStrategy

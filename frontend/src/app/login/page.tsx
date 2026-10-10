@@ -3,20 +3,23 @@
 /**
  * /login — 用户端登录页（统一门户视觉体系 · 分屏 + 毛玻璃卡）
  *
- * - 绿色主题，复用既有登录态逻辑：redirect 回跳、记住用户名（仅用户名，密码不落盘）、
+ * - 绿色主题，复用既有登录态逻辑：redirect 回跳、默认记住账号密码、
  *   会话过期标记（consumeExpiredFlag）。第三方登录为占位（禁用·敬请期待）。
- * - 客服端登录已分离：客服端现为独立应用 frontend-cs（:3300），由门户主页跨应用跳转，
- *   不再经此页（原 ?end=cs 主题变体已移除）。
+ * - 客服工作台登录由独立应用 frontend-cs（:3300）处理；用户选择智能客服助手时，
+ *   仍复用此登录页，并在登录后跳转到独立的用户客服对话页。
  * - 注册入口移到独立 /register 页（见设计稿 02）。
  */
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   clearSavedUsername,
   consumeExpiredFlag,
+  consumePendingLoginCredentials,
+  getSavedCredentials,
   getSavedUsername,
   login,
+  saveCredentials,
   saveUsername,
 } from "@/lib/auth";
 import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
@@ -33,29 +36,56 @@ const THEME = {
   ] as [string, string, string, string],
 };
 
+const DEMO_LOGIN_ACCOUNTS = [
+  { username: "demo_fuzhou", label: "福州行", role: "管理员" },
+  { username: "demo_li", label: "李经理", role: "普通用户" },
+  { username: "demo_wang", label: "王同学", role: "普通用户" },
+] as const;
+const DEMO_LOGIN_PASSWORD = "Demo@2026";
+
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") || "/agent";
+  const selectedAssistant = redirect.startsWith("/customer-service")
+    ? "智能客服"
+    : redirect.startsWith("/travel")
+      ? "旅游助手"
+      : "企业助手";
+  const registerHref = `/register?redirect=${encodeURIComponent(redirect)}`;
+  const registrationComplete = searchParams.get("registered") === "1";
   const theme = THEME;
 
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const credentialsHydrated = useRef(false);
+  const selectedDemoAccount = DEMO_LOGIN_ACCOUNTS.find(
+    ({ username }) => username === account.trim(),
+  );
 
   useEffect(() => {
+    if (credentialsHydrated.current) return;
+    credentialsHydrated.current = true;
+    const pendingCredentials = consumePendingLoginCredentials();
+    const savedCredentials = getSavedCredentials();
     const saved = getSavedUsername();
-    if (saved) {
-      setAccount(saved);
+    const username = pendingCredentials?.username || savedCredentials?.username || saved;
+    const savedPassword = pendingCredentials?.password || savedCredentials?.password;
+    if (username) {
+      setAccount(username);
       setRemember(true);
     }
+    if (savedPassword) setPassword(savedPassword);
     if (consumeExpiredFlag()) {
       setNotice("登录已过期，请重新登录");
+    } else if (registrationComplete) {
+      setNotice("注册成功，请核对账号密码后登录");
     }
-  }, []);
+  }, [registrationComplete]);
 
   const goNext = () => {
     router.replace(redirect.startsWith("/") ? redirect : "/agent");
@@ -66,20 +96,29 @@ function LoginForm() {
     if (loading) return;
     setError("");
     setNotice("");
-    if (!account.trim() || !password) {
-      setError("请输入手机号 / 邮箱和密码");
+    const isDemoAccount = DEMO_LOGIN_ACCOUNTS.some(
+      ({ username }) => username === account.trim(),
+    );
+    if (!isDemoAccount && !/^1\d{10}$/.test(account.trim())) {
+      setError("请输入 11 位数字，首位为 1");
+      return;
+    }
+    if (!password) {
+      setError("请输入登录密码");
       return;
     }
     setLoading(true);
     try {
       const result = await login(account.trim(), password);
-      if (remember) saveUsername(account.trim());
-      else clearSavedUsername();
       // 临时密码首次登录（P6.3/TD-04）：先改密，改完由改密页进 /agent
       if (result.mustChangePassword) {
+        if (remember) saveUsername(account.trim());
+        else clearSavedUsername();
         router.replace("/change-password");
         return;
       }
+      if (remember) saveCredentials(account.trim(), password);
+      else clearSavedUsername();
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
@@ -92,18 +131,18 @@ function LoginForm() {
       <span
         className="inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3.5 py-1.5 text-[13px] text-[#4A544F]"
       >
-        AI 问答 · 多模态客服
+        即将进入：{selectedAssistant}
       </span>
       <h1
         className="mt-7 whitespace-pre-line text-[56px] font-bold leading-[68px] tracking-[-1.5px] text-[#16191A]"
       >
-        {"问一句，\n拿到带证据的答案"}
+        {"回来继续，\n助手已经就位"}
       </h1>
       <p className="mt-6 max-w-[470px] text-[16px] leading-7 text-[#6E7873]">
-        知识库检索、图片与文档理解、订单与售后查询，一句话全部接住；AI 答不了的问题，自动转人工客服接着办。
+        登录后直达{selectedAssistant}，接着处理眼前的事。
       </p>
       <Link
-        href="/register"
+        href={registerHref}
         className="mt-8 inline-flex items-center gap-2 rounded-full bg-[#16191A] px-6 py-3.5 text-[15px] font-medium text-white transition-opacity hover:opacity-90"
       >
         还没有账号？免费注册
@@ -128,21 +167,22 @@ function LoginForm() {
       fog={theme.fog}
       nav={
         <AuthNav
-          brand={"智能协作平台"}
-          links={[{ label: "返回官网" }, { label: "帮助中心" }]}
+          brand={"智能助手平台"}
+          links={[{ label: "返回门户", href: "/" }]}
+          badge="统一入口"
         />
       }
       left={left}
     >
       <div className="mb-5 lg:mb-6">
         <span className="mb-3 inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3 py-1 text-[12px] text-[#4A544F] lg:hidden">
-          AI 问答 · 多模态客服
+          即将进入：{selectedAssistant}
         </span>
         <h2 className="text-[22px] font-semibold text-[#16191A] sm:text-[24px] lg:text-[26px]">
-          登录你的 AI 助手
+          登录你的账号
         </h2>
         <p className="mt-1.5 text-[13px] text-[#7A8480]">
-          继续上次的对话、知识库与客服工单
+          使用注册时的 11 位手机号登录，直达{selectedAssistant}
         </p>
       </div>
 
@@ -164,11 +204,14 @@ function LoginForm() {
       <form onSubmit={handleSubmit} noValidate>
         <div className="space-y-4">
           <AuthInput
-            label={"手机号 / 邮箱"}
+            label={selectedDemoAccount ? "演示账号" : "手机号"}
             accent={theme.accent}
-            type="text"
+            type={selectedDemoAccount ? "text" : "tel"}
+            name="username"
             autoComplete="username"
-            placeholder="请输入手机号或邮箱"
+            inputMode={selectedDemoAccount ? "text" : "numeric"}
+            maxLength={selectedDemoAccount ? 32 : 11}
+            placeholder={selectedDemoAccount ? "已填入演示账号" : "请输入 11 位手机号"}
             value={account}
             onChange={(e) => setAccount(e.target.value)}
           />
@@ -176,30 +219,71 @@ function LoginForm() {
             label="登录密码"
             accent={theme.accent}
             type="password"
+            name="password"
             autoComplete="current-password"
             placeholder="请输入登录密码"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             trailing={
               <Link
-                href="/register"
+                href={registerHref}
                 className="shrink-0 pl-3 text-[13px] font-medium"
                 style={{ color: theme.accent }}
               >
-                忘记密码？
+                去注册
               </Link>
             }
           />
+        </div>
+
+        <div className="mt-4 rounded-xl border border-[#E3E8E4] bg-white/70 p-3.5">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-1.5">
+            <span className="text-[13px] font-medium text-[#3F4A46]">演示账号</span>
+            <span className="text-[11px] text-[#7A8480]">
+              统一密码：{DEMO_LOGIN_PASSWORD}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {DEMO_LOGIN_ACCOUNTS.map(({ username, label, role }) => (
+              <button
+                key={username}
+                type="button"
+                onClick={() => {
+                  setAccount(username);
+                  setPassword(DEMO_LOGIN_PASSWORD);
+                  setRemember(true);
+                  setError("");
+                }}
+                className={`min-w-0 rounded-lg border px-2 py-2 text-left transition-colors ${
+                  account === username
+                    ? "border-[#1F7A4D]/40 bg-[#1F7A4D]/[0.07]"
+                    : "border-[#E3E8E4] bg-white hover:border-[#1F7A4D]/30"
+                }`}
+                aria-pressed={account === username}
+              >
+                <span className="block truncate text-[12px] font-medium text-[#26312B]">
+                  {label}
+                </span>
+                <span className="block truncate text-[10px] text-[#7A8480]">
+                  {username} · {role}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <label className="mt-4 flex cursor-pointer items-center gap-2 text-[13px] text-[#5C6662]">
           <input
             type="checkbox"
             checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            setRemember(checked);
+            if (!checked) clearSavedUsername();
+          }}
             style={{ accentColor: theme.accent }}
           />
-          记住登录状态
+          记住账号和密码，下次自动填充
         </label>
 
         <button
@@ -214,7 +298,7 @@ function LoginForm() {
             e.currentTarget.style.background = theme.accent;
           }}
         >
-          {loading ? "处理中…" : "登录"}
+          {loading ? "处理中…" : `进入${selectedAssistant}`}
         </button>
 
         {/* 第三方登录占位：桌面保留（占位说明产品规划），移动端收掉——
@@ -246,7 +330,7 @@ function LoginForm() {
         {/* 注册入口（2026-10-07 手机端补）：原入口在左侧品牌区，≤lg 整块隐藏
             导致手机端没有可点的注册路径——移一条进表单卡，两端可见 */}
         <Link
-          href="/register"
+          href={registerHref}
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#1F7A4D]/15 bg-[#1F7A4D]/[0.06] py-3 text-[14px] font-medium text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.12]"
         >
           还没有账号？免费注册

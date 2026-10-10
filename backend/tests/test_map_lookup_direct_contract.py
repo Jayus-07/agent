@@ -7,8 +7,8 @@ BaseSkill._normalize_output（structured 边界解包）→ direct_executor 的
 _coerce_final_answer（真实 final_answer 组装）。唯一 stub 是第三方 HTTP 边缘
 （lbs api.geocode，conftest 已切断 LBS 时走真实 not_configured 失败封套）。
 
-缺陷背景（STOP_G_Preparation_Audit.md §2.3）：map skill 曾声明 text，封套
-JSON 字符串经单步骤透传直出 final_answer，用户看到原始 JSON。
+缺陷背景：structured 输出曾按 text 透传到 final_answer，导致用户看到原始 JSON；
+当前 Tool/Skill 输出契约见 docs/development/tool-skill-guide.md。
 """
 from __future__ import annotations
 

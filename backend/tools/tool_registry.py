@@ -17,7 +17,7 @@ Capability 层（``CAPABILITY_SCHEMA`` 是 ``orchestration.capability_registry``
 派生属性，与本表无关）。
 
 消费方：``scripts/tool_quality_check.py``、``backend/tests/test_layer_consistency.py``
-（均在运行时之外；详见 docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md §3.3）
+（均在运行时之外；扩展约束见 docs/development/tool-skill-guide.md）
 """
 import ast
 import inspect

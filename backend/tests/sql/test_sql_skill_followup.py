@@ -19,9 +19,14 @@ def test_sql_skill_passes_previous_query_context_to_agent(monkeypatch):
     )
 
     class FakeAgent:
-        def ask_struct(self, question, policy=None, query_context=None):
+        # 签名须与 SQLAgent.ask_struct 对齐：Skill 现在会多传 event_sink
+        # （SSE 进度事件）。缺该参数会让 to_thread 调用直接 TypeError，
+        # 被 Skill 吞成查询失败，表现为 seen["question"] KeyError。
+        def ask_struct(self, question, policy=None, query_context=None,
+                       event_sink=None):
             seen["question"] = question
             seen["query_context"] = query_context
+            seen["event_sink"] = event_sink
             return SQLResult.success(
                 rows=[{"product_name": "A"}],
                 columns=["product_name"],
@@ -47,3 +52,5 @@ def test_sql_skill_passes_previous_query_context_to_agent(monkeypatch):
 
     assert seen["question"] == "按月展示"
     assert seen["query_context"]["question"] == "统计各商品分类的销售额排名"
+    # SSE 事件出口被真实透传（而非 None），保证用户端能看到查询进度
+    assert callable(seen["event_sink"])

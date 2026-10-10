@@ -5,7 +5,7 @@
 （不抛异常、日志正常，只是永远匹配不上）。本文件把这条变成可执行的断言：
 **前端写下的每个节点名，都必须真实存在于后端节点集。**
 
-实测事故（详见 docs/reports/2026-09-30-结构病代码审查报告.md）：
+实测事故：
   - `SqlViz.tsx` 过滤 `sql_worker`（真实为 `sql_skill`）→ SQL 结果 UI 从未渲染；
   - `cs/constants.ts` 用工号前的旧架构名 `cs_knowledge` 系（真实为 `cs_graph_node` 系）
     → 客服状态栏显示「正在 cs_graph_node...」、时间轴图标恒为 `•`。

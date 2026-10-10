@@ -77,7 +77,10 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
                                   department=principal.department,
                                   permissions=principal.permissions,
                                   user_id=get_tool_user_id(),
-                                  tenant_id=get_tool_tenant_id())
+                                  tenant_id=get_tool_tenant_id(),
+                                  # 聊天主图的 Reporter 会产出最终权威答案，
+                                  # Memory 统一由父 Runner 在完成后写入。
+                                  persist_memory=False)
     result = append_rag_answer_meta(outcome.answer, outcome.answer_meta)
     logger.info(f"[Tool:search_knowledge] 返回 len={len(result or '')} repr_head={repr((result or '')[:40])}")
     return result

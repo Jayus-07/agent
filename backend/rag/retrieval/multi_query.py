@@ -487,10 +487,19 @@ class MultiQueryRetriever(BaseRetriever):
         from concurrent.futures import TimeoutError, as_completed
         from backend.infra.thread_pools import submit_rag_task
         import contextvars
+        from backend.observability.tracer import trace_collector
+
         docs, seen = [], set()
         # 按 query 分组检索，每个 doc 标记来源查询
         evidence_groups: dict[str, list] = {}
+        query_results: dict[str, dict] = {}
         base_invoke = self.base_retriever.invoke
+        fanout_span = trace_collector.start_span(
+            "multi_query_fanout",
+            name="多查询并发检索",
+            type="retrieval",
+            input={"queries": queries[:10]},
+        )
 
         def _submit_isolated(q: str):
             # context 快照必须在提交方（请求）线程做：池线程 context 为空，
@@ -505,7 +514,55 @@ class MultiQueryRetriever(BaseRetriever):
             ctx = contextvars.copy_context()
             return submit_rag_task("multi_query", ctx.run, base_invoke, q)
 
-        future_to_q = {_submit_isolated(q): q for q in queries}
+        future_to_q = {}
+        submitted_at = {}
+        try:
+            for q in queries:
+                submitted_at[q] = time.perf_counter()
+                future_to_q[_submit_isolated(q)] = q
+        except Exception as e:
+            message = str(e)[:300]
+            cancelled_queries = set()
+            for future, submitted_query in future_to_q.items():
+                if future.cancel():
+                    cancelled_queries.add(submitted_query)
+            query_result_rows = []
+            for q in queries:
+                cancelled = q in cancelled_queries
+                query_result_rows.append({
+                    "query": q,
+                    "status": "cancelled" if cancelled else "error",
+                    "retrieved_docs": 0,
+                    "retained_docs": 0,
+                    "duration_ms": max(
+                        0,
+                        round((time.perf_counter() - submitted_at.get(q, time.perf_counter())) * 1000),
+                    ),
+                    "error": (
+                        "任务提交失败，已取消等待"
+                        if cancelled else f"检索任务提交失败：{message}"
+                    ),
+                })
+            trace_collector.add_event(
+                fanout_span,
+                "fanout_submission_failed",
+                "error",
+                f"多查询检索任务提交失败：{message}",
+                data={"error": message},
+            )
+            trace_collector.end_span(
+                fanout_span,
+                output={"query_results": query_result_rows, "partial": True},
+                metrics={
+                    "query_count": len(queries),
+                    "success_count": 0,
+                    "error_count": sum(item["status"] == "error" for item in query_result_rows),
+                    "timeout_count": 0,
+                    "unique_docs": 0,
+                },
+                status="error",
+            )
+            raise
         # Phase 5 §25：fan-out 限时——单个变体挂起不再无限等待；超时保留
         # 已完成变体的部分结果（部分成功语义），未完成的取消等待
         from backend.config.rag import RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS
@@ -520,8 +577,9 @@ class MultiQueryRetriever(BaseRetriever):
             for future in as_completed(future_to_q, timeout=fanout_s):
                 q = future_to_q[future]
                 try:
+                    retrieved_docs = list(future.result() or [])
                     q_docs = []
-                    for d in future.result():
+                    for d in retrieved_docs:
                         cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
                         if cid not in seen:
                             seen.add(cid)
@@ -529,14 +587,59 @@ class MultiQueryRetriever(BaseRetriever):
                             q_docs.append(d)
                             docs.append(d)
                     evidence_groups[q] = q_docs
+                    query_results[q] = {
+                        "query": q,
+                        "status": "success",
+                        "retrieved_docs": len(retrieved_docs),
+                        "retained_docs": len(q_docs),
+                        "duration_ms": max(
+                            0, round((time.perf_counter() - submitted_at[q]) * 1000)
+                        ),
+                    }
                 except Exception as e:
                     logger.warning(f"[MultiQuery] 检索失败: {e}")
                     evidence_groups[q] = []
+                    message = str(e)[:300]
+                    query_results[q] = {
+                        "query": q,
+                        "status": "error",
+                        "retrieved_docs": 0,
+                        "retained_docs": 0,
+                        "duration_ms": max(
+                            0, round((time.perf_counter() - submitted_at[q]) * 1000)
+                        ),
+                        "error": message,
+                    }
+                    trace_collector.add_event(
+                        fanout_span,
+                        "query_failed",
+                        "error",
+                        f"查询「{q[:100]}」检索失败：{message}",
+                        data={"query": q, "error": message},
+                    )
         except TimeoutError:
             fanout_timed_out = True
-            for f in future_to_q:
+            for f, q in future_to_q.items():
                 if not f.done():
                     f.cancel()
+                    message = "超过多查询检索时限，未完成的查询已取消等待"
+                    query_results[q] = {
+                        "query": q,
+                        "status": "timeout",
+                        "retrieved_docs": 0,
+                        "retained_docs": 0,
+                        "duration_ms": max(
+                            0, round((time.perf_counter() - submitted_at[q]) * 1000)
+                        ),
+                        "error": message,
+                    }
+                    trace_collector.add_event(
+                        fanout_span,
+                        "query_timeout",
+                        "error",
+                        f"查询「{q[:100]}」超时",
+                        data={"query": q, "error": message},
+                    )
             logger.warning(
                 f"[MultiQuery] fan-out 超时({fanout_s:.1f}s)，部分成功: "
                 f"已完成 {len(docs)} docs / {len(queries)} 变体"
@@ -544,6 +647,47 @@ class MultiQueryRetriever(BaseRetriever):
         # 超时后未产出结果的变体补空组，保证 evidence_groups 键完整
         for q in queries:
             evidence_groups.setdefault(q, [])
+            query_results.setdefault(q, {
+                "query": q,
+                "status": "timeout" if fanout_timed_out else "error",
+                "retrieved_docs": 0,
+                "retained_docs": 0,
+                "duration_ms": max(
+                    0, round((time.perf_counter() - submitted_at[q]) * 1000)
+                ),
+                "error": "查询未返回可记录的结果",
+            })
+
+        query_result_rows = [query_results[q] for q in queries]
+        statuses = [item["status"] for item in query_result_rows]
+        success_count = statuses.count("success")
+        error_count = statuses.count("error")
+        timeout_count = statuses.count("timeout")
+        fanout_status = (
+            "timeout" if timeout_count
+            else "partial" if success_count and error_count
+            else "error" if error_count
+            else "success"
+        )
+        trace_collector.end_span(
+            fanout_span,
+            output={
+                "query_results": query_result_rows,
+                "unique_docs": len(docs),
+                "partial": fanout_status != "success",
+            },
+            metrics={
+                "query_count": len(queries),
+                "success_count": success_count,
+                "error_count": error_count,
+                "timeout_count": timeout_count,
+                "retrieved_docs": sum(
+                    item["retrieved_docs"] for item in query_result_rows
+                ),
+                "unique_docs": len(docs),
+            },
+            status=fanout_status,
+        )
 
         # 注入 evidence_groups 到首个 doc，供 prompt 模板使用
         if docs:

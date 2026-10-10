@@ -1,6 +1,6 @@
 """四层设计规范守护测试（2026-09-16 归一）
 
-对应 ``docs/2026-09-16-Agent-Skill-Tool-MCP四层设计规范.md``。
+对应当前 Agent / Skill / Tool / MCP 开发规范。
 每条断言都对应一次真实发生过的偏差，不是形式主义：
 
   1. Tool 层完整性：所有 @tool 装饰的函数必须已注册进 tool_registry。

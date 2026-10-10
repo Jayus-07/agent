@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Literal, TypedDict
+from typing_extensions import NotRequired
 
 
 class DomainDecision(TypedDict):
@@ -16,6 +17,7 @@ class DomainDecision(TypedDict):
     domain: str
     subflow: str | None
     confidence: float
+    score_type: NotRequired[str]
     source: str
     reasoning: str
 
@@ -27,6 +29,16 @@ class CapabilityDecision(TypedDict):
     capability: str | None
     candidates: list[dict]
     confidence: float
+    selection_mode: NotRequired[str]
+    top1: NotRequired[str]
+    top1_score: NotRequired[float]
+    top2: NotRequired[str]
+    top2_score: NotRequired[float]
+    margin: NotRequired[float]
+    risk_level: NotRequired[str]
+    score_type: NotRequired[str]
+    fallback_reason: NotRequired[str]
+    block_reason: NotRequired[str]
     source: str
     reasoning: str
 

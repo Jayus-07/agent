@@ -1,19 +1,7 @@
-"""test_rule_freeze.py — 规则链冻结守卫（规划阶段 0.2 / 停止条件 S8 的 CI 化）。
+"""规则与 taxonomy 冻结守卫。
 
-规划（docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md）§0.2：
-CI 禁止 domain_data.py 新增正则；新增需架构师审批。本测试把词表当前状态
-（条目数 + 内容 sha256）固化为基线 JSON，任何未走审批的词表变更都会让
-本测试变红。
-
-审批流程（= 更新基线的唯一合法路径）：
-  1. 架构师确认新词表诉求不属于"修个案"（规划 §2.2 N7：不再往
-     domain_data.py 新增正则修个案；强信号走统一抽取/动态词库）；
-  2. 显式更新基线并留痕（CI 里基线 diff 可见）：
-       RULE_FREEZE_UPDATE_BASELINE=1 python -m pytest tests/rag/test_rule_freeze.py -q --no-cov
-  3. 在规划文档 §7 登记变更台账（改了哪个词表、为什么）。
-
-冻结对象 = domain_data.py 全部静态词表；DB 动态词库（keyword_store）不在此列
-（线上可维护，走管理页流程）。
+规则词典或 taxonomy 发生有意变更时，应同步更新基线，并在代码评审中说明原因：
+    RULE_FREEZE_UPDATE_BASELINE=1 python -m pytest tests/rag/test_rule_freeze.py -q --no-cov
 """
 import hashlib
 import json
@@ -100,7 +88,7 @@ def test_update_baseline_mode_writes_and_matches():
     payload = {
         "_meta": {
             "frozen_note": "规划阶段 0.2 冻结快照；更新 = 架构师审批 + 规划文档 §7 台账登记",
-            "plan": "docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md",
+            "plan": "docs/domains/rag.md#上传元数据与级联决策",
         },
         **current,
     }

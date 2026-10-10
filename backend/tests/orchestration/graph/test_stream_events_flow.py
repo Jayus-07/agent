@@ -43,6 +43,9 @@ def _allow_guard(monkeypatch):
 
 
 class _FakeMemory:
+    def __init__(self):
+        self.end_turn_calls = []
+
     def start_session(self, session_id, question, user_id="default",
                       tenant_id=""):
         from backend.memory.short_term import ShortTermBuffer
@@ -51,6 +54,7 @@ class _FakeMemory:
     def end_turn(self, session_id, question, answer, user_id="default",
                  tenant_id=""):
         self.last_answer = answer
+        self.end_turn_calls.append((session_id, question, answer))
 
 
 class _FakeGraph:
@@ -87,8 +91,17 @@ def _collect_events(sys_obj, stop_event=None):
     ))
 
 
-def test_stream_events_true_streaming_order():
+def test_stream_events_true_streaming_order(monkeypatch):
     """真流式：delta 在 status 之后、done 之前按序产出，且不再有假打字机重复。"""
+    from backend.observability.tracer import trace_collector
+
+    finished = {}
+
+    def record_finish(trace, answer, *_args):
+        finished["trace"] = trace
+        finished["answer"] = answer
+
+    monkeypatch.setattr(trace_collector, "finish", record_finish)
     events = [
         {"router": {"route_mode": "plan", "cs_context": {}}},
         {"reporter": {"final_answer": "最终回答"}},
@@ -104,6 +117,79 @@ def test_stream_events_true_streaming_order():
     # done 携带权威 final_answer
     done = next(e for e in out if e["event"] == "done")
     assert done["data"]["elapsed"] is not None
+    assert done["data"]["answer"] == "最终回答"
+    assert done["data"]["answer_source"] == "reporter"
+    assert sys_obj._memory.last_answer == done["data"]["answer"]
+    assert len(sys_obj._memory.end_turn_calls) == 1
+    assert finished["answer"] == done["data"]["answer"]
+    assert finished["trace"].tags["answer_source"] == "reporter"
+
+
+def test_rag_progress_sse_reaches_primary_stream_without_planner():
+    """RAG Direct 的检索进度经 Runner 进入主 SSE，期间不经过 Planner。"""
+    from backend.orchestration.graph.sse_event_sink import emit_sse_progress
+
+    class RagDirectGraph(_FakeGraph):
+        def stream(self, initial_state, config=None):
+            emit_sse_progress(
+                node="rag_skill", phase="rag_search",
+                message="正在检索知识库并核验资料", tool="rag.search",
+            )
+            yield {"router": {"route_mode": "direct", "cs_context": {}}}
+            yield {"skill_executor": {"final_answer": "RAG 权威答案"}}
+
+    events = _collect_events(_make_system(RagDirectGraph([])))
+    progress = next(
+        event for event in events
+        if event["event"] == "log"
+        and event["data"].get("payload", {}).get("phase") == "rag_search"
+    )
+    done = next(event["data"] for event in events if event["event"] == "done")
+
+    assert progress["data"]["node"] == "rag_skill"
+    assert done["answer"] == "RAG 权威答案"
+    assert not any(
+        event["event"] == "status" and event["data"].get("node") == "planner"
+        for event in events
+    )
+
+
+def test_general_chat_streaming_keeps_final_answer_contract():
+    """普通 General Chat 继续透传 delta，终态正文由 done.answer 定稿。"""
+    sys_obj = _make_system(_FakeGraph(
+        [{"general_chat": {"final_answer": "你好，最终答复。"}}],
+        emit_deltas=["你好", "，正在生成"],
+    ))
+    events = _collect_events(sys_obj)
+    deltas = [event["data"]["content"] for event in events if event["event"] == "delta"]
+    done = next(event for event in events if event["event"] == "done")
+
+    assert deltas == ["你好", "，正在生成"]
+    assert done["data"]["answer"] == "你好，最终答复。"
+    assert done["data"]["answer_source"] == "general_chat"
+    assert sys_obj._memory.last_answer == done["data"]["answer"]
+
+
+@pytest.mark.parametrize("route_mode", ["direct", "workflow"])
+def test_direct_and_workflow_adopt_deterministic_reporter_answer(route_mode):
+    """Executor 结果经 Reporter 规则渲染后成为唯一终态正文。"""
+    sys_obj = _make_system(_FakeGraph([
+        {"router": {"route_mode": route_mode, "cs_context": {}}},
+        {"skill_executor": {
+            "final_answer": '{"summary":"raw executor json"}',
+            "step_results": {"direct_1": {"status": "success"}},
+        }},
+        {"reporter": {"final_answer": "已格式化的确定性答案"}},
+    ]))
+    events = _collect_events(sys_obj)
+    deltas = [event["data"]["content"] for event in events
+              if event["event"] == "delta"]
+    done = next(event["data"] for event in events if event["event"] == "done")
+
+    assert "".join(deltas) == done["answer"]
+    assert done["answer"] == "已格式化的确定性答案"
+    assert done["answer_source"] == "reporter"
+    assert sys_obj._memory.last_answer == done["answer"]
 
 
 def test_stream_events_fallback_typewriter():
@@ -202,6 +288,7 @@ def test_stream_events_user_abort():
     names = [e["event"] for e in out]
     assert "error" in names
     assert "done" not in names
+    assert sys_obj._memory.end_turn_calls == []
 
 
 def test_stream_events_worker_error():
@@ -217,6 +304,72 @@ def test_stream_events_worker_error():
     names = [e["event"] for e in out]
     assert "error" in names
     assert "done" not in names
+    assert sys_obj._memory.end_turn_calls == []
+
+
+def test_abort_after_graph_answer_does_not_commit_memory():
+    """图结束后、done 之前收到 abort 时仍走 cancelled，不能写 Memory。"""
+    stop = threading.Event()
+
+    class LateAbortGraph:
+        def stream(self, _initial_state, config=None):
+            from backend.infra.llm.proxy import emit_stream_delta
+
+            assert emit_stream_delta("未定稿预览") is True
+            yield {"reporter": {"final_answer": "最终答案"}}
+            stop.set()
+
+    sys_obj = _make_system(LateAbortGraph())
+    out = list(sys_obj.stream_events(
+        "测试问题", "s-1", kb_id="default", stop_event=stop, user_id="u-1",
+    ))
+
+    assert any(event["event"] == "error" for event in out)
+    assert not any(event["event"] == "done" for event in out)
+    assert sys_obj._memory.end_turn_calls == []
+
+
+def test_shared_runner_keeps_domain_answer_contracts(monkeypatch):
+    """公共终态答案变化兼容客服、旅游、选品三个域图出口。"""
+    from backend.orchestration.graph import builder
+    from backend.orchestration.domain_registry import domain_graph_registry
+
+    domain_nodes = {
+        "cs_graph_node", "travel_graph_node", "selection_funnel_graph_node",
+    }
+    monkeypatch.setattr(domain_graph_registry, "get_node_names", lambda: domain_nodes)
+    for node_name, answer, payload in (
+        ("cs_graph_node", "客服域回答", {"cs_pending_action": {"action_type": "confirm"}}),
+        ("travel_graph_node", "旅游域回答", {"travel_context": {"itinerary": {"status": "draft"}}}),
+        ("selection_funnel_graph_node", "选品域回答", {"funnel_context": {"stage": "review"}}),
+    ):
+        # 模拟 build_graph() 已从 DomainGraphRegistry 派生节点标签的启动态。
+        monkeypatch.setitem(builder._NODE_LABELS, node_name, node_name)
+        output = {"final_answer": answer, **payload}
+        sys_obj = _make_system(_FakeGraph([{node_name: output}]))
+        events = _collect_events(sys_obj)
+        done = next(event for event in events if event["event"] == "done")
+
+        assert done["data"]["answer_source"] == node_name
+        assert done["data"]["answer"] == answer
+        assert output["final_answer"] == answer
+
+
+def test_final_answer_contract_covers_sql_workflow_planner_and_rag():
+    """AC-10/11 的四类答案生产路径都透出 Runner 的最终权威答案。"""
+    producers = (
+        ("skill_executor", "Direct SQL 最终答案"),
+        ("workflow_executor", "Workflow 最终答案"),
+        ("reporter", "Planner 最终答案"),
+        ("skill_executor", "RAG 最终答案"),
+    )
+    for node_name, answer in producers:
+        sys_obj = _make_system(_FakeGraph([{node_name: {"final_answer": answer}}]))
+        events = _collect_events(sys_obj)
+        done = next(event for event in events if event["event"] == "done")
+
+        assert done["data"]["answer"] == answer
+        assert sys_obj._memory.last_answer == answer
 
 
 def test_stream_events_memory_persisted():
@@ -225,6 +378,7 @@ def test_stream_events_memory_persisted():
     sys_obj = _make_system(_FakeGraph(events))
     _collect_events(sys_obj)
     assert sys_obj._memory.last_answer == "持久化答案"
+    assert len(sys_obj._memory.end_turn_calls) == 1
 
 
 # =====================================================

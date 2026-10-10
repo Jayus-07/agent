@@ -49,11 +49,38 @@ class TestTokenCounter:
         tc._counter_cache.clear()
 
     def test_openai_uses_compatible_tiktoken(self, monkeypatch):
+        """openai 系在 tiktoken 可用时必须走 compatible（官方口径）。
+
+        原断言无条件期望 compatible，实际降级链是
+        native → compatible → calibrated → fallback：compatible 分支要求
+        _get_encoding() 可用（cp. token_counter.py:165）。无 tiktoken 的环境
+        （本机实测 _get_encoding() is None）会正确落到 calibrated，
+        原断言因此长期红。这里显式注入 encoding，使"openai→compatible"
+        这条契约真正被验证，而不是依赖运行环境是否装了 tiktoken。
+        """
         from backend.context_budget import token_counter as tc
+
+        self._clear_cache()
         monkeypatch.setattr(tc, "_get_provider", lambda m: "openai")
+        monkeypatch.setattr(tc, "_get_encoding", lambda: object())
         counter = tc.get_counter("gpt-4o")
         assert counter.strategy == "compatible"
         assert counter.estimated is False
+
+    def test_openai_without_tiktoken_degrades_to_calibrated(self, monkeypatch):
+        """tiktoken 不可用时 openai 系必须降级到 calibrated（不静默假装精确）。
+
+        覆盖降级链的关键失败路径：宁可标记 estimated=True，也不能谎报
+        compatible 的精确性——使用方据此决定是否施加安全系数。
+        """
+        from backend.context_budget import token_counter as tc
+
+        self._clear_cache()
+        monkeypatch.setattr(tc, "_get_provider", lambda m: "openai")
+        monkeypatch.setattr(tc, "_get_encoding", lambda: None)
+        counter = tc.get_counter("gpt-4o")
+        assert counter.strategy == "calibrated"
+        assert counter.estimated is True
 
     def test_deepseek_calibrated_estimated(self, monkeypatch):
         from backend.context_budget import token_counter as tc

@@ -5,7 +5,7 @@
  *
  * 字段：手机号（必选，作为注册账号）/ 邮箱（选填）/ 设置密码 / 确认密码 /
  *       企业名称（选填）/ 协议勾选。
- * 复用 lib/auth.register + login：注册成功后自动登录并跳回 redirect（默认 /agent）。
+ * 复用 lib/auth.register：注册成功后返回登录页，带入刚注册的账号密码。
  *
  * 后端契约说明：当前 /api/sys/users/register 仅持久化 username/password/realName，
  * 邮箱、企业名称作为附加字段发送（后端暂忽略），后续扩展后端模型后即可落库。
@@ -14,7 +14,7 @@ import { Suspense, useCallback, useEffect, useState, type FormEvent } from "reac
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { RefreshCw } from "lucide-react";
-import { consumeExpiredFlag, fetchRegisterCaptcha, login, register, saveUsername } from "@/lib/auth";
+import { consumeExpiredFlag, fetchRegisterCaptcha, register, setPendingLoginCredentials } from "@/lib/auth";
 import type { RegisterCaptcha } from "@/lib/auth";
 import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
 import AuthInput from "@/components/auth/AuthInput";
@@ -32,6 +32,12 @@ function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") || "/agent";
+  const selectedAssistant = redirect.startsWith("/customer-service")
+    ? "智能客服"
+    : redirect.startsWith("/travel")
+      ? "旅游助手"
+      : "企业助手";
+  const loginHref = `/login?redirect=${encodeURIComponent(redirect)}`;
 
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
@@ -68,18 +74,14 @@ function RegisterForm() {
     if (consumeExpiredFlag()) setNotice("登录已过期，请重新登录");
   }, []);
 
-  const goNext = () => {
-    router.replace(redirect.startsWith("/") ? redirect : "/agent");
-  };
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (loading) return;
     setError("");
     setNotice("");
 
-    if (!/^1[3-9]\d{9}$/.test(phone.trim())) {
-      setError("请输入有效的 11 位手机号");
+    if (!/^1\d{10}$/.test(phone.trim())) {
+      setError("请输入 11 位数字，首位为 1");
       return;
     }
     if (password.length < 8 || password.length > 20) {
@@ -116,9 +118,8 @@ function RegisterForm() {
         void refreshCaptcha();
         throw regErr;
       }
-      await login(phone.trim(), password);
-      saveUsername(phone.trim());
-      goNext();
+      setPendingLoginCredentials(phone.trim(), password);
+      router.replace(`${loginHref}&registered=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "注册失败，请稍后重试");
       setLoading(false);
@@ -128,16 +129,16 @@ function RegisterForm() {
   const left = (
     <div className="max-w-[520px]">
       <span className="inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3.5 py-1.5 text-[13px] text-[#4A544F]">
-        AI 问答 · 多模态客服
+        即将进入：{selectedAssistant}
       </span>
       <h1 className="mt-7 whitespace-pre-line text-[56px] font-bold leading-[68px] tracking-[-1.5px] text-[#16191A]">
-        {"注册一个账号，\n问题就能问到底"}
+        {"创建账号，\n和助手开始聊"}
       </h1>
       <p className="mt-6 max-w-[470px] text-[16px] leading-7 text-[#6E7873]">
-        知识库问答、图片与文档理解、订单与售后查询全部开放；答不上来的问题直接转人工客服继续跟。
+        注册完成后会直接进入{selectedAssistant}。同一账号也能从门户切换其他助手。
       </p>
       <Link
-        href="/login"
+        href={loginHref}
         className="mt-8 inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/70 px-6 py-3.5 text-[15px] font-medium text-[#16191A] transition-colors hover:bg-white"
       >
         已有账号，立即登录
@@ -160,15 +161,15 @@ function RegisterForm() {
       accent={ACCENT}
       accentHover={ACCENT_HOVER}
       fog={FOG}
-      nav={<AuthNav brand="智能协作平台" links={[{ label: "返回官网" }, { label: "帮助中心" }]} />}
+      nav={<AuthNav brand="智能助手平台" links={[{ label: "返回门户", href: "/" }]} badge="统一入口" />}
       left={left}
     >
       <div className="mb-5 lg:mb-6">
         <span className="mb-3 inline-flex items-center rounded-full border border-black/10 bg-white/70 px-3 py-1 text-[12px] text-[#4A544F] lg:hidden">
-          AI 问答 · 多模态客服
+          即将进入：{selectedAssistant}
         </span>
         <h2 className="text-[22px] font-semibold text-[#16191A] sm:text-[24px] lg:text-[26px]">创建你的账号</h2>
-        <p className="mt-1.5 text-[13px] text-[#7A8480]">30 秒完成注册，马上开始提问</p>
+        <p className="mt-1.5 text-[13px] leading-5 text-[#7A8480]">用 11 位手机号和密码注册；密码需为 8–20 位且包含字母和数字，完成图形验证码即可提交，无需短信验证码。注册后将进入{selectedAssistant}。</p>
       </div>
 
       {notice && (
@@ -188,7 +189,8 @@ function RegisterForm() {
             label="手机号"
             accent={ACCENT}
             type="tel"
-            autoComplete="tel"
+            name="username"
+            autoComplete="username"
             placeholder="请输入 11 位手机号"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -197,6 +199,7 @@ function RegisterForm() {
             label="设置密码"
             accent={ACCENT}
             type="password"
+            name="new-password"
             autoComplete="new-password"
             placeholder="8-20 位，需包含字母与数字"
             value={password}
@@ -206,6 +209,7 @@ function RegisterForm() {
             label="确认密码"
             accent={ACCENT}
             type="password"
+            name="confirm-password"
             autoComplete="new-password"
             placeholder="请再次输入密码"
             value={confirm}
@@ -288,12 +292,12 @@ function RegisterForm() {
             e.currentTarget.style.background = ACCENT;
           }}
         >
-          {loading ? "处理中…" : "创建账号"}
+          {loading ? "处理中…" : "注册并开始使用"}
         </button>
 
         {/* 登录入口（2026-10-07 手机端补）：与登录页注册入口对称，两端可见 */}
         <Link
-          href="/login"
+          href={loginHref}
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#1F7A4D]/15 bg-[#1F7A4D]/[0.06] py-3 text-[14px] font-medium text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.12]"
         >
           已有账号？直接登录

@@ -2,7 +2,7 @@
 
 职责：拉取近 N 天 ai.cs_faq_query_log 的 matched=false 真实 miss，输出
 **人工判定清单**（读只不写——判定与发布是人审后的动作，流程见
-docs/cs-runbook.md §三）：
+docs/operations/customer-service-runbook.md §三）：
 
   - 聚合频次与首末出现时间（优先处置高频）；
   - 现配对：用当前 FAQ 索引重放每条 miss——已能命中的标记 closed_now

@@ -11,7 +11,9 @@
 from backend.orchestration.graph import direct_executor
 from backend.orchestration.graph.direct_executor import (
     _extract_capability_name,
+    _coerce_final_answer,
     skill_executor_node,
+    workflow_executor_node,
 )
 
 
@@ -93,14 +95,100 @@ class TestDirectExecution:
         out = skill_executor_node(_state(candidates=_mk_candidates("sql.query")))
         assert out["executor_mode"] == "direct"
         assert out["step_results"]["direct_1"]["status"] == "success"
-        # final_answer 必须是 str：skill 返回的 dict 不得原样透传
-        # （曾把 SQLResult dict 塞进 final_answer，炸掉下游所有按字符串
-        # 处理的地方——done 事件 sources、emit_delta、记忆落库等）
-        import json
         assert isinstance(out["final_answer"], str)
-        assert json.loads(out["final_answer"]) == {"rows": [{"x": 1}]}
+        assert "| x |" in out["final_answer"]
+        assert "| 1 |" in out["final_answer"]
         # step_results 保留结构化原貌，供 reporter/trace 使用
         assert out["step_results"]["direct_1"]["output"] == {"rows": [{"x": 1}]}
+
+    def test_coerce_business_insight_to_readable_markdown(self):
+        answer = _coerce_final_answer({
+            "capability": "business.analyze",
+            "description": "库存分析",
+            "status": "success",
+            "output": {
+                "summary": "库存周转较慢",
+                "risks": ["滞销库存增加"],
+                "suggestions": ["优先处理滞销商品"],
+                "confidence": 0.8,
+            },
+        })
+
+        assert "库存周转较慢" in answer
+        assert "滞销库存增加" in answer
+        assert "优先处理滞销商品" in answer
+        assert not answer.lstrip().startswith("{")
+
+    def test_coerce_sql_zero_rows_as_successful_empty_query(self):
+        answer = _coerce_final_answer({
+            "capability": "sql.query",
+            "description": "订单查询",
+            "status": "success",
+            "is_empty": True,
+            "output": {"columns": ["order_id"], "rows": []},
+        })
+
+        assert "查询成功" in answer
+        assert "0 行" in answer
+        assert "未能找到与" not in answer
+
+    def test_coerce_unknown_and_compacted_objects_without_repr(self):
+        unknown = _coerce_final_answer({
+            "capability": "unknown.capability",
+            "description": "内部结果",
+            "status": "success",
+            "output": {"opaque_internal_key": "secret-value"},
+        })
+        preview = _coerce_final_answer({
+            "capability": "map.lookup",
+            "description": "地图查询",
+            "status": "success",
+            "output": {
+                "context_compacted": True,
+                "type": "tool_result_preview",
+                "preview": "{\"context_compacted\": true, \"token\": \"secret\"}",
+            },
+        })
+
+        assert "无法可靠展示" in unknown
+        assert "opaque_internal_key" not in unknown
+        assert "secret-value" not in unknown
+        assert "无法可靠展示" in preview
+        assert "context_compacted" not in preview
+        assert "secret" not in preview
+
+
+def test_workflow_executor_renders_actual_business_result_without_run_metadata(monkeypatch):
+    from types import SimpleNamespace
+    import backend.orchestration.workflow.scheduler as scheduler_mod
+
+    context = SimpleNamespace(
+        status="success",
+        error="",
+        outputs={"analysis": {
+            "summary": "库存周转偏慢",
+            "risks": ["滞销库存增加"],
+            "suggestions": ["优先处理滞销商品"],
+        }},
+        step_failures=[],
+        run_id="synthetic-private-run-id",
+    )
+
+    class _Scheduler:
+        async def run_now(self, workflow_name, inputs=None):
+            return context
+
+    monkeypatch.setattr(scheduler_mod, "get_workflow_scheduler", lambda: _Scheduler())
+    out = workflow_executor_node({
+        "question": "生成库存分析",
+        "route_decision": {"workflow_name": "inventory_summary"},
+    })
+
+    assert "库存周转偏慢" in out["final_answer"]
+    assert "滞销库存增加" in out["final_answer"]
+    assert "synthetic-private-run-id" not in out["final_answer"]
+    assert "inventory_summary" not in out["final_answer"]
+    assert not out["final_answer"].lstrip().startswith("{")
 
     def test_failed_step_empty_final_answer(self, monkeypatch):
         """失败步骤 final_answer 必须为空串：曾返回 str(None)="None"，
@@ -206,3 +294,13 @@ class TestDirectExecution:
             previous_outputs={"plan_1": {"rows": []}}))
         assert "direct_0" not in out["step_results"]
         assert out["step_results"]["direct_1"]["status"] == "success"
+
+
+def test_business_analyze_does_not_receive_question_fallback():
+    """有 auto 前置依赖的 direct 能力不接收通用 question 参数。"""
+    state = _state(question="分析库存周转", candidates=_mk_candidates("business.analyze"))
+
+    assert direct_executor._resolved_params(state, "business.analyze") == {}
+    assert direct_executor._resolved_params(state, "sql.query") == {
+        "question": "分析库存周转"
+    }

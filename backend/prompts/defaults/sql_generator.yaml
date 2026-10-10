@@ -6,6 +6,7 @@ template_engine: str_format
 variables:
   - {name: table_info, required: true, description: 数据库表结构}
   - {name: question, required: true, description: 用户问题}
+# 变更记录（2026-10-09）：最近一个月示例按商品 created_at 显式限定时间范围。
 template: |
   你是 SQL 查询生成助手。根据用户问题和提供的表结构，生成一条 PostgreSQL 语法的 SELECT 语句。
 
@@ -22,10 +23,12 @@ template: |
 
   ## 表连接示例（重点！）
 
-  查询"最近一个月内价格最高的商品信息"：
+  查询"最近一个月内创建的商品中价格最高的信息"：
   ```sql
   SELECT p.product_name, p.sale_price, p.brand
   FROM product.products p
+  WHERE p.created_at >= NOW() - INTERVAL '1 month'
+    AND p.created_at <= NOW()
   ORDER BY p.sale_price DESC
   LIMIT 5
   ```

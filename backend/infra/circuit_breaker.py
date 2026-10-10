@@ -5,7 +5,7 @@ CLOSED → OPEN → HALF_OPEN 三态状态机:
   - OPEN: 快速失败（直接抛 CircuitBreakerOpenError），timeout 秒后进入 HALF_OPEN
   - HALF_OPEN: 试探 1 次（其余并发调用快速失败）→ 成功恢复 CLOSED / 失败回到 OPEN
 
-跨进程共享（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）:
+跨进程共享（审查 #13 / docs/architecture/domain-service-map.md#下游熔断）:
   CIRCUIT_BREAKER_SHARED_ENABLED 开启时，fail 计数（INCR+TTL）与 OPEN 状态
   （SET NX+TTL）走 Redis，多 worker/多副本下阈值不再放大 N 倍；Redis 不可用
   自动退回进程内状态（= 单机行为，方向安全）。热路径（CLOSED 下成功的调用）

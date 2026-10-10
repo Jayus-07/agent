@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """generate_batch1.py — CS 评测集 v2 批 1 生产（C1 FAQ 60 + C2 查询 60）
 
-口径（docs/2026-09-19-智能客服优化-P0评测集设计稿.md §2，已锁定）：
+口径（docs/domains/customer-service.md §2，已锁定）：
 - 意图/目标枚举从代码事实源 import（G2：禁止手抄）；
 - C2 实体锚定 15 笔演示种子订单（customer_service DB 实测值，2026-09-19 快照）；
 - C1 事实锚定 docs/customer-service/demo-kb/ 的 10 个演示文档；

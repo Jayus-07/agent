@@ -2,13 +2,16 @@
 
 /**
  * ChatHeader — 任务模式顶部标题栏（h-14）
- * 左：任务栏开关 + 当前会话标题；右：新建任务 + 分享 + 退出登录。
+ * 左：任务栏开关 + 当前会话标题；右：新建任务 + 门户 + 分享 + 退出登录。
  * 模型切换已下移到输入框工具栏（ComposerToolbar），此处不再重复。
  * 全局控制台导航在 /agent 下不渲染（见 app/layout.tsx）。
  */
 import { useRouter } from 'next/navigation'
-import { Headphones, History, LogOut, PanelLeft, PanelLeftClose, Plus, Share2 } from 'lucide-react'
+import type { ReactNode } from 'react'
+import Link from 'next/link'
+import { Headphones, House, LogOut, PanelLeft, PanelLeftClose, Plus, Share2 } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
+import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
 import { getCachedUser, logout } from '@/lib/auth'
 
 interface Props {
@@ -20,12 +23,12 @@ interface Props {
   sessionId?: string
   /** 打开智能客服抽屉（WorkBuddy 式右上胶囊入口；不传则不渲染） */
   onOpenCS?: () => void
-  /** 打开历史会话浮层（移动端 <md 专用按钮；桌面走左侧任务栏） */
-  onOpenHistory?: () => void
+  /** 注入移动端头像侧栏里的历史会话列表 */
+  mobileHistoryContent?: (onSelectSession: () => void) => ReactNode
 }
 
 export default function ChatHeader({
-  title, sidebarVisible, onToggleSidebar, onNewTask, sessionId, onOpenCS, onOpenHistory,
+  title, sidebarVisible, onToggleSidebar, onNewTask, sessionId, onOpenCS, mobileHistoryContent,
 }: Props) {
   const toast = useToast()
   const router = useRouter()
@@ -56,16 +59,16 @@ export default function ChatHeader({
 
   return (
     <header className="shrink-0 h-14 flex items-center gap-2 px-4 bg-surface-base/80">
-      {/* 历史会话（移动端 <md）：用户拍板 2026-10-07——手机顶栏左侧=历史，右侧=头像 */}
-      {onOpenHistory && (
+      {/* 移动端：左侧新建会话，历史列表收进头像侧栏。 */}
+      {onNewTask && (
         <button
-          onClick={onOpenHistory}
-          className="md:hidden shrink-0 flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-text-secondary
+          onClick={onNewTask}
+          className="md:hidden flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-secondary
             hover:text-text-primary hover:bg-black/5 transition-colors"
-          aria-label="历史会话"
-          title="历史会话"
+          aria-label="新建会话"
+          title="新建会话"
         >
-          <History size={17} />
+          <Plus size={18} />
         </button>
       )}
 
@@ -83,7 +86,7 @@ export default function ChatHeader({
         {title}
       </h1>
 
-      {/* 智能客服（桌面入口）：移动端 2026-10-07 起挪进底部导航第三 tab，顶栏收掉 */}
+      {/* 桌面端客服快捷入口；移动端从统一门户进入独立客服页 */}
       {onOpenCS && (
         <button
           onClick={onOpenCS}
@@ -103,7 +106,7 @@ export default function ChatHeader({
       {onNewTask && (
         <button
           onClick={onNewTask}
-          className="flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
+          className="hidden md:flex shrink-0 items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary
             hover:text-text-primary hover:bg-black/5 transition-colors"
           aria-label="新建任务"
           title="新建任务"
@@ -111,6 +114,17 @@ export default function ChatHeader({
           <Plus size={16} />
         </button>
       )}
+
+      <Link
+        href="/"
+        title="返回主页门户"
+        aria-label="返回主页门户"
+        className="hidden shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-text-secondary md:flex
+          hover:bg-black/5 hover:text-text-primary transition-colors"
+      >
+        <House size={15} />
+        <span>门户</span>
+      </Link>
 
       {/* 分享 / 退出登录：桌面保留；移动端收进设置页（用户拍板 2026-10-07） */}
       <button
@@ -133,17 +147,17 @@ export default function ChatHeader({
         <LogOut size={16} />
       </button>
 
-      {/* 用户头像（两端，最右）：点击进设置页（画像记忆 / 登出）。
-          移动端顶栏唯一右侧元素——登出/分享已收进设置页 */}
+      {/* 桌面端头像仍可直达设置；手机端三类助手共用头像侧栏。 */}
       <button
         onClick={() => router.push('/settings')}
-        className="ml-auto shrink-0 w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center
-          text-[13px] font-medium text-accent hover:bg-accent/20 transition-colors"
+        className="ml-auto hidden h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10
+          text-[13px] font-medium text-accent hover:bg-accent/20 transition-colors md:flex"
         aria-label="打开设置"
         title="设置"
       >
         {avatarInitial}
       </button>
+      <MobileAssistantDrawer historyContent={mobileHistoryContent} />
     </header>
   )
 }

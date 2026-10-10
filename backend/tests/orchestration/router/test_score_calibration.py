@@ -117,7 +117,8 @@ class TestVectorRouterCalibration:
         decision = vr.route("统计本月订单金额")
         assert decision.candidates[0].name == "sql.query"
         assert decision.candidates[1].name == "data.collect"
-        assert "calibrated" in (decision.reason or "")
+        assert decision.routing_meta["score_type"] == "adjusted_vector_similarity_heuristic"
+        assert decision.routing_meta["score_is_calibrated_probability"] is False
 
     def test_collect_query_not_flipped(self):
         """采集类问题：data.collect 命中特征，sql.query 零命中 → 不反转。"""
@@ -129,19 +130,21 @@ class TestVectorRouterCalibration:
         assert decision.candidates[0].name == "data.collect"
 
 
-# ── hierarchical：唯一强信号直通 ──────────────────────────────
+# ── hierarchical：特征只用于解释，不替代分数门禁 ──────────────
 
 class TestHierarchicalStrongSignal:
-    def test_d6_direct_to_sql_query(self):
-        """细路由向量分漂移（data.collect 领先）时，唯一强信号兜住 sql.query。"""
+    def test_strong_rule_signal_cannot_override_vector_order_or_margin(self):
+        """规则强信号不能改写 top1，也不能绕过 Fast Path 分数/分差门槛。"""
         router = HierarchicalRouter()
         router._fine_scores = lambda q, cands: {
             c.name: (0.697 if c.name == "data.collect" else 0.55) for c in cands}
         sel = router.select_tool(
             "统计本月订单金额", "data", resolve_domain_tools("data"))
-        assert sel.fine_top1 == "sql.query"
-        assert sel.route_mode == "fast_path"
-        assert sel.calibration["basis"] == "rule_strong_signal"
+        assert sel.fine_top1 == "data.collect"
+        assert sel.route_mode == "llm_selection"
+        assert sel.fine_top1_score == pytest.approx(0.697)
+        assert sel.fast_path_block_reason == "top1_score_below_threshold"
+        assert sel.calibration["basis"] == "grey_zone"
         assert sel.calibration["strong"] == ["sql.query"]
 
     def test_strong_signal_medium_risk_not_fast_path(self):

@@ -233,7 +233,7 @@ class TestStats:
 
 
 # ============================================================
-# 跨进程共享态（审查 #13 / docs/2026-09-21-熔断状态Redis共享设计.md）
+# 跨进程共享态（审查 #13 / docs/architecture/domain-service-map.md#下游熔断）
 # ============================================================
 class _FakeRedis:
     """最小 Redis 桩：incr/expire/set/get/delete/pipeline。"""

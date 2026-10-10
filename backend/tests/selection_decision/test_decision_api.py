@@ -1,6 +1,6 @@
 """tests/selection_decision/test_decision_api.py — B1 拍板/表现回填 API 契约测试
 
-对应 docs/2026-09-17-UX体验架构设计.md P0-③（拍板闭环）：
+覆盖选品决策建议与用户确认闭环：
 - 拍板 = record_decision 留痕 + set_user_decision 一步完成（workflow 不自动留痕）
 - decision 非法值 400 且不留痕；任务不存在 404
 - 表现回填 actual_metrics 幂等更新 + feedback_at 落库；decision 不存在 404

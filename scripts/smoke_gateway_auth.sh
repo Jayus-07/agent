@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # smoke_gateway_auth.sh — P2 网关鉴权冒烟
-# 验收标准来源：docs/auth/02-详细架构设计.md §12「网关过滤器」条目
+# 验收标准来源：docs/contracts/identity-header-protocol.md
 #
 # 覆盖：
 #   A 路由与白名单：/api/auth/login 经网关全通；refresh 不被网关拦

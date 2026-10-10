@@ -65,6 +65,7 @@ class TestDomainRouter:
             "domain": domain,
             "subflow": subflow,
             "confidence": 1.0,
+            "score_type": "prefilter_signal",
             "source": "prefilter",
             "reasoning": f"prefilter 命中 route_mode={update['route_mode']}",
         }
@@ -114,7 +115,9 @@ class TestCapabilityRouter:
         assert decision["domain"] == "data"
         assert decision["capability"] == "sql.query"
         assert "sql.query" in names
-        assert all(set(candidate) == {"name", "score", "risk", "source"}
+        assert all(set(candidate) == {
+            "name", "score", "risk", "fast_path_enabled", "permission_ready", "source",
+        }
                    for candidate in decision["candidates"])
         assert decision["source"] == "hierarchical"
 
@@ -160,11 +163,23 @@ class TestExecutionModeResolver:
 
     @staticmethod
     def capability(name: str | None, candidates=None) -> CapabilityDecision:
+        rows = candidates or ([] if name is None else [{
+            "name": name, "score": 0.9, "risk": "LOW",
+            "fast_path_enabled": True, "permission_ready": True,
+        }])
         return {
             "domain": "data",
             "capability": name,
-            "candidates": candidates or ([] if name is None else [{"name": name}]),
+            "candidates": rows,
             "confidence": 0.9 if name else 0.4,
+            "selection_mode": "fast_path" if name else "clarify",
+            "top1": name or "",
+            "top1_score": 0.9 if name else 0.0,
+            "top2": "",
+            "top2_score": 0.0,
+            "margin": 0.9 if name else 0.0,
+            "risk_level": "LOW" if name else "UNKNOWN",
+            "score_type": "vector_similarity_heuristic" if name else "none",
             "source": "hierarchical",
             "reasoning": "test",
         }
@@ -213,6 +228,45 @@ class TestExecutionModeResolver:
         assert decision.mode == "plan"
         assert decision.target == "clarify"
         assert decision.compat_route_mode == "clarify"
+
+    def test_capability_presence_without_selection_gate_clarifies(self):
+        decision = self.resolver.resolve(
+            self.domain("data"),
+            {
+                "domain": "data", "capability": "sql.query",
+                "candidates": [{"name": "sql.query", "score": 0.99}],
+                "confidence": 0.99, "source": "legacy", "reasoning": "untrusted",
+            },
+        )
+        assert decision.mode == "plan"
+        assert decision.target == "clarify"
+        assert decision.compat_route_mode == "clarify"
+
+    def test_gray_zone_has_no_direct_target(self):
+        capability = self.capability("sql.query")
+        capability["selection_mode"] = "llm_selection"
+        decision = self.resolver.resolve(self.domain("data"), capability)
+        assert decision.mode == "direct"
+        assert decision.target is None
+
+    def test_high_risk_fast_path_hint_is_demoted(self):
+        decision = self.resolver.resolve(
+            self.domain("communication"),
+            {
+                "domain": "communication", "capability": "email.send",
+                "candidates": [{
+                    "name": "email.send", "score": 0.99, "risk": "HIGH",
+                    "fast_path_enabled": False, "permission_ready": True,
+                }],
+                "confidence": 0.99, "selection_mode": "fast_path",
+                "top1": "email.send", "top1_score": 0.99, "top2": "",
+                "top2_score": 0.0, "margin": 0.99,
+                "risk_level": "HIGH", "score_type": "vector_similarity_heuristic",
+                "source": "test", "reasoning": "test",
+            },
+        )
+        assert decision.mode == "direct"
+        assert decision.target is None
 
 
 class TestIntentRouter:
@@ -285,6 +339,21 @@ def test_router_node_engine_decision_becomes_capability_snapshot():
         execution_mode=ExecutionMode.DIRECT,
         candidates=[CapabilityScore(name="sql.query", score=0.9)],
         confidence=0.9,
+        route_mode="direct",
+        routing_meta={
+            "domain": "data", "domain_confidence": 0.91,
+            "domain_margin": 0.4, "domain_source": "classifier",
+            "selection_mode": "fast_path", "tool_route_mode": "fast_path",
+            "candidate_tools": ["sql.query"], "candidate_tool_count": 1,
+            "candidate_details": [{
+                "name": "sql.query", "score": 0.9, "risk": "LOW",
+                "fast_path_enabled": True, "permission_ready": True,
+            }],
+            "fine_top1": "sql.query", "fine_top1_score": 0.9,
+            "fine_top2": "", "fine_top2_score": 0.0, "fine_margin": 0.9,
+            "score_type": "vector_similarity_heuristic", "risk_level": "LOW",
+            "selected_tool": "sql.query", "route_policy_version": "routing-p0-1",
+        },
     )
     result = _with_router_decisions(
         {"question": "查销售额"},
@@ -298,6 +367,7 @@ def test_router_node_engine_decision_becomes_capability_snapshot():
     )
     assert result["capability_decision"]["capability"] == "sql.query"
     assert result["execution_decision"]["mode"] == "direct"
+    assert result["execution_decision"]["target"] == "sql.query"
     assert result["intent_decision"]["kind"] == "single"
     assert result["legacy_used"] is False
 
@@ -318,6 +388,21 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
         execution_mode=ExecutionMode.DIRECT,
         candidates=[CapabilityScore(name="sql.query", score=0.93)],
         confidence=0.93,
+        route_mode="direct",
+        routing_meta={
+            "domain": "data", "domain_confidence": 0.91,
+            "domain_margin": 0.4, "domain_source": "classifier",
+            "selection_mode": "fast_path", "tool_route_mode": "fast_path",
+            "candidate_tools": ["sql.query"], "candidate_tool_count": 1,
+            "candidate_details": [{
+                "name": "sql.query", "score": 0.93, "risk": "LOW",
+                "fast_path_enabled": True, "permission_ready": True,
+            }],
+            "fine_top1": "sql.query", "fine_top1_score": 0.93,
+            "fine_top2": "", "fine_top2_score": 0.0, "fine_margin": 0.93,
+            "score_type": "vector_similarity_heuristic", "risk_level": "LOW",
+            "selected_tool": "sql.query", "route_policy_version": "routing-p0-1",
+        },
     )
     try:
         _with_router_decisions(
@@ -331,7 +416,7 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
         )
 
         assert trace.metadata["router"] == {
-            "domain": "unknown",
+            "domain": "data",
             "subflow": None,
             "capability": "sql.query",
             "mode": "direct",

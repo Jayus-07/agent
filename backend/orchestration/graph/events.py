@@ -540,7 +540,8 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
                     pending_action: dict | None = None,
                     trace_id: str = "",
                     context_usage: dict | None = None,
-                    reply_source: Optional[str] = None) -> dict:
+                    reply_source: Optional[str] = None,
+                    answer_source: Optional[str] = None) -> dict:
     """构建 done 事件，附带耗时 + 引用来源 + 本轮 token 用量。
 
     P3.1：pending_action 非空时下发（CS 确认流等待用户点击确认卡片），
@@ -558,7 +559,14 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     sources = _extract_sources_from_steps(all_step_results)
     if not sources and final_answer:
         sources = parse_sources_from_text(final_answer)
-    data: dict = {"elapsed": round(elapsed, 1), "sources": sources}
+    # done.answer 是服务端权威答案；delta 仅是生成过程中的可选预览。
+    data: dict = {
+        "elapsed": round(elapsed, 1),
+        "sources": sources,
+        "answer": final_answer,
+    }
+    if answer_source:
+        data["answer_source"] = answer_source
     effective_reply_source = reply_source or infer_reply_source(all_step_results)
     if effective_reply_source:
         data["reply_source"] = effective_reply_source

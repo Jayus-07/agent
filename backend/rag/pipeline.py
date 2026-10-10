@@ -10,7 +10,7 @@ from dataclasses import dataclass
 # R-P0-1（Windows 原生库加载顺序加固）：langchain_text_splitters 顶层会拉起
 # sentence_transformers→torch；若该导入发生在 chroma/doc_db 等原生库已加载
 # 之后（如 indexer.py:471 惰性导入 parse_and_chunk 触发），进程确定性段错误
-# （exit 139，见 docs/RAG质量专项-01-审计报告.md §2.2 与探针 logs/r2_probe*.log）。
+# （exit 139，归因于原生库异常退出；通过子进程隔离保护服务进程）。
 # 在任何原生库加载前预导入，使其进入 sys.modules，后续惰性导入变为无操作。
 # 实测：预导入后完整启动（含恢复重索引）正常；失败时软降级不影响启动。
 try:
@@ -868,13 +868,15 @@ class RAGPipeline:
         user_id: str = "",
         tenant_id: str = "",
         roles: tuple[str, ...] = (),
+        persist_memory: bool = True,
     ) -> str:
         """兼容出口：只取回答文本。需要 sources/meta 的调用方请用 ask_result。"""
         return self.ask_result(
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
             permissions=permissions,
-            user_id=user_id, tenant_id=tenant_id, roles=roles).answer
+            user_id=user_id, tenant_id=tenant_id, roles=roles,
+            persist_memory=persist_memory).answer
 
     def ask_result(
         self,
@@ -888,6 +890,7 @@ class RAGPipeline:
         user_id: str = "",
         tenant_id: str = "",
         roles: tuple[str, ...] = (),
+        persist_memory: bool = True,
     ) -> "AskOutcome":
         """提问入口（请求级返回，2026-09-23 D1-6）：3 段式 — 准备 → 执行 → 清理。
 
@@ -908,7 +911,8 @@ class RAGPipeline:
             question, session_id, kb_id=kb_id, kb_ids=kb_ids,
             subject_type=subject_type, department=department,
             permissions=permissions,
-            user_id=user_id, tenant_id=tenant_id, roles=roles)
+            user_id=user_id, tenant_id=tenant_id, roles=roles,
+            persist_memory=persist_memory)
         meta = dict(answer_meta or {})
         return AskOutcome(answer=answer,
                           sources=list(meta.get("sources") or []),
@@ -926,6 +930,7 @@ class RAGPipeline:
         user_id: str = "",
         tenant_id: str = "",
         roles: tuple[str, ...] = (),
+        persist_memory: bool = True,
     ) -> tuple[str, dict]:
         """执行主链，返回 (answer, answer_meta)。
 
@@ -958,7 +963,8 @@ class RAGPipeline:
                     self._mark_session_seen(session_id)
                     return str(cached.get("answer", "")), dict(cached.get("meta") or {})
 
-            answer = self._execute_chain(question, session_id)
+            answer = self._execute_chain(
+                question, session_id, persist_memory=persist_memory)
             self._mark_session_seen(session_id)
 
             self._snapshot_answer_meta()
@@ -1079,11 +1085,15 @@ class RAGPipeline:
         resource_monitor.log_status()
         return True
 
-    def _execute_chain(self, question: str, session_id: str) -> str:
+    def _execute_chain(self, question: str, session_id: str,
+                       persist_memory: bool = True) -> str:
         """执行 chain 调用并记录耗时。"""
         start_time = time.time()
         try:
-            result = self.lc_chain.ask(question, session_id=session_id)
+            result = self.lc_chain.ask(
+                question, session_id=session_id,
+                persist_memory=persist_memory,
+            )
             elapsed = time.time() - start_time
             logger.info(f"请求完成，耗时: {elapsed:.2f}s")
             if elapsed > OVERALL_REQUEST_TIMEOUT * 0.8:
@@ -1125,9 +1135,13 @@ class RAGPipeline:
             # 与工具 RAGMETA 协议同口径）。
             try:
                 from backend.rag.context import get_context
-                ctx_status = (get_context().meta or {}).get("answer_status")
+                context_meta = get_context().meta or {}
+                ctx_status = context_meta.get("answer_status")
                 if ctx_status:
                     meta["answer_status"] = ctx_status
+                trace_id = context_meta.get("trace_id")
+                if trace_id:
+                    meta["trace_id"] = str(trace_id)
             except Exception:  # noqa: BLE001 — 观测字段不阻塞主链
                 pass
             self.last_answer_meta = meta
@@ -1178,9 +1192,12 @@ class RAGPipeline:
             ctx = get_context()
             ident = ctx.identity
             scope = self._authorization_scope(ident)
+            cache_meta = dict(meta or {})
+            # Trace ID 属于单次执行关联信息，不能随答案缓存复用到后续请求。
+            cache_meta.pop("trace_id", None)
             get_answer_cache().put(
                 question, kb_id, ctx.metadata_filter, LLM_MODEL, answer,
-                scope=scope, meta=meta,
+                scope=scope, meta=cache_meta,
             )
         except Exception as e:
             logger.debug(f"[RAG.ask] 缓存写入失败（非致命）: {e}")

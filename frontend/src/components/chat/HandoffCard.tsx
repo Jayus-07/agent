@@ -8,8 +8,8 @@
  * 图标 + 一句话 + 带参跳转按钮。点击 = 埋点上报 + 跳转三专属入口：
  *   travel          → /travel?destination=…&days=…（旅游页解析参数预填 brief）
  *   selection_funnel → /selection-funnel?category=…&platform=…
- *   customer_service → 打开 CSDrawer 并预填 prefill_question（sessionStorage
- *                      + cs-drawer:open 事件，见 app/agent/page.tsx/CSDrawer）
+ *   customer_service → 导航到 /customer-service 并预填问题（sessionStorage
+ *                      + 兼容事件，见 app/agent/page.tsx）
  */
 import { Compass, Headphones, ShoppingBag, ArrowRight } from 'lucide-react'
 import { useRouter } from 'next/navigation'
@@ -66,7 +66,7 @@ export default function HandoffCard({ event }: { event: HandoffEvent }) {
       router.push(qs.toString() ? `/selection-funnel?${qs.toString()}` : '/selection-funnel')
       return
     }
-    // customer_service：主聊天页本就是 /agent，直接滑出抽屉并带预填问题
+    // customer_service：主助手监听此事件后跳独立客服页，并带上预填问题
     try {
       if (event.params.prefill_question) {
         sessionStorage.setItem('cs_handoff_prefill', event.params.prefill_question)

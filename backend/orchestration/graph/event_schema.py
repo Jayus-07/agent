@@ -58,6 +58,13 @@ class MetaData(_Loose):
 class StatusData(_Loose):
     node: str
     ts: float
+    # 新状态帧在节点入口/出口各一条；旧客户端与旧历史仍可只含 node/ts。
+    phase: str | None = None
+    execution_id: str | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    duration_ms: float | None = None
+    status: str | None = None
 
 
 class LogData(_Loose):
@@ -73,6 +80,9 @@ class DeltaData(_Loose):
 class DoneData(_Loose):
     elapsed: float
     sources: list
+    # 兼容旧客户端新增的权威终态答案与生产节点归因。
+    answer: str | None = None
+    answer_source: str | None = None
     # 2026-10-03 RAG 拒答/置信度语义（缺省 = 正常回答）：answer_status 来自
     # 工具 RAGMETA 标记，取值 rag_no_evidence / rag_permission_denied /
     # rag_hallucination（evidence_gate.models.ANSWER_STATUS_BY_REASON）；

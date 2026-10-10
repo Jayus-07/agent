@@ -210,6 +210,12 @@ def test_shadow_submission_survives_sync_async_bridge(monkeypatch, stage):
 def test_shadow_input_is_bounded_and_sampled(monkeypatch):
     captured = {}
 
+    # 2026-09-22：影子队列默认关闭后，本用例验的是「投递载荷有界且采样」，
+    # 不是开关本身，故显式打开队列开关，避免默认值变化掩盖载荷契约。
+    monkeypatch.setattr(
+        "backend.config.rag.METADATA_SHADOW_QUEUE_ENABLED", True
+    )
+
     class _Dispatcher:
         def submit(self, job_id, payload):
             captured["job_id"] = job_id

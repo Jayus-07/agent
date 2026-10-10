@@ -19,7 +19,7 @@ Evidence Gate — RAG 主动拒答决策模块
   - chain.py: chain.invoke 后 Rerank Gate → evidence_gate_rerank()
   - chain.py: _evaluate() 末尾 → is_groundedness_acceptable()
 
-文档: docs/architecture/rag-evidence-gate.md
+当前约束: docs/domains/rag.md
 """
 from backend.rag.evidence_gate.models import (  # noqa: F401
     RejectReason,

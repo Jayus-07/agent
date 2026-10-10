@@ -1,7 +1,7 @@
 /**
  * lib/auth.ts — 登录态管理（对接网关 + auth-service JWT 体系）
  *
- * 契约（docs/auth/02-详细架构设计.md + Enterprise_OA common-api）：
+ * 身份契约见 docs/contracts/identity-header-protocol.md；实现导航见 docs/auth/README.md。
  * - POST /api/auth/login  {username, password, deviceId?} → Result{data: LoginVO}
  *   LoginVO: { token, refreshToken(始终为 null，改走 HttpOnly Cookie),
  *              tokenType: "Bearer", expiresIn(ms), userInfo }
@@ -245,14 +245,49 @@ export function consumeExpiredFlag(): boolean {
 }
 
 /* ────────────────────────────────────────────────────────────
- * 开发者注册 + 记住用户名（只记用户名，密码永不落 localStorage——
- * 该存储暴露于 XSS 时可被读取；历史上曾明文存过密码
- * （agent.saved_credentials），getSavedUsername 读取时顺带清除残留）
+ * 开发者注册 + 登录凭据记忆
  * ──────────────────────────────────────────────────────────── */
 
 const USERNAME_KEY = "agent.saved_username";
+const SAVED_CREDENTIALS_KEY = "agent.saved_credentials_v1";
+const PENDING_CREDENTIALS_KEY = "agent.pending_login_credentials";
 // 历史版本的明文凭据键（{username, password}），读到即清除
 const LEGACY_CREDS_KEY = "agent.saved_credentials";
+
+export interface SavedCredentials {
+  username: string;
+  password: string;
+}
+
+/** 注册成功后临时带到登录页，仅留在当前标签页会话中 */
+export function setPendingLoginCredentials(username: string, password: string): void {
+  if (!isBrowser()) return;
+  try {
+    sessionStorage.setItem(PENDING_CREDENTIALS_KEY, JSON.stringify({ username, password }));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function consumePendingLoginCredentials(): SavedCredentials | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = sessionStorage.getItem(PENDING_CREDENTIALS_KEY);
+    sessionStorage.removeItem(PENDING_CREDENTIALS_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" && parsed !== null &&
+      "username" in parsed && typeof parsed.username === "string" &&
+      "password" in parsed && typeof parsed.password === "string"
+    ) {
+      return { username: parsed.username, password: parsed.password };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export interface RegisterResult {
   userId?: number;
@@ -317,7 +352,38 @@ function purgeLegacyCredentials(): void {
   }
 }
 
-/** 记住用户名：登录成功后按需调用（只记用户名，不记密码） */
+/** 登录成功后按需记住账号密码，供当前浏览器下次自动填入 */
+export function saveCredentials(username: string, password: string): void {
+  if (!isBrowser()) return;
+  try {
+    localStorage.setItem(USERNAME_KEY, username);
+    localStorage.setItem(SAVED_CREDENTIALS_KEY, JSON.stringify({ username, password }));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getSavedCredentials(): SavedCredentials | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = localStorage.getItem(SAVED_CREDENTIALS_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" && parsed !== null &&
+      "username" in parsed && typeof parsed.username === "string" &&
+      "password" in parsed && typeof parsed.password === "string"
+    ) {
+      return { username: parsed.username, password: parsed.password };
+    }
+    localStorage.removeItem(SAVED_CREDENTIALS_KEY);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 兼容只记账号的流程，例如首次登录需要先修改临时密码 */
 export function saveUsername(username: string): void {
   if (!isBrowser()) return;
   try {
@@ -337,12 +403,13 @@ export function getSavedUsername(): string | null {
   }
 }
 
-/** 忘记此用户名（下次登录改回手动输入） */
+/** 忘记已保存的账号和密码（下次登录改回手动输入） */
 export function clearSavedUsername(): void {
   if (!isBrowser()) return;
   purgeLegacyCredentials();
   try {
     localStorage.removeItem(USERNAME_KEY);
+    localStorage.removeItem(SAVED_CREDENTIALS_KEY);
   } catch {
     /* ignore */
   }

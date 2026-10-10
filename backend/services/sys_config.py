@@ -3,7 +3,7 @@
 把守卫类开关从「env + 重启」升级为「DB 覆盖 + 进程内缓存 + env 兜底」，
 不引入 Nacos/Apollo 等配置中心组件（当前单实例后端，TTL 级延迟可接受）。
 
-设计不变量（见 docs/2026-09-16-动态配置lite与API-Key多Key化方案.md）：
+设计不变量（见 docs/model-config-governance-design.md）：
 
 1. 存储分层：sys_config 表是覆盖层；表内无记录 = 用 env 默认值。
    env 语义不变（部署兜底 + 应急），DB 改动免重启生效。

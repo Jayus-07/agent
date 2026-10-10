@@ -1,8 +1,8 @@
-# 元数据基线评估（规划阶段 1.2 / 1.3 / 5.1 脚手架）
+# RAG 元数据基线评估
 
-> 规划：`docs/2026-09-19-RAG元数据管道统一抽取与级联路由上线规划.md`
-> 状态：**脚手架就绪，黄金集数据待标注**（外部阻断，§7.2）。标注完成后本目录
-> 产出《规则链基线报告》与《统一抽取基线报告》，作为上线门禁（+5pp）的测量依据。
+本目录对规则分类、统一抽取和级联路由做离线评估。分类契约见
+[`docs/domains/rag.md`](../../../docs/domains/rag.md#上传元数据与级联决策)；
+样本和结果文件以当前数据与代码为准，不在 README 固定数据规模或通过率。
 
 ## 黄金集 JSONL 格式（golden.jsonl）
 
@@ -11,17 +11,15 @@
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `id` | ✅ | 稳定样本 id（建议 `doc_type-序号`，如 `legal-017`） |
-| `text` | ✅ | 文档全文或与线上一致的采样（≤6000 字，对齐 METADATA_LLM_EXTRACT_MAX_CHARS） |
-| `doc_type_gold` | ✅ | 双人标注仲裁后的类型（14 类枚举，与 metadata_schema.DOC_TYPES 一致） |
-| `domain_gold` |  | 业务域（11 值，与 DOMAINS 一致；缺省 general） |
+| `text` | ✅ | 文档全文或与线上一致的采样；采样口径以配置为准 |
+| `doc_type_gold` | ✅ | 标注类型，与 `metadata_schema.DOC_TYPES` 一致 |
+| `domain_gold` |  | 业务域，与 `metadata_schema.DOMAINS` 一致；缺省 `general` |
 | `risk_gold` |  | 风险正例标记：`["依据词句", ...]` 或 `true`；负例省略/false |
 | `filename` / `file_path` |  | L0 强先验用；标注时保留真实文件名（可脱敏路径） |
 | `annotators` |  | `["标注员A", "标注员B"]`，Kappa 统计用 |
-| `dispute` |  | 分歧样本仲裁记录（规划 §1.1：争议 100% 仲裁） |
+| `dispute` |  | 分歧样本仲裁记录 |
 
 样例见 `golden_sample.jsonl`（仅格式演示，不参与统计）。
-
-验收口径（规划 §1.2）：每类 ≥ 50 条、总 ≥ 1200 条、双人 Kappa ≥ 0.80。
 
 ## 用法
 
@@ -55,13 +53,9 @@ python -m backend.eval.metadata_baseline.validate_release \
     --report metadata_release_report.json
 ```
 
-运行环境：仓库根、项目 venv 解释器。级联评估必须能加载 Embedding；不可用时命令
-显式失败，不会伪造 R1 结果。发布门禁要求每个类型至少 50 条黄金样本，并要求
-正式黄金集每条样本还必须带双人 `annotators`（至少 2 人）或非空的
-`adjudication`/`dispute` 仲裁记录；仅有标签数量不算已仲裁支持。预测文件携带
-taxonomy/rules/model/prompt 四类版本指纹；`--load-report` 和
-`--rollback-report` 是 staging 压测/演练的独立证据，不应把聚合指标复制到每条预测行。
-缺少任一证据时门禁 fail-closed。
+运行环境：仓库根、项目 venv 解释器。级联评估依赖 Embedding；不可用时命令显式失败。
+发布门禁所需的样本覆盖、标注依据和压测/回滚证据由 `validate_release` 校验，
+以其当前规则和测试为准。预测会携带 taxonomy、rules、model、prompt 版本指纹。
 
 `metadata-load-v1` 报告必须包含：
 
@@ -94,7 +88,6 @@ taxonomy/rules/model/prompt 四类版本指纹；`--load-report` 和
 
 ## 与影子模式的关系
 
-阶段 5.1 影子采集可直接落成本预测格式（`id/text/pred`），用
-`evaluate --pred shadow_dump.jsonl` 复用同一指标实现，避免两套口径。现网一致率
-仅作诊断；准确率、coverage、abstain、ECE、路径级 precision 和 load/rollback
-证据才是放量依据。
+影子采集结果可转换为 `id/text/pred` 格式，并通过 `evaluate --pred` 复用离线指标口径。
+一致率仅作诊断；发布结论须结合准确率、coverage、abstain、ECE、路径级 precision
+及 load/rollback 证据。

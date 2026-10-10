@@ -54,6 +54,12 @@ def router_node(state: dict) -> dict:
     Returns:
         包含 route_decision 的 state 更新
     """
+    from backend.orchestration.graph.sse_event_sink import emit_sse_progress
+
+    emit_sse_progress(
+        node="router", phase="routing",
+        message="正在识别问题并选择处理路径",
+    )
     query = state.get("question") or state.get("query") or ""
     if not query:
         update = route_update_for_mode(

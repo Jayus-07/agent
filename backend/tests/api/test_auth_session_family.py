@@ -3,7 +3,7 @@
 会话实体 = auth.sessions 一行（一次设备登录 = refresh token family），
 access token 携带 sid claim，refresh 轮换归入同一 session_id。
 
-覆盖成功标准 S1-S8（docs/superpowers/plans/2026-09-19-会话实体改造-设备登录session.md）：
+覆盖会话生命周期成功标准 S1-S8：
   S1 同浏览器登录一次 → 活跃会话 1 条
   S2 连续 refresh 5 次 → 行数不变、sid 不变、last_active_at 单调
   S3 两个不同 deviceId → 活跃会话 2 条

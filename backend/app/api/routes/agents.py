@@ -4,7 +4,7 @@ GET /agents  列出主图全部 Agent 节点（编排节点 / Skill 节点 / 域
 
 只读原则：Agent 层事实源在代码（builder 的 add_node、各 Skill 包自注册、
 域图自注册）。本接口只做汇总展示，不提供任何写路径，避免产生第二个事实源
-（同 docs/2026-09-16-总交接与实施计划.md B13 的「不写假数据、只读起步」口径）。
+（不返回伪造数据；初始运行只读）。
 """
 from pathlib import Path
 

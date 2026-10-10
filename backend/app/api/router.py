@@ -24,6 +24,7 @@ from backend.app.api.routes import (
     cs_agent_offers,
     cs_agent_ws,
     cs_dispatch,
+    cs_customer,
     cs_ops,
     data,
     demo,
@@ -68,6 +69,7 @@ from backend.app.api.routes import (
 )
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.keyword_routes import router as keyword_router
+from backend.travel_v2.api.router import router as travel_v2_router
 
 api_router = APIRouter()
 
@@ -116,6 +118,7 @@ api_router.include_router(prompts.admin_runtime_router)  # Prompt Runtime 状态
 api_router.include_router(cs_admin.router)  # 客服会话管理
 api_router.include_router(cs_admin.confirm_router)  # P3.1: 确认卡片端点
 api_router.include_router(cs_dispatch.router)  # P4: 用户直接请求人工入池
+api_router.include_router(cs_customer.router)  # 用户侧客服页：当前用户档案与近期订单
 api_router.include_router(cs_agent_offers.router)  # P7: 坐席 offer 接单/拒单/主管重派
 api_router.include_router(cs_ops.router)  # P8: 派单运营统计（admin）
 api_router.include_router(cs_tickets.router)  # 批次C: 统一工单（用户查询 + supervisor 流转）
@@ -133,6 +136,7 @@ api_router.include_router(tasks.router)  # 异步任务编排（Celery + LangGra
 api_router.include_router(admin_tasks.router)  # 管理端任务中心（管理员闸 + 操作审计）
 api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /api/map/*，Key 不出后端）
 api_router.include_router(travel.router)  # 旅游域 REST：plan/ICS导出/反馈/偏好/推荐（2026-09-22）
+api_router.include_router(travel_v2_router)  # 旅游 V2：独立 Trip/Revision/Template 数据接口
 api_router.include_router(question_ledger.router)  # 线上问题台账（候选评测集供给侧，2026-10-08 #13）
 
 # ── 系统路由 ──────────────────────────────────

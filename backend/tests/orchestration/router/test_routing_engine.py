@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import time
+
 from backend.orchestration.router.engine import RoutingEngine
 from backend.orchestration.router.types import (
     CapabilityScore,
@@ -12,6 +14,7 @@ from backend.orchestration.router.types import (
     RouteDecision,
 )
 from backend.orchestration.router.models import ExecutionModeDecision
+from backend.observability.tracer import trace_collector
 
 
 class _DomainRouter:
@@ -39,7 +42,7 @@ class _ModeResolver:
         self.decision = decision
         self.calls: list[tuple[dict, dict, object]] = []
 
-    def resolve(self, domain, capability, override=None):
+    def resolve(self, domain, capability, override=None, **_kwargs):
         self.calls.append((domain, capability, override))
         return self.decision
 
@@ -67,7 +70,7 @@ class _LLMRouter:
         self.decision = decision
         self.calls = 0
 
-    def route(self, _query):
+    def route(self, _query, **_kwargs):
         self.calls += 1
         return self.decision
 
@@ -137,7 +140,10 @@ def test_engine_composes_domain_capability_and_execution_decisions():
     assert decision.candidates[0].name == "sql.query"
     assert decision.routing_meta["domain"] == "data"
     assert domain_router.calls == [("查库存", {"routing_context": {"active_domain": "data"}})]
-    assert capability_router.calls == [("data", "查库存", {"active_domain": "data"})]
+    assert capability_router.calls == [(
+        "data", "查库存",
+        {"active_domain": "data", "_verified_roles": (), "_verified_scopes": ()},
+    )]
     assert mode_resolver.calls[0][0] == _domain()
 
 
@@ -160,9 +166,9 @@ def test_engine_exposes_explicit_domain_intent_capability_policy_order():
             return super().route(domain, query, context)
 
     class OrderedPolicy(_ModeResolver):
-        def resolve(self, domain, capability, override=None):
+        def resolve(self, domain, capability, override=None, **kwargs):
             calls.append("policy")
-            return super().resolve(domain, capability, override)
+            return super().resolve(domain, capability, override, **kwargs)
 
     intent_router = OrderedIntent(_intent())
     engine = RoutingEngine(
@@ -249,7 +255,7 @@ def test_engine_keeps_workflow_override_in_the_single_decision_path():
     assert decision.routing_meta["decision_source"] == "rule_override"
 
 
-def test_degraded_domain_uses_explicit_llm_fallback():
+def test_degraded_unknown_domain_cannot_fall_back_to_unrelated_rag():
     fallback = RouteDecision(
         execution_mode=ExecutionMode.PLAN,
         candidates=[CapabilityScore(name="rag.search", score=0.3)],
@@ -268,9 +274,11 @@ def test_degraded_domain_uses_explicit_llm_fallback():
     decision = engine.route("一个无法分类的问题")
 
     assert llm.calls == 1
-    assert decision.reason == "fallback"
+    assert decision.route_mode == "clarify"
+    assert decision.candidates == []
     assert decision.routing_meta["fallback_reason"] == "domain_classifier_degraded"
     assert decision.routing_meta["decision_source"] == "llm_fallback"
+    assert decision.routing_meta["final_destination"] == "clarify"
 
 
 def test_compat_router_facade_delegates_to_engine(monkeypatch):
@@ -358,7 +366,7 @@ class _Cache:
         self.values[key] = value
 
 
-def test_engine_cache_ignores_dynamic_session_fields_but_keeps_tenant_scope():
+def test_engine_cache_separates_session_context_and_authorization():
     from backend.orchestration.router.engine import _route_cache_key
 
     first = {
@@ -381,7 +389,22 @@ def test_engine_cache_ignores_dynamic_session_fields_but_keeps_tenant_scope():
     }
 
     assert _route_cache_key("  查库存  ", first) == _route_cache_key(
+        "查库存", first,
+    )
+    assert _route_cache_key("查库存", first) != _route_cache_key(
         "查库存", second,
+    )
+    assert _route_cache_key("查库存", first) != _route_cache_key(
+        "查库存", {**first, "session_id": "session-b"},
+    )
+    assert _route_cache_key("查库存", first) != _route_cache_key(
+        "查库存", {**first, "routing_context": {**first["routing_context"], "pending_question": "订单号？"}},
+    )
+    assert _route_cache_key("查库存", first) != _route_cache_key(
+        "查库存", {**first, "request_context": {"roles": ["viewer"], "permissions": ["kb:a"]}},
+    )
+    assert _route_cache_key("查库存", first) != _route_cache_key(
+        "查库存", {**first, "request_context": {"roles": ["viewer"], "scopes": ["data:read"], "permissions": ["kb:a"]}},
     )
     assert _route_cache_key("查库存", first) != _route_cache_key(
         "查库存", {**first, "user_id": "user-b"},
@@ -479,6 +502,97 @@ def test_cache_key_changes_when_manifest_or_model_fingerprint_changes(monkeypatc
     second = engine_module._route_cache_key("查库存", state)
     monkeypatch.setattr(engine_module, "_model_fingerprint", lambda: "model-b")
     third = engine_module._route_cache_key("查库存", state)
+    monkeypatch.setattr(engine_module, "ROUTING_POLICY_VERSION", "routing-p0-next")
+    fourth = engine_module._route_cache_key("查库存", state)
 
     assert first != second
     assert second != third
+    assert third != fourth
+
+
+def test_route_trace_contains_engine_and_each_routing_stage():
+    trace_collector.clear_for_test()
+    trace = trace_collector.start(question="合成问题")
+    engine = RoutingEngine(
+        domain_router=_DomainRouter(_domain()),
+        capability_router=_CapabilityRouter(_capability()),
+        execution_resolver=_ModeResolver(_direct_mode()),
+        rule_router=_RuleRouter(),
+        cache=_Cache(),
+    )
+
+    engine.route("查库存", state={"routing_context": {"active_domain": "data"}})
+
+    spans = {span.span_id: span for span in trace.spans}
+    assert {
+        "routing_engine",
+        "routing.entry_gate",
+        "routing.domain",
+        "routing.intent",
+        "routing.capability",
+        "routing.policy",
+        "routing.route_decision",
+    } <= set(spans)
+
+    # 所有细分阶段必须挂在 routing_engine 下（显式 parent_id，不走 tracer
+    # 的"最近未关闭 span"推断）。回归：交给推断时它们会被平铺到外层
+    # router 节点，与 routing_engine 同级，层级丢失且耗时被重复聚合。
+    for stage_id in (
+        "routing.entry_gate",
+        "routing.domain",
+        "routing.intent",
+        "routing.capability",
+        "routing.policy",
+        "routing.route_decision",
+    ):
+        assert spans[stage_id].parent_id == "routing_engine", (
+            f"{stage_id} 应嵌套在 routing_engine 下，实际 {spans[stage_id].parent_id}"
+        )
+
+
+def test_routing_stage_spans_measure_real_provider_delays():
+    trace_collector.clear_for_test()
+    trace = trace_collector.start(question="合成问题")
+
+    class SlowDomain(_DomainRouter):
+        def route(self, *args, **kwargs):
+            time.sleep(0.02)
+            return super().route(*args, **kwargs)
+
+    class SlowRuleRouter(_RuleRouter):
+        def route(self, *args, **kwargs):
+            time.sleep(0.015)
+            return super().route(*args, **kwargs)
+
+    class SlowIntentRouter(_IntentRouter):
+        def classify(self, *args, **kwargs):
+            time.sleep(0.02)
+            return super().classify(*args, **kwargs)
+
+    class SlowCapabilityRouter(_CapabilityRouter):
+        def route(self, *args, **kwargs):
+            time.sleep(0.025)
+            return super().route(*args, **kwargs)
+
+    class SlowModeResolver(_ModeResolver):
+        def resolve(self, *args, **kwargs):
+            time.sleep(0.02)
+            return super().resolve(*args, **kwargs)
+
+    engine = RoutingEngine(
+        domain_router=SlowDomain(_domain()),
+        intent_router=SlowIntentRouter(_intent("execute")),
+        capability_router=SlowCapabilityRouter(_capability()),
+        execution_resolver=SlowModeResolver(_direct_mode()),
+        rule_router=SlowRuleRouter(),
+        cache=_Cache(),
+    )
+    engine.route("查库存", state={"routing_context": {"active_domain": "data"}})
+
+    spans = {span.span_id: span for span in trace.spans}
+    assert spans["routing.domain"].duration_ms >= 15
+    assert spans["routing.intent.rule_evidence"].duration_ms >= 10
+    assert spans["routing.intent.classifier"].duration_ms >= 15
+    assert spans["routing.capability"].duration_ms >= 20
+    assert spans["routing.policy"].duration_ms >= 15
+    trace_collector.clear_for_test()

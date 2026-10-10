@@ -79,29 +79,6 @@ class BusinessAnalysisSkill(BaseSkill):
         )
         step_results[step_id] = sr
 
-        try:
-            # 本 Skill 为读取 previous_outputs 重写 execute，仍必须执行
-            # 声明式参数/权限闸门；sql_result 是 auto 参数，由运行时注入。
-            validate_invocation(
-                step_capability or "business.analyze",
-                dict(plan_node.get("params") or {}),
-                self._validate_params,
-            )
-        except ValidationFailure as exc:
-            reason = (exc.envelope.details or {}).get("reason", "")
-            error = (
-                f"参数校验失败: {reason}"
-                if exc.layer == "parameter" and reason
-                else exc.envelope.message
-            )
-            protocol = error_envelope_from_exception(exc, source="skill").to_dict()
-            sr.update(
-                status="failed", output=None, error=error,
-                error_type=protocol["code"].lower(),
-                error_protocol=protocol, finished_at=time.time(),
-            )
-            return {"step_results": {step_id: sr}}
-
         # 1. 从前置步骤获取 SQLResult
         previous_outputs: dict = state.get("previous_outputs", {})
         if not previous_outputs:
@@ -130,6 +107,39 @@ class BusinessAnalysisSkill(BaseSkill):
             sr["error_type"] = "parse_error"
             sr["finished_at"] = time.time()
             logger.error(f"[BusinessAnalysis] {sr['error']}")
+            return {"step_results": {step_id: sr}}
+
+        try:
+            # 本 Skill 重写 execute 后自行读取 previous_outputs，因此在参数
+            # 门校验时显式注入可信 auto 字段；不得使用 Planner/FC 提供的同名值。
+            capability = step_capability or "business.analyze"
+            params = dict(plan_node.get("params") or {})
+            metadata = self.capability_metadata.get(capability, {})
+            params_schema = metadata.get("params_schema", self.params_schema)
+            auto_params = {
+                name for name, spec in params_schema.items()
+                if isinstance(spec, dict) and spec.get("auto")
+            }
+            for name in auto_params:
+                params.pop(name, None)
+            if "sql_result" in auto_params:
+                params["sql_result"] = sql_result.model_dump()
+
+            # 权限闸门和 schema 必填校验继续复用统一入口。
+            validate_invocation(capability, params, self._validate_params)
+        except ValidationFailure as exc:
+            reason = (exc.envelope.details or {}).get("reason", "")
+            error = (
+                f"参数校验失败: {reason}"
+                if exc.layer == "parameter" and reason
+                else exc.envelope.message
+            )
+            protocol = error_envelope_from_exception(exc, source="skill").to_dict()
+            sr.update(
+                status="failed", output=None, error=error,
+                error_type=protocol["code"].lower(),
+                error_protocol=protocol, finished_at=time.time(),
+            )
             return {"step_results": {step_id: sr}}
 
         # 2. RAG 检索业务知识

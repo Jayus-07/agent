@@ -6,7 +6,7 @@
 - probe cooldown：连接失败后 60s 内不再重试（避免日志洪泛）
 - publish() 为 fire-and-forget：事件是旁路，绝不阻塞/失败主流程
 
-事件契约见 backend/config/messaging.py 的 topic 常量与 docs/architecture-overview.md。
+事件契约以 backend/config/messaging.py 的 topic 常量为准。
 """
 from __future__ import annotations
 
