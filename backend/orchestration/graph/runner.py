@@ -535,8 +535,14 @@ class GraphRunner:
             "memory.retrieve", name="长期记忆检索", type="retrieval",
             input={"session_id": session_id})
         try:
+            # 记忆作用域（2026-10-10 整合）：租户 + 业务域。domain_hint 非空时
+            # 一并下发，使长期记忆按业务域隔离；manager.start_session 的
+            # domain 形参缺省为 None，不传即维持原有跨域行为。
+            memory_scope = {"tenant_id": tenant_id}
+            if domain_hint:
+                memory_scope["domain"] = domain_hint
             l1 = self._memory.start_session(session_id, question, user_id=user_id,
-                                            tenant_id=tenant_id)
+                                            **memory_scope)
             trace_collector.end_span(
                 retrieve_span, metrics=dict(getattr(l1, "retrieval_stats", {}) or {}))
             initial_state = make_initial_state(

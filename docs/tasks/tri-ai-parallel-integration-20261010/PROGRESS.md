@@ -392,3 +392,32 @@
 1. **Trace 默认 `full` 档仍不脱敏**：读取路径不做 PII 掩码，故「敏感原文不得新增写入」的约束继续生效；SQL 两处含 `question[:500]` 的埋点仍排除在外。
 2. **Trace 跨租户真实数据库过滤尚未端到端验证**：本轮及上一轮的租户隔离均在 Python 层与 SQL 参数层验证；因本机无法连接 PostgreSQL，未对真实 PG 表做跨租户行级过滤的端到端验证。列入最终 P0 验收清单。
 - 数据库未修改，未执行迁移；未修改主工作区或任何来源 worktree；未执行 reset --hard / clean -fd / 强推 / 删除分支或 worktree / 丢弃 stash。
+
+## 2026-10-10：第 2 步——最终遗漏核对（集成树 vs 日常开发分支）
+
+- 核对基准：集成树 `codex/tri-ai-integration-20261010` @ `55c944e`（29 个提交，工作区干净）对比日常开发分支 `codex/memory-system-profile-upgrade` @ `76df67a`（本轮新推送 7 个提交）。共同祖先 `e6c90a4`。
+- 来源分支并入状态：`codex/cs-travel-acceptance-20261009`（8c5da51）**已并入集成树**；`codex/memory-system-profile-upgrade`、`codex/mobile-history-memory-format`、`codex/customer-service-context` **未并入**。
+
+### 逐项核对表
+
+| 项目 | 集成树 | 日常分支 | 判定 |
+| --- | --- | --- | --- |
+| `routes/_trace_authz.py` | 有 | 无 | **仅集成树有**：Trace 资源级授权模块 |
+| `tests/api/test_observability_trace_authz.py` | 有 | 无 | 仅集成树有（14 个授权用例） |
+| `tests/evaluation/test_rag_deferred_ragas_preserved.py` | 有 | 无 | 仅集成树有 |
+| `routes/observability.py` | 带 `_require_trace_reader` + `Depends` | 无守卫 | **集成树领先**（安全修复，103 行差） |
+| `observability/trace_store_pg.py` | `list_children` 带租户作用域 | 无租户参数 | **集成树领先**（安全修复，27 行差） |
+| `apisix/plugins/gateway-auth.lua` | 含 `/api/observability/traces` admin 闸 | 无该闸 | **集成树领先**（5 行差） |
+| `Dockerfile` | 有 `RUNTIME_DEBIAN_MIRROR` | 用 `DEBIAN_MIRROR` | **集成树领先**（10 行差） |
+| `sql/policy.py` | 稳定 guard span_id | 相同 | 已一致 |
+| `orchestration/graph/sse_event_sink.py` | 有 | 有 | 已一致 |
+| `pytest.ini` / `pyproject.toml` | 一致 | 一致 | 已一致 |
+| `tests/sql/test_sql_agent_trace_stages.py` | 5 用例 | 3 用例 | **集成树领先**（多 2 个多 Guard 用例） |
+| `orchestration/graph/runner.py` | 有 `include_pending_action` | 有 `memory_scope`+`domain` | **双向分歧，需合并** |
+
+### 关键发现：runner.py 双向分歧（必须双向合并）
+
+- **集成树独有**：`make_done_event(..., include_pending_action="cs_pending_action" in ctx, ...)`，来自客服 P3.1 提交 `bf67a36` `feat(cs): restore pending state and show live progress`。`events.py::make_done_event` 签名确认支持该参数（P3.1：仅客服图调用方设置，前端据此区分「状态未更新」与「本轮已清除」）。
+- **日常分支独有**：`memory_scope = {"tenant_id": tenant_id}` 且 `if domain_hint: memory_scope["domain"] = domain_hint`，以 `**memory_scope` 传给 `self._memory.start_session(...)`。`memory/manager.py::start_session` 签名确认支持 `domain: str | None = None`。集成树当前只传 `tenant_id=tenant_id`，**丢失 domain 传递**。
+- **判定：两侧都不可丢弃**——丢集成树的会破坏客服 pending 状态契约；丢日常分支的会丢失记忆的业务域隔离。需在集成树上补 `memory_scope`，同时保留 `include_pending_action`。
+- 该分歧**不属于**「覆盖冲突」：两处代码位置不同（L535 与 L1004），可各自独立保留，不存在需要人工取舍的冲突块。
