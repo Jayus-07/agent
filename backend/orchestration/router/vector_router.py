@@ -231,9 +231,9 @@ class VectorRouter:
 
         # 整体置信度 = top1 分数
         top1 = candidates[0].score if candidates else 0.0
-        reason = f"embedding top1={candidates[0].name} score={top1:.2f}" if candidates else "no match"
+        reason = f"embedding top1={candidates[0].name} heuristic_score={top1:.2f}" if candidates else "no match"
         if calib_info:
-            reason += " (calibrated)"
+            reason += " (heuristic_adjustment_applied)"
 
         # 决定 mode：根据 top1 capability 类型
         top1_cap = candidates[0].name if candidates else None
@@ -248,4 +248,12 @@ class VectorRouter:
             confidence=top1,
             reason=reason,
             workflow_name=top1_cap if execution_mode == ExecutionMode.WORKFLOW else None,
+            routing_meta={
+                "score_type": (
+                    "adjusted_vector_similarity_heuristic"
+                    if calib_info else "vector_similarity_heuristic"
+                ),
+                "score_is_calibrated_probability": False,
+                "calibration_applied": bool(calib_info),
+            },
         )

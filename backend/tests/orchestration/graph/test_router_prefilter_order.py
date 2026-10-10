@@ -85,6 +85,33 @@ class TestPrefilterOrder:
         rn.router_node({"question": "这个季度的经营状况怎么样", "session_id": "s3"})
         fake_detector.detect.assert_called()
 
+    def test_engine_clarify_stays_blocked_when_repeat_guard_denies(
+        self, monkeypatch,
+    ):
+        """澄清防循环不放行时仍去 Reporter，不把无目标请求送给 Planner。"""
+        from backend.orchestration.graph import clarify_content
+        from backend.orchestration.graph.routing.hierarchical import (
+            _handle_hierarchical_meta,
+        )
+
+        monkeypatch.setattr(clarify_content, "clarify_allowed", lambda *_args: False)
+        update = _handle_hierarchical_meta(
+            {
+                "domain": "knowledge",
+                "domain_action": "clarify",
+                "selection_mode": "clarify",
+                "clarification_reason": "llm_failure",
+            },
+            {"session_id": "repeat-clarify"},
+            "无法确认的问题",
+            {},
+        )
+
+        assert update is not None
+        assert update["route_mode"] == "clarify"
+        assert update["need_clarification"] is True
+        assert rn.route_selector(update) == "clarify"
+
 
 class TestDetectCache:
     def test_same_query_detected_once(self, monkeypatch):

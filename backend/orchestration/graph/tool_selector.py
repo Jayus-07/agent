@@ -5,11 +5,9 @@ bind_tools 形式暴露给模型，由模型在候选内选一个并同步填参
 "先路由缩候选，再给模型选"。取代 direct 模式"盲取 candidates[0] +
 question 透传"的旧行为。
 
-门控（ENABLE_FC_TOOL_SELECTION 且 route_mode=direct）：
-  - fast set（sql.query/rag.search/business.analyze：参数平凡或由
-    previous_outputs 自动注入）且 top1 ≥ 0.85 → 直通，零 LLM
-    （保持原 direct 快路径，TTFT 不受影响）
-  - 其余 capability 或置信灰区（0.6 ≤ score < 0.85）→ FC 选择
+门控（route_mode=direct）：
+  - routing policy 明确许可的 fast_path 再次验证后直通
+  - llm_selection 灰区始终通过域内动态注册候选执行 FC 选择
 
 降级策略：
   - 多候选时 LLM 超时/异常/无 tool_calls/校验重试失败 → 澄清，不执行首项
@@ -18,14 +16,9 @@ question 透传"的旧行为。
 """
 from __future__ import annotations
 
-import hashlib
 import time
 
 from backend.config import (
-    ENABLE_FC_TOOL_SELECTION,
-    FC_TOOL_SELECTION_ALLOWLIST,
-    FC_TOOL_SELECTION_ROLLOUT_PERCENT,
-    TOOL_SELECTOR_FAST_PATH_SCORE,
     TOOL_SELECTOR_LLM_MAX_TOKENS,
     TOOL_SELECTOR_LLM_TIMEOUT,
     TOOL_SELECTOR_MAX_CANDIDATES,
@@ -43,13 +36,6 @@ from backend.orchestration.tool_schema import (
 from backend.shared.logger import logger
 from backend.skills.base import _deadline_from_state, validate_params
 
-# 参数平凡（只有 question）/自动注入（business.analyze 的 sql_result 走
-# previous_outputs）的高频能力：路由高置信时直通，避免无意义的 LLM 调用。
-# web.search 同为单 question 参数：搜索意图（如行业新闻）不再被 FC 拒绝
-# 后落入 clarify，直通 web_search_skill 由 Reporter 带来源总结。
-# 阈值与候选上限可经 env 校准（评测数据说话后调，见 run_tool_selector_eval）
-FAST_PATH_CAPS = {"sql.query", "rag.search", "business.analyze", "web.search"}
-FAST_PATH_SCORE = TOOL_SELECTOR_FAST_PATH_SCORE
 MAX_FC_CANDIDATES = TOOL_SELECTOR_MAX_CANDIDATES
 
 
@@ -122,11 +108,25 @@ def _record(source: str, reason: str = "", capability: str = "",
         pass
 
 
-def _passthrough(state: dict, reason: str) -> dict:
-    """直通：不设置 resolved_params → direct_executor 回退旧行为
-    （candidates[0] + question 透传）。"""
-    _record("passthrough", reason)
-    return {**state, "_tool_selection": {"source": "passthrough", "reason": reason}}
+def _passthrough(state: dict, reason: str, capability: str = "") -> dict:
+    """直通统一门禁确认的单一能力；不设置 resolved_params，保留问题透传。"""
+    _record("passthrough", reason, capability)
+    result = {**state, "_tool_selection": {
+        "source": "passthrough", "reason": reason, "capability": capability,
+    }}
+    # direct_executor 只消费 route_decision.candidates[0]。把已经过门禁的
+    # Fast Path 目标收敛为唯一候选，避免候选顺序变化后执行到另一项。
+    decision = state.get("route_decision")
+    if capability and isinstance(decision, dict):
+        selected = next((
+            row for row in decision.get("candidates") or []
+            if isinstance(row, dict) and row.get("name") == capability
+        ), None)
+        if selected is not None:
+            result["route_decision"] = {
+                **decision, "candidates": [selected],
+            }
+    return result
 
 
 def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
@@ -173,28 +173,48 @@ def _build_user_prompt(query: str, valid_caps: list[str],
     if cands and isinstance(cands[0], dict) and cands[0].get("name"):
         top = cands[0]
     if top is not None:
+        route_meta = decision.get("routing_meta") or {}
+        score_type = str(route_meta.get("score_type") or "unknown")
         lines.append(
-            f"\n路由建议（仅供参考）: {top.get('name')} "
-            f"(置信度 {float(top.get('score', 0) or 0):.2f})"
+            f"\n路由候选建议（仅供参考）: {top.get('name')} "
+            f"(分数 {float(top.get('score', 0) or 0):.2f}, 类型 {score_type})"
         )
     if feedback:
         lines.append(f"\n【上次尝试失败，请修正】{feedback}")
     return "\n".join(lines)
 
 
-def _converge_candidates(candidates: list) -> list[str]:
-    """候选收敛：去重 + 已注册 + 截断到 MAX_FC_CANDIDATES。
+def _converge_candidates(candidates: list, domain: str = "") -> list[str]:
+    """候选收敛：去重 + 当前域已注册 + 截断到 MAX_FC_CANDIDATES。
 
     以 tool_registry 注册表为单一事实来源（ALL_CAPABILITIES 静态表缺
     competitor.analyze，不可作为校验依据）。
     """
+    allowed_for_domain: set[str] | None = None
+    if domain:
+        try:
+            from backend.orchestration.router.capability_router import _DOMAIN_ALIASES
+            from backend.orchestration.router.hierarchical import resolve_domain_tools
+
+            canonical = _DOMAIN_ALIASES.get(domain, domain)
+            allowed_for_domain = {c.name for c in resolve_domain_tools(canonical)}
+        except Exception:
+            allowed_for_domain = set()
+    else:
+        try:
+            from backend.orchestration.router.manifest import load_manifest
+
+            allowed_for_domain = {c.name for c in load_manifest().routed_capabilities}
+        except Exception:
+            allowed_for_domain = set()
     seen: set[str] = set()
     valid: list[str] = []
     for c in candidates:
         if not isinstance(c, dict):
             continue
         name = c.get("name", "")
-        if name and name not in seen and tool_registry.get_node(name):
+        if (name and name not in seen and tool_registry.get_node(name)
+                and name in allowed_for_domain):
             seen.add(name)
             valid.append(name)
             if len(valid) >= MAX_FC_CANDIDATES:
@@ -230,9 +250,16 @@ def _validate_selection(cap: str, valid_caps: list[str],
     """
     if cap not in valid_caps:
         return "not_in_candidates"
-    declared = _capability_domain(cap)
-    if domain and declared and declared != domain:
-        return f"domain_conflict:{declared}!={domain}"
+    if domain:
+        try:
+            from backend.orchestration.router.capability_router import _DOMAIN_ALIASES
+            from backend.orchestration.router.hierarchical import resolve_domain_tools
+
+            canonical = _DOMAIN_ALIASES.get(domain, domain)
+            if cap not in {item.name for item in resolve_domain_tools(canonical)}:
+                return f"domain_conflict:{_capability_domain(cap)}!={canonical}"
+        except Exception:
+            return "domain_registry_validation_failed"
     return None
 
 
@@ -470,10 +497,12 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
         # 不能把 question 伪装成其参数，也不能接受模型主动传 auto 字段。
         schema_params = (tool_registry.get_schema(cap) or {}).get("params") or {}
         params = args or ({"question": query} if "question" in schema_params else {})
-        # 模型选中的候选提到首位（skill_executor 取 candidates[0]）
-        rest = [c for c in (decision.get("candidates") or [])
-                if isinstance(c, dict) and c.get("name") != cap]
-        new_decision = {**decision, "candidates": [{"name": cap, "score": 0.95}] + rest}
+        # 模型只决定候选顺序；保留路由器的原始分数，不伪造置信分。
+        original = [c for c in (decision.get("candidates") or [])
+                    if isinstance(c, dict)]
+        chosen = next((dict(c) for c in original if c.get("name") == cap), {"name": cap})
+        rest = [c for c in original if c.get("name") != cap]
+        new_decision = {**decision, "candidates": [chosen] + rest}
         elapsed_ms = int((time.time() - t0) * 1000)
         _record("fc", "ok", capability=cap, t0=t0)
         _selector_deadline_log(deadline, "selector_done", f"fc_selected:{cap}")
@@ -500,18 +529,6 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
     return _clarify_selection(state, "fc_invalid_after_retry", valid_caps)
 
 
-def _in_rollout(session_id: str) -> bool:
-    """灰度判定（照 cs_prefilter 模式）：白名单 session 优先，其次
-    md5 稳定哈希百分比。用 md5 而非内置 hash——内置 hash 有随机盐，
-    进程重启会改变分组。"""
-    if session_id in FC_TOOL_SELECTION_ALLOWLIST:
-        return True
-    if FC_TOOL_SELECTION_ROLLOUT_PERCENT >= 100:
-        return True
-    digest = int(hashlib.md5(session_id.encode()).hexdigest(), 16)
-    return (digest % 100) < FC_TOOL_SELECTION_ROLLOUT_PERCENT
-
-
 def tool_selector_node(state: dict) -> dict:
     """direct 模式入口：路由缩候选 → FC 选工具 + 填参 → skill_executor。
 
@@ -520,46 +537,65 @@ def tool_selector_node(state: dict) -> dict:
         + _tool_selection（供 events 层发 log 事件；不在 state schema 内，
         仅随 stream update 透出，与 supervisor 的 _ready_dispatch 同模式）
     """
+    from backend.orchestration.graph.sse_event_sink import emit_sse_progress
+
+    emit_sse_progress(
+        node="tool_selector", phase="capability_selection",
+        message="正在选择合适的查询能力",
+    )
     result = _decide(state)
     _write_trace_metadata(result)
     return result
 
 
 def _decide(state: dict) -> dict:
-    """决策主体（门控 → 直通 / FC），trace metadata 由出口统一写入。"""
+    """统一门禁后的 selector：Fast Path 验证后直通，其余只走受限 FC。"""
     t0 = time.time()
-
-    if not ENABLE_FC_TOOL_SELECTION:
-        return _passthrough(state, "flag_off")
-
     if state.get("route_mode") != "direct":
         return _passthrough(state, "not_direct")
 
-    # 分层路由 Fast Path（2026-09-22）：router 层已按 top1/margin/风险三条件
-    # 直选工具，此处必须直通 —— 否则 LOW 风险但不在旧 FAST_PATH_CAPS 白名单的
-    # 能力（如 report.generate）会被再次送进 FC，形成重复 LLM 路由。
-    if state.get("tool_route_mode") == "fast_path":
-        return _passthrough(state, "hierarchical_fast_path")
-
-    # 灰度放量：未命中的 session 走 control 组（直通 = 旧行为），
-    # 便于按 session 对比 FC 与直通的表现
-    if not _in_rollout(state.get("session_id", "default")):
-        return _passthrough(state, "rollout_skip")
-
     decision = state.get("route_decision") or {}
     candidates = decision.get("candidates", []) if isinstance(decision, dict) else []
-    if not candidates:
-        return _passthrough(state, "no_candidates")
+    route_meta = decision.get("routing_meta") or {}
+    selection_mode = str(state.get("tool_route_mode") or route_meta.get("selection_mode") or "")
+    valid_caps = _converge_candidates(candidates, str(state.get("domain") or route_meta.get("domain") or ""))
 
-    top = candidates[0] if isinstance(candidates[0], dict) else {}
-    top_name = top.get("name", "")
-    top_score = float(top.get("score", 0.0) or 0.0)
-    if top_name in FAST_PATH_CAPS and top_score >= FAST_PATH_SCORE:
-        return _passthrough(state, "fast_path")
+    if selection_mode == "fast_path":
+        selected = str(state.get("selected_tool") or route_meta.get("selected_tool") or "")
+        top = next((row for row in candidates if isinstance(row, dict) and row.get("name") == selected), None)
+        try:
+            from backend.orchestration.router.execution_mode import ExecutionModeResolver
 
-    valid_caps = _converge_candidates(candidates)
+            gate_decision = {
+                "selection_mode": selection_mode,
+                "top1_score": route_meta.get("fine_top1_score"),
+                "top2": route_meta.get("fine_top2"),
+                "top2_score": route_meta.get("fine_top2_score"),
+                "margin": route_meta.get("fine_margin"),
+                "score_type": route_meta.get("score_type"),
+                "candidates": candidates,
+            }
+            gate_reason = ExecutionModeResolver()._fast_path_block_reason(
+                str(state.get("domain") or route_meta.get("domain") or ""),
+                selected,
+                gate_decision,
+                top,
+            )
+            valid_fast = bool(selected) and selected in valid_caps and not gate_reason
+        except Exception:
+            valid_fast = False
+        if valid_fast:
+            result = _passthrough(
+                state, "validated_hierarchical_fast_path", capability=selected,
+            )
+            result["_tool_selection"].update({"candidates": [selected]})
+            return result
+        return _clarify_selection(state, "fast_path_gate_mismatch", valid_caps)
+
+    if selection_mode != "llm_selection":
+        return _clarify_selection(state, "selection_mode_missing_or_invalid", valid_caps)
     if not valid_caps:
-        return _passthrough(state, "no_valid_candidates")
+        return _clarify_selection(state, "no_valid_candidates", [])
 
     return _select_via_fc(state, valid_caps, t0)
 
@@ -588,5 +624,25 @@ def _write_trace_metadata(result: dict) -> None:
             "model": _configured_tool_selector_model() or get_active_model_name(),
             "elapsed_ms": sel.get("elapsed_ms"),
         }
+        route = dict(trace.metadata.get("routing_decision") or {})
+        blocked = bool(result.get("selection_blocked"))
+        selection_reason = str(sel.get("reason") or "")
+        route.update({
+            "selection_mode": route.get("selection_mode") or (result.get("route_decision") or {}).get("routing_meta", {}).get("selection_mode", ""),
+            "candidates": route.get("candidates") or sel.get("candidates", []),
+            "source": route.get("source") or sel.get("source", ""),
+            "candidate_source": route.get("candidate_source") or route.get("source") or "",
+            "selection_source": sel.get("source", ""),
+            "score_type": route.get("score_type") or (result.get("route_decision") or {}).get("routing_meta", {}).get("score_type", "unknown"),
+            "margin": route.get("margin", 0.0),
+            "block_reason": selection_reason if blocked else route.get("block_reason", ""),
+            "selection_block_reason": selection_reason if blocked else "",
+            "selected_tool": sel.get("capability") or (result.get("selected_tool") or ""),
+            "final_destination": "clarify" if result.get("selection_blocked") else (
+                "skill_executor" if sel.get("source") in {"fc", "passthrough"} else "clarify"
+            ),
+            "route_policy_version": route.get("route_policy_version", "routing-p0-1"),
+        })
+        trace.metadata["routing_decision"] = route
     except Exception:
         pass

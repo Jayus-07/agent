@@ -48,20 +48,35 @@ def test_tool_selector_respects_engine_fast_path(monkeypatch):
     """统一路由层已直选时，tool_selector 不得再次调用 FC。"""
 
     called = {"fc": False}
-    monkeypatch.setattr(ts, "ENABLE_FC_TOOL_SELECTION", True)
     monkeypatch.setattr(
         ts,
         "_select_via_fc",
         lambda state, caps, t0: called.__setitem__("fc", True) or {},
     )
     state = {
-        "question": "生成本月经营报告",
+        "question": "查询库存",
+        "domain": "data",
         "session_id": "s1",
         "route_mode": "direct",
         "tool_route_mode": "fast_path",
-        "route_decision": {"candidates": [{"name": "report.generate", "score": 0.9}]},
+        "selected_tool": "sql.query",
+        "route_decision": {
+            "candidates": [
+                {"name": "sql.query", "score": 0.9, "risk": "LOW",
+                 "fast_path_enabled": True, "permission_ready": True},
+                {"name": "data.collect", "score": 0.7, "risk": "HIGH",
+                 "fast_path_enabled": False, "permission_ready": True},
+            ],
+            "routing_meta": {
+                "domain": "data", "selection_mode": "fast_path",
+                "selected_tool": "sql.query", "fine_top1_score": 0.9,
+                "fine_top2": "data.collect", "fine_top2_score": 0.7,
+                "fine_margin": 0.2, "risk_level": "LOW",
+                "score_type": "vector_similarity_heuristic",
+            },
+        },
     }
     result = ts.tool_selector_node(state)
     assert called["fc"] is False
     assert result["_tool_selection"]["source"] == "passthrough"
-    assert result["_tool_selection"]["reason"] == "hierarchical_fast_path"
+    assert result["_tool_selection"]["reason"] == "validated_hierarchical_fast_path"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from math import isfinite
 from typing import Any
 
 from backend.orchestration.domain_registry import (
@@ -48,6 +49,8 @@ class ExecutionModeResolver:
         domain_decision: DomainDecision,
         capability_decision: CapabilityDecision,
         existing_override: Any | None = None,
+        *,
+        verified_context: Mapping[str, Any] | None = None,
     ) -> ExecutionModeDecision:
         """按兼容优先级返回统一执行方式。"""
 
@@ -73,27 +76,30 @@ class ExecutionModeResolver:
                 or ""
             )
             if target and target not in self._workflow_names:
-                target = ""
+                return self._clarify(
+                    float(override.get("confidence") or 0.0),
+                    "workflow_not_registered",
+                )
+            if not target:
+                return self._clarify(
+                    float(override.get("confidence") or 0.0),
+                    "workflow_target_missing",
+                )
             return ExecutionModeDecision(
                 mode="workflow",
-                target=target or None,
+                target=target,
                 confidence=float(override.get("confidence") or 0.0),
                 reasoning="复用既有 workflow override",
             )
-        if override_mode == "direct":
-            target = self._first_candidate(override)
-            return ExecutionModeDecision(
-                mode="direct",
-                target=target or capability_decision.get("capability"),
-                confidence=float(override.get("confidence") or 0.0),
-                reasoning="复用既有 direct override",
-            )
+        # direct override 只是旧入口的路由提示，不是执行授权；继续走下方
+        # 同一套能力、分数、margin、风险、注册和权限门禁。
         if override_mode == "plan":
-            return ExecutionModeDecision(
-                mode="plan",
-                confidence=float(override.get("confidence") or 0.0),
-                reasoning="复用既有 plan override",
-            )
+            if self._valid_composite_override(override, verified_context):
+                return ExecutionModeDecision(
+                    mode="plan",
+                    confidence=float(override.get("confidence") or 0.0),
+                    reasoning="复用已校验的复合意图 plan override",
+                )
 
         domain = str(domain_decision.get("domain") or "unknown")
         confidence = float(domain_decision.get("confidence") or 0.0)
@@ -113,26 +119,155 @@ class ExecutionModeResolver:
                 reasoning="prefilter/continuation 命中有状态域图",
             )
 
-        capability = capability_decision.get("capability")
-        if capability:
+        selection_mode = str(capability_decision.get("selection_mode") or "")
+        candidate_rows = capability_decision.get("candidates") or []
+        candidates = {
+            str(item.get("name") or ""): item
+            for item in candidate_rows
+            if isinstance(item, Mapping) and item.get("name")
+        }
+        top1 = str(capability_decision.get("top1") or capability_decision.get("capability") or "")
+        if selection_mode == "fast_path":
+            reason = self._fast_path_block_reason(
+                domain, top1, capability_decision, candidates.get(top1),
+            )
+            if not reason:
+                return ExecutionModeDecision(
+                    mode="direct",
+                    target=top1,
+                    confidence=float(capability_decision.get("top1_score") or 0.0),
+                    reasoning="Fast Path 满足分数、margin、注册、白名单、风险与权限门禁",
+                )
+            if not candidates:
+                return self._clarify(float(capability_decision.get("confidence") or confidence), reason)
+            # 可信分数/分差不满足时仍可进入既有 Tool Selector 消歧；target
+            # 必须为空，禁止 selector 失败后静默执行首候选。
+            if any(not row.get("permission_ready", True) for row in candidates.values()):
+                return self._clarify(float(capability_decision.get("confidence") or confidence), "permission_denied")
             return ExecutionModeDecision(
                 mode="direct",
-                target=capability,
-                confidence=float(capability_decision.get("confidence") or 0.0),
-                reasoning="域内已有 top1 capability 候选",
+                target=None,
+                confidence=0.0,
+                reasoning=f"Fast Path 被阻断（{reason}），交 Tool Selector 消歧",
             )
 
-        if capability_decision.get("candidates"):
+        if selection_mode == "llm_selection" and candidates:
+            if any(not row.get("permission_ready", True) for row in candidates.values()):
+                return self._clarify(float(capability_decision.get("confidence") or confidence), "permission_denied")
             return ExecutionModeDecision(
-                mode="plan",
-                confidence=float(capability_decision.get("confidence") or 0.0),
-                reasoning="域内存在多个候选，交 Planner 形成 DAG",
+                mode="direct",
+                target=None,
+                confidence=0.0,
+                reasoning="灰区候选交现有 Tool Selector 消歧，未指定执行目标",
             )
 
+        return self._clarify(
+            float(capability_decision.get("confidence") or confidence),
+            str(capability_decision.get("block_reason") or "no_safe_candidate"),
+        )
+
+    def _fast_path_block_reason(
+        self,
+        domain: str,
+        capability: str,
+        decision: CapabilityDecision,
+        row: Mapping[str, Any] | None,
+    ) -> str:
+        if not capability or row is None:
+            return "top1_not_in_registered_candidates"
+        if not row.get("permission_ready", False):
+            return "permission_denied"
+        if str(decision.get("selection_mode") or "") != "fast_path":
+            return "selection_mode_not_fast_path"
+
+        try:
+            from backend.orchestration.capability_registry import tool_registry
+            from backend.core.tool_governance.registry import get_tool_spec
+            canonical_domain = {"travel_booking": "travel", "travel_commerce": "travel"}.get(domain, domain)
+            declaration = next(
+                item for item in load_manifest().capabilities if item.name == capability
+            )
+            spec = get_tool_spec(capability)
+            declared_domains = set(spec.domains if spec is not None else ())
+            declared_domain = str(getattr(declaration, "domain", "") or "")
+            if not declaration.routed or (
+                canonical_domain != declared_domain and canonical_domain not in declared_domains
+            ) or tool_registry.get_node(capability) is None:
+                return "capability_not_registered_for_domain"
+            if not declaration.fast_path_enabled or not row.get("fast_path_enabled", False):
+                return "fast_path_not_allowlisted"
+            if declaration.risk_level.upper() != "LOW" or str(row.get("risk") or "UNKNOWN").upper() != "LOW":
+                return "risk_level_not_low"
+        except Exception:
+            return "capability_registry_validation_failed"
+
+        try:
+            from backend.config import FINE_TOOL_HIGH_CONFIDENCE, FINE_TOOL_MIN_MARGIN
+            score = float(decision.get("top1_score"))
+            row_score = float(row.get("score"))
+            margin = float(decision.get("margin"))
+            top2_name = str(decision.get("top2") or "")
+            top2_score = float(decision.get("top2_score") or 0.0)
+            if not all(isfinite(value) for value in (score, row_score, margin, top2_score)):
+                return "non_finite_score_metadata"
+            if top2_name:
+                top2_row = next(
+                    (item for item in decision.get("candidates") or []
+                     if isinstance(item, Mapping) and item.get("name") == top2_name),
+                    None,
+                )
+                if top2_row is None or abs(float(top2_row.get("score")) - top2_score) > 0.001:
+                    return "top2_score_metadata_mismatch"
+            elif top2_score != 0.0:
+                return "top2_candidate_missing"
+            if abs(row_score - score) > 0.001 or abs((score - top2_score) - margin) > 0.001:
+                return "score_margin_metadata_mismatch"
+            score_type = str(decision.get("score_type") or "")
+            if score_type not in {
+                "vector_similarity_heuristic",
+                "adjusted_vector_similarity_heuristic",
+            }:
+                return "score_type_not_fast_path_eligible"
+        except (TypeError, ValueError):
+            return "invalid_score_metadata"
+        if score < FINE_TOOL_HIGH_CONFIDENCE:
+            return "top1_score_below_threshold"
+        if margin < FINE_TOOL_MIN_MARGIN:
+            return "margin_below_threshold"
+        return ""
+
+    @staticmethod
+    def _valid_composite_override(
+        override: Mapping[str, Any],
+        verified_context: Mapping[str, Any] | None = None,
+    ) -> bool:
+        if float(override.get("confidence") or 0.0) < 0.8:
+            return False
+        candidates = override.get("candidates") or []
+        if len(candidates) < 2:
+            return False
+        try:
+            from backend.orchestration.capability_registry import tool_registry
+            from backend.orchestration.router.capability_router import CapabilityRouter
+            allowed = set(load_manifest().planner_visible_capability_names)
+            for item in candidates:
+                name = str(item.get("name") if isinstance(item, Mapping) else item)
+                if name not in allowed or tool_registry.get_node(name) is None:
+                    return False
+                if not CapabilityRouter._permission_ready(name, dict(verified_context or {})):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    @staticmethod
+    def _clarify(confidence: float, reason: str) -> ExecutionModeDecision:
         return ExecutionModeDecision(
             mode="plan",
+            target="clarify",
             confidence=confidence,
-            reasoning="无可执行候选，进入 plan 交由统一 Planner 处理",
+            reasoning=f"安全路由阻断（{reason}），请求澄清",
+            compat_route_mode="clarify",
         )
 
     def _domain_graph_target(self, decision: DomainDecision) -> str | None:

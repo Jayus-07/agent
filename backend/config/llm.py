@@ -203,15 +203,8 @@ LLM_STREAM_USAGE = os.getenv(
     "LLM_STREAM_USAGE", "true"
 ).strip().lower() in ("1", "true", "yes")
 
-# ── FC 工具选择（tool RAG / 动态工具暴露）────────────────────
-# true: direct 模式门控走 function calling 选工具+填参（tool_selector 节点，
-#       路由缩候选 → 模型在候选内选择）；false 一键回退旧行为
-#       （candidates[0] 直取 + question 透传，零 LLM）
-ENABLE_FC_TOOL_SELECTION = os.getenv(
-    "ENABLE_FC_TOOL_SELECTION", "true"
-).strip().lower() in ("1", "true", "yes")
-# tool_selector 的 LLM 调用约束：选择+填参输出很小，收紧超时与上限，
-# 失败/超时直接回退直通路径（等价旧行为），不拖尾延迟。
+# ── 灰区 Tool Selector（路由消歧 + 参数抽取）─────────────────
+# selector 故障必须澄清阻断，不能回退首候选；超时仍由请求 Deadline 限制。
 # max_tokens 不宜低于 512：qwen3 系会先写一段普通 CoT 再发 tool_calls，
 # 截断会吞掉 tool_calls（评测实测 256 时 no_match 率飙升）
 TOOL_SELECTOR_LLM_TIMEOUT = int(os.getenv("TOOL_SELECTOR_LLM_TIMEOUT", "8"))
@@ -220,31 +213,12 @@ TOOL_SELECTOR_LLM_MAX_TOKENS = int(os.getenv("TOOL_SELECTOR_LLM_MAX_TOKENS", "51
 # 空 = 跟随全局默认模型。未注册/构建失败自动回退全局模型
 # 模型名走角色注册表（role=tool_selector，空值 = 跟随 main，空值有语义）
 TOOL_SELECTOR_MODEL = _literal_model("tool_selector")
-# 灰度放量（照 cs_prefilter 模式）：白名单 session 优先，其余按
-# md5(session_id) 稳定哈希百分比。默认 100 = 全量；0 = 全部直通（回旧行为）
-FC_TOOL_SELECTION_ROLLOUT_PERCENT = int(
-    os.getenv("FC_TOOL_SELECTION_ROLLOUT_PERCENT", "100"))
-FC_TOOL_SELECTION_ALLOWLIST = [
-    s.strip() for s in os.getenv("FC_TOOL_SELECTION_ALLOWLIST", "").split(",")
-    if s.strip()
-]
-# TD-06（2026-10-02）：selector LLM 故障/超预算时的首候选兜底门限。
-# 实测多候选 + selector 12.4s 超预算 → clarify → 整问 25.8s 失败，而路由器
-# 自身分数分布是可决策的（top 0.425 vs 次选 0.30）。兜底仅在「分数既有
-# 高度又有区分度」时执行首候选：top ≥ floor 且 (top - second) ≥ margin，
-# 否则维持 clarify（模糊问题宁问不猜）。0 = 关闭兜底回旧行为。
-TOOL_SELECTOR_TOP_CANDIDATE_FLOOR = float(
-    os.getenv("TOOL_SELECTOR_TOP_CANDIDATE_FLOOR", "0.4"))
-TOOL_SELECTOR_TOP_CANDIDATE_MARGIN = float(
-    os.getenv("TOOL_SELECTOR_TOP_CANDIDATE_MARGIN", "0.1"))
-# 门控阈值（评测校准后可调）：fast set 高置信直通阈值 / FC 候选截断上限
-TOOL_SELECTOR_FAST_PATH_SCORE = float(
-    os.getenv("TOOL_SELECTOR_FAST_PATH_SCORE", "0.85"))
+# FC 候选截断上限。Fast Path 阈值统一使用 FINE_TOOL_* 执行门禁。
 TOOL_SELECTOR_MAX_CANDIDATES = int(
     os.getenv("TOOL_SELECTOR_MAX_CANDIDATES", "3"))
 
-# 粗分类 Confidence Gate（§10）：top1 置信度与 top1-top2 margin 双阈值，
-# 任一不满足 → unknown（进澄清），不强行归域。
+# 粗分类双门槛（§10）：top1 排序分数与 top1-top2 分差，任一不满足 →
+# unknown（进澄清）。分数不是经校准的统计概率。
 # 例：knowledge=0.61 / data=0.59 —— margin=0.02 < 0.12，必须拒判。
 COARSE_DOMAIN_CONFIDENCE = float(os.getenv("COARSE_DOMAIN_CONFIDENCE", "0.75"))
 COARSE_DOMAIN_MIN_MARGIN = float(os.getenv("COARSE_DOMAIN_MIN_MARGIN", "0.12"))
@@ -254,9 +228,8 @@ COARSE_RULE_STRONG_HITS = int(os.getenv("COARSE_RULE_STRONG_HITS", "2"))
 # 规则弱信号对 embedding 分数的加成（每命中一次；上限 0.1 封顶防规则淹没语义）
 COARSE_RULE_HINT_BONUS = float(os.getenv("COARSE_RULE_HINT_BONUS", "0.05"))
 # unknown 处置固定进入澄清，避免不确定问题直接制造 plan 风暴。
-# embedding 域心余弦 → softmax 温度：把任意量纲的相似度转成校准概率
-# （top1 概率 / top1-top2 概率差直接对齐 COARSE_DOMAIN_* 阈值）。
-# 越小分布越尖锐；评测（§19）用真实流量校准后再调。
+# embedding 域心余弦 → softmax 温度：只转换为内部排序分数，未经校准，
+# 不解释为概率。越小分布越尖锐；阈值只用于路由门槛。
 COARSE_SOFTMAX_TEMP = float(os.getenv("COARSE_SOFTMAX_TEMP", "0.02"))
 
 # 细工具选择 Fast Path 三条件（§7）：top1 分数、top1-top2 margin、

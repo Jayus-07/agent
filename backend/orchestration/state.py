@@ -154,6 +154,12 @@ class AgentState(TypedDict):
     tool_arguments: dict | None                  # 细选择产出的执行参数（FC 填参后）
     tool_confidence: float                       # 细选择 top1 分数
     tool_route_mode: str                         # fast_path | llm_selection | ""
+    score_type: str
+    fine_top1: str
+    fine_top1_score: float
+    fine_top2: str
+    fine_top2_score: float
+    fine_margin: float
     need_clarification: bool                     # unknown / 低置信 → 澄清
     clarification_reason: str                    # LOW_CONFIDENCE | LOW_MARGIN | ...
     # STOP B Router 收口：三类决策对象的可序列化快照；旧字段继续为兼容事实源。

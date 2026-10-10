@@ -92,6 +92,7 @@ class DomainRouter:
                 "subflow": None,
                 "confidence": 1.0,
                 "source": "prefilter",
+                "score_type": "prefilter_signal",
                 "reasoning": "domain_hint customer_service 锁域",
             }
 
@@ -116,6 +117,7 @@ class DomainRouter:
             "domain": prediction.domain,
             "subflow": None,
             "confidence": float(prediction.confidence),
+            "score_type": str(getattr(prediction, "score_type", "unknown")),
             "margin": float(getattr(prediction, "margin", 0.0)),
             "second_domain": str(getattr(prediction, "second_domain", "") or ""),
             "source": source,
@@ -138,6 +140,7 @@ class DomainRouter:
             "domain": domain,
             "subflow": None,
             "confidence": float(meta.get("domain_confidence") or 0.0),
+            "score_type": str(meta.get("domain_score_type") or "unknown"),
             "margin": float(meta.get("domain_margin") or 0.0),
             "second_domain": str(meta.get("domain_second") or ""),
             "source": source,
@@ -165,6 +168,7 @@ class DomainRouter:
             "subflow": subflow,
             "confidence": 1.0,
             "source": "prefilter",
+            "score_type": "prefilter_signal",
             "reasoning": f"prefilter 命中 route_mode={route_mode}",
         }
 

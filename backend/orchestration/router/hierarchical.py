@@ -66,7 +66,13 @@ class ToolSelection(BaseModel):
     candidate_tools: list[str] = Field(default_factory=list)
     fine_top1: str = ""
     fine_top1_score: float = 0.0
+    fine_top2: str = ""
+    fine_top2_score: float = 0.0
     fine_margin: float = 0.0
+    candidate_scores: dict[str, float] = Field(default_factory=dict)
+    score_type: str = "vector_similarity_heuristic"
+    top1_risk_level: str = "UNKNOWN"
+    fast_path_block_reason: str = ""
     need_clarification: bool = False
     clarification_reason: str = ""
     # 规则特征校准明细（2026-09-22 D6 修复，score_calibration.py）：
@@ -79,9 +85,10 @@ class ToolSelection(BaseModel):
 class _FineScoreMap(dict[str, float]):
     """兼容旧 dict 接口，同时携带向量基础设施故障码。"""
 
-    def __init__(self, *args, failure_reason: str = "", **kwargs):
+    def __init__(self, *args, failure_reason: str = "", score_type: str = "unknown", **kwargs):
         super().__init__(*args, **kwargs)
         self.failure_reason = failure_reason
+        self.score_type = score_type
 
 
 def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
@@ -139,25 +146,33 @@ class HierarchicalRouter:
             for c in decision.candidates:
                 if c.name in valid_names and c.score > scores.get(c.name, 0.0):
                     scores[c.name] = c.score
+            score_type = str((decision.routing_meta or {}).get("score_type") or "vector_similarity_heuristic")
         except VectorRouteError as exc:
             return _FineScoreMap(
                 {c.name: 0.3 for c in candidates},
                 failure_reason=exc.code,
+                score_type="unavailable_fallback_score",
             )
-        except Exception:
+        except Exception as exc:
             scores = {}
+            score_type = "vector_query_failed_fallback_score"
+            failure_reason = f"vector_query_failed:{type(exc).__name__}"
+        else:
+            failure_reason = ""
         # 未进 top-K 的候选给保底分（保持候选完整，交给 FC/灰区路径）
-        return _FineScoreMap({c.name: scores.get(c.name, 0.3) for c in candidates})
+        return _FineScoreMap(
+            {c.name: scores.get(c.name, 0.3) for c in candidates},
+            failure_reason=failure_reason,
+            score_type=score_type,
+        )
 
     def select_tool(self, query: str, domain: str,
                     candidates: list[ToolCandidate]) -> ToolSelection:
         """细路由：Fast Path 三条件（top1/margin/risk+白名单）→ 灰区交 LLM。
 
-        2026-09-22 D6 修复：_fine_scores 返回的已是校准后分数（校准在
-        VectorRouter.route 单点生效）；此外唯一规则强信号候选（≥2 个特征
-        命中）直通 —— 这是「高置信场景直通」的规则化表达，不是把某工具
-        固定为最高优先级：直通资格随 query 命中的特征数变化，且仍受
-        LOW 风险 + fast_path_enabled 双门槛约束（§11）。
+        _fine_scores 返回向量相似度或启发式调整后的相似度分数。规则特征
+        只用于解释，不单独授权 Fast Path；Fast Path 必须同时满足分数、
+        margin、LOW 风险与 fast_path_enabled 门槛。
         """
         from backend.orchestration.router.score_calibration import (
             STRONG_SIGNAL_HITS,
@@ -171,13 +186,11 @@ class HierarchicalRouter:
         vector_failure_reason = getattr(scores, "failure_reason", "")
         ranked = sorted(candidates, key=lambda c: (-scores.get(c.name, 0.0), c.name))
 
-        # 规则强信号：唯一 ≥2 特征命中的候选（如有）提到首位——向量召回被
-        # 语义搭便车的 examples 拉偏时（D6），特征信号兜住确定性。
+        # 规则特征只作为附加证据记录，不替代向量分数、top1/top2 margin
+        # 或风险门禁，也不单独授权 Fast Path。
         hits = compute_signal(query, [c.name for c in candidates])
         strong = sorted(c for c, h in hits.items() if h >= STRONG_SIGNAL_HITS)
         calib_meta: dict = {"hits": hits, "strong": strong} if hits else {}
-        if len(strong) == 1 and ranked[0].name != strong[0]:
-            ranked.sort(key=lambda c: c.name != strong[0])  # stable：强信号候选置顶
 
         top1, top2 = ranked[0], ranked[1] if len(ranked) > 1 else None
         s1 = scores.get(top1.name, 0.0)
@@ -188,7 +201,13 @@ class HierarchicalRouter:
             tool_name=top1.name, tool_confidence=round(s1, 3),
             candidate_tools=[c.name for c in ranked],
             fine_top1=top1.name, fine_top1_score=round(s1, 3),
+            fine_top2=top2.name if top2 else "",
+            fine_top2_score=round(s2, 3),
             fine_margin=round(margin, 3),
+            candidate_scores={c.name: round(float(scores.get(c.name, 0.0)), 3)
+                              for c in ranked},
+            score_type=str(getattr(scores, "score_type", "vector_similarity_heuristic")),
+            top1_risk_level=top1.risk_level,
             fallback_reason=vector_failure_reason,
         )
 
@@ -198,21 +217,25 @@ class HierarchicalRouter:
             and top1.fast_path_enabled
             and top1.risk_level == "LOW"
         )
-        rule_signal_ok = (
-            len(strong) == 1
-            and top1.name == strong[0]
-            and top1.fast_path_enabled
-            and top1.risk_level == "LOW"
-        )
-        if fast_ok or rule_signal_ok:
+        if fast_ok:
             selection.route_mode = "fast_path"
             if calib_meta:
-                calib_meta["basis"] = "rule_strong_signal" if rule_signal_ok else "calibrated_scores"
+                calib_meta["basis"] = "score_and_margin_gate"
                 selection.calibration = calib_meta
         else:
             # 灰区：候选原样交给 tool_selector（bind 的只有域内工具）；
             # 不在此处调 LLM —— LLM 调用统一收敛在 tool_selector 节点。
             selection.route_mode = "llm_selection"
+            if s1 < FINE_TOOL_HIGH_CONFIDENCE:
+                selection.fast_path_block_reason = "top1_score_below_threshold"
+            elif margin < FINE_TOOL_MIN_MARGIN:
+                selection.fast_path_block_reason = "margin_below_threshold"
+            elif not top1.fast_path_enabled:
+                selection.fast_path_block_reason = "fast_path_disabled"
+            elif top1.risk_level != "LOW":
+                selection.fast_path_block_reason = "risk_level_not_low"
+            else:
+                selection.fast_path_block_reason = "fast_path_policy_rejected"
             if calib_meta:
                 calib_meta["basis"] = "grey_zone"
                 selection.calibration = calib_meta
@@ -314,7 +337,7 @@ class HierarchicalRouter:
                 _meta(prediction, "clarify", selection, None, t0),
             )
 
-        ordered = [CapabilityScore(name=n, score=selection.tool_confidence if n == selection.fine_top1 else 0.3)
+        ordered = [CapabilityScore(name=n, score=selection.candidate_scores.get(n, 0.0))
                    for n in selection.candidate_tools]
         decision = RouteDecision(
             execution_mode=ExecutionMode.DIRECT,
@@ -344,6 +367,7 @@ def _meta(source_or_prediction, action: str,
             "domain_confidence": p.confidence,
             "domain_margin": p.margin,
             "domain_source": p.source,
+            "domain_score_type": p.score_type,
             "reason_code": p.reason_code,
             "domain_action": action,
             "candidate_tools": selection.candidate_tools if selection else [],
@@ -352,8 +376,16 @@ def _meta(source_or_prediction, action: str,
             "fine_top1_score": selection.fine_top1_score if selection else 0.0,
             "fine_margin": selection.fine_margin if selection else 0.0,
             "tool_route_mode": selection.route_mode if selection else "",
+            "selection_mode": selection.route_mode if selection else "",
             "calibration": (selection.calibration if selection else {}),
             "selected_tool": (selection.tool_name if selection.route_mode == "fast_path" else "") if selection else "",
+            "fine_top2": selection.fine_top2 if selection else "",
+            "fine_top2_score": selection.fine_top2_score if selection else 0.0,
+            "candidate_scores": selection.candidate_scores if selection else {},
+            "score_type": selection.score_type if selection else "",
+            "fallback_reason": selection.fallback_reason if selection else "",
+            "risk_level": selection.top1_risk_level if selection else "",
+            "fast_path_block_reason": selection.fast_path_block_reason if selection else "",
             "need_clarification": selection.need_clarification if selection else (action == "clarify"),
             "clarification_reason": selection.clarification_reason if selection else (
                 "unknown_domain" if action == "clarify" else ""),

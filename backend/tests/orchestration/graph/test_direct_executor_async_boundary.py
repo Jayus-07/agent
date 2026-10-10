@@ -41,7 +41,7 @@ def _fake_skill_nodes(failed: bool = False):
                 "tool_status": "unavailable",
             }
             if failed
-            else {"status": "success", "output": {"columns": ["x"], "rows": [[1]]}}
+            else {"status": "success", "output": {"columns": ["x"], "rows": [{"x": 1}]}}
         )
         return {"step_results": {step_id: sr}}
 
