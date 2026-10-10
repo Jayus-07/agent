@@ -18,7 +18,6 @@ FROM python:3.10-slim AS builder
 ARG PIP_INDEX_URL=
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=120 \
     PIP_RETRIES=10 \
     PIP_INDEX_URL=${PIP_INDEX_URL}
@@ -45,7 +44,8 @@ COPY constraints/torch-cpu.txt ./constraints/torch-cpu.txt
 # sentence-transformers 会传递引入 Torch。仅追加 CPU 索引会让 pip 在所有索引
 # 中选择最高版本，可能从 PyPI 拉入整套 CUDA 依赖；先装 CPU wheel 并用约束锁定。
 ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
-RUN python -m venv /opt/venv \
+RUN --mount=type=cache,id=agent-platform-pip,target=/root/.cache/pip,sharing=locked \
+    python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install --no-deps \
         --index-url ${TORCH_CPU_INDEX_URL} \

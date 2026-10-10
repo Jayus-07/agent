@@ -1,9 +1,8 @@
 # APISIX standalone 声明式配置 — Python 项目独立入口（B1：鉴权旁路，仅路由/转发/兼容性）
 #
-# 方案：docs/gateway-apisix-migration-plan.md v2.0 §2（B0 审计实测修正版）
-# 审计：docs/gateway-apisix-audit-report.md
+# 身份协议：docs/contracts/identity-header-protocol.md；当前路由以本文件为准。
 #
-# B0 实测约束（改这里之前先读审计报告）：
+# 路由约束（修改前核对上游实际 API 路径）：
 # 1. FastAPI 路由无 /api 前缀 —— 所有 /api/* 路由必须 StripPrefix（regex_uri 剥 /api）。
 # 2. /api/sys/* 目标是 /system/<path>（对齐 SCG RewritePath，非裸 StripPrefix）。
 # 3. FastAPI 鉴权中间件先于路由执行 → 未知路径 401；APISIX 兜底 /api/* 整段转发，不做前缀过滤。

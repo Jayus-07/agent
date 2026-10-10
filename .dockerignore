@@ -21,6 +21,8 @@ data/report_snapshots/
 data/long_term_memory/
 data/chat_history.db
 data/report_preferences.json
+# 根 data 目录由运行时卷提供，未被 Dockerfile COPY，无需进入构建上下文
+data/
 # 本地 Windows 绝对路径符号链接（backend/data → D:/...），打镜像会变成悬空链接
 backend/data
 
@@ -32,9 +34,18 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Frontend (built separately in web/Dockerfile)
+# 前端单独构建；后端镜像上下文不需要本机依赖和构建产物
 web/node_modules/
 web/.next/
+frontend/node_modules/
+frontend/.next/
+frontend/.next-*/
+frontend-admin/node_modules/
+frontend-admin/.next/
+frontend-admin/.next-*/
+frontend-cs/node_modules/
+frontend-cs/.next/
+frontend-cs/.next-*/
 
 # Docker（保留 entrypoint.sh 用于 API 镜像构建）
 Dockerfile

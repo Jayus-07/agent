@@ -1,6 +1,6 @@
 -- gateway-auth.lua — APISIX 入口认证插件（B2）
 --
--- 行为合同：1:1 平移 Java AuthenticationGlobalFilter（B0 审计 docs/gateway-apisix-audit-report.md §3）
+-- 身份头行为合同见 docs/contracts/identity-header-protocol.md。
 --   ① 无条件剥离入站伪造身份头（九头：X-Auth-Type/X-User-Id/X-User-Name/X-User-Dept
 --      /X-User-Roles/X-User-Permissions/X-Tenant-Id + X-Operator-Role/X-Operator-Id；
 --      X-Operator-* 为 operator 身份族，B4 未开、py 不消费，
