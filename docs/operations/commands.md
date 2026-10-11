@@ -109,28 +109,3 @@ Playwright 的 Windows 默认浏览器目录是 `%LOCALAPPDATA%\ms-playwright`�
 ~~~
 
 上面是**可选验证命令，不代表已执行**；只运行与本次变更相关的用例。副作用状态未知、账本不可用或客服确认记录卡住时，**先读** [幂等手册](idempotency-runbook.md) 再处理，不重复触发支付、退款或下单。故障决策参见 [统一失败规范](../architecture/failure-degradation.md)。
-
-## 故障恢复、备份与演练标准
-
-这里只提供安全检查入口和 runbook 导航，不复制未经测试的破坏性恢复命令。更完整的数据完整性见 [生命周期规范](../governance/data-lifecycle.md)，任务/Lease/重试见 [异步任务治理](../architecture/async-task-governance.md)，副作用未知见 [幂等手册](idempotency-runbook.md)。
-
-| 故障 | 首先只读确认 | 后续恢复前的门禁 |
-| --- | --- | --- |
-| API / APISIX 登录 401/403 | 网关/后端健康、可信身份模式、当前请求 Trace | 不禁用认证守卫以“恢复可用” |
-| PostgreSQL 断线或迁移失败 | 目标 DB、连接池、schema_migrations、近期备份状态 | 只在隔离库试恢复；禁 `init_db.py --reset` |
-| Redis / Celery 积压 | Worker、QueueRouter 路由、pending/lease/defer、消息年龄 | 不能直接删除队列或重复投递未知副作用 |
-| Tool/MCP/Provider 超时 | ToolStatus、业务结果、用户硬约束和熔断状态 | 读故障可合法降级，写 UNKNOWN 先查 Ledger |
-| LLM 额度/供应商故障 | DB 模型角色绑定、凭据探测、预算预占、最近单价快照 | 不偷偷改 model 或绕预算；避免敏感数据发到未授权 Provider |
-| RAG 不能检索 | 文档审核状态、active_generation、向量/BM25 指针及权限范围 | 不能把 pending_review 当 active；不能删除旧版恢复证据 |
-| Grafana 无数据/告警未发 | Prometheus target、/metrics、PromQL、规则状态 | No Data ≠ 0，Webhook 未配置则不宣称通知已通过 |
-
-**演练证据**：触发/故障时间、影响租户与操作范围、业务状态、错误/Trace ID、只读诊断、恢复决策、备份版本、回滚或人工裁决、数据一致性和最终负责人。恢复脚本运行前核对容器名称、数据库目标、共享 Worktree/Volume 及备份落点；不使用 `down -v` 和强制清理 Worktree 来“修好”系统。
-
-### DR-01～06 验收
-
-1. 常见单点故障在模拟环境能被发现，错误码/Trace/指标可定位。
-2. Redis/Celery Worker 重启不会造成任务状态幻觉和重复副作用。
-3. 数据备份可以在隔离环境真实恢复并检查依赖索引/账本。
-4. 提供每类故障的回滚、阻断与恢复决策；不可执行时标 BLOCKED。
-5. 恢复后重新执行授权/失败路径和核心业务终态的定向回归。
-6. 重大事故有时间线与后续防复发测试，不把日志清空当解决方案。
