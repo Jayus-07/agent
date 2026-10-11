@@ -6,11 +6,22 @@ requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
 
-# ── 模块边界导航（以现行源码/Schema/测试为事实源）──
-# 仓库协作红线：AGENTS.md
-# 模块归属、依赖方向与重构门禁：docs/architecture/module-boundaries.md
-# API/Router/Domain/Skill/Tool/MCP 各司其职；MCP 不是所有请求的必经路径。
-# 本文件声明安装依赖，不承担自动验证 Python import 分层的职责。
+# ── 显式依赖分层（防止循环 import + 明确模块边界）──
+#
+# 分层规则（CLAUDE.md）:
+#   API → Router → Planner → Supervisor → Skill → Tool → MCP Client → MCP Server
+#
+# 对应包依赖:
+#   app/ ────────┐
+#   agents/ ─────┤
+#   orchestration/┤
+#   skills/ ─────┤── 全部可以 import
+#   tools/ ──────┤    shared/ + config/
+#   rag/ ────────┤    infra/ + observability/
+#   memory/ ─────┤
+#   mcp_servers/─┘
+#
+# 防循环: 单向依赖，低层不 import 高层
 
 dependencies = [
     # ═══════════════════════════════════════════

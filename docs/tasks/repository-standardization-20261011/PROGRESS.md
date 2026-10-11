@@ -6,5 +6,5 @@
 - **未做**：修改业务代码、目录移动、删除 Git 跟踪的 tmp/data、删除测试、运行本地 pytest/Vitest/E2E/容器/真实 Provider、合并 PR 到 main。
 - **后续**：针对 F-01～F-10 补引用与行为证据，进行各模块调用链级审查；取得本机工作树/数据库状态后分批实施 T0/T1/T2 验收。业务域重大重构先 ADR 和独立 PR。
 
-- 2026-10-11 / Batch A：在 `main@cc53527e` 基础上单独建立 `task/repository-cleanup-batch-a-20261011`。首批仅计划消除 API 聚合中 4 组重复导入、修正 Trace/pyproject 过时注释，并补 AST 静态守卫。无目录迁移、数据删除或业务逻辑改动。
+- 2026-10-11 / Batch A：在 `main@cc53527e` 基础上单独建立 `task/repository-cleanup-batch-a-20261011`。首批仅计划消除 API 聚合中 4 组重复导入、修正 Trace 过时注释，并补 AST 静态守卫；pyproject.toml 注释整理单独挂账，避免无关变动触发重量级 RAG Smoke。无目录迁移、数据删除或业务逻辑改动。
 - Batch A 状态：**已提交候选，等待本机定向 pytest 与必要的应用路由校验**。GitHub 分支中的静态 diff 校验不是运行时验证；在补齐实测证据前不合并主线。
