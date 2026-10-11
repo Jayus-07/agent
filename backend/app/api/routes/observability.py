@@ -1,7 +1,9 @@
 """可观测性 REST API — traces / metrics / resources / alerts / graph
 
-数据源统一在 `backend.rag.tracer.trace_collector`：
-SQLite TraceStore 直读（Langfuse 已下线，2026-09-16）。
+Trace 采集入口：backend.observability.tracer.trace_collector。
+持久化由 backend.observability.trace_store.get_trace_store() 委托
+backend.observability.trace_store_pg.PostgresTraceStore。
+实际存储与访问控制以当前实现及部署配置为准。
 """
 
 import os
