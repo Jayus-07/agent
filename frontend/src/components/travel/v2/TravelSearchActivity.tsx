@@ -5,6 +5,7 @@ import type { TravelSearchEvent } from './TravelSearchPanel'
 
 const labels: Record<TravelSearchEvent['status'], string> = {
   querying: '查询中',
+  cancelled: '已取消',
   success: '查询成功',
   no_results: '无结果',
   business_failure: '查询失败',
@@ -24,16 +25,17 @@ export default function TravelSearchActivity({ events }: { events: TravelSearchE
     {events.map((event, index) => {
       const querying = event.status === 'querying'
       const success = event.status === 'success'
-      const Icon = querying ? LoaderCircle : success ? Check : event.status === 'no_results' ? CircleHelp : AlertCircle
+      const cancelled = event.status === 'cancelled'
+      const Icon = querying ? LoaderCircle : success ? Check : (cancelled || event.status === 'no_results') ? CircleHelp : AlertCircle
       const tone = querying
         ? 'border-[#dbe9fc] bg-[#f4f8ff] text-[#527eb8]'
         : success
           ? 'border-[#d7eee2] bg-[#f4fbf7] text-[#39815d]'
-          : event.status === 'no_results'
+          : cancelled || event.status === 'no_results'
             ? 'border-[#e5eaf1] bg-[#f8fafc] text-[#73849a]'
             : 'border-[#f3ded9] bg-[#fff8f6] text-[#a55f50]'
 
-      return <li key={`${event.kind}-${event.status}-${event.queriedAt ?? index}-${index}`} className={`rounded-xl border px-2.5 py-2 ${tone}`}>
+      return <li key={event.queryId} className={`rounded-xl border px-2.5 py-2 ${tone}`}>
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 text-[9px] font-semibold">
             <Icon size={12} className={querying ? 'animate-spin' : ''} aria-hidden />

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, MapPin, Search, TrainFront, Utensils, Hotel, Check, CircleAlert, LoaderCircle } from 'lucide-react'
 import {
   addTravelMealV2,
@@ -21,8 +21,9 @@ import {
 
 export type TravelSearchKind = 'trip' | 'food' | 'hotel' | 'train'
 export interface TravelSearchEvent {
+  queryId: string
   kind: Exclude<TravelSearchKind, 'trip'>
-  status: 'querying' | TravelSearchStatusV2
+  status: 'querying' | 'cancelled' | TravelSearchStatusV2
   source: string
   message: string
   queriedAt?: string
@@ -43,21 +44,33 @@ const statusText: Record<string, string> = {
   disabled: '能力未启用',
 }
 
-export default function TravelSearchPanel({
-  initialKind = 'food',
-  trip,
-  showTabs = true,
-  onTripSaved,
-  onLocationSelect,
-  onSearchEvent,
-}: {
+interface ActiveSearchQuery {
+  queryId: string
+  kind: Exclude<TravelSearchKind, 'trip'>
+  controller: AbortController
+}
+
+interface TravelSearchPanelProps {
   initialKind?: Exclude<TravelSearchKind, 'trip'>
   trip?: TravelTripV2
   showTabs?: boolean
   onTripSaved?: (trip: TravelTripV2, summary: string) => void
   onLocationSelect?: (location: { name: string; lat: number; lng: number } | null) => void
   onSearchEvent?: (event: TravelSearchEvent) => void
-}) {
+}
+
+export default function TravelSearchPanel(props: TravelSearchPanelProps) {
+  return <TravelSearchPanelInstance key={props.trip?.trip_id ?? 'standalone-search'} {...props} />
+}
+
+function TravelSearchPanelInstance({
+  initialKind = 'food',
+  trip,
+  showTabs = true,
+  onTripSaved,
+  onLocationSelect,
+  onSearchEvent,
+}: TravelSearchPanelProps) {
   const [kind, setKind] = useState<Exclude<TravelSearchKind, 'trip'>>(initialKind)
   const [city, setCity] = useState(trip?.document.brief.destination ?? '')
   const [fromStation, setFromStation] = useState(trip?.document.brief.origin ?? '')
@@ -74,13 +87,44 @@ export default function TravelSearchPanel({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [savedMessage, setSavedMessage] = useState('')
+  const querySequence = useRef(0)
+  const activeQuery = useRef<ActiveSearchQuery | null>(null)
+  const onSearchEventRef = useRef(onSearchEvent)
 
   useEffect(() => {
+    onSearchEventRef.current = onSearchEvent
+  }, [onSearchEvent])
+
+  const cancelActiveQuery = useCallback(() => {
+    const current = activeQuery.current
+    if (!current) return
+    activeQuery.current = null
+    querySequence.current += 1
+    current.controller.abort()
+    onSearchEventRef.current?.({
+      queryId: current.queryId,
+      kind: current.kind,
+      status: 'cancelled',
+      source: sourceForKind(current.kind),
+      message: '查询已取消。',
+      queriedAt: new Date().toISOString(),
+    })
+  }, [])
+
+  useEffect(() => () => {
+    cancelActiveQuery()
+  }, [cancelActiveQuery])
+
+  useEffect(() => {
+    cancelActiveQuery()
+    setQuerying(false)
     setKind(initialKind)
     setResponse(null)
     setRequestError('')
     setSelectedIndex(null)
-  }, [initialKind])
+    setSaveError('')
+    setSavedMessage('')
+  }, [initialKind, cancelActiveQuery])
 
   useEffect(() => {
     if (!trip) return
@@ -95,9 +139,26 @@ export default function TravelSearchPanel({
 
   const selected = selectedIndex === null ? null : response?.results[selectedIndex] ?? null
 
+  function changeKind(nextKind: Exclude<TravelSearchKind, 'trip'>) {
+    cancelActiveQuery()
+    setQuerying(false)
+    setKind(nextKind)
+    setResponse(null)
+    setRequestError('')
+    setSelectedIndex(null)
+    setSaveError('')
+    setSavedMessage('')
+    onLocationSelect?.(null)
+  }
+
   async function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (querying) return
+    cancelActiveQuery()
+    const sequence = ++querySequence.current
+    const controller = new AbortController()
+    const queryId = createQueryId()
+    activeQuery.current = { queryId, kind, controller }
     setQuerying(true)
     setResponse(null)
     setRequestError('')
@@ -105,26 +166,29 @@ export default function TravelSearchPanel({
     setSavedMessage('')
     setSelectedIndex(null)
     onLocationSelect?.(null)
-    onSearchEvent?.({
-      kind, status: 'querying', source: kind === 'train' ? '12306' : 'amap',
+    onSearchEventRef.current?.({
+      queryId, kind, status: 'querying', source: sourceForKind(kind),
       message: `正在查询${kind === 'food' ? '美食' : kind === 'hotel' ? '酒店' : '动车'}…`,
+      queriedAt: new Date().toISOString(),
     })
     try {
       const result = kind === 'food'
-        ? await searchTravelFoodV2(city.trim())
+        ? await searchTravelFoodV2(city.trim(), { signal: controller.signal })
         : kind === 'hotel'
-          ? await searchTravelHotelsV2(city.trim())
+          ? await searchTravelHotelsV2(city.trim(), { signal: controller.signal })
           : await searchTravelTrainsV2({
             from_station: fromStation.trim(),
             to_station: toStation.trim(),
             travel_date: travelDate,
-          })
+          }, { signal: controller.signal })
+      if (controller.signal.aborted || sequence !== querySequence.current) return
       setResponse(result)
-      onSearchEvent?.({
-        kind, status: result.status, source: result.source, message: result.message,
+      onSearchEventRef.current?.({
+        queryId, kind, status: result.status, source: result.source, message: result.message,
         queriedAt: result.queried_at,
       })
     } catch (cause) {
+      if (controller.signal.aborted || sequence !== querySequence.current) return
       const message = cause instanceof Error ? cause.message : ''
       const status: TravelSearchStatusV2 = /timeout|超时|aborted/i.test(message)
         ? 'network_timeout'
@@ -135,9 +199,12 @@ export default function TravelSearchPanel({
             : 'business_failure'
       const notice = status === 'network_timeout' ? '网络超时，请稍后重试。' : '查询请求未完成，行程没有修改。请检查网络后重试。'
       setRequestError(notice)
-      onSearchEvent?.({ kind, status, source: kind === 'train' ? '12306' : 'amap', message: notice, queriedAt: new Date().toISOString() })
+      onSearchEventRef.current?.({ queryId, kind, status, source: sourceForKind(kind), message: notice, queriedAt: new Date().toISOString() })
     } finally {
-      setQuerying(false)
+      if (sequence === querySequence.current) {
+        if (activeQuery.current?.queryId === queryId) activeQuery.current = null
+        setQuerying(false)
+      }
     }
   }
 
@@ -268,7 +335,7 @@ export default function TravelSearchPanel({
   }
 
   return <section className="min-w-0 rounded-[20px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]">
-    {showTabs && <nav aria-label="行程关联查询" className="flex gap-1 overflow-x-auto border-b border-[#edf1f6] px-3 pt-2.5">{[{ kind: 'trip' as const, label: '行程' }, ...searchOptions.map(({ kind: value, label }) => ({ kind: value, label }))].map(({ kind: value, label }) => <button key={value} type="button" aria-pressed={value === 'trip' ? false : kind === value} disabled={value === 'trip'} onClick={() => value !== 'trip' && setKind(value)} className={`shrink-0 border-b-2 px-3 py-2 text-[11px] font-medium ${value === kind ? 'border-[#2878f5] text-[#2878f5]' : value === 'trip' ? 'border-transparent text-[#a0aab7]' : 'border-transparent text-[#71839b] hover:text-[#2878f5]'}`}>{label}</button>)}</nav>}
+    {showTabs && <nav aria-label="行程关联查询" className="flex gap-1 overflow-x-auto border-b border-[#edf1f6] px-3 pt-2.5">{[{ kind: 'trip' as const, label: '行程' }, ...searchOptions.map(({ kind: value, label }) => ({ kind: value, label }))].map(({ kind: value, label }) => <button key={value} type="button" aria-pressed={value === 'trip' ? false : kind === value} disabled={value === 'trip'} onClick={() => value !== 'trip' && changeKind(value)} className={`shrink-0 border-b-2 px-3 py-2 text-[11px] font-medium ${value === kind ? 'border-[#2878f5] text-[#2878f5]' : value === 'trip' ? 'border-transparent text-[#a0aab7]' : 'border-transparent text-[#71839b] hover:text-[#2878f5]'}`}>{label}</button>)}</nav>}
     <div className="p-3 sm:p-4">
       <div className="mb-3 flex items-center justify-between gap-2"><div><h2 className="text-sm font-bold text-[#263b55]">{kind === 'food' ? '查询美食' : kind === 'hotel' ? '查询酒店' : '查询动车 / 高铁'}</h2><p className="mt-1 text-[9px] leading-4 text-[#8998aa]">只读查询 · 只有明确选择后才会保存到行程</p></div>{trip && <span className="shrink-0 rounded-full bg-[#f2f7fd] px-2.5 py-1 text-[9px] text-[#6d829b]">行程 v{trip.revision}</span>}</div>
       <form onSubmit={submitSearch} className="space-y-2.5">
@@ -295,6 +362,14 @@ export default function TravelSearchPanel({
       </div>}
     </div>
   </section>
+}
+
+function createQueryId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `travel-v2-query-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function sourceForKind(kind: Exclude<TravelSearchKind, 'trip'>): string {
+  return kind === 'train' ? '12306' : 'amap'
 }
 
 function MerchantRow({ merchant, hotel, onClick }: { merchant: MerchantSearchResultV2; hotel: boolean; onClick: () => void }) {

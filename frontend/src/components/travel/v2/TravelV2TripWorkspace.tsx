@@ -25,7 +25,13 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'trip', label: '行程' }, { id: 'food', label: '美食' }, { id: 'hotel', label: '酒店' }, { id: 'train', label: '车次' },
 ]
 
-export default function TravelV2TripWorkspace({ tripId, editMode = false }: { tripId: string; editMode?: boolean }) {
+export default function TravelV2TripWorkspace(props: { tripId: string; editMode?: boolean }) {
+  // 一个 Trip 一个组件实例，切换 route 时所有页面状态随旧实例卸载。
+  // 写请求不会因此中止；迟到回执只能更新旧实例，不能进入新 Trip 页面。
+  return <TravelV2TripWorkspaceInstance key={props.tripId} tripId={props.tripId} editMode={props.editMode} />
+}
+
+function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: string; editMode?: boolean }) {
   const router = useRouter()
   const [trip, setTrip] = useState<TravelTripV2 | null>(null)
   const [loading, setLoading] = useState(true)
@@ -45,16 +51,24 @@ export default function TravelV2TripWorkspace({ tripId, editMode = false }: { tr
   const [searchEvents, setSearchEvents] = useState<TravelSearchEvent[]>([])
 
   const recordSearchEvent = useCallback((event: TravelSearchEvent) => {
-    setSearchEvents((current) => [event, ...current].slice(0, 5))
+    setSearchEvents((current) => {
+      const existingIndex = current.findIndex((item) => item.queryId === event.queryId)
+      if (existingIndex === -1) return [event, ...current].slice(0, 5)
+      if (current[existingIndex].status !== 'querying') return current
+      return current.map((item, index) => index === existingIndex ? event : item)
+    })
   }, [])
 
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
-    void fetchTravelTripV2(tripId).then(async (result) => {
+    setError('')
+    void fetchTravelTripV2(tripId, { signal: controller.signal }).then(async (result) => {
+      if (cancelled) return
       let previousRevision: number | null = null
       try {
-        const history = await fetchTravelTripRevisionsV2(tripId)
+        const history = await fetchTravelTripRevisionsV2(tripId, { signal: controller.signal })
         const latest = history.revisions.find((entry) => entry.revision === result.revision)
         if (latest?.change_type !== 'restore_revision') previousRevision = latest?.parent_revision ?? null
       } catch {
@@ -67,7 +81,10 @@ export default function TravelV2TripWorkspace({ tripId, editMode = false }: { tr
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : '行程暂时无法加载。')
     }).finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [tripId])
 
   useEffect(() => {
