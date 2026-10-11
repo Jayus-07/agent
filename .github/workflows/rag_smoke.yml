@@ -38,6 +38,17 @@ jobs:
             exit 0
           fi
 
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "::error::Pull request base or head SHA is missing; cannot determine changed paths."
+            exit 1
+          fi
+
+          changed_paths="$RUNNER_TEMP/rag-smoke-changed-paths.txt"
+          if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
+            echo "::error::Unable to determine changed paths for the RAG smoke gate."
+            exit 1
+          fi
+
           relevant=false
           while IFS= read -r path; do
             case "$path" in
@@ -50,7 +61,7 @@ jobs:
                 break
                 ;;
             esac
-          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          done < "$changed_paths"
 
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
           echo "RAG-related changes: $relevant"
@@ -58,7 +69,7 @@ jobs:
   rag-smoke:
     needs: detect-changes
     if: needs.detect-changes.outputs.relevant == 'true'
-    name: RAG Smoke (8 cases)
+    name: RAG Smoke Evaluation (8 cases)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -154,3 +165,45 @@ jobs:
           path: data/eval_runs/
           if-no-files-found: warn
           retention-days: 14
+
+  rag-smoke-gate:
+    name: RAG Smoke (8 cases)
+    needs: [detect-changes, rag-smoke]
+    # 该 Job 必须在依赖失败或被跳过后运行；下面的步骤会严格校验结果，不会无条件放行。
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate change detection and evaluation result
+        shell: bash
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          RAG_RELEVANT: ${{ needs.detect-changes.outputs.relevant }}
+          SMOKE_RESULT: ${{ needs.rag-smoke.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "::error::RAG change detection did not succeed (result: $DETECT_RESULT)."
+            exit 1
+          fi
+
+          if [[ "$RAG_RELEVANT" == "false" ]]; then
+            if [[ "$SMOKE_RESULT" != "skipped" ]]; then
+              echo "::error::Non-RAG changes expected the evaluation job to be skipped (result: $SMOKE_RESULT)."
+              exit 1
+            fi
+            echo "NOT_APPLICABLE: no RAG-related changes; the required gate is satisfied without running the RAG evaluation."
+            exit 0
+          fi
+
+          if [[ "$RAG_RELEVANT" != "true" ]]; then
+            echo "::error::RAG relevance output is missing or invalid (value: $RAG_RELEVANT)."
+            exit 1
+          fi
+
+          if [[ "$SMOKE_RESULT" != "success" ]]; then
+            echo "::error::RAG-related changes require a successful 8-case evaluation (result: $SMOKE_RESULT)."
+            exit 1
+          fi
+
+          echo "SUCCESS: RAG-related changes passed the real 8-case evaluation."
