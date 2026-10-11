@@ -11,6 +11,7 @@ import {
   fetchTravelTemplatesV2,
   fetchTravelTripRevisionsV2,
   fetchTravelTripsV2,
+  fetchTravelTripV2,
   searchTravelFoodV2,
   searchTravelHotelsV2,
   searchTravelPlacesV2,
@@ -45,6 +46,19 @@ describe('旅游 V2 BFF API', () => {
     expect(request).toHaveBeenCalledWith('/api/travel/v2/trips/trip%2F123/revisions')
   })
 
+  it('Trip 与 Revision 只读请求可接收 AbortSignal', async () => {
+    request.mockResolvedValue({ trip_id: 'trip-123', revisions: [] })
+    const controller = new AbortController()
+
+    await fetchTravelTripV2('trip-123', { signal: controller.signal })
+    await fetchTravelTripRevisionsV2('trip-123', { signal: controller.signal })
+
+    expect(request.mock.calls).toEqual([
+      ['/api/travel/v2/trips/trip-123', { signal: controller.signal }],
+      ['/api/travel/v2/trips/trip-123/revisions', { signal: controller.signal }],
+    ])
+  })
+
   it('美食、酒店和车次查询都调用独立 V2 Tool API', async () => {
     request.mockResolvedValue({ status: 'success', results: [] })
 
@@ -67,6 +81,17 @@ describe('旅游 V2 BFF API', () => {
       { method: 'POST', body: { city: '杭州', keyword: '西湖' } },
       { method: 'POST', body: { from_station: '福州', to_station: '杭州', travel_date: '2026-12-01' } },
     ])
+  })
+
+  it('只读 Provider 查询可接收取消信号', async () => {
+    request.mockResolvedValue({ status: 'success', results: [] })
+    const controller = new AbortController()
+
+    await searchTravelFoodV2('杭州', { signal: controller.signal })
+
+    expect(request).toHaveBeenCalledWith('/api/travel/v2/search/food', {
+      method: 'POST', body: { city: '杭州' }, signal: controller.signal,
+    })
   })
 
   it('新规划写入 V2 行程，并以版本 CAS 保存 Agent 后续修改', async () => {
