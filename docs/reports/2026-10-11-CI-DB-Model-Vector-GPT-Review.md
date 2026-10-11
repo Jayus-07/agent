@@ -1,7 +1,7 @@
 # CI / DB 模型 / 向量库施工 GPT 审查包（2026-10-11）
 
 > 第 3 阶段施工：CI / 自动评测门禁修复 + DB API 模型口径切换 + 隔离向量库。
-> 本报告为随 PR 提交的独立审查材料。所有数字对应 HEAD `53810de01b9acaac82a643c2acbf5434f2458485` 提交的源码。
+> 本报告为随 PR 提交的独立审查材料。核心评测证据对应 `53810de0`；第二轮整改（GPT 复核回应）对应 `93e3dc7`，见 §10。
 
 ---
 
@@ -162,39 +162,61 @@ pytest tests/evaluation/test_release_gate_tier_samples.py → 5 passed
 
 ## 8. GitHub Actions 真实结果
 
-**Run 记录（HEAD 演进）：**
+**第二轮整改（GPT 复核回应，commit `93e3dc7`）后状态：**
 
-| Run | HEAD | 结果 | 说明 |
-|---|---|---|---|
-| [38141724006](https://github.com/Jayus-07/agent/actions/runs/38141724006) | 3153624 | ✗ init_db 连锁失败 | 路径检测 ✓、preflight ✓、语料裁剪 ✓；`004_readonly_role` 跨库依赖 agent_business 库缺失 → agent_readonly 失败 → 006 customer_service schema 缺失 → 082 连锁。**已修**（5337858 补回 prompt_eval 模式的预建步骤） |
-| [38142127992](https://github.com/Jayus-07/agent/actions/runs/38142127992) | 5337858 | ✗ **BLOCKED（预期语义）** | 预建步骤 ✓、init_db ✓（全迁移通过）；Seed 步骤 `RuntimeError: rerank 配置不完整`——`PROMPT_EVAL_TEST_RERANK_API_KEY` 未配置时**显式失败，不静默跳过、不回退本地模型、不伪造 PASS**（fail-closed 设计验证通过） |
+| Run | 触发 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| [38146905426](https://github.com/Jayus-07/agent/actions/runs/38146905426) | pull_request | ✅ 通过（整改后语义） | Detect ✓ → `RAG Smoke preflight (PR, no paid API)` ✓（E0 免费）→ `RAG Smoke (real API)` **skipped**——受信任入口收敛实证：PR 不再获得付费 Secrets 跑真实评测 |
+| [38142127992](https://github.com/Jayus-07/agent/actions/runs/38142127992) | pull_request（旧策略） | ✗ BLOCKED（旧策略实证） | init_db ✓；Seed 显式 RuntimeError（缺 RERANK_API_KEY）——同时暴露旧策略下同仓库 PR 可达付费 Secrets |
+| [38141724006](https://github.com/Jayus-07/agent/actions/runs/38141724006) | pull_request（旧策略） | ✗ init_db 连锁失败 | agent_business 预建缺失 → 已修（5337858） |
 
-**真实评测 Run 待一个前置**：在 `prompt-eval` environment 配置 `PROMPT_EVAL_TEST_RERANK_API_KEY`（值=与 embedding 同账号的 DashScope/阿里云 MaaS API Key）。配置后在 PR 页手动 dispatch `RAG Regression` / 重跑 `RAG PR Smoke` 即可核对真实质量结果（隔离库已验证同链路 exit 0 / PASS 96.5%，见 §5）。
+**受信任执行入口整改证据（GPT 复核第 3 项）**：
+- `gh api repos/Jayus-07/agent/environments/prompt-eval` 实测返回 `protection_rules: []`、`deployment_branch_policy: null`——**environment 无任何保护规则**，整改前同仓库未审核 PR 的 job 可直接获得付费 Secrets（run 38142127992 日志中 secret 值被 mask 即读到的实证）。
+- 整改方式（不改用 `pull_request_target`）：`rag_smoke.yml` 拆分——`pull_request` 事件只运行免费预检 job（不引用任何 secrets）；真实 API 评测 job 触发条件收敛为 `push(main)` 与 `workflow_dispatch`（合并后代码或有写权限者人工触发 = 信任审查）。付费 Secrets 的可达面从"所有同仓库 PR"收敛为"受信任入口"。
 
-**Secrets/Vars 配置状态（prompt-eval environment）**：
-
-| 项 | 状态 |
-|---|---|
-| PROMPT_EVAL_TEST_API_KEY / BASE_URL / EMBEDDING_API_KEY / EMBEDDING_BASE_URL / SECRETS_ENCRYPTION_KEY | ✅ 已存在（10-01 配置，prompt_eval 在用） |
-| PROMPT_EVAL_TEST_EMBEDDING_MODEL=qwen3.7-text-embedding / PROMPT_EVAL_TEST_MODEL=doubao-seed-2.0-mini | ✅ 已存在 |
-| PROMPT_EVAL_TEST_RERANK_MODEL=qwen3.7-text-rerank / PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS=1024 / PROMPT_EVAL_TEST_RERANK_BASE_URL | ✅ 本 PR 施工时已配置（非敏感项） |
-| **PROMPT_EVAL_TEST_RERANK_API_KEY** | ⬜ **待用户在 GitHub 设置提供**（唯一缺失项） |
+**旧失败证据**：[38086882164](https://github.com/Jayus-07/agent/actions/runs/38086882164)（14 连败最后一次）。
 
 ---
 
-## 9. P0 / P1 遗留清单
+## 9. P0 / P1 遗留清单（第二轮整改后口径）
 
-**P0（阻断级）遗留：0 项。**
+**P0 级未闭环（不得宣称 P0=0）：**
+1. **GitHub 真实评测 Run 未完成**——受 `PROMPT_EVAL_TEST_RERANK_API_KEY` 未配置 + 受信任入口（main push/dispatch）双重待验；隔离环境同链路已验证（§5）但 GitHub Actions 上的真实质量结论缺失。
+2. **费用归因缺口（UNVERIFIED）**——Embedding/Rerank 直调未接 Billing V2（`llm_usage` 0 记录）；是否升级为发布阻断项由批准范围与发布门禁决定，未决前不得视为零成本、不得宣称已记账。
 
-**P1（登记不扩大本轮）**：
-1. 评测链路 embedding/rerank 直调未接入 Billing V2 账本（llm_usage 0 记录）——费用精确归因 UNVERIFIED（§6）。
-2. 共享库 rag_eval_kb 恢复/清理拍板（§7 恢复建议）。
-3. RAG Regression 历史基线对比（--compare/--promote-baseline）未启用——当前定位为固定样本门禁，如需趋势对比另立任务。
-4. 评测生成层（EvalGen）在 CI 口径下无生成模型（--no-ragas 口径）——端到端生成答案评测需显式 opt-in（--judge/--ragas），当前检索评测与生成评测已分离报告。
-5. RC-039（采购合同付款节点）语义召回不足——真实检索水位案例，属检索质量优化任务，不在本轮范围。
+**P1（登记不扩大本轮）：**
+1. Billing V2 精确费用归因实施（来源字段设计 + 直调链接入账本 + eval_run_id 绑定）——**本轮验收范围明确不含此项**（复核第 6 项），实施另立任务。
+2. 共享库 rag_eval_kb 恢复/清理拍板（§7）。
+3. 历史基线对比（--compare/--promote-baseline）未启用——Regression 定位为固定样本门禁（§7）。
+4. 版本化脱敏模型快照、已知样本检索探针、索引指纹缓存（[PR #31](https://github.com/Jayus-07/agent/pull/31) 规范中标注 ❌ 的契约项）。
+5. RC-039（采购合同付款节点）语义召回不足——检索质量优化任务，不在本轮范围。
+
+**测试证据（第二轮整改，本机 T1）**：
+```
+python -m pytest tests/test_rag_smoke_path_filter.py \
+  tests/evaluation/test_seed_eval_bindings_verify.py \
+  tests/evaluation/test_release_gate_tier_samples.py
+→ 19 passed（7 路径过滤正反例 + 7 verify 分离 Provider/缺绑定/缺凭据/
+  维度不匹配/解密失败/停用/无绑定 + 5 gate 三态），exit 0
+python -m pytest backend/tests/scripts/test_seed_prompt_eval_db.py \
+  backend/tests/test_prompt_eval_workflow.py → 6 passed（既有行为无回归）
+```
 
 **BLOCKED/UNVERIFIED 清单**：
-- GitHub Actions 真实 API Run：**BLOCKED on `PROMPT_EVAL_TEST_RERANK_API_KEY` 配置**（用户在 GitHub 设置提供后 dispatch 即可核对；缺失时 run 以 RuntimeError 显式 BLOCKED——该语义已在 run 38142127992 实证）。隔离库同链路已验证 exit 0 / PASS 96.5%（§5）。
-- 精确 API 费用数值：UNVERIFIED（账本缺口，见 §6）。
+- GitHub 真实评测 Run：**BLOCKED**——代码与权限门禁已按复核意见补齐（§8/§10），待配置 `PROMPT_EVAL_TEST_RERANK_API_KEY` 后以受信任入口（workflow_dispatch 或合并后 main push）重跑核对。
+- 精确 API 费用数值：**UNVERIFIED**（验收范围调整见上，不视为零成本）。
 
-**合并建议：READY_FOR_REVIEW**（代码修复有真实评测+测试证据；CI 真实 Run 待 Secrets 配置后触发核对，属部署侧前置条件而非代码缺陷；本轮不自动合并，等待 GPT 复核）。
+**合并建议：BLOCKED**——按复核第 5 项，CI 真实评测 Run 未完成前不请求合并。代码与权限门禁整改已完成（§8/§10），下一步：配置缺失的 Rerank Secret → 受信任入口重跑 CI → 以真实 Run 结果更新本报告后再请求复核。
+
+## 10. 第二轮整改逐条回应（GPT 复核意见，commit `93e3dc7`）
+
+| # | 复核意见 | 整改与证据 |
+| --- | --- | --- |
+| 1 | verify() 硬编码 specialized-api，与 CI seed 的分离 Provider 不符 | `seed_eval_model_bindings.py` 重构：凭据按每个绑定**各自的 provider_id** 逐一解密校验（`evaluate_bindings` 纯函数）；新增必需双绑定缺失校验。测试 `test_split_provider_ids_pass` 等 7 项 |
+| 2 | 路径过滤补齐 MCP RAG 与 seed 脚本 + 正反测试 | 判定逻辑抽为 [`.github/scripts/rag_smoke_path_filter.py`](../../../.github/scripts/rag_smoke_path_filter.py)（单一事实源，workflow 与测试共用）；补齐 `mcp_servers/servers/rag.py`（MCP RAG 实现真实路径）与 `backend/scripts/seed_prompt_eval_db.py`（修正原误写的 `scripts/` 前缀）；测试 `tests/test_rag_smoke_path_filter.py` 7 项正反例（import + subprocess 双通道） |
+| 3 | prompt-eval Environment Secrets 保护核实 | 实测 `protection_rules: []`、`deployment_branch_policy: null`——**整改前同仓库未审核 PR 可直接获得付费 Secrets**（run 38142127992 日志 secret 被 mask 即实证）。整改：不改用 `pull_request_target`，改为**触发器收敛**——`pull_request` 只跑免费 E0 预检（不引用任何 secrets），真实评测限 `push(main)`/`workflow_dispatch`（受信任入口）。实证 run [38146905426](https://github.com/Jayus-07/agent/actions/runs/38146905426)：PR 上免费预检 ✓、真实评测 job skipped |
+| 4 | 回归测试四项要求 | verify：分离 Provider PASS / 缺绑定 FAIL / 缺凭据 FAIL / 维度不匹配 FAIL（+解密失败/停用/无绑定）；路径过滤：MCP RAG 与 seed 脚本必触发 / 纯文档与前端及非 RAG 后端跳过。合计 14 项新测试，19 passed（含 gate 三态 5 项），exit 0 |
+| 5 | CI 真实评测仍 BLOCKED，不得宣称 P0=0 或 CI PASS | 已修正：§9 P0 级未闭环 2 项如实列明；本报告不再出现「P0=0」「CI PASS」宣称；合并建议改为 **BLOCKED** |
+| 6 | Billing V2 费用归因未完成的验收范围 | §9 明确：**本轮验收范围不含 Billing V2 精确费用归因实施**（P1 挂账另立任务）；费用缺口 UNVERIFIED，未决前不视为零成本、不宣称已记账 |
+
+**整改后 HEAD**：`93e3dc7`（代码与测试）；审查包随最新文档提交更新。
