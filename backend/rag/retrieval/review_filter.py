@@ -49,6 +49,9 @@ _VERSION_KEY = "rag:review_block:ver"
 class ReviewVisibilityUnavailableError(RuntimeError):
     """审核可见性事实源（DocumentRegistry/PG）不可用——检索必须显式失败。"""
 
+    CODE = "REVIEW_VISIBILITY_UNAVAILABLE"
+    HEADER = "X-RAG-Error-Code"
+
 
 # 进程内两层缓存：版本号（节流轮询）+ 不可见集合（短 TTL）。
 _version_cache: dict = {"value": None, "ts": 0.0, "last_seen": None}

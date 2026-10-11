@@ -293,6 +293,164 @@ class TestApplyReviewVisibility:
         assert got == {"ok"}
 
 
+class TestExpandedRetrievalVisibility:
+    def test_neighbor_fallback_does_not_restore_review_filtered_documents(self, monkeypatch):
+        """Hybrid 过滤完待审/下线/过期结果后，Neighbor 不得重新返回全文。"""
+        import backend.rag.retrieval.hybrid as hybrid_mod
+        from backend.rag.preprocessing import synonyms
+        from backend.rag.retrieval.retrievers import ChunkLevelRetriever, _Staging
+
+        h = _Harness()
+        h.blocked_rows = [{"doc_id": "pending"}, {"doc_id": "deprecated"}]
+        h.expired_rows = [{"doc_id": "expired"}]
+        h.extra_blocked = {"deleted"}
+        _patch_registry(monkeypatch, h)
+
+        hybrid_candidates = [
+            _doc("pending", "待审全文的检索片段"),
+            _doc("deprecated", "已下线全文的检索片段"),
+            _doc("expired", "过期全文的检索片段"),
+        ]
+        monkeypatch.setattr(
+            hybrid_mod, "_hybrid_retrieve_impl",
+            lambda *args, **kwargs: list(hybrid_candidates),
+        )
+        monkeypatch.setattr(synonyms, "expand_query", lambda query: [])
+
+        fallback_docs = [
+            {"doc_id": "pending", "chunk_id": "p-full"},
+            {"doc_id": "deprecated", "chunk_id": "d-full"},
+            {"doc_id": "expired", "chunk_id": "e-full"},
+            {"doc_id": "deleted", "chunk_id": "x-full"},
+            {"doc_id": "active", "chunk_id": "a-full"},
+            {},  # 缺 doc_id 的对客结果必须 fail-closed
+        ]
+        doc_db = SimpleNamespace(
+            get=lambda **kwargs: {
+                "documents": [f"全文 {i}" for i in range(len(fallback_docs))],
+                "metadatas": fallback_docs,
+            }
+        )
+        retriever = ChunkLevelRetriever(
+            doc_db=doc_db, vectordb=None,
+            chunk_retriever=SimpleNamespace(retrieve=lambda *a, **k: []),
+            bm25=SimpleNamespace(invoke=lambda *a, **k: []),
+        )
+        st = _Staging(query="查文档", span=None, doc_ids=[
+            "pending", "deprecated", "expired", "deleted", "active",
+        ])
+
+        retriever._stage2_hybrid_retrieve(st)
+        assert st.docs == [], "Hybrid 应先过滤掉 pending/deprecated/expired 候选"
+
+        fallback = retriever._stage2_neighbor_fallback(st)
+        assert fallback is not None
+        assert [d.metadata.get("doc_id") for d in fallback[0]] == ["active"]
+
+    def test_neighbor_fallback_registry_failure_propagates(self, monkeypatch):
+        """扩展结果需正向校验；Registry 故障不能变成可放行结果或正常空结果。"""
+        import backend.rag.retrieval.hybrid as hybrid_mod
+        from backend.rag.preprocessing import synonyms
+        from backend.rag.retrieval.retrievers import ChunkLevelRetriever, _Staging
+
+        h = _Harness()
+        h.blocked_rows = [{"doc_id": "pending"}]
+        _patch_registry(monkeypatch, h)
+        monkeypatch.setattr(
+            hybrid_mod, "_hybrid_retrieve_impl",
+            lambda *args, **kwargs: [_doc("pending", "待审检索片段")],
+        )
+        monkeypatch.setattr(synonyms, "expand_query", lambda query: [])
+
+        def fetch_full_docs(**kwargs):
+            h.verify_error = RuntimeError("pg down during fallback")
+            return {
+                "documents": ["待审全文", "有效全文"],
+                "metadatas": [
+                    {"doc_id": "pending", "chunk_id": "p-full"},
+                    {"doc_id": "active", "chunk_id": "a-full"},
+                ],
+            }
+
+        retriever = ChunkLevelRetriever(
+            doc_db=SimpleNamespace(get=fetch_full_docs), vectordb=None,
+            chunk_retriever=SimpleNamespace(retrieve=lambda *a, **k: []),
+            bm25=SimpleNamespace(invoke=lambda *a, **k: []),
+        )
+        st = _Staging(query="查文档", span=None,
+                      doc_ids=["pending", "active"])
+        retriever._stage2_hybrid_retrieve(st)
+        assert st.docs == []
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            retriever._stage2_neighbor_fallback(st)
+
+    def test_parent_context_rechecks_visibility_after_expansion(self, monkeypatch):
+        """Parent-Child 二次取回后重新校验同一审核 Registry。"""
+        from backend.rag.retrieval.retrievers import ChunkLevelRetriever, _Staging
+
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        get_review_blocked_doc_ids()  # 首轮时文档仍 active
+
+        def fetch_parent(**kwargs):
+            h.blocked_rows = [{"doc_id": "doc-1"}]
+            return {
+                "ids": ["parent-1"],
+                "documents": ["Parent 上下文"],
+                "metadatas": [{
+                    "doc_id": "doc-1", "chunk_id": "parent-1",
+                }],
+            }
+
+        retriever = ChunkLevelRetriever(
+            doc_db=SimpleNamespace(), vectordb=SimpleNamespace(get=fetch_parent),
+            chunk_retriever=SimpleNamespace(retrieve=lambda *a, **k: []),
+            bm25=SimpleNamespace(invoke=lambda *a, **k: []),
+        )
+        monkeypatch.setattr(
+            ChunkLevelRetriever, "_adaptive_expand",
+            lambda self, query, docs, doc_ids, metadata_filter, seen:
+                (docs, self.k),
+        )
+        leaf = Document(page_content="leaf", metadata={
+            "doc_id": "doc-1", "chunk_id": "leaf-1",
+            "parent_chunk_id": "parent-1", "granularity": "leaf",
+        })
+        st = _Staging(query="问题", span=None, docs=[leaf])
+
+        retriever._stage2_postprocess(st)
+        assert st.docs == []
+
+    def test_adaptive_expansion_rechecks_visibility_after_full_text_fetch(
+            self, monkeypatch):
+        """Adaptive 全文替换在审核状态变化后不能沿用旧 chunk 的可见性。"""
+        from langchain_core.retrievers import BaseRetriever
+        from backend.rag.retrieval.retrievers import AdaptiveRetriever
+
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        get_review_blocked_doc_ids()  # base chunk 命中时文档仍 active
+
+        class Base(BaseRetriever):
+            def _get_relevant_documents(self, query, *, run_manager=None):
+                return [Document(page_content="leaf", metadata={
+                    "doc_id": "doc-1", "rrf_score": 0.9,
+                })]
+
+        def fetch_full_docs(**kwargs):
+            h.blocked_rows = [{"doc_id": "doc-1"}]
+            return {
+                "documents": ["Adaptive 全文"],
+                "metadatas": [{"doc_id": "doc-1"}],
+            }
+
+        retriever = AdaptiveRetriever(
+            base_retriever=Base(),
+            doc_db=SimpleNamespace(get=fetch_full_docs),
+        )
+        assert retriever._get_relevant_documents("问题") == []
+
+
 # ────────────────────── 修5：三个代码出口 ──────────────────────
 
 class TestHybridRetrieveWrapper:
@@ -481,6 +639,8 @@ class TestRagServerEndpoints:
                                "system_subject": "t"})
         assert resp.status_code == 503, "审核事实源故障必须 503，不得 200 空结果"
         assert "拒绝" in resp.json()["detail"]
+        assert resp.headers[ReviewVisibilityUnavailableError.HEADER] == \
+            ReviewVisibilityUnavailableError.CODE
 
     def test_retrieve_docs_registry_down_503(self, monkeypatch):
         import backend.services.rag_server as rs
@@ -492,19 +652,40 @@ class TestRagServerEndpoints:
         resp = self._client(monkeypatch, pipe).post(
             "/retrieve_docs", json={"question": "q", "kb_id": "kb"})
         assert resp.status_code == 503
+        assert resp.headers[ReviewVisibilityUnavailableError.HEADER] == \
+            ReviewVisibilityUnavailableError.CODE
+
+    def test_ask_registry_down_returns_structured_503(self, monkeypatch):
+        import backend.services.rag_server as rs
+
+        def _boom(*a, **k):
+            raise ReviewVisibilityUnavailableError("pg down")
+
+        pipe = SimpleNamespace(ask=_boom, last_answer_meta={})
+        resp = self._client(monkeypatch, pipe).post(
+            "/ask", json={"question": "q", "session_id": "s", "kb_id": "kb"})
+        assert resp.status_code == 503
+        assert resp.headers[ReviewVisibilityUnavailableError.HEADER] == \
+            ReviewVisibilityUnavailableError.CODE
 
 
 # ────────────────── 修5：remote 代理（client 503 → 结构化异常） ──────────────────
 
 class TestRemoteProxy:
 
-    def _proxy(self, monkeypatch, status_code):
+    def _proxy(self, monkeypatch, status_code, *, review_error=False):
         import httpx
 
         from backend.rag.client import RAGServiceProxy
 
         def handler(request):
-            return httpx.Response(status_code, json={"detail": "拒绝检索"})
+            headers = {}
+            if review_error:
+                headers[ReviewVisibilityUnavailableError.HEADER] = \
+                    ReviewVisibilityUnavailableError.CODE
+            return httpx.Response(
+                status_code, json={"detail": "服务暂不可用"}, headers=headers,
+            )
 
         transport = httpx.MockTransport(handler)
         proxy = RAGServiceProxy.__new__(RAGServiceProxy)
@@ -513,14 +694,30 @@ class TestRemoteProxy:
         return proxy
 
     def test_retrieve_knowledge_503_converted(self, monkeypatch):
-        proxy = self._proxy(monkeypatch, 503)
+        proxy = self._proxy(monkeypatch, 503, review_error=True)
         with pytest.raises(ReviewVisibilityUnavailableError):
             proxy.retrieve_knowledge("q", "kb", system_subject="t")
 
     def test_retrieve_documents_503_converted(self, monkeypatch):
-        proxy = self._proxy(monkeypatch, 503)
+        proxy = self._proxy(monkeypatch, 503, review_error=True)
         with pytest.raises(ReviewVisibilityUnavailableError):
             proxy.retrieve_documents("q", "kb")
+
+    def test_ask_review_registry_failure_preserves_error(self, monkeypatch):
+        proxy = self._proxy(monkeypatch, 503, review_error=True)
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            proxy.ask("q", session_id="s")
+
+    def test_plain_503_is_not_review_registry_failure(self, monkeypatch):
+        """初始化/网关 503 无审核错误码时保留普通 RuntimeError。"""
+        proxy = self._proxy(monkeypatch, 503)
+        with pytest.raises(RuntimeError) as ei:
+            proxy.retrieve_knowledge("q", "kb", system_subject="t")
+        assert not isinstance(ei.value, ReviewVisibilityUnavailableError)
+
+        with pytest.raises(RuntimeError) as ei:
+            proxy.ask("q", session_id="s")
+        assert not isinstance(ei.value, ReviewVisibilityUnavailableError)
 
     def test_other_errors_keep_runtime_error(self, monkeypatch):
         """非 503 的服务错误维持既有 RuntimeError 语义（不扩大变更面）。"""
@@ -579,6 +776,49 @@ class TestAppSearchEndpoint:
         assert resp.status_code == 503
         body = resp.json()
         assert "拒绝" in body.get("detail", "")
+        assert resp.headers[ReviewVisibilityUnavailableError.HEADER] == \
+            ReviewVisibilityUnavailableError.CODE
+
+    def test_ask_registry_down_returns_structured_503(self, monkeypatch):
+        def _boom(*a, **k):
+            raise ReviewVisibilityUnavailableError("pg down")
+
+        pipe = SimpleNamespace(ask_result=_boom)
+        resp = self._client(monkeypatch, pipe).post(
+            "/ask", json={"question": "制度", "session_id": "s",
+                           "kb_id": "default"})
+        assert resp.status_code == 503
+        assert resp.headers[ReviewVisibilityUnavailableError.HEADER] == \
+            ReviewVisibilityUnavailableError.CODE
+
+
+class TestLegacyRagAskEndpoint:
+    def test_rag_root_registry_down_returns_structured_503(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import backend.app.api.routes.rag as mod
+
+        principal = SimpleNamespace(
+            authenticated=True, subject_type="employee",
+            department="general", roles=(), permissions=("general",),
+            user_id="u1", tenant_id="default",
+        )
+
+        def _boom(*a, **k):
+            raise ReviewVisibilityUnavailableError("pg down")
+
+        monkeypatch.setattr(mod, "require_principal", lambda request: principal)
+        monkeypatch.setattr(mod, "require_rag_ready", lambda: None)
+        monkeypatch.setattr(mod, "get_rag_pipeline", lambda: SimpleNamespace(ask=_boom))
+        app = FastAPI()
+        app.include_router(mod.router)
+
+        resp = TestClient(app).post(
+            "/rag", json={"question": "制度", "session_id": "s",
+                          "kb_id": "default"})
+        assert resp.status_code == 503
+        assert resp.headers[ReviewVisibilityUnavailableError.HEADER] == \
+            ReviewVisibilityUnavailableError.CODE
 
 
 # ────────── 终轮返修：审核/下线/删除后答案缓存失效 + system_subject 豁免关闭 ──────────

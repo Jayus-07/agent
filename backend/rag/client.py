@@ -22,9 +22,14 @@ from backend.shared.logger import logger
 
 
 def _is_review_unavailable(exc: httpx.HTTPError) -> bool:
-    """rag-service 以 503 表达「审核可见性事实源不可用」（Batch 1A fail-closed）。"""
+    """仅识别携带专用错误码的审核故障，不把普通 503 误判成 Registry 故障。"""
     response = getattr(exc, "response", None)
-    return response is not None and response.status_code == 503
+    return (
+        response is not None
+        and response.status_code == 503
+        and response.headers.get(ReviewVisibilityUnavailableError.HEADER)
+        == ReviewVisibilityUnavailableError.CODE
+    )
 
 
 # ask 完整链路（检索→rerank→LLM→evidence gate）30-120s，超时需覆盖最坏情况
@@ -151,6 +156,9 @@ class RAGServiceProxy:
                 _set_child_trace_link(
                     parent_trace, parent_span, reserved_child_trace_id, None,
                 )
+            if _is_review_unavailable(e):
+                raise ReviewVisibilityUnavailableError(
+                    "审核状态服务暂不可用，已拒绝问答（rag-service /ask）") from e
             raise RuntimeError(
                 f"RAG 服务调用失败(ask): {e} —— 检查 rag-service({self._base_url}) "
                 f"是否运行及 /readyz 状态"
@@ -200,7 +208,7 @@ class RAGServiceProxy:
                 # Batch 1A fail-closed：rag-service 侧审核状态不可用（503），
                 # 保留结构化语义供上层 /rag/search 等按服务不可用拒绝
                 raise ReviewVisibilityUnavailableError(
-                    "审核状态服务暂不可用，已拒绝检索（rag-service /retrieve 503）") from e
+                    "审核状态服务暂不可用，已拒绝检索（rag-service /retrieve）") from e
             raise RuntimeError(
                 f"RAG 服务调用失败(retrieve): {e} —— 检查 rag-service({self._base_url}) "
                 f"是否运行及 /readyz 状态"
@@ -244,7 +252,7 @@ class RAGServiceProxy:
             if _is_review_unavailable(e):
                 # Batch 1A fail-closed：同 /retrieve，保留结构化语义
                 raise ReviewVisibilityUnavailableError(
-                    "审核状态服务暂不可用，已拒绝检索（rag-service /retrieve_docs 503）") from e
+                    "审核状态服务暂不可用，已拒绝检索（rag-service /retrieve_docs）") from e
             raise RuntimeError(
                 f"RAG 服务调用失败(retrieve_docs): {e} —— 检查 rag-service"
                 f"({self._base_url}) 是否运行及版本是否含 /retrieve_docs"

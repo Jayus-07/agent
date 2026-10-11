@@ -33,6 +33,20 @@ app = FastAPI(
 )
 
 
+def _review_visibility_http_exception(operation: str, exc: Exception) -> HTTPException:
+    """用稳定错误码标识审核事实源故障，供 remote client 精确分类。"""
+    label = "问答" if operation == "ask" else "检索"
+    logger.error(f"[RAG /{operation}] 审核可见性事实源不可用: {exc}")
+    return HTTPException(
+        status_code=503,
+        detail=f"审核状态服务暂不可用，已拒绝{label}",
+        headers={
+            ReviewVisibilityUnavailableError.HEADER:
+                ReviewVisibilityUnavailableError.CODE,
+        },
+    )
+
+
 # ==================== 内部令牌防护（P3，docs/auth 就绪清单第 5 条） ====================
 # rag-server 的请求体带 subject_type/department 等授权字段，裸暴露等于任何人
 # 可以冒充 employee 直查授权知识库。防护规则：
@@ -347,6 +361,9 @@ def ask(
             tenant_id=req.tenant_id,
             persist_memory=req.persist_memory,
         )
+    except ReviewVisibilityUnavailableError as e:
+        # /ask 与轻量检索使用相同审核失败码，避免以通用 500 丢失安全语义。
+        raise _review_visibility_http_exception("ask", e) from e
     finally:
         reset_external_child_trace_id(child_token)
         reset_external_parent_trace_id(parent_token)
@@ -384,8 +401,7 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
         )
     except ReviewVisibilityUnavailableError as e:
         # Batch 1A fail-closed：审核状态无法确认时不返回任何内容
-        logger.error(f"[RAG /retrieve] 审核可见性事实源不可用: {e}")
-        raise HTTPException(status_code=503, detail="审核状态服务暂不可用，已拒绝检索") from e
+        raise _review_visibility_http_exception("retrieve", e) from e
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {"result": result, "index_status": "stale" if stale else "ok"}
 
@@ -415,8 +431,7 @@ def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
         )
     except ReviewVisibilityUnavailableError as e:
         # Batch 1A fail-closed：审核状态无法确认时不返回任何内容
-        logger.error(f"[RAG /retrieve_docs] 审核可见性事实源不可用: {e}")
-        raise HTTPException(status_code=503, detail="审核状态服务暂不可用，已拒绝检索") from e
+        raise _review_visibility_http_exception("retrieve_docs", e) from e
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {
         "docs": [
