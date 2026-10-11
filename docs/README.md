@@ -17,6 +17,11 @@
 | [development/repository-layout.md](development/repository-layout.md) | 目录归属、临时资产/数据治理、MOVE/MERGE/DELETE 标准 | 审查目录或文件清理时 |
 | [development/cross-cutting-contracts.md](development/cross-cutting-contracts.md) | REST/SSE/WS、数据、模型、前端与安全共通约束 | 修改跨层契约时 |
 | [development/refactoring-playbook.md](development/refactoring-playbook.md) | 审计与分批安全重构执行标准 | 开展全仓重构时 |
+| [development/frontend-guide.md](development/frontend-guide.md) | 三端 Next.js、API/SSE、状态、移动端及共享组件开发标准 | 任何前端开发或组件合并时 |
+| [governance/llm-budget-billing.md](governance/llm-budget-billing.md) | 模型预算、预占、估算、计价与对账标准 | 模型调用/价格/账单调整时 |
+| [observability/trace-model.md](observability/trace-model.md) | Trace/Span、归因、授权与脱敏契约 | 增删埋点/Trace UI 时 |
+| [observability/grafana-guide.md](observability/grafana-guide.md) | Prometheus/Grafana 看板与告警验证 | 指标、Grafana 或告警修改时 |
+| [prompt/architecture.md](prompt/architecture.md) | Prompt 注册、发布、热更新、回滚与版本溯源 | 调整提示词治理时 |
 | [development/testing-guide.md](development/testing-guide.md) | 唯一详细测试策略，T0–T3 | 选择或升级验证范围 |
 | [operations/release-quality.md](operations/release-quality.md) | 合并、发布和 T0–T3 门禁 | CI、发布或高风险变更时 |
 | [operations/commands.md](operations/commands.md) | 经核对的常用启动与验证命令 | 启停服务或调试环境 |

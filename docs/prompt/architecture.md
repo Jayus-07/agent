@@ -164,3 +164,27 @@ prompt_service.register_reload_hook("rag.qa", lambda: rebuild_chain())
 ```
 
 Hook 在 `publish()` 完成后同步触发，异常不会传播（仅 warning 日志）。
+
+## 新开发的发布一致性与版本追踪门禁
+
+这里补充**要求**，不把它误写成“所有调用点目前已通过”。现有实现的入口包括 `backend/prompts/service.py`、`backend/prompts/registry.py`、`backend/observability/prompt_trace.py`，以及项目的 Prompt 管理/评测 API。
+
+- **注册权威**：新增或修改 prompt 从 `PROMPT_REGISTRY` 及现有 YAML 默认模板入手；先检查是否已有同一业务 key；Code-controlled 的安全 Prompt 不可通过普通数据库发布绕过。
+- **发布与回滚**：Draft → 校验 → 评测/审批（按现有风险策略）→ active 版本切换 → snapshot/cache 刷新 → Trace 实际版本。发布或回滚后新请求应按已公布生效规则读取对应新 active；**不要求重启服务作为正常生效路径**。单进程成功不代表所有 Worker 实时一致。
+- **请求一致性**：一次运行内是否固定版本由现有 `_prompt_pin_var`、Graph state 等实现确定，不应出现半个流程使用新版本、另外半个流程意外换旧版而没有可解释的版本边界。批量并发中的切换应覆盖跨 worker/缓存失效时序与失败恢复。
+- **Trace 追踪**：调用级/节点级的实际 `prompt key@version` 必须能溯源；当前 trace-level 汇总写入见 `backend/observability/prompt_trace.py`，对同一 key 多次调用的版本归因是否完整需要实测，不可仅凭汇总数组断言每次调用版本。
+- **评测**：发布候选与当前版本可比较相同评测样本的质量、成本、错误率和关键安全拒绝；样本缺失、评测失败、发布指针变化都要有拒绝/记录策略。回滚不等于清除历史审计、历史 Trace 或替换已完成任务的版本。
+- **权限**：仅授权角色可以编辑/发布/回滚；只信任后端角色与资源判定，不以 `X-Operator-Role` 等客户端自报字段单独决定权限；现有 [API 说明](api.md) 的历史 Header 口径在改动前必须重新核对后端身份实现。
+- **失败**：DB/cache/广播同步失败时按实际策略阻断/标记生效延迟、重试和排查，不静默宣称“全节点已热切换”。
+
+| 编号 | 验收 |
+| --- | --- |
+| PG-01 | 草案、模板变量、必含安全片段、code-controlled 守卫均按约束校验 |
+| PG-02 | 发布后新请求读取正确版本；无需重启，跨 Worker 最终一致且延迟符合契约 |
+| PG-03 | 在途请求 pin 与新请求 active 不串版本；并发发布/回滚一致 |
+| PG-04 | 一键回滚恢复指定历史 active；审计不丢、老请求/历史 Trace 不漂移 |
+| PG-05 | Trace 能区分同 key 多次调用及节点实际版本，且不泄漏 prompt 敏感内容 |
+| PG-06 | 未授权用户、跨租户和测试评测失败不会导致错误发布 |
+| PG-07 | DB/Redis/Worker 同步故障有明确终态、可定位 Trace 和补救入口 |
+
+相关现有定向测试在 `backend/tests/prompts/`、`backend/tests/observability/test_prompt_version_trace.py`。不将文档中的要求误认为所有实现已达到；差距按独立整改任务登记。

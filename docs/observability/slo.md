@@ -103,3 +103,7 @@ WP6 新增 9 个固定标签指标，标签只允许稳定的操作名、组件�
 
 抓取配置：`docker/prometheus.yml`（目标 `host.docker.internal:8000`）。
 注意：TTFT/TPOT 只在 `/chat/stream` 流式请求中采样；Histogram 首次观测后才会出现在 /metrics。
+
+## 9. Grafana 看板维护与验收入口
+
+看板修改、PromQL 正确性、No data 与 0 的区别、七类 Dashboard 的数据源及告警实际触发验证，统一遵循 [Grafana / Prometheus 开发规范](grafana-guide.md)。本文件保留 SLO 目标及指标语义，不再复制看板配置；阈值和当前已加载规则以仓库配置、Prometheus API 与实际部署核对。不能将“规则加载通过”写成“通知 webhook 实际送达”。
