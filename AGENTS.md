@@ -42,6 +42,10 @@
 | 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md)                                                                      |
 | Tool/Provider 异常、失败分级与降级           | [failure-degradation.md](docs/architecture/failure-degradation.md)                                                                 |
 | 文档标准、同步责任与交付                    | [documentation-standard.md](docs/development/documentation-standard.md)                                                               |
+| 全平台模块边界与目录归属                 | [module-boundaries.md](docs/architecture/module-boundaries.md)、[repository-layout.md](docs/development/repository-layout.md) |
+| 跨层 API、状态、安全和可观测契约           | [cross-cutting-contracts.md](docs/development/cross-cutting-contracts.md) |
+| 全仓审计与安全重构                      | [refactoring-playbook.md](docs/development/refactoring-playbook.md) |
+| 发布质量与上线门禁                      | [release-quality.md](docs/operations/release-quality.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |

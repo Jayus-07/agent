@@ -34,6 +34,8 @@
 
 内容风格：优先稳定概念与边界；避免复制大量函数、版本号、策略默认值、行数、依赖数量和环境路径。配置/字段经常变时只链接事实源。移动/删文件前先搜索全部引用和正在进行中的工作树任务。
 
+更广的标准入口：[全平台模块边界](../architecture/module-boundaries.md)、[目录规范](repository-layout.md)、[横切契约](cross-cutting-contracts.md)、[安全重构](refactoring-playbook.md)、[质量与发布](../operations/release-quality.md)。本文仍是唯一文档维护规则。
+
 ## 4. 提交门禁与交付
 
 - T0：Markdown 本地链接指向仓库现有文件、新文件互链正确，代码路径核对存在；无密钥/本机私人地址/失效示例命令；目录索引能找到规范。

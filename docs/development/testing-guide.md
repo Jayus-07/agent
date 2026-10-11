@@ -49,6 +49,8 @@ python -m pytest backend/tests/<受影响路径> -q --no-cov
 
 推荐既有入口：`backend/tests/tool_runtime/test_governance.py`、`backend/tests/travel/test_tool_failure_policy.py`、`backend/tests/skills/test_tool_contract_boundary.py`。先检查项目实际测试列表及 fixture，路径不是覆盖已足够的证明。生产真实 Provider、端到端浏览器以及真实 LLM 评测仅在依赖就绪且风险需要时运行。
 
+涉及目录迁移、跨入口改动或发布时，按 [安全重构手册](refactoring-playbook.md) 核对静态/动态 import 与兼容引用，按 [发布质量门禁](../operations/release-quality.md) 补齐实际执行证据。
+
 ## 旧测试清理与测试证据
 
 旧测试过期时先建立**旧契约 → 当前事实源 → 替代测试 → 覆盖证据**的映射：确认功能/接口已废弃，替代用例能捕捉关键回归，再删除或迁移原用例；不要只因慢、红或重复就删掉。按风险拆分快慢测试集；T1 先跑单模块，T2 扩展跨层消费者，T3 仅发布门禁/明确要求触发。
