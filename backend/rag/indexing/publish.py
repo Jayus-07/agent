@@ -469,6 +469,13 @@ def publish_candidate(
 
     # ── i. 收口 ──
     run_store.mark_status(upload_id, "published", stage="publish")
+    # Batch 1A：发布可能产生 pending_review（near-dup）或使旧版本下线——
+    # 广播检索侧审核可见性缓存失效（尽力而为，TTL 兜底）
+    try:
+        from backend.rag.retrieval.review_filter import invalidate_pending_review_cache
+        invalidate_pending_review_cache()
+    except Exception as e:  # noqa: BLE001 - 广播失败不影响发布终态
+        logger.debug(f"[Publish] 审核可见性缓存广播失败: {e}")
     logger.info(
         f"[Publish] 发布完成: {os.path.basename(final_path)} "
         f"gen={generation[:12]} chunks={len(chunk_ids)}")

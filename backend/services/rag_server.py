@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.shared.logger import logger
+from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 
 app = FastAPI(
     title="RAG Service",
@@ -370,16 +371,21 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
         pipeline = _get_pipeline()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    result = pipeline.retrieve_knowledge(
-        question=req.question,
-        kb_id=req.kb_id,
-        top_k=req.top_k,
-        subject_type=req.subject_type,
-        department=req.department,
-        permissions=req.permissions,
-        roles=tuple(req.roles),
-        system_subject=req.system_subject,
-    )
+    try:
+        result = pipeline.retrieve_knowledge(
+            question=req.question,
+            kb_id=req.kb_id,
+            top_k=req.top_k,
+            subject_type=req.subject_type,
+            department=req.department,
+            permissions=req.permissions,
+            roles=tuple(req.roles),
+            system_subject=req.system_subject,
+        )
+    except ReviewVisibilityUnavailableError as e:
+        # Batch 1A fail-closed：审核状态无法确认时不返回任何内容
+        logger.error(f"[RAG /retrieve] 审核可见性事实源不可用: {e}")
+        raise HTTPException(status_code=503, detail="审核状态服务暂不可用，已拒绝检索") from e
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {"result": result, "index_status": "stale" if stale else "ok"}
 
@@ -396,16 +402,21 @@ def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
         pipeline = _get_pipeline()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    docs = pipeline.retrieve_documents(
-        question=req.question,
-        kb_id=req.kb_id,
-        top_k=req.top_k,
-        candidate_k=req.candidate_k,
-        subject_type=req.subject_type,
-        department=req.department,
-        permissions=req.permissions,
-        roles=tuple(req.roles),
-    )
+    try:
+        docs = pipeline.retrieve_documents(
+            question=req.question,
+            kb_id=req.kb_id,
+            top_k=req.top_k,
+            candidate_k=req.candidate_k,
+            subject_type=req.subject_type,
+            department=req.department,
+            permissions=req.permissions,
+            roles=tuple(req.roles),
+        )
+    except ReviewVisibilityUnavailableError as e:
+        # Batch 1A fail-closed：审核状态无法确认时不返回任何内容
+        logger.error(f"[RAG /retrieve_docs] 审核可见性事实源不可用: {e}")
+        raise HTTPException(status_code=503, detail="审核状态服务暂不可用，已拒绝检索") from e
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {
         "docs": [

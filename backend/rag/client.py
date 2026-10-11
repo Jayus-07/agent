@@ -17,7 +17,15 @@ from typing import Any
 
 import httpx
 
+from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 from backend.shared.logger import logger
+
+
+def _is_review_unavailable(exc: httpx.HTTPError) -> bool:
+    """rag-service 以 503 表达「审核可见性事实源不可用」（Batch 1A fail-closed）。"""
+    response = getattr(exc, "response", None)
+    return response is not None and response.status_code == 503
+
 
 # ask 完整链路（检索→rerank→LLM→evidence gate）30-120s，超时需覆盖最坏情况
 _ASK_TIMEOUT_S = 300.0
@@ -188,6 +196,11 @@ class RAGServiceProxy:
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
+            if _is_review_unavailable(e):
+                # Batch 1A fail-closed：rag-service 侧审核状态不可用（503），
+                # 保留结构化语义供上层 /rag/search 等按服务不可用拒绝
+                raise ReviewVisibilityUnavailableError(
+                    "审核状态服务暂不可用，已拒绝检索（rag-service /retrieve 503）") from e
             raise RuntimeError(
                 f"RAG 服务调用失败(retrieve): {e} —— 检查 rag-service({self._base_url}) "
                 f"是否运行及 /readyz 状态"
@@ -228,6 +241,10 @@ class RAGServiceProxy:
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
+            if _is_review_unavailable(e):
+                # Batch 1A fail-closed：同 /retrieve，保留结构化语义
+                raise ReviewVisibilityUnavailableError(
+                    "审核状态服务暂不可用，已拒绝检索（rag-service /retrieve_docs 503）") from e
             raise RuntimeError(
                 f"RAG 服务调用失败(retrieve_docs): {e} —— 检查 rag-service"
                 f"({self._base_url}) 是否运行及版本是否含 /retrieve_docs"

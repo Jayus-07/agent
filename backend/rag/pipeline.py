@@ -1282,6 +1282,13 @@ class RAGPipeline:
                 subject_type, department, roles=eff_roles)
             # 显式 kb 与授权集合求交：请求只能收窄，不能扩大（含 admin 全集）
             mf = self._constrain_filter_to_authorized(mf, authorized)
+
+            # ── 审核可见性（Batch 1A fail-closed）：两腿统一剔除 ──
+            # 检索前先取不可见集合（pending_review/deprecated/过期）：Registry
+            # 不可用在此显式失败，不产出任何结果——绝不伪装成正常空结果。
+            from backend.rag.retrieval.review_filter import get_review_blocked_doc_ids
+            review_blocked = get_review_blocked_doc_ids()
+
             # 0 命中放宽重试的兜底范围（与 retrieve_knowledge 同策略：
             # 只保留 kb 维度，且已收敛到授权集合——放宽不越权）
             kb_scope = (
@@ -1298,6 +1305,8 @@ class RAGPipeline:
             def _keep(doc) -> bool:
                 meta = getattr(doc, "metadata", {}) or {}
                 if authorized is not None and meta.get("kb_id") not in authorized:
+                    return False
+                if review_blocked and meta.get("doc_id") in review_blocked:
                     return False
                 from backend.rag.permissions import filter_documents_by_permission
                 return bool(filter_documents_by_permission([doc], user_permissions))
@@ -1458,6 +1467,12 @@ class RAGPipeline:
             if authorized is not None:
                 mf = self._constrain_filter_to_authorized(mf, authorized)
 
+            # ── 审核可见性（Batch 1A fail-closed）：两条腿统一剔除 ──
+            # 检索前先取不可见集合（pending_review/deprecated/过期）：Registry
+            # 不可用在此显式失败，两条腿不再执行——绝不以空内容或旧状态放行。
+            from backend.rag.retrieval.review_filter import get_review_blocked_doc_ids
+            review_blocked = get_review_blocked_doc_ids()
+
             chunks = []
             kb_scope = (
                 {k: v for k, v in (mf or {}).items() if k in ("kb_id", "$or")}
@@ -1465,9 +1480,11 @@ class RAGPipeline:
             )
 
             def _authorized(doc) -> bool:
-                """单条召回的授权后过滤（KB keep-set + 文档 permission_scope）。"""
+                """单条召回的授权后过滤（KB keep-set + 文档 permission_scope + 审核可见性）。"""
                 meta = getattr(doc, "metadata", {}) or {}
                 if authorized is not None and meta.get("kb_id") not in authorized:
+                    return False
+                if review_blocked and meta.get("doc_id") in review_blocked:
                     return False
                 return bool(filter_documents_by_permission([doc], user_permissions))
 
