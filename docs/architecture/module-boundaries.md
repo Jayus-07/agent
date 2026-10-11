@@ -78,6 +78,7 @@ flowchart LR
   D --> B[(Domain Repository / DB)]
   X --> P[Provider / MCP Adapter / 检索 SQL]
   X --> M[Model Role -> LLM Proxy / Budget]
+  D --> M
   P --> B
   M --> D
   D --> O[REST / SSE / WS 业务终态]
