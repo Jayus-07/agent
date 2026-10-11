@@ -243,3 +243,17 @@ Targeted regression tests (19, free) → ✓ passed，无付费调用
 | 6 | Billing V2 验收范围 | §9 P1-1 唯一归属，明确不含于本轮验收；费用 UNVERIFIED、不视为零成本、不作为合并阻断 |
 
 **最终 HEAD**：见 PR 页（代码 `0fc0765` + `4a6fd18`，报告随最后提交）。
+
+## 12. 真实评测触发矩阵（2026-10-11 用户拍板，随本 PR 落地）
+
+| 触发场景 | 是否运行真实 API | 测试范围 | 落地方式 |
+| --- | --- | --- | --- |
+| 普通代码 PR | 不需要 | T0/T1、定向单元测试 | ✅ PR 免费预检（run 38150412116 同款）+ 真实评测 job skipped |
+| 纯文档、页面样式 PR | 不需要 | 静态检查 | ✅ 路径过滤直接 skip（tests/test_rag_smoke_path_filter.py 锁定） |
+| RAG 检索算法、切分策略修改 | 需要 | RAG Smoke + 必要的 Regression | 合并进 main 后自动 RAG Smoke（push 触发）；Regression 由审核后 workflow_dispatch 按需运行 |
+| Embedding、Rerank 模型切换 | 必须 | 索引重建 + Golden 回归 | 每次运行已强制索引重建（§4）；probe 维度三方校验失配即 BLOCKED；Golden 回归 = dispatch selection=regression |
+| SQL Agent、Planner 修改 | 按风险运行 | 对应领域的真实模型评测 | Runner 已有（runners/sql.py、planner.py），CI workflow 未建（P1-4，另立任务） |
+| **每日定时回归** | **不在 GitHub 定时运行**（用户拍板） | 固定 Golden，监测质量 | **`rag_regression.yml` 已移除 `schedule` 触发**；定时回归由**管理端定时任务**承担（配置入口：管理端），费用与监控归项目自身体系 |
+| 重要版本发布前 | 需要 | 受影响领域的真实 API 和 E2E | 审核后 workflow_dispatch（selection 按受影响域）；E2E 属发布门禁（release-quality） |
+
+**随本次拍板的代码变更**：`rag_regression.yml` 移除 `schedule`（cron）触发——GitHub 侧不再每日自动消耗 API 费用；本 workflow 仅保留人工 `workflow_dispatch`（受信任入口），本报告 §8 的 run 38150689331 即该入口的首次成功运行。

@@ -12,11 +12,16 @@ name: RAG Regression
 #
 # 隔离：pgvector service container + agent_memory_test 隔离测试库，
 # 不连接本机/生产 PostgreSQL，不操作共享 agent_memory。
+#
+# 触发策略（2026-10-11 用户拍板）：
+#   - 本 workflow 仅保留人工 workflow_dispatch（受信任入口：审核后按需
+#     运行，如 RAG 算法/切分策略修改、模型切换、版本发布前）。
+#   - **不设 GitHub 每日 schedule**：定时回归由管理端定时任务承担
+#     （费用与监控归项目自身体系），GitHub 侧不再每日自动消耗 API。
+#   - 普通 PR / 文档 PR 不触发真实评测（真实评测限 push(main)+dispatch
+#     由 rag_smoke.yml 同口径收敛）。
 
 on:
-  schedule:
-    # GitHub 使用 UTC；北京时间每天 02:00 执行，避开白天 PR 高峰。
-    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       selection:
