@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, ArrowRightLeft, Bus, CarFront, Clock3, Footprints, MapPin, Plus, Search, Trash2, X } from 'lucide-react'
 import {
   searchTravelPlacesV2,
@@ -60,6 +60,8 @@ export default function TravelV2EditDialog({
   const [querying, setQuerying] = useState(false)
   const [searchResponse, setSearchResponse] = useState<Awaited<ReturnType<typeof searchTravelPlacesV2>> | null>(null)
   const [searchError, setSearchError] = useState('')
+  const searchSequence = useRef(0)
+  const searchController = useRef<AbortController | null>(null)
   const [activityType, setActivityType] = useState<NonNullable<TripItemV2['activity_type']>>('custom')
   const [activityTitle, setActivityTitle] = useState('')
   const [startTime, setStartTime] = useState('')
@@ -67,6 +69,9 @@ export default function TravelV2EditDialog({
   const [note, setNote] = useState('')
 
   useEffect(() => {
+    searchSequence.current += 1
+    searchController.current?.abort()
+    searchController.current = null
     setView(panel?.kind === 'item' ? 'menu' : panel?.kind === 'transport' ? 'transport' : 'add')
     setKeyword('')
     setSearchResponse(null)
@@ -75,6 +80,11 @@ export default function TravelV2EditDialog({
     setStartTime(item?.start_time ?? '')
     setDuration(item?.duration_min ?? 90)
     setActivityTitle('')
+    return () => {
+      searchSequence.current += 1
+      searchController.current?.abort()
+      searchController.current = null
+    }
   }, [panel, item?.item_id])
 
   if (!panel) return null
@@ -99,16 +109,25 @@ export default function TravelV2EditDialog({
   async function searchPlaces(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!keyword.trim() || querying) return
+    const sequence = ++searchSequence.current
+    searchController.current?.abort()
+    const controller = new AbortController()
+    searchController.current = controller
     setQuerying(true)
     setSearchError('')
     setSearchResponse(null)
     try {
-      const response = await searchTravelPlacesV2(trip.document.brief.destination, keyword.trim())
+      const response = await searchTravelPlacesV2(trip.document.brief.destination, keyword.trim(), { signal: controller.signal })
+      if (controller.signal.aborted || sequence !== searchSequence.current) return
       setSearchResponse(response)
     } catch (cause) {
+      if (controller.signal.aborted || sequence !== searchSequence.current) return
       setSearchError(cause instanceof Error ? cause.message : '查询未完成，行程没有修改。')
     } finally {
-      setQuerying(false)
+      if (sequence === searchSequence.current) {
+        searchController.current = null
+        setQuerying(false)
+      }
     }
   }
 

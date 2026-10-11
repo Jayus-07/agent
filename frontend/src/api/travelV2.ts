@@ -1,4 +1,4 @@
-import { request } from '@/api/client'
+import { request, type RequestOptions } from '@/api/client'
 
 /** 旅游 V2 独立数据契约；与旧 Itinerary / PlanState 不互转。 */
 
@@ -248,11 +248,14 @@ function idempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `travel-v2-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function post<T>(path: string, body: object, key?: string): Promise<T> {
+type TravelV2ReadOptions = Pick<RequestOptions, 'signal'>
+
+function post<T>(path: string, body: object, key?: string, options: TravelV2ReadOptions = {}): Promise<T> {
   return request<T>(path, {
     method: "POST",
     body,
     ...(key ? { headers: { "Idempotency-Key": key } } : {}),
+    ...options,
   });
 }
 
@@ -260,15 +263,17 @@ export function fetchTravelTripsV2(): Promise<{ trips: TravelTripV2[] }> {
   return request("/api/travel/v2/trips?limit=50");
 }
 
-export function fetchTravelTripV2(tripId: string): Promise<TravelTripV2> {
-  return request(`/api/travel/v2/trips/${encodeURIComponent(tripId)}`);
+export function fetchTravelTripV2(tripId: string, options: TravelV2ReadOptions = {}): Promise<TravelTripV2> {
+  const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}`
+  return options.signal ? request(path, { signal: options.signal }) : request(path);
 }
 
-export function fetchTravelTripRevisionsV2(tripId: string): Promise<{
+export function fetchTravelTripRevisionsV2(tripId: string, options: TravelV2ReadOptions = {}): Promise<{
   trip_id: string;
   revisions: TravelTripRevisionV2[];
 }> {
-  return request(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/revisions`);
+  const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}/revisions`
+  return options.signal ? request(path, { signal: options.signal }) : request(path);
 }
 
 export function archiveTravelTripV2(tripId: string): Promise<{ trip_id: string; status: 'archived'; saved: true }> {
@@ -309,22 +314,22 @@ export function copyTravelTemplateV2(key: string): Promise<TravelTripV2> {
   return post(`/api/travel/v2/templates/${encodeURIComponent(key)}/copy`, {}, idempotencyKey());
 }
 
-export function searchTravelFoodV2(city: string): Promise<TravelSearchResponseV2<MerchantSearchResultV2>> {
-  return post("/api/travel/v2/search/food", { city });
+export function searchTravelFoodV2(city: string, options: TravelV2ReadOptions = {}): Promise<TravelSearchResponseV2<MerchantSearchResultV2>> {
+  return post("/api/travel/v2/search/food", { city }, undefined, options);
 }
 
-export function searchTravelPlacesV2(city: string, keyword: string): Promise<TravelSearchResponseV2<PlaceSearchResultV2>> {
-  return post("/api/travel/v2/search/places", { city, keyword });
+export function searchTravelPlacesV2(city: string, keyword: string, options: TravelV2ReadOptions = {}): Promise<TravelSearchResponseV2<PlaceSearchResultV2>> {
+  return post("/api/travel/v2/search/places", { city, keyword }, undefined, options);
 }
 
-export function searchTravelHotelsV2(city: string): Promise<TravelSearchResponseV2<MerchantSearchResultV2>> {
-  return post("/api/travel/v2/search/hotels", { city });
+export function searchTravelHotelsV2(city: string, options: TravelV2ReadOptions = {}): Promise<TravelSearchResponseV2<MerchantSearchResultV2>> {
+  return post("/api/travel/v2/search/hotels", { city }, undefined, options);
 }
 
 export function searchTravelTrainsV2(input: {
   from_station: string; to_station: string; travel_date: string;
-}): Promise<TravelSearchResponseV2<TrainSearchResultV2>> {
-  return post("/api/travel/v2/search/trains", input);
+}, options: TravelV2ReadOptions = {}): Promise<TravelSearchResponseV2<TrainSearchResultV2>> {
+  return post("/api/travel/v2/search/trains", input, undefined, options);
 }
 
 export function addTravelMealV2(tripId: string, input: {
