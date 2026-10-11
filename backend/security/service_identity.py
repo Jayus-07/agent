@@ -22,10 +22,12 @@ from contextlib import contextmanager
 
 from backend.core.request_context import (
     get_tool_department,
+    get_tool_permissions,
     get_tool_roles,
     get_tool_tenant_id,
     get_tool_user_id,
     set_tool_department,
+    set_tool_permissions,
     set_tool_roles,
     set_tool_tenant_id,
     set_tool_user_id,
@@ -68,10 +70,47 @@ def bind_service_identity(workflow_name: str):
         set_tool_department(prev_department)
 
 
+#: 标准 MCP 协议端点（:8091 protocol_app）的执行主体标识。
+#: API Key 只证明「持有平台凭证」，不等价于任何真人身份（2026-10-11
+#: PR#27 返修拍板）；工具执行以受限机器主体进行：service_workflow 角色
+#: 只含 sql.read → 无 rag.admin（get_stats 等私有诊断工具对协议通道
+#: 天然拒绝，禁止伪造 admin），部门 system → RAG 检索只见 "all" 库。
+MCP_PROTOCOL_USER_ID = "svc:mcp-protocol"
+
+
+@contextmanager
+def bind_mcp_protocol_identity():
+    """标准 MCP 协议通道的机器主体绑定（捕获并还原前值）。
+
+    还原语义与 bind_service_identity 相同：不假设外层为空，退出精确
+    回到前值——FastMCP 工具执行可能复用线程/任务上下文，兜底防串。
+    """
+    prev_user = get_tool_user_id()
+    prev_tenant = get_tool_tenant_id()
+    prev_roles = get_tool_roles()
+    prev_department = get_tool_department()
+    prev_permissions = get_tool_permissions()
+    set_tool_user_id(MCP_PROTOCOL_USER_ID)
+    set_tool_tenant_id(SERVICE_TENANT_ID)
+    set_tool_roles((SERVICE_WORKFLOW_ROLE,))
+    set_tool_department(SERVICE_DEPARTMENT)
+    set_tool_permissions(None)
+    try:
+        yield
+    finally:
+        set_tool_user_id(prev_user)
+        set_tool_tenant_id(prev_tenant)
+        set_tool_roles(prev_roles)
+        set_tool_department(prev_department)
+        set_tool_permissions(prev_permissions)
+
+
 __all__ = [
     "SERVICE_WORKFLOW_ROLE",
     "SERVICE_TENANT_ID",
     "SERVICE_DEPARTMENT",
+    "MCP_PROTOCOL_USER_ID",
     "service_user_id",
     "bind_service_identity",
+    "bind_mcp_protocol_identity",
 ]

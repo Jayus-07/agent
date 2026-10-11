@@ -57,6 +57,15 @@ def _safe_doc_row(row: dict) -> dict:
     return {k: row.get(k) for k in _DOC_ROW_PUBLIC_FIELDS}
 
 
+def _deny(reason: str, detail: str = "") -> PermissionError:
+    """失败语义（PR#27 返修3）：未认证/越权不返回错误 dict（那会被
+    manager 包装成 ok:true / 协议层 isError:false）——统一 raise，
+    REST 通道由 manager.route 转 ok:false，标准 MCP 通道转 isError:true。
+    """
+    message = f"RAG MCP {reason}" + (f": {detail}" if detail else "")
+    return PermissionError(message)
+
+
 class RAGMCPServer(MCPServer):
     """知识库检索：search/list_documents/get_stats。
 
@@ -98,14 +107,43 @@ class RAGMCPServer(MCPServer):
         from backend.rag.indexing.doc_registry import DocumentRegistry
 
         if tool_name == "search_knowledge":
-            # P1-3 收口：经 tool 本体执行——ContextVar→principal→授权矩阵
-            # 与拒答语义（RAGMETA）在 tool 内强制。此前直调 pipeline.ask
-            # 权限参数全空，构成绕过授权矩阵的检索旁路。
-            answer = search_knowledge_tool.invoke({
-                "question": params["question"],
+            # P1-3 收口（返修4）：经 ToolGovernance Runtime 执行——MCP
+            # 通道与 HTTP/Graph 通道同一治理链（意图门/预算/风险/审计）。
+            # 不能假设 .invoke() 自动纳管：治理必须显式经 governance_runtime。
+            # capability 对应 capabilities.yaml 已登记的 search_knowledge_tool
+            # （read/R0/none，无需新登记）。
+            from backend.core.tool_governance.guard import (
+                ToolCallRequest,
+                governance_runtime,
+            )
+            from backend.core.tool_runtime.models import ToolStatus
+
+            arguments = {
+                "question": params.get("question", ""),
                 "kb_id": params.get("kb_id", "default"),
-            })
-            return {"answer": answer}
+            }
+            request = ToolCallRequest(
+                capability="search_knowledge_tool",
+                arguments=arguments,
+                domain="rag",
+                intent_fit="match",
+                selection_reason="mcp:rag server direct call",
+            )
+            result = governance_runtime.execute_sync(
+                request,
+                lambda: search_knowledge_tool.invoke(arguments),
+                normalize_output=False,
+                domain="rag",
+                tool_name="search_knowledge_tool",
+                trace_agent="mcp-rag",
+            )
+            if result.status is not ToolStatus.SUCCESS:
+                # 业务失败 ≠ 协议成功（返修3）：显式失败上抛
+                raise RuntimeError(
+                    f"search_knowledge 执行失败 "
+                    f"[{result.status.value}] {result.error_code or ''}: "
+                    f"{result.error_message or ''}")
+            return {"answer": result.data}
 
         if tool_name == "list_documents":
             # 资源授权：授权范围下推（kb_scope/visible_scopes 进 SQL），
@@ -113,8 +151,7 @@ class RAGMCPServer(MCPServer):
             try:
                 authz = _tool_authorization()
             except RagAuthorizationError as e:
-                return {"error": f"未认证或授权失败，已拒绝列出文档: {e}",
-                        "reason": "unauthorized", "documents": [], "total": 0}
+                raise _deny("未认证或授权失败，已拒绝列出文档", str(e)) from e
             registry = DocumentRegistry(DOC_REGISTRY_PATH)
             keyword = params.get("keyword", "")
             page = params.get("page", 1)
@@ -137,10 +174,9 @@ class RAGMCPServer(MCPServer):
             try:
                 authz = _tool_authorization()
             except RagAuthorizationError as e:
-                return {"error": f"未认证或授权失败，已拒绝统计: {e}",
-                        "reason": "unauthorized"}
+                raise _deny("未认证或授权失败，已拒绝统计", str(e)) from e
             if not authz.is_admin:
-                return {"error": "get_stats 仅限管理员", "reason": "forbidden"}
+                raise _deny("get_stats 仅限管理员（rag.admin 权限点）")
             registry = DocumentRegistry(DOC_REGISTRY_PATH)
             docs = [d for d in registry.list_active()
                     if str(d.get("kb_id") or "") in authz.kb_scope]

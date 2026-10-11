@@ -72,20 +72,20 @@ async def call_tool(
         raise HTTPException(status_code=400, detail="tool_name 不能为空")
     from backend.core.request_context import (
         set_tool_department,
+        set_tool_permissions,
         set_tool_roles,
         set_tool_tenant_id,
         set_tool_user_id,
     )
 
-    if ident.user_id:
-        set_tool_user_id(ident.user_id)
-    if ident.department:
-        set_tool_department(ident.department)
-    # STOP C：tenant/roles 一并绑定——SQL MCP 通道的权限门/数据范围
-    # 需要完整可信身份（与 HTTP/Graph 通道同一授权语义）
-    if ident.tenant_id:
-        set_tool_tenant_id(ident.tenant_id)
+    # 返修2/5（PR#27 复审）：身份五元组显式全量绑定——网关未声明的维度
+    # 也显式写入（None/空覆盖），语义上不存在「继承前值」的形态。
+    # FastAPI 每请求独立 task 上下文本就隔离，这里是语义自文档化兜底。
+    set_tool_user_id(ident.user_id)
+    set_tool_department(ident.department)
+    set_tool_tenant_id(ident.tenant_id)
     set_tool_roles(ident.roles or ())
+    set_tool_permissions(ident.permissions)
     logger.info(f"[MCP] call {req.tool_name} "
                 f"params({_params_fingerprint(req.params)}) "
                 f"actor={ident.user_id} tenant={ident.tenant_id or '-'}")

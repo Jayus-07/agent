@@ -33,8 +33,12 @@ def _mcp_sql_policy_context():
 
 
 def _unavailable():
-    return {"error": "SQL 查询服务暂不可用，请稍后重试。",
-            "reason": "service_unavailable"}
+    """失败语义（PR#27 返修3）：kill switch/依赖不可用是执行失败——
+    协议层显式失败（REST → ok:false；标准 MCP → isError:true），
+    不再以错误 dict 包装成协议成功。tool 本体的 envelope 文本协议
+    （sql_query_tool，供 LLM 阅读）不受影响。
+    """
+    raise RuntimeError("SQL 查询服务暂不可用，请稍后重试。（service_unavailable）")
 
 
 class SQLMCPServer(MCPServer):
@@ -78,11 +82,16 @@ class SQLMCPServer(MCPServer):
             result = agent.ask_struct(params["question"],
                                       policy=_mcp_sql_policy_context())
             if result.error_type == "service_unavailable":
-                return _unavailable()
+                _unavailable()
             if result.status in ("success", "no_data"):
                 return {"result": result.to_markdown()}
-            return {"error": result.error or "查询失败",
-                    "reason": result.status}
+            # 失败语义（返修3）：权限拒绝与其他执行失败显式上抛，
+            # 不再以错误 dict 包装成协议成功
+            if result.status == "permission_denied":
+                raise PermissionError(
+                    f"SQL 查询被权限门拒绝: {result.error or result.status}")
+            raise RuntimeError(
+                f"SQL 查询失败 [{result.status}]: {result.error or ''}")
 
         if tool_name == "list_tables":
             from backend.sql.schema_loader import schema_loader

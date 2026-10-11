@@ -83,15 +83,25 @@ async def call_tool(req: AiCallRequest, request: Request):
         logger.warning(f"[InternalAI] tool not whitelisted: {req.tool}")
         raise HTTPException(status_code=403, detail=f"tool not allowed: {req.tool}")
 
-    from backend.core.request_context import set_tool_department, set_tool_user_id
+    from backend.core.request_context import (
+        set_tool_department,
+        set_tool_permissions,
+        set_tool_roles,
+        set_tool_tenant_id,
+        set_tool_user_id,
+    )
     from backend.observability.tracer import current_trace_context
     from mcp_servers.manager import manager
 
-    # FastAPI 每请求独立 ContextVar 上下文，绑定不会跨请求泄漏
-    if req.actor_user_id:
-        set_tool_user_id(req.actor_user_id)
-    if req.actor_department:
-        set_tool_department(req.actor_department)
+    # 返修5（PR#27 复审）：Java 委托主体显式全量绑定——actor 未携带的
+    # 维度（roles/tenant/permissions）显式置空，语义上不存在「继承前值」。
+    # 每请求 task 上下文本就隔离，这里是语义自文档化兜底；工具侧
+    # permissions=None = 未声明（文档级权限按未声明裁决，不放大）。
+    set_tool_user_id(req.actor_user_id)
+    set_tool_department(req.actor_department)
+    set_tool_tenant_id("")
+    set_tool_roles(())
+    set_tool_permissions(None)
 
     started = time.perf_counter()
     result = manager.route(req.tool, req.params)

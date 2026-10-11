@@ -44,13 +44,14 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     输入检索问题和知识库ID，返回基于相关文档生成的回答。
     适用场景：概念解释、经验查询、流程规范、技术方案参考。
     """
-    logger.info(f"[Tool:search_knowledge] 检索：{question[:80]}... (kb={kb_id})")
+    logger.info(f"[Tool:search_knowledge] 检索 len={len(question)} kb={kb_id}")
     pipeline = _get_rag_pipeline()
     from backend.security.principal import resolve_tool_principal
     from backend.tools.session import (
         _get_session_id,
         get_tool_department,
         get_tool_permissions,
+        get_tool_roles,
         get_tool_tenant_id,
         get_tool_user_id,
     )
@@ -64,11 +65,16 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
     #   - 未登录（guest/api-key 匿名通道）→ customer fail-safe（宁严勿漏），
     #     仅 audience=customer 的 cs_* 库可见。RAG_TOOL_FAILSAFE_CUSTOMER=
     #     false 回滚为未声明主体（旧行为）。
+    # roles（PR#27 返修2）：网关验签角色随 principal 与 ask_result 全程
+    # 传递——admin 跨部门检索可见性（retrieval_authorized_kbs）依赖它，
+    # 此前丢失导致 admin 在检索链被当普通员工降级。
+    roles = get_tool_roles()
     principal = resolve_tool_principal(
         user_id=get_tool_user_id(),
         department=get_tool_department(),
         permissions=get_tool_permissions(),
         tenant_id=get_tool_tenant_id(),
+        roles=roles,
     )
     # ask_result（非 ask）：拒答状态/置信度随返回值带回（D1-6 口径，
     # 单例实例属性在并发下会串扰），随 RAGMETA 标记流出聊天链路
@@ -78,11 +84,13 @@ def search_knowledge_tool(question: str, kb_id: str = "default") -> str:
                                   permissions=principal.permissions,
                                   user_id=get_tool_user_id(),
                                   tenant_id=get_tool_tenant_id(),
+                                  roles=roles,
                                   # 聊天主图的 Reporter 会产出最终权威答案，
                                   # Memory 统一由父 Runner 在完成后写入。
                                   persist_memory=False)
     result = append_rag_answer_meta(outcome.answer, outcome.answer_meta)
-    logger.info(f"[Tool:search_knowledge] 返回 len={len(result or '')} repr_head={repr((result or '')[:40])}")
+    # 回答原文/摘要不落日志（返修5）：只记长度，问题与回答内容零出口
+    logger.info(f"[Tool:search_knowledge] 返回 len={len(result or '')}")
     return result
 
 

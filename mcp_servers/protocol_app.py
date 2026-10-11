@@ -94,8 +94,25 @@ def _make_tool_fn(server, tool_name: str, parameters: dict):
             )
         params.append(param)
 
-    def _fn(**kwargs):
-        return server.call_tool(tool_name, kwargs)
+    async def _fn(**kwargs):
+        # 返修1（PR#27 复审）：API Key ≠ 用户身份。8091 标准协议通道的
+        # 执行主体是显式受限机器 principal（svc:mcp-protocol，角色
+        # service_workflow 只含 sql.read）——无 rag.admin，get_stats 等
+        # 私有诊断工具对协议通道天然拒绝；业务工具走六层 SQL 安全与
+        # RAG 授权矩阵的受限可见范围，绝不伪造 admin 用户。
+        # async + to_thread：FastMCP 在事件循环线程调用工具函数，同步
+        # call_tool 内的治理链（governance_runtime.execute_sync 的
+        # asyncio.run）会撞上运行中的 loop；挪到工作线程执行（ContextVar
+        # 随 to_thread 复制传播，机器主体绑定不丢）。
+        from backend.security.service_identity import bind_mcp_protocol_identity
+
+        def _execute():
+            with bind_mcp_protocol_identity():
+                return server.call_tool(tool_name, kwargs)
+
+        import asyncio
+
+        return await asyncio.to_thread(_execute)
 
     _fn.__signature__ = inspect.Signature(params)
     return _fn
