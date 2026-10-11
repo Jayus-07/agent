@@ -1,6 +1,6 @@
 """RAG MCP Server — 知识库检索能力"""
 from backend.shared.logger import logger
-from mcp_servers.manager import MCPServer
+from mcp_servers.manager import MCPServer, _safe_error_location
 from mcp_servers.schema_adapter import langchain_tool_to_mcp_meta
 from backend.tools.rag import search_knowledge_tool
 
@@ -58,17 +58,16 @@ def _safe_doc_row(row: dict) -> dict:
     return {k: row.get(k) for k in _DOC_ROW_PUBLIC_FIELDS}
 
 
-def _deny(reason: str, detail: str = "") -> "MCPToolError":
+def _deny(reason: str) -> "MCPToolError":
     """失败语义（返修3+复核修正）：未认证/越权不返回错误 dict（那会被
     manager 包装成 ok:true / 协议层 isError:false）——统一 raise 受控
     异常，REST 通道由 manager.route 转 ok:false，标准 MCP 通道转
-    isError:true。detail 为受控短语（RagAuthorizationError 的中文拒绝
-    原因），非原始异常文本。
+    isError:true。reason 仅接受代码内固定文案；底层异常文本（含
+    RagAuthorizationError 可能包裹的原始异常）一律不进 safe_message。
     """
     from mcp_servers.manager import MCPToolError
 
-    message = f"RAG MCP {reason}" + (f": {detail}" if detail else "")
-    return MCPToolError(message, "permission_denied")
+    return MCPToolError(f"RAG MCP {reason}", "permission_denied")
 
 
 class RAGMCPServer(MCPServer):
@@ -163,7 +162,14 @@ class RAGMCPServer(MCPServer):
             try:
                 authz = _tool_authorization()
             except RagAuthorizationError as e:
-                raise _deny("未认证或授权失败，已拒绝列出文档", str(e)) from e
+                # 复核终轮修正：RagAuthorizationError 的 str(e) 可能携带
+                # 底层原始异常文本（authz.build 包 "{exc}"）——不进
+                # safe_message、不落日志，只记类型+位置；固定安全文案 +
+                # permission_denied，fail-closed 语义不变。
+                logger.error(
+                    f"[MCP-rag] list_documents 授权失败 "
+                    f"{type(e).__name__} at {_safe_error_location(e)}")
+                raise _deny("未认证或授权失败，已拒绝列出文档") from None
             registry = DocumentRegistry(DOC_REGISTRY_PATH)
             keyword = params.get("keyword", "")
             page = params.get("page", 1)
@@ -186,7 +192,10 @@ class RAGMCPServer(MCPServer):
             try:
                 authz = _tool_authorization()
             except RagAuthorizationError as e:
-                raise _deny("未认证或授权失败，已拒绝统计", str(e)) from e
+                logger.error(
+                    f"[MCP-rag] get_stats 授权失败 "
+                    f"{type(e).__name__} at {_safe_error_location(e)}")
+                raise _deny("未认证或授权失败，已拒绝统计") from None
             if not authz.is_admin:
                 raise _deny("get_stats 仅限管理员（rag.admin 权限点）")
             registry = DocumentRegistry(DOC_REGISTRY_PATH)

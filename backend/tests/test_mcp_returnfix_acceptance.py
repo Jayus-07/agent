@@ -627,3 +627,112 @@ class TestExceptionLeakContainment:
         ok = AiCallRequest(tool="search_knowledge", actor_user_id="svc:java-u1",
                            actor_department="sales")
         assert ok.actor_user_id == "svc:java-u1"
+
+
+# ==================== 8. RagAuthorizationError 污染路径围堵（复核终轮） ====================
+
+_AUTHZ_SECRET = "RAG 授权计算失败: SECRET_KEY=sk-final-1 /srv/internal/auth 用户敏感内容"
+
+
+class TestRagAuthzErrorContainment:
+    """终轮阻断收口：RagAuthorizationError 的 str(e) 可能携带底层原始
+    异常文本（authz.build 包 "{exc}"）——不得进 safe_message 或日志。"""
+
+    @pytest.fixture()
+    def poisoned_authz(self, monkeypatch):
+        from backend.rag.authz import RagAuthorizationError
+
+        def poisoned_build(cls, principal):
+            raise RagAuthorizationError(_AUTHZ_SECRET)
+
+        monkeypatch.setattr("backend.rag.authz.RagAuthorization.build",
+                            classmethod(poisoned_build))
+
+    def test_rest_list_documents_fixed_denial(
+            self, rest_client, fake_registry, clean_ctx, poisoned_authz,
+            caplog):
+        resp = rest_client.post(
+            "/api/mcp/call",
+            json={"tool_name": "list_documents", "params": {"page": 1}},
+            headers=_headers(roles="viewer"))
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "RAG MCP 未认证或授权失败，已拒绝列出文档"
+        assert body["error_code"] == "permission_denied"
+        assert "SECRET_KEY" not in resp.text
+        assert "/srv/internal" not in resp.text
+        assert "用户敏感内容" not in resp.text
+        assert _AUTHZ_SECRET not in caplog.text
+
+    def test_rest_get_stats_fixed_denial(
+            self, rest_client, fake_registry, clean_ctx, poisoned_authz,
+            caplog):
+        resp = rest_client.post(
+            "/api/mcp/call",
+            json={"tool_name": "get_stats", "params": {}},
+            headers=_headers(roles="viewer"))
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "RAG MCP 未认证或授权失败，已拒绝统计"
+        assert body["error_code"] == "permission_denied"
+        assert "SECRET_KEY" not in resp.text
+        assert _AUTHZ_SECRET not in caplog.text
+
+    def test_protocol_authz_error_contained(
+            self, monkeypatch, fake_registry, clean_ctx, poisoned_authz):
+        """标准 MCP 通道：同一污染路径经 8091 也只回固定文案。"""
+        from fastapi.testclient import TestClient
+        from mcp_servers.manager import MCPManager
+        from mcp_servers.protocol_app import build_protocol_app
+        from mcp_servers.servers.rag import RAGMCPServer
+
+        monkeypatch.setattr("backend.config.API_KEY", "k-final")
+        monkeypatch.setattr("backend.config.ALLOW_UNAUTHENTICATED", False)
+        monkeypatch.setattr("backend.config.ENVIRONMENT", "dev")
+        mgr = MCPManager()
+        mgr.register(RAGMCPServer())
+        app = build_protocol_app(mgr)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "tools/call",
+                      "params": {"name": "get_stats", "arguments": {}},
+                      "id": 1},
+                headers={"X-API-Key": "k-final",
+                         "Accept": "application/json, text/event-stream"})
+            assert resp.status_code == 200
+            assert "SECRET_KEY" not in resp.text
+            assert "/srv/internal" not in resp.text
+            assert "未认证或授权失败" in resp.text
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("conn refused: /srv/keys SECRET_KEY=sk-runtime-2 用户内容"),
+        PermissionError("denied: /srv/secret/doc.md 用户内容"),
+    ], ids=["runtime-error", "permission-error"])
+    def test_protocol_sensitive_runtime_and_permission_errors_contained(
+            self, monkeypatch, exc):
+        """补验：标准 MCP 通道收到携带敏感文本的 RuntimeError/
+        PermissionError 时同样围堵（类型不作为安全凭据）。"""
+        from fastapi.testclient import TestClient
+        from mcp_servers.manager import MCPManager
+        from mcp_servers.protocol_app import build_protocol_app
+
+        monkeypatch.setattr("backend.config.API_KEY", "k-final")
+        monkeypatch.setattr("backend.config.ALLOW_UNAUTHENTICATED", False)
+        monkeypatch.setattr("backend.config.ENVIRONMENT", "dev")
+        mgr = MCPManager()
+        mgr.register(_LeakServer(exc))
+        app = build_protocol_app(mgr)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "tools/call",
+                      "params": {"name": "leak_tool", "arguments": {}},
+                      "id": 1},
+                headers={"X-API-Key": "k-final",
+                         "Accept": "application/json, text/event-stream"})
+            assert resp.status_code == 200
+            assert "SECRET_KEY" not in resp.text
+            assert "/srv/keys" not in resp.text
+            assert "/srv/secret" not in resp.text
+            assert "用户内容" not in resp.text

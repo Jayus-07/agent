@@ -1,8 +1,10 @@
 # MCP P0 安全整改 — 独立审查包（供 GPT 复核）
 
-- 生成时间：2026-10-11
-- 分支：`task/mcp-p0-security-20261011`，HEAD：`49f26f2310957f7a4e7cd52f440a4b9b26aa33ad`
-- 本文件按指令落盘但**未 commit**（"不提交新变更"约束）；所有证据来自真实执行
+- 生成时间：2026-10-11（随整改逐轮更新，本文件已随 PR 提交）
+- 分支：`task/mcp-p0-security-20261011`
+- 审查基线演进：首轮/返修基线 `49f26f2` → 第三轮收口 `5d4fe9d` → 第四轮复核修正 `903c7e2` → **终轮（RagAuthorizationError 污染路径围堵，HEAD 见 PR 页面最新 commit）**
+- 交付状态：**READY_FOR_REVIEW（终轮阻断已修复）**；各轮历史测试记录在第 6 节分轮保留
+- 历史标注说明：文件早期版本曾标注"未 commit"，自第三轮起已按指令随 PR 分支提交，GitHub 可读
 
 ---
 
@@ -49,7 +51,13 @@
 
 ## 3. 安全验收
 
-### 3.-1 第四轮复核修正（最终独立复核阻断项，最终提交）
+### 3.-2 终轮修复（最后一条已识别代码级阻断：RagAuthorizationError 污染路径）
+
+| 阻断 | 修正 | 证据 |
+|---|---|---|
+| rag.py list_documents/get_stats 捕获 RagAuthorizationError 后经 str(e) → _deny → safe_message 透传；authz.build 包裹底层异常文本（authz.py:135 `f"RAG 授权计算失败: {exc}"`） | rag.py：str(e) 不再进 safe_message、不落日志——只记异常类型+位置（`_safe_error_location`）；固定安全拒绝文案（"RAG MCP 未认证或授权失败，已拒绝列出文档/统计"）+ `permission_denied` 错误码；fail-closed 语义不变；`_deny` 移除 detail 参数（消除未来注入点） | `test_rest_list_documents_fixed_denial`（poisoned build：error 恒等于固定文案、error_code=permission_denied、SECRET_KEY/内部路径/用户内容零出现）、`test_rest_get_stats_fixed_denial`、`test_protocol_authz_error_contained`（8091 同路径围堵）——RagAuthorizationError 携带模拟 SECRET_KEY/内部路径/用户内容时 REST 响应、8091 响应、日志三面零原文 |
+
+### 3.-1 第四轮复核修正（异常类型白名单不可靠，MCPToolError 显式化）
 
 | 复核阻断 | 修正 | 证据 |
 |---|---|---|
@@ -112,11 +120,11 @@
 
 ## 6. 测试证据（真实执行）
 
-**第四轮复核修正后最终执行（最终提交对应代码，105 例）**：
+**终轮修复后最终执行（最终提交对应代码，110 例）**：
 
 命令：`python -m pytest backend/tests/test_mcp_security.py backend/tests/test_mcp_returnfix_acceptance.py backend/tests/test_mcp_protocol.py backend/tests/test_registry_consistency.py backend/tests/infra/test_worker_runtime_bootstrap.py backend/tests/sql/test_sql_production_closure.py -q`
 
-结果：`105 passed, 1 warning in 57.50s`；**退出码 0**；FAIL 0 / SKIP 0。新增 2 例复核负向（RuntimeError/PermissionError 携带模拟密钥/内部路径/用户内容的三面围堵）。
+结果：`110 passed, 1 warning`；**退出码 0**；FAIL 0 / SKIP 0。终轮新增 5 例（RagAuthorizationError 污染路径 3 例 + 8091 RuntimeError/PermissionError 敏感变体参数化 2 例）。
 
 **第三轮收口执行（103 例，基线证据）**：
 
