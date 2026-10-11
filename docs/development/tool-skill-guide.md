@@ -51,3 +51,23 @@
 ## 验证入口
 
 先读 backend/tests/ 中最接近的现行测试，再选择单元、契约、接口或必要集成测试。共享注册或治理变化应覆盖其主要调用方。文档中的路径和命令如与代码不符，应以实现为准并同步修订本文件。
+
+## 新增能力的失败与降级定义（必填）
+
+在开始实现或修改 Tool / Skill / MCP Adapter 前，先明确下表并保留在对应实现、配置或任务验收中；不需新增第二份 Manifest：
+
+| 项目 | 开发者必须回答 |
+| --- | --- |
+| 能力与操作 | 复用哪个 Capability/Registry？这是只读还是有副作用？ |
+| 请求鉴权 | 租户/用户/资源级范围从哪里解析？读写均有服务端限制吗？ |
+| 成功依据 | HTTP 成功之外，哪一个业务字段、Schema、证据表明真正成功？ |
+| 失败类型 | 连接、超时、429/5xx、401/403、业务 failed、empty、partial 分别怎样处理？ |
+| 超时/重试 | 复用 ToolPolicy、Deadline、Retry；写操作是否禁止盲重试？ |
+| 用户约束 | 哪些情况下 REQUIRED，哪些情况下 IMPORTANT/OPTIONAL？ |
+| Fallback | 替代来源/缓存/跳过的前提是什么？如何告知来源与时效？ |
+| 终态与回显 | Reporter、SSE、前端怎样区分成功/降级/BLOCKED/FAILED？ |
+| 可观测与验收 | Tool status、业务 error_code、trace、指标和测试证据在哪里？ |
+
+执行顺序：**路由候选与合法性 → 授权/确认/幂等 → Tool Runtime 调用 → 传输与业务输出校验 → 域内 Failure Policy → Reporter/API/SSE**。不允许让 LLM 直接解释 HTML 502 页、把 `{"status":"failed"}` 看成检索证据，或让 MCP Server 自建绕过治理的重试与凭据路径。细节以 [统一失败规范](../architecture/failure-degradation.md) 为准；写操作异常的人工处置见 [幂等运行手册](../operations/idempotency-runbook.md)。
+
+合并前至少覆盖成功、业务失败（含 HTTP 200 + failed）、无结果、权限拒绝、Tool 超时、动态硬依赖和（有副作用时）未知效果，按 [测试策略](testing-guide.md) 选择必要 T1/T2；无真实 Provider 不能将真实链路标记为已验收。

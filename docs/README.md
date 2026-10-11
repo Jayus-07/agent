@@ -7,11 +7,18 @@
 | 文档 | 职责 | 按需读取 |
 | --- | --- | --- |
 | [architecture/system-overview.md](architecture/system-overview.md) | 部署边界、服务关系、异步与网关 | 修改部署、网关或异步运行时 |
+| [architecture/module-boundaries.md](architecture/module-boundaries.md) | 全平台分层、职责与依赖方向 | 设计跨层架构或移动模块时 |
 | [architecture/ai-runtime.md](architecture/ai-runtime.md) | 主图、域图接入、公共运行状态契约 | 修改 Router、LangGraph、SSE 或 Checkpoint |
 | [architecture/domain-service-map.md](architecture/domain-service-map.md) | 域服务、Provider、凭据和失败边界 | 新增或调整外部服务 |
+| [architecture/failure-degradation.md](architecture/failure-degradation.md) | Tool/Provider 失败分类、动态依赖、降级与阻断验收 | 修改外部调用或故障处理时 |
 | [architecture/Frozen-Contracts.md](architecture/Frozen-Contracts.md) | 当前公共契约和守卫入口 | 修改 SSE、Runtime、Tool 或 Domain 契约 |
 | [development/tool-skill-guide.md](development/tool-skill-guide.md) | Agent、Skill、Tool、Workflow、MCP 开发规范 | 新增或修改上述资产 |
+| [development/documentation-standard.md](development/documentation-standard.md) | 唯一现行文档维护与交付规则 | 维护架构与开发规范时 |
+| [development/repository-layout.md](development/repository-layout.md) | 目录归属、临时资产/数据治理、MOVE/MERGE/DELETE 标准 | 审查目录或文件清理时 |
+| [development/cross-cutting-contracts.md](development/cross-cutting-contracts.md) | REST/SSE/WS、数据、模型、前端与安全共通约束 | 修改跨层契约时 |
+| [development/refactoring-playbook.md](development/refactoring-playbook.md) | 审计与分批安全重构执行标准 | 开展全仓重构时 |
 | [development/testing-guide.md](development/testing-guide.md) | 唯一详细测试策略，T0–T3 | 选择或升级验证范围 |
+| [operations/release-quality.md](operations/release-quality.md) | 合并、发布和 T0–T3 门禁 | CI、发布或高风险变更时 |
 | [operations/commands.md](operations/commands.md) | 经核对的常用启动与验证命令 | 启停服务或调试环境 |
 | [operations/customer-service-runbook.md](operations/customer-service-runbook.md) | 客服 FAQ、RAG 降级和告警响应 | 运维客服问答链路 |
 | [operations/idempotency-runbook.md](operations/idempotency-runbook.md) | 副作用幂等账本与不确定交易的人工处置 | 处理副作用状态或账本异常 |

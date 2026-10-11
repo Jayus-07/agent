@@ -50,3 +50,13 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 - Node Runtime：backend/core/node_runtime/；契约测试：backend/tests/node_runtime/
 
 修改公共契约前，读取其守卫测试以及 [Frozen Contracts](Frozen-Contracts.md)。
+
+## 失败传播与结果语义
+
+Runtime 的图路由决策、节点执行结果、Tool 执行结果、领域最终结果是**不同的状态面**。普通 Tool 连接失败，只有在当前用户目标确实无法安全满足时才应阻断；内部图状态错误或未处理异常不得被标成外部 Provider 的降级。
+
+- Tool Runtime 负责 `ToolStatus` 和执行可靠性；业务适配边界必须验证 HTTP 200 body 的 `status=failed`、业务错误码、Schema、空结果。未校验的 Raw ToolResult `SUCCESS` 仅证明执行成功，不代表业务成功。
+- Domain / Supervisor 根据本次 brief、权限和硬约束确定 REQUIRED、IMPORTANT、OPTIONAL，选择继续、标记 DEGRADED、BLOCKED 或内部 FAILED。领域具体状态字段以当前域实现为准。
+- Reporter 不得擅自覆盖真实结果或将 failed envelope 当文本答案；SSE `done`、Trace、数据库状态及前端终态须与同一业务结果一致。新增事件/字段先检查现有 schema、消费端、断线恢复和兼容性。
+- Agent handoff 是职责转交，不是绕过 Tool Governance/授权/确认的执行捷径；转交时应保留 trace、状态归因及用户目标的硬约束。
+- 完整分类矩阵及验收见 [Tool/Provider 失败规范](failure-degradation.md)。

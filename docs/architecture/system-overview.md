@@ -22,3 +22,27 @@ APISIX 是外部请求入口。身份头由网关验证并注入，后端只接�
 - Provider 凭据由受控配置/凭据来源提供，不能写入文档、日志或客户端构建产物。
 - 外部服务、任务队列与模型不可用时按具体业务契约返回失败或降级；不得静默丢任务。
 - 部署与运维操作参考仓库 Compose 文件及 [commands.md](../operations/commands.md)。
+
+## 稳定层次与请求路径
+
+```mermaid
+flowchart LR
+  UI[Web / Admin / CS] --> GW[APISIX：外部入口与身份治理]
+  GW --> API[FastAPI：REST / SSE]
+  API --> RT[Router + 主 LangGraph Runtime]
+  RT --> DG[Domain Graph / Skill / Workflow]
+  DG --> TG[Tool Governance / Tool Runtime]
+  TG --> PR[Provider / MCP Adapter / 内部数据服务]
+  API --> DB[(PostgreSQL)]
+  API --> RD[(Redis)]
+  API --> CQ[Celery：异步任务]
+  CQ --> DB
+```
+
+上述是**职责拓扑**，不是每个请求都必须经过主图。部分旅游 V2、RAG、管理端接口可由领域 REST 入口直接调用业务服务；是否经过 Router、是否启用 Checkpoint、是否投递 Celery，必须到相应 API 实现和配置核验，不能仅凭图假定。Web 请求 SSE 生命周期不等于 Celery 异步任务；主请求、异步任务均应具有可追踪的业务终态。
+
+## 横向架构红线
+
+- 身份和 tenant 在 APISIX/后端可信边界校验后传递；领域服务及存储仍必须做资源级授权，不能因为经过网关就省略。
+- 跨层只传稳定契约：Router 判归宿，Graph/Skill 负责编排，Tool Governance 审权限与副作用，Tool Runtime 处理执行可靠性，Provider Adapter 负责协议与真实数据；禁止在每个领域复制一份相同治理链。
+- 对外可见的失败由 [统一失败与降级规范](failure-degradation.md) 约束；Provider 读故障不必然导致业务失败，写操作结果未知不得自动重投。跨域共享能力只由当前注册表和现有服务入口提供。

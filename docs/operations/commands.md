@@ -96,3 +96,16 @@ docker compose build --progress=plain app
 ~~~
 
 Playwright 的 Windows 默认浏览器目录是 `%LOCALAPPDATA%\ms-playwright`；Linux 使用各自的 Linux 缓存目录，不能把 Windows 浏览器缓存挂给 Linux。前端锁文件和后端依赖未变化时，继续使用已有 `node_modules`、虚拟环境和 BuildKit 层；只有确认需要下载浏览器或缺失基础镜像时才请求授权。BuildKit 构建日志中的 `CACHED` 可用于确认层缓存命中。简单前端修改先运行 TypeScript 与 Vitest；浏览器交互风险确实存在时再运行 Playwright，缺少所需浏览器则报告 `BLOCKED`。
+
+## Tool / Provider 失败定向诊断
+
+先根据 trace_id、capability/tool_name、provider、status、error_code、retry_count、fallback_used 和业务终态还原故障；不得只看 HTTP 200。配置阈值与精确指标名称到当前 `backend/core/tool_runtime/`、`backend/observability/` 查；不要照抄历史报告中的默认值冒充当前线上配置。
+
+~~~powershell
+# 从仓库根目录执行：执行层与旅游域已有定向测试
+.\.venv\Scripts\python.exe -m pytest backend/tests/tool_runtime/test_governance.py -q --no-cov
+.\.venv\Scripts\python.exe -m pytest backend/tests/travel/test_tool_failure_policy.py -q --no-cov
+.\.venv\Scripts\python.exe -m pytest backend/tests/skills/test_tool_contract_boundary.py -q --no-cov
+~~~
+
+上面是**可选验证命令，不代表已执行**；只运行与本次变更相关的用例。副作用状态未知、账本不可用或客服确认记录卡住时，**先读** [幂等手册](idempotency-runbook.md) 再处理，不重复触发支付、退款或下单。故障决策参见 [统一失败规范](../architecture/failure-degradation.md)。
