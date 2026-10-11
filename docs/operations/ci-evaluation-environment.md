@@ -116,6 +116,18 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 - SQL/Planner/E2E/鉴权/RBAC/租户变更：按对应 Runner 与数据集选择；不机械全域重建向量（❌ CI 集成未实现，见 §5）。
 - 改模型/维度/索引 Schema/阈值：版本相容性验证、失配反例、真实 API 探针、必要重索引及可比性说明（🚧 探针已实现；版本化快照与失配反例 ❌ 未实现）。
 
+**真实评测触发矩阵（2026-10-11 用户拍板）**：
+
+| 触发场景 | 真实 API | 测试范围 | 落地方式 |
+| --- | --- | --- | --- |
+| 普通代码 PR | 不需要 | T0/T1、定向单元测试 | ✅ PR 免费预检（真实评测 job 对 PR 事件 skipped） |
+| 纯文档、页面样式 PR | 不需要 | 静态检查 | ✅ 路径过滤 skip |
+| RAG 检索算法、切分策略修改 | 需要 | RAG Smoke + 必要的 Regression | 合并 main 后自动 Smoke；Regression 审核后 workflow_dispatch |
+| Embedding、Rerank 模型切换 | 必须 | 索引重建 + Golden 回归 | 每次运行强制索引重建；probe 维度三方校验失配即 BLOCKED；Golden 回归 dispatch selection=regression |
+| SQL Agent、Planner 修改 | 按风险运行 | 对应领域真实模型评测 | Runner 已有，CI workflow 未建（❌ 见 §5） |
+| 每日定时回归 | **不在 GitHub 定时运行** | 固定 Golden，监测质量 | 🚧 `rag_regression.yml` 已移除 schedule（PR #30）；定时回归由管理端定时任务承担（配置入口：管理端） |
+| 重要版本发布前 | 需要 | 受影响领域真实 API 和 E2E | 审核后 workflow_dispatch 按域运行；E2E 属发布门禁 |
+
 **验收矩阵 CI-01～CI-10（实现状态逐条标注）**：
 
 | ID | 要求（摘要） | 状态 |
