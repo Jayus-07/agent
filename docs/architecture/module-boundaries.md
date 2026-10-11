@@ -51,17 +51,19 @@ flowchart TD
 
 ## 5. 七层架构、核心组件与职责（统一开发归属表）
 
-这是**逻辑职责层**，可观测与安全/评测横切所有业务层，并非七个必须依次调用的网络节点。项目部署拓扑保留在 [系统概览](system-overview.md)，Router/Domain 图细节保留在 [AI Runtime](ai-runtime.md)，不要在此复制各模块的动态类数量。
+这是**七类逻辑职责**：接入、编排、领域应用、执行、模型、工具与数据、可观测。可观测横切其余六类；安全、授权、幂等、评测、发布及文档属于**横向治理机制**（不占用/替代领域应用层），并非七个必须依次调用的网络节点。项目部署拓扑保留在 [系统概览](system-overview.md)，Router/Domain 图细节保留在 [AI Runtime](ai-runtime.md)，不要在此复制各模块的动态类数量。
 
 | 层 | 主要组件/目录 | 唯一主责 | 不可越界 |
 | --- | --- | --- | --- |
 | **接入层** | APISIX；`backend/app/api`；`frontend*` BFF | JWT 校验、可信身份头/限流、REST/SSE/WS、DTO、接口幂等键传递 | 不用前端 role/user_id 决定权限；不把业务状态机放进 BFF |
-| **编排层** | Router、LangGraph builder、Domain Graph、Supervisor、Planner、Workflow | 归宿判断、任务拆解、交接、流程/Checkpoint、业务协调 | 不自行新建 Tool 重试、凭据及 DB 账本 |
-| **执行层** | Skill Executor、Node Runtime、Tool Governance/Runtime、Celery | 合法能力执行、Schema/审批、并发 deadline/retry、异步作业 | 不替 Domain 决定用户目标是否已满足 |
+| **编排层** | Router、LangGraph builder、Domain Graph、Supervisor、Planner、Workflow | 归宿判断、任务拆解、交接、流程/Checkpoint、跨节点调度 | 不承担业务领域状态机和持久化权威 |
+| **领域应用层** | `backend/rag/`、`backend/sql/`、`backend/travel*/`、`backend/customer_service/`、`backend/selection*/` | 领域策略/状态机、业务授权约束、证据/质量门、版本 CAS、用户目标完成判定 | 不重做公共身份、模型计费或 Tool Runtime |
+| **执行层** | Skill Executor、Node Runtime、Tool Governance/Runtime、Celery | 合法能力执行、Schema/审批、并发 deadline/retry、异步作业 | 不替领域应用决定用户目标是否已满足 |
 | **模型层** | `backend/config/model_roles.py`、`backend/infra/llm/`、`backend/prompts/` | DB Model Role/Provider 快照、Proxy、Prompt 版本、Token/预算与价格 | 不在各 Agent 直接写第二份 LLM SDK/模型配置 |
-| **工具/数据层** | `backend/tools`、`mcp_servers`、Provider Adapters、RAG/SQL、PostgreSQL/Redis/对象存储 | 真实外部操作、业务读写、检索/SQL、安全范围与持久化 | MCP 不能绕过执行治理，Redis 缓存不是正式业务实体 |
-| **可观测层** | `backend/observability`、Trace、Prometheus、Grafana | 结构化日志、跨请求 Trace、指标、告警、成本/业务结果诊断 | 不让异步观测失败吞掉核心业务错误；不写敏感信息进指标 label |
-| **横向治理** | `backend/security`、评测中心、CI/测试、发布与文档 | AuthN/RBAC/IDOR/租户、Golden Eval、模型/Prompt 审批、幂等与质量门禁 | 不是某一个 Agent 的私有实现；不能用模型分数抵消 P0 安全失败 |
+| **工具/数据层** | `backend/tools`、`mcp_servers`、Provider Adapter、领域 Repository、PostgreSQL/Redis/对象存储 | 原子外部调用、存储读写、协议适配与数据隔离 | MCP 不绕过执行治理；RAG/SQL 业务逻辑归领域层而非全部归 Tool |
+| **可观测层** | `backend/observability`、Trace、Prometheus、Grafana | 跨接入、编排、领域、执行、模型、数据层的日志、Trace、指标与告警 | 不让异步观测失败吞掉核心业务错误；不写敏感信息进指标 label |
+
+**横向治理职责**：`backend/security`、评测中心、CI/测试、发布与文档分别提供 AuthN/RBAC/IDOR/租户、Golden Eval、Prompt/模型审批、幂等与质量门禁。治理不属于某一个 Agent 的私有实现，也不得以模型综合分数抵消 P0 安全失败。
 
 本层的专门标准：[RBAC/租户授权](../auth/authorization-standard.md)、[RAG](../domains/rag.md)、[模型供应商](../governance/model-provider-runtime.md)、[模型预算](../governance/llm-budget-billing.md)、[统一评测](../evaluation/evaluation-governance.md)、[Tool/Skill/MCP](../development/tool-skill-guide.md)、[Prompt](../prompt/architecture.md)、[Trace](../observability/trace-model.md)、[Grafana](../observability/grafana-guide.md)。
 
@@ -87,6 +89,6 @@ flowchart LR
 
 同一请求中 Trace 和安全/预算/评测按需横切多个节点；“工具层/数据层”代表服务边界而非所有数据操作都需要 Tool。RAG 上传/索引可走 Celery，旅游 V2 行程编辑可走独立 REST 路径，不能把这些路径强制塞进主 Agent 图。
 
-**开发放置规则**：新 API 进接入层；新跨步骤业务策略进 Domain/Workflow；原子外部调用进 Tool/Adapter；厂商/模型绑定进 DB 模型配置；公共超时/熔断进 Runtime；用量/成本进平台治理；检索文档生命周期进 RAG 域；权限/评测/观测随其事实源实现，不在每个领域复制。
+**开发放置规则**：新 API 进接入层；新跨步骤执行协调进 Workflow，领域规则与业务状态进 Domain/Application；原子外部调用进 Tool/Adapter；厂商/模型绑定进 DB 模型配置；公共超时/熔断进 Runtime；用量/成本进平台治理；检索文档生命周期进 RAG 域；权限/评测/观测随其事实源实现，不在每个领域复制。
 
 **架构变动验收**：至少提供真实调用路径图、入口/消费者清单、权限与失败路径、关键 Schema、Trace、受影响测试和回滚；不根据“七层标准”批量搬包。

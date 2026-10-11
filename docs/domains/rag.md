@@ -35,14 +35,18 @@ flowchart TD
   META --> CHUNK[类型感知 ChunkStrategyRouter / Parent + Leaf]
   CHUNK --> EMB[EmbeddingStage / 去重缓存]
   EMB --> CAND[Candidate Vector + Chunk Store + BM25]
-  CAND --> PUB[审核/发布 CAS -> Active Generation]
-  PUB --> SEARCH[授权查询可见版本]
+  CAND --> PUB[候选存储发布 CAS -> 已提交 generation]
+  PUB --> AUDIT{内容审核状态}
+  AUDIT -->|普通/免审| ACTIVE[registry active]
+  AUDIT -->|近重复| PENDING[registry pending_review]
+  PENDING -->|审核 approve| ACTIVE
+  ACTIVE --> SEARCH[按授权与审核状态过滤的检索]
 ```
 
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
-- 解析与文档策略：`backend/rag/preprocessing/parser.py`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
+- 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
 - 元数据：`metadata_schema.py::UnifiedMetadata/DecisionEnvelope`、taxonomy 与当前源文档/chunk contract 为事实源。必要检索键至少保持可溯源 doc/chunk/source、KB/部门/权限、版本/代次等已有字段；具体必填性按 schema 检查，不从本段临时发明字段。
-- 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选索引未发布不得对用户可见；`publish_candidate` 存在注册 CAS 提交点，提交前失败清理候选、旧版可用；提交后失败需续跑幂等收尾，**不能把已提交发布随意回滚或直接标 active**。
+- 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。
 - 状态机：草稿/审核/active/deprecated/deleted 的合法迁移由现有 lifecycle/review 服务管理。正式删除需连同向量、BM25、文档及注册元数据按现有路径处理。重试、覆盖、同名不同内容和文件质量缺陷必须有可复现证据。
 - Embedding/model 变更需核对维度、模型版本、索引兼容与重建策略；未经兼容检查不能用旧向量宣称新模型检索准确。
 
@@ -70,8 +74,8 @@ flowchart LR
 | RAG-02 | SHA 去重、同名新版本、跨 KB 隔离与并发上传有确定结果 |
 | RAG-03 | 文档类型策略正确；Chunk parent/leaf、表格/QA/长文边界及 metadata 可复查 |
 | RAG-04 | 元数据 taxonomy/schema 和 LLM fallback 的来源、版本、耗时可追溯 |
-| RAG-05 | 索引部分失败不会提前显示 active；发布前候选不可见，失败旧版仍可检索 |
-| RAG-06 | 发布 CAS 冲突与提交点后失败可恢复；重建/删除不留悬挂向量或孤儿 Chunk |
+| RAG-05 | 索引发布前候选不可见；已发布但 `pending_review` 的文档仍不得越过审核过滤；故障恢复遵循代次提交点 |
+| RAG-06 | 代次 CAS 冲突与提交点后失败可恢复；审核批准只变更 registry 状态并刷新过滤缓存，不重复发布 |
 | RAG-07 | dense/BM25、RRF、rerank、引用/拒答在对应 Golden 集达到有效门禁 |
 | RAG-08 | 精确 ID、跨文档、表格、无答案、过期信息及非法问题覆盖 |
 | RAG-09 | 同租户越权、跨租户/部门/KB 搜索、缓存命中均不得泄漏 |

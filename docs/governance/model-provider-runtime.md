@@ -9,7 +9,7 @@
 | **Provider Driver**（代码） | OpenAI 兼容/专用协议，流式、Embedding、rerank、超时和 Tool Calling 适配 | `backend/infra/llm/providers/`、`backend/infra/llm/models.py` |
 | **Provider Instance**（数据库） | 实例 ID、driver、base_url、网络范围、服务能力、是否启用、加密凭据 | `backend/infra/llm/registry_store.py`、`backend/services/model_config.py`、供应商表/迁移 |
 | **Model**（数据库） | 模型名称、provider_id、model_kind、能力、上下文窗口、输入输出限制、价格关联 | 模型注册表 DB、`backend/infra/llm/models.py` |
-| **Model Role**（数据库覆盖 + 代码定义） | `general_chat` 等用途对应的模型及运行策略，Embedding/rerank 独立匹配索引 | `backend/config/model_roles.py`、DB 绑定、`registry_store.py` |
+| **Model Role**（数据库覆盖 + 代码定义） | 例如已注册的 `main`、`doc`、`embedding` 等 role 对应模型及运行策略，Embedding/rerank 独立匹配索引 | `backend/config/model_roles.py`、DB 绑定、`registry_store.py` |
 | **Secret / Runtime Snapshot** | 授权的密钥解密、热更新快照、失败时旧值保留及可观测来源 | `backend/infra/llm/credentials.py`、`registry_store.py` |
 
 **数据库是用户配置的持久事实源，代码定义的是合法角色、Provider 驱动及安全约束**，进程快照是热路径投影，不是另一套可任意改写的配置真相。代码默认值和角色继承是兼容/缺省语义，不可无审计地把未登记或无凭据的模型当作健康可用模型。
