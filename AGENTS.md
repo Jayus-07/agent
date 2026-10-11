@@ -51,6 +51,10 @@
 | Trace 与 Span、脱敏和版本归因               | [trace-model.md](docs/observability/trace-model.md) |
 | Prometheus / Grafana 和告警               | [grafana-guide.md](docs/observability/grafana-guide.md) |
 | Prompt 发布、热更新及回滚                    | [prompt/architecture.md](docs/prompt/architecture.md) |
+| 供应商模型登记/角色绑定/DB 热更新          | [model-provider-runtime.md](docs/governance/model-provider-runtime.md) |
+| RBAC/IDOR/租户/资源级授权                 | [authorization-standard.md](docs/auth/authorization-standard.md) |
+| RAG 上传、切分、索引、检索和证据             | [rag.md](docs/domains/rag.md) |
+| 各功能评测、Golden、Release Gate          | [evaluation-governance.md](docs/evaluation/evaluation-governance.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
