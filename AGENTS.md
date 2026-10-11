@@ -29,7 +29,7 @@
 - SQL 使用参数化、只读权限、授权表范围和现有安全校验；不得绕过或降级为宽权限执行。
 - 有副作用的 Tool 经过现有 Governance、确认/审批和幂等机制。
 - LLM、Prompt 版本、用量和计费使用统一链路，不在调用点重复实现。
-- 外部失败须显式返回错误或按既有契约降级；不得吞异常、伪造成功或静默丢任务。
+- Tool/Provider 失败先区分传输、执行、业务结果及任务终态；按当前用户目标动态判硬依赖，执行 [失败与降级规范](docs/architecture/failure-degradation.md)，不得吞异常、伪造成功或静默丢任务。
 - 关键链路保留必要的结构化日志与 Trace；敏感数据不得写入日志。
 
 ## 按需读取
@@ -40,6 +40,8 @@
 | Router、LangGraph、Runtime、SSE、Checkpoint  | [ai-runtime.md](docs/architecture/ai-runtime.md)                                                                                 |
 | Provider、凭据和跨域服务关系                 | [domain-service-map.md](docs/architecture/domain-service-map.md)                                                                 |
 | 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md)                                                                      |
+| Tool/Provider 异常、失败分级与降级           | [failure-degradation.md](docs/architecture/failure-degradation.md)                                                                 |
+| 文档标准、同步责任与交付                    | [documentation-standard.md](docs/development/documentation-standard.md)                                                               |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |

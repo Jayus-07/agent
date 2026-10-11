@@ -35,3 +35,22 @@ python -m pytest backend/tests/<受影响路径> -q --no-cov
 ## 交付记录
 
 报告实际命令、通过/失败/跳过数量、耗时、未运行范围及原因。T0/T1/T2 的局部通过不等于全量或生产验收通过。
+## 失败与降级的回归矩阵
+
+涉及 Tool、Provider、MCP、Agent 交接或 Reporter 时，在受影响链路上覆盖 [失败规范 F-01～F-12](../architecture/failure-degradation.md)，优先验证**用户可感知终态**而不只是底层函数返回：
+
+| 改动 | 最小足够的测试（按需要升级） |
+| --- | --- |
+| Tool adapter / Schema | T1：HTTP 200 但业务 failed、empty、非法格式、成功数据；T2：Skill/Workflow 消费边界 |
+| SafeToolExecutor / Tool Governance | T2：连接/读超时、重试预算、熔断/舱满、鉴权/租户、写操作禁止重投；共享调用方 |
+| Domain Agent / Supervisor / Reporter | T1+T2：普通请求允许 DEGRADED；同一工具遇到用户硬约束 BLOCKED；内部异常 FAILED；前端/SSE 与终态一致 |
+| 退款/预订/其它副作用 | T2：用户确认、幂等键、结果未知 IN_DOUBT、重复提交不重复生效、跨租户拒绝 |
+| Prompt/Router/LLM 路由选择 | T2：候选白名单、低置信度澄清、业务失败不被模型生成成功；必要时隔离集成测试 |
+
+推荐既有入口：`backend/tests/tool_runtime/test_governance.py`、`backend/tests/travel/test_tool_failure_policy.py`、`backend/tests/skills/test_tool_contract_boundary.py`。先检查项目实际测试列表及 fixture，路径不是覆盖已足够的证明。生产真实 Provider、端到端浏览器以及真实 LLM 评测仅在依赖就绪且风险需要时运行。
+
+## 旧测试清理与测试证据
+
+旧测试过期时先建立**旧契约 → 当前事实源 → 替代测试 → 覆盖证据**的映射：确认功能/接口已废弃，替代用例能捕捉关键回归，再删除或迁移原用例；不要只因慢、红或重复就删掉。按风险拆分快慢测试集；T1 先跑单模块，T2 扩展跨层消费者，T3 仅发布门禁/明确要求触发。
+
+验收记录至少包括：Git commit/ref、测试命令、用例范围、PASS/FAIL/SKIP、耗时、缺少的服务/凭据、是否真实 Provider、相关 Trace 或 API 响应证据。不能从一条 HTTP 200 或一次定向 pytest PASS 推导全链路生产就绪。
