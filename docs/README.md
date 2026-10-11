@@ -11,6 +11,10 @@
 | [governance/model-provider-runtime.md](governance/model-provider-runtime.md) | DB 驱动供应商、模型、角色、凭据与热更新 | 管理模型注册和供应商时 |
 | [evaluation/evaluation-governance.md](evaluation/evaluation-governance.md) | 全业务域 Golden、Runner、质量门禁与评测有效性 | 修改评测集/发布门禁时 |
 | [auth/authorization-standard.md](auth/authorization-standard.md) | RBAC、权限点、IDOR、租户/资源级授权 | 权限、资源查询、管理端操作时 |
+| [contracts/api-event-lifecycle.md](contracts/api-event-lifecycle.md) | 主 Chat SSE、REST/WS、终态、重放、兼容开发契约 | 新 API、SSE、WS 或断线恢复变化 |
+| [architecture/async-task-governance.md](architecture/async-task-governance.md) | Celery、队列路由、Admission/Lease、Retry/Recovery | 新异步任务或 Worker 故障 |
+| [governance/data-lifecycle.md](governance/data-lifecycle.md) | 正式数据/草案、版本 CAS、删除、备份恢复 | 表/数据流转/数据清理或迁移 |
+| [governance/memory-governance.md](governance/memory-governance.md) | L1/L2/L3 记忆、画像、冲突、更正与隔离 | 记忆和用户画像修改 |
 | [architecture/ai-runtime.md](architecture/ai-runtime.md) | 主图、域图接入、公共运行状态契约 | 修改 Router、LangGraph、SSE 或 Checkpoint |
 | [architecture/domain-service-map.md](architecture/domain-service-map.md) | 域服务、Provider、凭据和失败边界 | 新增或调整外部服务 |
 | [architecture/failure-degradation.md](architecture/failure-degradation.md) | Tool/Provider 失败分类、动态依赖、降级与阻断验收 | 修改外部调用或故障处理时 |
@@ -31,7 +35,7 @@
 | [operations/customer-service-runbook.md](operations/customer-service-runbook.md) | 客服 FAQ、RAG 降级和告警响应 | 运维客服问答链路 |
 | [operations/idempotency-runbook.md](operations/idempotency-runbook.md) | 副作用幂等账本与不确定交易的人工处置 | 处理副作用状态或账本异常 |
 | [auth/README.md](auth/README.md) | 网关身份、后端身份解析与授权边界 | 修改登录、身份头、会话或 RBAC |
-| [security/llm-data-handling.md](security/llm-data-handling.md) | 文档内容发送模型前的数据边界与合规核查项 | 修改文档解析、模型出口或 Trace 留存 |
+| [security/llm-data-handling.md](security/llm-data-handling.md) | AI 提示注入、敏感数据外发/脱敏与出站安全验收 | 修改文档解析、模型出口、Tool 或 Trace 留存 |
 
 ## 业务域
 
@@ -39,6 +43,7 @@
 - [客服](domains/customer-service.md)：客服域图、状态流转和人工坐席边界。
 - [RAG](domains/rag.md)：上传、切分、元数据、候选发布、索引生命周期、检索、引用和评测。
 - [SQL](domains/sql.md)：NL2SQL 执行链、安全校验和数据范围。
+- [选品与电商](domains/selection-ecommerce.md)：选品漏斗、商品/营销/供应链边界与写操作治理。
 
 ## 源码入口
 
