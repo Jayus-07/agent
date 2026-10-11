@@ -1,5 +1,10 @@
 name: RAG PR Smoke
 
+# 语义定位（2026-10-11 决策）：PR 短门禁 —— 固定 8 条用例（pr_smoke suite）
+# 的真实 API 检索评测，全部层级阈值达标才 PASS。同仓库 PR 才能取得
+# environment secrets；外部 Fork PR 的 run 无凭据，seed/probe 步骤显式
+# 失败（BLOCKED 语义），不会静默跳过也不会回退本地模型。
+
 on:
   pull_request:
     branches: [main, master]
@@ -42,8 +47,11 @@ jobs:
           while IFS= read -r path; do
             case "$path" in
               backend/rag/*|backend/evaluation/*|backend/infra/llm/*|backend/config/*|\
-              backend/orchestration/graph/*|backend/services/rag_server.py|backend/prompts/*|\
+              backend/orchestration/graph/*|backend/prompts/*|\
               backend/sql/migrations/*|data/docs/*|pyproject.toml|requirements-lock.txt|\
+              backend/app/api/routes/rag*.py|backend/app/api/routes/_rag_shared.py|\
+              backend/services/rag_server.py|backend/infra/mcp_client.py|\
+              scripts/seed_prompt_eval_db.py|scripts/seed_eval_model_bindings.py|\
               .github/workflows/rag_smoke.yml|.github/workflows/rag_regression.yml)
                 relevant=true
                 break
@@ -59,30 +67,9 @@ jobs:
     if: needs.detect-changes.outputs.relevant == 'true'
     name: RAG Smoke (8 cases)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      # PR 门禁使用可复现的离线检索模式，不调用生成模型或 LLM Judge。
-      ENV_MODE: local
-      EVAL_GATE: legacy
-      EVAL_SEMANTIC_SCORER: lexical
-      EVAL_TRIGGER: github_pr
-      EVAL_TRIGGERED_BY: github-actions-rag-smoke
-      EMBEDDING_MODEL_PATH: BAAI/bge-small-zh-v1.5
-      RERANKER_MODEL_PATH: BAAI/bge-reranker-base
-      RERANKER_DEVICE: cpu
-      VECTOR_PG_DIM: "512"
-      LANGFUSE_ENABLED: "false"
-      OBS_ANALYTICS_ENABLED: "false"
-      PYTHONUTF8: "1"
-      PGHOST: localhost
-      PGPORT: "5432"
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      MEMORY_PGDATABASE: agent_memory
-      BUSINESS_PGDATABASE: agent_business
-      VECTOR_PGDATABASE: agent_memory
-      RAG_STORES_PGDATABASE: agent_memory
-
+    # 受信任环境：与 prompt-eval 共用 environment secrets。
+    environment: prompt-eval
+    timeout-minutes: 40
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -97,6 +84,43 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
+    env:
+      # 真实 API 检索评测口径：DB API 模型（specialized binding），
+      # ENV_MODE=cloud；禁止本地 BGE / Ollama / 旧 env 凭据回退。
+      ENV_MODE: cloud
+      EVAL_GATE: legacy
+      EVAL_SEMANTIC_SCORER: lexical
+      EVAL_TRIGGER: github_pr
+      EVAL_TRIGGERED_BY: github-actions-rag-smoke
+      LANGFUSE_ENABLED: "false"
+      OBS_ANALYTICS_ENABLED: "false"
+      PYTHONUTF8: "1"
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
+      WORKFLOW_DB_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PROVIDER_ID: rag-eval-chat
+      PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
+      PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
+      PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
+      PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
+      PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
+      PROMPT_EVAL_TEST_EMBEDDING_MODEL: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS }}
+      PROMPT_EVAL_TEST_RERANK_PROVIDER_ID: rag-eval-rerank
+      PROMPT_EVAL_TEST_RERANK_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_RERANK_API_KEY }}
+      PROMPT_EVAL_TEST_RERANK_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_RERANK_BASE_URL }}
+      PROMPT_EVAL_TEST_RERANK_MODEL: ${{ vars.PROMPT_EVAL_TEST_RERANK_MODEL }}
+      SECRETS_ENCRYPTION_KEY: ${{ secrets.SECRETS_ENCRYPTION_KEY }}
 
     steps:
       - name: Checkout
@@ -109,47 +133,132 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-lock.txt
 
-      - name: Cache Hugging Face models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-rag-smoke-bge-small-reranker-base-v1
-          restore-keys: hf-rag-smoke-
-
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-lock.txt
 
-      - name: Prepare offline retrieval models
+      - name: Evaluation preflight
+        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
+
+      - name: Trim corpora to evaluation scope
         run: |
-          python - <<'PY'
-          from sentence_transformers import CrossEncoder, SentenceTransformer
+          # 与 rag_regression 同口径：业务知识库不进评测隔离库。
+          rm -rf data/docs/policy_general
+          ls data/docs/
 
-          SentenceTransformer("BAAI/bge-small-zh-v1.5")
-          CrossEncoder("BAAI/bge-reranker-base", device="cpu")
-          print("RAG smoke models ready")
-          PY
-
-      - name: Initialize isolated evaluation databases
+      - name: Initialize isolated evaluation database
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
+
+      - name: Seed DB API model bindings
+        run: python -m backend.scripts.seed_prompt_eval_db
+
+      - name: Verify bindings and probe real API
+        env:
+          EVAL_MEMORY_PGDATABASE: agent_memory_test
+        run: |
+          python scripts/seed_eval_model_bindings.py --verify --target-db agent_memory_test
+          python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test
 
       - name: Import baseline evaluation fixtures
         run: python -m backend.evaluation.import_fixture baseline
 
+      - name: Assert index completeness
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          import psycopg
+
+          expected_dims = int(os.getenv("PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS", "1024"))
+          conn = psycopg.connect(
+              host="localhost", port=5432, user="postgres", password="postgres",
+              dbname=os.environ["MEMORY_PGDATABASE"],
+          )
+          with conn.cursor() as cur:
+              cur.execute(
+                  "SELECT count(*), min(vector_dims(embedding)), "
+                  "max(vector_dims(embedding)) FROM rag_vectors "
+                  "WHERE collection = 'chroma' AND metadata->>'kb_id' = 'rag_eval_kb'"
+              )
+              n, dmin, dmax = cur.fetchone()
+          conn.close()
+          problems = []
+          if not n:
+              problems.append("kb=rag_eval_kb 向量数为 0（导入失败或空集合）")
+          if dmin != expected_dims or dmax != expected_dims:
+              problems.append(
+                  f"kb=rag_eval_kb 向量维度 {dmin}..{dmax} 与绑定声明 {expected_dims} 不一致"
+              )
+          for p in problems:
+              print(f"[assert] FAIL {p}")
+          if problems:
+              print("[assert] EVAL_INDEX_CHECK=failed —— 评测保持 BLOCKED")
+              sys.exit(1)
+          print(f"[assert] EVAL_INDEX_CHECK=passed vectors={n} dims={expected_dims}")
+          PY
+
       - name: Run RAG smoke evaluation
-        run: >-
-          python -m backend.evaluation.cli rag
-          --selection pr_smoke
-          --no-ragas
-          --no-resume
-          --triggered-by github-actions-rag-smoke
+        run: |
+          # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
+          set -o pipefail
+          python -u -m backend.evaluation.cli rag \
+            --selection pr_smoke \
+            --no-ragas \
+            --no-resume \
+            --triggered-by github-actions-rag-smoke 2>&1 | tee /tmp/eval-run.log
+          exit "$?"
+
+      - name: Collect API cost attribution
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import psycopg
+
+          try:
+              conn = psycopg.connect(
+                  host="localhost", port=5432, user="postgres", password="postgres",
+                  dbname=os.environ["MEMORY_PGDATABASE"],
+              )
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT model, provider, count(*), "
+                      "sum(coalesce(total_tokens, 0)), sum(coalesce(cost_usd, 0)) "
+                      "FROM llm_usage GROUP BY model, provider ORDER BY model"
+                  )
+                  rows = cur.fetchall()
+              conn.close()
+          except Exception as e:  # noqa: BLE001
+              print(f"[cost] llm_usage 查询失败: {type(e).__name__}: {e}")
+              raise SystemExit(0)
+          summary = [
+              {
+                  "model": r[0], "provider": r[1], "calls": r[2],
+                  "total_tokens": int(r[3] or 0), "cost_usd": round(float(r[4] or 0), 6),
+              }
+              for r in rows
+          ]
+          Path("data/eval_runs").mkdir(parents=True, exist_ok=True)
+          Path("data/eval_runs/llm_usage_summary.json").write_text(
+              json.dumps({"note": "隔离测试库账本，未同步生产计费", "usage": summary},
+                         ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
 
       - name: Upload RAG smoke report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rag-smoke-${{ github.run_id }}
-          path: data/eval_runs/
+          path: |
+            data/eval_runs/
+            /tmp/eval-run.log
           if-no-files-found: warn
           retention-days: 14
