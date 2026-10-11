@@ -148,16 +148,20 @@ def _server() -> RAGMCPServer:
 
 
 def test_get_stats_anonymous_denied(fake_registry, unbind):
+    # 返修3：未认证/越权 raise（不再返回错误 dict 被包装成协议成功）
+    import pytest
+
     _bind()
-    result = _server().call_tool("get_stats", {})
-    assert result["reason"] == "unauthorized"
-    assert "error" in result
+    with pytest.raises(PermissionError, match="未认证或授权失败"):
+        _server().call_tool("get_stats", {})
 
 
 def test_get_stats_non_admin_denied(fake_registry, unbind):
+    import pytest
+
     _bind(uid="sec_user", roles=("viewer",))
-    result = _server().call_tool("get_stats", {})
-    assert result["reason"] == "forbidden"
+    with pytest.raises(PermissionError, match="仅限管理员"):
+        _server().call_tool("get_stats", {})
 
 
 def test_get_stats_admin_sanitized(fake_registry, unbind):
@@ -188,10 +192,11 @@ def test_get_stats_admin_scope_excludes_other_kb(fake_registry, unbind):
 
 
 def test_list_documents_unauthorized_denied(fake_registry, unbind):
+    import pytest
+
     _bind()
-    result = _server().call_tool("list_documents", {})
-    assert result["reason"] == "unauthorized"
-    assert result["documents"] == []
+    with pytest.raises(PermissionError, match="未认证或授权失败"):
+        _server().call_tool("list_documents", {})
 
 
 def test_list_documents_scope_pushdown_and_path_stripped(fake_registry, unbind):

@@ -114,16 +114,19 @@ class TestKillSwitch:
 
     def test_mcp_disabled_unavailable(self, monkeypatch):
         """MCP 入口：kill switch 关闭 → unavailable（sql_query 与
-        list_tables 全部覆盖）。"""
+        list_tables 全部覆盖）。PR#27 返修3 后失败语义为协议级异常
+        （REST → ok:false；标准 MCP → isError:true），不再是错误 dict。"""
+        import pytest
+
         from mcp_servers.servers.sql import SQLMCPServer
 
         monkeypatch.setattr("backend.config.SQL_AGENT_ENABLED", False)
         server = SQLMCPServer()
         for tool_name in ("sql_query", "list_tables"):
-            out = server.call_tool(
-                tool_name, {} if tool_name == "list_tables"
-                else {"question": "查库存"})
-            assert out.get("reason") == "service_unavailable", tool_name
+            with pytest.raises(RuntimeError, match="service_unavailable"):
+                server.call_tool(
+                    tool_name, {} if tool_name == "list_tables"
+                    else {"question": "查库存"})
 
     def test_unavailable_is_not_permission_semantics(self):
         """不可用 ≠ 权限拒绝：error_type 不与权限语义混淆（§十四）。"""
@@ -376,12 +379,14 @@ class TestMcpChannelClosure:
 
     def test_mcp_sql_query_without_identity_denied(self):
         """MCP 通道无可信身份 → 权限门拒绝（不存在匿名 SQL），
-        且前置 precheck 保证不触发 LLM 生成。"""
+        且前置 precheck 保证不触发 LLM 生成。PR#27 返修3 后为协议级
+        PermissionError，不再以错误 dict 包装成协议成功。"""
+        import pytest
+
         from mcp_servers.servers.sql import SQLMCPServer
 
-        out = SQLMCPServer().call_tool("sql_query", {"question": "查销量"})
-        assert out.get("reason") == "permission_denied", out
-        assert "finance" not in json.dumps(out, ensure_ascii=False)
+        with pytest.raises(PermissionError, match="权限门拒绝"):
+            SQLMCPServer().call_tool("sql_query", {"question": "查销量"})
 
 
 # =====================================================
