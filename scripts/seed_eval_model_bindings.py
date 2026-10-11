@@ -245,68 +245,109 @@ def seed_from_env(target_db: str) -> int:
     return 0
 
 
-def verify(target_db: str) -> int:
-    """评测前校验：模型名 / Provider / 维度 / 凭据可用性。fail-closed。"""
-    import json
+def evaluate_bindings(
+    bindings: list[tuple],
+    credentials: dict[str, tuple],
+    *,
+    expected_dim: int,
+    decrypt,
+) -> tuple[list[str], list[str]]:
+    """纯函数裁决：绑定/凭据/维度校验（verify 的可测核心）。
 
-    expected_dim = int(os.getenv("VECTOR_PG_DIM", "1024"))
+    bindings: (role, provider_id, adapter, model_name, base_url, options, enabled)
+    credentials: {provider_id: (key_cipher|None, key_fingerprint|None)}
+    decrypt: callable(cipher) -> str（生产=decrypt_secret，测试可注入）
+
+    凭据按每个绑定**各自的 provider_id** 分别校验——CI seed 注册
+    rag-eval-embedding / rag-eval-rerank 等分离 Provider，不能硬编码单一
+    Provider ID。
+    返回 (summary_lines, problems)。
+    """
     problems: list[str] = []
     summary: list[str] = []
+    checked_providers: list[str] = []
+    roles_seen: set[str] = set()
+
+    for role, provider_id, adapter, model_name, base_url, options, enabled in bindings:
+        roles_seen.add(role)
+        checked_providers.append(provider_id)
+        if not enabled:
+            problems.append(f"{role}: binding 未启用")
+        if not model_name:
+            problems.append(f"{role}: 模型名为空")
+        if not base_url:
+            problems.append(f"{role}: base_url 为空")
+        if not provider_id:
+            problems.append(f"{role}: provider_id 为空")
+            continue
+        dims = (options or {}).get("dimensions")
+        summary.append(
+            f"{role}: model={model_name} provider={provider_id} "
+            f"adapter={adapter} dims={dims if dims is not None else 'default'}"
+        )
+        if role == "embedding" and dims is not None and int(dims) != expected_dim:
+            problems.append(
+                f"embedding 维度不匹配: binding dimensions={dims} "
+                f"vs 向量存储 VECTOR_PG_DIM={expected_dim}"
+            )
+
+    if not bindings:
+        problems.append("embedding/rerank: 无任何 specialized 绑定")
+    for required in ("embedding", "rerank"):
+        if required not in roles_seen:
+            problems.append(f"{required}: binding 缺失（RAG 检索评测必须双绑定）")
+
+    for provider_id in dict.fromkeys(checked_providers):
+        cipher, fingerprint = credentials.get(provider_id, (None, None))
+        if cipher is None:
+            problems.append(f"{provider_id}: 凭据缺失")
+            continue
+        try:
+            plain = decrypt(cipher)
+            ok = bool(plain)
+            decrypt_error = ""
+        except Exception as e:  # noqa: BLE001 — 解密失败必须阻断评测
+            ok = False
+            decrypt_error = type(e).__name__
+        if decrypt_error:
+            problems.append(f"{provider_id}: 凭据解密失败（{decrypt_error}）")
+        elif not ok:
+            problems.append(f"{provider_id}: 凭据解密为空")
+        else:
+            summary.append(f"credentials[{provider_id}]: 可解密 fingerprint={fingerprint}")
+    return summary, problems
+
+
+def verify(target_db: str) -> int:
+    """评测前校验：模型名 / Provider / 维度 / 凭据可用性。fail-closed。"""
+    expected_dim = int(os.getenv("VECTOR_PG_DIM", "1024"))
     conn = _connect(target_db)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT role, adapter, model_name, base_url, options, enabled "
-                "FROM llm_specialized_model_bindings WHERE role IN ('embedding','rerank')"
+                "SELECT role, provider_id, adapter, model_name, base_url, "
+                "options, enabled FROM llm_specialized_model_bindings "
+                "WHERE role IN ('embedding','rerank') ORDER BY role"
             )
-            bindings = {row[0]: row for row in cur.fetchall()}
-            for role in ("embedding", "rerank"):
-                row = bindings.get(role)
-                if row is None:
-                    problems.append(f"{role}: binding 缺失")
-                    continue
-                _r, adapter, model_name, base_url, options, enabled = row
-                if not enabled:
-                    problems.append(f"{role}: binding 未启用")
-                if not model_name:
-                    problems.append(f"{role}: 模型名为空")
-                if not base_url:
-                    problems.append(f"{role}: base_url 为空")
-                dims = (options or {}).get("dimensions")
-                summary.append(
-                    f"{role}: model={model_name} provider={PROVIDER_ID} "
-                    f"adapter={adapter} dims={dims if dims is not None else 'default'}"
+            bindings = cur.fetchall()
+            providers = [b[1] for b in bindings if b[1]]
+            if providers:
+                cur.execute(
+                    "SELECT provider_id, key_cipher, key_fingerprint "
+                    "FROM llm_provider_credentials WHERE provider_id = ANY(%s)",
+                    (providers,),
                 )
-                if role == "embedding" and dims is not None and int(dims) != expected_dim:
-                    problems.append(
-                        f"embedding 维度不匹配: binding dimensions={dims} "
-                        f"vs 向量存储 VECTOR_PG_DIM={expected_dim}"
-                    )
-            cur.execute(
-                "SELECT key_cipher, key_fingerprint FROM llm_provider_credentials "
-                "WHERE provider_id = %s",
-                (PROVIDER_ID,),
-            )
-            cred = cur.fetchone()
-            if cred is None:
-                problems.append(f"{PROVIDER_ID}: 凭据缺失")
+                credentials = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
             else:
-                decrypt_error = ""
-                try:
-                    from backend.shared.crypto import decrypt_secret
-
-                    ok = bool(decrypt_secret(cred[0]))
-                except Exception as e:  # noqa: BLE001 — 解密失败必须阻断评测
-                    ok = False
-                    decrypt_error = type(e).__name__
-                if decrypt_error:
-                    problems.append(f"{PROVIDER_ID}: 凭据解密失败（{decrypt_error}）")
-                elif not ok:
-                    problems.append(f"{PROVIDER_ID}: 凭据解密为空")
-                else:
-                    summary.append(f"credentials: 可解密 fingerprint={cred[1]}")
+                credentials = {}
     finally:
         conn.close()
+
+    from backend.shared.crypto import decrypt_secret
+
+    summary, problems = evaluate_bindings(
+        bindings, credentials, expected_dim=expected_dim, decrypt=decrypt_secret
+    )
 
     for line in summary:
         print(f"[verify] {line}")

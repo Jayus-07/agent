@@ -1,13 +1,21 @@
 name: RAG PR Smoke
 
-# 语义定位（2026-10-11 决策）：PR 短门禁 —— 固定 8 条用例（pr_smoke suite）
-# 的真实 API 检索评测，全部层级阈值达标才 PASS。同仓库 PR 才能取得
-# environment secrets；外部 Fork PR 的 run 无凭据，seed/probe 步骤显式
-# 失败（BLOCKED 语义），不会静默跳过也不会回退本地模型。
+# 触发与信任边界（2026-10-11 GPT 复核整改）：
+# - pull_request：只跑免费可信预检（路径检测 + E0 preflight），**不引用付费
+#   Secrets、不跑真实 API 评测**——同仓库未审核 PR 不获得付费凭据
+#   （prompt-eval environment 当前无 protection_rules，该收敛由触发器保证）。
+# - push(main) / workflow_dispatch：受信任入口（合并后代码或有写权限者人工
+#   触发），执行 DB API 模型口径的真实检索评测。
+# - 每日定时回归由 rag_regression.yml 承担（schedule + dispatch，无 PR 触发）。
+#
+# 语义定位：固定 8 条用例（pr_smoke suite）的真实检索评测，全部层级阈值
+# 达标才 PASS；检索评测与生成/Judge 评测（--judge/--ragas 显式 opt-in）分开。
 
 on:
   pull_request:
     branches: [main, master]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -37,35 +45,62 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # 手动触发没有 PR diff，按显式手动运行处理。
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          # 判定逻辑单一事实源在 .github/scripts/rag_smoke_path_filter.py，
+          # 正反触发回归测试见 tests/test_rag_smoke_path_filter.py。
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "RAG-related changes: true ($EVENT_NAME runs trusted path)"
             exit 0
           fi
+          relevant_output="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | python3 .github/scripts/rag_smoke_path_filter.py)"
+          echo "$relevant_output"
+          echo "$relevant_output" >> "$GITHUB_OUTPUT"
 
-          relevant=false
-          while IFS= read -r path; do
-            case "$path" in
-              backend/rag/*|backend/evaluation/*|backend/infra/llm/*|backend/config/*|\
-              backend/orchestration/graph/*|backend/prompts/*|\
-              backend/sql/migrations/*|data/docs/*|pyproject.toml|requirements-lock.txt|\
-              backend/app/api/routes/rag*.py|backend/app/api/routes/_rag_shared.py|\
-              backend/services/rag_server.py|backend/infra/mcp_client.py|\
-              scripts/seed_prompt_eval_db.py|scripts/seed_eval_model_bindings.py|\
-              .github/workflows/rag_smoke.yml|.github/workflows/rag_regression.yml)
-                relevant=true
-                break
-                ;;
-            esac
-          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+  # ── PR：免费可信预检（无付费 Secrets、无真实 API 调用）──────────────
+  rag-smoke-pr-static:
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.relevant == 'true'
+    name: RAG Smoke preflight (PR, no paid API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "RAG-related changes: $relevant"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
 
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-lock.txt
+
+      - name: Evaluation preflight (E0, free)
+        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
+
+      - name: Declare skipped real-API scope
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## RAG Smoke（真实 API 评测）= SKIPPED_UNTRUSTED_PR
+          同仓库 PR 不获得付费 API Secrets（prompt-eval environment 无
+          protection_rules，收敛由触发器保证）。真实评测在合并后由
+          push(main) / workflow_dispatch / 每日 Regression 执行。
+          本 Job 仅覆盖免费 E0 资产预检（suite/hash/case 完整性）。
+          EOF
+          echo "REAL_API_EVAL=SKIPPED_UNTRUSTED_PR"
+
+  # ── 受信任入口：main push / 手动 dispatch 才跑真实 API 评测 ─────────
   rag-smoke:
     needs: detect-changes
-    if: needs.detect-changes.outputs.relevant == 'true'
-    name: RAG Smoke (8 cases)
+    if: >-
+      needs.detect-changes.outputs.relevant == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    name: RAG Smoke (8 cases, real API)
     runs-on: ubuntu-latest
     # 受信任环境：与 prompt-eval 共用 environment secrets。
     environment: prompt-eval
@@ -143,15 +178,16 @@ jobs:
 
       - name: Trim corpora to evaluation scope
         run: |
-          # 与 rag_regression 同口径：业务知识库不进评测隔离库。
+          # 与 rag_regression 同口径：业务知识库不进评测隔离库
+          #（pipeline 全量 sync 会混入业务文档并触发 near-dup 交叉 HOLD）。
           rm -rf data/docs/policy_general
           ls data/docs/
 
       - name: Prepare migration compatibility database
         run: |
           # 对齐 prompt_eval 模式：004_readonly_role 等迁移要跨库操作
-          # agent_business；business 库不存在会让只读角色失败并连锁
-          # 导致 customer_service schema 缺失（006/082 连锁失败）。
+          # agent_business；库不存在会让只读角色失败并连锁导致
+          # customer_service schema 缺失（006/082 连锁失败）。
           python - <<'PY'
           import psycopg2
 
