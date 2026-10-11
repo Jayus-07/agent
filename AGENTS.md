@@ -46,6 +46,15 @@
 | 跨层 API、状态、安全和可观测契约           | [cross-cutting-contracts.md](docs/development/cross-cutting-contracts.md) |
 | 全仓审计与安全重构                      | [refactoring-playbook.md](docs/development/refactoring-playbook.md) |
 | 发布质量与上线门禁                      | [release-quality.md](docs/operations/release-quality.md) |
+| 三端前端、SSE、状态与共享组件               | [frontend-guide.md](docs/development/frontend-guide.md) |
+| 模型预算/价格/计费/对账                    | [llm-budget-billing.md](docs/governance/llm-budget-billing.md) |
+| Trace 与 Span、脱敏和版本归因               | [trace-model.md](docs/observability/trace-model.md) |
+| Prometheus / Grafana 和告警               | [grafana-guide.md](docs/observability/grafana-guide.md) |
+| Prompt 发布、热更新及回滚                    | [prompt/architecture.md](docs/prompt/architecture.md) |
+| 供应商模型登记/角色绑定/DB 热更新          | [model-provider-runtime.md](docs/governance/model-provider-runtime.md) |
+| RBAC/IDOR/租户/资源级授权                 | [authorization-standard.md](docs/auth/authorization-standard.md) |
+| RAG 上传、切分、索引、检索和证据             | [rag.md](docs/domains/rag.md) |
+| 各功能评测、Golden、Release Gate          | [evaluation-governance.md](docs/evaluation/evaluation-governance.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |

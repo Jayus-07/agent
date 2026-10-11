@@ -16,6 +16,8 @@
 
 事实源优先级：**实际代码/配置/Schema/迁移和通过的对应测试 → 现行跨域规范 → 领域说明 → 历史报告**。现有实现和目标规则冲突时**记录差距**，不要改写文档假称已实现，也不要以旧报告推翻当前代码。动态 Provider、Tool、Agent 数量及参数从注册表或实际配置读取。
 
+跨领域专项主责：`development/frontend-guide.md` 管三端前端；`governance/llm-budget-billing.md` 管额度、费用与对账；`observability/trace-model.md` 管 Trace 契约；`observability/grafana-guide.md` 管看板/告警；`prompt/architecture.md` 管 Prompt 生命周期；`development/tool-skill-guide.md` 管 Capability/Skill/Tool/MCP。专项文件只记录各自规范，公共权限/失败/测试仍链接既有权威文档，禁止复制。
+
 ## 2. 变更触发与维护人职责
 
 - 改 Router、Runtime、Agent/Skill/Tool、Tool Error/Fallback、身份、租户、SSE、数据模型时，同一变更更新**对应权威文档**和必要的守卫/契约测试；仅小型内部重构或普通 Bug、且公共行为不变时不强制修改文档。

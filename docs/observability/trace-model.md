@@ -93,3 +93,28 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - 持久化: `backend/observability/trace_store_pg.py`（PostgreSQL；SQLite 轨已于 2026-09-17 删除）
 - API: `backend/app/api/routes/observability.py`；DTO: `routes/_trace_dto.py`
 - 授权: `backend/app/api/routes/_trace_authz.py`
+
+## 开发时的 Span 生命周期与归因门禁
+
+本节是**跨服务开发约束**，不是所有旧 Span 字段现状的证明。入口、Router、LangGraph、Domain、Skill/Tool、LLM、RAG/SQL 和异步任务各自使用现有 Trace 接口，不能为某个域创建第二套不可关联的 Tracer。
+
+- 请求/任务创建 trace 时绑定由服务端验证的身份和归属；子请求/子图/任务用已有 parent、trace_id、span_id 关系传播，不能由浏览器或外部 Tool 回写别人的归属标签。
+- Span 至少明确开始、结束、真实耗时、执行状态、错误类别与合理的父子关系；异常、取消、超时和 fallback 同样必须收口。取消事件与业务副作用最终结果不同，不能当成功。
+- Router 要能解释选择层/候选目标；Tool 要能区分执行状态、业务状态和 DEGRADED；LLM 调用关联模型、prompt key/version、token/成本及成本事实状态。**字段名遵循现有 schema/埋点，不据本文硬增表。**
+- 同一请求可以调用同一 prompt key 多次；应在**调用级或节点级**追溯真实版本。现有 `backend/observability/prompt_trace.py` 的 trace-level `prompt_versions` 按 key 更新条目，不能仅凭这个汇总列表推断同一次 trace 中每次调用都用了同一版本；必要时审查具体调用侧追踪。
+- 当前 `backend/config/observability.py` 默认 `TRACE_DETAIL_LEVEL=full`；`backend/observability/redaction.py` 的掩码异常分支可能返回原文。这是必须审查的敏感数据边界，**不得把配置存在当作已安全**。任何写入/展示 prompt、question、SQL 或 token 计费身份的链路均须核对授权、最小采集、留存与脱敏失败策略。
+- Prometheus 做低基数聚合与告警；敏感逐请求明细保留在受控 Trace/用量 DB。Grafana 与 Trace 关联方式参见 [Grafana 规范](grafana-guide.md)。
+
+### 变更验收
+
+| 编号 | 必测情形 |
+| --- | --- |
+| TR-01 | 正常和失败各有完整父子 Span，无孤儿/悬挂 |
+| TR-02 | timeout/abort/fallback 与 Tool 业务失败不被记为同一种 success |
+| TR-03 | Prompt 发布/回滚期间同 key 多次调用可归因实际版本 |
+| TR-04 | model/provider/token/价格版本/估算状态与账单事实一致 |
+| TR-05 | Trace 列表、详情、children 下钻越权及跨租户不可见 |
+| TR-06 | PII 脱敏开关、异常分支、日志与管理端不泄露敏感字段 |
+| TR-07 | 断流或异步跨进程能根据父子/请求标识找回执行证据 |
+
+执行 T1/T2 定向验证，特别关注 `backend/tests/api/test_observability_trace_authz.py`、`backend/tests/observability/` 及对应真实跨层入口。浏览器页面打开不等于所有调用链 Trace 均可追溯。
