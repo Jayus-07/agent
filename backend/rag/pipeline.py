@@ -1521,11 +1521,13 @@ class RAGPipeline:
                         if self._doc_matches_filter(getattr(d, "metadata", {}), kb_scope)
                         and _authorized(d)
                     ]
-                # Batch 1A 返修：候选批量实时正向校验（黑名单 TTL/Redis 中断
-                # 窗口内的新下线/新待审/删除残留由此兜底）；内部 system_subject
-                # 对缺 doc_id 的存量 chunk 兼容放行，对客主体一律剔除。
+                # Batch 1A 返修 + 终轮：候选批量实时正向校验（黑名单 TTL/
+                # Redis 中断窗口内的新下线/新待审/删除残留由此兜底）。
+                # 缺 doc_id 豁免已关闭：system_subject 来自请求体、不可作为
+                # 受信系统证明（终轮问题3），对客与内部主体一律剔除；
+                # 存量缺 doc_id chunk 的修复路径是重索引（见审计报告 §10）。
                 visible = apply_review_visibility(
-                    kept, allow_missing_doc_id=bool(system_subject),
+                    kept, allow_missing_doc_id=False,
                     context="retrieve_knowledge:bm25")
                 for doc in visible:
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
@@ -1562,7 +1564,7 @@ class RAGPipeline:
                     if _authorized(doc):
                         allowed.append(doc)
                 visible = apply_review_visibility(
-                    allowed, allow_missing_doc_id=bool(system_subject),
+                    allowed, allow_missing_doc_id=False,
                     context="retrieve_knowledge:vector")
                 for doc in visible:
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)

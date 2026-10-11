@@ -394,8 +394,11 @@ class TestPipelineExits:
             p, "q", kb_id="kb", subject_type="employee", department="general")
         assert text.count("正文") == 1, "四类不可见状态全部剔除"
 
-    def test_retrieve_knowledge_internal_missing_doc_id_compat(
+    def test_internal_system_subject_missing_doc_id_also_dropped(
             self, monkeypatch):
+        """终轮问题3：system_subject 来自请求体不可信，内部主体豁免已关闭——
+        缺 doc_id（无法确认生命周期）即使带 system_subject 也一律剔除。
+        存量数据修复路径 = 重索引（见审计报告 §10），不改检索放行语义。"""
         from backend.rag import pipeline as module
 
         h = _Harness()
@@ -404,7 +407,7 @@ class TestPipelineExits:
         text = module.RAGPipeline.retrieve_knowledge(
             p, "q", kb_id="kb", subject_type="employee", department="general",
             system_subject="travel_domain")
-        assert text.count("正文") == 1 and "缺 doc_id 存量" in text
+        assert text.count("正文") == 1 and "缺 doc_id 存量" not in text
 
     def test_retrieve_knowledge_fail_closed(self, monkeypatch):
         from backend.rag import pipeline as module
@@ -576,3 +579,134 @@ class TestAppSearchEndpoint:
         assert resp.status_code == 503
         body = resp.json()
         assert "拒绝" in body.get("detail", "")
+
+
+# ────────── 终轮返修：审核/下线/删除后答案缓存失效 + system_subject 豁免关闭 ──────────
+
+class _ReviewStub:
+    """review_service 的最小 stub 集（只 mock 外部边界）。"""
+
+    def __init__(self, status="pending_review", kb_id="kb_a"):
+        self.status = status
+        self.kb_id = kb_id
+
+    def registry(self):
+        st = self
+
+        class R:
+            def get_by_doc_id(self, doc_id):
+                return {"doc_id": doc_id, "status": st.status,
+                        "kb_id": st.kb_id, "file_path": "t://x.md"}
+
+            def update_status_by_doc_id(self, doc_id, new_status):
+                return 1
+
+            def mark_deleted_by_doc_id(self, doc_id):
+                return 1
+
+        return R()
+
+    def pipeline(self):
+        class Store:
+            def delete_all_collections_by_doc_id(self, doc_id):
+                pass
+
+            def delete(self, where=None):
+                pass
+
+            def get(self, where=None):
+                return {"ids": []}
+
+        class ChunkStore:
+            def delete_by_doc_id(self, doc_id):
+                pass
+
+            def count_by_doc_id(self, doc_id):
+                return 0
+
+        class P:
+            vectordb = Store()
+            doc_db = Store()
+            chunk_store = ChunkStore()
+            bm25_store = None
+
+            def remove_documents_from_bm25(self, ids, file_paths=None):
+                pass
+
+        return P()
+
+
+class TestAnswerCacheInvalidatedOnReview:
+    """终轮问题2：pending 审批/拒绝、删除后，同 KB 答案缓存必须整体失效，
+    否则已缓存答案会绕过审核过滤继续返回不可见内容。"""
+
+    def _patch_cache(self, monkeypatch):
+        calls = []
+
+        class FakeCache:
+            def invalidate_kb(self, kb_id):
+                calls.append(kb_id)
+
+        monkeypatch.setattr(
+            "backend.rag.answer_cache.get_answer_cache", lambda: FakeCache())
+        return calls
+
+    def test_approve_invalidates_kb_cache(self, monkeypatch):
+        from backend.rag.indexing.review_service import review_pending_doc
+
+        calls = self._patch_cache(monkeypatch)
+        result = review_pending_doc(
+            "d1", "approve", registry=_ReviewStub().registry(),
+            pipeline=_ReviewStub().pipeline())
+        assert result.get("ok"), result
+        assert calls == ["kb_a"], "approve 后必须失效该 KB 答案缓存"
+
+    def test_reject_invalidates_kb_cache(self, monkeypatch):
+        from backend.rag.indexing import review_service as rs
+
+        calls = self._patch_cache(monkeypatch)
+        monkeypatch.setattr(rs, "_get_chunk_store",
+                            lambda: _ReviewStub().pipeline().chunk_store)
+        result = rs.review_pending_doc(
+            "d1", "reject", registry=_ReviewStub().registry(),
+            pipeline=_ReviewStub().pipeline())
+        assert result.get("ok"), result
+        assert calls == ["kb_a"], "reject 后必须失效该 KB 答案缓存"
+
+    def test_delete_cascade_invalidates_kb_cache(self, monkeypatch):
+        from backend.rag.indexing import review_service as rs
+
+        calls = self._patch_cache(monkeypatch)
+        monkeypatch.setattr(rs, "_get_chunk_store",
+                            lambda: _ReviewStub().pipeline().chunk_store)
+        result = rs.delete_document_cascade(
+            "d1", registry=_ReviewStub().registry(),
+            pipeline=_ReviewStub().pipeline())
+        assert result.get("ok"), result
+        assert calls == ["kb_a"], "删除后必须失效该 KB 答案缓存"
+
+
+class TestSystemSubjectExemptClosed:
+    """终轮问题3：system_subject 来自请求体、不可作为可信来源，
+    缺 doc_id 的存量豁免必须对内部主体同样关闭。"""
+
+    @pytest.fixture(autouse=True)
+    def _no_kb_authz(self, monkeypatch):
+        """屏蔽 KB 授权矩阵（本类只验证审核可见性维度）。"""
+        monkeypatch.setattr(
+            "backend.rag.authz.retrieval_authorized_kbs",
+            lambda *a, **k: None)
+
+    def test_internal_system_subject_no_missing_doc_id_exempt(
+            self, monkeypatch):
+        from backend.rag import pipeline as module
+
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        p = _FakeContextPipeline([_doc("ok"), "缺 doc_id 存量"])
+        text = module.RAGPipeline.retrieve_knowledge(
+            p, "q", kb_id="kb", subject_type="employee", department="general",
+            system_subject="travel_domain")
+        assert "缺 doc_id 存量" not in text, (
+            "system_subject 不可信：缺 doc_id 文档不得放行")
+        assert text.count("正文") == 1

@@ -814,14 +814,19 @@ class PostgresDocumentRegistry(DocumentRegistry):
         return [dict(r) for r in rows]
 
     def list_visible_doc_ids(self, doc_ids, now: str | None = None) -> set[str]:
-        """批量正向可见性校验（Batch 1A 返修）：仅返回当前可见的 doc_id。
+        """批量正向可见性校验（Batch 1A 返修 + 终轮加固）：仅返回当前可见的 doc_id。
 
-        可见 = status='active' 且未过期（expire_at 为空或 > now，与
-        list_expired 同一口径）。一条 SQL 完成候选集合（去重后通常 ≤ top_k）
-        的实时校验，不经过任何缓存——黑名单 TTL/跨进程信号中断期间新下线、
-        新待审（publish 提交 pending_review）与已删除残留由此兜底。调用方
-        必须把查询异常视为可见性事实源不可用（fail-closed），不得用过期
-        安全状态继续放行。
+        **doc_id 非唯一**（本表主键是 file_path，同一 doc_id 可存在多行——
+        跨环境残影/多版本），因此可见性按 doc_id 整体裁决，与黑名单
+        （list_by_statuses/list_expired 的 doc_id 集合）严格同口径：
+          - 任一行 pending_review/deprecated → 整体不可见；
+          - 任一 active 行已过期（expire_at <= now）→ 整体不可见；
+          - 至少一个 active 且未过期的行 → 可见（deleted 行不影响，
+            避免把合法文档全部过滤）。
+        一条 SQL 完成候选集合（去重后通常 ≤ top_k）的实时校验，不经过任何
+        缓存——黑名单 TTL/跨进程信号中断期间新下线、新待审（publish 提交
+        pending_review）与已删除残留由此兜底。调用方必须把查询异常视为
+        可见性事实源不可用（fail-closed），不得用过期安全状态继续放行。
         """
         ids = {d for d in (doc_ids or []) if d}
         if not ids:
@@ -834,16 +839,29 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 conn,
                 f"""SELECT doc_id FROM {self._table}
                    WHERE doc_id IN ({placeholders})
-                     AND status = 'active'
-                     AND (expire_at IS NULL OR expire_at > %s)""",
-                tuple(ids) + (now,),
+                   GROUP BY doc_id
+                   HAVING COUNT(*) FILTER (
+                              WHERE status IN ('pending_review', 'deprecated')) = 0
+                      AND COUNT(*) FILTER (
+                              WHERE status = 'active'
+                                AND expire_at IS NOT NULL AND expire_at <= %s) = 0
+                      AND COUNT(*) FILTER (
+                              WHERE status = 'active'
+                                AND (expire_at IS NULL OR expire_at > %s)) > 0""",
+                tuple(ids) + (now, now),
             ).fetchall()
         return {r["doc_id"] for r in rows}
 
-    def archive_expired(self, now: str | None = None) -> int:
+    def archive_expired(self, now: str | None = None) -> list[str]:
+        """归档过期文档，返回受影响 kb_id 列表（Batch 1A 终轮：供答案缓存失效）。
+
+        历史返回 int（归档行数）；现改为 kb_id 去重列表——调用方以列表真值
+        判断是否有归档发生，并据此失效对应 KB 的答案缓存，防止过期文档的
+        已缓存答案继续返回。
+        """
         expired = self.list_expired(now=now)
         if not expired:
-            return 0
+            return []
         doc_ids = list({d["doc_id"] for d in expired})
         with self._lock, self._conn() as conn:
             for doc_id in doc_ids:
@@ -854,4 +872,4 @@ class PostgresDocumentRegistry(DocumentRegistry):
                     "WHERE doc_id = %s AND status = 'active'",
                     (doc_id,),
                 )
-        return len(doc_ids)
+        return sorted({d.get("kb_id", "") for d in expired if d.get("kb_id")})

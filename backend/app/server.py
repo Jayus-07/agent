@@ -475,8 +475,17 @@ async def eager_init_lifecycle_scan():
             reg = DocumentRegistry()
             reg.ensure_expire_at_column()  # 兼容老数据库
             archived = reg.archive_expired()
-            if archived > 0:
-                logger.info(f"[Startup] 文档生命周期扫描：归档 {archived} 个过期文档")
+            # Batch 1A 终轮：归档即过期文档下线，必须失效对应 KB 答案缓存，
+            # 防止已缓存答案绕过可见性过滤继续返回。
+            if archived:
+                try:
+                    from backend.rag.answer_cache import get_answer_cache
+
+                    for kb in archived:
+                        get_answer_cache().invalidate_kb(kb)
+                except Exception as exc:  # noqa: BLE001 - 失效失败靠缓存 TTL 兜底
+                    logger.warning(f"[Startup] 归档后答案缓存失效失败: {exc}")
+                logger.info(f"[Startup] 文档生命周期扫描：归档 {len(archived)} 个过期文档")
             else:
                 logger.info("[Startup] 文档生命周期扫描：无过期文档")
         except Exception as e:
