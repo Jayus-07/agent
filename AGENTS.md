@@ -46,9 +46,23 @@
 | 跨层 API、状态、安全和可观测契约           | [cross-cutting-contracts.md](docs/development/cross-cutting-contracts.md) |
 | 全仓审计与安全重构                      | [refactoring-playbook.md](docs/development/refactoring-playbook.md) |
 | 发布质量与上线门禁                      | [release-quality.md](docs/operations/release-quality.md) |
+| 三端前端、SSE、状态与共享组件               | [frontend-guide.md](docs/development/frontend-guide.md) |
+| 模型预算/价格/计费/对账                    | [llm-budget-billing.md](docs/governance/llm-budget-billing.md) |
+| Trace 与 Span、脱敏和版本归因               | [trace-model.md](docs/observability/trace-model.md) |
+| Prometheus / Grafana 和告警               | [grafana-guide.md](docs/observability/grafana-guide.md) |
+| Prompt 发布、热更新及回滚                    | [prompt/architecture.md](docs/prompt/architecture.md) |
+| 供应商模型登记/角色绑定/DB 热更新          | [model-provider-runtime.md](docs/governance/model-provider-runtime.md) |
+| RBAC/IDOR/租户/资源级授权                 | [authorization-standard.md](docs/auth/authorization-standard.md) |
+| RAG 上传、切分、索引、检索和证据             | [rag.md](docs/domains/rag.md) |
+| 各功能评测、Golden、Release Gate          | [evaluation-governance.md](docs/evaluation/evaluation-governance.md) |
+| API / SSE / WS 兼容与断线恢复              | [api-event-lifecycle.md](docs/contracts/api-event-lifecycle.md) |
+| Celery/队列/Lease/恢复与幂等               | [async-task-governance.md](docs/architecture/async-task-governance.md) |
+| 数据版本/备份/删除/恢复                   | [data-lifecycle.md](docs/governance/data-lifecycle.md) |
+| L1/L2/L3 记忆冲突、画像和隔离               | [memory-governance.md](docs/governance/memory-governance.md) |
+| 选品、电商商品/供应链/营销能力              | [selection-ecommerce.md](docs/domains/selection-ecommerce.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
-| 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
+| 旅游、客服、RAG、SQL、选品业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
 
 普通 Bug 优先阅读相关源码与测试。只阅读当前任务需要的文档，不要求加载整个 README 或 docs；历史报告不作为默认上下文。
 

@@ -71,3 +71,15 @@
 执行顺序：**路由候选与合法性 → 授权/确认/幂等 → Tool Runtime 调用 → 传输与业务输出校验 → 域内 Failure Policy → Reporter/API/SSE**。不允许让 LLM 直接解释 HTML 502 页、把 `{"status":"failed"}` 看成检索证据，或让 MCP Server 自建绕过治理的重试与凭据路径。细节以 [统一失败规范](../architecture/failure-degradation.md) 为准；写操作异常的人工处置见 [幂等运行手册](../operations/idempotency-runbook.md)。
 
 合并前至少覆盖成功、业务失败（含 HTTP 200 + failed）、无结果、权限拒绝、Tool 超时、动态硬依赖和（有副作用时）未知效果，按 [测试策略](testing-guide.md) 选择必要 T1/T2；无真实 Provider 不能将真实链路标记为已验收。
+
+## Governance 闸门和版本一致性验收补充
+
+**声明权威**是 `backend/orchestration/router/capabilities.yaml`；派生校验/执行分工在 `backend/core/tool_governance/registry.py`、`guard.py`、`result_validator.py` 与 `backend/core/tool_runtime/`。Tool Registry（静态定义/查重）与 Capability Registry（可路由能力）是不同职责，不可为“统一名称”合并。
+
+- 注册新 Tool/Capability 时核查候选路由、Schema、operation、risk_level、confirmation_policy、rate limit、预算、超时、熔断、幂等与领域约束；禁止独立 MCP Server 重做且绕过这些门禁。
+- 调用前的身份/资源/租户授权与用户确认均由服务端执行。写操作的批准请求、实际执行参数 fingerprint、idempotency key、未知结果查询须能闭环；失去治理服务不允许用更宽的备用路径继续写。
+- `ToolLifecycle` 的 `BLOCKED/CLARIFICATION_REQUIRED/PENDING_CONFIRMATION/PENDING_APPROVAL/READY/EXECUTING/SUCCEEDED/EMPTY/DEGRADED/FAILED/TIMEOUT` 与 `ToolStatus` 并非同一枚举；业务完成仍取决于 Domain Failure Policy。
+- **失败结果**：`result_validator.py` 的合法封套 `success/empty/degraded/failed` 不应被二次封装误判；详见 [失败规范](../architecture/failure-degradation.md)。
+- 审批和调度要能用 Trace 查看 `capability、tool_spec/version、operation、risk、confirm/approval、执行状态、业务状态、fallback/retries`（字段以现有实现为准）；未经权限审查不得将原始参数或密钥写入 Trace。
+
+新/改 Tool 需按既有测试补 `候选内/候选外、Schema 非法、401/403、两种用户依赖强度、HTTP 200+failed、degraded、批准后参数篡改、重复写/超时未知、MCP 边界`。仅在项目实际接入的执行通路测试；未测真实 Provider 与外部 MCP 应写 NOT VERIFIED。指标和告警见 [Grafana 规范](../observability/grafana-guide.md)。

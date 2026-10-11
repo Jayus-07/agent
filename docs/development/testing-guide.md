@@ -56,3 +56,7 @@ python -m pytest backend/tests/<受影响路径> -q --no-cov
 旧测试过期时先建立**旧契约 → 当前事实源 → 替代测试 → 覆盖证据**的映射：确认功能/接口已废弃，替代用例能捕捉关键回归，再删除或迁移原用例；不要只因慢、红或重复就删掉。按风险拆分快慢测试集；T1 先跑单模块，T2 扩展跨层消费者，T3 仅发布门禁/明确要求触发。
 
 验收记录至少包括：Git commit/ref、测试命令、用例范围、PASS/FAIL/SKIP、耗时、缺少的服务/凭据、是否真实 Provider、相关 Trace 或 API 响应证据。不能从一条 HTTP 200 或一次定向 pytest PASS 推导全链路生产就绪。
+
+## AI 质量评测与工程测试的分工
+
+T0–T3 负责**工程风险选择**；Golden/Suite/Runner/Live/Release Gate 负责**业务与模型质量**。完整规则、按领域指标、版本与 PASS/FAIL/INVALID 判定见 [全项目功能评测治理](../evaluation/evaluation-governance.md)。修改检索、SQL、Agent、Prompt、供应商或客服状态时必须按影响选择对应质量 Suite 和权限/异常断言；CI 工程测试通过不等于 AI 质量评测已通过。

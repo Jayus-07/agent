@@ -21,3 +21,7 @@
 - 修改登录/刷新/登出或角色管理：核对 `backend/app/api/routes/auth_local.py` 及其 session/RBAC 测试。
 - 网关配置和服务入口见 `docs/architecture/system-overview.md`、`docs/operations/commands.md`。
 - 网关鉴权探针：`scripts/smoke_gateway_auth.sh`；相关测试位于 `backend/tests/api/`、`backend/tests/security/`。
+
+## RBAC 与资源权限开发标准
+
+各业务域统一采用 [RBAC、资源级授权与租户隔离规范](authorization-standard.md) 的五级判定：认证 → 角色 → 权限点 → 资源 ownership → 数据范围。特别是同一租户的不同用户之间的 IDOR、跨租户统计/列表/WS 泄漏，以及管理员跨租户作用域，不可只靠网关或前端校验。业务调用前先查 `backend/security/authorization.py` 的真实权限映射和各资源 repository；这份导航不再建立第二份角色表。
