@@ -31,7 +31,7 @@ flowchart TD
 | 用户目标 | 完成、允许降级、BLOCKED、内部 FAILED | Domain Failure Policy | 把硬依赖失败伪装为完整成功 |
 | 展示 | 普通成功、标明缺失的部分结果、明确拒绝/失败 | Reporter / API / SSE | SSE `done` 或界面成功状态掩盖业务失败 |
 
-结构化 Tool 成功使用 `{"status":"success","data":...}`，失败使用 `{"status":"failed","error":...}`；Skill/Workflow 按 `backend/shared/tool_envelope.py` 和当前实现解析。Tool Governance 侧另有 `backend/core/tool_governance/result_validator.py` 的 `success / empty / failed` 判定。两种数据形状在**既有适配边界**转换，不自行扩展第三种通用封套。返回纯文本的 Skill 不强行 JSON 包装，但也不能把 HTML 错误页、文本“失败”或缺证据视作正常事实。
+结构化 Tool 成功使用 `{"status":"success","data":...}`，失败使用 `{"status":"failed","error":...}`；Skill/Workflow 按 `backend/shared/tool_envelope.py` 和当前实现解析。Tool Governance 侧 `backend/core/tool_governance/result_validator.py` 使用同一个 `ToolResultEnvelope` 表示 `success / empty / degraded / failed`；其中 `degraded` 是合法的部分成功状态，必须保留数据、来源与降级信息，不得映射为完全成功或失败。不同执行层的结果语义只在**既有适配边界**转换，不自行扩展第三种通用封套。返回纯文本的 Skill 不强行 JSON 包装，但也不能把 HTML 错误页、文本“失败”或缺证据视作正常事实。
 
 ## 3. 失败分类与处理矩阵
 
