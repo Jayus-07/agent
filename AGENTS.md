@@ -46,6 +46,7 @@
 | 跨层 API、状态、安全和可观测契约           | [cross-cutting-contracts.md](docs/development/cross-cutting-contracts.md) |
 | 全仓审计与安全重构                      | [refactoring-playbook.md](docs/development/refactoring-playbook.md) |
 | 发布质量与上线门禁                      | [release-quality.md](docs/operations/release-quality.md) |
+| CI 与评测环境规范                        | [ci-evaluation-environment.md](docs/operations/ci-evaluation-environment.md) |
 | 三端前端、SSE、状态与共享组件               | [frontend-guide.md](docs/development/frontend-guide.md) |
 | 模型预算/价格/计费/对账                    | [llm-budget-billing.md](docs/governance/llm-budget-billing.md) |
 | Trace 与 Span、脱敏和版本归因               | [trace-model.md](docs/observability/trace-model.md) |
