@@ -5,7 +5,7 @@
 ## 1. 事实源与已有实现
 
 - **模块清单**：`backend/evaluation/models.py` 的 `ModuleKind / MODULE_KINDS` 为统一评测框架的模块源；CLI/前端不能各复制列表。当前包含 `planner, rag, cs, sql, e2e, travel, travel-provider, travel-commerce, travel-booking`。记忆、Tool/Router、模型供应商及其它专项可有独立评测脚本，**不能假称都已接入 ModuleKind**。
-- **数据集**：`backend/evaluation/datasets/<module>/` 下 `cases.jsonl`、`manifest.json` 和可能的 `suites/<selection>.json`；使用 `backend/evaluation/dataset/loader.py` 和 `fixture_catalog.py`，不可随便复制一个新 loader。历史 deprecated 文件不可进入运行基线。
+- **数据集**：`backend/evaluation/datasets/<module>/` 常以 `cases.jsonl` 组织，具有版本治理的模块另提供 `manifest.json` 和可选的 `suites/<selection>.json`；使用 `backend/evaluation/dataset/loader.py` 和 `fixture_catalog.py`，不可随便复制一个新 loader。**目前 `travel-commerce` 与 `travel-booking` 只有 `cases.jsonl`，并无 manifest/hash 保护；loader 对缺失 manifest 存在兼容默认版本路径。这属于待补齐的评测资产缺口，不能宣称已锁版。** 历史 deprecated 文件不可进入新运行基线。
 - **Runner**：`backend/evaluation/runners/`、`runners_config.py`；CLI `python -m backend.evaluation.cli`，实际选项先 `--help` 核对。离线评测、真实 Provider 探针和浏览器/API 端到端是不同覆盖层。
 - **发布裁决**：`backend/evaluation/release_gate.py` 已区分 `PASS / FAIL / INVALID`。基础设施坏了、凭据缺失、没有有效数据属于 `INVALID`，不能当作“模型质量差”；必要指标缺失又不能以 0 条通过冒充 `PASS`。
 - **样本校验**：`backend/evaluation/dataset/validator.py` 的某些分支仍只接受 planner/rag/cs，而模块注册已扩展到其它域。此为**需要定向审查的潜在契约漂移**；不得据此把所有新域数据标记合法或直接删除验证。
