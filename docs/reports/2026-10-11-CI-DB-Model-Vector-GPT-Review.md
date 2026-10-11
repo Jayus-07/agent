@@ -166,11 +166,26 @@ pytest tests/evaluation/test_release_gate_tier_samples.py → 5 passed
 
 | Run | 触发 | 结果 | 说明 |
 | --- | --- | --- | --- |
+| **[38154543463](https://github.com/Jayus-07/agent/actions/runs/38154543463)** | **workflow_dispatch（PR 分支 + regression suite，--strict-gate）** | **✅ SUCCESS（10m23s）** | **最终验收：strict-gate 端到端**——`EVAL_GATE_VERDICT=PASS` 完整 Gate 裁决输出 + probe ✓ + 索引断言 `vectors=169 dims=1024` ✓ + 96.5%（smoke 100%/hard 90%），CLI exit 0。修复过程：[38153508314](https://github.com/Jayus-07/agent/actions/runs/38153508314) 因参数行字面换行损坏 argparse 失败（7190316 修复） |
 | **[38150689331](https://github.com/Jayus-07/agent/actions/runs/38150689331)** | **workflow_dispatch（PR 分支 + regression suite）** | **✅ SUCCESS（10m53s）** | **GitHub 上首次真实 API 评测全绿**：preflight ✓（29 用例/git_sha=4a6fd18/suite_hash=5976e7ea01fd621e）→ `EVAL_MODEL_BINDING_CHECK=passed` ✓ → `EVAL_MODEL_PROBE=passed` ✓ → 导入 169 chunks ✓ → `EVAL_INDEX_CHECK=passed vectors=169 dims=1024` ✓ → 评测 **96.5%（28/29），smoke 100%（19/19，阈 95%）、hard 90%（9/10，阈 70%）**，CLI exit 0（job 绿灯即分层门禁全过）。结果与本机隔离验证（§5）完全一致。Artifact：`rag-regression-38150689331` |
 | [38150412116](https://github.com/Jayus-07/agent/actions/runs/38150412116) | pull_request | ✅ SUCCESS | PR 免费预检：路径检测 + E0 preflight + **19 项定向回归测试**（最终收口 1），无付费调用 |
 | [38146905426](https://github.com/Jayus-07/agent/actions/runs/38146905426) | pull_request | ✅ SUCCESS（整改后语义） | 受信任入口收敛首轮实证：真实评测 job skipped |
 | [38149897120](https://github.com/Jayus-07/agent/actions/runs/38149897120) | workflow_dispatch | ✗ BLOCKED | Key 未配齐时 Seed 显式 RuntimeError（过程记录；配齐后同链路即绿） |
 | [38141724006](https://github.com/Jayus-07/agent/actions/runs/38141724006) | pull_request（旧策略） | ✗ init_db 连锁失败 | agent_business 预建缺失 → 已修（5337858） |
+
+**CI 真实指标（run 38150689331 Artifact 实测，与本机报告分开记录）**：
+
+| 指标 | CI 实测 | 本机隔离实测（§5） | 阈值 |
+| --- | --- | --- | --- |
+| 通过率 | 96.5%（28/29） | 96.5%（28/29） | ≥95%（smoke 层） |
+| 召回率@5 | 0.8968 | 0.8968 | 0.8 |
+| **MRR** | **0.8810** | 0.9048 | 0.75 |
+| **Top-1 准确率** | **0.8095** | 0.8571 | 0.8 |
+| 拒答准确率 / 误答率 | 1.0000 / 0.0000 | 1.0000 / 0.0000 | 0.85 / 0.1 |
+
+两次运行的通过率与 recall@5 一致，MRR/Top-1 存在环境级微小差异（CI runner vs 本机 CPU 的检索排序波动，均达标）。失败反例同为 RC-039。
+
+**strict-gate report.json 回放验证（零额外 API 费用，GPT 要求 6）**：CI run 38150689331 与本机隔离评测的两份真实 `report.json` 回放 `_strict_gate_exit_code` 均 **exit 0**（REPLAY-OK）；修复前的 P0 场景（分层达标但完整 Gate 不达标）由 `tests/evaluation/test_cli_strict_gate_exit.py` 5 项构造测试锁定。
 
 **受信任执行入口证据（GPT 复核第 3 项）**：
 - `gh api repos/Jayus-07/agent/environments/prompt-eval` 实测 `protection_rules: []`、`deployment_branch_policy: null`（整改前基线）——整改前同仓库未审核 PR 的 job 可直接获得付费 Secrets（run 38142127992 日志中 secret 值被 mask 即读到的实证）。
