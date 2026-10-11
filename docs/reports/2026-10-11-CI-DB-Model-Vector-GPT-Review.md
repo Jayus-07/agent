@@ -162,23 +162,23 @@ pytest tests/evaluation/test_release_gate_tier_samples.py → 5 passed
 
 ## 8. GitHub Actions 真实结果
 
-- 旧失败证据：https://github.com/Jayus-07/agent/actions/runs/38086882164（14 连败最后一次）
-- 本 PR 触发的 workflow run：见 PR checks（`RAG PR Smoke` 将随 PR 自动触发；`RAG Regression` 可 workflow_dispatch）。
-- **依赖前提（需要仓库设置）**：新 workflow 需要以下 Secrets/Vars（`prompt-eval` environment）。**未配置时 run 会以 BLOCKED 失败（seed/probe 步骤显式报错），这是预期行为，不视为代码缺陷**：
+**Run 记录（HEAD 演进）：**
 
-| 类型 | 名称 | 说明 |
-|---|---|---|
-| Secret | `PROMPT_EVAL_TEST_API_KEY` | 聊天/生成模型 API Key（eval_gen） |
-| Secret | `PROMPT_EVAL_TEST_BASE_URL` | 聊天模型 base_url |
-| Secret | `PROMPT_EVAL_TEST_EMBEDDING_API_KEY` | Embedding API Key |
-| Secret | `PROMPT_EVAL_TEST_EMBEDDING_BASE_URL` | Embedding base_url |
-| Secret | `PROMPT_EVAL_TEST_RERANK_API_KEY` | Rerank API Key |
-| Secret | `PROMPT_EVAL_TEST_RERANK_BASE_URL` | Rerank base_url |
-| Secret | `SECRETS_ENCRYPTION_KEY` | 凭据加密主密钥（Fernet，与本地 .env 同口径） |
-| Var | `PROMPT_EVAL_TEST_MODEL` / `PROMPT_EVAL_TEST_EMBEDDING_MODEL` / `PROMPT_EVAL_TEST_RERANK_MODEL` | 模型名（如 qwen3.7-text-embedding） |
-| Var | `PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS` | 绑定维度（如 1024，probe 实测校验） |
+| Run | HEAD | 结果 | 说明 |
+|---|---|---|---|
+| [38141724006](https://github.com/Jayus-07/agent/actions/runs/38141724006) | 3153624 | ✗ init_db 连锁失败 | 路径检测 ✓、preflight ✓、语料裁剪 ✓；`004_readonly_role` 跨库依赖 agent_business 库缺失 → agent_readonly 失败 → 006 customer_service schema 缺失 → 082 连锁。**已修**（5337858 补回 prompt_eval 模式的预建步骤） |
+| [38142127992](https://github.com/Jayus-07/agent/actions/runs/38142127992) | 5337858 | ✗ **BLOCKED（预期语义）** | 预建步骤 ✓、init_db ✓（全迁移通过）；Seed 步骤 `RuntimeError: rerank 配置不完整`——`PROMPT_EVAL_TEST_RERANK_API_KEY` 未配置时**显式失败，不静默跳过、不回退本地模型、不伪造 PASS**（fail-closed 设计验证通过） |
 
-注：`PROMPT_EVAL_TEST_API_KEY/BASE_URL/EMBEDDING_*` 中部分 prompt_eval workflow 已在使用（如已配置无需重复）；新增的是 RERANK 三项与 `SECRETS_ENCRYPTION_KEY`（若未配）。
+**真实评测 Run 待一个前置**：在 `prompt-eval` environment 配置 `PROMPT_EVAL_TEST_RERANK_API_KEY`（值=与 embedding 同账号的 DashScope/阿里云 MaaS API Key）。配置后在 PR 页手动 dispatch `RAG Regression` / 重跑 `RAG PR Smoke` 即可核对真实质量结果（隔离库已验证同链路 exit 0 / PASS 96.5%，见 §5）。
+
+**Secrets/Vars 配置状态（prompt-eval environment）**：
+
+| 项 | 状态 |
+|---|---|
+| PROMPT_EVAL_TEST_API_KEY / BASE_URL / EMBEDDING_API_KEY / EMBEDDING_BASE_URL / SECRETS_ENCRYPTION_KEY | ✅ 已存在（10-01 配置，prompt_eval 在用） |
+| PROMPT_EVAL_TEST_EMBEDDING_MODEL=qwen3.7-text-embedding / PROMPT_EVAL_TEST_MODEL=doubao-seed-2.0-mini | ✅ 已存在 |
+| PROMPT_EVAL_TEST_RERANK_MODEL=qwen3.7-text-rerank / PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS=1024 / PROMPT_EVAL_TEST_RERANK_BASE_URL | ✅ 本 PR 施工时已配置（非敏感项） |
+| **PROMPT_EVAL_TEST_RERANK_API_KEY** | ⬜ **待用户在 GitHub 设置提供**（唯一缺失项） |
 
 ---
 
@@ -194,7 +194,7 @@ pytest tests/evaluation/test_release_gate_tier_samples.py → 5 passed
 5. RC-039（采购合同付款节点）语义召回不足——真实检索水位案例，属检索质量优化任务，不在本轮范围。
 
 **BLOCKED/UNVERIFIED 清单**：
-- GitHub Actions 真实 API Run：BLOCKED on Secrets 配置（用户在 GitHub 设置提供后触发）。
+- GitHub Actions 真实 API Run：**BLOCKED on `PROMPT_EVAL_TEST_RERANK_API_KEY` 配置**（用户在 GitHub 设置提供后 dispatch 即可核对；缺失时 run 以 RuntimeError 显式 BLOCKED——该语义已在 run 38142127992 实证）。隔离库同链路已验证 exit 0 / PASS 96.5%（§5）。
 - 精确 API 费用数值：UNVERIFIED（账本缺口，见 §6）。
 
 **合并建议：READY_FOR_REVIEW**（代码修复有真实评测+测试证据；CI 真实 Run 待 Secrets 配置后触发核对，属部署侧前置条件而非代码缺陷；本轮不自动合并，等待 GPT 复核）。
