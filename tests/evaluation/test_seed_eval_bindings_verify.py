@@ -20,6 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
+import seed_eval_model_bindings as seed_bindings  # noqa: E402
 from seed_eval_model_bindings import evaluate_bindings  # noqa: E402
 
 
@@ -133,3 +134,51 @@ def test_no_bindings_fails():
     """无任何 specialized 绑定 → FAIL（评测保持 BLOCKED）。"""
     summary, problems = evaluate_bindings([], {}, expected_dim=1024, decrypt=_decrypt_ok)
     assert any("无任何 specialized 绑定" in p for p in problems)
+
+
+def test_seed_from_env_updates_provider_id_on_binding_conflict(monkeypatch):
+    """重跑 env seed 时把旧 binding 指向本次凭据所在的 Provider。"""
+    from backend.shared import crypto
+
+    class _Cursor:
+        def __init__(self):
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+
+    class _Connection:
+        def __init__(self):
+            self.cur = _Cursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cur
+
+        def commit(self):
+            self.committed = True
+
+    conn = _Connection()
+    monkeypatch.setattr(seed_bindings, "_connect", lambda _db: conn)
+    monkeypatch.setattr(crypto, "encrypt_secret", lambda key: f"enc:{key}")
+    monkeypatch.setattr(crypto, "fingerprint", lambda _key: "fp")
+    monkeypatch.setattr(crypto, "last4", lambda _key: "1234")
+    monkeypatch.setenv("SPECIALIZED_API_KEY", "test-key")
+
+    assert seed_bindings.seed_from_env("isolated_test_db") == 0
+    assert conn.committed
+    binding_upserts = [
+        (sql, params) for sql, params in conn.cur.calls
+        if "INSERT INTO llm_specialized_model_bindings" in sql
+    ]
+    assert len(binding_upserts) == 2
+    for sql, params in binding_upserts:
+        assert "ON CONFLICT (role) DO UPDATE SET" in sql
+        assert "provider_id = EXCLUDED.provider_id" in sql
+        assert params[1] == seed_bindings.PROVIDER_ID

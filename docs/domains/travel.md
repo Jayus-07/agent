@@ -1,5 +1,9 @@
 # 旅游域
 
+## V2 目标产品设计
+
+- [旅游平台 V2 产品总设计书 v1.0-RC1](travel-v2/product-design.md)：AI 规划、行程编辑与版本、真实 Provider 双入口、PC/手机交互和验收目标；**这是待与后端改造对账的产品设计基线，不代表所有功能已经实现**。前端仅先执行 FE-0 审计，后续施工按验收批次推进。
+
 ## 入口与当前链路
 
 - 对话规划域图注册于 backend/travel/register.py，图构建在 backend/travel/graph_builder.py。

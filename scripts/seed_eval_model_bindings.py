@@ -226,6 +226,7 @@ def seed_from_env(target_db: str) -> int:
                      options, enabled, updated_by)
                 VALUES (%s, %s, %s, %s, %s, %s, true, %s)
                 ON CONFLICT (role) DO UPDATE SET
+                    provider_id = EXCLUDED.provider_id,
                     adapter = EXCLUDED.adapter,
                     model_name = EXCLUDED.model_name,
                     base_url = EXCLUDED.base_url,

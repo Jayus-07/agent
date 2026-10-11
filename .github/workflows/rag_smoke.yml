@@ -6,7 +6,7 @@ name: RAG PR Smoke
 #   （prompt-eval environment 当前无 protection_rules，该收敛由触发器保证）。
 # - push(main) / workflow_dispatch：受信任入口（合并后代码或有写权限者人工
 #   触发），执行 DB API 模型口径的真实检索评测。
-# - 每日定时回归由 rag_regression.yml 承担（schedule + dispatch，无 PR 触发）。
+# - 完整回归由 rag_regression.yml 的 workflow_dispatch 承担（无 PR/定时触发）。
 #
 # 语义定位：固定 8 条用例（pr_smoke suite）的真实检索评测，全部层级阈值
 # 达标才 PASS；检索评测与生成/Judge 评测（--judge/--ragas 显式 opt-in）分开。
@@ -45,6 +45,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
           # 判定逻辑单一事实源在 .github/scripts/rag_smoke_path_filter.py，
           # 正反触发回归测试见 tests/test_rag_smoke_path_filter.py。
           if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
@@ -52,8 +53,23 @@ jobs:
             echo "RAG-related changes: true ($EVENT_NAME runs trusted path)"
             exit 0
           fi
-          relevant_output="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
-            | python3 .github/scripts/rag_smoke_path_filter.py)"
+
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "::error::Pull request base or head SHA is missing; cannot determine changed paths."
+            exit 1
+          fi
+
+          changed_paths="$RUNNER_TEMP/rag-smoke-changed-paths.txt"
+          if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
+            echo "::error::Unable to determine changed paths for the RAG smoke gate."
+            exit 1
+          fi
+
+          relevant_output="$(python3 .github/scripts/rag_smoke_path_filter.py < "$changed_paths")"
+          if [[ "$relevant_output" != "relevant=true" && "$relevant_output" != "relevant=false" ]]; then
+            echo "::error::RAG path filter returned an invalid result: $relevant_output"
+            exit 1
+          fi
           echo "$relevant_output"
           echo "$relevant_output" >> "$GITHUB_OUTPUT"
 
@@ -83,14 +99,16 @@ jobs:
       - name: Evaluation preflight (E0, free)
         run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
 
-      - name: Targeted regression tests (19, free)
+      - name: Targeted regression tests (21, free)
         run: |
           # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
-          # API Secrets；不扩大为全量 pytest）。共 19 项：
-          #   7 路径过滤正反例 + 7 verify 绑定/凭据/维度 + 5 gate 三态。
+          # API Secrets；不扩大为全量 pytest）。共 21 项：
+          #   7 路径过滤正反例 + 8 绑定/凭据/维度 + 5 gate 三态 +
+          #   1 workflow gate 与 Billing V2 汇总契约。
           python -m pytest tests/test_rag_smoke_path_filter.py \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
+            tests/evaluation/test_rag_ci_workflow_contracts.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope
@@ -98,8 +116,9 @@ jobs:
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ## RAG Smoke（真实 API 评测）= SKIPPED_UNTRUSTED_PR
           同仓库 PR 不获得付费 API Secrets（prompt-eval environment 无
-          protection_rules，收敛由触发器保证）。真实评测在合并后由
-          push(main) / workflow_dispatch / 每日 Regression 执行。
+          protection_rules，收敛由触发器保证）。真实 Smoke 在合并后由
+          push(main) / workflow_dispatch 执行；完整 Regression 仅由其
+          workflow_dispatch 按需运行。
           本 Job 仅覆盖免费 E0 资产预检（suite/hash/case 完整性）。
           EOF
           echo "REAL_API_EVAL=SKIPPED_UNTRUSTED_PR"
@@ -110,7 +129,7 @@ jobs:
     if: >-
       needs.detect-changes.outputs.relevant == 'true' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    name: RAG Smoke (8 cases, real API)
+    name: RAG Smoke Evaluation (8 cases, real API)
     runs-on: ubuntu-latest
     # 受信任环境：与 prompt-eval 共用 environment secrets。
     environment: prompt-eval
@@ -300,7 +319,7 @@ jobs:
               with conn.cursor() as cur:
                   cur.execute(
                       "SELECT model, provider, count(*), "
-                      "sum(coalesce(total_tokens, 0)), sum(coalesce(cost_usd, 0)) "
+                      "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
                       "FROM llm_usage GROUP BY model, provider ORDER BY model"
                   )
                   rows = cur.fetchall()
@@ -311,7 +330,8 @@ jobs:
           summary = [
               {
                   "model": r[0], "provider": r[1], "calls": r[2],
-                  "total_tokens": int(r[3] or 0), "cost_usd": round(float(r[4] or 0), 6),
+                  "total_tokens": int(r[3] or 0),
+                  "billed_cost_cny": round(float(r[4] or 0), 6),
               }
               for r in rows
           ]
@@ -334,3 +354,60 @@ jobs:
             /tmp/eval-run.log
           if-no-files-found: warn
           retention-days: 14
+
+  rag-smoke-gate:
+    name: RAG Smoke (8 cases)
+    needs: [detect-changes, rag-smoke-pr-static, rag-smoke]
+    # 该 Job 必须在依赖失败或被跳过后运行；下面的步骤会严格校验结果，不会无条件放行。
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate change detection and evaluation result
+        shell: bash
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          RAG_RELEVANT: ${{ needs.detect-changes.outputs.relevant }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_PREFLIGHT_RESULT: ${{ needs.rag-smoke-pr-static.result }}
+          SMOKE_RESULT: ${{ needs.rag-smoke.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "::error::RAG change detection did not succeed (result: $DETECT_RESULT)."
+            exit 1
+          fi
+
+          if [[ "$RAG_RELEVANT" == "false" ]]; then
+            if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "skipped" ]]; then
+              echo "::error::Non-RAG changes expected both smoke jobs to be skipped (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+              exit 1
+            fi
+            echo "NOT_APPLICABLE: no RAG-related changes; the required gate is satisfied without running the RAG evaluation."
+            exit 0
+          fi
+
+          if [[ "$RAG_RELEVANT" != "true" ]]; then
+            echo "::error::RAG relevance output is missing or invalid (value: $RAG_RELEVANT)."
+            exit 1
+          fi
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_PREFLIGHT_RESULT" != "success" || "$SMOKE_RESULT" != "skipped" ]]; then
+              echo "::error::RAG pull requests require successful free preflight and must not run real API evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+              exit 1
+            fi
+            echo "SUCCESS: RAG pull request passed free preflight; real API evaluation is limited to trusted events."
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" != "push" && "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "::error::Unsupported event for the RAG Smoke required gate: $EVENT_NAME"
+            exit 1
+          fi
+          if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "success" ]]; then
+            echo "::error::Trusted RAG changes require a successful real 8-case evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+            exit 1
+          fi
+
+          echo "SUCCESS: trusted RAG changes passed the real 8-case evaluation."

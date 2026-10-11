@@ -278,7 +278,7 @@ jobs:
               with conn.cursor() as cur:
                   cur.execute(
                       "SELECT model, provider, count(*), "
-                      "sum(coalesce(total_tokens, 0)), sum(coalesce(cost_usd, 0)) "
+                      "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
                       "FROM llm_usage GROUP BY model, provider ORDER BY model"
                   )
                   rows = cur.fetchall()
@@ -289,7 +289,8 @@ jobs:
           summary = [
               {
                   "model": r[0], "provider": r[1], "calls": r[2],
-                  "total_tokens": int(r[3] or 0), "cost_usd": round(float(r[4] or 0), 6),
+                  "total_tokens": int(r[3] or 0),
+                  "billed_cost_cny": round(float(r[4] or 0), 6),
               }
               for r in rows
           ]
