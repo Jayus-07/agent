@@ -254,7 +254,7 @@ jobs:
             --selection "$EVAL_SELECTION" \
             --no-ragas \
             --no-resume \
-            --triggered-by github-actions-rag-regression 2>&1 | tee /tmp/eval-run.log
+            --strict-gate \n            --triggered-by github-actions-rag-regression 2>&1 | tee /tmp/eval-run.log
           exit "$?"
 
       - name: Collect API cost attribution
