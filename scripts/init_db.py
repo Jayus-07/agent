@@ -156,6 +156,12 @@ MIGRATION_TARGETS: dict[str, str] = {
     "088_memory_profile_scope_verification.sql": "memory",
     # L3 Celery 提取 outbox：与 user turn 同事务写入，broker 丢投由扫描器恢复。
     "089_memory_extraction_outbox.sql": "memory",
+    # L2 turn 收据：同一幂等键不重复写消息或提取 outbox。
+    "090_memory_turn_idempotency.sql": "memory",
+    # L2 LangChain 消息：可恢复 human/ai/tool 类型及工具调用元数据。
+    "091_chat_message_langchain_metadata.sql": "memory",
+    # L2 会话归属：租户和用户双重隔离，旧数据仅按 auth.users 权威映射。
+    "092_chat_session_tenant_scope.sql": "memory",
     # Phase3 STOP B（2026-09-24）：tasks PENDING Recovery 列 + 索引。
     # tasks 表演进权威在 backend/tasks/schema.sql（ensure_schema 幂等），
     # 本文件为 db-migrate 流程的实库执行留痕，语句全部 IF NOT EXISTS 幂等。

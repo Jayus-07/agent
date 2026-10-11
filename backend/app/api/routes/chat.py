@@ -34,7 +34,10 @@ from backend.config.settings import (
 
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
-from backend.app.api.stream_resume import get_stream_registry
+from backend.app.api.stream_resume import (
+    DuplicateStreamIdError,
+    get_stream_registry,
+)
 from backend.infra.llm.rate_limiter import require_rate_limit
 from backend.observability.metrics import (
     StreamLatencyTracker,
@@ -94,6 +97,21 @@ def _resolve_request_id(raw: str | None) -> str:
     if raw and raw != "default":
         return raw
     return uuid.uuid4().hex
+
+
+def _duplicate_stream_response() -> JSONResponse:
+    """同一 request_id 已有流时拒绝重启，客户端应续播原流。"""
+    from backend.app.exceptions import _http_payload
+
+    envelope = ErrorEnvelope(
+        code=ErrorCode.IDEMPOTENCY_CONFLICT,
+        retryable=False,
+        handoff_available=False,
+        message="该请求已提交，请使用原 request_id 恢复流，或使用新的 request_id 发起新请求。",
+        source="http",
+        details={"reason": "STREAM_ALREADY_EXISTS"},
+    )
+    return JSONResponse(status_code=409, content=_http_payload(envelope))
 
 
 def _aq_put_nowait(aq: asyncio.Queue, evt) -> None:
@@ -330,10 +348,14 @@ async def chat_stream(
 
     # —— F2 Resume Protocol：注册流记录，producer 全量事件入有界缓冲，——
     # —— 客户端断开只脱离订阅，服务端跑完供 resume 重放。——
-    record = get_stream_registry().create(
-        stream_id=request_id, session_id=req.session_id,
-        user_id=user_id, tenant_id=ident.tenant_id or "",
-    )
+    try:
+        record = get_stream_registry().create(
+            stream_id=request_id, session_id=req.session_id,
+            user_id=user_id, tenant_id=ident.tenant_id or "",
+        )
+    except DuplicateStreamIdError:
+        # 不能覆盖原恢复记录后再启动第二次 Runner，否则会丢失原流并重复写记忆。
+        return _duplicate_stream_response()
 
     # —— 握手事件：发送 node_labels 映射表 + 服务端 request_id（#14 回传）——
     # meta 也入注册表（seq=1）：客户端在 meta 前断开时 resume 可补发
@@ -404,7 +426,10 @@ async def chat_stream(
                 model=req.model or "",
                 domain_hint=req.domain_hint or "",
                 tenant_id=ident.tenant_id,
-                idempotency_key=(r.headers.get("Idempotency-Key") or "").strip(),
+                idempotency_key=(
+                    (r.headers.get("Idempotency-Key") or "").strip()
+                    or request_id
+                ),
                 roles=ident.roles,
             ):
                 # 先入恢复缓冲再检查 stop：abort 的「用户中止」error 帧本身
@@ -660,7 +685,7 @@ async def chat_stream_resume(
 # POST /chat/messages — 持久化会话消息到 PG
 # ═══════════════════════════════════════════════════
 @router.post("/messages")
-def save_messages(req: dict):
+def save_messages(req: dict, request: Request):
     """批量保存会话消息（前端 SSE done 后调用）
 
     body: { session_id, messages: [{ role, content }, ...] }
@@ -669,12 +694,19 @@ def save_messages(req: dict):
     主 loop 直接 await 会抛 "attached to a different loop"（CS 页消息
     持久化失败的根因）。
     """
+    from backend.app.api.identity import resolve_identity
+
+    identity = resolve_identity(request)
+    if not identity.authenticated:
+        raise HTTPException(status_code=401, detail="未认证：会话记忆按登录身份隔离")
     from backend.memory.manager import memory_manager
     from backend.memory.service import MemoryService
     return memory_manager.run_tool(
         lambda: MemoryService().save_messages(
             session_id=req.get("session_id", ""),
             messages=req.get("messages", []),
+            user_id=identity.user_id,
+            tenant_id=identity.tenant_id,
         )
     )
 

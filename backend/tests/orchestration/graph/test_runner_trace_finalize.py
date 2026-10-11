@@ -64,6 +64,7 @@ def _spy_finish(monkeypatch):
 class _FakeMemory:
     def __init__(self):
         self.end_turn_calls = []
+        self.end_turn_idempotency_keys = []
 
     def start_session(self, session_id, question, user_id="default",
                       tenant_id=""):
@@ -71,9 +72,10 @@ class _FakeMemory:
         return ShortTermBuffer()
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id=""):
+                 tenant_id="", idempotency_key=""):
         self.last_answer = answer
         self.end_turn_calls.append((session_id, question, answer))
+        self.end_turn_idempotency_keys.append(idempotency_key)
 
 
 def _root(record):
@@ -98,6 +100,20 @@ class _StaticGraph:
         self._events = events
 
     def stream(self, initial_state, config=None):
+        yield from self._events
+
+
+class _CheckpointGraph(_StaticGraph):
+    """捕获主图提交给 checkpointer 的每轮配置。"""
+
+    checkpointer = object()
+
+    def __init__(self, events):
+        super().__init__(events)
+        self.configs = []
+
+    def stream(self, initial_state, config=None):
+        self.configs.append(config)
         yield from self._events
 
 
@@ -135,6 +151,35 @@ class _TimedOutGraph:
         yield  # pragma: no cover
 
 
+class _BlockingGraphUntilStopped:
+    """Runner 关闭后等待取消信号的图，模拟仍在后台执行的节点。"""
+
+    def __init__(self):
+        import threading
+
+        self.started = threading.Event()
+        self.waiting = threading.Event()
+        self.stopped = threading.Event()
+
+    def stream(self, initial_state, config=None):
+        self.started.set()
+        yield {"router": {
+            "route_mode": "plan",
+            "cs_context": {},
+            "query_understanding": {"intent": "general_chat"},
+        }}
+        self.waiting.set()
+        import time
+        from backend.core.request_context import is_cancelled
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not is_cancelled():
+            time.sleep(0.005)
+        if is_cancelled():
+            self.stopped.set()
+            yield {"reporter": {"final_answer": "不应持久化"}}
+
+
 def _events_normal():
     return [
         {"router": {"route_mode": "plan", "cs_context": {}}},
@@ -147,7 +192,7 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     sys_obj = _make_system(_StaticGraph(_events_normal()))
     out = list(sys_obj.stream_events(
         "测试问题", "s-1", kb_id="default", user_id="u-1",
-        stop_event=threading.Event()))
+        stop_event=threading.Event(), idempotency_key="turn-key-1"))
 
     names = [e["event"] for e in out]
     assert "done" in names
@@ -156,9 +201,32 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     record, answer = _spy_finish.calls[0]
     assert answer == "最终回答"
     assert sys_obj._memory.end_turn_calls == [("s-1", "测试问题", "最终回答")]
+    assert sys_obj._memory.end_turn_idempotency_keys == ["turn-key-1"]
     root = _root(record)
     assert root.end_time != ""
     assert root.status == "success"
+
+
+def test_main_checkpointer_uses_opaque_unique_thread_id_per_turn():
+    import threading
+
+    graph = _CheckpointGraph(_events_normal())
+    sys_obj = _make_system(graph)
+    for _ in range(2):
+        list(sys_obj.stream_events(
+            "测试问题", "private-session", user_id="private-user",
+            tenant_id="private-tenant", stop_event=threading.Event(),
+        ))
+
+    thread_ids = [config["configurable"]["thread_id"] for config in graph.configs]
+    assert len(thread_ids) == 2
+    assert len(set(thread_ids)) == 2
+    assert all(value.startswith("agent-") for value in thread_ids)
+    assert all(
+        sensitive not in thread_id
+        for thread_id in thread_ids
+        for sensitive in ("private-session", "private-user", "private-tenant")
+    )
 
 
 def test_user_abort_mid_stream_finishes_once_with_reason(_spy_finish):
@@ -207,6 +275,26 @@ def test_generator_close_finishes_once_as_client_disconnect(_spy_finish):
     # stop_event 未置位 → 归因为客户端断连，而非用户中止
     assert root.metrics.get("reason") == "client_disconnect"
     assert sys_obj._memory.end_turn_calls == []
+
+
+def test_generator_close_stops_background_graph_without_persisting_memory(_spy_finish):
+    """Runner 被关闭时应停止后台图，避免无人消费时继续执行节点副作用。"""
+    graph = _BlockingGraphUntilStopped()
+    sys_obj = _make_system(graph)
+    gen = sys_obj.stream_events(
+        "测试问题", "s-1", kb_id="default", user_id="u-1",
+    )
+
+    next(gen)
+    assert graph.started.wait(timeout=1)
+    assert graph.waiting.wait(timeout=1)
+    gen.close()
+
+    assert graph.stopped.wait(timeout=1)
+    assert sys_obj._memory.end_turn_calls == []
+    assert len(_spy_finish.calls) == 1
+    record, _answer = _spy_finish.calls[0]
+    assert _root(record).metrics.get("reason") == "client_disconnect"
 
 
 def test_generator_close_after_abort_reports_user_abort(_spy_finish):

@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""test_session_ownership.py — C4 session 属主隔离回归（Platform Readiness STOP C）
+"""session 的 tenant/user 复合属主隔离回归。
 
 P0 修复：chat_sessions.session_id 全局唯一且 get_or_create 无属主校验，
 任何用户可用他人 session_id「收养」会话——读取全部 L2 历史并把新消息
 写入同一历史（实机复现：两租户 14 条 chat_messages 混流）。
 
 修复语义：
-- SessionRepository.get_or_create：属主不匹配 → SessionOwnerMismatch（fail-closed）
+- SessionRepository.get_or_create：租户或属主不匹配 → SessionOwnerMismatch
 - MemoryService 三入口（start_session/end_turn/save_messages）：捕获后派生
-  隔离存储键 `{session}::u:{sha1(user)[:8]}` 重试——B 的读写落到自己的键下，
-  A 的历史零暴露，无需 schema 变更。
+  隔离存储键重试——B 的读写落到自己的键下，A 的历史零暴露。
 集成行为由 scripts/e2e_tenant_collision.py 隔离实例实机复验。
 """
 from __future__ import annotations
@@ -53,12 +52,12 @@ class _FakeSession:
 
 class TestGetOrCreateOwnership:
     def test_owner_match_returns_row(self):
-        row = ChatSession(session_id="s1", user_id="u1")
+        row = ChatSession(session_id="s1", user_id="u1", tenant_id="default")
         repo = SessionRepository(_FakeSession(row))
         assert asyncio.run(repo.get_or_create("s1", "u1")) is row
 
     def test_owner_mismatch_raises(self):
-        row = ChatSession(session_id="s1", user_id="u1")
+        row = ChatSession(session_id="s1", user_id="u1", tenant_id="default")
         repo = SessionRepository(_FakeSession(row))
         with pytest.raises(SessionOwnerMismatch):
             asyncio.run(repo.get_or_create("s1", "u2"))
@@ -67,6 +66,13 @@ class TestGetOrCreateOwnership:
         repo = SessionRepository(_FakeSession(None))
         row = asyncio.run(repo.get_or_create("s9", "u9"))
         assert row.session_id == "s9" and row.user_id == "u9"
+        assert row.tenant_id == "default"
+
+    def test_tenant_mismatch_raises_even_for_same_user(self):
+        row = ChatSession(session_id="s1", user_id="u1", tenant_id="tenant-a")
+        repo = SessionRepository(_FakeSession(row))
+        with pytest.raises(SessionOwnerMismatch):
+            asyncio.run(repo.get_or_create("s1", "u1", "tenant-b"))
 
 
 class TestScopedSessionId:
@@ -76,6 +82,9 @@ class TestScopedSessionId:
         a1 = MemoryService._scoped_session_id("sess", "uA")
         a2 = MemoryService._scoped_session_id("sess", "uA")
         b = MemoryService._scoped_session_id("sess", "uB")
+        tenant_a = MemoryService._scoped_session_id("sess", "uA", "tenant-a")
+        tenant_b = MemoryService._scoped_session_id("sess", "uA", "tenant-b")
         assert a1 == a2
         assert a1 != b
         assert a1.startswith("sess::u:")
+        assert tenant_a != tenant_b

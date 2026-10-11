@@ -1,6 +1,6 @@
 # 企业级三层记忆与动态用户画像改造计划
 
-日期：2026-10-10。状态：实施中（分支 `codex/memory-travel-frontend`，基于整合后 main `098632a`）。
+日期：2026-10-10。状态：实施中（分支 `codex/memory-profile-upgrade-main`，基于整合后 main `da087cb`）。
 
 ## 目标与任务来源
 
@@ -53,15 +53,21 @@
 
 ### Phase 1：L1 多轮连续性与去重
 
-- [ ] 定义统一 Human/AI/Tool 消息及稳定消息标识，窗口可配置，区分消息数与对话轮数。
-- [ ] 收口 Memory 和 Graph State 注入，防止同一消息重复加载或保存；取消、失败和重试遵循明确终态规则。
-- [ ] 校验用户/租户/会话范围；核验 Redis 故障时的持久化恢复和服务重启行为，超窗历史交由 L2。
+- [x] L1 窗口按消息数与用户轮数分别配置；按 HumanMessage 边界淘汰旧的完整轮，轮内 AI/Tool 消息不拆分。
+- [x] 持久化 Human/AI 消息恢复时保留数据库稳定 ID，L1 对所有 BaseMessage 按稳定 ID 去重；不同 ID 的同正文消息仍保留。
+- [x] 增加受控 LangChain 文本消息的 L2 持久化/恢复契约，保留 human/ai/tool 类型、AI 工具调用参数及 ToolMessage 必要元数据，并补齐往返测试。
+- [x] 主图成功轮次的 `end_turn → save_turn` 写入已接入 typed HumanMessage/AIMessage，并保留同事务的幂等收据与 outbox。
+- [ ] 将真实执行图产生的可信 ToolMessage 接入持久化入口；当前主 Graph Runner 只返回结构化 step results，尚未产出 LangChain ToolMessage 流，不得由业务结果伪造。
+- [x] `/chat/stream` 使用 request_id/Idempotency-Key 与持久轮次收据实现成功轮次幂等；见 2026-10-11 进度记录。
+- [x] L2 会话表及记忆 API 按可信 tenant/user 双重授权；无法权威归属的历史会话进入 quarantine，跨租户同用户不能读取或收养原 L2。
+- [ ] 收口 Graph State 注入及取消、失败终态；验证用户取消与 Runner 关闭不写成功轮次、SSE 断连续播同一轮；验证 Redis 故障恢复和服务重启，超窗历史交由 L2。
 
 门禁：杭州三日游 → “第二天不要太累”正确指代；同一消息只注入一次；跨会话和用户不串话。覆盖 M01、M02、M04，关联 M17。
 
 ### Phase 2：L2、Checkpoint 与摘要
 
 - [ ] 分离原始历史、会话摘要和结构化 Graph/Domain 任务状态，保存业务 ID/版本及未完成事项。
+- [x] 主图 Checkpointer 使用每次执行独立的不透明 thread_id，避免 session_id 写入 checkpoint 索引及 messages reducer 跨轮累积。
 - [x] 按 Token 预算触发增量摘要，复用已有 frontier/版本机制；保留确认条件、未解决约束及关键引用。（L2 Token 触发已接入；关键条件保留与真实长会话门禁仍待验收。）
 - [ ] 核验同 thread_id 持久恢复和 namespace 隔离；不得以摘要覆盖旅游 Active/Draft、客服确认或人工接管状态。
 - [ ] 修补 L5 同步/异步差异、摘要失败和并发覆盖；失败保留安全上下文并记录降级。

@@ -80,3 +80,26 @@ class MemoryExtractionJob(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False,
                          default=lambda: datetime.now(timezone.utc),
                          onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MemoryTurnReceipt(Base):
+    """已持久化对话轮次的幂等收据；键与问题正文均只保存 SHA-256。"""
+    __tablename__ = "memory_turn_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "user_id", "session_id", "idempotency_key_hash",
+            name="uq_memory_turn_request",
+        ),
+        Index("idx_memory_turn_session", "tenant_id", "user_id", "session_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id = Column(String(64), nullable=False)
+    user_id = Column(String(64), nullable=False)
+    session_id = Column(String(128), nullable=False)
+    idempotency_key_hash = Column(String(64), nullable=False)
+    question_hash = Column(String(64), nullable=False)
+    user_message_id = Column(Integer, nullable=False)
+    assistant_message_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                         default=lambda: datetime.now(timezone.utc))

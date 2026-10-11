@@ -1,5 +1,5 @@
 """L2 会话记忆 — PostgreSQL async backend"""
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 from backend.config import SESSION_MAX_MESSAGES
 from backend.shared.logger import logger
 
@@ -27,11 +27,8 @@ class SessionMemory:
 
     async def load_messages(self, limit: int | None = None) -> list[BaseMessage]:
         rows = await self._repo.load_messages(self.session_id, limit=limit)
-        return [
-            HumanMessage(content=r.content) if r.role == "user"
-            else AIMessage(content=r.content)
-            for r in rows
-        ]
+        from backend.memory.message_codec import restore_message
+        return [restore_message(row) for row in rows]
 
     async def save_turn(self, question: str, answer: str) -> None:
         await self._repo.save_turn(self.session_id, question, answer)
@@ -73,8 +70,9 @@ class SessionMemory:
                     f"回退全量路径: {e}")
 
         rows = await self._repo.load_messages(self.session_id, limit=SESSION_MAX_MESSAGES)
+        from backend.memory.message_codec import role_label
         conversation = "\n".join(
-            f"{'用户' if r.role == 'user' else '助手'}: {r.content}"
+            f"{role_label(r.role)}: {r.content}"
             for r in rows[-SESSION_MAX_MESSAGES:]
         )
         try:

@@ -1,19 +1,21 @@
 """SessionRepository — async CRUD for chat_sessions + chat_messages"""
 from datetime import datetime, timezone
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import DateTime, delete, func, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.memory.message_codec import serialize_message
 from backend.memory.models.session import ChatMessage, ChatSession
 
 
 class SessionOwnerMismatch(Exception):
-    """session_id 已存在但属主（user_id）不同。
+    """session_id 已存在但属主（tenant_id/user_id）不同。
 
     Platform Readiness STOP C（C4 修复）：此前任何用户可用他人 session_id
     「收养」会话——读取其全部 L2 历史并把新消息写入同一历史（chat_messages
-    仅按 session_id 存取）。调用方（MemoryService）捕获本异常后派生
-    隔离存储键重试，实现无 schema 变更的属主隔离。
+    仅按 session_id 存取）。调用方（MemoryService）捕获本异常后按租户与用户
+    派生隔离存储键重试；拒绝访问已有会话及其 L2 历史。
     """
 
 
@@ -21,18 +23,24 @@ class SessionRepository:
     def __init__(self, session: AsyncSession):
         self._s = session
 
-    async def get_or_create(self, session_id: str, user_id: str = "default") -> ChatSession:
+    async def get_or_create(
+        self, session_id: str, user_id: str = "default",
+        tenant_id: str | None = "default",
+    ) -> ChatSession:
         result = await self._s.execute(
             select(ChatSession).where(ChatSession.session_id == session_id)
         )
         row = result.scalar_one_or_none()
         if row:
-            if user_id and row.user_id != user_id:
+            if (row.user_id != user_id
+                    or (tenant_id is not None and row.tenant_id != tenant_id)):
                 raise SessionOwnerMismatch(
-                    f"session {session_id} 属主为 {row.user_id!r}，"
-                    f"与请求身份 {user_id!r} 不符")
+                    f"session {session_id} 的租户/属主与请求身份不符")
             return row
-        obj = ChatSession(session_id=session_id, user_id=user_id)
+        obj = ChatSession(
+            session_id=session_id, user_id=user_id,
+            tenant_id=tenant_id or "default",
+        )
         self._s.add(obj)
         await self._s.flush()
         return obj
@@ -47,14 +55,24 @@ class SessionRepository:
         q = select(ChatMessage).where(ChatMessage.session_id == session_id)
         if limit:
             recent = await self._s.execute(
-                q.order_by(ChatMessage.created_at.desc()).limit(limit)
+                q.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+                .limit(limit)
             )
             return list(recent.scalars().all())[::-1]
-        result = await self._s.execute(q.order_by(ChatMessage.created_at))
+        result = await self._s.execute(
+            q.order_by(ChatMessage.created_at, ChatMessage.id)
+        )
         return list(result.scalars().all())
 
-    async def save_message(self, session_id: str, role: str, content: str) -> ChatMessage:
-        msg = ChatMessage(session_id=session_id, role=role, content=content)
+    async def save_message(
+        self, session_id: str, role: str, content: str, *,
+        message_type: str | None = None,
+        message_metadata: dict | None = None,
+    ) -> ChatMessage:
+        msg = ChatMessage(
+            session_id=session_id, role=role, content=content,
+            message_type=message_type, message_metadata=message_metadata,
+        )
         self._s.add(msg)
         # touch session updated_at
         await self._s.execute(
@@ -63,9 +81,26 @@ class SessionRepository:
         await self._s.flush()
         return msg
 
+    async def save_langchain_message(
+        self, session_id: str, message: BaseMessage,
+    ) -> ChatMessage:
+        """保存服务端 LangChain 消息，并以数据库主键作为恢复身份。"""
+        payload = serialize_message(message)
+        return await self.save_message(
+            session_id, payload["role"], payload["content"],
+            message_type=payload["message_type"],
+            message_metadata=payload["message_metadata"],
+        )
+
     async def save_turn(self, session_id: str, question: str, answer: str) -> tuple[ChatMessage, ChatMessage]:
-        q = await self.save_message(session_id, "user", question)
-        a = await self.save_message(session_id, "assistant", answer)
+        # GraphRunner.end_turn 的真实落库入口走受控消息编解码；工具协议消息
+        # 只有在执行图实际提供 LangChain ToolMessage 时才单独持久化。
+        q = await self.save_langchain_message(
+            session_id, HumanMessage(content=question),
+        )
+        a = await self.save_langchain_message(
+            session_id, AIMessage(content=answer),
+        )
         # 首轮自动设标题（仅当 title 为空，不覆盖用户重命名）
         await self._s.execute(
             update(ChatSession)
@@ -120,7 +155,8 @@ class SessionRepository:
 
     async def list_all(self, user_id: str = "default", limit: int = 50,
                        before: str | None = None,
-                       before_session_id: str | None = None) -> list[dict]:
+                       before_session_id: str | None = None,
+                       tenant_id: str = "default") -> list[dict]:
         """列出用户的所有会话（id + 标题 + 消息数 + 时间）。
 
         Args:
@@ -148,7 +184,10 @@ class SessionRepository:
                 func.count(ChatMessage.id).label("message_count"),
             )
             .outerjoin(ChatMessage, ChatMessage.session_id == ChatSession.session_id)
-            .where(ChatSession.user_id == user_id)
+            .where(
+                ChatSession.user_id == user_id,
+                ChatSession.tenant_id == tenant_id,
+            )
             .group_by(ChatSession.id)
             .order_by(desc(sort_updated_at), desc(ChatSession.session_id))
             .limit(limit)
@@ -188,23 +227,31 @@ class SessionRepository:
             for row in rows
         ]
 
-    async def count_sessions(self, user_id: str = "default") -> int:
+    async def count_sessions(
+        self, user_id: str = "default", tenant_id: str = "default",
+    ) -> int:
         """统计用户会话总数，配合 list_all 用于 hasMore 判断"""
         result = await self._s.execute(
-            select(func.count()).select_from(ChatSession).where(ChatSession.user_id == user_id)
+            select(func.count()).select_from(ChatSession).where(
+                ChatSession.user_id == user_id,
+                ChatSession.tenant_id == tenant_id,
+            )
         )
         return int(result.scalar() or 0)
 
-    async def get_owner(self, session_id: str) -> str | None:
-        """查询会话归属（user_id）。会话不存在返回 None。
+    async def get_owner(self, session_id: str) -> tuple[str, str] | None:
+        """查询会话归属（tenant_id, user_id）。会话不存在返回 None。
 
         供路由层做属主校验：跨用户访问与「会话不存在」同语义返回 404，
         不向调用方泄露该 session_id 是否真实存在。
         """
         result = await self._s.execute(
-            select(ChatSession.user_id).where(ChatSession.session_id == session_id)
+            select(ChatSession.tenant_id, ChatSession.user_id).where(
+                ChatSession.session_id == session_id,
+            )
         )
-        return result.scalar_one_or_none()
+        row = result.one_or_none()
+        return (row.tenant_id, row.user_id) if row else None
 
     async def delete(self, session_id: str) -> bool:
         """删除会话（级联删除 messages）"""

@@ -65,6 +65,7 @@ class _FakeService:
     # 注：路由会传 limit/before（P1-12 加的分页参数）；fake 接收可变参数忽略
     async def list_sessions(self, user_id: str = "default", **kwargs: object) -> dict:
         self.seen_user_id = user_id
+        self.seen_tenant_id = str(kwargs.get("tenant_id") or "")
         self.seen_before = kwargs.get("before")
         self.seen_before_session_id = kwargs.get("before_session_id")
         return self._payload
@@ -131,8 +132,36 @@ class _FakeService:
         self.seen_memory_id = str(kwargs.get("memory_id") or "")
         return self._payload
 
-    async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
+    async def get_session_messages(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
         self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def get_session_context(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def rename_session(
+        self, session_id: str, title: str, user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
+        return self._payload
+
+    async def delete_session(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
+        self.seen_user_id = user_id
+        self.seen_tenant_id = tenant_id
         return self._payload
 
     async def list_extraction_jobs(
@@ -161,11 +190,38 @@ def client_factory(monkeypatch):
 def test_list_sessions_success_returns_200(client_factory):
     service = _FakeService({"sessions": [{"session_id": "s1", "title": "t"}], "total": 1})
     client = client_factory(service)
-    res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
+    res = client.get(
+        "/memory/sessions?tenant_id=attacker",
+        headers={
+            "X-User-Id": "15", "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+        },
+    )
     assert res.status_code == 200
     assert res.json()["total"] == 1
     # 2026-09-16 按登录用户隔离：user_id 必须来自身份头，而非查询参数
     assert service.seen_user_id == "15"
+    assert service.seen_tenant_id == "tenant-a"
+
+
+def test_session_routes_pass_trusted_tenant_scope(client_factory):
+    service = _FakeService({"messages": [], "session_id": "session-a"})
+    client = client_factory(service)
+    headers = {
+        "X-User-Id": "15",
+        "X-Tenant-Id": "tenant-a",
+        "X-Auth-Type": "jwt",
+    }
+
+    for method, path, kwargs in (
+        ("get", "/memory/sessions/session-a", {}),
+        ("get", "/memory/sessions/session-a/context", {}),
+        ("delete", "/memory/sessions/session-a", {}),
+        ("patch", "/memory/sessions/session-a", {"json": {"title": "更新"}}),
+    ):
+        response = getattr(client, method)(path + "?tenant_id=attacker", headers=headers, **kwargs)
+        assert response.status_code == 200
+        assert service.seen_user_id == "15"
+        assert service.seen_tenant_id == "tenant-a"
 
 
 def test_list_sessions_guest_returns_401(client_factory):

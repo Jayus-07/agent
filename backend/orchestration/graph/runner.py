@@ -246,6 +246,11 @@ def _domain_node_names() -> set[str]:
         return set()
 
 
+def _new_main_graph_thread_id() -> str:
+    """返回每次主图执行独立且不含会话标识的 Checkpointer 键。"""
+    return f"agent-{uuid.uuid4().hex}"
+
+
 def _looks_like_refusal_text(message: str) -> bool:
     """回答是否为拒答/短路类文案（追问漏斗 resolved 的近似口径）。
 
@@ -320,6 +325,9 @@ class GraphRunner:
             domain_hint: 入口域提示（customer_service = 客服窗口锁域，
                 router_node 据此强制走 CS 预过滤并跳过其他域图 prefilter）
         """
+        if stop_event is None:
+            stop_event = threading.Event()
+
         from backend.observability.tracer import SpanKind, trace_collector
 
         start_time = time.time()
@@ -728,16 +736,13 @@ class GraphRunner:
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
                 # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
-                # thread_id：每轮唯一（session+毫秒+uuid），checkpoint 定位用于崩溃
-                # 恢复/审计，不做跨轮状态合并（多轮记忆由 MemoryService 负责）。
-                # uuid 后缀防同毫秒重复提交撞 thread_id（建议项 2026-09-21）
+                # thread_id：每次执行使用不透明随机键，避免把 session_id
+                # 放进 checkpoint 索引；不做跨轮状态合并（由 MemoryService
+                # 管理多轮历史，避免 messages reducer 跨轮累积）。
                 invoke_config: dict = {"recursion_limit": MAIN_GRAPH_RECURSION_LIMIT}
                 if has_checkpointer:
                     invoke_config["configurable"] = {
-                        "thread_id": (
-                            f"agent-{session_id}-{int(time.time() * 1000)}"
-                            f"-{uuid.uuid4().hex[:8]}"
-                        ),
+                        "thread_id": _new_main_graph_thread_id(),
                     }
                 for event in self._graph.stream(initial_state, config=invoke_config):
                     if stop_event is not None and stop_event.is_set():
@@ -976,9 +981,15 @@ class GraphRunner:
                     and not ctx["cs_context_snapshot"].get("conversation_id")):
                 ctx["memory_persisted"] = True
                 try:
+                    memory_kwargs = {
+                        "user_id": user_id,
+                        "tenant_id": tenant_id,
+                    }
+                    if idempotency_key:
+                        memory_kwargs["idempotency_key"] = idempotency_key
                     self._memory.end_turn(
                         session_id, question, answer,
-                        user_id=user_id, tenant_id=tenant_id,
+                        **memory_kwargs,
                     )
                 except Exception:
                     logger.warning("[GraphRunner] Memory end_turn 写入失败", exc_info=True)
@@ -1017,12 +1028,16 @@ class GraphRunner:
         except GeneratorExit:
             # 消费方关闭生成器（客户端断连 / 用户中止后前端停止拉流）：
             # 生成器挂起在 yield 处收到 GeneratorExit，此前这里不执行任何
-            # 收尾。GeneratorExit 处理内禁止 yield；收尾后必须重新抛出。
+            # 收尾。外层 /chat/stream 的断连由恢复注册表继续消费 Runner；若
+            # Runner 自身被关闭，则停止后台图，避免无人消费时继续执行副作用。
+            # GeneratorExit 处理内禁止 yield；收尾后必须重新抛出。
             reason = ("user_abort"
                       if (stop_event is not None and stop_event.is_set())
                       or ctx["aborted"] else "client_disconnect")
+            if stop_event is not None:
+                stop_event.set()
             # STOP CS-A P0-3/F4：用户中止 → cancelled；纯断连保持 error
-            #（producer 继续跑完，不是取消语义）
+            #（由上层 SSE 恢复协议决定 producer 是否继续）。
             _finalize_trace(
                 "cancelled" if reason == "user_abort" else "error",
                 {"reason": reason},

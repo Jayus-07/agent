@@ -10,8 +10,9 @@ Send 并行分支的流式/trace 绑定降级，见 orchestration/request_contex
 统一裁决见 config/checkpointer.py。
 
 thread_id 语义：主图多轮记忆由 MemoryService 负责（不靠 checkpoint 回放），
-thread_id 取每轮唯一值（session+毫秒时间戳）——checkpoint 定位是崩溃恢复/
-审计/未来 interrupt-resume，不是跨轮状态合并（避免 messages 通道累积）。
+每次主图执行使用独立不透明 UUID 键——不把 session_id 放进 checkpoint 索引，
+且不做跨轮状态合并（避免 messages 通道累积）。当前仍未提供按该键恢复一次中断
+主图执行的公开路径。
 """
 from typing import Any
 

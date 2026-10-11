@@ -13,6 +13,7 @@ import asyncio
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -105,6 +106,90 @@ def test_resume_finished_stream_replays_tail_with_terminal(client):
     assert client.fake_agent.stream_calls == 1, "resume 只能重放原流，不得重跑 Runner"
 
 
+def test_duplicate_initial_request_does_not_replace_or_rerun_stream(monkeypatch):
+    """路由遇到已有 request_id 应冲突，保留原记录且不启动 Runner。"""
+    from fastapi import FastAPI
+
+    from backend.app.api import stream_resume as sr_mod
+    import backend.app.api.routes.chat as chat_mod
+    from backend.infra.llm.rate_limiter import require_rate_limit
+
+    class CountingAgent:
+        stream_calls = 0
+
+        def stream_events(self, *args, **kwargs):
+            self.stream_calls += 1
+            yield {"event": "done", "data": {}}
+
+    sr_mod.reset_stream_registry()
+    registry = sr_mod.get_stream_registry()
+    original = registry.create(
+        stream_id="duplicate-route-test", session_id="session",
+        user_id="default", tenant_id="",
+    )
+    original.append({"event": "meta", "data": {"request_id": "duplicate-route-test"}})
+    original.append({"event": "done", "data": {}})
+    original.finish()
+    agent = CountingAgent()
+    monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
+    app = FastAPI()
+    app.include_router(chat_mod.router)
+    app.dependency_overrides[require_rate_limit] = lambda: None
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/chat/stream",
+            json={
+                "question": "相同 ID 的重复问题",
+                "session_id": "session",
+                "request_id": "duplicate-route-test",
+            },
+        )
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["code"] == "IDEMPOTENCY_CONFLICT"
+    assert payload["details"]["reason"] == "STREAM_ALREADY_EXISTS"
+    assert registry.get("duplicate-route-test") is original
+    assert agent.stream_calls == 0
+
+
+def test_stream_request_id_is_used_as_memory_idempotency_key(monkeypatch):
+    """未显式提供 Idempotency-Key 时，Runner 收到稳定 request_id。"""
+    from fastapi import FastAPI
+
+    from backend.app.api import stream_resume as sr_mod
+    import backend.app.api.routes.chat as chat_mod
+    from backend.infra.llm.rate_limiter import require_rate_limit
+
+    class CapturingAgent:
+        calls = []
+
+        def stream_events(self, question, session_id, **kwargs):
+            self.calls.append(kwargs)
+            yield {"event": "done", "data": {"elapsed": 0, "sources": []}}
+
+    sr_mod.reset_stream_registry()
+    agent = CapturingAgent()
+    monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
+    app = FastAPI()
+    app.include_router(chat_mod.router)
+    app.dependency_overrides[require_rate_limit] = lambda: None
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST", "/chat/stream",
+            json={"question": "稳定轮次", "session_id": "stable-turn",
+                  "request_id": "stable-turn-request"},
+        ) as response:
+            assert response.status_code == 200
+            b"".join(response.iter_bytes())
+
+    assert len(agent.calls) == 1
+    assert agent.calls[0]["idempotency_key"] == "stable-turn-request"
+    sr_mod.reset_stream_registry()
+
+
 def test_resume_unknown_stream_404(client):
     resp = client.post("/chat/stream/resume",
                        json={"request_id": "no-such-stream", "after_seq": 0},
@@ -132,6 +217,39 @@ def test_resume_forbidden_for_other_identity(client, monkeypatch):
                        headers=HDR)
     assert resp.status_code == 403
     assert resp.json()["details"]["reason"] == "FORBIDDEN"
+
+
+def test_registry_allows_only_one_concurrent_owner_of_stream_id():
+    """并发初始请求争用同一 ID 时，注册表只能保留一个流记录。"""
+    from backend.app.api.stream_resume import (
+        DuplicateStreamIdError,
+        StreamRegistry,
+    )
+
+    registry = StreamRegistry()
+    barrier = threading.Barrier(8)
+
+    def create_stream(index):
+        barrier.wait()
+        try:
+            record = registry.create(
+                stream_id="same-request",
+                session_id=f"session-{index}",
+                user_id=f"user-{index}",
+                tenant_id="tenant",
+            )
+            return "created", record
+        except DuplicateStreamIdError:
+            return "duplicate", None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(create_stream, range(8)))
+
+    created = [record for status, record in results if status == "created"]
+    duplicates = [status for status, _ in results if status == "duplicate"]
+    assert len(created) == 1
+    assert len(duplicates) == 7
+    assert registry.get("same-request") is created[0]
 
 
 def test_resume_gap_returns_not_resumable(client, monkeypatch):

@@ -1,9 +1,11 @@
 """MemoryService — 统一记忆服务入口"""
 import asyncio
+import hashlib
+import json
 import time
 
 from langchain_core.messages import SystemMessage
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from backend.config import HISTORY_TOKEN_BUDGET, MEMORY_ORIGIN_INFERRED, PREVIOUS_OUTPUTS_MAX_TOKENS
@@ -50,6 +52,10 @@ def _metric_safe(fn, **labels) -> None:
         pass
 
 
+class MemoryTurnIdempotencyConflict(ValueError):
+    """幂等键已绑定到不同问题；拒绝把冲突请求写入 L2。"""
+
+
 class MemoryService:
     """统一记忆服务。Agent 只能通过此接口访问记忆。"""
 
@@ -88,14 +94,20 @@ class MemoryService:
                 # STOP C（C4 属主隔离）：session 被其他用户占用时派生隔离
                 # 存储键——该用户的所有读写落到自己的键下，互不可见
                 try:
-                    srow = await srepo.get_or_create(session_id, user_id)
+                    srow = await srepo.get_or_create(
+                        session_id, user_id, tenant_id,
+                    )
                 except SessionOwnerMismatch:
                     original = session_id
-                    session_id = self._scoped_session_id(session_id, user_id)
+                    session_id = await self._scoped_session_id_for_owner(
+                        srepo, session_id, user_id, tenant_id,
+                    )
                     logger.warning(
-                        "[MemoryService] session %s 属主不匹配（跨用户收养拦截），"
+                        "[MemoryService] session %s 租户/属主不匹配（跨域收养拦截），"
                         "隔离至派生键", original)
-                    srow = await srepo.get_or_create(session_id, user_id)
+                    srow = await srepo.get_or_create(
+                        session_id, user_id, tenant_id,
+                    )
 
                 # L2 → L1（只取最近 SHORT_TERM_MAX_MESSAGES*2 条：
                 #  ① 查询层限量，避免长会话全量拉取；② 多取一倍给去重留余量）
@@ -105,14 +117,10 @@ class MemoryService:
 
                 l1 = ShortTermBuffer()
                 history = await l2.load_messages(limit=SHORT_TERM_MAX_MESSAGES * 2)
-                # 历史双写修复：旧数据曾因前端+后端各持久化一次，产生连续重复消息。
-                # 注入上下文前按 (role, content) 连续去重，避免重复历史挤占窗口、误导模型
-                prev = None
+                # L1 按持久消息 ID 去重；相同正文但 ID 不同可能是用户真实重复发送，
+                # 必须保留为独立消息，不能按 (role, content) 合并。
                 for msg in history:
-                    if prev is not None and type(msg) is type(prev) and msg.content == prev.content:
-                        continue
                     l1.add(msg)
-                    prev = msg
 
                 # L2 摘要注入：超过短消息窗口的更早上下文由会话摘要补足 ——
                 # 否则摘要落库后从未参与 prompt，长会话的早期信息完全丢失。
@@ -363,10 +371,23 @@ class MemoryService:
                 raise
 
     async def end_turn(self, session_id: str, question: str, answer: str,
-                       user_id: str = "default", tenant_id: str = "") -> None:
-        # L2 消息与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
-        from backend.memory.models.memory import MemoryExtractionJob
+                       user_id: str = "default", tenant_id: str = "",
+                       idempotency_key: str = "") -> None:
+        # L2 消息、请求收据与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
+        from backend.memory.models.memory import (
+            MemoryExtractionJob,
+            MemoryTurnReceipt,
+        )
+        from backend.memory.models.session import ChatMessage
+        from backend.memory.keying import normalize_tenant_id
 
+        tenant_id = normalize_tenant_id(tenant_id)
+        idempotency_key = (idempotency_key or "").strip()
+        key_hash = (
+            hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+            if idempotency_key else ""
+        )
+        question_hash = hashlib.sha256(question.encode("utf-8")).hexdigest()
         job_id: str | None = None
         async with AsyncSessionLocal() as db_session:
             try:
@@ -375,29 +396,92 @@ class MemoryService:
                 # Ensure chat_sessions row exists (may not if start_session was never called)
                 # STOP C（C4 属主隔离）：与 start_session 同口径派生隔离键
                 try:
-                    await srepo.get_or_create(session_id, user_id)
+                    await srepo.get_or_create(session_id, user_id, tenant_id)
                 except SessionOwnerMismatch:
-                    session_id = self._scoped_session_id(session_id, user_id)
-                    await srepo.get_or_create(session_id, user_id)
-
-                # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
-                q_msg, a_msg = await srepo.save_turn(session_id, question, answer)
-                if q_msg is not None and q_msg.id is not None:
-                    from backend.memory.keying import normalize_tenant_id
-
-                    job = MemoryExtractionJob(
-                        tenant_id=normalize_tenant_id(tenant_id),
-                        user_id=user_id,
-                        session_id=session_id,
-                        source_message_id=q_msg.id,
-                        assistant_message_id=a_msg.id if a_msg is not None else None,
-                        status="PENDING",
+                    session_id = await self._scoped_session_id_for_owner(
+                        srepo, session_id, user_id, tenant_id,
                     )
-                    db_session.add(job)
-                    await db_session.flush()
-                    job_id = str(job.id)
+                    await srepo.get_or_create(session_id, user_id, tenant_id)
+
+                receipt = None
+                if key_hash:
+                    # 对相同逻辑轮次串行化查询与写入；唯一约束是跨进程的最终防线。
+                    lock_scope = json.dumps(
+                        [tenant_id, user_id, session_id, key_hash],
+                        ensure_ascii=False, separators=(",", ":"),
+                    )
+                    await db_session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                        {"lock_key": f"memory-turn:{lock_scope}"},
+                    )
+                    receipt_result = await db_session.execute(
+                        select(MemoryTurnReceipt).where(
+                            MemoryTurnReceipt.tenant_id == tenant_id,
+                            MemoryTurnReceipt.user_id == user_id,
+                            MemoryTurnReceipt.session_id == session_id,
+                            MemoryTurnReceipt.idempotency_key_hash == key_hash,
+                        )
+                    )
+                    receipt = receipt_result.scalar_one_or_none()
+
+                if receipt is not None:
+                    if receipt.question_hash != question_hash:
+                        raise MemoryTurnIdempotencyConflict(
+                            "幂等键已绑定到另一条用户问题"
+                        )
+                    q_msg = await db_session.get(ChatMessage, receipt.user_message_id)
+                    a_msg = await db_session.get(
+                        ChatMessage, receipt.assistant_message_id,
+                    )
+                    if (q_msg is None or a_msg is None
+                            or q_msg.session_id != session_id
+                            or a_msg.session_id != session_id
+                            or q_msg.role != "user" or a_msg.role != "assistant"):
+                        raise RuntimeError("记忆轮次收据引用的消息不完整")
+                else:
+                    # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
+                    q_msg, a_msg = await srepo.save_turn(session_id, question, answer)
+                    if key_hash and q_msg.id is not None and a_msg.id is not None:
+                        db_session.add(MemoryTurnReceipt(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            idempotency_key_hash=key_hash,
+                            question_hash=question_hash,
+                            user_message_id=q_msg.id,
+                            assistant_message_id=a_msg.id,
+                        ))
+                        await db_session.flush()
+
+                if q_msg is not None and q_msg.id is not None:
+                    job = None
+                    if receipt is not None:
+                        job_result = await db_session.execute(
+                            select(MemoryExtractionJob).where(
+                                MemoryExtractionJob.tenant_id == tenant_id,
+                                MemoryExtractionJob.user_id == user_id,
+                                MemoryExtractionJob.source_message_id == q_msg.id,
+                            )
+                        )
+                        job = job_result.scalar_one_or_none()
+                    if job is None:
+                        job = MemoryExtractionJob(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            source_message_id=q_msg.id,
+                            assistant_message_id=a_msg.id if a_msg is not None else None,
+                            status="PENDING",
+                        )
+                        db_session.add(job)
+                        await db_session.flush()
+                    if job.status == "PENDING":
+                        job_id = str(job.id)
 
                 await db_session.commit()
+            except MemoryTurnIdempotencyConflict:
+                await db_session.rollback()
+                raise
             except Exception as e:
                 await db_session.rollback()
                 logger.error(f"[MemoryService] end_turn 失败: {e}")
@@ -457,13 +541,9 @@ class MemoryService:
 
                     # L2 以模型感知 Token 数作为主触发条件；消息数仍为历史
                     # 长度硬上限。达到 Token 线的长消息增量可绕过小批量门。
-                    from langchain_core.messages import AIMessage, HumanMessage
+                    from backend.memory.message_codec import restore_message
                     delta_tokens = sum(
-                        count_message_tokens(
-                            HumanMessage(content=row.content or "")
-                            if row.role == "user"
-                            else AIMessage(content=row.content or "")
-                        )
+                        count_message_tokens(restore_message(row))
                         for row in rows
                     )
                     token_triggered = (
@@ -725,8 +805,14 @@ class MemoryService:
     async def archive(self, record_id: str) -> bool:
         return await self.update(record_id, is_active=False)
 
-    async def save_messages(self, session_id: str, messages: list[dict], user_id: str = "default") -> dict:
+    async def save_messages(
+        self, session_id: str, messages: list[dict], user_id: str = "default",
+        tenant_id: str = "",
+    ) -> dict:
         """批量保存会话消息（供 chat API 调用）。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         if not session_id or not messages:
             return {"saved": 0}
         saved = 0
@@ -735,10 +821,12 @@ class MemoryService:
                 repo = SessionRepository(db)
                 # STOP C（C4 属主隔离）：与 start/end_turn 同口径
                 try:
-                    await repo.get_or_create(session_id, user_id)
+                    await repo.get_or_create(session_id, user_id, tenant_id)
                 except SessionOwnerMismatch:
-                    session_id = self._scoped_session_id(session_id, user_id)
-                    await repo.get_or_create(session_id, user_id)
+                    session_id = await self._scoped_session_id_for_owner(
+                        repo, session_id, user_id, tenant_id,
+                    )
+                    await repo.get_or_create(session_id, user_id, tenant_id)
                 for m in messages:
                     await repo.save_message(session_id, m.get("role", "user"), m.get("content", ""))
                     saved += 1
@@ -749,16 +837,22 @@ class MemoryService:
 
     async def replace_session_messages(
         self, session_id: str, messages: list[dict[str, str]],
-        user_id: str = "default",
+        user_id: str = "default", tenant_id: str | None = None,
     ) -> dict:
         """以单事务替换会话快照，供客户端按轮同步时保持幂等。"""
+        if tenant_id is not None:
+            from backend.memory.keying import normalize_tenant_id
+
+            tenant_id = normalize_tenant_id(tenant_id)
         if not session_id or len(session_id) > 128:
             return {"saved": 0, "error": "会话标识无效"}
         try:
             async with AsyncSessionLocal() as db_session:
                 repo = SessionRepository(db_session)
                 try:
-                    await repo.get_or_create(session_id, user_id)
+                    await repo.get_or_create(
+                        session_id, user_id, tenant_id,
+                    )
                 except SessionOwnerMismatch:
                     await db_session.rollback()
                     return {"saved": 0, "error": "会话不存在"}
@@ -771,12 +865,41 @@ class MemoryService:
 
 
     @staticmethod
-    def _scoped_session_id(session_id: str, user_id: str) -> str:
-        """跨用户收养拦截后的隔离存储键（确定性：同一用户恒映射同键）。"""
+    def _scoped_session_id(
+        session_id: str, user_id: str, tenant_id: str = "default",
+    ) -> str:
+        """跨用户/租户收养拦截后的稳定隔离键，且不超过数据库列宽。"""
         import hashlib
 
-        digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
-        return f"{session_id}::u:{digest}"
+        if tenant_id == "default":
+            # 保留既有默认租户映射，避免升级后旧的用户隔离会话失联。
+            digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
+            legacy = f"{session_id}::u:{digest}"
+            if len(legacy) <= 128:
+                return legacy
+            digest = hashlib.sha1(
+                f"{session_id}\0{user_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            return f"{session_id[:100]}::u:{digest}"
+
+        digest = hashlib.sha256(
+            f"{session_id}\0{tenant_id}\0{user_id}".encode("utf-8")
+        ).hexdigest()[:32]
+        return f"{session_id[:92]}::t:{digest}"
+
+    async def _scoped_session_id_for_owner(
+        self, repo: SessionRepository, session_id: str,
+        user_id: str, tenant_id: str,
+    ) -> str:
+        """复用归属可证明的旧 user-only 键，否则生成 tenant/user 新键。"""
+        tenant_scoped = self._scoped_session_id(session_id, user_id, tenant_id)
+        if tenant_id != "default":
+            # C4 已上线过 user-only 派生键。仅当数据库中的真实 owner tuple
+            # 与当前请求完全相同才复用；同 user 的其他租户仍转到新键。
+            legacy = self._scoped_session_id(session_id, user_id, "default")
+            if await repo.get_owner(legacy) == (tenant_id, user_id):
+                return legacy
+        return tenant_scoped
 
     async def run_decay(self) -> dict:
         async with AsyncSessionLocal() as db_session:
@@ -791,22 +914,29 @@ class MemoryService:
     # ============================================================
 
     @staticmethod
-    async def _check_owner(repo, session_id: str, user_id: str | None) -> str | None:
-        """路由面属主校验：user_id 给定时，非属主/不存在都返回统一「会话不存在」。
+    async def _check_owner(
+        repo, session_id: str, user_id: str | None,
+        tenant_id: str | None = None,
+    ) -> str | None:
+        """路由面属主校验：检查已提供的用户与租户，失败统一返回 404。
 
-        返回 None 表示校验通过（user_id=None 为内部调用方直通，不做校验）。
+        返回 None 表示校验通过（user_id=None 为内部调用方直通）。tenant_id
+        为空仅供把租户编码进 user_id 的内部适配器兼容使用；公开 API 必须传入
+        服务端身份中的 tenant_id。
         404 而非 403：不向调用方泄露 session_id 是否真实存在。
         """
         if user_id is None:
             return None
         owner = await repo.get_owner(session_id)
-        if owner != user_id:
+        if (owner is None or owner[1] != user_id
+                or (tenant_id is not None and owner[0] != tenant_id)):
             return "会话不存在"
         return None
 
     async def list_sessions(self, user_id: str = "default",
                             limit: int = 50, before: str | None = None,
-                            before_session_id: str | None = None) -> dict:
+                            before_session_id: str | None = None,
+                            tenant_id: str = "") -> dict:
         """列出用户所有会话（支持分页）。
 
         Args:
@@ -814,12 +944,16 @@ class MemoryService:
             before: 游标分页时间戳
             before_session_id: 时间相同时用于稳定分页的会话 ID
         """
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
                 safe_limit = max(1, min(int(limit), 200))
                 sessions = await repo.list_all(
                     user_id=user_id,
+                    tenant_id=tenant_id,
                     limit=safe_limit + 1,
                     before=before,
                     before_session_id=before_session_id,
@@ -830,7 +964,9 @@ class MemoryService:
                 # 是否有下一页由 limit + 1 的前瞻查询判断。
                 total: int | None = None
                 if before is None:
-                    total = await repo.count_sessions(user_id=user_id)
+                    total = await repo.count_sessions(
+                        user_id=user_id, tenant_id=tenant_id,
+                    )
                 await db_session.commit()
                 return {
                     "sessions": sessions,
@@ -931,7 +1067,7 @@ class MemoryService:
         async with AsyncSessionLocal() as db_session:
             try:
                 denied = await self._check_owner(
-                    SessionRepository(db_session), session_id, user_id,
+                    SessionRepository(db_session), session_id, user_id, tenant_id,
                 )
                 if denied:
                     return {"jobs": [], "total": 0, "error": denied}
@@ -1015,12 +1151,21 @@ class MemoryService:
                 logger.error("[MemoryService] delete_profile_memory 失败: %s", e)
                 return {"ok": False, "error": str(e)}
 
-    async def get_session_messages(self, session_id: str, user_id: str | None = None) -> dict:
+    async def get_session_messages(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict:
         """获取会话消息列表。"""
+        if tenant_id is not None:
+            from backend.memory.keying import normalize_tenant_id
+
+            tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"session_id": session_id, "messages": [], "error": denied}
                 msgs = await repo.load_messages(session_id)
@@ -1084,12 +1229,20 @@ class MemoryService:
                 logger.error(f"[MemoryService] list_profile_memories 失败: {e}")
                 return {"records": [], "error": str(e)}
 
-    async def get_session_context(self, session_id: str, user_id: str | None = None) -> dict:
+    async def get_session_context(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str = "",
+    ) -> dict:
         """获取会话 Agent 工作上下文。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"session_id": session_id, "context": None, "error": denied}
                 ctx = await repo.get_context(session_id)
@@ -1106,12 +1259,20 @@ class MemoryService:
                 await db_session.rollback()
                 return {"session_id": session_id, "context": None, "error": str(e)}
 
-    async def delete_session(self, session_id: str, user_id: str | None = None) -> dict:
+    async def delete_session(
+        self, session_id: str, user_id: str | None = None,
+        tenant_id: str = "",
+    ) -> dict:
         """删除会话及消息。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"ok": False, "error": denied}
                 from backend.memory.models.memory import MemoryExtractionJob
@@ -1124,6 +1285,9 @@ class MemoryService:
                     cancel_jobs = cancel_jobs.where(
                         MemoryExtractionJob.user_id == user_id,
                     )
+                cancel_jobs = cancel_jobs.where(
+                    MemoryExtractionJob.tenant_id == tenant_id,
+                )
                 await db_session.execute(cancel_jobs.values(
                     status="CANCELLED",
                     last_error_code="SESSION_DELETED",
@@ -1140,12 +1304,20 @@ class MemoryService:
                 logger.error(f"[MemoryService] delete_session 失败: {e}")
                 return {"ok": False, "error": str(e)}
 
-    async def rename_session(self, session_id: str, title: str, user_id: str | None = None) -> dict:
+    async def rename_session(
+        self, session_id: str, title: str, user_id: str | None = None,
+        tenant_id: str = "",
+    ) -> dict:
         """重命名会话。"""
+        from backend.memory.keying import normalize_tenant_id
+
+        tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
-                denied = await self._check_owner(repo, session_id, user_id)
+                denied = await self._check_owner(
+                    repo, session_id, user_id, tenant_id,
+                )
                 if denied:
                     return {"ok": False, "error": denied}
                 ok = await repo.rename(session_id, title)

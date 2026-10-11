@@ -17,6 +17,9 @@ ENABLE_HISTORY_AWARE_RETRIEVAL = os.getenv("ENABLE_HISTORY_AWARE_RETRIEVAL", "tr
 
 # 短期记忆 (L1)
 SHORT_TERM_MAX_MESSAGES = int(os.getenv("SHORT_TERM_MAX_MESSAGES", "20"))
+# 消息数与对话轮数分别限额；未显式配置时沿用旧消息上限的半数，保持默认窗口兼容。
+SHORT_TERM_MAX_TURNS = int(os.getenv(
+    "SHORT_TERM_MAX_TURNS", str(max(1, SHORT_TERM_MAX_MESSAGES // 2))))
 
 # 对话历史 token 预算：L1 组装（含 L2 摘要 / L3 记忆注入）后整体按 token 裁剪，
 # 弥补"按条数"截断对长消息失效的问题（0 = 关闭预算，仅条数控制）
