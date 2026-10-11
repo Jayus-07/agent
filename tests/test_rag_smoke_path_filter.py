@@ -70,6 +70,7 @@ def test_core_rag_paths_trigger_smoke():
     for paths in (
         ["backend/rag/pipeline.py"],
         ["backend/evaluation/runners/rag.py"],
+        ["backend/core/tool_runtime/policy.py"],
         ["backend/app/api/routes/rag_upload.py"],
         ["backend/services/rag_server.py"],
         ["backend/infra/llm/credentials.py"],

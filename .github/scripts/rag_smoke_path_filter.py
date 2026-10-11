@@ -9,6 +9,7 @@
 覆盖范围（2026-10-11 GPT 复核补齐）：
   - RAG 检索与评测代码（backend/rag、backend/evaluation、检索编排）
   - MCP RAG 实现（mcp_servers/servers/rag.py）
+  - RAG Tool 超时策略（backend/core/tool_runtime/policy.py）
   - 模型绑定面（backend/infra/llm/）与评测初始化脚本（真实路径：
     backend/scripts/seed_prompt_eval_db.py、scripts/seed_eval_model_bindings.py）
 
@@ -24,6 +25,7 @@ EXACT_ENTRIES = frozenset({
     "pyproject.toml",
     "requirements-lock.txt",
     "backend/app/api/routes/_rag_shared.py",
+    "backend/core/tool_runtime/policy.py",
     "backend/services/rag_server.py",
     "backend/infra/mcp_client.py",
     "mcp_servers/servers/rag.py",
