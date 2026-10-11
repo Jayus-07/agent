@@ -55,6 +55,11 @@
 | RBAC/IDOR/租户/资源级授权                 | [authorization-standard.md](docs/auth/authorization-standard.md) |
 | RAG 上传、切分、索引、检索和证据             | [rag.md](docs/domains/rag.md) |
 | 各功能评测、Golden、Release Gate          | [evaluation-governance.md](docs/evaluation/evaluation-governance.md) |
+| API/SSE/WS 兼容与恢复 | [api-event-lifecycle.md](docs/contracts/api-event-lifecycle.md) |
+| Celery/队列/Lease/重试与幂等 | [async-task-governance.md](docs/architecture/async-task-governance.md) |
+| 业务数据版本、删除、备份与迁移 | [data-lifecycle.md](docs/governance/data-lifecycle.md) |
+| L1/L2/L3 长期记忆和画像更新 | [memory-governance.md](docs/governance/memory-governance.md) |
+| 选品/电商领域的目标与现状 | [selection-ecommerce.md](docs/domains/selection-ecommerce.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
@@ -67,6 +72,10 @@
 - TASK 记录目标、范围和验收；PROGRESS 记录证据、阻塞和下一步。
 - 恢复任务时核对任务文件、Git 状态、代码和测试；无证据不标记完成。
 - 临时事项处理后回到原计划；用户改变、暂停或取消目标时遵从最新要求。
+- 暂停/取消/交接区分 `PAUSED`（预计续工）/`BLOCKED`（外部阻塞）/`CANCELLED`（用户取消）；取消不撤销已提交的副作用，暂停时不启动新改动或新测试。
+- 暂停时记录任务 ID、worktree、branch、HEAD、已改文件、未提交状态、测试证据、阻塞与下一步；不擅自 stash/reset/清理/合并。
+- 恢复前重读最新指令与任务文件，核对 worktree、HEAD、未提交修改与上游变更；有冲突先报告，不覆盖其他会话成果。
+- 完整契约与运行时生命周期边界见 [Agent 任务暂停与生命周期设计稿](docs/plans/agent-task-pause-resume-lifecycle.md)。
 
 ## 文档维护与交付
 
