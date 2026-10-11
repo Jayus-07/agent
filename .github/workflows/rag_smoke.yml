@@ -42,7 +42,8 @@ jobs:
           while IFS= read -r path; do
             case "$path" in
               backend/rag/*|backend/evaluation/*|backend/infra/llm/*|backend/config/*|\
-              backend/orchestration/graph/*|backend/services/rag_server.py|backend/prompts/*|\
+              backend/orchestration/graph/*|backend/core/tool_runtime/policy.py|\
+              backend/services/rag_server.py|backend/prompts/*|\
               backend/sql/migrations/*|data/docs/*|pyproject.toml|requirements-lock.txt|\
               .github/workflows/rag_smoke.yml|.github/workflows/rag_regression.yml)
                 relevant=true
