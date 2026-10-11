@@ -156,8 +156,11 @@ def verify_visible_doc_ids(doc_ids) -> set[str]:
     from backend.config import DOC_REGISTRY_PATH
     from backend.rag.indexing.doc_registry import DocumentRegistry
 
-    registry = DocumentRegistry(DOC_REGISTRY_PATH)
     try:
+        # 构造与查询同在 try 内（最终收口第二项）：Registry 初始化失败
+        # （PG 不可达等）与查询失败都必须包装为结构化异常，禁止裸异常
+        # 逃逸后被软降级吞掉、伪装成空结果。
+        registry = DocumentRegistry(DOC_REGISTRY_PATH)
         return registry.list_visible_doc_ids(ids)
     except ReviewVisibilityUnavailableError:
         raise

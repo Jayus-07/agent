@@ -710,3 +710,163 @@ class TestSystemSubjectExemptClosed:
         assert "缺 doc_id 存量" not in text, (
             "system_subject 不可信：缺 doc_id 文档不得放行")
         assert text.count("正文") == 1
+
+
+# ────────── 最终收口：答案缓存默认关闭 + Registry 构造故障 fail-closed ──────────
+
+class TestAnswerCacheDisabledByDefault:
+    """最终收口第一项：审核状态变更的跨进程失效存在不可忽视窗口
+    （版本号本地缓存 10s、invalidate 异常吞掉、自然到期不触发、TTL 1h），
+    答案缓存默认关闭——任何部署模式/配置覆盖下 get 恒 miss、put 恒 no-op。
+    显式 RAG_ANSWER_CACHE_ENABLED=true 才恢复（失效链路治理完成后）。"""
+
+    def test_put_then_get_is_miss_by_default(self, monkeypatch):
+        from backend.rag.answer_cache import get_answer_cache
+
+        monkeypatch.setattr("backend.config.rag.RAG_ANSWER_CACHE_ENABLED", False)
+        cache = get_answer_cache()
+        cache.put("q", "kb", {}, "model", "旧答案", scope="s")
+        assert cache.get("q", "kb", {}, "model", scope="s") is None, (
+            "缓存默认关闭：不得返回旧答案")
+
+    def test_natural_expiry_no_stale_answer(self, monkeypatch):
+        """文档自然到期场景：put 必须是 no-op（Redis 无写入），
+        之后任何进程相同请求都不可能命中。"""
+        import backend.rag.answer_cache as ac
+
+        writes = []
+
+        class FakeRedisStore:
+            def set_json(self, key, record, ttl=None):
+                writes.append(key)
+
+            def get_json(self, key):
+                return None
+
+            def incr_version(self, key):
+                return 1
+
+        monkeypatch.setattr("backend.config.rag.RAG_ANSWER_CACHE_ENABLED", False)
+        cache = ac.AnswerCache()
+        monkeypatch.setattr(cache, "_get_cache", lambda: FakeRedisStore())
+        cache.put("q", "kb", {}, "model", "旧答案", scope="s")
+        assert writes == [], "关闭状态下 put 不得写 Redis"
+        assert cache.get("q", "kb", {}, "model", scope="s") is None
+
+    def test_invalidate_failure_path_safe(self, monkeypatch):
+        """缓存失效失败（Redis 挂）：关闭状态下无旧答案可返回，且不抛异常。"""
+        from backend.rag.answer_cache import get_answer_cache
+
+        class BrokenRedis:
+            def incr_version(self, key):
+                raise ConnectionError("redis down")
+
+        monkeypatch.setattr("backend.config.rag.RAG_ANSWER_CACHE_ENABLED", False)
+        cache = get_answer_cache()
+        monkeypatch.setattr(cache, "_get_cache", lambda: BrokenRedis())
+        cache.invalidate_kb("kb")  # 不得抛异常
+        assert cache.get("q", "kb", {}, "model", scope="s") is None
+
+    def test_env_override_cannot_bypass(self, monkeypatch):
+        """GPT 验收口径：配置覆盖（env=true）也不得绕过硬关闭。"""
+        from backend.rag.answer_cache import get_answer_cache
+
+        monkeypatch.setattr(
+            "backend.rag.pipeline.RAG_ANSWER_CACHE_ENABLED", True)
+        cache = get_answer_cache()
+        cache.put("q", "kb", {}, "model", "旧答案", scope="s")
+        assert cache.get("q", "kb", {}, "model", scope="s") is None
+
+    def test_hard_disable_flag_restores_original_impl(self, monkeypatch):
+        """原实现完整保留：仅翻转硬开关常量即可恢复（治理完成后的恢复路径，
+        需代码变更+重新评审，env 不可达）。内存桩替代 Redis（本文件 autouse
+        _no_redis 屏蔽真实 Redis）。"""
+        import backend.rag.answer_cache as ac
+
+        class FakeRedisStore:
+            def __init__(self):
+                self.store = {}
+
+            def set_json(self, key, record, ttl=None):
+                self.store[key] = record
+
+            def get_json(self, key):
+                return self.store.get(key)
+
+            def incr_version(self, key):
+                return 1
+
+        monkeypatch.setattr(ac, "_ANSWER_CACHE_HARD_DISABLED", False)
+        cache = ac.AnswerCache()
+        store = FakeRedisStore()
+        monkeypatch.setattr(cache, "_get_cache", lambda: store)
+        cache.put("q", "kb", {}, "model", "答案", scope="s",
+                  meta={"answer_status": "ok"})
+        assert store.store, "翻转后原实现恢复写缓存"
+        record = cache.get("q", "kb", {}, "model", scope="s")
+        assert record is not None and record["answer"] == "答案"
+
+
+class TestRegistryConstructorFailure:
+    """最终收口第二项：DocumentRegistry() 构造在 verify 的 try 外，
+    构造失败（PG 不可达等）会以裸异常逃逸（BM25 腿软降级会吞掉）。
+    构造失败必须与查询失败同为 ReviewVisibilityUnavailableError。"""
+
+    def _boom_registry(self, monkeypatch):
+        from backend.rag.indexing import doc_registry as dr
+
+        class Boom:
+            def __init__(self, path):
+                raise RuntimeError("pg unreachable at init")
+
+        monkeypatch.setattr(dr, "DocumentRegistry", Boom)
+
+    def test_verify_wraps_constructor_failure(self, monkeypatch):
+        self._boom_registry(monkeypatch)
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            verify_visible_doc_ids({"ok"})
+
+    def test_blacklist_cache_hit_then_constructor_failure_fails_closed(
+            self, monkeypatch):
+        """黑名单缓存有效（不查 Registry）也必须在正向校验构造失败时
+        显式失败——不得用过期安全状态继续放行。"""
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        get_review_blocked_doc_ids()  # 黑名单缓存预热成功
+        self._boom_registry(monkeypatch)
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            apply_review_visibility([_doc("ok")])
+
+    def test_hybrid_constructor_failure_fails_closed(self, monkeypatch):
+        import backend.rag.retrieval.hybrid as hybrid_mod
+
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        get_review_blocked_doc_ids()  # 黑名单缓存有效
+        self._boom_registry(monkeypatch)
+        monkeypatch.setattr(
+            hybrid_mod, "_hybrid_retrieve_impl",
+            lambda *a, **k: [_doc("ok")])
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            hybrid_retrieve("q", None, None)
+
+    def test_pipeline_exits_constructor_failure_fails_closed(
+            self, monkeypatch):
+        from backend.rag import pipeline as module
+
+        monkeypatch.setattr(
+            "backend.rag.authz.retrieval_authorized_kbs",
+            lambda *a, **k: None)
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        get_review_blocked_doc_ids()  # 黑名单缓存有效
+        self._boom_registry(monkeypatch)
+        p = _FakeContextPipeline([_doc("ok")])
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            module.RAGPipeline.retrieve_knowledge(
+                p, "q", kb_id="kb", subject_type="employee",
+                department="general")
+        with pytest.raises(ReviewVisibilityUnavailableError):
+            module.RAGPipeline.retrieve_documents(
+                p, "q", kb_id="kb", subject_type="employee",
+                department="general")
