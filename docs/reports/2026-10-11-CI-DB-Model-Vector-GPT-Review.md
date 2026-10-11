@@ -162,37 +162,45 @@ pytest tests/evaluation/test_release_gate_tier_samples.py → 5 passed
 
 ## 8. GitHub Actions 真实结果
 
-**第二轮整改（GPT 复核回应，commit `93e3dc7`）后状态：**
+**最终收口（key 配置完成 + GPT 复核整改全部落地后）：**
 
 | Run | 触发 | 结果 | 说明 |
 | --- | --- | --- | --- |
-| [38146905426](https://github.com/Jayus-07/agent/actions/runs/38146905426) | pull_request | ✅ 通过（整改后语义） | Detect ✓ → `RAG Smoke preflight (PR, no paid API)` ✓（E0 免费）→ `RAG Smoke (real API)` **skipped**——受信任入口收敛实证：PR 不再获得付费 Secrets 跑真实评测 |
-| [38142127992](https://github.com/Jayus-07/agent/actions/runs/38142127992) | pull_request（旧策略） | ✗ BLOCKED（旧策略实证） | init_db ✓；Seed 显式 RuntimeError（缺 RERANK_API_KEY）——同时暴露旧策略下同仓库 PR 可达付费 Secrets |
+| **[38150689331](https://github.com/Jayus-07/agent/actions/runs/38150689331)** | **workflow_dispatch（PR 分支 + regression suite）** | **✅ SUCCESS（10m53s）** | **GitHub 上首次真实 API 评测全绿**：preflight ✓（29 用例/git_sha=4a6fd18/suite_hash=5976e7ea01fd621e）→ `EVAL_MODEL_BINDING_CHECK=passed` ✓ → `EVAL_MODEL_PROBE=passed` ✓ → 导入 169 chunks ✓ → `EVAL_INDEX_CHECK=passed vectors=169 dims=1024` ✓ → 评测 **96.5%（28/29），smoke 100%（19/19，阈 95%）、hard 90%（9/10，阈 70%）**，CLI exit 0（job 绿灯即分层门禁全过）。结果与本机隔离验证（§5）完全一致。Artifact：`rag-regression-38150689331` |
+| [38150412116](https://github.com/Jayus-07/agent/actions/runs/38150412116) | pull_request | ✅ SUCCESS | PR 免费预检：路径检测 + E0 preflight + **19 项定向回归测试**（最终收口 1），无付费调用 |
+| [38146905426](https://github.com/Jayus-07/agent/actions/runs/38146905426) | pull_request | ✅ SUCCESS（整改后语义） | 受信任入口收敛首轮实证：真实评测 job skipped |
+| [38149897120](https://github.com/Jayus-07/agent/actions/runs/38149897120) | workflow_dispatch | ✗ BLOCKED | Key 未配齐时 Seed 显式 RuntimeError（过程记录；配齐后同链路即绿） |
 | [38141724006](https://github.com/Jayus-07/agent/actions/runs/38141724006) | pull_request（旧策略） | ✗ init_db 连锁失败 | agent_business 预建缺失 → 已修（5337858） |
 
-**受信任执行入口整改证据（GPT 复核第 3 项）**：
-- `gh api repos/Jayus-07/agent/environments/prompt-eval` 实测返回 `protection_rules: []`、`deployment_branch_policy: null`——**environment 无任何保护规则**，整改前同仓库未审核 PR 的 job 可直接获得付费 Secrets（run 38142127992 日志中 secret 值被 mask 即读到的实证）。
-- 整改方式（不改用 `pull_request_target`）：`rag_smoke.yml` 拆分——`pull_request` 事件只运行免费预检 job（不引用任何 secrets）；真实 API 评测 job 触发条件收敛为 `push(main)` 与 `workflow_dispatch`（合并后代码或有写权限者人工触发 = 信任审查）。付费 Secrets 的可达面从"所有同仓库 PR"收敛为"受信任入口"。
+**受信任执行入口证据（GPT 复核第 3 项）**：
+- `gh api repos/Jayus-07/agent/environments/prompt-eval` 实测 `protection_rules: []`、`deployment_branch_policy: null`（整改前基线）——整改前同仓库未审核 PR 的 job 可直接获得付费 Secrets（run 38142127992 日志中 secret 值被 mask 即读到的实证）。
+- 整改（不改用 `pull_request_target`）：`rag_smoke.yml` 拆分——`pull_request` 只运行免费预检 job（不引用任何 secrets），真实 API 评测 job 限 `push(main)` 与 `workflow_dispatch`；`rag_regression` 本就无 PR 触发（schedule + dispatch）。
 
-**旧失败证据**：[38086882164](https://github.com/Jayus-07/agent/actions/runs/38086882164)（14 连败最后一次）。
+**Environment 保护建议（最终收口 2，供仓库所有者在 Settings → Environments → prompt-eval 配置，施工方不代改）**：
+
+1. **Required reviewers ≥ 1**（仓库所有者本人）：任何引用该 environment 的 job 启动前需人工批准，批准前 secrets 不注入——补强"有写权限者 dispatch ≠ 代码经审核"的缺口（批准动作即审核动作）。
+2. **Deployment branch policy：restricted**，允许 `main` 与 `task/*`：阻止任意分支 job 使用该 environment。注意 pull_request 事件 job 的 ref（`refs/pull/N/merge`）不匹配策略会直接失败——与本设计不冲突（整改后 PR 事件只跑不引用 environment 的免费预检 job）。
+3. 引用面审计（2026-10-11）：`rag_smoke.yml` 真实评测段（push main/dispatch）、`rag_regression.yml`（schedule/dispatch）、`prompt_eval.yml`（dispatch + repository_dispatch，后端 Prompt 发布回调，既有行为不在本轮改动范围）。
+4. 保护规则配置后，正式执行方式固定为：**人工审核 PR HEAD → Actions → RAG Regression → Run workflow → 选定 PR 分支与 selection=regression → 批准 → 运行**。本次 run 38150689331 即按此方式执行（GPT 两轮复核通过的 PR HEAD `4a6fd18` + 仓库所有者 dispatch）。
 
 ---
 
-## 9. P0 / P1 遗留清单（第二轮整改后口径）
+## 9. P0 / P1 遗留清单（最终收口口径，P0/P1 不重复统计）
 
-**P0 级未闭环（不得宣称 P0=0）：**
-1. **GitHub 真实评测 Run 未完成**——受 `PROMPT_EVAL_TEST_RERANK_API_KEY` 未配置 + 受信任入口（main push/dispatch）双重待验；隔离环境同链路已验证（§5）但 GitHub Actions 上的真实质量结论缺失。
-2. **费用归因缺口（UNVERIFIED）**——Embedding/Rerank 直调未接 Billing V2（`llm_usage` 0 记录）；是否升级为发布阻断项由批准范围与发布门禁决定，未决前不得视为零成本、不得宣称已记账。
+**P0（阻断合并）：0 项。**
+原 P0-1「GitHub 真实评测 Run 未完成」**已闭环**：run [38150689331](https://github.com/Jayus-07/agent/actions/runs/38150689331) 在受信任入口真实跑通（96.5% PASS，§8）。
 
-**P1（登记不扩大本轮）：**
-1. Billing V2 精确费用归因实施（来源字段设计 + 直调链接入账本 + eval_run_id 绑定）——**本轮验收范围明确不含此项**（复核第 6 项），实施另立任务。
+**P1（已批准另立任务，不阻断本 PR，不与 P0 重复计数）：**
+1. **Billing V2 精确费用归因实施**（唯一归属地）：来源字段设计 + Embedding/Rerank 直调链接入账本 + eval_run_id 绑定。**本轮验收范围明确不含**（复核第 6 项批准另立）。当前事实：CI 隔离库 `llm_usage` 0 记录，workflow 已导出空账本汇总（`llm_usage_summary.json`，标注"未同步生产计费"）——**费用 UNVERIFIED，不视为零成本，也不作为本 PR 的合并阻断**。
 2. 共享库 rag_eval_kb 恢复/清理拍板（§7）。
 3. 历史基线对比（--compare/--promote-baseline）未启用——Regression 定位为固定样本门禁（§7）。
 4. 版本化脱敏模型快照、已知样本检索探针、索引指纹缓存（[PR #31](https://github.com/Jayus-07/agent/pull/31) 规范中标注 ❌ 的契约项）。
-5. RC-039（采购合同付款节点）语义召回不足——检索质量优化任务，不在本轮范围。
+5. RC-039（采购合同付款节点）语义召回不足——检索质量优化任务。
+6. prompt-eval environment 保护规则配置（§8 建议 1/2，仓库所有者操作）。
 
-**测试证据（第二轮整改，本机 T1）**：
+**测试证据（本机 T1 + CI T1）**：
 ```
+# 本机
 python -m pytest tests/test_rag_smoke_path_filter.py \
   tests/evaluation/test_seed_eval_bindings_verify.py \
   tests/evaluation/test_release_gate_tier_samples.py
@@ -200,13 +208,15 @@ python -m pytest tests/test_rag_smoke_path_filter.py \
   维度不匹配/解密失败/停用/无绑定 + 5 gate 三态），exit 0
 python -m pytest backend/tests/scripts/test_seed_prompt_eval_db.py \
   backend/tests/test_prompt_eval_workflow.py → 6 passed（既有行为无回归）
+# CI（run 38150412116，PR 免费预检 Job 内，同一组 19 项）
+Targeted regression tests (19, free) → ✓ passed，无付费调用
 ```
 
 **BLOCKED/UNVERIFIED 清单**：
-- GitHub 真实评测 Run：**BLOCKED**——代码与权限门禁已按复核意见补齐（§8/§10），待配置 `PROMPT_EVAL_TEST_RERANK_API_KEY` 后以受信任入口（workflow_dispatch 或合并后 main push）重跑核对。
-- 精确 API 费用数值：**UNVERIFIED**（验收范围调整见上，不视为零成本）。
+- 真实评测 Run：**已解除 BLOCKED**（38150689331 ✅）。
+- 精确 API 费用数值：**UNVERIFIED**（P1-1 范围，不视为零成本）。
 
-**合并建议：BLOCKED**——按复核第 5 项，CI 真实评测 Run 未完成前不请求合并。代码与权限门禁整改已完成（§8/§10），下一步：配置缺失的 Rerank Secret → 受信任入口重跑 CI → 以真实 Run 结果更新本报告后再请求复核。
+**合并建议：READY_FOR_REVIEW（最终收口后）**——复核第 5 项要求的真实评测 Run 已完成（run 38150689331 ✅，96.5% PASS，受信任入口执行），P0 阻断项清零（§9）；P1 全部已批准另立任务、不重复计入。不自行合并，等待 GPT 最终验收。
 
 ## 10. 第二轮整改逐条回应（GPT 复核意见，commit `93e3dc7`）
 
@@ -220,3 +230,16 @@ python -m pytest backend/tests/scripts/test_seed_prompt_eval_db.py \
 | 6 | Billing V2 费用归因未完成的验收范围 | §9 明确：**本轮验收范围不含 Billing V2 精确费用归因实施**（P1 挂账另立任务）；费用缺口 UNVERIFIED，未决前不视为零成本、不宣称已记账 |
 
 **整改后 HEAD**：`93e3dc7`（代码与测试）；审查包随最新文档提交更新。
+
+## 11. 最终收口记录（GPT 第二轮复核意见，代码 `0fc0765`/`4a6fd18`，报告 `HEAD`）
+
+| # | 收口要求 | 落实与证据 |
+| --- | --- | --- |
+| 1 | PR 免费预检 Job 加 19 项定向回归测试 | `rag_smoke.yml` 免费预检 job 新增 Targeted regression tests 步骤（7 路径过滤 + 7 verify + 5 gate 三态）；无付费模型调用、不读 API Secrets、不扩大为全量 pytest。CI 实证：run [38150412116](https://github.com/Jayus-07/agent/actions/runs/38150412116) 该步骤 ✓ |
+| 2 | prompt-eval Environment 访问范围审计 + 保护建议 | 引用面：rag_smoke 真实评测段 / rag_regression / prompt_eval 三处（§8）；实测无 protection_rules；给出 Required reviewers ≥1 + Deployment branch policy（restricted：main、task/*）建议，由仓库所有者配置，施工方不代改；正式执行方式随之固定（§8 建议 4） |
+| 3 | 真实 CI 执行方式确认 | 已按"人工审核 PR HEAD → workflow_dispatch 选定 PR #30 分支 + regression suite"执行：run [38150689331](https://github.com/Jayus-07/agent/actions/runs/38150689331) ✅ 96.5% PASS（GPT 两轮复核通过后的 HEAD）；正式保护规则配置后照 §8 建议 4 固定流程 |
+| 4 | Rerank Key 配置 | 仓库所有者已在 prompt-eval environment 配齐三个 API Key（含首次误填 BASE_URL 的恢复：三个端点值已由施工方重设为生产绑定同款端点） |
+| 5 | 不得宣称 P0=0 / CI PASS | 已修正并闭环：真实评测 Run 完成（§8/§9）后 P0 阻断项如实为 0，P1 单独列示不重复计数 |
+| 6 | Billing V2 验收范围 | §9 P1-1 唯一归属，明确不含于本轮验收；费用 UNVERIFIED、不视为零成本、不作为合并阻断 |
+
+**最终 HEAD**：见 PR 页（代码 `0fc0765` + `4a6fd18`，报告随最后提交）。
