@@ -95,8 +95,24 @@ class MCPManager:
                     return {"ok": False, "tool": tool_name,
                             "error": f"MCP 工具调用超时（>{MCP_TOOL_TIMEOUT}s）"}
                 except Exception as e:
+                    # 异常防泄漏（PR#27 收口）：受控业务异常（权限拒绝/框架
+                    # 失败语义）的消息由代码构造、不含敏感数据，透传给调用方；
+                    # 意外异常（IO/DB/三方库等）的 str(e) 可能携带服务器路径、
+                    # 用户内容或密钥——调用方只回通用错误文案 + 错误类型码 +
+                    # trace_id，原文与堆栈仅进服务器受控日志（内部诊断能力
+                    # 保留，不对外）。
                     logger.error(f"[MCP] {tool_name} 调用失败: {e}", exc_info=True)
-                    return {"ok": False, "tool": tool_name, "error": str(e)}
+                    from backend.observability.tracer import current_trace_context
+
+                    trace_id, _ = current_trace_context()
+                    if isinstance(e, (PermissionError, RuntimeError)):
+                        return {"ok": False, "tool": tool_name, "error": str(e),
+                                "error_code": type(e).__name__,
+                                "trace_id": trace_id or None}
+                    return {"ok": False, "tool": tool_name,
+                            "error": "工具执行失败（内部错误），请稍后重试或联系管理员",
+                            "error_code": f"internal:{type(e).__name__}",
+                            "trace_id": trace_id or None}
         return {"ok": False, "error": f"Tool not found: {tool_name}"}
 
 

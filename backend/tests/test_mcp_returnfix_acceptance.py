@@ -468,3 +468,115 @@ class _BoomServer:
 
     def call_tool(self, tool_name, params):
         raise PermissionError("denied-for-rest")
+
+
+# ==================== 7. 异常敏感信息泄漏围堵 ====================
+
+_SENSITIVE = "/srv/secret/path SECRET_KEY=sk-ant-123 用户敏感内容user_content"
+
+
+class _LeakServer:
+    """call_tool 抛含敏感数据的意外异常的最小 server 替身。"""
+    name = "leak"
+    description = ""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    def list_tools(self):
+        return [{"name": "leak_tool", "description": "", "parameters": {}}]
+
+    def call_tool(self, tool_name, params):
+        raise self._exc
+
+
+class TestExceptionLeakContainment:
+    """收口验收：Tool 意外异常含敏感路径/密钥/用户内容时，
+    REST 响应、标准 MCP 响应不泄漏原文；受控日志保留诊断。"""
+
+    def _register(self, exc):
+        from mcp_servers.manager import manager as global_manager
+
+        original = global_manager._servers
+        global_manager._servers = {"leak": _LeakServer(exc)}
+        return original
+
+    def test_rest_unexpected_exception_contained(self, clean_ctx):
+        from mcp_servers.manager import manager as global_manager
+
+        original = self._register(
+            OSError(f"open failed: {_SENSITIVE}"))
+        try:
+            result = global_manager.route("leak_tool", {})
+        finally:
+            global_manager._servers = original
+        assert result["ok"] is False
+        assert _SENSITIVE not in result["error"]
+        assert "内部错误" in result["error"]
+        assert result["error_code"] == "internal:OSError"
+        assert "trace_id" in result
+
+    def test_controlled_business_exception_passes_through(self, clean_ctx):
+        """受控业务异常（权限拒绝等）消息由代码构造，保留原文供调用方
+        区分拒绝原因——不属于泄漏面。"""
+        from mcp_servers.manager import manager as global_manager
+
+        original = self._register(PermissionError("get_stats 仅限管理员"))
+        try:
+            result = global_manager.route("leak_tool", {})
+        finally:
+            global_manager._servers = original
+        assert result["ok"] is False
+        assert "仅限管理员" in result["error"]
+        assert result["error_code"] == "PermissionError"
+
+    def test_protocol_unexpected_exception_contained(self, monkeypatch):
+        """标准 MCP 通道：意外异常经 _fn 边界转受控文案，client 响应
+        （isError content）不含敏感原文。"""
+        from fastapi.testclient import TestClient
+        from mcp_servers.manager import MCPManager
+        from mcp_servers.protocol_app import build_protocol_app
+
+        monkeypatch.setattr("backend.config.API_KEY", "k-leak")
+        monkeypatch.setattr("backend.config.ALLOW_UNAUTHENTICATED", False)
+        monkeypatch.setattr("backend.config.ENVIRONMENT", "dev")
+        mgr = MCPManager()
+        mgr.register(_LeakServer(OSError(f"db conn failed: {_SENSITIVE}")))
+        app = build_protocol_app(mgr)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "tools/call",
+                      "params": {"name": "leak_tool", "arguments": {}}, "id": 1},
+                headers={"X-API-Key": "k-leak",
+                         "Accept": "application/json, text/event-stream"})
+            assert resp.status_code == 200
+            assert _SENSITIVE not in resp.text
+            assert "internal:OSError" in resp.text
+
+    def test_internal_log_retains_diagnostics(self, clean_ctx, caplog):
+        """受控日志保留异常诊断（类名+原文），供内部排障——不外泄。"""
+        from mcp_servers.manager import manager as global_manager
+
+        original = self._register(OSError(f"open failed: {_SENSITIVE}"))
+        try:
+            with caplog.at_level("ERROR"):
+                global_manager.route("leak_tool", {})
+        finally:
+            global_manager._servers = original
+        assert "OSError" in caplog.text
+
+    def test_java_actor_injection_rejected(self):
+        """actor 字段禁控制字符/超长（CRLF 日志注入防护）。"""
+        from pydantic import ValidationError
+
+        from backend.app.api.routes.internal_ai import AiCallRequest
+
+        with pytest.raises(ValidationError):
+            AiCallRequest(tool="search_knowledge",
+                          actor_user_id="u1\r\n[X-Injected-Header] evil")
+        with pytest.raises(ValidationError):
+            AiCallRequest(tool="search_knowledge", actor_user_id="u" * 129)
+        ok = AiCallRequest(tool="search_knowledge", actor_user_id="svc:java-u1",
+                           actor_department="sales")
+        assert ok.actor_user_id == "svc:java-u1"

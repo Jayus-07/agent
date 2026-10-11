@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.app.api.deps import require_internal_token
 from backend.shared.logger import logger
@@ -67,8 +67,15 @@ class AiCallRequest(BaseModel):
     # P3（docs/auth 修复清单③）：Java 侧透传终端用户身份（payload 委托）——
     # 该路由是 Java→Python 直连（不过网关，无身份头），工具层的权限校验与
     # 审计归属靠这里绑定；不传即 anonymous，工具侧 fail-safe。
-    actor_user_id: str = ""
-    actor_department: str = ""
+    # 信任边界（PR#27 收口）：actor 字段的权威性以 X-Internal-Token 为锚
+    # （token 持有者=可信内部服务，终端身份由 Java 侧从已验证会话透传，
+    # Python 不再二次验签——与网关-后端委托模型一致）。约束仅防注入：
+    # 长度上限 + 禁控制字符，防 CRLF 伪造审计日志行；真实 Java 调用方
+    # 尚未接入（AI_TOOLS_ENABLED 默认 false），格式收紧不影响现网。
+    actor_user_id: str = Field("", max_length=128,
+                               pattern=r"^[^\r\n\x00-\x1f]*$")
+    actor_department: str = Field("", max_length=128,
+                                  pattern=r"^[^\r\n\x00-\x1f]*$")
 
 
 @router.post("/call", dependencies=[Depends(require_internal_token)])

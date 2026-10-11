@@ -112,7 +112,19 @@ def _make_tool_fn(server, tool_name: str, parameters: dict):
 
         import asyncio
 
-        return await asyncio.to_thread(_execute)
+        try:
+            return await asyncio.to_thread(_execute)
+        except (PermissionError, RuntimeError) as e:
+            # 受控业务异常：消息由代码构造，透传给 MCP client（isError 语义）
+            raise
+        except Exception as e:
+            # 异常防泄漏（PR#27 收口）：意外异常的 str(e) 可能携带服务器
+            # 路径/用户内容/密钥——client 只收通用文案+类型码，原文与堆栈
+            # 仅进服务器受控日志。
+            logger.error(f"[MCP-Protocol] {tool_name} 执行失败: {e}", exc_info=True)
+            raise RuntimeError(
+                f"工具执行失败（内部错误）[internal:{type(e).__name__}]，"
+                "请稍后重试或联系平台管理员") from None
 
     _fn.__signature__ = inspect.Signature(params)
     return _fn
