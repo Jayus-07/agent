@@ -464,8 +464,18 @@ class TestKbIdFallback:
         finally:
             clear_context()
 
-    def test_retriever_filters_restricted_chunks_before_return(self):
-        """KB 授权通过后仍须执行文档 permission_scope 收口。"""
+    def test_retriever_filters_restricted_chunks_before_return(
+            self, monkeypatch):
+        """KB 授权通过后仍须执行文档 permission_scope 收口。
+
+        本测试只关注 permission 维度：审核可见性（Batch 1A）依赖 Registry
+        事实源，假 doc_id 必须显式 mock，不得依赖共享库内容。"""
+        import backend.rag.retrieval.review_filter as rf
+
+        monkeypatch.setattr(rf, "get_review_blocked_doc_ids",
+                            lambda: frozenset())
+        monkeypatch.setattr(rf, "verify_visible_doc_ids",
+                            lambda ids: set(ids))
         from backend.core.request_context import RequestContext
         from backend.rag.context import RagRequestState, set_context, clear_context
 

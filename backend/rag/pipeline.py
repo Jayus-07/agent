@@ -1372,6 +1372,13 @@ class RAGPipeline:
                 limit=result_limit if candidate_mode else top_k,
                 interleave=candidate_mode,
             )
+            # ── 审核可见性收口（Batch 1A 返修）：黑名单 + 实时批量正向校验 ──
+            # /rag/search、/retrieve_docs 及客服等消费方均为对客语义：
+            # 缺 doc_id 一律剔除；Registry 故障在此显式失败（本函数无软降级）。
+            from backend.rag.retrieval.review_filter import apply_review_visibility
+            results = apply_review_visibility(
+                results, allow_missing_doc_id=False,
+                context="retrieve_documents")
             elapsed = _time.monotonic() - t0
             logger.info(
                 f"[RAG.search] {len(results)} docs, {elapsed:.1f}s "
@@ -1470,7 +1477,12 @@ class RAGPipeline:
             # ── 审核可见性（Batch 1A fail-closed）：两条腿统一剔除 ──
             # 检索前先取不可见集合（pending_review/deprecated/过期）：Registry
             # 不可用在此显式失败，两条腿不再执行——绝不以空内容或旧状态放行。
-            from backend.rag.retrieval.review_filter import get_review_blocked_doc_ids
+            # import 置于两腿 try 之外：except 子句引用的异常类必须先完成绑定。
+            from backend.rag.retrieval.review_filter import (
+                ReviewVisibilityUnavailableError,
+                apply_review_visibility,
+                get_review_blocked_doc_ids,
+            )
             review_blocked = get_review_blocked_doc_ids()
 
             chunks = []
@@ -1509,8 +1521,17 @@ class RAGPipeline:
                         if self._doc_matches_filter(getattr(d, "metadata", {}), kb_scope)
                         and _authorized(d)
                     ]
-                for doc in kept:
+                # Batch 1A 返修：候选批量实时正向校验（黑名单 TTL/Redis 中断
+                # 窗口内的新下线/新待审/删除残留由此兜底）；内部 system_subject
+                # 对缺 doc_id 的存量 chunk 兼容放行，对客主体一律剔除。
+                visible = apply_review_visibility(
+                    kept, allow_missing_doc_id=bool(system_subject),
+                    context="retrieve_knowledge:bm25")
+                for doc in visible:
                     chunks.append(doc.page_content if hasattr(doc, 'page_content') else str(doc))
+            except ReviewVisibilityUnavailableError:
+                # 审核事实源故障不可软降级（Batch 1A fail-closed）
+                raise
             except Exception as e:
                 # BM25 失败 → 降级只用向量检索（软降级），留痕；全部失败时 chunks 为空返回 ""
                 logger.warning(f"[RAG.retrieve] BM25 检索失败，跳过: {e}", exc_info=True)
@@ -1534,14 +1555,22 @@ class RAGPipeline:
                         "[RAG.retrieve] 全量过滤 0 命中，放宽 QueryAnalyzer "
                         f"维度重试（保留 kb 范围）: {kb_scope}")
                     vec_results = _vec_retrieve(kb_scope)
+                allowed = []
                 for doc in vec_results[:top_k]:
                     # 向量腿授权后过滤（修复旁路：此前无 keep-set 也无
                     # permission 过滤，/rag/search remote 路径经此直读全库）
-                    if not _authorized(doc):
-                        continue
+                    if _authorized(doc):
+                        allowed.append(doc)
+                visible = apply_review_visibility(
+                    allowed, allow_missing_doc_id=bool(system_subject),
+                    context="retrieve_knowledge:vector")
+                for doc in visible:
                     content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
                     if content not in chunks:
                         chunks.append(content)
+            except ReviewVisibilityUnavailableError:
+                # 审核事实源故障不可软降级（Batch 1A fail-closed）
+                raise
             except Exception as e:
                 # 索引/运行时 embedding 模型不一致 → 禁止静默降级 BM25：
                 # 必须显式失败并携带 INDEX_EMBEDDING_MISMATCH（治理改造 2026-09-22）。

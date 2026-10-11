@@ -813,6 +813,33 @@ class PostgresDocumentRegistry(DocumentRegistry):
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_visible_doc_ids(self, doc_ids, now: str | None = None) -> set[str]:
+        """批量正向可见性校验（Batch 1A 返修）：仅返回当前可见的 doc_id。
+
+        可见 = status='active' 且未过期（expire_at 为空或 > now，与
+        list_expired 同一口径）。一条 SQL 完成候选集合（去重后通常 ≤ top_k）
+        的实时校验，不经过任何缓存——黑名单 TTL/跨进程信号中断期间新下线、
+        新待审（publish 提交 pending_review）与已删除残留由此兜底。调用方
+        必须把查询异常视为可见性事实源不可用（fail-closed），不得用过期
+        安全状态继续放行。
+        """
+        ids = {d for d in (doc_ids or []) if d}
+        if not ids:
+            return set()
+        from datetime import datetime
+        now = now or datetime.now().isoformat()[:10]
+        placeholders = ",".join(["%s"] * len(ids))
+        with self._lock, self._conn() as conn:
+            rows = self._exec(
+                conn,
+                f"""SELECT doc_id FROM {self._table}
+                   WHERE doc_id IN ({placeholders})
+                     AND status = 'active'
+                     AND (expire_at IS NULL OR expire_at > %s)""",
+                tuple(ids) + (now,),
+            ).fetchall()
+        return {r["doc_id"] for r in rows}
+
     def archive_expired(self, now: str | None = None) -> int:
         expired = self.list_expired(now=now)
         if not expired:

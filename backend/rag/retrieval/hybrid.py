@@ -318,21 +318,24 @@ def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, 
     4.1b: 返回前过滤 pending_review（near_dup 审核态）文档——软过滤，
     不动向量库 where（兼容无 review_status 字段的存量 chunk）。
     Batch 1A（2026-10-12）：实现收口到 retrieval.review_filter 公共模块，
-    与 retrieve_knowledge / retrieve_documents 共用同一 fail-closed 出口。
+    与 retrieve_knowledge / retrieve_documents 共用同一 fail-closed 出口；
+    ask 为对客链路，缺 doc_id 的结果一律剔除（严格模式）。
     """
     docs = _hybrid_retrieve_impl(
         query, vector_retriever, bm25_retriever, k=k, doc_ids=doc_ids,
         rrf_k=rrf_k, metadata_filter=metadata_filter,
         expanded_queries=expanded_queries,
     )
-    return _filter_review_blocked(docs)
+    from backend.rag.retrieval.review_filter import apply_review_visibility
+    return apply_review_visibility(
+        docs, allow_missing_doc_id=False, context="hybrid")
 
 
 # 审核可见性实现单一事实源（Batch 1A）：hybrid 侧只保留兼容别名，
-# 行为（含 fail-closed 与跨进程失效）见 review_filter 模块 docstring。
+# 行为（双层防线、fail-closed 与跨进程失效）见 review_filter 模块 docstring。
 from backend.rag.retrieval.review_filter import (  # noqa: E402
     ReviewVisibilityUnavailableError,  # noqa: F401
-    filter_review_blocked as _filter_review_blocked,
+    apply_review_visibility as _filter_review_blocked,
     get_review_blocked_doc_ids as _pending_review_doc_ids,
     invalidate_pending_review_cache,
 )
