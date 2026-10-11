@@ -1,4 +1,5 @@
 """RAG MCP Server — 知识库检索能力"""
+from backend.shared.logger import logger
 from mcp_servers.manager import MCPServer
 from mcp_servers.schema_adapter import langchain_tool_to_mcp_meta
 from backend.tools.rag import search_knowledge_tool
@@ -57,13 +58,17 @@ def _safe_doc_row(row: dict) -> dict:
     return {k: row.get(k) for k in _DOC_ROW_PUBLIC_FIELDS}
 
 
-def _deny(reason: str, detail: str = "") -> PermissionError:
-    """失败语义（PR#27 返修3）：未认证/越权不返回错误 dict（那会被
-    manager 包装成 ok:true / 协议层 isError:false）——统一 raise，
-    REST 通道由 manager.route 转 ok:false，标准 MCP 通道转 isError:true。
+def _deny(reason: str, detail: str = "") -> "MCPToolError":
+    """失败语义（返修3+复核修正）：未认证/越权不返回错误 dict（那会被
+    manager 包装成 ok:true / 协议层 isError:false）——统一 raise 受控
+    异常，REST 通道由 manager.route 转 ok:false，标准 MCP 通道转
+    isError:true。detail 为受控短语（RagAuthorizationError 的中文拒绝
+    原因），非原始异常文本。
     """
+    from mcp_servers.manager import MCPToolError
+
     message = f"RAG MCP {reason}" + (f": {detail}" if detail else "")
-    return PermissionError(message)
+    return MCPToolError(message, "permission_denied")
 
 
 class RAGMCPServer(MCPServer):
@@ -138,11 +143,18 @@ class RAGMCPServer(MCPServer):
                 trace_agent="mcp-rag",
             )
             if result.status is not ToolStatus.SUCCESS:
-                # 业务失败 ≠ 协议成功（返修3）：显式失败上抛
-                raise RuntimeError(
-                    f"search_knowledge 执行失败 "
-                    f"[{result.status.value}] {result.error_code or ''}: "
-                    f"{result.error_message or ''}")
+                # 业务失败 ≠ 协议成功（返修3+复核修正）：显式失败上抛受控
+                # 异常。result.error_message 来自治理链/执行器底层，可能
+                # 含敏感数据——不进 safe_message、不落日志，只记枚举状态
+                # 与错误码（安全诊断）。
+                from mcp_servers.manager import MCPToolError
+
+                logger.error(
+                    f"[MCP-rag] search_knowledge 治理失败 "
+                    f"status={result.status.value} "
+                    f"error_code={result.error_code or '-'}")
+                raise MCPToolError(
+                    "search_knowledge 执行失败，请稍后重试", "tool_failed")
             return {"answer": result.data}
 
         if tool_name == "list_documents":

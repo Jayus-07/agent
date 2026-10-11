@@ -7,6 +7,7 @@
 不存在「HTTP 有权限、MCP 匿名可查」的旁路。
 不创建 MCP 专属授权体系（规格 §五）。
 """
+from backend.shared.logger import logger
 from mcp_servers.manager import MCPServer
 from mcp_servers.schema_adapter import langchain_tool_to_mcp_meta
 from backend.sql.sql_agent import get_sql_agent
@@ -33,12 +34,15 @@ def _mcp_sql_policy_context():
 
 
 def _unavailable():
-    """失败语义（PR#27 返修3）：kill switch/依赖不可用是执行失败——
+    """失败语义（返修3+复核修正）：kill switch/依赖不可用是执行失败——
     协议层显式失败（REST → ok:false；标准 MCP → isError:true），
-    不再以错误 dict 包装成协议成功。tool 本体的 envelope 文本协议
+    受控异常保证消息无敏感数据。tool 本体的 envelope 文本协议
     （sql_query_tool，供 LLM 阅读）不受影响。
     """
-    raise RuntimeError("SQL 查询服务暂不可用，请稍后重试。（service_unavailable）")
+    from mcp_servers.manager import MCPToolError
+
+    raise MCPToolError("SQL 查询服务暂不可用，请稍后重试。",
+                       "service_unavailable")
 
 
 class SQLMCPServer(MCPServer):
@@ -85,13 +89,20 @@ class SQLMCPServer(MCPServer):
                 _unavailable()
             if result.status in ("success", "no_data"):
                 return {"result": result.to_markdown()}
-            # 失败语义（返修3）：权限拒绝与其他执行失败显式上抛，
-            # 不再以错误 dict 包装成协议成功
+            # 失败语义（返修3+复核修正）：权限拒绝与其他执行失败显式
+            # 上抛受控异常——result.error 可能含查询上下文，不进
+            # safe_message，只进受控日志的状态/类型行。
+            from mcp_servers.manager import MCPToolError
+
             if result.status == "permission_denied":
-                raise PermissionError(
-                    f"SQL 查询被权限门拒绝: {result.error or result.status}")
-            raise RuntimeError(
-                f"SQL 查询失败 [{result.status}]: {result.error or ''}")
+                logger.warning(
+                    f"[MCP-sql] 权限门拒绝 channel=sql_query "
+                    f"status={result.status}")
+                raise MCPToolError("SQL 查询被权限门拒绝", "permission_denied")
+            logger.error(
+                f"[MCP-sql] 查询失败 status={result.status} "
+                f"error_type={result.error_type or '-'}")
+            raise MCPToolError("SQL 查询失败，请稍后重试。", "tool_failed")
 
         if tool_name == "list_tables":
             from backend.sql.schema_loader import schema_loader

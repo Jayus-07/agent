@@ -49,13 +49,23 @@
 
 ## 3. 安全验收
 
-### 3.0 第三轮收口补充验收（异常泄漏 / Java 信任边界 / 失败路径，本提交）
+### 3.-1 第四轮复核修正（最终独立复核阻断项，最终提交）
+
+| 复核阻断 | 修正 | 证据 |
+|---|---|---|
+| 异常类型（PermissionError/RuntimeError）不能保证 str(e) 无敏感数据，按类型白名单透传不可靠 | 引入显式受控异常 `MCPToolError`（manager.py:34，`safe_message`+`code` 双字段，str(e) 恒安全）；manager/protocol_app **只透传该类型**，其余一切异常（含 PermissionError/RuntimeError）一律映射稳定错误码+通用文案。错误码集：`permission_denied` / `tool_failed` / `service_unavailable` / `internal_error` / `internal:<类型>` / timeout / tool not found——REST ok:false 与 MCP isError:true 语义不变 | `test_runtime_error_with_secrets_contained_everywhere`（RuntimeError 带模拟密钥/内部路径/用户内容 → REST error 通用文案 + error_code=internal:RuntimeError，响应与日志零原文）、`test_permission_error_with_sensitive_content_contained`（同围堵）、`test_controlled_business_exception_passes_through`（MCPToolError 正常透传 safe_message+code） |
+| 原始异常消息直接进入普通日志 | 全部异常日志路径重写：不再记录 str(e) 原文与 exc_info 堆栈文本；改记**异常类型 + 发生位置（file:line:func）+ trace_id**（`_safe_error_location`，manager.py:50）。受控 MCPToolError 记 safe_message（构造时声明安全）。rag/sql 治理失败只记枚举 status/error_code，`result.error_message`/`result.error`（可能含查询上下文）不透传、不落日志 | `test_internal_log_retains_diagnostics`（含 `_SENSITIVE not in caplog.text`）、`test_runtime_error_with_secrets_contained_everywhere`（日志断言）、`test_permission_error_with_sensitive_content_contained`（日志断言） |
+| RAG search_knowledge 的 result.error_message 上抛路径 | rag.py:150-158：治理失败只记 `status`（枚举）与 `error_code`，上抛 `MCPToolError("search_knowledge 执行失败，请稍后重试", "tool_failed")`——error_message 不进 safe_message、不进日志 | 同上；search_knowledge 执行点测试回归通过 |
+
+最终行号定位：manager.py:34（MCPToolError）/50（_safe_error_location）/124-150（异常映射）；rag.py:61-71（_deny）/150-158（治理失败）；sql.py:42-44,95-105（三处 raise）；protocol_app.py:119-131（_fn 映射）。
+
+### 3.0 第三轮收口补充验收（异常泄漏 / Java 信任边界 / 失败路径）
 
 | 验收项 | 结论 | 证据 |
 |---|---|---|
-| 异常敏感信息泄漏（REST） | PASS | manager.route 异常分类：受控业务异常（PermissionError/RuntimeError，消息由代码构造）透传；意外异常只回通用文案 + `error_code=internal:<类型>` + trace_id。`test_rest_unexpected_exception_contained`（OSError 携带 `/srv/secret/path SECRET_KEY=sk-ant-123 用户敏感内容` → 响应零原文）、`test_controlled_business_exception_passes_through` |
-| 异常敏感信息泄漏（标准 MCP 8091） | PASS | protocol_app._fn 边界同策略：意外异常转受控文案 `[internal:<类型>]`，原文仅进服务器受控日志。`test_protocol_unexpected_exception_contained`（db conn 异常含敏感串 → resp.text 零原文） |
-| 异常堆栈与日志 | PASS（边界声明） | 原文与堆栈仅写入服务器受控日志（`logger.error(exc_info=True)`，内部诊断能力保留，不对外）；调用方与协议响应零泄漏。`test_internal_log_retains_diagnostics` |
+| 异常敏感信息泄漏（REST） | PASS | 【已被第四轮修正取代，保留作审计轨迹】manager.route 异常分类：受控业务异常（PermissionError/RuntimeError，消息由代码构造）透传；意外异常只回通用文案 + `error_code=internal:<类型>` + trace_id。**复核发现类型白名单不可靠，最终态见 3.-1**。`test_rest_unexpected_exception_contained`（OSError 携带 `/srv/secret/path SECRET_KEY=sk-ant-123 用户敏感内容` → 响应零原文）、`test_controlled_business_exception_passes_through` |
+| 异常敏感信息泄漏（标准 MCP 8091） | PASS | 【已被第四轮修正取代】protocol_app._fn 边界同策略：意外异常转受控文案 `[internal:<类型>]`，原文仅进服务器受控日志。**最终态见 3.-1（MCPToolError 显式类型）。**`test_protocol_unexpected_exception_contained`（db conn 异常含敏感串 → resp.text 零原文） |
+| 异常堆栈与日志 | PASS（边界声明） | 【已被第四轮修正取代】原文与堆栈仅写入服务器受控日志。**复核指出普通日志也不应含原始异常消息；最终态=日志只记类型+位置+trace，见 3.-1。**`test_internal_log_retains_diagnostics` |
 | Java /internal/ai/call 信任边界 | PASS（最小加固） | 核实：真实 Java 调用方尚未接入（AI_TOOLS_ENABLED 默认 false，无现网流量）；委托模型以 X-Internal-Token 为锚（token=可信内部服务，actor 由 Java 侧从已验证会话透传，与网关-后端委托模型一致）。最小修复：actor_user_id/actor_department 加 `max_length=128` + 禁控制字符 pattern（防 CRLF 审计日志注入）。`test_java_actor_injection_rejected`（CRLF 注入与超长均 ValidationError，合法 svc: 前缀通过） |
 | 其他失败路径不包装成功 | PASS | 代码核查：rag server 全部失败分支 raise（治理失败/授权失败/执行失败/未知 tool）；sql server 全部失败分支 raise（unavailable/permission_denied/其他）；manager not-found/timeout/异常均 ok:false；8091 全部 isError；internal_ai 透传 ok:false。无业务失败包装为成功的残留路径 |
 
@@ -102,7 +112,13 @@
 
 ## 6. 测试证据（真实执行）
 
-**收口后最终执行（本提交对应代码，103 例）**：
+**第四轮复核修正后最终执行（最终提交对应代码，105 例）**：
+
+命令：`python -m pytest backend/tests/test_mcp_security.py backend/tests/test_mcp_returnfix_acceptance.py backend/tests/test_mcp_protocol.py backend/tests/test_registry_consistency.py backend/tests/infra/test_worker_runtime_bootstrap.py backend/tests/sql/test_sql_production_closure.py -q`
+
+结果：`105 passed, 1 warning in 57.50s`；**退出码 0**；FAIL 0 / SKIP 0。新增 2 例复核负向（RuntimeError/PermissionError 携带模拟密钥/内部路径/用户内容的三面围堵）。
+
+**第三轮收口执行（103 例，基线证据）**：
 
 命令：`python -m pytest backend/tests/test_mcp_security.py backend/tests/test_mcp_returnfix_acceptance.py backend/tests/test_mcp_protocol.py backend/tests/test_registry_consistency.py backend/tests/infra/test_worker_runtime_bootstrap.py backend/tests/sql/test_sql_production_closure.py -q`
 
@@ -157,6 +173,6 @@
 
 ---
 
-## 总结论：**READY_FOR_REVIEW**
+## 总结论：**READY_FOR_REVIEW**（第四轮复核阻断已修复，最终态见 3.-1；本文件随最终提交更新，HEAD 以 PR 页面为准）
 
-代码级 P0 修复完整、定向与回归测试全部真实通过（98 passed / exit 0）、规范一致性无冲突；UNVERIFIED 项全部为环境依赖类（真库/容器/前端/Trace 落库），已逐条明示，不阻塞进入 GPT 独立复核。**未合并 main；未启动 PR #24 或 Tool Governance 施工。**
+代码级 P0 修复完整、定向与回归测试全部真实通过（最终 105 passed / exit 0，历史 98/103 逐轮保留）、规范一致性无冲突；UNVERIFIED 项全部为环境依赖类（真库/容器/前端/Trace 落库），已逐条明示，不阻塞进入 GPT 独立复核。**未合并 main；未启动 PR #24 或 Tool Governance 施工。**

@@ -114,17 +114,21 @@ def _make_tool_fn(server, tool_name: str, parameters: dict):
 
         try:
             return await asyncio.to_thread(_execute)
-        except (PermissionError, RuntimeError) as e:
-            # 受控业务异常：消息由代码构造，透传给 MCP client（isError 语义）
-            raise
         except Exception as e:
-            # 异常防泄漏（PR#27 收口）：意外异常的 str(e) 可能携带服务器
-            # 路径/用户内容/密钥——client 只收通用文案+类型码，原文与堆栈
-            # 仅进服务器受控日志。
-            logger.error(f"[MCP-Protocol] {tool_name} 执行失败: {e}", exc_info=True)
-            raise RuntimeError(
+            # 异常防泄漏（复核修正）：异常类型不能保证 str(e) 无敏感数据。
+            # 受控 MCPToolError 的 safe_message 构造时已声明安全，透传给
+            # client（isError 语义）；其余异常一律转稳定错误码 + 通用文案，
+            # 原文不出边界也不落日志，日志只留类型与位置。
+            from mcp_servers.manager import MCPToolError, _safe_error_location
+
+            if isinstance(e, MCPToolError):
+                raise
+            logger.error(
+                f"[MCP-Protocol] {tool_name} 执行失败 {type(e).__name__} "
+                f"at {_safe_error_location(e)}（异常消息不出日志/边界）")
+            raise MCPToolError(
                 f"工具执行失败（内部错误）[internal:{type(e).__name__}]，"
-                "请稍后重试或联系平台管理员") from None
+                "请稍后重试或联系平台管理员", "internal_error") from None
 
     _fn.__signature__ = inspect.Signature(params)
     return _fn

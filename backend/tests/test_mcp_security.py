@@ -148,19 +148,24 @@ def _server() -> RAGMCPServer:
 
 
 def test_get_stats_anonymous_denied(fake_registry, unbind):
-    # 返修3：未认证/越权 raise（不再返回错误 dict 被包装成协议成功）
+    # 返修3+复核修正：未认证/越权 raise 受控异常（异常类型不能保证消息
+    # 安全，统一 MCPToolError）
     import pytest
 
+    from mcp_servers.manager import MCPToolError
+
     _bind()
-    with pytest.raises(PermissionError, match="未认证或授权失败"):
+    with pytest.raises(MCPToolError, match="未认证或授权失败"):
         _server().call_tool("get_stats", {})
 
 
 def test_get_stats_non_admin_denied(fake_registry, unbind):
     import pytest
 
+    from mcp_servers.manager import MCPToolError
+
     _bind(uid="sec_user", roles=("viewer",))
-    with pytest.raises(PermissionError, match="仅限管理员"):
+    with pytest.raises(MCPToolError, match="仅限管理员"):
         _server().call_tool("get_stats", {})
 
 
@@ -194,8 +199,10 @@ def test_get_stats_admin_scope_excludes_other_kb(fake_registry, unbind):
 def test_list_documents_unauthorized_denied(fake_registry, unbind):
     import pytest
 
+    from mcp_servers.manager import MCPToolError
+
     _bind()
-    with pytest.raises(PermissionError, match="未认证或授权失败"):
+    with pytest.raises(MCPToolError, match="未认证或授权失败"):
         _server().call_tool("list_documents", {})
 
 

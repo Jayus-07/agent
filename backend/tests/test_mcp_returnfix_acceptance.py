@@ -426,7 +426,9 @@ class TestFailureSemantics:
                 return [{"name": "get_stats", "description": "", "parameters": {}}]
 
             def call_tool(self, tool_name, params):
-                raise PermissionError("denied-for-test")
+                from mcp_servers.manager import MCPToolError
+
+                raise MCPToolError("denied-for-test", "permission_denied")
 
         mgr = MCPManager()
         mgr.register(DenyServer())
@@ -445,7 +447,9 @@ class TestFailureSemantics:
             assert "denied-for-test" in resp.text
 
     def test_rest_manager_wraps_exception_as_ok_false(self):
-        """REST 通道契约：call_tool 异常 → manager.route 捕获 → ok:false。"""
+        """REST 通道契约：非受控异常（PermissionError 带任意文本——类型
+        不能保证消息安全）→ manager.route 捕获 → ok:false + 通用文案 +
+        internal 类型码，原文不出边界。"""
         from mcp_servers.manager import manager as global_manager
 
         original = global_manager._servers
@@ -455,7 +459,8 @@ class TestFailureSemantics:
         finally:
             global_manager._servers = original
         assert result["ok"] is False
-        assert "denied-for-rest" in result["error"]
+        assert "denied-for-rest" not in result["error"]
+        assert result["error_code"] == "internal:PermissionError"
 
 
 class _BoomServer:
@@ -517,18 +522,19 @@ class TestExceptionLeakContainment:
         assert "trace_id" in result
 
     def test_controlled_business_exception_passes_through(self, clean_ctx):
-        """受控业务异常（权限拒绝等）消息由代码构造，保留原文供调用方
-        区分拒绝原因——不属于泄漏面。"""
-        from mcp_servers.manager import manager as global_manager
+        """受控业务异常（MCPToolError，safe_message 构造时声明安全）保留
+        文案与业务错误码，供调用方区分拒绝原因。"""
+        from mcp_servers.manager import MCPToolError, manager as global_manager
 
-        original = self._register(PermissionError("get_stats 仅限管理员"))
+        original = self._register(
+            MCPToolError("get_stats 仅限管理员", "permission_denied"))
         try:
             result = global_manager.route("leak_tool", {})
         finally:
             global_manager._servers = original
         assert result["ok"] is False
         assert "仅限管理员" in result["error"]
-        assert result["error_code"] == "PermissionError"
+        assert result["error_code"] == "permission_denied"
 
     def test_protocol_unexpected_exception_contained(self, monkeypatch):
         """标准 MCP 通道：意外异常经 _fn 边界转受控文案，client 响应
@@ -555,7 +561,8 @@ class TestExceptionLeakContainment:
             assert "internal:OSError" in resp.text
 
     def test_internal_log_retains_diagnostics(self, clean_ctx, caplog):
-        """受控日志保留异常诊断（类名+原文），供内部排障——不外泄。"""
+        """日志保留安全诊断（异常类型+位置），消息原文不落日志——
+        对齐 AGENTS.md 敏感信息保护，诊断能力以类型+位置+trace 承载。"""
         from mcp_servers.manager import manager as global_manager
 
         original = self._register(OSError(f"open failed: {_SENSITIVE}"))
@@ -565,6 +572,46 @@ class TestExceptionLeakContainment:
         finally:
             global_manager._servers = original
         assert "OSError" in caplog.text
+        assert _SENSITIVE not in caplog.text
+
+    def test_runtime_error_with_secrets_contained_everywhere(
+            self, clean_ctx, caplog):
+        """复核负向：RuntimeError 携带模拟密钥/内部路径/用户内容——
+        REST 响应与日志均不得出现原文（类型不作为安全凭据）。"""
+        from mcp_servers.manager import manager as global_manager
+
+        original = self._register(
+            RuntimeError("conn refused: /srv/keys SECRET_KEY=sk-live-9 用户内容"))
+        try:
+            with caplog.at_level("ERROR"):
+                result = global_manager.route("leak_tool", {})
+        finally:
+            global_manager._servers = original
+        assert result["ok"] is False
+        assert "SECRET_KEY" not in result["error"]
+        assert "/srv/keys" not in result["error"]
+        assert "用户内容" not in result["error"]
+        assert result["error_code"] == "internal:RuntimeError"
+        assert "SECRET_KEY" not in caplog.text
+        assert "/srv/keys" not in caplog.text
+
+    def test_permission_error_with_sensitive_content_contained(
+            self, clean_ctx, caplog):
+        """复核负向：PermissionError 携带用户内容——REST 响应与日志均
+        围堵，只回稳定通用文案。"""
+        from mcp_servers.manager import manager as global_manager
+
+        original = self._register(
+            PermissionError("denied: 用户内容 secret/doc.md"))
+        try:
+            with caplog.at_level("ERROR"):
+                result = global_manager.route("leak_tool", {})
+        finally:
+            global_manager._servers = original
+        assert result["ok"] is False
+        assert "用户内容" not in result["error"]
+        assert result["error"] == "工具执行失败（内部错误），请稍后重试或联系管理员"
+        assert "用户内容" not in caplog.text
 
     def test_java_actor_injection_rejected(self):
         """actor 字段禁控制字符/超长（CRLF 日志注入防护）。"""

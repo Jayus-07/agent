@@ -122,8 +122,10 @@ class TestKillSwitch:
 
         monkeypatch.setattr("backend.config.SQL_AGENT_ENABLED", False)
         server = SQLMCPServer()
+        from mcp_servers.manager import MCPToolError
+
         for tool_name in ("sql_query", "list_tables"):
-            with pytest.raises(RuntimeError, match="service_unavailable"):
+            with pytest.raises(MCPToolError, match="service_unavailable"):
                 server.call_tool(
                     tool_name, {} if tool_name == "list_tables"
                     else {"question": "查库存"})
@@ -379,13 +381,14 @@ class TestMcpChannelClosure:
 
     def test_mcp_sql_query_without_identity_denied(self):
         """MCP 通道无可信身份 → 权限门拒绝（不存在匿名 SQL），
-        且前置 precheck 保证不触发 LLM 生成。PR#27 返修3 后为协议级
-        PermissionError，不再以错误 dict 包装成协议成功。"""
+        且前置 precheck 保证不触发 LLM 生成。PR#27 返修3+复核修正后为
+        协议级受控异常 MCPToolError，不再以错误 dict 包装成协议成功。"""
         import pytest
 
+        from mcp_servers.manager import MCPToolError
         from mcp_servers.servers.sql import SQLMCPServer
 
-        with pytest.raises(PermissionError, match="权限门拒绝"):
+        with pytest.raises(MCPToolError, match="权限门拒绝"):
             SQLMCPServer().call_tool("sql_query", {"question": "查销量"})
 
 

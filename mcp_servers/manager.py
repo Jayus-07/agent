@@ -31,6 +31,33 @@ class MCPServer:
         raise NotImplementedError(f"{self.name}.{tool_name} 未实现")
 
 
+class MCPToolError(Exception):
+    """MCP 工具受控业务异常——唯一允许透传给调用方的异常类型。
+
+    为什么按显式类型而非 PermissionError/RuntimeError 白名单：异常类型
+    不能保证 str(e) 不含敏感数据（任何代码/三方库都可能让任意类型携带
+    服务器路径、用户内容或密钥）。只有构造时显式声明 safe_message 与
+    code 的本类型才对外透传；其余异常一律映射为稳定错误码 + 通用文案。
+    str(e) = "[{code}] {safe_message}"，恒可安全进入日志与响应。
+    """
+
+    def __init__(self, safe_message: str, code: str = "tool_failed"):
+        super().__init__(f"[{code}] {safe_message}")
+        self.safe_message = safe_message
+        self.code = code
+
+
+def _safe_error_location(exc: Exception) -> str:
+    """异常发生位置（文件:行号:函数）——安全诊断信息，不含消息原文。"""
+    import traceback
+
+    tb = traceback.extract_tb(exc.__traceback__)
+    if not tb:
+        return "unknown"
+    last = tb[-1]
+    return f"{last.filename}:{last.lineno}:{last.name}"
+
+
 class MCPManager:
     """管理多个 MCPServer 单例。"""
 
@@ -94,21 +121,29 @@ class MCPManager:
                     logger.error(f"[MCP] {tool_name} 调用超时（>{MCP_TOOL_TIMEOUT}s）")
                     return {"ok": False, "tool": tool_name,
                             "error": f"MCP 工具调用超时（>{MCP_TOOL_TIMEOUT}s）"}
-                except Exception as e:
-                    # 异常防泄漏（PR#27 收口）：受控业务异常（权限拒绝/框架
-                    # 失败语义）的消息由代码构造、不含敏感数据，透传给调用方；
-                    # 意外异常（IO/DB/三方库等）的 str(e) 可能携带服务器路径、
-                    # 用户内容或密钥——调用方只回通用错误文案 + 错误类型码 +
-                    # trace_id，原文与堆栈仅进服务器受控日志（内部诊断能力
-                    # 保留，不对外）。
-                    logger.error(f"[MCP] {tool_name} 调用失败: {e}", exc_info=True)
+                except MCPToolError as e:
+                    # 受控业务异常：safe_message 构造时已声明无敏感数据，
+                    # 可透传、可落日志（str(e) = "[code] safe_message"）
                     from backend.observability.tracer import current_trace_context
 
                     trace_id, _ = current_trace_context()
-                    if isinstance(e, (PermissionError, RuntimeError)):
-                        return {"ok": False, "tool": tool_name, "error": str(e),
-                                "error_code": type(e).__name__,
-                                "trace_id": trace_id or None}
+                    logger.error(f"[MCP] {tool_name} 受控失败: {e} "
+                                 f"trace={trace_id or '-'}")
+                    return {"ok": False, "tool": tool_name,
+                            "error": e.safe_message, "error_code": e.code,
+                            "trace_id": trace_id or None}
+                except Exception as e:
+                    # 异常防泄漏（复核修正）：异常类型不能保证 str(e) 无敏感
+                    # 数据——一律不透传原文，只回稳定错误码 + 通用文案 +
+                    # trace_id；日志记录类型与发生位置（不含消息原文），
+                    # 保留安全诊断能力。
+                    from backend.observability.tracer import current_trace_context
+
+                    trace_id, _ = current_trace_context()
+                    logger.error(
+                        f"[MCP] {tool_name} 调用失败 {type(e).__name__} "
+                        f"at {_safe_error_location(e)} "
+                        f"trace={trace_id or '-'}（异常消息不出日志/边界）")
                     return {"ok": False, "tool": tool_name,
                             "error": "工具执行失败（内部错误），请稍后重试或联系管理员",
                             "error_code": f"internal:{type(e).__name__}",
