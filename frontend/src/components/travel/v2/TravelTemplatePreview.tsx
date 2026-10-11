@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, LoaderCircle, MapPin, Users } from 'lucide-react'
 import { copyTravelTemplateV2, fetchTravelTemplateV2, type TravelTemplateV2 } from '@/api/travelV2'
-import { TRAVEL_PHOTOS } from './travelV2Data'
+import { travelDestinationImage } from './TravelTemplateCard'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
 
 export default function TravelTemplatePreview({ slug }: { slug: string }) {
@@ -18,6 +18,7 @@ export default function TravelTemplatePreview({ slug }: { slug: string }) {
     let cancelled = false
     setLoading(true)
     setError('')
+    setTemplate(null)
     void fetchTravelTemplateV2(slug).then((data) => {
       if (!cancelled) setTemplate(data)
     }).catch(() => {
@@ -41,15 +42,15 @@ export default function TravelTemplatePreview({ slug }: { slug: string }) {
   }
 
   const destination = template?.destination || template?.content.brief.destination || ''
-  const image = template?.cover_image_url || destinationImage(destination)
+  const image = template?.cover_image_url || travelDestinationImage(destination)
   const brief = template?.content.brief
   const itemsCount = template?.content.days.reduce((total, day) => total + day.items.length, 0) ?? 0
   const budget = brief?.budget.amount
 
   return <main className="min-h-screen bg-[#f4f8fd] pb-24 text-[#17283f] md:pb-10">
-    <TravelTopBar />
+    <TravelTopBar active="discover" />
     <div className="mx-auto max-w-[1120px] px-4 pb-8 pt-1 md:px-8 md:pt-3">
-      <a href="/travel" className="mb-4 inline-flex items-center gap-1.5 text-xs font-medium text-[#6c7d93] hover:text-[#2878f5]"><ArrowLeft size={14} aria-hidden />返回旅行首页</a>
+      <a href="/travel/templates" className="mb-4 inline-flex min-h-10 items-center gap-1.5 rounded-lg pr-2 text-xs font-medium text-[#6c7d93] hover:text-[#2878f5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5]"><ArrowLeft size={14} aria-hidden />返回模板目录</a>
       {loading ? <div role="status" className="rounded-[26px] border border-[#e4ebf4] bg-white p-12 text-center text-sm text-[#8393a8]">正在读取平台模板…</div> : error && !template ? <div role="alert" className="rounded-[26px] border border-amber-200 bg-amber-50 p-8 text-center text-sm text-amber-900">{error}</div> : template && <section className="overflow-hidden rounded-[26px] border border-[#e4ebf4] bg-white shadow-[0_12px_36px_rgba(31,74,130,.06)] md:rounded-[32px]">
         <div className="relative h-[230px] md:h-[330px]"><img src={image} alt={`${destination}风景`} className="absolute inset-0 h-full w-full object-cover" /><div className="absolute inset-0 bg-gradient-to-t from-[#102843]/75 via-[#173451]/10 to-transparent" /><span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-white/50 bg-white/90 px-3 py-1.5 text-[10px] font-semibold text-[#35699f] shadow-sm"><Check size={12} aria-hidden />平台精选模板 · 只读预览</span><div className="absolute bottom-5 left-5 right-5 text-white md:bottom-7 md:left-8"><p className="text-xs font-medium text-white/80">{brief?.day_count} 天 · {template.tags.join(' · ') || '精选路线'}</p><h1 className="mt-1 text-[26px] font-bold tracking-[-.035em] md:text-[38px]">{template.title}</h1><p className="mt-2 max-w-xl text-xs leading-5 text-white/85 md:text-sm">{template.summary}</p></div></div>
         <div className="grid gap-6 p-4 md:grid-cols-[1fr_300px] md:p-7">
@@ -64,10 +65,6 @@ export default function TravelTemplatePreview({ slug }: { slug: string }) {
         </div>
       </section>}
     </div>
-    <TravelBottomNav active="home" />
+    <TravelBottomNav active="discover" />
   </main>
-}
-
-function destinationImage(destination: string): string {
-  return /厦门|海|青岛|三亚/.test(destination) ? TRAVEL_PHOTOS.coast : /苏州|园林/.test(destination) ? TRAVEL_PHOTOS.garden : /杭州|西湖/.test(destination) ? TRAVEL_PHOTOS.westLake : TRAVEL_PHOTOS.city
 }
