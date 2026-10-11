@@ -31,3 +31,7 @@
 | PostgreSQL 迁移与库归属 | [backend/sql/migrations](../backend/sql/migrations)、[scripts/init_db.py](../scripts/init_db.py) |
 | SQL Agent 行为 | [SQL 领域说明](domains/sql.md) |
 | 启停、体检与本地调试 | [运维命令](operations/commands.md) |
+
+## 数据生命周期与资产保护
+
+数据库级 Schema 与迁移由本文维护；跨领域的权威状态、候选发布、版本/CAS、保留/删除、备份恢复以及 `tmp/data` 分类，统一使用 [数据生命周期治理](governance/data-lifecycle.md)。备份脚本存在不等于已通过恢复演练；多数据库及 RAG 向量/BM25/源文件的恢复须依对象范围核对。新的数据表、历史清理或文件迁移必须先确定 tenant/owner、存储位置、索引和审计保留政策。
