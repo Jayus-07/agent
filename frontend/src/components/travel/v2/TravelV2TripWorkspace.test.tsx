@@ -280,7 +280,7 @@ describe('V2 工作台 Trip 状态隔离', () => {
     const oldSearchProps = latestSearchProps('trip-a')
     act(() => {
       oldSearchProps.onLocationSelect?.({ name: 'A 的查询地点', lat: 30, lng: 120 })
-      oldSearchProps.onSearchEvent?.({ kind: 'food', status: 'success', source: 'amap', message: 'A 的查询完成' })
+      oldSearchProps.onSearchEvent?.({ queryId: 'query-a', kind: 'food', status: 'success', source: 'amap', message: 'A 的查询完成' })
     })
     expect(page.container.textContent).toContain('A 的查询地点')
     expect(page.container.textContent).toContain('A 的查询完成')
@@ -289,7 +289,7 @@ describe('V2 工作台 Trip 状态隔离', () => {
     await load(tripRequest(1), makeTrip('trip-b', '行程 B'))
     act(() => {
       oldSearchProps.onLocationSelect?.({ name: '迟到的 A 查询地点', lat: 31, lng: 121 })
-      oldSearchProps.onSearchEvent?.({ kind: 'food', status: 'success', source: 'amap', message: '迟到的 A 工具进度' })
+      oldSearchProps.onSearchEvent?.({ queryId: 'query-a-late', kind: 'food', status: 'success', source: 'amap', message: '迟到的 A 工具进度' })
       oldSearchProps.onTripSaved?.({ ...makeTrip('trip-a', '行程 A', 2) }, 'A 选入已保存。')
     })
 
@@ -298,6 +298,29 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).not.toContain('A 选入已保存')
     expect(page.container.textContent).not.toContain('A 的查询完成')
     expect(page.container.textContent).not.toContain('迟到的 A')
+  })
+
+  it('同一 queryId 的终态替换查询中状态，且不覆盖其他记录或已终止记录', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
+    await click(page.container, (button) => button.textContent?.trim() === '美食')
+    const searchProps = latestSearchProps('trip-a')
+
+    act(() => {
+      searchProps.onSearchEvent?.({ queryId: 'query-one', kind: 'food', status: 'querying', source: 'amap', message: '查询一中' })
+      searchProps.onSearchEvent?.({ queryId: 'query-two', kind: 'hotel', status: 'querying', source: 'amap', message: '查询二中' })
+      searchProps.onSearchEvent?.({ queryId: 'query-one', kind: 'food', status: 'success', source: 'amap', message: '查询一成功' })
+      searchProps.onSearchEvent?.({ queryId: 'query-two', kind: 'hotel', status: 'cancelled', source: 'amap', message: '查询二取消' })
+      searchProps.onSearchEvent?.({ queryId: 'query-two', kind: 'hotel', status: 'success', source: 'amap', message: '迟到的查询二成功' })
+    })
+
+    const activity = page.container.querySelector('ol[aria-label="旅游查询运行记录"]')!
+    const rows = [...activity.querySelectorAll('li')]
+    expect(rows).toHaveLength(2)
+    expect(rows.find((row) => row.textContent?.includes('查询一成功'))?.textContent).toContain('查询成功')
+    expect(rows.find((row) => row.textContent?.includes('查询二取消'))?.textContent).toContain('已取消')
+    expect(activity.textContent).not.toContain('查询中')
+    expect(activity.textContent).not.toContain('迟到的查询二成功')
   })
 
   it('A → B → A 快速切换时，最终只显示最后一次 A 的读取状态', async () => {

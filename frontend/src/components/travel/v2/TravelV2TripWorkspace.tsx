@@ -51,7 +51,12 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   const [searchEvents, setSearchEvents] = useState<TravelSearchEvent[]>([])
 
   const recordSearchEvent = useCallback((event: TravelSearchEvent) => {
-    setSearchEvents((current) => [event, ...current].slice(0, 5))
+    setSearchEvents((current) => {
+      const existingIndex = current.findIndex((item) => item.queryId === event.queryId)
+      if (existingIndex === -1) return [event, ...current].slice(0, 5)
+      if (current[existingIndex].status !== 'querying') return current
+      return current.map((item, index) => index === existingIndex ? event : item)
+    })
   }, [])
 
   useEffect(() => {

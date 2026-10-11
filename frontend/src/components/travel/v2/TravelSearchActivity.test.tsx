@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import TravelSearchActivity from './TravelSearchActivity'
 import type { TravelSearchEvent } from './TravelSearchPanel'
 
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
 function renderActivity(events: TravelSearchEvent[]) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -14,7 +16,7 @@ function renderActivity(events: TravelSearchEvent[]) {
 describe('V2 实时查询状态', () => {
   it('展示真实查询中的数据源与状态，不生成额外运行步骤', () => {
     const events: TravelSearchEvent[] = [
-      { kind: 'train', status: 'querying', source: '12306', message: '正在查询动车…' },
+      { queryId: 'query-train-1', kind: 'train', status: 'querying', source: '12306', message: '正在查询动车…' },
     ]
 
     const rendered = renderActivity(events)
@@ -26,15 +28,24 @@ describe('V2 实时查询状态', () => {
 
   it('区分无结果、上游不可用和网络超时', () => {
     const events: TravelSearchEvent[] = [
-      { kind: 'food', status: 'no_results', source: 'amap', message: '没有找到美食结果。' },
-      { kind: 'hotel', status: 'provider_unavailable', source: 'amap', message: '酒店数据源不可用。' },
-      { kind: 'train', status: 'network_timeout', source: '12306', message: '网络超时。' },
+      { queryId: 'query-food-1', kind: 'food', status: 'no_results', source: 'amap', message: '没有找到美食结果。' },
+      { queryId: 'query-hotel-1', kind: 'hotel', status: 'provider_unavailable', source: 'amap', message: '酒店数据源不可用。' },
+      { queryId: 'query-train-2', kind: 'train', status: 'network_timeout', source: '12306', message: '网络超时。' },
     ]
 
     const rendered = renderActivity(events)
     expect(rendered.container.textContent).toContain('无结果')
     expect(rendered.container.textContent).toContain('数据源不可用')
     expect(rendered.container.textContent).toContain('网络超时')
+    rendered.dispose()
+  })
+
+  it('用稳定 queryId 表示取消终态', () => {
+    const rendered = renderActivity([
+      { queryId: 'query-cancelled', kind: 'hotel', status: 'cancelled', source: 'amap', message: '查询已取消。' },
+    ])
+    expect(rendered.container.textContent).toContain('已取消')
+    expect(rendered.container.querySelector('svg')?.getAttribute('class')).not.toContain('animate-spin')
     rendered.dispose()
   })
 })

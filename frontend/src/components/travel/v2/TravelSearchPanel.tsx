@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, MapPin, Search, TrainFront, Utensils, Hotel, Check, CircleAlert, LoaderCircle } from 'lucide-react'
 import {
   addTravelMealV2,
@@ -21,8 +21,9 @@ import {
 
 export type TravelSearchKind = 'trip' | 'food' | 'hotel' | 'train'
 export interface TravelSearchEvent {
+  queryId: string
   kind: Exclude<TravelSearchKind, 'trip'>
-  status: 'querying' | TravelSearchStatusV2
+  status: 'querying' | 'cancelled' | TravelSearchStatusV2
   source: string
   message: string
   queriedAt?: string
@@ -41,6 +42,12 @@ const statusText: Record<string, string> = {
   network_timeout: '网络超时',
   provider_unavailable: '数据源不可用',
   disabled: '能力未启用',
+}
+
+interface ActiveSearchQuery {
+  queryId: string
+  kind: Exclude<TravelSearchKind, 'trip'>
+  controller: AbortController
 }
 
 interface TravelSearchPanelProps {
@@ -81,18 +88,35 @@ function TravelSearchPanelInstance({
   const [saveError, setSaveError] = useState('')
   const [savedMessage, setSavedMessage] = useState('')
   const querySequence = useRef(0)
-  const queryController = useRef<AbortController | null>(null)
-
-  useEffect(() => () => {
-    querySequence.current += 1
-    queryController.current?.abort()
-    queryController.current = null
-  }, [])
+  const activeQuery = useRef<ActiveSearchQuery | null>(null)
+  const onSearchEventRef = useRef(onSearchEvent)
 
   useEffect(() => {
+    onSearchEventRef.current = onSearchEvent
+  }, [onSearchEvent])
+
+  const cancelActiveQuery = useCallback(() => {
+    const current = activeQuery.current
+    if (!current) return
+    activeQuery.current = null
     querySequence.current += 1
-    queryController.current?.abort()
-    queryController.current = null
+    current.controller.abort()
+    onSearchEventRef.current?.({
+      queryId: current.queryId,
+      kind: current.kind,
+      status: 'cancelled',
+      source: sourceForKind(current.kind),
+      message: '查询已取消。',
+      queriedAt: new Date().toISOString(),
+    })
+  }, [])
+
+  useEffect(() => () => {
+    cancelActiveQuery()
+  }, [cancelActiveQuery])
+
+  useEffect(() => {
+    cancelActiveQuery()
     setQuerying(false)
     setKind(initialKind)
     setResponse(null)
@@ -100,7 +124,7 @@ function TravelSearchPanelInstance({
     setSelectedIndex(null)
     setSaveError('')
     setSavedMessage('')
-  }, [initialKind])
+  }, [initialKind, cancelActiveQuery])
 
   useEffect(() => {
     if (!trip) return
@@ -116,9 +140,7 @@ function TravelSearchPanelInstance({
   const selected = selectedIndex === null ? null : response?.results[selectedIndex] ?? null
 
   function changeKind(nextKind: Exclude<TravelSearchKind, 'trip'>) {
-    querySequence.current += 1
-    queryController.current?.abort()
-    queryController.current = null
+    cancelActiveQuery()
     setQuerying(false)
     setKind(nextKind)
     setResponse(null)
@@ -132,10 +154,11 @@ function TravelSearchPanelInstance({
   async function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (querying) return
+    cancelActiveQuery()
     const sequence = ++querySequence.current
-    queryController.current?.abort()
     const controller = new AbortController()
-    queryController.current = controller
+    const queryId = createQueryId()
+    activeQuery.current = { queryId, kind, controller }
     setQuerying(true)
     setResponse(null)
     setRequestError('')
@@ -143,9 +166,10 @@ function TravelSearchPanelInstance({
     setSavedMessage('')
     setSelectedIndex(null)
     onLocationSelect?.(null)
-    onSearchEvent?.({
-      kind, status: 'querying', source: kind === 'train' ? '12306' : 'amap',
+    onSearchEventRef.current?.({
+      queryId, kind, status: 'querying', source: sourceForKind(kind),
       message: `正在查询${kind === 'food' ? '美食' : kind === 'hotel' ? '酒店' : '动车'}…`,
+      queriedAt: new Date().toISOString(),
     })
     try {
       const result = kind === 'food'
@@ -159,8 +183,8 @@ function TravelSearchPanelInstance({
           }, { signal: controller.signal })
       if (controller.signal.aborted || sequence !== querySequence.current) return
       setResponse(result)
-      onSearchEvent?.({
-        kind, status: result.status, source: result.source, message: result.message,
+      onSearchEventRef.current?.({
+        queryId, kind, status: result.status, source: result.source, message: result.message,
         queriedAt: result.queried_at,
       })
     } catch (cause) {
@@ -175,10 +199,10 @@ function TravelSearchPanelInstance({
             : 'business_failure'
       const notice = status === 'network_timeout' ? '网络超时，请稍后重试。' : '查询请求未完成，行程没有修改。请检查网络后重试。'
       setRequestError(notice)
-      onSearchEvent?.({ kind, status, source: kind === 'train' ? '12306' : 'amap', message: notice, queriedAt: new Date().toISOString() })
+      onSearchEventRef.current?.({ queryId, kind, status, source: sourceForKind(kind), message: notice, queriedAt: new Date().toISOString() })
     } finally {
       if (sequence === querySequence.current) {
-        queryController.current = null
+        if (activeQuery.current?.queryId === queryId) activeQuery.current = null
         setQuerying(false)
       }
     }
@@ -338,6 +362,14 @@ function TravelSearchPanelInstance({
       </div>}
     </div>
   </section>
+}
+
+function createQueryId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `travel-v2-query-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function sourceForKind(kind: Exclude<TravelSearchKind, 'trip'>): string {
+  return kind === 'train' ? '12306' : 'amap'
 }
 
 function MerchantRow({ merchant, hotel, onClick }: { merchant: MerchantSearchResultV2; hotel: boolean; onClick: () => void }) {
