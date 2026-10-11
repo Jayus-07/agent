@@ -926,3 +926,26 @@ DELETE /sys/providers/{provider_id}/models?modelName=<urlencoded>
 1. **绑定时**：角色校验（`_registered_model`）未命中 → 拒绝并列出可用清单；
 2. **启动时**：`validate_roles()` 对默认/备用/各角色指向的未登记模型发告警；
 3. **运行时**：`validate_override_model` / proxy 对未注册模型名 fail-fast（既有）。
+
+## 附录 C：DB、环境变量与功能开关的责任边界（补充标准）
+
+该附录是将现有配置事实源转化为日常开发约束；具体合法键、读取模式和 TTL 以源码为准，**不把各模块的开关迁到第二个新 ConfigService**。
+
+| 配置类型 | 当前事实源 | 热路径要求 | 失败语义 |
+| --- | --- | --- | --- |
+| 安全守卫开关 | `backend/services/sys_config.py`：DB sys_config → 进程缓存 → env/安全默认 | `get_mode()` 不同步访问 PG | 非法值拒绝，按已知有效快照/安全默认回退；有审计 |
+| DB 模型角色及供应商 | `backend/config/model_roles.py`、`backend/infra/llm/registry_store.py` | 角色解析走已验证 snapshot，`model_roles` 不做重 IO | DB 抖动按专门注册表策略保留已验证旧快照；凭据解密失败不能 fallback 到旧不安全 Key |
+| Prompt 版本 | `backend/prompts/service.py`、Prompt DB/Registry | 请求版本 pin、快照/缓存，受控发布和回滚 | 正式生效版本必须可核对，不宣称全部 worker 已更新 |
+| 模型预算/价格 | `backend/config/budget.py`、`backend/infra/llm/` | 先预占后调用；本位币 CNY 与价格版本 | 无价或汇率缺失不虚报 0/1:1，按账本对账 |
+| 数据与部署连接 | `backend/config/database.py`、Compose/密钥提供方 | 连接复用，最小权限，禁止在 route 重建客户端 | 连接失败按领域及安全策略拒绝/降级，不自动改写 DB 目标 |
+
+### Config-01～08 统一验收
+
+- **CF-01** 具体 key 只有一个事实源，未登记、大小写错误、非法值被拒；测试校验配置来源。
+- **CF-02** 单实例发布、跨 Worker 热刷新/延迟、版本号/时间戳和回滚有实际证据。
+- **CF-03** DB 不可用时安全开关与模型快照遵循各自契约，不能泛称“全部 fail-open”。
+- **CF-04** API/管理端修改 Config 有正确 RBAC、幂等、旧新值及操作者审计。
+- **CF-05** 原始 secret 不进环境调试打印、管理端 API、Trace 或普通 DB 配置历史。
+- **CF-06（目标/待验证）** 模型/Prompt 切换需要保证请求版本可追溯、不被中途改写；跨 Worker 并发快照尚须专项核验。
+- **CF-07（目标/待验证）** 按配置类型制定经验证的回滚/恢复路径，列明影响范围；不能宣称已有通用的一键回滚机制。
+- **CF-08** 需要服务重启的设置与可热更的设置必须分类，不能通过 UI 文案误报即时生效。

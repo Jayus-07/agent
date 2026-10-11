@@ -44,3 +44,17 @@
 - T1/T2：只有当变更同时修改实现、公共接口或安全/失败语义时，依 [testing-guide](testing-guide.md) 选择对应定向与契约测试；文档本身不假称运行全量集成。
 - 交付说明写清：变更文件、基线、实际做了哪些检查、未验证范围、分支与 Commit/PR 链接、是否合入主线；“已推送 PR”不得写成“已合并生效”。
 - 合并前检查 `main` 是否前进、是否影响其他工作树的已提交修改；不强推、不清理他人工作树、不覆写其他任务草稿。
+
+## 5. 规范基线收口与后续维护
+
+本轮专项规范收口后，**默认优先审查与整改真实代码，完成验收证据闭环**。只有现有主责文档无法清楚承载新的公共契约或重大业务边界时，才按文档维护标准新增规范，并注明事实源和维护人；避免同一条款多处复制。现有专门职责入口还包括：
+
+- `contracts/api-event-lifecycle.md`：REST、SSE、WS、错误及兼容；
+- `architecture/async-task-governance.md`：Celery/QueueRouter/Admission/Lease/Retry/Recovery；
+- `governance/data-lifecycle.md`：正式业务数据、发布、迁移、备份与恢复；
+- `governance/memory-governance.md`：三层记忆、画像冲突、长期归因；
+- `domains/selection-ecommerce.md`：选品和未来电商子域的已实现/目标区分。
+
+`docs/ARCHITECTURE.md`、`docs/AGENT_DESIGN.md`、`docs/PRD.md` 等历史入口须通过审计确认使用范围，适用时加“历史设计/请读现行规范”指针；**未审计前不删除或大面积移动**，不要将旧版规范当作新需求实现依据。
+
+后续施工范围及批次以 [安全重构手册](refactoring-playbook.md) 和已批准的任务计划为准，本文不维护第二份施工顺序；每批保留可复现的 PASS/FAIL/INVALID/BLOCKED 等证据，不能把文档完成当作上线验收。

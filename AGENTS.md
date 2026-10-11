@@ -55,6 +55,11 @@
 | RBAC/IDOR/租户/资源级授权                 | [authorization-standard.md](docs/auth/authorization-standard.md) |
 | RAG 上传、切分、索引、检索和证据             | [rag.md](docs/domains/rag.md) |
 | 各功能评测、Golden、Release Gate          | [evaluation-governance.md](docs/evaluation/evaluation-governance.md) |
+| API/SSE/WS 兼容与恢复 | [api-event-lifecycle.md](docs/contracts/api-event-lifecycle.md) |
+| Celery/队列/Lease/重试与幂等 | [async-task-governance.md](docs/architecture/async-task-governance.md) |
+| 业务数据版本、删除、备份与迁移 | [data-lifecycle.md](docs/governance/data-lifecycle.md) |
+| L1/L2/L3 长期记忆和画像更新 | [memory-governance.md](docs/governance/memory-governance.md) |
+| 选品/电商领域的目标与现状 | [selection-ecommerce.md](docs/domains/selection-ecommerce.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
