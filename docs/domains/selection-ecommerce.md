@@ -19,7 +19,7 @@
 
 当前漏斗遵守 brief→pool→screen→verify→econ→rank→report 的概念阶段，但实际节点名称、来源、预算/配额、评分算法和报告结构以 `selection_funnel` 注册与代码为准，不在文档冻结固定推荐数量。报告中的市场需求、价格、销量、毛利和竞争情况要注明数据源、抓取时间、估算范围、币种和假设。外部 Provider 限流/反爬/过期不是“零竞争”证据，不允许默认填 0 并输出确定性排名。
 
-**目标契约**：候选数据应有稳定幂等标识、tenant、商品/SKU 与来源，跨租户不相互去重或串读。**当前缺口 P1-8**：`backend/selection_funnel/import_pool.py` 的候选池去重/查询尚未完成 tenant 隔离证明；实施需同步考虑 Schema、回填、查询与索引。上架、改价、广告、库存调拨、退款等未来执行动作**需要**提案、确认/审批、幂等与 UNKNOWN 处理，不能写成当前全部已实现。
+**目标契约**：候选数据应有稳定幂等标识、tenant、商品/SKU 与来源，跨租户不相互去重或串读。**当前缺口 P1-8（覆盖整个选品漏斗）**：`backend/selection_funnel/import_pool.py` 的候选构建与去重之外，`backend/selection_funnel/import_pool_pg.py` 持久化的 `import_candidates`、`backend/selection_funnel/market_data_pg.py` 持久化的 `keyword_stats` 与 `product_reviews` 均未实现可验证的 tenant 字段/过滤；对应 `backend/sql/migrations/021_selection_funnel_pg.sql` 及导入、查看、按 batch 删除的 API/Service 调用链也必须检查可信 tenant 是否贯穿。整改需覆盖**商品候选、关键词统计、商品差评**的 Schema、存量回填、唯一/索引约束、读写/删除过滤、批次归属及资源授权；单独修商品池不得宣告整个漏斗多租户已隔离。上架、改价、广告、库存调拨、退款等未来执行动作**需要**提案、确认/审批、幂等与 UNKNOWN 处理，不能写成当前全部已实现。
 
 ## EC-01～EC-08 验收
 
@@ -29,7 +29,7 @@
 | EC-02 | 来源/时间戳/币种/估算和评分规则清楚，不凭空生成销量、利润 |
 | EC-03 | Provider 超时/429/空结果按用户硬约束 BLOCKED 或有解释地 DEGRADED |
 | EC-04 | 相同 SKU/竞品去重、缓存版本、跨渠道映射正确 |
-| EC-05 | **多租户上线阻断/待验证**：候选池及库存/订单/广告/成本的 tenant+owner 访问控制；当前存在 P1-8 选品候选池缺口 |
+| EC-05 | **多租户上线阻断/待验证**：商品候选 `import_candidates`、关键词 `keyword_stats`、差评 `product_reviews` 的导入/查询/按 batch 删除，及库存/订单/广告/成本的 tenant+owner 授权均需验证；当前 P1-8 涉及三类选品漏斗数据 |
 | EC-06 | **写动作上线阻断/待实现**：未来上架、改价、广告、退款必须有确认/审批/幂等/未知结果恢复，现有代码不可推定已统一完成 |
 | EC-07 | 域 Graph/Skill/Tool/MCP 注册无平行权限或运行时副本 |
 | EC-08 | 报告和管理端按来源、推荐理由、Tool Trace 与评测版本可溯源 |

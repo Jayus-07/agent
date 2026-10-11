@@ -6,7 +6,8 @@
 
 | 组件 | 源码 | 只回答的问题 |
 | --- | --- | --- |
-| `TaskManager` | `backend/tasks/task_manager.py` | 谁创建任务、如何暂停/取消/恢复、如何通知 SSE |
+| `TaskService` | `backend/services/task_service.py` | 创建并持久化任务记录、任务状态/Lease 的数据库写读边界 |
+| `TaskManager` | `backend/tasks/task_manager.py` | 已持久化任务的入队/重投、暂停/取消/恢复及 SSE/事件通知 |
 | `QueueRouter` | `backend/tasks/queue_router.py` | workflow/task 到哪个逻辑 workload / 物理 queue |
 | `AdmissionController` | `backend/tasks/admission/controller.py` | 容量、请求/租户并发是否可进入执行 |
 | Lease / Heartbeat | `backend/tasks/lease_heartbeat.py` 与任务服务 | 当前哪个 execution 有权写任务状态（fencing） |
@@ -15,13 +16,13 @@
 | Side Effect Ledger | `backend/tasks/side_effect.py`、`backend/shared/idempotency` | 外部写操作有没有实际发生、是否可安全重试 |
 | Celery | `backend/tasks/celery_app.py` | broker、worker、beat 的执行和投递 |
 
-**关键区别**：QueueRouter=去哪里；Admission=能不能进；Lease=谁能执行；Ledger=写过没有；Retry=已知可恢复错误；Recovery=进程死亡后的重新协调。不能通过 Celery `autoretry_for` 代替不确定副作用账本。
+**关键区别**：TaskService=创建/持久化；TaskManager=投递/控制；QueueRouter=去哪里；Admission=能不能进；Lease=谁能执行；Ledger=写过没有；Retry=已知可恢复错误；Recovery=进程死亡后的重新协调。不能通过 Celery `autoretry_for` 代替不确定副作用账本。
 
 ## 生命周期与不变量
 
 ```mermaid
 flowchart TD
-  API[API/Workflow 发起] --> RECORD[权威任务记录 + 可信主体]
+  API[API/Workflow 发起] --> RECORD[TaskService 创建/持久化权威任务记录 + 可信主体]
   RECORD --> QUEUE[QueueRouter 登记队列]
   QUEUE --> LEASE[Worker Lease / Admission]
   LEASE -->|容量满| DEFER[受限 defer 并释放 Lease]
