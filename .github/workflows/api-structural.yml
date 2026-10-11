@@ -1,0 +1,44 @@
+name: API Structural Checks
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/api/router.py"
+      - "backend/app/api/routes/observability.py"
+      - "backend/tests/api/test_router_import_uniqueness.py"
+      - "pyproject.toml"
+      - ".github/workflows/api-structural.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/api/router.py"
+      - "backend/app/api/routes/observability.py"
+      - "backend/tests/api/test_router_import_uniqueness.py"
+      - "pyproject.toml"
+      - ".github/workflows/api-structural.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  static-structure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python and check router structure
+        run: |
+          python3 -m py_compile \
+            backend/app/api/router.py \
+            backend/app/api/routes/observability.py \
+            backend/tests/api/test_router_import_uniqueness.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import runpy
+          import tomllib
+
+          tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          test = runpy.run_path("backend/tests/api/test_router_import_uniqueness.py")
+          test["test_route_module_import_list_contains_no_duplicates"]()
+          print("API structural checks: PASS")
+          PY
