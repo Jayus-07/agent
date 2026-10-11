@@ -94,8 +94,41 @@ def _make_tool_fn(server, tool_name: str, parameters: dict):
             )
         params.append(param)
 
-    def _fn(**kwargs):
-        return server.call_tool(tool_name, kwargs)
+    async def _fn(**kwargs):
+        # 返修1（PR#27 复审）：API Key ≠ 用户身份。8091 标准协议通道的
+        # 执行主体是显式受限机器 principal（svc:mcp-protocol，角色
+        # service_workflow 只含 sql.read）——无 rag.admin，get_stats 等
+        # 私有诊断工具对协议通道天然拒绝；业务工具走六层 SQL 安全与
+        # RAG 授权矩阵的受限可见范围，绝不伪造 admin 用户。
+        # async + to_thread：FastMCP 在事件循环线程调用工具函数，同步
+        # call_tool 内的治理链（governance_runtime.execute_sync 的
+        # asyncio.run）会撞上运行中的 loop；挪到工作线程执行（ContextVar
+        # 随 to_thread 复制传播，机器主体绑定不丢）。
+        from backend.security.service_identity import bind_mcp_protocol_identity
+
+        def _execute():
+            with bind_mcp_protocol_identity():
+                return server.call_tool(tool_name, kwargs)
+
+        import asyncio
+
+        try:
+            return await asyncio.to_thread(_execute)
+        except Exception as e:
+            # 异常防泄漏（复核修正）：异常类型不能保证 str(e) 无敏感数据。
+            # 受控 MCPToolError 的 safe_message 构造时已声明安全，透传给
+            # client（isError 语义）；其余异常一律转稳定错误码 + 通用文案，
+            # 原文不出边界也不落日志，日志只留类型与位置。
+            from mcp_servers.manager import MCPToolError, _safe_error_location
+
+            if isinstance(e, MCPToolError):
+                raise
+            logger.error(
+                f"[MCP-Protocol] {tool_name} 执行失败 {type(e).__name__} "
+                f"at {_safe_error_location(e)}（异常消息不出日志/边界）")
+            raise MCPToolError(
+                f"工具执行失败（内部错误）[internal:{type(e).__name__}]，"
+                "请稍后重试或联系平台管理员", "internal_error") from None
 
     _fn.__signature__ = inspect.Signature(params)
     return _fn

@@ -176,6 +176,10 @@ class TestMakeToolFn:
         assert sig.parameters["kb_id"].default == "default"
 
     def test_kwargs_forwarded_to_call_tool(self):
+        # PR#27 返修：_fn 改 async + to_thread（FastMCP loop 内执行同步
+        # call_tool 会撞上治理链的 asyncio.run），契约不变，调用改异步驱动。
+        import asyncio
+
         server = FakeRAGServer()
         fn = _make_tool_fn(server, "search_knowledge", FakeRAGServer.list_tools(server)[0]["parameters"])
-        assert fn(question="hi")["answer"] == "mock:hi"
+        assert asyncio.run(fn(question="hi"))["answer"] == "mock:hi"

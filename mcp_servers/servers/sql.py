@@ -7,6 +7,7 @@
 不存在「HTTP 有权限、MCP 匿名可查」的旁路。
 不创建 MCP 专属授权体系（规格 §五）。
 """
+from backend.shared.logger import logger
 from mcp_servers.manager import MCPServer
 from mcp_servers.schema_adapter import langchain_tool_to_mcp_meta
 from backend.sql.sql_agent import get_sql_agent
@@ -33,8 +34,15 @@ def _mcp_sql_policy_context():
 
 
 def _unavailable():
-    return {"error": "SQL 查询服务暂不可用，请稍后重试。",
-            "reason": "service_unavailable"}
+    """失败语义（返修3+复核修正）：kill switch/依赖不可用是执行失败——
+    协议层显式失败（REST → ok:false；标准 MCP → isError:true），
+    受控异常保证消息无敏感数据。tool 本体的 envelope 文本协议
+    （sql_query_tool，供 LLM 阅读）不受影响。
+    """
+    from mcp_servers.manager import MCPToolError
+
+    raise MCPToolError("SQL 查询服务暂不可用，请稍后重试。",
+                       "service_unavailable")
 
 
 class SQLMCPServer(MCPServer):
@@ -78,11 +86,23 @@ class SQLMCPServer(MCPServer):
             result = agent.ask_struct(params["question"],
                                       policy=_mcp_sql_policy_context())
             if result.error_type == "service_unavailable":
-                return _unavailable()
+                _unavailable()
             if result.status in ("success", "no_data"):
                 return {"result": result.to_markdown()}
-            return {"error": result.error or "查询失败",
-                    "reason": result.status}
+            # 失败语义（返修3+复核修正）：权限拒绝与其他执行失败显式
+            # 上抛受控异常——result.error 可能含查询上下文，不进
+            # safe_message，只进受控日志的状态/类型行。
+            from mcp_servers.manager import MCPToolError
+
+            if result.status == "permission_denied":
+                logger.warning(
+                    f"[MCP-sql] 权限门拒绝 channel=sql_query "
+                    f"status={result.status}")
+                raise MCPToolError("SQL 查询被权限门拒绝", "permission_denied")
+            logger.error(
+                f"[MCP-sql] 查询失败 status={result.status} "
+                f"error_type={result.error_type or '-'}")
+            raise MCPToolError("SQL 查询失败，请稍后重试。", "tool_failed")
 
         if tool_name == "list_tables":
             from backend.sql.schema_loader import schema_loader
