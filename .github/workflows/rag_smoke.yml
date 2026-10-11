@@ -278,7 +278,8 @@ jobs:
             --selection pr_smoke \
             --no-ragas \
             --no-resume \
-            --strict-gate \n            --triggered-by github-actions-rag-smoke 2>&1 | tee /tmp/eval-run.log
+            --strict-gate \
+            --triggered-by github-actions-rag-smoke 2>&1 | tee /tmp/eval-run.log
           exit "$?"
 
       - name: Collect API cost attribution
