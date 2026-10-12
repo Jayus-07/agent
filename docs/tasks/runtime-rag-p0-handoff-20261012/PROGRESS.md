@@ -6,7 +6,7 @@
 
 - 最新 `origin/main`：`73c37d73c3b7c62711db276458912eed481ace7d`（PR #40/#42/#43/#44 已按用户批准依次合并）。
 - 安全治理工作树：`C:/Users/wh/.codex/worktrees/credential-security-p0-20261012/agent`，分支 `codex/credential-security-p0-20261012`。
-- #41 当前 head `82bd591`，基于 `73c37d7`；Secret Scan run 13 已成功，RAG PR Smoke run 152 正在运行。#45/#47 也已同步到 `73c37d7`；合并前仍须重新 fetch 并重验。合并均使用 GitHub 正常 PR 流程，不改写 main 历史。
+- #41 产品代码 head `40c33e1`，基于 `73c37d7`；Secret Scan run 14 与 RAG PR Smoke run 153 均 SUCCESS。run 152 因后续提交取消，不作为通过或失败证据。当前变更仅为任务看板文档；#45/#47 也已同步到 `73c37d7`，合并前仍须重新 fetch 并重验。合并均使用 GitHub 正常 PR 流程，不改写 main 历史。
 
 ## 统一看板
 
@@ -15,11 +15,11 @@
 | B1-A | #40 | 已合并至 main，merge commit `ed28db1` | PR head `9cca719` / RAG PR Smoke run 111 SUCCESS，评测 job 按路径 SKIP；合并后隔离 Worktree 定向集 11 passed，merge SHA 无 main workflow/check run | 0 条未解决 review thread；无 GPT review submission | 排队上限/等待超时继续挂账，不扩本 PR |
 | B1-B | #42 | 已按用户批准合并至 main，merge commit `0c471fb` | 合并前 head `d0223b9` 的 RAG PR Smoke、Evaluation、Detect 全部 SUCCESS；合并后隔离 worktree 定向集 65 passed、9 xfailed；merge SHA 无 main workflow/check run | 3 条旧 review thread 已解决 | 已完成；Usage Attribution 与预算账本按 `tenant=eval` 对齐 |
 | B1-F | #43 | 已按用户批准合并至 main，merge commit `b0f71bc` | 合并前 run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS；合并后隔离 worktree 定向集 39 passed；merge SHA 无 main workflow/check run | 2 条旧 review thread 已解决 | 已完成；逻辑取消与物理 Provider 停止边界保持明确 |
-| RAG R0/R1 | #41 | head `82bd591`，base `73c37d7`；PR open、mergeable，未合并；最近两次提交仅更新任务看板 | 定向集 `134 passed`；Secret Scan run 13 SUCCESS；RAG PR Smoke run 152 运行中；tree/diff/history scan 为 0 | 3 条旧 review thread 已解决；同步后无新 GPT review submission | 全 refs 有 83 个历史模式命中，不能等同于 83 个有效凭据；Redis/API Key 轮换和旧值失效验证仍未完成，安全 P0 放行阻断 |
+| RAG R0/R1 | #41 | 产品代码 head `40c33e1`，base `73c37d7`；PR open、mergeable，未合并；本次只更新看板文档 | 定向集 `134 passed`；Secret Scan run 14、RAG PR Smoke run 153 均 SUCCESS；tree/diff/history scan 为 0 | 3 条旧 review thread 已解决；同步后无新 GPT review submission | 全 refs 有 83 个历史模式命中，不能等同于 83 个有效凭据；Redis/API Key 轮换和旧值失效验证仍未完成，安全 P0 放行阻断 |
 | 凭据安全治理 | #44 | 已按用户批准合并至 main，merge commit `73c37d7` | PR head RAG PR Smoke run 147 SUCCESS；merge SHA 无 workflow run/commit status。5 脚本 `py_compile`、缺配置网络前 fail closed 及全假 `.env`/mock HTTP 验证均通过；head tree/diff/history-range scan 为 0 | 1/1 旧 thread 已解决；未见新 review submission | 代码整改已进入 main；真实 Redis/API Key 轮换、撤销及旧值失效验证未做，安全 P0 仍 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
-| B1-C | #45 | head `cdb1ebc` 已同步 base `73c37d7`；PR open、mergeable，未合并 | 隔离临时 PostgreSQL 定向集 `140 passed in 52.23s`；RAG PR Smoke run 149 SUCCESS；无真实 Provider 调用 | 3/3 旧 GPT review thread 已解决；同步后无新 GPT review submission | 用户确认按当前 4 个注册 Workflow 验收；等待单独合并批准 |
-| B1-D | #47 | head `3e912d7` 已同步 base `73c37d7`；PR open、mergeable，未合并 | 独立临时 PostgreSQL 定向集（含 CAS）`135 passed in 14.10s`；RAG PR Smoke run 150 SUCCESS；py_compile/Ruff/diff-check 通过 | 2/2 旧 GPT review thread 已解决；同步后无新 GPT review submission | 未连接生产 Redis/Provider；须等 #45 按顺序合并并重验后，再单独提交合并清单 |
+| B1-C | #45 | head `cdb1ebc` 已同步 base `73c37d7`；PR open、mergeable，未合并 | 隔离临时 PostgreSQL 定向集 `140 passed in 52.23s`；RAG PR Smoke run 149 SUCCESS；无真实 Provider 调用 | 3/3 旧 GPT review thread 已解决；同步后无新 GPT review submission | 用户确认按当前 4 个注册 Workflow 验收；按既定序列等待 RAG MultiQuery P0 完成后再提交合并清单 |
+| B1-D | #47 | head `3e912d7` 已同步 base `73c37d7`；PR open、mergeable，未合并 | 独立临时 PostgreSQL 定向集（含 CAS）`135 passed in 14.10s`；RAG PR Smoke run 150 SUCCESS；py_compile/Ruff/diff-check 通过 | 2/2 旧 GPT review thread 已解决；同步后无新 GPT review submission | 未连接生产 Redis/Provider；按顺序等 #45 合并后同步重验，再提交单独合并清单 |
 | B1-E | 新 PR | 已核对源码配置和测试，尚未施工 | — | — | B1-C/#45、B1-D/#47 尚未合入；生产 Checkpointer 的实际运行状态无可读证据，需满足前序门禁并取得运行态配置 |
 
 ## 已取得证据
@@ -35,7 +35,7 @@
 - PR #42 已同步 main（含 #40）至 head `d0223b9` 并按用户批准通过 GitHub 正常 merge 流程，merge commit `0c471fb`（父提交 `ed28db1` 与 `d0223b9`）。合并前 RAG PR Smoke、Evaluation、Detect 全部 SUCCESS。合并后在 detached worktree `D:/tmp/agent-pr42-postmerge-20261012`、隔离本地 PostgreSQL 集群，重跑 Eval、LLM governance、Travel intent 与 B1-A 回归集，`65 passed, 9 xfailed in 31.17s`；无真实 Provider 调用。merge SHA 没有 GitHub Actions run/commit status；未把 PR head CI 冒作 merge SHA CI。
 - PR #43 已同步 main `0c471fb` 至 head `6b1c32a`，并经单独批准通过 GitHub 正常 merge 流程合入 main，merge commit `b0f71bc`。run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS。合并后在 detached worktree `D:/tmp/agent-pr43-postmerge-20261012`、隔离本地 PostgreSQL 集群重跑终态取消、错误协议与 B1-A 选择工作流定向集，`39 passed in 35.46s`；无真实 Provider 调用。merge SHA 没有 GitHub Actions run/commit status；未把 PR head CI 冒作 merge SHA CI。原 2 条 GPT review thread 已解决。
 - PR #44 head `b43f52a` 经用户单独批准，通过 GitHub 正常 merge 流程合入 main，merge commit `73c37d73c3b7c62711db276458912eed481ace7d`；合并前 main/base 为 `b0f71bc`、PR mergeable=true、旧 review thread 已解决，RAG PR Smoke run 147 SUCCESS。合并后 PR 状态 closed/merged；merge SHA 未触发 workflow run/commit status，故未报告 merge-SHA CI 通过。Travel 五个脚本的环境读取与 fail-closed 验证、Secret Scan 零命中证据均来自 PR head；无真实服务调用或凭据轮换。
-- PR #41 在 #44 合并后的 base `73c37d7` 上已完成同步；RAG 定向集 `134 passed in 15.24s`，tree/diff/history Secret Scan 均 0。代码验证后只更新任务看板；当前 head `82bd591` 的 Secret Scan run 13 SUCCESS，RAG PR Smoke run 152 运行中。未重跑真实 Provider；既有性能/召回证据保留。旧 review threads 3/3 已解决，无新 GPT review submission。实际 Redis/API Key 轮换和旧值失效验证尚未完成，安全 P0 继续 BLOCKED。
+- PR #41 在 #44 合并后的 base `73c37d7` 上已完成同步；RAG 定向集 `134 passed in 15.24s`，tree/diff/history Secret Scan 均 0。代码验证后只更新任务看板；产品代码 head `40c33e1` 的 Secret Scan run 14、RAG PR Smoke run 153 均 SUCCESS；run 152 因新提交取消。未重跑真实 Provider；既有性能/召回证据保留。旧 review threads 3/3 已解决，无新 GPT review submission。实际 Redis/API Key 轮换和旧值失效验证尚未完成，安全 P0 继续 BLOCKED。
 - B1-C/#45 同步 head `cdb1ebc` 与 base `73c37d7`：用户已确认按 4 个实际注册 Workflow 验收；定向集 140 passed in 52.23s，使用独立临时 PostgreSQL，未调用真实 Provider；RAG PR Smoke run 149 SUCCESS，mergeable=true。首轮因默认本机 PG 未提供测试库凭据而出现 34 个 setup error 和 1 个同因 E2E failure；同一测试集改用独立临时 PG 后通过，未把首轮失败冒充通过。
 - B1-D/#47 同步 head `3e912d7` 与 base `73c37d7`：Prompt service/release/hot reload/API/trace 与 PostgreSQL CAS 定向集 135 passed in 14.10s，CAS 连接独立临时 PostgreSQL 并真实执行；未连接共享/生产 PostgreSQL、真实 Redis 或 Provider。RAG PR Smoke run 150 SUCCESS，py_compile/Ruff/diff-check 均通过，mergeable=true。
 - B1-E 只读核对：仓库 Docker Compose 的 Travel Checkpointer 默认值为 PostgreSQL 开启，应用配置的默认值则为关闭；运行时图状态区分 `healthy/degraded/disabled`，生产启动对缺少 PostgresSaver 依赖有显式校验。现有 interrupt 测试使用 `MemorySaver`，不能证明生产配置。当前工作区没有生产部署配置读取或实例运行状态访问，故不能确认实际生产后端与 interrupt 开关；未修改 B1-E 代码，需取得不含凭据的生产配置/运行状态证据后再施工。
@@ -59,7 +59,7 @@
 
 ## 下一步
 
-1. PR #40/#42/#43/#44 已依序按用户批准合入。#44 merge commit `73c37d7` 无 main workflow/status；PR head run 147 成功。#41 的 head `82bd591` 上 run 13 Secret Scan 成功，run 152 RAG Smoke 运行中；定向集 134 passed，三类 Secret Scan 均 0。凭据轮换未完成，P0 不得宣称关闭。#45/#47 当前 head 已同步到 `73c37d7` 并通过各自新 head 验收。
+1. PR #40/#42/#43/#44 已依序按用户批准合入。#44 merge commit `73c37d7` 无 main workflow/status；PR head run 147 成功。#41 的产品代码 head `40c33e1` 上 run 14 Secret Scan、run 153 RAG Smoke 均成功；定向集 134 passed，三类 Secret Scan 均 0。凭据轮换未完成，P0 不得宣称关闭。#45/#47 当前 head 已同步到 `73c37d7` 并通过各自新 head 验收。
 2. 凭据持有人授权后完成 Redis 与 API Key 轮换、部署更新、撤销旧值及旧值认证失败验证；确认测试登录常量仅供隔离环境使用。此前 P0 BLOCKED。
 3. #44 代码整改已合入 main，但全 refs 扫描的 83 个模式命中仍需凭据持有人确认，不能视作 83 个有效凭据。执行 Redis/API Key 轮换、消费者更新、撤销旧值并验证旧值认证失败前，安全 P0 保持 BLOCKED；本任务未触碰真实服务凭据，也未重写共享历史。
-4. PR #41 的定向验证与 Secret Scan 已通过，当前 RAG Smoke run 152 尚未完成；此外须先完成 Redis/API Key 凭据持有人授权的轮换、消费者更新、旧值撤销及旧值失效验证，才能提交安全放行合并清单。只有 PR #41/#42 合并后才施工 RAG MultiQuery P0。B1-C/#45 已完成新 main 同步和验收，可先提交独立合并清单；B1-D/#47 须等 #45 合并后重验再提交；B1-E 先取得生产 Checkpointer 实际状态证据，再独立施工。
+4. PR #41 的定向验证、Secret Scan、最新 RAG Smoke 均已通过；但须先完成 Redis/API Key 凭据持有人授权的轮换、消费者更新、旧值撤销及旧值失效验证，才能提交安全放行合并清单。只有 PR #41/#42 合并后才施工 RAG MultiQuery P0。按总任务顺序，B1-C/#45 应在 RAG MultiQuery P0 后提交独立合并清单；B1-D/#47 须等 #45 合并后重验再提交；B1-E 先取得生产 Checkpointer 实际状态证据，再独立施工。
