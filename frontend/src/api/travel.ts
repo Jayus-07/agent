@@ -97,6 +97,8 @@ export interface ItineraryBrief {
   start_date: string | null;
   days: number | null;
   party_size: number;
+  adults?: number | null;
+  children?: number | null;
   budget_cny: number | null;
   /** 预算语义：hard=不得超出，soft=大概范围。 */
   budget_constraint?: 'hard' | 'soft' | string;
