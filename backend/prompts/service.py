@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import contextvars
 import threading
-from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Iterator
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Iterator
 
 from backend.infra.cache import get_cache
 from backend.memory.database import AsyncSessionLocal
@@ -383,10 +383,20 @@ class PromptService:
         actor: str = "system",
         role: str = "",
         skip_workflow: bool = False,
+        _before_commit: Callable[[Any], Awaitable[Any]] | None = None,
+        _required_status: str | None = None,
     ) -> dict:
         spec = PROMPT_REGISTRY.get(key)
         if spec and spec.code_controlled:
             raise ValueError(f"Prompt {key} is code-controlled and cannot be published")
+        if skip_workflow and role != "release_gate":
+            raise ValueError(
+                "skip_workflow 仅允许已通过评测与审批的 Release Gate 调用"
+            )
+        if role == "release_gate" and _before_commit is None:
+            raise ValueError(
+                "Release Gate 发布必须在 Prompt 事务内完成 release 状态迁移"
+            )
 
         async with AsyncSessionLocal() as session:
             repo = PromptRepository(session)
@@ -397,6 +407,12 @@ class PromptService:
             ver = await repo.get_version(prompt.id, version)
             if not ver:
                 raise KeyError(f"Version {version} not found for {key}")
+
+            if _required_status is not None and ver.status != _required_status:
+                raise ValueError(
+                    f"版本 {version} 状态为 {ver.status!r}，"
+                    f"操作要求状态 {_required_status!r}"
+                )
 
             if not skip_workflow and ver.status not in ("passed", "published"):
                 raise ValueError(
@@ -423,17 +439,6 @@ class PromptService:
             # alias 是它的命名视图；切 production=set_alias 的发布路径落到这里）
             await repo.upsert_alias(prompt.id, "production", version, updated_by=actor)
             await repo.update_version_status(ver.id, "published")
-            self._cache.delete(f"prompt:{key}")
-
-            with self._snapshot_lock:
-                self._snapshot[key] = _SnapshotEntry(
-                    template=ver.template,
-                    version=ver.version,
-                    variables=list(ver.variables) if ver.variables else [],
-                )
-                self._epoch += 1
-                self._snapshot_time = datetime.now(timezone.utc).isoformat()
-                self._reload_source = "publish"
 
             await repo.write_audit(
                 key, "publish",
@@ -442,16 +447,52 @@ class PromptService:
                 actor=actor,
                 role=role,
             )
+            published_entry = _SnapshotEntry(
+                template=ver.template,
+                version=ver.version,
+                variables=list(ver.variables) if ver.variables else [],
+            )
+            from backend.prompts.hot_reload import stage_prompt_epoch
+
+            hot_reload_epoch = await stage_prompt_epoch(
+                session, key=key, actor=actor,
+            )
+            if _before_commit is not None:
+                before_commit_result = await _before_commit(session)
+                if role == "release_gate" and before_commit_result is None:
+                    raise ValueError(
+                        "Release Gate 未能在 Prompt 事务内更新 release 状态"
+                    )
             await session.commit()
 
-        # 发布/回滚共用同一条运行时通知链路；Redis/epoch 旁路失败不能阻断
-        # 已提交的业务发布，hot_reload 内部会 fail-open。
-        try:
-            from backend.prompts.hot_reload import bump_prompt_epoch
+        # DB 是发布线性化点。提交失败时不碰进程快照、缓存和 reload hooks；
+        # 提交成功后先刷新本进程，再做可补偿的缓存清理与跨进程广播。
+        with self._snapshot_lock:
+            self._snapshot[key] = published_entry
+            self._snapshot_history[(key, published_entry.version)] = published_entry
+            self._epoch += 1
+            self._snapshot_time = datetime.now(timezone.utc).isoformat()
+            self._reload_source = "publish"
 
-            await bump_prompt_epoch(key, actor=actor)
+        try:
+            self._cache.delete(f"prompt:{key}")
+        except Exception as exc:  # noqa: BLE001 - DB 已提交，保留 pending epoch 补偿
+            logger.warning(
+                "[PromptService] Prompt cache invalidation failed for %s (%s)",
+                key,
+                type(exc).__name__,
+            )
+
+        try:
+            from backend.prompts.hot_reload import dispatch_prompt_epoch
+
+            await dispatch_prompt_epoch(key, actor, hot_reload_epoch)
         except Exception as exc:  # noqa: BLE001 - 通知旁路不得影响发布结果
-            logger.warning(f"[PromptService] Hot reload notification failed for {key}: {exc}")
+            logger.warning(
+                "[PromptService] Hot reload notification failed for %s (%s)",
+                key,
+                type(exc).__name__,
+            )
 
         self._fire_hooks(key)
         return {"active_version": version, "previous_version": old_version}
@@ -479,7 +520,13 @@ class PromptService:
         actor: str = "system",
         role: str = "",
     ) -> dict:
-        return await self.publish(key, version, actor=actor, role=role, skip_workflow=True)
+        return await self.publish(
+            key,
+            version,
+            actor=actor,
+            role=role,
+            _required_status="published",
+        )
 
     async def set_alias(
         self,

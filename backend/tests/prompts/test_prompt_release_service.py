@@ -1,14 +1,15 @@
 """Prompt release gate 状态机测试。"""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
 from backend.prompts.release_models import (
-    PublishGateError,
     PromptReleaseStatus,
+    PublishGateError,
     ReleaseStateError,
 )
 from backend.prompts.release_service import PromptReleaseService
@@ -98,6 +99,15 @@ class _FakeReleaseRepository:
         row.update(status=PromptReleaseStatus.PUBLISHED.value, published_by=actor)
         return row
 
+    async def mark_published_in_session(
+        self, _session, release_id: str, actor: str,
+    ) -> dict[str, Any] | None:
+        row = self.records[release_id]
+        if row["status"] != PromptReleaseStatus.APPROVED.value:
+            return None
+        row.update(status=PromptReleaseStatus.PUBLISHED.value, published_by=actor)
+        return row
+
     async def mark_rolled_back(self, release_id: str, actor: str) -> dict[str, Any]:
         row = self.records[release_id]
         row.update(status=PromptReleaseStatus.ROLLED_BACK.value, rollback_by=actor)
@@ -108,6 +118,7 @@ class _FakePromptService:
     def __init__(self) -> None:
         self.prompts = {"test.prompt": _FakePrompt()}
         self.publish_calls: list[tuple[str, int, str, bool]] = []
+        self._publish_lock = asyncio.Lock()
         # GATE-13/14：版本 → 模板哈希（测试通过改写这里的值模拟「审批后篡改」）
         self.template_hashes: dict[str, dict[int, str]] = {
             "test.prompt": {1: "hash-v1", 2: "hash-v2"},
@@ -124,10 +135,14 @@ class _FakePromptService:
         actor: str,
         role: str = "",
         skip_workflow: bool = False,
+        _before_commit=None,
     ) -> dict[str, Any]:
-        self.publish_calls.append((key, version, actor, skip_workflow))
-        self.prompts[key].active_version = version
-        return {"active_version": version, "previous_version": 1}
+        async with self._publish_lock:
+            self.publish_calls.append((key, version, actor, skip_workflow))
+            if _before_commit is not None:
+                await _before_commit(object())
+            self.prompts[key].active_version = version
+            return {"active_version": version, "previous_version": 1}
 
 
 @pytest.fixture
@@ -191,6 +206,83 @@ async def test_passing_release_can_be_approved_and_published(
     assert published.status == PromptReleaseStatus.PUBLISHED
     assert prompt_service.prompts["test.prompt"].active_version == 2
     assert prompt_service.publish_calls == [("test.prompt", 2, "admin", True)]
+
+
+@pytest.mark.asyncio
+async def test_release_state_failure_keeps_active_version_unchanged(
+    repo: _FakeReleaseRepository,
+    prompt_service: _FakePromptService,
+    release_service: PromptReleaseService,
+) -> None:
+    release = await _create_release(release_service)
+    await release_service.record_result(
+        release.release_id, {"status": "passed"}, "eval",
+    )
+    await release_service.approve(release.release_id, "admin")
+
+    async def fail_publish_in_transaction(_session, _release_id, _actor):
+        return None
+
+    repo.mark_published_in_session = fail_publish_in_transaction
+
+    with pytest.raises(ReleaseStateError, match="状态已变化"):
+        await release_service.publish(release.release_id, "admin")
+
+    assert prompt_service.prompts["test.prompt"].active_version == 1
+    assert repo.records[release.release_id]["status"] == PromptReleaseStatus.APPROVED.value
+
+
+@pytest.mark.asyncio
+async def test_release_publish_error_does_not_expose_exception_details(
+    repo: _FakeReleaseRepository,
+    prompt_service: _FakePromptService,
+    release_service: PromptReleaseService,
+) -> None:
+    release = await _create_release(release_service)
+    await release_service.record_result(
+        release.release_id, {"status": "passed"}, "eval",
+    )
+    await release_service.approve(release.release_id, "admin")
+
+    async def fail_publish(*_args, **_kwargs):
+        raise RuntimeError("synthetic-password=never-a-real-secret")
+
+    prompt_service.publish = fail_publish
+
+    with pytest.raises(ReleaseStateError) as error:
+        await release_service.publish(release.release_id, "admin")
+
+    assert "synthetic-password" not in str(error.value)
+    assert prompt_service.prompts["test.prompt"].active_version == 1
+    assert repo.records[release.release_id]["status"] == PromptReleaseStatus.APPROVED.value
+
+
+@pytest.mark.asyncio
+async def test_concurrent_release_publish_commits_only_one_transition(
+    repo: _FakeReleaseRepository,
+    prompt_service: _FakePromptService,
+    release_service: PromptReleaseService,
+) -> None:
+    release = await _create_release(release_service)
+    await release_service.record_result(
+        release.release_id, {"status": "passed"}, "eval",
+    )
+    await release_service.approve(release.release_id, "admin")
+
+    results = await asyncio.gather(
+        release_service.publish(release.release_id, "admin"),
+        release_service.publish(release.release_id, "admin"),
+        return_exceptions=True,
+    )
+
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    assert sum(
+        isinstance(result, (PublishGateError, ReleaseStateError))
+        for result in results
+    ) == 1
+    assert prompt_service.prompts["test.prompt"].active_version == 2
+    assert repo.records[release.release_id]["status"] == PromptReleaseStatus.PUBLISHED.value
+    assert len(prompt_service.publish_calls) == 1
 
 
 @pytest.mark.asyncio

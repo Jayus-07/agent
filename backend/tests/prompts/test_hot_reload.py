@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -55,6 +56,9 @@ async def test_bump_prompt_epoch_increments_and_publishes(monkeypatch):
     redis = FakeRedis()
     monkeypatch.setattr(hot_reload, "get_redis", lambda: redis)
     monkeypatch.setattr(hot_reload, "_persist_epoch_event", _persist_epoch(1))
+    monkeypatch.setattr(
+        hot_reload, "_mark_event_published", _async_noop,
+    )
 
     epoch = await hot_reload.bump_prompt_epoch("planner.system", actor="admin")
 
@@ -64,6 +68,43 @@ async def test_bump_prompt_epoch_increments_and_publishes(monkeypatch):
     assert channel == hot_reload.PROMPT_CHANGED_CHANNEL
     assert json.loads(raw)["epoch"] == 1
     assert json.loads(raw)["key"] == "planner.system"
+
+
+@pytest.mark.asyncio
+async def test_stage_prompt_epoch_uses_publish_transaction_without_commit():
+    from backend.prompts import hot_reload
+
+    class _Result:
+        def scalar_one(self):
+            return 4
+
+    session = AsyncMock()
+    session.execute.return_value = _Result()
+
+    epoch = await hot_reload.stage_prompt_epoch(
+        session, key="planner.system", actor="admin",
+    )
+
+    assert epoch == 4
+    assert session.execute.await_count == 2
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_keeps_committed_epoch_for_db_polling(monkeypatch):
+    from backend.prompts import hot_reload
+
+    def broken_redis():
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(hot_reload, "get_redis", broken_redis)
+
+    epoch = await hot_reload.dispatch_prompt_epoch(
+        "planner.system", "admin", 8,
+    )
+
+    assert epoch == 8
+    assert hot_reload.local_epoch() == 8
 
 
 @pytest.mark.asyncio
@@ -220,3 +261,7 @@ def _async_value(value):
         return value
 
     return _value()
+
+
+async def _async_noop(*_args, **_kwargs):
+    return None

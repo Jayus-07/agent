@@ -57,42 +57,55 @@ def _runtime_service_name() -> str:
 _runtime_name = _runtime_service_name()
 
 
-async def _persist_epoch_event(*, key: str, actor: str) -> int | None:
-    """在 DB 中递增 epoch 并留下待发送事件；治理旁路失败不阻断发布。"""
-    try:
-        from sqlalchemy import text
+async def stage_prompt_epoch(
+    session: Any, *, key: str, actor: str,
+) -> int | None:
+    """把 epoch 和待发送事件写入调用方事务，确保与发布指针原子提交。"""
+    if not PROMPT_HOT_RELOAD_ENABLED:
+        return None
+    from sqlalchemy import text
 
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO prompt_runtime_state
+                (id, global_epoch, updated_by)
+            VALUES (1, 1, :actor)
+            ON CONFLICT (id) DO UPDATE SET
+                global_epoch = prompt_runtime_state.global_epoch + 1,
+                updated_at = now(),
+                updated_by = EXCLUDED.updated_by
+            RETURNING global_epoch
+            """
+        ),
+        {"actor": actor or "system"},
+    )
+    epoch = int(result.scalar_one())
+    await session.execute(
+        text(
+            """
+            INSERT INTO prompt_reload_events
+                (epoch, event_type, status)
+            VALUES (:epoch, 'prompt.changed', 'pending')
+            """
+        ),
+        {"epoch": epoch},
+    )
+    return epoch
+
+
+async def _persist_epoch_event(*, key: str, actor: str) -> int | None:
+    """独立递增 epoch；用于非发布事务的兼容入口。"""
+    try:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                text(
-                    """
-                    INSERT INTO prompt_runtime_state
-                        (id, global_epoch, updated_by)
-                    VALUES (1, 1, :actor)
-                    ON CONFLICT (id) DO UPDATE SET
-                        global_epoch = prompt_runtime_state.global_epoch + 1,
-                        updated_at = now(),
-                        updated_by = EXCLUDED.updated_by
-                    RETURNING global_epoch
-                    """
-                ),
-                {"actor": actor or "system"},
-            )
-            epoch = int(result.scalar_one())
-            await session.execute(
-                text(
-                    """
-                    INSERT INTO prompt_reload_events
-                        (epoch, event_type, status)
-                    VALUES (:epoch, 'prompt.changed', 'pending')
-                    """
-                ),
-                {"epoch": epoch},
-            )
+            epoch = await stage_prompt_epoch(session, key=key, actor=actor)
             await session.commit()
             return epoch
     except Exception as exc:  # noqa: BLE001 — 治理旁路软失败
-        logger.warning("[PromptHotReload] persist epoch failed: %s", exc)
+        logger.warning(
+            "[PromptHotReload] persist epoch failed (%s)",
+            type(exc).__name__,
+        )
         return None
 
 
@@ -133,52 +146,52 @@ async def _mark_event_published(epoch: int) -> None:
         logger.debug("[PromptHotReload] mark event published failed", exc_info=True)
 
 
-async def bump_prompt_epoch(key: str, actor: str = "system") -> int | None:
-    """发布成功后的唯一 epoch bump 出口。
-
-    先写 DB epoch，再 INCR Redis 并发布事件。任一旁路失败都不向业务抛异常。
-    """
+async def dispatch_prompt_epoch(
+    key: str, actor: str, db_epoch: int | None,
+) -> int | None:
+    """在发布事务提交后推送 epoch；DB 待发送事件负责 Redis 故障补偿。"""
     if not PROMPT_HOT_RELOAD_ENABLED:
         return None
-
-    db_epoch = await _persist_epoch_event(key=key, actor=actor)
-    redis_epoch: int | None = None
+    if db_epoch is None:
+        return None
     try:
         redis = get_redis()
         if redis is not None:
-            if db_epoch is not None:
-                # DB 是权威：先把 Redis 校准到 DB-1，再执行 INCR，避免
-                # Redis 残留更大计数导致发布信号脱离真实版本。
-                raw = redis.get(PROMPT_EPOCH_KEY)
-                current = int(raw) if raw is not None else None
-                if current != db_epoch - 1:
-                    redis.set(PROMPT_EPOCH_KEY, max(0, db_epoch - 1))
+            # DB 是权威：校准 Redis 后广播同一事务提交的 epoch。
+            raw = redis.get(PROMPT_EPOCH_KEY)
+            current = int(raw) if raw is not None else None
+            if current != db_epoch - 1:
+                redis.set(PROMPT_EPOCH_KEY, max(0, db_epoch - 1))
             redis_epoch = int(redis.incr(PROMPT_EPOCH_KEY))
-            if db_epoch is not None and redis_epoch != db_epoch:
+            if redis_epoch != db_epoch:
                 redis.set(PROMPT_EPOCH_KEY, db_epoch)
-                redis_epoch = db_epoch
-            epoch = redis_epoch if redis_epoch is not None else db_epoch
-            if epoch is not None:
-                payload = json.dumps(
-                    {
-                        "key": key,
-                        "epoch": epoch,
-                        "actor": actor or "system",
-                        "ts": time.time(),
-                    },
-                    ensure_ascii=False,
-                )
-                redis.publish(PROMPT_CHANGED_CHANNEL, payload)
-                await _mark_event_published(epoch)
-                _set_local_epoch(epoch)
-                return epoch
+            payload = json.dumps(
+                {
+                    "key": key,
+                    "epoch": db_epoch,
+                    "actor": actor or "system",
+                    "ts": time.time(),
+                },
+                ensure_ascii=False,
+            )
+            redis.publish(PROMPT_CHANGED_CHANNEL, payload)
+            await _mark_event_published(db_epoch)
     except Exception as exc:  # noqa: BLE001 — Redis 旁路软失败
-        logger.warning("[PromptHotReload] bump/publish failed: %s", exc)
-
-    # DB 成功但 Redis 不可用：请求仍正常，恢复后由拉取/补偿机制追平。
-    if db_epoch is not None:
-        _set_local_epoch(db_epoch)
+        logger.warning(
+            "[PromptHotReload] bump/publish failed (%s)",
+            type(exc).__name__,
+        )
+    # DB 事件已与发布一同提交；Redis 恢复后可由轮询/补偿机制追平。
+    _set_local_epoch(db_epoch)
     return db_epoch
+
+
+async def bump_prompt_epoch(key: str, actor: str = "system") -> int | None:
+    """非事务调用的 epoch bump；写入 DB 后再广播，失败按旁路降级。"""
+    if not PROMPT_HOT_RELOAD_ENABLED:
+        return None
+    db_epoch = await _persist_epoch_event(key=key, actor=actor)
+    return await dispatch_prompt_epoch(key, actor, db_epoch)
 
 
 def _set_local_epoch(epoch: int) -> None:
