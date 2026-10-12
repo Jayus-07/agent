@@ -12,12 +12,13 @@ Redis/PG 配额服务。
 """
 from __future__ import annotations
 
-import threading
 from collections import OrderedDict
+from contextlib import contextmanager
+import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from backend.shared.logger import logger
 
@@ -310,6 +311,37 @@ def clear_request_budget() -> None:
     _current_quota_reservation.set(None)
 
 
+@contextmanager
+def scoped_request_budget(
+    request_id: str,
+    *,
+    user_id: str = "",
+    tenant_id: str = "",
+    on_error: Callable[[Exception], None] | None = None,
+) -> Iterator[RequestBudget | None]:
+    """临时绑定请求预算，并恢复外层预算/预占状态。"""
+    request_token = _current_request_id.set(_current_request_id.get())
+    decision_token = _current_call_decision.set(_current_call_decision.get())
+    reservation_token = _current_quota_reservation.set(
+        _current_quota_reservation.get()
+    )
+    try:
+        try:
+            bind_request_budget(
+                request_id, user_id=user_id, tenant_id=tenant_id,
+            )
+        except Exception as exc:
+            clear_request_budget()
+            if on_error is None:
+                raise
+            on_error(exc)
+        yield current_request_budget()
+    finally:
+        _current_quota_reservation.reset(reservation_token)
+        _current_call_decision.reset(decision_token)
+        _current_request_id.reset(request_token)
+
+
 def current_request_budget() -> RequestBudget | None:
     request_id = _current_request_id.get()
     if not request_id:
@@ -451,4 +483,5 @@ __all__ = [
     "release_model_reservation",
     "reserve_model_call",
     "review_model_reservation",
+    "scoped_request_budget",
 ]

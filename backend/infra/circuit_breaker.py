@@ -351,6 +351,30 @@ class CircuitBreaker:
 # LLM: 默认 5 次连续失败触发熔断，30s 恢复期
 llm_circuit_breaker = CircuitBreaker("deepseek", fail_threshold=5, timeout=30.0)
 
+# 非 main 角色的模型熔断按 Provider + 实际模型分区，评测/专用模型的
+# 故障不会打开生产 main 的共享熔断器。
+_llm_model_breakers: dict[str, CircuitBreaker] = {}
+_llm_model_breakers_lock = threading.Lock()
+
+
+def get_llm_model_circuit_breaker(
+    provider: str,
+    model_name: str,
+) -> CircuitBreaker:
+    """返回按真实 Provider/模型隔离的 LLM 熔断器。"""
+    key = f"llm-model:{provider or 'unknown'}:{model_name or 'unknown'}"
+    with _llm_model_breakers_lock:
+        breaker = _llm_model_breakers.get(key)
+        if breaker is None:
+            breaker = CircuitBreaker(
+                key,
+                fail_threshold=llm_circuit_breaker.fail_threshold,
+                timeout=llm_circuit_breaker.timeout,
+            )
+            _llm_model_breakers[key] = breaker
+        return breaker
+
+
 # PostgreSQL: 数据库连接更关键，3 次失败即熔断，60s 恢复期
 pg_circuit_breaker = CircuitBreaker("postgresql", fail_threshold=3, timeout=60.0)
 
@@ -360,8 +384,10 @@ chroma_circuit_breaker = CircuitBreaker("chromadb", fail_threshold=5, timeout=30
 
 def get_all_breakers() -> dict[str, CircuitBreaker]:
     """返回所有熔断器实例（供 /metrics 查询）。"""
-    return {
-        "deepseek": llm_circuit_breaker,
-        "postgresql": pg_circuit_breaker,
-        "chromadb": chroma_circuit_breaker,
-    }
+    with _llm_model_breakers_lock:
+        return {
+            "deepseek": llm_circuit_breaker,
+            "postgresql": pg_circuit_breaker,
+            "chromadb": chroma_circuit_breaker,
+            **_llm_model_breakers,
+        }
