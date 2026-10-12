@@ -24,6 +24,7 @@
 ## 架构与安全红线
 
 - 沿用 Router / Runtime / Domain Agent / Skill / Tool 的职责边界；MCP 是接入适配方式。
+- `/agent` 主助手与 Travel/Customer Service 为不同业务入口；跨产品能力必须按服务端可信身份/权限过滤，`domain_hint` 不是授权依据。Conversation-first 目标见 [ADR-0002](docs/architecture/adr/0002-main-agent-conversation-first.md)（已决策、待施工；不得宣称已实现）。
 - 已有 registry、manifest、schema、迁移、生成器或发布指针时，以其作为唯一事实源。
 - 身份只信任服务端验证后的上下文；资源读写执行资源级授权和租户隔离。
 - SQL 使用参数化、只读权限、授权表范围和现有安全校验；不得绕过或降级为宽权限执行。
@@ -38,6 +39,7 @@
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | 网关、部署、异步运行                         | [system-overview.md](docs/architecture/system-overview.md)                                                                       |
 | Router、LangGraph、Runtime、SSE、Checkpoint  | [ai-runtime.md](docs/architecture/ai-runtime.md)                                                                                 |
+| `/agent` 对话优先目标架构与跨产品隔离         | [ADR-0002：Conversation-first](docs/architecture/adr/0002-main-agent-conversation-first.md)（待施工）                           |
 | Provider、凭据和跨域服务关系                 | [domain-service-map.md](docs/architecture/domain-service-map.md)                                                                 |
 | 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md)                                                                      |
 | Tool/Provider 异常、失败分级与降级           | [failure-degradation.md](docs/architecture/failure-degradation.md)                                                                 |
