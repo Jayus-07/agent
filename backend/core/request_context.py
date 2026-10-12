@@ -66,6 +66,11 @@ class RequestCancelled(RuntimeError):
 
     stage = 检查点标签（cs_graph_entry / cs_supervisor / cs_expert:<name> /
     cs_reporter / knowledge_rag 等），供 trace.cancel_stage 归因。
+
+    B1-F 语义边界：这是**逻辑取消**——取消检查边界保证不再启动新的下游
+    调用，但不等于底层线程或 Provider 调用已停止：已入场的同步调用会自然
+    跑完、其结果被丢弃（物理取消传播属后续批次，不在本契约内）。终态出
+    口统一为 REQUEST_CANCELLED（SSE 稳定码 / HTTP 499 / trace cancelled）。
     """
 
     def __init__(self, stage: str = ""):
