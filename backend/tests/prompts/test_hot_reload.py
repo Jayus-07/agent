@@ -113,15 +113,15 @@ async def test_reload_event_refreshes_snapshot(monkeypatch):
 
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     monkeypatch.setattr(hot_reload.prompt_service, "refresh_snapshot", refresh_snapshot)
     hot_reload._set_local_epoch(1)
 
     await hot_reload._handle_reload_event({"epoch": 2, "key": "planner.system"})
 
-    assert refreshed == [True]
+    assert refreshed == [2]
     assert hot_reload.local_epoch() == 2
 
 
@@ -132,8 +132,8 @@ async def test_ensure_fresh_refreshes_when_redis_epoch_is_newer(monkeypatch):
     redis = FakeRedis(epoch=5)
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     monkeypatch.setattr(hot_reload, "get_redis", lambda: redis)
     monkeypatch.setattr(hot_reload, "_read_db_epoch", lambda: _async_value(None))
@@ -144,7 +144,7 @@ async def test_ensure_fresh_refreshes_when_redis_epoch_is_newer(monkeypatch):
 
     await hot_reload.ensure_prompt_snapshot_fresh_async()
 
-    assert refreshed == [True]
+    assert refreshed == [5]
     assert hot_reload.local_epoch() == 5
 
 
@@ -154,8 +154,8 @@ async def test_redis_failure_is_fail_open(monkeypatch):
 
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     def broken_redis():
         raise ConnectionError("redis down")
@@ -233,8 +233,8 @@ async def test_ensure_fresh_uses_db_epoch_when_redis_lags(monkeypatch):
     redis = FakeRedis(epoch=1)
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     monkeypatch.setattr(hot_reload, "get_redis", lambda: redis)
     monkeypatch.setattr(hot_reload, "_read_db_epoch", lambda: _async_value(5))
@@ -245,7 +245,7 @@ async def test_ensure_fresh_uses_db_epoch_when_redis_lags(monkeypatch):
 
     await hot_reload.ensure_prompt_snapshot_fresh_async()
 
-    assert refreshed == [True]
+    assert refreshed == [5]
     assert hot_reload.local_epoch() == 5
 
 

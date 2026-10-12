@@ -11,6 +11,7 @@ Sync path:
 """
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import threading
 from contextlib import contextmanager
@@ -59,6 +60,10 @@ class PromptService:
         self._renderer = PromptRenderer()
         self._cache = get_cache("prompts", ttl=300)
         self._snapshot: dict[str, _SnapshotEntry] = {}
+        # 每个 key 最近一次已提交的 DB epoch；阻止乱序恢复的旧发布覆盖快照。
+        self._snapshot_publish_epochs: dict[str, int] = {}
+        self._publish_locks: dict[str, threading.Lock] = {}
+        self._publish_locks_guard = threading.Lock()
         # 进程内短期历史，供 LangGraph Send 线程按 state.prompt_versions
         # 恢复请求开始时的模板。历史只用于 pin，不改变当前 active 读路径。
         self._snapshot_history: dict[tuple[str, int], _SnapshotEntry] = {}
@@ -80,7 +85,15 @@ class PromptService:
     def list_specs(self) -> dict[str, PromptSpec]:
         return dict(PROMPT_REGISTRY)
 
-    async def refresh_snapshot(self) -> None:
+    async def _acquire_publish_lock(self, key: str) -> threading.Lock:
+        """异步等待 key 级提交锁，兼容服务的多个事件循环线程。"""
+        with self._publish_locks_guard:
+            lock = self._publish_locks.setdefault(key, threading.Lock())
+        while not lock.acquire(blocking=False):
+            await asyncio.sleep(0.001)
+        return lock
+
+    async def refresh_snapshot(self, *, publish_epoch: int | None = None) -> None:
         try:
             async with AsyncSessionLocal() as session:
                 repo = PromptRepository(session)
@@ -97,6 +110,11 @@ class PromptService:
                                 )
                                 self._snapshot[p.key] = entry
                                 self._snapshot_history[(p.key, ver.version)] = entry
+                                if publish_epoch is not None:
+                                    self._snapshot_publish_epochs[p.key] = max(
+                                        publish_epoch,
+                                        self._snapshot_publish_epochs.get(p.key, 0),
+                                    )
                     self._epoch += 1
                     self._snapshot_time = datetime.now(timezone.utc).isoformat()
                     self._reload_source = "refresh"
@@ -384,7 +402,8 @@ class PromptService:
         role: str = "",
         skip_workflow: bool = False,
         _before_commit: Callable[[Any], Awaitable[Any]] | None = None,
-        _required_status: str | None = None,
+        _required_status: str | tuple[str, ...] | None = None,
+        _require_publish_history: bool = False,
     ) -> dict:
         spec = PROMPT_REGISTRY.get(key)
         if spec and spec.code_controlled:
@@ -408,16 +427,34 @@ class PromptService:
             if not ver:
                 raise KeyError(f"Version {version} not found for {key}")
 
-            if _required_status is not None and ver.status != _required_status:
+            required_statuses = (
+                (_required_status,)
+                if isinstance(_required_status, str)
+                else _required_status
+            )
+            if required_statuses is not None and ver.status not in required_statuses:
+                if len(required_statuses) == 1:
+                    required_text = f"{required_statuses[0]!r}"
+                else:
+                    required_text = " / ".join(repr(status) for status in required_statuses)
                 raise ValueError(
                     f"版本 {version} 状态为 {ver.status!r}，"
-                    f"操作要求状态 {_required_status!r}"
+                    f"操作要求状态 {required_text}"
                 )
 
-            if not skip_workflow and ver.status not in ("passed", "published"):
+            allowed_statuses = ("passed", "published")
+            if _require_publish_history:
+                allowed_statuses += ("archived",)
+            if not skip_workflow and ver.status not in allowed_statuses:
                 raise ValueError(
                     f"Version {version} has status '{ver.status}'; "
-                    f"only 'passed' or 'published' versions can be published"
+                    f"only {', '.join(repr(status) for status in allowed_statuses)} "
+                    "versions can be published"
+                )
+
+            if _require_publish_history and not await repo.has_publish_audit(key, version):
+                raise ValueError(
+                    f"版本 {version} 没有已提交的发布记录，不能回滚"
                 )
 
             errors = self._renderer.validate(ver.template, spec) if spec else []
@@ -463,16 +500,15 @@ class PromptService:
                     raise ValueError(
                         "Release Gate 未能在 Prompt 事务内更新 release 状态"
                     )
-            await session.commit()
+            publish_lock = await self._acquire_publish_lock(key)
+            try:
+                await session.commit()
+                self._apply_published_snapshot(key, published_entry, hot_reload_epoch)
+            finally:
+                publish_lock.release()
 
         # DB 是发布线性化点。提交失败时不碰进程快照、缓存和 reload hooks；
-        # 提交成功后先刷新本进程，再做可补偿的缓存清理与跨进程广播。
-        with self._snapshot_lock:
-            self._snapshot[key] = published_entry
-            self._snapshot_history[(key, published_entry.version)] = published_entry
-            self._epoch += 1
-            self._snapshot_time = datetime.now(timezone.utc).isoformat()
-            self._reload_source = "publish"
+        # 成功提交时在 key 级锁内先刷新本进程，再做可补偿的缓存清理与跨进程广播。
 
         try:
             self._cache.delete(f"prompt:{key}")
@@ -496,6 +532,27 @@ class PromptService:
 
         self._fire_hooks(key)
         return {"active_version": version, "previous_version": old_version}
+
+    def _apply_published_snapshot(
+        self, key: str, entry: _SnapshotEntry, publish_epoch: int | None,
+    ) -> bool:
+        """按 DB epoch 单调更新本地快照，拒绝迟到的旧提交覆盖新版本。"""
+        with self._snapshot_lock:
+            current_epoch = self._snapshot_publish_epochs.get(key)
+            if (
+                publish_epoch is not None
+                and current_epoch is not None
+                and publish_epoch < current_epoch
+            ):
+                return False
+            self._snapshot[key] = entry
+            self._snapshot_history[(key, entry.version)] = entry
+            if publish_epoch is not None:
+                self._snapshot_publish_epochs[key] = publish_epoch
+            self._epoch += 1
+            self._snapshot_time = datetime.now(timezone.utc).isoformat()
+            self._reload_source = "publish"
+            return True
 
     async def get_template_hash(self, key: str, version: int) -> str:
         """指定版本的模板内容指纹（sha256 前 16 位，与 gen_prompt_contract_lock 同口径）。
@@ -525,7 +582,8 @@ class PromptService:
             version,
             actor=actor,
             role=role,
-            _required_status="published",
+            _required_status=("published", "archived"),
+            _require_publish_history=True,
         )
 
     async def set_alias(

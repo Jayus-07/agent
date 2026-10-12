@@ -254,10 +254,78 @@ class TestPublish:
             with patch(
                 "backend.prompts.service.PromptRepository", return_value=mock_repo,
             ):
-                with pytest.raises(ValueError, match="操作要求状态 'published'"):
+                with pytest.raises(ValueError, match="操作要求状态 'published' / 'archived'"):
                     await service.rollback("test.low", 2, actor="admin")
 
         session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rollback_restores_archived_version_with_publish_audit(self, service):
+        archived = MagicMock(
+            template="Previously published {name}", version=2,
+            variables=["name"], id=10, status="archived",
+        )
+        mock_prompt = MagicMock(id=1, active_version=3)
+        mock_repo = AsyncMock()
+        mock_repo.get_by_key.return_value = mock_prompt
+        mock_repo.get_version.return_value = archived
+        mock_repo.has_publish_audit.return_value = True
+
+        with patch("backend.prompts.service.AsyncSessionLocal") as session_cls:
+            session = AsyncMock()
+            session_cls.return_value.__aenter__ = AsyncMock(return_value=session)
+            session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            with patch(
+                "backend.prompts.service.PromptRepository", return_value=mock_repo,
+            ):
+                with patch(
+                    "backend.prompts.hot_reload.stage_prompt_epoch",
+                    new=AsyncMock(return_value=4),
+                ):
+                    with patch(
+                        "backend.prompts.hot_reload.dispatch_prompt_epoch",
+                        new=AsyncMock(),
+                    ):
+                        result = await service.rollback("test.low", 2, actor="admin")
+
+        assert result == {"active_version": 2, "previous_version": 3}
+        mock_repo.has_publish_audit.assert_awaited_once_with("test.low", 2)
+        mock_repo.set_active_version.assert_awaited_once_with(
+            1, 2, expected_current_version=3,
+        )
+
+    @pytest.mark.asyncio
+    async def test_rollback_rejects_archived_version_without_publish_audit(self, service):
+        archived = MagicMock(
+            template="Unpublished {name}", version=2,
+            variables=["name"], id=10, status="archived",
+        )
+        mock_repo = AsyncMock()
+        mock_repo.get_by_key.return_value = MagicMock(id=1, active_version=3)
+        mock_repo.get_version.return_value = archived
+        mock_repo.has_publish_audit.return_value = False
+
+        with patch("backend.prompts.service.AsyncSessionLocal") as session_cls:
+            session = AsyncMock()
+            session_cls.return_value.__aenter__ = AsyncMock(return_value=session)
+            session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            with patch(
+                "backend.prompts.service.PromptRepository", return_value=mock_repo,
+            ):
+                with pytest.raises(ValueError, match="没有已提交的发布记录"):
+                    await service.rollback("test.low", 2, actor="admin")
+
+        mock_repo.set_active_version.assert_not_awaited()
+        session.commit.assert_not_awaited()
+
+    def test_older_publish_epoch_cannot_overwrite_newer_snapshot(self, service):
+        newer = _SnapshotEntry("New {name}", version=3, variables=["name"])
+        older = _SnapshotEntry("Old {name}", version=2, variables=["name"])
+
+        assert service._apply_published_snapshot("test.low", newer, 8)
+        assert not service._apply_published_snapshot("test.low", older, 7)
+        assert service._snapshot["test.low"].version == 3
+        assert service._snapshot_publish_epochs["test.low"] == 8
 
 
 class TestReloadHooks:

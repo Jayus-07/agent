@@ -307,7 +307,7 @@ async def _refresh_if_newer(epoch: int, *, source: str) -> bool:
             return False
         try:
             before = local_epoch()
-            await prompt_service.refresh_snapshot()
+            await prompt_service.refresh_snapshot(publish_epoch=epoch)
             prompt_service.mark_snapshot_source(source)
             _set_local_epoch(epoch)
             _last_refresh_at = now

@@ -88,7 +88,9 @@ create_draft → publish → rollback
 6. Redis 通知失败时保留 DB pending 事件，由请求入口的 DB epoch 检查补偿；不能把单进程刷新描述成所有 Worker 已刷新
 7. 触发 reload hooks
 
-只有已评测并审批的 Release Gate 可以跳过普通 Prompt 状态流水线。直接回滚只允许指向曾发布的版本；未发布的 draft 不能通过 rollback 激活。
+只有已评测并审批的 Release Gate 可以跳过普通 Prompt 状态流水线。直接回滚只允许指向 `publish` 审计确认曾激活的版本；版本归档后仍可按该审计恢复，恢复会重新设为 `published`。没有发布记录的版本（包括仅经状态迁移标成 `published`/`archived` 的版本）不能通过 rollback 激活。
+
+本地快照按同一数据库提交的 reload epoch 单调更新；热重载拉取也会记录该 epoch，迟到的旧发布提交不能覆盖已刷新的新版本。
 
 ### rollback
 
