@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import threading
 
 from unittest.mock import patch as mp
@@ -115,6 +116,19 @@ class TestDirectExecutorAsyncBoundary:
             return 42
 
         assert _run_coro_sync(coro()) == 42
+
+    def test_run_coro_sync_preserves_contextvars_on_loop_thread(self):
+        """误接线隔离线程也必须继承调用者身份和预算 ContextVar。"""
+        value = ContextVar("workflow_test_context", default="")
+        value.set("request-context")
+
+        async def coro():
+            return value.get()
+
+        async def scenario():
+            return _run_coro_sync(coro())
+
+        assert asyncio.run(scenario()) == "request-context"
 
     def test_direct_executor_tool_failure_status_preserved(self):
         """D4：skill 失败 → step_results.status=failed + final_answer 置空

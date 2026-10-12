@@ -8,6 +8,8 @@
 """
 import asyncio
 import json
+import threading
+import time
 import re
 
 import pytest
@@ -182,3 +184,28 @@ def test_llm_failure_degrades_to_skeleton(patched_env, monkeypatch):
     md = ctx.outputs["report"]["report_md"]
     assert "模板骨架" in md
     assert ctx.outputs["report"]["claim_count"] == 0
+
+
+def test_sync_provider_call_does_not_block_workflow_loop(monkeypatch):
+    """同步 Provider 在线程池运行，Workflow 事件循环可继续调度。"""
+    import backend.orchestration.workflows.market_research as wf_mod
+
+    started = threading.Event()
+
+    def slow_invoke(_messages):
+        started.set()
+        time.sleep(0.15)
+        return _FakeResp("{}")
+
+    monkeypatch.setattr(
+        wf_mod, "llm", type("L", (), {"invoke": staticmethod(slow_invoke)}),
+    )
+
+    async def run():
+        task = asyncio.create_task(wf_mod._llm_json([]))
+        await asyncio.sleep(0.02)
+        assert started.is_set()
+        assert not task.done()
+        await task
+
+    asyncio.run(run())

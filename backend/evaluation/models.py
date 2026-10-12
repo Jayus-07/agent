@@ -3,7 +3,7 @@
 可移植性：此文件零项目依赖，可复制到任何 Python 项目直接使用。
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, Callable, get_args
 from pydantic import BaseModel, Field
 
@@ -125,7 +125,7 @@ class TierSummary(BaseModel):
 
 class EvalReport(BaseModel):
     """一次完整评估的报告。"""
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     module: str  # "all" | "planner" | "rag"
     mode: Literal["live", "offline"]
     smoke: bool = False

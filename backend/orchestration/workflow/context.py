@@ -39,6 +39,11 @@ class WorkflowContext:
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: dict[str, Any] = field(default_factory=dict)
     trace_id: str | None = None
+    request_context: Any = None
+    deadline_at_monotonic: float | None = None
+    deadline_budget_ms: int = 0
+    deadline_source: str = "workflow"
+    deadline_exceeded: bool = False
     started_at: datetime = field(default_factory=datetime.now)
     finished_at: datetime | None = None
     status: str = "running"  # running / success / failed / partial
@@ -79,6 +84,9 @@ class WorkflowContext:
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "duration_ms": self.duration_ms,
+            "deadline_budget_ms": self.deadline_budget_ms,
+            "deadline_source": self.deadline_source,
+            "deadline_exceeded": self.deadline_exceeded,
             "error": self.error,
             "skip_steps": list(self.skip_steps),
             "degraded_steps": list(self.degraded_steps),

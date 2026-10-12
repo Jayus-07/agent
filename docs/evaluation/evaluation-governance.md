@@ -46,6 +46,7 @@ T0–T3 的选择继续由 [测试策略](../development/testing-guide.md) 决�
 
 ## 5. 生命周期与输出
 
+- **报告时间**：面向人的报告和控制台摘要显示上海时间，精确到秒；机器字段 `timestamp` 使用带时区的 ISO 8601 UTC，另提供 `timestamp_shanghai` 便于读取。
 1. **收录**：新增样本来自已修复回归、人工标注、生产脱敏失败案例或明确对抗集；有稳定 id、人工责任人、版本和质量审查。
 2. **运行**：记录 `commit_sha`、数据集 hash、suite、模型/Prompt、路由策略、Provider、fixture_set、环境与 runner，以及 Trace/run_id、成本和持续时间。
 3. **裁决**：必需指标/有效样本/安全断言缺失按 `INVALID/FAIL` 的实际含义判决；不能把 LLM 调用失败归类模型质量不合格。

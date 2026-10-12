@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 from backend.orchestration.workflow.meta import (
@@ -41,6 +42,7 @@ def workflow(
     examples: list[str] | None = None,
     default_kbs: list[str] | None = None,
     category: str = "",
+    deadline_sec: float = 900,
 ) -> Callable[[type], type]:
     """类装饰器：声明 Workflow 的元数据
 
@@ -51,6 +53,7 @@ def workflow(
         actions: 动作类型（路由"动作"维度匹配）
         examples: 示例问句（embedding 相似度匹配 + LLM few-shot）
         default_kbs: 默认 RAG 检索的 kb_ids
+        deadline_sec: 整个 Workflow 的总执行预算（秒）
 
     Example:
         @workflow(name="daily_report", ...)
@@ -58,6 +61,11 @@ def workflow(
             @step()
             async def fetch_sales(self, ctx): ...
     """
+    if not math.isfinite(deadline_sec) or deadline_sec <= 0:
+        raise ValueError(
+            f"deadline_sec must be finite and > 0, got {deadline_sec}"
+        )
+
     def decorator(cls: type) -> type:
         meta = WorkflowMeta(
             name=name,
@@ -67,6 +75,7 @@ def workflow(
             examples=list(examples or []),
             default_kbs=list(default_kbs or []),
             category=category,
+            deadline_sec=deadline_sec,
         )
         setattr(cls, WORKFLOW_META_ATTR, meta)
         # 不修改类本身，只附加属性
