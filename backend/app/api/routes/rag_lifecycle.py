@@ -110,7 +110,7 @@ async def transition_lifecycle(doc_id: str, body: LifecycleTransitionRequest, re
                 detail={"from": doc.get("status"), "to": result.get("to")},
                 user_id=actor,
             )
-            _invalidate_retrieval_cache()
+            _invalidate_retrieval_cache(doc)
         return result
     except Exception as e:
         logger.error(f"[RAG] lifecycle 迁移失败 {doc_id}: {e}", exc_info=True)
@@ -144,7 +144,7 @@ async def set_expire_at(doc_id: str, body: ExpireAtRequest, request: Request):
                 detail={"from": doc.get("status"), "expire_at": expire_at},
                 user_id=actor,
             )
-            _invalidate_retrieval_cache()
+            _invalidate_retrieval_cache(doc)
         return result
     except Exception as e:
         logger.error(f"[RAG] expire-at 设置失败 {doc_id}: {e}", exc_info=True)
@@ -165,10 +165,24 @@ async def list_lifecycle_events(doc_id: str, request: Request):
     return {"ok": True, "doc_id": doc_id, "events": _get_lifecycle_service().list_events(doc_id)}
 
 
-def _invalidate_retrieval_cache() -> None:
-    """状态/有效期变更后清本进程检索过滤缓存（rag-service 进程靠 60s TTL 兜底）。"""
+def _invalidate_retrieval_cache(doc: dict | None = None) -> None:
+    """状态/有效期变更后清检索过滤缓存，并失效该 KB 答案缓存（终轮问题2）。
+
+    rag-service 进程靠 TTL/版本键兜底；答案缓存若不清，状态变更前的已缓存
+    答案会绕过审核过滤继续返回（pending/deprecated/deleted/expired 同样
+    受影响）。kb_id 来自 registry 行（doc），缺失时跳过答案缓存失效。
+    """
     try:
         from backend.rag.retrieval.hybrid import invalidate_pending_review_cache
         invalidate_pending_review_cache()
     except Exception:
         logger.debug("[RAG] 检索过滤缓存清理失败", exc_info=True)
+    kb_id = (doc or {}).get("kb_id", "")
+    if not kb_id:
+        return
+    try:
+        from backend.rag.answer_cache import get_answer_cache
+
+        get_answer_cache().invalidate_kb(kb_id)
+    except Exception:
+        logger.debug("[RAG] 答案缓存失效失败", exc_info=True)

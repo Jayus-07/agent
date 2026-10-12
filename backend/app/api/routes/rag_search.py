@@ -11,6 +11,7 @@ from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline
 from backend.app.api.identity import require_principal
 from backend.rag.authz import RagAuthorization, RagAuthorizationError
+from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 import asyncio
 
 from backend.shared.logger import logger
@@ -110,6 +111,17 @@ async def search_knowledge(req: SearchRequest, request: Request):
                 "index_status": "stale" if stale else "ok"}
     except HTTPException:
         raise
+    except ReviewVisibilityUnavailableError as e:
+        # Batch 1A fail-closed：审核状态无法确认时拒绝检索，
+        # 不得落入下方 except 伪装成「200 + 空结果」
+        logger.error(f"[RAG] /search 审核可见性事实源不可用: {e}")
+        raise HTTPException(
+            status_code=503, detail="审核状态服务暂不可用，已拒绝检索",
+            headers={
+                ReviewVisibilityUnavailableError.HEADER:
+                    ReviewVisibilityUnavailableError.CODE,
+            },
+        ) from e
     except Exception as e:
         logger.error(f"[RAG] 检索失败: {e}")
         return {"query": query, "results": [], "error": str(e)}
@@ -135,18 +147,28 @@ async def rag_ask(req: RAGAskRequest, request: Request):
         raise HTTPException(status_code=403, detail=f"没有知识库 '{kb_id}' 的访问权限")
     # D1-6：sources 随返回值带回（请求级），不再读 RAGChain 单例属性——
     # 并发请求下单例属性互相覆盖，A 的响应可能带 B 的来源
-    outcome = await asyncio.to_thread(
-        pipeline.ask_result,
-        req.question,
-        req.session_id,
-        kb_id=kb_id,
-        subject_type=principal.subject_type,
-        department=principal.department,
-        permissions=principal.permissions,
-        user_id=principal.user_id,
-        tenant_id=principal.tenant_id,
-        roles=principal.roles,
-    )
+    try:
+        outcome = await asyncio.to_thread(
+            pipeline.ask_result,
+            req.question,
+            req.session_id,
+            kb_id=kb_id,
+            subject_type=principal.subject_type,
+            department=principal.department,
+            permissions=principal.permissions,
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+            roles=principal.roles,
+        )
+    except ReviewVisibilityUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail="审核状态服务暂不可用，已拒绝问答",
+            headers={
+                ReviewVisibilityUnavailableError.HEADER:
+                    ReviewVisibilityUnavailableError.CODE,
+            },
+        ) from e
     return {"answer": outcome.answer, "session_id": req.session_id,
             "sources": outcome.sources,
             # A5（2026-10-04）：answer_meta 随响应带回（拒答时含 answer_status

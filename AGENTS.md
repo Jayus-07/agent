@@ -47,6 +47,7 @@
 | 全仓审计与安全重构                      | [refactoring-playbook.md](docs/development/refactoring-playbook.md) |
 | 发布质量与上线门禁                      | [release-quality.md](docs/operations/release-quality.md) |
 | 三端前端、SSE、状态与共享组件               | [frontend-guide.md](docs/development/frontend-guide.md) |
+| 三端 UI/UX 设计、响应式与页面一致性 | [frontend-design-standard.md](docs/development/frontend-design-standard.md) |
 | 模型预算/价格/计费/对账                    | [llm-budget-billing.md](docs/governance/llm-budget-billing.md) |
 | Trace 与 Span、脱敏和版本归因               | [trace-model.md](docs/observability/trace-model.md) |
 | Prometheus / Grafana 和告警               | [grafana-guide.md](docs/observability/grafana-guide.md) |

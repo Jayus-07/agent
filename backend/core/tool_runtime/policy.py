@@ -48,10 +48,18 @@ class ToolPolicy:
 DEFAULT_POLICIES: dict[str, ToolPolicy] = {
     # RAG：本地模式 pipeline.ask 含 LLM 合成。2026-09-22 依真实 trace 数据
     # （最近 7 次 rag.search：成功样本 3~15s，p50=8.2s，2 次成功落在 8-15s）
-    # 将默认从 8s 放宽到 15s，避免误伤正常查询；retries=0 + Deadline 25s
-    # 兜底不变 —— 183.7s 事故不可能复发。仍可用 TOOL_POLICY_JSON 覆盖。
+    # 将默认从 8s 放宽到 15s；retries=0，183.7s 事故（超时×重试叠加）
+    # 不可能复发。仍可用 TOOL_POLICY_JSON 覆盖。
+    # 2026-10-12 全链路审计 P0-1：15s 与 RAG 端到端常态结构性相撞——
+    # 本地库 627 条 RAG 子 trace P90=16.3s / P95=19.1s，加前置排队 ~4s，
+    # 10%+ 请求被 15s 线误杀：父判 timeout、rag-service 侧实际成功
+    # （答案被丢弃、模型费用白烧、连续超时误开熔断）。放宽到
+    # 45s = P95×2 + 排队余量；retries=0 / bulkhead 不变，超时×重试
+    # 叠加形态仍不可能复发。workflow 路径（rag_agent）未接
+    # RequestDeadline，本值即唯一约束；主图路径有效超时 = min(本值,
+    # 剩余 workflow 预算 − reserve)，Deadline 联动调优见审计报告 §4。
     "rag.search": ToolPolicy(
-        timeout_ms=15_000.0, retries=0, bulkhead_limit=20,
+        timeout_ms=45_000.0, retries=0, bulkhead_limit=20,
         criticality=ToolCriticality.IMPORTANT, fallback="rag_degraded",
     ),
     "sql.query": ToolPolicy(

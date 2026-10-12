@@ -13,6 +13,34 @@ from langchain_core.retrievers import BaseRetriever
 from types import SimpleNamespace
 
 
+@pytest.fixture(autouse=True)
+def _active_review_registry(monkeypatch):
+    """检索器行为单测使用确定性 active Registry；状态故障由专测覆盖。"""
+    import backend.rag.retrieval.review_filter as review_filter
+    from backend.rag.indexing import doc_registry
+
+    class ActiveRegistry:
+        def __init__(self, path):
+            pass
+
+        def list_by_statuses(self, statuses):
+            return []
+
+        def list_expired(self, now=None):
+            return []
+
+        def list_visible_doc_ids(self, doc_ids, now=None):
+            return {doc_id for doc_id in (doc_ids or []) if doc_id}
+
+    monkeypatch.setattr(doc_registry, "DocumentRegistry", ActiveRegistry)
+    monkeypatch.setattr(review_filter, "_read_remote_version", lambda: None)
+    review_filter._block_cache = {"ids": frozenset(), "ts": 0.0}
+    review_filter._version_cache = {"value": None, "ts": 0.0, "last_seen": None}
+    yield
+    review_filter._block_cache = {"ids": frozenset(), "ts": 0.0}
+    review_filter._version_cache = {"value": None, "ts": 0.0, "last_seen": None}
+
+
 # =====================================================
 # Hybrid 检索 fallback 行为
 # =====================================================
@@ -464,8 +492,18 @@ class TestKbIdFallback:
         finally:
             clear_context()
 
-    def test_retriever_filters_restricted_chunks_before_return(self):
-        """KB 授权通过后仍须执行文档 permission_scope 收口。"""
+    def test_retriever_filters_restricted_chunks_before_return(
+            self, monkeypatch):
+        """KB 授权通过后仍须执行文档 permission_scope 收口。
+
+        本测试只关注 permission 维度：审核可见性（Batch 1A）依赖 Registry
+        事实源，假 doc_id 必须显式 mock，不得依赖共享库内容。"""
+        import backend.rag.retrieval.review_filter as rf
+
+        monkeypatch.setattr(rf, "get_review_blocked_doc_ids",
+                            lambda: frozenset())
+        monkeypatch.setattr(rf, "verify_visible_doc_ids",
+                            lambda ids: set(ids))
         from backend.core.request_context import RequestContext
         from backend.rag.context import RagRequestState, set_context, clear_context
 

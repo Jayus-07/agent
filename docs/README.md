@@ -25,6 +25,7 @@
 | [development/cross-cutting-contracts.md](development/cross-cutting-contracts.md) | REST/SSE/WS、数据、模型、前端与安全共通约束 | 修改跨层契约时 |
 | [development/refactoring-playbook.md](development/refactoring-playbook.md) | 审计与分批安全重构执行标准 | 开展全仓重构时 |
 | [development/frontend-guide.md](development/frontend-guide.md) | 三端 Next.js、API/SSE、状态、移动端及共享组件开发标准 | 任何前端开发或组件合并时 |
+| [development/frontend-design-standard.md](development/frontend-design-standard.md) | 跨三端 UI/UX 视觉层级、组件状态、响应式与页面验收 | 设计、调整页面和视觉/交互组件时 |
 | [governance/llm-budget-billing.md](governance/llm-budget-billing.md) | 模型预算、预占、估算、计价与对账标准 | 模型调用/价格/账单调整时 |
 | [observability/trace-model.md](observability/trace-model.md) | Trace/Span、归因、授权与脱敏契约 | 增删埋点/Trace UI 时 |
 | [observability/grafana-guide.md](observability/grafana-guide.md) | Prometheus/Grafana 看板与告警验证 | 指标、Grafana 或告警修改时 |
