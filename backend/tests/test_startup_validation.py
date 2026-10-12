@@ -353,6 +353,8 @@ class TestReadonlyPassword:
         assert "CREATE ROLE AGENT_READONLY WITH LOGIN NOSUPERUSER" in migration
 
     def test_applied_legacy_004_checksum_is_not_replayed(self):
+        from pathlib import Path
+
         from scripts.init_db import apply_migration
 
         class _Cursor:
@@ -375,16 +377,60 @@ class TestReadonlyPassword:
         status, detail = apply_migration(
             _Connection(),
             "004_readonly_role.sql",
-            "-- updated 004 content",
+            (
+                Path(__file__).resolve().parents[1]
+                / "sql"
+                / "migrations"
+                / "004_readonly_role.sql"
+            ).read_text(encoding="utf-8"),
             force=False,
         )
         assert status == "skipped"
         assert "保持不变" in detail
 
-    def test_release_preflight_accepts_only_applied_legacy_004_checksum(self):
-        from backend.scripts.verify_migration_state import checksum_is_accepted
+    def test_applied_legacy_004_rejects_unknown_current_file_version(self):
+        from scripts.init_db import apply_migration
 
-        current_checksum = "new-004-checksum"
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, _params=None):
+                assert "SELECT CHECKSUM, STATUS" in query.upper()
+
+            def fetchone(self):
+                return "b5c27b0ff9ff348c", "applied"
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+        status, detail = apply_migration(
+            _Connection(),
+            "004_readonly_role.sql",
+            "-- unknown migration content",
+            force=False,
+        )
+        assert status == "error"
+        assert "拒绝重放" in detail
+
+    def test_release_preflight_accepts_only_applied_legacy_004_checksum(self):
+        from pathlib import Path
+
+        from backend.scripts.verify_migration_state import checksum_is_accepted
+        from scripts.init_db import checksum_of
+
+        current_checksum = "31b2b96b9b3a76ff"
+        current_migration = (
+            Path(__file__).resolve().parents[1]
+            / "sql"
+            / "migrations"
+            / "004_readonly_role.sql"
+        ).read_text(encoding="utf-8")
+        assert checksum_of(current_migration) == current_checksum
         assert checksum_is_accepted(
             "004_readonly_role.sql",
             {"checksum": "b5c27b0ff9ff348c", "status": "applied"},
@@ -400,6 +446,66 @@ class TestReadonlyPassword:
             {"checksum": "b5c27b0ff9ff348c", "status": "applied"},
             current_checksum,
         )
+        assert not checksum_is_accepted(
+            "004_readonly_role.sql",
+            {"checksum": "b5c27b0ff9ff348c", "status": "applied"},
+            "tampered-file-version",
+        )
+
+    def test_configured_password_and_093_ledger_commit_together(self, monkeypatch):
+        from scripts import init_db
+
+        events = []
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, _params=None):
+                events.append(("execute", query))
+
+            def fetchone(self):
+                return init_db.checksum_of(
+                    "ALTER ROLE agent_readonly PASSWORD NULL;"
+                ), "applied"
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+            def commit(self):
+                events.append(("commit", None))
+
+            def rollback(self):
+                events.append(("rollback", None))
+
+        monkeypatch.setattr(
+            init_db,
+            "_record",
+            lambda _conn, _filename, _sql, _status, *, commit=True: events.append(
+                ("record", commit)
+            ),
+        )
+
+        status, detail = init_db.apply_migration(
+            _Connection(),
+            "093_revoke_readonly_default_password.sql",
+            "ALTER ROLE agent_readonly PASSWORD NULL;",
+            force=False,
+            readonly_password="test-only-placeholder",
+        )
+
+        assert status == "applied"
+        assert "同一事务" in detail
+        assert events[-2:] == [("record", False), ("commit", None)]
+        assert not any(
+            isinstance(query, str) and "test-only-placeholder" in query
+            for event, query in events
+            if event == "execute"
+        )
 
     def test_ensure_dbs_applies_password_revocation_after_004(self):
         from scripts.ensure_dbs import BUSINESS_MIGRATIONS
@@ -409,6 +515,45 @@ class TestReadonlyPassword:
             "093_revoke_readonly_default_password.sql"
         )
         assert original < revocation
+
+    def test_ensure_dbs_sets_configured_password_with_parameterized_ddl(self):
+        from psycopg2.sql import Composed
+
+        from scripts.ensure_dbs import _apply_migration
+
+        executed = []
+        events = []
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query):
+                executed.append(query)
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+            def commit(self):
+                events.append("commit")
+
+            def rollback(self):
+                events.append("rollback")
+
+        result = _apply_migration(
+            _Connection(),
+            "093_revoke_readonly_default_password.sql",
+            password="test-only-placeholder",
+        )
+
+        assert result == "applied"
+        assert len(executed) == 1
+        assert isinstance(executed[0], Composed)
+        assert events == ["commit"]
 
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)

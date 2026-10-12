@@ -1,4 +1,3 @@
--- 升级既有数据库：在 init_db.py 配置新口令前撤销旧只读角色密码。
--- PG_READONLY_PASSWORD 缺失时，agent_readonly 保持不可用密码认证状态。
--- 004 is an applied migration; revoke its legacy password through this forward step.
+-- 004 is an applied migration; this forward step safely updates the readonly credential.
+-- The migration runner sets a configured password here, or revokes password auth if unset.
 ALTER ROLE agent_readonly PASSWORD NULL;

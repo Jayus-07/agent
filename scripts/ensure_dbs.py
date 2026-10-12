@@ -110,14 +110,24 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
         return "error: 迁移文件不存在"
 
     sql = path.read_text(encoding="utf-8")
-    # 安全注入：Python 字符串替换（禁止 sed/shell 插值——特殊字符会被写坏）
+    # 旧迁移占位符只为既有 SQL 保留；凭据迁移走参数化 DDL。
     sql = sql.replace("${PG_READONLY_PASSWORD}", password)
     sql = sql.replace("${PG_READONLY_USER}", os.getenv("PG_READONLY_USER", "agent_readonly"))
 
     applied_any = False
     with conn.cursor() as cur:
         try:
-            cur.execute(sql)
+            if filename == "093_revoke_readonly_default_password.sql" and password:
+                from psycopg2 import sql as pgsql
+
+                cur.execute(
+                    pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                        pgsql.Identifier("agent_readonly"),
+                        pgsql.Literal(password),
+                    )
+                )
+            else:
+                cur.execute(sql)
             applied_any = True
         except Exception as e:  # noqa: BLE001
             code = getattr(e, "pgcode", None)
@@ -125,6 +135,8 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
                 conn.rollback()
                 return "skipped"
             conn.rollback()
+            if filename == "093_revoke_readonly_default_password.sql":
+                return f"error: {type(e).__name__}: readonly credential migration failed"
             return f"error: {type(e).__name__}: {str(e)[:160]}"
     conn.commit()
     return "applied" if applied_any else "skipped"

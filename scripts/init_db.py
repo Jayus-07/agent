@@ -475,12 +475,23 @@ def checksum_of(text: str) -> str:
 # 004 已发布版本曾包含默认口令。修改为无密码创建后，明确保留已应用旧版
 # 的校验和，避免 checksum 不同导致整份授权迁移被重放。
 _FROZEN_LEGACY_MIGRATION_CHECKSUMS = {
-    "004_readonly_role.sql": frozenset({"b5c27b0ff9ff348c"}),
+    # 历史校验和只在文件仍是已知的无密码版本时接受。
+    "004_readonly_role.sql": {
+        "b5c27b0ff9ff348c": "31b2b96b9b3a76ff",
+    },
 }
+_READONLY_PASSWORD_MIGRATION = "093_revoke_readonly_default_password.sql"
 
 
 # ──────────────────────────────────────────────────────────── 迁移执行
-def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str, str]:
+def apply_migration(
+    conn,
+    filename: str,
+    sql: str,
+    *,
+    force: bool,
+    readonly_password: str = "",
+) -> tuple[str, str]:
     """执行单个迁移文件，返回 (状态, 说明)。
 
     状态：applied（全量执行）/ applied-partial（降级逐语句补齐）/
@@ -493,12 +504,17 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
             (filename,),
         )
         row = cur.fetchone()
-    if row and not force:
+    if row and not force and filename != _READONLY_PASSWORD_MIGRATION:
+        frozen_current = _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(
+            filename, {},
+        ).get(row[0])
         if (
             row[1] == "applied"
-            and row[0] in _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(filename, ())
+            and frozen_current is not None
         ):
-            return "skipped", "已应用的历史迁移保持不变；由后续迁移完成升级"
+            if checksum_of(sql) == frozen_current:
+                return "skipped", "已应用的历史迁移保持不变；由后续迁移完成升级"
+            return "error", "冻结的历史校验和与当前文件版本不匹配，拒绝重放"
         if row[0] != checksum_of(sql):
             # 文件内容变了 → 需要重新应用（并更新 checksum）
             pass
@@ -506,6 +522,35 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
             return "skipped", "已应用（记录一致）"
         elif row[1] == "error":
             pass  # 上次失败，重试
+
+    if filename == _READONLY_PASSWORD_MIGRATION:
+        from psycopg2 import sql as pgsql
+
+        try:
+            with conn.cursor() as cur:
+                if readonly_password:
+                    cur.execute(
+                        pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                            pgsql.Identifier("agent_readonly"),
+                            pgsql.Literal(readonly_password),
+                        )
+                    )
+                else:
+                    cur.execute(sql)
+            _record(conn, filename, sql, "applied", commit=False)
+            conn.commit()
+            detail = (
+                "配置的只读口令与迁移台账在同一事务提交"
+                if readonly_password else "撤销只读角色口令与迁移台账在同一事务提交"
+            )
+            return "applied", detail
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            try:
+                _record(conn, filename, sql, "error")
+            except Exception:  # noqa: BLE001
+                conn.rollback()
+            return "error", f"{type(exc).__name__}: 只读凭据迁移失败"
 
     # ① 整文件执行（快，且保留多语句事务语义）
     with conn.cursor() as cur:
@@ -545,7 +590,7 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
     return "applied-partial", f"补齐 {applied_new} 条 / 跳过 {skipped} 条"
 
 
-def _record(conn, filename: str, sql: str, status: str) -> None:
+def _record(conn, filename: str, sql: str, status: str, *, commit: bool = True) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -558,7 +603,8 @@ def _record(conn, filename: str, sql: str, status: str) -> None:
             """,
             (filename, checksum_of(sql), status),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ──────────────────────────────────────────────────────────── 库 / 角色
@@ -766,7 +812,13 @@ def main() -> int:
                         continue
                     sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
                     t0 = time.time()
-                    status, detail = apply_migration(conn, name, sql, force=args.force)
+                    status, detail = apply_migration(
+                        conn,
+                        name,
+                        sql,
+                        force=args.force,
+                        readonly_password=ro_pw,
+                    )
                     mark = {"applied": "✓", "applied-partial": "~",
                             "skipped": "=", "error": "✗"}[status]
                     print(f"[init_db]   {mark} {name}: {status} — {detail} "

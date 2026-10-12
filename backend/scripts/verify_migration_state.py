@@ -53,10 +53,10 @@ def checksum_is_accepted(filename: str, row: dict, current_checksum: str) -> boo
     recorded = row.get("checksum") or ""
     if recorded == current_checksum:
         return True
-    return (
-        row.get("status") == "applied"
-        and recorded in _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(filename, ())
-    )
+    expected_current = _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(
+        filename, {},
+    ).get(recorded)
+    return row.get("status") == "applied" and current_checksum == expected_current
 
 
 def repo_layer() -> tuple[list[str], list[str]]:
