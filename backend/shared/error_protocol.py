@@ -8,13 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 
 class ErrorCode(str, Enum):
-    """计划冻结的九个通用错误码。"""
+    """通用错误码（原九码 + B1-F 收口新增 REQUEST_CANCELLED）。
+
+    REQUEST_CANCELLED：用户主动中止（/chat/abort 等）——取消不是系统
+    故障，不得并入 INTERNAL_ERROR；HTTP 边界对应 499（客户端关闭请求）。
+    """
 
     INVALID_PARAM = "INVALID_PARAM"
     PERMISSION_DENIED = "PERMISSION_DENIED"
@@ -25,6 +30,7 @@ class ErrorCode(str, Enum):
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    REQUEST_CANCELLED = "REQUEST_CANCELLED"
 
 
 ERROR_CODES = tuple(code.value for code in ErrorCode)
@@ -39,6 +45,7 @@ _SAFE_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.IDEMPOTENCY_CONFLICT: "请求已处理或正在处理中。",
     ErrorCode.BUDGET_EXCEEDED: "已达到本次请求预算上限。",
     ErrorCode.INTERNAL_ERROR: "服务器内部错误，请稍后重试。",
+    ErrorCode.REQUEST_CANCELLED: "请求已由用户中止。",
 }
 
 _RETRYABLE: dict[ErrorCode, bool] = {
@@ -51,6 +58,8 @@ _RETRYABLE: dict[ErrorCode, bool] = {
     ErrorCode.IDEMPOTENCY_CONFLICT: False,
     ErrorCode.BUDGET_EXCEEDED: False,
     ErrorCode.INTERNAL_ERROR: True,
+    # 用户主动中止：不存在「重试恢复」，重发新请求是用户自己的决定
+    ErrorCode.REQUEST_CANCELLED: False,
 }
 
 
@@ -161,6 +170,23 @@ def _exception_code(exc: BaseException) -> ErrorCode:
 
         if isinstance(exc, RequestBudgetExceeded):
             return ErrorCode.BUDGET_EXCEEDED
+    except ImportError:
+        pass
+    # 用户主动中止（/chat/abort 经取消检查边界抛出）——不是内部错误
+    try:
+        from backend.core.request_context import RequestCancelled
+
+        if isinstance(exc, RequestCancelled):
+            return ErrorCode.REQUEST_CANCELLED
+    except ImportError:
+        pass
+    # Provider 传输层超时（httpx.TimeoutException 不是内置 TimeoutError
+    # 子类，不识别会被兜进 INTERNAL_ERROR/500）：连接/读超时统一 TIMEOUT
+    try:
+        import httpx
+
+        if isinstance(exc, httpx.TimeoutException):
+            return ErrorCode.TIMEOUT
     except ImportError:
         pass
     if isinstance(exc, LookupError):
@@ -286,13 +312,41 @@ def sse_error_event(
     *,
     trace_id: str = "",
     source: str = "sse",
+    message: str | None = None,
 ) -> dict[str, Any]:
-    """SSE error 帧适配器；保留 event:error 兼容现有客户端。"""
+    """SSE error 帧适配器；保留 event:error 兼容现有客户端。
+
+    data 带契约要求的 ts（event_schema.ErrorData 必填）；message 仅限
+    覆盖为既定安全文案（如 runner 的「执行失败: 单行原因」，堆栈不进帧）。
+    """
+    data = error_envelope_from_exception(
+        exc, trace_id=trace_id, source=source
+    ).to_dict()
+    if message is not None:
+        data["message"] = message
+    data["ts"] = time.time()
     return {
         "event": "error",
-        "data": error_envelope_from_exception(
-            exc, trace_id=trace_id, source=source
-        ).to_dict(),
+        "data": data,
+    }
+
+
+def sse_cancelled_event(source: str = "sse") -> dict[str, Any]:
+    """用户主动中止的 SSE error 终帧（稳定码 REQUEST_CANCELLED）。
+
+    runner / events 的三处「用户中止」手写帧统一走此出口——中止不是
+    系统故障，前端与 trace 据稳定码区分「用户取消」与普通执行失败。
+    """
+    envelope = ErrorEnvelope(
+        code=ErrorCode.REQUEST_CANCELLED,
+        retryable=False,
+        handoff_available=False,
+        message=_SAFE_MESSAGES[ErrorCode.REQUEST_CANCELLED],
+        source=source,
+    )
+    return {
+        "event": "error",
+        "data": {**envelope.to_dict(), "ts": time.time()},
     }
 
 
@@ -305,5 +359,6 @@ __all__ = [
     "error_envelope_from_exception",
     "serialize_tool_error",
     "skill_error_result",
+    "sse_cancelled_event",
     "sse_error_event",
 ]

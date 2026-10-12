@@ -29,7 +29,7 @@ def test_budget_check_blocked_reason(monkeypatch):
 
     class _FakeStore:
         def get_budget_status(self, *, user_id, tenant_id):
-            assert tenant_id == "default"
+            assert tenant_id == "eval"
             return {"blocked": True, "windows": [
                 {"scope": "tenant", "period": "month", "blocked": True,
                  "used": 100.0, "limit": 80.0},

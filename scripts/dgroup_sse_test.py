@@ -5,20 +5,30 @@
 每个场景独立 SSE 会话（D1-D3 共用同一 session_id 验证跨轮）。
 """
 import json
+import os
 import sys
 import time
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE = "http://127.0.0.1:3100"
-KEY = ""
-TOKEN = ""
-
-for line in open("frontend/.env.local", encoding="utf-8"):
-    if line.startswith("API_KEY="):
-        KEY = line.split("=", 1)[1].strip()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
+KEY = os.environ.get("API_KEY", "")
+TEST_USERNAME = os.environ.get("TEST_USERNAME", "")
+TEST_PASSWORD = os.environ.get("TEST_PASSWORD", "")
+missing = [name for name, value in (
+    ("API_KEY", KEY),
+    ("TEST_USERNAME", TEST_USERNAME),
+    ("TEST_PASSWORD", TEST_PASSWORD),
+) if not value.strip()]
+if missing:
+    sys.exit("缺少必需环境配置: " + ", ".join(missing))
 
 req = urllib.request.Request(BASE + "/api/auth/login",
-    data=json.dumps({"username": "13897654321", "password": "Travel#2026"}).encode(),
+    data=json.dumps({"username": TEST_USERNAME, "password": TEST_PASSWORD}).encode(),
     headers={"Content-Type": "application/json"}, method="POST")
 TOKEN = json.loads(urllib.request.urlopen(req, timeout=30).read())["data"]["token"]
 
