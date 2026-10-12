@@ -35,7 +35,10 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-from scripts.init_db import MIGRATION_TARGETS  # noqa: E402  (单一事实源，禁复制)
+from scripts.init_db import (  # noqa: E402  (单一事实源，禁复制)
+    MIGRATION_TARGETS,
+    _FROZEN_LEGACY_MIGRATION_CHECKSUMS,
+)
 
 MIGRATIONS_DIR = ROOT / "backend" / "sql" / "migrations"
 
@@ -43,6 +46,17 @@ MIGRATIONS_DIR = ROOT / "backend" / "sql" / "migrations"
 def _checksum(path: Path) -> str:
     """与 scripts/init_db.py::checksum_of 完全同口径：sha256(文件 utf-8 文本)[:16]。"""
     return hashlib.sha256(path.read_text(encoding="utf-8").encode("utf-8")).hexdigest()[:16]
+
+
+def checksum_is_accepted(filename: str, row: dict, current_checksum: str) -> bool:
+    """接受当前迁移校验和，以及明确冻结的已应用历史版本。"""
+    recorded = row.get("checksum") or ""
+    if recorded == current_checksum:
+        return True
+    return (
+        row.get("status") == "applied"
+        and recorded in _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(filename, ())
+    )
 
 
 def repo_layer() -> tuple[list[str], list[str]]:
@@ -149,7 +163,9 @@ def main() -> int:
     mismatch = []
     for f in registered:
         row = db_rows.get((MIGRATION_TARGETS[f], f))
-        if row and row["checksum"] and row["checksum"] != _checksum(MIGRATIONS_DIR / f):
+        if row and row["checksum"] and not checksum_is_accepted(
+            f, row, _checksum(MIGRATIONS_DIR / f),
+        ):
             mismatch.append(f)
     if mismatch:
         for f in mismatch:

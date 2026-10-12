@@ -381,6 +381,26 @@ class TestReadonlyPassword:
         assert status == "skipped"
         assert "保持不变" in detail
 
+    def test_release_preflight_accepts_only_applied_legacy_004_checksum(self):
+        from backend.scripts.verify_migration_state import checksum_is_accepted
+
+        current_checksum = "new-004-checksum"
+        assert checksum_is_accepted(
+            "004_readonly_role.sql",
+            {"checksum": "b5c27b0ff9ff348c", "status": "applied"},
+            current_checksum,
+        )
+        assert not checksum_is_accepted(
+            "004_readonly_role.sql",
+            {"checksum": "b5c27b0ff9ff348c", "status": "error"},
+            current_checksum,
+        )
+        assert not checksum_is_accepted(
+            "093_revoke_readonly_default_password.sql",
+            {"checksum": "b5c27b0ff9ff348c", "status": "applied"},
+            current_checksum,
+        )
+
     def test_ensure_dbs_applies_password_revocation_after_004(self):
         from scripts.ensure_dbs import BUSINESS_MIGRATIONS
 
