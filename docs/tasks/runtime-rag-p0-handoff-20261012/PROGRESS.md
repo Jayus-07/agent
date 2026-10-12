@@ -12,13 +12,13 @@
 
 | 项目 | PR | 状态 | CI | GPT 审查 | 阻断原因 |
 | --- | --- | --- | --- | --- | --- |
-| B1-A | #40 | `READY_TO_MERGE` 标签已加 | head `9cca719` / RAG PR Smoke run 111 SUCCESS | 无未解决 review thread | 等用户批准合并；排队上限/等待超时继续挂账 |
-| B1-B | #42 | 修复已推送 | head `fb57241` / RAG PR Smoke run 110 SUCCESS | 修复意见和 3 条旧 review thread 已解决；尚无新 head GPT 复审 | 等用户批准合并 |
-| B1-F | #43 | 修复已推送 | head `2172208` / RAG PR Smoke run 109 SUCCESS | 修复意见和 2 条旧 review thread 已解决；尚无新 head GPT 复审 | 等用户批准合并 |
-| RAG R0/R1 | #41 | 最新 main 已同步，做最终核对 | Secret Scan run 8 SUCCESS；RAG PR Smoke run 112 SUCCESS | 前轮三项 inline 意见已由当前代码修复并 resolve；此前第三轮接受主实现 | 等当前 RAG Smoke 完成；安全债脚本已在独立分支修复，待安全 PR 集成 |
-| 凭据安全治理 | #44 | 已创建；代码提交 `c356047`，最近 head `2b821c6` | RAG PR Smoke run 114 SUCCESS；该 head tree/diff/history 扫描均 0 命中 | 待审查 | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
+| B1-A | #40 | `READY_TO_MERGE` 标签已加 | head `9cca719` / RAG PR Smoke run 111 SUCCESS | 0 条未解决 review thread | 等用户批准合并；排队上限/等待超时继续挂账 |
+| B1-B | #42 | 修复已推送 | head `fb57241` / RAG PR Smoke run 110 SUCCESS | 3 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
+| B1-F | #43 | 修复已推送 | head `2172208` / RAG PR Smoke run 109 SUCCESS | 2 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
+| RAG R0/R1 | #41 | 最新 main 上最终核对完成，未合并 | head `fc27dec` / Secret Scan run 8 SUCCESS；RAG PR Smoke run 112 SUCCESS | 3 条旧 review thread 均已解决；无未解决 thread | 独立安全 PR #44 尚未合并；凭据轮换/旧值失效验证未完成，P0 仍阻断放行 |
+| 凭据安全治理 | #44 | 代码整改已推送，head `5bf88b8` | RAG PR Smoke run 117 SUCCESS；head tree/diff/history 扫描均 0 命中 | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
-| B1-C | 新 PR | 独立工作树创建中，尚未改代码 | — | — | 正在核实与待合并 PR 的文件边界 |
+| B1-C | #45 | 实现与三项 GPT 审查修复已推送，head `8bd8ea2` | RAG PR Smoke run 118 运行中 | 父 Trace 所有权、物理完成未知时重试、checkpoint deadline 归一化三项已修复并 resolve；审查基于旧 head，尚无新 head 复审 | 等 run 118 完成；请求上下文里的第 5 个 Workflow 在当前唯一注册表不存在，未臆造新增 |
 | B1-D | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
 | B1-E | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
 
@@ -28,8 +28,10 @@
 - PR #42 head `fb57241`：定向 Python 回归 `58 passed, 2 skipped, 9 xfailed`；包括 eval tenant 守卫、judge 线程上下文、正常/异常/取消、连续评测后普通请求恢复、预占/结算/释放、fallback 与熔断器隔离；`py_compile`、`git diff --check` 通过；run 110 SUCCESS。
 - PR #43 head `2172208`：此前定向回归 `28 passed`；覆盖单一取消终帧、Timeout SSE/Trace、敏感异常不回传、通用异常 500；run 109 SUCCESS。
 - PR #41 head `fc27dec`：同步最新 main 后，RAG 定向回归 `81 passed in 14.05s`；PR 的 `secret-scan` run 8 SUCCESS，RAG Smoke run 112 SUCCESS。前轮真实 Provider/性能/准确率证据未重跑、原样保留。
-- PR #41 当前树扫描按已有 workflow 的阻断口径为 0 blocking；报告 4 个 `assigned_secret` 存量项（根 `.env.example` 与 3 个 Travel 脚本）。它们都已在安全工作树修正；此时 PR #41 分支仍以旧 main 为基线，待安全 PR 合并后再同步。对 PR #41 的 `origin/main..HEAD` 可达提交区间扫描为 0；历史讨论记录了 PR 分支此前曾重写以移除泄漏，但本任务未重写任何历史。
-- 安全分支 commit `c356047` 使用 PR #41 `scripts/scan_secrets.py` 执行 `--tree`、`--diff origin/main..HEAD`、`--history --range origin/main..HEAD`，三项均 exit 0、0 命中。三个脚本通过 `py_compile`，在移除 `API_KEY` 环境变量的隔离进程中均在网络请求前退出并提示配置缺失。安全 PR #44 head `2b821c6` 的 RAG PR Smoke run 114 SUCCESS；该 head 的 tree/diff/history 扫描均为 0 命中。当前后续只更新看板文档。
+- PR #41 当前树仍报告根 `.env.example` 与 3 个 Travel 脚本的 4 项 `assigned_secret`；安全 PR #44 中已修正这些代码项，因此 PR #41 需等 #44 合并后再同步并重扫。PR #41 的 `origin/main..HEAD` 可达提交区间扫描为 0；历史讨论记录此前曾清理 PR 分支历史。本任务未重写 main 或其他共享历史。
+- 安全 PR #44 head `5bf88b8` 使用 PR #41 的 `scripts/scan_secrets.py` 执行 `--tree`、`--diff origin/main..HEAD`、`--history --range origin/main..HEAD`，三项均 exit 0、0 命中。三个 Travel 脚本从项目根 `.env` 读取 `API_KEY`，进程环境变量优先；用不含真实凭据的临时 `.env` 做隔离行为验证：3/3 脚本均能读取配置，缺少配置时均在网络请求前失败关闭。`py_compile`、`git diff --check` 与 Ruff 导入排序检查通过。PR #44 run 117 SUCCESS；GPT P2 已修复并 resolve。没有真实 Provider 请求。
+- B1-C PR #45 head `8bd8ea2`：Workflow / DirectExecutor / RequestContext / SafeToolExecutor 定向集 `99 passed`；Tool Deadline 定向集 `11 passed`。父 Trace 生命周期、取消吞噬后不重试、checkpoint dict Deadline 归一化新增覆盖；`py_compile`、`git diff --check` 通过。使用临时内存 fixture，无数据库与真实 Provider 调用。run 118 仍在运行，GPT 三条旧 head 线程均已 resolve。
+- 风险复核另发现 Travel 脚本保留预置测试登录常量；未被 Secret Scan 识别为可验证凭据，当前用途似为测试账号，但是否只在隔离环境有效尚未确认。看板和 PR 未记录其值；需代码所有者确认非生产复用后才能消除此项风险。
 - 安全分支另将根 `.env.example` 的 JWT 项改为明显占位符，避免把可复制的静态签名值当成配置。
 
 ## 凭据轮换与失效验证（BLOCKED）
@@ -49,8 +51,8 @@
 
 ## 下一步
 
-1. 核验 PR #44 看板文档更新后的 CI；跟进 GPT 审查，不在 PR 正文或报告写入凭据值。
-2. 轮询 PR #41 当前 RAG Smoke；复核四个 PR 的最新 CI、head、review 与 mergeable 状态。
-3. 准备逐项合并清单，提交用户审批；在获批前不合并。
-4. 安全 PR 合并后把 PR #41 同步到最新 main，确认树扫描无 Travel 存量项，再等待 #41/#42 合并与用户审批。
-5. 只有 PR #41 和 #42 完成合并后，才从最新 main 独立施工 MultiQuery P0；B1-C/D/E 维持各自独立 PR。
+1. 等 PR #45 run 118 完成，并刷新 PR #44 看板更新后的 CI。
+2. 复核 PR #40–#45 的新 head、CI、review 和 mergeable；保持逐项合并，先给用户提交具体合并清单并等待批准。
+3. 凭据持有人授权后完成 Redis 与 API Key 轮换、部署更新、撤销旧值及旧值认证失败验证；确认测试登录常量仅供隔离环境使用。此前 P0 BLOCKED。
+4. PR #44 获批合并后，将 PR #41 同步最新 main 并复扫；只有 P0 风险处理满足放行要求且用户批准，才继续合并 RAG/Runtime PR。
+5. 只有 PR #41 和 #42 合并后才施工 RAG MultiQuery P0；B1-C 后续按依赖推进 B1-D、B1-E，各建独立 PR。
