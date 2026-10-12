@@ -170,6 +170,10 @@ def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async):
     calls = {"built": [], "invoked": 0, "reserved": []}
 
     class _Fallback:
+        def bind(self, **kwargs):
+            calls["bound_kwargs"] = kwargs
+            return self
+
         def invoke(self, *_args, **_kwargs):
             calls["invoked"] += 1
             return "rewritten query"
@@ -218,24 +222,83 @@ def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async):
     monkeypatch.setattr(proxy, "set_current_resolved_model", lambda _ctx: None)
     monkeypatch.setattr(proxy, "_notify_degradation", lambda *_args, **_kwargs: None)
 
-    if is_async:
-        result = asyncio.run(proxy._ahandle_terminal_failure(
-            TimeoutError("provider failed"),
-            (),
-            {},
-            model_name="mq-primary",
-            role="multi_query",
-        ))
-    else:
-        result = proxy._handle_terminal_failure(
-            TimeoutError("provider failed"),
-            (),
-            {},
-            model_name="mq-primary",
-            role="multi_query",
-        )
+    token = proxy._role_fallback_generation_kwargs.set(
+        {"temperature": 0, "max_tokens": 512})
+    try:
+        if is_async:
+            result = asyncio.run(proxy._ahandle_terminal_failure(
+                TimeoutError("provider failed"),
+                (),
+                {},
+                model_name="mq-primary",
+                role="multi_query",
+            ))
+        else:
+            result = proxy._handle_terminal_failure(
+                TimeoutError("provider failed"),
+                (),
+                {},
+                model_name="mq-primary",
+                role="multi_query",
+            )
+    finally:
+        proxy._role_fallback_generation_kwargs.reset(token)
 
     assert result == "rewritten query"
     assert calls["built"] == ["role-specific-backup"]
     assert calls["reserved"] == [("fallback", "role-specific-backup")]
+    assert calls["bound_kwargs"] == {"temperature": 0, "max_tokens": 512}
     assert calls["invoked"] == 1
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_bound_llm_proxy_scopes_fallback_generation_kwargs(monkeypatch, is_async):
+    """角色参数只在本次治理调用期间可供 fallback 读取。"""
+    import backend.infra.llm.proxy as proxy
+
+    observed = []
+    expected = {"temperature": 0, "max_tokens": 512}
+
+    class _Bound:
+        def invoke(self, *_args, **_kwargs):
+            return "ok"
+
+        async def ainvoke(self, *_args, **_kwargs):
+            return "ok"
+
+    wrapped = proxy._BoundLLMProxy(
+        _Bound(), model_name="mq-primary", role="multi_query",
+        generation_kwargs=expected,
+    )
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user_id: None)
+    monkeypatch.setattr(proxy._BoundLLMProxy, "_bind_context", lambda _self: None)
+    monkeypatch.setattr(
+        proxy, "_preflight_context",
+        lambda args, _kwargs, **_options: args,
+    )
+
+    async def _apreflight(args, _kwargs, **_options):
+        return args
+
+    monkeypatch.setattr(proxy, "_apreflight_context", _apreflight)
+    monkeypatch.setattr(proxy, "_record_tokens", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(proxy, "_wrap_result", lambda result: result)
+
+    def _call(_attr, *args, **kwargs):
+        observed.append(proxy._role_fallback_generation_kwargs.get())
+        return "ok"
+
+    async def _acall(_attr, *args, **kwargs):
+        observed.append(proxy._role_fallback_generation_kwargs.get())
+        return "ok"
+
+    monkeypatch.setattr(proxy, "_call_with_resilience", _call)
+    monkeypatch.setattr(proxy, "_acall_with_resilience", _acall)
+
+    if is_async:
+        assert asyncio.run(wrapped.ainvoke("query")) == "ok"
+    else:
+        assert wrapped.invoke("query") == "ok"
+
+    assert observed == [expected]
+    assert proxy._role_fallback_generation_kwargs.get() is None

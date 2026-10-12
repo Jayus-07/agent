@@ -81,6 +81,9 @@ def _thread_local_user_id() -> str | None:
 _role_cancellation_event: _contextvars.ContextVar[Any] = _contextvars.ContextVar(
     "llm_role_cancellation_event", default=None,
 )
+_role_fallback_generation_kwargs: _contextvars.ContextVar[dict[str, Any] | None] = (
+    _contextvars.ContextVar("llm_role_fallback_generation_kwargs", default=None)
+)
 
 
 def run_with_role_cancellation(
@@ -107,6 +110,14 @@ def _role_call_cancelled(role: str) -> bool:
 def _raise_if_role_call_cancelled(role: str) -> None:
     if _role_call_cancelled(role):
         raise TimeoutError("multi_query role deadline expired")
+
+
+def _bind_role_fallback_generation_kwargs(fallback):
+    """让 fallback 继承角色入口设置的生成约束。"""
+    generation_kwargs = _role_fallback_generation_kwargs.get()
+    if generation_kwargs:
+        return fallback.bind(**generation_kwargs)
+    return fallback
 
 
 def _wait_for_role_retry(role: str, delay: float) -> None:
@@ -591,7 +602,8 @@ def _handle_terminal_failure(
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
             ))
-            result = fb.invoke(*args, **kwargs)
+            result = _bind_role_fallback_generation_kwargs(fb).invoke(
+                *args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             try:
                 from backend.observability.metrics import llm_fallback_total
@@ -670,7 +682,8 @@ async def _ahandle_terminal_failure(
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
             ))
-            result = await fb.ainvoke(*args, **kwargs)
+            fallback = _bind_role_fallback_generation_kwargs(fb)
+            result = await fallback.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             try:
                 from backend.observability.metrics import llm_fallback_total
@@ -1921,11 +1934,13 @@ class _BoundLLMProxy:
     """
 
     def __init__(self, bound, model_name: str | None = None, role: str = "main",
-                 tools: Any = None):
+                 tools: Any = None,
+                 generation_kwargs: dict[str, Any] | None = None):
         self._bound = bound
         self._model_name = model_name or ""
         self._role = role
         self._tools = tools
+        self._generation_kwargs = dict(generation_kwargs or {})
         self._schema_tokens: int | None = None  # 懒算并缓存（schema 静态）
 
     def _schema_reserved(self) -> int:
@@ -1956,7 +1971,13 @@ class _BoundLLMProxy:
         args = _preflight_context(args, kwargs,
                                   extra_reserved_tokens=self._schema_reserved())
         _t0 = time.monotonic()
-        result = _call_with_resilience(self._bound.invoke, *args, **kwargs)
+        token = _role_fallback_generation_kwargs.set(
+            self._generation_kwargs or None)
+        try:
+            result = _call_with_resilience(
+                self._bound.invoke, *args, **kwargs)
+        finally:
+            _role_fallback_generation_kwargs.reset(token)
         _record_tokens(
             result, duration_ms=(time.monotonic() - _t0) * 1000,
             model_name=self._model_name or None,
@@ -1970,7 +1991,13 @@ class _BoundLLMProxy:
         args = await _apreflight_context(args, kwargs,
                                          extra_reserved_tokens=self._schema_reserved())
         _t0 = time.monotonic()
-        result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
+        token = _role_fallback_generation_kwargs.set(
+            self._generation_kwargs or None)
+        try:
+            result = await _acall_with_resilience(
+                self._bound.ainvoke, *args, **kwargs)
+        finally:
+            _role_fallback_generation_kwargs.reset(token)
         _record_tokens(
             result, duration_ms=(time.monotonic() - _t0) * 1000,
             model_name=self._model_name or None,
@@ -1983,6 +2010,7 @@ class _BoundLLMProxy:
             self._bound.bind_tools(*args, **kwargs),
             model_name=self._model_name or None, role=self._role,
             tools=args[0] if args else kwargs.get("tools"),
+            generation_kwargs=self._generation_kwargs,
         )
 
     def __getattr__(self, name: str):
@@ -2064,7 +2092,10 @@ def bind_llm_for_role(
         bind_kwargs["max_tokens"] = max_tokens
     if bind_kwargs:
         bound = bound.bind(**bind_kwargs)
-    return _BoundLLMProxy(bound, model_name=model_name, role=role)
+    return _BoundLLMProxy(
+        bound, model_name=model_name, role=role,
+        generation_kwargs=bind_kwargs,
+    )
 
 
 # =====================================================
