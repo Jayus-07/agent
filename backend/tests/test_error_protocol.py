@@ -26,6 +26,8 @@ from backend.shared.error_protocol import (
 
 
 def test_error_codes_are_exactly_the_nine_planned_values():
+    # B1-F：原九码基础上收口新增 REQUEST_CANCELLED（用户主动中止不再是
+    # INTERNAL_ERROR）；契约 JSON 同步见 docs/contracts/error-protocol.schema.json
     assert set(ERROR_CODES) == {
         "INVALID_PARAM",
         "PERMISSION_DENIED",
@@ -36,8 +38,64 @@ def test_error_codes_are_exactly_the_nine_planned_values():
         "IDEMPOTENCY_CONFLICT",
         "BUDGET_EXCEEDED",
         "INTERNAL_ERROR",
+        "REQUEST_CANCELLED",
     }
     assert {code.value for code in ErrorCode} == set(ERROR_CODES)
+
+
+def test_request_cancelled_maps_to_dedicated_code():
+    """用户主动中止：专用稳定码、不可重试、不泄露内部 stage 名。"""
+    from backend.core.request_context import RequestCancelled
+
+    envelope = error_envelope_from_exception(
+        RequestCancelled("cs_expert:billing"), trace_id="trace-c", source="sse"
+    )
+
+    payload = envelope.to_dict()
+    assert payload["code"] == "REQUEST_CANCELLED"
+    assert payload["retryable"] is False
+    assert payload["message"] == "请求已由用户中止。"
+    assert "cs_expert" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_timeout_exception_family_maps_to_timeout_code():
+    """B1-F：内置 TimeoutError 与 httpx 传输超时统一 TIMEOUT（非 500）。"""
+    import asyncio
+
+    httpx = pytest.importorskip("httpx")
+
+    assert error_envelope_from_exception(
+        TimeoutError("synthetic"), trace_id="t"
+    ).code.value == "TIMEOUT"
+    assert error_envelope_from_exception(
+        asyncio.TimeoutError(), trace_id="t"
+    ).code.value == "TIMEOUT"
+    envelope = error_envelope_from_exception(
+        httpx.ReadTimeout("provider read timeout"), trace_id="t"
+    )
+    assert envelope.code.value == "TIMEOUT"
+    assert envelope.retryable is True
+
+
+def test_sse_cancelled_event_carries_stable_code():
+    from backend.shared.error_protocol import sse_cancelled_event
+
+    event = sse_cancelled_event()
+    assert event["event"] == "error"
+    assert event["data"]["code"] == "REQUEST_CANCELLED"
+    assert event["data"]["retryable"] is False
+    assert isinstance(event["data"]["ts"], float)
+
+
+def test_sse_error_event_message_override_and_ts():
+    """message 覆盖仅限既定安全文案；ts 满足 event_schema.ErrorData 必填。"""
+    event = sse_error_event(
+        RuntimeError("boom"), trace_id="t", message="执行失败: boom"
+    )
+
+    assert event["data"]["message"] == "执行失败: boom"
+    assert event["data"]["code"] == "INTERNAL_ERROR"
+    assert isinstance(event["data"]["ts"], float)
 
 
 def test_unknown_exception_is_safe_and_traceable():
@@ -160,6 +218,27 @@ async def test_global_handler_does_not_leak_unknown_exception_details():
     assert payload["retryable"] is True
     assert "RuntimeError" not in json.dumps(payload, ensure_ascii=False)
     assert "C:/private" not in json.dumps(payload, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_global_handler_maps_semantic_codes_to_http_status():
+    """B1-F：超时/上游不可用/用户取消不再一律 500，HTTP 与业务码一致。"""
+    import asyncio
+
+    from backend.core.request_context import RequestCancelled
+
+    cases = [
+        (TimeoutError("deadline"), 504, "TIMEOUT"),
+        (asyncio.TimeoutError(), 504, "TIMEOUT"),
+        (ConnectionError("redis down"), 503, "UPSTREAM_UNAVAILABLE"),
+        (RequestCancelled("cs_reporter"), 499, "REQUEST_CANCELLED"),
+    ]
+    for exc, expected_status, expected_code in cases:
+        response = await global_exception_handler(_request("/chat"), exc)
+        payload = json.loads(response.body)
+        assert response.status_code == expected_status, exc
+        assert payload["code"] == expected_code
+        assert payload["error"] == expected_code
 
 
 @pytest.mark.asyncio

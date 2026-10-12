@@ -100,14 +100,31 @@ async def memory_db_unavailable_handler(request: Request, exc: MemoryDatabaseUna
     )
 
 
+# B1-F：业务错误码 → HTTP 状态（全局兜底不再一律 500——请求超时、上游
+# 不可用、限流等与普通内部错误的 HTTP 语义必须可区分）。未列出的码保持 500。
+_ERROR_CODE_HTTP_STATUS: dict[ErrorCode, int] = {
+    ErrorCode.INVALID_PARAM: 400,
+    ErrorCode.PERMISSION_DENIED: 403,
+    ErrorCode.NOT_FOUND: 404,
+    ErrorCode.TIMEOUT: 504,
+    ErrorCode.UPSTREAM_UNAVAILABLE: 503,
+    ErrorCode.RATE_LIMITED: 429,
+    ErrorCode.IDEMPOTENCY_CONFLICT: 409,
+    ErrorCode.BUDGET_EXCEEDED: 429,
+    # nginx 惯例：客户端关闭连接/取消请求
+    ErrorCode.REQUEST_CANCELLED: 499,
+}
+
+
 async def global_exception_handler(request: Request, exc: Exception):
-    """非业务异常的兜底：记录堆栈 → 返回 500（避免泄露内部信息到 detail）"""
+    """非业务异常的兜底：记录堆栈 → 按错误封套映射状态码（避免泄露内部信息到 detail）"""
     logger.error(
         f"[Unhandled] {request.method} {request.url.path} → "
         f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
     )
     envelope = error_envelope_from_exception(exc, source="http")
+    status_code = _ERROR_CODE_HTTP_STATUS.get(envelope.code, 500)
     return JSONResponse(
-        status_code=500,
+        status_code=status_code,
         content=_http_payload(envelope),
     )
