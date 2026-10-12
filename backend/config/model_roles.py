@@ -317,9 +317,10 @@ def resolve_runtime_policy(role: str) -> RoleRuntimeDefaults:
 
 # ── 策略消费进度（管理端"策略"按钮的开关依据）─────────────────
 # 2026-09-22 实机验证发现策略表运行时零消费（假开关），当日接线
-# tool_selector；其余角色接通一个登记一个。管理端只对已登记角色开放
-# 策略编辑按钮，未登记角色编辑了也不生效，不该给可点的入口。
-POLICY_CONSUMED_ROLES = frozenset({"tool_selector"})
+# tool_selector；MultiQuery P0 接通改写超时/重试/skip 策略。
+# 管理端只对已登记角色开放策略编辑按钮，未登记角色编辑了也不生效，
+# 不该给可点的入口。
+POLICY_CONSUMED_ROLES = frozenset({"tool_selector", "multi_query"})
 
 
 def policy_enforced(role: str) -> bool:

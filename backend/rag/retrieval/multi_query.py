@@ -3,6 +3,7 @@
 need_multi_query() 是唯一入口，所有 MultiQuery 判断必须经过此函数。
 """
 
+import contextvars
 import re
 import time
 from typing import Any, List
@@ -37,27 +38,19 @@ _REWRITE_MAX_TOKENS_FLOOR = 512
 
 
 def _resolve_rewrite_llm():
-    """改写专用 LLM：multi_query 角色（空 = 继承 main，行为兼容旧版）。
+    """返回改写专用的治理化 LLM。
 
-    改写是「3 行查询文本」的简单转换，不需要推理能力。走独立角色后可绑定
-    non-thinking 轻模型，既避免思考型模型吃光 token 预算，又显著降低延迟。
-    解析失败回落主链 llm，保证可用性优先（与既有 fail-open 口径一致）。
+    空角色按注册表规则继承 main。必须使用公共 Proxy 入口，使请求经过限流、
+    预算预占/结算、韧性处理和用量审计。没有可用模型时由改写调用方降级为
+    原始 query，不能再绕回裸全局 ``llm``。
     """
-    try:
-        from backend.config import model_roles
+    from backend.infra.llm.proxy import bind_llm_for_role
 
-        name = str(model_roles.resolve_runtime_name("multi_query") or "").strip()
-        if name:
-            # 与既有角色消费点（llm_enrichment / verify_model_governance）同路径：
-            # get_llm_for_role 只在 proxy 模块导出，不在包 __init__ 面
-            from backend.infra.llm.proxy import get_llm_for_role
-
-            return get_llm_for_role("multi_query")
-    except Exception as e:  # noqa: BLE001 — 角色不可用不阻塞检索
-        logger.warning(f"[MultiQuery] multi_query 角色解析失败，回落主链 LLM: {e}")
-    from backend.infra.llm import llm
-
-    return llm
+    return bind_llm_for_role(
+        "multi_query",
+        temperature=0,
+        max_tokens=_rewrite_max_tokens(),
+    )
 
 
 def _rewrite_max_tokens() -> int:
@@ -180,11 +173,24 @@ def _rewrite_with_budget(question: str) -> list[str]:
     _rewrite 内部失败本就回退 [question]，本包装补齐「时间维度」的降级。
     """
     from backend.config.rag import RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS
+    from backend.config import model_roles
     from backend.rag.retrieval_budget import remaining_ms
 
-    rewrite_ms = min(
+    try:
+        role_timeout_ms = max(
+            200,
+            float(model_roles.resolve_runtime_policy("multi_query").timeout_seconds)
+            * 1000,
+        )
+    except Exception:
+        role_timeout_ms = RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS
+    configured_timeout_ms = min(
         RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS,
-        remaining_ms(RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS),
+        role_timeout_ms,
+    )
+    rewrite_ms = min(
+        configured_timeout_ms,
+        remaining_ms(configured_timeout_ms),
     )
     if rewrite_ms < 300:
         logger.info(
@@ -196,7 +202,10 @@ def _rewrite_with_budget(question: str) -> list[str]:
 
     from backend.infra.thread_pools import retrieval_pool_outer
 
-    future = retrieval_pool_outer().submit(_rewrite, question)
+    # 预算、可信身份和 Trace 都是请求级 ContextVar。线程池不会自动继承，
+    # 必须在提交方快照，确保 Proxy 预占与 llm_usage 使用同一租户/用户/Trace。
+    request_context = contextvars.copy_context()
+    future = retrieval_pool_outer().submit(request_context.run, _rewrite, question)
     try:
         return future.result(timeout=rewrite_ms / 1000)
     except _FutureTimeout:
@@ -230,11 +239,8 @@ def _rewrite(question: str) -> list[str]:
         # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
         if isinstance(span.input, dict):
             span.input["prompt"] = r.text[:1000]
-        result = _resolve_rewrite_llm().invoke(
-            [HumanMessage(content=r.text)],
-            max_tokens=_rewrite_max_tokens(),
-        )
-        
+        result = _resolve_rewrite_llm().invoke([HumanMessage(content=r.text)])
+
         # 正确提取 content（可能是 AIMessage 或其他类型）
         if hasattr(result, 'content'):
             raw = str(result.content)
@@ -284,7 +290,11 @@ def _rewrite(question: str) -> list[str]:
             from backend.observability.tracer import trace_collector
             span = trace_collector.start_span("query_rewrite", name="LLM 改写")
         trace_collector.end_span(span, metrics={"variants": 0}, status="error")
-        logger.warning(f"[MultiQuery] Rewrite 失败：{e}，回退到原始 query")
+        # Provider 异常文本可能包含密钥、请求 URL 或本机路径，只记录类型。
+        logger.warning(
+            "[MultiQuery] Rewrite 失败（%s），回退到原始 query",
+            type(e).__name__,
+        )
         return [question]
 
 

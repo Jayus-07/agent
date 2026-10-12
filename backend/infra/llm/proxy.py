@@ -511,8 +511,12 @@ def _handle_terminal_failure(
         "reason": reason, "error_type": error_type,
         "provider": provider, "model": active_model,
     }
+    # MultiQuery 默认 failure_policy=skip：检索调用方会退回原始 query，不能
+    # 再发起备用模型请求或把拒答话术误当成改写结果。
+    skip_fallback = _role_skips_fallback(role)
+
     # 1) 备用模型
-    fb = _get_fallback_llm()
+    fb = None if skip_fallback else _get_fallback_llm()
     if fb is not None:
         fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import (
@@ -555,7 +559,7 @@ def _handle_terminal_failure(
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
             _record_failed_attempt(fallback_model, e, decision="fallback")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
-    if LLM_ALLOW_DEGRADED_ANSWER:
+    if LLM_ALLOW_DEGRADED_ANSWER and not skip_fallback:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
         return _degraded_answer(reason, error_type=error_type,
@@ -590,7 +594,8 @@ async def _ahandle_terminal_failure(
         "reason": reason, "error_type": error_type,
         "provider": provider, "model": active_model,
     }
-    fb = _get_fallback_llm()
+    skip_fallback = _role_skips_fallback(role)
+    fb = None if skip_fallback else _get_fallback_llm()
     if fb is not None:
         fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import (
@@ -632,7 +637,7 @@ async def _ahandle_terminal_failure(
                 release_model_reservation()
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
             _record_failed_attempt(fallback_model, e, decision="fallback")
-    if LLM_ALLOW_DEGRADED_ANSWER:
+    if LLM_ALLOW_DEGRADED_ANSWER and not skip_fallback:
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
         return _degraded_answer(reason, error_type=error_type,
@@ -653,6 +658,31 @@ def _resilience_call_identity() -> tuple[str, str, str]:
         return model_name, context.role or "main", provider
     model_name = get_active_model_name()
     return model_name, "main", _get_provider_for(model_name)
+
+
+def _role_runtime_policy(role: str):
+    """读取由 Proxy 消费的角色运行策略。当前仅接通 MultiQuery P0。"""
+    if role != "multi_query":
+        return None
+    from backend.config import model_roles
+
+    try:
+        return model_roles.resolve_runtime_policy(role)
+    except Exception:
+        # 策略解析不可用时使用代码默认，确保 MultiQuery 仍是零重试、skip。
+        return model_roles.runtime_defaults(role)
+
+
+def _role_max_retries(role: str) -> int:
+    policy = _role_runtime_policy(role)
+    if policy is None:
+        return LLM_MAX_RETRIES
+    return max(0, int(policy.max_retries))
+
+
+def _role_skips_fallback(role: str) -> bool:
+    policy = _role_runtime_policy(role)
+    return bool(policy and policy.failure_policy != "fallback")
 
 
 def _breaker_for_resolved_model(model_name: str, role: str, provider: str):
@@ -679,7 +709,8 @@ def _call_with_resilience(attr, *args, **kwargs):
     last_err: BaseException | None = None
     model_name, role, provider = _resilience_call_identity()
     breaker = _breaker_for_resolved_model(model_name, role, provider)
-    for attempt in range(LLM_MAX_RETRIES + 1):
+    max_retries = _role_max_retries(role)
+    for attempt in range(max_retries + 1):
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
@@ -708,11 +739,11 @@ def _call_with_resilience(attr, *args, **kwargs):
                 raise _context_length_error() from e
             if not _is_transient(e):
                 break
-            if attempt >= LLM_MAX_RETRIES:
+            if attempt >= max_retries:
                 break
             delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
             logger.warning(
-                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{LLM_MAX_RETRIES} "
+                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
             time.sleep(delay)
@@ -733,7 +764,8 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     last_err: BaseException | None = None
     model_name, role, provider = _resilience_call_identity()
     breaker = _breaker_for_resolved_model(model_name, role, provider)
-    for attempt in range(LLM_MAX_RETRIES + 1):
+    max_retries = _role_max_retries(role)
+    for attempt in range(max_retries + 1):
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
@@ -764,11 +796,11 @@ async def _acall_with_resilience(attr, *args, **kwargs):
                 raise _context_length_error() from e
             if not _is_transient(e):
                 break
-            if attempt >= LLM_MAX_RETRIES:
+            if attempt >= max_retries:
                 break
             delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
             logger.warning(
-                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{LLM_MAX_RETRIES} "
+                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
             await asyncio.sleep(delay)
