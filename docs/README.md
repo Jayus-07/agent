@@ -16,6 +16,7 @@
 | [governance/data-lifecycle.md](governance/data-lifecycle.md) | 正式数据/候选、版本 CAS、备份与删除的目标规范 | 数据库/数据状态变动 |
 | [governance/memory-governance.md](governance/memory-governance.md) | L1/L2/L3、画像冲突、更正与隔离演进 | 记忆功能变动 |
 | [architecture/ai-runtime.md](architecture/ai-runtime.md) | 主图、域图接入、公共运行状态契约 | 修改 Router、LangGraph、SSE 或 Checkpoint |
+| [architecture/adr/0002-main-agent-conversation-first.md](architecture/adr/0002-main-agent-conversation-first.md) | `/agent` 对话优先目标与旅游/客服业务边界（**已决策、未实施**） | 后续主助手 Triage、Conversation、授权能力隔离改造 |
 | [architecture/domain-service-map.md](architecture/domain-service-map.md) | 域服务、Provider、凭据和失败边界 | 新增或调整外部服务 |
 | [architecture/failure-degradation.md](architecture/failure-degradation.md) | Tool/Provider 失败分类、动态依赖、降级与阻断验收 | 修改外部调用或故障处理时 |
 | [architecture/Frozen-Contracts.md](architecture/Frozen-Contracts.md) | 当前公共契约和守卫入口 | 修改 SSE、Runtime、Tool 或 Domain 契约 |
