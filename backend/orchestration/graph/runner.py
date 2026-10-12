@@ -46,7 +46,13 @@ from backend.orchestration.graph.events import (
 )
 from backend.orchestration.request_context import RequestContext, put_context
 from backend.core.request_context import RequestCancelled
-from backend.shared.error_protocol import sse_cancelled_event, sse_error_event
+from backend.shared.error_protocol import (
+    ErrorCode,
+    ProtocolError,
+    error_envelope_from_exception,
+    sse_cancelled_event,
+    sse_error_event,
+)
 from backend.security.input_guard import (
     GuardAction,
     GuardCategory,
@@ -58,6 +64,22 @@ from backend.shared.logger import logger
 # _answer 是 runner → 调用方的内部事件（携带最终回答文本），
 # 不属于 SSE 协议，stream_events 转发层必须过滤
 _ANSWER_EVENT = "_answer"
+
+
+def _runner_error_event(exc: Exception) -> tuple[dict, str]:
+    """Runner 终态按协议封套分类，内置参数异常在图执行边界视为内部错误。"""
+    envelope = error_envelope_from_exception(exc, source="sse")
+    code = envelope.code
+    if not isinstance(exc, ProtocolError) and code in (
+        ErrorCode.INVALID_PARAM,
+        ErrorCode.NOT_FOUND,
+    ):
+        code = ErrorCode.INTERNAL_ERROR
+    terminal_exc = (
+        exc if isinstance(exc, ProtocolError) or code != ErrorCode.INTERNAL_ERROR
+        else ProtocolError(ErrorCode.INTERNAL_ERROR, source="sse")
+    )
+    return sse_error_event(terminal_exc, source="sse"), code.value
 
 
 def _pin_prompt_snapshot(iter_fn):
@@ -868,11 +890,9 @@ class GraphRunner:
             except Exception as e:
                 logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
                 ctx["worker_error"] = True
-                # Internal Runtime Status ≠ User-facing Error Message：
-                # 用户帧只保留单行可读原因；堆栈尾 12 行此前直接拼进
-                # message 被前端原样渲染（STOP H 收口），全栈只在日志
-                # （上一行 exc_info=True）与 trace 留存。
-                merged_q.put(("evt", sse_error_event(e, message=f"执行失败: {e}")))
+                event, error_code = _runner_error_event(e)
+                ctx["worker_error_code"] = error_code
+                merged_q.put(("evt", event))
             finally:
                 ctx["sse_events_closed"] = True
                 reset_sse_event_sink(_sse_sink_token)
@@ -974,7 +994,10 @@ class GraphRunner:
 
             # 未发生过真流式输出 → 兜底假打字机（guard/降级/非 LLM 路径仍有增量呈现）
             if fallback_deltas and not streamed[0] and answer:
-                yield from emit_delta_events(answer, stop_event)
+                # delta helper 只停止输出；取消终帧由 Runner 唯一负责。
+                # stop_event 可能在主循环检查后、发送兜底 delta 时才置位，
+                # 因此这里不能让 helper 同时发取消帧。
+                yield from emit_delta_events(answer, None)
                 if stop_event is not None and stop_event.is_set():
                     yield sse_cancelled_event()
                     _finalize_trace("cancelled", {"reason": "user_abort"})
@@ -1085,10 +1108,11 @@ class GraphRunner:
             _finalize_trace("error", {"error": "timeout"}, error_code="TIMEOUT")
         except Exception as e:
             logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
-            # B1-F：协议帧出站——堆栈尾不再拼进用户 message（STOP H 在
-            # worker 路径已收口，此处补齐）；全栈只进日志与 trace。
-            yield sse_error_event(e, message=f"执行失败: {e}")
-            _finalize_trace("error", {"error": str(e)[:100]})
+            event, error_code = _runner_error_event(e)
+            yield event
+            _finalize_trace(
+                "error", {"error": error_code.lower()}, error_code=error_code,
+            )
 
 
 # =====================================================

@@ -221,6 +221,29 @@ async def test_global_handler_does_not_leak_unknown_exception_details():
 
 
 @pytest.mark.asyncio
+async def test_global_handler_keeps_generic_value_error_as_internal_500():
+    response = await global_exception_handler(
+        _request("/internal"), ValueError("unexpected internal state"),
+    )
+    payload = json.loads(response.body)
+
+    assert response.status_code == 500
+    assert payload["code"] == "INTERNAL_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_global_handler_maps_httpx_timeout_to_504():
+    httpx = pytest.importorskip("httpx")
+    response = await global_exception_handler(
+        _request("/provider"), httpx.ReadTimeout("synthetic timeout"),
+    )
+    payload = json.loads(response.body)
+
+    assert response.status_code == 504
+    assert payload["code"] == "TIMEOUT"
+
+
+@pytest.mark.asyncio
 async def test_global_handler_maps_semantic_codes_to_http_status():
     """B1-F：超时/上游不可用/用户取消不再一律 500，HTTP 与业务码一致。"""
     import asyncio

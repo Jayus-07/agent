@@ -129,6 +129,22 @@ class _ExplodingGraph:
         yield  # pragma: no cover
 
 
+class _SensitiveExplodingGraph:
+    def stream(self, initial_state, config=None):
+        raise RuntimeError(
+            "postgresql://demo:synthetic-secret-not-real@db.invalid/private"
+        )
+        yield  # pragma: no cover
+
+
+class _HttpxTimedOutGraph:
+    def stream(self, initial_state, config=None):
+        import httpx
+
+        raise httpx.ReadTimeout("synthetic provider timeout")
+        yield  # pragma: no cover
+
+
 def _events_normal():
     return [
         {"router": {"route_mode": "plan", "cs_context": {}}},
@@ -211,7 +227,8 @@ def test_generic_error_frame_is_protocol_envelope_without_stack(_spy_finish):
     frame = terminals[0]
     assert frame["event"] == "error"
     assert frame["data"]["code"] == "INTERNAL_ERROR"
-    assert frame["data"]["message"] == "执行失败: boom-in-graph"
+    assert frame["data"]["message"] == "服务器内部错误，请稍后重试。"
+    assert "boom-in-graph" not in frame["data"]["message"]
     assert "Traceback" not in frame["data"]["message"]
     assert "\n" not in frame["data"]["message"]
     assert not any(e["event"] == "done" for e in out)
@@ -219,7 +236,83 @@ def test_generic_error_frame_is_protocol_envelope_without_stack(_spy_finish):
 
     record, _ = _spy_finish.calls[0]
     assert _root(record).status == "error"
+    assert record.metadata.get("error_code") == "INTERNAL_ERROR"
     assert sys_obj._memory.end_turn_calls == []
+
+
+def test_generic_error_does_not_echo_sensitive_connection_details(_spy_finish):
+    sys_obj = _make_system(_SensitiveExplodingGraph())
+    out = list(sys_obj.stream_events("测试问题", "s-1", user_id="u-1"))
+
+    frame = next(e for e in out if e["event"] == "error")
+    serialized = str(frame["data"])
+    assert frame["data"]["code"] == "INTERNAL_ERROR"
+    assert frame["data"]["message"] == "服务器内部错误，请稍后重试。"
+    assert "synthetic-secret-not-real" not in serialized
+    assert "db.invalid" not in serialized
+    assert len(_terminal_frames(out)) == 1
+
+
+def test_httpx_read_timeout_worker_maps_sse_and_trace_consistently(_spy_finish):
+    sys_obj = _make_system(_HttpxTimedOutGraph())
+    out = list(sys_obj.stream_events("测试问题", "s-1", user_id="u-1"))
+
+    frame = next(e for e in out if e["event"] == "error")
+    assert len(_terminal_frames(out)) == 1
+    assert frame["data"]["code"] == "TIMEOUT"
+    record, _ = _spy_finish.calls[0]
+    assert record.metadata.get("error_code") == "TIMEOUT"
+
+
+def test_cancel_racing_with_fallback_delta_has_one_terminal(_spy_finish, monkeypatch):
+    import backend.orchestration.graph.runner as runner_mod
+
+    stop_event = threading.Event()
+    original_emit = runner_mod.emit_delta_events
+
+    def set_cancel_during_delta(answer, _stop_event=None):
+        stop_event.set()
+        yield from original_emit(answer, None)
+
+    monkeypatch.setattr(runner_mod, "emit_delta_events", set_cancel_during_delta)
+    sys_obj = _make_system(_StaticGraph([
+        {"router": {"route_mode": "plan", "cs_context": {}}},
+        {"reporter": {"final_answer": "最终回答"}},
+    ]))
+    out = list(sys_obj.stream_events(
+        "测试问题", "s-1", user_id="u-1", stop_event=stop_event,
+    ))
+
+    terminals = _terminal_frames(out)
+    assert len(terminals) == 1, [item["event"] for item in terminals]
+    assert terminals[0]["data"]["code"] == "REQUEST_CANCELLED"
+    assert not any(item["event"] == "done" for item in out)
+    record, _ = _spy_finish.calls[0]
+    assert _root(record).status == "cancelled"
+
+
+def test_generator_httpx_timeout_sets_trace_code(_spy_finish, monkeypatch):
+    import httpx
+
+    import backend.orchestration.graph.runner as runner_mod
+
+    def timeout_delta(*_args, **_kwargs):
+        raise httpx.ReadTimeout("synthetic generator timeout")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(runner_mod, "emit_delta_events", timeout_delta)
+    graph = _StaticGraph([
+        {"router": {"route_mode": "plan", "cs_context": {}}},
+        {"reporter": {"final_answer": "最终回答"}},
+    ])
+    sys_obj = _make_system(graph)
+    out = list(sys_obj.stream_events("测试问题", "s-1", user_id="u-1"))
+
+    frame = next(e for e in out if e["event"] == "error")
+    assert len(_terminal_frames(out)) == 1
+    assert frame["data"]["code"] == "TIMEOUT"
+    record, _ = _spy_finish.calls[0]
+    assert record.metadata.get("error_code") == "TIMEOUT"
 
 
 def test_worker_timeout_trace_consistency_without_stop_event(_spy_finish):

@@ -11,6 +11,7 @@ from backend.memory.database import MemoryDatabaseUnavailable
 from backend.shared.error_protocol import (
     ErrorCode,
     ErrorEnvelope,
+    ProtocolError,
     error_envelope_from_exception,
 )
 
@@ -111,7 +112,8 @@ _ERROR_CODE_HTTP_STATUS: dict[ErrorCode, int] = {
     ErrorCode.RATE_LIMITED: 429,
     ErrorCode.IDEMPOTENCY_CONFLICT: 409,
     ErrorCode.BUDGET_EXCEEDED: 429,
-    # nginx 惯例：客户端关闭连接/取消请求
+    # 499 仅用于 HTTP 响应尚未建立时的服务端取消映射；SSE 已建立连接后
+    # 无法再改变 HTTP 状态，取消语义由 REQUEST_CANCELLED 终帧表达。
     ErrorCode.REQUEST_CANCELLED: 499,
 }
 
@@ -123,6 +125,16 @@ async def global_exception_handler(request: Request, exc: Exception):
         f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
     )
     envelope = error_envelope_from_exception(exc, source="http")
+    # 通用 ValueError/KeyError 常表示服务端状态或代码错误，不可据此降为
+    # 400/404；非 500 状态只由显式协议/HTTP 或其他明确业务异常触发。
+    if not isinstance(exc, ProtocolError) and envelope.code in (
+        ErrorCode.INVALID_PARAM,
+        ErrorCode.NOT_FOUND,
+    ):
+        envelope = error_envelope_from_exception(
+            ProtocolError(ErrorCode.INTERNAL_ERROR, source="http"),
+            source="http",
+        )
     status_code = _ERROR_CODE_HTTP_STATUS.get(envelope.code, 500)
     return JSONResponse(
         status_code=status_code,
