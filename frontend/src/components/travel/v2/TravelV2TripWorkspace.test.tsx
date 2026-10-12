@@ -221,6 +221,24 @@ afterEach(() => {
 })
 
 describe('V2 工作台 Trip 状态隔离', () => {
+  it('后端能力未接入时禁用 AI 修改、分享和导出，不发起正式写入', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '杭州', 4))
+
+    const assistantInput = page.container.querySelector('#v2-trip-assistant') as HTMLTextAreaElement
+    expect(assistantInput.disabled).toBe(true)
+    expect(page.container.querySelector('#v2-trip-assistant-status')?.textContent).toContain('v4')
+
+    for (const label of ['发送问题（暂不可用）', '开始 AI 修改', '创建分享', '导出行程']) {
+      const button = [...page.container.querySelectorAll('button')].find((item) => item.getAttribute('aria-label') === label || item.textContent?.trim() === label)
+      expect(button?.disabled).toBe(true)
+    }
+    expect(page.container.textContent).toContain('不会生成分享链接或文件')
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
+    expect(mocks.restoreTrip).not.toHaveBeenCalled()
+    expect(mocks.selectionWrite).not.toHaveBeenCalled()
+  })
+
   it('A → B 时立即隐藏 A，B 的 GET 完成后只展示 B', async () => {
     const page = mount('trip-a')
     await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
