@@ -5,6 +5,7 @@ POST /tasks 创建任务后立即返回 task_id，workflow 异步执行；
 前端通过 GET /tasks 与 GET /tasks/{id} 轮询进度。
 """
 import asyncio
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -26,6 +27,22 @@ router = APIRouter(
 
 # 后台任务强引用集合（事件循环只持弱引用，防 GC 回收，bpo-88831）
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+# 并发 workflow 闸门（B1-A）：一次选品决策最多 9 次 LLM 调用
+# （痛点推断 1 + 差异化 1 + 评审团 ≤7），默认放行 3 个并发已占满
+# asyncio 默认线程池（min(32, cpu+4)）的主要额度；提交数不再无限增长，
+# 超出部分在闸门前排队（任务行保持 running，轮询语义不变）。
+SELECTION_DECISION_MAX_CONCURRENT_TASKS = max(
+    1, int(os.getenv("SELECTION_DECISION_MAX_CONCURRENT_TASKS", "3")))
+_workflow_gate: asyncio.Semaphore | None = None
+
+
+def _get_workflow_gate() -> asyncio.Semaphore:
+    """懒创建信号量（必须绑定主 loop；进程内单例，同 agent_assist 模式）。"""
+    global _workflow_gate
+    if _workflow_gate is None:
+        _workflow_gate = asyncio.Semaphore(SELECTION_DECISION_MAX_CONCURRENT_TASKS)
+    return _workflow_gate
 
 
 class FinanceParams(BaseModel):
@@ -50,9 +67,14 @@ class TaskRequest(BaseModel):
 
 
 async def _run_task(task_id: str, inputs: dict) -> None:
-    """后台执行 workflow；非 success 结果都兜底回写（不永久滞留 running）"""
+    """后台执行 workflow；非 success 结果都兜底回写（不永久滞留 running）
+
+    B1-A：过并发闸门执行——超限任务排队等待，防止 create_task 无限提交
+    挤爆线程池；排队时长不改变任务行的 running 语义。
+    """
     try:
-        ctx = await WorkflowExecutor().run("selection_decision", inputs=inputs)
+        async with _get_workflow_gate():
+            ctx = await WorkflowExecutor().run("selection_decision", inputs=inputs)
         # partial 当前不可达（executor 只产出 success/failed），但兜底覆盖非 success 全集
         if ctx.status != "success":
             get_selection_decision_store().update_result(
