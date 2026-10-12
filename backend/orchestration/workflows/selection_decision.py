@@ -156,6 +156,7 @@ async def _llm_json(messages) -> Any:
     actions=["评估", "分析", "决策"],
     examples=["评估蓝牙耳机品类值不值得做", "帮我做一次选品决策"],
     category="selection",
+    deadline_sec=900,
 )
 class SelectionDecision:
     """选品决策 Workflow — 8 个 step，5 层 DAG

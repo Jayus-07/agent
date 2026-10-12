@@ -50,6 +50,7 @@ from backend.shared.logger import logger
     ],
     default_kbs=["policies"],
     category="alert",
+    deadline_sec=300,
 )
 class InventoryAlert:
     """库存预警 Workflow（8 Step）"""
