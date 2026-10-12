@@ -11,6 +11,7 @@ from backend.prompts.release_models import (
     ReleaseStateError,
 )
 from backend.prompts.release_repository import PromptReleaseRepository
+from backend.shared.logger import logger
 
 
 class PromptReleaseService:
@@ -193,23 +194,48 @@ class PromptReleaseService:
                     "候选版本模板在审批后被修改（approved_template_hash 不一致），"
                     "原审批已失效；请重新评测并审批后再发布"
                 )
+        published_row: dict[str, Any] | None = None
+
+        async def mark_release_published(session: Any) -> dict[str, Any]:
+            nonlocal published_row
+            row = await self._repository.mark_published_in_session(
+                session, release_id, actor,
+            )
+            if row is None:
+                raise ReleaseStateError(
+                    "Prompt release 状态已变化，不能提交发布"
+                )
+            published_row = row
+            return row
+
         try:
             # Release Gate 的审批已经绑定了通过的外部评测结果；它是生产发布
             # 的最终门禁，不应再要求候选版本先手工走一遍独立的状态流水线。
             # skip_workflow 只跳过 Prompt 版本状态校验，仍保留模板校验、
             # active_version/production alias、审计与热更新通知。
+            # release 状态在同一个 DB 事务提交，不能出现指针已切换而记录仍 approved。
             await prompt_service.publish(
                 current.prompt_key,
                 current.version,
                 actor=actor,
                 role="release_gate",
                 skip_workflow=True,
+                _before_commit=mark_release_published,
             )
         except Exception as exc:
-            raise ReleaseStateError(f"Prompt production 发布失败: {exc}") from exc
+            if isinstance(exc, ReleaseStateError):
+                raise
+            logger.warning(
+                "[PromptRelease] publish transaction failed key=%s version=%s error_type=%s",
+                current.prompt_key,
+                current.version,
+                type(exc).__name__,
+            )
+            raise ReleaseStateError(
+                "Prompt production 发布失败，请先核对当前 active 版本后重试"
+            ) from exc
 
-        row = await self._repository.mark_published(release_id, actor)
-        return PromptReleaseRecord.from_row(row)
+        return PromptReleaseRecord.from_row(published_row)
 
     async def rollback(self, release_id: str, actor: str) -> PromptReleaseRecord:
         current = await self.get(release_id)

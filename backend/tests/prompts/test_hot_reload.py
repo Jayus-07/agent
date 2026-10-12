@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -55,6 +56,9 @@ async def test_bump_prompt_epoch_increments_and_publishes(monkeypatch):
     redis = FakeRedis()
     monkeypatch.setattr(hot_reload, "get_redis", lambda: redis)
     monkeypatch.setattr(hot_reload, "_persist_epoch_event", _persist_epoch(1))
+    monkeypatch.setattr(
+        hot_reload, "_mark_event_published", _async_noop,
+    )
 
     epoch = await hot_reload.bump_prompt_epoch("planner.system", actor="admin")
 
@@ -67,20 +71,57 @@ async def test_bump_prompt_epoch_increments_and_publishes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stage_prompt_epoch_uses_publish_transaction_without_commit():
+    from backend.prompts import hot_reload
+
+    class _Result:
+        def scalar_one(self):
+            return 4
+
+    session = AsyncMock()
+    session.execute.return_value = _Result()
+
+    epoch = await hot_reload.stage_prompt_epoch(
+        session, key="planner.system", actor="admin",
+    )
+
+    assert epoch == 4
+    assert session.execute.await_count == 2
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_keeps_committed_epoch_for_db_polling(monkeypatch):
+    from backend.prompts import hot_reload
+
+    def broken_redis():
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(hot_reload, "get_redis", broken_redis)
+
+    epoch = await hot_reload.dispatch_prompt_epoch(
+        "planner.system", "admin", 8,
+    )
+
+    assert epoch == 8
+    assert hot_reload.local_epoch() == 8
+
+
+@pytest.mark.asyncio
 async def test_reload_event_refreshes_snapshot(monkeypatch):
     from backend.prompts import hot_reload
 
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     monkeypatch.setattr(hot_reload.prompt_service, "refresh_snapshot", refresh_snapshot)
     hot_reload._set_local_epoch(1)
 
     await hot_reload._handle_reload_event({"epoch": 2, "key": "planner.system"})
 
-    assert refreshed == [True]
+    assert refreshed == [2]
     assert hot_reload.local_epoch() == 2
 
 
@@ -91,8 +132,8 @@ async def test_ensure_fresh_refreshes_when_redis_epoch_is_newer(monkeypatch):
     redis = FakeRedis(epoch=5)
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     monkeypatch.setattr(hot_reload, "get_redis", lambda: redis)
     monkeypatch.setattr(hot_reload, "_read_db_epoch", lambda: _async_value(None))
@@ -103,7 +144,7 @@ async def test_ensure_fresh_refreshes_when_redis_epoch_is_newer(monkeypatch):
 
     await hot_reload.ensure_prompt_snapshot_fresh_async()
 
-    assert refreshed == [True]
+    assert refreshed == [5]
     assert hot_reload.local_epoch() == 5
 
 
@@ -113,8 +154,8 @@ async def test_redis_failure_is_fail_open(monkeypatch):
 
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     def broken_redis():
         raise ConnectionError("redis down")
@@ -192,8 +233,8 @@ async def test_ensure_fresh_uses_db_epoch_when_redis_lags(monkeypatch):
     redis = FakeRedis(epoch=1)
     refreshed = []
 
-    async def refresh_snapshot():
-        refreshed.append(True)
+    async def refresh_snapshot(*, publish_epoch=None):
+        refreshed.append(publish_epoch)
 
     monkeypatch.setattr(hot_reload, "get_redis", lambda: redis)
     monkeypatch.setattr(hot_reload, "_read_db_epoch", lambda: _async_value(5))
@@ -204,7 +245,7 @@ async def test_ensure_fresh_uses_db_epoch_when_redis_lags(monkeypatch):
 
     await hot_reload.ensure_prompt_snapshot_fresh_async()
 
-    assert refreshed == [True]
+    assert refreshed == [5]
     assert hot_reload.local_epoch() == 5
 
 
@@ -220,3 +261,7 @@ def _async_value(value):
         return value
 
     return _value()
+
+
+async def _async_noop(*_args, **_kwargs):
+    return None
