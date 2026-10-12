@@ -48,7 +48,7 @@ describe('旅游 V2 模板目录', () => {
     expect(container?.textContent).toContain('正在加载旅行模板')
 
     await act(async () => { resolve({ templates: [template()] }) })
-    expect(container?.textContent).toContain('全部精选模板')
+    expect(container?.textContent).toContain('已加载的精选模板')
     expect(container?.textContent).toContain('杭州湖山慢游')
     expect(container?.querySelector('a[href="/travel/templates/hangzhou-slow"]')).not.toBeNull()
     expect(container?.querySelector('nav[aria-label="旅游导航"] a[aria-current="page"]')?.textContent).toBe('旅行灵感')
@@ -64,5 +64,18 @@ describe('旅游 V2 模板目录', () => {
     await act(async () => { retry?.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(container?.textContent).toContain('暂时没有可浏览的模板')
     expect(mocks.fetchTemplates).toHaveBeenCalledTimes(2)
+  })
+
+  it('恰好返回 50 项时只报告本次加载数量和当前展示范围', async () => {
+    const templates = Array.from({ length: 50 }, (_, index) => ({
+      ...template(),
+      slug: `template-${index + 1}`,
+    }))
+    mocks.fetchTemplates.mockResolvedValue({ templates })
+    await renderCatalog()
+
+    expect(container?.textContent).toContain('已加载 50 份 · 当前展示范围')
+    expect(container?.textContent).not.toContain('全部精选模板')
+    expect(container?.textContent).not.toContain('共 50')
   })
 })

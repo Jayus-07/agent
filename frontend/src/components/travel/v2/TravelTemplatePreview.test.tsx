@@ -3,12 +3,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TravelTemplateV2, TravelTripV2 } from '@/api/travelV2'
 
-const mocks = vi.hoisted(() => ({ fetchTemplate: vi.fn(), copyTemplate: vi.fn(), push: vi.fn() }))
+const mocks = vi.hoisted(() => ({ fetchTemplate: vi.fn(), copyTemplate: vi.fn(), createIdempotencyKey: vi.fn(), push: vi.fn() }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.push }) }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/travelV2')>()),
   fetchTravelTemplateV2: mocks.fetchTemplate,
   copyTravelTemplateV2: mocks.copyTemplate,
+  createTravelV2IdempotencyKey: mocks.createIdempotencyKey,
 }))
 
 import TravelTemplatePreview from './TravelTemplatePreview'
@@ -44,6 +45,7 @@ afterEach(() => {
 beforeEach(() => {
   mocks.fetchTemplate.mockReset().mockResolvedValue(template())
   mocks.copyTemplate.mockReset()
+  mocks.createIdempotencyKey.mockReset().mockReturnValue('copy-intent-1')
   mocks.push.mockReset()
 })
 
@@ -59,18 +61,37 @@ describe('旅游 V2 模板预览与复制', () => {
     expect(mocks.push).not.toHaveBeenCalled()
 
     await act(async () => { resolve({ trip_id: 'trip-created-by-server' } as TravelTripV2) })
+    expect(mocks.copyTemplate).toHaveBeenCalledWith('hangzhou-slow', 'copy-intent-1')
     expect(mocks.push).toHaveBeenCalledWith('/travel/itineraries/trip-created-by-server')
     expect(container?.textContent).not.toContain('已保存成功')
   })
 
-  it('复制 API 失败时留在模板预览并明确报错，不显示保存成功', async () => {
-    mocks.copyTemplate.mockRejectedValue(new Error('服务端拒绝创建'))
-    await renderPreview()
-    const button = [...(container?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.includes('复制为我的行程'))
+  it('第一次服务端成功但响应丢失时，安全重试复用幂等键且只创建一份 Trip', async () => {
+    const persistedTrips = new Map<string, TravelTripV2>()
+    let createdTripCount = 0
+    mocks.copyTemplate.mockImplementation((_slug: string, requestKey: string) => {
+      const existingTrip = persistedTrips.get(requestKey)
+      if (existingTrip) return Promise.resolve(existingTrip)
 
-    await act(async () => { button?.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+      createdTripCount += 1
+      const createdTrip = { trip_id: 'trip-created-once' } as TravelTripV2
+      persistedTrips.set(requestKey, createdTrip)
+      return Promise.reject(new TypeError('Failed to fetch'))
+    })
+    await renderPreview()
+    const button = [...(container?.querySelectorAll('button') ?? [])].find((item) => item.textContent?.includes('复制为我的行程'))!
+
+    await act(async () => { button.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(container?.textContent).toContain('复制结果尚未确认')
+    expect(container?.textContent).toContain('服务端可能已经创建了行程')
+    expect(button.textContent).toContain('安全重试（复用原请求）')
     expect(mocks.push).not.toHaveBeenCalled()
-    expect(container?.textContent).toContain('服务端拒绝创建')
+
+    await act(async () => { button.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(mocks.copyTemplate).toHaveBeenCalledTimes(2)
+    expect(mocks.copyTemplate.mock.calls.map(([, requestKey]) => requestKey)).toEqual(['copy-intent-1', 'copy-intent-1'])
+    expect(createdTripCount).toBe(1)
+    expect(mocks.push).toHaveBeenCalledWith('/travel/itineraries/trip-created-once')
     expect(container?.textContent).not.toContain('已保存成功')
   })
 })
