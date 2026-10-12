@@ -7,6 +7,8 @@ Covers:
   - create_draft: code_controlled rejection
   - DB degradation to defaults
 """
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -326,6 +328,100 @@ class TestPublish:
         assert not service._apply_published_snapshot("test.low", older, 7)
         assert service._snapshot["test.low"].version == 3
         assert service._snapshot_publish_epochs["test.low"] == 8
+
+    @pytest.mark.asyncio
+    async def test_concurrent_publish_keeps_commit_order_in_snapshot(self, service):
+        state = SimpleNamespace(active_version=1)
+        first_commit_applied = asyncio.Event()
+        release_first_commit = asyncio.Event()
+        second_epoch_staged = asyncio.Event()
+
+        class FakeSession:
+            def __init__(self):
+                self.pending_version = None
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def commit(self):
+                state.active_version = self.pending_version
+                if self.pending_version == 2:
+                    first_commit_applied.set()
+                    await release_first_commit.wait()
+
+        sessions = []
+
+        def session_factory():
+            session = FakeSession()
+            sessions.append(session)
+            return session
+
+        class FakeRepository:
+            def __init__(self, session):
+                self.session = session
+
+            async def get_by_key(self, _key):
+                return SimpleNamespace(id=1, active_version=state.active_version)
+
+            async def get_version(self, _prompt_id, version):
+                return SimpleNamespace(
+                    id=version,
+                    version=version,
+                    template=f"Version {version} {{name}}",
+                    variables=["name"],
+                    status="passed",
+                )
+
+            async def set_active_version(
+                self, _prompt_id, version, *, expected_current_version,
+            ):
+                if state.active_version != expected_current_version:
+                    return False
+                self.session.pending_version = version
+                return True
+
+            async def upsert_alias(self, *_args, **_kwargs):
+                return None
+
+            async def update_version_status(self, *_args):
+                return None
+
+            async def write_audit(self, *_args, **_kwargs):
+                return None
+
+        async def stage_epoch(session, **_kwargs):
+            if session.pending_version == 3:
+                second_epoch_staged.set()
+            return session.pending_version - 1
+
+        service._cache.delete = MagicMock()
+        with patch("backend.prompts.service.AsyncSessionLocal", session_factory):
+            with patch(
+                "backend.prompts.service.PromptRepository", FakeRepository,
+            ):
+                with patch(
+                    "backend.prompts.hot_reload.stage_prompt_epoch",
+                    side_effect=stage_epoch,
+                ):
+                    with patch(
+                        "backend.prompts.hot_reload.dispatch_prompt_epoch",
+                        new=AsyncMock(),
+                    ):
+                        first = asyncio.create_task(service.publish("test.low", 2))
+                        await first_commit_applied.wait()
+                        second = asyncio.create_task(service.publish("test.low", 3))
+                        await second_epoch_staged.wait()
+                        await asyncio.sleep(0.005)
+                        release_first_commit.set()
+                        await asyncio.gather(first, second)
+
+        assert state.active_version == 3
+        assert service._snapshot["test.low"].version == 3
+        assert service._snapshot_publish_epochs["test.low"] == 2
+        assert len(sessions) == 2
 
 
 class TestReloadHooks:
