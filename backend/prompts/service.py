@@ -436,7 +436,9 @@ class PromptService:
                 if len(required_statuses) == 1:
                     required_text = f"{required_statuses[0]!r}"
                 else:
-                    required_text = " / ".join(repr(status) for status in required_statuses)
+                    required_text = " / ".join(
+                        repr(status) for status in required_statuses
+                    )
                 raise ValueError(
                     f"版本 {version} 状态为 {ver.status!r}，"
                     f"操作要求状态 {required_text}"
@@ -452,7 +454,10 @@ class PromptService:
                     "versions can be published"
                 )
 
-            if _require_publish_history and not await repo.has_publish_audit(key, version):
+            if (
+                _require_publish_history
+                and not await repo.has_publish_audit(key, version)
+            ):
                 raise ValueError(
                     f"版本 {version} 没有已提交的发布记录，不能回滚"
                 )

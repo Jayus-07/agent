@@ -297,7 +297,7 @@ class TestPublish:
         )
 
     @pytest.mark.asyncio
-    async def test_rollback_rejects_archived_version_without_publish_audit(self, service):
+    async def test_rollback_rejects_archived_without_publish_audit(self, service):
         archived = MagicMock(
             template="Unpublished {name}", version=2,
             variables=["name"], id=10, status="archived",
