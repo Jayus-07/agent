@@ -1,6 +1,6 @@
 # 旅游 V2 前端 FE-3
 
-状态：实现与本地验收完成；PR #48 已创建并等待评审。真实 Provider E2E 因缺少认证凭据阻塞。
+状态：本地补修与定向验收完成；最新 main 已正常 merge，待推送 PR #48 并等待新 HEAD 的必需检查。真实 Provider E2E 因 no-credential 阻塞。
 
 ## 目标
 
@@ -27,4 +27,6 @@
 - Worktree：`C:\Users\wh\.codex\worktrees\travel-v2-fe-3\agent`
 - 起始提交：`a67449b07a2bc9b25ba61b01c9b336d4512842f9`
 - 当前提交：`88cad7db6b5e65ced6107f0d675dc6634117c32e`
+- main 同步：`73c37d73c3b7c62711db276458912eed481ace7d`，merge commit `1b603cd58ba1c8009a92d7e71116aa01d542cbef`
+- Tab 补修：`d1c58c7eb23dc21a8f30c0218573209438b28a09`
 - PR：[Jayus-07/agent#48](https://github.com/Jayus-07/agent/pull/48)
