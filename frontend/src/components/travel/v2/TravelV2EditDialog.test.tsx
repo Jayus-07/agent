@@ -2,6 +2,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TravelTripV2 } from '@/api/travelV2'
+import type { TravelWriteStatus } from './travelV2WriteState'
 
 const mocks = vi.hoisted(() => ({ searchPlaces: vi.fn() }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
@@ -49,9 +50,17 @@ const trip = {
 function renderDialog({
   panel = { kind: 'add' },
   onEdit = vi.fn(async () => true),
+  writeStatus = null,
+  writeMessage = '',
+  onRetry,
+  onRefreshConflict,
 }: {
   panel?: TravelV2EditPanel
   onEdit?: (operation: unknown, summary: string) => Promise<boolean>
+  writeStatus?: TravelWriteStatus | null
+  writeMessage?: string
+  onRetry?: () => Promise<boolean>
+  onRefreshConflict?: () => Promise<boolean>
 } = {}) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -59,7 +68,8 @@ function renderDialog({
   act(() => root.render(createElement(TravelV2EditDialog, {
     panel, trip, dayId: 'day-1', item: panel?.kind === 'item' ? trip.document.days[0].items[0] : null,
     route: panel?.kind === 'transport' ? { fromItemId: panel.fromItemId, toItemId: panel.toItemId } : undefined,
-    saving: false, error: '', onClose: close, onEdit: onEdit as never,
+    saving: false, error: '', writeStatus, writeMessage, onRetry, onRefreshConflict,
+    onClose: close, onEdit: onEdit as never,
   })))
   return { container, close, dispose: () => act(() => root.unmount()), onEdit }
 }
@@ -139,6 +149,20 @@ describe('V2 正式行程结构化编辑面板', () => {
 
     expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ op: 'update_item', item_id: 'item-1', start_time: '10:30' }), expect.any(String))
     expect(rendered.container.textContent).not.toContain('已自动保存')
+    expect(rendered.close).not.toHaveBeenCalled()
+    rendered.dispose()
+  })
+
+  it('未知提交结果保留编辑上下文并提供同一请求安全重试', async () => {
+    const onRetry = vi.fn(async () => false)
+    const rendered = renderDialog({ writeStatus: 'UNKNOWN', writeMessage: '提交结果尚未确认。', onRetry })
+
+    expect(rendered.container.textContent).toContain('状态待核实')
+    expect(rendered.container.textContent).toContain('提交结果尚未确认')
+    const retry = [...rendered.container.querySelectorAll('button')].find((button) => button.textContent === '使用同一请求安全重试')!
+    await act(async () => { retry.click(); await Promise.resolve() })
+
+    expect(onRetry).toHaveBeenCalledOnce()
     expect(rendered.close).not.toHaveBeenCalled()
     rendered.dispose()
   })

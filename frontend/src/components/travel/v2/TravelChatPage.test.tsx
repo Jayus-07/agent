@@ -77,4 +77,40 @@ describe('V2 旅游规划对话', () => {
     expect(mocks.saveTrip).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })
+
+  it('创建 Trip 响应丢失时保持 UNKNOWN，安全重试复用原键和完全相同 payload', async () => {
+    mocks.createTrip
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockImplementationOnce(async (input: { title: string; document: { schema_version: number; days: unknown[] } }) => ({
+        trip_id: 'v2-trip-replayed', title: input.title, status: 'active', revision: 1,
+        document: input.document, source_template_id: null, source_template_version: null,
+        created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z',
+      } as never))
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialPrompt: '帮我安排杭州一日游' }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(container.textContent).toContain('状态待核实')
+    expect(container.textContent).toContain('服务端可能已经完成操作')
+    expect(mocks.createTrip).toHaveBeenCalledOnce()
+    const originalRequest = mocks.createTrip.mock.calls[0]
+    const retry = [...container.querySelectorAll('button')].find((button) => button.textContent === '使用同一请求安全重试')!
+    await act(async () => {
+      retry.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(mocks.createTrip).toHaveBeenCalledTimes(2)
+    expect(mocks.createTrip.mock.calls[1]).toEqual(originalRequest)
+    expect(container.querySelector('a[href="/travel/itineraries/v2-trip-replayed"]')).not.toBeNull()
+    expect(container.textContent).toContain('已保存')
+    await act(async () => root.unmount())
+  })
 })
