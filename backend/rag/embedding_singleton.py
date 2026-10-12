@@ -629,6 +629,7 @@ class _TrackedEmbedding(Embeddings):
         compute: Callable[[], Any],
         to_vector: Callable[[Any], list],
         record_error: Callable[[float], None] | None = None,
+        record_success: Callable[[float], None] | None = None,
     ) -> tuple[Any, bool]:
         """单 key 单飞 + 双层缓存。返回 (provider 原始结果, 是否命中缓存)。
 
@@ -685,7 +686,10 @@ class _TrackedEmbedding(Embeddings):
                 _EMBED_INFLIGHT.setdefault(key, stats)
             t0 = time.monotonic()
             try:
-                raw = compute()          # 真正出站（含 _record 用量行）
+                raw = compute()          # 真正出站（仅发请求，不落账）
+                # 先做向量转换/校验：provider 返回畸形（None/字节串/长度不符）
+                # 时在这里抛错 → 走下面的失败路径，**不会**出现"成功行+失败行"
+                # 双记录的负面回归（P1 审查）。
                 vector = to_vector(raw)
             except Exception as exc:
                 # 失败：不入缓存、记录错误出站（P1-A），并解除在途让等待者重试。
@@ -713,6 +717,9 @@ class _TrackedEmbedding(Embeddings):
             self._bump_field(stats, "computed")
             self._emit_call(kind, elapsed_ms)
             self._store_process_cache(key, vector)
+            # 成功用量行只在"请求成功 + 向量有效"后落一次
+            if record_success is not None:
+                record_success(elapsed_ms)
             _flush_owned_scope()
             return raw, False
 
@@ -762,10 +769,26 @@ class _TrackedEmbedding(Embeddings):
             return self._inner.embed_query(text)
 
         def _to_vector(raw: Any) -> list:
-            # 成功用量行：token 为估算值（provider 未回传真实 usage 时的既有口径）
+            # 只做形状校验与转换，不落账：转换失败必须走失败路径，
+            # 否则会先写成功行、再写失败行（同一次出站双记录）。
+            if raw is None:
+                raise ValueError("embedding provider 返回空结果")
+            if isinstance(raw, (bytes, bytearray, str, dict)):
+                raise ValueError(
+                    f"embedding provider 返回非法类型 {type(raw).__name__}")
+            try:
+                vector = [float(v) for v in raw]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"embedding provider 返回无法转为数值向量: {exc}") from exc
+            if not vector:
+                raise ValueError("embedding provider 返回空向量")
+            return vector
+
+        def _record_success(elapsed_ms: float) -> None:
+            """成功用量行：token 为估算值（provider 未回传真实 usage 时的既有口径）。"""
             total_tokens = self._estimate_tokens([text])
-            self._record(total_tokens, 1, (time.monotonic() - t0) * 1000)
-            return list(raw)
+            self._record(total_tokens, 1, elapsed_ms)
 
         def _record_error(elapsed_ms: float) -> None:
             """出站失败/超时的用量审计（status=error、token 记 0）。
@@ -777,7 +800,8 @@ class _TrackedEmbedding(Embeddings):
             """
             self._record(None, 1, elapsed_ms, status="error")
 
-        return self._cached_embed(key, "query", _compute, _to_vector, _record_error)[0]
+        return self._cached_embed(
+            key, "query", _compute, _to_vector, _record_error, _record_success)[0]
 
     @staticmethod
     def _estimate_tokens(texts: List[str]) -> int:

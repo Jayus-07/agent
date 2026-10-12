@@ -31,3 +31,10 @@ R2/R3 仅设计（报告 §9），未实施。等待用户/GPT 复核后再进�
 - 凭据轮换（Redis 口令、`origin/main` 三个 travel 脚本中的真实 API_KEY）需用户执行。
 - 父工具→rag-service 的 ~4s 前置缺口未证实（该区间无服务端埋点，属 R3-B）。
 - RAG MultiQuery 直调 LLM 不入账：独立 P0，仍未解决。
+## 第二轮审查（2026-10-12）
+
+- P0 扫描漏检修复（artifacts 不再整目录豁免、空用户名 URL 命中、--fail-on 分级阻断）。
+- P1 CI 历史扫描改为新增提交区间；P1 self-correction 总账移到 ask 生命周期；
+  P1 非法 Provider 返回只留一条 error 用量行。
+- 定向回归 291 passed；RAG PR Smoke（head 2807e6c）success。
+- 凭据轮换仍 BLOCKED（需用户执行），main 三脚本 API_KEY 另立安全债。

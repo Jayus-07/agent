@@ -739,7 +739,19 @@ class RAGChain:
         if self._chains_dirty:
             self._build_chains()
             self._chains_dirty = False
+        # ── R0/R1-A：请求级 embedding 总账（跨 attempt + 跨线程汇总）──────
+        # 生命周期 = 一次 ask（不是一次 _execute）：self-correction 会在同一
+        # 用户请求内再次 _execute，若按 attempt 开闭，先前的统计会被 end 掉、
+        # ctx.embedding_stats 被后一次覆盖。这里统一在 finally 汇总上报一次，
+        # 得到的是"本次问答一共出站几次/复用几次/唯一输入几个"的请求级口径。
+        from backend.rag.embedding_singleton import (
+            begin_embedding_request,
+            end_embedding_request,
+            report_embedding_request,
+        )
+
         trace, t_total = self._start(question, session_id)
+        begin_embedding_request()
         try:
             ctx = get_context()
             ctx.meta = {}
@@ -779,6 +791,13 @@ class RAGChain:
 
             record_rag_stage("total", (_time.time() - t_total) * 1000)
             raise
+        finally:
+            # 请求级 embedding 总账收口：无论成功/失败/自纠正，只上报一次。
+            embedding_stats = end_embedding_request()
+            if embedding_stats is not None:
+                self._last_embedding_stats = embedding_stats
+                report_embedding_request(embedding_stats)
+                self._emit_embedding_stats(embedding_stats)
 
     def _start(self, question: str, session_id: str):
         """开启 Trace + root span。
@@ -1248,29 +1267,14 @@ class RAGChain:
         )
 
         start_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS)
-        # ── R0/R1-A：请求级 embedding 总账（跨线程汇总）────────────────
-        # Doc 级相似度 / Chunk 级 hybrid 向量腿 / MultiQuery 变体 / 同义词
-        # 扩展都从这一颗调用树取向量。总账由本入口创建，随 contextvars 被
-        # copy_context 带进 retrieval 线程池（与检索预算同一传播路径），每个
-        # 池线程只贡献自己的作用域，end 时统一汇总——父请求因此能读到
-        # requested/computed/request_hits/process_hits/unique_inputs/出站耗时
-        # 的**完整**数值，而不是只记主线程那一次（P1-B）。
-        from backend.rag.embedding_singleton import (
-            begin_embedding_request,
-            end_embedding_request,
-            report_embedding_request,
-        )
-
-        begin_embedding_request()
+        # R0/R1-A 的 embedding 总账在 ask() 生命周期开闭（见 RAGChain.ask）：
+        # _execute 会被 self-correction 在同一用户请求内二次调用，若在此处
+        # start/end 会把每一次尝试当成独立请求、后一次覆盖 ctx.embedding_stats
+        # （P1 审查）。这里只负责检索预算。
         try:
             result = active_chain.invoke({"input": question, "chat_history": chat_history})
         finally:
             clear_retrieval_budget()
-            scoped_stats = end_embedding_request()
-            if scoped_stats is not None:
-                self._last_embedding_stats = scoped_stats
-                report_embedding_request(scoped_stats)
-                self._emit_embedding_stats(scoped_stats)
 
         # ── 采集检索中间结果（正常路径 span 已提前收口，end_span 幂等跳过）──
         context_docs = result.get("context", [])

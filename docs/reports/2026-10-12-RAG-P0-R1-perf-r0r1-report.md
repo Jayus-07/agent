@@ -344,3 +344,49 @@ query 原文、request_id、tenant 一律只进 Trace。
 | 并发/故障 | 新增 80-key 并发、锁条纹、两态缓存、失败恢复用例 |
 | 真实链路 | provider 向量化 3 次问答 15 → 4；请求总账 requested=1/computed=1/kinds={'query':1} 与真实出站一致（`artifacts/rag-perf-r0r1/evidence/`） |
 | RAG Smoke | 见 PR checks |
+---
+
+# 附录 B：PR #41 第二轮审查整改（2026-10-12）
+
+| 项 | 状态 | 证据 |
+| --- | --- | --- |
+| P0 Secret Scan 漏检（artifacts 整目录跳过 + 空用户名 URL） | **PASS** | `backend/tests/test_scan_secrets.py` 4 例（虚构口令）；`artifacts` 已移出 SKIP_DIRS |
+| P0 凭据轮换与存量泄漏 | **BLOCKED（需用户执行）** | 见附录 A1；三处 main 脚本硬编码 API_KEY 另立安全债 |
+| P1 CI 历史扫描范围 | **PASS** | 门禁只扫 `base..head`/`before..after`；高置信形态才阻断（`--fail-on`） |
+| P1 self-correction 请求总账 | **PASS** | 总账移到 `ask()` 生命周期；新增 `test_ask_lifecycle_aggregates_self_correction_attempts` |
+| P1 非法 Provider 返回双记录 | **PASS** | 先校验/转换再落成功行；新增 4 组 malformed 负面用例 |
+
+## B1. Secret Scan 漏洞修复
+
+- `artifacts/` 从 `SKIP_DIRS` 移除（事故路径必须被扫），只跳过体积/二进制类目录。
+- `CREDENTIAL_URL` 允许空用户名：`redis://:pass@host:6379/0` 现在命中。
+- 占位符判定按行：`user:pass@` 与 `${VAR}`（compose/脚本插值）不算泄漏，也不写入允许清单。
+- 新增 `--fail-on`：只有高置信规则（凭据 URL / 私钥块 / 云与平台 token）阻断；
+  `assigned_secret` 类既有安全债只报告，避免门禁长期红、也不把真实密钥加入允许清单。
+- 回归测试用完全虚构口令，构造真实 `git` 仓库 + `artifacts/` 已跟踪文本产物，
+  并验证 `--range` 能把历史扫描限制在新增提交区间。
+
+## B2. CI 口径
+
+- PR：树扫描（阻断高置信形态）+ 历史扫描 `base..head`；
+- push main：历史扫描 `before..after`，不再全历史遍历；
+- 全历史泄漏改为独立安全债报告（`scripts/travel_*.py` 三处硬编码 key，需轮换）。
+
+## B3. 请求级统计（self-correction）
+
+- 总账生命周期从 `_execute` 提升到 `ask()`：`_try_self_correct → _execute` 的二次检索
+  并入同一次问答统计，`ctx.embedding_stats` 不再被后一次覆盖。
+- 实测（单测）：两次 attempt 同一问题 → `requested=2, computed=1, request_hits=1, kinds={query:2}`。
+
+## B4. 非法 Provider 返回
+
+- `_to_vector` 只做校验/转换（拒绝 None、字节串、字符串、字典、非数值元素、空向量），
+  成功用量行由成功路径统一落账；
+- malformed 返回只留 **1 条** `finish_reason=error` 用量行（token=0），且不入任何缓存。
+
+## B5. RAG Smoke
+
+- head `2807e6c` 的 `RAG PR Smoke`：**completed / success**
+  （https://github.com/Jayus-07/agent/actions/runs/38218709681）。
+  此前观察到的 in_progress 是并发组 `cancel-in-progress` 下多 head 连续推送造成的排队，
+  不是依赖安装卡死。

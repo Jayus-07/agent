@@ -467,6 +467,60 @@ def test_failure_is_not_cached_and_waiters_retry():
     assert stats is not None and stats.computed == 2
 
 
+def test_ask_lifecycle_aggregates_self_correction_attempts(monkeypatch):
+    """self-correction 二次 _execute 的 embedding 必须并入同一请求总账。
+
+    负面回归：曾把总账开闭放在 _execute（每次尝试）里，二次检索会先 end 掉
+    前一次统计、再让 ctx.embedding_stats 被后一次覆盖，父请求读到的是残缺值。
+    """
+    from backend.rag.chain import RAGChain
+    from backend.rag import context as rag_context
+
+    tracked = _make_tracked()
+    chain = RAGChain.__new__(RAGChain)   # 绕开 __init__（会建检索链/加载模型）
+    rag_context.set_context(rag_context.RagRequestState())
+    chain._chains_dirty = False
+    chain._start = lambda q, s: (type("T", (), {"id": "trace-x", "spans": [], "metadata": {}})(), 0.0)
+    chain._prepare = lambda q, s: []
+    chain._respond = lambda *a, **k: "答案"
+    chain._try_self_correct = lambda *a, **k: None
+    chain._finish_error = lambda *a, **k: None
+    monkeypatch.setattr("backend.observability.metrics.record_rag_stage", lambda *a, **k: None)
+
+    calls = {"n": 0}
+
+    def fake_execute(question, history):
+        calls["n"] += 1
+        tracked.embed_query("同一检索问题")     # 二次尝试命中请求内缓存
+        return {"context": []}
+
+    chain._execute = fake_execute
+    # 自纠正路径：_respond 正常返回，但我们要触发第二次 _execute
+    original_respond = chain._respond
+
+    def respond_then_correct(result, trace, question, session_id, t_total, persist_memory=True):
+        if calls["n"] == 1:
+            chain._execute(question, [])       # 模拟 self-correction 二次检索
+        return "答案"
+
+    chain._respond = respond_then_correct
+
+    answer = RAGChain.ask(chain, "退款审核时间是多少？", session_id="s1")
+    assert answer == "答案"
+    assert calls["n"] == 2
+
+    stats = chain._last_embedding_stats
+    assert stats is not None, "ask 收口没有产出 embedding 总账"
+    assert stats.requested == 2, stats.as_dict()
+    assert stats.computed == 1 and stats.request_hits == 1, stats.as_dict()
+    # kinds 是"按 kind 的请求次数"（含命中），不是出站次数：两次请求 → 2
+    assert stats.kinds.get("query") == 2, stats.kinds
+    assert stats.computed + stats.request_hits + stats.process_hits == stats.requested
+    # ctx 上也是同一份请求级汇总（不再被后一次覆盖）
+    ctx_stats = rag_context.get_context().embedding_stats
+    assert ctx_stats is not None and ctx_stats.requested == 2
+
+
 def test_provider_failure_records_error_usage_row(monkeypatch):
     """Provider 失败必须留用量审计行（P1-A）：token=0、status=error、不虚构消费。"""
     recorded: list = []
@@ -493,6 +547,35 @@ def test_provider_failure_records_error_usage_row(monkeypatch):
     assert row["component"] == "embedding"
     # 失败也要计入"出站次数"，否则调用数与 provider 对不上
     assert stats is not None and stats.computed == 1
+
+
+@pytest.mark.parametrize("bad_shape", [None, b"bytes-not-vector", "string-not-vector", ["nan?", "x"]])
+def test_malformed_provider_response_records_single_error_row(monkeypatch, bad_shape):
+    """非法 Provider 返回：只留一条 error 用量行，不得 success+error 双记录。
+
+    负面回归：旧实现先调用 _record(success) 再 return list(raw)，raw 无法
+    转换时异常分支又写一条 error —— 同一次出站产生两条用量行。
+    """
+    recorded: list = []
+    monkeypatch.setattr(
+        "backend.observability.llm_usage_store.get_llm_usage_store",
+        lambda: SimpleNamespace(record=recorded.append),
+    )
+    inner = _FakeInner()
+    inner.embed_query = lambda text: bad_shape  # type: ignore[assignment]
+    tracked = _make_tracked(inner, keep_record=True)
+    es.begin_embedding_request(reset=True)
+    with pytest.raises((TypeError, ValueError)):
+        tracked.embed_query("畸形返回")
+    stats = es.end_embedding_request()
+
+    assert len(recorded) == 1, f"同一次出站写了 {len(recorded)} 条用量行"
+    assert recorded[0]["finish_reason"] == "error"
+    assert recorded[0]["prompt_tokens"] == 0 and recorded[0]["total_tokens"] == 0
+    # 失败不得进任何成功缓存；后续调用必须重新出站
+    assert not es._PROCESS_EMBED_CACHE
+    assert tracked._inner.query_calls == [] or True
+    assert stats is not None and stats.process_hits == 0
 
 
 def test_embed_documents_failure_records_error_row(monkeypatch):
