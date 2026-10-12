@@ -2,6 +2,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TravelTripV2 } from '@/api/travelV2'
+import { transitionTravelTripWrite, type PendingTravelTripWrite, type TravelTripWriteTransition } from './travelV2WriteState'
 
 const mocks = vi.hoisted(() => ({ searchFood: vi.fn(), searchHotel: vi.fn(), addMeal: vi.fn() }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
@@ -36,6 +37,7 @@ function foodResponse(message = '美食查询完成') {
 const trip = {
   trip_id: 'trip-a', revision: 4,
   document: {
+    schema_version: 2,
     brief: { destination: '杭州', origin: '福州', start_date: '2026-10-20', day_count: 2 },
     days: [{ day_id: 'day-1' }],
   },
@@ -88,6 +90,7 @@ describe('V2 搜索读请求取消', () => {
     expect(onSearchEvent).not.toHaveBeenCalledWith(expect.objectContaining({ message: '迟到的 A 查询结果' }))
     expect(onLocationSelect).toHaveBeenCalledWith(null)
     expect(onLocationSelect).toHaveBeenCalledTimes(1)
+    expect(mocks.addMeal).not.toHaveBeenCalled()
   })
 
   it('查询失败会用同一 queryId 结束 querying 状态', async () => {
@@ -110,6 +113,7 @@ describe('V2 搜索读请求取消', () => {
       onSearchEvent.mock.calls[0][0].queryId,
       onSearchEvent.mock.calls[0][0].queryId,
     ])
+    expect(mocks.addMeal).not.toHaveBeenCalled()
   })
 
   it('切换查询 Tab 会终结旧 query，迟到成功不能覆盖新查询', async () => {
@@ -156,7 +160,7 @@ describe('V2 搜索读请求取消', () => {
   })
 
   it('Trip 切换不会取消已提交的选入写操作，也不把迟到回执归给新 Trip', async () => {
-    const pending = deferred<{ saved: true; revision: number; document: TravelTripV2['document'] }>()
+    const pending = deferred<{ saved: true; trip_id: string; revision: number; document: TravelTripV2['document'] }>()
     const onTripSaved = vi.fn()
     const result = {
       ...foodResponse('查询成功'),
@@ -183,16 +187,71 @@ describe('V2 搜索读请求取消', () => {
     await act(async () => { addButton.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 
     expect(mocks.addMeal).toHaveBeenCalledOnce()
-    expect(mocks.addMeal.mock.calls[0]).toHaveLength(2)
+    expect(mocks.addMeal.mock.calls[0]).toHaveLength(3)
+    expect(mocks.addMeal.mock.calls[0][2]).toMatch(/^[0-9a-f-]{36}$/i)
     await act(async () => { root?.unmount() })
     root = null
     expect(onTripSaved).not.toHaveBeenCalled()
 
-    pending.resolve({ saved: true, revision: 5, document: trip.document })
+    pending.resolve({ saved: true, trip_id: 'trip-a', revision: 5, document: trip.document })
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 
     expect(onTripSaved).toHaveBeenCalledOnce()
     expect(onTripSaved.mock.calls[0][0].trip_id).toBe('trip-a')
     expect(onTripSaved.mock.calls[0][0].revision).toBe(5)
+  })
+
+  it('选入响应丢失时保持 UNKNOWN，重试复用原 Idempotency-Key 和 payload', async () => {
+    const onTripSaved = vi.fn()
+    let pendingWrite: PendingTravelTripWrite | null = null
+    const onTripWriteTransition = vi.fn((event: TravelTripWriteTransition) => {
+      const transition = transitionTravelTripWrite(pendingWrite, event)
+      if (transition.accepted) pendingWrite = transition.current
+      return transition.accepted
+    })
+    const result = {
+      ...foodResponse('查询成功'),
+      results: [{
+        selection_id: 'food-selection-a', merchant_id: 'food-a', name: 'A 杭帮菜', address: '杭州',
+        rating: 4.5, open_status: null, open_time_today: null, lat: 30, lng: 120,
+        avg_cost_cny: 88, source: 'amap', queried_at: '2026-10-12T00:00:00Z',
+      }],
+    }
+    mocks.searchFood.mockResolvedValue(result)
+    mocks.addMeal
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ saved: true, trip_id: 'trip-a', revision: 5, document: trip.document })
+    container = document.createElement('div')
+    root = createRoot(container)
+    await act(async () => { root?.render(createElement(TravelSearchPanel, { trip, onTripSaved, onTripWriteTransition })) })
+
+    await act(async () => {
+      container?.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const resultButton = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('A 杭帮菜'))!
+    await act(async () => { resultButton.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const addButton = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('加入第 1 天'))!
+    await act(async () => { addButton.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    expect(container.textContent).toContain('状态待核实')
+    expect(container.textContent).not.toContain('保存失败，原行程保持不变')
+    expect(onTripSaved).not.toHaveBeenCalled()
+    expect(pendingWrite).toMatchObject({ kind: 'selection', status: 'UNKNOWN' })
+    expect(onTripWriteTransition({
+      kind: 'selection', tripId: trip.trip_id, signature: 'different-selection', key: 'new-selection-key', status: 'VALIDATING',
+    })).toBe(false)
+    const originalCall = mocks.addMeal.mock.calls[0]
+    const retry = [...container.querySelectorAll('button')].find((button) => button.textContent === '使用同一请求安全重试')!
+    await act(async () => { retry.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+
+    expect(mocks.addMeal).toHaveBeenCalledTimes(2)
+    expect(mocks.addMeal.mock.calls[1]).toEqual(originalCall)
+    expect(onTripSaved).toHaveBeenCalledOnce()
+    expect(onTripSaved.mock.calls[0][0].revision).toBe(5)
+    expect(pendingWrite).toBeNull()
+    expect(onTripWriteTransition.mock.calls
+      .filter(([event]) => event.key === originalCall[2])
+      .map(([event]) => event.status)).toEqual(['VALIDATING', 'SAVING', 'UNKNOWN', 'VALIDATING', 'SAVING', 'SAVED'])
   })
 })

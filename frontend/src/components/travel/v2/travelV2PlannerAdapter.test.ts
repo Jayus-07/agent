@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { Itinerary } from '@/api/travel'
-import { itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
+import type { TravelTripV2 } from '@/api/travelV2'
+import { confirmedTimezoneFromTrip, itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
 
 const itinerary = {
   brief: {
     origin: '福州', destination: '杭州', start_date: '2026-12-01', days: 1,
-    party_size: 2, budget_cny: 4000, pace: 'relaxed', preferences: ['自然', '美食'],
+    party_size: 3, adults: 2, children: 1,
+    budget_cny: 4000, pace: 'relaxed', preferences: ['自然', '美食'],
     must_go: ['西湖'], avoid: ['爬山'], diet: '', lodging: '', transport: '',
   },
   days: [{
@@ -25,12 +27,12 @@ const itinerary = {
 
 describe('旅游 Agent 行程到 V2 文档的确定性转换', () => {
   it('保留日期、地点来源、必去项和路段事实，并把餐饮映射为 Day Item', () => {
-    const document = itineraryToTripDocumentV2(itinerary)
+    const document = itineraryToTripDocumentV2(itinerary, 'America/Los_Angeles')
 
     expect(document.schema_version).toBe(2)
     expect(document.brief).toMatchObject({
       origin: '福州', destination: '杭州', start_date: '2026-12-01',
-      day_count: 1, travelers: { adults: 2, children: 0 },
+      day_count: 1, timezone: 'America/Los_Angeles', travelers: { adults: 2, children: 1 },
       budget: { amount: 4000, currency: 'CNY' }, pace: 'relaxed',
     })
     expect(document.days[0].items[0]).toMatchObject({
@@ -55,5 +57,65 @@ describe('旅游 Agent 行程到 V2 文档的确定性转换', () => {
       kind: 'activity', activity_type: 'meal', place: null,
     })
     expect(document.days[0].legs).toHaveLength(0)
+  })
+
+  it('未知接驳耗时保持 unavailable/null，不映射为 0 分钟', () => {
+    const unknownLeg = {
+      ...itinerary,
+      days: [{
+        ...itinerary.days[0]!,
+        legs: [{
+          from_title: '西湖', to_title: '灵隐寺', minutes: null, distance_km: null,
+          mode: 'walk', cost_cny: null, source: 'amap:route', is_estimate: false,
+        }],
+      }],
+    } as unknown as Itinerary
+
+    const document = itineraryToTripDocumentV2(unknownLeg)
+    expect(document.days[0]?.legs[0]).toMatchObject({
+      duration_min: null, distance_m: null, cost_cny: null, reliability: 'unavailable',
+    })
+    expect(document.health.issues.some((issue) => issue.message.includes('接驳耗时未知'))).toBe(true)
+  })
+
+  it('需求 Schema 未提供时区时使用 UTC 格式占位，不把设备时区标成目的地时区', () => {
+    const document = itineraryToTripDocumentV2(itinerary)
+    expect(document.brief.timezone).toBe('UTC')
+    expect(document.health.issues).toContainEqual(expect.objectContaining({
+      code: 'timezone_unconfirmed',
+      message: expect.stringContaining('不是目的地时区'),
+    }))
+  })
+
+  it.each(['America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Auckland'])(
+    '跨设备时区保留已确认的目的地时区 %s', (confirmedTimezone) => {
+      const document = itineraryToTripDocumentV2(itinerary, confirmedTimezone)
+      expect(document.brief.timezone).toBe(confirmedTimezone)
+      expect(document.health.issues.some((issue) => issue.code === 'timezone_unconfirmed')).toBe(false)
+    },
+  )
+
+  it('拒绝无效时区值并提示目的地时区待确认', () => {
+    const document = itineraryToTripDocumentV2(itinerary, 'Not/A_Timezone')
+    expect(document.brief.timezone).toBe('UTC')
+    expect(document.health.issues.some((issue) => issue.code === 'timezone_unconfirmed')).toBe(true)
+  })
+
+  it('不把已有 Revision 上标为平台默认的时区当作目的地确认值', () => {
+    const assumedTrip = {
+      document: {
+        brief: { timezone: 'Asia/Shanghai' },
+        health: { issues: [{ code: 'timezone_assumed', severity: 'warning', message: '平台默认时区' }] },
+      },
+    } as unknown as TravelTripV2
+    const confirmedTrip = {
+      document: {
+        brief: { timezone: 'America/Los_Angeles' },
+        health: { issues: [] },
+      },
+    } as unknown as TravelTripV2
+
+    expect(confirmedTimezoneFromTrip(assumedTrip)).toBeNull()
+    expect(confirmedTimezoneFromTrip(confirmedTrip)).toBe('America/Los_Angeles')
   })
 })
