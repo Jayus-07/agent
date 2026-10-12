@@ -17,6 +17,7 @@ Phase 1 限制（报告中如实标注）：
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from statistics import median
 from typing import Any
@@ -132,8 +133,19 @@ def _recommendation_of(verdict: str, recommendation_cap: str | None) -> str:
     return "recommend" if recommendation_cap in (None, "recommend") else "cautious"
 
 
-def _llm_json(messages) -> Any:
-    resp = llm.invoke(messages)
+async def _llm_json(messages) -> Any:
+    """LLM JSON 调用（B1-A）：同步 invoke 移入线程池，避免阻塞事件循环。
+
+    本 workflow 由 API 事件循环上的 asyncio.create_task 驱动
+    （routes/selection_decision.py），协程体内直接同步 llm.invoke 会卡死
+    整个进程的并发请求，且 step 级 wait_for 定时器同处该 loop，超时形同虚设。
+    与 selection_decision/panel.py 的既有写法对齐（asyncio.to_thread）。
+
+    边界（如实记录）：to_thread 线程无法被强制终止——wait_for 超时只是
+    放弃等待并让 step 走 on_error 路径，已在途的同步 LLM 调用会跑到
+    Provider 客户端自身超时为止，迟到结果被丢弃不入 outputs。
+    """
+    resp = await asyncio.to_thread(llm.invoke, messages)
     return json.loads(resp.content.strip().strip("`").removeprefix("json").strip())
 
 
@@ -236,7 +248,9 @@ class SelectionDecision:
     async def review_pain(self, ctx):
         """Phase 1 降级：无评论数据，LLM 基于卖点/评分推断痛点（spec R3 ②）
 
-        内部 catch-all fallback 已吞掉一切异常并返回降级结果，无需 on_error="skip"。
+        内部 catch-all fallback 吞掉同步异常并返回降级结果，无需 on_error="skip"；
+        注意 B1-A 后 asyncio.wait_for 的 step 超时真实生效——超时以 CancelledError
+        打断本协程（不被 except Exception 捕获），走 executor 默认 on_error=abort。
         """
         from langchain_core.messages import HumanMessage, SystemMessage
         cands = ctx.outputs["competitor_data"]["candidates"]
@@ -247,7 +261,7 @@ class SelectionDecision:
                     "note": "痛点推断失败，差异化分析将仅基于结构化数据"}
         try:
             from backend.prompts.service import prompt_service
-            data = _llm_json([
+            data = await _llm_json([
                 SystemMessage(content=prompt_service.get_template_sync("selection_decision.review_pain")),
                 HumanMessage(content=material),
             ])
@@ -275,7 +289,7 @@ class SelectionDecision:
                         "reason": "差异化分析不可用（LLM 失败），保守拒绝"}
         try:
             from backend.prompts.service import prompt_service
-            data = _llm_json([
+            data = await _llm_json([
                 SystemMessage(content=prompt_service.get_template_sync("selection_decision.differentiation")),
                 HumanMessage(content=json.dumps(material, ensure_ascii=False, default=str)),
             ])
