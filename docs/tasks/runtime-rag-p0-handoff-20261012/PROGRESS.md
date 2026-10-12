@@ -1,12 +1,12 @@
 # 进展记录
 
-更新时间：2026-10-12（Asia/Shanghai）
+更新时间：2026-10-13（Asia/Shanghai）
 
 ## 当前基线与工作树
 
-- 最新 `origin/main`：`b0f71bc93727279780c68ea6334c9fe6f4731abf`（PR #40/#42/#43 已按用户批准依次合并）。
+- 最新 `origin/main`：`73c37d73c3b7c62711db276458912eed481ace7d`（PR #40/#42/#43/#44 已按用户批准依次合并）。
 - 安全治理工作树：`C:/Users/wh/.codex/worktrees/credential-security-p0-20261012/agent`，分支 `codex/credential-security-p0-20261012`。
-- #41 等待 #44 合入后再同步 main；#45/#47 当前均基于 `b0f71bc`。合并均使用 GitHub 正常 PR 流程，不改写 main 历史；每项合并前重新 fetch 并重验。
+- #41 的同步候选以 `73c37d7` 为第二父提交，定向验证已通过，待推送后 CI；#45/#47 仍基于 `b0f71bc`，下次合并前须同步最新 main。合并均使用 GitHub 正常 PR 流程，不改写 main 历史；每项合并前重新 fetch 并重验。
 
 ## 统一看板
 
@@ -15,11 +15,11 @@
 | B1-A | #40 | 已合并至 main，merge commit `ed28db1` | PR head `9cca719` / RAG PR Smoke run 111 SUCCESS，评测 job 按路径 SKIP；合并后隔离 Worktree 定向集 11 passed，merge SHA 无 main workflow/check run | 0 条未解决 review thread；无 GPT review submission | 排队上限/等待超时继续挂账，不扩本 PR |
 | B1-B | #42 | 已按用户批准合并至 main，merge commit `0c471fb` | 合并前 head `d0223b9` 的 RAG PR Smoke、Evaluation、Detect 全部 SUCCESS；合并后隔离 worktree 定向集 65 passed、9 xfailed；merge SHA 无 main workflow/check run | 3 条旧 review thread 已解决 | 已完成；Usage Attribution 与预算账本按 `tenant=eval` 对齐 |
 | B1-F | #43 | 已按用户批准合并至 main，merge commit `b0f71bc` | 合并前 run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS；合并后隔离 worktree 定向集 39 passed；merge SHA 无 main workflow/check run | 2 条旧 review thread 已解决 | 已完成；逻辑取消与物理 Provider 停止边界保持明确 |
-| RAG R0/R1 | #41 | head `4e2c247`，PR open、mergeable，未合并；base 仍是旧 main `a67449b` | 新增扫描器定向集 `10 passed`；secret-scan run 10 SUCCESS、RAG PR Smoke run 144 SUCCESS；原真实 Provider/性能/准确率证据保留 | 3 条旧 review thread 均已解决；当前 head 尚无新 review submission | 等 #44 代码合入后同步最新 main、重跑 Secret Scan 与 RAG 定向回归；全 refs 有 83 个历史模式命中待凭据持有人确认。轮换/旧值失效未完成，P0 阻断放行 |
-| 凭据安全治理 | #44 | 最新 head `b98cc4e`，PR open、mergeable，尚未合并 | 最新 RAG PR Smoke run 146 SUCCESS；5 脚本 `py_compile` 通过；缺配置两种场景均 5/5 网络前 fail closed；全假 `.env` + mock HTTP 验证配置及登录字段 5/5；最新 tree/diff/history-range scan 均 0 | GPT 指出的根 `.env` 加载问题已修复并 resolve；1/1 旧 thread 已解决；无新 review submission | 最新 `origin/main` tree 有 6 个模式命中，#44 head tree 为 0。全 refs 扫描为 83 个模式命中/27 路径（值未输出）；本机根与归档 `.env` 各 12 个命中。真实凭据轮换、撤销和旧值失效验证未做，P0 BLOCKED |
+| RAG R0/R1 | #41 | 本地同步候选 `9e06042`，PR 远端 head 仍为 `4e2c247`；未合并 | 本地定向集 `134 passed`；tree/diff/history Secret Scan 均 0；推送后 PR CI 待执行；此前 run 10/144 是旧 head 证据 | 3 条旧 review thread 已解决；同步后尚无新 review submission | 需推送同步候选并确认新 head 的 Secret Scan/CI。全 refs 有 83 个历史模式命中，不能等同于 83 个有效凭据；Redis/API Key 轮换和旧值失效验证仍未完成，P0 不得宣称关闭 |
+| 凭据安全治理 | #44 | 已按用户批准合并至 main，merge commit `73c37d7` | PR head RAG PR Smoke run 147 SUCCESS；merge SHA 无 workflow run/commit status。5 脚本 `py_compile`、缺配置网络前 fail closed 及全假 `.env`/mock HTTP 验证均通过；head tree/diff/history-range scan 为 0 | 1/1 旧 thread 已解决；未见新 review submission | 代码整改已进入 main；真实 Redis/API Key 轮换、撤销及旧值失效验证未做，安全 P0 仍 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
-| B1-C | #45 | head `d2f91a6` 已推送并同步 `b0f71bc`；PR open、mergeable，未合并 | 隔离 PostgreSQL 定向集 `110 passed in 48.93s`；PR run 140 SUCCESS；无真实 Provider 调用 | 3/3 旧 GPT review thread 已解决；当前 head 尚无新 review submission | 用户确认按当前 4 个注册 Workflow 验收；等待单独合并批准 |
-| B1-D | #47 | head `b0a1800` 已推送并同步 `b0f71bc`；PR open、mergeable，未合并 | 定向集 `134 passed in 12.65s`；隔离 PostgreSQL CAS 用例 `1 passed in 3.75s`；PR run 141 SUCCESS；CAS pytest 进程退出时另有 Proactor cleanup warning | 2/2 旧 GPT review thread 已解决；当前 head 尚无新 review submission | 未连接真实 Redis/Provider；cleanup warning 尚未确认归属。等待用户合并批准 |
+| B1-C | #45 | head `d2f91a6`，PR open、未合并；需从 `b0f71bc` 同步到 `73c37d7` 后再验收 | 隔离 PostgreSQL 定向集 `110 passed in 48.93s`；旧 head run 140 SUCCESS；无真实 Provider 调用 | 3/3 旧 GPT review thread 已解决；当前 head 尚无新 review submission | 用户确认按当前 4 个注册 Workflow 验收；最新 main 同步和新 CI 完成后再提交合并清单 |
+| B1-D | #47 | head `b0a1800`，PR open、未合并；需从 `b0f71bc` 同步到 `73c37d7` 后再验收 | 定向集 `134 passed in 12.65s`；隔离 PostgreSQL CAS 用例 `1 passed in 3.75s`；旧 head run 141 SUCCESS；CAS pytest 进程退出时另有 Proactor cleanup warning | 2/2 旧 GPT review thread 已解决；当前 head 尚无新 review submission | 未连接真实 Redis/Provider；cleanup warning 尚未确认归属。最新 main 同步和新 CI 完成后再提交合并清单 |
 | B1-E | 新 PR | 已核对源码配置和测试，尚未施工 | — | — | B1-C/#45、B1-D/#47 尚未合入；生产 Checkpointer 的实际运行状态无可读证据，需满足前序门禁并取得运行态配置 |
 
 ## 已取得证据
@@ -34,6 +34,8 @@
 - 安全扫描范围补查：以 PR #41 新增规则扫描最新 `origin/main=b0f71bc`，工作树命中 6 处：根 `.env.example`、三个 Travel 验收脚本，以及 `context_budget_verify.py`、`dgroup_sse_test.py` 两个验证脚本；PR #44 当前 tree/diff/history-range 均 0。全 refs 83 个模式命中是历史风险信号，不是 83 个已确认有效凭据。根 `.env` 和 235 个可读归档文件中的一个 `.env` 各有 12 条命中；值未输出、活动状态未验证。根 `.env` 与归档均为用户工作树数据，未修改。未改写 main 历史；P0 不得关闭。
 - PR #42 已同步 main（含 #40）至 head `d0223b9` 并按用户批准通过 GitHub 正常 merge 流程，merge commit `0c471fb`（父提交 `ed28db1` 与 `d0223b9`）。合并前 RAG PR Smoke、Evaluation、Detect 全部 SUCCESS。合并后在 detached worktree `D:/tmp/agent-pr42-postmerge-20261012`、隔离本地 PostgreSQL 集群，重跑 Eval、LLM governance、Travel intent 与 B1-A 回归集，`65 passed, 9 xfailed in 31.17s`；无真实 Provider 调用。merge SHA 没有 GitHub Actions run/commit status；未把 PR head CI 冒作 merge SHA CI。
 - PR #43 已同步 main `0c471fb` 至 head `6b1c32a`，并经单独批准通过 GitHub 正常 merge 流程合入 main，merge commit `b0f71bc`。run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS。合并后在 detached worktree `D:/tmp/agent-pr43-postmerge-20261012`、隔离本地 PostgreSQL 集群重跑终态取消、错误协议与 B1-A 选择工作流定向集，`39 passed in 35.46s`；无真实 Provider 调用。merge SHA 没有 GitHub Actions run/commit status；未把 PR head CI 冒作 merge SHA CI。原 2 条 GPT review thread 已解决。
+- PR #44 head `b43f52a` 经用户单独批准，通过 GitHub 正常 merge 流程合入 main，merge commit `73c37d73c3b7c62711db276458912eed481ace7d`；合并前 main/base 为 `b0f71bc`、PR mergeable=true、旧 review thread 已解决，RAG PR Smoke run 147 SUCCESS。合并后 PR 状态 closed/merged；merge SHA 未触发 workflow run/commit status，故未报告 merge-SHA CI 通过。Travel 五个脚本的环境读取与 fail-closed 验证、Secret Scan 零命中证据均来自 PR head；无真实服务调用或凭据轮换。
+- 为 PR #41 从远端 head `4e2c247` 建立隔离同步候选；fetch 后 `origin/main=73c37d7`，`merge-tree` 无冲突，以普通 merge 生成候选 `9e06042`，没有重写 main 或 PR 历史。定向测试 `backend/tests/rag/test_embedding_singleton.py`、`test_embed_cache.py`、`test_embedding_request_cache.py`、MultiQuery context/trace/token budget/rhetorical/simple-fact routing、`test_hybrid.py` 与 `backend/tests/test_scan_secrets.py`：`134 passed in 15.24s`。PR #41 scanner tree、`origin/main..HEAD` diff、history 扫描均 0；未调用真实 Provider，既有真实 Provider/性能/准确率证据未重跑。同步候选尚未推送，PR CI 未触发。
 - B1-C PR #45 当前 head `d2f91a6` 已同步 `b0f71bc` 并推送；Workflow / DirectExecutor / RequestContext / SafeToolExecutor / B1-A 相关定向集在隔离 PG 上 `110 passed in 48.93s`。显式设置本地 `ALLOW_UNAUTHENTICATED=true` 与 `ENVIRONMENT=development`，不调用真实 Provider。deadline 取消单测单独验证通过；PR run 140 SUCCESS。源码仅有 4 个注册 Workflow；用户已确认按这 4 类验收，未新增虚构工作流。
 - B1-D PR #47 当前 head `b0a1800` 已同步 `b0f71bc` 并推送；Prompt Service、Release Service、Hot Reload、Prompts API、Release API、Prompt Trace 定向集 `134 passed in 12.65s`；隔离 PostgreSQL CAS 用例 `1 passed in 3.75s`。`py_compile`、Ruff、`git diff --check` 通过；没有连接共享 PostgreSQL、真实 Redis 或 Provider。PR run 141 SUCCESS。CAS pytest 成功后 Windows 进程退出有 asyncio Proactor cleanup warning，归属未确认。
 - B1-E 只读核对：仓库 Docker Compose 的 Travel Checkpointer 默认值为 PostgreSQL 开启，应用配置的默认值则为关闭；运行时图状态区分 `healthy/degraded/disabled`，生产启动对缺少 PostgresSaver 依赖有显式校验。现有 interrupt 测试使用 `MemorySaver`，不能证明生产配置。当前工作区没有生产部署配置读取或实例运行状态访问，故不能确认实际生产后端与 interrupt 开关；未修改 B1-E 代码，需取得不含凭据的生产配置/运行状态证据后再施工。
@@ -57,7 +59,7 @@
 
 ## 下一步
 
-1. PR #40/#42/#43 已依序按用户批准合入并完成各自 post-merge 定向验收。#44/#45/#47 当前 head 均基于 `b0f71bc`；#44 最新 head run 146、#45 run 140、#47 run 141 均成功。
+1. PR #40/#42/#43/#44 已依序按用户批准合入。#44 merge commit `73c37d7` 无 main workflow/status；PR head run 147 成功。#41 同步候选 `9e06042` 本地定向集 `134 passed`、三类 Secret Scan 均 0，待推送后 CI；#45/#47 仍需同步 `73c37d7` 并重新验收。
 2. 凭据持有人授权后完成 Redis 与 API Key 轮换、部署更新、撤销旧值及旧值认证失败验证；确认测试登录常量仅供隔离环境使用。此前 P0 BLOCKED。
-3. PR #44 五个验证脚本、示例和统一看板已提交至 head `b98cc4e`，run 146 SUCCESS。全 refs 扫描完成：83 个模式命中/27 路径，需凭据持有人确认潜在活凭据并执行 Redis/API Key 轮换、旧值撤销及失效验证；完成前 P0 BLOCKED。随后提交 #44 合并清单并取得单独用户批准。#41 仍需 #44 代码合入后同步并重跑 Secret Scan 与 RAG 定向验收。
-4. 只有 PR #41 和 #42 合并后才施工 RAG MultiQuery P0；B1-C/#45、B1-D/#47 等用户审批。B1-E 先取得生产 Checkpointer 实际状态证据，再独立施工。
+3. #44 代码整改已合入 main，但全 refs 扫描的 83 个模式命中仍需凭据持有人确认，不能视作 83 个有效凭据。执行 Redis/API Key 轮换、消费者更新、撤销旧值并验证旧值认证失败前，安全 P0 保持 BLOCKED；本任务未触碰真实服务凭据，也未重写共享历史。
+4. PR #41 新 head CI 成功后，给用户提交明确合并清单并取得单独批准；因凭据未轮换，安全 P0 仍不得宣称关闭。只有 PR #41/#42 合并后才施工 RAG MultiQuery P0。B1-C/#45、B1-D/#47 需先同步最新 main、重跑门禁并分别取得用户批准；B1-E 先取得生产 Checkpointer 实际状态证据，再独立施工。
