@@ -341,6 +341,25 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).toContain('已保存')
   })
 
+  it('成功刷新冲突后退出冲突状态并显示重新编辑提示', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
+    mocks.applyEdit.mockRejectedValueOnce(new ApiError('Revision changed', 409, undefined, 'VERSION_CONFLICT'))
+
+    await click(page.container, (button) => button.textContent?.includes('编辑行程') ?? false)
+    await click(page.container, (button) => button.textContent === '提交 trip-a 编辑')
+    await settle()
+    expect(page.container.textContent).toContain('CONFLICT')
+
+    await click(page.container, (button) => button.textContent === '刷新最新版本并重新编辑')
+    await load(tripRequest(1), makeTrip('trip-a', '行程 A 最新', 2))
+
+    expect(page.container.textContent).toContain('已载入服务器最新 Revision v2；原修改未自动重放，请重新编辑。')
+    expect(page.container.textContent).not.toContain('版本冲突')
+    expect([...page.container.querySelectorAll('button')].some((button) => button.textContent === '刷新最新版本并重新编辑')).toBe(false)
+    expect(page.container.querySelector('[role="status"]')?.textContent).toContain('原修改未自动重放')
+  })
+
   it('选入结果 UNKNOWN 时锁定工作台 Tab，并只允许同一选入请求重试', async () => {
     const page = mount('trip-a')
     const tripA = makeTrip('trip-a', '行程 A')
@@ -365,6 +384,9 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(mocks.selectionWrite).toHaveBeenCalledTimes(2)
     expect(mocks.selectionWrite.mock.calls[1]).toEqual(originalRequest)
     expect([...searchNav.querySelectorAll('button')].every((button) => !button.disabled)).toBe(true)
+    const mobileUndo = page.container.querySelector<HTMLButtonElement>('button[aria-label="撤销最近一次正式变更"]')
+    expect(mobileUndo).not.toBeNull()
+    expect(mobileUndo?.disabled).toBe(false)
     await click(page.container, (button) => searchNav.contains(button) && button.textContent?.trim() === '酒店')
     expect([...searchNav.querySelectorAll('button')].find((button) => button.textContent?.trim() === '酒店')?.getAttribute('aria-pressed')).toBe('true')
     expect(mocks.applyEdit).not.toHaveBeenCalled()
