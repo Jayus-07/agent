@@ -314,8 +314,28 @@ class TestCheckpointerProductionFatal:
 
 
 class TestReadonlyPassword:
-    """2026-09-21 审查 #12 回归：PG_READONLY_PASSWORD 有内置开发缺省值，
-    生产漏配 = 静默使用公开口令。任何环境 warning 点名；production fatal。"""
+    """只读账号只使用显式配置；漏配时开发环境告警、生产环境阻断。"""
+
+    def test_missing_database_password_has_no_fallback(self, monkeypatch):
+        from backend.config import database
+
+        monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
+        assert database._configured_readonly_password() == ""
+
+    def test_migration_does_not_embed_password(self):
+        from pathlib import Path
+
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "sql"
+            / "migrations"
+            / "004_readonly_role.sql"
+        ).read_text(encoding="utf-8")
+        create_role = next(
+            line for line in migration.splitlines()
+            if "CREATE ROLE agent_readonly" in line
+        )
+        assert "PASSWORD" not in create_role.upper()
 
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
