@@ -11,6 +11,7 @@ import {
   type TripItemV2,
   type TripLegModeV2,
 } from '@/api/travelV2'
+import { travelWriteStatusLabel, travelWriteStatusRole, travelWriteStatusTone, type TravelWriteStatus } from './travelV2WriteState'
 
 export type TravelV2EditPanel =
   | { kind: 'item'; itemId: string }
@@ -26,7 +27,6 @@ const placeStatus: Record<TravelSearchStatusV2, string> = {
   provider_unavailable: '地点数据源不可用',
   disabled: '地点检索未启用',
 }
-
 const transportChoices: Array<{ mode: TripLegModeV2; label: string; icon: typeof Bus }> = [
   { mode: 'walk', label: '步行', icon: Footprints },
   { mode: 'transit', label: '公共交通', icon: Bus },
@@ -42,8 +42,12 @@ export default function TravelV2EditDialog({
   route,
   saving,
   error,
+  writeStatus = null,
+  writeMessage = '',
   onClose,
   onEdit,
+  onRetry,
+  onRefreshConflict,
 }: {
   panel: TravelV2EditPanel
   trip: TravelTripV2
@@ -52,8 +56,12 @@ export default function TravelV2EditDialog({
   route?: { fromItemId: string; toItemId: string }
   saving: boolean
   error: string
+  writeStatus?: TravelWriteStatus | null
+  writeMessage?: string
   onClose: () => void
   onEdit: (operation: TripEditOperationV2, summary: string) => Promise<boolean>
+  onRetry?: () => Promise<boolean>
+  onRefreshConflict?: () => Promise<boolean>
 }) {
   const [view, setView] = useState<'menu' | 'add' | 'search' | 'activity' | 'time' | 'move' | 'transport'>('add')
   const [keyword, setKeyword] = useState('')
@@ -186,7 +194,12 @@ export default function TravelV2EditDialog({
       </header>
 
       {error && <p role="alert" className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-[11px] leading-5 text-rose-700">{error}</p>}
-      {saving && <p role="status" className="mb-3 rounded-xl bg-[#eff6ff] px-3 py-2 text-[11px] text-[#356fae]">正在保存正式行程…</p>}
+      {writeStatus && <div role={travelWriteStatusRole(writeStatus)} className={`mb-3 rounded-xl border px-3 py-2.5 text-sm leading-5 ${travelWriteStatusTone(writeStatus)}`}>
+        <p><span className="mr-1.5 font-semibold">{travelWriteStatusLabel(writeStatus)}</span>{writeMessage}</p>
+        {writeStatus === 'UNKNOWN' && onRetry && <button type="button" onClick={() => void onRetry()} className="mt-2 min-h-10 rounded-lg border border-amber-300 bg-white px-3 text-sm font-semibold text-amber-950">使用同一请求安全重试</button>}
+        {writeStatus === 'CONFLICT' && onRefreshConflict && <button type="button" onClick={() => void onRefreshConflict()} className="mt-2 min-h-10 rounded-lg border border-amber-300 bg-white px-3 text-sm font-semibold text-amber-950">刷新最新版本并重新编辑</button>}
+      </div>}
+      {saving && !writeStatus && <p role="status" className="mb-3 rounded-xl bg-[#eff6ff] px-3 py-2 text-[11px] text-[#356fae]">正在校验并保存正式行程…</p>}
 
       {view === 'menu' && selectedItem && <div className="grid grid-cols-2 gap-2">
         <button type="button" disabled={saving || locked} onClick={() => setView('search')} className="flex h-11 items-center gap-2 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50"><ArrowRightLeft size={14} aria-hidden />替换地点</button>
