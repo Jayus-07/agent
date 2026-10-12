@@ -161,6 +161,85 @@ def test_multi_query_timeout_signal_stops_retries_and_skips_fallback(
     assert calls["failed"] == 1
 
 
+@pytest.mark.parametrize("cancel_stage", ["build", "reserve", "identity"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_multi_query_cancel_during_fallback_setup_releases_unexecuted_reservation(
+    monkeypatch, cancel_stage, is_async,
+):
+    """Fallback 初始化期间超过 deadline 时，不预占或调用已取消的 Provider。"""
+    import backend.infra.llm.proxy as proxy
+    from backend.config.model_roles import RoleRuntimeDefaults
+
+    event = threading.Event()
+    calls = {"reserved": 0, "released": 0, "invoked": 0}
+
+    class _Fallback:
+        def invoke(self, *_args, **_kwargs):
+            calls["invoked"] += 1
+
+        async def ainvoke(self, *_args, **_kwargs):
+            calls["invoked"] += 1
+
+    def build_fallback(_role):
+        if cancel_stage == "build":
+            event.set()
+        return "mq-backup", _Fallback()
+
+    def reserve(*_args, **_kwargs):
+        calls["reserved"] += 1
+        if cancel_stage == "reserve":
+            event.set()
+
+    def model_extras(_model):
+        if cancel_stage == "identity":
+            event.set()
+        return {}
+
+    monkeypatch.setattr(
+        proxy, "_role_runtime_policy",
+        lambda _role: RoleRuntimeDefaults(failure_policy="fallback"),
+    )
+    monkeypatch.setattr(proxy, "_get_role_fallback_llm", build_fallback)
+    monkeypatch.setattr(proxy, "_get_provider_for", lambda _model: "test-provider")
+    monkeypatch.setattr(proxy, "canonical_model_id", lambda model: model)
+    monkeypatch.setattr(proxy, "get_active_model_name", lambda: "mq-primary")
+    monkeypatch.setattr(proxy, "get_current_resolved_model", lambda: None)
+    monkeypatch.setattr(proxy, "set_current_resolved_model", lambda _ctx: None)
+    monkeypatch.setattr(proxy, "model_identity_extras", model_extras)
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.reserve_model_call", reserve,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.release_model_reservation",
+        lambda: calls.__setitem__("released", calls["released"] + 1),
+    )
+
+    token = proxy._role_cancellation_event.set(event)
+    try:
+        with pytest.raises(TimeoutError, match="deadline expired"):
+            if is_async:
+                async def invoke():
+                    return await proxy._ahandle_terminal_failure(
+                        TimeoutError("primary failed"), (), {},
+                        model_name="mq-primary", role="multi_query",
+                    )
+                asyncio.run(invoke())
+            else:
+                proxy._handle_terminal_failure(
+                    TimeoutError("primary failed"), (), {},
+                    model_name="mq-primary", role="multi_query",
+                )
+    finally:
+        proxy._role_cancellation_event.reset(token)
+
+    expected_reservations = 0 if cancel_stage == "build" else 1
+    assert calls == {
+        "reserved": expected_reservations,
+        "released": expected_reservations,
+        "invoked": 0,
+    }
+
+
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async, caplog):
     """角色配置的 fallbackModel 优先于全局 fallback，预占使用同一模型。"""

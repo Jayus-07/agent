@@ -107,9 +107,13 @@ def _role_call_cancelled(role: str) -> bool:
     return bool(event is not None and event.is_set())
 
 
+class _RoleCallCancelled(TimeoutError):
+    """区分 Provider 超时和 Provider 尚未启动前的逻辑取消。"""
+
+
 def _raise_if_role_call_cancelled(role: str) -> None:
     if _role_call_cancelled(role):
-        raise TimeoutError("multi_query role deadline expired")
+        raise _RoleCallCancelled("multi_query role deadline expired")
 
 
 def _bind_role_fallback_generation_kwargs(fallback):
@@ -584,6 +588,8 @@ def _handle_terminal_failure(
 
     # 1) 备用模型
     fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
+    if not skip_fallback:
+        _raise_if_role_call_cancelled(role)
     if fb is not None:
         from backend.infra.llm.budget import (
             release_model_reservation,
@@ -595,6 +601,7 @@ def _handle_terminal_failure(
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
         reserve_model_call("fallback", model_name=fallback_model)
         try:
+            _raise_if_role_call_cancelled(role)
             # P1 模型归属：fallback 接管期间上下文改挂备用模型，
             # 其产出的用量按真实接管者结算（外层 _record_tokens 消费）
             _prev_ctx = get_current_resolved_model()
@@ -605,6 +612,7 @@ def _handle_terminal_failure(
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
             ))
+            _raise_if_role_call_cancelled(role)
             result = _bind_role_fallback_generation_kwargs(fb).invoke(
                 *args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
@@ -618,6 +626,9 @@ def _handle_terminal_failure(
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
+        except _RoleCallCancelled:
+            release_model_reservation()
+            raise
         except Exception as e:
             if _is_transient(e):
                 review_model_reservation("fallback_failed_possibly_billed")
@@ -671,6 +682,8 @@ async def _ahandle_terminal_failure(
     }
     skip_fallback = _role_skips_fallback(role)
     fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
+    if not skip_fallback:
+        _raise_if_role_call_cancelled(role)
     if fb is not None:
         from backend.infra.llm.budget import (
             release_model_reservation,
@@ -680,6 +693,7 @@ async def _ahandle_terminal_failure(
 
         reserve_model_call("fallback", model_name=fallback_model)
         try:
+            _raise_if_role_call_cancelled(role)
             # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
             _prev_ctx = get_current_resolved_model()
             set_current_resolved_model(ResolvedModelContext(
@@ -690,6 +704,7 @@ async def _ahandle_terminal_failure(
                 **model_identity_extras(fallback_model),
             ))
             fallback = _bind_role_fallback_generation_kwargs(fb)
+            _raise_if_role_call_cancelled(role)
             result = await fallback.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             try:
@@ -702,6 +717,9 @@ async def _ahandle_terminal_failure(
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
+        except _RoleCallCancelled:
+            release_model_reservation()
+            raise
         except asyncio.CancelledError:
             review_model_reservation("fallback_cancelled_possibly_billed")
             raise
