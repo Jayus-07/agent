@@ -186,6 +186,47 @@ _TIER1_MAX_CHARS = 8
 _TIER1_STRIP_RE = re.compile(r"[，。！？、；：「」《》\s!?;,.\[\]{}()\"'：:？—\-…]")
 
 
+# ── 简单事实问句（R1-B 单一事实来源，2026-10-12）───────────────
+# 为什么收归这里：multi_query._is_complex（分类器不可用时的兜底）与
+# _classify_query_tier 曾各持一套顺序——兜底把「强信号」排在简单事实豁免
+# 之前，导致「退款审核时间是多少？」一旦落到兜底就被"退款/审核"当业务
+# 关键词判成复杂问句，白付 1 次 LLM 改写（~1.8s）+ 3 路检索。
+# 现在两份清单与判定都从这里导出，禁止在 multi_query 另建分表。
+SIMPLE_PREFIXES = ("什么是", "多少", "几点", "几号", "谁", "哪个", "哪里")
+
+# 简单事实问句模式（2026-09-03 P1-7）：单一数值/时间点答案，改写只会放大重复检索。
+SIMPLE_FACT_PATTERNS = (
+    "是多少", "是多久", "多久", "几天", "多长时间", "什么时间", "什么时候", "多少钱", "多少个",
+)
+
+
+def is_simple_fact_query(query: str, *, sentence_parts: list | None = None) -> str:
+    """判定单意图简单事实问句，命中返回原因，否则返回空串。
+
+    边界：只对「单子句、单疑问、无多意图连接词」的问句生效。含对比/并列
+    诉求的问句即使带「是多少」也不豁免——那正是 MultiQuery 该干的活。
+    """
+    q = (query or "").strip()
+    if not q:
+        return ""
+    parts = sentence_parts
+    if parts is None:
+        parts = [x.strip() for x in re.split(r'[。！？；，、!?;,]', q) if x.strip()]
+    # 多子句（≥2）天然是多诉求结构，不豁免
+    if len(parts) >= 2:
+        return ""
+    if any(c in q for c in _MULTI_INTENT_CONNECTIVES):
+        return ""
+    if any(p in q for p in COMPLEX_STRONG_PATTERNS):
+        return ""
+    for pat in SIMPLE_FACT_PATTERNS:
+        if pat in q:
+            return f"简单事实问句({pat})"
+    if q.startswith(SIMPLE_PREFIXES):
+        return "简单事实问句"
+    return ""
+
+
 def _classify_query_tier(query: str) -> str:
     """三层查询分类。统一控制 BM25 开关 + MultiQuery 触发。
 
@@ -227,9 +268,15 @@ def _classify_query_tier(query: str) -> str:
     #   这类单子句短问里 流程+怎么 天然共现，仍算单一意图（任务书 §21 原例）。
     strong_hits = [p for p in COMPLEX_STRONG_PATTERNS if p in q]
     weak_hits = [p for p in COMPLEX_WEAK_PATTERNS if p in q]
+    # R1-B（P1-D 修正后）：简单事实豁免只作用于**弱信号叠加**分支，与基线
+    # d1b9668 的 tier 语义保持一致（短问/Tier-2 标识符/弱信号单命中的既有
+    # 行为不变）。强信号恒为 MQ：is_simple_fact_query 在强信号命中时必然
+    # 返回空串，因此不会降级真正的多意图问句。
     if strong_hits:
         return "hybrid_multi_query"
     if len(weak_hits) >= 2 and (len(sentence_parts) >= 2 or len(q) > 16):
+        if is_simple_fact_query(q, sentence_parts=sentence_parts):
+            return "hybrid"
         return "hybrid_multi_query"
     if len(q) > 40 and any(c in q for c in _MULTI_INTENT_CONNECTIVES):
         return "hybrid_multi_query"

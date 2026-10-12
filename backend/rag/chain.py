@@ -265,6 +265,10 @@ class RAGChain:
         # 互相覆盖串扰；现随请求上下文隔离，正式出口 = pipeline.ask_result
         # 随返回值带回。属性名保留仅为兼容既有读取点。
         self._chains_dirty = False
+        # R0（2026-10-12）：最近一次检索的 embedding 统计兜底字段；权威读取
+        # 点是请求上下文 ctx.embedding_stats（并发安全），本字段只作直连
+        # 调试出口，避免与单例并发语义混淆。
+        self._last_embedding_stats = None
 
         self._build_retrievers()
         self._build_chains()
@@ -735,7 +739,19 @@ class RAGChain:
         if self._chains_dirty:
             self._build_chains()
             self._chains_dirty = False
+        # ── R0/R1-A：请求级 embedding 总账（跨 attempt + 跨线程汇总）──────
+        # 生命周期 = 一次 ask（不是一次 _execute）：self-correction 会在同一
+        # 用户请求内再次 _execute，若按 attempt 开闭，先前的统计会被 end 掉、
+        # ctx.embedding_stats 被后一次覆盖。这里统一在 finally 汇总上报一次，
+        # 得到的是"本次问答一共出站几次/复用几次/唯一输入几个"的请求级口径。
+        from backend.rag.embedding_singleton import (
+            begin_embedding_request,
+            end_embedding_request,
+            report_embedding_request,
+        )
+
         trace, t_total = self._start(question, session_id)
+        begin_embedding_request()
         try:
             ctx = get_context()
             ctx.meta = {}
@@ -775,6 +791,13 @@ class RAGChain:
 
             record_rag_stage("total", (_time.time() - t_total) * 1000)
             raise
+        finally:
+            # 请求级 embedding 总账收口：无论成功/失败/自纠正，只上报一次。
+            embedding_stats = end_embedding_request()
+            if embedding_stats is not None:
+                self._last_embedding_stats = embedding_stats
+                report_embedding_request(embedding_stats)
+                self._emit_embedding_stats(embedding_stats)
 
     def _start(self, question: str, session_id: str):
         """开启 Trace + root span。
@@ -936,6 +959,46 @@ class RAGChain:
             except Exception:
                 logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
                              exc_info=True)
+
+    def _emit_embedding_stats(self, stats) -> None:
+        """把单请求 embedding 统计落到请求上下文 / Trace / 日志 / Prometheus。
+
+        R0 口径要求「调用次数、唯一输入数、复用次数」三者可读且与实际
+        provider 调用一致：同一份 stats 同时进 ctx.embedding_stats（供
+        pipeline / ask_result 读出）、trace event（供逐请求追溯）与
+        record_rag_stage("embedding", 累计出站耗时)（供 Grafana 长期时序）。
+        """
+        try:
+            get_context().embedding_stats = stats
+        except Exception:  # noqa: BLE001 — 观测旁路不影响主链
+            pass
+        if stats is None:
+            return
+        try:
+            from backend.observability.metrics import record_rag_stage
+
+            record_rag_stage("embedding", stats.duration_ms)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from backend.observability.tracer import trace_collector
+
+            trace = trace_collector.current()
+            span = trace.spans[-1] if trace is not None and trace.spans else None
+            if span is not None:
+                trace_collector.add_event(
+                    span, "embedding_stats", "info",
+                    "检索期 embedding 出站/复用统计",
+                    data=stats.as_dict(),
+                )
+        except Exception:  # noqa: BLE001 — Trace 旁路
+            pass
+        logger.info(
+            f"[RAGChain] embedding 统计: requested={stats.requested} "
+            f"computed={stats.computed} request_hits={stats.request_hits} "
+            f"process_hits={stats.process_hits} unique={stats.unique_inputs} "
+            f"out_ms={stats.duration_ms:.1f} dedup={stats.dedup_ratio:.2f}"
+        )
 
     def _record_rag_metric(self, status: str) -> None:
         """埋点 RAG 查询结果到运营指标（2026-08-11）。"""
@@ -1204,6 +1267,10 @@ class RAGChain:
         )
 
         start_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS)
+        # R0/R1-A 的 embedding 总账在 ask() 生命周期开闭（见 RAGChain.ask）：
+        # _execute 会被 self-correction 在同一用户请求内二次调用，若在此处
+        # start/end 会把每一次尝试当成独立请求、后一次覆盖 ctx.embedding_stats
+        # （P1 审查）。这里只负责检索预算。
         try:
             result = active_chain.invoke({"input": question, "chat_history": chat_history})
         finally:

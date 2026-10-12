@@ -536,10 +536,58 @@ rag_version_filtered_total = Counter(
     "RAG 生成上下文中被版本窗口过滤剔除的证据条数（§6 版本治理消费方，R4）",
 )
 
+# ── RAG 检索请求级 Embedding 复用观测（R0/R1-A，2026-10-12）──
+# 为什么存在：一次问答曾在 Doc/Chunk/Hybrid/MultiQuery 路径各自重嵌同一查询
+# （审计 P2-1 实测 6 次）。本组指标区分「真实出站调用」与「请求内/进程内复用」，
+# 标签只取低基数枚举；原始 query、request_id、tenant 只进 Trace，不进时序库。
+rag_embedding_calls_total = Counter(
+    "rag_embedding_calls_total",
+    "Embedding 真实出站调用次数（按 kind 与 provider 低基数枚举）",
+    labelnames=("kind", "provider"),  # kind: query | documents
+)
+
+rag_embedding_cache_total = Counter(
+    "rag_embedding_cache_total",
+    "Embedding 命中复用的次数（按来源）",
+    labelnames=("hit_source",),  # request | process
+)
+
+rag_embedding_dedup_ratio = Histogram(
+    "rag_embedding_dedup_ratio",
+    "单请求 embedding 去重比 = 1 - 真实出站调用数 / 请求内 embedding 总请求数",
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+
+rag_embedding_duration_seconds = Histogram(
+    "rag_embedding_duration_seconds",
+    "Embedding 真实出站调用耗时（秒，按 kind）",
+    labelnames=("kind",),  # query | documents
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20),
+)
+
+rag_embedding_request_total = Counter(
+    "rag_embedding_request_total",
+    "单请求 embedding 统计（按结果归类，用于核对去重比与出站次数）",
+    labelnames=("result",),  # computed | request_hit | process_hit
+)
+
+rag_embedding_call_errors_total = Counter(
+    "rag_embedding_call_errors_total",
+    "Embedding 出站失败/超时次数（按 kind 与状态；失败不写 token 消费）",
+    labelnames=("kind", "status"),  # status: error
+)
+
+rag_embedding_requested_per_scope = Histogram(
+    "rag_embedding_requested_per_scope",
+    "每个 embedding 作用域的向量化请求次数（主请求 + retrieval 线程池自建作用域）",
+    buckets=(1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50),
+)
+
 # ── RAG 阶段时延（2026-10-06 Grafana 观测重构，Grafana 04 页长期时序）──
 # stage 固定低基数枚举，禁止扩展：
 #   retrieve = 检索主阶段（BM25+向量+同文档扩展，到 context 就绪为止，含内部 rerank）
 #   rerank   = RerankCompressor 压缩耗时（retrieve 的子阶段）
+#   embedding = 检索期 query 向量化累计耗时（R1-A：区分出站与复用，2026-10-12）
 #   generate = LLM 生成（context 就绪 → chain.invoke 返回）
 #   total    = RAGChain.ask() 全链（含 verify/gate）
 rag_stage_duration_seconds = Histogram(
