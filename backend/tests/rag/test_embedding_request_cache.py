@@ -572,10 +572,51 @@ def test_malformed_provider_response_records_single_error_row(monkeypatch, bad_s
     assert len(recorded) == 1, f"同一次出站写了 {len(recorded)} 条用量行"
     assert recorded[0]["finish_reason"] == "error"
     assert recorded[0]["prompt_tokens"] == 0 and recorded[0]["total_tokens"] == 0
-    # 失败不得进任何成功缓存；后续调用必须重新出站
+    # 失败不得进任何成功缓存（进程级缓存为空 + 没有命中复用）
     assert not es._PROCESS_EMBED_CACHE
-    assert tracked._inner.query_calls == [] or True
-    assert stats is not None and stats.process_hits == 0
+    assert stats is not None and stats.process_hits == 0 and stats.computed == 1
+    assert stats.request_hits == 0
+    # 失败后重试必须重新出站：第二次仍失败 → 仍只留一条 error 行
+    es.begin_embedding_request(reset=True)
+    with pytest.raises((TypeError, ValueError)):
+        tracked.embed_query("畸形返回")
+    after = es.end_embedding_request()
+    assert len(recorded) == 2, "重试没有重新出站（疑似命中成功缓存）"
+    assert all(row["finish_reason"] == "error" for row in recorded)
+    assert after is not None and after.computed == 1, after
+
+
+def test_valid_provider_vector_records_dimension():
+    """合法返回：记下真实向量维度，防止"声称校验维度"却没有实际校验。
+
+    维度校验由 _to_vector 的逐元素 float 转换保证；这里断言总账如实记录
+    维度，malformed 用例（非数值/字符串/字典）则直接失败。
+    """
+    dim = es.EMBEDDING_DIM
+    inner = _FakeInner()
+    inner.embed_query = lambda text: [0.25] * dim  # type: ignore[assignment]
+    tracked = _make_tracked(inner)
+    es.begin_embedding_request(reset=True)
+    vector = tracked.embed_query("维度校验")
+    stats = es.end_embedding_request()
+
+    assert len(vector) == dim
+    assert stats is not None and stats.vector_dim == dim
+    assert stats.computed == 1
+
+
+def test_bad_dimension_shape_is_rejected():
+    """维度/元素非法（非数值、嵌套、空）必须失败，不进缓存。"""
+    inner = _FakeInner()
+    for bad in (["x", "y"], [[1.0], [2.0]], [], 3.14):
+        inner.embed_query = lambda text, b=bad: b  # type: ignore[assignment]
+        es.reset_embedding_cache()
+        es.begin_embedding_request(reset=True)
+        with pytest.raises((TypeError, ValueError)):
+            tracked = _make_tracked(inner)
+            tracked.embed_query("坏维度")
+        es.end_embedding_request()
+        assert not es._PROCESS_EMBED_CACHE, f"非法返回进了缓存: {bad!r}"
 
 
 def test_embed_documents_failure_records_error_row(monkeypatch):

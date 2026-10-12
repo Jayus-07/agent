@@ -267,6 +267,9 @@ class EmbeddingRequestStats:
     duration_ms: float = 0.0
     kinds: dict = field(default_factory=dict)
     values: dict = field(default_factory=dict)
+    # 真实向量的维度（成功或缓存命中时记录）：用于验证"维度确实被校验"，
+    # 也为后续对账（与索引 1024 维）留证据。
+    vector_dim: int | None = None
     # 进程级缓存的快照来源（汇总视图用；单线程作用域保持 "request"）
     hit_source: str = "request"
 
@@ -289,6 +292,7 @@ class EmbeddingRequestStats:
             "unique_inputs": self.unique_inputs,
             "dedup_ratio": round(self.dedup_ratio, 4),
             "duration_ms": round(self.duration_ms, 1),
+            "vector_dim": self.vector_dim,
             "kinds": dict(self.kinds),
         }
 
@@ -328,6 +332,8 @@ class _RequestEmbeddingRecord:
                 total.kinds[k] = total.kinds.get(k, 0) + v
             for k, v in scope.values.items():
                 total.values.setdefault(k, v)
+            if scope.vector_dim is not None:
+                total.vector_dim = scope.vector_dim
         total.hit_source = (
             "request" if total.request_hits >= total.process_hits else "process")
         return total
@@ -651,6 +657,7 @@ class _TrackedEmbedding(Embeddings):
         if cached is not None:
             self._bump_field(stats, "request_hits")
             stats.values[key] = cached
+            stats.vector_dim = stats.vector_dim or len(cached)
             self._emit_cache_hit("request")
             _flush_owned_scope()
             return cached, True
@@ -659,6 +666,7 @@ class _TrackedEmbedding(Embeddings):
         if cached is not None:
             stats.values[key] = cached
             stats.hit_source = "process"
+            stats.vector_dim = stats.vector_dim or len(cached)
             self._bump_field(stats, "process_hits")
             self._emit_cache_hit("process")
             _flush_owned_scope()
@@ -670,6 +678,7 @@ class _TrackedEmbedding(Embeddings):
             cached = stats.values.get(key)
             if cached is not None:
                 self._bump_field(stats, "request_hits")
+                stats.vector_dim = stats.vector_dim or len(cached)
                 self._emit_cache_hit("request")
                 _flush_owned_scope()
                 return cached, True
@@ -677,6 +686,7 @@ class _TrackedEmbedding(Embeddings):
             if cached is not None:
                 stats.values[key] = cached
                 stats.hit_source = "process"
+                stats.vector_dim = stats.vector_dim or len(cached)
                 self._bump_field(stats, "process_hits")
                 self._emit_cache_hit("process")
                 _flush_owned_scope()
@@ -713,6 +723,7 @@ class _TrackedEmbedding(Embeddings):
                 if _EMBED_INFLIGHT.get(key) is stats:
                     _EMBED_INFLIGHT.pop(key, None)
             stats.values[key] = vector
+            stats.vector_dim = len(vector)
             stats.duration_ms += elapsed_ms
             self._bump_field(stats, "computed")
             self._emit_call(kind, elapsed_ms)

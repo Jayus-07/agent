@@ -37,8 +37,16 @@ OPENAI_KEY = re.compile(r"sk-[A-Za-z0-9]{20,}")
 # （如 noqa: S105），把误报压到可人工逐条审计的数量。
 ASSIGNED_SECRET = re.compile(
     r"(?i)(api[_-]?key|secret|password|passwd|token)\b[\s\"\']*[:=][\s\"\']*"
-    r"(?!noqa)(?!\w+\s*\()(?!\w+[.\[])([A-Za-z0-9_\-]{16,})"
+    r"(?!noqa)(?!\w+\s*\()(?!\w+[.\[])"          # 排除 noqa 哨兵/函数调用/属性访问
+    r"(?!\$\{|os\.environ|os\.getenv|getenv\()"      # 排除变量插值与读环境变量
+    r"(?:[\"\']?(?!your|xxx|test|dummy|example|changeme|placeholder|redacted|[<*]))"
+    r"([A-Za-z0-9_\-]{16,})"
 )
+
+# diff（新增行）模式使用的规则：高精度、低误报，覆盖"硬编码密钥赋值"
+DIFF_RULES = {"assigned_secret", "credential_url", "url_with_credentials",
+              "private_key_block", "aws_access_key_id", "github_token", "slack_token",
+              "openai_style_key"}
 
 GENERIC_RULES = [
     ("url_with_credentials", CREDENTIAL_URL),
@@ -84,15 +92,53 @@ PLACEHOLDER_USERINFO = re.compile(
     r"(?i)://(?:user|username|userpass|user_name)?:(?:pass|password|passwd|pwd|secret|test|xxx+|"
     r"\*+|change[-_]?me|<[^>]+>|\$\{[^}]+\})@"
 )
+# 抽取每个凭据 URL 的 userinfo，用于**逐个**判断是不是变量插值占位。
+# 不能按整行判断：同一行完全可能既有一个 ${VAR} 插值、又有一个硬编码口令。
+CREDENTIAL_USERINFO = re.compile(
+    r"[a-zA-Z][a-zA-Z0-9+.-]*://([^\s/@:]*:[^\s/@]+)@"
+)
+# userinfo 中出现 shell/模板变量插值（含默认值写法）即视为占位。
+USERINFO_VAR = re.compile(r"\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
+# f-string / .format / % 模板：userinfo 由代码在运行时填充，不是硬编码口令。
+# 覆盖 f"postgresql://{c['user']}:{c['password']}@..." 这类既有写法。
+USERINFO_TEMPLATE = re.compile(r"\{[^}]*\}|%s|%\(")
+
+
+# 变量/模板插值统一形态：shell 变量、f-string/.format 占位、printf 占位。
+# 命中 userinfo 或整行都视为"运行时填充"，不是硬编码口令。
+INTERPOLATION = re.compile(
+    r"\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\{[^{}]*\}|%s|%\(")
+
+
+# diff（新增行）模式的路径级豁免：只放在"本身就在造/测凭据样本"的文件上，
+# 且仅限测试文件与扫描器自身的规则定义，避免给业务代码开后门。
+DIFF_PATH_ALLOW = (
+    "backend/tests/",
+    "scripts/scan_secrets.py",
+)
 
 
 def _is_allowed(path: str, rule: str, line: str = "") -> bool:
+    if any(path.startswith(prefix) for prefix in DIFF_PATH_ALLOW):
+        return True
     if rule == "url_with_credentials":
-        if PLACEHOLDER_USERINFO.search(line):
+        # 扫描器自身/规则定义行：形如 re.compile(r"...://...") 的模式串不是凭据
+        if "re.compile(" in line and "://" in line:
             return True
-        # compose/脚本里的变量插值仍属占位：redis://${PASS}@host 之类，
-        # 真实口令不入库；真正硬编码的密码不含 ${...}。
-        if "${" in line and "://" in line:
+        # 逐个 URL 判断，只对"该 URL 的 userinfo 本身"给豁免：
+        #   - userinfo 含变量/模板插值 → 运行时填充，放行（compose/脚本常见）；
+        #   - userinfo 是示例词（user:pass 等）→ 放行；
+        #   - 其余（含空用户名 + 真实口令）→ 命中。
+        # 这样既修掉"整行含 ${ 就放行"的后门（同一行另一处硬编码仍会被抓），
+        # 也不会因为同一行有多个变量嵌套而漏判。
+        for userinfo in CREDENTIAL_USERINFO.findall(line):
+            if INTERPOLATION.search(userinfo):
+                continue
+            if PLACEHOLDER_USERINFO.search("://" + userinfo + "@"):
+                continue
+            return False
+        # 没有解析到可判定的 userinfo 时，退回整行占位/插值判定
+        if INTERPOLATION.search(line) or PLACEHOLDER_USERINFO.search(line):
             return True
     return any(path.startswith(prefix) and rule == r for prefix, r in ALLOWLIST)
 SKIP_SUFFIXES = {".pyc", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip",
@@ -101,8 +147,10 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 
 
 def _run_git(args, cwd=None):
+    # 禁用分页器：git diff 在大 diff 下会等 pager，直接挂死 CI（实测）。
+    env = dict(os.environ, GIT_PAGER="cat", PAGER="cat")
     proc = subprocess.run(["git", *args], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", cwd=cwd)
+                          encoding="utf-8", errors="replace", cwd=cwd, env=env)
     if proc.returncode != 0:
         raise RuntimeError("git " + " ".join(args) + " failed: " + proc.stderr.strip()[:200])
     return proc.stdout
@@ -123,6 +171,54 @@ def scan_text(text, rules):
             if pattern.search(line):
                 hits.append((name, lineno))
     return hits
+
+
+def scan_diff(diff_range, rules, root=None):
+    """只扫**新增行**（P1 审查：新增硬编码密钥必须阻断）。
+
+    - 逐行扫 + 扫描相邻新增行的拼接（覆盖"变量在上一行、字面量在下一行"
+      这类赋值块，避免只查单行漏检）；
+    - 规则里通常只放高精度规则（如 assigned_secret），避免存量占位误报；
+    - diff 模式只看本次新增，不关心历史存量，因此不做整体 allowlist 豁免。
+    """
+    diff = _run_git(["diff", "--unified=0", "--no-color", diff_range], cwd=root)
+    findings = []
+    current = None
+    added = []
+    lines = diff.splitlines()
+
+    def _flush(path, block):
+        if not path or not block:
+            return
+        joined = "\n".join(block)
+        for name, _lineno in scan_text(joined, rules):
+            # 占位符/变量插值豁免同样适用于新增行（读环境变量不是硬编码）
+            if _is_allowed(path, name, joined):
+                continue
+            findings.append((path, name))
+            return
+
+    for line in lines:
+        if line.startswith("+++ b/"):
+            _flush(current, added)
+            current = line[6:]
+            added = []
+            continue
+        if line.startswith("+++ ") or line.startswith("--- "):
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
+        else:
+            # 相邻新增块结束：以最多 3 行滑动拼接再扫一次（多行赋值）
+            if added:
+                _flush(current, added)
+                for i in range(len(added)):
+                    _flush(current, added[i:i + 3])
+                added = []
+    _flush(current, added)
+    for i in range(len(added)):
+        _flush(current, added[i:i + 3])
+    return findings
 
 
 def _runtime_secret_rules():
@@ -204,6 +300,8 @@ def main():
     parser.add_argument("--with-runtime-secrets", action="store_true")
     parser.add_argument("--allow", action="append", default=[],
                         help="额外允许的路径前缀（可重复；用于把已知测试占位移出阻断面）")
+    parser.add_argument("--diff", dest="diff_range", default=None,
+                        help="只扫新增行（如 base..head）；用于阻断本次新增的硬编码密钥")
     parser.add_argument("--fail-on", default="",
                         help="逗号分隔的规则名白名单：只有这些规则命中才返回 1；"
                              "留空 = 任何命中都返回 1。用于 CI 区分高置信阻断与存量安全债")
@@ -224,7 +322,12 @@ def main():
 
     tree_findings = []
     history_findings = []
+    diff_findings = []
     try:
+        if args.diff_range:
+            # diff 模式：规则集中只保留高精度规则，避免存量占位误报
+            diff_rules = [r for r in rules if r[0] in DIFF_RULES]
+            diff_findings = scan_diff(args.diff_range, diff_rules, root=args.root)
         if do_tree:
             tree_findings = scan_tree(args.rev, rules, root=args.root)
         if do_history:
@@ -237,12 +340,16 @@ def main():
         print("tree", path + ":" + str(lineno), "type=" + name)
     for rev, path, name in history_findings:
         print("history", rev, path, "type=" + name)
+    for path, name, lineno in diff_findings:
+        print("diff", path + ":" + str(lineno), "type=" + name)
 
-    total = len(tree_findings) + len(history_findings)
+    total = len(tree_findings) + len(history_findings) + len(diff_findings)
     blocking = total
     if fail_on:
         blocking = sum(1 for _p, name, _n in tree_findings if name in fail_on) + sum(
             1 for _r, _p, name in history_findings if name in fail_on)
+    # 新增行命中高精度规则（含 assigned_secret）一律阻断，与存量债务解耦
+    blocking += len(diff_findings)
     print("[scan_secrets] 命中 " + str(total) + " 处 (tree=" + str(len(tree_findings))
           + ", history=" + str(len(history_findings)) + "), 其中阻断类 " + str(blocking))
     return 1 if blocking else 0

@@ -75,3 +75,53 @@ def test_history_scan_range_limits_scope(tmp_path):
     assert ranged == [], "新增区间不应报出基线里的历史泄漏"
     all_history = ss.scan_history(None, list(ss.GENERIC_RULES), root=repo)
     assert any(path == "old.txt" for _rev, path, _name in all_history), "全历史扫描仍应看到旧泄漏"
+
+def test_same_line_variable_and_hardcoded_credential_is_flagged():
+    """同一行既有 ${VAR} 插值又有硬编码凭据：必须命中（不得整行放行）。"""
+    line = ("CMD=redis://:${REDIS_PASSWORD}@cache:6379/0 BACKUP=" + FAKE_EMPTY_USER)
+    assert not ss._is_allowed("scripts/run.sh", "url_with_credentials", line)
+    # 纯插值仍然允许
+    only_var = "AUTH_REDIS_URL=redis://:${AUTH_REDIS_PASSWORD}@redis:6379/0"
+    assert ss._is_allowed("docker-compose.yml", "url_with_credentials", only_var)
+
+
+def test_diff_mode_blocks_new_hardcoded_key_but_not_baseline(tmp_path):
+    """新增硬编码 API_KEY 必须阻断；基线里的旧密钥只算存量债务。"""
+    repo = _init_repo(tmp_path / "diffrepo")
+    (repo / "config.py").write_text('API_KEY = "OLDLEGACYKEY1234567890"', encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "baseline with legacy hardcoded key")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # 新增提交：又写了一个新的硬编码密钥（虚构）
+    (repo / "config.py").write_text(
+        'API_KEY = "OLDLEGACYKEY1234567890"\nNEW_API_KEY = "NEWHARDCODEDKEY0987654321"\n',
+        encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "add another hardcoded key")
+
+    diff_rules = [r for r in ss.GENERIC_RULES if r[0] in ss.DIFF_RULES]
+    findings = ss.scan_diff(f"{base}..HEAD", diff_rules, root=repo)
+    assert any(path == "config.py" for path, _name in findings), (
+        "新增硬编码密钥未被 diff 模式拦住")
+    # 基线提交本身不该出现在 diff 结果里（存量不阻断）
+    base_findings = ss.scan_diff(f"{base}..{base}", diff_rules, root=repo)
+    assert base_findings == []
+
+
+def test_diff_mode_ignores_env_and_placeholder_assignments(tmp_path):
+    """新增行里读环境变量/变量插值不算硬编码密钥（避免误伤）。"""
+    repo = _init_repo(tmp_path / "diffrepo2")
+    (repo / "config.py").write_text("API_KEY = \"OLDLEGACYKEY1234567890\"\n", encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "baseline")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "config.py").write_text(
+        "API_KEY = os.environ[\"API_KEY\"]\nREDIS = \"redis://:${REDIS_PASSWORD}@cache:6379/0\"\n",
+        encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "read from env instead")
+
+    diff_rules = [r for r in ss.GENERIC_RULES if r[0] in ss.DIFF_RULES]
+    findings = ss.scan_diff(f"{base}..HEAD", diff_rules, root=repo)
+    assert findings == [], findings

@@ -390,3 +390,42 @@ query 原文、request_id、tenant 一律只进 Trace。
   （https://github.com/Jayus-07/agent/actions/runs/38218709681）。
   此前观察到的 in_progress 是并发组 `cancel-in-progress` 下多 head 连续推送造成的排队，
   不是依赖安装卡死。
+---
+
+# 附录 C：PR #41 第三轮审查整改（2026-10-12）
+
+| 审查项 | 状态 | 证据 |
+| --- | --- | --- |
+| P1 新硬编码密钥可绕过阻断 | **PASS** | 新增 `--diff <base>..<head>` 只扫新增行并阻断 `assigned_secret`；`test_diff_mode_blocks_new_hardcoded_key_but_not_baseline` |
+| P1 同行变量插值整行豁免 | **PASS** | `_is_allowed` 改为逐个 URL 判 userinfo 是否插值；`test_same_line_variable_and_hardcoded_credential_is_flagged` |
+| P0 环境外安全债 | **BLOCKED（需有权限者轮换）** | Travel 三脚本 + 已曝光 Redis 口令；本轮**未改动 Travel** |
+| 非阻断：恒真断言/维度校验 | **PASS** | 删除 `or True`；新增 `vector_dim` 记录与 `test_valid_provider_vector_records_dimension`、`test_bad_dimension_shape_is_rejected` |
+
+## C1. 新增行阻断（`--diff`）
+
+- `scan_secrets.py` 新增 `scan_diff()`：解析 `git diff --unified=0` 的**新增行**并按
+  相邻 3 行滑动拼接（覆盖"变量在上一行、字面量在下一行"的多行赋值），
+  命中 `assigned_secret`/凭据 URL 等高精度规则即返回非 0；
+- `secret-scan.yml` 增加"新增行扫描"步骤（PR: `base..head`；push: `before..after`），
+  与"全库树扫描（存量安全债只报告）"分离；
+- 回归：临时仓库基线写旧密钥 → informational；新提交再写一个硬编码 key → **必须红**。
+
+## C2. 豁免边界（同行变量 + 硬编码）
+
+- 旧实现：行内出现 `${ 且含 ://` 即整行放行 → 同一行另一处硬编码凭据漏检；
+- 现在：逐个凭据 URL 取其 userinfo，只有"该 userinfo 本身是插值或示例词"才放行；
+- 统一 `INTERPOLATION`（`${...}`、`$VAR`、`{...}`、`%s`）覆盖 compose 嵌套默认值
+  与 f-string 模板；`test_same_line_variable_and_hardcoded_credential_is_flagged`
+  证明混合行仍被抓。
+
+## C3. 恒真断言与维度
+
+- 删除 `assert ... or True`；
+- `EmbeddingRequestStats.vector_dim` 记录真实向量维度（成功与命中路径都写），
+  `test_valid_provider_vector_records_dimension` 断言等于 `EMBEDDING_DIM`；
+  `test_bad_dimension_shape_is_rejected` 覆盖非数值/嵌套/空/标量返回；
+- malformed 用例补"重试必须重新出站（无成功缓存）"断言。
+
+## C4. 附带修复
+
+- `_run_git` 显式 `GIT_PAGER=cat`：`git diff` 在大 diff 下等待分页器会让 CI 挂死（实测）。
