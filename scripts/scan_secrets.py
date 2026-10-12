@@ -88,9 +88,14 @@ ALLOWLIST: list[tuple[str, str]] = [
 
 
 # 命中行里的"明显占位符"才算允许：整段或 userinfo 是示例词。
+# 占位口令词：pass/secret 等常见词，以及 your_xxx / xxx / changeme / <...> / ***
+# 这类"一眼示例"的写法（.env.example 里普遍存在，不是真实凭据）。
+_PLACEHOLDER_WORD = (
+    r"(?:pass|password|passwd|pwd|secret|test|dummy|example|your[_-]?\w*|"
+    r"xxx+|\*+|change[-_]?me|placeholder|redacted|<[^>]+>|\$\{[^}]+\})"
+)
 PLACEHOLDER_USERINFO = re.compile(
-    r"(?i)://(?:user|username|userpass|user_name)?:(?:pass|password|passwd|pwd|secret|test|xxx+|"
-    r"\*+|change[-_]?me|<[^>]+>|\$\{[^}]+\})@"
+    r"(?i)://[^\s/@:]*(?::" + _PLACEHOLDER_WORD + r")?@|://[^\s/@:]*:" + _PLACEHOLDER_WORD + r"@"
 )
 # 抽取每个凭据 URL 的 userinfo，用于**逐个**判断是不是变量插值占位。
 # 不能按整行判断：同一行完全可能既有一个 ${VAR} 插值、又有一个硬编码口令。
@@ -317,8 +322,11 @@ def main():
         ALLOWLIST.append((prefix, "url_with_credentials"))
     fail_on = {r.strip() for r in args.fail_on.split(",") if r.strip()}
 
-    do_tree = bool(args.tree or args.rev) or not (args.tree or args.history)
-    do_history = bool(args.history) or not (args.tree or args.history)
+    # 只跑"显式指定"的模式：--diff / --rev / --tree / --history。
+    # 一个都没给时（本地手跑）才默认 tree + history。
+    no_mode_given = not (args.tree or args.history or args.rev or args.diff_range)
+    do_tree = bool(args.tree or args.rev) or no_mode_given
+    do_history = bool(args.history) or no_mode_given
 
     tree_findings = []
     history_findings = []

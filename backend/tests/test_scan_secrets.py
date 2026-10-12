@@ -52,6 +52,16 @@ def test_artifact_dir_is_scanned(tmp_path):
     assert ("artifacts/rag-perf-r0r1/run.log", "url_with_credentials") in hit, hit
 
 
+def test_env_example_dsn_template_is_not_blocking():
+    """仓库 .env.example 的 DSN 模板（fictional 占位口令）不得阻断 CI。"""
+    line = "DC_DATABASE_URL=postgresql://postgres:your_password_here@localhost:5432/demo"
+    assert ss.CREDENTIAL_URL.search(line)
+    assert ss._is_allowed("backend/.env.example", "url_with_credentials", line)
+    # 换成真实形态则必须命中
+    real = "DC_DATABASE_URL=postgresql://postgres:realpass0987654321@db:5432/prod"
+    assert not ss._is_allowed("backend/.env.example", "url_with_credentials", real)
+
+
 def test_placeholder_urls_are_not_blocking():
     """示例/变量插值属占位，不阻断：user:pass@ 与 ${VAR} 两种。"""
     assert ss._is_allowed("x.yml", "url_with_credentials", "dsn: postgresql://user:pass@host/db")
