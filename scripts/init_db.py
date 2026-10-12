@@ -472,6 +472,13 @@ def checksum_of(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+# 004 已发布版本曾包含默认口令。修改为无密码创建后，明确保留已应用旧版
+# 的校验和，避免 checksum 不同导致整份授权迁移被重放。
+_FROZEN_LEGACY_MIGRATION_CHECKSUMS = {
+    "004_readonly_role.sql": frozenset({"b5c27b0ff9ff348c"}),
+}
+
+
 # ──────────────────────────────────────────────────────────── 迁移执行
 def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str, str]:
     """执行单个迁移文件，返回 (状态, 说明)。
@@ -487,6 +494,11 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
         )
         row = cur.fetchone()
     if row and not force:
+        if (
+            row[1] == "applied"
+            and row[0] in _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(filename, ())
+        ):
+            return "skipped", "已应用的历史迁移保持不变；由后续迁移完成升级"
         if row[0] != checksum_of(sql):
             # 文件内容变了 → 需要重新应用（并更新 checksum）
             pass

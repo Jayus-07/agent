@@ -341,6 +341,46 @@ class TestReadonlyPassword:
         ).read_text(encoding="utf-8")
         assert "ALTER ROLE AGENT_READONLY PASSWORD NULL" in migration.upper()
 
+    def test_004_creates_role_without_password(self):
+        from pathlib import Path
+
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "sql"
+            / "migrations"
+            / "004_readonly_role.sql"
+        ).read_text(encoding="utf-8").upper()
+        assert "CREATE ROLE AGENT_READONLY WITH LOGIN NOSUPERUSER" in migration
+
+    def test_applied_legacy_004_checksum_is_not_replayed(self):
+        from scripts.init_db import apply_migration
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, _params):
+                assert "SELECT CHECKSUM, STATUS" in query.upper()
+
+            def fetchone(self):
+                return "b5c27b0ff9ff348c", "applied"
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+        status, detail = apply_migration(
+            _Connection(),
+            "004_readonly_role.sql",
+            "-- updated 004 content",
+            force=False,
+        )
+        assert status == "skipped"
+        assert "保持不变" in detail
+
     def test_ensure_dbs_applies_password_revocation_after_004(self):
         from scripts.ensure_dbs import BUSINESS_MIGRATIONS
 
