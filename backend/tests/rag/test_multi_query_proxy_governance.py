@@ -162,8 +162,10 @@ def test_multi_query_timeout_signal_stops_retries_and_skips_fallback(
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
-def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async):
+def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async, caplog):
     """角色配置的 fallbackModel 优先于全局 fallback，预占使用同一模型。"""
+    import logging
+
     import backend.infra.llm.proxy as proxy
     from backend.config.model_roles import RoleRuntimeDefaults
 
@@ -221,13 +223,18 @@ def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async):
     monkeypatch.setattr(proxy, "get_current_resolved_model", lambda: None)
     monkeypatch.setattr(proxy, "set_current_resolved_model", lambda _ctx: None)
     monkeypatch.setattr(proxy, "_notify_degradation", lambda *_args, **_kwargs: None)
+    caplog.set_level(logging.INFO)
+
+    primary_error = (
+        "api_key=primary-sentinel https://provider.invalid/private"
+    )
 
     token = proxy._role_fallback_generation_kwargs.set(
         {"temperature": 0, "max_tokens": 512})
     try:
         if is_async:
             result = asyncio.run(proxy._ahandle_terminal_failure(
-                TimeoutError("provider failed"),
+                TimeoutError(primary_error),
                 (),
                 {},
                 model_name="mq-primary",
@@ -235,7 +242,7 @@ def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async):
             ))
         else:
             result = proxy._handle_terminal_failure(
-                TimeoutError("provider failed"),
+                TimeoutError(primary_error),
                 (),
                 {},
                 model_name="mq-primary",
@@ -249,6 +256,76 @@ def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async):
     assert calls["reserved"] == [("fallback", "role-specific-backup")]
     assert calls["bound_kwargs"] == {"temperature": 0, "max_tokens": 512}
     assert calls["invoked"] == 1
+    assert "primary-sentinel" not in caplog.text
+    assert "provider.invalid" not in caplog.text
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_multi_query_fallback_failure_logs_only_exception_types(
+    monkeypatch, is_async, caplog,
+):
+    """备用失败日志及透传异常不得包含 Provider 返回的敏感文本。"""
+    import logging
+
+    import backend.infra.llm.proxy as proxy
+    from backend.config.model_roles import RoleRuntimeDefaults
+
+    primary_error = "api_key=primary-sentinel https://provider.invalid/private"
+    fallback_error = (
+        "password=fallback-sentinel postgresql://user:fake@db.internal/private"
+    )
+
+    class _Fallback:
+        def invoke(self, *_args, **_kwargs):
+            raise RuntimeError(fallback_error)
+
+        async def ainvoke(self, *_args, **_kwargs):
+            raise RuntimeError(fallback_error)
+
+    monkeypatch.setattr(
+        proxy, "_role_runtime_policy",
+        lambda _role: RoleRuntimeDefaults(failure_policy="fallback"),
+    )
+    monkeypatch.setattr(
+        proxy, "_get_role_fallback_llm",
+        lambda _role: ("mq-backup", _Fallback()),
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.reserve_model_call", lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.review_model_reservation", lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.release_model_reservation", lambda: None,
+    )
+    monkeypatch.setattr(proxy, "canonical_model_id", lambda model: model)
+    monkeypatch.setattr(proxy, "_get_provider_for", lambda _model: "test-provider")
+    monkeypatch.setattr(proxy, "model_identity_extras", lambda _model: {})
+    monkeypatch.setattr(proxy, "get_current_resolved_model", lambda: None)
+    monkeypatch.setattr(proxy, "set_current_resolved_model", lambda _ctx: None)
+    monkeypatch.setattr(proxy, "_record_failed_attempt", lambda *_args, **_kwargs: None)
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(Exception) as exc_info:
+        if is_async:
+            asyncio.run(proxy._ahandle_terminal_failure(
+                TimeoutError(primary_error), (), {},
+                model_name="mq-primary", role="multi_query",
+            ))
+        else:
+            proxy._handle_terminal_failure(
+                TimeoutError(primary_error), (), {},
+                model_name="mq-primary", role="multi_query",
+            )
+
+    for sensitive_fragment in (
+        "primary-sentinel", "fallback-sentinel", "provider.invalid",
+        "db.internal", "postgresql://",
+    ):
+        assert sensitive_fragment not in caplog.text
+        assert sensitive_fragment not in str(exc_info.value)
+    assert "RuntimeError" in caplog.text
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
@@ -302,3 +379,44 @@ def test_bound_llm_proxy_scopes_fallback_generation_kwargs(monkeypatch, is_async
 
     assert observed == [expected]
     assert proxy._role_fallback_generation_kwargs.get() is None
+
+
+def test_multi_query_unsupported_legacy_policy_uses_default(monkeypatch, caplog):
+    """存量不支持策略不绕过写入校验静默改变运行语义。"""
+    import logging
+
+    import backend.infra.llm.proxy as proxy
+    from backend.config import model_roles
+
+    monkeypatch.setattr(
+        model_roles,
+        "resolve_runtime_policy",
+        lambda _role: model_roles.RoleRuntimeDefaults(
+            timeout_seconds=21,
+            max_retries=2,
+            failure_policy="template_response",
+        ),
+    )
+    caplog.set_level(logging.WARNING)
+
+    policy = proxy._role_runtime_policy("multi_query")
+
+    assert policy.failure_policy == "skip"
+    assert policy.timeout_seconds == 21
+    assert policy.max_retries == 2
+    assert "非支持 failure_policy" in caplog.text
+    assert "template_response" not in caplog.text
+
+
+def test_other_role_is_not_routed_through_multi_query_policy(monkeypatch):
+    """MultiQuery 策略读取只作用于该角色。"""
+    import backend.infra.llm.proxy as proxy
+    from backend.config import model_roles
+
+    monkeypatch.setattr(
+        model_roles,
+        "resolve_runtime_policy",
+        lambda _role: pytest.fail("其他角色不应读取 MultiQuery 策略"),
+    )
+
+    assert proxy._role_runtime_policy("ocr") is None

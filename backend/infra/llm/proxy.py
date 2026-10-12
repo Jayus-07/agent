@@ -563,7 +563,10 @@ def _handle_terminal_failure(
     rate_limited/timeout/provider_error），随告警/降级话术/异常透传——
     模型错误不得被下游包装成 RAG / SQL / Travel 等业务失败。
     """
-    reason = f"{type(err).__name__}: {str(err)[:120]}"
+    reason = (
+        type(err).__name__ if role == "multi_query"
+        else f"{type(err).__name__}: {str(err)[:120]}"
+    )
     from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
 
     error_type = classify_model_error(err)
@@ -620,7 +623,8 @@ def _handle_terminal_failure(
                 review_model_reservation("fallback_failed_possibly_billed")
             else:
                 release_model_reservation()
-            logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
+            fallback_error = type(e).__name__ if role == "multi_query" else e
+            logger.warning("[LLM:resilience] 备用模型也失败: %s", fallback_error)
             _record_failed_attempt(fallback_model, e, decision="fallback")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
     if (
@@ -650,7 +654,10 @@ async def _ahandle_terminal_failure(
     role: str = "main",
 ):
     """async 版兜底：备用模型 → 降级话术 → 模型错误（分类同同步版）。"""
-    reason = f"{type(err).__name__}: {str(err)[:120]}"
+    reason = (
+        type(err).__name__ if role == "multi_query"
+        else f"{type(err).__name__}: {str(err)[:120]}"
+    )
     from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
 
     error_type = classify_model_error(err)
@@ -703,7 +710,8 @@ async def _ahandle_terminal_failure(
                 review_model_reservation("fallback_failed_possibly_billed")
             else:
                 release_model_reservation()
-            logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
+            fallback_error = type(e).__name__ if role == "multi_query" else e
+            logger.warning("[LLM:resilience] 备用模型也失败: %s", fallback_error)
             _record_failed_attempt(fallback_model, e, decision="fallback")
     if (
         LLM_ALLOW_DEGRADED_ANSWER
@@ -739,10 +747,23 @@ def _role_runtime_policy(role: str):
     from backend.config import model_roles
 
     try:
-        return model_roles.resolve_runtime_policy(role)
+        policy = model_roles.resolve_runtime_policy(role)
     except Exception:
         # 策略解析不可用时使用代码默认，确保 MultiQuery 仍是零重试、skip。
         return model_roles.runtime_defaults(role)
+    if role == "multi_query" and policy.failure_policy not in {"skip", "fallback"}:
+        logger.warning(
+            "[LLM:proxy] 忽略存量 MultiQuery 非支持 failure_policy，"
+            "回落到代码默认策略"
+        )
+        defaults = model_roles.runtime_defaults(role)
+        return model_roles.RoleRuntimeDefaults(
+            fallback_model=policy.fallback_model,
+            timeout_seconds=policy.timeout_seconds,
+            max_retries=policy.max_retries,
+            failure_policy=defaults.failure_policy,
+        )
+    return policy
 
 
 def _role_max_retries(role: str) -> int:
