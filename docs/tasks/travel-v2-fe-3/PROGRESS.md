@@ -3,8 +3,8 @@
 ## 当前状态
 
 - 本轮已把最新 `origin/main` (`73c37d73c3b7c62711db276458912eed481ace7d`) 正常 merge 到 FE-3 分支，merge commit 为 `1b603cd58ba1c8009a92d7e71116aa01d542cbef`；未强推。
-- Tab 修复提交：`d1c58c7eb23dc21a8f30c0218573209438b28a09`。从指定的 `a67449b07a2bc9b25ba61b01c9b336d4512842f9` 开始施工。PR [#48](https://github.com/Jayus-07/agent/pull/48) 仍开放、未合并；本轮修补尚待推送并等待新 HEAD 的必需检查。
-- Codex Review P2 `PRRC_kwDOUL3SNM79XKeb` 指出跨 Tab 候选残留；已修复并补回归测试，待在推送后回复和解决线程。
+- Tab 修复提交：`d1c58c7eb23dc21a8f30c0218573209438b28a09`；任务记录提交：`24c0b250bb41c7c009d9c1974c34d8aa66d4d67b`。从指定的 `a67449b07a2bc9b25ba61b01c9b336d4512842f9` 开始施工。PR [#48](https://github.com/Jayus-07/agent/pull/48) 已推送该补修，当前开放、未合并。
+- Codex Review P2 `PRRC_kwDOUL3SNM79XKeb` 指出跨 Tab 候选残留；已修复、回复并解决线程。
 - 真实 Provider E2E 阻塞：本机请求 `POST /api/travel/v2/search/food` 返回 HTTP 401 `未认证：no-credential`，没有 Provider 状态、来源、结果或查询时间。未将 Fixture 浏览器验收记为真实 Provider 通过。
 - FE-2 的真实持久化 E2E 仍保持未完成状态。
 
@@ -46,7 +46,6 @@
 
 ## 下一步
 
-1. 推送 merge commit 和 Tab 修复到 PR #48，回复并解决 Codex Review P2。
-2. 等待新 HEAD 上的必需 GitHub 检查完成；若 unstable，读取对应 job 状态与日志定位，不绕过门禁。
-3. 如获得真实 Provider 测试凭据，再单独补做真实 Provider E2E；Fixture 浏览器验收不能替代该项。
-4. 不合并 main、不开始 FE-4。
+1. 等待本轮最终推送 HEAD 上的必需 GitHub 检查完成；若 unstable，读取对应 job 状态与日志定位，不绕过门禁。
+2. 如获得真实 Provider 测试凭据，再单独补做真实 Provider E2E；Fixture 浏览器验收不能替代该项。
+3. 不合并 main、不开始 FE-4。

@@ -1,6 +1,6 @@
 # 旅游 V2 前端 FE-3
 
-状态：本地补修与定向验收完成；最新 main 已正常 merge，待推送 PR #48 并等待新 HEAD 的必需检查。真实 Provider E2E 因 no-credential 阻塞。
+状态：Tab 补修与定向验收已推送至 PR #48；最新 main 已正常 merge，等待最终 HEAD 的必需 GitHub 检查。真实 Provider E2E 因 no-credential 阻塞。
 
 ## 目标
 
@@ -26,7 +26,8 @@
 - 分支：`codex/travel-v2-fe-3`
 - Worktree：`C:\Users\wh\.codex\worktrees\travel-v2-fe-3\agent`
 - 起始提交：`a67449b07a2bc9b25ba61b01c9b336d4512842f9`
-- 当前提交：`88cad7db6b5e65ced6107f0d675dc6634117c32e`
+- FE-3 初始提交：`88cad7db6b5e65ced6107f0d675dc6634117c32e`
 - main 同步：`73c37d73c3b7c62711db276458912eed481ace7d`，merge commit `1b603cd58ba1c8009a92d7e71116aa01d542cbef`
 - Tab 补修：`d1c58c7eb23dc21a8f30c0218573209438b28a09`
+- PR 推送记录：`24c0b250bb41c7c009d9c1974c34d8aa66d4d67b`
 - PR：[Jayus-07/agent#48](https://github.com/Jayus-07/agent/pull/48)
