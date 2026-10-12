@@ -64,6 +64,7 @@
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
+| 旅游 V2 产品设计、审计与前端施工计划 | [product-design.md](docs/domains/travel-v2/product-design.md)、[fe0-audit.md](docs/domains/travel-v2/fe0-audit.md)、[implementation-plan.md](docs/domains/travel-v2/implementation-plan.md) |
 
 普通 Bug 优先阅读相关源码与测试。只阅读当前任务需要的文档，不要求加载整个 README 或 docs；历史报告不作为默认上下文。
 

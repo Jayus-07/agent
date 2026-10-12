@@ -1,55 +1,102 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, LoaderCircle, MapPin, Users } from 'lucide-react'
-import { copyTravelTemplateV2, fetchTravelTemplateV2, type TravelTemplateV2 } from '@/api/travelV2'
-import { TRAVEL_PHOTOS } from './travelV2Data'
+import { ApiError } from '@/api/client'
+import { describeApiError } from '@/api/errors'
+import { copyTravelTemplateV2, createTravelV2IdempotencyKey, fetchTravelTemplateV2, type TravelTemplateV2 } from '@/api/travelV2'
+import { travelDestinationImage } from './TravelTemplateCard'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
+
+type CopyIntent = { key: string; state: 'pending' | 'unknown' | 'rejected'; message: string }
 
 export default function TravelTemplatePreview({ slug }: { slug: string }) {
   const router = useRouter()
   const [template, setTemplate] = useState<TravelTemplateV2 | null>(null)
   const [loading, setLoading] = useState(true)
   const [copying, setCopying] = useState(false)
+  const [copyOutcomeUnknown, setCopyOutcomeUnknown] = useState(false)
+  const [copyNeedsRetry, setCopyNeedsRetry] = useState(false)
   const [error, setError] = useState('')
+  const copyScopeRef = useRef({ slug, active: true })
+  if (copyScopeRef.current.slug !== slug) copyScopeRef.current = { slug, active: true }
+  const copyIntents = useRef(new Map<string, CopyIntent>())
 
   useEffect(() => {
+    const scope = copyScopeRef.current
+    scope.active = true
     let cancelled = false
+    const copyIntent = copyIntents.current.get(slug)
     setLoading(true)
-    setError('')
+    setError(copyIntent?.message ?? '')
+    setTemplate(null)
+    setCopying(false)
+    setCopyOutcomeUnknown(copyIntent?.state === 'pending' || copyIntent?.state === 'unknown')
+    setCopyNeedsRetry(Boolean(copyIntent))
     void fetchTravelTemplateV2(slug).then((data) => {
-      if (!cancelled) setTemplate(data)
+      if (!cancelled && scope.active && copyScopeRef.current === scope) setTemplate(data)
     }).catch(() => {
-      if (!cancelled) setError('模板详情暂时无法加载，请返回首页重试。')
-    }).finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+      if (!cancelled && scope.active && copyScopeRef.current === scope) setError('模板详情暂时无法加载，请返回首页重试。')
+    }).finally(() => { if (!cancelled && scope.active && copyScopeRef.current === scope) setLoading(false) })
+    return () => {
+      cancelled = true
+      scope.active = false
+    }
   }, [slug])
 
   async function createCopy() {
-    if (!template || copying) return
+    const scope = copyScopeRef.current
+    if (!template || template.slug !== slug || scope.slug !== slug || !scope.active || copying) return
     setCopying(true)
     setError('')
+    const previousIntent = copyIntents.current.get(template.slug)
+    const requestKey = previousIntent?.key ?? createTravelV2IdempotencyKey()
+    copyIntents.current.set(template.slug, {
+      key: requestKey,
+      state: 'pending',
+      message: '复制结果尚未确认，服务端可能已经创建行程。请使用安全重试继续本次操作，系统会复用原请求标识。',
+    })
     try {
-      const result = await copyTravelTemplateV2(template.slug)
+      const result = await copyTravelTemplateV2(template.slug, requestKey)
+      if (!scope.active || copyScopeRef.current !== scope) return
+      copyIntents.current.delete(template.slug)
+      setCopyOutcomeUnknown(false)
+      setCopyNeedsRetry(false)
       router.push(`/travel/itineraries/${encodeURIComponent(result.trip_id)}`)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '行程副本创建失败，请稍后重试。')
+      const resolved = describeApiError(cause)
+      const definiteHttpRejection = cause instanceof ApiError
+        && cause.status >= 400
+        && cause.status < 500
+        && cause.status !== 408
+      const message = definiteHttpRejection
+        ? resolved.message
+        : `${resolved.message} 复制结果尚未确认，服务端可能已经创建行程。请使用安全重试继续本次操作，系统会复用原请求标识。`
+      copyIntents.current.set(template.slug, {
+        key: requestKey,
+        state: definiteHttpRejection ? 'rejected' : 'unknown',
+        message,
+      })
+      if (!scope.active || copyScopeRef.current !== scope) return
+      setCopyOutcomeUnknown(!definiteHttpRejection)
+      setCopyNeedsRetry(true)
+      setError(message)
     } finally {
-      setCopying(false)
+      if (scope.active && copyScopeRef.current === scope) setCopying(false)
     }
   }
 
   const destination = template?.destination || template?.content.brief.destination || ''
-  const image = template?.cover_image_url || destinationImage(destination)
+  const image = template?.cover_image_url || travelDestinationImage(destination)
   const brief = template?.content.brief
   const itemsCount = template?.content.days.reduce((total, day) => total + day.items.length, 0) ?? 0
   const budget = brief?.budget.amount
 
   return <main className="min-h-screen bg-[#f4f8fd] pb-24 text-[#17283f] md:pb-10">
-    <TravelTopBar />
+    <TravelTopBar active="discover" />
     <div className="mx-auto max-w-[1120px] px-4 pb-8 pt-1 md:px-8 md:pt-3">
-      <a href="/travel" className="mb-4 inline-flex items-center gap-1.5 text-xs font-medium text-[#6c7d93] hover:text-[#2878f5]"><ArrowLeft size={14} aria-hidden />返回旅行首页</a>
+      <a href="/travel/templates" className="mb-4 inline-flex min-h-10 items-center gap-1.5 rounded-lg pr-2 text-xs font-medium text-[#6c7d93] hover:text-[#2878f5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5]"><ArrowLeft size={14} aria-hidden />返回模板目录</a>
       {loading ? <div role="status" className="rounded-[26px] border border-[#e4ebf4] bg-white p-12 text-center text-sm text-[#8393a8]">正在读取平台模板…</div> : error && !template ? <div role="alert" className="rounded-[26px] border border-amber-200 bg-amber-50 p-8 text-center text-sm text-amber-900">{error}</div> : template && <section className="overflow-hidden rounded-[26px] border border-[#e4ebf4] bg-white shadow-[0_12px_36px_rgba(31,74,130,.06)] md:rounded-[32px]">
         <div className="relative h-[230px] md:h-[330px]"><img src={image} alt={`${destination}风景`} className="absolute inset-0 h-full w-full object-cover" /><div className="absolute inset-0 bg-gradient-to-t from-[#102843]/75 via-[#173451]/10 to-transparent" /><span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full border border-white/50 bg-white/90 px-3 py-1.5 text-[10px] font-semibold text-[#35699f] shadow-sm"><Check size={12} aria-hidden />平台精选模板 · 只读预览</span><div className="absolute bottom-5 left-5 right-5 text-white md:bottom-7 md:left-8"><p className="text-xs font-medium text-white/80">{brief?.day_count} 天 · {template.tags.join(' · ') || '精选路线'}</p><h1 className="mt-1 text-[26px] font-bold tracking-[-.035em] md:text-[38px]">{template.title}</h1><p className="mt-2 max-w-xl text-xs leading-5 text-white/85 md:text-sm">{template.summary}</p></div></div>
         <div className="grid gap-6 p-4 md:grid-cols-[1fr_300px] md:p-7">
@@ -59,15 +106,11 @@ export default function TravelTemplatePreview({ slug }: { slug: string }) {
           <aside className="flex flex-col gap-3 rounded-[20px] bg-[#f6f9fd] p-4 md:p-5"><h2 className="text-sm font-bold text-[#263b56]">行程概览</h2><dl className="space-y-3 text-xs"><div className="flex justify-between"><dt className="flex items-center gap-2 text-[#8492a4]"><CalendarDays size={14} aria-hidden />行程天数</dt><dd className="font-medium text-[#354b66]">{brief?.day_count} 天</dd></div><div className="flex justify-between"><dt className="flex items-center gap-2 text-[#8492a4]"><Users size={14} aria-hidden />参考人数</dt><dd className="font-medium text-[#354b66]">{(brief?.travelers.adults ?? 0) + (brief?.travelers.children ?? 0)} 人</dd></div><div className="flex justify-between"><dt className="text-[#8492a4]">预算参考</dt><dd className="font-medium text-[#354b66]">{budget === null || budget === undefined ? '待设置' : `¥${budget.toLocaleString()}`}</dd></div><div className="border-t border-[#e4ebf3] pt-3"><dt className="mb-2 text-[#8492a4]">旅行风格</dt><dd className="flex flex-wrap gap-1.5">{template.tags.map((tag) => <span key={tag} className="rounded-full bg-white px-2.5 py-1 text-[10px] text-[#6884a4]">{tag}</span>)}</dd></div></dl>
             <div className="mt-auto rounded-xl border border-[#dce9fb] bg-white p-3 text-[10px] leading-5 text-[#71839a]">模板副本会保存到你的 V2 行程。酒店、车次与景点没有真实核实的数据会明确标记为待核实。</div>
             {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[10px] leading-4 text-rose-700">{error}</p>}
-            <button type="button" onClick={() => void createCopy()} disabled={copying} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#2878f5] text-xs font-semibold text-white shadow-[0_6px_16px_rgba(40,120,245,.2)] transition hover:bg-[#1769e9] disabled:cursor-wait disabled:opacity-70">{copying ? <><LoaderCircle size={15} className="animate-spin" aria-hidden />正在创建副本…</> : <>复制为我的行程 <ArrowRight size={15} aria-hidden /></>}</button>
+            <button type="button" onClick={() => void createCopy()} disabled={copying} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#2878f5] text-xs font-semibold text-white shadow-[0_6px_16px_rgba(40,120,245,.2)] transition hover:bg-[#1769e9] disabled:cursor-wait disabled:opacity-70">{copying ? <><LoaderCircle size={15} className="animate-spin" aria-hidden />{copyOutcomeUnknown ? '正在安全重试…' : '正在创建副本…'}</> : copyOutcomeUnknown ? <>安全重试（复用原请求） <ArrowRight size={15} aria-hidden /></> : copyNeedsRetry ? <>使用原请求标识重试 <ArrowRight size={15} aria-hidden /></> : <>复制为我的行程 <ArrowRight size={15} aria-hidden /></>}</button>
           </aside>
         </div>
       </section>}
     </div>
-    <TravelBottomNav active="home" />
+    <TravelBottomNav active="discover" />
   </main>
-}
-
-function destinationImage(destination: string): string {
-  return /厦门|海|青岛|三亚/.test(destination) ? TRAVEL_PHOTOS.coast : /苏州|园林/.test(destination) ? TRAVEL_PHOTOS.garden : /杭州|西湖/.test(destination) ? TRAVEL_PHOTOS.westLake : TRAVEL_PHOTOS.city
 }

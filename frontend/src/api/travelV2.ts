@@ -248,6 +248,10 @@ function idempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `travel-v2-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+export function createTravelV2IdempotencyKey(): string {
+  return idempotencyKey();
+}
+
 type TravelV2ReadOptions = Pick<RequestOptions, 'signal'>
 
 function post<T>(path: string, body: object, key?: string, options: TravelV2ReadOptions = {}): Promise<T> {
@@ -310,8 +314,8 @@ export function fetchTravelTemplateV2(key: string): Promise<TravelTemplateV2> {
   return request(`/api/travel/v2/templates/${encodeURIComponent(key)}`);
 }
 
-export function copyTravelTemplateV2(key: string): Promise<TravelTripV2> {
-  return post(`/api/travel/v2/templates/${encodeURIComponent(key)}/copy`, {}, idempotencyKey());
+export function copyTravelTemplateV2(key: string, requestKey = idempotencyKey()): Promise<TravelTripV2> {
+  return post(`/api/travel/v2/templates/${encodeURIComponent(key)}/copy`, {}, requestKey);
 }
 
 export function searchTravelFoodV2(city: string, options: TravelV2ReadOptions = {}): Promise<TravelSearchResponseV2<MerchantSearchResultV2>> {

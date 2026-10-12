@@ -36,6 +36,7 @@ it('旅游首页提供自然语言规划、精选模板、V2近期行程和三�
   expect(container.textContent).toContain('查美食')
   expect(container.textContent).toContain('查动车')
   expect(container.querySelector('form[action="/travel/chat"]')).not.toBeNull()
+  expect([...container.querySelectorAll('a[href="/travel/templates"]')].some((link) => link.textContent?.includes('浏览模板'))).toBe(true)
 
   const hotelShortcut = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('查酒店'))
   expect(hotelShortcut).toBeDefined()

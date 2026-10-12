@@ -7,6 +7,7 @@ import {
   archiveTravelTripV2,
   applyTravelTripEditV2,
   createTravelTripV2,
+  copyTravelTemplateV2,
   fetchTravelTemplateV2,
   fetchTravelTemplatesV2,
   fetchTravelTripRevisionsV2,
@@ -131,6 +132,16 @@ describe('旅游 V2 BFF API', () => {
 
     expect(request).toHaveBeenCalledWith('/api/travel/v2/trips/trip%2F123/edits', {
       method: 'POST', body: input, headers: { 'Idempotency-Key': 'edit-key-1' },
+    })
+  })
+
+  it('模板复制可显式复用同一幂等键', async () => {
+    request.mockResolvedValue({ trip_id: 'trip-created-once' })
+
+    await copyTravelTemplateV2('hangzhou-slow', 'copy-intent-1')
+
+    expect(request).toHaveBeenCalledWith('/api/travel/v2/templates/hangzhou-slow/copy', {
+      method: 'POST', body: {}, headers: { 'Idempotency-Key': 'copy-intent-1' },
     })
   })
 })
