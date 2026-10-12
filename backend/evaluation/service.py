@@ -40,6 +40,12 @@ def _current_actor() -> str:
     return _os.getenv("EVAL_TRIGGERED_BY", "") or "unknown"
 
 
+# B1-B（2026-10-12）评测专用计费租户：预算账本（budget_ledger）与用量账本
+# （llm_usage）按该租户独立聚合，与生产业务租户（default）的额度、账单、
+# 预算策略完全分离。评测消费按 tenant="eval" + role=eval_gen 独立审计。
+EVAL_TENANT_ID = "eval"
+
+
 def _filter_cases_by_tier(
     cases: list[TestCase], tier: str,
 ) -> list[TestCase]:
@@ -495,13 +501,24 @@ class EvaluationService:
         # （budget.py reserve 旁路告警路径），live 回放/评测的 token
         # 归因与预算闸整体旁路。绑定失败不阻塞评测（放行模式，
         # 参照 services/rag_server.py 同款）。
+        # B1-B（2026-10-12）：计费主体隔离——tenant 从生产 default 改为
+        # 专用 EVAL_TENANT_ID，评测费用不再污染生产租户额度与账单；
+        # 同时把 user/tenant 写进请求身份 ContextVar，llm_usage 行的
+        # 归因维度（current_usage_attribution）与预算账本同源可对账。
         try:
+            from backend.core.request_context import (
+                set_tool_tenant_id,
+                set_tool_user_id,
+            )
             from backend.infra.llm.budget import bind_request_budget
 
+            eval_user = _current_actor() or "eval-runner"
+            set_tool_tenant_id(EVAL_TENANT_ID)
+            set_tool_user_id(eval_user)
             bind_request_budget(
                 f"eval:{run_id}",
-                user_id=_current_actor() or "eval-runner",
-                tenant_id="default",
+                user_id=eval_user,
+                tenant_id=EVAL_TENANT_ID,
             )
         except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞评测
             logger.warning(f"[Eval] 预算绑定失败（放行）: {e}")

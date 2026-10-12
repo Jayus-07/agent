@@ -1845,6 +1845,44 @@ def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
         return None
 
 
+def bind_llm_for_role(
+    role: str,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> "_BoundLLMProxy":
+    """按模型角色获取带参数绑定的治理化 LLM 包装（非 tools 场景）。
+
+    B1-B（2026-10-12）：与 ``bind_tools_for_model`` 同构的参数绑定出口。
+    此前旁路调用方（travel llm_intent 等）为带 temperature/max_tokens 只能
+    直构 ``_build_llm_for(...).bind(...)`` 裸实例——绕过限流/预算预占/韧性链/
+    token 记录（审计 P0-2）。本出口把这类调用收进与主链相同的
+    ``_BoundLLMProxy`` 包装：发起前预占预算，调用后按真实用量结算并入
+    llm_usage，role 归属按本函数入参登记。
+
+    角色无绑定模型时抛 RuntimeError（调用方按自身降级语义处理，如
+    travel llm_intent 回落词表链路）——与 ``get_llm_for_role`` 同契约。
+    """
+    from backend.config import model_roles
+
+    effective = model_roles.resolve_effective(role)
+    model_name = str(effective.get("value") or "").strip()
+    if not model_name:
+        raise RuntimeError(f"模型角色 {role!r} 没有可用模型")
+    ctx = _resolve_call_context(role=role, model_name=model_name)
+    if ctx is not None:
+        set_current_resolved_model(ctx)
+    bound = _get_override_llm(model_name)
+    bind_kwargs: dict[str, Any] = {}
+    if temperature is not None:
+        bind_kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        bind_kwargs["max_tokens"] = max_tokens
+    if bind_kwargs:
+        bound = bound.bind(**bind_kwargs)
+    return _BoundLLMProxy(bound, model_name=model_name, role=role)
+
+
 # =====================================================
 # 代理对象
 # =====================================================
