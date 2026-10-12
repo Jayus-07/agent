@@ -16,10 +16,10 @@
 | B1-B | #42 | 修复已推送 | head `fb57241` / RAG PR Smoke run 110 SUCCESS | 3 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
 | B1-F | #43 | 修复已推送 | head `2172208` / RAG PR Smoke run 109 SUCCESS | 2 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
 | RAG R0/R1 | #41 | 最新 main 上最终核对完成，未合并 | head `fc27dec` / Secret Scan run 8 SUCCESS；RAG PR Smoke run 112 SUCCESS | 3 条旧 review thread 均已解决；无未解决 thread | 独立安全 PR #44 尚未合并；凭据轮换/旧值失效验证未完成，P0 仍阻断放行 |
-| 凭据安全治理 | #44 | 代码整改已推送、PR mergeable；看板随本 PR 更新 | 代码提交 `5bf88b8` 的 PR Smoke run 117 SUCCESS、tree/diff/history 扫描均 0 命中；看板更新提交 Smoke 与变更检测 SUCCESS，评测按路径条件跳过 | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
+| 凭据安全治理 | #44 | 代码整改已推送、PR mergeable；当前提交仅更新看板 | 代码提交 `5bf88b8` 的 PR Smoke run 117 SUCCESS、tree/diff/history 扫描均 0 命中；看板提交前 RAG PR Smoke run 120 SUCCESS | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
-| B1-C | #45 | 实现与三项 GPT 审查修复已推送，head `8bd8ea2`，mergeable | RAG PR Smoke run 118 SUCCESS | 父 Trace 所有权、物理完成未知时重试、checkpoint deadline 归一化三项已修复并 resolve；审查基于旧 head，尚无新 head 复审 | 请求上下文里的第 5 个 Workflow 在当前唯一注册表不存在，未臆造新增 |
-| B1-D | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
+| B1-C | #45 | 实现与三项 GPT 审查修复已推送，head `8bd8ea2`，mergeable | RAG PR Smoke run 118 SUCCESS | 父 Trace 所有权、物理完成未知时重试、checkpoint deadline 归一化三项已修复并 resolve；审查基于旧 head，尚无新 head 复审 | 请求上下文里的第 5 个 Workflow 在当前唯一注册表不存在，未臆造新增；等用户批准合并 |
+| B1-D | #47 | 实现与定向验收已推送，head `35fbee9`，待 CI | RAG PR Smoke run 123 运行中 | 尚无 review thread | 等 run 123 和审查；PostgreSQL CAS 集成用例未运行，避免操作共享数据库 |
 | B1-E | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
 
 ## 已取得证据
@@ -30,7 +30,8 @@
 - PR #41 head `fc27dec`：同步最新 main 后，RAG 定向回归 `81 passed in 14.05s`；PR 的 `secret-scan` run 8 SUCCESS，RAG Smoke run 112 SUCCESS。前轮真实 Provider/性能/准确率证据未重跑、原样保留。
 - PR #41 当前树仍报告根 `.env.example` 与 3 个 Travel 脚本的 4 项 `assigned_secret`；安全 PR #44 中已修正这些代码项，因此 PR #41 需等 #44 合并后再同步并重扫。PR #41 的 `origin/main..HEAD` 可达提交区间扫描为 0；历史讨论记录此前曾清理 PR 分支历史。本任务未重写 main 或其他共享历史。
 - 安全 PR #44 head `5bf88b8` 使用 PR #41 的 `scripts/scan_secrets.py` 执行 `--tree`、`--diff origin/main..HEAD`、`--history --range origin/main..HEAD`，三项均 exit 0、0 命中。三个 Travel 脚本从项目根 `.env` 读取 `API_KEY`，进程环境变量优先；用不含真实凭据的临时 `.env` 做隔离行为验证：3/3 脚本均能读取配置，缺少配置时均在网络请求前失败关闭。`py_compile`、`git diff --check` 与 Ruff 导入排序检查通过。PR #44 run 117 SUCCESS；GPT P2 已修复并 resolve。没有真实 Provider 请求。
-- B1-C PR #45 head `8bd8ea2`：Workflow / DirectExecutor / RequestContext / SafeToolExecutor 定向集 `99 passed`；Tool Deadline 定向集 `11 passed`。父 Trace 生命周期、取消吞噬后不重试、checkpoint dict Deadline 归一化新增覆盖；`py_compile`、`git diff --check` 通过。使用临时内存 fixture，无数据库与真实 Provider 调用。run 118 仍在运行，GPT 三条旧 head 线程均已 resolve。
+- B1-C PR #45 head `8bd8ea2`：Workflow / DirectExecutor / RequestContext / SafeToolExecutor 定向集 `99 passed`；Tool Deadline 定向集 `11 passed`。父 Trace 生命周期、取消吞噬后不重试、checkpoint dict Deadline 归一化新增覆盖；`py_compile`、`git diff --check` 通过。使用临时内存 fixture，无数据库与真实 Provider 调用。run 118 SUCCESS，GPT 三条旧 head 线程均已 resolve。
+- B1-D PR #47 head `35fbee9`：Prompt Service、Release Service、Hot Reload、Prompts API、Release API、Prompt Trace 定向集 `130 passed`；`py_compile`、Ruff、`git diff --check` 均通过。发布状态测试使用 fake session/repository 与 Fake Redis；未连接共享 PostgreSQL、真实 Redis 或 Provider。PG CAS 真库用例因共享 DB 禁令未运行；run 123 尚在执行。
 - 风险复核另发现 Travel 脚本保留预置测试登录常量；未被 Secret Scan 识别为可验证凭据，当前用途似为测试账号，但是否只在隔离环境有效尚未确认。看板和 PR 未记录其值；需代码所有者确认非生产复用后才能消除此项风险。
 - 安全分支另将根 `.env.example` 的 JWT 项改为明显占位符，避免把可复制的静态签名值当成配置。
 
@@ -51,7 +52,7 @@
 
 ## 下一步
 
-1. 复核 PR #40–#45 的新 head、CI、review 和 mergeable；保持逐项合并，先给用户提交具体合并清单并等待批准。
+1. 复核 PR #40–#47 的新 head、CI、review 和 mergeable；保持逐项合并，先给用户提交具体合并清单并等待批准。
 2. 凭据持有人授权后完成 Redis 与 API Key 轮换、部署更新、撤销旧值及旧值认证失败验证；确认测试登录常量仅供隔离环境使用。此前 P0 BLOCKED。
 3. PR #44 获批合并后，将 PR #41 同步最新 main 并复扫；只有 P0 风险处理满足放行要求且用户批准，才继续合并 RAG/Runtime PR。
-4. 只有 PR #41 和 #42 合并后才施工 RAG MultiQuery P0；B1-C 后续按依赖推进 B1-D、B1-E，各建独立 PR。
+4. 只有 PR #41 和 #42 合并后才施工 RAG MultiQuery P0；B1-C/#45、B1-D/#47 等用户审批，随后独立施工 B1-E。
