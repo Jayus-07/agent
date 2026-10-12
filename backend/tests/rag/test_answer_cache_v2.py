@@ -3,6 +3,18 @@ from __future__ import annotations
 
 import pytest
 
+
+# Batch 1A 最终收口：答案缓存默认硬关闭（关闭行为见 test_review_filter.py
+# TestAnswerCacheDisabledByDefault）。本文件守护 AnswerCache 原实现
+# （v2 schema / meta / 失效语义），故翻转硬开关继续生效——恢复上线时
+# 删除 answer_cache.py 的短路并回归本文件即可。
+@pytest.fixture(autouse=True)
+def _restore_original_impl(monkeypatch):
+    import backend.rag.answer_cache as _ac
+
+    monkeypatch.setattr(_ac, "_ANSWER_CACHE_HARD_DISABLED", False)
+    yield
+
 from backend.rag.answer_cache import (
     CACHE_SCHEMA_VERSION,
     AnswerCache,

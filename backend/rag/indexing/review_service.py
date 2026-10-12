@@ -26,6 +26,26 @@ def _invalidate_review_cache() -> None:
     invalidate_pending_review_cache()
 
 
+def _invalidate_answer_cache(kb_id: str) -> None:
+    """审核/删除后失效该 KB 的答案缓存（Batch 1A 终轮问题2）。
+
+    已缓存答案生成时文档还是可见状态，状态变更后若不清缓存，同 query
+    同主体的请求会命中旧缓存、绕过审核过滤继续返回不可见内容。复用
+    answer_cache 既有 invalidate_kb（Redis INCR cache_version 原子失效
+    该 KB 全部缓存），不另造缓存系统；失败退回缓存 TTL 兜底。
+    """
+    if not kb_id:
+        return
+    try:
+        from backend.rag.answer_cache import get_answer_cache
+
+        get_answer_cache().invalidate_kb(kb_id)
+    except Exception as exc:  # noqa: BLE001 - 失效失败不阻断审核主流程
+        from backend.shared.logger import logger
+
+        logger.warning("[Review] 答案缓存失效失败 kb=%s: %s", kb_id, exc)
+
+
 def _collect_residue(doc_id: str, pipeline: Any, chunk_store: Any) -> list[str]:
     residue: list[str] = []
     try:
@@ -101,6 +121,7 @@ def review_pending_doc(
         if updated == 0:
             return {"ok": False, "doc_id": doc_id, "error": "状态更新失败（可能并发）"}
         _invalidate_review_cache()
+        _invalidate_answer_cache(doc.get("kb_id", ""))
         return {
             "ok": True,
             "doc_id": doc_id,
@@ -153,6 +174,7 @@ def review_pending_doc(
     if updated == 0:
         return _failure(doc_id, ["状态更新失败（可能并发）"])
     _invalidate_review_cache()
+    _invalidate_answer_cache(doc.get("kb_id", ""))
     return {
         "ok": True,
         "doc_id": doc_id,
@@ -216,6 +238,7 @@ def delete_document_cascade(
     if warnings:
         logger.warning("[Review] 删除存在残留 doc_id=%s warnings=%s", doc_id, warnings)
     _invalidate_review_cache()
+    _invalidate_answer_cache(doc.get("kb_id", ""))
     return {
         "ok": True,
         "doc_id": doc_id,

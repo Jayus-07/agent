@@ -283,9 +283,10 @@ class TestInterface:
         assert pg_reg.set_expire_at("e1", "2020-01-01") == 1
         expired = pg_reg.list_expired()
         assert any(r["doc_id"] == "e1" for r in expired)
-        assert pg_reg.archive_expired() == 1
+        # Batch 1A 终轮：archive_expired 返回受影响 kb_id 列表（供答案缓存失效）
+        assert pg_reg.archive_expired() == ["kb1"]
         assert pg_reg.get_by_doc_id("e1")["status"] == "deleted"
-        assert pg_reg.archive_expired() == 0
+        assert pg_reg.archive_expired() == []  # 二次归档：无过期文档
 
     def test_update_after_reindex(self, pg_reg):
         pg_reg.register("test://r.md", "r1", "h_old", "kb1", ["old0"], "d_old")
@@ -322,3 +323,47 @@ class TestConcurrentWrites:
             for i in range(docs_per):
                 row = pg_reg.get_by_path(f"test://conc/w{w}_d{i}.md")
                 assert row is not None and row["doc_id"] == f"conc_w{w}_d{i}"
+
+
+# ── Batch 1A 终轮返修：doc_id 非唯一下的正向可见性校验 ──
+
+class TestListVisibleDocIds:
+    """doc_registry 主键是 file_path，doc_id 非唯一（跨环境残影/多版本）。
+
+    契约：同 doc_id 只要存在任一 pending_review/deprecated 行、或任一过期
+    active 行，该 doc_id 整体不可见（与黑名单同口径）；deleted 行不影响；
+    至少一个 active 未过期行才可见。
+    """
+
+    def test_any_pending_row_blocks_doc_id(self, pg_reg):
+        pg_reg.register("t://dup/a.md", "dupdoc", "h1", "kb_x", ["c1"], "d1")
+        pg_reg.register("t://dup/b.md", "dupdoc", "h2", "kb_x", ["c2"], "d2")
+        pg_reg.update_status("t://dup/b.md", "pending_review")
+        assert pg_reg.list_visible_doc_ids({"dupdoc"}) == set(), (
+            "同 doc_id 存在 pending_review 行时不得放行")
+
+    def test_any_deprecated_row_blocks_doc_id(self, pg_reg):
+        pg_reg.register("t://dup/e.md", "dupdep", "h1", "kb_x", ["c1"], "d1")
+        pg_reg.register("t://dup/f.md", "dupdep", "h2", "kb_x", ["c2"], "d2")
+        pg_reg.update_status("t://dup/f.md", "deprecated")
+        assert pg_reg.list_visible_doc_ids({"dupdep"}) == set()
+
+    def test_deleted_rows_do_not_block(self, pg_reg):
+        pg_reg.register("t://dup/c.md", "dup2", "h1", "kb_x", ["c1"], "d1")
+        pg_reg.register("t://dup/d.md", "dup2", "h2", "kb_x", ["c2"], "d2")
+        pg_reg.update_status("t://dup/d.md", "deleted")
+        assert pg_reg.list_visible_doc_ids({"dup2"}) == {"dup2"}, (
+            "deleted 残影不应把合法文档全部过滤")
+
+    def test_expired_active_row_blocks(self, pg_reg):
+        pg_reg.register("t://dup/g.md", "dup3", "h1", "kb_x", ["c1"], "d1")
+        pg_reg.set_expire_at("dup3", "2020-01-01")
+        assert pg_reg.list_visible_doc_ids({"dup3"}) == set()
+
+    def test_archive_expired_returns_kb_ids(self, pg_reg):
+        """终轮问题2：归档过期文档必须返回 kb_id 列表供答案缓存失效。"""
+        pg_reg.register("t://exp/a.md", "exp1", "h", "kb_e", ["c"], "d")
+        pg_reg.register("t://exp/b.md", "exp2", "h", "kb_e", ["c"], "d")
+        pg_reg.set_expire_at("exp1", "2020-01-01")
+        kbs = pg_reg.archive_expired()
+        assert kbs == ["kb_e"], "archive_expired 应返回受影响 kb_id 列表"

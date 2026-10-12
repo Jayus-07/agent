@@ -785,6 +785,12 @@ class ChunkLevelRetriever(BaseRetriever):
                     "ChunkLevelRetriever: Neighbor Expansion 权限过滤 "
                     f"{before_permission - len(fallback_docs)} chunks"
                 )
+        # Neighbor 从 doc_db 二次取回全文，必须在最终出口复用统一审核过滤。
+        # Registry 故障异常保持向上传播，不得降级放行或伪装为空结果。
+        from backend.rag.retrieval.review_filter import apply_review_visibility
+        fallback_docs = apply_review_visibility(
+            fallback_docs, context="neighbor_expansion"
+        )
         if fallback_docs:
             logger.info(f"ChunkLevelRetriever: Neighbor Expansion → {len(fallback_docs)} chunks")
             return fallback_docs[: self.k], {
@@ -837,6 +843,11 @@ class ChunkLevelRetriever(BaseRetriever):
                 get_context().permission_filtered += denied
             except Exception:  # noqa: BLE001 — 计数失败不影响检索本身
                 logger.debug("permission_filtered 计数失败", exc_info=True)
+
+        # Adaptive K 与 Parent-Child 都可能二次取出 chunk；统一审核可见性
+        # 复核必须位于二者之后，保证扩展结果与首轮 Hybrid 结果同一出口。
+        from backend.rag.retrieval.review_filter import apply_review_visibility
+        st.docs = apply_review_visibility(st.docs, context="chunk_expansion")
 
     def _filter_has_docs(self, metadata_filter: dict) -> bool:
         """探测给定 metadata_filter 在 doc 库中是否还能匹配到文档（不做向量检索，零 embedding 成本）。
@@ -1169,11 +1180,13 @@ class AdaptiveRetriever(BaseRetriever):
                 f"AdaptiveRetriever: 扩展替换 {replaced_names}，"
                 f"非 cluster chunk 保留 {len(kept_names)} 条"
             )
-            return result
+            # 审核状态可能在 base_retriever 与全文扩展之间变化；最终复核放在
+            # try/except 之外，Registry 异常不能被下方扩展降级分支吞掉。
         except Exception as e:
             logger.error(f"AdaptiveRetriever: Context Expansion 失败: {e}")
             _end({"fallback": "passthrough"}, {
                 "decision": "expansion_failed_passthrough",
                 "error": str(e)[:200],
             })
-        return chunks
+        from backend.rag.retrieval.review_filter import apply_review_visibility
+        return apply_review_visibility(result, context="adaptive_expansion")

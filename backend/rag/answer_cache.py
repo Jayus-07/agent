@@ -150,6 +150,9 @@ class AnswerCache:
         STOP CS-A P0-4：v1 裸字符串值 / 畸形结构 / 版本不符 → 视为 miss
         （重新计算，绝不把旧答案包装成可信结果）。scope=主体授权范围。
         """
+        if _ANSWER_CACHE_HARD_DISABLED:
+            # 最终收口：硬关闭，任何 local/remote 部署与配置覆盖不可绕过
+            return None
         try:
             key = self._build_key(query, kb_id, metadata_filter, model, scope)
             cached = self._get_cache().get_json(key)
@@ -179,6 +182,9 @@ class AnswerCache:
         STOP CS-A P0-4：缓存值为结构化 v2 记录（answer + Evidence Gate
         依赖的完整 meta），命中方据此还原与首算一致的置信度语义。
         """
+        if _ANSWER_CACHE_HARD_DISABLED:
+            # 最终收口：硬关闭，不写 Redis（文档下线/到期后无旧答案可返回）
+            return
         try:
             key = self._build_key(query, kb_id, metadata_filter, model, scope)
             record = {
@@ -201,6 +207,15 @@ class AnswerCache:
             logger.info(f"[AnswerCache] 失效: kb={kb_id} new_version={new_version}")
         except Exception as e:
             logger.warning(f"[AnswerCache] 失效失败: {e}")
+
+
+# ── Batch 1A 最终收口（2026-10-12 GPT 复核）：用户答案缓存硬关闭 ──
+# 审核状态变更的跨进程失效存在不可忽视窗口：版本号本地缓存 10s、
+# invalidate_kb 异常被吞（仅 TTL 兜底）、自然到期文档不触发失效、缓存
+# TTL 1h——窗口内已缓存答案会绕过审核可见性过滤返回不可见内容。
+# 恢复方式：删除本短路并重新评审失效链路（按文档粒度的实时证据校验，
+# 见审计报告 §10.2）。env/配置覆盖不可绕过（GPT 验收口径）。
+_ANSWER_CACHE_HARD_DISABLED = True
 
 
 _answer_cache: AnswerCache | None = None
