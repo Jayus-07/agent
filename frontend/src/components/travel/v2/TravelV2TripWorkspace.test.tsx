@@ -59,8 +59,18 @@ vi.mock('./TravelSearchPanel', () => ({
 }))
 
 vi.mock('./TravelV2Map', () => ({
-  default: ({ selectedLocation }: { selectedLocation: { name: string } | null }) =>
-    createElement('div', { 'data-testid': 'map-selection' }, selectedLocation?.name ?? ''),
+  default: ({ selectedLocation, selectedItemId, onSelectItem }: {
+    selectedLocation: { name: string } | null
+    selectedItemId: string
+    onSelectItem: (id: string) => void
+  }) => createElement('div', null, [
+    createElement('div', {
+      key: 'selection',
+      'data-testid': 'map-selection',
+      'data-selected-item-id': selectedItemId,
+    }, selectedLocation?.name ?? ''),
+    createElement('button', { key: 'saved', type: 'button', onClick: () => onSelectItem('trip-a-item') }, '定位已保存行程地点'),
+  ]),
 }))
 
 vi.mock('./TravelV2EditDialog', () => ({
@@ -565,6 +575,25 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).not.toContain('A 选入已保存')
     expect(page.container.textContent).not.toContain('A 的查询完成')
     expect(page.container.textContent).not.toContain('迟到的 A')
+  })
+
+  it('选择临时查询候选时取消正式行程选择，回到地图行程点时恢复同步', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
+    const map = page.container.querySelector<HTMLDivElement>('[data-testid="map-selection"]')!
+    expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
+
+    await click(page.container, (button) => button.textContent?.trim() === '美食')
+    const searchProps = latestSearchProps('trip-a')
+    act(() => searchProps.onLocationSelect?.({ name: '临时餐饮候选', lat: 30.2, lng: 120.1, verification: 'estimated' }))
+
+    expect(map.textContent).toContain('临时餐饮候选')
+    expect(map.getAttribute('data-selected-item-id')).toBe('')
+    expect(page.container.textContent).toContain('临时餐饮候选')
+
+    await click(page.container, (button) => button.textContent === '定位已保存行程地点')
+    expect(map.textContent).not.toContain('临时餐饮候选')
+    expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
   })
 
   it('同一 queryId 的终态替换查询中状态，且不覆盖其他记录或已终止记录', async () => {

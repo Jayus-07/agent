@@ -16,6 +16,7 @@ import {
 import TravelSearchActivity from './TravelSearchActivity'
 import TravelSearchPanel, { type TravelSearchEvent, type TravelSearchKind } from './TravelSearchPanel'
 import TravelV2Map from './TravelV2Map'
+import type { TemporaryTravelMapLocation } from './travelV2MapData'
 import TravelV2EditDialog, { type TravelV2EditPanel } from './TravelV2EditDialog'
 import TravelTripHistoryPanel from './TravelTripHistoryPanel'
 import { TravelBottomNav } from './TravelV2Frame'
@@ -77,7 +78,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   const [activeTab, setActiveTab] = useState<Tab>('trip')
   const [dayIndex, setDayIndex] = useState(0)
   const [selectedItemId, setSelectedItemId] = useState('')
-  const [selectedLocation, setSelectedLocation] = useState<{ name: string; lat: number; lng: number } | null>(null)
+  const [selectedLocation, setSelectedLocation] = useState<TemporaryTravelMapLocation | null>(null)
   const [undoRevision, setUndoRevision] = useState<number | null>(null)
   const [undoing, setUndoing] = useState(false)
   const [savingMessage, setSavingMessage] = useState('')
@@ -155,7 +156,9 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
 
   const days = trip?.document.days ?? []
   const day = days[dayIndex] ?? null
-  const selectedItem = day?.items.find((item) => item.item_id === selectedItemId) ?? day?.items[0] ?? null
+  const selectedItem = selectedLocation
+    ? null
+    : day?.items.find((item) => item.item_id === selectedItemId) ?? day?.items[0] ?? null
   const allMapItemIds = useMemo(() => new Set((day?.items ?? []).map((item) => item.item_id)), [day])
 
   function selectDay(index: number) {
@@ -384,7 +387,10 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   }
 
   const onSelectMapItem = useCallback((id: string) => {
-    if (allMapItemIds.has(id)) setSelectedItemId(id)
+    if (allMapItemIds.has(id)) {
+      setSelectedItemId(id)
+      setSelectedLocation(null)
+    }
   }, [allMapItemIds])
 
   const editItem = editPanel?.kind === 'item'
