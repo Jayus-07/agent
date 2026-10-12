@@ -16,7 +16,7 @@
 | B1-B | #42 | 修复已推送 | head `fb57241` / RAG PR Smoke run 110 SUCCESS | 修复意见和 3 条旧 review thread 已解决；尚无新 head GPT 复审 | 等用户批准合并 |
 | B1-F | #43 | 修复已推送 | head `2172208` / RAG PR Smoke run 109 SUCCESS | 修复意见和 2 条旧 review thread 已解决；尚无新 head GPT 复审 | 等用户批准合并 |
 | RAG R0/R1 | #41 | 最新 main 已同步，做最终核对 | Secret Scan run 8 SUCCESS；RAG PR Smoke run 112 queued | 前轮三项 inline 意见已由当前代码修复并 resolve；此前第三轮接受主实现 | 等当前 RAG Smoke 完成；安全债脚本已在独立分支修复，待安全 PR 集成 |
-| 凭据安全治理 | 新 PR | 代码已提交 `c356047`，扫描通过，待推送并开 PR | PR #41 扫描器对本分支 tree/diff/history 均为 0 命中；待新 PR CI | 待审查 | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
+| 凭据安全治理 | #44 | 已创建；代码提交 `c356047`，看板提交 `d55e8e1` | `d55e8e1` 的 RAG PR Smoke run 113 SUCCESS；看板更新后需以新 head 复查 | 待审查 | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
 | B1-C | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
 | B1-D | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
@@ -29,7 +29,7 @@
 - PR #43 head `2172208`：此前定向回归 `28 passed`；覆盖单一取消终帧、Timeout SSE/Trace、敏感异常不回传、通用异常 500；run 109 SUCCESS。
 - PR #41 head `fc27dec`：同步最新 main 后，RAG 定向回归 `81 passed in 14.05s`；PR 的 `secret-scan` run 8 SUCCESS，RAG Smoke run 112 仍 queued。前轮真实 Provider/性能/准确率证据未重跑、原样保留。
 - PR #41 当前树扫描按已有 workflow 的阻断口径为 0 blocking；报告 4 个 `assigned_secret` 存量项（根 `.env.example` 与 3 个 Travel 脚本）。它们都已在安全工作树修正；此时 PR #41 分支仍以旧 main 为基线，待安全 PR 合并后再同步。对 PR #41 的 `origin/main..HEAD` 可达提交区间扫描为 0；历史讨论记录了 PR 分支此前曾重写以移除泄漏，但本任务未重写任何历史。
-- 安全分支使用 PR #41 `scripts/scan_secrets.py` 执行 `--tree`、`--diff origin/main..HEAD`、`--history --range origin/main..HEAD`，三项均 exit 0、0 命中。三个脚本通过 `py_compile`，在移除 `API_KEY` 环境变量的隔离进程中均在网络请求前退出并提示配置缺失。
+- 安全分支 commit `c356047` 使用 PR #41 `scripts/scan_secrets.py` 执行 `--tree`、`--diff origin/main..HEAD`、`--history --range origin/main..HEAD`，三项均 exit 0、0 命中。三个脚本通过 `py_compile`，在移除 `API_KEY` 环境变量的隔离进程中均在网络请求前退出并提示配置缺失。安全 PR #44 已创建，当前 CI run 113 SUCCESS（对应 `d55e8e1`）。
 - 安全分支另将根 `.env.example` 的 JWT 项改为明显占位符，避免把可复制的静态签名值当成配置。
 
 ## 凭据轮换与失效验证（BLOCKED）
@@ -49,7 +49,7 @@
 
 ## 下一步
 
-1. 推送安全分支并创建独立安全 PR；不在 PR 正文或报告写入凭据值。
+1. 对 PR #44 新 head 重跑最终 Secret Scan；跟进 CI/GPT 审查，不在 PR 正文或报告写入凭据值。
 2. 轮询 PR #41 当前 RAG Smoke；复核四个 PR 的最新 CI、head、review 与 mergeable 状态。
 3. 准备逐项合并清单，提交用户审批；在获批前不合并。
 4. 安全 PR 合并后把 PR #41 同步到最新 main，确认树扫描无 Travel 存量项，再等待 #41/#42 合并与用户审批。
