@@ -4,34 +4,34 @@
 
 ## 当前基线与工作树
 
-- 最新 `origin/main`：`a67449b07a2bc9b25ba61b01c9b336d4512842f9`。
+- 最新 `origin/main`：`5e48246a17aa0ab4444992760157efe17b5c87ca`（新增 CI/评测环境规范文档）。
 - 安全治理工作树：`C:/Users/wh/.codex/worktrees/credential-security-p0-20261012/agent`，分支 `codex/credential-security-p0-20261012`。
-- 本任务未改写 main 历史；三个已有 PR 的分支均已同步当前 main。
+- 原 PR #40–#43 与 #41 仍以 `a67449b` 为基点；main 此后仅增加 `5e48246` 文档提交（`AGENTS.md` 导航、`docs/README.md`、新增 CI 评测规范），无业务代码或 workflow 改动。本任务未改写 main 历史；每次合并前仍会重新 fetch 并重验。
 
 ## 统一看板
 
 | 项目 | PR | 状态 | CI | GPT 审查 | 阻断原因 |
 | --- | --- | --- | --- | --- | --- |
-| B1-A | #40 | `READY_TO_MERGE` 标签已加 | head `9cca719` / RAG PR Smoke run 111 SUCCESS | 0 条未解决 review thread | 等用户批准合并；排队上限/等待超时继续挂账 |
+| B1-A | #40 | `READY_TO_MERGE` 标签已加；当前 `mergeable=clean` | head `9cca719` / RAG PR Smoke run 111 SUCCESS，评测 job 按路径 SKIP | 0 条未解决 review thread；无 GPT review submission | 等用户批准合并；对最新 main `5e48246` 的 merge-tree 无冲突；排队上限/等待超时继续挂账 |
 | B1-B | #42 | 修复已推送 | head `fb57241` / RAG PR Smoke run 110 SUCCESS | 3 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
 | B1-F | #43 | 修复已推送 | head `2172208` / RAG PR Smoke run 109 SUCCESS | 2 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
-| RAG R0/R1 | #41 | 最新 main 上最终核对完成，未合并 | head `fc27dec` / Secret Scan run 8 SUCCESS；RAG PR Smoke run 112 SUCCESS | 3 条旧 review thread 均已解决；无未解决 thread | 独立安全 PR #44 尚未合并；凭据轮换/旧值失效验证未完成，P0 仍阻断放行 |
-| 凭据安全治理 | #44 | 代码整改已推送、PR mergeable；当前提交仅更新看板 | 代码提交 `5bf88b8` 的 PR Smoke run 117 SUCCESS、tree/diff/history 扫描均 0 命中；看板提交前 RAG PR Smoke run 120 SUCCESS | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
+| RAG R0/R1 | #41 | head `fc27dec` 最终核对完成，未合并 | head `fc27dec` / Secret Scan run 8 SUCCESS；RAG Smoke run 112 SUCCESS | 3 条旧 review thread 均已解决；无未解决 thread | 分支基于 `a67449b`；安全 PR #44 尚未合并；凭据轮换/旧值失效验证未完成，P0 仍阻断放行 |
+| 凭据安全治理 | #44 | 代码整改已推送；本次仅更新看板 | 上一 head `df5b071` 的 RAG PR Smoke run 130 SUCCESS，评测 job 按路径 SKIP；代码 head `5bf88b8` 的 tree/diff/history 扫描均 0 命中 | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
 | B1-C | #45 | 实现与三项 GPT 审查修复已推送，head `8bd8ea2`，mergeable | RAG PR Smoke run 118 SUCCESS | 父 Trace 所有权、物理完成未知时重试、checkpoint deadline 归一化三项已修复并 resolve；审查基于旧 head，尚无新 head 复审 | 请求上下文里的第 5 个 Workflow 在当前唯一注册表不存在，未臆造新增；等用户批准合并 |
-| B1-D | #47 | 两条新 P1 已修复并推送，head `6acdc54`，mergeable | 此 head 的 RAG Smoke queued，Detect RAG changes SUCCESS | 并发快照覆盖、归档版本回滚两条 P1 已修复并 resolve；最新 head 尚未复审 | 等此 head CI；PostgreSQL CAS 集成用例未运行，避免操作共享数据库；合并需用户批准 |
+| B1-D | #47 | 两条新 P1 已修复并推送，head `6acdc54`，mergeable | head RAG PR Smoke run 129 SUCCESS；RAG Smoke、评测与 Detect checks SUCCESS | 并发快照覆盖、归档版本回滚两条 P1 已修复并 resolve；最近 GPT review 针对 `35fbee9`，未复审最新 head | PostgreSQL CAS 集成用例未运行，避免操作共享数据库；合并需用户批准 |
 | B1-E | 新 PR | 只读核对；尚未施工 | — | — | 生产实例的 Checkpointer 实际运行状态无可读证据；按门禁暂停实现 |
 
 ## 已取得证据
 
-- PR #40 head `9cca719`：在最新 main 上运行 `backend/tests/orchestration/workflow/test_selection_decision_event_loop.py` 与 `test_selection_decision_smoke.py`，`11 passed in 121.91s`；GitHub run 111 SUCCESS，PR `mergeable=true`；已按用户要求加 `READY_TO_MERGE` 标签，未合并。排队上限/等待超时不在本 PR 中扩展。
+- PR #40 head `9cca719`：在其代码基线运行 `backend/tests/orchestration/workflow/test_selection_decision_event_loop.py` 与 `test_selection_decision_smoke.py`，`11 passed in 121.91s`；GitHub run 111 的 RAG Smoke SUCCESS、评测 job SKIP（路径不相关）、Detect SUCCESS；PR 当前 `mergeable=clean`，0 条未解决 inline review thread；已加 `READY_TO_MERGE` 标签，未合并。最新 main `5e48246` 相对分叉点只改文档；`git merge-tree --write-tree origin/main HEAD` 成功（无冲突）。排队上限/等待超时不在本 PR 中扩展。
 - PR #42 head `fb57241`：定向 Python 回归 `58 passed, 2 skipped, 9 xfailed`；包括 eval tenant 守卫、judge 线程上下文、正常/异常/取消、连续评测后普通请求恢复、预占/结算/释放、fallback 与熔断器隔离；`py_compile`、`git diff --check` 通过；run 110 SUCCESS。
 - PR #43 head `2172208`：此前定向回归 `28 passed`；覆盖单一取消终帧、Timeout SSE/Trace、敏感异常不回传、通用异常 500；run 109 SUCCESS。
-- PR #41 head `fc27dec`：同步最新 main 后，RAG 定向回归 `81 passed in 14.05s`；PR 的 `secret-scan` run 8 SUCCESS，RAG Smoke run 112 SUCCESS。前轮真实 Provider/性能/准确率证据未重跑、原样保留。
+- PR #41 head `fc27dec`（基于当时最新 `a67449b`）：RAG 定向回归 `81 passed in 14.05s`；PR 的 `secret-scan` run 8 SUCCESS，RAG Smoke run 112 SUCCESS。前轮真实 Provider/性能/准确率证据未重跑、原样保留。
 - PR #41 当前树仍报告根 `.env.example` 与 3 个 Travel 脚本的 4 项 `assigned_secret`；安全 PR #44 中已修正这些代码项，因此 PR #41 需等 #44 合并后再同步并重扫。PR #41 的 `origin/main..HEAD` 可达提交区间扫描为 0；历史讨论记录此前曾清理 PR 分支历史。本任务未重写 main 或其他共享历史。
 - 安全 PR #44 head `5bf88b8` 使用 PR #41 的 `scripts/scan_secrets.py` 执行 `--tree`、`--diff origin/main..HEAD`、`--history --range origin/main..HEAD`，三项均 exit 0、0 命中。三个 Travel 脚本从项目根 `.env` 读取 `API_KEY`，进程环境变量优先；用不含真实凭据的临时 `.env` 做隔离行为验证：3/3 脚本均能读取配置，缺少配置时均在网络请求前失败关闭。`py_compile`、`git diff --check` 与 Ruff 导入排序检查通过。PR #44 run 117 SUCCESS；GPT P2 已修复并 resolve。没有真实 Provider 请求。
 - B1-C PR #45 head `8bd8ea2`：Workflow / DirectExecutor / RequestContext / SafeToolExecutor 定向集 `99 passed`；Tool Deadline 定向集 `11 passed`。父 Trace 生命周期、取消吞噬后不重试、checkpoint dict Deadline 归一化新增覆盖；`py_compile`、`git diff --check` 通过。使用临时内存 fixture，无数据库与真实 Provider 调用。run 118 SUCCESS，GPT 三条旧 head 线程均已 resolve。
-- B1-D PR #47 最新 head `6acdc54`：Prompt Service、Release Service、Hot Reload、Prompts API、Release API、Prompt Trace 定向集 `134 passed`；`py_compile`、Ruff、`git diff --check` 均通过。新增提交乱序并发测试：模拟较早 DB commit 已生效但 coroutine 晚恢复，再执行第二次发布，最终快照跟随第二次提交。发布状态测试使用 fake session/repository 与 Fake Redis；未连接共享 PostgreSQL、真实 Redis 或 Provider。PG CAS 真库用例因共享 DB 禁令未运行。当前 head 的 RAG Smoke 已 queued、Detect RAG changes 成功；旧提交 `35fbee9` 的 run 123 与中间 head 的 run 127 均不作为此 head 验收。两条 P1 review thread 已 resolve；GPT 审查基于 `35fbee9`，最新 head 尚未复审。
+- B1-D PR #47 最新 head `6acdc54`：Prompt Service、Release Service、Hot Reload、Prompts API、Release API、Prompt Trace 定向集 `134 passed`；`py_compile`、Ruff、`git diff --check` 均通过。新增提交乱序并发测试：模拟较早 DB commit 已生效但 coroutine 晚恢复，再执行第二次发布，最终快照跟随第二次提交。发布状态测试使用 fake session/repository 与 Fake Redis；未连接共享 PostgreSQL、真实 Redis 或 Provider。PG CAS 真库用例因共享 DB 禁令未运行。head RAG PR Smoke run 129 SUCCESS；旧提交 `35fbee9` 的 run 123 与中间 head 的 run 127 均不作为此 head 验收。两条 P1 review thread 已 resolve；GPT 审查基于 `35fbee9`，最新 head 尚未复审。
 - B1-E 只读核对：仓库 Docker Compose 的 Travel Checkpointer 默认值为 PostgreSQL 开启，应用配置的默认值则为关闭；运行时图状态区分 `healthy/degraded/disabled`，生产启动对缺少 PostgresSaver 依赖有显式校验。现有 interrupt 测试使用 `MemorySaver`，不能证明生产配置。当前工作区没有生产部署配置读取或实例运行状态访问，故不能确认实际生产后端与 interrupt 开关；未修改 B1-E 代码，需取得不含凭据的生产配置/运行状态证据后再施工。
 - 风险复核另发现 Travel 脚本保留预置测试登录常量；未被 Secret Scan 识别为可验证凭据，当前用途似为测试账号，但是否只在隔离环境有效尚未确认。看板和 PR 未记录其值；需代码所有者确认非生产复用后才能消除此项风险。
 - 安全分支另将根 `.env.example` 的 JWT 项改为明显占位符，避免把可复制的静态签名值当成配置。
