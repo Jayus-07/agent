@@ -34,7 +34,7 @@
 ### 2.1 超级管理员测试库权限（✅ 已实现）
 
 - 管理面：`readable_kb_ids(include_test=)` 仅 `super_admin` 放开 `audience=test`（[`backend/rag/authz.py`](../../backend/rag/authz.py)）；普通 admin（`rag.admin` 权限点）可见全部非 test 库但**不可见** test 库。
-- 检索面：`authorized_kbs()` 对任何检索主体隐藏 test 库；customer 主体仅见 `audience=customer`。
+- 检索面：`backend/rag/authz.py` 的 `retrieval_authorized_kbs()` 对 `super_admin` 传入 `include_test=True`，因此超管可检索 test 库用于管理与评测验证；admin 及以下主体不可检索 test 库，customer 主体仅见 `audience=customer`。
 - 跨库兜底：`audience=test` 由属性推导进入兜底禁入名单（`CROSS_KB_FALLBACK_EXCLUDE_TEST`，默认 true），虚构语料不得经放宽路径对客召回。
 - 前端上传 KB 列表来自 `GET /api/rag/knowledge-bases`，按 `RagAuthorization.can_search_kb` 后端裁决收敛；上传走 `can_upload_to` 同一授权视图。权限由服务端负责，前端隐藏不是边界。
 - **Runner 接线警示（❌ 尚未实现）**：`cs_eval_kb` / `travel_eval_kb` 已登记，但 `backend/evaluation/` 下当前无任何 Runner 引用这两个 KB（全仓零引用，2026-10-11 核对）——登记不等于评测已消费。SQL/Planner/E2E 不绑定 RAG KB。
@@ -57,7 +57,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 
 - **Secrets → 加密入库 → 运行时读 DB（✅ 已实现骨架 / 🚧 扩展中）**：[`backend/scripts/seed_prompt_eval_db.py`](../../backend/scripts/seed_prompt_eval_db.py)（main 已有）从受保护 Environment Secrets 读显式配置，按既有 Fernet 加密链写入 CI 临时 DB，运行时经 `registry_store.refresh_registry()` 从 DB 解析；PR #30 扩展可选 rerank 绑定并将维度 env 化。**禁止旧 env 凭据回退**（`credentials.py`：DB 是唯一来源，未登记即未配置）。
 - **版本化脱敏模型快照文件（❌ 尚未实现）**："从管理端 DB 导出快照并版本化提交、CI 对比快照与注入绑定差异"为目标契约，当前无对应实现与快照文件。
-- **维度口径（✅ 探针已实现 / 值非长期标准）**：当前实例值 Embedding 维度 **1024**（qwen3.7-text-embedding）。实际维度必须由绑定声明、真实 API 探针（`scripts/seed_eval_model_bindings.py --probe`，🚧 PR #30）、pgvector 写入后 `vector_dims` 断言（🚧 PR #30）三方一致确认；换模型或维度必须重建不兼容索引（[model-provider-runtime MP-09](../governance/model-provider-runtime.md)）。
+- **维度口径（🚧 PR #30 施工中，main 探针未实现 / 值非长期标准）**：当前实例值 Embedding 维度 **1024**（qwen3.7-text-embedding）。实际维度必须由绑定声明、真实 API 探针（`scripts/seed_eval_model_bindings.py --probe`，🚧 PR #30）、pgvector 写入后 `vector_dims` 断言（🚧 PR #30）三方一致确认；换模型或维度必须重建不兼容索引（[model-provider-runtime MP-09](../governance/model-provider-runtime.md)）。
 
 ## 4. GitHub Actions 真实 RAG 评测流水线
 
