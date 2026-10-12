@@ -11,6 +11,7 @@ Router 决定 execution_mode=direct 或 workflow 时：
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 
 from backend.orchestration.capability_registry import tool_registry
@@ -40,8 +41,9 @@ def _run_coro_sync(coro):
     logger.warning(
         "[DirectExecutor] 检测到调用线程已有事件循环，协程转入专用线程执行"
     )
+    context = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="coro-sync") as pool:
-        return pool.submit(asyncio.run, coro).result()
+        return pool.submit(context.run, asyncio.run, coro).result()
 
 
 def _extract_capability_name(capability: str) -> str:
@@ -415,9 +417,20 @@ def workflow_executor_node(state: dict) -> dict:
 
     try:
         scheduler = get_workflow_scheduler()
+        from backend.orchestration.request_context import get_context_from_state
+        request_context = get_context_from_state(state)
         # run_now 是 async（STOP D：经显式 sync adapter，防 loop 线程误调用）
-        ctx = _run_coro_sync(scheduler.run_now(
-            wf_name, inputs=_build_workflow_inputs(wf_name, state)))
+        workflow_inputs = _build_workflow_inputs(wf_name, state)
+        run_coroutine = (
+            scheduler.run_now(
+                wf_name,
+                inputs=workflow_inputs,
+                request_context=request_context,
+            )
+            if request_context is not None
+            else scheduler.run_now(wf_name, inputs=workflow_inputs)
+        )
+        ctx = _run_coro_sync(run_coroutine)
 
         # 构造面向用户的确定性结果；内部 workflow 名、run_id 与异常细节留在
         # workflow_result / Trace，不混入最终正文。

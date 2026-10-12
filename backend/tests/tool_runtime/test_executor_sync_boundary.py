@@ -122,3 +122,37 @@ def test_sync_tool_exception_maps_to_tool_result() -> None:
     assert result.status is ToolStatus.UNAVAILABLE
     assert result.error_code == "connect_error"
     assert result.retryable is True
+
+
+def test_executor_inherits_request_deadline_and_skips_expired_call() -> None:
+    from backend.core.request_context import _current_request_deadline
+    from backend.core.tool_runtime.deadline import RequestDeadline
+
+    called = False
+
+    def sync_tool() -> dict:
+        nonlocal called
+        called = True
+        return {"ok": True}
+
+    deadline = RequestDeadline(
+        total_budget_ms=1,
+        workflow_budget_ms=0.1,
+        reporter_reserved_ms=1,
+    )
+
+    async def scenario() -> object:
+        return await safe_tool_executor.run(
+            tool_key="test.inherited_deadline",
+            call=sync_tool,
+            policy=_policy(),
+        )
+
+    token = _current_request_deadline.set(deadline)
+    try:
+        result = asyncio.run(scenario())
+    finally:
+        _current_request_deadline.reset(token)
+
+    assert result.error_code == "DEADLINE_BUDGET_INSUFFICIENT"
+    assert called is False

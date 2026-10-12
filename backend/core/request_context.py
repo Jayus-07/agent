@@ -51,6 +51,11 @@ _current_permissions: ContextVar[tuple[str, ...] | None] = ContextVar(
 _current_roles: ContextVar[tuple[str, ...] | None] = ContextVar(
     "tool_roles", default=None
 )
+# 当前请求的统一 Tool deadline。Workflow/Skill 的子调用未显式传 deadline 时，
+# SafeToolExecutor 从这里继承，避免内部 Provider/Tool 调用越过请求预算。
+_current_request_deadline: ContextVar[Any] = ContextVar(
+    "request_deadline", default=None
+)
 # STOP CS-A P0-3：请求级取消信号（threading.Event，由 /chat/abort 的
 # stop_event 注入）。ContextVar 载体 = 随 LangGraph copy_context 传播进
 # 节点线程与专家线程（THREAD_ISOLATED 亦复制），**不进任何可持久化
@@ -171,6 +176,11 @@ def get_tool_roles() -> tuple[str, ...]:
     return _current_roles.get() or ()
 
 
+def get_request_deadline() -> Any:
+    """当前可信请求 Deadline；未绑定时返回 None。"""
+    return _current_request_deadline.get()
+
+
 @dataclass
 class RequestContext:
     """一次用户请求的权威执行上下文（身份/会话/检索授权字段唯一定义点）。"""
@@ -261,6 +271,12 @@ class RequestContext:
         set_tool_department(self.department)
         set_tool_permissions(self.permissions)
         set_tool_roles(self.roles)
+        deadline = self.deadline
+        if isinstance(deadline, dict):
+            from backend.core.tool_runtime.deadline import RequestDeadline
+
+            deadline = RequestDeadline.from_dict(deadline)
+        _current_request_deadline.set(deadline)
         set_log_context(user_id=self.user_id)
         set_request_model(self.model)
         if self.bind_sink:

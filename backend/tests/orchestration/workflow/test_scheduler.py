@@ -47,6 +47,39 @@ class TestSchedulerRunNow:
         ctx = asyncio.run(scheduler.run_now("sched_wf", {"x": 1}))
         assert ctx.status == "success"
 
+    def test_run_now_propagates_request_context(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        from backend.core.request_context import RequestContext
+
+        @workflow(name="sched_context_wf")
+        class TWF:
+            @step()
+            async def s(self, ctx):
+                from backend.core.request_context import (
+                    get_tool_tenant_id,
+                    get_tool_user_id,
+                )
+                return {
+                    "user_id": get_tool_user_id(),
+                    "tenant_id": get_tool_tenant_id(),
+                }
+
+        fresh_registry.register(TWF)
+        scheduler = WorkflowScheduler(
+            registry=fresh_registry,
+            executor=WorkflowExecutor(registry=fresh_registry),
+        )
+        request_context = RequestContext(user_id="user-9", tenant_id="tenant-2")
+        ctx = asyncio.run(scheduler.run_now(
+            "sched_context_wf", request_context=request_context,
+        ))
+
+        assert ctx.request_context is request_context
+        assert ctx.outputs["s"] == {
+            "user_id": "user-9", "tenant_id": "tenant-2",
+        }
+
     def test_run_now_unknown_workflow_returns_failed(
         self, fresh_registry, patched_trace_collector, patched_persistence
     ):

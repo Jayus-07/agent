@@ -17,6 +17,7 @@ Phase 1 限制（报告中如实标注）：
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from statistics import median
 from typing import Any
@@ -132,8 +133,10 @@ def _recommendation_of(verdict: str, recommendation_cap: str | None) -> str:
     return "recommend" if recommendation_cap in (None, "recommend") else "cautious"
 
 
-def _llm_json(messages) -> Any:
-    resp = llm.invoke(messages)
+async def _llm_json(messages) -> Any:
+    # 竞品分析在 Workflow 的异步 Step 中运行，避免同步 Provider 调用阻塞
+    # DAG 事件循环；超时后线程可能仍在 Provider 侧执行，交由 Runtime 留痕。
+    resp = await asyncio.to_thread(llm.invoke, messages)
     return json.loads(resp.content.strip().strip("`").removeprefix("json").strip())
 
 
@@ -144,6 +147,7 @@ def _llm_json(messages) -> Any:
     actions=["评估", "分析", "决策"],
     examples=["评估蓝牙耳机品类值不值得做", "帮我做一次选品决策"],
     category="selection",
+    deadline_sec=900,
 )
 class SelectionDecision:
     """选品决策 Workflow — 8 个 step，5 层 DAG
@@ -247,7 +251,7 @@ class SelectionDecision:
                     "note": "痛点推断失败，差异化分析将仅基于结构化数据"}
         try:
             from backend.prompts.service import prompt_service
-            data = _llm_json([
+            data = await _llm_json([
                 SystemMessage(content=prompt_service.get_template_sync("selection_decision.review_pain")),
                 HumanMessage(content=material),
             ])
@@ -275,7 +279,7 @@ class SelectionDecision:
                         "reason": "差异化分析不可用（LLM 失败），保守拒绝"}
         try:
             from backend.prompts.service import prompt_service
-            data = _llm_json([
+            data = await _llm_json([
                 SystemMessage(content=prompt_service.get_template_sync("selection_decision.differentiation")),
                 HumanMessage(content=json.dumps(material, ensure_ascii=False, default=str)),
             ])

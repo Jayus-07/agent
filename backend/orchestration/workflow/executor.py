@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import uuid
 from datetime import datetime
 from typing import Any, Callable
@@ -40,7 +41,12 @@ from backend.shared.logger import logger
 _FAILURE_META_KEYS = (
     "error", "error_type", "tool_status", "criticality",
     "error_code", "fallback_used", "degraded", "needs_verification",
+    "physical_completion",
 )
+
+
+class WorkflowDeadlineExceededError(TimeoutError):
+    """整个 Workflow 的执行预算耗尽，不能按单步策略重试或降级。"""
 
 
 def _failure_metadata(exc: BaseException | None) -> dict:
@@ -55,7 +61,23 @@ def _failure_metadata(exc: BaseException | None) -> dict:
         meta = {"error": str(exc)}
         meta.update({k: sr[k] for k in _FAILURE_META_KEYS if sr.get(k) is not None})
         return meta
-    return {"error": str(exc) if exc else "unknown error"}
+    meta = {"error": str(exc) if exc else "unknown error"}
+    physical_completion = getattr(exc, "physical_completion", None)
+    if physical_completion:
+        meta.update(
+            error_type=type(exc).__name__,
+            error_code="step_timeout",
+            physical_completion=physical_completion,
+        )
+    return meta
+
+
+def _consume_detached_step(task: asyncio.Future) -> None:
+    """读取被 timeout 取消后仍运行的 Step 异常，避免未取回异常告警。"""
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 class WorkflowExecutor:
@@ -68,6 +90,7 @@ class WorkflowExecutor:
         self,
         workflow_name: str,
         inputs: dict[str, Any] | None = None,
+        request_context: Any = None,
     ) -> WorkflowContext:
         """执行一个 workflow
 
@@ -78,11 +101,46 @@ class WorkflowExecutor:
         Returns:
             WorkflowContext: 运行结果（含 outputs / status / duration_ms）
         """
-        # 1. 创建 ctx
+        request_context = self._coerce_request_context(request_context)
+        if request_context is None:
+            return await self._run(workflow_name, inputs, None)
+
+        # 在隔离的 asyncio Task 上绑定身份/租户/Trace/预算 ContextVar；
+        # 任务完成后调用者线程上下文不受污染，所有 Step 子任务继承此绑定。
+        bound_context = contextvars.copy_context()
+        bound_context.run(request_context.bind)
+        task = bound_context.run(
+            asyncio.create_task,
+            self._run(workflow_name, inputs, request_context),
+            name=f"workflow:{workflow_name}",
+        )
+        return await task
+
+    async def _run(
+        self,
+        workflow_name: str,
+        inputs: dict[str, Any] | None,
+        request_context: Any,
+    ) -> WorkflowContext:
+        """在已经绑定的请求 Context 中执行 Workflow 生命周期。"""
+        # 1. 创建 ctx，并将在线请求 Deadline 与 Workflow 总预算取较早者。
+        meta = self.registry.get_meta(workflow_name)
+        budget_sec = float(meta.deadline_sec if meta else 900)
+        deadline_source = "workflow"
+        request_deadline = getattr(request_context, "deadline", None)
+        if request_deadline is not None:
+            remaining_ms = request_deadline.remaining_workflow_ms()
+            budget_sec = min(budget_sec, max(0.0, remaining_ms / 1000))
+            deadline_source = "request_and_workflow"
+        loop = asyncio.get_running_loop()
         ctx = WorkflowContext(
             workflow_name=workflow_name,
             run_id=uuid.uuid4().hex[:12],
             inputs=inputs or {},
+            request_context=request_context,
+            deadline_at_monotonic=loop.time() + budget_sec,
+            deadline_budget_ms=max(0, int(budget_sec * 1000)),
+            deadline_source=deadline_source,
         )
 
         # 2. 拿 step 方法 + config
@@ -140,16 +198,44 @@ class WorkflowExecutor:
                 logger.debug(
                     f"[WorkflowExecutor] Layer {layer_idx}: {layer}"
                 )
-                await asyncio.gather(*[
-                    self._run_step(name, steps, ctx, trace_root_span)
+                tasks = [
+                    asyncio.create_task(
+                        self._run_step(name, steps, ctx, trace_root_span),
+                        name=f"workflow:{workflow_name}:{name}",
+                    )
                     for name in layer
-                ])
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                except WorkflowDeadlineExceededError:
+                    # gather 不会自动取消仍在运行的兄弟 Step；总预算到期后
+                    # 必须停止其逻辑执行，避免终态写入后又继续产生副作用。
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                if self._remaining_sec(ctx) <= 0:
+                    self._raise_workflow_deadline(
+                        ctx,
+                        "__workflow__",
+                        None,
+                        call_started=False,
+                        physical_completion="workflow_work_completed_after_deadline",
+                    )
             # 全部 step 成功（run_if 条件跳过不算 partial；错误跳过与降级
             # 继续都算 partial——workflow 没有全绿就不许标 success）
             if (ctx.skip_steps - ctx.run_if_skips) or ctx.degraded_steps:
                 ctx.mark_partial()
             else:
                 ctx.mark_success()
+        except WorkflowDeadlineExceededError as e:
+            ctx.deadline_exceeded = True
+            ctx.mark_failed(str(e))
+            logger.warning(
+                f"[WorkflowExecutor] {workflow_name} 总执行预算耗尽 "
+                f"run_id={ctx.run_id} budget_ms={ctx.deadline_budget_ms}"
+            )
         except Exception as e:
             # abort 失败
             ctx.mark_failed(str(e))
@@ -175,6 +261,8 @@ class WorkflowExecutor:
                         "skip_count": len(ctx.skip_steps),
                         "degraded_count": len(ctx.degraded_steps),
                         "failure_count": len(ctx.step_failures),
+                        "deadline_budget_ms": ctx.deadline_budget_ms,
+                        "deadline_exceeded": ctx.deadline_exceeded,
                     },
                 )
                 # finish() 将 trace 持久化到 trace_store（SQLite，重启不丢失）
@@ -202,6 +290,60 @@ class WorkflowExecutor:
 
         return ctx
 
+    @staticmethod
+    def _coerce_request_context(request_context: Any) -> Any:
+        """还原 checkpoint 安全形态的 RequestContext；None 保持后台路径。"""
+        if request_context is None:
+            return None
+        from backend.core.request_context import RequestContext
+
+        if isinstance(request_context, RequestContext):
+            return request_context
+        from backend.orchestration.request_context import get_context_from_state
+
+        return get_context_from_state({"request_context": request_context})
+
+    @staticmethod
+    def _remaining_sec(ctx: WorkflowContext) -> float:
+        if ctx.deadline_at_monotonic is None:
+            return float("inf")
+        return ctx.deadline_at_monotonic - asyncio.get_running_loop().time()
+
+    @staticmethod
+    def _raise_workflow_deadline(
+        ctx: WorkflowContext,
+        step_name: str,
+        step_span: Any,
+        *,
+        call_started: bool,
+        physical_completion: str | None = None,
+    ) -> None:
+        message = f"Workflow {ctx.workflow_name} 总执行预算耗尽"
+        ctx.deadline_exceeded = True
+        failure = {
+            "error": message,
+            "error_type": "WorkflowDeadlineExceededError",
+            "error_code": "workflow_deadline_exceeded",
+            "physical_completion": physical_completion or (
+                "unknown_after_cancellation" if call_started else "not_started"
+            ),
+        }
+        ctx.step_failures[step_name] = failure
+        if step_span is not None:
+            try:
+                from backend.observability.tracer import trace_collector
+                trace_collector.end_span(
+                    step_span,
+                    status="timeout",
+                    metrics={
+                        "error_code": "workflow_deadline_exceeded",
+                        "physical_completion": failure["physical_completion"],
+                    },
+                )
+            except Exception:
+                logger.debug("[WorkflowExecutor] deadline span 收尾失败", exc_info=True)
+        raise WorkflowDeadlineExceededError(message)
+
     async def _run_step(
         self,
         step_name: str,
@@ -228,6 +370,10 @@ class WorkflowExecutor:
             logger.debug("[WorkflowExecutor] step span 创建失败（忽略）", exc_info=True)
 
         # run_if 条件跳过：上游输出不满足谓词 → 记录 skipped 输出并收尾 span
+        if self._remaining_sec(ctx) <= 0:
+            self._raise_workflow_deadline(
+                ctx, step_name, step_span, call_started=False,
+            )
         if config.run_if is not None:
             try:
                 should_run = bool(config.run_if(ctx.outputs))
@@ -266,12 +412,38 @@ class WorkflowExecutor:
 
         # 重试循环
         for attempt in range(config.retry + 1):
+            remaining_sec = self._remaining_sec(ctx)
+            if remaining_sec <= 0:
+                self._raise_workflow_deadline(
+                    ctx, step_name, step_span, call_started=False,
+                )
+            attempt_timeout = min(config.timeout_sec, remaining_sec)
+            attempt_deadline = asyncio.get_running_loop().time() + attempt_timeout
+            workflow_deadline_limited = remaining_sec <= config.timeout_sec
+            step_task: asyncio.Future | None = None
             try:
                 # 调用 raw function：fn(workflow_instance, ctx)
+                step_task = asyncio.ensure_future(fn(workflow_instance, ctx))
                 result = await asyncio.wait_for(
-                    fn(workflow_instance, ctx),
-                    timeout=config.timeout_sec,
+                    asyncio.shield(step_task), timeout=attempt_timeout,
                 )
+                attempt_timed_out = (
+                    asyncio.get_running_loop().time() >= attempt_deadline
+                )
+                if self._remaining_sec(ctx) <= 0 or (
+                    workflow_deadline_limited and attempt_timed_out
+                ):
+                    self._raise_workflow_deadline(
+                        ctx,
+                        step_name,
+                        step_span,
+                        call_started=True,
+                        physical_completion="workflow_work_completed_after_deadline",
+                    )
+                if attempt_timed_out:
+                    raise asyncio.TimeoutError(
+                        f"step {step_name!r} 超时 ({config.timeout_sec}s)"
+                    )
                 ctx.outputs[step_name] = result
                 if step_span is not None:
                     try:
@@ -288,10 +460,86 @@ class WorkflowExecutor:
                     f"(attempt={attempt + 1})"
                 )
                 return
+            except WorkflowDeadlineExceededError:
+                raise
+            except asyncio.CancelledError:
+                if step_task is not None and not step_task.done():
+                    step_task.cancel()
+                    step_task.add_done_callback(_consume_detached_step)
+                if ctx.deadline_exceeded:
+                    failure = {
+                        "error": f"Workflow {ctx.workflow_name} 总执行预算耗尽",
+                        "error_type": "WorkflowDeadlineExceededError",
+                        "error_code": "workflow_deadline_exceeded",
+                        "physical_completion": "unknown_after_cancellation",
+                    }
+                    ctx.step_failures.setdefault(step_name, failure)
+                    if step_span is not None:
+                        try:
+                            from backend.observability.tracer import trace_collector
+                            trace_collector.end_span(
+                                step_span,
+                                status="timeout",
+                                metrics={
+                                    "error_code": "workflow_deadline_exceeded",
+                                    "physical_completion": "unknown_after_cancellation",
+                                },
+                            )
+                        except Exception:
+                            logger.debug(
+                                "[WorkflowExecutor] cancelled deadline span 收尾失败",
+                                exc_info=True,
+                            )
+                elif step_span is not None:
+                    try:
+                        from backend.observability.tracer import trace_collector
+                        trace_collector.end_span(
+                            step_span,
+                            status="cancelled",
+                            metrics={"physical_completion": "unknown_after_cancellation"},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "[WorkflowExecutor] cancelled step span 收尾失败",
+                            exc_info=True,
+                        )
+                raise
             except asyncio.TimeoutError:
+                step_timed_out = step_task is not None and not step_task.done()
+                if step_timed_out:
+                    # shield 让父 Step 不会等待协程处理取消；物理 Provider/异步
+                    # 操作可能仍在运行，终态必须如实记录未知完成状态。
+                    step_task.cancel()
+                    step_task.add_done_callback(_consume_detached_step)
+                    if step_span is not None:
+                        try:
+                            from backend.observability.tracer import trace_collector
+                            trace_collector.add_event(
+                                step_span,
+                                "step_timeout",
+                                "warn",
+                                "Step timeout 已取消等待，物理调用完成状态未知",
+                                data={
+                                    "attempt": attempt + 1,
+                                    "physical_completion": "unknown_after_cancellation",
+                                },
+                            )
+                        except Exception:
+                            logger.debug(
+                                "[WorkflowExecutor] timeout event 写入失败",
+                                exc_info=True,
+                            )
+                if self._remaining_sec(ctx) <= 0 or (
+                    workflow_deadline_limited and step_timed_out
+                ):
+                    self._raise_workflow_deadline(
+                        ctx, step_name, step_span, call_started=True,
+                    )
                 last_error = asyncio.TimeoutError(
                     f"step {step_name!r} 超时 ({config.timeout_sec}s)"
                 )
+                if step_timed_out:
+                    last_error.physical_completion = "unknown_after_cancellation"
                 logger.warning(
                     f"[WorkflowExecutor] step {step_name} 超时 "
                     f"(attempt={attempt + 1})"
