@@ -9,6 +9,7 @@
 """
 import json
 import subprocess
+import os
 import sys
 import threading
 import time
@@ -17,7 +18,9 @@ import urllib.request
 
 BASE = "http://127.0.0.1:9080"
 REPO = r"D:/Program Files/workplace/agent"
-API_KEY = "ak_P8iOQbZT4kgUcA8ImY-CycGLseGMIOMiB9jUaUxx4qGo"
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
 LEASE_TTL_S = 32  # RedisLease ttl=30 + 余量
 
 

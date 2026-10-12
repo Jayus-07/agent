@@ -11,12 +11,15 @@
 import json
 import re
 import statistics
+import os
 import sys
 import time
 import urllib.request
 
 BASE = "http://127.0.0.1:9080"
-API_KEY = "ak_P8iOQbZT4kgUcA8ImY-CycGLseGMIOMiB9jUaUxx4qGo"
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
 ROUNDS = 20
 
 

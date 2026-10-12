@@ -12,15 +12,16 @@ retrieved_at 三元组完整（RAG 类可回到 doc_id）。
 import concurrent.futures
 import json
 import re
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:9080"
-API_KEY = "ak_P8iOQbZT4kgUcA8ImY-CycGLseGMIOMiB9jUaUxx4qGo"
-
-
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
 def login():
     body = json.dumps({"username": "uitest_user", "password": "UiTest2026"}).encode()
     req = urllib.request.Request(
