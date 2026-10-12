@@ -9,7 +9,7 @@ import type {
 } from '@/api/travelV2'
 
 /** 将本轮旅游 Agent 的结构化输出转成 V2 正式文档，不读取或迁移旧行程记录。 */
-export function itineraryToTripDocumentV2(itinerary: Itinerary): TripDocumentV2 {
+export function itineraryToTripDocumentV2(itinerary: Itinerary, confirmedTimezone?: string | null): TripDocumentV2 {
   const brief = itinerary.brief
   const days = itinerary.days ?? []
   const destination = String(brief?.destination ?? '').trim()
@@ -80,21 +80,33 @@ export function itineraryToTripDocumentV2(itinerary: Itinerary): TripDocumentV2 
   })
 
   const warnings = (itinerary.warnings ?? []).filter((item) => String(item).trim())
+  const briefTimezone = typeof confirmedTimezone === 'string' ? confirmedTimezone.trim() : ''
+  const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  const timezone = validTimezone(briefTimezone) ? briefTimezone : localTimezone
+  if (!briefTimezone || !validTimezone(briefTimezone)) {
+    warnings.push(`现有需求数据未提供有效时区；当前暂用设备时区 ${timezone}，请确认目的地当地时区。`)
+  }
+  const children = finiteCount(brief.children) ?? 0
+  const partySize = Math.max(1, finiteCount(brief.party_size) ?? 1)
+  const adults = Math.max(1, finiteCount(brief.adults) ?? partySize - children)
   const total = finiteOrNull(itinerary.cost?.total)
     ?? [itinerary.cost?.tickets, itinerary.cost?.meals, itinerary.cost?.lodging, itinerary.cost?.transit]
       .map((value) => finiteOrNull(value) ?? 0)
       .reduce((sum, value) => sum + value, 0)
   const allLegs = dayDocuments.flatMap((day) => day.legs)
+  if (allLegs.some((leg) => leg.duration_min === null)) {
+    warnings.push('部分接驳耗时未知，交通总时长仅汇总已知路段，不代表完整通行时间。')
+  }
 
   return {
     schema_version: 2,
     brief: {
       origin: String(brief.origin ?? ''),
       destination,
-      timezone: 'Asia/Shanghai',
+      timezone,
       start_date: validDate(brief.start_date) ? brief.start_date : null,
       day_count: days.length,
-      travelers: { adults: Math.max(1, Math.floor(Number(brief.party_size) || 1)), children: 0 },
+      travelers: { adults, children },
       budget: { amount: finiteOrNull(brief.budget_cny), currency: 'CNY' },
       pace: brief.pace === 'relaxed' ? 'relaxed' : brief.pace === 'intense' ? 'intense' : 'balanced',
       interests: [...(brief.preferences ?? [])],
@@ -165,7 +177,7 @@ function mapLegs(
   dayIndex: number,
 ): TripLegV2[] {
   let previousFromIndex = -1
-  return legs.flatMap((leg, legIndex) => {
+  return legs.flatMap<TripLegV2>((leg, legIndex): TripLegV2[] => {
     const fromIndex = sourceItems.findIndex((item, index) => index > previousFromIndex
       && item.title === leg.from_title && sourceItems[index + 1]?.title === leg.to_title)
     if (fromIndex < 0) return []
@@ -177,7 +189,6 @@ function mapLegs(
       item.kind === 'activity' && (!item.place || item.place.lat === null || item.place.lng === null))
     if (coordinateFreeActivity) return []
     const duration = finiteOrNull(leg.minutes)
-    if (duration === null || duration < 0) return []
     const mode = String(leg.mode ?? '').toLowerCase()
     const selectedMode = mode.includes('walk') || mode.includes('步行')
       ? 'walk'
@@ -188,6 +199,20 @@ function mapLegs(
           : 'drive'
     const distance = finiteOrNull(leg.distance_km)
     const observed = leg.observed_at && isIsoDateTime(leg.observed_at) ? leg.observed_at : null
+    if (duration === null || duration <= 0) {
+      return [{
+        leg_id: `ai-day-${dayIndex + 1}-leg-${legIndex + 1}`,
+        from_item_id: fromTarget.item_id,
+        to_item_id: toTarget.item_id,
+        selected_mode: selectedMode,
+        duration_min: null,
+        distance_m: null,
+        cost_cny: null,
+        reliability: 'unavailable',
+        source: leg.source || null,
+        observed_at: observed,
+      }]
+    }
     return [{
       leg_id: `ai-day-${dayIndex + 1}-leg-${legIndex + 1}`,
       from_item_id: fromTarget.item_id,
@@ -251,6 +276,21 @@ function safeMinutes(value: number): number {
 function finiteOrNull(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null
   return value >= 0 ? value : null
+}
+
+function finiteCount(value: unknown): number | null {
+  const count = finiteOrNull(value)
+  return count === null ? null : Math.floor(count)
+}
+
+function validTimezone(value: string): boolean {
+  if (!value) return false
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
 }
 
 function validDate(value: unknown): value is string {

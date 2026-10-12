@@ -13,6 +13,10 @@ import {
   fetchTravelTripRevisionsV2,
   fetchTravelTripsV2,
   fetchTravelTripV2,
+  addTravelMealV2,
+  restoreTravelTripV2,
+  selectTravelLodgingV2,
+  selectTravelTrainV2,
   searchTravelFoodV2,
   searchTravelHotelsV2,
   searchTravelPlacesV2,
@@ -143,5 +147,45 @@ describe('旅游 V2 BFF API', () => {
     expect(request).toHaveBeenCalledWith('/api/travel/v2/templates/hangzhou-slow/copy', {
       method: 'POST', body: {}, headers: { 'Idempotency-Key': 'copy-intent-1' },
     })
+  })
+
+  it('编辑、选入与恢复重试可复用同一 Idempotency-Key 和原 payload', async () => {
+    request.mockResolvedValue({ saved: true })
+    const editInput = {
+      expected_revision: 4,
+      change_summary: '调整时长',
+      operation: { op: 'update_item', item_id: 'item-1', duration_min: 120 } as const,
+    }
+    const mealInput = {
+      expected_revision: 4, day_id: 'day-1', meal_period: 'lunch' as const,
+      selection_id: 'meal-1', merchant: { merchant_id: 'merchant-1' } as never,
+    }
+    const lodgingInput = {
+      expected_revision: 4, lodging: { selection_id: 'hotel-1' } as never,
+    }
+    const trainInput = {
+      expected_revision: 4, train: { selection_id: 'train-1' } as never,
+    }
+    const restoreInput = { expected_revision: 4, target_revision: 2 }
+
+    await applyTravelTripEditV2('trip/123', editInput, 'same-edit-key')
+    await applyTravelTripEditV2('trip/123', editInput, 'same-edit-key')
+    await addTravelMealV2('trip/123', mealInput, 'same-meal-key')
+    await addTravelMealV2('trip/123', mealInput, 'same-meal-key')
+    await selectTravelLodgingV2('trip/123', lodgingInput, 'same-lodging-key')
+    await selectTravelLodgingV2('trip/123', lodgingInput, 'same-lodging-key')
+    await selectTravelTrainV2('trip/123', trainInput, 'same-train-key')
+    await selectTravelTrainV2('trip/123', trainInput, 'same-train-key')
+    await restoreTravelTripV2('trip/123', restoreInput, 'same-restore-key')
+    await restoreTravelTripV2('trip/123', restoreInput, 'same-restore-key')
+
+    for (let index = 0; index < request.mock.calls.length; index += 2) {
+      expect(request.mock.calls[index + 1]).toEqual(request.mock.calls[index])
+    }
+    expect(request.mock.calls.map(([, options]) => options.headers['Idempotency-Key'])).toEqual([
+      'same-edit-key', 'same-edit-key', 'same-meal-key', 'same-meal-key',
+      'same-lodging-key', 'same-lodging-key', 'same-train-key', 'same-train-key',
+      'same-restore-key', 'same-restore-key',
+    ])
   })
 })

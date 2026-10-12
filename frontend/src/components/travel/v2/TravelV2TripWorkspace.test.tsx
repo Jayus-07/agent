@@ -1,6 +1,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '@/api/client'
 import type { TravelTripV2 } from '@/api/travelV2'
 
 const mocks = vi.hoisted(() => ({
@@ -34,14 +35,24 @@ vi.mock('./TravelV2Map', () => ({
 }))
 
 vi.mock('./TravelV2EditDialog', () => ({
-  default: ({ trip, onEdit }: { trip: TravelTripV2; onEdit: (operation: unknown, summary: string) => Promise<boolean> }) =>
+  default: ({ trip, onEdit, writeStatus, writeMessage, onRetry, onRefreshConflict }: {
+    trip: TravelTripV2
+    onEdit: (operation: unknown, summary: string) => Promise<boolean>
+    writeStatus?: string | null
+    writeMessage?: string
+    onRetry?: () => Promise<boolean>
+    onRefreshConflict?: () => Promise<boolean>
+  }) =>
     createElement('div', { 'data-testid': 'edit-dialog' }, [
       createElement('span', { key: 'trip' }, `编辑 ${trip.trip_id}`),
+      writeStatus && createElement('p', { key: 'status', role: writeStatus === 'UNKNOWN' || writeStatus === 'CONFLICT' ? 'alert' : 'status' }, `${writeStatus} ${writeMessage}`),
       createElement('button', {
         key: 'submit',
         type: 'button',
         onClick: () => void onEdit({ op: 'update_item', item_id: `${trip.trip_id}-item` }, `${trip.trip_id} 修改已保存`),
       }, `提交 ${trip.trip_id} 编辑`),
+      writeStatus === 'UNKNOWN' && createElement('button', { key: 'retry', type: 'button', onClick: () => void onRetry?.() }, '使用同一请求安全重试'),
+      writeStatus === 'CONFLICT' && createElement('button', { key: 'refresh', type: 'button', onClick: () => void onRefreshConflict?.() }, '刷新最新版本并重新编辑'),
     ]),
 }))
 
@@ -271,6 +282,97 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).not.toContain('行程 A')
     expect(page.container.textContent).not.toContain('已撤销上一次保存')
     expect(page.container.textContent).not.toContain('取消成功')
+  })
+
+  it('编辑结果未知时保留正式 Revision，安全重试复用同键和相同 payload', async () => {
+    const page = mount('trip-a')
+    const tripA = makeTrip('trip-a', '行程 A')
+    await load(tripRequest(0), tripA)
+    mocks.applyEdit
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ saved: true, trip_id: 'trip-a', revision: 2, document: tripA.document, status: 'active' })
+
+    await click(page.container, (button) => button.textContent?.includes('编辑行程') ?? false)
+    await click(page.container, (button) => button.textContent === '提交 trip-a 编辑')
+    await settle()
+
+    expect(page.container.textContent).toContain('UNKNOWN')
+    expect(page.container.textContent).toContain('v1')
+    expect(page.container.textContent).not.toContain('已保存到 v2')
+    const firstRequest = mocks.applyEdit.mock.calls[0]
+    await click(page.container, (button) => button.textContent === '使用同一请求安全重试')
+    await settle()
+
+    expect(mocks.applyEdit).toHaveBeenCalledTimes(2)
+    expect(mocks.applyEdit.mock.calls[1]).toEqual(firstRequest)
+    expect(page.container.textContent).toContain('v2')
+    expect(page.container.textContent).toContain('已保存')
+  })
+
+  it('409 保持原 Revision，显式刷新后不自动重放冲突编辑', async () => {
+    const page = mount('trip-a')
+    const tripA = makeTrip('trip-a', '行程 A')
+    await load(tripRequest(0), tripA)
+    mocks.applyEdit.mockRejectedValue(new ApiError('行程版本已变化', 409, null, 'VERSION_CONFLICT'))
+
+    await click(page.container, (button) => button.textContent?.includes('编辑行程') ?? false)
+    await click(page.container, (button) => button.textContent === '提交 trip-a 编辑')
+    await settle()
+
+    expect(page.container.textContent).toContain('CONFLICT')
+    expect(page.container.textContent).toContain('v1')
+    await click(page.container, (button) => button.textContent === '刷新最新版本并重新编辑')
+    await settle()
+    const latestRequest = tripRequest(1)
+    await load(latestRequest, makeTrip('trip-a', '服务器最新行程', 2))
+
+    expect(page.container.textContent).toContain('服务器最新行程')
+    expect(page.container.textContent).not.toContain('编辑 trip-a')
+    expect(mocks.applyEdit).toHaveBeenCalledOnce()
+  })
+
+  it('422 服务端校验失败保持正式 Revision 不变，也不显示已保存', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
+    mocks.applyEdit.mockRejectedValue(new ApiError('行程时间冲突', 422))
+
+    await click(page.container, (button) => button.textContent?.includes('编辑行程') ?? false)
+    await click(page.container, (button) => button.textContent === '提交 trip-a 编辑')
+    await settle()
+
+    expect(page.container.textContent).toContain('INVALID')
+    expect(page.container.textContent).toContain('v1')
+    expect(page.container.textContent).toContain('服务端校验未通过')
+    expect(page.container.textContent).not.toContain('已保存到 v2')
+    expect([...page.container.querySelectorAll('button')].some((button) => button.textContent === '使用同一请求安全重试')).toBe(false)
+  })
+
+  it('历史面板展示版本摘要，恢复前确认并请求服务端追加 Revision', async () => {
+    const page = mount('trip-a')
+    const tripA = makeTrip('trip-a', '行程 A', 2)
+    mocks.fetchRevisions.mockImplementation(async (tripId: string) => ({
+      trip_id: tripId,
+      revisions: [
+        { trip_id: tripId, revision: 2, parent_revision: 1, snapshot: tripA.document, change_type: 'manual_edit', change_summary: '延长西湖停留', actor_id: 'user-a', created_at: '2026-10-10T10:00:00Z' },
+        { trip_id: tripId, revision: 1, parent_revision: null, snapshot: tripA.document, change_type: 'create', change_summary: '创建行程', actor_id: 'user-a', created_at: '2026-10-09T10:00:00Z' },
+      ],
+    }))
+    mocks.restoreTrip.mockResolvedValue({ saved: true, trip_id: 'trip-a', revision: 3, document: tripA.document })
+    await load(tripRequest(0), tripA)
+
+    await click(page.container, (button) => button.getAttribute('aria-label') === '查看版本历史')
+    await settle()
+    expect(page.container.querySelector('[role="dialog"]')?.textContent).toContain('延长西湖停留')
+    await click(page.container, (button) => button.textContent === '恢复此版本')
+    expect(page.container.textContent).toContain('确认将内容恢复到 v1')
+    await click(page.container, (button) => button.textContent === '确认恢复 v1')
+    await settle()
+
+    expect(mocks.restoreTrip).toHaveBeenCalledOnce()
+    expect(mocks.restoreTrip.mock.calls[0][1]).toEqual({ expected_revision: 2, target_revision: 1 })
+    expect(mocks.restoreTrip.mock.calls[0][2]).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(page.container.textContent).toContain('v3')
+    expect(page.container.textContent).toContain('新增 v3')
   })
 
   it('A 的查询、地图选择和工具进度迟到时，不污染 B', async () => {
