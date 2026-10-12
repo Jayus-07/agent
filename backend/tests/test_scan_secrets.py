@@ -70,6 +70,37 @@ def test_placeholder_urls_are_not_blocking():
     assert not ss._is_allowed("app.log", "url_with_credentials", FAKE_EMPTY_USER)
 
 
+def test_short_hardcoded_password_is_detected_but_placeholder_is_allowed():
+    """短于通用密钥长度的静态密码也必须命中；示例值仍允许。"""
+    rules = [rule for rule in ss.GENERIC_RULES if rule[0] == "hardcoded_password"]
+    line = 'PASSWORD = "synthetic"'
+    assert ss.scan_text(line, rules) == [("hardcoded_password", 1)]
+    assert not ss._is_allowed("scripts/verify.py", "hardcoded_password", line)
+
+    placeholder = 'PASSWORD = "your_test_password"'
+    assert ss._is_allowed("scripts/verify.py", "hardcoded_password", placeholder)
+
+
+def test_diff_mode_blocks_new_short_hardcoded_password(tmp_path):
+    """Secret Scan 的新增行门禁也阻断短静态密码。"""
+    repo = _init_repo(tmp_path / "short-password-diff")
+    (repo / "config.py").write_text('PASSWORD = ""\n', encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "baseline")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    (repo / "config.py").write_text('PASSWORD = "synthetic"\n', encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "add a short static password")
+
+    diff_rules = [rule for rule in ss.GENERIC_RULES if rule[0] in ss.DIFF_RULES]
+    findings = ss.scan_diff(f"{base}..HEAD", diff_rules, root=repo)
+    assert any(
+        path == "config.py" and name == "hardcoded_password"
+        for path, name in findings
+    ), findings
+
+
 def test_history_scan_range_limits_scope(tmp_path):
     """历史扫描支持区间限定：新增提交之外的历史泄漏不参与阻断。"""
     repo = _init_repo(tmp_path / "hrepo")

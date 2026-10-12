@@ -43,10 +43,16 @@ ASSIGNED_SECRET = re.compile(
     r"([A-Za-z0-9_\-]{16,})"
 )
 
+# 密码允许短于通用 API/Token 的门槛：8 字符以上的引号字符串也必须扫描。
+HARDCODED_PASSWORD = re.compile(
+    r"(?i)\b(?:password|passwd)\b[\s\"\']*[:=][\s\"\']*"
+    r"(?:\"(?P<double>[^\"\r\n]{8,})\"|'(?P<single>[^'\r\n]{8,})')"
+)
+
 # diff（新增行）模式使用的规则：高精度、低误报，覆盖"硬编码密钥赋值"
 DIFF_RULES = {"assigned_secret", "credential_url", "url_with_credentials",
               "private_key_block", "aws_access_key_id", "github_token", "slack_token",
-              "openai_style_key"}
+              "openai_style_key", "hardcoded_password"}
 
 GENERIC_RULES = [
     ("url_with_credentials", CREDENTIAL_URL),
@@ -56,6 +62,7 @@ GENERIC_RULES = [
     ("slack_token", SLACK_TOKEN),
     ("openai_style_key", OPENAI_KEY),
     ("assigned_secret", ASSIGNED_SECRET),
+    ("hardcoded_password", HARDCODED_PASSWORD),
 ]
 
 # 注意：**不要整目录豁免 artifacts/**。上一次真实泄漏就发生在
@@ -68,6 +75,8 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cach
 # 逐条列出、可审计、可回退；新增条目必须随 PR 说明理由，禁止用通配符大范围豁免。
 ALLOWLIST: list[tuple[str, str]] = [
     ("backend/tests/", "assigned_secret"),            # 测试夹具占位符
+    ("backend/tests/", "hardcoded_password"),         # 测试夹具占位符
+    (".github/workflows/prompt_eval.yml", "hardcoded_password"),  # Actions 临时 PostgreSQL 服务凭据
     ("backend/tests/", "url_with_credentials"),       # 测试用假 DSN
     ("backend/.env.example", "url_with_credentials"),  # 示例 DSN 模板
     ("backend/.env.example", "assigned_secret"),       # 示例密钥占位
@@ -126,6 +135,19 @@ DIFF_PATH_ALLOW = (
 def _is_allowed(path: str, rule: str, line: str = "") -> bool:
     if any(path.startswith(prefix) for prefix in DIFF_PATH_ALLOW):
         return True
+    if rule == "hardcoded_password":
+        match = HARDCODED_PASSWORD.search(line)
+        value = (match.group("double") or match.group("single")) if match else ""
+        if re.match(
+            r"(?i)^(?:your|xxx+|test|dummy|example|change[-_]?me|"
+            r"placeholder|redacted|<|\*|\$\{)",
+            value.strip(),
+        ):
+            return True
+        return any(
+            path.startswith(prefix) and rule_name == rule
+            for prefix, rule_name in ALLOWLIST
+        )
     if rule == "url_with_credentials":
         # 扫描器自身/规则定义行：形如 re.compile(r"...://...") 的模式串不是凭据
         if "re.compile(" in line and "://" in line:
