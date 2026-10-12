@@ -138,11 +138,7 @@ def _is_allowed(path: str, rule: str, line: str = "") -> bool:
     if rule == "hardcoded_password":
         match = HARDCODED_PASSWORD.search(line)
         value = (match.group("double") or match.group("single")) if match else ""
-        if re.match(
-            r"(?i)^(?:your|xxx+|test|dummy|example|change[-_]?me|"
-            r"placeholder|redacted|<|\*|\$\{)",
-            value.strip(),
-        ):
+        if re.search(_PLACEHOLDER_WORD, value.strip(), re.IGNORECASE):
             return True
         return any(
             path.startswith(prefix) and rule_name == rule

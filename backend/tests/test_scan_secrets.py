@@ -79,6 +79,8 @@ def test_short_hardcoded_password_is_detected_but_placeholder_is_allowed():
 
     placeholder = 'PASSWORD = "your_test_password"'
     assert ss._is_allowed("scripts/verify.py", "hardcoded_password", placeholder)
+    test_account = 'PASSWORD = "ui_test_account"'
+    assert ss._is_allowed("scripts/travel_probe.py", "hardcoded_password", test_account)
 
 
 def test_diff_mode_blocks_new_short_hardcoded_password(tmp_path):
