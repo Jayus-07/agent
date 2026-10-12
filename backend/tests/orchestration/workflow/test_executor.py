@@ -365,10 +365,13 @@ class TestExecutorRetryTimeout:
         self, fresh_registry, patched_trace_collector, patched_persistence,
     ):
         """Step 吞掉单步 timeout 取消后迟到返回，也不能写入成功输出。"""
+        attempts = []
+
         @workflow(name="t_step_suppressed_cancel", deadline_sec=1)
         class T:
-            @step(timeout_sec=0.05)
+            @step(timeout_sec=0.05, retry=1)
             async def slow(self, ctx):
+                attempts.append(True)
                 try:
                     await asyncio.sleep(5)
                 except asyncio.CancelledError:
@@ -381,6 +384,7 @@ class TestExecutorRetryTimeout:
 
         assert ctx.status == "failed"
         assert ctx.deadline_exceeded is False
+        assert attempts == [True]
         assert "slow" not in ctx.outputs
         assert "超时" in ctx.step_failures["slow"]["error"]
         assert ctx.step_failures["slow"]["physical_completion"] == (
@@ -422,8 +426,8 @@ class TestExecutorRetryTimeout:
             user_id="user-7",
             tenant_id="tenant-3",
             deadline=RequestDeadline(
-                total_budget_ms=100,
-                workflow_budget_ms=50,
+                total_budget_ms=1_000,
+                workflow_budget_ms=500,
                 reporter_reserved_ms=0,
             ),
         )
@@ -435,13 +439,75 @@ class TestExecutorRetryTimeout:
         assert ctx.status == "failed"
         assert ctx.request_context is request_context
         assert ctx.deadline_source == "request_and_workflow"
-        assert ctx.deadline_budget_ms <= 50
+        assert ctx.deadline_budget_ms <= 500
         assert ctx.deadline_exceeded is True
         assert seen_identity == [(
             "user-7", "tenant-3", request_context.deadline,
         )]
         assert (get_tool_user_id(), get_tool_tenant_id()) == caller_identity
         assert get_request_deadline() is caller_deadline
+
+    def test_request_context_instance_normalizes_checkpoint_deadline_dict(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        from backend.core.request_context import RequestContext
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        @workflow(name="t_checkpoint_deadline", deadline_sec=5)
+        class T:
+            @step()
+            async def complete(self, ctx):
+                return {"ok": True}
+
+        fresh_registry.register(T)
+        original = RequestContext(
+            user_id="user-checkpoint",
+            tenant_id="tenant-checkpoint",
+            deadline=RequestDeadline(
+                total_budget_ms=1_000,
+                workflow_budget_ms=500,
+                reporter_reserved_ms=0,
+            ).to_dict(),
+        )
+
+        ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+            "t_checkpoint_deadline", request_context=original))
+
+        assert ctx.status == "success"
+        assert isinstance(ctx.request_context.deadline, RequestDeadline)
+        assert ctx.request_context is not original
+        assert isinstance(original.deadline, dict)
+
+    def test_reused_parent_trace_is_not_finished_by_workflow(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        from types import SimpleNamespace
+
+        from backend.core.request_context import RequestContext
+        from backend.observability.tracer import _current_trace_var
+
+        parent_trace = SimpleNamespace(id="parent-trace")
+
+        @workflow(name="t_reused_parent_trace", deadline_sec=5)
+        class T:
+            @step()
+            async def complete(self, ctx):
+                return {"ok": True}
+
+        fresh_registry.register(T)
+        token = _current_trace_var.set(parent_trace)
+        try:
+            ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+                "t_reused_parent_trace",
+                request_context=RequestContext(trace=parent_trace),
+            ))
+        finally:
+            _current_trace_var.reset(token)
+
+        assert ctx.status == "success"
+        assert ctx.trace_id == "parent-trace"
+        patched_trace_collector.start.assert_not_called()
+        patched_trace_collector.finish.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────

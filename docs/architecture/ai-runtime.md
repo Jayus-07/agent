@@ -38,7 +38,7 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 
 ## Workflow 总 Deadline
 
-`@workflow(deadline_sec=...)` 为整个 DAG 声明总执行预算，覆盖并行层、步骤和重试；未声明时默认 900 秒。在线图入口将 `RequestContext` 显式交给 Workflow Runtime，总预算取 Workflow 配置与请求 `remaining_workflow_ms()` 中较早的截止时间；Tool Runtime 在调用方未显式传入时继承同一请求 Deadline。调度任务没有请求上下文时只使用 Workflow 预算。每个 Step 的实际 timeout 取单步配置与总 Deadline 剩余量的较小值；总 Deadline 到期优先于单步 `on_error`、重试和降级，停止后续层并以 `failed` 保存唯一终态，迟到或吞取消的 Step 结果不会写成成功。取消同步 Provider 的等待后无法确认供应商侧是否停止，step failure 与 Trace 会记录 `physical_completion=unknown_after_cancellation`；LLM 调用自身的 usage 记录负责其后续结算或待对账。
+`@workflow(deadline_sec=...)` 为整个 DAG 声明总执行预算，覆盖并行层、步骤和重试；未声明时默认 900 秒。在线图入口将 `RequestContext` 显式交给 Workflow Runtime，总预算取 Workflow 配置与请求 `remaining_workflow_ms()` 中较早的截止时间；Tool Runtime 在调用方未显式传入时继承同一请求 Deadline。调度任务没有请求上下文时只使用 Workflow 预算。每个 Step 的实际 timeout 取单步配置与总 Deadline 剩余量的较小值；总 Deadline 到期优先于单步 `on_error`、重试和降级，停止后续层并以 `failed` 保存唯一终态，迟到或吞取消的 Step 结果不会写成成功。单步 timeout 且物理完成未知时不自动重试，避免旧尝试与重试并发；Workflow 只结束自身 span，不 finish 调用方复用的请求 Trace。取消同步 Provider 的等待后无法确认供应商侧是否停止，step failure 与 Trace 会记录 `physical_completion=unknown_after_cancellation`；LLM 调用自身的 usage 记录负责其后续结算或待对账。
 
 ## 上下文预算与跨请求状态
 

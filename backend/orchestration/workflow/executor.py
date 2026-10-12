@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Callable
 
@@ -161,6 +162,7 @@ class WorkflowExecutor:
         # 4. 初始化 trace（如果 tracer 已启动则复用，否则启动一个新的）
         trace_root_span = None
         trace_record = None  # 保存引用，用于 finish() 持久化
+        owns_trace_record = False
         try:
             from backend.observability.tracer import trace_collector, _current_trace_var
 
@@ -173,6 +175,7 @@ class WorkflowExecutor:
                     session_id=ctx.run_id,
                     workflow_name=workflow_name,
                 )
+                owns_trace_record = True
                 ctx.trace_id = trace_record.id
             else:
                 ctx.trace_id = trace_record.id
@@ -266,7 +269,7 @@ class WorkflowExecutor:
                     },
                 )
                 # finish() 将 trace 持久化到 trace_store（SQLite，重启不丢失）
-                if trace_record is not None:
+                if trace_record is not None and owns_trace_record:
                     trace_collector.finish(
                         trace_record,
                         answer=f"Workflow {workflow_name}: {ctx.status} ({len(ctx.outputs)} steps)",
@@ -298,6 +301,13 @@ class WorkflowExecutor:
         from backend.core.request_context import RequestContext
 
         if isinstance(request_context, RequestContext):
+            if isinstance(request_context.deadline, dict):
+                from backend.core.tool_runtime.deadline import RequestDeadline
+
+                return replace(
+                    request_context,
+                    deadline=RequestDeadline.from_dict(request_context.deadline),
+                )
             return request_context
         from backend.orchestration.request_context import get_context_from_state
 
@@ -552,7 +562,11 @@ class WorkflowExecutor:
                 )
 
             # 还有重试机会
-            if attempt < config.retry:
+            if (
+                attempt < config.retry
+                and getattr(last_error, "physical_completion", None)
+                != "unknown_after_cancellation"
+            ):
                 continue
             break
 
