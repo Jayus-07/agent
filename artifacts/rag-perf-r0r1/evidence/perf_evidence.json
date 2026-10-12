@@ -1,0 +1,124 @@
+{
+ "measure": [
+  {
+   "source": "ab_baseline.log",
+   "samples": [
+    {
+     "question_len": 10,
+     "provider_embed_calls": {
+      "query": 15,
+      "documents": 15
+     },
+     "repeats": [
+      {
+       "elapsed_ms": 23340.3,
+       "answer_len": 686,
+       "embedding": null
+      },
+      {
+       "elapsed_ms": 7601.2,
+       "answer_len": 108,
+       "embedding": null
+      },
+      {
+       "elapsed_ms": 25128.9,
+       "answer_len": 622,
+       "embedding": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "source": "ab_optimized.log",
+   "samples": [
+    {
+     "question_len": 10,
+     "provider_embed_calls": {
+      "query": 4,
+      "documents": 4
+     },
+     "repeats": [
+      {
+       "elapsed_ms": 21815.8,
+       "answer_len": 747,
+       "embedding": {
+        "requested": 1,
+        "computed": 1,
+        "request_hits": 0,
+        "process_hits": 0,
+        "unique_inputs": 1,
+        "dedup_ratio": 0.0,
+        "duration_ms": 781.6,
+        "kinds": {
+         "query": 1
+        }
+       }
+      },
+      {
+       "elapsed_ms": 17665.6,
+       "answer_len": 689,
+       "embedding": {
+        "requested": 1,
+        "computed": 0,
+        "request_hits": 0,
+        "process_hits": 1,
+        "unique_inputs": 1,
+        "dedup_ratio": 1.0,
+        "duration_ms": 0.0,
+        "kinds": {
+         "query": 1
+        }
+       }
+      },
+      {
+       "elapsed_ms": 22448.6,
+       "answer_len": 120,
+       "embedding": {
+        "requested": 1,
+        "computed": 0,
+        "request_hits": 0,
+        "process_hits": 1,
+        "unique_inputs": 1,
+        "dedup_ratio": 1.0,
+        "duration_ms": 0.0,
+        "kinds": {
+         "query": 1
+        }
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "call_sites": [
+  {
+   "source": "embed_trace.log",
+   "call_sites": [
+    "embedding_singleton.py:590:embed_query <- embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute",
+    "embedding_singleton.py:590:embed_query <- embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute",
+    "embedding_singleton.py:590:embed_query <- embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute",
+    "embedding_singleton.py:590:embed_query <- embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute"
+   ]
+  },
+  {
+   "source": "embed_trace2.log",
+   "call_sites": [
+    "embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute <- measure_ask.py:70:_count_q",
+    "embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute <- measure_ask.py:70:_count_q",
+    "embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute <- measure_ask.py:70:_count_q",
+    "embedding_singleton.py:534:_cached_embed <- embedding_singleton.py:583:_compute <- measure_ask.py:70:_count_q"
+   ]
+  },
+  {
+   "source": "embed_trace3.log",
+   "call_sites": [
+    "retrievers.py:404:_get_relevant_documents <- retrievers.py:417:_retrieve_uncached <- retrievers.py:433:_retrieve_uncached_impl <- retrievers.py:551:_stage1_select_docs <- retrievers.py:494:_authorized_doc_search <- pgvector_store.py:633:similarity_search <- pgvector_store.py:601:similarity_search_with_score <- embedding_singleton.py:621:embed_query <- embedding_singleton.py:565:_cached_embed <- em",
+    "thread_pools.py:111:_runner <- enhanced_hybrid_retrieval.py:17:_timed_retrieval <- base.py:95:retrieve <- pgvector_store.py:601:similarity_search_with_score <- embedding_singleton.py:621:embed_query <- embedding_singleton.py:565:_cached_embed <- embedding_singleton.py:613:_compute",
+    "thread_pools.py:111:_runner <- enhanced_hybrid_retrieval.py:17:_timed_retrieval <- base.py:95:retrieve <- pgvector_store.py:601:similarity_search_with_score <- embedding_singleton.py:621:embed_query <- embedding_singleton.py:565:_cached_embed <- embedding_singleton.py:613:_compute",
+    "thread_pools.py:111:_runner <- enhanced_hybrid_retrieval.py:17:_timed_retrieval <- base.py:95:retrieve <- pgvector_store.py:601:similarity_search_with_score <- embedding_singleton.py:621:embed_query <- embedding_singleton.py:565:_cached_embed <- embedding_singleton.py:613:_compute"
+   ]
+  }
+ ]
+}

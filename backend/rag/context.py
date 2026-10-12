@@ -80,6 +80,12 @@ class RagRequestState:
     retrieval_cache: dict = field(default_factory=dict)
     retrieval_cache_hits: int = 0
 
+    # ── 请求级 embedding 统计（R0/R1-A，2026-10-12）──
+    # 承载 EmbeddingRequestStats：真实出站次数 / 请求内复用 / 进程级复用 /
+    # 唯一输入数 / 出站累计耗时。挂在请求上下文而非 RAGChain 单例字段，
+    # 并发请求不互相覆盖（与 meta/faithfulness 同口径）。
+    embedding_stats: Any = None
+
     def to_dict(self) -> dict:
         return {
             "metadata_filter": self.metadata_filter,

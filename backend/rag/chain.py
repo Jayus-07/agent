@@ -265,6 +265,10 @@ class RAGChain:
         # 互相覆盖串扰；现随请求上下文隔离，正式出口 = pipeline.ask_result
         # 随返回值带回。属性名保留仅为兼容既有读取点。
         self._chains_dirty = False
+        # R0（2026-10-12）：最近一次检索的 embedding 统计兜底字段；权威读取
+        # 点是请求上下文 ctx.embedding_stats（并发安全），本字段只作直连
+        # 调试出口，避免与单例并发语义混淆。
+        self._last_embedding_stats = None
 
         self._build_retrievers()
         self._build_chains()
@@ -937,6 +941,46 @@ class RAGChain:
                 logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
                              exc_info=True)
 
+    def _emit_embedding_stats(self, stats) -> None:
+        """把单请求 embedding 统计落到请求上下文 / Trace / 日志 / Prometheus。
+
+        R0 口径要求「调用次数、唯一输入数、复用次数」三者可读且与实际
+        provider 调用一致：同一份 stats 同时进 ctx.embedding_stats（供
+        pipeline / ask_result 读出）、trace event（供逐请求追溯）与
+        record_rag_stage("embedding", 累计出站耗时)（供 Grafana 长期时序）。
+        """
+        try:
+            get_context().embedding_stats = stats
+        except Exception:  # noqa: BLE001 — 观测旁路不影响主链
+            pass
+        if stats is None:
+            return
+        try:
+            from backend.observability.metrics import record_rag_stage
+
+            record_rag_stage("embedding", stats.duration_ms)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from backend.observability.tracer import trace_collector
+
+            trace = trace_collector.current()
+            span = trace.spans[-1] if trace is not None and trace.spans else None
+            if span is not None:
+                trace_collector.add_event(
+                    span, "embedding_stats", "info",
+                    "检索期 embedding 出站/复用统计",
+                    data=stats.as_dict(),
+                )
+        except Exception:  # noqa: BLE001 — Trace 旁路
+            pass
+        logger.info(
+            f"[RAGChain] embedding 统计: requested={stats.requested} "
+            f"computed={stats.computed} request_hits={stats.request_hits} "
+            f"process_hits={stats.process_hits} unique={stats.unique_inputs} "
+            f"out_ms={stats.duration_ms:.1f} dedup={stats.dedup_ratio:.2f}"
+        )
+
     def _record_rag_metric(self, status: str) -> None:
         """埋点 RAG 查询结果到运营指标（2026-08-11）。"""
         try:
@@ -1204,10 +1248,29 @@ class RAGChain:
         )
 
         start_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS)
+        # ── R0/R1-A：请求级 embedding 总账（跨线程汇总）────────────────
+        # Doc 级相似度 / Chunk 级 hybrid 向量腿 / MultiQuery 变体 / 同义词
+        # 扩展都从这一颗调用树取向量。总账由本入口创建，随 contextvars 被
+        # copy_context 带进 retrieval 线程池（与检索预算同一传播路径），每个
+        # 池线程只贡献自己的作用域，end 时统一汇总——父请求因此能读到
+        # requested/computed/request_hits/process_hits/unique_inputs/出站耗时
+        # 的**完整**数值，而不是只记主线程那一次（P1-B）。
+        from backend.rag.embedding_singleton import (
+            begin_embedding_request,
+            end_embedding_request,
+            report_embedding_request,
+        )
+
+        begin_embedding_request()
         try:
             result = active_chain.invoke({"input": question, "chat_history": chat_history})
         finally:
             clear_retrieval_budget()
+            scoped_stats = end_embedding_request()
+            if scoped_stats is not None:
+                self._last_embedding_stats = scoped_stats
+                report_embedding_request(scoped_stats)
+                self._emit_embedding_stats(scoped_stats)
 
         # ── 采集检索中间结果（正常路径 span 已提前收口，end_span 幂等跳过）──
         context_docs = result.get("context", [])
