@@ -485,7 +485,14 @@ def _notify_degradation(code: str, detail: dict) -> None:
         logger.debug("降级告警发送失败", exc_info=True)
 
 
-def _handle_terminal_failure(err: BaseException, args, kwargs):
+def _handle_terminal_failure(
+    err: BaseException,
+    args,
+    kwargs,
+    *,
+    model_name: str | None = None,
+    role: str = "main",
+):
     """重试耗尽/熔断开路后的统一兜底：备用模型 → 降级话术 → 模型错误。
 
     路由专项 Step 3：错误在 proxy 层统一归类（quota_exhausted/auth_failed/
@@ -496,7 +503,9 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
     from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
 
     error_type = classify_model_error(err)
-    active_model = get_active_model_name()
+    active_model = canonical_model_id(model_name or "") or (
+        model_name or get_active_model_name()
+    )
     provider = _get_provider_for(active_model)
     error_detail = {
         "reason": reason, "error_type": error_type,
@@ -506,7 +515,11 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
     fb = _get_fallback_llm()
     if fb is not None:
         fallback_model = _configured_fallback_model()
-        from backend.infra.llm.budget import reserve_model_call
+        from backend.infra.llm.budget import (
+            release_model_reservation,
+            reserve_model_call,
+            review_model_reservation,
+        )
 
         # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
@@ -517,7 +530,7 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
             _prev_ctx = get_current_resolved_model()
             set_current_resolved_model(ResolvedModelContext(
                 model_id=fallback_model, provider=_get_provider_for(fallback_model),
-                role="main", binding_source="fallback",
+                role=role, binding_source="fallback",
                 request_id=(_prev_ctx.request_id if _prev_ctx else ""),
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
@@ -535,6 +548,10 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
                                 {**error_detail, "fallback_model": fallback_model})
             return result
         except Exception as e:
+            if _is_transient(e):
+                review_model_reservation("fallback_failed_possibly_billed")
+            else:
+                release_model_reservation()
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
             _record_failed_attempt(fallback_model, e, decision="fallback")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
@@ -552,13 +569,22 @@ def _handle_terminal_failure(err: BaseException, args, kwargs):
     ) from err
 
 
-async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
+async def _ahandle_terminal_failure(
+    err: BaseException,
+    args,
+    kwargs,
+    *,
+    model_name: str | None = None,
+    role: str = "main",
+):
     """async 版兜底：备用模型 → 降级话术 → 模型错误（分类同同步版）。"""
     reason = f"{type(err).__name__}: {str(err)[:120]}"
     from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
 
     error_type = classify_model_error(err)
-    active_model = get_active_model_name()
+    active_model = canonical_model_id(model_name or "") or (
+        model_name or get_active_model_name()
+    )
     provider = _get_provider_for(active_model)
     error_detail = {
         "reason": reason, "error_type": error_type,
@@ -567,7 +593,11 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
     fb = _get_fallback_llm()
     if fb is not None:
         fallback_model = _configured_fallback_model()
-        from backend.infra.llm.budget import reserve_model_call
+        from backend.infra.llm.budget import (
+            release_model_reservation,
+            reserve_model_call,
+            review_model_reservation,
+        )
 
         reserve_model_call("fallback", model_name=fallback_model)
         try:
@@ -575,7 +605,7 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
             _prev_ctx = get_current_resolved_model()
             set_current_resolved_model(ResolvedModelContext(
                 model_id=fallback_model, provider=_get_provider_for(fallback_model),
-                role="main", binding_source="fallback",
+                role=role, binding_source="fallback",
                 request_id=(_prev_ctx.request_id if _prev_ctx else ""),
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
@@ -592,7 +622,14 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
+        except asyncio.CancelledError:
+            review_model_reservation("fallback_cancelled_possibly_billed")
+            raise
         except Exception as e:
+            if _is_transient(e):
+                review_model_reservation("fallback_failed_possibly_billed")
+            else:
+                release_model_reservation()
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
             _record_failed_attempt(fallback_model, e, decision="fallback")
     if LLM_ALLOW_DEGRADED_ANSWER:
@@ -607,9 +644,32 @@ async def _ahandle_terminal_failure(err: BaseException, args, kwargs):
     ) from err
 
 
+def _resilience_call_identity() -> tuple[str, str, str]:
+    """取本次韧性调用已解析的模型/角色/Provider。"""
+    context = get_current_resolved_model()
+    if context is not None and context.model_id:
+        model_name = canonical_model_id(context.model_id) or context.model_id
+        provider = context.provider or _get_provider_for(model_name)
+        return model_name, context.role or "main", provider
+    model_name = get_active_model_name()
+    return model_name, "main", _get_provider_for(model_name)
+
+
+def _breaker_for_resolved_model(model_name: str, role: str, provider: str):
+    """main 保持既有熔断器；其他角色按实际模型与 Provider 隔离。"""
+    from backend.infra.circuit_breaker import (
+        get_llm_model_circuit_breaker,
+        llm_circuit_breaker,
+    )
+
+    if role == "main":
+        return llm_circuit_breaker
+    return get_llm_model_circuit_breaker(provider, model_name)
+
+
 def _call_with_resilience(attr, *args, **kwargs):
-    """同步韧性调用：重试 → 熔断/重试耗尽 → fallback。"""
-    from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
+    """同步韧性调用：按绑定模型预占/记录，重试与熔断按角色隔离。"""
+    from backend.infra.circuit_breaker import CircuitBreakerOpenError
     from backend.infra.llm.budget import (
         release_model_reservation,
         reserve_model_call,
@@ -617,40 +677,37 @@ def _call_with_resilience(attr, *args, **kwargs):
     )
 
     last_err: BaseException | None = None
-    model_name = get_active_model_name()
+    model_name, role, provider = _resilience_call_identity()
+    breaker = _breaker_for_resolved_model(model_name, role, provider)
     for attempt in range(LLM_MAX_RETRIES + 1):
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
         )
         try:
-            return llm_circuit_breaker.call(attr, *args, **kwargs)
+            return breaker.call(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
             release_model_reservation()
-            # 熔断开路：调用未发出，立即兜底（快速失败是熔断的目的，不做无意义等待）
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
-            return _handle_terminal_failure(e, args, kwargs)
+            return _handle_terminal_failure(
+                e, args, kwargs, model_name=model_name, role=role,
+            )
         except Exception as e:
-            # 2026-10-01 P0 修复：瞬时类失败（超时/网络）供应商可能已处理并计费，
-            # 不再直接释放（等于按零成本放走）——转待对账；非瞬时（鉴权/参数等）
-            # 确定未计费，维持释放。
+            # 瞬时类失败可能已计费，进入待对账；确定未计费的失败释放预占。
             if _is_transient(e):
                 review_model_reservation("call_failed_possibly_billed")
             else:
                 release_model_reservation()
-            # C11：失败 attempt 留痕（provider 侧可能已计费，不能无声消失）
             _record_failed_attempt(
                 model_name, e,
                 decision="primary" if attempt == 0 else "retry",
             )
             last_err = e
             if _is_context_length_provider_error(e):
-                # 超长输入：重试与换 fallback 模型都必然再超同一份输入——
-                # 以稳定错误码终止，不走兜底链（2026-10-01 STOP A）
                 raise _context_length_error() from e
             if not _is_transient(e):
-                break  # 非瞬时错误（鉴权/参数等）重试无意义
+                break
             if attempt >= LLM_MAX_RETRIES:
                 break
             delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
@@ -659,12 +716,14 @@ def _call_with_resilience(attr, *args, **kwargs):
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
             time.sleep(delay)
-    return _handle_terminal_failure(last_err, args, kwargs)
+    return _handle_terminal_failure(
+        last_err, args, kwargs, model_name=model_name, role=role,
+    )
 
 
 async def _acall_with_resilience(attr, *args, **kwargs):
-    """异步韧性调用（对称于 _call_with_resilience）。"""
-    from backend.infra.circuit_breaker import CircuitBreakerOpenError, llm_circuit_breaker
+    """异步韧性调用：与同步路径使用同一模型角色隔离和用量归属。"""
+    from backend.infra.circuit_breaker import CircuitBreakerOpenError
     from backend.infra.llm.budget import (
         release_model_reservation,
         reserve_model_call,
@@ -672,33 +731,36 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     )
 
     last_err: BaseException | None = None
-    model_name = get_active_model_name()
+    model_name, role, provider = _resilience_call_identity()
+    breaker = _breaker_for_resolved_model(model_name, role, provider)
     for attempt in range(LLM_MAX_RETRIES + 1):
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
         )
         try:
-            return await llm_circuit_breaker.acall(attr, *args, **kwargs)
+            return await breaker.acall(attr, *args, **kwargs)
+        except asyncio.CancelledError:
+            review_model_reservation("call_cancelled_possibly_billed")
+            raise
         except CircuitBreakerOpenError as e:
             release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
-            return await _ahandle_terminal_failure(e, args, kwargs)
+            return await _ahandle_terminal_failure(
+                e, args, kwargs, model_name=model_name, role=role,
+            )
         except Exception as e:
-            # async 对称（2026-10-01 P0 修复）：瞬时失败可能已计费 → 待对账
             if _is_transient(e):
                 review_model_reservation("call_failed_possibly_billed")
             else:
                 release_model_reservation()
-            # C11：失败 attempt 留痕（async 对称）
             _record_failed_attempt(
                 model_name, e,
                 decision="primary" if attempt == 0 else "retry",
             )
             last_err = e
             if _is_context_length_provider_error(e):
-                # 超长输入短路（async 对称）：不重试、不 fallback
                 raise _context_length_error() from e
             if not _is_transient(e):
                 break
@@ -710,7 +772,9 @@ async def _acall_with_resilience(attr, *args, **kwargs):
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
             await asyncio.sleep(delay)
-    return await _ahandle_terminal_failure(last_err, args, kwargs)
+    return await _ahandle_terminal_failure(
+        last_err, args, kwargs, model_name=model_name, role=role,
+    )
 
 
 def _build_default_llm():

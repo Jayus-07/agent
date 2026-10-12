@@ -24,6 +24,7 @@ from backend.evaluation.models import (
     TierSummary,
 )
 from backend.evaluation.registry import get_runner
+from backend.evaluation.run_guards import EVAL_TENANT_ID
 
 
 class RunAlreadyFinalizedError(ValueError):
@@ -38,12 +39,6 @@ def _current_actor() -> str:
     import os as _os
 
     return _os.getenv("EVAL_TRIGGERED_BY", "") or "unknown"
-
-
-# B1-B（2026-10-12）评测专用计费租户：预算账本（budget_ledger）与用量账本
-# （llm_usage）按该租户独立聚合，与生产业务租户（default）的额度、账单、
-# 预算策略完全分离。评测消费按 tenant="eval" + role=eval_gen 独立审计。
-EVAL_TENANT_ID = "eval"
 
 
 def _filter_cases_by_tier(
@@ -478,7 +473,7 @@ class EvaluationService:
 
         if _rg.BUDGET_BLOCK_ENABLED:
             budget_reason = _rg.RunGuard(
-                run_id or "pre-start", actor=_current_actor(),
+                config.run_id or "pre-start", actor=_current_actor(),
             ).check_budget()
             if budget_reason:
                 raise BudgetBlockedError(
@@ -496,32 +491,9 @@ class EvaluationService:
         # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
         run_id = config.run_id or make_run_id()
 
-        # N-02（2026-10-06）：评测线程绑定预算状态——此前线程无
-        # RequestContext.bind，budget enforce 下 LLM 调用不预占不结算
-        # （budget.py reserve 旁路告警路径），live 回放/评测的 token
-        # 归因与预算闸整体旁路。绑定失败不阻塞评测（放行模式，
-        # 参照 services/rag_server.py 同款）。
-        # B1-B（2026-10-12）：计费主体隔离——tenant 从生产 default 改为
-        # 专用 EVAL_TENANT_ID，评测费用不再污染生产租户额度与账单；
-        # 同时把 user/tenant 写进请求身份 ContextVar，llm_usage 行的
-        # 归因维度（current_usage_attribution）与预算账本同源可对账。
-        try:
-            from backend.core.request_context import (
-                set_tool_tenant_id,
-                set_tool_user_id,
-            )
-            from backend.infra.llm.budget import bind_request_budget
-
-            eval_user = _current_actor() or "eval-runner"
-            set_tool_tenant_id(EVAL_TENANT_ID)
-            set_tool_user_id(eval_user)
-            bind_request_budget(
-                f"eval:{run_id}",
-                user_id=eval_user,
-                tenant_id=EVAL_TENANT_ID,
-            )
-        except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞评测
-            logger.warning(f"[Eval] 预算绑定失败（放行）: {e}")
+        # N-02/B1-B：评测请求身份与预算只在该次评测作用域内生效；
+        # 作用域退出后恢复线程原有 ContextVar，避免线程池复用串入 eval 身份。
+        eval_user = _current_actor() or "eval-runner"
 
         # C2-2/RUN-02：终态 run 拒绝隐式重跑。显式 resume（同 run_id 断点
         # 续跑）或 force_rerun（全量重跑）才放行；默认参数撞上终态 run 视为
@@ -564,7 +536,22 @@ class EvaluationService:
         )
         heartbeat_thread.start()
         try:
-            report = self._evaluate_cases(config, run_id, run_started_ts)
+            from backend.core.request_context import scoped_tool_identity
+            from backend.infra.llm.budget import scoped_request_budget
+
+            def _warn_budget_binding(exc: Exception) -> None:
+                logger.warning("[Eval] 预算绑定失败（放行）: %s", exc)
+
+            with scoped_tool_identity(
+                user_id=eval_user, tenant_id=EVAL_TENANT_ID,
+            ):
+                with scoped_request_budget(
+                    f"eval:{run_id}",
+                    user_id=eval_user,
+                    tenant_id=EVAL_TENANT_ID,
+                    on_error=_warn_budget_binding,
+                ):
+                    report = self._evaluate_cases(config, run_id, run_started_ts)
             # C2-3：attempt 计数随报告落盘（跨次续跑可审计「跑了几次」）
             status = read_run_status(run_id) or {}
             report.metadata["attempt_no"] = int(status.get("attempt_no", 1) or 1)
