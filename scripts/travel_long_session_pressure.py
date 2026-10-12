@@ -9,14 +9,18 @@
 前提：全栈已起（devctl.bat all /y），uitest 账号可登录。
 """
 import json
+import os
 import re
 import statistics
-import os
 import sys
 import time
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE = "http://127.0.0.1:9080"
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
     sys.exit("API_KEY environment variable is required")

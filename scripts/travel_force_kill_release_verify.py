@@ -8,16 +8,20 @@
   D:/Python/python.exe scripts/travel_force_kill_release_verify.py
 """
 import json
-import subprocess
 import os
+import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE = "http://127.0.0.1:9080"
 REPO = r"D:/Program Files/workplace/agent"
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
     sys.exit("API_KEY environment variable is required")

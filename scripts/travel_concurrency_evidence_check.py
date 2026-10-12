@@ -11,14 +11,18 @@ retrieved_at 三元组完整（RAG 类可回到 doc_id）。
 """
 import concurrent.futures
 import json
-import re
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE = "http://127.0.0.1:9080"
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 API_KEY = os.environ.get("API_KEY", "")
 if not API_KEY:
     sys.exit("API_KEY environment variable is required")
