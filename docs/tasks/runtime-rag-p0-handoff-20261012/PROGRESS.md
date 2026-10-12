@@ -16,9 +16,9 @@
 | B1-B | #42 | 修复已推送 | head `fb57241` / RAG PR Smoke run 110 SUCCESS | 3 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
 | B1-F | #43 | 修复已推送 | head `2172208` / RAG PR Smoke run 109 SUCCESS | 2 条旧 review thread 已解决；修复来自旧 head 审查，未发现针对当前 head 的新审查 | 等用户批准合并 |
 | RAG R0/R1 | #41 | 最新 main 上最终核对完成，未合并 | head `fc27dec` / Secret Scan run 8 SUCCESS；RAG PR Smoke run 112 SUCCESS | 3 条旧 review thread 均已解决；无未解决 thread | 独立安全 PR #44 尚未合并；凭据轮换/旧值失效验证未完成，P0 仍阻断放行 |
-| 凭据安全治理 | #44 | 代码整改已推送，head `5bf88b8` | RAG PR Smoke run 117 SUCCESS；head tree/diff/history 扫描均 0 命中 | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
+| 凭据安全治理 | #44 | 代码整改已推送、PR mergeable；看板随本 PR 更新 | 代码提交 `5bf88b8` 的 PR Smoke run 117 SUCCESS、tree/diff/history 扫描均 0 命中；看板更新提交 Smoke 与变更检测 SUCCESS，评测按路径条件跳过 | GPT 指出的根 `.env` 加载问题已修复并 resolve；无未解决 thread | Redis/API Key 轮换和旧凭据失效验证需凭据持有人授权；未完成前 P0 BLOCKED |
 | RAG MultiQuery P0 | 新 PR | 未启动（依赖门禁未满足） | — | — | 等 PR #41/#42 合并及用户批准 |
-| B1-C | #45 | 实现与三项 GPT 审查修复已推送，head `8bd8ea2` | RAG PR Smoke run 118 运行中 | 父 Trace 所有权、物理完成未知时重试、checkpoint deadline 归一化三项已修复并 resolve；审查基于旧 head，尚无新 head 复审 | 等 run 118 完成；请求上下文里的第 5 个 Workflow 在当前唯一注册表不存在，未臆造新增 |
+| B1-C | #45 | 实现与三项 GPT 审查修复已推送，head `8bd8ea2`，mergeable | RAG PR Smoke run 118 SUCCESS | 父 Trace 所有权、物理完成未知时重试、checkpoint deadline 归一化三项已修复并 resolve；审查基于旧 head，尚无新 head 复审 | 请求上下文里的第 5 个 Workflow 在当前唯一注册表不存在，未臆造新增 |
 | B1-D | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
 | B1-E | 新 PR | 未启动 | — | — | 按 Runtime 阶段依赖推进 |
 
@@ -51,8 +51,7 @@
 
 ## 下一步
 
-1. 等 PR #45 run 118 完成，并刷新 PR #44 看板更新后的 CI。
-2. 复核 PR #40–#45 的新 head、CI、review 和 mergeable；保持逐项合并，先给用户提交具体合并清单并等待批准。
-3. 凭据持有人授权后完成 Redis 与 API Key 轮换、部署更新、撤销旧值及旧值认证失败验证；确认测试登录常量仅供隔离环境使用。此前 P0 BLOCKED。
-4. PR #44 获批合并后，将 PR #41 同步最新 main 并复扫；只有 P0 风险处理满足放行要求且用户批准，才继续合并 RAG/Runtime PR。
-5. 只有 PR #41 和 #42 合并后才施工 RAG MultiQuery P0；B1-C 后续按依赖推进 B1-D、B1-E，各建独立 PR。
+1. 复核 PR #40–#45 的新 head、CI、review 和 mergeable；保持逐项合并，先给用户提交具体合并清单并等待批准。
+2. 凭据持有人授权后完成 Redis 与 API Key 轮换、部署更新、撤销旧值及旧值认证失败验证；确认测试登录常量仅供隔离环境使用。此前 P0 BLOCKED。
+3. PR #44 获批合并后，将 PR #41 同步最新 main 并复扫；只有 P0 风险处理满足放行要求且用户批准，才继续合并 RAG/Runtime PR。
+4. 只有 PR #41 和 #42 合并后才施工 RAG MultiQuery P0；B1-C 后续按依赖推进 B1-D、B1-E，各建独立 PR。
