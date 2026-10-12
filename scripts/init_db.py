@@ -283,12 +283,14 @@ MIGRATION_TARGETS: dict[str, str] = {
 # 083 与 043 同因：必须晚于 004 的 schema 级 GRANT，否则会被重新授予。
 ORDER_LAST = [
     "004_readonly_role.sql",
+    "093_revoke_readonly_default_password.sql",
     "043_readonly_public_revoke.sql",
     "083_readonly_ai_grant_scope.sql",
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
+MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
 
 # 运行时管理的迁移（Platform Readiness STOP B）：对象由应用启动时的
 # ensure_schema() 幂等建立，而非迁移链。fresh 库上没有这些对象，直接执行

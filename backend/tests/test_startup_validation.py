@@ -336,6 +336,26 @@ class TestReadonlyPassword:
             if "CREATE ROLE agent_readonly" in line
         )
         assert "PASSWORD" not in create_role.upper()
+        assert "ALTER ROLE AGENT_READONLY PASSWORD NULL" in migration.upper()
+
+    def test_forward_migration_revokes_existing_role_password(self):
+        from pathlib import Path
+
+        from scripts.init_db import MIGRATION_TARGETS, discover_migrations
+
+        name = "093_revoke_readonly_default_password.sql"
+        plan, unregistered = discover_migrations()
+        assert not unregistered
+        assert MIGRATION_TARGETS[name] == "business"
+        filenames = [filename for filename, _target in plan]
+        assert filenames.index("004_readonly_role.sql") < filenames.index(name)
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "sql"
+            / "migrations"
+            / name
+        ).read_text(encoding="utf-8")
+        assert "ALTER ROLE AGENT_READONLY PASSWORD NULL" in migration.upper()
 
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)

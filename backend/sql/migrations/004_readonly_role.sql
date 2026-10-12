@@ -22,6 +22,9 @@ BEGIN
 END
 $$;
 
+-- 旧角色可能由此前版本创建并保留旧口令；配置的新口令由 init_db.py 后续设置。
+ALTER ROLE agent_readonly PASSWORD NULL;
+
 -- ═══ 2. 库级 CONNECT ═══
 GRANT CONNECT ON DATABASE agent_business TO agent_readonly;
 
