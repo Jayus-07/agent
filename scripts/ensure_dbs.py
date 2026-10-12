@@ -11,7 +11,7 @@
 
 职责：
   1. 补齐数据库（agent_memory / agent_business）
-  2. 按库应用迁移（含 001/002/003/005/006/007 与只读角色 004）
+  2. 按库应用迁移（含 001/002/003/005/006/007、只读角色 004 与口令撤销 093）
   3. 用 PG_READONLY_PASSWORD 对齐 agent_readonly 密码（**不经 shell/sed
      插值** —— 那会把含特殊字符的密码写坏，实测踩过）
   4. 校验并打印状态（表数量 / 角色可登录性），失败非零退出
@@ -43,7 +43,8 @@ BUSINESS_MIGRATIONS = [
     "003_agent_business_schema.sql",
     "005_schema_hardening.sql",
     "007_tool_approval.sql",
-    "004_readonly_role.sql",  # 只读角色与授权（放最后：依赖前面的 schema）
+    "004_readonly_role.sql",  # 只读角色与授权（依赖前面的 schema）
+    "093_revoke_readonly_default_password.sql",  # 清除历史默认口令
 ]
 MEMORY_MIGRATIONS = [
     "002_agent_memory_schema.sql",

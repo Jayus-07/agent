@@ -341,6 +341,15 @@ class TestReadonlyPassword:
         ).read_text(encoding="utf-8")
         assert "ALTER ROLE AGENT_READONLY PASSWORD NULL" in migration.upper()
 
+    def test_ensure_dbs_applies_password_revocation_after_004(self):
+        from scripts.ensure_dbs import BUSINESS_MIGRATIONS
+
+        original = BUSINESS_MIGRATIONS.index("004_readonly_role.sql")
+        revocation = BUSINESS_MIGRATIONS.index(
+            "093_revoke_readonly_default_password.sql"
+        )
+        assert original < revocation
+
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
         monkeypatch.delenv("ENVIRONMENT", raising=False)
