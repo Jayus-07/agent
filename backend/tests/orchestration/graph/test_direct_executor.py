@@ -190,6 +190,36 @@ def test_workflow_executor_renders_actual_business_result_without_run_metadata(m
     assert "inventory_summary" not in out["final_answer"]
     assert not out["final_answer"].lstrip().startswith("{")
 
+
+def test_workflow_executor_passes_request_context_to_runtime(monkeypatch):
+    from types import SimpleNamespace
+
+    import backend.orchestration.workflow.scheduler as scheduler_mod
+    from backend.core.request_context import RequestContext
+
+    request_context = RequestContext(user_id="user-4", tenant_id="tenant-2")
+    seen = {}
+    context = SimpleNamespace(
+        status="success", error="", outputs={"analysis": {"summary": "完成"}},
+        step_failures=[], run_id="run-test",
+    )
+
+    class _Scheduler:
+        async def run_now(self, workflow_name, inputs=None, *, request_context=None):
+            seen["workflow_name"] = workflow_name
+            seen["request_context"] = request_context
+            return context
+
+    monkeypatch.setattr(scheduler_mod, "get_workflow_scheduler", lambda: _Scheduler())
+    workflow_executor_node({
+        "question": "运行工作流",
+        "route_decision": {"workflow_name": "inventory_summary"},
+        "request_context": request_context,
+    })
+
+    assert seen["workflow_name"] == "inventory_summary"
+    assert seen["request_context"] is request_context
+
     def test_failed_step_empty_final_answer(self, monkeypatch):
         """失败步骤 final_answer 必须为空串：曾返回 str(None)="None"，
         占住 truthy final_answer 后 reporter 的降级文案被 runner 忽略，

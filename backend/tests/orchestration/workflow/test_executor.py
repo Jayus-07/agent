@@ -293,6 +293,222 @@ class TestExecutorRetryTimeout:
         assert ctx.status == "failed"
         assert "超时" in ctx.error or "timeout" in ctx.error.lower()
 
+    def test_workflow_deadline_cancels_step_before_its_timeout(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        """Workflow 总预算优先于更长的 Step timeout，且不启动后续层。"""
+        cancelled = asyncio.Event()
+        next_step_calls = []
+        attempts = []
+
+        @workflow(name="t_workflow_deadline", deadline_sec=0.05)
+        class T:
+            @step(timeout_sec=5, retry=1, on_error="skip")
+            async def slow(self, ctx):
+                attempts.append(True)
+                try:
+                    await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+            @step(depends_on=["slow"])
+            async def next_step(self, ctx):
+                next_step_calls.append(True)
+                return {"ok": True}
+
+        fresh_registry.register(T)
+        ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+            "t_workflow_deadline"))
+
+        assert ctx.status == "failed"
+        assert ctx.deadline_exceeded is True
+        assert "总执行预算耗尽" in ctx.error
+        assert cancelled.is_set()
+        assert attempts == [True]
+        assert next_step_calls == []
+        assert ctx.step_failures["slow"]["error_code"] == "workflow_deadline_exceeded"
+        assert ctx.step_failures["slow"]["physical_completion"] == "unknown_after_cancellation"
+        assert any(
+            call.kwargs.get("status") == "timeout"
+            and call.kwargs.get("metrics", {}).get("physical_completion")
+            == "unknown_after_cancellation"
+            for call in patched_trace_collector.end_span.call_args_list
+        )
+
+    def test_step_cannot_return_success_after_suppressing_deadline_cancel(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        """Step 吞掉 wait_for 取消后返回，也不能将迟到结果写成成功。"""
+        @workflow(name="t_deadline_suppressed_cancel", deadline_sec=0.05)
+        class T:
+            @step(timeout_sec=5)
+            async def slow(self, ctx):
+                try:
+                    await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    return {"late": True}
+
+        fresh_registry.register(T)
+        ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+            "t_deadline_suppressed_cancel"))
+
+        assert ctx.status == "failed"
+        assert ctx.deadline_exceeded is True
+        assert "slow" not in ctx.outputs
+        assert ctx.step_failures["slow"]["error_code"] == "workflow_deadline_exceeded"
+        assert ctx.step_failures["slow"]["physical_completion"] == (
+            "unknown_after_cancellation"
+        )
+
+    def test_step_timeout_cannot_return_late_success_after_suppressing_cancel(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        """Step 吞掉单步 timeout 取消后迟到返回，也不能写入成功输出。"""
+        attempts = []
+
+        @workflow(name="t_step_suppressed_cancel", deadline_sec=1)
+        class T:
+            @step(timeout_sec=0.05, retry=1)
+            async def slow(self, ctx):
+                attempts.append(True)
+                try:
+                    await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    await asyncio.sleep(0.02)
+                    return {"late": True}
+
+        fresh_registry.register(T)
+        ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+            "t_step_suppressed_cancel"))
+
+        assert ctx.status == "failed"
+        assert ctx.deadline_exceeded is False
+        assert attempts == [True]
+        assert "slow" not in ctx.outputs
+        assert "超时" in ctx.step_failures["slow"]["error"]
+        assert ctx.step_failures["slow"]["physical_completion"] == (
+            "unknown_after_cancellation"
+        )
+        assert any(
+            call.args[1] == "step_timeout"
+            and call.kwargs.get("data", {}).get("physical_completion")
+            == "unknown_after_cancellation"
+            for call in patched_trace_collector.add_event.call_args_list
+        )
+
+    def test_request_context_deadline_and_identity_reach_workflow(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        """在线 RequestContext 的较早 Deadline 约束 Workflow 并进入 WorkflowContext。"""
+        from backend.core.request_context import (
+            RequestContext,
+            get_request_deadline,
+            get_tool_tenant_id,
+            get_tool_user_id,
+        )
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        seen_identity = []
+
+        @workflow(name="t_parent_deadline", deadline_sec=5)
+        class T:
+            @step(timeout_sec=5)
+            async def slow(self, ctx):
+                seen_identity.append((
+                    get_tool_user_id(), get_tool_tenant_id(),
+                    get_request_deadline(),
+                ))
+                await asyncio.sleep(5)
+
+        fresh_registry.register(T)
+        request_context = RequestContext(
+            user_id="user-7",
+            tenant_id="tenant-3",
+            deadline=RequestDeadline(
+                total_budget_ms=1_000,
+                workflow_budget_ms=500,
+                reporter_reserved_ms=0,
+            ),
+        )
+        caller_identity = (get_tool_user_id(), get_tool_tenant_id())
+        caller_deadline = get_request_deadline()
+        ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+            "t_parent_deadline", request_context=request_context))
+
+        assert ctx.status == "failed"
+        assert ctx.request_context is request_context
+        assert ctx.deadline_source == "request_and_workflow"
+        assert ctx.deadline_budget_ms <= 500
+        assert ctx.deadline_exceeded is True
+        assert seen_identity == [(
+            "user-7", "tenant-3", request_context.deadline,
+        )]
+        assert (get_tool_user_id(), get_tool_tenant_id()) == caller_identity
+        assert get_request_deadline() is caller_deadline
+
+    def test_request_context_instance_normalizes_checkpoint_deadline_dict(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        from backend.core.request_context import RequestContext
+        from backend.core.tool_runtime.deadline import RequestDeadline
+
+        @workflow(name="t_checkpoint_deadline", deadline_sec=5)
+        class T:
+            @step()
+            async def complete(self, ctx):
+                return {"ok": True}
+
+        fresh_registry.register(T)
+        original = RequestContext(
+            user_id="user-checkpoint",
+            tenant_id="tenant-checkpoint",
+            deadline=RequestDeadline(
+                total_budget_ms=1_000,
+                workflow_budget_ms=500,
+                reporter_reserved_ms=0,
+            ).to_dict(),
+        )
+
+        ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+            "t_checkpoint_deadline", request_context=original))
+
+        assert ctx.status == "success"
+        assert isinstance(ctx.request_context.deadline, RequestDeadline)
+        assert ctx.request_context is not original
+        assert isinstance(original.deadline, dict)
+
+    def test_reused_parent_trace_is_not_finished_by_workflow(
+        self, fresh_registry, patched_trace_collector, patched_persistence,
+    ):
+        from types import SimpleNamespace
+
+        from backend.core.request_context import RequestContext
+        from backend.observability.tracer import _current_trace_var
+
+        parent_trace = SimpleNamespace(id="parent-trace")
+
+        @workflow(name="t_reused_parent_trace", deadline_sec=5)
+        class T:
+            @step()
+            async def complete(self, ctx):
+                return {"ok": True}
+
+        fresh_registry.register(T)
+        token = _current_trace_var.set(parent_trace)
+        try:
+            ctx = asyncio.run(WorkflowExecutor(registry=fresh_registry).run(
+                "t_reused_parent_trace",
+                request_context=RequestContext(trace=parent_trace),
+            ))
+        finally:
+            _current_trace_var.reset(token)
+
+        assert ctx.status == "success"
+        assert ctx.trace_id == "parent-trace"
+        patched_trace_collector.start.assert_not_called()
+        patched_trace_collector.finish.assert_not_called()
+
 
 # ─────────────────────────────────────────────────────────────
 # Trace 集成

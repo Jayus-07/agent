@@ -36,6 +36,10 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 
 `ExecutionContext` 与 `NodeResult` 是冻结的通用契约；`NodeResult` 只包含 `status`、`error`、`duration_ms`、`data`，领域结果类型由各域自己定义。观测 hook 负责域级 Trace/指标适配，改动时核对 `backend/tests/node_runtime/`。
 
+## Workflow 总 Deadline
+
+`@workflow(deadline_sec=...)` 为整个 DAG 声明总执行预算，覆盖并行层、步骤和重试；未声明时默认 900 秒。在线图入口将 `RequestContext` 显式交给 Workflow Runtime，总预算取 Workflow 配置与请求 `remaining_workflow_ms()` 中较早的截止时间；Tool Runtime 在调用方未显式传入时继承同一请求 Deadline。调度任务没有请求上下文时只使用 Workflow 预算。每个 Step 的实际 timeout 取单步配置与总 Deadline 剩余量的较小值；总 Deadline 到期优先于单步 `on_error`、重试和降级，停止后续层并以 `failed` 保存唯一终态，迟到或吞取消的 Step 结果不会写成成功。单步 timeout 且物理完成未知时不自动重试，避免旧尝试与重试并发；Workflow 只结束自身 span，不 finish 调用方复用的请求 Trace。取消同步 Provider 的等待后无法确认供应商侧是否停止，step failure 与 Trace 会记录 `physical_completion=unknown_after_cancellation`；LLM 调用自身的 usage 记录负责其后续结算或待对账。
+
 ## 上下文预算与跨请求状态
 
 L1 短期历史由 `SHORT_TERM_MAX_MESSAGES` 和 `SHORT_TERM_MAX_TURNS` 分别限制消息数和用户轮数；裁剪以用户消息为轮次边界，轮内 AI/Tool 消息一并保留。L1 按稳定数据库消息 ID 去重；相同正文但不同 ID 的消息仍保留为独立历史。消息数上限用于淘汰旧的完整轮次；最新单轮即使超过该数也不拆分，实际模型输入仍由后续 Token Budget 硬门禁约束。模型调用前由 `backend/context_budget/` 统一估算输入 token、预留模型输出和安全空间，并对历史、RAG 证据及工具结果做有界裁剪或压缩。原始会话历史不因预检而改写；裁剪后仍超预算时，由模型代理按稳定错误契约拒绝发送。预算策略和 L4/L5 实现以该模块、配置及测试为准。

@@ -59,8 +59,18 @@ vi.mock('./TravelSearchPanel', () => ({
 }))
 
 vi.mock('./TravelV2Map', () => ({
-  default: ({ selectedLocation }: { selectedLocation: { name: string } | null }) =>
-    createElement('div', { 'data-testid': 'map-selection' }, selectedLocation?.name ?? ''),
+  default: ({ selectedLocation, selectedItemId, onSelectItem }: {
+    selectedLocation: { name: string } | null
+    selectedItemId: string
+    onSelectItem: (id: string) => void
+  }) => createElement('div', null, [
+    createElement('div', {
+      key: 'selection',
+      'data-testid': 'map-selection',
+      'data-selected-item-id': selectedItemId,
+    }, selectedLocation?.name ?? ''),
+    createElement('button', { key: 'saved', type: 'button', onClick: () => onSelectItem('trip-a-item') }, '定位已保存行程地点'),
+  ]),
 }))
 
 vi.mock('./TravelV2EditDialog', () => ({
@@ -176,6 +186,12 @@ async function click(container: HTMLElement, predicate: (button: HTMLButtonEleme
   const button = [...container.querySelectorAll('button')].find(predicate)
   if (!button) throw new Error('没有找到预期按钮')
   await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+}
+
+async function clickWorkspaceTab(container: HTMLElement, label: string) {
+  const nav = container.querySelector('nav[aria-label="行程与查询"]')
+  if (!nav) throw new Error('没有找到工作台主 Tab')
+  await click(container, (button) => nav.contains(button) && button.textContent?.trim() === label)
 }
 
 beforeEach(() => {
@@ -393,6 +409,27 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(mocks.restoreTrip).not.toHaveBeenCalled()
   })
 
+  it('选入处于 SAVING 时锁定工作台 Tab 并保留当前候选', async () => {
+    const page = mount('trip-a')
+    const tripA = makeTrip('trip-a', '行程 A')
+    const write = deferred<{ revision: number; document: TravelTripV2['document'] }>()
+    mocks.selectionWrite.mockReturnValue(write.promise)
+    await load(tripRequest(0), tripA)
+    const searchNav = page.container.querySelector('nav[aria-label="行程与查询"]')!
+    await clickWorkspaceTab(page.container, '美食')
+    act(() => latestSearchProps('trip-a').onLocationSelect?.({ name: '保存中的候选', lat: 30.3, lng: 120.2 }))
+
+    await click(page.container, (button) => button.textContent === '模拟选入操作')
+    expect(page.container.textContent).toContain('本行程正在选入')
+    expect([...searchNav.querySelectorAll('button')].every((button) => button.disabled)).toBe(true)
+    expect([...searchNav.querySelectorAll('button')].find((button) => button.textContent?.trim() === '美食')?.getAttribute('aria-pressed')).toBe('true')
+    expect(page.container.querySelector('[data-testid="map-selection"]')?.textContent).toBe('保存中的候选')
+
+    write.resolve({ revision: 2, document: tripA.document })
+    await settle()
+    expect([...searchNav.querySelectorAll('button')].every((button) => !button.disabled)).toBe(true)
+  })
+
   it('UNKNOWN 编辑期间禁止开始 Restore', async () => {
     const tripA = makeTrip('trip-a', '行程 A', 2)
     mocks.fetchRevisions.mockResolvedValue({
@@ -565,6 +602,50 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).not.toContain('A 选入已保存')
     expect(page.container.textContent).not.toContain('A 的查询完成')
     expect(page.container.textContent).not.toContain('迟到的 A')
+  })
+
+  it('选择临时查询候选时取消正式行程选择，回到地图行程点时恢复同步', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
+    const map = page.container.querySelector<HTMLDivElement>('[data-testid="map-selection"]')!
+    expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
+
+    await click(page.container, (button) => button.textContent?.trim() === '美食')
+    const searchProps = latestSearchProps('trip-a')
+    act(() => searchProps.onLocationSelect?.({ name: '临时餐饮候选', lat: 30.2, lng: 120.1, verification: 'estimated' }))
+
+    expect(map.textContent).toContain('临时餐饮候选')
+    expect(map.getAttribute('data-selected-item-id')).toBe('')
+    expect(page.container.textContent).toContain('临时餐饮候选')
+
+    await click(page.container, (button) => button.textContent === '定位已保存行程地点')
+    expect(map.textContent).not.toContain('临时餐饮候选')
+    expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
+  })
+
+  it('选择候选后切换到行程或其他查询 Tab 时清除候选并恢复正式地点选择', async () => {
+    const page = mount('trip-a')
+    await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
+    const map = page.container.querySelector<HTMLDivElement>('[data-testid="map-selection"]')!
+
+    await clickWorkspaceTab(page.container, '美食')
+    act(() => latestSearchProps('trip-a').onLocationSelect?.({ name: '美食临时候选', lat: 30.3, lng: 120.2 }))
+    expect(map.textContent).toBe('美食临时候选')
+    expect(map.getAttribute('data-selected-item-id')).toBe('')
+
+    await clickWorkspaceTab(page.container, '行程')
+    expect(map.textContent).toBe('')
+    expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
+    expect(page.container.textContent).toContain('行程 A 景点')
+
+    await clickWorkspaceTab(page.container, '美食')
+    act(() => latestSearchProps('trip-a').onLocationSelect?.({ name: '第二个临时候选', lat: 30.4, lng: 120.3 }))
+    expect(map.textContent).toBe('第二个临时候选')
+    await clickWorkspaceTab(page.container, '酒店')
+
+    expect(map.textContent).toBe('')
+    expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
+    expect(page.container.textContent).toContain('行程 A 景点')
   })
 
   it('同一 queryId 的终态替换查询中状态，且不覆盖其他记录或已终止记录', async () => {

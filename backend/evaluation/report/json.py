@@ -5,6 +5,7 @@ from pathlib import Path
 
 from backend.evaluation.models import EvalReport
 from backend.evaluation.release_gate import compute_module_release_gate
+from .timestamp import format_shanghai_timestamp
 from .builder import (
     compute_dataset_validation,
     compute_performance_stats,
@@ -28,6 +29,7 @@ def write_json_report(
 
     data = {
         "timestamp": report.timestamp,
+        "timestamp_shanghai": format_shanghai_timestamp(report.timestamp),
         "module": report.module,
         "mode": report.mode,
         "smoke": report.smoke,
