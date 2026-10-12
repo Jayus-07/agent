@@ -20,9 +20,10 @@
 bind 幂等 / stream_sink=None 显式清除陈旧 sink / bind_sink=False 不覆盖
 等语义保持不变。
 """
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 # ── 工具层会话 ContextVar（原 tools.session 定义，收编至此统一由 bind() 写入）──
@@ -122,6 +123,18 @@ def set_tool_tenant_id(tenant_id: str) -> None:
 def get_tool_tenant_id() -> str:
     """当前请求租户 ID；无可信上下文返回空串。"""
     return _current_tenant_id.get()
+
+
+@contextmanager
+def scoped_tool_identity(*, user_id: str, tenant_id: str) -> Iterator[None]:
+    """临时绑定评测/后台身份，并在退出时恢复调用线程原有身份。"""
+    user_token = _current_user_id.set(user_id or "")
+    tenant_token = _current_tenant_id.set(tenant_id or "")
+    try:
+        yield
+    finally:
+        _current_tenant_id.reset(tenant_token)
+        _current_user_id.reset(user_token)
 
 
 def set_tool_domain_hint(domain_hint: str) -> None:
