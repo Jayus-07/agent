@@ -47,8 +47,9 @@ JUDGE_WORKERS = _env_int("EVAL_JUDGE_WORKERS", 2)
 BUDGET_BLOCK_ENABLED = os.getenv("EVAL_BUDGET_BLOCK_ENABLED", "false").strip().lower() in (
     "1", "true", "yes",
 )
-BUDGET_TENANT_ID = os.getenv("EVAL_BUDGET_TENANT_ID", "default")
-
+# 预算守卫、实际请求计费与 Usage Attribution 共用既有评测租户。
+EVAL_TENANT_ID = "eval"
+BUDGET_TENANT_ID = EVAL_TENANT_ID
 
 def _in_memory_token_usage() -> dict[str, int]:
     """run 期可实时读数的 token 口径（进程内计数器）。
@@ -317,8 +318,11 @@ def get_judge_pool() -> Any:
 
 
 def run_judge(fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """把 judge 调用提交到全局 judge 池并等待结果（并发上限 = 池大小）。"""
-    return get_judge_pool().submit(fn, *args, **kwargs).result()
+    """复制提交者的请求上下文到 judge 池，防止身份/预算在 worker 线程旁路。"""
+    from contextvars import copy_context
+
+    context = copy_context()
+    return get_judge_pool().submit(context.run, fn, *args, **kwargs).result()
 
 
 __all__ = [

@@ -11,6 +11,7 @@ from backend.memory.database import MemoryDatabaseUnavailable
 from backend.shared.error_protocol import (
     ErrorCode,
     ErrorEnvelope,
+    ProtocolError,
     error_envelope_from_exception,
 )
 
@@ -100,14 +101,42 @@ async def memory_db_unavailable_handler(request: Request, exc: MemoryDatabaseUna
     )
 
 
+# B1-F：业务错误码 → HTTP 状态（全局兜底不再一律 500——请求超时、上游
+# 不可用、限流等与普通内部错误的 HTTP 语义必须可区分）。未列出的码保持 500。
+_ERROR_CODE_HTTP_STATUS: dict[ErrorCode, int] = {
+    ErrorCode.INVALID_PARAM: 400,
+    ErrorCode.PERMISSION_DENIED: 403,
+    ErrorCode.NOT_FOUND: 404,
+    ErrorCode.TIMEOUT: 504,
+    ErrorCode.UPSTREAM_UNAVAILABLE: 503,
+    ErrorCode.RATE_LIMITED: 429,
+    ErrorCode.IDEMPOTENCY_CONFLICT: 409,
+    ErrorCode.BUDGET_EXCEEDED: 429,
+    # 499 仅用于 HTTP 响应尚未建立时的服务端取消映射；SSE 已建立连接后
+    # 无法再改变 HTTP 状态，取消语义由 REQUEST_CANCELLED 终帧表达。
+    ErrorCode.REQUEST_CANCELLED: 499,
+}
+
+
 async def global_exception_handler(request: Request, exc: Exception):
-    """非业务异常的兜底：记录堆栈 → 返回 500（避免泄露内部信息到 detail）"""
+    """非业务异常的兜底：记录堆栈 → 按错误封套映射状态码（避免泄露内部信息到 detail）"""
     logger.error(
         f"[Unhandled] {request.method} {request.url.path} → "
         f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
     )
     envelope = error_envelope_from_exception(exc, source="http")
+    # 通用 ValueError/KeyError 常表示服务端状态或代码错误，不可据此降为
+    # 400/404；非 500 状态只由显式协议/HTTP 或其他明确业务异常触发。
+    if not isinstance(exc, ProtocolError) and envelope.code in (
+        ErrorCode.INVALID_PARAM,
+        ErrorCode.NOT_FOUND,
+    ):
+        envelope = error_envelope_from_exception(
+            ProtocolError(ErrorCode.INTERNAL_ERROR, source="http"),
+            source="http",
+        )
+    status_code = _ERROR_CODE_HTTP_STATUS.get(envelope.code, 500)
     return JSONResponse(
-        status_code=500,
+        status_code=status_code,
         content=_http_payload(envelope),
     )

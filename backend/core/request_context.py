@@ -20,9 +20,10 @@
 bind 幂等 / stream_sink=None 显式清除陈旧 sink / bind_sink=False 不覆盖
 等语义保持不变。
 """
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 # ── 工具层会话 ContextVar（原 tools.session 定义，收编至此统一由 bind() 写入）──
@@ -70,6 +71,11 @@ class RequestCancelled(RuntimeError):
 
     stage = 检查点标签（cs_graph_entry / cs_supervisor / cs_expert:<name> /
     cs_reporter / knowledge_rag 等），供 trace.cancel_stage 归因。
+
+    B1-F 语义边界：这是**逻辑取消**——取消检查边界保证不再启动新的下游
+    调用，但不等于底层线程或 Provider 调用已停止：已入场的同步调用会自然
+    跑完、其结果被丢弃（物理取消传播属后续批次，不在本契约内）。终态出
+    口统一为 REQUEST_CANCELLED（SSE 稳定码 / HTTP 499 / trace cancelled）。
     """
 
     def __init__(self, stage: str = ""):
@@ -127,6 +133,18 @@ def set_tool_tenant_id(tenant_id: str) -> None:
 def get_tool_tenant_id() -> str:
     """当前请求租户 ID；无可信上下文返回空串。"""
     return _current_tenant_id.get()
+
+
+@contextmanager
+def scoped_tool_identity(*, user_id: str, tenant_id: str) -> Iterator[None]:
+    """临时绑定评测/后台身份，并在退出时恢复调用线程原有身份。"""
+    user_token = _current_user_id.set(user_id or "")
+    tenant_token = _current_tenant_id.set(tenant_id or "")
+    try:
+        yield
+    finally:
+        _current_tenant_id.reset(tenant_token)
+        _current_user_id.reset(user_token)
 
 
 def set_tool_domain_hint(domain_hint: str) -> None:
