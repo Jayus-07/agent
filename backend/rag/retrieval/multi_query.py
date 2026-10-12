@@ -5,6 +5,7 @@ need_multi_query() 是唯一入口，所有 MultiQuery 判断必须经过此函�
 
 import contextvars
 import re
+import threading
 import time
 from typing import Any, List
 
@@ -200,15 +201,25 @@ def _rewrite_with_budget(question: str) -> list[str]:
 
     from concurrent.futures import TimeoutError as _FutureTimeout
 
+    from backend.infra.llm import proxy as llm_proxy
     from backend.infra.thread_pools import retrieval_pool_outer
 
     # 预算、可信身份和 Trace 都是请求级 ContextVar。线程池不会自动继承，
     # 必须在提交方快照，确保 Proxy 预占与 llm_usage 使用同一租户/用户/Trace。
+
+    cancel_event = threading.Event()
     request_context = contextvars.copy_context()
-    future = retrieval_pool_outer().submit(request_context.run, _rewrite, question)
+    future = retrieval_pool_outer().submit(
+        request_context.run,
+        llm_proxy.run_with_role_cancellation,
+        cancel_event,
+        _rewrite,
+        question,
+    )
     try:
         return future.result(timeout=rewrite_ms / 1000)
     except _FutureTimeout:
+        cancel_event.set()
         future.cancel()
         try:
             from backend.observability.tracer import trace_collector

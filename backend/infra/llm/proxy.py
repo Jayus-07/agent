@@ -17,8 +17,7 @@ import contextvars as _contextvars
 import inspect
 import threading
 import time
-
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 # BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
 # chat_models 在装了 transformers 的环境下连带导入 torch（实测 ~8s）。
@@ -77,6 +76,60 @@ def set_current_user_id(user_id: str | None) -> None:
 def _thread_local_user_id() -> str | None:
     """读取当前请求的 user_id（限流用）。"""
     return _user_id_var.get()
+
+
+_role_cancellation_event: _contextvars.ContextVar[Any] = _contextvars.ContextVar(
+    "llm_role_cancellation_event", default=None,
+)
+
+
+def run_with_role_cancellation(
+    event: Any,
+    function: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """在调用上下文中绑定可由等待方触发的角色取消信号。"""
+    token = _role_cancellation_event.set(event)
+    try:
+        return function(*args, **kwargs)
+    finally:
+        _role_cancellation_event.reset(token)
+
+
+def _role_call_cancelled(role: str) -> bool:
+    if role != "multi_query":
+        return False
+    event = _role_cancellation_event.get()
+    return bool(event is not None and event.is_set())
+
+
+def _raise_if_role_call_cancelled(role: str) -> None:
+    if _role_call_cancelled(role):
+        raise TimeoutError("multi_query role deadline expired")
+
+
+def _wait_for_role_retry(role: str, delay: float) -> None:
+    event = _role_cancellation_event.get() if role == "multi_query" else None
+    if event is not None:
+        if event.wait(delay):
+            _raise_if_role_call_cancelled(role)
+        return
+    time.sleep(delay)
+
+
+async def _await_role_retry(role: str, delay: float) -> None:
+    event = _role_cancellation_event.get() if role == "multi_query" else None
+    if event is None:
+        await asyncio.sleep(delay)
+        return
+    deadline = time.monotonic() + delay
+    while not event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(remaining, 0.05))
+    _raise_if_role_call_cancelled(role)
 
 
 # 按请求模型覆盖：RequestContext.model → bind() 时设置（空 = 用全局模型）。
@@ -516,9 +569,8 @@ def _handle_terminal_failure(
     skip_fallback = _role_skips_fallback(role)
 
     # 1) 备用模型
-    fb = None if skip_fallback else _get_fallback_llm()
+    fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
     if fb is not None:
-        fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import (
             release_model_reservation,
             reserve_model_call,
@@ -559,7 +611,11 @@ def _handle_terminal_failure(
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
             _record_failed_attempt(fallback_model, e, decision="fallback")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
-    if LLM_ALLOW_DEGRADED_ANSWER and not skip_fallback:
+    if (
+        LLM_ALLOW_DEGRADED_ANSWER
+        and not skip_fallback
+        and role != "multi_query"
+    ):
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
         return _degraded_answer(reason, error_type=error_type,
@@ -595,9 +651,8 @@ async def _ahandle_terminal_failure(
         "provider": provider, "model": active_model,
     }
     skip_fallback = _role_skips_fallback(role)
-    fb = None if skip_fallback else _get_fallback_llm()
+    fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
     if fb is not None:
-        fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import (
             release_model_reservation,
             reserve_model_call,
@@ -637,7 +692,11 @@ async def _ahandle_terminal_failure(
                 release_model_reservation()
             logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
             _record_failed_attempt(fallback_model, e, decision="fallback")
-    if LLM_ALLOW_DEGRADED_ANSWER and not skip_fallback:
+    if (
+        LLM_ALLOW_DEGRADED_ANSWER
+        and not skip_fallback
+        and role != "multi_query"
+    ):
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
         return _degraded_answer(reason, error_type=error_type,
@@ -711,6 +770,7 @@ def _call_with_resilience(attr, *args, **kwargs):
     breaker = _breaker_for_resolved_model(model_name, role, provider)
     max_retries = _role_max_retries(role)
     for attempt in range(max_retries + 1):
+        _raise_if_role_call_cancelled(role)
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
@@ -720,6 +780,8 @@ def _call_with_resilience(attr, *args, **kwargs):
         except CircuitBreakerOpenError as e:
             release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return _handle_terminal_failure(
                 e, args, kwargs, model_name=model_name, role=role,
@@ -737,6 +799,8 @@ def _call_with_resilience(attr, *args, **kwargs):
             last_err = e
             if _is_context_length_provider_error(e):
                 raise _context_length_error() from e
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             if not _is_transient(e):
                 break
             if attempt >= max_retries:
@@ -746,7 +810,8 @@ def _call_with_resilience(attr, *args, **kwargs):
                 f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
-            time.sleep(delay)
+            _wait_for_role_retry(role, delay)
+    _raise_if_role_call_cancelled(role)
     return _handle_terminal_failure(
         last_err, args, kwargs, model_name=model_name, role=role,
     )
@@ -766,6 +831,7 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     breaker = _breaker_for_resolved_model(model_name, role, provider)
     max_retries = _role_max_retries(role)
     for attempt in range(max_retries + 1):
+        _raise_if_role_call_cancelled(role)
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
@@ -778,6 +844,8 @@ async def _acall_with_resilience(attr, *args, **kwargs):
         except CircuitBreakerOpenError as e:
             release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return await _ahandle_terminal_failure(
                 e, args, kwargs, model_name=model_name, role=role,
@@ -794,6 +862,8 @@ async def _acall_with_resilience(attr, *args, **kwargs):
             last_err = e
             if _is_context_length_provider_error(e):
                 raise _context_length_error() from e
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             if not _is_transient(e):
                 break
             if attempt >= max_retries:
@@ -803,7 +873,8 @@ async def _acall_with_resilience(attr, *args, **kwargs):
                 f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
-            await asyncio.sleep(delay)
+            await _await_role_retry(role, delay)
+    _raise_if_role_call_cancelled(role)
     return await _ahandle_terminal_failure(
         last_err, args, kwargs, model_name=model_name, role=role,
     )
@@ -882,6 +953,23 @@ def _configured_fallback_model() -> str:
             "[LLM:proxy] 读取 fallback 模型角色失败，回落旧常量", exc_info=True
         )
     return LLM_FALLBACK_MODEL
+
+
+def _get_role_fallback_llm(role: str) -> tuple[str, Any | None]:
+    """优先使用角色策略指定的备用模型，否则继承全局 fallback 角色。"""
+    policy = _role_runtime_policy(role)
+    role_model = str(getattr(policy, "fallback_model", "") or "").strip()
+    if role_model:
+        try:
+            return role_model, _get_override_llm(role_model)
+        except Exception as exc:
+            logger.warning(
+                "[LLM:resilience] 角色备用模型初始化失败 (%s)",
+                type(exc).__name__,
+            )
+            return role_model, None
+    model_name = _configured_fallback_model()
+    return model_name, _get_fallback_llm()
 
 
 def _resolve_active_llm() -> BaseChatModel:

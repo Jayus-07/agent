@@ -264,7 +264,8 @@ def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
             return True
 
     class _Pool:
-        def submit(self, *_args, **_kwargs):
+        def submit(self, _function, *args, **_kwargs):
+            state["cancel_event"] = args[1]
             return _Future()
 
     monkeypatch.setattr(
@@ -282,6 +283,7 @@ def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
     question = "复杂查询"
     assert mq._rewrite_with_budget(question) == [question]
     assert state["cancelled"] is True
+    assert state["cancel_event"].is_set()
 
 
 def test_multi_query_role_registered_and_inherits_main():
