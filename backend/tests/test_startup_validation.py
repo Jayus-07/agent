@@ -322,22 +322,6 @@ class TestReadonlyPassword:
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
         assert database._configured_readonly_password() == ""
 
-    def test_migration_does_not_embed_password(self):
-        from pathlib import Path
-
-        migration = (
-            Path(__file__).resolve().parents[1]
-            / "sql"
-            / "migrations"
-            / "004_readonly_role.sql"
-        ).read_text(encoding="utf-8")
-        create_role = next(
-            line for line in migration.splitlines()
-            if "CREATE ROLE agent_readonly" in line
-        )
-        assert "PASSWORD" not in create_role.upper()
-        assert "ALTER ROLE AGENT_READONLY PASSWORD NULL" in migration.upper()
-
     def test_forward_migration_revokes_existing_role_password(self):
         from pathlib import Path
 

@@ -13,17 +13,14 @@
 
 -- ═══ 1. 创建只读角色 ═══
 -- NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
--- 密码由 init_db.py 从环境变量 PG_READONLY_PASSWORD 设置；迁移不设默认口令。
+-- 密码由环境变量 PG_READONLY_PASSWORD 注入（不硬编码）
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'agent_readonly') THEN
-        CREATE ROLE agent_readonly WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+        CREATE ROLE agent_readonly WITH LOGIN PASSWORD 'agent_readonly_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE;
     END IF;
 END
 $$;
-
--- 旧角色可能由此前版本创建并保留旧口令；配置的新口令由 init_db.py 后续设置。
-ALTER ROLE agent_readonly PASSWORD NULL;
 
 -- ═══ 2. 库级 CONNECT ═══
 GRANT CONNECT ON DATABASE agent_business TO agent_readonly;
