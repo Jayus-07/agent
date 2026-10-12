@@ -87,22 +87,17 @@ class TestLLMIntentService:
 
     @staticmethod
     def _patch_llm(monkeypatch, content):
-        """mock 构建路径：resolve_effective 出模型名 + _build_llm_for 出假实例。"""
+        """mock 构建路径（B1-B 起走 bind_llm_for_role 治理出口）。"""
         from types import SimpleNamespace
 
-        from backend.config import model_roles
         from backend.config import travel as T
 
         monkeypatch.setattr(T, "TRAVEL_LLM_INTENT_ENABLED", True)
-        monkeypatch.setattr(
-            model_roles, "resolve_effective",
-            lambda role: {"role": role, "value": "test-model"})
-        fake_llm = SimpleNamespace(
+        fake_bound = SimpleNamespace(
             invoke=lambda messages: SimpleNamespace(content=content))
         monkeypatch.setattr(
-            "backend.infra.llm.proxy._build_llm_for",
-            lambda model_name: SimpleNamespace(
-                bind=lambda **_kw: fake_llm))
+            "backend.infra.llm.proxy.bind_llm_for_role",
+            lambda role, **_kw: fake_bound)
 
     def test_valid_family_mapped(self, monkeypatch):
         svc = self._svc()
@@ -160,16 +155,9 @@ class TestLLMIntentService:
         svc = self._svc()
         monkeypatch.setattr(T, "TRAVEL_LLM_INTENT_ENABLED", True)
 
-        from backend.config import model_roles
-        from backend.config import travel as T
-
-        monkeypatch.setattr(T, "TRAVEL_LLM_INTENT_ENABLED", True)
-        monkeypatch.setattr(
-            model_roles, "resolve_effective",
-            lambda role: {"role": role, "value": "test-model"})
-
-        def boom(model_name):
+        def boom(role, **_kw):
             raise RuntimeError("provider down")
 
-        monkeypatch.setattr("backend.infra.llm.proxy._build_llm_for", boom)
+        monkeypatch.setattr(
+            "backend.infra.llm.proxy.bind_llm_for_role", boom)
         assert svc.classify_intent_llm("随便", has_itinerary=True) is None

@@ -11,27 +11,24 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE = "http://localhost:9080"
-USERNAME = "13897654321"
-PASSWORD = "Travel#2026"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
+API_KEY = os.environ.get("API_KEY", "")
+USERNAME = os.environ.get("TEST_USERNAME", "")
+PASSWORD = os.environ.get("TEST_PASSWORD", "")
 
 
 def _api_key() -> str:
-    """服务级 X-API-Key（与 frontend/.env.local 同源，D 组实机脚本同先例）。"""
-    import os
-    here = os.path.dirname(os.path.abspath(__file__))
-    for cand in (os.path.join(here, "..", "frontend", ".env.local"),):
-        try:
-            for line in open(cand, encoding="utf-8"):
-                if line.startswith("API_KEY="):
-                    return line.split("=", 1)[1].strip()
-        except OSError:
-            continue
-    return ""
+    return API_KEY
 
 
 def _login() -> str:
@@ -127,6 +124,13 @@ def run_case(tag: str, session_id: str, questions: list[str], token: str) -> Non
 
 def main() -> None:
     case = sys.argv[1] if len(sys.argv) > 1 else "caseA"
+    missing = [name for name, value in (
+        ("API_KEY", API_KEY),
+        ("TEST_USERNAME", USERNAME),
+        ("TEST_PASSWORD", PASSWORD),
+    ) if not value.strip()]
+    if missing:
+        sys.exit("缺少必需环境配置: " + ", ".join(missing))
     token = _login()
     print("[VERIFY] 登录成功")
 

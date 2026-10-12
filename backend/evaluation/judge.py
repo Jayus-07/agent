@@ -1,6 +1,7 @@
 """LLM-as-Judge 评分器 — 用 LLM 对端到端答案进行 4 维质量评分。
 
-可移植性：此文件不硬编码任何特定 LLM 实现。默认使用项目 LLM（backend.infra.llm）。
+可移植性：此文件不硬编码任何特定 LLM 实现。默认走 eval_gen 角色的
+治理化调用链（bind_llm_for_role，B1-B 起不消耗 main 生产模型配额）。
 异常时返回 total=0.0（明确失败），而非 3.0（会误判为通过）。
 """
 
@@ -29,10 +30,18 @@ def _record_judge_tokens(resp) -> None:
 
 
 def _get_llm_response(prompt: str) -> str:
-    """获取 LLM 回复：使用项目默认 LLM。"""
+    """获取 LLM 回复：eval_gen 角色治理链（B1-B，2026-10-12）。
+
+    此前走 ``get_llm()`` 裸实例（main 生产模型，绕过预算预占/限流/用量
+    入账，第四阶段审计 P0-2）：judge 评分既消耗生产主模型配额又不进
+    llm_usage。改走 ``bind_llm_for_role("eval_gen")``——_BoundLLMProxy
+    治理链生效（发起前预算预占、真实用量结算入 llm_usage，role=eval_gen
+    归属）；eval_gen 未绑定模型时抛 RuntimeError，由 ``judge_answer``
+    既有 catch-all 转 total=0.0 明确失败（行为契约不变）。
+    """
     try:
-        from backend.infra.llm import get_llm
-        llm = get_llm()
+        from backend.infra.llm.proxy import bind_llm_for_role
+        llm = bind_llm_for_role("eval_gen")
         resp = llm.invoke(prompt)
         _record_judge_tokens(resp)
         return resp.content if hasattr(resp, "content") else str(resp)

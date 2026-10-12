@@ -23,16 +23,32 @@
         "RATE_LIMITED",
         "IDEMPOTENCY_CONFLICT",
         "BUDGET_EXCEEDED",
-        "INTERNAL_ERROR"
+        "INTERNAL_ERROR",
+        "REQUEST_CANCELLED"
       ]
     },
-    "retryable": { "type": "boolean" },
-    "handoff_available": { "type": "boolean" },
-    "message": { "type": "string", "minLength": 1 },
-    "trace_id": { "type": "string" },
-    "source": { "type": "string" },
-    "details": { "type": "object" },
-    "ts": { "type": "number" }
+    "retryable": {
+      "type": "boolean"
+    },
+    "handoff_available": {
+      "type": "boolean"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "details": {
+      "type": "object"
+    },
+    "ts": {
+      "type": "number"
+    }
   },
   "additionalProperties": true
 }
