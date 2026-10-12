@@ -1,6 +1,6 @@
 # 旅游 V2 前端 FE-3
 
-状态：实现中，待提交并创建 PR；真实 Provider E2E 因缺少认证凭据阻塞。
+状态：实现与本地验收完成；PR #48 已创建并等待评审。真实 Provider E2E 因缺少认证凭据阻塞。
 
 ## 目标
 
@@ -26,3 +26,5 @@
 - 分支：`codex/travel-v2-fe-3`
 - Worktree：`C:\Users\wh\.codex\worktrees\travel-v2-fe-3\agent`
 - 起始提交：`a67449b07a2bc9b25ba61b01c9b336d4512842f9`
+- 当前提交：`88cad7db6b5e65ced6107f0d675dc6634117c32e`
+- PR：[Jayus-07/agent#48](https://github.com/Jayus-07/agent/pull/48)

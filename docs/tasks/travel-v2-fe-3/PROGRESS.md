@@ -2,7 +2,8 @@
 
 ## 当前状态
 
-- 代码实现与定向验证完成，待提交并创建 PR。
+- 代码实现与定向验证完成；PR [#48](https://github.com/Jayus-07/agent/pull/48) 已创建并等待评审，未合并。
+- 分支提交：`88cad7db6b5e65ced6107f0d675dc6634117c32e`；从指定的 `a67449b07a2bc9b25ba61b01c9b336d4512842f9` 开始施工。创建 PR 时远端 `main` 已前进到 `73c37d73c3b7c62711db276458912eed481ace7d`，PR 当前无冲突。
 - 真实 Provider E2E 阻塞：本机请求 `POST /api/travel/v2/search/food` 返回 HTTP 401 `未认证：no-credential`，没有 Provider 状态、来源、结果或查询时间。未将 Fixture 浏览器验收记为真实 Provider 通过。
 - FE-2 的真实持久化 E2E 仍保持未完成状态。
 
@@ -41,6 +42,6 @@
 
 ## 下一步
 
-1. 完成最终 diff 与状态检查。
-2. 在 `codex/travel-v2-fe-3` 提交并推送，创建面向 `main` 的 PR。
-3. PR 明确列出真实 Provider 认证阻塞和上述后端契约依赖；不合并 main、不开始 FE-4，等待评审。
+1. 等待 PR #48 评审。
+2. 如获得真实 Provider 测试凭据，再单独补做真实 Provider E2E；Fixture 浏览器验收不能替代该项。
+3. 不合并 main、不开始 FE-4。
