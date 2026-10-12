@@ -1,6 +1,6 @@
 # 旅游 V2 前端 FE-3
 
-状态：Tab 补修与定向验收已推送至 PR #48；最新 main 已正常 merge，等待最终 HEAD 的必需 GitHub 检查。真实 Provider E2E 因 no-credential 阻塞。
+状态：Tab 补修与定向验收已推送至 PR #48；最新 main 已正常 merge，当前 PR 检查已结束并等待评审。真实 Provider E2E 因 no-credential 阻塞。
 
 ## 目标
 
@@ -30,4 +30,5 @@
 - main 同步：`73c37d73c3b7c62711db276458912eed481ace7d`，merge commit `1b603cd58ba1c8009a92d7e71116aa01d542cbef`
 - Tab 补修：`d1c58c7eb23dc21a8f30c0218573209438b28a09`
 - PR 推送记录：`24c0b250bb41c7c009d9c1974c34d8aa66d4d67b`
+- 已验收推送 HEAD：`314db782d8f1d985e7fe6ae646cd64ccca4c32d8`
 - PR：[Jayus-07/agent#48](https://github.com/Jayus-07/agent/pull/48)
