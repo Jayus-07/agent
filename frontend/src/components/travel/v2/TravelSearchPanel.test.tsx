@@ -2,6 +2,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TravelTripV2 } from '@/api/travelV2'
+import { transitionTravelTripWrite, type PendingTravelTripWrite, type TravelTripWriteTransition } from './travelV2WriteState'
 
 const mocks = vi.hoisted(() => ({ searchFood: vi.fn(), searchHotel: vi.fn(), addMeal: vi.fn() }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
@@ -202,6 +203,12 @@ describe('V2 搜索读请求取消', () => {
 
   it('选入响应丢失时保持 UNKNOWN，重试复用原 Idempotency-Key 和 payload', async () => {
     const onTripSaved = vi.fn()
+    let pendingWrite: PendingTravelTripWrite | null = null
+    const onTripWriteTransition = vi.fn((event: TravelTripWriteTransition) => {
+      const transition = transitionTravelTripWrite(pendingWrite, event)
+      if (transition.accepted) pendingWrite = transition.current
+      return transition.accepted
+    })
     const result = {
       ...foodResponse('查询成功'),
       results: [{
@@ -216,7 +223,7 @@ describe('V2 搜索读请求取消', () => {
       .mockResolvedValueOnce({ saved: true, trip_id: 'trip-a', revision: 5, document: trip.document })
     container = document.createElement('div')
     root = createRoot(container)
-    await act(async () => { root?.render(createElement(TravelSearchPanel, { trip, onTripSaved })) })
+    await act(async () => { root?.render(createElement(TravelSearchPanel, { trip, onTripSaved, onTripWriteTransition })) })
 
     await act(async () => {
       container?.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
@@ -230,6 +237,10 @@ describe('V2 搜索读请求取消', () => {
     expect(container.textContent).toContain('状态待核实')
     expect(container.textContent).not.toContain('保存失败，原行程保持不变')
     expect(onTripSaved).not.toHaveBeenCalled()
+    expect(pendingWrite).toMatchObject({ kind: 'selection', status: 'UNKNOWN' })
+    expect(onTripWriteTransition({
+      kind: 'selection', tripId: trip.trip_id, signature: 'different-selection', key: 'new-selection-key', status: 'VALIDATING',
+    })).toBe(false)
     const originalCall = mocks.addMeal.mock.calls[0]
     const retry = [...container.querySelectorAll('button')].find((button) => button.textContent === '使用同一请求安全重试')!
     await act(async () => { retry.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
@@ -238,5 +249,9 @@ describe('V2 搜索读请求取消', () => {
     expect(mocks.addMeal.mock.calls[1]).toEqual(originalCall)
     expect(onTripSaved).toHaveBeenCalledOnce()
     expect(onTripSaved.mock.calls[0][0].revision).toBe(5)
+    expect(pendingWrite).toBeNull()
+    expect(onTripWriteTransition.mock.calls
+      .filter(([event]) => event.key === originalCall[2])
+      .map(([event]) => event.status)).toEqual(['VALIDATING', 'SAVING', 'UNKNOWN', 'VALIDATING', 'SAVING', 'SAVED'])
   })
 })

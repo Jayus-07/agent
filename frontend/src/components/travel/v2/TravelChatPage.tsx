@@ -18,7 +18,7 @@ import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel
 import { useTravelConversation, type TravelConversationMessage } from '@/components/travel/useTravelConversation'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
 import { resolveTravelStreamOutcome } from './travelLiveRuntime'
-import { itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
+import { confirmedTimezoneFromTrip, itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
 import {
   classifyTravelWriteError,
   isConfirmedCreatedTravelTrip,
@@ -100,10 +100,13 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       const currentNotice = latest && latest.trip_id === savedTrip.trip_id && latest.revision > savedTrip.revision
         ? ` 页面已有更新的 v${latest.revision}，已保留该版本。`
         : ''
-      setWriteFeedback({ status: 'SAVED', message: `服务端已确认保存到 v${savedTrip.revision}.${currentNotice}` })
+      const timezoneNotice = savedTrip.document.health.issues.some((issue) => issue.code === 'timezone_unconfirmed')
+        ? '目的地时区尚未确认；UTC 仅为格式占位，行程当地时间可能不准确。'
+        : ''
+      setWriteFeedback({ status: 'SAVED', message: `服务端已确认保存到 v${savedTrip.revision}.${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}` })
       setMessages((currentMessages) => [...currentMessages, {
         id: `${intent.runId}:assistant`, conversationId, turnId: intent.runId,
-        role: 'assistant', text: `${intent.replyText}\n\n行程已自动保存到 V2 · v${savedTrip.revision}。${currentNotice}`,
+        role: 'assistant', text: `${intent.replyText}\n\n行程已自动保存到 V2 · v${savedTrip.revision}。${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}`,
         tag: '行程已自动保存', tone: 'ok',
       }])
       return true
@@ -175,7 +178,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       const tone: TravelConversationMessage['tone'] = 'ok'
       if (outcome.kind === 'clarification') tag = '需要补充信息'
       if (outcome.kind === 'plan' && response.itinerary) {
-        const document = itineraryToTripDocumentV2(response.itinerary, trip?.document.brief.timezone)
+        const document = itineraryToTripDocumentV2(response.itinerary, confirmedTimezoneFromTrip(trip))
         if (trip) {
           const expectedRevision = trip.revision
           const intent: PendingTravelPlanWrite = {

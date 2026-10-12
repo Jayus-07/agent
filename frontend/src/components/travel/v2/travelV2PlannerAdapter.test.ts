@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Itinerary } from '@/api/travel'
-import { itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
+import type { TravelTripV2 } from '@/api/travelV2'
+import { confirmedTimezoneFromTrip, itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
 
 const itinerary = {
   brief: {
@@ -77,9 +78,44 @@ describe('旅游 Agent 行程到 V2 文档的确定性转换', () => {
     expect(document.health.issues.some((issue) => issue.message.includes('接驳耗时未知'))).toBe(true)
   })
 
-  it('需求 Schema 未提供时区时提示待确认，不在映射中固定到某个城市时区', () => {
+  it('需求 Schema 未提供时区时使用 UTC 格式占位，不把设备时区标成目的地时区', () => {
     const document = itineraryToTripDocumentV2(itinerary)
-    expect(document.brief.timezone).toBeTruthy()
-    expect(document.health.issues.some((issue) => issue.message.includes('未提供有效时区'))).toBe(true)
+    expect(document.brief.timezone).toBe('UTC')
+    expect(document.health.issues).toContainEqual(expect.objectContaining({
+      code: 'timezone_unconfirmed',
+      message: expect.stringContaining('不是目的地时区'),
+    }))
+  })
+
+  it.each(['America/Los_Angeles', 'Asia/Tokyo', 'Pacific/Auckland'])(
+    '跨设备时区保留已确认的目的地时区 %s', (confirmedTimezone) => {
+      const document = itineraryToTripDocumentV2(itinerary, confirmedTimezone)
+      expect(document.brief.timezone).toBe(confirmedTimezone)
+      expect(document.health.issues.some((issue) => issue.code === 'timezone_unconfirmed')).toBe(false)
+    },
+  )
+
+  it('拒绝无效时区值并提示目的地时区待确认', () => {
+    const document = itineraryToTripDocumentV2(itinerary, 'Not/A_Timezone')
+    expect(document.brief.timezone).toBe('UTC')
+    expect(document.health.issues.some((issue) => issue.code === 'timezone_unconfirmed')).toBe(true)
+  })
+
+  it('不把已有 Revision 上标为平台默认的时区当作目的地确认值', () => {
+    const assumedTrip = {
+      document: {
+        brief: { timezone: 'Asia/Shanghai' },
+        health: { issues: [{ code: 'timezone_assumed', severity: 'warning', message: '平台默认时区' }] },
+      },
+    } as unknown as TravelTripV2
+    const confirmedTrip = {
+      document: {
+        brief: { timezone: 'America/Los_Angeles' },
+        health: { issues: [] },
+      },
+    } as unknown as TravelTripV2
+
+    expect(confirmedTimezoneFromTrip(assumedTrip)).toBeNull()
+    expect(confirmedTimezoneFromTrip(confirmedTrip)).toBe('America/Los_Angeles')
   })
 })

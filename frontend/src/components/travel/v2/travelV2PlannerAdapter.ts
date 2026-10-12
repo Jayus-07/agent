@@ -6,6 +6,7 @@ import type {
   TripDocumentV2,
   TripItemV2,
   TripLegV2,
+  TravelTripV2,
 } from '@/api/travelV2'
 
 /** 将本轮旅游 Agent 的结构化输出转成 V2 正式文档，不读取或迁移旧行程记录。 */
@@ -81,11 +82,12 @@ export function itineraryToTripDocumentV2(itinerary: Itinerary, confirmedTimezon
 
   const warnings = (itinerary.warnings ?? []).filter((item) => String(item).trim())
   const briefTimezone = typeof confirmedTimezone === 'string' ? confirmedTimezone.trim() : ''
-  const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  const timezone = validTimezone(briefTimezone) ? briefTimezone : localTimezone
-  if (!briefTimezone || !validTimezone(briefTimezone)) {
-    warnings.push(`现有需求数据未提供有效时区；当前暂用设备时区 ${timezone}，请确认目的地当地时区。`)
-  }
+  const timezoneIsConfirmed = validTimezone(briefTimezone)
+  const timezone = timezoneIsConfirmed ? briefTimezone : 'UTC'
+  const timezoneWarning = timezoneIsConfirmed
+    ? null
+    : '旅游需求 Schema 未提供目的地时区。当前仅用 UTC 满足 V2 的 IANA 时区格式要求；这不是目的地时区，行程当地时间可能不准确，请确认后再依赖时间安排。'
+  if (timezoneWarning) warnings.push(timezoneWarning)
   const children = finiteCount(brief.children) ?? 0
   const partySize = Math.max(1, finiteCount(brief.party_size) ?? 1)
   const adults = Math.max(1, finiteCount(brief.adults) ?? partySize - children)
@@ -135,12 +137,22 @@ export function itineraryToTripDocumentV2(itinerary: Itinerary, confirmedTimezon
     health: {
       status: warnings.length ? 'needs_attention' : 'ok',
       issues: warnings.map((message, index) => ({
-        code: `planner_warning_${index + 1}`,
+        code: message === timezoneWarning ? 'timezone_unconfirmed' : `planner_warning_${index + 1}`,
         severity: 'warning',
         message: String(message),
       })),
     },
   }
+}
+
+export function confirmedTimezoneFromTrip(trip: TravelTripV2 | null | undefined): string | null {
+  if (!trip) return null
+  const timezoneNotConfirmed = trip.document.health.issues.some((issue) =>
+    issue.code === 'timezone_assumed'
+    || issue.code === 'timezone_unconfirmed'
+    || (issue.message.includes('时区') && /(未提供|暂用|暂按|默认|未确认|待确认|不代表)/.test(issue.message)),
+  )
+  return timezoneNotConfirmed ? null : trip.document.brief.timezone
 }
 
 function mapPlace(poi: NonNullable<Itinerary['days'][number]['items'][number]['poi']>, title: string): PlaceSnapshotV2 {

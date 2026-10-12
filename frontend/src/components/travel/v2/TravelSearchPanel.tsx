@@ -27,6 +27,7 @@ import {
   travelWriteStatusLabel,
   travelWriteStatusRole,
   travelWriteStatusTone,
+  type TravelTripWriteTransition,
   type TravelWriteStatus,
 } from './travelV2WriteState'
 
@@ -78,6 +79,8 @@ interface TravelSearchPanelProps {
   showTabs?: boolean
   onTripSaved?: (trip: TravelTripV2, summary: string) => void
   onRefreshConflict?: () => void
+  writeLocked?: boolean
+  onTripWriteTransition?: (event: TravelTripWriteTransition) => boolean
   onLocationSelect?: (location: { name: string; lat: number; lng: number } | null) => void
   onSearchEvent?: (event: TravelSearchEvent) => void
 }
@@ -92,6 +95,8 @@ function TravelSearchPanelInstance({
   showTabs = true,
   onTripSaved,
   onRefreshConflict,
+  writeLocked = false,
+  onTripWriteTransition,
   onLocationSelect,
   onSearchEvent,
 }: TravelSearchPanelProps) {
@@ -294,21 +299,34 @@ function TravelSearchPanelInstance({
 
   async function executeSelection(intent: SelectionIntent): Promise<boolean> {
     if (selectionLockRef.current) return false
+    const identity = {
+      kind: 'selection' as const,
+      tripId: intent.tripId,
+      signature: intent.signature,
+      key: intent.key,
+    }
+    if (onTripWriteTransition?.({ ...identity, status: 'VALIDATING' }) === false) {
+      setSaveError('当前行程另有正式写入正在处理，本次选择尚未发送。请先完成或核实原请求。')
+      return false
+    }
     selectionLockRef.current = true
     setSaving(true)
     setSaveError('')
     setSavedMessage('')
     setSaveStatus('VALIDATING')
     await nextPaint()
+    onTripWriteTransition?.({ ...identity, status: 'SAVING' })
     setSaveStatus('SAVING')
     try {
       const result = await intent.send(intent.key)
       if (!isConfirmedTravelWrite(result, intent.tripId, intent.expectedRevision)) {
+        onTripWriteTransition?.({ ...identity, status: 'UNKNOWN' })
         setSaveStatus('UNKNOWN')
         setSaveError('提交回执尚不能证明事务已完成；当前行程仍显示上次确认的 Revision。请用同一请求安全重试。')
         return false
       }
       const nextTrip = { ...intent.baseTrip, revision: result.revision, document: result.document }
+      onTripWriteTransition?.({ ...identity, status: 'SAVED' })
       onTripSaved?.(nextTrip, intent.summary)
       selectionIntentRef.current = null
       setSaveStatus('SAVED')
@@ -316,6 +334,7 @@ function TravelSearchPanelInstance({
       return true
     } catch (cause) {
       const status = classifyTravelWriteError(cause)
+      onTripWriteTransition?.({ ...identity, status })
       setSaveStatus(status)
       setSaveError(travelWriteErrorMessage(cause, status))
       return false
@@ -332,7 +351,7 @@ function TravelSearchPanelInstance({
   }
 
   async function addMeal(merchant: MerchantSearchResultV2) {
-    if (!trip || !dayId || saving || saveStatus === 'UNKNOWN') return
+    if (!trip || !dayId || saving || writeLocked || saveStatus === 'UNKNOWN') return
     const merchantSnapshot: MerchantSnapshotV2 = {
       merchant_id: merchant.merchant_id,
       name: merchant.name,
@@ -359,7 +378,7 @@ function TravelSearchPanelInstance({
   }
 
   async function selectLodging(merchant: MerchantSearchResultV2) {
-    if (!trip || saving || saveStatus === 'UNKNOWN') return
+    if (!trip || saving || writeLocked || saveStatus === 'UNKNOWN') return
     const lodging: LodgingArrangementV2 = {
       selection_id: merchant.selection_id,
       merchant: {
@@ -389,7 +408,7 @@ function TravelSearchPanelInstance({
   }
 
   async function addTrain(train: TrainSearchResultV2) {
-    if (!trip || saving || saveStatus === 'UNKNOWN' || train.duration_min === null) return
+    if (!trip || saving || writeLocked || saveStatus === 'UNKNOWN' || train.duration_min === null) return
     const selectedTrain: IntercityTrainArrangementV2 = {
       selection_id: train.selection_id,
       train_code: train.train_code,
@@ -429,9 +448,9 @@ function TravelSearchPanelInstance({
         {selected && <div className="rounded-[16px] border border-[#dce8f5] bg-[#fbfdff] p-3">
           <button type="button" onClick={() => { setSelectedIndex(null); setSavedMessage(''); setSaveError(''); onLocationSelect?.(null) }} className="mb-2 inline-flex items-center gap-1 text-[10px] font-medium text-[#6b819a]"><ArrowLeft size={12} aria-hidden />返回结果列表</button>
           {kind === 'train' ? <TrainDetail train={selected as TrainSearchResultV2} /> : <MerchantDetail merchant={selected as MerchantSearchResultV2} />}
-          {trip && kind === 'food' && <div className="mt-3 space-y-2 border-t border-[#e9eff6] pt-3"><div className="grid grid-cols-2 gap-2"><label className="text-[9px] text-[#8191a6]">加入日期<select value={dayId} onChange={(event) => setDayId(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]">{trip.document.days.map((day, index) => <option key={day.day_id} value={day.day_id}>第 {index + 1} 天 · {day.date ?? '日期待定'}</option>)}</select></label><label className="text-[9px] text-[#8191a6]">用餐时段<select value={mealPeriod} onChange={(event) => setMealPeriod(event.target.value as 'lunch' | 'dinner')} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]"><option value="lunch">午餐</option><option value="dinner">晚餐</option></select></label></div><button type="button" disabled={saving || !dayId} onClick={() => void addMeal(selected as MerchantSearchResultV2)} className="h-10 w-full rounded-xl bg-[#2878f5] text-[11px] font-semibold text-white disabled:opacity-60">{saving ? '正在保存…' : `加入第 ${trip.document.days.findIndex((item) => item.day_id === dayId) + 1} 天 · ${mealPeriod === 'lunch' ? '午餐' : '晚餐'}`}</button></div>}
-          {trip && kind === 'hotel' && <div className="mt-3 space-y-2 border-t border-[#e9eff6] pt-3"><div className="grid grid-cols-2 gap-2"><label className="text-[9px] text-[#8191a6]">入住日期<input required type="date" value={checkIn} onChange={(event) => setCheckIn(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]" /></label><label className="text-[9px] text-[#8191a6]">退房日期<input required type="date" value={checkOut} min={checkIn} onChange={(event) => setCheckOut(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]" /></label></div><p className="text-[9px] text-amber-700">计划参考，未预订；房态与每晚房价待核实。</p><button type="button" disabled={saving || !checkIn || !checkOut || checkOut <= checkIn} onClick={() => void selectLodging(selected as MerchantSearchResultV2)} className="h-10 w-full rounded-xl bg-[#2878f5] text-[11px] font-semibold text-white disabled:opacity-60">{saving ? '正在保存…' : '选为本次行程住宿'}</button></div>}
-          {trip && kind === 'train' && <div className="mt-3 border-t border-[#e9eff6] pt-3"><p className="mb-2 text-[9px] text-amber-800">计划参考，未购票；车次信息可能延迟。</p><button type="button" disabled={saving || (selected as TrainSearchResultV2).duration_min === null} onClick={() => void addTrain(selected as TrainSearchResultV2)} className="h-10 w-full rounded-xl bg-[#2878f5] text-[11px] font-semibold text-white disabled:opacity-60">{saving ? '正在保存…' : '使用该车次'}</button></div>}
+          {trip && kind === 'food' && <div className="mt-3 space-y-2 border-t border-[#e9eff6] pt-3"><div className="grid grid-cols-2 gap-2"><label className="text-[9px] text-[#8191a6]">加入日期<select value={dayId} onChange={(event) => setDayId(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]">{trip.document.days.map((day, index) => <option key={day.day_id} value={day.day_id}>第 {index + 1} 天 · {day.date ?? '日期待定'}</option>)}</select></label><label className="text-[9px] text-[#8191a6]">用餐时段<select value={mealPeriod} onChange={(event) => setMealPeriod(event.target.value as 'lunch' | 'dinner')} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]"><option value="lunch">午餐</option><option value="dinner">晚餐</option></select></label></div><button type="button" disabled={saving || writeLocked || !dayId} onClick={() => void addMeal(selected as MerchantSearchResultV2)} className="h-10 w-full rounded-xl bg-[#2878f5] text-[11px] font-semibold text-white disabled:opacity-60">{saving ? '正在保存…' : `加入第 ${trip.document.days.findIndex((item) => item.day_id === dayId) + 1} 天 · ${mealPeriod === 'lunch' ? '午餐' : '晚餐'}`}</button></div>}
+          {trip && kind === 'hotel' && <div className="mt-3 space-y-2 border-t border-[#e9eff6] pt-3"><div className="grid grid-cols-2 gap-2"><label className="text-[9px] text-[#8191a6]">入住日期<input required type="date" value={checkIn} onChange={(event) => setCheckIn(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]" /></label><label className="text-[9px] text-[#8191a6]">退房日期<input required type="date" value={checkOut} min={checkIn} onChange={(event) => setCheckOut(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-[#e0e9f3] bg-white px-2 text-[10px] text-[#4b6380]" /></label></div><p className="text-[9px] text-amber-700">计划参考，未预订；房态与每晚房价待核实。</p><button type="button" disabled={saving || writeLocked || !checkIn || !checkOut || checkOut <= checkIn} onClick={() => void selectLodging(selected as MerchantSearchResultV2)} className="h-10 w-full rounded-xl bg-[#2878f5] text-[11px] font-semibold text-white disabled:opacity-60">{saving ? '正在保存…' : '选为本次行程住宿'}</button></div>}
+          {trip && kind === 'train' && <div className="mt-3 border-t border-[#e9eff6] pt-3"><p className="mb-2 text-[9px] text-amber-800">计划参考，未购票；车次信息可能延迟。</p><button type="button" disabled={saving || writeLocked || (selected as TrainSearchResultV2).duration_min === null} onClick={() => void addTrain(selected as TrainSearchResultV2)} className="h-10 w-full rounded-xl bg-[#2878f5] text-[11px] font-semibold text-white disabled:opacity-60">{saving ? '正在保存…' : '使用该车次'}</button></div>}
           {(saveStatus || saveError || savedMessage) && <div role={saveStatus ? travelWriteStatusRole(saveStatus) : saveError ? 'alert' : 'status'} className={`mt-2 rounded-lg border px-3 py-2 text-sm leading-5 ${saveStatus ? travelWriteStatusTone(saveStatus) : savedMessage ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>
             <p>{saveStatus && <span className="mr-1.5 font-semibold">{travelWriteStatusLabel(saveStatus)}</span>}{saveError || savedMessage}</p>
             {saveStatus === 'UNKNOWN' && selectionIntentRef.current && <button type="button" onClick={() => void retrySelection()} className="mt-2 min-h-10 rounded-lg border border-amber-300 bg-white px-3 text-sm font-semibold text-amber-950">使用同一请求安全重试</button>}

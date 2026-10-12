@@ -17,6 +17,7 @@ interface TravelTripHistoryPanelProps {
   currentRevision: number
   restoreStatus: TravelWriteStatus | null
   restoreMessage: string
+  writeBlockedMessage?: string
   canRetryRestore: boolean
   onClose: () => void
   onRestore: (targetRevision: number) => void
@@ -29,6 +30,7 @@ export default function TravelTripHistoryPanel({
   currentRevision,
   restoreStatus,
   restoreMessage,
+  writeBlockedMessage = '',
   canRetryRestore,
   onClose,
   onRestore,
@@ -79,7 +81,7 @@ export default function TravelTripHistoryPanel({
   }, [restoreStatus, currentRevision])
 
   return <div
-    className="fixed inset-0 z-[70] bg-[#17283f]/35 lg:flex lg:justify-end"
+    className="fixed inset-0 z-[1000] bg-[#17283f]/35 lg:flex lg:justify-end"
     role="presentation"
     onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}
   >
@@ -123,6 +125,7 @@ export default function TravelTripHistoryPanel({
       </div>}
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 lg:px-6">
+        {writeBlockedMessage && <p role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm leading-5 text-amber-950">{writeBlockedMessage}</p>}
         {loading && <p role="status" className="py-8 text-center text-sm text-[#71839b]">正在读取版本历史…</p>}
         {!loading && loadError && <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm leading-5 text-rose-800" role="alert">版本历史暂不可用：{loadError}</div>}
         {!loading && !loadError && revisions.length === 0 && <p className="rounded-xl border border-dashed border-[#d8e2ef] px-4 py-8 text-center text-sm text-[#71839b]">暂时没有可显示的版本。</p>}
@@ -141,7 +144,7 @@ export default function TravelTripHistoryPanel({
                 {entry.parent_revision !== null && <p className="mt-1 text-xs text-[#8a99ab]">基于 v{entry.parent_revision}</p>}
                 {!isCurrent && !isConfirming && <button
                   type="button"
-                  disabled={restoreStatus === 'VALIDATING' || restoreStatus === 'SAVING' || restoreStatus === 'UNKNOWN'}
+                  disabled={Boolean(writeBlockedMessage) || restoreStatus === 'VALIDATING' || restoreStatus === 'SAVING' || restoreStatus === 'UNKNOWN'}
                   onClick={() => setRestoreTarget(entry.revision)}
                   className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-[#d5e2f1] bg-white px-3 text-sm font-medium text-[#496783] hover:border-[#8db6f8] hover:text-[#246bd2] disabled:cursor-not-allowed disabled:opacity-50"
                 ><RotateCcw size={14} aria-hidden />恢复此版本</button>}
@@ -150,11 +153,11 @@ export default function TravelTripHistoryPanel({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      disabled={restoreStatus === 'VALIDATING' || restoreStatus === 'SAVING'}
+                      disabled={Boolean(writeBlockedMessage) || restoreStatus === 'VALIDATING' || restoreStatus === 'SAVING' || restoreStatus === 'UNKNOWN'}
                       onClick={() => onRestore(entry.revision)}
                       className="min-h-10 rounded-lg bg-[#2878f5] px-3.5 text-sm font-semibold text-white disabled:opacity-50"
                     >{restoreStatus === 'SAVING' ? '正在恢复…' : `确认恢复 v${entry.revision}`}</button>
-                    <button type="button" onClick={() => setRestoreTarget(null)} className="min-h-10 rounded-lg px-3 text-sm font-medium text-[#637891] hover:bg-white">取消</button>
+                    <button type="button" disabled={restoreStatus === 'UNKNOWN'} onClick={() => setRestoreTarget(null)} className="min-h-10 rounded-lg px-3 text-sm font-medium text-[#637891] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">取消</button>
                   </div>
                 </div>}
               </article>

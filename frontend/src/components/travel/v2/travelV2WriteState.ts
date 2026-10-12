@@ -17,6 +17,51 @@ export interface ConfirmedTravelWrite {
   document: TripDocumentV2
 }
 
+export type TravelTripWriteKind = 'edit' | 'restore' | 'selection'
+export type PendingTripWriteStatus = Extract<TravelWriteStatus, 'VALIDATING' | 'SAVING' | 'UNKNOWN'>
+
+export interface PendingTravelTripWrite {
+  kind: TravelTripWriteKind
+  tripId: string
+  signature: string
+  key: string
+  status: PendingTripWriteStatus
+}
+
+export interface TravelTripWriteTransition {
+  kind: TravelTripWriteKind
+  tripId: string
+  signature: string
+  key: string
+  status: TravelWriteStatus
+}
+
+/** 同一个 Trip 只允许一个未决正式写；只有 UNKNOWN 的完全相同请求可重试。 */
+export function transitionTravelTripWrite(
+  current: PendingTravelTripWrite | null,
+  event: TravelTripWriteTransition,
+): { accepted: boolean; current: PendingTravelTripWrite | null } {
+  const sameRequest = current?.kind === event.kind
+    && current.tripId === event.tripId
+    && current.signature === event.signature
+    && current.key === event.key
+
+  if (event.status === 'VALIDATING') {
+    if (current && !(sameRequest && current.status === 'UNKNOWN')) return { accepted: false, current }
+    return {
+      accepted: true,
+      current: { kind: event.kind, tripId: event.tripId, signature: event.signature, key: event.key, status: 'VALIDATING' },
+    }
+  }
+
+  if (!current || !sameRequest) return { accepted: false, current }
+  if (event.status === 'SAVED' || event.status === 'INVALID' || event.status === 'CONFLICT' || event.status === 'FAILED') {
+    return { accepted: true, current: null }
+  }
+  if (event.status !== 'SAVING' && event.status !== 'UNKNOWN') return { accepted: false, current }
+  return { accepted: true, current: { ...current, status: event.status } }
+}
+
 export function classifyTravelWriteError(cause: unknown): TravelWriteStatus {
   if (!(cause instanceof ApiError)) return 'UNKNOWN'
   if (cause.status === 409 && cause.code === 'VERSION_CONFLICT') return 'CONFLICT'
