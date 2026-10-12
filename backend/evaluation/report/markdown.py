@@ -23,6 +23,7 @@ from .builder import (
     compute_query_type_stats,
     compute_reject_hallucination_pareto,
 )
+from .timestamp import format_shanghai_timestamp
 
 
 def write_markdown_report(
@@ -61,7 +62,8 @@ def write_markdown_report(
     lines.append("")
     lines.append(f"### {verdict}")
     lines.append("")
-    lines.append(f"- **时间**: {report.timestamp}")
+    shanghai_timestamp = format_shanghai_timestamp(report.timestamp)
+    lines.append(f"- **时间（上海）**: {shanghai_timestamp}")
     lines.append(f"- **模式**: {mode_zh}")
     lines.append(f"- **用例数**: {len(report.results)}")
     pass_count = sum(1 for r in report.results if r.status == "pass")
@@ -448,6 +450,7 @@ def write_markdown_report(
     summary_json = {
         "verdict": "PASS" if gate["overall"] else "FAIL",
         "timestamp": report.timestamp,
+        "timestamp_shanghai": shanghai_timestamp,
         "module": report.module,
         "mode": report.mode,
         "total_cases": len(report.results),
