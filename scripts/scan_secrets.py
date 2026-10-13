@@ -90,8 +90,8 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("scripts/gateway_baseline_check.py", "assigned_secret"),      # 测试脚本占位
     ("scripts/gateway_rate_limit_check.py", "assigned_secret"),    # 测试脚本占位
     ("scripts/smoke_gateway_auth.sh", "assigned_secret"),          # 测试脚本占位
-    # 注意：scripts/travel_* 三个脚本含**真实 API_KEY**，故意不豁免 —— 扫描
-    # 会持续把它们报出来，直到有人轮换凭据并改成读环境变量（见 PR 说明）。
+    # scripts/travel_* 探针不豁免；当前三处 API_KEY 都从进程环境读取，
+    # 后续新增字面量仍必须由扫描门禁阻断。
 ]
 
 
