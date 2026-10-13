@@ -182,10 +182,12 @@ def _apply_business_migrations(
     from scripts.init_db import (
         block_readonly_roles_for_migrations,
         ensure_migration_tracking_table,
+        pending_readonly_authorization_migrations,
     )
 
-    block_readonly_roles_for_migrations(conn, readonly_user=user)
     ensure_migration_tracking_table(conn)
+    if pending_readonly_authorization_migrations(conn):
+        block_readonly_roles_for_migrations(conn, readonly_user=user)
 
     rc = 0
     readonly_migrations_ready = True

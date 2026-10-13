@@ -802,6 +802,11 @@ class TestReadonlyPassword:
         )
         monkeypatch.setattr(
             init_db,
+            "pending_readonly_authorization_migrations",
+            lambda _conn: ("083_readonly_ai_grant_scope.sql",),
+        )
+        monkeypatch.setattr(
+            init_db,
             "ensure_migration_tracking_table",
             lambda _conn: events.append(("tracking",)),
         )
@@ -827,10 +832,107 @@ class TestReadonlyPassword:
         )
 
         assert result == 1
-        assert events[:2] == [("block", "sql_reader"), ("tracking",)]
+        assert events[:2] == [("tracking",), ("block", "sql_reader")]
         assert (
             "migration", "093_revoke_readonly_default_password.sql"
         ) not in events
+
+    def test_ensure_dbs_skips_barrier_when_authorization_is_current(
+        self, monkeypatch,
+    ):
+        from scripts import init_db
+        from scripts import ensure_dbs
+
+        events = []
+        monkeypatch.setattr(
+            init_db,
+            "block_readonly_roles_for_migrations",
+            lambda *_args, **_kwargs: pytest.fail(
+                "normal deployments must not terminate active readonly sessions"
+            ),
+        )
+        monkeypatch.setattr(
+            init_db,
+            "pending_readonly_authorization_migrations",
+            lambda _conn: (),
+        )
+        monkeypatch.setattr(
+            init_db,
+            "ensure_migration_tracking_table",
+            lambda _conn: events.append(("tracking",)),
+        )
+        monkeypatch.setattr(
+            ensure_dbs,
+            "_apply_migration",
+            lambda _conn, filename, **_kwargs: events.append(
+                ("migration", filename)
+            ) or "skipped",
+        )
+        monkeypatch.setattr(
+            ensure_dbs,
+            "_ensure_readonly_password",
+            lambda *_args, **_kwargs: events.append(("password-aligned",)) or "ok",
+        )
+
+        result = ensure_dbs._apply_business_migrations(
+            object(), password="test-only-placeholder", user="sql_reader",
+            check=False,
+        )
+
+        assert result == 0
+        assert events[0] == ("tracking",)
+        assert ("password-aligned",) in events
+
+    def test_pending_readonly_migrations_respects_applied_and_frozen_checksums(
+        self, monkeypatch, tmp_path,
+    ):
+        from scripts import init_db
+
+        contents = {}
+        records = {}
+        for filename in init_db._READONLY_AUTHORIZATION_MIGRATIONS:
+            content = f"-- {filename}"
+            (tmp_path / filename).write_text(content, encoding="utf-8")
+            contents[filename] = init_db.checksum_of(content)
+            records[filename] = (contents[filename], "applied")
+
+        legacy_checksum = "b5c27b0ff9ff348c"
+        records["004_readonly_role.sql"] = (legacy_checksum, "applied")
+        monkeypatch.setattr(init_db, "MIGRATIONS_DIR", tmp_path)
+        monkeypatch.setattr(
+            init_db,
+            "_FROZEN_LEGACY_MIGRATION_CHECKSUMS",
+            {"004_readonly_role.sql": {legacy_checksum: contents["004_readonly_role.sql"]}},
+        )
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, _query, params):
+                self.filename = params[0]
+
+            def fetchone(self):
+                return records.get(self.filename)
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+        assert init_db.pending_readonly_authorization_migrations(_Connection()) == ()
+        assert init_db.pending_readonly_authorization_migrations(
+            _Connection(), force=True,
+        ) == init_db._READONLY_AUTHORIZATION_MIGRATIONS
+
+        records["093_revoke_readonly_default_password.sql"] = (
+            contents["093_revoke_readonly_default_password.sql"], "error",
+        )
+        assert init_db.pending_readonly_authorization_migrations(_Connection()) == (
+            "093_revoke_readonly_default_password.sql",
+        )
 
     def test_migration_barrier_disables_roles_before_terminating_sessions(self):
         from psycopg2.sql import Composed
@@ -953,6 +1055,14 @@ class TestReadonlyPassword:
             "block_readonly_roles_for_migrations",
             lambda *_args, **kwargs: events.append(
                 ("block", kwargs["readonly_user"]),
+            ),
+        )
+        monkeypatch.setattr(
+            init_db,
+            "pending_readonly_authorization_migrations",
+            lambda *_args, **_kwargs: (
+                "083_readonly_ai_grant_scope.sql",
+                "093_revoke_readonly_default_password.sql",
             ),
         )
 

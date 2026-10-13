@@ -490,6 +490,12 @@ _FROZEN_LEGACY_MIGRATION_CHECKSUMS = {
 }
 _READONLY_PASSWORD_MIGRATION = "093_revoke_readonly_default_password.sql"
 _LEGACY_READONLY_USER = "agent_readonly"
+_READONLY_AUTHORIZATION_MIGRATIONS = (
+    "004_readonly_role.sql",
+    "043_readonly_public_revoke.sql",
+    "083_readonly_ai_grant_scope.sql",
+    _READONLY_PASSWORD_MIGRATION,
+)
 _TERMINATE_READONLY_SESSIONS_SQL = (
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
     "WHERE usename = %s AND pid <> pg_backend_pid()"
@@ -528,6 +534,38 @@ def block_readonly_roles_for_migrations(
         with conn.cursor() as cur:
             cur.execute(_TERMINATE_READONLY_SESSIONS_SQL, (role,))
         conn.commit()
+
+
+def pending_readonly_authorization_migrations(
+    conn,
+    *,
+    force: bool = False,
+) -> tuple[str, ...]:
+    """返回待执行的只读权限迁移；无法判断时让调用方按需安全阻断。"""
+    if force:
+        return _READONLY_AUTHORIZATION_MIGRATIONS
+
+    pending: list[str] = []
+    for filename in _READONLY_AUTHORIZATION_MIGRATIONS:
+        sql_text = (MIGRATIONS_DIR / filename).read_text(encoding="utf-8")
+        expected_checksum = checksum_of(sql_text)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT checksum, status FROM public.schema_migrations "
+                "WHERE filename = %s",
+                (filename,),
+            )
+            row = cur.fetchone()
+
+        if row and row[1] == "applied":
+            frozen_current = _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(
+                filename, {},
+            ).get(row[0])
+            if row[0] == expected_checksum or frozen_current == expected_checksum:
+                continue
+        pending.append(filename)
+
+    return tuple(pending)
 
 
 # ──────────────────────────────────────────────────────────── 迁移执行
@@ -907,10 +945,20 @@ def main() -> int:
 
                 print(f"[init_db] ── {dbname} ──")
                 if db_key == "business":
-                    block_readonly_roles_for_migrations(
+                    pending_readonly = pending_readonly_authorization_migrations(
                         conn,
-                        readonly_user=ro_user,
+                        force=args.force,
                     )
+                    if pending_readonly:
+                        block_readonly_roles_for_migrations(
+                            conn,
+                            readonly_user=ro_user,
+                        )
+                    else:
+                        print(
+                            "[init_db]   只读权限迁移已全部应用，"
+                            "跳过只读会话屏障"
+                        )
                 readonly_migrations_ready = True
                 for name, target in plan:
                     if target != db_key:
