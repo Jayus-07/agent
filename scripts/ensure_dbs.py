@@ -36,6 +36,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS_DIR = ROOT / "backend" / "sql" / "migrations"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # 库 → 迁移顺序（与 docker/init-dbs.sh 对齐 + 补齐 006/007）
 BUSINESS_MIGRATIONS = [
@@ -44,6 +46,8 @@ BUSINESS_MIGRATIONS = [
     "005_schema_hardening.sql",
     "007_tool_approval.sql",
     "004_readonly_role.sql",  # 只读角色与授权（依赖前面的 schema）
+    "043_readonly_public_revoke.sql",  # 收窄 public 后再启用只读口令
+    "083_readonly_ai_grant_scope.sql",  # 收窄 ai 后再启用只读口令
     "093_revoke_readonly_default_password.sql",  # 清除历史默认口令
 ]
 MEMORY_MIGRATIONS = [
@@ -64,12 +68,6 @@ MEMORY_MIGRATIONS = [
 _ALREADY_EXISTS_SQLSTATES = {
     "42P07", "42710", "42P06", "42P04", "42723", "42P16", "23505",
 }
-_TERMINATE_READONLY_SESSIONS_SQL = (
-    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-    "WHERE usename = %s AND pid <> pg_backend_pid()"
-)
-
-
 def _load_env_file(path: Path) -> None:
     """把 .env 读进环境（不覆盖已存在的变量，容器内以进程 env 为准）。"""
     if not path.exists():
@@ -118,27 +116,32 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
     sql = sql.replace("${PG_READONLY_PASSWORD}", password)
     sql = sql.replace("${PG_READONLY_USER}", os.getenv("PG_READONLY_USER", "agent_readonly"))
 
+    if filename == "093_revoke_readonly_default_password.sql":
+        try:
+            from scripts.init_db import (
+                apply_migration,
+                ensure_migration_tracking_table,
+            )
+
+            ensure_migration_tracking_table(conn)
+            status, _detail = apply_migration(
+                conn,
+                filename,
+                sql,
+                force=False,
+                readonly_password=password,
+            )
+            if status == "error":
+                return "error: readonly credential migration failed"
+            return status
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            return f"error: {type(exc).__name__}: readonly credential migration failed"
+
     applied_any = False
     with conn.cursor() as cur:
         try:
-            if (
-                filename == "093_revoke_readonly_default_password.sql"
-                and password
-            ):
-                from psycopg2 import sql as pgsql
-
-                cur.execute(
-                    pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                        pgsql.Identifier("agent_readonly"),
-                        pgsql.Literal(password),
-                    )
-                )
-                cur.execute(
-                    _TERMINATE_READONLY_SESSIONS_SQL,
-                    ("agent_readonly",),
-                )
-            else:
-                cur.execute(sql)
+            cur.execute(sql)
             applied_any = True
         except Exception as e:  # noqa: BLE001
             code = getattr(e, "pgcode", None)

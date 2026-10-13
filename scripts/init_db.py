@@ -279,13 +279,14 @@ MIGRATION_TARGETS: dict[str, str] = {
     "087_llm_provider_extra_body.sql": "memory",
 }
 
-# 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
-# 083 与 043 同因：必须晚于 004 的 schema 级 GRANT，否则会被重新授予。
+# 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
+# 043/083 必须晚于 004 的 schema 级 GRANT；093 再晚于权限收口，
+# 确保只读角色获得可用口令前已完成最小权限约束。
 ORDER_LAST = [
     "004_readonly_role.sql",
-    "093_revoke_readonly_default_password.sql",
     "043_readonly_public_revoke.sql",
     "083_readonly_ai_grant_scope.sql",
+    "093_revoke_readonly_default_password.sql",
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
 ]
@@ -323,6 +324,13 @@ CREATE TABLE IF NOT EXISTS public.schema_migrations (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
+
+
+def ensure_migration_tracking_table(conn) -> None:
+    """确保目标库存在迁移台账；供 init_db 与 ensure_dbs 共用。"""
+    with conn.cursor() as cur:
+        cur.execute(_TRACK_TABLE_SQL)
+    conn.commit()
 
 
 # ──────────────────────────────────────────────────────────── 环境 / 连接
@@ -508,7 +516,7 @@ def apply_migration(
             (filename,),
         )
         row = cur.fetchone()
-    if row and not force and filename != _READONLY_PASSWORD_MIGRATION:
+    if row and not force:
         frozen_current = _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(
             filename, {},
         ).get(row[0])
@@ -803,9 +811,7 @@ def main() -> int:
         else:
             for db_key, dbname in (("business", business_db), ("memory", memory_db)):
                 conn = connect(dbname, args)
-                with conn.cursor() as cur:
-                    cur.execute(_TRACK_TABLE_SQL)
-                conn.commit()
+                ensure_migration_tracking_table(conn)
 
                 print(f"[init_db] ── {dbname} ──")
                 for name, target in plan:

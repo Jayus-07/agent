@@ -332,7 +332,13 @@ class TestReadonlyPassword:
         assert not unregistered
         assert MIGRATION_TARGETS[name] == "business"
         filenames = [filename for filename, _target in plan]
-        assert filenames.index("004_readonly_role.sql") < filenames.index(name)
+        assert filenames.index("004_readonly_role.sql") < filenames.index(
+            "043_readonly_public_revoke.sql"
+        )
+        assert filenames.index("043_readonly_public_revoke.sql") < filenames.index(
+            "083_readonly_ai_grant_scope.sql"
+        )
+        assert filenames.index("083_readonly_ai_grant_scope.sql") < filenames.index(name)
         migration = (
             Path(__file__).resolve().parents[1]
             / "sql"
@@ -455,6 +461,8 @@ class TestReadonlyPassword:
         )
 
     def test_configured_password_and_093_ledger_commit_together(self, monkeypatch):
+        from psycopg2.sql import Composed
+
         from scripts import init_db
 
         events = []
@@ -470,9 +478,7 @@ class TestReadonlyPassword:
                 events.append(("execute", query))
 
             def fetchone(self):
-                return init_db.checksum_of(
-                    "ALTER ROLE agent_readonly PASSWORD NULL;"
-                ), "applied"
+                return None
 
         class _Connection:
             def cursor(self):
@@ -503,6 +509,7 @@ class TestReadonlyPassword:
         assert status == "applied"
         assert "同一事务" in detail
         assert events[-4][0] == "execute"
+        assert isinstance(events[-4][1], Composed)
         assert "PG_TERMINATE_BACKEND" in events[-3][1].upper()
         assert events[-2:] == [("record", False), ("commit", None)]
         assert not any(
@@ -511,23 +518,19 @@ class TestReadonlyPassword:
             if event == "execute"
         )
 
-    def test_ensure_dbs_applies_password_revocation_after_004(self):
-        from scripts.ensure_dbs import BUSINESS_MIGRATIONS
+    def test_applied_093_checksum_skips_without_terminating_sessions(self):
+        from pathlib import Path
 
-        original = BUSINESS_MIGRATIONS.index("004_readonly_role.sql")
-        revocation = BUSINESS_MIGRATIONS.index(
-            "093_revoke_readonly_default_password.sql"
-        )
-        assert original < revocation
+        from scripts.init_db import apply_migration, checksum_of
 
-    def test_ensure_dbs_sets_configured_password_with_parameterized_ddl(self):
-        from psycopg2.sql import Composed
-
-        from scripts.ensure_dbs import _apply_migration
-
+        filename = "093_revoke_readonly_default_password.sql"
+        sql = (
+            Path(__file__).resolve().parents[1]
+            / "sql"
+            / "migrations"
+            / filename
+        ).read_text(encoding="utf-8")
         executed = []
-        executed_params = []
-        events = []
 
         class _Cursor:
             def __enter__(self):
@@ -536,19 +539,63 @@ class TestReadonlyPassword:
             def __exit__(self, *_args):
                 return None
 
-            def execute(self, query, params=None):
+            def execute(self, query, _params=None):
                 executed.append(query)
-                executed_params.append(params)
+
+            def fetchone(self):
+                return checksum_of(sql), "applied"
 
         class _Connection:
             def cursor(self):
                 return _Cursor()
 
             def commit(self):
-                events.append("commit")
+                pytest.fail("same-version 093 must not commit or terminate sessions")
 
-            def rollback(self):
-                events.append("rollback")
+        status, detail = apply_migration(
+            _Connection(),
+            filename,
+            sql,
+            force=False,
+            readonly_password="test-only-placeholder",
+        )
+
+        assert status == "skipped"
+        assert "已应用" in detail
+        assert len(executed) == 1
+        assert "SELECT CHECKSUM, STATUS" in executed[0].upper()
+
+    def test_ensure_dbs_applies_password_revocation_after_004(self):
+        from scripts.ensure_dbs import BUSINESS_MIGRATIONS
+
+        original = BUSINESS_MIGRATIONS.index("004_readonly_role.sql")
+        public_scope = BUSINESS_MIGRATIONS.index("043_readonly_public_revoke.sql")
+        ai_scope = BUSINESS_MIGRATIONS.index("083_readonly_ai_grant_scope.sql")
+        revocation = BUSINESS_MIGRATIONS.index(
+            "093_revoke_readonly_default_password.sql"
+        )
+        assert original < public_scope < ai_scope < revocation
+
+    def test_ensure_dbs_reuses_tracked_readonly_migration(self, monkeypatch):
+        from scripts import init_db
+        from scripts.ensure_dbs import _apply_migration
+
+        events = []
+
+        class _Connection:
+            pass
+
+        monkeypatch.setattr(
+            init_db,
+            "ensure_migration_tracking_table",
+            lambda conn: events.append(("tracking", conn)),
+        )
+
+        def _apply(conn, filename, sql, *, force, readonly_password):
+            events.append(("apply", conn, filename, bool(sql), force, readonly_password))
+            return "applied", ""
+
+        monkeypatch.setattr(init_db, "apply_migration", _apply)
 
         result = _apply_migration(
             _Connection(),
@@ -557,11 +604,10 @@ class TestReadonlyPassword:
         )
 
         assert result == "applied"
-        assert len(executed) == 2
-        assert isinstance(executed[0], Composed)
-        assert "PG_TERMINATE_BACKEND" in executed[1].upper()
-        assert executed_params[1] == ("agent_readonly",)
-        assert events == ["commit"]
+        assert events[0][0] == "tracking"
+        assert events[1][0] == "apply"
+        assert events[1][2] == "093_revoke_readonly_default_password.sql"
+        assert events[1][4:] == (False, "test-only-placeholder")
 
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)
