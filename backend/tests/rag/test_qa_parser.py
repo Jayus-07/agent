@@ -100,23 +100,51 @@ def test_markdown_parser_qa_doc(tmp_path):
 
 
 def test_markdown_parser_qa_nodes_attach_to_root_not_section(tmp_path):
-    """Q/A 节点直接挂 root，不嵌套在 section 里（避免重复切分）。"""
+    """P0-01 新契约：带标题文档不再整篇转 FAQ——section 保留，
+    Q/A 段落转 qa 节点并归属其所在 section（局部识别）。"""
     md = tmp_path / "faq_with_heading.md"
     md.write_text(
         "# FAQ 章节\n**Q: 怎么退货？**\n**A: 提交申请。**\n",
         encoding="utf-8",
     )
     ast = MarkdownParser().parse(str(md))
-    # 整个文档被识别为 FAQ → 没有普通 section，只有 qa_* 节点
+    # 结构保留：heading section 不再被 FAQ 识别吞掉
     sections = [
         n for n in ast.root.children
         if n.type == "section" and n.level > 0
     ]
+    assert len(sections) == 1
+    # Q/A 节点转出（归属 section 下），树中共 2 个
+    from backend.rag.preprocessing.ast import walk
     qa_nodes = [
-        n for n in ast.root.children if n.type in ("qa_question", "qa_answer")
+        n for n in walk(ast.root) if n.type in ("qa_question", "qa_answer")
     ]
     assert len(qa_nodes) == 2
-    assert sections == []  # FAQ 文档不识别为章节文档
+    assert qa_nodes[0].type == "qa_question"
+    assert qa_nodes[1].type == "qa_answer"
+
+
+def test_markdown_parser_mixed_faq_keeps_prose(tmp_path):
+    """P0-01 核心回归：混合文档（FAQ + 普通章节）不丢正文。
+
+    旧行为：looks_like_qa_doc 命中（min_pairs=1，单组 Q/A 即命中）→
+    整篇只产 qa 节点，普通段落/章节全部静默丢弃。新行为：FAQ 局部
+    配对，普通结构原样保留。"""
+    md = tmp_path / "mixed.md"
+    md.write_text(
+        "**Q: 怎么退货？**\n**A: 提交申请。**\n\n"
+        "# 第一章 总则\n\n这是普通正文段落，必须保留。\n",
+        encoding="utf-8",
+    )
+    ast = MarkdownParser().parse(str(md))
+    from backend.rag.preprocessing.ast import walk
+    all_nodes = list(walk(ast.root))
+    qa_nodes = [n for n in all_nodes if n.type in ("qa_question", "qa_answer")]
+    paragraphs = [n for n in all_nodes if n.type == "paragraph"]
+    sections = [n for n in all_nodes if n.type == "section" and n.level > 0]
+    assert len(qa_nodes) == 2
+    assert len(sections) == 1
+    assert any("必须保留" in p.text for p in paragraphs)
 
 
 # ─── TxtParser 集成测试 ───

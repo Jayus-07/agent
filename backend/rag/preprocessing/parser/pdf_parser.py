@@ -131,7 +131,10 @@ class PdfParser(BaseDocumentParser):
             raise
 
         raw_items: list[tuple[str, float, int, tuple]] = []  # (文本, 字号, 页码, bbox) — 仅非表格文本
-        table_items: list[tuple[float, list[list[str]], int, tuple]] = []  # (y_top, rows, 页码, bbox) — 表格
+        # P0-04（2026-10-13）：段落与表格按 (页序, 页内 y) 统一成事件流，
+        # 建 AST 时按阅读顺序交错挂 section——旧实现先处理全部文本、再把
+        # 全部表格追加到最后一个 section，表格-正文交错关系丢失。
+        page_events: list[list] = []  # 每页 [(y, kind, payload, pno, bbox), ...]
         skipped_pages: list[int] = []
         page_count = len(doc)
         try:
@@ -165,16 +168,12 @@ class PdfParser(BaseDocumentParser):
                     ]
                     # 段落合并 + 表格按 y 顺序混排（保持文档阅读顺序）
                     # §5.2 可追溯：merged 元组携带页码与版面 bbox
-                    merged: list[tuple[float, str, object, int, tuple]] = []
-                    self._extract_blocks(text_blocks, merged, table_bboxes, page_idx + 1)
+                    events: list[tuple[float, str, object, int, tuple]] = []
+                    self._extract_blocks(text_blocks, events, table_bboxes, page_idx + 1)
                     for tbbox, rows in tables:
-                        merged.append((tbbox[1], "table", rows, page_idx + 1, tbbox))
-                    merged.sort(key=lambda x: x[0])
-                    for _, kind, payload, pno, bbox_ in merged:
-                        if kind == "text":
-                            raw_items.append(payload)  # type: ignore[arg-type]
-                        else:
-                            table_items.append((_, payload, pno, bbox_))  # type: ignore[arg-type]
+                        events.append((tbbox[1], "table", rows, page_idx + 1, tbbox))
+                    events.sort(key=lambda x: x[0])
+                    page_events.append(events)
                 except Exception as e:
                     logger.warning(
                         f"[PdfParser] 第 {page_idx} 页解析失败: "
@@ -185,15 +184,25 @@ class PdfParser(BaseDocumentParser):
         finally:
             doc.close()
 
+        # 统一事件流（页序 = 外层循环顺序，页内 = y 升序）
+        ordered_events: list[tuple[float, str, object, int, tuple]] = [
+            ev for events in page_events for ev in events
+        ]
+        for y, kind, payload, pno, bbox_ in ordered_events:
+            if kind == "text":
+                text, size = payload[0], payload[1]
+                raw_items.append((text, size, pno, bbox_))
+        table_count = sum(1 for _, kind, *_ in ordered_events if kind == "table")
+
         # 可观测：汇总报告
         if skipped_pages:
             logger.warning(
                 f"[PdfParser] {file_path} 跳过 {len(skipped_pages)} 页: "
                 f"{skipped_pages}"
             )
-        if table_items:
+        if table_count:
             logger.info(
-                f"[PdfParser] {file_path} 识别 {len(table_items)} 个表格"
+                f"[PdfParser] {file_path} 识别 {table_count} 个表格"
             )
 
         # ── OCR 兜底：文本层近乎为空（扫描件/纯图片）→ 按页渲染走 OCR ──
@@ -226,35 +235,37 @@ class PdfParser(BaseDocumentParser):
                 )
 
         # 标题启发式：统计正文字号（众数），识别标题 → section，其余 → paragraph
+        # P0-04：按统一事件流遍历，表格在阅读顺序位置挂当前 section（不再全部
+        # 堆到最后一个 section）。§5.2 可追溯：段落/标题/表格节点填页码与 bbox
         body_size = _body_font_size([size for _, size, _, _ in raw_items])
         root = DocumentNode(type="section", text="", level=0)
         current_section = root
         heading_count = 0
-        # 文本与表格按 y 顺序混合（表格已按 y 排序进 table_items，此处按出现顺序交错插入）
-        # 简化：表格按 y 归入最近的 section —— 遍历文本构建 section 栈后，再按 y 归属表格。
-        # §5.2 可追溯：段落/标题节点填 page_number（1-based）与 bbox
-        for text, size, page_no, bbox_ in raw_items:
-            if not text.strip():
-                continue
-            if _is_heading_line(text, size, body_size):
-                section = DocumentNode(type="section", text=text.strip(), level=1,
-                                       page_number=page_no, bbox=bbox_)
-                root.children.append(section)
-                current_section = section
-                heading_count += 1
+        for _y, kind, payload, pno, bbox_ in ordered_events:
+            if kind == "text":
+                text, size = payload[0], payload[1]
+                if not text.strip():
+                    continue
+                if _is_heading_line(text, size, body_size):
+                    section = DocumentNode(type="section", text=text.strip(), level=1,
+                                           page_number=pno, bbox=bbox_)
+                    root.children.append(section)
+                    current_section = section
+                    heading_count += 1
+                else:
+                    current_section.children.append(
+                        DocumentNode(type="paragraph", text=text.strip(),
+                                     page_number=pno, bbox=bbox_)
+                    )
             else:
-                current_section.children.append(
-                    DocumentNode(type="paragraph", text=text.strip(),
-                                 page_number=page_no, bbox=bbox_)
-                )
-        # 表格节点挂到当前（最后出现的）section；P1-5 表格保留行列结构
-        for _y, rows, page_no, bbox_ in table_items:
-            from backend.rag.preprocessing.parser._table_nl import make_table_chunk_text
-            sec_title = current_section.text if current_section is not root else ""
-            table_text = make_table_chunk_text(rows, section_title=sec_title)
-            table_node = DocumentNode(type="table", text=table_text, rows=rows,
-                                      page_number=page_no, bbox=bbox_)
-            current_section.children.append(table_node)
+                # kind == "table"：rows 在阅读顺序位置挂当前 section
+                from backend.rag.preprocessing.parser._table_nl import make_table_chunk_text
+                rows = payload
+                sec_title = current_section.text if current_section is not root else ""
+                table_text = make_table_chunk_text(rows, section_title=sec_title)
+                table_node = DocumentNode(type="table", text=table_text, rows=rows,
+                                          page_number=pno, bbox=bbox_)
+                current_section.children.append(table_node)
 
         if heading_count:
             logger.info(
@@ -263,9 +274,10 @@ class PdfParser(BaseDocumentParser):
             )
 
         raw_text = "\n".join(text for text, _, _, _ in raw_items)
-        if table_items:
+        _tables_in_order = [rows for _, kind, rows, _, _ in ordered_events if kind == "table"]
+        if _tables_in_order:
             raw_text += "\n\n" + "\n\n".join(
-                make_table_chunk_text(rows) for _, rows, _, _ in table_items
+                make_table_chunk_text(rows) for rows in _tables_in_order
             )
         ast = DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
         # §5.1 质量记录：OCR 兜底发生 → AST 置位（pipeline 据此给 chunk 打标，

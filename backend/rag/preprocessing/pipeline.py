@@ -10,7 +10,9 @@ from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
-from backend.rag.preprocessing.chunking import ChunkStrategyRouter, stamp_chunk_pages
+from backend.rag.preprocessing.chunking import (
+    ChunkStrategyRouter, coverage_audit, stamp_chunk_pages,
+)
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
 
@@ -101,11 +103,20 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         for c in chunks:
             c.metadata["ocr_triggered"] = "true"
             c.metadata["ocr_pages"] = int(getattr(raw_ast, "ocr_pages", 0) or 0)
+    # P0-02 覆盖对账：源叶子 → 输出 chunk 的覆盖率（uncovered 进入
+    # quality_issues 可追溯，不让策略静默丢内容）
+    coverage = coverage_audit(normalized_ast, chunks)
+    if coverage.get("uncovered_count"):
+        logger.warning(
+            f"[ChunkPipeline] {file_path} 覆盖缺口: "
+            f"{coverage['uncovered_count']}/{coverage['leaf_total']} 叶子未入 chunk"
+        )
     qc = {
         "raw_ast": raw_ast,
         "normalized_ast": normalized_ast,
         "completeness": report,
         "doc_type": doc_type,
         "strategy_name": strategy.__class__.__name__,
+        "coverage": coverage,
     }
     return chunks, qc

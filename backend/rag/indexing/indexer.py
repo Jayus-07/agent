@@ -219,6 +219,27 @@ def _embedding_model_identity(embedding: Any) -> ModelIdentity:
     )
 
 
+def apply_index_chunk_identity(chunks: list, doc_id: str) -> None:
+    """索引期 chunk 身份协议：覆盖 chunk_id 并同步 parent_chunk_id（P0-03）。
+
+    切分期 chunk_id/parent_chunk_id 都是内容派生 id（12 位 md5）；索引期
+    chunk_id 统一覆盖为 ``{doc_id}_{i}``。若不同步改写 parent_chunk_id，
+    检索端 attach_parent_context 按 chunk_id $in 查询永远落空，
+    Parent-Child 上下文扩展静默失效（2026-10-13 修复）。
+    """
+    id_map: dict[str, str] = {}
+    for i, ch in enumerate(chunks):
+        old_cid = str(ch.metadata.get("chunk_id") or "")
+        new_cid = f"{doc_id}_{i}"
+        if old_cid and old_cid != new_cid:
+            id_map[old_cid] = new_cid
+        ch.metadata["chunk_id"] = new_cid
+    for ch in chunks:
+        pid = str(ch.metadata.get("parent_chunk_id") or "")
+        if pid and pid in id_map:
+            ch.metadata["parent_chunk_id"] = id_map[pid]
+
+
 class ChunkingEmptyError(Exception):
     """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
 
@@ -1463,6 +1484,10 @@ class IncrementalIndexer:
         time_refs_val = doc_meta.get("time_refs") or []
         time_refs_str = ", ".join(str(t) for t in time_refs_val[:10]) if isinstance(time_refs_val, list) else str(time_refs_val)[:200]
 
+        # P0-03（2026-10-13）：chunk_id 覆盖为索引期协议 id 时同步改写
+        # parent_chunk_id（实现与契约见 apply_index_chunk_identity）。
+        apply_index_chunk_identity(chunks, doc_id)
+
         for i, ch in enumerate(chunks):
             ch.metadata["doc_type"] = doc_type_val
             ch.metadata["person_names"] = person_val
@@ -1497,7 +1522,7 @@ class IncrementalIndexer:
             # 已存在文档走"复用 active 记录"分支 → doc_id 仍是旧协议 id，
             # 故重索引旧文档不会让现有评测集 relevant_docs 失效。
             ch.metadata["doc_id"] = doc_id
-            ch.metadata["chunk_id"] = f"{doc_id}_{i}"
+            # chunk_id 已在上方统一覆盖并同步 parent_chunk_id（P0-03），此处不再重复
             chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
             ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
             # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
