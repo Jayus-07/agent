@@ -17,8 +17,8 @@
 | B1-B | #42 | 已合并，`0c471fb` | RAG Smoke/Evaluation/Detect SUCCESS；合并后 65 passed、9 xfailed | 3 条旧 thread 已解决 | 无 |
 | B1-F | #43 | 已合并，`b0f71bc` | run 138 全绿；合并后 39 passed | 2 条旧 thread 已解决 | 无 |
 | RAG R0/R1 | #41 | 已合并，`48f3d49` | run 166 RAG Smoke、run 17 Secret Scan SUCCESS；合并前本地 142 passed | 3 条旧 thread 已解决 | 无；既有性能/准确率证据保留 |
-| 凭据安全治理 | #51 | Open，head 013c340，代码已补齐 | Detect、Secret Scan、PR preflight、RAG Smoke contract 全 SUCCESS；真实 API job 按 PR 策略跳过；只读迁移定向集 19 passed；隔离 PostgreSQL 16 认证/会话集成通过；tree/diff/history Secret Scan 0 命中 | 修复 4 条未解决旧 thread，等待新 head 复审 | Redis/API Key 按用户要求未轮换；历史泄漏未撤销，故 P0 凭据风险未关闭 |
-| RAG MultiQuery P0 | #52 | Open，head 0c3239b，修复已推送 | Detect、Secret Scan、PR preflight、RAG Smoke contract 全 SUCCESS；真实 API job 按 PR 策略跳过；相关定向集 46 passed；真实 run #38430900200 于旧 head befbad0 完成 8/8 用例 | 修复 2 条未解决 review thread，等待新 head 复审 | Live Top-1 为 0.7143，低于 0.80 门槛，与 main 同值；费用核验 UNVERIFIED；当前 head 未重复付费评测 |
+| 凭据安全治理 | #51 | Open，head a20b2e2；新 P2 已修复 | run 38438779728 与 Secret Scan run 38438779738 全部成功；真实 API 按 PR 策略跳过；只读迁移定向集 21 passed；隔离 PostgreSQL 16 认证/会话集成通过；tree/branch-history/diff Secret Scan 0 命中 | 新 P2 已回复并解决，已发起当前 head `@codex review`，待返回 | Redis/API Key 按用户要求未轮换；历史泄漏未撤销，故 P0 凭据风险未关闭；main RAG Smoke Top-1 门禁失败 |
+| RAG MultiQuery P0 | #52 | Open，head 4027387；新 P2 已修复 | run 38438851319 与 Secret Scan run 38438851282 全部成功；真实 API 按 PR 策略跳过；治理/改写/线程池/Trace/Deadline 相关集 55 passed；真实 run #38430900200 在旧 head befbad0 完成 8/8 用例 | 新 P2 已回复并解决，已发起当前 head `@codex review`，待返回 | 主线 Top-1 为 0.7143，低于 0.80 门槛；与旧 head MultiQuery run 指标一致；费用核验 UNVERIFIED，未在最终代码重复付费评测 |
 | B1-C | #45 | 已合并，`8f65712` | run 163 SUCCESS；隔离 PostgreSQL 定向集 273 passed | 旧 thread 已解决 | 无；按用户要求以当前 4 类 Workflow 验收 |
 | B1-D | #47 | 已合并，`c2feb44` | run 165 SUCCESS；定向集 135 passed + 隔离 PostgreSQL 6 passed | 2 条旧 thread 已解决 | 无 |
 | B1-E | 新 PR | 尚未施工 | — | — | 仓库只找到开发 compose 的 Checkpointer 配置，缺生产实际启用证据；须先取得部署配置/运行证据 |
@@ -35,12 +35,18 @@
 
 ### MultiQuery 验证证据
 
-- 当前代码 head 0c3239b 定向回归：infra/test_b1b_llm_governance.py、test_multi_query_token_budget.py、test_retrieval_executor_isolation.py、test_multi_query_trace.py，46 passed in 22.38s；py_compile 与 git diff --check 通过。
+- 当前代码 commit 4027387 定向回归：infra/test_b1b_llm_governance.py、test_multi_query_token_budget.py、test_retrieval_executor_isolation.py、test_multi_query_trace.py、test_retrieval_deadline.py，55 passed；另对部分成功超时场景锁定告警中的已完成文档数；py_compile 与 git diff --check 通过。
 - 本地取消与预算测试覆盖预占期间取消、同步/异步 Provider 阻断、未执行预占释放；真实 ThreadPoolExecutor 测试验证慢改写不能阻塞 outer 检索。
 - 真实 Provider run #38430900200（https://github.com/Jayus-07/agent/actions/runs/38430900200）在 head befbad0 开启 multiquery=true，8/8 案例成功执行；实际统计 107 次 Provider 请求（chat 35、embedding 63、rerank 9）。
 - 该 run 汇总 Recall@5 0.9286、MRR 0.8571、Top-1 0.7143、Multi-hop 0.8333。同 main 基线 run #38397152826 指标一致，未见召回退化；两个 run 均因 Top-1 低于 0.80 门槛失败，不能降低门槛掩盖。
-- Provider 实际调用有证据；价格/费用核验为 UNVERIFIED。上述 live run 早于当前取消与线程隔离修复提交；为避免额外付费调用，没有在 head 0c3239b 再跑真实评测。新代码由定向测试和 PR CI 验证。
+- Provider 实际调用有证据；价格/费用核验为 UNVERIFIED。上述 live run 早于当前取消与线程隔离修复提交；为避免额外付费调用，没有在 head 4027387 再跑真实评测。新代码由定向测试和 PR CI 验证。
 - R0/R1 Embedding 去重、缓存实现未改；现有 R0/R1 性能/准确率证据保留。
+
+### 主线 RAG Smoke 门禁诊断
+
+- 最新 `origin/main` 仍为 `2d1d0b173f50128429d9c868301ee05b38bcd85b`。读取 run `38397152826` 与 MultiQuery live run `38430900200` 的已存 artifact，两个结果的 Recall@5 0.9286、MRR 0.8571、Top-1 0.7143、Multi-hop 0.8333 完全一致；均未达到 0.80 的 Top-1 门槛。
+- 两次 run 都是 8/8 case 通过，但 RC-005、RC-024 的 top1_accuracy 为 0、MRR 为 0.5，说明目标文档能召回但被排在第二位；其余有 top1 指标的正向案例 Top-1 为 1.0。当前证据将门禁失败定位到基线重排顺序，未见 MultiQuery 召回退化。
+- PR #52 最新代码没有再次运行真实 Provider；前述 live run 在 `befbad0`，不是 4027387。未用降低阈值或删改案例处理主线失败。
 
 ## 凭据处置
 
@@ -52,6 +58,6 @@
 
 ## 下一步
 
-1. CI 已通过，等待 #51/#52 当前 head 的 GPT 复审；所有合并仍受主线 RAG Smoke Top-1 门禁阻断，修复基线前不合并。
-2. 不降低 0.80 Top-1 门槛；用同基线证据定位 main 的失败案例与指标差异。
-3. B1-E 继续等待生产 Checkpointer 的真实部署证据；Redis/API Key 与历史泄漏凭据继续保持未轮换状态，不宣称安全 P0 关闭。
+1. #51/#52 新提交的 PR CI 已通过；等待当前 head 的 GPT 复审。合并前还需主线门禁恢复并向用户提交合并清单征求批准。
+2. 不降低 0.80 Top-1 门槛；继续定位 RC-005/RC-024 的基线重排顺序问题，单独确认其修复范围后再开小 PR。
+3. B1-E 继续等待生产 Checkpointer 的真实部署配置/运行证据；当前仓库只找到开发 compose 配置。Redis/API Key 与历史泄漏凭据继续按用户要求保持未轮换，不宣称安全 P0 关闭。
