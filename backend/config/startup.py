@@ -223,11 +223,10 @@ def validate_startup_settings() -> List[str]:
         warnings.append(f"API_KEY 长度仅 {len(s.auth.api_key)} 位（建议 ≥ 32 位随机串）")
 
     if not s.database.pg_readonly_password:
-        # 审查 #12：database.py 对 PG_READONLY_PASSWORD 有内置开发缺省值，
-        # 生产漏配会静默使用公开口令 —— 任何环境都点名提醒
+        # 没有配置时数据库层不会提供可登录的默认凭据，明确提示只读能力不可用。
         warnings.append(
-            "PG_READONLY_PASSWORD 未配置：SQL 只读连接将使用内置开发口令"
-            "（agent_readonly_dev）。生产环境必须显式配置。"
+            "PG_READONLY_PASSWORD 未配置：SQL 只读连接不可用。"
+            "生产环境必须显式配置。"
         )
 
     if s.auth.allow_unauthenticated:
@@ -336,11 +335,11 @@ def validate_startup_settings() -> List[str]:
             "由网关验签后注入 X-User-Id 等身份头。"
         )
 
-    # 审查 #12：只读口令有公开的开发缺省值，生产漏配 = 静默使用弱口令
+    # 只读凭据必须由受控配置显式提供；生产漏配时拒绝启动。
     if _is_prod and not s.database.pg_readonly_password:
         _fatal.append(
-            "ENVIRONMENT=production + PG_READONLY_PASSWORD 未配置：生产环境"
-            "禁止静默使用内置开发口令（agent_readonly_dev），必须显式配置。"
+            "ENVIRONMENT=production + PG_READONLY_PASSWORD 未配置："
+            "必须通过受控环境配置提供只读数据库凭据。"
         )
 
     # 预算模式（2026-10-01 P0）：生产环境必须显式声明 LLM_BUDGET_MODE。

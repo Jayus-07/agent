@@ -48,6 +48,11 @@ def _pg_cfg(db_env_var: str, default_db: str) -> dict:
     }
 
 
+def _configured_readonly_password() -> str:
+    """只读业务连接仅使用显式配置，不提供可公开猜测的开发口令。"""
+    return os.getenv("PG_READONLY_PASSWORD", "")
+
+
 # === Memory 库（Agent 自身 + 聊天记忆 + 长期事实）===
 # 不复用 PGDATABASE：本地开发常把它指向 demo 业务库；一旦复用，
 # checkpointer / CS 状态会与 RAG 的 agent_memory 存储分裂。
@@ -60,7 +65,7 @@ BUSINESS_DB_CONFIG = _pg_cfg("BUSINESS_PGDATABASE", "agent_business")
 BUSINESS_DB_READONLY_CONFIG = {
     **_pg_cfg("BUSINESS_PGDATABASE", "agent_business"),
     "user": os.getenv("PG_READONLY_USER", "agent_readonly"),
-    "password": os.getenv("PG_READONLY_PASSWORD", "agent_readonly_dev"),
+    "password": _configured_readonly_password(),
 }
 
 # === Doc registry（PostgreSQL，2026-09-17 SQLite 轨删除，PG 为唯一实现）===
