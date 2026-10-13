@@ -84,9 +84,22 @@ def test_embedding_usage_payload_contains_processing_binding(monkeypatch):
 
 def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
     from backend.rag import embedding_singleton
+    from backend.infra.llm import pricing
 
     class FakeEmbedding:
         pass
+
+    recorded = []
+    priced = []
+    monkeypatch.setattr(
+        "backend.observability.llm_usage_store.get_llm_usage_store",
+        lambda: SimpleNamespace(record=recorded.append),
+    )
+    monkeypatch.setattr(
+        pricing,
+        "price_usage",
+        lambda model, role, usage, **kwargs: priced.append((model, role)) or None,
+    )
 
     monkeypatch.setattr(
         embedding_singleton,
@@ -97,12 +110,12 @@ def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
     monkeypatch.setattr(
         embedding_singleton.specialized_mod,
         "resolve_binding",
-        lambda role: SimpleNamespace(provider_id="embedding-provider")
+        lambda role: SimpleNamespace(
+            provider_id="embedding-provider",
+            model_name="registered-embedding",
+        )
         if role == "embedding"
         else None,
-    )
-    monkeypatch.setattr(
-        embedding_singleton, "_metered_embedding_model", lambda: "registered-embedding"
     )
     monkeypatch.setattr(
         embedding_singleton,
@@ -115,3 +128,8 @@ def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
     assert tracked._provider == "cloud"
     assert tracked._provider_id == "embedding-provider"
     assert tracked._model_name == "registered-embedding"
+    tracked._record(12, 1, 2.0)
+
+    assert priced == [("registered-embedding", "embedding")]
+    assert recorded[0]["provider"] == "embedding-provider"
+    assert recorded[0]["model"] == "registered-embedding"

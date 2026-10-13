@@ -286,15 +286,7 @@ def test_rerank_usage_records_bound_provider_and_billing_model(monkeypatch):
         lambda model, role, usage, **kwargs: priced.append((model, role)) or None,
     )
 
-    config = reranker._resolve_rerank_runtime_config()
-    backend = reranker.DashScopeReranker(
-        api_key=config["api_key"] or "sk-test-placeholder",
-        model=config["model"],
-        api_format=config["api_format"],
-        base_url=config["base_url"],
-        provider_id=config["provider"],
-        billing_model=config["billing_model"],
-    )
+    backend = reranker.get_reranker_backend()
     backend._record_tokens(3, 5.0, total_tokens=14)
 
     assert priced == [("registered-rerank", "rerank")]
