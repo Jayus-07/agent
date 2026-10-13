@@ -170,8 +170,8 @@ jobs:
           EVAL_MEMORY_PGDATABASE: agent_memory_test
         run: |
           # 校验绑定（模型名/Provider/维度/凭据可解密）后真实调用一次
-          # embedding API：以实际响应维度为准，不一致即 BLOCKED（exit 1），
-          # 不得切回本地模型或空集合跑出 PASS。
+          # embedding/rerank API：以 embedding 实际维度为准，不一致或
+          # 任一 Provider 不可用即 BLOCKED（exit 1），不得静默降级。
           python scripts/seed_eval_model_bindings.py --verify --target-db agent_memory_test
           python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test
 

@@ -32,6 +32,8 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert "python3 .github/scripts/rag_smoke_path_filter.py < \"$changed_paths\"" in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in regression
+    assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in smoke
+    assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in regression
     # 真实评测账本写入依赖此开关；两个 workflow 使用独立临时数据库。
     assert 'OBS_ANALYTICS_ENABLED: "true"' in smoke
     assert 'OBS_ANALYTICS_ENABLED: "true"' in regression

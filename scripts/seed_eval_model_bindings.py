@@ -393,7 +393,7 @@ def psycopg_extras_json(value):
 
 
 def probe(target_db: str) -> int:
-    """真实调用 embedding API 一次：连通性 + 实际返回维度。
+    """真实调用 embedding 与 rerank API：验证连通性、rerank 可用性和维度。
 
     与生产链路同构（OpenAIEmbeddings + binding.dimensions 参数）；
     绑定/凭据从目标库读取（运行时仍从 DB 加载，不走 env 第二配置源）。
@@ -476,7 +476,11 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--from-source-db", help="从源库原样复制（本地重放）")
     mode.add_argument("--from-env", action="store_true", help="从 env 明文 key 加密注入（CI）")
     mode.add_argument("--verify", action="store_true", help="仅校验不写入")
-    mode.add_argument("--probe", action="store_true", help="真实调用 embedding API 验证连通与维度")
+    mode.add_argument(
+        "--probe",
+        action="store_true",
+        help="真实调用 embedding/rerank API 验证连通与维度",
+    )
     args = parser.parse_args(argv)
 
     target = args.target_db
