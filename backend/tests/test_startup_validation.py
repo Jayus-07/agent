@@ -321,11 +321,20 @@ class TestReadonlyPassword:
     """只读账号只使用显式配置；漏配时开发环境告警、生产环境阻断。"""
 
     @staticmethod
-    def _readonly_role_state_connection(existing, managed, comments=None):
+    def _readonly_role_state_connection(
+        existing,
+        managed,
+        comments=None,
+        *,
+        database_name="agent_business",
+        foreign_managed=None,
+    ):
         from psycopg2.sql import Composed
 
         events = []
         comments = comments or {}
+        managed_by_database = {database_name: set(managed)}
+        managed_by_database.update(foreign_managed or {})
 
         class _Cursor:
             def __enter__(self):
@@ -335,11 +344,16 @@ class TestReadonlyPassword:
                 return None
 
             def execute(self, query, params=None):
-                if isinstance(query, str) and "shobj_description" in query.lower():
-                    if " like " in query.lower():
-                        self.last = ("managed_roles",)
-                    else:
-                        self.last = ("comment_read", params[0])
+                query_text = query.lower() if isinstance(query, str) else ""
+                if "current_database()" in query_text:
+                    self.last = ("database",)
+                elif (
+                    "select rolname" in query_text
+                    and "shobj_description" in query_text
+                ):
+                    self.last = ("managed_roles", params[0])
+                elif "shobj_description" in query_text:
+                    self.last = ("comment_read", params[0])
                 elif isinstance(query, str) and "pg_catalog.pg_roles" in query:
                     self.last = ("exists", params[0])
                 elif isinstance(query, str) and "pg_terminate_backend" in query:
@@ -356,6 +370,8 @@ class TestReadonlyPassword:
                 events.append(self.last)
 
             def fetchone(self):
+                if self.last[0] == "database":
+                    return (database_name,)
                 if self.last[0] == "exists":
                     return (1,) if self.last[1] in existing else None
                 if self.last[0] == "comment_read":
@@ -363,7 +379,15 @@ class TestReadonlyPassword:
                 return None
 
             def fetchall(self):
-                return [(role,) for role in managed]
+                if self.last[0] != "managed_roles":
+                    return []
+                marker = self.last[1]
+                if "%" in marker:
+                    role_names = set().union(*managed_by_database.values())
+                else:
+                    marked_database = marker.rsplit(":", maxsplit=1)[-1]
+                    role_names = managed_by_database.get(marked_database, set())
+                return [(role,) for role in role_names]
 
         class _Connection:
             def cursor(self):
@@ -547,6 +571,8 @@ class TestReadonlyPassword:
                     events.append(("terminate", params[0]))
                 elif isinstance(query, str) and "select checksum, status" in query.lower():
                     events.append(("ledger_read", None))
+                elif isinstance(query, str) and "current_database()" in query.lower():
+                    events.append(("database_read", None))
                 elif isinstance(query, str) and "shobj_description" in query.lower():
                     events.append(("comment_read", params[0]))
                 else:
@@ -555,6 +581,8 @@ class TestReadonlyPassword:
             def fetchone(self):
                 if events[-1][0] == "ledger_read":
                     return None
+                if events[-1][0] == "database_read":
+                    return ("agent_business",)
                 if events[-1][0] == "comment_read":
                     return ("operator note",)
                 return (1,)
@@ -618,6 +646,8 @@ class TestReadonlyPassword:
                     events.append(("terminate", params[0]))
                 elif isinstance(query, str) and "select checksum, status" in query.lower():
                     events.append(("ledger_read", None))
+                elif isinstance(query, str) and "current_database()" in query.lower():
+                    events.append(("database_read", None))
                 elif isinstance(query, str) and "shobj_description" in query.lower():
                     events.append(("comment_read", params[0]))
                 else:
@@ -703,6 +733,8 @@ class TestReadonlyPassword:
                     events.append(("terminate", params[0]))
                 elif isinstance(query, str) and "select checksum, status" in query.lower():
                     events.append(("ledger_read", None))
+                elif isinstance(query, str) and "current_database()" in query.lower():
+                    events.append(("database_read", None))
                 elif isinstance(query, str) and "shobj_description" in query.lower():
                     events.append(("comment_read", params[0]))
                 else:
@@ -716,6 +748,8 @@ class TestReadonlyPassword:
             def fetchone(self):
                 if events[-1][0] == "ledger_read":
                     return None
+                if events[-1][0] == "database_read":
+                    return ("agent_business",)
                 if events[-1][0] == "comment_read":
                     return ("",)
                 return (1,)
@@ -793,6 +827,37 @@ class TestReadonlyPassword:
             and "COMMENT ON ROLE SQL_READER_NEW IS" in event[1]
             and "OPERATOR NOTE" in event[1]
             and "AGENT-PLATFORM:READONLY-MANAGED" in event[1]
+            for event in events
+        )
+
+    def test_shared_cluster_does_not_disable_other_database_role(self):
+        from scripts.init_db import ensure_readonly_role
+
+        conn, events = self._readonly_role_state_connection(
+            existing={
+                "agent_readonly", "sql_reader_old", "sql_reader_new",
+                "sql_reader_other",
+            },
+            managed={"sql_reader_old"},
+            database_name="agent_business",
+            foreign_managed={"travel_business": {"sql_reader_other"}},
+        )
+
+        assert ensure_readonly_role(
+            conn, user="sql_reader_new", password="test-only-placeholder",
+        ) == "ok"
+
+        assert (
+            "managed_roles",
+            "agent-platform:readonly-managed:agent_business",
+        ) in events
+        assert ("terminate", "sql_reader_old") in events
+        assert not any(
+            event[0] == "terminate" and event[1] == "sql_reader_other"
+            for event in events
+        )
+        assert not any(
+            event[0] == "ddl" and "SQL_READER_OTHER" in event[1]
             for event in events
         )
 

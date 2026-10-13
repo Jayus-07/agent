@@ -496,7 +496,7 @@ _READONLY_AUTHORIZATION_MIGRATIONS = (
     "083_readonly_ai_grant_scope.sql",
     _READONLY_PASSWORD_MIGRATION,
 )
-_READONLY_ROLE_MARKER = "agent-platform:readonly-managed"
+_READONLY_ROLE_MARKER_PREFIX = "agent-platform:readonly-managed:"
 _TERMINATE_READONLY_SESSIONS_SQL = (
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
     "WHERE usename = %s AND pid <> pg_backend_pid()"
@@ -543,21 +543,34 @@ def _block_and_terminate_readonly_roles(conn, roles: list[str]) -> list[str]:
     return existing_roles
 
 
+def _readonly_role_marker(conn) -> str:
+    """按当前业务数据库生成托管标记，避免共享集群中的实例互相操作。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT current_database()")
+        row = cur.fetchone()
+    if row is None or not row[0]:
+        raise RuntimeError("无法确定当前数据库，拒绝对齐只读角色")
+    return f"{_READONLY_ROLE_MARKER_PREFIX}{row[0]}"
+
+
 def _managed_readonly_role_names(conn) -> set[str]:
-    """读取由本平台此前标记管理的只读角色名。"""
+    """只读取当前业务数据库托管标记所拥有的只读角色。"""
+    marker = _readonly_role_marker(conn)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT rolname FROM pg_catalog.pg_authid "
-            "WHERE pg_catalog.shobj_description(oid, 'pg_authid') LIKE %s",
-            (f"%{_READONLY_ROLE_MARKER}%",),
+            "WHERE strpos(COALESCE("
+            "pg_catalog.shobj_description(oid, 'pg_authid'), ''), %s) > 0",
+            (marker,),
         )
         return {str(row[0]) for row in cur.fetchall()}
 
 
 def _mark_readonly_role_managed(conn, *, role: str) -> None:
-    """在角色注释中保留管理标记，不覆盖已有运维注释。"""
+    """在角色注释中保留本数据库标记，不覆盖已有运维注释。"""
     from psycopg2 import sql as pgsql
 
+    marker = _readonly_role_marker(conn)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT pg_catalog.shobj_description(oid, 'pg_authid') "
@@ -568,10 +581,10 @@ def _mark_readonly_role_managed(conn, *, role: str) -> None:
         if row is None:
             return
         previous = str(row[0] or "")
-        if _READONLY_ROLE_MARKER in previous:
+        if marker in previous:
             return
         comment = "\n".join(
-            part for part in (previous.rstrip(), _READONLY_ROLE_MARKER) if part
+            part for part in (previous.rstrip(), marker) if part
         )
         cur.execute(
             pgsql.SQL("COMMENT ON ROLE {} IS {}").format(
