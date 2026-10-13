@@ -383,14 +383,22 @@ def compute_module_release_gate(
     tier_summaries = list(getattr(report, "tier_summaries", None) or [])
 
     summaries = list(getattr(report, "summaries", None) or [])
+
+    def _gate_metrics(s: Any) -> dict[str, Any]:
+        # pass_rate 是 ModuleSummary 顶层字段，不在 aggregate_metrics 产物
+        # （per-case 指标均值）里；不从顶层补注入会让 required pass_rate
+        # 恒判 missing_required，verdict 无论质量如何永远 FAIL。
+        metrics = dict(getattr(s, "metrics", None) or {})
+        pass_rate = getattr(s, "pass_rate", None)
+        if metrics.get("pass_rate") is None and pass_rate is not None:
+            metrics["pass_rate"] = pass_rate
+        return metrics
+
     if module == "all" and summaries:
-        targets = [
-            (str(s.module), dict(getattr(s, "metrics", None) or {}))
-            for s in summaries
-        ]
+        targets = [(str(s.module), _gate_metrics(s)) for s in summaries]
     else:
         summary = next((s for s in summaries if str(getattr(s, "module", "")) == module), None)
-        targets = [(module, dict(getattr(summary, "metrics", None) or {} if summary else {}))]
+        targets = [(module, _gate_metrics(summary) if summary else {})]
 
     items: list[dict[str, Any]] = []
     for mod, metrics in targets:

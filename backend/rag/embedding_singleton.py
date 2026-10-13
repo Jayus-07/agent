@@ -68,6 +68,14 @@ def _metered_embedding_model() -> str:
     return _configured_embedding_model()
 
 
+def _metered_embedding_provider() -> str:
+    """返回专项绑定的真实供应商 ID，供缓存身份和用量账本使用。"""
+    binding = specialized_mod.resolve_binding("embedding")
+    if binding is not None and str(binding.provider_id or "").strip():
+        return str(binding.provider_id).strip()
+    return "cloud"
+
+
 def _embedding_runtime_signature() -> tuple[Any, ...]:
     """返回影响 embedding 客户端的配置签名，供已构建的包装器热切换。"""
     binding = specialized_mod.resolve_binding("embedding")
@@ -499,7 +507,11 @@ def _embedding_identity(embedding: "_TrackedEmbedding") -> str:
     except Exception:  # noqa: BLE001 — 签名不可读时退化为模型名
         signature = ""
     return "|".join((
-        str(getattr(embedding, "_provider", "") or ""),
+        str(
+            getattr(embedding, "_provider_id", "")
+            or getattr(embedding, "_provider", "")
+            or ""
+        ),
         str(getattr(embedding, "_model_name", "") or ""),
         str(EMBEDDING_DIM),
         signature,
@@ -524,6 +536,9 @@ class _TrackedEmbedding(Embeddings):
         cloud_enabled = _embedding_is_cloud()
         self._model_name = _metered_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
         self._provider = "cloud" if cloud_enabled else "local"
+        self._provider_id = (
+            _metered_embedding_provider() if cloud_enabled else "local"
+        )
         # 单次 embed_documents 调用的最优文本条数，供索引链路取批大小：
         # cloud 模式受 DashScope 单请求上限约束（外层攒 32 条会被
         # OpenAIEmbeddings 内部再拆 10+10+10+2，白多 3 次 RTT），直接取上限；
@@ -548,6 +563,9 @@ class _TrackedEmbedding(Embeddings):
             self._config_signature = signature
             self._model_name = _metered_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
             self._provider = "cloud" if cloud_enabled else "local"
+            self._provider_id = (
+                _metered_embedding_provider() if cloud_enabled else "local"
+            )
             if cloud_enabled:
                 from backend.config.rag import EMBED_REQUEST_LIMIT
                 self.embed_batch_size = max(1, EMBED_REQUEST_LIMIT)
@@ -857,7 +875,7 @@ class _TrackedEmbedding(Embeddings):
             event = {
                 "component": "embedding",
                 "model": self._model_name,
-                "provider": self._provider,
+                "provider": getattr(self, "_provider_id", None) or self._provider,
                 "prompt_tokens": total_tokens or 0,
                 "completion_tokens": 0,
                 "total_tokens": total_tokens or 0,

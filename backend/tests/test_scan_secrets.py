@@ -10,6 +10,7 @@ redis://:password@host:6379/0 这种空用户名形态。
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
@@ -60,6 +61,14 @@ def test_env_example_dsn_template_is_not_blocking():
     # 换成真实形态则必须命中
     real = "DC_DATABASE_URL=postgresql://postgres:realpass0987654321@db:5432/prod"
     assert not ss._is_allowed("backend/.env.example", "url_with_credentials", real)
+
+
+def test_only_ephemeral_postgres_password_is_allowed_in_eval_workflows():
+    """评测服务只放行隔离 PostgreSQL 固定测试口令，不放行同块其他口令。"""
+    path = ".github/workflows/rag_smoke.yml"
+    assert ss._is_allowed(path, "hardcoded_password", 'password: "postgres"')
+    mixed = 'password: "postgres"\npassword: "UNRELATEDVALUE"'
+    assert not ss._is_allowed(path, "hardcoded_password", mixed)
 
 
 def test_placeholder_urls_are_not_blocking():
@@ -168,3 +177,29 @@ def test_diff_mode_ignores_env_and_placeholder_assignments(tmp_path):
     diff_rules = [r for r in ss.GENERIC_RULES if r[0] in ss.DIFF_RULES]
     findings = ss.scan_diff(f"{base}..HEAD", diff_rules, root=repo)
     assert findings == [], findings
+
+
+def test_diff_cli_blocks_synthetic_key_without_echoing_it(tmp_path):
+    """CLI diff 阻断新增密钥，输出仅包含路径和规则，不回显密钥值。"""
+    repo = _init_repo(tmp_path / "diff-cli")
+    target = repo / "config.py"
+    target.write_text("API_KEY = None\n", encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "baseline")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    synthetic_key = "NEWHARDCODEDKEY0987654321"
+    target.write_text(f'API_KEY = "{synthetic_key}"\n', encoding="utf-8")
+    _git(repo, "add", "config.py")
+    _git(repo, "commit", "-qm", "add synthetic credential")
+
+    result = subprocess.run(
+        [sys.executable, str(ss.__file__), "--diff", f"{base}..HEAD", "--root", str(repo)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "diff config.py type=assigned_secret" in result.stdout
+    assert synthetic_key not in result.stdout + result.stderr
