@@ -70,7 +70,11 @@ class TestQuestionGenModule:
         assert isinstance(tokens, dict), "tokens 必须随返回值回传"
 
     def test_llm_path_length_mismatch_falls_back(self, monkeypatch):
-        """LLM 返回的模拟问题长度不符 → 整体降级规则版，不得返回空。"""
+        """LLM 返回的模拟问题长度不符 → 整体降级。
+
+        P1 契约更新（2026-10-13）：降级 = 空列表（不产占位问句）。旧契约
+        「必须规则兜底不得留空」的占位问句会进【相关问题】embedding 前缀，
+        全库统一噪声句污染向量空间，已停用（见 _fallback_questions）。"""
         from backend.rag.preprocessing import question_gen
 
         def fake_llm(prompt, llm_obj=None):
@@ -84,10 +88,10 @@ class TestQuestionGenModule:
         chunks_text = ["第一条 甲。", "第二条 乙。", "第三条 丙。"]
         result, tokens = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
         assert len(result) == 3
-        assert all(len(qs) >= 1 for qs in result), "mismatch 后必须规则兜底，不得留空"
+        assert all(qs == [] for qs in result), "降级=空列表，不产占位问句"
 
     def test_llm_failure_falls_back_to_rule_based(self, monkeypatch):
-        """LLM 调用抛异常 → 规则版兜底，产出非空问题（无害原则）。"""
+        """LLM 调用抛异常 → 降级为空列表（占位问句停用，同上）。"""
         from backend.rag.preprocessing import question_gen
 
         def boom(prompt, llm_obj=None):
@@ -97,8 +101,33 @@ class TestQuestionGenModule:
         chunks_text = ["报销标准是什么？每月上限两千元。", "请假流程如下：先审批后执行。"]
         result, tokens = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
         assert len(result) == 2
-        assert all(len(qs) >= 1 for qs in result)
+        assert all(qs == [] for qs in result)
         assert tokens == {}
+
+    def test_long_doc_uniform_sampling_covers_tail(self, monkeypatch):
+        """超预算长文档：LLM 采样块均匀分布（尾部不再零覆盖），结果按
+        原索引对齐（P1，2026-10-13）。"""
+        from backend.rag.preprocessing import question_gen
+
+        def fake_llm(prompt, llm_obj=None):
+            msg = MagicMock()
+            n = prompt.count("[Chunk #")
+            msg.content = json.dumps({
+                "simulated_questions": [
+                    [f"主题{i}应该如何处理？"] for i in range(n)
+                ]
+            })
+            return msg
+
+        monkeypatch.setattr(question_gen, "_invoke_llm", fake_llm)
+        monkeypatch.setattr(question_gen, "QUESTION_GEN_MAX_CHUNKS", 4)
+        chunks_text = [f"第{i}块内容，涉及主题{i}。" for i in range(20)]
+        result, _ = question_gen.generate_chunk_questions(chunks_text, doc_type="policy")
+        assert len(result) == 20
+        covered = [i for i, qs in enumerate(result) if qs]
+        assert len(covered) == 4
+        assert covered[0] == 0
+        assert covered[-1] >= 15, "采样必须覆盖文档尾部（均匀分布）"
 
     def test_disabled_flag_returns_empty(self, monkeypatch):
         """ENABLE_SIMULATED_QUESTIONS=off → 空产出（功能开关可关闭）。"""

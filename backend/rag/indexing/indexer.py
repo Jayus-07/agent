@@ -255,18 +255,11 @@ class ChunkingEmptyError(Exception):
     """
 
 
-# 摘要采样：按文档长度自适应，保证头尾关键信息不丢
+# 摘要采样：委托共享实现（P1 元数据治理 2026-10-13——超长文档不再只取
+# 头尾 20k 声称代表全文，改为 头+章节目录+分层采样+尾 且标注覆盖范围）
 def _sample_for_summary(text: str) -> str:
-    n = len(text)
-    if n <= 2000:
-        return text           # 短文档全文
-    if n <= 8000:
-        cut = int(n * 0.6)
-        return text[:cut] + "\n...(中略)...\n" + text[-int(n * 0.4):]  # 头60%+尾40%
-    MAX_SAFE = 50000
-    if n > MAX_SAFE:
-        return text[:20000] + "\n...(中间大量细则略)...\n" + text[-20000:]  # 极端超长安全绳
-    return text               # 8KB~50KB 全文（DeepSeek 1M context 完全够）
+    from backend.rag.preprocessing.summary_sampling import sample_for_summary
+    return sample_for_summary(text)
 
 
 class IncrementalIndexer:
@@ -1184,7 +1177,17 @@ class IncrementalIndexer:
             type="llm",
             kind=SpanKind.INDEX_METADATA.value,
         )
-        full_text = "\n\n".join(ch.page_content for ch in chunks)
+        # P1 元数据治理（2026-10-13）：文档全文 = 纯 leaf 拼接。
+        # 原实现把 parent+leaf 全部 join——parent 文本是章节全量（=子叶子
+        # 的并集），拼接后同一段落出现 2~3 次，元数据 LLM/关键词/摘要都在
+        # 为重复文本付费并产生偏置（头部章节权重被放大）。
+        # leaf 层即文档全量内容（各 leaf 互为不同区间），滤掉 parent 即得
+        # 无重复全文；full_text 的下游（doc 级向量/摘要采样/章节兜底映射）
+        # 全部受益。leaf 切片间的 overlap 重叠为既有检索设计，保留。
+        full_text = "\n\n".join(
+            ch.page_content for ch in chunks
+            if ch.metadata.get("granularity") != "parent"
+        )
         doc_meta = {
             "doc_id": doc_id,
             "source_file": os.path.basename(file_path),
@@ -1491,6 +1494,12 @@ class IncrementalIndexer:
 
         for i, ch in enumerate(chunks):
             ch.metadata["doc_type"] = doc_type_val
+            # P1 元数据治理（2026-10-13）：切分时的类型是切分策略的事实依据，
+            # 级联决策可能改写入库类型——两者都留痕，审计「切分/元数据分类
+            # 不一致」（如文件名判 faq 走 QA 切分，LLM 元数据改判 policy）
+            _chunking_type = str(_qc.get("doc_type") or "")
+            if _chunking_type and _chunking_type != doc_type_val:
+                ch.metadata["chunking_doc_type"] = _chunking_type
             ch.metadata["person_names"] = person_val
             ch.metadata["kb_id"] = kb_id_val
             ch.metadata.update(
