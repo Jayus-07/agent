@@ -30,7 +30,8 @@ def evaluate_tiers(
 
     min_samples / min_valid_samples：最低样本量门（GATE-12）。suite 级配置
     （loader 读 suites/{name}.json）优先，缺省回退全局 EVAL_MIN_SAMPLES。
-    有效样本 = total - errors - skipped，不足则该层判定失败并注明原因。
+    有效样本 = total - errors - skipped；按套件全部层之和判定，不足时
+    各层均标注原因（fail-closed，不静默放行）。
     """
     thresholds = thresholds or TIER_THRESHOLDS
     effective_min_total = min_samples if min_samples is not None else DEFAULT_MIN_SAMPLES
@@ -70,15 +71,6 @@ def evaluate_tiers(
             gate_reasons.append(
                 f"通过率 {pass_rate:.1%} 低于阈值 {threshold:.1%}"
             )
-        # 同一层的最低样本量口径：各 tier 共用 suite 级要求（按层重复判定
-        # 会让 smoke 小集合恒挂），只要任一层有效样本达标即视为整体达标；
-        # 全部层都不足时在每层标注原因（诚实暴露，不静默放行）。
-        passed_min_samples = valid >= effective_min_valid
-        if not passed_min_samples:
-            gate_reasons.append(
-                f"有效样本不足：valid={valid}（total={total} - errors={errors} "
-                f"- skipped={skipped}）< 最低要求 {effective_min_valid}"
-            )
         summaries.append(TierSummary(
             tier=tier_name, total=total, passed=passed,
             failed=total - passed, pass_rate=pass_rate,
@@ -86,17 +78,22 @@ def evaluate_tiers(
             passed_threshold=passed_threshold,
             errors=errors, skipped=skipped, valid_samples=valid,
             min_samples=effective_min_valid,
-            passed_min_samples=passed_min_samples,
+            # GATE-12 按套件总量判定，此处占位，循环后统一覆盖。
+            passed_min_samples=True,
             gate_reasons=gate_reasons,
         ))
 
-    # 跨层口径：任一层有效样本达标 → 各层 passed_min_samples 统一视为达标
-    #（避免 smoke 8 条 / core 30 条的组合里 smoke 层误伤整体判定）
-    if summaries and any(s.passed_min_samples for s in summaries):
-        for s in summaries:
-            if not s.passed_min_samples:
-                s.passed_min_samples = True
-                s.gate_reasons = [
-                    r for r in s.gate_reasons if "有效样本不足" not in r
-                ]
+    # GATE-12 套件级口径：最低样本量是 suite 全局要求（suite JSON 的
+    # min_samples / min_valid_samples 优先，缺省全局缺省值），按全部层
+    # 有效样本之和判定。按层重复判定会制造数学死锁——如 smoke(19)+hard(10)
+    # 的 29 用例套件单层永远达不到 20，无论质量多高分层的样本量门恒失败。
+    suite_valid = sum(s.valid_samples for s in summaries)
+    suite_min_ok = suite_valid >= effective_min_valid
+    for s in summaries:
+        s.passed_min_samples = suite_min_ok
+        if not suite_min_ok:
+            s.gate_reasons.append(
+                f"有效样本不足：套件总 valid={suite_valid}（各层之和）"
+                f"< 最低要求 {effective_min_valid}"
+            )
     return summaries

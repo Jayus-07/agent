@@ -80,10 +80,11 @@ def _resolve_rerank_runtime_config() -> dict[str, str]:
     if binding is None:
         return {
             "model": _configured_rerank_model(),
+            "billing_model": _configured_rerank_model(),
             "api_key": "",
             "api_format": RERANK_API_FORMAT,
             "base_url": "",
-            "provider": "database",
+            "provider": "unknown",
         }
 
     credentials = credentials_mod.resolve_credentials(
@@ -101,6 +102,7 @@ def _resolve_rerank_runtime_config() -> dict[str, str]:
         # 兼容旧版/测试替身 binding：专项绑定新增 upstream_name 后，
         # 缺少该可选属性仍应回退登记名。
         "model": getattr(binding, "upstream_name", "") or binding.model_name,
+        "billing_model": binding.model_name,
         "api_key": credentials.api_key or "",
         "api_format": adapter_format,
         "base_url": binding.base_url,
@@ -204,6 +206,8 @@ class DashScopeReranker(BaseDocumentCompressor):
         model: str | None = None,
         api_format: str | None = None,
         base_url: str | None = None,
+        provider_id: str | None = None,
+        billing_model: str | None = None,
     ):
         if not api_key:
             raise RuntimeError("云端 Reranker 需要在管理端数据库配置供应商 API Key")
@@ -224,6 +228,8 @@ class DashScopeReranker(BaseDocumentCompressor):
         self.__dict__['_endpoint'] = endpoint
         self.__dict__['_headers'] = headers
         self.__dict__['_model'] = resolved_model
+        self.__dict__['_provider_id'] = provider_id or "unknown"
+        self.__dict__['_billing_model'] = billing_model or resolved_model
         self.__dict__['_api_format'] = resolved_format
         self.__dict__['_last_total_tokens'] = 0
 
@@ -371,7 +377,7 @@ class DashScopeReranker(BaseDocumentCompressor):
                     )
 
                     billing = price_usage(
-                        _configured_rerank_model(),
+                        self._billing_model,
                         "rerank",
                         NormalizedUsage(input_tokens=total_tokens),
                         enforce=False,
@@ -382,8 +388,8 @@ class DashScopeReranker(BaseDocumentCompressor):
                     )
             event = {
                 "component": "rerank",
-                "model": _configured_rerank_model(),
-                "provider": RERANK_API_FORMAT,
+                "model": self._billing_model,
+                "provider": self._provider_id,
                 "prompt_tokens": total_tokens,
                 "completion_tokens": 0,
                 "total_tokens": total_tokens,
@@ -594,6 +600,8 @@ def get_reranker_backend() -> BaseDocumentCompressor:
             model=runtime_config["model"],
             api_format=runtime_config["api_format"],
             base_url=runtime_config["base_url"],
+            provider_id=runtime_config["provider"],
+            billing_model=runtime_config["billing_model"],
         )
     else:
         # Local 模式：使用 CrossEncoder

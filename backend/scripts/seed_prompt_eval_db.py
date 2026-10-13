@@ -59,7 +59,35 @@ def build_seed_configs() -> dict[str, dict[str, object]]:
             "base_url": base_url,
             "api_key": api_key,
         }
-    configs["embedding"].update({"adapter": "openai_embedding", "dimensions": 1024})
+    configs["embedding"].update({"adapter": "openai_embedding"})
+    # 维度不写死：以 binding 声明 + 评测前 API 探针实测双重校验
+    #（scripts/seed_eval_model_bindings.py --probe）。默认 1024 与存量向量兼容。
+    configs["embedding"]["dimensions"] = int(
+        os.getenv("PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS", "1024")
+    )
+    # rerank 可选：RAG 真实检索评测必需（cloud 口径无 binding 会退回本地
+    # reranker，违反「评测统一 DB API 模型」）；prompt_eval 场景可不配。
+    rerank_env = (
+        "PROMPT_EVAL_TEST_RERANK_PROVIDER_ID",
+        "PROMPT_EVAL_TEST_RERANK_MODEL",
+        "PROMPT_EVAL_TEST_RERANK_BASE_URL",
+        "PROMPT_EVAL_TEST_RERANK_API_KEY",
+    )
+    rerank_vals = tuple(os.getenv(n, "").strip() for n in rerank_env)
+    if all(rerank_vals):
+        configs["rerank"] = {
+            "provider_id": rerank_vals[0],
+            "model_name": rerank_vals[1],
+            "base_url": rerank_vals[2],
+            "api_key": rerank_vals[3],
+            "adapter": os.getenv(
+                "PROMPT_EVAL_TEST_RERANK_ADAPTER", "dashscope_rerank"
+            ),
+        }
+    elif any(rerank_vals):
+        raise RuntimeError("rerank 配置不完整: " + "/".join(rerank_env))
+    else:
+        print("未配置 rerank 绑定（RAG 检索评测必须显式提供，禁止回退本地模型）")
     return configs
 
 
@@ -74,6 +102,11 @@ async def seed(*, dry_run: bool = False) -> None:
         "准备绑定: "
         f"chat={chat['provider_id']}/{chat['model_name']}, "
         f"embedding={embedding['provider_id']}/{embedding['model_name']}"
+        + (
+            f", rerank={configs['rerank']['provider_id']}/{configs['rerank']['model_name']}"
+            if "rerank" in configs
+            else ""
+        )
     )
     if dry_run:
         return
@@ -83,14 +116,22 @@ async def seed(*, dry_run: bool = False) -> None:
     from backend.memory.database import get_session
     from backend.shared.crypto import encrypt_secret, fingerprint, last4
 
+    cred_roles: list[tuple[str, dict[str, object]]] = [
+        ("eval_gen", chat), ("embedding", embedding)
+    ]
+    if "rerank" in configs:
+        cred_roles.append(("rerank", configs["rerank"]))
+
     async for session in get_session():
-        for role, config in (("eval_gen", chat), ("embedding", embedding)):
+        for role, config in cred_roles:
             provider_id = str(config["provider_id"])
             model_name = str(config["model_name"])
             base_url = str(config["base_url"])
             api_key = str(config["api_key"])
-            driver = "specialized" if role == "embedding" else "openai"
-            model_kind = "embedding" if role == "embedding" else "chat"
+            driver = "specialized" if role in ("embedding", "rerank") else "openai"
+            model_kind = "embedding" if role == "embedding" else (
+                "rerank" if role == "rerank" else "chat"
+            )
             await session.execute(
                 text(
                     """
@@ -153,58 +194,63 @@ async def seed(*, dry_run: bool = False) -> None:
                     "key_last4": last4(api_key),
                 },
             )
-        await session.execute(
-            text(
-                """
-                INSERT INTO llm_model_role_bindings (role, model_name, updated_by, updated_at)
-                VALUES ('eval_gen', :model_name, 'prompt-eval-seed', now())
-                ON CONFLICT (role) DO UPDATE SET
-                    model_name = EXCLUDED.model_name, updated_by = EXCLUDED.updated_by,
-                    updated_at = now()
-                """
-            ),
-            {"model_name": str(chat["model_name"])},
-        )
-        await session.execute(
-            text(
-                """
-                INSERT INTO llm_model_role_bindings (role, model_name, updated_by, updated_at)
-                VALUES ('embedding', :model_name, 'prompt-eval-seed', now())
-                ON CONFLICT (role) DO UPDATE SET
-                    model_name = EXCLUDED.model_name, updated_by = EXCLUDED.updated_by,
-                    updated_at = now()
-                """
-            ),
-            {"model_name": str(embedding["model_name"])},
-        )
-        await session.execute(
-            text(
-                """
-                INSERT INTO llm_specialized_model_bindings
-                    (role, provider_id, adapter, model_name, base_url, options,
-                     enabled, last_probe_ok, last_probe_summary, updated_by, updated_at)
-                VALUES ('embedding', :provider_id, :adapter, :model_name, :base_url,
-                        CAST(:options AS jsonb), true, NULL, '由 Prompt 评测 CI 写入',
-                        'prompt-eval-seed', now())
-                ON CONFLICT (role) DO UPDATE SET
-                    provider_id = EXCLUDED.provider_id, adapter = EXCLUDED.adapter,
-                    model_name = EXCLUDED.model_name, base_url = EXCLUDED.base_url,
-                    options = EXCLUDED.options, enabled = true,
-                    last_probe_ok = NULL, last_probe_summary = EXCLUDED.last_probe_summary,
-                    updated_by = EXCLUDED.updated_by, updated_at = now()
-                """
-            ),
-            {
-                "provider_id": str(embedding["provider_id"]),
-                "adapter": str(embedding["adapter"]),
-                "model_name": str(embedding["model_name"]),
-                "base_url": str(embedding["base_url"]),
-                "options": json.dumps(
-                    {"dimensions": int(embedding["dimensions"])},
-                    ensure_ascii=False,
+        role_bindings = [("eval_gen", chat), ("embedding", embedding)]
+        if "rerank" in configs:
+            role_bindings.append(("rerank", configs["rerank"]))
+        for role, config in role_bindings:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO llm_model_role_bindings
+                        (role, model_name, updated_by, updated_at)
+                    VALUES (:role, :model_name, 'prompt-eval-seed', now())
+                    ON CONFLICT (role) DO UPDATE SET
+                        model_name = EXCLUDED.model_name,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = now()
+                    """
                 ),
-            },
-        )
+                {"role": role, "model_name": str(config["model_name"])},
+            )
+        # specialized 通道绑定（embedding 必配；rerank 可选但 RAG 检索评测必需）
+        for role, config in (
+            (role, configs[role])
+            for role in ("embedding", "rerank") if role in configs
+        ):
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO llm_specialized_model_bindings
+                        (role, provider_id, adapter, model_name, base_url, options,
+                         enabled, last_probe_ok, last_probe_summary, updated_by, updated_at)
+                    VALUES (:role, :provider_id, :adapter, :model_name, :base_url,
+                            CAST(:options AS jsonb), true, NULL,
+                            '由 Prompt 评测 CI 写入', 'prompt-eval-seed', now())
+                    ON CONFLICT (role) DO UPDATE SET
+                        provider_id = EXCLUDED.provider_id, adapter = EXCLUDED.adapter,
+                        model_name = EXCLUDED.model_name, base_url = EXCLUDED.base_url,
+                        options = EXCLUDED.options, enabled = true,
+                        last_probe_ok = NULL,
+                        last_probe_summary = EXCLUDED.last_probe_summary,
+                        updated_by = EXCLUDED.updated_by, updated_at = now()
+                    """
+                ),
+                {
+                    "role": role,
+                    "provider_id": str(config["provider_id"]),
+                    "adapter": str(config["adapter"]),
+                    "model_name": str(config["model_name"]),
+                    "base_url": str(config["base_url"]),
+                    "options": json.dumps(
+                        (
+                            {"dimensions": int(config["dimensions"])}
+                            if "dimensions" in config
+                            else {}
+                        ),
+                        ensure_ascii=False,
+                    ),
+                },
+            )
         # get_session 是 async generator；break 不会执行 yield 后的自动提交，
         # 必须在关闭会话前显式提交，确保 CI 后续评测进程能读到绑定。
         await session.commit()
