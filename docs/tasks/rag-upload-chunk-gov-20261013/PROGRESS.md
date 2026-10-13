@@ -75,9 +75,10 @@
 - 修复代码 HEAD 与可信 Smoke 验证 HEAD 均为 `5a61a09`；PR API 返回 `MERGEABLE / CLEAN`。
   五条 Codex Review Thread
   均已逐条回复并解决（5/5）。
-- 当前远端 `main` 为 `888738365666706488492c90ee8b97d87b173d02`；PR 记录的 base 为
-  `2d1d0b173f50128429d9c868301ee05b38bcd85b`。检查时 `main` 相对分支有 27 个独有提交，
-  PR 分支有 7 个独有提交。按任务指令没有同步、合并或改写 main。
+- 最终核验时远端 `main` 为 `76334163a82f2fa9a969155da2800f7918476e5b`；PR 记录的 base 为
+  `2d1d0b173f50128429d9c868301ee05b38bcd85b`。当前 `main` 相对分支有 28 个独有提交，
+  PR 分支有 8 个独有提交。收口期间 main 曾从 `8887383` 前进到 `7633416`；按任务指令
+  没有同步、合并或改写 main。
 - 定向 RAG 回归：`125 passed, 1 skipped, 1 deselected`；独立质量门禁集 `6 passed`；
   16 类文档矩阵、Leaf/Parent 关联与 Token 上限均包含在定向集内。失败前新增回归在干净基线
   复现 10 项失败；修复后通过。`py_compile` 与 `git diff --check` 通过。
