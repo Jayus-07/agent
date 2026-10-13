@@ -66,6 +66,7 @@ def test_embedding_usage_payload_contains_processing_binding(monkeypatch):
     )
     tracked._model_name = "text-embedding-test"
     tracked._provider = "test-provider"
+    tracked._provider_id = "test-provider"
 
     binding = ProcessingBinding(
         run_id="run-embed", step_id="step-embed", role="embedding", stage="embedding"
@@ -73,7 +74,44 @@ def test_embedding_usage_payload_contains_processing_binding(monkeypatch):
     with bind_processing(binding):
         tracked._record(12, 2, 8.0)
 
+    assert recorded[0]["provider"] == "test-provider"
+    assert recorded[0]["model"] == "text-embedding-test"
     assert recorded[0]["run_id"] == "run-embed"
     assert recorded[0]["step_id"] == "step-embed"
     assert recorded[0]["role"] == "embedding"
     assert recorded[0]["stage"] == "embedding"
+
+
+def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
+    from backend.rag import embedding_singleton
+
+    class FakeEmbedding:
+        pass
+
+    monkeypatch.setattr(
+        embedding_singleton,
+        "_embedding_runtime_signature",
+        lambda: ("specialized", "embedding-provider"),
+    )
+    monkeypatch.setattr(embedding_singleton, "_embedding_is_cloud", lambda: True)
+    monkeypatch.setattr(
+        embedding_singleton.specialized_mod,
+        "resolve_binding",
+        lambda role: SimpleNamespace(provider_id="embedding-provider")
+        if role == "embedding"
+        else None,
+    )
+    monkeypatch.setattr(
+        embedding_singleton, "_metered_embedding_model", lambda: "registered-embedding"
+    )
+    monkeypatch.setattr(
+        embedding_singleton,
+        "_get_cloud_embedding",
+        lambda: FakeEmbedding(),
+    )
+
+    tracked = embedding_singleton._TrackedEmbedding(FakeEmbedding(), tracker=None)
+
+    assert tracked._provider == "cloud"
+    assert tracked._provider_id == "embedding-provider"
+    assert tracked._model_name == "registered-embedding"

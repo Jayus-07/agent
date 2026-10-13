@@ -10,8 +10,9 @@
   - RAG 检索与评测代码（backend/rag、backend/evaluation、检索编排）
   - MCP RAG 实现（mcp_servers/servers/rag.py）
   - RAG Tool 超时策略（backend/core/tool_runtime/policy.py）
-  - 模型绑定面（backend/infra/llm/）与评测初始化脚本（真实路径：
-    backend/scripts/seed_prompt_eval_db.py、scripts/seed_eval_model_bindings.py）
+  - 模型绑定面（backend/infra/llm/）与评测/数据库初始化脚本（真实路径：
+    backend/scripts/seed_prompt_eval_db.py、scripts/seed_eval_model_bindings.py、
+    scripts/init_db.py）
 
 匹配语义：git diff 输出为仓库根相对路径；精确文件名完全匹配，
 目录/前缀条目按前缀匹配。反斜杠统一为正斜杠。
@@ -32,6 +33,7 @@ EXACT_ENTRIES = frozenset({
     "backend/scripts/seed_prompt_eval_db.py",
     "backend/scripts/ingest_eval_fixtures.py",
     "scripts/seed_eval_model_bindings.py",
+    "scripts/init_db.py",
     ".github/workflows/rag_smoke.yml",
     ".github/workflows/rag_regression.yml",
     ".github/scripts/rag_smoke_path_filter.py",

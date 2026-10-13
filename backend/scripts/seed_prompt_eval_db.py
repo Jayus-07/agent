@@ -194,30 +194,24 @@ async def seed(*, dry_run: bool = False) -> None:
                     "key_last4": last4(api_key),
                 },
             )
-        await session.execute(
-            text(
-                """
-                INSERT INTO llm_model_role_bindings (role, model_name, updated_by, updated_at)
-                VALUES ('eval_gen', :model_name, 'prompt-eval-seed', now())
-                ON CONFLICT (role) DO UPDATE SET
-                    model_name = EXCLUDED.model_name, updated_by = EXCLUDED.updated_by,
-                    updated_at = now()
-                """
-            ),
-            {"model_name": str(chat["model_name"])},
-        )
-        await session.execute(
-            text(
-                """
-                INSERT INTO llm_model_role_bindings (role, model_name, updated_by, updated_at)
-                VALUES ('embedding', :model_name, 'prompt-eval-seed', now())
-                ON CONFLICT (role) DO UPDATE SET
-                    model_name = EXCLUDED.model_name, updated_by = EXCLUDED.updated_by,
-                    updated_at = now()
-                """
-            ),
-            {"model_name": str(embedding["model_name"])},
-        )
+        role_bindings = [("eval_gen", chat), ("embedding", embedding)]
+        if "rerank" in configs:
+            role_bindings.append(("rerank", configs["rerank"]))
+        for role, config in role_bindings:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO llm_model_role_bindings
+                        (role, model_name, updated_by, updated_at)
+                    VALUES (:role, :model_name, 'prompt-eval-seed', now())
+                    ON CONFLICT (role) DO UPDATE SET
+                        model_name = EXCLUDED.model_name,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = now()
+                    """
+                ),
+                {"role": role, "model_name": str(config["model_name"])},
+            )
         # specialized 通道绑定（embedding 必配；rerank 可选但 RAG 检索评测必需）
         for role, config in (
             (role, configs[role])

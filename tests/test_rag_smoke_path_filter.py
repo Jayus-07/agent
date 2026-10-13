@@ -73,6 +73,13 @@ def test_eval_fixture_ingest_change_triggers_smoke():
     assert _filter_subprocess(paths) is True
 
 
+def test_database_initializer_change_triggers_smoke():
+    """Smoke 执行的数据库初始化脚本变更必须触发。"""
+    paths = ["scripts/init_db.py"]
+    assert _filter_import(paths) is True
+    assert _filter_subprocess(paths) is True
+
+
 def test_core_rag_paths_trigger_smoke():
     for paths in (
         ["backend/rag/pipeline.py"],

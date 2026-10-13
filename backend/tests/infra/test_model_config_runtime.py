@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -238,6 +239,67 @@ def test_rerank_runtime_uses_specialized_adapter_binding(monkeypatch):
     assert config["api_key"] == "sk-test-placeholder"
     assert config["api_format"] == "dashscope"
     assert config["base_url"].endswith("api/v1")
+    assert config["provider"] == "dashscope-rag"
+    assert config["billing_model"] == "qwen3.7-text-rerank"
+
+
+def test_rerank_usage_records_bound_provider_and_billing_model(monkeypatch):
+    from backend.rag import reranker
+    from backend.infra.llm import pricing
+
+    specialized.set_bindings(
+        {
+            "rerank": {
+                "provider_id": "dashscope-rag",
+                "adapter": "dashscope_rerank",
+                "model_name": "registered-rerank",
+                "upstream_name": "upstream-rerank",
+                "base_url": "https://dashscope.aliyuncs.com/api/v1",
+                "options": {},
+            }
+        }
+    )
+    monkeypatch.setattr(
+        reranker.credentials_mod,
+        "resolve_credentials",
+        lambda provider_id, model_name=None: ProviderCredentials(
+            provider=provider_id,
+            api_key="sk-test-placeholder",
+            base_url="https://dashscope.aliyuncs.com/api/v1",
+            source="db",
+            version=2,
+        ),
+    )
+    recorded = []
+    priced = []
+    monkeypatch.setattr(
+        "backend.observability.llm_usage_store.get_llm_usage_store",
+        lambda: SimpleNamespace(record=recorded.append),
+    )
+    monkeypatch.setattr(
+        "backend.observability.tracer.current_trace_context",
+        lambda: ("trace-test", "session-test"),
+    )
+    monkeypatch.setattr(
+        pricing,
+        "price_usage",
+        lambda model, role, usage, **kwargs: priced.append((model, role)) or None,
+    )
+
+    config = reranker._resolve_rerank_runtime_config()
+    backend = reranker.DashScopeReranker(
+        api_key=config["api_key"] or "sk-test-placeholder",
+        model=config["model"],
+        api_format=config["api_format"],
+        base_url=config["base_url"],
+        provider_id=config["provider"],
+        billing_model=config["billing_model"],
+    )
+    backend._record_tokens(3, 5.0, total_tokens=14)
+
+    assert priced == [("registered-rerank", "rerank")]
+    assert recorded[0]["provider"] == "dashscope-rag"
+    assert recorded[0]["model"] == "registered-rerank"
 
 
 def test_existing_embedding_wrapper_hot_swaps_after_registry_change(monkeypatch):
@@ -249,10 +311,10 @@ def test_existing_embedding_wrapper_hot_swaps_after_registry_change(monkeypatch)
             self.label = label
 
         def embed_query(self, text: str):
-            return [self.label, text]
+            return [1.0, 0.0] if self.label == "before" else [0.0, 1.0]
 
         def embed_documents(self, texts):
-            return [[self.label, text] for text in texts]
+            return [self.embed_query(text) for text in texts]
 
     specialized.set_bindings(
         {
@@ -273,7 +335,7 @@ def test_existing_embedding_wrapper_hot_swaps_after_registry_change(monkeypatch)
     )
 
     wrapper = embedding_singleton._TrackedEmbedding(current["value"], tracker=None)
-    assert wrapper.embed_query("q") == ["before", "q"]
+    assert wrapper.embed_query("q") == [1.0, 0.0]
 
     current["value"] = FakeEmbedding("after")
     specialized.set_bindings(
@@ -288,7 +350,7 @@ def test_existing_embedding_wrapper_hot_swaps_after_registry_change(monkeypatch)
         }
     )
 
-    assert wrapper.embed_query("q") == ["after", "q"]
+    assert wrapper.embed_query("q") == [0.0, 1.0]
 
 
 def test_existing_rerank_wrapper_hot_swaps_after_registry_change(monkeypatch):

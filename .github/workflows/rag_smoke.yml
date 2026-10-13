@@ -107,12 +107,10 @@ jobs:
       - name: Evaluation preflight (E0, free)
         run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
 
-      - name: Targeted regression tests (21, free)
+      - name: Targeted regression tests (free, no paid API)
         run: |
           # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
-          # API Secrets；不扩大为全量 pytest）。共 21 项：
-          #   7 路径过滤正反例 + 8 绑定/凭据/维度 + 5 gate 三态 +
-          #   1 workflow gate 与 Billing V2 汇总契约。
+          # API Secrets；不扩大为全量 pytest）。
           python -m pytest tests/test_rag_smoke_path_filter.py \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
