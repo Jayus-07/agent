@@ -123,7 +123,7 @@ describe('V2 旅游规划对话', () => {
   })
 
   it('持久化待决令牌但不显示给用户，刷新后随确认自动提交', async () => {
-    const token = '0123456789abcdef01234567'
+    const token = 'a'.repeat(24)
     mocks.stream.mockImplementationOnce(async function* () {
       yield {
         event: 'done',

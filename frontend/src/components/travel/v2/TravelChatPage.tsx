@@ -33,6 +33,7 @@ import {
 
 const SUGGESTIONS = ['推荐杭州适合慢游的景点', '帮我安排三天行程', '第二天想少走一点']
 const DECISION_TOKEN_MARKER = /\n\[\[travel-decision-token:([a-f0-9]{24})\]\]$/
+const DECISION_TOKEN_FIELD = 'decision_token'
 
 function pendingDecisionTokenFromMessages(messages: TravelConversationMessage[]): string | undefined {
   const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -186,7 +187,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
         mode: 'chat',
         source: 'manual',
         ...(pendingDecisionToken
-          ? { actionPayload: { decision_token: pendingDecisionToken } }
+          ? { actionPayload: { [DECISION_TOKEN_FIELD]: pendingDecisionToken } }
           : {}),
       })) {
         events.push(event)
