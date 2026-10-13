@@ -93,3 +93,25 @@
 - 代码与现有 PR 检查状态为 PASS；GitHub 当前标记 `MERGEABLE / CLEAN`。任务按指令没有
   合并 main。考虑当前 main 相对 PR base 的提交差距，合并前应确认仓库是否要求把这些 main
   更新纳入 PR 后再跑组合基线；本任务未做该同步。
+
+## 最终集成基线验证（2026-10-14）
+
+- 在原 PR worktree `D:/Program Files/workplace/agent-wt-rag-chunk-gov-20261013` 执行
+  `git fetch origin` 前确认分支为 `task/rag-upload-chunk-governance-20261013` 且工作树干净。
+  普通 `git merge origin/main` 无冲突完成，集成提交为
+  `230387b52c3d5ccb2a0d4a13997781105f4fdde7`，第二父提交为
+  `76334163a82f2fa9a969155da2800f7918476e5b`；未 rebase、force push 或触碰其他 worktree。
+- 对比 `origin/main` 新增变更：Travel 写入链路、Business DB 只读角色的初始化/迁移屏障，
+  以及 Secret Scan 扫描器。未发现 RAG 上传、Indexer、QualityGate、Provider 或 RAG 迁移
+  注册冲突；RAG keyword store 使用的配置与只读角色配置隔离。Business DB 迁移排序、失败时
+  保持角色禁用和迁移注册契约由 `test_startup_validation.py`、RAG migration registration
+  定向覆盖。未执行真实 PostgreSQL 迁移。
+- 集成后定向回归：`184 passed, 1 skipped, 1 deselected`。覆盖 CSV/Excel/OCR 解析、Financial
+  根正文 Leaf、Coverage Audit/质量门禁、16 类文档矩阵、Parent 关联与 Token 上限、启动及 RAG
+  迁移契约。唯一 skip 是近重复矩阵用例因当前 MinHash 接口不可用（测试注明由 metadata
+  cascade 覆盖）；PostgreSQL 本机用例按已知基线认证故障排除，仍为 `BLOCKED`，不是 PASS。
+- 本次 main 修改后的 Secret Scan 在此 Git worktree 实际运行：tree、`origin/main..HEAD` diff、
+  history 三种模式均 0 命中；扫描器回归 `12 passed`。这三项均非“非 Git 仓库跳过”。
+- 保留此前可信 RAG Smoke `38480805885`（8/8 PASS）；未重新运行付费 Provider 评测。费用核算
+  仍为 `UNVERIFIED`（106 次调用价格未登记）。
+- 合并后的 GitHub CI、PR Mergeable 状态和 Review Thread 终态待本轮推送后复核；未合并 PR。
