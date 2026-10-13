@@ -21,7 +21,7 @@
 | RAG MultiQuery P0 | #52 | OPEN；head `63d317b`，base `d3272c9`，mergeable | 当前 run `38449989265`：RAG Smoke、preflight、Detect PASS；真实 API evaluation 按 PR 策略 SKIP；Secret Scan run `38449989269` PASS。此前唯一获授权真实评测的质量门失败，真实预算/用量对账仍未证实 | 当前 head 无已核实的新 GPT 审查结论 | Recall/多跳质量门与计费证据未达标；不得合并或重复付费重跑，等待修复/新授权后的证据 |
 | B1-C | #45 | 已合并，merge commit `8f65712` | 合并前定向集 `140 passed`，RAG PR Smoke PASS；无真实 Provider 调用 | 3/3 旧 GPT review thread 已解决 | 已完成；验收按用户确认的 4 个注册 Workflow |
 | B1-D | #47 | 已合并，merge commit `c2feb44` | 合并前定向集 `135 passed`，RAG PR Smoke、py_compile、Ruff、diff-check PASS | 2/2 旧 GPT review thread 已解决 | 已完成；未接生产 Redis/Provider |
-| B1-E | #56 | OPEN；代码 head `de5db4c`，最新看板提交 `bfb19b5`，base `d3272c9`，GitHub mergeable | 最新 run `38455561583`（head `bfb19b5`）：RAG Smoke、Detect PASS；真实 API Evaluation 与 RAG preflight 按路径 SKIP；Secret Scan run `38455561661` PASS。代码定向回归 `76 passed, 5 deselected`；语法/聚焦 Ruff/diff-check PASS | 0 条 review thread；当前无 GPT review submission | 生产 Checkpointer/interrupt 配置未核实；本机 Docker Compose 仅证明 dev app 与 worker 的 PostgreSQL Checkpointer healthy、interrupt 默认关闭。生产运行验收阻断，不能据 PR CI 宣称生产启用 |
+| B1-E | #56 | OPEN；代码 commit `de5db4c`，最新已验看板 head `505a460`（其余仅任务板更新），base `d3272c9`，GitHub mergeable | run `38455757460`（head `505a460`）：RAG Smoke、Detect PASS；真实 API Evaluation 与 RAG preflight 按路径 SKIP；Secret Scan run `38455757456` PASS。代码定向回归 `76 passed, 5 deselected`；语法/聚焦 Ruff/diff-check PASS | 0 条 review thread；当前无 GPT review submission | 生产 Checkpointer/interrupt 配置未核实；本机 Docker Compose 仅证明 dev app 与 worker 的 PostgreSQL Checkpointer healthy、interrupt 默认关闭。生产运行验收阻断，不能据 PR CI 宣称生产启用 |
 
 ## 已取得证据
 
@@ -62,7 +62,7 @@
 
 ## 下一步
 
-1. B1-E PR #56 已建立；代码 head `de5db4c` 的定向验证通过，最新看板提交 `bfb19b5` 的 RAG Smoke/Detect/Secret Scan 通过。等待 GPT 审查与只读的生产 Checkpointer/interrupt 运行态证据。未确认前不宣称生产启用或完成运行验收，也不合并。
+1. B1-E PR #56 已建立；代码 head `de5db4c` 的定向验证通过，已验看板 head `505a460` 的 RAG Smoke/Detect/Secret Scan 通过。等待 GPT 审查与只读的生产 Checkpointer/interrupt 运行态证据。未确认前不宣称生产启用或完成运行验收，也不合并。
 2. PR #52 的真实评测质量门与预算/用量对账证据未满足；既有一次真实评测已用完用户授权，不重跑、不合并，等待修复及新的明确授权。
 3. Redis/API Key 真实凭据轮换和旧值失效验证仍未完成；代码 PR 已合并不等于安全 P0 关闭。用户指示开发阶段先不处理，等用户后续授权凭据操作。
 4. RAG R2/R3 与 Runtime 资源生命周期治理不在本轮启动，等待上述 P0 门禁通过后再开独立任务。
