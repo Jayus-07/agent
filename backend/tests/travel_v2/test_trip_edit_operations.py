@@ -7,6 +7,7 @@ import pytest
 from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.services.search_service import stable_selection_id
 from backend.travel_v2.services.trip_edit_service import TripEditService
+from backend.travel_v2.services.trip_service import canonical_request_hash
 
 
 def _two_item_document() -> dict:
@@ -145,38 +146,104 @@ def test_add_meal_saves_a_lunch_between_morning_and_evening_items(monkeypatch) -
         "locked": True, "note": "",
     })
     service = TripEditService()
+    base_document = deepcopy(document)
     monkeypatch.setattr(
-        service, "_get_trip_document", lambda *_args, **_kwargs: {"document": document},
+        service, "_get_trip_document",
+        lambda *_args, **_kwargs: {"document": deepcopy(base_document)},
     )
-    calls = {}
+    calls = []
+    hashes = []
+    command_types = []
 
     def capture_commit(**kwargs):
-        calls.update(kwargs)
-        TripEditService._validate_edit_schedule(kwargs["document"].model_dump(mode="json"))
+        snapshot = kwargs["document"].model_dump(mode="json")
+        calls.append(snapshot)
+        command_types.append(kwargs["command_type"])
+        hashes.append(canonical_request_hash({
+            "trip_id": str(kwargs["trip_id"]),
+            "expected_revision": kwargs["expected_revision"],
+            "command_type": kwargs["command_type"],
+            "change_summary": kwargs["change_summary"],
+            "document": snapshot,
+        }))
+        TripEditService._validate_edit_schedule(snapshot)
         return {"saved": True, "revision": 2}
 
     monkeypatch.setattr(service, "apply_document", capture_commit)
-    result = service.add_meal(
-        trip_id="trip-1", tenant_id="tenant-1", owner_id="owner-1",
-        actor_id="owner-1", idempotency_key="meal-lunch",
-        command={
-            "expected_revision": 1, "day_id": "day-1", "meal_period": "lunch",
-            "selection_id": stable_selection_id("food", "amap", "food-1"),
-            "merchant": {
-                "merchant_id": "food-1", "name": "午餐餐厅", "source": "amap",
-                "observed_at": "2026-10-19T08:00:00+08:00",
-            },
+    command = {
+        "expected_revision": 1, "day_id": "day-1", "meal_period": "lunch",
+        "selection_id": stable_selection_id("food", "amap", "food-1"),
+        "merchant": {
+            "merchant_id": "food-1", "name": "午餐餐厅", "source": "amap",
+            "observed_at": "2026-10-19T08:00:00+08:00",
         },
-    )
+    }
+    call_args = {
+        "trip_id": "trip-1", "tenant_id": "tenant-1", "owner_id": "owner-1",
+        "actor_id": "owner-1", "idempotency_key": "meal-lunch",
+        "command": command,
+    }
+    result = service.add_meal(**call_args)
+    replay_candidate = service.add_meal(**call_args)
 
-    items = calls["document"].model_dump(mode="json")["days"][0]["items"]
+    items = calls[0]["days"][0]["items"]
     assert result == {"saved": True, "revision": 2}
-    assert calls["command_type"] == "structured_edit"
+    assert replay_candidate == result
+    assert len(calls) == 2
+    assert hashes[0] == hashes[1]
+    assert calls[0] == calls[1]
+    assert command_types == ["structured_edit", "structured_edit"]
     assert [(item["title"], item["start_time"]) for item in items] == [
         ("西湖", "09:00"), ("午餐餐厅", "12:00"), ("晚间活动", "18:00"),
     ]
     assert items[2]["locked"] is True
     assert items[2]["fixed_start"] is True
+
+
+def test_meal_leg_ids_are_deterministic_and_keep_unaffected_route_facts() -> None:
+    document = _two_item_document()
+    day = document["days"][0]
+    day["items"][0]["duration_min"] = 60
+    day["items"][1].update({"start_time": "18:00", "duration_min": 60})
+    third = {
+        "item_id": "item-3", "kind": "activity", "activity_type": "rest",
+        "title": "晚间休息", "start_time": "20:00", "duration_min": 30,
+        "fixed_start": False, "place": None, "must_visit": False,
+        "locked": False, "note": "",
+    }
+    day["items"].append(third)
+    preserved_route = {
+        "leg_id": "verified-evening-route", "from_item_id": "item-2",
+        "to_item_id": "item-3", "selected_mode": "drive", "duration_min": 30,
+        "distance_m": 12000, "cost_cny": 5, "reliability": "verified",
+        "source": "route-provider", "observed_at": "2026-10-09T08:00:00+08:00",
+    }
+    day["legs"] = [preserved_route]
+    meal = {
+        "item_id": "meal-lunch", "kind": "activity", "activity_type": "meal",
+        "title": "午餐", "start_time": "12:00", "duration_min": 60,
+        "fixed_start": False, "place": None, "must_visit": False,
+        "locked": False, "note": "午餐",
+    }
+    first = deepcopy(document)
+    second = deepcopy(document)
+
+    TripEditService._insert_meal_in_order(first["days"][0], deepcopy(meal))
+    TripEditService._insert_meal_in_order(second["days"][0], deepcopy(meal))
+
+    first_legs = first["days"][0]["legs"]
+    second_legs = second["days"][0]["legs"]
+    assert [leg["leg_id"] for leg in first_legs] == [
+        leg["leg_id"] for leg in second_legs
+    ]
+    assert first_legs[-1] == preserved_route
+    assert second_legs[-1] == preserved_route
+    assert all(
+        leg["reliability"] == "unavailable" and leg["duration_min"] is None
+        for leg in first_legs[:-1]
+    )
+    TripEditService._validate_edit_schedule(first)
+    TripEditService._validate_edit_schedule(second)
 
 
 def test_meal_with_a_real_time_overlap_is_rejected() -> None:

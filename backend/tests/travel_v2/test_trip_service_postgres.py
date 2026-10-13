@@ -8,8 +8,8 @@ from threading import Barrier
 import pytest
 from pydantic import ValidationError
 
-from backend.config.database import MEMORY_DB_CONFIG
 from backend.infra.db import get_memory_engine
+from backend.tests.travel_v2.postgres_test_support import assert_isolated_travel_postgres
 from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.models.commands import StructuredTripEditCommand
 from backend.travel_v2.models.trip import TripDocumentV2
@@ -25,8 +25,13 @@ from backend.travel_v2.services.trip_service import TripNotFound, TripService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
-    reason="requires the explicitly selected local agent_memory PostgreSQL",
+    reason="requires an explicitly selected isolated travel V2 PostgreSQL",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_postgres_guard() -> None:
+    assert_isolated_travel_postgres()
 
 
 def _cleanup_trip(trip_id: str) -> None:
@@ -121,8 +126,7 @@ def _train_command(
 
 @pytest.fixture
 def trip_scope():
-    assert MEMORY_DB_CONFIG["dbname"] == "agent_memory"
-    assert MEMORY_DB_CONFIG["port"] == 5433
+    assert_isolated_travel_postgres()
     scope = {
         "tenant_id": f"test-{uuid.uuid4().hex[:12]}",
         "owner_id": f"user-{uuid.uuid4().hex[:12]}",
@@ -595,6 +599,85 @@ def test_locked_item_cannot_be_removed_by_a_structured_write(trip_scope) -> None
     assert TripService().get_trip(
         scope["trip_id"], tenant_id=scope["tenant_id"], owner_id=scope["owner_id"]
     )["revision"] == 2
+
+
+def test_concurrent_same_key_meal_requests_replay_deterministically(
+    trip_scope, monkeypatch,
+) -> None:
+    scope, _created = trip_scope
+    edit = TripEditService()
+    document = valid_document()
+    document["days"][0]["items"][0]["duration_min"] = 60
+    document["days"][0]["items"].append({
+        "item_id": "evening-event", "kind": "activity", "activity_type": "custom",
+        "title": "晚间活动", "start_time": "18:00", "duration_min": 60,
+        "fixed_start": True, "place": None, "must_visit": False,
+        "locked": True, "note": "",
+    })
+    edit.apply_document(
+        **scope, actor_id=scope["owner_id"], expected_revision=1,
+        idempotency_key="meal-concurrency-base", command_type="replace_document",
+        change_summary="设置早晚安排",
+        document=TripDocumentV2.model_validate(document),
+    )
+
+    original_get = edit._get_trip_document
+    read_barrier = Barrier(2)
+
+    def read_same_base(*args, **kwargs):
+        snapshot = original_get(*args, **kwargs)
+        read_barrier.wait(timeout=10)
+        return snapshot
+
+    monkeypatch.setattr(edit, "_get_trip_document", read_same_base)
+    command = {
+        "expected_revision": 2, "day_id": "day-1", "meal_period": "lunch",
+        "selection_id": stable_selection_id("food", "amap", "food-concurrent"),
+        "merchant": {
+            "merchant_id": "food-concurrent", "name": "并发午餐", "source": "amap",
+            "observed_at": "2026-10-19T08:00:00+08:00",
+        },
+    }
+
+    def add_same_meal():
+        return edit.add_meal(
+            **scope, actor_id=scope["owner_id"], idempotency_key="meal-concurrent",
+            command=command,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result(timeout=20) for future in (
+            executor.submit(add_same_meal), executor.submit(add_same_meal),
+        )]
+
+    assert sorted(result["replayed"] for result in results) == [False, True]
+    assert {result["revision"] for result in results} == {3}
+    persisted = TripService().get_trip(
+        scope["trip_id"], tenant_id=scope["tenant_id"], owner_id=scope["owner_id"],
+    )
+    assert persisted["revision"] == 3
+    assert [item["title"] for item in persisted["document"]["days"][0]["items"]] == [
+        "西湖", "并发午餐", "晚间活动",
+    ]
+    assert [item["revision"] for item in TripService().list_revisions(
+        scope["trip_id"], tenant_id=scope["tenant_id"], owner_id=scope["owner_id"],
+    )] == [3, 2, 1]
+    assert "meal-concurrent" in _operation_keys(scope["trip_id"])
+
+    monkeypatch.setattr(edit, "_get_trip_document", original_get)
+    different_payload = {
+        **command,
+        "selection_id": stable_selection_id("food", "amap", "food-different"),
+        "merchant": {
+            "merchant_id": "food-different", "name": "另一家餐厅", "source": "amap",
+            "observed_at": "2026-10-19T08:00:00+08:00",
+        },
+    }
+    with pytest.raises(IdempotencyConflict):
+        edit.add_meal(
+            **scope, actor_id=scope["owner_id"], idempotency_key="meal-concurrent",
+            command=different_payload,
+        )
 
 
 def test_two_concurrent_edits_from_same_revision_have_one_winner(trip_scope) -> None:

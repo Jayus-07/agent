@@ -242,7 +242,7 @@ class TripEditService:
                 insertion_index = index
                 break
         day["items"].insert(insertion_index, meal_item)
-        TripEditService._refresh_day_legs(day)
+        TripEditService._refresh_day_legs(day, deterministic_new_leg_ids=True)
 
     def apply_document(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
@@ -609,7 +609,9 @@ class TripEditService:
             day["date"] = (base_date + timedelta(days=index)).isoformat()
 
     @staticmethod
-    def _refresh_day_legs(day: dict) -> None:
+    def _refresh_day_legs(
+        day: dict, *, deterministic_new_leg_ids: bool = False,
+    ) -> None:
         existing = {
             (leg["from_item_id"], leg["to_item_id"]): leg
             for leg in day.get("legs", [])
@@ -619,8 +621,15 @@ class TripEditService:
             edge = (source["item_id"], target["item_id"])
             leg = existing.get(edge)
             if leg is None:
+                if deterministic_new_leg_ids:
+                    edge_hash = hashlib.sha256(
+                        f"{edge[0]}\0{edge[1]}".encode("utf-8")
+                    ).hexdigest()
+                    leg_id = f"leg-{edge_hash}"
+                else:
+                    leg_id = f"leg-{uuid4().hex}"
                 leg = {
-                    "leg_id": f"leg-{uuid4().hex}",
+                    "leg_id": leg_id,
                     "from_item_id": edge[0], "to_item_id": edge[1],
                     "selected_mode": "transit", "duration_min": None,
                     "distance_m": None, "cost_cny": None,

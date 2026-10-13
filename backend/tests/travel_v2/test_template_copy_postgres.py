@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from backend.infra.db import get_memory_engine
+from backend.tests.travel_v2.postgres_test_support import assert_isolated_travel_postgres
 from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.models.template import TemplateCreateRequest, TemplateUpdateRequest
 from backend.travel_v2.models.trip import TripDocumentV2
@@ -15,8 +16,13 @@ from backend.travel_v2.services.trip_service import TripService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
-    reason="requires the explicitly selected local agent_memory PostgreSQL",
+    reason="requires an explicitly selected isolated travel V2 PostgreSQL",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_postgres_guard() -> None:
+    assert_isolated_travel_postgres()
 
 
 def _overlapping_document() -> dict:

@@ -7,15 +7,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.config.database import MEMORY_DB_CONFIG
 from backend.infra.db import get_memory_engine
+from backend.tests.travel_v2.postgres_test_support import assert_isolated_travel_postgres
 from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.api.router import router
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
-    reason="requires the explicitly selected local agent_memory PostgreSQL",
+    reason="requires an explicitly selected isolated travel V2 PostgreSQL",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_postgres_guard() -> None:
+    assert_isolated_travel_postgres()
 
 
 def _headers(user_id: str, tenant_id: str) -> dict[str, str]:
@@ -39,8 +44,6 @@ def _cleanup(trip_id: str) -> None:
 
 
 def test_api_creates_reads_and_archives_only_within_identity_scope() -> None:
-    assert MEMORY_DB_CONFIG["dbname"] == "agent_memory"
-    assert MEMORY_DB_CONFIG["port"] == 5433
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
