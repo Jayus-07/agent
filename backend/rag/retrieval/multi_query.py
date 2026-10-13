@@ -491,9 +491,11 @@ class MultiQueryRetriever(BaseRetriever):
         import contextvars
         from backend.observability.tracer import trace_collector
 
-        docs, seen = [], set()
+        docs = []
+        seen = set()
         # 按 query 分组检索，每个 doc 标记来源查询
         evidence_groups: dict[str, list] = {}
+        retrieved_groups: dict[str, list] = {}
         query_results: dict[str, dict] = {}
         base_invoke = self.base_retriever.invoke
         fanout_span = trace_collector.start_span(
@@ -580,26 +582,20 @@ class MultiQueryRetriever(BaseRetriever):
                 q = future_to_q[future]
                 try:
                     retrieved_docs = list(future.result() or [])
-                    q_docs = []
-                    for d in retrieved_docs:
-                        cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
-                        if cid not in seen:
-                            seen.add(cid)
-                            d.metadata["source_query"] = q  # 标记来源查询
-                            q_docs.append(d)
-                            docs.append(d)
-                    evidence_groups[q] = q_docs
+                    retrieved_groups[q] = retrieved_docs
+                    evidence_groups[q] = []
                     query_results[q] = {
                         "query": q,
                         "status": "success",
                         "retrieved_docs": len(retrieved_docs),
-                        "retained_docs": len(q_docs),
+                        "retained_docs": 0,
                         "duration_ms": max(
                             0, round((time.perf_counter() - submitted_at[q]) * 1000)
                         ),
                     }
                 except Exception as e:
                     logger.warning(f"[MultiQuery] 检索失败: {e}")
+                    retrieved_groups[q] = []
                     evidence_groups[q] = []
                     message = str(e)[:300]
                     query_results[q] = {
@@ -648,6 +644,7 @@ class MultiQueryRetriever(BaseRetriever):
             )
         # 超时后未产出结果的变体补空组，保证 evidence_groups 键完整
         for q in queries:
+            retrieved_groups.setdefault(q, [])
             evidence_groups.setdefault(q, [])
             query_results.setdefault(q, {
                 "query": q,
@@ -659,6 +656,22 @@ class MultiQueryRetriever(BaseRetriever):
                 ),
                 "error": "查询未返回可记录的结果",
             })
+
+        # 按查询提交顺序稳定合并，原始 query 总是第一组。并发完成顺序不能
+        # 决定重复 chunk 的归属或 rerank 输入顺序，否则相同请求会得到不同的
+        # 候选顺序，且改写先完成时可能覆盖原始 query 的来源标记。
+        for q in queries:
+            q_docs = []
+            for d in retrieved_groups[q]:
+                cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                d.metadata["source_query"] = q
+                q_docs.append(d)
+                docs.append(d)
+            evidence_groups[q] = q_docs
+            query_results[q]["retained_docs"] = len(q_docs)
 
         query_result_rows = [query_results[q] for q in queries]
         statuses = [item["status"] for item in query_result_rows]
