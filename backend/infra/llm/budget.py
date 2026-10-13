@@ -437,6 +437,7 @@ def record_model_usage(
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
     cost: Decimal | float | str | None = None,
+    review_reason: str = "",
 ) -> None:
     state = current_request_budget()
     if state is not None:
@@ -448,6 +449,9 @@ def record_model_usage(
         )
         reservation = _current_quota_reservation.get()
         if reservation is not None and state.quota_store is not None:
+            if review_reason:
+                review_model_reservation(review_reason)
+                return
             try:
                 state.quota_store.settle(reservation, Decimal(str(cost or 0)))
             except Exception as exc:

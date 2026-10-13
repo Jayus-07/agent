@@ -19,7 +19,7 @@
 | B1-F | #43 | 已合并，`b0f71bc` | run 138 全绿；合并后 39 passed | 2 条旧 thread 已解决 | 无 |
 | RAG R0/R1 | #41 | 已合并，`48f3d49` | run 166 RAG Smoke、run 17 Secret Scan SUCCESS；合并前本地 142 passed | 3 条旧 thread 已解决 | 无；既有性能/准确率证据保留 |
 | 凭据安全治理 | #51 | 已合并，merge `d3272c9` | PR run 38447092565 RAG PR Smoke、38447092851 Secret Scan SUCCESS；合并后相同 tree 定向集 `test_startup_validation.py` 55 passed；post-merge combined status 未返回 status checks | 合并前 GPT 复审无未解决 thread | 生产 `PG_READONLY_PASSWORD` 是否已受控配置尚未核实；Redis/API Key 与 PR #41 历史泄漏凭据按用户要求未轮换/撤销，安全 P0 未关闭 |
-| RAG MultiQuery P0 | #52 | OPEN；MultiQuery 源代码 commit `4027387`，前次 PR head `63d317b`；已同步 main 的 #56（`8887383`） | head `63d317b` 的 RAG Smoke run `38449989265`、Secret Scan run `38449989269` 成功；定向集 `55 passed`；授权的真实 Provider run `38445344364` 完成 8/8 case 但严格 RAG gate FAILED | 10 条 GPT review thread 全部已解决；同步 main 后需复核新 head | 当前 run Recall@5 `0.881`、Multi-hop `0.7222`，低于基线 `0.9286/0.8333`；RC-024 未触发改写，不能归因于 MultiQuery；费用 `UNVERIFIED`，artifact 无预算预占/结算对账 |
+| RAG MultiQuery P0 | #52 | OPEN；已同步 #56 main（`8887383`）；本地新增修复待提交/推送 | 旧 head `63d317b` 的 RAG Smoke `38449989265`、Secret Scan `38449989269` 成功；本地 `53 + 42 passed`，py_compile/YAML/模拟账本通过；新 head CI 待运行 | 10 条旧 thread 已解决；新增 diff 尚未复审 | 唯一授权的真实 Provider run `38445344364` 严格 RAG gate FAILED；Recall@5 `0.881`、Multi-hop `0.7222`，低于基线 `0.9286/0.8333`；费用/预算对账未验证，禁止再次真实调用直至取得新授权 |
 | B1-C | #45 | 已合并，`8f65712` | run 163 SUCCESS；隔离 PostgreSQL 定向集 273 passed | 旧 thread 已解决 | 无；按用户要求以当前 4 类 Workflow 验收 |
 | B1-D | #47 | 已合并，`c2feb44` | run 165 SUCCESS；定向集 135 passed + 隔离 PostgreSQL 6 passed | 2 条旧 thread 已解决 | 无 |
 | B1-E | #56 | 已合并，merge commit `8887383` | Secret Scan run `38460502481`、RAG PR Smoke run `38460502482` 成功；合并后后端 `78 passed, 5 deselected`、前端 `3 passed`、TypeScript 通过 | GPT P2 1/1 已解决 | 本机 Docker app/worker PostgreSQL Checkpointer healthy，但 `ENVIRONMENT` 未设置；生产 Checkpointer/interrupt 运行配置未核实，不宣称生产验收 |
@@ -33,10 +33,16 @@
 - 同步/异步 primary 与 retry 都在预算预占返回后复查取消信号；若请求已超时，释放未执行预占并阻止 Provider 调用。
 - 改写 Provider 调用改用 thread_pools 中独立、可观测的 multi_query_rewrite 池，慢请求不再占用 outer/inner 检索 worker。
 - 失败日志只记录异常类型；R0/R1 Embedding 去重和缓存实现未改动。
+- Eval case timeout/concurrency/RAGAS 线程池此前未复制 ContextVar；新增提交辅助函数后，tenant、user、Trace、budget request id 和 LLMProxy per-user rate-limit user 都进入工作线程。
+- 评测作用域现在临时绑定 LLMProxy 限流 user，并在正常、异常和取消后恢复。Provider 用量缺失或价格标为 `unpriced` 时，Proxy 与 cloud TokenTracker 不再按 ¥0 结清预占，而转入 `needs_review` 保留占额。
+- 可信 RAG Smoke job 设置 `LLM_BUDGET_MODE=enforce` 和独立 run id；artifact 以运行前 usage id 为边界，报告租户归属、预占/结算/释放/待对账金额及差额。无调用、错租户、遗漏 reservation、未终态 reservation 或金额不匹配均为 `UNVERIFIED`。
 
 ### MultiQuery 验证证据
 
 - 当前代码 commit 4027387 定向回归：infra/test_b1b_llm_governance.py、test_multi_query_token_budget.py、test_retrieval_executor_isolation.py、test_multi_query_trace.py、test_retrieval_deadline.py，55 passed；另对部分成功超时场景锁定告警中的已完成文档数；py_compile 与 git diff --check 通过。
+- 新增并发上下文用例验证两个 eval tenant/user 的 trace、预算 request id 和 LLMProxy 限流身份不串账；评测治理回归覆盖异常、取消、连续评测后普通请求恢复。
+- 内存 quota-store 回归验证缺用量和 `unpriced` 不会零元结算，改为 `needs_review`；cloud TokenTracker 缺用量走相同待对账路径。
+- 工作流 artifact 用模拟账本执行实际内嵌 Python 代码，检查 reservation 状态、预占/结算金额与差额；未调用 Provider 或 PostgreSQL。`rag_smoke.yml` YAML 解析通过。
 - 本地取消与预算测试覆盖预占期间取消、同步/异步 Provider 阻断、未执行预占释放；真实 ThreadPoolExecutor 测试验证慢改写不能阻塞 outer 检索。
 - 经用户授权仅执行一次真实 Provider run #38445344364（https://github.com/Jayus-07/agent/actions/runs/38445344364），head `7f1c454`、`multiquery=true`；8/8 case 级通过，实际 107 次 Provider 请求（chat 35、embedding 63、rerank 9），但严格评测门禁失败。
 - 当前 run 的 Recall@5 0.881、MRR 0.8571、Top-1 0.7143、Multi-hop 0.7222；main 基线 run #38397152826 为 0.9286、0.8571、0.7143、0.8333。Top-1 两边都低于 0.80 门槛，没有改门槛或删案例。
@@ -48,7 +54,7 @@
 
 - baseline run `38397152826`（main `2d1d0b1`）与 #52 真实 Provider run `38445344364`（代码 head `7f1c454`）来自同一 `pr_smoke` 数据版本；前者 Recall@5/MRR/Top-1/Multi-hop 为 0.9286/0.8571/0.7143/0.8333，后者为 0.881/0.8571/0.7143/0.7222。main 后续只合并了 #51 凭据安全改动，没有新的 RAG 真实评测。
 - 两次 run 都是 8/8 case 级通过，但 #52 的严格 gate 失败。已确认唯一出现 Recall@5/Multi-hop 差异的 RC-024 在 #52 trace 中没有触发改写；因此当前 live 对比既不能证明是 MultiQuery 导致，也不能作为未退化的验收证据。实际改写目标 RC-031 等待超时后回退，迟到的 Provider 输出未被消费；指标与 baseline 相同。
-- #52 定向测试和 PR CI 通过，但真实费用核验为 `UNVERIFIED`，workflow artifact 不含租户预算预占/结算账本核对。此次为用户授权的唯一真实调用，不再重复付费；其后未改代码，仅更新文档。
+- 旧 head `63d317b` 的定向测试和 PR CI 通过，但真实费用核验为 `UNVERIFIED`，当时 workflow artifact 不含租户预算预占/结算账本核对。此次为用户授权的唯一真实调用，不再重复付费；本地新修复已增加待对账语义和运行级账本 artifact，尚待推送与 CI 验收。
 - PR #56/B1-E 已按用户批准合并（merge `8887383`）。新 main 上复跑 Travel 后端定向集为 `78 passed, 5 deselected`，V2 前端为 `3 passed`，TypeScript 检查通过；无真实 Provider 调用。5 个 PostgreSQL 配置相关排除项此前已在干净基线复现。本机 Docker app/worker 的 PostgreSQL Checkpointer healthy，但 `ENVIRONMENT` 未设置，不能证明生产配置。
 
 ## 凭据处置
@@ -61,7 +67,7 @@
 
 ## 下一步
 
-1. #52 保持不合并：修复并测试 RAG evaluation case timeout/worker 对 eval tenant、user、trace、budget ContextVar 的传播；依据现有 trace/ledger 继续调查真实请求账务及 RC-024 差异。保留 0.80 Top-1 门槛，不重复付费评测；需要新真实 Provider 证据时先取得用户授权。
+1. #52 保持不合并：提交/推送本地修复，复核新 head 的 Secret Scan、RAG CI 和 GPT review；之后评估是否需要新的真实 Provider 评测，必须先取得用户授权。保留 0.80 Top-1 门槛，不重复付费评测。
 2. 凭据安全代码已合入，但 Redis/API Key 和 #41 历史泄漏凭据未轮换/撤销；用户要求开发阶段先不处理，不宣称安全 P0 关闭。
 3. B1-E 已合并；生产 Checkpointer/interrupt 运行配置仍未知，部署前需由脱敏生产配置或只读运行证据确认。
 4. RAG R2/R3 和 Runtime 资源生命周期治理按用户要求暂不启动。

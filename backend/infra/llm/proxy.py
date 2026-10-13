@@ -17,7 +17,8 @@ import contextvars as _contextvars
 import inspect
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Callable
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 # BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
 # chat_models 在装了 transformers 的环境下连带导入 torch（实测 ~8s）。
@@ -71,6 +72,16 @@ _user_id_var: _contextvars.ContextVar[str | None] = _contextvars.ContextVar(
 def set_current_user_id(user_id: str | None) -> None:
     """设置当前请求上下文的 user_id（限流用）。FastAPI 路由层在每次请求开始时调用。"""
     _user_id_var.set(user_id)
+
+
+@contextmanager
+def scoped_current_user_id(user_id: str | None) -> Iterator[None]:
+    """在短期后台作用域绑定限流用户，并在退出时恢复原值。"""
+    token = _user_id_var.set(user_id or None)
+    try:
+        yield
+    finally:
+        _user_id_var.reset(token)
 
 
 def _thread_local_user_id() -> str | None:
@@ -1387,7 +1398,10 @@ def _record_tokens(
             try:
                 from backend.infra.llm.budget import record_model_usage
 
-                record_model_usage(total_tokens=0, cost=0)
+                record_model_usage(
+                    total_tokens=0,
+                    review_reason="provider_usage_missing",
+                )
             except Exception:
                 pass
             return
@@ -1465,6 +1479,7 @@ def _record_tokens(
             )
         from backend.infra.llm.budget import current_request_budget
         from backend.infra.llm.pricing import (
+            PRICING_SOURCE_UNPRICED,
             USAGE_SOURCE_PROVIDER,
             NormalizedUsage,
             price_usage,
@@ -1524,7 +1539,15 @@ def _record_tokens(
                 prompt_tokens=p,
                 completion_tokens=c,
                 total_tokens=t,
-                cost=cost_decimal,
+                cost=(
+                    None if billing.pricing_source == PRICING_SOURCE_UNPRICED
+                    else cost_decimal
+                ),
+                review_reason=(
+                    "billing_price_unavailable"
+                    if billing.pricing_source == PRICING_SOURCE_UNPRICED
+                    else ""
+                ),
             )
         except Exception:
             # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。

@@ -538,20 +538,22 @@ class EvaluationService:
         try:
             from backend.core.request_context import scoped_tool_identity
             from backend.infra.llm.budget import scoped_request_budget
+            from backend.infra.llm.proxy import scoped_current_user_id
 
             def _warn_budget_binding(exc: Exception) -> None:
                 logger.warning("[Eval] 预算绑定失败（放行）: %s", exc)
 
-            with scoped_tool_identity(
-                user_id=eval_user, tenant_id=EVAL_TENANT_ID,
-            ):
-                with scoped_request_budget(
-                    f"eval:{run_id}",
-                    user_id=eval_user,
-                    tenant_id=EVAL_TENANT_ID,
-                    on_error=_warn_budget_binding,
+            with scoped_current_user_id(eval_user):
+                with scoped_tool_identity(
+                    user_id=eval_user, tenant_id=EVAL_TENANT_ID,
                 ):
-                    report = self._evaluate_cases(config, run_id, run_started_ts)
+                    with scoped_request_budget(
+                        f"eval:{run_id}",
+                        user_id=eval_user,
+                        tenant_id=EVAL_TENANT_ID,
+                        on_error=_warn_budget_binding,
+                    ):
+                        report = self._evaluate_cases(config, run_id, run_started_ts)
             # C2-3：attempt 计数随报告落盘（跨次续跑可审计「跑了几次」）
             status = read_run_status(run_id) or {}
             report.metadata["attempt_no"] = int(status.get("attempt_no", 1) or 1)

@@ -168,6 +168,8 @@ jobs:
       EVAL_SEMANTIC_SCORER: lexical
       EVAL_TRIGGER: ${{ github.event_name }}
       EVAL_TRIGGERED_BY: github-actions-rag-smoke
+      EVAL_RUN_ID: rag-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      LLM_BUDGET_MODE: enforce
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
@@ -304,6 +306,24 @@ jobs:
           print(f"[assert] EVAL_INDEX_CHECK=passed vectors={n} dims={expected_dims}")
           PY
 
+      - name: Snapshot usage ledger before evaluation
+        id: usage-ledger-baseline
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import psycopg
+
+          conn = psycopg.connect(
+              host="localhost", port=5432, user="postgres", password="postgres",
+              dbname=os.environ["MEMORY_PGDATABASE"],
+          )
+          with conn.cursor() as cur:
+              cur.execute("SELECT COALESCE(MAX(id), 0) FROM llm_usage")
+              start_id = int(cur.fetchone()[0] or 0)
+          conn.close()
+          print(f"usage_start_id={start_id}")
+          PY
+
       - name: Run RAG smoke evaluation
         run: |
           # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
@@ -314,6 +334,7 @@ jobs:
           fi
           python -u -m backend.evaluation.cli rag \
             --selection pr_smoke \
+            --run-id "$EVAL_RUN_ID" \
             "${MULTIQUERY_ARGS[@]}" \
             --no-ragas \
             --no-resume \
@@ -323,11 +344,14 @@ jobs:
 
       - name: Collect API cost attribution
         if: always()
+        env:
+          LLM_USAGE_START_ID: ${{ steps.usage-ledger-baseline.outputs.usage_start_id }}
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
+          from decimal import Decimal
 
           import psycopg
 
@@ -338,60 +362,140 @@ jobs:
               )
               with conn.cursor() as cur:
                   cur.execute(
-                      "SELECT model, provider, cost_status, pricing_source, count(*), "
+                      "SELECT component, model, provider, cost_status, pricing_source, count(*), "
                       "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
                       "FROM llm_usage "
-                      "GROUP BY model, provider, cost_status, pricing_source "
-                      "ORDER BY model, provider, cost_status, pricing_source"
+                      "WHERE id > %s AND component IN ('llm', 'embedding', 'rerank') "
+                      "GROUP BY component, model, provider, cost_status, pricing_source "
+                      "ORDER BY component, model, provider, cost_status, pricing_source",
+                      (int(os.getenv("LLM_USAGE_START_ID") or 0),),
                   )
                   rows = cur.fetchall()
+                  cur.execute(
+                      "SELECT count(*), "
+                      "count(*) FILTER (WHERE tenant_id <> %s OR user_id <> %s), "
+                      "sum(coalesce(total_tokens, 0)), "
+                      "sum(coalesce(billed_cost_cny, 0)) "
+                      "FROM llm_usage WHERE id > %s "
+                      "AND component IN ('llm', 'embedding', 'rerank')",
+                      (
+                          "eval", os.environ["EVAL_TRIGGERED_BY"],
+                          int(os.getenv("LLM_USAGE_START_ID") or 0),
+                      ),
+                  )
+                  usage_totals = cur.fetchone()
+                  cur.execute(
+                      "WITH reservation_per_call AS ("
+                      "SELECT DISTINCT ON (id) id, status, reserved_cny, settled_cny "
+                      "FROM budget_reservations WHERE request_id = %s "
+                      "ORDER BY id, created_at) "
+                      "SELECT status, count(*), sum(reserved_cny), sum(settled_cny) "
+                      "FROM reservation_per_call GROUP BY status ORDER BY status",
+                      (f"eval:{os.environ['EVAL_RUN_ID']}",),
+                  )
+                  reservation_rows = cur.fetchall()
               conn.close()
           except Exception:  # noqa: BLE001
-              print("[cost] llm_usage 查询失败；费用状态标记为 UNVERIFIED")
+              print("[cost] usage/quota ledger 查询失败；对账标记为 UNVERIFIED")
               rows = []
               query_failed = True
           else:
               query_failed = False
           unverified_statuses = {"", "unpriced", "price_unknown"}
           unverified_calls = sum(
-              int(r[4] or 0) for r in rows
-              if (r[2] or "").lower() in unverified_statuses
+              int(r[5] or 0) for r in rows
+              if (r[3] or "").lower() in unverified_statuses
           )
           estimated_calls = sum(
-              int(r[4] or 0) for r in rows if (r[2] or "").lower() == "estimated"
+              int(r[5] or 0) for r in rows if (r[3] or "").lower() == "estimated"
           )
           cost_verification = (
               "UNVERIFIED" if query_failed or not rows or unverified_calls
               else "ESTIMATED" if estimated_calls else "VERIFIED"
           )
+          reservation_counts = {
+              str(r[0]): int(r[1] or 0) for r in reservation_rows
+          } if not query_failed else {}
+          reservation_amounts_cny = {
+              str(status): {
+                  "reserved_cny": round(sum(
+                      float(r[2] or 0) for r in reservation_rows if r[0] == status
+                  ), 6),
+                  "settled_cny": round(sum(
+                      float(r[3] or 0) for r in reservation_rows if r[0] == status
+                  ), 6),
+              }
+              for status in reservation_counts
+          } if not query_failed else {}
+          reservation_total = sum(reservation_counts.values())
+          settled_cost = sum(
+              (Decimal(str(r[3] or 0)) for r in reservation_rows if r[0] == "settled"),
+              Decimal("0"),
+          ) if not query_failed else Decimal("0")
+          usage_calls = int(usage_totals[0] or 0) if not query_failed else 0
+          unattributed_calls = int(usage_totals[1] or 0) if not query_failed else 0
+          usage_cost = Decimal(str(usage_totals[3] or 0)) if not query_failed else Decimal("0")
+          ledger_difference = abs(usage_cost - settled_cost)
+          budget_ledger_verification = (
+              "VERIFIED"
+              if not query_failed
+              and os.environ.get("LLM_BUDGET_MODE") == "enforce"
+              and usage_calls > 0
+              and reservation_total == usage_calls
+              and reservation_counts.get("reserved", 0) == 0
+              and reservation_counts.get("needs_review", 0) == 0
+              and unattributed_calls == 0
+              and ledger_difference <= Decimal("0.000001")
+              else "UNVERIFIED"
+          )
           summary = []
           for r in rows:
-              cost_status = (r[2] or "").lower()
+              cost_status = (r[3] or "").lower()
               summary.append({
-                  "model": r[0],
-                  "provider": r[1],
+                  "component": r[0],
+                  "model": r[1],
+                  "provider": r[2],
                   "cost_status": cost_status or "unknown",
-                  "pricing_source": r[3] or "unknown",
-                  "calls": int(r[4] or 0),
-                  "total_tokens": int(r[5] or 0),
+                  "pricing_source": r[4] or "unknown",
+                  "calls": int(r[5] or 0),
+                  "total_tokens": int(r[6] or 0),
                   "billed_cost_cny": (
                       None if cost_status in unverified_statuses
-                      else round(float(r[6] or 0), 6)
+                      else round(float(r[7] or 0), 6)
                   ),
               })
           Path("data/eval_runs").mkdir(parents=True, exist_ok=True)
           Path("data/eval_runs/llm_usage_summary.json").write_text(
               json.dumps({
                   "note": "隔离测试库账本，未同步生产计费",
+                  "eval_run_id": os.environ.get("EVAL_RUN_ID", ""),
+                  "budget_request_id": f"eval:{os.environ.get('EVAL_RUN_ID', '')}",
+                  "budget_mode": os.environ.get("LLM_BUDGET_MODE", ""),
                   "cost_verification": cost_verification,
+                  "budget_ledger_verification": budget_ledger_verification,
                   "verification_error": "ledger_query_failed" if query_failed else None,
                   "unverified_calls": unverified_calls,
+                  "usage_calls": usage_calls,
+                  "unattributed_calls": unattributed_calls,
+                  "budget_reservations": reservation_counts,
+                  "reservation_amounts_cny": reservation_amounts_cny,
+                  "usage_cost_cny": round(float(usage_cost), 6),
+                  "settled_cost_cny": round(float(settled_cost), 6),
+                  "ledger_difference_cny": round(float(ledger_difference), 6),
                   "usage": summary,
               },
                          ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
           print(json.dumps({"cost_verification": cost_verification,
+                            "budget_ledger_verification": budget_ledger_verification,
+                            "usage_calls": usage_calls,
+                            "unattributed_calls": unattributed_calls,
+                            "budget_reservations": reservation_counts,
+                            "reservation_amounts_cny": reservation_amounts_cny,
+                            "usage_cost_cny": round(float(usage_cost), 6),
+                            "settled_cost_cny": round(float(settled_cost), 6),
+                            "ledger_difference_cny": round(float(ledger_difference), 6),
                             "unverified_calls": unverified_calls, "usage": summary},
                            ensure_ascii=False, indent=2))
           PY
