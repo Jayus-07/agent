@@ -105,7 +105,13 @@ def _db_exists(admin, name: str) -> bool:
         return cur.fetchone() is not None
 
 
-def _apply_migration(conn, filename: str, *, password: str) -> str:
+def _apply_migration(
+    conn,
+    filename: str,
+    *,
+    password: str,
+    user: str | None = None,
+) -> str:
     """在给定连接上应用单个迁移文件。返回 'applied' / 'skipped' / 'error:…'。"""
     path = MIGRATIONS_DIR / filename
     if not path.exists():
@@ -130,6 +136,7 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
                 sql,
                 force=False,
                 readonly_password=password,
+                readonly_user=user or os.getenv("PG_READONLY_USER", "agent_readonly"),
             )
             if status == "error":
                 return "error: readonly credential migration failed"
@@ -267,7 +274,9 @@ def main() -> int:
                 if args.check:
                     print(f"[ensure_dbs]   ({db}) {mig}: 跳过（--check）")
                     continue
-                result = _apply_migration(conn, mig, password=ro_pw)
+                result = _apply_migration(
+                    conn, mig, password=ro_pw, user=ro_user
+                )
                 mark = "✓" if result == "applied" else ("=" if result == "skipped" else "✗")
                 print(f"[ensure_dbs]   {mark} ({db}) {mig}: {result}")
                 if result.startswith("error"):

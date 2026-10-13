@@ -489,6 +489,7 @@ _FROZEN_LEGACY_MIGRATION_CHECKSUMS = {
     },
 }
 _READONLY_PASSWORD_MIGRATION = "093_revoke_readonly_default_password.sql"
+_LEGACY_READONLY_USER = "agent_readonly"
 _TERMINATE_READONLY_SESSIONS_SQL = (
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
     "WHERE usename = %s AND pid <> pg_backend_pid()"
@@ -503,6 +504,7 @@ def apply_migration(
     *,
     force: bool,
     readonly_password: str = "",
+    readonly_user: str = _LEGACY_READONLY_USER,
 ) -> tuple[str, str]:
     """执行单个迁移文件，返回 (状态, 说明)。
 
@@ -539,25 +541,75 @@ def apply_migration(
         from psycopg2 import sql as pgsql
 
         try:
+            target_user = str(readonly_user or _LEGACY_READONLY_USER).strip()
+            if not target_user:
+                raise ValueError("PG_READONLY_USER 不能为空")
+
+            # 先提交 NOLOGIN，确保终止会话后旧口令不能在提交窗口内重连。
+            # 旧默认角色始终撤销；使用自定义用户名时只给目标角色设置新口令。
+            roles_to_block = [_LEGACY_READONLY_USER]
+            if readonly_password and target_user != _LEGACY_READONLY_USER:
+                roles_to_block.append(target_user)
+
+            existing_roles: set[str] = set()
             with conn.cursor() as cur:
-                if readonly_password:
+                for role in roles_to_block:
+                    cur.execute(
+                        "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s",
+                        (role,),
+                    )
+                    if cur.fetchone() is None:
+                        if role == target_user and readonly_password:
+                            raise RuntimeError("配置的只读角色不存在")
+                        continue
+                    existing_roles.add(role)
+                    cur.execute(
+                        pgsql.SQL("ALTER ROLE {} NOLOGIN").format(
+                            pgsql.Identifier(role),
+                        )
+                    )
+                    conn.commit()
+
+            # NOLOGIN 已提交后再清理旧会话，阻断旧凭据重新认证的竞态窗口。
+            for role in existing_roles:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        _TERMINATE_READONLY_SESSIONS_SQL,
+                        (role,),
+                    )
+                conn.commit()
+
+            with conn.cursor() as cur:
+                if _LEGACY_READONLY_USER in existing_roles:
+                    if target_user == _LEGACY_READONLY_USER and readonly_password:
+                        cur.execute(
+                            pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                                pgsql.Identifier(target_user),
+                                pgsql.Literal(readonly_password),
+                            )
+                        )
+                    else:
+                        cur.execute(
+                            pgsql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(
+                                pgsql.Identifier(_LEGACY_READONLY_USER),
+                            )
+                        )
+
+                if (
+                    target_user != _LEGACY_READONLY_USER
+                    and readonly_password
+                ):
                     cur.execute(
                         pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                            pgsql.Identifier("agent_readonly"),
+                            pgsql.Identifier(target_user),
                             pgsql.Literal(readonly_password),
                         )
                     )
-                    cur.execute(
-                        _TERMINATE_READONLY_SESSIONS_SQL,
-                        ("agent_readonly",),
-                    )
-                else:
-                    cur.execute(sql)
             _record(conn, filename, sql, "applied", commit=False)
             conn.commit()
             detail = (
-                "配置的只读口令与迁移台账在同一事务提交"
-                if readonly_password else "撤销只读角色口令与迁移台账在同一事务提交"
+                "只读角色凭据与迁移台账在阻断旧登录后提交"
+                if readonly_password else "旧只读口令已撤销并阻断登录"
             )
             return "applied", detail
         except Exception as exc:  # noqa: BLE001
@@ -832,6 +884,7 @@ def main() -> int:
                         sql,
                         force=args.force,
                         readonly_password=ro_pw,
+                        readonly_user=ro_user,
                     )
                     mark = {"applied": "✓", "applied-partial": "~",
                             "skipped": "=", "error": "✗"}[status]

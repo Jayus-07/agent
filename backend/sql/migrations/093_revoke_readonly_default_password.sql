@@ -1,9 +1,4 @@
--- 004 is an applied migration; this forward step safely updates the readonly credential.
--- The migration runner sets a configured password here, or revokes password auth if unset.
-ALTER ROLE agent_readonly PASSWORD NULL;
-
--- Password changes do not invalidate already authenticated PostgreSQL sessions.
-SELECT pg_terminate_backend(pid)
-FROM pg_stat_activity
-WHERE usename = 'agent_readonly'
-  AND pid <> pg_backend_pid();
+-- This forward migration must be applied by scripts.init_db.apply_migration, which
+-- commits NOLOGIN before terminating old sessions and then applies the configured
+-- PG_READONLY_USER / PG_READONLY_PASSWORD. Standalone execution fails closed.
+ALTER ROLE agent_readonly NOLOGIN;
