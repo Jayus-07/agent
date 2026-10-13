@@ -32,6 +32,26 @@ import {
 } from './travelV2WriteState'
 
 const SUGGESTIONS = ['推荐杭州适合慢游的景点', '帮我安排三天行程', '第二天想少走一点']
+const DECISION_TOKEN_MARKER = /\n\[\[travel-decision-token:([a-f0-9]{24})\]\]$/
+const DECISION_TOKEN_FIELD = 'decision_token'
+
+function pendingDecisionTokenFromMessages(messages: TravelConversationMessage[]): string | undefined {
+  const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+  return latestAssistant?.text.match(DECISION_TOKEN_MARKER)?.[1]
+}
+
+function pendingDecisionTokenFromResponse(response: { travel_context?: { pending_decision?: { decision_token?: string } } }): string | undefined {
+  const token = response.travel_context?.pending_decision?.decision_token
+  return typeof token === 'string' && /^[a-f0-9]{24}$/.test(token) ? token : undefined
+}
+
+function withPendingDecisionToken(text: string, token?: string): string {
+  return token ? `${text}\n[[travel-decision-token:${token}]]` : text
+}
+
+function visibleTravelMessage(text: string): string {
+  return text.replace(DECISION_TOKEN_MARKER, '')
+}
 
 type PendingTravelPlanWrite =
   | { kind: 'create'; key: string; input: CreateTravelTripV2; runId: string; replyText: string }
@@ -147,6 +167,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
   const sendText = useCallback(async (raw: string) => {
     const text = raw.trim()
     if (!text || loading || !tripAssociationReady || pendingPlanWriteRef.current) return
+    const pendingDecisionToken = pendingDecisionTokenFromMessages(messages)
     const clientRunId = `client-${Date.now()}-${nanoid(8)}`
     const controller = new AbortController()
     abortRef.current = controller
@@ -165,6 +186,9 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
         clientRunId,
         mode: 'chat',
         source: 'manual',
+        ...(pendingDecisionToken
+          ? { actionPayload: { [DECISION_TOKEN_FIELD]: pendingDecisionToken } }
+          : {}),
       })) {
         events.push(event)
         setProcess((current) => current ? reduceTravelStreamEvent(current, event) : current)
@@ -174,6 +198,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
 
       const response = outcome.response
       const replyText = response.final_answer?.trim() || '已收到，我可以继续帮你调整旅行安排。'
+      const responseDecisionToken = pendingDecisionTokenFromResponse(response)
       let tag = '旅游问答'
       const tone: TravelConversationMessage['tone'] = 'ok'
       if (outcome.kind === 'clarification') tag = '需要补充信息'
@@ -214,7 +239,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       }
       setMessages((current) => [...current, {
         id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
-        role: 'assistant', text: replyText, tag, tone,
+        role: 'assistant', text: withPendingDecisionToken(replyText, responseDecisionToken), tag, tone,
       }])
     } catch (cause) {
       if (controller.signal.aborted) return
@@ -222,13 +247,15 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       setError(message)
       setMessages((current) => [...current, {
         id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
-        role: 'assistant', text: `这次请求没有完成：${message}`, tag: '请求失败', tone: 'warn',
+        role: 'assistant',
+        text: withPendingDecisionToken(`这次请求没有完成：${message}`, pendingDecisionToken),
+        tag: '请求失败', tone: 'warn',
       }])
     } finally {
       if (abortRef.current === controller) abortRef.current = null
       setLoading(false)
     }
-  }, [associatedTripId, conversationId, loading, persistPlanWrite, setMessages, trip, tripAssociationReady])
+  }, [associatedTripId, conversationId, loading, messages, persistPlanWrite, setMessages, trip, tripAssociationReady])
 
   useEffect(() => {
     let cancelled = false
@@ -274,7 +301,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
         <section aria-label="旅行对话" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_10px_34px_rgba(31,74,130,.06)] md:rounded-[24px]">
           <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6" aria-live="polite">
             {orderedMessages.length === 0 && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs leading-6 text-[#405875] md:max-w-[76%] md:text-sm">你好，我可以和你一起规划旅行。告诉我目的地、同行人数、预算和喜欢的节奏；也可以直接问景点、天气或交通。<div className="mt-3 flex flex-wrap gap-2">{SUGGESTIONS.map((suggestion) => <button key={suggestion} type="button" onClick={() => setDraft(suggestion)} className="rounded-full border border-[#dce8f7] bg-white px-3 py-1.5 text-[10px] text-[#587494] transition hover:border-[#9cc2f4] hover:text-[#2878f5]">{suggestion}</button>)}</div></div></div>}
-            {orderedMessages.map((message) => <div key={message.id} className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>{message.role === 'assistant' && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span>}<div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-xs leading-6 md:max-w-[76%] md:text-sm ${message.role === 'user' ? 'rounded-tr-md bg-[#2878f5] text-white' : 'rounded-tl-md bg-[#f2f7fd] text-[#405875]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4882ca]'}`}>{message.tag}</span>}{message.text}{message.role === 'assistant' && message.tag === '行程已自动保存' && trip && <a href={`/travel/itineraries/${encodeURIComponent(trip.trip_id)}`} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-[#2878f5] shadow-sm">打开行程工作台 <ArrowRight size={12} aria-hidden /></a>}</div></div>)}
+            {orderedMessages.map((message) => <div key={message.id} className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>{message.role === 'assistant' && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span>}<div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-xs leading-6 md:max-w-[76%] md:text-sm ${message.role === 'user' ? 'rounded-tr-md bg-[#2878f5] text-white' : 'rounded-tl-md bg-[#f2f7fd] text-[#405875]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4882ca]'}`}>{message.tag}</span>}{visibleTravelMessage(message.text)}{message.role === 'assistant' && message.tag === '行程已自动保存' && trip && <a href={`/travel/itineraries/${encodeURIComponent(trip.trip_id)}`} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-[#2878f5] shadow-sm">打开行程工作台 <ArrowRight size={12} aria-hidden /></a>}</div></div>)}
             {loading && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={14} className="animate-spin text-[#2878f5]" aria-hidden />{processLabel || '正在连接旅游 Agent…'}</div>{process && Object.keys(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(process.stages).map(([name, stage]) => <span key={name} className={`rounded-full px-2 py-1 text-[9px] ${stage.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : stage.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-white text-[#6e8097]'}`}>{name}</span>)}</div>}</div></div>}
             {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[10px] leading-5 text-rose-800"><CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />{error}</div>}
             {writeFeedback && <div role={travelWriteStatusRole(writeFeedback.status)} className={`rounded-xl border px-3 py-2.5 text-sm leading-5 ${travelWriteStatusTone(writeFeedback.status)}`}>

@@ -21,6 +21,14 @@ V1 行程版本服务的 Active/Draft 生命周期接口已退役。V2 正式行
 
 外部搜索或交通 Provider 失败时通过现有失败策略表达错误或降级，不将空结果或失败伪装成成功。
 
+## 人工决策中断与恢复
+
+- `TRAVEL_USER_DECISION_INTERRUPT` 开启且旅游图的持久化状态为 `healthy` 时，校验器可暂停在待决冲突；`degraded` 的进程内 MemorySaver 不支持可恢复的人工暂停。暂停结果作为 `needs_clarification` 返回，不写入正式 Trip。
+- `/travel/v2/plan/stream` 只接受与待决项匹配且携带当前 `decision_token` 的明确决策（“保留”或“移除：地点名”及对应结构化 `action_payload`）来恢复同一 checkpoint。令牌绑定 checkpoint ID、身份限定 thread 与待决内容；更新后的冲突拒绝旧令牌。普通提问不会被当成确认，也不会进入暂停图或写 Trip；会继续显示待决提示。
+- checkpoint thread 由服务端身份的 tenant、user 与 conversation 共同限定。Postgres 持久化恢复通过 advisory lock 串行化，并在锁内重读暂停状态，避免重复应用确认。
+- 恢复后的计划继续经过现有 V2 Trip 写入及 revision 校验；人工决策本身不绕过 Trip API。恢复模式、结果状态和可用的 Active/Draft/图版本写入 Trace。
+- Checkpointer 与人工中断是独立开关；`TRAVEL_USER_DECISION_INTERRUPT` 默认关闭，无健康持久化时不挂起图执行。
+
 ## 维护与验证
 
 - Provider 与凭据入口见 backend/providers/travel/、backend/providers/ 和配置模块；不得在文档中复制动态 Provider 或密钥清单。
