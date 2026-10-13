@@ -52,16 +52,19 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     # the deprecated compatibility amount whose currency can be mixed.
     for workflow in (smoke, regression):
         assert "sum(coalesce(billed_cost_cny, 0))" in workflow
-        assert "GROUP BY model, provider, cost_status, pricing_source" in workflow
         assert '"cost_verification": cost_verification' in workflow
         assert '"unverified_calls": unverified_calls' in workflow
-        assert '"pricing_source": r[3] or "unknown"' in workflow
         assert '"cost_status": cost_status or "unknown"' in workflow
         assert '"UNVERIFIED" if query_failed or not rows or unverified_calls' in workflow
         assert '"verification_error": "ledger_query_failed" if query_failed else None' in workflow
-        assert 'else round(float(r[6] or 0), 6)' in workflow
         assert "sum(coalesce(cost_usd, 0))" not in workflow
-        assert '"cost_usd": round(float(r[4] or 0), 6)' not in workflow
+
+    assert "GROUP BY component, model, provider, cost_status, pricing_source" in smoke
+    assert '"pricing_source": r[4] or "unknown"' in smoke
+    assert 'else round(float(r[7] or 0), 6)' in smoke
+    assert "GROUP BY model, provider, cost_status, pricing_source" in regression
+    assert '"pricing_source": r[3] or "unknown"' in regression
+    assert 'else round(float(r[6] or 0), 6)' in regression
 
     # The regression fee-artifact step uses pathlib.Path before writing output.
     assert "from pathlib import Path" in regression
@@ -85,10 +88,23 @@ def test_cost_artifacts_mark_unpriced_calls_unverified(tmp_path, monkeypatch):
         def __exit__(self, *_args):
             return None
 
-        def execute(self, _query):
-            return None
+        def execute(self, query, _params=None):
+            self._query = query
 
         def fetchall(self):
+            if "reservation_per_call" in self._query:
+                return []
+            if "GROUP BY component, model" in self._query:
+                return [
+                    (
+                        "embedding", "embedding-model", "provider-a", "unpriced",
+                        "unpriced", 1, 12, 0,
+                    ),
+                    (
+                        "llm", "chat-model", "provider-b", "estimated",
+                        "registry_fallback", 2, 40, 0.02,
+                    ),
+                ]
             return [
                 ("embedding-model", "provider-a", "unpriced", "unpriced", 1, 12, 0),
                 (
@@ -102,6 +118,11 @@ def test_cost_artifacts_mark_unpriced_calls_unverified(tmp_path, monkeypatch):
                 ),
             ]
 
+        def fetchone(self):
+            if "count(*) FILTER" in self._query:
+                return (3, 0, 52, 0.02)
+            return None
+
     class _Connection:
         def cursor(self):
             return _Cursor()
@@ -110,6 +131,8 @@ def test_cost_artifacts_mark_unpriced_calls_unverified(tmp_path, monkeypatch):
             return None
 
     monkeypatch.setenv("MEMORY_PGDATABASE", "isolated-test-db")
+    monkeypatch.setenv("EVAL_TRIGGERED_BY", "github-actions-rag-smoke")
+    monkeypatch.setenv("EVAL_RUN_ID", "rag-smoke-contract-test")
     monkeypatch.setitem(
         sys.modules,
         "psycopg",
