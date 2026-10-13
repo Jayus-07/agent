@@ -272,3 +272,60 @@ def test_seed_from_source_db_updates_all_provider_metadata_on_conflict(monkeypat
     assert "is_builtin = EXCLUDED.is_builtin" in provider_sql
     assert provider_params[5] == '{"X-Test-Header": "masked-value"}'
     assert provider_params[6:9] == ("metered", False, True)
+
+
+def test_probe_blocks_evaluation_when_rerank_provider_fails(monkeypatch):
+    """embedding 探针成功不能掩盖 rerank Provider 失败。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import credentials as credentials_mod
+    from backend.infra.llm import health, registry_store, specialized as specialized_mod
+
+    embedding = SimpleNamespace(
+        provider_id="embedding-provider",
+        model_name="embedding-model",
+        upstream_name="",
+        base_url="https://embedding.example.invalid/v1",
+        options={"dimensions": 2},
+    )
+    rerank = SimpleNamespace(
+        provider_id="rerank-provider",
+        model_name="rerank-model",
+    )
+    bindings = {"embedding": embedding, "rerank": rerank}
+    monkeypatch.setattr(
+        specialized_mod, "resolve_binding", lambda role: bindings.get(role)
+    )
+
+    async def _refresh_registry():
+        return True
+
+    monkeypatch.setattr(registry_store, "refresh_registry", _refresh_registry)
+    monkeypatch.setattr(
+        credentials_mod,
+        "resolve_credentials",
+        lambda _provider, **_kwargs: SimpleNamespace(api_key="test-only-key"),
+    )
+
+    class _Embeddings:
+        def __init__(self, **_kwargs):
+            return None
+
+        def embed_documents(self, _texts):
+            return [[0.1, 0.2]]
+
+    monkeypatch.setitem(sys.modules, "langchain_openai", SimpleNamespace(
+        OpenAIEmbeddings=_Embeddings
+    ))
+    monkeypatch.setenv("VECTOR_PG_DIM", "2")
+    monkeypatch.setenv("MEMORY_PGDATABASE", "previous-test-db")
+    probed_models = []
+
+    def _rerank_failure(model_name):
+        probed_models.append(model_name)
+        raise RuntimeError("rerank provider is unavailable")
+
+    monkeypatch.setattr(health, "_probe_rerank", _rerank_failure)
+
+    assert seed_bindings.probe("isolated-test-db") == 1
+    assert probed_models == ["rerank-model"]

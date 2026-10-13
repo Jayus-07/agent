@@ -95,7 +95,8 @@ jobs:
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
       PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
       PROMPT_EVAL_TEST_EMBEDDING_MODEL: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_MODEL }}
-      PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS }}
+      PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}
+      VECTOR_PG_DIM: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}
       PROMPT_EVAL_TEST_RERANK_PROVIDER_ID: rag-eval-rerank
       PROMPT_EVAL_TEST_RERANK_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_RERANK_API_KEY }}
       PROMPT_EVAL_TEST_RERANK_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_RERANK_BASE_URL }}
@@ -286,9 +287,12 @@ jobs:
                   )
                   rows = cur.fetchall()
               conn.close()
-          except Exception as e:  # noqa: BLE001
-              print(f"[cost] llm_usage 查询失败: {type(e).__name__}: {e}")
-              raise SystemExit(0)
+          except Exception:  # noqa: BLE001
+              print("[cost] llm_usage 查询失败；费用状态标记为 UNVERIFIED")
+              rows = []
+              query_failed = True
+          else:
+              query_failed = False
           unverified_statuses = {"", "unpriced", "price_unknown"}
           unverified_calls = sum(
               int(r[4] or 0) for r in rows
@@ -298,7 +302,7 @@ jobs:
               int(r[4] or 0) for r in rows if (r[2] or "").lower() == "estimated"
           )
           cost_verification = (
-              "UNVERIFIED" if not rows or unverified_calls
+              "UNVERIFIED" if query_failed or not rows or unverified_calls
               else "ESTIMATED" if estimated_calls else "VERIFIED"
           )
           summary = []
@@ -321,6 +325,7 @@ jobs:
               json.dumps({
                   "note": "隔离测试库账本，未同步生产计费",
                   "cost_verification": cost_verification,
+                  "verification_error": "ledger_query_failed" if query_failed else None,
                   "unverified_calls": unverified_calls,
                   "usage": summary,
               },

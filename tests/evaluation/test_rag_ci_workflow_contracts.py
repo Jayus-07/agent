@@ -35,6 +35,11 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     # 真实评测账本写入依赖此开关；两个 workflow 使用独立临时数据库。
     assert 'OBS_ANALYTICS_ENABLED: "true"' in smoke
     assert 'OBS_ANALYTICS_ENABLED: "true"' in regression
+    expected_vector_dim = "${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}"
+    assert f"PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: {expected_vector_dim}" in smoke
+    assert f"VECTOR_PG_DIM: {expected_vector_dim}" in smoke
+    assert f"PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: {expected_vector_dim}" in regression
+    assert f"VECTOR_PG_DIM: {expected_vector_dim}" in regression
 
     # Both workflows summarize the Billing V2 base-currency field (CNY), not
     # the deprecated compatibility amount whose currency can be mixed.
@@ -45,7 +50,8 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
         assert '"unverified_calls": unverified_calls' in workflow
         assert '"pricing_source": r[3] or "unknown"' in workflow
         assert '"cost_status": cost_status or "unknown"' in workflow
-        assert '"UNVERIFIED" if not rows or unverified_calls' in workflow
+        assert '"UNVERIFIED" if query_failed or not rows or unverified_calls' in workflow
+        assert '"verification_error": "ledger_query_failed" if query_failed else None' in workflow
         assert 'else round(float(r[6] or 0), 6)' in workflow
         assert "sum(coalesce(cost_usd, 0))" not in workflow
         assert '"cost_usd": round(float(r[4] or 0), 6)' not in workflow
@@ -128,3 +134,36 @@ def test_cost_artifacts_mark_unpriced_calls_unverified(tmp_path, monkeypatch):
             row for row in artifact["usage"] if row["cost_status"] == "estimated"
         )
         assert estimated["billed_cost_cny"] == 0.02
+
+
+def test_cost_artifact_marks_ledger_query_failure_unverified(
+    tmp_path, monkeypatch, capsys
+):
+    """账本查询异常也留下脱敏 UNVERIFIED artifact。"""
+
+    def _raise_connection_error(**_kwargs):
+        raise RuntimeError("credential-sentinel-must-not-leak")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=_raise_connection_error),
+    )
+
+    for workflow_name in ("rag_smoke.yml", "rag_regression.yml"):
+        run_dir = tmp_path / workflow_name
+        run_dir.mkdir()
+        monkeypatch.chdir(run_dir)
+        workflow = (ROOT / ".github/workflows" / workflow_name).read_text(
+            encoding="utf-8"
+        )
+        exec(compile(_cost_attribution_script(workflow), workflow_name, "exec"), {})
+        artifact = json.loads(
+            (run_dir / "data/eval_runs/llm_usage_summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert artifact["cost_verification"] == "UNVERIFIED"
+        assert artifact["verification_error"] == "ledger_query_failed"
+        assert artifact["usage"] == []
+        assert "credential-sentinel-must-not-leak" not in capsys.readouterr().out

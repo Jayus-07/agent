@@ -364,6 +364,25 @@ def verify(target_db: str) -> int:
     return 0
 
 
+def _probe_rerank_binding(specialized_mod, credentials_mod) -> None:
+    """通过生产 reranker 后端对当前 rerank 绑定发出真实请求。"""
+    binding = specialized_mod.resolve_binding("rerank")
+    if binding is None:
+        raise RuntimeError("rerank binding 缺失")
+    credentials = credentials_mod.resolve_credentials(
+        binding.provider_id,
+        model_name=binding.model_name,
+    )
+    if not credentials.api_key:
+        raise RuntimeError("rerank 供应商凭据缺失")
+
+    # 复用健康探针的生产后端路径；该函数直接调用后端而不是会软降级的
+    # RerankCompressor，因此 Provider 失败会向上传播并阻断评测。
+    from backend.infra.llm.health import _probe_rerank
+
+    _probe_rerank(binding.model_name)
+
+
 def psycopg_extras_json(value):
     """dict → psycopg JSON 适配（None 原样返回）。"""
     if value is None:
@@ -421,7 +440,7 @@ def probe(target_db: str) -> int:
         vecs = OpenAIEmbeddings(**kwargs).embed_documents(["评测绑定探针"])
         actual_dims = len(vecs[0])
     except Exception as e:  # noqa: BLE001 — 探针失败必须阻断评测
-        print(f"[probe] FAIL embedding API 调用失败: {type(e).__name__}: {str(e)[:200]}")
+        print(f"[probe] FAIL embedding API 调用失败: {type(e).__name__}")
         print("[probe] EVAL_MODEL_PROBE=failed —— 评测保持 BLOCKED")
         return 1
 
@@ -436,6 +455,15 @@ def probe(target_db: str) -> int:
         print(f"[probe] FAIL 实际维度 {actual_dims} ≠ 向量存储维度 {expected_store_dim}")
         print("[probe] EVAL_MODEL_PROBE=failed —— 评测保持 BLOCKED")
         return 1
+
+    try:
+        _probe_rerank_binding(specialized_mod, credentials_mod)
+    except Exception as e:  # noqa: BLE001 — rerank 是评测硬依赖，失败必须阻断
+        print(f"[probe] FAIL rerank API 调用失败: {type(e).__name__}")
+        print("[probe] EVAL_MODEL_PROBE=failed —— 评测保持 BLOCKED")
+        return 1
+
+    print("[probe] rerank API probe passed")
     print("[probe] EVAL_MODEL_PROBE=passed")
     return 0
 
