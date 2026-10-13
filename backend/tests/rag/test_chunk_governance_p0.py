@@ -113,16 +113,26 @@ def test_qa_strategy_keeps_plain_paragraphs():
 
 
 def test_coverage_audit_detects_uncovered_leaf():
-    """覆盖对账：策略漏掉的叶子被检出（uncovered_count > 0）。"""
+    """删除一个输出 Leaf 后，Parent 不得代替它通过覆盖对账。"""
     ast = DocumentAST(
         root=DocumentNode(type="section", text="", level=0, children=[
-            DocumentNode(type="paragraph", text="已覆盖的段落。"),
-            DocumentNode(type="paragraph", text="完全没进 chunk 的孤儿段落。"),
+            DocumentNode(type="section", text="A", level=1, children=[
+                DocumentNode(type="paragraph", text="已覆盖的段落内容。"),
+            ]),
+            DocumentNode(type="section", text="B", level=1, children=[
+                DocumentNode(type="paragraph", text="完全没进 chunk 的孤儿段落。"),
+            ]),
         ]),
         raw_text="已覆盖的段落。完全没进 chunk 的孤儿段落。",
     )
-    from langchain_core.documents import Document
-    chunks = [Document(page_content="已覆盖的段落。", metadata={})]
+    chunks = StructureChunkStrategy().split(ast, "doc.md")
+    removed_leaf = next(
+        c for c in chunks
+        if c.metadata.get("granularity") == "leaf"
+        and "孤儿段落" in c.page_content
+    )
+    chunks.remove(removed_leaf)
+
     report = coverage_audit(ast, chunks)
     assert report["uncovered_count"] == 1
     assert "孤儿段落" in report["uncovered_samples"][0]["preview"]
@@ -138,6 +148,70 @@ def test_coverage_audit_full_coverage(tmp_path):
     chunks = StructureChunkStrategy().split(ast, "doc.md")
     report = coverage_audit(ast, chunks)
     assert report["uncovered_count"] == 0, report
+
+
+def test_coverage_audit_ignores_parent_chunks():
+    """Parent 即使包含全文也不能替代检索实际输出的 Leaf。"""
+    from langchain_core.documents import Document
+
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text="这段正文必须进入 Leaf。"),
+        ]),
+        raw_text="这段正文必须进入 Leaf。",
+    )
+    parent_only = [Document(
+        page_content="这段正文必须进入 Leaf。",
+        metadata={"granularity": "parent"},
+    )]
+
+    report = coverage_audit(ast, parent_only)
+    assert report["uncovered_count"] == 1
+
+
+def test_coverage_audit_detects_missing_table_cell_and_row():
+    """表格只有部分行/单元格进入 Leaf 时不能按单个命中判全表覆盖。"""
+    from langchain_core.documents import Document
+
+    rows = [
+        ["SKU", "品名", "数量"],
+        ["A001", "苹果", "100"],
+        ["B002", "梨", "200"],
+    ]
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="table", text="SKU 品名 数量 A001 苹果 100 B002 梨 200", rows=rows),
+        ]),
+        raw_text="SKU 品名 数量 A001 苹果 100 B002 梨 200",
+    )
+    chunks = [Document(
+        page_content="SKU 品名 数量 A001 苹果 100 B002 梨",
+        metadata={"granularity": "leaf"},
+    )]
+
+    report = coverage_audit(ast, chunks)
+    assert report["uncovered_count"] == 1
+    assert report["table_cells_uncovered"] >= 1
+
+
+def test_sampled_coverage_never_claims_full_document_percentage():
+    """抽样结果保留全量节点数与已审样本数，不输出全量 100%。"""
+    from langchain_core.documents import Document
+
+    texts = [f"文档段落{i}包含必须检索到的内容。" for i in range(8)]
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=text) for text in texts
+        ]),
+        raw_text="\n".join(texts),
+    )
+    chunks = [Document(page_content=t, metadata={"granularity": "leaf"}) for t in texts]
+
+    report = coverage_audit(ast, chunks, max_audit_nodes=2)
+    assert report["sampled"] is True
+    assert report["leaf_total"] == 8
+    assert report["audited_leaf_count"] == 2
+    assert report["coverage_rate"] is None
 
 
 # ── P0-03：Parent/Leaf ID 契约 ───────────────────────────────────

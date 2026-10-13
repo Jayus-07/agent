@@ -3,7 +3,7 @@
 - 分支：`task/rag-upload-chunk-governance-20261013`
 - worktree：`D:/Program Files/workplace/agent-wt-rag-chunk-gov-20261013`
 - 基线：origin/main @ 2d1d0b1
-- 状态：DONE（全部批次完成，待 PR 审查）
+- 状态：IN_PROGRESS（原实现批次完成；PR #55 审查意见收口中）
 
 ## 目标
 
@@ -54,3 +54,11 @@ UnifiedMetadata/DecisionEnvelope/Parent-Leaf/MetadataStage/QualityGate/候选发
 - 不删除现有元数据字段或切分策略，除非有调用方证据。
 - Semantic 切分保持默认关闭。
 - 隔离测试 KB 验收，不污染正式知识库。
+
+## PR #55 审查收口范围
+
+- 只修复已复现的 CSV/Excel 资源上限、Financial 根正文 Leaf、Coverage Audit 和质量门禁缺陷；不重构 RAG、不新增质量系统、不改 `MAX_CHUNKS_PER_DOC` 失败策略。
+- CSV 解析内存有界并保留字符串精度；Excel 的行数/单元格额度按 Workbook 累计且触顶停止；解析截断不允许以部分内容进入 `active`。
+- 覆盖审计只基于实际输出 Leaf；覆盖缺口与审计失败由现有 QualityGate 阻断，并记录到 Quality Record、`quality_issues` 和 Trace。
+- 修复后回归、定向 RAG 门禁、Secret Scan 与 RAG Smoke 均须有实际执行证据；未执行项目不得报告通过。
+- PR #55 现有分支提交修复，不创建 PR、不合并 main。

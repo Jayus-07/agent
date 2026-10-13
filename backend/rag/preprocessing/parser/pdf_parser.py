@@ -213,7 +213,7 @@ class PdfParser(BaseDocumentParser):
         # ChunkingEmptyError 报"扫描件无法解析"，与旧行为一致）。
         # P0 超长文档收口（2026-10-13）：页数上限/失败页不再静默——
         # AST 记录 ocr_page_limit / ocr_failed_pages，quality_gate 产出
-        # ocr_coverage_partial 留痕，展示覆盖情况，不伪装完整成功。
+        # ocr_coverage_partial 硬异常，禁止部分 OCR 内容进入 active。
         ocr_required = False
         ocr_attempted = False
         ocr_pages = 0

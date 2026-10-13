@@ -1287,17 +1287,77 @@ class IncrementalIndexer:
         # ═══ §5.1–5.3 质量门禁（2026-09-17 R3）：每文档质量记录 + 类型化校验 ═══
         # 记录 JSON 落盘 data/quality_records/{kb}/{doc_id}.json；硬异常（0 叶子/
         # 0 字符等）抛错 → 文档 failed 不得伪装 active；软异常（截断/降级/大量
-        # 过滤/值丢失）追加 quality_issues 留痕。门禁自身故障不阻断索引主流程。
+        # 过滤/值丢失）追加 quality_issues 留痕。覆盖审计缺失/失败必须阻断，
+        # 其他非完整性质量记录故障仍沿用既有 best-effort 行为。
         _raw_ast = _qc.get("raw_ast")
         if _raw_ast is not None:
+            _coverage = _qc.get("coverage")
+            if not isinstance(_coverage, dict):
+                _coverage = {"error": "coverage audit result missing"}
+            _coverage_fields = {
+                "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
+            }
+            _coverage_error = (
+                bool(_coverage.get("error"))
+                or not _coverage_fields.issubset(_coverage)
+            )
+            try:
+                _coverage_leaf_total = int(_coverage.get("leaf_total") or 0)
+                _coverage_audited_count = int(
+                    _coverage.get("audited_leaf_count") or 0
+                )
+                _coverage_uncovered_count = int(
+                    _coverage.get("uncovered_count") or 0
+                )
+                if (
+                    _coverage_leaf_total < 0
+                    or _coverage_audited_count < 0
+                    or _coverage_uncovered_count < 0
+                    or _coverage_audited_count > _coverage_leaf_total
+                    or _coverage_uncovered_count > _coverage_audited_count
+                    or (
+                        _coverage_audited_count < _coverage_leaf_total
+                        and _coverage.get("sampled") is not True
+                    )
+                    or not isinstance(_coverage.get("sampled"), bool)
+                ):
+                    _coverage_error = True
+            except (TypeError, ValueError):
+                _coverage_leaf_total = 0
+                _coverage_audited_count = 0
+                _coverage_uncovered_count = 0
+                _coverage_error = True
+            _coverage_requires_failure = bool(
+                _coverage_error
+                or _coverage_uncovered_count > 0
+            )
+            _coverage_issue = (
+                "coverage_audit_failed" if _coverage_error
+                else "coverage_gap" if _coverage_uncovered_count > 0
+                else ""
+            )
+            _coverage_metrics = {
+                "coverage_sampled": bool(_coverage.get("sampled")),
+                "coverage_leaf_total": _coverage_leaf_total,
+                "coverage_audited_leaf_count": _coverage_audited_count,
+                "coverage_uncovered_count": _coverage_uncovered_count,
+                "coverage_audit_error": _coverage_error,
+                "coverage_issue": _coverage_issue,
+            }
             q_span = trace_collector.start_span(
                 "index_quality",
                 parent_id="index_upload",
                 name="Quality record",
                 type="audit",
                 kind=SpanKind.INDEX_PARSE.value,
-                input={"file_path": file_path, "doc_id": doc_id},
+                input={
+                    "file_path": file_path, "doc_id": doc_id,
+                    # Trace 只记录覆盖审计摘要，避免将未覆盖正文样本写入 Trace。
+                    "coverage": _coverage_metrics,
+                },
             )
+            _hard = []
+            _quality_record_saved = False
             try:
                 from backend.rag.preprocessing.quality_gate import (
                     anomaly_summary,
@@ -1319,28 +1379,47 @@ class IncrementalIndexer:
                     ocr_triggered=bool(getattr(_raw_ast, "ocr_triggered", False)),
                     ocr_pages=int(getattr(_raw_ast, "ocr_pages", 0) or 0),
                     route_decision=_qc.get("route_decision"),
+                    coverage=_coverage,
                 )
                 _anomalies = run_typed_validation(_record, _raw_ast)
                 _hard = hard_anomalies(_anomalies)
-                if _hard:
-                    # §5.3 硬异常：文档不得伪装 active
-                    raise ValueError(
-                        f"质量门禁硬异常: {_hard[0]['check']}({_hard[0]['detail']})"
-                    )
-                _soft = anomaly_summary(_anomalies)
-                if _soft:
-                    _append_quality_issue(doc_meta, _soft)
+                _summary = anomaly_summary(_anomalies, include_hard=True)
+                if _summary:
+                    _append_quality_issue(doc_meta, _summary)
+                _record["quality_issues"] = doc_meta.get("quality_issues", "")
                 # TD-09：质量分落 doc_meta（→ registry quality_score 列），
                 # 替代此前恒 0 的默认值；评分同步写进质量记录便于审计
                 doc_meta["quality_score"] = compute_quality_score(_anomalies)
                 _record.setdefault("validation", {})["score"] = doc_meta["quality_score"]
                 _qpath = persist_quality_record(_record)
+                _quality_record_saved = True
                 doc_meta["quality_record_path"] = _qpath
+                if _hard:
+                    # 先持久化完整异常，再复用现有上传失败终态。即使覆盖
+                    # 缺口已知，质量记录留痕失败也不能继续 active。候选模式
+                    # 不能改写同路径旧 active 行，问题码随质量记录/Trace 留存。
+                    doc_meta["quality_status"] = "failed"
+                    if not self.candidate_mode:
+                        self.registry.update_fields(
+                            path_id,
+                            {
+                                "quality_issues": doc_meta.get("quality_issues", ""),
+                                "quality_score": doc_meta["quality_score"],
+                                "quality_status": "failed",
+                            },
+                        )
+                    raise ValueError(
+                        f"质量门禁硬异常: {_hard[0]['check']}({_hard[0]['detail']})"
+                    )
+                doc_meta["quality_status"] = (
+                    "soft_warning" if _anomalies else "pass"
+                )
                 trace_collector.end_span(q_span,
                     metrics={"anomalies_total": len(_anomalies),
                              "anomalies_hard": len(_hard),
                              "anomalies_warn": len(_anomalies) - len(_hard),
-                             "record_path": _qpath})
+                             "record_path": _qpath,
+                             **_coverage_metrics})
                 logger.info(
                     f"[Indexer] 质量记录 {_qpath} "
                     f"(nodes={_record['parsing']['node_count']}, "
@@ -1349,11 +1428,64 @@ class IncrementalIndexer:
                 )
             except ValueError:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": "quality_gate_hard_anomaly"})
+                    metrics={"error": "quality_gate_hard_anomaly",
+                             **_coverage_metrics})
+                if (
+                    _coverage_requires_failure
+                    and not _quality_record_saved
+                    and not self.candidate_mode
+                ):
+                    if _coverage_issue not in str(
+                        doc_meta.get("quality_issues", "")
+                    ):
+                        _append_quality_issue(
+                            doc_meta,
+                            "quality_anomaly:" + _coverage_issue,
+                        )
+                    doc_meta["quality_status"] = "failed"
+                    try:
+                        self.registry.update_fields(
+                            path_id,
+                            {
+                                "quality_issues": doc_meta.get("quality_issues", ""),
+                                "quality_status": "failed",
+                            },
+                        )
+                    except Exception:
+                        logger.warning(
+                            "[Indexer] 覆盖异常写入 registry 失败",
+                            exc_info=True,
+                        )
                 raise
             except Exception as e:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": str(e)[:200]})
+                    metrics={"error": str(e)[:200], **_coverage_metrics})
+                if _coverage_requires_failure:
+                    if _coverage_issue not in str(
+                        doc_meta.get("quality_issues", "")
+                    ):
+                        _append_quality_issue(
+                            doc_meta,
+                            "quality_anomaly:" + _coverage_issue,
+                        )
+                    doc_meta["quality_status"] = "failed"
+                    if not self.candidate_mode:
+                        try:
+                            self.registry.update_fields(
+                                path_id,
+                                {
+                                    "quality_issues": doc_meta.get("quality_issues", ""),
+                                    "quality_status": "failed",
+                                },
+                            )
+                        except Exception:
+                            logger.warning(
+                                "[Indexer] 覆盖异常写入 registry 失败",
+                                exc_info=True,
+                            )
+                    raise ValueError(
+                        "质量门禁无法完成覆盖审计，拒绝将文档置为 active"
+                    ) from e
                 logger.warning(
                     f"[Indexer] 质量记录构建失败（不阻断索引）: "
                     f"{type(e).__name__}: {e}", exc_info=True,

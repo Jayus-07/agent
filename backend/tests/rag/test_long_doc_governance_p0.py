@@ -1,7 +1,7 @@
 """test_long_doc_governance_p0.py — P0 超长文档完整处理回归（2026-10-13）。
 
 覆盖任务书批次 2 验收点：
-- CSV 前导零 SKU / 精确数字无损失（pandas 不做数值推断）
+- CSV 前导零 SKU / 精确数字无损失（流式字符串读取不做数值推断）
 - Excel 整数单元格无 ".0" 尾巴；行数上限截断留痕 AST
 - chunk 超单文档上限 → 质量门禁硬异常（文档不得以截断状态 active）
 - OCR 页数上限 / 失败页留痕（覆盖情况展示，不伪装完整成功）
@@ -51,6 +51,21 @@ class TestCsvLeadingZero:
         # 不再出现数值化的 "123" / 科学计数 / 浮点尾巴
         assert "00123.0" not in flat
 
+    def test_gbk_csv_fallback_preserves_raw_strings(self, tmp_path):
+        """GBK 回退仍保留中文、前导零与长订单号。"""
+        path = tmp_path / "gbk.csv"
+        path.write_bytes(
+            "SKU,订单号,名称\n00123,202610130001234567,商品\n".encode("gbk")
+        )
+        ast = CsvParser().parse(str(path))
+        from backend.rag.preprocessing.ast import walk as _walk
+
+        table = next(n for n in _walk(ast.root) if n.type == "table")
+        flat = "\n".join(cell for row in table.rows for cell in row)
+        assert "00123" in flat
+        assert "202610130001234567" in flat
+        assert "商品" in flat
+
     def test_row_limit_truncation_marked(self, tmp_path, monkeypatch):
         import backend.config.rag as rag_cfg
 
@@ -63,6 +78,31 @@ class TestCsvLeadingZero:
         from backend.rag.preprocessing.ast import walk as _walk
         table = next(n for n in _walk(ast.root) if n.type == "table")
         assert len(table.rows) <= 5
+
+    def test_csv_streaming_enforces_row_and_cell_caps_without_dataframe(self, tmp_path, monkeypatch):
+        """超长和超宽 CSV 在读取时受限，且准确记录完整扫描得到的截断量。"""
+        import pandas as pd
+        import backend.config.rag as rag_cfg
+
+        monkeypatch.setattr(rag_cfg, "RAG_TABLE_MAX_ROWS", 10_000)
+        monkeypatch.setattr(rag_cfg, "RAG_TABLE_MAX_CELLS", 2_500)
+        monkeypatch.setattr(
+            pd, "read_csv",
+            lambda *args, **kwargs: pytest.fail("CSV 不应整份载入 DataFrame"),
+        )
+        header = [f"列{i}" for i in range(1_000)]
+        rows = [[f"值{r}-{c}" for c in range(1_000)] for r in range(100)]
+        path = _write_csv(tmp_path, "超宽.csv", header, rows)
+
+        ast = CsvParser().parse(path)
+        from backend.rag.preprocessing.ast import walk as _walk
+
+        table = next(n for n in _walk(ast.root) if n.type == "table")
+        assert sum(map(len, table.rows)) <= 2_500
+        assert ast.table_rows_total == 100
+        assert ast.table_rows_truncated == 99
+        assert ast.table_cells_total == 101_000
+        assert ast.table_cells_truncated == 99_000
 
 
 class TestExcelCellFidelity:
@@ -103,7 +143,78 @@ class TestExcelCellFidelity:
         path = self._xlsx(tmp_path, {"S1": rows})
         ast = ExcelParser().parse(path)
         assert ast.table_rows_truncated > 0
-        assert ast.table_rows_total >= 31
+        assert ast.table_rows_total == 4  # 不读取上限外的下一行
+        assert ast.table_rows_total_known is False
+
+    def test_workbook_limits_are_cumulative_and_stop_later_sheets(self, tmp_path, monkeypatch):
+        """行/单元格上限按工作簿累计，触顶后不再读取后续 Sheet。"""
+        import backend.config.rag as rag_cfg
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+
+        monkeypatch.setattr(rag_cfg, "RAG_TABLE_MAX_ROWS", 5)
+        monkeypatch.setattr(rag_cfg, "RAG_TABLE_MAX_CELLS", 100)
+        original_iter_rows = ReadOnlyWorksheet.iter_rows
+        visited_sheets = []
+
+        def track_iter_rows(self, *args, **kwargs):
+            visited_sheets.append(self.title)
+            if self.title == "NeverRead":
+                pytest.fail("达到工作簿上限后仍读取了后续 Sheet")
+            yield from original_iter_rows(self, *args, **kwargs)
+
+        monkeypatch.setattr(ReadOnlyWorksheet, "iter_rows", track_iter_rows)
+        path = self._xlsx(tmp_path, {
+            "First": [["ID", "值"], ["00123", 1], ["A2", 2]],
+            "Second": [["ID", "值"], ["B1", 3], ["B2", 4]],
+            "NeverRead": [["ID", "值"], ["C1", 5]],
+        })
+
+        ast = ExcelParser().parse(path)
+        from backend.rag.preprocessing.ast import walk as _walk
+
+        sections = [n.text for n in _walk(ast.root) if n.type == "section" and n.level == 1]
+        tables = [n for n in _walk(ast.root) if n.type == "table"]
+        assert sections == ["First", "Second"]
+        assert visited_sheets == ["First", "Second"]
+        assert sum(len(t.rows) for t in tables) == 5
+        assert ast.table_rows_truncated == 1
+        assert ast.table_rows_total == 5  # 触顶即停，不读取第 6 行
+        assert ast.table_rows_total_known is False
+        assert "00123" in "\n".join(c for row in tables[0].rows for c in row)
+
+    def test_cell_limit_is_cumulative_and_stops_before_next_sheet(
+        self, tmp_path, monkeypatch,
+    ):
+        """单元格总预算跨 Sheet 累计，触顶后不实例化后续 Sheet。"""
+        import backend.config.rag as rag_cfg
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+
+        monkeypatch.setattr(rag_cfg, "RAG_TABLE_MAX_ROWS", 100)
+        monkeypatch.setattr(rag_cfg, "RAG_TABLE_MAX_CELLS", 4)
+        original_iter_rows = ReadOnlyWorksheet.iter_rows
+        visited_sheets = []
+
+        def track_iter_rows(self, *args, **kwargs):
+            visited_sheets.append(self.title)
+            if self.title == "NeverRead":
+                pytest.fail("单元格达到工作簿上限后仍读取了后续 Sheet")
+            yield from original_iter_rows(self, *args, **kwargs)
+
+        monkeypatch.setattr(ReadOnlyWorksheet, "iter_rows", track_iter_rows)
+        path = self._xlsx(tmp_path, {
+            "First": [["h1", "h2"], ["a", "b"]],
+            "NeverRead": [["h1", "h2"], ["c", "d"]],
+        })
+
+        ast = ExcelParser().parse(path)
+        from backend.rag.preprocessing.ast import walk as _walk
+
+        tables = [n for n in _walk(ast.root) if n.type == "table"]
+        assert visited_sheets == ["First"]
+        assert sum(len(row) for table in tables for row in table.rows) == 4
+        assert ast.table_cells_total == 4
+        assert ast.table_cells_total_known is False
+        assert ast.table_cells_truncated >= 1
 
 
 class TestTruncatedDocNotActive:
@@ -139,7 +250,7 @@ class TestTruncatedDocNotActive:
 
 
 class TestOcrCoverageMarked:
-    """OCR 页数上限 / 失败页留痕 → ocr_coverage_partial（warn 展示覆盖）。"""
+    """OCR 页数上限 / 失败页留痕 → 不完整内容进入失败终态。"""
 
     def test_ocr_partial_coverage_flagged(self, tmp_path):
         ast = DocumentAST(
@@ -167,12 +278,12 @@ class TestOcrCoverageMarked:
         assert partial, anomalies
         assert "上限 100" in partial[0]["detail"]
         assert "失败页 3" in partial[0]["detail"]
-        # 覆盖不完整是展示性留痕（warn），不是硬失败
-        assert partial[0]["severity"] == "warn"
+        # OCR 页数上限或失败页代表源内容缺失，不能以 partial 状态 active。
+        assert partial[0]["severity"] == "error"
 
 
 class TestTableTruncationFlagged:
-    def test_table_rows_truncated_warn(self, tmp_path):
+    def test_table_rows_truncated_is_hard_error(self, tmp_path):
         ast = DocumentAST(
             root=DocumentNode(type="section", text="", level=0, children=[
                 DocumentNode(type="table", text="h1,h2\nv1,1",
@@ -193,6 +304,44 @@ class TestTableTruncationFlagged:
         flagged = [a for a in anomalies if a["check"] == "table_rows_truncated"]
         assert flagged
         assert "900" in flagged[0]["detail"]
+        assert flagged[0]["severity"] == "error"
+
+
+def test_financial_oversized_root_body_emits_bounded_linked_leaves(monkeypatch):
+    """无标题超长财务正文要生成 Parent 与有链接的有界 Leaf。"""
+    import backend.rag.preprocessing.chunking as chunking
+    from backend.rag.preprocessing.chunking import FinancialTableChunkStrategy
+    from backend.rag.preprocessing.ast import walk
+    from backend.rag.preprocessing.chunking import count_tokens
+
+    monkeypatch.setattr(chunking, "PARENT_CHUNK_TOKENS", 80)
+    monkeypatch.setattr(chunking, "LEAF_CHUNK_TOKENS", 24)
+    body = "\n".join(
+        f"财务正文标记{i:04d}：本期经营收入和现金流数据持续披露。"
+        for i in range(120)
+    )
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=body),
+        ]),
+        source_file="无标题财务报告.txt",
+        raw_text=body,
+    )
+
+    chunks = FinancialTableChunkStrategy().split(ast, ast.source_file)
+    parents = [c for c in chunks if c.metadata.get("granularity") == "parent"]
+    leaves = [c for c in chunks if c.metadata.get("granularity") == "leaf"]
+    parent_ids = {c.metadata["chunk_id"] for c in parents}
+
+    assert parents
+    assert leaves
+    assert all(c.metadata.get("parent_chunk_id") in parent_ids for c in leaves)
+    assert all(count_tokens(c.page_content) <= 24 for c in leaves)
+    assert all(count_tokens(c.page_content) <= 80 for c in parents)
+    leaf_text = "\n".join(c.page_content for c in leaves)
+    assert "财务正文标记0000" in leaf_text
+    assert "财务正文标记0119" in leaf_text
+    assert any(n.type == "paragraph" for n in walk(ast.root))
 
 
 def _empty_ast() -> DocumentAST:

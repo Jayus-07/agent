@@ -43,15 +43,20 @@ class DocumentAST:
     ocr_attempted: bool = False
     ocr_triggered: bool = False
     ocr_pages: int = 0  # 实际产出文本的 OCR 页数（失败页不计）
-    # P0 超长文档收口（2026-10-13）：覆盖情况展示——字段追加在尾部，
+    # P0 超长文档收口（2026-10-13）：OCR 部分覆盖检查——字段追加在尾部，
     # 位置构造兼容。ocr_page_limit>0 表示 OCR 触发 RAG_OCR_MAX_PAGES 上限、
     # 其后页面未识别；ocr_failed_pages 为 OCR 失败页数。
     ocr_page_limit: int = 0
     ocr_failed_pages: int = 0
-    # 表格解析资源保护截断（ExcelParser/CsvParser 写入）：超行数/单元格
-    # 上限后停止读取，截断行数与总行数留痕（quality_issues 展示覆盖）。
+    # 表格解析资源保护：CSV 流式计数可得精确总量；Excel 达到上限即停止，
+    # total_known=False 时总量与截断量都只报告已观察到的下界。
     table_rows_truncated: int = 0
     table_rows_total: int = 0
+    table_rows_total_known: bool = True
+    table_cells_truncated: int = 0
+    table_cells_total: int = 0
+    table_cells_total_known: bool = True
+    table_truncation_reason: str = ""
 
 
 def walk(node: DocumentNode) -> Iterator[DocumentNode]:

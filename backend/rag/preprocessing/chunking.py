@@ -1403,6 +1403,22 @@ class FinancialTableChunkStrategy:
                     file_path, f"parent:{anchor}:{gi}", sub)
                 StructureChunkStrategy._emit_parent(
                     chunks, file_path, sec, path, sub, parent_id)
+                # 根正文超 Parent 预算时也必须保留可检索 Leaf；每个 Leaf
+                # 归属当前 Parent，并再次按 Leaf 预算切分，避免 Parent 被
+                # 写入全文但实际索引侧无内容。
+                for li, leaf_text in enumerate(_split_to_budget(
+                        sub, LEAF_CHUNK_TOKENS, overlap=0)):
+                    chunks.append(_make_doc(leaf_text, {
+                        "granularity": "leaf",
+                        "chunk_id": _chunk_id(
+                            file_path, f"leaf:{anchor}:{gi}:{li}", leaf_text,
+                        ),
+                        "parent_chunk_id": parent_id,
+                        "section_path": path,
+                        "section_title": sec.text,
+                        "section_level": sec.level,
+                        "chunk_tokens": count_tokens(leaf_text),
+                    }))
 
     def _split_with_tables(
         self, sec, path: list, file_path: str, rows_per_chunk: int,
@@ -1705,55 +1721,139 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
     防止 O(n²) 子串匹配拖垮索引主流程。审计失败不抛异常——返回
     {"error": ...}，安全网自身不能成为新的失败点。
     """
+    def _normalize(text: str) -> str:
+        return " ".join(str(text or "").split()).casefold()
+
+    def _windows(text: str) -> list[str]:
+        if len(text) <= 120:
+            return [text] if text else []
+        stride = 80
+        windows = [text[i:i + 120] for i in range(0, len(text), stride)]
+        if windows and len(windows[-1]) < 40:
+            windows[-1] = text[-120:]
+        return windows
+
     try:
-        leaves: list[tuple[str, str, list | None]] = []
-        for n in walk(ast.root):
-            if n.type in LEAF_TYPES:
-                t = (n.text or "").strip()
-                if t:
-                    rows = getattr(n, "rows", None) if n.type == "table" else None
-                    leaves.append((n.type, t, rows))
-        bodies = [(c.page_content or "") for c in chunks
-                  if getattr(c, "page_content", None)]
-        sampled = len(leaves) > max_audit_nodes or len(bodies) > max_audit_nodes
-        if sampled:
-            step_l = max(1, len(leaves) // max_audit_nodes)
-            step_c = max(1, len(bodies) // max_audit_nodes)
-            leaves = leaves[::step_l]
-            bodies = bodies[::step_c]
-        covered, uncovered = 0, []
-        for ntype, text, rows in leaves:
-            probe = text[:60]
-            hit = False
-            for body in bodies:
-                if probe in body:
-                    hit = True
-                    break
-                core = body[:200]
-                if len(core) >= 40 and core in text:
-                    hit = True
-                    break
-            if not hit and rows:
-                # 表格叶子走双层切分时文本被等价改写（表级 NL 摘要 + 行级
-                # kv）——覆盖判定以单元格内容为准：任一非空 cell 文本出现
-                # 在任一 chunk 中即视为覆盖（精确数字/前导零可追溯）。
-                cells = [str(c).strip() for row in rows for c in row
-                         if str(c).strip()]
-                for cell in cells[:50]:
-                    if any(cell in body for body in bodies):
-                        hit = True
-                        break
-            if hit:
+        source_leaves = [
+            n for n in walk(ast.root)
+            if n.type in LEAF_TYPES and (
+                (n.text or "").strip()
+                or (n.type == "table" and any(
+                    str(cell).strip()
+                    for row in (n.rows or []) for cell in row
+                ))
+            )
+        ]
+        # Parent 只供上下文扩展，绝不能计入可索引内容覆盖。
+        bodies = [
+            _normalize(c.page_content)
+            for c in chunks
+            if (getattr(c, "page_content", None)
+                and getattr(c, "metadata", {}).get("granularity") == "leaf")
+        ]
+        max_audit_nodes = max(1, int(max_audit_nodes))
+        sampled = len(source_leaves) > max_audit_nodes or len(bodies) > max_audit_nodes
+        if len(source_leaves) > max_audit_nodes:
+            stride = max(1, math.ceil(len(source_leaves) / max_audit_nodes))
+            leaves = source_leaves[::stride][:max_audit_nodes]
+        else:
+            leaves = source_leaves
+
+        def _covered_text(text: str) -> bool:
+            normalized = _normalize(text)
+            probes = _windows(normalized)
+            return bool(probes) and all(
+                any(probe in body for body in bodies)
+                for probe in probes
+            )
+
+        covered = 0
+        uncovered: list[dict] = []
+        table_rows_total = 0
+        table_rows_uncovered = 0
+        table_cells_total = 0
+        table_cells_uncovered = 0
+
+        for node in leaves:
+            text = (node.text or "").strip()
+            rows = getattr(node, "rows", None) if node.type == "table" else None
+            if not rows:
+                hit = _covered_text(text)
+                if hit:
+                    covered += 1
+                else:
+                    uncovered.append({"type": node.type, "preview": text[:80]})
+                continue
+
+            # 行级和单元格级核对；双层财务切分会改写表格文本为 kv，
+            # 但保留每个非空单元格，故 Parent/表级摘要不能代替行数据。
+            source_row_counts: dict[tuple[str, ...], int] = {}
+            row_cells_by_signature: dict[tuple[str, ...], list[str]] = {}
+            for row in rows:
+                cells = [
+                    _normalize(str(cell)) for cell in row
+                    if str(cell).strip()
+                ]
+                if not cells:
+                    continue
+                signature = tuple(cells)
+                source_row_counts[signature] = source_row_counts.get(signature, 0) + 1
+                row_cells_by_signature[signature] = cells
+                table_rows_total += 1
+                table_cells_total += len(cells)
+
+            missing_rows = 0
+            missing_cells = 0
+            for signature, required_count in source_row_counts.items():
+                cells = row_cells_by_signature[signature]
+                matching_bodies = sum(
+                    1 for body in bodies if all(cell in body for cell in cells)
+                )
+                if matching_bodies < required_count:
+                    missing_rows += required_count - matching_bodies
+                for cell in cells:
+                    if not any(cell in body for body in bodies):
+                        missing_cells += 1
+
+            table_rows_uncovered += missing_rows
+            table_cells_uncovered += missing_cells
+            if not missing_rows and not missing_cells and source_row_counts:
                 covered += 1
             else:
-                uncovered.append({"type": ntype, "preview": text[:80]})
+                uncovered.append({
+                    "type": node.type,
+                    "preview": text[:80],
+                    "missing_rows": missing_rows,
+                    "missing_cells": missing_cells,
+                })
+
+        audited_count = len(leaves)
+        coverage_rate = (
+            None if sampled or not source_leaves
+            else covered / len(source_leaves)
+        )
         return {
-            "leaf_total": len(leaves),
+            "leaf_total": len(source_leaves),
+            "audited_leaf_count": audited_count,
             "covered": covered,
             "uncovered_count": len(uncovered),
             "uncovered_samples": uncovered[:10],
+            "table_rows_total": table_rows_total,
+            "table_rows_uncovered": table_rows_uncovered,
+            "table_cells_total": table_cells_total,
+            "table_cells_uncovered": table_cells_uncovered,
+            "coverage_rate": coverage_rate,
             "sampled": sampled,
         }
-    except Exception as e:  # noqa: BLE001 — 审计失败不阻断索引
-        logger.warning(f"[CoverageAudit] 失败（不阻断）: {type(e).__name__}: {e}")
-        return {"error": f"{type(e).__name__}: {e}"}
+    except Exception as e:  # noqa: BLE001 — QualityGate 将错误按硬异常处理
+        logger.warning(f"[CoverageAudit] 失败: {type(e).__name__}: {e}")
+        return {
+            "error": f"{type(e).__name__}: {e}",
+            "leaf_total": 0,
+            "audited_leaf_count": 0,
+            "covered": 0,
+            "uncovered_count": 0,
+            "uncovered_samples": [],
+            "coverage_rate": None,
+            "sampled": False,
+        }
