@@ -736,16 +736,14 @@ class TestReadonlyPassword:
         events = []
 
         class _Connection:
-            pass
-
-        monkeypatch.setattr(
-            init_db,
-            "ensure_migration_tracking_table",
-            lambda conn: events.append(("tracking", conn)),
-        )
+            def rollback(self):
+                events.append(("rollback",))
 
         def _apply(conn, filename, sql, *, force, readonly_password, readonly_user):
-            events.append(("apply", conn, filename, bool(sql), force, readonly_password, readonly_user))
+            events.append((
+                "apply", conn, filename, bool(sql), force,
+                readonly_password, readonly_user,
+            ))
             return "applied", ""
 
         monkeypatch.setattr(init_db, "apply_migration", _apply)
@@ -758,10 +756,233 @@ class TestReadonlyPassword:
         )
 
         assert result == "applied"
-        assert events[0][0] == "tracking"
-        assert events[1][0] == "apply"
-        assert events[1][2] == "093_revoke_readonly_default_password.sql"
-        assert events[1][4:] == (False, "test-only-placeholder", "sql_reader")
+        assert events[0][0] == "apply"
+        assert events[0][2] == "093_revoke_readonly_default_password.sql"
+        assert events[0][4:] == (False, "test-only-placeholder", "sql_reader")
+
+    def test_ensure_dbs_tracks_all_readonly_authorization_migrations(self, monkeypatch):
+        from scripts import init_db
+        from scripts.ensure_dbs import _apply_migration
+
+        applied = []
+
+        class _Connection:
+            def rollback(self):
+                pytest.fail("valid migration must not roll back")
+
+        def _apply(conn, filename, sql, *, force, readonly_password, readonly_user):
+            applied.append((filename, force, readonly_user))
+            return "applied", ""
+
+        monkeypatch.setattr(init_db, "apply_migration", _apply)
+        for name in (
+            "004_readonly_role.sql",
+            "043_readonly_public_revoke.sql",
+            "083_readonly_ai_grant_scope.sql",
+        ):
+            assert _apply_migration(
+                _Connection(), name, password="", user="sql_reader",
+            ) == "applied"
+
+        assert applied == [
+            ("004_readonly_role.sql", False, "sql_reader"),
+            ("043_readonly_public_revoke.sql", False, "sql_reader"),
+            ("083_readonly_ai_grant_scope.sql", False, "sql_reader"),
+        ]
+
+    def test_ensure_dbs_permission_failure_keeps_role_disabled(self, monkeypatch):
+        from scripts import init_db
+        from scripts import ensure_dbs
+
+        events = []
+        monkeypatch.setattr(
+            init_db,
+            "block_readonly_roles_for_migrations",
+            lambda _conn, *, readonly_user: events.append(("block", readonly_user)),
+        )
+        monkeypatch.setattr(
+            init_db,
+            "ensure_migration_tracking_table",
+            lambda _conn: events.append(("tracking",)),
+        )
+
+        def _apply(_conn, filename, *, password, user):
+            events.append(("migration", filename))
+            if filename == "083_readonly_ai_grant_scope.sql":
+                return "error: permission scope failed"
+            return "applied"
+
+        monkeypatch.setattr(ensure_dbs, "_apply_migration", _apply)
+        monkeypatch.setattr(
+            ensure_dbs,
+            "_ensure_readonly_password",
+            lambda *_args, **_kwargs: pytest.fail(
+                "failed permission chain must not re-enable LOGIN"
+            ),
+        )
+
+        result = ensure_dbs._apply_business_migrations(
+            object(), password="test-only-placeholder", user="sql_reader",
+            check=False,
+        )
+
+        assert result == 1
+        assert events[:2] == [("block", "sql_reader"), ("tracking",)]
+        assert (
+            "migration", "093_revoke_readonly_default_password.sql"
+        ) not in events
+
+    def test_migration_barrier_disables_roles_before_terminating_sessions(self):
+        from psycopg2.sql import Composed
+
+        from scripts.init_db import block_readonly_roles_for_migrations
+
+        events = []
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, params=None):
+                if isinstance(query, str) and "pg_catalog.pg_roles" in query:
+                    events.append(("exists", params[0]))
+                elif isinstance(query, str) and "pg_terminate_backend" in query:
+                    events.append(("terminate", params[0]))
+                elif isinstance(query, Composed):
+                    ddl = "".join(
+                        getattr(part, "string", "") for part in query.seq
+                    ).upper()
+                    events.append(("ddl", ddl))
+
+            def fetchone(self):
+                return (1,)
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+            def commit(self):
+                events.append(("commit",))
+
+        block_readonly_roles_for_migrations(
+            _Connection(), readonly_user="sql_reader",
+        )
+
+        legacy_no_login = events.index(
+            ("ddl", "ALTER ROLE AGENT_READONLY NOLOGIN")
+        )
+        legacy_commit = events.index(("commit",), legacy_no_login + 1)
+        legacy_terminate = events.index(("terminate", "agent_readonly"))
+        custom_no_login = events.index(("ddl", "ALTER ROLE SQL_READER NOLOGIN"))
+        custom_commit = events.index(("commit",), custom_no_login + 1)
+        custom_terminate = events.index(("terminate", "sql_reader"))
+        assert legacy_no_login < legacy_commit < legacy_terminate
+        assert custom_no_login < custom_commit < custom_terminate
+
+    def test_init_db_permission_failure_never_runs_093_or_reenables(
+        self, monkeypatch, tmp_path,
+    ):
+        import sys
+
+        from scripts import init_db
+
+        events = []
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, *_args, **_kwargs):
+                return None
+
+            def fetchone(self):
+                return ("test postgres",)
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+            def commit(self):
+                return None
+
+            def close(self):
+                return None
+
+        admin = _Connection()
+        business = _Connection()
+        memory = _Connection()
+        connections = iter((admin, business, memory))
+        monkeypatch.setattr(sys, "argv", ["init_db.py"])
+        monkeypatch.setattr(init_db, "load_env_file", lambda *_args: None)
+        monkeypatch.setattr(init_db, "connect", lambda *_args: next(connections))
+        monkeypatch.setattr(
+            init_db, "ensure_database", lambda *_args, **_kwargs: "已存在",
+        )
+        monkeypatch.setattr(init_db, "MIGRATIONS_DIR", tmp_path)
+        migration_names = (
+            "001_business.sql",
+            "004_readonly_role.sql",
+            "043_readonly_public_revoke.sql",
+            "083_readonly_ai_grant_scope.sql",
+            "093_revoke_readonly_default_password.sql",
+        )
+        for name in migration_names:
+            (tmp_path / name).write_text("-- test migration", encoding="utf-8")
+        monkeypatch.setattr(
+            init_db,
+            "discover_migrations",
+            lambda: ([
+                ("001_business.sql", "business"),
+                ("004_readonly_role.sql", "business"),
+                ("043_readonly_public_revoke.sql", "business"),
+                ("083_readonly_ai_grant_scope.sql", "business"),
+                ("093_revoke_readonly_default_password.sql", "business"),
+            ], []),
+        )
+        monkeypatch.setattr(
+            init_db, "ensure_migration_tracking_table", lambda *_args: None,
+        )
+        monkeypatch.setattr(
+            init_db,
+            "block_readonly_roles_for_migrations",
+            lambda *_args, **kwargs: events.append(
+                ("block", kwargs["readonly_user"]),
+            ),
+        )
+
+        def _apply(_conn, filename, _sql, **_kwargs):
+            events.append(("migration", filename))
+            if filename == "083_readonly_ai_grant_scope.sql":
+                return "error", "synthetic migration failure"
+            return "applied", "ok"
+
+        monkeypatch.setattr(init_db, "apply_migration", _apply)
+        monkeypatch.setattr(
+            init_db,
+            "ensure_readonly_role",
+            lambda *_args, **_kwargs: pytest.fail(
+                "failed permission migrations must not restore LOGIN"
+            ),
+        )
+        monkeypatch.setattr(init_db, "health_check", lambda *_args: "ok")
+        monkeypatch.setattr(init_db, "row_counts", lambda *_args: [])
+        monkeypatch.setattr(
+            init_db, "verify_readonly", lambda *_args, **_kwargs: "skipped",
+        )
+        monkeypatch.setenv("PG_READONLY_USER", "sql_reader")
+        monkeypatch.setenv("PG_READONLY_PASSWORD", "test-only-placeholder")
+
+        assert init_db.main() == 1
+        assert events[0] == ("block", "sql_reader")
+        assert (
+            "migration", "093_revoke_readonly_default_password.sql"
+        ) not in events
 
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):
         monkeypatch.delenv("PG_READONLY_PASSWORD", raising=False)

@@ -68,6 +68,12 @@ MEMORY_MIGRATIONS = [
 _ALREADY_EXISTS_SQLSTATES = {
     "42P07", "42710", "42P06", "42P04", "42723", "42P16", "23505",
 }
+_READONLY_TRACKED_MIGRATIONS = frozenset({
+    "004_readonly_role.sql",
+    "043_readonly_public_revoke.sql",
+    "083_readonly_ai_grant_scope.sql",
+    "093_revoke_readonly_default_password.sql",
+})
 def _load_env_file(path: Path) -> None:
     """把 .env 读进环境（不覆盖已存在的变量，容器内以进程 env 为准）。"""
     if not path.exists():
@@ -122,14 +128,10 @@ def _apply_migration(
     sql = sql.replace("${PG_READONLY_PASSWORD}", password)
     sql = sql.replace("${PG_READONLY_USER}", os.getenv("PG_READONLY_USER", "agent_readonly"))
 
-    if filename == "093_revoke_readonly_default_password.sql":
+    if filename in _READONLY_TRACKED_MIGRATIONS:
         try:
-            from scripts.init_db import (
-                apply_migration,
-                ensure_migration_tracking_table,
-            )
+            from scripts.init_db import apply_migration
 
-            ensure_migration_tracking_table(conn)
             status, _detail = apply_migration(
                 conn,
                 filename,
@@ -139,11 +141,11 @@ def _apply_migration(
                 readonly_user=user or os.getenv("PG_READONLY_USER", "agent_readonly"),
             )
             if status == "error":
-                return "error: readonly credential migration failed"
+                return f"error: {filename} failed"
             return status
         except Exception as exc:  # noqa: BLE001
             conn.rollback()
-            return f"error: {type(exc).__name__}: readonly credential migration failed"
+            return f"error: {type(exc).__name__}: readonly migration failed"
 
     applied_any = False
     with conn.cursor() as cur:
@@ -161,6 +163,63 @@ def _apply_migration(
             return f"error: {type(e).__name__}: {str(e)[:160]}"
     conn.commit()
     return "applied" if applied_any else "skipped"
+
+
+def _apply_business_migrations(
+    conn,
+    *,
+    password: str,
+    user: str,
+    check: bool,
+) -> int:
+    """先关闭只读登录，再应用权限链；任何迁移失败都保持 NOLOGIN。"""
+    if check:
+        for mig in BUSINESS_MIGRATIONS:
+            print(f"[ensure_dbs]   ({os.getenv('BUSINESS_PGDATABASE', 'agent_business')}) "
+                  f"{mig}: 跳过（--check）")
+        return 0
+
+    from scripts.init_db import (
+        block_readonly_roles_for_migrations,
+        ensure_migration_tracking_table,
+    )
+
+    block_readonly_roles_for_migrations(conn, readonly_user=user)
+    ensure_migration_tracking_table(conn)
+
+    rc = 0
+    readonly_migrations_ready = True
+    db_label = os.getenv("BUSINESS_PGDATABASE", "agent_business")
+    for mig in BUSINESS_MIGRATIONS:
+        if (
+            mig == "093_revoke_readonly_default_password.sql"
+            and not readonly_migrations_ready
+        ):
+            print(
+                f"[ensure_dbs]   = ({db_label}) {mig}: "
+                "跳过（前置迁移失败，保持 NOLOGIN）"
+            )
+            continue
+        result = _apply_migration(conn, mig, password=password, user=user)
+        mark = "✓" if result == "applied" else (
+            "=" if result == "skipped" else "✗"
+        )
+        print(f"[ensure_dbs]   {mark} ({db_label}) {mig}: {result}")
+        if result.startswith("error"):
+            rc = 1
+            readonly_migrations_ready = False
+
+    if readonly_migrations_ready:
+        print(
+            f"[ensure_dbs]   ({db_label}) 只读角色密码对齐: "
+            f"{_ensure_readonly_password(conn, user=user, password=password)}"
+        )
+    else:
+        print(
+            f"[ensure_dbs]   ({db_label}) 只读角色保持 NOLOGIN："
+            "前置迁移未全部成功"
+        )
+    return rc
 
 
 def _ensure_readonly_password(conn, *, user: str, password: str) -> str:
@@ -270,20 +329,27 @@ def main() -> int:
                     "WHERE table_schema NOT IN ('pg_catalog','information_schema')"
                 )
                 before = cur.fetchone()[0]
-            for mig in migrations:
-                if args.check:
-                    print(f"[ensure_dbs]   ({db}) {mig}: 跳过（--check）")
-                    continue
-                result = _apply_migration(
-                    conn, mig, password=ro_pw, user=ro_user
+            if db == business_db:
+                rc |= _apply_business_migrations(
+                    conn,
+                    password=ro_pw,
+                    user=ro_user,
+                    check=args.check,
                 )
-                mark = "✓" if result == "applied" else ("=" if result == "skipped" else "✗")
-                print(f"[ensure_dbs]   {mark} ({db}) {mig}: {result}")
-                if result.startswith("error"):
-                    rc = 1
-            if not args.check:
-                print(f"[ensure_dbs]   ({db}) 只读角色密码对齐: "
-                      f"{_ensure_readonly_password(conn, user=ro_user, password=ro_pw)}")
+            else:
+                for mig in migrations:
+                    if args.check:
+                        print(f"[ensure_dbs]   ({db}) {mig}: 跳过（--check）")
+                        continue
+                    result = _apply_migration(
+                        conn, mig, password=ro_pw, user=ro_user
+                    )
+                    mark = "✓" if result == "applied" else (
+                        "=" if result == "skipped" else "✗"
+                    )
+                    print(f"[ensure_dbs]   {mark} ({db}) {mig}: {result}")
+                    if result.startswith("error"):
+                        rc = 1
             conn.commit()
             print(f"[ensure_dbs] {db} 表分布: {_count_tables(conn, db)}（迁移前 {before} 张）")
             conn.close()

@@ -496,6 +496,40 @@ _TERMINATE_READONLY_SESSIONS_SQL = (
 )
 
 
+def block_readonly_roles_for_migrations(
+    conn,
+    *,
+    readonly_user: str,
+) -> None:
+    """在授权迁移前提交 NOLOGIN，再终止旧会话，失败时保持只读账号关闭。"""
+    from psycopg2 import sql as pgsql
+
+    roles = list(dict.fromkeys((_LEGACY_READONLY_USER, readonly_user.strip())))
+    existing_roles: list[str] = []
+    for role in roles:
+        if not role:
+            continue
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s",
+                (role,),
+            )
+            if cur.fetchone() is None:
+                continue
+            cur.execute(
+                pgsql.SQL("ALTER ROLE {} NOLOGIN").format(
+                    pgsql.Identifier(role),
+                )
+            )
+        conn.commit()
+        existing_roles.append(role)
+
+    for role in existing_roles:
+        with conn.cursor() as cur:
+            cur.execute(_TERMINATE_READONLY_SESSIONS_SQL, (role,))
+        conn.commit()
+
+
 # ──────────────────────────────────────────────────────────── 迁移执行
 def apply_migration(
     conn,
@@ -547,9 +581,9 @@ def apply_migration(
 
             # 先提交 NOLOGIN，确保终止会话后旧口令不能在提交窗口内重连。
             # 旧默认角色始终撤销；使用自定义用户名时只给目标角色设置新口令。
-            roles_to_block = [_LEGACY_READONLY_USER]
-            if readonly_password and target_user != _LEGACY_READONLY_USER:
-                roles_to_block.append(target_user)
+            roles_to_block = list(dict.fromkeys(
+                (_LEGACY_READONLY_USER, target_user),
+            ))
 
             existing_roles: set[str] = set()
             with conn.cursor() as cur:
@@ -595,16 +629,22 @@ def apply_migration(
                             )
                         )
 
-                if (
-                    target_user != _LEGACY_READONLY_USER
-                    and readonly_password
-                ):
-                    cur.execute(
-                        pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                            pgsql.Identifier(target_user),
-                            pgsql.Literal(readonly_password),
+                if target_user != _LEGACY_READONLY_USER:
+                    if readonly_password:
+                        cur.execute(
+                            pgsql.SQL(
+                                "ALTER ROLE {} WITH LOGIN PASSWORD {}"
+                            ).format(
+                                pgsql.Identifier(target_user),
+                                pgsql.Literal(readonly_password),
+                            )
                         )
-                    )
+                    elif target_user in existing_roles:
+                        cur.execute(
+                            pgsql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(
+                                pgsql.Identifier(target_user),
+                            )
+                        )
             _record(conn, filename, sql, "applied", commit=False)
             conn.commit()
             detail = (
@@ -866,8 +906,24 @@ def main() -> int:
                 ensure_migration_tracking_table(conn)
 
                 print(f"[init_db] ── {dbname} ──")
+                if db_key == "business":
+                    block_readonly_roles_for_migrations(
+                        conn,
+                        readonly_user=ro_user,
+                    )
+                readonly_migrations_ready = True
                 for name, target in plan:
                     if target != db_key:
+                        continue
+                    if (
+                        db_key == "business"
+                        and name == _READONLY_PASSWORD_MIGRATION
+                        and not readonly_migrations_ready
+                    ):
+                        print(
+                            f"[init_db]   = {name}: skipped — "
+                            "前置迁移失败，保持只读角色 NOLOGIN"
+                        )
                         continue
                     if name in RUNTIME_MANAGED_MIGRATIONS:
                         sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
@@ -892,10 +948,20 @@ def main() -> int:
                           f"({time.time() - t0:.1f}s)")
                     if status == "error":
                         rc = 1
+                        if db_key == "business":
+                            readonly_migrations_ready = False
 
                 if db_key == "business":
-                    print(f"[init_db]   只读角色密码对齐: "
-                          f"{ensure_readonly_role(conn, user=ro_user, password=ro_pw)}")
+                    if readonly_migrations_ready:
+                        print(
+                            f"[init_db]   只读角色密码对齐: "
+                            f"{ensure_readonly_role(conn, user=ro_user, password=ro_pw)}"
+                        )
+                    else:
+                        print(
+                            "[init_db]   只读角色保持 NOLOGIN："
+                            "前置迁移未全部成功"
+                        )
 
                 if args.demo_sandbox and db_key == "business":
                     seed_path = SEEDS_DIR / DEMO_SANDBOX_SEED
