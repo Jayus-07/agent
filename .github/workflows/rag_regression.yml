@@ -1,9 +1,27 @@
 name: RAG Regression
 
+# 语义定位（2026-10-11 决策）：固定样本质量门禁 —— 对固定 suite（regression,
+# 29 cases）按 DB API 模型口径跑真实检索评测，全部层级阈值达标才 PASS。
+# 不包含历史指标基线对比（那是独立的 --compare/--promote-baseline 机制，
+# 本 workflow 未启用，命名不夸大能力）。
+#
+# 模型口径（冻结决策）：Embedding/Rerank 一律 DB 注册 API 模型
+#（specialized binding 解析）；ENV_MODE=cloud；禁止本地 BGE / Ollama /
+# 旧 env 凭据回退。凭据仅经 GitHub Secrets 在初始化时加密入库，
+# 运行时一律从隔离测试数据库加载。
+#
+# 隔离：pgvector service container + agent_memory_test 隔离测试库，
+# 不连接本机/生产 PostgreSQL，不操作共享 agent_memory。
+#
+# 触发策略（2026-10-11 用户拍板）：
+#   - 本 workflow 仅保留人工 workflow_dispatch（受信任入口：审核后按需
+#     运行，如 RAG 算法/切分策略修改、模型切换、版本发布前）。
+#   - **不设 GitHub 每日 schedule**：定时回归由管理端定时任务承担
+#     （费用与监控归项目自身体系），GitHub 侧不再每日自动消耗 API。
+#   - 普通 PR / 文档 PR 不触发真实评测（真实评测限 push(main)+dispatch
+#     由 rag_smoke.yml 同口径收敛）。
+
 on:
-  schedule:
-    # GitHub 使用 UTC；北京时间每天 02:00 执行，避开白天 PR 高峰。
-    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       selection:
@@ -14,8 +32,7 @@ on:
         options:
           - regression
           - ci_golden
-          - expanded_100
-          - scale_20k
+          - pr_smoke
 
 permissions:
   contents: read
@@ -28,29 +45,12 @@ jobs:
   rag-regression:
     name: RAG Regression (${{ inputs.selection || 'regression' }})
     runs-on: ubuntu-latest
+    # 受信任环境：与 prompt-eval 共用 environment secrets；
+    # 外部 Fork PR 触发的 run 拿不到 secrets，seed 步骤会显式失败（BLOCKED）。
+    environment: prompt-eval
+    # 成本上限之一：单 run 墙钟上限。样本量固定（suite 决定），embedding/
+    # rerank 均为小请求，单 run API 成本为元级；超时视为 BLOCKED 不重试。
     timeout-minutes: 60
-    env:
-      ENV_MODE: local
-      EVAL_GATE: legacy
-      EVAL_SEMANTIC_SCORER: lexical
-      EVAL_TRIGGER: scheduled
-      EVAL_TRIGGERED_BY: github-actions-rag-regression
-      EMBEDDING_MODEL_PATH: BAAI/bge-small-zh-v1.5
-      RERANKER_MODEL_PATH: BAAI/bge-reranker-base
-      RERANKER_DEVICE: cpu
-      VECTOR_PG_DIM: "512"
-      LANGFUSE_ENABLED: "false"
-      OBS_ANALYTICS_ENABLED: "false"
-      PYTHONUTF8: "1"
-      PGHOST: localhost
-      PGPORT: "5432"
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      MEMORY_PGDATABASE: agent_memory
-      BUSINESS_PGDATABASE: agent_business
-      VECTOR_PGDATABASE: agent_memory
-      RAG_STORES_PGDATABASE: agent_memory
-
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -65,6 +65,43 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
+    env:
+      ENV_MODE: cloud
+      EVAL_GATE: legacy
+      EVAL_SEMANTIC_SCORER: lexical
+      EVAL_TRIGGER: ${{ github.event_name }}
+      EVAL_TRIGGERED_BY: github-actions-rag-regression
+      LANGFUSE_ENABLED: "false"
+      # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
+      OBS_ANALYTICS_ENABLED: "true"
+      PYTHONUTF8: "1"
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
+      WORKFLOW_DB_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PROVIDER_ID: rag-eval-chat
+      PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
+      PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
+      PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
+      PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
+      PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
+      PROMPT_EVAL_TEST_EMBEDDING_MODEL: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}
+      VECTOR_PG_DIM: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}
+      PROMPT_EVAL_TEST_RERANK_PROVIDER_ID: rag-eval-rerank
+      PROMPT_EVAL_TEST_RERANK_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_RERANK_API_KEY }}
+      PROMPT_EVAL_TEST_RERANK_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_RERANK_BASE_URL }}
+      PROMPT_EVAL_TEST_RERANK_MODEL: ${{ vars.PROMPT_EVAL_TEST_RERANK_MODEL }}
+      SECRETS_ENCRYPTION_KEY: ${{ secrets.SECRETS_ENCRYPTION_KEY }}
 
     steps:
       - name: Checkout
@@ -77,35 +114,66 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-lock.txt
 
-      - name: Cache Hugging Face models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-rag-regression-bge-small-reranker-base-v1
-          restore-keys: hf-rag-regression-
-
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-lock.txt
-
-      - name: Prepare offline retrieval models
-        run: |
-          python - <<'PY'
-          from sentence_transformers import CrossEncoder, SentenceTransformer
-
-          SentenceTransformer("BAAI/bge-small-zh-v1.5")
-          CrossEncoder("BAAI/bge-reranker-base", device="cpu")
-          print("RAG regression models ready")
-          PY
 
       - name: Evaluation preflight
         env:
           EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
         run: python -m backend.evaluation.preflight --module rag --selection "$EVAL_SELECTION"
 
-      - name: Initialize isolated evaluation databases
+      - name: Trim corpora to evaluation scope
+        run: |
+          # data/docs 里的业务知识库（policy_general 等）不属于评测语料：
+          # pipeline sync 是全量 delta，会把业务文档索引进隔离库并触发
+          # near-dup 交叉 HOLD 评测 fixture。评测只保留 rag_eval_kb 部署
+          # 目录与 fixture 源 rag_test_kb / rag_100_docs。
+          rm -rf data/docs/policy_general
+          ls data/docs/
+
+      - name: Prepare migration compatibility database
+        run: |
+          # 对齐 prompt_eval 模式：004_readonly_role 等迁移要跨库操作
+          # agent_business；business 库不存在会让只读角色失败并连锁
+          # 导致 customer_service schema 缺失（006/082 连锁失败）。
+          python - <<'PY'
+          import psycopg2
+
+          conn = psycopg2.connect(
+              host="localhost",
+              port=5432,
+              user="postgres",
+              password="postgres",
+              dbname="postgres",
+          )
+          conn.autocommit = True
+          try:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT 1 FROM pg_database WHERE datname = 'agent_business'")
+                  if cur.fetchone() is None:
+                      cur.execute('CREATE DATABASE agent_business')
+          finally:
+              conn.close()
+          PY
+
+      - name: Initialize isolated evaluation database
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
+
+      - name: Seed DB API model bindings
+        run: python -m backend.scripts.seed_prompt_eval_db
+
+      - name: Verify bindings and probe real API
+        env:
+          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+          EVAL_MEMORY_PGDATABASE: agent_memory_test
+        run: |
+          # 校验绑定（模型名/Provider/维度/凭据可解密）后真实调用一次
+          # embedding/rerank API：以 embedding 实际维度为准，不一致或
+          # 任一 Provider 不可用即 BLOCKED（exit 1），不得静默降级。
+          python scripts/seed_eval_model_bindings.py --verify --target-db agent_memory_test
+          python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test
 
       - name: Import selected evaluation fixtures
         env:
@@ -129,21 +197,153 @@ jobs:
           )
           PY
 
+      - name: Assert index completeness
+        env:
+          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+        run: |
+          # 评测前断言：正确 collection/KB、向量非空、维度与绑定一致、
+          # 可查询。任一不满足阻断评测（P0-04）。
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          import psycopg
+
+          selection = os.environ["EVAL_SELECTION"]
+          suite = json.loads(
+              (Path("backend/evaluation/datasets/rag/suites") / f"{selection}.json")
+              .read_text(encoding="utf-8")
+          )
+          kb_id = suite["kb_id"]
+          expected_dims = int(os.getenv("PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS", "1024"))
+          conn = psycopg.connect(
+              host="localhost", port=5432, user="postgres", password="postgres",
+              dbname=os.environ["MEMORY_PGDATABASE"],
+          )
+          with conn.cursor() as cur:
+              cur.execute(
+                  "SELECT count(*), min(vector_dims(embedding)), "
+                  "max(vector_dims(embedding)) FROM rag_vectors "
+                  "WHERE collection = 'chroma' AND metadata->>'kb_id' = %s",
+                  (kb_id,),
+              )
+              n, dmin, dmax = cur.fetchone()
+          conn.close()
+          problems = []
+          if not n:
+              problems.append(f"kb={kb_id} 向量数为 0（导入失败或空集合）")
+          if dmin != expected_dims or dmax != expected_dims:
+              problems.append(
+                  f"kb={kb_id} 向量维度 {dmin}..{dmax} 与绑定声明 {expected_dims} 不一致"
+              )
+          for p in problems:
+              print(f"[assert] FAIL {p}")
+          if problems:
+              print("[assert] EVAL_INDEX_CHECK=failed —— 评测保持 BLOCKED")
+              sys.exit(1)
+          print(f"[assert] EVAL_INDEX_CHECK=passed kb={kb_id} vectors={n} dims={expected_dims}")
+          PY
+
       - name: Run selected RAG regression
         env:
           EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
-        run: >-
-          python -m backend.evaluation.cli rag
-          --selection ${{ inputs.selection || 'regression' }}
-          --no-ragas
-          --no-resume
-          --triggered-by github-actions-rag-regression
+        run: |
+          # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
+          set -o pipefail
+          python -u -m backend.evaluation.cli rag \
+            --selection "$EVAL_SELECTION" \
+            --no-ragas \
+            --no-resume \
+            --strict-gate \
+            --triggered-by github-actions-rag-regression 2>&1 | tee /tmp/eval-run.log
+          exit "$?"
+
+      - name: Collect API cost attribution
+        if: always()
+        run: |
+          # 费用归因：评测调用的 Provider/Model/Token/费用落 llm_usage
+          #（隔离测试库账本，与生产账单无同步）；导出脱敏汇总供审查。
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import psycopg
+
+          try:
+              conn = psycopg.connect(
+                  host="localhost", port=5432, user="postgres", password="postgres",
+                  dbname=os.environ["MEMORY_PGDATABASE"],
+              )
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT model, provider, cost_status, pricing_source, count(*), "
+                      "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
+                      "FROM llm_usage "
+                      "GROUP BY model, provider, cost_status, pricing_source "
+                      "ORDER BY model, provider, cost_status, pricing_source"
+                  )
+                  rows = cur.fetchall()
+              conn.close()
+          except Exception:  # noqa: BLE001
+              print("[cost] llm_usage 查询失败；费用状态标记为 UNVERIFIED")
+              rows = []
+              query_failed = True
+          else:
+              query_failed = False
+          unverified_statuses = {"", "unpriced", "price_unknown"}
+          unverified_calls = sum(
+              int(r[4] or 0) for r in rows
+              if (r[2] or "").lower() in unverified_statuses
+          )
+          estimated_calls = sum(
+              int(r[4] or 0) for r in rows if (r[2] or "").lower() == "estimated"
+          )
+          cost_verification = (
+              "UNVERIFIED" if query_failed or not rows or unverified_calls
+              else "ESTIMATED" if estimated_calls else "VERIFIED"
+          )
+          summary = []
+          for r in rows:
+              cost_status = (r[2] or "").lower()
+              summary.append({
+                  "model": r[0],
+                  "provider": r[1],
+                  "cost_status": cost_status or "unknown",
+                  "pricing_source": r[3] or "unknown",
+                  "calls": int(r[4] or 0),
+                  "total_tokens": int(r[5] or 0),
+                  "billed_cost_cny": (
+                      None if cost_status in unverified_statuses
+                      else round(float(r[6] or 0), 6)
+                  ),
+              })
+          Path("data/eval_runs").mkdir(parents=True, exist_ok=True)
+          Path("data/eval_runs/llm_usage_summary.json").write_text(
+              json.dumps({
+                  "note": "隔离测试库账本，未同步生产计费",
+                  "cost_verification": cost_verification,
+                  "verification_error": "ledger_query_failed" if query_failed else None,
+                  "unverified_calls": unverified_calls,
+                  "usage": summary,
+              },
+                         ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps({"cost_verification": cost_verification,
+                            "unverified_calls": unverified_calls, "usage": summary},
+                           ensure_ascii=False, indent=2))
+          PY
 
       - name: Upload RAG regression report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rag-regression-${{ github.run_id }}
-          path: data/eval_runs/
+          path: |
+            data/eval_runs/
+            /tmp/eval-run.log
           if-no-files-found: warn
           retention-days: 30

@@ -76,7 +76,6 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cach
 ALLOWLIST: list[tuple[str, str]] = [
     ("backend/tests/", "assigned_secret"),            # 测试夹具占位符
     ("backend/tests/", "hardcoded_password"),         # 测试夹具占位符
-    (".github/workflows/prompt_eval.yml", "hardcoded_password"),  # Actions 临时 PostgreSQL 服务凭据
     ("backend/tests/", "url_with_credentials"),       # 测试用假 DSN
     ("backend/.env.example", "url_with_credentials"),  # 示例 DSN 模板
     ("backend/.env.example", "assigned_secret"),       # 示例密钥占位
@@ -136,9 +135,21 @@ def _is_allowed(path: str, rule: str, line: str = "") -> bool:
     if any(path.startswith(prefix) for prefix in DIFF_PATH_ALLOW):
         return True
     if rule == "hardcoded_password":
-        match = HARDCODED_PASSWORD.search(line)
-        value = (match.group("double") or match.group("single")) if match else ""
-        if re.search(_PLACEHOLDER_WORD, value.strip(), re.IGNORECASE):
+        matches = list(HARDCODED_PASSWORD.finditer(line))
+        if matches:
+            allowed_test_workflows = {
+                ".github/workflows/prompt_eval.yml",
+                ".github/workflows/rag_smoke.yml",
+                ".github/workflows/rag_regression.yml",
+            }
+            for match in matches:
+                value = (match.group("double") or match.group("single") or "").strip()
+                placeholder = re.search(_PLACEHOLDER_WORD, value, re.IGNORECASE)
+                isolated_pg_test_password = (
+                    value.lower() == "postgres" and path in allowed_test_workflows
+                )
+                if not placeholder and not isolated_pg_test_password:
+                    return False
             return True
         return any(
             path.startswith(prefix) and rule_name == rule
@@ -366,8 +377,8 @@ def main():
         print("tree", path + ":" + str(lineno), "type=" + name)
     for rev, path, name in history_findings:
         print("history", rev, path, "type=" + name)
-    for path, name, lineno in diff_findings:
-        print("diff", path + ":" + str(lineno), "type=" + name)
+    for path, name in diff_findings:
+        print("diff", path, "type=" + name)
 
     total = len(tree_findings) + len(history_findings) + len(diff_findings)
     blocking = total
