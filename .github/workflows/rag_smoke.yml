@@ -162,7 +162,7 @@ jobs:
       ENV_MODE: cloud
       EVAL_GATE: legacy
       EVAL_SEMANTIC_SCORER: lexical
-      EVAL_TRIGGER: github_pr
+      EVAL_TRIGGER: ${{ github.event_name }}
       EVAL_TRIGGERED_BY: github-actions-rag-smoke
       LANGFUSE_ENABLED: "false"
       OBS_ANALYTICS_ENABLED: "false"
@@ -326,30 +326,58 @@ jobs:
               )
               with conn.cursor() as cur:
                   cur.execute(
-                      "SELECT model, provider, count(*), "
+                      "SELECT model, provider, cost_status, pricing_source, count(*), "
                       "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
-                      "FROM llm_usage GROUP BY model, provider ORDER BY model"
+                      "FROM llm_usage "
+                      "GROUP BY model, provider, cost_status, pricing_source "
+                      "ORDER BY model, provider, cost_status, pricing_source"
                   )
                   rows = cur.fetchall()
               conn.close()
           except Exception as e:  # noqa: BLE001
               print(f"[cost] llm_usage 查询失败: {type(e).__name__}: {e}")
               raise SystemExit(0)
-          summary = [
-              {
-                  "model": r[0], "provider": r[1], "calls": r[2],
-                  "total_tokens": int(r[3] or 0),
-                  "billed_cost_cny": round(float(r[4] or 0), 6),
-              }
-              for r in rows
-          ]
+          unverified_statuses = {"", "unpriced", "price_unknown"}
+          unverified_calls = sum(
+              int(r[4] or 0) for r in rows
+              if (r[2] or "").lower() in unverified_statuses
+          )
+          estimated_calls = sum(
+              int(r[4] or 0) for r in rows if (r[2] or "").lower() == "estimated"
+          )
+          cost_verification = (
+              "UNVERIFIED" if not rows or unverified_calls
+              else "ESTIMATED" if estimated_calls else "VERIFIED"
+          )
+          summary = []
+          for r in rows:
+              cost_status = (r[2] or "").lower()
+              summary.append({
+                  "model": r[0],
+                  "provider": r[1],
+                  "cost_status": cost_status or "unknown",
+                  "pricing_source": r[3] or "unknown",
+                  "calls": int(r[4] or 0),
+                  "total_tokens": int(r[5] or 0),
+                  "billed_cost_cny": (
+                      None if cost_status in unverified_statuses
+                      else round(float(r[6] or 0), 6)
+                  ),
+              })
           Path("data/eval_runs").mkdir(parents=True, exist_ok=True)
           Path("data/eval_runs/llm_usage_summary.json").write_text(
-              json.dumps({"note": "隔离测试库账本，未同步生产计费", "usage": summary},
+              json.dumps({
+                  "note": "隔离测试库账本，未同步生产计费",
+                  "cost_verification": cost_verification,
+                  "unverified_calls": unverified_calls,
+                  "usage": summary,
+              },
                          ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
-          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          print(json.dumps({"cost_verification": cost_verification,
+                            "unverified_calls": unverified_calls, "usage": summary},
+                           ensure_ascii=False, indent=2))
           PY
 
       - name: Upload RAG smoke report
