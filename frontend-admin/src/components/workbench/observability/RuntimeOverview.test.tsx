@@ -96,4 +96,25 @@ describe('RuntimeOverview', () => {
     expect(partialCard?.textContent).toContain('部分成功')
     expect(partialCard?.textContent).toContain('1')
   })
+
+  it('总览记录数与同一时间范围的终态执行列表一致', async () => {
+    mocks.navigation.params = new URLSearchParams('tab=overview&range=24h')
+    const statuses: TraceRecord['status'][] = [
+      'success', 'failed', 'error', 'degraded', 'partial', 'timeout', 'cancelled', 'rejected', 'running',
+    ]
+    mocks.listTraces.mockResolvedValue([
+      ...statuses.map((status) => makeTrace(status, { id: `trace-${status}` })),
+      makeTrace('success', { id: 'trace-unknown', status: undefined }),
+      makeTrace('success', { id: 'future', timestamp: new Date(Date.now() + 60_000).toISOString() }),
+      makeTrace('success', { id: 'outside-window', timestamp: new Date(Date.now() - 25 * 60 * 60_000).toISOString() }),
+    ])
+
+    const container = await mountOverview()
+    const recordCard = container.querySelector<HTMLAnchorElement>('a[href*="status=all"]')
+
+    expect(recordCard?.querySelector('strong')?.textContent).toBe('9')
+    expect(container.querySelector('[data-trace-id="trace-running"]')).toBeNull()
+    expect(container.querySelector('[data-trace-id="future"]')).toBeNull()
+    expect(container.querySelector('[data-trace-id="outside-window"]')).toBeNull()
+  })
 })

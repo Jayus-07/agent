@@ -116,6 +116,18 @@ export function isInRuntimeWindow(
   return Number.isFinite(timestamp) && timestamp <= nowMs && nowMs - timestamp <= WINDOW_MS[window];
 }
 
+/** 总览和执行列表共用同一时间窗及历史 running 排除规则。 */
+export function filterRuntimeRecords(
+  traces: TraceRecord[],
+  window: RuntimeWindow | "custom",
+  nowMs = Date.now(),
+): TraceRecord[] {
+  return traces.filter((trace) =>
+    getRunStatus(trace) !== "running"
+    && (window === "custom" || isInRuntimeWindow(trace, window, nowMs)),
+  );
+}
+
 export function percentile(values: number[], percentileValue: number): number | null {
   const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (sorted.length === 0) return null;
@@ -141,7 +153,7 @@ export function summarizeRuntimeSample(
   window: RuntimeWindow,
   nowMs = Date.now(),
 ): RuntimeSampleSummary {
-  const inWindow = traces.filter((trace) => isInRuntimeWindow(trace, window, nowMs));
+  const inWindow = filterRuntimeRecords(traces, window, nowMs);
   const counts = Object.fromEntries(RUN_STATUSES.map((status) => [status, 0])) as Record<RunStatus, number>;
   inWindow.forEach((trace) => { counts[getRunStatus(trace)] += 1; });
 

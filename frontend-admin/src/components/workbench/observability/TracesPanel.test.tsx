@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TraceRecord } from '@/types/trace'
+import { filterRuntimeRecords, summarizeRuntimeSample } from '@/lib/observability/runtimeStatus'
 
 const mocks = vi.hoisted(() => ({
   listTraces: vi.fn().mockResolvedValue([]),
@@ -167,6 +168,33 @@ describe('TracesPanel', () => {
     expect(exported).not.toContain('historical-running')
     if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL })
     else delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL
+  })
+
+  it('执行记录总数与总览统计使用相同的时间窗和 running 口径', async () => {
+    const statuses: TraceRecord['status'][] = [
+      'success', 'failed', 'error', 'degraded', 'partial', 'timeout', 'cancelled', 'rejected', 'running',
+    ]
+    const sample = [
+      ...statuses.map((status) => makeTrace(status, `trace-${status}`)),
+      makeTrace('success', 'trace-unknown'),
+      makeTrace('success', 'future'),
+    ]
+    sample[sample.length - 2].status = undefined
+    // 用动态边界覆盖未来与过期样本，确保列表和总览不因边界定义不同而分叉。
+    sample[sample.length - 1].timestamp = new Date(Date.now() + 60_000).toISOString()
+    mocks.navigation.params = new URLSearchParams('tab=traces&range=24h&status=all')
+    mocks.listTraces.mockResolvedValue(sample)
+
+    const container = await mountPanel()
+    const now = Date.now()
+    const expectedCount = summarizeRuntimeSample(sample, '24h', now).total
+    const listCount = filterRuntimeRecords(sample, '24h', now).length
+
+    expect(expectedCount).toBe(9)
+    expect(listCount).toBe(expectedCount)
+    expect(container.textContent).toContain(`当前筛选 ${expectedCount} 条`)
+    expect(container.querySelector('[data-trace-id="trace-running"]')).toBeNull()
+    expect(container.querySelector('[data-trace-id="future"]')).toBeNull()
   })
 
   it('Tool 筛选快速切换时忽略较早请求的迟到响应', async () => {

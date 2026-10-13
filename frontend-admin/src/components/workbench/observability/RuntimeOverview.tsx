@@ -9,7 +9,7 @@ import {
   getRunStatus,
   getRunStatusLabel,
   getRunStatusTone,
-  isInRuntimeWindow,
+  filterRuntimeRecords,
   RUNTIME_WINDOW_LABELS,
   summarizeRuntimeSample,
   type RuntimeWindow,
@@ -72,12 +72,13 @@ export default function RuntimeOverview() {
     void loadTraces()
   }, [loadTraces])
 
+  const sampleNowMs = Date.now()
   const inWindow = useMemo(
-    () => traces.filter((trace) => isInRuntimeWindow(trace, range)),
+    () => filterRuntimeRecords(traces, range, sampleNowMs),
     [range, traces],
   )
   const summary = useMemo(
-    () => summarizeRuntimeSample(traces, range),
+    () => summarizeRuntimeSample(traces, range, sampleNowMs),
     [range, traces],
   )
 
@@ -105,7 +106,6 @@ export default function RuntimeOverview() {
   const recent = useMemo(
     // 列表端点可能返回旧记录的 running 默认状态；没有活跃 Trace 授权查询时，不把它显示为当前执行。
     () => [...inWindow]
-      .filter((trace) => getRunStatus(trace) !== 'running')
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
       .slice(0, 8),
     [inWindow],

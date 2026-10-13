@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TraceRecord } from '@/types/trace'
-import { getRunStatus, safeDiagnosticCode, safeRuntimeLabel, summarizeRuntimeSample } from './runtimeStatus'
+import { filterRuntimeRecords, getRunStatus, safeDiagnosticCode, safeRuntimeLabel, summarizeRuntimeSample } from './runtimeStatus'
 
 function makeTrace(overrides: Partial<TraceRecord> = {}): TraceRecord {
   return {
@@ -52,17 +52,41 @@ describe('Runtime run status', () => {
       makeTrace({ id: 'old', timestamp: '2026-10-13T10:00:00.000Z', status: 'success', duration_ms: 1, cost_cny: 10 }),
     ], '1h', now)
 
-    expect(summary.total).toBe(5)
+    expect(summary.total).toBe(4)
     expect(summary.counts.success).toBe(1)
     expect(summary.counts.failed).toBe(1)
     expect(summary.counts.error).toBe(1)
     expect(summary.counts.degraded).toBe(1)
-    expect(summary.counts.running).toBe(1)
+    expect(summary.counts.running).toBe(0)
     expect(summary.terminalCount).toBe(4)
     expect(summary.successRate).toBeCloseTo(1 / 4)
     expect(summary.p50DurationMs).toBe(200)
     expect(summary.p95DurationMs).toBe(300)
     expect(summary.costCny).toBeCloseTo(0.3)
     expect(summary.costRecordCount).toBe(2)
+    expect(summary.total).toBe(filterRuntimeRecords([
+      makeTrace({ status: 'success', duration_ms: 100, cost_cny: 0.1 }),
+      makeTrace({ id: 'failed', status: 'success', metadata: { business_outcome: 'failed' }, duration_ms: 200, cost_cny: 0.2 }),
+      makeTrace({ id: 'error', status: 'success', error: { code: 'ProviderTimeout' }, duration_ms: 250 }),
+      makeTrace({ id: 'degraded', status: 'degraded', duration_ms: 300 }),
+      makeTrace({ id: 'running', status: 'running', duration_ms: 0, timestamp: '2026-10-13T11:58:00.000Z', cost_usd: 5 }),
+      makeTrace({ id: 'old', timestamp: '2026-10-13T10:00:00.000Z', status: 'success', duration_ms: 1, cost_cny: 10 }),
+    ], '1h', now).length)
+  })
+
+  it('列表与统计共同排除未来时间戳和历史 running，并保留 unknown 记录', () => {
+    const now = Date.parse('2026-10-13T12:00:00.000Z')
+    const sample = [
+      makeTrace({ id: 'success', status: 'success' }),
+      makeTrace({ id: 'running', status: 'running' }),
+      makeTrace({ id: 'unknown', status: undefined }),
+      makeTrace({ id: 'future', status: 'success', timestamp: '2026-10-13T12:01:00.000Z' }),
+    ]
+    const listRecords = filterRuntimeRecords(sample, '1h', now)
+    const summary = summarizeRuntimeSample(sample, '1h', now)
+
+    expect(listRecords.map((trace) => trace.id)).toEqual(['success', 'unknown'])
+    expect(summary.total).toBe(listRecords.length)
+    expect(summary.counts.running).toBe(0)
   })
 })

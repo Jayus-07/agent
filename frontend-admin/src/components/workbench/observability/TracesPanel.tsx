@@ -9,8 +9,8 @@ import TraceFilterBar from '@/components/observability/trace/TraceFilter'
 import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 import TraceRow, { ColKey, VALID_COL_KEYS } from '@/components/observability/trace/TraceRow'
 import { useToast } from '@/components/shared/Toast'
-import { filterByTimeRange, TraceFilter, TraceRecord, TraceStatus } from '@/types/trace'
-import { getRunStatus } from '@/lib/observability/runtimeStatus'
+import { TraceFilter, TraceRecord, TraceStatus } from '@/types/trace'
+import { filterRuntimeRecords, getRunStatus } from '@/lib/observability/runtimeStatus'
 
 const PAGE_SIZES = [20, 50, 100]
 const BOOKMARK_KEY = 'obs.bookmarks'
@@ -175,8 +175,7 @@ export default function TracesPanel() {
 
   const filteredBase = useMemo(() => {
     // 历史列表中的 running 可能是旧 DTO 默认值；活跃查询缺少资源授权前不展示、不导出。
-    let result = filterByTimeRange(traces, filter.timeRange)
-      .filter((trace) => getRunStatus(trace) !== 'running')
+    let result = filterRuntimeRecords(traces, filter.timeRange)
     if (filter.status !== 'all') {
       result = result.filter((trace) => getRunStatus(trace) === filter.status)
     }
