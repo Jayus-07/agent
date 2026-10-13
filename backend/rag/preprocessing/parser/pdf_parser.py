@@ -211,9 +211,14 @@ class PdfParser(BaseDocumentParser):
         # OCR 页无字号信息（size=0），标题仅靠「第N章/一、/1.」编号模式识别；
         # 表格无法还原行列结构，不提取。OCR 不可用时返回空（下游按
         # ChunkingEmptyError 报"扫描件无法解析"，与旧行为一致）。
+        # P0 超长文档收口（2026-10-13）：页数上限/失败页不再静默——
+        # AST 记录 ocr_page_limit / ocr_failed_pages，quality_gate 产出
+        # ocr_coverage_partial 留痕，展示覆盖情况，不伪装完整成功。
         ocr_required = False
         ocr_attempted = False
         ocr_pages = 0
+        ocr_page_limit = 0
+        ocr_failed_pages = 0
         total_text_chars = sum(len(text) for text, _, _, _ in raw_items)
         if page_count > 0 and total_text_chars < RAG_OCR_MIN_TEXT_CHARS * page_count:
             ocr_required = True
@@ -226,12 +231,23 @@ class PdfParser(BaseDocumentParser):
                     f"（{total_text_chars} chars / {page_count} 页），"
                     f"启动 OCR 兜底（{rag_cfg.RAG_OCR_PROVIDER}）"
                 )
-                ocr_items = self._ocr_fallback(file_path, page_count)
+                ocr_items, ocr_failed_pages = self._ocr_fallback(
+                    file_path, page_count)
                 ocr_pages = len(ocr_items)
+                if page_count > rag_cfg.RAG_OCR_MAX_PAGES:
+                    ocr_page_limit = rag_cfg.RAG_OCR_MAX_PAGES
                 raw_items.extend(ocr_items)
+                # OCR 页并入统一事件流（旧实现走 raw_items 遍历天然包含；
+                # 事件流重构后必须显式追加，否则 OCR 内容不进 AST）
+                for _t, _s, pno, bbox_ in ocr_items:
+                    ordered_events.append(
+                        (1e9, "text", (_t, _s, pno, bbox_), pno, bbox_))
                 logger.info(
                     f"[PdfParser] {file_path} OCR 完成: "
                     f"{ocr_pages} 页产出文本"
+                    + (f"，失败 {ocr_failed_pages} 页" if ocr_failed_pages else "")
+                    + (f"，页数上限 {ocr_page_limit}（其后页面未识别）"
+                       if ocr_page_limit else "")
                 )
 
         # 标题启发式：统计正文字号（众数），识别标题 → section，其余 → paragraph
@@ -286,17 +302,23 @@ class PdfParser(BaseDocumentParser):
         ast.ocr_attempted = ocr_attempted
         ast.ocr_triggered = ocr_pages > 0
         ast.ocr_pages = ocr_pages
+        ast.ocr_page_limit = ocr_page_limit
+        ast.ocr_failed_pages = ocr_failed_pages
         return ast
 
-    def _ocr_fallback(self, file_path: str, page_count: int) -> list[tuple[str, float, int, tuple]]:
-        """按页渲染 PNG 走 OCR，返回与 raw_items 同构的 (text, size=0, 页码, bbox=()) 列表。
+    def _ocr_fallback(
+        self, file_path: str, page_count: int,
+    ) -> tuple[list[tuple[str, float, int, tuple]], int]:
+        """按页渲染 PNG 走 OCR，返回 (items, failed_pages)。
 
-        单页失败只丢该页（与主解析的 per-page 容错一致）；整本失败返回空，
-        由下游 ChunkingEmptyError 报业务失败。
+        items 与 raw_items 同构：(text, size=0, 页码, bbox=())。
+        单页失败只丢该页（与主解析的 per-page 容错一致），失败页数返回
+        给调用方留痕；整本失败返回空，由下游 ChunkingEmptyError 报业务失败。
         """
         from backend.config import rag as rag_cfg
         from backend.rag.preprocessing.parser import ocr as ocr_mod
         items: list[tuple[str, float, int, tuple]] = []
+        failed_pages = 0
         doc = fitz.open(file_path)
         try:
             for page_idx in range(min(page_count, rag_cfg.RAG_OCR_MAX_PAGES)):
@@ -305,14 +327,17 @@ class PdfParser(BaseDocumentParser):
                     text = ocr_mod.ocr_image(pix.tobytes("png"))
                     if text and text.strip():
                         items.append((text.strip(), 0.0, page_idx + 1, ()))
+                    else:
+                        failed_pages += 1
                 except Exception as e:
+                    failed_pages += 1
                     logger.warning(
                         f"[PdfParser][OCR] {file_path} 第 {page_idx} 页失败: "
                         f"{type(e).__name__}: {e}"
                     )
         finally:
             doc.close()
-        return items
+        return items, failed_pages
 
     def _extract_blocks(
         self, blocks: list, out: list, table_bboxes: list[tuple] | None = None,

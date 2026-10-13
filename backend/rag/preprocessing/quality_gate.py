@@ -249,11 +249,38 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
     _check("table_split_nonempty", not empty_tables,
            f"{len(empty_tables)} 个空表格节点", severity="warn")
 
-    # §5.3 截断 / 大量过滤 → 质量异常留痕（文档仍可 active，但必须可审计）
+    # §5.3 截断 → 硬异常（P0 超长文档收口 2026-10-13）：截断文档的检索
+    # 覆盖天然不完整，此前 warn 级留痕 + active 属「假成功」。任务口径：
+    # 超过单文档上限不得截断后标记成功——文档进 failed，用户拆分或调大
+    # MAX_CHUNKS_PER_DOC 后重传。（大量过滤仍为 warn 留痕。）
     if chunking["truncated"]:
         anomalies.append({
-            "check": "chunks_truncated", "severity": "warn",
-            "detail": "chunk 超上限被截断，检索覆盖不完整",
+            "check": "chunks_truncated", "severity": "error",
+            "detail": (
+                "chunk 超出单文档上限被截断，拒绝部分索引（不得以不完整"
+                "状态 active）；请拆分文档或调大 MAX_CHUNKS_PER_DOC 后重传"
+            ),
+        })
+    # 解析级资源保护截断（大表行数/OCR 页上限）→ warn 留痕展示覆盖情况
+    table_trunc = getattr(raw_ast, "table_rows_truncated", 0) or 0
+    if table_trunc:
+        anomalies.append({
+            "check": "table_rows_truncated", "severity": "warn",
+            "detail": (
+                f"表格行数超解析上限，已截断 {table_trunc} 行"
+                f"（共 {getattr(raw_ast, 'table_rows_total', 0) or 0} 行），"
+                f"尾行不在索引覆盖内"
+            ),
+        })
+    ocr_limit = getattr(raw_ast, "ocr_page_limit", 0) or 0
+    ocr_failed = getattr(raw_ast, "ocr_failed_pages", 0) or 0
+    if ocr_limit or ocr_failed:
+        anomalies.append({
+            "check": "ocr_coverage_partial", "severity": "warn",
+            "detail": (
+                f"OCR 覆盖不完整：页数上限 {ocr_limit or '∞'}，"
+                f"失败页 {ocr_failed}，实际产出 {parsing['ocr_pages']} 页"
+            ),
         })
     total_pre_filter = chunking["chunk_count"] + chunking["filtered_count"]
     if total_pre_filter > 0 and chunking["filtered_count"] / total_pre_filter > HEAVY_FILTER_RATIO:

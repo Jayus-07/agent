@@ -31,13 +31,25 @@ class CsvParser(BaseDocumentParser):
         root = DocumentNode(type="section", text="", level=0)
         raw_lines: list[str] = []
 
+        from backend.config.rag import RAG_TABLE_MAX_ROWS
+
         try:
             # 兼容 BOM 编码（Excel 导出的 CSV 常含 UTF-8 BOM）
-            df = pd.read_csv(file_path, encoding="utf-8-sig")
+            # dtype=str + keep_default_na（P0 超长文档收口 2026-10-13）：
+            # pandas 数值推断会把前导零 SKU（"00123"）变 123、长订单号变
+            # float 丢精度——全列按原始字符串读取，数值规范化交给下游
+            # safe_number_str；NA 关键字不再被吞成 NaN。
+            df = pd.read_csv(
+                file_path, encoding="utf-8-sig",
+                dtype=str, keep_default_na=False,
+            )
         except Exception as e:
             # 回退尝试 GBK（中文 Windows 环境常见编码）
             try:
-                df = pd.read_csv(file_path, encoding="gbk")
+                df = pd.read_csv(
+                    file_path, encoding="gbk",
+                    dtype=str, keep_default_na=False,
+                )
             except Exception as e2:
                 logger.error(
                     f"[CsvParser] 解析失败 {file_path}: "
@@ -57,8 +69,8 @@ class CsvParser(BaseDocumentParser):
                 raw_text="",
             )
 
-        # 列名 strip + 值安全转字符串（保留数值精度）
-        from backend.rag.preprocessing.financial_normalizer import safe_number_str
+        # 列名 strip + 值原样保留（dtype=str 已保证字符串与前导零；
+        # 仅剥离单元格首尾空白，不再做数值推断转换）
         from backend.rag.preprocessing.parser._table_nl import (
             make_table_chunk_text,
             normalize_table_rows,
@@ -66,8 +78,17 @@ class CsvParser(BaseDocumentParser):
 
         df.columns = [str(c).strip() for c in df.columns]
         rows: list[list[str]] = [list(df.columns)]
+        truncated_rows = 0
+        total_data_rows = len(df)
         for _, row in df.iterrows():
-            cells = [safe_number_str(v) if v is not None else "" for v in row]
+            if len(rows) >= RAG_TABLE_MAX_ROWS:
+                truncated_rows = total_data_rows - (len(rows) - 1)
+                logger.warning(
+                    f"[CsvParser] {file_path} 数据行超上限 "
+                    f"{RAG_TABLE_MAX_ROWS}，截断 {truncated_rows} 行"
+                )
+                break
+            cells = [str(v) if v is not None else "" for v in row]
             if any(cells):
                 rows.append(cells)
 
@@ -102,4 +123,8 @@ class CsvParser(BaseDocumentParser):
             f"[CsvParser] {file_path} 解析完成: "
             f"{len(data_rows)} 行 × {len(flat_header)} 列"
         )
-        return DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
+        return DocumentAST(
+            root=root, source_file=file_path, raw_text=raw_text,
+            table_rows_truncated=truncated_rows,
+            table_rows_total=total_data_rows,
+        )
