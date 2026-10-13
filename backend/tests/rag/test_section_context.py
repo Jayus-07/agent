@@ -75,9 +75,9 @@ class TestStrategyIntegration:
             _sect("一、报销标准", [_para("报销上限每月两千元。")]),
         ]))
         chunks = FixedSizeChunkStrategy().split(ast, "/x.md")
-        assert chunks[0].metadata["section_title"] == "一、报销标准"
-        assert chunks[0].metadata["section_path"] == ["一、报销标准"]
-        assert "section_mixed" not in chunks[0].metadata
+        assert _first_leaf(chunks).metadata["section_title"] == "一、报销标准"
+        assert _first_leaf(chunks).metadata["section_path"] == ["一、报销标准"]
+        assert "section_mixed" not in _first_leaf(chunks).metadata
 
     def test_recursive_mixed_sections_flagged(self):
         ast = DocumentAST(root=DocumentNode(type="section", text="", children=[
@@ -100,4 +100,8 @@ class TestStrategyIntegration:
         ]))
         ca = FixedSizeChunkStrategy().split(a, "/x.md")
         cb = FixedSizeChunkStrategy().split(b, "/x.md")
-        assert ca[0].metadata["chunk_id"] == cb[0].metadata["chunk_id"]
+        assert _first_leaf(ca).metadata["chunk_id"] ==             _first_leaf(cb).metadata["chunk_id"]
+
+def _first_leaf(chunks):
+    """虚拟 parent 前置后取首个 leaf（C1 契约）。"""
+    return next(c for c in chunks if c.metadata["granularity"] == "leaf")

@@ -370,10 +370,13 @@ def test_table_fallback_oversized_splits_by_lines():
                         rows=rows)
     sec = DocumentNode(type="section", text="表章节", level=1)
     chunks = _split_table_node(node, sec, ["表章节"], "t.csv")
-    assert len(chunks) > 1, "超大兜底表应被切分"
-    for c in chunks:
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert len(leaves) > 1, "超大兜底表应被切分"
+    for c in leaves:
         assert c.metadata["chunk_tokens"] <= LEAF_CHUNK_TOKENS
         assert c.metadata["chunk_type"] == "table_fallback"
+        # 兜底分片同样挂虚拟 parent（Parent 扩展不退化）
+        assert c.metadata["parent_chunk_id"]
 
 
 # ── 路由联合：混合 FAQ 文档经 Router 后内容完整 ─────────────────

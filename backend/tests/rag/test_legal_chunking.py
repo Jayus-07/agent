@@ -47,7 +47,8 @@ def test_legal_strategy_no_clause_single_chunk():
         raw_text="合同正文\n无条款编号",
     )
     chunks = LegalChunkStrategy().split(ast, "x.txt")
-    assert len(chunks) == 1
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert len(leaves) == 1
 
 
 def test_legal_routes_to_legal_strategy():

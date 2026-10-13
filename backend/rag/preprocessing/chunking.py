@@ -481,16 +481,21 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
         # 表头规范化失败 → 整表作 chunk 兜底（不丢内容）。
         # P0-05：超大表兜底不能是单一巨型 chunk——超 LEAF 预算按行分片，
         # 每片保留表格身份（chunk_type/section），行列内容不丢。
+        # P0 指标（2026-10-13）：兜底分片同样挂虚拟 parent（此前 parent 空，
+        # 「命中 leaf → 扩 parent」对兜底表静默退化）。
+        fallback_meta = {
+            "section_path": list(path),
+            "section_title": sec.text,
+            "section_level": sec.level,
+            "chunk_type": CHUNK_TYPE_TABLE_FALLBACK,
+        }
         if count_tokens(node.text) <= LEAF_CHUNK_TOKENS:
             chunks.append(_make_doc(node.text, {
                 "granularity": "leaf",
                 "chunk_id": _chunk_id(file_path, f"leaf:{section_anchor}", node.text),
                 "parent_chunk_id": "",
-                "section_path": list(path),
-                "section_title": sec.text,
-                "section_level": sec.level,
-                "chunk_type": CHUNK_TYPE_TABLE_FALLBACK,
                 "chunk_tokens": count_tokens(node.text),
+                **fallback_meta,
             }))
             return chunks
         for si, sub in enumerate(_split_to_budget(
@@ -501,13 +506,12 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
                 "chunk_id": _chunk_id(
                     file_path, f"leaf:{section_anchor}:fb:{si}", sub),
                 "parent_chunk_id": "",
-                "section_path": list(path),
-                "section_title": sec.text,
-                "section_level": sec.level,
-                "chunk_type": CHUNK_TYPE_TABLE_FALLBACK,
                 "chunk_tokens": count_tokens(sub),
+                **fallback_meta,
             }))
-        return chunks
+        # 兜底分片挂文档内虚拟 parent（表级摘要不可用时的一致退路）
+        return _attach_virtual_parents(
+            chunks, file_path, f"tblfb:{section_anchor}")
 
     # Layer 1: 表级摘要(parent)
     summary = build_table_summary(node.rows, section_title=sec.text)
@@ -855,7 +859,11 @@ def _split_unstructured(ast: DocumentAST, file_path: str,
             if len(titles) > 1:
                 meta["section_mixed"] = "true"
             chunks.append(_make_doc(sub, meta))
-    return _enrich(chunks, file_path)
+    # C1 同构修复（2026-10-13）：无结构文档的 leaf 此前 parent_chunk_id
+    # 恒空——「命中 leaf → 取 parent 扩上下文」对 Fixed/Recursive 路径
+    # 静默退化。挂文档级虚拟 parent，与 Step/Legal/QA 策略同构。
+    return _enrich(
+        _attach_virtual_parents(chunks, file_path, "plain"), file_path)
 
 
 class FixedSizeChunkStrategy:
@@ -1316,6 +1324,29 @@ class FinancialTableChunkStrategy:
         from backend.config import FINANCIAL_TABLE_ROWS_PER_CHUNK
 
         chunks: List[Document] = []
+        # 根引导块（P0-02 同构，2026-10-13）：首个标题前的直接子叶
+        # （含 PDF 表格-标题混排时挂 root 的表格）不再静默丢失
+        root_leaves = [n for n in ast.root.children if n.type in LEAF_TYPES]
+        if root_leaves:
+            root_pseudo = DocumentNode(
+                type="section", text=_doc_title(ast), level=0,
+                children=list(root_leaves))
+            has_table = any(
+                n.type == "table" and n.rows for n in root_leaves)
+            if has_table:
+                chunks.extend(self._split_with_tables(
+                    root_pseudo, [], file_path, FINANCIAL_TABLE_ROWS_PER_CHUNK,
+                ))
+                non_table = [
+                    n for n in root_leaves
+                    if not (n.type == "table" and n.rows)
+                ]
+            else:
+                non_table = root_leaves
+            if non_table:
+                self._emit_plain_group(
+                    chunks, file_path, root_pseudo, [], non_table,
+                )
         for sec, path in self._sections(ast):
             leaves = list(self._leaves(sec))
             section_anchor = ".".join(path)
@@ -1349,6 +1380,29 @@ class FinancialTableChunkStrategy:
         # 定义了但从未被使用，财务文档被通用 5000 上限截断，与配置意图相悖）
         from backend.config import FINANCIAL_MAX_CHUNKS_PER_DOC
         return _enrich(chunks, file_path, max_chunks=FINANCIAL_MAX_CHUNKS_PER_DOC)
+
+    @staticmethod
+    def _emit_plain_group(chunks: list, file_path: str, sec, path: list,
+                          leaves: list) -> None:
+        """无表格叶子组 → Structure 语义的 parent + leaf（根引导块用）。"""
+        sec_text = "\n".join(
+            ([sec.text] if sec.text else []) + [l.text for l in leaves])
+        anchor = ".".join(path)
+        if count_tokens(sec_text) <= PARENT_CHUNK_TOKENS:
+            parent_id = _chunk_id(file_path, f"parent:{anchor}", sec_text)
+            StructureChunkStrategy._emit_parent(
+                chunks, file_path, sec, path, sec_text, parent_id)
+            for leaf in leaves:
+                StructureChunkStrategy._emit_leaf(
+                    chunks, file_path, sec, path, leaf,
+                    _chunk_id(file_path, f"leaf:{anchor}", leaf.text), parent_id)
+        else:
+            for gi, sub in enumerate(_split_to_budget(
+                    sec_text, PARENT_CHUNK_TOKENS, overlap=0)):
+                parent_id = _chunk_id(
+                    file_path, f"parent:{anchor}:{gi}", sub)
+                StructureChunkStrategy._emit_parent(
+                    chunks, file_path, sec, path, sub, parent_id)
 
     def _split_with_tables(
         self, sec, path: list, file_path: str, rows_per_chunk: int,
@@ -1652,12 +1706,13 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
     {"error": ...}，安全网自身不能成为新的失败点。
     """
     try:
-        leaves: list[tuple[str, str]] = []
+        leaves: list[tuple[str, str, list | None]] = []
         for n in walk(ast.root):
             if n.type in LEAF_TYPES:
                 t = (n.text or "").strip()
                 if t:
-                    leaves.append((n.type, t))
+                    rows = getattr(n, "rows", None) if n.type == "table" else None
+                    leaves.append((n.type, t, rows))
         bodies = [(c.page_content or "") for c in chunks
                   if getattr(c, "page_content", None)]
         sampled = len(leaves) > max_audit_nodes or len(bodies) > max_audit_nodes
@@ -1667,7 +1722,7 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             leaves = leaves[::step_l]
             bodies = bodies[::step_c]
         covered, uncovered = 0, []
-        for ntype, text in leaves:
+        for ntype, text, rows in leaves:
             probe = text[:60]
             hit = False
             for body in bodies:
@@ -1678,6 +1733,16 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                 if len(core) >= 40 and core in text:
                     hit = True
                     break
+            if not hit and rows:
+                # 表格叶子走双层切分时文本被等价改写（表级 NL 摘要 + 行级
+                # kv）——覆盖判定以单元格内容为准：任一非空 cell 文本出现
+                # 在任一 chunk 中即视为覆盖（精确数字/前导零可追溯）。
+                cells = [str(c).strip() for row in rows for c in row
+                         if str(c).strip()]
+                for cell in cells[:50]:
+                    if any(cell in body for body in bodies):
+                        hit = True
+                        break
             if hit:
                 covered += 1
             else:
