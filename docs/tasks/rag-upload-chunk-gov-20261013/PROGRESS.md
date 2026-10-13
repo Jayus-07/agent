@@ -117,5 +117,6 @@
 - 推送后 GitHub 在 `c40ed5bc8fd5a868cc2e6e1ac03c9f41d7f96c0c` 的检查：RAG Smoke preflight、
   `RAG Smoke (8 cases)`、Detect RAG changes、Secret Scan 均 PASS；真实 API Evaluation 按 PR
   策略 SKIPPED。PR 为 `OPEN`、`MERGEABLE / CLEAN`、未合并，Codex Review Thread 5/5 resolved。
-- 本条进度记录随后会以文档提交推送；该新 HEAD 的自动 CI 需再核对。本任务不触发付费评测，也
-  不合并 PR。
+- 最终进度记录推送后，GitHub 自动检查复核为：RAG Smoke preflight、`RAG Smoke (8 cases)`、
+  Detect RAG changes、Secret Scan 均 PASS；真实 API Evaluation 按 PR 策略 SKIPPED。PR 保持
+  OPEN 且 MERGEABLE / CLEAN，Review Thread 5/5 resolved。本任务不触发付费评测，也不合并 PR。
