@@ -288,6 +288,8 @@ class TestCheckpointerProductionFatal:
         """显式接受内存检查点 → 不再致命（决定权留给运维，但必须写下来）。"""
         self._no_postgres_driver(monkeypatch)
         monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("PG_READONLY_PASSWORD", "test-only-placeholder")
+        monkeypatch.setenv("LLM_BUDGET_MODE", "observe")
         monkeypatch.setenv("CS_CHECKPOINTER_ENABLED", "true")
         monkeypatch.setenv("CHECKPOINTER_ALLOW_DEGRADE", "true")
 
@@ -308,6 +310,8 @@ class TestCheckpointerProductionFatal:
         """全关（明确不使用）不该被拦 —— 只有「开着却不可用」才是问题。"""
         self._no_postgres_driver(monkeypatch)
         monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("PG_READONLY_PASSWORD", "test-only-placeholder")
+        monkeypatch.setenv("LLM_BUDGET_MODE", "observe")
 
         warnings = su.validate_startup_settings()
         assert not any("checkpointer" in w and "Postgres" in w for w in warnings)
@@ -315,6 +319,60 @@ class TestCheckpointerProductionFatal:
 
 class TestReadonlyPassword:
     """只读账号只使用显式配置；漏配时开发环境告警、生产环境阻断。"""
+
+    @staticmethod
+    def _readonly_role_state_connection(existing, managed, comments=None):
+        from psycopg2.sql import Composed
+
+        events = []
+        comments = comments or {}
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, params=None):
+                if isinstance(query, str) and "shobj_description" in query.lower():
+                    if " like " in query.lower():
+                        self.last = ("managed_roles",)
+                    else:
+                        self.last = ("comment_read", params[0])
+                elif isinstance(query, str) and "pg_catalog.pg_roles" in query:
+                    self.last = ("exists", params[0])
+                elif isinstance(query, str) and "pg_terminate_backend" in query:
+                    self.last = ("terminate", params[0])
+                elif isinstance(query, Composed):
+                    ddl = "".join(
+                        getattr(part, "string", None)
+                        or str(getattr(part, "wrapped", ""))
+                        for part in query.seq
+                    ).upper()
+                    self.last = ("ddl", ddl)
+                else:
+                    self.last = ("other",)
+                events.append(self.last)
+
+            def fetchone(self):
+                if self.last[0] == "exists":
+                    return (1,) if self.last[1] in existing else None
+                if self.last[0] == "comment_read":
+                    return (comments.get(self.last[1], ""),)
+                return None
+
+            def fetchall(self):
+                return [(role,) for role in managed]
+
+        class _Connection:
+            def cursor(self):
+                return _Cursor()
+
+            def commit(self):
+                events.append(("commit",))
+
+        return _Connection(), events
 
     def test_missing_database_password_has_no_fallback(self, monkeypatch):
         from backend.config import database
@@ -480,18 +538,26 @@ class TestReadonlyPassword:
                     events.append(("role_exists", params[0]))
                 elif isinstance(query, Composed):
                     sql_parts = "".join(
-                        getattr(part, "string", "") for part in query.seq
+                        getattr(part, "string", None)
+                        or str(getattr(part, "wrapped", ""))
+                        for part in query.seq
                     ).upper()
                     events.append(("ddl", sql_parts))
                 elif isinstance(query, str) and "pg_terminate_backend" in query.lower():
                     events.append(("terminate", params[0]))
                 elif isinstance(query, str) and "select checksum, status" in query.lower():
                     events.append(("ledger_read", None))
+                elif isinstance(query, str) and "shobj_description" in query.lower():
+                    events.append(("comment_read", params[0]))
                 else:
                     events.append(("execute", type(query).__name__))
 
             def fetchone(self):
-                return None if events[-1][0] == "ledger_read" else (1,)
+                if events[-1][0] == "ledger_read":
+                    return None
+                if events[-1][0] == "comment_read":
+                    return ("operator note",)
+                return (1,)
 
         class _Connection:
             def cursor(self):
@@ -527,6 +593,11 @@ class TestReadonlyPassword:
         login = next(i for i, event in enumerate(events) if event[0] == "ddl" and "WITH LOGIN PASSWORD" in event[1])
         assert no_login < committed < terminated < login
         assert events[-2:] == [("record", False), ("commit", None)]
+        assert any(
+            event[0] == "ddl" and "COMMENT ON ROLE AGENT_READONLY IS" in event[1]
+            and "OPERATOR NOTE" in event[1]
+            for event in events
+        )
 
     def test_custom_readonly_user_does_not_enable_legacy_role(self, monkeypatch):
         from scripts import init_db
@@ -547,6 +618,8 @@ class TestReadonlyPassword:
                     events.append(("terminate", params[0]))
                 elif isinstance(query, str) and "select checksum, status" in query.lower():
                     events.append(("ledger_read", None))
+                elif isinstance(query, str) and "shobj_description" in query.lower():
+                    events.append(("comment_read", params[0]))
                 else:
                     sql_parts = "".join(
                         getattr(part, "string", "") for part in query.seq
@@ -554,7 +627,11 @@ class TestReadonlyPassword:
                     events.append(("ddl", sql_parts))
 
             def fetchone(self):
-                return None if events[-1][0] == "ledger_read" else (1,)
+                if events[-1][0] == "ledger_read":
+                    return None
+                if events[-1][0] == "comment_read":
+                    return ("operator note",)
+                return (1,)
 
         class _Connection:
             def cursor(self):
@@ -583,7 +660,11 @@ class TestReadonlyPassword:
         assert ("terminate", "agent_readonly") in events
         assert ("terminate", "sql_reader") in events
         assert ("ddl", "ALTER ROLE AGENT_READONLY NOLOGIN PASSWORD NULL") in events
-        assert ("ddl", "ALTER ROLE SQL_READER WITH LOGIN PASSWORD ") in events
+        assert any(
+            event[0] == "ddl"
+            and event[1].startswith("ALTER ROLE SQL_READER WITH LOGIN PASSWORD")
+            for event in events
+        )
         custom_block = next(
             i for i, event in enumerate(events)
             if event == ("ddl", "ALTER ROLE SQL_READER NOLOGIN")
@@ -598,7 +679,8 @@ class TestReadonlyPassword:
         )
         custom_enable = next(
             i for i, event in enumerate(events)
-            if event == ("ddl", "ALTER ROLE SQL_READER WITH LOGIN PASSWORD ")
+            if event[0] == "ddl"
+            and event[1].startswith("ALTER ROLE SQL_READER WITH LOGIN PASSWORD")
         )
         assert custom_block < custom_commit < custom_terminate < custom_enable
 
@@ -621,14 +703,22 @@ class TestReadonlyPassword:
                     events.append(("terminate", params[0]))
                 elif isinstance(query, str) and "select checksum, status" in query.lower():
                     events.append(("ledger_read", None))
+                elif isinstance(query, str) and "shobj_description" in query.lower():
+                    events.append(("comment_read", params[0]))
                 else:
                     sql_parts = "".join(
-                        getattr(part, "string", "") for part in query.seq
+                        getattr(part, "string", None)
+                        or str(getattr(part, "wrapped", ""))
+                        for part in query.seq
                     ).upper()
                     events.append(("ddl", sql_parts))
 
             def fetchone(self):
-                return None if events[-1][0] == "ledger_read" else (1,)
+                if events[-1][0] == "ledger_read":
+                    return None
+                if events[-1][0] == "comment_read":
+                    return ("",)
+                return (1,)
 
         class _Connection:
             def cursor(self):
@@ -670,6 +760,72 @@ class TestReadonlyPassword:
             if event == ("ddl", "ALTER ROLE AGENT_READONLY NOLOGIN PASSWORD NULL")
         )
         assert no_login < committed < terminated < revoked
+
+    def test_readonly_user_switch_disables_legacy_and_previous_custom_role(self):
+        from scripts.init_db import ensure_readonly_role
+
+        conn, events = self._readonly_role_state_connection(
+            existing={"agent_readonly", "sql_reader_old", "sql_reader_new"},
+            managed={"sql_reader_old"},
+            comments={"sql_reader_new": "operator note"},
+        )
+
+        assert ensure_readonly_role(
+            conn, user="sql_reader_new", password="test-only-placeholder",
+        ) == "ok"
+
+        for role in ("agent_readonly", "sql_reader_old"):
+            role_upper = role.upper()
+            assert ("ddl", f"ALTER ROLE {role_upper} NOLOGIN") in events
+            assert ("terminate", role) in events
+            assert (
+                "ddl", f"ALTER ROLE {role_upper} NOLOGIN PASSWORD NULL"
+            ) in events
+        assert any(
+            event[0] == "ddl"
+            and event[1].startswith(
+                "ALTER ROLE SQL_READER_NEW WITH LOGIN PASSWORD"
+            )
+            for event in events
+        )
+        assert any(
+            event[0] == "ddl"
+            and "COMMENT ON ROLE SQL_READER_NEW IS" in event[1]
+            and "OPERATOR NOTE" in event[1]
+            and "AGENT-PLATFORM:READONLY-MANAGED" in event[1]
+            for event in events
+        )
+
+    def test_missing_readonly_password_disables_current_and_previous_users(self):
+        from scripts.init_db import ensure_readonly_role
+
+        existing = {"agent_readonly", "sql_reader_old", "sql_reader_new"}
+        conn, events = self._readonly_role_state_connection(
+            existing=existing,
+            managed={"sql_reader_old"},
+        )
+
+        result = ensure_readonly_role(
+            conn, user="sql_reader_new", password="",
+        )
+
+        assert "未配置 PG_READONLY_PASSWORD" in result
+        for role in existing:
+            role_upper = role.upper()
+            assert ("terminate", role) in events
+            assert (
+                "ddl", f"ALTER ROLE {role_upper} NOLOGIN PASSWORD NULL"
+            ) in events
+        assert not any(
+            event[0] == "ddl" and "WITH LOGIN PASSWORD" in event[1]
+            for event in events
+        )
+        assert any(
+            event[0] == "ddl"
+            and "COMMENT ON ROLE SQL_READER_NEW IS" in event[1]
+            and "AGENT-PLATFORM:READONLY-MANAGED" in event[1]
+            for event in events
+        )
 
     def test_applied_093_checksum_skips_without_terminating_sessions(self):
         from pathlib import Path
@@ -759,6 +915,21 @@ class TestReadonlyPassword:
         assert events[0][0] == "apply"
         assert events[0][2] == "093_revoke_readonly_default_password.sql"
         assert events[0][4:] == (False, "test-only-placeholder", "sql_reader")
+
+    def test_ensure_dbs_reuses_shared_readonly_alignment(self, monkeypatch):
+        from scripts import ensure_dbs
+        from scripts import init_db
+
+        expected = (object(), "sql_reader", "test-only-placeholder")
+        monkeypatch.setattr(
+            init_db,
+            "ensure_readonly_role",
+            lambda conn, *, user, password: (conn, user, password),
+        )
+
+        assert ensure_dbs._ensure_readonly_password(
+            expected[0], user=expected[1], password=expected[2],
+        ) == expected
 
     def test_ensure_dbs_tracks_all_readonly_authorization_migrations(self, monkeypatch):
         from scripts import init_db

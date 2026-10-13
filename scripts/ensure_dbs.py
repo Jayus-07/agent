@@ -225,23 +225,10 @@ def _apply_business_migrations(
 
 
 def _ensure_readonly_password(conn, *, user: str, password: str) -> str:
-    """对齐只读角色密码（参数化构造 DDL，避免任何字符串拼接风险）。"""
-    from psycopg2 import sql
+    """复用主初始化入口的只读账号持续对齐逻辑。"""
+    from scripts.init_db import ensure_readonly_role
 
-    if not password:
-        return "skip: 未配置 PG_READONLY_PASSWORD"
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (user,))
-        exists = cur.fetchone() is not None
-        if not exists:
-            return f"skip: 角色 {user} 不存在（004 迁移应先创建）"
-        cur.execute(
-            sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                sql.Identifier(user), sql.Literal(password)
-            )
-        )
-    conn.commit()
-    return "ok"
+    return ensure_readonly_role(conn, user=user, password=password)
 
 
 def _verify_readonly(host_db: str) -> str:
