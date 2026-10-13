@@ -237,6 +237,14 @@ class FakeFilterRegistry:
     def list_expired(self, now=None):
         return self.expired
 
+    def list_visible_doc_ids(self, doc_ids, now=None):
+        # Batch 1A 返修：apply_review_visibility 的批量正向校验接口——
+        # 与真实 Registry 同口径：仅 active 且未过期可见。
+        blocked = {
+            r["doc_id"] for r in self.pending + self.deprecated + self.expired
+        }
+        return {d for d in (doc_ids or []) if d} - blocked
+
 
 class TestRetrievalBlockedSet:
     def setup_method(self):

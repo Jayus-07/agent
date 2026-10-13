@@ -96,6 +96,13 @@ class SafeToolExecutor:
         tool_name: @tool 函数名（契约 lock 键），指标/Redis 日键用它记账；
             空 = 沿用 tool_key（capability 名，历史口径，管理端按 lock 合并会对不上）。
         """
+        if deadline is None:
+            # Workflow/Skill 内的 Tool 调用继承入口绑定的统一请求预算。
+            # 显式 deadline 仍优先；无 RequestContext 的后台路径保持不变。
+            from backend.core.request_context import get_request_deadline
+
+            deadline = get_request_deadline()
+
         pol = policy or get_policy(tool_key)
         owns_trace_span = trace_span is None
         active_trace_span = trace_span or start_tool_span(

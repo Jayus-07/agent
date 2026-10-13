@@ -1,15 +1,16 @@
 'use client'
 
 import type { ReactNode } from 'react'
+import Link from 'next/link'
 import { CalendarDays, CircleUserRound, Compass, Info, Plane, Sparkles } from 'lucide-react'
 import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
 
-export type TravelNavItem = 'home' | 'trips' | 'me'
+export type TravelNavItem = 'home' | 'discover' | 'trips' | 'me'
 
 export function TravelTopBar({ active = 'home' }: { active?: TravelNavItem }) {
   return (
     <header className="mx-auto flex w-full max-w-[1440px] items-center justify-between px-4 py-3 md:px-8 md:py-4">
-      <a href="/travel" className="flex items-center gap-2.5 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5]">
+      <Link href="/travel" className="flex items-center gap-2.5 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5]">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2878f5] text-white shadow-[0_6px_18px_rgba(40,120,245,.2)]">
           <Plane size={18} strokeWidth={2.4} aria-hidden />
         </span>
@@ -17,11 +18,11 @@ export function TravelTopBar({ active = 'home' }: { active?: TravelNavItem }) {
           <span className="block text-sm font-bold tracking-tight text-[#17283f]">漫游</span>
           <span className="hidden text-[10px] text-[#8190a4] sm:block">AI 旅行助手</span>
         </span>
-      </a>
+      </Link>
       <nav aria-label="旅游导航" className="hidden items-center gap-1 md:flex">
-        <a aria-current={active === 'home' ? 'page' : undefined} href="/travel" className={`rounded-full px-4 py-2 text-sm transition ${active === 'home' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>首页</a>
-        <a aria-current={active === 'trips' ? 'page' : undefined} href="/travel/itineraries" className={`rounded-full px-4 py-2 text-sm transition ${active === 'trips' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>我的行程</a>
-        <a href="/travel/templates/hangzhou-slow" className="rounded-full px-4 py-2 text-sm text-[#65758b] transition hover:bg-white">旅行灵感</a>
+        <Link aria-current={active === 'home' ? 'page' : undefined} href="/travel" className={`rounded-full px-4 py-2 text-sm transition motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5] ${active === 'home' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>首页</Link>
+        <Link aria-current={active === 'discover' ? 'page' : undefined} href="/travel/templates" className={`rounded-full px-4 py-2 text-sm transition motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5] ${active === 'discover' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>旅行灵感</Link>
+        <Link aria-current={active === 'trips' ? 'page' : undefined} href="/travel/itineraries" className={`rounded-full px-4 py-2 text-sm transition motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5] ${active === 'trips' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>我的行程</Link>
       </nav>
       <MobileAssistantDrawer />
     </header>
@@ -40,16 +41,17 @@ export function DemoNotice({ compact = false }: { compact?: boolean }) {
 export function TravelBottomNav({ active }: { active: TravelNavItem }) {
   const items = [
     { key: 'home' as const, label: '首页', href: '/travel', icon: Compass },
+    { key: 'discover' as const, label: '发现', href: '/travel/discover', icon: Sparkles },
     { key: 'trips' as const, label: '行程', href: '/travel/itineraries', icon: CalendarDays },
     { key: 'me' as const, label: '我的', href: '/settings', icon: CircleUserRound },
   ]
   return (
-    <nav aria-label="手机导航" className="fixed inset-x-0 bottom-0 z-30 grid h-[68px] grid-cols-3 border-t border-[#e7edf5] bg-white/95 px-3 pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_22px_rgba(30,64,110,.06)] backdrop-blur md:hidden">
+    <nav aria-label="手机导航" className="fixed inset-x-0 bottom-0 z-30 grid h-[68px] grid-cols-4 border-t border-[#e7edf5] bg-white/95 px-2 pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_22px_rgba(30,64,110,.06)] backdrop-blur md:hidden">
       {items.map(({ key, label, href, icon: Icon }) => (
-        <a key={key} href={href} aria-current={active === key ? 'page' : undefined} className={`flex flex-col items-center justify-center gap-1 text-[10px] ${active === key ? 'font-semibold text-[#2878f5]' : 'text-[#8895a6]'}`}>
+        <Link key={key} href={href} aria-current={active === key ? 'page' : undefined} className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2878f5] ${active === key ? 'font-semibold text-[#2878f5]' : 'text-[#8895a6]'}`}>
           <Icon size={19} strokeWidth={active === key ? 2.5 : 1.8} aria-hidden />
           {label}
-        </a>
+        </Link>
       ))}
     </nav>
   )

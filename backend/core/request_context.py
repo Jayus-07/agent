@@ -20,9 +20,10 @@
 bind 幂等 / stream_sink=None 显式清除陈旧 sink / bind_sink=False 不覆盖
 等语义保持不变。
 """
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 # ── 工具层会话 ContextVar（原 tools.session 定义，收编至此统一由 bind() 写入）──
@@ -51,6 +52,11 @@ _current_permissions: ContextVar[tuple[str, ...] | None] = ContextVar(
 _current_roles: ContextVar[tuple[str, ...] | None] = ContextVar(
     "tool_roles", default=None
 )
+# 当前请求的统一 Tool deadline。Workflow/Skill 的子调用未显式传 deadline 时，
+# SafeToolExecutor 从这里继承，避免内部 Provider/Tool 调用越过请求预算。
+_current_request_deadline: ContextVar[Any] = ContextVar(
+    "request_deadline", default=None
+)
 # STOP CS-A P0-3：请求级取消信号（threading.Event，由 /chat/abort 的
 # stop_event 注入）。ContextVar 载体 = 随 LangGraph copy_context 传播进
 # 节点线程与专家线程（THREAD_ISOLATED 亦复制），**不进任何可持久化
@@ -65,6 +71,11 @@ class RequestCancelled(RuntimeError):
 
     stage = 检查点标签（cs_graph_entry / cs_supervisor / cs_expert:<name> /
     cs_reporter / knowledge_rag 等），供 trace.cancel_stage 归因。
+
+    B1-F 语义边界：这是**逻辑取消**——取消检查边界保证不再启动新的下游
+    调用，但不等于底层线程或 Provider 调用已停止：已入场的同步调用会自然
+    跑完、其结果被丢弃（物理取消传播属后续批次，不在本契约内）。终态出
+    口统一为 REQUEST_CANCELLED（SSE 稳定码 / HTTP 499 / trace cancelled）。
     """
 
     def __init__(self, stage: str = ""):
@@ -124,6 +135,18 @@ def get_tool_tenant_id() -> str:
     return _current_tenant_id.get()
 
 
+@contextmanager
+def scoped_tool_identity(*, user_id: str, tenant_id: str) -> Iterator[None]:
+    """临时绑定评测/后台身份，并在退出时恢复调用线程原有身份。"""
+    user_token = _current_user_id.set(user_id or "")
+    tenant_token = _current_tenant_id.set(tenant_id or "")
+    try:
+        yield
+    finally:
+        _current_tenant_id.reset(tenant_token)
+        _current_user_id.reset(user_token)
+
+
 def set_tool_domain_hint(domain_hint: str) -> None:
     _current_domain_hint.set(domain_hint or "")
 
@@ -169,6 +192,11 @@ def set_tool_roles(roles: tuple[str, ...] | None) -> None:
 def get_tool_roles() -> tuple[str, ...]:
     """当前请求 JWT 角色；无可信上下文返回空元组（授权层 fail-closed）。"""
     return _current_roles.get() or ()
+
+
+def get_request_deadline() -> Any:
+    """当前可信请求 Deadline；未绑定时返回 None。"""
+    return _current_request_deadline.get()
 
 
 @dataclass
@@ -261,6 +289,12 @@ class RequestContext:
         set_tool_department(self.department)
         set_tool_permissions(self.permissions)
         set_tool_roles(self.roles)
+        deadline = self.deadline
+        if isinstance(deadline, dict):
+            from backend.core.tool_runtime.deadline import RequestDeadline
+
+            deadline = RequestDeadline.from_dict(deadline)
+        _current_request_deadline.set(deadline)
         set_log_context(user_id=self.user_id)
         set_request_model(self.model)
         if self.bind_sink:

@@ -1,0 +1,5 @@
+# 基线代码快照（git archive 生成，A/B 对照用）
+baseline_backend/
+# 容器环境变量导出：含真实凭据，绝不入库
+rag-service.env
+*.tmp

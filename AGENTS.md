@@ -46,7 +46,9 @@
 | 跨层 API、状态、安全和可观测契约           | [cross-cutting-contracts.md](docs/development/cross-cutting-contracts.md) |
 | 全仓审计与安全重构                      | [refactoring-playbook.md](docs/development/refactoring-playbook.md) |
 | 发布质量与上线门禁                      | [release-quality.md](docs/operations/release-quality.md) |
+| CI 与评测环境规范                        | [ci-evaluation-environment.md](docs/operations/ci-evaluation-environment.md) |
 | 三端前端、SSE、状态与共享组件               | [frontend-guide.md](docs/development/frontend-guide.md) |
+| 三端 UI/UX 设计、响应式与页面一致性 | [frontend-design-standard.md](docs/development/frontend-design-standard.md) |
 | 模型预算/价格/计费/对账                    | [llm-budget-billing.md](docs/governance/llm-budget-billing.md) |
 | Trace 与 Span、脱敏和版本归因               | [trace-model.md](docs/observability/trace-model.md) |
 | Prometheus / Grafana 和告警               | [grafana-guide.md](docs/observability/grafana-guide.md) |
@@ -63,6 +65,7 @@
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
+| 旅游 V2 产品设计、审计与前端施工计划 | [product-design.md](docs/domains/travel-v2/product-design.md)、[fe0-audit.md](docs/domains/travel-v2/fe0-audit.md)、[implementation-plan.md](docs/domains/travel-v2/implementation-plan.md) |
 
 普通 Bug 优先阅读相关源码与测试。只阅读当前任务需要的文档，不要求加载整个 README 或 docs；历史报告不作为默认上下文。
 

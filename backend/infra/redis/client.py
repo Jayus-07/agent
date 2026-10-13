@@ -7,10 +7,42 @@
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from backend.shared.logger import logger
+
+# 连接串里的口令绝不进日志（2026-10-12 P0：一次性能取证的日志导出把带明文
+# 密码的 Redis URL 带进了公开 PR；根因是这里直接打印了整个连接串）。
+# 规则与 observability/redaction 的"敏感字段不外发"一致，只做最小必要脱敏。
+_URL_USERINFO_RE = re.compile(r"://([^/@s]+)@")
+
+
+def safe_url_for_log(url: str | None) -> str:
+    """连接串脱敏：去掉 userinfo 口令与 query 中的 password 参数。
+
+    只保留 scheme/host/port/path，认证信息统一替换为 `***`。
+    非 URL 形态（None/空/异常）返回空串，绝不回退到原串——回退即泄漏。
+    """
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(str(url))
+        if not parts.scheme or not parts.netloc:
+            return "***"
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        if parts.username is not None or parts.password is not None:
+            netloc = f"***@{host}"
+        else:
+            netloc = host
+        query = "***" if parts.query else ""
+        return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
+    except Exception:  # noqa: BLE001 — 脱敏失败时必须放弃原串
+        return "***"
 
 _client = None
 _lock = threading.Lock()
@@ -60,7 +92,7 @@ def get_redis():
                 protocol=2,
             )
             _client.ping()
-            logger.info(f"[Redis] connected: {REDIS_URL}")
+            logger.info("[Redis] connected: %s", safe_url_for_log(REDIS_URL))
             return _client
         except Exception as e:
             _last_probe_fail = time.monotonic()
@@ -120,7 +152,7 @@ def get_auth_redis():
                 protocol=2,
             )
             _auth_client.ping()
-            logger.info("[AuthRedis] connected: %s", AUTH_REDIS_URL)
+            logger.info("[AuthRedis] connected: %s", safe_url_for_log(AUTH_REDIS_URL))
             return _auth_client
         except Exception as exc:
             _last_auth_probe_fail = time.monotonic()

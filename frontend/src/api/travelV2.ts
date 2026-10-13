@@ -248,6 +248,10 @@ function idempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `travel-v2-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+export function createTravelV2IdempotencyKey(): string {
+  return idempotencyKey();
+}
+
 type TravelV2ReadOptions = Pick<RequestOptions, 'signal'>
 
 function post<T>(path: string, body: object, key?: string, options: TravelV2ReadOptions = {}): Promise<T> {
@@ -285,7 +289,7 @@ export function createTravelTripV2(input: CreateTravelTripV2, key = idempotencyK
 }
 
 export function saveTravelTripDocumentV2(tripId: string, input: EditTravelTripV2, key = idempotencyKey()): Promise<{
-  saved: true; revision: number; document: TripDocumentV2;
+  saved: true; trip_id: string; revision: number; document: TripDocumentV2; status: 'active';
 }> {
   return request(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/document`, {
     method: 'PUT',
@@ -310,8 +314,8 @@ export function fetchTravelTemplateV2(key: string): Promise<TravelTemplateV2> {
   return request(`/api/travel/v2/templates/${encodeURIComponent(key)}`);
 }
 
-export function copyTravelTemplateV2(key: string): Promise<TravelTripV2> {
-  return post(`/api/travel/v2/templates/${encodeURIComponent(key)}/copy`, {}, idempotencyKey());
+export function copyTravelTemplateV2(key: string, requestKey = idempotencyKey()): Promise<TravelTripV2> {
+  return post(`/api/travel/v2/templates/${encodeURIComponent(key)}/copy`, {}, requestKey);
 }
 
 export function searchTravelFoodV2(city: string, options: TravelV2ReadOptions = {}): Promise<TravelSearchResponseV2<MerchantSearchResultV2>> {
@@ -335,26 +339,26 @@ export function searchTravelTrainsV2(input: {
 export function addTravelMealV2(tripId: string, input: {
   expected_revision: number; day_id: string; meal_period: "lunch" | "dinner";
   selection_id: string; merchant: MerchantSnapshotV2;
-}): Promise<{ saved: true; revision: number; document: TripDocumentV2 }> {
-  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/meals`, input, idempotencyKey());
+}, key = idempotencyKey()): Promise<{ saved: true; trip_id: string; revision: number; document: TripDocumentV2 }> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/meals`, input, key);
 }
 
 export function selectTravelLodgingV2(tripId: string, input: {
   expected_revision: number; lodging: LodgingArrangementV2;
-}): Promise<{ saved: true; revision: number; document: TripDocumentV2 }> {
-  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/lodgings`, input, idempotencyKey());
+}, key = idempotencyKey()): Promise<{ saved: true; trip_id: string; revision: number; document: TripDocumentV2 }> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/lodgings`, input, key);
 }
 
 export function selectTravelTrainV2(tripId: string, input: {
   expected_revision: number; train: IntercityTrainArrangementV2;
-}): Promise<{ saved: true; revision: number; document: TripDocumentV2 }> {
-  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/intercity-trains`, input, idempotencyKey());
+}, key = idempotencyKey()): Promise<{ saved: true; trip_id: string; revision: number; document: TripDocumentV2 }> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/intercity-trains`, input, key);
 }
 
 export function restoreTravelTripV2(tripId: string, input: {
   expected_revision: number; target_revision: number;
-}): Promise<{ saved: true; revision: number; document: TripDocumentV2 }> {
-  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/restore`, input, idempotencyKey());
+}, key = idempotencyKey()): Promise<{ saved: true; trip_id: string; revision: number; document: TripDocumentV2 }> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/restore`, input, key);
 }
 
 export interface TravelTripRevisionV2 {

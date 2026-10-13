@@ -24,12 +24,27 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.shared.logger import logger
+from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 
 app = FastAPI(
     title="RAG Service",
     version="1.0.0",
     description="知识库检索/问答独立服务（重资源：embedding + Chroma + LLM）",
 )
+
+
+def _review_visibility_http_exception(operation: str, exc: Exception) -> HTTPException:
+    """用稳定错误码标识审核事实源故障，供 remote client 精确分类。"""
+    label = "问答" if operation == "ask" else "检索"
+    logger.error(f"[RAG /{operation}] 审核可见性事实源不可用: {exc}")
+    return HTTPException(
+        status_code=503,
+        detail=f"审核状态服务暂不可用，已拒绝{label}",
+        headers={
+            ReviewVisibilityUnavailableError.HEADER:
+                ReviewVisibilityUnavailableError.CODE,
+        },
+    )
 
 
 # ==================== 内部令牌防护（P3，docs/auth 就绪清单第 5 条） ====================
@@ -346,6 +361,9 @@ def ask(
             tenant_id=req.tenant_id,
             persist_memory=req.persist_memory,
         )
+    except ReviewVisibilityUnavailableError as e:
+        # /ask 与轻量检索使用相同审核失败码，避免以通用 500 丢失安全语义。
+        raise _review_visibility_http_exception("ask", e) from e
     finally:
         reset_external_child_trace_id(child_token)
         reset_external_parent_trace_id(parent_token)
@@ -370,16 +388,20 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
         pipeline = _get_pipeline()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    result = pipeline.retrieve_knowledge(
-        question=req.question,
-        kb_id=req.kb_id,
-        top_k=req.top_k,
-        subject_type=req.subject_type,
-        department=req.department,
-        permissions=req.permissions,
-        roles=tuple(req.roles),
-        system_subject=req.system_subject,
-    )
+    try:
+        result = pipeline.retrieve_knowledge(
+            question=req.question,
+            kb_id=req.kb_id,
+            top_k=req.top_k,
+            subject_type=req.subject_type,
+            department=req.department,
+            permissions=req.permissions,
+            roles=tuple(req.roles),
+            system_subject=req.system_subject,
+        )
+    except ReviewVisibilityUnavailableError as e:
+        # Batch 1A fail-closed：审核状态无法确认时不返回任何内容
+        raise _review_visibility_http_exception("retrieve", e) from e
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {"result": result, "index_status": "stale" if stale else "ok"}
 
@@ -396,16 +418,20 @@ def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
         pipeline = _get_pipeline()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    docs = pipeline.retrieve_documents(
-        question=req.question,
-        kb_id=req.kb_id,
-        top_k=req.top_k,
-        candidate_k=req.candidate_k,
-        subject_type=req.subject_type,
-        department=req.department,
-        permissions=req.permissions,
-        roles=tuple(req.roles),
-    )
+    try:
+        docs = pipeline.retrieve_documents(
+            question=req.question,
+            kb_id=req.kb_id,
+            top_k=req.top_k,
+            candidate_k=req.candidate_k,
+            subject_type=req.subject_type,
+            department=req.department,
+            permissions=req.permissions,
+            roles=tuple(req.roles),
+        )
+    except ReviewVisibilityUnavailableError as e:
+        # Batch 1A fail-closed：审核状态无法确认时不返回任何内容
+        raise _review_visibility_http_exception("retrieve_docs", e) from e
     stale = bool(getattr(pipeline, "is_index_stale", False))
     return {
         "docs": [

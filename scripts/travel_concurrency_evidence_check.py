@@ -11,18 +11,27 @@ retrieved_at 三元组完整（RAG 类可回到 doc_id）。
 """
 import concurrent.futures
 import json
+import os
 import re
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE = "http://127.0.0.1:9080"
-API_KEY = "ak_P8iOQbZT4kgUcA8ImY-CycGLseGMIOMiB9jUaUxx4qGo"
-
-
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+API_KEY = os.environ.get("API_KEY", "")
+if not API_KEY:
+    sys.exit("API_KEY environment variable is required")
+TEST_USERNAME = os.environ.get("TEST_USERNAME", "")
+TEST_PASSWORD = os.environ.get("TEST_PASSWORD", "")
+if not TEST_USERNAME.strip() or not TEST_PASSWORD.strip():
+    sys.exit("TEST_USERNAME and TEST_PASSWORD environment variables are required")
 def login():
-    body = json.dumps({"username": "uitest_user", "password": "UiTest2026"}).encode()
+    body = json.dumps({"username": TEST_USERNAME, "password": TEST_PASSWORD}).encode()
     req = urllib.request.Request(
         BASE + "/api/auth/login", data=body, method="POST",
         headers={"Content-Type": "application/json", "X-API-Key": API_KEY})

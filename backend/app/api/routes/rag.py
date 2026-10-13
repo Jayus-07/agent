@@ -7,7 +7,7 @@
   - rag_lifecycle.py: POST /knowledge/{id}/lifecycle, /expire-at, GET events（C1/C2 生命周期）
   - 根 POST /rag:     直接用 RAG pipeline 问答
 """
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 import asyncio
 
@@ -18,6 +18,7 @@ from backend.app.api.routes.rag_lifecycle import router as lifecycle_router
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import get_rag_pipeline, require_rag_ready
 from backend.app.api.identity import require_principal
+from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -42,16 +43,26 @@ async def rag_ask(req: RAGAskRequest, request: Request):
     principal = require_principal(request)
     # 初始化锁等待与 LLM 问答都是长耗时同步操作，全部移入工作线程
     pipeline = await asyncio.to_thread(get_rag_pipeline)
-    answer = await asyncio.to_thread(
-        pipeline.ask,
-        req.question,
-        session_id=req.session_id or "rag-api",
-        # kb_id 契约字段必须透传（D-10 修复）：此前被丢弃导致 REST ask
-        # 恒查 default 库，声明了 kb_id 的调用方拿到的是另一个库的答案
-        kb_id=req.kb_id or "default",
-        subject_type=principal.subject_type,
-        department=principal.department,
-        permissions=principal.permissions,
-    )
+    try:
+        answer = await asyncio.to_thread(
+            pipeline.ask,
+            req.question,
+            session_id=req.session_id or "rag-api",
+            # kb_id 契约字段必须透传（D-10 修复）：此前被丢弃导致 REST ask
+            # 恒查 default 库，声明了 kb_id 的调用方拿到的是另一个库的答案
+            kb_id=req.kb_id or "default",
+            subject_type=principal.subject_type,
+            department=principal.department,
+            permissions=principal.permissions,
+        )
+    except ReviewVisibilityUnavailableError as e:
+        raise HTTPException(
+            status_code=503,
+            detail="审核状态服务暂不可用，已拒绝问答",
+            headers={
+                ReviewVisibilityUnavailableError.HEADER:
+                    ReviewVisibilityUnavailableError.CODE,
+            },
+        ) from e
     return {"query": req.question, "answer": answer,
             "session_id": req.session_id, "kb_id": req.kb_id or "default"}

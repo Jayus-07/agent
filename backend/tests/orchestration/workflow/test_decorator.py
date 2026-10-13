@@ -77,6 +77,21 @@ class TestWorkflowDecorator:
         assert meta.actions == []
         assert meta.examples == []
         assert meta.default_kbs == []
+        assert meta.deadline_sec == 900
+
+    def test_workflow_deadline_is_configurable_and_positive(self):
+        @workflow(name="deadline_wf", deadline_sec=45)
+        class T:
+            pass
+
+        assert get_workflow_meta(T).deadline_sec == 45
+        with pytest.raises(ValueError, match="deadline_sec"):
+            workflow(name="invalid_deadline", deadline_sec=0)
+
+    @pytest.mark.parametrize("deadline_sec", [float("nan"), float("inf")])
+    def test_workflow_deadline_must_be_finite(self, deadline_sec):
+        with pytest.raises(ValueError, match="deadline_sec"):
+            workflow(name="invalid_deadline", deadline_sec=deadline_sec)
 
 
 # ─────────────────────────────────────────────────────────────
