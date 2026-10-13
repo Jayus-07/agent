@@ -240,6 +240,14 @@ def _has_qa_nodes(ast: DocumentAST) -> bool:
     )
 
 
+def _ast_has_sections(ast: DocumentAST) -> bool:
+    """AST 中是否存在正层级 section（资格校验的实时判断）。"""
+    return any(
+        n.type == "section" and n.level > 0
+        for n in walk(ast.root)
+    )
+
+
 def _make_leaf_chunk(texts: list[str], file_path: str,
                      section_title: str = "", section_level: int = 0,
                      section_path: list | None = None) -> Document:
@@ -1441,45 +1449,192 @@ STRUCTURE_STRATEGIES = {
 }
 
 
+class ChunkRouteDecision:
+    """Router 可审计决策记录（P1，2026-10-13）。
+
+    回答「这份文档为什么用这个策略」：输入结构信号、业务类型、最终策略、
+    策略版本、降级原因与处理范围。随 qc 进质量记录与 Trace，供管理端
+    与评测归因。字段演进保持向后兼容（新增带默认值）。
+    """
+
+    def __init__(self, *, doc_type: str, completeness: float,
+                 strategy: str, strategy_version: str,
+                 signals: dict, degrade_reason: str = "",
+                 threshold: float = 0.0, scope: str = ""):
+        self.doc_type = doc_type
+        self.completeness = completeness
+        self.strategy = strategy
+        self.strategy_version = strategy_version
+        self.signals = signals
+        self.degrade_reason = degrade_reason
+        self.threshold = threshold
+        self.scope = scope
+
+    def as_dict(self) -> dict:
+        return {
+            "doc_type": self.doc_type,
+            "completeness": self.completeness,
+            "strategy": self.strategy,
+            "strategy_version": self.strategy_version,
+            "signals": self.signals,
+            "degrade_reason": self.degrade_reason,
+            "threshold": self.threshold,
+            "scope": self.scope,
+        }
+
+
+# 策略版本表（决策记录元数据，集中维护）：切分行为变更的类递增——
+# v2 = 2026-10-13 批次1（根引导块/覆盖补全/严格 Token 上限/局部 QA 配对）。
+_STRATEGY_VERSIONS = {
+    "StructureChunkStrategy": "v2",
+    "FixedSizeChunkStrategy": "v2",
+    "RecursiveChunkStrategy": "v2",
+    "StepChunkStrategy": "v2",
+    "LegalChunkStrategy": "v2",
+    "QAChunkStrategy": "v2",
+    "FinancialTableChunkStrategy": "v2",
+    "SemanticChunkStrategy": "v1",
+}
+
+# 强信号豁免阈值（P1 Structure Profile）：强结构信号不因整篇完整度
+# 低于 STRUCTURE_COMPLETE_THRESHOLD 失效。信号计数的下限防误判——
+# 普通文本中偶现的「第N条」/单条 Q/A 不足以支撑整篇按该结构切。
+_SIGNAL_MIN_BY_FIELD = {
+    "legal_clause_count": 3,   # ≥3 条「第N条」→ Legal 策略豁免完整度阈值
+    "qa_pair_count": 1,        # qa 节点即强信号（parser 局部配对已保证配对可信）
+    "step_heading_count": 3,   # ≥3 个「一、二、三、」标题 → Step 策略豁免
+}
+
+# doc_type → 豁免信号名（profile 字段）
+_STRONG_SIGNAL_FIELD = {
+    "legal": "legal_clause_count",
+    "contract_template": "legal_clause_count",
+    "faq": "qa_pair_count",
+    "sop": "step_heading_count",
+    "training": "step_heading_count",
+}
+
+
 class ChunkStrategyRouter:
-    """双轴路由：文档类型 × 结构完整度 → 策略。优先级 Structure > LLM > Semantic > Recursive。"""
+    """双轴路由：文档类型 × 结构完整度 → 策略。优先级 Structure > Semantic > Recursive。
+
+    P1（2026-10-13）：
+    - 强信号豁免：doc_type 与 AST 强结构信号同时成立时，不因整篇完整度
+      低于阈值降级 Recursive（此前合同/FAQ/SOP 强结构文档偶因完整度
+      0.6x 被整篇递归硬切）。
+    - route_with_decision 输出可审计决策记录（signals/策略版本/降级原因/
+      处理范围），route() 保持旧签名兼容。
+    """
+
+    ROUTER_VERSION = "v2"
 
     def route(self, doc_type: str, report: StructureReport):
+        return self.route_with_decision(doc_type, report)[0]
+
+    def route_with_decision(self, doc_type: str, report: StructureReport):
         from backend.config import (
             ENABLE_SEMANTIC_CHUNKING, SEMANTIC_CHUNK_MIN_TOKENS,
+            STRUCTURE_COMPLETE_THRESHOLD,
         )
+        profile = getattr(report, "profile", None)
+        signals = profile.as_dict() if profile is not None else {}
 
-        if report.is_complete:
-            # 资格校验：doc_type 指向的策略需要 AST 中存在对应结构特征，
-            # 否则降级（文件名分类与 parser 实际结构可能不一致）。
-            if doc_type in ("legal", "contract_template") and not _has_legal_clauses(report.ast):
-                has_sections = any(
-                    n.type == "section" and n.level > 0
-                    for n in walk(report.ast.root)
-                )
-                fallback = StructureChunkStrategy if has_sections else RecursiveChunkStrategy
+        def _decision(cls, degrade_reason: str = "", scope: str = ""):
+            return cls(), ChunkRouteDecision(
+                doc_type=doc_type,
+                completeness=report.completeness,
+                strategy=cls.__name__,
+                strategy_version=_STRATEGY_VERSIONS.get(cls.__name__, "v1"),
+                signals=signals,
+                degrade_reason=degrade_reason,
+                threshold=STRUCTURE_COMPLETE_THRESHOLD,
+                scope=scope,
+            )
+
+        # ── 强信号豁免：完整度不足但 doc_type 与 AST 强信号同时成立 ──
+        if not report.is_complete:
+            field_name = _STRONG_SIGNAL_FIELD.get(doc_type)
+            min_required = (
+                _SIGNAL_MIN_BY_FIELD.get(field_name, 1) if field_name else 0
+            )
+            if field_name and signals.get(field_name, 0) >= min_required:
+                cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
+                # 豁免前仍做资格兜底：legal 声明但条款信号不足时降级
+                if doc_type in ("legal", "contract_template") and not _has_legal_clauses(report.ast):
+                    has_sections = _ast_has_sections(report.ast)
+                    fallback = StructureChunkStrategy if has_sections else RecursiveChunkStrategy
+                    logger.info(
+                        f"[Router] {doc_type} 完整度不足且无「第 N 条」条款 → "
+                        + ("Structure 降级" if has_sections else "Recursive 兜底"))
+                    return _decision(
+                        fallback,
+                        degrade_reason="legal_without_clauses",
+                        scope="全篇" if not has_sections else "按章节",
+                    )
                 logger.info(
-                    f"[Router] {doc_type} 但 AST 无「第 N 条」条款 → "
-                    + ("Structure 降级" if has_sections else "Recursive 兜底")
+                    f"[Router] {doc_type} 完整度 {report.completeness} 低于阈值，"
+                    f"但强结构信号成立（{field_name}={signals.get(field_name)}）"
+                    f"→ {cls.__name__} 豁免"
                 )
-                return fallback()
+                return _decision(
+                    cls,
+                    degrade_reason="strong_signal_override",
+                    scope=f"强信号豁免（{field_name}={signals.get(field_name)}）",
+                )
 
-            if doc_type == "faq" and not _has_qa_nodes(report.ast):
-                logger.info("[Router] faq 但 AST 无 qa 节点 → Recursive 兜底")
-                return RecursiveChunkStrategy()
+            # Phase 3：Semantic 语义切分（无结构长文档，基于 embedding 主题边界）
+            if ENABLE_SEMANTIC_CHUNKING and count_tokens(report.ast.raw_text) >= SEMANTIC_CHUNK_MIN_TOKENS:
+                logger.info("[Router] 无结构长文档 → Semantic 语义切分")
+                return _decision(
+                    SemanticChunkStrategy,
+                    degrade_reason="incomplete_structure_semantic",
+                    scope="全篇按语义边界",
+                )
 
-            cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
-            return cls()
+            # （4.5 清理：原 "Phase 2 LLM Assisted" 空壳分支已删除——
+            #   ENABLE_LLM_CHUNKING 从未有实现体，分支只打日志不产出策略，
+            #   属死代码。若未来要做 LLM 辅助切分，重新实现时再引入开关。）
+            logger.info(
+                f"[Router] 完整度 {report.completeness} 低于阈值且无强信号"
+                f"→ Recursive 兜底")
+            return _decision(
+                RecursiveChunkStrategy,
+                degrade_reason=report.deficit_signal or "incomplete_structure",
+                scope="全篇递归切分",
+            )
 
-        # Phase 3：Semantic 语义切分（无结构长文档，基于 embedding 主题边界）
-        if ENABLE_SEMANTIC_CHUNKING and count_tokens(report.ast.raw_text) >= SEMANTIC_CHUNK_MIN_TOKENS:
-            logger.info("[Router] 无结构长文档 → Semantic 语义切分")
-            return SemanticChunkStrategy()
+        # ── 完整结构：doc_type 指向策略的资格校验 ──
+        # has_sections 从 AST 实时判断（report 可能由调用方手工构造、
+        # profile 缺省；profile 只服务豁免信号，不作为资格判定事实源）
+        if doc_type in ("legal", "contract_template") and not _has_legal_clauses(report.ast):
+            has_sections = _ast_has_sections(report.ast)
+            fallback = StructureChunkStrategy if has_sections else RecursiveChunkStrategy
+            logger.info(
+                f"[Router] {doc_type} 但 AST 无「第 N 条」条款 → "
+                + ("Structure 降级" if has_sections else "Recursive 兜底")
+            )
+            return _decision(
+                fallback,
+                degrade_reason="legal_without_clauses",
+                scope="按章节" if has_sections else "全篇",
+            )
 
-        # （4.5 清理：原 "Phase 2 LLM Assisted" 空壳分支已删除——
-        #   ENABLE_LLM_CHUNKING 从未有实现体，分支只打日志不产出策略，
-        #   属死代码。若未来要做 LLM 辅助切分，重新实现时再引入开关。）
-        return RecursiveChunkStrategy()
+        if doc_type == "faq" and not _has_qa_nodes(report.ast):
+            logger.info("[Router] faq 但 AST 无 qa 节点 → Recursive 兜底")
+            return _decision(
+                RecursiveChunkStrategy,
+                degrade_reason="faq_without_qa_nodes",
+                scope="全篇递归切分",
+            )
+
+        cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
+        if cls is RecursiveChunkStrategy:
+            return _decision(
+                cls,
+                degrade_reason="doc_type_unmapped",
+                scope="全篇递归切分",
+            )
+        return _decision(cls)
 
 
 def coverage_audit(ast: DocumentAST, chunks: List[Document],

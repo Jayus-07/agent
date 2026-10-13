@@ -88,10 +88,13 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
     normalized_ast, report = StructureAnalyzer().analyze(raw_ast)
 
     doc_type = doc_type_hint or classify_doc_type(raw_ast.raw_text, filename=file_path, file_path=file_path)
-    strategy = ChunkStrategyRouter().route(doc_type, report)
+    # P1（2026-10-13）：route_with_decision 产出可审计决策记录（结构信号/
+    # 策略版本/降级原因/处理范围），随 qc 进质量记录与 Trace
+    strategy, route_decision = ChunkStrategyRouter().route_with_decision(doc_type, report)
     logger.info(
         f"[ChunkPipeline] {file_path} doc_type={doc_type} "
         f"completeness={report.completeness} → {strategy.__class__.__name__}"
+        + (f" (degrade={route_decision.degrade_reason})" if route_decision.degrade_reason else "")
     )
     chunks = strategy.split(normalized_ast, file_path)
     # 原文定位（P0）：叶子页码（PDF §5.2）回映射进 chunk metadata["pages"]，
@@ -117,6 +120,7 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         "completeness": report,
         "doc_type": doc_type,
         "strategy_name": strategy.__class__.__name__,
+        "route_decision": route_decision.as_dict(),
         "coverage": coverage,
     }
     return chunks, qc

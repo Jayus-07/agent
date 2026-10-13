@@ -2,14 +2,46 @@
 
 规则优先：归一化 AST + 计算结构完整度 + 判定结构不足信号。
 结构混乱时的 LLM 补充是 Phase 2，本文件不实现。
+
+P1 Structure Profile（2026-10-13）：StructureReport 携带结构信号集合
+（章节/表格/QA 对/法律条款/SOP 标题/纯段落量），供 ChunkStrategyRouter
+做「强信号豁免阈值」与可审计决策记录——文件类型决定 Parser，业务类型
+决定分类属性，AST 具体结构决定 Chunk 边界。
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from backend.config import STRUCTURE_COMPLETE_THRESHOLD, PARENT_CHUNK_TOKENS
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode, LEAF_TYPES, walk
 from backend.rag.preprocessing.token_counter import count_tokens
+
+_STEP_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
+_LEGAL_CLAUSE_RE = re.compile(r"^第[一二三四五六七八九十百\d]+条")
+
+
+@dataclass
+class StructureProfile:
+    """AST 结构信号集合（Router 决策与豁免判定的事实源）。"""
+    has_sections: bool = False
+    section_count: int = 0
+    table_count: int = 0
+    qa_pair_count: int = 0
+    legal_clause_count: int = 0
+    step_heading_count: int = 0
+    plain_leaf_count: int = 0
+
+    def as_dict(self) -> dict:
+        return {
+            "has_sections": self.has_sections,
+            "section_count": self.section_count,
+            "table_count": self.table_count,
+            "qa_pair_count": self.qa_pair_count,
+            "legal_clause_count": self.legal_clause_count,
+            "step_heading_count": self.step_heading_count,
+            "plain_leaf_count": self.plain_leaf_count,
+        }
 
 
 @dataclass
@@ -19,10 +51,34 @@ class StructureReport:
     deficit_signal: str = ""
     topic_shift_detected: bool = False        # Phase 2 接入
     is_high_value_and_chaotic: bool = False   # Phase 2 接入
+    profile: StructureProfile = field(default_factory=StructureProfile)
 
     @property
     def is_complete(self) -> bool:
         return self.completeness >= STRUCTURE_COMPLETE_THRESHOLD
+
+
+def build_profile(ast: DocumentAST) -> StructureProfile:
+    """一次遍历统计 AST 结构信号（P1 Structure Profile）。"""
+    profile = StructureProfile()
+    qa_seen = 0
+    for n in walk(ast.root):
+        if n.type == "section":
+            if n.level > 0:
+                profile.has_sections = True
+                profile.section_count += 1
+                if _STEP_HEADING_RE.match((n.text or "").strip()):
+                    profile.step_heading_count += 1
+        elif n.type == "table":
+            profile.table_count += 1
+        elif n.type == "qa_question":
+            qa_seen += 1
+        elif n.type in LEAF_TYPES:
+            profile.plain_leaf_count += 1
+            if _LEGAL_CLAUSE_RE.match((n.text or "").strip()):
+                profile.legal_clause_count += 1
+    profile.qa_pair_count = qa_seen
+    return profile
 
 
 def _find_parent_section(root: DocumentNode, target: DocumentNode) -> DocumentNode | None:
@@ -50,6 +106,7 @@ class StructureAnalyzer:
             ast=normalized,
             completeness=completeness,
             deficit_signal=deficit,
+            profile=build_profile(raw_ast),
         )
         return normalized, report
 

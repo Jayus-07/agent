@@ -117,6 +117,7 @@ def build_quality_record(
     ocr_triggered: bool = False,
     ocr_pages: int = 0,
     index_errors: list[str] | None = None,
+    route_decision: dict | None = None,
 ) -> dict:
     """组装 §5.1/§5.2 质量记录（纯函数，不做校验不落盘）。"""
     node_summaries = _node_summary(raw_ast)
@@ -191,6 +192,8 @@ def build_quality_record(
         "index_errors": list(index_errors or []),
         # §5.2 节点级可追溯
         "traceability": {"nodes": node_summaries},
+        # P1 切分路由可审计决策（为什么用这个策略）
+        "route_decision": dict(route_decision or {}),
         # §5.3 校验结果（run_typed_validation 填充）
         "validation": {"checks": [], "anomalies": []},
     }

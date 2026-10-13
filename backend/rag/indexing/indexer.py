@@ -1315,6 +1315,7 @@ class IncrementalIndexer:
                     truncated=chunks_truncated,
                     ocr_triggered=bool(getattr(_raw_ast, "ocr_triggered", False)),
                     ocr_pages=int(getattr(_raw_ast, "ocr_pages", 0) or 0),
+                    route_decision=_qc.get("route_decision"),
                 )
                 _anomalies = run_typed_validation(_record, _raw_ast)
                 _hard = hard_anomalies(_anomalies)
