@@ -114,7 +114,6 @@ export default function RuntimeOverview() {
     { label: '执行错误', value: String(summary.counts.error), status: 'error', tone: 'text-red-700' },
     { label: '降级', value: String(summary.counts.degraded), status: 'degraded', tone: 'text-amber-700' },
     { label: '超时', value: String(summary.counts.timeout), status: 'timeout', tone: 'text-amber-700' },
-    { label: '运行中', value: String(summary.counts.running), status: 'running', tone: 'text-blue-700' },
     { label: '已拒绝', value: String(summary.counts.rejected), status: 'rejected', tone: 'text-orange-700' },
     { label: '已取消', value: String(summary.counts.cancelled), status: 'cancelled', tone: 'text-slate-700' },
     { label: '状态未知', value: String(summary.counts.unknown), status: 'unknown', tone: 'text-slate-600' },
@@ -191,6 +190,11 @@ export default function RuntimeOverview() {
                 <span className="mt-1 block text-xs text-text-muted">样本 · {RUNTIME_WINDOW_LABELS[range]}</span>
               </Link>
             ))}
+            <div className="min-h-24 rounded-md border border-amber-200 bg-amber-50 px-4 py-3" aria-label="运行中状态暂不可统计">
+              <span className="block text-sm text-amber-900">运行中</span>
+              <strong className="mt-2 block text-base font-semibold text-amber-900">暂不可统计</strong>
+              <span className="mt-1 block text-xs text-amber-800">BLOCKED · 活跃 Trace 缺少资源授权</span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -252,6 +256,7 @@ export default function RuntimeOverview() {
         <h3 className="font-semibold">后端契约缺口</h3>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>列表 DTO 没有执行类型字段；执行类型筛选为 BLOCKED。</li>
+          <li>活跃 Trace 查询接口缺少资源级授权；运行中数量及列表为 BLOCKED，不以历史记录推断。</li>
           <li>Run 级待审批状态未随 Trace 返回；不会把运行中当作待审批。</li>
           <li>降级计数只认明确的 <code>metadata.business_outcome=degraded</code>；当前成功记录没有覆盖完整的降级观测率。</li>
           <li>列表没有 <code>observed_at</code>、总数或游标，当前指标是最多 200 条授权记录的样本。</li>

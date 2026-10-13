@@ -347,11 +347,17 @@ export default function TracesPanel() {
               ))}
             </fieldset>
           )}
-          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {total} 条 / 已加载 {traces.length} 条</span>
+          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {filter.status === 'running' ? '暂不可统计' : `${total} 条`} / 已加载 {traces.length} 条</span>
         </div>
       </div>
 
-      {traces.length === 0 && !requestFailed ? (
+      {filter.status === 'running' ? (
+        <section className="rounded-md border border-amber-300 bg-amber-50 p-6" role="status">
+          <h3 className="font-semibold text-amber-950">运行中记录暂不可安全查询</h3>
+          <p className="mt-1 text-sm text-amber-900">当前活跃 Trace 接口缺少资源级授权。为避免越权读取或把历史列表当作实时数据，此筛选标记为 BLOCKED，也不显示伪造的空结果。</p>
+          <button type="button" onClick={() => updateFilter({ ...filter, status: 'all' })} className="mt-3 min-h-10 rounded-md border border-amber-400 bg-white px-3 text-sm font-medium text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">清除运行中筛选</button>
+        </section>
+      ) : traces.length === 0 && !requestFailed ? (
         <section className="rounded-md border border-border-subtle bg-white p-6" aria-live="polite">
           <h3 className="font-medium text-text-primary">当前授权范围内没有运行记录</h3>
           <p className="mt-1 text-sm text-text-secondary">Trace API 成功返回 0 条；这不是服务错误。</p>

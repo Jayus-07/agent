@@ -16,7 +16,7 @@ const TIME_OPTIONS: { value: FilterType["timeRange"]; label: string }[] = [
   { value: "24h", label: "近24小时" },
 ];
 
-const STATUS_OPTIONS: { value: FilterType["status"]; label: string }[] = [
+const STATUS_OPTIONS: { value: FilterType["status"]; label: string; disabled?: boolean }[] = [
   { value: "all", label: "全部状态" },
   { value: "success", label: "成功" },
   { value: "failed", label: "业务失败" },
@@ -26,7 +26,7 @@ const STATUS_OPTIONS: { value: FilterType["status"]; label: string }[] = [
   { value: "timeout", label: "超时" },
   { value: "cancelled", label: "取消" },
   { value: "rejected", label: "拒绝" },
-  { value: "running", label: "运行中" },
+  { value: "running", label: "运行中（BLOCKED：缺少安全的活跃 Trace 查询）", disabled: true },
   { value: "unknown", label: "状态未知" },
 ];
 
@@ -84,7 +84,7 @@ export default function TraceFilterBar({ filter, onChange, traces }: Props) {
         className="min-h-10 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         {STATUS_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>{opt.label}</option>
+          <option key={opt.value} value={opt.value} disabled={opt.disabled}>{opt.label}</option>
         ))}
       </select>
 

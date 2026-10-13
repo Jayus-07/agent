@@ -117,12 +117,38 @@ describe('visibleNav — 按角色过滤分组', () => {
   it('admin 可见全部分组', () => {
     loginAs('admin')
     expect(visibleNav().map((entry) => entry.label)).toEqual(NAV.map((entry) => entry.label))
+    expect(visibleNav().flatMap((entry) => entry.items ?? []).map((item) => item.path))
+      .toEqual(items.map((item) => item.path))
   })
 
   it('viewer 仍可进入公开的监控与安全入口，编辑类分组保持隐藏', () => {
     loginAs('viewer')
-    const labels = visibleNav().map((entry) => entry.label)
+    const visible = visibleNav()
+    const labels = visible.map((entry) => entry.label)
     expect(labels).toEqual(['运营总览', '业务运营', '运行监控', '安全运维'])
+    const paths = visible.flatMap((entry) => entry.items ?? []).map((item) => item.path)
+    expect(paths).not.toContain('/settings/access')
+    expect(paths).not.toContain('/approvals')
+    expect(paths).not.toContain('/tools')
+    expect(paths).toContain('/observability/monitoring')
+    expect(paths).toContain('/security')
+  })
+
+  it('editor 只看到能力治理中允许其访问的子菜单，且 baseline 不带角色限制项', () => {
+    loginAs('editor')
+    const capability = visibleNav().find((entry) => entry.label === '能力治理')
+    const capabilityPaths = capability?.items?.map((item) => item.path)
+    expect(capabilityPaths).toContain('/skills')
+    expect(capabilityPaths).toContain('/cost-governance/budgets')
+    expect(capabilityPaths).toContain('/prompts')
+    expect(capabilityPaths).not.toContain('/tools')
+    expect(capabilityPaths).not.toContain('/settings/models')
+    expect(capabilityPaths).not.toContain('/consistency')
+    expect(capabilityPaths).not.toContain('/releases')
+
+    const baseline = visibleNav(true)
+    expect(baseline.flatMap((entry) => entry.items ?? []).every((item) => !item.minRole)).toBe(true)
+    expect(baseline.some((entry) => entry.items?.length === 0)).toBe(false)
   })
 
   it('按深层路由自动定位侧栏分组，工作台子视图共享运行监控分组', () => {

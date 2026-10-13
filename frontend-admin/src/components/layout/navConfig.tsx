@@ -185,6 +185,13 @@ export function getActiveNavLabel(pathname: string | null | undefined): string |
  * 再切 visibleNav()。
  */
 export function visibleNav(baseline = false): NavEntry[] {
-  if (baseline) return NAV.filter((e) => !e.minRole)
-  return NAV.filter((e) => !e.minRole || atLeast(e.minRole))
+  const canSee = (minRole?: RoleName) => baseline ? !minRole : !minRole || atLeast(minRole)
+  return NAV.flatMap((entry) => {
+    if (!canSee(entry.minRole)) return []
+    if (!entry.items) return [entry]
+
+    const items = entry.items.filter((item) => canSee(item.minRole))
+    if (items.length === 0) return []
+    return [{ ...entry, items }]
+  })
 }

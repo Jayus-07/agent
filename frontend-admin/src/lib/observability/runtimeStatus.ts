@@ -53,6 +53,9 @@ export function getRunStatus(trace: Pick<TraceRecord, "status" | "error" | "meta
     if (status === "success") {
       const outcome = trace.metadata?.business_outcome;
       if (outcome === "failed" || outcome === "degraded" || outcome === "partial") return outcome;
+      // 兼容旧 Trace：DTO 可能把缺省状态填成 success，但实际记录了错误对象。
+      // 不展示错误正文，只依据是否存在结构化错误证据纠正状态。
+      if (trace.error && Object.keys(trace.error).length > 0) return "error";
     }
     return status as RunStatus;
   }

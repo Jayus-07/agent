@@ -84,4 +84,24 @@ describe('TracesPanel', () => {
     expect(failed.textContent).toContain('执行记录暂不可用')
     expect(failed.textContent).toContain('当前账号无权读取')
   })
+
+  it('保留旧 URL 的运行中筛选，但明确标记 BLOCKED 而不报告空结果', async () => {
+    mocks.navigation.params = new URLSearchParams('tab=traces&status=running')
+    const container = await mountPanel()
+
+    expect(container.textContent).toContain('运行中记录暂不可安全查询')
+    expect(container.textContent).toContain('BLOCKED')
+    expect(container.textContent).toContain('当前筛选 暂不可统计')
+    expect(container.textContent).not.toContain('当前筛选条件下无匹配记录')
+    expect(container.textContent).not.toContain('当前授权范围内没有运行记录')
+
+    const clearButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('清除运行中筛选'))
+    expect(clearButton).toBeTruthy()
+    await act(async () => clearButton?.click())
+    expect(mocks.navigation.router.replace).toHaveBeenCalledWith(
+      expect.stringContaining('status=all'),
+      { scroll: false },
+    )
+  })
 })
