@@ -49,12 +49,6 @@ export function hasGraphNodeExecution(nodeId: string, spans: Span[]): boolean {
   return Boolean(findGraphNodeSpan(nodeId, spans));
 }
 
-/** 从实际 Span 中取得 graph node 的状态；缺少证据时保持未知。 */
-function nodeStatus(nodeId: string, spans: Span[]): string {
-  const span = findGraphNodeSpan(nodeId, spans);
-  return span?.status || "unknown";
-}
-
 function statusColor(status: string): string {
   switch (status) {
     case "success": return "border-emerald-400 bg-emerald-50 text-emerald-700";
@@ -87,11 +81,13 @@ export default function GraphTopology({ nodes, edges, spans, loopCount, maxLoops
       {/* DAG */}
       <div className="space-y-2">
         {nodes.map((node) => {
-          const status = nodeStatus(node.id, spans);
+          const matchedSpan = findGraphNodeSpan(node.id, spans);
+          const status = matchedSpan?.status || "unknown";
           return (
             <button
               key={node.id}
-              onClick={() => onNodeClick?.(node.id)}
+              disabled={!matchedSpan}
+              onClick={() => matchedSpan && onNodeClick?.(matchedSpan.id)}
               aria-label={`执行节点 ${safeRuntimeLabel(node.label, "未命名节点")}，状态 ${safeRuntimeLabel(status, "状态未知")}`}
               className={`w-full min-h-10 text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors hover:ring-2 hover:ring-violet-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${statusColor(status)}`}
             >

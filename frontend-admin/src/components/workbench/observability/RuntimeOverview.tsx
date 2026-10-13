@@ -103,7 +103,11 @@ export default function RuntimeOverview() {
   }, [range, searchParams])
 
   const recent = useMemo(
-    () => [...inWindow].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 8),
+    // 列表端点可能返回旧记录的 running 默认状态；没有活跃 Trace 授权查询时，不把它显示为当前执行。
+    () => [...inWindow]
+      .filter((trace) => getRunStatus(trace) !== 'running')
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 8),
     [inWindow],
   )
 
@@ -224,7 +228,7 @@ export default function RuntimeOverview() {
               <Link href={runListUrl} className="min-h-10 inline-flex items-center text-sm font-medium text-accent underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">查看执行记录</Link>
             </div>
             {recent.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-text-secondary">最近 200 条授权记录中，所选时间范围没有匹配项。</p>
+              <p className="px-4 py-6 text-sm text-text-secondary">最近 200 条授权记录中，所选时间范围没有可确认的终态记录；历史列表的 running 状态不会当作实时运行。</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[620px] border-collapse text-left text-sm">

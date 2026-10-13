@@ -81,5 +81,7 @@ describe('RuntimeOverview', () => {
     expect(container.textContent).toContain('暂不可统计')
     expect(container.textContent).toContain('BLOCKED')
     expect(container.querySelector('a[href*="status=running"]')).toBeNull()
+    expect(container.textContent).toContain('没有可确认的终态记录')
+    expect(container.querySelector('tbody tr')).toBeNull()
   })
 })
