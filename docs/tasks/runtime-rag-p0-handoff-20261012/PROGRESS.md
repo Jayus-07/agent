@@ -17,8 +17,8 @@
 | B1-B | #42 | 已合并，`0c471fb` | RAG Smoke/Evaluation/Detect SUCCESS；合并后 65 passed、9 xfailed | 3 条旧 thread 已解决 | 无 |
 | B1-F | #43 | 已合并，`b0f71bc` | run 138 全绿；合并后 39 passed | 2 条旧 thread 已解决 | 无 |
 | RAG R0/R1 | #41 | 已合并，`48f3d49` | run 166 RAG Smoke、run 17 Secret Scan SUCCESS；合并前本地 142 passed | 3 条旧 thread 已解决 | 无；既有性能/准确率证据保留 |
-| 凭据安全治理 | #51 | Open，head a20b2e2；新 P2 已修复 | run 38438779728 与 Secret Scan run 38438779738 全部成功；真实 API 按 PR 策略跳过；只读迁移定向集 21 passed；隔离 PostgreSQL 16 认证/会话集成通过；tree/branch-history/diff Secret Scan 0 命中 | 新 P2 已回复并解决，已发起当前 head `@codex review`，待返回 | Redis/API Key 按用户要求未轮换；历史泄漏未撤销，故 P0 凭据风险未关闭；main RAG Smoke Top-1 门禁失败 |
-| RAG MultiQuery P0 | #52 | Open，head 4027387；新 P2 已修复 | run 38438851319 与 Secret Scan run 38438851282 全部成功；真实 API 按 PR 策略跳过；治理/改写/线程池/Trace/Deadline 相关集 55 passed；真实 run #38430900200 在旧 head befbad0 完成 8/8 用例 | 新 P2 已回复并解决，已发起当前 head `@codex review`，待返回 | 主线 Top-1 为 0.7143，低于 0.80 门槛；与旧 head MultiQuery run 指标一致；费用核验 UNVERIFIED，未在最终代码重复付费评测 |
+| 凭据安全治理 | #51 | Open，head `ddc1301`；共享集群角色标记隔离已修复 | run 38447092565 RAG PR Smoke、run 38447092851 Secret Scan SUCCESS；`test_startup_validation.py` 55 passed；隔离 PostgreSQL 18 双数据库/SCRAM 验证当前库旧角色禁用、会话终止且另一数据库角色不受影响；tree/history/diff Secret Scan 退出码 0 | 对 `ddc1301` 的 GPT 复审已完成；无未解决 thread | 生产 `PG_READONLY_PASSWORD` 是否已受控配置尚未核实；Redis/API Key 与 PR #41 历史泄漏凭据按用户要求未轮换/撤销，安全 P0 未关闭 |
+| RAG MultiQuery P0 | #52 | Open，代码 commit `4027387`；真实评测 head `7f1c454` | run 38440124676 RAG PR Smoke、run 38440124430 Secret Scan SUCCESS；定向集 55 passed；获授权的真实 Provider run 38445344364 完成 8/8 case，但严格 RAG gate FAILED | 代码 head `7f1c454` GPT review 已完成；无未解决 thread | 当前 run Recall@5 0.881、Multi-hop 0.7222，低于 main 实测 0.9286/0.8333；RC-024 本身未触发改写，不能归因为 MultiQuery；真实费用为 UNVERIFIED，artifact 无预算账本对账证据 |
 | B1-C | #45 | 已合并，`8f65712` | run 163 SUCCESS；隔离 PostgreSQL 定向集 273 passed | 旧 thread 已解决 | 无；按用户要求以当前 4 类 Workflow 验收 |
 | B1-D | #47 | 已合并，`c2feb44` | run 165 SUCCESS；定向集 135 passed + 隔离 PostgreSQL 6 passed | 2 条旧 thread 已解决 | 无 |
 | B1-E | 新 PR | 尚未施工 | — | — | 仓库只找到开发 compose 的 Checkpointer 配置，缺生产实际启用证据；须先取得部署配置/运行证据 |
@@ -37,27 +37,28 @@
 
 - 当前代码 commit 4027387 定向回归：infra/test_b1b_llm_governance.py、test_multi_query_token_budget.py、test_retrieval_executor_isolation.py、test_multi_query_trace.py、test_retrieval_deadline.py，55 passed；另对部分成功超时场景锁定告警中的已完成文档数；py_compile 与 git diff --check 通过。
 - 本地取消与预算测试覆盖预占期间取消、同步/异步 Provider 阻断、未执行预占释放；真实 ThreadPoolExecutor 测试验证慢改写不能阻塞 outer 检索。
-- 真实 Provider run #38430900200（https://github.com/Jayus-07/agent/actions/runs/38430900200）在 head befbad0 开启 multiquery=true，8/8 案例成功执行；实际统计 107 次 Provider 请求（chat 35、embedding 63、rerank 9）。
-- 该 run 汇总 Recall@5 0.9286、MRR 0.8571、Top-1 0.7143、Multi-hop 0.8333。同 main 基线 run #38397152826 指标一致，未见召回退化；两个 run 均因 Top-1 低于 0.80 门槛失败，不能降低门槛掩盖。
-- Provider 实际调用有证据；价格/费用核验为 UNVERIFIED。上述 live run 早于当前取消与线程隔离修复提交；为避免额外付费调用，没有在 head 4027387 再跑真实评测。新代码由定向测试和 PR CI 验证。
+- 经用户授权仅执行一次真实 Provider run #38445344364（https://github.com/Jayus-07/agent/actions/runs/38445344364），head `7f1c454`、`multiquery=true`；8/8 case 级通过，实际 107 次 Provider 请求（chat 35、embedding 63、rerank 9），但严格评测门禁失败。
+- 当前 run 的 Recall@5 0.881、MRR 0.8571、Top-1 0.7143、Multi-hop 0.7222；main 基线 run #38397152826 为 0.9286、0.8571、0.7143、0.8333。Top-1 两边都低于 0.80 门槛，没有改门槛或删案例。
+- RC-024 的 trace 显示 3 层路由为 `hybrid`、rewrite `skipped`、0 variants；该 case Recall@5/Multi-hop 从基线的 1.0/1.0 变为 0.6667/0.6667。它没有实际走 MultiQuery 改写，单次 Provider 运行的变化不能归因为该功能，也不能据此声称总体召回未退化。
+- 真正触发改写的长查询在 1.8 秒等待预算后回退原始 query；日志随后显示其 Provider 请求迟到完成并返回 1 个变体，调用方没有消费。该 case 指标与基线相同。当前证据确认请求发生，但费用为 `UNVERIFIED`，artifact 未提供 tenant/reservation/settlement 对账，无法证明预算账本与真实调用已对齐。
 - R0/R1 Embedding 去重、缓存实现未改；现有 R0/R1 性能/准确率证据保留。
 
 ### 主线 RAG Smoke 门禁诊断
 
-- 最新 `origin/main` 仍为 `2d1d0b173f50128429d9c868301ee05b38bcd85b`。读取 run `38397152826` 与 MultiQuery live run `38430900200` 的已存 artifact，两个结果的 Recall@5 0.9286、MRR 0.8571、Top-1 0.7143、Multi-hop 0.8333 完全一致；均未达到 0.80 的 Top-1 门槛。
-- 两次 run 都是 8/8 case 通过，但 RC-005、RC-024 的 top1_accuracy 为 0、MRR 为 0.5，说明目标文档能召回但被排在第二位；其余有 top1 指标的正向案例 Top-1 为 1.0。当前证据将门禁失败定位到基线重排顺序，未见 MultiQuery 召回退化。
-- PR #52 最新代码没有再次运行真实 Provider；前述 live run 在 `befbad0`，不是 4027387。未用降低阈值或删改案例处理主线失败。
+- 最新 `origin/main` 为 `2d1d0b173f50128429d9c868301ee05b38bcd85b`。baseline run `38397152826` 与当前代码头 `7f1c454` 的真实 Provider run `38445344364` 来自同一 `pr_smoke` 数据版本；前者 Recall@5/MRR/Top-1/Multi-hop 为 0.9286/0.8571/0.7143/0.8333，后者为 0.881/0.8571/0.7143/0.7222。
+- 两次 run 都是 8/8 case 级通过，但 #52 的严格 gate 失败。已确认唯一出现 Recall@5/Multi-hop 差异的 RC-024 在 #52 trace 中没有触发改写；因此当前 live 对比既不能证明是 MultiQuery 导致，也不能作为未退化的验收证据。实际改写目标 RC-031 等待超时后回退，迟到的 Provider 输出未被消费；指标与 baseline 相同。
+- #52 定向测试和 PR CI 通过，但真实费用核验为 `UNVERIFIED`，workflow artifact 不含租户预算预占/结算账本核对。此次为用户授权的唯一真实调用，不再重复付费；其后未改代码，仅更新文档。
 
 ## 凭据处置
 
 - 已按用户授权轮换本机 Docker PostgreSQL 的只读角色口令：新口令从主机及 `app` 容器认证成功；旧口令被 PostgreSQL 拒绝；角色无建库权限，业务库无 CREATE 权限。
 - 读取根目录 `.env` 的 9 个本地应用/Worker 容器已重建并全部 healthy；`.env` DACL 收紧到当前用户、SYSTEM 和 Administrators。口令值未写入日志、PR 或报告。
-- 安全 PR #51 移除数据库配置和迁移中的弱默认值；本批新增安全迁移 fail-closed 修复。当前 head 的 Detect、Secret Scan、PR preflight、RAG Smoke contract 全 SUCCESS，真实 API job 按 PR 策略跳过。新增行扫描、当前树扫描、提交区间扫描均 0 命中；scratch PostgreSQL 16 验证旧会话终止、旧凭据拒绝、新配置凭据认证成功。
+- 安全 PR #51 移除只读数据库配置和迁移中的弱默认值，并修复迁移已记账后的凭据状态漂移及共享集群跨库角色误禁用风险。head `ddc1301` 的 Secret Scan 与 RAG PR Smoke 均 SUCCESS；`test_startup_validation.py` 55 passed；scratch PostgreSQL 18 双数据库/SCRAM 验证目标库角色处理及另一库角色隔离；tree/history/diff Secret Scan 退出码 0；GPT 复审无未解决意见。
 - Secret Scan 标准 `--tree`、`--history`、`--diff origin/main` 均为 0 命中。可选 `--with-runtime-secrets` 报 59 条命中，全部映射到非秘密配置 `JWT_ISSUER` 和 `TOKEN_USAGE_LOG_PATH`，不是凭据命中。
 - Redis/API 当前值本轮未修改，按用户要求维持开发阶段现状；本地生产/外部 Secret Manager 均未触碰。PR #41 既有历史泄露未做共享历史重写；历史处置需单独评估影响，不宣称凭据 P0 整体关闭。
 
 ## 下一步
 
-1. #51/#52 新提交的 PR CI 已通过；等待当前 head 的 GPT 复审。合并前还需主线门禁恢复并向用户提交合并清单征求批准。
-2. 不降低 0.80 Top-1 门槛；继续定位 RC-005/RC-024 的基线重排顺序问题，单独确认其修复范围后再开小 PR。
-3. B1-E 继续等待生产 Checkpointer 的真实部署配置/运行证据；当前仓库只找到开发 compose 配置。Redis/API Key 与历史泄漏凭据继续按用户要求保持未轮换，不宣称安全 P0 关闭。
+1. #51 CI 与 GPT 复审已完成；合并前须取得用户批准，部署前须确认生产 `PG_READONLY_PASSWORD` 受控配置。Redis/API Key 和 #41 历史泄漏凭据仍未轮换/撤销，不宣称安全 P0 关闭。
+2. #52 保持不合并：先依据现有 trace/ledger 证据确认真实请求、迟到 Provider 调用的账务归因及预算结算；真实 RAG gate 的 RC-024 单次差异需查明来源。继续使用现有 0.80 Top-1 门槛，不增加真实 Provider 调用，除非取得新授权。
+3. B1-E 继续等待生产 Checkpointer 的真实部署配置/运行证据；当前仓库只找到开发 compose 配置。
